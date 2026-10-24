@@ -94,7 +94,7 @@ var mapping = map[string]struct {
 // derive one id. A mapped value derives it from its target member (or the
 // alias's declared identity), lower-cased the same way.
 func Resolve(raw string) (typ contractsv1.ContextFabricRelationshipType, swapEndpoints bool, identitySpelling string) {
-	upper := strings.ToUpper(strings.TrimSpace(raw))
+	upper := asciiUpper(asciiTrim(raw))
 	if m, ok := mapping[upper]; ok {
 		if m.identity != "" {
 			return m.mapped, m.swapEndpoints, asciiLower(m.identity)

@@ -2,12 +2,14 @@ package devhealthsource
 
 import (
 	"context"
+	"errors"
 	"os"
 	"strings"
 	"testing"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/dependencyrelation"
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric/evidenceref"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/identity"
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 )
@@ -236,8 +238,9 @@ func TestDependencyEdgeCountsAreUnmeasuredWhenTheRemovedLinkSetIsCut(t *testing.
 	source, _ := NewClickHouseProjectionSource(client)
 	source.SetEndedLinksBoundForTest(1)
 	counts, err := source.ProjectionSourceEdgeCounts(context.Background(), "org-a")
-	if err != nil {
-		t.Fatal(err)
+	var unmeasured *contextfabric.EdgeCountsUnmeasured
+	if !errors.As(err, &unmeasured) || unmeasured.Reason != "removed_link_set_cut" || len(unmeasured.Keys) != len(dependencyEdgeRelations) {
+		t.Fatalf("a cut removed-link set is reported unmeasured with its reason, got %v", err)
 	}
 	for _, key := range source.EdgeCountKeys() {
 		_, present := counts[key]
@@ -251,6 +254,21 @@ func TestDependencyEdgeCountsAreUnmeasuredWhenTheRemovedLinkSetIsCut(t *testing.
 		if strings.Contains(statement, "AS edge_count FROM (\n  SELECT substring") {
 			t.Fatal("no count statement runs over a truncated removed-link set")
 		}
+	}
+}
+
+func TestDependencyEdgeCountDropsARelationWhoseEvidenceReferenceBreaksTheBound(t *testing.T) {
+	t.Parallel()
+	statement := dependencyEdgeCountSQL()
+	ref := "concat('acr:v1:work-item-dependency.v2:', " + encodeSegmentSQL("d.source_work_item_id") + ", ':', " + encodeSegmentSQL("d.target_work_item_id") + ", ':', " + encodeSegmentSQL("k") + ")"
+	for _, want := range []string{"lengthUTF8(" + ref + ") <= 256", "position(" + ref + ", '|') = 0", "AND ref_ok"} {
+		if !strings.Contains(statement, want) {
+			t.Errorf("statement lacks the evidence-reference bound %q:\n%s", want, statement)
+		}
+	}
+	got, fits := evidenceref.Mint(contractsv1.ContextFabricEvidenceEntityWorkItemDependencyV2, "s", "t", dependencyrelation.Key("blocks"))
+	if want := "acr:v1:work-item-dependency.v2:s:t:blocks%3Afwd"; got != want || !fits {
+		t.Fatalf("the SQL mirrors the producer's reference %q, got %q fits=%v", want, got, fits)
 	}
 }
 

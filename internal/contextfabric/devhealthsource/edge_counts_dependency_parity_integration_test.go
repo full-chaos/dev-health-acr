@@ -101,6 +101,13 @@ func TestLiveDependencyEdgeCountsEqualTheEdgesTheProducerAsserts(t *testing.T) {
 		item(id, "github", linked)
 	}
 	noCreatedItem("d:23")
+	// Ids whose canonical ids fit the bound while the evidence reference over both does not,
+	// and a Unicode spelling of an inverse alias the fold must not map.
+	pairA, pairB := "d:pair-a-"+strings.Repeat("P", 100), "d:pair-b-"+strings.Repeat("Q", 100)
+	item(pairA, "github", linked)
+	item(pairB, "github", linked)
+	item("d:unicode-a", "github", linked)
+	item("d:unicode-b", "github", linked)
 	item("jira:D-20", "jira", linked)
 	item("jira:D-21", "jira", linked)
 
@@ -124,6 +131,8 @@ func TestLiveDependencyEdgeCountsEqualTheEdgesTheProducerAsserts(t *testing.T) {
 	dep("d:27", "d:27", "relates_to", "relates to", linked)
 	dep("no-such-source", "d:24", "blocks", "blocks", linked)
 	dep("d:29", "d:30", "blocks", "blocks", linked)
+	dep(pairA, pairB, "blocks", "blocks", linked)
+	dep("d:unicode-a", "d:unicode-b", "i\u017f_blocked_by", "unicode alias", linked)
 	dep("d:29", "d:30", "blocks", "blocks again", resynced)
 	dep("jira:D-20", "jira:D-21", "relates_to", "relates to", linked)
 	item("jira:D-20", "jira", resynced)

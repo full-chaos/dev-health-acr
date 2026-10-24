@@ -200,6 +200,9 @@ func dependencyEdgeCountSQL() string {
 	source := "concat('w.', " + encodeSegmentSQL("toString(w.repo_id)") + ", ':', " + encodeSegmentSQL("d.source_work_item_id") + ")"
 	target := "if(" + resolved + ", concat('w.', " + encodeSegmentSQL("toString(t.repo_id)") + ", ':', " + encodeSegmentSQL("d.target_work_item_id") + "), concat('r.', " + encodeSegmentSQL("d.target_work_item_id") + "))"
 	refFits := fmt.Sprintf("length(concat('%s:', %s)) <= %d", identity.KindWorkItemRef, encodeSegmentSQL("d.target_work_item_id"), identity.MaxNaturalKeyBytes)
+	ref := "concat('" + contractsv1.ContextFabricEvidenceRefPrefix + string(contractsv1.ContextFabricEvidenceEntityWorkItemDependencyV2) + ":', " +
+		encodeSegmentSQL("d.source_work_item_id") + ", ':', " + encodeSegmentSQL("d.target_work_item_id") + ", ':', " + encodeSegmentSQL("k") + ")"
+	refOK := fmt.Sprintf("lengthUTF8(%s) <= %d AND position(%s, '|') = 0", ref, contractsv1.ContextFabricEvidenceRefIDMaxLength, ref)
 	arms := make([]string, 0, len(dependencyEdgeRelations))
 	for arm := range dependencyEdgeRelations {
 		arms = append(arms, "'"+arm+"'")
@@ -208,14 +211,14 @@ func dependencyEdgeCountSQL() string {
 	return `SELECT arm, uniqExact(edge_from, edge_to) AS edge_count FROM (
   SELECT substring(k, 1, length(k) - 4) AS arm, if(endsWith(k, ':inv'), tgt, src) AS edge_from, if(endsWith(k, ':inv'), src, tgt) AS edge_to
   FROM (
-    SELECT ` + key + ` AS k, ` + source + ` AS src, ` + target + ` AS tgt
+    SELECT ` + key + ` AS k, ` + source + ` AS src, ` + target + ` AS tgt, ` + refOK + ` AS ref_ok
     ` + dependencyFromSQL() + `
       AND ifNull(rr.ended, 0) = 0
       AND lower(` + trimSpaceSQL(dependencyRelationshipTypeExpr) + `) NOT IN ('` + strings.Join(ignoredDependencyTypeNames(), "', '") + `')
       AND ` + derivedIDFitsSQL(identity.KindWorkItem, "toString(w.repo_id)", "d.source_work_item_id") + `
       AND if(` + resolved + `, ` + derivedIDFitsSQL(identity.KindWorkItem, "toString(t.repo_id)", "d.target_work_item_id") + `, ` + refFits + `)
   )
-  WHERE arm IN (` + strings.Join(arms, ", ") + `) AND src != tgt
+  WHERE arm IN (` + strings.Join(arms, ", ") + `) AND src != tgt AND ref_ok
 )
 GROUP BY arm`
 }
@@ -237,6 +240,7 @@ func runEdgePopulations(ctx context.Context, client contextpacket.ClickHouseQuer
 		return nil, fmt.Errorf("devhealthsource: organization is required")
 	}
 	counts := map[contextfabric.EdgeCountKey]int64{}
+	var unmeasured *contextfabric.EdgeCountsUnmeasured
 	for _, population := range populations {
 		bindings := []contextpacket.ClickHouseBinding{{Name: "org_id", Value: orgID}}
 		if population.needsEndedLinks {
@@ -246,7 +250,11 @@ func runEdgePopulations(ctx context.Context, client contextpacket.ClickHouseQuer
 			}
 			if ended.cut {
 				startLogger(ctx).WarnContext(ctx, "devhealthsource dependency edge counts unmeasured",
-					"org_id", contextfabric.SanitizeLogAttr(redactOrg(orgID)), "reason", "removed_link_set_cut", "removed_links_kept", len(ended.keys))
+					"org_id", contextfabric.SanitizeLogAttr(redactOrg(orgID)), "reason", removedLinkSetCutReason, "removed_links_kept", len(ended.keys))
+				if unmeasured == nil {
+					unmeasured = &contextfabric.EdgeCountsUnmeasured{Reason: removedLinkSetCutReason}
+				}
+				unmeasured.Keys = append(unmeasured.Keys, population.keys()...)
 				continue
 			}
 			bindings = append(bindings, ended.bindings()...)
@@ -278,8 +286,13 @@ func runEdgePopulations(ctx context.Context, client contextpacket.ClickHouseQuer
 			return nil, fmt.Errorf("devhealthsource: count %s edges: %w", population.name(), iterErr)
 		}
 	}
+	if unmeasured != nil {
+		return counts, unmeasured
+	}
 	return counts, nil
 }
+
+const removedLinkSetCutReason = "removed_link_set_cut"
 
 func (p edgePopulation) name() string {
 	if p.relationByArm != nil {

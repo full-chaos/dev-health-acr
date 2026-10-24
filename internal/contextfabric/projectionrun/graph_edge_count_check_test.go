@@ -272,6 +272,29 @@ func TestEdgeCountDeclaredKeyMissingFromTheSourceMapIsUnmeasured(t *testing.T) {
 	}
 }
 
+// A source that cannot measure a population says so: the key is reported
+// unmeasured with the source's own reason (unknown is not missing), the failed
+// measurement fails the check, and the counts it did return are still compared.
+func TestEdgeCountsUnmeasuredBySourceReportTheSourceReasonAndStillCompareTheRest(t *testing.T) {
+	t.Parallel()
+	h := newEdgeHarness(t, map[contextfabric.EdgeCountKey]int64{edgeTransition: 1000}, map[contextfabric.EdgeCountKey]int64{edgeTransition: 100, edgeColumn: 10})
+	h.source.declared = []contextfabric.EdgeCountKey{edgeTransition, edgeColumn}
+	h.source.edgeErr = &contextfabric.EdgeCountsUnmeasured{Keys: []contextfabric.EdgeCountKey{edgeColumn}, Reason: "removed_link_set_cut"}
+	h.run(testStart)
+	h.run(testStart.Add(time.Minute))
+	logged := h.log.String()
+	if !strings.Contains(logged, `"reason":"removed_link_set_cut"`) || !strings.Contains(logged, `"arm":"work_item_column"`) {
+		t.Fatalf("the unmeasured key carries the source's reason:\n%s", logged)
+	}
+	if strings.Contains(logged, `"reason":"source_missing_edge_count"`) || strings.Contains(logged, `"stage":"edge_source_count"`) {
+		t.Fatalf("an unmeasured key is neither a missing count nor a failed source read:\n%s", logged)
+	}
+	last := h.observer.checks[len(h.observer.checks)-1]
+	if last.Outcome != projectionrun.GraphCountCheckFailed || last.Errors < 1 || last.RelationsCompared != 1 || last.EdgeGaps != 1 {
+		t.Fatalf("the failed measurement fails the check and the measured key is still compared: %+v", last)
+	}
+}
+
 type edgeOnlySource struct {
 	*fakeSource
 	inner *countingSource
