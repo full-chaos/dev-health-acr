@@ -1326,7 +1326,12 @@ import (
 // issues link no pull request) is told "the team owns project X; no linked pull
 // request reaches a repository" in place of "owns no repository in synced
 // ownership". A stored answer holds the old cause text.
-const QueryVersion = "devhealthfacts.clickhouse.v256"
+// v256 -> v257: an Investment mix, its unit counts and its unit listing leave
+// out a work unit whose latest categorization stopped at the evidence gate
+// (insufficient_evidence, no_text_sources) and count it in
+// uncategorized_unit_count. An answer saved under v256 holds the fixed uniform
+// prior of those units in its theme shares.
+const QueryVersion = "devhealthfacts.clickhouse.v257"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each
