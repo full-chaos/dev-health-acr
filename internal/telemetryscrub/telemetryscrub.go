@@ -67,12 +67,35 @@ var benignKeys = map[string]bool{
 var networkSuffixes = []string{"remoteip", "clientip", "clientaddress", "remoteaddr", "remoteaddress"}
 
 var valueShapes = []*regexp.Regexp{
-	regexp.MustCompile(`(?i)\bbearer\s+[A-Za-z0-9._~+/=-]{8,}`),
-	regexp.MustCompile(`(?i)\bbasic\s+[A-Za-z0-9+/=]{8,}`),
 	regexp.MustCompile(`\beyJ[A-Za-z0-9_-]{4,}\.[A-Za-z0-9_-]{4,}\.[A-Za-z0-9_-]*`),
 	regexp.MustCompile(`(?s)-----BEGIN [A-Z0-9 ]+-----.*?(?:-----END [A-Z0-9 ]+-----|\z)`),
 	regexp.MustCompile(`\b(?:sk|ghp|gho|ghs|xox[abp])[-_][A-Za-z0-9_-]{16,}`),
 	regexp.MustCompile(`\b(?:AKIA|ASIA)[A-Z0-9]{16}\b`),
+}
+
+// A scheme word followed by a short token is a credential only with a digit or symbol in it, or at 8+ characters;
+// under a protected key (kvPair) any length is redacted, so prose like "Bearer of news" stays clean.
+var (
+	bearerShape = regexp.MustCompile(`(?i)\bbearer\s+[A-Za-z0-9._~+/=-]{4,}`)
+	basicShape  = regexp.MustCompile(`(?i)\bbasic\s+[A-Za-z0-9+/=]{4,}`)
+)
+
+func schemeCredential(m string) bool {
+	i := strings.LastIndexAny(m, " \t\r\n\v\f")
+	tok := m[i+1:]
+	return len(tok) >= 8 || strings.ContainsAny(tok, "0123456789._~+/=-")
+}
+
+func redactSchemeCredentials(s string) string {
+	for _, re := range []*regexp.Regexp{bearerShape, basicShape} {
+		s = re.ReplaceAllStringFunc(s, func(m string) string {
+			if schemeCredential(m) {
+				return Redacted
+			}
+			return m
+		})
+	}
+	return s
 }
 
 // shapeMarkers are lowercase; a value is checked against them case-insensitively before any regex runs.
@@ -299,7 +322,7 @@ func redactUserinfo(s string) string {
 	return out.String()
 }
 
-var kvPair = regexp.MustCompile(`(["']?([A-Za-z0-9_.-]+)["']?\s*[=:]\s*)("[^"]*"|'[^']*'|[^\s,;&"'}\]]+)`)
+var kvPair = regexp.MustCompile(`(["']?([A-Za-z0-9_.-]+)["']?\s*[=:]\s*)("[^"]*"|'[^']*'|(?i:bearer|basic)\s+[^\s,;&"'}\]]+|[^\s,;&"'}\]]+)`)
 
 // kvWords: a key=value or "key":"value" pair can only name a protected key if one of these fragments appears.
 var kvWords = []string{"token", "secret", "pass", "pwd", "key", "auth", "code", "otp", "pin", "mfa", "session", "credential", "cookie", "signature", "jwt", "dsn", "bearer"}
@@ -353,6 +376,7 @@ func scrubString(s string) string {
 		for _, re := range valueShapes {
 			s = re.ReplaceAllString(s, Redacted)
 		}
+		s = redactSchemeCredentials(s)
 	}
 	if pair {
 		s = redactPairs(s)

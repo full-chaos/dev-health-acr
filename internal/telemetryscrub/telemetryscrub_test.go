@@ -565,3 +565,48 @@ func TestR2ExactBenignKeysOnly(t *testing.T) {
 		}
 	}
 }
+
+func TestShortSchemeCredentialsRedacted(t *testing.T) {
+	cases := []struct{ in, leak string }{
+		{"Authorization: Bearer abc", "abc"},
+		{"authorization=Bearer a1", "a1"},
+		{"proxy-authorization: Bearer x9", "x9"},
+		{"msg token=Bearer ab12", "ab12"},
+		{"Authorization: Basic abc", "abc"},
+		{"Authorization:\tBasic\tUjU=", "UjU="},
+		{"sent Bearer ab12 now", "ab12"},
+		{"sent Bearer a.b-c now", "a.b-c"},
+		{"sent Bearer abcdefgh now", "abcdefgh"},
+		{"Basic\tUjU=", "UjU="},
+		{"sent Basic ab+1 now", "ab+1"},
+		{"sent Basic abcdefgh now", "abcdefgh"},
+	}
+	for _, c := range cases {
+		if got := ScrubText(c.in); strings.Contains(got, c.leak) || !strings.Contains(got, Redacted) {
+			t.Errorf("ScrubText(%q) = %q", c.in, got)
+		}
+		rec := record(t, func(l *slog.Logger) { l.Info(c.in, "note", c.in) })
+		if s, _ := rec["note"].(string); strings.Contains(s, c.leak) {
+			t.Errorf("attr leaked %q: %q", c.in, s)
+		}
+		if s, _ := rec["msg"].(string); strings.Contains(s, c.leak) {
+			t.Errorf("message leaked %q: %q", c.in, s)
+		}
+	}
+}
+
+func TestShortSchemeFloorAndControls(t *testing.T) {
+	for _, v := range []string{
+		"Bearer of news", "the bearer token", "bearer bonds", "Bearer Smith", "Bearer of the ring",
+		"Bearer abcdefg", "Basic\tabcd", "Basic abcdefg", "Bearer a1b", "basic train", "author: Bearer",
+	} {
+		if got := ScrubText(v); got != v {
+			t.Errorf("clean text changed: %q -> %q", v, got)
+		}
+	}
+	for _, v := range []string{"Bearer a1b2", "Bearer abcdefgh", "Basic ab=c", "Basic abcdefgh"} {
+		if got := ScrubText(v); got != Redacted {
+			t.Errorf("ScrubText(%q) = %q", v, got)
+		}
+	}
+}
