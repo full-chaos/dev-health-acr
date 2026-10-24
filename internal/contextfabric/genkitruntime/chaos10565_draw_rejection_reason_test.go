@@ -21,7 +21,7 @@ func TestSchemaRefusedSynthesisDrawLogsTheRuleThatRefusedIt(t *testing.T) {
 		kind invalidSynthesisDrawKind
 		want string
 	}{
-		{"unknown_property_on_a_parsed_draft", drawSynthesisUnknownProperty, "1:output_schema_mismatch,2:none"},
+		{"null_array_on_a_parsed_draft", drawSynthesisNullArray, "1:output_schema_mismatch,2:none"},
 		{"malformed_json", drawSynthesisMalformedJSON, "1:output_schema_mismatch,2:none"},
 		// A draft this package's own rules also refuse keeps the more specific rule.
 		{"out_of_enum_status", drawSynthesisOutOfEnumStatus, "1:status_invalid,2:none"},
@@ -55,7 +55,7 @@ func TestEachRejectedSynthesisDrawNamesItsOwnRule(t *testing.T) {
 		t.Fatal(err)
 	}
 	rt, handler, _ := scriptedSynthesisGenkitRuntime(t, []string{
-		invalidSynthesisDrawText(t, drawSynthesisUnknownProperty),
+		invalidSynthesisDrawText(t, drawSynthesisNullArray),
 		string(encoded),
 		invalidSynthesisDrawText(t, drawSynthesisOutOfEnumStatus),
 	})

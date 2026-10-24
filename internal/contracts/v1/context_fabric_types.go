@@ -725,13 +725,13 @@ func EvidenceRefID(entityType ContextFabricEvidenceEntityType, id string) string
 }
 
 // RowKeyedEvidenceRef reports whether ref names ONE source row by its own key:
-// a repository, pull request, work item, CI run, deployment, review.v2 or
-// incident (all but the incident open with the repository UUID; an incident id
-// is the table key within the organization). Such a ref
-// is expanded from the row, authorized live against the caller's repository
-// grant, and needs no stored answer; every other kind names a subject that many
-// stored results cite and is expanded only in the scope of the answer that
-// returned it.
+// a repository, pull request, work item, CI run, deployment, incident or one
+// of the injective ".v2" edge kinds (work-item-dependency, work-item-hierarchy,
+// work-item-team, deployment-incident, project-team, review). Such a ref is
+// expanded from the row, authorized live by the kind's own gate (the caller's
+// repository grant, or the ownership gate for a team), and needs no stored
+// answer; every other kind names a subject that many stored results cite and
+// is expanded only in the scope of the answer that returned it.
 func RowKeyedEvidenceRef(ref string) bool {
 	rest, ok := strings.CutPrefix(ref, ContextFabricEvidenceRefPrefix)
 	if !ok {
@@ -745,7 +745,10 @@ func RowKeyedEvidenceRef(ref string) bool {
 	case ContextFabricEvidenceEntityPullRequest, ContextFabricEvidenceEntityWorkItem,
 		ContextFabricEvidenceEntityRepository, ContextFabricEvidenceEntityCI,
 		ContextFabricEvidenceEntityDeployment, ContextFabricEvidenceEntityReviewV2,
-		ContextFabricEvidenceEntityIncident:
+		ContextFabricEvidenceEntityIncident,
+		ContextFabricEvidenceEntityWorkItemDependencyV2, ContextFabricEvidenceEntityWorkItemHierarchyV2,
+		ContextFabricEvidenceEntityWorkItemTeamV2, ContextFabricEvidenceEntityDeploymentIncidentV2,
+		ContextFabricEvidenceEntityProjectTeamV2:
 		return true
 	}
 	return false

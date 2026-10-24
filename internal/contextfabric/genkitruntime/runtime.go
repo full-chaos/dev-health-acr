@@ -2347,11 +2347,14 @@ type attemptOutcome struct {
 	// in receipt.Attempts.
 	Index int
 	// Class is attemptOutcomeClass's own closed vocabulary: success,
-	// rate_limited, invalid_output, unavailable, cancelled (all shared with
-	// receiptOutcomeForError's terminal Outcome vocabulary since CHAOS-5577
-	// added "cancelled" there too -- see attemptOutcomeClass's doc comment).
+	// rate_limited, invalid_output, unavailable, cancelled, timeout (all but
+	// timeout shared with receiptOutcomeForError's terminal Outcome vocabulary
+	// since CHAOS-5577 added "cancelled" there too -- see attemptOutcomeClass's
+	// doc comment).
 	// cancelled means the attempt's context expired or was cancelled, at or
-	// before the provider call, never that the provider itself failed. This
+	// before the provider call, never that the provider itself failed. timeout
+	// means the attempt's own ACR_CONTEXT_FABRIC_MODEL_TIMEOUT deadline passed
+	// while the request context was live (contextfabric.ErrModelTimeout). This
 	// per-attempt class does NOT distinguish pre-call from in-call the way
 	// the terminal receipt.Outcome now does (CHAOS-5577): a cancelled LAST
 	// attempt therefore reads Class="cancelled" here regardless of which
@@ -2371,7 +2374,8 @@ type attemptOutcome struct {
 // model call did succeed, and whether its OUTPUT validates is a later,
 // separate decision the terminal outcome already reports.
 //
-// "cancelled" was the ONE deliberate exception at this per-attempt level
+// "cancelled" was the one deliberate exception at this per-attempt level
+// until "timeout" was added for the attempt's own deadline
 // (CHAOS-5380 PR-A, recut open item 3; team-lead A3 ruling, option (b),
 // 2026-09-10). A context.Canceled/DeadlineExceeded error used to fall
 // through to receiptOutcomeForError's default and read "unavailable" --
@@ -2399,6 +2403,9 @@ type attemptOutcome struct {
 func attemptOutcomeClass(err error) string {
 	if err == nil {
 		return "success"
+	}
+	if errors.Is(err, contextfabric.ErrModelTimeout) {
+		return "timeout"
 	}
 	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 		return "cancelled"

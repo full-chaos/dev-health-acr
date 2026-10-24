@@ -242,7 +242,7 @@ func producerGrammars() []producerGrammar {
 		{kind: contractsv1.ContextFabricEvidenceEntityWorkItemDependencyV2, shape: "sqlmint/3", rowQuery: "work_item_dependencies.v2",
 			keyColumns:    []string{"source_work_item_id", "target_work_item_id", "relation_key"},
 			keyExceptions: map[string]string{"relationship_type": "relation_key (CHAOS-7177), as above"},
-			sites:         sites(sourceRows, catalog)},
+			sites:         sites(sourceRows, catalog, source+"edge_counts_relations.go|dependencyEdgeCountSQL")},
 		{kind: contractsv1.ContextFabricEvidenceEntityWorkItemHierarchyV2, shape: "mint/3", repoAnchored: true, rowQuery: "work_item_hierarchy.v2",
 			keyColumns: []string{"repo_id", "work_item_id", "parent_id"}, sites: sites(source + "tables.go|queryWorkItemHierarchy")},
 		{kind: contractsv1.ContextFabricEvidenceEntityWorkItemHierarchyV2, shape: "sqlmint/3", repoAnchored: true, rowQuery: "work_item_hierarchy.v2",

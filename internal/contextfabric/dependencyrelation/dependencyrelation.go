@@ -94,7 +94,7 @@ var mapping = map[string]struct {
 // derive one id. A mapped value derives it from its target member (or the
 // alias's declared identity), lower-cased the same way.
 func Resolve(raw string) (typ contractsv1.ContextFabricRelationshipType, swapEndpoints bool, identitySpelling string) {
-	upper := strings.ToUpper(strings.TrimSpace(raw))
+	upper := asciiUpper(asciiTrim(raw))
 	if m, ok := mapping[upper]; ok {
 		if m.identity != "" {
 			return m.mapped, m.swapEndpoints, asciiLower(m.identity)
@@ -102,6 +102,17 @@ func Resolve(raw string) (typ contractsv1.ContextFabricRelationshipType, swapEnd
 		return m.mapped, m.swapEndpoints, asciiLower(string(m.mapped))
 	}
 	return contractsv1.ContextFabricRelationshipType(upper), false, asciiLower(asciiTrim(raw))
+}
+
+// Aliases returns every raw spelling the table maps, upper-cased, in order. A
+// consumer that enumerates the mapped wire types tests each one through Resolve.
+func Aliases() []string {
+	keys := make([]string, 0, len(mapping))
+	for k := range mapping {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	return keys
 }
 
 // Key is the canonical relation key of a raw spelling: canonical type plus

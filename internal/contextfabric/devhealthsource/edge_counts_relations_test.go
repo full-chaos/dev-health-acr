@@ -2,11 +2,14 @@ package devhealthsource
 
 import (
 	"context"
-	"sort"
+	"errors"
+	"os"
 	"strings"
 	"testing"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric/dependencyrelation"
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric/evidenceref"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/identity"
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 )
@@ -14,8 +17,8 @@ import (
 func TestClickHouseEdgePopulationsMeasureEveryArmAndZeroFillTheMissingOne(t *testing.T) {
 	t.Parallel()
 	client := &edgeCountClient{rows: map[string][][]any{
-		"'pull_request' AS arm": {{"pull_request", uint64(5)}, {"incident", uint64(2)}},
-		"GROUP BY arm":          {{"native", uint64(3)}},
+		"'pull_request' AS arm":    {{"pull_request", uint64(5)}, {"incident", uint64(2)}},
+		"FROM work_graph_issue_pr": {{"native", uint64(3)}},
 	}}
 	source, err := NewClickHouseProjectionSource(client)
 	if err != nil {
@@ -43,6 +46,10 @@ func TestClickHouseEdgePopulationsMeasureEveryArmAndZeroFillTheMissingOne(t *tes
 		{Relation: contractsv1.ContextFabricRelationshipCorrelatedWithIncident}: 0,
 		{Relation: contractsv1.ContextFabricRelationshipPartOf}:                 0,
 		{Relation: contractsv1.ContextFabricRelationshipBelongsToPullRequest}:   0,
+		{Relation: contractsv1.ContextFabricRelationshipBlocks}:                 0,
+		{Relation: contractsv1.ContextFabricRelationshipRelatesTo}:              0,
+		{Relation: contractsv1.ContextFabricRelationshipDuplicates}:             0,
+		{Relation: contractsv1.ContextFabricRelationshipRelatedTo}:              0,
 	}
 	for key, n := range want {
 		if got, ok := counts[key]; !ok || got != n {
@@ -60,7 +67,7 @@ func TestClickHouseEdgePopulationsMeasureEveryArmAndZeroFillTheMissingOne(t *tes
 
 func TestClickHouseEdgePopulationsRefuseAnUnknownArm(t *testing.T) {
 	t.Parallel()
-	client := &edgeCountClient{rows: map[string][][]any{"GROUP BY arm": {{"mystery", uint64(1)}}}}
+	client := &edgeCountClient{rows: map[string][][]any{"FROM work_graph_issue_pr": {{"mystery", uint64(1)}}}}
 	source, _ := NewClickHouseProjectionSource(client)
 	counts, err := source.ProjectionSourceEdgeCounts(context.Background(), "org-a")
 	if err == nil || !strings.Contains(err.Error(), `unknown arm "mystery"`) || counts != nil {
@@ -68,24 +75,11 @@ func TestClickHouseEdgePopulationsRefuseAnUnknownArm(t *testing.T) {
 	}
 }
 
-func TestDeferredEdgeRelationsAreTheDependencyTypesOnly(t *testing.T) {
+func TestClickHouseSourceDefersNoRelationType(t *testing.T) {
 	t.Parallel()
 	source, _ := NewClickHouseProjectionSource(&edgeCountClient{})
-	var got []string
-	for _, relation := range source.DeferredEdgeRelations() {
-		got = append(got, string(relation))
-	}
-	sort.Strings(got)
-	var want []string
-	for _, relation := range []contractsv1.ContextFabricRelationshipType{
-		contractsv1.ContextFabricRelationshipBlocks, contractsv1.ContextFabricRelationshipDuplicates,
-		contractsv1.ContextFabricRelationshipRelatedTo, contractsv1.ContextFabricRelationshipRelatesTo,
-	} {
-		want = append(want, string(relation))
-	}
-	sort.Strings(want)
-	if strings.Join(got, ",") != strings.Join(want, ",") {
-		t.Fatalf("deferred = %v, want %v", got, want)
+	if deferred := source.DeferredEdgeRelations(); len(deferred) != 0 {
+		t.Fatalf("every relation type the source produces is measured, deferred = %v", deferred)
 	}
 }
 
@@ -159,6 +153,138 @@ func TestLinksPullRequestEdgeCountDropsALowerTierBesideANativeLink(t *testing.T)
 	for _, arm := range linkEdgeArms {
 		if _, ok := issuePullRequestLinkTierRank[arm]; !ok {
 			t.Errorf("arm %q is not a producer tier", arm)
+		}
+	}
+}
+
+func TestDependencyEdgeCountReadsTheProducersOwnRowSourceAndKeepsItsOmissions(t *testing.T) {
+	t.Parallel()
+	statement := dependencyEdgeCountSQL()
+	for _, want := range []string{
+		dependencyFromSQL(),
+		dependencyrelation.KeySQL(dependencyRelationshipTypeExpr),
+		"ifNull(rr.ended, 0) = 0",
+		"NOT IN ('external_issue_key')",
+		derivedIDFitsSQL(identity.KindWorkItem, "toString(w.repo_id)", "d.source_work_item_id"),
+		derivedIDFitsSQL(identity.KindWorkItem, "toString(t.repo_id)", "d.target_work_item_id"),
+		"isNotNull(t.created_at)",
+		"src != tgt",
+		"if(endsWith(k, ':inv'), tgt, src) AS edge_from",
+		"uniqExact(edge_from, edge_to)",
+	} {
+		if !strings.Contains(statement, want) {
+			t.Errorf("statement lacks %q:\n%s", want, statement)
+		}
+	}
+}
+
+func TestEveryDependencySpellingResolvesToAMeasuredRelation(t *testing.T) {
+	t.Parallel()
+	for _, alias := range dependencyrelation.Aliases() {
+		typ, _, _ := dependencyrelation.Resolve(alias)
+		if _, ok := dependencyEdgeRelations[strings.ToLower(string(typ))]; !ok {
+			t.Errorf("dependencyrelation maps %q onto %s, which no dependency edge count measures: add it to dependencyEdgeRelations and to ProducedRelationshipTypes", alias, typ)
+		}
+	}
+	produced := map[contractsv1.ContextFabricRelationshipType]bool{}
+	for _, relation := range ProducedRelationshipTypes() {
+		produced[relation] = true
+	}
+	for arm, relation := range dependencyEdgeRelations {
+		if !produced[relation] || arm != strings.ToLower(string(relation)) {
+			t.Errorf("dependency arm %q relation %s is not a produced relation type spelled as its arm", arm, relation)
+		}
+	}
+}
+
+func TestDependencyEdgeCountBindsTheRemovedLinkSetAndReportsEachRelation(t *testing.T) {
+	t.Parallel()
+	client := &edgeCountClient{rows: map[string][][]any{
+		"AS ended_links": {{[]string{"6162.6364.626c6f636b73.1"}, uint64(1), uint64(0), uint64(0)}},
+		"AS edge_count FROM (\n  SELECT substring": {{"blocks", uint64(4)}, {"relates_to", uint64(2)}},
+	}}
+	source, _ := NewClickHouseProjectionSource(client)
+	counts, err := source.ProjectionSourceEdgeCounts(context.Background(), "org-a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := map[contractsv1.ContextFabricRelationshipType]int64{
+		contractsv1.ContextFabricRelationshipBlocks: 4, contractsv1.ContextFabricRelationshipRelatesTo: 2,
+		contractsv1.ContextFabricRelationshipDuplicates: 0, contractsv1.ContextFabricRelationshipRelatedTo: 0,
+	}
+	for relation, n := range want {
+		if got, ok := counts[contextfabric.EdgeCountKey{Relation: relation}]; !ok || got != n {
+			t.Errorf("%s = %d (present %v), want %d", relation, got, ok, n)
+		}
+	}
+	var bound bool
+	for i, statement := range client.statements {
+		if strings.Contains(statement, "AS edge_count FROM (\n  SELECT substring") {
+			for _, b := range client.bindings[i] {
+				bound = bound || b.Name == "ended_links"
+			}
+		}
+	}
+	if !bound {
+		t.Fatal("the dependency count must bind the removed-link set the producer binds")
+	}
+}
+
+func TestDependencyEdgeCountsAreUnmeasuredWhenTheRemovedLinkSetIsCut(t *testing.T) {
+	t.Parallel()
+	client := &edgeCountClient{rows: map[string][][]any{
+		"AS ended_links": {{[]string{"6162.6364.626c6f636b73.1"}, uint64(5), uint64(0), uint64(0)}},
+	}}
+	source, _ := NewClickHouseProjectionSource(client)
+	source.SetEndedLinksBoundForTest(1)
+	counts, err := source.ProjectionSourceEdgeCounts(context.Background(), "org-a")
+	var unmeasured *contextfabric.EdgeCountsUnmeasured
+	if !errors.As(err, &unmeasured) || unmeasured.Reason != "removed_link_set_cut" || len(unmeasured.Keys) != len(dependencyEdgeRelations) {
+		t.Fatalf("a cut removed-link set is reported unmeasured with its reason, got %v", err)
+	}
+	for _, key := range source.EdgeCountKeys() {
+		_, present := counts[key]
+		isDependency := key.Relation == contractsv1.ContextFabricRelationshipBlocks || key.Relation == contractsv1.ContextFabricRelationshipRelatesTo ||
+			key.Relation == contractsv1.ContextFabricRelationshipDuplicates || key.Relation == contractsv1.ContextFabricRelationshipRelatedTo
+		if isDependency == present {
+			t.Errorf("%+v present=%v: a cut removed-link set leaves the dependency keys out and keeps the others", key, present)
+		}
+	}
+	for _, statement := range client.statements {
+		if strings.Contains(statement, "AS edge_count FROM (\n  SELECT substring") {
+			t.Fatal("no count statement runs over a truncated removed-link set")
+		}
+	}
+}
+
+func TestDependencyEdgeCountDropsARelationWhoseEvidenceReferenceBreaksTheBound(t *testing.T) {
+	t.Parallel()
+	statement := dependencyEdgeCountSQL()
+	ref := evidenceref.SQL(contractsv1.ContextFabricEvidenceEntityWorkItemDependencyV2, "d.source_work_item_id", "d.target_work_item_id", "k")
+	for _, want := range []string{"lengthUTF8(" + ref + ") <= 256", "position(" + ref + ", '|') = 0", "AND ref_ok"} {
+		if !strings.Contains(statement, want) {
+			t.Errorf("statement lacks the evidence-reference bound %q:\n%s", want, statement)
+		}
+	}
+	got, fits := evidenceref.Mint(contractsv1.ContextFabricEvidenceEntityWorkItemDependencyV2, "s", "t", dependencyrelation.Key("blocks"))
+	if want := "acr:v1:work-item-dependency.v2:s:t:blocks%3Afwd"; got != want || !fits {
+		t.Fatalf("the SQL mirrors the producer's reference %q, got %q fits=%v", want, got, fits)
+	}
+}
+
+func TestDependencyProducerStatementIsByteIdenticalToTheGolden(t *testing.T) {
+	t.Parallel()
+	for name, cursor := range map[string]cursorState{"empty": {}, "after": {After: "k"}} {
+		client := &edgeCountClient{}
+		if _, _, err := queryWorkItemDependencies(context.Background(), client, "org-a", cursor, 10); err != nil {
+			t.Fatal(err)
+		}
+		want, err := os.ReadFile("testdata/work_item_dependencies_statement_" + name + ".golden.sql")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := client.statements[len(client.statements)-1]; got != string(want) {
+			t.Errorf("cursor %s: the producer statement drifted from the golden captured before dependencyFromSQL was extracted", name)
 		}
 	}
 }

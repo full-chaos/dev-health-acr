@@ -252,7 +252,8 @@ func (p *InvestmentProvider) ReadFacts(ctx context.Context, principal storage.Pr
 	}
 	result = contextfabric.FactProviderResult{Facts: facts, State: state, Reason: retentionReason, Version: QueryVersion, Grain: timeBound.effectiveGrain(grainDaily), Truncated: truncated || omittedUnrepresentableCount > 0, OmittedCount: omittedUnrepresentableCount}
 	applyTeamsOwningNothing(&result, query.Subjects, teamsRequested, teamsOwningNothing)
-	applyTeamsOwningProjectsOnly(ctx, p.facts.client, orgID, &result, query.Subjects, teamsRequested, timeBound)
+	projectCauses := applyTeamsOwningProjectsOnly(ctx, p.facts.client, orgID, &result, query.Subjects, teamsRequested, timeBound)
+	mixUnavailable = investmentMixNoOwnedCauses(mixUnavailable, len(teamsOwningNothing), projectCauses)
 	if mixUnavailable != "" {
 		addRequestNote(&result, mixUnavailable)
 		for _, subject := range teamsNoUnit {
@@ -643,6 +644,28 @@ type teamZeroEffort struct {
 // measured zero: no partial marker is persisted, so the two are not told apart.
 func investmentTeamEffortNotMeasurableOwnReason(units int64) string {
 	return fmt.Sprintf("%s: %d work unit(s) attributed to the team's owned repositories in the requested window, all with zero persisted effort; effort not measurable (no line counts, no linked commits, no cycle times); an unmeasured or capped unit is not told apart from a measured zero, and no mix is served", investmentTeamEffortNotMeasurable, units)
+}
+
+// investmentMixNoOwnedCauses splits the "no owned repository" clause of the mix
+// disclosure by cause once the project read has run: a team that owns projects
+// owns work whose linked pull requests reach no repository, and a team whose
+// project check did not run is unknown; only the remainder owns nothing.
+func investmentMixNoOwnedCauses(reason string, noOwned int, causes teamProjectCauses) string {
+	if reason == "" || noOwned == 0 {
+		return reason
+	}
+	old := fmt.Sprintf("; %s for %d: the team owns no repository", investmentTeamNoOwnedRepository, noOwned)
+	var parts []string
+	if none := noOwned - causes.owning - causes.unchecked; none > 0 {
+		parts = append(parts, fmt.Sprintf("; %s for %d: the team owns no repository", investmentTeamNoOwnedRepository, none))
+	}
+	if causes.owning > 0 {
+		parts = append(parts, fmt.Sprintf("; %s for %d: the team owns projects whose linked pull requests reach no repository", investmentTeamNoOwnedRepository, causes.owning))
+	}
+	if causes.unchecked > 0 {
+		parts = append(parts, fmt.Sprintf("; %s for %d: the project-link check could not run, so ownership through projects is unknown", investmentTeamNoOwnedRepository, causes.unchecked))
+	}
+	return strings.Replace(reason, old, strings.Join(parts, ""), 1)
 }
 
 // investmentMixUnavailableReason is the disclosure for teams that have no

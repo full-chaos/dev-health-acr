@@ -354,6 +354,14 @@ func (g llmGenerator) check(ctx context.Context, operation, text string, schema 
 	case !json.Valid([]byte(candidate)):
 		reason = "not_json"
 	default:
+		if operation == "synthesize" {
+			var dropped []string
+			if candidate, dropped = dropUndeclaredProperties(candidate, schema.wire); len(dropped) > 0 {
+				g.logger.InfoContext(ctx, llmUndeclaredDroppedMessage, "operation", contextfabric.SanitizeLogAttr(operation),
+					"dropped_paths", len(dropped), "paths", contextfabric.SanitizeLogStrings(dropped[:min(len(dropped), maxLoggedDroppedPaths)]),
+					"reply_bytes", len(text))
+			}
+		}
 		result, err := schema.compiled.Validate(gojsonschema.NewStringLoader(candidate))
 		if err != nil {
 			reason = "not_json"
