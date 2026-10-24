@@ -35,13 +35,13 @@ WHERE r.org_id = {org_id:String} AND ` + derivedIDFitsSQL(identity.KindPullReque
 
 var clickHouseKindCountStatements = []kindCountStatement{
 	{contractsv1.ContextFabricSubjectRepository, `SELECT uniqExact(id) FROM repos FINAL WHERE org_id = {org_id:String}`},
-	{contractsv1.ContextFabricSubjectWorkItem, `SELECT uniqExact(w.repo_id, w.work_item_id) FROM work_items AS w FINAL WHERE w.org_id = {org_id:String}`},
+	{contractsv1.ContextFabricSubjectWorkItem, `SELECT uniqExact(w.repo_id, w.work_item_id) FROM work_items AS w FINAL WHERE w.org_id = {org_id:String} AND ` + derivedIDFitsSQL(identity.KindWorkItem, "toString(w.repo_id)", "w.work_item_id")},
 	{contractsv1.ContextFabricSubjectPullRequest, `SELECT uniqExact(p.repo_id, p.number) FROM git_pull_requests AS p FINAL
 INNER JOIN repos AS r FINAL ON r.id = p.repo_id AND r.org_id = p.org_id
 WHERE p.org_id = {org_id:String}`},
 	{contractsv1.ContextFabricSubjectDeployment, `SELECT uniqExact(d.repo_id, d.deployment_id) FROM deployments AS d FINAL
 INNER JOIN repos AS r FINAL ON r.id = d.repo_id AND r.org_id = d.org_id
-WHERE d.org_id = {org_id:String}`},
+WHERE d.org_id = {org_id:String} AND ` + derivedIDFitsSQL(identity.KindDeployment, "toString(d.repo_id)", "d.deployment_id")},
 	{contractsv1.ContextFabricSubjectIncident, `SELECT uniqExact(i.id) FROM ` + devhealthschema.CurrentOperationalIncidents + ` AS i
 INNER JOIN ` + devhealthschema.CurrentServiceRepositoryMappings + ` AS m ON i.org_id = m.org_id AND i.service_id = m.service_id AND m.is_active = 1
 INNER JOIN repos AS r FINAL ON r.id = m.repo_id AND r.org_id = m.org_id
@@ -49,12 +49,12 @@ WHERE i.org_id = {org_id:String} AND i.is_deleted = 0`},
 	{contractsv1.ContextFabricSubjectPullRequestReview, pullRequestReviewCountSQL},
 	{contractsv1.ContextFabricSubjectCIRun, `SELECT uniqExact(c.repo_id, c.run_id) FROM ci_pipeline_runs AS c FINAL
 INNER JOIN repos AS repo FINAL ON repo.id = c.repo_id AND repo.org_id = c.org_id
-WHERE c.org_id = {org_id:String}`},
+WHERE c.org_id = {org_id:String} AND ` + derivedIDFitsSQL(identity.KindCIPipelineRun, "toString(c.repo_id)", "c.run_id")},
 }
 
 var teamsProjectsKindCountStatements = []kindCountStatement{
 	{contractsv1.ContextFabricSubjectTeam, `SELECT uniqExact(id) FROM teams FINAL WHERE org_id = {org_id:String} AND ` + devhealthschema.ActiveTeamPredicate("")},
-	{contractsv1.ContextFabricSubjectProject, `SELECT uniqExact(provider, id) FROM projects FINAL WHERE org_id = {org_id:String}`},
+	{contractsv1.ContextFabricSubjectProject, `SELECT uniqExact(provider, id) FROM projects FINAL WHERE org_id = {org_id:String} AND ` + derivedIDFitsSQL(identity.KindProject, "provider", "id")},
 }
 
 func countKinds(ctx context.Context, client contextpacket.ClickHouseQueryClient, orgID string, statements []kindCountStatement) (map[contextfabric.SubjectKind]int64, error) {
