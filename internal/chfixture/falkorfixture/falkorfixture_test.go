@@ -12,6 +12,7 @@ import (
 
 	"github.com/full-chaos/dev-health-acr/internal/chfixture"
 	"github.com/testcontainers/testcontainers-go"
+	"github.com/testcontainers/testcontainers-go/wait"
 )
 
 type fakeContainer struct {
@@ -174,5 +175,55 @@ func TestServerNotUpInsideFailsAtOnceWithTheTryHistoryAndNeverRestarts(t *testin
 	}
 	if len(rt.logs) != 0 {
 		t.Fatalf("no restart line may be written: %v", rt.logs)
+	}
+}
+
+func TestStartDoesNotRetryWhenTheFirstContainerCouldNotBeTerminated(t *testing.T) {
+	rt := &recordingT{}
+	first := &fakeContainer{termErr: errors.New("daemon refused terminate")}
+	var calls int
+	_, err := startRetrying(context.Background(), rt, "falkordb/falkordb", nil, func(context.Context, testcontainers.GenericContainerRequest) (testcontainers.Container, error) {
+		calls++
+		return first, &chfixture.PortUnreachableError{Port: "1", Tries: 1, Elapsed: time.Second, Err: fmt.Errorf("w: %w", chfixture.ErrPublishedPortUnreachable)}
+	})
+	if calls != 1 || err == nil || !strings.Contains(err.Error(), "daemon refused terminate") {
+		t.Fatalf("a failed cleanup must be returned, not retried over: calls=%d err=%v", calls, err)
+	}
+	if len(rt.logs) != 0 {
+		t.Fatalf("no restart line when no restart happens: %v", rt.logs)
+	}
+}
+
+func unreachableCreate(calls *int, pause time.Duration) startFunc {
+	return func(context.Context, testcontainers.GenericContainerRequest) (testcontainers.Container, error) {
+		*calls++
+		time.Sleep(pause)
+		return &fakeContainer{}, &chfixture.PortUnreachableError{Port: "1", Tries: 1, Elapsed: pause, Err: fmt.Errorf("w: %w", chfixture.ErrPublishedPortUnreachable)}
+	}
+}
+
+func TestStartRetryNeverExceedsTheTotalBudget(t *testing.T) {
+	var budgets []time.Duration
+	strategy := func(d time.Duration) wait.Strategy { budgets = append(budgets, d); return nil }
+	var calls int
+	_, err := startRetryingWithin(context.Background(), &recordingT{}, "falkordb/falkordb", nil, unreachableCreate(&calls, 300*time.Millisecond), strategy, 2*time.Second, time.Second)
+	if err == nil || calls != 2 || len(budgets) != 2 {
+		t.Fatalf("calls=%d budgets=%v err=%v", calls, budgets, err)
+	}
+	if budgets[0] != 2*time.Second || budgets[1] > 2*time.Second-300*time.Millisecond || budgets[1] < time.Second {
+		t.Fatalf("the retry gets what is left of the total, never more: %v", budgets)
+	}
+}
+
+func TestStartDoesNotRetryWhenLessThanTheFloorIsLeft(t *testing.T) {
+	rt := &recordingT{}
+	var calls int
+	strategy := func(time.Duration) wait.Strategy { return nil }
+	_, err := startRetryingWithin(context.Background(), rt, "falkordb/falkordb", nil, unreachableCreate(&calls, 1500*time.Millisecond), strategy, 2*time.Second, time.Second)
+	if calls != 1 || err == nil || !strings.Contains(err.Error(), "no restart") || !errors.Is(err, chfixture.ErrPublishedPortUnreachable) {
+		t.Fatalf("with less than the floor left there is no restart: calls=%d err=%v", calls, err)
+	}
+	if len(rt.logs) != 0 {
+		t.Fatalf("no restart line when no restart happens: %v", rt.logs)
 	}
 }

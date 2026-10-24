@@ -310,3 +310,46 @@ func TestAwaitFalkorServingKeepsOnlyTheEdgesOfALongTryHistory(t *testing.T) {
 		t.Fatalf("history must keep the first and last 5 tries: %q", got)
 	}
 }
+
+func TestAwaitFalkorServingNeverCallsAGraphCommandFailureAnUnreachablePort(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = ln.Close() }()
+	go func() {
+		for {
+			c, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			go func() {
+				defer func() { _ = c.Close() }()
+				buf := make([]byte, 4096)
+				for {
+					n, err := c.Read(buf)
+					if err != nil {
+						return
+					}
+					req := strings.ToUpper(string(buf[:n]))
+					switch {
+					case strings.Contains(req, "PING"):
+						_, _ = c.Write([]byte("+PONG\r\n"))
+					case strings.Contains(req, "GRAPH.LIST"):
+						_, _ = c.Write([]byte("-ERR graph module loading\r\n"))
+					case strings.Contains(req, "HELLO"), strings.Contains(req, "CLIENT"):
+						_, _ = c.Write([]byte("-ERR unknown command\r\n"))
+					}
+				}
+			}()
+		}
+	}()
+	var pl probeLog
+	err = awaitFalkorServingInside(context.Background(), ln.Addr().String(), 1500*time.Millisecond, 100*time.Millisecond, 20*time.Millisecond, 300*time.Millisecond, func(context.Context) error { return nil }, pl.logf)
+	if err == nil || errors.Is(err, ErrPublishedPortUnreachable) {
+		t.Fatalf("a host that answers PING and fails GRAPH.LIST must stay a hard fail, not a dead published port: %v", err)
+	}
+	if !strings.Contains(err.Error(), "GRAPH.LIST") {
+		t.Fatalf("the hard fail must carry the GRAPH.LIST error: %v", err)
+	}
+}

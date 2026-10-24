@@ -112,11 +112,15 @@ func awaitFalkorServingInside(ctx context.Context, addr string, budget, tryLimit
 			insideCtx, cancel := context.WithTimeout(ctx, tryLimit)
 			insideErr := inside(insideCtx)
 			cancel()
-			if insideErr == nil {
+			var pingStep *pingStepError
+			if insideErr == nil && errors.As(last, &pingStep) {
 				line += "; inside the container: answers PING"
 				if insideOKSince.IsZero() {
 					insideOKSince = time.Now()
 				}
+			} else if insideErr == nil {
+				line += "; inside the container: answers PING; host PING answered"
+				insideOKSince = time.Time{}
 			} else {
 				line += fmt.Sprintf("; inside the container: %v", insideErr)
 				insideOKSince = time.Time{}
@@ -181,6 +185,13 @@ func loopbackDialer(tryLimit time.Duration) func(context.Context, string, string
 	}
 }
 
+// pingStepError marks a probe that failed at the PING step (dial, write or read of PING), as opposed to a later
+// command; only a host-side PING that never answers can mean the published port is dead.
+type pingStepError struct{ err error }
+
+func (e *pingStepError) Error() string { return e.err.Error() }
+func (e *pingStepError) Unwrap() error { return e.err }
+
 func probeGraphName() (string, error) {
 	var b [8]byte
 	if _, err := rand.Read(b[:]); err != nil {
@@ -202,7 +213,7 @@ func probeFalkor(ctx context.Context, client *redis.Client, graph string, tryLim
 	tryCtx, cancel := context.WithTimeout(ctx, tryLimit)
 	defer cancel()
 	if err := client.Ping(tryCtx).Err(); err != nil {
-		return fmt.Errorf("PING: %w", err)
+		return &pingStepError{err: fmt.Errorf("PING: %w", err)}
 	}
 	if err := client.Do(tryCtx, "GRAPH.LIST").Err(); err != nil {
 		return fmt.Errorf("GRAPH.LIST: %w", err)
