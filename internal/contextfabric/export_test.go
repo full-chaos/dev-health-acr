@@ -2,6 +2,8 @@ package contextfabric
 
 import (
 	"context"
+	"testing"
+	"time"
 
 	"github.com/full-chaos/dev-health-acr/internal/storage"
 )
@@ -126,4 +128,37 @@ func FactScopeEnabledOriginsForTest() map[FactKind][]SubjectKind {
 		out[row.Requirement] = append(out[row.Requirement], row.Origins...)
 	}
 	return out
+}
+
+// BootstrapDraftForTest is the acceptance bootstrap question's grounded draft.
+func BootstrapDraftForTest() SynthesisDraft { return bootstrapDraft(acceptanceProject()) }
+
+// InvestigateAcceptanceBootstrapForTest runs the acceptance bootstrap question
+// through the real Engine, with the given runtime answering synthesis.
+func InvestigateAcceptanceBootstrapForTest(t *testing.T, synthesis ModelRuntime) (InvestigationResult, error) {
+	t.Helper()
+	project := acceptanceProject()
+	interpreter := fakeModelRuntime{interpreted: bootstrapInterpretation(), receipt: validModelReceiptFixture(ModelOperationInterpret)}
+	engine, err := NewEngine(EngineDependencies{
+		Interpreter: RuntimeQuestionInterpreter{Runtime: interpreter},
+		Graph: &acceptanceGraphReader{
+			resolution: SubjectResolution{Candidates: []SubjectCandidate{}, Committed: []SubjectRef{project}},
+			context:    bootstrapGraphContext(project),
+		},
+		Facts: factReaderFunc(func(context.Context, storage.Principal, CanonicalFactRequest) (CanonicalFactBundle, error) {
+			return bootstrapFactBundle(project), nil
+		}),
+		Synthesizer: RuntimeAnswerSynthesizer{Runtime: synthesis, Options: RuntimeAnswerSynthesizerOptions{ServiceVersion: "acceptance-test", Backend: "graph"}},
+		Results:     newMapResultStore(),
+	}, EngineOptions{
+		ServiceVersion: "acceptance-test",
+		Now:            func() time.Time { return time.Date(2026, 8, 12, 12, 0, 0, 0, time.UTC) },
+		NewResultID:    func() string { return "result_acceptance01" },
+	})
+	if err != nil {
+		t.Fatalf("NewEngine() error = %v", err)
+	}
+	request := validInvestigationRequestWithConfirmedWindow()
+	request.Question = "What is the actual status of Ask Dev and what is driving it?"
+	return engine.Investigate(context.Background(), acceptancePrincipal(), request)
 }
