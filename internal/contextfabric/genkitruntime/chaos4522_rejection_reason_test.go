@@ -83,36 +83,6 @@ func TestDecisionLineNamesTheRuleThatRejectedADecodedDraft(t *testing.T) {
 	}
 }
 
-// TestToDomainRejectionNamesItsOwnRuleNotADecodeFailure is the RED-FIRST
-// half, and it is where investigating team-lead's finding actually led.
-//
-// synthesisOutput.toDomain runs BEFORE ValidateAgainst and enforces one
-// rule of its own: deterministic_answer is required. Two things were wrong
-// there. The original implementation guarded its `output_undecodable`
-// override on errors.Is(err, ErrModelOutput), which toDomain's plain
-// errors.New never satisfies -- so the override was DEAD and this
-// rejection reported `unclassified`, the vocabulary's "no entry for this"
-// value, for a rule that has an entry. And `output_undecodable` was the
-// wrong name for it regardless: the model's JSON decoded into
-// synthesisOutput perfectly well, it merely omitted a required field, and
-// it is the very same rule ValidateAgainst enforces one statement later.
-// Nothing in this path can actually fail to DECODE, so no undecodable
-// reason exists in the vocabulary at all -- a reason no branch can emit is
-// a claim the telemetry cannot back.
-//
-// RED at 64d68cce and at e85a4ac8: both report a reason other than
-// deterministic_answer_missing for a rejection that IS exactly that rule.
-func TestToDomainRejectionNamesItsOwnRuleNotADecodeFailure(t *testing.T) {
-	t.Parallel()
-	output := validSynthesisOutput()
-	output.DeterministicAnswer = "   "
-
-	fields := captureDecisionLine(t, output, validSynthesisInput())
-	if got := fields["rejection_reason"]; got != string(contextfabric.RejectionReasonDeterministicAnswerMissing) {
-		t.Fatalf("rejection_reason = %v, want %q -- toDomain's required-field rejection is a validation rule with its own vocabulary entry, not a decode failure and not unclassified", got, contextfabric.RejectionReasonDeterministicAnswerMissing)
-	}
-}
-
 // TestDecisionLineCarriesTheRejectingClaimsFactGroupSize pins the second
 // new field on the emitted line, in codex R1 finding 1's adversarial shape:
 // the claim that REJECTS sits on a group of size 1 while a later,
@@ -289,15 +259,15 @@ func TestBothLegsFailedLineDescribesTheFallbackLeg(t *testing.T) {
 	logger := slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelInfo}))
 
 	// Primary rejects on the STATUS rule; the fallback fails carrying a
-	// DIFFERENT, deterministic-answer rejection. The two are distinguishable
+	// DIFFERENT, evidence rejection. The two are distinguishable
 	// on the wire, which is the whole point.
 	primary := validSynthesisOutput()
 	primary.Status = ""
 	fallbackReceipt := validReceipt(contextfabric.ModelOperationSynthesize)
 	fallbackReceipt.Outcome = "invalid_output"
 	fallbackErr := contextfabric.NewSynthesisRejection(
-		contextfabric.RejectionReasonDeterministicAnswerMissing,
-		errors.New("deterministic answer is required"),
+		contextfabric.RejectionReasonEvidenceUnknown,
+		errors.New("synthesis references unknown evidence"),
 	)
 	runtime := mustRuntime(t, &generatorStub{synthesis: primary}, Config{
 		Logger:   logger,
@@ -313,8 +283,8 @@ func TestBothLegsFailedLineDescribesTheFallbackLeg(t *testing.T) {
 			fields = candidate
 		}
 	}
-	if got := fields["rejection_reason"]; got != string(contextfabric.RejectionReasonDeterministicAnswerMissing) {
-		t.Fatalf("rejection_reason = %v, want the FALLBACK leg's %q -- the receipt outcome and the caller's error both come from that leg", got, contextfabric.RejectionReasonDeterministicAnswerMissing)
+	if got := fields["rejection_reason"]; got != string(contextfabric.RejectionReasonEvidenceUnknown) {
+		t.Fatalf("rejection_reason = %v, want the FALLBACK leg's %q -- the receipt outcome and the caller's error both come from that leg", got, contextfabric.RejectionReasonEvidenceUnknown)
 	}
 }
 

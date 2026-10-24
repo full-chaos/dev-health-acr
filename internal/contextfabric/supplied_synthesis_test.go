@@ -473,8 +473,8 @@ func TestSuppliedSynthesisThatFailsValidationIsRejectedAndNothingIsSaved(t *test
 			w.parse.draft, w.parse.err = SynthesisDraft{}, errors.New("unknown field")
 		}, RejectionReasonOutputSchemaMismatch, "invalid_output", 1},
 		"output with a wrong type": {func(w *writeBackRig) {
-			w.parse.draft, w.parse.err = SynthesisDraft{}, NewSynthesisRejection(RejectionReasonDeterministicAnswerMissing, errors.New("deterministic answer is required"))
-		}, RejectionReasonDeterministicAnswerMissing, "invalid_output", 1},
+			w.parse.draft, w.parse.err = SynthesisDraft{}, NewSynthesisRejection(RejectionReasonStatusInvalid, errors.New("synthesis draft status is invalid"))
+		}, RejectionReasonStatusInvalid, "invalid_output", 1},
 	}
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {

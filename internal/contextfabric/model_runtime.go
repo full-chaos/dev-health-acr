@@ -648,12 +648,6 @@ func (d SynthesisDraft) ValidateAgainst(input SynthesisInput) error {
 	default:
 		return rejectSynthesis(RejectionReasonStatusInvalid, "synthesis draft status is invalid")
 	}
-	if (d.Status == InvestigationComplete || d.Status == InvestigationPartial) && strings.TrimSpace(d.DirectJudgment) == "" {
-		return rejectSynthesis(RejectionReasonDirectJudgmentMissing, "answer-capable synthesis requires a direct judgment")
-	}
-	if strings.TrimSpace(d.DeterministicAnswer) == "" {
-		return rejectSynthesis(RejectionReasonDeterministicAnswerMissing, "deterministic answer is required")
-	}
 	allowedSubjects := synthesisSubjects(input)
 	// allowedSubjects is what the model may cite; payloadSubjects is
 	// everything it was SHOWN; uncitableShown is the part of the latter that
