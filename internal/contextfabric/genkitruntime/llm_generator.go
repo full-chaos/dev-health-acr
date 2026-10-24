@@ -355,6 +355,11 @@ func (g llmGenerator) check(ctx context.Context, operation, text string, schema 
 		reason = "not_json"
 	default:
 		if operation == "synthesize" {
+			var lifted int
+			if candidate, lifted = liftToolInputWrapper(candidate, schema.wire); lifted > 0 {
+				g.logger.InfoContext(ctx, llmToolInputLiftedMessage, "operation", contextfabric.SanitizeLogAttr(operation),
+					"lifted_keys", lifted, "reply_bytes", len(text))
+			}
 			var dropped []string
 			if candidate, dropped = dropUndeclaredProperties(candidate, schema.wire); len(dropped) > 0 {
 				g.logger.InfoContext(ctx, llmUndeclaredDroppedMessage, "operation", contextfabric.SanitizeLogAttr(operation),
