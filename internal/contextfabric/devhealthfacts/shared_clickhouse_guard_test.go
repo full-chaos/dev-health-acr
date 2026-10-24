@@ -2,9 +2,13 @@ package devhealthfacts_test
 
 import (
 	"context"
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"os"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strings"
 	"testing"
 
@@ -189,5 +193,162 @@ func TestPerTestQueryOptionsApplyTheTuneHookAndNameTheDatabase(t *testing.T) {
 	hooked := perTestQueryOptions("127.0.0.1:9000", "p7", func(o *runtimeclickhouse.Options) { o.DSN = "clickhouse://acr:acr@other/x" })
 	if hooked.DSN != "clickhouse://acr:acr@other/x" {
 		t.Fatalf("DSN = %q, want the hook applied after the default (it runs last)", hooked.DSN)
+	}
+}
+
+// forbiddenFunctions is every package-level function of the given test sources
+// that touches the server itself, found from its source rather than from a list:
+// a function whose body matches the server-statement or server-accounting
+// patterns, closed transitively over the calls between package-level functions.
+func forbiddenFunctions(t *testing.T, sources map[string]string) map[string]string {
+	t.Helper()
+	fset := token.NewFileSet()
+	bodies := map[string]string{}
+	calls := map[string]map[string]struct{}{}
+	names := make([]string, 0, len(sources))
+	for name := range sources {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	for _, name := range names {
+		file, err := parser.ParseFile(fset, name, sources[name], 0)
+		if err != nil {
+			t.Fatalf("parse %s: %v", name, err)
+		}
+		for _, decl := range file.Decls {
+			fn, ok := decl.(*ast.FuncDecl)
+			if !ok || fn.Recv != nil || fn.Body == nil {
+				continue
+			}
+			start, end := fset.Position(fn.Body.Pos()).Offset, fset.Position(fn.Body.End()).Offset
+			bodies[fn.Name.Name] = sources[name][start:end]
+			called := map[string]struct{}{}
+			ast.Inspect(fn.Body, func(n ast.Node) bool {
+				if call, ok := n.(*ast.CallExpr); ok {
+					if id, ok := call.Fun.(*ast.Ident); ok {
+						called[id.Name] = struct{}{}
+					}
+				}
+				return true
+			})
+			calls[fn.Name.Name] = called
+		}
+	}
+	forbidden := map[string]string{}
+	for fn, body := range bodies {
+		if m := serverStatement.FindString(body); m != "" {
+			forbidden[fn] = strings.TrimSpace(m)
+		} else if m := serverAccounting.FindString(body); m != "" {
+			forbidden[fn] = m
+		}
+	}
+	for changed := true; changed; {
+		changed = false
+		for fn, called := range calls {
+			if _, done := forbidden[fn]; done {
+				continue
+			}
+			for callee := range called {
+				if why, bad := forbidden[callee]; bad {
+					forbidden[fn] = callee + " -> " + why
+					changed = true
+					break
+				}
+			}
+		}
+	}
+	return forbidden
+}
+
+// indirectSharedHelperProblems fails a file that calls the shared helper and any
+// function that touches the server, directly or through other functions.
+func indirectSharedHelperProblems(t *testing.T, sources map[string]string) []string {
+	t.Helper()
+	forbidden := forbiddenFunctions(t, sources)
+	var problems []string
+	names := make([]string, 0, len(sources))
+	for name := range sources {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	fset := token.NewFileSet()
+	for _, name := range names {
+		if !callsSharedHelper(sources[name]) {
+			continue
+		}
+		file, err := parser.ParseFile(fset, name, sources[name], 0)
+		if err != nil {
+			t.Fatalf("parse %s: %v", name, err)
+		}
+		seen := map[string]struct{}{}
+		ast.Inspect(file, func(n ast.Node) bool {
+			call, ok := n.(*ast.CallExpr)
+			if !ok {
+				return true
+			}
+			id, ok := call.Fun.(*ast.Ident)
+			if !ok {
+				return true
+			}
+			if why, bad := forbidden[id.Name]; bad {
+				if _, dup := seen[id.Name]; !dup {
+					seen[id.Name] = struct{}{}
+					problems = append(problems, name+" uses the shared ClickHouse helper but calls "+id.Name+", which touches the server ("+why+"): use newDedicatedClickHouseIntegrationClient")
+				}
+			}
+			return true
+		})
+	}
+	return problems
+}
+
+func TestSharedClickHouseHelperIsNotUsedWithFunctionsThatTouchTheServer(t *testing.T) {
+	files, err := filepath.Glob("*_test.go")
+	if err != nil || len(files) == 0 {
+		t.Fatalf("no test files found (err %v): the guard measured nothing", err)
+	}
+	sources := map[string]string{}
+	for _, file := range files {
+		if file == "shared_clickhouse_guard_test.go" {
+			continue
+		}
+		raw, err := os.ReadFile(file)
+		if err != nil {
+			t.Fatal(err)
+		}
+		sources[file] = string(raw)
+	}
+	if forbidden := forbiddenFunctions(t, sources); len(forbidden) == 0 {
+		t.Fatal("no function touches the server: the guard measured nothing")
+	}
+	for _, problem := range indirectSharedHelperProblems(t, sources) {
+		t.Error(problem)
+	}
+}
+
+func TestSharedClickHouseGuardCatchesPlantedIndirectServerUses(t *testing.T) {
+	const helper = "package p\n\nfunc readQueryLog() {\n\tx := \"SELECT 1 FROM system.query_log\"\n\t_ = x\n}\n"
+	const viaHelper = "package p\n\nfunc measure() {\n\treadQueryLog()\n}\n"
+	shared := func(call string) string {
+		return "package p\n\nfunc TestX() {\n\tquery, direct := newCHAOS3780IntegrationClient(t, ctx)\n\t" + call + "\n}\n"
+	}
+	cases := map[string]map[string]string{
+		"a helper in another file reads system.query_log":    {"helper_test.go": helper, "shared_test.go": shared("readQueryLog()")},
+		"transitive: shared calls a helper that calls it":    {"helper_test.go": helper, "mid_test.go": viaHelper, "shared_test.go": shared("measure()")},
+		"a helper that runs a SYSTEM statement":              {"helper_test.go": "package p\n\nfunc flush() {\n\texec(\"SYSTEM FLUSH LOGS\")\n}\n", "shared_test.go": shared("flush()")},
+		"a helper that reads memory accounting by its field": {"helper_test.go": "package p\n\nfunc peak() int {\n\treturn memory_usage\n}\n", "shared_test.go": shared("peak()")},
+	}
+	for name, sources := range cases {
+		if len(indirectSharedHelperProblems(t, sources)) == 0 {
+			t.Errorf("%s: the planted indirect server use passed the guard", name)
+		}
+	}
+	for name, sources := range map[string]map[string]string{
+		"a clean helper":                        {"helper_test.go": "package p\n\nfunc seed() {\n\texec(\"INSERT INTO t VALUES (1)\")\n}\n", "shared_test.go": shared("seed()")},
+		"the server helper used by a dedicated": {"helper_test.go": helper, "dedicated_test.go": "package p\n\nfunc TestY() {\n\tq, d := newDedicatedClickHouseIntegrationClient(t, ctx)\n\treadQueryLog()\n}\n"},
+	} {
+		if problems := indirectSharedHelperProblems(t, sources); len(problems) != 0 {
+			t.Errorf("%s: unexpected problems %v", name, problems)
+		}
 	}
 }
