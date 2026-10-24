@@ -19,7 +19,7 @@ import (
 // makes every row its own block, so a result of two or more rows has an end
 // that stopping after one row never reaches. The evidence reference read and
 // the other Query sites stop at the last row their LIMIT returns, so that end
-// is already consumed there; the layer every site shares is what is pinned.
+// is already consumed there; the shared row wrappers are what is pinned.
 
 const (
 	// rowsCloseBlockSize turns each result row into one block.
@@ -80,12 +80,13 @@ func TestAbandonedMultiBlockResultsStarveThePoolWithoutClose(t *testing.T) {
 	}
 }
 
-// Every production Query site reaches ClickHouse through components.queryClient,
-// the measured wrapper over the memory-capped wrapper over the native client.
-// Each wrapper's rows.Close must forward to the driver, because a result a
-// caller abandons before its end holds its connection until that Close. Reading
-// one row of a multi-block result and closing it, repeated three pool widths,
-// must neither starve the pool nor open connections beyond the warm one.
+// components.queryClient is the measured wrapper over the memory-capped
+// wrapper over the native client; the evidence store reads through the capped
+// wrapper alone. Each wrapper's rows.Close must forward to the driver, because
+// a result a caller abandons before its end holds its connection until that
+// Close. Reading one row of a multi-block result and closing it, repeated three
+// pool widths, must neither starve the pool nor open connections beyond the
+// warm one.
 func TestAbandonedMultiBlockResultsReleaseTheirConnectionThroughTheQueryClient(t *testing.T) {
 	rig, components := openMultiBlockRig(t)
 	rig.Proxy.ResetStats()
@@ -94,7 +95,7 @@ func TestAbandonedMultiBlockResultsReleaseTheirConnectionThroughTheQueryClient(t
 		rows, err := components.queryClient.Query(ctx, "SELECT number FROM numbers(1000)", nil)
 		if err != nil {
 			cancel()
-			t.Fatalf("call %d: %v; a context deadline here is a leaked pool slot", call+1, err)
+			t.Fatalf("call %d: %v; a failure after the first pool width of calls means the pool is starved by unreleased connections", call+1, err)
 		}
 		if !rows.Next() {
 			cancel()
