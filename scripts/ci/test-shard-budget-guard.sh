@@ -10,6 +10,11 @@ tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
 fails=0
 
+# CHAOS-10963: the JSON cases below need jq; a missing jq is a failure, not a skip.
+if ! command -v jq >/dev/null; then
+  echo "FAIL jq-present: jq is required for the JSON cases"; fails=$((fails + 1))
+fi
+
 expect() { # name want_rc want_pattern budget file
   local name="$1" want="$2" pat="$3" budget="$4" f="$5" rc=0 out
   out="$("$guard" "$budget" "$f" 2>&1)" || rc=$?
