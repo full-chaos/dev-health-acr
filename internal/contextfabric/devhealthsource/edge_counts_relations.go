@@ -7,7 +7,9 @@ import (
 	"strings"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric/dependencyrelation"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/devhealthschema"
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric/evidenceref"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/identity"
 	"github.com/full-chaos/dev-health-acr/internal/contextpacket"
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
@@ -20,9 +22,23 @@ type edgePopulation struct {
 	relation contractsv1.ContextFabricRelationshipType
 	arms     []string
 	sql      string
+	// relationByArm, when set, makes the statement's arm column name the relation
+	// type itself: one statement measures several relation types, each a key
+	// with no arm.
+	relationByArm map[string]contractsv1.ContextFabricRelationshipType
+	// needsEndedLinks marks a statement over the producer's removed-link set,
+	// which it binds; a set cut at its bound makes the population unmeasured.
+	needsEndedLinks bool
 }
 
 func (p edgePopulation) keys() []contextfabric.EdgeCountKey {
+	if p.relationByArm != nil {
+		keys := make([]contextfabric.EdgeCountKey, 0, len(p.relationByArm))
+		for _, relation := range sortedRelations(p.relationByArm) {
+			keys = append(keys, contextfabric.EdgeCountKey{Relation: relation})
+		}
+		return keys
+	}
 	arms := p.arms
 	if len(arms) == 0 {
 		arms = []string{""}
@@ -148,12 +164,72 @@ func pullRequestWorkItemTypeNames() []string {
 	return names
 }
 
+// dependencyEdgeRelations maps the canonical type of dependencyrelation.KeySQL
+// (the lower-cased vocabulary member) to the relation type it measures.
+var dependencyEdgeRelations = map[string]contractsv1.ContextFabricRelationshipType{
+	strings.ToLower(string(contractsv1.ContextFabricRelationshipBlocks)):     contractsv1.ContextFabricRelationshipBlocks,
+	strings.ToLower(string(contractsv1.ContextFabricRelationshipRelatesTo)):  contractsv1.ContextFabricRelationshipRelatesTo,
+	strings.ToLower(string(contractsv1.ContextFabricRelationshipDuplicates)): contractsv1.ContextFabricRelationshipDuplicates,
+	strings.ToLower(string(contractsv1.ContextFabricRelationshipRelatedTo)):  contractsv1.ContextFabricRelationshipRelatedTo,
+}
+
+func sortedRelations(byArm map[string]contractsv1.ContextFabricRelationshipType) []contractsv1.ContextFabricRelationshipType {
+	arms := make([]string, 0, len(byArm))
+	for arm := range byArm {
+		arms = append(arms, arm)
+	}
+	sort.Strings(arms)
+	relations := make([]contractsv1.ContextFabricRelationshipType, 0, len(arms))
+	for _, arm := range arms {
+		relations = append(relations, byArm[arm])
+	}
+	return relations
+}
+
+// dependencyEdgeCountSQL counts, per relation type, the distinct edges of
+// queryWorkItemDependencies over its own row source (dependencyFromSQL) and its
+// removed-link set. A row projects no edge when its type is ignored, when the
+// provider removed the link, when its source work item or its target (a work
+// item, or the work_item_ref stub of an unresolved target) has a canonical id over
+// the natural-key bound, or when the edge would join a work item to itself. An
+// edge is (type, from, to) after the type is resolved through dependencyrelation:
+// an inverse spelling exchanges the endpoints, so it and the forward row of the
+// same relation are one edge, as are case and padding variants of one type.
+func dependencyEdgeCountSQL() string {
+	key := dependencyrelation.KeySQL(dependencyRelationshipTypeExpr)
+	resolved := "isNotNull(t.created_at)"
+	source := "concat('w.', " + encodeSegmentSQL("toString(w.repo_id)") + ", ':', " + encodeSegmentSQL("d.source_work_item_id") + ")"
+	target := "if(" + resolved + ", concat('w.', " + encodeSegmentSQL("toString(t.repo_id)") + ", ':', " + encodeSegmentSQL("d.target_work_item_id") + "), concat('r.', " + encodeSegmentSQL("d.target_work_item_id") + "))"
+	refFits := fmt.Sprintf("length(concat('%s:', %s)) <= %d", identity.KindWorkItemRef, encodeSegmentSQL("d.target_work_item_id"), identity.MaxNaturalKeyBytes)
+	ref := evidenceref.SQL(contractsv1.ContextFabricEvidenceEntityWorkItemDependencyV2, "d.source_work_item_id", "d.target_work_item_id", "k")
+	refOK := fmt.Sprintf("lengthUTF8(%s) <= %d AND position(%s, '|') = 0", ref, contractsv1.ContextFabricEvidenceRefIDMaxLength, ref)
+	arms := make([]string, 0, len(dependencyEdgeRelations))
+	for arm := range dependencyEdgeRelations {
+		arms = append(arms, "'"+arm+"'")
+	}
+	sort.Strings(arms)
+	return `SELECT arm, uniqExact(edge_from, edge_to) AS edge_count FROM (
+  SELECT substring(k, 1, length(k) - 4) AS arm, if(endsWith(k, ':inv'), tgt, src) AS edge_from, if(endsWith(k, ':inv'), src, tgt) AS edge_to
+  FROM (
+    SELECT ` + key + ` AS k, ` + source + ` AS src, ` + target + ` AS tgt, ` + refOK + ` AS ref_ok
+    ` + dependencyFromSQL() + `
+      AND ifNull(rr.ended, 0) = 0
+      AND lower(` + trimSpaceSQL(dependencyRelationshipTypeExpr) + `) NOT IN ('` + strings.Join(ignoredDependencyTypeNames(), "', '") + `')
+      AND ` + derivedIDFitsSQL(identity.KindWorkItem, "toString(w.repo_id)", "d.source_work_item_id") + `
+      AND if(` + resolved + `, ` + derivedIDFitsSQL(identity.KindWorkItem, "toString(t.repo_id)", "d.target_work_item_id") + `, ` + refFits + `)
+  )
+  WHERE arm IN (` + strings.Join(arms, ", ") + `) AND src != tgt AND ref_ok
+)
+GROUP BY arm`
+}
+
 var clickHouseEdgePopulations = []edgePopulation{
 	{relation: contractsv1.ContextFabricRelationshipBelongsToPullRequest, sql: `SELECT '' AS arm, * FROM (` + pullRequestReviewCountSQL + `)`},
 	{relation: contractsv1.ContextFabricRelationshipBelongsToRepository, arms: repositoryEdgeArms, sql: belongsToRepositoryEdgeCountSQL()},
 	{relation: contractsv1.ContextFabricRelationshipCorrelatedWithIncident, sql: deploymentIncidentEdgeCountSQL()},
 	{relation: contractsv1.ContextFabricRelationshipPartOf, sql: partOfEdgeCountSQL()},
 	{relation: contractsv1.ContextFabricRelationshipLinksPullRequest, arms: linkEdgeArms, sql: linksPullRequestEdgeCountSQL()},
+	{relationByArm: dependencyEdgeRelations, sql: dependencyEdgeCountSQL(), needsEndedLinks: true},
 }
 
 // runEdgePopulations runs each population's statement and returns every key it
@@ -164,33 +240,71 @@ func runEdgePopulations(ctx context.Context, client contextpacket.ClickHouseQuer
 		return nil, fmt.Errorf("devhealthsource: organization is required")
 	}
 	counts := map[contextfabric.EdgeCountKey]int64{}
+	var unmeasured *contextfabric.EdgeCountsUnmeasured
 	for _, population := range populations {
+		bindings := []contextpacket.ClickHouseBinding{{Name: "org_id", Value: orgID}}
+		if population.needsEndedLinks {
+			ended, err := endedLinksFor(ctx, client, orgID)
+			if err != nil {
+				return nil, fmt.Errorf("devhealthsource: read removed links for the dependency edge counts: %w", err)
+			}
+			if ended.cut {
+				startLogger(ctx).WarnContext(ctx, "devhealthsource dependency edge counts unmeasured",
+					"org_id", contextfabric.SanitizeLogAttr(redactOrg(orgID)), "reason", removedLinkSetCutReason, "removed_links_kept", len(ended.keys))
+				if unmeasured == nil {
+					unmeasured = &contextfabric.EdgeCountsUnmeasured{Reason: removedLinkSetCutReason}
+				}
+				unmeasured.Keys = append(unmeasured.Keys, population.keys()...)
+				continue
+			}
+			bindings = append(bindings, ended.bindings()...)
+		}
 		for _, key := range population.keys() {
 			counts[key] = 0
 		}
-		rows, err := client.Query(ctx, population.sql, []contextpacket.ClickHouseBinding{{Name: "org_id", Value: orgID}})
+		rows, err := client.Query(ctx, population.sql, bindings)
 		if err != nil {
-			return nil, fmt.Errorf("devhealthsource: count %s edges: %w", population.relation, err)
+			return nil, fmt.Errorf("devhealthsource: count %s edges: %w", population.name(), err)
 		}
 		for rows.Next() {
 			var arm string
 			var total uint64
 			if err := rows.Scan(&arm, &total); err != nil {
 				_ = rows.Close()
-				return nil, fmt.Errorf("devhealthsource: scan %s edge count: %w", population.relation, err)
+				return nil, fmt.Errorf("devhealthsource: scan %s edge count: %w", population.name(), err)
 			}
-			key := contextfabric.EdgeCountKey{Relation: population.relation, Arm: arm}
-			if _, known := counts[key]; !known {
+			key, known := population.keyForArm(arm)
+			if _, present := counts[key]; !known || !present {
 				_ = rows.Close()
-				return nil, fmt.Errorf("devhealthsource: %s edge count returned unknown arm %q", population.relation, arm)
+				return nil, fmt.Errorf("devhealthsource: %s edge count returned unknown arm %q", population.name(), arm)
 			}
 			counts[key] = int64(total)
 		}
 		iterErr := rows.Err()
 		_ = rows.Close()
 		if iterErr != nil {
-			return nil, fmt.Errorf("devhealthsource: count %s edges: %w", population.relation, iterErr)
+			return nil, fmt.Errorf("devhealthsource: count %s edges: %w", population.name(), iterErr)
 		}
 	}
+	if unmeasured != nil {
+		return counts, unmeasured
+	}
 	return counts, nil
+}
+
+const removedLinkSetCutReason = "removed_link_set_cut"
+
+func (p edgePopulation) name() string {
+	if p.relationByArm != nil {
+		return "work item dependency"
+	}
+	return string(p.relation)
+}
+
+func (p edgePopulation) keyForArm(arm string) (contextfabric.EdgeCountKey, bool) {
+	if p.relationByArm != nil {
+		relation, ok := p.relationByArm[arm]
+		return contextfabric.EdgeCountKey{Relation: relation}, ok
+	}
+	return contextfabric.EdgeCountKey{Relation: p.relation, Arm: arm}, true
 }

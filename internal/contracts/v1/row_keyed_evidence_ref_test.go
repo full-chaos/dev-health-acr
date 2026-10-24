@@ -4,13 +4,18 @@ import "testing"
 
 func TestRowKeyedEvidenceRefIsExactlyTheSingleRowKinds(t *testing.T) {
 	rowKeyed := map[ContextFabricEvidenceEntityType]bool{
-		ContextFabricEvidenceEntityPullRequest: true,
-		ContextFabricEvidenceEntityWorkItem:    true,
-		ContextFabricEvidenceEntityRepository:  true,
-		ContextFabricEvidenceEntityCI:          true,
-		ContextFabricEvidenceEntityDeployment:  true,
-		ContextFabricEvidenceEntityReviewV2:    true,
-		ContextFabricEvidenceEntityIncident:    true,
+		ContextFabricEvidenceEntityPullRequest:          true,
+		ContextFabricEvidenceEntityWorkItem:             true,
+		ContextFabricEvidenceEntityRepository:           true,
+		ContextFabricEvidenceEntityCI:                   true,
+		ContextFabricEvidenceEntityDeployment:           true,
+		ContextFabricEvidenceEntityReviewV2:             true,
+		ContextFabricEvidenceEntityIncident:             true,
+		ContextFabricEvidenceEntityWorkItemDependencyV2: true,
+		ContextFabricEvidenceEntityWorkItemHierarchyV2:  true,
+		ContextFabricEvidenceEntityWorkItemTeamV2:       true,
+		ContextFabricEvidenceEntityDeploymentIncidentV2: true,
+		ContextFabricEvidenceEntityProjectTeamV2:        true,
 	}
 	for _, kind := range ContextFabricEvidenceEntityTypeVocabulary() {
 		ref := ContextFabricEvidenceRefPrefix + string(kind) + ":0b8f2a4e-1c3d-4e5f-8a9b-0c1d2e3f4a5b:x"

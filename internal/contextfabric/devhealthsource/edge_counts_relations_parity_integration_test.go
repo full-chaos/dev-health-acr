@@ -218,7 +218,9 @@ func TestLiveRepositoryAndLinkEdgeCountsEqualTheEdgesTheProducersAssert(t *testi
 		got[key]++
 	}
 	for _, key := range source.EdgeCountKeys() {
-		if key.Relation == contractsv1.ContextFabricRelationshipBelongsToPullRequest {
+		switch key.Relation {
+		case contractsv1.ContextFabricRelationshipBelongsToPullRequest, contractsv1.ContextFabricRelationshipBlocks, contractsv1.ContextFabricRelationshipRelatesTo,
+			contractsv1.ContextFabricRelationshipDuplicates, contractsv1.ContextFabricRelationshipRelatedTo:
 			continue
 		}
 		if got[key] == 0 {

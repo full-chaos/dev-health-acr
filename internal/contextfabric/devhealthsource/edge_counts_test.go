@@ -36,6 +36,8 @@ func (r *edgeCountRows) Scan(dest ...any) error {
 			*d = row[i].(string)
 		case *uint64:
 			*d = row[i].(uint64)
+		case *[]string:
+			*d = row[i].([]string)
 		default:
 			return fmt.Errorf("unsupported scan target %T", dest[i])
 		}
@@ -197,7 +199,7 @@ func TestTeamsProjectsEdgeCountsReportEveryArmAndZeroFillsTheMissingOne(t *testi
 	}
 	transition := contextfabric.EdgeCountKey{Relation: contractsv1.ContextFabricRelationshipBelongsToProject, Arm: contextfabric.EdgeArmTransition}
 	column := contextfabric.EdgeCountKey{Relation: contractsv1.ContextFabricRelationshipBelongsToProject, Arm: contextfabric.EdgeArmWorkItemColumn}
-	if len(counts) != 2 || counts[transition] != 6756 {
+	if len(counts) != 2+len(ownedByTeamArms) || counts[transition] != 6756 {
 		t.Fatalf("both arms must be present: %+v", counts)
 	}
 	if v, ok := counts[column]; !ok || v != 0 {
@@ -341,8 +343,8 @@ func TestEveryProducedRelationTypeIsMeasuredOrNamedDeferred(t *testing.T) {
 			if len(missing) != 0 || len(extra) != 0 {
 				t.Fatalf("produced relation types not measured or named deferred: %v; measured or deferred but not produced: %v", missing, extra)
 			}
-			if len(source.DeferredEdgeRelations()) == 0 {
-				t.Fatalf("this leaf defers relation types by name; an empty list means a producer was dropped from the guard")
+			if deferred := source.DeferredEdgeRelations(); len(deferred) != 0 {
+				t.Fatalf("every relation type %s produces is measured, deferred = %v", name, deferred)
 			}
 		})
 	}

@@ -3,6 +3,7 @@ package emitscan_test
 import (
 	"bufio"
 	"context"
+	"errors"
 	"fmt"
 	"io/fs"
 	"os"
@@ -18,17 +19,45 @@ import (
 	"github.com/full-chaos/dev-health-acr/internal/otelexport"
 )
 
-// scanBudget is the wall-time budget of one scan of the repository, enforced by cancelling the scan's context: the scan
-// checks it while it works and stops, so a runaway scan ends inside the test instead of outliving it.
-const scanBudget = 30 * time.Second
+// scanDeadlineBudget is how long one scan of the repository may run before the guard cancels it. It follows the test binary's
+// own deadline (go test -timeout) and leaves a margin to report a clean failure before the binary is killed, so a slow runner
+// can no longer fail a scan that is making progress; the cost itself is pinned by the work budget and the CPU-time rows. A
+// binary with no deadline gets a ten minute cap.
+func scanDeadlineBudget(now, deadline time.Time, hasDeadline bool) time.Duration {
+	const (
+		budgetCap = 10 * time.Minute
+		margin    = 5 * time.Second
+		floor     = time.Second
+	)
+	if !hasDeadline {
+		return budgetCap
+	}
+	if budget := deadline.Sub(now) - margin; budget > floor {
+		return budget
+	}
+	return floor
+}
+
+// runScan scans dirs under root and gives up, cancelling the work itself, after budget.
+func runScan(budget time.Duration, root string, dirs []string) ([]emitscan.Finding, []emitscan.Site, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), budget)
+	defer cancel()
+	return emitscan.ScanContext(ctx, root, dirs)
+}
+
+// scanBudget is the budget of a scan started now by this test.
+func scanBudget(t *testing.T) time.Duration {
+	t.Helper()
+	deadline, ok := t.Deadline()
+	return scanDeadlineBudget(time.Now(), deadline, ok)
+}
 
 func scanWithin(t *testing.T) ([]emitscan.Finding, []emitscan.Site) {
 	t.Helper()
-	ctx, cancel := context.WithTimeout(context.Background(), scanBudget)
-	defer cancel()
-	findings, sites, err := emitscan.ScanContext(ctx, repoRoot(t), []string{"internal", "cmd"})
+	budget := scanBudget(t)
+	findings, sites, err := runScan(budget, repoRoot(t), []string{"internal", "cmd"})
 	if err != nil {
-		t.Fatalf("the emit-path scan did not finish within %s: %v", scanBudget, err)
+		t.Fatalf("the emit-path scan did not finish within %s (the test deadline less a margin): %v", budget, err)
 	}
 	return findings, sites
 }
@@ -218,7 +247,18 @@ func diffTables(have, want map[siteKey]string) []string {
 // TestMetricLabelSitesMatchLabelsTSV pins the label keys of every metric.WithAttributes call site: a new site, a changed
 // key set or a stale row fails until the table says so. Unbounded words (ids, paths, free text) are refused by rule R2.
 func TestMetricLabelSitesMatchLabelsTSV(t *testing.T) {
-	for _, problem := range diffTables(censusOf(t, "metric"), readSiteTable(t, "labels.tsv")) {
+	table := readSiteTable(t, "labels.tsv")
+	thirdParty := 0
+	for key := range table {
+		if strings.HasPrefix(key.file, "third-party:") { // read by the runtime census in internal/otelexport, not by the source scan
+			delete(table, key)
+			thirdParty++
+		}
+	}
+	if thirdParty == 0 {
+		t.Error("labels.tsv has no third-party row: the runtime census of the library instruments would have nothing to read")
+	}
+	for _, problem := range diffTables(censusOf(t, "metric"), table) {
 		t.Error(problem)
 	}
 }
@@ -321,5 +361,50 @@ func TestThePlannerAlwaysReachesTheCensusGate(t *testing.T) {
 	}
 	if _, mode := plan("scripts/ci/reached-shards.sh"); mode != "full" {
 		t.Fatalf("a change under scripts/ci/ runs mode %q, want full", mode)
+	}
+}
+
+func TestScanBudgetFollowsTheTestDeadline(t *testing.T) {
+	now := time.Date(2026, 10, 24, 12, 0, 0, 0, time.UTC)
+	cases := []struct {
+		name        string
+		deadline    time.Time
+		hasDeadline bool
+		want        time.Duration
+	}{
+		{"no deadline: the ten minute cap", time.Time{}, false, 10 * time.Minute},
+		{"a fifteen minute deadline leaves the margin", now.Add(15 * time.Minute), true, 15*time.Minute - 5*time.Second},
+		{"a ten minute deadline (the go test default)", now.Add(10 * time.Minute), true, 10*time.Minute - 5*time.Second},
+		{"three seconds left: the floor", now.Add(3 * time.Second), true, time.Second},
+		{"the deadline has passed: the floor", now.Add(-time.Minute), true, time.Second},
+	}
+	for _, tc := range cases {
+		if got := scanDeadlineBudget(now, tc.deadline, tc.hasDeadline); got != tc.want {
+			t.Errorf("%s: budget = %s, want %s", tc.name, got, tc.want)
+		}
+	}
+	// the wiring: the budget a test's scan really gets is the one derived from this test's own deadline
+	deadline, ok := t.Deadline()
+	want := scanDeadlineBudget(time.Now(), deadline, ok)
+	if got := scanBudget(t); got > want || want-got > time.Second {
+		t.Errorf("scanBudget = %s, want about %s (deadline %v, set %v)", got, want, deadline, ok)
+	}
+	if ok && scanBudget(t) == 30*time.Second {
+		t.Error("the scan budget is the old fixed 30 s")
+	}
+}
+
+// The guard still ends a scan that never returns: with the work budget raised so only the context can stop it, a short
+// budget cancels it and the guard's own path reports the context error.
+func TestTheGuardFailsOnAHangingScan(t *testing.T) {
+	root := ringRoot(t, 2000)
+	defer emitscan.SetWorkBudget(1<<50, 1<<30)()
+	start := time.Now()
+	_, _, err := runScan(200*time.Millisecond, root, []string{"internal"})
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("err = %v, want the context deadline", err)
+	}
+	if elapsed := time.Since(start); elapsed > 2*time.Second {
+		t.Fatalf("the hanging scan outlasted its budget by %s", elapsed)
 	}
 }

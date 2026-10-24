@@ -204,7 +204,7 @@ func NewWithExporters(ctx context.Context, cfg Config, sinks Exporters) (*Export
 	return &Exporter{
 		config:      cfg,
 		traces:      sdktrace.NewTracerProvider(sdktrace.WithResource(res), sdktrace.WithSpanProcessor(spanProcessor)),
-		metrics:     sdkmetric.NewMeterProvider(sdkmetric.WithResource(res), sdkmetric.WithReader(sinks.Metrics)),
+		metrics:     sdkmetric.NewMeterProvider(sdkmetric.WithResource(res), sdkmetric.WithReader(sinks.Metrics), sdkmetric.WithView(httpMetricView())),
 		logs:        sdklog.NewLoggerProvider(sdklog.WithResource(res), sdklog.WithProcessor(logProcessor)),
 		propagators: propagation.NewCompositeTextMapPropagator(propagation.TraceContext{}, propagation.Baggage{}),
 		serviceName: cfg.ServiceName,

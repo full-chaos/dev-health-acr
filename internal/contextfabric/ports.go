@@ -3,6 +3,7 @@ package contextfabric
 import (
 	"context"
 	"errors"
+	"fmt"
 	"time"
 
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
@@ -1473,6 +1474,19 @@ type ProjectionSourceEdgeCounts interface {
 	ProjectionSourceEdgeCounts(ctx context.Context, orgID string) (map[EdgeCountKey]int64, error)
 	EdgeCountKeys() []EdgeCountKey
 	DeferredEdgeRelations() []RelationshipType
+}
+
+// EdgeCountsUnmeasured is the error a ProjectionSourceEdgeCounts returns beside
+// the counts it did measure when it could not measure some populations: Keys
+// names them and Reason says why. Unknown is not missing: the check reports
+// each key unmeasured with this reason and still compares the counts returned.
+type EdgeCountsUnmeasured struct {
+	Keys   []EdgeCountKey
+	Reason string
+}
+
+func (e *EdgeCountsUnmeasured) Error() string {
+	return fmt.Sprintf("%d edge count populations unmeasured: %s", len(e.Keys), e.Reason)
 }
 
 // ProjectionGraphEdgeCounts is an OPTIONAL capability a ProjectionBackend

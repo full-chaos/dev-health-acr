@@ -428,6 +428,9 @@ type ProjectTeamsFragment struct {
 	Name, SQL string
 	Settings  string
 	Paged     bool
+	// Capped runs the statement under the projector's statement settings with
+	// only the organization bound: a count statement, not a paged read.
+	Capped bool
 }
 
 // ProjectTeamsFragmentsForTest lists the statement's building blocks, then the
@@ -444,6 +447,7 @@ func ProjectTeamsFragmentsForTest(ingest bool) []ProjectTeamsFragment {
 		{Name: "both_arms_union", SQL: arms[0] + "\nUNION ALL\n" + arms[1]},
 		{Name: "group_statement", SQL: projectTeamsGroupSQL(ingest)},
 		{Name: "paged_statement", SQL: projectTeamsStatementFor(cursorState{}, ingest), Paged: true},
+		{Name: "owned_by_team_project_count", SQL: projectOwnershipEdgeCountSQL(ingest), Capped: true},
 		{Name: "legacy_group_statement", SQL: legacyProjectTeamsGroupSQL(ingest)},
 		{Name: "legacy_paged_statement", SQL: legacyProjectTeamsStatementFor(cursorState{}, ingest), Paged: true},
 	}
@@ -512,14 +516,27 @@ type CarryTrialForTest struct {
 	Equal            bool
 	NonEmpty         bool
 	Carried, Fetched []string
+	// TieKept and TieDropped count the rows of the read at c0 that sit at
+	// exactly c1's timestamp: kept when their key sorts after c1's key, dropped
+	// when it does not. Both must be exercised for the (position, key) tie
+	// rule to be proven rather than assumed.
+	TieKept, TieDropped int
+	// Arms counts, per membership arm, the rows of the statement read at c1.
+	Arms map[string]int
 }
 
-func carryProducersForTest() []entityTable {
-	return teamsProjectsTablesFor(&ambiguityLedger{}, &presenceTelemetryLedger{}, &teamAuthorizationLedger{}, &repositoryOwnershipLedger{}, true)
+// MembershipArmsForTest lists the project_membership_presence statement arms.
+func MembershipArmsForTest() []string { return append([]string(nil), membershipArms...) }
+
+// carryProducersForTest builds the teams source's producers for one statement
+// set: ingest=true is the ingest-column statements (cursor space ingest.v2),
+// ingest=false the pre-migration statements (ingest.v1).
+func carryProducersForTest(ingest bool) []entityTable {
+	return teamsProjectsTablesFor(&ambiguityLedger{}, &presenceTelemetryLedger{}, &teamAuthorizationLedger{}, &repositoryOwnershipLedger{}, ingest)
 }
 
-func carryProducerForTest(name string) (entityTable, error) {
-	for _, table := range carryProducersForTest() {
+func carryProducerForTest(name string, ingest bool) (entityTable, error) {
+	for _, table := range carryProducersForTest(ingest) {
 		if table.name == name {
 			return table, nil
 		}
@@ -528,9 +545,9 @@ func carryProducerForTest(name string) (entityTable, error) {
 }
 
 // CarryProducersForTest lists the teams source's producers in registry order.
-func CarryProducersForTest() []CarryProducerForTest {
+func CarryProducersForTest(ingest bool) []CarryProducerForTest {
 	var out []CarryProducerForTest
-	for _, table := range carryProducersForTest() {
+	for _, table := range carryProducersForTest(ingest) {
 		out = append(out, CarryProducerForTest{Name: table.name, Carry: table.carry})
 	}
 	return out
@@ -538,8 +555,8 @@ func CarryProducersForTest() []CarryProducerForTest {
 
 // CarryPositionsForTest reads the producer from the start and returns the
 // keyset position of every row it returns, ascending.
-func CarryPositionsForTest(ctx context.Context, client contextpacket.ClickHouseQueryClient, orgID, name string, limit int) ([]CarryCursorForTest, error) {
-	table, err := carryProducerForTest(name)
+func CarryPositionsForTest(ctx context.Context, client contextpacket.ClickHouseQueryClient, orgID, name string, ingest bool, limit int) ([]CarryCursorForTest, error) {
+	table, err := carryProducerForTest(name, ingest)
 	if err != nil {
 		return nil, err
 	}
@@ -561,8 +578,8 @@ func CarryPositionsForTest(ctx context.Context, client contextpacket.ClickHouseQ
 // CarryTrialRunForTest reads the producer at c0; when that read is complete it
 // filters the rows with the window carry to c1 and compares them, value for
 // value, with a statement read at c1.
-func CarryTrialRunForTest(ctx context.Context, client contextpacket.ClickHouseQueryClient, orgID, name string, c0, c1 CarryCursorForTest, limit int) (CarryTrialForTest, error) {
-	table, err := carryProducerForTest(name)
+func CarryTrialRunForTest(ctx context.Context, client contextpacket.ClickHouseQueryClient, orgID, name string, ingest bool, c0, c1 CarryCursorForTest, limit int) (CarryTrialForTest, error) {
+	table, err := carryProducerForTest(name, ingest)
 	if err != nil {
 		return CarryTrialForTest{}, err
 	}
@@ -582,7 +599,21 @@ func CarryTrialRunForTest(ctx context.Context, client contextpacket.ClickHouseQu
 	if err != nil {
 		return CarryTrialForTest{}, err
 	}
-	trial := CarryTrialForTest{Carried: keysForTest(carried), Fetched: keysForTest(fetched)}
+	trial := CarryTrialForTest{Carried: keysForTest(carried), Fetched: keysForTest(fetched), Arms: map[string]int{}}
+	for _, row := range first {
+		if row.position().Equal(to.Since) {
+			if row.sortKey > to.After {
+				trial.TieKept++
+			} else {
+				trial.TieDropped++
+			}
+		}
+	}
+	for _, row := range fetched {
+		if row.arm != "" {
+			trial.Arms[row.arm]++
+		}
+	}
 	// A nil slice and an empty one are the same page; DeepEqual says otherwise.
 	trial.NonEmpty = len(fetched) > 0
 	trial.Equal = !fetchedTruncated && ((len(carried) == 0 && len(fetched) == 0) || reflect.DeepEqual(carried, fetched))
