@@ -80,6 +80,16 @@ func TestRedProofs(t *testing.T) {
 		{"planted attribute held in a variable", "func f(a slog.Attr, l *slog.Logger) { l.Info(\"x\", a) }", "R9"},
 		{"planted error text as a log value", "func f(err error, l *slog.Logger) { l.Info(\"x\", \"reason\", err.Error()) }", "R3"},
 		{"planted formatted error as a log value", "func f(err error, l *slog.Logger) { l.Info(\"x\", \"reason\", fmt.Sprintf(\"%v\", err)) }", "R3"},
+		{"planted protected key as an slog group name", "func f(v string, l *slog.Logger) { l.Info(\"x\", slog.Group(\"api_key\", \"k\", v)) }", "R1"},
+		{"planted protected key inside an slog group", "func f(v string, l *slog.Logger) { l.Info(\"x\", slog.Group(\"g\", \"password\", v)) }", "R1"},
+		{"planted protected key in an slog.Attr literal", "func f(v string, l *slog.Logger) { l.Info(\"x\", slog.Attr{Key: \"api_key\", Value: slog.StringValue(v)}) }", "R1"},
+		{"planted unresolvable key in an slog.Attr literal", "func f(k, v string, l *slog.Logger) { l.Info(\"x\", slog.Attr{Key: k, Value: slog.StringValue(v)}) }", "R9"},
+		{"planted protected key through Logger.Log", "func f(v string, l *slog.Logger) { l.Log(context.Background(), slog.LevelInfo, \"x\", \"api_key\", v) }", "R1"},
+		{"planted protected key through slog.Log", "func f(v string) { slog.Log(context.Background(), slog.LevelInfo, \"x\", \"password\", v) }", "R1"},
+		{"planted attribute variable through LogAttrs", "func f(a slog.Attr, l *slog.Logger) { l.LogAttrs(context.Background(), slog.LevelInfo, \"x\", a) }", "R9"},
+		{"planted protected key through LogAttrs", "func f(v string, l *slog.Logger) { l.LogAttrs(context.Background(), slog.LevelInfo, \"x\", slog.String(\"api_key\", v)) }", "R1"},
+		{"planted variable metric label value", "func f(c metric.Int64Counter, customer string) { c.Add(context.Background(), 1, metric.WithAttributes(attribute.String(\"status\", customer))) }", "R2"},
+		{"planted label set built in a helper", "func labels(v string) []attribute.KeyValue { return []attribute.KeyValue{attribute.String(\"customer_name\", v)} }\nfunc f(c metric.Int64Counter, v string) { c.Add(context.Background(), 1, metric.WithAttributes(labels(v)...)) }", "R2"},
 		{"planted bare digest as attribute", "func f(v []byte) { _ = attribute.String(\"who\", string(sha256.Sum256(v)[:])) }", "R7"},
 	}
 	for _, tc := range cases {
@@ -477,6 +487,33 @@ func TestHandlerInsideTheScrubWrapperIsNotARawHandler(t *testing.T) {
 	} {
 		if got := rules(scanSource(t, head+body)); got != "R4" {
 			t.Fatalf("%s: rules = %q, want R4", name, got)
+		}
+	}
+}
+
+func TestMetricLabelValuesAreBoundedOrFlagged(t *testing.T) {
+	wrap := func(value string) string {
+		return header + "const kind = \"fixed\"\nfunc bucket(string) string { return \"x\" }\nfunc f(c metric.Int64Counter, v string, r *http.Request) {\n\tc.Add(context.Background(), 1, metric.WithAttributes(attribute.String(\"outcome\", " + value + ")))\n}\n"
+	}
+	for name, value := range map[string]string{
+		"a literal":              "\"ok\"",
+		"a package constant":     "kind",
+		"a helper call":          "bucket(v)",
+		"a conversion of a call": "string(bucket(v))",
+		"a qualified name":       "http.MethodGet",
+	} {
+		if got := rules(scanSource(t, wrap(value))); got != "" {
+			t.Errorf("%s: rules = %q, want none", name, got)
+		}
+	}
+	for name, value := range map[string]string{
+		"a parameter":                "v",
+		"a field of a variable":      "r.Method",
+		"a conversion of a variable": "string(v)",
+		"a concatenation with one":   "\"a\" + v",
+	} {
+		if got := rules(scanSource(t, wrap(value))); got != "R2" {
+			t.Errorf("%s: rules = %q, want R2", name, got)
 		}
 	}
 }

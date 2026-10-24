@@ -2,6 +2,7 @@ package emitscan_test
 
 import (
 	"bufio"
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -15,33 +16,19 @@ import (
 	"github.com/full-chaos/dev-health-acr/internal/otelexport"
 )
 
-// scanBudget is the wall-time budget of one scan of the repository. The scan bounds its own work per package; this is the
-// second, outer bound: a scan that outlasts it fails the test instead of hanging the run.
+// scanBudget is the wall-time budget of one scan of the repository, enforced by cancelling the scan's context: the scan
+// checks it while it works and stops, so a runaway scan ends inside the test instead of outliving it.
 const scanBudget = 30 * time.Second
 
 func scanWithin(t *testing.T) ([]emitscan.Finding, []emitscan.Site) {
 	t.Helper()
-	type result struct {
-		findings []emitscan.Finding
-		sites    []emitscan.Site
-		err      error
+	ctx, cancel := context.WithTimeout(context.Background(), scanBudget)
+	defer cancel()
+	findings, sites, err := emitscan.ScanContext(ctx, repoRoot(t), []string{"internal", "cmd"})
+	if err != nil {
+		t.Fatalf("the emit-path scan did not finish within %s: %v", scanBudget, err)
 	}
-	done := make(chan result, 1)
-	root := repoRoot(t)
-	go func() {
-		findings, sites, err := emitscan.ScanWithCensus(root, []string{"internal", "cmd"})
-		done <- result{findings, sites, err}
-	}()
-	select {
-	case r := <-done:
-		if r.err != nil {
-			t.Fatal(r.err)
-		}
-		return r.findings, r.sites
-	case <-time.After(scanBudget):
-		t.Fatalf("the emit-path scan outlasted its %s budget", scanBudget)
-		return nil, nil
-	}
+	return findings, sites
 }
 
 func repoRoot(t *testing.T) string {

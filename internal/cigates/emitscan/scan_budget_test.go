@@ -1,7 +1,11 @@
 package emitscan_test
 
 import (
+	"context"
+	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"runtime"
 	"strings"
 	"testing"
@@ -71,6 +75,9 @@ var budgetSites = []budgetSite{
 	{"computed key walks", func() string {
 		return "func f(v string) { _ = attribute.String(k" + strings.Repeat(" + k", 300) + ", v) }\n"
 	}, 4650},
+	{"scrub wrapper ancestor walk", func() string {
+		return "func w(h slog.Handler) slog.Handler { return h }\nfunc f() {\n\t_ = " + strings.Repeat("w(", 500) + "slog.NewJSONHandler(nil, nil)" + strings.Repeat(")", 500) + "\n}\n"
+	}, 4500},
 	{"syntax node walk", func() string { return "func f() {\n" + repeat(1000, "\tx\n") + "}\n" }, 5000},
 }
 
@@ -119,4 +126,63 @@ func TestAliasEntryMemoryIsBounded(t *testing.T) {
 		t.Errorf("the scan allocated %d MiB, want < 200", grown)
 	}
 	t.Logf("%d byte plant allocated %d MiB", len(body), (after.TotalAlloc-before.TotalAlloc)>>20)
+}
+
+// The scan carries a context: a runaway scan (the class of the D6265 host crashes) is stopped by cancelling the work
+// itself, not by abandoning a goroutine that keeps running.
+func TestScanStopsWhenItsContextIsCancelled(t *testing.T) {
+	const n = 2000
+	var b strings.Builder
+	b.WriteString(header + "func f(v string) {\n")
+	for i := 0; i < n; i++ {
+		fmt.Fprintf(&b, "\tr%d = r%d\n\tr%d = slog.F%d\n", i, (i+1)%n, i, i)
+	}
+	b.WriteString("\t_ = r0(\"x\", v)\n}\n")
+	root := t.TempDir()
+	dir := filepath.Join(root, "internal", "sample")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "sample.go"), []byte(b.String()), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	// raise the work budget far above anything the source costs, so only the context can end the scan early
+	defer emitscan.SetWorkBudget(1<<50, 1<<30)()
+
+	before := runtime.NumGoroutine()
+	ctx, cancel := context.WithTimeout(context.Background(), 150*time.Millisecond)
+	defer cancel()
+	start := time.Now()
+	_, _, err := emitscan.ScanContext(ctx, root, []string{"internal"})
+	elapsed := time.Since(start)
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("err = %v, want the context deadline", err)
+	}
+	if elapsed > 2*time.Second {
+		t.Fatalf("the scan outlasted its 150ms context by %s: the work was not cancelled", elapsed)
+	}
+	deadline := time.Now().Add(2 * time.Second)
+	for runtime.NumGoroutine() > before && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if after := runtime.NumGoroutine(); after > before {
+		t.Fatalf("goroutines: %d before the scan, %d after it ended", before, after)
+	}
+}
+
+// A context that is already cancelled stops the scan before it reads a file.
+func TestScanWithACancelledContextReadsNothing(t *testing.T) {
+	root := t.TempDir()
+	dir := filepath.Join(root, "internal", "sample")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "sample.go"), []byte("package sample\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, _, err := emitscan.ScanContext(ctx, root, []string{"internal"}); !errors.Is(err, context.Canceled) {
+		t.Fatalf("err = %v, want context.Canceled", err)
+	}
 }

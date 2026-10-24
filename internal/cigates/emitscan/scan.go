@@ -15,6 +15,7 @@
 package emitscan
 
 import (
+	"context"
 	"fmt"
 	"go/ast"
 	"go/parser"
@@ -137,6 +138,13 @@ type Site struct {
 
 // ScanWithCensus is Scan plus the census of emitted attribute keys, ordered by kind, file and function.
 func ScanWithCensus(root string, dirs []string) ([]Finding, []Site, error) {
+	return ScanContext(context.Background(), root, dirs)
+}
+
+// ScanContext is ScanWithCensus under a context. Cancelling the context stops the work itself: the directory walk, the
+// package loop and (every 1024 charged steps) the scan of a package all check it, and the scan then returns the context's
+// error. A scan whose caller gave up never keeps running in the background.
+func ScanContext(ctx context.Context, root string, dirs []string) ([]Finding, []Site, error) {
 	var out []Finding
 	var sites []Site
 	byDir := map[string][]parsedFile{}
@@ -144,6 +152,9 @@ func ScanWithCensus(root string, dirs []string) ([]Finding, []Site, error) {
 	for _, dir := range dirs {
 		base := filepath.Join(root, dir)
 		err := filepath.WalkDir(base, func(path string, entry fs.DirEntry, walkErr error) error {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
 			if walkErr != nil {
 				rel, _ := filepath.Rel(root, path)
 				out = append(out, Finding{Rule: RuleUnparsable, File: filepath.ToSlash(rel), Line: 1, Func: "-"})
@@ -184,13 +195,19 @@ func ScanWithCensus(root string, dirs []string) ([]Finding, []Site, error) {
 		return nil, nil, fmt.Errorf("emitscan: no source files read under %v", dirs)
 	}
 	for _, group := range byDir {
-		info := packageInfo(group)
+		if err := ctx.Err(); err != nil {
+			return nil, nil, err
+		}
+		info := packageInfo(ctx, group)
 		var found []Finding
 		for _, parsed := range group {
 			if info.budget.over {
 				break
 			}
 			found = append(found, scanFile(parsed, info)...)
+		}
+		if err := ctx.Err(); err != nil && info.budget.cancelled {
+			return nil, nil, err
 		}
 		if info.budget.over {
 			first := group[0]
@@ -245,13 +262,20 @@ func inspectCharged(b *budget, root ast.Node, visit func(ast.Node) bool) {
 // budget is the one counter of a package scan. Every fold step, key byte, alias step and fixpoint pass charges it; when
 // it runs out the package is unscannable: it reports one finding and its scan stops (fail closed).
 type budget struct {
-	used  int
-	limit int
-	over  bool
+	used      int
+	limit     int
+	over      bool
+	ctx       context.Context // checked every 1024 charges: a cancelled scan stops inside the package, not after it
+	charges   int
+	cancelled bool
 }
 
 func (b *budget) charge(n int) bool {
 	if b.over {
+		return false
+	}
+	if b.charges++; b.ctx != nil && b.charges&1023 == 0 && b.ctx.Err() != nil {
+		b.over, b.cancelled = true, true
 		return false
 	}
 	if b.used += n; b.used > b.limit {
@@ -299,7 +323,7 @@ func (p *pkgInfo) censusSites() []Site {
 	return out
 }
 
-func packageInfo(group []parsedFile) *pkgInfo {
+func packageInfo(ctx context.Context, group []parsedFile) *pkgInfo {
 	nodes := 0
 	for _, parsed := range group {
 		ast.Inspect(parsed.file, func(node ast.Node) bool {
@@ -310,7 +334,7 @@ func packageInfo(group []parsedFile) *pkgInfo {
 		})
 	}
 	info := &pkgInfo{consts: map[string][]string{}, rawFuncs: map[string]bool{}, constNames: map[string]bool{},
-		stringTypes: map[string]bool{}, aliases: map[string][][2]string{}, saturated: map[string]bool{}, census: map[[3]string]map[string]bool{}, budget: &budget{limit: workBase + workPerNode*nodes}}
+		stringTypes: map[string]bool{}, aliases: map[string][][2]string{}, saturated: map[string]bool{}, census: map[[3]string]map[string]bool{}, budget: &budget{limit: workBase + workPerNode*nodes, ctx: ctx}}
 	for _, parsed := range group {
 		ast.Inspect(parsed.file, func(node ast.Node) bool {
 			if spec, ok := node.(*ast.TypeSpec); ok {
@@ -850,8 +874,50 @@ func (s *fileScan) Visit(node ast.Node) ast.Visitor {
 		}
 	case *ast.CallExpr:
 		s.call(fn)
+	case *ast.CompositeLit:
+		s.attrLiteral(fn)
 	}
 	return s
+}
+
+// attrLiteral reads an slog.Attr composite literal (slog.Attr{Key: k, Value: v} or the positional form) as an emitted
+// key and value.
+func (s *fileScan) attrLiteral(lit *ast.CompositeLit) {
+	sel, ok := lit.Type.(*ast.SelectorExpr)
+	if !ok || sel.Sel.Name != "Attr" {
+		return
+	}
+	if x, isIdent := sel.X.(*ast.Ident); !isIdent || s.imports[x.Name] != "slog" {
+		return
+	}
+	var key, value ast.Expr
+	for i, element := range lit.Elts {
+		if kv, isKV := element.(*ast.KeyValueExpr); isKV {
+			if name, isIdent := kv.Key.(*ast.Ident); isIdent {
+				switch name.Name {
+				case "Key":
+					key = kv.Value
+				case "Value":
+					value = kv.Value
+				}
+			}
+			continue
+		}
+		switch i {
+		case 0:
+			key = element
+		case 1:
+			value = element
+		}
+	}
+	if key == nil {
+		s.add(RuleLogKey, lit.Pos(), "unresolvable key")
+		return
+	}
+	s.logKey(key, value, lit.Pos())
+	if value != nil {
+		s.emitValue(value, lit.Pos())
+	}
 }
 
 func (s *fileScan) tainted(name string) bool {
@@ -1260,6 +1326,13 @@ func (s *fileScan) callTarget(call *ast.CallExpr, pkg, name string) {
 		if !strings.HasPrefix(s.rel, rawHandlerAllowed) && !s.discardsOutput(call) && !s.insideScrubHandler() {
 			s.add(RuleRawHandler, call.Pos(), "slog."+name)
 		}
+	case pkg == "slog" && name == "Group" && len(call.Args) >= 1:
+		s.logKey(call.Args[0], nil, call.Pos())
+		s.logPairs(call.Args, 1)
+	case name == "Log" && len(call.Args) >= 4:
+		s.logPairs(call.Args, 3)
+	case name == "LogAttrs" && len(call.Args) >= 4:
+		s.logAttrs(call.Args, 3)
 	case logMethods[name] && (len(call.Args) >= 3 || (len(call.Args) == 2 && !strings.HasSuffix(name, "Context"))):
 		s.logCall(call, strings.HasSuffix(name, "Context"))
 	case name == "With":
@@ -1283,6 +1356,9 @@ func exprName(expr ast.Expr) string {
 // the redacting wrapper sits in front of it, so no record reaches the raw handler unscrubbed.
 func (s *fileScan) insideScrubHandler() bool {
 	for _, node := range s.nodes {
+		if !s.pkg.budget.charge(1) {
+			return false
+		}
 		call, ok := node.(*ast.CallExpr)
 		if !ok {
 			continue
@@ -1325,6 +1401,17 @@ func (s *fileScan) logKeys(args []ast.Expr, from int) {
 			s.logKey(args[i], nil, args[i].Pos())
 		}
 		i++
+	}
+}
+
+// logAttrs reads the arguments of LogAttrs: every one is an slog.Attr, so one that is not a constructor call or a literal
+// (a variable, a spread) hides its key (R9).
+func (s *fileScan) logAttrs(args []ast.Expr, from int) {
+	for i := from; i < len(args); i++ {
+		if !s.isAttrItem(args[i]) {
+			s.add(RuleLogKey, args[i].Pos(), "unresolvable key")
+		}
+		s.emitValue(args[i], args[i].Pos())
 	}
 }
 
@@ -1497,6 +1584,7 @@ func (s *fileScan) attribute(call *ast.CallExpr, keyExpr, value ast.Expr) {
 	s.emitValue(value, call.Pos())
 	if s.metricAttrs[call] {
 		s.metricLabel(call, keys, literal)
+		s.metricValue(value)
 	} else if !literal && s.dynamicCallInKey(keyExpr) {
 		s.add(RuleMetricLabel, call.Pos(), "dynamic key")
 	}
@@ -1550,13 +1638,15 @@ func (s *fileScan) metricAttributes(call *ast.CallExpr) {
 	attrs := 0
 	for _, arg := range call.Args {
 		inner, ok := arg.(*ast.CallExpr)
-		if !ok {
-			continue
+		if ok {
+			if _, _, isAttr := s.attrParts(inner); isAttr {
+				s.metricAttrs[inner] = true
+				attrs++
+				continue
+			}
 		}
-		if _, _, ok := s.attrParts(inner); ok {
-			s.metricAttrs[inner] = true
-			attrs++
-		}
+		// a label set built outside the call (a variable, a spread, a helper): its keys and values cannot be read here
+		s.add(RuleMetricLabel, arg.Pos(), "labels built outside the call")
 	}
 	if attrs > maxMetricLabels {
 		s.add(RuleMetricLabel, call.Pos(), fmt.Sprintf("%d labels", attrs))
@@ -1574,6 +1664,42 @@ func (s *fileScan) metricLabel(call *ast.CallExpr, keys []string, literal bool) 
 			return
 		}
 	}
+}
+
+// metricValue refuses a label value that is a variable: a bare name, a field or any expression the scan cannot show is a
+// constant or the result of a call (a helper that maps the input onto a closed vocabulary). A conversion is read through.
+func (s *fileScan) metricValue(value ast.Expr) {
+	if s.boundedValue(value, 0) {
+		return
+	}
+	s.add(RuleMetricLabel, value.Pos(), "variable value")
+}
+
+func (s *fileScan) boundedValue(expr ast.Expr, depth int) bool {
+	if depth > 8 {
+		return false
+	}
+	switch e := expr.(type) {
+	case *ast.BasicLit:
+		return true
+	case *ast.ParenExpr:
+		return s.boundedValue(e.X, depth+1)
+	case *ast.Ident:
+		return e.Name == "true" || e.Name == "false" || s.pkg.constNames[e.Name]
+	case *ast.SelectorExpr:
+		if x, ok := e.X.(*ast.Ident); ok && s.imports[x.Name] != "" {
+			return true // a qualified name from another package: a constant or a helper value, reviewed where it is declared
+		}
+		return false
+	case *ast.CallExpr:
+		if s.isConversion(e) && len(e.Args) == 1 {
+			return s.boundedValue(e.Args[0], depth+1)
+		}
+		return true
+	case *ast.BinaryExpr:
+		return s.boundedValue(e.X, depth+1) && s.boundedValue(e.Y, depth+1)
+	}
+	return false
 }
 
 func unboundedLabel(key string) bool {
