@@ -358,7 +358,7 @@ func (g llmGenerator) check(ctx context.Context, operation, text string, schema 
 			var lifted int
 			if candidate, lifted = liftToolInputWrapper(candidate, schema.wire); lifted > 0 {
 				g.logger.InfoContext(ctx, llmToolInputLiftedMessage, "operation", contextfabric.SanitizeLogAttr(operation),
-					"lifted_keys", lifted, "reply_bytes", len(text))
+					"lifted_keys", lifted, "reply_bytes", len(text), "reply_digest", contextfabric.SanitizeLogAttr(contextfabric.DigestModelValue([]byte(text))))
 			}
 			var dropped []string
 			if candidate, dropped = dropUndeclaredProperties(candidate, schema.wire); len(dropped) > 0 {

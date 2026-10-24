@@ -92,8 +92,12 @@ func TestSynthesisDrawWrappedInAToolInputObjectIsLifted(t *testing.T) {
 				t.Fatalf("lift lines = %d, want 1", len(lines))
 			}
 			attrs := lines[0]
-			if attrs["operation"] != "synthesize" || attrs["lifted_keys"] != tc.lifted || attrs["reply_bytes"] != int64(len(text)) || len(attrs) != 3 {
-				t.Fatalf("lift line attrs = %v, want operation, lifted_keys=%d, reply_bytes=%d only", attrs, tc.lifted, len(text))
+			rawDigest := contextfabric.DigestModelValue([]byte(text))
+			if attrs["operation"] != "synthesize" || attrs["lifted_keys"] != tc.lifted || attrs["reply_bytes"] != int64(len(text)) || attrs["reply_digest"] != rawDigest || len(attrs) != 4 {
+				t.Fatalf("lift line attrs = %v, want operation, lifted_keys=%d, reply_bytes=%d, reply_digest=%s only", attrs, tc.lifted, len(text), rawDigest)
+			}
+			if receipt.OutputDigest == rawDigest {
+				t.Fatalf("receipt digest = raw reply digest %s, want the lifted draft's own digest", rawDigest)
 			}
 			if dropped := logRecords(logger, llmUndeclaredDroppedMessage); len(dropped) != 0 {
 				t.Fatalf("undeclared-dropped lines = %v, want none after the lift", dropped)
