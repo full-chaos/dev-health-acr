@@ -215,7 +215,7 @@ func PromptDefs(v PromptVocab) []PromptDef {
 				{Name: ArgEvidenceRefID, Title: "Evidence reference id", Required: true,
 					Description: "One evidence_ref_id from an answer's evidence_ref_ids. Pass it exactly as returned."},
 				{Name: ArgResultID, Title: "Answer result id",
-					Description: "The result_id of the answer that returned the reference. Required when the reference starts with " + contractsv1.ContextFabricEvidenceRefPrefix + " (it names its subject, not its answer). Pass it exactly as returned."},
+					Description: "The result_id of the answer that returned the reference. Required for a stored-result (record-only) reference that starts with " + contractsv1.ContextFabricEvidenceRefPrefix + " (it names its subject, not its answer); a row-keyed reference needs none. Pass it exactly as returned."},
 			},
 		},
 	}
@@ -493,8 +493,8 @@ func renderExpand(args map[string]string) (PromptText, error) {
 			return PromptText{}, argErr("argument %q must be %d to %d characters", ArgResultID, minResultIDLen, maxEvidenceIDLen)
 		}
 		call["result_id"] = resultID
-	} else if strings.HasPrefix(id, contractsv1.ContextFabricEvidenceRefPrefix) {
-		return PromptText{}, argErr("argument %q is required when %q starts with %s (pass the result_id of the answer that returned it)", ArgResultID, ArgEvidenceRefID, contractsv1.ContextFabricEvidenceRefPrefix)
+	} else if strings.HasPrefix(id, contractsv1.ContextFabricEvidenceRefPrefix) && !contractsv1.RowKeyedEvidenceRef(id) {
+		return PromptText{}, argErr("argument %q is required when %q is a stored-result %s reference (pass the result_id of the answer that returned it)", ArgResultID, ArgEvidenceRefID, contractsv1.ContextFabricEvidenceRefPrefix)
 	}
 	callJSON, err := indentedJSON(call)
 	if err != nil {
