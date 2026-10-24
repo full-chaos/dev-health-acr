@@ -317,6 +317,14 @@ contextFabric:
     maxTransportRetries: "5"
     existingSecret: ""
     apiKeyKey: ACR_CONTEXT_FABRIC_EMBED_API_KEY
+    # Also render the same embed settings (and the egress rule below) into
+    # acr-api so it can embed the QUESTION at answer time (kind-scoped semantic
+    # retrieval). Off by default: it adds a billed embedding call per question
+    # with a hinted kind, so it is a cost decision, not an implicit consequence
+    # of setting baseURL for the projector. Requires baseURL (the chart fails
+    # otherwise); the key comes from the same existingSecret/apiKeyKey, which
+    # must exist in the release namespace.
+    apiEnabled: false
   # CHAOS-4076: acr-api's Investigator model runtime (internal/contextfabric/
   # modelprovider), consumed by templates/deployment.yaml. Unlike falkor/embed
   # above, modelprovider.Configured() opts in on ANY nonblank
@@ -642,6 +650,10 @@ networkPolicy:
     # contextFabric.falkordb.service.port when using the in-release
     # workload on a non-default port).
     falkorPort: 6379
+    # Embedding provider port for acr-api's query embedder. Rendered only when
+    # contextFabric.embed.apiEnabled and embed.baseURL are both set; 0 renders
+    # no rule. Port-only, like the rules above.
+    embedPort: 443
     # Kubernetes API server port, needed only when workloadTokenExchange.enabled
     # (acr-api calls TokenReview). Ports-only, same convention as the other
     # egress rules above -- NetworkPolicy cannot target the API server by pod

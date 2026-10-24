@@ -132,6 +132,46 @@ negative() {
   printf 'RESULT: negative scenario %s passed\n' "$name"
 }
 
+
+# ---------------------------------------------------------------------------
+# acr-api query embedder (explicit switch contextFabric.embed.apiEnabled).
+# ---------------------------------------------------------------------------
+embed_api_render() {
+  render \
+    --set-string "contextFabric.embed.baseURL=https://api.openai.com/v1" \
+    --set-string "contextFabric.embed.provider=openai" \
+    --set-string "contextFabric.embed.model=text-embedding-3-large" \
+    --set-string "contextFabric.embed.dimension=3072" \
+    --set-string "contextFabric.embed.existingSecret=acr-embed-provider" \
+    "$@"
+}
+
+# embed_api_assert <rendered-file> <on|off>: acr-api container env and the
+# acr-api NetworkPolicy either carry the embed wiring (on) or none of it (off).
+embed_api_assert() {
+  python3 - "$1" "$2" <<'PY' || exit 1
+import re, sys
+docs = open(sys.argv[1]).read().split('\n---\n')
+want = sys.argv[2] == 'on'
+def fail(msg):
+    print('  FAIL embed-api: ' + msg, file=sys.stderr); sys.exit(1)
+deploy = next((d for d in docs if '\nkind: Deployment' in '\n' + d and 'component: api' in d and 'name: acr-api' in d), '')
+policy = next((d for d in docs if '\nkind: NetworkPolicy' in '\n' + d and 'component: api' in d), '')
+if not deploy or not policy: fail('acr-api Deployment and NetworkPolicy must both render')
+names = ['BASE_URL', 'PROVIDER', 'MODEL', 'DIMENSION', 'TIMEOUT', 'MAX_TRANSPORT_RETRIES', 'API_KEY']
+present = [n for n in names if 'name: ACR_CONTEXT_FABRIC_EMBED_' + n in deploy]
+if want:
+    if present != names: fail('acr-api env is missing ' + ','.join(sorted(set(names) - set(present))))
+    key = re.search(r'name: ACR_CONTEXT_FABRIC_EMBED_API_KEY\n\s+valueFrom:\n\s+secretKeyRef:\n\s+name: "acr-embed-provider"\n\s+key: "ACR_CONTEXT_FABRIC_EMBED_API_KEY"', deploy)
+    if not key: fail('API key must come from the same existingSecret/apiKeyKey the projector uses (secretKeyRef)')
+    if 'port: 443' not in policy: fail('acr-api NetworkPolicy has no embed egress rule (port 443)')
+else:
+    if present: fail('acr-api env carries ' + ','.join(present) + ' although the switch is off')
+    if 'port: 443' in policy: fail('acr-api NetworkPolicy carries an embed egress rule although the switch is off')
+print('  ok   embed-api: acr-api embed env and egress ' + ('rendered' if want else 'absent'))
+PY
+}
+
 case "$scenario" in
   mutable-image)
     negative mutable-image "mutable-image" \
@@ -256,6 +296,28 @@ case "$scenario" in
       --set acrMcp.enabled=true \
       --set acrMcp.gateway.enabled=true \
       --set-string "acrMcp.image.reference=${image}"
+    exit 0 ;;
+  embed-api-off-by-default)
+    printf 'scenario: embed-api-off-by-default (baseURL set for the projector, apiEnabled unset)\n'
+    embed_api_render >"$workdir/embed-off.yaml"
+    embed_api_assert "$workdir/embed-off.yaml" off
+    printf 'RESULT: scenario embed-api-off-by-default passed\n'
+    exit 0 ;;
+  embed-api-enabled)
+    printf 'scenario: embed-api-enabled (apiEnabled + baseURL)\n'
+    embed_api_render --set contextFabric.embed.apiEnabled=true >"$workdir/embed-on.yaml"
+    embed_api_assert "$workdir/embed-on.yaml" on
+    printf 'RESULT: scenario embed-api-enabled passed\n'
+    exit 0 ;;
+  embed-api-enabled-no-base-url)
+    negative embed-api-enabled-no-base-url "contextFabric.embed.apiEnabled requires contextFabric.embed.baseURL" \
+      --set contextFabric.embed.apiEnabled=true
+    exit 0 ;;
+  embed-api-bad-port)
+    negative embed-api-bad-port "/networkPolicy/egress/embedPort': maximum" \
+      --set-string "contextFabric.embed.baseURL=https://api.openai.com/v1" \
+      --set contextFabric.embed.apiEnabled=true \
+      --set networkPolicy.egress.embedPort=70000
     exit 0 ;;
   happy) : ;;
   *) printf 'unknown scenario: %s\n' "$scenario" >&2; usage; exit 2 ;;
