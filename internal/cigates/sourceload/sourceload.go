@@ -1,4 +1,4 @@
-package outboundtransport
+package sourceload
 
 import (
 	"fmt"
@@ -12,11 +12,11 @@ import (
 	"golang.org/x/tools/go/packages"
 )
 
-// loadSources lists the packages matching patterns for one GOOS/GOARCH with `go list -deps` and type-checks them from
+// Load lists the packages matching patterns for one GOOS/GOARCH with `go list -deps` and type-checks them from
 // source. It never compiles: packages.Load with NeedTypes runs `go list -export`, which builds the whole dependency
 // closure for every release GOOS. Root packages are checked with function bodies and full type info. A dependency is
 // checked with IgnoreFuncBodies: the walk only needs the declared types and signatures of what roots use.
-func loadSources(root string, patterns []string, goos, goarch string) (*sourceLoader, error) {
+func Load(root string, patterns []string, goos, goarch string) (*Loader, error) {
 	cfg := &packages.Config{
 		Dir:  root,
 		Env:  append(os.Environ(), "GOOS="+goos, "GOARCH="+goarch),
@@ -26,11 +26,11 @@ func loadSources(root string, patterns []string, goos, goarch string) (*sourceLo
 	if err != nil {
 		return nil, err
 	}
-	loader := &sourceLoader{
-		fset:  token.NewFileSet(),
+	loader := &Loader{
+		Fset:  token.NewFileSet(),
 		sizes: types.SizesFor("gc", goarch),
-		units: map[string]*sourceUnit{},
-		roots: pkgs,
+		Units: map[string]*Unit{},
+		Roots: pkgs,
 	}
 	for _, pkg := range pkgs {
 		loader.isRoot(pkg.ID, true)
@@ -41,23 +41,23 @@ func loadSources(root string, patterns []string, goos, goarch string) (*sourceLo
 	return loader, nil
 }
 
-type sourceUnit struct {
-	pkg   *packages.Package
-	files []*ast.File
-	types *types.Package
-	info  *types.Info
-	errs  []error
+type Unit struct {
+	Pkg   *packages.Package
+	Files []*ast.File
+	Types *types.Package
+	Info  *types.Info
+	Errs  []error
 }
 
-type sourceLoader struct {
-	fset    *token.FileSet
+type Loader struct {
+	Fset    *token.FileSet
 	sizes   types.Sizes
-	units   map[string]*sourceUnit
-	roots   []*packages.Package
+	Units   map[string]*Unit
+	Roots   []*packages.Package
 	rootIDs map[string]bool
 }
 
-func (l *sourceLoader) isRoot(id string, set bool) bool {
+func (l *Loader) isRoot(id string, set bool) bool {
 	if l.rootIDs == nil {
 		l.rootIDs = map[string]bool{}
 	}
@@ -67,27 +67,27 @@ func (l *sourceLoader) isRoot(id string, set bool) bool {
 	return l.rootIDs[id]
 }
 
-func (l *sourceLoader) check(pkg *packages.Package) *sourceUnit {
-	if unit, ok := l.units[pkg.ID]; ok {
+func (l *Loader) check(pkg *packages.Package) *Unit {
+	if unit, ok := l.Units[pkg.ID]; ok {
 		return unit
 	}
-	unit := &sourceUnit{pkg: pkg}
-	l.units[pkg.ID] = unit
+	unit := &Unit{Pkg: pkg}
+	l.Units[pkg.ID] = unit
 	root := l.isRoot(pkg.ID, false)
 	for _, name := range pkg.GoFiles {
-		file, err := parser.ParseFile(l.fset, name, nil, parser.SkipObjectResolution)
+		file, err := parser.ParseFile(l.Fset, name, nil, parser.SkipObjectResolution)
 		if err != nil {
-			unit.errs = append(unit.errs, err)
+			unit.Errs = append(unit.Errs, err)
 		}
 		if file != nil {
-			unit.files = append(unit.files, file)
+			unit.Files = append(unit.Files, file)
 		}
 	}
 	conf := types.Config{
 		IgnoreFuncBodies: !root,
 		FakeImportC:      true,
 		Sizes:            l.sizes,
-		Error:            func(err error) { unit.errs = append(unit.errs, err) },
+		Error:            func(err error) { unit.Errs = append(unit.Errs, err) },
 		Importer: importerFunc(func(path string) (*types.Package, error) {
 			if path == "unsafe" {
 				return types.Unsafe, nil
@@ -96,11 +96,11 @@ func (l *sourceLoader) check(pkg *packages.Package) *sourceUnit {
 			if dep == nil {
 				return nil, fmt.Errorf("package %s imports %q, which go list did not return", pkg.PkgPath, path)
 			}
-			return l.check(dep).types, nil
+			return l.check(dep).Types, nil
 		}),
 	}
 	if root {
-		unit.info = &types.Info{
+		unit.Info = &types.Info{
 			Types:      map[ast.Expr]types.TypeAndValue{},
 			Defs:       map[*ast.Ident]types.Object{},
 			Uses:       map[*ast.Ident]types.Object{},
@@ -109,7 +109,7 @@ func (l *sourceLoader) check(pkg *packages.Package) *sourceUnit {
 			Selections: map[*ast.SelectorExpr]*types.Selection{},
 		}
 	}
-	unit.types, _ = conf.Check(pkg.PkgPath, l.fset, unit.files, unit.info)
+	unit.Types, _ = conf.Check(pkg.PkgPath, l.Fset, unit.Files, unit.Info)
 	return unit
 }
 
@@ -120,28 +120,28 @@ func (f importerFunc) Import(path string) (*types.Package, error) { return f(pat
 // problems is every type or parse error of a root package, and of each dependency package whose objects a root uses:
 // a dependency that did not check cleanly can hand the walk an invalid type, which the walk would read as "not a
 // net/http type" and so miss a site.
-func (l *sourceLoader) problems(goos, goarch string) []string {
+func (l *Loader) Problems(goos, goarch string) []string {
 	var out []string
 	used := map[string]bool{}
-	for _, pkg := range l.roots {
-		unit := l.units[pkg.ID]
+	for _, pkg := range l.Roots {
+		unit := l.Units[pkg.ID]
 		for _, listErr := range pkg.Errors {
 			out = append(out, fmt.Sprintf("LOAD error in %s (%s/%s): %v", pkg.PkgPath, goos, goarch, listErr))
 		}
-		for _, err := range unit.errs {
+		for _, err := range unit.Errs {
 			out = append(out, fmt.Sprintf("LOAD error in %s (%s/%s): %v", pkg.PkgPath, goos, goarch, err))
 		}
-		for _, obj := range unit.info.Uses {
-			if obj.Pkg() != nil && obj.Pkg() != unit.types {
+		for _, obj := range unit.Info.Uses {
+			if obj.Pkg() != nil && obj.Pkg() != unit.Types {
 				used[obj.Pkg().Path()] = true
 			}
 		}
 	}
-	for _, unit := range l.units {
-		if l.isRoot(unit.pkg.ID, false) || !used[unit.pkg.PkgPath] || len(unit.errs) == 0 {
+	for _, unit := range l.Units {
+		if l.isRoot(unit.Pkg.ID, false) || !used[unit.Pkg.PkgPath] || len(unit.Errs) == 0 {
 			continue
 		}
-		out = append(out, fmt.Sprintf("LOAD error in dependency %s (%s/%s), whose objects the walk uses: %v", unit.pkg.PkgPath, goos, goarch, unit.errs[0]))
+		out = append(out, fmt.Sprintf("LOAD error in dependency %s (%s/%s), whose objects the walk uses: %v", unit.Pkg.PkgPath, goos, goarch, unit.Errs[0]))
 	}
 	sort.Strings(out)
 	return out
