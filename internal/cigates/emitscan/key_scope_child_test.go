@@ -82,10 +82,18 @@ func runHeavyShapes(t *testing.T, estimate bool) {
 		if !estimate && strings.HasPrefix(c.name, estimateOnlyShape) {
 			continue
 		}
+		restoreLimits := func() {}
+		if !estimate && strings.HasSuffix(c.name, "(cpu)") {
+			// Test-only CPU limit (the smallest an rlimit allows, 1 s) for the shape that is refused by its CPU time: the real 4 s limit
+			// would make this test depend on the host's speed (the helper needs ~7.5 s of CPU here, under 4 s on a fast runner).
+			_, rssLimit, wallLimit := emitscan.ChildLimits()
+			restoreLimits = emitscan.SetChildLimits(1, rssLimit, wallLimit)
+		}
 		start := cpuTime(t)
 		wall := time.Now()
 		got := keyFindings(scanSource(t, header+c.body+"\n"))
 		used := cpuTime(t) - start
+		restoreLimits()
 		t.Logf("%s (estimate %v): parent %s cpu, %s wall, findings %q", c.name, estimate, used, time.Since(wall).Round(time.Millisecond), got)
 		if used > time.Second {
 			t.Errorf("%s: the scanning process used %s cpu, want < 1s even under the race detector", c.name, used)
