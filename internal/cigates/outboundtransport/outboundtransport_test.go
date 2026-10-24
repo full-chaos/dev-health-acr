@@ -66,8 +66,7 @@ import (
 	"sync"
 	"testing"
 
-	"golang.org/x/tools/go/packages"
-
+	"github.com/full-chaos/dev-health-acr/internal/cigates/sourceload"
 	"github.com/full-chaos/dev-health-acr/internal/releasebuild"
 	"github.com/full-chaos/dev-health-acr/internal/testsupport/repopath"
 )
@@ -155,28 +154,19 @@ type targetScan struct {
 }
 
 func scanTarget(root string, patterns []string, target [2]string) targetScan {
-	cfg := &packages.Config{
-		Dir:  root,
-		Env:  append(os.Environ(), "GOOS="+target[0], "GOARCH="+target[1]),
-		Mode: packages.NeedName | packages.NeedFiles | packages.NeedCompiledGoFiles | packages.NeedSyntax | packages.NeedTypes | packages.NeedTypesInfo,
-	}
-	pkgs, err := packages.Load(cfg, patterns...)
+	loader, err := sourceload.Load(root, patterns, target[0], target[1])
 	if err != nil {
 		return targetScan{err: err}
 	}
 	result := targetScan{counts: map[site]int{}, loaded: map[string]bool{}}
-	for _, pkg := range pkgs {
-		for _, loadErr := range pkg.Errors {
-			result.problems = append(result.problems, fmt.Sprintf("LOAD error in %s (%s/%s): %v", pkg.PkgPath, target[0], target[1], loadErr))
-		}
-		for _, name := range pkg.CompiledGoFiles {
+	result.problems = loader.Problems(target[0], target[1])
+	for _, pkg := range loader.Roots {
+		unit := loader.Units[pkg.ID]
+		for _, name := range pkg.GoFiles {
 			result.loaded[name] = true
 		}
-		if pkg.TypesInfo == nil {
-			continue
-		}
-		for _, file := range pkg.Syntax {
-			rel, relErr := filepath.Rel(root, pkg.Fset.Position(file.Pos()).Filename)
+		for _, file := range unit.Files {
+			rel, relErr := filepath.Rel(root, loader.Fset.Position(file.Pos()).Filename)
 			if relErr != nil {
 				return targetScan{err: relErr}
 			}
@@ -184,7 +174,7 @@ func scanTarget(root string, patterns []string, target [2]string) targetScan {
 			for _, declaration := range file.Decls {
 				symbol := declSymbol(declaration)
 				ast.Inspect(declaration, func(node ast.Node) bool {
-					for _, kind := range kindsOf(pkg.TypesInfo, declaration, node) {
+					for _, kind := range kindsOf(unit.Info, declaration, node) {
 						result.counts[site{rel, symbol, kind}]++
 					}
 					return true

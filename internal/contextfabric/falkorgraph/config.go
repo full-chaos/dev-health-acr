@@ -705,7 +705,22 @@ func (NoopTelemetry) RecordNeighborLookupFailed(context.Context, string, string,
 // body, or request payload) because "which organization" is the first question
 // every one of these signals raises. It logs no text, no vectors, no model
 // output, and no provider response content.
-type SlogTelemetry struct{ Logger *slog.Logger }
+type SlogTelemetry struct {
+	Logger *slog.Logger
+	// QueryEmbedFallback, when set, is the counter hook RecordQueryEmbedFallback
+	// calls once per fallback with its closed cause ("timeout" or "error").
+	QueryEmbedFallback func(ctx context.Context, cause string)
+}
+
+// QueryEmbedFallbackTelemetry is the optional extension of GraphTelemetry for
+// the one signal that needs a cause: the QUERY embed failed or timed out, so
+// vector retrieval fell back to lexical for this request. A sink that
+// implements it receives that event INSTEAD of RecordVectorRetrievalDegraded
+// (one signal per event, never two); a sink that does not keeps the old signal.
+// cause is a closed vocabulary: "timeout" or "error".
+type QueryEmbedFallbackTelemetry interface {
+	RecordQueryEmbedFallback(ctx context.Context, orgID, cause string)
+}
 
 func (t SlogTelemetry) logger() *slog.Logger {
 	if t.Logger != nil {
@@ -716,6 +731,16 @@ func (t SlogTelemetry) logger() *slog.Logger {
 
 func (t SlogTelemetry) RecordObservationTraversalDegraded(_ context.Context, orgID string, count int) {
 	t.logger().Warn("context_fabric: observation traversal degraded", "org_id", contextfabric.SanitizeLogAttr(orgID), "count", count)
+}
+
+// RecordQueryEmbedFallback emits ONE WARN (organization and cause only: no
+// question text, no provider response, no secret) and increments the counter
+// hook. It replaces RecordVectorRetrievalDegraded for this event.
+func (t SlogTelemetry) RecordQueryEmbedFallback(ctx context.Context, orgID, cause string) {
+	t.logger().Warn("context_fabric: query embed failed, vector retrieval fell back to lexical for a request", "org_id", contextfabric.SanitizeLogAttr(orgID), "cause", contextfabric.SanitizeLogAttr(cause))
+	if t.QueryEmbedFallback != nil {
+		t.QueryEmbedFallback(ctx, cause)
+	}
 }
 
 // RecordGraphSchemaRebootstrap logs at Warn: the vector index vanished from a

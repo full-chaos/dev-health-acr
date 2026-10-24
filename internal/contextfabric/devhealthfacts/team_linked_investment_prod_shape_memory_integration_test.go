@@ -470,7 +470,7 @@ func servedLinkedMixPeak(t *testing.T, ctx context.Context, provider contextfabr
 func newLinkedProdShapeStore(t *testing.T, ctx context.Context, orgID string, shape linkedProdShape) (*runtimeclickhouse.Client, clickhousedriver.Conn, []string, []string) {
 	t.Helper()
 	maxBytes := uint64(linkedShapeMaxBytesToRead)
-	query, direct := newCHAOS3780IntegrationClientWithOptions(t, ctx, func(o *runtimeclickhouse.Options) { o.MaxBytesToRead = &maxBytes })
+	query, direct := newDedicatedClickHouseIntegrationClientWithOptions(t, ctx, func(o *runtimeclickhouse.Options) { o.MaxBytesToRead = &maxBytes })
 	createCHAOS5930Tables(t, ctx, direct)
 	for _, statement := range devhealthschema.DDL("work_graph_issue_pr", "git_pull_requests") {
 		if err := direct.Exec(ctx, statement); err != nil {

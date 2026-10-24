@@ -19,7 +19,7 @@ import (
 // sizes and the served mix does not move with unrelated units.
 func TestTeamLinkedInvestmentStatementStaysUnderTheMemoryCeilingOnRealClickHouse(t *testing.T) {
 	ctx := context.Background()
-	rawQuery, direct := newCHAOS3780IntegrationClient(t, ctx)
+	rawQuery, direct := newDedicatedClickHouseIntegrationClient(t, ctx)
 	query := statementthreads.API(rawQuery)
 	createCHAOS5930Tables(t, ctx, direct)
 	for _, statement := range devhealthschema.DDL("work_graph_issue_pr", "git_pull_requests") {

@@ -34,7 +34,7 @@ const (
 // read, and a planted whole-organization read must break the slope.
 func TestTeamPullRequestStatesReadFollowsTeamRepositoriesNotOrganizationSizeOnRealClickHouse(t *testing.T) {
 	ctx := context.Background()
-	query, direct := newCHAOS3780IntegrationClient(t, ctx)
+	query, direct := newDedicatedClickHouseIntegrationClient(t, ctx)
 	org := pullRequestStatesMemoryOrg
 	for _, statement := range devhealthschema.DDL(
 		"repos", "teams", "team_repo_ownership", "git_pull_requests", "work_graph_issue_pr", "work_items",

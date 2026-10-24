@@ -68,7 +68,7 @@ func TestDependencyBlockerStatusMemoryFollowsTheRepositoryNotTheOrganizationOnRe
 		t.Skip("the bound is the ClickHouse server peak, which the race detector does not change; the unit leg runs this row")
 	}
 	ctx := context.Background()
-	rawQuery, direct := newCHAOS3780IntegrationClientWithOptions(t, ctx, func(options *runtimeclickhouse.Options) {
+	rawQuery, direct := newDedicatedClickHouseIntegrationClientWithOptions(t, ctx, func(options *runtimeclickhouse.Options) {
 		maxBytesToRead := config.DefaultClickHouseMaxBytesToRead
 		options.MaxBytesToRead = &maxBytesToRead
 	})
@@ -163,7 +163,7 @@ SELECT concat('unrelated-%d-', lpad(toString(number), 12, '0')), toUUID('0000000
 
 func TestDependencyBlockerStatusIsCarriedOnlyForTheRepositoryAndTheCurrentAxisOnRealClickHouse(t *testing.T) {
 	ctx := context.Background()
-	query, direct := newCHAOS3780IntegrationClientWithOptions(t, ctx, nil)
+	query, direct := newDedicatedClickHouseIntegrationClientWithOptions(t, ctx, nil)
 	for _, statement := range devhealthschema.DDL("repos", "work_items", "work_item_dependencies", "work_item_relations_read") {
 		if err := direct.Exec(ctx, statement); err != nil {
 			t.Fatalf("create table: %v\n%s", err, statement)

@@ -83,7 +83,7 @@ func TestHandleSourceEvidenceBatchRefusesAnUnscopedContextFabricRefAsItsOwnEntry
 		writeJSONFixture(t, w, http.StatusOK, validExpandedEvidenceFixture(r.URL.Path[len("/api/v1/agent-context/evidence/"):]))
 	}
 	boot := newFixtureBootstrap(t, fx)
-	result, err := invokeSourceEvidence(context.Background(), boot, callToolRequest(t, map[string]any{"evidence_ref_ids": []string{"acr:v1:team:CHAOS", "ev_abc123"}}))
+	result, err := invokeSourceEvidence(context.Background(), boot, callToolRequest(t, map[string]any{"evidence_ref_ids": []string{"acr:v1:organization:CHAOS", "ev_abc123"}}))
 	if err != nil || result.IsError {
 		t.Fatalf("err=%v result=%q", err, toolResultText(result))
 	}

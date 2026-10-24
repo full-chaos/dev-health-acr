@@ -171,10 +171,33 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
       - name: Verify every mirrored image is resolvable before any job pulls one
         run: scripts/ci/verify-mirrored-images.sh "${{ github.repository }}"
+
+  # The one Go module cache of the run. setup-go keys
+  # one cache on go.sum and the first job to finish saves it, so the saved
+  # module set was whatever that job needed and every other job downloaded the
+  # rest from the proxy on every run. This job downloads the whole module and
+  # every pinned tool (scripts/ci/go-tool-pins.txt) once per go.sum change and
+  # is the only saver; consumers restore it and fail on a miss.
+  gomodcache:
+    runs-on: ubuntu-latest
+    steps:
+      # actions/checkout v7.0.0
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        with: {persist-credentials: false}
+      # actions/setup-go v6.5.0
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16
+        with:
+          go-version: '1.27.3'
+          cache: false
+      - uses: ./.github/actions/go-modcache
+        with: {mode: warm}
+
   scripts:
     # Hosted on purpose: the CI_RACE_RUNNER pool image (ops docker/arc-runner,
     # on actions/runner) has no shellcheck, which most steps here run.
     runs-on: ubuntu-latest
+    needs:
+      - gomodcache
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
         with: {persist-credentials: false, fetch-depth: 2}
@@ -286,12 +309,20 @@ jobs:
         with:
           go-version: '1.27.3'
           cache: true
+      # Module cache: one gomodcache job fills it, every consumer restores it
+      # and fails on a miss (hosted runners only; the self-hosted pool keeps its
+      # own disk). Restored after setup-go so its smaller cache is overlaid.
+      - uses: ./.github/actions/go-modcache
+        if: ${{ runner.environment == 'github-hosted' }}
+        with: {mode: restore}
       - name: Test the mutation-battery plan matrix and arm layout
         run: python3 scripts/battery/test_plan_matrix.py
       - name: Test the run queue report
         run: scripts/ci/test-run-queue-report.sh
   lint:
     runs-on: ${{ (github.event_name == 'push' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository)) && vars.CI_RACE_RUNNER || 'ubuntu-latest' }}
+    needs:
+      - gomodcache
     steps:
       # actions/checkout v7.0.0
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
@@ -308,6 +339,12 @@ jobs:
         with:
           go-version: '1.27.3'
           cache: ${{ runner.environment == 'github-hosted' }}
+      # Module cache: one gomodcache job fills it, every consumer restores it
+      # and fails on a miss (hosted runners only; the self-hosted pool keeps its
+      # own disk). Restored after setup-go so its smaller cache is overlaid.
+      - uses: ./.github/actions/go-modcache
+        if: ${{ runner.environment == 'github-hosted' }}
+        with: {mode: restore}
       - name: Verify Go formatting
         run: make fmt-check
       - name: Vet Go packages
@@ -448,6 +485,7 @@ jobs:
     # explicit `if:` instead, because exactly one leg ran and the cascade
     # would otherwise have skipped this job along with the leg that never ran.
     needs:
+      - gomodcache
       - mirror-preflight
       - plan
     if: ${{ !contains(fromJSON(needs.plan.outputs.skip_jobs), 'unit') }}
@@ -477,6 +515,12 @@ jobs:
         with:
           go-version: '1.27.3'
           cache: true
+      # Module cache: one gomodcache job fills it, every consumer restores it
+      # and fails on a miss (hosted runners only; the self-hosted pool keeps its
+      # own disk). Restored after setup-go so its smaller cache is overlaid.
+      - uses: ./.github/actions/go-modcache
+        if: ${{ runner.environment == 'github-hosted' }}
+        with: {mode: restore}
       # docker/login-action v4.5.1. No Docker Hub credentials exist in this
       # repo (CHAOS-4855) -- this authenticates only to the ghcr mirror, which
       # GITHUB_TOKEN already has read access to.
@@ -656,6 +700,7 @@ jobs:
   unit-dedup-plan:
     name: unit-dedup-plan
     needs:
+      - gomodcache
       - plan
       - race-devhealthfacts
       - race-devhealthfacts-heavy
@@ -679,6 +724,12 @@ jobs:
         with:
           go-version: '1.27.3'
           cache: true
+      # Module cache: one gomodcache job fills it, every consumer restores it
+      # and fails on a miss (hosted runners only; the self-hosted pool keeps its
+      # own disk). Restored after setup-go so its smaller cache is overlaid.
+      - uses: ./.github/actions/go-modcache
+        if: ${{ runner.environment == 'github-hosted' }}
+        with: {mode: restore}
       # actions/download-artifact v8.0.1. One directory per artifact
       # (merge-multiple stays false): race-json-<job key>/race.json.
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
@@ -730,6 +781,7 @@ jobs:
     name: unit (shard ${{ matrix.shard }} of 10)
     runs-on: ubuntu-latest
     needs:
+      - gomodcache
       - mirror-preflight
       - plan
       - unit-dedup-plan
@@ -760,6 +812,12 @@ jobs:
         with:
           go-version: '1.27.3'
           cache: true
+      # Module cache: one gomodcache job fills it, every consumer restores it
+      # and fails on a miss (hosted runners only; the self-hosted pool keeps its
+      # own disk). Restored after setup-go so its smaller cache is overlaid.
+      - uses: ./.github/actions/go-modcache
+        if: ${{ runner.environment == 'github-hosted' }}
+        with: {mode: restore}
       # docker/login-action v4.5.1. No Docker Hub credentials exist in this
       # repo (CHAOS-4855) -- this authenticates only to the ghcr mirror, which
       # GITHUB_TOKEN already has read access to.
@@ -937,6 +995,7 @@ jobs:
     # See `unit`'s comment: mirror-preflight is one job again, so a plain
     # `needs:` is correct here too.
     needs:
+      - gomodcache
       - mirror-preflight
       - plan
     if: needs.plan.outputs.heavy == 'true' && !contains(fromJSON(needs.plan.outputs.skip_jobs), 'race')
@@ -968,6 +1027,12 @@ jobs:
         with:
           go-version: '1.27.3'
           cache: ${{ runner.environment == 'github-hosted' }}
+      # Module cache: one gomodcache job fills it, every consumer restores it
+      # and fails on a miss (hosted runners only; the self-hosted pool keeps its
+      # own disk). Restored after setup-go so its smaller cache is overlaid.
+      - uses: ./.github/actions/go-modcache
+        if: ${{ runner.environment == 'github-hosted' }}
+        with: {mode: restore}
       # docker/login-action v4.5.1. No Docker Hub credentials exist in this
       # repo (CHAOS-4855) -- this authenticates only to the ghcr mirror, which
       # GITHUB_TOKEN already has read access to.
@@ -1058,6 +1123,7 @@ jobs:
     name: race (devhealthschema, isolated scope)
     # Same CI_RACE_RUNNER contract as the `race` job above.
     needs:
+      - gomodcache
       - plan
     if: needs.plan.outputs.heavy == 'true' && !contains(fromJSON(needs.plan.outputs.skip_jobs), 'race-devhealthschema')
     runs-on: ${{ (github.event_name == 'push' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository)) && vars.CI_RACE_RUNNER || 'ubuntu-latest' }}
@@ -1069,6 +1135,12 @@ jobs:
         with:
           go-version: '1.27.3'
           cache: ${{ runner.environment == 'github-hosted' }}
+      # Module cache: one gomodcache job fills it, every consumer restores it
+      # and fails on a miss (hosted runners only; the self-hosted pool keeps its
+      # own disk). Restored after setup-go so its smaller cache is overlaid.
+      - uses: ./.github/actions/go-modcache
+        if: ${{ runner.environment == 'github-hosted' }}
+        with: {mode: restore}
       - name: Run isolated devhealthschema race suite
         run: |
           set -euo pipefail
@@ -1130,6 +1202,7 @@ jobs:
     # same as the `race` job above -- needs mirror-preflight so it cannot
     # start before every mirrored image is confirmed resolvable.
     needs:
+      - gomodcache
       - mirror-preflight
       - plan
     if: needs.plan.outputs.heavy == 'true' && !contains(fromJSON(needs.plan.outputs.skip_jobs), 'race-devhealthfacts')
@@ -1147,6 +1220,12 @@ jobs:
         with:
           go-version: '1.27.3'
           cache: true
+      # Module cache: one gomodcache job fills it, every consumer restores it
+      # and fails on a miss (hosted runners only; the self-hosted pool keeps its
+      # own disk). Restored after setup-go so its smaller cache is overlaid.
+      - uses: ./.github/actions/go-modcache
+        if: ${{ runner.environment == 'github-hosted' }}
+        with: {mode: restore}
       # docker/login-action v4.5.1. Same GHCR-mirror-only auth as the `race`
       # job above.
       - name: Log in to GitHub Container Registry
@@ -1187,6 +1266,7 @@ jobs:
     # same as the `race` job above -- needs mirror-preflight so it cannot
     # start before every mirrored image is confirmed resolvable.
     needs:
+      - gomodcache
       - mirror-preflight
       - plan
     if: needs.plan.outputs.heavy == 'true' && !contains(fromJSON(needs.plan.outputs.skip_jobs), 'race-devhealthfacts-heavy')
@@ -1204,6 +1284,12 @@ jobs:
         with:
           go-version: '1.27.3'
           cache: true
+      # Module cache: one gomodcache job fills it, every consumer restores it
+      # and fails on a miss (hosted runners only; the self-hosted pool keeps its
+      # own disk). Restored after setup-go so its smaller cache is overlaid.
+      - uses: ./.github/actions/go-modcache
+        if: ${{ runner.environment == 'github-hosted' }}
+        with: {mode: restore}
       # docker/login-action v4.5.1. Same GHCR-mirror-only auth as the `race`
       # job above.
       - name: Log in to GitHub Container Registry
@@ -1242,6 +1328,7 @@ jobs:
     # same as the `race` job above -- needs mirror-preflight so it cannot
     # start before every mirrored image is confirmed resolvable.
     needs:
+      - gomodcache
       - mirror-preflight
       - plan
     if: needs.plan.outputs.heavy == 'true' && !contains(fromJSON(needs.plan.outputs.skip_jobs), 'race-devhealthfacts-mid')
@@ -1258,6 +1345,12 @@ jobs:
         with:
           go-version: '1.27.3'
           cache: ${{ runner.environment == 'github-hosted' }}
+      # Module cache: one gomodcache job fills it, every consumer restores it
+      # and fails on a miss (hosted runners only; the self-hosted pool keeps its
+      # own disk). Restored after setup-go so its smaller cache is overlaid.
+      - uses: ./.github/actions/go-modcache
+        if: ${{ runner.environment == 'github-hosted' }}
+        with: {mode: restore}
       # docker/login-action v4.5.1. Same GHCR-mirror-only auth as the `race`
       # job above.
       - name: Log in to GitHub Container Registry
@@ -1296,6 +1389,7 @@ jobs:
     # same as the `race` job above -- needs mirror-preflight so it cannot
     # start before every mirrored image is confirmed resolvable.
     needs:
+      - gomodcache
       - mirror-preflight
       - plan
     if: needs.plan.outputs.heavy == 'true' && !contains(fromJSON(needs.plan.outputs.skip_jobs), 'race-devhealthfacts-fourth')
@@ -1312,6 +1406,12 @@ jobs:
         with:
           go-version: '1.27.3'
           cache: ${{ runner.environment == 'github-hosted' }}
+      # Module cache: one gomodcache job fills it, every consumer restores it
+      # and fails on a miss (hosted runners only; the self-hosted pool keeps its
+      # own disk). Restored after setup-go so its smaller cache is overlaid.
+      - uses: ./.github/actions/go-modcache
+        if: ${{ runner.environment == 'github-hosted' }}
+        with: {mode: restore}
       # docker/login-action v4.5.1. Same GHCR-mirror-only auth as the `race`
       # job above.
       - name: Log in to GitHub Container Registry
@@ -1368,6 +1468,7 @@ jobs:
     # Pulls a mirrored image via TESTCONTAINERS_HUB_IMAGE_NAME_PREFIX below,
     # same as race-devhealthfacts -- needs mirror-preflight.
     needs:
+      - gomodcache
       - mirror-preflight
       - plan
     if: needs.plan.outputs.heavy == 'true' && !contains(fromJSON(needs.plan.outputs.skip_jobs), 'race-devhealthsource')
@@ -1384,6 +1485,12 @@ jobs:
         with:
           go-version: '1.27.3'
           cache: ${{ runner.environment == 'github-hosted' }}
+      # Module cache: one gomodcache job fills it, every consumer restores it
+      # and fails on a miss (hosted runners only; the self-hosted pool keeps its
+      # own disk). Restored after setup-go so its smaller cache is overlaid.
+      - uses: ./.github/actions/go-modcache
+        if: ${{ runner.environment == 'github-hosted' }}
+        with: {mode: restore}
       # docker/login-action v4.5.1. Same GHCR-mirror-only auth as the `race`
       # job above.
       - name: Log in to GitHub Container Registry
@@ -1422,6 +1529,7 @@ jobs:
     # Pulls a mirrored image via TESTCONTAINERS_HUB_IMAGE_NAME_PREFIX below,
     # same as race-devhealthfacts -- needs mirror-preflight.
     needs:
+      - gomodcache
       - mirror-preflight
       - plan
     if: needs.plan.outputs.heavy == 'true' && !contains(fromJSON(needs.plan.outputs.skip_jobs), 'race-devhealthsource-heavy')
@@ -1439,6 +1547,12 @@ jobs:
         with:
           go-version: '1.27.3'
           cache: true
+      # Module cache: one gomodcache job fills it, every consumer restores it
+      # and fails on a miss (hosted runners only; the self-hosted pool keeps its
+      # own disk). Restored after setup-go so its smaller cache is overlaid.
+      - uses: ./.github/actions/go-modcache
+        if: ${{ runner.environment == 'github-hosted' }}
+        with: {mode: restore}
       # docker/login-action v4.5.1. Same GHCR-mirror-only auth as the `race`
       # job above.
       - name: Log in to GitHub Container Registry
@@ -1479,6 +1593,7 @@ jobs:
     # Pulls a mirrored image via TESTCONTAINERS_HUB_IMAGE_NAME_PREFIX below,
     # same as race-devhealthfacts -- needs mirror-preflight.
     needs:
+      - gomodcache
       - mirror-preflight
       - plan
     if: needs.plan.outputs.heavy == 'true' && !contains(fromJSON(needs.plan.outputs.skip_jobs), 'race-devhealthsource-mid')
@@ -1495,6 +1610,12 @@ jobs:
         with:
           go-version: '1.27.3'
           cache: ${{ runner.environment == 'github-hosted' }}
+      # Module cache: one gomodcache job fills it, every consumer restores it
+      # and fails on a miss (hosted runners only; the self-hosted pool keeps its
+      # own disk). Restored after setup-go so its smaller cache is overlaid.
+      - uses: ./.github/actions/go-modcache
+        if: ${{ runner.environment == 'github-hosted' }}
+        with: {mode: restore}
       # docker/login-action v4.5.1. Same GHCR-mirror-only auth as the `race`
       # job above.
       - name: Log in to GitHub Container Registry
@@ -1544,6 +1665,7 @@ jobs:
     # Pulls a mirrored image via TESTCONTAINERS_HUB_IMAGE_NAME_PREFIX below,
     # same as race-devhealthfacts -- needs mirror-preflight.
     needs:
+      - gomodcache
       - mirror-preflight
       - plan
     if: needs.plan.outputs.heavy == 'true' && !contains(fromJSON(needs.plan.outputs.skip_jobs), 'race-factoracle')
@@ -1560,6 +1682,12 @@ jobs:
         with:
           go-version: '1.27.3'
           cache: ${{ runner.environment == 'github-hosted' }}
+      # Module cache: one gomodcache job fills it, every consumer restores it
+      # and fails on a miss (hosted runners only; the self-hosted pool keeps its
+      # own disk). Restored after setup-go so its smaller cache is overlaid.
+      - uses: ./.github/actions/go-modcache
+        if: ${{ runner.environment == 'github-hosted' }}
+        with: {mode: restore}
       # docker/login-action v4.5.1. Same GHCR-mirror-only auth as the `race`
       # job above.
       - name: Log in to GitHub Container Registry
@@ -1601,6 +1729,7 @@ jobs:
     # Pulls a mirrored image via TESTCONTAINERS_HUB_IMAGE_NAME_PREFIX below,
     # same as race-devhealthfacts -- needs mirror-preflight.
     needs:
+      - gomodcache
       - mirror-preflight
       - plan
     if: needs.plan.outputs.heavy == 'true' && !contains(fromJSON(needs.plan.outputs.skip_jobs), 'race-mcp')
@@ -1617,6 +1746,12 @@ jobs:
         with:
           go-version: '1.27.3'
           cache: ${{ runner.environment == 'github-hosted' }}
+      # Module cache: one gomodcache job fills it, every consumer restores it
+      # and fails on a miss (hosted runners only; the self-hosted pool keeps its
+      # own disk). Restored after setup-go so its smaller cache is overlaid.
+      - uses: ./.github/actions/go-modcache
+        if: ${{ runner.environment == 'github-hosted' }}
+        with: {mode: restore}
       # docker/login-action v4.5.1. Same GHCR-mirror-only auth as the `race`
       # job above.
       - name: Log in to GitHub Container Registry
@@ -1656,6 +1791,7 @@ jobs:
     # Pulls a mirrored image via TESTCONTAINERS_HUB_IMAGE_NAME_PREFIX below,
     # same as race-devhealthfacts -- needs mirror-preflight.
     needs:
+      - gomodcache
       - mirror-preflight
       - plan
     if: needs.plan.outputs.heavy == 'true' && !contains(fromJSON(needs.plan.outputs.skip_jobs), 'race-contracts-v1')
@@ -1672,6 +1808,12 @@ jobs:
         with:
           go-version: '1.27.3'
           cache: ${{ runner.environment == 'github-hosted' }}
+      # Module cache: one gomodcache job fills it, every consumer restores it
+      # and fails on a miss (hosted runners only; the self-hosted pool keeps its
+      # own disk). Restored after setup-go so its smaller cache is overlaid.
+      - uses: ./.github/actions/go-modcache
+        if: ${{ runner.environment == 'github-hosted' }}
+        with: {mode: restore}
       # docker/login-action v4.5.1. Same GHCR-mirror-only auth as the `race`
       # job above.
       - name: Log in to GitHub Container Registry
@@ -1708,6 +1850,7 @@ jobs:
     # Pulls a mirrored image via TESTCONTAINERS_HUB_IMAGE_NAME_PREFIX below,
     # same as race-devhealthfacts -- needs mirror-preflight.
     needs:
+      - gomodcache
       - mirror-preflight
       - plan
     if: needs.plan.outputs.heavy == 'true' && !contains(fromJSON(needs.plan.outputs.skip_jobs), 'race-factoracle-heavy')
@@ -1724,6 +1867,12 @@ jobs:
         with:
           go-version: '1.27.3'
           cache: ${{ runner.environment == 'github-hosted' }}
+      # Module cache: one gomodcache job fills it, every consumer restores it
+      # and fails on a miss (hosted runners only; the self-hosted pool keeps its
+      # own disk). Restored after setup-go so its smaller cache is overlaid.
+      - uses: ./.github/actions/go-modcache
+        if: ${{ runner.environment == 'github-hosted' }}
+        with: {mode: restore}
       # docker/login-action v4.5.1. Same GHCR-mirror-only auth as the `race`
       # job above.
       - name: Log in to GitHub Container Registry
@@ -1762,6 +1911,7 @@ jobs:
   build:
     runs-on: ubuntu-latest
     needs:
+      - gomodcache
       - mirror-preflight
       - plan
     if: needs.plan.outputs.heavy == 'true'
@@ -1784,6 +1934,12 @@ jobs:
         with:
           go-version: '1.27.3'
           cache: true
+      # Module cache: one gomodcache job fills it, every consumer restores it
+      # and fails on a miss (hosted runners only; the self-hosted pool keeps its
+      # own disk). Restored after setup-go so its smaller cache is overlaid.
+      - uses: ./.github/actions/go-modcache
+        if: ${{ runner.environment == 'github-hosted' }}
+        with: {mode: restore}
       # docker/login-action v4.5.1. No Docker Hub credentials exist in this
       # repo (CHAOS-4855) -- this authenticates only to the ghcr mirror, which
       # GITHUB_TOKEN already has read access to.
@@ -1806,6 +1962,7 @@ jobs:
         run: scripts/ci/reap-testcontainers-session.sh
   contracts:
     needs:
+      - gomodcache
       - plan
     if: needs.plan.outputs.heavy == 'true'
     runs-on: ubuntu-latest
@@ -1820,6 +1977,12 @@ jobs:
         with:
           go-version: '1.27.3'
           cache: true
+      # Module cache: one gomodcache job fills it, every consumer restores it
+      # and fails on a miss (hosted runners only; the self-hosted pool keeps its
+      # own disk). Restored after setup-go so its smaller cache is overlaid.
+      - uses: ./.github/actions/go-modcache
+        if: ${{ runner.environment == 'github-hosted' }}
+        with: {mode: restore}
       # Must run before anything else in this job that could dirty the
       # worktree: the script refuses to start unless `git status --porcelain`
       # is empty.
@@ -2295,6 +2458,7 @@ jobs:
     # merge requires exactly the unit legs the matrix kept.
     if: '!cancelled()'
     needs:
+      - gomodcache
       - plan
       - mirror-preflight
       - scripts
@@ -2332,6 +2496,12 @@ jobs:
         with:
           go-version: '1.27.3'
           cache: true
+      # Module cache: one gomodcache job fills it, every consumer restores it
+      # and fails on a miss (hosted runners only; the self-hosted pool keeps its
+      # own disk). Restored after setup-go so its smaller cache is overlaid.
+      - uses: ./.github/actions/go-modcache
+        if: ${{ runner.environment == 'github-hosted' }}
+        with: {mode: restore}
       # Observed race dedup, the check. unit-dedup-plan names the deferred unit
       # legs it dropped; this step does NOT take that list on trust. It downloads
       # the race jobs' test2json artifacts and the per-leg test lists and runs the

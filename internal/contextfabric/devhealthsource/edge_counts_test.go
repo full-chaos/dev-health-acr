@@ -199,7 +199,7 @@ func TestTeamsProjectsEdgeCountsReportEveryArmAndZeroFillsTheMissingOne(t *testi
 	}
 	transition := contextfabric.EdgeCountKey{Relation: contractsv1.ContextFabricRelationshipBelongsToProject, Arm: contextfabric.EdgeArmTransition}
 	column := contextfabric.EdgeCountKey{Relation: contractsv1.ContextFabricRelationshipBelongsToProject, Arm: contextfabric.EdgeArmWorkItemColumn}
-	if len(counts) != 2 || counts[transition] != 6756 {
+	if len(counts) != 2+len(ownedByTeamArms) || counts[transition] != 6756 {
 		t.Fatalf("both arms must be present: %+v", counts)
 	}
 	if v, ok := counts[column]; !ok || v != 0 {
@@ -343,8 +343,8 @@ func TestEveryProducedRelationTypeIsMeasuredOrNamedDeferred(t *testing.T) {
 			if len(missing) != 0 || len(extra) != 0 {
 				t.Fatalf("produced relation types not measured or named deferred: %v; measured or deferred but not produced: %v", missing, extra)
 			}
-			if name == "teams_projects" && len(source.DeferredEdgeRelations()) == 0 {
-				t.Fatalf("this source defers relation types by name; an empty list means a producer was dropped from the guard")
+			if deferred := source.DeferredEdgeRelations(); len(deferred) != 0 {
+				t.Fatalf("every relation type %s produces is measured, deferred = %v", name, deferred)
 			}
 		})
 	}

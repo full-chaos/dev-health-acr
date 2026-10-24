@@ -130,7 +130,7 @@ func measureWorkUnitInvestmentsReads(t *testing.T, ctx context.Context, direct c
 
 func TestThemeMixReadsScanWorkUnitInvestmentsOnceAgainstRealClickHouse(t *testing.T) {
 	ctx := context.Background()
-	query, direct := newCHAOS3780IntegrationClient(t, ctx)
+	query, direct := newDedicatedClickHouseIntegrationClient(t, ctx)
 	createCHAOS5930Tables(t, ctx, direct)
 	const orgID = "org-bytes"
 	seedCHAOS6594(t, ctx, direct, orgID)
@@ -195,7 +195,7 @@ func lastServerException(ctx context.Context, direct clickhousedriver.Conn) stri
 // counts once, in the window that holds its end stamp.
 func TestTeamThemeMixCurrentAndPriorWindowsShareOnePassAgainstRealClickHouse(t *testing.T) {
 	ctx := context.Background()
-	query, direct := newCHAOS3780IntegrationClient(t, ctx)
+	query, direct := newDedicatedClickHouseIntegrationClient(t, ctx)
 	createCHAOS5930Tables(t, ctx, direct)
 	provider := findProvider(t, devhealthfacts.NewProviders(query), contextfabric.FactInvestment)
 	const orgID = "org-two-windows"
@@ -269,7 +269,7 @@ func TestTeamThemeMixCurrentAndPriorWindowsShareOnePassAgainstRealClickHouse(t *
 // single pass, and none is dropped.
 func TestRepositoryThemeMixAcrossChunksIsCompleteAgainstRealClickHouse(t *testing.T) {
 	ctx := context.Background()
-	query, direct := newCHAOS3780IntegrationClient(t, ctx)
+	query, direct := newDedicatedClickHouseIntegrationClient(t, ctx)
 	createCHAOS5930Tables(t, ctx, direct)
 	provider := findProvider(t, devhealthfacts.NewProviders(query), contextfabric.FactInvestment)
 	const orgID = "org-chunks"

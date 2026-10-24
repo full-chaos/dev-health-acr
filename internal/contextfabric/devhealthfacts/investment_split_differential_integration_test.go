@@ -93,7 +93,7 @@ func pr(label string, number int) string { return fmt.Sprintf("%s#pr%d", repoUUI
 // keep their text (TestWholeOrganizationSplitTextIsUnchanged).
 func TestInvestmentSplitStatementsMatchTheirOldTextOnRealClickHouse(t *testing.T) {
 	ctx := context.Background()
-	query, direct := newCHAOS3780IntegrationClient(t, ctx)
+	query, direct := newDedicatedClickHouseIntegrationClient(t, ctx)
 	createCHAOS5930Tables(t, ctx, direct)
 	for _, statement := range devhealthschema.DDL("work_graph_issue_pr", "git_pull_requests") {
 		if err := direct.Exec(ctx, statement); err != nil {
@@ -312,7 +312,7 @@ func splitDiffRows(t *testing.T, ctx context.Context, query readers.QueryClient,
 // keeps the last inserted version.
 func TestInvestmentSplitStatementsPickTheSameVersionOnAComputedAtTieOnRealClickHouse(t *testing.T) {
 	ctx := context.Background()
-	query, direct := newCHAOS3780IntegrationClient(t, ctx)
+	query, direct := newDedicatedClickHouseIntegrationClient(t, ctx)
 	createCHAOS5930Tables(t, ctx, direct)
 	for _, statement := range devhealthschema.DDL("work_graph_issue_pr", "git_pull_requests") {
 		if err := direct.Exec(ctx, statement); err != nil {

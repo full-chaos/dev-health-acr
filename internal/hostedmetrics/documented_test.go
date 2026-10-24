@@ -84,6 +84,7 @@ func producedInstruments(t *testing.T) map[string][]string {
 	instruments.ClickHousePeakUnobserved(ctx)
 	instruments.OutcomeRowEvicted(ctx, "path_drop")
 	instruments.LimitationDisclosureSkipped(ctx)
+	instruments.QueryEmbedFallback(ctx, "timeout")
 	produced := map[string][]string{}
 	for cell := range read() {
 		name, rest, _ := strings.Cut(cell, "{")

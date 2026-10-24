@@ -37,7 +37,7 @@ func (a *Adapter) kindScopedSemanticSearchNodes(ctx context.Context, key, orgID,
 	}
 	vectors, embedErr := a.embedder.Embed(ctx, []string{bound.transmitted})
 	if embedErr != nil || len(vectors) != 1 {
-		a.recordVectorDegraded(ctx, orgID)
+		a.recordQueryEmbedFailure(ctx, orgID, embedErr)
 		return nil, false, true, nil
 	}
 	queryVector := make([]float64, len(vectors[0]))

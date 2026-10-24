@@ -46,7 +46,7 @@ type readOnceStats struct{ memory, readRows, scalarMiss uint64 }
 // ceiling on its lowest read, so the row can fail on this data.
 func TestScopedHistoricalStatementsReadTheCandidatesOnceOnRealClickHouse(t *testing.T) {
 	ctx := context.Background()
-	rawQuery, direct := newCHAOS3780IntegrationClientWithOptions(t, ctx, func(options *runtimeclickhouse.Options) {
+	rawQuery, direct := newDedicatedClickHouseIntegrationClientWithOptions(t, ctx, func(options *runtimeclickhouse.Options) {
 		maxBytesToRead := config.DefaultClickHouseMaxBytesToRead
 		options.MaxBytesToRead = &maxBytesToRead
 	})

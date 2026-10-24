@@ -179,6 +179,20 @@ spec:
             {{- if not .Values.contextFabric.embed.baseURL }}
             {{- fail "contextFabric.embed.apiEnabled requires contextFabric.embed.baseURL" }}
             {{- end }}
+            {{- /* The Go embedder (embedprovider/config.go) refuses a query timeout
+                 outside 10ms..1m and acr-api then fails to start; the schema
+                 can only check the spelling (one unit: ms, s or m), so the
+                 range is checked here, where the value is used. */}}
+            {{- $apiTimeout := .Values.contextFabric.embed.api.timeout | toString }}
+            {{- $apiTimeoutNumber := regexFind "^[0-9]+(\\.[0-9]+)?" $apiTimeout | float64 }}
+            {{- $apiTimeoutUnit := regexFind "(ms|s|m)$" $apiTimeout }}
+            {{- $apiTimeoutMs := 0.0 }}
+            {{- if eq $apiTimeoutUnit "ms" }}{{ $apiTimeoutMs = $apiTimeoutNumber }}{{ end }}
+            {{- if eq $apiTimeoutUnit "s" }}{{ $apiTimeoutMs = mulf $apiTimeoutNumber 1000.0 }}{{ end }}
+            {{- if eq $apiTimeoutUnit "m" }}{{ $apiTimeoutMs = mulf $apiTimeoutNumber 60000.0 }}{{ end }}
+            {{- if or (lt $apiTimeoutMs 10.0) (gt $apiTimeoutMs 60000.0) }}
+            {{- fail (printf "contextFabric.embed.api.timeout must be between 10ms and 1m (the embedder's own bounds), got %q" $apiTimeout) }}
+            {{- end }}
             - name: ACR_CONTEXT_FABRIC_EMBED_BASE_URL
               value: {{ .Values.contextFabric.embed.baseURL | quote }}
             - name: ACR_CONTEXT_FABRIC_EMBED_PROVIDER
@@ -187,10 +201,14 @@ spec:
               value: {{ .Values.contextFabric.embed.model | quote }}
             - name: ACR_CONTEXT_FABRIC_EMBED_DIMENSION
               value: {{ .Values.contextFabric.embed.dimension | quote }}
+            {{- /* acr-api embeds ONE question text on the answer path, so it has
+                 its own timeout and retry count (contextFabric.embed.api.*);
+                 the projector's contextFabric.embed.timeout/maxTransportRetries
+                 stay the projector's. */}}
             - name: ACR_CONTEXT_FABRIC_EMBED_TIMEOUT
-              value: {{ .Values.contextFabric.embed.timeout | quote }}
+              value: {{ .Values.contextFabric.embed.api.timeout | quote }}
             - name: ACR_CONTEXT_FABRIC_EMBED_MAX_TRANSPORT_RETRIES
-              value: {{ .Values.contextFabric.embed.maxTransportRetries | quote }}
+              value: {{ .Values.contextFabric.embed.api.maxTransportRetries | quote }}
             {{- if .Values.contextFabric.embed.existingSecret }}
             - name: ACR_CONTEXT_FABRIC_EMBED_API_KEY
               valueFrom:

@@ -167,7 +167,7 @@ func TestHandleSourceEvidenceRejectsSchemaVersionField(t *testing.T) {
 // acr:v1 ref with a named error instead of resolving a citation of some other
 // result.
 func TestHandleSourceEvidenceScopesContextFabricRefsToTheAnswerResult(t *testing.T) {
-	const ref = "acr:v1:team:CHAOS"
+	const ref = "acr:v1:organization:CHAOS"
 	fx := newFixtureServer(t)
 	var hostedQueries []string
 	fx.EvidenceHandler = func(w http.ResponseWriter, r *http.Request) {
@@ -220,6 +220,8 @@ func TestHandleSourceEvidenceRowKeyedRefsResolveWithoutResultID(t *testing.T) {
 		contractsv1.EvidenceRefID(contractsv1.ContextFabricEvidenceEntityDeployment, repo+":dep-1"),
 		contractsv1.EvidenceRefID(contractsv1.ContextFabricEvidenceEntityReviewV2, repo+":532:rev-9"),
 		contractsv1.EvidenceRefID(contractsv1.ContextFabricEvidenceEntityIncident, "INC-1"),
+		contractsv1.EvidenceRefID(contractsv1.ContextFabricEvidenceEntityTeam, "CHAOS"),
+		contractsv1.EvidenceRefID(contractsv1.ContextFabricEvidenceEntityProject, "jira:WID"),
 		contractsv1.ContextFabricEvidenceRefPrefix + string(contractsv1.ContextFabricEvidenceEntityWorkItemDependencyV2) + ":a:b:blocks%3Afwd",
 		contractsv1.ContextFabricEvidenceRefPrefix + string(contractsv1.ContextFabricEvidenceEntityWorkItemHierarchyV2) + ":" + repo + ":c:p",
 		contractsv1.ContextFabricEvidenceRefPrefix + string(contractsv1.ContextFabricEvidenceEntityWorkItemTeamV2) + ":" + repo + ":w:t:native",
@@ -231,13 +233,12 @@ func TestHandleSourceEvidenceRowKeyedRefsResolveWithoutResultID(t *testing.T) {
 			t.Fatalf("%s: row-keyed ref without result_id must resolve: err=%v text=%q", ref, err, toolResultText(result))
 		}
 	}
-	if len(hostedQueries) != 12 {
-		t.Fatalf("hosted calls = %q, want 12 unscoped", hostedQueries)
+	if len(hostedQueries) != 14 {
+		t.Fatalf("hosted calls = %q, want 14 unscoped", hostedQueries)
 	}
 
 	for _, kind := range []contractsv1.ContextFabricEvidenceEntityType{
-		contractsv1.ContextFabricEvidenceEntityTeam, contractsv1.ContextFabricEvidenceEntityProject,
-		contractsv1.ContextFabricEvidenceEntityReview,
+		contractsv1.ContextFabricEvidenceEntityOrganization, contractsv1.ContextFabricEvidenceEntityReview,
 		contractsv1.ContextFabricEvidenceEntityWorkItemTeam, contractsv1.ContextFabricEvidenceEntityWorkItemDependency, contractsv1.ContextFabricEvidenceEntityWorkItemHierarchy,
 		contractsv1.ContextFabricEvidenceEntityDeploymentIncident, contractsv1.ContextFabricEvidenceEntityProjectTeam,
 	} {
@@ -247,7 +248,7 @@ func TestHandleSourceEvidenceRowKeyedRefsResolveWithoutResultID(t *testing.T) {
 			t.Fatalf("%s must still require result_id, got %q", kind, toolResultText(result))
 		}
 	}
-	if len(hostedQueries) != 12 {
+	if len(hostedQueries) != 14 {
 		t.Fatalf("a subject-keyed ref reached the hosted route: %q", hostedQueries)
 	}
 }

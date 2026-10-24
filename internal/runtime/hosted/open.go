@@ -36,6 +36,7 @@ import (
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/synthesisprompt"
 	"github.com/full-chaos/dev-health-acr/internal/contextpacket"
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
+	"github.com/full-chaos/dev-health-acr/internal/hostedmetrics"
 	"github.com/full-chaos/dev-health-acr/internal/limits"
 	"github.com/full-chaos/dev-health-acr/internal/observability"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
@@ -335,7 +336,18 @@ func open(ctx context.Context, request buildRequest) (*Runtime, error) {
 // assert the wiring -- "the constructed sink carries the passed-in logger"
 // -- without needing a graph backend configured or a live connection.
 func falkorGraphTelemetry(logger *slog.Logger) falkorgraph.GraphTelemetry {
-	return falkorgraph.SlogTelemetry{Logger: logger}
+	return falkorGraphTelemetryWithMetrics(logger, nil)
+}
+
+// falkorGraphTelemetryWithMetrics is falkorGraphTelemetry plus the query-embed
+// fallback counter: the sink counts each question whose query embed failed or
+// timed out. A nil metrics leaves the sink log-only, exactly as before.
+func falkorGraphTelemetryWithMetrics(logger *slog.Logger, metrics *hostedmetrics.Instruments) falkorgraph.GraphTelemetry {
+	sink := falkorgraph.SlogTelemetry{Logger: logger}
+	if metrics != nil {
+		sink.QueryEmbedFallback = metrics.QueryEmbedFallback
+	}
+	return sink
 }
 
 // graphLifecycleTelemetry builds the CHAOS-3898 S2a
@@ -493,7 +505,7 @@ func buildContextFabricGraphReader(request buildRequest, postgres postgresCompon
 	// DIFFERENT, unconfigured logger instead, satisfying
 	// internal/contextfabric/AGENTS.md's "reported, never inferred"
 	// invariant only cosmetically.
-	graphConfig.Telemetry = falkorGraphTelemetry(request.options.Logger)
+	graphConfig.Telemetry = falkorGraphTelemetryWithMetrics(request.options.Logger, request.options.Metrics)
 	// CHAOS-3898 S2a (design brief §2.0): startup/config assertion, and the
 	// §5b signal sink wired unconditionally.
 	graphConfig.LifecycleTelemetry = graphLifecycleTelemetry(request.options.Logger)

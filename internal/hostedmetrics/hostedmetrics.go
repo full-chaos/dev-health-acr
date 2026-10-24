@@ -29,11 +29,12 @@ const (
 	ClickHousePeakUnobservedName = "acr_clickhouse_statement_peak_unobserved_total"
 	OutcomeRowsEvictedName       = "acr_outcome_rows_evicted_total"
 	LimitationSkippedName        = "acr_limitation_disclosure_skipped_total"
+	QueryEmbedFallbacksName      = "acr_query_embed_fallbacks_total"
 )
 
 // Names lists every instrument this package creates.
 func Names() []string {
-	return []string{ToolCallsName, ToolLatencyName, AnswersName, BudgetRefusalsName, AnswerReuseName, RequirementOutcomesName, FactReadAbortsName, InvestigationLatencyName, ClickHouseNearMemoryCapName, ClickHousePeakUnobservedName, OutcomeRowsEvictedName, LimitationSkippedName}
+	return []string{ToolCallsName, ToolLatencyName, AnswersName, BudgetRefusalsName, AnswerReuseName, RequirementOutcomesName, FactReadAbortsName, InvestigationLatencyName, ClickHouseNearMemoryCapName, ClickHousePeakUnobservedName, OutcomeRowsEvictedName, LimitationSkippedName, QueryEmbedFallbacksName}
 }
 
 // LatencyBucketsSeconds are the explicit histogram boundaries. They reach 300 s
@@ -75,6 +76,7 @@ type Instruments struct {
 	peakUnobserved     metric.Int64Counter
 	outcomeRowsEvicted metric.Int64Counter
 	limitationSkipped  metric.Int64Counter
+	queryEmbedFallback metric.Int64Counter
 	vocab              Vocabularies
 }
 
@@ -107,6 +109,7 @@ func New(meter metric.Meter, vocab Vocabularies) (*Instruments, error) {
 		peakUnobserved:     counter(ClickHousePeakUnobservedName, "ClickHouse statements that finished with no peak memory value from the server."),
 		outcomeRowsEvicted: counter(OutcomeRowsEvictedName, "Served lever applications that evicted an outcome row at the row cap, by lever."),
 		limitationSkipped:  counter(LimitationSkippedName, "Service disclosures left out of a served answer because the limitation list was full of service-looking entries."),
+		queryEmbedFallback: counter(QueryEmbedFallbacksName, "Questions whose query embed failed or timed out, so vector retrieval fell back to lexical, by cause."),
 		nearMemoryCap:      counter(ClickHouseNearMemoryCapName, "ClickHouse statements that finished above half of their memory cap."),
 		vocab:              vocab,
 	}
@@ -229,6 +232,8 @@ func StatusClass(status int) string {
 func AnswerStatusVocabulary() []string       { return slices.Clone(answerStatuses) }
 func FactReadAbortCauseVocabulary() []string { return slices.Clone(factReadAbortCauses) }
 
+var queryEmbedFallbackCauses = []string{"timeout", "error"}
+
 var evictionLevers = []string{"claim_depth", "fact_row", "path_drop", "candidate"}
 
 // OutcomeRowEvicted records one served stage-3 lever application whose answer
@@ -247,4 +252,14 @@ func (i *Instruments) LimitationDisclosureSkipped(ctx context.Context) {
 		return
 	}
 	i.limitationSkipped.Add(ctx, 1)
+}
+
+// QueryEmbedFallback records one question whose query embed failed or timed out
+// and fell back to lexical retrieval. cause is "timeout" or "error"; anything
+// else is recorded as "other".
+func (i *Instruments) QueryEmbedFallback(ctx context.Context, cause string) {
+	if i == nil {
+		return
+	}
+	i.queryEmbedFallback.Add(ctx, 1, metric.WithAttributes(attribute.String("cause", bucket(cause, queryEmbedFallbackCauses))))
 }

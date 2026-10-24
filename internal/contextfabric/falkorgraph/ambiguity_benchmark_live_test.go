@@ -3,15 +3,8 @@ package falkorgraph
 import (
 	"context"
 	"encoding/json"
-	"go/ast"
-	"go/constant"
-	"go/types"
 	"os"
-	"sort"
-	"strings"
 	"testing"
-
-	"golang.org/x/tools/go/packages"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/embedprovider"
@@ -675,102 +668,10 @@ var benchmarkLookupEnvVarFor = map[string]string{
 	embedprovider.EnvAllowNoCredential:   "ACR_TEST_EMBED_ALLOW_NO_CREDENTIAL",
 }
 
-// embedproviderImportPath is the package packages.Load resolves for
-// discoverEmbedproviderEnvVars, below -- an import path, not a filesystem
-// path, so resolution goes through the SAME module-aware machinery
-// `go build`/`go test` use, unlike round 4's manual filesystem-relative walk
-// from runtime.Caller(0).
+// embedproviderImportPath is the package discoverEmbedproviderEnvVars
+// resolves -- an import path, not a filesystem path, so resolution goes
+// through the module-aware machinery `go build`/`go test` use.
 const embedproviderImportPath = "github.com/full-chaos/dev-health-acr/internal/contextfabric/embedprovider"
-
-// discoverEmbedproviderEnvVars is the CHAOS-3849 round-5 fix (round 3 on
-// this closure test's class: hardcoded list -> static go/parser AST ->
-// compiler semantics via go/types -- no more syntactic patches). It loads
-// the embedprovider package with golang.org/x/tools/go/packages
-// (NeedTypes|NeedTypesInfo) and reads every exported package-scope object
-// whose name starts with "Env" and whose TYPE-CHECKED value is a string
-// constant, via go/constant.StringVal(obj.Val()). This is what
-// TestBenchmarkLookupCoversEveryEmbedproviderEnvVar iterates over, NOT any
-// hand-maintained list: a new Env* constant is picked up here automatically,
-// with no test file for a human to remember to touch.
-//
-// This is STRUCTURAL closure, not another syntactic approximation -- for two
-// reasons, both required by the round-5 review:
-//
-//	(a) The value comes from the type-checker's own constant evaluator
-//	    (types.Const.Val()), not from pattern-matching source syntax against
-//	    one hardcoded shape. Round 4's go/parser walk only recognized a BARE
-//	    *ast.BasicLit string -- `const EnvNew = envPrefix + "NEW"`
-//	    (concatenation), a type-aliased constant, a parenthesized literal, an
-//	    iota-based continuation, or a value assembled from a constant
-//	    declared in a DIFFERENT file of the same package would all have been
-//	    silently excluded, each one a distinct syntactic form someone would
-//	    eventually have to notice and patch this discovery function for.
-//	    Every one of those is a legal Go constant expression that
-//	    type-checks to a single computed string value, and go/types hands
-//	    back exactly that computed value regardless of which spelling
-//	    produced it -- there is no second form to special-case, because the
-//	    type checker has already reduced all of them to the same
-//	    representation this code reads.
-//	(b) packages.Load runs through the SAME `go list`-driven build machinery
-//	    `go build`/`go test` themselves use, so it applies the ACTIVE build
-//	    configuration (GOOS/GOARCH, build tags) when deciding which files
-//	    belong to the package -- an Env* constant in a file excluded by a
-//	    build constraint on this platform is excluded from
-//	    pkg.Types.Scope() exactly as it would be from the real build. Round
-//	    4's parser.ParseDir walked every .go file in the directory
-//	    unconditionally, with no notion of "inactive for this build" at all,
-//	    so an inactive-platform constant would have over-collected and could
-//	    have spuriously failed CI on a different GOOS/GOARCH.
-//
-// A load error is a hard test failure (t.Fatalf), never a skip: this
-// closure test must run in CI, and a load failure silently skipping it
-// would be the same "quietly measures nothing" failure mode the CHAOS-3831
-// harness had before its own credential/timeout fixes (round 1/2 of this
-// same ticket) -- no special GOFLAGS/env handling was needed here in
-// practice (packages.Load works against this repo's ordinary module
-// context), but a failure surfaces loudly rather than degrading to an
-// empty, silently-passing set.
-func discoverEmbedproviderEnvVars(t *testing.T) []string {
-	t.Helper()
-	cfg := &packages.Config{
-		Mode: packages.NeedName | packages.NeedTypes | packages.NeedTypesInfo,
-	}
-	pkgs, err := packages.Load(cfg, embedproviderImportPath)
-	if err != nil {
-		t.Fatalf("packages.Load(%s): %v", embedproviderImportPath, err)
-	}
-	if n := packages.PrintErrors(pkgs); n > 0 {
-		t.Fatalf("packages.Load(%s) reported %d package error(s) (printed above) -- embedprovider did not type-check cleanly", embedproviderImportPath, n)
-	}
-	if len(pkgs) != 1 || pkgs[0].Types == nil {
-		t.Fatalf("packages.Load(%s) returned %d package(s) with usable type information, want exactly 1", embedproviderImportPath, len(pkgs))
-	}
-	scope := pkgs[0].Types.Scope()
-	var names []string
-	for _, name := range scope.Names() {
-		if !ast.IsExported(name) || !strings.HasPrefix(name, "Env") {
-			continue
-		}
-		constObj, ok := scope.Lookup(name).(*types.Const)
-		if !ok {
-			continue // an Env*-prefixed non-const at package scope is not a lookup key.
-		}
-		basic, ok := constObj.Type().Underlying().(*types.Basic)
-		if !ok || basic.Info()&types.IsString == 0 {
-			continue // only a string-kind constant is an env-var lookup name.
-		}
-		// constant.StringVal reads the type checker's OWN evaluated value --
-		// this is the line that makes (a) above true: it is identical
-		// whether the source wrote a bare literal, a concatenation, an
-		// alias, or an iota-derived expression.
-		names = append(names, constant.StringVal(constObj.Val()))
-	}
-	if len(names) == 0 {
-		t.Fatalf("loaded %s but found zero exported Env*-prefixed string constants -- the package load is broken, not that embedprovider suddenly has none", embedproviderImportPath)
-	}
-	sort.Strings(names)
-	return names
-}
 
 // TestBenchmarkLookupCoversEveryEmbedproviderEnvVar is the round-3 class-
 // closure test (review finding 3), made round-4-DYNAMIC (review finding 1):

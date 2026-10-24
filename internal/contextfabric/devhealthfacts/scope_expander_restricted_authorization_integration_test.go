@@ -23,7 +23,7 @@ import (
 // and counts must name every admission path.
 func TestScopeExpanderWorkItemsAuthorizeRepoLessItemsForARestrictedPrincipalOnRealClickHouse(t *testing.T) {
 	ctx := context.Background()
-	rawQuery, direct := newCHAOS3780IntegrationClient(t, ctx)
+	rawQuery, direct := newDedicatedClickHouseIntegrationClient(t, ctx)
 	query := statementthreads.API(rawQuery)
 	for _, statement := range devhealthschema.DDL(sharedClickHouseTables...) {
 		if err := direct.Exec(ctx, statement); err != nil {
