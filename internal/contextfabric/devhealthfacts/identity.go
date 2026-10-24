@@ -2,6 +2,7 @@ package devhealthfacts
 
 import (
 	"context"
+	"github.com/full-chaos/dev-health-acr/internal/telemetryscrub"
 	"log/slog"
 	"strconv"
 	"strings"
@@ -102,7 +103,7 @@ func (p *IdentityProvider) ReadFacts(ctx context.Context, principal storage.Prin
 			slog.Warn("context_fabric_owning_teams_read_failed",
 				"producer", "devhealthfacts.identity",
 				"repositories", ownershipUnread,
-				"error", contextfabric.SanitizeLogAttr(err.Error()),
+				"error", contextfabric.SanitizeLogAttr(telemetryscrub.ErrorClass(err)),
 			)
 		}
 		ownersCut = omitted

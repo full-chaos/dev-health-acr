@@ -5,6 +5,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"github.com/full-chaos/dev-health-acr/internal/telemetryscrub"
 	"log/slog"
 	"os"
 	"os/signal"
@@ -92,7 +93,8 @@ func serve(args []string) error {
 		return fmt.Errorf("initialize otel export: %w", err)
 	}
 	defer shutdownExporter(exporter)
-	logger := slog.New(exporter.LogHandler(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: cfg.LogLevel})))
+	logger := slog.New(telemetryscrub.Handler(exporter.LogHandler(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: cfg.LogLevel}))))
+	telemetryscrub.InstallDefault(os.Stdout, cfg.LogLevel)
 	logStarting(logger, info, cfg, os.LookupEnv)
 	exporter.LogStart(ctx, logger)
 

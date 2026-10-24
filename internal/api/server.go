@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/full-chaos/dev-health-acr/internal/telemetryscrub"
 	"log/slog"
 	"net"
 	"net/http"
@@ -78,7 +79,7 @@ func (s *Server) Serve(ctx context.Context, listener net.Listener) error {
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), s.config.ShutdownTimeout)
 		defer cancel()
 		if err := s.http.Shutdown(shutdownCtx); err != nil {
-			s.logger.Error("graceful shutdown failed; forcing close", "error", err)
+			s.logger.Error("graceful shutdown failed; forcing close", "error", telemetryscrub.ErrorClass(err))
 			_ = s.http.Close()
 			return fmt.Errorf("shutdown: %w", err)
 		}
