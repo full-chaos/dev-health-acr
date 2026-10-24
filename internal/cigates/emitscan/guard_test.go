@@ -4,7 +4,9 @@ import (
 	"bufio"
 	"context"
 	"fmt"
+	"io/fs"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"sort"
 	"strconv"
@@ -248,5 +250,76 @@ func TestSiteTableDiffNamesEveryKindOfDrift(t *testing.T) {
 	}
 	if len(diffTables(have, have)) != 0 {
 		t.Error("identical tables reported drift")
+	}
+}
+
+// goFilesUnder lists the Go files the scan reads. The guard names its root by go.mod and enumerates files itself, so the shard
+// planner (scripts/ci/reached-shards.sh, rule 4: a test that names a root outside its directory and enumerates files walks
+// the tree) reaches this package from any change.
+func goFilesUnder(t *testing.T, root string, dirs []string) []string {
+	t.Helper()
+	var files []string
+	for _, dir := range dirs {
+		err := filepath.WalkDir(filepath.Join(root, dir), func(path string, entry fs.DirEntry, err error) error {
+			if err != nil {
+				return err
+			}
+			if !entry.IsDir() && strings.HasSuffix(path, ".go") && !strings.HasSuffix(path, "_test.go") {
+				files = append(files, path)
+			}
+			return nil
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	return files
+}
+
+func TestTheScanHasSourceToRead(t *testing.T) {
+	if files := goFilesUnder(t, repoRoot(t), []string{"internal", "cmd"}); len(files) < 100 {
+		t.Fatalf("only %d Go files under internal and cmd: the census would pass over an empty tree", len(files))
+	}
+}
+
+// The census gate must run on every pull request that touches Go: the planner reaches this package from a change in a
+// package that shares no import with it, and runs every shard for a change under scripts/ci/.
+func TestThePlannerAlwaysReachesTheCensusGate(t *testing.T) {
+	root := repoRoot(t)
+	plan := func(changed string) (reached string, mode string) {
+		t.Helper()
+		dir := t.TempDir()
+		changedFile := filepath.Join(dir, "changed.txt")
+		reachedFile := filepath.Join(dir, "reached.txt")
+		if err := os.WriteFile(changedFile, []byte(changed+"\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		cmd := exec.Command("bash", filepath.Join(root, "scripts", "ci", "reached-shards.sh"), "--event", "pull_request", "--changed", changedFile, "--reached-out", reachedFile)
+		cmd.Dir = root
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("reached-shards.sh: %v\n%s", err, out)
+		}
+		raw, _ := os.ReadFile(reachedFile)
+		for _, line := range strings.Split(string(out), "\n") {
+			if strings.HasPrefix(line, "reach_mode=") {
+				mode = strings.TrimPrefix(line, "reach_mode=")
+			}
+		}
+		return string(raw), mode
+	}
+	const gate = "internal/cigates/emitscan"
+	// the path is built at run time: a test that names the changed file in its source is reached by that very rule
+	outside := "internal/contract" + "check/ru" + "n.go"
+	reached, mode := plan(outside)
+	if mode != "full" && !strings.Contains(reached, gate) {
+		t.Fatalf("a change to %s (mode %q) does not reach %s: the census gate can be skipped", outside, mode, gate)
+	}
+	// control: the planner does prune, so the check above is not vacuous
+	if mode == "reached" && strings.Count(reached, "\n") < 2 {
+		t.Fatalf("control: the planner reached only %q", reached)
+	}
+	if _, mode := plan("scripts/ci/reached-shards.sh"); mode != "full" {
+		t.Fatalf("a change under scripts/ci/ runs mode %q, want full", mode)
 	}
 }

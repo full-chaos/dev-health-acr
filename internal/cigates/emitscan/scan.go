@@ -201,6 +201,9 @@ func ScanContext(ctx context.Context, root string, dirs []string) ([]Finding, []
 		info := packageInfo(ctx, group)
 		var found []Finding
 		for _, parsed := range group {
+			if err := ctx.Err(); err != nil {
+				return nil, nil, err
+			}
 			if info.budget.over {
 				break
 			}
@@ -233,6 +236,9 @@ func ScanContext(ctx context.Context, root string, dirs []string) ([]Finding, []
 		}
 		return out[i].Line < out[j].Line
 	})
+	if err := ctx.Err(); err != nil { // a scan during which the context was cancelled is never a pass
+		return nil, nil, err
+	}
 	return out, sites, nil
 }
 
@@ -890,6 +896,30 @@ func (s *fileScan) attrLiteral(lit *ast.CompositeLit) {
 	if x, isIdent := sel.X.(*ast.Ident); !isIdent || s.imports[x.Name] != "slog" {
 		return
 	}
+	s.attrFields(lit)
+}
+
+// withAttrs reads the argument of Handler.WithAttrs: a slice literal whose items are attribute constructors or literals,
+// anything else (a variable, a spread, a helper) hides its keys (R9).
+func (s *fileScan) withAttrs(arg ast.Expr) {
+	lit, ok := arg.(*ast.CompositeLit)
+	if !ok {
+		s.add(RuleLogKey, arg.Pos(), "unresolvable key")
+		return
+	}
+	for _, element := range lit.Elts {
+		if inner, isLit := element.(*ast.CompositeLit); isLit && inner.Type == nil {
+			s.attrFields(inner) // the elided type of a []slog.Attr element
+			continue
+		}
+		if !s.isAttrItem(element) {
+			s.add(RuleLogKey, element.Pos(), "unresolvable key")
+		}
+	}
+}
+
+// attrFields reads the key and value of an slog.Attr literal.
+func (s *fileScan) attrFields(lit *ast.CompositeLit) {
 	var key, value ast.Expr
 	for i, element := range lit.Elts {
 		if kv, isKV := element.(*ast.KeyValueExpr); isKV {
@@ -1329,6 +1359,12 @@ func (s *fileScan) callTarget(call *ast.CallExpr, pkg, name string) {
 	case pkg == "slog" && name == "Group" && len(call.Args) >= 1:
 		s.logKey(call.Args[0], nil, call.Pos())
 		s.logPairs(call.Args, 1)
+	case name == "WithGroup" && len(call.Args) >= 1:
+		s.logKey(call.Args[0], nil, call.Pos())
+	case name == "WithAttrs" && len(call.Args) >= 1:
+		s.withAttrs(call.Args[0])
+	case pkg == "metric" && name == "WithAttributeSet" && len(call.Args) >= 1:
+		s.metricAttributeSet(call)
 	case name == "Log" && len(call.Args) >= 4:
 		s.logPairs(call.Args, 3)
 	case name == "LogAttrs" && len(call.Args) >= 4:
@@ -1635,8 +1671,31 @@ func (s *fileScan) unfoldableConst(expr ast.Expr) bool {
 }
 
 func (s *fileScan) metricAttributes(call *ast.CallExpr) {
+	s.labelArgs(call.Args, call.Pos())
+}
+
+// metricAttributeSet reads metric.WithAttributeSet(set): the set must be built at the call, as attribute.NewSet (or an alias of
+// it) over direct attribute constructors; a set held in a variable or built by a helper cannot be read (R2).
+func (s *fileScan) metricAttributeSet(call *ast.CallExpr) {
+	if inner, ok := call.Args[0].(*ast.CallExpr); ok {
+		for _, target := range s.targets(inner.Fun) {
+			if target[0] == "attribute" && target[1] == "NewSet" {
+				s.labelArgs(inner.Args, inner.Pos())
+				return
+			}
+		}
+		if pkg, name, found := s.qualified(inner.Fun); found && pkg == "attribute" && name == "NewSet" {
+			s.labelArgs(inner.Args, inner.Pos())
+			return
+		}
+	}
+	s.add(RuleMetricLabel, call.Args[0].Pos(), "labels built outside the call")
+}
+
+// labelArgs marks the direct attribute constructors among a label list and refuses every other item.
+func (s *fileScan) labelArgs(args []ast.Expr, pos token.Pos) {
 	attrs := 0
-	for _, arg := range call.Args {
+	for _, arg := range args {
 		inner, ok := arg.(*ast.CallExpr)
 		if ok {
 			if _, _, isAttr := s.attrParts(inner); isAttr {
@@ -1649,7 +1708,7 @@ func (s *fileScan) metricAttributes(call *ast.CallExpr) {
 		s.add(RuleMetricLabel, arg.Pos(), "labels built outside the call")
 	}
 	if attrs > maxMetricLabels {
-		s.add(RuleMetricLabel, call.Pos(), fmt.Sprintf("%d labels", attrs))
+		s.add(RuleMetricLabel, pos, fmt.Sprintf("%d labels", attrs))
 	}
 }
 
