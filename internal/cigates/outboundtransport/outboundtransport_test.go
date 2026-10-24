@@ -66,6 +66,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/full-chaos/dev-health-acr/internal/cigates/sourceload"
 	"github.com/full-chaos/dev-health-acr/internal/releasebuild"
 	"github.com/full-chaos/dev-health-acr/internal/testsupport/repopath"
 )
@@ -153,19 +154,19 @@ type targetScan struct {
 }
 
 func scanTarget(root string, patterns []string, target [2]string) targetScan {
-	loader, err := loadSources(root, patterns, target[0], target[1])
+	loader, err := sourceload.Load(root, patterns, target[0], target[1])
 	if err != nil {
 		return targetScan{err: err}
 	}
 	result := targetScan{counts: map[site]int{}, loaded: map[string]bool{}}
-	result.problems = loader.problems(target[0], target[1])
-	for _, pkg := range loader.roots {
-		unit := loader.units[pkg.ID]
+	result.problems = loader.Problems(target[0], target[1])
+	for _, pkg := range loader.Roots {
+		unit := loader.Units[pkg.ID]
 		for _, name := range pkg.GoFiles {
 			result.loaded[name] = true
 		}
-		for _, file := range unit.files {
-			rel, relErr := filepath.Rel(root, loader.fset.Position(file.Pos()).Filename)
+		for _, file := range unit.Files {
+			rel, relErr := filepath.Rel(root, loader.Fset.Position(file.Pos()).Filename)
 			if relErr != nil {
 				return targetScan{err: relErr}
 			}
@@ -173,7 +174,7 @@ func scanTarget(root string, patterns []string, target [2]string) targetScan {
 			for _, declaration := range file.Decls {
 				symbol := declSymbol(declaration)
 				ast.Inspect(declaration, func(node ast.Node) bool {
-					for _, kind := range kindsOf(unit.info, declaration, node) {
+					for _, kind := range kindsOf(unit.Info, declaration, node) {
 						result.counts[site{rel, symbol, kind}]++
 					}
 					return true
