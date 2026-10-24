@@ -218,7 +218,18 @@ func diffTables(have, want map[siteKey]string) []string {
 // TestMetricLabelSitesMatchLabelsTSV pins the label keys of every metric.WithAttributes call site: a new site, a changed
 // key set or a stale row fails until the table says so. Unbounded words (ids, paths, free text) are refused by rule R2.
 func TestMetricLabelSitesMatchLabelsTSV(t *testing.T) {
-	for _, problem := range diffTables(censusOf(t, "metric"), readSiteTable(t, "labels.tsv")) {
+	table := readSiteTable(t, "labels.tsv")
+	thirdParty := 0
+	for key := range table {
+		if strings.HasPrefix(key.file, "third-party:") { // read by the runtime census in internal/otelexport, not by the source scan
+			delete(table, key)
+			thirdParty++
+		}
+	}
+	if thirdParty == 0 {
+		t.Error("labels.tsv has no third-party row: the runtime census of the library instruments would have nothing to read")
+	}
+	for _, problem := range diffTables(censusOf(t, "metric"), table) {
 		t.Error(problem)
 	}
 }
