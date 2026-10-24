@@ -252,6 +252,9 @@ func (p *InvestmentProvider) ReadFacts(ctx context.Context, principal storage.Pr
 	}
 	result = contextfabric.FactProviderResult{Facts: facts, State: state, Reason: retentionReason, Version: QueryVersion, Grain: timeBound.effectiveGrain(grainDaily), Truncated: truncated || omittedUnrepresentableCount > 0, OmittedCount: omittedUnrepresentableCount}
 	applyTeamsOwningNothing(&result, query.Subjects, teamsRequested, teamsOwningNothing)
+	if projectsErr := applyTeamsOwningProjectsOnly(ctx, p.facts.client, orgID, &result, query.Subjects, teamsRequested, timeBound); projectsErr != nil {
+		return contextfabric.FactProviderResult{}, readFailure("query team owned projects", projectsErr)
+	}
 	if mixUnavailable != "" {
 		addRequestNote(&result, mixUnavailable)
 		for _, subject := range teamsNoUnit {

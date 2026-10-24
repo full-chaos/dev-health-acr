@@ -191,6 +191,9 @@ ORDER BY team_id, rule_id`)
 			return contextfabric.FactProviderResult{}, readFailure("query team owned repositories", ownedErr)
 		}
 		applyTeamsOwningNothing(&result, query.Subjects, len(ids), teamsOwningNothingWithoutData(ids, bySubject, owned, facts, evaluated))
+		if projectsErr := applyTeamsOwningProjectsOnly(ctx, p.facts.client, orgID, &result, query.Subjects, len(ids), timeBound); projectsErr != nil {
+			return contextfabric.FactProviderResult{}, readFailure("query team owned projects", projectsErr)
+		}
 	}
 	return result, nil
 }

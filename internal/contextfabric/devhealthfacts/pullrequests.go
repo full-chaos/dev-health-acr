@@ -139,6 +139,9 @@ func (p *PullRequestsProvider) ReadFacts(ctx context.Context, principal storage.
 	state, retentionReason := timeBound.retentionState(len(rows) + teamFactCount)
 	result = contextfabric.FactProviderResult{Facts: facts, State: state, Reason: retentionReason, Version: QueryVersion, Grain: timeBound.effectiveGrain(grainExact), Truncated: len(rows) >= maxFactRowsPerQuery || teamOutcome.truncated || projectLinksTruncated}
 	applyTeamsOwningNothing(&result, query.Subjects, teamOutcome.teamsRequested, teamOutcome.teamsWithoutRepos)
+	if projectsErr := applyTeamsOwningProjectsOnly(ctx, p.facts.client, orgID, &result, query.Subjects, teamOutcome.teamsRequested, timeBound); projectsErr != nil {
+		return contextfabric.FactProviderResult{}, readFailure("query team owned projects", projectsErr)
+	}
 	unwindowedLinkSubjects := append(append([]contextfabric.SubjectRef(nil), teamOutcome.linkUnwindowedTeams...), projectLinksUnwindowed...)
 	addScopedReason(&result, query.Subjects, unwindowedLinkSubjects, teamProjectLinksUnwindowedReason)
 	return result, nil
