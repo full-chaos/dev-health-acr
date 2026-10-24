@@ -4,7 +4,9 @@ package falkorfixture
 
 import (
 	"context"
+	"errors"
 	"testing"
+	"time"
 
 	"github.com/full-chaos/dev-health-acr/internal/chfixture"
 	"github.com/full-chaos/dev-health-acr/internal/chfixture/startterm"
@@ -27,7 +29,7 @@ func WithLabels(labels map[string]string) Option {
 func Start(ctx context.Context, t testing.TB, image string, opts ...Option) testcontainers.Container {
 	t.Helper()
 	chfixture.RequireContainers(t)
-	container, err := start(ctx, request(image, opts), testcontainers.GenericContainer)
+	container, err := startRetrying(ctx, t, image, opts, testcontainers.GenericContainer)
 	if err != nil {
 		t.Fatalf("start FalkorDB container: %v", err)
 	}
@@ -37,6 +39,42 @@ func Start(ctx context.Context, t testing.TB, image string, opts ...Option) test
 		}
 	})
 	return container
+}
+
+const (
+	serveBudget    = 2 * time.Minute
+	minRetryBudget = 45 * time.Second
+)
+
+type logger interface {
+	Helper()
+	Logf(string, ...any)
+}
+
+// startRetrying starts a container and, only when the wait proved the server answers inside the container while
+// its published port never did, starts one more on a new port mapping with the rest of the 2-minute budget. Every
+// other failure is final.
+func startRetrying(ctx context.Context, t logger, image string, opts []Option, create startFunc) (testcontainers.Container, error) {
+	t.Helper()
+	began := time.Now()
+	container, err := start(ctx, withBudget(request(image, opts), serveBudget), create)
+	if err == nil || !errors.Is(err, chfixture.ErrPublishedPortUnreachable) {
+		return container, err
+	}
+	budget := max(serveBudget-time.Since(began), minRetryBudget)
+	var unreachable *chfixture.PortUnreachableError
+	if errors.As(err, &unreachable) {
+		t.Logf("falkordb-fixture: published port unreachable, restarting once port=%s tries=%d elapsed=%s", unreachable.Port, unreachable.Tries, unreachable.Elapsed)
+	} else {
+		t.Logf("falkordb-fixture: published port unreachable, restarting once port=unknown tries=0 elapsed=%s", time.Since(began).Round(time.Millisecond))
+	}
+	t.Logf("falkordb-fixture: first failure (retry budget %s):\n%v", budget, err)
+	return start(ctx, withBudget(request(image, opts), budget), create)
+}
+
+func withBudget(req testcontainers.GenericContainerRequest, budget time.Duration) testcontainers.GenericContainerRequest {
+	req.WaitingFor = chfixture.FalkorReadyWithin(budget)
+	return req
 }
 
 func request(image string, opts []Option) testcontainers.GenericContainerRequest {
