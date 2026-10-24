@@ -40,7 +40,7 @@ SELECT o.provider AS g_provider, o.project_id AS g_project_id, o.team_id AS g_te
 ` + projectTeamsFromGroupSQL(ingest) + `
 HAVING NOT (` + projectTeamsSuppressedSQL + `)
 )
-WHERE ` + derivedIDFitsSQL(identity.KindProject, "g_provider", "g_project_id")
+WHERE ` + "1 = 1"
 }
 
 // workItemOwnershipEdgeCountSQL counts the work item -> team pairs
