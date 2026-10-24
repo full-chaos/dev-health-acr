@@ -133,7 +133,7 @@ func TestTermlessContinuationNeedsAnExplicitRequestSideContinuation(t *testing.T
 		{"no parent and no referenced result", InvestigationRequest{}, false},
 		{"a blank parent", InvestigationRequest{ParentResultID: "  "}, false},
 	} {
-		if got := termlessContinuation(outcome, tc.request); got != tc.want {
+		if got := termlessContinuation(outcome, tc.request).Active; got != tc.want {
 			t.Fatalf("%s: termlessContinuation = %v, want %v", tc.name, got, tc.want)
 		}
 	}
@@ -152,15 +152,15 @@ func TestAReceiptWithoutTheTermlessFlagSerializesUnchanged(t *testing.T) {
 func TestAReferencedPriorResultIsAnExplicitContinuationToo(t *testing.T) {
 	outcome := termlessOutcome(QuestionFamilyOutcome{}, true, FrameInvariantI3)
 	request := InvestigationRequest{PriorKindReceipts: []BoundSubjectReceipt{{ResultID: "result_prior"}}}
-	if !termlessContinuation(outcome, request) {
+	if !termlessContinuation(outcome, request).Active {
 		t.Fatal("termlessContinuation = false, want true: referenced prior results are the same continuation clause reuseBypassReason reads")
 	}
-	if termlessContinuation(termlessOutcome(QuestionFamilyOutcome{}, true, FrameInvariantI4), request) {
+	if termlessContinuation(termlessOutcome(QuestionFamilyOutcome{}, true, FrameInvariantI4), request).Active {
 		t.Fatal("termlessContinuation = true for a gate rejected at another invariant")
 	}
 	notRejected := outcome
 	notRejected.Gate = FrameGate{Outcome: FrameGatePassed}
-	if termlessContinuation(notRejected, request) {
+	if termlessContinuation(notRejected, request).Active {
 		t.Fatal("termlessContinuation = true for a gate that passed")
 	}
 }

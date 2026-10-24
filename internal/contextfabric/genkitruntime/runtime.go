@@ -3441,6 +3441,8 @@ func mergeFallbackFrameCapture(primary *contextfabric.ModelExecutionReceipt, fal
 	primary.QuestionFrame = fallback.QuestionFrame
 	primary.FrameOutcome = fallback.FrameOutcome
 	primary.FrameFailedInvariant = fallback.FrameFailedInvariant
+	primary.TermlessNamedSubject = fallback.TermlessNamedSubject
+	primary.TermlessScopeMemberKind = fallback.TermlessScopeMemberKind
 	primary.FrameGateOutcome = fallback.FrameGateOutcome
 	primary.FrameGateRefuseBasis = fallback.FrameGateRefuseBasis
 	primary.FrameGateDeclaredMemberKind = fallback.FrameGateDeclaredMemberKind
