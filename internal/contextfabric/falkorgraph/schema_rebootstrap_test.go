@@ -99,6 +99,7 @@ func TestAPurgeFromAnotherProcessIsHealedByTheNextTick(t *testing.T) {
 	if !bootstrapCached(adapter, key) || rig.embeddings != 1 {
 		t.Fatalf("premise: bootstrap cached = %v, embeddings = %d, want true/1", bootstrapCached(adapter, key), rig.embeddings)
 	}
+	watermarksBefore := rig.watermarks
 
 	rig.purge()
 	if err := apply(t, adapter); !errors.Is(err, errVectorIndexNotReady) {
@@ -107,12 +108,18 @@ func TestAPurgeFromAnotherProcessIsHealedByTheNextTick(t *testing.T) {
 	if bootstrapCached(adapter, key) {
 		t.Fatal("bootstrapDone must be dropped when the vector index is absent after bootstrap")
 	}
+	if rig.watermarks != watermarksBefore {
+		t.Fatalf("watermark writes %d -> %d: the batch that finds the index gone must not advance the checkpoint", watermarksBefore, rig.watermarks)
+	}
 	if len(sink.attempts) != 1 || sink.attempts[0] != 1 {
 		t.Fatalf("rebootstrap telemetry = %v, want one event with attempt 1", sink.attempts)
 	}
 
 	if err := apply(t, adapter); err != nil {
 		t.Fatalf("the next tick must bootstrap again and land the batch: %v", err)
+	}
+	if rig.watermarks != watermarksBefore+1 {
+		t.Fatalf("watermark writes = %d, want %d: the healed batch advances the checkpoint once", rig.watermarks, watermarksBefore+1)
 	}
 	if !rig.schemaPresent || rig.embeddings != 2 || !bootstrapCached(adapter, key) {
 		t.Fatalf("schema/embeddings/cached = %v/%d/%v, want true/2/true", rig.schemaPresent, rig.embeddings, bootstrapCached(adapter, key))
