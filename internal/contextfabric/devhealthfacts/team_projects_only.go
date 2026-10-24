@@ -113,9 +113,9 @@ func teamsOwnProjectsOnlyNote(owning, requested int) string {
 // the cause text moves, because a repository-derived kind has nothing to roll up
 // either way. A read error is returned so the caller fails loudly instead of
 // serving the wrong cause.
-func applyTeamsOwningProjectsOnly(ctx context.Context, client contextpacket.ClickHouseQueryClient, orgID string, result *contextfabric.FactProviderResult, queried []contextfabric.SubjectRef, requested int, bound factTimeBound) {
+func applyTeamsOwningProjectsOnly(ctx context.Context, client contextpacket.ClickHouseQueryClient, orgID string, result *contextfabric.FactProviderResult, queried []contextfabric.SubjectRef, requested int, bound factTimeBound) teamProjectCauses {
 	if len(result.NotApplicableSubjects) == 0 {
-		return
+		return teamProjectCauses{}
 	}
 	var teams []contextfabric.SubjectRef
 	var ids []string
@@ -134,7 +134,7 @@ func applyTeamsOwningProjectsOnly(ctx context.Context, client contextpacket.Clic
 		ids = append(ids, raw)
 	}
 	if len(ids) == 0 {
-		return
+		return teamProjectCauses{}
 	}
 	summaries, checked, err := teamOwnedProjectSummaries(ctx, client, orgID, ids, bound)
 	var unchecked []contextfabric.SubjectRef
@@ -173,12 +173,22 @@ func applyTeamsOwningProjectsOnly(ctx context.Context, client contextpacket.Clic
 		}
 	}
 	applyTeamProjectCheckFailed(result, unchecked, requested)
+	causes := teamProjectCauses{owning: owning, unchecked: len(unchecked)}
 	if owning > 0 && owning == len(result.NotApplicableSubjects) {
 		if result.State == contextfabric.SourceNotApplicable && result.Reason == teamNoOwnedRepositoriesReason {
 			result.Reason = teamsOwnProjectsOnlyReason
 		}
 		result.RequestNote = strings.Replace(result.RequestNote, teamsOwningNoRepositoriesReason(owning, requested), teamsOwnProjectsOnlyNote(owning, requested), 1)
 	}
+	return causes
+}
+
+// teamProjectCauses counts, among the not-applicable teams, those whose cause
+// moved off "owns no repository": teams that own a project, and teams whose
+// project check did not run.
+type teamProjectCauses struct {
+	owning    int
+	unchecked int
 }
 
 // applyTeamProjectCheckFailed rewrites the not-applicable wording that

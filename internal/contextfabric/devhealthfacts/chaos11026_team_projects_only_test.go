@@ -263,3 +263,42 @@ func TestChaos11070_ALaterChunkFailureLeavesEarlierCheckedTeamsAlone(t *testing.
 		t.Fatalf("kind reason %q must not claim the check failed for every team", result.Reason)
 	}
 }
+
+// Investment appends its own mix-unavailable note after the cause text moves; it
+// must not call a team repository-less when the team owns projects or the check
+// that would tell did not run.
+func TestChaos11070_InvestmentMixNoteDoesNotCallAProjectOwnerRepositoryLess(t *testing.T) {
+	cases := []struct {
+		name   string
+		extra  []fakeTable
+		teams  []string
+		want   []string
+		forbid []string
+	}{
+		{"team owns a project", []fakeTable{chaos11026ProjectOwner("NOTHING", 1, "DEV")}, []string{"OWNER", "NOTHING"},
+			[]string{"investment_team_no_owned_repository for 1: the team owns projects whose linked pull requests reach no repository"}, []string{"the team owns no repository"}},
+		{"project check failed", []fakeTable{{match: chaos11026Summaries, err: errors.New("code: 60, UNKNOWN_TABLE")}}, []string{"OWNER", "NOTHING"},
+			[]string{"investment_team_no_owned_repository for 1: the project-link check could not run, so ownership through projects is unknown"}, []string{"the team owns no repository"}},
+		{"one project owner beside a team that owns nothing", []fakeTable{chaos11026ProjectOwner("NOTHING", 1, "DEV")}, []string{"OWNER", "NOTHING", "EMPTY"},
+			[]string{"investment_team_no_owned_repository for 1: the team owns no repository", "investment_team_no_owned_repository for 1: the team owns projects whose linked pull requests reach no repository"}, nil},
+		{"a team that owns nothing keeps the old words", nil, []string{"OWNER", "NOTHING"},
+			[]string{"investment_team_no_owned_repository for 1: the team owns no repository"}, nil},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			client := teamOwningClient(contextfabric.FactInvestment, "OWNER")
+			client.tables = append(client.tables, c.extra...)
+			result := readTeamsKind(t, client, contextfabric.FactInvestment, c.teams...)
+			for _, want := range c.want {
+				if !strings.Contains(result.RequestNote, want) {
+					t.Fatalf("request note %q lacks %q", result.RequestNote, want)
+				}
+			}
+			for _, bad := range c.forbid {
+				if strings.Contains(result.RequestNote, bad) {
+					t.Fatalf("request note %q still says %q", result.RequestNote, bad)
+				}
+			}
+		})
+	}
+}
