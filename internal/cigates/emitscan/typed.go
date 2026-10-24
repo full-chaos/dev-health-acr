@@ -741,7 +741,7 @@ func (p *pkgInfo) boundedTypeCheck() (*types.Info, []*ast.File, error) {
 	if err != nil {
 		return nil, nil, err
 	}
-	if err := probeTypeCheck(p.budget.ctx, p.root, p.group, exports); err != nil {
+	if err := probeTypeCheck(p.budget.ctx, p.helperCPU, p.root, p.group, exports); err != nil {
 		return nil, nil, err
 	}
 	return typeCheck(p.root, p.group, exports)
@@ -770,13 +770,13 @@ func noteChildStat(slot *atomic.Int64, value int64) {
 // childEnvAllowed is the whole environment of the helper: nothing but its own memory hint is passed, so no credential or
 // token variable of the scanning process reaches it.
 func childEnvironment() []string {
-	return []string{"GOMEMLIMIT=" + strconv.FormatInt(childRSSLimit*3/4, 10)}
+	return []string{"GOMEMLIMIT=" + strconv.FormatInt(childRSSLimit*3/4, 10), "GOENV=off", "GOWORK=off"}
 }
 
 // buildEnvironment is the environment of the one `go build` that makes the helper: a fixed one, plus the toolchain's own
 // locations. No -race or -toolexec through GOFLAGS, no cgo, the local toolchain only, no network.
 func buildEnvironment() []string {
-	env := []string{"GOFLAGS=", "CGO_ENABLED=0", "GOTOOLCHAIN=local", "GOPROXY=off", "GOSUMDB=off"}
+	env := []string{"GOFLAGS=", "GOENV=off", "GOWORK=off", "CGO_ENABLED=0", "GOTOOLCHAIN=local", "GOPROXY=off", "GOSUMDB=off"}
 	for _, name := range []string{"PATH", "HOME", "GOCACHE", "GOMODCACHE", "GOPATH", "GOROOT", "TMPDIR", "XDG_CACHE_HOME"} {
 		if value, ok := os.LookupEnv(name); ok {
 			env = append(env, name+"="+value)
@@ -896,7 +896,13 @@ func probeKey(root string, rels []string) (string, error) {
 	return hex.EncodeToString(digest.Sum(nil)), nil
 }
 
-func probeTypeCheck(ctx context.Context, root string, group []parsedFile, exports map[string]string) error {
+// scanHelperCPU is the CPU time all helpers of one scan may use together; when it is spent, every package that still needs a
+// helper is refused. The real tree uses a small fraction of it.
+var scanHelperCPU = 60 * time.Second
+
+var errHelperCPUBudget = errors.New("type-check helpers used the CPU budget of this scan")
+
+func probeTypeCheck(ctx context.Context, budget *atomic.Int64, root string, group []parsedFile, exports map[string]string) error {
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -909,12 +915,18 @@ func probeTypeCheck(ctx context.Context, root string, group []parsedFile, export
 		return err
 	}
 	probeCache.Lock()
-	verdict, seen := probeCache.verdict[key]
+	cached, seen := probeCache.verdict[key]
 	probeCache.Unlock()
 	if seen {
-		return verdict
+		return cached
 	}
-	verdict = runChild(ctx, root, req)
+	if budget != nil && budget.Load() <= 0 {
+		return errHelperCPUBudget
+	}
+	verdict, cpu := runChild(ctx, root, req)
+	if budget != nil {
+		budget.Add(-cpu)
+	}
 	if ctx.Err() == nil {
 		probeCache.Lock()
 		probeCache.verdict[key] = verdict
@@ -941,17 +953,17 @@ func (c *cappedBuffer) Write(p []byte) (int, error) {
 // runChild runs the helper on one request. Only an exit status 0 with exactly the acknowledgement line of this request
 // is a pass; a start failure, a non-zero exit, a signal, a timeout, a memory kill, a truncated, oversized or foreign
 // output is an error.
-func runChild(ctx context.Context, root string, req tcheck.Request) error {
+func runChild(ctx context.Context, root string, req tcheck.Request) (verdict error, cpuNanos int64) {
 	binary, err := childBinaryPath(ctx, root)
 	if err != nil {
 		if !errors.Is(err, errHelperUnavailable) {
 			err = fmt.Errorf("%w: %v", errHelperUnavailable, err)
 		}
-		return err
+		return err, 0
 	}
 	payload, err := json.Marshal(req)
 	if err != nil {
-		return err
+		return err, 0
 	}
 	sum := sha256.Sum256(payload)
 	want := "emitscan-tcheck-ok " + hex.EncodeToString(sum[:]) + "\n"
@@ -963,7 +975,7 @@ func runChild(ctx context.Context, root string, req tcheck.Request) error {
 	out := &cappedBuffer{limit: 4096}
 	cmd.Stdout = out
 	if err := cmd.Start(); err != nil {
-		return fmt.Errorf("%w: %v", errHelperUnavailable, err)
+		return fmt.Errorf("%w: %v", errHelperUnavailable, err), 0
 	}
 	done := make(chan error, 1)
 	go func() { done <- cmd.Wait() }()
@@ -982,28 +994,33 @@ loop:
 			if peak > polledPeak {
 				polledPeak = peak
 			}
-			if !killed && rss > childRSSLimit {
+			if !killed && memoryExceeded(rss, peak, childRSSLimit) {
 				killed = true
 				_ = cmd.Process.Kill()
 			}
 		}
 	}
+	cpuNanos = usedCPU(cmd.ProcessState)
 	switch {
-	case killed:
-		return errChildLimit
+	case killed || memoryExceeded(0, polledPeak, childRSSLimit):
+		return errChildLimit, cpuNanos
 	case ctx.Err() != nil:
-		return fmt.Errorf("type-check helper stopped: %w", ctx.Err())
+		return fmt.Errorf("type-check helper stopped: %w", ctx.Err()), cpuNanos
 	case waitErr != nil:
-		return fmt.Errorf("type-check helper: %w", waitErr)
+		return fmt.Errorf("type-check helper: %w", waitErr), cpuNanos
 	case out.overflow || out.String() != want:
-		return errors.New("type-check helper answered with something other than the acknowledgement of its request")
+		return errors.New("type-check helper answered with something other than the acknowledgement of its request"), cpuNanos
 	}
 	noteChildStat(&childStats.rssKB, polledPeak>>10)
 	recordUsage(cmd.ProcessState) // only a helper that finished inside its limits counts toward the limits' headroom
-	return nil
+	return nil, cpuNanos
 }
 
 var errChildLimit = errors.New("type-check stopped at its memory limit")
+
+// memoryExceeded is true when the helper's resident set is over the limit now or was at its peak (a short spike between two
+// polls still shows in the kernel's high-water mark).
+func memoryExceeded(rss, peak, limit int64) bool { return rss > limit || peak > limit }
 
 // RunHelperEnvProbe is a test hook: it runs the helper in env mode and returns the names of the variables it received.
 func runChildMode(ctx context.Context, root, mode string) (string, error) {

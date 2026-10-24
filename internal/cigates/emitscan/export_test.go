@@ -2,6 +2,9 @@ package emitscan
 
 import (
 	"context"
+	"go/ast"
+	"go/token"
+	"strings"
 	"time"
 )
 
@@ -82,3 +85,30 @@ func SetCostEstimate(on bool) func() {
 
 // BuildEnvironment is the environment of the helper's `go build`.
 func BuildEnvironment() []string { return buildEnvironment() }
+
+// SetScanHelperCPU sets the CPU all helpers of one scan may use together; the returned function restores it.
+func SetScanHelperCPU(d time.Duration) func() {
+	old := scanHelperCPU
+	scanHelperCPU = d
+	return func() { scanHelperCPU = old }
+}
+
+// MemoryExceeded is the helper's memory test: over the limit now, or over it at its peak.
+func MemoryExceeded(rss, peak, limit int64) bool { return memoryExceeded(rss, peak, limit) }
+
+// LiteralHuge reports whether the syntax estimate refuses a numeric literal.
+func LiteralHuge(src string) bool {
+	return literalHuge(&ast.BasicLit{Kind: literalKind(src), Value: src})
+}
+
+func literalKind(src string) token.Token {
+	switch {
+	case strings.HasPrefix(src, "'"):
+		return token.CHAR
+	case strings.HasSuffix(src, "i"):
+		return token.IMAG
+	case strings.ContainsAny(src, ".pP") || (!strings.HasPrefix(src, "0x") && strings.ContainsAny(src, "eE")):
+		return token.FLOAT
+	}
+	return token.INT
+}

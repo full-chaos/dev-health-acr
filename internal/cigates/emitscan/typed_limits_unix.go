@@ -70,3 +70,15 @@ func checkHelperFile(path string) error {
 	}
 	return nil
 }
+
+// usedCPU is the CPU time a finished process used (user plus system), 0 where it is not known.
+func usedCPU(state *os.ProcessState) int64 {
+	if state == nil {
+		return 0
+	}
+	usage, ok := state.SysUsage().(*syscall.Rusage)
+	if !ok {
+		return 0
+	}
+	return usage.Utime.Nano() + usage.Stime.Nano()
+}

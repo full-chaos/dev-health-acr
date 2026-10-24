@@ -27,6 +27,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"unicode"
 
 	"github.com/full-chaos/dev-health-acr/internal/telemetryscrub"
@@ -152,6 +153,8 @@ func ScanContext(ctx context.Context, root string, dirs []string) ([]Finding, []
 	var out []Finding
 	var sites []Site
 	byDir := map[string][]parsedFile{}
+	helperCPU := new(atomic.Int64)
+	helperCPU.Store(int64(scanHelperCPU))
 	fset := token.NewFileSet()
 	files := 0
 	for _, dir := range dirs {
@@ -202,7 +205,7 @@ func ScanContext(ctx context.Context, root string, dirs []string) ([]Finding, []
 		if err := ctx.Err(); err != nil {
 			return nil, nil, err
 		}
-		info := packageInfo(ctx, root, group)
+		info := packageInfo(ctx, root, group, helperCPU)
 		var found []Finding
 		for _, parsed := range group {
 			if err := ctx.Err(); err != nil {
@@ -309,6 +312,7 @@ type pkgInfo struct {
 	keyAliases  map[types.Object]ast.Expr     // local variables bound once to an attribute.Key method value and only called: the key receiver
 	typed       *typedPackage                 // the type-check of the package, made once and only when a benign key is read
 	budget      *budget
+	helperCPU   *atomic.Int64 // CPU nanoseconds the helpers of this scan may still use
 }
 
 // noteKeys records the constant keys of one attribute constructor for the census.
@@ -360,7 +364,38 @@ type costState struct {
 	active map[string]bool
 	sum    int
 	nodes  int
+	huge   bool // a numeric literal whose exponent or mantissa the checker would expand into a very large number
 	marked map[ast.Expr]bool
+}
+
+// literalHuge reports a numeric literal the checker would expand into a very large exact number: a decimal exponent past 300
+// (1e1180) or a decimal mantissa of more than 40 digits (or, for a hex, octal or binary integer, more than 1000).
+func literalHuge(lit *ast.BasicLit) bool {
+	if lit.Kind != token.INT && lit.Kind != token.FLOAT && lit.Kind != token.IMAG {
+		return false // a string or a character is not a number
+	}
+	value := strings.ToLower(strings.ReplaceAll(lit.Value, "_", ""))
+	if lit.Kind == token.IMAG {
+		value = strings.TrimSuffix(value, "i")
+	}
+	based := strings.HasPrefix(value, "0x") || strings.HasPrefix(value, "0o") || strings.HasPrefix(value, "0b")
+	mantissa, exponent := value, ""
+	marker := "e"
+	if strings.HasPrefix(value, "0x") {
+		marker = "p"
+	}
+	if before, after, found := strings.Cut(value, marker); found && (marker == "p" || !based) {
+		mantissa, exponent = before, after
+	}
+	if exponent != "" {
+		if n, err := strconv.Atoi(exponent); err != nil || n > 300 || n < -300 {
+			return true
+		}
+	}
+	if based {
+		return len(mantissa) > 1000
+	}
+	return len(strings.ReplaceAll(mantissa, ".", "")) > 40
 }
 
 func satMul(a, b int) int {
@@ -384,6 +419,9 @@ func (c *costState) leaves(expr ast.Expr) int {
 	case *ast.BasicLit:
 		if e.Kind == token.STRING {
 			return 1
+		}
+		if literalHuge(e) {
+			c.huge = true
 		}
 		return 1 + len(e.Value)/32 // a long numeric literal is a long number for the checker
 	case *ast.SelectorExpr:
@@ -481,6 +519,10 @@ func oversizeCost(group []parsedFile) bool {
 			if !ok || over {
 				return !over
 			}
+			if lit, isLit := expr.(*ast.BasicLit); isLit && lit.Kind != token.STRING && literalHuge(lit) {
+				over = true
+				return false
+			}
 			switch expr.(type) {
 			case *ast.BinaryExpr, *ast.ParenExpr, *ast.UnaryExpr, *ast.CallExpr:
 			default:
@@ -494,7 +536,7 @@ func oversizeCost(group []parsedFile) bool {
 			if c.nodes >= costChainMin {
 				longNodes = satAdd(longNodes, c.nodes)
 			}
-			over = c.sum > costSumBound || longNodes > costChainBound
+			over = c.sum > costSumBound || longNodes > costChainBound || c.huge
 			return !over
 		})
 		if over {
@@ -504,7 +546,7 @@ func oversizeCost(group []parsedFile) bool {
 	return false
 }
 
-func packageInfo(ctx context.Context, root string, group []parsedFile) *pkgInfo {
+func packageInfo(ctx context.Context, root string, group []parsedFile, helperCPU *atomic.Int64) *pkgInfo {
 	nodes := 0
 	for _, parsed := range group {
 		ast.Inspect(parsed.file, func(node ast.Node) bool {
@@ -514,7 +556,7 @@ func packageInfo(ctx context.Context, root string, group []parsedFile) *pkgInfo 
 			return true
 		})
 	}
-	info := &pkgInfo{consts: map[string][]string{}, rawFuncs: map[string]bool{}, constNames: map[string]bool{},
+	info := &pkgInfo{helperCPU: helperCPU, consts: map[string][]string{}, rawFuncs: map[string]bool{}, constNames: map[string]bool{},
 		stringTypes: map[string]bool{}, keyAliases: map[types.Object]ast.Expr{}, aliases: map[string][][2]string{}, saturated: map[string]bool{}, census: map[[3]string]map[string]bool{}, root: root, group: group, budget: &budget{limit: workBase + workPerNode*nodes, ctx: ctx}}
 	for _, parsed := range group {
 		ast.Inspect(parsed.file, func(node ast.Node) bool {

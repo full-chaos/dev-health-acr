@@ -3,6 +3,7 @@ package emitscan_test
 import (
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -10,6 +11,10 @@ import (
 
 	"github.com/full-chaos/dev-health-acr/internal/cigates/emitscan"
 )
+
+// estimateOnlyShape marks a shape the helper alone would let through (it finishes inside its limits, and the in-process re-run is
+// then slow): only the syntax estimate refuses it.
+const estimateOnlyShape = "[estimate only]"
 
 const childRefusal = "R10:refusal:typecheck,R9:unresolvable key"
 
@@ -44,7 +49,17 @@ func checkerHeavyShapes() []keyCase {
 	for i := 0; i < 450; i++ {
 		fmt.Fprintf(&p20, "const r%d = %s\n", i, chainOf("z*y", "-", 60))
 	}
+	shortLiteralComplex := func(exp int) string {
+		var b strings.Builder
+		fmt.Fprintf(&b, "const p = (1e%d + 1) * 1e-1190\nconst q = (3e%d + 7) * 1e-1189\nconst z = complex(p, q)\nconst y = complex(q, p)\n", exp, exp-1)
+		for i := 0; i < 190; i++ {
+			fmt.Fprintf(&b, "const r%d = %s\n", i, chainOf("z*y", "-", 60))
+		}
+		return b.String()
+	}
 	return []keyCase{
+		{estimateOnlyShape + " p24 short literals, exponent 600, complex chains", shortLiteralComplex(600) + trig, childRefusal},
+		{estimateOnlyShape + " p26 short literals, exponent 1180, complex chains", shortLiteralComplex(1180) + trig, childRefusal},
 		{"max doubling to 256 MB strings x40 (memory)", p16.String() + trig, childRefusal},
 		{"max doubling to 64 MB strings x30", p21.String() + trig, childRefusal},
 		{"min with an inner + doubling x40 (memory)", p01b.String() + trig, childRefusal},
@@ -62,6 +77,9 @@ func TestKeyScopeCheckerHeavyShapesAreRefusedByTheHelperLimits(t *testing.T) {
 
 func runHeavyShapes(t *testing.T, estimate bool) {
 	for _, c := range checkerHeavyShapes() {
+		if !estimate && strings.HasPrefix(c.name, estimateOnlyShape) {
+			continue
+		}
 		start := cpuTime(t)
 		wall := time.Now()
 		got := keyFindings(scanSource(t, header+c.body+"\n"))
@@ -70,7 +88,7 @@ func runHeavyShapes(t *testing.T, estimate bool) {
 		if used > time.Second {
 			t.Errorf("%s: the scanning process used %s cpu, want < 1s even under the race detector", c.name, used)
 		}
-		if estimate && c.name != "1200-digit complex rationals in 450 chains of 60 terms (cpu)" && time.Since(wall) > 300*time.Millisecond {
+		if estimate && !strings.Contains(c.name, "1200-digit") && time.Since(wall) > 300*time.Millisecond {
 			t.Errorf("%s: took %s with the syntax estimate on, which must refuse it before any helper runs", c.name, time.Since(wall))
 		}
 		if got != c.want {
@@ -154,10 +172,19 @@ func TestKeyScopeHelperGetsOnlyAnAllowlistedEnvironment(t *testing.T) {
 		t.Fatal(err)
 	}
 	names := strings.Split(strings.TrimSpace(strings.TrimPrefix(out, "env ")), ",")
-	allowed := map[string]bool{"GOMEMLIMIT": true}
+	allowed := map[string]bool{"GOMEMLIMIT": true, "GOENV": true, "GOWORK": true}
 	for _, name := range names {
 		if name != "" && !allowed[name] {
 			t.Errorf("the helper received the variable %s, which is not on the allowlist", name)
+		}
+	}
+	have := map[string]bool{}
+	for _, name := range names {
+		have[name] = true
+	}
+	for name := range allowed {
+		if !have[name] {
+			t.Errorf("the helper did not receive %s, which fixes its go environment", name)
 		}
 	}
 	for _, name := range names {
@@ -255,7 +282,7 @@ func TestKeyScopeHelperBuildEnvironmentIsFixed(t *testing.T) {
 		name, value, _ := strings.Cut(entry, "=")
 		got[name] = value
 	}
-	for name, want := range map[string]string{"GOFLAGS": "", "CGO_ENABLED": "0", "GOTOOLCHAIN": "local", "GOPROXY": "off"} {
+	for name, want := range map[string]string{"GOFLAGS": "", "GOENV": "off", "GOWORK": "off", "CGO_ENABLED": "0", "GOTOOLCHAIN": "local", "GOPROXY": "off"} {
 		if value, ok := got[name]; !ok || value != want {
 			t.Errorf("the helper's build has %s set to %q (present %v), want %q", name, value, ok, want)
 		}
@@ -265,4 +292,98 @@ func TestKeyScopeHelperBuildEnvironmentIsFixed(t *testing.T) {
 			t.Errorf("the helper's build received the credential-like variable %s", name)
 		}
 	}
+}
+
+func TestKeyScopeSyntaxEstimateRefusesHugeNumericLiterals(t *testing.T) {
+	for src, want := range map[string]bool{
+		"1e1180": true, "1e-1190": true, "3e599": true, "1e300": false, "1e-300": false, "1e301": true, "0.5": false, "2.5e10": false,
+		"1_000_000": false, "3.14159265358979323846264338327950288419716939937510582097494459": true,
+		"0.123456789012345678901234567890123456789": false, "0xdeadbeef": false, "0x1p-1100": true, "0x1p100": false,
+		"1e1180i": true, "'e'": false, "'x'": false, "123456789012345678901234567890123456789012345678901": true, "7": false,
+	} {
+		if got := emitscan.LiteralHuge(src); got != want {
+			t.Errorf("LiteralHuge(%q) = %v want %v", src, got, want)
+		}
+	}
+}
+
+func TestKeyScopeHelperMemoryPeakCounts(t *testing.T) {
+	for _, c := range []struct {
+		rss, peak, limit int64
+		want             bool
+	}{
+		{100, 100, 200, false}, {300, 300, 200, true}, {100, 300, 200, true}, {300, 100, 200, true}, {200, 200, 200, false},
+	} {
+		if got := emitscan.MemoryExceeded(c.rss, c.peak, c.limit); got != c.want {
+			t.Errorf("MemoryExceeded(rss %d, peak %d, limit %d) = %v want %v", c.rss, c.peak, c.limit, got, c.want)
+		}
+	}
+}
+
+func TestKeyScopeHelperCPUBudgetOfOneScanRefusesTheRest(t *testing.T) {
+	burn := plantHelper(t, ackScript+`i=0; while [ $i -lt 300000 ]; do i=$((i+1)); done; echo "$ack"`)
+	restoreHelper := emitscan.SetHelperBinary(burn)
+	defer restoreHelper()
+	restoreBudget := emitscan.SetScanHelperCPU(50 * time.Millisecond)
+	defer restoreBudget()
+	root := t.TempDir()
+	for _, name := range []string{"a", "b", "c"} {
+		dir := filepath.Join(root, "internal", name)
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		source := header + "func f(l *slog.Logger, v string) { key := \"api_token\"; l.Info(\"m\", key, v); _ = \"" + name + "\" }\n"
+		if err := os.WriteFile(filepath.Join(dir, "x.go"), []byte(source), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	findings, err := emitscan.Scan(root, []string{"internal"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var typed, refused int
+	for _, f := range findings {
+		switch {
+		case f.Rule == emitscan.RuleProtectedKey && f.Detail == "api_token":
+			typed++
+		case f.Rule == emitscan.RuleBenignKind && f.Detail == "refusal:typecheck":
+			refused++
+		}
+	}
+	if typed == 0 || refused == 0 || typed+refused != 3 {
+		t.Errorf("with a 50 ms budget for all helpers of the scan: %d packages typed, %d refused, want at least one of each and 3 in all", typed, refused)
+	}
+}
+
+func TestKeyScopeHelperBuildIgnoresTheGoEnvFile(t *testing.T) {
+	read := func(name string) string {
+		out, err := exec.Command("go", "env", name).Output()
+		if err != nil {
+			t.Fatal(err)
+		}
+		return strings.TrimSpace(string(out))
+	}
+	cache, modCache, goPath, goRoot := read("GOCACHE"), read("GOMODCACHE"), read("GOPATH"), read("GOROOT")
+	home := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(home, ".config", "go"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(home, ".config", "go", "env"), []byte("GOFLAGS=-toolexec=/bin/false\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("HOME", home)
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
+	t.Setenv("GOCACHE", cache)
+	t.Setenv("GOMODCACHE", modCache)
+	t.Setenv("GOPATH", goPath)
+	t.Setenv("GOROOT", goRoot)
+	t.Setenv("GOENV", "")
+	t.Cleanup(emitscan.ShutdownHelper)
+	emitscan.ShutdownHelper()
+	restore := emitscan.SetHelperBuilder(nil)
+	defer restore()
+	if _, err := emitscan.HelperPath(benignRepoRoot(t)); err != nil {
+		t.Errorf("the helper did not build with a go env file that sets GOFLAGS=-toolexec: %v", err)
+	}
+	emitscan.ShutdownHelper()
 }
