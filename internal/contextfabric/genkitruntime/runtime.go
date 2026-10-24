@@ -2332,7 +2332,9 @@ type attemptOutcome struct {
 	// receiptOutcomeForError's terminal Outcome vocabulary since CHAOS-5577
 	// added "cancelled" there too -- see attemptOutcomeClass's doc comment).
 	// cancelled means the attempt's context expired or was cancelled, at or
-	// before the provider call, never that the provider itself failed. This
+	// before the provider call, never that the provider itself failed. timeout
+	// means the attempt's own ACR_CONTEXT_FABRIC_MODEL_TIMEOUT deadline passed
+	// while the request context was live (contextfabric.ErrModelTimeout). This
 	// per-attempt class does NOT distinguish pre-call from in-call the way
 	// the terminal receipt.Outcome now does (CHAOS-5577): a cancelled LAST
 	// attempt therefore reads Class="cancelled" here regardless of which
@@ -2380,6 +2382,9 @@ type attemptOutcome struct {
 func attemptOutcomeClass(err error) string {
 	if err == nil {
 		return "success"
+	}
+	if errors.Is(err, contextfabric.ErrModelTimeout) {
+		return "timeout"
 	}
 	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 		return "cancelled"
