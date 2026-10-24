@@ -26,7 +26,9 @@ func startupName(value string, known map[string]bool) string {
 // StartupAttributes returns the startup-log fields that disclose the embed
 // provider state the binary will use: names, mode and presence only, never a
 // URL, key or secret. Values come from the resolved ConfigFromEnv result, so a
-// key supplied through its _FILE variant counts as present. embed_config_valid
+// key supplied through its _FILE variant counts as present. The query
+// timeout, batch timeout and transport retry count are the values in force
+// (0 when unconfigured or rejected: no value is in force). embed_config_valid
 // is false when a base URL is set but the configuration is rejected.
 func StartupAttributes(lookup func(string) (string, bool)) []any {
 	cfg, err := ConfigFromEnv(lookup)
@@ -50,5 +52,8 @@ func StartupAttributes(lookup func(string) (string, bool)) []any {
 		"embed_model", startupName(cfg.Model, startupKnownModels),
 		"embed_dimension", cfg.Dimension,
 		"embed_key_present", cfg.APIKey != "",
+		"embed_query_timeout_ms", cfg.Timeout.Milliseconds(),
+		"embed_max_transport_retries", cfg.MaxTransportRetries,
+		"embed_batch_timeout_ms", cfg.BatchTimeout.Milliseconds(),
 	}
 }

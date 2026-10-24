@@ -325,6 +325,16 @@ contextFabric:
     # otherwise); the key comes from the same existingSecret/apiKeyKey, which
     # must exist in the release namespace.
     apiEnabled: false
+    # acr-api's own query-embed timeout and transport retries (used only when
+    # apiEnabled): one question text is embedded on the answer path, so a slow
+    # provider must not hold a question for the projector's 45s x retries.
+    # Range: timeout 10ms..1m in ONE unit (ms, s or m; the chart refuses the
+    # rest), retries 0..5. Defaults: 1s, no retries; on a timeout the semantic arm falls back to
+    # lexical retrieval and a WARN plus acr_query_embed_fallbacks_total say so.
+    # Set them from the observed provider latency before enabling outside dev.
+    api:
+      timeout: "1s"
+      maxTransportRetries: "0"
   # CHAOS-4076: acr-api's Investigator model runtime (internal/contextfabric/
   # modelprovider), consumed by templates/deployment.yaml. Unlike falkor/embed
   # above, modelprovider.Configured() opts in on ANY nonblank
