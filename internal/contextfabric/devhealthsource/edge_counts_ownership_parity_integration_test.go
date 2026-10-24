@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric/identity"
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 )
 
@@ -20,7 +21,9 @@ import (
 // inactive team. project: versions that close and reopen, a key-only row, a row
 // with no key, a conflicting identity and an ambiguous key (both suppressed). work
 // item: a primary and a co-owner team, a candidate-only pair, two sources of one
-// pair, an inactive team, an overlong id, an attribution with no work item.
+// pair, an inactive team, an overlong id, an attribution with no work item. An
+// overlong project id is seeded for two non-Linear providers: the producer omits
+// the project and the count must omit it too.
 func TestLiveOwnedByTeamEdgeCountsEqualTheEdgesTheProducersAssert(t *testing.T) {
 	f := newIngestColumnsFixture(t, "76000000-0000-4000-8000-000000000001", nil, nil)
 	seedOwnershipEdgeCases(t, f, true)
@@ -55,6 +58,17 @@ func TestLiveOwnedByTeamEdgeCountsEqualTheEdgesTheProducersAssert(t *testing.T) 
 	attribute("linear:OWN-5", "team-off", "native_team", 1)
 	attribute(long, "T1", "native_team", 1)
 	attribute("linear:GHOST-1", "T1", "native_team", 1)
+
+	for _, provider := range []string{"jira", "gitlab"} {
+		overlong := strings.Repeat("P", 300)
+		if _, omitted, err := identity.Derive(identity.KindProject, []string{provider, overlong}, nil); err != nil || !omitted {
+			t.Fatalf("%s: the seeded project id must exceed the natural-key bound (omitted=%v err=%v)", provider, omitted, err)
+		}
+		mustExec(t, f.ctx, f.h.direct, `INSERT INTO projects (id, org_id, provider, project_key, name, is_active, state, url, updated_at, last_synced) VALUES (?, ?, ?, ?, 'overlong project', 1, 'started', '', ?, ?)`,
+			overlong, f.h.orgID, provider, "LONG-"+provider, f.old, f.old)
+		mustExec(t, f.ctx, f.h.direct, `INSERT INTO team_project_ownership (org_id, provider, team_id, project_id, project_key, source, valid_from, valid_to, updated_at, last_synced) VALUES (?, ?, 'T1', ?, NULL, 'native', ?, NULL, ?, ?)`,
+			f.h.orgID, provider, overlong, f.old, f.old, f.old)
+	}
 
 	counter, ok := f.h.src.(contextfabric.ProjectionSourceEdgeCounts)
 	if !ok {
