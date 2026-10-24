@@ -344,6 +344,7 @@ func investigateRecovered(ctx context.Context, investigator contextfabric.Invest
 // the route with no sentinel of its own.
 const (
 	contextFabricClassDeadline          = "deadline_exceeded"
+	contextFabricClassModelDeadline     = "model_deadline_exceeded"
 	contextFabricClassTimeBound         = "invalid_time_bound"
 	contextFabricClassRateLimited       = "rate_limited"
 	contextFabricClassUnavailable       = "dependency_unavailable"
@@ -468,8 +469,16 @@ func (a *App) writeContextFabricError(w http.ResponseWriter, r *http.Request, er
 		a.writeContextFabricFailure(w, r, err, contextFabricClassBudgetRefusal, http.StatusRequestEntityTooLarge, "budget_refusal", "The Context Fabric answer did not fit the response budget", false, details)
 		return
 	}
+	if errors.Is(err, contextfabric.ErrModelTimeout) && errors.Is(err, context.DeadlineExceeded) && r.Context().Err() == nil {
+		a.writeContextFabricFailure(w, r, err, contextFabricClassModelDeadline, http.StatusGatewayTimeout, "upstream_unavailable", "A Context Fabric model call exceeded ACR_CONTEXT_FABRIC_MODEL_TIMEOUT before the request deadline", true, map[string]any{contractsv1.DeadlineDetailsKey: contractsv1.DeadlineModel})
+		return
+	}
 	if errors.Is(err, context.DeadlineExceeded) || errors.Is(r.Context().Err(), context.DeadlineExceeded) {
-		a.writeContextFabricFailure(w, r, err, contextFabricClassDeadline, http.StatusGatewayTimeout, "upstream_unavailable", "The Context Fabric investigation timed out", true, nil)
+		var details map[string]any
+		if errors.Is(r.Context().Err(), context.DeadlineExceeded) {
+			details = map[string]any{contractsv1.DeadlineDetailsKey: contractsv1.DeadlineRequest}
+		}
+		a.writeContextFabricFailure(w, r, err, contextFabricClassDeadline, http.StatusGatewayTimeout, "upstream_unavailable", "The Context Fabric investigation timed out", true, details)
 		return
 	}
 	// A historical question whose BOUNDS this engine will not answer --

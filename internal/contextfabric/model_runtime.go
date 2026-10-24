@@ -72,6 +72,11 @@ var (
 	// runtime's own terminal fact: a transient failure without it ended before
 	// the budget was used, and its error stands.
 	ErrModelRetriesExhausted = errors.New("context fabric model runtime retries exhausted")
+	// ErrModelTimeout marks a model attempt that ended on its own per-attempt
+	// deadline (ACR_CONTEXT_FABRIC_MODEL_TIMEOUT) while the caller's context was
+	// still live. It always wraps the original deadline error, so
+	// errors.Is(err, context.DeadlineExceeded) still holds.
+	ErrModelTimeout = errors.New("context fabric model attempt exceeded its own timeout")
 )
 
 // ModelInputOverflow is the error a model runtime returns in place of a call
