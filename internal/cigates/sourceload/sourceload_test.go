@@ -1,11 +1,14 @@
 package sourceload
 
 import (
+	"os"
+	"path/filepath"
 	"runtime"
 	"strings"
 	"testing"
 
 	"golang.org/x/tools/go/packages"
+	"golang.org/x/tools/go/ssa/ssautil"
 
 	"github.com/full-chaos/dev-health-acr/internal/testsupport/repopath"
 )
@@ -90,5 +93,63 @@ func TestPackagesIsStableAcrossCalls(t *testing.T) {
 	second := len(loader.Packages()[0].Errors)
 	if first == 0 || first != second {
 		t.Fatalf("errors after first call = %d, after second = %d", first, second)
+	}
+}
+
+func TestPackagesIllTypedFollowsImports(t *testing.T) {
+	root := loadView(t, "use")[0]
+	if len(root.Errors) != 0 {
+		t.Fatalf("the root has no error of its own, got %v", root.Errors)
+	}
+	if !root.IllTyped {
+		t.Fatal("a root that imports an ill-typed package must be ill-typed, as in go/packages: SSA would otherwise build it")
+	}
+	if good := loadView(t, "good")[0]; good.IllTyped {
+		t.Fatal("a root over well-typed imports must not be ill-typed")
+	}
+}
+
+func TestPackagesParseErrorsKeepTheirPositions(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "go.mod"), []byte("module parsebadmod\n\ngo 1.21\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "p.go"), []byte("package p\n\nfunc Broken( {\n}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	loader, err := Load(dir, []string{"parsebadmod"}, runtime.GOOS, runtime.GOARCH)
+	if err != nil {
+		t.Fatal(err)
+	}
+	root := loader.Packages()[0]
+	if len(root.Errors) < 2 {
+		t.Fatalf("a root with two syntax errors reported %d: the error list was collapsed", len(root.Errors))
+	}
+	for _, e := range root.Errors {
+		if e.Kind != packages.ParseError {
+			t.Errorf("kind = %v, want ParseError", e.Kind)
+		}
+		if !strings.HasSuffix(e.Pos, "p.go:3:14") && !strings.HasSuffix(e.Pos, "p.go:4:1") {
+			t.Errorf("position = %q, want the file, line and column of a syntax error", e.Pos)
+		}
+		if strings.Contains(e.Msg, "p.go") {
+			t.Errorf("message %q repeats the position, so PrintErrors would print it twice", e.Msg)
+		}
+	}
+}
+
+func TestPackagesFeedSSAExactlyWhenWellTyped(t *testing.T) {
+	good := loadView(t, "good")
+	prog, ssaPkgs := ssautil.Packages(good, 0)
+	if len(ssaPkgs) != 1 || ssaPkgs[0] == nil {
+		t.Fatalf("a well-typed root was not admitted to SSA: %v", ssaPkgs)
+	}
+	prog.Build()
+	if ssaPkgs[0].Func("Read") == nil || len(ssaPkgs[0].Func("Read").Blocks) == 0 {
+		t.Fatal("the root's function body was not built")
+	}
+	_, broken := ssautil.Packages(loadView(t, "use"), 0)
+	if len(broken) != 1 || broken[0] != nil {
+		t.Fatalf("a root over an ill-typed import was admitted to SSA: %v", broken)
 	}
 }

@@ -175,19 +175,24 @@ func (l *Loader) Packages() []*packages.Package {
 			pkg.TypesInfo = unit.Info
 		}
 		for _, err := range unit.Errs {
-			kind := packages.TypeError
-			if _, parse := err.(scanner.ErrorList); parse {
-				kind = packages.ParseError
+			switch typed := err.(type) {
+			case scanner.ErrorList:
+				for _, one := range typed {
+					pkg.Errors = append(pkg.Errors, packages.Error{Pos: one.Pos.String(), Msg: one.Msg, Kind: packages.ParseError})
+				}
+			case types.Error:
+				pkg.Errors = append(pkg.Errors, packages.Error{Pos: l.Fset.Position(typed.Pos).String(), Msg: typed.Msg, Kind: packages.TypeError})
+			default:
+				pkg.Errors = append(pkg.Errors, packages.Error{Msg: err.Error(), Kind: packages.UnknownError})
 			}
-			e := packages.Error{Msg: err.Error(), Kind: kind}
-			if typeErr, ok := err.(types.Error); ok {
-				e.Pos = l.Fset.Position(typeErr.Pos).String()
-				e.Msg = typeErr.Msg
-			}
-			pkg.Errors = append(pkg.Errors, e)
 		}
 		if len(unit.Errs) > 0 {
 			pkg.IllTyped = true
+		}
+		for _, imp := range pkg.Imports {
+			if imp.IllTyped {
+				pkg.IllTyped = true
+			}
 		}
 	})
 	return l.Roots
