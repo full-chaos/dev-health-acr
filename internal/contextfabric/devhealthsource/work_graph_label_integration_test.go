@@ -330,33 +330,36 @@ func (s *workGraphStage) cost(t *testing.T, mark int64, rounds int) workGraphCos
 	if gates < 3 || c.gateMemory == 0 || c.gateReadBytes == 0 {
 		t.Fatalf("gate measurement did not happen: %d statements, %+v", gates, c)
 	}
-	c.memoryRuns = s.memoryRuns(t, mark, workGraphStatementPredicate, rounds)
-	c.freshnessRuns = s.memoryRuns(t, mark, workGraphFreshnessPredicate, rounds)
-	c.gateRuns = s.memoryRuns(t, mark, workGraphGatePredicate, rounds)
+	c.memoryRuns = s.memoryRuns(t, mark, "work_graph.v1", workGraphStatementPredicate, rounds)
+	c.freshnessRuns = s.memoryRuns(t, mark, "freshness read", workGraphFreshnessPredicate, rounds)
+	c.gateRuns = s.memoryRuns(t, mark, "issue gate", workGraphGatePredicate, rounds)
 	s.logRunTable(t, mark)
 	return c
 }
 
 // memoryRuns is the peak memory of every run of one statement after mark, in
 // time order.
-func (s *workGraphStage) memoryRuns(t *testing.T, mark int64, predicate string, rounds int) []uint64 {
+func (s *workGraphStage) memoryRuns(t *testing.T, mark int64, label, predicate string, rounds int) []uint64 {
 	t.Helper()
-	rows, err := s.direct.Query(s.ctx, `SELECT memory_usage FROM system.query_log WHERE type = 'QueryFinish' AND query_kind = 'Select' AND current_database = ? AND event_time_microseconds > fromUnixTimestamp64Micro(?) AND `+predicate+` ORDER BY event_time_microseconds`, s.database, mark)
+	rows, err := s.direct.Query(s.ctx, `SELECT memory_usage, `+statementthreads.UnboundThreads+` FROM system.query_log WHERE type = 'QueryFinish' AND query_kind = 'Select' AND current_database = ? AND event_time_microseconds > fromUnixTimestamp64Micro(?) AND `+predicate+` ORDER BY event_time_microseconds`, s.database, mark)
 	if err != nil {
 		t.Fatalf("%s: read the per-run memory (measurement did not happen): %v", s.name, err)
 	}
 	defer rows.Close()
 	var out []uint64
+	var unbound uint64
 	for rows.Next() {
-		var memory uint64
-		if err := rows.Scan(&memory); err != nil {
+		var memory, off uint64
+		if err := rows.Scan(&memory, &off); err != nil {
 			t.Fatalf("%s: scan a per-run memory: %v", s.name, err)
 		}
 		out = append(out, memory)
+		unbound += off
 	}
 	if err := rows.Err(); err != nil {
 		t.Fatalf("%s: per-run memory rows: %v", s.name, err)
 	}
+	statementthreads.RequireThreadBound(t, s.ctx, s.direct, s.name+" "+label+" per-run memory", unbound)
 	if len(out) < rounds {
 		t.Fatalf("%s: %d runs measured, want at least %d (measurement did not happen)", s.name, len(out), rounds)
 	}
