@@ -833,26 +833,40 @@ func (a *Adapter) edgesOfNode(ctx context.Context, key, orgID, uuid string, temp
 	if kind == "" {
 		return nil, nil
 	}
-	// CHAOS-3781: the window is applied to the EDGE and to the NEIGHBOR
-	// node, in both union arms. Filtering the edge alone would still walk
-	// into a subject that did not exist at the requested time whenever a
-	// window-less edge touched it.
-	edgeWindow := temporal.predicate("r")
-	neighborWindow := temporal.predicate("other")
-	cypher := fmt.Sprintf(
-		"CALL { "+
-			"MATCH (n:%s {%s:$org, %s:$kind, %s:$id})-[r:%s]->(other:%s {%s:$org}) WHERE true%s%s RETURN r, %s AS srcKind, $id AS srcId, other.%s AS dstKind, other.%s AS dstId "+
-			"UNION "+
-			"MATCH (other:%s {%s:$org})-[r:%s]->(n:%s {%s:$org, %s:$kind, %s:$id}) WHERE true%s%s RETURN r, other.%s AS srcKind, other.%s AS srcId, %s AS dstKind, $id AS dstId "+
-			"} RETURN r, srcKind, srcId, dstKind, dstId ORDER BY r.%s ASC",
-		labelSubject, propOrgID, propKind, propCanonicalID, labelRelation, labelSubject, propOrgID, edgeWindow, neighborWindow, "$kind", propKind, propCanonicalID,
-		labelSubject, propOrgID, labelRelation, labelSubject, propOrgID, propKind, propCanonicalID, edgeWindow, neighborWindow, propKind, propCanonicalID, "$kind",
-		propRelationshipID,
-	)
-	rows, err := a.api.query(ctx, key, cypher, temporal.bind(map[string]interface{}{"org": orgID, "kind": kind, "id": canonicalID}), true)
+	rows, err := a.api.query(ctx, key, nodeEdgesCypher(temporal), temporal.bind(map[string]interface{}{"org": orgID, "kind": kind, "id": canonicalID}), true)
 	if err != nil {
 		return nil, safeDependencyError("get node edges", err)
 	}
+	return nodeEdgesFromRows(rows), nil
+}
+
+// nodeEdgesCypher reads every edge of one node. CHAOS-3781: the window is
+// applied to the EDGE and to the NEIGHBOR node, in both union arms. Filtering
+// the edge alone would still walk into a subject that did not exist at the
+// requested time whenever a window-less edge touched it.
+//
+// The in arm binds n in its own MATCH before it reads the edges. Written as
+// one pattern, (other)-[r]->(n), FalkorDB starts at other: it scans every node
+// of the organization and traverses every edge of the graph before it keeps
+// the edges into n, which on a real graph runs past the server's query timeout
+// for a node with a handful of edges (same plan as directEdgePageCypher's in
+// arm).
+func nodeEdgesCypher(temporal temporalFilter) string {
+	edgeWindow := temporal.predicate("r")
+	neighborWindow := temporal.predicate("other")
+	return fmt.Sprintf(
+		"CALL { "+
+			"MATCH (n:%s {%s:$org, %s:$kind, %s:$id})-[r:%s]->(other:%s {%s:$org}) WHERE true%s%s RETURN r, %s AS srcKind, $id AS srcId, other.%s AS dstKind, other.%s AS dstId "+
+			"UNION "+
+			"MATCH (n:%s {%s:$org, %s:$kind, %s:$id}) WITH n MATCH (other:%s {%s:$org})-[r:%s]->(n) WHERE true%s%s RETURN r, other.%s AS srcKind, other.%s AS srcId, %s AS dstKind, $id AS dstId "+
+			"} RETURN r, srcKind, srcId, dstKind, dstId ORDER BY r.%s ASC",
+		labelSubject, propOrgID, propKind, propCanonicalID, labelRelation, labelSubject, propOrgID, edgeWindow, neighborWindow, "$kind", propKind, propCanonicalID,
+		labelSubject, propOrgID, propKind, propCanonicalID, labelSubject, propOrgID, labelRelation, edgeWindow, neighborWindow, propKind, propCanonicalID, "$kind",
+		propRelationshipID,
+	)
+}
+
+func nodeEdgesFromRows(rows []row) []graphrank.CandidateEdge {
 	edges := make([]graphrank.CandidateEdge, 0, len(rows))
 	for _, row := range rows {
 		e, ok := row["r"].(*edge)
@@ -863,7 +877,7 @@ func (a *Adapter) edgesOfNode(ctx context.Context, key, orgID, uuid string, temp
 		dstKind, dstID := propStringValue(row["dstKind"]), propStringValue(row["dstId"])
 		edges = append(edges, toCandidateEdge(e, srcKind, srcID, dstKind, dstID))
 	}
-	return edges, nil
+	return edges
 }
 
 func toCandidateEdge(e *edge, srcKind, srcID, dstKind, dstID string) graphrank.CandidateEdge {
