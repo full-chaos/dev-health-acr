@@ -797,8 +797,11 @@ func TestTypedBenignKeysNeedNoGroup(t *testing.T) {
 }
 
 func TestTypedBenignStringStillShapeScrubbed(t *testing.T) {
-	got := record(t, func(l *slog.Logger) { l.Info("m", "authorization_reason", "Bearer abcdefgh1") })
-	if s, _ := got["authorization_reason"].(string); strings.Contains(s, "abcdefgh1") {
+	got := record(t, func(l *slog.Logger) { l.Info("m", "authorization_reason", secretShapedReason) })
+	if got["authorization_reason"] == secretShapedReason {
+		t.Errorf("a registered value with a secret shape reached the log: %v", got["authorization_reason"])
+	}
+	if s, _ := got["authorization_reason"].(string); strings.Contains(s, "abcdefghijklmnop") {
 		t.Errorf("shape leaked: %q", s)
 	}
 }
@@ -818,7 +821,11 @@ func TestTypedBenignWithAttrsAndRecordAttrs(t *testing.T) {
 
 var testReasons = []string{"subjects_admitted", "subject_denied", "grant_mismatch"}
 
-func init() { RegisterClosedValues("authorization_reason", testReasons) }
+const secretShapedReason = "ghp_abcdefghijklmnopqrstuvwx"
+
+func init() {
+	RegisterClosedValues("authorization_reason", append(append([]string{}, testReasons...), secretShapedReason))
+}
 
 func TestClosedValueKeyRedactsEveryValueOutsideTheSet(t *testing.T) {
 	for _, v := range testReasons {
@@ -913,5 +920,58 @@ func TestClosedValuesRegisterOnceAndOnlyCodeShapedValues(t *testing.T) {
 	}
 	if !closedValueShape.MatchString(strings.Repeat("a", 64)) || !closedValueShape.MatchString("a1_b2") {
 		t.Error("shape rejects a valid code")
+	}
+}
+
+type uintValuer uint64
+
+func (u uintValuer) LogValue() slog.Value { return slog.Uint64Value(uint64(u)) }
+
+func TestIntExemptionNeverCoversUnsignedValues(t *testing.T) {
+	for _, c := range typedBenignCases {
+		if c.kind != "int" {
+			continue
+		}
+		k := c.key
+		for name, v := range map[string]any{"uint": uint(41), "uint64": uint64(42), "uint8": uint8(1), "uintptr": uintptr(2), "Uint64Value": slog.Uint64Value(43), "uint valuer": uintValuer(44)} {
+			got := record(t, func(l *slog.Logger) { l.Info("m", k, v) })
+			if got[k] != Redacted {
+				t.Errorf("%s with %s = %v want redacted", k, name, got[k])
+			}
+		}
+		if got := record(t, func(l *slog.Logger) { l.Info("m", k, 5) }); got[k] != float64(5) {
+			t.Errorf("%s with int = %v want kept", k, got[k])
+		}
+		if got := record(t, func(l *slog.Logger) { l.Info("m", k, int64(6)) }); got[k] != float64(6) {
+			t.Errorf("%s with int64 = %v want kept", k, got[k])
+		}
+	}
+}
+
+func TestUnnamedGroupsCountAsGroups(t *testing.T) {
+	cases := map[string]func(*slog.Logger){
+		"empty group": func(l *slog.Logger) {
+			l.Info("m", slog.Group("", slog.Int("authorization_batches", 3), slog.Bool("coverage_bypass", true)))
+		},
+		"nested empty":     func(l *slog.Logger) { l.Info("m", slog.Group("", slog.Group("", slog.Int("pass", 3)))) },
+		"With empty group": func(l *slog.Logger) { l.With(slog.Group("", slog.Int("evaluated_pass", 3))).Info("m") },
+		"empty then named": func(l *slog.Logger) { l.Info("m", slog.Group("", slog.Group("span", slog.Int("pass", 3)))) },
+		"empty group string": func(l *slog.Logger) {
+			l.Info("m", slog.Group("", slog.String("authorization_reason", "subjects_admitted")))
+		},
+	}
+	for name, build := range cases {
+		got := record(t, build)
+		for _, k := range []string{"authorization_batches", "coverage_bypass", "pass", "evaluated_pass", "authorization_reason"} {
+			if v, ok := got[k]; ok && v != Redacted {
+				t.Errorf("%s: %s = %v want redacted", name, k, v)
+			}
+		}
+		if g, ok := got["span"].(map[string]any); ok && g["pass"] != Redacted {
+			t.Errorf("%s: span.pass = %v want redacted", name, g["pass"])
+		}
+	}
+	if got := record(t, func(l *slog.Logger) { l.Info("m", "pass", 3) }); got["pass"] != float64(3) {
+		t.Errorf("ungrouped pass = %v want kept", got["pass"])
 	}
 }

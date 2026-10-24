@@ -130,7 +130,7 @@ func BenignKind(key string) string { return typedBenignKeys[compact(key)] }
 
 func attrKind(v slog.Value) string {
 	switch v.Kind() {
-	case slog.KindInt64, slog.KindUint64:
+	case slog.KindInt64:
 		return "int"
 	case slog.KindBool:
 		return "bool"
@@ -712,10 +712,7 @@ func scrubAttr(groups []string, a slog.Attr, b *budget) slog.Attr {
 			a.Value = slog.StringValue(Redacted)
 			return a
 		}
-		inner := groups
-		if a.Key != "" {
-			inner = append(append([]string{}, groups...), a.Key)
-		}
+		inner := append(append([]string{}, groups...), a.Key)
 		group := a.Value.Group()
 		out := make([]slog.Attr, 0, len(group))
 		for _, g := range group {
