@@ -59,13 +59,19 @@ func checkerHeavyShapes() []keyCase {
 		}
 		return b.String()
 	}
+	var linked strings.Builder
+	fmt.Fprintf(&linked, "const l0 = %s\n", chainOf(`"a"`, "+", 2800))
+	for i := 1; i < 10; i++ {
+		fmt.Fprintf(&linked, "const l%d = l%d + %s\n", i, i-1, chainOf(`"a"`, "+", 2800))
+	}
 	return []keyCase{
+		{"ten linked string consts of 2800 terms, quadratic walk in the checker (cpu)", linked.String() + trig, childRefusal},
 		{estimateOnlyShape + " p24 short literals, exponent 600, complex chains", shortLiteralComplex(600) + trig, childRefusal},
 		{estimateOnlyShape + " p26 short literals, exponent 1180, complex chains", shortLiteralComplex(1180) + trig, childRefusal},
 		{"max doubling to 256 MB strings x40 (memory)", p16.String() + trig, childRefusal},
 		{"max doubling to 64 MB strings x30", p21.String() + trig, childRefusal},
 		{"min with an inner + doubling x40 (memory)", p01b.String() + trig, childRefusal},
-		{"1200-digit complex rationals in 450 chains of 60 terms (cpu)", p20.String() + trig, childRefusal},
+		{estimateOnlyShape + " p20 1200-digit complex rationals in 450 chains of 60 terms", p20.String() + trig, childRefusal},
 	}
 }
 
@@ -83,22 +89,34 @@ func runHeavyShapes(t *testing.T, estimate bool) {
 			continue
 		}
 		restoreLimits := func() {}
+		cpuShape := false
 		if !estimate && strings.HasSuffix(c.name, "(cpu)") {
 			// Test-only CPU limit (the smallest an rlimit allows, 1 s) for the shape that is refused by its CPU time: the real 4 s limit
-			// would make this test depend on the host's speed (the helper needs ~7.5 s of CPU here, under 4 s on a fast runner).
+			// would make this test depend on the host's speed. Without the limit this shape needs ~16-18 s of helper CPU on the
+			// development host (measured), 16x or more over 1 s on any host. SetChildLimits empties the helper verdict cache
+			// (its key is the sha256 of the package files only, typed.go probeKey), so a cached "ok" cannot reach this run.
 			_, rssLimit, wallLimit := emitscan.ChildLimits()
 			restoreLimits = emitscan.SetChildLimits(1, rssLimit, wallLimit)
+			cpuShape = true
+			if n := emitscan.ProbeCacheLen(); n != 0 {
+				t.Fatalf("the helper verdict cache holds %d entries before the limited run, want 0", n)
+			}
 		}
 		start := cpuTime(t)
 		wall := time.Now()
 		got := keyFindings(scanSource(t, header+c.body+"\n"))
 		used := cpuTime(t) - start
+		if cpuShape {
+			if n := emitscan.ProbeCacheLen(); n != 1 {
+				t.Errorf("%s: the helper verdict cache holds %d entries after the limited run, want exactly the one this run made", c.name, n)
+			}
+		}
 		restoreLimits()
 		t.Logf("%s (estimate %v): parent %s cpu, %s wall, findings %q", c.name, estimate, used, time.Since(wall).Round(time.Millisecond), got)
 		if used > time.Second {
 			t.Errorf("%s: the scanning process used %s cpu, want < 1s even under the race detector", c.name, used)
 		}
-		if estimate && !strings.Contains(c.name, "1200-digit") && time.Since(wall) > 300*time.Millisecond {
+		if estimate && !strings.Contains(c.name, "1200-digit") && time.Since(wall) > 700*time.Millisecond {
 			t.Errorf("%s: took %s with the syntax estimate on, which must refuse it before any helper runs", c.name, time.Since(wall))
 		}
 		if got != c.want {

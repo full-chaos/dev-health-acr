@@ -112,3 +112,17 @@ func literalKind(src string) token.Token {
 	}
 	return token.INT
 }
+
+// ResetChildStats clears the largest-helper statistics.
+func ResetChildStats() {
+	childStats.cpuNanos.Store(0)
+	childStats.rssKB.Store(0)
+	childStats.count.Store(0)
+}
+
+// ProbeCacheLen is the number of helper verdicts cached in this process.
+func ProbeCacheLen() int {
+	probeCache.Lock()
+	defer probeCache.Unlock()
+	return len(probeCache.verdict)
+}
