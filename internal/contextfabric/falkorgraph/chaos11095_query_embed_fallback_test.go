@@ -88,3 +88,58 @@ func TestChaos11095_ASinkWithoutTheFallbackHookKeepsTheOldDegradedSignal(t *test
 		t.Fatalf("RecordVectorRetrievalDegraded calls = %d, want 1 for a sink that has no fallback hook", recording.degraded)
 	}
 }
+
+func chaos11095ReadableAdapter(t *testing.T, embedErr error, logs *bytes.Buffer, causes *[]string) *Adapter {
+	t.Helper()
+	fake := &fakeConn{queryFunc: func(ctx context.Context, key, cypher string, params map[string]interface{}, readOnly bool) ([]row, error) {
+		if strings.Contains(cypher, "db.idx.vector.queryNodes") {
+			t.Fatal("the vector index must not be queried after the query embed failed")
+		}
+		return nil, nil
+	}}
+	fake.indexesFunc = func(ctx context.Context, key string) ([]indexStatus, error) {
+		return []indexStatus{operationalVectorIndex(8)}, nil
+	}
+	adapter := vectorAdapter(t, fake, &stubEmbedder{vector: make([]float32, 8), err: embedErr}, 0.55)
+	adapter.config.Telemetry = chaos11095Sink(logs, causes)
+	return adapter
+}
+
+func chaos11095AssertOneFallback(t *testing.T, logs *bytes.Buffer, causes []string, want string) {
+	t.Helper()
+	lines := chaos11095Lines(t, logs)
+	if len(lines) != 1 || lines[0]["level"] != "WARN" || lines[0]["cause"] != want {
+		t.Fatalf("log lines = %v, want exactly ONE WARN with cause=%s", lines, want)
+	}
+	if strings.Contains(logs.String(), "executor") {
+		t.Fatalf("the WARN carries question text: %s", logs.String())
+	}
+	if len(causes) != 1 || causes[0] != want {
+		t.Fatalf("counter calls = %v, want one %s", causes, want)
+	}
+}
+
+// The per-term hybrid site (vector.go hybridSearchNodes) reports the same one
+// WARN and one count on a forced query-embed timeout.
+func TestChaos11095_TheHybridSiteFallsBackLoudlyOnceAndCounts(t *testing.T) {
+	var logs bytes.Buffer
+	var causes []string
+	adapter := chaos11095ReadableAdapter(t, context.DeadlineExceeded, &logs, &causes)
+	_, _, degraded, err := adapter.hybridSearchNodes(context.Background(), "k", "org-1", "auth", 5, &resolutionFence{}, temporalFilter{})
+	if err != nil || !degraded {
+		t.Fatalf("degraded=%v err=%v, want a degraded lexical-only result", degraded, err)
+	}
+	chaos11095AssertOneFallback(t, &logs, causes, "timeout")
+}
+
+// The question-level site (vector.go questionVectorSearchNodes) likewise.
+func TestChaos11095_TheQuestionSiteFallsBackLoudlyOnceAndCounts(t *testing.T) {
+	var logs bytes.Buffer
+	var causes []string
+	adapter := chaos11095ReadableAdapter(t, errors.New("provider returned 500"), &logs, &causes)
+	got, _, degraded, err := adapter.questionVectorSearchNodes(context.Background(), "k", "org-1", chaos11095Question, 10, &resolutionFence{}, temporalFilter{})
+	if err != nil || !degraded || len(got) != 0 {
+		t.Fatalf("got=%d degraded=%v err=%v, want a degraded empty result", len(got), degraded, err)
+	}
+	chaos11095AssertOneFallback(t, &logs, causes, "error")
+}

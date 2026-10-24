@@ -46,7 +46,7 @@ Usage: test-helm.sh --values <path> [--image <ref>] [--chart <path>] [--scenario
               The acr-api query embedder scenarios (positive ones render and assert, the rest fail closed):
               embed-api-off-by-default, embed-api-enabled, embed-api-enabled-no-base-url,
               embed-api-bad-port, embed-api-default-values, embed-api-override-values,
-              embed-api-projector-unchanged, embed-api-bad-retries.
+              embed-api-projector-unchanged, embed-api-bad-retries, embed-api-timeout-bounds.
 
 The harness only renders (helm template/lint) and validates output offline.
 EOF
@@ -380,6 +380,21 @@ case "$scenario" in
       --set-string "contextFabric.embed.baseURL=https://api.openai.com/v1" \
       --set contextFabric.embed.apiEnabled=true \
       --set-string contextFabric.embed.api.maxTransportRetries=9
+    exit 0 ;;
+  embed-api-timeout-bounds)
+    printf 'scenario: embed-api-timeout-bounds (the embedder accepts 10ms..1m: refuse 0s, 9ms, 2m; accept 10ms, 1m)\n'
+    for bad in 0s 9ms 2m; do
+      negative "embed-api-timeout-$bad" "contextFabric.embed.api.timeout must be between 10ms and 1m" \
+        --set-string "contextFabric.embed.baseURL=https://api.openai.com/v1" \
+        --set contextFabric.embed.apiEnabled=true \
+        --set-string "contextFabric.embed.api.timeout=$bad"
+    done
+    for good in 10ms 1m; do
+      embed_api_render --set contextFabric.embed.apiEnabled=true --set-string "contextFabric.embed.api.timeout=$good" >"$workdir/embed-timeout-$good.yaml"
+      grep -q "value: \"$good\"" "$workdir/embed-timeout-$good.yaml" || fail_gate "embed-api: timeout $good not rendered into acr-api"
+      pass "embed-api-timeout-$good accepted and rendered"
+    done
+    printf 'RESULT: scenario embed-api-timeout-bounds passed\n'
     exit 0 ;;
   happy) : ;;
   *) printf 'unknown scenario: %s\n' "$scenario" >&2; usage; exit 2 ;;

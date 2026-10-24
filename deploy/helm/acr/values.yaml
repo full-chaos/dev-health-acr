@@ -328,7 +328,8 @@ contextFabric:
     # acr-api's own query-embed timeout and transport retries (used only when
     # apiEnabled): one question text is embedded on the answer path, so a slow
     # provider must not hold a question for the projector's 45s x retries.
-    # Defaults: 1s, no retries; on a timeout the semantic arm falls back to
+    # Range: timeout 10ms..1m in ONE unit (ms, s or m; the chart refuses the
+    # rest), retries 0..5. Defaults: 1s, no retries; on a timeout the semantic arm falls back to
     # lexical retrieval and a WARN plus acr_query_embed_fallbacks_total say so.
     # Set them from the observed provider latency before enabling outside dev.
     api:
