@@ -595,6 +595,18 @@ func TestShortSchemeCredentialsRedacted(t *testing.T) {
 		{"Basic\u3000UjU=", "UjU="},
 		{"Authorization:\vBearer\vab12", "ab12"},
 		{"Authorization: Bearer\u00a0ab12", "ab12"},
+		{"Authorization: Bearer Bearer abcd", "abcd"},
+		{"Authorization: Basic Basic abcdefg", "abcdefg"},
+		{"Authorization: Bearer Bearer Bearer abcd", "abcd"},
+		{"Authorization: Bearer Bearer \"abcd\"", "abcd"},
+		{"Authorization: Bearer 'ab'abc12", "abc12"},
+		{"Authorization: [REDACTED]abc12", "abc12"},
+		{"https://host/path?q=Bearer%20ab12", "ab12"},
+		{"https://host/path?q=Basic%20UjU%3D", "UjU"},
+		{"Bearer%09ab12", "ab12"},
+		{"Bearer%2520ab12", "ab12"},
+		{"x=Bearer%0Aab12", "ab12"},
+		{"q=Bearer+ab12", "ab12"},
 	}
 	for _, c := range cases {
 		if got := ScrubText(c.in); strings.Contains(got, c.leak) || !strings.Contains(got, Redacted) {
@@ -615,7 +627,7 @@ func TestShortSchemeCredentialsRedacted(t *testing.T) {
 func TestShortSchemeFloorAndControls(t *testing.T) {
 	for _, v := range []string{
 		"Bearer of news", "the bearer token", "bearer bonds", "Bearer Smith", "Bearer of the ring",
-		"Bearer abcdefg", "Basic\tabcd", "Basic abcdefg", "Bearer a1b", "basic train", "author: Bearer",
+		"Bearer abcdefg", "Bearer%20of%20news", "Basic%20abcd", "Basic\tabcd", "Basic abcdefg", "Bearer a1b", "basic train", "author: Bearer",
 	} {
 		if got := ScrubText(v); got != v {
 			t.Errorf("clean text changed: %q -> %q", v, got)

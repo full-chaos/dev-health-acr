@@ -76,14 +76,23 @@ var valueShapes = []*regexp.Regexp{
 // schemeSpace is every separator accepted between a scheme word and its token: Go's \s misses \v and the Unicode spaces.
 const schemeSpace = `[ \t\r\n\v\f\x{0085}\x{00A0}\x{1680}\x{2000}-\x{200A}\x{2028}\x{2029}\x{202F}\x{205F}\x{3000}]`
 
+// schemeSep is a separator between a scheme word and its token: a space class, or its URL-encoded form ("+", %20, %09, %0A, %2520).
+const schemeSep = `(?:` + schemeSpace + `|\+|%(?:25)*(?:20|09|0[aAbBcCdD]))`
+
+// schemeToken is a run of token characters and %XX escapes.
+const schemeToken = `(?:[A-Za-z0-9._~+/=-]|%[0-9A-Fa-f]{2}){4,}`
+
 // A scheme word followed by a short token is a credential only with a digit or symbol in it, or at 8+ characters;
 // under a protected key (kvPair) any length is redacted, so prose like "Bearer of news" stays clean.
 var (
-	bearerShape = regexp.MustCompile(`(?i)\bbearer` + schemeSpace + `+([A-Za-z0-9._~+/=-]{4,})`)
-	basicShape  = regexp.MustCompile(`(?i)\bbasic` + schemeSpace + `+([A-Za-z0-9+/=]{4,})`)
+	bearerShape = regexp.MustCompile(`(?i)\bbearer` + schemeSep + `+(` + schemeToken + `)`)
+	basicShape  = regexp.MustCompile(`(?i)\bbasic` + schemeSep + `+(` + strings.ReplaceAll(schemeToken, "._~+/=-", "+/=") + `)`)
 )
 
 func schemeCredential(tok string) bool {
+	if dec, err := url.PathUnescape(tok); err == nil {
+		tok = dec
+	}
 	return len(tok) >= 8 || strings.ContainsAny(tok, "0123456789._~+/=-")
 }
 
@@ -339,7 +348,7 @@ func redactUserinfo(s string) string {
 	return out.String()
 }
 
-var kvPair = regexp.MustCompile(`(["']?([A-Za-z0-9_.-]+)["']?` + schemeSpace + `*[=:]` + schemeSpace + `*)("[^"]*"|'[^']*'|(?i:bearer|basic)` + schemeSpace + `+(?:"[^"]*"|'[^']*'|\[REDACTED\]|[^\s,;&"'}\]]+)|\[REDACTED\]|[^\s,;&"'}\]]+)`)
+var kvPair = regexp.MustCompile(`(["']?([A-Za-z0-9_.-]+)["']?` + schemeSpace + `*[=:]` + schemeSpace + `*)("[^"]*"|'[^']*'|(?:(?i:bearer|basic)` + schemeSep + `+)+(?:"[^"]*"|'[^']*'|\[REDACTED\]|[^\s,;&"'}\]])+|(?:\[REDACTED\]|[^\s,;&"'}\]])+)`)
 
 // kvWords: a key=value or "key":"value" pair can only name a protected key if one of these fragments appears.
 var kvWords = []string{"token", "secret", "pass", "pwd", "key", "auth", "code", "otp", "pin", "mfa", "session", "credential", "cookie", "signature", "jwt", "dsn", "bearer"}
