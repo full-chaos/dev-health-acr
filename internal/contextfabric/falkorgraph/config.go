@@ -743,6 +743,13 @@ func (t SlogTelemetry) RecordQueryEmbedFallback(ctx context.Context, orgID, caus
 	}
 }
 
+// RecordGraphSchemaRebootstrap logs at Warn: the vector index vanished from a
+// graph this process had bootstrapped (a purge by another process), and the
+// next projection tick bootstraps it again.
+func (t SlogTelemetry) RecordGraphSchemaRebootstrap(_ context.Context, orgID string, attempt int) {
+	t.logger().Warn("context_fabric: graph schema vanished after bootstrap; bootstrapping again on the next tick", "org_id", contextfabric.SanitizeLogAttr(orgID), "attempt", attempt)
+}
+
 func (t SlogTelemetry) RecordVectorRetrievalDegraded(_ context.Context, orgID string) {
 	t.logger().Warn("context_fabric: vector retrieval unavailable for a request", "org_id", contextfabric.SanitizeLogAttr(orgID))
 }

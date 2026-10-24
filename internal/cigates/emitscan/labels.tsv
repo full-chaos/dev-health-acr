@@ -1,0 +1,9 @@
+file	func	keys	reason
+internal/hostedmetrics/hostedmetrics.go	Answer	status,tool	closed vocabularies through bucket()
+internal/hostedmetrics/hostedmetrics.go	AnswerReuse	outcome	closed vocabulary through bucket()
+internal/hostedmetrics/hostedmetrics.go	FactReadAbort	cause	closed vocabulary through bucket()
+internal/hostedmetrics/hostedmetrics.go	InvestigationLatency	status	closed vocabulary through bucket()
+internal/hostedmetrics/hostedmetrics.go	OutcomeRowEvicted	lever	closed vocabulary through bucket()
+internal/hostedmetrics/hostedmetrics.go	QueryEmbedFallback	cause	closed vocabulary through bucket()
+internal/hostedmetrics/hostedmetrics.go	RequirementOutcome	outcome	closed vocabulary through bucket()
+internal/hostedmetrics/hostedmetrics.go	ToolCall	result_class,status,tool	closed vocabularies through bucket() and StatusClass()

@@ -62,12 +62,13 @@ const requestedRepositoryReach = `(hasAny(arrayMap(x -> x.1, direct_refs), {ids:
 
 // requestedSplitRows returns, per window, kept work unit and requested
 // repository: win, work_unit_id, repo_uuid, c, n, effort_value,
-// theme_distribution_json, bugfix_share, span_from and, with unitColumns,
+// theme_distribution_json, bugfix_share, span_from, gated and, with unitColumns,
 // from_ts, to_ts, prs (the unit's PR numbers in that repository),
 // unresolved_n and unresolved_refs (its references that resolved to no
 // repository). The values are those of repoSplitCore's rows for the same
 // (window, unit, repository), with n and the unresolved columns taken over
-// the unit's whole reference set.
+// the unit's whole reference set. The unit listing (unitColumns) keeps no gated
+// unit; the mix keeps them flagged so it can count them apart.
 func requestedSplitRows(memberships []string, spanSentinel bool, scope membershipScope, unitColumns bool) string {
 	return foldedSplitRows(memberships, spanSentinel, scope, unitColumns, "")
 }
@@ -75,7 +76,7 @@ func requestedSplitRows(memberships []string, spanSentinel bool, scope membershi
 // linkedPullRequestSplitRows returns, per window, kept work unit and
 // resolved (repository, pull request) in linked: win, work_unit_id, repo_uuid,
 // pr_number, c, n, effort_value, theme_distribution_json, bugfix_share,
-// span_from. They are the whole-organization split's rows grouped per
+// span_from, gated. They are the whole-organization split's rows grouped per
 // reference as well, for those pull requests. linked is an Array(Tuple(String, String, String)) expression
 // of (repository id, PR number, team id).
 func linkedPullRequestSplitRows(memberships []string, scope membershipScope, linked string) string {
@@ -108,6 +109,7 @@ func foldedSplitRows(memberships []string, spanSentinel bool, scope membershipSc
 		wins = "arrayConcat([" + spanSentinelWindow + "], " + wins + ")"
 	}
 	rowCols, unitAgg := "", ""
+	having := "HAVING argMax(reaches, computed_at)"
 	head := `SELECT win, work_unit_id, repo_uuid,
 	countEqual(arrayMap(p -> p.1, pairs), repo_uuid) AS c, length(pairs) AS n,`
 	expand := requestedRepositories
@@ -139,33 +141,36 @@ WHERE rp.1 != '' AND rp IN (SELECT (l.1, l.2) FROM (SELECT arrayJoin(` + linked 
 		unitAgg = `
 		any(from_ts) AS from_ts, any(to_ts) AS to_ts,
 		groupUniqArray((ref_repo, pr_number)) AS repo_prs,`
+		having += " AND NOT gated"
 	}
 	return head + `
-	unit_size_weight AS effort_value, unit_issue_size, theme_distribution_json, bugfix_share, span_from` + rowCols + `
+	unit_size_weight AS effort_value, unit_issue_size, theme_distribution_json, bugfix_share, span_from, gated` + rowCols + `
 FROM ` + sizedUnitsForOrg(`SELECT work_unit_id,
 		any(theme_distribution_json) AS theme_distribution_json,
 		any(bugfix_share) AS bugfix_share,
 		any(span_from) AS span_from,
-		any(wins) AS wins,`+unitAgg+`
+		any(wins) AS wins,
+		any(gated) AS gated,`+unitAgg+`
 		`+pairs+`
 	FROM (
 		SELECT parsed.work_unit_id AS work_unit_id,
 			parsed.theme_distribution_json AS theme_distribution_json, parsed.bugfix_share AS bugfix_share,
-			parsed.span_from AS span_from, parsed.from_ts AS from_ts, parsed.to_ts AS to_ts, parsed.wins AS wins,
+			parsed.span_from AS span_from, parsed.from_ts AS from_ts, parsed.to_ts AS to_ts, parsed.wins AS wins, parsed.gated AS gated,
 			parsed.pr_number AS pr_number, parsed.ref_text AS ref_text,
 			ifNull(if(parsed.uuid_direct != '', parsed.uuid_direct, ifNull(rl.repo_uuid, '')), '') AS ref_repo
 		FROM (
-			SELECT work_unit_id, theme_distribution_json, bugfix_share, from_ts AS span_from, from_ts, to_ts, wins,
+			SELECT work_unit_id, theme_distribution_json, bugfix_share, from_ts AS span_from, from_ts, to_ts, wins, gated,
 				ref.1 AS uuid_direct, ref.2 AS lookup_provider, ref.3 AS lookup_repo, ref.4 AS pr_number, ref.5 AS ref_text
 			FROM (
 				SELECT work_unit_id, latest.1 AS repo_id, latest.2 AS from_ts, latest.3 AS to_ts,
-					latest.4 AS theme_distribution_json, latest.5 AS bugfix_share, latest.6 AS pr_refs,
+					latest.4 AS theme_distribution_json, latest.5 AS bugfix_share, latest.6 AS pr_refs, gated,
 					`+wins+` AS wins
 				FROM (
 					SELECT work_unit_id,
-						argMaxIf(tuple(repo_id, from_ts, to_ts, theme_distribution_json, unit_bugfix_share, pr_refs), computed_at, reaches) AS latest
+						argMaxIf(tuple(repo_id, from_ts, to_ts, theme_distribution_json, unit_bugfix_share, pr_refs), computed_at, reaches) AS latest,
+						`+latestUnitGatedSQL+` AS gated
 					FROM (
-						SELECT work_unit_id, computed_at, repo_id, from_ts, to_ts, theme_distribution_json,
+						SELECT work_unit_id, computed_at, repo_id, from_ts, to_ts, theme_distribution_json, categorization_status,
 							ifNull(subcategory_distribution_json['`+readers.BugfixSubcategoryKey+`'], 0.0) AS unit_bugfix_share,
 							`+referenceKeys+`,
 							`+reaches+` AS reaches,
@@ -174,7 +179,7 @@ FROM ` + sizedUnitsForOrg(`SELECT work_unit_id,
 						WHERE org_id = {org_id:String}`+supersededWorkUnitIDsFilter()+scope.filter()+`
 					)
 					GROUP BY work_unit_id
-					HAVING argMax(reaches, computed_at)
+					`+having+`
 				)
 			)
 			ARRAY JOIN `+repoRefsExpression+` AS ref

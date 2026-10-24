@@ -126,6 +126,8 @@ type emptyCause struct {
 	token    string
 	outside  uint64
 	positive uint64
+	// gated counts the units of a team whose units are all evidence-gated.
+	gated uint64
 }
 
 func (c emptyCause) reason() string {
@@ -134,6 +136,8 @@ func (c emptyCause) reason() string {
 		return fmt.Sprintf("%s (%d units outside the run)", investmentTeamUnitsOutsideRunReason, c.outside)
 	case investmentTeamUnitsUnattrib:
 		return fmt.Sprintf("%s (%d units with positive effort whose references reach no repository the team owns)", investmentTeamUnitsUnattribReason, c.positive)
+	case investmentUnitsUncategorized:
+		return investmentUncategorizedReason(0, int64(c.gated))
 	}
 	return investmentTeamNoUnitReason
 }
@@ -145,6 +149,8 @@ func (c emptyCause) summary() string {
 		return "owned repositories have persisted work units in the requested window, and at least one is outside the latest complete membership run"
 	case investmentTeamUnitsUnattrib:
 		return "owned repositories have persisted work units in scope, and none reached a positive share because their references reach no repository the team owns: a reference that resolves to no repository, or to a repository the team does not own (counts per team in the subject reason)"
+	case investmentUnitsUncategorized:
+		return "every work unit of the team in the requested window had too little text to categorize (insufficient_evidence or no_text_sources); no theme mix is served (counts per team in the subject reason)"
 	}
 	return investmentTeamNoUnitReason
 }
