@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"github.com/full-chaos/dev-health-acr/internal/chfixture/startterm"
 	"os"
 	"testing"
 	"time"
@@ -54,7 +55,7 @@ func TestOpenRuntimeProjectsIntoRealFalkorDBAndRetrievalReadsItBack(t *testing.T
 	// TESTCONTAINERS_HUB_IMAGE_NAME_PREFIX resolves this to the ghcr.io
 	// mirror by digest, same as every other postgres:18-alpine pull in
 	// this module.
-	pgContainer, err := tcpostgres.Run(ctx, "postgres:18-alpine@sha256:a1d02e4bd40c94d3bf2bdd3678c137388e76d9efcd23c285e9429d336a834b44",
+	pgContainer, err := startterm.PostgresRun(ctx, "postgres:18-alpine@sha256:a1d02e4bd40c94d3bf2bdd3678c137388e76d9efcd23c285e9429d336a834b44",
 		tcpostgres.WithDatabase("acr"), tcpostgres.WithUsername("acr"), tcpostgres.WithPassword("acr"), tcpostgres.BasicWaitStrategies(),
 	)
 	require.NoError(t, err, "start Postgres container")

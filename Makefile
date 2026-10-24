@@ -110,7 +110,9 @@ GOTEST_EXEC := -exec $(CURDIR)/scripts/ci/testcontainers-session-exec.sh
 
 # CHAOS-10226: the production-size proofs (build tag sizeproof) run in the
 # plain unit run only; the -race targets never pass it. Guarded by
-# internal/contextfabric/falkorgraph/sizeproof_guard_test.go.
+# internal/contextfabric/falkorgraph/sizeproof_guard_test.go. That guard sees only
+# tests it can name; scripts/ci/shard-budget-guard.sh is the measured second net:
+# a race job fails a top-level test over 300 s (scripts/ci/race-slow-tests.tsv lifts one).
 GOTEST_PLAIN_TAGS := -tags sizeproof
 
 GOTESTSUM_VERSION := v1.13.0

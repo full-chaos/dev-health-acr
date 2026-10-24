@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"github.com/full-chaos/dev-health-acr/internal/chfixture/startterm"
 	"testing"
 
 	"github.com/jackc/pgx/v5"
@@ -21,7 +22,7 @@ func newTestDatabase(t *testing.T, ctx context.Context) *sql.DB {
 	// TESTCONTAINERS_HUB_IMAGE_NAME_PREFIX resolves this to the ghcr.io
 	// mirror by digest, same as every other postgres:18-alpine pull in
 	// this module.
-	container, err := tcpostgres.Run(ctx, "postgres:18-alpine@sha256:a1d02e4bd40c94d3bf2bdd3678c137388e76d9efcd23c285e9429d336a834b44",
+	container, err := startterm.PostgresRun(ctx, "postgres:18-alpine@sha256:a1d02e4bd40c94d3bf2bdd3678c137388e76d9efcd23c285e9429d336a834b44",
 		tcpostgres.WithDatabase("acr"),
 		tcpostgres.WithUsername("acr"),
 		tcpostgres.WithPassword("acr"),

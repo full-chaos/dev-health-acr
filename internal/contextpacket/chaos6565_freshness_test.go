@@ -85,7 +85,7 @@ func TestFreshnessFallbackIsLoud(t *testing.T) {
 		t.Fatalf("Warnings = %v, want freshness_from_evidence:deployments.v1", result.Warnings)
 	}
 	out := logs.String()
-	if !strings.Contains(out, "level=WARN") || !strings.Contains(out, "source=deployments.v1") || !strings.Contains(out, "freshness boom") || !strings.Contains(out, "request_id="+plan.RequestID) {
+	if !strings.Contains(out, "level=WARN") || !strings.Contains(out, "source=deployments.v1") || strings.Contains(out, "freshness boom") || !strings.Contains(out, "error=*") || !strings.Contains(out, "request_id="+plan.RequestID) {
 		t.Fatalf("fallback log not loud or missing source/error/request id: %s", out)
 	}
 }

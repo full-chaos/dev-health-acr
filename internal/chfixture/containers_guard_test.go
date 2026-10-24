@@ -20,6 +20,8 @@ const (
 	tcRoot         = "github.com/testcontainers/testcontainers-go"
 	tcModulePrefix = tcRoot + "/modules/"
 	tcNetwork      = tcRoot + "/network"
+	starttermPath  = gatePath + "/startterm"
+	starttermFile  = "internal/chfixture/startterm/startterm.go"
 )
 
 var knownTestcontainersImports = map[string]bool{
@@ -116,7 +118,12 @@ func checkSource(fset *token.FileSet, filename string, src []byte) ([]violation,
 		sel, ok := n.(*ast.SelectorExpr)
 		if ok {
 			p := pathOf(sel.X)
+			if filename == starttermFile {
+				return "", false
+			}
 			switch {
+			case p == starttermPath && (sel.Sel.Name == "Generic" || sel.Sel.Name == "PostgresRun"):
+				return "startterm." + sel.Sel.Name, true
 			case p == tcRoot && rootStartNames[sel.Sel.Name]:
 				return "testcontainers." + sel.Sel.Name, true
 			case strings.HasPrefix(p, tcModulePrefix) && (sel.Sel.Name == "Run" || sel.Sel.Name == "RunContainer"):

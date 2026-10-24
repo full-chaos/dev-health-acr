@@ -300,6 +300,10 @@ type ModelExecutionReceipt struct {
 	// FrameFailedInvariant is the FIRST failed invariant in table order,
 	// i1...i19, empty on a valid frame.
 	FrameFailedInvariant FrameInvariant `json:"frame_failed_invariant,omitempty"`
+	// TermlessNamedSubject: the proposal was a named_subject with no terms
+	// and I3 (no_terms) was its only failure. Decided in resolveFrame by
+	// termlessNamedSubjectOnly; no other code sets it.
+	TermlessNamedSubject bool `json:"termless_named_subject,omitempty"`
 	// FrameGateOutcome is the ORDERING verdict DecideFrameGate reached for
 	// this receipt's frame -- validity and the refuse basis, decided here
 	// at interpretation because that is where §13.5.2's order puts them,
@@ -1770,6 +1774,7 @@ func (r RuntimeQuestionInterpreter) resolveFrame(ctx context.Context, principal 
 
 	receipt.FrameOutcome = result.Outcome
 	receipt.FrameFailedInvariant = result.Failure.Invariant
+	receipt.TermlessNamedSubject = termlessNamedSubjectOnly(*receipt, proposed, emittedShape, result)
 
 	// CHAOS-4975 (codex round 1, P2): the backfill below MUST run BEFORE
 	// requirement derivation, not after. DeriveRequirementCoordinates
@@ -2403,7 +2408,26 @@ func familySampleFrom(interpreted InterpretedQuestion, receipt ModelExecutionRec
 		RequestedKind:           receipt.RequestedSubjectKind,
 		ModelFamily:             receipt.QuestionFamily,
 		ModelFamilyUnrecognized: receipt.QuestionFamilyUnrecognized,
+		TermlessNamedSubject:    receipt.TermlessNamedSubject,
 	}
+}
+
+// termlessNamedSubjectOnly reports whether the refusal is exactly I3
+// no_terms on a named_subject with no terms and nothing else is wrong with
+// the frame: the same frame with one placeholder term validates. Decided
+// from the model's own emitted frame, never from the question or memory.
+func termlessNamedSubjectOnly(receipt ModelExecutionReceipt, proposed QuestionFrame, emittedShape InvestigationShape, result FrameValidationResult) bool {
+	expression := proposed.SubjectExpression
+	if result.Outcome != FrameValidationOutcomeRefusedInvalid ||
+		result.Failure.Invariant != FrameInvariantI3 || result.Failure.Detail != FrameFailureNoTerms ||
+		expression.Kind != SubjectExpressionNamed || expression.Named == nil || len(expression.Named.Terms) != 0 {
+		return false
+	}
+	named := *expression.Named
+	named.Terms = []string{"placeholder"}
+	probe := proposed
+	probe.SubjectExpression.Named = &named
+	return validateAgainstInterpretation(receipt, probe, emittedShape).Outcome.Accepted()
 }
 
 type RuntimeAnswerSynthesizerOptions struct {

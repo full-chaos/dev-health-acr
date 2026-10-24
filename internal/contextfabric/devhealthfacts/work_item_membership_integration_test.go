@@ -3,6 +3,7 @@ package devhealthfacts
 import (
 	"context"
 	"fmt"
+	"github.com/full-chaos/dev-health-acr/internal/chfixture/startterm"
 	"net"
 	"strings"
 	"testing"
@@ -26,7 +27,7 @@ import (
 func TestWorkItemMembershipS1AgainstActualDDL(t *testing.T) {
 	chfixture.RequireContainers(t)
 	ctx := context.Background()
-	container, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
+	container, err := startterm.Generic(ctx, testcontainers.GenericContainerRequest{
 		ContainerRequest: testcontainers.ContainerRequest{
 			Image: chfixture.Image, ExposedPorts: []string{"9000/tcp"},
 			Env: map[string]string{
@@ -596,7 +597,7 @@ func TestWorkItemMembershipS1AgainstActualDDL(t *testing.T) {
 func TestWorkItemMembershipS1ReadLimitExceededIsCertifiedAgainstRealClickHouse(t *testing.T) {
 	chfixture.RequireContainers(t)
 	ctx := context.Background()
-	container, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
+	container, err := startterm.Generic(ctx, testcontainers.GenericContainerRequest{
 		ContainerRequest: testcontainers.ContainerRequest{
 			Image: chfixture.Image, ExposedPorts: []string{"9000/tcp"},
 			Env: map[string]string{

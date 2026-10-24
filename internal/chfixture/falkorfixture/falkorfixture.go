@@ -4,17 +4,12 @@ package falkorfixture
 
 import (
 	"context"
-	"errors"
-	"fmt"
-	"reflect"
 	"testing"
-	"time"
 
 	"github.com/full-chaos/dev-health-acr/internal/chfixture"
+	"github.com/full-chaos/dev-health-acr/internal/chfixture/startterm"
 	"github.com/testcontainers/testcontainers-go"
 )
-
-const terminateBudget = 30 * time.Second
 
 type startFunc func(context.Context, testcontainers.GenericContainerRequest) (testcontainers.Container, error)
 
@@ -60,23 +55,5 @@ func request(image string, opts []Option) testcontainers.GenericContainerRequest
 // start returns the container that failed to start only so a caller can prove it is gone; it is already terminated.
 func start(ctx context.Context, req testcontainers.GenericContainerRequest, create startFunc) (testcontainers.Container, error) {
 	container, err := create(ctx, req)
-	if err == nil {
-		return container, nil
-	}
-	if !isNil(container) {
-		termCtx, cancel := context.WithTimeout(context.Background(), terminateBudget)
-		defer cancel()
-		if termErr := container.Terminate(termCtx); termErr != nil {
-			err = errors.Join(err, fmt.Errorf("terminate after failed start: %w", termErr))
-		}
-	}
-	return container, err
-}
-
-func isNil(c testcontainers.Container) bool {
-	if c == nil {
-		return true
-	}
-	v := reflect.ValueOf(c)
-	return v.Kind() == reflect.Pointer && v.IsNil()
+	return container, startterm.TerminateFailed(container, err)
 }
