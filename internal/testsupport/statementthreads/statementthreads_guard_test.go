@@ -21,8 +21,10 @@ var peakColumn = regexp.MustCompile(`(^|[^_A-Za-z])memory_usage\b`)
 // diagnosticPeakReads are query_log reads of memory_usage that only list or
 // log statements and assert no bound, by file and enclosing function.
 var diagnosticPeakReads = map[string]string{
-	"internal/contextfabric/devhealthfacts/statement_memory_guard_integration_test.go:recentServerStatements":             "lists the last statements for a failure message",
-	"internal/contextfabric/devhealthfacts/team_project_reach_org_links_memory_integration_test.go:failedStatementsSince": "lists failed statements for a failure message",
+	"internal/contextfabric/devhealthfacts/statement_memory_guard_integration_test.go:recentServerStatements":                         "lists the last statements for a failure message",
+	"internal/contextfabric/devhealthfacts/team_project_reach_org_links_memory_integration_test.go:failedStatementsSince":             "lists failed statements for a failure message",
+	"internal/contextfabric/devhealthfacts/shared_clickhouse_guard_test.go:TestSharedClickHouseGuardCatchesPlantedServerUses":         "plants server-accounting text as a guard fixture; it reads no query_log",
+	"internal/contextfabric/devhealthfacts/shared_clickhouse_guard_test.go:TestSharedClickHouseGuardCatchesPlantedIndirectServerUses": "plants server-accounting text as a guard fixture; it reads no query_log",
 }
 
 // peakReader is one function (declaration or literal) whose own string
