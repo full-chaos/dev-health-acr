@@ -124,7 +124,7 @@ FROM (
 			sum(c) OVER (PARTITION BY win, work_unit_id) AS n,
 			sum(if(repo_uuid = '', c, 0)) OVER (PARTITION BY win, work_unit_id) AS unresolved_n,
 			arrayFlatten(groupArray(if(repo_uuid = '', ref_texts, [])) OVER (PARTITION BY win, work_unit_id)) AS unresolved_refs,
-			effort_value, unit_issue_size, theme_distribution_json, from_ts, to_ts, prs
+			effort_value, unit_issue_size, theme_distribution_json, from_ts, to_ts, prs, gated
 		FROM (
 ` + core + `		)
 	)
