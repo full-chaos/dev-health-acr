@@ -24,7 +24,7 @@ import (
 // continuations and constants declared in a sibling file all resolve.
 func discoverEmbedproviderEnvVars(t *testing.T) []string {
 	t.Helper()
-	names, err := discoverEnvConstValues("", embedproviderImportPath)
+	names, err := discoverEnvConstValues("", nil, embedproviderImportPath)
 	if err != nil {
 		t.Fatalf("discover Env* constants of %s: %v", embedproviderImportPath, err)
 	}
@@ -40,8 +40,8 @@ func discoverEmbedproviderEnvVars(t *testing.T) []string {
 //
 // An Env* constant whose value needs an imported package cannot be evaluated
 // here; that is an error naming the constant, never a silent omission.
-func discoverEnvConstValues(dir, pattern string) ([]string, error) {
-	cfg := &packages.Config{Mode: packages.NeedName | packages.NeedFiles, Dir: dir}
+func discoverEnvConstValues(dir string, env []string, pattern string) ([]string, error) {
+	cfg := &packages.Config{Mode: packages.NeedName | packages.NeedFiles, Dir: dir, Env: env}
 	pkgs, err := packages.Load(cfg, pattern)
 	if err != nil {
 		return nil, fmt.Errorf("packages.Load(%s): %w", pattern, err)
@@ -105,6 +105,12 @@ func (refusingImporter) Import(path string) (*types.Package, error) {
 	return nil, fmt.Errorf("import %q is not resolved by Env* discovery", path)
 }
 
+// linuxAMD64Env pins the platform the plant fixtures' expected files assume, so
+// the table holds when the test binary runs on another GOOS.
+func linuxAMD64Env() []string {
+	return append(os.Environ(), "GOOS=linux", "GOARCH=amd64", "CGO_ENABLED=0")
+}
+
 func writePlantPackage(t *testing.T, files map[string]string) string {
 	t.Helper()
 	dir := t.TempDir()
@@ -154,7 +160,7 @@ func f() { _ = undefinedInBody }
 		"e.go":         "//go:build linux\n\npackage plant\n\nconst EnvTagged = \"TAGGED\"\n",
 		"f.go":         "//go:build !linux\n\npackage plant\n\nconst EnvNotLinux = \"NOTLINUX\"\n",
 	})
-	got, err := discoverEnvConstValues(dir, "plant")
+	got, err := discoverEnvConstValues(dir, linuxAMD64Env(), "plant")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -168,7 +174,7 @@ func TestDiscoverEnvConstValuesFailsLoudlyOnAnImportValuedConstant(t *testing.T)
 	dir := writePlantPackage(t, map[string]string{
 		"a.go": "package plant\n\nimport \"os\"\n\nconst EnvOK = \"OK\"\n\nconst EnvFromImport = os.DevNull\n",
 	})
-	_, err := discoverEnvConstValues(dir, "plant")
+	_, err := discoverEnvConstValues(dir, linuxAMD64Env(), "plant")
 	if err == nil || !strings.Contains(err.Error(), "EnvFromImport") {
 		t.Fatalf("err = %v, want an error naming EnvFromImport", err)
 	}
