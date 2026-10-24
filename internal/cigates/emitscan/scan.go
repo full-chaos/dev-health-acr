@@ -145,8 +145,9 @@ func ScanWithCensus(root string, dirs []string) ([]Finding, []Site, error) {
 
 // ScanContext is ScanWithCensus under a context. Cancelling the context stops the work of the scan itself: the directory
 // walk, the package loop and (every 1024 charged steps) the scan of a package all check it, and the scan then returns the
-// context's error. The type-check of a package (go/types) does not take the context and is not cancellable; its cost is
-// bounded instead by the size estimate that keeps an oversized package from being type-checked at all.
+// context's error. The type-check of a package (go/types) takes no context: it runs first in a helper process that is
+// killed when the context ends or a CPU, memory or wall-clock limit is hit, and a package it cannot finish is never
+// type-checked in this process.
 func ScanContext(ctx context.Context, root string, dirs []string) ([]Finding, []Site, error) {
 	var out []Finding
 	var sites []Site
@@ -342,12 +343,16 @@ func (p *pkgInfo) censusSites() []Site {
 // long */-/shift/paren/conversion chains cost per node. The checker's work is not bounded by the scan's budget, so a package
 // whose estimated cost passes these bounds is never type-checked.
 const (
-	costSumBound   = 200_000 // sum, over every + node, of the leaves under it
+	costSumBound   = 600_000 // sum, over every + node, of the leaves under it
 	costChainMin   = 256     // an operator chain at least this long counts toward costChainBound
 	costChainBound = 20_000  // operator-chain nodes of the chains that long, over the package
 	costSaturated  = 1 << 40
+	costImported   = 64 // assumed size of a constant read from another package
 	costNameDepth  = 64
 )
+
+// costEstimateDisabled lets a test reach the type-check helper with shapes the estimate would refuse first.
+var costEstimateDisabled bool
 
 type costState struct {
 	decls  map[string][][]ast.Expr
@@ -356,6 +361,13 @@ type costState struct {
 	sum    int
 	nodes  int
 	marked map[ast.Expr]bool
+}
+
+func satMul(a, b int) int {
+	if a > 0 && b > costSaturated/a {
+		return costSaturated
+	}
+	return a * b
 }
 
 func satAdd(a, b int) int {
@@ -370,7 +382,12 @@ func (c *costState) leaves(expr ast.Expr) int {
 	c.nodes++
 	switch e := expr.(type) {
 	case *ast.BasicLit:
-		return 1
+		if e.Kind == token.STRING {
+			return 1
+		}
+		return 1 + len(e.Value)/32 // a long numeric literal is a long number for the checker
+	case *ast.SelectorExpr:
+		return costImported // a constant of another package: its size is not in this one
 	case *ast.Ident:
 		return c.name(e.Name)
 	case *ast.ParenExpr:
@@ -381,16 +398,22 @@ func (c *costState) leaves(expr ast.Expr) int {
 		return c.leaves(e.X)
 	case *ast.BinaryExpr:
 		c.marked[e] = true
-		size := satAdd(c.leaves(e.X), c.leaves(e.Y))
-		if e.Op == token.ADD {
+		sx, sy := c.leaves(e.X), c.leaves(e.Y)
+		size := satAdd(sx, sy)
+		switch e.Op {
+		case token.ADD:
 			c.sum = satAdd(c.sum, size)
+		case token.MUL, token.QUO, token.REM:
+			c.sum = satAdd(c.sum, satMul(sx, sy)) // exact arithmetic on long numbers costs their product
 		}
 		return size
 	case *ast.CallExpr:
-		if len(e.Args) == 1 {
-			c.marked[e] = true
-			return c.leaves(e.Args[0])
+		c.marked[e] = true
+		size := 1
+		for _, arg := range e.Args { // min, max, complex and conversions: every argument can carry the whole tree
+			size = satAdd(size, c.leaves(arg))
 		}
+		return size
 	}
 	return 1
 }
@@ -503,7 +526,7 @@ func packageInfo(ctx context.Context, root string, group []parsedFile) *pkgInfo 
 			return true
 		})
 	}
-	info.oversize = oversizeCost(group)
+	info.oversize = !costEstimateDisabled && oversizeCost(group)
 	saturate := func(name string) {
 		info.saturated[name] = true
 		delete(info.consts, name)
@@ -1546,7 +1569,7 @@ func (s *fileScan) attrParts(call *ast.CallExpr) (key, value ast.Expr, ok bool) 
 		case keyMethodRefuse:
 			s.add(RuleBenignKind, call.Pos(), keyReceiverDetail)
 		case keyMethodNoTypes:
-			s.add(RuleBenignKind, call.Pos(), refusalDetail)
+			s.add(RuleBenignKind, call.Pos(), s.pkg.refusal())
 		}
 	}
 	if ident, isIdent := ast.Unparen(call.Fun).(*ast.Ident); isIdent && len(call.Args) >= 1 && len(s.pkg.keyAliases) > 0 {
@@ -2105,7 +2128,7 @@ func (s *fileScan) benignPairs(args []ast.Expr, from int, shape ast.Expr) {
 		if verified == 0 {
 			verified = 1
 			if ok, valid := s.pairSource(shape); !valid {
-				s.add(RuleBenignKind, key.Pos(), refusalDetail)
+				s.add(RuleBenignKind, key.Pos(), s.pkg.refusal())
 				return
 			} else if !ok {
 				verified = -1
@@ -2143,7 +2166,7 @@ func (s *fileScan) benignPair(keyExpr ast.Expr, kind func() (string, bool), pos 
 	}
 	got, ok := kind()
 	if !ok {
-		s.add(RuleBenignKind, pos, refusalDetail)
+		s.add(RuleBenignKind, pos, s.pkg.refusal())
 		return
 	}
 	possible := strings.Split(got, ",")

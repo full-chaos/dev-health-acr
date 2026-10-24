@@ -1,28 +1,48 @@
 package emitscan
 
 import (
+	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"go/ast"
-	"go/build"
 	"go/constant"
-	"go/importer"
 	"go/token"
 	"go/types"
-	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
+	"time"
 
+	"github.com/full-chaos/dev-health-acr/internal/cigates/emitscan/tcheck"
 	"github.com/full-chaos/dev-health-acr/internal/telemetryscrub"
 )
 
 // refusalDetail is the R10 detail of a package whose types the scan cannot read. It is never pinnable.
 const refusalDetail = "refusal:typecheck"
+
+// helperUnavailableDetail is the R10 detail of a package whose type-check helper could not be built, found or trusted: the
+// scan cannot tell what the package's keys are, and says so under its own reason. Never pinnable.
+const helperUnavailableDetail = "refusal:typecheck_child_unavailable"
+
+var errHelperUnavailable = errors.New("type-check helper unavailable")
+
+// refusal is the R10 detail for a package whose types cannot be read.
+func (p *pkgInfo) refusal() string {
+	if p.typed != nil && errors.Is(p.typed.err, errHelperUnavailable) {
+		return helperUnavailableDetail
+	}
+	return refusalDetail
+}
 
 // errOversize is the type-check error of a package that holds an expression the scan's fold bound refuses: it is not
 // checked, because the checker's work on it is not bounded by the scan's budget; the scan reads its keys by name, fail closed.
@@ -57,7 +77,7 @@ func (p *pkgInfo) typedInfo() *typedPackage {
 		p.typed = &typedPackage{err: errOversize}
 	}
 	if p.typed == nil {
-		info, files, err := typeCheck(p.budget.ctx, p.root, p.group)
+		info, files, err := p.boundedTypeCheck()
 		p.typed = &typedPackage{info: info, files: files, err: err}
 	}
 	return p.typed
@@ -124,7 +144,7 @@ func exportFiles(ctx context.Context, moduleDir string) (map[string]string, erro
 	return files, nil
 }
 
-func typeCheck(ctx context.Context, root string, group []parsedFile) (*types.Info, []*ast.File, error) {
+func typeCheck(root string, group []parsedFile, exports map[string]string) (*types.Info, []*ast.File, error) {
 	if len(group) == 0 {
 		return nil, nil, errors.New("no files")
 	}
@@ -134,7 +154,7 @@ func typeCheck(ctx context.Context, root string, group []parsedFile) (*types.Inf
 	}
 	var files []*ast.File
 	for _, parsed := range group {
-		match, err := build.Default.MatchFile(filepath.Join(absRoot, filepath.Dir(filepath.FromSlash(parsed.rel))), filepath.Base(parsed.rel))
+		match, err := tcheck.Match(absRoot, parsed.rel)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -145,39 +165,9 @@ func typeCheck(ctx context.Context, root string, group []parsedFile) (*types.Inf
 	if len(files) == 0 {
 		return nil, nil, errors.New("no file matches the build context")
 	}
-	moduleDir, err := moduleDirOf(root)
+	info, err := tcheck.Check(group[0].fset, files, exports)
 	if err != nil {
 		return nil, nil, err
-	}
-	exports, err := exportFiles(ctx, moduleDir)
-	if err != nil {
-		return nil, nil, err
-	}
-	fset := group[0].fset
-	lookup := func(path string) (io.ReadCloser, error) {
-		file, ok := exports[path]
-		if !ok {
-			return nil, fmt.Errorf("no export data for %q", path)
-		}
-		return os.Open(file)
-	}
-	var first error
-	cfg := &types.Config{
-		Importer:    importer.ForCompiler(fset, "gc", lookup),
-		FakeImportC: true,
-		Error: func(err error) {
-			if first == nil {
-				first = err
-			}
-		},
-	}
-	info := &types.Info{Types: map[ast.Expr]types.TypeAndValue{}, Uses: map[*ast.Ident]types.Object{}, Defs: map[*ast.Ident]types.Object{}, Selections: map[*ast.SelectorExpr]*types.Selection{}}
-	_, checkErr := cfg.Check(files[0].Name.Name, fset, files, info)
-	if first != nil {
-		return nil, nil, first
-	}
-	if checkErr != nil {
-		return nil, nil, checkErr
 	}
 	return info, files, nil
 }
@@ -383,7 +373,7 @@ func (f *typedFold) ready(ctx *foldCtx) (*typedPackage, bool) {
 	typed := f.s.pkg.typedInfo()
 	if typed.err != nil {
 		if ctx.refusal == "" {
-			ctx.refusal = refusalDetail
+			ctx.refusal = f.s.pkg.refusal()
 		}
 		return nil, false
 	}
@@ -405,7 +395,7 @@ func (f *typedFold) ident(ident *ast.Ident, ctx *foldCtx) []string {
 	obj := objectOf(typed.info, ident)
 	if obj == nil {
 		if ctx.refusal == "" {
-			ctx.refusal = refusalDetail
+			ctx.refusal = f.s.pkg.refusal()
 		}
 		return nil
 	}
@@ -701,7 +691,7 @@ func (s *fileScan) keyMethodValue(sel *ast.SelectorExpr) {
 	case keyMethodNone:
 		return
 	case keyMethodNoTypes:
-		s.add(RuleBenignKind, sel.Pos(), refusalDetail)
+		s.add(RuleBenignKind, sel.Pos(), s.pkg.refusal())
 		return
 	case keyMethodRefuse:
 		s.add(RuleBenignKind, sel.Pos(), keyReceiverDetail)
@@ -733,4 +723,298 @@ func (s *fileScan) keyMethodValue(sel *ast.SelectorExpr) {
 		}
 	}
 	s.add(RuleBenignKind, sel.Pos(), keyMethodValueDetail)
+}
+
+// boundedTypeCheck type-checks the package in this process only after the same check has finished inside a helper
+// process under a CPU limit, a memory limit and a wall-clock limit (and the scan's context): the checker's own work on a
+// constant expression is not bounded by anything the scan counts, so a shape it cannot finish never runs here. Any abnormal
+// helper result is a package that does not type-check; there is no in-process fallback.
+func (p *pkgInfo) boundedTypeCheck() (*types.Info, []*ast.File, error) {
+	if len(p.group) == 0 {
+		return nil, nil, errors.New("no files")
+	}
+	moduleDir, err := moduleDirOf(p.root)
+	if err != nil {
+		return nil, nil, err
+	}
+	exports, err := exportFiles(p.budget.ctx, moduleDir)
+	if err != nil {
+		return nil, nil, err
+	}
+	if err := probeTypeCheck(p.budget.ctx, p.root, p.group, exports); err != nil {
+		return nil, nil, err
+	}
+	return typeCheck(p.root, p.group, exports)
+}
+
+// Limits of the type-check helper: at least three times what the largest package of the real tree needs (see the numbers
+// in the change that set them). A package whose check does not finish inside them is refused.
+var (
+	childCPUSeconds = 4
+	childRSSLimit   = int64(512 << 20)
+	childWall       = 20 * time.Second
+)
+
+// childStats are the largest CPU time and resident set one helper used, for the limits' headroom.
+var childStats struct{ cpuNanos, rssKB, count atomic.Int64 }
+
+func noteChildStat(slot *atomic.Int64, value int64) {
+	for {
+		old := slot.Load()
+		if value <= old || slot.CompareAndSwap(old, value) {
+			return
+		}
+	}
+}
+
+// childEnvAllowed is the whole environment of the helper: nothing but its own memory hint is passed, so no credential or
+// token variable of the scanning process reaches it.
+func childEnvironment() []string {
+	return []string{"GOMEMLIMIT=" + strconv.FormatInt(childRSSLimit*3/4, 10)}
+}
+
+// buildEnvironment is the environment of the one `go build` that makes the helper: a fixed one, plus the toolchain's own
+// locations. No -race or -toolexec through GOFLAGS, no cgo, the local toolchain only, no network.
+func buildEnvironment() []string {
+	env := []string{"GOFLAGS=", "CGO_ENABLED=0", "GOTOOLCHAIN=local", "GOPROXY=off", "GOSUMDB=off"}
+	for _, name := range []string{"PATH", "HOME", "GOCACHE", "GOMODCACHE", "GOPATH", "GOROOT", "TMPDIR", "XDG_CACHE_HOME"} {
+		if value, ok := os.LookupEnv(name); ok {
+			env = append(env, name+"="+value)
+		}
+	}
+	return env
+}
+
+// helperOverride replaces the built helper (set by tests only, to plant a misbehaving one); helperBuilder replaces the
+// build (tests only, to make it fail).
+var (
+	helperOverride string
+	helperBuilder  func() (string, error)
+)
+
+var helperBinary struct {
+	sync.Mutex
+	dir  string
+	path string
+	err  error
+	done bool
+}
+
+// childBinaryPath builds the helper once per process into a directory of this process's own (private to this user), from the
+// module of the working directory or of the scan root. A failed build is remembered: the helper is unavailable.
+func childBinaryPath(ctx context.Context, root string) (string, error) {
+	if helperOverride != "" {
+		return helperOverride, checkHelperFile(helperOverride)
+	}
+	helperBinary.Lock()
+	defer helperBinary.Unlock()
+	if !helperBinary.done {
+		helperBinary.done = true
+		helperBinary.path, helperBinary.err = buildHelper(ctx, root)
+	}
+	if helperBinary.err != nil {
+		return "", helperBinary.err
+	}
+	if err := checkHelperFile(helperBinary.path); err != nil {
+		return "", err
+	}
+	return helperBinary.path, nil
+}
+
+func buildHelper(ctx context.Context, root string) (string, error) {
+	if helperBuilder != nil {
+		path, err := helperBuilder()
+		if err != nil {
+			return "", fmt.Errorf("%w: %v", errHelperUnavailable, err)
+		}
+		return path, nil
+	}
+	importPath := reflect.TypeOf(parsedFile{}).PkgPath() + "/tcheck/child"
+	var dirs []string
+	if wd, err := os.Getwd(); err == nil {
+		if dir, err := moduleDirOf(wd); err == nil {
+			dirs = append(dirs, dir)
+		}
+	}
+	if dir, err := moduleDirOf(root); err == nil {
+		dirs = append(dirs, dir)
+	}
+	dir, err := os.MkdirTemp("", "emitscan-tcheck-")
+	if err != nil {
+		return "", fmt.Errorf("%w: %v", errHelperUnavailable, err)
+	}
+	if err := os.Chmod(dir, 0o700); err != nil {
+		_ = os.RemoveAll(dir)
+		return "", fmt.Errorf("%w: %v", errHelperUnavailable, err)
+	}
+	helperBinary.dir = dir
+	target := filepath.Join(dir, "child")
+	lastErr := errors.New("no module directory to build the type-check helper in")
+	for _, moduleDir := range dirs {
+		cmd := exec.CommandContext(context.WithoutCancel(ctx), "go", "build", "-mod=readonly", "-trimpath", "-o", target, importPath)
+		cmd.Dir = moduleDir
+		cmd.Env = buildEnvironment()
+		if output, err := cmd.CombinedOutput(); err != nil {
+			lastErr = fmt.Errorf("build type-check helper: %w: %.200s", err, output)
+			continue
+		}
+		return target, nil
+	}
+	return "", fmt.Errorf("%w: %v", errHelperUnavailable, lastErr)
+}
+
+// ShutdownHelper removes the helper's directory. A process that scanned calls it before it exits (a test binary, from TestMain).
+func ShutdownHelper() {
+	helperBinary.Lock()
+	defer helperBinary.Unlock()
+	if helperBinary.dir != "" {
+		_ = os.RemoveAll(helperBinary.dir)
+	}
+	helperBinary.dir, helperBinary.path, helperBinary.err, helperBinary.done = "", "", nil, false
+}
+
+var probeCache = struct {
+	sync.Mutex
+	verdict map[string]error
+}{verdict: map[string]error{}}
+
+// probeKey names a package by the bytes of its files, so a package already probed in this process is not probed again.
+func probeKey(root string, rels []string) (string, error) {
+	absRoot, err := filepath.Abs(root)
+	if err != nil {
+		return "", err
+	}
+	digest := sha256.New()
+	for _, rel := range rels {
+		source, err := os.ReadFile(filepath.Join(absRoot, filepath.FromSlash(rel)))
+		if err != nil {
+			return "", err
+		}
+		fmt.Fprintf(digest, "%s\x00%d\x00", rel, len(source))
+		digest.Write(source)
+	}
+	return hex.EncodeToString(digest.Sum(nil)), nil
+}
+
+func probeTypeCheck(ctx context.Context, root string, group []parsedFile, exports map[string]string) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	req := tcheck.Request{Root: root, Exports: exports, CPUSeconds: childCPUSeconds}
+	for _, parsed := range group {
+		req.Rels = append(req.Rels, parsed.rel)
+	}
+	key, err := probeKey(root, req.Rels)
+	if err != nil {
+		return err
+	}
+	probeCache.Lock()
+	verdict, seen := probeCache.verdict[key]
+	probeCache.Unlock()
+	if seen {
+		return verdict
+	}
+	verdict = runChild(ctx, root, req)
+	if ctx.Err() == nil {
+		probeCache.Lock()
+		probeCache.verdict[key] = verdict
+		probeCache.Unlock()
+	}
+	return verdict
+}
+
+// cappedBuffer keeps at most limit bytes and remembers that it overflowed.
+type cappedBuffer struct {
+	bytes.Buffer
+	limit    int
+	overflow bool
+}
+
+func (c *cappedBuffer) Write(p []byte) (int, error) {
+	if c.Len()+len(p) > c.limit {
+		c.overflow = true
+		return len(p), nil
+	}
+	return c.Buffer.Write(p)
+}
+
+// runChild runs the helper on one request. Only an exit status 0 with exactly the acknowledgement line of this request
+// is a pass; a start failure, a non-zero exit, a signal, a timeout, a memory kill, a truncated, oversized or foreign
+// output is an error.
+func runChild(ctx context.Context, root string, req tcheck.Request) error {
+	binary, err := childBinaryPath(ctx, root)
+	if err != nil {
+		if !errors.Is(err, errHelperUnavailable) {
+			err = fmt.Errorf("%w: %v", errHelperUnavailable, err)
+		}
+		return err
+	}
+	payload, err := json.Marshal(req)
+	if err != nil {
+		return err
+	}
+	sum := sha256.Sum256(payload)
+	want := "emitscan-tcheck-ok " + hex.EncodeToString(sum[:]) + "\n"
+	ctx, cancel := context.WithTimeout(ctx, childWall)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, binary)
+	cmd.Env = childEnvironment()
+	cmd.Stdin = bytes.NewReader(payload)
+	out := &cappedBuffer{limit: 4096}
+	cmd.Stdout = out
+	if err := cmd.Start(); err != nil {
+		return fmt.Errorf("%w: %v", errHelperUnavailable, err)
+	}
+	done := make(chan error, 1)
+	go func() { done <- cmd.Wait() }()
+	ticker := time.NewTicker(10 * time.Millisecond)
+	defer ticker.Stop()
+	var waitErr error
+	killed := false
+	var polledPeak int64
+loop:
+	for {
+		select {
+		case waitErr = <-done:
+			break loop
+		case <-ticker.C:
+			rss, peak := residentBytes(cmd.Process.Pid)
+			if peak > polledPeak {
+				polledPeak = peak
+			}
+			if !killed && rss > childRSSLimit {
+				killed = true
+				_ = cmd.Process.Kill()
+			}
+		}
+	}
+	switch {
+	case killed:
+		return errChildLimit
+	case ctx.Err() != nil:
+		return fmt.Errorf("type-check helper stopped: %w", ctx.Err())
+	case waitErr != nil:
+		return fmt.Errorf("type-check helper: %w", waitErr)
+	case out.overflow || out.String() != want:
+		return errors.New("type-check helper answered with something other than the acknowledgement of its request")
+	}
+	noteChildStat(&childStats.rssKB, polledPeak>>10)
+	recordUsage(cmd.ProcessState) // only a helper that finished inside its limits counts toward the limits' headroom
+	return nil
+}
+
+var errChildLimit = errors.New("type-check stopped at its memory limit")
+
+// RunHelperEnvProbe is a test hook: it runs the helper in env mode and returns the names of the variables it received.
+func runChildMode(ctx context.Context, root, mode string) (string, error) {
+	binary, err := childBinaryPath(ctx, root)
+	if err != nil {
+		return "", err
+	}
+	payload, _ := json.Marshal(tcheck.Request{Mode: mode})
+	cmd := exec.CommandContext(ctx, binary)
+	cmd.Env = childEnvironment()
+	cmd.Stdin = bytes.NewReader(payload)
+	out, err := cmd.Output()
+	return string(out), err
 }
