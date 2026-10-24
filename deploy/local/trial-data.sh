@@ -12,6 +12,9 @@
 #   deploy/local/trial-data.sh dsn
 #   deploy/local/trial-data.sh restore-postgres <dump.sql.gz>
 #   deploy/local/trial-data.sh restore-clickhouse <zip1> [zip2 ...]
+#   deploy/local/trial-data.sh restore-clickhouse --as <newdb> <zip>
+#                              # restore under another database name; every view
+#                              # is then compared with the backup's definition
 #   deploy/local/trial-data.sh seed-team-repo-ownership [org_id]
 #                              # CHAOS-4577: inserts CURRENT team_repo_ownership
 #                              # rows (the ORIGINAL seed dump has none) so the
@@ -364,10 +367,20 @@ parse_clickhouse_backup_db() {
   sed -E 's/^clickhouse-(.+)-[0-9]{8}-[0-9]{6}(-[0-9]+)?\.zip$/\1/' <<<"$1"
 }
 
+# shellcheck source=restore-view-check.sh
+source "$SCRIPT_DIR/restore-view-check.sh"
+
 cmd_restore_clickhouse() {
   require_kubeconfig
   validate_password
-  [[ $# -ge 1 ]] || die "usage: trial-data.sh restore-clickhouse <zip1> [zip2 ...]"
+  local as_db=""
+  if [[ "${1:-}" == "--as" ]]; then
+    [[ $# -eq 3 ]] || die "usage: trial-data.sh restore-clickhouse --as <newdb> <zip>"
+    as_db="$2"
+    [[ "$as_db" =~ ^[A-Za-z0-9_]+$ ]] || die "--as database name must match [A-Za-z0-9_]+"
+    shift 2
+  fi
+  [[ $# -ge 1 ]] || die "usage: trial-data.sh restore-clickhouse [--as <newdb>] <zip1> [zip2 ...]"
   local pod
   pod="$(kubectl -n "$NAMESPACE" get pod -l app.kubernetes.io/component=clickhouse -o jsonpath='{.items[0].metadata.name}')"
   [[ -n "$pod" ]] || die "no clickhouse pod found in $NAMESPACE"
@@ -378,6 +391,7 @@ cmd_restore_clickhouse() {
   # to whenever the EXIT trap fires -- which happens in the top-level script
   # scope, where this function's `local workdir` no longer exists (confirmed
   # live: "workdir: unbound variable" from exactly that).
+  # shellcheck disable=SC2064
   trap "rm -rf '$workdir'" EXIT
   for zip in "$@"; do
     [[ -f "$zip" ]] || die "not found: $zip"
@@ -402,6 +416,10 @@ cmd_restore_clickhouse() {
     # this is a throwaway local extraction scratch dir, not the archive
     # itself.
     chmod -R a+rwX "$extractdir"
+    mkdir -p "$workdir/views-$name"
+    if [[ -d "$extractdir/metadata/$db" ]]; then
+      cp "$extractdir/metadata/$db/"*.sql "$workdir/views-$name/" 2>/dev/null || true
+    fi
     log "copying extracted $name/ into $pod:/backups/"
     kubectl -n "$NAMESPACE" cp "$extractdir" "$pod:/backups/$name"
     rm -rf "$extractdir"
@@ -411,9 +429,24 @@ cmd_restore_clickhouse() {
     # original restrictive mode) -- fix it server-side instead of trusting
     # the copy to preserve it.
     kubectl -n "$NAMESPACE" exec "$pod" -- chmod -R a+rwX "/backups/$name"
-    log "restoring database $db from $name"
+    local target="${as_db:-$db}" restore_sql
+    restore_sql="RESTORE DATABASE \`$db\` FROM Disk('trial_backups', '$name')"
+    if [[ -n "$as_db" ]]; then
+      restore_sql="RESTORE DATABASE \`$db\` AS \`$as_db\` FROM Disk('trial_backups', '$name')"
+    fi
+    log "restoring database $db as $target from $name"
     kubectl -n "$NAMESPACE" exec "$pod" -- clickhouse-client -u ch --password "$PG_PASSWORD" \
-      --query "RESTORE DATABASE \`$db\` FROM Disk('trial_backups', '$name')"
+      --query "$restore_sql"
+    # shellcheck disable=SC2317  # called by rvc_check_views
+    rvc_restored_create_query() {
+      kubectl -n "$NAMESPACE" exec "$pod" -- clickhouse-client -u ch --password "$PG_PASSWORD" \
+        --param_db="$1" --param_name="$2" \
+        --query "SELECT create_query FROM system.tables WHERE database = {db:String} AND name = {name:String} FORMAT TSVRaw"
+    }
+    log "comparing every view in $target with the backup definition"
+    if ! rvc_check_views "$workdir/views-$name" "$db" "$target" >&2; then
+      die "view definitions after restore differ from the backup (views listed above); the restored database $target is NOT usable"
+    fi
   done
   log "clickhouse restore complete: $# database(s)"
 }
