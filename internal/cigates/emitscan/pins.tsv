@@ -1,0 +1,68 @@
+rule	file	func	detail	count	reason
+R9	cmd/acr-api/main.go	-	unresolvable key	1	the key is a variable, a slog.Attr value or a forwarded argument list; the record passes through telemetryscrub.Handler at run time
+R9	cmd/acr-projector/main.go	-	unresolvable key	1	the key is a variable, a slog.Attr value or a forwarded argument list; the record passes through telemetryscrub.Handler at run time
+R9	cmd/acr-projector/priors.go	-	unresolvable key	1	the key is a variable, a slog.Attr value or a forwarded argument list; the record passes through telemetryscrub.Handler at run time
+R9	cmd/acr-projector/runtime.go	-	unresolvable key	2	the key is a variable, a slog.Attr value or a forwarded argument list; the record passes through telemetryscrub.Handler at run time
+R9	internal/api/context_fabric_result_routes.go	-	unresolvable key	7	the key is a variable, a slog.Attr value or a forwarded argument list; the record passes through telemetryscrub.Handler at run time
+R9	internal/api/context_fabric_routes.go	-	unresolvable key	3	the key is a variable, a slog.Attr value or a forwarded argument list; the record passes through telemetryscrub.Handler at run time
+R9	internal/api/oauth_routes.go	-	unresolvable key	2	the key is a variable, a slog.Attr value or a forwarded argument list; the record passes through telemetryscrub.Handler at run time
+R9	internal/api/read_routes.go	-	unresolvable key	3	the key is a variable, a slog.Attr value or a forwarded argument list; the record passes through telemetryscrub.Handler at run time
+R9	internal/api/readiness_transitions.go	-	unresolvable key	1	the key is a variable, a slog.Attr value or a forwarded argument list; the record passes through telemetryscrub.Handler at run time
+R9	internal/api/service_model_gate.go	-	unresolvable key	1	the key is a variable, a slog.Attr value or a forwarded argument list; the record passes through telemetryscrub.Handler at run time
+R9	internal/auth/middleware.go	-	unresolvable key	2	the key is a variable, a slog.Attr value or a forwarded argument list; the record passes through telemetryscrub.Handler at run time
+R1	internal/auth/middleware.go	MiddlewareFor	remote_ip	2	network key: telemetryscrub.Handler truncates the address to a network prefix before any handler sees it
+R1	internal/auth/middleware.go	recordUnknownFailure	remote_ip	1	network key: telemetryscrub.Handler truncates the address to a network prefix before any handler sees it
+R1	internal/auth/middleware.go	rejectCredential	remote_ip	1	network key: telemetryscrub.Handler truncates the address to a network prefix before any handler sees it
+R1	internal/contextfabric/client_synthesis.go	encodeWithinInputBound	pass	1	a ranking pass counter (the key text contains the protected fragment pass); the value is an integer
+R9	internal/contextfabric/devhealthfacts/deficiencies.go	-	unresolvable key	2	the key is a variable, a slog.Attr value or a forwarded argument list; the record passes through telemetryscrub.Handler at run time
+R3	internal/contextfabric/devhealthfacts/dependencies.go	ageReadFailure	error_type	1	the value is the dynamic type name of an error (%T), never its text
+R9	internal/contextfabric/devhealthfacts/investment_linked_pull_request_mix.go	-	unresolvable key	2	the key is a variable, a slog.Attr value or a forwarded argument list; the record passes through telemetryscrub.Handler at run time
+R9	internal/contextfabric/devhealthfacts/investment_team_pr_link_state.go	-	unresolvable key	1	the key is a variable, a slog.Attr value or a forwarded argument list; the record passes through telemetryscrub.Handler at run time
+R9	internal/contextfabric/devhealthfacts/pull_request_project_cover.go	-	unresolvable key	1	the key is a variable, a slog.Attr value or a forwarded argument list; the record passes through telemetryscrub.Handler at run time
+R9	internal/contextfabric/devhealthfacts/shared.go	-	unresolvable key	1	the key is a variable, a slog.Attr value or a forwarded argument list; the record passes through telemetryscrub.Handler at run time
+R3	internal/contextfabric/devhealthfacts/team_rollup.go	attachOwnershipNoteToFailure	error_type	1	the value is the dynamic type name of an error (%T), never its text
+R9	internal/contextfabric/devhealthsource/assemble.go	-	unresolvable key	1	the key is a variable, a slog.Attr value or a forwarded argument list; the record passes through telemetryscrub.Handler at run time
+R3	internal/contextfabric/devhealthsource/ingest_probe.go	availableAt	cause_type	1	the value is the dynamic type name of an error (%T), never its text
+R9	internal/contextfabric/devhealthsource/item_quarantine.go	-	unresolvable key	1	the key is a variable, a slog.Attr value or a forwarded argument list; the record passes through telemetryscrub.Handler at run time
+R9	internal/contextfabric/devhealthsource/overlap.go	-	unresolvable key	1	the key is a variable, a slog.Attr value or a forwarded argument list; the record passes through telemetryscrub.Handler at run time
+R9	internal/contextfabric/directread/facts_telemetry.go	-	unresolvable key	1	the key is a variable, a slog.Attr value or a forwarded argument list; the record passes through telemetryscrub.Handler at run time
+R9	internal/contextfabric/directread/graphql_query.go	-	unresolvable key	1	the key is a variable, a slog.Attr value or a forwarded argument list; the record passes through telemetryscrub.Handler at run time
+R9	internal/contextfabric/directread/operation_runner.go	-	unresolvable key	1	the key is a variable, a slog.Attr value or a forwarded argument list; the record passes through telemetryscrub.Handler at run time
+R9	internal/contextfabric/directread/relationships_telemetry.go	-	unresolvable key	1	the key is a variable, a slog.Attr value or a forwarded argument list; the record passes through telemetryscrub.Handler at run time
+R9	internal/contextfabric/directread/subject_lookup.go	-	unresolvable key	1	the key is a variable, a slog.Attr value or a forwarded argument list; the record passes through telemetryscrub.Handler at run time
+R9	internal/contextfabric/directread/telemetry.go	-	unresolvable key	1	the key is a variable, a slog.Attr value or a forwarded argument list; the record passes through telemetryscrub.Handler at run time
+R9	internal/contextfabric/fact_registry.go	-	unresolvable key	7	the key is a variable, a slog.Attr value or a forwarded argument list; the record passes through telemetryscrub.Handler at run time
+R9	internal/contextfabric/falkorgraph/config.go	-	unresolvable key	10	the key is a variable, a slog.Attr value or a forwarded argument list; the record passes through telemetryscrub.Handler at run time
+R3	internal/contextfabric/falkorgraph/fulltext_ready.go	awaitFulltextIndexOperational	error_type	1	the value is the dynamic type name of an error (%T), never its text
+R9	internal/contextfabric/genkitruntime/llm_generator.go	-	unresolvable key	3	the key is a variable, a slog.Attr value or a forwarded argument list; the record passes through telemetryscrub.Handler at run time
+R9	internal/contextfabric/genkitruntime/runtime.go	-	unresolvable key	5	the key is a variable, a slog.Attr value or a forwarded argument list; the record passes through telemetryscrub.Handler at run time
+R9	internal/contextfabric/genkitruntime/supplied_interpretation.go	-	unresolvable key	1	the key is a variable, a slog.Attr value or a forwarded argument list; the record passes through telemetryscrub.Handler at run time
+R9	internal/contextfabric/graphrank/comparison_telemetry.go	-	unresolvable key	30	the key is a variable, a slog.Attr value or a forwarded argument list; the record passes through telemetryscrub.Handler at run time
+R9	internal/contextfabric/graphrank/tracer.go	-	unresolvable key	2	the key is a variable, a slog.Attr value or a forwarded argument list; the record passes through telemetryscrub.Handler at run time
+R1	internal/contextfabric/graphrank/tracer.go	Trace	coverage_bypass	1	a boolean flag of the ranking trace (the key text contains the protected fragment pass); the value is a bool
+R1	internal/contextfabric/graphrank/tracer.go	Trace	pass	8	a ranking pass counter (the key text contains the protected fragment pass); the value is an integer
+R9	internal/contextfabric/lifecycle.go	-	unresolvable key	2	the key is a variable, a slog.Attr value or a forwarded argument list; the record passes through telemetryscrub.Handler at run time
+R9	internal/contextfabric/modelprovider/public_refusal_log.go	-	unresolvable key	1	the key is a variable, a slog.Attr value or a forwarded argument list; the record passes through telemetryscrub.Handler at run time
+R9	internal/contextfabric/modelruntimeresolver/chaos5638_sampled.go	-	unresolvable key	1	the key is a variable, a slog.Attr value or a forwarded argument list; the record passes through telemetryscrub.Handler at run time
+R1	internal/contextfabric/org_model_config.go	LogValue	credential	1	the value is a constant redaction placeholder in a LogValue method, not a credential
+R4	internal/contextfabric/pginvestigation/paritytest/carried_parent_chain.go	newChainRig	slog.NewJSONHandler	1	test-support code: the handler writes to an in-memory buffer read by the test and never leaves the process
+R4	internal/contextfabric/pginvestigation/paritytest/question_window.go	runQuestionWindowRedemption	slog.NewJSONHandler	1	test-support code: the handler writes to an in-memory buffer read by the test and never leaves the process
+R4	internal/contextfabric/pginvestigation/paritytest/substitution_parent.go	runAdmittedBindingCell	slog.NewJSONHandler	1	test-support code: the handler writes to an in-memory buffer read by the test and never leaves the process
+R4	internal/contextfabric/pginvestigation/paritytest/substitution_parent.go	runSubstitutionParentCell	slog.NewJSONHandler	1	test-support code: the handler writes to an in-memory buffer read by the test and never leaves the process
+R9	internal/contextfabric/projectionrun/coordinator.go	-	unresolvable key	12	the key is a variable, a slog.Attr value or a forwarded argument list; the record passes through telemetryscrub.Handler at run time
+R9	internal/contextfabric/semantic_state_telemetry.go	-	unresolvable key	3	the key is a variable, a slog.Attr value or a forwarded argument list; the record passes through telemetryscrub.Handler at run time
+R9	internal/contextfabric/stored_result_authorization.go	-	unresolvable key	1	the key is a variable, a slog.Attr value or a forwarded argument list; the record passes through telemetryscrub.Handler at run time
+R9	internal/contextfabric/synthesis_model_failure.go	-	unresolvable key	1	the key is a variable, a slog.Attr value or a forwarded argument list; the record passes through telemetryscrub.Handler at run time
+R9	internal/contextfabric/synthesis_score_k7.go	-	unresolvable key	2	the key is a variable, a slog.Attr value or a forwarded argument list; the record passes through telemetryscrub.Handler at run time
+R9	internal/contextfabric/synthesis_ungrounded_drop.go	-	unresolvable key	1	the key is a variable, a slog.Attr value or a forwarded argument list; the record passes through telemetryscrub.Handler at run time
+R9	internal/contextfabric/telemetry.go	-	unresolvable key	94	the key is a variable, a slog.Attr value or a forwarded argument list; the record passes through telemetryscrub.Handler at run time
+R9	internal/contextfabric/work_item_membership.go	-	unresolvable key	2	the key is a variable, a slog.Attr value or a forwarded argument list; the record passes through telemetryscrub.Handler at run time
+R9	internal/contextfabric/work_item_stored_telemetry.go	-	unresolvable key	1	the key is a variable, a slog.Attr value or a forwarded argument list; the record passes through telemetryscrub.Handler at run time
+R9	internal/contextpacket/source_catalog.go	-	unresolvable key	2	the key is a variable, a slog.Attr value or a forwarded argument list; the record passes through telemetryscrub.Handler at run time
+R1	internal/entitlements/llmconfig.go	LogValue	api_key	1	the value is a constant redaction placeholder in a LogValue method, not a credential
+R9	internal/mcp/hosted_scope.go	-	unresolvable key	1	the key is a variable, a slog.Attr value or a forwarded argument list; the record passes through telemetryscrub.Handler at run time
+R9	internal/mcp/http.go	-	unresolvable key	1	the key is a variable, a slog.Attr value or a forwarded argument list; the record passes through telemetryscrub.Handler at run time
+R9	internal/mcp/investigate_question.go	-	unresolvable key	1	the key is a variable, a slog.Attr value or a forwarded argument list; the record passes through telemetryscrub.Handler at run time
+R9	internal/otelexport/otelexport.go	-	unresolvable key	1	the key is a variable, a slog.Attr value or a forwarded argument list; the record passes through telemetryscrub.Handler at run time
+R3	internal/outboundhttp/outboundhttp.go	Transport	default_transport_type	1	the value is the type name of http.DefaultTransport (%T), not error text
+R9	internal/runtime/hosted/postgres_purge.go	-	unresolvable key	1	the key is a variable, a slog.Attr value or a forwarded argument list; the record passes through telemetryscrub.Handler at run time
