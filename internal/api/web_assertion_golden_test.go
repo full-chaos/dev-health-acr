@@ -14,6 +14,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"regexp"
 	"slices"
 	"sort"
 	"strings"
@@ -97,6 +98,18 @@ func (h *goldenHarness) claims(method, path string, body []byte, permissions []s
 		"repository_scopes": []string{hostedTestRepository}, "permissions": permissions,
 		"iat": h.now.Unix(), "nbf": h.now.Unix(), "exp": h.now.Add(30 * time.Second).Unix(), "jti": fmt.Sprintf("golden_%d", h.jti),
 		"method": method, "path": path, "body_sha256": base64.RawURLEncoding.EncodeToString(digest[:]),
+	}
+}
+
+func assertGoldenUniform401(t *testing.T, response *httptest.ResponseRecorder) {
+	t.Helper()
+	assertErrorResponse(t, response, http.StatusUnauthorized, "invalid_token")
+	var envelope contractsv1.ErrorEnvelope
+	if err := json.Unmarshal(response.Body.Bytes(), &envelope); err != nil {
+		t.Fatal(err)
+	}
+	if envelope.Error.Message != "Missing or invalid ACR credential" || envelope.Error.Retryable || envelope.Error.Details != nil {
+		t.Fatalf("refusal is not the uniform one: %#v", envelope.Error)
 	}
 }
 
@@ -198,6 +211,14 @@ func TestWebAssertionGolden_refusesEachWrongField(t *testing.T) {
 			r.Body = nopBody(goldenPacketBody(t, "example-org/other-service"))
 			return r
 		}},
+		{name: "subject empty", claims: func(c map[string]any) { c["sub"] = "" }},
+		{name: "subject missing", claims: func(c map[string]any) { delete(c, "sub") }},
+		{name: "jti empty", claims: func(c map[string]any) { c["jti"] = "" }},
+		{name: "jti missing", claims: func(c map[string]any) { delete(c, "jti") }},
+		{name: "iat missing", claims: func(c map[string]any) { delete(c, "iat") }},
+		{name: "iat not a number", claims: func(c map[string]any) { c["iat"] = "now" }},
+		{name: "nbf missing", claims: func(c map[string]any) { delete(c, "nbf") }},
+		{name: "nbf not a number", claims: func(c map[string]any) { c["nbf"] = "now" }},
 		{name: "org empty", claims: func(c map[string]any) { c["org_id"] = "" }},
 		{name: "org too long", claims: func(c map[string]any) { c["org_id"] = string(bytes.Repeat([]byte("o"), 257)) }},
 		{name: "repo empty", claims: func(c map[string]any) { c["repository_scopes"] = []string{} }},
@@ -231,7 +252,7 @@ func TestWebAssertionGolden_refusesEachWrongField(t *testing.T) {
 			if row.send != nil {
 				request = row.send(request)
 			}
-			assertErrorResponse(t, h.do(request), http.StatusUnauthorized, "invalid_token")
+			assertGoldenUniform401(t, h.do(request))
 		})
 	}
 }
@@ -286,6 +307,13 @@ func TestWebAssertionGolden_refusesUserAndWorkloadTokens(t *testing.T) {
 	workload := goldenSign(t, h.foreign, map[string]any{"alg": "RS256", "typ": "JWT", "kid": "workload"}, map[string]any{
 		"iss": "https://kubernetes.default.svc", "aud": []string{"acr-workload"}, "sub": "system:serviceaccount:ns:consumer", "exp": h.now.Add(time.Hour).Unix(),
 	})
+	workloadClaims := map[string]any{
+		"iss": goldenIssuer, "aud": goldenAudience, "sub": "prn_" + strings.Repeat("A", 22), "principal_type": "workload", "jti": "000000000000000000000001",
+		"iat": h.now.Unix(), "nbf": h.now.Unix(), "exp": h.now.Add(300 * time.Second).Unix(),
+	}
+	workloadHeader := map[string]any{"alg": "EdDSA", "typ": "workload+jwt", "kid": "current"}
+	workloadByValid := goldenSign(t, h.valid, workloadHeader, workloadClaims)
+	workloadByForeign := goldenSign(t, h.foreign, workloadHeader, workloadClaims)
 	valid := h.signed(http.MethodPost, goldenPacket, body, nil).Header.Get(auth.WebAssertionHeader)
 	rows := []struct {
 		name   string
@@ -295,7 +323,11 @@ func TestWebAssertionGolden_refusesUserAndWorkloadTokens(t *testing.T) {
 		{name: "user token as assertion, valid key", header: userByValid},
 		{name: "user token as assertion, foreign key", header: userByForeign},
 		{name: "user token as bearer", bearer: userByValid},
-		{name: "workload token as assertion", header: workload},
+		{name: "mismatched-alg workload token as assertion", header: workload},
+		{name: "workload-token.v1 as assertion, valid key", header: workloadByValid},
+		{name: "workload-token.v1 as assertion, foreign key", header: workloadByForeign},
+		{name: "workload-token.v1 as bearer", bearer: workloadByValid},
+		{name: "workload-token.v1 bearer beside valid assertion", header: valid, bearer: workloadByValid},
 		{name: "workload token as bearer", bearer: workload},
 		{name: "workload bearer beside valid assertion", header: valid, bearer: workload},
 		{name: "user bearer beside valid assertion", header: valid, bearer: userByValid},
@@ -309,7 +341,7 @@ func TestWebAssertionGolden_refusesUserAndWorkloadTokens(t *testing.T) {
 			if row.bearer != "" {
 				request.Header.Set("Authorization", "Bearer "+row.bearer)
 			}
-			assertErrorResponse(t, h.do(request), http.StatusUnauthorized, "invalid_token")
+			assertGoldenUniform401(t, h.do(request))
 		})
 	}
 }
@@ -386,7 +418,7 @@ func TestWebAssertionGolden_routeToPermissionPin(t *testing.T) {
 				})
 			}
 			if !route.WebAssertion {
-				assertErrorResponse(t, h.do(grant(auth.ScopeContextRead)), http.StatusUnauthorized, "invalid_token")
+				assertGoldenUniform401(t, h.do(grant(auth.ScopeContextRead)))
 				return
 			}
 			other := auth.ScopeContextRead
@@ -401,22 +433,23 @@ func TestWebAssertionGolden_routeToPermissionPin(t *testing.T) {
 		})
 	}
 }
-func goldenIdentifyingLeaves(value any, key string, out *[]string) {
+
+// goldenVocabulary matches schema words and enum values shared by every packet; everything else in an org_1 packet is org_1 data.
+var goldenVocabulary = regexp.MustCompile(`^[a-z][a-z_]*(\.v[0-9]+)?$`)
+
+func goldenStringLeaves(value any, out *[]string) {
 	switch v := value.(type) {
 	case string:
-		for _, suffix := range []string{"id", "ids", "uri", "title", "summary", "excerpt", "citation", "label"} {
-			if len(v) >= 8 && strings.HasSuffix(key, suffix) {
-				*out = append(*out, v)
-				return
-			}
+		if len(v) >= 8 && !goldenVocabulary.MatchString(v) {
+			*out = append(*out, v)
 		}
 	case []any:
 		for _, item := range v {
-			goldenIdentifyingLeaves(item, key, out)
+			goldenStringLeaves(item, out)
 		}
 	case map[string]any:
-		for k, item := range v {
-			goldenIdentifyingLeaves(item, k, out)
+		for _, item := range v {
+			goldenStringLeaves(item, out)
 		}
 	}
 }
@@ -439,13 +472,19 @@ func TestWebAssertionGolden_ForeignOrgRepoScopeReturnsNoForeignData(t *testing.T
 	}
 	foreignValues := []string{"org_1", "fixture:"}
 	identifying := len(foreignValues)
-	goldenIdentifyingLeaves(items, "", &foreignValues)
-	goldenIdentifyingLeaves(ownPacket["resolved_scope"], "", &foreignValues)
+	goldenStringLeaves(items, &foreignValues)
+	goldenStringLeaves(ownPacket["resolved_scope"], &foreignValues)
+	foreignValues = slices.DeleteFunc(foreignValues, func(value string) bool { return bytes.Contains(packet, []byte(value)) })
 	if len(foreignValues) <= identifying {
-		t.Fatal("no org_1 identifying values collected; the scan would prove nothing")
+		t.Fatal("no org_1 values collected; the scan would prove nothing")
 	}
 
 	response := h.do(h.signed(http.MethodPost, goldenPacket, packet, func(c map[string]any) { c["org_id"] = "org_2" }))
+	for _, value := range foreignValues {
+		if bytes.Contains(response.Body.Bytes(), []byte(value)) {
+			t.Fatalf("foreign-org response (status %d) contains an org_1 value %q", response.Code, value)
+		}
+	}
 	if response.Code >= 500 {
 		t.Fatalf("status = %d", response.Code)
 	}
@@ -458,10 +497,5 @@ func TestWebAssertionGolden_ForeignOrgRepoScopeReturnsNoForeignData(t *testing.T
 	}
 	if got.Status == contractsv1.PacketComplete || len(got.Items) != 0 || strings.Contains(got.Repository.RepoID, "fixture:") || !strings.HasPrefix(got.Repository.RepoID, "unresolved:") {
 		t.Fatalf("foreign-org packet carries data: status=%q items=%d", got.Status, len(got.Items))
-	}
-	for _, value := range foreignValues {
-		if bytes.Contains(response.Body.Bytes(), []byte(value)) {
-			t.Fatalf("foreign-org response contains an org_1 value %q", value)
-		}
 	}
 }
