@@ -666,12 +666,14 @@ var ProductionColumns = map[string][]Column{
 	// sidestepping the evidence-JSON/work-item-attribution path
 	// readTeamThemeMix uses for the team subject -- verified live against
 	// the trial ClickHouse (acr-trial-data, db dh_0906, system.columns).
+	// categorization_status/13 (String, ops baseline head.json) is read so the
+	// mix leaves out a unit the evidence gate stopped before any model call.
 	// Remaining unread production columns (provider/5, effort_metric/6,
 	// evidence_quality/11, evidence_quality_band/12,
-	// categorization_status/13, categorization_errors_json/14,
-	// categorization_model_version/15, categorization_input_hash/16,
-	// categorization_run_id/17, work_unit_type/19, work_unit_name/20)
-	// stay omitted, matching this package's own documented scope rule.
+	// categorization_errors_json/14, categorization_model_version/15,
+	// categorization_input_hash/16, categorization_run_id/17,
+	// work_unit_type/19, work_unit_name/20) stay omitted, matching this
+	// package's own documented scope rule.
 	"work_unit_investments": {
 		{Name: "work_unit_id", Type: "String"},
 		{Name: "from_ts", Type: "DateTime64(3, 'UTC')"},
@@ -681,6 +683,7 @@ var ProductionColumns = map[string][]Column{
 		{Name: "theme_distribution_json", Type: "Map(String, Float64)"},
 		{Name: "subcategory_distribution_json", Type: "Map(String, Float64)"},
 		{Name: "structural_evidence_json", Type: "String"},
+		{Name: "categorization_status", Type: "String"},
 		{Name: "computed_at", Type: "DateTime64(3, 'UTC')"},
 		{Name: "org_id", Type: "String"},
 	},

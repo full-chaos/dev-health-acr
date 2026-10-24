@@ -287,6 +287,9 @@ func (p *InvestmentProvider) ReadFacts(ctx context.Context, principal storage.Pr
 		if reason := span.reasonFor(subject.CanonicalID, projectSpanKey(subject), subject.Kind == contextfabric.SubjectProject, timeBound); reason != "" {
 			addScopedReason(&result, query.Subjects, []contextfabric.SubjectRef{subject}, reason)
 		}
+		if reason := span.uncategorizedReasonFor(subject); reason != "" {
+			addScopedReason(&result, query.Subjects, []contextfabric.SubjectRef{subject}, reason)
+		}
 	}
 	orgSubjects := subjectsOfKind(query.Subjects, contextfabric.SubjectOrganization)
 	if orgUnattributedOnly {
@@ -386,11 +389,17 @@ func (p *InvestmentProvider) readTeamThemeMix(ctx context.Context, orgID string,
 		}
 	}
 	sort.Strings(teamIDs)
+	gatedOnly := map[string]emptyCause{}
 	for _, teamID := range teamIDs {
 		subject := bySubject[teamID]
 		m, ok := current[teamID]
 		if !ok || m.total() <= 0 {
 			unavailable++
+			if ok && len(m.unitSet) == 0 && len(m.gatedUnitSet) > 0 {
+				noUnit = append(noUnit, subject)
+				gatedOnly[teamID] = emptyCause{token: investmentUnitsUncategorized, gated: uint64(len(m.gatedUnitSet))}
+				continue
+			}
 			if len(owned[teamID]) == 0 && len(reachedOnly[teamID]) == 0 {
 				noOwned = append(noOwned, subject)
 			} else if units := ownedUnits[teamID]; units > 0 {
@@ -409,6 +418,8 @@ func (p *InvestmentProvider) readTeamThemeMix(ctx context.Context, orgID string,
 		fields["theme_breakdown"] = themeBreakdownTable(m, timeBound.effectiveGrain(grainDaily))
 		units, sized := m.sizingUnits()
 		investmentSizingFields(fields, currentTotal, units, sized)
+		investmentUncategorizedFields(fields, units, m.uncategorizedUnits())
+		recordInvestmentUncategorized(ctx, subject, units, m.uncategorizedUnits(), false)
 		fields["owned_repository_count"] = contextfabric.IntegerFactValue(m.repos)
 		fields["mix_source"] = contextfabric.StringFactValue(repoMixSource)
 		fields["attribution_basis"] = contextfabric.StringFactValue(repoMixBasis + "_over_team_repo_ownership")
@@ -452,7 +463,9 @@ func (p *InvestmentProvider) readTeamThemeMix(ctx context.Context, orgID string,
 		unitOwned := make(map[string][]string, len(noUnit)+len(noEffort))
 		for _, subject := range noUnit {
 			id := strings.TrimPrefix(subject.CanonicalID, teamPrefix)
-			unitOwned[id] = owned[id]
+			if _, gated := gatedOnly[id]; !gated {
+				unitOwned[id] = owned[id]
+			}
 		}
 		for _, z := range noEffort {
 			id := strings.TrimPrefix(z.subject.CanonicalID, teamPrefix)
@@ -472,6 +485,12 @@ func (p *InvestmentProvider) readTeamThemeMix(ctx context.Context, orgID string,
 			keptEffort = append(keptEffort, z)
 		}
 		noEffort = keptEffort
+		if causes == nil {
+			causes = make(map[string]emptyCause, len(gatedOnly))
+		}
+		for id, cause := range gatedOnly {
+			causes[id] = cause
+		}
 		noUnitCause = causes
 	}
 	if len(noUnit) > 0 {
@@ -642,7 +661,7 @@ func investmentMixUnavailableReason(unavailable, noOwned int, noEffort []teamZer
 		reason += fmt.Sprintf("; %s for %d: the team's owned repositories hold %d work unit(s) in the requested window, all with zero persisted effort; effort not measurable (no line counts, no linked commits, no cycle times); an unmeasured or capped unit is not told apart from a measured zero", investmentTeamEffortNotMeasurable, len(noEffort), units)
 	}
 	causedTotal := 0
-	for _, token := range []string{investmentTeamUnitsOutsideRun, investmentTeamUnitsUnattrib} {
+	for _, token := range []string{investmentUnitsUncategorized, investmentTeamUnitsOutsideRun, investmentTeamUnitsUnattrib} {
 		if n := caused[token]; n > 0 {
 			causedTotal += n
 			reason += fmt.Sprintf("; %s for %d: %s", token, n, emptyCause{token: token}.summary())
@@ -821,9 +840,13 @@ func (p *InvestmentProvider) readProjectThemeMix(ctx context.Context, orgID stri
 		}
 		currentTotal := featureDelivery + operational + maintenance + quality + risk
 		if currentTotal <= 0 {
-			unusableRollup[projectKey] = int64(workUnits)
+			recordInvestmentUncategorized(ctx, subject, int64(workUnits), int64(mix.UncategorizedUnits), false)
+			if workUnits > 0 {
+				unusableRollup[projectKey] = int64(workUnits)
+			}
 			return nil
 		}
+		recordInvestmentUncategorized(ctx, subject, int64(workUnits), int64(mix.UncategorizedUnits), true)
 		themeValues := map[string]float64{
 			contextfabric.ThemeFeatureDelivery: featureDelivery,
 			contextfabric.ThemeOperational:     operational,
@@ -840,6 +863,7 @@ func (p *InvestmentProvider) readProjectThemeMix(ctx context.Context, orgID stri
 		// repos) so a synthesizer never presents this as a project-native
 		// attribution computed directly from the project's own work items.
 		investmentSizingFields(fields, currentTotal, int64(workUnits), int64(mix.SizedUnits))
+		investmentUncategorizedFields(fields, int64(workUnits), int64(mix.UncategorizedUnits))
 		fields["rollup_basis"] = contextfabric.StringFactValue("team_project_ownership_via_owned_repos_work_unit_investments")
 		fields[contextfabric.FactFieldInvestmentMixSource] = contextfabric.StringFactValue(contextfabric.InvestmentMixSourceOwningTeamRollup)
 		fields["team_count"] = contextfabric.IntegerFactValue(int64(teamCount))
@@ -943,10 +967,11 @@ func (p *InvestmentProvider) readProjectNativeThemeMix(ctx context.Context, orgI
 	if len(ids) == 0 {
 		return 0, "", nil
 	}
-	rows, sizedByProject, err := readProjectNativeThemeMixRows(ctx, p.facts.client, orgID, ids, timeBound, maxProjectPopulationProbe, p)
+	rows, sizedByProject, uncategorizedByProject, err := readProjectNativeThemeMixRows(ctx, p.facts.client, orgID, ids, timeBound, maxProjectPopulationProbe, p)
 	if err != nil {
 		return 0, "", err
 	}
+	withRow := make(map[string]bool, len(rows))
 	rowCount = len(rows)
 	if rowCount > maxProjectPopulationRows {
 		cutAfter = rows[maxProjectPopulationRows-1].ProjectSubjectKey
@@ -960,8 +985,11 @@ func (p *InvestmentProvider) readProjectNativeThemeMix(ctx context.Context, orgI
 		if !ok {
 			continue
 		}
+		withRow[row.ProjectSubjectKey] = true
+		gated := int64(uncategorizedByProject[row.ProjectSubjectKey])
 		currentTotal := row.FeatureDelivery + row.Operational + row.Maintenance + row.Quality + row.Risk
 		if row.WorkUnits == 0 || currentTotal <= 0 {
+			recordInvestmentUncategorized(ctx, subject, int64(row.WorkUnits), gated, false)
 			// No native mix. A project whose only counted units carry no
 			// effort still discloses its multi-placed units.
 			if row.MultiPlacedUnits > 0 {
@@ -986,6 +1014,8 @@ func (p *InvestmentProvider) readProjectNativeThemeMix(ctx context.Context, orgI
 		fields[contextfabric.FactFieldInvestmentMixSource] = contextfabric.StringFactValue(contextfabric.InvestmentMixSourceProjectNative)
 		fields["rollup_basis"] = contextfabric.StringFactValue(projectNativeMixBasis)
 		investmentSizingFields(fields, currentTotal, int64(row.WorkUnits), int64(sizedByProject[row.ProjectSubjectKey]))
+		investmentUncategorizedFields(fields, int64(row.WorkUnits), gated)
+		recordInvestmentUncategorized(ctx, subject, int64(row.WorkUnits), gated, true)
 		fields["work_unit_count"] = contextfabric.IntegerFactValue(int64(row.WorkUnits))
 		fields["effort_unit_count"] = contextfabric.IntegerFactValue(int64(row.WorkUnits))
 		fields["spanning_unit_count"] = contextfabric.IntegerFactValue(int64(row.SpanningUnits))
@@ -1015,6 +1045,12 @@ func (p *InvestmentProvider) readProjectNativeThemeMix(ctx context.Context, orgI
 			break
 		}
 		mergeProjectInvestmentFact(facts, subject, row.ProjectSubjectKey, fields, []string{"team_count", "repo_count", "work_units_without_repo_link", "sizing_coverage", "sizing_note"})
+	}
+	// A project placed only through evidence-gated units has no native row.
+	for key, gated := range uncategorizedByProject {
+		if subject, ok := bySubject[key]; ok && !withRow[key] {
+			recordInvestmentUncategorized(ctx, subject, 0, int64(gated), false)
+		}
 	}
 	return rowCount, cutAfter, nil
 }

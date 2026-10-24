@@ -167,7 +167,7 @@ func servedLinkedSetAndMixReads(t *testing.T, ctx context.Context, provider cont
 		}
 		factFor(t, result, teamSubject(linkedShapeTeam))
 		setPeaks := statementMemorySince(t, ctx, direct, statementFilter{Table: "work_graph_issue_pr", QueryContains: "groupArray(r), groupArray(n), groupArray(t)"}, mark)
-		mixPeaks := statementMemorySince(t, ctx, direct, statementFilter{Table: "work_unit_investments", QueryContains: "uniqExact(m.repo_uuid)"}, mark)
+		mixPeaks := statementMemorySince(t, ctx, direct, statementFilter{Table: "work_unit_investments", QueryContains: "uniqExactIf(m.repo_uuid, NOT m.gated)"}, mark)
 		if len(setPeaks) != 1 || len(mixPeaks) != 1 {
 			t.Errorf("measurement did not happen: %d linked set and %d linked mix statements logged on a served read, want 1 and 1", len(setPeaks), len(mixPeaks))
 			continue
@@ -191,7 +191,7 @@ func servedLinkedSetAndMixReads(t *testing.T, ctx context.Context, provider cont
 FROM (
 	SELECT query_duration_ms, Settings,
 		has(tables, concat(currentDatabase(), '.work_graph_issue_pr')) AND position(query, 'groupArray(r), groupArray(n), groupArray(t)') > 0 AS is_set,
-		has(tables, concat(currentDatabase(), '.work_unit_investments')) AND position(query, 'uniqExact(m.repo_uuid)') > 0 AS is_mix
+		has(tables, concat(currentDatabase(), '.work_unit_investments')) AND position(query, 'uniqExactIf(m.repo_uuid, NOT m.gated)') > 0 AS is_mix
 	FROM system.query_log WHERE `+queryLogSinceMark+` AND type = 'QueryFinish' AND query_kind = 'Select'
 )`, mark).Scan(&read.setMs, &read.mixMs, &setRuns, &mixRuns, &setReadonly, &mixReadonly); err != nil {
 			t.Fatalf("read the served statements' durations (measurement did not happen): %v", err)
