@@ -1442,6 +1442,8 @@ request, was the limit: raising `ACR_REQUEST_TIMEOUT` alone does not help.
 
 A model attempt that times out during synthesis, with its retries used, is not a 504: the answer is served as `status=degraded` with coverage class `model_call_not_completed`.
 
+In the Info `context fabric model decision` line, `attempt_outcomes` reads `timeout` for an attempt that ended on `ACR_CONTEXT_FABRIC_MODEL_TIMEOUT` with the request still live, and `cancelled` when the request's own context ended it. The terminal `outcome` stays `unavailable` in both cases.
+
 **`ACR_WRITE_TIMEOUT` must be raised alongside it (CHAOS-4330).** This is
 `http.Server.WriteTimeout` — the wire-level deadline for writing the
 response — a completely different budget from `ACR_REQUEST_TIMEOUT`

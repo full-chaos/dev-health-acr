@@ -36,6 +36,8 @@ func (r *edgeCountRows) Scan(dest ...any) error {
 			*d = row[i].(string)
 		case *uint64:
 			*d = row[i].(uint64)
+		case *[]string:
+			*d = row[i].([]string)
 		default:
 			return fmt.Errorf("unsupported scan target %T", dest[i])
 		}
@@ -341,8 +343,8 @@ func TestEveryProducedRelationTypeIsMeasuredOrNamedDeferred(t *testing.T) {
 			if len(missing) != 0 || len(extra) != 0 {
 				t.Fatalf("produced relation types not measured or named deferred: %v; measured or deferred but not produced: %v", missing, extra)
 			}
-			if len(source.DeferredEdgeRelations()) == 0 {
-				t.Fatalf("this leaf defers relation types by name; an empty list means a producer was dropped from the guard")
+			if name == "teams_projects" && len(source.DeferredEdgeRelations()) == 0 {
+				t.Fatalf("this source defers relation types by name; an empty list means a producer was dropped from the guard")
 			}
 		})
 	}

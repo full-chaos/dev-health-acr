@@ -128,10 +128,10 @@ func TestAliasEntryMemoryIsBounded(t *testing.T) {
 	t.Logf("%d byte plant allocated %d MiB", len(body), (after.TotalAlloc-before.TotalAlloc)>>20)
 }
 
-// The scan carries a context: a runaway scan (the class of the D6265 host crashes) is stopped by cancelling the work
-// itself, not by abandoning a goroutine that keeps running.
-func TestScanStopsWhenItsContextIsCancelled(t *testing.T) {
-	const n = 2000
+// ringRoot writes a package of n aliases that copy each other in a ring: with the work budget raised far above its default
+// the scan of it runs until something cancels it.
+func ringRoot(t *testing.T, n int) string {
+	t.Helper()
 	var b strings.Builder
 	b.WriteString(header + "func f(v string) {\n")
 	for i := 0; i < n; i++ {
@@ -146,6 +146,13 @@ func TestScanStopsWhenItsContextIsCancelled(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, "sample.go"), []byte(b.String()), 0o600); err != nil {
 		t.Fatal(err)
 	}
+	return root
+}
+
+// The scan carries a context: a runaway scan (the class of the D6265 host crashes) is stopped by cancelling the work
+// itself, not by abandoning a goroutine that keeps running.
+func TestScanStopsWhenItsContextIsCancelled(t *testing.T) {
+	root := ringRoot(t, 2000)
 	// raise the work budget far above anything the source costs, so only the context can end the scan early
 	defer emitscan.SetWorkBudget(1<<50, 1<<30)()
 

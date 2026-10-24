@@ -112,6 +112,9 @@ func (s *TeamsProjectsSource) DeferredEdgeRelations() []contextfabric.Relationsh
 // ProjectionSourceEdgeCounts implements contextfabric.ProjectionSourceEdgeCounts.
 // Each population is counted over the producer's own joins (edge_counts_relations.go).
 func (s *ClickHouseProjectionSource) ProjectionSourceEdgeCounts(ctx context.Context, orgID string) (map[contextfabric.EdgeCountKey]int64, error) {
+	if s.endedLinksBound > 0 {
+		ctx = withEndedLinkMemo(s.endedLinksBound, ctx)
+	}
 	return runEdgePopulations(ctx, s.client, orgID, clickHouseEdgePopulations)
 }
 
@@ -128,8 +131,8 @@ func (s *ClickHouseProjectionSource) EdgeCountKeys() []contextfabric.EdgeCountKe
 // produced relation types no population measures.
 func (s *ClickHouseProjectionSource) DeferredEdgeRelations() []contextfabric.RelationshipType {
 	measured := map[contextfabric.RelationshipType]bool{}
-	for _, population := range clickHouseEdgePopulations {
-		measured[population.relation] = true
+	for _, key := range s.EdgeCountKeys() {
+		measured[key.Relation] = true
 	}
 	var deferred []contextfabric.RelationshipType
 	for _, relation := range ProducedRelationshipTypes() {
