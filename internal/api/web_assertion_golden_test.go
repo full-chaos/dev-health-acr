@@ -314,6 +314,16 @@ func TestWebAssertionGolden_refusesUserAndWorkloadTokens(t *testing.T) {
 	workloadHeader := map[string]any{"alg": "EdDSA", "typ": "workload+jwt", "kid": "current"}
 	workloadByValid := goldenSign(t, h.valid, workloadHeader, workloadClaims)
 	workloadByForeign := goldenSign(t, h.foreign, workloadHeader, workloadClaims)
+	contractClaims := map[string]any{
+		"iss": "https://auth.example.test", "aud": "auth-service", "sub": "prn_" + strings.Repeat("A", 22), "principal_type": "workload", "jti": "000000000000000000000001",
+		"iat": h.now.Unix(), "nbf": h.now.Unix(), "exp": h.now.Add(300 * time.Second).Unix(),
+	}
+	contractHeader := map[string]any{"alg": "EdDSA", "typ": "workload+jwt", "kid": "auth-example-2026-10"}
+	_, workloadKey, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	contractToken := goldenSign(t, workloadKey, contractHeader, contractClaims)
 	valid := h.signed(http.MethodPost, goldenPacket, body, nil).Header.Get(auth.WebAssertionHeader)
 	rows := []struct {
 		name   string
@@ -326,6 +336,9 @@ func TestWebAssertionGolden_refusesUserAndWorkloadTokens(t *testing.T) {
 		{name: "mismatched-alg workload token as assertion", header: workload},
 		{name: "workload-token.v1 as assertion, valid key", header: workloadByValid},
 		{name: "workload-token.v1 as assertion, foreign key", header: workloadByForeign},
+		{name: "workload-token.v1 untrusted workload key as assertion", header: contractToken},
+		{name: "workload-token.v1 untrusted workload key as bearer", bearer: contractToken},
+		{name: "workload-token.v1 untrusted workload key bearer beside valid assertion", header: valid, bearer: contractToken},
 		{name: "workload-token.v1 as bearer", bearer: workloadByValid},
 		{name: "workload-token.v1 bearer beside valid assertion", header: valid, bearer: workloadByValid},
 		{name: "workload token as bearer", bearer: workload},
@@ -454,6 +467,21 @@ func goldenStringLeaves(value any, out *[]string) {
 	}
 }
 
+func goldenAllStringLeaves(value any, out *[]string) {
+	switch v := value.(type) {
+	case string:
+		*out = append(*out, v)
+	case []any:
+		for _, item := range v {
+			goldenAllStringLeaves(item, out)
+		}
+	case map[string]any:
+		for _, item := range v {
+			goldenAllStringLeaves(item, out)
+		}
+	}
+}
+
 // known gap: CHAOS-11278 (refuse instead of degraded)
 func TestWebAssertionGolden_ForeignOrgRepoScopeReturnsNoForeignData(t *testing.T) {
 	h := newGoldenHarness(t)
@@ -480,13 +508,26 @@ func TestWebAssertionGolden_ForeignOrgRepoScopeReturnsNoForeignData(t *testing.T
 	}
 
 	response := h.do(h.signed(http.MethodPost, goldenPacket, packet, func(c map[string]any) { c["org_id"] = "org_2" }))
+	if response.Code != http.StatusOK && response.Code != http.StatusUnauthorized && response.Code != http.StatusForbidden {
+		t.Fatalf("status = %d", response.Code)
+	}
 	for _, value := range foreignValues {
 		if bytes.Contains(response.Body.Bytes(), []byte(value)) {
 			t.Fatalf("foreign-org response (status %d) contains an org_1 value %q", response.Code, value)
 		}
 	}
-	if response.Code >= 500 {
-		t.Fatalf("status = %d", response.Code)
+	var decoded any
+	if err := json.Unmarshal(response.Body.Bytes(), &decoded); err != nil {
+		t.Fatal(err)
+	}
+	var responseLeaves []string
+	goldenAllStringLeaves(decoded, &responseLeaves)
+	for _, leaf := range responseLeaves {
+		for _, value := range foreignValues {
+			if strings.Contains(leaf, value) {
+				t.Fatalf("foreign-org response leaf contains an org_1 value %q", value)
+			}
+		}
 	}
 	if response.Code != http.StatusOK {
 		return
