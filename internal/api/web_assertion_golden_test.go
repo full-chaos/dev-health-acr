@@ -215,6 +215,7 @@ func TestWebAssertionGolden_refusesEachWrongField(t *testing.T) {
 		{name: "subject missing", claims: func(c map[string]any) { delete(c, "sub") }},
 		{name: "jti empty", claims: func(c map[string]any) { c["jti"] = "" }},
 		{name: "jti missing", claims: func(c map[string]any) { delete(c, "jti") }},
+		// iat and nbf-not-a-number rows are behaviour pins: the lifetime rule and the JSON decode already refuse them.
 		{name: "iat missing", claims: func(c map[string]any) { delete(c, "iat") }},
 		{name: "iat not a number", claims: func(c map[string]any) { c["iat"] = "now" }},
 		{name: "nbf missing", claims: func(c map[string]any) { delete(c, "nbf") }},
