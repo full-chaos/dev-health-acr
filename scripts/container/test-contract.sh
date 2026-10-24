@@ -63,6 +63,7 @@ grep -q 'create-context.sh' "${repo_root}/scripts/container/build.sh"
 # digest; the Buildx CLI version must be pinned to an explicit release.
 ci_workflow="${repo_root}/.github/workflows/ci.yml"
 while IFS= read -r action_ref; do
+  [[ "$action_ref" =~ ^\./\.github/actions/[a-z0-9-]+$ ]] && continue
   [[ "$action_ref" =~ @[0-9a-f]{40}$ ]] || {
     printf 'GitHub action is not pinned to a full commit SHA: %s\n' "$action_ref" >&2
     exit 1

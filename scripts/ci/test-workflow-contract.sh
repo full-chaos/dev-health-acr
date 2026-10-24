@@ -1560,7 +1560,9 @@ check_gomodcache_pins() {
   want="github.com/boumenot/gocover-cobertura@$(sed -n 's/^GOCOVER_COBERTURA_VERSION := //p' "$repo_root/Makefile")"
   grep -qxF "$want" "$pins" || { printf 'go-tool-pins.txt lacks %s (Makefile GOCOVER_COBERTURA_VERSION)\n' "$want" >&2; status=1; }
   got="$(grep -ohE 'golang.org/x/vuln/cmd/govulncheck@v[0-9.]+' "$default_workflow" | sort -u)"
-  grep -qxF "$got" "$pins" && [ -n "$got" ] || { printf 'go-tool-pins.txt lacks the govulncheck pin ci.yml runs (%s)\n' "$got" >&2; status=1; }
+  if [ -z "$got" ] || ! grep -qxF "$got" "$pins"; then
+    printf 'go-tool-pins.txt lacks the govulncheck pin ci.yml runs (%s)\n' "$got" >&2; status=1
+  fi
   return "$status"
 }
 
