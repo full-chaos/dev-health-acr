@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"go/ast"
 	"go/parser"
+	"go/scanner"
 	"go/token"
 	"go/types"
 	"os"
@@ -55,6 +56,7 @@ type Loader struct {
 	Units   map[string]*Unit
 	Roots   []*packages.Package
 	rootIDs map[string]bool
+	shaped  bool
 }
 
 func (l *Loader) isRoot(id string, set bool) bool {
@@ -145,4 +147,48 @@ func (l *Loader) Problems(goos, goarch string) []string {
 	}
 	sort.Strings(out)
 	return out
+}
+
+// Packages returns the root packages as go/packages values filled from the source-checked units, so an analysis that
+// reads Fset, Syntax, Types, TypesInfo, Imports and Errors needs no other change than the load call. Only roots carry
+// Syntax and TypesInfo; a dependency carries its declared types and its own declaration errors. A dependency's
+// function bodies are not checked, so a type error inside one is not reported.
+func (l *Loader) Packages() []*packages.Package {
+	if l.shaped {
+		return l.Roots
+	}
+	l.shaped = true
+	packages.Visit(l.Roots, nil, func(pkg *packages.Package) {
+		pkg.Fset = l.Fset
+		pkg.TypesSizes = l.sizes
+		if pkg.PkgPath == "unsafe" {
+			pkg.Types = types.Unsafe
+			return
+		}
+		unit := l.Units[pkg.ID]
+		if unit == nil {
+			return
+		}
+		pkg.Types = unit.Types
+		if l.isRoot(pkg.ID, false) {
+			pkg.Syntax = unit.Files
+			pkg.TypesInfo = unit.Info
+		}
+		for _, err := range unit.Errs {
+			kind := packages.TypeError
+			if _, parse := err.(scanner.ErrorList); parse {
+				kind = packages.ParseError
+			}
+			e := packages.Error{Msg: err.Error(), Kind: kind}
+			if typeErr, ok := err.(types.Error); ok {
+				e.Pos = l.Fset.Position(typeErr.Pos).String()
+				e.Msg = typeErr.Msg
+			}
+			pkg.Errors = append(pkg.Errors, e)
+		}
+		if len(unit.Errs) > 0 {
+			pkg.IllTyped = true
+		}
+	})
+	return l.Roots
 }
