@@ -3942,7 +3942,7 @@ func resolveSubjects(ctx context.Context, principal storage.Principal, request c
 	// under offersOnly would silently withhold the low-population-kind
 	// offer from the one call whose entire purpose is building offers.
 	var kindScopedSemanticCandidates []contextfabric.SubjectCandidate
-	if confirmedKind == nil && len(resolution.Committed) == 0 {
+	if (confirmedKind == nil || len(candidatesBySubject) == 0) && len(resolution.Committed) == 0 {
 		if hinted := hintedPoolKinds(request, confirmedKind, frame, anchorScope.Kind); len(hinted) > 0 {
 			semantic, semanticErr := applyKindScopedSemanticOffers(ctx, principal, request, deps, terms, hinted, admission)
 			if semanticErr != nil {
@@ -4252,7 +4252,7 @@ func resolveSubjects(ctx context.Context, principal storage.Principal, request c
 	// the wrong authority and why the offer-only finds must be included.
 	// Computed once and reused for both calls below, mirroring declaredKinds'
 	// own "read once, read twice" shape.
-	poolHeld := poolHeldKindsOf(offerFullPool, kindOfferCandidates)
+	poolHeld := poolHeldKindsOf(offerFullPool, append(slices.Clone(kindOfferCandidates), semanticAdmitted...))
 	// beforeOffer is discarded -- only beforeDiag's counts are kept, as the
 	// PRE-repair telemetry twin below. Calling kindOfferMaterial twice
 	// (once per kind list) keeps both diagnostics computed by the
