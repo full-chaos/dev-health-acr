@@ -44,6 +44,10 @@ const (
 	// 70.5 MiB unmerged and 72.8 MiB merged at this shape.
 	memoryBoundMiB = 48.0
 
+	// The OWNED_BY_TEAM project count is the same group statement behind an
+	// outer count; its bound is the paged statement's.
+	ownedByTeamCountBoundMiB = memoryBoundMiB
+
 	// The 12-part layout is bounded by a line in versions per pair. Measured
 	// paged-statement peaks (CI, prod settings): 17.2-17.4 MiB at 100, 18.7-21.4
 	// at 1,000, 31.5-35.3 at 2,000. FINAL over unmerged overlapping parts is
@@ -121,7 +125,7 @@ func measureProjectTeamsFragments(t *testing.T, f *ingestColumnsFixture, query, 
 			if frag.Settings != "" {
 				settings += ", " + frag.Settings
 			}
-			if frag.Paged {
+			if frag.Paged || frag.Capped {
 				client, settings = projectorCapped, fmt.Sprintf("max_bytes_to_read = %d", prodMaxBytesToRead)
 			}
 			rows, err := client.Query(f.ctx, frag.SQL+"\nSETTINGS "+settings+", log_comment = '"+tag+"'", bindings)
@@ -207,10 +211,18 @@ func TestProjectTeamOwnershipStatementMemoryOnTheProdShape(t *testing.T) {
 		t.Run(layout, func(t *testing.T) {
 			m := freshDatabaseFixture(t, fmt.Sprintf("95460000-0000-4000-8000-00000000030%d", i), layout, 767)
 			capped := statementthreads.Capped(m.query, prodMaxMemoryUsage)
-			only := map[string]bool{"ownership_raw_final_x1": true, "asserting_arm": true, "retraction_arm": true, "group_statement": true, "paged_statement": true, "legacy_paged_statement": true}
+			only := map[string]bool{"ownership_raw_final_x1": true, "asserting_arm": true, "retraction_arm": true, "group_statement": true, "paged_statement": true, "legacy_paged_statement": true, "owned_by_team_project_count": true}
 			peaks := measureProjectTeamsFragments(t, m.f, statementthreads.API(m.query), capped, "prod-"+layout, only, memoryShapeRuns)
 			report(t, fmt.Sprintf("%d active parts\n%s", m.parts, fragmentTable(layout, peaks)))
 			paged := peakOf(t, peaks, "paged_statement")
+			// The OWNED_BY_TEAM project count runs under the same per-statement cap
+			// as the paged statement; the cap itself (prodMaxMemoryUsage) fails the
+			// query when it is exceeded, and the bound below keeps a margin.
+			count := peakOf(t, peaks, "owned_by_team_project_count")
+			report(t, fmt.Sprintf("%s: OWNED_BY_TEAM project count peaked at %.2f MiB (median %.2f, highest %.2f), cap %d MiB", layout, count.mib, count.medianMiB, count.maxMiB, prodMaxMemoryUsage>>20))
+			if count.maxMiB > ownedByTeamCountBoundMiB {
+				t.Errorf("%s: the OWNED_BY_TEAM project count peaked at %.2f MiB (lowest read %.2f), bound %.0f MiB", layout, count.maxMiB, count.mib, ownedByTeamCountBoundMiB)
+			}
 			raw := peakOf(t, peaks, "ownership_raw_final_x1")
 			// An absolute bound is a cap margin: the worst warm read decides.
 			if paged.maxMiB > memoryBoundMiB {

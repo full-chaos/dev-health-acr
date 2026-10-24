@@ -40,10 +40,15 @@ func TestEdgeCountCypherPerRelationAndArm(t *testing.T) {
 			key:  contextfabric.EdgeCountKey{Relation: contractsv1.ContextFabricRelationshipLinksPullRequest, Arm: contextfabric.EdgeArmLinkNative},
 			want: []string{"r." + propPropertyPrefix + "link_provenance = $arm"},
 		},
-		"an unknown repository arm is refused": {key: contextfabric.EdgeCountKey{Relation: contractsv1.ContextFabricRelationshipBelongsToRepository, Arm: "mystery"}, wantErr: `has no arm "mystery"`},
-		"an unknown link tier is refused":      {key: contextfabric.EdgeCountKey{Relation: contractsv1.ContextFabricRelationshipLinksPullRequest, Arm: "mystery"}, wantErr: `has no arm "mystery"`},
-		"unknown arm is refused":               {key: contextfabric.EdgeCountKey{Relation: project, Arm: "mystery"}, wantErr: `has no arm "mystery"`},
-		"an arm on a relation without arms":    {key: contextfabric.EdgeCountKey{Relation: contractsv1.ContextFabricRelationshipBelongsToPullRequest, Arm: contextfabric.EdgeArmTransition}, wantErr: "has no arm"},
+		"owned by team arm filters on the source node kind": {
+			key:  contextfabric.EdgeCountKey{Relation: contractsv1.ContextFabricRelationshipOwnedByTeam, Arm: "project"},
+			want: []string{"a." + propKind + " = $arm"},
+		},
+		"an unknown owned by team arm is refused": {key: contextfabric.EdgeCountKey{Relation: contractsv1.ContextFabricRelationshipOwnedByTeam, Arm: "incident"}, wantErr: `has no arm "incident"`},
+		"an unknown repository arm is refused":    {key: contextfabric.EdgeCountKey{Relation: contractsv1.ContextFabricRelationshipBelongsToRepository, Arm: "mystery"}, wantErr: `has no arm "mystery"`},
+		"an unknown link tier is refused":         {key: contextfabric.EdgeCountKey{Relation: contractsv1.ContextFabricRelationshipLinksPullRequest, Arm: "mystery"}, wantErr: `has no arm "mystery"`},
+		"unknown arm is refused":                  {key: contextfabric.EdgeCountKey{Relation: project, Arm: "mystery"}, wantErr: `has no arm "mystery"`},
+		"an arm on a relation without arms":       {key: contextfabric.EdgeCountKey{Relation: contractsv1.ContextFabricRelationshipBelongsToPullRequest, Arm: contextfabric.EdgeArmTransition}, wantErr: "has no arm"},
 	} {
 		tc := tc
 		t.Run(name, func(t *testing.T) {

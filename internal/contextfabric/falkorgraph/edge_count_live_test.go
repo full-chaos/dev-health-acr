@@ -57,7 +57,12 @@ func TestLiveCountEdgesCountsDistinctEdgesPerRelationAndArm(t *testing.T) {
 		r.Properties = map[string]contractsv1.ContextFabricScalarValue{"link_provenance": {String: &name}}
 		return r
 	}
+	team := contextfabric.SubjectRef{Kind: contextfabric.SubjectTeam, CanonicalID: "team:t1", Label: "t1"}
 	rels = append(rels,
+		relationship("relationship_t1", contractsv1.ContextFabricRelationshipOwnedByTeam, workItem("work:1"), team, nil, nil),
+		relationship("relationship_t2", contractsv1.ContextFabricRelationshipOwnedByTeam, project, team, nil, nil),
+		relationship("relationship_t3", contractsv1.ContextFabricRelationshipOwnedByTeam, repoNode, team, nil, nil),
+		relationship("relationship_t4", contractsv1.ContextFabricRelationshipOwnedByTeam, contextfabric.SubjectRef{Kind: contextfabric.SubjectRepository, CanonicalID: "repository:r2", Label: "r2"}, team, nil, nil),
 		relationship("relationship_r1", contractsv1.ContextFabricRelationshipBelongsToRepository, contextfabric.SubjectRef{Kind: contextfabric.SubjectPullRequest, CanonicalID: "pull_request:1", Label: "pr1"}, repoNode, nil, nil),
 		relationship("relationship_r2", contractsv1.ContextFabricRelationshipBelongsToRepository, workItem("work:1"), repoNode, nil, nil),
 		relationship("relationship_r3", contractsv1.ContextFabricRelationshipBelongsToRepository, contextfabric.SubjectRef{Kind: contextfabric.SubjectIncident, CanonicalID: "incident:1", Label: "i1"}, repoNode, nil, nil),
