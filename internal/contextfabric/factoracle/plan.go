@@ -268,6 +268,8 @@ var factPlan = map[string]map[string]string{
 		"sizing_coverage":                              "the share of the mix's work units that carry an issue size; ops serves it on its own response, not in the THEME breakdown",
 		"unsized_unit_count":                           "the work units counted 1 because they carry no issue size; ops serves it on its own response, not in the THEME breakdown",
 		"sizing_note":                                  "the mostly-unsized sentence; ops serves it on its own response, not in the THEME breakdown",
+		"uncategorized_unit_count":                     "the evidence-gated work units the mix leaves out; ops serves it in its evidence-quality stats, not in the THEME breakdown",
+		"uncategorized_unit_share":                     "the evidence-gated share of the scope's work units; ops serves it in its evidence-quality stats, not in the THEME breakdown",
 		"unit_issue_size":                              "the work-unit listing, served only when read_facts is asked for units; the oracle reads the mix, not the listing",
 		"owned_repository_count":                       "a count of the ownership rows; the roll-up compares the mix of the owned repositories",
 		"project_reached_repository_count":             "a count of repositories reached only through an owned project's linked pull requests; the roll-up compares the mix of the owned repositories",
