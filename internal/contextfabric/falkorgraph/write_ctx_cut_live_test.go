@@ -45,16 +45,12 @@ const (
 // classifyCut orders the three instants that make a cut: send < deadline < commit. The caller's return time is
 // not one of them: under load a caller returns late, which says nothing about the server.
 func classifyCut(sent, deadline time.Time, landing probeLanding) cutVerdict {
-	sentMs, deadlineMs := int64(0), deadline.UnixMilli()
-	if !sent.IsZero() {
-		sentMs = sent.UnixMilli()
-	}
 	switch {
-	case sentMs == 0 || sentMs >= deadlineMs:
+	case sent.IsZero() || !sent.Before(deadline):
 		return cutNeverSent
 	case landing.count < 1:
 		return cutNotLanded
-	case landing.atMs <= deadlineMs:
+	case landing.atMs <= deadline.UnixMilli():
 		return cutCommittedBeforeDeadline
 	}
 	return cutMidCommand
