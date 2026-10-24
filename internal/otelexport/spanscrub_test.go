@@ -134,9 +134,9 @@ func TestSpanScrubRedactsAndCapsValuesOfSafeKeys(t *testing.T) {
 	}
 }
 
-func TestSpanScrubServerAddressOnlyOnServerSpans(t *testing.T) {
+func TestSpanScrubExportsNoServerAddressOrPortOnAnySpan(t *testing.T) {
 	attrs := []attribute.KeyValue{attribute.String("server.address", "tenant-x.example.com"), attribute.Int("server.port", 8443), attribute.String("http.request.method", "GET")}
-	for _, kind := range []trace.SpanKind{trace.SpanKindClient, trace.SpanKindInternal, trace.SpanKindProducer} {
+	for _, kind := range []trace.SpanKind{trace.SpanKindServer, trace.SpanKindClient, trace.SpanKindInternal, trace.SpanKindProducer, trace.SpanKindConsumer} {
 		got := attrMap(exportStubs(t, tracetest.SpanStub{Name: "x", SpanKind: kind, Attributes: attrs})[0].Attributes)
 		if _, ok := got["server.address"]; ok {
 			t.Errorf("%v span exported server.address", kind)
@@ -145,9 +145,98 @@ func TestSpanScrubServerAddressOnlyOnServerSpans(t *testing.T) {
 			t.Errorf("%v span exported server.port", kind)
 		}
 	}
-	got := attrMap(exportStubs(t, tracetest.SpanStub{Name: "x", SpanKind: trace.SpanKindServer, Attributes: attrs})[0].Attributes)
-	if got["server.address"] != "tenant-x.example.com" || got["server.port"] != "8443" {
-		t.Errorf("server span lost its own listener: %v", got)
+	// the request Host header is caller-controlled: it must not reach the sink through a real request either
+	exporter, s := newTestExporter(t)
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /v1/ping", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusNoContent) })
+	req := httptest.NewRequest(http.MethodGet, "/v1/ping", nil)
+	req.Host = "customer-secret-host.example:43871"
+	exporter.HTTPHandler(mux).ServeHTTP(httptest.NewRecorder(), req)
+	spans := s.spans.GetSpans()
+	if len(spans) != 1 {
+		t.Fatalf("exported %d spans, want 1", len(spans))
+	}
+	for key, value := range attrMap(spans[0].Attributes) {
+		if strings.Contains(value, "customer-secret-host") || strings.HasPrefix(key, "server.") {
+			t.Errorf("attribute %s=%q carries the request Host", key, value)
+		}
+	}
+}
+
+func TestSpanScrubClearsIncomingTraceState(t *testing.T) {
+	exporter, s := newTestExporter(t)
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /v1/ping", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusNoContent) })
+	req := httptest.NewRequest(http.MethodGet, "/v1/ping", nil)
+	req.Header.Set("traceparent", "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01")
+	req.Header.Set("tracestate", "vendor=customer-secret-4711")
+	exporter.HTTPHandler(mux).ServeHTTP(httptest.NewRecorder(), req)
+	spans := s.spans.GetSpans()
+	if len(spans) != 1 {
+		t.Fatalf("exported %d spans, want 1", len(spans))
+	}
+	sc := spans[0].SpanContext
+	if sc.TraceState().Len() != 0 || strings.Contains(sc.TraceState().String(), "customer-secret") {
+		t.Errorf("trace state exported: %q", sc.TraceState().String())
+	}
+	if sc.TraceID().String() != "0af7651916cd43dd8448eb211c80319c" {
+		t.Errorf("trace id lost: %s", sc.TraceID())
+	}
+	if spans[0].Parent.TraceState().Len() != 0 {
+		t.Errorf("parent trace state exported: %q", spans[0].Parent.TraceState().String())
+	}
+	if spans[0].Parent.SpanID().String() != "b7ad6b7169203331" {
+		t.Errorf("parent span id lost: %s", spans[0].Parent.SpanID())
+	}
+}
+
+func TestSpanScrubDropsNestedAndWrongTypedValues(t *testing.T) {
+	res := resource.NewWithAttributes("", attribute.String("service.name", "acr"),
+		attribute.KeyValue{Key: "nested.resource", Value: attribute.MapValue(attribute.String("field", "customer-secret-value"))},
+		attribute.KeyValue{Key: "bytes.resource", Value: attribute.ByteSliceValue([]byte("customer-secret-value"))})
+	got := exportStubs(t, tracetest.SpanStub{
+		Name: "x", SpanKind: trace.SpanKindServer, Resource: res,
+		Attributes: []attribute.KeyValue{
+			{Key: "acr.tool", Value: attribute.MapValue(attribute.String("field", "customer-secret-value"))},
+			{Key: "acr.result_class", Value: attribute.SliceValue(attribute.StringValue("nested-secret-value"))},
+			{Key: "acr.query_version", Value: attribute.Int64Value(7)},
+			{Key: "http.response.status_code", Value: attribute.StringValue("418")},
+			{Key: "http.request.method", Value: attribute.BoolValue(true)},
+			{Key: "http.route", Value: attribute.StringSliceValue([]string{"/v1/x"})},
+			attribute.Int("http.response.status_code", 200),
+			attribute.String("http.request.method", "GET"),
+		},
+		Events: []sdktrace.Event{{Name: "exception", Attributes: []attribute.KeyValue{{Key: "exception.type", Value: attribute.MapValue(attribute.String("field", "customer-secret-value"))}}}},
+	})[0]
+	attrs := map[string]attribute.Value{}
+	for _, kv := range got.Attributes {
+		attrs[string(kv.Key)] = kv.Value
+	}
+	for _, key := range []string{"acr.tool", "acr.result_class", "acr.query_version", "http.route"} {
+		if _, ok := attrs[key]; ok {
+			t.Errorf("%s with a value of the wrong type was exported: %v", key, attrs[key])
+		}
+	}
+	if v, ok := attrs["http.response.status_code"]; !ok || v.Type() != attribute.INT64 || v.AsInt64() != 200 {
+		t.Errorf("the well-typed status code was not exported: %v", attrs["http.response.status_code"])
+	}
+	if v, ok := attrs["http.request.method"]; !ok || v.AsString() != "GET" {
+		t.Errorf("the well-typed method was not exported: %v", attrs["http.request.method"])
+	}
+	for _, ev := range got.Events {
+		if len(ev.Attributes) != 0 {
+			t.Errorf("an event kept a wrongly typed attribute: %v", ev.Attributes)
+		}
+	}
+	r := attrMap(got.Resource.Attributes())
+	if _, ok := r["nested.resource"]; ok {
+		t.Error("a nested resource value was exported")
+	}
+	if _, ok := r["bytes.resource"]; ok {
+		t.Error("a byte-slice resource value was exported")
+	}
+	if r["service.name"] != "acr" {
+		t.Errorf("resource lost service.name: %v", r)
 	}
 }
 

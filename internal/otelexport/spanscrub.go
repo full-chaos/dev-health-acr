@@ -61,16 +61,34 @@ func scrubValue(kv attribute.KeyValue) attribute.KeyValue {
 }
 
 func (s scrubbedSpan) Attributes() []attribute.KeyValue {
-	kind := s.ReadOnlySpan.SpanKind()
 	var out []attribute.KeyValue
 	for _, kv := range s.ReadOnlySpan.Attributes() {
-		key := string(kv.Key)
-		if !SafeSpanKey(key) || (serverOnlySpanKeys[key] && kind != trace.SpanKindServer) {
+		if want, safe := safeSpanKeys[string(kv.Key)]; !safe || kv.Value.Type() != want {
 			continue
 		}
 		out = append(out, scrubValue(kv))
 	}
 	return out
+}
+
+// SpanContext keeps the trace and span ids and drops the trace state: its text comes from the incoming tracestate header.
+func (s scrubbedSpan) SpanContext() trace.SpanContext {
+	return s.ReadOnlySpan.SpanContext().WithTraceState(trace.TraceState{})
+}
+
+// Parent keeps the ids of the incoming parent and drops its trace state for the same reason.
+func (s scrubbedSpan) Parent() trace.SpanContext {
+	return s.ReadOnlySpan.Parent().WithTraceState(trace.TraceState{})
+}
+
+// plainValue reports a value type that carries no nested keys: nested maps and slices, byte slices and empty values are
+// never exported.
+func plainValue(kv attribute.KeyValue) bool {
+	switch kv.Value.Type() {
+	case attribute.BOOL, attribute.INT64, attribute.FLOAT64, attribute.STRING, attribute.BOOLSLICE, attribute.INT64SLICE, attribute.FLOAT64SLICE, attribute.STRINGSLICE:
+		return true
+	}
+	return false
 }
 
 // Name is one of: "<METHOD> <route template>", "HTTP <METHOD>", "HTTP", a closed internal name, or "span". It is never
@@ -110,7 +128,7 @@ func (s scrubbedSpan) Events() []sdktrace.Event {
 		}
 		ev.Attributes = nil
 		for _, kv := range in[i].Attributes {
-			if safeEventKeys[string(kv.Key)] {
+			if safeEventKeys[string(kv.Key)] && kv.Value.Type() == attribute.STRING {
 				ev.Attributes = append(ev.Attributes, scrubValue(kv))
 			}
 		}
@@ -142,6 +160,9 @@ func (s scrubbedSpan) Resource() *resource.Resource {
 	}
 	var attrs []attribute.KeyValue
 	for _, kv := range in.Attributes() {
+		if !plainValue(kv) {
+			continue
+		}
 		if protected, network := telemetryscrub.KeyClass(string(kv.Key)); protected || network {
 			attrs = append(attrs, attribute.String(string(kv.Key), redactedValue))
 			continue

@@ -109,7 +109,7 @@ Per-organization and per-credential request/resource totals come from the bounde
 
 ## What leaves a span
 
-Exported spans pass through one scrub in `internal/otelexport`: only the attribute keys of `otelexport.SafeSpanKey` leave the process (`server.address` and `server.port` only on server spans), values are redacted for credential shapes and capped, the span name is `METHOD <route template>`, `HTTP METHOD` or a fixed internal name, and events keep only the error type, links keep no attributes, and a status keeps its code without text. Resource attributes are redacted for credential shapes and credential-named keys.
+Exported spans pass through one scrub in `internal/otelexport`: only the attribute keys of `otelexport.SafeSpanKey` leave the process, each with its one value type (no server host or port, no client address, no raw path), string values are redacted for credential shapes and capped, the trace state is cleared (ids are kept), the span name is `METHOD <route template>`, `HTTP METHOD` or a fixed internal name, and events keep only the error type, links keep no attributes, and a status keeps its code without text. Resource attributes are redacted for credential shapes and credential-named keys.
 
 ## SLOs and alerts
 
