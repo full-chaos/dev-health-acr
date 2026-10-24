@@ -174,6 +174,26 @@ func TestStore_getUnknownResultIDIsIndistinguishableFromWrongOrg(t *testing.T) {
 	require.Equal(t, unknownIDErr.Error(), wrongOrgErr.Error(), "wrong-org and truly-missing must produce the identical error")
 }
 
+func TestStore_saveUnderAnotherOrganizationNeverReadsTheOwnersRow(t *testing.T) {
+	ctx := context.Background()
+	db := newInvestigationTestDatabase(t, ctx)
+	store, err := pginvestigation.NewStore(db)
+	require.NoError(t, err)
+	save := func(org string) error {
+		return store.Save(ctx, storage.Principal{OrgID: org}, validResult("result-owned-by-org-1"), nil, nil, contextfabric.TimeAxisKeyFor(contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent}), contextfabric.ReuseRetrievalIdentity{}, contextfabric.ReusePromptVersions{}, contextfabric.ReuseVersionAuthorities{}, 0, "", contextfabric.SemanticStateAbsent(contextfabric.SemanticStateAbsenceTurnEndedBeforeInterpretation))
+	}
+	require.NoError(t, save("org-1"))
+
+	otherErr := save("org-2")
+
+	require.Error(t, otherErr)
+	require.NotContains(t, otherErr.Error(), "organization")
+	var rows int
+	require.NoError(t, db.QueryRowContext(ctx, `SELECT count(*) FROM acr.context_fabric_investigation_results WHERE result_id = $1 AND org_id = $2`, "result-owned-by-org-1", "org-2").Scan(&rows))
+	require.Zero(t, rows)
+	require.NoError(t, save("org-1"), "the owner's byte-identical replay still succeeds")
+}
+
 // TestStore_getRejectsStoredResultThatFailsValidation is the M2 Get-guard
 // probe (Codex adversarial + delta review, CHAOS-3755) for the production
 // store specifically -- memoryinvestigation has its own white-box version
