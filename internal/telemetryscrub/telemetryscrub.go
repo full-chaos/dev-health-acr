@@ -64,6 +64,94 @@ var benignKeys = map[string]bool{
 	"secretaries":                        true,
 }
 
+// typedBenignKeys are exact slog attribute keys (compared after compact()) that look protected and are not,
+// each only for its one value kind: counters, flags and one closed-vocabulary code. Any other kind, any
+// enclosing group, and any key inside an opaque value stays protected.
+var typedBenignKeys = map[string]string{
+	"authorizationdroppedcount":               "int",
+	"repolessauthorizationdroppedcount":       "int",
+	"authorizationgrantexactselectors":        "int",
+	"authorizationgrantownerselectors":        "int",
+	"authorizationbatches":                    "int",
+	"authorizationbatchsize":                  "int",
+	"deviceauthorizations":                    "int",
+	"deviceauthorizationsremaining":           "int",
+	"pass":                                    "int",
+	"evaluatedpass":                           "int",
+	"authorizationgrantmeasured":              "bool",
+	"authorizationgrantorganizationwide":      "bool",
+	"devhealthentitlementtokenfileconfigured": "bool",
+	"coveragebypass":                          "bool",
+	"authorizationreason":                     "string",
+}
+
+var closedValueShape = regexp.MustCompile(`^[a-z0-9_]{1,64}$`)
+
+var (
+	closedValuesMu sync.RWMutex
+	closedValues   = map[string]map[string]bool{}
+)
+
+// RegisterClosedValues sets the exact values a string-kind typed benign key may carry; any other value of
+// that key stays redacted, and a string-kind key with no registered set is always redacted. The owner of the
+// vocabulary calls it once, from init, so the set has one source; a second call for the same key, an empty
+// set, or a value that is not a code ([a-z0-9_], 1 to 64 characters) panics, so the exemption cannot widen.
+func RegisterClosedValues(key string, values []string) {
+	c := compact(key)
+	if typedBenignKeys[c] != "string" {
+		panic("telemetryscrub: " + key + " is not a string-kind typed benign key")
+	}
+	if len(values) == 0 {
+		panic("telemetryscrub: no closed values for " + key)
+	}
+	set := make(map[string]bool, len(values))
+	for _, v := range values {
+		if !closedValueShape.MatchString(v) {
+			panic("telemetryscrub: closed value for " + key + " is not a code shape")
+		}
+		set[v] = true
+	}
+	closedValuesMu.Lock()
+	defer closedValuesMu.Unlock()
+	if _, ok := closedValues[c]; ok {
+		panic("telemetryscrub: closed values for " + key + " already registered")
+	}
+	closedValues[c] = set
+}
+
+func closedValue(c, v string) bool {
+	closedValuesMu.RLock()
+	defer closedValuesMu.RUnlock()
+	return closedValues[c][v]
+}
+
+// BenignKind returns the one value kind ("int", "bool" or "string") for which key is exempt from the key rule, or "".
+func BenignKind(key string) string { return typedBenignKeys[compact(key)] }
+
+func attrKind(v slog.Value) string {
+	switch v.Kind() {
+	case slog.KindInt64:
+		return "int"
+	case slog.KindBool:
+		return "bool"
+	case slog.KindString:
+		return "string"
+	}
+	return ""
+}
+
+// classAttr is classPath for a slog attribute whose value kind is known.
+func classAttr(groups []string, key string, v slog.Value) keyClass {
+	out := classPath(groups, key)
+	if out == classProtected && len(groups) == 0 {
+		c := compact(key)
+		if kind := attrKind(v); kind != "" && typedBenignKeys[c] == kind && (kind != "string" || closedValue(c, v.String())) {
+			return classClean
+		}
+	}
+	return out
+}
+
 var networkSuffixes = []string{"remoteip", "clientip", "clientaddress", "remoteaddr", "remoteaddress"}
 
 var valueShapes = []*regexp.Regexp{
@@ -604,9 +692,9 @@ func tree(v reflect.Value, depth int, b *budget, path []string) any {
 func clean(groups []string, a slog.Attr) bool {
 	switch a.Value.Kind() {
 	case slog.KindString:
-		return classPath(groups, a.Key) == classClean && !mayContainShape(a.Value.String()) && !mayContainPair(a.Value.String())
+		return classAttr(groups, a.Key, a.Value) == classClean && !mayContainShape(a.Value.String()) && !mayContainPair(a.Value.String())
 	case slog.KindInt64, slog.KindUint64, slog.KindFloat64, slog.KindBool, slog.KindDuration, slog.KindTime:
-		return classPath(groups, a.Key) == classClean
+		return classAttr(groups, a.Key, a.Value) == classClean
 	}
 	return false
 }
@@ -624,10 +712,7 @@ func scrubAttr(groups []string, a slog.Attr, b *budget) slog.Attr {
 			a.Value = slog.StringValue(Redacted)
 			return a
 		}
-		inner := groups
-		if a.Key != "" {
-			inner = append(append([]string{}, groups...), a.Key)
-		}
+		inner := append(append([]string{}, groups...), a.Key)
 		group := a.Value.Group()
 		out := make([]slog.Attr, 0, len(group))
 		for _, g := range group {
@@ -636,7 +721,7 @@ func scrubAttr(groups []string, a slog.Attr, b *budget) slog.Attr {
 		a.Value = slog.GroupValue(out...)
 		return a
 	}
-	switch classPath(groups, a.Key) {
+	switch classAttr(groups, a.Key, a.Value) {
 	case classProtected:
 		a.Value = slog.StringValue(Redacted)
 		return a
