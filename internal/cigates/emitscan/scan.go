@@ -757,7 +757,7 @@ func readNames(expr ast.Expr, imports map[string]string) []string {
 				return nil
 			}
 		}
-		if e.Sel.Name == "With" {
+		if isAttachMethod(e.Sel.Name) {
 			return nil
 		}
 		return []string{e.Sel.Name}
@@ -772,6 +772,11 @@ func readNames(expr ast.Expr, imports map[string]string) []string {
 		return out
 	}
 	return nil
+}
+
+// isAttachMethod names the logger methods that attach keys or attributes: a method value of one of them holds that method.
+func isAttachMethod(name string) bool {
+	return name == "With" || name == "WithGroup" || name == "WithAttrs"
 }
 
 // altsOf returns the watched constructors an expression holds: a selector of a watched package, a name already known to
@@ -794,8 +799,8 @@ func (info *pkgInfo) altsOf(expr ast.Expr, imports map[string]string) [][2]strin
 				return [][2]string{{pkg, e.Sel.Name}}
 			}
 		}
-		if e.Sel.Name == "With" {
-			return [][2]string{{"", "With"}} // a method value
+		if isAttachMethod(e.Sel.Name) {
+			return [][2]string{{"", e.Sel.Name}} // a method value
 		}
 		return info.aliases[e.Sel.Name] // a field holding a constructor
 	case *ast.CompositeLit:

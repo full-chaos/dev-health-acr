@@ -27,6 +27,9 @@ func TestSlogAttachmentMethodsAreRead(t *testing.T) {
 		{"handler WithAttrs variable", "func f(h slog.Handler, a slog.Attr) { _ = h.WithAttrs([]slog.Attr{a}) }", "R9"},
 		{"handler WithAttrs variable slice", "func f(h slog.Handler, a []slog.Attr) { _ = h.WithAttrs(a) }", "R9"},
 		{"handler WithAttrs protected constructor", "func f(h slog.Handler, v string) { _ = h.WithAttrs([]slog.Attr{slog.String(\"api_key\", v)}) }", "R1"},
+		{"WithGroup method value", "func f(l *slog.Logger) { wg := l.WithGroup; _ = wg(\"api_key\") }", "R1"},
+		{"WithAttrs method value", "func f(h slog.Handler, v string) { wa := h.WithAttrs; _ = wa([]slog.Attr{{Key: \"password\", Value: slog.StringValue(v)}}) }", "R1"},
+		{"WithGroup held in a struct field", "type hold struct{ wg func(string) *slog.Logger }\nfunc f(l *slog.Logger) { h := hold{wg: l.WithGroup}; _ = h.wg(\"api_key\") }", "R1"},
 		{"handler WithGroup protected key", "func f(h slog.Handler) { _ = h.WithGroup(\"password\") }", "R1"},
 	}
 	for _, tc := range cases {
