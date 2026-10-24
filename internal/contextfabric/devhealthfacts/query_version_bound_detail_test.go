@@ -159,3 +159,17 @@ func TestQueryVersionMovedPastTheFlowViews(t *testing.T) {
 		t.Fatalf("QueryVersion = %q: an answer saved before the flow views (v254 and before) must not be reused", devhealthfacts.QueryVersion)
 	}
 }
+
+// A team that owns a project and reaches no repository is told which project
+// and why no repository exists for it, so an answer stored before it (v255 and
+// before) holds the "owns no repository" cause and must not be reused.
+func TestQueryVersionMovedPastTheTeamProjectOnlyCause(t *testing.T) {
+	const prefix = "devhealthfacts.clickhouse.v"
+	version, ok := strings.CutPrefix(devhealthfacts.QueryVersion, prefix)
+	if !ok {
+		t.Fatalf("QueryVersion = %q, want the %q<n> shape", devhealthfacts.QueryVersion, prefix)
+	}
+	if n, err := strconv.Atoi(version); err != nil || n < 256 {
+		t.Fatalf("QueryVersion = %q: an answer saved before the project-only team cause (v255 and before) must not be reused", devhealthfacts.QueryVersion)
+	}
+}

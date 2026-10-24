@@ -171,6 +171,11 @@ type FamilySample struct {
 	// request's explicit continuation to offer the remembered subject
 	// instead of ending no_match (anchor_binding_follow_up.go).
 	TermlessNamedSubject bool
+	// TermlessScopeMemberKind is set only by resolveFrame, to the member
+	// kind the model itself stated, when its frame was a children_of_scope
+	// with NO anchor terms and I5 (no_anchor_terms) was its only failure.
+	// Read with TermlessNamedSubject by termlessContinuation.
+	TermlessScopeMemberKind SubjectKind
 }
 
 // FamilySampleOutcome is the precedence table's verdict for ONE sample.

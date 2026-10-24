@@ -117,8 +117,8 @@ func declarationName(line string) string {
 
 func TestQueryVersionMovedPastTheEvidenceGatedMix(t *testing.T) {
 	t.Parallel()
-	if QueryVersion <= "devhealthfacts.clickhouse.v255" {
-		t.Fatalf("QueryVersion = %q, want v256 or later -- an answer saved when the investment mix held the uniform prior of evidence-gated units must not be reused", QueryVersion)
+	if QueryVersion <= "devhealthfacts.clickhouse.v256" {
+		t.Fatalf("QueryVersion = %q, want v257 or later -- an answer saved when the investment mix held the uniform prior of evidence-gated units must not be reused", QueryVersion)
 	}
 }
 

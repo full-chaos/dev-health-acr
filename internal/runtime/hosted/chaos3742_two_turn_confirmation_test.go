@@ -18,7 +18,8 @@ package hosted_test
 //   - positive:        confirm the oracle-matching offer -- measures conversion.
 //   - inferred_tier:   inject the oracle's negative value WITHOUT a receipt
 //     (explicit field, Consumer.Surface="mcp" so it lands at
-//     inferred_default/explicit_unattributed, never question_stated).
+//     inferred_default/explicit_unattributed, never question_stated;
+//     member=window lands at question_stated).
 //     CHAOS-4039 v5 measurement contract (team-lead ruling 2026-08-22,
 //     superseding the v4 sol-max ruling 2026-08-20): window retains the
 //     ORIGINAL "ANY commit fails" bar (WindowCommitCount). CHAOS-4040
@@ -3867,7 +3868,7 @@ type twoTurnCaseResult struct {
 	Reused bool `json:"reused"`
 	// TierRoutedCorrectly (inferred_tier arm only) asserts the injected
 	// explicit value actually landed at Source=explicit_unattributed,
-	// Provenance=inferred_default in the echo -- not merely "did not
+	// Provenance=inferred_default in the echo (member=window: Provenance=question_stated) -- not merely "did not
 	// commit" (codex round-1 finding #6: a tier-routing regression that
 	// instead landed the value at question_stated could still fail to
 	// commit for an unrelated census reason, silently passing a commit-only
@@ -4698,7 +4699,7 @@ func twoTurnCaseResultIsAnomalous(res twoTurnCaseResult) bool {
 	// TestChaos3742TwoTurnConfirmationReplay -- every inferred_tier row
 	// that ran (ArmInvalidReason=="") must show the injected value routed
 	// to explicit_unattributed/inferred_default (window's own version:
-	// EffectiveEvidenceWindow.Provenance==inferred_default). A miss here
+	// EffectiveEvidenceWindow.Provenance==question_stated). A miss here
 	// is its own finding, independent of whether the row also committed
 	// correctly.
 	if res.Arm == string(twoTurnArmInferredTier) && res.ArmInvalidReason == "" && !res.TierRoutedCorrectly {
@@ -5660,7 +5661,7 @@ type twoTurnReport struct {
 	// WindowGatedCount counts, of WindowInferredTierRanCount, how many
 	// cases show the ACTUAL CHAOS-4040 gate signature: Turn2Status ==
 	// clarification_required, TierRoutedCorrectly (already proves
-	// EffectiveEvidenceWindow.Provenance == inferred_default), and
+	// EffectiveEvidenceWindow.Provenance == question_stated), and
 	// CommittedCount == 0 together -- not merely "did not commit for
 	// whatever reason". Pass condition: WindowGatedCount ==
 	// WindowInferredTierRanCount -- EVERY window inferred-tier case that
@@ -8504,9 +8505,7 @@ func runTwoTurnInferredTierArm(t *testing.T, ctx context.Context, investigator c
 	// mechanism" framing). Checked directly per member, not inferred from
 	// "did not commit".
 	if isWindow {
-		if result.EffectiveEvidenceWindow != nil && result.EffectiveEvidenceWindow.Provenance == contractsv1.ContextFabricWindowInferredDefault {
-			res.TierRoutedCorrectly = true
-		}
+		res.TierRoutedCorrectly = twoTurnWindowTierRouted(result.EffectiveEvidenceWindow)
 	} else {
 		for _, e := range result.ConfirmedStructure {
 			if string(e.Member) == entry.Member &&
@@ -8521,6 +8520,13 @@ func runTwoTurnInferredTierArm(t *testing.T, ctx context.Context, investigator c
 	res.ResultBytes, res.EstTokens = chaos4386MeasureResult(result)
 	chaos4525StampTerminal(&res, result)
 	return res
+}
+
+// twoTurnWindowTierRouted: an explicit window on surface mcp is committed at
+// question_stated, so that is the tier the inferred_tier arm's window
+// injection must land at.
+func twoTurnWindowTierRouted(w *contractsv1.ContextFabricEffectiveEvidenceWindow) bool {
+	return w != nil && w.Provenance == contractsv1.ContextFabricWindowQuestionStated
 }
 
 // twoTurnInferredTierRequestIDPrefix/twoTurnInferredTierRetryRequestIDPrefix
@@ -10560,7 +10566,7 @@ func TestChaos3742TwoTurnConfirmationReplay(t *testing.T) {
 	// explicit_unattributed/inferred_default.
 	for _, r := range report.Results {
 		if r.Arm == string(twoTurnArmInferredTier) && r.ArmInvalidReason == "" && !r.TierRoutedCorrectly {
-			t.Errorf("case %d member %q: inferred-tier injection did not route to explicit_unattributed/inferred_default in the echo -- tier-routing finding", r.Index, r.Member)
+			t.Errorf("case %d member %q: inferred-tier injection did not route to its expected tier in the echo (explicit_unattributed/inferred_default; window: question_stated) -- tier-routing finding", r.Index, r.Member)
 		}
 	}
 	// D0 controls (design brief lines 958/960: controls carry it on their
