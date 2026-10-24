@@ -72,6 +72,31 @@ func f(l *slog.Logger, e a) { l.Info("m", "pass", e.N) }`, "pass"},
 		{"non-benign key with an unsigned value", `func f(l *slog.Logger) { l.Info("m", "count", uint(1)) }`, ""},
 		{"benign word as a value, not a key", `func f() []any { return []any{"note", "pass"} }`, ""},
 		{"lone key without a value", `func f() []any { return []any{"pass"} }`, ""},
+		{"Attr literal with a string value on an int key", `func f(l *slog.Logger) { l.LogAttrs(context.Background(), slog.LevelInfo, "m", slog.Attr{Key: "authorization_batches", Value: slog.StringValue("x")}) }`, "mismatch:authorization_batches"},
+		{"Attr literal with a bool value in WithAttrs on an int key", `func f(h slog.Handler) { _ = h.WithAttrs([]slog.Attr{{Key: "pass", Value: slog.BoolValue(true)}}) }`, "mismatch:pass"},
+		{"Attr literal with the right value kind", `func f(l *slog.Logger) { l.LogAttrs(context.Background(), slog.LevelInfo, "m", slog.Attr{Key: "authorization_batches", Value: slog.IntValue(1)}) }`, ""},
+		{"Attr literal with an unknown value constructor", `func f(l *slog.Logger) { l.LogAttrs(context.Background(), slog.LevelInfo, "m", slog.Attr{Key: "pass", Value: slog.AnyValue(1)}) }`, "pass"},
+		{"shadowed int function is not the builtin", `func int(x int8) bool { return true }
+func f(l *slog.Logger) { l.Info("m", "authorization_batches", int(1)) }`, "authorization_batches"},
+		{"shadowed len function is not the builtin", `func len(x []int) bool { return true }
+func f(l *slog.Logger, x []int) { l.Info("m", "authorization_batches", len(x)) }`, "authorization_batches"},
+		{"package-qualified selector is not a package field", `type ev struct{ DeadlineExceeded int }
+var _ ev
+func f(l *slog.Logger) { l.Info("m", "pass", context.DeadlineExceeded) }`, "pass"},
+		{"control: same field name on a package value is still int", `type ev struct{ DeadlineExceeded int }
+func f(l *slog.Logger, e ev) { l.Info("m", "pass", e.DeadlineExceeded) }`, ""},
+		{"control: int alias field is an int", `type counter = int
+type ev struct{ Batches counter }
+func f(l *slog.Logger, e ev) { l.Info("m", "authorization_batches", e.Batches) }`, ""},
+		{"chained int alias field is an int", `type base = int
+type counter = base
+type ev struct{ Batches counter }
+func f(l *slog.Logger, e ev) { l.Info("m", "authorization_batches", e.Batches) }`, ""},
+		{"uint alias field is a mismatch", `type counter = uint
+type ev struct{ Batches counter }
+func f(l *slog.Logger, e ev) { l.Info("m", "authorization_batches", e.Batches) }`, "mismatch:authorization_batches"},
+		{"field of an undeclared named type is unprovable", `type ev struct{ Batches elsewhere }
+func f(l *slog.Logger, e ev) { l.Info("m", "authorization_batches", e.Batches) }`, "authorization_batches"},
 		{"key in a map is not a log pair", `func f() map[string]int { return map[string]int{"pass": 1} }`, ""},
 	}
 	for _, c := range cases {
@@ -136,11 +161,39 @@ func TestPinsOfBenignKeysNameTheirKind(t *testing.T) {
 			continue
 		}
 		pinned++
-		if want := "kind=" + kind; !strings.Contains(reason, want) {
+		if want := "kind=" + kind; !hasKindToken(reason, want) {
 			t.Errorf("pins.tsv: %s %s %s must say %q in its reason: %q", rule, fields[1], detail, want, reason)
 		}
 	}
 	if pinned == 0 {
 		t.Error("pins.tsv holds no pin of a benign key: the check reads nothing")
+	}
+}
+
+func hasKindToken(reason, token string) bool {
+	for from := 0; ; {
+		at := strings.Index(reason[from:], token)
+		if at < 0 {
+			return false
+		}
+		end := from + at + len(token)
+		if end == len(reason) || !isTokenChar(reason[end]) {
+			return true
+		}
+		from = end
+	}
+}
+
+func isTokenChar(b byte) bool {
+	return b == '_' || b >= '0' && b <= '9' || b >= 'a' && b <= 'z' || b >= 'A' && b <= 'Z'
+}
+
+func TestKindTokenIsExact(t *testing.T) {
+	for reason, want := range map[string]bool{
+		"x kind=string": true, "kind=string: y": true, "kind=string y": true, "(kind=string)": true, "kind=stringbogus": false, "kind=strings": false, "no token": false,
+	} {
+		if got := hasKindToken(reason, "kind=string"); got != want {
+			t.Errorf("hasKindToken(%q) = %v want %v", reason, got, want)
+		}
 	}
 }

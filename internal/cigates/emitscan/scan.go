@@ -301,6 +301,8 @@ type pkgInfo struct {
 	saturated   map[string]bool               // constants whose folding hit a bound: no value is kept, a use is an unfoldable const key
 	census      map[[3]string]map[string]bool // (kind, file, function) -> constant attribute keys emitted there
 	fieldKinds  map[string]string             // struct field name -> value kind every declaration of that name in the package agrees on ("mixed" when they differ)
+	declared    map[string]bool               // every name the package binds itself (types, functions, variables, parameters): a builtin spelling is the builtin only when absent
+	typeDecls   map[string]ast.Expr           // package type name -> the aliased type for an alias, nil for a defined type
 	budget      *budget
 }
 
@@ -342,17 +344,56 @@ func packageInfo(ctx context.Context, group []parsedFile) *pkgInfo {
 		})
 	}
 	info := &pkgInfo{consts: map[string][]string{}, rawFuncs: map[string]bool{}, constNames: map[string]bool{},
-		stringTypes: map[string]bool{}, aliases: map[string][][2]string{}, saturated: map[string]bool{}, census: map[[3]string]map[string]bool{}, fieldKinds: map[string]string{}, budget: &budget{limit: workBase + workPerNode*nodes, ctx: ctx}}
+		stringTypes: map[string]bool{}, aliases: map[string][][2]string{}, saturated: map[string]bool{}, census: map[[3]string]map[string]bool{}, fieldKinds: map[string]string{}, declared: map[string]bool{}, typeDecls: map[string]ast.Expr{}, budget: &budget{limit: workBase + workPerNode*nodes, ctx: ctx}}
 	for _, parsed := range group {
 		ast.Inspect(parsed.file, func(node ast.Node) bool {
-			if spec, ok := node.(*ast.TypeSpec); ok {
-				if ident, isIdent := spec.Type.(*ast.Ident); isIdent && ident.Name == "string" {
-					info.stringTypes[spec.Name.Name] = true
+			switch n := node.(type) {
+			case *ast.TypeSpec:
+				info.declared[n.Name.Name] = true
+				if n.Assign.IsValid() {
+					info.typeDecls[n.Name.Name] = n.Type
+				} else {
+					info.typeDecls[n.Name.Name] = nil
+				}
+				if ident, isIdent := n.Type.(*ast.Ident); isIdent && ident.Name == "string" {
+					info.stringTypes[n.Name.Name] = true
+				}
+			case *ast.FuncDecl:
+				if n.Recv == nil {
+					info.declared[n.Name.Name] = true
+				}
+			case *ast.ValueSpec:
+				for _, name := range n.Names {
+					info.declared[name.Name] = true
+				}
+			case *ast.AssignStmt:
+				if n.Tok == token.DEFINE {
+					for _, lhs := range n.Lhs {
+						if ident, isIdent := lhs.(*ast.Ident); isIdent {
+							info.declared[ident.Name] = true
+						}
+					}
+				}
+			case *ast.FuncType:
+				for _, list := range []*ast.FieldList{n.Params, n.Results} {
+					if list == nil {
+						continue
+					}
+					for _, field := range list.List {
+						for _, name := range field.Names {
+							info.declared[name.Name] = true
+						}
+					}
 				}
 			}
+			return true
+		})
+	}
+	for _, parsed := range group {
+		ast.Inspect(parsed.file, func(node ast.Node) bool {
 			if st, ok := node.(*ast.StructType); ok && info.budget.charge(1) {
 				for _, field := range st.Fields.List {
-					kind := typeKind(field.Type)
+					kind := info.typeKind(field.Type, 0)
 					for _, name := range field.Names {
 						if prev, seen := info.fieldKinds[name.Name]; seen && prev != kind {
 							kind = "mixed"
@@ -966,9 +1007,34 @@ func (s *fileScan) attrFields(lit *ast.CompositeLit) {
 		return
 	}
 	s.logKey(key, value, lit.Pos())
+	s.benignPair(key, s.attrValueKind(value), lit.Pos())
 	if value != nil {
 		s.emitValue(value, lit.Pos())
 	}
+}
+
+// attrValueKind is the kind of the slog.Value an Attr literal holds when it is built by a typed slog constructor;
+// anything else (a variable, slog.AnyValue, a missing value) is "" (unprovable).
+func (s *fileScan) attrValueKind(value ast.Expr) string {
+	call, ok := value.(*ast.CallExpr)
+	if !ok {
+		return ""
+	}
+	if pkg, name, found := s.qualified(call.Fun); found && pkg == "slog" {
+		switch name {
+		case "StringValue":
+			return "string"
+		case "IntValue", "Int64Value":
+			return "int"
+		case "BoolValue":
+			return "bool"
+		case "Uint64Value":
+			return "uint"
+		case "Float64Value":
+			return "float"
+		}
+	}
+	return ""
 }
 
 func (s *fileScan) tainted(name string) bool {
@@ -1853,13 +1919,30 @@ func (s *fileScan) discardsOutput(call *ast.CallExpr) bool {
 }
 
 // typeKind is the slog value kind a Go type expression boxes to: "int" (int..int64), "bool", "string", "uint",
-// "float", or "other" for a named type, pointer or anything else (slog.Any keeps those as KindAny).
-func typeKind(expr ast.Expr) string {
+// "float", or "other" for a defined type, pointer or anything else (slog.Any keeps those as KindAny). A package alias
+// takes the kind of its target; a name the package does not declare and Go does not predeclare is "" (unprovable).
+func (p *pkgInfo) typeKind(expr ast.Expr, depth int) string {
 	ident, ok := expr.(*ast.Ident)
 	if !ok {
 		return "other"
 	}
-	switch ident.Name {
+	if target, isType := p.typeDecls[ident.Name]; isType {
+		if target == nil {
+			return "other"
+		}
+		if depth > 8 {
+			return ""
+		}
+		return p.typeKind(target, depth+1)
+	}
+	if p.declared[ident.Name] {
+		return ""
+	}
+	return builtinKind(ident.Name)
+}
+
+func builtinKind(name string) string {
+	switch name {
 	case "int", "int8", "int16", "int32", "int64":
 		return "int"
 	case "bool":
@@ -1871,7 +1954,7 @@ func typeKind(expr ast.Expr) string {
 	case "float32", "float64":
 		return "float"
 	}
-	return "other"
+	return ""
 }
 
 func slogConstructorKind(name string) string {
@@ -1921,7 +2004,7 @@ func (s *fileScan) valueKind(expr ast.Expr) string {
 			return "float"
 		}
 	case *ast.Ident:
-		if e.Name == "true" || e.Name == "false" {
+		if (e.Name == "true" || e.Name == "false") && !s.pkg.declared[e.Name] {
 			return "bool"
 		}
 	case *ast.UnaryExpr:
@@ -1942,18 +2025,22 @@ func (s *fileScan) valueKind(expr ast.Expr) string {
 			}
 		}
 	case *ast.CallExpr:
-		if ident, ok := e.Fun.(*ast.Ident); ok {
+		if ident, ok := e.Fun.(*ast.Ident); ok && !s.pkg.declared[ident.Name] {
 			switch ident.Name {
 			case "len", "cap":
 				return "int"
-			case "int", "int8", "int16", "int32", "int64", "uint", "uint8", "uint16", "uint32", "uint64", "uintptr",
-				"float32", "float64", "bool", "string":
-				if len(e.Args) == 1 && !s.pkg.stringTypes[ident.Name] {
-					return typeKind(ident)
+			default:
+				if kind := builtinKind(ident.Name); kind != "" && len(e.Args) == 1 {
+					return kind
 				}
 			}
 		}
 	case *ast.SelectorExpr:
+		if recv, isIdent := e.X.(*ast.Ident); isIdent {
+			if _, imported := s.imports[recv.Name]; imported {
+				return ""
+			}
+		}
 		if kind, ok := s.pkg.fieldKinds[e.Sel.Name]; ok && kind != "mixed" {
 			return kind
 		}
