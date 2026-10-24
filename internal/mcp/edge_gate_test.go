@@ -253,7 +253,7 @@ func TestEdgeGateLogsTheRefusalDecisionAndAddress(t *testing.T) {
 	if last == nil {
 		t.Fatalf("no request line in %s", e.logs.Bytes())
 	}
-	if last["gate_decision"] != "failure_budget" || last["client_ip"] != "203.0.113.40" || last["auth_outcome"] != "rate_limited" || last["level"] != "INFO" {
+	if last["gate_decision"] != "failure_budget" || last["client_ip"] != "203.0.113.0/24" || last["auth_outcome"] != "rate_limited" || last["level"] != "INFO" {
 		t.Fatalf("request line = %v", last)
 	}
 }

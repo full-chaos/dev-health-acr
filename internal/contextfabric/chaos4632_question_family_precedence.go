@@ -165,6 +165,17 @@ type FamilySample struct {
 	// nothing, and the distinction is the whole point of the
 	// FamilyIncompatibilityUnrecognized reason.
 	ModelFamilyUnrecognized bool
+	// TermlessNamedSubject is set only by resolveFrame, when the model's
+	// frame was a named_subject with no terms and I3 (no_terms) was its
+	// ONLY failure. No table row reads it. The engine reads it with the
+	// request's explicit continuation to offer the remembered subject
+	// instead of ending no_match (anchor_binding_follow_up.go).
+	TermlessNamedSubject bool
+	// TermlessScopeMemberKind is set only by resolveFrame, to the member
+	// kind the model itself stated, when its frame was a children_of_scope
+	// with NO anchor terms and I5 (no_anchor_terms) was its only failure.
+	// Read with TermlessNamedSubject by termlessContinuation.
+	TermlessScopeMemberKind SubjectKind
 }
 
 // FamilySampleOutcome is the precedence table's verdict for ONE sample.

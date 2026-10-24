@@ -1321,7 +1321,17 @@ import (
 // work scope), the legacy rows counting in both. Before the ops writer stores
 // the views every row is a legacy row and every value is unchanged; an answer
 // saved under v254 would hold the sum of two views once the writer runs.
-const QueryVersion = "devhealthfacts.clickhouse.v255"
+//
+// v255 -> v256: a team that owns a project but reaches no repository (its
+// issues link no pull request) is told "the team owns project X; no linked pull
+// request reaches a repository" in place of "owns no repository in synced
+// ownership". A stored answer holds the old cause text.
+// v256 -> v257: an Investment mix, its unit counts and its unit listing leave
+// out a work unit whose latest categorization stopped at the evidence gate
+// (insufficient_evidence, no_text_sources) and count it in
+// uncategorized_unit_count. An answer saved under v256 holds the fixed uniform
+// prior of those units in its theme shares.
+const QueryVersion = "devhealthfacts.clickhouse.v257"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each

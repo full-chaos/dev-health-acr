@@ -152,13 +152,15 @@ func TestEdgeCountKeysAreTheKeysTheSourceReturns(t *testing.T) {
 	if len(disabled.EdgeCountKeys()) != 0 {
 		t.Fatalf("a disabled source declares nothing")
 	}
-	review, _ := NewClickHouseProjectionSource(&edgeCountClient{rows: map[string][][]any{"git_pull_request_reviews": {{uint64(1)}}}})
-	got, err := review.ProjectionSourceEdgeCounts(context.Background(), "org-a")
-	if err != nil || len(review.EdgeCountKeys()) != 1 || len(got) != 1 {
-		t.Fatalf("%v %v %v", review.EdgeCountKeys(), got, err)
+	main, _ := NewClickHouseProjectionSource(&edgeCountClient{rows: map[string][][]any{"git_pull_request_reviews": {{"", uint64(1)}}}})
+	got, err := main.ProjectionSourceEdgeCounts(context.Background(), "org-a")
+	if err != nil || len(main.EdgeCountKeys()) != len(got) {
+		t.Fatalf("%v %v %v", main.EdgeCountKeys(), got, err)
 	}
-	if _, ok := got[review.EdgeCountKeys()[0]]; !ok {
-		t.Fatalf("the declared review key must be the returned one")
+	for _, key := range main.EdgeCountKeys() {
+		if _, ok := got[key]; !ok {
+			t.Fatalf("declared key %+v is not in the returned map", key)
+		}
 	}
 }
 
@@ -245,9 +247,9 @@ func TestDisabledTeamsProjectsSourceMeasuresAndDefersNothing(t *testing.T) {
 	}
 }
 
-func TestClickHouseSourceEdgeCountsAreTheReviewCount(t *testing.T) {
+func TestClickHouseSourceEdgeCountsShareTheReviewNodeCountStatement(t *testing.T) {
 	t.Parallel()
-	client := &edgeCountClient{rows: map[string][][]any{"git_pull_request_reviews": {{uint64(412)}}}}
+	client := &edgeCountClient{rows: map[string][][]any{"git_pull_request_reviews": {{"", uint64(412)}}}}
 	source, err := NewClickHouseProjectionSource(client)
 	if err != nil {
 		t.Fatal(err)
@@ -256,12 +258,16 @@ func TestClickHouseSourceEdgeCountsAreTheReviewCount(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := contextfabric.EdgeCountKey{Relation: contractsv1.ContextFabricRelationshipBelongsToPullRequest}
-	if len(counts) != 1 || counts[want] != 412 {
-		t.Fatalf("one measured population, the distinct reviews: %+v", counts)
+	review := contextfabric.EdgeCountKey{Relation: contractsv1.ContextFabricRelationshipBelongsToPullRequest}
+	if counts[review] != 412 {
+		t.Fatalf("the review population is the distinct reviews: %+v", counts)
 	}
-	if got := client.statements[len(client.statements)-1]; got != pullRequestReviewCountSQL {
-		t.Fatalf("the edge count must share the review node count statement, got:\n%s", got)
+	shared := false
+	for _, statement := range client.statements {
+		shared = shared || strings.Contains(statement, pullRequestReviewCountSQL)
+	}
+	if !shared {
+		t.Fatal("the review edge count must embed the review node count statement")
 	}
 	var kindStatement string
 	for _, st := range clickHouseKindCountStatements {
@@ -285,7 +291,7 @@ func TestEveryProducedRelationTypeIsMeasuredOrNamedDeferred(t *testing.T) {
 	}{
 		"clickhouse": {
 			produced: ProducedRelationshipTypes(),
-			counts:   map[string][][]any{"git_pull_request_reviews": {{uint64(1)}}},
+			counts:   map[string][][]any{"git_pull_request_reviews": {{"", uint64(1)}}},
 		},
 		"teams_projects": {
 			produced: TeamsProjectsRelationshipTypes(),

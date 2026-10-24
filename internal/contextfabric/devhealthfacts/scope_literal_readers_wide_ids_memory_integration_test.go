@@ -95,8 +95,8 @@ func scopeLiteralRowUnits(name string, row readers.RowScanner) (int, error) {
 		var unit []string
 		var effort, feature, operational, maintenance, quality, risk []float64
 		var from []time.Time
-		var sized []uint8
-		err := row.Scan(&unit, &effort, &feature, &operational, &maintenance, &quality, &risk, &from, &sized)
+		var sized, gated []uint8
+		err := row.Scan(&unit, &effort, &feature, &operational, &maintenance, &quality, &risk, &from, &sized, &gated)
 		return len(unit), err
 	case "project_native_bugfix_values":
 		var unit []string

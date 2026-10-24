@@ -1045,6 +1045,28 @@ var KindCoverageFloor = Event{
 	},
 }
 
+// KindScopedSemantic is the Info line (graphrank/tracer.go, case
+// "kind_scoped_semantic", CHAOS-10941) for the offer-only kind-scoped semantic
+// arm. Its presence means the arm ran (a hinted repository/project/team kind
+// and a configured hook); result_count=0 is a measured miss, truncated says the
+// hook cut its own result at the limit, authz_dropped counts finds the
+// principal's repository scope removed. None of the three feeds a decision.
+var KindScopedSemantic = Event{
+	ID:                 "graphrank.kind_scoped_semantic",
+	Msg:                "context fabric resolution trace: kind scoped semantic",
+	Level:              LevelInfo,
+	Multiplicity:       MultiplicityZeroOrOnePerRequest,
+	Attribution:        []string{"request_id"},
+	BoundedAggregation: "at most one line per resolveSubjects call -- gated on a confirmed-kind-free, uncommitted resolution with a hinted repository/project/team kind and a non-nil KindScopedSemantic hook; CertifyAbsent asserts the case where the arm never ran.",
+	Fields: []Field{
+		{Key: "request_id", Type: FieldString, Presence: PresenceRequired},
+		{Key: "stage", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: []string{"kind_scoped_semantic"}},
+		{Key: "result_count", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "truncated", Type: FieldBool, Presence: PresenceRequired},
+		{Key: "authz_dropped", Type: FieldInt, Presence: PresenceRequired},
+	},
+}
+
 // ConfirmedKindRescue is the Info line (graphrank/tracer.go, case
 // "confirmed_kind_rescue", CHAOS-4132) reporting the confirmed-kind
 // rescue's own operator-visible half -- once per resolution; its own
@@ -5446,7 +5468,7 @@ var All = []Event{
 	WorkItemAuthorizationGap,
 	RankedCutSummary, AnchorSlotDisplaced, DecisionSummary, Search, KindOfferWithheld,
 	Corroboration, CorroborationSummary, ReservedKindAdmitted, OfferPool, OfferPoolSummary,
-	Decision, SearchQuestion, AliasLookup, AnchorPool, KindCoverageFloor, ConfirmedKindRescue,
+	Decision, SearchQuestion, AliasLookup, AnchorPool, KindCoverageFloor, ConfirmedKindRescue, KindScopedSemantic,
 	IdentityUniverse, KindHintSearch, ExactNameSearch, AnchorOffer,
 	AnchorKindWithheld, AnchorKindWithheldSummary, WindowContinuationDecision, RememberedWindowAxis,
 	// CHAOS-5636: KindOffer/ConfirmedKindScope

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/full-chaos/dev-health-acr/internal/telemetryscrub"
 	"log/slog"
 	"maps"
 	"sort"
@@ -143,7 +144,7 @@ func ExecuteCatalogObserved(ctx context.Context, executor SourceQueryExecutor, p
 						cause = unwrapped
 					}
 					reason = "freshness read failed"
-					attrs = append(attrs, "phase", string(sourceQueryFailurePhase(ferr)), "error", cause.Error())
+					attrs = append(attrs, "phase", string(sourceQueryFailurePhase(ferr)), "error", telemetryscrub.ErrorClass(cause))
 				} else {
 					attrs = append(attrs, "evidence_rows", len(rows))
 				}
@@ -312,7 +313,7 @@ func (r *ingestReads) unreadable(ctx context.Context, source string, err error) 
 	if unwrapped := errors.Unwrap(err); unwrapped != nil {
 		cause = unwrapped
 	}
-	attrs := []any{"source", source, "phase", string(sourceQueryFailurePhase(err)), "error", cause.Error()}
+	attrs := []any{"source", source, "phase", string(sourceQueryFailurePhase(err)), "error", telemetryscrub.ErrorClass(cause)}
 	if r.plan.RequestID != "" {
 		attrs = append(attrs, "request_id", r.plan.RequestID)
 	}

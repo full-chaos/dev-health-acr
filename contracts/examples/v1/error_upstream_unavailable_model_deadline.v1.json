@@ -1,0 +1,13 @@
+{
+  "schema_version": "error.v1",
+  "request_id": "req_01J0ACR006",
+  "error": {
+    "code": "upstream_unavailable",
+    "message": "A Context Fabric model call exceeded ACR_CONTEXT_FABRIC_MODEL_TIMEOUT before the request deadline",
+    "http_status": 504,
+    "retryable": true,
+    "details": {
+      "deadline": "model"
+    }
+  }
+}

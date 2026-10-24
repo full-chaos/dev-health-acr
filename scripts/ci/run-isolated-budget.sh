@@ -69,7 +69,7 @@ guard_args=("$budget" "$out")
 if [ -n "$json_out" ]; then guard_args=(--json "$budget" "$out"); fi
 "$guard" "${guard_args[@]}" || guard_rc=$?
 if [ "$guard_rc" -ne 0 ]; then
-  printf '::error::%s: package test time failed the 85%% guard of its %ss budget; rebalance the heavy-test list or retune the budget\n' "$label" "$budget"
+  printf '::error::%s: the budget guard failed (a package over 85%% of its %ss budget, or a test over the per-test limit); see the lines above\n' "$label" "$budget"
 fi
 if [ "$status" -ne 0 ]; then exit "$status"; fi
 exit "$guard_rc"

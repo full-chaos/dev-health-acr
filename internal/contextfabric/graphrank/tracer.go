@@ -394,6 +394,14 @@ func (t SlogResolutionTracer) Trace(event ResolutionTraceEvent) {
 			"fired", event.ConfirmedKindRescueFired,
 			"result_count", event.ConfirmedKindRescueResultCount,
 			"truncated", event.ConfirmedKindRescueTruncated)
+	case "kind_scoped_semantic":
+		// CHAOS-10941: presence means the offer-only semantic arm ran;
+		// result_count=0 is a measured miss. Counts and bools only.
+		t.logger.InfoContext(ctx, "context fabric resolution trace: kind scoped semantic",
+			"request_id", contextfabric.SanitizeLogAttr(event.RequestID), "stage", contextfabric.SanitizeLogAttr(event.Stage),
+			"result_count", event.KindScopedSemanticResultCount,
+			"truncated", event.KindScopedSemanticTruncated,
+			"authz_dropped", event.KindScopedSemanticAuthzDropped)
 	case "kind_offer":
 		// CHAOS-4012 v20: the operator-visible half of kindOfferMaterial's
 		// own suppression check -- this event fires on EVERY resolution

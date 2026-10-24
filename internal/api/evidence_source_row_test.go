@@ -45,7 +45,9 @@ type sourceRowTables struct {
 	// orgRows are organization-level rows by (query, locator); gate is the
 	// subject gate the resolver is built with (nil: none composed).
 	orgRows map[string][]contextpacket.OrganizationRowReference
-	gate    sourcerow.SubjectGate
+	// discoveries are the repositories a discovered row (an incident) maps to, by entity id.
+	discoveries map[string][]contractsv1.ResolvedScope
+	gate        sourcerow.SubjectGate
 }
 
 func (s *sourceRowTables) RepositoryByID(_ context.Context, orgID, repoID string) ([]contractsv1.ResolvedScope, error) {
@@ -61,6 +63,9 @@ func (s *sourceRowTables) RepositoryByID(_ context.Context, orgID, repoID string
 
 func (s *sourceRowTables) SourceRowRepositories(_ context.Context, orgID string, discovery contextpacket.SourceRowDiscovery, entityID string) ([]contractsv1.ResolvedScope, error) {
 	s.reads = append(s.reads, "discover:"+orgID+":"+string(discovery)+":"+entityID)
+	if scopes, ok := s.discoveries[entityID]; ok {
+		return scopes, s.err
+	}
 	return []contractsv1.ResolvedScope{}, s.err
 }
 
@@ -764,5 +769,177 @@ func TestEvidenceRouteRowKeyedRefWithoutResultIDNeverFallsBackToAStoredResult(t 
 	}
 	if rec := get(teamRef, ""); rec.Code != http.StatusOK {
 		t.Fatalf("unscoped team ref keeps the legacy record path: status = %d: %s", rec.Code, rec.Body.String())
+	}
+}
+
+// withKindRow seeds the one source row of a repository-anchored kind: ref is
+// the row's whole ref, entityID its source entity id, query and entityType the
+// catalog statement that reads it.
+func (s *sourceRowTables) withKindRow(repoID, slug, locator, query, entityType, entityID string) *sourceRowTables {
+	s.repos[repoID] = slug
+	ref := locator
+	s.rows[repoID+"|"+query+"|"+locator] = []contextpacket.EvidenceReference{{RepoSlug: slug, Excerpt: "current", Evidence: contractsv1.EvidenceRef{
+		SchemaVersion: contractsv1.EvidenceRefSchema, EvidenceRefID: ref, SourceVersion: query,
+		Source:     contractsv1.EvidenceSource{System: "dev_health", EntityType: entityType, EntityID: entityID, DisplayLabel: "row"},
+		Provenance: "native", Confidence: 1, Citation: "current", ObservedAt: time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC), Availability: contractsv1.EvidenceAvailable,
+	}}}
+	return s
+}
+
+type rowKeyedKindCase struct {
+	name       string
+	kind       contractsv1.ContextFabricEvidenceEntityType
+	ref        func(repoID string) string
+	locator    string
+	query      string
+	entityType string
+	entityID   func(repoID string) string
+}
+
+func rowKeyedKindCases() []rowKeyedKindCase {
+	return []rowKeyedKindCase{
+		{"repository", contractsv1.ContextFabricEvidenceEntityRepository,
+			func(repo string) string {
+				return contractsv1.EvidenceRefID(contractsv1.ContextFabricEvidenceEntityRepository, repo)
+			},
+			"", "repository_freshness.v1", "repository", func(repo string) string { return repo }},
+		{"ci", contractsv1.ContextFabricEvidenceEntityCI,
+			func(repo string) string {
+				return contractsv1.EvidenceRefID(contractsv1.ContextFabricEvidenceEntityCI, repo+":run-1")
+			},
+			"acr:v1:ci:run-1", "ci_pipeline_runs.v1", "ci_pipeline_run", func(string) string { return "run-1" }},
+		{"deployment", contractsv1.ContextFabricEvidenceEntityDeployment,
+			func(repo string) string {
+				return contractsv1.EvidenceRefID(contractsv1.ContextFabricEvidenceEntityDeployment, repo+":dep-1")
+			},
+			"acr:v1:deployment:dep-1", "deployments.v1", "deployment", func(string) string { return "dep-1" }},
+		{"review.v2", contractsv1.ContextFabricEvidenceEntityReviewV2,
+			func(repo string) string {
+				return contractsv1.EvidenceRefID(contractsv1.ContextFabricEvidenceEntityReviewV2, repo+":532:rev-9")
+			},
+			"", "pull_request_reviews.v2", "pull_request_review", func(repo string) string { return repo + ":532:rev-9" }},
+	}
+}
+
+// Every repository-anchored kind is expanded from its source row without a
+// result_id; an out-of-grant row and an absent row answer with the same bytes;
+// a stored result that cites the ref is never served in place of a missing
+// row, and still answers when its result_id is given.
+func TestEvidenceRouteRepositoryAnchoredRefsExpandWithoutResultID(t *testing.T) {
+	for _, tc := range rowKeyedKindCases() {
+		t.Run(tc.name, func(t *testing.T) {
+			grantedRef, secretRef := tc.ref(sourceRowGrantedRepoID), tc.ref(sourceRowSecretRepoID)
+			locator := func(ref string) string {
+				if tc.locator != "" {
+					return tc.locator
+				}
+				return ref
+			}
+			store := memoryinvestigation.NewStore()
+			seedResult3355(t, store, "org_1", citingStoredResult("result_row_keyed_"+tc.name, grantedRef, secretRef))
+			serve := func(tables *sourceRowTables, ref, resultID string) *httptest.ResponseRecorder {
+				app, token := sourceRowApp(t, tables, store, &bytes.Buffer{})
+				rec := httptest.NewRecorder()
+				request := scopedEvidenceRequest(t, token, ref, resultID)
+				request.Header.Set("X-Request-ID", "req_6180000000000000000000000000beef")
+				app.Handler().ServeHTTP(rec, request)
+				return rec
+			}
+			granted := newSourceRowTables().withKindRow(sourceRowGrantedRepoID, hostedTestRepository, locator(grantedRef), tc.query, tc.entityType, tc.entityID(sourceRowGrantedRepoID))
+			rec := serve(granted, grantedRef, "")
+			if rec.Code != http.StatusOK {
+				t.Fatalf("granted row without result_id: status %d: %s", rec.Code, rec.Body.String())
+			}
+			var expanded contractsv1.ExpandedEvidence
+			if err := json.Unmarshal(rec.Body.Bytes(), &expanded); err != nil {
+				t.Fatal(err)
+			}
+			if expanded.Evidence.EvidenceRefID != grantedRef || expanded.Evidence.Source.System != "dev_health" || expanded.Evidence.Metadata["record"] != "source_row" {
+				t.Fatalf("not the source row: %+v", expanded.Evidence)
+			}
+
+			ungranted := serve(newSourceRowTables().withKindRow(sourceRowSecretRepoID, sourceRowSecretSlug, locator(secretRef), tc.query, tc.entityType, tc.entityID(sourceRowSecretRepoID)), secretRef, "")
+			absent := serve(newSourceRowTables(), secretRef, "")
+			unseeded := serve(newSourceRowTables(), grantedRef, "")
+			for name, got := range map[string]*httptest.ResponseRecorder{"ungranted": ungranted, "unseeded": unseeded} {
+				if got.Code != http.StatusNotFound || absent.Code != http.StatusNotFound {
+					t.Fatalf("%s status %d, absent %d: %s", name, got.Code, absent.Code, got.Body.String())
+				}
+				if !bytes.Equal(got.Body.Bytes(), absent.Body.Bytes()) || !reflect.DeepEqual(got.Header(), absent.Header()) {
+					t.Fatalf("%s differs from absent:\n %s %v\n %s %v", name, got.Body.String(), got.Header(), absent.Body.String(), absent.Header())
+				}
+			}
+
+			if rec := serve(newSourceRowTables(), grantedRef, "result_row_keyed_"+tc.name); rec.Code != http.StatusOK {
+				t.Fatalf("scoped ref with an absent row: status %d, want 200 from the stored result: %s", rec.Code, rec.Body.String())
+			}
+		})
+	}
+}
+
+// An incident ref is expanded from its source row without a result_id when the
+// caller may read a repository the incident's service maps to. An incident
+// mapped only to an ungranted repository, to no repository, to more
+// repositories than the bound, or absent, answers with the bytes of an absent
+// ref; a stored result citing the ref is not served unscoped.
+func TestEvidenceRouteIncidentRefExpandsWithoutResultID(t *testing.T) {
+	ref := contractsv1.EvidenceRefID(contractsv1.ContextFabricEvidenceEntityIncident, "INC-1")
+	locator := ref
+	scope := func(id, slug string) contractsv1.ResolvedScope {
+		return contractsv1.ResolvedScope{RepoID: id, RepoSlug: slug, Resolution: contractsv1.ScopeRepoFallback, FallbackReasons: []string{}}
+	}
+	incident := func(mapped ...contractsv1.ResolvedScope) *sourceRowTables {
+		tables := newSourceRowTables()
+		tables.discoveries = map[string][]contractsv1.ResolvedScope{"INC-1": mapped}
+		for _, mappedScope := range mapped {
+			tables.repos[mappedScope.RepoID] = mappedScope.RepoSlug
+			tables.withKindRow(mappedScope.RepoID, mappedScope.RepoSlug, locator, "incidents.v1", "incident", "INC-1")
+		}
+		return tables
+	}
+	store := memoryinvestigation.NewStore()
+	seedResult3355(t, store, "org_1", citingStoredResult("result_incident_row_keyed", ref))
+	serve := func(tables *sourceRowTables, resultID string) *httptest.ResponseRecorder {
+		app, token := sourceRowApp(t, tables, store, &bytes.Buffer{})
+		rec := httptest.NewRecorder()
+		request := scopedEvidenceRequest(t, token, ref, resultID)
+		request.Header.Set("X-Request-ID", "req_6180000000000000000000000000beef")
+		app.Handler().ServeHTTP(rec, request)
+		return rec
+	}
+
+	rec := serve(incident(scope(sourceRowGrantedRepoID, hostedTestRepository)), "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("incident mapped to a granted repository: status %d: %s", rec.Code, rec.Body.String())
+	}
+	var expanded contractsv1.ExpandedEvidence
+	if err := json.Unmarshal(rec.Body.Bytes(), &expanded); err != nil {
+		t.Fatal(err)
+	}
+	if expanded.Evidence.EvidenceRefID != ref || expanded.Evidence.Source.System != "dev_health" || expanded.Evidence.Metadata["record"] != "source_row" {
+		t.Fatalf("not the source row: %+v", expanded.Evidence)
+	}
+
+	var tooMany []contractsv1.ResolvedScope
+	for index := 0; index <= contextpacket.MaxSourceRowRepositories(); index++ {
+		tooMany = append(tooMany, scope(fmt.Sprintf("40000000-0000-4000-8000-%012d", index), hostedTestRepository))
+	}
+	absent := serve(newSourceRowTables(), "")
+	for name, tables := range map[string]*sourceRowTables{
+		"ungranted only": incident(scope(sourceRowSecretRepoID, sourceRowSecretSlug)),
+		"unmapped":       incident(),
+		"too many":       incident(tooMany...),
+	} {
+		got := serve(tables, "")
+		if got.Code != http.StatusNotFound || absent.Code != http.StatusNotFound {
+			t.Fatalf("%s: status %d, absent %d: %s", name, got.Code, absent.Code, got.Body.String())
+		}
+		if !bytes.Equal(got.Body.Bytes(), absent.Body.Bytes()) || !reflect.DeepEqual(got.Header(), absent.Header()) {
+			t.Fatalf("%s differs from absent:\n %s %v\n %s %v", name, got.Body.String(), got.Header(), absent.Body.String(), absent.Header())
+		}
+	}
+
+	if rec := serve(newSourceRowTables(), "result_incident_row_keyed"); rec.Code != http.StatusOK {
+		t.Fatalf("scoped ref with an absent row: status %d, want 200 from the stored result: %s", rec.Code, rec.Body.String())
 	}
 }

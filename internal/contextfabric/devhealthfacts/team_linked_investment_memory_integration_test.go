@@ -80,7 +80,7 @@ SELECT concat('` + prefix + `', toString(number)), ` + instant + `, ` + instant 
 				t.Fatalf("risk effort = %v: an unrelated unit reached the team", *row.Fields["weighted_effort"].Number)
 			}
 		}
-		return statementMemorySince(t, ctx, direct, statementFilter{Table: "work_unit_investments", QueryContains: "uniqExact(m.repo_uuid)"}, mark)
+		return statementMemorySince(t, ctx, direct, statementFilter{Table: "work_unit_investments", QueryContains: "uniqExactIf(m.repo_uuid, NOT m.gated)"}, mark)
 	}
 	read()
 	addFiller("a-", 2000)

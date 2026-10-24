@@ -3,6 +3,7 @@ package devhealthfacts_test
 import (
 	"context"
 	"errors"
+	"github.com/full-chaos/dev-health-acr/internal/chfixture/startterm"
 	"net"
 	"testing"
 	"time"
@@ -158,7 +159,7 @@ func TestChaos5751WorkItemReaderPhysicalAndMemoryBudgetLimitsAgainstRealClickHou
 func newWorkItemReadLimitFixture(t *testing.T, ctx context.Context) (*runtimeclickhouse.Client, clickhousedriver.Conn) {
 	t.Helper()
 	chfixture.RequireContainers(t)
-	container, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
+	container, err := startterm.Generic(ctx, testcontainers.GenericContainerRequest{
 		ContainerRequest: testcontainers.ContainerRequest{
 			Image: chfixture.Image, ExposedPorts: []string{"9000/tcp"},
 			Env:        map[string]string{"CLICKHOUSE_USER": "acr", "CLICKHOUSE_PASSWORD": "acr", "CLICKHOUSE_DB": "default"},

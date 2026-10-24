@@ -771,8 +771,8 @@ func TestEveryRowTheProducerDropsSaysWhyItWasDropped(t *testing.T) {
 		if refusals[0].Level != "WARN" {
 			t.Errorf("level = %q, want WARN -- the producers mint only valid rows, so a refusal is a defect", refusals[0].Level)
 		}
-		if !strings.Contains(refusals[0].Error, "requires source_state") {
-			t.Errorf("error = %q, want the contract's own reason", refusals[0].Error)
+		if refusals[0].Error != "*fmt.wrapError" && refusals[0].Error != "*errors.errorString" {
+			t.Errorf("error = %q, want the error type only", refusals[0].Error)
 		}
 	})
 

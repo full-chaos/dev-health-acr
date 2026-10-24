@@ -1,4 +1,4 @@
-.PHONY: content-check install-pre-push-hook fmt fmt-check test test-split test-race test-race-shared test-race-isolated test-race-split test-shuffle-random test-coverage coverage-cobertura isolated-timeout print-gotest-timeout crosscompile hosted-integration clients-real vet contract-write contract-test codegraph-contract shard-plan canonical-receipts build verify release-local release-verify container-contract container-pins container-test container-reproducible container-oci container-scan fullstack-opencode-e2e fullstack-contract o4-oracle-live o4-oracle-capture o4-oracle-repin
+.PHONY: content-check install-pre-push-hook fmt fmt-check test test-split test-race test-race-shared test-race-isolated test-race-split test-shuffle-random test-coverage coverage-cobertura isolated-timeout print-gotest-timeout crosscompile hosted-integration clients-real vet contract-write contract-test codegraph-contract shard-plan trial-data-checks canonical-receipts build verify release-local release-verify container-contract container-pins container-test container-reproducible container-oci container-scan fullstack-opencode-e2e fullstack-contract o4-oracle-live o4-oracle-capture o4-oracle-repin
 
 RELEASE_OUTPUT ?= .tmp/release
 RELEASE_VERSION ?=
@@ -110,7 +110,9 @@ GOTEST_EXEC := -exec $(CURDIR)/scripts/ci/testcontainers-session-exec.sh
 
 # CHAOS-10226: the production-size proofs (build tag sizeproof) run in the
 # plain unit run only; the -race targets never pass it. Guarded by
-# internal/contextfabric/falkorgraph/sizeproof_guard_test.go.
+# internal/contextfabric/falkorgraph/sizeproof_guard_test.go. That guard sees only
+# tests it can name; scripts/ci/shard-budget-guard.sh is the measured second net:
+# a race job fails a top-level test over 300 s (scripts/ci/race-slow-tests.tsv lifts one).
 GOTEST_PLAIN_TAGS := -tags sizeproof
 
 GOTESTSUM_VERSION := v1.13.0
@@ -393,6 +395,11 @@ codegraph-contract:
 shard-plan:
 	bash scripts/trial/test-shard-plan.sh
 	bash scripts/trial/test-seed-corpus-cases.sh
+	$(MAKE) trial-data-checks
+
+trial-data-checks:
+	bash deploy/local/test-restore-clickhouse-name.sh
+	bash deploy/local/test-restore-view-check.sh
 
 canonical-receipts:
 	bash scripts/e2e/test-canonical-receipts.sh

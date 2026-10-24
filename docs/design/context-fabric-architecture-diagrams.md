@@ -305,6 +305,9 @@ flowchart TD
   LOWPOP -->|"else, per kind in {repository,<br/>project, team}: EXHAUSTIVE SearchKind<br/>census, reusing CHAOS-4154's<br/>buildConfirmedKindScopedSnapshot --<br/>an INCOMPLETE kind is skipped,<br/>NOT fatal (an offer is a suggestion,<br/>not a proof)"| LOWOFFER["candidates from every COMPLETE<br/>kind's own census"]
   LOWOFFER -.->|"NEVER commits -- see caption:<br/>no kind authority pre-confirmation<br/>(team-lead R4 ruling)"| COMMITTABLE
 
+  GATE -->|"nothing committed AND<br/>confirmedKind == nil AND<br/>a hinted repository/project/team kind<br/>(CHAOS-10941)"| KSEM["applyKindScopedSemanticOffers<br/>chaos10941_kind_scoped_semantic.go<br/>deps.KindScopedSemantic: ONE embed of the term,<br/>cosine over that kind's stored embeddings,<br/>exact temporal predicate in the read"]
+  KSEM -.->|"NEVER commits, never enters 'pool',<br/>no identity claim; admitted to the offer<br/>as OfferAdmittedKindScopedSemantic"| COMMITTABLE
+  KSEM -->|"candidate offer ONLY (never the kind,<br/>handle or boundary inputs)"| OFFERS
   OOP --> UNION["unionCandidatesForOffer"]
   POOL -.-> UNION
   LOWOFFER --> UNION
@@ -368,6 +371,22 @@ survive resolution-wide truncation (`internal/contextfabric/AGENTS.md:313`,
 CHAOS-3810 -- "no unseen row can outrank it"), never a statistical
 ranking decided over a population this ticket cannot prove complete for
 every kind that could rank above it.
+**CHAOS-10941 (repository/project/team, hinted kind, OFFER-only, semantic):**
+a paraphrase that shares no token with the node ("self-hosted CI executor
+setup repository" for `full-chaos/action-runners-local`, E7 case 56) cannot
+reach it through any lexical arm (kind-hint, coverage floor, exact name),
+the unscoped vector arm is crowded by high-population kinds and withheld on
+a historical axis, and CHAOS-4417's census is skipped whenever a vector
+mechanism is configured. `KindScopedSemantic` embeds the term once and
+scores the hinted kind's own stored embeddings (identity-fenced, bounded by
+the exact-name census cap, over-cap = degraded and nothing returned) with the
+exact temporal predicate in the read, so it is correct on a historical axis.
+Its finds are offered, strongest similarity first, in the candidate offer only
+(never the expected_kind or handle offers), after any non-vector candidate
+(they lead only when they are the only candidates; `ClassifyOffer`'s vector-only refusal, a
+CHAOS-6047 lane-level choice, is overridden only for this arm) and never
+committed. One `kind_scoped_semantic` Info line per run of the arm carries
+result_count (0 = measured miss), truncated and authz_dropped.
 **Team-lead R4 ruling: this rescue NEVER commits.** It reuses
 `buildConfirmedKindScopedSnapshot` PRE-confirmation, for the fixed,
 small, identity-census-enumerable kind set (`isAliasLookupScopedKind`)

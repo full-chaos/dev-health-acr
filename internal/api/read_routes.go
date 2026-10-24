@@ -128,7 +128,7 @@ func (a *App) expandContextFabricEvidence(w http.ResponseWriter, r *http.Request
 	if scoped != "" && lookup != nil {
 		lookup = contextfabric.ResultScopedCitedEvidenceLookup{ResultID: scoped}
 	}
-	// A pull request or work item ref names one source row. Without a
+	// A row-keyed ref (contractsv1.RowKeyedEvidenceRef) names one source row. Without a
 	// result_id it is expanded from that row alone: an absent row is the
 	// closed not-found outcome, never the newest stored result that cites the
 	// ref.

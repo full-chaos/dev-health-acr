@@ -1034,8 +1034,9 @@ func investmentThemeFields(aggregateShares bool) []fieldDecl {
 }
 
 // investmentSizingDeclarations are the measure and sizing coverage a mix fact
-// carries in ISSUE_SIZE (D6027, D6031). A team's counts are taken over every
-// repository the team owns, like its shares, so they are aggregates.
+// carries in ISSUE_SIZE (D6027, D6031), and its evidence-gated unit coverage. A
+// team's counts are taken over every repository the team owns, like its shares,
+// so they are aggregates.
 func investmentSizingDeclarations(aggregate bool) []fieldDecl {
 	fields := []fieldDecl{
 		fStr("measure"),
@@ -1043,6 +1044,8 @@ func investmentSizingDeclarations(aggregate bool) []fieldDecl {
 		declNullable(fNum("sizing_coverage", "ratio")),
 		fInt("unsized_unit_count", "count"),
 		declNullable(fStr("sizing_note")),
+		declNullable(fInt("uncategorized_unit_count", "count")),
+		declNullable(fNum("uncategorized_unit_share", "ratio")),
 	}
 	if aggregate {
 		for i := range fields {

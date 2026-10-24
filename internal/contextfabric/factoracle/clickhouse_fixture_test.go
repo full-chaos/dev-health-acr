@@ -3,6 +3,7 @@ package factoracle
 import (
 	"context"
 	"fmt"
+	"github.com/full-chaos/dev-health-acr/internal/chfixture/startterm"
 	"io"
 	"log/slog"
 	"net"
@@ -38,7 +39,7 @@ func startClickHouseServer(t *testing.T) *clickHouseServer {
 	t.Helper()
 	chfixture.RequireContainers(t)
 	ctx := context.Background()
-	container, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
+	container, err := startterm.Generic(ctx, testcontainers.GenericContainerRequest{
 		ContainerRequest: testcontainers.ContainerRequest{
 			Image: chfixture.Image, ExposedPorts: []string{"9000/tcp", "8123/tcp"},
 			Env:        map[string]string{"CLICKHOUSE_USER": "acr", "CLICKHOUSE_PASSWORD": "acr", "CLICKHOUSE_DB": "default"},

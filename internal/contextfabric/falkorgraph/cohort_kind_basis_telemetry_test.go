@@ -429,8 +429,8 @@ func TestNeighborLookupFailedLineCarriesTheSite(t *testing.T) {
 		if got, _ := record["org_id"].(string); got != "org_sink_test" {
 			t.Errorf("org_id = %q -- without it a lost member cannot be scoped to a tenant", got)
 		}
-		if got, _ := record["error"].(string); got != "injected" {
-			t.Errorf("error = %q -- the message is the part a count throws away", got)
+		if got, _ := record["error"].(string); got != "*errors.errorString" {
+			t.Errorf("error = %q -- the line carries the error type, never its text", got)
 		}
 		if got, _ := record["level"].(string); got != "WARN" {
 			t.Errorf("level = %q, want WARN -- a lost cohort member is not an Info-level event", got)

@@ -25,6 +25,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/full-chaos/dev-health-acr/internal/telemetryscrub"
 	"log/slog"
 	"math"
 	"net"
@@ -717,6 +718,13 @@ func (t SlogTelemetry) RecordObservationTraversalDegraded(_ context.Context, org
 	t.logger().Warn("context_fabric: observation traversal degraded", "org_id", contextfabric.SanitizeLogAttr(orgID), "count", count)
 }
 
+// RecordGraphSchemaRebootstrap logs at Warn: the vector index vanished from a
+// graph this process had bootstrapped (a purge by another process), and the
+// next projection tick bootstraps it again.
+func (t SlogTelemetry) RecordGraphSchemaRebootstrap(_ context.Context, orgID string, attempt int) {
+	t.logger().Warn("context_fabric: graph schema vanished after bootstrap; bootstrapping again on the next tick", "org_id", contextfabric.SanitizeLogAttr(orgID), "attempt", attempt)
+}
+
 func (t SlogTelemetry) RecordVectorRetrievalDegraded(_ context.Context, orgID string) {
 	t.logger().Warn("context_fabric: vector retrieval unavailable for a request", "org_id", contextfabric.SanitizeLogAttr(orgID))
 }
@@ -934,7 +942,7 @@ func (t SlogTelemetry) RecordCohortKindCensus(ctx context.Context, orgID string,
 			"kinds", contextfabric.SanitizeLogAttr(strings.Join(kinds, ",")),
 			"pool_bound", contextfabric.SanitizeLogInt(int64(poolBound)))
 		if readErr != nil {
-			args = append(args, "error", contextfabric.SanitizeLogAttr(readErr.Error()))
+			args = append(args, "error", contextfabric.SanitizeLogAttr(telemetryscrub.ErrorClass(readErr)))
 		}
 		t.logger().Warn("context_fabric: cohort kind census", append(args, graphRequestIDLogAttrs(ctx)...)...)
 		return
@@ -1009,7 +1017,7 @@ func (t SlogTelemetry) RecordCohortKindFulltext(ctx context.Context, orgID strin
 			"duplicates_with_general", duplicatesWithGeneral)
 	case CohortKindFulltextReadFailed:
 		if readErr != nil {
-			args = append(args, "error", contextfabric.SanitizeLogAttr(readErr.Error()))
+			args = append(args, "error", contextfabric.SanitizeLogAttr(telemetryscrub.ErrorClass(readErr)))
 		}
 	}
 	t.logger().Info(eventspec.CohortKindFulltext.Msg, append(args, graphRequestIDLogAttrs(ctx)...)...)
@@ -1044,7 +1052,7 @@ func (t SlogTelemetry) RecordProjectDeploymentWalk(ctx context.Context, orgID st
 			"truncated", decision.Truncated)
 	}
 	if decision.Err != nil {
-		args = append(args, "error", contextfabric.SanitizeLogAttr(decision.Err.Error()))
+		args = append(args, "error", contextfabric.SanitizeLogAttr(telemetryscrub.ErrorClass(decision.Err)))
 	}
 	t.logger().Info(eventspec.ProjectDeploymentWalk.Msg, append(args, graphRequestIDLogAttrs(ctx)...)...)
 }
@@ -1066,7 +1074,7 @@ func (t SlogTelemetry) RecordTeamAnchorWalk(ctx context.Context, orgID string, d
 			"truncated", decision.Truncated)
 	}
 	if decision.Err != nil {
-		args = append(args, "error", contextfabric.SanitizeLogAttr(decision.Err.Error()))
+		args = append(args, "error", contextfabric.SanitizeLogAttr(telemetryscrub.ErrorClass(decision.Err)))
 	}
 	t.logger().Info(eventspec.TeamAnchorWalk.Msg, append(args, graphRequestIDLogAttrs(ctx)...)...)
 }
@@ -1093,7 +1101,7 @@ func (t SlogTelemetry) RecordPullRequestStatusFilter(ctx context.Context, orgID 
 			args = append(args, "pool", decision.Pool)
 		}
 	} else {
-		args = append(args, "error", contextfabric.SanitizeLogAttr(decision.Err.Error()))
+		args = append(args, "error", contextfabric.SanitizeLogAttr(telemetryscrub.ErrorClass(decision.Err)))
 	}
 	t.logger().Info(eventspec.PullRequestStatusFilter.Msg, append(args, graphRequestIDLogAttrs(ctx)...)...)
 }
@@ -1127,7 +1135,7 @@ func (t SlogTelemetry) RecordOwnershipRouting(ctx context.Context, orgID string,
 			"truncated", decision.Truncated)
 	}
 	if decision.Err != nil {
-		args = append(args, "error", contextfabric.SanitizeLogAttr(decision.Err.Error()))
+		args = append(args, "error", contextfabric.SanitizeLogAttr(telemetryscrub.ErrorClass(decision.Err)))
 	}
 	t.logger().Info(eventspec.OwnershipRouting.Msg, append(args, graphRequestIDLogAttrs(ctx)...)...)
 }
@@ -1138,7 +1146,7 @@ func (t SlogTelemetry) RecordOwnershipRouting(ctx context.Context, orgID string,
 func (t SlogTelemetry) RecordNeighborLookupFailed(ctx context.Context, orgID, originCanonicalID, neighborUUID string, site NeighborLookupFailureSite, err error) {
 	args := []any{"org_id", contextfabric.SanitizeLogAttr(orgID), "origin_canonical_id", contextfabric.SanitizeLogAttr(originCanonicalID), "neighbor_uuid", contextfabric.SanitizeLogAttr(neighborUUID), "site", contextfabric.SanitizeLogAttr(string(site))}
 	if err != nil {
-		args = append(args, "error", contextfabric.SanitizeLogAttr(err.Error()))
+		args = append(args, "error", contextfabric.SanitizeLogAttr(telemetryscrub.ErrorClass(err)))
 	}
 	t.logger().Warn("context_fabric: cohort neighbor lookup failed", append(args, graphRequestIDLogAttrs(ctx)...)...)
 }

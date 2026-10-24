@@ -173,6 +173,7 @@ var ByID = map[string]Event{
 	"graphrank.kind_hint_search":                          KindHintSearch,
 	"graphrank.kind_offer":                                KindOffer,
 	"graphrank.kind_offer_withheld":                       KindOfferWithheld,
+	"graphrank.kind_scoped_semantic":                      KindScopedSemantic,
 	"graphrank.low_population_kind_scope":                 LowPopulationKindScope,
 	"graphrank.low_population_kind_scope_summary":         LowPopulationKindScopeSummary,
 	"graphrank.offer_pool":                                OfferPool,
@@ -11498,6 +11499,57 @@ func (f KindOfferWithheldFields) SlogArgs() []any {
 		"distinct_kind_count", f.DistinctKindCount,
 		"suppressed_by_cardinality", f.SuppressedByCardinality,
 		"suppressed_by_unservable_declared_kind", f.SuppressedByUnservableDeclaredKind,
+	}
+}
+
+// KindScopedSemanticFields is graphrank.kind_scoped_semantic's generated typed construction interface
+// (CHAOS-5516): one Go field per Field KindScopedSemantic.Fields declares in spec.go.
+type KindScopedSemanticFields struct {
+	RequestID    string
+	ResultCount  int
+	Truncated    bool
+	AuthzDropped int
+	// constructed (CHAOS-5516 r1 fix): an UNEXPORTED marker, generated on
+	// every KindScopedSemanticFields uniformly, set ONLY by NewKindScopedSemanticFields below. A caller
+	// outside this package cannot set an unexported field via a composite
+	// literal -- not partially (one exported field set, the rest at their
+	// Go zero value) and not even by hand-setting every EXPORTED field --
+	// so this is the class fix for "a caller still assembles that event's
+	// field list": no composite literal built outside eventspec, complete or
+	// partial, can ever read as constructed.
+	constructed bool
+}
+
+// NewKindScopedSemanticFields is the generated constructor for KindScopedSemanticFields -- every
+// field KindScopedSemantic.Fields declares is a required parameter.
+func NewKindScopedSemanticFields(requestID string, resultCount int, truncated bool, authzDropped int) KindScopedSemanticFields {
+	return KindScopedSemanticFields{
+		RequestID:    requestID,
+		ResultCount:  resultCount,
+		Truncated:    truncated,
+		AuthzDropped: authzDropped,
+		constructed:  true,
+	}
+}
+
+// IsConstructed reports whether f was built by NewKindScopedSemanticFields -- the ONE
+// exported way to read the unexported "constructed" marker from outside
+// this package. false for the Go zero value and for ANY composite literal
+// assembled elsewhere, complete or partial.
+func (f KindScopedSemanticFields) IsConstructed() bool { return f.constructed }
+
+// SlogArgs returns KindScopedSemantic's own declared fields as alternating slog
+// key/value pairs, in the SAME order spec.go declares them. Every
+// free-text string/[]string value is sanitized HERE, at its own
+// construction site inside this function's body -- the shape CHAOS-5544's
+// own instrument (TestNoUnsanitizedLogAttributeInContextFabric) requires.
+func (f KindScopedSemanticFields) SlogArgs() []any {
+	return []any{
+		"request_id", contextfabric.SanitizeLogAttr(f.RequestID),
+		"stage", "kind_scoped_semantic",
+		"result_count", f.ResultCount,
+		"truncated", f.Truncated,
+		"authz_dropped", f.AuthzDropped,
 	}
 }
 

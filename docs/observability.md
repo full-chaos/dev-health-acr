@@ -107,6 +107,14 @@ dimensions use `unknown`; no backend-specific dynamic label may be added.
 Per-organization and per-credential request/resource totals come from the bounded
 `internal/limits.Manager.Usage` interface and are not emitted as metric labels.
 
+## What leaves a span
+
+Exported spans pass through one scrub in `internal/otelexport`: only the attribute keys of `otelexport.SafeSpanKey` leave the process, each with its one value type (no server host or port, no client address, no raw path), string values are redacted for credential shapes and capped, the trace state is cleared (ids are kept), the span name is `METHOD <route template>`, `HTTP METHOD` or a fixed internal name, and events keep only the error type, links keep no attributes, and a status keeps its code without text. Resource attributes are redacted for credential shapes and credential-named keys.
+
+## Emit-path census
+
+`internal/cigates/emitscan` reads the Go source of `cmd` and `internal` on every run and fails the build on a protected or network key in a log line, span attribute or metric label, error text as a log or attribute value, a raw request path or query in a log attribute, a log key that is not a constant (pinned per file in `pins.tsv`), an slog handler built outside `telemetryscrub`, and an unbounded metric label. `labels.tsv` pins the label keys of every metric call site, `spans.tsv` pins the span attribute keys (each must satisfy `otelexport.SafeSpanKey`), and `pins.tsv` holds the reviewed exceptions with a reason; a stale row fails too. A package whose scan exhausts its work budget is a finding, never a pass.
+
 ## SLOs and alerts
 
 The measurements below name snapshot-derived series (`acr_observation_*`,

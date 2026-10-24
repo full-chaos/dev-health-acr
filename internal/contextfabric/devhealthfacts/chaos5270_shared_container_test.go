@@ -23,6 +23,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/full-chaos/dev-health-acr/internal/chfixture/startterm"
 	"log"
 	"net"
 	"os"
@@ -514,7 +515,7 @@ func startSharedClickHouseContainer(tb testing.TB) (*runtimeclickhouse.Client, c
 	chfixture.RequireContainers(tb)
 	ctx := context.Background()
 	sharedClickHouseStartedAt = time.Now()
-	container, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
+	container, err := startterm.Generic(ctx, testcontainers.GenericContainerRequest{
 		ContainerRequest: testcontainers.ContainerRequest{
 			Image: chfixture.Image, ExposedPorts: []string{"9000/tcp"},
 			Env:        map[string]string{"CLICKHOUSE_USER": "acr", "CLICKHOUSE_PASSWORD": "acr", "CLICKHOUSE_DB": "default"},

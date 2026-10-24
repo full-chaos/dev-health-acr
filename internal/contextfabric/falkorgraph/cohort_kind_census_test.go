@@ -910,8 +910,8 @@ func TestCohortKindCensusLineReportsAFailedRead(t *testing.T) {
 		}
 	}
 	errText, _ := record["error"].(string)
-	if !strings.Contains(errText, "read kind census candidates") || strings.Contains(errText, "\n") {
-		t.Errorf("error = %q, want the read error with line breaks sanitised", errText)
+	if strings.Contains(errText, "read kind census candidates") || !strings.HasPrefix(errText, "*") {
+		t.Errorf("error = %q, want the error type only, never its text", errText)
 	}
 	for key := range record {
 		if _, ok := want[key]; !ok && key != "time" && key != "error" {

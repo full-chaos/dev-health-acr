@@ -3,6 +3,7 @@ package contextfabric
 import (
 	"context"
 	"fmt"
+	"github.com/full-chaos/dev-health-acr/internal/telemetryscrub"
 	"log/slog"
 	"strings"
 
@@ -829,7 +830,7 @@ func readOriginStateCoverage(served, member, group Coverage, memberKind, groupKi
 				"fact_kind", SanitizeLogAttr(kind),
 				"source_state", SanitizeLogAttr(string(state)),
 				"reason", "contract_refused",
-				"error", SanitizeLogAttr(err.Error()))
+				"error", SanitizeLogAttr(telemetryscrub.ErrorClass(err)))
 			continue
 		}
 		details = append(details, detail)
