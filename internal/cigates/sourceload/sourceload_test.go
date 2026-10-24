@@ -30,7 +30,7 @@ func TestPackagesCarryTheFieldsAnAnalysisReads(t *testing.T) {
 		t.Fatalf("loaded %d packages, want 1", len(pkgs))
 	}
 	root := pkgs[0]
-	if root.Fset == nil || len(root.Syntax) != 1 || root.Types == nil || root.TypesInfo == nil || root.TypesSizes == nil {
+	if root.Fset == nil || len(root.Syntax) != 2 || root.Types == nil || root.TypesInfo == nil || root.TypesSizes == nil {
 		t.Fatalf("root is missing a field: fset=%v syntax=%d types=%v info=%v sizes=%v",
 			root.Fset != nil, len(root.Syntax), root.Types != nil, root.TypesInfo != nil, root.TypesSizes != nil)
 	}
@@ -184,5 +184,18 @@ func TestLoadChecksEachPackageAtItsModulesGoVersion(t *testing.T) {
 	}
 	if _, ssaPkgs := ssautil.Packages(loader.Packages(), 0); len(ssaPkgs) != 1 || ssaPkgs[0] != nil {
 		t.Fatalf("a root over a rejected dependency was admitted to SSA: %v", ssaPkgs)
+	}
+}
+
+func TestProblemsDoesNotCountPackagesAgain(t *testing.T) {
+	loader, err := Load(repopath.Root(t), []string{viewBase + "badroot"}, runtime.GOOS, runtime.GOARCH)
+	if err != nil {
+		t.Fatal(err)
+	}
+	before := loader.Problems(runtime.GOOS, runtime.GOARCH)
+	loader.Packages()
+	after := loader.Problems(runtime.GOOS, runtime.GOARCH)
+	if len(before) == 0 || strings.Join(before, "\n") != strings.Join(after, "\n") {
+		t.Fatalf("Problems() changed after Packages():\nbefore %q\nafter  %q", before, after)
 	}
 }

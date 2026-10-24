@@ -204,7 +204,11 @@ func sizesSummary(sizes types.Sizes) string {
 func syntaxSummary(p *packages.Package) string {
 	var out []string
 	for _, f := range p.Syntax {
-		out = append(out, fmt.Sprintf("%s:%d", filepath.Base(p.Fset.Position(f.Pos()).Filename), len(f.Decls)))
+		var comments []string
+		for _, group := range f.Comments {
+			comments = append(comments, strings.TrimSpace(group.Text()))
+		}
+		out = append(out, fmt.Sprintf("%s:decls=%d:comments=%q", filepath.Base(p.Fset.Position(f.Pos()).Filename), len(f.Decls), comments))
 	}
 	sort.Strings(out)
 	return strings.Join(out, ",")
@@ -214,8 +218,9 @@ func infoSummary(info *types.Info) string {
 	if info == nil {
 		return "<nil>"
 	}
-	return fmt.Sprintf("types=%d defs=%d uses=%d implicits=%d selections=%d instances=%d",
-		len(info.Types), len(info.Defs), len(info.Uses), len(info.Implicits), len(info.Selections), len(info.Instances))
+	return fmt.Sprintf("types=%d defs=%d uses=%d implicits=%d selections=%d instances=%d scopes=%d fileVersions=%d",
+		len(info.Types), len(info.Defs), len(info.Uses), len(info.Implicits), len(info.Selections), len(info.Instances),
+		len(info.Scopes), len(info.FileVersions))
 }
 
 // diffClosures compares the whole import closure of old and got, root fields on roots only.

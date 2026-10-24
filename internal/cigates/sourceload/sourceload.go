@@ -33,8 +33,10 @@ func Load(root string, patterns []string, goos, goarch string) (*Loader, error) 
 		Units: map[string]*Unit{},
 		Roots: pkgs,
 	}
+	loader.listErr = map[string][]packages.Error{}
 	for _, pkg := range pkgs {
 		loader.isRoot(pkg.ID, true)
+		loader.listErr[pkg.ID] = append([]packages.Error(nil), pkg.Errors...)
 	}
 	for _, pkg := range pkgs {
 		loader.check(pkg)
@@ -57,6 +59,7 @@ type Loader struct {
 	Roots   []*packages.Package
 	rootIDs map[string]bool
 	shaped  bool
+	listErr map[string][]packages.Error
 }
 
 func (l *Loader) isRoot(id string, set bool) bool {
@@ -77,7 +80,7 @@ func (l *Loader) check(pkg *packages.Package) *Unit {
 	l.Units[pkg.ID] = unit
 	root := l.isRoot(pkg.ID, false)
 	for _, name := range pkg.GoFiles {
-		file, err := parser.ParseFile(l.Fset, name, nil, parser.SkipObjectResolution)
+		file, err := parser.ParseFile(l.Fset, name, nil, parser.SkipObjectResolution|parser.ParseComments)
 		if err != nil {
 			unit.Errs = append(unit.Errs, err)
 		}
@@ -108,12 +111,14 @@ func (l *Loader) check(pkg *packages.Package) *Unit {
 	}
 	if root {
 		unit.Info = &types.Info{
-			Types:      map[ast.Expr]types.TypeAndValue{},
-			Defs:       map[*ast.Ident]types.Object{},
-			Uses:       map[*ast.Ident]types.Object{},
-			Implicits:  map[ast.Node]types.Object{},
-			Instances:  map[*ast.Ident]types.Instance{},
-			Selections: map[*ast.SelectorExpr]*types.Selection{},
+			Types:        map[ast.Expr]types.TypeAndValue{},
+			Defs:         map[*ast.Ident]types.Object{},
+			Uses:         map[*ast.Ident]types.Object{},
+			Implicits:    map[ast.Node]types.Object{},
+			Instances:    map[*ast.Ident]types.Instance{},
+			Selections:   map[*ast.SelectorExpr]*types.Selection{},
+			Scopes:       map[ast.Node]*types.Scope{},
+			FileVersions: map[*ast.File]string{},
 		}
 	}
 	unit.Types, _ = conf.Check(pkg.PkgPath, l.Fset, unit.Files, unit.Info)
@@ -132,7 +137,7 @@ func (l *Loader) Problems(goos, goarch string) []string {
 	used := map[string]bool{}
 	for _, pkg := range l.Roots {
 		unit := l.Units[pkg.ID]
-		for _, listErr := range pkg.Errors {
+		for _, listErr := range l.listErr[pkg.ID] {
 			out = append(out, fmt.Sprintf("LOAD error in %s (%s/%s): %v", pkg.PkgPath, goos, goarch, listErr))
 		}
 		for _, err := range unit.Errs {
