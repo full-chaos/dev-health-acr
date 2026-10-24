@@ -184,10 +184,12 @@ type workGraphCost struct {
 }
 
 // The query_log predicates that tell the three statements of the catalog apart.
+// Each excludes reads of system.query_log itself: those carry the markers in
+// their own text (the predicates), and would otherwise match once logged.
 const (
-	workGraphStatementPredicate = `position(query, 'work_graph_edges') > 0 AND position(query, 'AS pt ON') > 0 AND position(query, 'SELECT max(observed_at), count() FROM (') = 0`
-	workGraphFreshnessPredicate = `position(query, 'work_graph_edges') > 0 AND position(query, 'AS pt ON') > 0 AND position(query, 'SELECT max(observed_at), count() FROM (') > 0`
-	workGraphGatePredicate      = `position(query, 'wia_link_auth') > 0 AND position(query, 'GROUP BY w.work_item_id') > 0`
+	workGraphStatementPredicate = `position(query, 'system.query_log') = 0 AND position(query, 'work_graph_edges') > 0 AND position(query, 'AS pt ON') > 0 AND position(query, 'SELECT max(observed_at), count() FROM (') = 0`
+	workGraphFreshnessPredicate = `position(query, 'system.query_log') = 0 AND position(query, 'work_graph_edges') > 0 AND position(query, 'AS pt ON') > 0 AND position(query, 'SELECT max(observed_at), count() FROM (') > 0`
+	workGraphGatePredicate      = `position(query, 'system.query_log') = 0 AND position(query, 'wia_link_auth') > 0 AND position(query, 'GROUP BY w.work_item_id') > 0`
 )
 
 // workGraphCommitNoiseSQL seeds rows commit-sourced edges of another
@@ -423,7 +425,7 @@ func TestWorkGraphLabelStatementCostIgnoresOtherWorkItemsAndOtherEdges(t *testin
 	// unmeasured. The measured rounds run every stage once each, so a change of
 	// the server's state over time reaches all four stages alike instead of
 	// whichever stage happened to be running; the peak memory of every run is
-	// kept and the slope reads the plateau the statement reaches most often.
+	// kept and the slope reads the lower quartile of them (the second-smallest of eight), a level the statement reached at least twice.
 	const warmupRounds, measuredRounds = 3, 8
 	for round := 0; round < warmupRounds; round++ {
 		for _, stage := range stages {
