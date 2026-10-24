@@ -18,7 +18,7 @@ var _ contextfabric.ProjectionGraphEdgeCounts = (*Adapter)(nil)
 // interval edge counts: the producer asserts it and the graph keeps it. The
 // arm of BELONGS_TO_PROJECT is the edge's validity start: the work-item column
 // edge has none, an interval edge always has one. The arm of BELONGS_TO_REPOSITORY
-// is the kind of the edge's source node; the arm of LINKS_PULL_REQUEST is the
+// and OWNED_BY_TEAM is the kind of the edge's source node; the arm of LINKS_PULL_REQUEST is the
 // provenance tier stored on the edge.
 func (a *Adapter) CountEdges(ctx context.Context, orgID string, key contextfabric.EdgeCountKey) (int64, error) {
 	if strings.TrimSpace(orgID) == "" || strings.TrimSpace(string(key.Relation)) == "" {
@@ -58,6 +58,12 @@ var repositoryEdgeArms = map[string]bool{
 	string(contractsv1.ContextFabricSubjectIncident):    true,
 }
 
+var ownedByTeamEdgeArms = map[string]bool{
+	string(contractsv1.ContextFabricSubjectWorkItem):   true,
+	string(contractsv1.ContextFabricSubjectProject):    true,
+	string(contractsv1.ContextFabricSubjectRepository): true,
+}
+
 var linkEdgeArms = map[string]bool{
 	contextfabric.EdgeArmLinkNative:       true,
 	contextfabric.EdgeArmLinkExplicitText: true,
@@ -72,7 +78,8 @@ func edgeCountCypher(key contextfabric.EdgeCountKey) (string, error) {
 		arm = fmt.Sprintf(" AND r.%s IS NULL", propValidFromNs)
 	case key.Relation == contractsv1.ContextFabricRelationshipBelongsToProject && key.Arm == contextfabric.EdgeArmTransition:
 		arm = fmt.Sprintf(" AND r.%s IS NOT NULL", propValidFromNs)
-	case key.Relation == contractsv1.ContextFabricRelationshipBelongsToRepository && repositoryEdgeArms[key.Arm]:
+	case key.Relation == contractsv1.ContextFabricRelationshipBelongsToRepository && repositoryEdgeArms[key.Arm],
+		key.Relation == contractsv1.ContextFabricRelationshipOwnedByTeam && ownedByTeamEdgeArms[key.Arm]:
 		arm = fmt.Sprintf(" AND a.%s = $arm", propKind)
 	case key.Relation == contractsv1.ContextFabricRelationshipLinksPullRequest && linkEdgeArms[key.Arm]:
 		arm = fmt.Sprintf(" AND r.%s%s = $arm", propPropertyPrefix, safeName(linkTierProperty))
