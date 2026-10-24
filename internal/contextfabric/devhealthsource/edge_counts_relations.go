@@ -109,7 +109,13 @@ func partOfEdgeCountSQL() string {
   AND ` + derivedIDFitsSQL(identity.KindWorkItem, parentRepo, parentRef)
 }
 
-const linkTierSQL = "trimBoth(l.provenance)"
+// trimSpaceSQL is strings.TrimSpace over a SQL expression: ClickHouse trimBoth
+// strips ASCII spaces only, Go trims every Unicode space.
+func trimSpaceSQL(expr string) string {
+	return `replaceRegexpAll(` + expr + `, '^[\\s\\x0B\\x{85}\\p{Z}]+|[\\s\\x0B\\x{85}\\p{Z}]+$', '')`
+}
+
+var linkTierSQL = trimSpaceSQL("l.provenance")
 
 // linksPullRequestEdgeCountSQL counts, per provenance tier, the LINKS_PULL_REQUEST
 // edges of queryIssuePullRequestLinks over its own joins. A row of a known tier
@@ -127,8 +133,8 @@ LEFT JOIN repos AS r FINAL ON r.id = l.repo_id AND r.org_id = l.org_id
 WHERE l.org_id = {org_id:String} AND ` + linkTierSQL + ` IN ('` + strings.Join(linkEdgeArms, "', '") + `')
   AND ` + issuePullRequestLinkOutranked + ` = 0
   AND ifNull(w.work_item_id, '') != ''
-  AND lower(trimBoth(ifNull(w.type, ''))) NOT IN ('` + strings.Join(pullRequestWorkItemTypeNames(), "', '") + `')
-  AND ifNull(p.number, 0) > 0 AND trimBoth(ifNull(r.repo, '')) != ''
+  AND lower(` + trimSpaceSQL("ifNull(w.type, '')") + `) NOT IN ('` + strings.Join(pullRequestWorkItemTypeNames(), "', '") + `')
+  AND ifNull(p.number, 0) > 0 AND ` + trimSpaceSQL("ifNull(r.repo, '')") + ` != ''
   AND ` + derivedIDFitsSQL(identity.KindWorkItem, "toString(w.repo_id)", "w.work_item_id") + `
 GROUP BY arm`
 }
