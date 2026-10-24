@@ -32,8 +32,18 @@ func TestEdgeCountCypherPerRelationAndArm(t *testing.T) {
 			want:    []string{"r." + propValidFromNs + " IS NOT NULL"},
 			notWant: []string{propValidFromNs + " IS NULL"},
 		},
-		"unknown arm is refused":            {key: contextfabric.EdgeCountKey{Relation: project, Arm: "mystery"}, wantErr: `has no arm "mystery"`},
-		"an arm on a relation without arms": {key: contextfabric.EdgeCountKey{Relation: contractsv1.ContextFabricRelationshipBelongsToPullRequest, Arm: contextfabric.EdgeArmTransition}, wantErr: "has no arm"},
+		"repository arm filters on the source node kind": {
+			key:  contextfabric.EdgeCountKey{Relation: contractsv1.ContextFabricRelationshipBelongsToRepository, Arm: "incident"},
+			want: []string{"a." + propKind + " = $arm"},
+		},
+		"link arm filters on the stored tier": {
+			key:  contextfabric.EdgeCountKey{Relation: contractsv1.ContextFabricRelationshipLinksPullRequest, Arm: contextfabric.EdgeArmLinkNative},
+			want: []string{"r." + propPropertyPrefix + "link_provenance = $arm"},
+		},
+		"an unknown repository arm is refused": {key: contextfabric.EdgeCountKey{Relation: contractsv1.ContextFabricRelationshipBelongsToRepository, Arm: "mystery"}, wantErr: `has no arm "mystery"`},
+		"an unknown link tier is refused":      {key: contextfabric.EdgeCountKey{Relation: contractsv1.ContextFabricRelationshipLinksPullRequest, Arm: "mystery"}, wantErr: `has no arm "mystery"`},
+		"unknown arm is refused":               {key: contextfabric.EdgeCountKey{Relation: project, Arm: "mystery"}, wantErr: `has no arm "mystery"`},
+		"an arm on a relation without arms":    {key: contextfabric.EdgeCountKey{Relation: contractsv1.ContextFabricRelationshipBelongsToPullRequest, Arm: contextfabric.EdgeArmTransition}, wantErr: "has no arm"},
 	} {
 		tc := tc
 		t.Run(name, func(t *testing.T) {
@@ -77,6 +87,9 @@ func TestCountEdgesBindsOrgAndNormalizedRelationAndReadsOneScalar(t *testing.T) 
 	got, err := adapter.CountEdges(context.Background(), "org-1", contextfabric.EdgeCountKey{Relation: contractsv1.ContextFabricRelationshipBelongsToProject, Arm: contextfabric.EdgeArmTransition})
 	if err != nil || got != 1997 {
 		t.Fatalf("CountEdges = %d, %v; want 1997", got, err)
+	}
+	if _, armed := params["arm"]; armed {
+		t.Fatalf("an arm-less count binds no arm: %v", params)
 	}
 	if !readOnly || params["org"] != "org-1" || params["rel"] == "" || strings.Contains(cypher, "org-1") || strings.Contains(cypher, "BELONGS_TO_PROJECT") {
 		t.Fatalf("values are bound, never interpolated; read only: ro=%v params=%v\n%s", readOnly, params, cypher)
