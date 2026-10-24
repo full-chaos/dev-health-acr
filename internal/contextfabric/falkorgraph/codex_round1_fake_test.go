@@ -259,7 +259,7 @@ func TestDiscoverContextFromBlockedSideStillSurfacesBLOCKSNotAnInvertedName(t *t
 			// ANY query containing the literal substring "UNION". This
 			// binds the test to the actual query shape, not just its
 			// keyword.
-			if !strings.Contains(cypher, ")-[r:"+labelRelation+"]->(n:"+labelSubject) {
+			if !strings.Contains(cypher, " WITH n MATCH (other:"+labelSubject) || !strings.Contains(cypher, ")-[r:"+labelRelation+"]->(n) ") {
 				t.Fatalf("edgesOfNode's query text does not contain the incoming UNION branch (other)-[r]->(n) -- this test cannot prove direction safety against a query that dropped it: %s", cypher)
 			}
 			// The real edgesOfNode UNION's second branch --

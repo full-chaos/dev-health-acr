@@ -72,7 +72,7 @@ write_web_assertion_material() {
 render_svs_override() {
   WEB_PORT="$(free_port)"
   WEB_EMAIL="admin@test.com"
-  WEB_PASSWORD="default1234"
+  WEB_PASSWORD="AcrE2eWebUser1234"
   WEB_AUTH_SECRET="$(random_secret)"
   cat > "$STATE/svs.override.yml" <<EOF
 services:
