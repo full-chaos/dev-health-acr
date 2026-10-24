@@ -2328,9 +2328,10 @@ type attemptOutcome struct {
 	// in receipt.Attempts.
 	Index int
 	// Class is attemptOutcomeClass's own closed vocabulary: success,
-	// rate_limited, invalid_output, unavailable, cancelled (all shared with
-	// receiptOutcomeForError's terminal Outcome vocabulary since CHAOS-5577
-	// added "cancelled" there too -- see attemptOutcomeClass's doc comment).
+	// rate_limited, invalid_output, unavailable, cancelled, timeout (all but
+	// timeout shared with receiptOutcomeForError's terminal Outcome vocabulary
+	// since CHAOS-5577 added "cancelled" there too -- see attemptOutcomeClass's
+	// doc comment).
 	// cancelled means the attempt's context expired or was cancelled, at or
 	// before the provider call, never that the provider itself failed. timeout
 	// means the attempt's own ACR_CONTEXT_FABRIC_MODEL_TIMEOUT deadline passed
@@ -2354,7 +2355,8 @@ type attemptOutcome struct {
 // model call did succeed, and whether its OUTPUT validates is a later,
 // separate decision the terminal outcome already reports.
 //
-// "cancelled" was the ONE deliberate exception at this per-attempt level
+// "cancelled" was the one deliberate exception at this per-attempt level
+// until "timeout" was added for the attempt's own deadline
 // (CHAOS-5380 PR-A, recut open item 3; team-lead A3 ruling, option (b),
 // 2026-09-10). A context.Canceled/DeadlineExceeded error used to fall
 // through to receiptOutcomeForError's default and read "unavailable" --
