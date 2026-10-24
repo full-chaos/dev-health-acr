@@ -178,7 +178,17 @@ type workGraphCost struct {
 	memory, memoryHigh, readBytes                            uint64
 	freshnessMemory, freshnessMemoryHigh, freshnessReadBytes uint64
 	gateMemory, gateMemoryHigh, gateReadBytes                uint64
+	// memoryRuns, freshnessRuns and gateRuns are the peak memory of every
+	// measured run, in time order; the slope is read from these.
+	memoryRuns, freshnessRuns, gateRuns []uint64
 }
+
+// The query_log predicates that tell the three statements of the catalog apart.
+const (
+	workGraphStatementPredicate = `position(query, 'work_graph_edges') > 0 AND position(query, 'AS pt ON') > 0 AND position(query, 'SELECT max(observed_at), count() FROM (') = 0`
+	workGraphFreshnessPredicate = `position(query, 'work_graph_edges') > 0 AND position(query, 'AS pt ON') > 0 AND position(query, 'SELECT max(observed_at), count() FROM (') > 0`
+	workGraphGatePredicate      = `position(query, 'wia_link_auth') > 0 AND position(query, 'GROUP BY w.work_item_id') > 0`
+)
 
 // workGraphCommitNoiseSQL seeds rows commit-sourced edges of another
 // repository of the organization, with the writers' source id
@@ -187,10 +197,20 @@ func workGraphCommitNoiseSQL(rows int) string {
 	return fmt.Sprintf(`INSERT INTO work_graph_edges (edge_id, source_type, source_id, target_type, target_id, edge_type, repo_id, provider, provenance, confidence, evidence, discovered_at, last_synced, org_id) SELECT concat('cnoise-', toString(number)), 'commit', concat('%s@', lower(hex(SHA1(toString(number))))), 'issue', concat('CNOISE-', toString(number)), 'implements', toUUID('%s'), 'github', 'explicit_text', 0.9, 'Fixes #1', now64(3), now64(3), '%s' FROM numbers(%d)`, wgOther, wgOther, wgOrg, rows)
 }
 
-// workGraphStatementCost seeds one isolated database with the label rows plus
-// the requested extra rows, runs work_graph.v1 for a restricted caller (the
-// widest authorization relation) and returns the statement's peak cost.
-func workGraphStatementCost(t *testing.T, fillerPerRepo, noiseRows, commitNoiseRows int) workGraphCost {
+// workGraphStage is one isolated database seeded with the label rows plus the
+// requested extra rows. Its statements run for a restricted caller (the widest
+// authorization relation); the stages are measured interleaved, round by
+// round, so whatever the server's state does over time reaches all of them.
+type workGraphStage struct {
+	name     string
+	ctx      context.Context
+	direct   clickhousedriver.Conn
+	executor *contextpacket.ClickHouseSourceExecutor
+	plan     contextpacket.ReadPlan
+	database string
+}
+
+func newWorkGraphStage(t *testing.T, name string, fillerPerRepo, noiseRows, commitNoiseRows int) *workGraphStage {
 	t.Helper()
 	ctx := context.Background()
 	rawQuery, direct := newDevHealthClickHouseIntegrationClient(t, ctx)
@@ -251,36 +271,38 @@ func workGraphStatementCost(t *testing.T, fillerPerRepo, noiseRows, commitNoiseR
 	}
 	plan := contextpacket.ReadPlan{OrgID: wgOrg, RepoID: wgRepo, RepoSlug: "acme/deploy-service", Branch: "main", TimeWindowDays: 30, WorkItemGrant: auth.WorkItemRepositorySelectorSet([]string{"acme/deploy-service"}, true)}
 	executor := contextpacket.NewClickHouseSourceExecutor(query)
-	// The first runs load the table indexes and caches into the server; a
-	// statement's peak memory settles on its plateau only by the third run, and
-	// a lower peak before it shrinks the slope bound. Three runs are unmeasured,
-	// the three later runs are measured: the slope uses each statement's
-	// smallest peak, the ceilings its largest.
-	var mark int64
-	for i := 0; i < 6; i++ {
-		if i == 3 {
-			mark = time.Now().UnixMicro()
-		}
-		result, err := contextpacket.ExecuteCatalog(ctx, executor, plan)
-		if err != nil {
-			t.Fatalf("catalog: %v", err)
-		}
-		for _, unavailable := range result.Unavailable {
-			if unavailable.Source == "work_graph.v1" {
-				t.Fatalf("work_graph.v1 unavailable: %s", unavailable.Reason)
-			}
-		}
-	}
-	if err := direct.Exec(ctx, `SYSTEM FLUSH LOGS`); err != nil {
-		t.Fatalf("flush logs (measurement did not happen): %v", err)
-	}
 	var database string
 	if err := direct.QueryRow(ctx, `SELECT currentDatabase()`).Scan(&database); err != nil {
 		t.Fatalf("current database: %v", err)
 	}
+	return &workGraphStage{name: name, ctx: ctx, direct: direct, executor: executor, plan: plan, database: database}
+}
+
+// run executes the catalog once.
+func (s *workGraphStage) run(t *testing.T) {
+	t.Helper()
+	result, err := contextpacket.ExecuteCatalog(s.ctx, s.executor, s.plan)
+	if err != nil {
+		t.Fatalf("%s: catalog: %v", s.name, err)
+	}
+	for _, unavailable := range result.Unavailable {
+		if unavailable.Source == "work_graph.v1" {
+			t.Fatalf("%s: work_graph.v1 unavailable: %s", s.name, unavailable.Reason)
+		}
+	}
+}
+
+// cost reads, for the runs after mark, each statement's lowest and highest
+// peak memory, its lowest read volume and every run's peak memory.
+func (s *workGraphStage) cost(t *testing.T, mark int64, rounds int) workGraphCost {
+	t.Helper()
+	ctx, direct, database := s.ctx, s.direct, s.database
+	if err := direct.Exec(ctx, `SYSTEM FLUSH LOGS`); err != nil {
+		t.Fatalf("flush logs (measurement did not happen): %v", err)
+	}
 	var c workGraphCost
 	var statements, threadless uint64
-	row := direct.QueryRow(ctx, `SELECT min(memory_usage), max(memory_usage), min(read_bytes), count(), `+statementthreads.UnboundThreadsCount+` FROM system.query_log WHERE type = 'QueryFinish' AND query_kind = 'Select' AND current_database = ? AND event_time_microseconds > fromUnixTimestamp64Micro(?) AND position(query, 'work_graph_edges') > 0 AND position(query, 'AS pt ON') > 0 AND position(query, 'SELECT max(observed_at), count() FROM (') = 0`, database, mark)
+	row := direct.QueryRow(ctx, `SELECT min(memory_usage), max(memory_usage), min(read_bytes), count(), `+statementthreads.UnboundThreadsCount+` FROM system.query_log WHERE type = 'QueryFinish' AND query_kind = 'Select' AND current_database = ? AND event_time_microseconds > fromUnixTimestamp64Micro(?) AND `+workGraphStatementPredicate, database, mark)
 	if err := row.Scan(&c.memory, &c.memoryHigh, &c.readBytes, &statements, &threadless); err != nil {
 		t.Fatalf("read query_log: %v", err)
 	}
@@ -289,7 +311,7 @@ func workGraphStatementCost(t *testing.T, fillerPerRepo, noiseRows, commitNoiseR
 		t.Fatalf("measurement did not happen: %d statements, %+v", statements, c)
 	}
 	var freshness uint64
-	row = direct.QueryRow(ctx, `SELECT min(memory_usage), max(memory_usage), min(read_bytes), count(), `+statementthreads.UnboundThreadsCount+` FROM system.query_log WHERE type = 'QueryFinish' AND query_kind = 'Select' AND current_database = ? AND event_time_microseconds > fromUnixTimestamp64Micro(?) AND position(query, 'work_graph_edges') > 0 AND position(query, 'AS pt ON') > 0 AND position(query, 'SELECT max(observed_at), count() FROM (') > 0`, database, mark)
+	row = direct.QueryRow(ctx, `SELECT min(memory_usage), max(memory_usage), min(read_bytes), count(), `+statementthreads.UnboundThreadsCount+` FROM system.query_log WHERE type = 'QueryFinish' AND query_kind = 'Select' AND current_database = ? AND event_time_microseconds > fromUnixTimestamp64Micro(?) AND `+workGraphFreshnessPredicate, database, mark)
 	if err := row.Scan(&c.freshnessMemory, &c.freshnessMemoryHigh, &c.freshnessReadBytes, &freshness, &threadless); err != nil {
 		t.Fatalf("read query_log for the freshness read: %v", err)
 	}
@@ -298,7 +320,7 @@ func workGraphStatementCost(t *testing.T, fillerPerRepo, noiseRows, commitNoiseR
 		t.Fatalf("freshness measurement did not happen: %d statements, %+v", freshness, c)
 	}
 	var gates uint64
-	row = direct.QueryRow(ctx, `SELECT min(memory_usage), max(memory_usage), min(read_bytes), count(), `+statementthreads.UnboundThreadsCount+` FROM system.query_log WHERE type = 'QueryFinish' AND query_kind = 'Select' AND current_database = ? AND event_time_microseconds > fromUnixTimestamp64Micro(?) AND position(query, 'wia_link_auth') > 0 AND position(query, 'GROUP BY w.work_item_id') > 0`, database, mark)
+	row = direct.QueryRow(ctx, `SELECT min(memory_usage), max(memory_usage), min(read_bytes), count(), `+statementthreads.UnboundThreadsCount+` FROM system.query_log WHERE type = 'QueryFinish' AND query_kind = 'Select' AND current_database = ? AND event_time_microseconds > fromUnixTimestamp64Micro(?) AND `+workGraphGatePredicate, database, mark)
 	if err := row.Scan(&c.gateMemory, &c.gateMemoryHigh, &c.gateReadBytes, &gates, &threadless); err != nil {
 		t.Fatalf("read query_log for the gate: %v", err)
 	}
@@ -306,7 +328,79 @@ func workGraphStatementCost(t *testing.T, fillerPerRepo, noiseRows, commitNoiseR
 	if gates < 3 || c.gateMemory == 0 || c.gateReadBytes == 0 {
 		t.Fatalf("gate measurement did not happen: %d statements, %+v", gates, c)
 	}
+	c.memoryRuns = s.memoryRuns(t, mark, workGraphStatementPredicate, rounds)
+	c.freshnessRuns = s.memoryRuns(t, mark, workGraphFreshnessPredicate, rounds)
+	c.gateRuns = s.memoryRuns(t, mark, workGraphGatePredicate, rounds)
+	s.logRunTable(t, mark)
 	return c
+}
+
+// memoryRuns is the peak memory of every run of one statement after mark, in
+// time order.
+func (s *workGraphStage) memoryRuns(t *testing.T, mark int64, predicate string, rounds int) []uint64 {
+	t.Helper()
+	rows, err := s.direct.Query(s.ctx, `SELECT memory_usage FROM system.query_log WHERE type = 'QueryFinish' AND query_kind = 'Select' AND current_database = ? AND event_time_microseconds > fromUnixTimestamp64Micro(?) AND `+predicate+` ORDER BY event_time_microseconds`, s.database, mark)
+	if err != nil {
+		t.Fatalf("%s: read the per-run memory (measurement did not happen): %v", s.name, err)
+	}
+	defer rows.Close()
+	var out []uint64
+	for rows.Next() {
+		var memory uint64
+		if err := rows.Scan(&memory); err != nil {
+			t.Fatalf("%s: scan a per-run memory: %v", s.name, err)
+		}
+		out = append(out, memory)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("%s: per-run memory rows: %v", s.name, err)
+	}
+	if len(out) < rounds {
+		t.Fatalf("%s: %d runs measured, want at least %d (measurement did not happen)", s.name, len(out), rounds)
+	}
+	return out
+}
+
+// logRunTable prints every measured run with what could decide its memory:
+// read volume, rows, the threads it used, the max_threads setting and the
+// stage's part and granule counts. It is a diagnostic: a failing query here
+// only logs, it never fails the test.
+func (s *workGraphStage) logRunTable(t *testing.T, mark int64) {
+	t.Helper()
+	var maxThreads string
+	if err := s.direct.QueryRow(s.ctx, `SELECT toString(getSetting('max_threads'))`).Scan(&maxThreads); err != nil {
+		maxThreads = "unreadable: " + err.Error()
+	}
+	parts, err := s.direct.Query(s.ctx, `SELECT table, count(), sum(rows), sum(marks) FROM system.parts WHERE database = currentDatabase() AND active AND table IN ('work_graph_edges', 'work_items', 'git_pull_requests') GROUP BY table ORDER BY table`)
+	if err != nil {
+		t.Logf("%s: part layout unavailable: %v", s.name, err)
+	} else {
+		for parts.Next() {
+			var table string
+			var count, rows, marks uint64
+			if err := parts.Scan(&table, &count, &rows, &marks); err != nil {
+				t.Logf("%s: part layout scan: %v", s.name, err)
+				break
+			}
+			t.Logf("%s: layout %s parts=%d rows=%d granules=%d max_threads=%s", s.name, table, count, rows, marks, maxThreads)
+		}
+		parts.Close()
+	}
+	runs, err := s.direct.Query(s.ctx, `SELECT multiIf(position(query, 'wia_link_auth') > 0, 'gate', position(query, 'SELECT max(observed_at), count() FROM (') > 0, 'freshness', 'work_graph.v1') AS statement, memory_usage, read_bytes, read_rows, length(thread_ids), Settings['max_threads'] FROM system.query_log WHERE type = 'QueryFinish' AND query_kind = 'Select' AND current_database = ? AND event_time_microseconds > fromUnixTimestamp64Micro(?) AND ((`+workGraphStatementPredicate+`) OR (`+workGraphFreshnessPredicate+`) OR (`+workGraphGatePredicate+`)) ORDER BY event_time_microseconds`, s.database, mark)
+	if err != nil {
+		t.Logf("%s: per-run table unavailable: %v", s.name, err)
+		return
+	}
+	defer runs.Close()
+	for n := 0; runs.Next(); n++ {
+		var statement, setting string
+		var memory, readBytes, readRows, threads uint64
+		if err := runs.Scan(&statement, &memory, &readBytes, &readRows, &threads, &setting); err != nil {
+			t.Logf("%s: per-run table scan: %v", s.name, err)
+			return
+		}
+		t.Logf("%s: run %d %s memory=%d read_bytes=%d read_rows=%d threads=%d max_threads_setting=%q", s.name, n, statement, memory, readBytes, readRows, threads, setting)
+	}
 }
 
 // Four stages, each in its own database: the base, the base plus 150k other
@@ -317,49 +411,76 @@ func workGraphStatementCost(t *testing.T, fillerPerRepo, noiseRows, commitNoiseR
 func TestWorkGraphLabelStatementCostIgnoresOtherWorkItemsAndOtherEdges(t *testing.T) {
 	const ceiling = uint64(56 << 20)
 	const statementCeiling = uint64(12 << 20)
-	base := workGraphStatementCost(t, 50000, 20000, 20000)
-	filler := workGraphStatementCost(t, 125000, 20000, 20000)
-	noise := workGraphStatementCost(t, 50000, 60000, 20000)
-	commits := workGraphStatementCost(t, 50000, 20000, 60000)
+	stages := []*workGraphStage{
+		newWorkGraphStage(t, "base", 50000, 20000, 20000),
+		newWorkGraphStage(t, "+work items", 125000, 20000, 20000),
+		newWorkGraphStage(t, "+edges and pull requests", 50000, 60000, 20000),
+		newWorkGraphStage(t, "+commit edges", 50000, 20000, 60000),
+	}
+	// The first rounds load the table indexes and caches into the server; a
+	// statement's peak memory settles on its plateau only by the third run, and
+	// a lower peak before it shrinks the slope bound. Three rounds are
+	// unmeasured. The measured rounds run every stage once each, so a change of
+	// the server's state over time reaches all four stages alike instead of
+	// whichever stage happened to be running; the peak memory of every run is
+	// kept and the slope reads the plateau the statement reaches most often.
+	const warmupRounds, measuredRounds = 3, 8
+	for round := 0; round < warmupRounds; round++ {
+		for _, stage := range stages {
+			stage.run(t)
+		}
+	}
+	mark := time.Now().UnixMicro()
+	for round := 0; round < measuredRounds; round++ {
+		for _, stage := range stages {
+			stage.run(t)
+		}
+	}
+	costs := map[string]workGraphCost{}
+	for _, stage := range stages {
+		costs[stage.name] = stage.cost(t, mark, measuredRounds)
+	}
+	base, filler, noise, commits := costs["base"], costs["+work items"], costs["+edges and pull requests"], costs["+commit edges"]
 	t.Logf("work_graph.v1 cost: base %+v, +150k work items %+v, +40k edges and pull requests %+v, +40k commit edges %+v", base, filler, noise, commits)
 	// Ceilings are absolute bounds, so each asserts the largest of the measured
 	// warm peaks: a cap is hit by the worst run. Warm, the statement peaks near
-	// 7 MB, its freshness read near 4 to 6 MB and the issue gate near 8 MB.
-	for name, stage := range map[string]workGraphCost{"base": base, "+work items": filler, "+edges and pull requests": noise, "+commit edges": commits} {
+	// 7 MB (11.6 MB on its higher plateau), its freshness read near 4 to 6 MB
+	// and the issue gate near 8 MB.
+	for _, name := range []string{"base", "+work items", "+edges and pull requests", "+commit edges"} {
+		stage := costs[name]
 		for _, c := range []struct {
 			what         string
-			lowest, peak uint64
+			runs         []uint64
 			ceilingBytes uint64
 		}{
-			{"work_graph.v1", stage.memory, stage.memoryHigh, statementCeiling},
-			{"work_graph.v1", stage.memory, stage.memoryHigh, ceiling},
-			{"freshness read", stage.freshnessMemory, stage.freshnessMemoryHigh, statementCeiling},
-			{"issue gate", stage.gateMemory, stage.gateMemoryHigh, ceiling},
+			{"work_graph.v1", stage.memoryRuns, statementCeiling},
+			{"work_graph.v1", stage.memoryRuns, ceiling},
+			{"freshness read", stage.freshnessRuns, statementCeiling},
+			{"issue gate", stage.gateRuns, ceiling},
 		} {
-			if c.peak >= c.ceilingBytes {
-				t.Errorf("%s: %s peaked at %d bytes on its highest warm run (lowest %d), want under %d", name, c.what, c.peak, c.lowest, c.ceilingBytes)
+			if peak, over := highestRunOver(c.runs, c.ceilingBytes); over {
+				t.Errorf("%s: %s peaked at %d bytes on its highest warm run (runs %v), want under %d", name, c.what, peak, c.runs, c.ceilingBytes)
 			} else {
-				t.Logf("%s: %s memory lowest %d highest %d bytes, ceiling under %d on the highest", name, c.what, c.lowest, c.peak, c.ceilingBytes)
+				t.Logf("%s: %s memory highest %d bytes over %d runs, ceiling under %d on the highest", name, c.what, peak, len(c.runs), c.ceilingBytes)
 			}
 		}
 	}
-	// Slope: a stage is red when it exceeds 1.15x the base plus an absolute
-	// floor (2 MiB of memory; 8 KiB of read volume, which only absorbs granule
-	// and mark rounding on figures of a few KiB). Each figure is the smallest of
-	// three warm runs, so a regression that grows the cost lifts all three.
-	const memoryFloor = float64(2 << 20)
+	// Slope: a stage is red when its plateau exceeds 1.15x the base's plus an
+	// absolute floor (2 MiB of memory; 8 KiB of read volume, which only absorbs
+	// granule and mark rounding on figures of a few KiB). The plateau is the
+	// lower quartile of the measured runs (slopeOver), so a regression that
+	// grows the cost lifts every run while a single high run lifts nothing.
 	const readSlack = float64(8192)
 	for name, stage := range map[string]workGraphCost{"+work items": filler, "+edges and pull requests": noise, "+commit edges": commits} {
-		for what, pair := range map[string][4]uint64{
-			"work_graph.v1 memory":  {stage.memory, stage.memoryHigh, base.memory, base.memoryHigh},
-			"freshness read memory": {stage.freshnessMemory, stage.freshnessMemoryHigh, base.freshnessMemory, base.freshnessMemoryHigh},
-			"issue gate memory":     {stage.gateMemory, stage.gateMemoryHigh, base.gateMemory, base.gateMemoryHigh},
+		for what, runs := range map[string][2][]uint64{
+			"work_graph.v1 memory":  {stage.memoryRuns, base.memoryRuns},
+			"freshness read memory": {stage.freshnessRuns, base.freshnessRuns},
+			"issue gate memory":     {stage.gateRuns, base.gateRuns},
 		} {
-			bound := 1.15*float64(pair[2]) + memoryFloor
-			if float64(pair[0]) > bound {
-				t.Errorf("%s: %s lowest %d bytes (highest %d) against the base's lowest %d (highest %d), over the %.0f bytes of the 1.15x slope plus the 2 MiB floor", name, what, pair[0], pair[1], pair[2], pair[3], bound)
+			if over, level, bound := slopeOver(runs[0], runs[1]); over {
+				t.Errorf("%s: %s plateau %d bytes (runs %v) against the base's plateau %d (runs %v), over the %.0f bytes of the 1.15x slope plus the 2 MiB floor", name, what, level, runs[0], lowerQuartile(runs[1]), runs[1], bound)
 			} else {
-				t.Logf("%s: %s lowest %d highest %d bytes, base lowest %d highest %d, slope bound under %.0f on the lowest", name, what, pair[0], pair[1], pair[2], pair[3], bound)
+				t.Logf("%s: %s plateau %d bytes (runs %v), base plateau %d, slope bound under %.0f on the plateau", name, what, level, runs[0], lowerQuartile(runs[1]), bound)
 			}
 		}
 		for what, pair := range map[string][2]uint64{
