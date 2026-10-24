@@ -2,7 +2,7 @@ package v1
 
 import "testing"
 
-func TestRowKeyedEvidenceRefIsExactlyTheRepositoryAnchoredKinds(t *testing.T) {
+func TestRowKeyedEvidenceRefIsExactlyTheSingleRowKinds(t *testing.T) {
 	rowKeyed := map[ContextFabricEvidenceEntityType]bool{
 		ContextFabricEvidenceEntityPullRequest: true,
 		ContextFabricEvidenceEntityWorkItem:    true,
@@ -10,6 +10,7 @@ func TestRowKeyedEvidenceRefIsExactlyTheRepositoryAnchoredKinds(t *testing.T) {
 		ContextFabricEvidenceEntityCI:          true,
 		ContextFabricEvidenceEntityDeployment:  true,
 		ContextFabricEvidenceEntityReviewV2:    true,
+		ContextFabricEvidenceEntityIncident:    true,
 	}
 	for _, kind := range ContextFabricEvidenceEntityTypeVocabulary() {
 		ref := ContextFabricEvidenceRefPrefix + string(kind) + ":0b8f2a4e-1c3d-4e5f-8a9b-0c1d2e3f4a5b:x"
