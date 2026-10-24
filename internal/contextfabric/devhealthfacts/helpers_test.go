@@ -207,6 +207,20 @@ func (s *fakeScanner) Next() bool { return s.row < len(s.rows) }
 func (s *fakeScanner) Scan(dest ...any) error {
 	row := s.rows[s.row]
 	for index, target := range dest {
+		// A trailing count or hash array a canned row predates reads as none.
+		if index >= len(row) {
+			switch value := target.(type) {
+			case *uint64:
+				*value = 0
+				continue
+			case *[]uint64:
+				*value = nil
+				continue
+			case *[]uint8:
+				*value = nil
+				continue
+			}
+		}
 		switch value := target.(type) {
 		case *string:
 			*value = row[index].(string)

@@ -163,6 +163,8 @@ type projectRollupMixRow struct {
 	WorkUnits, Repos, Teams, ExcludedNoRepoLink                              uint64
 	// SizedUnits counts the counted units that carry an issue size.
 	SizedUnits uint64
+	// UncategorizedUnits counts the evidence-gated units of the repo arm, none counted above.
+	UncategorizedUnits uint64
 	// FirstUnitFrom is the earliest start among the counted units, the project's
 	// own span within the window.
 	FirstUnitFrom time.Time
@@ -237,18 +239,19 @@ func projectRollupRepoThemesStatement() string {
 WITH ` + projectMixBoundLinkCTE + `
 SELECT
 	concat(l.project_provider, ':', l.project_id) AS project_key,
-	sumIf(u.theme_feature_delivery * u.effort_value, l.link_kind = 'repo') AS feature_delivery,
-	sumIf(u.theme_operational * u.effort_value, l.link_kind = 'repo') AS operational,
-	sumIf(u.theme_maintenance * u.effort_value, l.link_kind = 'repo') AS maintenance,
-	sumIf(u.theme_quality * u.effort_value, l.link_kind = 'repo') AS quality,
-	sumIf(u.theme_risk * u.effort_value, l.link_kind = 'repo') AS risk,
-	uniqExactIf(u.work_unit_id, l.link_kind = 'repo') AS work_units,
-	uniqExactIf(u.repo_id, l.link_kind = 'repo') AS repos,
-	length(groupUniqArrayArrayIf(l.link_teams, l.link_kind = 'repo')) AS team_count,
-	minIf(u.from_ts, l.link_kind = 'repo' AND toUnixTimestamp(u.from_ts) > 0) AS first_unit_from,
-	uniqExactIf(u.work_unit_id, l.link_kind = 'repo' AND u.unit_issue_size > 0) AS sized_units
+	sumIf(u.theme_feature_delivery * u.effort_value, l.link_kind = 'repo' AND NOT u.gated) AS feature_delivery,
+	sumIf(u.theme_operational * u.effort_value, l.link_kind = 'repo' AND NOT u.gated) AS operational,
+	sumIf(u.theme_maintenance * u.effort_value, l.link_kind = 'repo' AND NOT u.gated) AS maintenance,
+	sumIf(u.theme_quality * u.effort_value, l.link_kind = 'repo' AND NOT u.gated) AS quality,
+	sumIf(u.theme_risk * u.effort_value, l.link_kind = 'repo' AND NOT u.gated) AS risk,
+	uniqExactIf(u.work_unit_id, l.link_kind = 'repo' AND NOT u.gated) AS work_units,
+	uniqExactIf(u.repo_id, l.link_kind = 'repo' AND NOT u.gated) AS repos,
+	length(groupUniqArrayArrayIf(l.link_teams, l.link_kind = 'repo' AND NOT u.gated)) AS team_count,
+	minIf(u.from_ts, l.link_kind = 'repo' AND NOT u.gated AND toUnixTimestamp(u.from_ts) > 0) AS first_unit_from,
+	uniqExactIf(u.work_unit_id, l.link_kind = 'repo' AND NOT u.gated AND u.unit_issue_size > 0) AS sized_units,
+	uniqExactIf(u.work_unit_id, l.link_kind = 'repo' AND u.gated) AS uncategorized_units
 FROM (
-	SELECT work_unit_id, repo_id, effort_value, unit_issue_size, from_ts,
+	SELECT work_unit_id, repo_id, effort_value, unit_issue_size, from_ts, gated,
 		` + themeEntrySumSQL(contextfabric.ThemeFeatureDelivery) + ` AS theme_feature_delivery,
 		` + themeEntrySumSQL(contextfabric.ThemeOperational) + ` AS theme_operational,
 		` + themeEntrySumSQL(contextfabric.ThemeMaintenance) + ` AS theme_maintenance,
@@ -260,7 +263,8 @@ FROM (
 		FROM ` + sizedUnits(`SELECT work_unit_id, org_id,
 			(argMax(tuple(repo_id), computed_at)).1 AS repo_id,
 			argMax(from_ts, computed_at) AS from_ts,
-			argMax(theme_distribution_json, computed_at) AS theme_distribution_json
+			argMax(theme_distribution_json, computed_at) AS theme_distribution_json,
+			`+latestUnitGatedSQL+` AS gated
 		FROM work_unit_investments
 		WHERE org_id = {org_id:String}`+projectMixPinnedFilter+`
 		GROUP BY work_unit_id, org_id`) + `
@@ -269,7 +273,7 @@ FROM (
 ) AS u
 INNER JOIN project_link AS l ON l.link_key = u.link_key
 GROUP BY l.project_provider, l.project_id
-HAVING work_units > 0
+HAVING work_units > 0 OR uncategorized_units > 0
 )
 ORDER BY project_key`)
 }
@@ -283,16 +287,17 @@ func projectRollupRepoBugfixStatement() string {
 WITH ` + projectMixBoundLinkCTE + `
 SELECT
 	concat(l.project_provider, ':', l.project_id) AS project_key,
-	sumIf(u.bugfix_share * u.effort_value, l.link_kind = 'repo') AS bugfix_weighted
+	sumIf(u.bugfix_share * u.effort_value, l.link_kind = 'repo' AND NOT u.gated) AS bugfix_weighted
 FROM (
-	SELECT work_unit_id, repo_id, effort_value,
+	SELECT work_unit_id, repo_id, effort_value, gated,
 		ifNull(subcategory_distribution_json['` + readers.BugfixSubcategoryKey + `'], 0.0) AS bugfix_share,
 		concat('r:', toString(repo_id)) AS link_key
 	FROM (
 		SELECT *, unit_size_weight AS effort_value
 		FROM ` + sizedUnits(`SELECT work_unit_id, org_id,
 			(argMax(tuple(repo_id), computed_at)).1 AS repo_id,
-			argMax(subcategory_distribution_json, computed_at) AS subcategory_distribution_json
+			argMax(subcategory_distribution_json, computed_at) AS subcategory_distribution_json,
+			`+latestUnitGatedSQL+` AS gated
 		FROM work_unit_investments
 		WHERE org_id = {org_id:String}`+projectMixPinnedFilter+`
 		GROUP BY work_unit_id, org_id`) + `
@@ -360,12 +365,13 @@ FROM (
 					FROM (
 						SELECT work_unit_id,
 							(argMax(tuple(repo_id), computed_at)).1 AS repo_id,
-							argMax(structural_evidence_json, computed_at) AS structural_evidence_json
+							argMax(structural_evidence_json, computed_at) AS structural_evidence_json,
+							` + latestUnitGatedSQL + ` AS gated
 						FROM work_unit_investments
 						WHERE org_id = {org_id:String}` + projectMixPinnedFilter + `
 						GROUP BY work_unit_id
 					)
-					WHERE repo_id IS NULL
+					WHERE repo_id IS NULL AND NOT gated
 				) AS unit
 				LEFT ARRAY JOIN unit.evidence_refs AS evidence_ref
 			) AS expanded
@@ -411,7 +417,7 @@ func readProjectRollupMixRowsOnce(ctx context.Context, client contextpacket.Clic
 	var rows []projectRollupMixRow
 	if err := readers.QueryOrgScopedNamed(ctx, client, "ReadProjectThemeMix", projectRollupRepoThemesStatement(), orgID, ids, func(row contextpacket.ClickHouseRowScanner) error {
 		var r projectRollupMixRow
-		if scanErr := row.Scan(&r.ProjectKey, &r.FeatureDelivery, &r.Operational, &r.Maintenance, &r.Quality, &r.Risk, &r.WorkUnits, &r.Repos, &r.Teams, &r.FirstUnitFrom, &r.SizedUnits); scanErr != nil {
+		if scanErr := row.Scan(&r.ProjectKey, &r.FeatureDelivery, &r.Operational, &r.Maintenance, &r.Quality, &r.Risk, &r.WorkUnits, &r.Repos, &r.Teams, &r.FirstUnitFrom, &r.SizedUnits, &r.UncategorizedUnits); scanErr != nil {
 			return scanErr
 		}
 		rows = append(rows, r)
@@ -501,9 +507,9 @@ func projectNativePlacementStatement() string {
 func projectNativeThemeValuesStatement() string {
 	return `SELECT groupArray(work_unit_id), groupArray(effort_value),
     groupArray(theme_feature_delivery), groupArray(theme_operational), groupArray(theme_maintenance),
-    groupArray(theme_quality), groupArray(theme_risk), groupArray(from_ts), groupArray(sized)
+    groupArray(theme_quality), groupArray(theme_risk), groupArray(from_ts), groupArray(sized), groupArray(gated)
 FROM (
-    SELECT work_unit_id, effort_value, toUInt8(unit_issue_size > 0) AS sized, from_ts,
+    SELECT work_unit_id, effort_value, toUInt8(unit_issue_size > 0) AS sized, from_ts, gated,
         theme_distribution_json['` + contextfabric.ThemeFeatureDelivery + `'] AS theme_feature_delivery,
         theme_distribution_json['` + contextfabric.ThemeOperational + `'] AS theme_operational,
         theme_distribution_json['` + contextfabric.ThemeMaintenance + `'] AS theme_maintenance,
@@ -513,7 +519,8 @@ FROM (
         SELECT *, unit_size_weight AS effort_value
         FROM ` + sizedUnits(`SELECT work_unit_id, org_id,
             argMax(from_ts, computed_at) AS from_ts,
-            argMax(theme_distribution_json, computed_at) AS theme_distribution_json
+            argMax(theme_distribution_json, computed_at) AS theme_distribution_json,
+            `+latestUnitGatedSQL+` AS gated
         FROM work_unit_investments
         WHERE org_id = {org_id:String}`+projectMixPinnedFilter+`
         GROUP BY work_unit_id, org_id`) + `
@@ -540,27 +547,28 @@ FROM (
 type projectNativeUnitValues struct {
 	effort, feature, operational, maintenance, quality, risk, bugfix float64
 	from                                                             time.Time
-	sized                                                            bool
+	sized, gated                                                     bool
 }
 
 // readProjectNativeMixRows runs the native mix: phase 0, the placement, the
 // unit values, then the per-project aggregation the single statement did in
 // SQL: a unit counts in full for every requested project it is placed in,
-// spanning when it is placed in more than one project (requested or not).
-func readProjectNativeMixRowsOnce(ctx context.Context, client contextpacket.ClickHouseQueryClient, orgID string, ids []string, timeBound factTimeBound, rowLimit int, resolve *InvestmentProvider) ([]readers.ProjectThemeMixRow, map[string]time.Time, map[string]uint64, bool, error) {
+// spanning when it is placed in more than one project (requested or not). An
+// evidence-gated unit counts only in the returned per-project uncategorized count.
+func readProjectNativeMixRowsOnce(ctx context.Context, client contextpacket.ClickHouseQueryClient, orgID string, ids []string, timeBound factTimeBound, rowLimit int, resolve *InvestmentProvider) ([]readers.ProjectThemeMixRow, map[string]time.Time, map[string]uint64, map[string]uint64, bool, error) {
 	// Nothing is read before the baseline marks (see the roll-up).
 	before, err := readProjectMixInputs(ctx, client, orgID, ids, projectNativeInputSources)
 	if err != nil {
-		return nil, nil, nil, false, err
+		return nil, nil, nil, nil, false, err
 	}
 	projectMixAfterBaseline(ctx)
 	scope, err := readProjectMixScope(ctx, client, orgID, ids, timeBound, resolve)
 	if err != nil {
-		return nil, nil, nil, false, err
+		return nil, nil, nil, nil, false, err
 	}
 	projectMixAfterScope(ctx)
 	if len(scope.unitIDs) == 0 {
-		return nil, nil, nil, false, nil
+		return nil, nil, nil, nil, false, nil
 	}
 	projectMixBetweenPhases(ctx)
 	extra := scope.bindings()
@@ -570,27 +578,27 @@ func readProjectNativeMixRowsOnce(ctx context.Context, client contextpacket.Clic
 	if err := readers.QueryOrgScopedNamed(ctx, client, "ReadProjectThemeMixPlacement", projectNativePlacementStatement(), orgID, ids, func(row contextpacket.ClickHouseRowScanner) error {
 		return row.Scan(&pUnit, &pProvider, &pProject, &pMulti)
 	}, extra...); err != nil {
-		return nil, nil, nil, false, err
+		return nil, nil, nil, nil, false, err
 	}
 	if len(pProvider) != len(pUnit) || len(pProject) != len(pUnit) || len(pMulti) != len(pUnit) {
-		return nil, nil, nil, false, fmt.Errorf("project native mix placement arrays disagree: %d/%d/%d/%d", len(pUnit), len(pProvider), len(pProject), len(pMulti))
+		return nil, nil, nil, nil, false, fmt.Errorf("project native mix placement arrays disagree: %d/%d/%d/%d", len(pUnit), len(pProvider), len(pProject), len(pMulti))
 	}
 
 	var vUnit []string
 	var vEffort, vFeature, vOperational, vMaintenance, vQuality, vRisk []float64
 	var vFrom []time.Time
-	var vSized []uint8
+	var vSized, vGated []uint8
 	if err := readers.QueryOrgScopedNamed(ctx, client, "ReadProjectThemeMixThemeValues", projectNativeThemeValuesStatement(), orgID, ids, func(row contextpacket.ClickHouseRowScanner) error {
-		return row.Scan(&vUnit, &vEffort, &vFeature, &vOperational, &vMaintenance, &vQuality, &vRisk, &vFrom, &vSized)
+		return row.Scan(&vUnit, &vEffort, &vFeature, &vOperational, &vMaintenance, &vQuality, &vRisk, &vFrom, &vSized, &vGated)
 	}, extra...); err != nil {
-		return nil, nil, nil, false, err
+		return nil, nil, nil, nil, false, err
 	}
 	var bUnit []string
 	var bShare []float64
 	if err := readers.QueryOrgScopedNamed(ctx, client, "ReadProjectThemeMixBugfixValues", projectNativeBugfixValuesStatement(), orgID, ids, func(row contextpacket.ClickHouseRowScanner) error {
 		return row.Scan(&bUnit, &bShare)
 	}, append(append([]readers.Binding{}, extra...), readers.Binding{Name: "bugfix_key", Value: readers.BugfixSubcategoryKey})...); err != nil {
-		return nil, nil, nil, false, err
+		return nil, nil, nil, nil, false, err
 	}
 	bugfix := make(map[string]float64, len(bUnit))
 	for i, unit := range bUnit {
@@ -598,12 +606,12 @@ func readProjectNativeMixRowsOnce(ctx context.Context, client contextpacket.Clic
 	}
 	values := make(map[string]projectNativeUnitValues, len(vUnit))
 	for i, unit := range vUnit {
-		values[unit] = projectNativeUnitValues{vEffort[i], vFeature[i], vOperational[i], vMaintenance[i], vQuality[i], vRisk[i], bugfix[unit], vFrom[i], vSized[i] == 1}
+		values[unit] = projectNativeUnitValues{vEffort[i], vFeature[i], vOperational[i], vMaintenance[i], vQuality[i], vRisk[i], bugfix[unit], vFrom[i], vSized[i] == 1, i < len(vGated) && vGated[i] == 1}
 	}
 
 	after, err := readProjectMixInputs(ctx, client, orgID, ids, projectNativeInputSources)
 	if err != nil {
-		return nil, nil, nil, false, err
+		return nil, nil, nil, nil, false, err
 	}
 	changed := !slices.Equal(before, after)
 
@@ -618,6 +626,7 @@ func readProjectNativeMixRowsOnce(ctx context.Context, client contextpacket.Clic
 	byProject := map[string]*readers.ProjectThemeMixRow{}
 	firstFrom := map[string]time.Time{}
 	sized := map[string]uint64{}
+	uncategorized := map[string]uint64{}
 	for i, unit := range pUnit {
 		key := pProvider[i] + ":" + pProject[i]
 		if _, ok := requested[key]; !ok {
@@ -625,6 +634,10 @@ func readProjectNativeMixRowsOnce(ctx context.Context, client contextpacket.Clic
 		}
 		v, ok := values[unit]
 		if !ok {
+			continue
+		}
+		if v.gated {
+			uncategorized[key]++
 			continue
 		}
 		r := byProject[key]
@@ -662,7 +675,7 @@ func readProjectNativeMixRowsOnce(ctx context.Context, client contextpacket.Clic
 	if rowLimit > 0 && len(rows) > rowLimit {
 		rows = rows[:rowLimit]
 	}
-	return rows, firstFrom, sized, changed, nil
+	return rows, firstFrom, sized, uncategorized, changed, nil
 }
 
 // The roll-up and the native mix read tables beyond work_unit_investments that
@@ -818,16 +831,16 @@ func readProjectRollupMixRows(ctx context.Context, client contextpacket.ClickHou
 	return nil, contended
 }
 
-func readProjectNativeMixRows(ctx context.Context, client contextpacket.ClickHouseQueryClient, orgID string, ids []string, timeBound factTimeBound, rowLimit int, resolve *InvestmentProvider) ([]readers.ProjectThemeMixRow, map[string]uint64, error) {
+func readProjectNativeMixRows(ctx context.Context, client contextpacket.ClickHouseQueryClient, orgID string, ids []string, timeBound factTimeBound, rowLimit int, resolve *InvestmentProvider) ([]readers.ProjectThemeMixRow, map[string]uint64, map[string]uint64, error) {
 	for attempt := 1; attempt <= projectMixMaxAttempts; attempt++ {
-		rows, firstFrom, sized, changed, err := readProjectNativeMixRowsOnce(ctx, client, orgID, ids, timeBound, rowLimit, resolve)
+		rows, firstFrom, sized, uncategorized, changed, err := readProjectNativeMixRowsOnce(ctx, client, orgID, ids, timeBound, rowLimit, resolve)
 		if err != nil || !changed {
 			if err == nil {
 				for key, from := range firstFrom {
 					recordInvestmentProjectSpan(ctx, key, from)
 				}
 			}
-			return rows, sized, err
+			return rows, sized, uncategorized, err
 		}
 		slog.WarnContext(ctx, "devhealthfacts.project_mix_inputs_changed", "mix", "project_native", "attempt", attempt, "max_attempts", projectMixMaxAttempts)
 		if attempt < projectMixMaxAttempts {
@@ -837,5 +850,5 @@ func readProjectNativeMixRows(ctx context.Context, client contextpacket.ClickHou
 	contended := &ProjectMixContendedError{Mix: "project_native", Attempts: projectMixMaxAttempts}
 	slog.WarnContext(ctx, "devhealthfacts.project_mix_contended", "mix", contextfabric.SanitizeLogAttr(contended.Mix), "attempts", contended.Attempts)
 	projectMixEvent(ctx, projectMixContendedReader, contended)
-	return nil, nil, contended
+	return nil, nil, nil, contended
 }
