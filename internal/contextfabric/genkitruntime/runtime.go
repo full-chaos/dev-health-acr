@@ -1263,6 +1263,7 @@ func (r *Runtime) interpretQuestionWithSample(ctx context.Context, principal sto
 			// keeps the outcome vocabulary consistent with a direct call to
 			// that same fallback.
 			receipt.Outcome = fallbackReceipt.Outcome
+			addFallbackUsage(&receipt, fallbackReceipt)
 			// The SECOND fallback-failure branch, and it needs the same
 			// derivation as the one further down for the same reason. The
 			// two differ only in why the PRIMARY failed -- here the primary
@@ -1324,6 +1325,7 @@ func (r *Runtime) interpretQuestionWithSample(ctx context.Context, principal sto
 			// comment: report the fallback's own outcome/classification,
 			// not the primary's stale invalid_output/ErrModelOutput.
 			receipt.Outcome = fallbackReceipt.Outcome
+			addFallbackUsage(&receipt, fallbackReceipt)
 			// The FALLBACK's error is the one the caller receives here, so
 			// its reason is the one the receipt and the decision line must
 			// report. A fallback that fails semantically (its own
@@ -3577,11 +3579,17 @@ func mergeFallbackReceipt(primary, fallback contextfabric.ModelExecutionReceipt)
 	if fallback.OutputDigest != "" {
 		primary.OutputDigest = fallback.OutputDigest
 	}
-	primary.Usage.InputTokens += fallback.Usage.InputTokens
-	primary.Usage.OutputTokens += fallback.Usage.OutputTokens
-	primary.Usage.TotalTokens += fallback.Usage.TotalTokens
+	addFallbackUsage(&primary, fallback)
 	mergeFallbackFrameCapture(&primary, fallback)
 	return primary
+}
+
+// addFallbackUsage sums the fallback leg's token usage onto the receipt. A
+// call that ran both legs paid for both, whether or not the fallback answered.
+func addFallbackUsage(receipt *contextfabric.ModelExecutionReceipt, fallback contextfabric.ModelExecutionReceipt) {
+	receipt.Usage.InputTokens += fallback.Usage.InputTokens
+	receipt.Usage.OutputTokens += fallback.Usage.OutputTokens
+	receipt.Usage.TotalTokens += fallback.Usage.TotalTokens
 }
 
 func mergeFallbackFrameCapture(primary *contextfabric.ModelExecutionReceipt, fallback contextfabric.ModelExecutionReceipt) {
@@ -3630,19 +3638,20 @@ func mergeFallbackFrameCapture(primary *contextfabric.ModelExecutionReceipt, fal
 // The primary's failure stays observable through primaryFailureClassification
 // and the primary_* identity fields.
 //
-// Three fields stay the primary's, each pinned by its own test:
+// Usage is summed across both legs: the call paid for both, and the receipt
+// is the only record of that spend.
+//
+// Two fields stay the primary's, each pinned by its own test:
 //   - Attempts, matching mergeFallbackReceipt; the fallback's own count is
 //     reported separately as fallback_attempts_total.
 //   - FallbackUsed, which means the fallback ANSWERED; on these branches it
 //     did not.
-//   - Usage, which stays unsummed, so a both-failed call does not account for
-//     the fallback's tokens. That gap is independent of which leg the receipt
-//     describes.
 func describeReportedLeg(primary, fallback contextfabric.ModelExecutionReceipt) contextfabric.ModelExecutionReceipt {
 	primary.Provider = fallback.Provider
 	primary.Model = fallback.Model
 	primary.ModelVersion = fallback.ModelVersion
 	primary.OutputDigest = fallback.OutputDigest
+	addFallbackUsage(&primary, fallback)
 	return primary
 }
 
