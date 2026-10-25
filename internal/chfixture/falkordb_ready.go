@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/redis/go-redis/v9"
+	tcexec "github.com/testcontainers/testcontainers-go/exec"
 	"github.com/testcontainers/testcontainers-go/wait"
 )
 
@@ -54,9 +55,48 @@ func (e *PortUnreachableError) Error() string        { return e.Err.Error() }
 func (e *PortUnreachableError) Unwrap() error        { return e.Err }
 func (e *PortUnreachableError) Is(target error) bool { return target == ErrPublishedPortUnreachable }
 
+// ErrServerWedged marks a failed wait where the server answered PING on the mapped port and then stopped answering
+// both there and inside the container, and was still silent when the budget ended. The wait keeps the whole budget,
+// so a server that recovers passes; this error only names the state and carries the diagnostics. It is never retried,
+// because the stall is the server's, not the port's.
+var ErrServerWedged = errors.New("server answered and then stopped answering on the mapped port and inside the container")
+
+// ServerWedgedError is the ErrServerWedged failure. Graph and InFlight name the probe graph and the statement that got
+// no reply on the last try the server answered PING; Diagnostics holds what WaitUntilReady read from the container.
+type ServerWedgedError struct {
+	Graph       string
+	InFlight    string
+	ServedTry   int
+	Tries       int
+	Silent      time.Duration
+	Elapsed     time.Duration
+	Err         error
+	Diagnostics string
+}
+
+func (e *ServerWedgedError) Error() string {
+	if e.Diagnostics == "" {
+		return e.Err.Error()
+	}
+	return e.Err.Error() + "\n" + e.Diagnostics
+}
+func (e *ServerWedgedError) Unwrap() error        { return e.Err }
+func (e *ServerWedgedError) Is(target error) bool { return target == ErrServerWedged }
+
 const falkorUnreachableAfter = 10 * time.Second
 
-type falkorServing struct{ budget time.Duration }
+type falkorServing struct {
+	budget time.Duration
+	// zero means the package default; set only by tests that need a shorter clock.
+	tryLimit, poll, unreachableAfter time.Duration
+}
+
+func orDefault(d, def time.Duration) time.Duration {
+	if d == 0 {
+		return def
+	}
+	return d
+}
 
 func (f falkorServing) WaitUntilReady(ctx context.Context, target wait.StrategyTarget) error {
 	host, err := target.Host(ctx)
@@ -78,7 +118,83 @@ func (f falkorServing) WaitUntilReady(ctx context.Context, target wait.StrategyT
 		}
 		return nil
 	}
-	return awaitFalkorServingInside(ctx, net.JoinHostPort(host, port.Port()), f.budget, falkorServeTryLimit, falkorServePoll, falkorUnreachableAfter, inside, log.Printf)
+	tryLimit := orDefault(f.tryLimit, falkorServeTryLimit)
+	err = awaitFalkorServingInside(ctx, net.JoinHostPort(host, port.Port()), f.budget, tryLimit, orDefault(f.poll, falkorServePoll), orDefault(f.unreachableAfter, falkorUnreachableAfter), inside, log.Printf)
+	var wedged *ServerWedgedError
+	if errors.As(err, &wedged) {
+		wedged.Diagnostics = diagnoseFalkorContainer(target, tryLimit)
+	}
+	return err
+}
+
+const falkorLogTail = 4096
+
+// diagnoseFalkorContainer reads what a stalled server leaves behind: the image, the container state, the main
+// process status and per-thread state and wait channel, and the tail of the container log. Each read has its own
+// deadline and a failed read is reported in place, so a stalled daemon cannot hold the failure back.
+func diagnoseFalkorContainer(target wait.StrategyTarget, stepLimit time.Duration) string {
+	var lines []string
+	step := func() (context.Context, context.CancelFunc) {
+		return context.WithTimeout(context.Background(), stepLimit)
+	}
+
+	ctx, cancel := step()
+	info, err := target.Inspect(ctx)
+	cancel()
+	switch {
+	case err != nil:
+		lines = append(lines, fmt.Sprintf("container inspect: unavailable: %v", err))
+	default:
+		image := ""
+		if info.Config != nil {
+			image = info.Config.Image
+		}
+		lines = append(lines, fmt.Sprintf("container image: %s (image id %s)", image, info.Image))
+		if st := info.State; st != nil {
+			lines = append(lines, fmt.Sprintf("container state: status=%s running=%t paused=%t restarting=%t oom_killed=%t dead=%t pid=%d exit=%d started=%s error=%q",
+				st.Status, st.Running, st.Paused, st.Restarting, st.OOMKilled, st.Dead, st.Pid, st.ExitCode, st.StartedAt, st.Error))
+		} else {
+			lines = append(lines, "container state: unavailable: inspect carried no state")
+		}
+	}
+
+	execRead := func(label string, cmd []string, keep func(string) bool) {
+		ctx, cancel := step()
+		defer cancel()
+		code, out, err := target.Exec(ctx, cmd, tcexec.Multiplexed())
+		if err != nil {
+			lines = append(lines, fmt.Sprintf("%s: unavailable: %v", label, err))
+			return
+		}
+		body, _ := io.ReadAll(io.LimitReader(out, falkorLogTail))
+		var kept []string
+		for _, l := range strings.Split(strings.TrimSpace(string(body)), "\n") {
+			if keep == nil || keep(l) {
+				kept = append(kept, "  "+l)
+			}
+		}
+		lines = append(lines, fmt.Sprintf("%s (exit %d):", label, code))
+		lines = append(lines, kept...)
+	}
+	execRead("/proc/1/status", []string{"cat", "/proc/1/status"}, func(l string) bool {
+		return strings.HasPrefix(l, "Name:") || strings.HasPrefix(l, "State:") || strings.HasPrefix(l, "Threads:") || strings.HasPrefix(l, "VmRSS:")
+	})
+	execRead("threads of pid 1 (tid state wchan comm)", []string{"sh", "-c", `for t in /proc/1/task/*; do printf '%s %s %s %s\n' "${t##*/}" "$(sed 's/.*) //' "$t/stat" | cut -d' ' -f1)" "$(cat "$t/wchan" 2>/dev/null)" "$(cat "$t/comm")"; done`}, nil)
+
+	ctx, cancel = step()
+	defer cancel()
+	rc, err := target.Logs(ctx)
+	if err != nil {
+		lines = append(lines, fmt.Sprintf("container log: unavailable: %v", err))
+		return strings.Join(lines, "\n")
+	}
+	defer func() { _ = rc.Close() }()
+	body, readErr := readTail(rc, falkorLogTail)
+	lines = append(lines, fmt.Sprintf("container log (last %d bytes):", len(body)), strings.TrimRight(string(body), "\n"))
+	if readErr != nil {
+		lines = append(lines, fmt.Sprintf("container log: read stopped: %v", readErr))
+	}
+	return strings.Join(lines, "\n")
 }
 
 func awaitFalkorServing(ctx context.Context, addr string, budget, tryLimit, poll time.Duration, logf func(string, ...any)) error {
@@ -86,8 +202,10 @@ func awaitFalkorServing(ctx context.Context, addr string, budget, tryLimit, poll
 }
 
 // awaitFalkorServingInside probes addr from the runner. When inside is set, every failed try also asks the server
-// from inside the container, so a dead published port is told apart from a server that is not up; unreachableAfter
-// is how long that must hold before the wait gives up early with ErrPublishedPortUnreachable.
+// from inside the container, so a dead published port is told apart from a server that is not up, and a server that
+// answered PING and then went silent everywhere is told apart from both. unreachableAfter is how long either state
+// must hold: a dead published port ends the wait early with ErrPublishedPortUnreachable; a silent server is named
+// ErrServerWedged only when the budget ends.
 func awaitFalkorServingInside(ctx context.Context, addr string, budget, tryLimit, poll, unreachableAfter time.Duration, inside func(context.Context) error, logf func(string, ...any)) error {
 	began := time.Now()
 	deadline := began.Add(budget)
@@ -98,8 +216,10 @@ func awaitFalkorServingInside(ctx context.Context, addr string, budget, tryLimit
 	defer deleteProbeGraph(newFalkorClient(addr, tryLimit), graph, tryLimit, logf)
 	var last error
 	var history []string
-	var insideOKSince time.Time
+	var insideOKSince, silentSince time.Time
+	servedTry, inFlight := 0, ""
 	for try := 1; ; try++ {
+		tryBegan := time.Now()
 		client := newFalkorClient(addr, tryLimit)
 		last = probeFalkor(ctx, client, graph, tryLimit)
 		_ = client.Close()
@@ -113,7 +233,11 @@ func awaitFalkorServingInside(ctx context.Context, addr string, budget, tryLimit
 			insideErr := inside(insideCtx)
 			cancel()
 			var pingStep *pingStepError
-			if insideErr == nil && errors.As(last, &pingStep) {
+			hostPingFailed := errors.As(last, &pingStep)
+			if !hostPingFailed {
+				servedTry, inFlight = try, probeStatement(last)
+			}
+			if insideErr == nil && hostPingFailed {
 				line += "; inside the container: answers PING"
 				if insideOKSince.IsZero() {
 					insideOKSince = time.Now()
@@ -124,6 +248,13 @@ func awaitFalkorServingInside(ctx context.Context, addr string, budget, tryLimit
 			} else {
 				line += fmt.Sprintf("; inside the container: %v", insideErr)
 				insideOKSince = time.Time{}
+			}
+			if servedTry > 0 && hostPingFailed && insideErr != nil {
+				if silentSince.IsZero() {
+					silentSince = tryBegan
+				}
+			} else {
+				silentSince = time.Time{}
 			}
 		}
 		history = append(history, line)
@@ -136,6 +267,12 @@ func awaitFalkorServingInside(ctx context.Context, addr string, budget, tryLimit
 			return &PortUnreachableError{Port: port, Tries: try, Elapsed: time.Since(began).Round(time.Millisecond), Err: fmt.Errorf("falkordb not serving on %s after %s: %w: %w\n%s", addr, time.Since(began).Round(time.Millisecond), ErrPublishedPortUnreachable, last, summarizeTries(history))}
 		}
 		if time.Now().Add(poll).After(deadline) {
+			if inside != nil && !silentSince.IsZero() && time.Since(silentSince) >= unreachableAfter {
+				silent, elapsed := time.Since(silentSince).Round(time.Millisecond), time.Since(began).Round(time.Millisecond)
+				return &ServerWedgedError{Graph: graph, InFlight: inFlight, ServedTry: servedTry, Tries: try, Silent: silent, Elapsed: elapsed,
+					Err: fmt.Errorf("falkordb on %s stopped answering after it served and was still silent when the %s budget ended: try %d answered PING, then %s got no reply; host PING and the in-container ping have both failed for the last %s (%d tries, %s elapsed): %w: %w\n%s",
+						addr, budget, servedTry, inFlight, silent, try, elapsed, ErrServerWedged, last, summarizeTries(history))}
+			}
 			return fmt.Errorf("falkordb not serving on %s within %s: %w\n%s", addr, budget, last, summarizeTries(history))
 		}
 		select {
@@ -185,6 +322,44 @@ func loopbackDialer(tryLimit time.Duration) func(context.Context, string, string
 	}
 }
 
+// probeStepError marks a probe whose PING was answered and which then failed at the named statement.
+type probeStepError struct {
+	statement string
+	err       error
+}
+
+func (e *probeStepError) Error() string { return e.err.Error() }
+func (e *probeStepError) Unwrap() error { return e.err }
+
+func probeStatement(err error) string {
+	var step *probeStepError
+	if errors.As(err, &step) {
+		return step.statement
+	}
+	return "no statement"
+}
+
+const probeIndexStatement = "CREATE INDEX FOR (n:ReadyProbe) ON (n.k)"
+
+// readTail reads r to the end and returns its last n bytes.
+func readTail(r io.Reader, n int) ([]byte, error) {
+	tail := make([]byte, 0, 2*n)
+	buf := make([]byte, 32<<10)
+	for {
+		k, err := r.Read(buf)
+		tail = append(tail, buf[:k]...)
+		if len(tail) > n {
+			tail = append(tail[:0], tail[len(tail)-n:]...)
+		}
+		if err == io.EOF {
+			return tail, nil
+		}
+		if err != nil {
+			return tail, err
+		}
+	}
+}
+
 // pingStepError marks a probe that failed at the PING step (dial, write or read of PING), as opposed to a later
 // command; only a host-side PING that never answers can mean the published port is dead.
 type pingStepError struct{ err error }
@@ -216,10 +391,10 @@ func probeFalkor(ctx context.Context, client *redis.Client, graph string, tryLim
 		return &pingStepError{err: fmt.Errorf("PING: %w", err)}
 	}
 	if err := client.Do(tryCtx, "GRAPH.LIST").Err(); err != nil {
-		return fmt.Errorf("GRAPH.LIST: %w", err)
+		return &probeStepError{statement: "GRAPH.LIST", err: fmt.Errorf("GRAPH.LIST: %w", err)}
 	}
-	if err := client.Do(tryCtx, "GRAPH.QUERY", graph, "CREATE INDEX FOR (n:ReadyProbe) ON (n.k)").Err(); err != nil && !alreadyIndexed(err) {
-		return fmt.Errorf("GRAPH.QUERY CREATE INDEX: %w", err)
+	if err := client.Do(tryCtx, "GRAPH.QUERY", graph, probeIndexStatement).Err(); err != nil && !alreadyIndexed(err) {
+		return &probeStepError{statement: fmt.Sprintf("GRAPH.QUERY %s %q", graph, probeIndexStatement), err: fmt.Errorf("GRAPH.QUERY CREATE INDEX: %w", err)}
 	}
 	return nil
 }

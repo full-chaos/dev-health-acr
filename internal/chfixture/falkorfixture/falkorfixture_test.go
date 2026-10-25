@@ -142,6 +142,7 @@ func TestStartDoesNotRetryAnyOtherFailureOrMoreThanOnce(t *testing.T) {
 		"not up inside":     {errors.New("falkordb not serving within 2m0s: PING: i/o timeout\ntry 1 at 0ms: PING: EOF; inside the container: exit 1")},
 		"unreachable twice": {chfixture.ErrPublishedPortUnreachable, chfixture.ErrPublishedPortUnreachable, nil},
 		"create failed":     {errors.New("create container: no daemon")},
+		"server stalled":    {&chfixture.ServerWedgedError{Graph: "acr_ready_probe_1", ServedTry: 2, Tries: 5, Err: fmt.Errorf("w: %w: PING: i/o timeout", chfixture.ErrServerWedged)}},
 	} {
 		var calls int
 		_, err := startRetrying(context.Background(), &recordingT{}, "falkordb/falkordb", nil, func(context.Context, testcontainers.GenericContainerRequest) (testcontainers.Container, error) {

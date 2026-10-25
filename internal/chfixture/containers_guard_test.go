@@ -27,6 +27,7 @@ const (
 var knownTestcontainersImports = map[string]bool{
 	tcRoot:                       true,
 	tcRoot + "/wait":             true,
+	tcRoot + "/exec":             true,
 	tcRoot + "/modules/postgres": true,
 	tcNetwork:                    true,
 }
