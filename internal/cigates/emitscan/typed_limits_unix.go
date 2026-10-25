@@ -3,7 +3,9 @@
 package emitscan
 
 import (
+	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -81,4 +83,43 @@ func usedCPU(state *os.ProcessState) int64 {
 		return 0
 	}
 	return usage.Utime.Nano() + usage.Stime.Nano()
+}
+
+// processStart is the start time (field 22 of /proc/<pid>/stat, in clock ticks since boot) of a process, which tells a
+// process from a later one that reused its id. procUnknown where /proc is not there or the read fails for any reason
+// other than the process being gone.
+func processStart(pid int) (string, procStatus) {
+	if _, err := os.Stat("/proc/self/stat"); err != nil {
+		return "", procUnknown
+	}
+	data, err := os.ReadFile("/proc/" + strconv.Itoa(pid) + "/stat")
+	if errors.Is(err, fs.ErrNotExist) {
+		return "", procGone
+	}
+	if err != nil {
+		return "", procUnknown
+	}
+	text := string(data)
+	end := strings.LastIndexByte(text, ')')
+	if end < 0 {
+		return "", procUnknown
+	}
+	fields := strings.Fields(text[end+1:])
+	if len(fields) < 20 {
+		return "", procUnknown
+	}
+	return fields[19], procKnown
+}
+
+// ownedByThisUser is true for a file of the user running the scan.
+func ownedByThisUser(info os.FileInfo) bool {
+	stat, ok := info.Sys().(*syscall.Stat_t)
+	return ok && int(stat.Uid) == os.Getuid()
+}
+
+// pidNamespace names the process id namespace of this process (the link /proc/self/ns/pid). A process id and a start
+// time only mean something inside the namespace they were read in.
+func pidNamespace() (string, bool) {
+	link, err := os.Readlink("/proc/self/ns/pid")
+	return link, err == nil && link != ""
 }
