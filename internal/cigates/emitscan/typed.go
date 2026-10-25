@@ -16,6 +16,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"sort"
 	"strconv"
 	"strings"
@@ -128,8 +129,13 @@ func exportFiles(ctx context.Context, moduleDir string) (map[string]string, erro
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	cmd := exec.CommandContext(ctx, "go", "list", "-export", "-deps", "-f", "{{if .Export}}{{.ImportPath}}\t{{.Export}}{{end}}", "./...")
+	goPath, err := goBinary()
+	if err != nil {
+		return nil, err
+	}
+	cmd := exec.CommandContext(ctx, goPath, "list", "-export", "-deps", "-f", "{{if .Export}}{{.ImportPath}}\t{{.Export}}{{end}}", "./...")
 	cmd.Dir = moduleDir
+	cmd.Env = append(os.Environ(), "GOTOOLCHAIN=local")
 	out, err := cmd.Output()
 	if err != nil {
 		return nil, fmt.Errorf("go list -export: %w", err)
@@ -794,6 +800,50 @@ func buildEnvironment() []string {
 	return env
 }
 
+var goTool struct {
+	sync.Mutex
+	path string
+	err  error
+	done bool
+}
+
+// goBinary is the go command every step of the type-check uses: the one on PATH, once per process, and only when its
+// toolchain is the one that built this binary. The export data of `go list` and the helper built by `go build` must come
+// from the toolchain whose go/types reads them; a different go first on PATH (a test binary run outside `go test`, which
+// is what puts the matching toolchain on PATH) used to end in a refusal that did not say why. A mismatch is named once on
+// standard error and is an unavailable helper.
+func goBinary() (string, error) {
+	goTool.Lock()
+	defer goTool.Unlock()
+	if goTool.done {
+		return goTool.path, goTool.err
+	}
+	goTool.done = true
+	path, err := exec.LookPath("go")
+	if err != nil {
+		goTool.err = fmt.Errorf("%w: %v", errHelperUnavailable, err)
+		fmt.Fprintf(os.Stderr, "emitscan: %v\n", goTool.err)
+		return "", goTool.err
+	}
+	cmd := exec.Command(path, "env", "GOVERSION")
+	cmd.Dir = os.TempDir()
+	cmd.Env = buildEnvironment()
+	out, err := cmd.Output()
+	got := strings.TrimSpace(string(out))
+	switch {
+	case err != nil:
+		goTool.err = fmt.Errorf("%w: %s env GOVERSION: %v", errHelperUnavailable, path, err)
+	case got != runtime.Version():
+		goTool.err = fmt.Errorf("%w: the go command on PATH (%s) is %s but this scanner was built with %s; put the matching toolchain first on PATH", errHelperUnavailable, path, got, runtime.Version())
+	default:
+		goTool.path = path
+	}
+	if goTool.err != nil {
+		fmt.Fprintf(os.Stderr, "emitscan: %v\n", goTool.err)
+	}
+	return goTool.path, goTool.err
+}
+
 // helperOverride replaces the built helper (set by tests only, to plant a misbehaving one); helperBuilder replaces the
 // build (tests only, to make it fail).
 var (
@@ -848,10 +898,16 @@ func buildHelper(ctx context.Context, root string) (string, error) {
 	if dir, err := moduleDirOf(root); err == nil {
 		dirs = append(dirs, dir)
 	}
-	dir, err := os.MkdirTemp("", "emitscan-tcheck-")
+	goPath, err := goBinary()
+	if err != nil {
+		return "", err
+	}
+	sweepStaleHelperDirs(os.TempDir())
+	dir, err := os.MkdirTemp("", helperDirPrefix)
 	if err != nil {
 		return "", fmt.Errorf("%w: %v", errHelperUnavailable, err)
 	}
+	writeCreatorMarker(dir)
 	if err := os.Chmod(dir, 0o700); err != nil {
 		_ = os.RemoveAll(dir)
 		return "", fmt.Errorf("%w: %v", errHelperUnavailable, err)
@@ -860,7 +916,7 @@ func buildHelper(ctx context.Context, root string) (string, error) {
 	target := filepath.Join(dir, "child")
 	lastErr := errors.New("no module directory to build the type-check helper in")
 	for _, moduleDir := range dirs {
-		cmd := exec.CommandContext(context.WithoutCancel(ctx), "go", "build", "-mod=readonly", "-trimpath", "-o", target, importPath)
+		cmd := exec.CommandContext(context.WithoutCancel(ctx), goPath, "build", "-mod=readonly", "-trimpath", "-o", target, importPath)
 		cmd.Dir = moduleDir
 		cmd.Env = buildEnvironment()
 		if output, err := cmd.CombinedOutput(); err != nil {
@@ -870,6 +926,70 @@ func buildHelper(ctx context.Context, root string) (string, error) {
 		return target, nil
 	}
 	return "", fmt.Errorf("%w: %v", errHelperUnavailable, lastErr)
+}
+
+const (
+	helperDirPrefix = "emitscan-tcheck-"
+	creatorMarker   = "creator"
+)
+
+type procStatus int
+
+const (
+	procUnknown procStatus = iota
+	procKnown
+	procGone
+)
+
+// writeCreatorMarker records, in the helper's directory, the process that made it and when that process started. A killed
+// run cannot remove its directory; the next run finds the marker and removes the directory only if the creator is gone.
+// Where the start time is not known no marker is written, and the directory is never swept.
+func writeCreatorMarker(dir string) {
+	pid := os.Getpid()
+	start, status := processStart(pid)
+	if status != procKnown {
+		return
+	}
+	_ = os.WriteFile(filepath.Join(dir, creatorMarker), []byte(strconv.Itoa(pid)+" "+start+"\n"), 0o600)
+}
+
+// sweepStaleHelperDirs removes the helper directories under tmp that a killed run left behind: directories of this user
+// whose marker names a process that no longer exists with that start time. Every lane on a host runs as the same user,
+// so age is no evidence that a directory is unused. A directory without a readable marker, with an unparsable one, or
+// whose creator cannot be looked up is left alone.
+func sweepStaleHelperDirs(tmp string) {
+	entries, err := os.ReadDir(tmp)
+	if err != nil {
+		return
+	}
+	for _, entry := range entries {
+		if !strings.HasPrefix(entry.Name(), helperDirPrefix) || !entry.IsDir() {
+			continue
+		}
+		dir := filepath.Join(tmp, entry.Name())
+		info, err := os.Lstat(dir)
+		if err != nil || !info.IsDir() || !ownedByThisUser(info) {
+			continue
+		}
+		marker := filepath.Join(dir, creatorMarker)
+		if minfo, err := os.Lstat(marker); err != nil || !minfo.Mode().IsRegular() {
+			continue
+		}
+		data, err := os.ReadFile(marker)
+		if err != nil {
+			continue
+		}
+		pidText, startText, ok := strings.Cut(strings.TrimSpace(string(data)), " ")
+		pid, err := strconv.Atoi(pidText)
+		if !ok || err != nil || pid <= 0 || startText == "" {
+			continue
+		}
+		start, status := processStart(pid)
+		if status == procUnknown || (status == procKnown && start == startText) {
+			continue
+		}
+		_ = os.RemoveAll(dir)
+	}
 }
 
 // ShutdownHelper removes the helper's directory. A process that scanned calls it before it exits (a test binary, from TestMain).

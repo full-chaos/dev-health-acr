@@ -130,3 +130,33 @@ func ProbeCacheLen() int {
 	defer probeCache.Unlock()
 	return len(probeCache.verdict)
 }
+
+// ResetGoTool forgets the resolved go command and the export data read with it.
+func ResetGoTool() {
+	goTool.Lock()
+	goTool.path, goTool.err, goTool.done = "", nil, false
+	goTool.Unlock()
+	exportCache.Lock()
+	exportCache.byDir = map[string]*exportEntry{}
+	exportCache.Unlock()
+}
+
+// GoBinary is the resolved go command or the reason there is none.
+func GoBinary() (string, error) { return goBinary() }
+
+// ExportFiles reads the export data of the module at dir with the resolved go command.
+func ExportFiles(dir string) error {
+	_, err := exportFiles(context.Background(), dir)
+	return err
+}
+
+// WriteCreatorMarker and SweepStaleHelperDirs expose the leftover-directory sweep.
+func WriteCreatorMarker(dir string)   { writeCreatorMarker(dir) }
+func SweepStaleHelperDirs(tmp string) { sweepStaleHelperDirs(tmp) }
+func ProcessStartOf(pid int) (string, bool) {
+	start, status := processStart(pid)
+	return start, status == procKnown
+}
+
+const HelperDirPrefix = helperDirPrefix
+const CreatorMarker = creatorMarker
