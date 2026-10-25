@@ -164,7 +164,7 @@ func TestCredentialStore_rejectsInvalidUsageMetadataAtBoundary(t *testing.T) {
 	}
 
 	// When
-	err = store.TouchLastUsed(context.Background(), created.CredentialID, "not-an-ip", "agent\nforged", time.Now())
+	err = store.TouchLastUsed(context.Background(), created.OrgID, created.CredentialID, "not-an-ip", "agent\nforged", time.Now())
 
 	// Then
 	if !errors.Is(err, storage.ErrInvalidCredentialInput) {
@@ -264,4 +264,45 @@ func mustCredentialStore(t *testing.T, audits ...*AuditStore) *storage.Credentia
 		t.Fatal(err)
 	}
 	return store
+}
+
+func TestCredentialStore_TouchLastUsedLeavesCredentialOfAnotherOrganizationUnchanged(t *testing.T) {
+	// Given
+	store := mustCredentialStore(t, NewAuditStore())
+	created, err := store.CreateCredential(context.Background(), validCredentialCreateInput("usage"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// When
+	err = store.TouchLastUsed(context.Background(), "org_2", created.CredentialID, "203.0.113.10", "agent", time.Now())
+
+	// Then
+	if !errors.Is(err, storage.ErrNotFound) {
+		t.Fatalf("TouchLastUsed() error = %v, want not found", err)
+	}
+	got, err := store.GetByID(context.Background(), created.OrgID, created.CredentialID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.LastUsedAt != nil {
+		t.Fatalf("LastUsedAt = %v, want nil", got.LastUsedAt)
+	}
+}
+
+func TestCredentialStore_TouchLastUsedRejectsEmptyOrganization(t *testing.T) {
+	// Given
+	store := mustCredentialStore(t, NewAuditStore())
+	created, err := store.CreateCredential(context.Background(), validCredentialCreateInput("usage"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// When
+	err = store.TouchLastUsed(context.Background(), "", created.CredentialID, "203.0.113.10", "agent", time.Now())
+
+	// Then
+	if !errors.Is(err, storage.ErrInvalidCredentialInput) {
+		t.Fatalf("TouchLastUsed() error = %v, want invalid credential input", err)
+	}
 }

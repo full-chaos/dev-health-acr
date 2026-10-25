@@ -21,7 +21,7 @@ type orderedUsageStore struct {
 	events *[]string
 }
 
-func (s orderedUsageStore) TouchLastUsed(context.Context, string, string, string, time.Time) error {
+func (s orderedUsageStore) TouchLastUsed(context.Context, string, string, string, string, time.Time) error {
 	*s.events = append(*s.events, "last_used.flush")
 	return nil
 }
@@ -47,7 +47,7 @@ type cancellationThenSuccessUsageStore struct {
 	calls   atomic.Int64
 }
 
-func (s *cancellationThenSuccessUsageStore) TouchLastUsed(ctx context.Context, _ string, _ string, _ string, _ time.Time) error {
+func (s *cancellationThenSuccessUsageStore) TouchLastUsed(ctx context.Context, _ string, _ string, _ string, _ string, _ time.Time) error {
 	if s.calls.Add(1) == 1 {
 		s.once.Do(func() { close(s.started) })
 		<-ctx.Done()
@@ -56,7 +56,7 @@ func (s *cancellationThenSuccessUsageStore) TouchLastUsed(ctx context.Context, _
 	return nil
 }
 
-func (s *uncooperativeTelemetryStore) TouchLastUsed(context.Context, string, string, string, time.Time) error {
+func (s *uncooperativeTelemetryStore) TouchLastUsed(context.Context, string, string, string, string, time.Time) error {
 	s.once.Do(func() { close(s.started) })
 	<-s.release
 	return nil

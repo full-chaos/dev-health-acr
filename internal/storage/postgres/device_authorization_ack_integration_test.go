@@ -137,6 +137,9 @@ func TestDeviceCredentialAckStore_acknowledgementIsFinalAndScopedToTheOrganizati
 
 	_, err = f.store.AcknowledgeCredential(f.ctx, "00000000-0000-4000-8000-000000000999", id)
 	require.ErrorIs(t, err, storage.ErrDeviceAuthorizationNotFound)
+	var acked sql.NullTime
+	require.NoError(t, f.db.QueryRowContext(f.ctx, `SELECT credential_acked_at FROM acr.device_authorizations WHERE redeemed_credential_id = $1`, id).Scan(&acked))
+	require.False(t, acked.Valid)
 	_, err = f.store.AcknowledgeCredential(f.ctx, f.grant.OrgID, "cred_does_not_exist")
 	require.ErrorIs(t, err, storage.ErrDeviceAuthorizationNotFound)
 	ackedAt, err := f.store.AcknowledgeCredential(f.ctx, f.grant.OrgID, id)

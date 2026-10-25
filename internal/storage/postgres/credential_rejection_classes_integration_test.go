@@ -59,9 +59,9 @@ func (s countedCredentialStore) FindByTokenHash(ctx context.Context, hash string
 	return credential, err
 }
 
-func (s countedCredentialStore) TouchLastUsed(ctx context.Context, credentialID, ip, userAgent string, usedAt time.Time) error {
+func (s countedCredentialStore) TouchLastUsed(ctx context.Context, orgID, credentialID, ip, userAgent string, usedAt time.Time) error {
 	s.calls.add("TouchLastUsed")
-	return s.CredentialStore.TouchLastUsed(ctx, credentialID, ip, userAgent, usedAt)
+	return s.CredentialStore.TouchLastUsed(ctx, orgID, credentialID, ip, userAgent, usedAt)
 }
 
 type countedAuditStore struct {

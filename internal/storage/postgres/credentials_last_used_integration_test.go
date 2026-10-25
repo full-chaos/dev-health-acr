@@ -28,8 +28,8 @@ func TestCredentialStore_TouchLastUsed_keepsNewestMetadata(t *testing.T) {
 	older := newer.Add(-time.Minute)
 
 	// When
-	require.NoError(t, lifecycle.TouchLastUsed(ctx, created.Credential.CredentialID, "203.0.113.10", "newer-agent", newer))
-	require.NoError(t, lifecycle.TouchLastUsed(ctx, created.Credential.CredentialID, "203.0.113.11", "older-agent", older))
+	require.NoError(t, lifecycle.TouchLastUsed(ctx, created.Credential.OrgID, created.Credential.CredentialID, "203.0.113.10", "newer-agent", newer))
+	require.NoError(t, lifecycle.TouchLastUsed(ctx, created.Credential.OrgID, created.Credential.CredentialID, "203.0.113.11", "older-agent", older))
 
 	// Then
 	var (
@@ -57,7 +57,7 @@ func TestCredentialStore_TouchLastUsed_returnsNotFound_whenCredentialDoesNotExis
 	require.NoError(t, err)
 
 	// When
-	err = lifecycle.TouchLastUsed(ctx, "credential-does-not-exist", "203.0.113.10", "agent", time.Now())
+	err = lifecycle.TouchLastUsed(ctx, "00000000-0000-4000-8000-0000000000aa", "credential-does-not-exist", "203.0.113.10", "agent", time.Now())
 
 	// Then
 	require.ErrorIs(t, err, storage.ErrNotFound)
@@ -78,11 +78,34 @@ func TestCredentialStore_TouchLastUsed_redactsDatabaseCastErrors(t *testing.T) {
 	invalidIP := "not-an-ip"
 
 	// When
-	err = store.TouchLastUsed(ctx, created.Credential.CredentialID, invalidIP, "agent", time.Now())
+	err = store.TouchLastUsed(ctx, created.Credential.OrgID, created.Credential.CredentialID, invalidIP, "agent", time.Now())
 
 	// Then
 	require.ErrorIs(t, err, storage.ErrUnavailable)
 	require.False(t, errors.Is(err, storage.ErrInvalidCredentialInput))
 	require.NotContains(t, err.Error(), invalidIP)
 	require.NotContains(t, err.Error(), "invalid input syntax")
+}
+
+func TestCredentialStore_TouchLastUsed_leavesCredentialOfAnotherOrganizationUnchanged(t *testing.T) {
+	// Given
+	ctx := context.Background()
+	db := newCredentialStoreDatabase(t, ctx)
+	audit, err := NewAuditStore(db)
+	require.NoError(t, err)
+	_, lifecycle, err := newCredentialStore(db, audit, time.Now)
+	require.NoError(t, err)
+	service, err := auth.NewService(lifecycle, auth.ServiceOptions{})
+	require.NoError(t, err)
+	created, err := service.Create(ctx, credentialCreateRequest("other-org"))
+	require.NoError(t, err)
+
+	// When
+	err = lifecycle.TouchLastUsed(ctx, "22222222-2222-2222-2222-222222222222", created.Credential.CredentialID, "203.0.113.10", "agent", time.Now())
+
+	// Then
+	require.ErrorIs(t, err, storage.ErrNotFound)
+	var usedAt sql.NullTime
+	require.NoError(t, db.QueryRowContext(ctx, `SELECT last_used_at FROM acr.client_credentials WHERE credential_id = $1`, created.Credential.CredentialID).Scan(&usedAt))
+	require.False(t, usedAt.Valid)
 }

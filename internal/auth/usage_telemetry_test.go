@@ -25,7 +25,7 @@ type usageStore struct {
 	err     error
 }
 
-func (s *usageStore) TouchLastUsed(_ context.Context, credentialID, ip, userAgent string, usedAt time.Time) error {
+func (s *usageStore) TouchLastUsed(_ context.Context, orgID, credentialID, ip, userAgent string, usedAt time.Time) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.touches = append(s.touches, recordedUsage{credentialID: credentialID, ip: ip, userAgent: userAgent, usedAt: usedAt})
@@ -75,13 +75,13 @@ type uncooperativeUsageStore struct {
 	once    sync.Once
 }
 
-func (s *uncooperativeUsageStore) TouchLastUsed(context.Context, string, string, string, time.Time) error {
+func (s *uncooperativeUsageStore) TouchLastUsed(context.Context, string, string, string, string, time.Time) error {
 	s.once.Do(func() { close(s.started) })
 	<-s.release
 	return nil
 }
 
-func (s *blockingUsageStore) TouchLastUsed(ctx context.Context, _ string, _, _ string, _ time.Time) error {
+func (s *blockingUsageStore) TouchLastUsed(ctx context.Context, _ string, _ string, _, _ string, _ time.Time) error {
 	s.once.Do(func() { close(s.started) })
 	select {
 	case <-s.release:

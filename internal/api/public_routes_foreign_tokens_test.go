@@ -117,9 +117,9 @@ func (c *countingCredentials) FindByTokenHash(ctx context.Context, hash string) 
 	return c.CredentialStore.FindByTokenHash(ctx, hash)
 }
 
-func (c *countingCredentials) TouchLastUsed(ctx context.Context, id, ip, ua string, at time.Time) error {
+func (c *countingCredentials) TouchLastUsed(ctx context.Context, orgID, id, ip, ua string, at time.Time) error {
 	c.calls.Add(1)
-	return c.CredentialStore.TouchLastUsed(ctx, id, ip, ua, at)
+	return c.CredentialStore.TouchLastUsed(ctx, orgID, id, ip, ua, at)
 }
 
 type countingAudit struct {

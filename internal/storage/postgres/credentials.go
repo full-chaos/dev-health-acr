@@ -109,7 +109,7 @@ WHERE token_hash = $1
 	return credential, mapNotFound("find credential", err)
 }
 
-func (s *credentialStore) TouchLastUsed(ctx context.Context, credentialID, ip, userAgent string, usedAt time.Time) error {
+func (s *credentialStore) TouchLastUsed(ctx context.Context, orgID, credentialID, ip, userAgent string, usedAt time.Time) error {
 	if err := s.ready(ctx); err != nil {
 		return err
 	}
@@ -127,7 +127,7 @@ SET last_used_at = CASE
         WHEN last_used_at IS NULL OR last_used_at < $2 THEN NULLIF($4, '')
         ELSE last_used_user_agent
     END
-WHERE credential_id = $1`, credentialID, usedAt, ip, userAgent)
+WHERE org_id = $5 AND credential_id = $1`, credentialID, usedAt, ip, userAgent, orgID)
 	if err != nil {
 		return fmt.Errorf("touch credential last used: %w", sanitizeDatabaseError(err))
 	}
