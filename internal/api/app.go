@@ -73,8 +73,21 @@ func (a *App) InstrumentedHandler(next http.Handler) http.Handler {
 	return handler
 }
 
+type routeMux interface {
+	Handle(pattern string, handler http.Handler)
+	HandleFunc(pattern string, handler func(http.ResponseWriter, *http.Request))
+}
+
 func (a *App) Handler() http.Handler {
 	mux := http.NewServeMux()
+	a.registerRoutes(mux)
+	// RouteNamer names the OTel server span (when export is on) by the matched
+	// route: InstrumentedHandler's middleware sits between the exporter's
+	// handler and this mux.
+	return a.InstrumentedHandler(otelexport.RouteNamer(mux))
+}
+
+func (a *App) registerRoutes(mux routeMux) {
 	mux.HandleFunc("GET /healthz", a.handleHealth)
 	mux.HandleFunc("GET /readyz", a.handleReady)
 	mux.Handle("GET /api/v1/agent-context/capabilities", a.protectedRuntimeHandler(limits.RequestClassCapabilities, auth.ScopeContextRead, false, true, http.HandlerFunc(a.handleCapabilities)))
@@ -105,10 +118,6 @@ func (a *App) Handler() http.Handler {
 		mux.HandleFunc("POST "+OAuthDeviceAuthorizationPath, a.handleOAuthDeviceAuthorization)
 	}
 	mux.Handle("POST /api/v1/auth/credentials/self/ack", a.credentialLifecycleLine(oauthvocab.StepCredentialAck, a.selfLifecycleHandler(http.HandlerFunc(a.handleAcknowledgeSelfCredential))))
-	// RouteNamer names the OTel server span (when export is on) by the matched
-	// route: InstrumentedHandler's middleware sits between the exporter's
-	// handler and this mux.
-	return a.InstrumentedHandler(otelexport.RouteNamer(mux))
 }
 
 type healthResponse struct {
