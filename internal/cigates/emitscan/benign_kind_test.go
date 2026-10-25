@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strings"
 	"testing"
@@ -11,6 +12,7 @@ import (
 	"golang.org/x/tools/go/packages"
 
 	"github.com/full-chaos/dev-health-acr/internal/cigates/emitscan"
+	"github.com/full-chaos/dev-health-acr/internal/cigates/sourceload"
 	"github.com/full-chaos/dev-health-acr/internal/telemetryscrub"
 )
 
@@ -286,14 +288,11 @@ func TestWrongKindIsNeverPinnable(t *testing.T) {
 }
 
 func TestRealTreeTypeChecks(t *testing.T) {
-	cfg := &packages.Config{
-		Dir:  benignRepoRoot(t),
-		Mode: packages.NeedName | packages.NeedFiles | packages.NeedSyntax | packages.NeedTypes | packages.NeedTypesInfo | packages.NeedImports | packages.NeedDeps,
-	}
-	loaded, err := packages.Load(cfg, "./internal/...", "./cmd/...")
+	loader, err := sourceload.Load(benignRepoRoot(t), []string{"./internal/...", "./cmd/..."}, runtime.GOOS, runtime.GOARCH)
 	if err != nil {
-		t.Fatalf("packages.Load: %v", err)
+		t.Fatalf("sourceload.Load: %v", err)
 	}
+	loaded := loader.Packages()
 	errs := 0
 	packages.Visit(loaded, nil, func(p *packages.Package) {
 		for _, e := range p.Errors {
