@@ -292,6 +292,38 @@ func TestNoExemplarCarriesAnUnreviewedFilteredAttribute(t *testing.T) {
 	if exemplars == 0 {
 		t.Fatal("no exemplar was recorded in any scope: the census would pass vacuously")
 	}
+	counterExemplars := 0
+	counterPoints := 0
+	for _, scope := range rm.ScopeMetrics {
+		for _, m := range scope.Metrics {
+			sum, ok := m.Data.(metricdata.Sum[int64])
+			if !ok || m.Name != "census_probe_total" {
+				continue
+			}
+			for _, p := range sum.DataPoints {
+				counterPoints++
+				if p.Value != 1 {
+					t.Errorf("%s: counter value %d, want 1", m.Name, p.Value)
+				}
+				if got := p.Attributes.ToSlice(); len(got) != 1 || got[0].Key != "outcome" || got[0].Value.Emit() != "ok" {
+					t.Errorf("%s: counter attributes %v, want exactly outcome=ok (the otelhttp view must not touch other meters)", m.Name, got)
+				}
+				for _, ex := range p.Exemplars {
+					counterExemplars++
+					if len(ex.TraceID) == 0 {
+						t.Errorf("%s: the counter exemplar lost its trace link", m.Name)
+					}
+					checkFiltered(t, scope.Scope.Name, m.Name, ex.FilteredAttributes, allowed)
+				}
+			}
+		}
+	}
+	if counterPoints != 1 {
+		t.Fatalf("census_probe_total has %d datapoints, want 1", counterPoints)
+	}
+	if counterExemplars == 0 {
+		t.Fatal("the first-party counter recorded no exemplar: its exemplar is not pinned")
+	}
 }
 
 func checkFiltered(t *testing.T, scope, metric string, attrs []attribute.KeyValue, allowed map[string]bool) {
