@@ -51,11 +51,15 @@ import (
 	"go/token"
 	"go/types"
 	"os"
+	"path/filepath"
+	"runtime"
 	"sort"
 	"strings"
 	"testing"
 
 	"golang.org/x/tools/go/packages"
+
+	"github.com/full-chaos/dev-health-acr/internal/cigates/sourceload"
 )
 
 const emissionReachabilityArtifact = "testdata/emitted_fields_reachable.txt"
@@ -208,14 +212,15 @@ type funcFacts struct {
 // loadProviderPackage type-checks devhealthfacts.
 func loadProviderPackage(t *testing.T) *packages.Package {
 	t.Helper()
-	loaded, err := packages.Load(&packages.Config{
-		Mode: packages.NeedName | packages.NeedFiles | packages.NeedSyntax |
-			packages.NeedTypes | packages.NeedTypesInfo | packages.NeedDeps | packages.NeedImports,
-		Tests: false,
-	}, "./devhealthfacts")
+	root, err := filepath.Abs("../..")
+	if err != nil {
+		t.Fatal(err)
+	}
+	loader, err := sourceload.Load(root, []string{"./internal/contextfabric/devhealthfacts"}, runtime.GOOS, runtime.GOARCH)
 	if err != nil {
 		t.Fatalf("loading the provider package: %v", err)
 	}
+	loaded := loader.Packages()
 	if len(loaded) != 1 {
 		t.Fatalf("loaded %d packages, want exactly 1", len(loaded))
 	}
@@ -1018,7 +1023,7 @@ func TestEveryProviderIsReachedByTheWalk(t *testing.T) {
 
 // The fixture package the walk is pinned against. Every shape in it is one a
 // review round constructed and the walk got wrong; see its package comment.
-const emissionProbePackage = "./testdata/emissionprobe"
+const emissionProbePackage = "./internal/contextfabric/testdata/emissionprobe"
 
 // walkProbeFixture runs the same collection logic against the fixture package
 // instead of the provider package.
@@ -1029,12 +1034,17 @@ const emissionProbePackage = "./testdata/emissionprobe"
 // shapes live permanently.
 func walkProbeFixture(t *testing.T) map[string]*reachableEmission {
 	t.Helper()
-	loaded, err := packages.Load(&packages.Config{
-		Mode: packages.NeedName | packages.NeedFiles | packages.NeedSyntax |
-			packages.NeedTypes | packages.NeedTypesInfo | packages.NeedDeps | packages.NeedImports,
-	}, emissionProbePackage)
-	if err != nil || len(loaded) != 1 || len(loaded[0].Errors) > 0 {
-		t.Fatalf("loading the probe fixture: err=%v pkgs=%d", err, len(loaded))
+	root, err := filepath.Abs("../..")
+	if err != nil {
+		t.Fatal(err)
+	}
+	loader, err := sourceload.Load(root, []string{emissionProbePackage}, runtime.GOOS, runtime.GOARCH)
+	if err != nil {
+		t.Fatalf("loading the probe fixture: %v", err)
+	}
+	loaded := loader.Packages()
+	if len(loaded) != 1 || len(loaded[0].Errors) > 0 {
+		t.Fatalf("loading the probe fixture: pkgs=%d", len(loaded))
 	}
 	return collectFrom(t, loaded[0])
 }
