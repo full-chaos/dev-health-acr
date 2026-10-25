@@ -279,7 +279,7 @@ func (c *gatedConn) Write(b []byte) (int, error) {
 	began := time.Now().UnixNano()
 	probe := c.gate.recording() && bytes.Contains(b, []byte("GRAPH.QUERY"))
 	if release, held := c.gate.sendHold(); held && probe {
-		if at := c.writeDeadline.Load(); at != 0 && began >= at {
+		if at := c.writeDeadline.Load(); at != 0 && time.Now().UnixNano() >= at {
 			return 0, os.ErrDeadlineExceeded
 		}
 		c.holdUntil(release, append([]byte(nil), b...))
