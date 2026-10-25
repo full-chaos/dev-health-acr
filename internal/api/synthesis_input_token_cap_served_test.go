@@ -375,7 +375,9 @@ func TestServedSynthesisPromptIsCutToTheTokenCapOnTheDeploymentRuntime(t *testin
 
 // When the committed subjects alone exceed the cap bound no cut can fit: the
 // investigation ends with the input overflow at the bound the cap leaves, and
-// the model is never called. With the cap off the same fixture is answered.
+// the model is never called. With the cap off the same fixture is sent: the
+// deployment runtime answers it, and the organization runtime attempts its own
+// endpoint and is refused there.
 func TestServedSynthesisThatCannotFitTheTokenCapIsNeverSent(t *testing.T) {
 	rows, subjects := servedCapRows(30, 500)
 	bound := 3*genkitruntime.MinSynthesisInputTokens - servedCapOverheadBytes()
@@ -406,8 +408,12 @@ func TestServedSynthesisThatCannotFitTheTokenCapIsNeverSent(t *testing.T) {
 				t.Fatalf("cap off: Investigate error = %v, want the call placed and an answer served", err)
 			}
 			if tc.org.found {
-				if result.Status != contextfabric.InvestigationDegraded || len(off.model.given()) != 0 {
-					t.Fatalf("cap off, organization runtime: status = %q calls = %d, want the call placed at the organization endpoint and refused there", result.Status, len(off.model.given()))
+				refused := false
+				for _, detail := range result.Coverage.Details {
+					refused = refused || (detail.Code == contractsv1.ContextFabricCoverageDetailSynthesisModelFailed && string(detail.FailureClass) == "model_call_not_completed")
+				}
+				if result.Status != contextfabric.InvestigationDegraded || !refused || len(off.model.given()) != 0 {
+					t.Fatalf("cap off, organization runtime: status = %q refused = %v calls = %d, want the call attempted at the organization endpoint and refused there (synthesis_model_failed, model_call_not_completed)", result.Status, refused, len(off.model.given()))
 				}
 				return
 			}
