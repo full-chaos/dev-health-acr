@@ -1326,6 +1326,7 @@ type fileScan struct {
 	nodes       []ast.Node
 	taints      []map[string]bool
 	funcs       []string
+	unlogged    map[ast.Node]bool // lists no log call can read (markUnloggedLists)
 }
 
 // Visit keeps a stack of the open nodes and, per function, the identifiers that hold a raw request path.
@@ -1349,8 +1350,12 @@ func (s *fileScan) Visit(node ast.Node) ast.Visitor {
 	switch fn := node.(type) {
 	case *ast.FuncDecl:
 		s.funcs = append(s.funcs, fn.Name.Name)
+		s.markUnloggedLists(fn.Type, fn.Body)
 		s.taints = append(s.taints, rawPathIdents(fn.Body, s.pkg.rawFuncs, s.pkg.budget))
 	case *ast.FuncLit:
+		if len(s.taints) == 0 {
+			s.markUnloggedLists(fn.Type, fn.Body)
+		}
 		if len(s.taints) > 0 { // the enclosing function's pass already walked this body
 			s.taints = append(s.taints, s.taints[len(s.taints)-1])
 		} else {
@@ -1362,7 +1367,7 @@ func (s *fileScan) Visit(node ast.Node) ast.Visitor {
 		s.keyMethodValue(fn)
 	case *ast.CompositeLit:
 		s.attrLiteral(fn)
-		if isAnySlice(fn.Type) {
+		if isAnySlice(fn.Type) && !s.unlogged[fn] {
 			s.benignPairs(fn.Elts, 0, fn)
 		}
 	}
@@ -1875,7 +1880,7 @@ func (s *fileScan) attrParts(call *ast.CallExpr) (key, value ast.Expr, ok bool) 
 }
 
 func (s *fileScan) call(call *ast.CallExpr) {
-	if ident, isIdent := call.Fun.(*ast.Ident); isIdent && ident.Name == "append" && len(call.Args) >= 2 {
+	if ident, isIdent := call.Fun.(*ast.Ident); isIdent && ident.Name == "append" && len(call.Args) >= 2 && !s.unlogged[call] {
 		s.benignPairs(call.Args, 1, ident)
 	}
 	if key, value, ok := s.attrParts(call); ok {
