@@ -69,6 +69,11 @@ func TestCells_CompositionBoundary(t *testing.T) {
 			if got.FailedInvariant != tc.wantInvariant {
 				t.Errorf("invariant=%q want %q", got.FailedInvariant, tc.wantInvariant)
 			}
+			// The engine serves the carried gate's own refusal on exactly this
+			// invariant, so it must never be returned beside a gate that does not refuse.
+			if got.FailedInvariant == CompositionInvariantCarriedFrameRefused && !got.Gate.Refuses() {
+				t.Errorf("carried_frame_refused beside gate %q, which does not refuse", got.Gate.Outcome)
+			}
 			if got.EffectiveGroupKind() != tc.wantGroup {
 				t.Errorf("effective group=%q want %q", got.EffectiveGroupKind(), tc.wantGroup)
 			}
@@ -239,5 +244,23 @@ func TestCells_IdentityIsRawBytesNotCanonicalEquality(t *testing.T) {
 	if got != ContinuationReasonChangedQuestion {
 		t.Fatalf("identity reason = %q, want %q -- a byte-different question is outside this continuation rule EVEN WHEN canonicalisation considers it equivalent, and a guard that accepted canonical equality here would admit a reading the caller did not ask to continue",
 			got, ContinuationReasonChangedQuestion)
+	}
+}
+
+// A frameless carried reading refused by its own recorded gate keeps that
+// gate whole: the invariant never rides beside a gate that does not refuse,
+// and the recorded basis and declared kind reach the caller.
+func TestCells_AFramelessRefusedCarrierKeepsItsRecordedGate(t *testing.T) {
+	recorded := FrameGate{Outcome: FrameGateRefusedBasis, RefuseBasis: CohortMemberKindUnservable, DeclaredMemberKind: SubjectOrganization}
+	carried := carriedStateFor(t, QuestionFamilyDiscoveredCohortRanking, "", nil, recorded)
+	got := composeAcceptedContext(compositionInput{Carried: carried, FreshFamily: QuestionFamilyDiscoveredCohortRanking})
+	if got.Outcome != CompositionInvalid || got.FailedInvariant != CompositionInvariantCarriedFrameRefused {
+		t.Fatalf("outcome=%q invariant=%q, want invalid/carried_frame_refused", got.Outcome, got.FailedInvariant)
+	}
+	if !got.Gate.Refuses() {
+		t.Errorf("carried_frame_refused beside gate %q, which does not refuse", got.Gate.Outcome)
+	}
+	if got.Gate != recorded {
+		t.Errorf("gate = %+v, want the recorded gate %+v whole", got.Gate, recorded)
 	}
 }

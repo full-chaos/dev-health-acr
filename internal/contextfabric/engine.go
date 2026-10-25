@@ -2442,6 +2442,7 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 	freshContext := freshAcceptedContext(familyOutcome.Frame, familyOutcome.Gate, familyOutcome.WinningSample.GroupKind)
 	freshEffectiveGroup := freshContext.EffectiveGroupKind()
 	accepted := freshContext
+	var carriedGateRefusal *AcceptedContext
 	if continuation.Observed {
 		// The executed axis is stamped only once the verdict has passed: an
 		// exit above executed nothing.
@@ -2489,6 +2490,9 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 				// field is two authorities for one object.
 				continuation.Disposition = ContinuationWithheld
 				continuation = continuation.withReason(ContinuationReasonCompositionInvalid)
+				if composed.FailedInvariant == CompositionInvariantCarriedFrameRefused {
+					carriedGateRefusal = &composed
+				}
 			}
 		}
 		// The fresh proposal in the snapshot's own shape, so the comparison
@@ -2508,6 +2512,14 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 			}),
 		})
 		familyOutcome = e.applyAndRecordContinuation(ctx, principal, familyOutcome, continuation, accepted)
+		if carriedGateRefusal != nil {
+			// refusesTurn's fourth conjunct now reads the carried gate, so the turn serves its own refusal.
+			state := continuation.Accepted.State
+			familyOutcome.Family = state.Family
+			familyOutcome.Source = QuestionFamilySourceCarried
+			familyOutcome.Gate = carriedGateRefusal.Gate
+			continuation.RefusalBasis = carriedGateRefusal.Gate.RefusalBasis()
+		}
 		// A WITHHELD CONTINUATION ENDS THE TURN HERE, above the planning stage
 		// and above every retrieval: the carrier could not be established, and
 		// answering under the fresh reading would serve a reading the caller
@@ -2596,6 +2608,10 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 	} else {
 		familyOutcome.Gate = tightenWorkItemTupleFrameGate(familyOutcome.Gate, familyOutcome.Frame, familyAllowsWorkItemTuple, interpretation.TimeContext)
 		workItemTuple = prospectiveWorkItemTupleAdmission(familyOutcome.Frame, familyAllowsWorkItemTuple, interpretation.TimeContext) == workItemTupleProspective
+	}
+	if carriedGateRefusal != nil {
+		// The refinement above reads the FRESH frame and can pass a gate the carried reading refused.
+		familyOutcome.Gate = carriedGateRefusal.Gate
 	}
 	// THE SETTLED-ADMISSION Info line's one call site. No mutation here or
 	// anywhere in this arm -- see workItemTupleEffectiveObligations's own

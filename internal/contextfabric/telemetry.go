@@ -2321,17 +2321,19 @@ func closedDecisionFields() []closedDecisionField {
 		},
 		{
 			Key: "refusal_basis",
-			// The WIRE vocabulary, and only the member this decision can
-			// serve: a continuation refuses on its carrier, never on a frame,
-			// so a frame member here is as wrong as an invented one. "none"
-			// is the explicit not-refused token.
+			// The WIRE vocabulary, and only the members this decision can
+			// serve: the continuation's own carrier refusal, or the frame
+			// refusal of the CARRIED reading's gate (a carried gate that refuses
+			// is served as that gate's own basis). Any other member is as wrong
+			// as an invented one. "none" is the explicit not-refused token.
 			Token: func(d windowContinuationDecision) string {
 				valid := d.RefusalBasis == "" ||
-					d.RefusalBasis == contractsv1.ContextFabricRefusalBasisContinuationContextUnverifiable
+					d.RefusalBasis == contractsv1.ContextFabricRefusalBasisContinuationContextUnverifiable ||
+					contractsv1.ValidContextFabricFrameRefusalBasis(d.RefusalBasis)
 				return guard(valid, d.ObservableRefusalBasis())
 			},
 			Invent: func(d *windowContinuationDecision) {
-				d.RefusalBasis = contractsv1.ContextFabricRefusalBasisMemberKindUnservable
+				d.RefusalBasis = contractsv1.ContextFabricRefusalBasisOrganizationScopeUnsupported
 			},
 		},
 		{
@@ -2440,9 +2442,16 @@ func ContinuationDecisionLineVocabulary(key string) []string {
 		// new status joins here by existing, never by being remembered.
 		return append([]string{"not_read"}, tokenStrings(semanticStateReadStatuses())...)
 	case "refusal_basis":
-		// The one wire member a continuation can serve, and the explicit
-		// not-refused token ObservableRefusalBasis renders.
-		return []string{string(contractsv1.ContextFabricRefusalBasisContinuationContextUnverifiable), "none"}
+		// The wire members a continuation decision can serve (its own carrier
+		// refusal, or a frame refusal of the carried reading's gate), and the
+		// explicit not-refused token ObservableRefusalBasis renders.
+		return []string{
+			string(contractsv1.ContextFabricRefusalBasisContinuationContextUnverifiable),
+			string(contractsv1.ContextFabricRefusalBasisMemberKindUnservable),
+			string(contractsv1.ContextFabricRefusalBasisFrameInvariantViolated),
+			string(contractsv1.ContextFabricRefusalBasisUnspecified),
+			"none",
+		}
 	default:
 		return nil
 	}

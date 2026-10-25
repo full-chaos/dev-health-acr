@@ -96,6 +96,37 @@ func assertContinuationRefused(t *testing.T, result InvestigationResult) {
 	}
 }
 
+// assertCarriedGateRefusal asserts the served document is the carried gate's own
+// frame refusal: the TRUE basis, no retrieval, a valid document, and the
+// carried reading's family on the wire -- never the fresh turn's.
+func assertCarriedGateRefusal(t *testing.T, result InvestigationResult, counts *refusalReadCounts, carried, fresh QuestionFamily) {
+	t.Helper()
+	if result.Status != InvestigationNoMatch {
+		t.Errorf("status = %q, want %q", result.Status, InvestigationNoMatch)
+	}
+	if result.Completeness.RefusalBasis != result.RefusalBasis {
+		t.Errorf("completeness.refusal_basis = %q, want the mirror %q", result.Completeness.RefusalBasis, result.RefusalBasis)
+	}
+	if n := counts.resolves.Load() + counts.discovers.Load() + counts.facts.Load() + counts.syntheses.Load(); n != 0 {
+		t.Errorf("the carried gate refusal reached %d retrieval/synthesis call(s), want 0", n)
+	}
+	if family := servedPlanFamily(result); family == fresh {
+		t.Errorf("served plan family = %q, the FRESH turn's family: the refusal must describe the carried reading", family)
+	}
+	if family := servedPlanFamily(result); family != "" && family != carried {
+		t.Errorf("served plan family = %q, want the carried %q", family, carried)
+	}
+	if source := servedPlanSource(result); source != "" && source != QuestionFamilySourceCarried {
+		t.Errorf("served plan family_source = %q, want %q: the family is the carried reading's", source, QuestionFamilySourceCarried)
+	}
+	if group := servedPlanGroup(result); group != "" {
+		t.Errorf("served plan group = %q, want none: the fresh turn's group axis must not reach the wire", group)
+	}
+	if err := result.Validate(); err != nil {
+		t.Errorf("the served refusal does not validate: %v", err)
+	}
+}
+
 // readCountingGraph counts every retrieval call. Resolution and discovery are
 // the reads a refusal must never reach.
 type readCountingGraph struct {
@@ -215,6 +246,22 @@ func (i gateRefusingInterpreter) Interpret(context.Context, storage.Principal, I
 		}, nil
 }
 
+// framedForcedInterpreter is forcedFamilyInterpreter with a validated fresh
+// frame and a passing gate, so a fresh frame that leaks onto a turn which must
+// describe the CARRIED reading has something to leak.
+type framedForcedInterpreter struct {
+	forcedFamilyInterpreter
+	frame QuestionFrame
+}
+
+func (f framedForcedInterpreter) Interpret(ctx context.Context, p storage.Principal, r InvestigationRequest) (InterpretedQuestion, QuestionFamilyOutcome, error) {
+	q, outcome, err := f.forcedFamilyInterpreter.Interpret(ctx, p, r)
+	frame := cloneFrame(f.frame)
+	outcome.Frame = &frame
+	outcome.Gate = FrameGate{Outcome: FrameGatePassed}
+	return q, outcome, err
+}
+
 // refusalCell is one engine-driven cell of the refusal matrix.
 type refusalCell struct {
 	name        string
@@ -242,6 +289,14 @@ type refusalCell struct {
 	// wantServedBasis is the basis the SERVED document carries, which on the
 	// fresh-gate cell is the frame's own basis rather than the continuation's.
 	wantServedBasis contractsv1.ContextFabricRefusalBasis
+	// wantDecisionBasis overrides the basis the decision line must name, for a
+	// cell that serves the carried gate's own frame refusal rather than the
+	// continuation refusal.
+	wantDecisionBasis contractsv1.ContextFabricRefusalBasis
+	// wantCarriedGateRefusal marks the cell whose carried reading's gate
+	// refuses: the served document is that gate's refusal over the CARRIED
+	// reading, with no retrieval and none of the fresh turn's frame on it.
+	wantCarriedGateRefusal bool
 	// wantCarrierRead is what admission's read of the carrier must publish;
 	// every window-only decision also names the carrier it is about.
 	wantCarrierRead ContinuationCarrierRead
@@ -327,6 +382,37 @@ func refusalCells() []refusalCell {
 			carrier: func(t testing.TB, prior InvestigationResult) *PersistedSemanticState {
 				frame, gate := unservableDiscoveredFrame(t.(*testing.T))
 				return carriedStateFor(t.(*testing.T), prior.AnswerPlan.Family, "", &frame, gate)
+			},
+			interpreter: framedForcedInterpreter{forcedFamilyInterpreter: forced, frame: freshTeamRepoFrame()},
+			wantRefused: false, wantDisposition: ContinuationWithheld, wantReason: ContinuationReasonCompositionInvalid,
+			wantDecisionEmitted: true, wantServedBasis: contractsv1.ContextFabricRefusalBasisMemberKindUnservable,
+			wantDecisionBasis: contractsv1.ContextFabricRefusalBasisMemberKindUnservable, wantCarriedGateRefusal: true,
+		},
+		{
+			name:        "frameless carried gate refusal keeps its own basis",
+			priorFamily: QuestionFamilyDiscoveredCohortRanking,
+			carrier: func(t testing.TB, prior InvestigationResult) *PersistedSemanticState {
+				gate := FrameGate{Outcome: FrameGateRefusedBasis, RefuseBasis: CohortMemberKindUnservable, DeclaredMemberKind: SubjectOrganization}
+				return carriedStateFor(t.(*testing.T), prior.AnswerPlan.Family, "", nil, gate)
+			},
+			interpreter: framedForcedInterpreter{forcedFamilyInterpreter: forced, frame: freshTeamRepoFrame()},
+			wantRefused: false, wantDisposition: ContinuationWithheld, wantReason: ContinuationReasonCompositionInvalid,
+			wantDecisionEmitted: true, wantServedBasis: contractsv1.ContextFabricRefusalBasisMemberKindUnservable,
+			wantDecisionBasis: contractsv1.ContextFabricRefusalBasisMemberKindUnservable, wantCarriedGateRefusal: true,
+		},
+		{
+			name:        "carried frame fails an invariant today, so its gate is not the carried gate's refusal",
+			priorFamily: QuestionFamilyGroupedCohortStatus, priorGroup: contractsv1.ContextFabricSubjectTeam,
+			carrier: func(t testing.TB, prior InvestigationResult) *PersistedSemanticState {
+				selfGrouped := DeriveFrameObligations(NormalizeFrame(QuestionFrame{
+					Goals: []InvestigationGoal{GoalAssessState},
+					SubjectExpression: SubjectExpression{
+						Kind:    SubjectExpressionGroupedMembers,
+						Grouped: &GroupedSetExpression{GroupKind: contractsv1.ContextFabricSubjectTeam, MemberKind: contractsv1.ContextFabricSubjectTeam},
+					},
+					Temporal: TemporalIntentCurrent,
+				}), nil)
+				return carriedStateFor(t.(*testing.T), prior.AnswerPlan.Family, contractsv1.ContextFabricSubjectTeam, &selfGrouped, FrameGate{Outcome: FrameGatePassed})
 			},
 			interpreter: forced,
 			wantRefused: true, wantDisposition: ContinuationWithheld, wantReason: ContinuationReasonCompositionInvalid,
@@ -491,6 +577,9 @@ func TestContinuationRefusal_TheRefusalMatrixThroughTheEngine(t *testing.T) {
 				if result.RefusalBasis == contractsv1.ContextFabricRefusalBasisContinuationContextUnverifiable {
 					t.Errorf("a cell with one conjunct false still refused as a continuation")
 				}
+				if cell.wantCarriedGateRefusal {
+					assertCarriedGateRefusal(t, result, counts, QuestionFamilyDiscoveredCohortRanking, QuestionFamilyGroupedCohortStatus)
+				}
 				for _, limitation := range result.Limitations {
 					if limitation == contractsv1.ContextFabricContinuationContextUnverifiableLimitation {
 						t.Errorf("the continuation sentence reached a document that was not the continuation refusal")
@@ -511,7 +600,7 @@ func TestContinuationRefusal_TheRefusalMatrixThroughTheEngine(t *testing.T) {
 			if decision.Disposition != cell.wantDisposition || decision.Reason != cell.wantReason {
 				t.Errorf("decision = %q/%q, want %q/%q", decision.Disposition, decision.Reason, cell.wantDisposition, cell.wantReason)
 			}
-			wantDecisionBasis := contractsv1.ContextFabricRefusalBasis("")
+			wantDecisionBasis := cell.wantDecisionBasis
 			if cell.wantRefused {
 				wantDecisionBasis = contractsv1.ContextFabricRefusalBasisContinuationContextUnverifiable
 			}
@@ -685,8 +774,17 @@ func TestContinuationRefusal_TheDecisionLineNamesTheServedBasis(t *testing.T) {
 		storeEpoch *int64
 		saveErr    error
 		wantErr    bool
+		carried    bool
 		wantFields map[string]string
 	}{
+		{
+			name: "carried gate refused", carried: true,
+			wantFields: map[string]string{
+				"refusal_basis": "member_kind_unservable", "continuation_disposition": "withheld",
+				"decision_reason": "composition_invalid", "composition_failed_invariant": CompositionInvariantCarriedFrameRefused,
+				"family_accepted": "", "accepted_context_id": "",
+			},
+		},
 		{
 			name: "refused", storeEpoch: staleEpoch(),
 			wantFields: map[string]string{
@@ -715,6 +813,10 @@ func TestContinuationRefusal_TheDecisionLineNamesTheServedBasis(t *testing.T) {
 			prior := continuationPrior(t, continuationPriorID, base, QuestionFamilyDiscoveredCohortRanking, "")
 			store := newRefusalStore(withCarrierStates(t, &staticResultStore{results: map[string]InvestigationResult{prior.ResultID: prior}, graphEpoch: tc.storeEpoch}))
 			store.saveErr = tc.saveErr
+			if tc.carried {
+				frame, gate := unservableDiscoveredFrame(t)
+				store.staticResultStore.states = map[string]*PersistedSemanticState{prior.ResultID: carriedStateFor(t, prior.AnswerPlan.Family, "", &frame, gate)}
+			}
 			engine, _ := newRefusalEngine(t, store, forcedFamilyInterpreter{family: QuestionFamilyGroupedCohortStatus, groupKind: contractsv1.ContextFabricSubjectTeam}, sink)
 			_, err := engine.Investigate(context.Background(), acceptancePrincipal(), continuationRequest(base))
 			if (err != nil) != tc.wantErr {
@@ -1260,4 +1362,56 @@ func hasOwnNamingSentence(basis contractsv1.ContextFabricRefusalBasis) bool {
 		}
 	}
 	return false
+}
+
+func freshTeamRepoFrame() QuestionFrame {
+	frame := QuestionFrame{
+		Goals: []InvestigationGoal{GoalAssessState},
+		SubjectExpression: SubjectExpression{
+			Kind:    SubjectExpressionGroupedMembers,
+			Grouped: &GroupedSetExpression{GroupKind: contractsv1.ContextFabricSubjectTeam, MemberKind: contractsv1.ContextFabricSubjectRepository},
+		},
+		Temporal: TemporalIntentCurrent,
+	}
+	return DeriveFrameObligations(NormalizeFrame(frame), nil)
+}
+
+// A carried work-item refusal must not be reopened by the fresh frame. The
+// work-item window refinement rewrites the gate later in the turn from the
+// FRESH frame and can pass a gate the carried reading refused, which would
+// retrieve under a reading the server refused.
+func TestContinuationRefusal_ACarriedWorkItemGateRefusalIsNotReopenedByTheFreshFrame(t *testing.T) {
+	t.Parallel()
+	question := "Which work items were closed in the last quarter?"
+	scoped := func(temporal TemporalIntent) QuestionFrame {
+		return frameWith([]InvestigationGoal{GoalRankOrSurvey}, SubjectExpression{
+			Kind:   SubjectExpressionChildrenOfScope,
+			Scoped: &ScopedSetExpression{AnchorTerms: []string{"project"}, MemberKind: SubjectWorkItem},
+		}, temporal, nil)
+	}
+	carriedFrame := scoped(TemporalIntentCurrent)
+	refusing := FrameGate{Outcome: FrameGateRefusedBasis, RefuseBasis: CohortMemberKindUnservable, DeclaredMemberKind: SubjectWorkItem}
+	prior := continuationPrior(t, continuationPriorID, question, QuestionFamilyScopedCohortStatus, "")
+	base := &staticResultStore{results: map[string]InvestigationResult{prior.ResultID: prior}}
+	base.states = map[string]*PersistedSemanticState{prior.ResultID: carriedStateFor(t, QuestionFamilyScopedCohortStatus, "", &carriedFrame, refusing)}
+	withCarrierStates(t, base)
+	store := newRefusalStore(base)
+	telemetry := &recordingTelemetry{}
+	fresh := framedForcedInterpreter{
+		forcedFamilyInterpreter: forcedFamilyInterpreter{family: QuestionFamilyScopedCohortStatus},
+		frame:                   scoped(TemporalIntentBoundedWindow),
+	}
+	engine, counts := newRefusalEngine(t, store, fresh, telemetry)
+	result, err := engine.Investigate(context.Background(), acceptancePrincipal(), continuationRequest(question))
+	if err != nil {
+		t.Fatalf("Investigate() error = %v", err)
+	}
+	t.Logf("status=%q basis=%q resolves=%d discovers=%d facts=%d syntheses=%d", result.Status, result.RefusalBasis,
+		counts.resolves.Load(), counts.discovers.Load(), counts.facts.Load(), counts.syntheses.Load())
+	if result.RefusalBasis != contractsv1.ContextFabricRefusalBasisMemberKindUnservable {
+		t.Errorf("served refusal_basis = %q, want %q", result.RefusalBasis, contractsv1.ContextFabricRefusalBasisMemberKindUnservable)
+	}
+	if n := counts.resolves.Load() + counts.discovers.Load() + counts.facts.Load() + counts.syntheses.Load(); n != 0 {
+		t.Errorf("the refused carried reading reached %d retrieval/synthesis call(s), want 0", n)
+	}
 }
