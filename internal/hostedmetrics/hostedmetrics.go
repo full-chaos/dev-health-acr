@@ -30,11 +30,14 @@ const (
 	OutcomeRowsEvictedName       = "acr_outcome_rows_evicted_total"
 	LimitationSkippedName        = "acr_limitation_disclosure_skipped_total"
 	QueryEmbedFallbacksName      = "acr_query_embed_fallbacks_total"
+	ProjectionPairFailuresName   = "acr_projection_pair_failures_total"
+	GraphBootstrapWaitsName      = "acr_graph_bootstrap_waits_total"
+	GraphBootstrapWaitName       = "acr_graph_bootstrap_wait_seconds"
 )
 
 // Names lists every instrument this package creates.
 func Names() []string {
-	return []string{ToolCallsName, ToolLatencyName, AnswersName, BudgetRefusalsName, AnswerReuseName, RequirementOutcomesName, FactReadAbortsName, InvestigationLatencyName, ClickHouseNearMemoryCapName, ClickHousePeakUnobservedName, OutcomeRowsEvictedName, LimitationSkippedName, QueryEmbedFallbacksName}
+	return []string{ToolCallsName, ToolLatencyName, AnswersName, BudgetRefusalsName, AnswerReuseName, RequirementOutcomesName, FactReadAbortsName, InvestigationLatencyName, ClickHouseNearMemoryCapName, ClickHousePeakUnobservedName, OutcomeRowsEvictedName, LimitationSkippedName, QueryEmbedFallbacksName, ProjectionPairFailuresName, GraphBootstrapWaitsName, GraphBootstrapWaitName}
 }
 
 // LatencyBucketsSeconds are the explicit histogram boundaries. They reach 300 s
@@ -77,6 +80,9 @@ type Instruments struct {
 	outcomeRowsEvicted metric.Int64Counter
 	limitationSkipped  metric.Int64Counter
 	queryEmbedFallback metric.Int64Counter
+	pairFailures       metric.Int64Counter
+	bootstrapWaits     metric.Int64Counter
+	bootstrapWait      metric.Float64Histogram
 	vocab              Vocabularies
 }
 
@@ -111,6 +117,9 @@ func New(meter metric.Meter, vocab Vocabularies) (*Instruments, error) {
 		limitationSkipped:  counter(LimitationSkippedName, "Service disclosures left out of a served answer because the limitation list was full of service-looking entries."),
 		queryEmbedFallback: counter(QueryEmbedFallbacksName, "Questions whose query embed failed or timed out, so vector retrieval fell back to lexical, by cause."),
 		nearMemoryCap:      counter(ClickHouseNearMemoryCapName, "ClickHouse statements that finished above half of their memory cap."),
+		pairFailures:       counter(ProjectionPairFailuresName, "Projection tick outcomes that ended in an error, by failure class."),
+		bootstrapWaits:     counter(GraphBootstrapWaitsName, "Graph writers that waited behind another writer's bootstrap of the same graph key, by outcome."),
+		bootstrapWait:      histogram(GraphBootstrapWaitName, "Time a graph writer waited behind another writer's bootstrap of the same graph key, by outcome."),
 		vocab:              vocab,
 	}
 	if err := errors.Join(errs...); err != nil {
@@ -262,4 +271,35 @@ func (i *Instruments) QueryEmbedFallback(ctx context.Context, cause string) {
 		return
 	}
 	i.queryEmbedFallback.Add(ctx, 1, metric.WithAttributes(attribute.String("cause", bucket(cause, queryEmbedFallbackCauses))))
+}
+
+// projectionFailureClasses mirrors projectionrun's failure class vocabulary;
+// a test in projectionrun pins the two lists to each other.
+var projectionFailureClasses = []string{"canceled", "checkpoint_conflict", "organization_locked", "rebuild_required", "dependency_rate_limited", "query_budget_exceeded", "dependency_unavailable", "invalid_result", "unclassified"}
+
+var bootstrapWaitOutcomes = []string{"bootstrapped", "took_over"}
+
+func ProjectionFailureClassVocabulary() []string { return slices.Clone(projectionFailureClasses) }
+
+// ProjectionPairFailure records one projection tick outcome that ended in an
+// error. failureClass is projectionrun's classification; a value outside the
+// closed set is recorded as "other".
+func (i *Instruments) ProjectionPairFailure(ctx context.Context, failureClass string) {
+	if i == nil {
+		return
+	}
+	i.pairFailures.Add(ctx, 1, metric.WithAttributes(attribute.String("failure_class", bucket(failureClass, projectionFailureClasses))))
+}
+
+// GraphBootstrapWait records one graph writer that waited behind another
+// writer's bootstrap of the same graph key. outcome is "bootstrapped" (the
+// holder finished the bootstrap) or "took_over" (the holder failed and the
+// waiter ran it); anything else is recorded as "other".
+func (i *Instruments) GraphBootstrapWait(ctx context.Context, outcome string, wait time.Duration) {
+	if i == nil {
+		return
+	}
+	attrs := metric.WithAttributes(attribute.String("outcome", bucket(outcome, bootstrapWaitOutcomes)))
+	i.bootstrapWaits.Add(ctx, 1, attrs)
+	i.bootstrapWait.Record(ctx, wait.Seconds(), attrs)
 }

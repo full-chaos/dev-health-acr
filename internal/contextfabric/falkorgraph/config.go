@@ -710,6 +710,29 @@ type SlogTelemetry struct {
 	// QueryEmbedFallback, when set, is the counter hook RecordQueryEmbedFallback
 	// calls once per fallback with its closed cause ("timeout" or "error").
 	QueryEmbedFallback func(ctx context.Context, cause string)
+	// BootstrapWait, when set, is called once per writer that waited behind
+	// another writer's bootstrap of the same graph key.
+	BootstrapWait func(ctx context.Context, outcome string, wait time.Duration)
+}
+
+// Bootstrap wait outcomes. A waiter cannot time out or be cancelled: it blocks
+// on the key's gate until the holder returns.
+const (
+	BootstrapWaitBootstrapped = "bootstrapped"
+	BootstrapWaitTookOver     = "took_over"
+)
+
+// BootstrapWaitTelemetry is the optional extension of GraphTelemetry for a
+// writer that waited behind another writer's bootstrap of the same graph key.
+// outcome is BootstrapWaitBootstrapped or BootstrapWaitTookOver.
+type BootstrapWaitTelemetry interface {
+	RecordBootstrapWait(ctx context.Context, outcome string, wait time.Duration)
+}
+
+func (t SlogTelemetry) RecordBootstrapWait(ctx context.Context, outcome string, wait time.Duration) {
+	if t.BootstrapWait != nil {
+		t.BootstrapWait(ctx, outcome, wait)
+	}
 }
 
 // QueryEmbedFallbackTelemetry is the optional extension of GraphTelemetry for
