@@ -2,6 +2,7 @@ package otelexport
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net"
 	"os"
@@ -19,27 +20,106 @@ import (
 	"github.com/full-chaos/dev-health-acr/internal/testsupport/proxycapture"
 )
 
+const (
+	configuredEndpointHost = "upstream.invalid"
+	resolverAttemptBound   = 30 * time.Second
+)
+
+// queryRecorder is a stub name server: it reports the name of every DNS query written to it and fails the read, so a
+// lookup ends at once and its duration does not depend on a real resolver.
+type queryRecorder struct {
+	names chan string
+}
+
+func (q *queryRecorder) Dial(context.Context, string, string) (net.Conn, error) {
+	return &recordingConn{names: q.names}, nil
+}
+
+type recordingConn struct {
+	names chan string
+}
+
+func (c *recordingConn) Write(b []byte) (int, error) {
+	var labels []string
+	for i := 12; i < len(b) && b[i] != 0; {
+		n := int(b[i])
+		if i+1+n > len(b) {
+			break
+		}
+		labels = append(labels, string(b[i+1:i+1+n]))
+		i += 1 + n
+	}
+	select {
+	case c.names <- strings.Join(labels, "."):
+	default:
+	}
+	return len(b), nil
+}
+
+func (c *recordingConn) Read([]byte) (int, error) {
+	return 0, errors.New("recording resolver: no answer")
+}
+func (c *recordingConn) ReadFrom([]byte) (int, net.Addr, error) {
+	return 0, nil, errors.New("recording resolver: no answer")
+}
+func (c *recordingConn) WriteTo(b []byte, _ net.Addr) (int, error) { return c.Write(b) }
+func (c *recordingConn) Close() error                              { return nil }
+func (c *recordingConn) LocalAddr() net.Addr                       { return &net.UDPAddr{} }
+func (c *recordingConn) RemoteAddr() net.Addr                      { return &net.UDPAddr{} }
+func (c *recordingConn) SetDeadline(time.Time) error               { return nil }
+func (c *recordingConn) SetReadDeadline(time.Time) error           { return nil }
+func (c *recordingConn) SetWriteDeadline(time.Time) error          { return nil }
+
+// namesConfiguredHost accepts the endpoint name itself, its search-domain expansions, and the service-config TXT name
+// gRPC derives from it.
+func namesConfiguredHost(name string) bool {
+	name = strings.TrimPrefix(name, "_grpc_config.")
+	return name == configuredEndpointHost || strings.HasPrefix(name, configuredEndpointHost+".")
+}
+
 func TestTheGRPCExportersNeverDialTheEnvironmentProxy(t *testing.T) {
 	proxycapture.Check(t, func(ctx context.Context) {
-		if err := os.Setenv("OTEL_EXPORTER_OTLP_ENDPOINT", "http://upstream.invalid:4317"); err != nil {
+		if err := os.Setenv("OTEL_EXPORTER_OTLP_ENDPOINT", "http://"+configuredEndpointHost+":4317"); err != nil {
 			panic(err)
 		}
+		recorder := &queryRecorder{names: make(chan string, 64)}
+		net.DefaultResolver = &net.Resolver{PreferGo: true, Dial: recorder.Dial}
 		spans, metrics, logs, err := newGRPCExporters(ctx)
 		if err != nil {
 			panic(err)
 		}
-		call := func(send func(context.Context) error) {
-			callCtx, cancel := context.WithTimeout(ctx, time.Second)
+		// Shutdown closes the exporter's channel and waits for its resolver, so no lookup of a finished exporter can be
+		// read as the next one's.
+		call := func(exporter string, send func(context.Context) error, shutdown func(context.Context) error) {
+			for len(recorder.names) > 0 {
+				<-recorder.names
+			}
+			callCtx, cancel := context.WithTimeout(ctx, resolverAttemptBound)
 			defer cancel()
-			if err := send(callCtx); err == nil || !strings.Contains(err.Error(), "name resolver error") {
-				panic(fmt.Sprintf("export did not attempt the configured endpoint: %v", err))
+			done := make(chan error, 1)
+			go func() { done <- send(callCtx) }()
+			select {
+			case name := <-recorder.names:
+				if !namesConfiguredHost(name) {
+					panic(fmt.Sprintf("the %s exporter looked up %q, want the configured endpoint %q", exporter, name, configuredEndpointHost))
+				}
+				cancel()
+				err := <-done
+				if shutdownErr := shutdown(ctx); shutdownErr != nil {
+					panic(shutdownErr)
+				}
+				fmt.Printf("%s exporter looked up %q; export ended with: %v\n", exporter, name, err)
+			case err := <-done:
+				panic(fmt.Sprintf("the %s exporter returned before looking up the configured endpoint %q: %v", exporter, configuredEndpointHost, err))
+			case <-callCtx.Done():
+				panic(fmt.Sprintf("the %s exporter made no lookup of the configured endpoint %q before the call context ended (bound %s)", exporter, configuredEndpointHost, resolverAttemptBound))
 			}
 		}
-		call(func(c context.Context) error {
+		call("spans", func(c context.Context) error {
 			return spans.ExportSpans(c, tracetest.SpanStubs{{Name: "probe"}}.Snapshots())
-		})
-		call(func(c context.Context) error { return metrics.Export(c, &metricdata.ResourceMetrics{}) })
-		call(func(c context.Context) error { return logs.Export(c, make([]sdklog.Record, 1)) })
+		}, spans.Shutdown)
+		call("metrics", func(c context.Context) error { return metrics.Export(c, &metricdata.ResourceMetrics{}) }, metrics.Shutdown)
+		call("logs", func(c context.Context) error { return logs.Export(c, make([]sdklog.Record, 1)) }, logs.Shutdown)
 	}).AssertNothingReached(t)
 }
 
