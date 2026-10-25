@@ -258,8 +258,8 @@ func TestKeyScopeOversizedPackageIsNeverTypeChecked(t *testing.T) {
 		got := keyFindings(scanSource(t, header+c.body+"\n"))
 		used := cpuTime(t) - start
 		t.Logf("%s: %s cpu, findings %q", c.name, used, got)
-		if used > time.Second {
-			t.Errorf("%s: used %s cpu, want < 1s even under the race detector", c.name, used)
+		if limit := time.Second * raceSlowdown; used > limit {
+			t.Errorf("%s: used %s cpu, want < %s", c.name, used, limit)
 		}
 		if got != c.want {
 			t.Errorf("%s: key findings %q want %q", c.name, got, c.want)

@@ -102,6 +102,12 @@ func runHeavyShapes(t *testing.T, estimate bool) {
 				t.Fatalf("the helper verdict cache holds %d entries before the limited run, want 0", n)
 			}
 		}
+		refusedBeforeHelper := estimate && !strings.Contains(c.name, "1200-digit")
+		if refusedBeforeHelper {
+			// empties the helper verdict cache, so an entry after the run can only come from a helper this run started
+			limitCPU, rssLimit, wallLimit := emitscan.ChildLimits()
+			restoreLimits = emitscan.SetChildLimits(limitCPU, rssLimit, wallLimit)
+		}
 		start := cpuTime(t)
 		wall := time.Now()
 		got := keyFindings(scanSource(t, header+c.body+"\n"))
@@ -111,13 +117,14 @@ func runHeavyShapes(t *testing.T, estimate bool) {
 				t.Errorf("%s: the helper verdict cache holds %d entries after the limited run, want exactly the one this run made", c.name, n)
 			}
 		}
+		helperRuns := emitscan.ProbeCacheLen()
 		restoreLimits()
 		t.Logf("%s (estimate %v): parent %s cpu, %s wall, findings %q", c.name, estimate, used, time.Since(wall).Round(time.Millisecond), got)
-		if used > time.Second {
-			t.Errorf("%s: the scanning process used %s cpu, want < 1s even under the race detector", c.name, used)
+		if limit := time.Second * raceSlowdown; used > limit {
+			t.Errorf("%s: the scanning process used %s cpu, want < %s", c.name, used, limit)
 		}
-		if estimate && !strings.Contains(c.name, "1200-digit") && time.Since(wall) > 700*time.Millisecond {
-			t.Errorf("%s: took %s with the syntax estimate on, which must refuse it before any helper runs", c.name, time.Since(wall))
+		if refusedBeforeHelper && helperRuns != 0 {
+			t.Errorf("%s: %d helper verdicts cached with the syntax estimate on, which must refuse it before any helper runs", c.name, helperRuns)
 		}
 		if got != c.want {
 			t.Errorf("%s: key findings %q want %q", c.name, got, c.want)
