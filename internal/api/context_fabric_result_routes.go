@@ -144,6 +144,14 @@ func (a *App) ContextFabricInvestigationResultHandler(results contextfabric.Inve
 			return
 		case contextfabric.WorkItemTupleByIDServed, contextfabric.WorkItemTupleByIDStored:
 			result = tupleDecision.Result
+		case contextfabric.WorkItemTupleByIDNotApplicable:
+			// Any other kind of stored result with a flooded limitation list
+			// cannot show the service disclosures: it is answered like an
+			// unknown id, as the work-item tuple is.
+			if contextfabric.StoredResultFloodWithheld(result) {
+				a.writeInvestigationResultNotFound(w, r, principal)
+				return
+			}
 		}
 		// CHAOS-4413 (codex xhigh round-1 P1, confirmed): a row persisted
 		// before Completeness existed reads back with the exact zero
