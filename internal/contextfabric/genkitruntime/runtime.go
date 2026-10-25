@@ -3581,7 +3581,24 @@ func mergeFallbackReceipt(primary, fallback contextfabric.ModelExecutionReceipt)
 	}
 	addFallbackUsage(&primary, fallback)
 	mergeFallbackFrameCapture(&primary, fallback)
+	mergeFallbackWindowAndFamilyCapture(&primary, fallback)
 	return primary
+}
+
+func mergeFallbackWindowAndFamilyCapture(primary *contextfabric.ModelExecutionReceipt, fallback contextfabric.ModelExecutionReceipt) {
+	primary.WindowClass = fallback.WindowClass
+	primary.WindowConfidence = fallback.WindowConfidence
+	primary.WindowClassUnrecognized = fallback.WindowClassUnrecognized
+	primary.QuestionFamily = fallback.QuestionFamily
+	primary.QuestionFamilyUnrecognized = fallback.QuestionFamilyUnrecognized
+	primary.GroupKind = fallback.GroupKind
+	primary.GroupKindUnrecognized = fallback.GroupKindUnrecognized
+	primary.ScopeAnchorTerm = fallback.ScopeAnchorTerm
+	primary.ScopeAnchorTermTruncated = fallback.ScopeAnchorTermTruncated
+	primary.ScopeAnchorKind = fallback.ScopeAnchorKind
+	primary.ScopeAnchorKindUnrecognized = fallback.ScopeAnchorKindUnrecognized
+	primary.RequestedSubjectKind = fallback.RequestedSubjectKind
+	primary.RequestedSubjectKindUnrecognized = fallback.RequestedSubjectKindUnrecognized
 }
 
 // addFallbackUsage sums the fallback leg's token usage onto the receipt. A
