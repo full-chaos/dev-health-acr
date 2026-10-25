@@ -212,13 +212,14 @@ func runtimeConfig(cfg Config, model string, fallback contextfabric.ModelRuntime
 		// Model is the bare id: it lands unqualified in every
 		// ModelExecutionReceipt (the receipt carries Provider separately),
 		// and it is the key of the model's shared-package client.
-		Model:           model,
-		Timeout:         cfg.Timeout,
-		MaxAttempts:     cfg.MaxAttempts,
-		Fallback:        fallback,
-		MaxOutputTokens: cfg.MaxOutputTokens,
-		Telemetry:       cfg.Telemetry,
-		PromptCache:     cfg.PromptCache,
+		Model:                   model,
+		Timeout:                 cfg.Timeout,
+		MaxAttempts:             cfg.MaxAttempts,
+		Fallback:                fallback,
+		MaxOutputTokens:         cfg.MaxOutputTokens,
+		MaxSynthesisInputTokens: cfg.MaxSynthesisInputTokens,
+		Telemetry:               cfg.Telemetry,
+		PromptCache:             cfg.PromptCache,
 		// CHAOS-5380: copied straight through, unconditionally, exactly
 		// like Telemetry above it -- a nil here keeps genkitruntime's own
 		// documented slog.Default() fallback rather than a

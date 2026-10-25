@@ -4349,12 +4349,13 @@ var synthesisZeroClaimRedrawVocabulary = []string{
 // (request, encoded input, model): the fallback leg encodes the same input
 // under its own model id, so the two never share a scope.
 var SynthesisInput = Event{
-	ID:                 "contextfabric.synthesis_input",
-	Msg:                "context fabric synthesis input",
-	Level:              LevelInfo,
-	Multiplicity:       MultiplicityZeroOrOnePerRequest,
-	Attribution:        []string{"request_id", "input_digest", "model_id"},
-	BoundedAggregation: "at most one line per synthesize call, emitted when the call has encoded its model input; a call rejected before encoding emits none. Per-draw lists are bounded by the re-synthesis ceiling.",
+	RequiredOnlyConstruction: true,
+	ID:                       "contextfabric.synthesis_input",
+	Msg:                      "context fabric synthesis input",
+	Level:                    LevelInfo,
+	Multiplicity:             MultiplicityZeroOrOnePerRequest,
+	Attribution:              []string{"request_id", "input_digest", "model_id"},
+	BoundedAggregation:       "at most one line per synthesize call, emitted when the call has encoded its model input; a call rejected before encoding emits none. Per-draw lists are bounded by the re-synthesis ceiling.",
 	Fields: []Field{
 		{Key: "org_id_hash", Type: FieldString, Presence: PresenceRequired},
 		{Key: "model_id", Type: FieldString, Presence: PresenceRequired},
@@ -4382,6 +4383,8 @@ var SynthesisInput = Event{
 		{Key: "evidence_refs", Type: FieldInt, Presence: PresenceRequired},
 		{Key: "zero_claim_redraw", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: synthesisZeroClaimRedrawVocabulary},
 		{Key: "request_id", Type: FieldString, Presence: PresenceRequired},
+		{Key: "input_token_estimate", Type: FieldInt, Presence: PresenceConditional, Applicability: "written when the synthesis input token cap is on"},
+		{Key: "input_token_cap", Type: FieldInt, Presence: PresenceConditional, Applicability: "written when the synthesis input token cap is on"},
 	},
 }
 

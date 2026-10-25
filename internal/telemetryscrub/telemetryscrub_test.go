@@ -708,6 +708,7 @@ var typedBenignCases = []struct {
 	{"authorization_batches", "int"}, {"authorization_batch_size", "int"},
 	{"device_authorizations", "int"}, {"device_authorizations_remaining", "int"},
 	{"pass", "int"}, {"evaluated_pass", "int"},
+	{"input_token_estimate", "int"}, {"input_token_cap", "int"},
 	{"authorization_grant_measured", "bool"}, {"authorization_grant_organization_wide", "bool"},
 	{"dev_health_entitlement_token_file_configured", "bool"}, {"coverage_bypass", "bool"},
 	{"authorization_reason", "string"},

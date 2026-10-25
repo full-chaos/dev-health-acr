@@ -11705,6 +11705,18 @@
         "key": "request_id",
         "type": "string",
         "presence": "required"
+      },
+      {
+        "key": "input_token_estimate",
+        "type": "int",
+        "presence": "conditional",
+        "applicability": "written when the synthesis input token cap is on"
+      },
+      {
+        "key": "input_token_cap",
+        "type": "int",
+        "presence": "conditional",
+        "applicability": "written when the synthesis input token cap is on"
       }
     ]
   },

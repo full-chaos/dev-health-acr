@@ -198,6 +198,11 @@ type Config struct {
 	// leaves the primary's genkitruntime.Config field at its own zero value
 	// too, which genkitruntime.New then defaults to 1 (today's behavior).
 	MaxSynthesisResynthesisAttempts int
+	// MaxSynthesisInputTokens caps the estimated tokens of one synthesize
+	// prompt (genkitruntime.Config.MaxSynthesisInputTokens); 0 is off. Set by
+	// the caller, like MaxSynthesisResynthesisAttempts, and reaching the
+	// primary and the fallback runtime alike.
+	MaxSynthesisInputTokens int
 	// PublicEndpointsOnly makes every model call dial only publicly routable
 	// addresses: the dialer refuses a loopback, private, link-local, shared,
 	// reserved or otherwise non-public address after DNS resolution, so a
