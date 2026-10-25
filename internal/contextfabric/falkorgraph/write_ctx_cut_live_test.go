@@ -1,13 +1,16 @@
 package falkorgraph
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"os"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -89,32 +92,6 @@ func waitForProbeLandings(t *testing.T, api *sdkAPI, key, run string, want int64
 	}
 }
 
-// calibrateSlowProbe sizes the probe so one uncut run takes at least
-// minimum. A probe faster than that cannot show a cut mid-command, so the
-// test fails instead of passing on a write that finished before the cut.
-func calibrateSlowProbe(t *testing.T, api *sdkAPI, key string, minimum time.Duration) (int64, time.Duration) {
-	t.Helper()
-	n := int64(200)
-	for attempt := 0; attempt < 12; attempt++ {
-		began := time.Now()
-		if err := sendSlowProbe(context.Background(), api.db, key, fmt.Sprintf("calibrate-%d", attempt), n); err != nil {
-			t.Fatalf("calibration probe n=%d: %v", n, err)
-		}
-		spent := time.Since(began)
-		if spent >= minimum {
-			t.Logf("slow probe calibrated: n=%d took %v (minimum %v)", n, spent, minimum)
-			return n, spent
-		}
-		scale := int64(float64(minimum)/float64(spent+time.Millisecond)*1.2) + 1
-		if scale < 2 {
-			scale = 2
-		}
-		n *= scale
-	}
-	t.Fatalf("slow probe never reached %v; the cut tests cannot prove a mid-command cut on this server", minimum)
-	return 0, 0
-}
-
 func liveSDKAPI(t *testing.T, adapter *Adapter) *sdkAPI {
 	t.Helper()
 	switch c := adapter.api.(type) {
@@ -129,16 +106,23 @@ func liveSDKAPI(t *testing.T, adapter *Adapter) *sdkAPI {
 	return nil
 }
 
-// replyGate holds back the server's reply on the connections it wraps while
-// armed, so a test decides when the reply arrives instead of racing a timer
-// against how fast the server happens to run the probe. It is test-only: the
-// production dialer is untouched.
+// replyGate holds back the server's reply, or the probe command itself, on the
+// connections it wraps while armed, so a test decides when the reply arrives
+// or when the server gets the command instead of racing a timer against how
+// fast the server happens to run the probe. It is test-only: the production
+// dialer is untouched.
 type replyGate struct {
-	mu      sync.Mutex
-	armed   bool
-	hold    bool
-	release chan struct{}
-	writes  atomic.Int64
+	mu       sync.Mutex
+	armed    bool
+	hold     bool
+	holdSend bool
+	release  chan struct{}
+	writes   atomic.Int64
+	// flushes tracks held probe commands not yet written to the server and
+	// answered; drained counts the replies read back, flushErr keeps the first failure.
+	flushes  sync.WaitGroup
+	drained  atomic.Int64
+	flushErr error
 	// dialsBeforeSend counts dials made while recording before the probe went on the wire.
 	dialsBeforeSend atomic.Int64
 	sentAt          atomic.Int64
@@ -151,22 +135,31 @@ func newReplyGate() *replyGate {
 
 // arm starts holding replies back; every later probe write counts as a send.
 func (g *replyGate) arm() {
-	g.armWith(true)
+	g.armWith(true, false)
 }
 
 // record stamps every probe send and lets replies through: the send time of a
 // call whose reply is not held back.
 func (g *replyGate) record() {
-	g.armWith(false)
+	g.armWith(false, false)
 }
 
-func (g *replyGate) armWith(hold bool) {
+// holdSends stamps every probe send as the client writes it and keeps the
+// command off the wire until open: the server gets it only after the release.
+func (g *replyGate) holdSends() {
+	g.armWith(false, true)
+}
+
+func (g *replyGate) armWith(hold, holdSend bool) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	g.writes.Store(0)
 	g.dialsBeforeSend.Store(0)
 	g.sentAt.Store(0)
 	g.hold = hold
+	g.holdSend = holdSend
+	g.drained.Store(0)
+	g.flushErr = nil
 	for len(g.sent) > 0 {
 		<-g.sent
 	}
@@ -190,10 +183,42 @@ func (g *replyGate) holding() (<-chan struct{}, bool) {
 	return g.release, g.armed && g.hold
 }
 
+func (g *replyGate) sendHold() (<-chan struct{}, bool) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return g.release, g.armed && g.holdSend
+}
+
 func (g *replyGate) recording() bool {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	return g.armed
+}
+
+func (g *replyGate) failFlush(err error) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if g.flushErr == nil {
+		g.flushErr = err
+	}
+}
+
+// settle waits for every released command to be written and answered, and
+// returns how many replies were read back and the first failure.
+func (g *replyGate) settle() (int64, error) {
+	g.flushes.Wait()
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return g.drained.Load(), g.flushErr
+}
+
+func (g *replyGate) stampSend(began int64) {
+	g.sentAt.CompareAndSwap(0, began)
+	g.writes.Add(1)
+	select {
+	case g.sent <- struct{}{}:
+	default:
+	}
 }
 
 func (g *replyGate) dialer(base func(context.Context, string, string) (net.Conn, error)) func(context.Context, string, string) (net.Conn, error) {
@@ -211,44 +236,155 @@ func (g *replyGate) dialer(base func(context.Context, string, string) (net.Conn,
 
 type gatedConn struct {
 	net.Conn
-	gate     *replyGate
-	deadline atomic.Int64
+	gate          *replyGate
+	deadline      atomic.Int64
+	writeDeadline atomic.Int64
+
+	mu              sync.Mutex
+	held            int
+	closeAfterFlush bool
+}
+
+func storeDeadline(at *atomic.Int64, t time.Time) {
+	if t.IsZero() {
+		at.Store(0)
+	} else {
+		at.Store(t.UnixNano())
+	}
 }
 
 func (c *gatedConn) SetReadDeadline(t time.Time) error {
-	if t.IsZero() {
-		c.deadline.Store(0)
-	} else {
-		c.deadline.Store(t.UnixNano())
-	}
+	storeDeadline(&c.deadline, t)
 	return c.Conn.SetReadDeadline(t)
 }
 
+func (c *gatedConn) SetWriteDeadline(t time.Time) error {
+	storeDeadline(&c.writeDeadline, t)
+	return c.Conn.SetWriteDeadline(t)
+}
+
 func (c *gatedConn) SetDeadline(t time.Time) error {
-	if t.IsZero() {
-		c.deadline.Store(0)
-	} else {
-		c.deadline.Store(t.UnixNano())
-	}
+	storeDeadline(&c.deadline, t)
+	storeDeadline(&c.writeDeadline, t)
 	return c.Conn.SetDeadline(t)
 }
 
 // Write counts and stamps only the probe's own command. A new connection's
 // handshake (HELLO) is a write too, and stamping it would date a send of a
 // probe that never went on the wire. The stamp is taken before the write, and
-// kept only when the whole command was written.
+// kept only when the whole command was written. A held command is accepted as
+// the socket would accept it (refused once its write deadline has passed) and
+// reaches the server only at the gate's release.
 func (c *gatedConn) Write(b []byte) (int, error) {
 	began := time.Now().UnixNano()
-	n, err := c.Conn.Write(b)
-	if err == nil && c.gate.recording() && bytes.Contains(b, []byte("GRAPH.QUERY")) {
-		c.gate.sentAt.CompareAndSwap(0, began)
-		c.gate.writes.Add(1)
-		select {
-		case c.gate.sent <- struct{}{}:
-		default:
+	probe := c.gate.recording() && bytes.Contains(b, []byte("GRAPH.QUERY"))
+	if release, held := c.gate.sendHold(); held && probe {
+		if at := c.writeDeadline.Load(); at != 0 && time.Now().UnixNano() >= at {
+			return 0, os.ErrDeadlineExceeded
 		}
+		c.holdUntil(release, append([]byte(nil), b...))
+		c.gate.stampSend(began)
+		return len(b), nil
+	}
+	n, err := c.Conn.Write(b)
+	if err == nil && probe {
+		c.gate.stampSend(began)
 	}
 	return n, err
+}
+
+// holdUntil writes b to the server once release closes, under its own
+// stallBound deadline (the caller's has passed by then), and reads the server's
+// reply back before anything else: the server has taken the command before
+// the connection can close. A Close that came first takes effect after the
+// last held command is answered.
+func (c *gatedConn) holdUntil(release <-chan struct{}, b []byte) {
+	c.mu.Lock()
+	c.held++
+	c.mu.Unlock()
+	c.gate.flushes.Add(1)
+	go func() {
+		defer c.gate.flushes.Done()
+		<-release
+		c.mu.Lock()
+		defer c.mu.Unlock()
+		if err := c.flush(b); err != nil {
+			c.gate.failFlush(err)
+		} else {
+			c.gate.drained.Add(1)
+		}
+		c.held--
+		if c.held == 0 && c.closeAfterFlush {
+			_ = c.Conn.Close()
+		}
+	}()
+}
+
+func (c *gatedConn) flush(b []byte) error {
+	if err := c.Conn.SetDeadline(time.Now().Add(stallBound)); err != nil {
+		return fmt.Errorf("bound the flush: %w", err)
+	}
+	if _, err := c.Conn.Write(b); err != nil {
+		return fmt.Errorf("write the held command: %w", err)
+	}
+	if err := skipRESPReply(bufio.NewReader(c.Conn)); err != nil {
+		return fmt.Errorf("read the reply to the held command: %w", err)
+	}
+	return nil
+}
+
+// skipRESPReply reads one whole RESP2 or RESP3 reply and discards it.
+func skipRESPReply(r *bufio.Reader) error {
+	line, err := r.ReadString('\n')
+	if err != nil {
+		return err
+	}
+	if len(line) < 3 || !strings.HasSuffix(line, "\r\n") {
+		return fmt.Errorf("malformed reply line %q", line)
+	}
+	kind, body := line[0], line[1:len(line)-2]
+	switch kind {
+	case '+', '-', ':', '_', ',', '#', '(':
+		return nil
+	case '$', '!', '=':
+		size, err := strconv.Atoi(body)
+		if err != nil {
+			return fmt.Errorf("bulk length %q: %w", body, err)
+		}
+		if size < 0 {
+			return nil
+		}
+		_, err = io.CopyN(io.Discard, r, int64(size)+2)
+		return err
+	case '*', '~', '>', '%', '|':
+		count, err := strconv.Atoi(body)
+		if err != nil {
+			return fmt.Errorf("aggregate length %q: %w", body, err)
+		}
+		if kind == '%' || kind == '|' {
+			count *= 2
+		}
+		if kind == '|' {
+			count++
+		}
+		for i := 0; i < count; i++ {
+			if err := skipRESPReply(r); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+	return fmt.Errorf("unknown reply type %q", kind)
+}
+
+func (c *gatedConn) Close() error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.held > 0 {
+		c.closeAfterFlush = true
+		return nil
+	}
+	return c.Conn.Close()
 }
 
 func (c *gatedConn) Read(b []byte) (int, error) {
@@ -283,15 +419,29 @@ func gatedClient(t *testing.T, options redis.Options, gate *replyGate) *falkordb
 	return &falkordb.FalkorDB{Conn: client}
 }
 
+// waitPastMillisecond returns once the wall clock reads a later millisecond
+// than every instant, so a server stamp taken after it is strictly later in
+// milliseconds than each of them.
+func waitPastMillisecond(instants ...time.Time) {
+	var last int64
+	for _, at := range instants {
+		if ms := at.UnixMilli(); ms > last {
+			last = ms
+		}
+	}
+	for time.Now().UnixMilli() <= last {
+		time.Sleep(100 * time.Microsecond)
+	}
+}
+
 // TestLiveWriteCutOnARealFalkorDB measures, on one FalkorDB container, what a
-// cut does to a write that FalkorDB is still executing. The probe write is
-// sized so one uncut run takes at least probeMinimum (3x the longest cut),
-// and the test fails if it cannot get there.
+// cut does to a write whose reply has not come back: a deadline, a cancel,
+// and the write client's own read timeout. The gate, not the server's speed,
+// decides where each cut falls.
 func TestLiveWriteCutOnARealFalkorDB(t *testing.T) {
 	t.Parallel()
-	const cut = 50 * time.Millisecond
+	const cut = time.Second
 	const readTimeout = 100 * time.Millisecond
-	const probeMinimum = 3 * readTimeout
 	adapter, _ := newLiveFalkorAdapter(t, context.Background())
 	api := liveSDKAPI(t, adapter)
 	key := graphKey(adapter.config.GraphPrefix, "live-write-cut-"+time.Now().UTC().Format("20060102T150405.000000000"))
@@ -299,15 +449,18 @@ func TestLiveWriteCutOnARealFalkorDB(t *testing.T) {
 	if err := api.read.Conn.Ping(context.Background()).Err(); err != nil {
 		t.Fatalf("warm the context-enforcing client: %v", err)
 	}
-	n, probe := calibrateSlowProbe(t, api, key, probeMinimum)
 
 	// A deadline on a client that enforces the caller's ctx (the read
-	// client's options) expires while FalkorDB still executes the write.
-	// The caller gets an error every time, and the write commits on the
-	// server every time, after the call returned: a deadline turns a
-	// completing write into an error plus a landed write.
+	// client's options) expires after the client wrote the command and before
+	// any reply. The gate keeps the written command off the wire until the
+	// call has returned past its deadline, so the server always receives it
+	// after the cut: "sent" is the client's write, before the deadline, and
+	// the commit comes after the deadline and after the return. That is the
+	// product risk, whatever the server's speed: the caller gets a deadline
+	// error, nothing resends the write (a resend is a second held command and
+	// a second landing), and the write still lands exactly once.
 	t.Run("deadline", func(t *testing.T) {
-		const runs = 10
+		const runs = 5
 		const maxUnsent = 2
 		gate := newReplyGate()
 		client := gatedClient(t, *api.read.Conn.(*redis.Client).Options(), gate)
@@ -320,18 +473,36 @@ func TestLiveWriteCutOnARealFalkorDB(t *testing.T) {
 			if err := client.Conn.Ping(context.Background()).Err(); err != nil {
 				t.Fatalf("%s: warm the recording client: %v", run, err)
 			}
-			gate.record()
+			gate.holdSends()
 			ctx, cancel := context.WithTimeout(context.Background(), cut)
 			deadline, _ := ctx.Deadline()
-			err := sendSlowProbe(ctx, client, key, run, n)
-			returnedMs := time.Now().UnixMilli()
+			done := make(chan error, 1)
+			go func() { done <- sendSlowProbe(ctx, client, key, run, 1) }()
+			var err error
+			select {
+			case err = <-done:
+			case <-time.After(cut + stallBound):
+				cancel()
+				gate.open()
+				t.Fatalf("%s: the call did not return within %v after its %v deadline although its command got no reply: the deadline did not bound the call", run, stallBound, cut)
+			}
+			returned := time.Now()
 			cancel()
 			sends, dials := gate.writes.Load(), gate.dialsBeforeSend.Load()
 			sent := time.Time{}
 			if ns := gate.sentAt.Load(); ns != 0 {
 				sent = time.Unix(0, ns)
 			}
+			waitPastMillisecond(deadline, returned)
 			gate.open()
+			drained, flushErr := gate.settle()
+			if flushErr != nil {
+				t.Fatalf("%s: the held command was not written and answered after the release: %v", run, flushErr)
+			}
+			t.Logf("%s: sends=%d replies_drained=%d error=%v", run, sends, drained, err)
+			if drained != sends {
+				t.Fatalf("%s: %d replies drained for %d held send(s): a held command was not answered before its connection closed", run, drained, sends)
+			}
 			if dials != 0 {
 				t.Fatalf("%s: the call dialed %d connection(s) before the probe went on the wire: a handshake shared the %v cut window, so the run would not measure a cut of the write", run, dials, cut)
 			}
@@ -368,7 +539,7 @@ func TestLiveWriteCutOnARealFalkorDB(t *testing.T) {
 			case cutNotLanded:
 				t.Errorf("%s: the probe went on the wire before the deadline and did not land within 30s", run)
 			}
-			if landing.atMs > returnedMs {
+			if landing.atMs > returned.UnixMilli() {
 				returnedBeforeCommit++
 			}
 		}
@@ -382,11 +553,11 @@ func TestLiveWriteCutOnARealFalkorDB(t *testing.T) {
 				t.Errorf("%s never put the probe on the wire, yet it landed %d times", run, got)
 			}
 		}
-		t.Logf("write ctx deadline cut: runs=%d cut=%v probe=%v errors=%d deadline_errors=%d landed=%d single=%d committed_after_deadline=%d returned_before_commit=%d unsent_retries=%d",
-			runs, cut, probe, errorsSeen, deadlineErrors, landed, single, committedAfterCut, returnedBeforeCommit, len(unsent))
-		if errorsSeen != runs || deadlineErrors != runs || landed != runs || single != runs || committedAfterCut != runs {
-			t.Fatalf("want every cut run to return a deadline error AND land exactly once, sent before the deadline and committed after it: errors=%d deadline_errors=%d landed=%d single=%d committed_after_deadline=%d of %d",
-				errorsSeen, deadlineErrors, landed, single, committedAfterCut, runs)
+		t.Logf("write ctx deadline cut: runs=%d cut=%v errors=%d deadline_errors=%d landed=%d single=%d committed_after_deadline=%d returned_before_commit=%d unsent_retries=%d",
+			runs, cut, errorsSeen, deadlineErrors, landed, single, committedAfterCut, returnedBeforeCommit, len(unsent))
+		if errorsSeen != runs || deadlineErrors != runs || landed != runs || single != runs || committedAfterCut != runs || returnedBeforeCommit != runs {
+			t.Fatalf("want every cut run to return a deadline error AND land exactly once, sent before the deadline and committed after it and after the return: errors=%d deadline_errors=%d landed=%d single=%d committed_after_deadline=%d returned_before_commit=%d of %d",
+				errorsSeen, deadlineErrors, landed, single, committedAfterCut, returnedBeforeCommit, runs)
 		}
 	})
 
