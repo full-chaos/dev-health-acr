@@ -79,26 +79,40 @@ func synthesisResynthesisAttemptsFromEnv(lookup func(string) (string, bool), log
 const EnvSynthesisMaxInputTokens = "ACR_CONTEXT_FABRIC_SYNTHESIS_MAX_INPUT_TOKENS"
 
 func synthesisMaxInputTokensFromEnv(lookup func(string) (string, bool), logger *slog.Logger) int {
-	raw, _ := lookup(EnvSynthesisMaxInputTokens)
+	return maxInputTokensFromEnv(lookup, logger, EnvSynthesisMaxInputTokens, "synthesis", genkitruntime.MinSynthesisInputTokens)
+}
+
+// EnvInterpretMaxInputTokens caps the estimated tokens of one interpret
+// prompt, for the deployment model and every per-organization model alike,
+// with the same policy as EnvSynthesisMaxInputTokens against
+// genkitruntime.MinInterpretInputTokens.
+const EnvInterpretMaxInputTokens = "ACR_CONTEXT_FABRIC_INTERPRET_MAX_INPUT_TOKENS"
+
+func interpretMaxInputTokensFromEnv(lookup func(string) (string, bool), logger *slog.Logger) int {
+	return maxInputTokensFromEnv(lookup, logger, EnvInterpretMaxInputTokens, "interpret", genkitruntime.MinInterpretInputTokens())
+}
+
+func maxInputTokensFromEnv(lookup func(string) (string, bool), logger *slog.Logger, variable, call string, minimum int) int {
+	raw, _ := lookup(variable)
 	value := strings.TrimSpace(raw)
 	if value == "" {
 		return 0
 	}
 	parsed, err := strconv.Atoi(value)
-	if err == nil && (parsed == 0 || parsed >= genkitruntime.MinSynthesisInputTokens) {
+	if err == nil && (parsed == 0 || parsed >= minimum) {
 		return parsed
 	}
 	if err == nil && parsed > 0 {
-		logger.Warn("context fabric synthesis input token cap below the minimum, raised to the minimum",
-			"variable", EnvSynthesisMaxInputTokens,
+		logger.Warn("context fabric "+call+" input token cap below the minimum, raised to the minimum",
+			"variable", variable,
 			"value", parsed,
-			"minimum", genkitruntime.MinSynthesisInputTokens)
-		return genkitruntime.MinSynthesisInputTokens
+			"minimum", minimum)
+		return minimum
 	}
-	logger.Warn("context fabric synthesis input token cap malformed, cap off",
-		"variable", EnvSynthesisMaxInputTokens,
+	logger.Warn("context fabric "+call+" input token cap malformed, cap off",
+		"variable", variable,
 		"value", contextfabric.SanitizeLogAttr(value),
-		"minimum", genkitruntime.MinSynthesisInputTokens)
+		"minimum", minimum)
 	return 0
 }
 
@@ -165,6 +179,7 @@ func contextFabricModelConfigFromEnv(lookup func(string) (string, bool), telemet
 	// ACR_CONTEXT_FABRIC_MODEL_* variable that function owns.
 	modelConfig.MaxSynthesisResynthesisAttempts = synthesisResynthesisAttemptsFromEnv(lookup, logger)
 	modelConfig.MaxSynthesisInputTokens = synthesisMaxInputTokensFromEnv(lookup, logger)
+	modelConfig.MaxInterpretInputTokens = interpretMaxInputTokensFromEnv(lookup, logger)
 	return modelConfig, nil
 }
 

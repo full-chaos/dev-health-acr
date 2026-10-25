@@ -138,6 +138,7 @@ func contextFabricModelDefaults(lookup func(string) (string, bool), logger *slog
 			MaxTransportRetries:             modelprovider.DefaultMaxTransportRetries,
 			MaxSynthesisResynthesisAttempts: synthesisResynthesisAttemptsFromEnv(lookup, logger),
 			MaxSynthesisInputTokens:         synthesisMaxInputTokensFromEnv(lookup, logger),
+			MaxInterpretInputTokens:         interpretMaxInputTokensFromEnv(lookup, logger),
 			AllowNonPublicBYOEndpoint:       byoAllowNonPublicBaseURLFromEnv(lookup, logger),
 		}, nil
 	}
@@ -155,6 +156,7 @@ func contextFabricModelDefaults(lookup func(string) (string, bool), logger *slog
 	// uses for the deployment-default runtime.
 	cfg.MaxSynthesisResynthesisAttempts = synthesisResynthesisAttemptsFromEnv(lookup, logger)
 	cfg.MaxSynthesisInputTokens = synthesisMaxInputTokensFromEnv(lookup, logger)
+	cfg.MaxInterpretInputTokens = interpretMaxInputTokensFromEnv(lookup, logger)
 	cfg.AllowNonPublicBYOEndpoint = byoAllowNonPublicBaseURLFromEnv(lookup, logger)
 	return cfg, nil
 }

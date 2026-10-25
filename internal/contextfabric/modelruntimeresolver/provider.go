@@ -52,6 +52,7 @@ func orgModelProviderConfig(defaults modelprovider.Config, resolved contextfabri
 		// per-organization contract either.
 		MaxSynthesisResynthesisAttempts: defaults.MaxSynthesisResynthesisAttempts,
 		MaxSynthesisInputTokens:         defaults.MaxSynthesisInputTokens,
+		MaxInterpretInputTokens:         defaults.MaxInterpretInputTokens,
 		// CHAOS-4355 follow-up: inherited from defaults, same as the
 		// tuning knobs above, so a per-organization BYO runtime reports
 		// RecordModelRowsStripped through the SAME sink the

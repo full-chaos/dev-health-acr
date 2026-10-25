@@ -203,6 +203,10 @@ type Config struct {
 	// the caller, like MaxSynthesisResynthesisAttempts, and reaching the
 	// primary and the fallback runtime alike.
 	MaxSynthesisInputTokens int
+	// MaxInterpretInputTokens caps the estimated tokens of one interpret
+	// prompt (genkitruntime.Config.MaxInterpretInputTokens); 0 is off. Set by
+	// the caller and reaching the primary and the fallback runtime alike.
+	MaxInterpretInputTokens int
 	// PublicEndpointsOnly makes every model call dial only publicly routable
 	// addresses: the dialer refuses a loopback, private, link-local, shared,
 	// reserved or otherwise non-public address after DNS resolution, so a
