@@ -84,6 +84,50 @@ func (p *pkgInfo) typedInfo() *typedPackage {
 	return p.typed
 }
 
+// sourceSnapshot is every file the scan parsed, as the bytes it parsed.
+type sourceSnapshot struct {
+	root  string
+	files []parsedFile // sorted by rel
+	key   string       // digest of the rels and bytes
+}
+
+func newSourceSnapshot(root string, byDir map[string][]parsedFile) *sourceSnapshot {
+	snap := &sourceSnapshot{root: root}
+	for _, group := range byDir {
+		snap.files = append(snap.files, group...)
+	}
+	sort.Slice(snap.files, func(i, j int) bool { return snap.files[i].rel < snap.files[j].rel })
+	snap.key = probeKey(snap.files)
+	return snap
+}
+
+// writeOverlay writes the parsed bytes to a private temp directory and the go overlay file that maps each scanned file to
+// its copy. The directory is returned even with an error, so the caller removes it.
+func (snap *sourceSnapshot) writeOverlay() (dir, overlayFile string, err error) {
+	absRoot, err := filepath.Abs(snap.root)
+	if err != nil {
+		return "", "", err
+	}
+	dir, err = os.MkdirTemp("", "emitscan-overlay-")
+	if err != nil {
+		return "", "", err
+	}
+	replace := map[string]string{}
+	for i, parsed := range snap.files {
+		copyPath := filepath.Join(dir, fmt.Sprintf("%d.go", i))
+		if err := os.WriteFile(copyPath, parsed.src, 0o600); err != nil {
+			return dir, "", err
+		}
+		replace[filepath.Join(absRoot, filepath.FromSlash(parsed.rel))] = copyPath
+	}
+	payload, err := json.Marshal(map[string]map[string]string{"Replace": replace})
+	if err != nil {
+		return dir, "", err
+	}
+	overlayFile = filepath.Join(dir, "overlay.json")
+	return dir, overlayFile, os.WriteFile(overlayFile, payload, 0o600)
+}
+
 type exportEntry struct {
 	files map[string]string
 }
@@ -120,10 +164,18 @@ func moduleDirOf(root string) (string, error) {
 }
 
 // exportFiles maps import path to export data file for every package of the module and its dependencies.
-func exportFiles(ctx context.Context, moduleDir string) (map[string]string, error) {
+//
+// With a snapshot, go list builds every scanned file from the bytes the scan parsed (an overlay of temp copies), so a
+// change on disk while it runs cannot reach the export data. Files go list reads that the scan did not parse (go.mod,
+// test files, directories outside the scanned ones) are still read from disk.
+func exportFiles(ctx context.Context, moduleDir string, snap *sourceSnapshot) (map[string]string, error) {
 	exportCache.Lock()
 	defer exportCache.Unlock()
-	if entry, ok := exportCache.byDir[moduleDir]; ok {
+	cacheKey := moduleDir
+	if snap != nil && len(snap.files) > 0 {
+		cacheKey += "\x00" + snap.key
+	}
+	if entry, ok := exportCache.byDir[cacheKey]; ok {
 		return entry.files, nil
 	}
 	if ctx == nil {
@@ -133,7 +185,19 @@ func exportFiles(ctx context.Context, moduleDir string) (map[string]string, erro
 	if err != nil {
 		return nil, err
 	}
-	cmd := exec.CommandContext(ctx, goPath, "list", "-export", "-deps", "-f", "{{if .Export}}{{.ImportPath}}\t{{.Export}}{{end}}", "./...")
+	args := []string{"list", "-export", "-deps"}
+	if snap != nil && len(snap.files) > 0 {
+		overlayDir, overlayFile, err := snap.writeOverlay()
+		if overlayDir != "" {
+			defer os.RemoveAll(overlayDir)
+		}
+		if err != nil {
+			return nil, fmt.Errorf("go list overlay: %w", err)
+		}
+		args = append(args, "-overlay", overlayFile)
+	}
+	args = append(args, "-f", "{{if .Export}}{{.ImportPath}}\t{{.Export}}{{end}}", "./...")
+	cmd := exec.CommandContext(ctx, goPath, args...)
 	cmd.Dir = moduleDir
 	cmd.Env = append(os.Environ(), "GOTOOLCHAIN=local")
 	out, err := cmd.Output()
@@ -146,7 +210,7 @@ func exportFiles(ctx context.Context, moduleDir string) (map[string]string, erro
 			files[path] = file
 		}
 	}
-	exportCache.byDir[moduleDir] = &exportEntry{files: files}
+	exportCache.byDir[cacheKey] = &exportEntry{files: files}
 	return files, nil
 }
 
@@ -752,7 +816,7 @@ func (p *pkgInfo) boundedTypeCheck() (*types.Info, []*ast.File, error) {
 	if err != nil {
 		return nil, nil, err
 	}
-	exports, err := exportFiles(p.budget.ctx, moduleDir)
+	exports, err := exportFiles(p.budget.ctx, moduleDir, p.snap)
 	if err != nil {
 		return nil, nil, err
 	}
