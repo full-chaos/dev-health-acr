@@ -74,6 +74,7 @@ func TestExportDataIsBuiltFromTheParsedBytesNotTheDisk(t *testing.T) {
 	if !strings.Contains(control, "mismatch:pass") {
 		t.Fatalf("control scan %q does not carry the mismatch finding", control)
 	}
+	// ResetGoTool empties exportCache, so the second scan runs go list again; the marker below asserts that it did.
 	emitscan.ResetGoTool()
 	emitscan.SetHelperBinary("")()
 	ran := filepath.Join(t.TempDir(), "go-list-ran")
