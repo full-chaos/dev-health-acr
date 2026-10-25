@@ -694,14 +694,21 @@ func (e *Engine) tryReuseWithReading(ctx context.Context, principal storage.Prin
 	// any reuse-specific rule: a candidate whose subjects the caller's current
 	// grant does not admit is never served, whatever else it matches. An
 	// undecidable candidate is a miss, never a hit.
-	if decision := e.storedResultGate.Authorize(ctx, principal, stored, StoredResultSurfaceAnswerReuse); !decision.Admitted() {
-		if e.telemetry != nil {
-			e.telemetry.RecordStoredResultAuthorization(ctx, principal, decision)
-		}
-		e.recordReuseOutcome(ctx, principal, AnswerReuseMissAuthorization)
-		return InvestigationResult{}, false, false, storedCountReading{}, nil
-	} else if e.telemetry != nil {
+	decision := e.storedResultGate.Authorize(ctx, principal, stored, StoredResultSurfaceAnswerReuse)
+	if e.telemetry != nil {
 		e.telemetry.RecordStoredResultAuthorization(ctx, principal, decision)
+	}
+	// A candidate whose limitation list is flooded cannot show the service
+	// disclosures, so it is not served: the question is answered afresh.
+	// It is a content rule, not an authorization decision.
+	missOutcome := AnswerReuseMissAuthorization
+	withheld := !decision.Admitted()
+	if !withheld && StoredResultFloodWithheld(candidate) {
+		missOutcome, withheld = AnswerReuseMissNoCandidate, true
+	}
+	if withheld {
+		e.recordReuseOutcome(ctx, principal, missOutcome)
+		return InvestigationResult{}, false, false, storedCountReading{}, nil
 	}
 	if !requestHintsCommittedBy(request.RequestedScope.SubjectHints, candidate.SubjectResolution.Committed) {
 		e.recordReuseOutcome(ctx, principal, AnswerReuseMissHintNotCommitted)

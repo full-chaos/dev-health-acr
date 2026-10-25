@@ -387,6 +387,10 @@ func servedStoredResult(stored StoredInvestigationResult, principal storage.Prin
 	switch tuple.Disposition {
 	case WorkItemTupleByIDNotFound:
 		return InvestigationResult{}, true, event, nil
+	case WorkItemTupleByIDNotApplicable:
+		if StoredResultFloodWithheld(result) {
+			return InvestigationResult{}, true, nil, nil
+		}
 	case WorkItemTupleByIDServed, WorkItemTupleByIDStored:
 		result = tuple.Result
 	}
