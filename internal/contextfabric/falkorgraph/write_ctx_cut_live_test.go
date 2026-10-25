@@ -1,13 +1,16 @@
 package falkorgraph
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"os"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -115,9 +118,11 @@ type replyGate struct {
 	holdSend bool
 	release  chan struct{}
 	writes   atomic.Int64
-	// flushes tracks held probe commands not yet written to the server; flushErrors counts the ones that failed.
-	flushes     sync.WaitGroup
-	flushErrors atomic.Int64
+	// flushes tracks held probe commands not yet written to the server and
+	// answered; drained counts the replies read back, flushErr keeps the first failure.
+	flushes  sync.WaitGroup
+	drained  atomic.Int64
+	flushErr error
 	// dialsBeforeSend counts dials made while recording before the probe went on the wire.
 	dialsBeforeSend atomic.Int64
 	sentAt          atomic.Int64
@@ -153,6 +158,8 @@ func (g *replyGate) armWith(hold, holdSend bool) {
 	g.sentAt.Store(0)
 	g.hold = hold
 	g.holdSend = holdSend
+	g.drained.Store(0)
+	g.flushErr = nil
 	for len(g.sent) > 0 {
 		<-g.sent
 	}
@@ -186,6 +193,23 @@ func (g *replyGate) recording() bool {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	return g.armed
+}
+
+func (g *replyGate) failFlush(err error) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if g.flushErr == nil {
+		g.flushErr = err
+	}
+}
+
+// settle waits for every released command to be written and answered, and
+// returns how many replies were read back and the first failure.
+func (g *replyGate) settle() (int64, error) {
+	g.flushes.Wait()
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return g.drained.Load(), g.flushErr
 }
 
 func (g *replyGate) stampSend(began int64) {
@@ -269,9 +293,11 @@ func (c *gatedConn) Write(b []byte) (int, error) {
 	return n, err
 }
 
-// holdUntil writes b to the server once release closes, with no deadline: the
-// caller's deadline has passed by then. A Close that came first takes effect
-// after the last held command is written.
+// holdUntil writes b to the server once release closes, under its own
+// stallBound deadline (the caller's has passed by then), and reads the server's
+// reply back before anything else: the server has taken the command before
+// the connection can close. A Close that came first takes effect after the
+// last held command is answered.
 func (c *gatedConn) holdUntil(release <-chan struct{}, b []byte) {
 	c.mu.Lock()
 	c.held++
@@ -282,16 +308,73 @@ func (c *gatedConn) holdUntil(release <-chan struct{}, b []byte) {
 		<-release
 		c.mu.Lock()
 		defer c.mu.Unlock()
-		if err := c.Conn.SetWriteDeadline(time.Time{}); err != nil {
-			c.gate.flushErrors.Add(1)
-		} else if _, err := c.Conn.Write(b); err != nil {
-			c.gate.flushErrors.Add(1)
+		if err := c.flush(b); err != nil {
+			c.gate.failFlush(err)
+		} else {
+			c.gate.drained.Add(1)
 		}
 		c.held--
 		if c.held == 0 && c.closeAfterFlush {
 			_ = c.Conn.Close()
 		}
 	}()
+}
+
+func (c *gatedConn) flush(b []byte) error {
+	if err := c.Conn.SetDeadline(time.Now().Add(stallBound)); err != nil {
+		return fmt.Errorf("bound the flush: %w", err)
+	}
+	if _, err := c.Conn.Write(b); err != nil {
+		return fmt.Errorf("write the held command: %w", err)
+	}
+	if err := skipRESPReply(bufio.NewReader(c.Conn)); err != nil {
+		return fmt.Errorf("read the reply to the held command: %w", err)
+	}
+	return nil
+}
+
+// skipRESPReply reads one whole RESP2 or RESP3 reply and discards it.
+func skipRESPReply(r *bufio.Reader) error {
+	line, err := r.ReadString('\n')
+	if err != nil {
+		return err
+	}
+	if len(line) < 3 || !strings.HasSuffix(line, "\r\n") {
+		return fmt.Errorf("malformed reply line %q", line)
+	}
+	kind, body := line[0], line[1:len(line)-2]
+	switch kind {
+	case '+', '-', ':', '_', ',', '#', '(':
+		return nil
+	case '$', '!', '=':
+		size, err := strconv.Atoi(body)
+		if err != nil {
+			return fmt.Errorf("bulk length %q: %w", body, err)
+		}
+		if size < 0 {
+			return nil
+		}
+		_, err = io.CopyN(io.Discard, r, int64(size)+2)
+		return err
+	case '*', '~', '>', '%', '|':
+		count, err := strconv.Atoi(body)
+		if err != nil {
+			return fmt.Errorf("aggregate length %q: %w", body, err)
+		}
+		if kind == '%' || kind == '|' {
+			count *= 2
+		}
+		if kind == '|' {
+			count++
+		}
+		for i := 0; i < count; i++ {
+			if err := skipRESPReply(r); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+	return fmt.Errorf("unknown reply type %q", kind)
 }
 
 func (c *gatedConn) Close() error {
@@ -412,9 +495,13 @@ func TestLiveWriteCutOnARealFalkorDB(t *testing.T) {
 			}
 			waitPastMillisecond(deadline, returned)
 			gate.open()
-			gate.flushes.Wait()
-			if failed := gate.flushErrors.Load(); failed != 0 {
-				t.Fatalf("%s: %d held command(s) could not be written to the server after the release", run, failed)
+			drained, flushErr := gate.settle()
+			if flushErr != nil {
+				t.Fatalf("%s: the held command was not written and answered after the release: %v", run, flushErr)
+			}
+			t.Logf("%s: sends=%d replies_drained=%d error=%v", run, sends, drained, err)
+			if drained != sends {
+				t.Fatalf("%s: %d replies drained for %d held send(s): a held command was not answered before its connection closed", run, drained, sends)
 			}
 			if dials != 0 {
 				t.Fatalf("%s: the call dialed %d connection(s) before the probe went on the wire: a handshake shared the %v cut window, so the run would not measure a cut of the write", run, dials, cut)

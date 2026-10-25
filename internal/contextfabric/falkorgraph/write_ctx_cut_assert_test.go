@@ -7,6 +7,7 @@ import (
 	"io"
 	"net"
 	"os"
+	"strings"
 	"testing"
 	"time"
 )
@@ -54,14 +55,16 @@ func TestRecordingGateStampsTheSendAndHoldsNoReply(t *testing.T) {
 }
 
 // A held probe command reaches the peer only after open, each held command is
-// a counted send (a resend after the cut is a second one), and a Close that
-// came first takes effect only after the held commands are written.
+// a counted send (a resend after the cut is a second one), each one's reply is
+// read back before the next goes out, and a Close that came first takes
+// effect only after the last reply is read.
 func TestHeldSendReachesTheWireOnlyAfterOpen(t *testing.T) {
 	client, server := net.Pipe()
 	defer server.Close()
 	gate := newReplyGate()
 	conn := &gatedConn{Conn: client, gate: gate}
 	command := []byte("*4\r\n$11\r\nGRAPH.QUERY\r\n$3\r\nkey\r\n$8\r\nRETURN 1\r\n$9\r\n--compact\r\n")
+	reply := []byte("*3\r\n*0\r\n*0\r\n*1\r\n$5\r\nstats\r\n")
 	gate.holdSends()
 	accepted := make(chan error, 1)
 	go func() {
@@ -87,24 +90,78 @@ func TestHeldSendReachesTheWireOnlyAfterOpen(t *testing.T) {
 	if gate.sentAt.Load() == 0 {
 		t.Fatal("a held write was not stamped as sent")
 	}
-	received := make(chan []byte, 1)
+	type peerView struct {
+		commands [][]byte
+		err      error
+		rest     []byte
+	}
+	seen := make(chan peerView, 1)
 	go func() {
-		got, _ := io.ReadAll(server)
-		received <- got
+		view := peerView{}
+		for i := 0; i < 2; i++ {
+			got := make([]byte, len(command))
+			if _, err := io.ReadFull(server, got); err != nil {
+				view.err = fmt.Errorf("read command %d: %w", i, err)
+				seen <- view
+				return
+			}
+			view.commands = append(view.commands, got)
+			if _, err := server.Write(reply); err != nil {
+				view.err = fmt.Errorf("reply %d: %w (the connection closed before the reply was read)", i, err)
+				seen <- view
+				return
+			}
+		}
+		view.rest, view.err = io.ReadAll(server)
+		seen <- view
 	}()
 	gate.open()
-	gate.flushes.Wait()
-	if failed := gate.flushErrors.Load(); failed != 0 {
-		t.Fatalf("%d held command(s) failed to reach the peer", failed)
+	drained, err := gate.settle()
+	if err != nil {
+		t.Fatalf("flush: %v", err)
+	}
+	if drained != 2 {
+		t.Fatalf("replies drained = %d, want 2", drained)
 	}
 	select {
-	case got := <-received:
-		if want := append(append([]byte(nil), command...), command...); !bytes.Equal(got, want) {
-			t.Fatalf("peer received %q, want both held commands %q", got, want)
+	case view := <-seen:
+		if view.err != nil {
+			t.Fatalf("peer: %v", view.err)
+		}
+		if len(view.commands) != 2 || !bytes.Equal(view.commands[0], command) || !bytes.Equal(view.commands[1], command) {
+			t.Fatalf("peer received %q, want both held commands", view.commands)
+		}
+		if len(view.rest) != 0 {
+			t.Fatalf("peer received %q after the held commands", view.rest)
 		}
 	case <-time.After(stallBound):
-		t.Fatal("the connection was not closed after the held commands were written")
+		t.Fatal("the connection was not closed after the held commands were answered")
 	}
+}
+
+// A held command whose reply never comes fails the flush, naming the reply read.
+func TestHeldSendWithNoReplyFailsTheFlush(t *testing.T) {
+	client, server := net.Pipe()
+	gate := newReplyGate()
+	conn := &gatedConn{Conn: client, gate: gate}
+	gate.holdSends()
+	go func() {
+		got := make([]byte, len("GRAPH.QUERY"))
+		_, _ = io.ReadFull(server, got)
+		_ = server.Close()
+	}()
+	if _, err := conn.Write([]byte("GRAPH.QUERY")); err != nil {
+		t.Fatal(err)
+	}
+	gate.open()
+	drained, err := gate.settle()
+	if err == nil || !strings.Contains(err.Error(), "read the reply") {
+		t.Fatalf("flush error = %v, want a failed reply read", err)
+	}
+	if drained != 0 {
+		t.Fatalf("replies drained = %d, want 0", drained)
+	}
+	_ = conn.Close()
 }
 
 // A held command is refused once its write deadline has passed, as the
@@ -126,5 +183,7 @@ func TestHeldSendPastTheWriteDeadlineIsRefused(t *testing.T) {
 		t.Fatalf("sends = %d, want 0", got)
 	}
 	gate.open()
-	gate.flushes.Wait()
+	if _, err := gate.settle(); err != nil {
+		t.Fatal(err)
+	}
 }
