@@ -1385,9 +1385,12 @@ turn above retrieval with the wire refusal basis
 `continuation_context_unverifiable` and its fixed sentence
 (`ContextFabricContinuationContextUnverifiableLimitation`). It never answers
 under the fresh reading. A fresh frame the gate already refused keeps its own
-refusal and basis. The decision line (`context fabric window continuation
+refusal and basis, and so does a carried reading whose own gate refuses
+(`carried_frame_refused`): the turn serves that gate's basis, for example
+`member_kind_unservable`, over the carried reading. The decision line (`context fabric window continuation
 decision`, Info) carries `continuation_disposition`, `decision_reason` and
-`refusal_basis` (`none` when nothing was refused).
+`refusal_basis` (`none` when nothing was refused; the carrier refusal or the
+carried gate's frame basis when one was served).
 
 ```mermaid
 flowchart TD
@@ -1399,7 +1402,7 @@ flowchart TD
   ADMIT -->|"admitted"| COMP{"composeAcceptedContext<br/>validate the composition"}
   COMP -->|"usable"| APPLIED["applied<br/>family_source=carried"]
   COMP -->|"invalid composition"| WH
-  WH --> GATE{"fresh gate<br/>already refuses?"}
+  WH --> GATE{"fresh gate or the carried<br/>reading gate refuses?"}
   GATE -->|"yes"| FRAME["frame refusal stands<br/>refusal_basis = frame member"]
   GATE -->|"no"| REFUSE["continuationRefusalResult<br/>no_match, limitation_disclosed,<br/>refusal_basis=continuation_context_unverifiable<br/>no plan, no resolution, no fact read"]
   class APPLIED fixed

@@ -69,6 +69,11 @@ func TestCells_CompositionBoundary(t *testing.T) {
 			if got.FailedInvariant != tc.wantInvariant {
 				t.Errorf("invariant=%q want %q", got.FailedInvariant, tc.wantInvariant)
 			}
+			// The engine serves the carried gate's own refusal on exactly this
+			// invariant, so it must never be returned beside a gate that does not refuse.
+			if got.FailedInvariant == CompositionInvariantCarriedFrameRefused && !got.Gate.Refuses() {
+				t.Errorf("carried_frame_refused beside gate %q, which does not refuse", got.Gate.Outcome)
+			}
 			if got.EffectiveGroupKind() != tc.wantGroup {
 				t.Errorf("effective group=%q want %q", got.EffectiveGroupKind(), tc.wantGroup)
 			}
