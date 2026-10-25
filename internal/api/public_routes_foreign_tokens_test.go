@@ -6,10 +6,14 @@ import (
 	"crypto/rand"
 	"encoding/base64"
 	"encoding/json"
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"regexp"
 	"slices"
 	"sort"
@@ -379,5 +383,98 @@ func TestPublicRouteHandlerRegistersThroughRegisterRoutesOnly(t *testing.T) {
 		if response.Code == http.StatusNotFound || response.Code == http.StatusMethodNotAllowed {
 			t.Fatalf("%s %s is in the table but Handler() does not serve it (status %d)", route.method, route.path, response.Code)
 		}
+	}
+}
+
+// Handler must register only through registerRoutes, and on the one mux it
+// serves: the recorder in the pin never sees a route added in Handler itself.
+func TestPublicRouteHandlerOnlyDelegatesRegistrationToTheServedMux(t *testing.T) {
+	source, err := os.ReadFile("app.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	file, err := parser.ParseFile(token.NewFileSet(), "app.go", source, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var handler *ast.FuncDecl
+	for _, decl := range file.Decls {
+		if fn, ok := decl.(*ast.FuncDecl); ok && fn.Recv != nil && fn.Name.Name == "Handler" {
+			handler = fn
+		}
+	}
+	if handler == nil || handler.Body == nil {
+		t.Fatal("(*App).Handler not found in app.go")
+	}
+	var muxNames, delegated []string
+	var registrations, returned []ast.Expr
+	ast.Inspect(handler.Body, func(node ast.Node) bool {
+		switch n := node.(type) {
+		case *ast.AssignStmt:
+			for i, rhs := range n.Rhs {
+				call, ok := rhs.(*ast.CallExpr)
+				if !ok || i >= len(n.Lhs) {
+					continue
+				}
+				if sel, ok := call.Fun.(*ast.SelectorExpr); ok && sel.Sel.Name == "NewServeMux" {
+					if id, ok := n.Lhs[i].(*ast.Ident); ok {
+						muxNames = append(muxNames, id.Name)
+					} else {
+						muxNames = append(muxNames, "<not an identifier>")
+					}
+				}
+			}
+		case *ast.CallExpr:
+			sel, ok := n.Fun.(*ast.SelectorExpr)
+			if !ok {
+				return true
+			}
+			switch sel.Sel.Name {
+			case "Handle", "HandleFunc":
+				registrations = append(registrations, n)
+			case "registerRoutes":
+				if len(n.Args) != 1 {
+					t.Fatalf("registerRoutes called with %d arguments in Handler, want 1", len(n.Args))
+				}
+				id, ok := n.Args[0].(*ast.Ident)
+				if !ok {
+					t.Fatal("registerRoutes in Handler must receive the mux identifier itself")
+				}
+				delegated = append(delegated, id.Name)
+			}
+		case *ast.ReturnStmt:
+			returned = append(returned, n.Results...)
+		case *ast.ValueSpec:
+			for _, value := range n.Values {
+				if call, ok := value.(*ast.CallExpr); ok {
+					if sel, ok := call.Fun.(*ast.SelectorExpr); ok && sel.Sel.Name == "NewServeMux" {
+						muxNames = append(muxNames, "<var spec>")
+					}
+				}
+			}
+		}
+		return true
+	})
+	if len(registrations) != 0 {
+		t.Fatalf("Handler registers %d route(s) itself through Handle or HandleFunc; routes belong in registerRoutes", len(registrations))
+	}
+	if len(muxNames) != 1 || muxNames[0] == "<not an identifier>" || muxNames[0] == "<var spec>" {
+		t.Fatalf("Handler must create exactly one http.NewServeMux assigned to an identifier, found %v", muxNames)
+	}
+	if len(delegated) != 1 || delegated[0] != muxNames[0] {
+		t.Fatalf("Handler must call registerRoutes exactly once with the mux %q, found calls with %v", muxNames[0], delegated)
+	}
+	if len(returned) != 1 {
+		t.Fatalf("Handler must have exactly one return value expression, found %d", len(returned))
+	}
+	served := false
+	ast.Inspect(returned[0], func(node ast.Node) bool {
+		if id, ok := node.(*ast.Ident); ok && id.Name == muxNames[0] {
+			served = true
+		}
+		return true
+	})
+	if !served {
+		t.Fatalf("Handler does not return or wrap the mux %q it passes to registerRoutes", muxNames[0])
 	}
 }
