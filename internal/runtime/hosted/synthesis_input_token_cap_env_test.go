@@ -11,9 +11,10 @@ import (
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/modelprovider"
 )
 
-// Absent, blank or zero leaves the cap off silently. A value that is not a
-// whole number, is negative, or is below the smallest cap the runtime takes
-// leaves it off and logs one WARN naming the variable and the value.
+// Absent, blank or zero leaves the cap off silently. A positive value below
+// the smallest cap the runtime takes is raised to that minimum with one WARN.
+// A value that is not a whole number or is negative leaves the cap off and logs
+// one WARN naming the variable and the value.
 func TestSynthesisMaxInputTokensFromEnvDomain(t *testing.T) {
 	minimum := strconv.Itoa(genkitruntime.MinSynthesisInputTokens)
 	below := strconv.Itoa(genkitruntime.MinSynthesisInputTokens - 1)
@@ -30,7 +31,8 @@ func TestSynthesisMaxInputTokensFromEnvDomain(t *testing.T) {
 		{name: "zero is off", present: true, value: "0"},
 		{name: "a padded value parses", present: true, value: " 90000 ", want: 90000},
 		{name: "the minimum is taken", present: true, value: minimum, want: genkitruntime.MinSynthesisInputTokens},
-		{name: "below the minimum warns and is off", present: true, value: below, wantWarn: true},
+		{name: "below the minimum warns and is raised to it", present: true, value: below, want: genkitruntime.MinSynthesisInputTokens, wantWarn: true},
+		{name: "one warns and is raised to the minimum", present: true, value: "1", want: genkitruntime.MinSynthesisInputTokens, wantWarn: true},
 		{name: "negative warns and is off", present: true, value: "-90000", wantWarn: true},
 		{name: "minus one warns and is off", present: true, value: "-1", wantWarn: true},
 		{name: "fractional warns and is off", present: true, value: "90000.5", wantWarn: true},

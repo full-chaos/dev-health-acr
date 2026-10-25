@@ -72,7 +72,9 @@ func synthesisResynthesisAttemptsFromEnv(lookup func(string) (string, bool), log
 
 // EnvSynthesisMaxInputTokens caps the estimated tokens of one synthesize
 // prompt, for the deployment model and every per-organization model alike.
-// Unset or 0 is off. Like EnvSynthesisResynthesisAttempts, a malformed value
+// Unset or 0 is off. A positive value below genkitruntime.MinSynthesisInputTokens
+// is raised to it with one WARN: the operator asked for a strict bound, so the
+// strictest one the runtime takes applies. A negative or non-numeric value
 // never stops composition: it leaves the cap off and logs one WARN.
 const EnvSynthesisMaxInputTokens = "ACR_CONTEXT_FABRIC_SYNTHESIS_MAX_INPUT_TOKENS"
 
@@ -85,6 +87,13 @@ func synthesisMaxInputTokensFromEnv(lookup func(string) (string, bool), logger *
 	parsed, err := strconv.Atoi(value)
 	if err == nil && (parsed == 0 || parsed >= genkitruntime.MinSynthesisInputTokens) {
 		return parsed
+	}
+	if err == nil && parsed > 0 {
+		logger.Warn("context fabric synthesis input token cap below the minimum, raised to the minimum",
+			"variable", EnvSynthesisMaxInputTokens,
+			"value", parsed,
+			"minimum", genkitruntime.MinSynthesisInputTokens)
+		return genkitruntime.MinSynthesisInputTokens
 	}
 	logger.Warn("context fabric synthesis input token cap malformed, cap off",
 		"variable", EnvSynthesisMaxInputTokens,
