@@ -39,6 +39,14 @@ func f() s { args := []any{"pass", uint8(1)}; return s{a: args} }`, mismatch},
 	}
 }`, mismatch + "," + mismatch},
 		{"multi value declaration is not a dead list", `func f() { n, args := 1, []any{"pass", uint8(1)}; _, _ = n, len(args) }`, mismatch},
+		{"user-defined append that logs its list", `func append(a []any, b ...any) []any { slog.Info("m", a...); return a }
+func f() { args := []any{"pass", uint8(1)}; args = append(args, "pass", uint8(2)); _ = len(args) }`, mismatch},
+		{"user-defined len that logs its list", `func len(a []any) int { slog.Info("m", a...); return 0 }
+func f() { args := []any{"pass", uint8(1)}; _ = len(args) }`, mismatch},
+		{"user-defined cap that logs its list", `func cap(a []any) int { slog.Info("m", a...); return 0 }
+func f() { args := []any{"pass", uint8(1)}; _ = cap(args) }`, mismatch},
+		{"local variable named len", `func f() { len := func(a []any) int { slog.Info("m", a...); return 0 }; args := []any{"pass", uint8(1)}; _ = len(args) }`, mismatch},
+		{"dead list in a package that does not type-check", `func f() { undefinedCall(); args := []any{"pass", uint8(1)}; _ = len(args) }`, "refusal:typecheck"},
 		{"dead outer list shadowed by a logged inner list", `func f() {
 	args := []any{"pass", uint8(1)}
 	_ = len(args)
