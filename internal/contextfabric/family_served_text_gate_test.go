@@ -62,12 +62,14 @@ import (
 	"go/types"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strings"
 	"testing"
 
 	"golang.org/x/tools/go/packages"
 
+	"github.com/full-chaos/dev-health-acr/internal/cigates/sourceload"
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 )
 
@@ -381,38 +383,17 @@ func familyGateLoadRoot(t *testing.T) string {
 	}
 }
 
-// familyGateBuildFlags pins the build tags this load compiles under to
-// EXACTLY what the real binaries and CI build with.
-//
-// CODEX ROUND 1, P3, EXECUTED: a production file gated behind an
-// unrecognized build tag compiled cleanly (`go build`/`go vet`/`go test
-// -tags <tag>`) while packages.Load's default (empty BuildFlags, i.e. no
-// tags) silently excluded it -- no error, just absence. Checked at
-// gate-authoring time (2026-09-02): NEITHER the Makefile NOR
-// .github/workflows/ci.yml passes `-tags` to any build/vet/test
-// invocation anywhere in this repository, so "no tags" is not a
-// convenient default here -- it is what CI actually builds with. Pinning
-// it explicitly (rather than leaving the zero value to mean the same
-// thing implicitly) makes that coupling visible: if this repository ever
-// adopts a build tag for production code, updating this constant is the
-// forcing function, not an afterthought this analysis would otherwise
-// drift out of sync with silently.
-var familyGateBuildFlags = []string{}
-
+// familyGateLoadPackages loads with no build tags, which is what the real
+// binaries and CI build with (no Makefile or workflow passes -tags). The
+// loader runs `go list` without BuildFlags, so a tagged production file is
+// excluded here exactly as in CI.
 func familyGateLoadPackages(t *testing.T, dir string, patterns ...string) []*packages.Package {
 	t.Helper()
-	cfg := &packages.Config{
-		Dir: dir,
-		Mode: packages.NeedName | packages.NeedFiles | packages.NeedCompiledGoFiles |
-			packages.NeedImports | packages.NeedDeps | packages.NeedTypes |
-			packages.NeedTypesInfo | packages.NeedSyntax,
-		Tests:      false,
-		BuildFlags: familyGateBuildFlags,
-	}
-	pkgs, err := packages.Load(cfg, patterns...)
+	loader, err := sourceload.Load(dir, patterns, runtime.GOOS, runtime.GOARCH)
 	if err != nil {
-		t.Fatalf("packages.Load: %v", err)
+		t.Fatalf("sourceload.Load: %v", err)
 	}
+	pkgs := loader.Packages()
 	nerr := 0
 	packages.Visit(pkgs, nil, func(p *packages.Package) {
 		nerr += len(p.Errors)
