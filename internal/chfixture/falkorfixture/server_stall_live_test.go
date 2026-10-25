@@ -133,7 +133,7 @@ func TestFalkorReadyNamesARealServerThatStopsAnsweringAfterItServed(t *testing.T
 	}
 
 	began := time.Now()
-	err = chfixture.FalkorReadyWithin(2*time.Minute).WaitUntilReady(ctx, proxiedTarget{Container: c, host: proxyHost, port: port})
+	err = chfixture.FalkorReadyWithin(30*time.Second).WaitUntilReady(ctx, proxiedTarget{Container: c, host: proxyHost, port: port})
 	took := time.Since(began)
 	t.Logf("falkordb-stall: verdict after %s:\n%v", took.Round(time.Millisecond), err)
 
@@ -143,15 +143,15 @@ func TestFalkorReadyNamesARealServerThatStopsAnsweringAfterItServed(t *testing.T
 	if !errors.Is(err, chfixture.ErrServerWedged) {
 		t.Fatalf("a server that answered PING and then stopped answering must be named as stalled, got: %v", err)
 	}
-	if took > time.Minute {
-		t.Fatalf("the stall must end the wait early, not after the 2m budget: %s", took)
+	if took < 29*time.Second || took > time.Minute {
+		t.Fatalf("a stalled server keeps the whole 30s budget and the diagnostics stay bounded: %s", took)
 	}
 	var wedged *chfixture.ServerWedgedError
 	if !errors.As(err, &wedged) || !strings.HasPrefix(wedged.Graph, "acr_ready_probe_") || wedged.ServedTry < 1 {
 		t.Fatalf("the error must carry the probe graph and the served try: %#v", wedged)
 	}
 	for _, want := range []string{
-		"stopped answering after it served",
+		"stopped answering after it served and was still silent when the 30s budget ended",
 		`GRAPH.QUERY ` + wedged.Graph + ` "CREATE INDEX FOR (n:ReadyProbe) ON (n.k)"`,
 		"container image: ", strings.TrimPrefix(stallFalkordbImage, "falkordb/"),
 		"container state: status=running running=true paused=false",

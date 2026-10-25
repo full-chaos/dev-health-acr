@@ -56,8 +56,9 @@ func (e *PortUnreachableError) Unwrap() error        { return e.Err }
 func (e *PortUnreachableError) Is(target error) bool { return target == ErrPublishedPortUnreachable }
 
 // ErrServerWedged marks a failed wait where the server answered PING on the mapped port and then stopped answering
-// both there and inside the container for a sustained time. Such a server does not recover inside the budget, so the
-// wait ends early and names it; it is never retried, because the stall is the server's, not the port's.
+// both there and inside the container, and was still silent when the budget ended. The wait keeps the whole budget,
+// so a server that recovers passes; this error only names the state and carries the diagnostics. It is never retried,
+// because the stall is the server's, not the port's.
 var ErrServerWedged = errors.New("server answered and then stopped answering on the mapped port and inside the container")
 
 // ServerWedgedError is the ErrServerWedged failure. Graph and InFlight name the probe graph and the statement that got
@@ -188,10 +189,7 @@ func diagnoseFalkorContainer(target wait.StrategyTarget, stepLimit time.Duration
 		return strings.Join(lines, "\n")
 	}
 	defer func() { _ = rc.Close() }()
-	body, readErr := io.ReadAll(io.LimitReader(rc, 1<<20))
-	if len(body) > falkorLogTail {
-		body = body[len(body)-falkorLogTail:]
-	}
+	body, readErr := readTail(rc, falkorLogTail)
 	lines = append(lines, fmt.Sprintf("container log (last %d bytes):", len(body)), strings.TrimRight(string(body), "\n"))
 	if readErr != nil {
 		lines = append(lines, fmt.Sprintf("container log: read stopped: %v", readErr))
@@ -206,7 +204,8 @@ func awaitFalkorServing(ctx context.Context, addr string, budget, tryLimit, poll
 // awaitFalkorServingInside probes addr from the runner. When inside is set, every failed try also asks the server
 // from inside the container, so a dead published port is told apart from a server that is not up, and a server that
 // answered PING and then went silent everywhere is told apart from both. unreachableAfter is how long either state
-// must hold before the wait gives up early with ErrPublishedPortUnreachable or ErrServerWedged.
+// must hold: a dead published port ends the wait early with ErrPublishedPortUnreachable; a silent server is named
+// ErrServerWedged only when the budget ends.
 func awaitFalkorServingInside(ctx context.Context, addr string, budget, tryLimit, poll, unreachableAfter time.Duration, inside func(context.Context) error, logf func(string, ...any)) error {
 	began := time.Now()
 	deadline := began.Add(budget)
@@ -263,17 +262,17 @@ func awaitFalkorServingInside(ctx context.Context, addr string, budget, tryLimit
 		if ctx.Err() != nil {
 			return fmt.Errorf("falkordb not serving on %s: %w (last probe error: %v)", addr, ctx.Err(), last)
 		}
-		if inside != nil && !silentSince.IsZero() && time.Since(silentSince) >= unreachableAfter {
-			silent, elapsed := time.Since(silentSince).Round(time.Millisecond), time.Since(began).Round(time.Millisecond)
-			return &ServerWedgedError{Graph: graph, InFlight: inFlight, ServedTry: servedTry, Tries: try, Silent: silent, Elapsed: elapsed,
-				Err: fmt.Errorf("falkordb on %s stopped answering after it served: try %d answered PING, then %s got no reply; host PING and the in-container ping have both failed for %s (%d tries, %s elapsed): %w: %w\n%s",
-					addr, servedTry, inFlight, silent, try, elapsed, ErrServerWedged, last, summarizeTries(history))}
-		}
 		if inside != nil && !insideOKSince.IsZero() && time.Since(insideOKSince) >= unreachableAfter {
 			_, port, _ := net.SplitHostPort(addr)
 			return &PortUnreachableError{Port: port, Tries: try, Elapsed: time.Since(began).Round(time.Millisecond), Err: fmt.Errorf("falkordb not serving on %s after %s: %w: %w\n%s", addr, time.Since(began).Round(time.Millisecond), ErrPublishedPortUnreachable, last, summarizeTries(history))}
 		}
 		if time.Now().Add(poll).After(deadline) {
+			if inside != nil && !silentSince.IsZero() && time.Since(silentSince) >= unreachableAfter {
+				silent, elapsed := time.Since(silentSince).Round(time.Millisecond), time.Since(began).Round(time.Millisecond)
+				return &ServerWedgedError{Graph: graph, InFlight: inFlight, ServedTry: servedTry, Tries: try, Silent: silent, Elapsed: elapsed,
+					Err: fmt.Errorf("falkordb on %s stopped answering after it served and was still silent when the %s budget ended: try %d answered PING, then %s got no reply; host PING and the in-container ping have both failed for the last %s (%d tries, %s elapsed): %w: %w\n%s",
+						addr, budget, servedTry, inFlight, silent, try, elapsed, ErrServerWedged, last, summarizeTries(history))}
+			}
 			return fmt.Errorf("falkordb not serving on %s within %s: %w\n%s", addr, budget, last, summarizeTries(history))
 		}
 		select {
@@ -341,6 +340,25 @@ func probeStatement(err error) string {
 }
 
 const probeIndexStatement = "CREATE INDEX FOR (n:ReadyProbe) ON (n.k)"
+
+// readTail reads r to the end and returns its last n bytes.
+func readTail(r io.Reader, n int) ([]byte, error) {
+	tail := make([]byte, 0, 2*n)
+	buf := make([]byte, 32<<10)
+	for {
+		k, err := r.Read(buf)
+		tail = append(tail, buf[:k]...)
+		if len(tail) > n {
+			tail = append(tail[:0], tail[len(tail)-n:]...)
+		}
+		if err == io.EOF {
+			return tail, nil
+		}
+		if err != nil {
+			return tail, err
+		}
+	}
+}
 
 // pingStepError marks a probe that failed at the PING step (dial, write or read of PING), as opposed to a later
 // command; only a host-side PING that never answers can mean the published port is dead.
