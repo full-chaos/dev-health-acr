@@ -52,7 +52,7 @@ func TestAResolvedOrgRuntimeKeepsTheSynthesisInputTokenCap(t *testing.T) {
 	if err := call(tokenCap); !errors.As(err, &overflow) || overflow.MaxBytes != 3*tokenCap-overhead {
 		t.Fatalf("err = %v, want the input overflow at a bound of %d bytes", err, 3*tokenCap-overhead)
 	}
-	if err := call(0); err == nil || errors.As(err, &overflow) {
+	if err := call(0); !errors.Is(err, contextfabric.ErrModelUnavailable) || errors.As(err, &overflow) {
 		t.Fatalf("cap off: err = %v, want the call placed and refused at the dial", err)
 	}
 }

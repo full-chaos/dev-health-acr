@@ -2693,10 +2693,10 @@ type synthesisInputTrace struct {
 // overhead when the cap is on. An input within it has an estimate within the
 // cap.
 func (r *Runtime) synthesisInputByteBound() int {
-	if r.config.MaxSynthesisInputTokens <= 0 {
+	if r.config.MaxSynthesisInputTokens <= 0 || r.config.MaxSynthesisInputTokens >= estimateSynthesisInputTokens(r.config.MaxInputBytes) {
 		return r.config.MaxInputBytes
 	}
-	return min(r.config.MaxInputBytes, r.config.MaxSynthesisInputTokens*synthesisBytesPerToken-synthesisPromptOverheadBytes)
+	return r.config.MaxSynthesisInputTokens*synthesisBytesPerToken - synthesisPromptOverheadBytes
 }
 
 func newSynthesisInputTrace(encoded []byte, input contextfabric.SynthesisInput) synthesisInputTrace {

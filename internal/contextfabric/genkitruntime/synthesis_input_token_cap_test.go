@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"math"
 	"slices"
 	"strings"
 	"testing"
@@ -162,6 +163,13 @@ func TestWithTheTokenCapOffTheByteBoundAloneDecides(t *testing.T) {
 	if client.calls() != 1 {
 		t.Fatalf("model calls = %d, want 1", client.calls())
 	}
+	want, err := synthesisprompt.UserPayload(tokenCapPrincipal.OrgID, input, 512<<10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := client.request(0); got.Prompt != string(want) || !strings.HasPrefix(got.System, synthesisprompt.System()) {
+		t.Fatal("the cap-off prompt differs from the prompt the byte bound alone builds")
+	}
 	records := synthesisInputRecords(logs)
 	if len(records) != 1 {
 		t.Fatalf("synthesis input lines = %d, want 1", len(records))
@@ -261,6 +269,9 @@ func TestAnInputOverTheTokenCapIsCutAndTheAnswerSaysSo(t *testing.T) {
 	if work == nil || work.Declared == nil || work.Served == nil || *work.Declared != 400 || *work.Served >= 400 || *work.Served < 1 {
 		t.Fatalf("coverage details = %+v, want a work detail of fewer than 400 given of 400 read", result.Coverage.Details)
 	}
+	if result.Status != contextfabric.InvestigationPartial {
+		t.Fatalf("status = %q, want %q: the model said complete about part of the facts", result.Status, contextfabric.InvestigationPartial)
+	}
 }
 
 // When no cut can bring the input under the cap, the call ends with the input
@@ -276,6 +287,21 @@ func TestAnInputNoCutCanFitUnderTheTokenCapIsNeverSent(t *testing.T) {
 	}
 	if client.calls() != 0 {
 		t.Fatalf("model calls = %d, want 0", client.calls())
+	}
+}
+
+// A cap far above what the byte bound admits leaves the byte bound alone,
+// however large: the token arithmetic never wraps.
+func TestACapAboveTheByteBoundLeavesTheByteBound(t *testing.T) {
+	input := tokenCapInput(400, 40)
+	for _, tokenCap := range []int{(512<<10+promptOverheadBytes())/3 + 1, math.MaxInt / 3, math.MaxInt/3 + 1, math.MaxInt / 2, math.MaxInt} {
+		runtime, client, _ := tokenCapRuntime(t, tokenCap)
+		if got := runtime.synthesisInputByteBound(); got != 512<<10 {
+			t.Fatalf("cap %d: byte bound = %d, want the byte bound %d", tokenCap, got, 512<<10)
+		}
+		if _, _, err := runtime.SynthesizeAnswer(context.Background(), tokenCapPrincipal, input); err != nil || client.calls() != 1 {
+			t.Fatalf("cap %d: err = %v calls = %d, want the call placed once", tokenCap, err, client.calls())
+		}
 	}
 }
 
