@@ -309,7 +309,7 @@ type pkgInfo struct {
 	root        string                        // the scan root: the module of the type-checked load is the nearest go.mod at or above it
 	group       []parsedFile                  // the files of the package directory, type-checked together on the first R10 need
 	oversize    bool                          // a + chain larger than one fold may visit: the package is never type-checked (the checker's own work on it is not bounded by the scan's budget)
-	keyAliases  map[types.Object]ast.Expr     // local variables bound once to an attribute.Key method value and only called: the key receiver
+	keyAliases  map[types.Object]ast.Expr     // local variables bound once to an attribute.Key method value and only called: the key receiver (nil for a method expression: the first argument)
 	typed       *typedPackage                 // the type-check of the package, made once and only when a benign key is read
 	budget      *budget
 	helperCPU   *atomic.Int64 // CPU nanoseconds the helpers of this scan may still use
@@ -891,28 +891,124 @@ type aliasEdge struct {
 
 // collectAliases computes, over the whole package, every watched constructor each name is ever bound to, in any scope
 // and in any order, directly or through other names. It is a deliberate over-approximation (fail closed): scopes and
-// order are ignored, the sets are deduplicated and the loop runs until nothing is added.
+// order are ignored, the sets are deduplicated and the loop runs until nothing is added. A function with a result of a
+// function type binds all its results to the name "<function>()" (its returns and its named results), and a parameter of
+// a function type takes every argument in its position at a call of a function of the package of that name.
 func (info *pkgInfo) collectAliases(group []parsedFile) {
 	var edges []aliasEdge
+	funcTypes := map[string]bool{}
+	litNames := map[*ast.FuncLit][]string{}
+	params := map[string][]*ast.FieldList{}
 	for _, parsed := range group {
-		imports := importsOf(parsed)
-		add := func(name ast.Expr, rhs ast.Expr) {
-			if ident, ok := name.(*ast.Ident); ok && ident.Name != "_" && rhs != nil {
-				edges = append(edges, aliasEdge{ident.Name, rhs, imports})
+		ast.Inspect(parsed.file, func(node ast.Node) bool {
+			if spec, ok := node.(*ast.TypeSpec); ok {
+				if _, isFunc := ast.Unparen(spec.Type).(*ast.FuncType); isFunc {
+					funcTypes[spec.Name.Name] = true
+				}
+			}
+			return true
+		})
+	}
+	for _, parsed := range group {
+		bindLit := func(name ast.Expr, rhs ast.Expr) {
+			ident, isIdent := name.(*ast.Ident)
+			lit, isLit := ast.Unparen(rhs).(*ast.FuncLit)
+			if isIdent && isLit && ident.Name != "_" {
+				litNames[lit] = append(litNames[lit], ident.Name)
+				params[ident.Name] = append(params[ident.Name], lit.Type.Params)
 			}
 		}
 		ast.Inspect(parsed.file, func(node ast.Node) bool {
 			switch n := node.(type) {
+			case *ast.FuncDecl:
+				params[n.Name.Name] = append(params[n.Name.Name], n.Type.Params)
+			case *ast.AssignStmt:
+				if len(n.Lhs) == len(n.Rhs) {
+					for i, lhs := range n.Lhs {
+						bindLit(lhs, n.Rhs[i])
+					}
+				}
+			case *ast.ValueSpec:
+				for i, name := range n.Names {
+					if i < len(n.Values) {
+						bindLit(name, n.Values[i])
+					}
+				}
+			}
+			return true
+		})
+	}
+	for _, parsed := range group {
+		imports := importsOf(parsed)
+		addName := func(name string, rhs ast.Expr) {
+			if name != "" && name != "_" && rhs != nil {
+				edges = append(edges, aliasEdge{name, rhs, imports})
+			}
+		}
+		add := func(name ast.Expr, rhs ast.Expr) {
+			if ident, ok := name.(*ast.Ident); ok {
+				addName(ident.Name, rhs)
+			}
+		}
+		var stack []ast.Node
+		var frames [][]string // the result names of the enclosing functions, innermost last
+		enter := func(fn *ast.FuncType, keys []string) {
+			if !holdsFunc(fn.Results, funcTypes) {
+				keys = nil
+			}
+			frames = append(frames, keys)
+			for _, key := range keys {
+				for _, field := range fn.Results.List {
+					for _, name := range field.Names {
+						addName(key, name) // a bare return
+					}
+				}
+			}
+		}
+		ast.Inspect(parsed.file, func(node ast.Node) bool {
+			if node == nil {
+				switch stack[len(stack)-1].(type) {
+				case *ast.FuncDecl, *ast.FuncLit:
+					frames = frames[:len(frames)-1]
+				}
+				stack = stack[:len(stack)-1]
+				return true
+			}
+			stack = append(stack, node)
+			switch n := node.(type) {
+			case *ast.FuncDecl:
+				enter(n.Type, []string{n.Name.Name + "()"})
+			case *ast.FuncLit:
+				keys := []string{funcLitKey(n)}
+				for _, name := range litNames[n] {
+					keys = append(keys, name+"()")
+				}
+				enter(n.Type, keys)
+			case *ast.ReturnStmt:
+				if len(frames) == 0 {
+					break
+				}
+				for _, key := range frames[len(frames)-1] {
+					for _, result := range n.Results {
+						addName(key, result)
+					}
+				}
 			case *ast.AssignStmt:
 				if len(n.Lhs) == len(n.Rhs) {
 					for i, lhs := range n.Lhs {
 						add(lhs, n.Rhs[i])
+					}
+				} else if len(n.Rhs) == 1 {
+					for _, lhs := range n.Lhs {
+						add(lhs, n.Rhs[0])
 					}
 				}
 			case *ast.ValueSpec:
 				for i, name := range n.Names {
 					if i < len(n.Values) {
 						add(name, n.Values[i])
+					} else if len(n.Values) == 1 {
+						add(name, n.Values[0])
 					}
 				}
 			case *ast.RangeStmt:
@@ -920,6 +1016,12 @@ func (info *pkgInfo) collectAliases(group []parsedFile) {
 				add(n.Value, n.X)
 			case *ast.KeyValueExpr:
 				add(n.Key, n.Value)
+			case *ast.CallExpr:
+				if name, ok := calleeName(n.Fun, imports); ok {
+					for _, list := range params[name] {
+						bindArguments(list, n.Args, funcTypes, addName)
+					}
+				}
 			}
 			return true
 		})
@@ -974,9 +1076,105 @@ func (info *pkgInfo) collectAliases(group []parsedFile) {
 	}
 }
 
+// holdsFunc reports a result list with a result of a function type.
+func holdsFunc(list *ast.FieldList, funcTypes map[string]bool) bool {
+	if list == nil {
+		return false
+	}
+	for _, field := range list.List {
+		if isFuncType(field.Type, funcTypes) {
+			return true
+		}
+	}
+	return false
+}
+
+// isFuncType reports a function type written in place or a type of the package declared as one.
+func isFuncType(expr ast.Expr, funcTypes map[string]bool) bool {
+	switch e := ast.Unparen(expr).(type) {
+	case *ast.FuncType:
+		return true
+	case *ast.Ident:
+		return funcTypes[e.Name]
+	}
+	return false
+}
+
+// bindArguments binds every argument of a call to the parameter of a function type in its position; the last, variadic,
+// parameter takes the rest.
+func bindArguments(list *ast.FieldList, args []ast.Expr, funcTypes map[string]bool, addName func(string, ast.Expr)) {
+	var names []string
+	variadic := false
+	for _, field := range list.List {
+		typ := field.Type
+		ellipsis, isEllipsis := typ.(*ast.Ellipsis)
+		if variadic = isEllipsis; isEllipsis {
+			typ = ellipsis.Elt
+		}
+		if len(field.Names) == 0 || !isFuncType(typ, funcTypes) {
+			for range max(1, len(field.Names)) {
+				names = append(names, "")
+			}
+			continue
+		}
+		for _, ident := range field.Names {
+			names = append(names, ident.Name)
+		}
+	}
+	for i, arg := range args {
+		switch {
+		case i < len(names):
+			addName(names[i], arg)
+		case variadic && len(names) > 0:
+			addName(names[len(names)-1], arg)
+		}
+	}
+}
+
+// funcLitKey is the result name of a function literal: its position.
+func funcLitKey(lit *ast.FuncLit) string { return fmt.Sprintf("func@%d()", lit.Pos()) }
+
+// calleeName is the name a call target is declared under in the package: a function, a method of any type, or a local
+// bound to a function literal. A function of another package has none.
+func calleeName(fun ast.Expr, imports map[string]string) (string, bool) {
+	switch f := ast.Unparen(fun).(type) {
+	case *ast.Ident:
+		return f.Name, true
+	case *ast.SelectorExpr:
+		if x, ok := f.X.(*ast.Ident); ok {
+			if _, imported := imports[x.Name]; imported {
+				return "", false
+			}
+		}
+		return f.Sel.Name, true
+	case *ast.IndexExpr:
+		return calleeName(f.X, imports)
+	case *ast.IndexListExpr:
+		return calleeName(f.X, imports)
+	}
+	return "", false
+}
+
+// resultName is the name a call's results are bound to: "<function>()", or the position of a function literal called
+// where it is written.
+func resultName(fun ast.Expr, imports map[string]string) (string, bool) {
+	if lit, isLit := ast.Unparen(fun).(*ast.FuncLit); isLit {
+		return funcLitKey(lit), true
+	}
+	if name, ok := calleeName(fun, imports); ok {
+		return name + "()", true
+	}
+	return "", false
+}
+
 // readNames lists the names whose alternatives altsOf reads for an expression: it mirrors altsOf.
 func readNames(expr ast.Expr, imports map[string]string) []string {
 	switch e := expr.(type) {
+	case *ast.CallExpr:
+		if name, ok := resultName(e.Fun, imports); ok {
+			return []string{name}
+		}
+		return nil
 	case *ast.ParenExpr:
 		return readNames(e.X, imports)
 	case *ast.StarExpr:
@@ -1034,6 +1232,11 @@ func (info *pkgInfo) altsOf(expr ast.Expr, imports map[string]string) [][2]strin
 		return info.altsOf(e.X, imports)
 	case *ast.Ident:
 		return info.aliases[e.Name]
+	case *ast.CallExpr:
+		if name, ok := resultName(e.Fun, imports); ok {
+			return info.aliases[name]
+		}
+		return nil
 	case *ast.SelectorExpr:
 		if x, ok := e.X.(*ast.Ident); ok {
 			if pkg, imported := imports[x.Name]; imported {
@@ -1041,7 +1244,7 @@ func (info *pkgInfo) altsOf(expr ast.Expr, imports map[string]string) [][2]strin
 			}
 		}
 		if isAttachMethod(e.Sel.Name) || isLogMethod(e.Sel.Name) {
-			return [][2]string{{"", e.Sel.Name}} // a method value
+			return info.loggerMethod(e, imports) // a method value or a method expression
 		}
 		return info.aliases[e.Sel.Name] // a field holding a constructor
 	case *ast.CompositeLit:
@@ -1065,6 +1268,35 @@ func (info *pkgInfo) altsOf(expr ast.Expr, imports map[string]string) [][2]strin
 		return out
 	}
 	return nil
+}
+
+// methodExprPkg marks a logger method expression ((*slog.Logger).Info): its first argument is the receiver.
+const methodExprPkg = "(method expression)"
+
+// loggerMethod reads a selector of a logger method: a method value, or, on a pointer type ((*slog.Logger).Info), a method
+// expression. The checker decides the form; without it a pointer to a type of an imported package is a method expression
+// and any other pointer form is read both ways (fail closed).
+func (info *pkgInfo) loggerMethod(sel *ast.SelectorExpr, imports map[string]string) [][2]string {
+	value := [2]string{"", sel.Sel.Name}
+	expr := [2]string{methodExprPkg, sel.Sel.Name}
+	star, isStar := ast.Unparen(sel.X).(*ast.StarExpr)
+	if !isStar {
+		return [][2]string{value}
+	}
+	if typed := info.typedInfo(); typed.err == nil {
+		if selection := typed.info.Selections[sel]; selection != nil {
+			if selection.Kind() == types.MethodExpr {
+				return [][2]string{expr}
+			}
+			return [][2]string{value}
+		}
+	}
+	if inner, ok := ast.Unparen(star.X).(*ast.SelectorExpr); ok {
+		if x, isIdent := inner.X.(*ast.Ident); isIdent && imports[x.Name] != "" {
+			return [][2]string{expr}
+		}
+	}
+	return [][2]string{value, expr}
 }
 
 func scanFile(parsed parsedFile, info *pkgInfo) []Finding {
@@ -1572,8 +1804,16 @@ func (s *fileScan) targets(fun ast.Expr) [][2]string {
 			return nil
 		}
 		return alts
+	case *ast.CallExpr:
+		alts := s.pkg.altsOf(f, s.imports)
+		if !s.pkg.budget.charge(1 + len(alts)) {
+			return nil
+		}
+		return alts
 	case *ast.SelectorExpr:
-		if pkg, name, ok := s.qualified(f); ok {
+		if _, isStar := ast.Unparen(f.X).(*ast.StarExpr); isStar && (isLogMethod(f.Sel.Name) || isAttachMethod(f.Sel.Name)) {
+			out = append(out, s.pkg.loggerMethod(f, s.imports)...)
+		} else if pkg, name, ok := s.qualified(f); ok {
 			out = append(out, [2]string{pkg, name})
 		}
 		if x, ok := f.X.(*ast.Ident); !ok || s.imports[x.Name] == "" {
@@ -1604,10 +1844,14 @@ func (s *fileScan) attrParts(call *ast.CallExpr) (key, value ast.Expr, ok bool) 
 			}
 		}
 	}
-	if sel, isSel := call.Fun.(*ast.SelectorExpr); isSel && attrConstructors[sel.Sel.Name] && len(call.Args) >= 1 {
+	if sel, isSel := ast.Unparen(call.Fun).(*ast.SelectorExpr); isSel && attrConstructors[sel.Sel.Name] && len(call.Args) >= 1 {
 		switch recv, class := s.attrKeyMethod(sel); class {
 		case keyMethodKey:
 			return recv, call.Args[0], true // a receiver of static type attribute.Key: a local, a parenthesised one, a call
+		case keyMethodExpr:
+			if len(call.Args) >= 2 {
+				return call.Args[0], call.Args[1], true // attribute.Key.String(k, v)
+			}
 		case keyMethodRefuse:
 			s.add(RuleBenignKind, call.Pos(), keyReceiverDetail)
 		case keyMethodNoTypes:
@@ -1617,6 +1861,12 @@ func (s *fileScan) attrParts(call *ast.CallExpr) (key, value ast.Expr, ok bool) 
 	if ident, isIdent := ast.Unparen(call.Fun).(*ast.Ident); isIdent && len(call.Args) >= 1 && len(s.pkg.keyAliases) > 0 {
 		if typed := s.pkg.typedInfo(); typed.err == nil {
 			if recv, found := s.pkg.keyAliases[typed.info.Uses[ident]]; found {
+				if recv == nil {
+					if len(call.Args) >= 2 {
+						return call.Args[0], call.Args[1], true // emit := attribute.Key.String; emit(k, v)
+					}
+					return nil, nil, false
+				}
 				return recv, call.Args[0], true // emit := k.String; emit(v)
 			}
 		}
@@ -1640,6 +1890,14 @@ func (s *fileScan) call(call *ast.CallExpr) {
 }
 
 func (s *fileScan) callTarget(call *ast.CallExpr, pkg, name string) {
+	if pkg == methodExprPkg {
+		if len(call.Args) > 0 {
+			receiverless := *call
+			receiverless.Args = call.Args[1:]
+			s.callTarget(&receiverless, "", name)
+		}
+		return
+	}
 	switch {
 	case pkg == "slog" && slogAttrConstructors[name] && len(call.Args) >= 2:
 		s.logKey(call.Args[0], call.Args[1], call.Pos())
