@@ -75,9 +75,15 @@ func TestExportDataIsBuiltFromTheParsedBytesNotTheDisk(t *testing.T) {
 		t.Fatalf("control scan %q does not carry the mismatch finding", control)
 	}
 	emitscan.ResetGoTool()
+	emitscan.SetHelperBinary("")()
+	ran := filepath.Join(t.TempDir(), "go-list-ran")
 	real, _ := exec.LookPath("go")
-	goWrapper(t, "cp '"+depFile+"' '"+depFile+".orig'\nprintf 'package dep\\n\\nvar Value int\\n' > '"+depFile+"'\n'"+real+"' \"$@\"; rc=$?\nmv '"+depFile+".orig' '"+depFile+"'\nexit $rc")
-	if got := scanExportModule(t, root); got != control {
+	goWrapper(t, "touch '"+ran+"'\ncp '"+depFile+"' '"+depFile+".orig'\nprintf 'package dep\\n\\nvar Value int\\n' > '"+depFile+"'\n'"+real+"' \"$@\"; rc=$?\nmv '"+depFile+".orig' '"+depFile+"'\nexit $rc")
+	got := scanExportModule(t, root)
+	if _, err := os.Stat(ran); err != nil {
+		t.Fatalf("go list never ran in the second scan (an export cache served it): %v", err)
+	}
+	if got != control {
 		t.Errorf("scan with dep.go changed only during go list = %q, want %q", got, control)
 	}
 	if data, _ := os.ReadFile(depFile); !strings.Contains(string(data), "string") {
