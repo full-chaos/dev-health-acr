@@ -160,7 +160,7 @@ func typeCheck(root string, group []parsedFile, exports map[string]string) (*typ
 	}
 	var files []*ast.File
 	for _, parsed := range group {
-		match, err := tcheck.Match(absRoot, parsed.rel)
+		match, err := tcheck.Match(absRoot, parsed.rel, parsed.src)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -1018,22 +1018,14 @@ var probeCache = struct {
 	verdict map[string]error
 }{verdict: map[string]error{}}
 
-// probeKey names a package by the bytes of its files, so a package already probed in this process is not probed again.
-func probeKey(root string, rels []string) (string, error) {
-	absRoot, err := filepath.Abs(root)
-	if err != nil {
-		return "", err
-	}
+// probeKey names a package by the bytes the scan parsed, so a package already probed in this process is not probed again.
+func probeKey(group []parsedFile) string {
 	digest := sha256.New()
-	for _, rel := range rels {
-		source, err := os.ReadFile(filepath.Join(absRoot, filepath.FromSlash(rel)))
-		if err != nil {
-			return "", err
-		}
-		fmt.Fprintf(digest, "%s\x00%d\x00", rel, len(source))
-		digest.Write(source)
+	for _, parsed := range group {
+		fmt.Fprintf(digest, "%s\x00%d\x00", parsed.rel, len(parsed.src))
+		digest.Write(parsed.src)
 	}
-	return hex.EncodeToString(digest.Sum(nil)), nil
+	return hex.EncodeToString(digest.Sum(nil))
 }
 
 // scanHelperCPU is the CPU time all helpers of one scan may use together; when it is spent, every package that still needs a
@@ -1046,14 +1038,12 @@ func probeTypeCheck(ctx context.Context, budget *atomic.Int64, root string, grou
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	req := tcheck.Request{Root: root, Exports: exports, CPUSeconds: childCPUSeconds}
+	req := tcheck.Request{Root: root, Exports: exports, CPUSeconds: childCPUSeconds, Sources: map[string][]byte{}}
 	for _, parsed := range group {
 		req.Rels = append(req.Rels, parsed.rel)
+		req.Sources[parsed.rel] = parsed.src
 	}
-	key, err := probeKey(root, req.Rels)
-	if err != nil {
-		return err
-	}
+	key := probeKey(group)
 	probeCache.Lock()
 	cached, seen := probeCache.verdict[key]
 	probeCache.Unlock()
@@ -1108,6 +1098,9 @@ func runChild(ctx context.Context, root string, req tcheck.Request) (verdict err
 	if err != nil {
 		return err, 0
 	}
+	if len(payload) > maxRequestBytes {
+		return fmt.Errorf("%w: request is %d bytes, bound is %d bytes", errRequestTooLarge, len(payload), maxRequestBytes), 0
+	}
 	sum := sha256.Sum256(payload)
 	want := "emitscan-tcheck-ok " + hex.EncodeToString(sum[:]) + "\n"
 	ctx, cancel := context.WithTimeout(ctx, childWall)
@@ -1158,6 +1151,12 @@ loop:
 	recordUsage(cmd.ProcessState) // only a helper that finished inside its limits counts toward the limits' headroom
 	return nil, cpuNanos
 }
+
+// maxRequestBytes is below the helper's stdin cap (64 MiB, tcheck/child/main.go) so a large package is a refusal here and never a
+// silently truncated request.
+var maxRequestBytes = 48 << 20
+
+var errRequestTooLarge = errors.New("type-check helper request too large")
 
 var errChildLimit = errors.New("type-check stopped at its memory limit")
 

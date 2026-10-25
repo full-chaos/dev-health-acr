@@ -116,6 +116,7 @@ type parsedFile struct {
 	rel     string
 	fset    *token.FileSet
 	file    *ast.File
+	src     []byte // the bytes file was parsed from; every later check of this file uses these, never the disk
 	imports map[string]string
 }
 
@@ -191,7 +192,7 @@ func ScanContext(ctx context.Context, root string, dirs []string) ([]Finding, []
 				return nil
 			}
 			dirKey := filepath.ToSlash(filepath.Dir(rel))
-			byDir[dirKey] = append(byDir[dirKey], parsedFile{rel: rel, fset: fset, file: file, imports: importNames(file)})
+			byDir[dirKey] = append(byDir[dirKey], parsedFile{rel: rel, fset: fset, file: file, src: source, imports: importNames(file)})
 			return nil
 		})
 		if err != nil {
