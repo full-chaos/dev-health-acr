@@ -309,7 +309,12 @@ func composeAcceptedContext(in compositionInput) AcceptedContext {
 		// A FRAMELESS READING is carried as frameless: turn one proposed no
 		// frame, so neither does the continuation, whatever this turn's model
 		// proposed. The group axis rides on the snapshot.
-		gate := FrameGate{Outcome: carried.Validation.GateOutcome}
+		gate := FrameGate{
+			Outcome:            carried.Validation.GateOutcome,
+			FailedInvariant:    carried.Validation.FailedInvariant,
+			RefuseBasis:        carried.Validation.RefuseBasis,
+			DeclaredMemberKind: carried.Validation.DeclaredMemberKind,
+		}
 		if gate.Refuses() {
 			return AcceptedContext{Gate: gate, Outcome: CompositionInvalid, FailedInvariant: CompositionInvariantCarriedFrameRefused}
 		}

@@ -2609,6 +2609,10 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 		familyOutcome.Gate = tightenWorkItemTupleFrameGate(familyOutcome.Gate, familyOutcome.Frame, familyAllowsWorkItemTuple, interpretation.TimeContext)
 		workItemTuple = prospectiveWorkItemTupleAdmission(familyOutcome.Frame, familyAllowsWorkItemTuple, interpretation.TimeContext) == workItemTupleProspective
 	}
+	if carriedGateRefusal != nil {
+		// The refinement above reads the FRESH frame and can pass a gate the carried reading refused.
+		familyOutcome.Gate = carriedGateRefusal.Gate
+	}
 	// THE SETTLED-ADMISSION Info line's one call site. No mutation here or
 	// anywhere in this arm -- see workItemTupleEffectiveObligations's own
 	// doc comment for why.
