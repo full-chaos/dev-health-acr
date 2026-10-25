@@ -98,11 +98,23 @@ func (s *fileScan) markUnloggedLists(body *ast.BlockStmt) {
 		}
 	}
 	live := map[types.Object]bool{}
+	named := map[string][]types.Object{}
+	for obj := range lists {
+		named[obj.Name()] = append(named[obj.Name()], obj)
+	}
 	inspectCharged(s.pkg.budget, body, func(node ast.Node) bool {
-		if id, ok := node.(*ast.Ident); ok && !allowed[id] {
-			if obj := objectOf(typed.info, id); obj != nil && lists[obj] {
-				live[obj] = true
+		id, ok := node.(*ast.Ident)
+		if !ok || allowed[id] {
+			return true
+		}
+		obj := objectOf(typed.info, id)
+		if obj == nil {
+			// a use the type information does not resolve could be any list of that name
+			for _, same := range named[id.Name] {
+				live[same] = true
 			}
+		} else if lists[obj] {
+			live[obj] = true
 		}
 		return true
 	})
