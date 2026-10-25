@@ -9,6 +9,7 @@ import (
 )
 
 func (s *credentialStore) createCredential(ctx context.Context, input storage.CredentialCreateInput) (contractsv1.ClientCredential, error) {
+	s.observeOp("createCredential")
 	if err := s.ready(ctx); err != nil {
 		return contractsv1.ClientCredential{}, err
 	}
@@ -42,6 +43,7 @@ func (s *credentialStore) createCredential(ctx context.Context, input storage.Cr
 }
 
 func (s *credentialStore) rollbackCredentialRotation(ctx context.Context, input storage.CredentialRotationRollbackInput) (contractsv1.ClientCredential, error) {
+	s.observeOp("rollbackCredentialRotation")
 	if err := s.ready(ctx); err != nil {
 		return contractsv1.ClientCredential{}, err
 	}
@@ -89,6 +91,7 @@ func (s *credentialStore) rotationRelates(sourceID, successorID string) bool {
 }
 
 func (s *credentialStore) rotateCredential(ctx context.Context, input storage.CredentialRotationInput) (contractsv1.ClientCredential, error) {
+	s.observeOp("rotateCredential")
 	if err := s.ready(ctx); err != nil {
 		return contractsv1.ClientCredential{}, err
 	}
@@ -137,6 +140,7 @@ func (s *credentialStore) rotateCredential(ctx context.Context, input storage.Cr
 }
 
 func (s *credentialStore) revokeCredential(ctx context.Context, input storage.CredentialRevocationInput) (contractsv1.ClientCredential, error) {
+	s.observeOp("revokeCredential")
 	if err := s.ready(ctx); err != nil {
 		return contractsv1.ClientCredential{}, err
 	}

@@ -13,16 +13,19 @@ import (
 )
 
 type credentialStore struct {
-	mu     sync.RWMutex
-	audit  *AuditStore
-	byID   map[string]storage.CredentialRecord
-	byHash map[string]string
-	now    func() time.Time
+	mu      sync.RWMutex
+	audit   *AuditStore
+	byID    map[string]storage.CredentialRecord
+	byHash  map[string]string
+	now     func() time.Time
+	observe func(op string)
 }
 
 type CredentialStoreOptions struct {
 	Audit *AuditStore
 	Now   func() time.Time
+	// Observe, when set, receives the operation name of every store call.
+	Observe func(op string)
 }
 
 func NewCredentialStore(audits ...*AuditStore) (*storage.CredentialLifecycle, error) {
@@ -38,7 +41,10 @@ func NewCredentialStore(audits ...*AuditStore) (*storage.CredentialLifecycle, er
 }
 
 func NewCredentialStoreWithOptions(options CredentialStoreOptions) (*storage.CredentialLifecycle, error) {
-	_, lifecycle, err := newCredentialStore(options.Audit, options.Now)
+	store, lifecycle, err := newCredentialStore(options.Audit, options.Now)
+	if err == nil {
+		store.observe = options.Observe
+	}
 	return lifecycle, err
 }
 
@@ -62,6 +68,7 @@ func newCredentialStore(audit *AuditStore, now func() time.Time) (*credentialSto
 }
 
 func (s *credentialStore) List(ctx context.Context, orgID string) ([]contractsv1.ClientCredential, error) {
+	s.observeOp("List")
 	if err := s.ready(ctx); err != nil {
 		return nil, err
 	}
@@ -83,6 +90,7 @@ func (s *credentialStore) List(ctx context.Context, orgID string) ([]contractsv1
 }
 
 func (s *credentialStore) GetByID(ctx context.Context, orgID, credentialID string) (contractsv1.ClientCredential, error) {
+	s.observeOp("GetByID")
 	if err := s.ready(ctx); err != nil {
 		return contractsv1.ClientCredential{}, err
 	}
@@ -99,6 +107,7 @@ func (s *credentialStore) GetByID(ctx context.Context, orgID, credentialID strin
 }
 
 func (s *credentialStore) FindByTokenHash(ctx context.Context, tokenHash string) (contractsv1.ClientCredential, error) {
+	s.observeOp("FindByTokenHash")
 	if err := s.ready(ctx); err != nil {
 		return contractsv1.ClientCredential{}, err
 	}
@@ -120,6 +129,7 @@ func (s *credentialStore) FindByTokenHash(ctx context.Context, tokenHash string)
 }
 
 func (s *credentialStore) TouchLastUsed(ctx context.Context, orgID, credentialID, ip, userAgent string, usedAt time.Time) error {
+	s.observeOp("TouchLastUsed")
 	if err := s.ready(ctx); err != nil {
 		return err
 	}
@@ -139,6 +149,12 @@ func (s *credentialStore) TouchLastUsed(ctx context.Context, orgID, credentialID
 		s.byID[credentialID] = cloneRecord(record)
 	}
 	return nil
+}
+
+func (s *credentialStore) observeOp(op string) {
+	if s != nil && s.observe != nil {
+		s.observe(op)
+	}
 }
 
 func (s *credentialStore) ready(ctx context.Context) error {

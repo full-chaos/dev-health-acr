@@ -6,10 +6,12 @@ import (
 	"crypto/rand"
 	"encoding/base64"
 	"encoding/json"
+	"io"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
-	"os"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 	"sync/atomic"
@@ -17,46 +19,48 @@ import (
 	"time"
 
 	"github.com/full-chaos/dev-health-acr/internal/auth"
-	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
+	"github.com/full-chaos/dev-health-acr/internal/limits"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
+	"github.com/full-chaos/dev-health-acr/internal/storage/memory"
 )
 
-// publicRoute is one registration of (*App).Handler. expr is the pattern
-// argument exactly as app.go spells it, so the table can be pinned to the source.
+// publicRoute is one registration of (*App).registerRoutes. pattern is the
+// mux pattern; the pin compares it with the patterns the mux really received.
 type publicRoute struct {
-	expr   string
-	method string
-	path   string
-	gated  bool
+	pattern   string
+	method    string
+	path      string
+	gated     bool
+	oauthOnly bool
 }
 
 var publicRoutes = []publicRoute{
-	{expr: `"GET /healthz"`, method: "GET", path: "/healthz"},
-	{expr: `"GET /readyz"`, method: "GET", path: "/readyz"},
-	{expr: `"GET /api/v1/agent-context/capabilities"`, method: "GET", path: "/api/v1/agent-context/capabilities", gated: true},
-	{expr: `"POST /api/v1/agent-context/context-packets"`, method: "POST", path: "/api/v1/agent-context/context-packets", gated: true},
-	{expr: `"GET /api/v1/agent-context/evidence/{evidence_ref_id}"`, method: "GET", path: "/api/v1/agent-context/evidence/ev_1", gated: true},
-	{expr: `"POST /api/v1/agent-context/episodes"`, method: "POST", path: "/api/v1/agent-context/episodes", gated: true},
-	{expr: `"POST "+ContextFabricInvestigationsPath`, method: "POST", path: ContextFabricInvestigationsPath, gated: true},
-	{expr: `"GET "+ContextFabricInvestigationResultPath`, method: "GET", path: "/api/v1/context-fabric/investigations/res_1", gated: true},
-	{expr: `"GET "+ContextFabricDataCatalogPath`, method: "GET", path: ContextFabricDataCatalogPath, gated: true},
-	{expr: `"POST "+ContextFabricDataSubjectsPath`, method: "POST", path: ContextFabricDataSubjectsPath, gated: true},
-	{expr: `"POST "+ContextFabricDataFactsPath`, method: "POST", path: ContextFabricDataFactsPath, gated: true},
-	{expr: `"POST "+ContextFabricDataOperationsPath`, method: "POST", path: ContextFabricDataOperationsPath, gated: true},
-	{expr: `"POST "+ContextFabricDataGraphQLPath`, method: "POST", path: ContextFabricDataGraphQLPath, gated: true},
-	{expr: `"POST "+ContextFabricDataRelationshipsPath`, method: "POST", path: ContextFabricDataRelationshipsPath, gated: true},
-	{expr: `"POST /api/v1/oauth/device_authorization"`, method: "POST", path: "/api/v1/oauth/device_authorization"},
-	{expr: `"POST /api/v1/oauth/token"`, method: "POST", path: "/api/v1/oauth/token"},
-	{expr: `"POST /api/v1/oauth/device_approval"`, method: "POST", path: "/api/v1/oauth/device_approval", gated: true},
-	{expr: `"POST /api/v1/auth/credentials/self/rotate"`, method: "POST", path: "/api/v1/auth/credentials/self/rotate", gated: true},
-	{expr: `"POST /api/v1/auth/credentials/self/revoke"`, method: "POST", path: "/api/v1/auth/credentials/self/revoke", gated: true},
-	{expr: `"GET "+OAuthAuthorizationServerMetadataPath`, method: "GET", path: OAuthAuthorizationServerMetadataPath},
-	{expr: `"GET "+OAuthAuthorizePath`, method: "GET", path: OAuthAuthorizePath},
-	{expr: `"POST "+OAuthConsentPath`, method: "POST", path: OAuthConsentPath, gated: true},
-	{expr: `"POST "+OAuthTokenPath`, method: "POST", path: OAuthTokenPath},
-	{expr: `"POST "+OAuthRegisterPath`, method: "POST", path: OAuthRegisterPath},
-	{expr: `"POST "+OAuthDeviceAuthorizationPath`, method: "POST", path: OAuthDeviceAuthorizationPath},
-	{expr: `"POST /api/v1/auth/credentials/self/ack"`, method: "POST", path: "/api/v1/auth/credentials/self/ack", gated: true},
+	{pattern: "GET /healthz", method: "GET", path: "/healthz"},
+	{pattern: "GET /readyz", method: "GET", path: "/readyz"},
+	{pattern: "GET /api/v1/agent-context/capabilities", method: "GET", path: "/api/v1/agent-context/capabilities", gated: true},
+	{pattern: "POST /api/v1/agent-context/context-packets", method: "POST", path: "/api/v1/agent-context/context-packets", gated: true},
+	{pattern: "GET /api/v1/agent-context/evidence/{evidence_ref_id}", method: "GET", path: "/api/v1/agent-context/evidence/ev_1", gated: true},
+	{pattern: "POST /api/v1/agent-context/episodes", method: "POST", path: "/api/v1/agent-context/episodes", gated: true},
+	{pattern: "POST " + ContextFabricInvestigationsPath, method: "POST", path: ContextFabricInvestigationsPath, gated: true},
+	{pattern: "GET " + ContextFabricInvestigationResultPath, method: "GET", path: "/api/v1/context-fabric/investigations/res_1", gated: true},
+	{pattern: "GET " + ContextFabricDataCatalogPath, method: "GET", path: ContextFabricDataCatalogPath, gated: true},
+	{pattern: "POST " + ContextFabricDataSubjectsPath, method: "POST", path: ContextFabricDataSubjectsPath, gated: true},
+	{pattern: "POST " + ContextFabricDataFactsPath, method: "POST", path: ContextFabricDataFactsPath, gated: true},
+	{pattern: "POST " + ContextFabricDataOperationsPath, method: "POST", path: ContextFabricDataOperationsPath, gated: true},
+	{pattern: "POST " + ContextFabricDataGraphQLPath, method: "POST", path: ContextFabricDataGraphQLPath, gated: true},
+	{pattern: "POST " + ContextFabricDataRelationshipsPath, method: "POST", path: ContextFabricDataRelationshipsPath, gated: true},
+	{pattern: "POST /api/v1/oauth/device_authorization", method: "POST", path: "/api/v1/oauth/device_authorization"},
+	{pattern: "POST /api/v1/oauth/token", method: "POST", path: "/api/v1/oauth/token"},
+	{pattern: "POST /api/v1/oauth/device_approval", method: "POST", path: "/api/v1/oauth/device_approval", gated: true},
+	{pattern: "POST /api/v1/auth/credentials/self/rotate", method: "POST", path: "/api/v1/auth/credentials/self/rotate", gated: true},
+	{pattern: "POST /api/v1/auth/credentials/self/revoke", method: "POST", path: "/api/v1/auth/credentials/self/revoke", gated: true},
+	{pattern: "GET " + OAuthAuthorizationServerMetadataPath, method: "GET", path: OAuthAuthorizationServerMetadataPath, oauthOnly: true},
+	{pattern: "GET " + OAuthAuthorizePath, method: "GET", path: OAuthAuthorizePath, oauthOnly: true},
+	{pattern: "POST " + OAuthConsentPath, method: "POST", path: OAuthConsentPath, gated: true, oauthOnly: true},
+	{pattern: "POST " + OAuthTokenPath, method: "POST", path: OAuthTokenPath, oauthOnly: true},
+	{pattern: "POST " + OAuthRegisterPath, method: "POST", path: OAuthRegisterPath, oauthOnly: true},
+	{pattern: "POST " + OAuthDeviceAuthorizationPath, method: "POST", path: OAuthDeviceAuthorizationPath, oauthOnly: true},
+	{pattern: "POST /api/v1/auth/credentials/self/ack", method: "POST", path: "/api/v1/auth/credentials/self/ack", gated: true},
 }
 
 type foreignToken struct {
@@ -97,31 +101,6 @@ var foreignTokens = []foreignToken{
 	{"generic_bearer", func(t *testing.T) string { return "tok_" + randomSegment(t, 32) }},
 }
 
-type countingCredentials struct {
-	storage.CredentialStore
-	calls atomic.Int64
-}
-
-func (c *countingCredentials) List(ctx context.Context, orgID string) ([]contractsv1.ClientCredential, error) {
-	c.calls.Add(1)
-	return c.CredentialStore.List(ctx, orgID)
-}
-
-func (c *countingCredentials) GetByID(ctx context.Context, orgID, id string) (contractsv1.ClientCredential, error) {
-	c.calls.Add(1)
-	return c.CredentialStore.GetByID(ctx, orgID, id)
-}
-
-func (c *countingCredentials) FindByTokenHash(ctx context.Context, hash string) (contractsv1.ClientCredential, error) {
-	c.calls.Add(1)
-	return c.CredentialStore.FindByTokenHash(ctx, hash)
-}
-
-func (c *countingCredentials) TouchLastUsed(ctx context.Context, orgID, id, ip, ua string, at time.Time) error {
-	c.calls.Add(1)
-	return c.CredentialStore.TouchLastUsed(ctx, orgID, id, ip, ua, at)
-}
-
 type countingAudit struct {
 	storage.AuditStore
 	calls atomic.Int64
@@ -140,45 +119,69 @@ func (c *countingReplays) Observe(context.Context, string, string, time.Time, ti
 }
 
 type publicRouteRig struct {
+	app         *App
 	handler     http.Handler
-	credentials *countingCredentials
+	credentials *atomic.Int64
 	audit       *countingAudit
 	replays     *countingReplays
-	reached     *atomic.Int64
 }
 
 func (r publicRouteRig) lookups() int64 {
-	return r.credentials.calls.Load() + r.audit.calls.Load() + r.replays.calls.Load()
+	return r.credentials.Load() + r.audit.calls.Load() + r.replays.calls.Load()
 }
 
-// newPublicRouteRig builds the real route table with the OAuth routes on and
-// every credential, audit and replay store behind a counter.
-func newPublicRouteRig(t *testing.T) publicRouteRig {
+// newPublicRouteRig builds the real route table with the OAuth routes on. The
+// credential store counts every call at the store itself, and the audit and
+// replay stores sit behind counters in the runtime dependencies, so a handler
+// that reaches app.runtime directly is counted like the authenticator is.
+func newPublicRouteRig(t *testing.T, oauthOn bool) publicRouteRig {
 	t.Helper()
-	app, _, err := newOAuthTestApp(t, &OAuthRuntime{Issuer: oauthTestIssuer, Resources: []string{oauthTestResource}}, true)
+	now := time.Date(2026, 9, 21, 12, 0, 0, 0, time.UTC)
+	clock := func() time.Time { return now }
+	rig := publicRouteRig{credentials: &atomic.Int64{}, replays: &countingReplays{}}
+	memoryAudit := memory.NewAuditStore()
+	rig.audit = &countingAudit{AuditStore: memoryAudit}
+	credentials, err := memory.NewCredentialStoreWithOptions(memory.CredentialStoreOptions{Audit: memoryAudit, Now: clock, Observe: func(string) { rig.credentials.Add(1) }})
 	if err != nil {
 		t.Fatal(err)
 	}
-	public, _, err := ed25519.GenerateKey(rand.Reader)
+	devices, err := memory.NewDeviceAuthorizationStore(memory.DeviceAuthorizationStoreOptions{Credentials: credentials, Now: clock})
 	if err != nil {
 		t.Fatal(err)
 	}
-	rig := publicRouteRig{
-		credentials: &countingCredentials{CredentialStore: app.runtime.Credentials},
-		audit:       &countingAudit{AuditStore: app.runtime.Audit},
-		replays:     &countingReplays{},
-		reached:     &atomic.Int64{},
-	}
-	verifier, err := auth.NewWebAssertionVerifier(auth.WebAssertionOptions{Issuer: "https://web.example.test", Audience: "acr-api", JWKSPath: writeAPIJWKS(t, public), Now: app.now, Replays: rig.replays})
+	public, private, err := ed25519.GenerateKey(rand.Reader)
 	if err != nil {
 		t.Fatal(err)
 	}
-	authenticator, err := auth.NewAuthenticator(rig.credentials, rig.audit, auth.AuthenticatorOptions{Now: app.now, Limiter: auth.NoopLimiter{}, ClientIP: app.clientIP, WebAssertions: verifier})
+	oauthTestWebKey = private
+	verifier, err := auth.NewWebAssertionVerifier(auth.WebAssertionOptions{Issuer: "https://web.example.test", Audience: "acr-api", JWKSPath: writeAPIJWKS(t, public), Now: clock, Replays: rig.replays})
 	if err != nil {
 		t.Fatal(err)
 	}
-	app.authenticator = authenticator
-	rig.handler = app.Handler()
+	manager, err := limits.NewManager(limits.Options{Now: clock, PerOrgConcurrency: 4, Policies: limits.PolicySet{Auth: limits.AuthPolicy{Window: time.Minute, PerOrgLimit: 100}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var oauthRuntime *OAuthRuntime
+	if oauthOn {
+		oauthRuntime = &OAuthRuntime{Issuer: oauthTestIssuer, Resources: []string{oauthTestResource}, Store: memory.NewOAuthStore(clock), ConsentURL: oauthTestConsentURL}
+	}
+	rig.app, err = NewApp(AppConfig{ServiceName: "acr", ServiceVersion: "test", RequestTimeout: time.Second}, Dependencies{
+		Capabilities: StaticCapabilitiesProvider{Now: clock, Value: hostedCapabilities()}, Limits: manager, Now: clock, WebAssertions: verifier,
+		Runtime: &RuntimeDependencies{
+			Credentials: credentials, Audit: rig.audit, Entitlements: EntitlementFunc(func(context.Context, string, string) (bool, error) { return true, nil }),
+			Assembler: noopAssembler{}, Evidence: noopEvidenceStore{},
+			DeviceAuthorizations: devices, DeviceVerificationURL: "https://web.example.test/acr/device",
+			DeviceAuthorizationLimiter: NewDeviceAuthorizationLimiter(ClockFunc(clock)),
+			ReadinessChecks:            exactRuntimeChecks(),
+			DataStoreChecks:            exactDataStoreChecks(),
+			OAuth:                      oauthRuntime,
+		},
+	}, slog.New(slog.NewJSONHandler(io.Discard, &slog.HandlerOptions{Level: slog.LevelInfo})))
+	if err != nil {
+		t.Fatal(err)
+	}
+	rig.handler = rig.app.Handler()
 	return rig
 }
 
@@ -237,14 +240,14 @@ func TestPublicRoutesRefuseForeignTokenClassesBeforeAnyStoreLookup(t *testing.T)
 		if !route.gated {
 			continue
 		}
-		reference := serveRoute(newPublicRouteRig(t), route, map[string]string{"Authorization": "Bearer " + auth.TokenPrefix + strings.Repeat("A", 43)})
+		reference := serveRoute(newPublicRouteRig(t, true), route, map[string]string{"Authorization": "Bearer " + auth.TokenPrefix + strings.Repeat("A", 43)})
 		if reference.status != http.StatusUnauthorized {
 			t.Fatalf("%s %s: unknown-token reference = %d, want 401", route.method, route.path, reference.status)
 		}
 		for _, class := range foreignTokens {
 			for carrier := range foreignCarriers("x") {
 				t.Run(route.method+" "+route.path+"/"+class.name+"/"+carrier, func(t *testing.T) {
-					rig := newPublicRouteRig(t)
+					rig := newPublicRouteRig(t, true)
 					answer := serveRoute(rig, route, foreignCarriers(class.build(t))[carrier])
 					if answer.status != http.StatusUnauthorized {
 						t.Fatalf("status = %d, want 401", answer.status)
@@ -253,7 +256,7 @@ func TestPublicRoutesRefuseForeignTokenClassesBeforeAnyStoreLookup(t *testing.T)
 						t.Fatalf("answer %d %v %q differs from the unknown-token refusal %d %v %q", answer.status, answer.header, answer.body, reference.status, reference.header, reference.body)
 					}
 					if n := rig.lookups(); n != 0 {
-						t.Fatalf("store lookups = %d (credential %d, audit %d, replay %d), want 0", n, rig.credentials.calls.Load(), rig.audit.calls.Load(), rig.replays.calls.Load())
+						t.Fatalf("store lookups = %d (credential %d, audit %d, replay %d), want 0", n, rig.credentials.Load(), rig.audit.calls.Load(), rig.replays.calls.Load())
 					}
 				})
 			}
@@ -266,11 +269,11 @@ func TestPublicRoutesIgnoreForeignTokensOnUnauthenticatedRoutes(t *testing.T) {
 		if route.gated {
 			continue
 		}
-		reference := serveRoute(newPublicRouteRig(t), route, nil)
+		reference := serveRoute(newPublicRouteRig(t, true), route, nil)
 		for _, class := range foreignTokens {
 			for carrier := range foreignCarriers("x") {
 				t.Run(route.method+" "+route.path+"/"+class.name+"/"+carrier, func(t *testing.T) {
-					rig := newPublicRouteRig(t)
+					rig := newPublicRouteRig(t, true)
 					answer := serveRoute(rig, route, foreignCarriers(class.build(t))[carrier])
 					if !sameAnswer(answer, reference) {
 						t.Fatalf("answer %d %v %q differs from the no-header answer %d %v %q", answer.status, answer.header, answer.body, reference.status, reference.header, reference.body)
@@ -284,45 +287,97 @@ func TestPublicRoutesIgnoreForeignTokensOnUnauthenticatedRoutes(t *testing.T) {
 	}
 }
 
-// The control: a well-formed fcacr_ bearer on a gated route does reach the
-// credential store, so a zero above is the counter measuring, not a dead wire.
+// The controls: a zero above is the counters measuring, not a dead wire. A
+// well-formed fcacr_ bearer on a gated route reaches the credential store, and
+// a direct call on app.runtime is counted although no authenticator is involved.
 func TestPublicRouteCounterSeesAWellFormedCredentialLookup(t *testing.T) {
-	rig := newPublicRouteRig(t)
+	rig := newPublicRouteRig(t, true)
 	route := publicRoutes[2]
 	serveRoute(rig, route, map[string]string{"Authorization": "Bearer " + auth.TokenPrefix + strings.Repeat("A", 43)})
-	if rig.credentials.calls.Load() != 1 {
-		t.Fatalf("credential lookups for a well-formed unknown bearer = %d, want 1", rig.credentials.calls.Load())
+	if rig.credentials.Load() != 1 {
+		t.Fatalf("credential lookups for a well-formed unknown bearer = %d, want 1", rig.credentials.Load())
 	}
 }
 
-func TestPublicRouteTableIsFullyCovered(t *testing.T) {
-	source, err := os.ReadFile("app.go")
-	if err != nil {
+func TestPublicRouteCountersSeeDirectRuntimeStoreCalls(t *testing.T) {
+	rig := newPublicRouteRig(t, true)
+	ctx := context.Background()
+	_, _ = rig.app.runtime.Credentials.FindByTokenHash(ctx, strings.Repeat("a", 64))
+	_, _ = rig.app.runtime.Credentials.List(ctx, "org_1")
+	if rig.credentials.Load() != 2 {
+		t.Fatalf("direct runtime credential calls counted = %d, want 2", rig.credentials.Load())
+	}
+	if err := rig.app.runtime.Audit.Record(ctx, storage.AuditEvent{OrgID: "org_1", Action: "probe", Status: "ok", CreatedAt: time.Now()}); err != nil {
 		t.Fatal(err)
 	}
-	registration := regexp.MustCompile(`mux\.Handle(?:Func)?\(([^,]+),`)
-	found := map[string]bool{}
-	for _, match := range registration.FindAllStringSubmatch(string(source), -1) {
-		found[strings.ReplaceAll(strings.TrimSpace(match[1]), " ", "")] = true
+	if rig.audit.calls.Load() != 1 {
+		t.Fatalf("direct runtime audit calls counted = %d, want 1", rig.audit.calls.Load())
 	}
-	covered := map[string]bool{}
+}
+
+type recordingMux struct {
+	mux      *http.ServeMux
+	patterns []string
+}
+
+func (m *recordingMux) Handle(pattern string, handler http.Handler) {
+	m.patterns = append(m.patterns, pattern)
+	m.mux.Handle(pattern, handler)
+}
+
+func (m *recordingMux) HandleFunc(pattern string, handler func(http.ResponseWriter, *http.Request)) {
+	m.patterns = append(m.patterns, pattern)
+	m.mux.HandleFunc(pattern, handler)
+}
+
+func registeredPatterns(t *testing.T, oauthOn bool) []string {
+	t.Helper()
+	recorder := &recordingMux{mux: http.NewServeMux()}
+	newPublicRouteRig(t, oauthOn).app.registerRoutes(recorder)
+	sort.Strings(recorder.patterns)
+	return recorder.patterns
+}
+
+func tablePatterns(oauthOn bool) []string {
+	var patterns []string
 	for _, route := range publicRoutes {
-		covered[strings.ReplaceAll(route.expr, " ", "")] = true
-	}
-	var missing, stale []string
-	for expr := range found {
-		if !covered[expr] {
-			missing = append(missing, expr)
+		if oauthOn || !route.oauthOnly {
+			patterns = append(patterns, route.pattern)
 		}
 	}
-	for expr := range covered {
-		if !found[expr] {
-			stale = append(stale, expr)
+	sort.Strings(patterns)
+	return patterns
+}
+
+func TestPublicRouteTableIsFullyCovered(t *testing.T) {
+	for _, oauthOn := range []bool{true, false} {
+		registered := registeredPatterns(t, oauthOn)
+		table := tablePatterns(oauthOn)
+		var missing, stale []string
+		for _, pattern := range registered {
+			if !slices.Contains(table, pattern) {
+				missing = append(missing, pattern)
+			}
+		}
+		for _, pattern := range table {
+			if !slices.Contains(registered, pattern) {
+				stale = append(stale, pattern)
+			}
+		}
+		if len(missing) != 0 || len(stale) != 0 {
+			t.Fatalf("oauth=%v: registered but not in the matrix %v; in the matrix but not registered %v", oauthOn, missing, stale)
 		}
 	}
-	sort.Strings(missing)
-	sort.Strings(stale)
-	if len(missing) != 0 || len(stale) != 0 {
-		t.Fatalf("route table out of step with app.go: not in the matrix %v; in the matrix but not registered %v", missing, stale)
+}
+
+func TestPublicRouteHandlerRegistersThroughRegisterRoutesOnly(t *testing.T) {
+	rig := newPublicRouteRig(t, true)
+	for _, route := range publicRoutes {
+		request := httptest.NewRequest(route.method, route.path, nil)
+		response := httptest.NewRecorder()
+		rig.handler.ServeHTTP(response, request)
+		if response.Code == http.StatusNotFound || response.Code == http.StatusMethodNotAllowed {
+			t.Fatalf("%s %s is in the table but Handler() does not serve it (status %d)", route.method, route.path, response.Code)
+		}
 	}
 }
