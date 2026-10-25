@@ -3266,6 +3266,9 @@ func scalarDisplayString(field string, v ScalarValue) (string, bool) {
 	}
 }
 
+// receiptRecordTimeout bounds the detached receipt write; a var so tests can shorten it.
+var receiptRecordTimeout = 5 * time.Second
+
 func recordModelReceipt(ctx context.Context, principal storage.Principal, sink ModelReceiptSink, receipt ModelExecutionReceipt) error {
 	if receipt.Operation == "" {
 		return nil
@@ -3300,7 +3303,13 @@ func recordModelReceipt(ctx context.Context, principal storage.Principal, sink M
 	if sink == nil {
 		return nil
 	}
-	if err := sink.RecordModelExecution(ctx, principal, receipt); err != nil {
+	// The receipt is the audit record of a call the caller may already have
+	// abandoned, so the write must not die with the caller's context. It runs
+	// detached from the caller's cancellation, bounded so a stuck sink cannot
+	// hold the caller's return.
+	sinkCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), receiptRecordTimeout)
+	defer cancel()
+	if err := sink.RecordModelExecution(sinkCtx, principal, receipt); err != nil {
 		return fmt.Errorf("%w: record model receipt: %w", ErrModelReceiptUnrecorded, err)
 	}
 	return nil

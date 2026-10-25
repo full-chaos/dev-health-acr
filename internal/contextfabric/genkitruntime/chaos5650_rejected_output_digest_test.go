@@ -329,7 +329,7 @@ func TestInterpretRejectionCarriesNoStaleDigest(t *testing.T) {
 // outcome, diagnostics and digest describing the fallback while identity
 // still described the primary — so the digest would name a draft made by a
 // model the receipt does not name. Each field below is asserted to the leg it
-// must describe, including the three that deliberately do NOT follow the
+// must describe, including the two that deliberately do NOT follow the
 // reported leg, so "deliberate" is a measurement and not a comment.
 func TestBothLegsFailedReceiptIsOneProjectionOfTheReportedLeg(t *testing.T) {
 	fallback := validReceipt(contextfabric.ModelOperationSynthesize)
@@ -384,11 +384,8 @@ func TestBothLegsFailedReceiptIsOneProjectionOfTheReportedLeg(t *testing.T) {
 			if receipt.FallbackUsed {
 				t.Error("FallbackUsed = true, want false -- it means the fallback ANSWERED, and on this branch it did not")
 			}
-			if receipt.Usage.TotalTokens == fallback.Usage.TotalTokens+28 {
-				t.Errorf("Usage.TotalTokens = %d looks summed; this fix deliberately does not change usage accounting", receipt.Usage.TotalTokens)
-			}
-			if receipt.Usage.TotalTokens != 28 {
-				t.Errorf("Usage.TotalTokens = %d, want the primary's 28 -- the fallback's tokens stay unaccounted on a both-failed call, a pre-existing gap this change does not silently alter", receipt.Usage.TotalTokens)
+			if want := fallback.Usage.TotalTokens + 28; receipt.Usage.TotalTokens != want {
+				t.Errorf("Usage.TotalTokens = %d, want %d -- both legs' tokens, the primary's 28 plus the fallback's %d", receipt.Usage.TotalTokens, want, fallback.Usage.TotalTokens)
 			}
 		})
 	}

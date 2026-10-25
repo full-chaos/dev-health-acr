@@ -96,7 +96,7 @@ func ServeStoredWorkItemTuple(candidate InvestigationResult, state *PersistedSem
 				decision.Event.Basis = "digest_changed"
 				return decision
 			}
-			if storedLimitationsFlooded(candidate.Limitations) {
+			if StoredResultFloodWithheld(candidate) {
 				decision.Disposition = WorkItemTupleByIDNotFound
 				decision.Event.Basis = "limitations_flooded"
 				return decision
@@ -117,7 +117,7 @@ func ServeStoredWorkItemTuple(candidate InvestigationResult, state *PersistedSem
 		decision.Event.Basis = "authorization_unverifiable"
 		return decision
 	}
-	if storedLimitationsFlooded(candidate.Limitations) {
+	if StoredResultFloodWithheld(candidate) {
 		decision.Disposition = WorkItemTupleByIDNotFound
 		decision.Event.Basis = "limitations_flooded"
 		return decision
@@ -126,15 +126,6 @@ func ServeStoredWorkItemTuple(candidate InvestigationResult, state *PersistedSem
 	decision.Result = serveWorkItemTupleWithoutCensus(candidate)
 	decision.Err = validateWorkItemStoredCoverage(decision.Result, &decision.Event)
 	return decision
-}
-
-// storedLimitationsFlooded reports a stored list at the cap with no
-// model-authored entry. The engine never composes one, and drafts lose such
-// entries when vetted, so only a row stored before that could hold one: no
-// disclosure could be appended to it, the authorization gap included, and the
-// denied count needed to compose the gap again is not persisted.
-func storedLimitationsFlooded(limitations []string) bool {
-	return len(limitations) >= contractsv1.ContextFabricLimitationsMaxCount && lastModelAuthoredLimitation(limitations) < 0
 }
 
 // serveWorkItemTupleWithoutCensus serves the stored public result while
