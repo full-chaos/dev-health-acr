@@ -158,9 +158,8 @@ func TestWithOnTracedLoggersIsALogCall(t *testing.T) {
 }
 
 func TestIotaOffsetIsCarriedThroughAConstGroup(t *testing.T) {
-	body := "const (\n\tfirst = \"api_token\" + strconv.Itoa(iota)\n\tsecond\n)\nfunc f(v string) { _ = attribute.String(second, v) }\n"
-	source := strings.Replace(header, "\t\"net/http\"\n", "\t\"net/http\"\n\t\"strconv\"\n", 1) + "var _ = strconv.Itoa\n" + body
-	got := scanSource(t, source)
+	body := "const (\n\tfirst = \"api_token\" + string(rune('0'+iota))\n\tsecond\n)\nfunc f(v string) { _ = attribute.String(second, v) }\n"
+	got := scanSource(t, header+body)
 	if len(got) != 1 || got[0].Rule != "R1" || got[0].Detail != "api_token1" {
 		t.Fatalf("findings = %v, want R1 for the key of the second spec (iota 1)", got)
 	}
@@ -221,11 +220,10 @@ func TestConvertedConstantKeysAreFolded(t *testing.T) {
 	}
 }
 
-func TestUnfoldableConstantKeyIsAFinding(t *testing.T) {
+func TestConstOfAnotherPackageIsResolvedByValue(t *testing.T) {
 	body := "const k = http.MethodGet\nfunc f(v string) { _ = attribute.String(k, v) }\n"
-	got := scanSource(t, header+body)
-	if len(got) != 1 || got[0].Rule != "R1" || got[0].Detail != "unfoldable const key" {
-		t.Fatalf("findings = %v, want one R1 unfoldable const key", got)
+	if got := scanSource(t, header+body); len(got) != 0 {
+		t.Fatalf("findings = %v, want none: the checker gives the exact text of the constant", got)
 	}
 }
 
@@ -406,11 +404,10 @@ func TestACallInKeyPositionIsADynamicMetricKey(t *testing.T) {
 	}
 }
 
-func TestConversionOfAnUnfoldableConstantIsAFinding(t *testing.T) {
+func TestConversionOfAConstOfAnotherPackageIsResolvedByValue(t *testing.T) {
 	body := "type K string\nconst k = K(http.MethodGet)\nfunc f(v string) { _ = attribute.String(string(k), v) }\n"
-	got := scanSource(t, header+body)
-	if len(got) != 1 || got[0].Detail != "unfoldable const key" {
-		t.Fatalf("findings = %v, want one unfoldable const key", got)
+	if got := scanSource(t, header+body); len(got) != 0 {
+		t.Fatalf("findings = %v, want none: the checker gives the exact text of the constant", got)
 	}
 }
 
