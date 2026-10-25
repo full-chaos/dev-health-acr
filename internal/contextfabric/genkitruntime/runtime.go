@@ -14,6 +14,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
@@ -583,10 +584,44 @@ var synthesisPromptOverheadBytes = len(synthesisprompt.System()) + len(synthesis
 
 // MinSynthesisInputTokens is the smallest synthesis input token cap: one that
 // still leaves the smallest input the byte bound admits (8 KiB).
-var MinSynthesisInputTokens = (synthesisPromptOverheadBytes + 8<<10 + synthesisBytesPerToken - 1) / synthesisBytesPerToken
+var MinSynthesisInputTokens = minInputTokens(synthesisPromptOverheadBytes)
 
 func estimateSynthesisInputTokens(inputBytes int) int {
-	return (synthesisPromptOverheadBytes + inputBytes + synthesisBytesPerToken - 1) / synthesisBytesPerToken
+	return estimateInputTokens(synthesisPromptOverheadBytes, inputBytes)
+}
+
+// interpretPromptOverheadBytes is what every interpret call sends besides the
+// encoded input: the system prompt and the output schema.
+var interpretPromptOverheadBytes = sync.OnceValue(func() int {
+	schema, _ := json.Marshal(inferSchemaMap(interpretationOutput{}))
+	return len(interpretprompt.System()) + len(schema)
+})
+
+// MinInterpretInputTokens is the smallest interpret input token cap: one that
+// still leaves the smallest input the byte bound admits (8 KiB).
+func MinInterpretInputTokens() int { return minInputTokens(interpretPromptOverheadBytes()) }
+
+func estimateInterpretInputTokens(inputBytes int) int {
+	return estimateInputTokens(interpretPromptOverheadBytes(), inputBytes)
+}
+
+func estimateInputTokens(overheadBytes, inputBytes int) int {
+	return (overheadBytes + inputBytes + synthesisBytesPerToken - 1) / synthesisBytesPerToken
+}
+
+func minInputTokens(overheadBytes int) int {
+	return estimateInputTokens(overheadBytes, 8<<10)
+}
+
+// inputByteBound is the encoded-input bound of one model call: the byte
+// bound, lowered to what the token cap leaves after the prompt overhead when
+// the cap is on. A cap at or above the estimate of the byte bound leaves the
+// byte bound alone, so the product below never wraps.
+func inputByteBound(capTokens, overheadBytes, maxInputBytes int) int {
+	if capTokens <= 0 || capTokens >= estimateInputTokens(overheadBytes, maxInputBytes) {
+		return maxInputBytes
+	}
+	return capTokens*synthesisBytesPerToken - overheadBytes
 }
 
 type Config struct {
@@ -627,6 +662,10 @@ type Config struct {
 	// prompt before it is sent; 0 is off. An input over it is answered as a
 	// ModelInputOverflow, so the caller cuts the facts and discloses the cut.
 	MaxSynthesisInputTokens int
+	// MaxInterpretInputTokens caps the estimated tokens of one interpret
+	// prompt before it is sent; 0 is off. An input over it is answered as a
+	// ModelInputOverflow and no call is placed.
+	MaxInterpretInputTokens int
 	// MaxSynthesisResynthesisAttempts (CHAOS-5655) bounds SynthesizeAnswer's
 	// own re-sampling loop: when the model returns output that
 	// draft.ValidateAgainst rejects, the SAME synthesis prompt is re-sent
@@ -939,6 +978,9 @@ func newWithGenerator(config Config, gen generator) (*Runtime, error) {
 	if config.MaxSynthesisInputTokens != 0 && config.MaxSynthesisInputTokens < MinSynthesisInputTokens {
 		return nil, fmt.Errorf("synthesis input token cap must be 0 or at least %d", MinSynthesisInputTokens)
 	}
+	if config.MaxInterpretInputTokens != 0 && config.MaxInterpretInputTokens < MinInterpretInputTokens() {
+		return nil, fmt.Errorf("interpret input token cap must be 0 or at least %d", MinInterpretInputTokens())
+	}
 	if config.Logger == nil {
 		config.Logger = slog.Default()
 	}
@@ -1072,7 +1114,7 @@ func (r *Runtime) interpretQuestionWithSample(ctx context.Context, principal sto
 	if strings.TrimSpace(principal.OrgID) == "" {
 		return contextfabric.InterpretedQuestion{}, contextfabric.ModelExecutionReceipt{}, errors.New("authenticated organization is required")
 	}
-	encoded, err := interpretprompt.UserPayload(request, r.config.MaxInputBytes)
+	encoded, err := interpretprompt.UserPayload(request, r.interpretInputByteBound())
 	if err != nil {
 		return contextfabric.InterpretedQuestion{}, contextfabric.ModelExecutionReceipt{}, err
 	}
@@ -2693,10 +2735,12 @@ type synthesisInputTrace struct {
 // overhead when the cap is on. An input within it has an estimate within the
 // cap.
 func (r *Runtime) synthesisInputByteBound() int {
-	if r.config.MaxSynthesisInputTokens <= 0 || r.config.MaxSynthesisInputTokens >= estimateSynthesisInputTokens(r.config.MaxInputBytes) {
-		return r.config.MaxInputBytes
-	}
-	return r.config.MaxSynthesisInputTokens*synthesisBytesPerToken - synthesisPromptOverheadBytes
+	return inputByteBound(r.config.MaxSynthesisInputTokens, synthesisPromptOverheadBytes, r.config.MaxInputBytes)
+}
+
+// interpretInputByteBound is synthesisInputByteBound's interpret counterpart.
+func (r *Runtime) interpretInputByteBound() int {
+	return inputByteBound(r.config.MaxInterpretInputTokens, interpretPromptOverheadBytes(), r.config.MaxInputBytes)
 }
 
 func newSynthesisInputTrace(encoded []byte, input contextfabric.SynthesisInput) synthesisInputTrace {

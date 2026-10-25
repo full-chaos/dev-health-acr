@@ -218,6 +218,7 @@ func runtimeConfig(cfg Config, model string, fallback contextfabric.ModelRuntime
 		Fallback:                fallback,
 		MaxOutputTokens:         cfg.MaxOutputTokens,
 		MaxSynthesisInputTokens: cfg.MaxSynthesisInputTokens,
+		MaxInterpretInputTokens: cfg.MaxInterpretInputTokens,
 		Telemetry:               cfg.Telemetry,
 		PromptCache:             cfg.PromptCache,
 		// CHAOS-5380: copied straight through, unconditionally, exactly
