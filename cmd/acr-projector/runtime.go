@@ -122,7 +122,7 @@ func openRuntime(ctx context.Context, cfg config.ProjectorConfig, logger *slog.L
 		epochResolverInvalidator = cachedResolver
 	}
 
-	backend, falkorCheck, err := openProjectionBackend(logger, epochResolver, lifecycleTelemetry)
+	backend, falkorCheck, err := openProjectionBackend(logger, metrics, epochResolver, lifecycleTelemetry)
 	if err != nil {
 		return nil, errors.Join(err, runtime.Close())
 	}
@@ -219,7 +219,7 @@ func openRuntime(ctx context.Context, cfg config.ProjectorConfig, logger *slog.L
 		// Codex round-3 F2: a real observer, not the no-op default. A tick
 		// that fails and holds its checkpoint is correct behavior, but only
 		// safe behavior if it is visible.
-		Observer: projectionrun.SlogObserver{Logger: logger},
+		Observer: projectionObserver(logger, metrics),
 	}
 	if lifecycleEnvCfg.Enabled {
 		// CHAOS-3898 S2a-2 (design brief item 8's MANDATORY conversion):
@@ -284,7 +284,29 @@ const probeOrg, probeSource = "acr-projector-readiness-probe", "readiness"
 // assert the wiring -- "the constructed sink carries the passed-in logger"
 // -- without needing FALKOR_ADDR configured or a live connection.
 func falkorGraphTelemetry(logger *slog.Logger) falkorgraph.GraphTelemetry {
-	return falkorgraph.SlogTelemetry{Logger: logger}
+	return falkorGraphTelemetryWithMetrics(logger, nil)
+}
+
+// falkorGraphTelemetryWithMetrics is falkorGraphTelemetry plus the bootstrap
+// wait counter. A nil metrics leaves the sink log-only.
+func falkorGraphTelemetryWithMetrics(logger *slog.Logger, metrics *hostedmetrics.Instruments) falkorgraph.GraphTelemetry {
+	sink := falkorgraph.SlogTelemetry{Logger: logger}
+	if metrics != nil {
+		sink.BootstrapWait = metrics.GraphBootstrapWait
+	}
+	return sink
+}
+
+// projectionObserver is the coordinator's observer: log-only, plus the pair
+// failure counter when metrics is set.
+func projectionObserver(logger *slog.Logger, metrics *hostedmetrics.Instruments) projectionrun.SlogObserver {
+	observer := projectionrun.SlogObserver{Logger: logger}
+	if metrics != nil {
+		observer.PairFailure = func(failureClass string) {
+			metrics.ProjectionPairFailure(context.Background(), failureClass)
+		}
+	}
+	return observer
 }
 
 // graphLifecycleTelemetry mirrors falkorGraphTelemetry above for the
@@ -300,7 +322,7 @@ func graphLifecycleTelemetry(logger *slog.Logger) contextfabric.GraphLifecycleTe
 // nil unless pglifecycle.EnvConfig.Enabled -- see openRuntime's own
 // construction. A nil value degrades falkorConfig.EpochResolver to nil too,
 // byte-identical to pre-CHAOS-3898 behavior.
-func openProjectionBackend(logger *slog.Logger, epochResolver contextfabric.OrgEpochResolver, lifecycleTelemetry contextfabric.GraphLifecycleTelemetry) (contextfabric.ProjectionBackend, func(context.Context) error, error) {
+func openProjectionBackend(logger *slog.Logger, metrics *hostedmetrics.Instruments, epochResolver contextfabric.OrgEpochResolver, lifecycleTelemetry contextfabric.GraphLifecycleTelemetry) (contextfabric.ProjectionBackend, func(context.Context) error, error) {
 	if !falkorgraph.Configured(os.LookupEnv) {
 		return nil, nil, nil
 	}
@@ -321,7 +343,7 @@ func openProjectionBackend(logger *slog.Logger, epochResolver contextfabric.OrgE
 	// was reaching a DIFFERENT, unconfigured logger instead, satisfying
 	// internal/contextfabric/AGENTS.md's "reported, never inferred"
 	// invariant only cosmetically.
-	falkorConfig.Telemetry = falkorGraphTelemetry(logger)
+	falkorConfig.Telemetry = falkorGraphTelemetryWithMetrics(logger, metrics)
 	// CHAOS-3898 S2a (design brief §2.0): startup/config assertion, and the
 	// §5b signal sink wired unconditionally -- see graphLifecycleTelemetry's
 	// own doc comment.

@@ -133,12 +133,24 @@ func (a *Adapter) ensureOrgGraph(ctx context.Context, key string) error {
 	}
 	gate := a.acquireBootstrapGate(key)
 	defer a.releaseBootstrapGate(key, gate)
-	gate.mu.Lock()
+	waited := !gate.mu.TryLock()
+	waitStart := time.Now()
+	if waited {
+		a.noteBootstrapContended(gate)
+		gate.mu.Lock()
+	}
 	defer gate.mu.Unlock()
 	a.bootstrapMu.RLock()
 	done = a.bootstrapDone[key]
 	generation := a.bootstrapGeneration[key]
 	a.bootstrapMu.RUnlock()
+	if waited {
+		outcome := BootstrapWaitTookOver
+		if done {
+			outcome = BootstrapWaitBootstrapped
+		}
+		a.recordBootstrapWait(ctx, outcome, time.Since(waitStart))
+	}
 	if done {
 		return nil
 	}
@@ -158,6 +170,8 @@ func (a *Adapter) ensureOrgGraph(ctx context.Context, key string) error {
 type bootstrapGate struct {
 	mu    sync.Mutex
 	users int
+	// contended counts the callers that found mu held; guarded by bootstrapMu.
+	contended int
 }
 
 func (a *Adapter) acquireBootstrapGate(key string) *bootstrapGate {
@@ -170,6 +184,22 @@ func (a *Adapter) acquireBootstrapGate(key string) *bootstrapGate {
 	}
 	gate.users++
 	return gate
+}
+
+// noteBootstrapContended counts a caller that found the gate held and must
+// block on it. A wait is recorded only for such a caller, so the caller that
+// runs the bootstrap is never counted as a waiter whatever the registration
+// order.
+func (a *Adapter) noteBootstrapContended(gate *bootstrapGate) {
+	a.bootstrapMu.Lock()
+	gate.contended++
+	a.bootstrapMu.Unlock()
+}
+
+func (a *Adapter) recordBootstrapWait(ctx context.Context, outcome string, wait time.Duration) {
+	if sink, ok := a.config.Telemetry.(BootstrapWaitTelemetry); ok {
+		sink.RecordBootstrapWait(ctx, outcome, wait)
+	}
 }
 
 func (a *Adapter) releaseBootstrapGate(key string, gate *bootstrapGate) {

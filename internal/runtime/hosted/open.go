@@ -346,6 +346,7 @@ func falkorGraphTelemetryWithMetrics(logger *slog.Logger, metrics *hostedmetrics
 	sink := falkorgraph.SlogTelemetry{Logger: logger}
 	if metrics != nil {
 		sink.QueryEmbedFallback = metrics.QueryEmbedFallback
+		sink.BootstrapWait = metrics.GraphBootstrapWait
 	}
 	return sink
 }

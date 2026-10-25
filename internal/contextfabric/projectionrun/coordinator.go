@@ -122,7 +122,12 @@ func (noopObserver) ObserveProjectionDrain(DrainOutcome) {}
 //
 // Content-safe by the same rule Observer documents: counts, IDs, durations,
 // and error text only.
-type SlogObserver struct{ Logger *slog.Logger }
+type SlogObserver struct {
+	Logger *slog.Logger
+	// PairFailure, when set, is called once per failed tick outcome with its
+	// failure class.
+	PairFailure func(failureClass string)
+}
 
 func (o SlogObserver) ObserveProjectionOutcome(outcome Outcome) {
 	logger := o.Logger
@@ -146,8 +151,12 @@ func (o SlogObserver) ObserveProjectionOutcome(outcome Outcome) {
 		//
 		// Same discipline as the embedder's model-identity error: name the
 		// classified thing, never the received text.
+		failureClass := classifyOutcomeError(outcome.Err)
 		logger.Error("context_fabric: projection tick failed; checkpoint held for replay",
-			append(attrs, "failure_class", contextfabric.SanitizeLogAttr(classifyOutcomeError(outcome.Err)))...)
+			append(attrs, "failure_class", contextfabric.SanitizeLogAttr(failureClass))...)
+		if o.PairFailure != nil {
+			o.PairFailure(failureClass)
+		}
 		return
 	}
 	logger.Debug("context_fabric: projection tick completed", attrs...)
