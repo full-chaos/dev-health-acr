@@ -7,12 +7,14 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"sort"
 	"strings"
 	"testing"
 
 	"golang.org/x/tools/go/packages"
 
+	"github.com/full-chaos/dev-health-acr/internal/cigates/sourceload"
 	"github.com/full-chaos/dev-health-acr/internal/testsupport/repopath"
 )
 
@@ -567,14 +569,11 @@ func moduleRootForParity(t *testing.T) string {
 
 func loadContractsPackage(t *testing.T, root string) *packages.Package {
 	t.Helper()
-	cfg := &packages.Config{
-		Dir:  root,
-		Mode: packages.NeedName | packages.NeedTypes | packages.NeedSyntax | packages.NeedTypesInfo,
-	}
-	pkgs, err := packages.Load(cfg, contractsV1ImportPath)
+	loader, err := sourceload.Load(root, []string{contractsV1ImportPath}, runtime.GOOS, runtime.GOARCH)
 	if err != nil {
-		t.Fatalf("packages.Load(%s): %v", contractsV1ImportPath, err)
+		t.Fatalf("sourceload.Load(%s): %v", contractsV1ImportPath, err)
 	}
+	pkgs := loader.Packages()
 	if n := packages.PrintErrors(pkgs); n > 0 {
 		t.Fatalf("packages.Load(%s) reported %d package error(s) (printed above)", contractsV1ImportPath, n)
 	}
