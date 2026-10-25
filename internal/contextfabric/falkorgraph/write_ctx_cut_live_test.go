@@ -1,6 +1,7 @@
 package falkorgraph
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -138,21 +139,23 @@ type replyGate struct {
 	hold    bool
 	release chan struct{}
 	writes  atomic.Int64
-	sentAt  atomic.Int64
-	sent    chan struct{}
+	// dialsBeforeSend counts dials made while recording before the probe went on the wire.
+	dialsBeforeSend atomic.Int64
+	sentAt          atomic.Int64
+	sent            chan struct{}
 }
 
 func newReplyGate() *replyGate {
 	return &replyGate{sent: make(chan struct{}, 16)}
 }
 
-// arm starts holding replies back; every later write counts as a send.
+// arm starts holding replies back; every later probe write counts as a send.
 func (g *replyGate) arm() {
 	g.armWith(true)
 }
 
-// record stamps every send and lets replies through: the send time of a call
-// whose reply is not held back.
+// record stamps every probe send and lets replies through: the send time of a
+// call whose reply is not held back.
 func (g *replyGate) record() {
 	g.armWith(false)
 }
@@ -161,6 +164,7 @@ func (g *replyGate) armWith(hold bool) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	g.writes.Store(0)
+	g.dialsBeforeSend.Store(0)
 	g.sentAt.Store(0)
 	g.hold = hold
 	for len(g.sent) > 0 {
@@ -194,6 +198,9 @@ func (g *replyGate) recording() bool {
 
 func (g *replyGate) dialer(base func(context.Context, string, string) (net.Conn, error)) func(context.Context, string, string) (net.Conn, error) {
 	return func(ctx context.Context, network, addr string) (net.Conn, error) {
+		if g.recording() && g.sentAt.Load() == 0 {
+			g.dialsBeforeSend.Add(1)
+		}
 		conn, err := base(ctx, network, addr)
 		if err != nil {
 			return nil, err
@@ -226,10 +233,15 @@ func (c *gatedConn) SetDeadline(t time.Time) error {
 	return c.Conn.SetDeadline(t)
 }
 
+// Write counts and stamps only the probe's own command. A new connection's
+// handshake (HELLO) is a write too, and stamping it would date a send of a
+// probe that never went on the wire. The stamp is taken before the write, and
+// kept only when the whole command was written.
 func (c *gatedConn) Write(b []byte) (int, error) {
+	began := time.Now().UnixNano()
 	n, err := c.Conn.Write(b)
-	if err == nil && c.gate.recording() {
-		c.gate.sentAt.CompareAndSwap(0, time.Now().UnixNano())
+	if err == nil && c.gate.recording() && bytes.Contains(b, []byte("GRAPH.QUERY")) {
+		c.gate.sentAt.CompareAndSwap(0, began)
 		c.gate.writes.Add(1)
 		select {
 		case c.gate.sent <- struct{}{}:
@@ -296,25 +308,47 @@ func TestLiveWriteCutOnARealFalkorDB(t *testing.T) {
 	// completing write into an error plus a landed write.
 	t.Run("deadline", func(t *testing.T) {
 		const runs = 10
+		const maxUnsent = 2
 		gate := newReplyGate()
 		client := gatedClient(t, *api.read.Conn.(*redis.Client).Options(), gate)
-		if err := client.Conn.Ping(context.Background()).Err(); err != nil {
-			t.Fatalf("warm the recording client: %v", err)
-		}
+		measured := make([]string, 0, runs)
+		var unsent []string
 		errorsSeen, deadlineErrors, landed, single, committedAfterCut, returnedBeforeCommit := 0, 0, 0, 0, 0, 0
-		for i := 0; i < runs; i++ {
+		for i := 0; len(measured) < runs; i++ {
 			run := fmt.Sprintf("deadline-%d", i)
+			// A cut drops the connection; warming here keeps the next dial and handshake out of the cut window.
+			if err := client.Conn.Ping(context.Background()).Err(); err != nil {
+				t.Fatalf("%s: warm the recording client: %v", run, err)
+			}
 			gate.record()
 			ctx, cancel := context.WithTimeout(context.Background(), cut)
 			deadline, _ := ctx.Deadline()
 			err := sendSlowProbe(ctx, client, key, run, n)
 			returnedMs := time.Now().UnixMilli()
 			cancel()
+			sends, dials := gate.writes.Load(), gate.dialsBeforeSend.Load()
 			sent := time.Time{}
 			if ns := gate.sentAt.Load(); ns != 0 {
 				sent = time.Unix(0, ns)
 			}
 			gate.open()
+			if dials != 0 {
+				t.Fatalf("%s: the call dialed %d connection(s) before the probe went on the wire: a handshake shared the %v cut window, so the run would not measure a cut of the write", run, dials, cut)
+			}
+			if classifyCut(sent, deadline, probeLanding{}) == cutNeverSent {
+				if sends != 0 {
+					t.Fatalf("%s: the probe write began at %s, not before the %s deadline, and still succeeded: the deadline did not bound the write", run, sent.Format(time.RFC3339Nano), deadline.Format(time.RFC3339Nano))
+				}
+				unsent = append(unsent, run)
+				if len(unsent) > maxUnsent {
+					t.Fatalf("%d calls never put the probe on the wire before the %v deadline (%v), more than %d: the cut is not being measured", len(unsent), cut, unsent, maxUnsent)
+				}
+				continue
+			}
+			measured = append(measured, run)
+			if sends != 1 {
+				t.Errorf("%s: the probe went on the wire %d times in one call, want 1 (a deadline cut must not resend)", run, sends)
+			}
 			if err != nil {
 				errorsSeen++
 			}
@@ -331,21 +365,25 @@ func TestLiveWriteCutOnARealFalkorDB(t *testing.T) {
 			switch classifyCut(sent, deadline, landing) {
 			case cutMidCommand:
 				committedAfterCut++
-			case cutNeverSent:
-				t.Fatalf("run %d: the %v deadline expired before the write was sent (send stamp %s, deadline %s): the host was too loaded to measure a cut, which is not a failure of the cut", i, cut, sent.Format(time.RFC3339Nano), deadline.Format(time.RFC3339Nano))
+			case cutNotLanded:
+				t.Errorf("%s: the probe went on the wire before the deadline and did not land within 30s", run)
 			}
 			if landing.atMs > returnedMs {
 				returnedBeforeCommit++
 			}
 		}
-		time.Sleep(probe + 200*time.Millisecond)
-		for i := 0; i < runs; i++ {
-			if got := readProbeLanding(t, api, key, fmt.Sprintf("deadline-%d", i)).count; got != 1 {
-				t.Errorf("run %d landed %d times after settling, want exactly 1 (a deadline cut must not resend)", i, got)
+		for _, run := range measured {
+			if got := readProbeLanding(t, api, key, run).count; got != 1 {
+				t.Errorf("%s landed %d times, want exactly 1 (a deadline cut must not resend)", run, got)
 			}
 		}
-		t.Logf("write ctx deadline cut: runs=%d cut=%v probe=%v errors=%d deadline_errors=%d landed=%d single=%d committed_after_deadline=%d returned_before_commit=%d",
-			runs, cut, probe, errorsSeen, deadlineErrors, landed, single, committedAfterCut, returnedBeforeCommit)
+		for _, run := range unsent {
+			if got := readProbeLanding(t, api, key, run).count; got != 0 {
+				t.Errorf("%s never put the probe on the wire, yet it landed %d times", run, got)
+			}
+		}
+		t.Logf("write ctx deadline cut: runs=%d cut=%v probe=%v errors=%d deadline_errors=%d landed=%d single=%d committed_after_deadline=%d returned_before_commit=%d unsent_retries=%d",
+			runs, cut, probe, errorsSeen, deadlineErrors, landed, single, committedAfterCut, returnedBeforeCommit, len(unsent))
 		if errorsSeen != runs || deadlineErrors != runs || landed != runs || single != runs || committedAfterCut != runs {
 			t.Fatalf("want every cut run to return a deadline error AND land exactly once, sent before the deadline and committed after it: errors=%d deadline_errors=%d landed=%d single=%d committed_after_deadline=%d of %d",
 				errorsSeen, deadlineErrors, landed, single, committedAfterCut, runs)
