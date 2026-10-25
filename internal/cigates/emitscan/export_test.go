@@ -160,3 +160,6 @@ func ProcessStartOf(pid int) (string, bool) {
 
 const HelperDirPrefix = helperDirPrefix
 const CreatorMarker = creatorMarker
+
+// PIDNamespace is the pid namespace of this process.
+func PIDNamespace() (string, bool) { return pidNamespace() }

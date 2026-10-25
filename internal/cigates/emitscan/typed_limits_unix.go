@@ -116,3 +116,10 @@ func ownedByThisUser(info os.FileInfo) bool {
 	stat, ok := info.Sys().(*syscall.Stat_t)
 	return ok && int(stat.Uid) == os.Getuid()
 }
+
+// pidNamespace names the process id namespace of this process (the link /proc/self/ns/pid). A process id and a start
+// time only mean something inside the namespace they were read in.
+func pidNamespace() (string, bool) {
+	link, err := os.Readlink("/proc/self/ns/pid")
+	return link, err == nil && link != ""
+}

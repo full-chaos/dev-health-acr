@@ -27,6 +27,18 @@ func helperDirWithMarker(t *testing.T, tmp, name, marker string) string {
 	return dir
 }
 
+// marker is a creator marker the way writeCreatorMarker writes it, for any pid, start time and namespace.
+func marker(t *testing.T, pid int, start, namespace string) string {
+	t.Helper()
+	if namespace == "" {
+		var ok bool
+		if namespace, ok = emitscan.PIDNamespace(); !ok {
+			t.Skip("no pid namespace link on this host")
+		}
+	}
+	return strconv.Itoa(pid) + " " + start + " " + namespace + "\n"
+}
+
 func exists(path string) bool {
 	_, err := os.Lstat(path)
 	return err == nil
@@ -52,16 +64,20 @@ func TestSweepRemovesOnlyDirectoriesOfGoneCreators(t *testing.T) {
 	self := os.Getpid()
 	selfStart, _ := emitscan.ProcessStartOf(self)
 
-	dead := helperDirWithMarker(t, tmp, prefix+"dead", strconv.Itoa(creator.Process.Pid)+" "+deadStart+"\n")
+	dead := helperDirWithMarker(t, tmp, prefix+"dead", marker(t, creator.Process.Pid, deadStart, ""))
 	live := helperDirWithMarker(t, tmp, prefix+"live", "")
 	emitscan.WriteCreatorMarker(live)
 	noMarker := helperDirWithMarker(t, tmp, prefix+"nomarker", "")
-	reused := helperDirWithMarker(t, tmp, prefix+"reused", strconv.Itoa(self)+" "+selfStart+"0\n")
+	reused := helperDirWithMarker(t, tmp, prefix+"reused", marker(t, self, selfStart+"0", ""))
+	badStart := helperDirWithMarker(t, tmp, prefix+"badstart", marker(t, self, "not-a-start", ""))
+	badStartDead := helperDirWithMarker(t, tmp, prefix+"badstartdead", marker(t, creator.Process.Pid, "-5", ""))
+	otherNamespace := helperDirWithMarker(t, tmp, prefix+"otherns", marker(t, creator.Process.Pid, deadStart, "pid:[1]"))
+	noNamespace := helperDirWithMarker(t, tmp, prefix+"nons", strconv.Itoa(creator.Process.Pid)+" "+deadStart+"\n")
 	garbage := helperDirWithMarker(t, tmp, prefix+"garbage", "not a marker\n")
-	elsewhere := helperDirWithMarker(t, tmp, "other-"+"dead", strconv.Itoa(creator.Process.Pid)+" "+deadStart+"\n")
+	elsewhere := helperDirWithMarker(t, tmp, "other-"+"dead", marker(t, creator.Process.Pid, deadStart, ""))
 	linked := helperDirWithMarker(t, tmp, prefix+"linked", "")
 	target := filepath.Join(tmp, "marker-target")
-	if err := os.WriteFile(target, []byte(strconv.Itoa(creator.Process.Pid)+" "+deadStart+"\n"), 0o600); err != nil {
+	if err := os.WriteFile(target, []byte(marker(t, creator.Process.Pid, deadStart, "")), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.Symlink(target, filepath.Join(linked, emitscan.CreatorMarker)); err != nil {
@@ -79,6 +95,10 @@ func TestSweepRemovesOnlyDirectoriesOfGoneCreators(t *testing.T) {
 		"no marker":                             {noMarker, true},
 		"a reused pid with another start time":  {reused, false},
 		"an unparsable marker":                  {garbage, true},
+		"a live creator with a malformed start": {badStart, true},
+		"a gone creator with a malformed start": {badStartDead, true},
+		"a creator in another pid namespace":    {otherNamespace, true},
+		"a marker without a pid namespace":      {noNamespace, true},
 		"a directory without the helper prefix": {elsewhere, true},
 		"a marker that is a symlink":            {linked, true},
 	} {
@@ -97,7 +117,8 @@ func TestCreatorMarkerNamesTheRunningProcess(t *testing.T) {
 		t.Skipf("no marker written on this host: %v", err)
 	}
 	start, _ := emitscan.ProcessStartOf(os.Getpid())
-	if want := strconv.Itoa(os.Getpid()) + " " + start; strings.TrimSpace(string(data)) != want {
+	namespace, _ := emitscan.PIDNamespace()
+	if want := strconv.Itoa(os.Getpid()) + " " + start + " " + namespace; strings.TrimSpace(string(data)) != want {
 		t.Fatalf("marker = %q, want %q", data, want)
 	}
 }

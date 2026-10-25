@@ -941,22 +941,25 @@ const (
 	procGone
 )
 
-// writeCreatorMarker records, in the helper's directory, the process that made it and when that process started. A killed
-// run cannot remove its directory; the next run finds the marker and removes the directory only if the creator is gone.
-// Where the start time is not known no marker is written, and the directory is never swept.
+// writeCreatorMarker records, in the helper's directory, the process that made it, when that process started and the pid
+// namespace both were read in. A killed run cannot remove its directory; the next run finds the marker and removes the
+// directory only if the creator is gone. Where the start time or the namespace is not known no marker is written, and the
+// directory is never swept.
 func writeCreatorMarker(dir string) {
 	pid := os.Getpid()
 	start, status := processStart(pid)
-	if status != procKnown {
+	namespace, ok := pidNamespace()
+	if status != procKnown || !ok {
 		return
 	}
-	_ = os.WriteFile(filepath.Join(dir, creatorMarker), []byte(strconv.Itoa(pid)+" "+start+"\n"), 0o600)
+	_ = os.WriteFile(filepath.Join(dir, creatorMarker), []byte(strconv.Itoa(pid)+" "+start+" "+namespace+"\n"), 0o600)
 }
 
 // sweepStaleHelperDirs removes the helper directories under tmp that a killed run left behind: directories of this user
 // whose marker names a process that no longer exists with that start time. Every lane on a host runs as the same user,
-// so age is no evidence that a directory is unused. A directory without a readable marker, with an unparsable one, or
-// whose creator cannot be looked up is left alone.
+// so age is no evidence that a directory is unused. A directory without a readable marker, with an unparsable one (the
+// start time must be a number), made in another pid namespace than this process's, or whose creator cannot be looked up
+// is left alone.
 func sweepStaleHelperDirs(tmp string) {
 	entries, err := os.ReadDir(tmp)
 	if err != nil {
@@ -979,9 +982,17 @@ func sweepStaleHelperDirs(tmp string) {
 		if err != nil {
 			continue
 		}
-		pidText, startText, ok := strings.Cut(strings.TrimSpace(string(data)), " ")
-		pid, err := strconv.Atoi(pidText)
-		if !ok || err != nil || pid <= 0 || startText == "" {
+		fields := strings.Fields(string(data))
+		if len(fields) != 3 {
+			continue
+		}
+		pid, pidErr := strconv.Atoi(fields[0])
+		_, startErr := strconv.ParseUint(fields[1], 10, 64)
+		if pidErr != nil || pid <= 0 || startErr != nil {
+			continue
+		}
+		startText := fields[1]
+		if namespace, ok := pidNamespace(); !ok || namespace != fields[2] {
 			continue
 		}
 		start, status := processStart(pid)

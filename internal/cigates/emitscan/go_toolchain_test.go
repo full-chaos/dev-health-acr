@@ -37,10 +37,30 @@ func readCalls(t *testing.T, logFile string) string {
 	return string(data)
 }
 
+// captureStderr redirects standard error to a file for the test and returns a reader of what was written.
+func captureStderr(t *testing.T) func() string {
+	t.Helper()
+	file, err := os.CreateTemp(t.TempDir(), "stderr")
+	if err != nil {
+		t.Fatal(err)
+	}
+	saved := os.Stderr
+	os.Stderr = file
+	t.Cleanup(func() { os.Stderr = saved })
+	return func() string {
+		data, err := os.ReadFile(file.Name())
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(data)
+	}
+}
+
 // A go command whose toolchain is not the one that built the scanner is refused by name, before any `go list` or
-// `go build` runs with it.
+// `go build` runs with it, and the refusal is printed once however many steps ask.
 func TestGoToolchainOtherThanTheScannersIsRefusedByName(t *testing.T) {
 	calls := fakeGo(t, "go1.0.0")
+	stderr := captureStderr(t)
 	_, err := emitscan.GoBinary()
 	if err == nil {
 		t.Fatal("GoBinary() accepted a go command of another toolchain")
@@ -56,6 +76,12 @@ func TestGoToolchainOtherThanTheScannersIsRefusedByName(t *testing.T) {
 	if got := readCalls(t, calls); strings.Contains(got, "list") || strings.Contains(got, "build") {
 		t.Fatalf("the refused go command ran a step: %q", got)
 	}
+	if _, err := emitscan.GoBinary(); err == nil {
+		t.Fatal("a second GoBinary() call accepted the go command")
+	}
+	if n := strings.Count(stderr(), "put the matching toolchain first on PATH"); n != 1 {
+		t.Fatalf("the refusal was printed %d times, want once", n)
+	}
 }
 
 // With the matching toolchain, `go list` runs through the resolved command and with GOTOOLCHAIN=local, whatever the
@@ -63,6 +89,15 @@ func TestGoToolchainOtherThanTheScannersIsRefusedByName(t *testing.T) {
 func TestGoListRunsWithTheResolvedGoAndALocalToolchain(t *testing.T) {
 	t.Setenv("GOTOOLCHAIN", "auto")
 	calls := fakeGo(t, runtime.Version())
+	resolved, err := emitscan.GoBinary()
+	if err != nil {
+		t.Fatalf("GoBinary() error = %v", err)
+	}
+	if filepath.Dir(resolved) != filepath.Dir(calls) {
+		t.Fatalf("GoBinary() = %s, want the fake go at %s", resolved, filepath.Dir(calls))
+	}
+	// With the fake gone from PATH, only a go command run by its resolved path still reaches it.
+	t.Setenv("PATH", t.TempDir())
 	if err := emitscan.ExportFiles(t.TempDir()); err != nil {
 		t.Fatalf("ExportFiles() error = %v", err)
 	}
