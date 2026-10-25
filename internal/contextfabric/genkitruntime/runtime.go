@@ -571,7 +571,23 @@ const (
 	// operator configure a value this package itself cannot observe
 	// correctly; measured directly (TestFormatSynthesisDrawDigestsFitsTheLogSanitizerBudget).
 	MaxSynthesisResynthesisAttemptsCeiling = 3
+	// synthesisBytesPerToken is the floor of encoded bytes per token the
+	// synthesis input token cap estimates with. It is an estimate: a prompt
+	// denser than this is undercounted by the same ratio.
+	synthesisBytesPerToken = 3
 )
+
+// synthesisPromptOverheadBytes is what every synthesize call sends besides the
+// encoded input: the system prompt and the output schema.
+var synthesisPromptOverheadBytes = len(synthesisprompt.System()) + len(synthesisprompt.OutputSchema())
+
+// MinSynthesisInputTokens is the smallest synthesis input token cap: one that
+// still leaves the smallest input the byte bound admits (8 KiB).
+var MinSynthesisInputTokens = (synthesisPromptOverheadBytes + 8<<10 + synthesisBytesPerToken - 1) / synthesisBytesPerToken
+
+func estimateSynthesisInputTokens(inputBytes int) int {
+	return (synthesisPromptOverheadBytes + inputBytes + synthesisBytesPerToken - 1) / synthesisBytesPerToken
+}
 
 type Config struct {
 	Provider string
@@ -607,6 +623,10 @@ type Config struct {
 	Timeout               time.Duration
 	MaxAttempts           int
 	MaxInputBytes         int
+	// MaxSynthesisInputTokens caps the estimated tokens of one synthesize
+	// prompt before it is sent; 0 is off. An input over it is answered as a
+	// ModelInputOverflow, so the caller cuts the facts and discloses the cut.
+	MaxSynthesisInputTokens int
 	// MaxSynthesisResynthesisAttempts (CHAOS-5655) bounds SynthesizeAnswer's
 	// own re-sampling loop: when the model returns output that
 	// draft.ValidateAgainst rejects, the SAME synthesis prompt is re-sent
@@ -915,6 +935,9 @@ func newWithGenerator(config Config, gen generator) (*Runtime, error) {
 	}
 	if config.MaxInputBytes < 8<<10 || config.MaxInputBytes > 1<<20 {
 		return nil, errors.New("model input bound must be between 8 KiB and 1 MiB")
+	}
+	if config.MaxSynthesisInputTokens != 0 && config.MaxSynthesisInputTokens < MinSynthesisInputTokens {
+		return nil, fmt.Errorf("synthesis input token cap must be 0 or at least %d", MinSynthesisInputTokens)
 	}
 	if config.Logger == nil {
 		config.Logger = slog.Default()
@@ -1843,11 +1866,14 @@ func (r *Runtime) SynthesizeAnswer(ctx context.Context, principal storage.Princi
 	if strings.TrimSpace(principal.OrgID) == "" {
 		return contextfabric.SynthesisDraft{}, contextfabric.ModelExecutionReceipt{}, errors.New("authenticated organization is required")
 	}
-	encoded, err := synthesisprompt.UserPayload(principal.OrgID, input, r.config.MaxInputBytes)
+	encoded, err := synthesisprompt.UserPayload(principal.OrgID, input, r.synthesisInputByteBound())
 	if err != nil {
 		return contextfabric.SynthesisDraft{}, contextfabric.ModelExecutionReceipt{}, err
 	}
 	trace := newSynthesisInputTrace(encoded, input)
+	if r.config.MaxSynthesisInputTokens > 0 {
+		trace.TokenEstimate, trace.TokenCap = estimateSynthesisInputTokens(len(encoded)), r.config.MaxSynthesisInputTokens
+	}
 	inputTrace = &trace
 
 	// setDiagnostics populates the two rejection fields from the error whose
@@ -2657,6 +2683,20 @@ type synthesisInputTrace struct {
 	DriverCandidates         int
 	CohortMembers            int
 	LabelCanonicalization    contextfabric.SubjectLabelCanonicalization
+	// TokenEstimate and TokenCap are set only when the token cap is on.
+	TokenEstimate int
+	TokenCap      int
+}
+
+// synthesisInputByteBound is the encoded-input bound of one synthesize call:
+// the byte bound, lowered to what the token cap leaves after the prompt
+// overhead when the cap is on. An input within it has an estimate within the
+// cap.
+func (r *Runtime) synthesisInputByteBound() int {
+	if r.config.MaxSynthesisInputTokens <= 0 || r.config.MaxSynthesisInputTokens >= estimateSynthesisInputTokens(r.config.MaxInputBytes) {
+		return r.config.MaxInputBytes
+	}
+	return r.config.MaxSynthesisInputTokens*synthesisBytesPerToken - synthesisPromptOverheadBytes
 }
 
 func newSynthesisInputTrace(encoded []byte, input contextfabric.SynthesisInput) synthesisInputTrace {
@@ -2716,7 +2756,11 @@ func (r *Runtime) logSynthesizeInput(ctx context.Context, orgID, requestID strin
 		zeroClaimRedraw,
 		requestID,
 	)
-	r.config.Logger.InfoContext(ctx, eventspec.SynthesisInput.Msg, fields.SlogArgs()...)
+	args := fields.SlogArgs()
+	if trace.TokenCap > 0 {
+		args = append(args, "input_token_estimate", trace.TokenEstimate, "input_token_cap", trace.TokenCap)
+	}
+	r.config.Logger.InfoContext(ctx, eventspec.SynthesisInput.Msg, args...)
 }
 
 // drawsRetried mirrors attemptsRetried at draw granularity: the count of

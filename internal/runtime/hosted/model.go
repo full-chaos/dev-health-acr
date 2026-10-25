@@ -70,6 +70,38 @@ func synthesisResynthesisAttemptsFromEnv(lookup func(string) (string, bool), log
 	return parsed
 }
 
+// EnvSynthesisMaxInputTokens caps the estimated tokens of one synthesize
+// prompt, for the deployment model and every per-organization model alike.
+// Unset or 0 is off. A positive value below genkitruntime.MinSynthesisInputTokens
+// is raised to it with one WARN: the operator asked for a strict bound, so the
+// strictest one the runtime takes applies. A negative or non-numeric value
+// never stops composition: it leaves the cap off and logs one WARN.
+const EnvSynthesisMaxInputTokens = "ACR_CONTEXT_FABRIC_SYNTHESIS_MAX_INPUT_TOKENS"
+
+func synthesisMaxInputTokensFromEnv(lookup func(string) (string, bool), logger *slog.Logger) int {
+	raw, _ := lookup(EnvSynthesisMaxInputTokens)
+	value := strings.TrimSpace(raw)
+	if value == "" {
+		return 0
+	}
+	parsed, err := strconv.Atoi(value)
+	if err == nil && (parsed == 0 || parsed >= genkitruntime.MinSynthesisInputTokens) {
+		return parsed
+	}
+	if err == nil && parsed > 0 {
+		logger.Warn("context fabric synthesis input token cap below the minimum, raised to the minimum",
+			"variable", EnvSynthesisMaxInputTokens,
+			"value", parsed,
+			"minimum", genkitruntime.MinSynthesisInputTokens)
+		return genkitruntime.MinSynthesisInputTokens
+	}
+	logger.Warn("context fabric synthesis input token cap malformed, cap off",
+		"variable", EnvSynthesisMaxInputTokens,
+		"value", contextfabric.SanitizeLogAttr(value),
+		"minimum", genkitruntime.MinSynthesisInputTokens)
+	return 0
+}
+
 // newContextFabricModelRuntime builds the Context Fabric model runtime from
 // the environment, or returns (nil, nil) when no model provider is
 // configured (CHAOS-3770).
@@ -132,6 +164,7 @@ func contextFabricModelConfigFromEnv(lookup func(string) (string, bool), telemet
 	// knob's malformed-value policy deliberately differs from every
 	// ACR_CONTEXT_FABRIC_MODEL_* variable that function owns.
 	modelConfig.MaxSynthesisResynthesisAttempts = synthesisResynthesisAttemptsFromEnv(lookup, logger)
+	modelConfig.MaxSynthesisInputTokens = synthesisMaxInputTokensFromEnv(lookup, logger)
 	return modelConfig, nil
 }
 

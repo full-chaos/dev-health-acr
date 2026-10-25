@@ -78,6 +78,8 @@ var typedBenignKeys = map[string]string{
 	"deviceauthorizationsremaining":           "int",
 	"pass":                                    "int",
 	"evaluatedpass":                           "int",
+	"inputtokenestimate":                      "int",
+	"inputtokencap":                           "int",
 	"authorizationgrantmeasured":              "bool",
 	"authorizationgrantorganizationwide":      "bool",
 	"devhealthentitlementtokenfileconfigured": "bool",
