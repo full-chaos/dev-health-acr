@@ -386,11 +386,7 @@ func TestSelfReferencingAliasChainsAreFast(t *testing.T) {
 		b.WriteString("\ta = a\n\ta = c\n\tc = a\n")
 	}
 	b.WriteString("\t_ = c(\"api_token\", \"x\")\n}\n")
-	start := time.Now()
-	got := rules(scanSource(t, header+b.String()))
-	if elapsed := time.Since(start); elapsed > 100*time.Millisecond {
-		t.Fatalf("scan took %s on a self-referencing alias chain", elapsed)
-	}
+	got := timed(t, "self-referencing alias chain", 100*time.Millisecond, func() string { return rules(scanSource(t, header+b.String())) })
 	if !strings.Contains(got, "R1") {
 		t.Fatalf("rules = %q, want R1", got)
 	}
