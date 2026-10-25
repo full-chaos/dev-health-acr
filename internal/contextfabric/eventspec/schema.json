@@ -12757,6 +12757,9 @@
         "presence": "required",
         "closed_vocabulary": [
           "continuation_context_unverifiable",
+          "member_kind_unservable",
+          "frame_invariant_violated",
+          "unspecified",
           "none"
         ]
       },
