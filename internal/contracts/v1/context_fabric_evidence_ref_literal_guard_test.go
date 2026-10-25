@@ -9,12 +9,14 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"strconv"
 	"strings"
 	"testing"
 
 	"golang.org/x/tools/go/packages"
 
+	"github.com/full-chaos/dev-health-acr/internal/cigates/sourceload"
 	"github.com/full-chaos/dev-health-acr/internal/testsupport/repopath"
 )
 
@@ -287,14 +289,11 @@ func TestAllowlistedAcrV1LiteralsEndAtThePrefixBoundary(t *testing.T) {
 		patterns = append(patterns, importPath)
 	}
 
-	cfg := &packages.Config{
-		Dir:  root,
-		Mode: packages.NeedName | packages.NeedSyntax | packages.NeedTypes | packages.NeedTypesInfo,
-	}
-	pkgs, err := packages.Load(cfg, patterns...)
+	loader, err := sourceload.Load(root, patterns, runtime.GOOS, runtime.GOARCH)
 	if err != nil {
-		t.Fatalf("packages.Load(%v): %v", patterns, err)
+		t.Fatalf("sourceload.Load(%v): %v", patterns, err)
 	}
+	pkgs := loader.Packages()
 	if n := packages.PrintErrors(pkgs); n > 0 {
 		t.Fatalf("packages.Load(%v) reported %d package error(s) (printed above) -- an allowlisted package did not type-check cleanly", patterns, n)
 	}
