@@ -54,7 +54,7 @@ func f() { args := []any{"pass", uint8(1)}; _ = cap(args) }`, mismatch},
 		args := []any{"pass", uint8(2)}
 		slog.Info("m", args...)
 	}
-}`, mismatch + "," + mismatch},
+}`, mismatch},
 		{"logged outer list shadowed by a dead inner list", `func f() {
 	args := []any{"pass", uint8(1)}
 	slog.Info("m", args...)
@@ -62,7 +62,25 @@ func f() { args := []any{"pass", uint8(1)}; _ = cap(args) }`, mismatch},
 		args := []any{"pass", uint8(2)}
 		_ = len(args)
 	}
+}`, mismatch},
+		{"package variable assigned a literal here and logged elsewhere", `var shared []any
+func f() { shared = []any{"pass", uint8(1)}; _ = len(shared) }
+func g() { slog.Info("m", shared...) }`, mismatch},
+		{"package variable grown by append here and logged elsewhere", `var shared []any
+func f() { shared = append(shared, "pass", uint8(1)); _ = len(shared) }
+func g() { slog.Info("m", shared...) }`, mismatch},
+		{"package variable grown by append beside a dead local list", `var shared []any
+func f() { dead := []any{"note", 1}; _ = len(dead); shared = append(shared, "pass", uint8(1)) }
+func g() { slog.Info("m", shared...) }`, mismatch},
+		{"receiver grown by append", `type L []any
+func (r L) f() { r = append(r, "pass", uint8(1)); _ = len(r) }`, mismatch},
+		{"assign-back from another list", `func f(o []any) {
+	args := []any{"pass", uint8(1)}
+	args = append(o, "pass", uint8(2))
+	_ = len(args)
 }`, mismatch + "," + mismatch},
+		{"blank assigned literal stays checked", `func f() { _ = []any{"pass", uint8(1)} }`, mismatch},
+		{"list defined by append is not a literal list", `func f(o []any) { args := append(o, "pass", uint8(1)); _ = len(args) }`, mismatch},
 	}
 	for _, c := range cases {
 		got := benignDetails(scanSource(t, header+c.body+"\n"))

@@ -1350,11 +1350,11 @@ func (s *fileScan) Visit(node ast.Node) ast.Visitor {
 	switch fn := node.(type) {
 	case *ast.FuncDecl:
 		s.funcs = append(s.funcs, fn.Name.Name)
-		s.markUnloggedLists(fn.Type, fn.Body)
+		s.markUnloggedLists(fn.Body)
 		s.taints = append(s.taints, rawPathIdents(fn.Body, s.pkg.rawFuncs, s.pkg.budget))
 	case *ast.FuncLit:
 		if len(s.taints) == 0 {
-			s.markUnloggedLists(fn.Type, fn.Body)
+			s.markUnloggedLists(fn.Body)
 		}
 		if len(s.taints) > 0 { // the enclosing function's pass already walked this body
 			s.taints = append(s.taints, s.taints[len(s.taints)-1])

@@ -5,23 +5,35 @@ import (
 	"go/types"
 )
 
+type listDecl struct {
+	id   *ast.Ident
+	node ast.Node
+}
+
+type listAppend struct {
+	lhs, first, fun *ast.Ident
+	call            *ast.CallExpr
+}
+
+type listMeasure struct{ arg, fun *ast.Ident }
+
 // markUnloggedLists records, for one top-level function body, the []any literals and append calls that build a list
-// no log call can read: a local list whose every use is the declaration, an assign-back append, or len/cap. Any other
-// use of the name (an argument, a spread, an index, a range, a return, a closure) leaves the list checked, and one
-// name is one list across every scope of the body, so a shadowing inner list keeps the outer one checked.
-func (s *fileScan) markUnloggedLists(fnType *ast.FuncType, body *ast.BlockStmt) {
+// no log call can read: a variable defined in the body by a []any literal whose every use is its definition, an
+// assign-back append, or len/cap, with append, len and cap the predeclared functions. Variables are told apart by
+// type information, never by name, so a package variable, a receiver, a parameter or a shadowing variable is not
+// this list. Without type information nothing is marked and every list stays checked.
+func (s *fileScan) markUnloggedLists(body *ast.BlockStmt) {
 	if body == nil {
 		return
 	}
-	candidates := map[string][]ast.Node{}
-	allowed := map[*ast.Ident]bool{}
-	builtins := map[string][]*ast.Ident{} // per list name, the append/len/cap identifiers its uses rely on
+	var decls []listDecl
+	var appends []listAppend
+	var measures []listMeasure
 	noteList := func(lhs ast.Expr, rhs ast.Expr) {
 		id, ok := lhs.(*ast.Ident)
 		lit, isLit := rhs.(*ast.CompositeLit)
 		if ok && isLit && isAnySlice(lit.Type) {
-			candidates[id.Name] = append(candidates[id.Name], lit)
-			allowed[id] = true
+			decls = append(decls, listDecl{id, lit})
 		}
 	}
 	inspectCharged(s.pkg.budget, body, func(node ast.Node) bool {
@@ -33,13 +45,11 @@ func (s *fileScan) markUnloggedLists(fnType *ast.FuncType, body *ast.BlockStmt) 
 			noteList(n.Lhs[0], n.Rhs[0])
 			lhs, ok := n.Lhs[0].(*ast.Ident)
 			call, isCall := n.Rhs[0].(*ast.CallExpr)
-			if !ok || !isCall || n.Tok.String() != "=" || !isBuiltinAppend(call) {
+			if !ok || !isCall || !isBuiltinAppend(call) || call.Ellipsis != 0 {
 				return true
 			}
-			if first, same := call.Args[0].(*ast.Ident); same && first.Name == lhs.Name && call.Ellipsis == 0 {
-				candidates[lhs.Name] = append(candidates[lhs.Name], call)
-				builtins[lhs.Name] = append(builtins[lhs.Name], call.Fun.(*ast.Ident))
-				allowed[lhs], allowed[first] = true, true
+			if first, same := call.Args[0].(*ast.Ident); same {
+				appends = append(appends, listAppend{lhs, first, call.Fun.(*ast.Ident), call})
 			}
 		case *ast.ValueSpec:
 			if len(n.Names) == 1 && len(n.Values) == 1 {
@@ -48,59 +58,93 @@ func (s *fileScan) markUnloggedLists(fnType *ast.FuncType, body *ast.BlockStmt) 
 		case *ast.CallExpr:
 			if id, ok := n.Fun.(*ast.Ident); ok && (id.Name == "len" || id.Name == "cap") && len(n.Args) == 1 {
 				if arg, isIdent := n.Args[0].(*ast.Ident); isIdent {
-					allowed[arg] = true
-					builtins[arg.Name] = append(builtins[arg.Name], id)
+					measures = append(measures, listMeasure{arg, id})
 				}
 			}
 		}
 		return true
 	})
-	live := map[string]bool{}
-	for _, root := range []ast.Node{fnType, body} {
-		inspectCharged(s.pkg.budget, root, func(node ast.Node) bool {
-			if id, ok := node.(*ast.Ident); ok && !allowed[id] {
-				live[id.Name] = true
-			}
-			return true
-		})
+	if len(decls) == 0 || s.pkg.budget.over {
+		return
 	}
+	typed := s.pkg.typedInfo()
+	if typed.err != nil {
+		return
+	}
+	lists := map[types.Object]bool{}
+	for _, decl := range decls {
+		if v, ok := typed.info.Defs[decl.id].(*types.Var); ok {
+			lists[v] = true
+		}
+	}
+	allowed := map[*ast.Ident]bool{}
+	for _, decl := range decls {
+		allowed[decl.id] = true
+	}
+	var unlogged []ast.Node
+	for _, decl := range decls {
+		unlogged = append(unlogged, decl.node)
+	}
+	for _, app := range appends {
+		if typed.info.Uses[app.lhs] != typed.info.Uses[app.first] || !isPredeclared(typed.info, app.fun) {
+			continue
+		}
+		allowed[app.lhs], allowed[app.first] = true, true
+		unlogged = append(unlogged, app.call)
+	}
+	for _, m := range measures {
+		if isPredeclared(typed.info, m.fun) {
+			allowed[m.arg] = true
+		}
+	}
+	live := map[types.Object]bool{}
+	inspectCharged(s.pkg.budget, body, func(node ast.Node) bool {
+		if id, ok := node.(*ast.Ident); ok && !allowed[id] {
+			if obj := objectOf(typed.info, id); obj != nil && lists[obj] {
+				live[obj] = true
+			}
+		}
+		return true
+	})
 	if s.pkg.budget.over {
 		return
 	}
-	for name, nodes := range candidates {
-		if live[name] || !s.resolveToBuiltins(builtins[name]) {
-			continue
+	if s.unlogged == nil {
+		s.unlogged = map[ast.Node]bool{}
+	}
+	owner := func(node ast.Node) types.Object {
+		switch n := node.(type) {
+		case *ast.CompositeLit:
+			for _, decl := range decls {
+				if decl.node == n {
+					return typed.info.Defs[decl.id]
+				}
+			}
+		case *ast.CallExpr:
+			for _, app := range appends {
+				if app.call == n {
+					return typed.info.Uses[app.lhs]
+				}
+			}
 		}
-		if s.unlogged == nil {
-			s.unlogged = map[ast.Node]bool{}
-		}
-		for _, node := range nodes {
+		return nil
+	}
+	for _, node := range unlogged {
+		if obj := owner(node); obj != nil && lists[obj] && !live[obj] {
 			s.unlogged[node] = true
 		}
 	}
 }
 
-// isBuiltinAppend reports a call written append(x, ...) with at least one argument. The scan reads the name only, as
-// the append site in call does; a shadowing function named append is checked there against the type information.
+// isBuiltinAppend reports a call written append(x, ...) with at least one argument.
 func isBuiltinAppend(call *ast.CallExpr) bool {
 	id, ok := call.Fun.(*ast.Ident)
 	return ok && id.Name == "append" && len(call.Args) >= 1
 }
 
-// resolveToBuiltins reports that every identifier is the predeclared function it is spelled as. A function or variable
-// of the same name (append, len, cap) could log its argument, so without type information the list stays checked.
-func (s *fileScan) resolveToBuiltins(idents []*ast.Ident) bool {
-	if len(idents) == 0 {
-		return true
-	}
-	typed := s.pkg.typedInfo()
-	if typed.err != nil {
-		return false
-	}
-	for _, id := range idents {
-		if _, ok := typed.info.Uses[id].(*types.Builtin); !ok {
-			return false
-		}
-	}
-	return true
+// isPredeclared reports that an identifier is the predeclared function it is spelled as: a function or variable of the
+// same name could log its argument.
+func isPredeclared(info *types.Info, id *ast.Ident) bool {
+	_, ok := info.Uses[id].(*types.Builtin)
+	return ok
 }
