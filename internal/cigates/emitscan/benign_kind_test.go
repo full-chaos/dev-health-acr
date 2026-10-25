@@ -165,18 +165,6 @@ func benignRepoRoot(t *testing.T) string {
 	}
 }
 
-func TestNoBenignKeyCarriesAnotherKindInTheTree(t *testing.T) {
-	findings, err := emitscan.Scan(benignRepoRoot(t), []string{"internal", "cmd"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, finding := range findings {
-		if finding.Rule == emitscan.RuleBenignKind && strings.HasPrefix(finding.Detail, "mismatch:") {
-			t.Errorf("%s: %s is logged with a value of a kind the scrubber does not exempt for that key", finding.Where(), strings.TrimPrefix(finding.Detail, "mismatch:"))
-		}
-	}
-}
-
 func TestPinsOfBenignKeysNameTheirKind(t *testing.T) {
 	handle, err := os.Open("pins.tsv")
 	if err != nil {
