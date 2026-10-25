@@ -115,16 +115,70 @@ func TestConstFixpointBounded(t *testing.T) {
 	}
 }
 
+// timedScale is the factor timed applies to every limit; the race detector slows the scan, see raceSlowdown.
+var timedScale = raceSlowdown
+
+type errorfer interface {
+	Helper()
+	Errorf(format string, args ...any)
+}
+
 func timed(t *testing.T, id string, limit time.Duration, run func() string) string {
 	t.Helper()
-	start := cpuTime(t)
+	return timedScaled(t, cpuTime, id, limit, timedScale, run)
+}
+
+func timedScaled(t errorfer, clock func(*testing.T) time.Duration, id string, limit time.Duration, scale int, run func() string) string {
+	t.Helper()
+	tt, _ := t.(*testing.T)
+	start := clock(tt)
 	got := run()
-	elapsed := cpuTime(t) - start
-	t.Logf("%s: %s cpu", id, elapsed)
-	if elapsed > limit*raceSlowdown {
-		t.Errorf("%s: used %s cpu, want < %s", id, elapsed, limit)
+	elapsed := clock(tt) - start
+	if tt != nil {
+		tt.Logf("%s: %s cpu", id, elapsed)
+	}
+	enforced := limit * time.Duration(scale)
+	if elapsed > enforced {
+		t.Errorf("%s: used %s cpu, want < %s", id, elapsed, enforced)
 	}
 	return got
+}
+
+type recordingT struct{ msgs []string }
+
+func (r *recordingT) Helper() {}
+func (r *recordingT) Errorf(format string, args ...any) {
+	r.msgs = append(r.msgs, fmt.Sprintf(format, args...))
+}
+
+// The failure text must name the limit that was enforced (after the scale), and timed must pass the race scale.
+func TestTimedFailureNamesEnforcedLimit(t *testing.T) {
+	rows := []struct {
+		scale   int
+		elapsed time.Duration
+		want    string
+	}{
+		{1, 150 * time.Millisecond, "j1: used 150ms cpu, want < 100ms"},
+		{10, 1500 * time.Millisecond, "j1: used 1.5s cpu, want < 1s"},
+	}
+	for _, row := range rows {
+		var calls int
+		clock := func(*testing.T) time.Duration {
+			calls++
+			if calls == 1 {
+				return 0
+			}
+			return row.elapsed
+		}
+		rec := &recordingT{}
+		timedScaled(rec, clock, "j1", 100*time.Millisecond, row.scale, func() string { return "" })
+		if len(rec.msgs) != 1 || rec.msgs[0] != row.want {
+			t.Errorf("scale %d: messages = %q, want [%q]", row.scale, rec.msgs, row.want)
+		}
+	}
+	if timedScale != raceSlowdown {
+		t.Errorf("timedScale = %d, want raceSlowdown %d", timedScale, raceSlowdown)
+	}
 }
 
 // A right-nested concatenation must cost linear work, and the key it builds must still be read.
