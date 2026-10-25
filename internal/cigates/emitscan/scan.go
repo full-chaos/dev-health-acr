@@ -546,7 +546,8 @@ func oversizeCost(group []parsedFile) bool {
 	return false
 }
 
-func packageInfo(ctx context.Context, root string, group []parsedFile, helperCPU *atomic.Int64) *pkgInfo {
+// syntaxNodes is the number of syntax nodes in the files of one package.
+func syntaxNodes(group []parsedFile) int {
 	nodes := 0
 	for _, parsed := range group {
 		ast.Inspect(parsed.file, func(node ast.Node) bool {
@@ -556,6 +557,11 @@ func packageInfo(ctx context.Context, root string, group []parsedFile, helperCPU
 			return true
 		})
 	}
+	return nodes
+}
+
+func packageInfo(ctx context.Context, root string, group []parsedFile, helperCPU *atomic.Int64) *pkgInfo {
+	nodes := syntaxNodes(group)
 	info := &pkgInfo{helperCPU: helperCPU, consts: map[string][]string{}, rawFuncs: map[string]bool{}, constNames: map[string]bool{},
 		stringTypes: map[string]bool{}, keyAliases: map[types.Object]ast.Expr{}, aliases: map[string][][2]string{}, saturated: map[string]bool{}, census: map[[3]string]map[string]bool{}, root: root, group: group, budget: &budget{limit: workBase + workPerNode*nodes, ctx: ctx}}
 	for _, parsed := range group {

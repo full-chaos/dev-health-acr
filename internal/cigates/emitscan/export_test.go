@@ -20,6 +20,9 @@ func ChildStats() (cpuNanos, rssKB, count int64) {
 	return childStats.cpuNanos.Load(), childStats.rssKB.Load(), childStats.count.Load()
 }
 
+// ChildMaxNodes is the most syntax nodes one package had that a helper checked inside its limits.
+func ChildMaxNodes() int64 { return childStats.nodes.Load() }
+
 // SetChildLimits lets a test change the helper's limits; the returned function restores them and clears the verdict cache.
 func SetChildLimits(cpuSeconds int, rssBytes int64, wall time.Duration) func() {
 	oldCPU, oldRSS, oldWall := childCPUSeconds, childRSSLimit, childWall
@@ -118,6 +121,7 @@ func ResetChildStats() {
 	childStats.cpuNanos.Store(0)
 	childStats.rssKB.Store(0)
 	childStats.count.Store(0)
+	childStats.nodes.Store(0)
 }
 
 // ProbeCacheLen is the number of helper verdicts cached in this process.
