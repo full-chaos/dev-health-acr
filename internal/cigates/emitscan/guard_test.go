@@ -22,20 +22,21 @@ import (
 // scanDeadlineBudget is how long one scan of the repository may run before the guard cancels it. It follows the test binary's
 // own deadline (go test -timeout) and leaves a margin to report a clean failure before the binary is killed, so a slow runner
 // can no longer fail a scan that is making progress; the cost itself is pinned by the work budget and the CPU-time rows. A
-// binary with no deadline gets a ten minute cap.
-func scanDeadlineBudget(now, deadline time.Time, hasDeadline bool) time.Duration {
+// binary with no deadline gets a ten minute cap. When the deadline leaves no more than the floor after the margin, ok is
+// false: the scan is not started, because a floored budget would outlive the test binary's own deadline.
+func scanDeadlineBudget(now, deadline time.Time, hasDeadline bool) (budget time.Duration, ok bool) {
 	const (
 		budgetCap = 10 * time.Minute
 		margin    = 5 * time.Second
 		floor     = time.Second
 	)
 	if !hasDeadline {
-		return budgetCap
+		return budgetCap, true
 	}
 	if budget := deadline.Sub(now) - margin; budget > floor {
-		return budget
+		return budget, true
 	}
-	return floor
+	return 0, false
 }
 
 // runScan scans dirs under root and gives up, cancelling the work itself, after budget.
@@ -45,8 +46,8 @@ func runScan(budget time.Duration, root string, dirs []string) ([]emitscan.Findi
 	return emitscan.ScanContext(ctx, root, dirs)
 }
 
-// scanBudget is the budget of a scan started now by this test.
-func scanBudget(t *testing.T) time.Duration {
+// scanBudget is the budget of a scan started now by this test; ok is false when the test deadline is too close to scan.
+func scanBudget(t *testing.T) (time.Duration, bool) {
 	t.Helper()
 	deadline, ok := t.Deadline()
 	return scanDeadlineBudget(time.Now(), deadline, ok)
@@ -54,7 +55,11 @@ func scanBudget(t *testing.T) time.Duration {
 
 func scanWithin(t *testing.T) ([]emitscan.Finding, []emitscan.Site) {
 	t.Helper()
-	budget := scanBudget(t)
+	budget, ok := scanBudget(t)
+	if !ok {
+		deadline, _ := t.Deadline()
+		t.Fatalf("the test deadline is %s away: not enough to scan after the 5s margin; raise go test -timeout", time.Until(deadline).Round(time.Millisecond))
+	}
 	findings, sites, err := runScan(budget, repoRoot(t), []string{"internal", "cmd"})
 	if err != nil {
 		t.Fatalf("the emit-path scan did not finish within %s (the test deadline less a margin): %v", budget, err)
@@ -371,25 +376,37 @@ func TestScanBudgetFollowsTheTestDeadline(t *testing.T) {
 		deadline    time.Time
 		hasDeadline bool
 		want        time.Duration
+		wantOK      bool
 	}{
-		{"no deadline: the ten minute cap", time.Time{}, false, 10 * time.Minute},
-		{"a fifteen minute deadline leaves the margin", now.Add(15 * time.Minute), true, 15*time.Minute - 5*time.Second},
-		{"a ten minute deadline (the go test default)", now.Add(10 * time.Minute), true, 10*time.Minute - 5*time.Second},
-		{"three seconds left: the floor", now.Add(3 * time.Second), true, time.Second},
-		{"the deadline has passed: the floor", now.Add(-time.Minute), true, time.Second},
+		{"no deadline: the ten minute cap", time.Time{}, false, 10 * time.Minute, true},
+		{"a fifteen minute deadline leaves the margin", now.Add(15 * time.Minute), true, 15*time.Minute - 5*time.Second, true},
+		{"a ten minute deadline (the go test default)", now.Add(10 * time.Minute), true, 10*time.Minute - 5*time.Second, true},
+		{"one nanosecond over the floor after the margin scans", now.Add(6*time.Second + time.Nanosecond), true, time.Second + time.Nanosecond, true},
+		{"exactly the floor after the margin does not scan", now.Add(6 * time.Second), true, 0, false},
+		{"three seconds left does not scan", now.Add(3 * time.Second), true, 0, false},
+		{"the deadline has passed does not scan", now.Add(-time.Minute), true, 0, false},
 	}
 	for _, tc := range cases {
-		if got := scanDeadlineBudget(now, tc.deadline, tc.hasDeadline); got != tc.want {
+		got, ok := scanDeadlineBudget(now, tc.deadline, tc.hasDeadline)
+		if ok != tc.wantOK {
+			t.Errorf("%s: ok = %v, want %v (budget %s)", tc.name, ok, tc.wantOK, got)
+			continue
+		}
+		if ok && got != tc.want {
 			t.Errorf("%s: budget = %s, want %s", tc.name, got, tc.want)
 		}
 	}
 	// the wiring: the budget a test's scan really gets is the one derived from this test's own deadline
-	deadline, ok := t.Deadline()
-	want := scanDeadlineBudget(time.Now(), deadline, ok)
-	if got := scanBudget(t); got > want || want-got > time.Second {
-		t.Errorf("scanBudget = %s, want about %s (deadline %v, set %v)", got, want, deadline, ok)
+	deadline, hasDeadline := t.Deadline()
+	want, wantOK := scanDeadlineBudget(time.Now(), deadline, hasDeadline)
+	got, gotOK := scanBudget(t)
+	if gotOK != wantOK {
+		t.Fatalf("scanBudget ok = %v, want %v (deadline %v, set %v)", gotOK, wantOK, deadline, hasDeadline)
 	}
-	if ok && scanBudget(t) == 30*time.Second {
+	if gotOK && (got > want || want-got > time.Second) {
+		t.Errorf("scanBudget = %s, want about %s (deadline %v, set %v)", got, want, deadline, hasDeadline)
+	}
+	if gotOK && hasDeadline && got == 30*time.Second {
 		t.Error("the scan budget is the old fixed 30 s")
 	}
 }
