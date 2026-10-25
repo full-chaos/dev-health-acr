@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
@@ -130,16 +131,63 @@ func (a *Adapter) ensureOrgGraph(ctx context.Context, key string) error {
 	if done {
 		return nil
 	}
-	a.bootstrapMu.Lock()
-	defer a.bootstrapMu.Unlock()
-	if a.bootstrapDone[key] {
+	gate := a.acquireBootstrapGate(key)
+	defer a.releaseBootstrapGate(key, gate)
+	gate.mu.Lock()
+	defer gate.mu.Unlock()
+	a.bootstrapMu.RLock()
+	done = a.bootstrapDone[key]
+	generation := a.bootstrapGeneration[key]
+	a.bootstrapMu.RUnlock()
+	if done {
 		return nil
 	}
 	if err := a.bootstrapSchema(ctx, key); err != nil {
 		return err
 	}
-	a.bootstrapDone[key] = true
+	a.bootstrapMu.Lock()
+	if a.bootstrapGeneration[key] == generation {
+		a.bootstrapDone[key] = true
+	}
+	a.bootstrapMu.Unlock()
 	return nil
+}
+
+// bootstrapGate single-flights the bootstrap of one graph key. users counts
+// the callers holding or waiting for it; the last one out removes it.
+type bootstrapGate struct {
+	mu    sync.Mutex
+	users int
+}
+
+func (a *Adapter) acquireBootstrapGate(key string) *bootstrapGate {
+	a.bootstrapMu.Lock()
+	defer a.bootstrapMu.Unlock()
+	gate := a.bootstrapGates[key]
+	if gate == nil {
+		gate = &bootstrapGate{}
+		a.bootstrapGates[key] = gate
+	}
+	gate.users++
+	return gate
+}
+
+func (a *Adapter) releaseBootstrapGate(key string, gate *bootstrapGate) {
+	a.bootstrapMu.Lock()
+	defer a.bootstrapMu.Unlock()
+	gate.users--
+	if gate.users == 0 {
+		delete(a.bootstrapGates, key)
+	}
+}
+
+// forgetBootstrap drops the cached bootstrap of key after its graph was
+// deleted or lost its schema, including a bootstrap still in flight.
+func (a *Adapter) forgetBootstrap(key string) {
+	a.bootstrapMu.Lock()
+	defer a.bootstrapMu.Unlock()
+	delete(a.bootstrapDone, key)
+	a.bootstrapGeneration[key]++
 }
 
 func (a *Adapter) bootstrapSchema(ctx context.Context, key string) error {

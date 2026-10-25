@@ -154,9 +154,7 @@ func (a *Adapter) DeleteEpochGraph(ctx context.Context, orgID string, epoch, act
 	key := graphKeyForEpoch(a.config.GraphPrefix, orgID, epoch)
 	a.stampResolvedKey(ctx, orgID, epoch, contextfabric.GraphKeyRoleRetireTarget, key)
 	err := a.api.deleteGraph(ctx, key)
-	a.bootstrapMu.Lock()
-	delete(a.bootstrapDone, key)
-	a.bootstrapMu.Unlock()
+	a.forgetBootstrap(key)
 	if err != nil && !errors.Is(err, ErrNotFound) {
 		return safeDependencyError("delete epoch organization graph", err)
 	}
@@ -267,9 +265,7 @@ func (a *Adapter) DeleteOrganizationGraphs(ctx context.Context, orgID string) (i
 	deleted := 0
 	for _, key := range keys {
 		err := a.api.deleteGraph(ctx, key)
-		a.bootstrapMu.Lock()
-		delete(a.bootstrapDone, key)
-		a.bootstrapMu.Unlock()
+		a.forgetBootstrap(key)
 		if err != nil && !errors.Is(err, ErrNotFound) {
 			return deleted, safeDependencyError("delete organization graph", err)
 		}

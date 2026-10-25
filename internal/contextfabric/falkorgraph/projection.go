@@ -793,9 +793,7 @@ func (a *Adapter) PurgeOrganization(ctx context.Context, orgID string) error {
 	}
 	key := graphKey(a.config.GraphPrefix, orgID)
 	err := a.api.deleteGraph(ctx, key)
-	a.bootstrapMu.Lock()
-	delete(a.bootstrapDone, key)
-	a.bootstrapMu.Unlock()
+	a.forgetBootstrap(key)
 	if err != nil && !errors.Is(err, ErrNotFound) {
 		return safeDependencyError("purge organization graph", err)
 	}
