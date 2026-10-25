@@ -83,8 +83,15 @@ type Adapter struct {
 	// (EmbedderFromEnv, vector.go) AND inside the evaluator itself.
 	commitGatePolicy graphrank.CommitGatePolicy
 
-	bootstrapMu   sync.RWMutex
-	bootstrapDone map[string]bool
+	// bootstrapMu guards the three bootstrap maps only and is never held
+	// across a FalkorDB call: a bootstrap stuck on the server holds only its
+	// own key's gate, never another organization's writes. bootstrapGeneration
+	// moves on every forgetBootstrap, so a bootstrap that a purge overtook
+	// does not mark the purged graph as bootstrapped.
+	bootstrapMu         sync.RWMutex
+	bootstrapDone       map[string]bool
+	bootstrapGates      map[string]*bootstrapGate
+	bootstrapGeneration map[string]uint64
 
 	// rebootstrap is the per-graph-key re-bootstrap guard of
 	// rebootstrapAfterAbsentIndex (schema_rebootstrap.go): when the vector
@@ -309,7 +316,8 @@ func newWithAPI(config Config, client conn) (*Adapter, error) {
 	}
 	return &Adapter{
 		api: projectReachConn{conn: client}, config: config, now: time.Now,
-		bootstrapDone: make(map[string]bool), rebootstrap: make(map[string]*schemaRebootstrap), observedKeys: make(map[string]string),
+		bootstrapDone: make(map[string]bool), bootstrapGates: make(map[string]*bootstrapGate), bootstrapGeneration: make(map[string]uint64),
+		rebootstrap: make(map[string]*schemaRebootstrap), observedKeys: make(map[string]string),
 	}, nil
 }
 

@@ -70,9 +70,7 @@ func (a *Adapter) rebootstrapAfterAbsentIndex(ctx context.Context, key, orgID st
 	state.nextAt = now.Add(wait)
 	a.rebootstrapMu.Unlock()
 
-	a.bootstrapMu.Lock()
-	delete(a.bootstrapDone, key)
-	a.bootstrapMu.Unlock()
+	a.forgetBootstrap(key)
 	a.recordGraphSchemaRebootstrap(ctx, orgID, attempt)
 	return true
 }
