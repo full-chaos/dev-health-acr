@@ -8,10 +8,10 @@ import (
 	"time"
 )
 
-// stallBound is how long a write of one organization may wait while another
-// organization's bootstrap is stuck on the server. A write that waits on the
-// stuck bootstrap waits until the test releases it, far past this bound.
-const stallBound = 2 * time.Second
+// stallBound is how long a test waits for an event. A write that waits on
+// another key's stuck bootstrap never returns before the test releases it, so
+// the bound only needs to be far above a loaded -race runner's scheduling delay.
+const stallBound = 30 * time.Second
 
 // gatedBootstrapConn holds the first schema statement (CREATE INDEX on
 // Subject) of a gated key until the test releases it, as a server that stops

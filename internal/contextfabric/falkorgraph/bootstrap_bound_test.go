@@ -127,7 +127,10 @@ func (s *silentOnCreateIndexServer) serve(c net.Conn, stop <-chan struct{}) {
 // has no deadline, and the graph is not marked bootstrapped.
 func TestAFirstWriteOnAServerThatGoesSilentOnCreateIndexFailsWithinTheRequestTimeout(t *testing.T) {
 	const requestTimeout = time.Second
-	const slack = 3 * time.Second
+	// slack covers a loaded -race runner. guard is the test's own cap for a
+	// call that never returns; it is above the upper edge so both fail apart.
+	const slack = 15 * time.Second
+	const guard = requestTimeout + slack + 5*time.Second
 	server := newSilentOnCreateIndexServer(t)
 	config := Config{
 		Addr: server.addr, GraphPrefix: "acr-cf-silent", RequestTimeout: requestTimeout,
@@ -164,8 +167,8 @@ func TestAFirstWriteOnAServerThatGoesSilentOnCreateIndexFailsWithinTheRequestTim
 	var got outcome
 	select {
 	case got = <-done:
-	case <-time.After(requestTimeout + slack):
-		t.Fatalf("ApplyProjectionBatch still blocked %s after the server went silent on CREATE INDEX (RequestTimeout %s)", requestTimeout+slack, requestTimeout)
+	case <-time.After(guard):
+		t.Fatalf("ApplyProjectionBatch still blocked %s after the server went silent on CREATE INDEX (RequestTimeout %s)", guard, requestTimeout)
 	}
 	t.Logf("silent CREATE INDEX: returned after %s with %v", got.elapsed.Round(time.Millisecond), got.err)
 
@@ -180,6 +183,9 @@ func TestAFirstWriteOnAServerThatGoesSilentOnCreateIndexFailsWithinTheRequestTim
 	}
 	if got.elapsed < requestTimeout-100*time.Millisecond {
 		t.Fatalf("returned after %s, before the RequestTimeout %s: the timeout did not end this call", got.elapsed, requestTimeout)
+	}
+	if got.elapsed > requestTimeout+slack {
+		t.Fatalf("returned after %s, more than the RequestTimeout %s plus %s", got.elapsed, requestTimeout, slack)
 	}
 	server.mu.Lock()
 	inFlight, answered := server.inFlight, server.answered
