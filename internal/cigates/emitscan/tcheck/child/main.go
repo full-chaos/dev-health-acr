@@ -51,15 +51,15 @@ func run() int {
 	fset := token.NewFileSet()
 	var files []*ast.File
 	for _, rel := range req.Rels {
-		source, err := os.ReadFile(filepath.Join(absRoot, filepath.FromSlash(rel)))
-		if err != nil {
+		source, ok := req.Sources[rel]
+		if !ok {
 			return 2
 		}
 		file, err := parser.ParseFile(fset, rel, source, 0)
 		if err != nil {
 			return 2
 		}
-		match, err := tcheck.Match(absRoot, rel)
+		match, err := tcheck.Match(absRoot, rel, source)
 		if err != nil {
 			return 2
 		}

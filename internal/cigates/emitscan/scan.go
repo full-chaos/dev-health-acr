@@ -116,6 +116,7 @@ type parsedFile struct {
 	rel     string
 	fset    *token.FileSet
 	file    *ast.File
+	src     []byte // the bytes file was parsed from; every later check of this file uses these, never the disk
 	imports map[string]string
 }
 
@@ -191,7 +192,7 @@ func ScanContext(ctx context.Context, root string, dirs []string) ([]Finding, []
 				return nil
 			}
 			dirKey := filepath.ToSlash(filepath.Dir(rel))
-			byDir[dirKey] = append(byDir[dirKey], parsedFile{rel: rel, fset: fset, file: file, imports: importNames(file)})
+			byDir[dirKey] = append(byDir[dirKey], parsedFile{rel: rel, fset: fset, file: file, src: source, imports: importNames(file)})
 			return nil
 		})
 		if err != nil {
@@ -201,11 +202,12 @@ func ScanContext(ctx context.Context, root string, dirs []string) ([]Finding, []
 	if files == 0 {
 		return nil, nil, fmt.Errorf("emitscan: no source files read under %v", dirs)
 	}
+	snap := newSourceSnapshot(root, byDir)
 	for _, group := range byDir {
 		if err := ctx.Err(); err != nil {
 			return nil, nil, err
 		}
-		info := packageInfo(ctx, root, group, helperCPU)
+		info := packageInfo(ctx, root, group, helperCPU, snap)
 		var found []Finding
 		for _, parsed := range group {
 			if err := ctx.Err(); err != nil {
@@ -307,6 +309,7 @@ type pkgInfo struct {
 	saturated   map[string]bool               // constants whose folding hit a bound: no value is kept, a use is an unfoldable const key
 	census      map[[3]string]map[string]bool // (kind, file, function) -> constant attribute keys emitted there
 	root        string                        // the scan root: the module of the type-checked load is the nearest go.mod at or above it
+	snap        *sourceSnapshot               // every file of the scan as parsed; export data is built from it
 	group       []parsedFile                  // the files of the package directory, type-checked together on the first R10 need
 	oversize    bool                          // a + chain larger than one fold may visit: the package is never type-checked (the checker's own work on it is not bounded by the scan's budget)
 	keyAliases  map[types.Object]ast.Expr     // local variables bound once to an attribute.Key method value and only called: the key receiver (nil for a method expression: the first argument)
@@ -560,10 +563,10 @@ func syntaxNodes(group []parsedFile) int {
 	return nodes
 }
 
-func packageInfo(ctx context.Context, root string, group []parsedFile, helperCPU *atomic.Int64) *pkgInfo {
+func packageInfo(ctx context.Context, root string, group []parsedFile, helperCPU *atomic.Int64, snap *sourceSnapshot) *pkgInfo {
 	nodes := syntaxNodes(group)
 	info := &pkgInfo{helperCPU: helperCPU, consts: map[string][]string{}, rawFuncs: map[string]bool{}, constNames: map[string]bool{},
-		stringTypes: map[string]bool{}, keyAliases: map[types.Object]ast.Expr{}, aliases: map[string][][2]string{}, saturated: map[string]bool{}, census: map[[3]string]map[string]bool{}, root: root, group: group, budget: &budget{limit: workBase + workPerNode*nodes, ctx: ctx}}
+		stringTypes: map[string]bool{}, keyAliases: map[types.Object]ast.Expr{}, aliases: map[string][][2]string{}, saturated: map[string]bool{}, census: map[[3]string]map[string]bool{}, root: root, group: group, snap: snap, budget: &budget{limit: workBase + workPerNode*nodes, ctx: ctx}}
 	for _, parsed := range group {
 		ast.Inspect(parsed.file, func(node ast.Node) bool {
 			if spec, ok := node.(*ast.TypeSpec); ok {

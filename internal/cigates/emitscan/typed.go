@@ -84,6 +84,50 @@ func (p *pkgInfo) typedInfo() *typedPackage {
 	return p.typed
 }
 
+// sourceSnapshot is every file the scan parsed, as the bytes it parsed.
+type sourceSnapshot struct {
+	root  string
+	files []parsedFile // sorted by rel
+	key   string       // digest of the rels and bytes
+}
+
+func newSourceSnapshot(root string, byDir map[string][]parsedFile) *sourceSnapshot {
+	snap := &sourceSnapshot{root: root}
+	for _, group := range byDir {
+		snap.files = append(snap.files, group...)
+	}
+	sort.Slice(snap.files, func(i, j int) bool { return snap.files[i].rel < snap.files[j].rel })
+	snap.key = probeKey(snap.files)
+	return snap
+}
+
+// writeOverlay writes the parsed bytes to a private temp directory and the go overlay file that maps each scanned file to
+// its copy. The directory is returned even with an error, so the caller removes it.
+func (snap *sourceSnapshot) writeOverlay() (dir, overlayFile string, err error) {
+	absRoot, err := filepath.Abs(snap.root)
+	if err != nil {
+		return "", "", err
+	}
+	dir, err = os.MkdirTemp("", "emitscan-overlay-")
+	if err != nil {
+		return "", "", err
+	}
+	replace := map[string]string{}
+	for i, parsed := range snap.files {
+		copyPath := filepath.Join(dir, fmt.Sprintf("%d.go", i))
+		if err := os.WriteFile(copyPath, parsed.src, 0o600); err != nil {
+			return dir, "", err
+		}
+		replace[filepath.Join(absRoot, filepath.FromSlash(parsed.rel))] = copyPath
+	}
+	payload, err := json.Marshal(map[string]map[string]string{"Replace": replace})
+	if err != nil {
+		return dir, "", err
+	}
+	overlayFile = filepath.Join(dir, "overlay.json")
+	return dir, overlayFile, os.WriteFile(overlayFile, payload, 0o600)
+}
+
 type exportEntry struct {
 	files map[string]string
 }
@@ -120,10 +164,18 @@ func moduleDirOf(root string) (string, error) {
 }
 
 // exportFiles maps import path to export data file for every package of the module and its dependencies.
-func exportFiles(ctx context.Context, moduleDir string) (map[string]string, error) {
+//
+// With a snapshot, go list builds every scanned file from the bytes the scan parsed (an overlay of temp copies), so a
+// change on disk while it runs cannot reach the export data. Files go list reads that the scan did not parse (go.mod,
+// test files, directories outside the scanned ones) are still read from disk.
+func exportFiles(ctx context.Context, moduleDir string, snap *sourceSnapshot) (map[string]string, error) {
 	exportCache.Lock()
 	defer exportCache.Unlock()
-	if entry, ok := exportCache.byDir[moduleDir]; ok {
+	cacheKey := moduleDir
+	if snap != nil && len(snap.files) > 0 {
+		cacheKey += "\x00" + snap.key
+	}
+	if entry, ok := exportCache.byDir[cacheKey]; ok {
 		return entry.files, nil
 	}
 	if ctx == nil {
@@ -133,7 +185,19 @@ func exportFiles(ctx context.Context, moduleDir string) (map[string]string, erro
 	if err != nil {
 		return nil, err
 	}
-	cmd := exec.CommandContext(ctx, goPath, "list", "-export", "-deps", "-f", "{{if .Export}}{{.ImportPath}}\t{{.Export}}{{end}}", "./...")
+	args := []string{"list", "-export", "-deps"}
+	if snap != nil && len(snap.files) > 0 {
+		overlayDir, overlayFile, err := snap.writeOverlay()
+		if overlayDir != "" {
+			defer os.RemoveAll(overlayDir)
+		}
+		if err != nil {
+			return nil, fmt.Errorf("go list overlay: %w", err)
+		}
+		args = append(args, "-overlay", overlayFile)
+	}
+	args = append(args, "-f", "{{if .Export}}{{.ImportPath}}\t{{.Export}}{{end}}", "./...")
+	cmd := exec.CommandContext(ctx, goPath, args...)
 	cmd.Dir = moduleDir
 	cmd.Env = append(os.Environ(), "GOTOOLCHAIN=local")
 	out, err := cmd.Output()
@@ -146,7 +210,7 @@ func exportFiles(ctx context.Context, moduleDir string) (map[string]string, erro
 			files[path] = file
 		}
 	}
-	exportCache.byDir[moduleDir] = &exportEntry{files: files}
+	exportCache.byDir[cacheKey] = &exportEntry{files: files}
 	return files, nil
 }
 
@@ -160,7 +224,7 @@ func typeCheck(root string, group []parsedFile, exports map[string]string) (*typ
 	}
 	var files []*ast.File
 	for _, parsed := range group {
-		match, err := tcheck.Match(absRoot, parsed.rel)
+		match, err := tcheck.Match(absRoot, parsed.rel, parsed.src)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -752,7 +816,7 @@ func (p *pkgInfo) boundedTypeCheck() (*types.Info, []*ast.File, error) {
 	if err != nil {
 		return nil, nil, err
 	}
-	exports, err := exportFiles(p.budget.ctx, moduleDir)
+	exports, err := exportFiles(p.budget.ctx, moduleDir, p.snap)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -1018,22 +1082,14 @@ var probeCache = struct {
 	verdict map[string]error
 }{verdict: map[string]error{}}
 
-// probeKey names a package by the bytes of its files, so a package already probed in this process is not probed again.
-func probeKey(root string, rels []string) (string, error) {
-	absRoot, err := filepath.Abs(root)
-	if err != nil {
-		return "", err
-	}
+// probeKey names a package by the bytes the scan parsed, so a package already probed in this process is not probed again.
+func probeKey(group []parsedFile) string {
 	digest := sha256.New()
-	for _, rel := range rels {
-		source, err := os.ReadFile(filepath.Join(absRoot, filepath.FromSlash(rel)))
-		if err != nil {
-			return "", err
-		}
-		fmt.Fprintf(digest, "%s\x00%d\x00", rel, len(source))
-		digest.Write(source)
+	for _, parsed := range group {
+		fmt.Fprintf(digest, "%s\x00%d\x00", parsed.rel, len(parsed.src))
+		digest.Write(parsed.src)
 	}
-	return hex.EncodeToString(digest.Sum(nil)), nil
+	return hex.EncodeToString(digest.Sum(nil))
 }
 
 // scanHelperCPU is the CPU time all helpers of one scan may use together; when it is spent, every package that still needs a
@@ -1046,14 +1102,12 @@ func probeTypeCheck(ctx context.Context, budget *atomic.Int64, root string, grou
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	req := tcheck.Request{Root: root, Exports: exports, CPUSeconds: childCPUSeconds}
+	req := tcheck.Request{Root: root, Exports: exports, CPUSeconds: childCPUSeconds, Sources: map[string][]byte{}}
 	for _, parsed := range group {
 		req.Rels = append(req.Rels, parsed.rel)
+		req.Sources[parsed.rel] = parsed.src
 	}
-	key, err := probeKey(root, req.Rels)
-	if err != nil {
-		return err
-	}
+	key := probeKey(group)
 	probeCache.Lock()
 	cached, seen := probeCache.verdict[key]
 	probeCache.Unlock()
@@ -1108,6 +1162,9 @@ func runChild(ctx context.Context, root string, req tcheck.Request) (verdict err
 	if err != nil {
 		return err, 0
 	}
+	if len(payload) > maxRequestBytes {
+		return fmt.Errorf("%w: request is %d bytes, bound is %d bytes", errRequestTooLarge, len(payload), maxRequestBytes), 0
+	}
 	sum := sha256.Sum256(payload)
 	want := "emitscan-tcheck-ok " + hex.EncodeToString(sum[:]) + "\n"
 	ctx, cancel := context.WithTimeout(ctx, childWall)
@@ -1158,6 +1215,12 @@ loop:
 	recordUsage(cmd.ProcessState) // only a helper that finished inside its limits counts toward the limits' headroom
 	return nil, cpuNanos
 }
+
+// maxRequestBytes is below the helper's stdin cap (64 MiB, tcheck/child/main.go) so a large package is a refusal here and never a
+// silently truncated request.
+var maxRequestBytes = 48 << 20
+
+var errRequestTooLarge = errors.New("type-check helper request too large")
 
 var errChildLimit = errors.New("type-check stopped at its memory limit")
 

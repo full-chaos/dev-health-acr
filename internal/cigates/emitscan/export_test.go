@@ -2,6 +2,7 @@ package emitscan
 
 import (
 	"context"
+	"github.com/full-chaos/dev-health-acr/internal/cigates/emitscan/tcheck"
 	"go/ast"
 	"go/token"
 	"strings"
@@ -146,7 +147,7 @@ func GoBinary() (string, error) { return goBinary() }
 
 // ExportFiles reads the export data of the module at dir with the resolved go command.
 func ExportFiles(dir string) error {
-	_, err := exportFiles(context.Background(), dir)
+	_, err := exportFiles(context.Background(), dir, nil)
 	return err
 }
 
@@ -163,3 +164,44 @@ const CreatorMarker = creatorMarker
 
 // PIDNamespace is the pid namespace of this process.
 func PIDNamespace() (string, bool) { return pidNamespace() }
+
+// ProbeKeyOfSources is the probe-cache key of a package made of these parsed bytes.
+func ProbeKeyOfSources(rels []string, srcs [][]byte) string {
+	var group []parsedFile
+	for i, rel := range rels {
+		group = append(group, parsedFile{rel: rel, src: srcs[i]})
+	}
+	return probeKey(group)
+}
+
+// SetMaxRequestBytes lets a test shrink the helper request bound; the returned function restores it.
+func SetMaxRequestBytes(n int) func() {
+	old := maxRequestBytes
+	maxRequestBytes = n
+	return func() { maxRequestBytes = old }
+}
+
+// RunHelperRequest sends one request to the helper and returns its verdict.
+func RunHelperRequest(root string, req tcheck.Request) error {
+	verdict, _ := runChild(context.Background(), root, req)
+	return verdict
+}
+
+// ExportFilesOf reads the export data of the module at dir with an overlay of these parsed files (rel under root).
+func ExportFilesOf(dir, root string, rels []string, srcs [][]byte) error {
+	byDir := map[string][]parsedFile{"x": nil}
+	for i, rel := range rels {
+		byDir["x"] = append(byDir["x"], parsedFile{rel: rel, src: srcs[i]})
+	}
+	_, err := exportFiles(context.Background(), dir, newSourceSnapshot(root, byDir))
+	return err
+}
+
+// SnapshotKey is the key of a snapshot of these parsed files, each in a directory of its own (map order is random).
+func SnapshotKey(rels []string, srcs [][]byte) string {
+	byDir := map[string][]parsedFile{}
+	for i, rel := range rels {
+		byDir[rel] = []parsedFile{{rel: rel, src: srcs[i]}}
+	}
+	return newSourceSnapshot(".", byDir).key
+}

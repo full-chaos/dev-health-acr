@@ -4,6 +4,7 @@
 package tcheck
 
 import (
+	"bytes"
 	"fmt"
 	"go/ast"
 	"go/build"
@@ -20,6 +21,7 @@ type Request struct {
 	Root       string
 	Rels       []string
 	Exports    map[string]string
+	Sources    map[string][]byte // rel -> the bytes the scanner parsed; the helper reads nothing from disk
 	CPUSeconds int
 	Mode       string // "" type-checks; "env" reports the names of the environment variables the helper got (a test hook)
 }
@@ -55,7 +57,18 @@ func Check(fset *token.FileSet, files []*ast.File, exports map[string]string) (*
 	return info, nil
 }
 
-// Match reports whether the file takes part in the default build context (build tags, file name suffixes).
-func Match(absRoot, rel string) (bool, error) {
-	return build.Default.MatchFile(filepath.Join(absRoot, filepath.Dir(filepath.FromSlash(rel))), filepath.Base(rel))
+// Match reports whether the file takes part in the default build context (build tags, file name suffixes). The decision is
+// made on src, never on what is on disk now.
+func Match(absRoot, rel string, src []byte) (bool, error) {
+	dir := filepath.Join(absRoot, filepath.Dir(filepath.FromSlash(rel)))
+	name := filepath.Base(rel)
+	want := filepath.Join(dir, name)
+	ctxt := build.Default
+	ctxt.OpenFile = func(path string) (io.ReadCloser, error) {
+		if path != want {
+			return nil, fmt.Errorf("unexpected read of %q", path)
+		}
+		return io.NopCloser(bytes.NewReader(src)), nil
+	}
+	return ctxt.MatchFile(dir, name)
 }
