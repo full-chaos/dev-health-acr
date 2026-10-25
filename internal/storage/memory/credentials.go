@@ -92,7 +92,7 @@ func (s *credentialStore) GetByID(ctx context.Context, orgID, credentialID strin
 		return contractsv1.ClientCredential{}, err
 	}
 	record, ok := s.byID[credentialID]
-	if !ok {
+	if !ok || record.Metadata.OrgID != orgID {
 		return contractsv1.ClientCredential{}, storage.ErrNotFound
 	}
 	return cloneCredential(record.Metadata), nil

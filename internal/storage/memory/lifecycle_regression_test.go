@@ -306,3 +306,20 @@ func TestCredentialStore_TouchLastUsedRejectsEmptyOrganization(t *testing.T) {
 		t.Fatalf("TouchLastUsed() error = %v, want invalid credential input", err)
 	}
 }
+
+func TestCredentialStore_GetByIDAnswersNotFoundForAnotherOrganization(t *testing.T) {
+	// Given
+	store := mustCredentialStore(t, NewAuditStore())
+	created, err := store.CreateCredential(context.Background(), validCredentialCreateInput("usage"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// When
+	_, err = store.GetByID(context.Background(), "org_2", created.CredentialID)
+
+	// Then
+	if !errors.Is(err, storage.ErrNotFound) {
+		t.Fatalf("GetByID() error = %v, want not found", err)
+	}
+}

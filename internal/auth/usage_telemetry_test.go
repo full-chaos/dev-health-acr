@@ -11,6 +11,7 @@ import (
 )
 
 type recordedUsage struct {
+	orgID        string
 	credentialID string
 	ip           string
 	userAgent    string
@@ -28,7 +29,7 @@ type usageStore struct {
 func (s *usageStore) TouchLastUsed(_ context.Context, orgID, credentialID, ip, userAgent string, usedAt time.Time) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.touches = append(s.touches, recordedUsage{credentialID: credentialID, ip: ip, userAgent: userAgent, usedAt: usedAt})
+	s.touches = append(s.touches, recordedUsage{orgID: orgID, credentialID: credentialID, ip: ip, userAgent: userAgent, usedAt: usedAt})
 	return s.err
 }
 
@@ -117,7 +118,7 @@ func TestUsageTelemetry_coalesces_latest_successful_uses_when_flushed(t *testing
 	if len(touches) != 1 {
 		t.Fatalf("touches = %d, want 1", len(touches))
 	}
-	if touches[0].usedAt != newer || touches[0].ip != "127.0.0.1" || touches[0].userAgent != "first" {
+	if touches[0].orgID != "org-1" || touches[0].usedAt != newer || touches[0].ip != "127.0.0.1" || touches[0].userAgent != "first" {
 		t.Fatalf("last-used write = %#v, want latest successful use", touches[0])
 	}
 	events := audit.Events()
