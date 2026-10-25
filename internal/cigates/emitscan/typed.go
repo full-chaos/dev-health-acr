@@ -765,7 +765,7 @@ var (
 )
 
 // childStats are the largest CPU time and resident set one helper used, for the limits' headroom.
-var childStats struct{ cpuNanos, rssKB, count atomic.Int64 }
+var childStats struct{ cpuNanos, rssKB, count, nodes atomic.Int64 }
 
 func noteChildStat(slot *atomic.Int64, value int64) {
 	for {
@@ -933,6 +933,9 @@ func probeTypeCheck(ctx context.Context, budget *atomic.Int64, root string, grou
 		return errHelperCPUBudget
 	}
 	verdict, cpu := runChild(ctx, root, req)
+	if verdict == nil {
+		noteChildStat(&childStats.nodes, int64(syntaxNodes(group)))
+	}
 	if budget != nil {
 		budget.Add(-cpu)
 	}
