@@ -58,11 +58,13 @@ import (
 	"go/types"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"testing"
 
 	"golang.org/x/tools/go/packages"
 
+	"github.com/full-chaos/dev-health-acr/internal/cigates/sourceload"
 	"github.com/full-chaos/dev-health-acr/internal/testsupport/repopath"
 )
 
@@ -229,15 +231,11 @@ func chaos5544Classify(expr ast.Expr, info *types.Info, enumTypes map[*types.Nam
 // the fixture-package exercises below.
 func chaos5544ScanForUnsanitizedLogAttrs(t *testing.T, dir, pattern string) []string {
 	t.Helper()
-	cfg := &packages.Config{
-		Mode: packages.NeedName | packages.NeedFiles | packages.NeedSyntax |
-			packages.NeedTypes | packages.NeedTypesInfo | packages.NeedImports | packages.NeedDeps,
-		Dir: dir,
-	}
-	pkgs, err := packages.Load(cfg, pattern)
+	loader, err := sourceload.Load(dir, []string{pattern}, runtime.GOOS, runtime.GOARCH)
 	if err != nil {
-		t.Fatalf("packages.Load(%q): %v", pattern, err)
+		t.Fatalf("sourceload.Load(%q): %v", pattern, err)
 	}
+	pkgs := loader.Packages()
 	if n := packages.PrintErrors(pkgs); n > 0 {
 		t.Fatalf("%d package error(s) loading %q -- the instrument cannot see a tree that does not compile", n, pattern)
 	}
