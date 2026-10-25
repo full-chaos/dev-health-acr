@@ -607,13 +607,15 @@ func (t *typedPackage) flowInfo() *flowInfo {
 const (
 	keyMethodNone = iota
 	keyMethodKey
+	keyMethodExpr
 	keyMethodRefuse
 	keyMethodNoTypes
 )
 
 // attrKeyMethod classifies a selector that names an attribute constructor method (String, Int, ...). keyMethodKey: the
-// method of attribute.Key on a receiver the scan can read (recv). keyMethodRefuse: the same method on a receiver it cannot
-// (a pointer, a dereference, a type parameter or interface that can hold a Key). keyMethodNoTypes: the package has no types.
+// method of attribute.Key on a receiver the scan can read (recv). keyMethodExpr: the method expression attribute.Key.String,
+// whose first argument is the receiver. keyMethodRefuse: the same method on a receiver it cannot read (a pointer, a
+// dereference, a type parameter or interface that can hold a Key). keyMethodNoTypes: the package has no types.
 func (s *fileScan) attrKeyMethod(sel *ast.SelectorExpr) (recv ast.Expr, class int) {
 	if !attrConstructors[sel.Sel.Name] {
 		return nil, keyMethodNone
@@ -626,7 +628,7 @@ func (s *fileScan) attrKeyMethod(sel *ast.SelectorExpr) (recv ast.Expr, class in
 		return nil, keyMethodNoTypes
 	}
 	selection := typed.info.Selections[sel]
-	if selection == nil || selection.Kind() != types.MethodVal {
+	if selection == nil || (selection.Kind() != types.MethodVal && selection.Kind() != types.MethodExpr) {
 		return nil, keyMethodNone
 	}
 	fn, isFunc := selection.Obj().(*types.Func)
@@ -652,6 +654,12 @@ func (s *fileScan) attrKeyMethod(sel *ast.SelectorExpr) (recv ast.Expr, class in
 	if !isNamed(recvType, attributePkg, "Key") {
 		return nil, keyMethodNone
 	}
+	if selection.Kind() == types.MethodExpr {
+		if pointer {
+			return nil, keyMethodRefuse
+		}
+		return nil, keyMethodExpr
+	}
 	receiver := ast.Unparen(sel.X)
 	if _, deref := receiver.(*ast.StarExpr); deref || pointer {
 		return nil, keyMethodRefuse
@@ -664,8 +672,9 @@ func isNamed(t types.Type, pkgPath, name string) bool {
 	return ok && named.Obj().Pkg() != nil && named.Obj().Pkg().Path() == pkgPath && named.Obj().Name() == name
 }
 
-// keyMethodValue reads an attribute.Key method value (k.String not called where it is written): bound once to a local that
-// is only ever called it is followed (keyAliases); any other use (returned, stored, passed, rebound) is a refusal.
+// keyMethodValue reads an attribute.Key method value or method expression (k.String, attribute.Key.String, not called where
+// it is written): bound once to a local that is only ever called it is followed (keyAliases); any other use (returned,
+// stored, passed, rebound) is a refusal.
 func (s *fileScan) keyMethodValue(sel *ast.SelectorExpr) {
 	if !attrConstructors[sel.Sel.Name] {
 		return
