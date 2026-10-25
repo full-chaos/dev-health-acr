@@ -25,11 +25,11 @@ type delayedUsageCredentialStore struct {
 	once    sync.Once
 }
 
-func (s *delayedUsageCredentialStore) TouchLastUsed(ctx context.Context, credentialID, ip, userAgent string, usedAt time.Time) error {
+func (s *delayedUsageCredentialStore) TouchLastUsed(ctx context.Context, orgID, credentialID, ip, userAgent string, usedAt time.Time) error {
 	s.once.Do(func() { close(s.started) })
 	select {
 	case <-s.release:
-		return s.CredentialStore.TouchLastUsed(ctx, credentialID, ip, userAgent, usedAt)
+		return s.CredentialStore.TouchLastUsed(ctx, orgID, credentialID, ip, userAgent, usedAt)
 	case <-ctx.Done():
 		return ctx.Err()
 	}

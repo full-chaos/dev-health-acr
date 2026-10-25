@@ -70,8 +70,14 @@ FOR UPDATE`, orgID, credentialID).Scan(&redeemedAt, &ackedAt)
 	if revokedAt.Valid {
 		return time.Time{}, storage.NewDeviceAuthorizationConflict(storage.DeviceAuthorizationStateRedeemed, storage.DeviceConflictAckWindowElapsed)
 	}
-	if _, err := tx.ExecContext(ctx, `UPDATE acr.device_authorizations SET credential_acked_at = $2 WHERE redeemed_credential_id = $1`, credentialID, now); err != nil {
+	ackResult, err := tx.ExecContext(ctx, `UPDATE acr.device_authorizations SET credential_acked_at = $2 WHERE redeemed_credential_id = $1 AND authorized_org_id = $3::uuid`, credentialID, now, orgID)
+	if err != nil {
 		return time.Time{}, fmt.Errorf("acknowledge device credential: %w", sanitizeDatabaseError(err))
+	}
+	if updated, err := ackResult.RowsAffected(); err != nil {
+		return time.Time{}, fmt.Errorf("acknowledge device credential rows affected: %w", sanitizeDatabaseError(err))
+	} else if updated != 1 {
+		return time.Time{}, storage.ErrDeviceAuthorizationNotFound
 	}
 	if err := tx.Commit(); err != nil {
 		return time.Time{}, fmt.Errorf("commit device credential acknowledgement: %w", sanitizeDatabaseError(err))

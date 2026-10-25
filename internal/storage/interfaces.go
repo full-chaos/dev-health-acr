@@ -220,7 +220,7 @@ type CredentialStore interface {
 	List(ctx context.Context, orgID string) ([]contractsv1.ClientCredential, error)
 	GetByID(ctx context.Context, orgID, credentialID string) (contractsv1.ClientCredential, error)
 	FindByTokenHash(ctx context.Context, tokenHash string) (contractsv1.ClientCredential, error)
-	TouchLastUsed(ctx context.Context, credentialID, ip, userAgent string, usedAt time.Time) error
+	TouchLastUsed(ctx context.Context, orgID, credentialID, ip, userAgent string, usedAt time.Time) error
 }
 
 type CredentialLifecycle = credentiallifecycle.Lifecycle

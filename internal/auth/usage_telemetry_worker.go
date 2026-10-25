@@ -92,7 +92,7 @@ func (u *UsageTelemetry) deliver(parent context.Context, batch usageBatch) {
 	deliveryFailed := false
 	if usageAction(batch.record) == "credential_used" {
 		deliveryContext, cancel := context.WithTimeout(parent, u.deliveryTimeout)
-		err := u.store.TouchLastUsed(deliveryContext, batch.record.CredentialID, batch.record.ClientIP, batch.record.UserAgent, batch.record.UsedAt.UTC())
+		err := u.store.TouchLastUsed(deliveryContext, batch.record.OrgID, batch.record.CredentialID, batch.record.ClientIP, batch.record.UserAgent, batch.record.UsedAt.UTC())
 		cancel()
 		deliveryFailed = err != nil
 		if err != nil {

@@ -119,7 +119,7 @@ func (s *credentialStore) FindByTokenHash(ctx context.Context, tokenHash string)
 	return cloneCredential(record.Metadata), nil
 }
 
-func (s *credentialStore) TouchLastUsed(ctx context.Context, credentialID, ip, userAgent string, usedAt time.Time) error {
+func (s *credentialStore) TouchLastUsed(ctx context.Context, orgID, credentialID, ip, userAgent string, usedAt time.Time) error {
 	if err := s.ready(ctx); err != nil {
 		return err
 	}
@@ -129,7 +129,7 @@ func (s *credentialStore) TouchLastUsed(ctx context.Context, credentialID, ip, u
 		return err
 	}
 	record, ok := s.byID[credentialID]
-	if !ok {
+	if !ok || record.Metadata.OrgID != orgID {
 		return storage.ErrNotFound
 	}
 	if record.Metadata.LastUsedAt == nil || usedAt.After(*record.Metadata.LastUsedAt) {

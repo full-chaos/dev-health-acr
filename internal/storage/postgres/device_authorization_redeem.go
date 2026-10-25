@@ -96,11 +96,11 @@ FROM acr.device_authorizations WHERE device_code_hash = $1 FOR UPDATE`, hash.Str
 UPDATE acr.device_authorizations
 SET state = 'redeemed', redeemed_at = $2, redeemed_credential_id = $3,
     ack_required = $4, credential_acked_at = NULL
-WHERE device_code_hash = $1
+WHERE device_code_hash = $1 AND authorized_org_id = $7::uuid
   AND ((state = 'approved' AND expires_at > $2)
     OR (state = 'redeemed' AND ack_required AND credential_acked_at IS NULL AND redeemed_credential_id = $5
         AND redeemed_at + $6::double precision * INTERVAL '1 second' > $2))`,
-		hash.String(), now, credential.CredentialID, ackable, nullableText(replacing), int64(storage.DeviceCredentialAckWindow/time.Second),
+		hash.String(), now, credential.CredentialID, ackable, nullableText(replacing), int64(storage.DeviceCredentialAckWindow/time.Second), record.AuthorizedOrgID,
 	)
 	if err != nil {
 		return contractsv1.ClientCredential{}, fmt.Errorf("redeem device authorization: %w", sanitizeDatabaseError(err))

@@ -18,7 +18,7 @@ type Store interface {
 	List(context.Context, string) ([]contractsv1.ClientCredential, error)
 	GetByID(context.Context, string, string) (contractsv1.ClientCredential, error)
 	FindByTokenHash(context.Context, string) (contractsv1.ClientCredential, error)
-	TouchLastUsed(context.Context, string, string, string, time.Time) error
+	TouchLastUsed(context.Context, string, string, string, string, time.Time) error
 }
 
 type Backend struct {
@@ -129,11 +129,15 @@ func (l *Lifecycle) FindByTokenHash(ctx context.Context, tokenHash string) (cont
 	return l.backend.Store.FindByTokenHash(ctx, normalized)
 }
 
-func (l *Lifecycle) TouchLastUsed(ctx context.Context, credentialID, ip, userAgent string, usedAt time.Time) error {
+func (l *Lifecycle) TouchLastUsed(ctx context.Context, orgID, credentialID, ip, userAgent string, usedAt time.Time) error {
 	if err := l.operationContext(ctx); err != nil {
 		return err
 	}
 	normalizedID, err := normalizeCredentialID(credentialID)
+	if err != nil {
+		return err
+	}
+	normalizedOrg, err := normalizeIdentifier("organization", orgID)
 	if err != nil {
 		return err
 	}
@@ -144,7 +148,7 @@ func (l *Lifecycle) TouchLastUsed(ctx context.Context, credentialID, ip, userAge
 	if err != nil {
 		return err
 	}
-	return l.backend.Store.TouchLastUsed(ctx, normalizedID, normalizedIP, normalizedUserAgent, usedAt.UTC())
+	return l.backend.Store.TouchLastUsed(ctx, normalizedOrg, normalizedID, normalizedIP, normalizedUserAgent, usedAt.UTC())
 }
 
 func (l *Lifecycle) operationContext(ctx context.Context) error {
