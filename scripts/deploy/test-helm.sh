@@ -48,7 +48,7 @@ Usage: test-helm.sh --values <path> [--image <ref>] [--chart <path>] [--scenario
               embed-api-bad-port, embed-api-default-values, embed-api-override-values,
               embed-api-projector-unchanged, embed-api-bad-retries, embed-api-timeout-bounds.
               The acr-api ServiceAccount scenarios: api-service-account-dedicated (positive),
-              api-service-account-shared, api-service-account-default.
+              api-service-account-shared, api-service-account-default, api-service-account-default-exchange-off.
 
 The harness only renders (helm template/lint) and validates output offline.
 EOF
@@ -466,6 +466,17 @@ case "$scenario" in
       --set workloadTokenExchange.enabled=true \
       --set-string "workloadTokenExchange.trustDomain=test.cluster.local" \
       --set serviceAccount.create=false
+    exit 0 ;;
+  api-service-account-default-exchange-off)
+    printf 'scenario: api-service-account-default-exchange-off (exchange off: create=false with no name still renders, projector on the default ServiceAccount as before)\n'
+    render --set contextFabric.projector.enabled=true --set contextFabric.readsEnabled=true \
+      --set-string "contextFabric.falkor.addr=falkor.acr-test.svc:6379" \
+      --set serviceAccount.create=false >"$workdir/api-sa-off.yaml"
+    grep -qE '^      serviceAccountName: default$' "$workdir/api-sa-off.yaml" || fail_gate "api-sa: exchange off, create=false: projector should still render on the default ServiceAccount"
+    grep -qE "^      serviceAccountName: ${RELEASE}-api\$" "$workdir/api-sa-off.yaml" || fail_gate "api-sa: acr-api must still run on ${RELEASE}-api"
+    if grep -q 'kind: ClusterRoleBinding' "$workdir/api-sa-off.yaml"; then fail_gate "api-sa: exchange off must render no TokenReview binding"; fi
+    pass "api-service-account-default-exchange-off renders as before"
+    printf 'RESULT: scenario api-service-account-default-exchange-off passed\n'
     exit 0 ;;
   happy) : ;;
   *) printf 'unknown scenario: %s\n' "$scenario" >&2; usage; exit 2 ;;
