@@ -130,15 +130,42 @@ escape hatch exists here.
 {{- end -}}
 
 {{/*
-acr-api runs under its own ServiceAccount, never the one the projector uses.
-Fails closed when the shared (serviceAccount.*) name resolves to the same name.
+acr-api runs under its own ServiceAccount. Uniqueness against every other
+ServiceAccount name is enforced by acr.validateServiceAccountNames.
 */}}
 {{- define "acr.apiServiceAccountName" -}}
-{{- $name := printf "%s-api" (include "acr.fullname" .) -}}
-{{- if eq $name (include "acr.serviceAccountName" .) -}}
-{{- fail (printf "api-service-account-shared: serviceAccount resolves to %q, the dedicated acr-api ServiceAccount; the projector must not share it" $name) -}}
+{{- printf "%s-api" (include "acr.fullname" .) -}}
 {{- end -}}
-{{- $name -}}
+
+{{/*
+ONE rule: every ServiceAccount name this chart renders or binds is unique, and
+no consumer ServiceAccount is empty or "default". The set: the acr-api
+ServiceAccount, the shared serviceAccount.* (projector), the migrate Job's, the
+acr-mcp one, and (exchange enabled) every consumerServiceAccounts entry.
+Reused names would put two workloads, or a consumer and the TokenReview
+subject, on one identity.
+*/}}
+{{- define "acr.validateServiceAccountNames" -}}
+{{- $full := include "acr.fullname" . -}}
+{{- $entries := list (list "acr-api" (include "acr.apiServiceAccountName" .)) (list "serviceAccount.*" (include "acr.serviceAccountName" .)) (list "acr-migrate" (printf "%s-migrate" $full)) (list "acr-mcp" (printf "%s-mcp" $full)) -}}
+{{- if .Values.workloadTokenExchange.enabled -}}
+{{- range $i, $c := .Values.workloadTokenExchange.consumerServiceAccounts -}}
+{{- $src := printf "workloadTokenExchange.consumerServiceAccounts[%d]" $i -}}
+{{- $cname := $c.name | default "" -}}
+{{- if or (not $cname) (eq $cname "default") -}}
+{{- fail (printf "service-account-name-collision: %s must name a dedicated ServiceAccount, not empty and not \"default\"" $src) -}}
+{{- end -}}
+{{- $entries = append $entries (list $src $cname) -}}
+{{- end -}}
+{{- end -}}
+{{- $owners := dict -}}
+{{- range $e := $entries -}}
+{{- $n := index $e 1 -}}
+{{- if hasKey $owners $n -}}
+{{- fail (printf "service-account-name-collision: %s and %s resolve to the same ServiceAccount name" (index $owners $n) (index $e 0)) -}}
+{{- end -}}
+{{- $_ := set $owners $n (index $e 0) -}}
+{{- end -}}
 {{- end -}}
 
 {{/*
@@ -357,21 +384,6 @@ name, or the literal name "default").
 {{- if or (not $name) (eq $name "default") -}}
 {{- fail "workload-token-exchange: workloadTokenExchange.enabled=true requires either serviceAccount.create=true or an explicit, non-\"default\" serviceAccount.name -- no workload pod may run on a namespace's shared default ServiceAccount" -}}
 {{- end -}}
-{{- end -}}
-{{- /*
-A consumer ServiceAccount is a different identity from every workload this
-chart runs: a name equal to acr-api's, the shared serviceAccount.*, the
-migrate Job's or acr-mcp's would render a second ServiceAccount of that name,
-and the TokenReview binding would then cover the consumer too. Duplicates
-inside the list are refused for the same reason.
-*/ -}}
-{{- $reserved := list (include "acr.apiServiceAccountName" .) (include "acr.serviceAccountName" .) (printf "%s-migrate" (include "acr.fullname" .)) (printf "%s-mcp" (include "acr.fullname" .)) -}}
-{{- $seen := list -}}
-{{- range .Values.workloadTokenExchange.consumerServiceAccounts -}}
-{{- if or (has .name $reserved) (has .name $seen) -}}
-{{- fail (printf "consumer-service-account-collision: workloadTokenExchange.consumerServiceAccounts name %q is reserved by a chart workload or repeated" .name) -}}
-{{- end -}}
-{{- $seen = append $seen .name -}}
 {{- end -}}
 {{- end -}}
 {{- end -}}

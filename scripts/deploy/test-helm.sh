@@ -49,7 +49,7 @@ Usage: test-helm.sh --values <path> [--image <ref>] [--chart <path>] [--scenario
               embed-api-projector-unchanged, embed-api-bad-retries, embed-api-timeout-bounds.
               The acr-api ServiceAccount scenarios: api-service-account-dedicated (positive),
               api-service-account-shared, api-service-account-default, api-service-account-default-exchange-off,
-              consumer-service-account-collision.
+              service-account-name-collision.
 
 The harness only renders (helm template/lint) and validates output offline.
 EOF
@@ -462,7 +462,7 @@ case "$scenario" in
     printf 'RESULT: scenario api-service-account-dedicated passed\n'
     exit 0 ;;
   api-service-account-shared)
-    negative api-service-account-shared "api-service-account-shared" \
+    negative api-service-account-shared "service-account-name-collision" \
       --set-string "serviceAccount.name=${RELEASE}-api"
     exit 0 ;;
   api-service-account-default)
@@ -481,19 +481,20 @@ case "$scenario" in
     pass "api-service-account-default-exchange-off renders as before"
     printf 'RESULT: scenario api-service-account-default-exchange-off passed\n'
     exit 0 ;;
-  consumer-service-account-collision)
-    printf 'scenario: consumer-service-account-collision (a consumer ServiceAccount may not reuse a chart workload ServiceAccount name, nor repeat)\n'
-    for n in "${RELEASE}-api" "$RELEASE" "${RELEASE}-migrate" "${RELEASE}-mcp"; do
-      negative "consumer-service-account-collision-$n" "consumer-service-account-collision" \
-        --set workloadTokenExchange.enabled=true \
-        --set-string "workloadTokenExchange.trustDomain=test.cluster.local" \
-        --set-json "workloadTokenExchange.consumerServiceAccounts=[{\"name\":\"$n\"}]"
+  service-account-name-collision)
+    printf 'scenario: service-account-name-collision (every ServiceAccount name the chart renders or binds is unique; no consumer is empty or default)\n'
+    exch=(--set workloadTokenExchange.enabled=true --set-string "workloadTokenExchange.trustDomain=test.cluster.local")
+    for n in "${RELEASE}-api" "${RELEASE}-mcp" "${RELEASE}-migrate" "$RELEASE" default; do
+      negative "service-account-name-collision-consumer-$n" "service-account-name-collision" \
+        "${exch[@]}" --set-json "workloadTokenExchange.consumerServiceAccounts=[{\"name\":\"$n\"}]"
     done
-    negative consumer-service-account-collision-duplicate "consumer-service-account-collision" \
-      --set workloadTokenExchange.enabled=true \
-      --set-string "workloadTokenExchange.trustDomain=test.cluster.local" \
-      --set-json 'workloadTokenExchange.consumerServiceAccounts=[{"name":"panel-read"},{"name":"panel-read"}]'
-    printf 'RESULT: scenario consumer-service-account-collision passed\n'
+    negative service-account-name-collision-consumer-empty "service-account-name-collision" \
+      "${exch[@]}" --set-json 'workloadTokenExchange.consumerServiceAccounts=[{"name":""}]'
+    negative service-account-name-collision-consumer-duplicate "service-account-name-collision" \
+      "${exch[@]}" --set-json 'workloadTokenExchange.consumerServiceAccounts=[{"name":"panel-read"},{"name":"panel-read"}]'
+    negative service-account-name-collision-shared-is-mcp "service-account-name-collision" \
+      --set-string "serviceAccount.name=${RELEASE}-mcp"
+    printf 'RESULT: scenario service-account-name-collision passed\n'
     exit 0 ;;
   happy) : ;;
   *) printf 'unknown scenario: %s\n' "$scenario" >&2; usage; exit 2 ;;

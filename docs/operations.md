@@ -1908,13 +1908,13 @@ path and leaves the just-built epoch orphaned until a future decision.
 
 **ServiceAccounts.** acr-api runs under its own ServiceAccount
 `<fullname>-api` (`templates/serviceaccount-api.yaml`): automount off, no
-secrets, and shared with no other workload. The projector keeps the
+secrets, and shared with no other workload. The projector uses the resolved
 `serviceAccount.*` ServiceAccount (default `<fullname>`). The TokenReview
 ClusterRoleBinding, rendered only with `workloadTokenExchange.enabled=true`,
-names the acr-api ServiceAccount alone. The chart refuses a `serviceAccount`
-that resolves to `<fullname>-api`, and a consumer ServiceAccount
-(`workloadTokenExchange.consumerServiceAccounts`) named like a chart workload
-ServiceAccount or repeated. Pre-roll record (read-only):
+names the acr-api ServiceAccount alone. Every ServiceAccount name the chart
+renders or binds (acr-api, `serviceAccount.*`, migrate, acr-mcp, each
+`workloadTokenExchange.consumerServiceAccounts` entry) must be unique, with no
+consumer empty or `default`; the chart fails closed otherwise. Pre-roll record (read-only):
 `kubectl get rolebinding,clusterrolebinding -A -o jsonpath='{range .items[*]}{.kind}{"/"}{.metadata.name}{"\t"}{range .subjects[?(@.kind=="ServiceAccount")]}{.namespace}{"/"}{.name}{" "}{end}{"\n"}{end}' | grep -E 'dev-health/dev-health-acr(-api)?( |$)'`
 -- the `-api` name must have no binding before the roll.
 
