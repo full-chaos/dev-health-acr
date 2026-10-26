@@ -10,10 +10,10 @@ import (
 	"github.com/full-chaos/dev-health-acr/internal/cigates/emitscan"
 )
 
-// maxExportListExecs is the most `go list -export -deps` commands one run of the tests may start, counted at the exec:
-// the first real run (no overlay), five overlay runs of the tests that scan other bytes, one after the deliberate
-// ResetGoTool, and three against planted stand-in go commands. A scan that reloads what it already has exceeds it.
-const maxExportListExecs = 10
+// maxExportListExecs is the most `go list -export -deps` commands one run of the tests may start, counted at the exec.
+// Measured 10 in file order and 13-14 over eight shuffle seeds (a deliberate ResetGoTool empties the cache, so the
+// order moves the count); an unshared load starts 36. Above the cap, a scan reloads export data it already has.
+const maxExportListExecs = 16
 
 func TestMain(m *testing.M) {
 	code := m.Run()
