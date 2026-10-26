@@ -130,6 +130,18 @@ escape hatch exists here.
 {{- end -}}
 
 {{/*
+acr-api runs under its own ServiceAccount, never the one the projector uses.
+Fails closed when the shared (serviceAccount.*) name resolves to the same name.
+*/}}
+{{- define "acr.apiServiceAccountName" -}}
+{{- $name := printf "%s-api" (include "acr.fullname" .) -}}
+{{- if eq $name (include "acr.serviceAccountName" .) -}}
+{{- fail (printf "api-service-account-shared: serviceAccount resolves to %q, the dedicated acr-api ServiceAccount; the projector must not share it" $name) -}}
+{{- end -}}
+{{- $name -}}
+{{- end -}}
+
+{{/*
 RFC1123 subdomain validity for Secret name references. Returns the name or
 fails with the supplied violation label.
 */}}
@@ -334,25 +346,16 @@ URL whenever backing stores are enabled.
 {{- fail "workload-token-exchange: workloadTokenExchange.trustDomain is required when workloadTokenExchange.enabled=true" -}}
 {{- end -}}
 {{- /*
-Codex round 1 finding: the TokenReview ClusterRoleBinding targets
-acr.serviceAccountName, which defaults to the literal "default" namespace
-ServiceAccount whenever serviceAccount.create=false and no explicit name is
-set. Binding cluster-wide TokenReview capability to a SA shared with other
-workloads is a real privilege-escalation surface, so this fails closed on
-the one case this chart can actually detect: create=false with no explicit
-name. An explicit serviceAccount.name is trusted as the operator's own
-deliberate, out-of-band-provisioned choice -- EXCEPT the literal name
-"default", which this chart still rejects explicitly: that name can never
-be a deliberately dedicated choice, since it is the one every namespace's
-built-in ServiceAccount already carries and is almost always shared with
-whatever workloads never set their own. This chart cannot detect sharing
-with any OTHER explicitly named pre-existing SA -- that remains the
-operator's own responsibility (codex round 2 finding 2).
+The TokenReview ClusterRoleBinding targets acr.apiServiceAccountName, a
+dedicated <fullname>-api ServiceAccount that can never be "default". The
+projector keeps acr.serviceAccountName; with the exchange enabled it must not
+fall back to a namespace's shared default ServiceAccount (create=false with no
+name, or the literal name "default").
 */ -}}
 {{- if not .Values.serviceAccount.create -}}
 {{- $name := .Values.serviceAccount.name | default "" -}}
 {{- if or (not $name) (eq $name "default") -}}
-{{- fail "workload-token-exchange: workloadTokenExchange.enabled=true requires either serviceAccount.create=true or an explicit, non-\"default\" serviceAccount.name -- the TokenReview ClusterRoleBinding must never land on a namespace's shared default ServiceAccount" -}}
+{{- fail "workload-token-exchange: workloadTokenExchange.enabled=true requires either serviceAccount.create=true or an explicit, non-\"default\" serviceAccount.name -- no workload pod may run on a namespace's shared default ServiceAccount" -}}
 {{- end -}}
 {{- end -}}
 {{- end -}}

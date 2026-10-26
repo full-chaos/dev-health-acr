@@ -29,6 +29,6 @@ roleRef:
   name: {{ include "acr.fullname" . }}-token-review
 subjects:
   - kind: ServiceAccount
-    name: {{ include "acr.serviceAccountName" . }}
+    name: {{ include "acr.apiServiceAccountName" . }}
     namespace: {{ .Release.Namespace }}
 {{- end }}

@@ -47,6 +47,8 @@ Usage: test-helm.sh --values <path> [--image <ref>] [--chart <path>] [--scenario
               embed-api-off-by-default, embed-api-enabled, embed-api-enabled-no-base-url,
               embed-api-bad-port, embed-api-default-values, embed-api-override-values,
               embed-api-projector-unchanged, embed-api-bad-retries, embed-api-timeout-bounds.
+              The acr-api ServiceAccount scenarios: api-service-account-dedicated (positive),
+              api-service-account-shared, api-service-account-default.
 
 The harness only renders (helm template/lint) and validates output offline.
 EOF
@@ -206,6 +208,59 @@ embed_api_with_projector() {
     --set contextFabric.readsEnabled=true \
     --set-string "contextFabric.falkor.addr=falkor.acr-test.svc:6379" \
     "$@"
+}
+
+api_sa_render() {
+  render \
+    --set contextFabric.projector.enabled=true \
+    --set contextFabric.readsEnabled=true \
+    --set-string "contextFabric.falkor.addr=falkor.acr-test.svc:6379" \
+    --set workloadTokenExchange.enabled=true \
+    --set-string "workloadTokenExchange.trustDomain=test.cluster.local" \
+    --set-json 'imagePullSecrets=[{"name":"ghcr-pull"}]' \
+    "$@"
+}
+
+# api_sa_assert <rendered-file>: acr-api runs under its own ServiceAccount
+# (automount off, no secrets), the pod keeps its pull secret and its projected
+# reviewer token, no other workload uses that ServiceAccount, the projector
+# carries no exchange wiring, and the TokenReview binding names only acr-api's.
+api_sa_assert() {
+  python3 - "$1" "$RELEASE" <<'PY' || exit 1
+import re, sys
+docs = open(sys.argv[1]).read().split('\n---\n')
+rel = sys.argv[2]
+def fail(msg):
+    print('  FAIL api-sa: ' + msg, file=sys.stderr); sys.exit(1)
+def kind(d): m = re.search(r'(?m)^kind: (\S+)$', d); return m.group(1) if m else ''
+def name(d): m = re.search(r'(?m)^metadata:\n(?:  .*\n)*?  name: (\S+)$', d); return m.group(1) if m else ''
+def sa(d): m = re.search(r'(?m)^      serviceAccountName: (\S+)$', d); return m.group(1) if m else None
+api_sa, proj_sa = rel + '-api', rel
+sas = [d for d in docs if kind(d) == 'ServiceAccount' and name(d) == api_sa]
+if len(sas) != 1: fail('want exactly one ServiceAccount %s, got %d' % (api_sa, len(sas)))
+if not re.search(r'(?m)^automountServiceAccountToken: false$', sas[0]): fail('ServiceAccount %s must set automountServiceAccountToken: false' % api_sa)
+if re.search(r'(?m)^(secrets|imagePullSecrets):', sas[0]): fail('ServiceAccount %s must carry no secrets or imagePullSecrets' % api_sa)
+workloads = [d for d in docs if kind(d) in ('Deployment', 'Job', 'StatefulSet', 'CronJob', 'DaemonSet')]
+users = [(kind(d), name(d)) for d in workloads if sa(d) == api_sa]
+if users != [('Deployment', rel)]: fail('workloads on %s = %s, want only the acr-api Deployment %s' % (api_sa, users, rel))
+api = [d for d in workloads if kind(d) == 'Deployment' and name(d) == rel][0]
+if not re.search(r'(?m)^      automountServiceAccountToken: false$', api): fail('acr-api pod must set automountServiceAccountToken: false')
+if not re.search(r'(?m)^      imagePullSecrets:\n        - name: ghcr-pull$', api): fail('acr-api pod lost its imagePullSecrets')
+if not re.search(r'(?m)^        - name: kubernetes-api-reviewer-token\n          projected:', api) or 'serviceAccountToken:' not in api: fail('acr-api lost its projected reviewer token volume')
+projector = [d for d in workloads if kind(d) == 'Deployment' and name(d) == rel + '-projector']
+if len(projector) != 1: fail('want one projector Deployment')
+if sa(projector[0]) != proj_sa: fail('projector serviceAccountName = %s, want %s' % (sa(projector[0]), proj_sa))
+for token in ('ACR_WORKLOAD_TOKEN_EXCHANGE_AUDIENCE', 'ACR_WORKLOAD_TRUST_DOMAIN', 'serviceAccountToken:', 'projected:', 'kubernetes-api-reviewer-token'):
+    if token in projector[0]: fail('projector pod carries %s' % token)
+for d in docs:
+    if kind(d) == 'ConfigMap' and name(d) == rel + '-projector-config' and ('WORKLOAD' in d): fail('projector ConfigMap carries workload-token wiring')
+crb = [d for d in docs if kind(d) == 'ClusterRoleBinding' and name(d) == rel + '-token-review']
+if len(crb) != 1: fail('want one TokenReview ClusterRoleBinding')
+subjects = re.findall(r'(?m)^  - kind: ServiceAccount\n    name: (\S+)$', crb[0])
+if subjects != [api_sa]: fail('TokenReview binding subjects = %s, want [%s]' % (subjects, api_sa))
+if any(sa(d) in (None, 'default') and kind(d) != 'StatefulSet' for d in workloads): fail('a workload pod resolves to the default ServiceAccount')
+print('  ok   api-sa: %s dedicated (automount off, no secrets), sole user is acr-api; projector %s clean; TokenReview bound to %s only' % (api_sa, proj_sa, api_sa))
+PY
 }
 
 case "$scenario" in
@@ -395,6 +450,22 @@ case "$scenario" in
       pass "embed-api-timeout-$good accepted and rendered"
     done
     printf 'RESULT: scenario embed-api-timeout-bounds passed\n'
+    exit 0 ;;
+  api-service-account-dedicated)
+    printf 'scenario: api-service-account-dedicated (acr-api has its own ServiceAccount; projector and TokenReview binding assertions)\n'
+    api_sa_render >"$workdir/api-sa.yaml"
+    api_sa_assert "$workdir/api-sa.yaml"
+    printf 'RESULT: scenario api-service-account-dedicated passed\n'
+    exit 0 ;;
+  api-service-account-shared)
+    negative api-service-account-shared "api-service-account-shared" \
+      --set-string "serviceAccount.name=${RELEASE}-api"
+    exit 0 ;;
+  api-service-account-default)
+    negative api-service-account-default "no workload pod may run on a namespace's shared default ServiceAccount" \
+      --set workloadTokenExchange.enabled=true \
+      --set-string "workloadTokenExchange.trustDomain=test.cluster.local" \
+      --set serviceAccount.create=false
     exit 0 ;;
   happy) : ;;
   *) printf 'unknown scenario: %s\n' "$scenario" >&2; usage; exit 2 ;;
