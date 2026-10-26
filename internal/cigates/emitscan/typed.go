@@ -17,6 +17,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"runtime"
+	"runtime/debug"
 	"sort"
 	"strconv"
 	"strings"
@@ -151,6 +152,21 @@ func (snap *sourceSnapshot) writeOverlay() (dir, overlayFile string, err error) 
 // exportListExecs counts the `go list -export -deps` commands this process started.
 var exportListExecs atomic.Int64
 
+// exportListArgs are the leading arguments of the export-data listing. A race-built scanner lists with -race, so the
+// listing reuses the export data of the race build that compiled the same packages for the test binaries instead of
+// compiling them a second time without it.
+func exportListArgs() []string {
+	args := []string{"list", "-export", "-deps"}
+	if info, ok := debug.ReadBuildInfo(); ok {
+		for _, setting := range info.Settings {
+			if setting.Key == "-race" && setting.Value == "true" {
+				return append(args, "-race")
+			}
+		}
+	}
+	return args
+}
+
 type exportEntry struct {
 	files map[string]string
 }
@@ -214,7 +230,7 @@ func exportFiles(ctx context.Context, moduleDir string, snap *sourceSnapshot) (m
 	if err != nil {
 		return nil, err
 	}
-	args := []string{"list", "-export", "-deps"}
+	args := exportListArgs()
 	if snap != nil && len(snap.files) > 0 {
 		overlayDir, overlayFile, err := snap.writeOverlay()
 		if overlayDir != "" {
