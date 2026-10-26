@@ -168,7 +168,7 @@ deployment:
   podLabels: {}
   resources:
     requests:
-      cpu: 100m
+      cpu: 25m
       memory: 128Mi
     limits:
       cpu: "1"
@@ -481,7 +481,7 @@ contextFabric:
     affinity: {}
     resources:
       requests:
-        cpu: 100m
+        cpu: 50m
         memory: 128Mi
       limits:
         cpu: "1"
@@ -592,7 +592,7 @@ acrMcp:
   topologySpreadConstraints: []
   resources:
     requests:
-      cpu: 50m
+      cpu: 25m
       memory: 64Mi
     limits:
       cpu: "1"
