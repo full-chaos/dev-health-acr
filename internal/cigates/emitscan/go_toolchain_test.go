@@ -102,7 +102,8 @@ func TestGoListRunsWithTheResolvedGoAndALocalToolchain(t *testing.T) {
 		t.Fatalf("ExportFiles() error = %v", err)
 	}
 	got := readCalls(t, calls)
-	if !strings.Contains(got, "list -export -deps") || !strings.Contains(got, "list -export -deps -f {{if .Export}}{{.ImportPath}}\t{{.Export}}{{end}} ./... GOTOOLCHAIN=local") {
+	listing := strings.Join(emitscan.ExportListArgs(), " ")
+	if !strings.Contains(got, "list -export -deps") || !strings.Contains(got, listing+" -f {{if .Export}}{{.ImportPath}}\t{{.Export}}{{end}} ./... GOTOOLCHAIN=local") {
 		t.Fatalf("go list calls = %q, want the export listing with GOTOOLCHAIN=local", got)
 	}
 	if !strings.Contains(got, "env GOVERSION GOTOOLCHAIN=local") {
