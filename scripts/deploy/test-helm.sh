@@ -48,7 +48,8 @@ Usage: test-helm.sh --values <path> [--image <ref>] [--chart <path>] [--scenario
               embed-api-bad-port, embed-api-default-values, embed-api-override-values,
               embed-api-projector-unchanged, embed-api-bad-retries, embed-api-timeout-bounds.
               The acr-api ServiceAccount scenarios: api-service-account-dedicated (positive),
-              api-service-account-shared, api-service-account-default, api-service-account-default-exchange-off.
+              api-service-account-shared, api-service-account-default, api-service-account-default-exchange-off,
+              consumer-service-account-collision.
 
 The harness only renders (helm template/lint) and validates output offline.
 EOF
@@ -226,10 +227,11 @@ api_sa_render() {
 # reviewer token, no other workload uses that ServiceAccount, the projector
 # carries no exchange wiring, and the TokenReview binding names only acr-api's.
 api_sa_assert() {
-  python3 - "$1" "$RELEASE" <<'PY' || exit 1
+  python3 - "$1" "$RELEASE" "$NAMESPACE" <<'PY' || exit 1
 import re, sys
 docs = open(sys.argv[1]).read().split('\n---\n')
 rel = sys.argv[2]
+ns = sys.argv[3]
 def fail(msg):
     print('  FAIL api-sa: ' + msg, file=sys.stderr); sys.exit(1)
 def kind(d): m = re.search(r'(?m)^kind: (\S+)$', d); return m.group(1) if m else ''
@@ -256,8 +258,10 @@ for d in docs:
     if kind(d) == 'ConfigMap' and name(d) == rel + '-projector-config' and ('WORKLOAD' in d): fail('projector ConfigMap carries workload-token wiring')
 crb = [d for d in docs if kind(d) == 'ClusterRoleBinding' and name(d) == rel + '-token-review']
 if len(crb) != 1: fail('want one TokenReview ClusterRoleBinding')
-subjects = re.findall(r'(?m)^  - kind: ServiceAccount\n    name: (\S+)$', crb[0])
-if subjects != [api_sa]: fail('TokenReview binding subjects = %s, want [%s]' % (subjects, api_sa))
+subjects = re.findall(r'(?m)^  - kind: ServiceAccount\n    name: (\S+)\n    namespace: (\S+)$', crb[0])
+if subjects != [(api_sa, ns)]: fail('TokenReview binding subjects = %s, want [(%s, %s)]' % (subjects, api_sa, ns))
+sa_names = [name(d) for d in docs if kind(d) == 'ServiceAccount']
+if len(sa_names) != len(set(sa_names)): fail('a ServiceAccount name is rendered twice: %s' % sorted(n for n in set(sa_names) if sa_names.count(n) > 1))
 if any(sa(d) in (None, 'default') and kind(d) != 'StatefulSet' for d in workloads): fail('a workload pod resolves to the default ServiceAccount')
 print('  ok   api-sa: %s dedicated (automount off, no secrets), sole user is acr-api; projector %s clean; TokenReview bound to %s only' % (api_sa, proj_sa, api_sa))
 PY
@@ -476,6 +480,20 @@ case "$scenario" in
     if grep -q 'kind: ClusterRoleBinding' "$workdir/api-sa-off.yaml"; then fail_gate "api-sa: exchange off must render no TokenReview binding"; fi
     pass "api-service-account-default-exchange-off renders as before"
     printf 'RESULT: scenario api-service-account-default-exchange-off passed\n'
+    exit 0 ;;
+  consumer-service-account-collision)
+    printf 'scenario: consumer-service-account-collision (a consumer ServiceAccount may not reuse a chart workload ServiceAccount name, nor repeat)\n'
+    for n in "${RELEASE}-api" "$RELEASE" "${RELEASE}-migrate" "${RELEASE}-mcp"; do
+      negative "consumer-service-account-collision-$n" "consumer-service-account-collision" \
+        --set workloadTokenExchange.enabled=true \
+        --set-string "workloadTokenExchange.trustDomain=test.cluster.local" \
+        --set-json "workloadTokenExchange.consumerServiceAccounts=[{\"name\":\"$n\"}]"
+    done
+    negative consumer-service-account-collision-duplicate "consumer-service-account-collision" \
+      --set workloadTokenExchange.enabled=true \
+      --set-string "workloadTokenExchange.trustDomain=test.cluster.local" \
+      --set-json 'workloadTokenExchange.consumerServiceAccounts=[{"name":"panel-read"},{"name":"panel-read"}]'
+    printf 'RESULT: scenario consumer-service-account-collision passed\n'
     exit 0 ;;
   happy) : ;;
   *) printf 'unknown scenario: %s\n' "$scenario" >&2; usage; exit 2 ;;

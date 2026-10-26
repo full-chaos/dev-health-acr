@@ -358,6 +358,21 @@ name, or the literal name "default").
 {{- fail "workload-token-exchange: workloadTokenExchange.enabled=true requires either serviceAccount.create=true or an explicit, non-\"default\" serviceAccount.name -- no workload pod may run on a namespace's shared default ServiceAccount" -}}
 {{- end -}}
 {{- end -}}
+{{- /*
+A consumer ServiceAccount is a different identity from every workload this
+chart runs: a name equal to acr-api's, the shared serviceAccount.*, the
+migrate Job's or acr-mcp's would render a second ServiceAccount of that name,
+and the TokenReview binding would then cover the consumer too. Duplicates
+inside the list are refused for the same reason.
+*/ -}}
+{{- $reserved := list (include "acr.apiServiceAccountName" .) (include "acr.serviceAccountName" .) (printf "%s-migrate" (include "acr.fullname" .)) (printf "%s-mcp" (include "acr.fullname" .)) -}}
+{{- $seen := list -}}
+{{- range .Values.workloadTokenExchange.consumerServiceAccounts -}}
+{{- if or (has .name $reserved) (has .name $seen) -}}
+{{- fail (printf "consumer-service-account-collision: workloadTokenExchange.consumerServiceAccounts name %q is reserved by a chart workload or repeated" .name) -}}
+{{- end -}}
+{{- $seen = append $seen .name -}}
+{{- end -}}
 {{- end -}}
 {{- end -}}
 
