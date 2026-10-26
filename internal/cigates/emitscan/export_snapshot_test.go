@@ -137,3 +137,50 @@ func TestSnapshotKeyDoesNotDependOnDirectoryOrder(t *testing.T) {
 		}
 	}
 }
+
+// Scans of fixture roots outside the module read no file `go list ./...` of the module reads, so the module's export data
+// is listed once per process however many different fixtures are scanned.
+func TestExportDataIsListedOnceForFixturesOutsideTheModule(t *testing.T) {
+	counter := filepath.Join(t.TempDir(), "list-count")
+	goWrapper(t, "echo x >> '"+counter+"'\nexit 0")
+	defer emitscan.SetHelperBinary(plantHelper(t, ackScript+`echo "$ack"`))()
+	body := "func f(l *slog.Logger, v string) { l.Info(\"m\", \"pass\", v) }"
+	for i := 0; i < 3; i++ {
+		scanSource(t, header+body+"\n"+strings.Repeat("var _ = 1\n", i))
+	}
+	data, err := os.ReadFile(counter)
+	if err != nil {
+		t.Fatalf("go list never ran: %v", err)
+	}
+	if n := strings.Count(string(data), "x"); n != 1 {
+		t.Errorf("go list ran %d times for 3 different fixtures outside the module, want 1", n)
+	}
+}
+
+// The export-cache key follows the bytes of the files `go list ./...` of the module reads, and only those.
+func TestExportCacheKeyFollowsFilesInTheModuleOnly(t *testing.T) {
+	moduleDir := t.TempDir()
+	outside := t.TempDir()
+	key := func(root string, rel string, src string) string {
+		t.Helper()
+		k, err := emitscan.ModuleExportKey(moduleDir, root, []string{rel}, [][]byte{[]byte(src)})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return k
+	}
+	inA := key(moduleDir, "internal/a/a.go", "package a\n")
+	if inB := key(moduleDir, "internal/a/a.go", "package b\n"); inB == inA {
+		t.Error("a change in a module file left the key unchanged")
+	}
+	if inOther := key(moduleDir, "internal/c/c.go", "package a\n"); inOther == inA {
+		t.Error("a module file at another path left the key unchanged")
+	}
+	outA := key(outside, "internal/a/a.go", "package a\n")
+	if outB := key(outside, "internal/a/a.go", "package b\n"); outB != outA {
+		t.Error("a change in a file outside the module changed the key")
+	}
+	if outA != key(t.TempDir(), "internal/z/z.go", "package z\n") {
+		t.Error("fixtures outside the module do not share the key of an empty snapshot")
+	}
+}

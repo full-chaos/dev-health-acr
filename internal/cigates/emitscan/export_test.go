@@ -205,3 +205,16 @@ func SnapshotKey(rels []string, srcs [][]byte) string {
 	}
 	return newSourceSnapshot(".", byDir).key
 }
+
+// ModuleExportKey is the export-cache key of the snapshot of these parsed files (rel under root) for the module at moduleDir.
+func ModuleExportKey(moduleDir, root string, rels []string, srcs [][]byte) (string, error) {
+	var files []parsedFile
+	for i, rel := range rels {
+		files = append(files, parsedFile{rel: rel, src: srcs[i]})
+	}
+	snap, err := newSourceSnapshot(root, map[string][]parsedFile{"x": files}).inModule(moduleDir)
+	if err != nil {
+		return "", err
+	}
+	return snap.key, nil
+}
