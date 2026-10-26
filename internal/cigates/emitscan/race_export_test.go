@@ -27,12 +27,12 @@ func TestExportListUsesRaceExactlyWhenTheScannerIsRaceBuilt(t *testing.T) {
 
 // raceTaggedFiles lists, as import path + "/" + file, every non-test Go file of the dependency set of patterns (standard
 // library excluded) that a build constraint names the race tag in, whichever side of the constraint it is on.
-func raceTaggedFiles(t *testing.T, dir string, patterns ...string) []string {
+func raceTaggedFiles(t *testing.T, dir string, env []string, patterns ...string) []string {
 	t.Helper()
-	args := append([]string{"list", "-deps", "-f", `{{if not .Standard}}{{.ImportPath}}|{{.Dir}}{{range .GoFiles}}|{{.}}{{end}}{{range .IgnoredGoFiles}}|{{.}}{{end}}{{end}}`}, patterns...)
+	args := append([]string{"list", "-deps", "-f", `{{if not .Standard}}{{.ImportPath}}|{{.Dir}}{{range .GoFiles}}|{{.}}{{end}}{{range .CgoFiles}}|{{.}}{{end}}{{range .IgnoredGoFiles}}|{{.}}{{end}}{{end}}`}, patterns...)
 	cmd := exec.Command("go", args...)
 	cmd.Dir = dir
-	cmd.Env = append(os.Environ(), "GOTOOLCHAIN=local")
+	cmd.Env = append(append(os.Environ(), "GOTOOLCHAIN=local"), env...)
 	out, err := cmd.Output()
 	if err != nil {
 		t.Fatalf("go list -deps: %v", err)
@@ -68,7 +68,11 @@ func namesRaceTag(t *testing.T, path string) bool {
 		if strings.HasPrefix(line, "package ") {
 			return false
 		}
-		if rest, ok := strings.CutPrefix(line, "//go:build "); ok {
+		rest, ok := strings.CutPrefix(line, "//go:build ")
+		if !ok {
+			rest, ok = strings.CutPrefix(line, "// +build ")
+		}
+		if ok {
 			for _, word := range strings.FieldsFunc(rest, func(r rune) bool {
 				return !(r == '_' || r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9')
 			}) {
@@ -94,7 +98,7 @@ var pinnedRaceTaggedFiles = []string{
 }
 
 func TestRaceTaggedFilesOfTheDependencySetArePinned(t *testing.T) {
-	got := raceTaggedFiles(t, repoRoot(t), "./...")
+	got := raceTaggedFiles(t, repoRoot(t), nil, "./...")
 	if strings.Join(got, "\n") != strings.Join(pinnedRaceTaggedFiles, "\n") {
 		t.Errorf("race-tagged non-test files of the dependency set changed: a new or removed file needs a review (does it change a declaration a scanned package uses?) before this pin moves.\n got: %q\nwant: %q", got, pinnedRaceTaggedFiles)
 	}
@@ -112,8 +116,11 @@ func TestRaceTaggedFileListSeesAFixtureFileOnEitherSideOfTheConstraint(t *testin
 	write("b_race.go", "//go:build race\n\npackage fx\n")
 	write("c_norace.go", "//go:build !race && linux\n\npackage fx\n")
 	write("d_other.go", "//go:build linux\n\npackage fx\n")
-	want := "example.com/fx/b_race.go,example.com/fx/c_norace.go"
-	if got := strings.Join(raceTaggedFiles(t, dir, "./..."), ","); got != want {
+	write("e_legacy.go", "// +build race\n\npackage fx\n")
+	write("f_legacy_not.go", "// +build linux,!race\n\npackage fx\n")
+	write("g_cgo_race.go", "//go:build race\n\npackage fx\n\n// int one(void) { return 1; }\nimport \"C\"\n")
+	want := "example.com/fx/b_race.go,example.com/fx/c_norace.go,example.com/fx/e_legacy.go,example.com/fx/f_legacy_not.go,example.com/fx/g_cgo_race.go"
+	if got := strings.Join(raceTaggedFiles(t, dir, []string{"GOFLAGS=-race", "CGO_ENABLED=1"}, "./..."), ","); got != want {
 		t.Errorf("race-tagged fixture files = %q, want %q", got, want)
 	}
 }
