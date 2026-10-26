@@ -16,7 +16,7 @@ the Job (-5), so they exist first. They are cleaned up after the hook succeeds.
 apiVersion: v1
 kind: ServiceAccount
 metadata:
-  name: {{ include "acr.fullname" . }}-migrate
+  name: {{ printf "%s-migrate" (include "acr.fullname" .) | quote }}
   namespace: {{ .Release.Namespace }}
   labels:
     {{- include "acr.migrationLabels" . | nindent 4 }}

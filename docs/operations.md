@@ -1906,6 +1906,18 @@ path and leaves the just-built epoch orphaned until a future decision.
 
 ### CHAOS-4076: NetworkPolicy apiserver egress and in-release FalkorDB PodSecurity
 
+**ServiceAccounts.** acr-api runs under its own ServiceAccount
+`<fullname>-api` (`templates/serviceaccount-api.yaml`): automount off, no
+secrets, and shared with no other workload. The projector uses the resolved
+`serviceAccount.*` ServiceAccount (default `<fullname>`). The TokenReview
+ClusterRoleBinding, rendered only with `workloadTokenExchange.enabled=true`,
+names the acr-api ServiceAccount alone. Every ServiceAccount name the chart
+renders or binds (acr-api, `serviceAccount.*`, migrate, acr-mcp, each
+`workloadTokenExchange.consumerServiceAccounts` entry) must be a valid Kubernetes name (lowercase DNS-1123 subdomain) and unique, with no
+consumer empty or `default`; the chart fails closed otherwise and emits every name quoted. Pre-roll record (read-only):
+`kubectl get rolebinding,clusterrolebinding -A -o jsonpath='{range .items[*]}{.kind}{"/"}{.metadata.name}{"\t"}{range .subjects[?(@.kind=="ServiceAccount")]}{.namespace}{"/"}{.name}{" "}{end}{"\n"}{end}' | grep -E 'dev-health/dev-health-acr(-api)?( |$)'`
+-- the `-api` name must have no binding before the roll.
+
 Two chart-level constraints found during the CHAOS-4034 live P6 auth
 validation run, both ratified (chris, 2026-08-23) rather than fixed, and
 recorded here so a future deployer does not re-open either as a bug.
