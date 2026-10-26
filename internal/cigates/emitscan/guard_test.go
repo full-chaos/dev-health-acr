@@ -12,6 +12,8 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -53,16 +55,61 @@ func scanBudget(t *testing.T) (time.Duration, bool) {
 	return scanDeadlineBudget(time.Now(), deadline, ok)
 }
 
+type scanMemoEntry struct {
+	once     sync.Once
+	findings []emitscan.Finding
+	sites    []emitscan.Site
+	err      error
+	budget   time.Duration
+}
+
+var scanMemo = struct {
+	sync.Mutex
+	byInput map[string]*scanMemoEntry
+}{byInput: map[string]*scanMemoEntry{}}
+
+// scanRuns counts the scans scanWithin really ran in this process.
+var scanRuns atomic.Int64
+
 func scanWithin(t *testing.T) ([]emitscan.Finding, []emitscan.Site) {
 	t.Helper()
-	budget, ok := scanBudget(t)
+	return scanShared(t, repoRoot(t), []string{"internal", "cmd"})
+}
+
+// scanShared scans dirs under root once per process for each distinct (root, dirs); later callers get a copy of the
+// result, or fail with the original error.
+func scanShared(t *testing.T, root string, dirs []string) ([]emitscan.Finding, []emitscan.Site) {
+	t.Helper()
+	input := root + "\x00" + strings.Join(dirs, "\x00")
+	scanMemo.Lock()
+	entry, ok := scanMemo.byInput[input]
 	if !ok {
-		deadline, _ := t.Deadline()
-		t.Fatalf("the test deadline is %s away: not enough to scan after the 5s margin; raise go test -timeout", time.Until(deadline).Round(time.Millisecond))
+		entry = &scanMemoEntry{}
+		scanMemo.byInput[input] = entry
 	}
-	findings, sites, err := runScan(budget, repoRoot(t), []string{"internal", "cmd"})
-	if err != nil {
-		t.Fatalf("the emit-path scan did not finish within %s (the test deadline less a margin): %v", budget, err)
+	scanMemo.Unlock()
+	entry.once.Do(func() {
+		budget, ok := scanBudget(t)
+		if !ok {
+			deadline, _ := t.Deadline()
+			entry.err = fmt.Errorf("the test deadline is %s away: not enough to scan after the 5s margin; raise go test -timeout", time.Until(deadline).Round(time.Millisecond))
+			return
+		}
+		entry.budget = budget
+		scanRuns.Add(1)
+		entry.findings, entry.sites, entry.err = runScan(budget, root, dirs)
+		if entry.err != nil {
+			entry.err = fmt.Errorf("the emit-path scan did not finish within %s (the test deadline less a margin): %w", budget, entry.err)
+		}
+	})
+	if entry.err != nil {
+		t.Fatal(entry.err)
+	}
+	findings := append([]emitscan.Finding(nil), entry.findings...)
+	sites := make([]emitscan.Site, len(entry.sites))
+	for i, site := range entry.sites {
+		site.Keys = append([]string(nil), site.Keys...)
+		sites[i] = site
 	}
 	return findings, sites
 }
