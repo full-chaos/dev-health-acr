@@ -101,6 +101,26 @@ func newSourceSnapshot(root string, byDir map[string][]parsedFile) *sourceSnapsh
 	return snap
 }
 
+// inModule is the part of the snapshot that lies under moduleDir, with its paths relative to moduleDir. Only those files can
+// be read by `go list ./...` of the module, so only they belong in its overlay and in the key of its export set; a scan root
+// outside the module (a fixture) must neither change the key nor add overlay entries. Paths are compared as given (no symlink
+// resolution).
+func (snap *sourceSnapshot) inModule(moduleDir string) (*sourceSnapshot, error) {
+	absRoot, err := filepath.Abs(snap.root)
+	if err != nil {
+		return nil, err
+	}
+	var inside []parsedFile
+	for _, parsed := range snap.files {
+		rel, err := filepath.Rel(moduleDir, filepath.Join(absRoot, filepath.FromSlash(parsed.rel)))
+		if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+			continue
+		}
+		inside = append(inside, parsedFile{rel: filepath.ToSlash(rel), src: parsed.src})
+	}
+	return newSourceSnapshot(moduleDir, map[string][]parsedFile{"": inside}), nil
+}
+
 // writeOverlay writes the parsed bytes to a private temp directory and the go overlay file that maps each scanned file to
 // its copy. The directory is returned even with an error, so the caller removes it.
 func (snap *sourceSnapshot) writeOverlay() (dir, overlayFile string, err error) {
@@ -171,6 +191,12 @@ func moduleDirOf(root string) (string, error) {
 func exportFiles(ctx context.Context, moduleDir string, snap *sourceSnapshot) (map[string]string, error) {
 	exportCache.Lock()
 	defer exportCache.Unlock()
+	if snap != nil {
+		var snapErr error
+		if snap, snapErr = snap.inModule(moduleDir); snapErr != nil {
+			return nil, snapErr
+		}
+	}
 	cacheKey := moduleDir
 	if snap != nil && len(snap.files) > 0 {
 		cacheKey += "\x00" + snap.key
