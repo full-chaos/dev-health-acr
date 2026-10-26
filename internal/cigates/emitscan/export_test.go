@@ -218,3 +218,6 @@ func ModuleExportKey(moduleDir, root string, rels []string, srcs [][]byte) (stri
 	}
 	return snap.key, nil
 }
+
+// ExportListExecs is how many `go list -export -deps` commands this process started.
+func ExportListExecs() int64 { return exportListExecs.Load() }

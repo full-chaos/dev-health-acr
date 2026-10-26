@@ -148,6 +148,9 @@ func (snap *sourceSnapshot) writeOverlay() (dir, overlayFile string, err error) 
 	return dir, overlayFile, os.WriteFile(overlayFile, payload, 0o600)
 }
 
+// exportListExecs counts the `go list -export -deps` commands this process started.
+var exportListExecs atomic.Int64
+
 type exportEntry struct {
 	files map[string]string
 }
@@ -223,6 +226,7 @@ func exportFiles(ctx context.Context, moduleDir string, snap *sourceSnapshot) (m
 		args = append(args, "-overlay", overlayFile)
 	}
 	args = append(args, "-f", "{{if .Export}}{{.ImportPath}}\t{{.Export}}{{end}}", "./...")
+	exportListExecs.Add(1)
 	cmd := exec.CommandContext(ctx, goPath, args...)
 	cmd.Dir = moduleDir
 	cmd.Env = append(os.Environ(), "GOTOOLCHAIN=local")
