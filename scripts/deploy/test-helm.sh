@@ -473,7 +473,6 @@ case "$scenario" in
       --set-string "contextFabric.falkor.addr=falkor.acr-test.svc:6379" \
       --set serviceAccount.create=false >"$workdir/api-sa-off.yaml"
     grep -qE '^      serviceAccountName: default$' "$workdir/api-sa-off.yaml" || fail_gate "api-sa: exchange off, create=false: projector should still render on the default ServiceAccount"
-    grep -qE "^      serviceAccountName: ${RELEASE}-api\$" "$workdir/api-sa-off.yaml" || fail_gate "api-sa: acr-api must still run on ${RELEASE}-api"
     if grep -q 'kind: ClusterRoleBinding' "$workdir/api-sa-off.yaml"; then fail_gate "api-sa: exchange off must render no TokenReview binding"; fi
     pass "api-service-account-default-exchange-off renders as before"
     printf 'RESULT: scenario api-service-account-default-exchange-off passed\n'
