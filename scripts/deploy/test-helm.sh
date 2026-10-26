@@ -235,8 +235,9 @@ ns = sys.argv[3]
 def fail(msg):
     print('  FAIL api-sa: ' + msg, file=sys.stderr); sys.exit(1)
 def kind(d): m = re.search(r'(?m)^kind: (\S+)$', d); return m.group(1) if m else ''
-def name(d): m = re.search(r'(?m)^metadata:\n(?:  .*\n)*?  name: (\S+)$', d); return m.group(1) if m else ''
-def sa(d): m = re.search(r'(?m)^      serviceAccountName: (\S+)$', d); return m.group(1) if m else None
+def name(d): m = re.search(r'(?m)^metadata:\n(?:  .*\n)*?  name: "?([^"\s]+)"?$', d); return m.group(1) if m else ''
+def sa(d): m = re.search(r'(?m)^      serviceAccountName: "?([^"\s]+)"?$', d); return m.group(1) if m else None
+def raw_sa(d): m = re.search(r'(?m)^      serviceAccountName: (\S+)$', d); return m.group(1) if m else None
 api_sa, proj_sa = rel + '-api', rel
 sas = [d for d in docs if kind(d) == 'ServiceAccount' and name(d) == api_sa]
 if len(sas) != 1: fail('want exactly one ServiceAccount %s, got %d' % (api_sa, len(sas)))
@@ -248,7 +249,12 @@ if users != [('Deployment', rel)]: fail('workloads on %s = %s, want only the acr
 api = [d for d in workloads if kind(d) == 'Deployment' and name(d) == rel][0]
 if not re.search(r'(?m)^      automountServiceAccountToken: false$', api): fail('acr-api pod must set automountServiceAccountToken: false')
 if not re.search(r'(?m)^      imagePullSecrets:\n        - name: ghcr-pull$', api): fail('acr-api pod lost its imagePullSecrets')
-if not re.search(r'(?m)^        - name: kubernetes-api-reviewer-token\n          projected:', api) or 'serviceAccountToken:' not in api: fail('acr-api lost its projected reviewer token volume')
+vol = re.search(r'(?ms)^        - name: kubernetes-api-reviewer-token\n(.*?)(?=^        - name: |\Z)', api)
+if not vol or 'projected:' not in vol.group(1) or 'serviceAccountToken:' not in vol.group(1): fail('acr-api lost its projected reviewer token on the kubernetes-api-reviewer-token volume')
+for d in docs:
+    if kind(d) == 'ServiceAccount' and not re.search(r'(?m)^metadata:\n(?:  .*\n)*?  name: "[^"]+"$', d): fail('ServiceAccount %s name is not quoted' % name(d))
+for d in workloads:
+    if raw_sa(d) is not None and not (raw_sa(d).startswith('"') and raw_sa(d).endswith('"')): fail('%s %s serviceAccountName is not quoted' % (kind(d), name(d)))
 projector = [d for d in workloads if kind(d) == 'Deployment' and name(d) == rel + '-projector']
 if len(projector) != 1: fail('want one projector Deployment')
 if sa(projector[0]) != proj_sa: fail('projector serviceAccountName = %s, want %s' % (sa(projector[0]), proj_sa))
@@ -258,7 +264,9 @@ for d in docs:
     if kind(d) == 'ConfigMap' and name(d) == rel + '-projector-config' and ('WORKLOAD' in d): fail('projector ConfigMap carries workload-token wiring')
 crb = [d for d in docs if kind(d) == 'ClusterRoleBinding' and name(d) == rel + '-token-review']
 if len(crb) != 1: fail('want one TokenReview ClusterRoleBinding')
-subjects = re.findall(r'(?m)^  - kind: ServiceAccount\n    name: (\S+)\n    namespace: (\S+)$', crb[0])
+allsub = re.search(r'(?ms)^subjects:\n(.*)\Z', crb[0]).group(1)
+if len(re.findall(r'(?m)^  - ', allsub)) != 1: fail('TokenReview binding must have exactly one subject, got %d' % len(re.findall(r'(?m)^  - ', allsub)))
+subjects = re.findall(r'(?m)^  - kind: ServiceAccount\n    name: "([^"\s]+)"\n    namespace: (\S+)$', crb[0])
 if subjects != [(api_sa, ns)]: fail('TokenReview binding subjects = %s, want [(%s, %s)]' % (subjects, api_sa, ns))
 sa_names = [name(d) for d in docs if kind(d) == 'ServiceAccount']
 if len(sa_names) != len(set(sa_names)): fail('a ServiceAccount name is rendered twice: %s' % sorted(n for n in set(sa_names) if sa_names.count(n) > 1))
@@ -476,8 +484,9 @@ case "$scenario" in
     render --set contextFabric.projector.enabled=true --set contextFabric.readsEnabled=true \
       --set-string "contextFabric.falkor.addr=falkor.acr-test.svc:6379" \
       --set serviceAccount.create=false >"$workdir/api-sa-off.yaml"
-    grep -qE '^      serviceAccountName: default$' "$workdir/api-sa-off.yaml" || fail_gate "api-sa: exchange off, create=false: projector should still render on the default ServiceAccount"
+    grep -qE '^      serviceAccountName: "?default"?$' "$workdir/api-sa-off.yaml" || fail_gate "api-sa: exchange off, create=false: projector should still render on the default ServiceAccount"
     if grep -q 'kind: ClusterRoleBinding' "$workdir/api-sa-off.yaml"; then fail_gate "api-sa: exchange off must render no TokenReview binding"; fi
+    if grep -q 'kubernetes-api-reviewer-token' "$workdir/api-sa-off.yaml"; then fail_gate "api-sa: exchange off must render no reviewer token volume"; fi
     pass "api-service-account-default-exchange-off renders as before"
     printf 'RESULT: scenario api-service-account-default-exchange-off passed\n'
     exit 0 ;;
@@ -488,6 +497,12 @@ case "$scenario" in
       negative "service-account-name-collision-consumer-$n" "service-account-name-collision" \
         "${exch[@]}" --set-json "workloadTokenExchange.consumerServiceAccounts=[{\"name\":\"$n\"}]"
     done
+    for bad in "${RELEASE}-api " " ${RELEASE}-api" $'tab\t' Upper-Case under_score -leading-dash; do
+      negative "service-account-name-collision-consumer-invalid-name" "service-account-name-collision: workloadTokenExchange.consumerServiceAccounts[0] is not a valid Kubernetes name" \
+        "${exch[@]}" --set-json "workloadTokenExchange.consumerServiceAccounts=[{\"name\":$(python3 -c 'import json,sys; print(json.dumps(sys.argv[1]))' "$bad")}]"
+    done
+    negative service-account-name-collision-projector-whitespace "service-account-name-collision: serviceAccount.* is not a valid Kubernetes name" \
+      --set serviceAccount.create=false --set-string "serviceAccount.name=${RELEASE}-api "
     negative service-account-name-collision-consumer-empty "service-account-name-collision" \
       "${exch[@]}" --set-json 'workloadTokenExchange.consumerServiceAccounts=[{"name":""}]'
     negative service-account-name-collision-consumer-duplicate "service-account-name-collision" \
@@ -1087,7 +1102,7 @@ mcp_render="$(render \
   --set-json 'acrMcp.gateway.httpRoute.hostnames=["mcp.dev-health.internal"]')"
 # Select by resource NAME: the acr-api NetworkPolicy also carries a `component: mcp`
 # label (its ingress from the acr-mcp pods), so a label match alone is ambiguous.
-extract_mcp_doc() { extract_doc "$1" '  name: [^\n]*-mcp(-config)?\n' <<<"$mcp_render"; }
+extract_mcp_doc() { extract_doc "$1" '  name: "?[^\n"]*-mcp"?(-config)?\n' <<<"$mcp_render"; }
 
 mcp_deploy="$(extract_mcp_doc Deployment)"
 [[ -n "$mcp_deploy" ]] || fail_gate "acr-mcp: enabled render is missing the acr-mcp Deployment"

@@ -138,8 +138,10 @@ ServiceAccount name is enforced by acr.validateServiceAccountNames.
 {{- end -}}
 
 {{/*
-ONE rule: every ServiceAccount name this chart renders or binds is unique, and
-no consumer ServiceAccount is empty or "default". The set: the acr-api
+ONE rule: every ServiceAccount name this chart renders or binds is a valid
+Kubernetes DNS-1123 subdomain (checked on the raw value, before any YAML
+parsing can trim it), is unique, and no consumer ServiceAccount is empty or
+"default". Every template emits these names quoted. The set: the acr-api
 ServiceAccount, the shared serviceAccount.* (projector), the migrate Job's, the
 acr-mcp one, and (exchange enabled) every consumerServiceAccounts entry.
 Reused names would put two workloads, or a consumer and the TokenReview
@@ -156,6 +158,12 @@ subject, on one identity.
 {{- fail (printf "service-account-name-collision: %s must name a dedicated ServiceAccount, not empty and not \"default\"" $src) -}}
 {{- end -}}
 {{- $entries = append $entries (list $src $cname) -}}
+{{- end -}}
+{{- end -}}
+{{- range $e := $entries -}}
+{{- $n := index $e 1 -}}
+{{- if or (gt (len $n) 253) (not (regexMatch "^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$" $n)) -}}
+{{- fail (printf "service-account-name-collision: %s is not a valid Kubernetes name (DNS-1123 subdomain: lowercase alphanumerics, '-' and '.', starting and ending alphanumeric, at most 253 characters)" (index $e 0)) -}}
 {{- end -}}
 {{- end -}}
 {{- $owners := dict -}}

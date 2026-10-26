@@ -47,7 +47,7 @@ spec:
         {{- end }}
     spec:
       restartPolicy: Never
-      serviceAccountName: {{ include "acr.fullname" . }}-migrate
+      serviceAccountName: {{ printf "%s-migrate" (include "acr.fullname" .) | quote }}
       automountServiceAccountToken: false
       {{- include "acr.imagePullSecrets" . | nindent 6 }}
       securityContext:

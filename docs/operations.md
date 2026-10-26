@@ -1913,8 +1913,8 @@ secrets, and shared with no other workload. The projector uses the resolved
 ClusterRoleBinding, rendered only with `workloadTokenExchange.enabled=true`,
 names the acr-api ServiceAccount alone. Every ServiceAccount name the chart
 renders or binds (acr-api, `serviceAccount.*`, migrate, acr-mcp, each
-`workloadTokenExchange.consumerServiceAccounts` entry) must be unique, with no
-consumer empty or `default`; the chart fails closed otherwise. Pre-roll record (read-only):
+`workloadTokenExchange.consumerServiceAccounts` entry) must be a valid Kubernetes name (lowercase DNS-1123 subdomain) and unique, with no
+consumer empty or `default`; the chart fails closed otherwise and emits every name quoted. Pre-roll record (read-only):
 `kubectl get rolebinding,clusterrolebinding -A -o jsonpath='{range .items[*]}{.kind}{"/"}{.metadata.name}{"\t"}{range .subjects[?(@.kind=="ServiceAccount")]}{.namespace}{"/"}{.name}{" "}{end}{"\n"}{end}' | grep -E 'dev-health/dev-health-acr(-api)?( |$)'`
 -- the `-api` name must have no binding before the roll.
 
