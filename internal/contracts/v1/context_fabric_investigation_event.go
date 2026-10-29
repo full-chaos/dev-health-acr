@@ -32,7 +32,8 @@ import (
 //     no other event, so no hop between ACR and the browser is silent for
 //     longer than its idle limit (INV-3); with the scheduling slack, no two
 //     consecutive elapsed_ms values (accepted counting as 0) are more than
-//     11 s apart.
+//     11 s apart. The bound is on silence: a heartbeat sooner than the
+//     interval is valid, and a consumer accepts one at any time.
 //   - exactly one terminal, `result` or `error`, last. `result.result` is the
 //     JSON body the same request gets without the stream, byte for byte;
 //     `error.error` is the error.v1 envelope the same failure gets as JSON.

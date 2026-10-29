@@ -21,7 +21,9 @@ import (
 //   - seq grows by exactly one per event, and request_id never changes;
 //   - elapsed_ms never decreases, and no two consecutive elapsed_ms values
 //     (accepted counting as 0) are more than the heartbeat interval plus its
-//     slack apart: a writer that let the stream go silent fails here;
+//     slack apart: a writer that let the stream go silent fails here. The
+//     bound is on silence only: a heartbeat sooner than the interval is
+//     valid, so a consumer accepts a heartbeat at any time;
 //   - a stage starts only when no stage is open and only after every stage
 //     already started (the fixed order, skips allowed, no repeats); it
 //     completes only while it is the open stage;
@@ -162,97 +164,130 @@ func ValidateContextFabricInvestigationEventStream(events []ContextFabricInvesti
 }
 
 // DecodeContextFabricInvestigationEventFrames reads a text/event-stream body
-// into its events. It is strict, because it reads ACR's own writer: a frame
-// carries exactly the id, event and data fields; a comment line (":" first)
-// is skipped; the data passes DecodeContextFabricInvestigationEventData (so it
-// is one line of compact JSON: data split over lines, which SSE allows, is not
-// what the writer writes and is refused); the SSE id equals seq and the SSE
-// event equals type. maxFrameBytes bounds the
-// bytes of one frame. A body that ends inside a frame is an error. It does
-// not check the stream grammar; ValidateContextFabricInvestigationEventStream
-// does.
+// written by MarshalContextFabricInvestigationEventFrame back into its events.
+// It accepts exactly the writer's bytes, frame by frame: `id: <seq>`,
+// `event: <type>` and `data: <the writer's encoding of the event>`, each line
+// ending in "\n", then a blank line -- no comment line, no carriage return, no
+// other field, no field spelled differently (SSE allows all of those; ACR's
+// writer writes none of them, and this reader exists to hold that writer to
+// its own form). The data must pass DecodeContextFabricInvestigationEventData,
+// so each frame is the writer's frame for its event. maxFrameBytes
+// bounds one frame. A body that ends inside a frame is an error. It does not
+// check the stream grammar; ValidateContextFabricInvestigationEventStream does.
 func DecodeContextFabricInvestigationEventFrames(body io.Reader, maxFrameBytes int) ([]ContextFabricInvestigationEvent, error) {
 	if maxFrameBytes <= 0 {
 		return nil, fmt.Errorf("maxFrameBytes must be positive")
 	}
-	scanner := bufio.NewScanner(body)
-	scanner.Buffer(make([]byte, 0, 4096), maxFrameBytes+2)
-	var (
-		events     []ContextFabricInvestigationEvent
-		frame      contextFabricEventFrame
-		frameBytes int
-	)
-	for scanner.Scan() {
-		line := strings.TrimSuffix(scanner.Text(), "\r")
-		frameBytes += len(line) + 1
-		if frameBytes > maxFrameBytes {
-			return nil, fmt.Errorf("frame %d exceeds %d bytes", len(events)+1, maxFrameBytes)
-		}
-		if line == "" {
-			if frame.empty() {
-				frameBytes = 0
-				continue
-			}
-			event, err := frame.event()
-			if err != nil {
-				return nil, fmt.Errorf("frame %d: %w", len(events)+1, err)
-			}
-			events = append(events, event)
-			frame, frameBytes = contextFabricEventFrame{}, 0
-			continue
-		}
-		if strings.HasPrefix(line, ":") {
-			continue
-		}
-		if err := frame.add(line); err != nil {
+	reader := bufio.NewReader(body)
+	var events []ContextFabricInvestigationEvent
+	for {
+		frame, err := readContextFabricEventFrame(reader, maxFrameBytes)
+		if err != nil {
 			return nil, fmt.Errorf("frame %d: %w", len(events)+1, err)
 		}
-	}
-	if err := scanner.Err(); err != nil {
-		if errors.Is(err, bufio.ErrTooLong) {
-			return nil, fmt.Errorf("frame %d exceeds %d bytes", len(events)+1, maxFrameBytes)
+		if frame == nil {
+			return events, nil
 		}
-		return nil, fmt.Errorf("read event stream: %w", err)
+		event, err := decodeContextFabricEventFrame(frame)
+		if err != nil {
+			return nil, fmt.Errorf("frame %d: %w", len(events)+1, err)
+		}
+		events = append(events, event)
 	}
-	if !frame.empty() {
-		return nil, fmt.Errorf("event stream ends inside frame %d", len(events)+1)
-	}
-	return events, nil
 }
 
-// DecodeContextFabricInvestigationEventData decodes one event's data payload
-// and holds it to the form the writer produces, so a payload the schema would
-// refuse cannot pass as a valid event on the Go side:
+// readContextFabricEventFrame reads up to and including the blank line that
+// ends one frame. It returns nil, nil at a clean end of the body.
+func readContextFabricEventFrame(reader *bufio.Reader, maxFrameBytes int) ([]byte, error) {
+	var frame []byte
+	for {
+		line, err := reader.ReadSlice('\n')
+		if bytes.IndexByte(line, '\r') >= 0 {
+			return nil, fmt.Errorf("frame carries a carriage return; the writer ends every line with \\n")
+		}
+		frame = append(frame, line...)
+		if len(frame) > maxFrameBytes {
+			return nil, fmt.Errorf("exceeds %d bytes", maxFrameBytes)
+		}
+		if errors.Is(err, bufio.ErrBufferFull) {
+			continue
+		}
+		if errors.Is(err, io.EOF) {
+			if len(frame) == 0 {
+				return nil, nil
+			}
+			return nil, fmt.Errorf("event stream ends inside the frame")
+		}
+		if err != nil {
+			return nil, fmt.Errorf("read event stream: %w", err)
+		}
+		if bytes.Equal(line, []byte("\n")) {
+			return frame, nil
+		}
+	}
+}
+
+func decodeContextFabricEventFrame(frame []byte) (ContextFabricInvestigationEvent, error) {
+	lines := strings.Split(strings.TrimSuffix(string(frame), "\n\n"), "\n")
+	prefixes := []string{"id: ", "event: ", "data: "}
+	if len(lines) != len(prefixes) {
+		return ContextFabricInvestigationEvent{}, fmt.Errorf("frame has %d lines; the writer writes exactly `id: <seq>`, `event: <type>` and `data: <event>`", len(lines))
+	}
+	values := make([]string, len(lines))
+	for index, prefix := range prefixes {
+		value, found := strings.CutPrefix(lines[index], prefix)
+		if !found {
+			return ContextFabricInvestigationEvent{}, fmt.Errorf("frame line %d is not %q followed by its value", index+1, prefix)
+		}
+		values[index] = value
+	}
+	event, err := DecodeContextFabricInvestigationEventData([]byte(values[2]))
+	if err != nil {
+		return ContextFabricInvestigationEvent{}, err
+	}
+	if values[1] != string(event.Type) {
+		return ContextFabricInvestigationEvent{}, fmt.Errorf("SSE event %q differs from data type %q", values[1], event.Type)
+	}
+	if values[0] != strconv.FormatInt(event.Seq, 10) {
+		return ContextFabricInvestigationEvent{}, fmt.Errorf("SSE id %q differs from data seq %d", values[0], event.Seq)
+	}
+	// Three fixed prefixes, the writer's own id, type and data bytes, "\n"
+	// line ends and one blank line: the frame is the writer's frame.
+	return event, nil
+}
+
+// ParseContextFabricInvestigationEventData is the consumer decode of one
+// event's data: it accepts every JSON spelling of a valid event (key order,
+// whitespace and escapes are free) and refuses what the schema refuses:
 //
-//   - one value of compact JSON (MarshalContextFabricInvestigationEventData
-//     writes nothing else, so whitespace, a leading space after "data:" or data
-//     split over lines is not the writer's);
-//   - no unknown key, and nothing after the value;
+//   - one JSON value, no unknown key, no key given twice at the top level;
 //   - no key the event does not carry: a type-dependent field present with an
 //     empty, zero or null value decodes to the Go zero value, which the type
-//     reads as ABSENT, so a field the schema refuses would otherwise disappear.
-//     The decoded event's own encoding must name exactly the keys the payload
-//     names;
-//   - Validate.
+//     reads as ABSENT, so a field the schema refuses would otherwise disappear;
+//   - the error envelope, when present, names every key error.v1 requires and
+//     none of them as null, and its details, when present, is an object (a
+//     missing retryable would otherwise decode as false);
+//   - Validate;
+//   - a result body validated in full by the production validator of its own
+//     schema_version (the response v1 or v2, or the answer projection), as the
+//     schema validates it against the response schemas. The writer's Validate
+//     checks only the body's identity, so the stream never refuses an answer
+//     the JSON path serves; a consumer holds the body to its own contract.
 //
-// Key order is not checked: a payload a generic encoder re-ordered is the same
-// event.
-func DecodeContextFabricInvestigationEventData(data []byte) (ContextFabricInvestigationEvent, error) {
-	var compact bytes.Buffer
-	if err := json.Compact(&compact, data); err != nil {
-		return ContextFabricInvestigationEvent{}, fmt.Errorf("decode data: %w", err)
+// The result body's own wire presence (a key its schema requires, present as
+// null or missing, deep inside the answer) is the same question for this body
+// as for the JSON response body, and stays with that body's consumers
+// (internal/sidecar's presence check); this function adds nothing to it.
+func ParseContextFabricInvestigationEventData(data []byte) (ContextFabricInvestigationEvent, error) {
+	if err := rejectDuplicateTopLevelKeys(data); err != nil {
+		return ContextFabricInvestigationEvent{}, err
 	}
-	if !bytes.Equal(compact.Bytes(), data) {
-		return ContextFabricInvestigationEvent{}, fmt.Errorf("data is not one value of compact JSON")
-	}
-	decoder := json.NewDecoder(bytes.NewReader(data))
-	decoder.DisallowUnknownFields()
 	var event ContextFabricInvestigationEvent
-	if err := decoder.Decode(&event); err != nil {
+	if err := decodeContextFabricEventStrict(data, &event); err != nil {
 		return ContextFabricInvestigationEvent{}, fmt.Errorf("decode data: %w", err)
 	}
-	if _, err := decoder.Token(); err != io.EOF {
-		return ContextFabricInvestigationEvent{}, fmt.Errorf("data carries trailing content")
+	if err := checkContextFabricEventEnvelopePresence(data); err != nil {
+		return ContextFabricInvestigationEvent{}, err
 	}
 	if err := event.Validate(); err != nil {
 		return ContextFabricInvestigationEvent{}, err
@@ -274,7 +309,161 @@ func DecodeContextFabricInvestigationEventData(data []byte) (ContextFabricInvest
 			return ContextFabricInvestigationEvent{}, fmt.Errorf("data carries %s with an empty, zero or null value; the writer omits an absent field", key)
 		}
 	}
+	if len(event.Result) > 0 {
+		if err := validateContextFabricEventResultBodyInFull(event.Result); err != nil {
+			return ContextFabricInvestigationEvent{}, err
+		}
+	}
 	return event, nil
+}
+
+// DecodeContextFabricInvestigationEventData is ParseContextFabricInvestigationEventData
+// plus the writer's form: the data must be, byte for byte,
+// MarshalContextFabricInvestigationEventData of the event it decodes to. Key
+// order, whitespace, escapes, number spelling and a key given twice anywhere
+// are therefore all fixed. It is what ACR's own stream reader uses; a generic
+// consumer uses Parse.
+func DecodeContextFabricInvestigationEventData(data []byte) (ContextFabricInvestigationEvent, error) {
+	event, err := ParseContextFabricInvestigationEventData(data)
+	if err != nil {
+		return ContextFabricInvestigationEvent{}, err
+	}
+	written, err := MarshalContextFabricInvestigationEventData(event)
+	if err != nil {
+		return ContextFabricInvestigationEvent{}, err
+	}
+	if !bytes.Equal(written, data) {
+		return ContextFabricInvestigationEvent{}, fmt.Errorf("data is not the writer's encoding of its event (compact JSON, the writer's key order and spelling)")
+	}
+	return event, nil
+}
+
+func validateContextFabricEventResultBodyInFull(body json.RawMessage) error {
+	var head struct {
+		SchemaVersion string `json:"schema_version"`
+	}
+	if err := json.Unmarshal(body, &head); err != nil {
+		return fmt.Errorf("investigation result event body must be a JSON object: %w", err)
+	}
+	switch head.SchemaVersion {
+	case ContextFabricInvestigationResultSchema, ContextFabricInvestigationResultSchemaV2:
+		var response ContextFabricInvestigationResponse
+		if err := decodeContextFabricEventStrict(body, &response); err != nil {
+			return fmt.Errorf("investigation result event body: %w", err)
+		}
+		if head.SchemaVersion == ContextFabricInvestigationResultSchema {
+			if err := response.Validate(); err != nil {
+				return fmt.Errorf("investigation result event body: %w", err)
+			}
+			return nil
+		}
+		if err := response.ContextFabricInvestigationResult.ValidateV2(); err != nil {
+			return fmt.Errorf("investigation result event body: %w", err)
+		}
+		if response.SynthesisInput != nil {
+			if err := response.SynthesisInput.Validate(); err != nil {
+				return fmt.Errorf("investigation result event body: %w", err)
+			}
+		}
+		return nil
+	case ContextFabricAnswerProjectionSchema:
+		var projection ContextFabricAnswerProjection
+		if err := decodeContextFabricEventStrict(body, &projection); err != nil {
+			return fmt.Errorf("investigation result event body: %w", err)
+		}
+		if err := projection.Validate(); err != nil {
+			return fmt.Errorf("investigation result event body: %w", err)
+		}
+		return nil
+	default:
+		return fmt.Errorf("investigation result event body schema_version is not a create-investigation response")
+	}
+}
+
+func decodeContextFabricEventStrict(data []byte, target any) error {
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(target); err != nil {
+		return err
+	}
+	if _, err := decoder.Token(); err != io.EOF {
+		return fmt.Errorf("trailing content after the JSON value")
+	}
+	return nil
+}
+
+// checkContextFabricEventEnvelopePresence holds an error event's envelope to
+// error.v1's required keys: encoding/json reads a missing or null key as its
+// Go zero value, and for retryable that zero (false) is a valid value.
+func checkContextFabricEventEnvelopePresence(data []byte) error {
+	var top map[string]json.RawMessage
+	if err := json.Unmarshal(data, &top); err != nil {
+		return fmt.Errorf("decode data: %w", err)
+	}
+	raw, present := top["error"]
+	if !present {
+		return nil
+	}
+	envelope, err := requiredJSONObject(raw, "error", "schema_version", "request_id", "error")
+	if err != nil {
+		return err
+	}
+	detail, err := requiredJSONObject(envelope["error"], "error.error", "code", "message", "http_status", "retryable")
+	if err != nil {
+		return err
+	}
+	if details, present := detail["details"]; present {
+		var object map[string]json.RawMessage
+		if err := json.Unmarshal(details, &object); err != nil || object == nil {
+			return fmt.Errorf("data carries error.error.details that is not an object")
+		}
+	}
+	return nil
+}
+
+func requiredJSONObject(raw json.RawMessage, path string, keys ...string) (map[string]json.RawMessage, error) {
+	var object map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &object); err != nil || object == nil {
+		return nil, fmt.Errorf("data carries %s that is not an object", path)
+	}
+	for _, key := range keys {
+		value, present := object[key]
+		if !present || bytes.Equal(bytes.TrimSpace(value), []byte("null")) {
+			return nil, fmt.Errorf("data carries %s without %s", path, key)
+		}
+	}
+	return object, nil
+}
+
+// rejectDuplicateTopLevelKeys refuses an object that names a key twice:
+// encoding/json keeps the last one silently, so the two sides of a parity
+// check could read different values from one payload.
+func rejectDuplicateTopLevelKeys(data []byte) error {
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	token, err := decoder.Token()
+	if err != nil {
+		return fmt.Errorf("decode data: %w", err)
+	}
+	if delim, ok := token.(json.Delim); !ok || delim != '{' {
+		return fmt.Errorf("decode data: an event is a JSON object")
+	}
+	seen := map[string]bool{}
+	for decoder.More() {
+		token, err := decoder.Token()
+		if err != nil {
+			return fmt.Errorf("decode data: %w", err)
+		}
+		key, _ := token.(string)
+		if seen[key] {
+			return fmt.Errorf("data names %s twice", key)
+		}
+		seen[key] = true
+		var skip json.RawMessage
+		if err := decoder.Decode(&skip); err != nil {
+			return fmt.Errorf("decode data: %w", err)
+		}
+	}
+	return nil
 }
 
 func topLevelKeys(object []byte) (map[string]bool, error) {
@@ -287,54 +476,4 @@ func topLevelKeys(object []byte) (map[string]bool, error) {
 		keys[key] = true
 	}
 	return keys, nil
-}
-
-type contextFabricEventFrame struct {
-	id, kind    *string
-	data        []string
-	sawDataLine bool
-}
-
-func (f contextFabricEventFrame) empty() bool {
-	return f.id == nil && f.kind == nil && !f.sawDataLine
-}
-
-func (f *contextFabricEventFrame) add(line string) error {
-	name, value, _ := strings.Cut(line, ":")
-	value = strings.TrimPrefix(value, " ")
-	switch name {
-	case "id":
-		if f.id != nil {
-			return fmt.Errorf("frame carries id twice")
-		}
-		f.id = &value
-	case "event":
-		if f.kind != nil {
-			return fmt.Errorf("frame carries event twice")
-		}
-		f.kind = &value
-	case "data":
-		f.data = append(f.data, value)
-		f.sawDataLine = true
-	default:
-		return fmt.Errorf("frame carries field %q; an investigation event frame has id, event and data only", name)
-	}
-	return nil
-}
-
-func (f contextFabricEventFrame) event() (ContextFabricInvestigationEvent, error) {
-	if f.id == nil || f.kind == nil || !f.sawDataLine {
-		return ContextFabricInvestigationEvent{}, fmt.Errorf("frame lacks id, event or data")
-	}
-	event, err := DecodeContextFabricInvestigationEventData([]byte(strings.Join(f.data, "\n")))
-	if err != nil {
-		return ContextFabricInvestigationEvent{}, err
-	}
-	if *f.kind != string(event.Type) {
-		return ContextFabricInvestigationEvent{}, fmt.Errorf("SSE event %q differs from data type %q", *f.kind, event.Type)
-	}
-	if *f.id != strconv.FormatInt(event.Seq, 10) {
-		return ContextFabricInvestigationEvent{}, fmt.Errorf("SSE id %q differs from data seq %d", *f.id, event.Seq)
-	}
-	return event, nil
 }

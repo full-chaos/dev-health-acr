@@ -31,9 +31,10 @@ func eventAsMap(t *testing.T, event ContextFabricInvestigationEvent) map[string]
 }
 
 // verdicts reports whether the published schema and the Go side each accept
-// one serialized event. The Go side is the consumer path,
-// DecodeContextFabricInvestigationEventData: a strict decode that also refuses
-// a key the decoded event does not carry, then Validate.
+// one serialized event. The Go side is the consumer decode,
+// ParseContextFabricInvestigationEventData: a strict decode that also refuses
+// a key the decoded event does not carry, Validate, and the result body in
+// full.
 func verdicts(t *testing.T, object map[string]any) (schemaAccepts, goAccepts bool, goErr error) {
 	t.Helper()
 	data, err := json.Marshal(object)
@@ -41,7 +42,7 @@ func verdicts(t *testing.T, object map[string]any) (schemaAccepts, goAccepts boo
 		t.Fatal(err)
 	}
 	schemaAccepts = contractcheck.ValidateSerializedStrict("", investigationEventSchemaFile, data) == nil
-	_, goErr = DecodeContextFabricInvestigationEventData(data)
+	_, goErr = ParseContextFabricInvestigationEventData(data)
 	return schemaAccepts, goErr == nil, goErr
 }
 
@@ -231,11 +232,25 @@ func TestInvestigationEventSchemaAndGoAgreeOnValues(t *testing.T) {
 			node[path[len(path)-1]] = value
 		}
 	}
+	drop := func(path []string) func(map[string]any) {
+		return func(object map[string]any) {
+			node := object
+			for _, key := range path[:len(path)-1] {
+				node = node[key].(map[string]any)
+			}
+			delete(node, path[len(path)-1])
+		}
+	}
 	cases := []struct {
 		name   string
 		base   ContextFabricInvestigationEvent
 		mutate func(map[string]any)
 	}{
+		{"error envelope without retryable", failure, drop([]string{"error", "error", "retryable"})},
+		{"error envelope with retryable null", failure, nested([]string{"error", "error", "retryable"}, nil)},
+		{"error envelope with details null", failure, nested([]string{"error", "error", "details"}, nil)},
+		{"error envelope without request_id", failure, drop([]string{"error", "request_id"})},
+		{"error envelope with error null", failure, nested([]string{"error", "error"}, nil)},
 		{"schema_version", stage, set("schema_version", "context_fabric_investigation_event.v2")},
 		{"unknown type", stage, set("type", "progress")},
 		{"unknown top-level key", stage, set("partial_answer", "x")},
@@ -259,6 +274,9 @@ func TestInvestigationEventSchemaAndGoAgreeOnValues(t *testing.T) {
 		{"error stage unknown", failure, set("stage", "persistence")},
 		{"result body not an object", result, set("result", "answer")},
 		{"result body of another schema", result, nested([]string{"result", "schema_version"}, "context_packet.v1")},
+		{"result body that names only its identity", result, set("result", map[string]any{"schema_version": ContextFabricInvestigationResultSchema, "request_id": "request_12345678", "result_id": "result_12345678"})},
+		{"result body with an unknown key", result, nested([]string{"result", "answer_draft"}, "x")},
+		{"result body with a status outside its vocabulary", result, nested([]string{"result", "status"}, "finished")},
 		{"error envelope schema_version", failure, nested([]string{"error", "schema_version"}, "error.v2")},
 		{"error code outside the vocabulary", failure, nested([]string{"error", "error", "code"}, "stream_lost")},
 		{"error message empty", failure, nested([]string{"error", "error", "message"}, "")},
@@ -493,6 +511,13 @@ func TestInvestigationEventStreamGrammar(t *testing.T) {
 	if err := ValidateContextFabricInvestigationEventStream(early); err != nil {
 		t.Fatalf("an error before the first stage: %v", err)
 	}
+	// A heartbeat sooner than the interval is valid: the bound is on silence.
+	earlyHeartbeat := renumber([]ContextFabricInvestigationEvent{result[0], result[1], with(result[6], func(e *ContextFabricInvestigationEvent) {
+		e.Stage, e.ElapsedMS = ContextFabricStageInterpreting, int64Ptr(5)
+	}), result[2], result[len(result)-1]})
+	if err := ValidateContextFabricInvestigationEventStream(earlyHeartbeat); err != nil {
+		t.Fatalf("an early heartbeat: %v", err)
+	}
 	// Silence of exactly the interval plus its slack is within the bound.
 	bound := renumber([]ContextFabricInvestigationEvent{result[0], with(result[1], func(e *ContextFabricInvestigationEvent) { e.ElapsedMS = int64Ptr(11000) }), with(result[2], func(e *ContextFabricInvestigationEvent) { e.ElapsedMS = int64Ptr(22000) }), result[len(result)-1]})
 	if err := ValidateContextFabricInvestigationEventStream(bound); err != nil {
@@ -521,39 +546,76 @@ func TestInvestigationEventFramesRoundTrip(t *testing.T) {
 		t.Fatal("decode then encode changed the stream")
 	}
 
-	// The same events survive the variations SSE allows: CRLF line ends,
-	// comment lines, data split over several lines.
-	variant := strings.ReplaceAll(string(stream), "\n", "\r\n")
-	variant = ": keepalive\r\n\r\n" + variant
-	if events, err := DecodeContextFabricInvestigationEventFrames(strings.NewReader(variant), 1<<20); err != nil || len(events) != len(decoded) {
-		t.Fatalf("CRLF and comments: %d events, %v", len(events), err)
-	}
-
+	// The reader holds ACR's writer to its own form: every SSE variation the
+	// writer never writes is refused (CHAOS-11909 review round 2, F2/F4).
 	first := "id: 1\nevent: accepted\ndata: " + string(mustEventData(t, goldens.resultStream[0])) + "\n\n"
 	cases := []struct {
 		name, body string
 		max        int
 		want       string
 	}{
+		{"CRLF line ends", strings.ReplaceAll(first, "\n", "\r\n"), 1 << 20, "carriage return"},
+		{"a comment frame", ": keepalive\n\n" + first, 1 << 20, "1 lines"},
+		{"no space after id:", strings.Replace(first, "id: 1", "id:1", 1), 1 << 20, "frame line 1"},
+		{"no space after event:", strings.Replace(first, "event: accepted", "event:accepted", 1), 1 << 20, "frame line 2"},
+		{"no space after data:", strings.Replace(first, "data: {", "data:{", 1), 1 << 20, "frame line 3"},
 		{"id differs from seq", strings.Replace(first, "id: 1", "id: 7", 1), 1 << 20, "SSE id"},
 		{"event differs from type", strings.Replace(first, "event: accepted", "event: stage", 1), 1 << 20, "SSE event"},
-		{"unknown SSE field", strings.Replace(first, "id: 1\n", "id: 1\nretry: 100\n", 1), 1 << 20, "field \"retry\""},
-		{"id twice", strings.Replace(first, "id: 1\n", "id: 1\nid: 1\n", 1), 1 << 20, "id twice"},
-		{"no data", "id: 1\nevent: accepted\n\n", 1 << 20, "lacks"},
+		{"unknown SSE field", strings.Replace(first, "id: 1\n", "id: 1\nretry: 100\n", 1), 1 << 20, "4 lines"},
+		{"id twice", strings.Replace(first, "id: 1\n", "id: 1\nid: 1\n", 1), 1 << 20, "4 lines"},
+		{"no data", "id: 1\nevent: accepted\n\n", 1 << 20, "2 lines"},
+		{"data over two lines", strings.Replace(first, ",\"seq\":1,", ",\ndata: \"seq\":1,", 1), 1 << 20, "4 lines"},
 		{"unknown JSON key", strings.Replace(first, "{\"schema_version\"", "{\"partial\":true,\"schema_version\"", 1), 1 << 20, "unknown field"},
-		{"two JSON values", strings.Replace(first, "}\n\n", "} {}\n\n", 1), 1 << 20, "decode data"},
-		{"data over two lines", strings.Replace(first, ",\"seq\":1,", ",\ndata: \"seq\":1,", 1), 1 << 20, "compact"},
-		{"a second space after data:", strings.Replace(first, "data: {", "data:  {", 1), 1 << 20, "compact"},
+		{"two JSON values", strings.Replace(first, "}\n\n", "} {}\n\n", 1), 1 << 20, "trailing"},
+		{"a second space after data:", strings.Replace(first, "data: {", "data:  {", 1), 1 << 20, "writer's encoding"},
+		{"a key given twice", strings.Replace(first, ",\"seq\":1,", ",\"seq\":1,\"seq\":1,", 1), 1 << 20, "twice"},
+		{"an escaped key", strings.Replace(first, "\"type\":", "\"\\u0074ype\":", 1), 1 << 20, "writer's encoding"},
+		{"an escaped value", strings.Replace(first, "\"type\":\"accepted\"", "\"type\":\"\\u0061ccepted\"", 1), 1 << 20, "writer's encoding"},
+		{"keys in another order", strings.Replace(first, "{\"schema_version\":\"context_fabric_investigation_event.v1\",\"type\":\"accepted\",", "{\"type\":\"accepted\",\"schema_version\":\"context_fabric_investigation_event.v1\",", 1), 1 << 20, "writer's encoding"},
 		{"an explicit empty field", strings.Replace(first, ",\"budget_seconds\":120}", ",\"budget_seconds\":120,\"thread_id\":\"\"}", 1), 1 << 20, "thread_id"},
 		{"an explicit null field", strings.Replace(first, ",\"budget_seconds\":120}", ",\"budget_seconds\":120,\"stage\":null}", 1), 1 << 20, "stage"},
 		{"ends inside a frame", strings.TrimSuffix(first, "\n"), 1 << 20, "ends inside"},
 		{"frame over the limit", first, 64, "exceeds"},
 	}
 	for _, test := range cases {
+		if test.body == first {
+			if test.max != 64 {
+				t.Fatalf("%s: the mutation changed nothing", test.name)
+			}
+		}
+	}
+	for _, test := range cases {
 		_, err := DecodeContextFabricInvestigationEventFrames(strings.NewReader(test.body), test.max)
 		if err == nil || !strings.Contains(err.Error(), test.want) {
 			t.Errorf("%s: want an error containing %q, got %v", test.name, test.want, err)
 		}
+	}
+}
+
+// TestParseAcceptsEverySpellingDecodeOnlyTheWriters: the consumer decode
+// takes any JSON spelling of a valid event; the writer-form decode takes
+// only the writer's bytes.
+func TestParseAcceptsEverySpellingDecodeOnlyTheWriters(t *testing.T) {
+	goldens := buildInvestigationEventGoldens(t)
+	data := string(mustEventData(t, goldens.resultStream[0]))
+	spellings := map[string]string{
+		"keys in another order": strings.Replace(data, `{"schema_version":"context_fabric_investigation_event.v1","type":"accepted",`, `{"type":"accepted","schema_version":"context_fabric_investigation_event.v1",`, 1),
+		"an escaped value":      strings.Replace(data, `"type":"accepted"`, `"type":"\u0061ccepted"`, 1),
+		"whitespace":            strings.Replace(data, `,"seq":1,`, `, "seq": 1 ,`, 1),
+	}
+	for name, spelling := range spellings {
+		if spelling == data {
+			t.Fatalf("%s: the spelling changed nothing", name)
+		}
+		if _, err := ParseContextFabricInvestigationEventData([]byte(spelling)); err != nil {
+			t.Errorf("%s: Parse refused a valid spelling: %v", name, err)
+		}
+		if _, err := DecodeContextFabricInvestigationEventData([]byte(spelling)); err == nil {
+			t.Errorf("%s: Decode accepted bytes the writer does not write", name)
+		}
+	}
+	if _, err := DecodeContextFabricInvestigationEventData([]byte(data)); err != nil {
+		t.Fatalf("Decode refused the writer's own bytes: %v", err)
 	}
 }
 
