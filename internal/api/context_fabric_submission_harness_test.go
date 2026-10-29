@@ -136,8 +136,10 @@ type submissionHarness struct {
 	t *testing.T
 	// denied names entitlements the harness's entitlement service refuses
 	// from now on (all are granted by default).
-	denied       sync.Map
-	clock        *submissionClock
+	denied sync.Map
+	// clickhouseDown makes every App's ClickHouse data-store check fail.
+	clickhouseDown atomic.Bool
+	clock          *submissionClock
 	apps         []*App
 	logs         []*bytes.Buffer
 	tokenA       string
@@ -183,8 +185,13 @@ func newSubmissionHarness(t *testing.T, stores ...submissionTestStore) *submissi
 				DeviceAuthorizations: devices, DeviceVerificationURL: "https://verify.example.test/device",
 				DeviceAuthorizationLimiter: NewDeviceAuthorizationLimiter(ClockFunc(clock.Now)),
 				ReadinessChecks:            exactRuntimeChecks(),
-				DataStoreChecks:            exactDataStoreChecks(),
-				Investigator:               harness.investigator,
+				DataStoreChecks: []ReadinessCheck{CheckFunc{CheckName: "clickhouse", Fn: func(context.Context) error {
+					if harness.clickhouseDown.Load() {
+						return errors.New("clickhouse is down")
+					}
+					return nil
+				}}},
+				Investigator: harness.investigator,
 				InvestigationResults:       store,
 				StoredResultGate:           testStoredResultGate(harness.investigator),
 				InvestigationSubmissions:   store,
@@ -203,6 +210,13 @@ func newSubmissionHarness(t *testing.T, stores ...submissionTestStore) *submissi
 // the submission id (none when ""), and the question.
 func (h *submissionHarness) post(app int, token, submissionID, question string) *httptest.ResponseRecorder {
 	h.t.Helper()
+	return h.postTo(h.apps[app].Handler(), token, submissionID, question)
+}
+
+// postTo is post through handler (for example one App's create handler built
+// over a nil investigator).
+func (h *submissionHarness) postTo(handler http.Handler, token, submissionID, question string) *httptest.ResponseRecorder {
+	h.t.Helper()
 	body := investigationRequestBody()
 	body.Question = question
 	encoded, err := json.Marshal(body)
@@ -218,7 +232,7 @@ func (h *submissionHarness) post(app int, token, submissionID, question string) 
 		request.Header.Set(contractsv1.ContextFabricSubmissionIDHeader, submissionID)
 	}
 	recorder := httptest.NewRecorder()
-	h.apps[app].Handler().ServeHTTP(recorder, request)
+	handler.ServeHTTP(recorder, request)
 	return recorder
 }
 

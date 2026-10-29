@@ -345,3 +345,49 @@ func TestASubmissionRepeatIsAnsweredBeforeTheServiceModelGate(t *testing.T) {
 		t.Fatalf("executions = %d, want 2", got)
 	}
 }
+
+// Confirmation pass C1/C2: a repeat of an admitted submission executes
+// nothing and reads only the submission and result stores, like a read by id,
+// so neither runtime-readiness gate decides it. With ClickHouse down, and on
+// a create handler with no investigator configured, the owner's retry of a
+// done submission still replays its stored result and a changed request is
+// still a mismatch. A NEW submission still meets each gate and admits
+// nothing there.
+func TestASubmissionRepeatIsAnsweredBeforeTheRuntimeReadinessGates(t *testing.T) {
+	harness, _ := newMemorySubmissionHarness(t, 2)
+	first := servedResultID(t, harness.post(0, harness.tokenA, "submission-ready-1", submissionQuestion))
+
+	harness.clickhouseDown.Store(true)
+	if again := servedResultID(t, harness.post(1, harness.tokenA, "submission-ready-1", submissionQuestion)); again != first {
+		t.Fatalf("replay with ClickHouse down = %s, want %s", again, first)
+	}
+	expectSubmissionRefusal(t, harness.post(1, harness.tokenA, "submission-ready-1", submissionQuestion+" Why?"), contractsv1.ErrorCodeSubmissionMismatch)
+	if refused := harness.post(0, harness.tokenA, "submission-ready-2", submissionQuestion); refused.Code != http.StatusServiceUnavailable || errorEnvelopeOf(t, refused).Error.Code != "store_unavailable" {
+		t.Fatalf("a new submission with ClickHouse down = %d %s, want 503 store_unavailable", refused.Code, refused.Body.String())
+	}
+	harness.clickhouseDown.Store(false)
+
+	// The production create handler over a nil investigator, behind the
+	// same request middleware App.Handler applies.
+	unconfigured := harness.apps[1].InstrumentedHandler(harness.apps[1].ContextFabricInvestigationHandler(nil))
+	if again := servedResultID(t, harness.postTo(unconfigured, harness.tokenA, "submission-ready-1", submissionQuestion)); again != first {
+		t.Fatalf("replay with no investigator = %s, want %s", again, first)
+	}
+	expectSubmissionRefusal(t, harness.postTo(unconfigured, harness.tokenA, "submission-ready-1", submissionQuestion+" Why?"), contractsv1.ErrorCodeSubmissionMismatch)
+	if refused := harness.postTo(unconfigured, harness.tokenA, "submission-ready-3", submissionQuestion); refused.Code != http.StatusServiceUnavailable || errorEnvelopeOf(t, refused).Error.Code != "upstream_unavailable" {
+		t.Fatalf("a new submission with no investigator = %d %s, want 503 upstream_unavailable", refused.Code, refused.Body.String())
+	}
+	// Another principal's retry of the same key is a new key of its own, so
+	// it meets the gate: a replay is never served across principals.
+	if refused := harness.postTo(unconfigured, harness.tokenB, "submission-ready-1", submissionQuestion); refused.Code != http.StatusServiceUnavailable {
+		t.Fatalf("principal B's request on A's key with no investigator = %d %s, want 503", refused.Code, refused.Body.String())
+	}
+
+	// The refused new submissions admitted nothing: with the runtime back,
+	// each key runs once.
+	servedResultID(t, harness.post(0, harness.tokenA, "submission-ready-2", submissionQuestion))
+	servedResultID(t, harness.post(0, harness.tokenA, "submission-ready-3", submissionQuestion))
+	if got := harness.investigator.executions.Load(); got != 3 {
+		t.Fatalf("executions = %d, want 3", got)
+	}
+}

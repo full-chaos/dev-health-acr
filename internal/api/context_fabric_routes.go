@@ -47,17 +47,11 @@ func (a *App) ContextFabricInvestigationHandler(investigator contextfabric.Inves
 		// unauthenticated caller observe "investigator not configured"
 		// without ever being authenticated, rate-limited, or audited
 		// (CHAOS-3755 adversarial review finding H5).
-		if investigator == nil {
-			a.handleRuntimeUnavailable(w, r)
-			return
-		}
-		// CHAOS-6745: the SAME after-protectedRuntimeHandler placement rule
-		// as the nil-investigator check above, and for the identical
-		// reason -- an unauthenticated caller must never learn ClickHouse
-		// is down before being authenticated, rate-limited, or audited.
-		if !a.dataStoresReady(w, r) {
-			return
-		}
+		//
+		// CHAOS-11912 (confirmation pass C1/C2): both readiness gates run
+		// after a repeat of an admitted submission is answered (below), not
+		// here. A repeat executes nothing and reads only the submission and
+		// result stores, like a read by id, which neither gate decides.
 		var request contextfabric.InvestigationRequest
 		if err := decodeJSONBody(w, r, a.config.MaxRequestBodyBytes, &request); err != nil {
 			status := http.StatusBadRequest
@@ -89,6 +83,17 @@ func (a *App) ContextFabricInvestigationHandler(investigator contextfabric.Inves
 		// nothing, so it is answered before the service-model gate, which
 		// decides EXECUTION on the deployment's model.
 		if submissionID != "" && a.answerSubmissionRepeat(w, r, principal, request, submissionID) {
+			return
+		}
+		// Execution needs a configured investigator and ready data stores.
+		// Both checks stay inside protectedRuntimeHandler (CHAOS-3755 H5,
+		// CHAOS-6745): an unauthenticated caller must never learn that the
+		// investigator is not configured or that ClickHouse is down.
+		if investigator == nil {
+			a.handleRuntimeUnavailable(w, r)
+			return
+		}
+		if !a.dataStoresReady(w, r) {
 			return
 		}
 		gatedCtx, served := a.gateServiceModel(w, r, principal, request)
