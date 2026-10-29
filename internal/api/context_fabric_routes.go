@@ -71,6 +71,7 @@ func (a *App) ContextFabricInvestigationHandler(investigator contextfabric.Inves
 		// before anything is admitted.
 		submissionID, submissionValid := investigationSubmissionID(r)
 		if !submissionValid {
+			a.logSubmissionHeaderRefused(r, contractsv1.ContextFabricSubmissionIDHeader)
 			writeError(w, r, http.StatusBadRequest, "invalid_request", "Context Fabric investigation submission id is invalid", false, nil)
 			return
 		}
@@ -78,6 +79,7 @@ func (a *App) ContextFabricInvestigationHandler(investigator contextfabric.Inves
 		// record. Same grammar, same refusal.
 		threadID, threadValid := investigationThreadID(r)
 		if !threadValid {
+			a.logSubmissionHeaderRefused(r, contractsv1.ContextFabricThreadIDHeader)
 			writeError(w, r, http.StatusBadRequest, "invalid_request", "Context Fabric investigation thread id is invalid", false, nil)
 			return
 		}

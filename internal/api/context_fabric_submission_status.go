@@ -69,6 +69,9 @@ func (a *App) ContextFabricSubmissionStatusHandler(submissions contextfabric.Sub
 		// After protectedRuntimeHandler, never before it: an unauthenticated
 		// caller must not learn whether the store is configured.
 		if submissions == nil {
+			a.logger.WarnContext(r.Context(), ContextFabricSubmissionStatusLogMessage,
+				"surface", "submission_status", "outcome", string(SubmissionStatusStoreUnavailable), "error_class", "store_not_configured",
+				"request_id", contextfabric.SanitizeLogAttr(RequestID(r.Context())))
 			a.handleRuntimeUnavailable(w, r)
 			return
 		}

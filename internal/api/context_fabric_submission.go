@@ -41,10 +41,11 @@ const (
 )
 
 // SubmissionAdmissionOutcomeVocabulary is the closed set of outcomes.
-func SubmissionAdmissionOutcomeVocabulary() [8]SubmissionAdmissionOutcome {
-	return [8]SubmissionAdmissionOutcome{
+func SubmissionAdmissionOutcomeVocabulary() [9]SubmissionAdmissionOutcome {
+	return [9]SubmissionAdmissionOutcome{
 		SubmissionOutcomeAdmitted, SubmissionOutcomeReplayed, SubmissionOutcomeRefusedMismatch, SubmissionOutcomeRefusedInProgress,
 		SubmissionOutcomeRefusedUnsaved, SubmissionOutcomeRefusedAbandoned, SubmissionOutcomeStoreUnavailable, SubmissionOutcomeOwnerUnknown,
+		SubmissionOutcomeRefusedHeader,
 	}
 }
 
@@ -79,6 +80,20 @@ func investigationCorrelationHeader(r *http.Request, header string) (string, boo
 		return "", false
 	}
 	return values[0], true
+}
+
+// SubmissionOutcomeRefusedHeader is the admission line's outcome for a
+// malformed or repeated X-ACR-Submission-ID or X-ACR-Thread-ID: refused
+// before anything is admitted.
+const SubmissionOutcomeRefusedHeader SubmissionAdmissionOutcome = "refused_header"
+
+// logSubmissionHeaderRefused records a header refusal on the admission line,
+// naming the header (a closed pair), never its value.
+func (a *App) logSubmissionHeaderRefused(r *http.Request, header string) {
+	a.logger.InfoContext(r.Context(), ContextFabricSubmissionLogMessage,
+		"outcome", string(SubmissionOutcomeRefusedHeader),
+		"header", header,
+		"request_id", contextfabric.SanitizeLogAttr(RequestID(r.Context())))
 }
 
 func (a *App) investigationSubmissions() contextfabric.SubmissionStore {

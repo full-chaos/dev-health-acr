@@ -15,6 +15,7 @@ func TestRequestOperationNamesEveryContextFabricRoute(t *testing.T) {
 	}{
 		{http.MethodPost, ContextFabricInvestigationsPath, observability.OperationInvestigation},
 		{http.MethodGet, ContextFabricInvestigationsPath + "/res_0123456789abcdef", observability.OperationInvestigationResult},
+		{http.MethodGet, ContextFabricInvestigationsPath + "/submissions/submission-0001", observability.OperationSubmissionStatus},
 		{http.MethodGet, ContextFabricDataCatalogPath, observability.OperationDataCatalog},
 		{http.MethodPost, ContextFabricDataSubjectsPath, observability.OperationDataSubjects},
 		{http.MethodPost, ContextFabricDataFactsPath, observability.OperationDataFacts},
