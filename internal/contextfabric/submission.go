@@ -138,6 +138,12 @@ type SubmissionAdmission struct {
 	// ThreadID is optional; when set it follows ValidSubmissionID's grammar.
 	ThreadID  string
 	ExpiresAt time.Time
+	// Limits are the shared limits a NEW record is admitted under
+	// (CHAOS-11914); a repeat of an existing key is never refused by them.
+	Limits SubmissionLimits
+	// PlatformRun is true when the run uses the deployment's own model: it
+	// then counts to the monthly allowance as well as to concurrency.
+	PlatformRun bool
 }
 
 // SubmissionCompletion names how a served run's record reached its final
@@ -195,7 +201,10 @@ type SubmissionStore interface {
 	// AdmitSubmission inserts the record in state running. admitted is
 	// true when this call inserted it; false returns the existing record
 	// for the key, reconciled. The unique key decides every race: exactly
-	// one concurrent admission of a key is admitted.
+	// one concurrent admission of a key is admitted. A NEW record over a
+	// shared limit is refused with *SubmissionRefusedError and nothing is
+	// written; the count, the check, the record and the aggregate
+	// increment are one transaction, serialized per organization.
 	AdmitSubmission(ctx context.Context, admission SubmissionAdmission, now time.Time) (record SubmissionRecord, admitted bool, err error)
 	// GetSubmission returns the key's record, reconciled, or
 	// ErrSubmissionNotFound.

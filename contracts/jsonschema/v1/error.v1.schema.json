@@ -49,9 +49,11 @@
             "submission_mismatch",
             "submission_in_progress",
             "submission_unsaved",
-            "submission_abandoned"
+            "submission_abandoned",
+            "concurrency_limited",
+            "allowance_exhausted"
           ],
-          "description": "stream_unavailable is the 406 of a create-investigation request that asks for the event stream (Accept: text/event-stream) while the deployment has the stream turned off. It is written before any admission work and is not retryable. submission_mismatch, submission_in_progress, submission_unsaved and submission_abandoned are the 409s of a create-investigation request whose X-ACR-Submission-ID was already admitted: a different request under that id; its run still live (retryable, with Retry-After); answered but not stored; ended without an answer. None of them runs the request again."
+          "description": "stream_unavailable is the 406 of a create-investigation request that asks for the event stream (Accept: text/event-stream) while the deployment has the stream turned off. It is written before any admission work and is not retryable. submission_mismatch, submission_in_progress, submission_unsaved and submission_abandoned are the 409s of a create-investigation request whose X-ACR-Submission-ID was already admitted: a different request under that id; its run still live (retryable, with Retry-After); answered but not stored; ended without an answer. None of them runs the request again. concurrency_limited and allowance_exhausted are the 429s of a create-investigation request that names a new X-ACR-Submission-ID over a shared Ask Dev limit: running runs per principal or per organization (details.limit principal or org), or the organization's monthly allowance of runs on the deployment's model. Both carry Retry-After; nothing was admitted."
         },
         "message": {
           "type": "string",
@@ -83,9 +85,11 @@
             "limit": {
               "enum": [
                 "request_budget",
-                "capabilities_budget"
+                "capabilities_budget",
+                "principal",
+                "org"
               ],
-              "description": "On a 429 rate_limited: which limit refused the request. request_budget is the organization's request budget; capabilities_budget is the capabilities handshake's own budget, spent by the caller-resolution call every MCP request makes; the credential was already decided in both cases. A consumer treats a value outside this enum as absent."
+              "description": "On a 429 rate_limited: which limit refused the request. request_budget is the organization's request budget; capabilities_budget is the capabilities handshake's own budget, spent by the caller-resolution call every MCP request makes; the credential was already decided in both cases. On a 429 concurrency_limited (CHAOS-11914): principal or org, the shared running-run limit that refused the submission. A consumer treats a value outside this enum as absent."
             },
             "deadline": {
               "enum": [

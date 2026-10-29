@@ -71,6 +71,15 @@ const (
 	// ... status 200" (it measures its own processing, not the wire) while
 	// every client actually saw a dropped connection.
 	minWriteTimeoutHeadroom = 5 * time.Second
+	// The shared Ask Dev admission limits (CHAOS-11914, plan §2.9). The
+	// same numbers are contextfabric's DefaultMaxRunningPerPrincipal & co.;
+	// config_test holds them equal.
+	defaultAskDevMaxRunningPerPrincipal = 2
+	defaultAskDevMaxRunningPerOrg       = 4
+	defaultAskDevMonthlyRunAllowance    = 1000
+	maxAskDevMaxRunningPerPrincipal     = 16
+	maxAskDevMaxRunningPerOrg           = 64
+	maxAskDevMonthlyRunAllowance        = 5000
 )
 
 // Config contains only process-level configuration. Credentials and request
@@ -231,7 +240,19 @@ type Config struct {
 	// lag in your deployment's canonical sources is very unlikely to fall
 	// entirely inside one window, because nothing else catches that case
 	// between rebuilds.
-	AnswerReuseMaxAge                    time.Duration
+	AnswerReuseMaxAge time.Duration
+	// AskDevMaxRunningPerPrincipal, AskDevMaxRunningPerOrg and
+	// AskDevMonthlyPlatformRunAllowance (CHAOS-11914, plan §2.9) are the
+	// SHARED Ask Dev admission limits: running submission runs per
+	// principal (ACR_ASK_DEV_MAX_RUNNING_PER_PRINCIPAL, default 2, at most
+	// 16) and per organization (ACR_ASK_DEV_MAX_RUNNING_PER_ORG, default 4,
+	// at most 64, at least the per-principal limit), and admitted runs on the
+	// deployment's own model per organization and calendar month UTC
+	// (ACR_ASK_DEV_MONTHLY_RUN_ALLOWANCE, default 1000, at most 5000). They
+	// apply to requests that name X-ACR-Submission-ID only.
+	AskDevMaxRunningPerPrincipal         int
+	AskDevMaxRunningPerOrg               int
+	AskDevMonthlyPlatformRunAllowance    int
 	MinimumSidecarVersion                string
 	RevokedClientVersions                []string
 	EntitlementKey                       string
@@ -427,6 +448,15 @@ func load(lookup lookupEnv) (Config, error) {
 	if cfg.ServiceModelOpen, err = serviceModelDefaultValue(lookup, environment); err != nil {
 		return Config{}, err
 	}
+	if cfg.AskDevMaxRunningPerPrincipal, err = intValue(lookup, "ACR_ASK_DEV_MAX_RUNNING_PER_PRINCIPAL", defaultAskDevMaxRunningPerPrincipal); err != nil {
+		return Config{}, err
+	}
+	if cfg.AskDevMaxRunningPerOrg, err = intValue(lookup, "ACR_ASK_DEV_MAX_RUNNING_PER_ORG", defaultAskDevMaxRunningPerOrg); err != nil {
+		return Config{}, err
+	}
+	if cfg.AskDevMonthlyPlatformRunAllowance, err = intValue(lookup, "ACR_ASK_DEV_MONTHLY_RUN_ALLOWANCE", defaultAskDevMonthlyRunAllowance); err != nil {
+		return Config{}, err
+	}
 	devHealthEntitlementMaxResponseBytes, err := intValue(lookup, "ACR_DEV_HEALTH_ENTITLEMENT_MAX_RESPONSE_BYTES", 16<<10)
 	if err != nil {
 		return Config{}, err
@@ -540,6 +570,14 @@ func (c Config) Validate() error {
 	// mean every candidate row is already "in the future" and always
 	// rejected -- a silent, confusing way to disable reuse that the
 	// explicit zero-means-disabled convention exists to avoid.
+	switch {
+	case c.AskDevMaxRunningPerPrincipal < 1 || c.AskDevMaxRunningPerPrincipal > maxAskDevMaxRunningPerPrincipal:
+		return fmt.Errorf("ACR_ASK_DEV_MAX_RUNNING_PER_PRINCIPAL must be between 1 and %d", maxAskDevMaxRunningPerPrincipal)
+	case c.AskDevMaxRunningPerOrg < c.AskDevMaxRunningPerPrincipal || c.AskDevMaxRunningPerOrg > maxAskDevMaxRunningPerOrg:
+		return fmt.Errorf("ACR_ASK_DEV_MAX_RUNNING_PER_ORG must be between ACR_ASK_DEV_MAX_RUNNING_PER_PRINCIPAL and %d", maxAskDevMaxRunningPerOrg)
+	case c.AskDevMonthlyPlatformRunAllowance < 1 || c.AskDevMonthlyPlatformRunAllowance > maxAskDevMonthlyRunAllowance:
+		return fmt.Errorf("ACR_ASK_DEV_MONTHLY_RUN_ALLOWANCE must be between 1 and %d", maxAskDevMonthlyRunAllowance)
+	}
 	if c.AnswerReuseMaxAge != 0 && (c.AnswerReuseMaxAge < minAnswerReuseMaxAge || c.AnswerReuseMaxAge > maxAnswerReuseMaxAge) {
 		return fmt.Errorf("ACR_CONTEXT_FABRIC_ANSWER_REUSE_MAX_AGE must be unset (disabled) or between %s and %s", minAnswerReuseMaxAge, maxAnswerReuseMaxAge)
 	}

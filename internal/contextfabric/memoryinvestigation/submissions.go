@@ -18,6 +18,7 @@ import (
 var (
 	_ contextfabric.SubmissionStore         = (*Store)(nil)
 	_ contextfabric.SubmissionUnsavedMarker = (*Store)(nil)
+	_ contextfabric.UsageReader             = (*Store)(nil)
 )
 
 func validSubmissionKey(key contextfabric.SubmissionKey) error {
@@ -78,6 +79,49 @@ func (s *Store) reconcileLocked(record contextfabric.SubmissionRecord, now time.
 	return record, false
 }
 
+// usageKey is the aggregate's (org_id, month) key.
+type usageKey struct {
+	orgID string
+	month time.Time
+}
+
+// liveLocked: a record that counts to concurrency -- running, inside its
+// budget, its reserved result not stored. Callers hold mu.
+func (s *Store) liveLocked(record contextfabric.SubmissionRecord, now time.Time) bool {
+	if record.State != contextfabric.SubmissionRunning || !now.Before(record.ExpiresAt) {
+		return false
+	}
+	stored, found := s.results[record.ReservedResultID]
+	return !found || stored.orgID != record.Key.OrgID
+}
+
+// ReadUsageMonthly implements contextfabric.UsageReader.
+func (s *Store) ReadUsageMonthly(ctx context.Context, orgID string, month time.Time) (contextfabric.UsageMonthly, bool, error) {
+	if err := ctx.Err(); err != nil {
+		return contextfabric.UsageMonthly{}, false, err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	runs, found := s.usage[usageKey{orgID: orgID, month: contextfabric.UsageMonth(month)}]
+	if !found {
+		return contextfabric.UsageMonthly{}, false, nil
+	}
+	return contextfabric.UsageMonthly{OrgID: orgID, Month: contextfabric.UsageMonth(month), PlatformRuns: runs}, true, nil
+}
+
+// DeleteSubmissionsForTest removes every submission record of orgID, as a
+// retention job would, and nothing else: the usage aggregate stays.
+func (s *Store) DeleteSubmissionsForTest(orgID string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for key, record := range s.submissions {
+		if key.OrgID == orgID {
+			delete(s.submissions, key)
+			delete(s.reserved, reservedResultKey{orgID: orgID, resultID: record.ReservedResultID})
+		}
+	}
+}
+
 // AdmitSubmission implements contextfabric.SubmissionStore.
 func (s *Store) AdmitSubmission(ctx context.Context, admission contextfabric.SubmissionAdmission, now time.Time) (contextfabric.SubmissionRecord, bool, error) {
 	if err := ctx.Err(); err != nil {
@@ -104,6 +148,32 @@ func (s *Store) AdmitSubmission(ctx context.Context, admission contextfabric.Sub
 	index := reservedResultKey{orgID: admission.Key.OrgID, resultID: admission.ReservedResultID}
 	if _, taken := s.reserved[index]; taken {
 		return contextfabric.SubmissionRecord{}, false, fmt.Errorf("memoryinvestigation: reserved result id is already reserved")
+	}
+	// CHAOS-11914: the shared limits, decided under the same lock as the
+	// insert and the aggregate increment.
+	limits := admission.Limits.Effective()
+	var principalRunning, orgRunning int64
+	for key, record := range s.submissions {
+		if key.OrgID != admission.Key.OrgID || !s.liveLocked(record, now) {
+			continue
+		}
+		orgRunning++
+		if key.Owner == admission.Key.Owner {
+			principalRunning++
+		}
+	}
+	switch {
+	case principalRunning >= int64(limits.MaxRunningPerPrincipal):
+		return contextfabric.SubmissionRecord{}, false, &contextfabric.SubmissionRefusedError{Refusal: contextfabric.SubmissionRefusedPrincipalConcurrency, Count: principalRunning, Limit: int64(limits.MaxRunningPerPrincipal), RetryAfter: contextfabric.SubmissionConcurrencyRetryAfter}
+	case orgRunning >= int64(limits.MaxRunningPerOrg):
+		return contextfabric.SubmissionRecord{}, false, &contextfabric.SubmissionRefusedError{Refusal: contextfabric.SubmissionRefusedOrgConcurrency, Count: orgRunning, Limit: int64(limits.MaxRunningPerOrg), RetryAfter: contextfabric.SubmissionConcurrencyRetryAfter}
+	}
+	month := usageKey{orgID: admission.Key.OrgID, month: contextfabric.UsageMonth(now)}
+	if admission.PlatformRun {
+		if runs := s.usage[month]; runs >= limits.MonthlyPlatformRunAllowance {
+			return contextfabric.SubmissionRecord{}, false, &contextfabric.SubmissionRefusedError{Refusal: contextfabric.SubmissionRefusedAllowanceExhausted, Count: runs, Limit: limits.MonthlyPlatformRunAllowance, RetryAfter: contextfabric.AllowanceRetryAfter(now)}
+		}
+		s.usage[month]++
 	}
 	record := contextfabric.SubmissionRecord{
 		Key: admission.Key, RequestDigest: admission.RequestDigest, ReservedResultID: admission.ReservedResultID, ThreadID: admission.ThreadID,

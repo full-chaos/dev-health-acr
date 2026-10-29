@@ -137,6 +137,10 @@ var exampleSchemaPairs = map[string]string{
 	// CHAOS-11913: the submission status read, written by the route itself
 	// (internal/api/context_fabric_submission_status_test.go).
 	"context_fabric_submission_status.v1.json": "context_fabric_submission_status.v1.schema.json",
+	// CHAOS-11914: the two shared-limit refusals, written by the route itself
+	// (internal/api/context_fabric_submission_limits_test.go).
+	"error_context_fabric_concurrency_limited.v1.json": "error.v1.schema.json",
+	"error_context_fabric_allowance_exhausted.v1.json": "error.v1.schema.json",
 }
 
 // Options configures repository contract validation.

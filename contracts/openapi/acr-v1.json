@@ -518,7 +518,7 @@
             "$ref": "#/components/responses/Error"
           },
           "429": {
-            "$ref": "#/components/responses/Error"
+            "$ref": "#/components/responses/ContextFabricInvestigationTooManyRequests"
           },
           "500": {
             "$ref": "#/components/responses/Error"
@@ -3230,6 +3230,25 @@
                   }
                 }
               ]
+            }
+          }
+        }
+      },
+      "ContextFabricInvestigationTooManyRequests": {
+        "description": "Structured safe error. rate_limited: the per-replica request rate limit (with N replicas the effective ceiling is N times the configured one). CHAOS-11914, for a request that names a NEW X-ACR-Submission-ID: concurrency_limited when the principal (details.limit principal) or the organization (details.limit org) already has its shared limit of running Ask Dev runs (defaults 2 and 4, counted across every replica); allowance_exhausted when the organization admitted its monthly allowance of runs on the deployment's model (default 1000, calendar month UTC; a run on the organization's own model counts to concurrency only). Every 429 carries Retry-After: for allowance_exhausted it is the start of the next month. Nothing was admitted or counted; a repeat of an already admitted submission id is never refused by these limits.",
+        "headers": {
+          "Retry-After": {
+            "description": "Seconds to wait before retrying.",
+            "schema": {
+              "type": "integer",
+              "minimum": 1
+            }
+          }
+        },
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "../jsonschema/v1/error.v1.schema.json"
             }
           }
         }

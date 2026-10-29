@@ -130,7 +130,7 @@ func (a *App) ContextFabricInvestigationHandler(investigator contextfabric.Inves
 		var submission *admittedInvestigationSubmission
 		reservedResultID := ""
 		if submissionID != "" {
-			admitted, proceed := a.admitInvestigationSubmission(w, r, principal, request, submissionID, threadID)
+			admitted, proceed := a.admitInvestigationSubmission(w, r, principal, request, submissionID, threadID, contextfabric.DeploymentModelBound(gatedCtx))
 			if !proceed {
 				return
 			}

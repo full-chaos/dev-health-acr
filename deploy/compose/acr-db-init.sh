@@ -254,6 +254,10 @@ GRANT SELECT, DELETE ON TABLE acr.context_fabric_org_purge_markers TO :"runtime_
 REVOKE SELECT, INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER ON TABLE acr.context_fabric_investigation_results FROM :"runtime_user";
 GRANT SELECT, INSERT ON TABLE acr.context_fabric_investigation_results TO :"runtime_user";
 
+-- INSERT ... ON CONFLICT DO UPDATE internal/contextfabric/pginvestigation/submissions.go AdmitSubmission (the monthly allowance), SELECT submissions.go ReadUsageMonthly
+REVOKE SELECT, INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER ON TABLE acr.context_fabric_usage_monthly FROM :"runtime_user";
+GRANT SELECT, INSERT, UPDATE ON TABLE acr.context_fabric_usage_monthly TO :"runtime_user";
+
 -- INSERT internal/contextfabric/pginvestigation/submissions.go AdmitSubmission, SELECT submissions.go GetSubmission, UPDATE submissions.go FinishSubmission and store.go Save's completion
 REVOKE SELECT, INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER ON TABLE acr.context_fabric_investigation_submissions FROM :"runtime_user";
 GRANT SELECT, INSERT, UPDATE ON TABLE acr.context_fabric_investigation_submissions TO :"runtime_user";

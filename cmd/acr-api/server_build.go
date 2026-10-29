@@ -11,6 +11,7 @@ import (
 	"github.com/full-chaos/dev-health-acr/internal/api"
 	"github.com/full-chaos/dev-health-acr/internal/auth"
 	"github.com/full-chaos/dev-health-acr/internal/config"
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 	"github.com/full-chaos/dev-health-acr/internal/hostedmetrics"
 	"github.com/full-chaos/dev-health-acr/internal/limits"
@@ -165,6 +166,10 @@ func appConfig(cfg config.Config, serviceVersion string) api.AppConfig {
 		ServerCompletenessAuthorityEnabled:          cfg.ServerCompletenessAuthorityEnabled,
 		ServerCompletenessAuthoritySymmetricEnabled: cfg.ServerCompletenessAuthoritySymmetricEnabled,
 		ContextFabricEventStreamEnabled:             cfg.ContextFabricEventStreamEnabled,
+		AskDevLimits: contextfabric.SubmissionLimits{
+			MaxRunningPerPrincipal: cfg.AskDevMaxRunningPerPrincipal, MaxRunningPerOrg: cfg.AskDevMaxRunningPerOrg,
+			MonthlyPlatformRunAllowance: int64(cfg.AskDevMonthlyPlatformRunAllowance),
+		},
 	}
 }
 
