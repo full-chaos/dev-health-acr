@@ -3156,6 +3156,13 @@ sequenceDiagram
   Note over R,S: no outcome of a repeated key runs the request again
 ```
 
+Gate order. Authentication, scope, the rate limit, the body and the headers are
+checked first. A repeat of an admitted key is then answered, before the
+investigator, ClickHouse readiness and service-model gates: it executes nothing
+and reads only the submission and result stores, like a read by id. A new key
+meets those three gates, then admission (the race on admission is answered
+as a repeat).
+
 The record's states. A stored reserved result always wins over the clock: the
 reconcile rule (on read and in the 30 s sweeper of every replica) completes a
 running record whose reserved result exists bound to the record's owner, and
