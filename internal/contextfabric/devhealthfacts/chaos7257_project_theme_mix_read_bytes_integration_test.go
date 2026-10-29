@@ -405,13 +405,12 @@ WHERE database = 'system' AND table = 'query_log' AND expr = 'event_time_microse
 			t.Errorf("%s: %s kept %d rows, want %d", c.name, queryLogSinceMark, got, c.want)
 		}
 	}
-	// The control only says whether THIS server still has the hazard; the window
-	// cases above are the guard and hold either way. ClickHouse 26.7 patch
-	// releases moved: a later one analyses the DateTime constant exactly and the
-	// old bind keeps the row (CHAOS-11981). A server that no longer has the
-	// hazard is reported loudly, never failed, because the guard is still proved
-	// by the cases above; a server that has it must show the old bind losing the
-	// row, which is the pin that the fixture reproduces it.
+	// The window cases above are the guard and have already run. The control
+	// proves the fixture reproduces the hazard on THIS server. ClickHouse 26.7
+	// patch releases drift: a later one analyses the DateTime constant exactly and
+	// the old bind keeps the row. That is a visible SKIP naming the server, never
+	// a pass: on such a server the cases above cannot tell the microsecond bind
+	// from the old bind. A server that has the hazard must still lose the row.
 	var version string
 	if err := direct.QueryRow(ctx, `SELECT version()`).Scan(&version); err != nil {
 		t.Fatalf("read server version: %v", err)
@@ -420,7 +419,7 @@ WHERE database = 'system' AND table = 'query_log' AND expr = 'event_time_microse
 	case 0:
 		t.Logf("control: server %s reproduces the skip-index hazard (old time.Time bind lost the row)", version)
 	case 1:
-		t.Logf("control: server %s does NOT reproduce the skip-index hazard (old time.Time bind kept the row); the window cases above still assert the microsecond bind, but cannot tell it from the old bind on this server", version)
+		t.Skipf("control skipped: old-bind hazard absent on this server (%s): the old time.Time bind kept the row, so the window cases above cannot distinguish the microsecond bind from it", version)
 	default:
 		t.Errorf("control: server %s: the old time.Time bind kept %d rows, want 0 or 1", version, got)
 	}
