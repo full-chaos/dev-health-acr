@@ -116,7 +116,10 @@ grep -Fq 'X-ACR-Client-Version: 1.0.0' "$script"
 grep -Fq "\"\$ACR_CLIENT_VERSION_HEADER\"" "$script"
 grep -Fq 'rotated ACR credential did not authenticate against the direct localhost endpoint' "$script"
 grep -Fq 'previous ACR credential remained valid after immediate rotation' "$script"
-grep -F -A 3 'compose up -d postgres clickhouse valkey pgbouncer mailpit migrate go-api-roles go-api acr-db-init acr-migrate acr-api acr-tls-proxy >/dev/null' "$script" | grep -Fq "run_mcp \"\$(<\"\$STATE/secrets/acr-rotated-token\")\""
+grep -F -A 4 'compose up -d postgres clickhouse valkey pgbouncer mailpit migrate go-api-roles go-api >/dev/null' "$script" | grep -Fq "run_mcp \"\$(<\"\$STATE/secrets/acr-rotated-token\")\""
+# CHAOS-11890: acr-api must start only after the ops api internal listener answers (it exits on a failed boot entitlement check).
+awk '/^ensure_go_api_ready\(\)/,/^}/' "$script" | grep -Fq 'wait_go_api'
+awk '/^start_acr_after_go_api\(\)/,/^}/' "$script" | awk '/ensure_go_api_ready/{r=NR} /acr-api/{a=NR} END{exit !(r && a && r<a)}'
 # The failure-log health dump names only services the harness compose gives a healthcheck (the retired api service has none).
 grep -Fq "for service in postgres pgbouncer clickhouse valkey; do" "$script"
 ! grep -Fq "for service in clickhouse api; do" "$script"

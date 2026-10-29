@@ -356,7 +356,7 @@ start_failure_runtime() {
   if [[ "$SCENARIO" == 'false-entitlement' ]]; then
     remove_runtime_entitlement
   fi
-  compose up -d acr-db-init acr-migrate acr-api acr-tls-proxy >/dev/null
+  start_acr_after_go_api
   wait_https_ready
   record_acl_probe
   create_acr_credential
