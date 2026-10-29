@@ -232,7 +232,10 @@ type ContextFabricInvestigationEvent struct {
 	// Result (result) is the JSON response body the request gets without the
 	// stream, verbatim: context_fabric_investigation_response v1 or v2, or the
 	// bounded context_fabric_answer_projection.v1. It must be compact JSON so
-	// it travels on one data line unchanged.
+	// it travels on one data line unchanged. Its request_id names the
+	// request that produced the answer: this request, or on answer reuse the
+	// earlier one, since a reused answer is served exactly as stored
+	// (AC-3782-2), on the stream as in the JSON body.
 	Result json.RawMessage `json:"result,omitempty"`
 	// Error (error) is the error.v1 envelope the same failure gets as a JSON
 	// response, http_status included.
@@ -318,7 +321,7 @@ func (e ContextFabricInvestigationEvent) presentFields() map[contextFabricEventF
 // ContextFabricInvestigationEventStreamCheck.
 //
 // The result body is checked only for its identity (one compact JSON object,
-// a known schema_version, the event's request_id, a result_id): the body is
+// a known schema_version, a result_id): the body is
 // the JSON response, which its own response schemas govern, and a stricter
 // check here would let the stream refuse an answer the JSON response serves.
 func (e ContextFabricInvestigationEvent) Validate() error {
@@ -373,7 +376,7 @@ func (e ContextFabricInvestigationEvent) Validate() error {
 		return fmt.Errorf("investigation event elapsed_ms must be between 0 and %d", int64(contextFabricEventMaxInteger))
 	}
 	if present[eventFieldResult] {
-		if err := validateContextFabricEventResultBody(e.Result, e.RequestID); err != nil {
+		if err := validateContextFabricEventResultBody(e.Result); err != nil {
 			return err
 		}
 	}
@@ -393,7 +396,7 @@ var contextFabricEventResultSchemas = map[string]bool{
 	ContextFabricAnswerProjectionSchema:      true,
 }
 
-func validateContextFabricEventResultBody(body json.RawMessage, requestID string) error {
+func validateContextFabricEventResultBody(body json.RawMessage) error {
 	var compact bytes.Buffer
 	if err := json.Compact(&compact, body); err != nil {
 		return fmt.Errorf("investigation result event body is not one JSON value: %w", err)
@@ -403,7 +406,6 @@ func validateContextFabricEventResultBody(body json.RawMessage, requestID string
 	}
 	var identity struct {
 		SchemaVersion string `json:"schema_version"`
-		RequestID     string `json:"request_id"`
 		ResultID      string `json:"result_id"`
 	}
 	if err := json.Unmarshal(body, &identity); err != nil {
@@ -411,9 +413,6 @@ func validateContextFabricEventResultBody(body json.RawMessage, requestID string
 	}
 	if !contextFabricEventResultSchemas[identity.SchemaVersion] {
 		return fmt.Errorf("investigation result event body schema_version is not a create-investigation response")
-	}
-	if identity.RequestID != requestID {
-		return fmt.Errorf("investigation result event body request_id differs from the event's")
 	}
 	if !stringLengthBetween(identity.ResultID, 8, 256) {
 		return fmt.Errorf("investigation result event body result_id violates v1 bounds")

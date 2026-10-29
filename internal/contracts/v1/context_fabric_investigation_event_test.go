@@ -113,6 +113,14 @@ func TestInvestigationEventValuesBothSidesAccept(t *testing.T) {
 		{"budget_seconds 1", ContextFabricInvestigationEventAccepted, "budget_seconds", json.Number("1")},
 		{"a UUID submission_id", ContextFabricInvestigationEventAccepted, "submission_id", "8f14e45f-ceea-467a-9575-0a1b2c3d4e5f"},
 	}
+	// A reused answer is served exactly as stored (AC-3782-2): its body names
+	// the request that first produced it, not this one, and the stream must
+	// carry it as the JSON body does.
+	reused := eventAsMap(t, bases[ContextFabricInvestigationEventResult])
+	reused["result"].(map[string]any)["request_id"] = "request_earlier01"
+	if schemaOK, goOK, err := verdicts(t, reused); !schemaOK || !goOK {
+		t.Errorf("a reused body naming an earlier request: want accepted; schema accepted=%t, Go accepted=%t (%v)", schemaOK, goOK, err)
+	}
 	for _, test := range cases {
 		object := eventAsMap(t, bases[test.kind])
 		object[test.key] = test.value
@@ -315,9 +323,6 @@ func TestInvestigationEventCrossFieldRulesAreGoOnly(t *testing.T) {
 		base   ContextFabricInvestigationEvent
 		mutate func(map[string]any)
 	}{
-		{"body request_id differs from the event's", result, func(object map[string]any) {
-			object["result"].(map[string]any)["request_id"] = "request_99999999"
-		}},
 		{"envelope request_id differs from the event's", failure, func(object map[string]any) {
 			object["error"].(map[string]any)["request_id"] = "req_other_one"
 		}},
@@ -635,6 +640,19 @@ func TestInvestigationEventEncoderRefusesAnInvalidEvent(t *testing.T) {
 	invalid := ContextFabricInvestigationEvent{SchemaVersion: ContextFabricInvestigationEventSchema, Type: ContextFabricInvestigationEventStage, RequestID: "request_12345678", Seq: 2}
 	if _, err := MarshalContextFabricInvestigationEventFrame(invalid); err == nil {
 		t.Fatal("a stage event with no stage, state or elapsed_ms was encoded")
+	}
+	// The writer checks a result body's identity (it never deep-validates an
+	// answer the JSON path serves): a body of another contract, or one with
+	// no result_id, is refused at the encoder.
+	for name, body := range map[string]string{
+		"another contract": `{"schema_version":"context_packet.v1","request_id":"request_12345678","result_id":"result_12345678"}`,
+		"no result_id":     `{"schema_version":"context_fabric_investigation_result.v1","request_id":"request_12345678"}`,
+		"not an object":    `["context_fabric_investigation_result.v1"]`,
+	} {
+		event := ContextFabricInvestigationEvent{SchemaVersion: ContextFabricInvestigationEventSchema, Type: ContextFabricInvestigationEventResult, RequestID: "request_12345678", Seq: 9, Result: json.RawMessage(body)}
+		if _, err := MarshalContextFabricInvestigationEventData(event); err == nil {
+			t.Errorf("%s: the encoder wrote a result body it must refuse", name)
+		}
 	}
 }
 
