@@ -140,11 +140,11 @@ type submissionHarness struct {
 	// clickhouseDown makes every App's ClickHouse data-store check fail.
 	clickhouseDown atomic.Bool
 	clock          *submissionClock
-	apps         []*App
-	logs         []*bytes.Buffer
-	tokenA       string
-	tokenB       string
-	investigator *countingSubmissionInvestigator
+	apps           []*App
+	logs           []*bytes.Buffer
+	tokenA         string
+	tokenB         string
+	investigator   *countingSubmissionInvestigator
 }
 
 // newSubmissionHarness builds one App per store. Every App shares the
@@ -191,10 +191,10 @@ func newSubmissionHarness(t *testing.T, stores ...submissionTestStore) *submissi
 					}
 					return nil
 				}}},
-				Investigator: harness.investigator,
-				InvestigationResults:       store,
-				StoredResultGate:           testStoredResultGate(harness.investigator),
-				InvestigationSubmissions:   store,
+				Investigator:             harness.investigator,
+				InvestigationResults:     store,
+				StoredResultGate:         testStoredResultGate(harness.investigator),
+				InvestigationSubmissions: store,
 			},
 		}, testLogger(logs))
 		if err != nil {
