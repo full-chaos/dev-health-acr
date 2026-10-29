@@ -3,6 +3,7 @@ internal/hostedmetrics/hostedmetrics.go	Answer	status,tool	closed vocabularies t
 internal/hostedmetrics/hostedmetrics.go	AnswerReuse	outcome	closed vocabulary through bucket()
 internal/hostedmetrics/hostedmetrics.go	FactReadAbort	cause	closed vocabulary through bucket()
 internal/hostedmetrics/hostedmetrics.go	GraphBootstrapWait	outcome	closed vocabulary through bucket()
+internal/hostedmetrics/hostedmetrics.go	InvestigationEventsDropped	stage	closed vocabulary through bucket()
 internal/hostedmetrics/hostedmetrics.go	InvestigationLatency	status	closed vocabulary through bucket()
 internal/hostedmetrics/hostedmetrics.go	OutcomeRowEvicted	lever	closed vocabulary through bucket()
 internal/hostedmetrics/hostedmetrics.go	ProjectionPairFailure	failure_class	closed vocabulary through bucket()
