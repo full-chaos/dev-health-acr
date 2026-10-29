@@ -162,12 +162,54 @@ func (a *App) admitInvestigationSubmission(w http.ResponseWriter, r *http.Reques
 		a.logSubmissionAdmission(r, principal, SubmissionOutcomeAdmitted, record.State, nil)
 		return &admittedInvestigationSubmission{key: key, record: record, store: store}, true
 	}
-	// A repeat of the key. The digest is decided before the state: a key is
-	// only ever a retry of the identical request.
+	// A repeat that raced the pre-gate lookup (answerSubmissionRepeat): the
+	// other request admitted the key between the two reads.
+	a.answerSubmissionRecord(w, r, principal, record, digest)
+	return nil, false
+}
+
+// answerSubmissionRepeat answers a request whose submission key is already
+// admitted, BEFORE the service-model gate (round-3 F1): a repeat runs no
+// model, so the decision to execute on the deployment's model does not apply
+// to it; the stored-result gate re-authorizes a replay like a read by id.
+// answered is false when the key is new (or the lookup cannot be made here;
+// admission then decides and answers any failure).
+func (a *App) answerSubmissionRepeat(w http.ResponseWriter, r *http.Request, principal storage.Principal, request contextfabric.InvestigationRequest, submissionID string) (answered bool) {
+	store := a.investigationSubmissions()
+	if store == nil {
+		return false
+	}
+	key, err := contextfabric.SubmissionKeyFor(principal, submissionID)
+	if err != nil {
+		return false
+	}
+	record, err := store.GetSubmission(r.Context(), key, a.now())
+	switch {
+	case errors.Is(err, contextfabric.ErrSubmissionNotFound):
+		return false
+	case err != nil:
+		a.logSubmissionAdmission(r, principal, SubmissionOutcomeStoreUnavailable, "", err)
+		writeError(w, r, http.StatusServiceUnavailable, "store_unavailable", "Context Fabric investigation submissions are temporarily unavailable", true, nil)
+		return true
+	}
+	digest, err := contextfabric.SubmissionRequestDigest(request)
+	if err != nil {
+		a.logSubmissionAdmission(r, principal, SubmissionOutcomeStoreUnavailable, "", err)
+		writeError(w, r, http.StatusInternalServerError, "internal_error", "Context Fabric investigation submission could not be admitted", false, nil)
+		return true
+	}
+	a.answerSubmissionRecord(w, r, principal, record, digest)
+	return true
+}
+
+// answerSubmissionRecord is the one answer to a repeat of an admitted key.
+// The digest is decided before the state: a key is only ever a retry of the
+// identical request. Nothing here executes.
+func (a *App) answerSubmissionRecord(w http.ResponseWriter, r *http.Request, principal storage.Principal, record contextfabric.SubmissionRecord, digest string) {
 	if record.RequestDigest != digest {
 		a.logSubmissionAdmission(r, principal, SubmissionOutcomeRefusedMismatch, record.State, nil)
 		writeError(w, r, http.StatusConflict, contractsv1.ErrorCodeSubmissionMismatch, "The submission id was already used for a different request", false, nil)
-		return nil, false
+		return
 	}
 	switch record.State {
 	case contextfabric.SubmissionDone:
@@ -191,7 +233,6 @@ func (a *App) admitInvestigationSubmission(w http.ResponseWriter, r *http.Reques
 		a.logSubmissionAdmission(r, principal, SubmissionOutcomeRefusedAbandoned, record.State, nil)
 		writeError(w, r, http.StatusConflict, contractsv1.ErrorCodeSubmissionAbandoned, "The submission ended without an answer", false, nil)
 	}
-	return nil, false
 }
 
 // submissionWriteContext outlives the request: a client that disconnected

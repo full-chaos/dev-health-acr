@@ -133,7 +133,10 @@ func (f *countingSubmissionInvestigator) Investigate(ctx context.Context, princi
 const submissionTestRequestID = "req_00000000000000000000000000011912"
 
 type submissionHarness struct {
-	t            *testing.T
+	t *testing.T
+	// denied names entitlements the harness's entitlement service refuses
+	// from now on (all are granted by default).
+	denied       sync.Map
 	clock        *submissionClock
 	apps         []*App
 	logs         []*bytes.Buffer
@@ -172,7 +175,10 @@ func newSubmissionHarness(t *testing.T, stores ...submissionTestStore) *submissi
 		app, err := NewApp(AppConfig{ServiceName: "acr", ServiceVersion: "test", RequestTimeout: 30 * time.Second}, Dependencies{
 			Capabilities: StaticCapabilitiesProvider{Now: clock.Now, Value: hostedCapabilities()}, Limits: manager, Now: clock.Now,
 			Runtime: &RuntimeDependencies{
-				Credentials: credentials, Audit: audit, Entitlements: EntitlementFunc(func(context.Context, string, string) (bool, error) { return true, nil }),
+				Credentials: credentials, Audit: audit, Entitlements: EntitlementFunc(func(_ context.Context, _ string, entitlement string) (bool, error) {
+					_, refused := harness.denied.Load(entitlement)
+					return !refused, nil
+				}),
 				Assembler: noopAssembler{}, Evidence: noopEvidenceStore{},
 				DeviceAuthorizations: devices, DeviceVerificationURL: "https://verify.example.test/device",
 				DeviceAuthorizationLimiter: NewDeviceAuthorizationLimiter(ClockFunc(clock.Now)),

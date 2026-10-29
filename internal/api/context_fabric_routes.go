@@ -85,6 +85,12 @@ func (a *App) ContextFabricInvestigationHandler(investigator contextfabric.Inves
 			writeError(w, r, http.StatusUnauthorized, "invalid_token", "Missing or invalid ACR credential", false, nil)
 			return
 		}
+		// CHAOS-11912 (round-3 F1): a repeat of an admitted submission runs
+		// nothing, so it is answered before the service-model gate, which
+		// decides EXECUTION on the deployment's model.
+		if submissionID != "" && a.answerSubmissionRepeat(w, r, principal, request, submissionID) {
+			return
+		}
 		gatedCtx, served := a.gateServiceModel(w, r, principal, request)
 		if !served {
 			return

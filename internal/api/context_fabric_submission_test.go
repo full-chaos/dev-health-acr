@@ -315,3 +315,33 @@ func TestSubmissionDigestBindsTheConsumerSurface(t *testing.T) {
 		t.Fatalf("executions = %d, want 1", got)
 	}
 }
+
+// Round-3 F1: a repeat of an admitted submission runs no model, so the
+// service-model gate (a decision about EXECUTING on the deployment's model)
+// does not decide it: after the model entitlement is withdrawn, the owner's
+// retry of a done submission still replays the stored result, re-authorized
+// by the stored-result gate like a read by id, and a retry of a running one
+// is still in_progress. A NEW submission is refused by the model gate before
+// anything is admitted.
+func TestASubmissionRepeatIsAnsweredBeforeTheServiceModelGate(t *testing.T) {
+	harness, _ := newMemorySubmissionHarness(t, 2)
+	first := servedResultID(t, harness.post(0, harness.tokenA, "submission-modelgate-1", submissionQuestion))
+	harness.denied.Store("acr_service_model", true)
+	harness.denied.Store("platform_model_fallback", true)
+	if again := servedResultID(t, harness.post(1, harness.tokenA, "submission-modelgate-1", submissionQuestion)); again != first {
+		t.Fatalf("replay = %s, want %s", again, first)
+	}
+	expectSubmissionRefusal(t, harness.post(1, harness.tokenA, "submission-modelgate-1", submissionQuestion+" Why?"), contractsv1.ErrorCodeSubmissionMismatch)
+	refused := harness.post(0, harness.tokenA, "submission-modelgate-2", submissionQuestion)
+	if refused.Code != http.StatusForbidden || errorEnvelopeOf(t, refused).Error.Code != "feature_not_enabled" {
+		t.Fatalf("a new submission without the model entitlement = %d %s, want 403 feature_not_enabled", refused.Code, refused.Body.String())
+	}
+	// The refused new submission admitted nothing: with the entitlement
+	// back, the same key runs.
+	harness.denied.Delete("acr_service_model")
+	harness.denied.Delete("platform_model_fallback")
+	servedResultID(t, harness.post(0, harness.tokenA, "submission-modelgate-2", submissionQuestion))
+	if got := harness.investigator.executions.Load(); got != 2 {
+		t.Fatalf("executions = %d, want 2", got)
+	}
+}
