@@ -51,7 +51,9 @@ type ContextFabricInvestigationEventStreamCheck struct {
 const contextFabricEventMaxSilenceMS = int64((ContextFabricInvestigationEventHeartbeatInterval + ContextFabricInvestigationEventHeartbeatSlack) / time.Millisecond)
 
 // ErrContextFabricInvestigationStreamInterrupted is Finish's error for a
-// stream that ended before its terminal event.
+// stream that ended before its terminal event, an empty stream included (a
+// connection that closed before `accepted`): Finish wraps it, so a consumer
+// tells "interrupted" from "malformed" with errors.Is alone.
 var ErrContextFabricInvestigationStreamInterrupted = errors.New("investigation event stream ended without a terminal event")
 
 // Next checks one event against the event schema and against its place in
@@ -141,10 +143,11 @@ func (c *ContextFabricInvestigationEventStreamCheck) stage(event ContextFabricIn
 }
 
 // Finish reports whether the stream ended correctly: at least one event and
-// a terminal event last.
+// a terminal event last. An empty stream and one with no terminal both return
+// an error that wraps ErrContextFabricInvestigationStreamInterrupted.
 func (c *ContextFabricInvestigationEventStreamCheck) Finish() error {
 	if c.count == 0 {
-		return fmt.Errorf("investigation event stream is empty")
+		return fmt.Errorf("%w: the stream is empty", ErrContextFabricInvestigationStreamInterrupted)
 	}
 	if !c.terminal {
 		return ErrContextFabricInvestigationStreamInterrupted
@@ -267,12 +270,10 @@ func decodeContextFabricEventFrame(frame []byte) (ContextFabricInvestigationEven
 //   - the error envelope, when present, names every key error.v1 requires and
 //     none of them as null, and its details, when present, is an object (a
 //     missing retryable would otherwise decode as false);
-//   - Validate;
-//   - a result body validated in full by the production validator of its own
-//     schema_version (the response v1 or v2, or the answer projection), as the
-//     schema validates it against the response schemas. The writer's Validate
-//     checks only the body's identity, so the stream never refuses an answer
-//     the JSON path serves; a consumer holds the body to its own contract.
+//   - Validate, which checks a result body in full by the production
+//     validator of its own schema_version (the response v1 or v2, or the
+//     answer projection), as the schema checks it against the response
+//     schemas, and an error envelope's typed details keys.
 //
 // The result body's own wire presence (a key its schema requires, present as
 // null or missing, deep inside the answer) is the same question for this body
@@ -307,11 +308,6 @@ func ParseContextFabricInvestigationEventData(data []byte) (ContextFabricInvesti
 	for key := range payloadKeys {
 		if !writtenKeys[key] {
 			return ContextFabricInvestigationEvent{}, fmt.Errorf("data carries %s with an empty, zero or null value; the writer omits an absent field", key)
-		}
-	}
-	if len(event.Result) > 0 {
-		if err := validateContextFabricEventResultBodyInFull(event.Result); err != nil {
-			return ContextFabricInvestigationEvent{}, err
 		}
 	}
 	return event, nil

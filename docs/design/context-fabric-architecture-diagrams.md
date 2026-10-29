@@ -3082,7 +3082,10 @@ consumer decode, accepts any JSON spelling of a valid event and refuses what the
 schema refuses (the result body included, validated in full against its own
 schema version); `DecodeContextFabricInvestigationEventData` additionally
 requires the writer's exact bytes, and `DecodeContextFabricInvestigationEventFrames`
-requires the writer's exact frames.
+requires the writer's exact frames. `Validate`, which the encoder calls, runs the
+same result-body and error-`details` checks, so the writer cannot encode an
+event a consumer refuses. An empty stream, like one that ends before its
+terminal, is interrupted (`ErrContextFabricInvestigationStreamInterrupted`).
 Stage order is `interpreting`, `resolving_subjects`, `reading_facts`,
 `synthesizing`, `validating`; it is a wire vocabulary, distinct from the
 engine's internal failure stages (`internal/contextfabric/stage.go`). Progress

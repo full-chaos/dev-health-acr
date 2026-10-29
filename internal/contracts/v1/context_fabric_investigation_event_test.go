@@ -129,6 +129,19 @@ func TestInvestigationEventValuesBothSidesAccept(t *testing.T) {
 			t.Errorf("%s: want accepted; schema accepted=%t, Go accepted=%t (%v)", test.name, schemaOK, goOK, err)
 		}
 	}
+	// error.v1 details: every typed key at a valid value, and a key error.v1
+	// does not name (additionalProperties: true), at any value.
+	for name, details := range map[string]map[string]any{
+		"every typed key valid": {"reason": "schema_violation", "field": "options.max_items", "limit": "capabilities_budget", "deadline": "request"},
+		"reason at 64":          {"reason": strings.Repeat("r", 64)},
+		"an untyped key":        {"measured_items": json.Number("41"), "retry_attempted": true, "note": nil},
+	} {
+		object := eventAsMap(t, bases[ContextFabricInvestigationEventError])
+		object["error"].(map[string]any)["error"].(map[string]any)["details"] = details
+		if schemaOK, goOK, err := verdicts(t, object); !schemaOK || !goOK {
+			t.Errorf("error details %s: want accepted; schema accepted=%t, Go accepted=%t (%v)", name, schemaOK, goOK, err)
+		}
+	}
 }
 
 // donorValues holds one valid wire value for every type-dependent field,
@@ -289,6 +302,19 @@ func TestInvestigationEventSchemaAndGoAgreeOnValues(t *testing.T) {
 		{"error code outside the vocabulary", failure, nested([]string{"error", "error", "code"}, "stream_lost")},
 		{"error message empty", failure, nested([]string{"error", "error", "message"}, "")},
 		{"error http_status 200", failure, nested([]string{"error", "error", "http_status"}, json.Number("200"))},
+		// error.v1's typed details keys (round-3 F1): each refused value, on
+		// both sides.
+		{"error details.deadline outside its enum", failure, nested([]string{"error", "error", "details"}, map[string]any{"deadline": "not-a-deadline"})},
+		{"error details.deadline null", failure, nested([]string{"error", "error", "details"}, map[string]any{"deadline": nil})},
+		{"error details.limit outside its enum", failure, nested([]string{"error", "error", "details"}, map[string]any{"limit": "org_budget"})},
+		{"error details.limit not a string", failure, nested([]string{"error", "error", "details"}, map[string]any{"limit": json.Number("3")})},
+		{"error details.reason with an upper-case letter", failure, nested([]string{"error", "error", "details"}, map[string]any{"reason": "Schema_violation"})},
+		{"error details.reason over 64", failure, nested([]string{"error", "error", "details"}, map[string]any{"reason": strings.Repeat("r", 65)})},
+		{"error details.reason not a string", failure, nested([]string{"error", "error", "details"}, map[string]any{"reason": true})},
+		{"error details.reason empty", failure, nested([]string{"error", "error", "details"}, map[string]any{"reason": ""})},
+		{"error details.field with a slash", failure, nested([]string{"error", "error", "details"}, map[string]any{"field": "options/max_items"})},
+		{"error details.field over 64", failure, nested([]string{"error", "error", "details"}, map[string]any{"field": strings.Repeat("f", 65)})},
+		{"error details.field null", failure, nested([]string{"error", "error", "details"}, map[string]any{"field": nil})},
 	}
 	for _, test := range cases {
 		object := eventAsMap(t, test.base)
@@ -641,18 +667,80 @@ func TestInvestigationEventEncoderRefusesAnInvalidEvent(t *testing.T) {
 	if _, err := MarshalContextFabricInvestigationEventFrame(invalid); err == nil {
 		t.Fatal("a stage event with no stage, state or elapsed_ms was encoded")
 	}
-	// The writer checks a result body's identity (it never deep-validates an
-	// answer the JSON path serves): a body of another contract, or one with
-	// no result_id, is refused at the encoder.
+	// The writer checks a result body in full (round-3 F2): a body of another
+	// contract, one with no result_id, and a compact body with a valid
+	// identity whose content its own response contract refuses are all
+	// refused at the encoder, so the writer never writes what a consumer and
+	// the schema refuse.
+	goldens := buildInvestigationEventGoldens(t)
+	golden := goldens.single["context_fabric_investigation_event_result.v1.json"]
+	reshaped := func(edit func(map[string]any)) string {
+		decoder := json.NewDecoder(bytes.NewReader(golden.Result))
+		decoder.UseNumber()
+		var body map[string]any
+		if err := decoder.Decode(&body); err != nil {
+			t.Fatal(err)
+		}
+		edit(body)
+		encoded, err := json.Marshal(body)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(encoded)
+	}
 	for name, body := range map[string]string{
-		"another contract": `{"schema_version":"context_packet.v1","request_id":"request_12345678","result_id":"result_12345678"}`,
-		"no result_id":     `{"schema_version":"context_fabric_investigation_result.v1","request_id":"request_12345678"}`,
-		"not an object":    `["context_fabric_investigation_result.v1"]`,
+		"another contract":                `{"schema_version":"context_packet.v1","request_id":"request_12345678","result_id":"result_12345678"}`,
+		"no result_id":                    `{"schema_version":"context_fabric_investigation_result.v1","request_id":"request_12345678"}`,
+		"not an object":                   `["context_fabric_investigation_result.v1"]`,
+		"only an identity":                `{"schema_version":"context_fabric_investigation_result.v1","request_id":"request_12345678","result_id":"result_12345678"}`,
+		"a status outside its vocabulary": reshaped(func(body map[string]any) { body["status"] = "finished" }),
+		"an unknown key":                  reshaped(func(body map[string]any) { body["answer_draft"] = "x" }),
 	} {
-		event := ContextFabricInvestigationEvent{SchemaVersion: ContextFabricInvestigationEventSchema, Type: ContextFabricInvestigationEventResult, RequestID: "request_12345678", Seq: 9, Result: json.RawMessage(body)}
+		event := golden
+		event.Result = json.RawMessage(body)
+		if err := event.Validate(); err == nil {
+			t.Errorf("%s: Validate accepted a result body it must refuse", name)
+		}
 		if _, err := MarshalContextFabricInvestigationEventData(event); err == nil {
 			t.Errorf("%s: the encoder wrote a result body it must refuse", name)
 		}
+	}
+	// The unchanged golden body, re-encoded the same way, is still written:
+	// the refusals above are the edits, not the re-encoding.
+	unchanged := golden
+	unchanged.Result = json.RawMessage(reshaped(func(map[string]any) {}))
+	if _, err := MarshalContextFabricInvestigationEventData(unchanged); err != nil {
+		t.Fatalf("the golden body, re-encoded, was refused: %v", err)
+	}
+	// error.v1 details (round-3 F1): the encoder refuses a typed key at a
+	// value error.v1 refuses.
+	failure := goldens.single["context_fabric_investigation_event_error_model_deadline.v1.json"]
+	envelope := *failure.Error
+	envelope.Error.Details = map[string]any{"deadline": "not-a-deadline"}
+	failure.Error = &envelope
+	if _, err := MarshalContextFabricInvestigationEventData(failure); err == nil {
+		t.Error("the encoder wrote an error event whose details.deadline error.v1 refuses")
+	}
+}
+
+// TestAnEmptyStreamIsInterrupted (round-3 F3): a stream with no event at all
+// -- a connection that closed before `accepted` -- is interrupted, the same
+// sentinel as a stream that ends before its terminal, through the stream
+// check and through the frame reader.
+func TestAnEmptyStreamIsInterrupted(t *testing.T) {
+	if err := ValidateContextFabricInvestigationEventStream(nil); !errors.Is(err, ErrContextFabricInvestigationStreamInterrupted) {
+		t.Fatalf("empty stream: %v, want ErrContextFabricInvestigationStreamInterrupted", err)
+	}
+	var check ContextFabricInvestigationEventStreamCheck
+	if err := check.Finish(); !errors.Is(err, ErrContextFabricInvestigationStreamInterrupted) {
+		t.Fatalf("Finish on no events: %v, want ErrContextFabricInvestigationStreamInterrupted", err)
+	}
+	events, err := DecodeContextFabricInvestigationEventFrames(bytes.NewReader(nil), 1<<20)
+	if err != nil {
+		t.Fatalf("an empty body is zero frames, not malformed: %v", err)
+	}
+	if err := ValidateContextFabricInvestigationEventStream(events); !errors.Is(err, ErrContextFabricInvestigationStreamInterrupted) {
+		t.Fatalf("empty body: %v, want ErrContextFabricInvestigationStreamInterrupted", err)
 	}
 }
 

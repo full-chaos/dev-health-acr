@@ -398,15 +398,20 @@ func TestInvestigationResultEventCarriesTheJSONBodyByteForByte(t *testing.T) {
 		}
 	}
 
+	// The golden v1 body with a question that HTML escaping would change,
+	// encoded without escaping: a full, valid body, since the encoder holds a
+	// result body to its own contract.
+	decoder := json.NewDecoder(bytes.NewReader(goldens.single["context_fabric_investigation_event_result.v1.json"].Result))
+	decoder.UseNumber()
+	var golden map[string]any
+	if err := decoder.Decode(&golden); err != nil {
+		t.Fatal(err)
+	}
+	golden["question"] = "is a<b && c>d?"
 	var unescaped bytes.Buffer
 	encoder := json.NewEncoder(&unescaped)
 	encoder.SetEscapeHTML(false)
-	if err := encoder.Encode(map[string]any{
-		"schema_version": ContextFabricInvestigationResultSchema,
-		"request_id":     "request_12345678",
-		"result_id":      "result_12345678",
-		"question":       "is a<b && c>d?",
-	}); err != nil {
+	if err := encoder.Encode(golden); err != nil {
 		t.Fatal(err)
 	}
 	body := bytes.TrimSuffix(unescaped.Bytes(), []byte("\n"))

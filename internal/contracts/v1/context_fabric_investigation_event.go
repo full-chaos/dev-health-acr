@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"regexp"
+	"slices"
 	"strconv"
 	"time"
 )
@@ -320,10 +321,16 @@ func (e ContextFabricInvestigationEvent) presentFields() map[contextFabricEventF
 // does not check the event's place in a stream; see
 // ContextFabricInvestigationEventStreamCheck.
 //
-// The result body is checked only for its identity (one compact JSON object,
-// a known schema_version, a result_id): the body is
-// the JSON response, which its own response schemas govern, and a stricter
-// check here would let the stream refuse an answer the JSON response serves.
+// A result body is checked in full: one compact JSON object of a known
+// schema_version with a result_id, then the production validator of that
+// schema_version (the response v1 or v2, or the answer projection), as the
+// schema checks it against the response schemas. So the writer, which calls
+// Validate before it encodes, cannot put a body on the wire that the schema
+// refuses; a route whose JSON 200 body fails its own contract gets a
+// refusal here, not a stream that carries it.
+//
+// An error envelope's details are checked against error.v1's typed keys
+// (reason, field, limit, deadline); other keys are free, as error.v1 allows.
 func (e ContextFabricInvestigationEvent) Validate() error {
 	if e.SchemaVersion != ContextFabricInvestigationEventSchema {
 		return fmt.Errorf("investigation event schema_version must be %q", ContextFabricInvestigationEventSchema)
@@ -379,6 +386,9 @@ func (e ContextFabricInvestigationEvent) Validate() error {
 		if err := validateContextFabricEventResultBody(e.Result); err != nil {
 			return err
 		}
+		if err := validateContextFabricEventResultBodyInFull(e.Result); err != nil {
+			return err
+		}
 	}
 	if present[eventFieldError] {
 		if err := validateContextFabricEventErrorEnvelope(*e.Error, e.RequestID); err != nil {
@@ -388,14 +398,11 @@ func (e ContextFabricInvestigationEvent) Validate() error {
 	return nil
 }
 
-// contextFabricEventResultSchemas are the schema_versions a result body may
-// carry: every body the JSON 200 response of the route can be.
-var contextFabricEventResultSchemas = map[string]bool{
-	ContextFabricInvestigationResultSchema:   true,
-	ContextFabricInvestigationResultSchemaV2: true,
-	ContextFabricAnswerProjectionSchema:      true,
-}
-
+// validateContextFabricEventResultBody checks how a result body travels: one
+// compact JSON object (so it is carried unchanged) with a result_id.
+// validateContextFabricEventResultBodyInFull then holds it to its
+// schema_version -- the one list of the bodies the JSON 200 response of the
+// route can be -- and to that version's own contract.
 func validateContextFabricEventResultBody(body json.RawMessage) error {
 	var compact bytes.Buffer
 	if err := json.Compact(&compact, body); err != nil {
@@ -405,14 +412,10 @@ func validateContextFabricEventResultBody(body json.RawMessage) error {
 		return fmt.Errorf("investigation result event body must be compact JSON, so it travels unchanged")
 	}
 	var identity struct {
-		SchemaVersion string `json:"schema_version"`
-		ResultID      string `json:"result_id"`
+		ResultID string `json:"result_id"`
 	}
 	if err := json.Unmarshal(body, &identity); err != nil {
 		return fmt.Errorf("investigation result event body must be a JSON object: %w", err)
-	}
-	if !contextFabricEventResultSchemas[identity.SchemaVersion] {
-		return fmt.Errorf("investigation result event body schema_version is not a create-investigation response")
 	}
 	if !stringLengthBetween(identity.ResultID, 8, 256) {
 		return fmt.Errorf("investigation result event body result_id violates v1 bounds")
@@ -467,7 +470,54 @@ func validateContextFabricEventErrorEnvelope(envelope ErrorEnvelope, requestID s
 	if envelope.Error.HTTPStatus < 400 || envelope.Error.HTTPStatus > 599 {
 		return fmt.Errorf("investigation error event http_status must be between 400 and 599")
 	}
-	return nil
+	return validateContextFabricEventErrorDetails(envelope.Error.Details)
+}
+
+var (
+	errorDetailReasonPattern = regexp.MustCompile(`^[a-z0-9_]+$`)
+	errorDetailFieldPattern  = regexp.MustCompile(`^[A-Za-z0-9_.]+$`)
+)
+
+// validateContextFabricEventErrorDetails holds details to error.v1's typed
+// keys. A key error.v1 does not name is free (additionalProperties: true). A
+// typed key present with a value its type refuses -- null included -- is
+// refused, as the schema refuses it: a value that is not a string reads as
+// "", which neither pattern (one or more characters) nor any enum member
+// admits. The patterns admit ASCII only, so the byte length is the schema's
+// character length.
+func validateContextFabricEventErrorDetails(details map[string]any) error {
+	patterned := func(key string, pattern *regexp.Regexp) error {
+		value, present := details[key]
+		if !present {
+			return nil
+		}
+		text, _ := value.(string)
+		if len(text) > 64 || !pattern.MatchString(text) {
+			return fmt.Errorf("investigation error event details.%s must be a string of at most 64 characters matching %s", key, pattern)
+		}
+		return nil
+	}
+	enumerated := func(key string, members ...string) error {
+		value, present := details[key]
+		if !present {
+			return nil
+		}
+		text, _ := value.(string)
+		if !slices.Contains(members, text) {
+			return fmt.Errorf("investigation error event details.%s must be one of %v", key, members)
+		}
+		return nil
+	}
+	if err := patterned("reason", errorDetailReasonPattern); err != nil {
+		return err
+	}
+	if err := patterned("field", errorDetailFieldPattern); err != nil {
+		return err
+	}
+	if err := enumerated("limit", "request_budget", "capabilities_budget"); err != nil {
+		return err
+	}
+	return enumerated("deadline", "model", "request")
 }
 
 // MarshalContextFabricInvestigationEventData encodes the event's data payload:
