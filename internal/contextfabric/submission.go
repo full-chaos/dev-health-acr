@@ -173,9 +173,12 @@ type SubmissionSweep struct {
 //
 // Reconcile rule, applied by AdmitSubmission (to the existing record),
 // GetSubmission and SweepSubmissions: a running or abandoned record whose
-// ReservedResultID is stored in the organization's results becomes done with
-// that id; otherwise a running record at or past ExpiresAt becomes
-// abandoned. A saved result always wins over the clock.
+// ReservedResultID is stored in the organization's results AND bound to the
+// record's owner becomes done with that id; otherwise a running record at
+// or past ExpiresAt becomes abandoned. A saved result always wins over the
+// clock. Invariant: a done record names a result bound to its own owner --
+// never another principal's result, never an unbound one (FinishSubmission
+// and the replay completion keep it too).
 //
 // The atomic completion is not here: the result store's Save completes the
 // running (or abandoned) record whose ReservedResultID is the saved result's
@@ -192,8 +195,10 @@ type SubmissionStore interface {
 	// ErrSubmissionNotFound.
 	GetSubmission(ctx context.Context, key SubmissionKey, now time.Time) (SubmissionRecord, error)
 	// FinishSubmission is the serve path's backstop after a run served
-	// servedResultID: a running record becomes done (served id stored) or
-	// done_unsaved (not stored). A final record is not changed.
+	// servedResultID: a running record becomes done when the served id is
+	// stored bound to the record's owner (its own save, or its own earlier
+	// answer reused), and done_unsaved otherwise. A final record is not
+	// changed.
 	FinishSubmission(ctx context.Context, key SubmissionKey, servedResultID string, now time.Time) (SubmissionRecord, SubmissionCompletion, error)
 	// AbandonSubmission ends a running record whose run ended without a
 	// served result. A final record is not changed.

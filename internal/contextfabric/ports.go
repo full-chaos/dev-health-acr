@@ -873,6 +873,11 @@ type SourceWatermarkSnapshot map[string]string
 // does (migration 0015, extended in this round rather than a new
 // migration -- same mechanism, same rows).
 type ReuseKey struct {
+	// OwnedOnly (CHAOS-11912) is true on a submission's own turn: only a row
+	// bound to the reader's own submission is a candidate, never an unbound
+	// one, so the submission's record can name only a result its owner owns.
+	// It is a candidate filter, not a reuse dimension.
+	OwnedOnly                   bool
 	QuestionHash                string
 	ContractVersion             string
 	ProjectionVersion           string

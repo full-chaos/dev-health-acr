@@ -53,13 +53,21 @@ func (s *Store) completeSubmissionLocked(principal storage.Principal, orgID, res
 	return &owner
 }
 
+// ownedByLocked: resultID is stored for key's organization AND bound to
+// key's owner. A done record names only such a result (round-2 F1). Callers
+// hold mu.
+func (s *Store) ownedByLocked(resultID string, key contextfabric.SubmissionKey) bool {
+	stored, found := s.results[resultID]
+	return found && stored.orgID == key.OrgID && stored.owner != nil && *stored.owner == key.Owner
+}
+
 // reconcileLocked applies the store's reconcile rule to one record. Callers
 // hold mu.
 func (s *Store) reconcileLocked(record contextfabric.SubmissionRecord, now time.Time) (contextfabric.SubmissionRecord, bool) {
 	if record.State != contextfabric.SubmissionRunning && record.State != contextfabric.SubmissionAbandoned {
 		return record, false
 	}
-	if stored, found := s.results[record.ReservedResultID]; found && stored.orgID == record.Key.OrgID {
+	if s.ownedByLocked(record.ReservedResultID, record.Key) {
 		record.State, record.ResultID, record.UpdatedAt = contextfabric.SubmissionDone, record.ReservedResultID, now.UTC()
 		return record, true
 	}
@@ -146,7 +154,7 @@ func (s *Store) FinishSubmission(ctx context.Context, key contextfabric.Submissi
 	}
 	completion := contextfabric.SubmissionCompletionServedUnsaved
 	record.State = contextfabric.SubmissionDoneUnsaved
-	if stored, ok := s.results[servedResultID]; ok && stored.orgID == key.OrgID && servedResultID != "" {
+	if servedResultID != "" && s.ownedByLocked(servedResultID, key) {
 		completion = contextfabric.SubmissionCompletionServedStored
 		record.State, record.ResultID = contextfabric.SubmissionDone, servedResultID
 	}

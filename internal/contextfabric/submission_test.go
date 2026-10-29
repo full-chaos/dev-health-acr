@@ -496,3 +496,67 @@ func TestSubmissionOwnerIsTheAuditActor(t *testing.T) {
 		t.Fatal("submission error codes")
 	}
 }
+
+// optionalOwnerReuseGate offers one candidate, bound to owner when owner is
+// set, unbound otherwise.
+type optionalOwnerReuseGate struct {
+	candidate InvestigationResult
+	owner     *SubmissionOwner
+	keys      *[]ReuseKey
+}
+
+func (g optionalOwnerReuseGate) FindReusable(_ context.Context, principal storage.Principal, key ReuseKey) (StoredInvestigationResult, bool, ReuseMissReason, error) {
+	if g.keys != nil {
+		*g.keys = append(*g.keys, key)
+	}
+	return StoredInvestigationResult{Result: g.candidate, GrantDigest: StoredResultGrantDigest(principal), SemanticStateRead: SemanticStateReadAbsent, SubmissionOwner: g.owner}, true, "", nil
+}
+
+// Round-2 F1: a submission's turn reuses only an answer bound to its own
+// principal's submission. An unbound answer (an MCP or header-less turn) is
+// a miss for it, so its record can never name a result it does not own; a
+// header-less turn keeps organization reuse of unbound answers. The key
+// carries OwnedOnly so the store filters the same way.
+func TestASubmissionTurnReusesOnlyItsOwnersBoundAnswers(t *testing.T) {
+	t.Parallel()
+	reader := ownerPrincipal("user_a", "acme/tools")
+	for _, tc := range []struct {
+		name      string
+		submitted bool
+		owner     *SubmissionOwner
+		reused    bool
+	}{
+		{"submission turn, unbound candidate", true, nil, false},
+		{"submission turn, own bound candidate", true, ownerOf(t, reader), true},
+		{"header-less turn, unbound candidate", false, nil, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			project, candidate := reusableCandidate()
+			telemetry := &recordingTelemetry{}
+			var keys []ReuseKey
+			engine := mustReuseTestEngine(t, EngineDependencies{
+				Interpreter: interpreterFunc(func(context.Context, storage.Principal, InvestigationRequest) (InterpretedQuestion, error) {
+					return InterpretedQuestion{}, errors.New("fresh investigation reached")
+				}),
+				Graph:     reuseSubjectGraph{graphReaderStub: graphReaderStub{resolution: SubjectResolution{Candidates: []SubjectCandidate{}, Committed: []SubjectRef{project}}}, outcome: StoredSubjectAdmitted},
+				Results:   &resultStoreStub{},
+				Telemetry: telemetry,
+				ReuseGate: optionalOwnerReuseGate{candidate: candidate, owner: tc.owner, keys: &keys},
+			})
+			ctx := context.Background()
+			if tc.submitted {
+				ctx = WithReservedResultID(ctx, "result_reserved_reuse")
+			}
+			result, err := engine.Investigate(ctx, reader, validInvestigationRequest())
+			if tc.reused != (err == nil && result.Reused) {
+				t.Fatalf("reused %t err %v, want reused %t", result.Reused, err, tc.reused)
+			}
+			if len(keys) == 0 || keys[0].OwnedOnly != tc.submitted {
+				t.Fatalf("reuse keys = %+v, want OwnedOnly %t", keys, tc.submitted)
+			}
+			if !tc.reused && (len(telemetry.answerReuseOutcomes) == 0 || telemetry.answerReuseOutcomes[0] != AnswerReuseMissAuthorization) {
+				t.Fatalf("reuse outcomes = %v, want an authorization miss", telemetry.answerReuseOutcomes)
+			}
+		})
+	}
+}

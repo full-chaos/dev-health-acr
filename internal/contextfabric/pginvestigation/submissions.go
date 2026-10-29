@@ -26,8 +26,11 @@ var (
 const submissionColumns = `org_id, owner_auth_method, owner_subject, submission_id, request_digest, reserved_result_id, state, result_id, admitted_at, updated_at, expires_at`
 
 // storedResultExists is the reconcile rule's condition: the record's reserved
-// result is stored for its organization. s is the submissions row alias.
-const storedResultExists = `EXISTS (SELECT 1 FROM acr.context_fabric_investigation_results r WHERE r.result_id = s.reserved_result_id AND r.org_id = s.org_id)`
+// result is stored for its organization AND bound to the record's own owner
+// (round-2 F1: a done record never names a result its owner does not own; a
+// row saved under the reserved id by anyone else, or unbound, completes
+// nothing). s is the submissions row alias.
+const storedResultExists = `EXISTS (SELECT 1 FROM acr.context_fabric_investigation_results r WHERE r.result_id = s.reserved_result_id AND r.org_id = s.org_id AND r.submission_owner_auth_method = s.owner_auth_method AND r.submission_owner_subject = s.owner_subject)`
 
 // reconcileSetSQL is the reconcile rule as one UPDATE's SET and WHERE, over
 // the alias s and the clock $now: a running or abandoned record whose
@@ -155,7 +158,9 @@ func (s *Store) FinishSubmission(ctx context.Context, key contextfabric.Submissi
 	var stored sql.NullBool
 	err := s.db.QueryRowContext(ctx, `
 WITH served AS (
-    SELECT EXISTS (SELECT 1 FROM acr.context_fabric_investigation_results WHERE result_id = $5 AND org_id = $1 AND $5 <> '') AS stored
+    SELECT EXISTS (SELECT 1 FROM acr.context_fabric_investigation_results
+                    WHERE result_id = $5 AND org_id = $1 AND $5 <> ''
+                      AND submission_owner_auth_method = $2 AND submission_owner_subject = $3) AS stored
 )
 UPDATE acr.context_fabric_investigation_submissions s
    SET state = CASE WHEN (SELECT stored FROM served) THEN 'done' ELSE 'done_unsaved' END,

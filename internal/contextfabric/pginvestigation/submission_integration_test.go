@@ -154,13 +154,13 @@ func TestSaveCompletesItsSubmissionAndBindsTheOwner(t *testing.T) {
 	saveAs(t, ctx, store, stranger, second.ReservedResultID)
 	record, err = store.GetSubmission(ctx, second.Key, now)
 	require.NoError(t, err)
-	// The stored row does complete the record by the reconcile rule (the
-	// reserved id exists); what it must not do is carry an owner it was not
-	// saved by.
+	// The row carries no owner it was not saved by, and it does not complete
+	// the record either: a done record names only a result bound to its own
+	// owner (round-2 F1).
 	unbound, err := store.Get(ctx, stranger, second.ReservedResultID)
 	require.NoError(t, err)
 	require.Nil(t, unbound.SubmissionOwner)
-	require.Equal(t, contextfabric.SubmissionDone, record.State)
+	require.Equal(t, contextfabric.SubmissionRunning, record.State)
 
 	// A save with no reservation is unbound.
 	saveAs(t, ctx, store, owner, "result_save_plain_01")
@@ -288,4 +288,59 @@ func TestASaveCompletesItsSubmissionOnlyAfterItsRowIsProven(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, contextfabric.SubmissionDone, record.State)
 	require.Equal(t, "result_replay_01", record.ResultID)
+
+	// A verified replay of a row ANOTHER principal of the organization saved
+	// (byte-identical, so the immutability check passes) completes nothing:
+	// the row is not bound to this record's owner (round-2 F1).
+	sameOrgStranger := submissionPrincipal("user-same-org-stranger")
+	foreign := admissionFor(t, owner, "submission-replay-02", "result_replay_02", now)
+	_, ok, err = store.AdmitSubmission(ctx, foreign, now)
+	require.NoError(t, err)
+	require.True(t, ok)
+	foreignResult := validResult("result_replay_02")
+	saveResult := func(principal storage.Principal) error {
+		return store.Save(ctx, principal, foreignResult, nil, nil, contextfabric.TimeAxisKeyFor(contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent}),
+			contextfabric.ReuseRetrievalIdentity{}, contextfabric.ReusePromptVersions{}, contextfabric.ReuseVersionAuthorities{}, 0, "",
+			contextfabric.SemanticStateAbsent(contextfabric.SemanticStateAbsenceTurnEndedBeforeInterpretation))
+	}
+	require.NoError(t, saveResult(sameOrgStranger))
+	require.NoError(t, saveResult(owner), "the identical bytes replay")
+	record, err = store.GetSubmission(ctx, foreign.Key, now)
+	require.NoError(t, err)
+	require.Equal(t, contextfabric.SubmissionRunning, record.State, "a replay of a row the owner does not own completed the record")
+}
+
+// Round-2 F1, the store's side: an OwnedOnly key (a submission's turn) is
+// offered a row bound to the reader's own submission only, never an
+// unbound row.
+func TestFindReusableOwnedOnlyOffersOnlyTheReadersBoundRows(t *testing.T) {
+	ctx := context.Background()
+	db, store, _ := twoSubmissionStores(t, ctx)
+	owner := submissionPrincipal("user-owned-only")
+	setCheckpointWatermark(t, ctx, db, owner.OrgID, "linear", "wm-1")
+	now := time.Date(2026, 10, 29, 12, 0, 0, 0, time.UTC)
+
+	unbound := reusableResult("result_owned_only_plain", owner.OrgID, "Is the plain owned-only question on track?")
+	saveWithReuseSnapshot(t, ctx, store, owner, unbound)
+	key := reuseKeyFor(unbound)
+	_, ok, _, err := store.FindReusable(ctx, owner, key)
+	require.NoError(t, err)
+	require.True(t, ok, "control: a header-less turn reuses the unbound row")
+	key.OwnedOnly = true
+	_, ok, _, err = store.FindReusable(ctx, owner, key)
+	require.NoError(t, err)
+	require.False(t, ok, "a submission's turn must not be offered an unbound row")
+
+	admission := admissionFor(t, owner, "submission-owned-only", "result_owned_only_bound", now)
+	_, admitted, err := store.AdmitSubmission(ctx, admission, now)
+	require.NoError(t, err)
+	require.True(t, admitted)
+	bound := reusableResult(admission.ReservedResultID, owner.OrgID, "Is the bound owned-only question on track?")
+	saveWithReuseSnapshot(t, ctx, store, owner, bound)
+	boundKey := reuseKeyFor(bound)
+	boundKey.OwnedOnly = true
+	found, ok, _, err := store.FindReusable(ctx, owner, boundKey)
+	require.NoError(t, err)
+	require.True(t, ok, "a submission's turn reuses its own principal's bound row")
+	require.NotNil(t, found.SubmissionOwner)
 }

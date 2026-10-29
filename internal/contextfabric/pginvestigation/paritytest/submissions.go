@@ -113,10 +113,12 @@ func RunSubmissionSuite(t *testing.T, newStore func(t *testing.T) SubmissionStor
 
 	t.Run("finish: served stored, served unsaved, already final", func(t *testing.T) {
 		store := newStore(t)
-		save(t, store, owner, "result_parity_reused")
+		// A reused answer the owner's own earlier submission saved.
+		earlier := admit(t, store, "finish-earlier")
+		save(t, store, owner, earlier.ReservedResultID)
 		reused := admit(t, store, "finish-reused")
-		record, completion, err := store.FinishSubmission(context.Background(), reused.Key, "result_parity_reused", now)
-		if err != nil || completion != contextfabric.SubmissionCompletionServedStored || record.State != contextfabric.SubmissionDone || record.ResultID != "result_parity_reused" {
+		record, completion, err := store.FinishSubmission(context.Background(), reused.Key, earlier.ReservedResultID, now)
+		if err != nil || completion != contextfabric.SubmissionCompletionServedStored || record.State != contextfabric.SubmissionDone || record.ResultID != earlier.ReservedResultID {
 			t.Fatalf("reused = %+v %s %v", record, completion, err)
 		}
 		unsaved := admit(t, store, "finish-unsaved")
@@ -137,6 +139,39 @@ func RunSubmissionSuite(t *testing.T, newStore func(t *testing.T) SubmissionStor
 		record, completion, err = store.FinishSubmission(context.Background(), abandoned.Key, abandoned.ReservedResultID, now)
 		if err != nil || completion != contextfabric.SubmissionCompletionNotRunning || record.State != contextfabric.SubmissionAbandoned {
 			t.Fatalf("abandoned = %+v %s %v", record, completion, err)
+		}
+	})
+
+	// Round-2 F1: a done record names a result bound to the record's own
+	// owner, never another principal's result and never an unbound one.
+	t.Run("a record is done only with a result its owner owns", func(t *testing.T) {
+		store := newStore(t)
+		strangerKey, err := contextfabric.SubmissionKeyFor(stranger, "submission-parity-strangers")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, _, err := store.AdmitSubmission(context.Background(), contextfabric.SubmissionAdmission{Key: strangerKey, RequestDigest: digest, ReservedResultID: "result_parity_strangers", ExpiresAt: now.Add(time.Minute)}, now); err != nil {
+			t.Fatal(err)
+		}
+		save(t, store, stranger, "result_parity_strangers")
+		save(t, store, owner, "result_parity_plain")
+		for served, name := range map[string]string{"result_parity_strangers": "another principal's result", "result_parity_plain": "an unbound result"} {
+			admission := admit(t, store, "foreign-"+served[len("result_parity_"):])
+			record, completion, err := store.FinishSubmission(context.Background(), admission.Key, served, now)
+			if err != nil || completion != contextfabric.SubmissionCompletionServedUnsaved || record.State != contextfabric.SubmissionDoneUnsaved || record.ResultID != "" {
+				t.Fatalf("finish with %s = %+v %s %v, want done_unsaved", name, record, completion, err)
+			}
+		}
+		// A reserved id another principal saved under (unbound to this
+		// record's owner) does not complete the record on read; past its
+		// expiry the record is abandoned.
+		hijacked := admit(t, store, "hijacked")
+		save(t, store, stranger, hijacked.ReservedResultID)
+		if record := state(t, store, hijacked.Key, now); record.State != contextfabric.SubmissionRunning {
+			t.Fatalf("a row this owner does not own completed the record: %+v", record)
+		}
+		if record := state(t, store, hijacked.Key, now.Add(2*time.Minute)); record.State != contextfabric.SubmissionAbandoned {
+			t.Fatalf("past expiry = %+v, want abandoned", record)
 		}
 	})
 

@@ -432,11 +432,14 @@ ON CONFLICT (org_id, prior_result_id, member) DO NOTHING`,
 // only after verifyIdempotentReplay succeeded.
 func (s *Store) completeReplayedSubmission(ctx context.Context, orgID, resultID, ownerMethod, ownerSubject string) error {
 	if _, err := s.db.ExecContext(ctx, `
-UPDATE acr.context_fabric_investigation_submissions
+UPDATE acr.context_fabric_investigation_submissions s
    SET state = 'done', result_id = $1, updated_at = clock_timestamp()
- WHERE org_id = $2 AND reserved_result_id = $1
-   AND owner_auth_method = $3 AND owner_subject = $4
-   AND state IN ('running', 'abandoned')`, resultID, orgID, ownerMethod, ownerSubject); err != nil {
+ WHERE s.org_id = $2 AND s.reserved_result_id = $1
+   AND s.owner_auth_method = $3 AND s.owner_subject = $4
+   AND s.state IN ('running', 'abandoned')
+   AND EXISTS (SELECT 1 FROM acr.context_fabric_investigation_results r
+                WHERE r.result_id = $1 AND r.org_id = $2
+                  AND r.submission_owner_auth_method = $3 AND r.submission_owner_subject = $4)`, resultID, orgID, ownerMethod, ownerSubject); err != nil {
 		return fmt.Errorf("pginvestigation: complete the replayed result's submission: %w", sanitizeError(err))
 	}
 	return nil
@@ -1121,8 +1124,11 @@ WHERE org_id = $1
   AND question_hash = $2
   -- CHAOS-11912: reuse never crosses principals. A row that completed a
   -- submission is a candidate for its owner only; the stored-result gate
-  -- re-decides the same rule on the candidate this returns.
-  AND (submission_owner_subject IS NULL OR (submission_owner_auth_method = $23 AND submission_owner_subject = $24))
+  -- re-decides the same rule on the candidate this returns. A submission's
+  -- own turn ($25, ReuseKey.OwnedOnly) is offered its principal's bound
+  -- rows only, never an unbound one, so its record cannot name a result it
+  -- does not own (round-2 F1).
+  AND (((NOT $25) AND submission_owner_subject IS NULL) OR (submission_owner_auth_method = $23 AND submission_owner_subject = $24))
   AND contract_version = $3
   AND projection_version = $4
   AND model_identity = ANY($5)
@@ -1160,7 +1166,7 @@ LIMIT 1`,
 		key.EmbedRetrievalIdentity, key.RetrievalPolicyVersion, key.InterpretationPromptVersion, key.SynthesisPromptVersion,
 		key.QueryVersion, key.CanonicalServiceVersion, key.ModelOutputSchemaVersion, key.IdentityNormalizationVersion, key.GraphEpoch,
 		key.WindowInferenceVersion, key.CommitGateVersion, key.RankingFormulaVersion, key.QuestionFamilyVersion, key.OwnershipRoutingVersion,
-		key.GraphWalkVersion, readerOwnerMethod, readerOwnerSubject)
+		key.GraphWalkVersion, readerOwnerMethod, readerOwnerSubject, key.OwnedOnly)
 	var payload, sourceWatermarks, semanticStateColumn []byte
 	var graphEpoch sql.NullInt64
 	var createdAt time.Time
@@ -1276,7 +1282,7 @@ SELECT EXISTS (
       AND question_family_version = $19
       AND ownership_routing_version = $20
       AND graph_walk_version = $21
-      AND (submission_owner_subject IS NULL OR (submission_owner_auth_method = $22 AND submission_owner_subject = $23))
+      AND (((NOT $24) AND submission_owner_subject IS NULL) OR (submission_owner_auth_method = $22 AND submission_owner_subject = $23))
       AND source_watermarks IS NOT NULL
       AND invalidation_epoch IS NOT NULL
       AND created_at > now() - ($6 * INTERVAL '1 second')
@@ -1288,7 +1294,7 @@ SELECT EXISTS (
 		key.EmbedRetrievalIdentity, key.RetrievalPolicyVersion, key.InterpretationPromptVersion, key.SynthesisPromptVersion,
 		key.QueryVersion, key.CanonicalServiceVersion, key.ModelOutputSchemaVersion, key.IdentityNormalizationVersion,
 		key.WindowInferenceVersion, key.CommitGateVersion, key.RankingFormulaVersion, key.QuestionFamilyVersion, key.OwnershipRoutingVersion,
-		key.GraphWalkVersion, ownerMethod, ownerSubject,
+		key.GraphWalkVersion, ownerMethod, ownerSubject, key.OwnedOnly,
 	).Scan(&exists)
 	if err != nil {
 		return false, fmt.Errorf("classify reuse miss: %w", sanitizeError(err))

@@ -574,7 +574,9 @@ func (e *Engine) tryReuseWithReading(ctx context.Context, principal storage.Prin
 		e.recordReuseOutcome(ctx, principal, AnswerReuseMissNoCandidate)
 		return InvestigationResult{}, false, false, storedCountReading{}, nil
 	}
+	_, submissionTurn := ReservedResultID(ctx)
 	key := ReuseKey{
+		OwnedOnly:         submissionTurn,
 		QuestionHash:      QuestionHash(request.Question),
 		ContractVersion:   InvestigationResultSchemaV1,
 		ProjectionVersion: e.reuseProjectionVersion,
@@ -703,6 +705,13 @@ func (e *Engine) tryReuseWithReading(ctx context.Context, principal storage.Prin
 	// It is a content rule, not an authorization decision.
 	missOutcome := AnswerReuseMissAuthorization
 	withheld := !decision.Admitted()
+	// CHAOS-11912 (round-2 F1): a submission's turn is served only an answer
+	// bound to its own principal's submission, whatever the store returned:
+	// an unbound answer would leave the record naming a result its owner
+	// does not own. The same rule the OwnedOnly filter applies in the store.
+	if !withheld && submissionTurn && (stored.SubmissionOwner == nil || !stored.SubmissionOwner.Is(principal)) {
+		withheld = true
+	}
 	if !withheld && StoredResultFloodWithheld(candidate) {
 		missOutcome, withheld = AnswerReuseMissNoCandidate, true
 	}

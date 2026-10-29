@@ -3110,7 +3110,8 @@ submit. Admission inserts one record keyed (organization, owner, submission id)
 before anything runs; the insert-first primary key decides every race, on every
 replica, so exactly one request of a key executes. The record is bound to the
 request's semantic digest (`SubmissionRequestDigest`: every body field but
-`request_id` and `consumer`). The run executes under the result id the record
+`request_id` and `consumer.name`/`consumer.version`; `consumer.surface` is
+included, trimmed, because the engine reads it as behaviour). The run executes under the result id the record
 reserved (`WithReservedResultID` into the engine's one mint,
 `mintResultID`), and the result store's `Save` completes the record and records
 its owner on the result row in the same statement. A request without the header
@@ -3157,7 +3158,8 @@ sequenceDiagram
 
 The record's states. A stored reserved result always wins over the clock: the
 reconcile rule (on read and in the 30 s sweeper of every replica) completes a
-running record whose reserved result exists, and abandons a running record past
+running record whose reserved result exists bound to the record's owner, and
+abandons a running record past
 `expires_at` = run budget + 30 s. A save that lands after its record was
 abandoned is still bound to the owner and completes the record.
 
