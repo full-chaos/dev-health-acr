@@ -44,8 +44,10 @@
             "store_unavailable",
             "interpretation_rejected",
             "synthesis_rejected",
-            "internal_error"
-          ]
+            "internal_error",
+            "stream_unavailable"
+          ],
+          "description": "stream_unavailable is the 406 of a create-investigation request that asks for the event stream (Accept: text/event-stream) while the deployment has the stream turned off. It is written before any admission work and is not retryable."
         },
         "message": {
           "type": "string",
