@@ -1,5 +1,5 @@
 # Generated from acr-v1.json by `go run ./cmd/contractcheck -write`. DO NOT EDIT.
-# canonical-content-sha256: 48aa8d86b496c33f576b58ff0bf4cb9d9e75ac6cc21f258de0601efdd1d082c1
+# canonical-content-sha256: 002769efb2b909489f61990daab91a9bdb78e487498ca485cd0c71798d899610
 openapi: "3.1.0"
 info:
   description: "Private hosted API for evidence-backed agent context packets, authorized provenance expansion, replay snapshots, and opt-in episode writeback. External Push is a separate API plane."
@@ -1152,7 +1152,7 @@ components:
         application/json:
           schema:
             "$ref": "../jsonschema/v1/error.v1.schema.json"
-      description: "Structured safe error. rate_limited: the per-replica request rate limit (with N replicas the effective ceiling is N times the configured one). CHAOS-11914, for a request that names a NEW X-ACR-Submission-ID: concurrency_limited when the principal (details.limit principal) or the organization (details.limit org) already has its shared limit of running Ask Dev runs (defaults 2 and 4, counted across every replica); allowance_exhausted when the organization admitted its monthly allowance of runs on the deployment's model (default 1000, calendar month UTC; a run on the organization's own model counts to concurrency only). Every 429 carries Retry-After: for allowance_exhausted it is the start of the next month. Nothing was admitted or counted; a repeat of an already admitted submission id is never refused by these limits."
+      description: "Structured safe error. rate_limited: the per-replica request rate limit (with N replicas the effective ceiling is N times the configured one). CHAOS-11914, for a request that names a NEW X-ACR-Submission-ID: concurrency_limited when the principal (details.limit principal) or the organization (details.limit org) already has its shared limit of running Ask Dev runs (defaults 2 and 4, counted across every replica); allowance_exhausted when the organization admitted its monthly allowance of runs on the deployment's model (default 1000, calendar month UTC; a run on the organization's own model counts to concurrency only). concurrency_limited and allowance_exhausted always carry Retry-After (for allowance_exhausted, the start of the next UTC month) and admitted and counted nothing. rate_limited carries Retry-After only when the request limiter knows the wait; a rate_limited answer from the model or graph runtime carries none, comes after admission, and its run stays counted (its submission record ends abandoned). A repeat of an already admitted submission id is never refused by these limits."
       headers:
         Retry-After:
           description: "Seconds to wait before retrying."

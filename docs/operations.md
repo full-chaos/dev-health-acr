@@ -1102,6 +1102,7 @@ A create-investigation request that names `X-ACR-Submission-ID` is one user subm
 
 - A refusal is `429 concurrency_limited` (`details.limit` = `principal` or `org`, `Retry-After: 3`) or `429 allowance_exhausted` (`Retry-After` = the start of the next UTC month). Nothing is admitted or counted.
 - Not counted: a repeat of an admitted submission id (replay, in-progress, mismatch), a status read, a request without the header, a refused admission. A run on the organization's own model counts to the two concurrency limits only.
+- Counted and never refunded: an admitted platform run that then fails, including a `429 rate_limited` from the model or graph runtime (that 429 carries no `Retry-After`). Its record ends `abandoned` and frees its concurrency slot at once.
 - The monthly aggregate `acr.context_fabric_usage_monthly` is content-free (counts only). Deleting submission records leaves it unchanged, and the organization purge keeps it, like the audit trail.
 - **Cost is not metered.** ACR records token counts per model call (`ModelExecutionReceipt.Usage`) but no price, so `cost_micro_usd` stays NULL and a USD ceiling cannot be enforced in ACR; it is reported only.
 - **The request rate limit is per replica.** `ACR_REQUESTS_PER_MINUTE` (`limits.Manager`) counts in process memory: with N `acr-api` replicas the effective ceiling is N times the configured value. The three limits above are the shared ones.
