@@ -32,6 +32,8 @@ type stageScenarioFaults struct {
 	// unresolved commits no subject: the subjectless terminal, served
 	// without a fact read or a synthesis.
 	unresolved bool
+	// resolveErr fails the decisive ResolveSubjects call.
+	resolveErr error
 	factErr    error
 	// factWaitsForDeadline makes the fact read wait for the request deadline
 	// and return its error, the way a slow canonical read ends.
@@ -39,6 +41,21 @@ type stageScenarioFaults struct {
 	synthErr             error
 	synthPanic           bool
 	saveErr              error
+	// maxSerializedBytes is the engine's own byte ceiling; 0 leaves it unset.
+	maxSerializedBytes int64
+}
+
+// stageScenarioGraph is graphReaderStub with a failing ResolveSubjects.
+type stageScenarioGraph struct {
+	graphReaderStub
+	resolveErr error
+}
+
+func (g stageScenarioGraph) ResolveSubjects(ctx context.Context, principal storage.Principal, request InvestigationRequest, interpretation InterpretedQuestion, binding ResolvedGraphBinding, kind *ConfirmedExpectedKind, anchor *ConfirmedAnchorSelection, frame *QuestionFrame, anchorKind SubjectKind) (SubjectResolution, StructureOfferMaterial, CommitBasisSet, CommitDecisionDigestSet, error) {
+	if g.resolveErr != nil {
+		return SubjectResolution{}, StructureOfferMaterial{}, nil, nil, g.resolveErr
+	}
+	return g.graphReaderStub.ResolveSubjects(ctx, principal, request, interpretation, binding, kind, anchor, frame, anchorKind)
 }
 
 type stageScenarioStore struct {
@@ -76,7 +93,7 @@ func stageScenarioEngine(t *testing.T, faults stageScenarioFaults) (*Engine, *st
 				FactRequirements: []FactRequirement{{Kind: FactStatus}, {Kind: FactReadiness}},
 			}, nil
 		}),
-		Graph: graphReaderStub{
+		Graph: stageScenarioGraph{resolveErr: faults.resolveErr, graphReaderStub: graphReaderStub{
 			resolution: resolution,
 			context: GraphContext{
 				Paths:            []RelationshipPath{},
@@ -85,7 +102,7 @@ func stageScenarioEngine(t *testing.T, faults stageScenarioFaults) (*Engine, *st
 				EvidenceRefIDs:   []string{"evidence_project_status"},
 				Coverage:         Coverage{Sources: []SourceObservation{}, DegradedReasons: []string{}},
 			},
-		},
+		}},
 		Facts: factReaderFunc(func(ctx context.Context, _ storage.Principal, _ CanonicalFactRequest) (CanonicalFactBundle, error) {
 			if faults.factWaitsForDeadline {
 				<-ctx.Done()
@@ -120,7 +137,7 @@ func stageScenarioEngine(t *testing.T, faults stageScenarioFaults) (*Engine, *st
 			}, nil
 		}),
 		Results: store,
-	}, EngineOptions{ServiceVersion: "acr-test", Now: func() time.Time { return time.Unix(100, 0).UTC() }, NewResultID: func() string { return "result_12345678" }})
+	}, EngineOptions{ServiceVersion: "acr-test", Now: func() time.Time { return time.Unix(100, 0).UTC() }, NewResultID: func() string { return "result_12345678" }, MaxSerializedBytes: faults.maxSerializedBytes})
 	if err != nil {
 		t.Fatalf("NewEngine() error = %v", err)
 	}

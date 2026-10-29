@@ -24,8 +24,10 @@ import (
 //	resolving_subjects the decisive ResolveSubjects call in Investigate
 //	reading_facts      the canonical fact read in Investigate
 //	synthesizing       synthesizeAndAssemble (every synthesis pass enters here)
-//	validating         finalizeServed and saveResult (the final budget
-//	                   assertion and validation, and the engine's only Save)
+//	validating         finalizeServedAs: the final budget assertion and
+//	                   validation, which every serving path (fresh, reused,
+//	                   terminal) runs before its Save, so the Save is inside
+//	                   the stage
 //
 // A path may skip stages (answer reuse, an early clarification, a window or
 // structure veto) and a stage may be entered more than once (the budget

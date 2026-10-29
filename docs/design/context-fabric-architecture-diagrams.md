@@ -3097,7 +3097,8 @@ events carry no claims.
 `WithSynthesisInputCollector` pattern). One site per stage: the interpreter
 call and the decisive `ResolveSubjects` call and the canonical fact read in
 `Investigate` (`engine.go`), `synthesizeAndAssemble` for `synthesizing`, and
-`finalizeServedAs` plus `saveResult` for `validating`. Each started/completed
+`finalizeServedAs` for `validating` (every serving path finalizes before its
+Save, so the Save is inside the stage). Each started/completed
 pair brackets its port call; the sink keeps the grammar (a repeat or an earlier
 stage is ignored, a stage still open when a later one starts is completed
 first), and `Investigate` completes the open stage when it returns a served

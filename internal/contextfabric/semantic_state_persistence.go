@@ -117,10 +117,6 @@ func (e *Engine) saveResult(
 	watermark SourceWatermarkSnapshot, epoch RebuildEpoch, timeAxisKey string, graphEpoch int64, parentResultID string,
 	capture semanticStateCapture,
 ) error {
-	// CHAOS-11910: the engine's only Save is part of the validating stage;
-	// a path that saves without a final finalization (the decisive answer)
-	// enters it here.
-	startInvestigationStage(ctx, contractsv1.ContextFabricStageValidating)
 	// CHAOS-7127: the same grant widening the reuse lookup applies
 	// (reuse_grant_scope.go); this is the engine's only Save, so every saved
 	// row of a restricted caller carries it.
