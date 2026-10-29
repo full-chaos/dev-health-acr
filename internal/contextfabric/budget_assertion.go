@@ -304,6 +304,9 @@ const (
 )
 
 func (e *Engine) finalizeServedAs(ctx context.Context, principal storage.Principal, stage BudgetAssertStage, result InvestigationResult, plan *AnswerPlan, budget ResponseBudget, mode servedMode) (InvestigationResult, error) {
+	// CHAOS-11910: the final budget assertion and validation of a served
+	// document is the validating stage (with saveResult).
+	startInvestigationStage(ctx, contractsv1.ContextFabricStageValidating)
 	telemetry := e.telemetry
 	if mode == servedModeMeasureOnly {
 		telemetry = nil

@@ -33,11 +33,14 @@ const (
 	ProjectionPairFailuresName   = "acr_projection_pair_failures_total"
 	GraphBootstrapWaitsName      = "acr_graph_bootstrap_waits_total"
 	GraphBootstrapWaitName       = "acr_graph_bootstrap_wait_seconds"
+	// CHAOS-11910: a stage transition the investigation event sink refused
+	// because its buffer was full.
+	InvestigationEventsDroppedName = "acr_investigation_events_dropped_total"
 )
 
 // Names lists every instrument this package creates.
 func Names() []string {
-	return []string{ToolCallsName, ToolLatencyName, AnswersName, BudgetRefusalsName, AnswerReuseName, RequirementOutcomesName, FactReadAbortsName, InvestigationLatencyName, ClickHouseNearMemoryCapName, ClickHousePeakUnobservedName, OutcomeRowsEvictedName, LimitationSkippedName, QueryEmbedFallbacksName, ProjectionPairFailuresName, GraphBootstrapWaitsName, GraphBootstrapWaitName}
+	return []string{ToolCallsName, ToolLatencyName, AnswersName, BudgetRefusalsName, AnswerReuseName, RequirementOutcomesName, FactReadAbortsName, InvestigationLatencyName, ClickHouseNearMemoryCapName, ClickHousePeakUnobservedName, OutcomeRowsEvictedName, LimitationSkippedName, QueryEmbedFallbacksName, ProjectionPairFailuresName, GraphBootstrapWaitsName, GraphBootstrapWaitName, InvestigationEventsDroppedName}
 }
 
 // LatencyBucketsSeconds are the explicit histogram boundaries. They reach 300 s
@@ -83,6 +86,7 @@ type Instruments struct {
 	pairFailures       metric.Int64Counter
 	bootstrapWaits     metric.Int64Counter
 	bootstrapWait      metric.Float64Histogram
+	eventsDropped      metric.Int64Counter
 	vocab              Vocabularies
 }
 
@@ -120,6 +124,7 @@ func New(meter metric.Meter, vocab Vocabularies) (*Instruments, error) {
 		pairFailures:       counter(ProjectionPairFailuresName, "Projection tick outcomes that ended in an error, by failure class."),
 		bootstrapWaits:     counter(GraphBootstrapWaitsName, "Graph writers that waited behind another writer's bootstrap of the same graph key, by outcome."),
 		bootstrapWait:      histogram(GraphBootstrapWaitName, "Time a graph writer waited behind another writer's bootstrap of the same graph key, by outcome."),
+		eventsDropped:      counter(InvestigationEventsDroppedName, "Investigation stage transitions the event stream sink dropped because its buffer was full, by stage."),
 		vocab:              vocab,
 	}
 	if err := errors.Join(errs...); err != nil {
@@ -191,6 +196,20 @@ func (i *Instruments) FactReadAbort(ctx context.Context, cause string) {
 		return
 	}
 	i.factReadAborts.Add(ctx, 1, metric.WithAttributes(attribute.String("cause", bucket(cause, factReadAbortCauses))))
+}
+
+// investigationEventStages is the closed stage label of the dropped-event
+// counter: the wire stage vocabulary of the investigation event stream.
+var investigationEventStages = []string{"interpreting", "resolving_subjects", "reading_facts", "synthesizing", "validating"}
+
+// InvestigationEventDropped records one stage transition the investigation
+// event sink dropped because its buffer was full. A production sink cannot
+// fill (ten transitions at most, 32 slots), so any count is a defect signal.
+func (i *Instruments) InvestigationEventDropped(ctx context.Context, stage string) {
+	if i == nil {
+		return
+	}
+	i.eventsDropped.Add(ctx, 1, metric.WithAttributes(attribute.String("stage", bucket(stage, investigationEventStages))))
 }
 
 // InvestigationLatency records one investigation request's latency by its

@@ -1469,6 +1469,18 @@ func (e *Engine) captureAcceptedReading(
 }
 
 func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, request InvestigationRequest) (served InvestigationResult, servedErr error) {
+	// CHAOS-11910: a served answer completes the stage it ended in, so a
+	// stream never carries a result while a stage is open; a failure leaves
+	// the last stage open for the error terminal to name. DECLARED ABOVE EVERY
+	// RETURN. A panic unwinds through here with the zero result, and no
+	// served answer is zero (every one carries its result_id), so a panic
+	// never reads as a completed stage.
+	stageCtx := ctx
+	defer func() {
+		if servedErr == nil && served.ResultID != "" {
+			completeOpenInvestigationStage(stageCtx)
+		}
+	}()
 	ctx = WithWorkItemCensusRepositoryScopeRecorder(ctx)
 	// Only the creator completes the response owner. Hosted requests borrow
 	// the transport's larger lifetime; direct calls end at this return.
@@ -2213,7 +2225,11 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 	// never the raw request.PriorSubjectReceipts -- see the block above.
 	interpretRequest := request
 	interpretRequest.PriorSubjectReceipts = priorValidatedReceipts
+	startInvestigationStage(ctx, contractsv1.ContextFabricStageInterpreting)
 	interpretation, familyOutcome, err := e.interpreter.Interpret(ctx, principal, interpretRequest)
+	if err == nil {
+		completeInvestigationStage(ctx, contractsv1.ContextFabricStageInterpreting)
+	}
 	if err != nil {
 		// THIS EXIT ASSIGNS ITS OWN REASON. With no interpretation there is no
 		// fresh proposal to compare the carried context against, so the
@@ -3118,7 +3134,11 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 		}
 		anchorShadow.recordCarryAppend(appended)
 	}
+	startInvestigationStage(ctx, contractsv1.ContextFabricStageResolvingSubjects)
 	resolution, structureMaterial, commitBases, commitDigests, err := e.graph.ResolveSubjects(resolveCtx, principal, graphRequest, interpretation, binding, effectiveConfirmedKind(structureCanon.Confirmed, kindCarry), confirmedAnchorSelection(structureCanon.Confirmed, appliedNeeds), familyOutcome.Frame, scopeAnchorKind)
+	if err == nil {
+		completeInvestigationStage(ctx, contractsv1.ContextFabricStageResolvingSubjects)
+	}
 	if err != nil {
 		// CHAOS-4077: a never-projected org (ResolveSubjects queried a
 		// graph key that has never been created) degrades to the SAME
@@ -3703,6 +3723,7 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 			priorAsOf, anchored := periodDeltaCurrentAsOf(clampedInterpretedTime, e.now())
 			periodPrior = e.startPeriodDeltaPriorRead(ctx, principal, *familyOutcome.Frame, subjects, priorAsOf, anchored)
 		}
+		startInvestigationStage(ctx, contractsv1.ContextFabricStageReadingFacts)
 		facts, err = e.facts.ReadFacts(ctx, principal, factRequest)
 		// CHAOS-4099 / CHAOS-4089 standing order: every scope-expansion decision
 		// this read made is reported here, immediately, whether it expanded,
@@ -3748,7 +3769,7 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 			detail := &FactReadAbortDetail{RequirementCount: len(factRequest.Requirements), SubjectKinds: subjectKinds, MemberKind: string(plan.MemberKind), Err: err}
 			return InvestigationResult{}, stageError(StageFactRead, fmt.Errorf("%w: read canonical facts: %w", ErrFactReadAborted, detail))
 		}
-
+		completeInvestigationStage(ctx, contractsv1.ContextFabricStageReadingFacts)
 	}
 
 	// Enrich the CHAOS-4347 composed team/project facts just read with a
@@ -4188,6 +4209,7 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 		// error, rejection included, passes through here.
 		return InvestigationResult{}, withSynthesisNarrowingSnapshot(err, plan)
 	}
+	completeInvestigationStage(ctx, contractsv1.ContextFabricStageSynthesizing)
 	pendingTelemetry.CohortRanked = rankedForServedResult
 	// CHAOS-4636 STAGE 3 -- measure the ASSEMBLED result and, if it does not
 	// fit, RE-SYNTHESIZE ONCE with a smaller input (design §6.3).

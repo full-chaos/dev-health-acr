@@ -87,6 +87,7 @@ func producedInstruments(t *testing.T) map[string][]string {
 	instruments.QueryEmbedFallback(ctx, "timeout")
 	instruments.ProjectionPairFailure(ctx, "unclassified")
 	instruments.GraphBootstrapWait(ctx, "bootstrapped", time.Second)
+	instruments.InvestigationEventDropped(ctx, "reading_facts")
 	produced := map[string][]string{}
 	for cell := range read() {
 		name, rest, _ := strings.Cut(cell, "{")
