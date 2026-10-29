@@ -147,11 +147,20 @@ type stageRun struct {
 // investigateRecovered does.
 func runStageScenario(t *testing.T, engine *Engine, request InvestigationRequest, ctx context.Context) stageRun {
 	t.Helper()
+	run, sink := runStageScenarioWithCapacity(t, engine, request, ctx, InvestigationStageSinkCapacity)
+	if sink.Dropped() != 0 {
+		t.Errorf("a production-capacity sink dropped %d transitions", sink.Dropped())
+	}
+	return run
+}
+
+// runStageScenarioWithCapacity is runStageScenario with a sink of capacity
+// slots and nothing reading it while Investigate runs.
+func runStageScenarioWithCapacity(t *testing.T, engine *Engine, request InvestigationRequest, ctx context.Context, capacity int) (stageRun, *InvestigationStageSink) {
+	t.Helper()
 	clock := tickingClock()
 	run := stageRun{start: clock()}
-	sink := NewInvestigationStageSink(InvestigationStageSinkCapacity, clock, func(InvestigationStageTransition) {
-		t.Error("a production-capacity sink dropped a transition")
-	})
+	sink := NewInvestigationStageSink(capacity, clock)
 	func() {
 		defer func() {
 			if recover() != nil {
@@ -161,7 +170,7 @@ func runStageScenario(t *testing.T, engine *Engine, request InvestigationRequest
 		run.result, run.err = engine.Investigate(WithInvestigationStageSink(ctx, sink), stageScenarioPrincipal(), request)
 	}()
 	run.transitions = drainStageTransitions(sink)
-	return run
+	return run, sink
 }
 
 // TestStageEventOrderHoldsOnEveryExit is the fault list of the event stream
@@ -170,16 +179,20 @@ func runStageScenario(t *testing.T, engine *Engine, request InvestigationRequest
 // passes the contract's grammar, and an error names the stage it ended in.
 // Each case states the EXACT transitions, so a site that stopped reporting --
 // or reported on the wrong side of its port call -- fails by name.
-func TestStageEventOrderHoldsOnEveryExit(t *testing.T) {
+// stageExitCase is one exit of the fault list: its faults and the EXACT
+// transitions a production sink receives.
+type stageExitCase struct {
+	name      string
+	faults    stageScenarioFaults
+	timeout   time.Duration
+	want      []stageStep
+	wantErr   func(error) bool
+	wantPanic bool
+}
+
+func stageExitCases() []stageExitCase {
 	answered := steps(both(stInterpreting), both(stResolving), both(stReading), both(stSynthesizing), both(stValidating))
-	cases := []struct {
-		name      string
-		faults    stageScenarioFaults
-		timeout   time.Duration
-		want      []stageStep
-		wantErr   func(error) bool
-		wantPanic bool
-	}{
+	return []stageExitCase{
 		{name: "answered", want: answered},
 		{name: "early terminal, no subject resolved", faults: stageScenarioFaults{unresolved: true},
 			want: steps(both(stInterpreting), both(stResolving), both(stValidating))},
@@ -204,6 +217,10 @@ func TestStageEventOrderHoldsOnEveryExit(t *testing.T) {
 		{name: "org purged at save", faults: stageScenarioFaults{saveErr: storage.ErrOrgPurged},
 			want: steps(both(stInterpreting), both(stResolving), both(stReading), both(stSynthesizing), []stageStep{startedStep(stValidating)}), wantErr: func(err error) bool { return errors.Is(err, storage.ErrOrgPurged) }},
 	}
+}
+
+func TestStageEventOrderHoldsOnEveryExit(t *testing.T) {
+	cases := stageExitCases()
 	for _, test := range cases {
 		t.Run(test.name, func(t *testing.T) {
 			engine, _ := stageScenarioEngine(t, test.faults)
@@ -292,44 +309,108 @@ func TestASinkChangesNothingInvestigateServes(t *testing.T) {
 	}
 }
 
-// TestAStalledReaderNeverBlocksTheEngine: nothing reads the sink. With a
-// one-slot buffer the engine must still finish, keep the first transition,
-// and drop and count every later one -- the drop is the mechanism that keeps
-// the engine moving, so it is asserted exactly, not as "some".
+// TestAStalledReaderNeverBlocksTheEngine: nothing reads the sink, and the
+// sink has the smallest capacity (two slots, one held back). The engine must
+// still finish, the sink must overflow after the first transition and count
+// every later one by stage, and the held-back slot must complete the stage the
+// reader saw start, so the reader's stream with the answer is valid. Nothing
+// the caller supplies runs on the engine's goroutine when a transition is
+// dropped (the sink takes no drop callback).
 func TestAStalledReaderNeverBlocksTheEngine(t *testing.T) {
 	engine, _ := stageScenarioEngine(t, stageScenarioFaults{})
-	var mu sync.Mutex
-	var dropped []stageStep
-	sink := NewInvestigationStageSink(1, tickingClock(), func(transition InvestigationStageTransition) {
-		mu.Lock()
-		defer mu.Unlock()
-		dropped = append(dropped, stageStep{transition.Stage, transition.State})
-	})
-	done := make(chan error, 1)
+	clock := tickingClock()
+	start := clock()
+	sink := NewInvestigationStageSink(1, clock) // below the minimum: two slots
+	type outcome struct {
+		result InvestigationResult
+		err    error
+	}
+	done := make(chan outcome, 1)
 	go func() {
-		_, err := engine.Investigate(WithInvestigationStageSink(context.Background(), sink), stageScenarioPrincipal(), validInvestigationRequest())
-		done <- err
+		result, err := engine.Investigate(WithInvestigationStageSink(context.Background(), sink), stageScenarioPrincipal(), validInvestigationRequest())
+		done <- outcome{result, err}
 	}()
+	var run outcome
 	select {
-	case err := <-done:
-		if err != nil {
-			t.Fatalf("Investigate error = %v", err)
+	case run = <-done:
+		if run.err != nil {
+			t.Fatalf("Investigate error = %v", run.err)
 		}
 	case <-time.After(30 * time.Second):
 		t.Fatal("Investigate did not return while the sink was full: the engine waited on its reader")
 	}
-	buffered := stepsOf(drainStageTransitions(sink))
-	if !sameSteps(buffered, []stageStep{startedStep(stInterpreting)}) {
-		t.Fatalf("buffered %v, want the first transition only", buffered)
+	transitions := drainStageTransitions(sink)
+	if got, want := stepsOf(transitions), both(stInterpreting); !sameSteps(got, want) {
+		t.Fatalf("received %v, want %v (the first transition, then the held-back completion)", got, want)
 	}
-	mu.Lock()
-	defer mu.Unlock()
-	wantDropped := steps([]stageStep{completedStep(stInterpreting)}, both(stResolving), both(stReading), both(stSynthesizing), both(stValidating))
-	if !sameSteps(dropped, wantDropped) {
-		t.Fatalf("dropped %v, want %v", dropped, wantDropped)
+	// interpreting's completion reached the reader late, in the held-back
+	// slot: it is not counted as lost.
+	wantDropped := map[contractsv1.ContextFabricInvestigationStage]int64{stResolving: 2, stReading: 2, stSynthesizing: 2, stValidating: 2}
+	if got := sink.DroppedByStage(); fmt.Sprint(got) != fmt.Sprint(wantDropped) {
+		t.Fatalf("dropped by stage %v, want %v", got, wantDropped)
 	}
-	if sink.Dropped() != int64(len(wantDropped)) {
-		t.Fatalf("Dropped() = %d, want %d", sink.Dropped(), len(wantDropped))
+	if sink.Dropped() != 8 {
+		t.Fatalf("Dropped() = %d, want 8", sink.Dropped())
+	}
+	if err := stageStream(t, start, transitions, &run.result); err != nil {
+		t.Fatalf("the reader's stream with the answer breaks the grammar: %v", err)
+	}
+}
+
+// TestEveryExitStaysValidWhenTheSinkOverflows runs every exit of the fault
+// list with every capacity from the minimum to one that holds the whole run,
+// nothing reading. For each: the reader receives a prefix of the exit's
+// production transitions -- plus, on a served answer only, the held-back
+// completion of the stage the prefix leaves open -- the drop count is exactly
+// what the prefix lacks, and the stream the route builds with the exit's
+// terminal passes the contract's grammar.
+func TestEveryExitStaysValidWhenTheSinkOverflows(t *testing.T) {
+	isPrefix := func(got, of []stageStep) bool { return len(got) <= len(of) && sameSteps(got, of[:len(got)]) }
+	overflowed := 0
+	for _, test := range stageExitCases() {
+		for capacity := 2; capacity <= 12; capacity++ {
+			t.Run(fmt.Sprintf("%s/capacity=%d", test.name, capacity), func(t *testing.T) {
+				engine, _ := stageScenarioEngine(t, test.faults)
+				ctx := context.Background()
+				if test.timeout > 0 {
+					var cancel context.CancelFunc
+					ctx, cancel = context.WithTimeout(ctx, test.timeout)
+					defer cancel()
+				}
+				run, sink := runStageScenarioWithCapacity(t, engine, validInvestigationRequest(), ctx, capacity)
+				served := run.err == nil && !run.panicked
+				got := stepsOf(run.transitions)
+				prefix := got
+				if !isPrefix(got, test.want) {
+					if !served || len(got) < 2 {
+						t.Fatalf("received %v: not a prefix of %v, and only a served answer may add the held-back completion", got, test.want)
+					}
+					prefix = got[:len(got)-1]
+					last, opened := got[len(got)-1], prefix[len(prefix)-1]
+					if !isPrefix(prefix, test.want) || last.state != contractsv1.ContextFabricStageCompleted || opened != startedStep(last.stage) {
+						t.Fatalf("received %v: the last step is not the completion of the stage the prefix left open", got)
+					}
+				}
+				// Every transition the reader did not get is counted, and only
+				// those: a held-back completion stands in for its dropped one.
+				if want := int64(len(test.want) - len(got)); sink.Dropped() != want {
+					t.Fatalf("Dropped() = %d, want %d (the production run has %d transitions, the reader got %d)", sink.Dropped(), want, len(test.want), len(got))
+				}
+				if len(prefix) < len(test.want) {
+					overflowed++
+				}
+				var result *InvestigationResult
+				if served {
+					result = &run.result
+				}
+				if err := stageStream(t, run.start, run.transitions, result); err != nil {
+					t.Fatalf("received %v: the stream breaks the contract grammar: %v", got, err)
+				}
+			})
+		}
+	}
+	if overflowed == 0 {
+		t.Fatal("no run overflowed its sink: the property was never exercised")
 	}
 }
 
@@ -340,7 +421,7 @@ func TestAProductionSinkHoldsAWholeRun(t *testing.T) {
 		t.Fatalf("capacity %d is below the %d transitions one run can make", InvestigationStageSinkCapacity, max)
 	}
 	engine, _ := stageScenarioEngine(t, stageScenarioFaults{})
-	sink := NewInvestigationStageSink(InvestigationStageSinkCapacity, tickingClock(), nil)
+	sink := NewInvestigationStageSink(InvestigationStageSinkCapacity, tickingClock())
 	if _, err := engine.Investigate(WithInvestigationStageSink(context.Background(), sink), stageScenarioPrincipal(), validInvestigationRequest()); err != nil {
 		t.Fatal(err)
 	}
@@ -356,7 +437,7 @@ func TestAProductionSinkHoldsAWholeRun(t *testing.T) {
 func TestTheSinkKeepsTheStreamGrammar(t *testing.T) {
 	clock := tickingClock()
 	start := clock()
-	sink := NewInvestigationStageSink(InvestigationStageSinkCapacity, clock, nil)
+	sink := NewInvestigationStageSink(InvestigationStageSinkCapacity, clock)
 	ctx := WithInvestigationStageSink(context.Background(), sink)
 
 	startInvestigationStage(ctx, contractsv1.ContextFabricInvestigationStage("graph")) // outside the vocabulary, first: ignored
@@ -400,5 +481,36 @@ func TestNoSinkIsANoOp(t *testing.T) {
 	completeOpenInvestigationStage(ctx)
 	if investigationStageSinkFrom(ctx) != nil {
 		t.Fatal("a sink appeared on a context that never had one")
+	}
+}
+
+// TestAnOverflowedSinkSendsNothingMore: once the sink overflowed, it sends no
+// ordinary transition again, even after the reader caught up. A sink that
+// resumed would hand the reader a gap (a stage starting while the one it
+// last saw is still open), which no consumer can repair; a prefix needs no
+// repair. The held-back completion then closes the stage the reader saw.
+func TestAnOverflowedSinkSendsNothingMore(t *testing.T) {
+	clock := tickingClock()
+	start := clock()
+	sink := NewInvestigationStageSink(2, clock)
+	ctx := WithInvestigationStageSink(context.Background(), sink)
+	startInvestigationStage(ctx, stInterpreting)    // sent: the buffer now holds one, the held-back slot is left
+	completeInvestigationStage(ctx, stInterpreting) // overflow: dropped
+	received := drainStageTransitions(sink)         // the reader catches up
+	startInvestigationStage(ctx, stResolving)       // still dropped
+	completeInvestigationStage(ctx, stResolving)    // still dropped
+	startInvestigationStage(ctx, stSynthesizing)    // still dropped
+	completeOpenInvestigationStage(ctx)             // the served answer: the held-back completion of interpreting
+	received = append(received, drainStageTransitions(sink)...)
+	if got, want := stepsOf(received), both(stInterpreting); !sameSteps(got, want) {
+		t.Fatalf("received %v, want %v", got, want)
+	}
+	if sink.Dropped() != 4 {
+		t.Fatalf("Dropped() = %d, want 4 (resolving twice, synthesizing twice; interpreting's completion arrived late)", sink.Dropped())
+	}
+	result := validInvestigationResult()
+	result.GeneratedAt = start
+	if err := stageStream(t, start, received, &result); err != nil {
+		t.Fatalf("grammar: %v", err)
 	}
 }

@@ -3,7 +3,6 @@ package contextfabric
 import (
 	"context"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
@@ -39,15 +38,25 @@ import (
 // answer, so a stream never ends on a result with a stage open; a failure
 // leaves it open, and the error terminal names it.
 //
-// The sink never blocks the engine. Transitions go into a buffered channel of
-// InvestigationStageSinkCapacity; when it is full the transition is dropped,
-// counted, and handed to the onDrop hook (the route counts it in
-// acr_investigation_events_dropped_total and logs it). The grammar bounds a run
-// to two transitions per stage, ten in all, below the capacity, so a production
-// sink drops nothing even when its reader is stalled; the drop path is the
-// guarantee that a stalled reader can never stall the engine. Terminal events
-// never pass through the sink: the route writes them itself, after Investigate
-// returns, so a terminal cannot be dropped.
+// The sink never blocks the engine and runs no caller code on the engine's
+// goroutine. Transitions go into a buffered channel of
+// InvestigationStageSinkCapacity, and one slot of it is held back. When only
+// that slot is left (the reader is behind), the sink OVERFLOWS: from then on it
+// sends no ordinary transition, and counts each one it drops, by stage. So what
+// a reader receives is always a prefix of the run's transitions, and a prefix
+// is a valid stage sequence on its own. When Investigate returns a served
+// answer, the held-back slot carries the completion of the stage the reader
+// last saw start (if the reader saw it start but not complete), so the stream
+// the reader can build ends with no stage open, as a `result` requires. A
+// failure leaves that stage open, and the error terminal names it.
+//
+// The route reads DroppedByStage after Investigate returns and records
+// acr_investigation_events_dropped_total from it, off the engine's goroutine.
+// The grammar bounds a run to two transitions per stage, ten in all, below the
+// capacity, so a production sink drops nothing even when its reader is
+// stalled; the overflow is the guarantee that a stalled reader can never stall
+// the engine. Terminal events never pass through the sink: the route writes
+// them itself, after Investigate returns, so a terminal cannot be dropped.
 
 // InvestigationStageSinkCapacity is the buffer of a production sink.
 const InvestigationStageSinkCapacity = 32
@@ -66,21 +75,25 @@ type InvestigationStageTransition struct {
 type InvestigationStageSink struct {
 	transitions chan InvestigationStageTransition
 	now         func() time.Time
-	onDrop      func(InvestigationStageTransition)
-	dropped     atomic.Int64
 
-	mu          sync.Mutex
+	mu sync.Mutex
+	// open and lastStarted are the engine's stage state, which the grammar
+	// rules are decided on.
 	open        contractsv1.ContextFabricInvestigationStage
 	lastStarted contractsv1.ContextFabricInvestigationStage
+	// delivered is the stage whose start the reader received and whose
+	// completion it did not.
+	delivered  contractsv1.ContextFabricInvestigationStage
+	overflowed bool
+	dropped    map[contractsv1.ContextFabricInvestigationStage]int64
 }
 
 // NewInvestigationStageSink makes a sink with room for capacity transitions
-// (at least one). now stamps each transition (time.Now when nil). onDrop, when
-// set, is called with each transition the full buffer refused; it runs on the
-// engine's goroutine under the sink's lock, so it must not block.
-func NewInvestigationStageSink(capacity int, now func() time.Time, onDrop func(InvestigationStageTransition)) *InvestigationStageSink {
-	if capacity < 1 {
-		capacity = 1
+// (at least two: one slot is held back for the closing completion). now
+// stamps each transition (time.Now when nil).
+func NewInvestigationStageSink(capacity int, now func() time.Time) *InvestigationStageSink {
+	if capacity < 2 {
+		capacity = 2
 	}
 	if now == nil {
 		now = time.Now
@@ -88,7 +101,7 @@ func NewInvestigationStageSink(capacity int, now func() time.Time, onDrop func(I
 	return &InvestigationStageSink{
 		transitions: make(chan InvestigationStageTransition, capacity),
 		now:         now,
-		onDrop:      onDrop,
+		dropped:     map[contractsv1.ContextFabricInvestigationStage]int64{},
 	}
 }
 
@@ -99,9 +112,26 @@ func (s *InvestigationStageSink) Transitions() <-chan InvestigationStageTransiti
 	return s.transitions
 }
 
-// Dropped counts the transitions the full buffer refused.
+// Dropped counts the transitions that never reached the reader.
 func (s *InvestigationStageSink) Dropped() int64 {
-	return s.dropped.Load()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var total int64
+	for _, count := range s.dropped {
+		total += count
+	}
+	return total
+}
+
+// DroppedByStage is Dropped by stage, for the route's metric. It is a copy.
+func (s *InvestigationStageSink) DroppedByStage() map[contractsv1.ContextFabricInvestigationStage]int64 {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := make(map[contractsv1.ContextFabricInvestigationStage]int64, len(s.dropped))
+	for stage, count := range s.dropped {
+		out[stage] = count
+	}
+	return out
 }
 
 type investigationStageSinkKey struct{}
@@ -134,8 +164,9 @@ func completeInvestigationStage(ctx context.Context, stage contractsv1.ContextFa
 	}
 }
 
-// completeOpenInvestigationStage completes whatever stage is open; Investigate
-// calls it once, when it returns a served answer.
+// completeOpenInvestigationStage reports that Investigate returns a served
+// answer: the open stage completes, and the reader's stream ends with no
+// stage open. Investigate calls it once, and only then.
 func completeOpenInvestigationStage(ctx context.Context) {
 	if sink := investigationStageSinkFrom(ctx); sink != nil {
 		sink.completeOpen()
@@ -174,23 +205,42 @@ func (s *InvestigationStageSink) complete(stage contractsv1.ContextFabricInvesti
 func (s *InvestigationStageSink) completeOpen() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.open == "" {
-		return
+	if s.open != "" {
+		s.emit(s.open, contractsv1.ContextFabricStageCompleted)
+		s.open = ""
 	}
-	s.emit(s.open, contractsv1.ContextFabricStageCompleted)
-	s.open = ""
+	// After an overflow the reader may have seen a stage start and not
+	// complete; the held-back slot carries that completion. It is always
+	// free: an ordinary send never takes the last slot, and this is the one
+	// send that may.
+	if s.delivered != "" {
+		s.transitions <- InvestigationStageTransition{Stage: s.delivered, State: contractsv1.ContextFabricStageCompleted, At: s.now()}
+		// That completion was counted as dropped when the engine reported
+		// it after the overflow; it reached the reader late, not never.
+		if s.dropped[s.delivered]--; s.dropped[s.delivered] <= 0 {
+			delete(s.dropped, s.delivered)
+		}
+		s.delivered = ""
+	}
 }
 
-// emit offers one transition to the buffer without waiting. The caller holds
-// s.mu, so transitions enter the buffer in the order the grammar decided.
+// emit sends one ordinary transition, or drops it once the sink has
+// overflowed. The caller holds s.mu, and only emit and completeOpen send, so
+// the length check below cannot be raced into a blocking send: the reader
+// only ever shortens the buffer.
 func (s *InvestigationStageSink) emit(stage contractsv1.ContextFabricInvestigationStage, state contractsv1.ContextFabricInvestigationStageState) {
-	transition := InvestigationStageTransition{Stage: stage, State: state, At: s.now()}
-	select {
-	case s.transitions <- transition:
-	default:
-		s.dropped.Add(1)
-		if s.onDrop != nil {
-			s.onDrop(transition)
-		}
+	if !s.overflowed && len(s.transitions) >= cap(s.transitions)-1 {
+		s.overflowed = true
+	}
+	if s.overflowed {
+		s.dropped[stage]++
+		return
+	}
+	s.transitions <- InvestigationStageTransition{Stage: stage, State: state, At: s.now()}
+	switch state {
+	case contractsv1.ContextFabricStageStarted:
+		s.delivered = stage
+	case contractsv1.ContextFabricStageCompleted:
+		s.delivered = ""
 	}
 }

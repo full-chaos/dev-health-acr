@@ -202,14 +202,16 @@ func (i *Instruments) FactReadAbort(ctx context.Context, cause string) {
 // counter: the wire stage vocabulary of the investigation event stream.
 var investigationEventStages = []string{"interpreting", "resolving_subjects", "reading_facts", "synthesizing", "validating"}
 
-// InvestigationEventDropped records one stage transition the investigation
-// event sink dropped because its buffer was full. A production sink cannot
-// fill (ten transitions at most, 32 slots), so any count is a defect signal.
-func (i *Instruments) InvestigationEventDropped(ctx context.Context, stage string) {
-	if i == nil {
+// InvestigationEventsDropped records count stage transitions of one stage
+// that one request's investigation event sink did not send because its buffer
+// was full. The route records it after the run, off the engine's goroutine. A
+// production sink cannot fill (ten transitions at most, 32 slots), so any
+// count is a defect signal.
+func (i *Instruments) InvestigationEventsDropped(ctx context.Context, stage string, count int64) {
+	if i == nil || count <= 0 {
 		return
 	}
-	i.eventsDropped.Add(ctx, 1, metric.WithAttributes(attribute.String("stage", bucket(stage, investigationEventStages))))
+	i.eventsDropped.Add(ctx, count, metric.WithAttributes(attribute.String("stage", bucket(stage, investigationEventStages))))
 }
 
 // InvestigationLatency records one investigation request's latency by its

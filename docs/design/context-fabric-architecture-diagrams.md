@@ -3103,9 +3103,14 @@ pair brackets its port call; the sink keeps the grammar (a repeat or an earlier
 stage is ignored, a stage still open when a later one starts is completed
 first), and `Investigate` completes the open stage when it returns a served
 answer. A failure leaves the stage open for the error terminal to name. The sink
-is a buffered channel of 32 and never blocks the engine: a full buffer drops the
-transition and counts it in `acr_investigation_events_dropped_total`; a run makes
-at most 10 transitions. No sink installed: every report is a no-op, and the
+is a buffered channel of 32 and never blocks the engine or runs caller code on
+its goroutine. One slot is held back: when only it is left, the sink stops
+sending and counts each later transition it drops, so a reader always receives
+a prefix of the run's transitions (a valid stage sequence), and on a served
+answer the held-back slot completes the stage the reader last saw start, so the
+stream ends with no stage open. The route records the drop counts in
+`acr_investigation_events_dropped_total` after the run; a run makes at most 10
+transitions. No sink installed: every report is a no-op, and the
 served answer is byte-equal to the goldens recorded before the sites existed
 (`testdata/investigation_stage_scenarios`).
 
