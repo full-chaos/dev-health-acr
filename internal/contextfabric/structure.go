@@ -1440,7 +1440,7 @@ func (e *Engine) structureVetoResult(ctx context.Context, principal storage.Prin
 	emptyCoverage := Coverage{Sources: []SourceObservation{}, DegradedReasons: []string{}}
 	result := InvestigationResult{
 		SchemaVersion:  InvestigationResultSchemaV1,
-		ResultID:       e.newResultID(),
+		ResultID:       e.mintResultID(ctx),
 		RequestID:      request.RequestID,
 		GeneratedAt:    e.now().UTC(),
 		Status:         InvestigationNoMatch,

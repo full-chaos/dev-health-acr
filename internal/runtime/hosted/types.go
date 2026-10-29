@@ -105,9 +105,12 @@ type Runtime struct {
 	// postgresClose discipline, see Close's own comment for why both must
 	// get an unconditional, independent shutdown attempt.
 	structureSelectionSink *pgstructureselection.Sink
-	postgresClose          func() error
-	independentClosed      bool
-	postgresClosed         bool
+	// submissionSweeper (CHAOS-11912) writes through the same pool, so it
+	// is stopped before postgresClose like the sinks above.
+	submissionSweeper *submissionSweeper
+	postgresClose     func() error
+	independentClosed bool
+	postgresClosed    bool
 }
 
 func (r *Runtime) Close() error {
@@ -141,7 +144,7 @@ func (r *Runtime) Close() error {
 	// rather than replaying a stale error from a round that already ended.
 	// (This mirrors the pre-F6 code, which joined its own timeout err only
 	// into the transient return value, never into r.closeErr.)
-	var usageErr, sinkErr, structureSinkErr error
+	var usageErr, sinkErr, structureSinkErr, sweeperErr error
 	var workerTimedOut bool
 	if r.usageTelemetry != nil {
 		if err := r.usageTelemetry.Close(); errors.Is(err, auth.ErrUsageTelemetryShutdownTimeout) {
@@ -170,13 +173,21 @@ func (r *Runtime) Close() error {
 			workerTimedOut = true
 		}
 	}
+	if r.submissionSweeper != nil {
+		closeCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		sweeperErr = r.submissionSweeper.Close(closeCtx)
+		cancel()
+		if sweeperErr != nil {
+			workerTimedOut = true
+		}
+	}
 	// The OTHER, unrelated closers (clickhouse, entitlement, ...) share no
 	// worker with the pool, so they run regardless of the outcome above.
 	// closeIndependentLocked is itself idempotent, so persisting its result
 	// across retries is safe (unlike usageErr/sinkErr/structureSinkErr above).
 	r.closeErr = errors.Join(r.closeErr, r.closeIndependentLocked())
 	if workerTimedOut {
-		return errors.Join(r.closeErr, usageErr, sinkErr, structureSinkErr)
+		return errors.Join(r.closeErr, usageErr, sinkErr, structureSinkErr, sweeperErr)
 	}
 	if r.postgresClose != nil {
 		r.closeErr = errors.Join(r.closeErr, r.postgresClose())

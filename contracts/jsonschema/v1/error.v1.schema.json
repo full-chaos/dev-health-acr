@@ -45,9 +45,13 @@
             "interpretation_rejected",
             "synthesis_rejected",
             "internal_error",
-            "stream_unavailable"
+            "stream_unavailable",
+            "submission_mismatch",
+            "submission_in_progress",
+            "submission_unsaved",
+            "submission_abandoned"
           ],
-          "description": "stream_unavailable is the 406 of a create-investigation request that asks for the event stream (Accept: text/event-stream) while the deployment has the stream turned off. It is written before any admission work and is not retryable."
+          "description": "stream_unavailable is the 406 of a create-investigation request that asks for the event stream (Accept: text/event-stream) while the deployment has the stream turned off. It is written before any admission work and is not retryable. submission_mismatch, submission_in_progress, submission_unsaved and submission_abandoned are the 409s of a create-investigation request whose X-ACR-Submission-ID was already admitted: a different request under that id; its run still live (retryable, with Retry-After); answered but not stored; ended without an answer. None of them runs the request again."
         },
         "message": {
           "type": "string",

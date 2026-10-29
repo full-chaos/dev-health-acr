@@ -120,18 +120,21 @@ const (
 	// -- a row saved before the digest was persisted (grant_unrecorded).
 	StoredResultReasonGrantMismatch   StoredResultAuthorizationReason = "grant_mismatch"
 	StoredResultReasonGrantUnrecorded StoredResultAuthorizationReason = "grant_unrecorded"
+	// CHAOS-11912 (INV-1): the result completed another principal's
+	// submission. It is decided first and holds whatever the grants are.
+	StoredResultReasonOwnerMismatch StoredResultAuthorizationReason = "owner_mismatch"
 	// Unavailable reasons.
 	StoredResultReasonAuthorizerMissing StoredResultAuthorizationReason = "authorizer_missing"
 	StoredResultReasonGraphReadFailed   StoredResultAuthorizationReason = "graph_read_failed"
 )
 
 // StoredResultAuthorizationReasonVocabulary is the closed set of reasons.
-func StoredResultAuthorizationReasonVocabulary() [12]StoredResultAuthorizationReason {
-	return [12]StoredResultAuthorizationReason{
+func StoredResultAuthorizationReasonVocabulary() [13]StoredResultAuthorizationReason {
+	return [13]StoredResultAuthorizationReason{
 		StoredResultReasonNoSubjects, StoredResultReasonUnrestrictedPrincipal, StoredResultReasonSubjectsAdmitted,
 		StoredResultReasonOrganizationMismatch, StoredResultReasonSubjectDenied, StoredResultReasonSubjectAbsent,
 		StoredResultReasonGroupUnproven, StoredResultReasonGraphNotProjected,
-		StoredResultReasonGrantMismatch, StoredResultReasonGrantUnrecorded,
+		StoredResultReasonGrantMismatch, StoredResultReasonGrantUnrecorded, StoredResultReasonOwnerMismatch,
 		StoredResultReasonAuthorizerMissing, StoredResultReasonGraphReadFailed,
 	}
 }
@@ -293,7 +296,11 @@ func NewStoredResultGate(graph GraphReader) *StoredResultGate {
 // Authorize decides whether stored may be served to principal on surface.
 // The caller writes the decision to the trace.
 func (g *StoredResultGate) Authorize(ctx context.Context, principal storage.Principal, stored StoredInvestigationResult, surface StoredResultSurface) StoredResultAuthorization {
-	if reason, refused := storedResultGrantRefusal(principal, stored); refused {
+	reason, refused := storedResultOwnerRefusal(principal, stored)
+	if !refused {
+		reason, refused = storedResultGrantRefusal(principal, stored)
+	}
+	if refused {
 		return StoredResultAuthorization{
 			Surface:              surface,
 			PrincipalScope:       classifyStoredResultPrincipalScope(principal),
@@ -319,6 +326,25 @@ func StoredResultGrantDigest(principal storage.Principal) string {
 		return storedResultOpenGrantDigest
 	}
 	return "g:" + reuseGrantDigest(principal.RepositoryScopes)
+}
+
+// storedResultOwnerRefusal (CHAOS-11912, INV-1): a result that completed a
+// submission is served to that submission's owner only -- on result_by_id,
+// on every prior_result read (parent chain, each prior_*_receipts namespace,
+// window carry, structure claims), on answer_reuse and on
+// evidence_expansion -- whatever the reader's grants. The refusal is the
+// unknown-id answer, so a reader cannot tell another principal's result from
+// one that does not exist. A result with no owner (it completed no
+// submission) is not decided here: it keeps the organization-bearer
+// semantics of a result id. fact_root_recheck reads no stored row (it
+// re-decides the turn's own committed roots through decide), so it never
+// reaches this check; a root carried from a prior result was read through
+// prior_result first.
+func storedResultOwnerRefusal(principal storage.Principal, stored StoredInvestigationResult) (StoredResultAuthorizationReason, bool) {
+	if stored.SubmissionOwner == nil || stored.SubmissionOwner.Is(principal) {
+		return "", false
+	}
+	return StoredResultReasonOwnerMismatch, true
 }
 
 // storedResultGrantRefusal: a restricted reader is served only a result

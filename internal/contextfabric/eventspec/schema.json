@@ -3903,6 +3903,7 @@
           "graph_not_projected",
           "grant_mismatch",
           "grant_unrecorded",
+          "owner_mismatch",
           "authorizer_missing",
           "graph_read_failed"
         ],
@@ -10978,6 +10979,7 @@
           "graph_not_projected",
           "grant_mismatch",
           "grant_unrecorded",
+          "owner_mismatch",
           "authorizer_missing",
           "graph_read_failed"
         ]
@@ -11288,7 +11290,8 @@
           "stored_result_denied_group_unproven",
           "stored_result_denied_graph_not_projected",
           "stored_result_denied_grant_mismatch",
-          "stored_result_denied_grant_unrecorded"
+          "stored_result_denied_grant_unrecorded",
+          "stored_result_denied_owner_mismatch"
         ]
       },
       {

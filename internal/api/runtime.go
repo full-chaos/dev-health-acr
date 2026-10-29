@@ -82,6 +82,17 @@ type RuntimeDependencies struct {
 	// configured and this is nil, the retrieval route fails closed as
 	// unavailable rather than serve an undecided result.
 	StoredResultGate StoredResultAuthorizer
+	// InvestigationSubmissions is the submission store (CHAOS-11912) the
+	// investigation route admits X-ACR-Submission-ID requests through. It
+	// must be the store InvestigationResults reads and the engine saves
+	// through: a Save completes the submission whose reserved id it saves,
+	// in the same statement. Optional: without it a request that names a
+	// submission is refused 503 store_unavailable (never run unbound), and a
+	// request that names none is unchanged.
+	InvestigationSubmissions contextfabric.SubmissionStore
+	// NewResultID mints the result id admission reserves for a submission.
+	// Nil uses contextfabric.NewInvestigationResultID.
+	NewResultID func() string
 	// SourceRows expands a Context Fabric evidence ref to the Dev Health row
 	// its id names (CHAOS-6180), before the persisted-record path. Optional:
 	// nil (no ClickHouse composed) leaves every ref on the persisted record.
@@ -174,6 +185,9 @@ func (r *RuntimeDependencies) validate() error {
 	}
 	if r.InvestigationResults != nil && storage.IsNil(r.InvestigationResults) {
 		return errors.New("hosted context fabric investigation result store must not be typed nil")
+	}
+	if r.InvestigationSubmissions != nil && storage.IsNil(r.InvestigationSubmissions) {
+		return errors.New("hosted context fabric investigation submission store must not be typed nil")
 	}
 	if r.DataOperations != nil && storage.IsNil(r.DataOperations) {
 		return errors.New("hosted data operation runner must not be typed nil")

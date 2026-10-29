@@ -92,310 +92,320 @@ func (a *App) ContextFabricInvestigationResultHandler(results contextfabric.Inve
 			a.writeInvestigationResultNotFound(w, r, principal)
 			return
 		}
-		// Organization scoping is the store's binding precondition (see
-		// contextfabric.InvestigationResultStore). The principal comes
-		// from authentication, never from the path or a payload.
-		// CHAOS-3898 §2.4: Get now returns the metadata-bearing
-		// StoredInvestigationResult carrier; this route serves only the
-		// canonical/projected result, so it unwraps to .Result immediately
-		// -- persistence metadata (GraphEpoch) is not part of the public
-		// response contract.
-		stored, err := results.Get(r.Context(), principal, resultID)
-		if err != nil {
-			a.writeInvestigationResultError(w, r, principal, err)
-			return
-		}
-		// The live authorization decision, before anything about the row
-		// reaches the response: a result whose subjects the caller's CURRENT
-		// grant does not admit does not exist for this caller, and is answered
-		// exactly like an unknown id. An undecidable read fails closed as
-		// unavailable. No gate configured is the same failure, never a pass.
-		authorization := contextfabric.StoredResultAuthorization{Surface: contextfabric.StoredResultSurfaceResultByID, Decision: contextfabric.StoredResultUnavailable, Reason: contextfabric.StoredResultReasonAuthorizerMissing}
-		if gate != nil {
-			authorization = gate.Authorize(r.Context(), principal, stored, contextfabric.StoredResultSurfaceResultByID)
-		}
-		authorizationArgs := contextfabric.StoredResultAuthorizationLogArgs(principal, authorization)
-		authorizationArgs = append(authorizationArgs, "request_id", contextfabric.SanitizeLogAttr(RequestID(r.Context())))
-		a.logger.InfoContext(r.Context(), contextfabric.StoredResultAuthorizationLogMessage, authorizationArgs...)
-		if err := authorization.ServingError(); err != nil {
-			a.writeInvestigationResultError(w, r, principal, err)
-			return
-		}
-		result := stored.Result
-		// A stored project-to-work-item tuple has an independent census
-		// serving rule. Apply it immediately after the org-scoped read so a
-		// changed authorization digest is indistinguishable from a missing
-		// row, and so an unavailable census cannot be mistaken for a current
-		// population. This branch only transforms the in-memory serving copy;
-		// it never writes the stored result or starts a new investigation.
-		tupleDecision := contextfabric.ServeStoredWorkItemTuple(result, stored.SemanticState, stored.SemanticStateRead, principal)
-		if tupleDecision.Disposition != contextfabric.WorkItemTupleByIDNotApplicable {
-			args := contextfabric.WorkItemStoredServingLogArgs(tupleDecision.Event)
-			args = append(args, "request_id", contextfabric.SanitizeLogAttr(RequestID(r.Context())), "org_id", contextfabric.SanitizeLogAttr(principal.OrgID))
-			a.logger.InfoContext(r.Context(), contextfabric.WorkItemStoredServingLogMessage, args...)
-		}
-		if tupleDecision.Err != nil {
-			a.writeInvestigationResultError(w, r, principal, tupleDecision.Err)
-			return
-		}
-		switch tupleDecision.Disposition {
-		case contextfabric.WorkItemTupleByIDNotFound:
-			a.writeInvestigationResultNotFound(w, r, principal)
-			return
-		case contextfabric.WorkItemTupleByIDServed, contextfabric.WorkItemTupleByIDStored:
-			result = tupleDecision.Result
-		case contextfabric.WorkItemTupleByIDNotApplicable:
-			// Any other kind of stored result with a flooded limitation list
-			// cannot show the service disclosures: it is answered like an
-			// unknown id, as the work-item tuple is.
-			if contextfabric.StoredResultFloodWithheld(result) {
-				a.writeInvestigationResultNotFound(w, r, principal)
-				return
-			}
-		}
-		// CHAOS-4413 (codex xhigh round-1 P1, confirmed): a row persisted
-		// before Completeness existed reads back with the exact zero
-		// value ValidateStored's legacy exemption allows -- fine for the
-		// canonical view (re-served, not re-validated), but the
-		// projection view below runs Completeness through Validate() with
-		// no such exemption, so an old row 500s the instant a bounded
-		// consumer asks for it. ComputeAnswerCompleteness is a pure
-		// function of fields this row already carries, so this is a
-		// backfill, never an invention, and a no-op for any post-4413 row.
-		// The legacy completeness arm, OBSERVED WHERE IT IS CONSUMED.
-		//
-		// A result stored before the read-requirement evaluator existed can
-		// carry a state the amended derivation no longer produces. The
-		// stored-read validator admits exactly one such shape so the row
-		// stays readable; this line says when that actually happened, so the
-		// exemption's sunset is a measurement rather than a guess.
-		//
-		// HERE, and BEFORE the backfill below, because the backfill
-		// overwrites the very field this compares. Derived by RE-DERIVING
-		// rather than by threading a flag out of the validator: a positive
-		// signal computed from the document itself cannot report a state
-		// nothing actually held.
-		if state := result.Completeness.State; state != "" &&
-			state != contractsv1.DeriveContextFabricAnswerCompletenessState(result.Completeness.Outcomes) {
-			a.logger.InfoContext(r.Context(), "context fabric legacy completeness state admitted",
-				"request_id", contextfabric.SanitizeLogAttr(RequestID(r.Context())),
-				"stored_state", string(state),
-				"outcome_rows", len(result.Completeness.Outcomes))
-		}
-		// The read side of answerability, in fresh composition's precedence
-		// (stored_answerability.go): the window gate, the organization scope,
-		// the role decision, a clarification offering no subject, and the
-		// offer-less rows the stored-read validator admits by design (the
-		// shape the yardstick measured 76 times). A stored clarification that
-		// is unanswerable is served as the terminal fresh composition takes
-		// today; one whose reading is unavailable is served as stored -- a
-		// history read never runs an investigation. The MCP
-		// investigation_result tool forwards this response, so both read
-		// surfaces take the one determination. Repaired rather than refused:
-		// the row is real and was asked for by id.
-		//
-		// BEFORE the completeness recompute below, deliberately: the repair
-		// changes Status and the refusal basis, and completeness mirrors both.
-		//
-		// Logged at Info for every stored clarification, because this route
-		// emits no subjectless telemetry and a regression here is otherwise
-		// invisible. The offer-less repair keeps its own line as well: the
-		// count of earlier rows still being repaired is how that arm's sunset
-		// gets measured rather than guessed.
-		storedStatus := result.Status
-		if answerability := contextfabric.RepairStoredClarification(&result, stored.SemanticState, stored.SemanticStateRead); answerability.Determination != contextfabric.StoredAnswerabilityNotApplicable {
-			if answerability.Step == contextfabric.StoredAnswerabilityStepOfferLess && answerability.Repaired {
-				a.logger.InfoContext(r.Context(), "context fabric legacy unanswerable clarification repaired",
-					"request_id", contextfabric.SanitizeLogAttr(RequestID(r.Context())),
-					"served_status", string(result.Status))
-			}
-			// D49: an unavailable determination is disclosed on the wire as
-			// well as on the line, so a consumer can tell a clarification the
-			// server could not check from one it checked.
-			result.SemanticReading = answerability.WireSemanticReading()
-			args := contextfabric.StoredAnswerabilityLogArgs(contextfabric.StoredAnswerabilitySurfaceResultByID, answerability, storedStatus, result.Status)
-			args = append(args, "request_id", contextfabric.SanitizeLogAttr(RequestID(r.Context())))
-			a.logger.InfoContext(r.Context(), contextfabric.StoredAnswerabilityLogMessage, args...)
-		}
-		// A stored cardinality claim minted under an earlier mint authority
-		// keeps naming its old subject forever otherwise -- this route reads
-		// storage directly and never reaches the pass that mints the claim
-		// fresh, the same reason the two repairs above exist. Logged only
-		// when something actually moved, because "checked and it already
-		// matched" is not an event a reader needs to see repeated on every
-		// read of an already-correct row.
-		if beforeKind := cardinalityClaimSubjectKind(result); contextfabric.RepairStoredCardinalityClaimSubject(principal, &result, stored.SemanticState, stored.SemanticStateRead) {
-			a.logger.InfoContext(r.Context(), "context fabric legacy cardinality claim subject repaired",
-				"request_id", contextfabric.SanitizeLogAttr(RequestID(r.Context())),
-				"stored_subject_kind", contextfabric.SanitizeLogAttr(string(beforeKind)),
-				"served_subject_kind", contextfabric.SanitizeLogAttr(string(cardinalityClaimSubjectKind(result))))
-		}
-		var rankingAccounting []contextfabric.RetainedRankingAccountingEvent
-		result, rankingAccounting = contextfabric.AccountForRetainedRanking(result)
-		for _, event := range rankingAccounting {
-			args := contextfabric.RetainedRankingAccountingLogArgs(event, principal.OrgID)
-			args = append(args, "request_id", contextfabric.SanitizeLogAttr(RequestID(r.Context())))
-			a.logger.InfoContext(r.Context(), contextfabric.RetainedRankingAccountingLogMessage, args...)
-		}
-		result.Completeness = contextfabric.ComputeAnswerCompleteness(result)
-		// A row stored before the interpretation provenance fields existed
-		// names its interpreter here by the rule the reuse return uses. The
-		// projection view below copies these versions. Logged when a source
-		// was named, so the count of such rows still read is a measurement.
-		if contextfabric.BackfillStoredInterpretationProvenance(&result.Versions) {
-			a.logger.InfoContext(r.Context(), storedInterpretationProvenanceBackfilledLogMessage,
-				"request_id", contextfabric.SanitizeLogAttr(RequestID(r.Context())),
-				"interpretation_source", string(result.Versions.InterpretationSource))
-		}
-		if contextfabric.BackfillStoredSynthesisSource(&result.Versions) {
-			a.logger.InfoContext(r.Context(), storedSynthesisSourceBackfilledLogMessage,
-				"request_id", contextfabric.SanitizeLogAttr(RequestID(r.Context())),
-				"synthesis_source", string(result.Versions.SynthesisSource))
-		}
-		// The outcome-derivation completeness authority, re-evaluated HERE
-		// against the row's OWN outcome rows -- a stored row never reaches
-		// finalizeServed (this route reads storage directly, the same
-		// reason the two repairs immediately above exist), so without this
-		// a by-id read would silently be the one serving surface the
-		// authority never measures or corrects, no matter how long the
-		// engine-served surfaces have carried it.
-		//
-		// The knob is read LIVE, from the deployment's current
-		// configuration, not from anything baked into the row: a result
-		// saved before the flip was ever turned on must not keep serving
-		// a stale answer forever just because Save already ran once.
-		// The requirement-outcome reconciliation, on the surface that serves
-		// STORED documents. This route never reaches finalizeServed, so without
-		// these two calls a mismatch a stored document carries is stated on the
-		// trace of the investigation that produced it and on no later read of
-		// it, and a document claiming a requirement satisfied with nothing
-		// behind it is served by id indefinitely.
-		//
-		// The MCP investigation_result tool forwards THIS route's response
-		// (internal/mcp/investigation_result.go reads through the sidecar
-		// client), so both read surfaces take one determination here rather
-		// than two that have to agree.
-		//
-		// Both calls are the exported ones the engine itself uses: one
-		// numbering of the lines, one definition of served evidence.
-		for _, transition := range contextfabric.RequirementOutcomeTransitionEvents(result) {
-			args := contextfabric.RequirementOutcomeTransitionLogArgs(transition, principal.OrgID)
-			args = append(args, "request_id", contextfabric.SanitizeLogAttr(RequestID(r.Context())))
-			a.logger.InfoContext(r.Context(), contextfabric.RequirementOutcomeTransitionLogMessage, args...)
-		}
-		// A stored row that states a satisfied requirement its own evidence does
-		// not back is a SERVER defect, and the caller receives it as one:
-		// serving it would put the claim this guard exists to forbid in front of
-		// a reader through the one door the engine does not stand in.
-		if err := contextfabric.AssertServedRequirementEvidence(result); err != nil {
-			a.logger.ErrorContext(r.Context(), "context fabric stored result states an unsupported satisfied requirement",
-				"request_id", contextfabric.SanitizeLogAttr(RequestID(r.Context())),
-				"result_id", contextfabric.SanitizeLogAttr(result.ResultID),
-				"detail", telemetryscrub.ErrorClass(err))
-			writeError(w, r, http.StatusInternalServerError, "internal_error", "Context Fabric investigation result could not be served", false, nil)
-			return
-		}
-		// The served-status floors, on the stored-result read like on every
-		// engine serving point: a row stored before a floor existed is floored
-		// here, and the authority below cannot lift it back.
-		result = contextfabric.ApplyServedStatusFloors(result)
-		completenessAuthority := contextfabric.DeriveCompletenessAuthority(result)
-		result = contextfabric.ApplyServerCompletenessAuthority(result, a.config.ServerCompletenessAuthorityEnabled, a.config.ServerCompletenessAuthoritySymmetricEnabled, completenessAuthority)
-		completenessAuthority.StatusCorrectionDisclosed = result.StatusCorrection != nil
-		completenessAuthorityArgs := contextfabric.CompletenessAuthorityLogArgs(completenessAuthority, principal.OrgID)
-		completenessAuthorityArgs = append(completenessAuthorityArgs, "request_id", contextfabric.SanitizeLogAttr(RequestID(r.Context())))
-		a.logger.InfoContext(r.Context(), "context fabric completeness authority", completenessAuthorityArgs...)
-		// The consumer projection is served from THIS route, through the
-		// same answerprojection.Project the MCP tool calls (CHAOS-3746
-		// codex round-1 F2). Before this, the API only ever returned the
-		// canonical result, so "API and MCP agree" could only be checked
-		// by calling the projection helper directly -- which proves the
-		// helper is deterministic, not that the two SURFACES agree. With
-		// the view here, the differential check compares two real
-		// handlers and the parity guarantee is structural end to end.
-		view, budget, ok := investigationResultView(r)
-		if !ok {
-			writeError(w, r, http.StatusBadRequest, "invalid_request", "Context Fabric investigation result view or budget is invalid", false, nil)
-			return
-		}
-		var payload any = result
-		if view == investigationViewProjection {
-			budget.MaxSerializedBytes = a.config.MaxSerializedBytes
-			projection := answerprojection.Project(result, budget)
-			// Validate before emitting (codex round-6 F2). The route
-			// serves a DERIVED document, and the derivation runs over
-			// stored rows that are validated leniently -- so a projection
-			// bug shows up here as a schema-invalid body a client cannot
-			// parse, with nothing server-side having noticed. The
-			// canonical view needs no equivalent check: it re-serves a
-			// document the store already validated on read.
-			if err := projection.Validate(); err != nil {
-				a.logger.ErrorContext(r.Context(), "context fabric projection failed contract validation",
-					"request_id", contextfabric.SanitizeLogAttr(RequestID(r.Context())), "failure_class", "context_fabric_projection")
-				writeError(w, r, http.StatusInternalServerError, "internal_error", "Context Fabric answer projection could not be produced", false, nil)
-				return
-			}
-			displayArgs := answerprojection.DisplayLogArgs(result, projection, budget, false, false)
-			displayArgs = append(displayArgs, "request_id", contextfabric.SanitizeLogAttr(RequestID(r.Context())), "surface", "result_by_id")
-			a.logger.InfoContext(r.Context(), "context fabric answer display", displayArgs...)
-			payload = projection
-		}
-		maximumBytes := int64(a.config.MaxSerializedBytes)
-		itemCounts := contextFabricResultItemCounts(result)
-		encoded, measuredBytes, sizeErr := marshalContextFabricResponse(payload)
-		if sizeErr != nil {
-			writeError(w, r, http.StatusInternalServerError, "internal_error", "Context Fabric investigation result could not be serialized", false, nil)
-			return
-		}
-		estimatedTokens := (measuredBytes + 3) / 4
-		if measuredBytes > maximumBytes {
-			// CHAOS-4355 response-bound follow-up -- see the matching
-			// branch in ContextFabricInvestigationHandler
-			// (context_fabric_routes.go) for why this is a 413, not the
-			// 500 "internal_error" this branch used to return with no
-			// measurement at all: a stored result over
-			// ACR_MAX_SERIALIZED_BYTES is a legitimate "does not fit"
-			// outcome, not a server bug. This also confirms the retrieval
-			// route enforces the SAME bound the investigation route wrote
-			// under, so a result that returns once can also be re-read.
-			a.logContextFabricResponseBudgetExceeded(r, contractsv1.ContextFabricPlannedItemCeiling(result, a.config.MaxItems), "bytes", measuredBytes, maximumBytes, estimatedTokens, itemCounts)
-			writeError(w, r, http.StatusRequestEntityTooLarge, "budget_refusal", "Context Fabric investigation result exceeded service limits", false, map[string]any{
-				"measured_bytes": measuredBytes, "max_serialized_bytes": maximumBytes,
-			})
-			return
-		}
-		// CHAOS-4355 codex R2 ruling (team-lead): usage.Tokens carries the
-		// REAL estimate, charged via CompleteUsageWithBudget against an
-		// override (MaxTokens: 0, unlimited) instead of
-		// RequestClassContext's shared budget -- see the matching comment
-		// in ContextFabricInvestigationHandler (context_fabric_routes.go)
-		// for the full rationale and limits.Claim.CompleteWithBudget's doc
-		// comment for the mechanism, and its CHAOS-4523 codex P2 addendum
-		// for why usage.Items carries the truthful total (Paths included)
-		// while override.MaxItems is widened by itemCounts.Paths instead
-		// of shrinking the recorded count.
-		usage := limits.ResourceUsage{
-			Items:  int64(itemCounts.Total()),
-			Tokens: estimatedTokens,
-			Bytes:  measuredBytes,
-		}
-		override := limits.ResourceBudget{
-			MaxItems: int64(contractsv1.ContextFabricPlannedItemCeiling(result, a.config.MaxItems)) + int64(itemCounts.Paths) + int64(itemCounts.WalkCohortMembers), MaxTokens: 0, MaxBytes: int64(a.config.MaxSerializedBytes),
-		}
-		if err := CompleteUsageWithBudget(r.Context(), usage, override); err != nil {
-			a.logContextFabricResponseBudgetExceeded(r, contractsv1.ContextFabricPlannedItemCeiling(result, a.config.MaxItems), "items", measuredBytes, maximumBytes, estimatedTokens, itemCounts)
-			writeError(w, r, http.StatusRequestEntityTooLarge, "budget_refusal", "Context Fabric investigation result exceeded service limits", false, map[string]any{
-				"measured_bytes": usage.Bytes, "measured_items": usage.Items, "estimated_tokens": estimatedTokens,
-				"max_items":       contractsv1.ContextFabricPlannedItemCeiling(result, a.config.MaxItems),
-				"items_breakdown": itemCounts,
-			})
-			return
-		}
-		a.logContextFabricResponseBudgetMeasured(r, contractsv1.ContextFabricPlannedItemCeiling(result, a.config.MaxItems), measuredBytes, maximumBytes, estimatedTokens, itemCounts)
-		a.recordReadAudit(r.Context(), principal, "context_fabric_investigation_result_read", "context_fabric_investigation", result.ResultID, "success", map[string]any{"investigation_status": result.Status, "view": string(view)})
-		writeEncodedJSON(w, http.StatusOK, encoded)
+		a.serveStoredInvestigationResult(w, r, principal, results, gate, resultID, "context_fabric_investigation_result_read")
 	})
 	return a.protectedRuntimeHandler(limits.RequestClassContext, auth.ScopeContextRead, true, true, handler)
+}
+
+// serveStoredInvestigationResult reads resultID, decides it with the
+// stored-result gate (surface result_by_id) and serves it exactly as the
+// result-by-id route does. CHAOS-11912: the investigation POST answers a
+// repeat of a done submission through this same function, so a replayed
+// submission and a read by id are one serving path and cannot drift.
+// auditAction names the read on the audit trail.
+func (a *App) serveStoredInvestigationResult(w http.ResponseWriter, r *http.Request, principal storage.Principal, results contextfabric.InvestigationResultStore, gate StoredResultAuthorizer, resultID, auditAction string) {
+	// Organization scoping is the store's binding precondition (see
+	// contextfabric.InvestigationResultStore). The principal comes
+	// from authentication, never from the path or a payload.
+	// CHAOS-3898 §2.4: Get now returns the metadata-bearing
+	// StoredInvestigationResult carrier; this route serves only the
+	// canonical/projected result, so it unwraps to .Result immediately
+	// -- persistence metadata (GraphEpoch) is not part of the public
+	// response contract.
+	stored, err := results.Get(r.Context(), principal, resultID)
+	if err != nil {
+		a.writeInvestigationResultError(w, r, principal, err)
+		return
+	}
+	// The live authorization decision, before anything about the row
+	// reaches the response: a result whose subjects the caller's CURRENT
+	// grant does not admit does not exist for this caller, and is answered
+	// exactly like an unknown id. An undecidable read fails closed as
+	// unavailable. No gate configured is the same failure, never a pass.
+	authorization := contextfabric.StoredResultAuthorization{Surface: contextfabric.StoredResultSurfaceResultByID, Decision: contextfabric.StoredResultUnavailable, Reason: contextfabric.StoredResultReasonAuthorizerMissing}
+	if gate != nil {
+		authorization = gate.Authorize(r.Context(), principal, stored, contextfabric.StoredResultSurfaceResultByID)
+	}
+	authorizationArgs := contextfabric.StoredResultAuthorizationLogArgs(principal, authorization)
+	authorizationArgs = append(authorizationArgs, "request_id", contextfabric.SanitizeLogAttr(RequestID(r.Context())))
+	a.logger.InfoContext(r.Context(), contextfabric.StoredResultAuthorizationLogMessage, authorizationArgs...)
+	if err := authorization.ServingError(); err != nil {
+		a.writeInvestigationResultError(w, r, principal, err)
+		return
+	}
+	result := stored.Result
+	// A stored project-to-work-item tuple has an independent census
+	// serving rule. Apply it immediately after the org-scoped read so a
+	// changed authorization digest is indistinguishable from a missing
+	// row, and so an unavailable census cannot be mistaken for a current
+	// population. This branch only transforms the in-memory serving copy;
+	// it never writes the stored result or starts a new investigation.
+	tupleDecision := contextfabric.ServeStoredWorkItemTuple(result, stored.SemanticState, stored.SemanticStateRead, principal)
+	if tupleDecision.Disposition != contextfabric.WorkItemTupleByIDNotApplicable {
+		args := contextfabric.WorkItemStoredServingLogArgs(tupleDecision.Event)
+		args = append(args, "request_id", contextfabric.SanitizeLogAttr(RequestID(r.Context())), "org_id", contextfabric.SanitizeLogAttr(principal.OrgID))
+		a.logger.InfoContext(r.Context(), contextfabric.WorkItemStoredServingLogMessage, args...)
+	}
+	if tupleDecision.Err != nil {
+		a.writeInvestigationResultError(w, r, principal, tupleDecision.Err)
+		return
+	}
+	switch tupleDecision.Disposition {
+	case contextfabric.WorkItemTupleByIDNotFound:
+		a.writeInvestigationResultNotFound(w, r, principal)
+		return
+	case contextfabric.WorkItemTupleByIDServed, contextfabric.WorkItemTupleByIDStored:
+		result = tupleDecision.Result
+	case contextfabric.WorkItemTupleByIDNotApplicable:
+		// Any other kind of stored result with a flooded limitation list
+		// cannot show the service disclosures: it is answered like an
+		// unknown id, as the work-item tuple is.
+		if contextfabric.StoredResultFloodWithheld(result) {
+			a.writeInvestigationResultNotFound(w, r, principal)
+			return
+		}
+	}
+	// CHAOS-4413 (codex xhigh round-1 P1, confirmed): a row persisted
+	// before Completeness existed reads back with the exact zero
+	// value ValidateStored's legacy exemption allows -- fine for the
+	// canonical view (re-served, not re-validated), but the
+	// projection view below runs Completeness through Validate() with
+	// no such exemption, so an old row 500s the instant a bounded
+	// consumer asks for it. ComputeAnswerCompleteness is a pure
+	// function of fields this row already carries, so this is a
+	// backfill, never an invention, and a no-op for any post-4413 row.
+	// The legacy completeness arm, OBSERVED WHERE IT IS CONSUMED.
+	//
+	// A result stored before the read-requirement evaluator existed can
+	// carry a state the amended derivation no longer produces. The
+	// stored-read validator admits exactly one such shape so the row
+	// stays readable; this line says when that actually happened, so the
+	// exemption's sunset is a measurement rather than a guess.
+	//
+	// HERE, and BEFORE the backfill below, because the backfill
+	// overwrites the very field this compares. Derived by RE-DERIVING
+	// rather than by threading a flag out of the validator: a positive
+	// signal computed from the document itself cannot report a state
+	// nothing actually held.
+	if state := result.Completeness.State; state != "" &&
+		state != contractsv1.DeriveContextFabricAnswerCompletenessState(result.Completeness.Outcomes) {
+		a.logger.InfoContext(r.Context(), "context fabric legacy completeness state admitted",
+			"request_id", contextfabric.SanitizeLogAttr(RequestID(r.Context())),
+			"stored_state", string(state),
+			"outcome_rows", len(result.Completeness.Outcomes))
+	}
+	// The read side of answerability, in fresh composition's precedence
+	// (stored_answerability.go): the window gate, the organization scope,
+	// the role decision, a clarification offering no subject, and the
+	// offer-less rows the stored-read validator admits by design (the
+	// shape the yardstick measured 76 times). A stored clarification that
+	// is unanswerable is served as the terminal fresh composition takes
+	// today; one whose reading is unavailable is served as stored -- a
+	// history read never runs an investigation. The MCP
+	// investigation_result tool forwards this response, so both read
+	// surfaces take the one determination. Repaired rather than refused:
+	// the row is real and was asked for by id.
+	//
+	// BEFORE the completeness recompute below, deliberately: the repair
+	// changes Status and the refusal basis, and completeness mirrors both.
+	//
+	// Logged at Info for every stored clarification, because this route
+	// emits no subjectless telemetry and a regression here is otherwise
+	// invisible. The offer-less repair keeps its own line as well: the
+	// count of earlier rows still being repaired is how that arm's sunset
+	// gets measured rather than guessed.
+	storedStatus := result.Status
+	if answerability := contextfabric.RepairStoredClarification(&result, stored.SemanticState, stored.SemanticStateRead); answerability.Determination != contextfabric.StoredAnswerabilityNotApplicable {
+		if answerability.Step == contextfabric.StoredAnswerabilityStepOfferLess && answerability.Repaired {
+			a.logger.InfoContext(r.Context(), "context fabric legacy unanswerable clarification repaired",
+				"request_id", contextfabric.SanitizeLogAttr(RequestID(r.Context())),
+				"served_status", string(result.Status))
+		}
+		// D49: an unavailable determination is disclosed on the wire as
+		// well as on the line, so a consumer can tell a clarification the
+		// server could not check from one it checked.
+		result.SemanticReading = answerability.WireSemanticReading()
+		args := contextfabric.StoredAnswerabilityLogArgs(contextfabric.StoredAnswerabilitySurfaceResultByID, answerability, storedStatus, result.Status)
+		args = append(args, "request_id", contextfabric.SanitizeLogAttr(RequestID(r.Context())))
+		a.logger.InfoContext(r.Context(), contextfabric.StoredAnswerabilityLogMessage, args...)
+	}
+	// A stored cardinality claim minted under an earlier mint authority
+	// keeps naming its old subject forever otherwise -- this route reads
+	// storage directly and never reaches the pass that mints the claim
+	// fresh, the same reason the two repairs above exist. Logged only
+	// when something actually moved, because "checked and it already
+	// matched" is not an event a reader needs to see repeated on every
+	// read of an already-correct row.
+	if beforeKind := cardinalityClaimSubjectKind(result); contextfabric.RepairStoredCardinalityClaimSubject(principal, &result, stored.SemanticState, stored.SemanticStateRead) {
+		a.logger.InfoContext(r.Context(), "context fabric legacy cardinality claim subject repaired",
+			"request_id", contextfabric.SanitizeLogAttr(RequestID(r.Context())),
+			"stored_subject_kind", contextfabric.SanitizeLogAttr(string(beforeKind)),
+			"served_subject_kind", contextfabric.SanitizeLogAttr(string(cardinalityClaimSubjectKind(result))))
+	}
+	var rankingAccounting []contextfabric.RetainedRankingAccountingEvent
+	result, rankingAccounting = contextfabric.AccountForRetainedRanking(result)
+	for _, event := range rankingAccounting {
+		args := contextfabric.RetainedRankingAccountingLogArgs(event, principal.OrgID)
+		args = append(args, "request_id", contextfabric.SanitizeLogAttr(RequestID(r.Context())))
+		a.logger.InfoContext(r.Context(), contextfabric.RetainedRankingAccountingLogMessage, args...)
+	}
+	result.Completeness = contextfabric.ComputeAnswerCompleteness(result)
+	// A row stored before the interpretation provenance fields existed
+	// names its interpreter here by the rule the reuse return uses. The
+	// projection view below copies these versions. Logged when a source
+	// was named, so the count of such rows still read is a measurement.
+	if contextfabric.BackfillStoredInterpretationProvenance(&result.Versions) {
+		a.logger.InfoContext(r.Context(), storedInterpretationProvenanceBackfilledLogMessage,
+			"request_id", contextfabric.SanitizeLogAttr(RequestID(r.Context())),
+			"interpretation_source", string(result.Versions.InterpretationSource))
+	}
+	if contextfabric.BackfillStoredSynthesisSource(&result.Versions) {
+		a.logger.InfoContext(r.Context(), storedSynthesisSourceBackfilledLogMessage,
+			"request_id", contextfabric.SanitizeLogAttr(RequestID(r.Context())),
+			"synthesis_source", string(result.Versions.SynthesisSource))
+	}
+	// The outcome-derivation completeness authority, re-evaluated HERE
+	// against the row's OWN outcome rows -- a stored row never reaches
+	// finalizeServed (this route reads storage directly, the same
+	// reason the two repairs immediately above exist), so without this
+	// a by-id read would silently be the one serving surface the
+	// authority never measures or corrects, no matter how long the
+	// engine-served surfaces have carried it.
+	//
+	// The knob is read LIVE, from the deployment's current
+	// configuration, not from anything baked into the row: a result
+	// saved before the flip was ever turned on must not keep serving
+	// a stale answer forever just because Save already ran once.
+	// The requirement-outcome reconciliation, on the surface that serves
+	// STORED documents. This route never reaches finalizeServed, so without
+	// these two calls a mismatch a stored document carries is stated on the
+	// trace of the investigation that produced it and on no later read of
+	// it, and a document claiming a requirement satisfied with nothing
+	// behind it is served by id indefinitely.
+	//
+	// The MCP investigation_result tool forwards THIS route's response
+	// (internal/mcp/investigation_result.go reads through the sidecar
+	// client), so both read surfaces take one determination here rather
+	// than two that have to agree.
+	//
+	// Both calls are the exported ones the engine itself uses: one
+	// numbering of the lines, one definition of served evidence.
+	for _, transition := range contextfabric.RequirementOutcomeTransitionEvents(result) {
+		args := contextfabric.RequirementOutcomeTransitionLogArgs(transition, principal.OrgID)
+		args = append(args, "request_id", contextfabric.SanitizeLogAttr(RequestID(r.Context())))
+		a.logger.InfoContext(r.Context(), contextfabric.RequirementOutcomeTransitionLogMessage, args...)
+	}
+	// A stored row that states a satisfied requirement its own evidence does
+	// not back is a SERVER defect, and the caller receives it as one:
+	// serving it would put the claim this guard exists to forbid in front of
+	// a reader through the one door the engine does not stand in.
+	if err := contextfabric.AssertServedRequirementEvidence(result); err != nil {
+		a.logger.ErrorContext(r.Context(), "context fabric stored result states an unsupported satisfied requirement",
+			"request_id", contextfabric.SanitizeLogAttr(RequestID(r.Context())),
+			"result_id", contextfabric.SanitizeLogAttr(result.ResultID),
+			"detail", telemetryscrub.ErrorClass(err))
+		writeError(w, r, http.StatusInternalServerError, "internal_error", "Context Fabric investigation result could not be served", false, nil)
+		return
+	}
+	// The served-status floors, on the stored-result read like on every
+	// engine serving point: a row stored before a floor existed is floored
+	// here, and the authority below cannot lift it back.
+	result = contextfabric.ApplyServedStatusFloors(result)
+	completenessAuthority := contextfabric.DeriveCompletenessAuthority(result)
+	result = contextfabric.ApplyServerCompletenessAuthority(result, a.config.ServerCompletenessAuthorityEnabled, a.config.ServerCompletenessAuthoritySymmetricEnabled, completenessAuthority)
+	completenessAuthority.StatusCorrectionDisclosed = result.StatusCorrection != nil
+	completenessAuthorityArgs := contextfabric.CompletenessAuthorityLogArgs(completenessAuthority, principal.OrgID)
+	completenessAuthorityArgs = append(completenessAuthorityArgs, "request_id", contextfabric.SanitizeLogAttr(RequestID(r.Context())))
+	a.logger.InfoContext(r.Context(), "context fabric completeness authority", completenessAuthorityArgs...)
+	// The consumer projection is served from THIS route, through the
+	// same answerprojection.Project the MCP tool calls (CHAOS-3746
+	// codex round-1 F2). Before this, the API only ever returned the
+	// canonical result, so "API and MCP agree" could only be checked
+	// by calling the projection helper directly -- which proves the
+	// helper is deterministic, not that the two SURFACES agree. With
+	// the view here, the differential check compares two real
+	// handlers and the parity guarantee is structural end to end.
+	view, budget, ok := investigationResultView(r)
+	if !ok {
+		writeError(w, r, http.StatusBadRequest, "invalid_request", "Context Fabric investigation result view or budget is invalid", false, nil)
+		return
+	}
+	var payload any = result
+	if view == investigationViewProjection {
+		budget.MaxSerializedBytes = a.config.MaxSerializedBytes
+		projection := answerprojection.Project(result, budget)
+		// Validate before emitting (codex round-6 F2). The route
+		// serves a DERIVED document, and the derivation runs over
+		// stored rows that are validated leniently -- so a projection
+		// bug shows up here as a schema-invalid body a client cannot
+		// parse, with nothing server-side having noticed. The
+		// canonical view needs no equivalent check: it re-serves a
+		// document the store already validated on read.
+		if err := projection.Validate(); err != nil {
+			a.logger.ErrorContext(r.Context(), "context fabric projection failed contract validation",
+				"request_id", contextfabric.SanitizeLogAttr(RequestID(r.Context())), "failure_class", "context_fabric_projection")
+			writeError(w, r, http.StatusInternalServerError, "internal_error", "Context Fabric answer projection could not be produced", false, nil)
+			return
+		}
+		displayArgs := answerprojection.DisplayLogArgs(result, projection, budget, false, false)
+		displayArgs = append(displayArgs, "request_id", contextfabric.SanitizeLogAttr(RequestID(r.Context())), "surface", "result_by_id")
+		a.logger.InfoContext(r.Context(), "context fabric answer display", displayArgs...)
+		payload = projection
+	}
+	maximumBytes := int64(a.config.MaxSerializedBytes)
+	itemCounts := contextFabricResultItemCounts(result)
+	encoded, measuredBytes, sizeErr := marshalContextFabricResponse(payload)
+	if sizeErr != nil {
+		writeError(w, r, http.StatusInternalServerError, "internal_error", "Context Fabric investigation result could not be serialized", false, nil)
+		return
+	}
+	estimatedTokens := (measuredBytes + 3) / 4
+	if measuredBytes > maximumBytes {
+		// CHAOS-4355 response-bound follow-up -- see the matching
+		// branch in ContextFabricInvestigationHandler
+		// (context_fabric_routes.go) for why this is a 413, not the
+		// 500 "internal_error" this branch used to return with no
+		// measurement at all: a stored result over
+		// ACR_MAX_SERIALIZED_BYTES is a legitimate "does not fit"
+		// outcome, not a server bug. This also confirms the retrieval
+		// route enforces the SAME bound the investigation route wrote
+		// under, so a result that returns once can also be re-read.
+		a.logContextFabricResponseBudgetExceeded(r, contractsv1.ContextFabricPlannedItemCeiling(result, a.config.MaxItems), "bytes", measuredBytes, maximumBytes, estimatedTokens, itemCounts)
+		writeError(w, r, http.StatusRequestEntityTooLarge, "budget_refusal", "Context Fabric investigation result exceeded service limits", false, map[string]any{
+			"measured_bytes": measuredBytes, "max_serialized_bytes": maximumBytes,
+		})
+		return
+	}
+	// CHAOS-4355 codex R2 ruling (team-lead): usage.Tokens carries the
+	// REAL estimate, charged via CompleteUsageWithBudget against an
+	// override (MaxTokens: 0, unlimited) instead of
+	// RequestClassContext's shared budget -- see the matching comment
+	// in ContextFabricInvestigationHandler (context_fabric_routes.go)
+	// for the full rationale and limits.Claim.CompleteWithBudget's doc
+	// comment for the mechanism, and its CHAOS-4523 codex P2 addendum
+	// for why usage.Items carries the truthful total (Paths included)
+	// while override.MaxItems is widened by itemCounts.Paths instead
+	// of shrinking the recorded count.
+	usage := limits.ResourceUsage{
+		Items:  int64(itemCounts.Total()),
+		Tokens: estimatedTokens,
+		Bytes:  measuredBytes,
+	}
+	override := limits.ResourceBudget{
+		MaxItems: int64(contractsv1.ContextFabricPlannedItemCeiling(result, a.config.MaxItems)) + int64(itemCounts.Paths) + int64(itemCounts.WalkCohortMembers), MaxTokens: 0, MaxBytes: int64(a.config.MaxSerializedBytes),
+	}
+	if err := CompleteUsageWithBudget(r.Context(), usage, override); err != nil {
+		a.logContextFabricResponseBudgetExceeded(r, contractsv1.ContextFabricPlannedItemCeiling(result, a.config.MaxItems), "items", measuredBytes, maximumBytes, estimatedTokens, itemCounts)
+		writeError(w, r, http.StatusRequestEntityTooLarge, "budget_refusal", "Context Fabric investigation result exceeded service limits", false, map[string]any{
+			"measured_bytes": usage.Bytes, "measured_items": usage.Items, "estimated_tokens": estimatedTokens,
+			"max_items":       contractsv1.ContextFabricPlannedItemCeiling(result, a.config.MaxItems),
+			"items_breakdown": itemCounts,
+		})
+		return
+	}
+	a.logContextFabricResponseBudgetMeasured(r, contractsv1.ContextFabricPlannedItemCeiling(result, a.config.MaxItems), measuredBytes, maximumBytes, estimatedTokens, itemCounts)
+	a.recordReadAudit(r.Context(), principal, auditAction, "context_fabric_investigation", result.ResultID, "success", map[string]any{"investigation_status": result.Status, "view": string(view)})
+	writeEncodedJSON(w, http.StatusOK, encoded)
 }
 
 // investigationResultView is the closed set of representations this route

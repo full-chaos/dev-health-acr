@@ -288,8 +288,11 @@ func assertInvestigationHandlerRunsOnTheGatedContext(t *testing.T, path string) 
 		if isGateCall(source) {
 			return
 		}
-		if !isSelector(source.Fun, "contextfabric", "WithSynthesisInputCollector") || len(source.Args) == 0 {
-			t.Fatalf("investigateRecovered context %q passes through %s, not only contextfabric.WithSynthesisInputCollector", ident.Name, callName(source.Fun))
+		// CHAOS-11912: WithReservedResultID carries the submission's
+		// reserved result id and nothing else; it does not change which
+		// model the gate admitted.
+		if !(isSelector(source.Fun, "contextfabric", "WithSynthesisInputCollector") || isSelector(source.Fun, "contextfabric", "WithReservedResultID")) || len(source.Args) == 0 {
+			t.Fatalf("investigateRecovered context %q passes through %s, not only contextfabric.WithSynthesisInputCollector or WithReservedResultID", ident.Name, callName(source.Fun))
 		}
 		next, ok := source.Args[0].(*ast.Ident)
 		if !ok {

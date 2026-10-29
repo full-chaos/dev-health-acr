@@ -210,8 +210,14 @@ func open(ctx context.Context, request buildRequest) (*Runtime, error) {
 	// *pginvestigation.Store and is nil whenever the investigator itself
 	// was not composed.
 	var investigationResults contextfabric.InvestigationResultStore
+	// CHAOS-11912: the submission store is the SAME *pginvestigation.Store
+	// the engine saves through, because a Save completes the submission
+	// whose reserved id it saves in the same statement; and its sweeper.
+	var investigationSubmissions contextfabric.SubmissionStore
 	if investigationResultStore != nil {
 		investigationResults = investigationResultStore
+		investigationSubmissions = investigationResultStore
+		runtime.submissionSweeper = startSubmissionSweeper(investigationResultStore, request.options.Logger, request.options.Now, submissionSweepInterval)
 	}
 	// The retrieval route decides every read with the engine's own gate, so
 	// a stored answer and a prior-result read take one decision. Nil only
@@ -276,6 +282,8 @@ func open(ctx context.Context, request buildRequest) (*Runtime, error) {
 			Investigator:               investigator,
 			InvestigationResults:       investigationResults,
 			StoredResultGate:           storedResultGate,
+			InvestigationSubmissions:   investigationSubmissions,
+			NewResultID:                newInvestigationResultID,
 			SourceRows:                 sourceRows,
 			DirectReadGate:             directReadGate,
 			DirectFactReader:           directFactReader,

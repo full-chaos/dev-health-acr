@@ -446,6 +446,9 @@
           },
           {
             "$ref": "#/components/parameters/WaitBudget"
+          },
+          {
+            "$ref": "#/components/parameters/SubmissionID"
           }
         ],
         "requestBody": {
@@ -492,6 +495,9 @@
           },
           "403": {
             "$ref": "#/components/responses/ContextFabricInvestigationForbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
           },
           "406": {
             "$ref": "#/components/responses/ContextFabricInvestigationStreamUnavailable"
@@ -2887,6 +2893,18 @@
           "type": "string",
           "maxLength": 200
         }
+      },
+      "SubmissionID": {
+        "name": "X-ACR-Submission-ID",
+        "in": "header",
+        "required": false,
+        "description": "Optional id of one user submit (CHAOS-11912): 8 to 128 characters of letters, digits, '.', '_', ':' and '-' (a UUID fits). The service admits the id once for the authenticated principal, bound to the request's semantic digest (every body field but request_id and consumer), and runs the request at most once under it. A repeat of an admitted id never runs the request again: a done submission is answered with its stored result exactly as GET /api/v1/context-fabric/investigations/{result_id} serves it, re-authorized for the caller; any other repeat is a 409 submission_mismatch, submission_in_progress (with Retry-After), submission_unsaved or submission_abandoned. A result that completes a submission is served to that submission's principal only, on every read surface. A malformed value is 400 invalid_request. Absent, the request runs as before and its result keeps organization-bearer reads.",
+        "schema": {
+          "type": "string",
+          "minLength": 8,
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9._:-]{8,128}$"
+        }
       }
     },
     "responses": {
@@ -2935,7 +2953,16 @@
         }
       },
       "ContextFabricInvestigationConflict": {
-        "description": "Structured safe error. A supplied interpretation or supplied synthesis that was made under a contract this service does not run carries details.interpretation_contract or details.synthesis_contract. A supplied synthesis written from an input that is no longer the turn's input carries details.reason input_changed and details.synthesis_input, the new synthesis input.",
+        "description": "Structured safe error. A supplied interpretation or supplied synthesis that was made under a contract this service does not run carries details.interpretation_contract or details.synthesis_contract. A supplied synthesis written from an input that is no longer the turn's input carries details.reason input_changed and details.synthesis_input, the new synthesis input. A repeat of an admitted X-ACR-Submission-ID (CHAOS-11912) is a 409 with code submission_mismatch (a different request used the id; not retryable), submission_in_progress (its run is still live; retryable, with Retry-After), submission_unsaved (answered, not stored; not retryable) or submission_abandoned (ended without an answer, or ran past its budget plus 30 seconds; not retryable). None of them runs the request.",
+        "headers": {
+          "Retry-After": {
+            "description": "Seconds to wait before retrying the same submission id. Sent with submission_in_progress only.",
+            "schema": {
+              "type": "integer",
+              "minimum": 1
+            }
+          }
+        },
         "content": {
           "application/json": {
             "schema": {

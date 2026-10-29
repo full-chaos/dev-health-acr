@@ -1,5 +1,5 @@
 # Generated from acr-v1.json by `go run ./cmd/contractcheck -write`. DO NOT EDIT.
-# canonical-content-sha256: 87f76f0596efda286cbaa3a32e28ad7633816fd21ad306882c7e366394b92ed9
+# canonical-content-sha256: 7213e41a56e96e9158e81e97d94f32ab52965c3f9994bc43699590b8ff3cedda
 openapi: "3.1.0"
 info:
   description: "Private hosted API for evidence-backed agent context packets, authorized provenance expansion, replay snapshots, and opt-in episode writeback. External Push is a separate API plane."
@@ -614,6 +614,8 @@ paths:
           "$ref": "#/components/parameters/ClientVersion"
         -
           "$ref": "#/components/parameters/WaitBudget"
+        -
+          "$ref": "#/components/parameters/SubmissionID"
       requestBody:
         content:
           application/json:
@@ -635,13 +637,15 @@ paths:
             text/event-stream:
               schema:
                 "$ref": "../jsonschema/v1/context_fabric_investigation_event.v1.schema.json"
-          description: "Investigation result; status may be complete, partial, degraded, clarification_required, or no_match. schema_version is context_fabric_investigation_result.v1, or .v2 when the result minted an anchor membership-verify offer (CHAOS-4042). The body is the result plus, when the request asked synthesis_mode client and the turn reached synthesis, synthesis_input: the input for the caller's model to write the answer from. The result read by id never carries it. When options.max_serialized_bytes is below the size of the result, the body is instead the bounded consumer projection (context_fabric_answer_projection.v1) sized to that option, with projection_budget.full_result_omitted true and result_id naming the stored result, which GET by id serves whole against the service ceiling. A synthesis_mode client turn is never projected: its synthesis_input is outside options.max_serialized_bytes (the option bounds the result; the input has its own bound, the service ceiling), and a result over the option on such a turn is refused. text/event-stream (CHAOS-11909): served when Accept is exactly text/event-stream and the deployment has ACR_CONTEXT_FABRIC_EVENT_STREAM_ENABLED on; with the flag off the request gets 406 stream_unavailable before any admission work, and there is no fallback to application/json. Any other Accept value gets the application/json body, unchanged. The stream body is a sequence of Server-Sent Events frames -- `id: \u003cseq\u003e`, `event: \u003ctype\u003e`, `data: \u003cone event as one line of compact JSON, no field present as empty, zero or null\u003e`, then a blank line -- and each data object validates against context_fabric_investigation_event.v1. accepted comes first, with the response headers, right after admission; stage events follow in the fixed stage order; a heartbeat follows when 10 seconds pass with no other event, so consecutive elapsed_ms values (accepted counting as 0) are at most 11 seconds apart (the bound is on silence; a heartbeat sooner than that is valid); exactly one terminal event, result or error, ends the stream. result.result is the application/json body this response has for the same request, byte for byte; error.error is the error.v1 envelope the same failure gets as an application/json error response, http_status included. A failure before the stream starts keeps its HTTP status and application/json error.v1 body. A stream that ends without a terminal event was interrupted."
+          description: "Investigation result; status may be complete, partial, degraded, clarification_required, or no_match. schema_version is context_fabric_investigation_result.v1, or .v2 when the result minted an anchor membership-verify offer (CHAOS-4042). The body is the result plus, when the request asked synthesis_mode client and the turn reached synthesis, synthesis_input: the input for the caller's model to write the answer from. The result read by id never carries it. When options.max_serialized_bytes is below the size of the result, the body is instead the bounded consumer projection (context_fabric_answer_projection.v1) sized to that option, with projection_budget.full_result_omitted true and result_id naming the stored result, which GET by id serves whole against the service ceiling. A synthesis_mode client turn is never projected: its synthesis_input is outside options.max_serialized_bytes (the option bounds the result; the input has its own bound, the service ceiling), and a result over the option on such a turn is refused. text/event-stream (CHAOS-11909): served when Accept is exactly text/event-stream and the deployment has ACR_CONTEXT_FABRIC_EVENT_STREAM_ENABLED on; with the flag off the request gets 406 stream_unavailable before any admission work, and there is no fallback to application/json. Any other Accept value gets the application/json body, unchanged. The stream body is a sequence of Server-Sent Events frames -- `id: \u003cseq\u003e`, `event: \u003ctype\u003e`, `data: \u003cone event as compact JSON\u003e`, then a blank line -- and each data object validates against context_fabric_investigation_event.v1. accepted comes first, with the response headers, right after admission; stage events follow in the fixed stage order; a heartbeat follows 10 seconds with no other event; exactly one terminal event, result or error, ends the stream. result.result is the application/json body this response has for the same request, byte for byte; error.error is the error.v1 envelope the same failure gets as an application/json error response, http_status included. A failure before the stream starts keeps its HTTP status and application/json error.v1 body. A stream that ends without a terminal event was interrupted."
         "400":
           "$ref": "#/components/responses/ContextFabricInvestigationBadRequest"
         "401":
           "$ref": "#/components/responses/Error"
         "403":
           "$ref": "#/components/responses/ContextFabricInvestigationForbidden"
+        "404":
+          "$ref": "#/components/responses/Error"
         "406":
           "$ref": "#/components/responses/ContextFabricInvestigationStreamUnavailable"
         "409":
@@ -936,6 +940,16 @@ components:
       schema:
         maxLength: 256
         type: "string"
+    SubmissionID:
+      description: "Optional id of one user submit (CHAOS-11912): 8 to 128 characters of letters, digits, '.', '_', ':' and '-' (a UUID fits). The service admits the id once for the authenticated principal, bound to the request's semantic digest (every body field but request_id and consumer), and runs the request at most once under it. A repeat of an admitted id never runs the request again: a done submission is answered with its stored result exactly as GET /api/v1/context-fabric/investigations/{result_id} serves it, re-authorized for the caller; any other repeat is a 409 submission_mismatch, submission_in_progress (with Retry-After), submission_unsaved or submission_abandoned. A result that completes a submission is served to that submission's principal only, on every read surface. A malformed value is 400 invalid_request. Absent, the request runs as before and its result keeps organization-bearer reads."
+      in: "header"
+      name: "X-ACR-Submission-ID"
+      required: false
+      schema:
+        maxLength: 128
+        minLength: 8
+        pattern: "^[A-Za-z0-9._:-]{8,128}$"
+        type: "string"
     WaitBudget:
       description: "Optional longest wait, in whole seconds, the caller will give one investigation. At least 10. The request ends by then, narrowing the service's own request timeout and never extending it: when the synthesis model call has not finished, the answer is served degraded with its result_id and coverage.details[code=synthesis_model_failed]. Stages before synthesis that run past the budget still end as 504 deadline_exceeded. A value that is not a whole number of seconds of at least 10 is ignored."
       in: "header"
@@ -1021,7 +1035,13 @@ components:
                         type: "object"
                     type: "object"
                 type: "object"
-      description: "Structured safe error. A supplied interpretation or supplied synthesis that was made under a contract this service does not run carries details.interpretation_contract or details.synthesis_contract. A supplied synthesis written from an input that is no longer the turn's input carries details.reason input_changed and details.synthesis_input, the new synthesis input."
+      description: "Structured safe error. A supplied interpretation or supplied synthesis that was made under a contract this service does not run carries details.interpretation_contract or details.synthesis_contract. A supplied synthesis written from an input that is no longer the turn's input carries details.reason input_changed and details.synthesis_input, the new synthesis input. A repeat of an admitted X-ACR-Submission-ID (CHAOS-11912) is a 409 with code submission_mismatch (a different request used the id; not retryable), submission_in_progress (its run is still live; retryable, with Retry-After), submission_unsaved (answered, not stored; not retryable) or submission_abandoned (ended without an answer, or ran past its budget plus 30 seconds; not retryable). None of them runs the request."
+      headers:
+        Retry-After:
+          description: "Seconds to wait before retrying the same submission id. Sent with submission_in_progress only."
+          schema:
+            minimum: 1
+            type: "integer"
     ContextFabricInvestigationForbidden:
       content:
         application/json:

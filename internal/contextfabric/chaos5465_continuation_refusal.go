@@ -118,7 +118,7 @@ func (e *Engine) continuationRefusalResult(
 	}
 	result := InvestigationResult{
 		SchemaVersion:      InvestigationResultSchemaV1,
-		ResultID:           e.newResultID(),
+		ResultID:           e.mintResultID(ctx),
 		RequestID:          request.RequestID,
 		GeneratedAt:        e.now().UTC(),
 		Status:             InvestigationNoMatch,

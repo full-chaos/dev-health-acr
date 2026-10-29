@@ -108,6 +108,13 @@ type StoredInvestigationResult struct {
 	// The stored-result gate refuses a restricted reader whose own digest
 	// differs, and one that meets "".
 	GrantDigest string
+	// SubmissionOwner is the principal whose submission this result completed
+	// (CHAOS-11912), or nil for a result that completed no submission (MCP,
+	// Workbench, a request without X-ACR-Submission-ID, or a row saved
+	// before the binding existed). The stored-result gate serves a bound
+	// result to its owner only, on every surface; an unbound one keeps the
+	// organization-bearer semantics ParentResultID documents.
+	SubmissionOwner *SubmissionOwner
 }
 
 // ReuseMissReason classifies WHY AnswerReuseGate.FindReusable found no

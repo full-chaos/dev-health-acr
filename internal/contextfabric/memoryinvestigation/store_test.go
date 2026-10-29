@@ -257,3 +257,9 @@ func TestStore_grantDigest(t *testing.T) {
 		func(t *testing.T) contextfabric.InvestigationResultStore { return memoryinvestigation.NewStore() },
 	)
 }
+
+// TestStore_submissionParity runs the shared submission behavior table
+// (CHAOS-11912) against the in-memory store.
+func TestStore_submissionParity(t *testing.T) {
+	paritytest.RunSubmissionSuite(t, func(*testing.T) paritytest.SubmissionStore { return memoryinvestigation.NewStore() })
+}

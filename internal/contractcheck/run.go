@@ -128,6 +128,12 @@ var exampleSchemaPairs = map[string]string{
 	"context_fabric_investigation_event_error_request_deadline.v1.json": "context_fabric_investigation_event.v1.schema.json",
 	"context_fabric_investigation_event_error_budget_refusal.v1.json":   "context_fabric_investigation_event.v1.schema.json",
 	"error_context_fabric_stream_unavailable.v1.json":                   "error.v1.schema.json",
+	// CHAOS-11912: the four submission refusals, written by the route
+	// itself (internal/api/context_fabric_submission_test.go).
+	"error_context_fabric_submission_mismatch.v1.json":    "error.v1.schema.json",
+	"error_context_fabric_submission_in_progress.v1.json": "error.v1.schema.json",
+	"error_context_fabric_submission_unsaved.v1.json":     "error.v1.schema.json",
+	"error_context_fabric_submission_abandoned.v1.json":   "error.v1.schema.json",
 }
 
 // Options configures repository contract validation.

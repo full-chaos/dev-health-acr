@@ -73,6 +73,13 @@ func (a *App) ContextFabricInvestigationHandler(investigator contextfabric.Inves
 			writeError(w, r, http.StatusBadRequest, "invalid_request", "Context Fabric investigation request is invalid", false, schemaViolationDetails())
 			return
 		}
+		// CHAOS-11912: a malformed submission id is a client error, refused
+		// before anything is admitted.
+		submissionID, submissionValid := investigationSubmissionID(r)
+		if !submissionValid {
+			writeError(w, r, http.StatusBadRequest, "invalid_request", "Context Fabric investigation submission id is invalid", false, nil)
+			return
+		}
 		principal, ok := auth.PrincipalFromContext(r.Context())
 		if !ok {
 			writeError(w, r, http.StatusUnauthorized, "invalid_token", "Missing or invalid ACR credential", false, nil)
@@ -82,7 +89,23 @@ func (a *App) ContextFabricInvestigationHandler(investigator contextfabric.Inves
 		if !served {
 			return
 		}
-		investigateCtx, collectedSynthesisInput := contextfabric.WithSynthesisInputCollector(gatedCtx)
+		// CHAOS-11912 (INV-2): a request that names a submission is admitted
+		// first. A repeat of the key is answered here and never executes; an
+		// admitted one runs under the result id its record reserved.
+		var submission *admittedInvestigationSubmission
+		reservedResultID := ""
+		if submissionID != "" {
+			admitted, proceed := a.admitInvestigationSubmission(w, r, principal, request, submissionID)
+			if !proceed {
+				return
+			}
+			submission = admitted
+			reservedResultID = submission.record.ReservedResultID
+		}
+		// With no submission the reserved id is "" and the context is the
+		// gated one unchanged.
+		reservedCtx := contextfabric.WithReservedResultID(gatedCtx, reservedResultID)
+		investigateCtx, collectedSynthesisInput := contextfabric.WithSynthesisInputCollector(reservedCtx)
 		investigationStarted := a.now()
 		// The latency is recorded once, when the request ends, under the
 		// status of the answer it delivered; every earlier exit (a failure,
@@ -93,6 +116,10 @@ func (a *App) ContextFabricInvestigationHandler(investigator contextfabric.Inves
 		}()
 		result, err := investigateRecovered(investigateCtx, investigator, principal, request)
 		if err != nil {
+			// The run ended without an answer: its record is final now, so a
+			// retry of the key is answered submission_abandoned at once
+			// instead of in_progress until the budget runs out.
+			a.abandonInvestigationSubmission(r, principal, submission)
 			if request.SuppliedSynthesis != nil && errors.Is(err, contextfabric.ErrSynthesisRejected) {
 				a.writeSuppliedSynthesisRejection(w, r, err)
 				return
@@ -100,146 +127,160 @@ func (a *App) ContextFabricInvestigationHandler(investigator contextfabric.Inves
 			a.writeContextFabricError(w, r, err)
 			return
 		}
-		// The service ceiling is the only line past which an answer is
-		// refused. The caller's own max_serialized_bytes bounds what is
-		// SERVED: an answer that measures over it is delivered as the
-		// bounded projection below, never refused and never oversize.
-		maximumBytes := int64(a.config.MaxSerializedBytes)
-		callerBytes := int64(request.Options.MaxSerializedBytes)
-		itemCounts := contextFabricResultItemCounts(result)
-		encoded, measuredBytes, sizeErr := marshalContextFabricResponse(result)
-		if sizeErr != nil {
-			writeError(w, r, http.StatusInternalServerError, "internal_error", "Context Fabric investigation response could not be serialized", false, nil)
-			return
-		}
-		estimatedTokens := (measuredBytes + 3) / 4
-		if measuredBytes > maximumBytes {
-			// CHAOS-4355 response-bound follow-up: this is a legitimate
-			// "the answer does not fit" outcome (a Rows-bearing result over
-			// ACR_MAX_SERIALIZED_BYTES, or a caller-requested
-			// options.max_serialized_bytes below what the answer needs),
-			// never a server bug -- classify and disclose it exactly like
-			// the CompleteUsage budget below, instead of the misleading
-			// 500 "internal_error" this branch used to return with no
-			// measurement at all.
-			a.logContextFabricResponseBudgetExceeded(r, contractsv1.ContextFabricPlannedItemCeiling(result, a.config.MaxItems), "bytes", measuredBytes, maximumBytes, estimatedTokens, itemCounts)
-			writeError(w, r, http.StatusRequestEntityTooLarge, "budget_refusal", "Context Fabric investigation response exceeded service limits", false, map[string]any{
-				"measured_bytes": measuredBytes, "max_serialized_bytes": maximumBytes,
-			})
-			return
-		}
-		// CHAOS-4355 codex R2 ruling (team-lead): usage.Tokens carries the
-		// REAL estimate -- accounting must stay truthful, per
-		// window.org.Tokens/credential.Tokens (internal/limits/manager.go's
-		// complete()), which Manager.Usage() reports back as-is. What
-		// changes is the CEILING that estimate is checked against: the
-		// shared RequestClassContext budget's MaxTokens is
-		// a.config.MaxOutputTokens (the SAME value
-		// cmd/acr-api/server_build.go advertises as
-		// CapabilityLimits.MaxOutputTokens and internal/contracts/v1's
-		// Context Packet/MCP wire validators cap a caller-REQUESTED budget
-		// at, all sized for a text-only answer -- see
-		// internal/config/config.go's defaultMaxOutputTokens doc comment
-		// for why that must stay untouched). A Context Fabric investigation
-		// response carries no caller-declared token budget and can
-		// legitimately be a Rows-bearing result several times that size
-		// while still comfortably inside ACR_MAX_SERIALIZED_BYTES -- the
-		// authoritative "does this fit the wire" gate already enforced
-		// above. CompleteUsageWithBudget evaluates against an override
-		// budget (MaxTokens: 0, i.e. unlimited per
-		// limits.ResourceBudget.allows) instead of the class's shared one,
-		// without creating a new RequestClass that would fragment
-		// RequestClassContext's shared rate-limit window across
-		// context-packets/context-fabric/model-config -- see
-		// limits.Claim.CompleteWithBudget's doc comment.
-		//
-		// CHAOS-4523 codex P2 finding: the SAME truthful-accounting rule
-		// applies to Items. usage.Items carries the REAL total
-		// (itemCounts.Total(), Paths included) -- Manager.Usage() records
-		// this verbatim into the org/credential window (manager.go's
-		// complete()), so charging the budgeted() subset here would
-		// silently under-report every response that carries any Paths, the
-		// same false-accounting defect CompleteWithBudget's own doc
-		// comment warns against. What changes is the CEILING: override's
-		// MaxItems is widened by itemCounts.Paths and itemCounts.WalkCohortMembers, so the gate condition
-		// `total <= MaxItems+Paths` is exactly `budgeted <= MaxItems` --
-		// Paths stops binding the gate without the recorded usage ever
-		// diverging from what was actually served.
-		var projected *contractsv1.ContextFabricAnswerProjection
-		servedBytes := measuredBytes
-		if measuredBytes > callerBytes {
-			if collectedSynthesisInput() != nil {
-				// A client synthesis turn needs its synthesis input in the
-				// body, which a projection cannot carry, so the caller's
-				// ceiling is a refusal here, exactly as it was.
-				a.logContextFabricResponseBudgetExceeded(r, contractsv1.ContextFabricPlannedItemCeiling(result, a.config.MaxItems), "bytes", measuredBytes, callerBytes, estimatedTokens, itemCounts)
-				writeError(w, r, http.StatusRequestEntityTooLarge, "budget_refusal", "Context Fabric investigation response exceeded service limits", false, map[string]any{
-					"measured_bytes": measuredBytes, "max_serialized_bytes": callerBytes,
-				})
-				return
-			}
-			projection, projectionEncoded, projectionBytes, budget, fits := a.projectToCallerOption(result, request.Options)
-			if !fits {
-				a.logContextFabricResponseBudgetExceeded(r, contractsv1.ContextFabricPlannedItemCeiling(result, a.config.MaxItems), "projection_bytes", projectionBytes, callerBytes, estimatedTokens, itemCounts)
-				writeError(w, r, http.StatusRequestEntityTooLarge, "budget_refusal", "Context Fabric investigation response exceeded service limits", false, map[string]any{
-					"measured_bytes": projectionBytes, "max_serialized_bytes": callerBytes,
-				})
-				return
-			}
-			projected = &projection
-			encoded = projectionEncoded
-			servedBytes = projectionBytes
-			displayArgs := answerprojection.DisplayLogArgs(result, projection, budget, false, false)
-			displayArgs = append(displayArgs, "request_id", contextfabric.SanitizeLogAttr(RequestID(r.Context())), "surface", "investigation_create",
-				"canonical_bytes", measuredBytes, "served_bytes", servedBytes, "caller_max_serialized_bytes", callerBytes, "hosted_max_serialized_bytes", maximumBytes)
-			a.logger.InfoContext(r.Context(), "context fabric answer display", displayArgs...)
-		}
-		usage := limits.ResourceUsage{
-			Items:  int64(itemCounts.Total()),
-			Tokens: estimatedTokens,
-			Bytes:  servedBytes,
-		}
-		override := limits.ResourceBudget{
-			MaxItems: int64(contractsv1.ContextFabricPlannedItemCeiling(result, a.config.MaxItems)) + int64(itemCounts.Paths) + int64(itemCounts.WalkCohortMembers), MaxTokens: 0, MaxBytes: int64(a.config.MaxSerializedBytes),
-		}
-		if err := CompleteUsageWithBudget(r.Context(), usage, override); err != nil {
-			a.logContextFabricResponseBudgetExceeded(r, contractsv1.ContextFabricPlannedItemCeiling(result, a.config.MaxItems), "items", measuredBytes, maximumBytes, estimatedTokens, itemCounts)
-			writeError(w, r, http.StatusRequestEntityTooLarge, "budget_refusal", "Context Fabric investigation response exceeded service limits", false, map[string]any{
-				"measured_bytes": usage.Bytes, "measured_items": usage.Items, "estimated_tokens": estimatedTokens,
-				"max_items":       contractsv1.ContextFabricPlannedItemCeiling(result, a.config.MaxItems),
-				"items_breakdown": itemCounts,
-			})
-			return
-		}
-		synthesisInputBytes := 0
-		if bundle := collectedSynthesisInput(); bundle != nil && projected == nil {
-			// The synthesis input has its own bound, so it is not part of the
-			// measure above.
-			var envelopeBytes int64
-			encoded, envelopeBytes, sizeErr = marshalContextFabricResponse(contractsv1.ContextFabricInvestigationResponse{ContextFabricInvestigationResult: result, SynthesisInput: bundle})
-			if sizeErr != nil {
-				writeError(w, r, http.StatusInternalServerError, "internal_error", "Context Fabric investigation response could not be serialized", false, nil)
-				return
-			}
-			bodyLimit := int64(a.config.MaxSerializedBytes)
-			if callerBytes > 0 && callerBytes < bodyLimit {
-				bodyLimit = callerBytes
-			}
-			if envelopeBytes > bodyLimit {
-				a.logContextFabricResponseBudgetExceeded(r, contractsv1.ContextFabricPlannedItemCeiling(result, a.config.MaxItems), "synthesis_input_bytes", envelopeBytes, bodyLimit, estimatedTokens, itemCounts)
-				writeError(w, r, http.StatusRequestEntityTooLarge, "budget_refusal", "Context Fabric investigation response exceeded service limits", false, map[string]any{
-					"measured_bytes": envelopeBytes, "max_serialized_bytes": bodyLimit,
-				})
-				return
-			}
-			synthesisInputBytes = int(envelopeBytes - measuredBytes)
-		}
-		a.logContextFabricResponseBudgetMeasured(r, contractsv1.ContextFabricPlannedItemCeiling(result, a.config.MaxItems), measuredBytes, maximumBytes, estimatedTokens, itemCounts, "synthesis_input_bytes", synthesisInputBytes, "projected", projected != nil, "served_bytes", servedBytes, "caller_max_serialized_bytes", callerBytes)
-		a.recordReadAudit(r.Context(), principal, "context_fabric_investigation_completed", "context_fabric_investigation", result.ResultID, "success", map[string]any{"investigation_status": result.Status})
-		deliveredStatus = string(result.Status)
-		writeEncodedJSON(w, http.StatusOK, encoded)
+		// The record is final before the response is written: a client that
+		// loses the response and retries the key learns the outcome without
+		// a second execution.
+		a.finishInvestigationSubmission(r, principal, submission, result)
+		deliveredStatus = a.serveContextFabricInvestigationResult(w, r, principal, request, result, collectedSynthesisInput)
 	})
 	return a.protectedRuntimeHandler(limits.RequestClassContext, auth.ScopeContextRead, true, true, handler)
+}
+
+// serveContextFabricInvestigationResult is the one post-processing path of a
+// served investigation answer: the service and caller byte bounds, the
+// bounded projection, the usage charge, the synthesis-input envelope, the
+// audit line and the write. It returns the status the latency metric records:
+// the result's status when the answer was written, "error" when a gate
+// refused it.
+func (a *App) serveContextFabricInvestigationResult(w http.ResponseWriter, r *http.Request, principal storage.Principal, request contextfabric.InvestigationRequest, result contextfabric.InvestigationResult, collectedSynthesisInput func() *contractsv1.ContextFabricSynthesisInput) string {
+	// The service ceiling is the only line past which an answer is
+	// refused. The caller's own max_serialized_bytes bounds what is
+	// SERVED: an answer that measures over it is delivered as the
+	// bounded projection below, never refused and never oversize.
+	maximumBytes := int64(a.config.MaxSerializedBytes)
+	callerBytes := int64(request.Options.MaxSerializedBytes)
+	itemCounts := contextFabricResultItemCounts(result)
+	encoded, measuredBytes, sizeErr := marshalContextFabricResponse(result)
+	if sizeErr != nil {
+		writeError(w, r, http.StatusInternalServerError, "internal_error", "Context Fabric investigation response could not be serialized", false, nil)
+		return "error"
+	}
+	estimatedTokens := (measuredBytes + 3) / 4
+	if measuredBytes > maximumBytes {
+		// CHAOS-4355 response-bound follow-up: this is a legitimate
+		// "the answer does not fit" outcome (a Rows-bearing result over
+		// ACR_MAX_SERIALIZED_BYTES, or a caller-requested
+		// options.max_serialized_bytes below what the answer needs),
+		// never a server bug -- classify and disclose it exactly like
+		// the CompleteUsage budget below, instead of the misleading
+		// 500 "internal_error" this branch used to return with no
+		// measurement at all.
+		a.logContextFabricResponseBudgetExceeded(r, contractsv1.ContextFabricPlannedItemCeiling(result, a.config.MaxItems), "bytes", measuredBytes, maximumBytes, estimatedTokens, itemCounts)
+		writeError(w, r, http.StatusRequestEntityTooLarge, "budget_refusal", "Context Fabric investigation response exceeded service limits", false, map[string]any{
+			"measured_bytes": measuredBytes, "max_serialized_bytes": maximumBytes,
+		})
+		return "error"
+	}
+	// CHAOS-4355 codex R2 ruling (team-lead): usage.Tokens carries the
+	// REAL estimate -- accounting must stay truthful, per
+	// window.org.Tokens/credential.Tokens (internal/limits/manager.go's
+	// complete()), which Manager.Usage() reports back as-is. What
+	// changes is the CEILING that estimate is checked against: the
+	// shared RequestClassContext budget's MaxTokens is
+	// a.config.MaxOutputTokens (the SAME value
+	// cmd/acr-api/server_build.go advertises as
+	// CapabilityLimits.MaxOutputTokens and internal/contracts/v1's
+	// Context Packet/MCP wire validators cap a caller-REQUESTED budget
+	// at, all sized for a text-only answer -- see
+	// internal/config/config.go's defaultMaxOutputTokens doc comment
+	// for why that must stay untouched). A Context Fabric investigation
+	// response carries no caller-declared token budget and can
+	// legitimately be a Rows-bearing result several times that size
+	// while still comfortably inside ACR_MAX_SERIALIZED_BYTES -- the
+	// authoritative "does this fit the wire" gate already enforced
+	// above. CompleteUsageWithBudget evaluates against an override
+	// budget (MaxTokens: 0, i.e. unlimited per
+	// limits.ResourceBudget.allows) instead of the class's shared one,
+	// without creating a new RequestClass that would fragment
+	// RequestClassContext's shared rate-limit window across
+	// context-packets/context-fabric/model-config -- see
+	// limits.Claim.CompleteWithBudget's doc comment.
+	//
+	// CHAOS-4523 codex P2 finding: the SAME truthful-accounting rule
+	// applies to Items. usage.Items carries the REAL total
+	// (itemCounts.Total(), Paths included) -- Manager.Usage() records
+	// this verbatim into the org/credential window (manager.go's
+	// complete()), so charging the budgeted() subset here would
+	// silently under-report every response that carries any Paths, the
+	// same false-accounting defect CompleteWithBudget's own doc
+	// comment warns against. What changes is the CEILING: override's
+	// MaxItems is widened by itemCounts.Paths and itemCounts.WalkCohortMembers, so the gate condition
+	// `total <= MaxItems+Paths` is exactly `budgeted <= MaxItems` --
+	// Paths stops binding the gate without the recorded usage ever
+	// diverging from what was actually served.
+	var projected *contractsv1.ContextFabricAnswerProjection
+	servedBytes := measuredBytes
+	if measuredBytes > callerBytes {
+		if collectedSynthesisInput() != nil {
+			// A client synthesis turn needs its synthesis input in the
+			// body, which a projection cannot carry, so the caller's
+			// ceiling is a refusal here, exactly as it was.
+			a.logContextFabricResponseBudgetExceeded(r, contractsv1.ContextFabricPlannedItemCeiling(result, a.config.MaxItems), "bytes", measuredBytes, callerBytes, estimatedTokens, itemCounts)
+			writeError(w, r, http.StatusRequestEntityTooLarge, "budget_refusal", "Context Fabric investigation response exceeded service limits", false, map[string]any{
+				"measured_bytes": measuredBytes, "max_serialized_bytes": callerBytes,
+			})
+			return "error"
+		}
+		projection, projectionEncoded, projectionBytes, budget, fits := a.projectToCallerOption(result, request.Options)
+		if !fits {
+			a.logContextFabricResponseBudgetExceeded(r, contractsv1.ContextFabricPlannedItemCeiling(result, a.config.MaxItems), "projection_bytes", projectionBytes, callerBytes, estimatedTokens, itemCounts)
+			writeError(w, r, http.StatusRequestEntityTooLarge, "budget_refusal", "Context Fabric investigation response exceeded service limits", false, map[string]any{
+				"measured_bytes": projectionBytes, "max_serialized_bytes": callerBytes,
+			})
+			return "error"
+		}
+		projected = &projection
+		encoded = projectionEncoded
+		servedBytes = projectionBytes
+		displayArgs := answerprojection.DisplayLogArgs(result, projection, budget, false, false)
+		displayArgs = append(displayArgs, "request_id", contextfabric.SanitizeLogAttr(RequestID(r.Context())), "surface", "investigation_create",
+			"canonical_bytes", measuredBytes, "served_bytes", servedBytes, "caller_max_serialized_bytes", callerBytes, "hosted_max_serialized_bytes", maximumBytes)
+		a.logger.InfoContext(r.Context(), "context fabric answer display", displayArgs...)
+	}
+	usage := limits.ResourceUsage{
+		Items:  int64(itemCounts.Total()),
+		Tokens: estimatedTokens,
+		Bytes:  servedBytes,
+	}
+	override := limits.ResourceBudget{
+		MaxItems: int64(contractsv1.ContextFabricPlannedItemCeiling(result, a.config.MaxItems)) + int64(itemCounts.Paths) + int64(itemCounts.WalkCohortMembers), MaxTokens: 0, MaxBytes: int64(a.config.MaxSerializedBytes),
+	}
+	if err := CompleteUsageWithBudget(r.Context(), usage, override); err != nil {
+		a.logContextFabricResponseBudgetExceeded(r, contractsv1.ContextFabricPlannedItemCeiling(result, a.config.MaxItems), "items", measuredBytes, maximumBytes, estimatedTokens, itemCounts)
+		writeError(w, r, http.StatusRequestEntityTooLarge, "budget_refusal", "Context Fabric investigation response exceeded service limits", false, map[string]any{
+			"measured_bytes": usage.Bytes, "measured_items": usage.Items, "estimated_tokens": estimatedTokens,
+			"max_items":       contractsv1.ContextFabricPlannedItemCeiling(result, a.config.MaxItems),
+			"items_breakdown": itemCounts,
+		})
+		return "error"
+	}
+	synthesisInputBytes := 0
+	if bundle := collectedSynthesisInput(); bundle != nil && projected == nil {
+		// The synthesis input has its own bound, so it is not part of the
+		// measure above.
+		var envelopeBytes int64
+		encoded, envelopeBytes, sizeErr = marshalContextFabricResponse(contractsv1.ContextFabricInvestigationResponse{ContextFabricInvestigationResult: result, SynthesisInput: bundle})
+		if sizeErr != nil {
+			writeError(w, r, http.StatusInternalServerError, "internal_error", "Context Fabric investigation response could not be serialized", false, nil)
+			return "error"
+		}
+		bodyLimit := int64(a.config.MaxSerializedBytes)
+		if callerBytes > 0 && callerBytes < bodyLimit {
+			bodyLimit = callerBytes
+		}
+		if envelopeBytes > bodyLimit {
+			a.logContextFabricResponseBudgetExceeded(r, contractsv1.ContextFabricPlannedItemCeiling(result, a.config.MaxItems), "synthesis_input_bytes", envelopeBytes, bodyLimit, estimatedTokens, itemCounts)
+			writeError(w, r, http.StatusRequestEntityTooLarge, "budget_refusal", "Context Fabric investigation response exceeded service limits", false, map[string]any{
+				"measured_bytes": envelopeBytes, "max_serialized_bytes": bodyLimit,
+			})
+			return "error"
+		}
+		synthesisInputBytes = int(envelopeBytes - measuredBytes)
+	}
+	a.logContextFabricResponseBudgetMeasured(r, contractsv1.ContextFabricPlannedItemCeiling(result, a.config.MaxItems), measuredBytes, maximumBytes, estimatedTokens, itemCounts, "synthesis_input_bytes", synthesisInputBytes, "projected", projected != nil, "served_bytes", servedBytes, "caller_max_serialized_bytes", callerBytes)
+	a.recordReadAudit(r.Context(), principal, "context_fabric_investigation_completed", "context_fabric_investigation", result.ResultID, "success", map[string]any{"investigation_status": result.Status})
+	writeEncodedJSON(w, http.StatusOK, encoded)
+	return string(result.Status)
 }
 
 // maxProjectionShrinkSteps bounds how often projectToCallerOption halves the

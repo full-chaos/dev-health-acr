@@ -58,6 +58,8 @@ func seedStatements() []string {
 		`INSERT INTO acr.context_fabric_projection_checkpoints (org_id, source, updated_at) VALUES ($1, 'src', now())`,
 		`INSERT INTO acr.context_fabric_projection_checkpoints (org_id, source, updated_at) VALUES (upper($1), 'src-upper', now())`,
 		`INSERT INTO acr.context_fabric_projection_rebuild_markers (org_id, started_at) VALUES ($1, now())`,
+		`INSERT INTO acr.context_fabric_investigation_submissions (org_id, owner_auth_method, owner_subject, submission_id, request_digest, reserved_result_id, state, admitted_at, updated_at, expires_at)
+		 VALUES ($1, 'web_assertion', 'user-seed', 'submission-' || $2, 'sha256:' || repeat('a', 64), 'result-' || $2, 'done_unsaved', now(), now(), now() + interval '1 minute')`,
 		`INSERT INTO acr.context_fabric_investigation_results (result_id, org_id, payload, generated_at) VALUES ('result-' || $2, $1, '{}', now())`,
 		`INSERT INTO acr.context_fabric_model_execution_receipts (receipt_id, org_id, operation, provider, outcome, fallback_used, payload, started_at, completed_at)
 		 VALUES ('receipt-' || $2, $1, 'op', 'p', 'ok', false, '{}', now(), now())`,

@@ -446,6 +446,10 @@ var errorCodes = []string{
 	"synthesis_rejected",
 	"internal_error",
 	ErrorCodeStreamUnavailable,
+	ErrorCodeSubmissionMismatch,
+	ErrorCodeSubmissionInProgress,
+	ErrorCodeSubmissionUnsaved,
+	ErrorCodeSubmissionAbandoned,
 }
 
 func validErrorCode(code string) bool {
