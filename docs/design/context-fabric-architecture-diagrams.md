@@ -3163,6 +3163,22 @@ and reads only the submission and result stores, like a read by id. A new key
 meets those three gates, then admission (the race on admission is answered
 as a repeat).
 
+Repeat-key outcomes (the owner's retry of the same key):
+
+| Record state | How it was reached | A same-key retry gets |
+| --- | --- | --- |
+| any, request digest differs | — | `409 submission_mismatch` |
+| `done` | `Save` of the reserved id; reconcile; backstop (a reused answer was served) | the stored result, authorized live by `StoredResultGate` as GET by id is |
+| `running` | admitted, the run is in progress | `409 submission_in_progress`, `Retry-After: 3` |
+| `done_unsaved` | the engine skipped the save; backstop | `409 submission_unsaved` |
+| `abandoned` | the run returned an error (abandoned at once) | `409 submission_abandoned` |
+| `abandoned` | running past `expires_at` (a pod that died mid-run), by reconcile or the sweeper | `409 submission_abandoned`, byte-identical to the row above |
+
+A client cannot tell the two `abandoned` causes apart, by design: the plan's
+recovery maps both to "Interrupted — ask again". Another principal's request
+on the same submission id is a new key of its own and never reaches the
+record.
+
 The record's states. A stored reserved result always wins over the clock: the
 reconcile rule (on read and in the 30 s sweeper of every replica) completes a
 running record whose reserved result exists bound to the record's owner, and

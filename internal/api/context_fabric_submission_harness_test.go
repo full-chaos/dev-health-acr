@@ -139,6 +139,10 @@ type submissionHarness struct {
 	denied sync.Map
 	// clickhouseDown makes every App's ClickHouse data-store check fail.
 	clickhouseDown atomic.Bool
+	// grantWithdrawn makes the live graph grant every stored subject to
+	// another repository, so the stored-result gate denies the test
+	// credentials' reads from then on.
+	grantWithdrawn atomic.Bool
 	clock          *submissionClock
 	apps           []*App
 	logs           []*bytes.Buffer
@@ -193,7 +197,7 @@ func newSubmissionHarness(t *testing.T, stores ...submissionTestStore) *submissi
 				}}},
 				Investigator:             harness.investigator,
 				InvestigationResults:     store,
-				StoredResultGate:         testStoredResultGate(harness.investigator),
+				StoredResultGate:         contextfabric.NewStoredResultGate(withdrawableGrantGraph{withdrawn: &harness.grantWithdrawn}),
 				InvestigationSubmissions: store,
 			},
 		}, testLogger(logs))
@@ -204,6 +208,22 @@ func newSubmissionHarness(t *testing.T, stores ...submissionTestStore) *submissi
 		harness.logs = append(harness.logs, logs)
 	}
 	return harness
+}
+
+// withdrawableGrantGraph is the harness's live graph: every stored subject is
+// granted to the test credentials' repository until withdrawn, then to
+// another one.
+type withdrawableGrantGraph struct {
+	subjectNodeGraph
+	withdrawn *atomic.Bool
+}
+
+func (g withdrawableGrantGraph) AuthorizeStoredSubjects(ctx context.Context, principal storage.Principal, binding contextfabric.ResolvedGraphBinding, subjects []contextfabric.SubjectRef) ([]contextfabric.StoredSubjectOutcome, error) {
+	grant := []string{hostedTestRepository}
+	if g.withdrawn.Load() {
+		grant = []string{"acme/another-repository"}
+	}
+	return subjectNodeGraph{grant: grant}.AuthorizeStoredSubjects(ctx, principal, binding, subjects)
 }
 
 // post sends one create-investigation request to app index, as token, with
@@ -264,6 +284,30 @@ func errorEnvelopeOf(t *testing.T, recorder *httptest.ResponseRecorder) ErrorEnv
 		t.Fatalf("decode error envelope: %v (body %s)", err, recorder.Body.String())
 	}
 	return envelope
+}
+
+// expectErrorCode asserts an error.v1 answer with status and code.
+func expectErrorCode(t *testing.T, recorder *httptest.ResponseRecorder, status int, code string) {
+	t.Helper()
+	if recorder.Code != status || errorEnvelopeOf(t, recorder).Error.Code != code {
+		t.Fatalf("answer = %d %s, want %d %s", recorder.Code, recorder.Body.String(), status, code)
+	}
+}
+
+// submissionErrorCode is the error.v1 code of an answer, or "" for a
+// served (2xx) answer.
+func submissionErrorCode(t *testing.T, recorder *httptest.ResponseRecorder) string {
+	t.Helper()
+	if recorder.Code < http.StatusBadRequest {
+		return ""
+	}
+	return errorEnvelopeOf(t, recorder).Error.Code
+}
+
+// unconfiguredCreateHandler is App app's production create handler built over
+// no investigator, behind the same request middleware App.Handler applies.
+func (h *submissionHarness) unconfiguredCreateHandler(app int) http.Handler {
+	return h.apps[app].InstrumentedHandler(h.apps[app].ContextFabricInvestigationHandler(nil))
 }
 
 // ErrorEnvelopeForTest is the error.v1 shape a test reads.

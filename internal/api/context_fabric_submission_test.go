@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -101,6 +102,41 @@ func TestSubmissionFailedRunIsAbandonedAtOnce(t *testing.T) {
 	}
 	if !strings.Contains(harness.logs[0].String(), `"completion":"abandoned_on_error"`) {
 		t.Fatalf("the abandon is not on the completion line:\n%s", harness.logs[0].String())
+	}
+}
+
+// Lead ruling 2026-10-29 (plan deviation: abandon at once on a run error):
+// a same-key retry after an abandon on a known run error gets exactly the
+// answer a retry after an abandon at expiry (a pod that died mid-run) gets:
+// 409 submission_abandoned, not retryable, no Retry-After, byte-identical
+// bodies. The client is not meant to tell them apart: the plan (§2.7.5,
+// recovery) maps both to "Interrupted — ask again". Neither runs again.
+func TestAnAbandonOnErrorAndAnAbandonAtExpiryAnswerARetryAlike(t *testing.T) {
+	harness, _ := newMemorySubmissionHarness(t, 2)
+	harness.investigator.mode.Store(int32(runFail))
+	harness.post(0, harness.tokenA, "submission-abandon-e", submissionQuestion)
+	onError := harness.post(1, harness.tokenA, "submission-abandon-e", submissionQuestion)
+	expectSubmissionRefusal(t, onError, contractsv1.ErrorCodeSubmissionAbandoned)
+
+	// The stand-in for a pod that died mid-run: the run never finishes
+	// while its record passes expires_at (run budget + 30 s).
+	harness.investigator.mode.Store(int32(runBlockThenSave))
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		harness.post(0, harness.tokenA, "submission-abandon-x", submissionQuestion)
+	}()
+	<-harness.investigator.entered
+	harness.clock.Advance(24 * time.Hour)
+	atExpiry := harness.post(1, harness.tokenA, "submission-abandon-x", submissionQuestion)
+	close(harness.investigator.release)
+	<-done
+	expectSubmissionRefusal(t, atExpiry, contractsv1.ErrorCodeSubmissionAbandoned)
+	if onError.Code != atExpiry.Code || onError.Body.String() != atExpiry.Body.String() || onError.Header().Get("Retry-After") != atExpiry.Header().Get("Retry-After") {
+		t.Fatalf("a retry after an abandon on error = %d %s, after an abandon at expiry = %d %s: they must be identical", onError.Code, onError.Body.String(), atExpiry.Code, atExpiry.Body.String())
+	}
+	if got := harness.investigator.executions.Load(); got != 2 {
+		t.Fatalf("executions = %d, want 2 (one per key)", got)
 	}
 }
 
@@ -346,47 +382,134 @@ func TestASubmissionRepeatIsAnsweredBeforeTheServiceModelGate(t *testing.T) {
 	}
 }
 
-// Confirmation pass C1/C2: a repeat of an admitted submission executes
-// nothing and reads only the submission and result stores, like a read by id,
-// so neither runtime-readiness gate decides it. With ClickHouse down, and on
-// a create handler with no investigator configured, the owner's retry of a
-// done submission still replays its stored result and a changed request is
-// still a mismatch. A NEW submission still meets each gate and admits
-// nothing there.
-func TestASubmissionRepeatIsAnsweredBeforeTheRuntimeReadinessGates(t *testing.T) {
+// Confirmation pass C1: a repeat of an admitted submission executes nothing
+// and reads only the submission and result stores, like a read by id, so the
+// ClickHouse readiness gate does not decide it. With ClickHouse down the
+// owner's retry of a done submission still replays its stored result and a
+// changed request is still a mismatch. A NEW submission still meets the gate
+// and admits nothing there.
+func TestASubmissionRepeatIsAnsweredBeforeTheDataStoreReadinessGate(t *testing.T) {
 	harness, _ := newMemorySubmissionHarness(t, 2)
 	first := servedResultID(t, harness.post(0, harness.tokenA, "submission-ready-1", submissionQuestion))
-
 	harness.clickhouseDown.Store(true)
 	if again := servedResultID(t, harness.post(1, harness.tokenA, "submission-ready-1", submissionQuestion)); again != first {
 		t.Fatalf("replay with ClickHouse down = %s, want %s", again, first)
 	}
 	expectSubmissionRefusal(t, harness.post(1, harness.tokenA, "submission-ready-1", submissionQuestion+" Why?"), contractsv1.ErrorCodeSubmissionMismatch)
-	if refused := harness.post(0, harness.tokenA, "submission-ready-2", submissionQuestion); refused.Code != http.StatusServiceUnavailable || errorEnvelopeOf(t, refused).Error.Code != "store_unavailable" {
-		t.Fatalf("a new submission with ClickHouse down = %d %s, want 503 store_unavailable", refused.Code, refused.Body.String())
-	}
+	expectErrorCode(t, harness.post(0, harness.tokenA, "submission-ready-2", submissionQuestion), http.StatusServiceUnavailable, "store_unavailable")
 	harness.clickhouseDown.Store(false)
+	// The refused new submission admitted nothing: with ClickHouse back,
+	// the key runs once.
+	servedResultID(t, harness.post(0, harness.tokenA, "submission-ready-2", submissionQuestion))
+	if got := harness.investigator.executions.Load(); got != 2 {
+		t.Fatalf("executions = %d, want 2", got)
+	}
+}
 
-	// The production create handler over a nil investigator, behind the
-	// same request middleware App.Handler applies.
-	unconfigured := harness.apps[1].InstrumentedHandler(harness.apps[1].ContextFabricInvestigationHandler(nil))
+// Confirmation pass C2: the same for the create handler built over no
+// investigator (the runtime is not configured): a repeat still replays or
+// is still a mismatch; a new submission is 503 upstream_unavailable and
+// admits nothing.
+func TestASubmissionRepeatIsAnsweredBeforeTheInvestigatorGate(t *testing.T) {
+	harness, _ := newMemorySubmissionHarness(t, 2)
+	first := servedResultID(t, harness.post(0, harness.tokenA, "submission-ready-1", submissionQuestion))
+	unconfigured := harness.unconfiguredCreateHandler(1)
 	if again := servedResultID(t, harness.postTo(unconfigured, harness.tokenA, "submission-ready-1", submissionQuestion)); again != first {
 		t.Fatalf("replay with no investigator = %s, want %s", again, first)
 	}
 	expectSubmissionRefusal(t, harness.postTo(unconfigured, harness.tokenA, "submission-ready-1", submissionQuestion+" Why?"), contractsv1.ErrorCodeSubmissionMismatch)
-	if refused := harness.postTo(unconfigured, harness.tokenA, "submission-ready-3", submissionQuestion); refused.Code != http.StatusServiceUnavailable || errorEnvelopeOf(t, refused).Error.Code != "upstream_unavailable" {
-		t.Fatalf("a new submission with no investigator = %d %s, want 503 upstream_unavailable", refused.Code, refused.Body.String())
-	}
-	// Another principal's retry of the same key is a new key of its own, so
-	// it meets the gate: a replay is never served across principals.
-	if refused := harness.postTo(unconfigured, harness.tokenB, "submission-ready-1", submissionQuestion); refused.Code != http.StatusServiceUnavailable {
-		t.Fatalf("principal B's request on A's key with no investigator = %d %s, want 503", refused.Code, refused.Body.String())
-	}
-
-	// The refused new submissions admitted nothing: with the runtime back,
-	// each key runs once.
-	servedResultID(t, harness.post(0, harness.tokenA, "submission-ready-2", submissionQuestion))
+	expectErrorCode(t, harness.postTo(unconfigured, harness.tokenA, "submission-ready-3", submissionQuestion), http.StatusServiceUnavailable, "upstream_unavailable")
 	servedResultID(t, harness.post(0, harness.tokenA, "submission-ready-3", submissionQuestion))
+	if got := harness.investigator.executions.Load(); got != 2 {
+		t.Fatalf("executions = %d, want 2", got)
+	}
+}
+
+// Lead ruling 2026-10-29, condition 2 (INV-1, North Star 18): answered
+// before the readiness gates, a done replay is still authorized live by the
+// stored-result gate, as GET by id is. After the grant is withdrawn, the
+// owner's replay gets exactly the answer GET by id gets (the existence-
+// neutral not-found), whether the runtime is ready, ClickHouse is down, or
+// no investigator is configured; with the grant back it replays again.
+func TestASubmissionReplayIsAuthorizedLiveLikeAReadByID(t *testing.T) {
+	harness, _ := newMemorySubmissionHarness(t, 2)
+	first := servedResultID(t, harness.post(0, harness.tokenA, "submission-live-01", submissionQuestion))
+	harness.grantWithdrawn.Store(true)
+	byID := harness.get(1, harness.tokenA, first)
+	if byID.Code != http.StatusNotFound {
+		t.Fatalf("GET by id after the grant was withdrawn = %d %s, want 404", byID.Code, byID.Body.String())
+	}
+	unconfigured := harness.unconfiguredCreateHandler(1)
+	for _, condition := range []struct {
+		name   string
+		before func()
+		post   func() *httptest.ResponseRecorder
+	}{
+		{"ready", func() {}, func() *httptest.ResponseRecorder {
+			return harness.post(1, harness.tokenA, "submission-live-01", submissionQuestion)
+		}},
+		{"clickhouse down", func() { harness.clickhouseDown.Store(true) }, func() *httptest.ResponseRecorder {
+			return harness.post(1, harness.tokenA, "submission-live-01", submissionQuestion)
+		}},
+		{"no investigator", func() { harness.clickhouseDown.Store(false) }, func() *httptest.ResponseRecorder {
+			return harness.postTo(unconfigured, harness.tokenA, "submission-live-01", submissionQuestion)
+		}},
+	} {
+		condition.before()
+		replay := condition.post()
+		if replay.Code != byID.Code || errorEnvelopeOf(t, replay).Error.Code != errorEnvelopeOf(t, byID).Error.Code {
+			t.Fatalf("%s: replay after the grant was withdrawn = %d %s, want GET by id's %d %s", condition.name, replay.Code, replay.Body.String(), byID.Code, byID.Body.String())
+		}
+	}
+	harness.grantWithdrawn.Store(false)
+	if again := servedResultID(t, harness.post(1, harness.tokenA, "submission-live-01", submissionQuestion)); again != first {
+		t.Fatalf("replay with the grant back = %s, want %s", again, first)
+	}
+	if got := harness.investigator.executions.Load(); got != 1 {
+		t.Fatalf("executions = %d, want 1", got)
+	}
+}
+
+// Lead ruling 2026-10-29, condition 2: the key includes the owner, so another
+// principal's request on A's submission id is a new key of its own and never
+// reaches A's record. Whatever the runtime state, principal B gets the same
+// answer on A's id as on an id nobody used (no 503-versus-404 or other
+// difference that tells B the id exists), never A's result; and GET by id of
+// A's result answers B not found in every state.
+func TestANonOwnerCannotTellAnotherPrincipalsSubmissionExists(t *testing.T) {
+	harness, _ := newMemorySubmissionHarness(t, 2)
+	first := servedResultID(t, harness.post(0, harness.tokenA, "submission-owner-01", submissionQuestion))
+	unconfigured := harness.unconfiguredCreateHandler(1)
+	for index, condition := range []struct {
+		name  string
+		setup func()
+		post  func(submissionID string) *httptest.ResponseRecorder
+	}{
+		{"clickhouse down", func() { harness.clickhouseDown.Store(true) }, func(id string) *httptest.ResponseRecorder {
+			return harness.post(1, harness.tokenB, id, submissionQuestion)
+		}},
+		{"no investigator", func() { harness.clickhouseDown.Store(false) }, func(id string) *httptest.ResponseRecorder {
+			return harness.postTo(unconfigured, harness.tokenB, id, submissionQuestion)
+		}},
+		{"ready", func() {}, func(id string) *httptest.ResponseRecorder {
+			return harness.post(1, harness.tokenB, id, submissionQuestion)
+		}},
+	} {
+		condition.setup()
+		onA := condition.post("submission-owner-01")
+		unused := condition.post(fmt.Sprintf("submission-unused-%02d", index))
+		if onA.Code != unused.Code || submissionErrorCode(t, onA) != submissionErrorCode(t, unused) {
+			t.Fatalf("%s: B on A's id = %d %s, B on an unused id = %d %s: they must not differ", condition.name, onA.Code, onA.Body.String(), unused.Code, unused.Body.String())
+		}
+		if strings.Contains(onA.Body.String(), first) {
+			t.Fatalf("%s: B was served A's result %s", condition.name, first)
+		}
+		if byID := harness.get(1, harness.tokenB, first); byID.Code != http.StatusNotFound {
+			t.Fatalf("%s: B's GET of A's result = %d %s, want 404", condition.name, byID.Code, byID.Body.String())
+		}
+	}
+	// A ran once; B ran once on A's id and once on the unused id, both only
+	// when the runtime was ready.
 	if got := harness.investigator.executions.Load(); got != 3 {
 		t.Fatalf("executions = %d, want 3", got)
 	}

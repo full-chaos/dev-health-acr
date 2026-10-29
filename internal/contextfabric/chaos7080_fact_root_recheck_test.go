@@ -19,6 +19,13 @@ import (
 // the registry was asked to read.
 func chaos7080Engine(t *testing.T, graph GraphReader, reads *[]CanonicalFactRequest, telemetry EngineTelemetry, synthesized ...*[]SynthesisInput) *Engine {
 	t.Helper()
+	return chaos7080EngineWithResults(t, graph, reads, telemetry, &staticResultStore{results: map[string]InvestigationResult{}}, synthesized...)
+}
+
+// chaos7080EngineWithResults is chaos7080Engine over the caller's result
+// store, so a test can count its reads.
+func chaos7080EngineWithResults(t *testing.T, graph GraphReader, reads *[]CanonicalFactRequest, telemetry EngineTelemetry, results *staticResultStore, synthesized ...*[]SynthesisInput) *Engine {
+	t.Helper()
 	interpretation := InterpretedQuestion{
 		Shape: ShapeOpen, RequestedJudgment: "status", TimeContext: TimeContext{Axis: TemporalCurrent},
 		FactRequirements: []FactRequirement{{Kind: FactStatus}},
@@ -48,7 +55,7 @@ func chaos7080Engine(t *testing.T, graph GraphReader, reads *[]CanonicalFactRequ
 				Versions: VersionSet{Backend: "test", ProjectionVersion: "projection-v1", QueryVersion: "query-v1", InterpretationVersion: "interpret-v1", SynthesisVersion: "synthesis-v1"},
 			}, nil
 		}),
-		Results: &staticResultStore{results: map[string]InvestigationResult{}}, Telemetry: telemetry,
+		Results: results, Telemetry: telemetry,
 	}, EngineOptions{ServiceVersion: "acr-test", Now: func() time.Time { return time.Unix(200, 0).UTC() }, NewResultID: func() string { return "result_99999999" }})
 	if err != nil {
 		t.Fatalf("NewEngine() error = %v", err)
