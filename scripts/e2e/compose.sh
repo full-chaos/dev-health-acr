@@ -649,9 +649,24 @@ ensure_go_api_ready() {
   wait_go_api "$(<"$STATE/ops-probe-token")"
 }
 
-start_acr_after_go_api() {
+# up_acr_services is the ONLY way a harness script starts acr-api (CHAOS-11890). It proves the ops
+# listener answers, then starts the named services with --no-recreate so compose cannot recreate
+# go-api (or migrate) as a side effect of `up acr-api`: run 40960897433 recreated go-api in the same
+# `up` that started acr-api, so the readiness proof described a container that no longer existed and
+# acr-api exited with "initial entitlement readiness check: Dev Health entitlement service
+# unavailable". The go-api container id is compared across the start; a change is a loud failure.
+up_acr_services() {
+  local before after
   ensure_go_api_ready
-  compose up -d acr-db-init acr-migrate acr-api acr-tls-proxy >/dev/null
+  before="$(compose ps -q go-api)"
+  [[ -n "$before" ]] || die 'go-api is not running after its readiness probe passed'
+  compose up -d --no-recreate "$@" >/dev/null
+  after="$(compose ps -q go-api)"
+  [[ "$before" == "$after" ]] || die "go-api was recreated while starting ($*): container ${before:0:12} -> ${after:0:12}; the readiness proof no longer describes it"
+}
+
+start_acr_after_go_api() {
+  up_acr_services acr-db-init acr-migrate acr-api acr-tls-proxy
 }
 
 # prepare_stack is the reusable boundary: after it returns, the isolated stack is seeded,
