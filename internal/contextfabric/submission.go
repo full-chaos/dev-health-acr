@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"sync/atomic"
 	"time"
 
@@ -224,20 +225,23 @@ const submissionDigestPrefix = "context_fabric_submission_digest.v1\n"
 
 // SubmissionRequestDigest is the semantic digest a submission is bound to:
 // sha256 of the request's canonical JSON with the fields that do not change
-// what is asked removed -- request_id (a per-attempt correlation id) and
-// consumer (who is asking, not what). Everything else is included: the
-// question, conversation, requested scope with its subject hints,
+// what is asked removed -- request_id (a per-attempt correlation id) and the
+// consumer's name and version (who is asking). Everything else is included:
+// the question, conversation, requested scope with its subject hints,
 // parent_result_id, every prior_*_receipts namespace, expected kinds and
 // handles, supplied interpretation and synthesis, synthesis mode, time
-// context and options. Headers (wait budget, thread, correlation) are not
-// part of the body and never reach it.
+// context, options, and consumer.surface, which the engine reads as
+// behaviour (the MCP-only calendar-window commit and reuse bypass, the
+// explicit-structure authority, clarification capture), compared as the
+// engine compares it, trimmed. Headers (wait budget, thread, correlation) are
+// not part of the body and never reach it.
 //
 // encoding/json writes struct fields in declaration order and sorts map keys,
 // so one decoded request has one encoding.
 func SubmissionRequestDigest(request InvestigationRequest) (string, error) {
 	semantic := request
 	semantic.RequestID = ""
-	semantic.Consumer = contractsv1.ContextFabricConsumerInfo{}
+	semantic.Consumer = contractsv1.ContextFabricConsumerInfo{Surface: strings.TrimSpace(request.Consumer.Surface)}
 	encoded, err := json.Marshal(semantic)
 	if err != nil {
 		return "", fmt.Errorf("context fabric: encode submission digest: %w", err)

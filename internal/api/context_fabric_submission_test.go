@@ -281,3 +281,37 @@ func TestSubmissionRefusalGoldensAreTheRoutesOwnBodies(t *testing.T) {
 		}
 	}
 }
+
+// Round-1 F1: consumer.surface changes what the engine does (MCP-only window
+// commit, reuse bypass, structure authority), so the same submission id with
+// another surface is a different request: submission_mismatch, never a
+// replay. Name and version are who is asking, not what: they do not change
+// the digest.
+func TestSubmissionDigestBindsTheConsumerSurface(t *testing.T) {
+	harness, _ := newMemorySubmissionHarness(t, 1)
+	post := func(surface, name string) *httptest.ResponseRecorder {
+		body := investigationRequestBody()
+		body.Question = submissionQuestion
+		body.Consumer.Surface, body.Consumer.Name = surface, name
+		encoded, err := json.Marshal(body)
+		if err != nil {
+			t.Fatal(err)
+		}
+		request := httptest.NewRequest(http.MethodPost, ContextFabricInvestigationsPath, bytes.NewReader(encoded))
+		request.Header.Set("Authorization", "Bearer "+harness.tokenA)
+		request.Header.Set("X-ACR-Client-Version", "1.0.0")
+		request.Header.Set("Content-Type", "application/json")
+		request.Header.Set(contractsv1.ContextFabricSubmissionIDHeader, "submission-surface-01")
+		recorder := httptest.NewRecorder()
+		harness.apps[0].Handler().ServeHTTP(recorder, request)
+		return recorder
+	}
+	first := servedResultID(t, post("workbench", "context-fabric-workbench"))
+	expectSubmissionRefusal(t, post("mcp", "context-fabric-workbench"), contractsv1.ErrorCodeSubmissionMismatch)
+	if again := servedResultID(t, post("workbench", "another-client-name")); again != first {
+		t.Fatalf("a changed consumer name replayed %s, want %s", again, first)
+	}
+	if got := harness.investigator.executions.Load(); got != 1 {
+		t.Fatalf("executions = %d, want 1", got)
+	}
+}

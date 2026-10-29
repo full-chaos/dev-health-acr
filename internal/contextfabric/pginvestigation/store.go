@@ -299,12 +299,15 @@ func (s *Store) Save(ctx context.Context, principal storage.Principal, result co
 	// result and completes the submission that reserved its id -- the
 	// running record whose reserved_result_id is this result's id and whose
 	// owner is the saving principal -- and records that owner on the row.
-	// A data-modifying CTE commits with its statement (and, on the claim
+	// Data-modifying CTEs commit with their statement (and, on the claim
 	// path, with the transaction), so there is no instant at which the
-	// result is stored and its record still running. The update runs even
-	// when the insert conflicts (an idempotent replay): the row with the
-	// reserved id then exists, which is exactly the reconcile rule's
-	// condition for done.
+	// result is stored and its record still running. The completion is
+	// conditional on THIS insert having written the row (EXISTS inserted):
+	// when the id already exists, nothing is completed here, and the
+	// replay path completes the record only after verifyIdempotentReplay
+	// proved the existing row is this result, in this organization
+	// (completeReplayedSubmission). The statement returns how many rows the
+	// insert wrote (0 or 1).
 	//
 	// The OWNER is bound whatever the record's state: a run that saves after
 	// its record was abandoned (it ran past budget + grace) still saves a
@@ -317,19 +320,23 @@ WITH reservation AS (
     SELECT owner_auth_method, owner_subject FROM acr.context_fabric_investigation_submissions
      WHERE org_id = $2 AND reserved_result_id = $1
        AND owner_auth_method = $30 AND owner_subject = $31
+), inserted AS (
+INSERT INTO acr.context_fabric_investigation_results
+    (result_id, org_id, payload, generated_at, question_hash, contract_version, projection_version, model_identity, source_watermarks, invalidation_epoch, time_axis_key, embed_retrieval_identity, retrieval_policy_version, interpretation_prompt_version, synthesis_prompt_version, query_version, canonical_service_version, model_output_schema_version, identity_normalization_version, graph_epoch, window_inference_version, commit_gate_version, ranking_formula_version, question_family_version, ownership_routing_version, parent_result_id, semantic_state, grant_digest, graph_walk_version, submission_owner_auth_method, submission_owner_subject)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29,
+        (SELECT owner_auth_method FROM reservation), (SELECT owner_subject FROM reservation))
+ON CONFLICT (result_id) DO NOTHING
+RETURNING 1
 ), completed AS (
     UPDATE acr.context_fabric_investigation_submissions
        SET state = 'done', result_id = $1, updated_at = clock_timestamp()
      WHERE org_id = $2 AND reserved_result_id = $1
        AND owner_auth_method = $30 AND owner_subject = $31
        AND state IN ('running', 'abandoned')
+       AND EXISTS (SELECT 1 FROM inserted)
     RETURNING 1
 )
-INSERT INTO acr.context_fabric_investigation_results
-    (result_id, org_id, payload, generated_at, question_hash, contract_version, projection_version, model_identity, source_watermarks, invalidation_epoch, time_axis_key, embed_retrieval_identity, retrieval_policy_version, interpretation_prompt_version, synthesis_prompt_version, query_version, canonical_service_version, model_output_schema_version, identity_normalization_version, graph_epoch, window_inference_version, commit_gate_version, ranking_formula_version, question_family_version, ownership_routing_version, parent_result_id, semantic_state, grant_digest, graph_walk_version, submission_owner_auth_method, submission_owner_subject)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29,
-        (SELECT owner_auth_method FROM reservation), (SELECT owner_subject FROM reservation))
-ON CONFLICT (result_id) DO NOTHING`
+SELECT count(*) FROM inserted`
 
 	// CHAOS-3927 P4 (design brief §2.1): claims is empty for the
 	// overwhelming majority of Saves (no ConfirmedStructure entry redeemed
@@ -341,18 +348,17 @@ ON CONFLICT (result_id) DO NOTHING`
 	// result and every claim persist, or neither does.
 	claims := structureSupersessionClaims(result)
 	if len(claims) == 0 {
-		insertResult, err := s.db.ExecContext(ctx, insertResultSQL, insertArgs...)
-		if err != nil {
+		var rows int64
+		if err := s.db.QueryRowContext(ctx, insertResultSQL, insertArgs...).Scan(&rows); err != nil {
 			return fmt.Errorf("save investigation result: %w", sanitizeError(err))
-		}
-		rows, err := insertResult.RowsAffected()
-		if err != nil {
-			return fmt.Errorf("save investigation result rows affected: %w", sanitizeError(err))
 		}
 		if rows == 1 {
 			return nil
 		}
-		return s.verifyIdempotentReplay(ctx, orgID, resultID, payload, semantic.State)
+		if err := s.verifyIdempotentReplay(ctx, orgID, resultID, payload, semantic.State); err != nil {
+			return err
+		}
+		return s.completeReplayedSubmission(ctx, orgID, resultID, ownerMethod, ownerSubject)
 	}
 
 	tx, err := s.db.BeginTx(ctx, nil)
@@ -361,13 +367,9 @@ ON CONFLICT (result_id) DO NOTHING`
 	}
 	defer func() { _ = tx.Rollback() }() // no-op once Commit succeeds below
 
-	insertResult, err := tx.ExecContext(ctx, insertResultSQL, insertArgs...)
-	if err != nil {
+	var rows int64
+	if err := tx.QueryRowContext(ctx, insertResultSQL, insertArgs...).Scan(&rows); err != nil {
 		return fmt.Errorf("save investigation result: %w", sanitizeError(err))
-	}
-	rows, err := insertResult.RowsAffected()
-	if err != nil {
-		return fmt.Errorf("save investigation result rows affected: %w", sanitizeError(err))
 	}
 	if rows != 1 {
 		// A row already existed for this result_id -- an idempotent
@@ -381,7 +383,10 @@ ON CONFLICT (result_id) DO NOTHING`
 		if rollbackErr := tx.Rollback(); rollbackErr != nil {
 			return fmt.Errorf("pginvestigation: rollback idempotent-replay transaction: %w", sanitizeError(rollbackErr))
 		}
-		return s.verifyIdempotentReplay(ctx, orgID, resultID, payload, semantic.State)
+		if err := s.verifyIdempotentReplay(ctx, orgID, resultID, payload, semantic.State); err != nil {
+			return err
+		}
+		return s.completeReplayedSubmission(ctx, orgID, resultID, ownerMethod, ownerSubject)
 	}
 
 	var conflicted []contractsv1.ContextFabricStructureNeedKind
@@ -417,6 +422,22 @@ ON CONFLICT (org_id, prior_result_id, member) DO NOTHING`,
 	}
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("pginvestigation: commit investigation result with structure claims: %w", sanitizeError(err))
+	}
+	return nil
+}
+
+// completeReplayedSubmission completes the submission a VERIFIED idempotent
+// replay saved for (CHAOS-11912): the existing row is this result, in this
+// organization, so the record whose reserved id it is can name it. Called
+// only after verifyIdempotentReplay succeeded.
+func (s *Store) completeReplayedSubmission(ctx context.Context, orgID, resultID, ownerMethod, ownerSubject string) error {
+	if _, err := s.db.ExecContext(ctx, `
+UPDATE acr.context_fabric_investigation_submissions
+   SET state = 'done', result_id = $1, updated_at = clock_timestamp()
+ WHERE org_id = $2 AND reserved_result_id = $1
+   AND owner_auth_method = $3 AND owner_subject = $4
+   AND state IN ('running', 'abandoned')`, resultID, orgID, ownerMethod, ownerSubject); err != nil {
+		return fmt.Errorf("pginvestigation: complete the replayed result's submission: %w", sanitizeError(err))
 	}
 	return nil
 }

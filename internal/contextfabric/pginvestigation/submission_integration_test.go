@@ -244,3 +244,48 @@ func TestFindReusableNeverOffersAnotherPrincipalsSubmissionResult(t *testing.T) 
 	require.True(t, ok, "an unbound answer keeps organization reuse")
 	require.Nil(t, found.SubmissionOwner)
 }
+
+// Round-1 F2: a Save whose result id already exists completes nothing until
+// the existing row is proven to be this result in this organization. An id
+// held by ANOTHER organization's row leaves the record running (the save
+// fails); a verified same-organization replay completes it.
+func TestASaveCompletesItsSubmissionOnlyAfterItsRowIsProven(t *testing.T) {
+	ctx := context.Background()
+	_, store, _ := twoSubmissionStores(t, ctx)
+	owner := submissionPrincipal("user-collision")
+	stranger := storage.Principal{AuthenticationMethod: storage.AuthenticationMethodWebAssertion, Subject: "user-elsewhere", OrgID: "org-elsewhere"}
+	now := time.Date(2026, 10, 29, 12, 0, 0, 0, time.UTC)
+
+	saveAs(t, ctx, store, stranger, "result_collide_01")
+	collided := admissionFor(t, owner, "submission-collide-01", "result_collide_01", now)
+	_, ok, err := store.AdmitSubmission(ctx, collided, now)
+	require.NoError(t, err)
+	require.True(t, ok)
+	err = store.Save(ctx, owner, validResult("result_collide_01"), nil, nil, contextfabric.TimeAxisKeyFor(contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent}),
+		contextfabric.ReuseRetrievalIdentity{}, contextfabric.ReusePromptVersions{}, contextfabric.ReuseVersionAuthorities{}, 0, "",
+		contextfabric.SemanticStateAbsent(contextfabric.SemanticStateAbsenceTurnEndedBeforeInterpretation))
+	require.Error(t, err, "a result id another organization holds is not this result")
+	record, err := store.GetSubmission(ctx, collided.Key, now)
+	require.NoError(t, err)
+	require.Equal(t, contextfabric.SubmissionRunning, record.State, "a failed save completed the record")
+	require.Empty(t, record.ResultID)
+
+	replayed := admissionFor(t, owner, "submission-replay-01", "result_replay_01", now)
+	_, ok, err = store.AdmitSubmission(ctx, replayed, now)
+	require.NoError(t, err)
+	require.True(t, ok)
+	result := validResult("result_replay_01")
+	save := func() error {
+		return store.Save(ctx, owner, result, nil, nil, contextfabric.TimeAxisKeyFor(contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent}),
+			contextfabric.ReuseRetrievalIdentity{}, contextfabric.ReusePromptVersions{}, contextfabric.ReuseVersionAuthorities{}, 0, "",
+			contextfabric.SemanticStateAbsent(contextfabric.SemanticStateAbsenceTurnEndedBeforeInterpretation))
+	}
+	require.NoError(t, save())
+	_, err = store.AbandonSubmission(ctx, replayed.Key, now) // done stays done
+	require.NoError(t, err)
+	require.NoError(t, save(), "an identical replay is accepted")
+	record, err = store.GetSubmission(ctx, replayed.Key, now)
+	require.NoError(t, err)
+	require.Equal(t, contextfabric.SubmissionDone, record.State)
+	require.Equal(t, "result_replay_01", record.ResultID)
+}

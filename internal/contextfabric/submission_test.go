@@ -243,9 +243,10 @@ func TestAReuseCandidateOfAnotherPrincipalsSubmissionIsAMiss(t *testing.T) {
 	}
 }
 
-// The digest covers every request field but request_id and consumer. The
-// field set is read from the production type, so a field added to the
-// request is covered (or this test fails) the day it lands.
+// The digest covers every request field but request_id and the consumer's
+// name and version; consumer.surface is behaviour and is covered. The field
+// set is read from the production type, so a field added to the request is
+// covered (or this test fails) the day it lands.
 func TestSubmissionRequestDigestCoversEveryRequestFieldButCorrelation(t *testing.T) {
 	base := validInvestigationRequest()
 	baseDigest, err := SubmissionRequestDigest(base)
@@ -255,7 +256,7 @@ func TestSubmissionRequestDigestCoversEveryRequestFieldButCorrelation(t *testing
 	if !strings.HasPrefix(baseDigest, "sha256:") || len(baseDigest) != len("sha256:")+64 {
 		t.Fatalf("digest = %q", baseDigest)
 	}
-	excluded := map[string]bool{"RequestID": true, "Consumer": true}
+	excluded := map[string]bool{"RequestID": true, "Consumer": true} // Consumer: perturbs Name, its first field
 	requestType := reflect.TypeOf(base)
 	seen := 0
 	for index := 0; index < requestType.NumField(); index++ {
@@ -285,6 +286,24 @@ func TestSubmissionRequestDigestCoversEveryRequestFieldButCorrelation(t *testing
 	}
 	if seen < 20 {
 		t.Fatalf("walked %d request fields; the request type has more", seen)
+	}
+	// consumer.surface changes the digest (trimmed, as the engine reads
+	// it); name and version do not.
+	surface := base
+	surface.Consumer.Surface = "mcp"
+	if digest, _ := SubmissionRequestDigest(surface); digest == baseDigest {
+		t.Error("consumer surface does not change the digest")
+	}
+	for name, change := range map[string]func(*InvestigationRequest){
+		"name":            func(r *InvestigationRequest) { r.Consumer.Name = "another-client" },
+		"version":         func(r *InvestigationRequest) { r.Consumer.Version = "9.9.9" },
+		"surface spacing": func(r *InvestigationRequest) { r.Consumer.Surface = "  " + r.Consumer.Surface + " " },
+	} {
+		changed := base
+		change(&changed)
+		if digest, _ := SubmissionRequestDigest(changed); digest != baseDigest {
+			t.Errorf("consumer %s changes the digest", name)
+		}
 	}
 	// Deterministic: the same request has the same digest.
 	again, _ := SubmissionRequestDigest(validInvestigationRequest())
