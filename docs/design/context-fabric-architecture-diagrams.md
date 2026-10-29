@@ -3071,7 +3071,13 @@ stateDiagram-v2
 
 Rules the diagram does not draw: `seq` grows by exactly one (the writer assigns
 it, so a gap is a lost frame), `request_id` never changes, `elapsed_ms` never
-decreases, and the `error` event repeats `accepted`'s `reserved_result_id`.
+decreases and steps by at most 11 s (the 10 s heartbeat plus 1 s of scheduling
+slack; `accepted` counts as 0; the silence before a terminal is not measurable
+from the stream), and the `error` event repeats `accepted`'s
+`reserved_result_id`. The data line is one value of compact JSON with no field
+present as empty, zero or null (`DecodeContextFabricInvestigationEventData`
+refuses anything else, so a payload the schema refuses cannot pass on the Go
+side).
 Stage order is `interpreting`, `resolving_subjects`, `reading_facts`,
 `synthesizing`, `validating`; it is a wire vocabulary, distinct from the
 engine's internal failure stages (`internal/contextfabric/stage.go`). Progress

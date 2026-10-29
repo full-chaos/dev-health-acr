@@ -28,9 +28,11 @@ import (
 //   - `stage` events at the engine's stage boundaries, in the fixed order of
 //     ContextFabricInvestigationStages. A stage may be skipped, never revisited,
 //     and at most one stage is open at a time.
-//   - `heartbeat` every ContextFabricInvestigationEventHeartbeatInterval with no
-//     other event, so no hop between ACR and the browser is silent for longer
-//     than its idle limit (INV-3).
+//   - `heartbeat` after ContextFabricInvestigationEventHeartbeatInterval with
+//     no other event, so no hop between ACR and the browser is silent for
+//     longer than its idle limit (INV-3); with the scheduling slack, no two
+//     consecutive elapsed_ms values (accepted counting as 0) are more than
+//     11 s apart.
 //   - exactly one terminal, `result` or `error`, last. `result.result` is the
 //     JSON body the same request gets without the stream, byte for byte;
 //     `error.error` is the error.v1 envelope the same failure gets as JSON.
@@ -63,6 +65,15 @@ const ContextFabricInvestigationEventStreamMediaType = "text/event-stream"
 // this long. It is shorter than every idle limit between ACR and the browser
 // (prod ingress proxy-read-timeout is 60 s).
 const ContextFabricInvestigationEventHeartbeatInterval = 10 * time.Second
+
+// ContextFabricInvestigationEventHeartbeatSlack is the scheduling allowance on
+// top of the heartbeat interval. A writer's timer fires at or after its
+// deadline, never before, so the contract bound is interval + slack: between
+// `accepted` (elapsed 0) and each later event that carries elapsed_ms, and
+// between two such events, at most 11 s pass. The stream check enforces it.
+// The silence before a terminal is not measurable from the stream (a terminal
+// carries no elapsed_ms), so the consumer's own stall watchdog covers it.
+const ContextFabricInvestigationEventHeartbeatSlack = time.Second
 
 // Request headers whose values an `accepted` event echoes. The route reads
 // them from CHAOS-11912 (submission) and CHAOS-11913 (thread) on; until then
@@ -202,7 +213,8 @@ type ContextFabricInvestigationEvent struct {
 	// ContextFabricSubmissionIDHeader and ContextFabricThreadIDHeader.
 	SubmissionID string `json:"submission_id,omitempty"`
 	ThreadID     string `json:"thread_id,omitempty"`
-	// StartedAt (accepted) is when the run started; ElapsedMS counts from it.
+	// StartedAt (accepted) is when the run started, a date-time; ElapsedMS
+	// counts from it. Any date-time the schema accepts is valid here too.
 	StartedAt *time.Time `json:"started_at,omitempty"`
 	// BudgetSeconds (accepted) is the run budget: the request deadline, the
 	// smaller of ACR_REQUEST_TIMEOUT and the caller's wait budget, in whole
@@ -346,9 +358,6 @@ func (e ContextFabricInvestigationEvent) Validate() error {
 	}
 	if present[eventFieldThreadID] && !ValidContextFabricClientCorrelationID(e.ThreadID) {
 		return fmt.Errorf("investigation event thread_id violates the client correlation id grammar")
-	}
-	if present[eventFieldStartedAt] && e.StartedAt.IsZero() {
-		return fmt.Errorf("investigation event started_at must be a real time")
 	}
 	if present[eventFieldBudgetSeconds] && (e.BudgetSeconds < 1 || e.BudgetSeconds > contextFabricEventMaxInteger) {
 		return fmt.Errorf("investigation event budget_seconds must be between 1 and %d", int64(contextFabricEventMaxInteger))

@@ -9,6 +9,7 @@ import (
 	"io"
 	"strconv"
 	"strings"
+	"time"
 )
 
 // ContextFabricInvestigationEventStreamCheck holds one stream to the grammar
@@ -18,7 +19,9 @@ import (
 //
 //   - the first event is `accepted`, with seq 1; no later event is `accepted`;
 //   - seq grows by exactly one per event, and request_id never changes;
-//   - elapsed_ms never decreases;
+//   - elapsed_ms never decreases, and no two consecutive elapsed_ms values
+//     (accepted counting as 0) are more than the heartbeat interval plus its
+//     slack apart: a writer that let the stream go silent fails here;
 //   - a stage starts only when no stage is open and only after every stage
 //     already started (the fixed order, skips allowed, no repeats); it
 //     completes only while it is the open stage;
@@ -40,6 +43,10 @@ type ContextFabricInvestigationEventStreamCheck struct {
 	open             ContextFabricInvestigationStage
 	terminal         bool
 }
+
+// contextFabricEventMaxSilenceMS is the largest elapsed_ms step the stream
+// check accepts.
+const contextFabricEventMaxSilenceMS = int64((ContextFabricInvestigationEventHeartbeatInterval + ContextFabricInvestigationEventHeartbeatSlack) / time.Millisecond)
 
 // ErrContextFabricInvestigationStreamInterrupted is Finish's error for a
 // stream that ended before its terminal event.
@@ -77,6 +84,9 @@ func (c *ContextFabricInvestigationEventStreamCheck) Next(event ContextFabricInv
 	if event.ElapsedMS != nil {
 		if *event.ElapsedMS < c.lastElapsedMS {
 			return fmt.Errorf("event %d: elapsed_ms %d is below the earlier %d", c.count+1, *event.ElapsedMS, c.lastElapsedMS)
+		}
+		if gap := *event.ElapsedMS - c.lastElapsedMS; gap > contextFabricEventMaxSilenceMS {
+			return fmt.Errorf("event %d: %d ms passed since the previous elapsed_ms with no event; a heartbeat is due after %s (slack %s)", c.count+1, gap, ContextFabricInvestigationEventHeartbeatInterval, ContextFabricInvestigationEventHeartbeatSlack)
 		}
 		c.lastElapsedMS = *event.ElapsedMS
 	}
@@ -153,10 +163,11 @@ func ValidateContextFabricInvestigationEventStream(events []ContextFabricInvesti
 
 // DecodeContextFabricInvestigationEventFrames reads a text/event-stream body
 // into its events. It is strict, because it reads ACR's own writer: a frame
-// carries exactly the id, event and data fields (data may span lines, joined
-// with a newline as SSE defines); a comment line (":" first) is skipped; the
-// data is one event that decodes with no unknown field and validates; the
-// SSE id equals seq and the SSE event equals type. maxFrameBytes bounds the
+// carries exactly the id, event and data fields; a comment line (":" first)
+// is skipped; the data passes DecodeContextFabricInvestigationEventData (so it
+// is one line of compact JSON: data split over lines, which SSE allows, is not
+// what the writer writes and is refused); the SSE id equals seq and the SSE
+// event equals type. maxFrameBytes bounds the
 // bytes of one frame. A body that ends inside a frame is an error. It does
 // not check the stream grammar; ValidateContextFabricInvestigationEventStream
 // does.
@@ -209,6 +220,75 @@ func DecodeContextFabricInvestigationEventFrames(body io.Reader, maxFrameBytes i
 	return events, nil
 }
 
+// DecodeContextFabricInvestigationEventData decodes one event's data payload
+// and holds it to the form the writer produces, so a payload the schema would
+// refuse cannot pass as a valid event on the Go side:
+//
+//   - one value of compact JSON (MarshalContextFabricInvestigationEventData
+//     writes nothing else, so whitespace, a leading space after "data:" or data
+//     split over lines is not the writer's);
+//   - no unknown key, and nothing after the value;
+//   - no key the event does not carry: a type-dependent field present with an
+//     empty, zero or null value decodes to the Go zero value, which the type
+//     reads as ABSENT, so a field the schema refuses would otherwise disappear.
+//     The decoded event's own encoding must name exactly the keys the payload
+//     names;
+//   - Validate.
+//
+// Key order is not checked: a payload a generic encoder re-ordered is the same
+// event.
+func DecodeContextFabricInvestigationEventData(data []byte) (ContextFabricInvestigationEvent, error) {
+	var compact bytes.Buffer
+	if err := json.Compact(&compact, data); err != nil {
+		return ContextFabricInvestigationEvent{}, fmt.Errorf("decode data: %w", err)
+	}
+	if !bytes.Equal(compact.Bytes(), data) {
+		return ContextFabricInvestigationEvent{}, fmt.Errorf("data is not one value of compact JSON")
+	}
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.DisallowUnknownFields()
+	var event ContextFabricInvestigationEvent
+	if err := decoder.Decode(&event); err != nil {
+		return ContextFabricInvestigationEvent{}, fmt.Errorf("decode data: %w", err)
+	}
+	if _, err := decoder.Token(); err != io.EOF {
+		return ContextFabricInvestigationEvent{}, fmt.Errorf("data carries trailing content")
+	}
+	if err := event.Validate(); err != nil {
+		return ContextFabricInvestigationEvent{}, err
+	}
+	written, err := MarshalContextFabricInvestigationEventData(event)
+	if err != nil {
+		return ContextFabricInvestigationEvent{}, err
+	}
+	payloadKeys, err := topLevelKeys(data)
+	if err != nil {
+		return ContextFabricInvestigationEvent{}, err
+	}
+	writtenKeys, err := topLevelKeys(written)
+	if err != nil {
+		return ContextFabricInvestigationEvent{}, err
+	}
+	for key := range payloadKeys {
+		if !writtenKeys[key] {
+			return ContextFabricInvestigationEvent{}, fmt.Errorf("data carries %s with an empty, zero or null value; the writer omits an absent field", key)
+		}
+	}
+	return event, nil
+}
+
+func topLevelKeys(object []byte) (map[string]bool, error) {
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(object, &fields); err != nil {
+		return nil, fmt.Errorf("decode data: %w", err)
+	}
+	keys := make(map[string]bool, len(fields))
+	for key := range fields {
+		keys[key] = true
+	}
+	return keys, nil
+}
+
 type contextFabricEventFrame struct {
 	id, kind    *string
 	data        []string
@@ -246,16 +326,8 @@ func (f contextFabricEventFrame) event() (ContextFabricInvestigationEvent, error
 	if f.id == nil || f.kind == nil || !f.sawDataLine {
 		return ContextFabricInvestigationEvent{}, fmt.Errorf("frame lacks id, event or data")
 	}
-	decoder := json.NewDecoder(bytes.NewReader([]byte(strings.Join(f.data, "\n"))))
-	decoder.DisallowUnknownFields()
-	var event ContextFabricInvestigationEvent
-	if err := decoder.Decode(&event); err != nil {
-		return ContextFabricInvestigationEvent{}, fmt.Errorf("decode data: %w", err)
-	}
-	if _, err := decoder.Token(); err != io.EOF {
-		return ContextFabricInvestigationEvent{}, fmt.Errorf("data carries trailing content")
-	}
-	if err := event.Validate(); err != nil {
+	event, err := DecodeContextFabricInvestigationEventData([]byte(strings.Join(f.data, "\n")))
+	if err != nil {
 		return ContextFabricInvestigationEvent{}, err
 	}
 	if *f.kind != string(event.Type) {

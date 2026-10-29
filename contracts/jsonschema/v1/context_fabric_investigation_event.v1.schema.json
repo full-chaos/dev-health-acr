@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://contracts.fullchaos.dev/acr/v1/context_fabric_investigation_event.v1.schema.json",
   "title": "ACR Context Fabric Investigation Event v1",
-  "description": "One event of the investigation event stream: POST /api/v1/context-fabric/investigations with Accept: text/event-stream. Each Server-Sent Events frame is `id: <seq>`, `event: <type>`, `data: <this object as one line of compact JSON>`, then a blank line. A stream is: accepted first, written with the response headers right after admission; stage events in the fixed stage order (a stage may be skipped, never revisited, at most one open at a time); a heartbeat after 10 seconds with no other event; exactly one terminal event, result or error, last. A stream that ends without a terminal event was interrupted: it is neither an answer nor a failure. Progress events carry no claims: no subject, label, count, fact, prompt or model text.",
+  "description": "One event of the investigation event stream: POST /api/v1/context-fabric/investigations with Accept: text/event-stream. Each Server-Sent Events frame is `id: <seq>`, `event: <type>`, `data: <this object as one line of compact JSON, with no field present as empty, zero or null>`, then a blank line. A stream is: accepted first, written with the response headers right after admission; stage events in the fixed stage order (a stage may be skipped, never revisited, at most one open at a time); a heartbeat after 10 seconds with no other event, so no two consecutive elapsed_ms values (accepted counting as 0) are more than 11 seconds apart (1 second of scheduling slack); exactly one terminal event, result or error, last. A stream that ends without a terminal event was interrupted: it is neither an answer nor a failure. Progress events carry no claims: no subject, label, count, fact, prompt or model text.",
   "type": "object",
   "additionalProperties": false,
   "required": [
@@ -89,7 +89,7 @@
       "type": "integer",
       "minimum": 0,
       "maximum": 9007199254740991,
-      "description": "On stage and heartbeat: milliseconds since started_at. It never decreases along a stream."
+      "description": "On stage and heartbeat: milliseconds since started_at. It never decreases along a stream, and steps by at most 11000 from the previous value (0 at accepted): the 10-second heartbeat plus 1 second of scheduling slack."
     },
     "result": {
       "description": "On result: the JSON response body the same request gets without the stream, byte for byte -- the investigation response v1 or v2, or the bounded answer projection when options.max_serialized_bytes is below the size of the result.",

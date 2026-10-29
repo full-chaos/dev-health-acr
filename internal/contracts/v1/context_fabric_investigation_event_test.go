@@ -30,9 +30,10 @@ func eventAsMap(t *testing.T, event ContextFabricInvestigationEvent) map[string]
 	return object
 }
 
-// verdicts reports whether the published schema and the Go validator each
-// accept one serialized event. The Go side is the consumer path: a strict
-// decode, then Validate.
+// verdicts reports whether the published schema and the Go side each accept
+// one serialized event. The Go side is the consumer path,
+// DecodeContextFabricInvestigationEventData: a strict decode that also refuses
+// a key the decoded event does not carry, then Validate.
 func verdicts(t *testing.T, object map[string]any) (schemaAccepts, goAccepts bool, goErr error) {
 	t.Helper()
 	data, err := json.Marshal(object)
@@ -40,11 +41,85 @@ func verdicts(t *testing.T, object map[string]any) (schemaAccepts, goAccepts boo
 		t.Fatal(err)
 	}
 	schemaAccepts = contractcheck.ValidateSerializedStrict("", investigationEventSchemaFile, data) == nil
-	var event ContextFabricInvestigationEvent
-	if goErr = decodeContextFabricStrict(data, &event); goErr == nil {
-		goErr = event.Validate()
-	}
+	_, goErr = DecodeContextFabricInvestigationEventData(data)
 	return schemaAccepts, goErr == nil, goErr
+}
+
+// eventBases is one golden event per type.
+func eventBases(goldens investigationEventGoldens) map[ContextFabricInvestigationEventType]ContextFabricInvestigationEvent {
+	return map[ContextFabricInvestigationEventType]ContextFabricInvestigationEvent{
+		ContextFabricInvestigationEventAccepted:  goldens.single["context_fabric_investigation_event_accepted.v1.json"],
+		ContextFabricInvestigationEventStage:     goldens.single["context_fabric_investigation_event_stage_started.v1.json"],
+		ContextFabricInvestigationEventHeartbeat: goldens.single["context_fabric_investigation_event_heartbeat.v1.json"],
+		ContextFabricInvestigationEventResult:    goldens.single["context_fabric_investigation_event_result.v1.json"],
+		ContextFabricInvestigationEventError:     goldens.single["context_fabric_investigation_event_error_model_deadline.v1.json"],
+	}
+}
+
+// TestInvestigationEventExplicitEmptyFieldsAreRefusedOnBothSides: a
+// type-dependent field PRESENT with null, an empty string or (where 0 is not
+// a value of the field) zero decodes to the Go zero value, which the Go type
+// reads as absent. The schema refuses every such payload, so the Go side must
+// too -- for every type and every field, generated.
+func TestInvestigationEventExplicitEmptyFieldsAreRefusedOnBothSides(t *testing.T) {
+	goldens := buildInvestigationEventGoldens(t)
+	empties := map[contextFabricEventField][]any{
+		eventFieldReservedResultID: {nil, ""},
+		eventFieldSubmissionID:     {nil, ""},
+		eventFieldThreadID:         {nil, ""},
+		eventFieldStartedAt:        {nil, ""},
+		eventFieldBudgetSeconds:    {nil, json.Number("0")},
+		eventFieldStage:            {nil, ""},
+		eventFieldState:            {nil, ""},
+		eventFieldElapsedMS:        {nil},
+		eventFieldResult:           {nil},
+		eventFieldError:            {nil},
+	}
+	cases := 0
+	for kind, base := range eventBases(goldens) {
+		for _, field := range contextFabricEventFields {
+			for _, value := range empties[field] {
+				object := eventAsMap(t, base)
+				object[string(field)] = value
+				schemaOK, goOK, err := verdicts(t, object)
+				if schemaOK || goOK {
+					t.Errorf("%s with %s=%#v: want refused; schema accepted=%t, Go accepted=%t (%v)", kind, field, value, schemaOK, goOK, err)
+				}
+				cases++
+			}
+		}
+	}
+	if cases != 5*17 {
+		t.Fatalf("checked %d cases", cases)
+	}
+}
+
+// TestInvestigationEventValuesBothSidesAccept are the edge values the schema
+// accepts; Go must accept each too.
+func TestInvestigationEventValuesBothSidesAccept(t *testing.T) {
+	goldens := buildInvestigationEventGoldens(t)
+	bases := eventBases(goldens)
+	cases := []struct {
+		name  string
+		kind  ContextFabricInvestigationEventType
+		key   string
+		value any
+	}{
+		{"started_at at the zero instant", ContextFabricInvestigationEventAccepted, "started_at", "0001-01-01T00:00:00Z"},
+		{"started_at with an offset", ContextFabricInvestigationEventAccepted, "started_at", "2026-08-11T18:00:00+02:00"},
+		{"elapsed_ms zero", ContextFabricInvestigationEventStage, "elapsed_ms", json.Number("0")},
+		{"seq at 2^53-1", ContextFabricInvestigationEventStage, "seq", json.Number("9007199254740991")},
+		{"budget_seconds 1", ContextFabricInvestigationEventAccepted, "budget_seconds", json.Number("1")},
+		{"a UUID submission_id", ContextFabricInvestigationEventAccepted, "submission_id", "8f14e45f-ceea-467a-9575-0a1b2c3d4e5f"},
+	}
+	for _, test := range cases {
+		object := eventAsMap(t, bases[test.kind])
+		object[test.key] = test.value
+		schemaOK, goOK, err := verdicts(t, object)
+		if !schemaOK || !goOK {
+			t.Errorf("%s: want accepted; schema accepted=%t, Go accepted=%t (%v)", test.name, schemaOK, goOK, err)
+		}
+	}
 }
 
 // donorValues holds one valid wire value for every type-dependent field,
@@ -87,13 +162,7 @@ func donorValues(t *testing.T, goldens investigationEventGoldens) map[contextFab
 func TestInvestigationEventSchemaAndGoAgreeOnEveryField(t *testing.T) {
 	goldens := buildInvestigationEventGoldens(t)
 	donors := donorValues(t, goldens)
-	bases := map[ContextFabricInvestigationEventType]ContextFabricInvestigationEvent{
-		ContextFabricInvestigationEventAccepted:  goldens.single["context_fabric_investigation_event_accepted.v1.json"],
-		ContextFabricInvestigationEventStage:     goldens.single["context_fabric_investigation_event_stage_started.v1.json"],
-		ContextFabricInvestigationEventHeartbeat: goldens.single["context_fabric_investigation_event_heartbeat.v1.json"],
-		ContextFabricInvestigationEventResult:    goldens.single["context_fabric_investigation_event_result.v1.json"],
-		ContextFabricInvestigationEventError:     goldens.single["context_fabric_investigation_event_error_model_deadline.v1.json"],
-	}
+	bases := eventBases(goldens)
 	if len(bases) != len(ContextFabricInvestigationEventTypes()) {
 		t.Fatal("a base event is missing for an event type")
 	}
@@ -395,11 +464,13 @@ func TestInvestigationEventStreamGrammar(t *testing.T) {
 		{"stage repeats", renumber([]ContextFabricInvestigationEvent{at(result, 0), at(result, 1), at(result, 2), with(at(result, 1), func(e *ContextFabricInvestigationEvent) { e.ElapsedMS = int64Ptr(4000) })}), "do not repeat"},
 		{"stage completes unopened", renumber([]ContextFabricInvestigationEvent{at(result, 0), at(result, 2)}), "completes while the open stage"},
 		{"heartbeat names a closed stage", renumber([]ContextFabricInvestigationEvent{at(result, 0), at(result, 1), at(result, 2), with(at(result, 6), func(e *ContextFabricInvestigationEvent) { e.Stage = ContextFabricStageInterpreting })}), "heartbeat names stage"},
-		{"heartbeat omits the open stage", renumber([]ContextFabricInvestigationEvent{at(result, 0), at(result, 1), with(at(result, 6), func(e *ContextFabricInvestigationEvent) { e.Stage = "" })}), "heartbeat names stage"},
+		{"heartbeat omits the open stage", renumber([]ContextFabricInvestigationEvent{at(result, 0), at(result, 1), with(at(result, 6), func(e *ContextFabricInvestigationEvent) { e.Stage, e.ElapsedMS = "", int64Ptr(5000) })}), "heartbeat names stage"},
 		{"result with a stage open", renumber([]ContextFabricInvestigationEvent{at(result, 0), at(result, 1), at(result, len(result)-1)}), "result while stage"},
 		{"error names another stage", renumber(append(slices.Clone(failure[:len(failure)-1]), with(failure[len(failure)-1], func(e *ContextFabricInvestigationEvent) { e.Stage = ContextFabricStageReadingFacts }))), "the last stage started"},
 		{"error names no stage after one started", renumber(append(slices.Clone(failure[:len(failure)-1]), with(failure[len(failure)-1], func(e *ContextFabricInvestigationEvent) { e.Stage = "" }))), "the last stage started"},
 		{"error reserved id differs", renumber(append(slices.Clone(failure[:len(failure)-1]), with(failure[len(failure)-1], func(e *ContextFabricInvestigationEvent) { e.ReservedResultID = "result_99999999" }))), "reserved_result_id differs"},
+		{"silence over the heartbeat bound", renumber([]ContextFabricInvestigationEvent{at(result, 0), with(at(result, 1), func(e *ContextFabricInvestigationEvent) { e.ElapsedMS = int64Ptr(11001) })}), "a heartbeat is due"},
+		{"silence over the bound between two events", renumber([]ContextFabricInvestigationEvent{at(result, 0), at(result, 1), with(at(result, 2), func(e *ContextFabricInvestigationEvent) { e.ElapsedMS = int64Ptr(4 + 11001) })}), "a heartbeat is due"},
 		{"two terminals", renumber(append(slices.Clone(result), result[len(result)-1])), "follows the terminal"},
 		{"event after the terminal", renumber(append(slices.Clone(result), result[6])), "follows the terminal"},
 	}
@@ -421,6 +492,11 @@ func TestInvestigationEventStreamGrammar(t *testing.T) {
 	early := renumber([]ContextFabricInvestigationEvent{result[0], with(failure[len(failure)-1], func(e *ContextFabricInvestigationEvent) { e.Stage = "" })})
 	if err := ValidateContextFabricInvestigationEventStream(early); err != nil {
 		t.Fatalf("an error before the first stage: %v", err)
+	}
+	// Silence of exactly the interval plus its slack is within the bound.
+	bound := renumber([]ContextFabricInvestigationEvent{result[0], with(result[1], func(e *ContextFabricInvestigationEvent) { e.ElapsedMS = int64Ptr(11000) }), with(result[2], func(e *ContextFabricInvestigationEvent) { e.ElapsedMS = int64Ptr(22000) }), result[len(result)-1]})
+	if err := ValidateContextFabricInvestigationEventStream(bound); err != nil {
+		t.Fatalf("silence at the bound: %v", err)
 	}
 	// Skipping stages is allowed (answer reuse, early clarification).
 	skipped := renumber([]ContextFabricInvestigationEvent{result[0], result[1], result[2], result[len(result)-1]})
@@ -452,10 +528,6 @@ func TestInvestigationEventFramesRoundTrip(t *testing.T) {
 	if events, err := DecodeContextFabricInvestigationEventFrames(strings.NewReader(variant), 1<<20); err != nil || len(events) != len(decoded) {
 		t.Fatalf("CRLF and comments: %d events, %v", len(events), err)
 	}
-	split := "id: 2\nevent: stage\ndata: {\"schema_version\":\"context_fabric_investigation_event.v1\",\"type\":\"stage\",\ndata: \"request_id\":\"request_12345678\",\"seq\":2,\"stage\":\"interpreting\",\"state\":\"started\",\"elapsed_ms\":4}\n\n"
-	if events, err := DecodeContextFabricInvestigationEventFrames(strings.NewReader(split), 1<<20); err != nil || len(events) != 1 || events[0].Stage != ContextFabricStageInterpreting {
-		t.Fatalf("data over two lines: %+v, %v", events, err)
-	}
 
 	first := "id: 1\nevent: accepted\ndata: " + string(mustEventData(t, goldens.resultStream[0])) + "\n\n"
 	cases := []struct {
@@ -469,7 +541,11 @@ func TestInvestigationEventFramesRoundTrip(t *testing.T) {
 		{"id twice", strings.Replace(first, "id: 1\n", "id: 1\nid: 1\n", 1), 1 << 20, "id twice"},
 		{"no data", "id: 1\nevent: accepted\n\n", 1 << 20, "lacks"},
 		{"unknown JSON key", strings.Replace(first, "{\"schema_version\"", "{\"partial\":true,\"schema_version\"", 1), 1 << 20, "unknown field"},
-		{"two JSON values", strings.Replace(first, "}\n\n", "} {}\n\n", 1), 1 << 20, "trailing"},
+		{"two JSON values", strings.Replace(first, "}\n\n", "} {}\n\n", 1), 1 << 20, "decode data"},
+		{"data over two lines", strings.Replace(first, ",\"seq\":1,", ",\ndata: \"seq\":1,", 1), 1 << 20, "compact"},
+		{"a second space after data:", strings.Replace(first, "data: {", "data:  {", 1), 1 << 20, "compact"},
+		{"an explicit empty field", strings.Replace(first, ",\"budget_seconds\":120}", ",\"budget_seconds\":120,\"thread_id\":\"\"}", 1), 1 << 20, "thread_id"},
+		{"an explicit null field", strings.Replace(first, ",\"budget_seconds\":120}", ",\"budget_seconds\":120,\"stage\":null}", 1), 1 << 20, "stage"},
 		{"ends inside a frame", strings.TrimSuffix(first, "\n"), 1 << 20, "ends inside"},
 		{"frame over the limit", first, 64, "exceeds"},
 	}
