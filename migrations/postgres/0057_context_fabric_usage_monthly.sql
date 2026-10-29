@@ -8,9 +8,11 @@
 -- is not counted here (it counts to concurrency only).
 --
 -- Content-free by construction: counts only, no question, answer, principal
--- or result id. It is outside retention (deleting submission records leaves
--- it unchanged) and outside the organization purge (orgpurge KeptTables),
--- like the audit trail.
+-- or result id. It is outside retention: deleting submission records or
+-- results leaves it unchanged. An organization purge deletes the
+-- organization's rows (orgpurge purgeTables, lead ruling 2026-10-29), so no
+-- row keyed by a purged organization stays; the write fence (0052) below
+-- refuses a later write for it.
 --
 -- cost_micro_usd stays NULL: ACR records token counts per model call
 -- (ModelExecutionReceipt.Usage) but no price, so it meters no cost. A
@@ -30,3 +32,11 @@ CREATE TABLE IF NOT EXISTS acr.context_fabric_usage_monthly (
     CONSTRAINT ck_acr_cf_usage_monthly_runs CHECK (platform_runs >= 0),
     CONSTRAINT ck_acr_cf_usage_monthly_cost CHECK (cost_micro_usd IS NULL OR cost_micro_usd >= 0)
 );
+
+-- The organization write fence (0052), on the new table.
+DROP TRIGGER IF EXISTS refuse_purged_org_insert ON acr.context_fabric_usage_monthly;
+DROP TRIGGER IF EXISTS refuse_purged_org_update ON acr.context_fabric_usage_monthly;
+CREATE TRIGGER refuse_purged_org_insert BEFORE INSERT ON acr.context_fabric_usage_monthly
+    FOR EACH ROW EXECUTE FUNCTION acr.context_fabric_refuse_purged_org();
+CREATE TRIGGER refuse_purged_org_update BEFORE UPDATE OF org_id ON acr.context_fabric_usage_monthly
+    FOR EACH ROW WHEN (NEW.org_id IS DISTINCT FROM OLD.org_id) EXECUTE FUNCTION acr.context_fabric_refuse_purged_org();

@@ -19,8 +19,9 @@ import (
 //     (organization, calendar month UTC) that counts every ADMITTED run on
 //     the deployment's own model. A run on the organization's own model counts
 //     to the two concurrency limits only. Written in the admission
-//     transaction; nothing else deletes or decrements it, and deleting
-//     submission records leaves it unchanged.
+//     transaction; nothing decrements it, and deleting submission records
+//     or results leaves it unchanged. Only the organization purge deletes
+//     an organization's rows (orgpurge purgeTables).
 //
 // What is never counted: a repeat of an admitted key (a replay, an
 // in-progress answer, any same-digest or mismatched repeat), a status read,

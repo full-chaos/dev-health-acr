@@ -124,6 +124,10 @@ var purgeTables = []tableSpec{
 	{Name: "context_fabric_projection_checkpoints", Where: matchOrg("org_id")},
 	{Name: "context_fabric_projection_rebuild_markers", Where: matchOrg("org_id")},
 	{Name: "context_fabric_investigation_submissions", Where: matchOrg("org_id")},
+	// CHAOS-11914 (lead ruling 2026-10-29): retention and result deletion
+	// keep the monthly usage aggregate; an organization purge deletes it, so
+	// no row keyed by a purged organization stays.
+	{Name: "context_fabric_usage_monthly", Where: matchOrg("org_id")},
 	{Name: "context_fabric_investigation_results", Where: matchOrg("org_id")},
 	{Name: "context_fabric_model_execution_receipts", Where: matchOrg("org_id")},
 	{Name: "context_fabric_org_model_config", Where: matchOrg("org_id")},
@@ -150,12 +154,10 @@ func PurgedTables() []string {
 	return names
 }
 
-// KeptTables are org-keyed tables the purge never deletes: the audit trail,
-// the purge marker, which is the fence that outlives the purge, and the
-// content-free monthly usage aggregate (CHAOS-11914, plan §2.6/§2.9: counts
-// only, outside retention and outside the purged backing set).
+// KeptTables are org-keyed tables the purge never deletes: the audit trail
+// and the purge marker, which is the fence that outlives the purge.
 func KeptTables() []string {
-	return []string{"audit_events", "context_fabric_org_purge_markers", "context_fabric_usage_monthly"}
+	return []string{"audit_events", "context_fabric_org_purge_markers"}
 }
 
 // CascadedTables are org-keyed tables whose rows go with their

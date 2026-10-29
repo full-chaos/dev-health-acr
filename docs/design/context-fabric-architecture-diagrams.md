@@ -3264,6 +3264,8 @@ model, increment `acr.context_fabric_usage_monthly` under the monthly
 allowance. Any refusal rolls all three back and answers `429
 concurrency_limited{limit}` or `429 allowance_exhausted`. A repeat of an
 existing key is decided before any limit and is never refused by one.
+Retention and result deletion keep the aggregate; the organization purge
+deletes the organization's rows, and the write fence covers the table.
 
 ```mermaid
 flowchart TD

@@ -352,6 +352,9 @@ GRANT SELECT, DELETE ON TABLE acr.context_fabric_projection_rebuild_markers TO :
 REVOKE SELECT, INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER ON TABLE acr.context_fabric_investigation_submissions FROM :"purge_user";
 GRANT SELECT, DELETE ON TABLE acr.context_fabric_investigation_submissions TO :"purge_user";
 -- purge table list: orgpurge purgeTables
+REVOKE SELECT, INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER ON TABLE acr.context_fabric_usage_monthly FROM :"purge_user";
+GRANT SELECT, DELETE ON TABLE acr.context_fabric_usage_monthly TO :"purge_user";
+-- purge table list: orgpurge purgeTables
 REVOKE SELECT, INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER ON TABLE acr.context_fabric_investigation_results FROM :"purge_user";
 GRANT SELECT, DELETE ON TABLE acr.context_fabric_investigation_results TO :"purge_user";
 -- purge table list: orgpurge purgeTables
