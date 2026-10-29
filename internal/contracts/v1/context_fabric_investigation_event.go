@@ -399,10 +399,11 @@ func (e ContextFabricInvestigationEvent) Validate() error {
 }
 
 // validateContextFabricEventResultBody checks how a result body travels: one
-// compact JSON object (so it is carried unchanged) with a result_id.
+// compact JSON value, so it is carried unchanged.
 // validateContextFabricEventResultBodyInFull then holds it to its
 // schema_version -- the one list of the bodies the JSON 200 response of the
-// route can be -- and to that version's own contract.
+// route can be -- and to that version's own contract (an object, its
+// result_id and request_id bounds included).
 func validateContextFabricEventResultBody(body json.RawMessage) error {
 	var compact bytes.Buffer
 	if err := json.Compact(&compact, body); err != nil {
@@ -410,15 +411,6 @@ func validateContextFabricEventResultBody(body json.RawMessage) error {
 	}
 	if !bytes.Equal(compact.Bytes(), body) {
 		return fmt.Errorf("investigation result event body must be compact JSON, so it travels unchanged")
-	}
-	var identity struct {
-		ResultID string `json:"result_id"`
-	}
-	if err := json.Unmarshal(body, &identity); err != nil {
-		return fmt.Errorf("investigation result event body must be a JSON object: %w", err)
-	}
-	if !stringLengthBetween(identity.ResultID, 8, 256) {
-		return fmt.Errorf("investigation result event body result_id violates v1 bounds")
 	}
 	return nil
 }
