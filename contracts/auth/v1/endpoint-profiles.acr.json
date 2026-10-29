@@ -410,6 +410,64 @@
       }
     },
     {
+      "id": "GET /api/v1/context-fabric/investigations/submissions/{submission_id} [dev-health-acr-api]",
+      "surface_kind": "rest",
+      "method": "GET",
+      "route": "/api/v1/context-fabric/investigations/submissions/{submission_id}",
+      "graphql_field_name": null,
+      "service": "dev-health-acr-api",
+      "source": {
+        "file": "internal/api/app.go",
+        "line": 99
+      },
+      "classification": "protected",
+      "public_rationale": null,
+      "accepted_credential_classes": [
+        "acr_client_credential",
+        "acr_web_assertion"
+      ],
+      "primary_validator": {
+        "description": "protectedRuntimeHandler(RequestClassContext, ScopeContextRead, entitlement=true, allowWebAssertions=true), applied at the end of ContextFabricSubmissionStatusHandler.",
+        "anchor": {
+          "path": "internal/api/context_fabric_submission_status.go",
+          "line": 116,
+          "line_end": 116,
+          "note": "a.protectedRuntimeHandler(limits.RequestClassContext, auth.ScopeContextRead"
+        }
+      },
+      "token_shape": {
+        "token_type": "fcacr_ bearer OR X-ACR-Web-Assertion",
+        "issuer": null,
+        "audience": null,
+        "algorithm": null
+      },
+      "reachable_validators": [
+        {
+          "description": "Same single-dispatch guarantee -- see web_assertion_middleware.go:11-16.",
+          "anchor": {
+            "path": "internal/auth/web_assertion_middleware.go",
+            "line": 11,
+            "line_end": 16,
+            "note": "func (a *Authenticator) authenticateWebAssertion("
+          },
+          "is_intended_validator": true,
+          "reachable_but_not_owner": false
+        }
+      ],
+      "action": "context_fabric.investigation.submission.status.read",
+      "resource_resolver": "submission_id path param; the record is keyed (org_id, owner auth method, owner subject, submission_id) from the authenticated principal (SubmissionKeyFor), so another principal's or another organization's submission id is not found by construction (CHAOS-11913).",
+      "tenant_requirement": "org_scoped",
+      "current_state_cache_behavior": "Reads the caller's own submission record, applying the reconcile rule; runs nothing.",
+      "impersonation_policy": "not_applicable_non_main_app",
+      "entitlement_requirement": "agentContextRuntimeEntitlement",
+      "disclosure_behavior": "writeSubmissionNotFound(): one 404 not_found envelope for unknown, malformed and another principal's ids; 503 store_unavailable on a store failure.",
+      "gaps": [],
+      "class_disambiguator": {
+        "kind": "dedicated_header",
+        "name": "X-ACR-Web-Assertion"
+      }
+    },
+    {
       "id": "GET /api/v1/context-fabric/data/catalog [dev-health-acr-api]",
       "surface_kind": "rest",
       "method": "GET",
