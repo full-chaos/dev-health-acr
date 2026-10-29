@@ -89,6 +89,9 @@ func (s *Store) AdmitSubmission(ctx context.Context, admission contextfabric.Sub
 	if admission.RequestDigest == "" || admission.ReservedResultID == "" || !admission.ExpiresAt.After(now) {
 		return contextfabric.SubmissionRecord{}, false, errors.New("memoryinvestigation: submission digest, reserved result id and a future expiry are required")
 	}
+	if admission.ThreadID != "" && !contextfabric.ValidSubmissionID(admission.ThreadID) {
+		return contextfabric.SubmissionRecord{}, false, errors.New("memoryinvestigation: thread id is malformed")
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if existing, found := s.submissions[admission.Key]; found {
@@ -103,7 +106,7 @@ func (s *Store) AdmitSubmission(ctx context.Context, admission contextfabric.Sub
 		return contextfabric.SubmissionRecord{}, false, fmt.Errorf("memoryinvestigation: reserved result id is already reserved")
 	}
 	record := contextfabric.SubmissionRecord{
-		Key: admission.Key, RequestDigest: admission.RequestDigest, ReservedResultID: admission.ReservedResultID,
+		Key: admission.Key, RequestDigest: admission.RequestDigest, ReservedResultID: admission.ReservedResultID, ThreadID: admission.ThreadID,
 		State: contextfabric.SubmissionRunning, AdmittedAt: now.UTC(), UpdatedAt: now.UTC(), ExpiresAt: admission.ExpiresAt.UTC(),
 	}
 	s.submissions[admission.Key] = record

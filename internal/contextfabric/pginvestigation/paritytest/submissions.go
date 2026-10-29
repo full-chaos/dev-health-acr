@@ -73,6 +73,36 @@ func RunSubmissionSuite(t *testing.T, newStore func(t *testing.T) SubmissionStor
 		}
 	})
 
+	t.Run("the thread is stored and a repeat keeps the first", func(t *testing.T) {
+		store := newStore(t)
+		key, err := contextfabric.SubmissionKeyFor(owner, "submission-parity-thread")
+		if err != nil {
+			t.Fatal(err)
+		}
+		admission := contextfabric.SubmissionAdmission{Key: key, RequestDigest: digest, ReservedResultID: "result_parity_thread", ThreadID: "thread-parity-11913", ExpiresAt: now.Add(time.Minute)}
+		if record, admitted, err := store.AdmitSubmission(context.Background(), admission, now); err != nil || !admitted || record.ThreadID != "thread-parity-11913" {
+			t.Fatalf("admit = %+v admitted=%t err=%v", record, admitted, err)
+		}
+		again := admission
+		again.ThreadID = "thread-parity-other"
+		if record, admitted, err := store.AdmitSubmission(context.Background(), again, now); err != nil || admitted || record.ThreadID != "thread-parity-11913" {
+			t.Fatalf("repeat = %+v admitted=%t err=%v, want the first thread", record, admitted, err)
+		}
+		if record := state(t, store, key, now); record.ThreadID != "thread-parity-11913" {
+			t.Fatalf("read thread = %q", record.ThreadID)
+		}
+		bad := admission
+		bad.Key.SubmissionID, bad.ReservedResultID, bad.ThreadID = "submission-parity-badthread", "result_parity_badthread", "bad thread"
+		if _, _, err := store.AdmitSubmission(context.Background(), bad, now); err == nil {
+			t.Fatal("a malformed thread id was admitted")
+		}
+		none := admission
+		none.Key.SubmissionID, none.ReservedResultID, none.ThreadID = "submission-parity-nothread", "result_parity_nothread", ""
+		if record, _, err := store.AdmitSubmission(context.Background(), none, now); err != nil || record.ThreadID != "" {
+			t.Fatalf("no thread = %+v err=%v", record, err)
+		}
+	})
+
 	t.Run("save completes the record and binds the owner", func(t *testing.T) {
 		store := newStore(t)
 		admission := admit(t, store, "save")

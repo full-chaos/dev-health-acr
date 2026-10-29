@@ -74,6 +74,13 @@ func (a *App) ContextFabricInvestigationHandler(investigator contextfabric.Inves
 			writeError(w, r, http.StatusBadRequest, "invalid_request", "Context Fabric investigation submission id is invalid", false, nil)
 			return
 		}
+		// CHAOS-11913: the thread the submission belongs to, stored on its
+		// record. Same grammar, same refusal.
+		threadID, threadValid := investigationThreadID(r)
+		if !threadValid {
+			writeError(w, r, http.StatusBadRequest, "invalid_request", "Context Fabric investigation thread id is invalid", false, nil)
+			return
+		}
 		principal, ok := auth.PrincipalFromContext(r.Context())
 		if !ok {
 			writeError(w, r, http.StatusUnauthorized, "invalid_token", "Missing or invalid ACR credential", false, nil)
@@ -106,7 +113,7 @@ func (a *App) ContextFabricInvestigationHandler(investigator contextfabric.Inves
 		var submission *admittedInvestigationSubmission
 		reservedResultID := ""
 		if submissionID != "" {
-			admitted, proceed := a.admitInvestigationSubmission(w, r, principal, request, submissionID)
+			admitted, proceed := a.admitInvestigationSubmission(w, r, principal, request, submissionID, threadID)
 			if !proceed {
 				return
 			}

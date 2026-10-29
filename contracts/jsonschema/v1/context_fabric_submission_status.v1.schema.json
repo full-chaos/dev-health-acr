@@ -1,0 +1,35 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://contracts.fullchaos.dev/acr/v1/context_fabric_submission_status.v1.schema.json",
+  "title": "Context Fabric Submission Status v1",
+  "description": "The caller's own submission record (CHAOS-11913): GET /api/v1/context-fabric/investigations/submissions/{submission_id}. Served to the principal that admitted the submission only; any other caller, and an unknown id, get the same 404 not_found. A client that lost a create response polls this and replays result_id when state is done.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "submission_id", "state", "reserved_result_id", "updated_at"],
+  "properties": {
+    "schema_version": { "const": "context_fabric_submission_status.v1" },
+    "submission_id": { "type": "string", "minLength": 8, "maxLength": 128, "pattern": "^[A-Za-z0-9._:-]{8,128}$" },
+    "state": {
+      "enum": ["running", "done", "done_unsaved", "abandoned"],
+      "description": "running: the run is live. done: result_id names the final result. done_unsaved: the answer was served but not stored, so there is nothing to replay. abandoned: the run ended without an answer, or ran past its budget plus 30 seconds. No state runs the request again."
+    },
+    "reserved_result_id": { "type": "string", "minLength": 8, "maxLength": 256 },
+    "result_id": {
+      "type": "string",
+      "minLength": 8,
+      "maxLength": 256,
+      "description": "Present exactly when state is done: the reserved id, or the reused answer's id when the run served one. Read it with GET /api/v1/context-fabric/investigations/{result_id}, which decides the read again."
+    },
+    "thread_id": {
+      "type": "string",
+      "minLength": 8,
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9._:-]{8,128}$",
+      "description": "The X-ACR-Thread-ID the submission was admitted with, when it named one."
+    },
+    "updated_at": { "type": "string", "format": "date-time" }
+  },
+  "if": { "properties": { "state": { "const": "done" } } },
+  "then": { "required": ["result_id"] },
+  "else": { "not": { "required": ["result_id"] } }
+}

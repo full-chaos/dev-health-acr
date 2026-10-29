@@ -110,6 +110,9 @@ func validOpenAPIPath(path string) bool {
 		// what stops an unreviewed path from reaching the published
 		// contract, and a wildcard would surrender exactly that.
 		"/api/v1/context-fabric/investigations/{result_id}",
+		// CHAOS-11913: the caller's own submission record, listed one by
+		// one for the same reason.
+		"/api/v1/context-fabric/investigations/submissions/{submission_id}",
 		// CHAOS-7071: the direct data routes of CHAOS-7036 (E.5), listed
 		// one by one for the same reason as above.
 		"/api/v1/context-fabric/data/catalog",

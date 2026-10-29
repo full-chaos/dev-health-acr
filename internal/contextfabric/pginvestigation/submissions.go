@@ -23,7 +23,7 @@ var (
 	_ contextfabric.SubmissionUnsavedMarker = (*Store)(nil)
 )
 
-const submissionColumns = `org_id, owner_auth_method, owner_subject, submission_id, request_digest, reserved_result_id, state, result_id, admitted_at, updated_at, expires_at`
+const submissionColumns = `org_id, owner_auth_method, owner_subject, submission_id, request_digest, reserved_result_id, state, result_id, thread_id, admitted_at, updated_at, expires_at`
 
 // storedResultExists is the reconcile rule's condition: the record's reserved
 // result is stored for its organization AND bound to the record's own owner
@@ -63,13 +63,14 @@ type submissionScanner interface {
 func scanSubmission(row submissionScanner) (contextfabric.SubmissionRecord, error) {
 	var record contextfabric.SubmissionRecord
 	var state string
-	var resultID sql.NullString
+	var resultID, threadID sql.NullString
 	if err := row.Scan(&record.Key.OrgID, &record.Key.Owner.AuthenticationMethod, &record.Key.Owner.Subject, &record.Key.SubmissionID,
-		&record.RequestDigest, &record.ReservedResultID, &state, &resultID, &record.AdmittedAt, &record.UpdatedAt, &record.ExpiresAt); err != nil {
+		&record.RequestDigest, &record.ReservedResultID, &state, &resultID, &threadID, &record.AdmittedAt, &record.UpdatedAt, &record.ExpiresAt); err != nil {
 		return contextfabric.SubmissionRecord{}, err
 	}
 	record.State = contextfabric.SubmissionState(state)
 	record.ResultID = resultID.String
+	record.ThreadID = threadID.String
 	record.AdmittedAt, record.UpdatedAt, record.ExpiresAt = record.AdmittedAt.UTC(), record.UpdatedAt.UTC(), record.ExpiresAt.UTC()
 	return record, nil
 }
@@ -95,15 +96,19 @@ func (s *Store) AdmitSubmission(ctx context.Context, admission contextfabric.Sub
 	if admission.RequestDigest == "" || admission.ReservedResultID == "" || !admission.ExpiresAt.After(now) {
 		return contextfabric.SubmissionRecord{}, false, errors.New("pginvestigation: submission digest, reserved result id and a future expiry are required")
 	}
+	if admission.ThreadID != "" && !contextfabric.ValidSubmissionID(admission.ThreadID) {
+		return contextfabric.SubmissionRecord{}, false, errors.New("pginvestigation: thread id is malformed")
+	}
+	threadID := sql.NullString{String: admission.ThreadID, Valid: admission.ThreadID != ""}
 	key := admission.Key
 	row := s.db.QueryRowContext(ctx, `
 INSERT INTO acr.context_fabric_investigation_submissions
-    (org_id, owner_auth_method, owner_subject, submission_id, request_digest, reserved_result_id, state, admitted_at, updated_at, expires_at)
-VALUES ($1, $2, $3, $4, $5, $6, 'running', $7, $7, $8)
+    (org_id, owner_auth_method, owner_subject, submission_id, request_digest, reserved_result_id, state, thread_id, admitted_at, updated_at, expires_at)
+VALUES ($1, $2, $3, $4, $5, $6, 'running', $9, $7, $7, $8)
 ON CONFLICT (org_id, owner_auth_method, owner_subject, submission_id) DO NOTHING
 RETURNING `+submissionColumns,
 		key.OrgID, key.Owner.AuthenticationMethod, key.Owner.Subject, key.SubmissionID,
-		admission.RequestDigest, admission.ReservedResultID, now.UTC(), admission.ExpiresAt.UTC())
+		admission.RequestDigest, admission.ReservedResultID, now.UTC(), admission.ExpiresAt.UTC(), threadID)
 	record, err := scanSubmission(row)
 	switch {
 	case err == nil:

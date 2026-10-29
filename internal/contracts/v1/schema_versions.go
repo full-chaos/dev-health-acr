@@ -35,6 +35,9 @@ var AllSchemaVersions = []string{
 	// (Accept: text/event-stream on the create-investigation route).
 	// Reserved ahead of the route writer; the stream flag gates it.
 	ContextFabricInvestigationEventSchema,
+	// CHAOS-11913: the caller's own submission record
+	// (GET /api/v1/context-fabric/investigations/submissions/{submission_id}).
+	ContextFabricSubmissionStatusSchema,
 	MCPContextForTaskRequestSchema,
 	MCPContextForTaskResponseSchema,
 	MCPSourceEvidenceRequestSchema,

@@ -238,6 +238,22 @@ func TestSubmissionOnPostgresAcrossTwoInstances(t *testing.T) {
 		}
 	})
 
+	// CHAOS-11913: the status read on the OTHER instance names the result
+	// and the thread; another principal gets the unknown-id answer.
+	t.Run("status_across_instances", func(t *testing.T) {
+		harness := newPostgresSubmissionHarness(t, dsn)
+		served := servedResultID(t, harness.postThread(0, harness.tokenA, "submission-pg-status01", "thread-pg-11913-status", submissionQuestion))
+		status := decodeSubmissionStatus(t, harness.status(1, harness.tokenA, "submission-pg-status01"))
+		if status.State != contractsv1.ContextFabricSubmissionDone || status.ResultID != served || status.ThreadID != "thread-pg-11913-status" {
+			t.Fatalf("status = %+v", status)
+		}
+		other := harness.status(1, harness.tokenB, "submission-pg-status01")
+		unknown := harness.status(1, harness.tokenB, "submission-pg-unknown01")
+		if other.Code != http.StatusNotFound || !sameErrorBody(t, other, unknown) {
+			t.Fatalf("another principal = %d %s", other.Code, other.Body.String())
+		}
+	})
+
 	// INV-1, per surface: the stored row carries its owner, and every
 	// surface's decision on it refuses another principal of the same org
 	// and grant -- result_by_id through the real route on the other

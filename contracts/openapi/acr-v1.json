@@ -449,6 +449,9 @@
           },
           {
             "$ref": "#/components/parameters/SubmissionID"
+          },
+          {
+            "$ref": "#/components/parameters/ThreadID"
           }
         ],
         "requestBody": {
@@ -645,6 +648,78 @@
             "$ref": "#/components/responses/Error"
           },
           "413": {
+            "$ref": "#/components/responses/Error"
+          },
+          "426": {
+            "$ref": "#/components/responses/Error"
+          },
+          "429": {
+            "$ref": "#/components/responses/Error"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error"
+          },
+          "503": {
+            "$ref": "#/components/responses/Error"
+          },
+          "504": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/api/v1/context-fabric/investigations/submissions/{submission_id}": {
+      "get": {
+        "operationId": "getContextFabricSubmissionStatus",
+        "summary": "Read the caller's own submission record.",
+        "description": "CHAOS-11913: the record of one X-ACR-Submission-ID the caller admitted on POST /api/v1/context-fabric/investigations. A client that lost a create response polls this (every 3 s) and replays result_id through GET /api/v1/context-fabric/investigations/{result_id} once the state is done; done_unsaved and abandoned mean ask again with a new submission id. Strictly read-only: it runs nothing. The read applies the record's reconcile rule: a running record whose reserved result is stored reads as done, and one past its budget plus 30 seconds reads as abandoned. The record is keyed by the authenticated principal: another principal's submission id, an unknown one and a malformed one all answer the same 404 not_found, so a submission id is never an existence oracle. Each read is authorized afresh.",
+        "x-required-scope": "context:read",
+        "x-required-entitlement": "agent_context_runtime",
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {
+            "webAssertionAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/RequestID"
+          },
+          {
+            "$ref": "#/components/parameters/ClientVersion"
+          },
+          {
+            "name": "submission_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 8,
+              "maxLength": 128,
+              "pattern": "^[A-Za-z0-9._:-]{8,128}$"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The caller's submission record.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "../jsonschema/v1/context_fabric_submission_status.v1.schema.json"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
             "$ref": "#/components/responses/Error"
           },
           "426": {
@@ -2899,6 +2974,18 @@
         "in": "header",
         "required": false,
         "description": "Optional id of one user submit (CHAOS-11912): 8 to 128 characters of letters, digits, '.', '_', ':' and '-' (a UUID fits). The service admits the id once for the authenticated principal, bound to the request's semantic digest (every body field but request_id and consumer.name/consumer.version; consumer.surface is included, trimmed), and runs the request at most once under it. A repeat of an admitted id never runs the request again: a done submission is answered with its stored result exactly as GET /api/v1/context-fabric/investigations/{result_id} serves it, re-authorized for the caller; any other repeat is a 409 submission_mismatch, submission_in_progress (with Retry-After), submission_unsaved or submission_abandoned. A result that completes a submission is served to that submission's principal only, on every read surface. A malformed value is 400 invalid_request. Absent, the request runs as before and its result keeps organization-bearer reads.",
+        "schema": {
+          "type": "string",
+          "minLength": 8,
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9._:-]{8,128}$"
+        }
+      },
+      "ThreadID": {
+        "name": "X-ACR-Thread-ID",
+        "in": "header",
+        "required": false,
+        "description": "Optional id of the conversation this turn belongs to (CHAOS-11913): the same grammar as X-ACR-Submission-ID. With a submission id, the service stores it on the submission record and the status read returns it. It is not part of the request digest: a retry of a submission id keeps the first admission's thread. A malformed value is 400 invalid_request.",
         "schema": {
           "type": "string",
           "minLength": 8,

@@ -47,6 +47,7 @@ var publicRoutes = []publicRoute{
 	{pattern: "POST /api/v1/agent-context/episodes", method: "POST", path: "/api/v1/agent-context/episodes", gated: true},
 	{pattern: "POST " + ContextFabricInvestigationsPath, method: "POST", path: ContextFabricInvestigationsPath, gated: true},
 	{pattern: "GET " + ContextFabricInvestigationResultPath, method: "GET", path: "/api/v1/context-fabric/investigations/res_1", gated: true},
+	{pattern: "GET " + ContextFabricSubmissionStatusPath, method: "GET", path: "/api/v1/context-fabric/investigations/submissions/submission-0001", gated: true},
 	{pattern: "GET " + ContextFabricDataCatalogPath, method: "GET", path: ContextFabricDataCatalogPath, gated: true},
 	{pattern: "POST " + ContextFabricDataSubjectsPath, method: "POST", path: ContextFabricDataSubjectsPath, gated: true},
 	{pattern: "POST " + ContextFabricDataFactsPath, method: "POST", path: ContextFabricDataFactsPath, gated: true},
