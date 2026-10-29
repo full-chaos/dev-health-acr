@@ -462,6 +462,8 @@ provision_ops_control_plane() {
   compose up -d postgres valkey pgbouncer mailpit migrate go-api-roles go-api query-api >/dev/null
   token="$(mint_ops_service_token)" || die 'Ops credential provisioning failed'
   write_secret "$STATE/secrets/ops-token" "$token"
+  # Host-readable copy for ensure_go_api_ready: secrets/ops-token is chowned to the acr-api UID.
+  write_secret "$STATE/ops-probe-token" "$token"
   wait_go_api "$token"
   if ! output="$(dho admin orgs create --name "${PROJECT} E2E" --slug "$PROJECT" --description 'isolated compose E2E' --tier community)"; then
     printf '%s\n' "$output" >&2
@@ -637,13 +639,28 @@ build_host_mcp() {
   go build -o "$STATE/acr-mcp" ./cmd/acr-mcp
 }
 
+# start_acr_after_go_api starts acr-api only once the Go ops api internal listener answers. acr-api
+# checks entitlement at boot and exits when the listener is down; `compose up acr-api` may recreate
+# go-api first (service_started does not wait for its listener), and a recent ops change delays the
+# listener by the OTLP startup flush, so acr-api lost that race and nginx then logged
+# "host not found in upstream acr-api" (CHAOS-11890).
+ensure_go_api_ready() {
+  compose up -d go-api >/dev/null
+  wait_go_api "$(<"$STATE/ops-probe-token")"
+}
+
+start_acr_after_go_api() {
+  ensure_go_api_ready
+  compose up -d acr-db-init acr-migrate acr-api acr-tls-proxy >/dev/null
+}
+
 # prepare_stack is the reusable boundary: after it returns, the isolated stack is seeded,
 # TLS-ready, holds a scoped ACR credential at $STATE/secrets/acr-token, and has a host-local
 # acr-mcp binary at $STATE/acr-mcp. It deliberately performs no client assertions, so suites
 # can attach their own test hook without inheriting this file's smoke expectations.
 prepare_stack() {
   bootstrap_ops
-  compose up -d acr-db-init acr-migrate acr-api acr-tls-proxy >/dev/null
+  start_acr_after_go_api
   wait_https_ready
   record_acl_probe
   create_acr_credential
@@ -758,7 +775,8 @@ main() {
     start_happy
     inject_existing_volume_drift
     compose down --remove-orphans >/dev/null
-    compose up -d postgres clickhouse valkey pgbouncer mailpit migrate go-api-roles go-api acr-db-init acr-migrate acr-api acr-tls-proxy >/dev/null
+    compose up -d postgres clickhouse valkey pgbouncer mailpit migrate go-api-roles go-api >/dev/null
+    start_acr_after_go_api
     wait_https_ready
     record_acl_probe
     run_mcp "$(<"$STATE/secrets/acr-rotated-token")"

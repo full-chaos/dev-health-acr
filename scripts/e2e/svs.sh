@@ -332,6 +332,8 @@ bootstrap_failure_ops() {
   compose up -d postgres clickhouse valkey pgbouncer mailpit migrate go-api-roles go-api >/dev/null
   token="$(mint_ops_service_token)" || svs_die 'Ops credential provisioning failed'
   write_secret "$STATE/secrets/ops-token" "$token"
+  # Host-readable copy for ensure_go_api_ready: secrets/ops-token is chowned to the acr-api UID.
+  write_secret "$STATE/ops-probe-token" "$token"
   wait_go_api "$token"
   if ! output="$(dho admin orgs create --name "${PROJECT} SVS" --slug "$PROJECT" --description 'isolated SVS control plane' --tier community)"; then
     printf '%s\n' "$output" >&2
@@ -356,7 +358,7 @@ start_failure_runtime() {
   if [[ "$SCENARIO" == 'false-entitlement' ]]; then
     remove_runtime_entitlement
   fi
-  compose up -d acr-db-init acr-migrate acr-api acr-tls-proxy >/dev/null
+  start_acr_after_go_api
   wait_https_ready
   record_acl_probe
   create_acr_credential
