@@ -462,6 +462,8 @@ provision_ops_control_plane() {
   compose up -d postgres valkey pgbouncer mailpit migrate go-api-roles go-api query-api >/dev/null
   token="$(mint_ops_service_token)" || die 'Ops credential provisioning failed'
   write_secret "$STATE/secrets/ops-token" "$token"
+  # Host-readable copy for ensure_go_api_ready: secrets/ops-token is chowned to the acr-api UID.
+  write_secret "$STATE/ops-probe-token" "$token"
   wait_go_api "$token"
   if ! output="$(dho admin orgs create --name "${PROJECT} E2E" --slug "$PROJECT" --description 'isolated compose E2E' --tier community)"; then
     printf '%s\n' "$output" >&2
@@ -644,7 +646,7 @@ build_host_mcp() {
 # "host not found in upstream acr-api" (CHAOS-11890).
 ensure_go_api_ready() {
   compose up -d go-api >/dev/null
-  wait_go_api "$(<"$STATE/secrets/ops-token")"
+  wait_go_api "$(<"$STATE/ops-probe-token")"
 }
 
 start_acr_after_go_api() {
