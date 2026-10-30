@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"slices"
 
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 )
@@ -48,7 +49,22 @@ func itemsNoun(count int64) string {
 // forecast the project (capacity_forecasts, from wip_count_end_of_day). The
 // readiness fact's is the open items of the day (estimate_coverage_metrics_daily:
 // created and not completed or closed by the end of that day).
+//
+// The order is the answer's order: the quick answer first, the open items of
+// the day, then the details (the forecast's in-progress count, the estimate
+// coverage, the risk severity).
 var projectStatusObservations = []projectStatusObservation{
+	{
+		kind: FactReadiness, category: "readiness", field: "backlog_size", id: "project-status-0-open-items",
+		title: func(fields map[string]FactValue) (string, bool) {
+			open, okOpen := factInteger(fields, "backlog_size")
+			day, okDay := factString(fields, "day")
+			if !okOpen || !okDay {
+				return "", false
+			}
+			return fmt.Sprintf("Open items: %d (%s)", open, day), true
+		},
+	},
 	{
 		kind: FactWorkload, category: "workload", field: "backlog_size", id: "project-status-1-workload",
 		title: func(fields map[string]FactValue) (string, bool) {
@@ -178,7 +194,12 @@ func projectStatusDrivers(interpretation InterpretedQuestion, committed []Subjec
 				break
 			}
 		}
+		// Two observations read the readiness fact: a kind is named missing
+		// or partial once, by the first observation that finds it so.
 		missing := func(state string) {
+			if containsFactKind(event.Missing, observation.kind) {
+				return
+			}
 			event.Missing = append(event.Missing, observation.kind)
 			event.MissingStates = append(event.MissingStates, state)
 		}
@@ -217,8 +238,10 @@ func projectStatusDrivers(interpretation InterpretedQuestion, committed []Subjec
 		var sourceState SourceState
 		if fact.SourceState != SourceAvailable {
 			sourceState = fact.SourceState
-			event.Partial = append(event.Partial, observation.kind)
-			event.PartialStates = append(event.PartialStates, fact.SourceState)
+			if !containsFactKind(event.Partial, observation.kind) {
+				event.Partial = append(event.Partial, observation.kind)
+				event.PartialStates = append(event.PartialStates, fact.SourceState)
+			}
 		}
 		// The claim names the one fact it restates and carries that fact's
 		// rows, so its number traces to the dated rows it was read from. When
@@ -229,6 +252,9 @@ func projectStatusDrivers(interpretation InterpretedQuestion, committed []Subjec
 			event.RowsShared++
 		} else if attached, rows, _, cut := attachCanonicalRows([]ClaimedFact{claim}, []CanonicalFact{*fact}); len(attached) == 1 {
 			claim = attached[0]
+			if fact.ID != "" && (len(claim.Rows) > 0 || len(claim.TimeSeriesRows) > 0) {
+				rowsCarried[fact.ID] = true
+			}
 			event.RowsAttached += rows + len(claim.TimeSeriesRows)
 			if cut {
 				event.RowsCut++
@@ -285,9 +311,15 @@ const (
 func ProjectStatusDriverKindVocabulary() []string {
 	out := make([]string, 0, len(projectStatusObservations))
 	for _, observation := range projectStatusObservations {
-		out = append(out, string(observation.kind))
+		if !slices.Contains(out, string(observation.kind)) {
+			out = append(out, string(observation.kind))
+		}
 	}
 	return out
+}
+
+func containsFactKind(kinds []FactKind, kind FactKind) bool {
+	return slices.Contains(kinds, kind)
 }
 
 // ProjectStatusDriverMissingStateVocabulary is the closed set of states a

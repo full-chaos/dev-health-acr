@@ -23,11 +23,11 @@ func TestProjectStatusTruncatedReadinessIsServedAsAPartialDriver(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got, want := driverTitles(result.Drivers), "Forecast backlog: 40 items in progress (capacity forecast of 2026-10-26)|Estimate coverage: 18 of 40 open items estimated (2026-10-30)|Risk severity: medium"; got != want {
+	if got, want := driverTitles(result.Drivers), "Open items: 40 (2026-10-30)|Forecast backlog: 40 items in progress (capacity forecast of 2026-10-26)|Estimate coverage: 18 of 40 open items estimated (2026-10-30)|Risk severity: medium"; got != want {
 		t.Fatalf("drivers = %q, want %q", got, want)
 	}
-	if len(result.ClaimedFacts) != 3 {
-		t.Errorf("claimed facts = %d, want 3", len(result.ClaimedFacts))
+	if len(result.ClaimedFacts) != 4 {
+		t.Errorf("claimed facts = %d, want 4", len(result.ClaimedFacts))
 	}
 	for _, driver := range result.Drivers {
 		partial := strings.Contains(driver.Summary, projectStatusPartialLabel)
@@ -49,11 +49,11 @@ func TestProjectStatusTruncatedReadinessCandidateCarriesThePartialLabel(t *testi
 	if _, _, err := rig.investigate(clientRequest()); err != nil {
 		t.Fatal(err)
 	}
-	if len(rig.encoded) == 0 || strings.Count(string(rig.encoded[0]), "project-status-") != 3 {
-		t.Fatalf("synthesis_input must carry 3 project status candidates")
+	if len(rig.encoded) == 0 || strings.Count(string(rig.encoded[0]), "project-status-") != 4 {
+		t.Fatalf("synthesis_input must carry 4 project status candidates")
 	}
-	if got := strings.Count(string(rig.encoded[0]), "partial: the source read was truncated"); got != 1 {
-		t.Errorf("synthesis_input carries %d partial labels, want 1", got)
+	if got := strings.Count(string(rig.encoded[0]), "partial: the source read was truncated"); got != 2 {
+		t.Errorf("synthesis_input carries %d partial labels, want 2 (open items and estimate coverage)", got)
 	}
 	var decoded any
 	if err := json.Unmarshal(rig.encoded[0], &decoded); err != nil {
@@ -61,7 +61,7 @@ func TestProjectStatusTruncatedReadinessCandidateCarriesThePartialLabel(t *testi
 	}
 	states := map[string]string{}
 	collectCandidateStates(decoded, states)
-	if len(states) != 3 || states["project-status-2-readiness-candidate"] != "truncated" || states["project-status-1-workload-candidate"] != "" || states["project-status-3-health-candidate"] != "" {
+	if len(states) != 4 || states["project-status-0-open-items-candidate"] != "truncated" || states["project-status-2-readiness-candidate"] != "truncated" || states["project-status-1-workload-candidate"] != "" || states["project-status-3-health-candidate"] != "" {
 		t.Errorf("candidate source_state by driver = %v, want truncated on readiness only", states)
 	}
 }
@@ -76,7 +76,7 @@ func TestProjectStatusAbsentReadinessIsMissingAndTruncatedIsPartial(t *testing.T
 		t.Errorf("absent: drivers=%d missing=%v partial=%v", len(drivers), event.Missing, event.Partial)
 	}
 	drivers, _, event = projectStatusDrivers(interpretation, []SubjectRef{project}, truncatedReadinessFacts(project), Coverage{}, nil, nil, ItemAllocation{})
-	if len(drivers) != 3 || len(event.Missing) != 0 || len(event.Partial) != 1 || event.Partial[0] != FactReadiness {
+	if len(drivers) != 4 || len(event.Missing) != 0 || len(event.Partial) != 1 || event.Partial[0] != FactReadiness {
 		t.Errorf("truncated: drivers=%d missing=%v partial=%v", len(drivers), event.Missing, event.Partial)
 	}
 	noHealth := projectStatusFacts(project)[:3]
@@ -113,7 +113,7 @@ func TestProjectStatusStaleFactIsUsableWithAStaleLabel(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got, want := driverTitles(result.Drivers), "Forecast backlog: 40 items in progress (capacity forecast of 2026-10-26)|Estimate coverage: 18 of 40 open items estimated (2026-10-30)|Risk severity: medium"; got != want {
+	if got, want := driverTitles(result.Drivers), "Open items: 40 (2026-10-30)|Forecast backlog: 40 items in progress (capacity forecast of 2026-10-26)|Estimate coverage: 18 of 40 open items estimated (2026-10-30)|Risk severity: medium"; got != want {
 		t.Fatalf("drivers = %q, want %q", got, want)
 	}
 	for _, driver := range result.Drivers {

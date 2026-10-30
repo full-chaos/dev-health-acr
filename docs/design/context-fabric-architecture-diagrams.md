@@ -1100,11 +1100,13 @@ The two `backlog_size` fields are different measures: the workload fact's is
 the capacity forecast's backlog, the items in progress when ops last forecast
 the project (`capacity_forecasts`, from `wip_count_end_of_day`); the readiness
 fact's is the open items of a day (`estimate_coverage_metrics_daily`: created
-and not completed or closed by the end of that day). So the workload driver
+and not completed or closed by the end of that day). The answer leads with the
+quick answer, "Open items: N (DAY)" from the readiness fact; the details follow.
+The workload driver
 reads "Forecast backlog: N items in progress (capacity forecast of DAY)", with
 ", not refreshed by the forecast run of DAY" and a stale label when the newest
 run did not forecast the project, and the readiness driver reads "Estimate
-coverage: E of N open items estimated (DAY)". A number with no day is not
+coverage: E of N open items estimated (DAY)", then the risk severity. A number with no day is not
 served (its kind reports `no_value`). Each status claim names the fact it
 restates (`fact_id`) and carries that fact's rows, so its number traces to the
 dated rows it was read from. The rows are served once per answer: when another

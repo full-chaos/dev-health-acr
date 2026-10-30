@@ -8713,8 +8713,8 @@
         "type": "string_slice",
         "presence": "required",
         "closed_vocabulary": [
-          "workload",
           "readiness",
+          "workload",
           "health"
         ]
       },
@@ -8743,8 +8743,8 @@
         "type": "string_slice",
         "presence": "required",
         "closed_vocabulary": [
-          "workload",
           "readiness",
+          "workload",
           "health"
         ]
       },

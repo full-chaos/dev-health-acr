@@ -49,13 +49,13 @@ func TestProjectStatusServerModeServesStatusFactsAsDrivers(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got, want := driverTitles(result.Drivers), "Forecast backlog: 40 items in progress (capacity forecast of 2026-10-26)|Estimate coverage: 18 of 40 open items estimated (2026-10-30)|Risk severity: medium"; got != want {
+	if got, want := driverTitles(result.Drivers), "Open items: 40 (2026-10-30)|Forecast backlog: 40 items in progress (capacity forecast of 2026-10-26)|Estimate coverage: 18 of 40 open items estimated (2026-10-30)|Risk severity: medium"; got != want {
 		t.Errorf("drivers = %q, want %q", got, want)
 	}
-	if len(result.ClaimedFacts) != 3 {
-		t.Errorf("claimed facts = %d, want 3", len(result.ClaimedFacts))
+	if len(result.ClaimedFacts) != 4 {
+		t.Errorf("claimed facts = %d, want 4", len(result.ClaimedFacts))
 	}
-	if !strings.Contains(result.DirectJudgment, "Principal driver: Forecast backlog: 40 items in progress (capacity forecast of 2026-10-26)") {
+	if !strings.Contains(result.DirectJudgment, "Principal driver: Open items: 40 (2026-10-30)") {
 		t.Errorf("judgment = %q", result.DirectJudgment)
 	}
 }
@@ -69,11 +69,11 @@ func TestProjectStatusClientModeResultCarriesStatusDrivers(t *testing.T) {
 	if bundle == nil {
 		t.Fatal("no synthesis input")
 	}
-	if len(rig.encoded) == 0 || strings.Count(string(rig.encoded[0]), "project-status-") != 3 {
-		t.Errorf("synthesis_input carries %d project status driver candidates, want 3", strings.Count(string(rig.encoded[0]), "project-status-"))
+	if len(rig.encoded) == 0 || strings.Count(string(rig.encoded[0]), "project-status-") != 4 {
+		t.Errorf("synthesis_input carries %d project status driver candidates, want 4", strings.Count(string(rig.encoded[0]), "project-status-"))
 	}
-	if len(result.Drivers) != 3 || len(result.ClaimedFacts) != 3 {
-		t.Errorf("drivers=%d claims=%d, want 3 and 3", len(result.Drivers), len(result.ClaimedFacts))
+	if len(result.Drivers) != 4 || len(result.ClaimedFacts) != 4 {
+		t.Errorf("drivers=%d claims=%d, want 4 and 4", len(result.Drivers), len(result.ClaimedFacts))
 	}
 }
 
@@ -88,7 +88,7 @@ func TestProjectStatusMissingKindServesNoDriver(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got, want := driverTitles(result.Drivers), "Estimate coverage: 18 of 40 open items estimated (2026-10-30)"; got != want {
+	if got, want := driverTitles(result.Drivers), "Open items: 40 (2026-10-30)|Estimate coverage: 18 of 40 open items estimated (2026-10-30)"; got != want {
 		t.Errorf("drivers = %q, want %q", got, want)
 	}
 }
@@ -126,8 +126,8 @@ func TestProjectStatusCandidatesKeepTheTrueCategoryAndEvidenceWithoutClaims(t *t
 	project := acceptanceProject()
 	drivers, _, _ := projectStatusDrivers(InterpretedQuestion{FactRequirements: projectStatusRequirements}, []SubjectRef{project}, projectStatusFacts(project), Coverage{}, nil, nil, ItemAllocation{})
 	candidates := projectStatusDriverCandidates(drivers)
-	if len(candidates) != 3 {
-		t.Fatalf("candidates = %d, want 3", len(candidates))
+	if len(candidates) != 4 {
+		t.Fatalf("candidates = %d, want 4", len(candidates))
 	}
 	for index, candidate := range candidates {
 		if len(candidate.ClaimedFactIDs) != 0 {
@@ -193,8 +193,8 @@ func TestProjectStatusDecisionTelemetryNamesWhatWasOmitted(t *testing.T) {
 		t.Fatalf("events = %#v, want exactly one", rig.telemetry.projectStatusDrivers)
 	}
 	event := rig.telemetry.projectStatusDrivers[0]
-	if event.Emitted != 2 || len(event.Missing) != 1 || event.Missing[0] != FactWorkload {
-		t.Errorf("event = %#v, want 2 emitted and workload missing", event)
+	if event.Emitted != 3 || len(event.Missing) != 1 || event.Missing[0] != FactWorkload {
+		t.Errorf("event = %#v, want 3 emitted and workload missing", event)
 	}
 	if len(event.MissingStates) != 1 || event.MissingStates[0] != string(SourceNoData) {
 		t.Errorf("missing states = %v, want [no_data]", event.MissingStates)
@@ -205,12 +205,12 @@ func TestProjectStatusClaimIDCollisionSkipsTheDriverInsteadOfInvalidatingTheAnsw
 	project := acceptanceProject()
 	interpretation := InterpretedQuestion{FactRequirements: projectStatusRequirements}
 	first, claims, _ := projectStatusDrivers(interpretation, []SubjectRef{project}, projectStatusFacts(project), Coverage{}, nil, nil, ItemAllocation{})
-	if len(first) != 3 {
-		t.Fatalf("drivers = %d, want 3", len(first))
+	if len(first) != 4 {
+		t.Fatalf("drivers = %d, want 4", len(first))
 	}
 	drivers, _, event := projectStatusDrivers(interpretation, []SubjectRef{project}, projectStatusFacts(project), Coverage{}, nil, claims[:1], ItemAllocation{})
-	if len(drivers) != 2 || event.SkippedIDClash != 1 {
-		t.Errorf("drivers=%d clash=%d, want 2 and 1", len(drivers), event.SkippedIDClash)
+	if len(drivers) != 3 || event.SkippedIDClash != 1 {
+		t.Errorf("drivers=%d clash=%d, want 3 and 1", len(drivers), event.SkippedIDClash)
 	}
 }
 
@@ -221,8 +221,8 @@ func TestProjectStatusDriversAreBoundByTheNarrationGrant(t *testing.T) {
 		t.Fatalf("narration grant = %d, want 4", allocation.NarrationGrant)
 	}
 	drivers, claims, event := projectStatusDrivers(InterpretedQuestion{FactRequirements: projectStatusRequirements}, []SubjectRef{project}, projectStatusFacts(project), Coverage{}, nil, nil, allocation)
-	if len(drivers) != 2 || len(claims) != 2 || event.SkippedBudget != 1 {
-		t.Errorf("drivers=%d claims=%d skipped_budget=%d, want 2, 2 and 1", len(drivers), len(claims), event.SkippedBudget)
+	if len(drivers) != 2 || len(claims) != 2 || event.SkippedBudget != 2 {
+		t.Errorf("drivers=%d claims=%d skipped_budget=%d, want 2, 2 and 2", len(drivers), len(claims), event.SkippedBudget)
 	}
 }
 
@@ -264,8 +264,8 @@ func TestProjectStatusClaimsNameTheirFactAndCarryItsRows(t *testing.T) {
 			}
 		}
 	}
-	if served != 3 {
-		t.Fatalf("status claims = %d, want 3", served)
+	if served != 4 {
+		t.Fatalf("status claims = %d, want 4", served)
 	}
 	if got := rig.telemetry.projectStatusDrivers; len(got) != 1 || got[0].RowsAttached != 2 || got[0].RowsCut != 0 {
 		t.Errorf("events = %#v, want one event with 2 rows attached and none cut", got)
@@ -349,5 +349,51 @@ func TestProjectStatusClaimSharesTheRowsAnotherClaimOfTheFactCarries(t *testing.
 	}
 	if event.RowsShared != 1 {
 		t.Errorf("rows shared = %d, want 1", event.RowsShared)
+	}
+}
+
+// TestProjectStatusLeadsWithOpenItemsAndServesTheReadinessRowsOnce: the quick
+// answer (open items of the day) leads; the estimate coverage, read from the
+// same readiness fact, names that fact and does not carry its rows again.
+func TestProjectStatusLeadsWithOpenItemsAndServesTheReadinessRowsOnce(t *testing.T) {
+	project := acceptanceProject()
+	facts := projectStatusFacts(project)
+	facts[2].Fields["daily_readiness"] = TableFactValue(FactTable{
+		Shape: FactTableTimeSeries, Key: []string{"day"}, Measures: []string{"backlog_size", "estimated_count"}, Grain: GrainDay,
+		Rows: []FactValueRow{{Fields: map[string]FactValue{"day": StringFactValue("2026-10-30"), "backlog_size": IntegerFactValue(40), "estimated_count": IntegerFactValue(18)}}},
+	})
+	AssignFactIDs(facts)
+	drivers, claims, event := projectStatusDrivers(InterpretedQuestion{FactRequirements: projectStatusRequirements}, []SubjectRef{project}, facts, Coverage{}, nil, nil, ItemAllocation{})
+	if len(drivers) != 4 || drivers[0].DriverID != "project-status-0-open-items" || drivers[0].Title != "Open items: 40 (2026-10-30)" {
+		t.Fatalf("drivers = %q, want the open items first", driverTitles(drivers))
+	}
+	var open, coverage *ClaimedFact
+	for index := range claims {
+		switch {
+		case claims[index].Kind == FactReadiness && claims[index].Field == "backlog_size":
+			open = &claims[index]
+		case claims[index].Kind == FactReadiness && claims[index].Field == "estimated_count":
+			coverage = &claims[index]
+		}
+	}
+	if open == nil || coverage == nil {
+		t.Fatalf("claims = %#v, want the open items and the estimate coverage claims", claims)
+	}
+	if open.FactID != facts[2].ID || len(open.Rows) != 1 {
+		t.Errorf("open items claim fact_id=%q rows=%d, want fact %q and its 1 row", open.FactID, len(open.Rows), facts[2].ID)
+	}
+	if coverage.FactID != facts[2].ID || len(coverage.Rows) != 0 {
+		t.Errorf("estimate coverage claim fact_id=%q rows=%d, want fact %q and no second copy", coverage.FactID, len(coverage.Rows), facts[2].ID)
+	}
+	if event.RowsShared != 1 || event.RowsAttached != 1 {
+		t.Errorf("rows attached=%d shared=%d, want 1 and 1", event.RowsAttached, event.RowsShared)
+	}
+}
+
+// TestProjectStatusKindVocabularyNamesEachKindOnce: two observations read the
+// readiness fact, and the closed vocabulary still names each kind once.
+func TestProjectStatusKindVocabularyNamesEachKindOnce(t *testing.T) {
+	if got, want := strings.Join(ProjectStatusDriverKindVocabulary(), ","), "readiness,workload,health"; got != want {
+		t.Errorf("vocabulary = %q, want %q", got, want)
 	}
 }
