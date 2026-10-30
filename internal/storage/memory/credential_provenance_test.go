@@ -70,6 +70,14 @@ func TestCredentialProvenance_oauthRedeemRecordsClientAndApprover(t *testing.T) 
 		ClientClass: string(storage.CredentialClientClassOAuthUser), ApprovingUserID: grant.ApprovingSubject,
 		ClientID: "acrc_0123456789abcdef0123456789abcdef",
 	}, credential.Provenance)
+	// The class decision and its inputs are on the credential_created audit row.
+	events := fixture.audit.Events()
+	require.NotEmpty(t, events)
+	created := events[len(events)-1]
+	require.Equal(t, storage.AuditActionCredentialCreated, created.Action)
+	require.Equal(t, "oauth_user", created.Metadata["client_class"])
+	require.Equal(t, grant.ApprovingSubject, created.Metadata["approving_user_id"])
+	require.Equal(t, "acrc_0123456789abcdef0123456789abcdef", created.Metadata["client_id"])
 }
 
 func TestCredentialProvenance_redeemRefusesACallerApproverThatDiffersFromTheRecord(t *testing.T) {
