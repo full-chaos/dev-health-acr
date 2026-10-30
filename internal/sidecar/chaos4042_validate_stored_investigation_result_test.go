@@ -59,8 +59,22 @@ func TestValidateStoredInvestigationResult_AcceptsV2Result(t *testing.T) {
 	t.Run("v2-stamped result accepted, not rejected as a v1 schema mismatch", func(t *testing.T) {
 		result := validSidecarInvestigationResult()
 		result.SchemaVersion = contractsv1.ContextFabricInvestigationResultSchemaV2
+		// CHAOS-11975: a valid v2 result carries a membership-verify anchor option.
+		result.StructureNeeds = &contractsv1.ContextFabricStructureNeeds{
+			Missing: []contractsv1.ContextFabricStructureNeedKind{contractsv1.ContextFabricStructureNeedSubjectAnchor},
+			AnchorOptions: []contractsv1.ContextFabricAnchorOption{contractsv1.ContextFabricAnchorOptionV2{
+				ReceiptID: "ancr_confirm00001", OptionID: "opt_repo_a", Label: "repoA",
+				Kind: contractsv1.ContextFabricSubjectRepository, CanonicalID: "repository_widget_svc_a",
+				MatchedTermHash: "aa11bb22cc33dd44ee55ff66", OfferSource: contractsv1.ContextFabricStructureOfferEngine,
+			}.ToV1Wire()},
+		}
 		if err := validateStoredInvestigationResult(result); err != nil {
 			t.Fatalf("validateStoredInvestigationResult() error = %v, want nil for a valid v2 result", err)
+		}
+		// The same v2 label on a body with no anchor option is refused.
+		result.StructureNeeds = nil
+		if err := validateStoredInvestigationResult(result); err == nil {
+			t.Fatal("validateStoredInvestigationResult accepted a v2 result with no anchor option")
 		}
 	})
 }

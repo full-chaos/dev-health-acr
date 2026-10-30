@@ -81,10 +81,12 @@ func TestDeterministicAnswerPredicateDomainIsEnumeratedAndExecuted(t *testing.T)
 
 	// ---------------------------------------------- 2. the lower bound, every status x support x answer
 	// got = write-path verdict / v1 schema / v2 schema. v2 differs from v1
-	// only in schema_version, so the same document with the v2 constant
-	// must reach the same verdict through ValidateV2 and the v2 schema.
+	// only in schema_version and the membership-verify anchor option a v2
+	// result must carry (CHAOS-11975), so the same document with the v2
+	// constant and one anchor option must reach the same verdict through
+	// ValidateV2 and the v2 schema.
 	verdicts := func(r ContextFabricInvestigationResult) string {
-		v2 := r
+		v2 := withOneV2AnchorOption(r)
 		v2.SchemaVersion = ContextFabricInvestigationResultSchemaV2
 		v2.Versions.ContractVersion = ContextFabricInvestigationResultSchemaV2
 		return fmt.Sprintf("go=%s v1=%s go2=%s v2=%s",
@@ -191,7 +193,7 @@ func TestDeterministicAnswerPredicateDomainIsEnumeratedAndExecuted(t *testing.T)
 		check("ValidateStored", "completeness", "stored row with a block, unsupported, answer empty", daVerdict(fresh.ValidateStored()), "accepted")
 		sup := daFixture(degraded, 1, 1, "")
 		check("ValidateStored", "completeness", "stored row with a block, supported, answer empty", daVerdict(sup.ValidateStored()), "refused")
-		mixed := daFixture(degraded, 0, 0, "")
+		mixed := withOneV2AnchorOption(daFixture(degraded, 0, 0, ""))
 		mixed.SchemaVersion = ContextFabricInvestigationResultSchemaV2
 		mixed.Versions.ContractVersion = ContextFabricInvestigationResultSchemaV2
 		check("ValidateStoredResult (dispatch)", "schema_version", "v2 stored row, unsupported, answer empty", daVerdict(ValidateStoredResult(mixed)), "accepted")

@@ -61,7 +61,7 @@ func TestValidateResult_DispatchesOnSchemaVersion(t *testing.T) {
 	})
 	t.Run("v2 result validates under v2, not v1", func(t *testing.T) {
 		t.Parallel()
-		result := validInvestigationResult()
+		result := withOneV2AnchorOption(validInvestigationResult())
 		result.SchemaVersion = InvestigationResultSchemaV2
 		if err := ValidateResult(result); err != nil {
 			t.Errorf("ValidateResult() error = %v, want nil for a genuine v2 result", err)
@@ -108,7 +108,7 @@ func TestValidateStoredResult_DispatchesOnSchemaVersion(t *testing.T) {
 	})
 	t.Run("v2 stored result validates under v2, not v1", func(t *testing.T) {
 		t.Parallel()
-		result := validInvestigationResult()
+		result := withOneV2AnchorOption(validInvestigationResult())
 		result.SchemaVersion = InvestigationResultSchemaV2
 		if err := ValidateStoredResult(result); err != nil {
 			t.Errorf("ValidateStoredResult() error = %v, want nil for a genuine v2 stored result", err)

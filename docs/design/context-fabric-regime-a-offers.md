@@ -116,6 +116,14 @@ Three properties the implementation depends on:
 - **`AnchorOptionsRequireV2` is cleared with the options.** It is the sole
   signal promoting a result to the v2 semantic major, and both call sites
   dispatch `schemaVersion` off it.
+  The follow-up reconcile (`anchor_binding_follow_up.go`) clears it the
+  same way when it removes the last anchor option (CHAOS-11975), and the
+  contract refuses the shape: `ValidateV2` and `ValidateStoredV2` require
+  `structure_needs` with a non-empty `anchor_options`, and the published v2
+  schemas refuse an empty `anchor_options`. The schemas add `structure_needs`
+  and `anchor_options` to `required` in the next release (a field is
+  optional for one release before it becomes required). A v1-shaped body
+  labelled v2 is not a v2 result.
 
 There is no gate 1 any more (CHAOS-6557): a window the caller supplies -- the
 `evidence_window` field on any surface, or a single period stated in the

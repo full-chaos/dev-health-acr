@@ -9,6 +9,22 @@ import (
 )
 
 func validMCPTestResult(schemaVersion string) contractsv1.ContextFabricInvestigationResult {
+	result := validMCPTestResultBody(schemaVersion)
+	if schemaVersion == contractsv1.ContextFabricInvestigationResultSchemaV2 {
+		// CHAOS-11975: a v2 result carries a membership-verify anchor option.
+		result.StructureNeeds = &contractsv1.ContextFabricStructureNeeds{
+			Missing: []contractsv1.ContextFabricStructureNeedKind{contractsv1.ContextFabricStructureNeedSubjectAnchor},
+			AnchorOptions: []contractsv1.ContextFabricAnchorOption{contractsv1.ContextFabricAnchorOptionV2{
+				ReceiptID: "ancr_confirm00001", OptionID: "opt_repo_a", Label: "repoA",
+				Kind: contractsv1.ContextFabricSubjectRepository, CanonicalID: "repository_widget_svc_a",
+				MatchedTermHash: "aa11bb22cc33dd44ee55ff66", OfferSource: contractsv1.ContextFabricStructureOfferEngine,
+			}.ToV1Wire()},
+		}
+	}
+	return result
+}
+
+func validMCPTestResultBody(schemaVersion string) contractsv1.ContextFabricInvestigationResult {
 	project := contractsv1.ContextFabricSubjectRef{Kind: contractsv1.ContextFabricSubjectProject, CanonicalID: "project_ask_dev", Label: "Ask Dev"}
 	return contractsv1.ContextFabricInvestigationResult{
 		SchemaVersion: schemaVersion,

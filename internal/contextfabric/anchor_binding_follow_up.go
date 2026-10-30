@@ -115,6 +115,15 @@ func (t *anchorBindingTracker) reconcileFollowUpStructure(material StructureOffe
 	}
 	out := material
 	out.AnchorOptions = kept
+	if len(kept) == 0 {
+		// CHAOS-11975: AnchorOptionsRequireV2 means "at least one anchor
+		// option on this result needs membership-verify redemption". With
+		// every anchor option removed that is false, and leaving it set
+		// would mint a v2 result carrying no anchor option at all (the
+		// cohort gate in chaos4579_cohort_structure_gate.go clears it for
+		// the same reason).
+		out.AnchorOptionsRequireV2 = false
+	}
 	t.carry = BoundAnchorCarryFollowUpOfferedReconciled
 	return out
 }
