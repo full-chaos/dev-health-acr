@@ -684,7 +684,7 @@ func storedSubmissionOwner(method, subject, user, surface sql.NullString) *conte
 }
 
 // submissionOwnerArgs is a principal's owner as SQL arguments: the legacy
-// pair, and the canonical user and surface ("" when it has none). '' never
+// pair, and the canonical user and surface ("" when it has none). ” never
 // matches: the owner columns are NOT NULL and never empty, and the canonical
 // branch of ownerMatchSQL requires a non-empty user.
 type submissionOwnerArgs struct {
