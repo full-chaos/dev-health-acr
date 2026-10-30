@@ -211,3 +211,44 @@ func TestSharedLimitRefusalsAreObservedAsRateLimitDenials(t *testing.T) {
 		}
 	}
 }
+
+// The shared limits on the event stream (CHAOS-11911 rebased under this
+// change): a stream request for a NEW submission over a limit is refused with
+// the JSON 429 before any stream starts, and runs nothing; it is the same
+// admission as the JSON path.
+func TestAStreamedSubmissionOverASharedLimitIsRefusedBeforeAnyStream(t *testing.T) {
+	{
+		harness, _ := newMemorySubmissionHarness(t, 1)
+		setSubmissionLimits(harness, contextfabric.SubmissionLimits{MonthlyPlatformRunAllowance: 1})
+		if first := streamSubmission(t, harness, 0, "submission-stream-l1"); first.status != http.StatusOK || len(first.events) == 0 {
+			t.Fatalf("the first streamed submission = %d (%s), want the stream", first.status, first.raw)
+		}
+		refused := streamSubmission(t, harness, 0, "submission-stream-l2")
+		if refused.status != http.StatusTooManyRequests || refused.header.Get("Content-Type") == contractsv1.ContextFabricInvestigationEventStreamMediaType || !strings.Contains(string(refused.raw), `"code":"allowance_exhausted"`) {
+			t.Fatalf("a streamed submission past the allowance = %d %q %s, want the JSON 429 allowance_exhausted", refused.status, refused.header.Get("Content-Type"), refused.raw)
+		}
+		if refused.header.Get("Retry-After") == "" {
+			t.Fatalf("the streamed 429 has no Retry-After")
+		}
+		if got := harness.investigator.executions.Load(); got != 1 {
+			t.Fatalf("executions = %d, want 1", got)
+		}
+	}
+	{
+		harness, _ := newMemorySubmissionHarness(t, 1)
+		setSubmissionLimits(harness, contextfabric.SubmissionLimits{MaxRunningPerPrincipal: 1, MaxRunningPerOrg: 1})
+		harness.investigator.mode.Store(int32(runBlockThenSave))
+		finished := make(chan struct{})
+		go func() { harness.post(0, harness.tokenA, "submission-stream-l3", submissionQuestion); close(finished) }()
+		<-harness.investigator.entered
+		refused := streamSubmission(t, harness, 0, "submission-stream-l4")
+		close(harness.investigator.release)
+		<-finished
+		if refused.status != http.StatusTooManyRequests || refused.header.Get("Content-Type") == contractsv1.ContextFabricInvestigationEventStreamMediaType || !strings.Contains(string(refused.raw), `"code":"concurrency_limited"`) {
+			t.Fatalf("a streamed submission over the principal limit = %d %q %s, want the JSON 429 concurrency_limited", refused.status, refused.header.Get("Content-Type"), refused.raw)
+		}
+		if got := harness.investigator.executions.Load(); got != 1 {
+			t.Fatalf("executions = %d, want 1", got)
+		}
+	}
+}
