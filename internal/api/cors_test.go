@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
 
@@ -259,6 +260,61 @@ func TestCORSIsAnsweredForTheListedOriginOnTheBrowserRoutesOnly(t *testing.T) {
 	}
 }
 
+// CORS reads a path the way the mux routes it: the escaped path splits on
+// "/" and each segment is unescaped. An evidence reference may hold a "/" (a
+// team id such as ari:cloud:identity::team/1); the browser sends it escaped,
+// as one segment, and the mux routes it to the evidence read. An escaped
+// literal segment (%69nvestigations) is the literal the mux matches.
+func TestCORSReadsAnEscapedPathAsTheMuxRoutesIt(t *testing.T) {
+	harness := corsHarness(t)
+	for _, path := range []string{
+		"/api/v1/agent-context/evidence/" + url.PathEscape("ev:ari:cloud:identity::team/1"),
+		ContextFabricInvestigationsPath + "/" + url.PathEscape("result/escaped"),
+		"/api/v1/context-fabric/%69nvestigations",
+	} {
+		got := harness.cors(0, corsCall{method: http.MethodOptions, path: path, origin: corsTestOrigin, headers: map[string]string{"Access-Control-Request-Method": "GET", "Access-Control-Request-Headers": "authorization"}})
+		if got.Code != http.StatusNoContent || got.Header().Get("Access-Control-Allow-Origin") != corsTestOrigin {
+			t.Errorf("%s: preflight status %d, Access-Control-Allow-Origin %q; want 204 and %q", path, got.Code, got.Header().Get("Access-Control-Allow-Origin"), corsTestOrigin)
+		}
+	}
+	// A nested path stays nested when only its last part is escaped.
+	nested := "/api/v1/agent-context/evidence/ev_cors_0001/" + url.PathEscape("a/b")
+	expectNoCORS(t, nested, harness.cors(0, corsCall{method: http.MethodOptions, path: nested, origin: corsTestOrigin, headers: map[string]string{"Access-Control-Request-Method": "GET"}}))
+}
+
+// Only the registered browser routes answer CORS: a path under a browser
+// route's prefix that no route is registered for (nested, or an empty
+// segment) gets no CORS header, no 204 preflight and no Vary: Origin.
+func TestCORSIsAnsweredOnlyOnTheRegisteredBrowserRoutePaths(t *testing.T) {
+	harness := corsHarness(t)
+	preflight := map[string]string{"Access-Control-Request-Method": "GET", "Access-Control-Request-Headers": "authorization"}
+	for _, path := range []string{
+		"/api/v1/agent-context/evidence/ev_cors_0001/nested",
+		"/api/v1/agent-context/evidence/",
+		ContextFabricInvestigationsPath + "/",
+		ContextFabricInvestigationsPath + "/result_cors_00000001/nested",
+		ContextFabricInvestigationsPath + "/submissions/submission-cors-0001/nested",
+		ContextFabricInvestigationsPath + "/submissions/",
+		ContextFabricInvestigationsPath + "x",
+		OAuthTokenPath + "/nested",
+	} {
+		t.Run(path, func(t *testing.T) {
+			got := harness.cors(0, corsCall{method: http.MethodOptions, path: path, origin: corsTestOrigin, headers: preflight})
+			if got.Code == http.StatusNoContent {
+				t.Fatalf("an unregistered path answered the preflight 204 (Access-Control-Allow-Origin %q)", got.Header().Get("Access-Control-Allow-Origin"))
+			}
+			expectNoCORS(t, "preflight", got)
+			actual := harness.cors(0, corsCall{method: http.MethodGet, path: path, origin: corsTestOrigin, token: harness.tokenA})
+			expectNoCORS(t, "actual", actual)
+			for _, recorder := range []*httptest.ResponseRecorder{got, actual} {
+				if containsValue(recorder.Header().Values("Vary"), "Origin") {
+					t.Fatalf("Vary: Origin on a path that is not a browser route")
+				}
+			}
+		})
+	}
+}
+
 // codex #1770 r1 P3: every CORS decision is on the request's Info access
 // line, an allowed grant as well as a refusal, so a regression in an allowed
 // origin's headers is not indistinguishable from an ordinary response.
@@ -278,6 +334,14 @@ func TestEveryCORSDecisionIsOnTheAccessLog(t *testing.T) {
 			map[string]any{"cors": "allowed", "cors_route": "oauth_metadata", "cors_preflight": false, "cors_origin": corsTestOrigin}},
 		{"refused", corsCall{method: http.MethodGet, path: OAuthAuthorizationServerMetadataPath, origin: "https://evil.example"},
 			map[string]any{"cors": "refused", "cors_route": "oauth_metadata", "cors_preflight": false, "cors_origin": nil}},
+		{"evidence route", corsCall{method: http.MethodOptions, path: "/api/v1/agent-context/evidence/ev_cors_0001", origin: corsTestOrigin, headers: preflight},
+			map[string]any{"cors": "allowed", "cors_route": "evidence", "cors_preflight": true, "cors_origin": corsTestOrigin}},
+		{"result route", corsCall{method: http.MethodOptions, path: ContextFabricInvestigationsPath + "/result_cors_00000001", origin: corsTestOrigin, headers: preflight},
+			map[string]any{"cors": "allowed", "cors_route": "investigations", "cors_preflight": true, "cors_origin": corsTestOrigin}},
+		{"submission route", corsCall{method: http.MethodOptions, path: ContextFabricInvestigationsPath + "/submissions/submission-cors-0001", origin: corsTestOrigin, headers: preflight},
+			map[string]any{"cors": "allowed", "cors_route": "investigations", "cors_preflight": true, "cors_origin": corsTestOrigin}},
+		{"token route", corsCall{method: http.MethodOptions, path: OAuthTokenPath, origin: corsTestOrigin, headers: preflight},
+			map[string]any{"cors": "allowed", "cors_route": "oauth_token", "cors_preflight": true, "cors_origin": corsTestOrigin}},
 		{"no origin", corsCall{method: http.MethodGet, path: OAuthAuthorizationServerMetadataPath},
 			map[string]any{"cors": nil, "cors_route": nil, "cors_preflight": nil, "cors_origin": nil}},
 		{"not a browser route", corsCall{method: http.MethodGet, path: "/healthz", origin: corsTestOrigin},

@@ -76,24 +76,59 @@ func (d *corsDecision) logFields() []any {
 	return fields
 }
 
+// corsBrowserRoutes are the browser routes as their registered mux patterns
+// (app.go), with their closed class names. A path is a browser route only
+// when it matches one of these patterns exactly, never because it sits under
+// one of their prefixes (CHAOS-12125): a nested or empty-segment path that no
+// route serves answers no CORS.
+var corsBrowserRoutes = [...]struct{ pattern, class string }{
+	{OAuthAuthorizationServerMetadataPath, "oauth_metadata"},
+	{OAuthTokenPath, "oauth_token"},
+	{ContextFabricInvestigationsPath, "investigations"},
+	{ContextFabricInvestigationResultPath, "investigations"},
+	{ContextFabricSubmissionStatusPath, "investigations"},
+	{AgentContextEvidencePath, "evidence"},
+}
+
 // corsRouteClass is the closed name of a browser route ("" for any other
-// path).
+// path). path is the request's escaped path (URL.EscapedPath), so an escaped
+// "/" inside an identifier (an evidence reference can hold one) stays inside
+// its segment, as the mux reads it.
 func corsRouteClass(path string) string {
-	switch {
-	case path == OAuthAuthorizationServerMetadataPath:
-		return "oauth_metadata"
-	case path == OAuthTokenPath:
-		return "oauth_token"
-	case path == ContextFabricInvestigationsPath || strings.HasPrefix(path, ContextFabricInvestigationsPath+"/"):
-		return "investigations"
-	case strings.HasPrefix(path, corsEvidencePrefix):
-		return "evidence"
+	for _, route := range corsBrowserRoutes {
+		if corsPatternMatches(route.pattern, path) {
+			return route.class
+		}
 	}
 	return ""
 }
 
-// corsEvidencePrefix is the evidence read route's fixed prefix.
-const corsEvidencePrefix = "/api/v1/agent-context/evidence/"
+// corsPatternMatches reports whether an escaped path matches a mux pattern's
+// path the way the mux matches it: the escaped path splits on "/", each
+// segment is unescaped, a literal segment matches itself, and a {name}
+// wildcard matches exactly one non-empty segment.
+func corsPatternMatches(pattern, escapedPath string) bool {
+	want, got := strings.Split(pattern, "/"), strings.Split(escapedPath, "/")
+	if len(want) != len(got) {
+		return false
+	}
+	for i, segment := range want {
+		value, err := url.PathUnescape(got[i])
+		if err != nil {
+			return false
+		}
+		if strings.HasPrefix(segment, "{") && strings.HasSuffix(segment, "}") {
+			if value == "" {
+				return false
+			}
+			continue
+		}
+		if segment != value {
+			return false
+		}
+	}
+	return true
+}
 
 // CORSRouteClassVocabulary is the closed set of browser route names.
 func CORSRouteClassVocabulary() [4]string {
@@ -116,7 +151,7 @@ func (a *App) corsMiddleware(next http.Handler) http.Handler {
 		return next
 	}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		route := corsRouteClass(r.URL.Path)
+		route := corsRouteClass(r.URL.EscapedPath())
 		if route == "" {
 			next.ServeHTTP(w, r)
 			return
