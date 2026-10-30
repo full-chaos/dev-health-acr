@@ -68,6 +68,12 @@ func (a *App) InstrumentedHandler(next http.Handler) http.Handler {
 	handler := a.recoveryMiddleware(next)
 	handler = a.responseOwnerMiddleware(handler)
 	handler = a.timeoutMiddleware(handler)
+	// CHAOS-12086: CORS sits outside every route's auth and outside the
+	// timeout, response-owner and panic-recovery writers, so a preflight
+	// never meets auth and every response -- an error included -- carries
+	// the headers; inside the access log and the request id, so both still
+	// cover a preflight.
+	handler = a.corsMiddleware(handler)
 	handler = a.accessLogMiddleware(handler)
 	handler = a.requestIDMiddleware(handler)
 	return handler
