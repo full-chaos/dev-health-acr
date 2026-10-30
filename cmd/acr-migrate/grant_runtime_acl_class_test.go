@@ -113,8 +113,9 @@ func TestRuntimeGrantDeclaration_includesWhatTheReadinessCheckAsserts(t *testing
 // setting.
 func TestRuntimeGrantDeclaration_runtimeRoleHoldsExactlyTheDeclaration(t *testing.T) {
 	for name, features := range map[string]dbacl.Features{
-		"no optional feature":    {},
-		"every optional feature": {dbacl.EpisodeWriteback: true, dbacl.WorkloadTokenExchange: true},
+		"no optional feature":     {},
+		"every optional feature":  {dbacl.EpisodeWriteback: true, dbacl.WorkloadTokenExchange: true, dbacl.BrowserClient: true},
+		"only the browser client": {dbacl.BrowserClient: true},
 	} {
 		features := features
 		t.Run(name, func(t *testing.T) {
@@ -148,7 +149,7 @@ func TestRuntimeGrantDeclaration_runtimeRoleHoldsExactlyTheDeclaration(t *testin
 				require.Equal(t, wantHeld, has, "agent_episodes %s with writeback %v", privilege, features[dbacl.EpisodeWriteback])
 			}
 			for _, grant := range dbacl.RuntimeGrants {
-				if !features[grant.Feature] && grant.Feature != dbacl.AlwaysOn {
+				if !features.Enabled(grant.Feature) {
 					continue
 				}
 				for _, sequence := range grant.Sequences {

@@ -274,3 +274,69 @@ func TestOpenPostgres_oauthPurgeTickLineSeparatesSkippedFromEmpty(t *testing.T) 
 	require.Contains(t, logs.String(), "requests=1 clients=1 device_authorizations=1 requests_remaining=0 clients_remaining=0 device_authorizations_remaining=0")
 	require.Equal(t, 1, h.count(t, "oauth_clients"), "the young client stays")
 }
+
+// CHAOS-12140 through the REAL openPostgres: the browser family purge starts
+// only with a browser client, its startup purge is the DELETE proof on both
+// tables it deletes from (acr.client_credentials, acr.browser_token_families),
+// and with both granted it deletes an ended family as the runtime role, whose
+// refresh rows go by cascade though the role holds no DELETE on them (the
+// cascade runs as the table owner).
+func TestOpenPostgres_browserFamilyPurgeAtStartupThroughTheRealConstructor(t *testing.T) {
+	h := newOAuthPurgeStartupHarness(t)
+	ctx, owner := h.ctx, h.owner
+	for _, statement := range []string{
+		`GRANT DELETE ON acr.oauth_clients, acr.oauth_authorization_requests, acr.device_authorizations TO acr_purge_rt`,
+		`REVOKE DELETE ON acr.client_credentials, acr.browser_token_families, acr.browser_refresh_tokens FROM acr_purge_rt`,
+	} {
+		_, err := owner.ExecContext(ctx, statement)
+		require.NoError(t, err, statement)
+	}
+	// A family that ended (absolute end) long before any grace, with a refresh row.
+	t0 := time.Date(2026, 9, 1, 12, 0, 0, 0, time.UTC)
+	_, err := owner.ExecContext(ctx, `
+INSERT INTO acr.browser_token_families (family_id, org_id, client_id, created_at, expires_at)
+VALUES ('fam_startup', '7b0f3f9e-1d4f-4c1e-9a55-2f1b6f0c7a10', 'https://www.example.test/acr/client-metadata.json', $1, $2)`, t0, t0.Add(12*time.Hour))
+	require.NoError(t, err)
+	_, err = owner.ExecContext(ctx, `
+INSERT INTO acr.browser_refresh_tokens (token_hash, family_id, credential_id, created_at)
+VALUES ($1, 'fam_startup', 'cred_startup', $2)`, strings.Repeat("a", 64), t0)
+	require.NoError(t, err)
+	count := func(table string) int { return h.count(t, table) }
+
+	// OAuth without a browser client: no family purge, so the role needs no DELETE there.
+	logger, logs := newOAuthPurgeStartupLogger()
+	components, err := openPostgres(ctx, h.config(), logger)
+	require.NoError(t, err, "OAuth without a browser client must start without DELETE on the browser tables")
+	require.NoError(t, components.close())
+	require.NotContains(t, logs.String(), "browser family purge")
+	require.Equal(t, 1, count("browser_token_families"))
+
+	cfg := h.config()
+	cfg.OAuthBrowserClients = []string{"https://www.example.test/acr/client-metadata.json"}
+	cfg.OAuthBrowserFamilyPurgeGrace = time.Hour
+	for _, missing := range []string{"acr.client_credentials", "acr.browser_token_families"} {
+		for _, table := range []string{"acr.client_credentials", "acr.browser_token_families"} {
+			verb := "GRANT DELETE ON " + table + " TO"
+			if table == missing {
+				verb = "REVOKE DELETE ON " + table + " FROM"
+			}
+			_, err := owner.ExecContext(ctx, verb+" acr_purge_rt")
+			require.NoError(t, err)
+		}
+		logger, _ := newOAuthPurgeStartupLogger()
+		_, err := openPostgres(ctx, cfg, logger)
+		require.Errorf(t, err, "DELETE missing on %s: startup must fail", missing)
+		require.Contains(t, err.Error(), "purge ended browser token families")
+		require.Equal(t, 1, count("browser_token_families"))
+	}
+
+	_, err = owner.ExecContext(ctx, `GRANT DELETE ON acr.client_credentials, acr.browser_token_families TO acr_purge_rt`)
+	require.NoError(t, err)
+	logger, logs = newOAuthPurgeStartupLogger()
+	components, err = openPostgres(ctx, cfg, logger)
+	require.NoError(t, err)
+	require.NoError(t, components.close())
+	require.Equal(t, 0, count("browser_token_families"), "the startup purge deletes the ended family")
+	require.Equal(t, 0, count("browser_refresh_tokens"), "its refresh row goes by cascade, without DELETE granted on it")
+	require.Contains(t, logs.String(), `msg="browser family purge" credentials=0 families=1 credentials_remaining=0 families_remaining=0`)
+}
