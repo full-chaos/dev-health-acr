@@ -13,8 +13,10 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"os/exec"
 	"reflect"
 	"sort"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -316,6 +318,7 @@ func TestTheInvestigationStreamOnTheLiveStack(t *testing.T) {
 		t.Fatalf("the result names result_id %q and request_id %q, want the reserved %q and %q", str(result, "result_id"), str(result, "request_id"), accepted.ReservedResultID, answer.requestID)
 	}
 	t.Logf("stream: %d events, %d stage events, result status %s", len(events), stages, str(result, "status"))
+	requireNoRunningSubmission(t)
 }
 
 // TestJSONAndTheStreamServeTheSameLiveAnswer: the same request sent once as JSON and once as
@@ -386,5 +389,174 @@ func TestASameKeyRetryOfAStreamedSubmissionRunsNothing(t *testing.T) {
 	mismatch := postInvestigation(t, token, other, true, key)
 	if mismatch.status != http.StatusConflict || !strings.Contains(string(mismatch.raw), `"`+contractsv1.ErrorCodeSubmissionMismatch+`"`) {
 		t.Fatalf("the key with another body: %d %.800s, want 409 %s", mismatch.status, mismatch.raw, contractsv1.ErrorCodeSubmissionMismatch)
+	}
+	if state := pgScalar(t, fmt.Sprintf(`SELECT state FROM acr.context_fabric_investigation_submissions WHERE org_id = %s AND submission_id = %s`, sqlStr(orgID(t)), sqlStr(key))); state != "done" {
+		t.Fatalf("the streamed submission's record is %q after its terminal, want done", state)
+	}
+	requireNoRunningSubmission(t)
+}
+
+// pg runs one SQL script, in one session, against acr's Postgres and returns its
+// tab-separated rows.
+func pg(t testing.TB, sql string) [][]string {
+	t.Helper()
+	cmd := exec.Command(mustEnv(t, "FG_PG_QUERY"))
+	cmd.Stdin = strings.NewReader(sql)
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	out, err := cmd.Output()
+	if err != nil {
+		t.Fatalf("postgres query failed: %v\n%s\nSQL: %s", err, stderr.String(), sql)
+	}
+	var rows [][]string
+	for _, line := range strings.Split(strings.TrimRight(string(out), "\n"), "\n") {
+		if line != "" {
+			rows = append(rows, strings.Split(line, "\t"))
+		}
+	}
+	return rows
+}
+
+func pgScalar(t testing.TB, sql string) string {
+	t.Helper()
+	rows := pg(t, sql)
+	if len(rows) != 1 || len(rows[0]) != 1 {
+		t.Fatalf("want one scalar from %q, got %v", sql, rows)
+	}
+	return rows[0][0]
+}
+
+const submissionsTable = "acr.context_fabric_investigation_submissions"
+
+// runningSubmissions counts the org's submission records still running.
+func runningSubmissions(t testing.TB) int {
+	t.Helper()
+	n, err := strconv.Atoi(pgScalar(t, fmt.Sprintf(`SELECT count(*) FROM %s WHERE org_id = %s AND state = 'running'`, submissionsTable, sqlStr(orgID(t)))))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return n
+}
+
+// requireNoRunningSubmission: once a run's terminal event is written, no record of the org is
+// left running -- a record left running would hold a concurrency slot no run fills.
+func requireNoRunningSubmission(t *testing.T) {
+	t.Helper()
+	if n := runningSubmissions(t); n != 0 {
+		t.Fatalf("%d submission records are still running after the terminal: %v", n, pg(t, fmt.Sprintf(`SELECT submission_id, state FROM %s WHERE org_id = %s AND state = 'running'`, submissionsTable, sqlStr(orgID(t)))))
+	}
+}
+
+// plantHeldRuns adds n running records for the principal whose real record is templateKey,
+// each a copy of that record (every column, the owner included) with its own key and reserved
+// id, admitted now and expiring in ten minutes. They are the runs another replica holds in
+// flight: written outside this acr-api, read by its admission from the shared table.
+func plantHeldRuns(t *testing.T, templateKey string, n int) []string {
+	t.Helper()
+	var keys []string
+	var script strings.Builder
+	fmt.Fprintf(&script, "CREATE TEMP TABLE planted AS SELECT * FROM %s WHERE org_id = %s AND submission_id = %s;\n", submissionsTable, sqlStr(orgID(t)), sqlStr(templateKey))
+	for i := 0; i < n; i++ {
+		key := "fg-held-" + randomHex(t, 8)
+		keys = append(keys, key)
+		fmt.Fprintf(&script, "UPDATE planted SET submission_id = %s, reserved_result_id = %s, state = 'running', result_id = NULL, admitted_at = now(), updated_at = now(), expires_at = now() + interval '10 minutes';\nINSERT INTO %s SELECT * FROM planted;\n",
+			sqlStr(key), sqlStr("result_fgheld"+randomHex(t, 16)), submissionsTable)
+	}
+	fmt.Fprintf(&script, "SELECT count(*) FROM %s WHERE org_id = %s AND submission_id IN (%s) AND state = 'running';\n", submissionsTable, sqlStr(orgID(t)), sqlList(keys))
+	if got := pg(t, script.String()); len(got) != 1 || got[0][0] != strconv.Itoa(n) {
+		t.Fatalf("planted %v running records, want %d (is the template %q in the table?)", got, n, templateKey)
+	}
+	return keys
+}
+
+func sqlList(values []string) string {
+	quoted := make([]string, len(values))
+	for i, v := range values {
+		quoted[i] = sqlStr(v)
+	}
+	return strings.Join(quoted, ", ")
+}
+
+// templateSubmission makes one real submission for token, so its record carries the
+// principal's owner identity, and returns its key.
+func templateSubmission(t *testing.T, token string, body contractsv1.ContextFabricInvestigationRequest) string {
+	t.Helper()
+	key := "fg-template-" + randomHex(t, 8)
+	answer := postInvestigation(t, token, body, false, key)
+	if answer.status == http.StatusTooManyRequests {
+		t.Fatalf("the template submission was refused: %.800s", answer.raw)
+	}
+	if n := pgScalar(t, fmt.Sprintf(`SELECT count(*) FROM %s WHERE org_id = %s AND submission_id = %s`, submissionsTable, sqlStr(orgID(t)), sqlStr(key))); n != "1" {
+		t.Fatalf("the template submission left %s records, want 1 (status %d: %.500s)", n, answer.status, answer.raw)
+	}
+	return key
+}
+
+// expectConcurrencyRefusal: a new key is refused 429 concurrency_limited for limit, with a
+// Retry-After, before anything is admitted -- no record is written for it.
+func expectConcurrencyRefusal(t *testing.T, answer apiAnswer, key, limit string) {
+	t.Helper()
+	if answer.status != http.StatusTooManyRequests {
+		t.Fatalf("want 429 %s, got %d: %.800s", limit, answer.status, answer.raw)
+	}
+	envelope := decodeDoc(t, answer.raw)
+	if code := str(envelope, "error", "code"); code != contractsv1.ErrorCodeConcurrencyLimited {
+		t.Fatalf("error code %q, want %s: %.800s", code, contractsv1.ErrorCodeConcurrencyLimited, answer.raw)
+	}
+	if got := str(envelope, "error", "details", contractsv1.ContextFabricConcurrencyLimitDetailsKey); got != limit {
+		t.Fatalf("details.%s %q, want %q: %.800s", contractsv1.ContextFabricConcurrencyLimitDetailsKey, got, limit, answer.raw)
+	}
+	if seconds, err := strconv.Atoi(answer.retryAfter); err != nil || seconds < 1 {
+		t.Fatalf("Retry-After %q, want whole seconds", answer.retryAfter)
+	}
+	if n := pgScalar(t, fmt.Sprintf(`SELECT count(*) FROM %s WHERE org_id = %s AND submission_id = %s`, submissionsTable, sqlStr(orgID(t)), sqlStr(key))); n != "0" {
+		t.Fatalf("the refused key left %s records, want 0", n)
+	}
+}
+
+// TestBothConcurrencyBoundariesAgainstPlantedHeldRuns: the shared concurrency ceilings
+// (2 running per principal, 4 per org: the acr-api defaults), counted from the submission
+// table. No run in this venue stays in flight for long (every turn is a fast client synthesis
+// turn and the venue has no model), so the runs held in flight are PLANTED: running records
+// copied from each principal's real record, written outside acr-api the way another replica's
+// runs are. Real held runs are proved live on kiac (I-48). The admission that counts them and
+// refuses is the real one, over the stream path.
+func TestBothConcurrencyBoundariesAgainstPlantedHeldRuns(t *testing.T) {
+	c := connect(t, "FG_ORG_TOKEN_FILE")
+	tokenA, tokenB, tokenC := readTokenFile(t, "FG_ORG_TOKEN_FILE"), readTokenFile(t, "FG_SCOPED_TOKEN_FILE"), readTokenFile(t, "FG_THIRD_TOKEN_FILE")
+	body := ownerTurnRequest(t, c, ownerProject(t))
+	if n := runningSubmissions(t); n != 0 {
+		t.Fatalf("%d records already running before the case: it would not start from an empty org", n)
+	}
+	templateA, templateB := templateSubmission(t, tokenA, body), templateSubmission(t, tokenB, body)
+	var planted []string
+	t.Cleanup(func() {
+		if len(planted) > 0 {
+			pg(t, fmt.Sprintf(`UPDATE %s SET state = 'abandoned', updated_at = now() WHERE org_id = %s AND submission_id IN (%s)`, submissionsTable, sqlStr(orgID(t)), sqlList(planted)))
+		}
+	})
+
+	// The principal boundary: A holds its 2, the org has room for 2 more. A's third run is
+	// refused for the principal.
+	planted = append(planted, plantHeldRuns(t, templateA, 2)...)
+	key := "fg-third-run-" + randomHex(t, 8)
+	expectConcurrencyRefusal(t, postInvestigation(t, tokenA, body, true, key), key, "principal")
+
+	// The org boundary: B holds 2 as well, so the org holds 4. C runs nothing, and its first
+	// run -- the org's fifth -- is refused for the org.
+	planted = append(planted, plantHeldRuns(t, templateB, 2)...)
+	key = "fg-fifth-run-" + randomHex(t, 8)
+	expectConcurrencyRefusal(t, postInvestigation(t, tokenC, body, true, key), key, "org")
+
+	// And from the other side: one held run ends, and C's next run is admitted, streamed and
+	// finished, and its record does not stay running.
+	pg(t, fmt.Sprintf(`UPDATE %s SET state = 'done', result_id = reserved_result_id, updated_at = now() WHERE org_id = %s AND submission_id = %s`, submissionsTable, sqlStr(orgID(t)), sqlStr(planted[0])))
+	key = "fg-admitted-run-" + randomHex(t, 8)
+	events := streamOf(t, postInvestigation(t, tokenC, body, true, key))
+	if accepted := events[0]; accepted.SubmissionID != key {
+		t.Fatalf("accepted %+v, want the admitted submission %q", accepted, key)
+	}
+	if state := pgScalar(t, fmt.Sprintf(`SELECT state FROM %s WHERE org_id = %s AND submission_id = %s`, submissionsTable, sqlStr(orgID(t)), sqlStr(key))); state == "running" {
+		t.Fatalf("the admitted run's record is still running after its terminal")
 	}
 }

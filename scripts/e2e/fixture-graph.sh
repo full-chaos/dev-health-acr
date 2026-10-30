@@ -145,6 +145,20 @@ write_clickhouse_wrapper() {
   chmod 700 "$out"
 }
 
+# The Postgres wrapper reads one SQL script from stdin and runs it, in one session, as the
+# venue's Postgres admin against acr's database: the I-S09 concurrency cases plant held runs
+# in the submission table and read the rows real runs leave there.
+write_postgres_wrapper() {
+  local argv=() entry out="$STATE/pgq.sh"
+  while IFS= read -r -d '' entry; do argv+=("$entry"); done < <(compose_argv)
+  {
+    printf '#!/usr/bin/env bash\nset -euo pipefail\nexec'
+    printf ' %q' "${argv[@]}"
+    printf ' exec -T -e PGPASSWORD=%q postgres psql -h postgres -U devhealth -d %q -q -At -F %q -v ON_ERROR_STOP=1 -f -\n' "$(<"$STATE/secrets/postgres-password")" "$ACR_DB_NAME" $'\t'
+  } > "$out"
+  chmod 700 "$out"
+}
+
 create_credential() {
   local scope="$1" name="$2" out="$3" token
   token="$(compose run --rm --no-deps acr-credentials credentials create --org-id "$(<"$STATE/org-id")" --repository-scope "$scope" --scope context:read,evidence:read --name "$name" --actor fixture-graph 2>"$STATE/cred.stderr")" \
@@ -162,6 +176,7 @@ run_use_case_tests() {
   set +e
   (cd "$REPO_ROOT" && FG_API_URL="https://localhost:${PORT}" FG_CA_FILE="$STATE/pki/ca.crt" \
     FG_ORG_TOKEN_FILE="$STATE/secrets/fg-org-token" FG_SCOPED_TOKEN_FILE="$STATE/secrets/fg-scoped-token" \
+    FG_THIRD_TOKEN_FILE="$STATE/secrets/fg-third-token" FG_PG_QUERY="$STATE/pgq.sh" \
     FG_SCOPED_SLUG="$FG_WORLD_ONE_SLUG" FG_OTHER_SLUG="$FG_WORLD_TWO_SLUG" \
     FG_MCP_BIN="$STATE/acr-mcp" FG_CH_QUERY="$STATE/chq.sh" FG_ORG_ID="$(<"$STATE/org-id")" \
     go test -tags fixturegraph -count=1 -timeout 20m -json "${filter[@]}" ./tests/fixturegraph/ >"$json")
@@ -201,7 +216,10 @@ main() {
   build_host_mcp
   create_credential '*' fixture-graph-org "$STATE/secrets/fg-org-token"
   create_credential "$FG_WORLD_ONE_SLUG" fixture-graph-scoped "$STATE/secrets/fg-scoped-token"
+  # A third principal: the org concurrency boundary needs one whose own count is below its cap.
+  create_credential '*' fixture-graph-third "$STATE/secrets/fg-third-token"
   write_clickhouse_wrapper
+  write_postgres_wrapper
   run_use_case_tests main
   note 'PASS: fixture-graph'
 }
