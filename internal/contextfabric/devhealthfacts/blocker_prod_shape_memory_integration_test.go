@@ -236,7 +236,9 @@ func blockerProdShapeStatements(t *testing.T, ctx context.Context, direct clickh
 	for _, st := range out {
 		t.Logf("PRODSHAPE[%s] statement %d peak %d bytes (%.1f MiB) read_rows %d: %s", label, st.hash, st.peak, float64(st.peak)/(1<<20), st.readRows, st.head)
 	}
-	if len(out) < 4 {
+	// At least the authorized ids, the roll-up and the totals with the oldest
+	// age read work_item_dependencies on every team read.
+	if len(out) < 3 {
 		t.Fatalf("%s: measured %d statements, want the team blocker statements: the measurement did not happen", label, len(out))
 	}
 	return out
