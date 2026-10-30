@@ -241,15 +241,22 @@ type browserFamilyPurger interface {
 func browserFamilyPurgeFunc(purger browserFamilyPurger, grace time.Duration, logger *slog.Logger) packetPurgeFunc {
 	return func(ctx context.Context, before time.Time, limit int) (int, error) {
 		result, err := purger.PurgeEndedFamilies(ctx, before, grace, limit)
-		attrs := []any{"credentials", result.Credentials, "families", result.Families}
+		probed := false
+		var remaining storagepostgres.BrowserFamilyPurgeRemaining
 		if err == nil {
-			var remaining storagepostgres.BrowserFamilyPurgeRemaining
-			if remaining, err = purger.CountEndedFamiliesRemaining(ctx, before, grace, limit); err == nil {
-				attrs = append(attrs, "credentials_remaining", remaining.Credentials, "families_remaining", remaining.Families)
-			}
+			remaining, err = purger.CountEndedFamiliesRemaining(ctx, before, grace, limit)
+			probed = err == nil
 		}
-		if logger != nil {
-			logger.InfoContext(ctx, "browser family purge", attrs...)
+		// Constant keys in both forms, so the emit census resolves every one;
+		// member_rows, not "credentials": the shared redactor masks any key
+		// that holds a credential fragment, and these are counts.
+		switch {
+		case logger == nil:
+		case probed:
+			logger.InfoContext(ctx, "browser family purge", "member_rows", result.Credentials, "families", result.Families,
+				"member_rows_remaining", remaining.Credentials, "families_remaining", remaining.Families)
+		default:
+			logger.InfoContext(ctx, "browser family purge", "member_rows", result.Credentials, "families", result.Families)
 		}
 		return result.Credentials + result.Families, err
 	}

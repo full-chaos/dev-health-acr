@@ -345,5 +345,5 @@ VALUES ($1, 'fam_startup', 'cred_startup', $2)`, strings.Repeat("a", 64), t0)
 	require.NoError(t, components.close())
 	require.Equal(t, 0, count("browser_token_families"), "the startup purge deletes the ended family")
 	require.Equal(t, 0, count("browser_refresh_tokens"), "its refresh row goes by cascade, without DELETE granted on it")
-	require.Contains(t, logs.String(), `msg="browser family purge" credentials=0 families=1 credentials_remaining=0 families_remaining=0`)
+	require.Contains(t, logs.String(), `msg="browser family purge" member_rows=0 families=1 member_rows_remaining=0 families_remaining=0`)
 }

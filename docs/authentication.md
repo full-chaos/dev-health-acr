@@ -493,8 +493,9 @@ rows per statement.
   `config.oauth.browserClients` (and `config.oauth.devBrowserRedirectUris` in
   development): the chart renders them for acr-api and for the grant Job.
 - Every tick logs one `browser family purge` line at Info, zeros included
-  (the loop's heartbeat): `credentials`, `families` (deleted) and, after a purge
-  that did not fail, `credentials_remaining`, `families_remaining` (still
+  (the loop's heartbeat): `member_rows` (member credentials), `families`
+  (deleted) and, after a purge that did not fail, `member_rows_remaining`,
+  `families_remaining` (still
   eligible, capped at the batch limit + 1), read the same way as the
   `oauth purge` line. A failed tick logs the fixed warning
   `browser family purge tick failed; retrying on next tick` with the error class

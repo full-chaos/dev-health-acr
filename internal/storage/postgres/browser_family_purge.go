@@ -2,7 +2,6 @@ package postgres
 
 import (
 	"context"
-	"database/sql"
 	"fmt"
 	"time"
 
@@ -184,7 +183,7 @@ func (s *BrowserRefreshStore) PurgeEndedFamilies(ctx context.Context, now time.T
 // lock timeout, so a stuck lock fails the tick (the loop's redacted warning,
 // retried next tick) instead of hanging the loop.
 func (s *BrowserRefreshStore) purgeBatch(ctx context.Context, what, statement string, args ...any) (int, error) {
-	tx, err := s.DB.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelReadCommitted})
+	tx, err := s.DB.BeginTx(ctx, nil)
 	if err != nil {
 		return 0, fmt.Errorf("purge %s begin: %w", what, sanitizeDatabaseError(err))
 	}

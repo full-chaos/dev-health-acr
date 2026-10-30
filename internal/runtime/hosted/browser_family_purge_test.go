@@ -161,19 +161,19 @@ func TestBrowserFamilyPurgeFunc_logsOneCountLineOnEveryTick(t *testing.T) {
 	if total, err := purge(context.Background(), time.Now(), 7); total != 0 || err != nil {
 		t.Fatalf("empty tick: total=%d err=%v", total, err)
 	}
-	oneLine("credentials=0 families=0 credentials_remaining=0 families_remaining=0")
+	oneLine("member_rows=0 families=0 member_rows_remaining=0 families_remaining=0")
 
 	purger.remaining = storagepostgres.BrowserFamilyPurgeRemaining{Credentials: 4, Families: 2}
 	if total, err := purge(context.Background(), time.Now(), 7); total != 0 || err != nil {
 		t.Fatalf("skipped tick: total=%d err=%v", total, err)
 	}
-	oneLine("credentials=0 families=0 credentials_remaining=4 families_remaining=2")
+	oneLine("member_rows=0 families=0 member_rows_remaining=4 families_remaining=2")
 
 	purger.result, purger.remaining = storagepostgres.BrowserFamilyPurgeResult{Credentials: 5, Families: 3}, storagepostgres.BrowserFamilyPurgeRemaining{}
 	if total, err := purge(context.Background(), time.Now(), 7); total != 8 || err != nil {
 		t.Fatalf("delete tick: total=%d err=%v", total, err)
 	}
-	oneLine("credentials=5 families=3 credentials_remaining=0 families_remaining=0")
+	oneLine("member_rows=5 families=3 member_rows_remaining=0 families_remaining=0")
 	want := fakeBrowserFamilyPurgeCall{grace: 3 * time.Hour, limit: 7}
 	for _, call := range append(append([]fakeBrowserFamilyPurgeCall(nil), purger.calls...), purger.remainingCalls...) {
 		if call != want {
@@ -189,7 +189,7 @@ func TestBrowserFamilyPurgeFunc_logsOneCountLineOnEveryTick(t *testing.T) {
 		t.Fatalf("partial-failure tick: total=%d err=%v", total, err)
 	}
 	line := logs.String()
-	oneLine("credentials=2 families=0")
+	oneLine("member_rows=2 families=0")
 	if strings.Contains(line, "remaining") || len(purger.remainingCalls) != probes {
 		t.Fatalf("a failed purge was probed or logged remaining: probes %d -> %d, line %q", probes, len(purger.remainingCalls), line)
 	}
@@ -199,7 +199,7 @@ func TestBrowserFamilyPurgeFunc_logsOneCountLineOnEveryTick(t *testing.T) {
 		t.Fatalf("failed probe: total=%d err=%v; want 1 and the probe error", total, err)
 	}
 	line = logs.String()
-	oneLine("credentials=0 families=1")
+	oneLine("member_rows=0 families=1")
 	if strings.Contains(line, "remaining") {
 		t.Fatalf("failed probe logged remaining: %q", line)
 	}
