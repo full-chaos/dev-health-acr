@@ -59,6 +59,15 @@ func (s *DeviceAuthorizationStore) redeem(ctx context.Context, hash storage.Devi
 		return contractsv1.ClientCredential{}, storage.ErrInvalidDeviceAuthorization
 	}
 	input.ApprovingUserID = record.ApprovingSubject
+	// CHAOS-12123: a browser-class credential's session comes from the
+	// locked authorization row too -- the web session the approval was made
+	// in. A record approved without one cannot redeem a browser credential.
+	if input.ClientClass == storage.CredentialClientClassBrowser {
+		if record.ApprovingSessionID == "" || (input.SessionID != "" && input.SessionID != record.ApprovingSessionID) {
+			return contractsv1.ClientCredential{}, storage.ErrInvalidDeviceAuthorization
+		}
+		input.SessionID = record.ApprovingSessionID
+	}
 	input.IssuanceProvenance = storage.CredentialIssuanceProvenanceDeviceAuthorization
 	// Mint first so a failed mint leaves the old credential live, then revoke
 	// the old one; a revocation that fails (including one that lost to an

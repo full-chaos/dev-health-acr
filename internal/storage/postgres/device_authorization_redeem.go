@@ -67,6 +67,15 @@ FROM acr.device_authorizations WHERE device_code_hash = $1 FOR UPDATE`, hash.Str
 		return contractsv1.ClientCredential{}, storage.ErrInvalidDeviceAuthorization
 	}
 	input.ApprovingUserID = record.ApprovingSubject
+	// CHAOS-12123: a browser-class credential's session comes from the
+	// locked authorization row too -- the web session the approval was made
+	// in. A record approved without one cannot redeem a browser credential.
+	if input.ClientClass == storage.CredentialClientClassBrowser {
+		if record.ApprovingSessionID == "" || (input.SessionID != "" && input.SessionID != record.ApprovingSessionID) {
+			return contractsv1.ClientCredential{}, storage.ErrInvalidDeviceAuthorization
+		}
+		input.SessionID = record.ApprovingSessionID
+	}
 	if err := storage.ValidateCredentialCreateInput(input); err != nil {
 		return contractsv1.ClientCredential{}, err
 	}

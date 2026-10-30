@@ -59,6 +59,11 @@ func credentialCreatedEvent(record storage.CredentialRecord) storage.AuditEvent 
 	if credential.Provenance.ClientID != "" {
 		metadata["client_id"] = credential.Provenance.ClientID
 	}
+	// CHAOS-12123: a browser credential's family and its end.
+	if credential.Provenance.FamilyID != "" && credential.Provenance.FamilyExpiresAt != nil {
+		metadata["family_id"] = credential.Provenance.FamilyID
+		metadata["family_expires_at"] = credential.Provenance.FamilyExpiresAt.UTC().Format(time.RFC3339)
+	}
 	return storage.AuditEvent{OrgID: credential.OrgID, ActorType: "user", ActorID: record.CreatedBy, Action: storage.AuditActionCredentialCreated, ResourceType: "acr_credential", ResourceID: credential.CredentialID, Status: "success", CreatedAt: credential.CreatedAt, Metadata: metadata}
 }
 
@@ -78,6 +83,7 @@ func credentialFromCreate(input storage.CredentialCreateInput, createdAt time.Ti
 		Resource:          input.Resource,
 		Provenance: contractsv1.CredentialProvenance{
 			ClientClass: string(input.ClientClass), ApprovingUserID: input.ApprovingUserID, ClientID: input.ClientID,
+			SessionID: input.SessionID, FamilyID: input.FamilyID, FamilyExpiresAt: cloneTime(input.FamilyExpiresAt),
 		},
 	}
 }

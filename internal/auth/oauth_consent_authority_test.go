@@ -44,6 +44,10 @@ func (s *stubConsentAuthority) RedeemForResource(context.Context, storage.Device
 	return IssuedCredential{}, ErrOAuthDeviceNotApproved
 }
 
+func (s *stubConsentAuthority) RedeemBrowserForResource(context.Context, storage.DeviceCodeHash, string, string, []string) (IssuedCredential, error) {
+	return IssuedCredential{}, ErrOAuthDeviceNotApproved
+}
+
 func (s *stubConsentAuthority) StartDeviceGrant(context.Context) (OAuthDeviceGrantStart, error) {
 	return OAuthDeviceGrantStart{
 		DeviceCode: "device", UserCode: "USER-CODE", DeviceCodeHash: storage.HashDeviceCode("device"),

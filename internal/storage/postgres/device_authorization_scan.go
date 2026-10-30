@@ -14,12 +14,13 @@ const deviceAuthorizationColumns = `device_code_hash, user_code_hash, state,
 	       organization_id_hint, repository_hints, authorized_org_id, authorized_repository_scopes, authorized_scopes,
        approving_subject, approving_authentication_method, created_at, expires_at,
        poll_interval_seconds, last_poll_at, approved_at, redeemed_at,
-       redeemed_credential_id, issuance_provenance, ack_required, credential_acked_at`
+       redeemed_credential_id, issuance_provenance, ack_required, credential_acked_at, approving_session_id`
 
 func scanDeviceAuthorization(row scanner) (storage.DeviceAuthorization, error) {
 	var (
 		deviceHashText, userHashText, stateText, provenanceText                string
 		organizationIDHint, orgID, subject, authenticationMethod, credentialID sql.NullString
+		approvingSessionID                                                     sql.NullString
 		repositoryHintsJSON, repositoryJSON, scopeJSON                         []byte
 		createdAt, expiresAt                                                   time.Time
 		intervalSeconds                                                        int64
@@ -31,7 +32,7 @@ func scanDeviceAuthorization(row scanner) (storage.DeviceAuthorization, error) {
 		&organizationIDHint, &repositoryHintsJSON, &orgID, &repositoryJSON, &scopeJSON,
 		&subject, &authenticationMethod, &createdAt, &expiresAt,
 		&intervalSeconds, &lastPollAt, &approvedAt, &redeemedAt,
-		&credentialID, &provenanceText, &ackRequired, &ackedAt,
+		&credentialID, &provenanceText, &ackRequired, &ackedAt, &approvingSessionID,
 	); err != nil {
 		return storage.DeviceAuthorization{}, err
 	}
@@ -72,6 +73,7 @@ func scanDeviceAuthorization(row scanner) (storage.DeviceAuthorization, error) {
 		AuthorizedScopes:              scopes,
 		ApprovingSubject:              subject.String,
 		ApprovingAuthenticationMethod: storage.AuthenticationMethod(authenticationMethod.String),
+		ApprovingSessionID:            approvingSessionID.String,
 		CreatedAt:                     createdAt.UTC(),
 		ExpiresAt:                     expiresAt.UTC(),
 		PollInterval:                  time.Duration(intervalSeconds) * time.Second,

@@ -58,7 +58,11 @@
           "authorization_pending",
           "slow_down",
           "rate_limited",
-          "unavailable"
+          "unavailable",
+          "session_required",
+          "impersonating",
+          "unauthorized_client",
+          "rotation_not_allowed"
         ]
       },
       {
@@ -13435,7 +13439,8 @@
         "closed_vocabulary": [
           "inferred_default",
           "question_stated",
-          "clarification_confirmed"
+          "clarification_confirmed",
+          "server_default"
         ]
       },
       {

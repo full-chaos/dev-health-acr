@@ -70,10 +70,10 @@ Every credential row records how, and for whom, it was issued (migration `0058`)
 
 | Column | Meaning |
 | --- | --- |
-| `client_class` | Derived by the credential lifecycle from the issuance path, never chosen by a caller: `operator` (the `acr-api credentials` command), `workload` (RFC 8693 workload exchange), `native_device` (legacy device flow), `oauth_user` (OAuth authorization code or RFC 8628 device grant). `browser` is reserved for the first-party web client (CHAOS-12070). |
+| `client_class` | Derived by the credential lifecycle from the issuance path, never chosen by a caller: `operator` (the `acr-api credentials` command), `workload` (RFC 8693 workload exchange), `native_device` (legacy device flow), `oauth_user` (OAuth authorization code or RFC 8628 device grant; it always names its client), `browser` (the first-party web browser client's code exchange, CHAOS-12123: the OAuth service names the class for a configured browser client, and the lifecycle accepts it only on an OAuth exchange that carries the session, the family and both expiries). |
 | `approving_user_id` | The web-session subject that approved the device or OAuth authorization. The device-authorization store copies it from the locked authorization row inside the redemption transaction. Empty for `operator` and `workload`. |
 | `client_id` | The OAuth client the credential was issued to. |
-| `session_id`, `family_id`, `family_expires_at` | Reserved for the browser class (CHAOS-12070); no issuance path writes them yet. |
+| `session_id`, `family_id`, `family_expires_at` | Browser class only (CHAOS-12123): the web session (`sid`) the approval was made in -- the store copies it from the locked device-authorization row (`approving_session_id`, migration `0061`), never from the caller -- the token family the credential starts, and the family's absolute end (issuance + 12 h). |
 
 The values are written once at issuance. Every rotation (operator rotate and self-rotate) copies them from the source row; no rotation or lifecycle request can set them, and a database trigger refuses an `UPDATE` that changes a set value. `created_by` stays an audit actor only: a self-rotation writes the rotating credential's id there, which is why it cannot identify the approving user. Authentication copies `client_class` and `approving_user_id` onto the `Principal`; policy that depends on how a credential was issued reads them, never a request header or `Origin`.
 
@@ -366,6 +366,57 @@ statement:
   fixed warning without the error text. The remaining count shares the purge's
   own eligibility rules, so it shows a delete that misses rows the rules
   select, not a rule that is wrong.
+
+## First-party browser client (CHAOS-12123)
+
+The Dev Health web app's browser calls acr-api directly with an ACR OAuth
+credential of class `browser`. The class is set by configuration only:
+
+- `ACR_OAUTH_BROWSER_CLIENTS` (comma separated, empty by default -- the class is
+  off) names the first-party client ids, each an https client ID metadata
+  document URL; it needs `ACR_OAUTH_CLIENT_METADATA_DOCUMENTS`. Any other client
+  keeps `oauth_user`.
+- `ACR_OAUTH_DEV_BROWSER_REDIRECT_URIS` (comma separated) turns on a static
+  development browser client, id `https://localhost/acr/dev-browser-client`,
+  whose metadata is these exact http loopback redirect URIs (each with a port
+  and a path) instead of a fetched document. Startup refuses it unless
+  `ACR_ENVIRONMENT` is `development`.
+- The browser class binds the acr-api resource, `ACR_OAUTH_ISSUER`, which must
+  then be one of `ACR_OAUTH_RESOURCES`; no other configured resource may be a
+  same-host alias of it. A browser call sends `X-ACR-Resource` equal to the
+  issuer; acr-mcp forwards its own MCP resource, so a browser credential is
+  refused there.
+
+What the class changes:
+
+| Step | Browser client | Every other client |
+| --- | --- | --- |
+| `/authorize` redirect | exact string match (no loopback port variance) | loopback port variance as before |
+| Resource | the issuer only (none named = the issuer) | never the issuer; none named = the only other resource |
+| Consent | the web assertion must carry `sid`; refused while impersonating | refused while impersonating |
+| `/token` (code) | 10-minute credential, new token family, family ends 12 h after this issuance, session from the approval | 30-day credential |
+| RFC 8628 device grant | refused (`unauthorized_client`) | as before |
+| Rotation (self or operator) | refused: it renews only by its refresh grant | as before |
+
+A code started under one configuration is not exchanged under another: a
+browser client's code must carry the issuer resource, and no other client's
+code may (`invalid_target`, outcome `resource_mismatch`).
+
+The web consent assertion (`credential:issue`) carries two optional claims the
+web server derives from its own session, never from the browser: `sid` (the
+web session id, 1-256 characters) and `impersonating` (true while the session
+impersonates another user). Every approval -- OAuth consent and the typed-code
+device approval -- is refused while `impersonating` is true; the approval stores
+`sid` on the device authorization.
+
+Telemetry: the class decision is on the `credential_created` audit row
+(`client_class`, `approving_user_id`, `client_id`). Each refusal names its
+reason in the OAuth step line's closed outcome vocabulary: `session_required`
+(browser consent without `sid`, or a browser redemption of an approval without
+one), `impersonating`, `unauthorized_client` (browser client on the device
+grant), `rotation_not_allowed` (step `credential_rotate`). A refused typed-code
+approval writes one Info line `device approval refused` with
+`reason=impersonating`.
 
 ## Rate limiting
 

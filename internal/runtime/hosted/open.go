@@ -214,9 +214,13 @@ func open(ctx context.Context, request buildRequest) (*Runtime, error) {
 	// the engine saves through, because a Save completes the submission
 	// whose reserved id it saves in the same statement; and its sweeper.
 	var investigationSubmissions contextfabric.SubmissionStore
+	// CHAOS-11948: the thread store is the same store too: admission writes
+	// a thread turn in the submission's own transaction.
+	var investigationThreads contextfabric.ThreadStore
 	if investigationResultStore != nil {
 		investigationResults = investigationResultStore
 		investigationSubmissions = investigationResultStore
+		investigationThreads = investigationResultStore
 		runtime.submissionSweeper = startSubmissionSweeper(investigationResultStore, request.options.Logger, request.options.Now, submissionSweepInterval)
 	}
 	// The retrieval route decides every read with the engine's own gate, so
@@ -283,6 +287,7 @@ func open(ctx context.Context, request buildRequest) (*Runtime, error) {
 			InvestigationResults:       investigationResults,
 			StoredResultGate:           storedResultGate,
 			InvestigationSubmissions:   investigationSubmissions,
+			InvestigationThreads:       investigationThreads,
 			NewResultID:                newInvestigationResultID,
 			SourceRows:                 sourceRows,
 			DirectReadGate:             directReadGate,
@@ -782,7 +787,9 @@ func buildContextFabricInvestigator(ctx context.Context, request buildRequest, p
 	// answer reuse stays off entirely: WithAnswerReuse is not passed, so
 	// Save never writes reuse columns and FindReusable always misses.
 	reuseEnabled := request.config.AnswerReuseMaxAge > 0
-	var storeOpts []pginvestigation.StoreOption
+	// CHAOS-11948: Get and FindReusable decide the closed-thread rule on the
+	// runtime's clock, the one the thread routes pass.
+	storeOpts := []pginvestigation.StoreOption{pginvestigation.WithClock(request.options.Now)}
 	if reuseEnabled {
 		storeOpts = append(storeOpts, pginvestigation.WithAnswerReuse(request.config.AnswerReuseMaxAge))
 	}
@@ -1344,7 +1351,10 @@ func oauthRuntime(cfg config.Config, store storage.OAuthStore) *api.OAuthRuntime
 	if !cfg.OAuthConfigured() {
 		return nil
 	}
-	runtime := &api.OAuthRuntime{Store: store, Issuer: cfg.OAuthIssuer, Resources: append([]string(nil), cfg.OAuthResources...), ConsentURL: cfg.OAuthConsentURL}
+	runtime := &api.OAuthRuntime{
+		Store: store, Issuer: cfg.OAuthIssuer, Resources: append([]string(nil), cfg.OAuthResources...), ConsentURL: cfg.OAuthConsentURL,
+		BrowserClients: append([]string(nil), cfg.OAuthBrowserClients...), DevBrowserRedirectURIs: append([]string(nil), cfg.OAuthDevBrowserRedirectURIs...),
+	}
 	if cfg.OAuthClientMetadataDocuments {
 		runtime.ClientMetadata = auth.NewPublicClientMetadataFetcher()
 	}

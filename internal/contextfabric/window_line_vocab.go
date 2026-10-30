@@ -47,7 +47,7 @@ func WindowClassLogVocabulary() []string {
 func WindowProvenanceLogVocabulary() []string {
 	return []string{
 		string(contractsv1.ContextFabricWindowInferredDefault), string(contractsv1.ContextFabricWindowQuestionStated),
-		string(contractsv1.ContextFabricWindowClarificationConfirmed),
+		string(contractsv1.ContextFabricWindowClarificationConfirmed), string(contractsv1.ContextFabricWindowServerDefault),
 	}
 }
 

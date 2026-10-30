@@ -165,6 +165,7 @@ func (s *DeviceAuthorizationStore) Approve(ctx context.Context, hash storage.Use
 	record.AuthorizedScopes = append([]string(nil), grant.Scopes...)
 	record.ApprovingSubject = grant.ApprovingSubject
 	record.ApprovingAuthenticationMethod = grant.ApprovingAuthenticationMethod
+	record.ApprovingSessionID = grant.ApprovingSessionID
 	record.ApprovedAt = ptrTime(now)
 	s.byDevice[deviceHash] = cloneDeviceAuthorization(record)
 	return cloneDeviceAuthorization(record), nil

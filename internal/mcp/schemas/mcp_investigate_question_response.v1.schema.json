@@ -807,9 +807,14 @@
                 "start",
                 "end"
               ]
+            },
+            {
+              "required": [
+                "as_of"
+              ]
             }
           ],
-          "description": "CHAOS-3900 W1: the window an answer actually speaks for once canonicalization has run. Server-computed; never accepted from the wire.",
+          "description": "CHAOS-3900 W1: the window an answer actually speaks for once canonicalization has run. Server-computed; never accepted from the wire. CHAOS-11601: as_of (date-time) is the third form, a current-state snapshot read at that instant with no read window; it is legal only with no start, end or relative_id.",
           "if": {
             "properties": {
               "relative_id": {
@@ -841,9 +846,27 @@
                 "required": [
                   "end"
                 ]
+              },
+              {
+                "required": [
+                  "as_of",
+                  "start"
+                ]
+              },
+              {
+                "required": [
+                  "as_of",
+                  "end"
+                ]
+              },
+              {
+                "required": [
+                  "as_of",
+                  "relative_id"
+                ]
               }
             ],
-            "description": "CHAOS-3900 W1 (codex round 7): mirrors RequestedEvidenceWindow's own completeness guard -- the anyOf above proves at least one of relative_id/start+end is present but does not forbid a partial bound alongside a relative_id. See RequestedEvidenceWindow's identical clause for the full explanation."
+            "description": "CHAOS-3900 W1 (codex round 7): mirrors RequestedEvidenceWindow's own completeness guard -- the anyOf above proves at least one of relative_id/start+end is present but does not forbid a partial bound alongside a relative_id. See RequestedEvidenceWindow's identical clause for the full explanation. CHAOS-11601: it also forbids as_of beside start, end or relative_id."
           },
           "properties": {
             "confidence": {
@@ -858,13 +881,18 @@
               "format": "date-time",
               "type": "string"
             },
+            "as_of": {
+              "type": "string",
+              "format": "date-time"
+            },
             "provenance": {
               "type": "string",
-              "description": "Open vocabulary; documented values: inferred_default, question_stated, clarification_confirmed. A client must tolerate values it does not know.",
+              "description": "Open vocabulary; documented values: inferred_default, question_stated, clarification_confirmed, server_default. A client must tolerate values it does not know.",
               "x-documented-values": [
                 "inferred_default",
                 "question_stated",
-                "clarification_confirmed"
+                "clarification_confirmed",
+                "server_default"
               ]
             },
             "relative_id": {
@@ -6448,9 +6476,14 @@
                 "start",
                 "end"
               ]
+            },
+            {
+              "required": [
+                "as_of"
+              ]
             }
           ],
-          "description": "CHAOS-3900 W1: the window an answer actually speaks for once canonicalization has run. Server-computed; never accepted from the wire.",
+          "description": "CHAOS-3900 W1: the window an answer actually speaks for once canonicalization has run. Server-computed; never accepted from the wire. CHAOS-11601: as_of (date-time) is the third form, a current-state snapshot read at that instant with no read window; it is legal only with no start, end or relative_id.",
           "if": {
             "properties": {
               "relative_id": {
@@ -6482,9 +6515,27 @@
                 "required": [
                   "end"
                 ]
+              },
+              {
+                "required": [
+                  "as_of",
+                  "start"
+                ]
+              },
+              {
+                "required": [
+                  "as_of",
+                  "end"
+                ]
+              },
+              {
+                "required": [
+                  "as_of",
+                  "relative_id"
+                ]
               }
             ],
-            "description": "CHAOS-3900 W1 (codex round 7): mirrors RequestedEvidenceWindow's own completeness guard -- the anyOf above proves at least one of relative_id/start+end is present but does not forbid a partial bound alongside a relative_id. See RequestedEvidenceWindow's identical clause for the full explanation."
+            "description": "CHAOS-3900 W1 (codex round 7): mirrors RequestedEvidenceWindow's own completeness guard -- the anyOf above proves at least one of relative_id/start+end is present but does not forbid a partial bound alongside a relative_id. See RequestedEvidenceWindow's identical clause for the full explanation. CHAOS-11601: it also forbids as_of beside start, end or relative_id."
           },
           "properties": {
             "confidence": {
@@ -6499,13 +6550,18 @@
               "format": "date-time",
               "type": "string"
             },
+            "as_of": {
+              "type": "string",
+              "format": "date-time"
+            },
             "provenance": {
               "type": "string",
-              "description": "Open vocabulary; documented values: inferred_default, question_stated, clarification_confirmed. A client must tolerate values it does not know.",
+              "description": "Open vocabulary; documented values: inferred_default, question_stated, clarification_confirmed, server_default. A client must tolerate values it does not know.",
               "x-documented-values": [
                 "inferred_default",
                 "question_stated",
-                "clarification_confirmed"
+                "clarification_confirmed",
+                "server_default"
               ]
             },
             "relative_id": {

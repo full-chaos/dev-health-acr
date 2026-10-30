@@ -275,6 +275,29 @@ carries' own seed population, so the bypass and the carry can never again name
 different sets; the closed `AnswerReuseBypassReason` counter reports which arm
 fired, a branch that was previously silent.
 
+**Every current-axis answer states its window (CHAOS-11601).** When the
+question names no period and its window class carries no default
+(`state_snapshot`, or no class), `composeEffectiveWindow` returns no window and
+the fact reads use their own default. The assembled result then states that
+default as provenance `server_default` (`server_default_window.go`): the
+default trailing window (`trailing_90d`, `[start of today − 90 d, start of
+today)` UTC, the devhealthfacts `default_trailing` rollup window) when a
+deployments, incidents, metrics or pull_requests read completed, else `as_of`,
+the instant the snapshot was read, window class `state_snapshot`. `as_of` is
+the effective window's third contract form, legal only with no start, end or
+relative_id. The window is stamped on the result only, after the window offer
+and the canonicalization outcome and before Validate and Save: the reads, the
+synthesis input, the gate and the reuse key are those of the request, so no
+number changes. A `server_default` window is no caller authority: it is never
+gated, never offered for confirmation, never a carry source
+(`carriableWindow`), never a reuse match for a request that states a window,
+and does not count as the applied window on a continuation. The kind list is
+pinned to the providers by
+`TestServerDefaultWindowKindsAreTheProvidersThatReadTheDefaultWindow`. Refusal
+and veto results (time bound, continuation, structure and window vetoes) read
+no state and carry no window. Investment reads all history when no window is
+given; CHAOS-12142 tracks investment ignoring a stated window.
+
 ---
 
 ## 2 — Candidate pool internals: why an offer-only hit can never commit
@@ -3273,6 +3296,13 @@ Repeat-key outcomes (the owner's retry of the same key):
 | `abandoned` | the run returned an error (abandoned at once) | `409 submission_abandoned` |
 | `abandoned` | running past `expires_at` (a pod that died mid-run), by reconcile or the sweeper | `409 submission_abandoned`, byte-identical to the row above |
 
+A browser-class credential (CHAOS-12093) must name the key: its create with a
+missing, malformed or repeated `X-ACR-Submission-ID` is `400
+submission_required`, before admission and model work, and leaves no record.
+The class comes from the credential row, never from the request; every other
+class keeps the optional header (a missing one is an implicit admission,
+CHAOS-11997).
+
 A client cannot tell the two `abandoned` causes apart, by design: the plan's
 recovery maps both to "Interrupted — ask again". Another principal's request
 on the same submission id is a new key of its own and never reaches the
@@ -3407,15 +3437,18 @@ route's own bodies, regenerated with `ACR_WRITE_SUBMISSION_GOLDENS=1`.
 
 ## 18 — Ask Dev conversations: the thread contract
 
-A thread is one principal's Ask Dev conversation: the submission records the
-principal admitted with one `X-ACR-Thread-ID`, keyed `(org_id, owner,
-thread_id)`, in turn order (`admitted_at`, then `submission_id`), plus its
+A thread is one owner's Ask Dev conversation: the submission records the
+owner admitted with one `X-ACR-Thread-ID`, keyed `(org_id, owner,
+thread_id)` with the owner matched like a submission's (legacy pair or
+approving user and surface, CHAOS-12091), in turn order (`admitted_at`, then `submission_id`), plus its
 retention (`X-ACR-Thread-Retention-Days`: `0` = until 24 h after the last
 turn, `30` = until 30 days after it; the latest turn that named one decides;
 none named = `0`). The contract (`context_fabric_thread.v1`,
 `context_fabric_thread_list.v1`, the `thread_closed` 409, the gate surface
-`thread`) is published ahead of the store and routes that serve it. Design
-and obligations: `docs/design/ask-dev-conversation-contract.md`.
+`thread`) is served by the store and routes of CHAOS-11948: the thread row
+`acr.context_fabric_threads` (migration `0060`) is written by admission in the
+submission's own transaction, and the routes read and close it. Design and
+obligations: `docs/design/ask-dev-conversation-contract.md` (§6, §9).
 
 ```mermaid
 sequenceDiagram
@@ -3425,7 +3458,7 @@ sequenceDiagram
   participant G as One serving decision (StoredResultGate surface thread + read-by-id rules)
 
   W->>R: GET threads/{thread_id}?before=cursor
-  R->>S: the caller's key (org, owner, thread_id), one page of at most 100 turns
+  R->>S: the caller's thread row (closed or expired = not found), reconcile, one page of at most 100 turns
   alt no open thread for this principal (unknown, another principal's, deleted, expired, malformed)
     R-->>W: 404 not_found (one body)
   else open thread
@@ -3472,7 +3505,27 @@ an unsaved answer stays unsaved (T5); closed is closed on every read (T6); a
 thread holds at most 1000000 turns (T7). A thread read writes one aggregated
 decision line, not one `StoredResultAuthorization` line per turn.
 
-**Construction anchors:** `ContextFabricThread`, `ContextFabricThreadList`,
+Admission of a thread turn, in one transaction under the organization's
+admission lock: the repeat check, the thread row the caller reaches read `FOR
+UPDATE` (owner matched like a submission's, CHAOS-12091: a rotated
+credential of the same user on the same surface reaches the user's row; a
+user's browser and MCP never share one), a closed thread refused (`409
+thread_closed`, nothing written), the submission INSERT linking the row's
+legacy pair, the shared limits, then `AdvanceThread` writes the row. The result
+stores' `Get` and answer reuse hide a result that only closed threads' turns
+name, so every reader of a deleted or expired conversation's answers fails
+closed.
+
+**Construction anchors (store and routes):** `AdvanceThread`, `ThreadStore`
+(`internal/contextfabric/thread.go`); `pginvestigation` `threads.go`
+(`ListThreads`, `GetThread`, `CloseThread`, `hiddenByClosedThreadSQL`) and
+`AdmitSubmission`; `memoryinvestigation/threads.go`;
+`ContextFabricThreadListHandler`, `ContextFabricThreadHandler`
+(`internal/api/context_fabric_threads.go`); `decideStoredResultServing`
+(`internal/api/stored_result_serving.go`); migration
+`0060_context_fabric_threads.sql`.
+
+**Construction anchors (contract):** `ContextFabricThread`, `ContextFabricThreadList`,
 `ParseContextFabricThreadRetention`, `ContextFabricThreadExpiresAt`,
 `ValidContextFabricThreadCursor`, `ErrorCodeThreadClosed`
 (`internal/contracts/v1/context_fabric_thread.go`); the consumer decoders

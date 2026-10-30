@@ -92,6 +92,10 @@ type Store struct {
 	// usage mirrors acr.context_fabric_usage_monthly (CHAOS-11914): written
 	// under mu with the record it admits; nothing removes an entry.
 	usage map[usageKey]int64
+	// threads mirrors acr.context_fabric_threads (CHAOS-11948): written
+	// under mu by AdmitSubmission with the turn it admits, and by
+	// CloseThread.
+	threads map[threadRowKey]contextfabric.ThreadRecord
 	// now stamps the updated_at a Save's completion writes; the submission
 	// methods take the caller's clock.
 	now func() time.Time
@@ -110,6 +114,7 @@ func NewStore() *Store {
 		submissions: make(map[contextfabric.SubmissionKey]contextfabric.SubmissionRecord),
 		reserved:    make(map[reservedResultKey]contextfabric.SubmissionKey),
 		usage:       make(map[usageKey]int64),
+		threads:     make(map[threadRowKey]contextfabric.ThreadRecord),
 		now:         time.Now,
 	}
 }
@@ -313,8 +318,11 @@ func (s *Store) Get(ctx context.Context, principal storage.Principal, resultID s
 
 	s.mu.Lock()
 	stored, found := s.results[resultID]
+	// CHAOS-11948 (design §6 T6): a result only closed threads' turns name
+	// is not served on any read.
+	hidden := found && stored.orgID == orgID && s.hiddenByClosedThreadLocked(orgID, resultID, s.now())
 	s.mu.Unlock()
-	if !found || stored.orgID != orgID {
+	if !found || stored.orgID != orgID || hidden {
 		return contextfabric.StoredInvestigationResult{}, ErrNotFound
 	}
 

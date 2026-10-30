@@ -137,3 +137,85 @@ func TestLoad_oauthPurgeWindowsParse(t *testing.T) {
 		}
 	}
 }
+
+// TestValidateOAuthBrowserClients pins CHAOS-12123's configuration: the
+// browser class is off by default, its clients are metadata documents, it
+// binds the issuer (which must be a resource), and the static development
+// client exists in development only.
+func TestValidateOAuthBrowserClients(t *testing.T) {
+	const client = "https://www.example.test/acr/client-metadata.json"
+	valid := Config{
+		Environment: "production", OAuthIssuer: "https://acr.example.test",
+		OAuthResources:  []string{"https://mcp.example.test/mcp", "https://acr.example.test"},
+		OAuthConsentURL: "https://www.example.test/acr/authorize", WebAssertionJWKSFile: "/run/jwks.json", RequireBackingStores: true,
+		OAuthRequestPurgeGrace: 30 * 24 * time.Hour, OAuthClientIdleTTL: 30 * 24 * time.Hour,
+		OAuthClientMetadataDocuments: true, OAuthBrowserClients: []string{client},
+	}
+	for _, tc := range []struct {
+		name   string
+		mutate func(*Config)
+		want   string
+	}{
+		{"browser client", func(*Config) {}, ""},
+		{"off", func(c *Config) { c.OAuthBrowserClients = nil; c.OAuthResources = c.OAuthResources[:1] }, ""},
+		{"issuer not a resource", func(c *Config) { c.OAuthResources = c.OAuthResources[:1] }, "requires ACR_OAUTH_ISSUER in ACR_OAUTH_RESOURCES"},
+		{"no metadata documents", func(c *Config) { c.OAuthClientMetadataDocuments = false }, "requires ACR_OAUTH_CLIENT_METADATA_DOCUMENTS"},
+		{"http client", func(c *Config) { c.OAuthBrowserClients = []string{"http://www.example.test/acr/client.json"} }, "https client ID metadata document URLs"},
+		{"client without path", func(c *Config) { c.OAuthBrowserClients = []string{"https://www.example.test"} }, "https client ID metadata document URLs"},
+		{"repeated client", func(c *Config) { c.OAuthBrowserClients = []string{client, client} }, "must not repeat"},
+		{"browser clients without oauth", func(c *Config) { c.OAuthIssuer, c.OAuthResources, c.OAuthConsentURL = "", nil, "" }, "require ACR_OAUTH_ISSUER"},
+		{"dev client in production", func(c *Config) { c.OAuthDevBrowserRedirectURIs = []string{"http://localhost:3000/acr/callback"} }, "only when ACR_ENVIRONMENT is development"},
+		{"dev client in staging", func(c *Config) {
+			c.Environment = "staging"
+			c.OAuthDevBrowserRedirectURIs = []string{"http://localhost:3000/acr/callback"}
+		}, "only when ACR_ENVIRONMENT is development"},
+		{"dev client in development", func(c *Config) {
+			c.Environment, c.OAuthBrowserClients = "development", nil
+			c.OAuthDevBrowserRedirectURIs = []string{"http://localhost:3000/acr/callback"}
+		}, ""},
+		{"dev redirect https", func(c *Config) {
+			c.Environment = "development"
+			c.OAuthDevBrowserRedirectURIs = []string{"https://localhost:3000/acr/callback"}
+		}, "http loopback URLs"},
+		{"dev redirect not loopback", func(c *Config) {
+			c.Environment = "development"
+			c.OAuthDevBrowserRedirectURIs = []string{"http://web.example.test:3000/acr/callback"}
+		}, "http loopback URLs"},
+		{"dev redirect without port", func(c *Config) {
+			c.Environment = "development"
+			c.OAuthDevBrowserRedirectURIs = []string{"http://localhost/acr/callback"}
+		}, "http loopback URLs"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := valid
+			cfg.OAuthResources = append([]string(nil), valid.OAuthResources...)
+			cfg.OAuthBrowserClients = append([]string(nil), valid.OAuthBrowserClients...)
+			tc.mutate(&cfg)
+			err := validateOAuthConfig(cfg)
+			if tc.want == "" {
+				if err != nil {
+					t.Fatalf("err = %v, want nil", err)
+				}
+				return
+			}
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("err = %v, want %q", err, tc.want)
+			}
+		})
+	}
+}
+
+func TestLoad_oauthBrowserClientsParse(t *testing.T) {
+	cfg, err := load(mapLookup(map[string]string{
+		"ACR_LOCAL_COMPOSITION_READY":         "true",
+		"ACR_OAUTH_BROWSER_CLIENTS":           " https://www.example.test/acr/a.json , https://www.example.test/acr/b.json",
+		"ACR_OAUTH_DEV_BROWSER_REDIRECT_URIS": "http://localhost:3000/acr/callback",
+	}))
+	if err == nil || !strings.Contains(err.Error(), "require ACR_OAUTH_ISSUER") {
+		t.Fatalf("browser clients without oauth: err = %v", err)
+	}
+	cfg, err = load(mapLookup(map[string]string{"ACR_LOCAL_COMPOSITION_READY": "true"}))
+	if err != nil || len(cfg.OAuthBrowserClients) != 0 || len(cfg.OAuthDevBrowserRedirectURIs) != 0 {
+		t.Fatalf("defaults: browser clients %q dev redirects %q err=%v", cfg.OAuthBrowserClients, cfg.OAuthDevBrowserRedirectURIs, err)
+	}
+}

@@ -90,6 +90,12 @@ type RuntimeDependencies struct {
 	// submission is refused 503 store_unavailable (never run unbound), and a
 	// request that names none is unchanged.
 	InvestigationSubmissions contextfabric.SubmissionStore
+	// InvestigationThreads is the Ask Dev conversation store (CHAOS-11948)
+	// the thread routes read and delete through. It must be the store
+	// InvestigationSubmissions admits through: a thread turn is written in
+	// the submission's own transaction. Optional: without it the thread
+	// routes answer 503 store_unavailable.
+	InvestigationThreads contextfabric.ThreadStore
 	// NewResultID mints the result id admission reserves for a submission.
 	// Nil uses contextfabric.NewInvestigationResultID.
 	NewResultID func() string
@@ -188,6 +194,9 @@ func (r *RuntimeDependencies) validate() error {
 	}
 	if r.InvestigationSubmissions != nil && storage.IsNil(r.InvestigationSubmissions) {
 		return errors.New("hosted context fabric investigation submission store must not be typed nil")
+	}
+	if r.InvestigationThreads != nil && storage.IsNil(r.InvestigationThreads) {
+		return errors.New("hosted context fabric investigation thread store must not be typed nil")
 	}
 	if r.DataOperations != nil && storage.IsNil(r.DataOperations) {
 		return errors.New("hosted data operation runner must not be typed nil")
