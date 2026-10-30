@@ -272,6 +272,35 @@ ORDER BY p.id, toDate(cf.computed_at) DESC`)
 	return byProject, scanErr
 }
 
+// workloadForecastRunMarker is in the forecast run statement and no other.
+const workloadForecastRunMarker = "-- latest forecast run"
+
+// queryLatestForecastRunDay reads the day of the organization's newest
+// capacity forecast run, under the same time bound as the daily series. ops
+// forecasts every team scope that has work in one run, so a project whose
+// newest forecast is older than this day was not forecast again: its forecast
+// backlog is the in-progress count of that older day, not of now. ok is false
+// when the organization holds no forecast in the bound, and then nothing is
+// called stale: a day that cannot be compared is not a stale day.
+func (p *WorkloadProvider) queryLatestForecastRunDay(ctx context.Context, orgID string, timeBound factTimeBound) (day string, ok bool, err error) {
+	statement := `SELECT toString(toDate(max(computed_at))), toUInt64(count())
+FROM capacity_forecasts
+WHERE org_id = {org_id:String}` + timeBound.timestampPredicate("computed_at") + `
+` + workloadForecastRunMarker
+	scanErr := p.facts.query(ctx, statement, orgID, nil, func(row contextpacket.ClickHouseRowScanner) error {
+		var rows uint64
+		if err := row.Scan(&day, &rows); err != nil {
+			return err
+		}
+		ok = rows > 0
+		return nil
+	}, timeBound.bindings()...)
+	if scanErr != nil || !ok {
+		return "", false, scanErr
+	}
+	return day, true, nil
+}
+
 // readTeamWorkload is CHAOS-3780's original capacity_forecasts read. The
 // query itself (row_number() tiebreak over computed_at/forecast_id for the
 // F3 multi-scope-per-team shape) now lives in readers.ReadTeamWorkload --
@@ -584,6 +613,10 @@ func (p *WorkloadProvider) readProjectWorkload(ctx context.Context, orgID string
 	if p50RowCount > rowCount {
 		rowCount = p50RowCount
 	}
+	runDay, runKnown, runErr := p.queryLatestForecastRunDay(ctx, orgID, timeBound)
+	if runErr != nil {
+		return 0, rejected, false, runErr
+	}
 	byProject := make(map[string][]readers.WorkloadProjectRow)
 	for _, r := range scanned {
 		if _, ok := bySubject[r.ProjectSubjectKey]; !ok {
@@ -776,9 +809,19 @@ func (p *WorkloadProvider) readProjectWorkload(ctx context.Context, orgID string
 				fields[name] = value
 			}
 		}
+		// A project forecast the newest run did not refresh is stale: its
+		// scalars are the freshest day's, which is older than that run.
+		// latest_run_day is served beside day so the reader sees both days.
+		var sourceState contextfabric.SourceState
+		if runKnown {
+			fields["latest_run_day"] = contextfabric.StringFactValue(runDay)
+			if day := fields["day"]; day.String != nil && *day.String < runDay {
+				sourceState = contextfabric.SourceStale
+			}
+		}
 		*facts = append(*facts, contextfabric.CanonicalFact{
 			Kind: contextfabric.FactWorkload, Subject: subject, Fields: fields,
-			EvidenceRefIDs: evidenceRefIDs,
+			EvidenceRefIDs: evidenceRefIDs, SourceState: sourceState,
 		})
 	}
 	return rowCount, rejected, breakdownTruncated, nil

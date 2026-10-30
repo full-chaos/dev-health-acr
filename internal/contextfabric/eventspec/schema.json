@@ -8694,6 +8694,21 @@
         "presence": "required"
       },
       {
+        "key": "rows_attached",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "rows_shared",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "rows_cut",
+        "type": "int",
+        "presence": "required"
+      },
+      {
         "key": "missing_kinds",
         "type": "string_slice",
         "presence": "required",

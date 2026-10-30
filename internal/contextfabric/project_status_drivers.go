@@ -24,30 +24,69 @@ func factInteger(fields map[string]FactValue, name string) (int64, bool) {
 	return *value.Integer, true
 }
 
+func factString(fields map[string]FactValue, name string) (string, bool) {
+	value, ok := fields[name]
+	if !ok || value.String == nil || *value.String == "" {
+		return "", false
+	}
+	return *value.String, true
+}
+
+func itemsNoun(count int64) string {
+	if count == 1 {
+		return "item"
+	}
+	return "items"
+}
+
+// projectStatusObservations name each number for what it measures and give the
+// day it was observed. A number with no day is not served: its observation
+// reports no_value.
+//
+// The two backlog_size fields are different measures. The workload fact's is
+// the capacity forecast's backlog: the items in progress when ops last
+// forecast the project (capacity_forecasts, from wip_count_end_of_day). The
+// readiness fact's is the open items of the day (estimate_coverage_metrics_daily:
+// created and not completed or closed by the end of that day).
 var projectStatusObservations = []projectStatusObservation{
 	{
 		kind: FactWorkload, category: "workload", field: "backlog_size", id: "project-status-1-workload",
 		title: func(fields map[string]FactValue) (string, bool) {
-			backlog, ok := factInteger(fields, "backlog_size")
-			return fmt.Sprintf("Backlog: %d items", backlog), ok
+			backlog, okBacklog := factInteger(fields, "backlog_size")
+			day, okDay := factString(fields, "day")
+			if !okBacklog || !okDay {
+				return "", false
+			}
+			title := fmt.Sprintf("Forecast backlog: %d %s in progress (capacity forecast of %s", backlog, itemsNoun(backlog), day)
+			if run, ok := factString(fields, "latest_run_day"); ok && day < run {
+				title += ", not refreshed by the forecast run of " + run
+			}
+			return title + ")", true
 		},
 	},
 	{
 		kind: FactReadiness, category: "readiness", field: "estimated_count", id: "project-status-2-readiness",
 		title: func(fields map[string]FactValue) (string, bool) {
 			estimated, okEstimated := factInteger(fields, "estimated_count")
-			backlog, okBacklog := factInteger(fields, "backlog_size")
-			return fmt.Sprintf("Estimate coverage: %d of %d items estimated", estimated, backlog), okEstimated && okBacklog
+			open, okOpen := factInteger(fields, "backlog_size")
+			day, okDay := factString(fields, "day")
+			if !okEstimated || !okOpen || !okDay {
+				return "", false
+			}
+			return fmt.Sprintf("Estimate coverage: %d of %d open %s estimated (%s)", estimated, open, itemsNoun(open), day), true
 		},
 	},
 	{
 		kind: FactHealth, category: "health", field: "severity", id: "project-status-3-health",
 		title: func(fields map[string]FactValue) (string, bool) {
-			value, ok := fields["severity"]
-			if !ok || value.String == nil || *value.String == "" {
+			severity, ok := factString(fields, "severity")
+			if !ok {
 				return "", false
 			}
-			return "Risk severity: " + *value.String, true
+			if asOf, dated := factString(fields, "severity_as_of"); dated {
+				return "Risk severity: " + severity + " (as of " + asOf + ")", true
+			}
+			return "Risk severity: " + severity, true
 		},
 	},
 }
@@ -56,10 +95,18 @@ type ProjectStatusDriverEvent struct {
 	Emitted        int
 	SkippedBudget  int
 	SkippedIDClash int
-	Missing        []FactKind
-	MissingStates  []string
-	Partial        []FactKind
-	PartialStates  []SourceState
+	// RowsAttached counts the fact rows (both tables) the status claims
+	// carry. RowsShared counts the status claims that carry none because
+	// another claim of the answer already carries the rows of the same fact.
+	// RowsCut counts the status claims whose rows were cut at the claimed
+	// fact row bound.
+	RowsAttached  int
+	RowsShared    int
+	RowsCut       int
+	Missing       []FactKind
+	MissingStates []string
+	Partial       []FactKind
+	PartialStates []SourceState
 }
 
 func projectStatusUsableState(state SourceState) bool {
@@ -107,8 +154,12 @@ func projectStatusDrivers(interpretation InterpretedQuestion, committed []Subjec
 		taken[driver.DriverID] = struct{}{}
 	}
 	takenClaims := make(map[string]struct{}, len(existingClaims))
+	rowsCarried := make(map[string]bool, len(existingClaims))
 	for _, claim := range existingClaims {
 		takenClaims[claim.ClaimID] = struct{}{}
+		if claim.FactID != "" && (len(claim.Rows) > 0 || len(claim.TimeSeriesRows) > 0) {
+			rowsCarried[claim.FactID] = true
+		}
 	}
 	var drivers []DriverJudgment
 	var claims []ClaimedFact
@@ -169,7 +220,21 @@ func projectStatusDrivers(interpretation InterpretedQuestion, committed []Subjec
 			event.Partial = append(event.Partial, observation.kind)
 			event.PartialStates = append(event.PartialStates, fact.SourceState)
 		}
-		claims = append(claims, ClaimedFact{ClaimID: claimID, Kind: observation.kind, Subject: project, Field: observation.field, Value: convertFactValueScalar(claimValue)})
+		// The claim names the one fact it restates and carries that fact's
+		// rows, so its number traces to the dated rows it was read from. When
+		// another claim of the answer already carries the rows of that fact,
+		// the fact id names them and they are not served twice.
+		claim := ClaimedFact{ClaimID: claimID, Kind: observation.kind, Subject: project, Field: observation.field, Value: convertFactValueScalar(claimValue), FactID: fact.ID}
+		if fact.ID != "" && rowsCarried[fact.ID] {
+			event.RowsShared++
+		} else if attached, rows, _, cut := attachCanonicalRows([]ClaimedFact{claim}, []CanonicalFact{*fact}); len(attached) == 1 {
+			claim = attached[0]
+			event.RowsAttached += rows + len(claim.TimeSeriesRows)
+			if cut {
+				event.RowsCut++
+			}
+		}
+		claims = append(claims, claim)
 		drivers = append(drivers, DriverJudgment{
 			DriverID: driverID, Standing: DriverPrincipal, Category: observation.category,
 			Title: title, Summary: summary,

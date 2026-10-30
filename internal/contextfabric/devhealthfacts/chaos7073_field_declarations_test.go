@@ -272,6 +272,7 @@ func t4Cases() []t4Case {
 		{match: workloadDailySeriesMatch, rows: t4Rows(66, func(i int, day string) []any {
 			return workloadDailySeriesRow("linear:proj-1", day, 160, 12.2, 1.28)
 		})},
+		{match: workloadForecastRunMatch, rows: [][]any{{"2026-10-26", uint64(254)}}},
 	}})
 	add(t4Case{name: "workload/project_p50_unavailable", kind: contextfabric.FactWorkload, subjects: proj, tables: []fakeTable{
 		{match: workloadP50MaxMatch, rows: [][]any{workloadP50MaxRow("linear", "proj-1", 0, 0, 1, 0, "", "", false, false)}},

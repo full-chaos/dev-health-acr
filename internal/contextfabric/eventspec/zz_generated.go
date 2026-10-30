@@ -5825,6 +5825,9 @@ type ProjectStatusDriversFields struct {
 	Emitted        int
 	SkippedBudget  int
 	SkippedIDClash int
+	RowsAttached   int
+	RowsShared     int
+	RowsCut        int
 	MissingKinds   []string
 	MissingStates  []string
 	PartialKinds   []string
@@ -5843,7 +5846,7 @@ type ProjectStatusDriversFields struct {
 
 // NewProjectStatusDriversFields is the generated constructor for ProjectStatusDriversFields -- every
 // field ProjectStatusDrivers.Fields declares is a required parameter.
-func NewProjectStatusDriversFields(orgID string, emitted int, skippedBudget int, skippedIDClash int, missingKinds []string, missingStates []string, partialKinds []string, partialStates []string, requestID string) ProjectStatusDriversFields {
+func NewProjectStatusDriversFields(orgID string, emitted int, skippedBudget int, skippedIDClash int, rowsAttached int, rowsShared int, rowsCut int, missingKinds []string, missingStates []string, partialKinds []string, partialStates []string, requestID string) ProjectStatusDriversFields {
 	valid := true
 	if missingKinds == nil {
 		valid = false
@@ -5862,6 +5865,9 @@ func NewProjectStatusDriversFields(orgID string, emitted int, skippedBudget int,
 		Emitted:        emitted,
 		SkippedBudget:  skippedBudget,
 		SkippedIDClash: skippedIDClash,
+		RowsAttached:   rowsAttached,
+		RowsShared:     rowsShared,
+		RowsCut:        rowsCut,
 		MissingKinds:   missingKinds,
 		MissingStates:  missingStates,
 		PartialKinds:   partialKinds,
@@ -5888,6 +5894,9 @@ func (f ProjectStatusDriversFields) SlogArgs() []any {
 		"emitted", f.Emitted,
 		"skipped_budget", f.SkippedBudget,
 		"skipped_id_clash", f.SkippedIDClash,
+		"rows_attached", f.RowsAttached,
+		"rows_shared", f.RowsShared,
+		"rows_cut", f.RowsCut,
 		"missing_kinds", contextfabric.SanitizeLogStrings(f.MissingKinds),
 		"missing_states", contextfabric.SanitizeLogStrings(f.MissingStates),
 		"partial_kinds", contextfabric.SanitizeLogStrings(f.PartialKinds),

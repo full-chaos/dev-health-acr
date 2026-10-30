@@ -23,7 +23,7 @@ func TestProjectStatusTruncatedReadinessIsServedAsAPartialDriver(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got, want := driverTitles(result.Drivers), "Backlog: 40 items|Estimate coverage: 18 of 40 items estimated|Risk severity: medium"; got != want {
+	if got, want := driverTitles(result.Drivers), "Forecast backlog: 40 items in progress (capacity forecast of 2026-10-26)|Estimate coverage: 18 of 40 open items estimated (2026-10-30)|Risk severity: medium"; got != want {
 		t.Fatalf("drivers = %q, want %q", got, want)
 	}
 	if len(result.ClaimedFacts) != 3 {
@@ -113,7 +113,7 @@ func TestProjectStatusStaleFactIsUsableWithAStaleLabel(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got, want := driverTitles(result.Drivers), "Backlog: 40 items|Estimate coverage: 18 of 40 items estimated|Risk severity: medium"; got != want {
+	if got, want := driverTitles(result.Drivers), "Forecast backlog: 40 items in progress (capacity forecast of 2026-10-26)|Estimate coverage: 18 of 40 open items estimated (2026-10-30)|Risk severity: medium"; got != want {
 		t.Fatalf("drivers = %q, want %q", got, want)
 	}
 	for _, driver := range result.Drivers {
@@ -159,7 +159,7 @@ func TestProjectStatusUnusableReadStatesStayMissingAndNameTheState(t *testing.T)
 			if err != nil {
 				t.Fatal(err)
 			}
-			if got, want := driverTitles(result.Drivers), "Backlog: 40 items|Risk severity: medium"; got != want {
+			if got, want := driverTitles(result.Drivers), "Forecast backlog: 40 items in progress (capacity forecast of 2026-10-26)|Risk severity: medium"; got != want {
 				t.Errorf("drivers = %q, want %q", got, want)
 			}
 			served := 0
@@ -184,7 +184,7 @@ func TestProjectStatusQualifierReachesTheComposedAnswerProse(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	label := "Estimate coverage: 18 of 40 items estimated " + projectStatusPartialLabel
+	label := "Estimate coverage: 18 of 40 open items estimated (2026-10-30) " + projectStatusPartialLabel
 	for name, text := range map[string]string{"direct_judgment": result.DirectJudgment, "deterministic_answer": result.DeterministicAnswer} {
 		if !strings.Contains(text, label) {
 			t.Errorf("%s = %q, want the partial label on the estimate driver", name, text)
@@ -238,7 +238,7 @@ func TestProjectStatusRealRegistryReadNamesTheStateOfAnEmptyRead(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if got, want := driverTitles(result.Drivers), "Backlog: 40 items|Risk severity: medium"; got != want {
+			if got, want := driverTitles(result.Drivers), "Forecast backlog: 40 items in progress (capacity forecast of 2026-10-26)|Risk severity: medium"; got != want {
 				t.Errorf("drivers = %q, want %q", got, want)
 			}
 			want := contractsv1.ContextFabricProjectStatusMissingLimitation("readiness", string(state))

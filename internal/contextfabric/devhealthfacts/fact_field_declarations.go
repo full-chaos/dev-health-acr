@@ -777,6 +777,7 @@ func workloadFields() []fieldDecl {
 			declAggregate(fBool("high_variance")),
 			fStr("p50_unavailable_reason"),
 			declFresh(fStr("day")),
+			fStr("latest_run_day"),
 			declAggregate(fInt("backlog_size", "count")),
 			declAggregate(fNum("throughput_mean", "")),
 			declAggregate(fNum("throughput_stddev", "")),

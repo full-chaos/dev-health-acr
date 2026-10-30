@@ -3,6 +3,8 @@ package contextfabric
 import (
 	"strings"
 	"testing"
+
+	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 )
 
 func projectStatusFacts(project SubjectRef) []CanonicalFact {
@@ -11,8 +13,8 @@ func projectStatusFacts(project SubjectRef) []CanonicalFact {
 	}
 	return []CanonicalFact{
 		mk(FactStatus, "evidence_ps_status", map[string]FactValue{"status": StringFactValue("in_progress")}),
-		mk(FactWorkload, "evidence_ps_workload", map[string]FactValue{"backlog_size": IntegerFactValue(40)}),
-		mk(FactReadiness, "evidence_ps_readiness", map[string]FactValue{"estimated_count": IntegerFactValue(18), "backlog_size": IntegerFactValue(40)}),
+		mk(FactWorkload, "evidence_ps_workload", map[string]FactValue{"backlog_size": IntegerFactValue(40), "day": StringFactValue("2026-10-26"), "latest_run_day": StringFactValue("2026-10-26")}),
+		mk(FactReadiness, "evidence_ps_readiness", map[string]FactValue{"estimated_count": IntegerFactValue(18), "backlog_size": IntegerFactValue(40), "day": StringFactValue("2026-10-30")}),
 		mk(FactHealth, "evidence_ps_health", map[string]FactValue{"severity": StringFactValue("medium")}),
 	}
 }
@@ -47,13 +49,13 @@ func TestProjectStatusServerModeServesStatusFactsAsDrivers(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got, want := driverTitles(result.Drivers), "Backlog: 40 items|Estimate coverage: 18 of 40 items estimated|Risk severity: medium"; got != want {
+	if got, want := driverTitles(result.Drivers), "Forecast backlog: 40 items in progress (capacity forecast of 2026-10-26)|Estimate coverage: 18 of 40 open items estimated (2026-10-30)|Risk severity: medium"; got != want {
 		t.Errorf("drivers = %q, want %q", got, want)
 	}
 	if len(result.ClaimedFacts) != 3 {
 		t.Errorf("claimed facts = %d, want 3", len(result.ClaimedFacts))
 	}
-	if !strings.Contains(result.DirectJudgment, "Principal driver: Backlog: 40 items") {
+	if !strings.Contains(result.DirectJudgment, "Principal driver: Forecast backlog: 40 items in progress (capacity forecast of 2026-10-26)") {
 		t.Errorf("judgment = %q", result.DirectJudgment)
 	}
 }
@@ -86,7 +88,7 @@ func TestProjectStatusMissingKindServesNoDriver(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got, want := driverTitles(result.Drivers), "Estimate coverage: 18 of 40 items estimated"; got != want {
+	if got, want := driverTitles(result.Drivers), "Estimate coverage: 18 of 40 open items estimated (2026-10-30)"; got != want {
 		t.Errorf("drivers = %q, want %q", got, want)
 	}
 }
@@ -221,5 +223,131 @@ func TestProjectStatusDriversAreBoundByTheNarrationGrant(t *testing.T) {
 	drivers, claims, event := projectStatusDrivers(InterpretedQuestion{FactRequirements: projectStatusRequirements}, []SubjectRef{project}, projectStatusFacts(project), Coverage{}, nil, nil, allocation)
 	if len(drivers) != 2 || len(claims) != 2 || event.SkippedBudget != 1 {
 		t.Errorf("drivers=%d claims=%d skipped_budget=%d, want 2, 2 and 1", len(drivers), len(claims), event.SkippedBudget)
+	}
+}
+
+// TestProjectStatusClaimsNameTheirFactAndCarryItsRows: every served status
+// claim names the one fact it restates and carries that fact's dated rows, so
+// its number traces to the rows it was read from.
+func TestProjectStatusClaimsNameTheirFactAndCarryItsRows(t *testing.T) {
+	rig := projectStatusRig(t, projectStatusRequirements, func(p SubjectRef) []CanonicalFact {
+		facts := projectStatusFacts(p)
+		facts[1].Fields["daily_workload"] = TableFactValue(FactTable{
+			Shape: FactTableTimeSeries, Key: []string{"day"}, Measures: []string{"backlog_size"}, Grain: GrainDay,
+			Rows: []FactValueRow{
+				{Fields: map[string]FactValue{"day": StringFactValue("2026-10-26"), "backlog_size": IntegerFactValue(40)}},
+				{Fields: map[string]FactValue{"day": StringFactValue("2026-10-19"), "backlog_size": IntegerFactValue(38)}},
+			},
+		})
+		// The registry's last step: every fact a read returns carries its id.
+		AssignFactIDs(facts)
+		return facts
+	})
+	result, _, err := rig.investigate(serverRequest())
+	if err != nil {
+		t.Fatal(err)
+	}
+	served := 0
+	for _, claim := range result.ClaimedFacts {
+		if !strings.HasPrefix(claim.ClaimID, "claim_project_status_") {
+			continue
+		}
+		served++
+		if want := MintFactID(claim.Kind, claim.Subject, 0); claim.FactID != want {
+			t.Errorf("claim %q (%s.%s) fact_id = %q, want the fact it restates %q", claim.ClaimID, claim.Kind, claim.Field, claim.FactID, want)
+		}
+		if claim.Kind == FactWorkload {
+			if len(claim.Rows) != 2 || claim.Table == nil || claim.Table.Field != "daily_workload" {
+				t.Errorf("workload claim rows=%d table=%#v, want the fact's 2 daily_workload rows", len(claim.Rows), claim.Table)
+			} else if day := claim.Rows[0].Fields["day"].String; day == nil || *day != "2026-10-26" {
+				t.Errorf("workload claim first row day = %#v, want 2026-10-26", claim.Rows[0].Fields["day"])
+			}
+		}
+	}
+	if served != 3 {
+		t.Fatalf("status claims = %d, want 3", served)
+	}
+	if got := rig.telemetry.projectStatusDrivers; len(got) != 1 || got[0].RowsAttached != 2 || got[0].RowsCut != 0 {
+		t.Errorf("events = %#v, want one event with 2 rows attached and none cut", got)
+	}
+}
+
+// TestProjectStatusForecastNotRefreshedByTheLatestRunIsServedStale: a forecast
+// backlog older than the newest forecast run names both days and is served
+// stale, with its value as read.
+func TestProjectStatusForecastNotRefreshedByTheLatestRunIsServedStale(t *testing.T) {
+	rig := projectStatusRig(t, projectStatusRequirements, func(p SubjectRef) []CanonicalFact {
+		facts := projectStatusFacts(p)
+		facts[1].Fields = map[string]FactValue{"backlog_size": IntegerFactValue(1), "day": StringFactValue("2026-10-02"), "latest_run_day": StringFactValue("2026-10-26")}
+		facts[1].SourceState = SourceStale
+		return facts
+	})
+	result, _, err := rig.investigate(serverRequest())
+	if err != nil {
+		t.Fatal(err)
+	}
+	var workload *DriverJudgment
+	for index := range result.Drivers {
+		if result.Drivers[index].DriverID == "project-status-1-workload" {
+			workload = &result.Drivers[index]
+		}
+	}
+	if workload == nil {
+		t.Fatalf("drivers = %q, want the workload driver", driverTitles(result.Drivers))
+	}
+	if want := "Forecast backlog: 1 item in progress (capacity forecast of 2026-10-02, not refreshed by the forecast run of 2026-10-26)"; workload.Title != want {
+		t.Errorf("title = %q, want %q", workload.Title, want)
+	}
+	if workload.SourceState != SourceStale || !strings.Contains(workload.Summary, "(stale: the source read is out of date).") {
+		t.Errorf("state = %q summary = %q, want a stale driver", workload.SourceState, workload.Summary)
+	}
+}
+
+// TestProjectStatusUndatedNumberIsMissingNotServed: a number with no day of
+// observation is not served; its kind reports no_value.
+func TestProjectStatusUndatedNumberIsMissingNotServed(t *testing.T) {
+	project := acceptanceProject()
+	facts := projectStatusFacts(project)
+	delete(facts[1].Fields, "day")
+	delete(facts[2].Fields, "day")
+	drivers, _, event := projectStatusDrivers(InterpretedQuestion{FactRequirements: projectStatusRequirements}, []SubjectRef{project}, facts, Coverage{}, nil, nil, ItemAllocation{})
+	if got, want := driverTitles(drivers), "Risk severity: medium"; got != want {
+		t.Errorf("drivers = %q, want %q", got, want)
+	}
+	if len(event.Missing) != 2 || event.MissingStates[0] != projectStatusStateNoValue || event.MissingStates[1] != projectStatusStateNoValue {
+		t.Errorf("missing = %v %v, want workload and readiness no_value", event.Missing, event.MissingStates)
+	}
+}
+
+// TestProjectStatusClaimSharesTheRowsAnotherClaimOfTheFactCarries: when a
+// claim of the answer already carries the rows of the same fact, the status
+// claim names that fact and does not serve its rows a second time.
+func TestProjectStatusClaimSharesTheRowsAnotherClaimOfTheFactCarries(t *testing.T) {
+	project := acceptanceProject()
+	facts := projectStatusFacts(project)
+	facts[1].Fields["daily_workload"] = TableFactValue(FactTable{
+		Shape: FactTableTimeSeries, Key: []string{"day"}, Measures: []string{"backlog_size"}, Grain: GrainDay,
+		Rows: []FactValueRow{{Fields: map[string]FactValue{"day": StringFactValue("2026-10-26"), "backlog_size": IntegerFactValue(40)}}},
+	})
+	AssignFactIDs(facts)
+	existing := []ClaimedFact{{
+		ClaimID: "claim-model-backlog", Kind: FactWorkload, Subject: project, Field: "backlog_size", Value: convertFactValueScalar(facts[1].Fields["backlog_size"]), FactID: facts[1].ID,
+		Rows: []contractsv1.ContextFabricClaimedFactRow{convertFactValueRow(facts[1].Fields["daily_workload"].Rows[0])},
+	}}
+	_, claims, event := projectStatusDrivers(InterpretedQuestion{FactRequirements: projectStatusRequirements}, []SubjectRef{project}, facts, Coverage{}, nil, existing, ItemAllocation{})
+	var workload *ClaimedFact
+	for index := range claims {
+		if claims[index].Kind == FactWorkload {
+			workload = &claims[index]
+		}
+	}
+	if workload == nil {
+		t.Fatal("no workload status claim")
+	}
+	if workload.FactID != facts[1].ID || len(workload.Rows) != 0 || len(workload.TimeSeriesRows) != 0 {
+		t.Errorf("workload claim fact_id=%q rows=%d, want fact %q and no second copy of its rows", workload.FactID, len(workload.Rows), facts[1].ID)
+	}
+	if event.RowsShared != 1 {
+		t.Errorf("rows shared = %d, want 1", event.RowsShared)
 	}
 }

@@ -14,7 +14,7 @@ import (
 
 var (
 	projectStatusDriversLegacyKeys = []string{
-		"time", "level", "msg", "org_id", "emitted", "skipped_budget", "skipped_id_clash",
+		"time", "level", "msg", "org_id", "emitted", "skipped_budget", "skipped_id_clash", "rows_attached", "rows_shared", "rows_cut",
 		"missing_kinds", "missing_states", "partial_kinds", "partial_states", "request_id",
 	}
 	teamBlockersDriversLegacyKeys = []string{
@@ -93,7 +93,7 @@ func TestProjectStatusDriversLineCertifiesWhatTheBuilderWrites(t *testing.T) {
 	workloadFact := func(state contextfabric.SourceState, evidence []string, fields map[string]contextfabric.FactValue) contextfabric.CanonicalFact {
 		return contextfabric.CanonicalFact{Kind: contextfabric.FactWorkload, Subject: project, SourceState: state, EvidenceRefIDs: evidence, Fields: fields}
 	}
-	backlog := map[string]contextfabric.FactValue{"backlog_size": contextfabric.IntegerFactValue(4)}
+	backlog := map[string]contextfabric.FactValue{"backlog_size": contextfabric.IntegerFactValue(4), "day": contextfabric.StringFactValue("2026-10-26")}
 	for _, facts := range [][]contextfabric.CanonicalFact{
 		{workloadFact(contextfabric.SourceNoData, nil, nil)},
 		{workloadFact(contextfabric.SourceAvailable, nil, backlog)},

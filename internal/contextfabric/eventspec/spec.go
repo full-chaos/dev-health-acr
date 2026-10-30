@@ -3373,7 +3373,7 @@ var PullRequestProjectNativeFirst = Event{
 	},
 }
 
-// ProjectStatusDrivers is the Info line of one project status driver decision: how many drivers were emitted or skipped, and which fact kinds were missing or partial and in which state. Counts and closed names only, never a value or a subject.
+// ProjectStatusDrivers is the Info line of one project status driver decision: how many drivers were emitted or skipped, how many fact rows the status claims carry, how many carry none because another claim already carries the rows of the same fact, and how many had their rows cut at the claimed fact row bound, and which fact kinds were missing or partial and in which state. Counts and closed names only, never a value or a subject.
 var ProjectStatusDrivers = Event{
 	ID:                 "contextfabric.project_status_drivers",
 	Msg:                "context fabric project status drivers",
@@ -3386,6 +3386,9 @@ var ProjectStatusDrivers = Event{
 		{Key: "emitted", Type: FieldInt, Presence: PresenceRequired},
 		{Key: "skipped_budget", Type: FieldInt, Presence: PresenceRequired},
 		{Key: "skipped_id_clash", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "rows_attached", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "rows_shared", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "rows_cut", Type: FieldInt, Presence: PresenceRequired},
 		{Key: "missing_kinds", Type: FieldStringSlice, Presence: PresenceRequired, ClosedVocabulary: contextfabric.ProjectStatusDriverKindVocabulary()},
 		{Key: "missing_states", Type: FieldStringSlice, Presence: PresenceRequired, ClosedVocabulary: contextfabric.ProjectStatusDriverMissingStateVocabulary()},
 		{Key: "partial_kinds", Type: FieldStringSlice, Presence: PresenceRequired, ClosedVocabulary: contextfabric.ProjectStatusDriverKindVocabulary()},
