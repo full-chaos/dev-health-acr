@@ -89,6 +89,11 @@ func TestAStreamedSubmissionIsTheSubmissionsRun(t *testing.T) {
 	if harness.investigator.executions.Load() != 1 || harness.investigator.reservedSeen.Load() != 1 {
 		t.Fatalf("executions %d, reservations seen %d: want one run under the submission's reservation", harness.investigator.executions.Load(), harness.investigator.reservedSeen.Load())
 	}
+	// The shared delivery completed the record, on the line the JSON path
+	// writes (the save already made it final).
+	if !strings.Contains(harness.logs[0].String(), `"completion":"already_final"`) {
+		t.Fatalf("the streamed answer did not complete the submission:\n%s", harness.logs[0].String())
+	}
 	// The record is done: a JSON retry of the key replays the same result
 	// and runs nothing.
 	if again := servedResultID(t, harness.post(0, harness.tokenA, "submission-stream-01", submissionQuestion)); again != accepted.ReservedResultID {
@@ -119,6 +124,25 @@ func TestAFailedStreamedSubmissionIsAbandoned(t *testing.T) {
 		t.Fatalf("the streamed failure did not abandon the submission:\n%s", harness.logs[0].String())
 	}
 	expectSubmissionRefusal(t, harness.post(0, harness.tokenA, "submission-stream-02", submissionQuestion), contractsv1.ErrorCodeSubmissionAbandoned)
+	if got := harness.investigator.executions.Load(); got != 1 {
+		t.Fatalf("executions = %d, want 1", got)
+	}
+}
+
+// TestAnUnsavedStreamedAnswerMarksItsSubmission: an answer served without
+// being stored makes the record done_unsaved through the shared delivery, so
+// a JSON retry of the key is refused submission_unsaved, never run again.
+func TestAnUnsavedStreamedAnswerMarksItsSubmission(t *testing.T) {
+	harness, _ := newMemorySubmissionHarness(t, 1)
+	harness.investigator.mode.Store(int32(runUnsaved))
+	stream := streamSubmission(t, harness, 0, "submission-stream-03")
+	if err := contractsv1.ValidateContextFabricInvestigationEventStream(stream.events); err != nil {
+		t.Fatalf("grammar: %v\n%s", err, stream.raw)
+	}
+	if terminal := stream.events[len(stream.events)-1]; terminal.Type != contractsv1.ContextFabricInvestigationEventResult {
+		t.Fatalf("terminal %+v, want the served answer", terminal)
+	}
+	expectSubmissionRefusal(t, harness.post(0, harness.tokenA, "submission-stream-03", submissionQuestion), contractsv1.ErrorCodeSubmissionUnsaved)
 	if got := harness.investigator.executions.Load(); got != 1 {
 		t.Fatalf("executions = %d, want 1", got)
 	}

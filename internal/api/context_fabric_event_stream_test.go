@@ -1040,6 +1040,11 @@ func TestAPanicAfterTheStreamStartedEndsItWithAnInternalError(t *testing.T) {
 				if terminal.Type != contractsv1.ContextFabricInvestigationEventResult {
 					t.Fatalf("terminal %+v, want the result written before the panic", terminal)
 				}
+				// abort sees the terminal and does nothing: no second
+				// terminal is even attempted.
+				if strings.Contains(logs.String(), "already carries its terminal event") {
+					t.Fatalf("the abort tried a second terminal:\n%s", logs.String())
+				}
 			}
 			if line := logLine(t, logs, "request panic recovered"); line["failure_class"] != "event_stream_panic" || line["request_id"] != streamTestRequestID {
 				t.Fatalf("panic line %v", line)
