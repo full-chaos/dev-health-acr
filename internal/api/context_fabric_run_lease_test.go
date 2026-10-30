@@ -674,3 +674,66 @@ func TestAJSONSubmissionIsNotLeased(t *testing.T) {
 		t.Fatalf("record %+v (%v), want no lease", record, err)
 	}
 }
+
+// A running JSON submission is connection-owned (leases are the stream's):
+// cancel cannot stop it and says so -- 409 submission_in_progress with
+// details.reason not_leased and Retry-After -- and attach has no log to
+// serve -- 410 cursor_expired with details.reason not_logged. Neither
+// changes the run, which finishes with its answer.
+func TestARunningJSONSubmissionCanBeNeitherCanceledNorAttached(t *testing.T) {
+	harness, store, _ := newLeaseHarness(t, 1)
+	harness.investigator.mode.Store(int32(runBlockThenSave))
+	finished := make(chan int, 1)
+	go func() { finished <- harness.post(0, harness.tokenA, "submission-json-run01", submissionQuestion).Code }()
+	waitEntered(t, harness.investigator.entered)
+
+	recorder := harness.cancelRun(0, harness.tokenA, "submission-json-run01")
+	if recorder.Code != http.StatusConflict {
+		t.Fatalf("cancel of a running JSON submission = %d %s, want 409", recorder.Code, recorder.Body.String())
+	}
+	var refusal struct {
+		Error struct {
+			Code    string         `json:"code"`
+			Details map[string]any `json:"details"`
+		} `json:"error"`
+	}
+	if err := json.Unmarshal(recorder.Body.Bytes(), &refusal); err != nil {
+		t.Fatal(err)
+	}
+	if recorder.Code != http.StatusConflict || refusal.Error.Code != contractsv1.ErrorCodeSubmissionInProgress || refusal.Error.Details["reason"] != "not_leased" || recorder.Header().Get("Retry-After") != "3" {
+		t.Fatalf("cancel of a running JSON submission = %d %s (Retry-After %q), want 409 submission_in_progress not_leased", recorder.Code, recorder.Body.String(), recorder.Header().Get("Retry-After"))
+	}
+
+	attach, response := openLiveStream(t, harness.attachRequest(harness.serveApp(0), harness.tokenA, "submission-json-run01"))
+	if attach != nil {
+		t.Fatal("an attach to a running JSON submission opened a stream")
+	}
+	status, code, body := attachRefusal(t, response)
+	var expired struct {
+		Error struct {
+			Details map[string]any `json:"details"`
+		} `json:"error"`
+	}
+	_ = json.Unmarshal(body, &expired)
+	if status != http.StatusGone || code != contractsv1.ErrorCodeCursorExpired || expired.Error.Details["reason"] != "not_logged" {
+		t.Fatalf("attach to a running JSON submission = %d %s, want 410 cursor_expired not_logged", status, body)
+	}
+
+	key, err := contextfabric.SubmissionKeyFor(harness.investigator.lastPrincipal.Load().(storage.Principal), "submission-json-run01")
+	if err != nil {
+		t.Fatal(err)
+	}
+	record, err := store.GetSubmission(context.Background(), key, harness.clock.Now())
+	if err != nil || record.Leased() || !record.CancelRequestedAt.IsZero() || record.State != contextfabric.SubmissionRunning {
+		t.Fatalf("record %+v (%v), want running, no lease and no t_req", record, err)
+	}
+	close(harness.investigator.release)
+	select {
+	case code := <-finished:
+		if code != http.StatusOK {
+			t.Fatalf("the JSON run answered %d, want its answer", code)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("the JSON run did not finish")
+	}
+}
