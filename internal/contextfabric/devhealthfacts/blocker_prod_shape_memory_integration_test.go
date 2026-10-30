@@ -189,9 +189,10 @@ GROUP BY normalized_query_hash ORDER BY max(memory_usage) DESC`, mark)
 // the authorization read that precedes them is a different statement). A wrapper or session default that drops the
 // setting leaves it out of the map, so it is reported here.
 // blockerProdShapeBlockerStatements is the number of blocker statements over
-// work_item_dependencies (the two team statements and the repository one); a new,
-// renamed or dropped statement changes it and fails the read-back.
-const blockerProdShapeBlockerStatements = 3
+// work_item_dependencies (the team totals with the age, and the repository
+// one); a new, renamed or dropped statement changes it and fails the
+// read-back.
+const blockerProdShapeBlockerStatements = 2
 
 // blockerProdShapeAuthorizationRead is the head of the one other statement over
 // that table, the authorization read that precedes them.
@@ -236,7 +237,9 @@ func blockerProdShapeStatements(t *testing.T, ctx context.Context, direct clickh
 	for _, st := range out {
 		t.Logf("PRODSHAPE[%s] statement %d peak %d bytes (%.1f MiB) read_rows %d: %s", label, st.hash, st.peak, float64(st.peak)/(1<<20), st.readRows, st.head)
 	}
-	if len(out) < 4 {
+	// At least the authorized ids, the roll-up and the totals with the oldest
+	// age read work_item_dependencies on every team read.
+	if len(out) < 3 {
 		t.Fatalf("%s: measured %d statements, want the team blocker statements: the measurement did not happen", label, len(out))
 	}
 	return out

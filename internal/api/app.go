@@ -98,7 +98,7 @@ func (a *App) registerRoutes(mux routeMux) {
 	mux.HandleFunc("GET /readyz", a.handleReady)
 	mux.Handle("GET /api/v1/agent-context/capabilities", a.protectedRuntimeHandler(limits.RequestClassCapabilities, auth.ScopeContextRead, false, true, http.HandlerFunc(a.handleCapabilities)))
 	mux.Handle("POST /api/v1/agent-context/context-packets", a.protectedRuntimeHandler(limits.RequestClassContext, auth.ScopeContextRead, false, true, a.requireDataStoresReady(http.HandlerFunc(a.handleContextPacket))))
-	mux.Handle("GET /api/v1/agent-context/evidence/{evidence_ref_id}", a.protectedRuntimeHandler(limits.RequestClassEvidence, auth.ScopeEvidenceRead, true, true, a.requireDataStoresReady(http.HandlerFunc(a.handleEvidence))))
+	mux.Handle("GET "+AgentContextEvidencePath, a.protectedRuntimeHandler(limits.RequestClassEvidence, auth.ScopeEvidenceRead, true, true, a.requireDataStoresReady(http.HandlerFunc(a.handleEvidence))))
 	mux.Handle("POST /api/v1/agent-context/episodes", a.protectedRuntimeHandler(limits.RequestClassEpisode, auth.ScopeEpisodeWrite, true, false, http.HandlerFunc(a.handleEpisode)))
 	mux.Handle("POST "+ContextFabricInvestigationsPath, a.ContextFabricInvestigationHandler(a.investigator()))
 	mux.Handle("GET "+ContextFabricInvestigationResultPath, a.ContextFabricInvestigationResultHandler(a.investigationResults(), a.storedResultGate()))
