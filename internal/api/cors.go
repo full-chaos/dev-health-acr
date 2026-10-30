@@ -76,24 +76,52 @@ func (d *corsDecision) logFields() []any {
 	return fields
 }
 
+// corsBrowserRoutes are the browser routes as their registered mux patterns
+// (app.go), with their closed class names. A path is a browser route only
+// when it matches one of these patterns exactly, never because it sits under
+// one of their prefixes (CHAOS-12125): a nested or empty-segment path that no
+// route serves answers no CORS.
+var corsBrowserRoutes = [...]struct{ pattern, class string }{
+	{OAuthAuthorizationServerMetadataPath, "oauth_metadata"},
+	{OAuthTokenPath, "oauth_token"},
+	{ContextFabricInvestigationsPath, "investigations"},
+	{ContextFabricInvestigationResultPath, "investigations"},
+	{ContextFabricSubmissionStatusPath, "investigations"},
+	{AgentContextEvidencePath, "evidence"},
+}
+
 // corsRouteClass is the closed name of a browser route ("" for any other
 // path).
 func corsRouteClass(path string) string {
-	switch {
-	case path == OAuthAuthorizationServerMetadataPath:
-		return "oauth_metadata"
-	case path == OAuthTokenPath:
-		return "oauth_token"
-	case path == ContextFabricInvestigationsPath || strings.HasPrefix(path, ContextFabricInvestigationsPath+"/"):
-		return "investigations"
-	case strings.HasPrefix(path, corsEvidencePrefix):
-		return "evidence"
+	for _, route := range corsBrowserRoutes {
+		if corsPatternMatches(route.pattern, path) {
+			return route.class
+		}
 	}
 	return ""
 }
 
-// corsEvidencePrefix is the evidence read route's fixed prefix.
-const corsEvidencePrefix = "/api/v1/agent-context/evidence/"
+// corsPatternMatches reports whether path matches a mux pattern's path,
+// segment by segment: a literal segment matches itself, and a {name}
+// wildcard matches exactly one non-empty segment.
+func corsPatternMatches(pattern, path string) bool {
+	want, got := strings.Split(pattern, "/"), strings.Split(path, "/")
+	if len(want) != len(got) {
+		return false
+	}
+	for i, segment := range want {
+		if strings.HasPrefix(segment, "{") && strings.HasSuffix(segment, "}") {
+			if got[i] == "" {
+				return false
+			}
+			continue
+		}
+		if segment != got[i] {
+			return false
+		}
+	}
+	return true
+}
 
 // CORSRouteClassVocabulary is the closed set of browser route names.
 func CORSRouteClassVocabulary() [4]string {
