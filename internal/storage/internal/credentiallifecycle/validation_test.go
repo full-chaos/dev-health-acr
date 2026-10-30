@@ -140,3 +140,13 @@ func TestValidateCreateInputRejectsTheRetiredContextAdminScope(t *testing.T) {
 
 	require.ErrorIs(t, ValidateCreateInput(input), ErrInvalidInput)
 }
+
+func TestValidateCreateInputAcceptsADotLeadingRepositoryScopeAndRefusesTraversalNames(t *testing.T) {
+	input := validResourceTestInput()
+	input.RepositoryScopes = []string{"full-chaos/.github", "full-chaos/*"}
+	require.NoError(t, ValidateCreateInput(input))
+	for _, refused := range []string{"full-chaos/.", "full-chaos/..", ".full-chaos/x"} {
+		input.RepositoryScopes = []string{refused}
+		require.ErrorIs(t, ValidateCreateInput(input), ErrInvalidInput, refused)
+	}
+}

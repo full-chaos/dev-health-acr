@@ -2,14 +2,12 @@ package auth
 
 import (
 	"fmt"
-	"regexp"
 	"sort"
 	"strings"
 
+	"github.com/full-chaos/dev-health-acr/internal/reposlug"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
 )
-
-var repositoryPartPattern = regexp.MustCompile(`^[a-z0-9](?:[a-z0-9._-]{0,98}[a-z0-9])?$`)
 
 // NormalizeRepositoryScopes accepts exact owner/repo scopes, owner/* scopes,
 // or the explicit global wildcard. Empty repository scope is forbidden.
@@ -37,7 +35,7 @@ func NormalizeRepositoryScopes(scopes []string) ([]string, error) {
 func NormalizeRepositorySlug(slug string) (string, error) {
 	normalized := strings.ToLower(strings.TrimSpace(slug))
 	parts := strings.Split(normalized, "/")
-	if len(parts) != 2 || !repositoryPartPattern.MatchString(parts[0]) || !repositoryPartPattern.MatchString(parts[1]) {
+	if len(parts) != 2 || !reposlug.ValidOwner(parts[0]) || !reposlug.ValidName(parts[1]) {
 		return "", fmt.Errorf("%w: invalid repository slug", ErrRepositoryForbidden)
 	}
 	return normalized, nil
@@ -75,8 +73,25 @@ func validRepositoryScope(scope string) bool {
 		return true
 	}
 	parts := strings.Split(scope, "/")
-	if len(parts) != 2 || !repositoryPartPattern.MatchString(parts[0]) {
+	if len(parts) != 2 || !reposlug.ValidOwner(parts[0]) {
 		return false
 	}
-	return parts[1] == "*" || repositoryPartPattern.MatchString(parts[1])
+	return parts[1] == "*" || reposlug.ValidName(parts[1])
+}
+
+// repositorySlugFault says which part of a rejected owner/repo slug is wrong
+// and why, for logs. It is only called for a slug NormalizeRepositorySlug
+// refused.
+func repositorySlugFault(slug string) string {
+	parts := strings.Split(strings.ToLower(strings.TrimSpace(slug)), "/")
+	if len(parts) != 2 {
+		return "not of the form owner/repo"
+	}
+	if fault := reposlug.Fault(parts[0], true); fault != "" {
+		return "owner " + fault
+	}
+	if fault := reposlug.Fault(parts[1], false); fault != "" {
+		return "repository " + fault
+	}
+	return "invalid repository slug"
 }

@@ -52,18 +52,29 @@ func validWebRepositories(scopes, permissions []string, method, path string) boo
 		return len(permissions) == 1 && permissions[0] == WebAssertionPermissionCredentialIssue &&
 			method == http.MethodPost && slices.Contains(webAssertionOrganizationWidePaths, path)
 	}
+	scope, _ := webRepositoryScopeFault(scopes)
+	return scope == ""
+}
+
+// webRepositoryScopeFault names the first repository scope that makes a web
+// assertion invalid and why, or ("", "") when every scope is acceptable. The
+// caller has already handled the lone "*" organization-wide form.
+func webRepositoryScopeFault(scopes []string) (scope, reason string) {
 	seen := make(map[string]struct{}, len(scopes))
-	for _, scope := range scopes {
-		normalized, err := NormalizeRepositorySlug(scope)
-		if err != nil || normalized != scope {
-			return false
+	for _, candidate := range scopes {
+		normalized, err := NormalizeRepositorySlug(candidate)
+		if err != nil {
+			return candidate, repositorySlugFault(candidate)
+		}
+		if normalized != candidate {
+			return candidate, "not in normalized (lower-case, trimmed) form"
 		}
 		if _, duplicate := seen[normalized]; duplicate {
-			return false
+			return candidate, "duplicate scope"
 		}
 		seen[normalized] = struct{}{}
 	}
-	return true
+	return "", ""
 }
 
 func normalizeWebRepositoryScopes(scopes []string) []string {

@@ -10,13 +10,14 @@ import (
 	"time"
 	"unicode"
 	"unicode/utf8"
+
+	"github.com/full-chaos/dev-health-acr/internal/reposlug"
 )
 
 var (
-	credentialIDPattern   = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:-]{0,199}$`)
-	repositoryPartPattern = regexp.MustCompile(`^[a-z0-9](?:[a-z0-9._-]{0,98}[a-z0-9])?$`)
-	tokenHashPattern      = regexp.MustCompile(`^[a-f0-9]{64}$`)
-	tokenPrefixPattern    = regexp.MustCompile(`^fcacr_[A-Za-z0-9_-]{6,64}$`)
+	credentialIDPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:-]{0,199}$`)
+	tokenHashPattern    = regexp.MustCompile(`^[a-f0-9]{64}$`)
+	tokenPrefixPattern  = regexp.MustCompile(`^fcacr_[A-Za-z0-9_-]{6,64}$`)
 )
 
 // maxResourceLength bounds Resource: RFC 8707 gives no length limit, so this
@@ -266,7 +267,7 @@ func normalizeRepositories(values []string) ([]string, error) {
 	for _, raw := range values {
 		value := strings.ToLower(strings.TrimSpace(raw))
 		parts := strings.Split(value, "/")
-		if value != "*" && (len(parts) != 2 || !repositoryPartPattern.MatchString(parts[0]) || (parts[1] != "*" && !repositoryPartPattern.MatchString(parts[1]))) {
+		if value != "*" && (len(parts) != 2 || !reposlug.ValidOwner(parts[0]) || (parts[1] != "*" && !reposlug.ValidName(parts[1]))) {
 			return nil, invalid("repository scope")
 		}
 		if _, exists := seen[value]; !exists {
