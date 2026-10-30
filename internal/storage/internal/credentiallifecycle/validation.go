@@ -27,6 +27,12 @@ var (
 // duplicated by value, not by reference.
 const maxResourceLength = 2048
 
+// maxClientIDLength bounds ClientID: a client-ID metadata document client id
+// is an https URL as long as maxOAuthURILength in internal/storage (2048),
+// so the credential provenance admits every client id authorization admits
+// (duplicated by value for the same import-cycle reason as above).
+const maxClientIDLength = 2048
+
 var knownScopes = map[string]struct{}{
 	"context:read":  {},
 	"evidence:read": {},
@@ -37,6 +43,14 @@ var knownScopes = map[string]struct{}{
 func ValidateCreateInput(input CreateInput) error {
 	_, err := normalizeCreate(input)
 	return err
+}
+
+// NormalizeCreateInput returns input in the exact form the lifecycle stores
+// it, including the derived ClientClass. An adapter that inserts a credential
+// outside Lifecycle.CreateCredential (device redemption) must store this
+// value, never its own input.
+func NormalizeCreateInput(input CreateInput) (CreateInput, error) {
+	return normalizeCreate(input)
 }
 
 func normalizeCreate(input CreateInput) (CreateInput, error) {
@@ -97,7 +111,71 @@ func normalizeCreate(input CreateInput) (CreateInput, error) {
 	if err != nil {
 		return CreateInput{}, err
 	}
+	input.ClientID, err = normalizeOptionalText("client id", input.ClientID, maxClientIDLength)
+	if err != nil {
+		return CreateInput{}, err
+	}
+	input.ApprovingUserID, err = normalizeOptionalText("approving user", input.ApprovingUserID, 200)
+	if err != nil {
+		return CreateInput{}, err
+	}
+	class, err := deriveClientClass(input)
+	if err != nil {
+		return CreateInput{}, err
+	}
+	if input.ClientClass != "" && input.ClientClass != class {
+		return CreateInput{}, invalid("client class")
+	}
+	input.ClientClass = class
 	return input, nil
+}
+
+// deriveClientClass maps an issuance path to its client class (CHAOS-12083).
+// The issuance provenance names the path; within the device-authorization
+// path a resource marks an OAuth exchange. Each path admits only the
+// provenance fields it can have: an approving user only on a redeemed device
+// authorization, a client id only on an OAuth exchange.
+func deriveClientClass(input CreateInput) (ClientClass, error) {
+	switch input.IssuanceProvenance {
+	case "":
+		if input.ApprovingUserID != "" {
+			return "", invalid("approving user")
+		}
+		if input.ClientID != "" {
+			return "", invalid("client id")
+		}
+		return ClientClassOperator, nil
+	case IssuanceProvenanceWorkloadExchange:
+		if input.ApprovingUserID != "" {
+			return "", invalid("approving user")
+		}
+		if input.ClientID != "" {
+			return "", invalid("client id")
+		}
+		return ClientClassWorkload, nil
+	case IssuanceProvenanceDeviceAuthorization:
+		if input.ApprovingUserID == "" {
+			return "", invalid("approving user")
+		}
+		if input.Resource == "" {
+			if input.ClientID != "" {
+				return "", invalid("client id")
+			}
+			return ClientClassNativeDevice, nil
+		}
+		return ClientClassOAuthUser, nil
+	default:
+		return "", invalid("issuance provenance")
+	}
+}
+
+// normalizeOptionalText trims value and returns it, or "" when it is blank;
+// a non-blank value must pass normalizeText.
+func normalizeOptionalText(field, value string, maxLength int) (string, error) {
+	if strings.TrimSpace(value) == "" {
+		return "", nil
+	}
+	return normalizeText(field, value, maxLength)
 }
 
 // normalizeResource accepts an empty value, or an absolute HTTPS (or HTTP

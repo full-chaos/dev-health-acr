@@ -112,7 +112,7 @@ func TestDeviceFlow_oauthDeviceGrantCredentialNeedsNoAcknowledgement(t *testing.
 	code := approvedDeviceCode(t, fixture)
 	hash := storage.HashDeviceCode(code)
 
-	issued, err := fixture.flow.PollDeviceGrant(context.Background(), hash, "https://acr.example.test/mcp", []string{ScopeContextRead})
+	issued, err := fixture.flow.PollDeviceGrant(context.Background(), hash, testOAuthClientID, "https://acr.example.test/mcp", []string{ScopeContextRead})
 	require.NoError(t, err)
 	fixture.now = fixture.now.Add(24 * time.Hour)
 	revoked, err := fixture.store.RevokeUnacknowledged(context.Background(), 10)

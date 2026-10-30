@@ -9,6 +9,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"time"
 )
 
 const fixturePostgresDriverName = "acr-api-fixture-postgres"
@@ -87,6 +88,10 @@ func (c *fixturePostgresConn) ExecContext(_ context.Context, query string, args 
 			// resource ($16): the OAuth audience binding; NULL for this
 			// fixture's operator-issued credential.
 			args[15].Value,
+			// provenance ($17-$22, CHAOS-12083): client_class,
+			// approving_user_id, client_id, session_id, family_id,
+			// family_expires_at -- matches insertCredential's order.
+			args[16].Value, args[17].Value, args[18].Value, args[19].Value, args[20].Value, fixtureTimeValue(args[21].Value),
 		}
 	}
 	return driver.RowsAffected(1), nil
@@ -102,7 +107,7 @@ func (c *fixturePostgresConn) QueryContext(_ context.Context, query string, args
 }
 
 func (r *fixturePostgresRows) Columns() []string {
-	return []string{"credential_id", "name", "token_prefix", "org_id", "repository_scopes", "scopes", "created_at", "expires_at", "revoked_at", "last_used_at", "workload_binding_id", "resource"}
+	return []string{"credential_id", "name", "token_prefix", "org_id", "repository_scopes", "scopes", "created_at", "expires_at", "revoked_at", "last_used_at", "workload_binding_id", "resource", "client_class", "approving_user_id", "client_id", "session_id", "family_id", "family_expires_at"}
 }
 
 func (r *fixturePostgresRows) Close() error { return nil }
@@ -114,4 +119,17 @@ func (r *fixturePostgresRows) Next(destination []driver.Value) error {
 	copy(destination, r.row)
 	r.done = true
 	return nil
+}
+
+// fixtureTimeValue turns a *time.Time argument into the driver value a real
+// driver returns for that column: the time, or SQL NULL for a nil pointer.
+// CheckNamedValue above skips database/sql's own conversion.
+func fixtureTimeValue(value driver.Value) driver.Value {
+	if pointer, ok := value.(*time.Time); ok {
+		if pointer == nil {
+			return nil
+		}
+		return *pointer
+	}
+	return value
 }

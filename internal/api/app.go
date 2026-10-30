@@ -68,6 +68,12 @@ func (a *App) InstrumentedHandler(next http.Handler) http.Handler {
 	handler := a.recoveryMiddleware(next)
 	handler = a.responseOwnerMiddleware(handler)
 	handler = a.timeoutMiddleware(handler)
+	// CHAOS-12086: CORS sits outside every route's auth and outside the
+	// timeout, response-owner and panic-recovery writers, so a preflight
+	// never meets auth and every response -- an error included -- carries
+	// the headers; inside the access log and the request id, so both still
+	// cover a preflight.
+	handler = a.corsMiddleware(handler)
 	handler = a.accessLogMiddleware(handler)
 	handler = a.requestIDMiddleware(handler)
 	return handler
@@ -296,6 +302,7 @@ func (a *App) accessLogMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		started := a.now()
 		wrapped := &statusWriter{ResponseWriter: w, status: http.StatusOK}
+		r, cors := withCORSDecision(r)
 		next.ServeHTTP(wrapped, r)
 		// CHAOS-4330: `status` is whatever the handler decided BEFORE the
 		// body write that can still fail (e.g. http.Server.WriteTimeout
@@ -312,6 +319,7 @@ func (a *App) accessLogMiddleware(next http.Handler) http.Handler {
 			"bytes", wrapped.bytes,
 			"duration_ms", a.now().Sub(started).Milliseconds(),
 		}
+		fields = append(fields, cors.logFields()...)
 		level := slog.LevelInfo
 		if wrapped.writeErr != nil {
 			level = slog.LevelWarn

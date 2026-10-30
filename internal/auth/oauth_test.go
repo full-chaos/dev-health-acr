@@ -20,6 +20,9 @@ const (
 	testIssuer   = "https://acr.example.test"
 	testResource = "https://mcp.example.test/mcp"
 	testRedirect = "http://127.0.0.1:4711/callback"
+	// testOAuthClientID is the OAuth client a test redeem names directly,
+	// outside a /token exchange (CHAOS-12083: an OAuth redeem carries one).
+	testOAuthClientID = "acrc_0123456789abcdef0123456789abcdef"
 )
 
 type oauthHarness struct {
@@ -667,7 +670,7 @@ func TestRedeemForResourceRefusesAnUnapprovedAuthorization(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := h.devices.RedeemForResource(context.Background(), started.DeviceCodeHash, testResource, []string{ScopeContextRead}); !errors.Is(err, ErrOAuthDeviceNotApproved) {
+	if _, err := h.devices.RedeemForResource(context.Background(), started.DeviceCodeHash, testOAuthClientID, testResource, []string{ScopeContextRead}); !errors.Is(err, ErrOAuthDeviceNotApproved) {
 		t.Fatalf("pending authorization: err = %v, want ErrOAuthDeviceNotApproved", err)
 	}
 	h.approveDevice(t, started.DeviceCodeHash, []string{"org/repo"})
@@ -675,7 +678,7 @@ func TestRedeemForResourceRefusesAnUnapprovedAuthorization(t *testing.T) {
 	if state, err := h.devices.StateForOAuth(context.Background(), started.DeviceCodeHash); err != nil || state != OAuthDeviceStateExpired {
 		t.Fatalf("expired approval state = %q, %v, want expired", state, err)
 	}
-	if _, err := h.devices.RedeemForResource(context.Background(), started.DeviceCodeHash, testResource, []string{ScopeContextRead}); !errors.Is(err, ErrOAuthDeviceNotApproved) {
+	if _, err := h.devices.RedeemForResource(context.Background(), started.DeviceCodeHash, testOAuthClientID, testResource, []string{ScopeContextRead}); !errors.Is(err, ErrOAuthDeviceNotApproved) {
 		t.Fatalf("expired approval: err = %v, want ErrOAuthDeviceNotApproved", err)
 	}
 }
@@ -737,7 +740,7 @@ func TestRedeemForResourceNeverWidensTheApproval(t *testing.T) {
 	}
 	h.approveDevice(t, started.DeviceCodeHash, []string{"org/repo"})
 	for _, scopes := range [][]string{{"context:admin"}, {ScopeContextRead, ScopeEpisodeWrite}, {}} {
-		if issued, err := h.devices.RedeemForResource(context.Background(), started.DeviceCodeHash, testResource, scopes); err == nil {
+		if issued, err := h.devices.RedeemForResource(context.Background(), started.DeviceCodeHash, testOAuthClientID, testResource, scopes); err == nil {
 			t.Fatalf("scopes %v redeemed as %v", scopes, issued.Credential.Scopes)
 		}
 	}

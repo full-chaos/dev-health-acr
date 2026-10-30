@@ -103,7 +103,10 @@ func (s *credentialStore) createCredential(ctx context.Context, input storage.Cr
 	if input.ExpiresAt != nil && !input.ExpiresAt.After(now) {
 		return contractsv1.ClientCredential{}, storage.ErrInvalidCredentialInput
 	}
-	credential := credentialFromCreate(input, now)
+	credential, err := credentialFromNormalizedCreate(input, now)
+	if err != nil {
+		return contractsv1.ClientCredential{}, err
+	}
 	// Codex round 1 finding: IssuanceProvenance was never threaded into
 	// the audit record here (pre-existing, since before workload_exchange
 	// existed) -- production audit events for a device_authorization or
@@ -150,7 +153,7 @@ func (s *credentialStore) rotateCredential(ctx context.Context, input storage.Cr
 	if input.Replacement.ExpiresAt != nil && !input.Replacement.ExpiresAt.After(now) {
 		return contractsv1.ClientCredential{}, storage.ErrInvalidCredentialInput
 	}
-	replacement := credentialFromRotation(input.Replacement, source.OrgID, now, source.Resource)
+	replacement := credentialFromRotation(input.Replacement, source.OrgID, now, source.Resource, source.Provenance)
 	if err := rotateCredential(ctx, tx, source.OrgID, source.CredentialID, replacement, input.Replacement.TokenHash, input.ActorID, overlapExpiry(now, input.Replacement.Overlap), now); err != nil {
 		return contractsv1.ClientCredential{}, err
 	}
@@ -211,7 +214,8 @@ WHERE org_id = $1 AND credential_id = $2
 func lockedCredential(ctx context.Context, tx *sql.Tx, orgID, credentialID string) (contractsv1.ClientCredential, error) {
 	row := tx.QueryRowContext(ctx, `
 SELECT credential_id, name, token_prefix, org_id, repository_scopes, scopes,
-       created_at, expires_at, revoked_at, last_used_at, workload_binding_id, resource
+       created_at, expires_at, revoked_at, last_used_at, workload_binding_id, resource,
+       client_class, approving_user_id, client_id, session_id, family_id, family_expires_at
 FROM acr.client_credentials WHERE org_id = $1 AND credential_id = $2 FOR UPDATE`, orgID, credentialID)
 	credential, err := scanCredential(row)
 	if err != nil {
@@ -277,6 +281,17 @@ func credentialCreatedEvent(record storage.CredentialRecord) storage.AuditEvent 
 	if credential.Resource != "" {
 		metadata["resource"] = credential.Resource
 	}
+	// CHAOS-12083: the derived client class is a classification that later
+	// policy reads; the audit row records the decision and its inputs.
+	if credential.Provenance.ClientClass != "" {
+		metadata["client_class"] = credential.Provenance.ClientClass
+	}
+	if credential.Provenance.ApprovingUserID != "" {
+		metadata["approving_user_id"] = credential.Provenance.ApprovingUserID
+	}
+	if credential.Provenance.ClientID != "" {
+		metadata["client_id"] = credential.Provenance.ClientID
+	}
 	return storage.AuditEvent{
 		OrgID: credential.OrgID, ActorType: "user", ActorID: record.CreatedBy,
 		Action: storage.AuditActionCredentialCreated, ResourceType: "acr_credential", ResourceID: credential.CredentialID,
@@ -311,7 +326,23 @@ func credentialFromCreate(input storage.CredentialCreateInput, createdAt time.Ti
 		RepositoryScopes: append([]string(nil), input.RepositoryScopes...), Scopes: append([]string(nil), input.Scopes...), CreatedAt: createdAt, ExpiresAt: cloneTime(input.ExpiresAt),
 		WorkloadBindingID: nonEmptyPtr(input.WorkloadBindingID),
 		Resource:          input.Resource,
+		Provenance: contractsv1.CredentialProvenance{
+			ClientClass: string(input.ClientClass), ApprovingUserID: input.ApprovingUserID, ClientID: input.ClientID,
+		},
 	}
+}
+
+// credentialFromNormalizedCreate builds a new credential row's metadata from
+// input in its stored form (CHAOS-12083): the client class is the one the
+// lifecycle derives for the issuance path (normalizeCreate refuses a caller
+// class that differs), so an adapter cannot insert a row whose class it chose
+// itself or left out. Normalizing an already-normalized input is a no-op.
+func credentialFromNormalizedCreate(input storage.CredentialCreateInput, createdAt time.Time) (contractsv1.ClientCredential, error) {
+	normalized, err := storage.NormalizeCredentialCreateInput(input)
+	if err != nil {
+		return contractsv1.ClientCredential{}, err
+	}
+	return credentialFromCreate(normalized, createdAt), nil
 }
 
 // nonEmptyPtr returns nil for an empty string and a pointer to value
@@ -325,12 +356,15 @@ func nonEmptyPtr(value string) *string {
 }
 
 // credentialFromRotation builds the rotation successor's metadata. resource
-// is carried over from the SOURCE credential row, never from the rotation
-// request -- a rotated successor inherits the resource binding it replaces
-// exactly like it inherits repository/scope invariants, rather than
-// re-deriving it from caller-supplied input.
-func credentialFromRotation(input storage.CredentialRotationReplacement, orgID string, createdAt time.Time, resource string) contractsv1.ClientCredential {
-	return credentialFromCreate(storage.CredentialCreateInput{CredentialID: input.CredentialID, OrgID: orgID, Name: input.Name, TokenPrefix: input.TokenPrefix, RepositoryScopes: input.RepositoryScopes, Scopes: input.Scopes, ExpiresAt: input.ExpiresAt, Resource: resource}, createdAt)
+// and provenance are carried over from the SOURCE credential row, never from
+// the rotation request -- a rotated successor inherits the resource binding
+// and the issuance provenance (CHAOS-12083: class, approving user, client,
+// session, family) it replaces exactly like it inherits repository/scope
+// invariants, rather than re-deriving them from caller-supplied input.
+func credentialFromRotation(input storage.CredentialRotationReplacement, orgID string, createdAt time.Time, resource string, provenance contractsv1.CredentialProvenance) contractsv1.ClientCredential {
+	credential := credentialFromCreate(storage.CredentialCreateInput{CredentialID: input.CredentialID, OrgID: orgID, Name: input.Name, TokenPrefix: input.TokenPrefix, RepositoryScopes: input.RepositoryScopes, Scopes: input.Scopes, ExpiresAt: input.ExpiresAt, Resource: resource}, createdAt)
+	credential.Provenance = provenance.Clone()
+	return credential
 }
 
 func overlapExpiry(now time.Time, overlap time.Duration) *time.Time {

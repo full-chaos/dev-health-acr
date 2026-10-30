@@ -19,6 +19,7 @@ func cloneCredential(value contractsv1.ClientCredential) contractsv1.ClientCrede
 	value.ExpiresAt = cloneTime(value.ExpiresAt)
 	value.RevokedAt = cloneTime(value.RevokedAt)
 	value.LastUsedAt = cloneTime(value.LastUsedAt)
+	value.Provenance = value.Provenance.Clone()
 	return value
 }
 
@@ -47,6 +48,17 @@ func credentialCreatedEvent(record storage.CredentialRecord) storage.AuditEvent 
 	if credential.Resource != "" {
 		metadata["resource"] = credential.Resource
 	}
+	// CHAOS-12083: the derived client class is a classification that later
+	// policy reads; the audit row records the decision and its inputs.
+	if credential.Provenance.ClientClass != "" {
+		metadata["client_class"] = credential.Provenance.ClientClass
+	}
+	if credential.Provenance.ApprovingUserID != "" {
+		metadata["approving_user_id"] = credential.Provenance.ApprovingUserID
+	}
+	if credential.Provenance.ClientID != "" {
+		metadata["client_id"] = credential.Provenance.ClientID
+	}
 	return storage.AuditEvent{OrgID: credential.OrgID, ActorType: "user", ActorID: record.CreatedBy, Action: storage.AuditActionCredentialCreated, ResourceType: "acr_credential", ResourceID: credential.CredentialID, Status: "success", CreatedAt: credential.CreatedAt, Metadata: metadata}
 }
 
@@ -64,6 +76,9 @@ func credentialFromCreate(input storage.CredentialCreateInput, createdAt time.Ti
 		RepositoryScopes: append([]string(nil), input.RepositoryScopes...), Scopes: append([]string(nil), input.Scopes...), CreatedAt: createdAt, ExpiresAt: cloneTime(input.ExpiresAt),
 		WorkloadBindingID: nonEmptyPtr(input.WorkloadBindingID),
 		Resource:          input.Resource,
+		Provenance: contractsv1.CredentialProvenance{
+			ClientClass: string(input.ClientClass), ApprovingUserID: input.ApprovingUserID, ClientID: input.ClientID,
+		},
 	}
 }
 
@@ -75,11 +90,14 @@ func nonEmptyPtr(value string) *string {
 }
 
 // credentialFromRotation builds the rotation successor's metadata. resource
-// is carried over from the SOURCE credential row, never from the rotation
-// request -- a rotated successor inherits the resource binding it replaces
-// exactly like it inherits repository/scope invariants.
-func credentialFromRotation(input storage.CredentialRotationReplacement, orgID string, createdAt time.Time, resource string) contractsv1.ClientCredential {
-	return credentialFromCreate(storage.CredentialCreateInput{CredentialID: input.CredentialID, OrgID: orgID, Name: input.Name, TokenPrefix: input.TokenPrefix, RepositoryScopes: input.RepositoryScopes, Scopes: input.Scopes, ExpiresAt: input.ExpiresAt, Resource: resource}, createdAt)
+// and provenance (CHAOS-12083) are carried over from the SOURCE credential
+// row, never from the rotation request -- a rotated successor inherits the
+// resource binding and issuance provenance it replaces exactly like it
+// inherits repository/scope invariants.
+func credentialFromRotation(input storage.CredentialRotationReplacement, orgID string, createdAt time.Time, resource string, provenance contractsv1.CredentialProvenance) contractsv1.ClientCredential {
+	credential := credentialFromCreate(storage.CredentialCreateInput{CredentialID: input.CredentialID, OrgID: orgID, Name: input.Name, TokenPrefix: input.TokenPrefix, RepositoryScopes: input.RepositoryScopes, Scopes: input.Scopes, ExpiresAt: input.ExpiresAt, Resource: resource}, createdAt)
+	credential.Provenance = provenance.Clone()
+	return credential
 }
 
 func overlapExpiry(now time.Time, overlap time.Duration) *time.Time {

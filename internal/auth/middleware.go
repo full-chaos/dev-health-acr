@@ -201,6 +201,10 @@ func (a *Authenticator) MiddlewareFor(allowWebAssertions bool, next http.Handler
 			OrgID: credential.OrgID, CredentialID: credential.CredentialID,
 			RepositoryScopes: append([]string(nil), credential.RepositoryScopes...),
 			Permissions:      append([]string(nil), credential.Scopes...),
+			// CHAOS-12083: the credential row's immutable issuance
+			// provenance, never anything the request carries.
+			ClientClass:     storage.CredentialClientClass(credential.Provenance.ClientClass),
+			ApprovingUserID: credential.Provenance.ApprovingUserID,
 		}
 		ctx := context.WithValue(r.Context(), principalKey{}, principal)
 		release()

@@ -135,7 +135,10 @@ func TestSaveCompletesItsSubmissionAndBindsTheOwner(t *testing.T) {
 	stored, err := store.Get(ctx, owner, admission.ReservedResultID)
 	require.NoError(t, err)
 	require.NotNil(t, stored.SubmissionOwner)
-	require.Equal(t, contextfabric.SubmissionOwner{AuthenticationMethod: string(storage.AuthenticationMethodWebAssertion), Subject: "user-owner"}, *stored.SubmissionOwner)
+	// CHAOS-12091: the row also records the canonical owner (a web user on
+	// the browser).
+	require.Equal(t, contextfabric.SubmissionOwner{AuthenticationMethod: string(storage.AuthenticationMethodWebAssertion), Subject: "user-owner",
+		UserID: "user-owner", Surface: contextfabric.SubmissionSurfaceBrowser}, *stored.SubmissionOwner)
 
 	// The bound row is the unknown-id answer for another principal of the
 	// org on every surface the gate decides.
@@ -205,6 +208,17 @@ func TestARunningRecordWithAStoredResultIsCompletedOnReadAndBySweep(t *testing.T
 func TestSubmissionParity(t *testing.T) {
 	ctx := context.Background()
 	paritytest.RunSubmissionSuite(t, func(t *testing.T) paritytest.SubmissionStore {
+		store, err := pginvestigation.NewStore(newInvestigationTestDatabase(t, ctx))
+		require.NoError(t, err)
+		return store
+	})
+}
+
+// The canonical-owner table (CHAOS-12091), on PostgreSQL; memoryinvestigation
+// runs the same table.
+func TestSubmissionCanonicalOwnerParity(t *testing.T) {
+	ctx := context.Background()
+	paritytest.RunSubmissionCanonicalOwnerSuite(t, func(t *testing.T) paritytest.SubmissionStore {
 		store, err := pginvestigation.NewStore(newInvestigationTestDatabase(t, ctx))
 		require.NoError(t, err)
 		return store

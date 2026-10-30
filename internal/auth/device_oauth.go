@@ -22,14 +22,14 @@ type OAuthConsentAuthority interface {
 	StateForOAuth(ctx context.Context, ref storage.DeviceCodeHash) (OAuthDeviceState, error)
 	ApproveForOAuth(ctx context.Context, principal storage.Principal, ref storage.DeviceCodeHash, repositoryScopes, scopes []string) error
 	DenyForOAuth(ctx context.Context, principal storage.Principal, ref storage.DeviceCodeHash) error
-	RedeemForResource(ctx context.Context, ref storage.DeviceCodeHash, resource string, scopes []string) (IssuedCredential, error)
+	RedeemForResource(ctx context.Context, ref storage.DeviceCodeHash, clientID, resource string, scopes []string) (IssuedCredential, error)
 	// StartDeviceGrant starts a device authorization for RFC 8628's
 	// device_authorization endpoint.
 	StartDeviceGrant(ctx context.Context) (OAuthDeviceGrantStart, error)
 	// PollDeviceGrant reports an RFC 8628 device-code poll: the standard
 	// authorization_pending/slow_down/access_denied/expired_token progression,
 	// enforcing the poll interval, and an issued credential once approved.
-	PollDeviceGrant(ctx context.Context, ref storage.DeviceCodeHash, resource string, scopes []string) (IssuedCredential, error)
+	PollDeviceGrant(ctx context.Context, ref storage.DeviceCodeHash, clientID, resource string, scopes []string) (IssuedCredential, error)
 }
 
 var _ OAuthConsentAuthority = (*DeviceFlowService)(nil)
@@ -188,11 +188,11 @@ var ErrOAuthDeviceNotApproved = errors.New("device authorization is not approved
 // RedeemForResource issues the credential of an approved device authorization,
 // bound to the protected resource the OAuth request named and carrying only
 // the scopes it asked for (a non-empty subset of the approved ones).
-func (s *DeviceFlowService) RedeemForResource(ctx context.Context, hash storage.DeviceCodeHash, resource string, scopes []string) (IssuedCredential, error) {
+func (s *DeviceFlowService) RedeemForResource(ctx context.Context, hash storage.DeviceCodeHash, clientID, resource string, scopes []string) (IssuedCredential, error) {
 	if err := s.ready(ctx); err != nil {
 		return IssuedCredential{}, err
 	}
-	if resource == "" || !storage.ValidOAuthResource(resource) || len(scopes) == 0 {
+	if clientID == "" || resource == "" || !storage.ValidOAuthResource(resource) || len(scopes) == 0 {
 		return IssuedCredential{}, ErrInvalidDeviceFlow
 	}
 	record, err := s.store.GetByDeviceCodeHash(ctx, hash)
@@ -205,7 +205,7 @@ func (s *DeviceFlowService) RedeemForResource(ctx context.Context, hash storage.
 	if record.State != storage.DeviceAuthorizationStateApproved || !record.ExpiresAt.After(s.now().UTC()) {
 		return IssuedCredential{}, ErrOAuthDeviceNotApproved
 	}
-	issued, err := s.redeem(ctx, record, resource, scopes, false)
+	issued, err := s.redeem(ctx, record, clientID, resource, scopes, false)
 	if err != nil {
 		var pollError *DevicePollError
 		if errors.As(err, &pollError) {
@@ -276,11 +276,11 @@ func (s *DeviceFlowService) StartDeviceGrant(ctx context.Context) (OAuthDeviceGr
 // denied/expired so /token can answer each with its own RFC 8628 error code
 // (RedeemForResource, built for the single-shot authorization-code exchange,
 // collapses all of those into one error and never enforces the interval).
-func (s *DeviceFlowService) PollDeviceGrant(ctx context.Context, hash storage.DeviceCodeHash, resource string, scopes []string) (IssuedCredential, error) {
+func (s *DeviceFlowService) PollDeviceGrant(ctx context.Context, hash storage.DeviceCodeHash, clientID, resource string, scopes []string) (IssuedCredential, error) {
 	if err := s.ready(ctx); err != nil {
 		return IssuedCredential{}, err
 	}
-	if resource == "" || !storage.ValidOAuthResource(resource) || len(scopes) == 0 {
+	if clientID == "" || resource == "" || !storage.ValidOAuthResource(resource) || len(scopes) == 0 {
 		return IssuedCredential{}, ErrInvalidDeviceFlow
 	}
 	record, err := s.store.Poll(ctx, hash)
@@ -291,7 +291,7 @@ func (s *DeviceFlowService) PollDeviceGrant(ctx context.Context, hash storage.De
 	case storage.DeviceAuthorizationStatePending:
 		return IssuedCredential{}, newDevicePollError(DevicePollAuthorizationPending, 0)
 	case storage.DeviceAuthorizationStateApproved:
-		return s.redeem(ctx, record, resource, scopes, false)
+		return s.redeem(ctx, record, clientID, resource, scopes, false)
 	case storage.DeviceAuthorizationStateDenied:
 		return IssuedCredential{}, newDevicePollError(DevicePollAccessDenied, 0)
 	case storage.DeviceAuthorizationStateExpired:

@@ -61,6 +61,12 @@ FROM acr.device_authorizations WHERE device_code_hash = $1 FOR UPDATE`, hash.Str
 		return contractsv1.ClientCredential{}, storage.NewDeviceAuthorizationError(storage.DeviceAuthorizationErrorConflict, record.State, 0)
 	}
 	input.IssuanceProvenance = storage.CredentialIssuanceProvenanceDeviceAuthorization
+	// CHAOS-12083: the approving user comes from the locked authorization
+	// row, never from the caller; a caller value that differs is refused.
+	if input.ApprovingUserID != "" && input.ApprovingUserID != record.ApprovingSubject {
+		return contractsv1.ClientCredential{}, storage.ErrInvalidDeviceAuthorization
+	}
+	input.ApprovingUserID = record.ApprovingSubject
 	if err := storage.ValidateCredentialCreateInput(input); err != nil {
 		return contractsv1.ClientCredential{}, err
 	}
@@ -81,7 +87,10 @@ FROM acr.device_authorizations WHERE device_code_hash = $1 FOR UPDATE`, hash.Str
 			return contractsv1.ClientCredential{}, storage.NewDeviceAuthorizationConflict(record.State, storage.DeviceConflictAckWindowElapsed)
 		}
 	}
-	credential := credentialFromCreate(input, now)
+	credential, err := credentialFromNormalizedCreate(input, now)
+	if err != nil {
+		return contractsv1.ClientCredential{}, err
+	}
 	credentialRecord := storage.CredentialRecord{
 		Metadata: credential, TokenHash: input.TokenHash, CreatedBy: input.ActorID,
 		IssuanceProvenance: input.IssuanceProvenance,
