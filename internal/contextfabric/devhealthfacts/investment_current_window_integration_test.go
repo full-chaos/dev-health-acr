@@ -102,8 +102,9 @@ func TestTheCurrentAxisInvestmentWindowCountsByEndStampAgainstRealClickHouse(t *
 	check("no window (the 30-day three, ends-before-start, ends-at-default-start)", defaulted, 5)
 	defaultRange, _ := read("range 90d", ranged(defaultStart, end))
 	check("range [today-90d, today) beside the default window", defaultRange, defaulted)
-	if !strings.Contains(defaultedResult.RequestNote, "investment_default_window") || !strings.Contains(defaultedResult.RequestNote, defaultStart.Format(time.RFC3339)) {
-		t.Errorf("no-window RequestNote = %q, want the default-window note naming %s", defaultedResult.RequestNote, defaultStart.Format(time.RFC3339))
+	// The note names the period, never its clock-derived dates.
+	if !strings.Contains(defaultedResult.RequestNote, "investment_default_window: no period was given") || !strings.Contains(defaultedResult.RequestNote, "the trailing 90 days ending at 00:00 UTC today") || strings.Contains(defaultedResult.RequestNote, defaultStart.Format(time.RFC3339)) {
+		t.Errorf("no-window RequestNote = %q, want the default-window note naming the trailing 90 days and no dates", defaultedResult.RequestNote)
 	}
 
 	all, _ := read("all_time", current(&contractsv1.ContextFabricRequestedEvidenceWindow{RelativeID: contractsv1.ContextFabricRelativeWindowAllTime}))
