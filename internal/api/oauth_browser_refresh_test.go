@@ -130,3 +130,49 @@ func TestOAuthRefreshGrantIsAbsentWithoutABrowserClient(t *testing.T) {
 		t.Fatalf("refresh without a browser client = %d %q, want unsupported_grant_type", status, answer.Error)
 	}
 }
+
+// Sign-out from the web origin: the browser preflights /revoke and must read
+// its answer, so /revoke answers CORS for the listed origin like /token
+// (CHAOS-12124; found by the web lane against 1442f42f: preflight 405, POST
+// 200 with no Access-Control-Allow-Origin).
+func TestOAuthRevokeAnswersCORSForTheWebOrigin(t *testing.T) {
+	app, _, err := newOAuthTestApp(t, &OAuthRuntime{
+		Issuer: oauthTestIssuer, Resources: []string{oauthTestResource, oauthTestIssuer}, DevBrowserRedirectURIs: []string{oauthTestRedirect},
+	}, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	app.config.CORSAllowedOrigins = []string{corsTestOrigin}
+
+	for _, path := range []string{OAuthTokenPath, OAuthRevocationPath} {
+		preflight := httptest.NewRequest(http.MethodOptions, path, nil)
+		preflight.Header.Set("Origin", corsTestOrigin)
+		preflight.Header.Set("Access-Control-Request-Method", "POST")
+		preflight.Header.Set("Access-Control-Request-Headers", "content-type, x-request-id")
+		recorder := httptest.NewRecorder()
+		app.Handler().ServeHTTP(recorder, preflight)
+		if recorder.Code != http.StatusNoContent || recorder.Header().Get("Access-Control-Allow-Origin") != corsTestOrigin ||
+			!containsValue(recorder.Header().Values("Access-Control-Allow-Methods"), "POST") {
+			t.Fatalf("%s preflight: %d, Allow-Origin %q, Allow-Methods %q; want 204 for %s with POST", path, recorder.Code,
+				recorder.Header().Get("Access-Control-Allow-Origin"), recorder.Header().Get("Access-Control-Allow-Methods"), corsTestOrigin)
+		}
+		expectNoCredentialsOrWildcard(t, path+" preflight", recorder)
+	}
+
+	revoke := httptest.NewRequest(http.MethodPost, OAuthRevocationPath, strings.NewReader(url.Values{"token": {"acrrt_" + strings.Repeat("A", 43)}, "client_id": {auth.DevBrowserClientID}}.Encode()))
+	revoke.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	revoke.Header.Set("Origin", corsTestOrigin)
+	recorder := httptest.NewRecorder()
+	app.Handler().ServeHTTP(recorder, revoke)
+	expectCORSActual(t, "revoke", recorder, http.StatusOK, corsTestOrigin)
+	if strings.TrimSpace(recorder.Body.String()) != "{}" {
+		t.Fatalf("revoke body = %q, want {}", recorder.Body.String())
+	}
+
+	other := httptest.NewRequest(http.MethodOptions, OAuthRevocationPath, nil)
+	other.Header.Set("Origin", "https://evil.example")
+	other.Header.Set("Access-Control-Request-Method", "POST")
+	recorder = httptest.NewRecorder()
+	app.Handler().ServeHTTP(recorder, other)
+	expectNoCORS(t, "revoke preflight from an unlisted origin", recorder)
+}
