@@ -282,7 +282,7 @@ the fact reads use their own default. The assembled result then states that
 default as provenance `server_default` (`server_default_window.go`): the
 default trailing window (`trailing_90d`, `[start of today − 90 d, start of
 today)` UTC, the devhealthfacts `default_trailing` rollup window) when a
-deployments, incidents, metrics or pull_requests read completed, else `as_of`,
+deployments, incidents, investment, metrics or pull_requests read completed, else `as_of`,
 the instant the snapshot was read, window class `state_snapshot`. `as_of` is
 the effective window's third contract form, legal only with no start, end or
 relative_id. The window is stamped on the result only, after the window offer
@@ -295,8 +295,8 @@ and does not count as the applied window on a continuation. The kind list is
 pinned to the providers by
 `TestServerDefaultWindowKindsAreTheProvidersThatReadTheDefaultWindow`. Refusal
 and veto results (time bound, continuation, structure and window vetoes) read
-no state and carry no window. Investment reads all history when no window is
-given; CHAOS-12142 tracks investment ignoring a stated window.
+no state and carry no window. Investment reads the committed window, else the
+same 90-day default, and all history only for `all_time` (CHAOS-12142).
 
 ---
 
