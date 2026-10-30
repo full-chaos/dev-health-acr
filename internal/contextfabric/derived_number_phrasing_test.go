@@ -305,3 +305,94 @@ func TestCohortDriverNarrationStatesItsDerivedNumbersAsDerived(t *testing.T) {
 		t.Fatalf("narration %q: measure = %+v, want 1 sentence, 0 asserted", summary, got)
 	}
 }
+
+// TestDerivedNumberPhrasingAttachesTheNumberToItsMeasure (codex r2): a number
+// counts only when attached to a word that names the derived value: before it
+// with no other number between, or after it in the same clause. Dates and
+// clock times are not numbers that separate the two.
+func TestDerivedNumberPhrasingAttachesTheNumberToItsMeasure(t *testing.T) {
+	t.Parallel()
+	risk := []ClaimedFact{numberClaim("claim-risk-0001", FactHealth, "compounding_risk", 0.73)}
+	for sentence, want := range map[string]int{
+		"The compounding risk score is 0.65, while the deployment ratio was 0.73 last week.": 0,
+		"The deployment ratio was 0.73, while the compounding risk score is 0.65.":           0,
+		"The compounding risk score as of 2026-10-29 23:27:56 is 0.73.":                      1,
+	} {
+		if got := MeasureDerivedNumberPhrasing(phrasingResult(risk, sentence)); got.Sentences != want || got.Asserted != want {
+			t.Errorf("%q: measure = %+v, want %d sentence(s) asserted", sentence, got, want)
+		}
+	}
+}
+
+// TestDerivedNumberPhrasingJudgesTheHedgeAtTheNumber (codex r2): a hedge counts
+// when it stands between the measure word and the number or in the number's
+// own clause; a hedge about something else in the sentence does not qualify it.
+func TestDerivedNumberPhrasingJudgesTheHedgeAtTheNumber(t *testing.T) {
+	t.Parallel()
+	risk := []ClaimedFact{numberClaim("claim-risk-0001", FactHealth, "compounding_risk", 0.73)}
+	share := []ClaimedFact{numberClaim("claim-quality-01", FactInvestment, "theme_quality", 0.53)}
+	for _, tc := range []struct {
+		claims   []ClaimedFact
+		sentence string
+		asserted int
+	}{
+		{risk, "The compounding risk score is 0.73, and that number appears in the record.", 1},
+		{risk, "The compounding risk score appears to be 0.73, and the record shows it.", 0},
+		{share, "The investment mix leans to quality work, at 0.53 of the categorized units, while 4009 work units remain uncategorized.", 0},
+	} {
+		got := MeasureDerivedNumberPhrasing(phrasingResult(tc.claims, tc.sentence))
+		if got.Sentences != 1 || got.Asserted != tc.asserted {
+			t.Errorf("%q: measure = %+v, want 1 sentence, %d asserted", tc.sentence, got, tc.asserted)
+		}
+	}
+}
+
+// TestDerivedNumberPhrasingMatchesWholeAndUnicodeSignedForms (codex r2): a
+// score of exactly 0 written "0", and a difference written with a Unicode minus.
+func TestDerivedNumberPhrasingMatchesWholeAndUnicodeSignedForms(t *testing.T) {
+	t.Parallel()
+	zero := []ClaimedFact{numberClaim("claim-risk-0001", FactHealth, "compounding_risk", 0)}
+	if got := MeasureDerivedNumberPhrasing(phrasingResult(zero, "The compounding risk score is 0.")); got.Sentences != 1 || got.Asserted != 1 {
+		t.Errorf("whole 0: measure = %+v, want 1 asserted", got)
+	}
+	if got := MeasureDerivedNumberPhrasing(phrasingResult(zero, "Fullchaos has 0 repositories with data.")); got.Sentences != 0 {
+		t.Errorf("an unattached 0: measure = %+v, want none", got)
+	}
+	difference := integerClaim("claim-net-00001", FactWorkload, "net_change", -4)
+	difference.DerivedFrom = []contractsv1.ContextFabricDerivationInput{{FactID: "fact-a", Field: "opened"}, {FactID: "fact-b", Field: "closed"}}
+	difference.Operation = contractsv1.ContextFabricDerivationDifference
+	if got := MeasureDerivedNumberPhrasing(phrasingResult([]ClaimedFact{difference}, "Net change is −4.")); got.Sentences != 1 || got.Asserted != 1 {
+		t.Errorf("unicode minus: measure = %+v, want 1 asserted", got)
+	}
+}
+
+// TestDerivedNumberPhrasingCountsTheCohortNarrationByConstruction (codex r2):
+// the narration's numbers are derived whether or not a claimed fact restates
+// them, so a summary in its shape counts as one qualified sentence.
+func TestDerivedNumberPhrasingCountsTheCohortNarrationByConstruction(t *testing.T) {
+	t.Parallel()
+	score := 75.8
+	member := CohortMember{Subject: SubjectRef{Kind: SubjectProject, CanonicalID: "project:acr", Label: "Ask Dev v2. (beta)"}, Score: &score}
+	summary := cohortDriverJudgmentSummary(member, CohortMemberDriver{Signal: RankingSignalReadinessGap, Weight: 15, Value: 0.7, WeightContributed: 17.5})
+	if !cohortDriverSummaryShape.MatchString(summary) {
+		t.Fatalf("the narration %q no longer has the shape the measure counts", summary)
+	}
+	severity := "high"
+	observed := []ClaimedFact{{ClaimID: "claim-sev-00001", Kind: FactHealth, Field: "severity", Value: ScalarValue{String: &severity},
+		Subject: SubjectRef{Kind: SubjectProject, CanonicalID: "project:acr", Label: "Ask Dev"}}}
+	result := phrasingResult(observed)
+	result.Drivers = []DriverJudgment{{Title: "readiness gap", Summary: summary}}
+	if got := MeasureDerivedNumberPhrasing(result); got.Sentences != 1 || got.Asserted != 0 {
+		t.Fatalf("narration %q: measure = %+v, want 1 qualified sentence", summary, got)
+	}
+	// The template before CHAOS-11600, as answers stored by an older build
+	// carry it: the same derived numbers, stated plainly.
+	result.Drivers[0].Summary = strings.Replace(summary, "appears to account for", "contributed", 1)
+	if got := MeasureDerivedNumberPhrasing(result); got.Sentences != 1 || got.Asserted != 1 {
+		t.Fatalf("the older narration %q: measure = %+v, want 1 asserted sentence", result.Drivers[0].Summary, got)
+	}
+	result.Drivers[0].Summary = "Ask Dev has 2 open blockers."
+	if got := MeasureDerivedNumberPhrasing(result); got.Sentences != 0 {
+		t.Fatalf("a summary outside the narration shape counted as narration: %+v", got)
+	}
+}

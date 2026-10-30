@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"regexp"
 	"sort"
 	"strconv"
 	"unicode/utf8"
@@ -602,6 +603,12 @@ func cohortDriverJudgmentTitle(member CohortMember, driver CohortMemberDriver) s
 // score. scoreText carries no possessive/article of its own; the sentence
 // supplies exactly one "'s" and one noun ("attention points"), whether or
 // not the member has a score.
+// cohortDriverSummaryShape matches what cohortDriverJudgmentSummary writes, and
+// what it wrote before CHAOS-11600 ("contributed"), so the derived-number
+// measure reads answers stored by an older build alike: every number in it is
+// derived, and the measure counts a summary in this shape as such a sentence.
+var cohortDriverSummaryShape = regexp.MustCompile(`^.+ \(weight -?\d+, value -?\d+\.\d{2}\) (?:appears to account for|contributed) -?\d+\.\d of .+'s .+ attention points\.$`)
+
 func cohortDriverJudgmentSummary(member CohortMember, driver CohortMemberDriver) string {
 	scoreText := "unranked"
 	if member.Score != nil {

@@ -90,14 +90,28 @@ type phrasingClaim struct {
 // MeasureDerivedNumberPhrasing measures one answer. A sentence states a derived
 // number when it carries one of the answer's derived claimed-fact values as the
 // prose writes a number (the value verbatim, rounded to two decimals, or, for a
-// share between 0 and 1, as a whole percent) AND names what that value measures
-// (a word of its field, such as "risk" for a compounding risk score or
-// "quality" for the quality theme share; "investment", "mix" or "theme" for any
-// theme share). An unrelated number that only happens to be equal is not
-// counted. The prose read is everything a reader is given to read: the lead
-// (direct_judgment and deterministic_answer), current_state, strongest_pressures,
-// each driver's title, summary and qualification, each finding's summary,
-// limitations and warnings.
+// share between 0 and 1, as a whole percent; with its sign, an ASCII or a
+// Unicode minus) AND that number is attached to a word that names what the
+// value measures (a word of its field, such as "risk" for a compounding risk
+// score or "quality" for the quality theme share; "investment", "mix" or
+// "theme" for any theme share): the word stands before the number with no
+// other number between them, or after it in the same clause. An unrelated
+// number, equal or not, is not counted. Dates and clock times are not numbers
+// here. The sentence is qualified when appears, leans or suggests stands in
+// that attachment or in the number's own clause; a hedge about something else
+// in the sentence does not qualify the number.
+//
+// current_state is a list the service composes under a heading ("Derived
+// values, which suggest rather than observe: ..."): the heading qualifies every
+// item, so a list sentence is qualified by a hedge anywhere in it. The cohort
+// ranking narration (cohortDriverJudgmentSummary) states only derived values
+// (a signal's weight and value, its contribution, the attention score), so a
+// driver summary in that shape is a derived-number sentence by construction.
+//
+// The prose read is everything a reader is given to read: the lead
+// (direct_judgment and deterministic_answer), current_state,
+// strongest_pressures, each driver's title, summary and qualification, each
+// finding's summary, limitations and warnings.
 func MeasureDerivedNumberPhrasing(result InvestigationResult) DerivedNumberPhrasing {
 	var claims []phrasingClaim
 	var measure DerivedNumberPhrasing
@@ -121,15 +135,18 @@ func MeasureDerivedNumberPhrasing(result InvestigationResult) DerivedNumberPhras
 		}
 		claims = append(claims, phrasingClaim{forms: set, words: measureWords(claim.Field)})
 	}
-	if len(claims) == 0 {
-		return measure
-	}
 	for _, sentence := range readerSentences(result) {
-		if !statesADerivedClaim(sentence, claims) {
+		var states, asserted bool
+		if sentence.narration {
+			states, asserted = true, !hedgeWord.MatchString(sentence.text)
+		} else {
+			states, asserted = measureSentence(sentence.text, claims, sentence.list)
+		}
+		if !states {
 			continue
 		}
 		measure.Sentences++
-		if !hedgeWord.MatchString(sentence) {
+		if asserted {
 			measure.Asserted++
 		}
 	}
@@ -186,60 +203,208 @@ func measureWords(field string) *regexp.Regexp {
 	return regexp.MustCompile(`(?i)\b(` + strings.Join(words, "|") + `)`)
 }
 
-func statesADerivedClaim(sentence string, claims []phrasingClaim) bool {
+// measureSentence reports whether sentence states one of claims, and whether
+// any such statement is unqualified. A list sentence is qualified by a hedge
+// anywhere in it.
+func measureSentence(sentence string, claims []phrasingClaim, list bool) (states, asserted bool) {
+	if len(claims) == 0 {
+		return false, false
+	}
+	sentence = unicodeMinus.Replace(sentence)
+	numbers := numberSpans(sentence)
+	if len(numbers) == 0 {
+		return false, false
+	}
+	hedges := hedgeWord.FindAllStringIndex(sentence, -1)
+	breaks := clauseBreak.FindAllStringIndex(sentence, -1)
 	for _, claim := range claims {
-		if claim.words != nil && !claim.words.MatchString(sentence) {
-			continue
+		var words [][]int
+		if claim.words != nil {
+			if words = claim.words.FindAllStringIndex(sentence, -1); len(words) == 0 {
+				continue
+			}
 		}
-		for _, match := range numberToken.FindAllStringSubmatch(sentence, -1) {
-			token := match[1]
-			if token == "" {
-				token = match[2]
+		for i, number := range numbers {
+			if _, ok := claim.forms[number.value]; !ok {
+				continue
 			}
-			if _, ok := claim.forms[strings.ReplaceAll(token, ",", "")]; ok {
-				return true
+			from, to, attached := attachment(words, numbers, i, breaks, len(sentence), claim.words == nil)
+			if !attached {
+				continue
 			}
+			states = true
+			if list {
+				asserted = asserted || len(hedges) == 0
+				continue
+			}
+			clauseFrom, clauseTo := clauseAround(breaks, number.start, number.end, len(sentence))
+			if !spansHedge(hedges, from, to) && !spansHedge(hedges, clauseFrom, clauseTo) {
+				asserted = true
+			}
+		}
+	}
+	return states, asserted
+}
+
+// unicodeMinus writes the Unicode minus sign as the ASCII one.
+var unicodeMinus = strings.NewReplacer("\u2212", "-")
+
+// clauseBreak matches what ends a clause inside a sentence: a comma, a
+// semicolon, a colon, a dash between spaces, or a coordinating "and", "but",
+// "while" or "whereas".
+var clauseBreak = regexp.MustCompile(`[,;:]|\s[\x{2013}\x{2014}-]\s|(?i:\s(?:and|but|while|whereas)\s)`)
+
+// dateOrTime matches a date or a clock time, whose digits are not numbers a
+// measure could state.
+var dateOrTime = regexp.MustCompile(`\d{4}-\d{2}-\d{2}(?:[T ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:\d{2})?)?|\b\d{1,2}:\d{2}(?::\d{2})?\b`)
+
+// numberSpan is one number in a sentence: its byte span and its value as a
+// form (thousands separators removed).
+type numberSpan struct {
+	start, end int
+	value      string
+}
+
+// numberSpans lists the numbers in sentence in order, dates and times left out.
+func numberSpans(sentence string) []numberSpan {
+	masked := []byte(sentence)
+	for _, span := range dateOrTime.FindAllStringIndex(sentence, -1) {
+		for i := span[0]; i < span[1]; i++ {
+			masked[i] = ' '
+		}
+	}
+	var out []numberSpan
+	for _, match := range numberToken.FindAllStringSubmatchIndex(string(masked), -1) {
+		group := 2
+		if match[group] < 0 {
+			group = 4
+		}
+		start, end := match[group], match[group+1]
+		out = append(out, numberSpan{start: start, end: end, value: strings.ReplaceAll(sentence[start:end], ",", "")})
+	}
+	return out
+}
+
+// attachment reports whether the number numbers[i] is attached to one of the
+// measure words: one stands before it with no other number between them, or
+// after it in the same clause. It returns the span from the first attached
+// word to the number (or from the number to the last attached word after it).
+// A claim whose field names no usable word (unworded) attaches to every
+// matching number.
+func attachment(words [][]int, numbers []numberSpan, i int, breaks [][]int, length int, unworded bool) (from, to int, attached bool) {
+	number := numbers[i]
+	from, to = number.start, number.end
+	if unworded {
+		return from, to, true
+	}
+	previous := 0
+	if i > 0 {
+		previous = numbers[i-1].end
+	}
+	_, clauseEnd := clauseAround(breaks, number.start, number.end, length)
+	next := clauseEnd
+	if i+1 < len(numbers) && numbers[i+1].start < next {
+		next = numbers[i+1].start
+	}
+	for _, word := range words {
+		switch {
+		case word[0] >= previous && word[1] <= number.start:
+			attached = true
+			from = min(from, word[0])
+		case word[0] >= number.end && word[1] <= next:
+			attached = true
+			to = max(to, word[1])
+		}
+	}
+	return from, to, attached
+}
+
+// clauseAround returns the clause that holds [start, end).
+func clauseAround(breaks [][]int, start, end, length int) (from, to int) {
+	from, to = 0, length
+	for _, brk := range breaks {
+		if brk[1] <= start {
+			from = brk[1]
+		}
+		if brk[0] >= end && brk[0] < to {
+			to = brk[0]
+		}
+	}
+	return from, to
+}
+
+// spansHedge reports whether a hedge word lies inside [from, to).
+func spansHedge(hedges [][]int, from, to int) bool {
+	for _, hedge := range hedges {
+		if hedge[0] >= from && hedge[1] <= to {
+			return true
 		}
 	}
 	return false
 }
 
 // numberForms is every spelling the synthesis prompt allows prose to give a
-// fractional number in: verbatim, two decimals, and a whole percent for a share.
-// A bare whole number is left out: a score or share of exactly 0 or 1 would
-// otherwise match every count of 0 or 1 in the prose.
+// number in: verbatim (a whole value too, such as a score of exactly 0), two
+// decimals, and a whole percent for a share. A whole value cannot match an
+// unrelated count such as "0 repositories": the number must be attached to a
+// word that names what the value measures (measureSentence).
 func numberForms(value float64) []string {
-	forms := []string{strconv.FormatFloat(value, 'f', 2, 64)}
-	if verbatim := strconv.FormatFloat(value, 'f', -1, 64); strings.Contains(verbatim, ".") {
-		forms = append(forms, verbatim)
-	}
+	forms := []string{strconv.FormatFloat(value, 'f', 2, 64), strconv.FormatFloat(value, 'f', -1, 64)}
 	if value >= 0 && value <= 1 {
 		forms = append(forms, strconv.FormatFloat(math.Round(value*100), 'f', 0, 64)+"%")
 	}
 	return forms
 }
 
-func readerSentences(result InvestigationResult) []string {
-	texts := []string{result.DirectJudgment, result.DeterministicAnswer}
-	texts = append(texts, result.StrongestPressures...)
+// readerSentence is one sentence a reader is given, with how it is measured.
+type readerSentence struct {
+	text string
+	// list is a current_state sentence: a list under a heading.
+	list bool
+	// narration is a cohort ranking narration summary.
+	narration bool
+}
+
+func readerSentences(result InvestigationResult) []readerSentence {
+	var sentences []readerSentence
+	add := func(text string) {
+		for _, sentence := range splitSentences(text, true) {
+			sentences = append(sentences, readerSentence{text: sentence})
+		}
+	}
+	add(result.DirectJudgment)
+	add(result.DeterministicAnswer)
+	for _, text := range result.StrongestPressures {
+		add(text)
+	}
 	for _, driver := range result.Drivers {
-		texts = append(texts, driver.Title, driver.Summary, driver.Qualification)
+		add(driver.Title)
+		if cohortDriverSummaryShape.MatchString(driver.Summary) {
+			// One sentence by construction, whatever periods its labels hold.
+			sentences = append(sentences, readerSentence{text: driver.Summary, narration: true})
+		} else {
+			add(driver.Summary)
+		}
+		add(driver.Qualification)
 	}
 	for _, findings := range [][]Finding{result.RemainingWork, result.ReadinessGaps, result.Conflicts} {
 		for _, finding := range findings {
-			texts = append(texts, finding.Summary)
+			add(finding.Summary)
 		}
 	}
-	texts = append(texts, result.Limitations...)
-	texts = append(texts, result.Warnings...)
-	var sentences []string
-	for _, text := range texts {
-		sentences = append(sentences, splitSentences(text, true)...)
+	for _, text := range result.Limitations {
+		add(text)
+	}
+	for _, text := range result.Warnings {
+		add(text)
 	}
 	// current_state is a list the service composes, "label: value; label:
 	// value." per clause: a ';' there separates list items, not sentences, so
 	// a clause's opening words cover every item in it.
-	return append(sentences, splitSentences(result.CurrentState, false)...)
+	for _, sentence := range splitSentences(result.CurrentState, false) {
+		sentences = append(sentences, readerSentence{text: sentence, list: true})
+	}
+	return sentences
 }
 
 // splitSentences ends a sentence at '.', '!' or '?' (and at ';' when

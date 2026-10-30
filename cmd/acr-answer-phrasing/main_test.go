@@ -46,6 +46,7 @@ func TestRunFailsOnAnythingThatIsNotAnAnswer(t *testing.T) {
 	for name, body := range map[string]string{
 		"empty wrapped result": `{"result":{}}`,
 		"foreign wrapped":      `{"result":{"schema_version":"context_packet.v1"}}`,
+		"schema version only":  `{"result":{"schema_version":"context_fabric_investigation_result.v1"}}`,
 		"empty object":         `{}`,
 		"not json":             `result`,
 	} {

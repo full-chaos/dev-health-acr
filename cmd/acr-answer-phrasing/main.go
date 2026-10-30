@@ -56,6 +56,11 @@ func readAnswer(path string) (contextfabric.InvestigationResult, error) {
 	if !strings.HasPrefix(result.SchemaVersion, "context_fabric_investigation_result.") {
 		return contextfabric.InvestigationResult{}, fmt.Errorf("%s: not an investigation result (schema_version %q)", path, result.SchemaVersion)
 	}
+	// Every stored answer has a result id and a status; an object that only
+	// names the schema is not one.
+	if strings.TrimSpace(result.ResultID) == "" || strings.TrimSpace(string(result.Status)) == "" {
+		return contextfabric.InvestigationResult{}, fmt.Errorf("%s: not an investigation result (no result_id or status)", path)
+	}
 	return result, nil
 }
 
