@@ -417,10 +417,15 @@ func TestSchemaAndGoBoundsAgree(t *testing.T) {
 		// for both majors, so the SAME Validate() bounds this file already
 		// proves for v1 apply -- these entries exist only because the JSON
 		// Schema $defs are separate objects the probe walks independently).
-		"common#$defs.AnchorOptionV2.properties.matched_term_hash.minLength":  24,
-		"common#$defs.AnchorOptionV2.properties.matched_term_hash.maxLength":  24,
-		"common#$defs.StructureNeedsV2.properties.kind_options.maxItems":      contextFabricStructureNeedsMaxOptions,
-		"common#$defs.StructureNeedsV2.properties.anchor_options.maxItems":    contextFabricStructureNeedsMaxOptions,
+		"common#$defs.AnchorOptionV2.properties.matched_term_hash.minLength": 24,
+		"common#$defs.AnchorOptionV2.properties.matched_term_hash.maxLength": 24,
+		"common#$defs.StructureNeedsV2.properties.kind_options.maxItems":     contextFabricStructureNeedsMaxOptions,
+		"common#$defs.StructureNeedsV2.properties.anchor_options.maxItems":   contextFabricStructureNeedsMaxOptions,
+		// CHAOS-11975: a v2 result carries at least one anchor option --
+		// validateAgainstSchemaVersion's v2 rule (validate_context_fabric_result.go),
+		// proved behaviourally by TestAV2ResultWithoutAnAnchorOptionIsRefused.
+		// Mapped, not probed: the shared Go type cannot be probed per major.
+		"common#$defs.StructureNeedsV2.properties.anchor_options.minItems":    1,
 		"common#$defs.StructureNeedsV2.properties.handle_options.maxItems":    contextFabricStructureNeedsMaxOptions,
 		"common#$defs.StructureNeedsV2.properties.window_options.maxItems":    contextFabricStructureNeedsMaxOptions,
 		"common#$defs.StructureNeedsV2.properties.accepted_grammars.maxItems": contextFabricStructureNeedsMaxOptions,

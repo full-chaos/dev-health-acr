@@ -48,6 +48,19 @@ func TestTheWirePresenceCheckRequiresExactlyTheSchemasRequiredKeysForAResult(t *
 	legacyExemptions := map[string]map[string]bool{
 		"ContextFabricAnswerCompleteness": {"state": true},
 	}
+	// CHAOS-11975: the v2 major's own invariant. The v2 result requires
+	// structure_needs and StructureNeedsV2 requires a non-empty
+	// anchor_options, but v1 and v2 share one Go type, where both keys are
+	// omitempty (a v1 result has neither). A struct tag cannot carry a
+	// version-conditional requirement, so the semantic validator carries it:
+	// ValidateStoredResult, which every Go client that re-validates a read
+	// result runs, refuses a v2 result without one. Pinned by an executed
+	// cell below.
+	versionExemptions := map[string]map[string]map[string]bool{
+		"context_fabric_investigation_result.v2.schema.json": {"ContextFabricInvestigationResult": {"structure_needs": true}},
+		"context_fabric_common.v1.schema.json":               {"ContextFabricStructureNeeds": {"anchor_options": true}},
+	}
+	versionExemptionsUsed := 0
 
 	checked, exemptionsUsed := 0, 0
 	for _, b := range bindings {
@@ -88,6 +101,10 @@ func TestTheWirePresenceCheckRequiresExactlyTheSchemasRequiredKeysForAResult(t *
 				exemptionsUsed++
 				continue
 			}
+			if versionExemptions[b.document][b.named.Obj().Name()][key] {
+				versionExemptionsUsed++
+				continue
+			}
 			schemaOnly = append(schemaOnly, key)
 		}
 		sort.Strings(walkerOnly)
@@ -105,6 +122,34 @@ func TestTheWirePresenceCheckRequiresExactlyTheSchemasRequiredKeysForAResult(t *
 	}
 	if exemptionsUsed == 0 {
 		t.Error("the completeness.state legacy exemption matched nothing; remove it")
+	}
+	if versionExemptionsUsed != 2 {
+		t.Errorf("the v2 anchor-invariant exemptions matched %d keys, want 2 (structure_needs, anchor_options)", versionExemptionsUsed)
+	}
+	// THE VERSION EXEMPTIONS' REASON, EXECUTED: a v2-labelled result with
+	// no structure_needs, and one whose structure_needs has no anchor
+	// option, pass the presence walker's tag-derived keys but are refused by
+	// both the published v2 schema and ValidateStoredResult.
+	for _, cell := range []struct {
+		name  string
+		needs *ContextFabricStructureNeeds
+	}{
+		{"no structure_needs", nil},
+		{"no anchor option", &ContextFabricStructureNeeds{Missing: []ContextFabricStructureNeedKind{ContextFabricStructureNeedSubjectAnchor}}},
+	} {
+		bare := validContextFabricContractResult()
+		bare.SchemaVersion = ContextFabricInvestigationResultSchemaV2
+		bare.StructureNeeds = cell.needs
+		encoded, err := json.Marshal(bare)
+		if err != nil {
+			t.Fatal(err)
+		}
+		storedErr := ValidateStoredResult(bare)
+		schemaErr := contractcheck.ValidateSerialized("", "context_fabric_investigation_result.v2.schema.json", encoded)
+		t.Logf("PRESENCE V2 CELL (%s): ValidateStoredResult refused=%t schema refused=%t", cell.name, storedErr != nil, schemaErr != nil)
+		if storedErr == nil || schemaErr == nil {
+			t.Errorf("%s: the v2 exemption's reason no longer holds (ValidateStoredResult error=%v, schema error=%v)", cell.name, storedErr, schemaErr)
+		}
 	}
 	t.Logf("PRESENCE PARITY: %d schema objects reachable from an investigation result compared; %d legacy exemption(s) used", checked, exemptionsUsed)
 

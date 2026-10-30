@@ -108,6 +108,15 @@ func TestClient_InvestigateAcceptsAV2StampedResult(t *testing.T) {
 		result := minimalValidResult("result_test0002", "request_test0002")
 		result.SchemaVersion = contractsv1.ContextFabricInvestigationResultSchemaV2
 		result.Versions.ContractVersion = contractsv1.ContextFabricInvestigationResultSchemaV2
+		// CHAOS-11975: a valid v2 result carries a membership-verify anchor option.
+		result.StructureNeeds = &contractsv1.ContextFabricStructureNeeds{
+			Missing: []contractsv1.ContextFabricStructureNeedKind{contractsv1.ContextFabricStructureNeedSubjectAnchor},
+			AnchorOptions: []contractsv1.ContextFabricAnchorOption{contractsv1.ContextFabricAnchorOptionV2{
+				ReceiptID: "ancr_confirm00001", OptionID: "opt_repo_a", Label: "repoA",
+				Kind: contractsv1.ContextFabricSubjectRepository, CanonicalID: "repository_widget_svc_a",
+				MatchedTermHash: "aa11bb22cc33dd44ee55ff66", OfferSource: contractsv1.ContextFabricStructureOfferEngine,
+			}.ToV1Wire()},
+		}
 		_ = json.NewEncoder(w).Encode(result)
 	}))
 	defer server.Close()

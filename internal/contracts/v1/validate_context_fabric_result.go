@@ -1613,6 +1613,13 @@ func (r ContextFabricInvestigationResult) validateAgainstSchemaVersion(bounds co
 	if r.SchemaVersion != expectedSchemaVersion || !stringLengthBetween(r.ResultID, 8, 256) || !stringLengthBetween(r.RequestID, 8, 256) || r.GeneratedAt.IsZero() || !boundedText(r.Question, 1, 8000, bounds) || !validInvestigationStatus(r.Status) {
 		return fmt.Errorf("result identity or status violates v1 bounds")
 	}
+	// CHAOS-11975: the v2 major exists only for membership-verify anchor
+	// options, so a v2 result carries at least one; a v1-shaped body
+	// labelled v2 is refused on every path (write, stored read, stream
+	// writer), as the published v2 schemas refuse it.
+	if expectedSchemaVersion == ContextFabricInvestigationResultSchemaV2 && (r.StructureNeeds == nil || len(r.StructureNeeds.AnchorOptions) == 0) {
+		return fmt.Errorf("a %s result must carry at least one structure_needs.anchor_options entry", ContextFabricInvestigationResultSchemaV2)
+	}
 	if err := r.Interpretation.validate(bounds); err != nil {
 		return fmt.Errorf("interpretation: %w", err)
 	}

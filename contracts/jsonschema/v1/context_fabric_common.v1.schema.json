@@ -1280,7 +1280,7 @@
       ]
     },
     "StructureNeedsV2": {
-      "description": "CHAOS-4042: the disclosure block carried on a context_fabric_investigation_result.v2 result -- identical to StructureNeeds except anchor_options items are AnchorOptionV2 (membership-verify semantics) rather than AnchorOption (unique-claimant). kind_options/handle_options/window_options/accepted_grammars are unchanged from v1.",
+      "description": "CHAOS-4042: the disclosure block carried on a context_fabric_investigation_result.v2 result -- identical to StructureNeeds except anchor_options items are AnchorOptionV2 (membership-verify semantics) rather than AnchorOption (unique-claimant). kind_options/handle_options/window_options/accepted_grammars are unchanged from v1. CHAOS-11975: anchor_options is required and non-empty -- the v2 major exists only for membership-verify anchor options, so a block without one is not a v2 block.",
       "type": "object",
       "additionalProperties": false,
       "properties": {
@@ -1305,7 +1305,8 @@
           "items": {
             "$ref": "#/$defs/AnchorOptionV2"
           },
-          "maxItems": 20
+          "maxItems": 20,
+          "minItems": 1
         },
         "handle_options": {
           "type": "array",
@@ -1344,7 +1345,8 @@
         }
       },
       "required": [
-        "missing"
+        "missing",
+        "anchor_options"
       ]
     },
     "StructureSource": {
