@@ -105,6 +105,35 @@ func TestComposeWorkloadGateFollowsTheRuntimeRule(t *testing.T) {
 	}
 }
 
+// TestComposeServicesPassTheBrowserClientSettings: the ACL service grants the
+// browser family purge's DELETE only when it sees a browser client setting, so
+// it must receive the same two settings acr-api reads (CHAOS-12140; codex
+// #1788 r2 P2: both were absent from acr-db-acl).
+func TestComposeServicesPassTheBrowserClientSettings(t *testing.T) {
+	raw, err := os.ReadFile("../../deploy/compose/acr.compose.yml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, service := range []string{"acr-db-acl", "acr-api"} {
+		start := strings.Index(string(raw), "\n  "+service+":")
+		if start < 0 {
+			t.Fatalf("service %s not found", service)
+		}
+		block := string(raw)[start+1:]
+		if next := regexp.MustCompile(`\n  [a-z-]+:\n`).FindStringIndex(block[1:]); next != nil {
+			block = block[:next[0]+1]
+		}
+		for _, want := range []string{
+			"ACR_OAUTH_BROWSER_CLIENTS: ${ACR_OAUTH_BROWSER_CLIENTS:-}",
+			"ACR_OAUTH_DEV_BROWSER_REDIRECT_URIS: ${ACR_OAUTH_DEV_BROWSER_REDIRECT_URIS:-}",
+		} {
+			if !strings.Contains(block, want) {
+				t.Errorf("%s does not pass %s", service, want)
+			}
+		}
+	}
+}
+
 // TestComposeBrowserGateFollowsTheRuntimeRule runs the script's gates for
 // CHAOS-12140 with real shell: browser_client is on when either browser client
 // setting holds something other than whitespace (config.OAuthBrowserClassConfigured),

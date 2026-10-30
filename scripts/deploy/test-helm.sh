@@ -1242,6 +1242,36 @@ if grep -qE 'ACR_OAUTH_|ACR_MCP_RESOURCE_URL|ACR_MCP_AUTHORIZATION_SERVER' <<<"$
   fail_gate "oauth: the default render must carry no OAuth settings"
 fi
 pass "oauth: the default render carries no OAuth settings"
+# CHAOS-12140: the browser client settings reach acr-api AND the
+# grant-runtime-acl Job, which grants the browser family purge's DELETE only
+# when it sees one; off (the default, and OAuth on without them) neither does.
+browser_doc() { # browser_doc <render> <kind> <name-suffix>: one document
+  BROWSER_RENDER="$1" python3 - "$2" "$RELEASE$3" <<'PY'
+import os, re, sys
+want_kind, want_name = sys.argv[1], sys.argv[2]
+for d in os.environ['BROWSER_RENDER'].split('\n---\n'):
+    k = re.search(r'(?m)^kind: (\S+)$', d)
+    n = re.search(r'(?m)^metadata:\n(?:  .*\n)*?  name: "?([^"\s]+)"?$', d)
+    if k and n and k.group(1) == want_kind and n.group(1) == want_name:
+        print(d)
+PY
+}
+browser_args=("${oauth_args[@]}" --set-string 'config.oauth.resources[1]=https://acr.example.test'
+  --set-string 'config.oauth.browserClients[0]=https://www.example.test/acr/client-metadata.json')
+browser_on="$(render "${browser_args[@]}")"
+browser_cm="$(browser_doc "$browser_on" ConfigMap -config)"
+browser_job="$(browser_doc "$browser_on" Job -grant-runtime-acl)"
+grep -qF 'ACR_OAUTH_BROWSER_CLIENTS: "https://www.example.test/acr/client-metadata.json"' <<<"$browser_cm" || fail_gate "browser client: the acr-api ConfigMap lacks ACR_OAUTH_BROWSER_CLIENTS"
+grep -qF 'grant-runtime-acl' <<<"$browser_job" || fail_gate "browser client: the grant-runtime-acl Job was not found"
+grep -A1 -F -- '- name: ACR_OAUTH_BROWSER_CLIENTS' <<<"$browser_job" | grep -qF 'value: "https://www.example.test/acr/client-metadata.json"' || fail_gate "browser client: the grant-runtime-acl Job lacks ACR_OAUTH_BROWSER_CLIENTS (its browser family purge grant would be off)"
+pass "browser client: config.oauth.browserClients renders for acr-api and the grant-runtime-acl Job"
+browser_dev="$(render "${browser_args[@]}" --set-string 'config.oauth.devBrowserRedirectUris[0]=http://127.0.0.1:3000/acr/callback')"
+[[ "$(grep -c 'ACR_OAUTH_DEV_BROWSER_REDIRECT_URIS' <<<"$browser_dev")" -ge 2 ]] || fail_gate "browser client: devBrowserRedirectUris must render for acr-api and the grant Job"
+pass "browser client: config.oauth.devBrowserRedirectUris renders for acr-api and the grant-runtime-acl Job"
+if grep -qE 'ACR_OAUTH_BROWSER_CLIENTS|ACR_OAUTH_DEV_BROWSER_REDIRECT_URIS' <<<"$oauth_render$oauth_off"; then
+  fail_gate "browser client: a render without browser clients must carry no browser client setting"
+fi
+pass "browser client: OAuth on or off without browser clients renders no browser client setting"
 oauth_must_fail() {
   local name="$1" expect="$2"; shift 2
   local out status

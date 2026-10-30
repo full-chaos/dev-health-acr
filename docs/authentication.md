@@ -489,7 +489,9 @@ rows per statement.
   `acr.browser_token_families` (the `browser_client` rows of
   `internal/dbacl`; `deploy/compose/acr-db-init.sh runtime-acl` and
   `acr-migrate grant-runtime-acl` grant them when either browser client
-  setting is not blank).
+  setting is not blank). On Kubernetes set the clients as
+  `config.oauth.browserClients` (and `config.oauth.devBrowserRedirectUris` in
+  development): the chart renders them for acr-api and for the grant Job.
 - Every tick logs one `browser family purge` line at Info, zeros included
   (the loop's heartbeat): `credentials`, `families` (deleted) and, after a purge
   that did not fail, `credentials_remaining`, `families_remaining` (still
