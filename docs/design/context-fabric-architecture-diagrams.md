@@ -3300,6 +3300,24 @@ stateDiagram-v2
   abandoned --> [*]
 ```
 
+**The owner (CHAOS-12091).** A `SubmissionOwner` is the legacy pair
+(authentication method, subject) plus a canonical owner: the approving user of
+a user-approved credential (its immutable provenance, migration 0058) or the
+web assertion's subject, on a surface -- `browser` (web assertion, browser
+class) or `mcp` (OAuth user, native device). Two owners are one when the
+legacy pair is the same OR the canonical user and surface are the same
+(`SameSubmissionOwner`; SQL `ownerMatchSQL`). So a rotated credential -- and
+every browser token refresh -- repeats, reads, completes and counts against its
+user's records, while the same user's other surface, another user and an
+operator or workload credential (no canonical owner) do not. The canonical
+owner lives in new columns (`owner_user_id`/`owner_surface`, and
+`submission_owner_user_id`/`submission_owner_surface` on results, migration
+0059) beside the unchanged legacy primary key, with a partial unique index on
+(organization, canonical owner, submission id); admission resolves an existing
+record of the same owner under the organization's advisory lock before it
+inserts. A replica on the previous release keeps reading and writing the legacy
+pair only.
+
 INV-1: `StoredResultGate.Authorize` refuses a result whose
 `SubmissionOwner` is not the reader (`owner_mismatch`, decided before the
 grant check) on every surface that reads a stored row: `result_by_id` (and

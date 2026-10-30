@@ -265,6 +265,12 @@ func TestStore_submissionParity(t *testing.T) {
 	paritytest.RunSubmissionSuite(t, func(*testing.T) paritytest.SubmissionStore { return memoryinvestigation.NewStore() })
 }
 
+// TestStore_submissionCanonicalOwnerParity runs the canonical-owner table
+// (CHAOS-12091) against the in-memory store.
+func TestStore_submissionCanonicalOwnerParity(t *testing.T) {
+	paritytest.RunSubmissionCanonicalOwnerSuite(t, func(*testing.T) paritytest.SubmissionStore { return memoryinvestigation.NewStore() })
+}
+
 // TestStore_submissionLimitsParity runs the shared admission-limit table
 // (CHAOS-11914) against the in-memory store.
 func TestStore_submissionLimitsParity(t *testing.T) {
