@@ -52,29 +52,30 @@ func validWebRepositories(scopes, permissions []string, method, path string) boo
 		return len(permissions) == 1 && permissions[0] == WebAssertionPermissionCredentialIssue &&
 			method == http.MethodPost && slices.Contains(webAssertionOrganizationWidePaths, path)
 	}
-	scope, _ := webRepositoryScopeFault(scopes)
-	return scope == ""
+	_, _, refused := webRepositoryScopeFault(scopes)
+	return !refused
 }
 
 // webRepositoryScopeFault names the first repository scope that makes a web
-// assertion invalid and why, or ("", "") when every scope is acceptable. The
-// caller has already handled the lone "*" organization-wide form.
-func webRepositoryScopeFault(scopes []string) (scope, reason string) {
+// assertion invalid and why. refused is false when every scope is acceptable;
+// it is a separate result because the refused scope can itself be the empty
+// string. The caller has already handled the lone "*" organization-wide form.
+func webRepositoryScopeFault(scopes []string) (scope, reason string, refused bool) {
 	seen := make(map[string]struct{}, len(scopes))
 	for _, candidate := range scopes {
 		normalized, err := NormalizeRepositorySlug(candidate)
 		if err != nil {
-			return candidate, repositorySlugFault(candidate)
+			return candidate, repositorySlugFault(candidate), true
 		}
 		if normalized != candidate {
-			return candidate, "not in normalized (lower-case, trimmed) form"
+			return candidate, "not in normalized (lower-case, trimmed) form", true
 		}
 		if _, duplicate := seen[normalized]; duplicate {
-			return candidate, "duplicate scope"
+			return candidate, "duplicate scope", true
 		}
 		seen[normalized] = struct{}{}
 	}
-	return "", ""
+	return "", "", false
 }
 
 func normalizeWebRepositoryScopes(scopes []string) []string {

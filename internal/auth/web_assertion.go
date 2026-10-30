@@ -203,7 +203,7 @@ func (v *WebAssertionVerifier) logRepositoryScopeFault(r *http.Request, claims p
 	case len(claims.RepositoryScopes) == 1 && claims.RepositoryScopes[0] == "*":
 		scope, reason = "*", "organization-wide scope is only valid for credential issue on an organization-wide path"
 	default:
-		scope, reason = webRepositoryScopeFault(claims.RepositoryScopes)
+		scope, reason, _ = webRepositoryScopeFault(claims.RepositoryScopes)
 	}
 	v.logger.WarnContext(r.Context(), "web assertion refused: invalid repository scope", "class", "web_assertion_repository_scope_invalid",
 		"scope", truncateLogValue(scope, 128), "reason", reason, "scope_count", len(claims.RepositoryScopes), "organization_id", claims.OrganizationID)

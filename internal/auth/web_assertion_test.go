@@ -385,6 +385,8 @@ func TestWebAssertionVerifier_logsTheRepositoryScopeThatRefusedTheAssertion(t *t
 		{"nonsense", []string{"nonsense"}, "owner/repo"},
 		{"full-chaos/dup", []string{"full-chaos/dup", "full-chaos/dup"}, "duplicate"},
 		{"Full-Chaos/X", []string{"Full-Chaos/X"}, "normalized"},
+		{"", []string{"", "*"}, "owner/repo"},
+		{"", []string{"full-chaos/ask-dev", ""}, "owner/repo"},
 		{"*", []string{"*"}, "organization-wide"},
 		{"", []string{}, "no repository scope"},
 	} {
