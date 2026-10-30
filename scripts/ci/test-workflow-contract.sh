@@ -1668,19 +1668,51 @@ check_ops_checkout_chooser_behaviour() {
   return "$status"
 }
 
-# Codex #1768 r1 P2: a re-pin PR changes the product slice, so the PR browser
-# agreement job must select it. EXECUTES the decide step's path selector.
+# Codex #1768 r1 P2 / r2 P3: a re-pin PR changes the product slice, so the PR
+# browser agreement job must run on it. This EXECUTES the decide step's own
+# script against a throwaway repository whose head commit changes only the
+# candidate path, and asserts run=true; an unrelated change must give
+# run=false, so the decision is shown to discriminate, not just to say yes.
 check_web_agreement_selects_ops_pin() {
-  local file="$1" status=0 assignments paths candidate
-  assignments="$(awk '/id: decide/ { grab=1 } grab && /^          paths=/ { print } grab && /if git diff --name-only/ { exit }' "$file")"
-  if [ -z "$assignments" ]; then
-    printf 'no web-agreement path selector found in %s\n' "$file" >&2; return 1
+  local file="$1" status=0 dir script candidate got
+  dir="$(mktemp -d)"
+  script="$dir/decide.sh"
+  # shellcheck disable=SC2016  # ${PR_BASE}/${PR_HEAD} below are literal text the extracted script expands
+  awk '
+    /id: decide/ { in_step=1 }
+    in_step && /^        run: \|$/ { in_run=1; next }
+    in_run && /^      - / { exit }
+    in_run && NF > 0 && !/^          / { exit }
+    in_run { sub(/^          /, ""); print }
+  ' "$file" \
+    | sed -e 's/\${{ github\.event\.pull_request\.base\.sha }}/${PR_BASE}/' \
+          -e 's/\${{ github\.event\.pull_request\.head\.sha }}/${PR_HEAD}/' > "$script"
+  # shellcheck disable=SC2016  # ${{ is the literal GitHub expression marker
+  if [ ! -s "$script" ] || grep -qF '${{' "$script"; then
+    printf 'could not extract an executable web-agreement decide step from %s\n' "$file" >&2; rm -rf "$dir"; return 1
   fi
-  paths="$(bash -c "$assignments"$'\n''printf %s "$paths"')"
+  decide_for() {
+    local changed="$1" repo="$dir/repo-${RANDOM}" out
+    out="$repo.out"
+    git init -q "$repo"
+    git -C "$repo" -c user.email=t@t -c user.name=t commit -q --allow-empty -m base
+    mkdir -p "$repo/$(dirname "$changed")"
+    printf 'x\n' > "$repo/$changed"
+    git -C "$repo" add -A
+    git -C "$repo" -c user.email=t@t -c user.name=t commit -q -m head
+    : > "$out"
+    (cd "$repo" && env PR_BASE="$(git rev-parse HEAD~1)" PR_HEAD="$(git rev-parse HEAD)" GITHUB_OUTPUT="$out" bash -e "$script") >/dev/null 2>&1 || return 1
+    sed -n 's/^run=//p' "$out"
+  }
   for candidate in ci/fullstack-ops.pin .github/actions/ops-checkout/action.yml; do
-    grep -Eq "$paths" <<<"$candidate" || {
-      printf 'the web-agreement selector does not select %s: a re-pin PR would skip the browser agreement\n' "$candidate" >&2; status=1; }
+    got="$(decide_for "$candidate")" || { printf 'the web-agreement decide step failed to run for %s\n' "$candidate" >&2; status=1; continue; }
+    [ "$got" = true ] || {
+      printf 'the web-agreement decide step gives run=%s for a PR that changes only %s: a re-pin PR would skip the browser agreement\n' "$got" "$candidate" >&2; status=1; }
   done
+  got="$(decide_for docs/unrelated-note.md)" || got=failed
+  [ "$got" = false ] || {
+    printf 'the web-agreement decide step gives run=%s for an unrelated change: it does not discriminate\n' "$got" >&2; status=1; }
+  rm -rf "$dir"
   return "$status"
 }
 
@@ -1689,7 +1721,7 @@ check_fullstack_ops_checkout_wiring() {
   if grep -qF 'repository: full-chaos/dev-health-ops' "$file"; then
     printf '%s checks dev-health-ops out directly; every ops checkout must go through .github/actions/ops-checkout\n' "$file" >&2; status=1
   fi
-  for job in $(awk '/^jobs:/ { in_jobs=1; next } in_jobs && /^  [A-Za-z0-9_-]+:$/ { sub(/:$/, ""); sub(/^  /, ""); print }' "$file"); do
+  while IFS= read -r job; do
     block="$(job_block "$file" "$job")"
     grep -qF 'dev-health/ops' <<<"$block" || continue
     grep -qxF '        uses: ./dev-health-acr/.github/actions/ops-checkout' <<<"$block" || {
@@ -1708,7 +1740,7 @@ check_fullstack_ops_checkout_wiring() {
     # shellcheck disable=SC2016
     awk '/- name: Name the dev-health-ops commit of a failed run/ { grab=1 } grab' <<<"$block" | grep -qF 'OPS_SHA: ${{ steps.ops.outputs.sha }}' || {
       printf 'job %s: the ops naming step does not name the checked-out commit\n' "$job" >&2; status=1; }
-  done
+  done < <(awk '/^jobs:/ { in_jobs=1; next } in_jobs && /^  [A-Za-z0-9_-]+:$/ { sub(/:$/, ""); sub(/^  /, ""); print }' "$file")
   return "$status"
 }
 
@@ -1884,10 +1916,12 @@ sed 's/ref: ${{ steps.choose.outputs.ref }}/ref: main/' "$ops_checkout_action" >
 mutate_or_die "$ops_checkout_action" "$action_floating_checkout" 'action_floating_checkout'
 assert_check_fails 'the ops checkout follows main while the pin is validated' check_ops_checkout_action "$action_floating_checkout"
 action_pr_floats="$tmpdir/ops-checkout-pr-floats.yml"
+# shellcheck disable=SC2016  # the $ names are literal text in the action file
 sed 's/\[ "\$GITHUB_EVENT_NAME" = schedule \]/[ "$GITHUB_EVENT_NAME" = pull_request ]/' "$ops_checkout_action" > "$action_pr_floats"
 mutate_or_die "$ops_checkout_action" "$action_pr_floats" 'action_pr_floats'
 assert_check_fails 'pull requests float on ops main' check_ops_checkout_action "$action_pr_floats"
 action_no_verify="$tmpdir/ops-checkout-no-verify.yml"
+# shellcheck disable=SC2016  # the $ names are literal text in the action file
 sed 's/if \[ "\$MODE" = pinned \] && \[ "\$sha" != "\$PIN" \]; then/if false; then/' "$ops_checkout_action" > "$action_no_verify"
 mutate_or_die "$ops_checkout_action" "$action_no_verify" 'action_no_verify'
 assert_check_fails 'a pinned run no longer verifies the pin it checked out' check_ops_checkout_action "$action_no_verify"
@@ -1914,6 +1948,7 @@ awk '/^          ref=""$/ && !done { print "          ref=\"$pin\""; done=1; nex
 mutate_or_die "$ops_checkout_action" "$chooser_schedule_pinned" 'chooser_schedule_pinned'
 assert_check_fails 'the schedule canary no longer floats' behaviour_check "$chooser_schedule_pinned"
 chooser_dispatch_ignored="$tmpdir/ops-checkout-chooser-dispatch-ignored.yml"
+# shellcheck disable=SC2016  # the $ names are literal text in the action file
 sed 's/^        if \[ -n "\$DISPATCH_REF" \]; then$/        if false; then/' "$ops_checkout_action" > "$chooser_dispatch_ignored"
 mutate_or_die "$ops_checkout_action" "$chooser_dispatch_ignored" 'chooser_dispatch_ignored'
 assert_check_fails 'the dispatch ops_ref is ignored' behaviour_check "$chooser_dispatch_ignored"
@@ -1925,6 +1960,16 @@ selector_no_action="$tmpdir/fullstack-selector-no-action.yml"
 awk '!/paths="\$\{paths\}\|\\.github\/actions\/ops-checkout\/"/' "$fullstack_workflow" > "$selector_no_action"
 mutate_or_die "$fullstack_workflow" "$selector_no_action" 'selector_no_action'
 assert_check_fails 'the browser agreement selector lost the ops-checkout action' check_web_agreement_selects_ops_pin "$selector_no_action"
+decide_forced_false="$tmpdir/fullstack-decide-forced-false.yml"
+# shellcheck disable=SC2016  # the $ names are literal text in the workflow
+sed 's/^          if git diff --name-only "\$base" "\$head" | grep -Eq "\$paths"; then$/          if false; then/' "$fullstack_workflow" > "$decide_forced_false"
+mutate_or_die "$fullstack_workflow" "$decide_forced_false" 'decide_forced_false'
+assert_check_fails 'the browser agreement decision is forced false' check_web_agreement_selects_ops_pin "$decide_forced_false"
+decide_forced_true="$tmpdir/fullstack-decide-forced-true.yml"
+# shellcheck disable=SC2016  # the $ names are literal text in the workflow
+sed 's/^          if git diff --name-only "\$base" "\$head" | grep -Eq "\$paths"; then$/          if true; then/' "$fullstack_workflow" > "$decide_forced_true"
+mutate_or_die "$fullstack_workflow" "$decide_forced_true" 'decide_forced_true'
+assert_check_fails 'the browser agreement decision no longer discriminates' check_web_agreement_selects_ops_pin "$decide_forced_true"
 printf 'PASS: the CHAOS-11974 ops pin checks reject a branch pin, a short pin, a loose regex, a floating checkout, a floating pull request, a missing pin verification, a direct ops checkout, a missing and an always-on failure step\n'
 modcache_stale_pin="$tmpdir/modcache-stale-pin.txt"
 sed 's/^gotest.tools\/gotestsum@.*/gotest.tools\/gotestsum@v0.0.1/' "$modcache_pins" > "$modcache_stale_pin"
