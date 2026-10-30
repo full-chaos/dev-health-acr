@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"net/http"
 	"strings"
 
@@ -37,6 +38,42 @@ const (
 // CORSRefusedLogMessage is the line for a request on a browser route from an
 // origin that is not on the allow list.
 const CORSRefusedLogMessage = "cors origin refused"
+
+// corsDecision carries this middleware's decision out to the access log, so
+// an allowed CORS grant is visible at Info as well as a refusal (codex #1770
+// r1 P3): the access line of a browser-route request with an Origin carries
+// cors (allowed or refused), cors_route and cors_preflight, and an allowed
+// one carries cors_origin, the listed origin it echoed.
+type corsDecision struct {
+	outcome   string
+	route     string
+	preflight bool
+	origin    string
+}
+
+type corsDecisionContextKey struct{}
+
+func withCORSDecision(r *http.Request) (*http.Request, *corsDecision) {
+	decision := &corsDecision{}
+	return r.WithContext(context.WithValue(r.Context(), corsDecisionContextKey{}, decision)), decision
+}
+
+func noteCORSDecision(r *http.Request, decision corsDecision) {
+	if holder, ok := r.Context().Value(corsDecisionContextKey{}).(*corsDecision); ok {
+		*holder = decision
+	}
+}
+
+func (d *corsDecision) logFields() []any {
+	if d == nil || d.outcome == "" {
+		return nil
+	}
+	fields := []any{"cors", d.outcome, "cors_route", d.route, "cors_preflight", d.preflight}
+	if d.origin != "" {
+		fields = append(fields, "cors_origin", contextfabric.SanitizeLogAttr(d.origin))
+	}
+	return fields
+}
 
 // corsRouteClass is the closed name of a browser route ("" for any other
 // path).
@@ -88,6 +125,7 @@ func (a *App) corsMiddleware(next http.Handler) http.Handler {
 		preflight := r.Method == http.MethodOptions && r.Header.Get("Access-Control-Request-Method") != ""
 		origin := origins[0]
 		if _, ok := allowed[origin]; !ok || len(origins) != 1 {
+			noteCORSDecision(r, corsDecision{outcome: "refused", route: route, preflight: preflight})
 			a.logger.InfoContext(r.Context(), CORSRefusedLogMessage,
 				"route", route,
 				"preflight", preflight,
@@ -97,6 +135,7 @@ func (a *App) corsMiddleware(next http.Handler) http.Handler {
 			next.ServeHTTP(w, r)
 			return
 		}
+		noteCORSDecision(r, corsDecision{outcome: "allowed", route: route, preflight: preflight, origin: origin})
 		header.Set("Access-Control-Allow-Origin", origin)
 		if preflight {
 			header.Add("Vary", "Access-Control-Request-Method")

@@ -258,3 +258,53 @@ func TestCORSIsAnsweredForTheListedOriginOnTheBrowserRoutesOnly(t *testing.T) {
 		t.Fatalf("executions = %d, want 6", got)
 	}
 }
+
+// codex #1770 r1 P3: every CORS decision is on the request's Info access
+// line, an allowed grant as well as a refusal, so a regression in an allowed
+// origin's headers is not indistinguishable from an ordinary response.
+func TestEveryCORSDecisionIsOnTheAccessLog(t *testing.T) {
+	harness := corsHarness(t)
+	logs := harness.logs[0]
+	logs.Reset()
+	preflight := map[string]string{"Access-Control-Request-Method": "POST"}
+	for _, tc := range []struct {
+		name string
+		call corsCall
+		want map[string]any
+	}{
+		{"allowed preflight", corsCall{method: http.MethodOptions, path: ContextFabricInvestigationsPath, origin: corsTestOrigin, headers: preflight},
+			map[string]any{"cors": "allowed", "cors_route": "investigations", "cors_preflight": true, "cors_origin": corsTestOrigin}},
+		{"allowed actual", corsCall{method: http.MethodGet, path: OAuthAuthorizationServerMetadataPath, origin: corsTestOrigin},
+			map[string]any{"cors": "allowed", "cors_route": "oauth_metadata", "cors_preflight": false, "cors_origin": corsTestOrigin}},
+		{"refused", corsCall{method: http.MethodGet, path: OAuthAuthorizationServerMetadataPath, origin: "https://evil.example"},
+			map[string]any{"cors": "refused", "cors_route": "oauth_metadata", "cors_preflight": false, "cors_origin": nil}},
+		{"no origin", corsCall{method: http.MethodGet, path: OAuthAuthorizationServerMetadataPath},
+			map[string]any{"cors": nil, "cors_route": nil, "cors_preflight": nil, "cors_origin": nil}},
+		{"not a browser route", corsCall{method: http.MethodGet, path: "/healthz", origin: corsTestOrigin},
+			map[string]any{"cors": nil, "cors_route": nil, "cors_preflight": nil, "cors_origin": nil}},
+	} {
+		harness.cors(0, tc.call)
+		line := lastAccessLine(t, logs)
+		for key, want := range tc.want {
+			if got := line[key]; got != want {
+				t.Errorf("%s: access line %s = %v, want %v\n%v", tc.name, key, got, want, line)
+			}
+		}
+	}
+}
+
+func lastAccessLine(t *testing.T, logs *bytes.Buffer) map[string]any {
+	t.Helper()
+	var found map[string]any
+	for _, line := range strings.Split(strings.TrimSpace(logs.String()), "\n") {
+		var entry map[string]any
+		if json.Unmarshal([]byte(line), &entry) == nil && entry["msg"] == "request completed" {
+			found = entry
+		}
+	}
+	if found == nil {
+		t.Fatalf("no request completed line in:\n%s", logs.String())
+	}
+	logs.Reset()
+	return found
+}
