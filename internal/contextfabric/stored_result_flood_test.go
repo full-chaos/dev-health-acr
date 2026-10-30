@@ -6,6 +6,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strings"
 	"testing"
@@ -118,11 +119,14 @@ func TestStoredResultSurfacesServingToACallerCallTheFloodHelper(t *testing.T) {
 	// included (docs/design/ask-dev-conversation-contract.md §4), so the
 	// change that adds its reader must move it to servesToCaller with the
 	// file that applies StoredResultFloodWithheld, or this test fails.
-	pendingReader := map[StoredResultSurface]string{
-		StoredResultSurfaceThread: "StoredResultSurfaceThread",
+	// A reader names the surface by its constant or by converting its
+	// value; both spellings are searched. NOT caught: an untyped "thread"
+	// literal passed straight where a StoredResultSurface is expected.
+	pendingReader := map[StoredResultSurface]*regexp.Regexp{
+		StoredResultSurfaceThread: regexp.MustCompile(`\bStoredResultSurfaceThread\b|StoredResultSurface\(\s*"thread"\s*\)`),
 	}
-	for surface, identifier := range pendingReader {
-		if users := productionFilesNaming(t, identifier, "stored_result_authorization.go"); len(users) > 0 {
+	for surface, pattern := range pendingReader {
+		if users := productionFilesMatching(t, pattern, "stored_result_authorization.go"); len(users) > 0 {
 			t.Fatalf("stored-result surface %q now has a production reader (%v): classify it as serving to a caller and name the file that applies StoredResultFloodWithheld", surface, users)
 		}
 		notServed[surface] = "out of scope until its reader exists: no production file names it (checked above)"
@@ -145,9 +149,9 @@ func TestStoredResultSurfacesServingToACallerCallTheFloodHelper(t *testing.T) {
 	}
 }
 
-// productionFilesNaming lists the non-test Go files under internal/ that name
-// identifier, except the files in exempt (matched by base name).
-func productionFilesNaming(t *testing.T, identifier string, exempt ...string) []string {
+// productionFilesMatching lists the non-test Go files under internal/ whose
+// source matches pattern, except the files in exempt (matched by base name).
+func productionFilesMatching(t *testing.T, pattern *regexp.Regexp, exempt ...string) []string {
 	t.Helper()
 	var users []string
 	err := filepath.WalkDir("..", func(path string, entry fs.DirEntry, err error) error {
@@ -161,7 +165,7 @@ func productionFilesNaming(t *testing.T, identifier string, exempt ...string) []
 		if err != nil {
 			return err
 		}
-		if bytes.Contains(source, []byte(identifier)) {
+		if pattern.Match(source) {
 			users = append(users, path)
 		}
 		return nil

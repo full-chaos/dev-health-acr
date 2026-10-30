@@ -110,9 +110,12 @@ read as `0`; no field is nullable), no key present as empty, false or zero
 where the writer omits the field, and no required key missing (a missing
 `retention_days` would read as `0` too). Every string bound is the schema's exactly (the
 question is 1..8000 runes, untrimmed). A key given twice is the one rule
-only Go holds: JSON Schema has none for it. A number is read by value, as
-the standard reads it: an integral number spelled with a fraction or an
-exponent (`30.0`, `4e0`) is the integer it equals (an independent Draft
+only Go holds: JSON Schema has none for it. A number is read by its exact
+value, as the standard reads it, from the literal's decimal digits and never
+through a float: a number spelled with a fraction or an exponent that equals
+an integer exactly (`30.0`, `4e0`) is that integer, and one that does not
+(`30.5`, `30.0000000000000001`) is not; trailing content is refused before
+any number is rewritten (an independent Draft
 2020-12 validator is the parity reference; contractcheck reads integers
 lexically and refuses those spellings, which ACR's writer never writes).
 

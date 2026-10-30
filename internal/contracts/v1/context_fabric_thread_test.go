@@ -479,6 +479,7 @@ func TestThreadOpenAPIPublishesTheGoConstants(t *testing.T) {
 		Pattern   string   `json:"pattern"`
 	}
 	type parameter struct {
+		Ref    string `json:"$ref"`
 		Name   string `json:"name"`
 		In     string `json:"in"`
 		Schema schema `json:"schema"`
@@ -506,6 +507,16 @@ func TestThreadOpenAPIPublishesTheGoConstants(t *testing.T) {
 		if _, err := ParseContextFabricThreadRetention(value); err != nil {
 			t.Fatalf("published retention %q is refused by the parser", value)
 		}
+	}
+	// The create operation names the header (confirmation-pass review: the
+	// component alone was checked, so dropping the operation's reference
+	// passed every test).
+	attached := false
+	for _, p := range document.Paths["/api/v1/context-fabric/investigations"]["post"].Parameters {
+		attached = attached || p.Ref == "#/components/parameters/ThreadRetentionDays"
+	}
+	if !attached {
+		t.Fatal("POST /api/v1/context-fabric/investigations does not name the ThreadRetentionDays parameter")
 	}
 	var limit, cursor *parameter
 	for i, p := range document.Paths["/api/v1/context-fabric/threads"]["get"].Parameters {
@@ -793,23 +804,35 @@ func TestThreadParseReadsNumbersAsTheSchemaDoes(t *testing.T) {
 		from, to      string
 		valid         bool
 		localStricter bool
+		// floatMasked: the literal is not an integer, but a float64 reads it
+		// as one, so the float-based reference validator cannot judge it;
+		// Parse is held to the exact value alone (confirmation-pass review:
+		// 30.0000000000000001 was rounded to 30 and accepted).
+		floatMasked bool
 	}
 	cases := []numberCase{
-		{false, `"retention_days":30`, `"retention_days":30.0`, true, true},
-		{false, `"retention_days":30`, `"retention_days":3e1`, true, true},
-		{false, `"retention_days":30`, `"retention_days":30.5`, false, false},
-		{false, `"retention_days":30`, `"retention_days":30.000`, true, true},
-		{false, `"turn_count":4`, `"turn_count":4.0`, true, true},
-		{false, `"turn_count":4`, `"turn_count":4e0`, true, true},
-		{false, `"turn_count":4`, `"turn_count":4.5`, false, false},
-		{false, `"turn_count":4`, `"turn_count":1000000`, true, false},
-		{false, `"turn_count":4`, `"turn_count":1000001`, false, false},
-		{false, `"turn_count":4`, `"turn_count":1e6`, true, true},
-		{false, `"turn_count":4`, `"turn_count":9223372036854775808`, false, false},
-		{false, `"turn_count":4`, `"turn_count":1e400`, false, false},
-		{true, `"retention_days":0`, `"retention_days":0.0`, true, true},
-		{true, `"turn_count":1,`, `"turn_count":1e0,`, true, true},
-		{true, `"turn_count":4`, `"turn_count":1000001`, false, false},
+		{false, `"retention_days":30`, `"retention_days":30.0`, true, true, false},
+		{false, `"retention_days":30`, `"retention_days":3e1`, true, true, false},
+		{false, `"retention_days":30`, `"retention_days":30.5`, false, false, false},
+		{false, `"retention_days":30`, `"retention_days":30.000`, true, true, false},
+		{false, `"turn_count":4`, `"turn_count":4.0`, true, true, false},
+		{false, `"turn_count":4`, `"turn_count":4e0`, true, true, false},
+		{false, `"turn_count":4`, `"turn_count":4.5`, false, false, false},
+		{false, `"turn_count":4`, `"turn_count":1000000`, true, false, false},
+		{false, `"turn_count":4`, `"turn_count":1000001`, false, false, false},
+		{false, `"turn_count":4`, `"turn_count":1e6`, true, true, false},
+		{false, `"turn_count":4`, `"turn_count":9223372036854775808`, false, false, false},
+		{false, `"turn_count":4`, `"turn_count":1e400`, false, false, false},
+		{true, `"retention_days":0`, `"retention_days":0.0`, true, true, false},
+		{true, `"turn_count":1,`, `"turn_count":1e0,`, true, true, false},
+		{true, `"turn_count":4`, `"turn_count":1000001`, false, false, false},
+		{false, `"retention_days":30`, `"retention_days":30.0000000000000001`, false, false, true},
+		{false, `"turn_count":4`, `"turn_count":4.0000000000000000001e0`, false, false, true},
+		{false, `"retention_days":30`, `"retention_days":3.0e1`, true, true, false},
+		{false, `"retention_days":30`, `"retention_days":300e-1`, true, true, false},
+		{false, `"retention_days":30`, `"retention_days":0.3e2`, true, true, false},
+		{false, `"retention_days":30`, `"retention_days":3e-1`, false, false, false},
+		{false, `"turn_count":4`, `"turn_count":400E-2`, true, true, false},
 	}
 	for _, tc := range cases {
 		base, file := thread, threadSchemaFile
@@ -826,13 +849,57 @@ func TestThreadParseReadsNumbersAsTheSchemaDoes(t *testing.T) {
 		} else {
 			_, parseErr = ParseContextFabricThread(body)
 		}
+		if (parseErr == nil) != tc.valid {
+			t.Errorf("%s: Parse = %v, want valid %t", tc.to, parseErr, tc.valid)
+		}
+		if tc.floatMasked {
+			continue
+		}
 		standardErr := standardThreadSchemaErr(t, file, body)
-		if (parseErr == nil) != tc.valid || (standardErr == nil) != tc.valid {
-			t.Errorf("%s: Parse = %v, standard schema = %v, want valid %t", tc.to, parseErr, standardErr, tc.valid)
+		if (standardErr == nil) != tc.valid {
+			t.Errorf("%s: standard schema = %v, want valid %t", tc.to, standardErr, tc.valid)
 		}
 		localErr := contractcheck.ValidateSerializedStrict("", file, body)
 		if tc.localStricter != (tc.valid && localErr != nil) {
 			t.Errorf("%s: contractcheck = %v, want its lexical-integer refusal %t", tc.to, localErr, tc.localStricter)
+		}
+	}
+}
+
+// exactJSONInteger decides integrality from the literal's digits, never
+// through a float.
+func TestExactJSONInteger(t *testing.T) {
+	for literal, want := range map[string]string{
+		"30.0": "30", "3e1": "30", "3.0e1": "30", "300e-1": "30", "0.3e2": "30", "30.000": "30",
+		"-0.0": "0", "0e-5000": "0", "1e+2": "100", "100e-2": "1", "-4.0": "-4",
+		"9223372036854775807.0": "9223372036854775807", "-9223372036854775808.0": "-9223372036854775808",
+	} {
+		got, ok := exactJSONInteger(literal)
+		if !ok || got != want {
+			t.Errorf("%s = %q %t, want %q", literal, got, ok, want)
+		}
+	}
+	for _, literal := range []string{
+		"30.5", "30.0000000000000001", "3e-1", "1.5e0", "1e-5000", "1e5000", "1e99999999999999999999",
+		"9223372036854775808.0", "-9223372036854775809.0", "4.0000000000000000001e0",
+	} {
+		if got, ok := exactJSONInteger(literal); ok {
+			t.Errorf("%s = %q, want not an int64 integer", literal, got)
+		}
+	}
+}
+
+// Trailing content is refused before a number is rewritten: the rewrite
+// re-encodes the first value only (confirmation-pass review: 30.0 followed
+// by {} was accepted).
+func TestThreadParseRefusesTrailingContentAfterARewrite(t *testing.T) {
+	body := bytes.Replace(contextFabricGolden(t, "context_fabric_thread.v1.json"), []byte(`"retention_days":30`), []byte(`"retention_days":30.0`), 1)
+	if _, err := ParseContextFabricThread(body); err != nil {
+		t.Fatalf("the rewritten document itself must parse: %v", err)
+	}
+	for _, trailing := range []string{`{}`, ` {}`, `[]`, `1`, `"x"`, `null`} {
+		if _, err := ParseContextFabricThread(append(bytes.Clone(body), trailing...)); err == nil {
+			t.Errorf("trailing %s after a rewritten number is accepted", trailing)
 		}
 	}
 }
