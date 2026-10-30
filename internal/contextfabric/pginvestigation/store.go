@@ -69,10 +69,31 @@ type Store struct {
 	// keep in sync with acr-projector's own configured source set.
 	reuseEnabled bool
 	reuseMaxAge  time.Duration
+	// now is the clock the closed-thread rule (CHAOS-11948) compares a
+	// thread's expiry with on Get and FindReusable, whose interface takes no
+	// clock. The submission and thread methods take the caller's.
+	now func() time.Time
 }
 
 // StoreOption configures optional Store behavior. See WithAnswerReuse.
 type StoreOption func(*Store)
+
+// WithClock sets the clock Get and FindReusable decide the closed-thread
+// rule with (default time.Now).
+func WithClock(now func() time.Time) StoreOption {
+	return func(s *Store) {
+		if now != nil {
+			s.now = now
+		}
+	}
+}
+
+func (s *Store) clock() time.Time {
+	if s.now == nil {
+		return time.Now().UTC()
+	}
+	return s.now().UTC()
+}
 
 // WithAnswerReuse enables CHAOS-3782 answer reuse on Store: Save
 // additionally snapshots, at insert time, the CURRENT backend_watermark of
@@ -612,7 +633,12 @@ func (s *Store) Get(ctx context.Context, principal storage.Principal, resultID s
 	}
 
 	row := s.db.QueryRowContext(ctx, `
-SELECT payload, graph_epoch, created_at, parent_result_id, semantic_state, grant_digest, submission_owner_auth_method, submission_owner_subject FROM acr.context_fabric_investigation_results WHERE result_id = $1 AND org_id = $2`, resultID, orgID)
+SELECT payload, graph_epoch, created_at, parent_result_id, semantic_state, grant_digest, submission_owner_auth_method, submission_owner_subject
+  FROM acr.context_fabric_investigation_results r
+ WHERE r.result_id = $1 AND r.org_id = $2
+   -- CHAOS-11948 (design §6 T6): a result only closed threads' turns name is
+   -- not served on any read; the caller sees an unknown id.
+   AND NOT `+hiddenByClosedThreadSQL("$3"), resultID, orgID, s.clock())
 	var payload []byte
 	var graphEpoch sql.NullInt64
 	var createdAt time.Time
@@ -1119,9 +1145,12 @@ func (s *Store) FindReusable(ctx context.Context, principal storage.Principal, k
 	// ReuseKey.OwnershipRoutingVersion's own field doc comment.
 	row := s.db.QueryRowContext(ctx, `
 SELECT payload, source_watermarks, graph_epoch, created_at, parent_result_id, semantic_state, grant_digest, submission_owner_auth_method, submission_owner_subject
-FROM acr.context_fabric_investigation_results
+FROM acr.context_fabric_investigation_results r
 WHERE org_id = $1
   AND question_hash = $2
+  -- CHAOS-11948 (design §6 T6): a result only closed threads' turns name is
+  -- never reused.
+  AND NOT `+hiddenByClosedThreadSQL("$26")+`
   -- CHAOS-11912: reuse never crosses principals. A row that completed a
   -- submission is a candidate for its owner only; the stored-result gate
   -- re-decides the same rule on the candidate this returns. A submission's
@@ -1166,7 +1195,7 @@ LIMIT 1`,
 		key.EmbedRetrievalIdentity, key.RetrievalPolicyVersion, key.InterpretationPromptVersion, key.SynthesisPromptVersion,
 		key.QueryVersion, key.CanonicalServiceVersion, key.ModelOutputSchemaVersion, key.IdentityNormalizationVersion, key.GraphEpoch,
 		key.WindowInferenceVersion, key.CommitGateVersion, key.RankingFormulaVersion, key.QuestionFamilyVersion, key.OwnershipRoutingVersion,
-		key.GraphWalkVersion, readerOwnerMethod, readerOwnerSubject, key.OwnedOnly)
+		key.GraphWalkVersion, readerOwnerMethod, readerOwnerSubject, key.OwnedOnly, s.clock())
 	var payload, sourceWatermarks, semanticStateColumn []byte
 	var graphEpoch sql.NullInt64
 	var createdAt time.Time

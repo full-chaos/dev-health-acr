@@ -3390,8 +3390,10 @@ retention (`X-ACR-Thread-Retention-Days`: `0` = until 24 h after the last
 turn, `30` = until 30 days after it; the latest turn that named one decides;
 none named = `0`). The contract (`context_fabric_thread.v1`,
 `context_fabric_thread_list.v1`, the `thread_closed` 409, the gate surface
-`thread`) is published ahead of the store and routes that serve it. Design
-and obligations: `docs/design/ask-dev-conversation-contract.md`.
+`thread`) is served by the store and routes of CHAOS-11948: the thread row
+`acr.context_fabric_threads` (migration `0058`) is written by admission in the
+submission's own transaction, and the routes read and close it. Design and
+obligations: `docs/design/ask-dev-conversation-contract.md` (§6, §9).
 
 ```mermaid
 sequenceDiagram
@@ -3401,7 +3403,7 @@ sequenceDiagram
   participant G as One serving decision (StoredResultGate surface thread + read-by-id rules)
 
   W->>R: GET threads/{thread_id}?before=cursor
-  R->>S: the caller's key (org, owner, thread_id), one page of at most 100 turns
+  R->>S: the caller's thread row (closed or expired = not found), reconcile, one page of at most 100 turns
   alt no open thread for this principal (unknown, another principal's, deleted, expired, malformed)
     R-->>W: 404 not_found (one body)
   else open thread
@@ -3448,7 +3450,24 @@ an unsaved answer stays unsaved (T5); closed is closed on every read (T6); a
 thread holds at most 1000000 turns (T7). A thread read writes one aggregated
 decision line, not one `StoredResultAuthorization` line per turn.
 
-**Construction anchors:** `ContextFabricThread`, `ContextFabricThreadList`,
+Admission of a thread turn, in one transaction under the organization's
+admission lock: the submission INSERT (the key decides races), the thread row
+read `FOR UPDATE`, a closed thread refused (`409 thread_closed`, nothing
+written), the shared limits, then `AdvanceThread` writes the row. The result
+stores' `Get` and answer reuse hide a result that only closed threads' turns
+name, so every reader of a deleted or expired conversation's answers fails
+closed.
+
+**Construction anchors (store and routes):** `AdvanceThread`, `ThreadStore`
+(`internal/contextfabric/thread.go`); `pginvestigation` `threads.go`
+(`ListThreads`, `GetThread`, `CloseThread`, `hiddenByClosedThreadSQL`) and
+`AdmitSubmission`; `memoryinvestigation/threads.go`;
+`ContextFabricThreadListHandler`, `ContextFabricThreadHandler`
+(`internal/api/context_fabric_threads.go`); `decideStoredResultServing`
+(`internal/api/stored_result_serving.go`); migration
+`0058_context_fabric_threads.sql`.
+
+**Construction anchors (contract):** `ContextFabricThread`, `ContextFabricThreadList`,
 `ParseContextFabricThreadRetention`, `ContextFabricThreadExpiresAt`,
 `ValidContextFabricThreadCursor`, `ErrorCodeThreadClosed`
 (`internal/contracts/v1/context_fabric_thread.go`); the consumer decoders

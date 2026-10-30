@@ -63,6 +63,27 @@
       "web_assertion": true
     },
     {
+      "method": "GET",
+      "pattern": "/api/v1/context-fabric/threads",
+      "path": "/api/v1/context-fabric/threads",
+      "scope": "context:read",
+      "web_assertion": true
+    },
+    {
+      "method": "GET",
+      "pattern": "/api/v1/context-fabric/threads/{thread_id}",
+      "path": "/api/v1/context-fabric/threads/thread-00000001",
+      "scope": "context:read",
+      "web_assertion": true
+    },
+    {
+      "method": "DELETE",
+      "pattern": "/api/v1/context-fabric/threads/{thread_id}",
+      "path": "/api/v1/context-fabric/threads/thread-00000001",
+      "scope": "context:read",
+      "web_assertion": true
+    },
+    {
       "method": "POST",
       "pattern": "/api/v1/oauth/device_approval",
       "path": "/api/v1/oauth/device_approval",

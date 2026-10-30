@@ -1,5 +1,5 @@
 # Generated from acr-v1.json by `go run ./cmd/contractcheck -write`. DO NOT EDIT.
-# canonical-content-sha256: a462143bd2ef8a8f794635de6a9c41cc69174aeebc94fe3245c7bb591bc4e63f
+# canonical-content-sha256: 893a5975364d446f6d1aa0e4fae6e98e1e3df2fc12e47097ea42ebef1dd2a499
 openapi: "3.1.0"
 info:
   description: "Private hosted API for evidence-backed agent context packets, authorized provenance expansion, replay snapshots, and opt-in episode writeback. External Push is a separate API plane."
@@ -1169,7 +1169,7 @@ components:
         pattern: "^[A-Za-z0-9._:-]{8,128}$"
         type: "string"
     ThreadID:
-      description: "Optional id of the conversation this turn belongs to (CHAOS-11913): the same grammar as X-ACR-Submission-ID. With a submission id, the service stores it on the submission record and the status read returns it. It is not part of the request digest: a retry of a submission id keeps the first admission's thread. A malformed value is 400 invalid_request. The id names an Ask Dev conversation of the authenticated principal: the conversation is the caller's submissions under this id, keyed by organization, principal and id, so another principal's turn with the same id is never part of it. A turn whose id names a conversation of the caller that was deleted or has expired is refused with 409 thread_closed and nothing runs, as long as the service holds the conversation's closure record (at least until its expires_at); a client mints a new id per conversation."
+      description: "Optional id of the conversation this turn belongs to (CHAOS-11913): the same grammar as X-ACR-Submission-ID. A conversation turn is a submission: X-ACR-Thread-ID without X-ACR-Submission-ID is 400 invalid_request (CHAOS-11948). The service stores it on the submission record, the status read returns it, and the turn (with its question) joins the caller's conversation of that id. It is not part of the request digest: a retry of a submission id keeps the first admission's thread. A malformed value is 400 invalid_request. The id names an Ask Dev conversation of the authenticated principal: the conversation is the caller's submissions under this id, keyed by organization, principal and id, so another principal's turn with the same id is never part of it. A turn whose id names a conversation of the caller that was deleted or has expired is refused with 409 thread_closed and nothing runs, as long as the service holds the conversation's closure record (at least until its expires_at); a client mints a new id per conversation."
       in: "header"
       name: "X-ACR-Thread-ID"
       required: false
@@ -1179,7 +1179,7 @@ components:
         pattern: "^[A-Za-z0-9._:-]{8,128}$"
         type: "string"
     ThreadRetentionDays:
-      description: "Optional retention of the Ask Dev conversation this turn belongs to (with X-ACR-Thread-ID): exactly 0 (kept until 24 hours after the conversation's last turn) or 30 (kept until 30 days after it). The latest turn of a conversation that names a value decides; a conversation whose turns named none has 0. When the retention ends, the conversation and the results of its turns are no longer served on any read and are deleted. It is not part of the request digest: a retry of a submission id keeps the first admission's value. Any other value is 400 invalid_request."
+      description: "Optional retention of the Ask Dev conversation this turn belongs to (with X-ACR-Thread-ID): exactly 0 (kept until 24 hours after the conversation's last turn) or 30 (kept until 30 days after it). The latest turn of a conversation that names a value decides; a conversation whose turns named none has 0. When the retention ends, the conversation and the results of its turns are no longer served on any read and are deleted. It is not part of the request digest: a retry of a submission id keeps the first admission's value. Any other value, a repeated header, or the header without X-ACR-Thread-ID is 400 invalid_request."
       in: "header"
       name: "X-ACR-Thread-Retention-Days"
       required: false

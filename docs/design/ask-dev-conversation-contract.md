@@ -1,7 +1,7 @@
 # Ask Dev conversation contract (threads)
 
-Status: the contract (plan item I-28). The store and the routes come in the
-next item (I-29); the run lease, attach and cancel (I-S10a), feedback (I-32a)
+Status: the contract (plan item I-28, acr #1762) and the store and routes
+(I-29, §9). the run lease, attach and cancel (I-S10a), feedback (I-32a)
 and the retention job (I-30) build on this contract and add their own parts
 of it. §6 lists what those items must keep.
 
@@ -264,3 +264,55 @@ item that implements it.
 ## 8. Diagram
 
 `docs/design/context-fabric-architecture-diagrams.md` §18.
+
+## 9. Implementation (I-29, CHAOS-11948)
+
+- **Thread row.** `acr.context_fabric_threads` (migration `0058`), keyed
+  `(org_id, owner_auth_method, owner_subject, thread_id)` exactly like the
+  submission records, so the owner re-key of the approving-user design (T2,
+  CHAOS-12091) moves both tables the same way. It holds `created_at`,
+  `last_turn_at`, `turn_count`, `retention_days` and the turn that set it,
+  `expires_at` and `closed_at`. Admission writes it in the submission's own
+  transaction, under the organization's admission lock and a row lock, with
+  `contextfabric.AdvanceThread` (one rule for both stores). A turn's question is
+  a column on its submission record (`question`, thread turns only).
+- **Admission.** A new key with `X-ACR-Thread-ID` joins the caller's thread; a
+  closed thread (deleted, expired, or at 1 000 000 turns) refuses it before any
+  limit is counted and writes nothing (`409 thread_closed`, reason on the
+  admission line). A repeat of a closed thread's key is `409 thread_closed`
+  after the digest check. `X-ACR-Thread-ID` without `X-ACR-Submission-ID`, and
+  `X-ACR-Thread-Retention-Days` without a thread or outside `0|30`, are
+  `400 invalid_request`: a header is never silently ignored.
+- **Closed is closed (T6).** The thread read, the list and the submission status
+  read answer a closed thread's ids as unknown. The result stores' `Get` and
+  answer reuse hide a result that only closed threads' turns name (final or
+  reserved id), so the read by id, the replay, the engine's prior-result reads
+  and evidence expansion all fail closed; a result a live turn or a record
+  with no thread names stays readable (T3). Expiry is compared with the store
+  clock (`pginvestigation.WithClock`, the runtime's).
+- **Delete.** One transaction under the admission lock: `closed_at` set, the
+  turns' questions erased; the submission records stay, so a run in flight
+  still saves bound to its owner (T2), and its result stays hidden.
+- **Thread read (T4).** Each done turn's result goes through
+  `decideStoredResultServing` (api), the decision the read by id and the replay
+  take: the gate on surface `thread`, then the work-item tuple and flood rules.
+  Served → `result_id`; denied, gone or withheld → `result_withheld`;
+  undecidable → `503`, never a partial thread. One aggregated `context fabric
+  thread` line per read (§4 telemetry).
+- **Cursors.** Opaque base64url JSON bound to the caller (a digest of
+  organization and owner) and, for `before`, to the thread; a cursor another
+  principal or thread issued is `400`.
+- **Parent result (AC-10).** A turn's `parent_result_id` and every prior
+  receipt are read through the gate on surface `prior_result`, live, each turn;
+  one the caller can no longer read binds like a missing one (existing engine
+  tests `TestAPriorResultTheCallerMayNotReadBindsLikeAMissingOne`, the owner
+  case in `submission_test.go`). Another principal's same `thread_id` is
+  another thread by key.
+- **Not here.** The surface split of chris decision 5b (an MCP credential may
+  not read browser history) arrives with the approving-user owner (T2,
+  CHAOS-12091), which must extend the thread key the same way; until then the
+  owner is the credential or the web-assertion subject, so a user's MCP
+  credential and browser are different owners. The browser-class route list
+  and the per-call access read (T7 of the direct-browser design) add the
+  thread routes when they land. The retention job (I-30) removes the backing
+  set after `expires_at`.

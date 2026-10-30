@@ -145,8 +145,11 @@ type submissionHarness struct {
 	// another repository, so the stored-result gate denies the test
 	// credentials' reads from then on.
 	grantWithdrawn atomic.Bool
-	clock          *submissionClock
-	apps           []*App
+	// graphDown makes the live graph fail every stored-subject decision, so
+	// the stored-result gate answers unavailable (CHAOS-11948).
+	graphDown atomic.Bool
+	clock     *submissionClock
+	apps      []*App
 	// observed is each App\'s request observations.
 	observed     []*snapshotSink
 	logs         []*bytes.Buffer
@@ -203,8 +206,9 @@ func newSubmissionHarness(t *testing.T, stores ...submissionTestStore) *submissi
 				}}},
 				Investigator:             harness.investigator,
 				InvestigationResults:     store,
-				StoredResultGate:         contextfabric.NewStoredResultGate(withdrawableGrantGraph{withdrawn: &harness.grantWithdrawn}),
+				StoredResultGate:         contextfabric.NewStoredResultGate(withdrawableGrantGraph{withdrawn: &harness.grantWithdrawn, down: &harness.graphDown}),
 				InvestigationSubmissions: store,
+				InvestigationThreads:     threadStoreOf(store),
 			},
 		}, testLogger(logs))
 		if err != nil {
@@ -223,9 +227,19 @@ func newSubmissionHarness(t *testing.T, stores ...submissionTestStore) *submissi
 type withdrawableGrantGraph struct {
 	subjectNodeGraph
 	withdrawn *atomic.Bool
+	down      *atomic.Bool
+}
+
+// threadStoreOf is the store's thread side, nil when it has none.
+func threadStoreOf(store submissionTestStore) contextfabric.ThreadStore {
+	threads, _ := store.(contextfabric.ThreadStore)
+	return threads
 }
 
 func (g withdrawableGrantGraph) AuthorizeStoredSubjects(ctx context.Context, principal storage.Principal, binding contextfabric.ResolvedGraphBinding, subjects []contextfabric.SubjectRef) ([]contextfabric.StoredSubjectOutcome, error) {
+	if g.down != nil && g.down.Load() {
+		return nil, errors.Join(contextfabric.ErrUnavailable, errors.New("injected graph failure"))
+	}
 	grant := []string{hostedTestRepository}
 	if g.withdrawn.Load() {
 		grant = []string{"acme/another-repository"}

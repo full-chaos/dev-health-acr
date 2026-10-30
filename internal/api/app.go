@@ -97,6 +97,10 @@ func (a *App) registerRoutes(mux routeMux) {
 	mux.Handle("POST "+ContextFabricInvestigationsPath, a.ContextFabricInvestigationHandler(a.investigator()))
 	mux.Handle("GET "+ContextFabricInvestigationResultPath, a.ContextFabricInvestigationResultHandler(a.investigationResults(), a.storedResultGate()))
 	mux.Handle("GET "+ContextFabricSubmissionStatusPath, a.ContextFabricSubmissionStatusHandler(a.investigationSubmissions()))
+	// CHAOS-11948: the Ask Dev conversation routes.
+	mux.Handle("GET "+ContextFabricThreadsPath, a.ContextFabricThreadListHandler())
+	mux.Handle("GET "+ContextFabricThreadPath, a.ContextFabricThreadHandler())
+	mux.Handle("DELETE "+ContextFabricThreadPath, a.ContextFabricThreadHandler())
 	// CHAOS-7071: direct data routes (CHAOS-7036 E.5). Bearer only (no web
 	// assertions), entitlement required; handlers are stubs until S1a/S2.
 	mux.Handle("GET "+ContextFabricDataCatalogPath, a.protectedRuntimeHandler(limits.RequestClassContext, auth.ScopeContextRead, true, false, a.requireDataStoresReady(a.contextFabricDataCatalogHandler())))

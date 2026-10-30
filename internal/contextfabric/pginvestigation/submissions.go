@@ -24,7 +24,7 @@ var (
 	_ contextfabric.UsageReader             = (*Store)(nil)
 )
 
-const submissionColumns = `org_id, owner_auth_method, owner_subject, submission_id, request_digest, reserved_result_id, state, result_id, thread_id, admitted_at, updated_at, expires_at`
+const submissionColumns = `org_id, owner_auth_method, owner_subject, submission_id, request_digest, reserved_result_id, state, result_id, thread_id, admitted_at, updated_at, expires_at, question`
 
 // storedResultExists is the reconcile rule's condition: the record's reserved
 // result is stored for its organization AND bound to the record's own owner
@@ -64,14 +64,15 @@ type submissionScanner interface {
 func scanSubmission(row submissionScanner) (contextfabric.SubmissionRecord, error) {
 	var record contextfabric.SubmissionRecord
 	var state string
-	var resultID, threadID sql.NullString
+	var resultID, threadID, question sql.NullString
 	if err := row.Scan(&record.Key.OrgID, &record.Key.Owner.AuthenticationMethod, &record.Key.Owner.Subject, &record.Key.SubmissionID,
-		&record.RequestDigest, &record.ReservedResultID, &state, &resultID, &threadID, &record.AdmittedAt, &record.UpdatedAt, &record.ExpiresAt); err != nil {
+		&record.RequestDigest, &record.ReservedResultID, &state, &resultID, &threadID, &record.AdmittedAt, &record.UpdatedAt, &record.ExpiresAt, &question); err != nil {
 		return contextfabric.SubmissionRecord{}, err
 	}
 	record.State = contextfabric.SubmissionState(state)
 	record.ResultID = resultID.String
 	record.ThreadID = threadID.String
+	record.Question = question.String
 	record.AdmittedAt, record.UpdatedAt, record.ExpiresAt = record.AdmittedAt.UTC(), record.UpdatedAt.UTC(), record.ExpiresAt.UTC()
 	return record, nil
 }
@@ -108,7 +109,12 @@ func (s *Store) AdmitSubmission(ctx context.Context, admission contextfabric.Sub
 	if admission.ThreadID != "" && !contextfabric.ValidSubmissionID(admission.ThreadID) {
 		return contextfabric.SubmissionRecord{}, false, errors.New("pginvestigation: thread id is malformed")
 	}
+	if admission.ThreadRetention != nil && !admission.ThreadRetention.Valid() {
+		return contextfabric.SubmissionRecord{}, false, errors.New("pginvestigation: thread retention is outside the closed set")
+	}
 	threadID := sql.NullString{String: admission.ThreadID, Valid: admission.ThreadID != ""}
+	// The question is stored with a thread turn only (CHAOS-11948).
+	question := sql.NullString{String: admission.Question, Valid: admission.ThreadID != "" && admission.Question != ""}
 	key := admission.Key
 	limits := admission.Limits.Effective()
 	tx, err := s.db.BeginTx(ctx, nil)
@@ -121,12 +127,12 @@ func (s *Store) AdmitSubmission(ctx context.Context, admission contextfabric.Sub
 	}
 	row := tx.QueryRowContext(ctx, `
 INSERT INTO acr.context_fabric_investigation_submissions
-    (org_id, owner_auth_method, owner_subject, submission_id, request_digest, reserved_result_id, state, thread_id, admitted_at, updated_at, expires_at)
-VALUES ($1, $2, $3, $4, $5, $6, 'running', $9, $7, $7, $8)
+    (org_id, owner_auth_method, owner_subject, submission_id, request_digest, reserved_result_id, state, thread_id, admitted_at, updated_at, expires_at, question)
+VALUES ($1, $2, $3, $4, $5, $6, 'running', $9, $7, $7, $8, $10)
 ON CONFLICT (org_id, owner_auth_method, owner_subject, submission_id) DO NOTHING
 RETURNING `+submissionColumns,
 		key.OrgID, key.Owner.AuthenticationMethod, key.Owner.Subject, key.SubmissionID,
-		admission.RequestDigest, admission.ReservedResultID, now.UTC(), admission.ExpiresAt.UTC(), threadID)
+		admission.RequestDigest, admission.ReservedResultID, now.UTC(), admission.ExpiresAt.UTC(), threadID, question)
 	record, err := scanSubmission(row)
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
@@ -141,6 +147,22 @@ RETURNING `+submissionColumns,
 		return existing, false, nil
 	case err != nil:
 		return contextfabric.SubmissionRecord{}, false, fmt.Errorf("admit investigation submission: %w", sanitizeError(err))
+	}
+	// CHAOS-11948: a new turn of a closed thread is refused before any limit
+	// is counted; the rollback undoes the insert, so nothing is written.
+	var thread *contextfabric.ThreadRecord
+	if admission.ThreadID != "" {
+		threadKey := contextfabric.ThreadKey{OrgID: key.OrgID, Owner: key.Owner, ThreadID: admission.ThreadID}
+		current, found, err := readThreadForUpdate(ctx, tx, threadKey)
+		if err != nil {
+			return contextfabric.SubmissionRecord{}, false, fmt.Errorf("admit investigation submission: read thread: %w", err)
+		}
+		if found {
+			if reason := current.ClosedReason(now); reason != "" {
+				return contextfabric.SubmissionRecord{}, false, &contextfabric.ThreadClosedError{Reason: reason}
+			}
+			thread = &current
+		}
 	}
 	// The live runs, without the one just inserted: running, inside its
 	// budget, its reserved result not stored.
@@ -177,6 +199,14 @@ RETURNING u.platform_runs`, key.OrgID, month, now.UTC(), limits.MonthlyPlatformR
 			return contextfabric.SubmissionRecord{}, false, &contextfabric.SubmissionRefusedError{Refusal: contextfabric.SubmissionRefusedAllowanceExhausted, Count: current, Limit: limits.MonthlyPlatformRunAllowance, RetryAfter: contextfabric.AllowanceRetryAfter(now)}
 		case err != nil:
 			return contextfabric.SubmissionRecord{}, false, fmt.Errorf("admit investigation submission: count usage: %w", sanitizeError(err))
+		}
+	}
+	if admission.ThreadID != "" {
+		threadKey := contextfabric.ThreadKey{OrgID: key.OrgID, Owner: key.Owner, ThreadID: admission.ThreadID}
+		next := contextfabric.AdvanceThread(thread, threadKey,
+			contextfabric.ThreadTurnCursor{AdmittedAt: record.AdmittedAt, SubmissionID: key.SubmissionID}, admission.ThreadRetention)
+		if err := writeThread(ctx, tx, next); err != nil {
+			return contextfabric.SubmissionRecord{}, false, fmt.Errorf("admit investigation submission: write thread: %w", err)
 		}
 	}
 	if err := tx.Commit(); err != nil {
@@ -229,6 +259,9 @@ SELECT `+submissionColumns+` FROM acr.context_fabric_investigation_submissions
 		return contextfabric.SubmissionRecord{}, contextfabric.ErrSubmissionNotFound
 	case err != nil:
 		return contextfabric.SubmissionRecord{}, fmt.Errorf("read investigation submission: %w", sanitizeError(err))
+	}
+	if record.ThreadClosed, err = s.recordThreadClosed(ctx, record, now); err != nil {
+		return contextfabric.SubmissionRecord{}, err
 	}
 	return record, nil
 }

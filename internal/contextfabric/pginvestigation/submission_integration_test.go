@@ -211,6 +211,17 @@ func TestSubmissionParity(t *testing.T) {
 	})
 }
 
+// The shared thread behavior table (CHAOS-11948), on PostgreSQL;
+// memoryinvestigation runs the same table.
+func TestThreadParity(t *testing.T) {
+	ctx := context.Background()
+	paritytest.RunThreadSuite(t, func(t *testing.T, clock func() time.Time) paritytest.ThreadStore {
+		store, err := pginvestigation.NewStore(newInvestigationTestDatabase(t, ctx), pginvestigation.WithClock(clock))
+		require.NoError(t, err)
+		return store
+	})
+}
+
 // Reuse never crosses principals: a row bound to A's submission is a reuse
 // candidate for A only; an unbound row stays a candidate for everyone in the
 // organization.
