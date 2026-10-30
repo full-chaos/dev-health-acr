@@ -110,12 +110,14 @@ read as `0`; no field is nullable), no key present as empty, false or zero
 where the writer omits the field, and no required key missing (a missing
 `retention_days` would read as `0` too). Every string bound is the schema's exactly (the
 question is 1..8000 runes, untrimmed). A key given twice is the one rule
-only Go holds: JSON Schema has none for it. A number is read by its exact
-value, as the standard reads it, from the literal's decimal digits and never
-through a float: a number spelled with a fraction or an exponent that equals
-an integer exactly (`30.0`, `4e0`) is that integer, and one that does not
-(`30.5`, `30.0000000000000001`) is not; trailing content is refused before
-any number is rewritten. Every timestamp carries the RFC 3339 shape the
+only Go holds: JSON Schema has none for it. Every number of
+either document is an integer field, read with the standard path (lead
+ruling after the review rounds): `json.Decoder` with `UseNumber`, then
+`strconv.ParseInt` on each literal, so a fraction or exponent spelling
+(`30.0`, `3e1`) is refused even where its value is an integer. That is the
+one number rule where Go is stricter than a standard validator, which reads
+`30.0` as `30`; ACR's writer never writes either form. Anything after the
+first JSON value is refused. Every timestamp carries the RFC 3339 shape the
 writer writes (uppercase `T` and `Z` or a numeric offset) as a schema
 `pattern`, since `format: date-time` is only an annotation; calendar
 validity (no 30 February) stays a Go-only rule. The list schema itself

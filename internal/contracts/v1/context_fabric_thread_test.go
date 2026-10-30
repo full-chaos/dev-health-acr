@@ -756,15 +756,6 @@ func TestThreadParseRefusesNullAtEveryKey(t *testing.T) {
 	if err := contractcheck.ValidateSerializedStrict("", threadSchemaFile, cased); err == nil {
 		t.Fatal("the schema accepts Retention_Days")
 	}
-	// Integer spellings: Parse judges them as a standard validator does.
-	for _, spelling := range []string{"0.0", "0e0", "-0", "0.5"} {
-		number := bytes.Replace(threadBody, []byte(`"retention_days":0`), []byte(`"retention_days":`+spelling), 1)
-		_, parseErr := ParseContextFabricThread(number)
-		standardErr := standardThreadSchemaErr(t, threadSchemaFile, number)
-		if (parseErr == nil) != (standardErr == nil) {
-			t.Fatalf("retention_days %s: Parse = %v, standard schema = %v", spelling, parseErr, standardErr)
-		}
-	}
 }
 
 // standardThreadSchemaErr validates body against a published thread schema
@@ -790,123 +781,6 @@ func standardThreadSchemaErr(t *testing.T, file string, body []byte) error {
 		return err
 	}
 	return resolved.Validate(document)
-}
-
-// Parse reads a number as the published schema does, by value (round-3
-// review: Parse refused 30.0 and 4e0, which a standard validator accepts,
-// and accepted no turn_count bound while Go's int has one). Every case is
-// judged by Parse and by an independent standard validator; contractcheck's
-// lexical integer rule is recorded, not used as the reference.
-func TestThreadParseReadsNumbersAsTheSchemaDoes(t *testing.T) {
-	thread := contextFabricGolden(t, "context_fabric_thread.v1.json")
-	list := contextFabricGolden(t, "context_fabric_thread_list.v1.json")
-	type numberCase struct {
-		list          bool
-		from, to      string
-		valid         bool
-		localStricter bool
-		// floatMasked: the literal is not an integer, but a float64 reads it
-		// as one, so the float-based reference validator cannot judge it;
-		// Parse is held to the exact value alone (confirmation-pass review:
-		// 30.0000000000000001 was rounded to 30 and accepted).
-		floatMasked bool
-	}
-	cases := []numberCase{
-		{false, `"retention_days":30`, `"retention_days":30.0`, true, true, false},
-		{false, `"retention_days":30`, `"retention_days":3e1`, true, true, false},
-		{false, `"retention_days":30`, `"retention_days":30.5`, false, false, false},
-		{false, `"retention_days":30`, `"retention_days":30.000`, true, true, false},
-		{false, `"turn_count":4`, `"turn_count":4.0`, true, true, false},
-		{false, `"turn_count":4`, `"turn_count":4e0`, true, true, false},
-		{false, `"turn_count":4`, `"turn_count":4.5`, false, false, false},
-		{false, `"turn_count":4`, `"turn_count":1000000`, true, false, false},
-		{false, `"turn_count":4`, `"turn_count":1000001`, false, false, false},
-		{false, `"turn_count":4`, `"turn_count":1e6`, true, true, false},
-		{false, `"turn_count":4`, `"turn_count":9223372036854775808`, false, false, false},
-		{false, `"turn_count":4`, `"turn_count":1e400`, false, false, false},
-		{true, `"retention_days":0`, `"retention_days":0.0`, true, true, false},
-		{true, `"turn_count":1,`, `"turn_count":1e0,`, true, true, false},
-		{true, `"turn_count":4`, `"turn_count":1000001`, false, false, false},
-		{false, `"turn_count":4`, `"turn_count":1.1e-9223372036854775808`, false, false, false},
-		{true, `"turn_count":4`, `"turn_count":1e9223372036854775807`, false, false, false},
-		{false, `"retention_days":30`, `"retention_days":30.0000000000000001`, false, false, true},
-		{false, `"turn_count":4`, `"turn_count":4.0000000000000000001e0`, false, false, true},
-		{false, `"retention_days":30`, `"retention_days":3.0e1`, true, true, false},
-		{false, `"retention_days":30`, `"retention_days":300e-1`, true, true, false},
-		{false, `"retention_days":30`, `"retention_days":0.3e2`, true, true, false},
-		{false, `"retention_days":30`, `"retention_days":3e-1`, false, false, false},
-		{false, `"turn_count":4`, `"turn_count":400E-2`, true, true, false},
-	}
-	for _, tc := range cases {
-		base, file := thread, threadSchemaFile
-		if tc.list {
-			base, file = list, threadListSchemaFile
-		}
-		if !bytes.Contains(base, []byte(tc.from)) {
-			t.Fatalf("%s: the golden has no %s", tc.to, tc.from)
-		}
-		body := bytes.Replace(base, []byte(tc.from), []byte(tc.to), 1)
-		var parseErr error
-		if tc.list {
-			_, parseErr = ParseContextFabricThreadList(body)
-		} else {
-			_, parseErr = ParseContextFabricThread(body)
-		}
-		if (parseErr == nil) != tc.valid {
-			t.Errorf("%s: Parse = %v, want valid %t", tc.to, parseErr, tc.valid)
-		}
-		if tc.floatMasked {
-			continue
-		}
-		standardErr := standardThreadSchemaErr(t, file, body)
-		if (standardErr == nil) != tc.valid {
-			t.Errorf("%s: standard schema = %v, want valid %t", tc.to, standardErr, tc.valid)
-		}
-		localErr := contractcheck.ValidateSerializedStrict("", file, body)
-		if tc.localStricter != (tc.valid && localErr != nil) {
-			t.Errorf("%s: contractcheck = %v, want its lexical-integer refusal %t", tc.to, localErr, tc.localStricter)
-		}
-	}
-}
-
-// exactJSONInteger decides integrality from the literal's digits, never
-// through a float.
-func TestExactJSONInteger(t *testing.T) {
-	for literal, want := range map[string]string{
-		"30.0": "30", "3e1": "30", "3.0e1": "30", "300e-1": "30", "0.3e2": "30", "30.000": "30",
-		"-0.0": "0", "0e-5000": "0", "1e+2": "100", "100e-2": "1", "-4.0": "-4",
-		"9223372036854775807.0": "9223372036854775807", "-9223372036854775808.0": "-9223372036854775808",
-	} {
-		got, ok := exactJSONInteger(literal)
-		if !ok || got != want {
-			t.Errorf("%s = %q %t, want %q", literal, got, ok, want)
-		}
-	}
-	for _, literal := range []string{
-		"30.5", "30.0000000000000001", "3e-1", "1.5e0", "1e-5000", "1e5000", "1e99999999999999999999",
-		"9223372036854775808.0", "-9223372036854775809.0", "4.0000000000000000001e0",
-		"1.1e-9223372036854775808", "1e-9223372036854775808", "1e9223372036854775807", "10e9223372036854775807",
-		"1.5e9223372036854775807", "1e-9223372036854775809", "1e9223372036854775808", "100e9223372036854775807",
-	} {
-		if got, ok := exactJSONInteger(literal); ok {
-			t.Errorf("%s = %q, want not an int64 integer", literal, got)
-		}
-	}
-}
-
-// Trailing content is refused before a number is rewritten: the rewrite
-// re-encodes the first value only (confirmation-pass review: 30.0 followed
-// by {} was accepted).
-func TestThreadParseRefusesTrailingContentAfterARewrite(t *testing.T) {
-	body := bytes.Replace(contextFabricGolden(t, "context_fabric_thread.v1.json"), []byte(`"retention_days":30`), []byte(`"retention_days":30.0`), 1)
-	if _, err := ParseContextFabricThread(body); err != nil {
-		t.Fatalf("the rewritten document itself must parse: %v", err)
-	}
-	for _, trailing := range []string{`{}`, ` {}`, `[]`, `1`, `"x"`, `null`} {
-		if _, err := ParseContextFabricThread(append(bytes.Clone(body), trailing...)); err == nil {
-			t.Errorf("trailing %s after a rewritten number is accepted", trailing)
-		}
-	}
 }
 
 // Every timestamp is RFC 3339 in the writer's form (uppercase T and Z, or a
@@ -975,6 +849,87 @@ func TestThreadTimestampsAgreeAcrossValidators(t *testing.T) {
 			case !spelling.goOnly && ((localErr == nil) != spelling.valid || (standardErr == nil) != spelling.valid):
 				t.Errorf("%s %s: local = %v, standard = %v, want valid %t", stamp.key, spelling.name, localErr, standardErr, spelling.valid)
 			}
+		}
+	}
+}
+
+// Every number is an integer field, read exactly with strconv.ParseInt on its
+// literal (lead ruling after the review rounds: the standard decode path, no
+// hand-rolled reader). A fraction or exponent spelling is refused even when
+// its value is an integer; that is the one number rule where Parse is
+// stricter than a standard validator, which reads 30.0 as 30. Values outside
+// the schema's range are refused by both.
+func TestThreadParseReadsIntegersExactly(t *testing.T) {
+	thread := contextFabricGolden(t, "context_fabric_thread.v1.json")
+	list := contextFabricGolden(t, "context_fabric_thread_list.v1.json")
+	type numberCase struct {
+		list     bool
+		from, to string
+		// parse: Parse accepts it. standard: a standard validator accepts it
+		// (checked only where float64 reads the literal exactly).
+		parse, standard, standardChecked bool
+	}
+	cases := []numberCase{
+		{false, `"retention_days":30`, `"retention_days":30`, true, true, true},
+		{false, `"turn_count":4`, `"turn_count":1000000`, true, true, true},
+		{false, `"retention_days":30`, `"retention_days":30.0`, false, true, true},
+		{false, `"retention_days":30`, `"retention_days":3e1`, false, true, true},
+		{false, `"retention_days":30`, `"retention_days":300e-1`, false, true, true},
+		{false, `"turn_count":4`, `"turn_count":4.0`, false, true, true},
+		{false, `"turn_count":4`, `"turn_count":4e0`, false, true, true},
+		{false, `"turn_count":4`, `"turn_count":1e6`, false, true, true},
+		{false, `"retention_days":30`, `"retention_days":30.5`, false, false, true},
+		{false, `"turn_count":4`, `"turn_count":4.5`, false, false, true},
+		{false, `"turn_count":4`, `"turn_count":1000001`, false, false, true},
+		{false, `"turn_count":4`, `"turn_count":9223372036854775808`, false, false, true},
+		{false, `"turn_count":4`, `"turn_count":1e400`, false, false, false},
+		{false, `"retention_days":30`, `"retention_days":30.0000000000000001`, false, false, false},
+		{false, `"turn_count":4`, `"turn_count":1.1e-9223372036854775808`, false, false, true},
+		{false, `"turn_count":4`, `"turn_count":1e9223372036854775807`, false, false, false},
+		{true, `"retention_days":0`, `"retention_days":0.0`, false, true, true},
+		{true, `"turn_count":1,`, `"turn_count":1e0,`, false, true, true},
+		{true, `"turn_count":4`, `"turn_count":1000001`, false, false, true},
+	}
+	for _, tc := range cases {
+		base, file := thread, threadSchemaFile
+		if tc.list {
+			base, file = list, threadListSchemaFile
+		}
+		if !bytes.Contains(base, []byte(tc.from)) {
+			t.Fatalf("%s: the golden has no %s", tc.to, tc.from)
+		}
+		body := bytes.Replace(base, []byte(tc.from), []byte(tc.to), 1)
+		var parseErr error
+		if tc.list {
+			_, parseErr = ParseContextFabricThreadList(body)
+		} else {
+			_, parseErr = ParseContextFabricThread(body)
+		}
+		if (parseErr == nil) != tc.parse {
+			t.Errorf("%s: Parse = %v, want valid %t", tc.to, parseErr, tc.parse)
+		}
+		// A non-literal spelling is refused by the integer-literal rule
+		// itself, not by a later check that happens to catch it.
+		if !tc.parse && tc.standard && (parseErr == nil || !strings.Contains(parseErr.Error(), "integer literal")) {
+			t.Errorf("%s: Parse = %v, want the integer-literal refusal", tc.to, parseErr)
+		}
+		if tc.standardChecked {
+			if standardErr := standardThreadSchemaErr(t, file, body); (standardErr == nil) != tc.standard {
+				t.Errorf("%s: standard schema = %v, want valid %t", tc.to, standardErr, tc.standard)
+			}
+		}
+	}
+}
+
+// Trailing content after the one JSON value is refused, in every form.
+func TestThreadParseRefusesTrailingContent(t *testing.T) {
+	body := contextFabricGolden(t, "context_fabric_thread.v1.json")
+	if _, err := ParseContextFabricThread(body); err != nil {
+		t.Fatalf("the golden must parse: %v", err)
+	}
+	for _, trailing := range []string{`{}`, ` {}`, `[]`, `1`, `"x"`, `null`, `}`} {
+		if _, err := ParseContextFabricThread(append(bytes.Clone(body), trailing...)); err == nil {
+			t.Errorf("trailing %s is accepted", trailing)
 		}
 	}
 }

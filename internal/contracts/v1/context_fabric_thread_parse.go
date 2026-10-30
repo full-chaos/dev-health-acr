@@ -6,10 +6,8 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"math"
 	"slices"
 	"strconv"
-	"strings"
 	"unicode/utf8"
 )
 
@@ -25,10 +23,12 @@ import (
 // is missing (a missing retention_days would read as 0 too). It then holds
 // the value to Validate.
 //
-// A number is read as JSON Schema reads it, by its exact value: a number
-// spelled with a fraction or an exponent that equals an integer exactly
-// (30.0, 3e1) is that integer, as a standard validator of the published
-// schema accepts it; one that does not (30.5, 30.0000000000000001) is not.
+// Every number of either document is an integer field, and Parse reads it
+// exactly, with strconv.ParseInt on the literal: a fraction or an exponent
+// spelling (30.0, 3e1) is refused even where its value is an integer. That is
+// stricter than a standard validator of the published schema, which reads
+// 30.0 as the integer 30; ACR's writer never writes either form (lead ruling
+// on the review rounds: the standard decode path, no hand-rolled reader).
 func ParseContextFabricThread(data []byte) (ContextFabricThread, error) {
 	return parseContextFabricThreadDocument[ContextFabricThread](data)
 }
@@ -46,8 +46,7 @@ func parseContextFabricThreadDocument[T interface{ Validate() error }](data []by
 	if err := rejectDuplicateJSONKeys(data); err != nil {
 		return zero, err
 	}
-	data, err := canonicalJSONIntegers(data)
-	if err != nil {
+	if err := requireJSONIntegerLiterals(data); err != nil {
 		return zero, err
 	}
 	decoder := json.NewDecoder(bytes.NewReader(data))
@@ -71,106 +70,38 @@ func parseContextFabricThreadDocument[T interface{ Validate() error }](data []by
 	return value, nil
 }
 
-// canonicalJSONIntegers rewrites every number literal that equals an int64
-// exactly but is spelled with a fraction or an exponent as the integer
-// literal it equals (exactJSONInteger decides from the decimal digits, never
-// through a float), and leaves every other value as it is: a non-integral
-// number then fails the integer field it meets, and an integral one beyond
-// int64 fails it too. The document is re-encoded only when a number changed;
-// decodeJSONNumbers has already refused trailing content, so the re-encoding
-// drops nothing.
-func canonicalJSONIntegers(data []byte) ([]byte, error) {
+// requireJSONIntegerLiterals decodes the document's first JSON value with
+// numbers kept as written (json.Decoder.UseNumber) and refuses every number that strconv.ParseInt does not read exactly as
+// an int64: a fraction, an exponent, or a value beyond int64. Every number in
+// a thread document is an integer field.
+func requireJSONIntegerLiterals(data []byte) error {
 	var tree any
 	if err := decodeJSONNumbers(data, &tree); err != nil {
-		return nil, err
+		return err
 	}
-	changed := false
-	var walk func(any) any
-	walk = func(value any) any {
+	var walk func(any, string) error
+	walk = func(value any, path string) error {
 		switch v := value.(type) {
 		case map[string]any:
 			for key, item := range v {
-				v[key] = walk(item)
+				if err := walk(item, path+"."+key); err != nil {
+					return err
+				}
 			}
 		case []any:
 			for index, item := range v {
-				v[index] = walk(item)
+				if err := walk(item, fmt.Sprintf("%s[%d]", path, index)); err != nil {
+					return err
+				}
 			}
 		case json.Number:
-			if _, err := strconv.ParseInt(string(v), 10, 64); err == nil {
-				return v
+			if _, err := strconv.ParseInt(string(v), 10, 64); err != nil {
+				return fmt.Errorf("thread document carries %s at %s; an integer field takes an integer literal (no fraction, no exponent, within int64)", string(v), pathOrRoot(path))
 			}
-			integer, ok := exactJSONInteger(string(v))
-			if !ok {
-				return v
-			}
-			changed = true
-			return json.Number(integer)
 		}
-		return value
+		return nil
 	}
-	tree = walk(tree)
-	if !changed {
-		return data, nil
-	}
-	canonical, err := json.Marshal(tree)
-	if err != nil {
-		return nil, fmt.Errorf("encode thread document: %w", err)
-	}
-	return canonical, nil
-}
-
-// exactJSONInteger returns the int64 literal a JSON number literal equals
-// exactly, or false when it is not an integer or does not fit int64. It reads
-// the literal's decimal digits and exponent, so no rounding can turn a
-// fraction into an integer.
-func exactJSONInteger(literal string) (string, bool) {
-	negative := strings.HasPrefix(literal, "-")
-	body := strings.TrimPrefix(literal, "-")
-	mantissa, exponentText, hasExponent := strings.Cut(strings.ToLower(body), "e")
-	whole, fraction, _ := strings.Cut(mantissa, ".")
-	digits := strings.TrimLeft(whole+fraction, "0")
-	if digits == "" {
-		return "0", true
-	}
-	exponent := int64(0)
-	if hasExponent {
-		parsed, err := strconv.ParseInt(exponentText, 10, 64)
-		if err != nil {
-			// Beyond int64: a non-zero value is then out of int64 range or
-			// not an integer.
-			return "", false
-		}
-		exponent = parsed
-	}
-	// value = digits * 10^scale, scale = exponent - len(fraction) + the
-	// trailing zeros trimmed from digits. Every step is checked: the
-	// exponent is any int64, and an overflow here would read a fraction as
-	// an integer or ask strings.Repeat for a negative count (third
-	// confirmation pass: 1.1e-9223372036854775808 panicked).
-	fractionLength := int64(len(fraction))
-	if exponent < math.MinInt64+fractionLength {
-		return "", false
-	}
-	scale := exponent - fractionLength
-	trimmed := strings.TrimRight(digits, "0")
-	zeros := int64(len(digits) - len(trimmed))
-	if scale > math.MaxInt64-zeros {
-		return "", false
-	}
-	scale += zeros
-	digits = trimmed
-	if scale < 0 || scale > 19 || int64(len(digits))+scale > 19 {
-		return "", false
-	}
-	integer := digits + strings.Repeat("0", int(scale))
-	if negative {
-		integer = "-" + integer
-	}
-	if _, err := strconv.ParseInt(integer, 10, 64); err != nil {
-		return "", false
-	}
-	return integer, true
+	return walk(tree, "")
 }
 
 // rejectDuplicateJSONKeys refuses a document that names a key twice in any
@@ -245,16 +176,14 @@ func sameJSONKeyPaths(data, written []byte) error {
 	return compareJSONKeyPaths(received, wrote, "")
 }
 
-// decodeJSONNumbers decodes exactly one JSON value, numbers kept as written,
-// and refuses trailing content.
+// decodeJSONNumbers decodes the first JSON value with numbers kept as
+// written. Trailing content is refused by the document decode in
+// parseContextFabricThreadDocument (one check, one place).
 func decodeJSONNumbers(data []byte, target *any) error {
 	decoder := json.NewDecoder(bytes.NewReader(data))
 	decoder.UseNumber()
 	if err := decoder.Decode(target); err != nil {
 		return fmt.Errorf("decode thread document: %w", err)
-	}
-	if _, err := decoder.Token(); !errors.Is(err, io.EOF) {
-		return errors.New("thread document has trailing content")
 	}
 	return nil
 }
