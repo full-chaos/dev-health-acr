@@ -193,10 +193,9 @@ main() {
   write_graph_override
   compose up -d --wait falkordb >/dev/null || fg_die 'falkordb did not become healthy'
   prepare_acr_database
-  ensure_go_api_ready
-  compose up -d acr-api acr-tls-proxy >/dev/null
+  up_acr_services acr-api acr-tls-proxy
   wait_https_ready
-  compose up -d acr-projector >/dev/null
+  up_acr_services acr-projector
   wait_projector_caught_up
   build_host_mcp
   create_credential '*' fixture-graph-org "$STATE/secrets/fg-org-token"

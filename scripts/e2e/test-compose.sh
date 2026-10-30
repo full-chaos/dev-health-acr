@@ -3,6 +3,7 @@ set -euo pipefail
 
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 script="$root/scripts/e2e/compose.sh"
+script_dir="$root/scripts/e2e"
 pki="$root/scripts/deploy/local-pki.sh"
 receipt_validator="$root/scripts/e2e/validate-error-receipt.sh"
 
@@ -119,7 +120,16 @@ grep -Fq 'previous ACR credential remained valid after immediate rotation' "$scr
 grep -F -A 4 'compose up -d postgres clickhouse valkey pgbouncer mailpit migrate go-api-roles go-api >/dev/null' "$script" | grep -Fq "run_mcp \"\$(<\"\$STATE/secrets/acr-rotated-token\")\""
 # CHAOS-11890: acr-api must start only after the ops api internal listener answers (it exits on a failed boot entitlement check).
 awk '/^ensure_go_api_ready\(\)/,/^}/' "$script" | grep -Fq 'wait_go_api'
-awk '/^start_acr_after_go_api\(\)/,/^}/' "$script" | awk '/ensure_go_api_ready/{r=NR} /acr-api/{a=NR} END{exit !(r && a && r<a)}'
+awk '/^up_acr_services\(\)/,/^}/' "$script" | awk '/ensure_go_api_ready/{r=NR} /compose up/{a=NR} END{exit !(r && a && r<a)}'
+awk '/^start_acr_after_go_api\(\)/,/^}/' "$script" | grep -Fq 'up_acr_services acr-db-init acr-migrate acr-api acr-tls-proxy'
+# The start must not recreate go-api behind the readiness proof, and must fail loudly if it did (run 40960897433).
+awk '/^up_acr_services\(\)/,/^}/' "$script" | grep -Fq 'compose up -d --no-recreate "$@"'
+awk '/^up_acr_services\(\)/,/^}/' "$script" | grep -Fq 'go-api was recreated while starting'
+# A same-container restart keeps the id: acr-api must also be seen running through a settle window.
+awk '/^up_acr_services\(\)/,/^}/' "$script" | grep -Fq 'assert_acr_api_survives_boot'
+awk '/^assert_acr_api_survives_boot\(\)/,/^}/' "$script" | grep -Fq "!= 'running'"
+# Every start of acr-api or acr-projector in the e2e scripts goes through up_acr_services: no direct `compose up` names them.
+if grep -nE 'compose up .*(acr-api|acr-projector)' "$script_dir"/compose.sh "$script_dir"/fixture-graph.sh "$script_dir"/svs.sh "$script_dir"/fullstack-opencode.sh | grep -v '^[^:]*:[0-9]*:[[:space:]]*#'; then exit 1; fi
 # The failure-log health dump names only services the harness compose gives a healthcheck (the retired api service has none).
 grep -Fq "for service in postgres pgbouncer clickhouse valkey; do" "$script"
 ! grep -Fq "for service in clickhouse api; do" "$script"
