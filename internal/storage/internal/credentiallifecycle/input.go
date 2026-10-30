@@ -17,7 +17,7 @@ const (
 
 // ClientClass is a credential's issuance class (CHAOS-12083). normalizeCreate
 // derives it from the issuance path; the vocabulary is closed and mirrored by
-// the acr.client_credentials client_class CHECK (migration 0058).
+// the acr.client_credentials client_class CHECK (migrations 0058 and 0062).
 type ClientClass string
 
 const (
@@ -31,8 +31,12 @@ const (
 	// ClientClassNativeDevice is a user-approved credential issued by the
 	// legacy native device flow (no OAuth client, no resource).
 	ClientClassNativeDevice ClientClass = "native_device"
-	// ClientClassOperator is a credential an operator issued directly (the
-	// acr-api credentials command). It has no approving user.
+	// ClientClassOrgBearer is a credential an operator issued directly (the
+	// acr-api credentials command), D6530. It has no approving user and no
+	// client.
+	ClientClassOrgBearer ClientClass = "org_bearer"
+	// ClientClassOperator stays in the vocabulary and the CHECK, and no
+	// issuance path derives it: the CLI credential is org_bearer.
 	ClientClassOperator ClientClass = "operator"
 	// ClientClassWorkload is a credential minted by RFC 8693 workload token
 	// exchange. It has no approving user.
@@ -42,7 +46,7 @@ const (
 // Valid reports whether c is a member of the closed vocabulary.
 func (c ClientClass) Valid() bool {
 	switch c {
-	case ClientClassBrowser, ClientClassOAuthUser, ClientClassNativeDevice, ClientClassOperator, ClientClassWorkload:
+	case ClientClassBrowser, ClientClassOAuthUser, ClientClassNativeDevice, ClientClassOrgBearer, ClientClassOperator, ClientClassWorkload:
 		return true
 	default:
 		return false

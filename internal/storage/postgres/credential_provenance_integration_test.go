@@ -89,7 +89,7 @@ func TestCredentialProvenance_issuanceWritesTheClassAndRotationCopiesIt(t *testi
 	f := newProvenanceFixture(t, ctx)
 	const client = "acrc_0123456789abcdef0123456789abcdef"
 
-	operator, err := f.service.Create(ctx, credentialCreateRequest("operator"))
+	cli, err := f.service.Create(ctx, credentialCreateRequest("cli"))
 	require.NoError(t, err)
 	native := f.redeemDevice(t, ctx, "N1", "", "")
 	oauth := f.redeemDevice(t, ctx, "O1", "https://mcp.example.test/mcp", client)
@@ -98,7 +98,8 @@ func TestCredentialProvenance_issuanceWritesTheClassAndRotationCopiesIt(t *testi
 	})
 	require.NoError(t, err)
 
-	require.Equal(t, provenanceRow{class: sql.NullString{String: "operator", Valid: true}}, readProvenanceRow(t, ctx, f.db, operator.Credential.CredentialID))
+	require.Equal(t, provenanceRow{class: sql.NullString{String: "org_bearer", Valid: true}}, readProvenanceRow(t, ctx, f.db, cli.Credential.CredentialID),
+		"a credential from the operator CLI is org_bearer with no approver and no client (D6530)")
 	require.Equal(t, provenanceRow{
 		class:    sql.NullString{String: "native_device", Valid: true},
 		approver: sql.NullString{String: credentialTestActorID, Valid: true},
@@ -161,7 +162,7 @@ VALUES ('wlb_provenance', $1, 'cluster.local', 'ns', 'sa', 'uid', 'read', '["*"]
 	})
 	require.NoError(t, err)
 	oauth := f.redeemDevice(t, ctx, "B2", "https://mcp.example.test/mcp", client)
-	operator, err := f.service.Create(ctx, credentialCreateRequest("legacy operator"))
+	cli, err := f.service.Create(ctx, credentialCreateRequest("legacy cli"))
 	require.NoError(t, err)
 
 	// Make every row a pre-0058 row: no provenance at all.
@@ -189,6 +190,65 @@ VALUES ('wlb_provenance', $1, 'cluster.local', 'ns', 'sa', 'uid', 'read', '["*"]
 	gotOAuth := readProvenanceRow(t, ctx, f.db, oauth.CredentialID)
 	require.Equal(t, "oauth_user", gotOAuth.class.String)
 	require.Equal(t, credentialTestActorID, gotOAuth.approver.String)
-	require.Equal(t, provenanceRow{}, readProvenanceRow(t, ctx, f.db, operator.Credential.CredentialID),
-		"an operator row has no issuance record to prove its class: it stays unclassified")
+	require.Equal(t, provenanceRow{}, readProvenanceRow(t, ctx, f.db, cli.Credential.CredentialID),
+		"a CLI row has no issuance record to prove its class: 0058 leaves it unclassified")
+}
+
+// Migration 0062 adds org_bearer (D6530) and relabels the rows the CLI path
+// wrote as operator before it: 0058 never backfills operator, and the CLI
+// create is the only writer of it, so every operator row is a CLI credential.
+func TestCredentialProvenance_orgBearerMigrationRelabelsCLIRowsAndKeepsImmutability(t *testing.T) {
+	ctx := context.Background()
+	f := newProvenanceFixture(t, ctx)
+	cli, err := f.service.Create(ctx, credentialCreateRequest("pre-0061 cli"))
+	require.NoError(t, err)
+	cliSuccessor, err := f.service.Rotate(ctx, auth.RotateCredentialRequest{
+		OrgID: cli.Credential.OrgID, CredentialID: cli.Credential.CredentialID, CreatedBy: "operator@example.test", Overlap: time.Minute,
+	})
+	require.NoError(t, err)
+	native := f.redeemDevice(t, ctx, "M1", "", "")
+
+	// Make the CLI rows pre-0061 rows: the class the 0058 code wrote.
+	_, err = f.db.ExecContext(ctx, `ALTER TABLE acr.client_credentials DISABLE TRIGGER trg_client_credentials_provenance_immutable`)
+	require.NoError(t, err)
+	_, err = f.db.ExecContext(ctx, `UPDATE acr.client_credentials SET client_class = 'operator' WHERE credential_id = ANY($1)`,
+		[]string{cli.Credential.CredentialID, cliSuccessor.Credential.CredentialID})
+	require.NoError(t, err)
+	_, err = f.db.ExecContext(ctx, `ALTER TABLE acr.client_credentials ENABLE TRIGGER trg_client_credentials_provenance_immutable`)
+	require.NoError(t, err)
+
+	migration, err := migrationfiles.Files.ReadFile("0062_credential_org_bearer.sql")
+	require.NoError(t, err)
+	for run := 1; run <= 2; run++ {
+		_, err = f.db.ExecContext(ctx, string(migration))
+		require.NoError(t, err, "run %d: the migration is idempotent", run)
+	}
+
+	wantOrgBearer := provenanceRow{class: sql.NullString{String: "org_bearer", Valid: true}}
+	require.Equal(t, wantOrgBearer, readProvenanceRow(t, ctx, f.db, cli.Credential.CredentialID))
+	require.Equal(t, wantOrgBearer, readProvenanceRow(t, ctx, f.db, cliSuccessor.Credential.CredentialID))
+	require.Equal(t, "native_device", readProvenanceRow(t, ctx, f.db, native.CredentialID).class.String, "other classes are not touched")
+	var operatorRows int
+	require.NoError(t, f.db.QueryRowContext(ctx, `SELECT count(*) FROM acr.client_credentials WHERE client_class = 'operator'`).Scan(&operatorRows))
+	require.Zero(t, operatorRows)
+
+	var triggerState string
+	require.NoError(t, f.db.QueryRowContext(ctx, `
+SELECT tgenabled::text FROM pg_trigger WHERE tgname = 'trg_client_credentials_provenance_immutable'`).Scan(&triggerState))
+	require.Equal(t, "O", triggerState, "the trigger is enabled again after the relabel")
+
+	var pgErr *pgconn.PgError
+	_, err = f.db.ExecContext(ctx, `UPDATE acr.client_credentials SET client_class = 'workload' WHERE credential_id = $1`, cli.Credential.CredentialID)
+	require.True(t, errors.As(err, &pgErr), "error = %v", err)
+	require.Equal(t, "23514", pgErr.Code, "the class stays immutable once set")
+	_, err = f.db.ExecContext(ctx, `UPDATE acr.client_credentials SET client_class = NULL WHERE credential_id = $1`, cli.Credential.CredentialID)
+	require.Error(t, err)
+
+	// org_bearer behaves like workload: no approver and no client.
+	_, err = f.db.ExecContext(ctx, `UPDATE acr.client_credentials SET approving_user_id = 'someone' WHERE credential_id = $1`, cli.Credential.CredentialID)
+	require.True(t, errors.As(err, &pgErr), "error = %v", err)
+	require.Equal(t, "23514", pgErr.Code)
+	_, err = f.db.ExecContext(ctx, `UPDATE acr.client_credentials SET client_id = 'acrc_0123456789abcdef0123456789abcdef' WHERE credential_id = $1`, cli.Credential.CredentialID)
+	require.True(t, errors.As(err, &pgErr), "error = %v", err)
+	require.Equal(t, "23514", pgErr.Code)
 }

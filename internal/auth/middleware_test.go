@@ -29,10 +29,10 @@ func TestAuthenticatorAllowsAuthorizedReadAndTracksUsage(t *testing.T) {
 		if !ok || principal.OrgID != "org_1" || principal.CredentialID != issued.Credential.CredentialID {
 			t.Fatalf("unexpected principal: %#v %v", principal, ok)
 		}
-		// CHAOS-12083: the principal carries the row's provenance; an
-		// operator credential has no approving user.
-		if principal.ClientClass != storage.CredentialClientClassOperator || principal.ApprovingUserID != "" {
-			t.Fatalf("principal provenance = class %q approver %q, want operator and none", principal.ClientClass, principal.ApprovingUserID)
+		// CHAOS-12083: the principal carries the row's provenance; a CLI
+		// org_bearer credential has no approving user.
+		if principal.ClientClass != storage.CredentialClientClassOrgBearer || principal.ApprovingUserID != "" {
+			t.Fatalf("principal provenance = class %q approver %q, want org_bearer and none", principal.ClientClass, principal.ApprovingUserID)
 		}
 		w.WriteHeader(http.StatusNoContent)
 	})

@@ -424,8 +424,8 @@ type ClientCredential struct {
 // (CHAOS-12083). Server-side only; see ClientCredential.Provenance.
 type CredentialProvenance struct {
 	// ClientClass is the issuance class (the closed vocabulary in
-	// internal/storage: browser, oauth_user, native_device, operator,
-	// workload). Empty only on a legacy row whose class could not be proven
+	// internal/storage: browser, oauth_user, native_device, org_bearer,
+	// operator, workload). Empty only on a legacy row whose class could not be proven
 	// from its issuance records.
 	ClientClass string
 	// ApprovingUserID is the web-session subject that approved the device or
