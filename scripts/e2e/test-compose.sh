@@ -125,6 +125,9 @@ awk '/^start_acr_after_go_api\(\)/,/^}/' "$script" | grep -Fq 'up_acr_services a
 # The start must not recreate go-api behind the readiness proof, and must fail loudly if it did (run 40960897433).
 awk '/^up_acr_services\(\)/,/^}/' "$script" | grep -Fq 'compose up -d --no-recreate "$@"'
 awk '/^up_acr_services\(\)/,/^}/' "$script" | grep -Fq 'go-api was recreated while starting'
+# A same-container restart keeps the id: acr-api must also be seen running through a settle window.
+awk '/^up_acr_services\(\)/,/^}/' "$script" | grep -Fq 'assert_acr_api_survives_boot'
+awk '/^assert_acr_api_survives_boot\(\)/,/^}/' "$script" | grep -Fq "!= 'running'"
 # Every start of acr-api or acr-projector in the e2e scripts goes through up_acr_services: no direct `compose up` names them.
 if grep -nE 'compose up .*(acr-api|acr-projector)' "$script_dir"/compose.sh "$script_dir"/fixture-graph.sh "$script_dir"/svs.sh "$script_dir"/fullstack-opencode.sh | grep -v '^[^:]*:[0-9]*:[[:space:]]*#'; then exit 1; fi
 # The failure-log health dump names only services the harness compose gives a healthcheck (the retired api service has none).
