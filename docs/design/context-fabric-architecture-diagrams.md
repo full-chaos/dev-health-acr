@@ -3091,6 +3091,30 @@ Stage order is `interpreting`, `resolving_subjects`, `reading_facts`,
 engine's internal failure stages (`internal/contextfabric/stage.go`). Progress
 events carry no claims.
 
+**Engine sites (CHAOS-11910).** The engine reports stage boundaries to an
+`InvestigationStageSink` carried on the request context
+(`internal/contextfabric/investigation_stage_events.go`, the
+`WithSynthesisInputCollector` pattern). One site per stage: the interpreter
+call and the decisive `ResolveSubjects` call and the canonical fact read in
+`Investigate` (`engine.go`), `synthesizeAndAssemble` for `synthesizing`, and
+`finalizeServedAs` for `validating` (every serving path finalizes before its
+Save, so the Save is inside the stage). Each started/completed
+pair brackets its port call, except `synthesizing`, which completes when
+`validating` starts, so the stage-3 budget re-synthesis stays inside it; the sink keeps the grammar (a repeat or an earlier
+stage is ignored, a stage still open when a later one starts is completed
+first), and `Investigate` completes the open stage when it returns a served
+answer. A failure leaves the stage open for the error terminal to name. The sink
+is a buffered channel of 32 and never blocks the engine or runs caller code on
+its goroutine. One slot is held back: when only it is left, the sink stops
+sending and counts each later transition it drops, so a reader always receives
+a prefix of the run's transitions (a valid stage sequence), and on a served
+answer the held-back slot completes the stage the reader last saw start, so the
+stream ends with no stage open. The route records the drop counts in
+`acr_investigation_events_dropped_total` after the run; a run makes at most 10
+transitions. No sink installed: every report is a no-op, and the
+served answer is byte-equal to the goldens recorded before the sites existed
+(`testdata/investigation_stage_scenarios`).
+
 **Construction anchors:** `ContextFabricInvestigationEvent`, `Validate`,
 `contextFabricEventShapes`, `MarshalContextFabricInvestigationEventFrame`
 (`internal/contracts/v1/context_fabric_investigation_event.go`);

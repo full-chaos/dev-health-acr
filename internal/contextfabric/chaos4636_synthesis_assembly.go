@@ -280,6 +280,9 @@ func copyCohortForRetry(cohort *Cohort) *Cohort {
 // and carried out so nothing downstream computes a second one. See the
 // `membership_cardinality` block below for why it is computed where it is.
 func (e *Engine) synthesizeAndAssemble(ctx context.Context, principal storage.Principal, params synthesisAssemblyParams) (InvestigationResult, ItemAllocation, assemblyTelemetry, MembershipCardinality, error) {
+	// CHAOS-11910: every synthesis pass enters here; the sink ignores a
+	// second pass (the budget re-synthesis), so the stage starts once.
+	startInvestigationStage(ctx, contractsv1.ContextFabricStageSynthesizing)
 	// pending holds every per-investigation decision event this pass
 	// produces. NOTHING here emits -- see point 3 in this file's header.
 	var pending assemblyTelemetry
