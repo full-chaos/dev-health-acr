@@ -232,7 +232,7 @@ func NewApp(cfg AppConfig, deps Dependencies, logger *slog.Logger) (*App, error)
 		oauth:                oauth,
 		oauthConsentURL:      oauthConsentURL(deps),
 		readinessTransitions: NewReadinessTransitionLogger(),
-		eventStream:          defaultInvestigationEventStreamSettings(),
+		eventStream:          defaultInvestigationEventStreamSettings(cfg.MaxSerializedBytes),
 	}
 	if app.clientIP == nil {
 		app.clientIP = auth.RemoteAddressClientIP

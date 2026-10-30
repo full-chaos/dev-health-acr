@@ -514,7 +514,7 @@ func TestAWriterWithoutAWriteDeadlineGetsNoStream(t *testing.T) {
 // TestTheProductionStreamTimingIsTheContracts: the heartbeat interval the
 // route runs is the contract's, and the per-frame write deadline is 30 s.
 func TestTheProductionStreamTimingIsTheContracts(t *testing.T) {
-	settings := defaultInvestigationEventStreamSettings()
+	settings := defaultInvestigationEventStreamSettings(262144)
 	if settings.heartbeat != contractsv1.ContextFabricInvestigationEventHeartbeatInterval {
 		t.Fatalf("heartbeat %s, want the contract's interval", settings.heartbeat)
 	}
@@ -639,7 +639,7 @@ func newUnitStreamWithLogs(t *testing.T, recorder *deadlineRecorder) (*investiga
 	t.Helper()
 	logs := &bytes.Buffer{}
 	return &investigationEventStream{
-		w: recorder, controller: http.NewResponseController(recorder), settings: defaultInvestigationEventStreamSettings(),
+		w: recorder, controller: http.NewResponseController(recorder), settings: defaultInvestigationEventStreamSettings(262144),
 		logger: testLogger(logs), logCtx: context.Background(), requestID: streamTestRequestID, reserved: "result_12345678",
 		startedAt: time.Now(),
 	}, logs
@@ -650,7 +650,7 @@ func newUnitStreamWithLogs(t *testing.T, recorder *deadlineRecorder) (*investiga
 func TestTheStreamWritesOneTerminalOnly(t *testing.T) {
 	recorder := &deadlineRecorder{}
 	stream, logs := newUnitStreamWithLogs(t, recorder)
-	if err := stream.accepted(30, ""); err != nil {
+	if err := stream.accepted(30, "", ""); err != nil {
 		t.Fatal(err)
 	}
 	body := goldenResultBody(t, "context_fabric_investigation_result.v1.json")
@@ -697,7 +697,7 @@ func TestTheStreamWritesOneTerminalOnly(t *testing.T) {
 func TestTheStreamKeepsTheGrammarWhenTransitionsAreLost(t *testing.T) {
 	recorder := &deadlineRecorder{}
 	stream := newUnitStream(t, recorder)
-	if err := stream.accepted(30, ""); err != nil {
+	if err := stream.accepted(30, "", ""); err != nil {
 		t.Fatal(err)
 	}
 	at := stream.startedAt
@@ -760,7 +760,7 @@ func TestADroppedTransitionIsCountedAndLogged(t *testing.T) {
 func TestAnOutcomeTheContractRefusesEndsAsInternalError(t *testing.T) {
 	recorder := &deadlineRecorder{}
 	stream := newUnitStream(t, recorder)
-	if err := stream.accepted(30, ""); err != nil {
+	if err := stream.accepted(30, "", ""); err != nil {
 		t.Fatal(err)
 	}
 	outcome := newInvestigationOutcomeCapture(recorder)
@@ -792,11 +792,11 @@ func TestAFailedWriteEndsTheRun(t *testing.T) {
 	cancelled := 0
 	logs := &bytes.Buffer{}
 	stream := &investigationEventStream{
-		w: writer, controller: http.NewResponseController(writer), settings: defaultInvestigationEventStreamSettings(),
+		w: writer, controller: http.NewResponseController(writer), settings: defaultInvestigationEventStreamSettings(262144),
 		logger: testLogger(logs), logCtx: context.Background(), requestID: streamTestRequestID, reserved: "result_12345678",
 		startedAt: time.Now(), onWriteFailure: func() { cancelled++ },
 	}
-	if err := stream.accepted(30, ""); err == nil {
+	if err := stream.accepted(30, "", ""); err == nil {
 		t.Fatal("the write failed and accepted reported success")
 	}
 	if cancelled != 1 {
@@ -837,7 +837,7 @@ func TestAStreamedRefusalKeepsItsDenialClass(t *testing.T) {
 func TestThePumpDrainsWhatTheSinkHolds(t *testing.T) {
 	recorder := &deadlineRecorder{}
 	stream := newUnitStream(t, recorder)
-	if err := stream.accepted(30, ""); err != nil {
+	if err := stream.accepted(30, "", ""); err != nil {
 		t.Fatal(err)
 	}
 	transitions := make(chan contextfabric.InvestigationStageTransition, 16)
@@ -868,7 +868,7 @@ func TestThePumpDrainsWhatTheSinkHolds(t *testing.T) {
 func TestARunWithNoOutcomeEndsWithNoTerminal(t *testing.T) {
 	recorder := &deadlineRecorder{}
 	stream, logs := newUnitStreamWithLogs(t, recorder)
-	if err := stream.accepted(30, ""); err != nil {
+	if err := stream.accepted(30, "", ""); err != nil {
 		t.Fatal(err)
 	}
 	if got := stream.finish(newInvestigationOutcomeCapture(recorder)); got != "" {
