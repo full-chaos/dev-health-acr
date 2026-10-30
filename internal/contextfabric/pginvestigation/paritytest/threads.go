@@ -284,13 +284,17 @@ func RunThreadSuite(t *testing.T, newStore func(t *testing.T, clock func() time.
 	credential := func(id, user string, class storage.CredentialClientClass) storage.Principal {
 		return storage.Principal{AuthenticationMethod: storage.AuthenticationMethodCredential, Subject: id, OrgID: owner.OrgID, ApprovingUserID: user, ClientClass: class}
 	}
-	t.Run("a rotated credential of the same user reaches the user's thread", func(t *testing.T) {
+	t.Run("another credential of the same user on the same surface reaches the user's thread", func(t *testing.T) {
 		store, clock := setup(t)
-		before := credential("cred-thread-rot-a", "user-thread-rotating", storage.CredentialClientClassBrowser)
+		// The web session of the user, then a browser credential the user
+		// approved: another legacy pair (method and subject), one canonical
+		// owner (the user on the browser).
+		before := storage.Principal{AuthenticationMethod: storage.AuthenticationMethodWebAssertion, Subject: "user-thread-rotating", OrgID: owner.OrgID}
 		after := credential("cred-thread-rot-b", "user-thread-rotating", storage.CredentialClientClassBrowser)
 		first := turn(t, store, clock, before, "thread-parity-rotate", "rotate-1", nil)
 		clock.now = clock.now.Add(time.Second)
 		second := turn(t, store, clock, after, "thread-parity-rotate", "rotate-2", &month)
+		save(t, store, after, second.ReservedResultID)
 		for _, reader := range []storage.Principal{before, after} {
 			page, err := store.GetThread(ctx, threadKey(t, reader, "thread-parity-rotate"), nil, 100, clock.now)
 			if err != nil || page.Thread.TurnCount != 2 || len(page.Turns) != 2 || page.Thread.RetentionDays != month ||
@@ -307,6 +311,11 @@ func RunThreadSuite(t *testing.T, newStore func(t *testing.T, clock func() time.
 		}
 		if _, err := store.GetThread(ctx, threadKey(t, before, "thread-parity-rotate"), nil, 100, clock.now); !errors.Is(err, contextfabric.ErrThreadNotFound) {
 			t.Fatalf("read by the earlier credential after the delete = %v", err)
+		}
+		// T6: the rotated credential's turn belongs to the closed thread, so
+		// its result is hidden too.
+		if _, err := store.Get(ctx, after, second.ReservedResultID); !errors.Is(err, contextfabric.ErrInvestigationResultNotFound) {
+			t.Fatalf("the rotated turn's result after the delete = %v, want not found", err)
 		}
 		for _, admitted := range []contextfabric.SubmissionAdmission{first, second} {
 			record, err := store.GetSubmission(ctx, admitted.Key, clock.now)
