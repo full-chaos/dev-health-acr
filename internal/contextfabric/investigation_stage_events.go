@@ -39,7 +39,7 @@ import (
 // leaves it open, and the error terminal names it.
 //
 // The sink never blocks the engine and runs no caller code on the engine's
-// goroutine. Transitions go into a buffered channel of
+// goroutine (it takes no caller function, not even a clock). Transitions go into a buffered channel of
 // InvestigationStageSinkCapacity, and one slot of it is held back. When only
 // that slot is left (the reader is behind), the sink OVERFLOWS: from then on it
 // sends no ordinary transition, and counts each one it drops, by stage. So what
@@ -62,7 +62,7 @@ import (
 const InvestigationStageSinkCapacity = 32
 
 // InvestigationStageTransition is one stage boundary: the stage, whether it
-// started or completed, and when, on the sink's clock.
+// started or completed, and when (time.Now).
 type InvestigationStageTransition struct {
 	Stage contractsv1.ContextFabricInvestigationStage
 	State contractsv1.ContextFabricInvestigationStageState
@@ -74,7 +74,6 @@ type InvestigationStageTransition struct {
 // and read Transitions while Investigate runs.
 type InvestigationStageSink struct {
 	transitions chan InvestigationStageTransition
-	now         func() time.Time
 
 	mu sync.Mutex
 	// open and lastStarted are the engine's stage state, which the grammar
@@ -89,18 +88,15 @@ type InvestigationStageSink struct {
 }
 
 // NewInvestigationStageSink makes a sink with room for capacity transitions
-// (at least two: one slot is held back for the closing completion). now
-// stamps each transition (time.Now when nil).
-func NewInvestigationStageSink(capacity int, now func() time.Time) *InvestigationStageSink {
+// (at least two: one slot is held back for the closing completion). Each
+// transition is stamped with time.Now: the sink takes no caller function, so
+// nothing a caller supplies runs on the engine's goroutine.
+func NewInvestigationStageSink(capacity int) *InvestigationStageSink {
 	if capacity < 2 {
 		capacity = 2
 	}
-	if now == nil {
-		now = time.Now
-	}
 	return &InvestigationStageSink{
 		transitions: make(chan InvestigationStageTransition, capacity),
-		now:         now,
 		dropped:     map[contractsv1.ContextFabricInvestigationStage]int64{},
 	}
 }
@@ -214,7 +210,7 @@ func (s *InvestigationStageSink) completeOpen() {
 	// free: an ordinary send never takes the last slot, and this is the one
 	// send that may.
 	if s.delivered != "" {
-		s.transitions <- InvestigationStageTransition{Stage: s.delivered, State: contractsv1.ContextFabricStageCompleted, At: s.now()}
+		s.transitions <- InvestigationStageTransition{Stage: s.delivered, State: contractsv1.ContextFabricStageCompleted, At: time.Now()}
 		// That completion was counted as dropped when the engine reported
 		// it after the overflow; it reached the reader late, not never.
 		if s.dropped[s.delivered]--; s.dropped[s.delivered] <= 0 {
@@ -236,7 +232,7 @@ func (s *InvestigationStageSink) emit(stage contractsv1.ContextFabricInvestigati
 		s.dropped[stage]++
 		return
 	}
-	s.transitions <- InvestigationStageTransition{Stage: stage, State: state, At: s.now()}
+	s.transitions <- InvestigationStageTransition{Stage: stage, State: state, At: time.Now()}
 	switch state {
 	case contractsv1.ContextFabricStageStarted:
 		s.delivered = stage

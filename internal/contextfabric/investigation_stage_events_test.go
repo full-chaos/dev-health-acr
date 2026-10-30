@@ -7,7 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"sync"
+	"reflect"
 	"testing"
 	"time"
 
@@ -52,19 +52,6 @@ var (
 	stValidating   = contractsv1.ContextFabricStageValidating
 )
 
-// tickingClock is a clock that moves one millisecond per reading, so every
-// transition has its own time.
-func tickingClock() func() time.Time {
-	var mu sync.Mutex
-	at := time.Date(2026, 10, 29, 18, 0, 0, 0, time.UTC)
-	return func() time.Time {
-		mu.Lock()
-		defer mu.Unlock()
-		at = at.Add(time.Millisecond)
-		return at
-	}
-}
-
 func drainStageTransitions(sink *InvestigationStageSink) []InvestigationStageTransition {
 	var out []InvestigationStageTransition
 	for {
@@ -85,15 +72,28 @@ func stepsOf(transitions []InvestigationStageTransition) []stageStep {
 	return out
 }
 
+// lastStartedStep is the last stage a step list starts ("" for none).
+func lastStartedStep(list []stageStep) contractsv1.ContextFabricInvestigationStage {
+	var stage contractsv1.ContextFabricInvestigationStage
+	for _, step := range list {
+		if step.state == contractsv1.ContextFabricStageStarted {
+			stage = step.stage
+		}
+	}
+	return stage
+}
+
 func sameSteps(got, want []stageStep) bool {
 	return fmt.Sprint(got) == fmt.Sprint(want)
 }
 
 // stageStream builds the stream the route writes for one run -- accepted,
 // one stage event per transition, the terminal -- through the contract's own
-// types, and holds it to the contract's stream grammar. The error terminal
-// names the last stage the sink started, the rule the route follows.
-func stageStream(t *testing.T, start time.Time, transitions []InvestigationStageTransition, result *InvestigationResult) error {
+// types, and holds it to the contract's stream grammar. errorStage is the
+// stage the error terminal names, given by the caller from what it expects
+// (the exit's own fault), not taken from the transitions under test, so a
+// transition list that ends in the wrong stage fails the grammar.
+func stageStream(t *testing.T, start time.Time, transitions []InvestigationStageTransition, result *InvestigationResult, errorStage contractsv1.ContextFabricInvestigationStage) error {
 	t.Helper()
 	const requestID = "request_12345678"
 	reserved := "result_12345678"
@@ -105,14 +105,10 @@ func stageStream(t *testing.T, start time.Time, transitions []InvestigationStage
 	accepted := next(contractsv1.ContextFabricInvestigationEventAccepted)
 	accepted.ReservedResultID, accepted.StartedAt, accepted.BudgetSeconds = reserved, &start, 30
 	events := []contractsv1.ContextFabricInvestigationEvent{accepted}
-	var lastStarted contractsv1.ContextFabricInvestigationStage
 	for _, transition := range transitions {
 		event := next(contractsv1.ContextFabricInvestigationEventStage)
 		elapsed := transition.At.Sub(start).Milliseconds()
 		event.Stage, event.State, event.ElapsedMS = transition.Stage, transition.State, &elapsed
-		if transition.State == contractsv1.ContextFabricStageStarted {
-			lastStarted = transition.Stage
-		}
 		events = append(events, event)
 	}
 	if result != nil {
@@ -125,7 +121,7 @@ func stageStream(t *testing.T, start time.Time, transitions []InvestigationStage
 		events = append(events, terminal)
 	} else {
 		terminal := next(contractsv1.ContextFabricInvestigationEventError)
-		terminal.ReservedResultID, terminal.Stage = reserved, lastStarted
+		terminal.ReservedResultID, terminal.Stage = reserved, errorStage
 		terminal.Error = &contractsv1.ErrorEnvelope{SchemaVersion: contractsv1.ErrorSchema, RequestID: requestID, Error: contractsv1.ErrorDetail{
 			Code: "internal_error", Message: "Context Fabric investigation failed", HTTPStatus: 500,
 		}}
@@ -158,9 +154,8 @@ func runStageScenario(t *testing.T, engine *Engine, request InvestigationRequest
 // slots and nothing reading it while Investigate runs.
 func runStageScenarioWithCapacity(t *testing.T, engine *Engine, request InvestigationRequest, ctx context.Context, capacity int) (stageRun, *InvestigationStageSink) {
 	t.Helper()
-	clock := tickingClock()
-	run := stageRun{start: clock()}
-	sink := NewInvestigationStageSink(capacity, clock)
+	run := stageRun{start: time.Now()}
+	sink := NewInvestigationStageSink(capacity)
 	func() {
 		defer func() {
 			if recover() != nil {
@@ -253,7 +248,7 @@ func TestStageEventOrderHoldsOnEveryExit(t *testing.T) {
 			if run.err == nil && !run.panicked {
 				result = &run.result
 			}
-			if err := stageStream(t, run.start, run.transitions, result); err != nil {
+			if err := stageStream(t, run.start, run.transitions, result, lastStartedStep(test.want)); err != nil {
 				t.Fatalf("the stream built from these transitions breaks the contract grammar: %v", err)
 			}
 		})
@@ -279,7 +274,7 @@ func TestStageEventOrderHoldsOnABudgetRefusal(t *testing.T) {
 	if !sameSteps(got, want) {
 		t.Fatalf("transitions %v, want %v", got, want)
 	}
-	if err := stageStream(t, run.start, run.transitions, nil); err != nil {
+	if err := stageStream(t, run.start, run.transitions, nil, stSynthesizing); err != nil {
 		t.Fatalf("grammar: %v", err)
 	}
 }
@@ -318,9 +313,8 @@ func TestASinkChangesNothingInvestigateServes(t *testing.T) {
 // dropped (the sink takes no drop callback).
 func TestAStalledReaderNeverBlocksTheEngine(t *testing.T) {
 	engine, _ := stageScenarioEngine(t, stageScenarioFaults{})
-	clock := tickingClock()
-	start := clock()
-	sink := NewInvestigationStageSink(1, clock) // below the minimum: two slots
+	start := time.Now()
+	sink := NewInvestigationStageSink(1) // below the minimum: two slots
 	type outcome struct {
 		result InvestigationResult
 		err    error
@@ -352,7 +346,7 @@ func TestAStalledReaderNeverBlocksTheEngine(t *testing.T) {
 	if sink.Dropped() != 8 {
 		t.Fatalf("Dropped() = %d, want 8", sink.Dropped())
 	}
-	if err := stageStream(t, start, transitions, &run.result); err != nil {
+	if err := stageStream(t, start, transitions, &run.result, ""); err != nil {
 		t.Fatalf("the reader's stream with the answer breaks the grammar: %v", err)
 	}
 }
@@ -403,7 +397,9 @@ func TestEveryExitStaysValidWhenTheSinkOverflows(t *testing.T) {
 				if served {
 					result = &run.result
 				}
-				if err := stageStream(t, run.start, run.transitions, result); err != nil {
+				// The route names the last stage its stream started, so after an
+				// overflow that is the last stage of the received prefix.
+				if err := stageStream(t, run.start, run.transitions, result, lastStartedStep(prefix)); err != nil {
 					t.Fatalf("received %v: the stream breaks the contract grammar: %v", got, err)
 				}
 			})
@@ -421,7 +417,7 @@ func TestAProductionSinkHoldsAWholeRun(t *testing.T) {
 		t.Fatalf("capacity %d is below the %d transitions one run can make", InvestigationStageSinkCapacity, max)
 	}
 	engine, _ := stageScenarioEngine(t, stageScenarioFaults{})
-	sink := NewInvestigationStageSink(InvestigationStageSinkCapacity, tickingClock())
+	sink := NewInvestigationStageSink(InvestigationStageSinkCapacity)
 	if _, err := engine.Investigate(WithInvestigationStageSink(context.Background(), sink), stageScenarioPrincipal(), validInvestigationRequest()); err != nil {
 		t.Fatal(err)
 	}
@@ -435,9 +431,8 @@ func TestAProductionSinkHoldsAWholeRun(t *testing.T) {
 // reached after a later one, a completion of a stage that is not open) and
 // holds the result to the contract's grammar.
 func TestTheSinkKeepsTheStreamGrammar(t *testing.T) {
-	clock := tickingClock()
-	start := clock()
-	sink := NewInvestigationStageSink(InvestigationStageSinkCapacity, clock)
+	start := time.Now()
+	sink := NewInvestigationStageSink(InvestigationStageSinkCapacity)
 	ctx := WithInvestigationStageSink(context.Background(), sink)
 
 	startInvestigationStage(ctx, contractsv1.ContextFabricInvestigationStage("graph")) // outside the vocabulary, first: ignored
@@ -459,11 +454,11 @@ func TestTheSinkKeepsTheStreamGrammar(t *testing.T) {
 	}
 	result := validInvestigationResult()
 	result.GeneratedAt = start
-	if err := stageStream(t, start, transitions, &result); err != nil {
+	if err := stageStream(t, start, transitions, &result, ""); err != nil {
 		t.Fatalf("grammar: %v", err)
 	}
 	for index := 1; index < len(transitions); index++ {
-		if !transitions[index].At.After(transitions[index-1].At) {
+		if transitions[index].At.Before(transitions[index-1].At) {
 			t.Fatal("transitions are not stamped in order")
 		}
 	}
@@ -490,9 +485,8 @@ func TestNoSinkIsANoOp(t *testing.T) {
 // last saw is still open), which no consumer can repair; a prefix needs no
 // repair. The held-back completion then closes the stage the reader saw.
 func TestAnOverflowedSinkSendsNothingMore(t *testing.T) {
-	clock := tickingClock()
-	start := clock()
-	sink := NewInvestigationStageSink(2, clock)
+	start := time.Now()
+	sink := NewInvestigationStageSink(2)
 	ctx := WithInvestigationStageSink(context.Background(), sink)
 	startInvestigationStage(ctx, stInterpreting)    // sent: the buffer now holds one, the held-back slot is left
 	completeInvestigationStage(ctx, stInterpreting) // overflow: dropped
@@ -510,7 +504,50 @@ func TestAnOverflowedSinkSendsNothingMore(t *testing.T) {
 	}
 	result := validInvestigationResult()
 	result.GeneratedAt = start
-	if err := stageStream(t, start, received, &result); err != nil {
+	if err := stageStream(t, start, received, &result, ""); err != nil {
 		t.Fatalf("grammar: %v", err)
+	}
+}
+
+// TestTheStreamHelperCanFail (round-2 F4): stageStream is the check every
+// order test leans on, so it must refuse a wrong stream. An error terminal
+// that names a stage other than the last one started, and a result with a
+// stage still open, both fail it.
+func TestTheStreamHelperCanFail(t *testing.T) {
+	start := time.Now()
+	at := func(ms int) time.Time { return start.Add(time.Duration(ms) * time.Millisecond) }
+	transitions := []InvestigationStageTransition{
+		{Stage: stInterpreting, State: contractsv1.ContextFabricStageStarted, At: at(1)},
+		{Stage: stInterpreting, State: contractsv1.ContextFabricStageCompleted, At: at(2)},
+		{Stage: stResolving, State: contractsv1.ContextFabricStageStarted, At: at(3)},
+	}
+	if err := stageStream(t, start, transitions, nil, stResolving); err != nil {
+		t.Fatalf("control: the right error stage was refused: %v", err)
+	}
+	if err := stageStream(t, start, transitions, nil, stInterpreting); err == nil {
+		t.Fatal("an error naming a stage other than the last one started passed")
+	}
+	result := validInvestigationResult()
+	result.GeneratedAt = start
+	if err := stageStream(t, start, transitions, &result, ""); err == nil {
+		t.Fatal("a result with a stage still open passed")
+	}
+}
+
+// TestTheSinkTakesNoCallerFunction (round-2 F3): nothing a caller supplies
+// may run on the engine's goroutine, so the sink's constructor takes no
+// function at all -- no drop callback (round 1), no clock (round 2).
+func TestTheSinkTakesNoCallerFunction(t *testing.T) {
+	constructor := reflect.TypeOf(NewInvestigationStageSink)
+	for index := 0; index < constructor.NumIn(); index++ {
+		if constructor.In(index).Kind() == reflect.Func {
+			t.Fatalf("NewInvestigationStageSink parameter %d is a function (%s): it would run on the engine's goroutine", index, constructor.In(index))
+		}
+	}
+	sinkType := reflect.TypeOf(InvestigationStageSink{})
+	for index := 0; index < sinkType.NumField(); index++ {
+		if sinkType.Field(index).Type.Kind() == reflect.Func {
+			t.Fatalf("InvestigationStageSink holds a function field %q", sinkType.Field(index).Name)
+		}
 	}
 }
