@@ -94,8 +94,13 @@ func TestAV2ResultWithoutAnAnchorOptionIsRefused(t *testing.T) {
 	// The published schemas, on the wire. Go omits an empty anchor_options
 	// slice, so the empty-array cell is built in JSON: a v2 body whose
 	// structure_needs carries "anchor_options": [] is refused by the v2
-	// result and response schemas (minItems), one with no structure_needs
-	// by required, and the one-option body is accepted.
+	// result and response schemas (minItems). A body with no
+	// anchor_options key, or no structure_needs, is still ACCEPTED by the
+	// schemas in this release -- the contract's required-field policy
+	// (contractcheck -required-baseline) makes a field optional for one
+	// release before it becomes required -- and refused by the Go
+	// validator above. The two accepted cells flip to refused when the
+	// next release adds the required entries.
 	encoded, err := json.Marshal(full)
 	if err != nil {
 		t.Fatal(err)
@@ -114,8 +119,8 @@ func TestAV2ResultWithoutAnAnchorOptionIsRefused(t *testing.T) {
 	}{
 		{"one anchor option", encoded, true},
 		{"empty anchor_options", emptied(func(d map[string]any) { d["structure_needs"].(map[string]any)["anchor_options"] = []any{} }), false},
-		{"no anchor_options", emptied(func(d map[string]any) { delete(d["structure_needs"].(map[string]any), "anchor_options") }), false},
-		{"no structure_needs", emptied(func(d map[string]any) { delete(d, "structure_needs") }), false},
+		{"no anchor_options (required next release)", emptied(func(d map[string]any) { delete(d["structure_needs"].(map[string]any), "anchor_options") }), true},
+		{"no structure_needs (required next release)", emptied(func(d map[string]any) { delete(d, "structure_needs") }), true},
 	}
 	for _, schema := range []string{"context_fabric_investigation_result.v2.schema.json", "context_fabric_investigation_response.v2.schema.json"} {
 		for _, cell := range cells {

@@ -60,13 +60,10 @@ func TestContextFabricInvestigationResultV2Schema_BoundsMatchV1Except(t *testing
 		}
 	}
 
-	// The "required" array is v1's plus exactly structure_needs
-	// (CHAOS-11975): a v2 result exists only for membership-verify anchor
-	// options, so its disclosure block is mandatory; nothing else differs.
-	v1Required, _ := v1Schema["required"].([]any)
-	wantV2Required := append(append([]any(nil), v1Required...), "structure_needs")
-	if !reflect.DeepEqual(wantV2Required, v2Schema["required"]) {
-		t.Errorf("v2 required list is not v1's plus structure_needs:\nwant = %#v\nv2   = %#v", wantV2Required, v2Schema["required"])
+	// The "required" array is likewise expected to be byte-identical
+	// (same set of mandatory fields either way).
+	if !reflect.DeepEqual(v1Schema["required"], v2Schema["required"]) {
+		t.Errorf("required list differs between v1 and v2 schemas:\nv1 = %#v\nv2 = %#v", v1Schema["required"], v2Schema["required"])
 	}
 }
 

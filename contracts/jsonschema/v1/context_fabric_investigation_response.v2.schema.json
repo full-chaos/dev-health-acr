@@ -388,8 +388,7 @@
     "deterministic_answer",
     "warnings",
     "reused",
-    "completeness",
-    "structure_needs"
+    "completeness"
   ],
   "allOf": [
     {

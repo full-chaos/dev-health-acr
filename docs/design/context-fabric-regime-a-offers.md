@@ -118,10 +118,12 @@ Three properties the implementation depends on:
   dispatch `schemaVersion` off it.
   The follow-up reconcile (`anchor_binding_follow_up.go`) clears it the
   same way when it removes the last anchor option (CHAOS-11975), and the
-  contract now refuses the shape outright: `ValidateV2`, `ValidateStoredV2`
-  and the published v2 result and response schemas require `structure_needs`
-  with a non-empty `anchor_options`. A v1-shaped body labelled v2 is not a v2
-  result.
+  contract refuses the shape: `ValidateV2` and `ValidateStoredV2` require
+  `structure_needs` with a non-empty `anchor_options`, and the published v2
+  schemas refuse an empty `anchor_options`. The schemas add `structure_needs`
+  and `anchor_options` to `required` in the next release (a field is
+  optional for one release before it becomes required). A v1-shaped body
+  labelled v2 is not a v2 result.
 
 There is no gate 1 any more (CHAOS-6557): a window the caller supplies -- the
 `evidence_window` field on any surface, or a single period stated in the
