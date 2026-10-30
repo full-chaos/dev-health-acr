@@ -477,7 +477,7 @@ Every job that uses `dev-health/ops` checks it out through one composite action,
 - The pin must be a full 40-hex commit SHA. The action refuses anything else, and a pinned run fails if it checked out a different commit.
 - Every job writes the ops commit, how it was chosen, and the pin to its job summary (`E2E_OPS_REF`, `E2E_OPS_REF_MODE`).
 - A failed job ends with an error annotation that names that commit.
-- `scripts/ci/test-workflow-contract.sh` pins all of this, with negative controls.
+- `scripts/ci/test-workflow-contract.sh` pins all of this, with negative controls. It executes the chooser, the record step, the browser-agreement decision and each job's failure step, not only reads them. Its throwaway commits ignore the caller's commit signing and hooks.
 
 **Re-pinning:** set `ci/fullstack-ops.pin` to an ops commit that a fullstack-acceptance run proved green, taken from that run's summary or a manual run with `ops_ref`. Do it in its own acr PR. The web checkout still follows its default branch, unless the `web_ref` input says otherwise.
 

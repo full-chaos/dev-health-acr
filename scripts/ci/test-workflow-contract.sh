@@ -1668,6 +1668,14 @@ check_ops_checkout_chooser_behaviour() {
   return "$status"
 }
 
+# Codex #1768 r3 P3: the throwaway commits of these checks must not inherit the
+# caller's git config. Commit signing with no reachable signer, or a failing
+# hook, would fail them, and a check would then report a wrong decision instead
+# of failing to run.
+throwaway_git() {
+  git -c commit.gpgsign=false -c core.hooksPath=/dev/null -c user.email=t@t -c user.name=t "$@"
+}
+
 # Codex #1768 r1 P2 / r2 P3: a re-pin PR changes the product slice, so the PR
 # browser agreement job must run on it. This EXECUTES the decide step's own
 # script against a throwaway repository whose head commit changes only the
@@ -1694,12 +1702,12 @@ check_web_agreement_selects_ops_pin() {
   decide_for() {
     local changed="$1" repo="$dir/repo-${RANDOM}" out
     out="$repo.out"
-    git init -q "$repo"
-    git -C "$repo" -c user.email=t@t -c user.name=t commit -q --allow-empty -m base
+    throwaway_git init -q "$repo" || return 1
+    throwaway_git -C "$repo" commit -q --allow-empty -m base || return 1
     mkdir -p "$repo/$(dirname "$changed")"
     printf 'x\n' > "$repo/$changed"
-    git -C "$repo" add -A
-    git -C "$repo" -c user.email=t@t -c user.name=t commit -q -m head
+    throwaway_git -C "$repo" add -A || return 1
+    throwaway_git -C "$repo" commit -q -m head || return 1
     : > "$out"
     (cd "$repo" && env PR_BASE="$(git rev-parse HEAD~1)" PR_HEAD="$(git rev-parse HEAD)" GITHUB_OUTPUT="$out" bash -e "$script") >/dev/null 2>&1 || return 1
     sed -n 's/^run=//p' "$out"
@@ -1741,6 +1749,106 @@ check_fullstack_ops_checkout_wiring() {
     awk '/- name: Name the dev-health-ops commit of a failed run/ { grab=1 } grab' <<<"$block" | grep -qF 'OPS_SHA: ${{ steps.ops.outputs.sha }}' || {
       printf 'job %s: the ops naming step does not name the checked-out commit\n' "$job" >&2; status=1; }
   done < <(awk '/^jobs:/ { in_jobs=1; next } in_jobs && /^  [A-Za-z0-9_-]+:$/ { sub(/:$/, ""); sub(/^  /, ""); print }' "$file")
+  return "$status"
+}
+
+# Codex #1768 r3 P3: the record step names the ops commit a run used. This
+# EXECUTES the record step's own script against a throwaway ops repository
+# whose HEAD is not the pin. It asserts that a floating run records HEAD, never
+# the pin, and that a pinned run that did not check out the pin fails.
+check_ops_checkout_record_behaviour() {
+  local file="$1" status=0 dir script ops ops_head other
+  dir="$(mktemp -d)"
+  script="$dir/record.sh"
+  awk '
+    /name: Record the ops commit this job uses/ { in_step=1 }
+    in_step && /^      run: \|$/ { in_run=1; next }
+    in_run && /^    - / { exit }
+    in_run && NF > 0 && !/^        / { exit }
+    in_run { sub(/^        /, ""); print }
+  ' "$file" > "$script"
+  if [ ! -s "$script" ]; then
+    printf 'ops-checkout: could not extract the record step script\n' >&2; rm -rf "$dir"; return 1
+  fi
+  ops="$dir/ops"
+  if ! { throwaway_git init -q "$ops" && throwaway_git -C "$ops" commit -q --allow-empty -m ops; }; then
+    printf 'ops-checkout record check: could not build the throwaway ops repository\n' >&2; rm -rf "$dir"; return 1
+  fi
+  ops_head="$(git -C "$ops" rev-parse HEAD)"
+  other=0123456789abcdef0123456789abcdef01234567
+  run_record() {
+    : > "$dir/output"; : > "$dir/env"; : > "$dir/summary"
+    env -i PATH="$PATH" HOME="$dir" OPS_PATH="$ops" MODE="$1" PIN="$2" \
+      GITHUB_OUTPUT="$dir/output" GITHUB_ENV="$dir/env" GITHUB_STEP_SUMMARY="$dir/summary" \
+      bash -e "$script" > "$dir/stdout" 2>&1
+  }
+  local mode recorded
+  for mode in schedule_floating dispatch_input; do
+    run_record "$mode" "$other" || { printf 'ops-checkout record step failed in %s mode\n' "$mode" >&2; status=1; continue; }
+    recorded="$(sed -n 's/^sha=//p' "$dir/output")"
+    [ "$recorded" = "$ops_head" ] || {
+      printf 'ops-checkout record step in %s mode recorded sha %s, not the commit checked out (%s)\n' "$mode" "$recorded" "$ops_head" >&2; status=1; }
+    if ! { grep -qxF "E2E_OPS_REF=$ops_head" "$dir/env" && grep -qxF "E2E_OPS_REF_MODE=$mode" "$dir/env"; }; then
+      printf 'ops-checkout record step in %s mode did not export E2E_OPS_REF=%s and its mode\n' "$mode" "$ops_head" >&2; status=1
+    fi
+    if ! { grep -qF "commit: \`$ops_head\`" "$dir/summary" && grep -qF 'did NOT use the pin' "$dir/summary"; }; then
+      printf 'ops-checkout record step in %s mode: the summary does not name %s and say the pin was not used\n' "$mode" "$ops_head" >&2; status=1
+    fi
+  done
+  if run_record pinned "$ops_head"; then
+    [ "$(sed -n 's/^sha=//p' "$dir/output")" = "$ops_head" ] || {
+      printf 'ops-checkout record step for a pinned run did not record the pinned commit\n' >&2; status=1; }
+    ! grep -qF 'did NOT use the pin' "$dir/summary" || {
+      printf 'ops-checkout record step says a pinned run did not use the pin\n' >&2; status=1; }
+  else
+    printf 'ops-checkout record step failed for a pinned run that checked out the pin\n' >&2; status=1
+  fi
+  if run_record pinned "$other"; then
+    printf 'ops-checkout record step passed a pinned run that checked out %s, not the pin %s\n' "$ops_head" "$other" >&2; status=1
+  else
+    grep -qF "::error title=ops checkout::checked out $ops_head, not the pinned $other" "$dir/stdout" || {
+      printf 'ops-checkout record step refused a pin mismatch without naming both commits\n' >&2; status=1; }
+    [ ! -s "$dir/output" ] || { printf 'ops-checkout record step wrote outputs for a pin mismatch\n' >&2; status=1; }
+  fi
+  rm -rf "$dir"
+  return "$status"
+}
+
+# Codex #1768 r3 P3: the wiring check proves each failure step is given the ops
+# commit, not that it says it. This EXECUTES every ops job's failure step with
+# the ops outputs set, and asserts its ::error line and its summary line carry
+# the commit, the mode and the pin.
+check_fullstack_failure_step_behaviour() {
+  local file="$1" status=0 dir job block script checked=0
+  local sha=fedcba9876543210fedcba9876543210fedcba98 pin=0123456789abcdef0123456789abcdef01234567 mode=schedule_floating
+  dir="$(mktemp -d)"
+  while IFS= read -r job; do
+    block="$(job_block "$file" "$job")"
+    grep -qF 'dev-health/ops' <<<"$block" || continue
+    script="$dir/$job.sh"
+    awk '
+      /- name: Name the dev-health-ops commit of a failed run/ { in_step=1 }
+      in_step && /^        run: \|$/ { in_run=1; next }
+      in_run && /^      - / { exit }
+      in_run && NF > 0 && !/^          / { exit }
+      in_run { sub(/^          /, ""); print }
+    ' <<<"$block" > "$script"
+    if [ ! -s "$script" ]; then
+      printf 'job %s: could not extract the failed-run ops naming step script\n' "$job" >&2; status=1; continue
+    fi
+    : > "$dir/summary"
+    if ! env -i PATH="$PATH" OPS_SHA="$sha" OPS_MODE="$mode" OPS_PIN="$pin" GITHUB_STEP_SUMMARY="$dir/summary" \
+      bash -e "$script" > "$dir/stdout" 2>&1; then
+      printf 'job %s: the failed-run ops naming step itself failed\n' "$job" >&2; status=1; continue
+    fi
+    checked=$((checked + 1))
+    awk -v s="$sha" -v m="$mode" -v p="$pin" '/^::error / && index($0, s) && index($0, m) && index($0, p) { found=1 } END { exit !found }' "$dir/stdout" || {
+      printf 'job %s: the failed-run step emits no ::error line naming ops %s (%s, pin %s)\n' "$job" "$sha" "$mode" "$pin" >&2; status=1; }
+    awk -v s="$sha" -v m="$mode" -v p="$pin" 'index($0, s) && index($0, m) && index($0, p) { found=1 } END { exit !found }' "$dir/summary" || {
+      printf 'job %s: the failed-run step writes no summary line naming ops %s (%s, pin %s)\n' "$job" "$sha" "$mode" "$pin" >&2; status=1; }
+  done < <(awk '/^jobs:/ { in_jobs=1; next } in_jobs && /^  [A-Za-z0-9_-]+:$/ { sub(/:$/, ""); sub(/^  /, ""); print }' "$file")
+  [ "$checked" -gt 0 ] || { printf 'no failed-run ops naming step was executed in %s\n' "$file" >&2; status=1; }
+  rm -rf "$dir"
   return "$status"
 }
 
@@ -1800,8 +1908,11 @@ check_ops_checkout_action "$ops_checkout_action"
 check_fullstack_ops_checkout_wiring "$fullstack_workflow"
 check_ops_checkout_chooser_behaviour "$ops_checkout_action" "$(tr -d '[:space:]' < "$fullstack_ops_pin")"
 check_web_agreement_selects_ops_pin "$fullstack_workflow"
+check_ops_checkout_record_behaviour "$ops_checkout_action"
+check_fullstack_failure_step_behaviour "$fullstack_workflow"
 printf 'PASS: fullstack-acceptance checks dev-health-ops out at the pin through one action and names it on failure\n'
 printf 'PASS: the ops chooser, executed, pins PR/push/dispatch runs, floats only the schedule, and refuses a branch pin; a re-pin PR runs the browser agreement\n'
+printf 'PASS: the ops record step, executed, records the commit checked out and refuses a pin mismatch; every failed-run step, executed, names the ops commit\n'
 for other_workflow in "$repo_root"/.github/workflows/*.yml; do
   check_container_switch_in_scope "$other_workflow"
 done
@@ -1970,6 +2081,89 @@ decide_forced_true="$tmpdir/fullstack-decide-forced-true.yml"
 sed 's/^          if git diff --name-only "\$base" "\$head" | grep -Eq "\$paths"; then$/          if true; then/' "$fullstack_workflow" > "$decide_forced_true"
 mutate_or_die "$fullstack_workflow" "$decide_forced_true" 'decide_forced_true'
 assert_check_fails 'the browser agreement decision no longer discriminates' check_web_agreement_selects_ops_pin "$decide_forced_true"
+record_sha_is_pin="$tmpdir/ops-checkout-record-sha-is-pin.yml"
+# shellcheck disable=SC2016  # the $ names are literal text in the action file
+sed 's/^        sha="\$(git -C "\$OPS_PATH" rev-parse HEAD)"$/        sha="$PIN"/' "$ops_checkout_action" > "$record_sha_is_pin"
+mutate_or_die "$ops_checkout_action" "$record_sha_is_pin" 'record_sha_is_pin'
+assert_check_fails 'the record step reports the pin as the commit it used' check_ops_checkout_record_behaviour "$record_sha_is_pin"
+# One clause at a time: the step output, the job environment and the summary
+# each name the pin instead of the commit checked out. The lines are matched
+# and replaced literally (ENVIRON, so awk applies no escapes).
+replace_literal_line() {
+  FROM="$3" TO="$4" awk '$0 == ENVIRON["FROM"] && !done { print ENVIRON["TO"]; done=1; next } { print }' "$1" > "$2"
+}
+record_output_is_pin="$tmpdir/ops-checkout-record-output-is-pin.yml"
+# shellcheck disable=SC2016  # the $ names are literal text in the action file
+replace_literal_line "$ops_checkout_action" "$record_output_is_pin" \
+  "        printf 'sha=%s\n' \"\$sha\" >> \"\$GITHUB_OUTPUT\"" \
+  "        printf 'sha=%s\n' \"\$PIN\" >> \"\$GITHUB_OUTPUT\""
+mutate_or_die "$ops_checkout_action" "$record_output_is_pin" 'record_output_is_pin'
+assert_check_fails 'the record step output names the pin' check_ops_checkout_record_behaviour "$record_output_is_pin"
+record_env_is_pin="$tmpdir/ops-checkout-record-env-is-pin.yml"
+# shellcheck disable=SC2016  # the $ names are literal text in the action file
+replace_literal_line "$ops_checkout_action" "$record_env_is_pin" \
+  "        printf 'E2E_OPS_REF=%s\nE2E_OPS_REF_MODE=%s\n' \"\$sha\" \"\$MODE\" >> \"\$GITHUB_ENV\"" \
+  "        printf 'E2E_OPS_REF=%s\nE2E_OPS_REF_MODE=%s\n' \"\$PIN\" \"\$MODE\" >> \"\$GITHUB_ENV\""
+mutate_or_die "$ops_checkout_action" "$record_env_is_pin" 'record_env_is_pin'
+assert_check_fails 'the record step exports the pin as E2E_OPS_REF' check_ops_checkout_record_behaviour "$record_env_is_pin"
+record_summary_is_pin="$tmpdir/ops-checkout-record-summary-is-pin.yml"
+# shellcheck disable=SC2016  # the $ names are literal text in the action file
+replace_literal_line "$ops_checkout_action" "$record_summary_is_pin" \
+  '          echo "- commit: \`$sha\`"' \
+  '          echo "- commit: \`$PIN\`"'
+mutate_or_die "$ops_checkout_action" "$record_summary_is_pin" 'record_summary_is_pin'
+assert_check_fails 'the record step summary names the pin as the commit' check_ops_checkout_record_behaviour "$record_summary_is_pin"
+record_mismatch_passes="$tmpdir/ops-checkout-record-mismatch-passes.yml"
+awk '/not the pinned %s/ { flag=1; print; next } flag && /^          exit 1$/ { flag=0; next } { flag=0; print }' "$ops_checkout_action" > "$record_mismatch_passes"
+mutate_or_die "$ops_checkout_action" "$record_mismatch_passes" 'record_mismatch_passes'
+check_ops_checkout_action "$record_mismatch_passes" 2>/dev/null && printf 'NOTE: the text check alone passes a pin mismatch that does not exit (codex #1768 r3 P3); the behaviour check must not\n'
+assert_check_fails 'a pinned run that did not check out the pin no longer fails' check_ops_checkout_record_behaviour "$record_mismatch_passes"
+failure_step_no_error="$tmpdir/fullstack-failure-step-no-error.yml"
+awk '/^          echo "::error title=fullstack-acceptance failed::/ && !done { print "          :"; done=1; next } { print }' "$fullstack_workflow" > "$failure_step_no_error"
+mutate_or_die "$fullstack_workflow" "$failure_step_no_error" 'failure_step_no_error'
+check_fullstack_ops_checkout_wiring "$failure_step_no_error" 2>/dev/null && printf 'NOTE: the wiring check alone passes a failure step that emits nothing (codex #1768 r3 P3); the behaviour check must not\n'
+assert_check_fails 'the first job'"'"'s failure step emits no ::error line' check_fullstack_failure_step_behaviour "$failure_step_no_error"
+failure_step_no_summary="$tmpdir/fullstack-failure-step-no-summary.yml"
+summary_lines="$(grep -c 'Failed with dev-health-ops' "$fullstack_workflow")"
+awk -v last="$summary_lines" '/Failed with dev-health-ops/ { n++; if (n == last) { print "          :"; next } } { print }' "$fullstack_workflow" > "$failure_step_no_summary"
+mutate_or_die "$fullstack_workflow" "$failure_step_no_summary" 'failure_step_no_summary'
+assert_check_fails 'the last job'"'"'s failure step writes no summary line' check_fullstack_failure_step_behaviour "$failure_step_no_summary"
+
+# Codex #1768 r3 P3: the executed checks must hold under a caller git config
+# that signs every commit with a signer that always fails, and under one whose
+# pre-commit hook always fails. Each config must first be shown to fail a plain
+# commit, so the pass below is not vacuous.
+hostile_hooks="$tmpdir/hostile-hooks"
+mkdir -p "$hostile_hooks"
+printf '#!/bin/sh\nexit 1\n' > "$hostile_hooks/pre-commit"
+chmod +x "$hostile_hooks/pre-commit"
+with_signing_that_fails() {
+  GIT_CONFIG_COUNT=2 GIT_CONFIG_KEY_0=commit.gpgsign GIT_CONFIG_VALUE_0=true \
+    GIT_CONFIG_KEY_1=gpg.program GIT_CONFIG_VALUE_1=false "$@"
+}
+with_hook_that_fails() {
+  GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=core.hooksPath GIT_CONFIG_VALUE_0="$hostile_hooks" "$@"
+}
+for hostile in with_signing_that_fails with_hook_that_fails; do
+  probe="$tmpdir/probe-$hostile"
+  git init -q "$probe"
+  if "$hostile" git -C "$probe" -c user.email=t@t -c user.name=t commit -q --allow-empty -m probe >/dev/null 2>&1; then
+    printf 'NEGATIVE CONTROL SETUP FAILED: %s did not stop a plain commit\n' "$hostile" >&2; exit 1
+  fi
+  "$hostile" check_web_agreement_selects_ops_pin "$fullstack_workflow" || {
+    printf 'FAIL: the browser agreement decision check does not hold %s in the caller git config\n' "$hostile" >&2; exit 1; }
+  "$hostile" check_ops_checkout_record_behaviour "$ops_checkout_action" || {
+    printf 'FAIL: the ops record check does not hold %s in the caller git config\n' "$hostile" >&2; exit 1; }
+  if ! (
+    # shellcheck disable=SC2329  # redefined on purpose; check_web_agreement_selects_ops_pin calls it
+    throwaway_git() { git -c user.email=t@t -c user.name=t "$@"; }
+    if "$hostile" check_web_agreement_selects_ops_pin "$fullstack_workflow" 2>"$tmpdir/inherit.err"; then exit 1; fi
+    grep -qF 'the web-agreement decide step failed to run' "$tmpdir/inherit.err"
+  ); then
+    printf 'NEGATIVE CONTROL FAILED: throwaway commits that inherit %s did not make the decision check fail to run\n' "$hostile" >&2; exit 1
+  fi
+done
+printf 'PASS: the executed ops checks hold under a failing signer and a failing hook, and fail to run, loudly, without their git overrides\n'
 printf 'PASS: the CHAOS-11974 ops pin checks reject a branch pin, a short pin, a loose regex, a floating checkout, a floating pull request, a missing pin verification, a direct ops checkout, a missing and an always-on failure step\n'
 modcache_stale_pin="$tmpdir/modcache-stale-pin.txt"
 sed 's/^gotest.tools\/gotestsum@.*/gotest.tools\/gotestsum@v0.0.1/' "$modcache_pins" > "$modcache_stale_pin"
