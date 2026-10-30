@@ -3143,7 +3143,13 @@ reservation (CHAOS-11912, `admitInvestigationSubmission`); a stream whose reques
 names no submission reserves one with the same generator
 (`contextfabric.NewInvestigationResultID`, `WithReservedResultID`). The route
 installs the sink and writes the 200, the headers and `accepted` (with the
-submission id) together. A pump goroutine writes the sink's transitions and the
+submission id and the thread id the request sent) together. The writer caps
+bytes on the wire, framing included: a frame at most max serialized bytes + 64
+KiB (not written when over; a result over it ends as `error{budget_refusal}`),
+the stream at most 8 MiB, with the last max serialized bytes + 64 KiB reserved
+for the terminal -- a non-terminal frame that would cross into the reserve is
+not written, the stream ends with `error{budget_refusal}` inside it and the run
+is cancelled. A pump goroutine writes the sink's transitions and the
 heartbeats. When `Investigate` returns, the pump drains and stops, and the handler
 runs `deliverInvestigationOutcome` -- the ONE delivery the JSON path runs too
 (abandon or finish the submission, then `writeContextFabricError` or
