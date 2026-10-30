@@ -87,22 +87,16 @@ func TestAHeaderlessAnswerStaysOrganizationBearer(t *testing.T) {
 	}
 }
 
-// The implicit namespace is the server's: a client's X-ACR-Submission-ID in
-// it is refused before anything is admitted.
-func TestAClientSubmissionIDInTheImplicitNamespaceIsRefused(t *testing.T) {
+// Without a submission store (a runtime composed without one; the hosted
+// runtime always has one) a header-less create runs uncounted, as before, and
+// says so at Warn on the admission line.
+func TestAHeaderlessCreateWithoutAStoreRunsAndSaysSo(t *testing.T) {
 	harness, _ := newMemorySubmissionHarness(t, 1)
-	refused := harness.post(0, harness.tokenA, contextfabric.ImplicitSubmissionIDPrefix+"0123456789abcdef", submissionQuestion)
-	if refused.Code != http.StatusBadRequest || errorEnvelopeOf(t, refused).Error.Code != "invalid_request" {
-		t.Fatalf("answer = %d %s, want 400 invalid_request", refused.Code, refused.Body.String())
-	}
-	if got := harness.investigator.executions.Load(); got != 0 {
-		t.Fatalf("executions = %d, want 0", got)
-	}
-	if status := harness.status(0, harness.tokenA, contextfabric.ImplicitSubmissionIDPrefix+"0123456789abcdef"); status.Code != http.StatusNotFound {
-		t.Fatalf("status in the implicit namespace = %d %s, want 404", status.Code, status.Body.String())
-	}
-	if !contextfabric.IsImplicitSubmissionID(contextfabric.NewImplicitSubmissionID()) || !contextfabric.ValidSubmissionID(contextfabric.NewImplicitSubmissionID()) {
-		t.Fatal("a minted implicit id is not a valid submission id in the implicit namespace")
+	harness.apps[0].runtime.InvestigationSubmissions = nil
+	servedResultID(t, harness.post(0, harness.tokenA, "", submissionQuestion))
+	logs := harness.logs[0].String()
+	if !strings.Contains(logs, `"level":"WARN"`) || !strings.Contains(logs, `"outcome":"store_unavailable"`) || !strings.Contains(logs, `"error_class":"store_not_configured"`) {
+		t.Fatalf("the uncounted header-less create is not on a Warn admission line:\n%s", logs)
 	}
 }
 
@@ -121,22 +115,37 @@ func (s *admissionRecordingStore) AdmitSubmission(ctx context.Context, admission
 	return s.Store.AdmitSubmission(ctx, admission, now)
 }
 
-// An implicit record exists and is final after its run, and it has no status,
-// not even for its own principal: the id is the service's.
-func TestAnImplicitRecordHasNoStatus(t *testing.T) {
+// An implicit record is admitted under a minted, valid key and is released
+// after its run: final, naming no result (its answer is not its record's).
+func TestAnImplicitRecordIsReleasedAndNamesNoResult(t *testing.T) {
 	var clock *submissionClock
 	store := &admissionRecordingStore{Store: memoryinvestigation.NewStoreWithClock(func() time.Time { return clock.Now() })}
 	harness := newSubmissionHarness(t, store)
 	clock = harness.clock
 	servedResultID(t, harness.post(0, harness.tokenA, "", submissionQuestion))
-	if len(store.keys) != 1 || !contextfabric.IsImplicitSubmissionID(store.keys[0].SubmissionID) {
+	if len(store.keys) != 1 || !contextfabric.IsImplicitSubmissionID(store.keys[0].SubmissionID) || !contextfabric.ValidSubmissionID(store.keys[0].SubmissionID) {
 		t.Fatalf("admissions %+v, want one implicit key", store.keys)
 	}
 	record, err := store.GetSubmission(t.Context(), store.keys[0], harness.clock.Now())
 	if err != nil || record.State != contextfabric.SubmissionDoneUnsaved || record.ResultID != "" {
 		t.Fatalf("the implicit record = %+v (%v), want released (done_unsaved, no result)", record, err)
 	}
-	if status := harness.status(0, harness.tokenA, store.keys[0].SubmissionID); status.Code != http.StatusNotFound {
-		t.Fatalf("status of the principal's own implicit record = %d %s, want 404", status.Code, status.Body.String())
+}
+
+// Round-1 P1: the prefix is an operator marker, not a reserved namespace. A
+// client submission id that starts with it is an ordinary submission, as it
+// was before this change: admitted, replayed on a retry, its status served.
+func TestAClientSubmissionIDWithTheImplicitPrefixIsAnOrdinarySubmission(t *testing.T) {
+	harness, _ := newMemorySubmissionHarness(t, 2)
+	id := contextfabric.ImplicitSubmissionIDPrefix + "client-0001"
+	first := servedResultID(t, harness.post(0, harness.tokenA, id, submissionQuestion))
+	if again := servedResultID(t, harness.post(1, harness.tokenA, id, submissionQuestion)); again != first {
+		t.Fatalf("replay = %s, want %s", again, first)
+	}
+	if status := harness.status(1, harness.tokenA, id); status.Code != http.StatusOK || !strings.Contains(status.Body.String(), first) {
+		t.Fatalf("status = %d %s, want 200 naming %s", status.Code, status.Body.String(), first)
+	}
+	if got := harness.investigator.executions.Load(); got != 1 {
+		t.Fatalf("executions = %d, want 1", got)
 	}
 }

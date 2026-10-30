@@ -1,5 +1,5 @@
 # Generated from acr-v1.json by `go run ./cmd/contractcheck -write`. DO NOT EDIT.
-# canonical-content-sha256: d1b77fc039388d926f9ad9d1525148a48330546ed1b080c0aff85f1275615f93
+# canonical-content-sha256: 6462b4cf47524a026888c89da558b364823ef966319e76f0f9379121fb6844f7
 openapi: "3.1.0"
 info:
   description: "Private hosted API for evidence-backed agent context packets, authorized provenance expansion, replay snapshots, and opt-in episode writeback. External Push is a separate API plane."
@@ -992,7 +992,7 @@ components:
         maxLength: 256
         type: "string"
     SubmissionID:
-      description: "Optional id of one user submit (CHAOS-11912): 8 to 128 characters of letters, digits, '.', '_', ':' and '-' (a UUID fits). The service admits the id once for the authenticated principal, bound to the request's semantic digest (every body field but request_id and consumer.name/consumer.version; consumer.surface is included, trimmed), and runs the request at most once under it. A repeat of an admitted id never runs the request again: a done submission is answered with its stored result exactly as GET /api/v1/context-fabric/investigations/{result_id} serves it, re-authorized for the caller; any other repeat is a 409 submission_mismatch, submission_in_progress (with Retry-After), submission_unsaved or submission_abandoned. A result that completes a submission is served to that submission's principal only, on every read surface. A malformed value, or one that starts with acr-implicit- (the service's own namespace), is 400 invalid_request. Absent, the request runs at most once and is not repeatable, and its result keeps organization-bearer reads; when it runs on the deployment's model it is admitted under a server-minted key against the same shared limits (429 concurrency_limited / allowance_exhausted)."
+      description: "Optional id of one user submit (CHAOS-11912): 8 to 128 characters of letters, digits, '.', '_', ':' and '-' (a UUID fits). The service admits the id once for the authenticated principal, bound to the request's semantic digest (every body field but request_id and consumer.name/consumer.version; consumer.surface is included, trimmed), and runs the request at most once under it. A repeat of an admitted id never runs the request again: a done submission is answered with its stored result exactly as GET /api/v1/context-fabric/investigations/{result_id} serves it, re-authorized for the caller; any other repeat is a 409 submission_mismatch, submission_in_progress (with Retry-After), submission_unsaved or submission_abandoned. A result that completes a submission is served to that submission's principal only, on every read surface. A malformed value is 400 invalid_request. Absent, the request runs at most once and is not repeatable, and its result keeps organization-bearer reads; when it runs on the deployment's model it is admitted under a server-minted key against the same shared limits (429 concurrency_limited / allowance_exhausted)."
       in: "header"
       name: "X-ACR-Submission-ID"
       required: false

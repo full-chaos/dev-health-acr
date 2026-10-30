@@ -219,13 +219,28 @@ func TestSubmissionOnPostgresAcrossTwoInstances(t *testing.T) {
 		if running != 0 {
 			t.Fatalf("%d implicit records still running after their runs ended", running)
 		}
-		// An implicit record has no status, even for its own principal.
-		var implicitID string
-		if err := admin.QueryRowContext(context.Background(), `SELECT submission_id FROM acr.context_fabric_investigation_submissions WHERE submission_id LIKE 'acr-implicit-%' LIMIT 1`).Scan(&implicitID); err != nil {
+		// Whichever two won the slots, one more header-less create on each
+		// instance runs now (the slots are free) and leaves its implicit
+		// record released (done_unsaved, no result), never running.
+		releasedImplicit := func() int {
+			var n int
+			if err := admin.QueryRowContext(context.Background(), `SELECT count(*) FROM acr.context_fabric_investigation_submissions WHERE submission_id LIKE 'acr-implicit-%' AND state = 'done_unsaved' AND result_id IS NULL`).Scan(&n); err != nil {
+				t.Fatal(err)
+			}
+			return n
+		}
+		before := releasedImplicit()
+		harness.investigator.mode.Store(int32(runSave))
+		servedResultID(t, harness.post(0, harness.tokenA, "", submissionQuestion))
+		servedResultID(t, harness.post(1, harness.tokenA, "", submissionQuestion))
+		if after := releasedImplicit(); after != before+2 {
+			t.Fatalf("released implicit records %d → %d, want +2", before, after)
+		}
+		if err := admin.QueryRowContext(context.Background(), `SELECT count(*) FROM acr.context_fabric_investigation_submissions WHERE submission_id LIKE 'acr-implicit-%' AND state = 'running'`).Scan(&running); err != nil {
 			t.Fatal(err)
 		}
-		if status := harness.status(0, harness.tokenA, implicitID); status.Code != http.StatusNotFound {
-			t.Fatalf("status of an implicit record = %d %s, want 404", status.Code, status.Body.String())
+		if running != 0 {
+			t.Fatalf("%d implicit records running after every run ended", running)
 		}
 	})
 

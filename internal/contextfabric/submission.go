@@ -235,8 +235,9 @@ type SubmissionUnsavedMarker interface {
 // runs on the deployment's model is admitted under a fresh key of its own, so
 // the shared concurrency limits and the monthly allowance count it. Its
 // reserved result id never reaches the engine, so its answer stays unbound
-// (organization-bearer reads, as before), and nobody can repeat the key. A
-// client's X-ACR-Submission-ID may not start with it.
+// (organization-bearer reads, as before), and the client never learns the key.
+// The prefix marks an implicit record for operators; it is not a reserved
+// namespace (a client id may use it too: its key is its own principal's).
 const ImplicitSubmissionIDPrefix = "acr-implicit-"
 
 // NewImplicitSubmissionID mints an implicit admission's submission id: the

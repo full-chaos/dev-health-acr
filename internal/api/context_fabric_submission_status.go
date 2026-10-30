@@ -81,9 +81,7 @@ func (a *App) ContextFabricSubmissionStatusHandler(submissions contextfabric.Sub
 			return
 		}
 		submissionID := r.PathValue("submission_id")
-		// CHAOS-11997: an implicit admission (a create without the header)
-		// has no status to read; its id is the service's, never the client's.
-		if !contextfabric.ValidSubmissionID(submissionID) || contextfabric.IsImplicitSubmissionID(submissionID) {
+		if !contextfabric.ValidSubmissionID(submissionID) {
 			a.writeSubmissionNotFound(w, r, principal)
 			return
 		}

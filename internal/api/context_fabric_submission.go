@@ -82,14 +82,9 @@ type admittedInvestigationSubmission struct {
 }
 
 // investigationSubmissionID reads X-ACR-Submission-ID. Absent is ("", true);
-// one well-formed value is (value, true); anything else is ("", false),
-// including a value in the server's implicit namespace (CHAOS-11997).
+// one well-formed value is (value, true); anything else is ("", false).
 func investigationSubmissionID(r *http.Request) (string, bool) {
-	id, ok := investigationCorrelationHeader(r, contractsv1.ContextFabricSubmissionIDHeader)
-	if ok && contextfabric.IsImplicitSubmissionID(id) {
-		return "", false
-	}
-	return id, ok
+	return investigationCorrelationHeader(r, contractsv1.ContextFabricSubmissionIDHeader)
 }
 
 // investigationThreadID reads X-ACR-Thread-ID by the same rule.
@@ -165,8 +160,14 @@ func (a *App) logSubmissionAdmission(r *http.Request, principal storage.Principa
 	a.logger.InfoContext(r.Context(), ContextFabricSubmissionLogMessage, args...)
 }
 
+// errSubmissionStoreNotConfigured is the admission line's error for a
+// runtime composed without a submission store.
+var errSubmissionStoreNotConfigured = errors.New("context fabric: no investigation submission store is configured")
+
 func submissionStoreErrorClass(err error) string {
 	switch {
+	case errors.Is(err, errSubmissionStoreNotConfigured):
+		return "store_not_configured"
 	case errors.Is(err, context.DeadlineExceeded):
 		return "deadline_exceeded"
 	case errors.Is(err, context.Canceled):
@@ -234,11 +235,15 @@ func (a *App) admitInvestigationSubmission(w http.ResponseWriter, r *http.Reques
 // fresh and never handed to the engine, so the answer stays unbound
 // (organization-bearer reads by id, unchanged) and nothing can repeat the
 // key. With no submission store configured the create runs as before
-// (proceed, nil). Any other failure fails closed: the spend ceiling is not
+// (proceed, nil) and a Warn admission line. Any other failure fails closed: the spend ceiling is not
 // skipped because its store cannot be reached.
 func (a *App) admitImplicitInvestigation(w http.ResponseWriter, r *http.Request, principal storage.Principal, request contextfabric.InvestigationRequest, threadID string) (*admittedInvestigationSubmission, bool) {
 	store := a.investigationSubmissions()
 	if store == nil {
+		// A runtime composed without a submission store (the hosted runtime
+		// always has one): the create runs uncounted, as before, and says
+		// so on every such request.
+		a.logSubmissionAdmission(r, principal, SubmissionOutcomeStoreUnavailable, "", errSubmissionStoreNotConfigured)
 		return nil, true
 	}
 	key, err := contextfabric.SubmissionKeyFor(principal, contextfabric.NewImplicitSubmissionID())
