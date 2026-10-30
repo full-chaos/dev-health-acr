@@ -15,8 +15,9 @@
 -- key, so a replica still running the previous release reads and writes
 -- exactly as before during a rolling deploy. The previous release ignores the
 -- new columns (nullable). Rows it writes during the rollout carry no
--- canonical owner and are matched by their legacy pair only; re-running this
--- file (idempotent) classifies them.
+-- canonical owner and are matched by their legacy pair only. The runner
+-- applies a version once, so a later migration repeats this backfill after
+-- the rollout (the first-party browser client's migration does).
 --
 -- No inline BEGIN/COMMIT (the runner wraps the file). Idempotent.
 
