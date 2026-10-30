@@ -234,6 +234,19 @@ func cardinalityClaimAdmitted(existingClaims int) bool {
 	return existingClaims < contractsv1.ContextFabricClaimedFactsMaxCount
 }
 
+// moveCountSentenceToHead puts the count sentence at the head of a lead prose
+// field once. A document stored before the count led the head carries it
+// later in the field (last); it is moved, never stated twice.
+func moveCountSentenceToHead(answer, sentence string, maxRunes int) string {
+	if sentence == "" || strings.HasPrefix(answer, sentence) {
+		return answer
+	}
+	if index := strings.Index(answer, sentence); index >= 0 {
+		answer = strings.TrimSpace(strings.TrimSpace(answer[:index]) + " " + strings.TrimSpace(answer[index+len(sentence):]))
+	}
+	return leadWithCountSentence(answer, sentence, maxRunes)
+}
+
 // leadWithCountSentence puts the count sentence at the head of a lead prose
 // field and keeps the field inside its contract bound.
 //

@@ -3134,6 +3134,33 @@ func composeLeadProse(status InvestigationStatus, drivers []DriverJudgment, coho
 	return strings.TrimSpace(b.String())
 }
 
+// recomposeLeadProseForStatus recomposes both lead prose fields after the
+// served status changed from `from` to result.Status, keeping what the server
+// composed around them: the count and period sentences that lead the head
+// (leadWithCountSentence), and the narrated-cohort form that states no driver
+// list. Recomposing from the drivers alone dropped the count of a counting
+// answer and gave a narrated cohort its driver list back.
+func recomposeLeadProseForStatus(result *InvestigationResult, from InvestigationStatus) {
+	result.DirectJudgment = recomposeLeadField(result.DirectJudgment, from, result.Status, result.Drivers, result.Cohort, result.SubjectResolution, "Principal driver: ", directJudgmentMaxLength)
+	result.DeterministicAnswer = recomposeLeadField(result.DeterministicAnswer, from, result.Status, result.Drivers, result.Cohort, result.SubjectResolution, "Principal driver(s): ", deterministicAnswerMaxLength)
+}
+
+// recomposeLeadField finds which composition head is (with the details label,
+// or the narrated-cohort form without it), keeps the sentences the server put
+// before it, and composes the same form for the new status. A head that is
+// neither form is composed afresh with the label, as before.
+func recomposeLeadField(head string, from, to InvestigationStatus, drivers []DriverJudgment, cohort *Cohort, resolution SubjectResolution, label string, maxRunes int) string {
+	for _, form := range []string{label, ""} {
+		old := truncateAtSentenceBoundary(composeLeadProse(from, drivers, cohort, resolution, form), maxRunes)
+		if head != old && !strings.HasSuffix(head, " "+old) {
+			continue
+		}
+		lead := strings.TrimSpace(strings.TrimSuffix(head, old))
+		return leadWithCountSentence(truncateAtSentenceBoundary(composeLeadProse(to, drivers, cohort, resolution, form), maxRunes), lead, maxRunes)
+	}
+	return truncateAtSentenceBoundary(composeLeadProse(to, drivers, cohort, resolution, label), maxRunes)
+}
+
 // statusAnswers reports whether a status serves an answer a quick answer can
 // lead.
 func statusAnswers(status InvestigationStatus) bool {

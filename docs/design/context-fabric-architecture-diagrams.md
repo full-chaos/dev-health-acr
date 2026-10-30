@@ -1122,7 +1122,7 @@ by sorting on driver id:
 
 | Answer shape | Quick answer |
 |---|---|
-| A question that owes a count (any family) | the server's count sentence ("Counted N …"), then a single subject's period totals; both fields |
+| A question that owes a count (any family) | the server's count sentence ("Counted N …"), then a single subject's period totals and the period they rest on; both fields |
 | Project status (`subject_investigation`) | the first engine-ranked status driver: "Open items: N (DAY)" |
 | Team blockers | the principal driver that explains the most blocked team (engine rank by blocked count) |
 | A ranked cohort (`discovered_cohort_ranking`, a cohort whose ranking ran) | the first principal driver about the member of attention rank 1 |
@@ -1136,8 +1136,11 @@ before); every other answer states the remaining principal drivers after the
 status sentence. No display language is added: the quick answer is a served
 driver title or the server's count sentence. A no_match or clarification head
 keeps the status sentence first. The served-status restate replaces the first
-model-path status sentence at a sentence boundary, so a head that leads with
-the quick answer still states its served status.
+model-path status sentence at a sentence boundary after the quick answer, so a
+head that leads with the quick answer still states its served status. A late
+status floor recomposes the lead prose keeping the count sentences that lead it
+and the narrated-cohort form; a reused answer stored with its count last is
+served with the count moved to the head, once.
 
 **Live data gap disclosed, not hidden (CH readback, 2026-08-27, org
 `70d529e0-3c06-4597-8480-794fd02328b6`):** investment (6 rows), workload (12

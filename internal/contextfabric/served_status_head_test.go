@@ -107,7 +107,7 @@ func TestRestateServedStatusHeadFindsTheFirstStatusSentenceAtASentenceBoundary(t
 		{"two status sentences: only the opening one is replaced", complete + " " + degraded, partial + " " + degraded},
 		{"already the served sentence is unchanged", partial + " Principal driver: A.", partial + " Principal driver: A."},
 	} {
-		got := restateHeadSentence(row.head, partial, directJudgmentMaxLength)
+		got := restateHeadSentence(row.head, partial, "", directJudgmentMaxLength)
 		if got != row.want {
 			t.Errorf("%s: got %q, want %q", row.name, got, row.want)
 		}
@@ -174,7 +174,7 @@ func TestRestateServedStatusHeadKeepsTheCountSentenceAtTheLengthBound(t *testing
 			if len([]rune(stale)) > row.maxes {
 				t.Fatalf("%s: premise: stale head is %d runes, over %d", row.name, len([]rune(stale)), row.maxes)
 			}
-			got := restateHeadSentence(stale, statusSentence(InvestigationPartial, SubjectResolution{}), row.maxes)
+			got := restateHeadSentence(stale, statusSentence(InvestigationPartial, SubjectResolution{}), "", row.maxes)
 			if len([]rune(got)) > row.maxes {
 				t.Fatalf("%s fill %d: restated head is %d runes, over %d", row.name, fill, len([]rune(got)), row.maxes)
 			}
@@ -208,13 +208,32 @@ func TestRestateServedStatusHeadKeepsALeadingCountSentenceAtTheLengthBound(t *te
 		for fill := maxes - 140; fill <= maxes; fill += 7 {
 			body := lead + " " + statusSentence(InvestigationComplete, SubjectResolution{}) + " Principal driver(s): " + strings.Repeat("a", fill-160) + "; " + strings.Repeat("b", 60) + "."
 			stale := leadWithCountSentence(body, count, maxes)
-			got := restateHeadSentence(stale, partial, maxes)
+			got := restateHeadSentence(stale, partial, "", maxes)
 			if len([]rune(got)) > maxes {
 				t.Fatalf("max %d fill %d: restated head is %d runes", maxes, fill, len([]rune(got)))
 			}
 			if !strings.HasPrefix(got, count+" "+lead+" "+partial) {
 				t.Fatalf("max %d fill %d: restated head lost the count, the quick answer or the served sentence: %q", maxes, fill, got[:120])
 			}
+		}
+	}
+}
+
+// TestRestateServedStatusHeadStepsOverAQuickAnswerThatReadsLikeAStatus: the
+// restate replaces the composer's status sentence, never the quick answer
+// that leads the head, even when the driver's title reads like a status.
+func TestRestateServedStatusHeadStepsOverAQuickAnswerThatReadsLikeAStatus(t *testing.T) {
+	t.Parallel()
+	complete := statusSentence(InvestigationComplete, SubjectResolution{})
+	partial := statusSentence(InvestigationPartial, SubjectResolution{})
+	result := InvestigationResult{Status: InvestigationComplete, Drivers: []DriverJudgment{{DriverID: "driver_mimic", Standing: DriverPrincipal, Title: complete}}}
+	result.DirectJudgment = composeDirectJudgmentFrom(result.Status, result.Drivers, nil, result.SubjectResolution)
+	result.DeterministicAnswer = composeDeterministicAnswerFrom(result.Status, result.Drivers, nil, nil, result.SubjectResolution)
+	result.Status = InvestigationPartial
+	served := restateServedStatusHead(result)
+	for name, text := range map[string]string{"direct_judgment": served.DirectJudgment, "deterministic_answer": served.DeterministicAnswer} {
+		if want := complete + " " + partial; text != want {
+			t.Errorf("%s = %q, want %q (the quick answer kept, the status sentence after it restated)", name, text, want)
 		}
 	}
 }

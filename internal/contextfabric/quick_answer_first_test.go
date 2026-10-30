@@ -174,3 +174,38 @@ func TestSingleSubjectAnswerLeadsWithTheFirstServedDriverNotTheLowestID(t *testi
 		t.Errorf("direct_judgment = %q, want %q", result.DirectJudgment, want)
 	}
 }
+
+// TestAStatusFloorKeepsTheCountLeadAndTheNarratedForm: a floor that changes the
+// served status recomposes the lead prose for it, keeping the count sentence
+// the server put first and, for a narrated cohort, the form with no driver list.
+func TestAStatusFloorKeepsTheCountLeadAndTheNarratedForm(t *testing.T) {
+	drivers := []DriverJudgment{quickAnswerDriver("driver_lead", "Lead"), quickAnswerDriver("driver_detail", "Detail")}
+	partial := statusSentence(InvestigationPartial, SubjectResolution{})
+	count := "Counted 3 teams."
+
+	counted := InvestigationResult{Status: InvestigationNoMatch, Drivers: drivers}
+	counted.DirectJudgment = leadWithCountSentence(composeDirectJudgmentFrom(counted.Status, drivers, nil, counted.SubjectResolution), count, directJudgmentMaxLength)
+	counted.DeterministicAnswer = leadWithCountSentence(composeDeterministicAnswerFrom(counted.Status, drivers, nil, nil, counted.SubjectResolution), count, deterministicAnswerMaxLength)
+	floorNoMatchTo(&counted, InvestigationPartial)
+	if want := count + " Lead. " + partial + " Principal driver: Detail."; counted.DirectJudgment != want {
+		t.Errorf("floored direct_judgment = %q, want %q", counted.DirectJudgment, want)
+	}
+	if want := count + " Lead. " + partial + " Principal driver(s): Detail."; counted.DeterministicAnswer != want {
+		t.Errorf("floored deterministic_answer = %q, want %q", counted.DeterministicAnswer, want)
+	}
+
+	narrated := InvestigationResult{Status: InvestigationComplete, Drivers: drivers}
+	narrated.DirectJudgment, narrated.DeterministicAnswer = recomposeCohortAnswerNarrative(narrated.Status, drivers, nil, narrated.SubjectResolution)
+	floorNoMatchTo(&narrated, InvestigationPartial)
+	for name, text := range map[string]string{"direct_judgment": narrated.DirectJudgment, "deterministic_answer": narrated.DeterministicAnswer} {
+		if want := "Lead. " + partial; text != want {
+			t.Errorf("floored narrated %s = %q, want %q (no driver list)", name, text, want)
+		}
+	}
+
+	fixed := InvestigationResult{Status: InvestigationNoMatch, Drivers: drivers, DirectJudgment: "A client-written answer.", DeterministicAnswer: "A client-written answer."}
+	floorNoMatchTo(&fixed, InvestigationPartial)
+	if want := composeDirectJudgmentFrom(InvestigationPartial, drivers, nil, SubjectResolution{}); fixed.DirectJudgment != want {
+		t.Errorf("a head of neither form = %q, want it composed afresh %q", fixed.DirectJudgment, want)
+	}
+}

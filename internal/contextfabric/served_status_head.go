@@ -22,9 +22,20 @@ func restateServedStatusHead(result InvestigationResult) InvestigationResult {
 	if !ok {
 		return result
 	}
-	result.DirectJudgment = restateHeadSentence(result.DirectJudgment, want, directJudgmentMaxLength)
-	result.DeterministicAnswer = restateHeadSentence(result.DeterministicAnswer, want, deterministicAnswerMaxLength)
+	lead := quickAnswerSentence(result)
+	result.DirectJudgment = restateHeadSentence(result.DirectJudgment, want, lead, directJudgmentMaxLength)
+	result.DeterministicAnswer = restateHeadSentence(result.DeterministicAnswer, want, lead, deterministicAnswerMaxLength)
 	return result
+}
+
+// quickAnswerSentence is the driver sentence the composer leads an answer's
+// head with (composeLeadProse), or "" when it leads with none.
+func quickAnswerSentence(result InvestigationResult) string {
+	ordered := principalDriversInAnswerOrder(result.Drivers, result.Cohort)
+	if len(ordered) == 0 {
+		return ""
+	}
+	return leadDriverSentence(ordered[0])
 }
 
 func modelPathStatusSentence(status InvestigationStatus) (string, bool) {
@@ -37,10 +48,18 @@ func modelPathStatusSentence(status InvestigationStatus) (string, bool) {
 
 // restateHeadSentence replaces the first model-path status sentence that
 // stands at a sentence boundary of head (the head's start, or after a sentence
-// that ends in ". ") with want. A head whose first such sentence is already
-// want, or that carries none, is returned unchanged.
-func restateHeadSentence(head, want string, maxLength int) string {
-	at, stale := firstModelPathStatusSentence(head)
+// that ends in ". ", "? " or "! ") with want. The search starts after lead, the
+// quick answer the composer put first, when head carries it: a driver title
+// that reads like a status sentence is the answer, not the status. A head that
+// carries no such sentence is returned unchanged.
+func restateHeadSentence(head, want, lead string, maxLength int) string {
+	from := 0
+	if lead != "" {
+		if index := strings.Index(head, lead); index >= 0 {
+			from = index + len(lead)
+		}
+	}
+	at, stale := firstModelPathStatusSentence(head, from)
 	if stale == "" {
 		return head
 	}
@@ -49,11 +68,11 @@ func restateHeadSentence(head, want string, maxLength int) string {
 
 // firstModelPathStatusSentence finds the first model-path status sentence at a
 // sentence boundary of head: its byte offset and its text, or "" for none.
-func firstModelPathStatusSentence(head string) (int, string) {
+func firstModelPathStatusSentence(head string, start int) (int, string) {
 	best, found := -1, ""
 	for _, status := range []InvestigationStatus{InvestigationComplete, InvestigationPartial, InvestigationDegraded} {
 		sentence, _ := modelPathStatusSentence(status)
-		for from := 0; from <= len(head); {
+		for from := start; from <= len(head); {
 			index := strings.Index(head[from:], sentence)
 			if index < 0 {
 				break
