@@ -170,7 +170,10 @@ func encodeStageScenarioAnswer(t *testing.T, result InvestigationResult) []byte 
 
 // TestStageScenarioAnswersAreTheGoldens holds what Investigate serves, with no
 // sink installed, byte-equal to the goldens recorded before the stage sites
-// existed.
+// existed. A golden is recorded again (ACR_WRITE_STAGE_SCENARIO_GOLDENS=1)
+// only for an answer change made on purpose: answered.json was recorded again
+// when the project status observations put the open items first, which puts
+// the readiness limitation first.
 func TestStageScenarioAnswersAreTheGoldens(t *testing.T) {
 	for stem, faults := range stageScenarioAnswers {
 		t.Run(stem, func(t *testing.T) {
