@@ -21,6 +21,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"strings"
 	"testing"
 	"time"
 
@@ -1094,6 +1095,12 @@ func TestAReusedAnswerStatesItsCardinality(t *testing.T) {
 	}
 	if err := contractsv1.ValidateContextFabricPlanRequirementOutcomeRow(rows[0]); err != nil {
 		t.Fatalf("the backfilled row does not validate: %v", err)
+	}
+	// The count is the quick answer: the reused answer leads both lead prose
+	// fields with it, as a fresh one does.
+	count := cardinalityAnswerSentence(MembershipCardinality{Resolved: true, Kind: SubjectTeam, Served: 3, Declared: 3})
+	if !strings.HasPrefix(served.DeterministicAnswer, count+" ") || !strings.HasPrefix(served.DirectJudgment, count+" ") {
+		t.Fatalf("reused deterministic_answer = %q direct_judgment = %q, want both to lead with %q", served.DeterministicAnswer, served.DirectJudgment, count)
 	}
 }
 

@@ -296,8 +296,8 @@ func applyOrganizationSubjectStatusFloor(result *InvestigationResult) {
 // narrative was withheld.
 func floorNoMatchTo(result *InvestigationResult, floor InvestigationStatus) {
 	result.Status = floor
-	result.DirectJudgment = composeDirectJudgmentFrom(result.Status, result.Drivers, result.SubjectResolution)
-	result.DeterministicAnswer = composeDeterministicAnswerFrom(result.Status, result.Drivers, result.ClaimedFacts, result.SubjectResolution)
+	result.DirectJudgment = composeDirectJudgmentFrom(result.Status, result.Drivers, result.Cohort, result.SubjectResolution)
+	result.DeterministicAnswer = composeDeterministicAnswerFrom(result.Status, result.Drivers, result.ClaimedFacts, result.Cohort, result.SubjectResolution)
 	composed, displaced := appendBoundedLimitations(result.Limitations, []string{synthesisNarrativeWithheldLimitation})
 	result.Limitations = composed
 	result.LimitationsDisplaced += displaced

@@ -207,8 +207,8 @@ func applySynthesisStatusOverride(result *InvestigationResult) *SynthesisStatusO
 	// result's copies are the ones that were validated and are about to be
 	// served, so rendering from them keeps the prose bound to the document
 	// it describes.
-	result.DirectJudgment = composeDirectJudgmentFrom(result.Status, result.Drivers, result.SubjectResolution)
-	result.DeterministicAnswer = composeDeterministicAnswerFrom(result.Status, result.Drivers, result.ClaimedFacts, result.SubjectResolution)
+	result.DirectJudgment = composeDirectJudgmentFrom(result.Status, result.Drivers, result.Cohort, result.SubjectResolution)
+	result.DeterministicAnswer = composeDeterministicAnswerFrom(result.Status, result.Drivers, result.ClaimedFacts, result.Cohort, result.SubjectResolution)
 	// appendBoundedLimitations is the ONE path by which anything is added
 	// to a composed result's limitations (CHAOS-3746 round-17 finding 1).
 	// The disclosure is registered service-authored in

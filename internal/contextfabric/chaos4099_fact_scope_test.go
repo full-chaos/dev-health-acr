@@ -121,8 +121,8 @@ func scopeServableResult() InvestigationResult {
 		CanonicalServiceVersion: "ops-v1", ModelIdentity: "unwired",
 	}
 	result.Status = InvestigationNoMatch
-	result.DirectJudgment = composeDirectJudgmentFrom(result.Status, result.Drivers, result.SubjectResolution)
-	result.DeterministicAnswer = composeDeterministicAnswerFrom(result.Status, result.Drivers, result.ClaimedFacts, result.SubjectResolution)
+	result.DirectJudgment = composeDirectJudgmentFrom(result.Status, result.Drivers, result.Cohort, result.SubjectResolution)
+	result.DeterministicAnswer = composeDeterministicAnswerFrom(result.Status, result.Drivers, result.ClaimedFacts, result.Cohort, result.SubjectResolution)
 	return result
 }
 

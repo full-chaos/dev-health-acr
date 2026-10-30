@@ -11,8 +11,8 @@ import (
 
 func servedHeadCandidate(modelStatus InvestigationStatus) (SubjectRef, InvestigationResult) {
 	project, candidate := outcomeAuthorityCandidate(modelStatus, contractsv1.ContextFabricAnswerCompletenessDegraded)
-	candidate.DirectJudgment = composeDirectJudgmentFrom(modelStatus, candidate.Drivers, candidate.SubjectResolution)
-	candidate.DeterministicAnswer = composeDeterministicAnswerFrom(modelStatus, candidate.Drivers, candidate.ClaimedFacts, candidate.SubjectResolution)
+	candidate.DirectJudgment = composeDirectJudgmentFrom(modelStatus, candidate.Drivers, candidate.Cohort, candidate.SubjectResolution)
+	candidate.DeterministicAnswer = composeDeterministicAnswerFrom(modelStatus, candidate.Drivers, candidate.ClaimedFacts, candidate.Cohort, candidate.SubjectResolution)
 	return project, candidate
 }
 
@@ -65,10 +65,10 @@ func TestRestateServedStatusHeadEveryPair(t *testing.T) {
 				result.Status = served
 				drivers := result.Drivers
 				got := restateServedStatusHead(result)
-				if want := composeDirectJudgmentFrom(served, drivers, result.SubjectResolution); got.DirectJudgment != want {
+				if want := composeDirectJudgmentFrom(served, drivers, result.Cohort, result.SubjectResolution); got.DirectJudgment != want {
 					t.Fatalf("DirectJudgment = %q, want %q", got.DirectJudgment, want)
 				}
-				if want := composeDeterministicAnswerFrom(served, drivers, result.ClaimedFacts, result.SubjectResolution); got.DeterministicAnswer != want {
+				if want := composeDeterministicAnswerFrom(served, drivers, result.ClaimedFacts, result.Cohort, result.SubjectResolution); got.DeterministicAnswer != want {
 					t.Fatalf("DeterministicAnswer = %q, want %q", got.DeterministicAnswer, want)
 				}
 			})
@@ -88,7 +88,7 @@ func TestRestateServedStatusHeadLeavesOtherTerminalsAlone(t *testing.T) {
 	}
 }
 
-func TestRestateServedStatusHeadFindsOnlyAnOpeningStatusSentence(t *testing.T) {
+func TestRestateServedStatusHeadFindsTheFirstStatusSentenceAtASentenceBoundary(t *testing.T) {
 	t.Parallel()
 	complete := statusSentence(InvestigationComplete, SubjectResolution{})
 	partial := statusSentence(InvestigationPartial, SubjectResolution{})
@@ -99,7 +99,11 @@ func TestRestateServedStatusHeadFindsOnlyAnOpeningStatusSentence(t *testing.T) {
 		{"opening sentence is replaced, the rest kept", complete + " Principal driver: A.", partial + " Principal driver: A."},
 		{"no recognisable status sentence is left alone", "Available work items.", "Available work items."},
 		{"empty head is left alone", "", ""},
-		{"a status sentence that is not the opening is left alone", "Note. " + complete, "Note. " + complete},
+		{"a status sentence after the quick answer is replaced", "Open items: 3 (2026-10-30). " + complete + " Principal driver: A.", "Open items: 3 (2026-10-30). " + partial + " Principal driver: A."},
+		{"a status sentence after a count and a quick answer is replaced", "Counted 3 teams. Fullchaos: health risk. " + complete, "Counted 3 teams. Fullchaos: health risk. " + partial},
+		{"a status sentence inside a sentence is left alone", "Note: " + complete, "Note: " + complete},
+		{"a status sentence after a question mark is replaced", "Is it ready? " + complete, "Is it ready? " + partial},
+		{"a status sentence after an exclamation mark is replaced", "Shipped! " + complete, "Shipped! " + partial},
 		{"two status sentences: only the opening one is replaced", complete + " " + degraded, partial + " " + degraded},
 		{"already the served sentence is unchanged", partial + " Principal driver: A.", partial + " Principal driver: A."},
 	} {
@@ -161,8 +165,8 @@ func TestRestateServedStatusHeadKeepsTheCountSentenceAtTheLengthBound(t *testing
 		maxes int
 		build func(status InvestigationStatus, filler string) string
 	}{
-		{"deterministic answer", deterministicAnswerMaxLength, func(status InvestigationStatus, filler string) string {
-			return appendCardinalitySentence(statusSentence(status, SubjectResolution{})+" Principal driver(s): "+filler+".", count)
+		{"deterministic answer stored with the count last", deterministicAnswerMaxLength, func(status InvestigationStatus, filler string) string {
+			return storedHeadEndingWithCount(statusSentence(status, SubjectResolution{})+" Principal driver(s): "+filler+".", count, deterministicAnswerMaxLength)
 		}},
 	} {
 		for fill := row.maxes - 140; fill <= row.maxes; fill += 7 {
@@ -176,6 +180,40 @@ func TestRestateServedStatusHeadKeepsTheCountSentenceAtTheLengthBound(t *testing
 			}
 			if !strings.HasPrefix(got, statusSentence(InvestigationPartial, SubjectResolution{})) || !strings.HasSuffix(got, count) {
 				t.Fatalf("%s fill %d: restated head lost the served sentence or the count sentence: %q ... %q", row.name, fill, got[:60], got[len(got)-80:])
+			}
+		}
+	}
+}
+
+// storedHeadEndingWithCount builds a head the way the composer did before the
+// count led it: the count sentence last, the earlier prose truncated to fit.
+// Stored documents carry this layout and are served again.
+func storedHeadEndingWithCount(answer, sentence string, maxRunes int) string {
+	joined := strings.TrimSpace(answer + " " + sentence)
+	if len([]rune(joined)) <= maxRunes {
+		return joined
+	}
+	return strings.TrimSpace(truncateAtSentenceBoundary(answer, maxRunes-len([]rune(sentence))-1) + " " + sentence)
+}
+
+// TestRestateServedStatusHeadKeepsALeadingCountSentenceAtTheLengthBound: a head
+// that leads with the count and the quick answer keeps both when the served
+// status sentence replaces the stale one, at every length up to the bound.
+func TestRestateServedStatusHeadKeepsALeadingCountSentenceAtTheLengthBound(t *testing.T) {
+	t.Parallel()
+	count := cardinalityAnswerSentence(MembershipCardinality{Resolved: true, Kind: SubjectTeam, Served: 3, Declared: 3})
+	lead := "Fullchaos: health risk."
+	partial := statusSentence(InvestigationPartial, SubjectResolution{})
+	for _, maxes := range []int{directJudgmentMaxLength, deterministicAnswerMaxLength} {
+		for fill := maxes - 140; fill <= maxes; fill += 7 {
+			body := lead + " " + statusSentence(InvestigationComplete, SubjectResolution{}) + " Principal driver(s): " + strings.Repeat("a", fill-160) + "; " + strings.Repeat("b", 60) + "."
+			stale := leadWithCountSentence(body, count, maxes)
+			got := restateHeadSentence(stale, partial, maxes)
+			if len([]rune(got)) > maxes {
+				t.Fatalf("max %d fill %d: restated head is %d runes", maxes, fill, len([]rune(got)))
+			}
+			if !strings.HasPrefix(got, count+" "+lead+" "+partial) {
+				t.Fatalf("max %d fill %d: restated head lost the count, the quick answer or the served sentence: %q", maxes, fill, got[:120])
 			}
 		}
 	}

@@ -141,7 +141,9 @@ func TestEngineRecomposesCohortAnswerNarrativeAfterNarration(t *testing.T) {
 	// principal-driver clause DeterministicAnswer carries -- it is reduced
 	// to the bare status sentence (never empty: Validate() requires a
 	// non-empty DirectJudgment for an answer-capable status).
-	wantDirectJudgment := "This investigation is partial: some canonical or graph coverage was unavailable."
+	// Quick answer first (chris 2026-10-30): the cohort's lead principal
+	// driver title, then the status sentence -- still no driver clause.
+	wantDirectJudgment := "Fullchaos: health risk. This investigation is partial: some canonical or graph coverage was unavailable."
 	if result.DirectJudgment != wantDirectJudgment {
 		t.Fatalf("result.DirectJudgment = %q, want %q after recomposition", result.DirectJudgment, wantDirectJudgment)
 	}
@@ -174,7 +176,7 @@ func TestEngineRecomposesCohortAnswerNarrativeAfterNarration(t *testing.T) {
 	//
 	// The discriminating half of this pin is unchanged and asserted explicitly
 	// below: driver clauses and scoring arithmetic stay out.
-	wantDeterministicAnswer := "This investigation is partial: some canonical or graph coverage was unavailable."
+	wantDeterministicAnswer := "Fullchaos: health risk. This investigation is partial: some canonical or graph coverage was unavailable."
 	if result.DeterministicAnswer != wantDeterministicAnswer {
 		t.Fatalf("result.DeterministicAnswer = %q, want %q (status composition: status sentence + served count)", result.DeterministicAnswer, wantDeterministicAnswer)
 	}

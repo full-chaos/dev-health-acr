@@ -2648,7 +2648,7 @@ func (r RuntimeAnswerSynthesizer) composeSynthesisResult(ctx context.Context, pr
 		// the opposite of an already-validated claim, e.g. "on track"
 		// prose next to a principal driver whose claimed fact says
 		// release_ready=false).
-		DirectJudgment:     composeDirectJudgment(draft, input.Graph.Resolution),
+		DirectJudgment:     composeDirectJudgment(draft, input.Graph),
 		CurrentState:       composeCurrentState(draft),
 		StrongestPressures: cloneSlice(draft.StrongestPressures),
 		Drivers:            cloneSlice(draft.Drivers),
@@ -2666,7 +2666,7 @@ func (r RuntimeAnswerSynthesizer) composeSynthesisResult(ctx context.Context, pr
 		// the only reading of "deterministic" that can't itself introduce
 		// a fresh, unchecked claim -- draft.DeterministicAnswer (whatever
 		// prose the model produced) is deliberately discarded here.
-		DeterministicAnswer: composeDeterministicAnswer(draft, input.Graph.Resolution),
+		DeterministicAnswer: composeDeterministicAnswer(draft, input.Graph),
 		Warnings:            cloneSlice(draft.Warnings),
 		Versions: VersionSet{
 			ServiceVersion:          nonEmptyVersion(r.Options.ServiceVersion, "unwired"),
@@ -3029,8 +3029,8 @@ func truncateAtSentenceBoundary(text string, maxRunes int) string {
 // prose) is never read. Distinct from composeDeterministicAnswer in
 // content, not just name -- this is the short judgment sentence alone,
 // without the trailing claimed-fact restatement DeterministicAnswer adds.
-func composeDirectJudgment(draft SynthesisDraft, resolution SubjectResolution) string {
-	return composeDirectJudgmentFrom(draft.Status, draft.Drivers, resolution)
+func composeDirectJudgment(draft SynthesisDraft, graph GraphContext) string {
+	return composeDirectJudgmentFrom(draft.Status, draft.Drivers, graph.Cohort, graph.Resolution)
 }
 
 // composeDirectJudgmentFrom is composeDirectJudgment's body, taking the
@@ -3045,15 +3045,8 @@ func composeDirectJudgment(draft SynthesisDraft, resolution SubjectResolution) s
 // field says means an override cannot render it differently from the
 // original composition, which is the whole point of recomposing rather
 // than patching the leading sentence.
-func composeDirectJudgmentFrom(status InvestigationStatus, drivers []DriverJudgment, resolution SubjectResolution) string {
-	var b strings.Builder
-	b.WriteString(statusSentence(status, resolution))
-	if titles := principalDriverTitles(drivers); len(titles) > 0 {
-		b.WriteString(" Principal driver: ")
-		b.WriteString(strings.Join(titles, "; "))
-		b.WriteString(".")
-	}
-	return truncateAtSentenceBoundary(strings.TrimSpace(b.String()), directJudgmentMaxLength)
+func composeDirectJudgmentFrom(status InvestigationStatus, drivers []DriverJudgment, cohort *Cohort, resolution SubjectResolution) string {
+	return truncateAtSentenceBoundary(composeLeadProse(status, drivers, cohort, resolution, "Principal driver: "), directJudgmentMaxLength)
 }
 
 // composeCurrentState renders CurrentState server-side from validated
@@ -3090,8 +3083,8 @@ func composeCurrentState(draft SynthesisDraft) string {
 // ValidateAgainst before this ever runs, so nothing here can diverge from
 // a canonical value -- there's just no longer a reason to restate it in
 // this field too.
-func composeDeterministicAnswer(draft SynthesisDraft, resolution SubjectResolution) string {
-	return composeDeterministicAnswerFrom(draft.Status, draft.Drivers, draft.ClaimedFacts, resolution)
+func composeDeterministicAnswer(draft SynthesisDraft, graph GraphContext) string {
+	return composeDeterministicAnswerFrom(draft.Status, draft.Drivers, draft.ClaimedFacts, graph.Cohort, graph.Resolution)
 }
 
 // composeDeterministicAnswerFrom is composeDeterministicAnswer's body.
@@ -3105,15 +3098,127 @@ func composeDeterministicAnswer(draft SynthesisDraft, resolution SubjectResoluti
 // renderer with the same arguments composeDeterministicAnswer itself
 // passes, instead of each caller needing to know which fields this
 // renderer currently reads.
-func composeDeterministicAnswerFrom(status InvestigationStatus, drivers []DriverJudgment, _ []ClaimedFact, resolution SubjectResolution) string {
+func composeDeterministicAnswerFrom(status InvestigationStatus, drivers []DriverJudgment, _ []ClaimedFact, cohort *Cohort, resolution SubjectResolution) string {
+	return truncateAtSentenceBoundary(composeLeadProse(status, drivers, cohort, resolution, "Principal driver(s): "), deterministicAnswerMaxLength)
+}
+
+// composeLeadProse composes a lead prose field quick answer first (chris
+// 2026-10-30: "always lean towards whatever the quick answer is with details
+// afterwards"). For an answer (complete, partial, degraded) with a principal
+// driver, the field opens with the quick answer -- the first principal driver
+// in answer order (principalDriversInAnswerOrder) -- then states the status
+// sentence, then, when detailsLabel is set, the other principal drivers. Every
+// other status keeps the status sentence first: there is no answer to lead with.
+//
+// It adds no display language of its own (CHAOS-4690): the quick answer is a
+// served driver title, and the status sentence and the details label are the
+// ones these fields already carried.
+func composeLeadProse(status InvestigationStatus, drivers []DriverJudgment, cohort *Cohort, resolution SubjectResolution, detailsLabel string) string {
+	ordered := principalDriversInAnswerOrder(drivers, cohort)
+	sentence := statusSentence(status, resolution)
 	var b strings.Builder
-	b.WriteString(statusSentence(status, resolution))
-	if titles := principalDriverTitles(drivers); len(titles) > 0 {
-		b.WriteString(" Principal driver(s): ")
-		b.WriteString(strings.Join(titles, "; "))
+	if len(ordered) > 0 && statusAnswers(status) {
+		b.WriteString(leadDriverSentence(ordered[0]))
+		b.WriteString(" ")
+		b.WriteString(sentence)
+		ordered = ordered[1:]
+	} else {
+		b.WriteString(sentence)
+	}
+	if detailsLabel != "" && len(ordered) > 0 {
+		b.WriteString(" ")
+		b.WriteString(detailsLabel)
+		b.WriteString(strings.Join(principalDriverTitles(ordered), "; "))
 		b.WriteString(".")
 	}
-	return truncateAtSentenceBoundary(strings.TrimSpace(b.String()), deterministicAnswerMaxLength)
+	return strings.TrimSpace(b.String())
+}
+
+// statusAnswers reports whether a status serves an answer a quick answer can
+// lead.
+func statusAnswers(status InvestigationStatus) bool {
+	return status == InvestigationComplete || status == InvestigationPartial || status == InvestigationDegraded
+}
+
+// leadDriverSentence states one driver's title as the opening sentence: its
+// source state qualifier inside the sentence, one closing period.
+func leadDriverSentence(driver DriverJudgment) string {
+	title := strings.TrimSpace(driver.Title)
+	qualifier := driverSourceStateQualifier(driver.SourceState)
+	if qualifier != "" {
+		title = strings.TrimRight(title, ".")
+	}
+	sentence := title + qualifier
+	if !strings.HasSuffix(sentence, ".") && !strings.HasSuffix(sentence, "?") && !strings.HasSuffix(sentence, "!") {
+		sentence += "."
+	}
+	return sentence
+}
+
+// principalDriversInAnswerOrder is the order lead prose states principal
+// drivers in: the quick answer first, the details after. Never by driver id.
+//
+//  1. Drivers the engine ranked (Rank > 0), by rank. The engine states a rank
+//     only where it built the answer itself: the project status drivers (the
+//     open items first) and the team blocker drivers.
+//  2. For a cohort whose ranking ran, the drivers about its top member
+//     (attention rank 1), in served order: the quick answer to a ranking or an
+//     ownership question is about the member that ranks first.
+//  3. Every other principal driver, in served order: the order the synthesis
+//     stated them in.
+//
+// A driver with an empty title states nothing and is left out.
+func principalDriversInAnswerOrder(drivers []DriverJudgment, cohort *Cohort) []DriverJudgment {
+	ordered := make([]DriverJudgment, 0, len(drivers))
+	for _, driver := range drivers {
+		if driver.Standing == DriverPrincipal && strings.TrimSpace(driver.Title) != "" {
+			ordered = append(ordered, driver)
+		}
+	}
+	top := topRankedCohortMembers(cohort)
+	class := func(driver DriverJudgment) int {
+		switch {
+		case driver.Rank > 0:
+			return 0
+		case driverAffectsAny(driver, top):
+			return 1
+		}
+		return 2
+	}
+	sort.SliceStable(ordered, func(i, j int) bool {
+		left, right := class(ordered[i]), class(ordered[j])
+		if left != right {
+			return left < right
+		}
+		return left == 0 && ordered[i].Rank < ordered[j].Rank
+	})
+	return ordered
+}
+
+// topRankedCohortMembers are the members of attention rank 1 of a cohort whose
+// ranking ran; none for a cohort that was not ranked.
+func topRankedCohortMembers(cohort *Cohort) []SubjectRef {
+	if cohort == nil {
+		return nil
+	}
+	var top []SubjectRef
+	for _, member := range cohort.Members {
+		if member.RankingComputed && member.AttentionRank == 1 {
+			top = append(top, member.Subject)
+		}
+	}
+	return top
+}
+
+func driverAffectsAny(driver DriverJudgment, subjects []SubjectRef) bool {
+	for _, affected := range driver.AffectedSubjects {
+		for _, subject := range subjects {
+			if affected.Kind == subject.Kind && affected.CanonicalID == subject.CanonicalID {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // statusSentence renders the one-sentence status prose every composed
@@ -3184,16 +3289,11 @@ func statusSentence(status InvestigationStatus, resolution SubjectResolution) st
 	}
 }
 
+// principalDriverTitles states each driver's title with its source state
+// qualifier, in the order given.
 func principalDriverTitles(drivers []DriverJudgment) []string {
-	filtered := make([]DriverJudgment, 0, len(drivers))
+	titles := make([]string, 0, len(drivers))
 	for _, driver := range drivers {
-		if driver.Standing == DriverPrincipal {
-			filtered = append(filtered, driver)
-		}
-	}
-	sort.Slice(filtered, func(i, j int) bool { return filtered[i].DriverID < filtered[j].DriverID })
-	titles := make([]string, 0, len(filtered))
-	for _, driver := range filtered {
 		if title := strings.TrimSpace(driver.Title); title != "" {
 			titles = append(titles, title+driverSourceStateQualifier(driver.SourceState))
 		}

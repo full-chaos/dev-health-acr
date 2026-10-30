@@ -1113,6 +1113,32 @@ dated rows it was read from. The rows are served once per answer: when another
 claim already carries the rows of the same fact, the status claim names the
 fact and carries none.
 
+**Lead prose leads with the quick answer, details after** (chris
+2026-10-30: "always lean towards whatever the quick answer is with details
+afterwards"). For an answer (complete, partial, degraded), `direct_judgment`
+and `deterministic_answer` open with the quick answer, then the status
+sentence, then the details. The quick answer is chosen from served data, never
+by sorting on driver id:
+
+| Answer shape | Quick answer |
+|---|---|
+| A question that owes a count (any family) | the server's count sentence ("Counted N …"), then a single subject's period totals; both fields |
+| Project status (`subject_investigation`) | the first engine-ranked status driver: "Open items: N (DAY)" |
+| Team blockers | the principal driver that explains the most blocked team (engine rank by blocked count) |
+| A ranked cohort (`discovered_cohort_ranking`, a cohort whose ranking ran) | the first principal driver about the member of attention rank 1 |
+| Any other answer (single subject, ownership, unranked cohort, trend, investment) | the first principal driver in served order |
+
+Order of principal drivers (`principalDriversInAnswerOrder`): engine `Rank`
+first, by rank; then, for a ranked cohort, the drivers about its top member;
+then the rest in served order. A cohort answer whose drivers were narrated
+states the quick answer and the status sentence only (no driver list, as
+before); every other answer states the remaining principal drivers after the
+status sentence. No display language is added: the quick answer is a served
+driver title or the server's count sentence. A no_match or clarification head
+keeps the status sentence first. The served-status restate replaces the first
+model-path status sentence at a sentence boundary, so a head that leads with
+the quick answer still states its served status.
+
 **Live data gap disclosed, not hidden (CH readback, 2026-08-27, org
 `70d529e0-3c06-4597-8480-794fd02328b6`):** investment (6 rows), workload (12
 rows), and readiness (17 rows) each returned real, non-zero rows for the

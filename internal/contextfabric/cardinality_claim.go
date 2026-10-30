@@ -234,34 +234,39 @@ func cardinalityClaimAdmitted(existingClaims int) bool {
 	return existingClaims < contractsv1.ContextFabricClaimedFactsMaxCount
 }
 
-// appendCardinalitySentence puts the count sentence on the answer and keeps the
-// result inside the contract bound.
+// leadWithCountSentence puts the count sentence at the head of a lead prose
+// field and keeps the field inside its contract bound.
 //
-// THE SENTENCE STANDS; THE EARLIER PROSE GIVES. Appending blindly is what made
-// a valid 11,985-rune answer oversized and got the whole result rejected: the
+// THE COUNT LEADS. For a question that owes a count, the count is the quick
+// answer (chris 2026-10-30: "always lean towards whatever the quick answer is
+// with details afterwards"), so it opens the field and the composed prose
+// follows it as the details.
+//
+// THE SENTENCE STANDS; THE OTHER PROSE GIVES. Adding blindly is what made a
+// valid 11,985-rune answer oversized and got the whole result rejected: the
 // composer had already truncated to the bound, so anything added afterwards
-// broke it. Refusing to append instead would drop the count from an answer that
+// broke it. Refusing to add instead would drop the count from an answer that
 // owes one, which is the same silent loss on a different path.
 //
 // The count is the one part of this prose the server computed and the claim
-// must agree with, so it is the part that survives: the earlier prose is
-// truncated at a sentence boundary to make room. An answer that cannot fit even
+// must agree with, so it is the part that survives: the other prose is
+// truncated at a sentence boundary to make room. A field that cannot fit even
 // the sentence alone keeps the sentence and nothing else, which is degenerate
 // but honest -- and unreachable in practice, the sentence being a few dozen
-// runes against a bound of twelve thousand.
-func appendCardinalitySentence(answer, sentence string) string {
+// runes against a bound of thousands.
+func leadWithCountSentence(answer, sentence string, maxRunes int) string {
 	if sentence == "" {
 		return answer
 	}
-	joined := strings.TrimSpace(answer + " " + sentence)
-	if len([]rune(joined)) <= deterministicAnswerMaxLength {
+	joined := strings.TrimSpace(sentence + " " + answer)
+	if len([]rune(joined)) <= maxRunes {
 		return joined
 	}
-	room := deterministicAnswerMaxLength - len([]rune(sentence)) - 1
+	room := maxRunes - len([]rune(sentence)) - 1
 	if room <= 0 {
-		return truncateAtSentenceBoundary(sentence, deterministicAnswerMaxLength)
+		return truncateAtSentenceBoundary(sentence, maxRunes)
 	}
-	return strings.TrimSpace(truncateAtSentenceBoundary(answer, room) + " " + sentence)
+	return strings.TrimSpace(sentence + " " + truncateAtSentenceBoundary(answer, room))
 }
 
 // cardinalityClaimSubjectRepair is the ONE construction that decides

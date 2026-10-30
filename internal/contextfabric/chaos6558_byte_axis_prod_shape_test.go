@@ -179,8 +179,8 @@ func chaos6558Engine(t *testing.T, calls *int, telemetry *recordingTelemetry, sh
 			draftHead := "Two teams lean toward needing attention."
 			draftAnswer := "Two teams appear to need attention, based on available context."
 			if shape.composedHead {
-				draftHead = composeDirectJudgmentFrom(InvestigationComplete, nil, SubjectResolution{})
-				draftAnswer = composeDeterministicAnswerFrom(InvestigationComplete, nil, nil, SubjectResolution{})
+				draftHead = composeDirectJudgmentFrom(InvestigationComplete, nil, nil, SubjectResolution{})
+				draftAnswer = composeDeterministicAnswerFrom(InvestigationComplete, nil, nil, nil, SubjectResolution{})
 			}
 			return InvestigationResult{
 				Status: InvestigationComplete, DirectJudgment: draftHead, CurrentState: "Review queues appear to be growing.",

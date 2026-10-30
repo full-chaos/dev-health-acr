@@ -106,6 +106,35 @@ func TestTeamCohortServesBlockersAsKeyFactAndDriver(t *testing.T) {
 	}
 }
 
+// TestTeamBlockersAnswerLeadsWithTheMostBlockedTeamsPrincipalDriver: the
+// engine ranks the drivers that explain each team's blockers by blocked count.
+// A model stating the less blocked team first does not lead the prose: the
+// principal driver of the most blocked team (engine rank 1) does.
+func TestTeamBlockersAnswerLeadsWithTheMostBlockedTeamsPrincipalDriver(t *testing.T) {
+	a, b, _ := teamsAB()
+	model := func(team SubjectRef, count int64) (DriverJudgment, ClaimedFact) {
+		claim := ClaimedFact{ClaimID: "claim_model_" + team.Label, Kind: FactBlockers, Subject: team, Field: teamBlockersField, Value: convertFactValueScalar(IntegerFactValue(count))}
+		return DriverJudgment{
+			DriverID: "model_blockers_" + team.Label, Standing: DriverPrincipal, Category: "blockers",
+			Title: fmt.Sprintf("%s has %d blocked work items", team.Label, count), Summary: "Blocked work items.",
+			AffectedSubjects: []SubjectRef{team}, EvidenceRefIDs: []string{"evidence_blk_" + team.Label}, ClaimedFactIDs: []string{claim.ClaimID},
+			Derivation: DerivationCanonicalStructured, EpistemicStatus: EpistemicObserved, Confidence: 0.9, Current: true,
+		}, claim
+	}
+	alpha, alphaClaim := model(a, 3)
+	beta, betaClaim := model(b, 30)
+	result := investigateTeamBlockersWithDraft(t, []SubjectRef{a, b}, []CanonicalFact{
+		blockersFact(a, SourceAvailable, intp(3), nil),
+		blockersFact(b, SourceAvailable, intp(30), nil),
+	}, []DriverJudgment{alpha, beta}, []ClaimedFact{alphaClaim, betaClaim})
+	lead := "Beta has 30 blocked work items. " + statusSentence(result.Status, result.SubjectResolution)
+	for name, text := range map[string]string{"direct_judgment": result.DirectJudgment, "deterministic_answer": result.DeterministicAnswer} {
+		if !strings.HasPrefix(text, lead) {
+			t.Errorf("%s = %q, want it to open with %q", name, text, lead)
+		}
+	}
+}
+
 func TestTeamCohortBlockersMissingAndZeroServeNoDriver(t *testing.T) {
 	a, b, c := teamsAB()
 	result := investigateTeamBlockers(t, []SubjectRef{a, b, c}, []CanonicalFact{
@@ -462,6 +491,84 @@ func TestTeamCohortBlockersDriverNamesTheOldestBlockedAge(t *testing.T) {
 	for label, summary := range want {
 		if summaries[label] != summary {
 			t.Errorf("%s summary = %q, want %q", label, summaries[label], summary)
+		}
+	}
+}
+
+// TestNarratedCohortBlockersAnswerLeadsWithTheMostBlockedTeamAndStatesNoDriverList:
+// a cohort whose drivers were narrated recomposes its lead prose after the
+// blocker ranks with the cohort composer: the most blocked team's principal
+// driver, then the status sentence, and no driver list.
+func TestNarratedCohortBlockersAnswerLeadsWithTheMostBlockedTeamAndStatesNoDriverList(t *testing.T) {
+	a, b, _ := teamsAB()
+	model := func(team SubjectRef, count int64) (DriverJudgment, ClaimedFact) {
+		claim := ClaimedFact{ClaimID: "claim_model_" + team.Label, Kind: FactBlockers, Subject: team, Field: teamBlockersField, Value: convertFactValueScalar(IntegerFactValue(count))}
+		return DriverJudgment{
+			DriverID: "model_blockers_" + team.Label, Standing: DriverPrincipal, Category: "blockers",
+			Title: fmt.Sprintf("%s has %d blocked work items", team.Label, count), Summary: "Blocked work items.",
+			AffectedSubjects: []SubjectRef{team}, EvidenceRefIDs: []string{"evidence_blk_" + team.Label}, ClaimedFactIDs: []string{claim.ClaimID},
+			Derivation: DerivationCanonicalStructured, EpistemicStatus: EpistemicObserved, Confidence: 0.9, Current: true,
+		}, claim
+	}
+	alpha, alphaClaim := model(a, 3)
+	beta, betaClaim := model(b, 30)
+	cohort := &Cohort{Kind: SubjectTeam, Rationale: "kind census match", Members: []CohortMember{
+		{Subject: a, Rank: 1, InclusionReasons: []string{"matched"}, EvidenceRefIDs: []string{"evidence_team_roster"}},
+		{Subject: b, Rank: 2, InclusionReasons: []string{"matched"}, EvidenceRefIDs: []string{"evidence_team_roster"}},
+	}}
+	interpretation := InterpretedQuestion{
+		Shape: ShapeDiscoveredCohort, RequestedJudgment: "teams_blocked",
+		TimeContext: TimeContext{Axis: TemporalCurrent}, FactRequirements: []FactRequirement{{Kind: FactHealth}, {Kind: FactBlockers}},
+	}
+	telemetry := &recordingTelemetry{}
+	engine, err := NewEngine(EngineDependencies{
+		Interpreter: interpreterFunc(func(context.Context, storage.Principal, InvestigationRequest) (InterpretedQuestion, error) {
+			return interpretation, nil
+		}),
+		Graph: graphReaderStub{
+			resolution: SubjectResolution{Candidates: []SubjectCandidate{}, Committed: []SubjectRef{}},
+			context: GraphContext{Cohort: cohort, Paths: []RelationshipPath{}, DriverCandidates: []DriverJudgment{},
+				FactRequirements: []FactRequirement{}, EvidenceRefIDs: []string{},
+				Coverage: Coverage{Sources: []SourceObservation{}, DegradedReasons: []string{}}},
+		},
+		Facts: factReaderFunc(func(_ context.Context, _ storage.Principal, _ CanonicalFactRequest) (CanonicalFactBundle, error) {
+			return CanonicalFactBundle{Facts: []CanonicalFact{
+				{Kind: FactHealth, Subject: a, Fields: map[string]FactValue{"severity": StringFactValue("high")}},
+				{Kind: FactHealth, Subject: b, Fields: map[string]FactValue{"severity": StringFactValue("high")}},
+				blockersFact(a, SourceAvailable, intp(3), nil),
+				blockersFact(b, SourceAvailable, intp(30), nil),
+				investmentFact("A", balancedThemes(), 0),
+				investmentFact("B", balancedThemes(), 0),
+			},
+				Coverage: Coverage{Sources: []SourceObservation{{Source: "canonical_fact:health", State: SourceAvailable}, {Source: "canonical_fact:blockers", State: SourceAvailable}}, DegradedReasons: []string{}},
+				Version:  "ops-v1", Versions: map[FactKind]string{}, Watermarks: map[FactKind]string{}}, nil
+		}),
+		Synthesizer: synthesizerFunc(func(_ context.Context, _ storage.Principal, _ SynthesisInput) (InvestigationResult, error) {
+			return InvestigationResult{Status: InvestigationPartial, DirectJudgment: "x", CurrentState: "x", DeterministicAnswer: "x",
+				StrongestPressures: []string{}, Drivers: []DriverJudgment{alpha, beta},
+				RemainingWork: []Finding{}, ReadinessGaps: []Finding{}, Paths: []RelationshipPath{}, Conflicts: []Finding{}, Limitations: []string{},
+				EvidenceRefIDs: []string{}, ClaimedFacts: []ClaimedFact{alphaClaim, betaClaim}, Coverage: Coverage{Sources: []SourceObservation{}, DegradedReasons: []string{}}, Warnings: []string{},
+				Versions: VersionSet{Backend: "test", ProjectionVersion: "p", QueryVersion: "q", InterpretationVersion: "i", SynthesisVersion: "s"}}, nil
+		}),
+		Results: &resultStoreStub{}, Telemetry: telemetry,
+	}, EngineOptions{ServiceVersion: "acr-test", Now: func() time.Time { return time.Unix(300, 0).UTC() }, NewResultID: func() string { return "result_narrblk1" }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := validInvestigationRequestWithConfirmedWindow()
+	request.RequestID = "request_narrblk1"
+	request.Question = "which teams are blocked?"
+	result, err := engine.Investigate(context.Background(), storage.Principal{OrgID: "org-1"}, request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(telemetry.cohortDriverNarrations) != 1 || !telemetry.cohortDriverNarrations[0].AnswerNarrativeRecomposed {
+		t.Fatalf("narration events = %#v, want one narration that recomposed the answer -- the fixture does not reach the narrated branch", telemetry.cohortDriverNarrations)
+	}
+	want := "Beta has 30 blocked work items. " + statusSentence(result.Status, result.SubjectResolution)
+	for name, text := range map[string]string{"direct_judgment": result.DirectJudgment, "deterministic_answer": result.DeterministicAnswer} {
+		if text != want {
+			t.Errorf("%s = %q, want %q (the most blocked team, the status sentence, no driver list)", name, text, want)
 		}
 	}
 }
