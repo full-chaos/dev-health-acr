@@ -2,6 +2,7 @@ package credentiallifecycle
 
 import (
 	"errors"
+	"strings"
 	"testing"
 )
 
@@ -106,5 +107,28 @@ func TestClientClass_vocabularyIsClosed(t *testing.T) {
 		if class.UserApproved() != want {
 			t.Fatalf("%q.UserApproved() = %v, want %v", class, !want, want)
 		}
+	}
+}
+
+// A client-ID metadata document client id is an https URL of up to 2048
+// bytes (internal/storage maxOAuthURILength); an OAuth redemption for such a
+// client must not fail on the credential's provenance.
+func TestNormalizeCreate_acceptsAMetadataDocumentClientIDOfAnyAdmittedLength(t *testing.T) {
+	input := validResourceTestInput()
+	input.IssuanceProvenance = IssuanceProvenanceDeviceAuthorization
+	input.ApprovingUserID = "user_1"
+	input.Resource = "https://mcp.example.test/mcp"
+	prefix := "https://client.example.test/"
+	input.ClientID = prefix + strings.Repeat("a", 2048-len(prefix))
+	got, err := normalizeCreate(input)
+	if err != nil {
+		t.Fatalf("a 2048-byte metadata-document client id is refused: %v", err)
+	}
+	if got.ClientID != input.ClientID || got.ClientClass != ClientClassOAuthUser {
+		t.Fatalf("normalized = client %d bytes class %q", len(got.ClientID), got.ClientClass)
+	}
+	input.ClientID += "a"
+	if _, err := normalizeCreate(input); !errors.Is(err, ErrInvalidInput) {
+		t.Fatalf("a 2049-byte client id error = %v, want ErrInvalidInput", err)
 	}
 }
