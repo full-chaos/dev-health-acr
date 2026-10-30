@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 )
 
 // ContextFabricInvestigationEventStreamCheck holds one stream to the grammar
@@ -263,6 +264,7 @@ func decodeContextFabricEventFrame(frame []byte) (ContextFabricInvestigationEven
 // event's data: it accepts every JSON spelling of a valid event (key order,
 // whitespace and escapes are free) and refuses what the schema refuses:
 //
+//   - valid UTF-8, checked first, before any decoding;
 //   - one JSON value, no unknown key, no key given twice at the top level;
 //   - no key the event does not carry: a type-dependent field present with an
 //     empty, zero or null value decodes to the Go zero value, which the type
@@ -280,6 +282,11 @@ func decodeContextFabricEventFrame(frame []byte) (ContextFabricInvestigationEven
 // as for the JSON response body, and stays with that body's consumers
 // (internal/sidecar's presence check); this function adds nothing to it.
 func ParseContextFabricInvestigationEventData(data []byte) (ContextFabricInvestigationEvent, error) {
+	// JSON is UTF-8, and encoding/json would read an invalid byte as U+FFFD,
+	// so the event decoded would not be the bytes received.
+	if !utf8.Valid(data) {
+		return ContextFabricInvestigationEvent{}, fmt.Errorf("data is not valid UTF-8")
+	}
 	if err := rejectDuplicateTopLevelKeys(data); err != nil {
 		return ContextFabricInvestigationEvent{}, err
 	}

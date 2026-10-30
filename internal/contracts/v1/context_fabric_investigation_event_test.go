@@ -765,3 +765,83 @@ func TestInvestigationStageVocabularyIsOrdered(t *testing.T) {
 		}
 	}
 }
+
+// TestNoEventCarriesInvalidUTF8 (round-4 R4-F1, closed class-wide): JSON and
+// SSE are UTF-8. The writer refuses an event with an invalid byte in ANY
+// string it carries -- each kind of place a string can sit: a field, a field
+// of the error envelope behind its pointer, a details key, a details value
+// behind an interface, inside a slice, inside an array, inside a struct value,
+// and the raw result body -- and the consumer decode refuses a data line with
+// an invalid byte before it decodes anything.
+func TestNoEventCarriesInvalidUTF8(t *testing.T) {
+	goldens := buildInvestigationEventGoldens(t)
+	result := goldens.single["context_fabric_investigation_event_result.v1.json"]
+	failure := goldens.single["context_fabric_investigation_event_error_model_deadline.v1.json"]
+	const bad = "a\xffb"
+	withError := func(edit func(*ErrorEnvelope)) ContextFabricInvestigationEvent {
+		event := failure
+		envelope := *failure.Error
+		envelope.Error.Details = map[string]any{}
+		for key, value := range failure.Error.Error.Details {
+			envelope.Error.Details[key] = value
+		}
+		edit(&envelope)
+		event.Error = &envelope
+		return event
+	}
+	type detailStruct struct{ Note string }
+	cases := map[string]ContextFabricInvestigationEvent{
+		"a field (request_id)": func() ContextFabricInvestigationEvent {
+			e := goldens.single["context_fabric_investigation_event_stage_started.v1.json"]
+			e.RequestID = "request_" + bad
+			return e
+		}(),
+		"the envelope message, behind its pointer": withError(func(e *ErrorEnvelope) { e.Error.Message = bad }),
+		"a details key":                   withError(func(e *ErrorEnvelope) { e.Error.Details[bad] = "x" }),
+		"a details value":                 withError(func(e *ErrorEnvelope) { e.Error.Details["note"] = bad }),
+		"a details value inside a slice":  withError(func(e *ErrorEnvelope) { e.Error.Details["notes"] = []any{"ok", bad} }),
+		"a details value inside an array": withError(func(e *ErrorEnvelope) { e.Error.Details["notes"] = [2]string{"ok", bad} }),
+		"a details value inside a struct": withError(func(e *ErrorEnvelope) { e.Error.Details["detail"] = detailStruct{Note: bad} }),
+		"a details value as raw JSON":     withError(func(e *ErrorEnvelope) { e.Error.Details["raw"] = json.RawMessage(`"` + bad + `"`) }),
+		"the result body (a raw JSON field)": func() ContextFabricInvestigationEvent {
+			e := result
+			at := bytes.Index(e.Result, []byte(`"question":"`)) + len(`"question":"`)
+			e.Result = append(append(append(json.RawMessage{}, e.Result[:at]...), 0xff), e.Result[at:]...)
+			return e
+		}(),
+	}
+	for name, event := range cases {
+		if err := event.Validate(); err == nil || !strings.Contains(err.Error(), "not valid UTF-8") {
+			t.Errorf("%s: Validate = %v, want a UTF-8 refusal", name, err)
+		}
+		if _, err := MarshalContextFabricInvestigationEventFrame(event); err == nil {
+			t.Errorf("%s: the encoder wrote an event with an invalid byte", name)
+		}
+	}
+	// Controls: the same shapes with valid strings are written, so each
+	// refusal above is the byte, not the shape.
+	for name, event := range map[string]ContextFabricInvestigationEvent{
+		"details with a slice, an array, a struct and raw JSON": withError(func(e *ErrorEnvelope) {
+			e.Error.Details["notes"] = []any{"ok", "é"}
+			e.Error.Details["pair"] = [2]string{"ok", "ü"}
+			e.Error.Details["detail"] = detailStruct{Note: "ñ"}
+			e.Error.Details["raw"] = json.RawMessage(`"ß"`)
+		}),
+		"the result body": result,
+	} {
+		if _, err := MarshalContextFabricInvestigationEventFrame(event); err != nil {
+			t.Errorf("control %s: refused: %v", name, err)
+		}
+	}
+	// The consumer decode: an invalid byte anywhere in the data line,
+	// including inside a string the decoder would turn into U+FFFD.
+	data := mustEventData(t, goldens.single["context_fabric_investigation_event_stage_started.v1.json"])
+	at := bytes.Index(data, []byte(`"request_id":"`)) + len(`"request_id":"`)
+	invalid := append(append(append([]byte{}, data[:at]...), 0xff), data[at:]...)
+	if _, err := ParseContextFabricInvestigationEventData(invalid); err == nil || !strings.Contains(err.Error(), "not valid UTF-8") {
+		t.Fatalf("Parse of a data line with an invalid byte = %v, want a UTF-8 refusal", err)
+	}
+	if _, err := ParseContextFabricInvestigationEventData(data); err != nil {
+		t.Fatalf("control: the valid data line was refused: %v", err)
+	}
+}

@@ -4,10 +4,12 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"reflect"
 	"regexp"
 	"slices"
 	"strconv"
 	"time"
+	"unicode/utf8"
 )
 
 // The investigation event stream (CHAOS-11909, plan of record §2.7.1-2.7.2).
@@ -331,7 +333,16 @@ func (e ContextFabricInvestigationEvent) presentFields() map[contextFabricEventF
 //
 // An error envelope's details are checked against error.v1's typed keys
 // (reason, field, limit, deadline); other keys are free, as error.v1 allows.
+//
+// Every string the event carries -- each field, the error envelope, every key
+// and value of its details, and the raw result body -- must be valid UTF-8:
+// JSON and SSE are UTF-8, and encoding/json would replace an invalid byte with
+// U+FFFD (or, inside a json.RawMessage, write it to the wire as it is), so the
+// event written would not be the event validated.
 func (e ContextFabricInvestigationEvent) Validate() error {
+	if path, ok := everyStringIsUTF8(reflect.ValueOf(e), "event"); !ok {
+		return fmt.Errorf("investigation event %s is not valid UTF-8", path)
+	}
 	if e.SchemaVersion != ContextFabricInvestigationEventSchema {
 		return fmt.Errorf("investigation event schema_version must be %q", ContextFabricInvestigationEventSchema)
 	}
@@ -551,4 +562,57 @@ func MarshalContextFabricInvestigationEventFrame(event ContextFabricInvestigatio
 	frame = append(frame, data...)
 	frame = append(frame, "\n\n"...)
 	return frame, nil
+}
+
+var rawMessageType = reflect.TypeOf(json.RawMessage(nil))
+
+// everyStringIsUTF8 reports whether every string reachable from value is valid
+// UTF-8: strings, map keys, the elements of slices and arrays, the exported
+// fields of structs (unexported fields are not encoded), through pointers and
+// interfaces, and a json.RawMessage as raw bytes. It returns the path of the
+// first string that is not, for the error text.
+func everyStringIsUTF8(value reflect.Value, path string) (string, bool) {
+	if value.Type() == rawMessageType {
+		return path, utf8.Valid(value.Bytes())
+	}
+	switch value.Kind() {
+	case reflect.String:
+		return path, utf8.ValidString(value.String())
+	case reflect.Pointer, reflect.Interface:
+		if value.IsNil() {
+			return path, true
+		}
+		return everyStringIsUTF8(value.Elem(), path)
+	case reflect.Map:
+		iter := value.MapRange()
+		for iter.Next() {
+			if _, ok := everyStringIsUTF8(iter.Key(), path+" key"); !ok {
+				return path + " key", false
+			}
+			if at, ok := everyStringIsUTF8(iter.Value(), fmt.Sprintf("%s.%v", path, iter.Key())); !ok {
+				return at, false
+			}
+		}
+		return path, true
+	case reflect.Slice, reflect.Array:
+		for index := 0; index < value.Len(); index++ {
+			if at, ok := everyStringIsUTF8(value.Index(index), fmt.Sprintf("%s[%d]", path, index)); !ok {
+				return at, false
+			}
+		}
+		return path, true
+	case reflect.Struct:
+		for index := 0; index < value.NumField(); index++ {
+			field := value.Type().Field(index)
+			if !field.IsExported() {
+				continue
+			}
+			if at, ok := everyStringIsUTF8(value.Field(index), path+"."+field.Name); !ok {
+				return at, false
+			}
+		}
+		return path, true
+	default:
+		return path, true
+	}
 }
