@@ -181,7 +181,8 @@ SELECT `+threadColumns+` FROM acr.context_fabric_threads
 }
 
 // GetThread implements contextfabric.ThreadStore: the reconcile update for
-// the thread's unfinished turns, then the reads.
+// the thread's unfinished turns, then the reads in one snapshot
+// (readThreadSnapshot).
 func (s *Store) GetThread(ctx context.Context, key contextfabric.ThreadKey, before *contextfabric.ThreadTurnCursor, limit int, now time.Time) (contextfabric.ThreadPage, error) {
 	if err := s.configured(); err != nil {
 		return contextfabric.ThreadPage{}, err
@@ -189,71 +190,17 @@ func (s *Store) GetThread(ctx context.Context, key contextfabric.ThreadKey, befo
 	if err := validThreadKey(key); err != nil || limit < 1 {
 		return contextfabric.ThreadPage{}, contextfabric.ErrThreadNotFound
 	}
-	// Reconcile first, in its own statement: the reads below then see the
-	// turns' current states.
+	// Reconcile first, in its own statement: the reads then see the turns'
+	// current states.
 	if _, err := s.db.ExecContext(ctx, `
 UPDATE acr.context_fabric_investigation_submissions s`+reconcileSetSQL("$5")+`
    AND s.org_id = $1 AND s.owner_auth_method = $2 AND s.owner_subject = $3 AND s.thread_id = $4`,
 		key.OrgID, key.Owner.AuthenticationMethod, key.Owner.Subject, key.ThreadID, now.UTC()); err != nil {
 		return contextfabric.ThreadPage{}, fmt.Errorf("reconcile thread turns: %w", sanitizeError(err))
 	}
-	// The thread row and its turns are read in one snapshot, so a turn
-	// admitted (or a delete committed) during the read is in both or in
-	// neither: the turn count always agrees with the turns.
-	tx, err := s.db.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelRepeatableRead, ReadOnly: true})
+	thread, turns, err := s.readThreadSnapshot(ctx, key, before, limit+1, now)
 	if err != nil {
-		return contextfabric.ThreadPage{}, fmt.Errorf("read thread: begin: %w", sanitizeError(err))
-	}
-	defer func() { _ = tx.Rollback() }()
-	thread, err := scanThread(tx.QueryRowContext(ctx, `
-SELECT `+threadColumns+` FROM acr.context_fabric_threads
- WHERE org_id = $1 AND owner_auth_method = $2 AND owner_subject = $3 AND thread_id = $4`,
-		key.OrgID, key.Owner.AuthenticationMethod, key.Owner.Subject, key.ThreadID))
-	switch {
-	case errors.Is(err, sql.ErrNoRows):
-		return contextfabric.ThreadPage{}, contextfabric.ErrThreadNotFound
-	case err != nil:
-		return contextfabric.ThreadPage{}, fmt.Errorf("read thread: %w", sanitizeError(err))
-	case thread.Closed(now):
-		return contextfabric.ThreadPage{}, contextfabric.ErrThreadNotFound
-	}
-	if s.afterThreadSummaryRead != nil {
-		s.afterThreadSummaryRead()
-	}
-	args := []any{key.OrgID, key.Owner.AuthenticationMethod, key.Owner.Subject, key.ThreadID, limit + 1}
-	keyset := ""
-	if before != nil {
-		keyset = ` AND (admitted_at < $6 OR (admitted_at = $6 AND submission_id < $7))`
-		args = append(args, before.AdmittedAt.UTC(), before.SubmissionID)
-	}
-	rows, err := tx.QueryContext(ctx, `
-SELECT `+submissionColumns+` FROM acr.context_fabric_investigation_submissions
- WHERE org_id = $1 AND owner_auth_method = $2 AND owner_subject = $3 AND thread_id = $4`+keyset+`
- ORDER BY admitted_at DESC, submission_id DESC
- LIMIT $5`, args...)
-	if err != nil {
-		return contextfabric.ThreadPage{}, fmt.Errorf("read thread turns: %w", sanitizeError(err))
-	}
-	defer rows.Close()
-	var turns []contextfabric.ThreadTurn
-	for rows.Next() {
-		record, err := scanSubmission(rows)
-		if err != nil {
-			return contextfabric.ThreadPage{}, fmt.Errorf("read thread turns: %w", sanitizeError(err))
-		}
-		turns = append(turns, contextfabric.ThreadTurn{
-			SubmissionID: record.Key.SubmissionID, State: record.State, ResultID: record.ResultID,
-			Question: record.Question, AdmittedAt: record.AdmittedAt, UpdatedAt: record.UpdatedAt,
-		})
-	}
-	if err := rows.Err(); err != nil {
-		return contextfabric.ThreadPage{}, fmt.Errorf("read thread turns: %w", sanitizeError(err))
-	}
-	if err := rows.Close(); err != nil {
-		return contextfabric.ThreadPage{}, fmt.Errorf("read thread turns: %w", sanitizeError(err))
-	}
-	if err := tx.Commit(); err != nil {
-		return contextfabric.ThreadPage{}, fmt.Errorf("read thread: commit: %w", sanitizeError(err))
+		return contextfabric.ThreadPage{}, err
 	}
 	earlier := len(turns) > limit
 	if earlier {
