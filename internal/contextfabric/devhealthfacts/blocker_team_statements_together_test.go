@@ -199,3 +199,128 @@ func TestATeamBlockerStatementFailureCancelsItsSiblingsAndFailsTheRead(t *testin
 		})
 	}
 }
+
+// holdingClient answers from inner, except: the statements hold names run
+// until their context ends (failing after 5 s if it never does), and fail
+// fails once every held statement is in flight.
+type holdingClient struct {
+	inner   *fakeClient
+	hold    []string
+	fail    string
+	mu      sync.Mutex
+	started chan string
+}
+
+func (c *holdingClient) Query(ctx context.Context, statement string, bindings []contextpacket.ClickHouseBinding) (contextpacket.ClickHouseRowScanner, error) {
+	if c.fail != "" && strings.Contains(statement, c.fail) {
+		for range c.hold {
+			select {
+			case <-c.started:
+			case <-time.After(2 * time.Second):
+				return nil, errors.New("the held statements were not in flight")
+			}
+		}
+		return nil, errors.New("statement failed")
+	}
+	for _, marker := range c.hold {
+		if strings.Contains(statement, marker) {
+			c.started <- marker
+			select {
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			case <-time.After(5 * time.Second):
+				return nil, errors.New("a held statement was not cancelled")
+			}
+		}
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.inner.Query(ctx, statement, bindings)
+}
+
+func captureSlog(t *testing.T) *bytes.Buffer {
+	t.Helper()
+	var logs bytes.Buffer
+	previous := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&logs, nil)))
+	t.Cleanup(func() { slog.SetDefault(previous) })
+	return &logs
+}
+
+func teamAndItemTables() []fakeTable {
+	return []fakeTable{
+		{match: "GROUP BY team_id, repo_key", rows: [][]any{{"CHAOS", "00000000-0000-4000-8000-000000000001", "acme/repo"}}},
+		{match: "is_open AND start_unix IS NOT NULL", rows: [][]any{{"CHAOS", int64(5), int64(5), int64(5), time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC).UnixMilli()}}},
+		{match: "SELECT toInt64(uniqExact(if(", rows: [][]any{{int64(0)}}},
+		{match: "arrayJoin({team_repo_pairs", rows: [][]any{{"CHAOS", int64(4), int64(5), int64(0), int64(0), int64(0), int64(0)}}},
+		{match: workItemBlockersMarker, rows: [][]any{{"WIDGET-099", "WIDGET-101", "blocks", "repo-1", "repo-9", uint64(1), uint8(1)}}},
+		{match: "FROM work_item_dependencies", rows: [][]any{{"00000000-0000-4000-8000-000000000001", int64(4), int64(5), int64(0), int64(3)}}},
+	}
+}
+
+func readTeamAndItem(ctx context.Context, client contextpacket.ClickHouseQueryClient) error {
+	provider := devhealthfacts.NewProviders(client)
+	for _, p := range provider {
+		if p.Capability().Kind == contextfabric.FactBlockers {
+			_, err := p.ReadFacts(ctx, storage.Principal{OrgID: "org-1"}, contextfabric.FactQuery{
+				Time: contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent}, Kind: contextfabric.FactBlockers,
+				Subjects: []contextfabric.SubjectRef{teamSubject("CHAOS"), workItemSubject("repo-1", "WIDGET-101")},
+			})
+			return err
+		}
+	}
+	return errors.New("no blockers provider")
+}
+
+// A failed team rollup fails the read and cancels the work item read in
+// flight. The read logs one failure, the team rollup's: the work item read it
+// cancelled is not logged as a failure of its own.
+func TestATeamRollupFailureCancelsTheWorkItemReadAndLogsOneFailure(t *testing.T) {
+	logs := captureSlog(t)
+	client := &holdingClient{inner: &fakeClient{tables: teamAndItemTables()}, hold: []string{workItemBlockersMarker}, fail: teamBlockerStatementMarkers[1], started: make(chan string, 1)}
+	start := time.Now()
+	err := readTeamAndItem(context.Background(), client)
+	if elapsed := time.Since(start); elapsed > 4*time.Second {
+		t.Fatalf("the read took %s: the work item read was not cancelled", elapsed)
+	}
+	if err == nil || !strings.Contains(err.Error(), "query team blockers failed") {
+		t.Fatalf("err = %v, want the team blockers read failed", err)
+	}
+	if got := strings.Count(logs.String(), "devhealthfacts.read_failed"); got != 1 || strings.Contains(logs.String(), `action="query work item blockers"`) {
+		t.Fatalf("%d read_failed lines, want one, the team rollup's:\n%s", got, logs.String())
+	}
+}
+
+// When the caller's deadline ends the read, the failure is logged: a
+// cancellation the read did not cause itself is a failure of the read.
+func TestADeadlineThatEndsTheBlockersReadIsLogged(t *testing.T) {
+	logs := captureSlog(t)
+	client := &holdingClient{inner: &fakeClient{tables: teamAndItemTables()}, hold: []string{workItemBlockersMarker, teamBlockerStatementMarkers[0]}, started: make(chan string, 2)}
+	ctx, cancel := context.WithTimeout(context.Background(), 1500*time.Millisecond)
+	defer cancel()
+	err := readTeamAndItem(ctx, client)
+	if err == nil {
+		t.Fatal("the read succeeded past its deadline")
+	}
+	if !strings.Contains(logs.String(), "devhealthfacts.read_failed") {
+		t.Fatalf("the read's failure was not logged:\n%s", logs.String())
+	}
+}
+
+// A failed work item read fails the read and cancels the team rollup in
+// flight; the read logs one failure, the work item read's.
+func TestAWorkItemReadFailureCancelsTheTeamRollupAndLogsOneFailure(t *testing.T) {
+	logs := captureSlog(t)
+	client := &holdingClient{inner: &fakeClient{tables: teamAndItemTables()}, hold: []string{teamBlockerStatementMarkers[0]}, fail: workItemBlockersMarker, started: make(chan string, 1)}
+	start := time.Now()
+	err := readTeamAndItem(context.Background(), client)
+	if elapsed := time.Since(start); elapsed > 4*time.Second {
+		t.Fatalf("the read took %s: the team rollup was not cancelled", elapsed)
+	}
+	if err == nil || !strings.Contains(err.Error(), "query work item blockers failed") {
+		t.Fatalf("err = %v, want the work item blockers read failed", err)
+	}
+	if got := strings.Count(logs.String(), "devhealthfacts.read_failed"); got != 1 || strings.Contains(logs.String(), `action="query team blockers"`) {
+		t.Fatalf("%d read_failed lines, want one, the work item read's:\n%s", got, logs.String())
+	}
+}
