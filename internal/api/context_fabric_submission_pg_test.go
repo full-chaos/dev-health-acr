@@ -219,6 +219,14 @@ func TestSubmissionOnPostgresAcrossTwoInstances(t *testing.T) {
 		if running != 0 {
 			t.Fatalf("%d implicit records still running after their runs ended", running)
 		}
+		// An implicit record has no status, even for its own principal.
+		var implicitID string
+		if err := admin.QueryRowContext(context.Background(), `SELECT submission_id FROM acr.context_fabric_investigation_submissions WHERE submission_id LIKE 'acr-implicit-%' LIMIT 1`).Scan(&implicitID); err != nil {
+			t.Fatal(err)
+		}
+		if status := harness.status(0, harness.tokenA, implicitID); status.Code != http.StatusNotFound {
+			t.Fatalf("status of an implicit record = %d %s, want 404", status.Code, status.Body.String())
+		}
 	})
 
 	// CHAOS-11997: the monthly allowance counts header-less platform creates

@@ -1,11 +1,15 @@
 package api
 
 import (
+	"context"
 	"net/http"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric/memoryinvestigation"
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 )
 
@@ -94,7 +98,45 @@ func TestAClientSubmissionIDInTheImplicitNamespaceIsRefused(t *testing.T) {
 	if got := harness.investigator.executions.Load(); got != 0 {
 		t.Fatalf("executions = %d, want 0", got)
 	}
+	if status := harness.status(0, harness.tokenA, contextfabric.ImplicitSubmissionIDPrefix+"0123456789abcdef"); status.Code != http.StatusNotFound {
+		t.Fatalf("status in the implicit namespace = %d %s, want 404", status.Code, status.Body.String())
+	}
 	if !contextfabric.IsImplicitSubmissionID(contextfabric.NewImplicitSubmissionID()) || !contextfabric.ValidSubmissionID(contextfabric.NewImplicitSubmissionID()) {
 		t.Fatal("a minted implicit id is not a valid submission id in the implicit namespace")
+	}
+}
+
+// admissionRecordingStore is the memory store, recording every admission's
+// key, so a test can name the server-minted key of an implicit admission.
+type admissionRecordingStore struct {
+	*memoryinvestigation.Store
+	mu   sync.Mutex
+	keys []contextfabric.SubmissionKey
+}
+
+func (s *admissionRecordingStore) AdmitSubmission(ctx context.Context, admission contextfabric.SubmissionAdmission, now time.Time) (contextfabric.SubmissionRecord, bool, error) {
+	s.mu.Lock()
+	s.keys = append(s.keys, admission.Key)
+	s.mu.Unlock()
+	return s.Store.AdmitSubmission(ctx, admission, now)
+}
+
+// An implicit record exists and is final after its run, and it has no status,
+// not even for its own principal: the id is the service's.
+func TestAnImplicitRecordHasNoStatus(t *testing.T) {
+	var clock *submissionClock
+	store := &admissionRecordingStore{Store: memoryinvestigation.NewStoreWithClock(func() time.Time { return clock.Now() })}
+	harness := newSubmissionHarness(t, store)
+	clock = harness.clock
+	servedResultID(t, harness.post(0, harness.tokenA, "", submissionQuestion))
+	if len(store.keys) != 1 || !contextfabric.IsImplicitSubmissionID(store.keys[0].SubmissionID) {
+		t.Fatalf("admissions %+v, want one implicit key", store.keys)
+	}
+	record, err := store.GetSubmission(t.Context(), store.keys[0], harness.clock.Now())
+	if err != nil || record.State != contextfabric.SubmissionDoneUnsaved || record.ResultID != "" {
+		t.Fatalf("the implicit record = %+v (%v), want released (done_unsaved, no result)", record, err)
+	}
+	if status := harness.status(0, harness.tokenA, store.keys[0].SubmissionID); status.Code != http.StatusNotFound {
+		t.Fatalf("status of the principal's own implicit record = %d %s, want 404", status.Code, status.Body.String())
 	}
 }
