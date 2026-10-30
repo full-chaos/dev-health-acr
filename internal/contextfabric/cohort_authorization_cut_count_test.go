@@ -2,6 +2,7 @@ package contextfabric
 
 import (
 	"context"
+	"reflect"
 	"testing"
 
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
@@ -254,5 +255,151 @@ func TestWithCohortAuthorizationCutLeavesWhatItDoesNotQualify(t *testing.T) {
 	}
 	if got := withCohortAuthorizationCut(MembershipCardinality{Resolved: true, Kind: SubjectRepository, Served: 4, Declared: 4}, coverage); got.AuthorizationDenied != cohortAuthorizationCutDenied {
 		t.Fatalf("repository count: AuthorizationDenied = %d, want %d", got.AuthorizationDenied, cohortAuthorizationCutDenied)
+	}
+}
+
+// A stored answer written BEFORE the cut was stated carries a `satisfied`
+// assembled-result count row beside the denial detail. Reuse never re-runs
+// the count step for a row that exists, so the served copy must restate the
+// cut by APPENDING the narrowed row (the stored row is never rewritten), or
+// the reused answer keeps reading `complete`.
+func TestAReusedStoredSatisfiedCountOverACutCohortIsRestated(t *testing.T) {
+	t.Parallel()
+	project, candidate := reusableCandidate()
+	candidate.Cohort = countingCohort(SubjectTeam, 3)
+	candidate.SubjectResolution.Candidates = []SubjectCandidate{scopeAnchorMatch(project)}
+	cut := cohortAuthorizationCutCoverage(cohortAuthorizationCutDenied, true)
+	candidate.Coverage.Details = append(candidate.Coverage.Details, cut.Details...)
+	candidate.Coverage.DegradedReasons = append(candidate.Coverage.DegradedReasons, cut.DegradedReasons...)
+	candidate.Coverage.Partial = true
+	identity := string(ObligationCount) + "/" + string(SubjectRoleMember) + "/" + string(SubjectTeam)
+	storedRow := RequirementOutcomeRow{
+		Stage: contractsv1.ContextFabricOutcomeStageAssembledResult, Requirement: identity, Obligation: string(ObligationCount),
+		Outcome: contractsv1.ContextFabricRequirementSatisfied, Impact: contractsv1.ContextFabricAnswerImpactNone,
+		Served: 3, Declared: 3,
+	}
+	candidate.Completeness.Outcomes = []RequirementOutcomeRow{{
+		Stage: contractsv1.ContextFabricOutcomeStagePlanning, Requirement: identity, Obligation: string(ObligationCount),
+		Outcome: contractsv1.ContextFabricRequirementSatisfied, Impact: contractsv1.ContextFabricAnswerImpactNone,
+	}, storedRow}
+	candidate.Completeness = ComputeAnswerCompleteness(candidate)
+	if candidate.Completeness.State != contractsv1.ContextFabricAnswerCompletenessComplete {
+		t.Fatalf("fixture: stored state = %q, want the pre-fix `complete`", candidate.Completeness.State)
+	}
+
+	committed := []SubjectRef{project}
+	for _, member := range candidate.Cohort.Members {
+		committed = append(committed, member.Subject)
+	}
+	engine := mustReuseTestEngine(t, EngineDependencies{
+		Graph:     graphReaderStub{resolution: SubjectResolution{Candidates: []SubjectCandidate{}, Committed: committed}},
+		Results:   &resultStoreStub{},
+		ReuseGate: readingReuseGate{stored: candidate, frame: countingFrame(SubjectTeam)},
+	})
+	served, err := engine.Investigate(context.Background(), reusePrincipal(), validInvestigationRequest())
+	if err != nil {
+		t.Fatalf("Investigate() error = %v", err)
+	}
+	if !served.Reused {
+		t.Fatal("the fixture did not take the reuse path, so it proves nothing about it")
+	}
+	if got := served.Completeness.State; got == contractsv1.ContextFabricAnswerCompletenessComplete {
+		t.Fatalf("reused completeness.state = %q over an authorization cut member set", got)
+	}
+	rows := countOutcomeRows(served, contractsv1.ContextFabricOutcomeStageAssembledResult)
+	if len(rows) != 2 || !reflect.DeepEqual(rows[0], storedRow) {
+		t.Fatalf("assembled count rows = %+v, want the stored row kept as it was, then the restated cut", rows)
+	}
+	restated := rows[1]
+	if restated.Outcome != contractsv1.ContextFabricRequirementNarrowed ||
+		restated.CauseCoverage != contractsv1.ContextFabricCoverageDetailGraphCohortDeniedByAuthorization ||
+		restated.Served != 3 || restated.Declared != 3+cohortAuthorizationCutDenied {
+		t.Fatalf("restated row = %q cause %q %d/%d, want narrowed cause %q 3/%d", restated.Outcome, restated.CauseCoverage,
+			restated.Served, restated.Declared, contractsv1.ContextFabricCoverageDetailGraphCohortDeniedByAuthorization, 3+cohortAuthorizationCutDenied)
+	}
+	if err := served.Validate(); err != nil {
+		t.Fatalf("served result does not validate: %v", err)
+	}
+}
+
+// The restatement directly, over every shape it must leave alone, plus its
+// idempotence: a second pass appends nothing.
+func TestRestateCohortAuthorizationCutCountTouchesOnlyAStaleSatisfiedCount(t *testing.T) {
+	t.Parallel()
+	identity := "count/member/team"
+	satisfied := RequirementOutcomeRow{
+		Stage: contractsv1.ContextFabricOutcomeStageAssembledResult, Requirement: identity, Obligation: string(ObligationCount),
+		Outcome: contractsv1.ContextFabricRequirementSatisfied, Impact: contractsv1.ContextFabricAnswerImpactNone, Served: 4, Declared: 4,
+	}
+	base := func() InvestigationResult {
+		return InvestigationResult{
+			Cohort:       countingCohort(SubjectTeam, 4),
+			Coverage:     cohortAuthorizationCutCoverage(cohortAuthorizationCutDenied, true),
+			Completeness: AnswerCompleteness{Outcomes: []RequirementOutcomeRow{satisfied}},
+		}
+	}
+	restated, changed := restateCohortAuthorizationCutCount(base())
+	if !changed || len(restated.Completeness.Outcomes) != 2 || !reflect.DeepEqual(restated.Completeness.Outcomes[0], satisfied) {
+		t.Fatalf("restate = changed %v rows %+v, want the stored row then one appended row", changed, restated.Completeness.Outcomes)
+	}
+	if again, changedAgain := restateCohortAuthorizationCutCount(restated); changedAgain || len(again.Completeness.Outcomes) != 2 {
+		t.Fatalf("second restate appended again: changed %v rows %d", changedAgain, len(again.Completeness.Outcomes))
+	}
+	narrowedByBudget := satisfied
+	narrowedByBudget.Outcome = contractsv1.ContextFabricRequirementNarrowed
+	narrowedByBudget.Impact = contractsv1.ContextFabricAnswerImpactScope
+	narrowedByBudget.CauseNarrowing = contractsv1.ContextFabricNarrowingBasisCanonicalIDLexical
+	narrowedByBudget.CauseObserved = true
+	narrowedByBudget.Declared = 8
+	readRow := satisfied
+	readRow.Obligation, readRow.Requirement = "state", "state/member/team"
+	for name, mutate := range map[string]func(*InvestigationResult){
+		"no cohort":        func(r *InvestigationResult) { r.Cohort = nil },
+		"work item cohort": func(r *InvestigationResult) { r.Cohort.Kind = SubjectWorkItem },
+		"no denial":        func(r *InvestigationResult) { r.Coverage = Coverage{} },
+		"denial not degrading": func(r *InvestigationResult) {
+			r.Coverage = cohortAuthorizationCutCoverage(cohortAuthorizationCutDenied, false)
+		},
+		"no count row":           func(r *InvestigationResult) { r.Completeness.Outcomes = []RequirementOutcomeRow{readRow} },
+		"count already narrowed": func(r *InvestigationResult) { r.Completeness.Outcomes = []RequirementOutcomeRow{narrowedByBudget} },
+		"work item count requirement": func(r *InvestigationResult) {
+			r.AnswerPlan = &AnswerPlan{Requirements: []contractsv1.ContextFabricPlanRequirement{{Requirement: identity, Obligation: string(ObligationCount), Subject: SubjectWorkItem}}}
+		},
+		"planning row only": func(r *InvestigationResult) {
+			planning := satisfied
+			planning.Stage, planning.Served, planning.Declared = contractsv1.ContextFabricOutcomeStagePlanning, 0, 0
+			r.Completeness.Outcomes = []RequirementOutcomeRow{planning}
+		},
+	} {
+		result := base()
+		mutate(&result)
+		before := len(result.Completeness.Outcomes)
+		if got, changed := restateCohortAuthorizationCutCount(result); changed || len(got.Completeness.Outcomes) != before {
+			t.Fatalf("%s: restate changed %v rows %d -> %d, want untouched", name, changed, before, len(got.Completeness.Outcomes))
+		}
+	}
+}
+
+// The operator line describes the decision the served document ends on: with
+// a stored row and a restated one, that is the restated row.
+func TestTheCardinalityEventReadsTheRestatedCountRow(t *testing.T) {
+	t.Parallel()
+	identity := "count/member/team"
+	stored := RequirementOutcomeRow{
+		Stage: contractsv1.ContextFabricOutcomeStageAssembledResult, Requirement: identity, Obligation: string(ObligationCount),
+		Outcome: contractsv1.ContextFabricRequirementSatisfied, Impact: contractsv1.ContextFabricAnswerImpactNone, Served: 4, Declared: 4,
+	}
+	result, changed := restateCohortAuthorizationCutCount(InvestigationResult{
+		Cohort:       countingCohort(SubjectTeam, 4),
+		Coverage:     cohortAuthorizationCutCoverage(cohortAuthorizationCutDenied, true),
+		Completeness: AnswerCompleteness{Outcomes: []RequirementOutcomeRow{stored}},
+	})
+	if !changed {
+		t.Fatal("fixture: nothing was restated")
+	}
+	event, ok := membershipCardinalityEventFrom(result, QuestionFamilyScopedCohortStatus)
+	if !ok || event.Outcome != contractsv1.ContextFabricRequirementNarrowed ||
+		event.Cause != contractsv1.ContextFabricCoverageDetailGraphCohortDeniedByAuthorization || event.Declared != 4+cohortAuthorizationCutDenied {
+		t.Fatalf("event = %+v (ok %v), want the restated narrowed row", event, ok)
 	}
 }

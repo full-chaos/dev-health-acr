@@ -237,6 +237,67 @@ func cohortAuthorizationDenied(coverage Coverage) int {
 	return denied
 }
 
+// restateCohortAuthorizationCutCount states the authorization cut on the
+// SERVED COPY of an answer whose count row predates it (CHAOS-12147).
+//
+// A result stored before the count row read the cut carries the denial detail
+// beside a `satisfied` assembled-result count row. Reuse never re-runs the
+// count step for a row that exists (hasAssembledOutcome), and a by-id read
+// never runs it at all, so both served that stored row and the completeness
+// state `complete`. This APPENDS the narrowed row the count step now writes,
+// built by the same builder from the stored row's own numbers; the stored row
+// is never rewritten (the outcome layer's APPEND invariant), and storage is
+// not touched. The completeness derivation reads any narrowed row, so the
+// served state is no longer `complete`.
+//
+// It reads the LAST assembled count row, and leaves alone: no cohort, a
+// work-item count (see withCohortAuthorizationCut), no measured denial, no
+// assembled count row (the backfill paths write one with the cut already
+// stated), and a last count row that is not `satisfied` (it already keeps the
+// state from `complete`). The last rule is also why a second pass appends
+// nothing: after a restatement the last count row is the narrowed one.
+//
+// It is called from ApplyServedStatusFloors, the one late writer every serving
+// surface runs, fresh, reused and by id. On a fresh answer the count row
+// already names the cut, so it is a no-op there.
+func restateCohortAuthorizationCutCount(result InvestigationResult) (InvestigationResult, bool) {
+	if result.Cohort == nil || result.Cohort.Kind == SubjectWorkItem {
+		return result, false
+	}
+	denied := cohortAuthorizationDenied(result.Coverage)
+	if denied == 0 {
+		return result, false
+	}
+	var stated *RequirementOutcomeRow
+	for index := range result.Completeness.Outcomes {
+		row := &result.Completeness.Outcomes[index]
+		if row.Stage != contractsv1.ContextFabricOutcomeStageAssembledResult || row.Obligation != string(ObligationCount) {
+			continue
+		}
+		stated = row
+	}
+	if stated == nil || stated.Outcome != contractsv1.ContextFabricRequirementSatisfied {
+		return result, false
+	}
+	if result.AnswerPlan != nil {
+		for _, requirement := range result.AnswerPlan.Requirements {
+			if requirement.Requirement == stated.Requirement && requirement.Subject == SubjectWorkItem {
+				return result, false
+			}
+		}
+	}
+	restated := membershipCardinalityOutcomeRow(MembershipCardinality{
+		Resolved:            true,
+		Kind:                result.Cohort.Kind,
+		Served:              stated.Served,
+		Declared:            stated.Declared,
+		AuthorizationDenied: denied,
+	}, stated.Requirement, stated.Obligation)
+	outcomes := appendOutcomeRows(result.Completeness.Outcomes, restated)
+	result.Completeness.Outcomes = outcomes
+	return result, true
+}
+
 // renderClampNarrowing finds the stage-1 `cardinality` step -- the pre-read
 // clamp of MaxCohortMembers to the response item budget.
 //
@@ -502,7 +563,11 @@ func appendMembershipCardinality(rows []RequirementOutcomeRow, cardinality Membe
 // same absence the row itself reports: nothing to say, said by saying
 // nothing rather than by logging a zero.
 func membershipCardinalityEventFrom(result InvestigationResult, family QuestionFamily) (MembershipCardinalityEvent, bool) {
-	for _, row := range result.Completeness.Outcomes {
+	// The LAST assembled count row, read backwards: a served copy can carry a
+	// restated row after a stored one (restateCohortAuthorizationCutCount),
+	// and the later row is the decision the served document ends on.
+	for index := len(result.Completeness.Outcomes) - 1; index >= 0; index-- {
+		row := result.Completeness.Outcomes[index]
 		if row.Stage != contractsv1.ContextFabricOutcomeStageAssembledResult {
 			continue
 		}

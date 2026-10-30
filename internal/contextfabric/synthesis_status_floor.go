@@ -258,12 +258,15 @@ func populationTruncatedNoMemberRowHolds(result InvestigationResult) bool {
 // can never serve a status above it.
 func ApplyServedStatusFloors(result InvestigationResult) InvestigationResult {
 	before := result.Status
+	// CHAOS-12147: a stored count row that predates the authorization-cut
+	// statement is restated on the served copy before the floors read it.
+	result, restated := restateCohortAuthorizationCutCount(result)
 	applyPopulationOutcomeStatusFloor(&result)
 	applyEmptyMemberSearchStatusFloor(&result)
 	applyDeniedCohortStatusFloor(&result)
 	applyStatusPoolCutStatusFloor(&result)
 	applyOrganizationSubjectStatusFloor(&result)
-	if result.Status != before {
+	if result.Status != before || restated {
 		result.Completeness = ComputeAnswerCompleteness(result)
 	}
 	return result
