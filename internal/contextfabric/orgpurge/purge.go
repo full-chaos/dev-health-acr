@@ -131,6 +131,8 @@ var purgeTables = []tableSpec{
 	// keep the monthly usage aggregate; an organization purge deletes it, so
 	// no row keyed by a purged organization stays.
 	{Name: "context_fabric_usage_monthly", Where: matchOrg("org_id")},
+	// CHAOS-11948: the Ask Dev thread rows.
+	{Name: "context_fabric_threads", Where: matchOrg("org_id")},
 	{Name: "context_fabric_investigation_results", Where: matchOrg("org_id")},
 	{Name: "context_fabric_model_execution_receipts", Where: matchOrg("org_id")},
 	{Name: "context_fabric_org_model_config", Where: matchOrg("org_id")},

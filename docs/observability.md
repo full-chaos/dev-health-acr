@@ -14,9 +14,10 @@ generated request ID for correlation and these bounded dimensions:
 - `kind`: `request`, `store`, `ranking`, `evidence`, or `episode`
 - `operation` and HTTP status class: finite endpoint families and `2xx`/`4xx`/`5xx`.
   Operations: `health`, `readiness`, `capabilities`, `context`, `evidence`,
-  `snapshot`, `episode`, `investigation`, `investigation_result`, `data_catalog`,
-  `data_subjects`, `data_facts`, `data_relationships`, `data_operations`,
-  `data_graphql`, or `unknown`
+  `snapshot`, `episode`, `investigation`, `investigation_result`,
+  `submission_status`, `threads` (the Ask Dev conversation list), `thread` (one
+  conversation's read or delete), `data_catalog`, `data_subjects`, `data_facts`,
+  `data_relationships`, `data_operations`, `data_graphql`, or `unknown`
 - `outcome`: `success`, `failure`, `denied`, `canceled`, or `unknown`
 - packet: lifecycle `status`, bytes, tokens, schema/baseline versions,
   compatibility, and source coverage
@@ -29,6 +30,18 @@ generated request ID for correlation and these bounded dimensions:
   `license`, `rate_limit`, `none`, or `unknown`. `rate_limit` covers the
   request rate limit (`rate_limited`) and the shared Ask Dev admission
   refusals (`concurrency_limited`, `allowance_exhausted`).
+
+The Ask Dev conversation routes (CHAOS-11948) write one Info line per request,
+`context fabric thread`: `route` (`list`, `get`, `delete`), a closed `outcome`
+(`listed`, `read`, `closed`, `not_open`, `not_found`, `invalid_request`,
+`store_unavailable`, `gate_unavailable`, `invalid_record`, `owner_unknown`), and
+on a read the aggregated serving decision of its done turns (`turns`,
+`done_turns`, `served_turns`, `withheld_denied`, `withheld_not_found`,
+`withheld_tuple`, `withheld_flood`, `earlier_turns`). A thread read writes no
+`StoredResultAuthorization` line per turn: that event is one line per request.
+A turn naming a deleted, expired or full conversation is refused on the
+admission line with outcome `refused_thread_closed` and a
+`thread_closed_reason`.
 
 The sink receives the snapshot only, never a `context.Context`, request body,
 evidence reference, transcript, debug payload, credential, or arbitrary attribute
