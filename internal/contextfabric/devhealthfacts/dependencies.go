@@ -120,21 +120,50 @@ func (p *BlockersProvider) ReadFacts(ctx context.Context, principal storage.Prin
 	}()
 	facts := make([]contextfabric.CanonicalFact, 0, len(ids))
 	var teamOutcome teamRollupOutcome
-	if teamSubjects := subjectsOfKind(query.Subjects, contextfabric.SubjectTeam); len(teamSubjects) > 0 {
-		var teamErr error
-		teamOutcome, teamErr = p.readTeamRollup(ctx, principal, orgID, query.RequestedRepositoryScope, orgWideFigureAllowed(principal, query.RequestedRepositoryScope), teamSubjects, &facts)
-		if teamErr != nil {
-			return contextfabric.FactProviderResult{}, readFailure("query team blockers", teamErr)
+	var projectRejected int
+	// The team and project rollups and the work item read need nothing from
+	// each other, so they run together: the read takes the slower of them, not
+	// their sum (the team rollup alone is several statements). Each writes its
+	// own facts; the work item facts follow the rollup facts, as before. The
+	// first failure cancels the other and fails the read; the read it cancelled
+	// is not logged as a failure of its own.
+	group, groupCtx := errgroup.WithContext(ctx)
+	failed := func(action string, err error) error {
+		if ctx.Err() == nil && groupCtx.Err() != nil {
+			return err
 		}
-		rejected += teamOutcome.rejected
+		return readFailure(action, err)
 	}
-	if projectSubjects := subjectsOfKind(query.Subjects, contextfabric.SubjectProject); len(projectSubjects) > 0 {
-		projectRejected, projectErr := p.readProjectRollup(ctx, principal, orgID, query.RequestedRepositoryScope, projectSubjects, &facts)
-		if projectErr != nil {
-			return contextfabric.FactProviderResult{}, readFailure("query project blockers", projectErr)
+	group.Go(func() error {
+		if teamSubjects := subjectsOfKind(query.Subjects, contextfabric.SubjectTeam); len(teamSubjects) > 0 {
+			var teamErr error
+			teamOutcome, teamErr = p.readTeamRollup(groupCtx, principal, orgID, query.RequestedRepositoryScope, orgWideFigureAllowed(principal, query.RequestedRepositoryScope), teamSubjects, &facts)
+			if teamErr != nil {
+				return failed("query team blockers", teamErr)
+			}
 		}
-		rejected += projectRejected
+		if projectSubjects := subjectsOfKind(query.Subjects, contextfabric.SubjectProject); len(projectSubjects) > 0 {
+			var projectErr error
+			projectRejected, projectErr = p.readProjectRollup(groupCtx, principal, orgID, query.RequestedRepositoryScope, projectSubjects, &facts)
+			if projectErr != nil {
+				return failed("query project blockers", projectErr)
+			}
+		}
+		return nil
+	})
+	var workItemFacts []contextfabric.CanonicalFact
+	// CHAOS-5438: ONE owner -- see factBudget, and WorkProvider's identical
+	// note on why a single-branch provider uses it too.
+	budget := newFactBudget()
+	if len(ids) > 0 {
+		group.Go(func() error {
+			return p.readWorkItemBlockers(groupCtx, principal, orgID, query.RequestedRepositoryScope, ids, bySubject, budget, &workItemFacts, failed)
+		})
 	}
+	if err := group.Wait(); err != nil {
+		return contextfabric.FactProviderResult{}, err
+	}
+	rejected += teamOutcome.rejected + projectRejected
 	teamFactCount := len(facts)
 	if len(ids) == 0 {
 		state, emptyReason := currentAxisReadState(teamFactCount)
@@ -143,9 +172,17 @@ func (p *BlockersProvider) ReadFacts(ctx context.Context, principal storage.Prin
 		applyTeamsOwningProjectsOnly(ctx, p.facts.client, orgID, &result, query.Subjects, teamOutcome.teamsRequested, factTimeBound{})
 		return result, nil
 	}
-	// CHAOS-5438: ONE owner -- see factBudget, and WorkProvider's identical
-	// note on why a single-branch provider uses it too.
-	budget := newFactBudget()
+	facts = append(facts, workItemFacts...)
+	state, emptyReason := currentAxisReadState(len(facts))
+	result = contextfabric.FactProviderResult{Facts: facts, State: state, Reason: emptyReason, Version: QueryVersion, Truncated: budget.truncated() || teamOutcome.truncated}
+	applyTeamsOwningNothing(&result, query.Subjects, teamOutcome.teamsRequested, teamOutcome.teamsWithoutRepos)
+	applyTeamsOwningProjectsOnly(ctx, p.facts.client, orgID, &result, query.Subjects, teamOutcome.teamsRequested, factTimeBound{})
+	return result, nil
+}
+
+// readWorkItemBlockers reads the blockers of the work item subjects (ids, keyed
+// in bySubject) into facts.
+func (p *BlockersProvider) readWorkItemBlockers(ctx context.Context, principal storage.Principal, orgID string, requestedScope []string, ids []string, bySubject map[string]contextfabric.SubjectRef, budget *factBudget, facts *[]contextfabric.CanonicalFact, failed func(string, error) error) error {
 	// blockerRelationshipType is an internal Go constant, not a caller
 	// supplied value, so it is safe to inline as a SQL string literal here
 	// rather than a bound parameter.
@@ -166,10 +203,10 @@ func (p *BlockersProvider) ReadFacts(ctx context.Context, principal storage.Prin
 	// subject and the blocking item it names. A blocker is itself a work
 	// item's identity, so an authorized subject must never carry the id of
 	// one the principal may not see.
-	authorized, authorizationBindings := workItemAuthorizedIDsSQL(workItemRepositoryAuthorization(principal, query.RequestedRepositoryScope))
+	authorized, authorizationBindings := workItemAuthorizedIDsSQL(workItemRepositoryAuthorization(principal, requestedScope))
 	settings, settingsErr := workItemReaderSettings(ctx)
 	if settingsErr != nil {
-		return contextfabric.FactProviderResult{}, readFailure("query work item blockers", settingsErr)
+		return failed("query work item blockers", settingsErr)
 	}
 	statement := readers.WithSettings(withRowProbeLimit(`SELECT d.source_work_item_id, d.target_work_item_id, ifNull(d.relationship_type, ''), toString(t.repo_id), `+counterpartRepositoryColumnsSQL+`, toUInt8(ifNull(c.counterpart_open, `+strconv.Itoa(int(blockerOpenUnknown))+`))
 FROM work_item_dependencies AS d FINAL
@@ -218,7 +255,7 @@ LIMIT 1 BY toString(t.repo_id), `+blockedExpr("d")+`, `+blockerExpr("d")), setti
 		if ref, ok := counterpartWorkItemRef(sourceRepoID, sourceRepoCount, blockerID); ok {
 			fields["blocked_by_work_item_ref"] = contextfabric.StringFactValue(ref)
 		}
-		facts = append(facts, contextfabric.CanonicalFact{
+		*facts = append(*facts, contextfabric.CanonicalFact{
 			Kind: contextfabric.FactBlockers, Subject: subject,
 			Fields:         fields,
 			EvidenceRefIDs: []string{dependencyEvidenceRefID(storedSourceID, storedTargetID, relationKey)},
@@ -226,14 +263,10 @@ LIMIT 1 BY toString(t.repo_id), `+blockedExpr("d")+`, `+blockerExpr("d")), setti
 		return nil
 	}, authorizationBindings...)
 	if scanErr != nil {
-		return contextfabric.FactProviderResult{}, readFailure("query work item blockers", scanErr)
+		return failed("query work item blockers", scanErr)
 	}
 	budget.observe(rowCount)
-	state, emptyReason := currentAxisReadState(len(facts))
-	result = contextfabric.FactProviderResult{Facts: facts, State: state, Reason: emptyReason, Version: QueryVersion, Truncated: budget.truncated() || teamOutcome.truncated}
-	applyTeamsOwningNothing(&result, query.Subjects, teamOutcome.teamsRequested, teamOutcome.teamsWithoutRepos)
-	applyTeamsOwningProjectsOnly(ctx, p.facts.client, orgID, &result, query.Subjects, teamOutcome.teamsRequested, factTimeBound{})
-	return result, nil
+	return nil
 }
 
 // RequiredChildrenProvider implements contextfabric.FactProvider for

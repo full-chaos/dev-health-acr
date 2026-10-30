@@ -26,11 +26,15 @@ var teamBlockerStatementMarkers = []string{
 	"is_open AND start_unix IS NOT NULL",
 }
 
-// togetherClient holds each of the three statements until all three are in
-// flight. A statement still alone after wait fails, naming how many were in
+// workItemBlockersMarker names the work item blockers statement.
+const workItemBlockersMarker = "ifNull(d.relationship_type, ''), toString(t.repo_id)"
+
+// togetherClient holds each statement a marker names until all of them are
+// in flight. A statement still alone after wait fails, naming how many were in
 // flight, so a read that runs them one after another fails.
 type togetherClient struct {
 	inner   *fakeClient
+	markers []string
 	wait    time.Duration
 	mu      sync.Mutex
 	arrived int
@@ -38,13 +42,13 @@ type togetherClient struct {
 }
 
 func (c *togetherClient) Query(ctx context.Context, statement string, bindings []contextpacket.ClickHouseBinding) (contextpacket.ClickHouseRowScanner, error) {
-	for _, marker := range teamBlockerStatementMarkers {
+	for _, marker := range c.markers {
 		if !strings.Contains(statement, marker) {
 			continue
 		}
 		c.mu.Lock()
 		c.arrived++
-		if c.arrived == len(teamBlockerStatementMarkers) {
+		if c.arrived == len(c.markers) {
 			close(c.all)
 		}
 		c.mu.Unlock()
@@ -55,7 +59,7 @@ func (c *togetherClient) Query(ctx context.Context, statement string, bindings [
 		case <-time.After(c.wait):
 			c.mu.Lock()
 			defer c.mu.Unlock()
-			return nil, fmt.Errorf("statement %q ran alone: %d of %d edge-row statements were in flight", marker, c.arrived, len(teamBlockerStatementMarkers))
+			return nil, fmt.Errorf("statement %q ran alone: %d of %d statements were in flight", marker, c.arrived, len(c.markers))
 		}
 		break
 	}
@@ -69,7 +73,7 @@ func (c *togetherClient) Query(ctx context.Context, statement string, bindings [
 // slowest of them, not their sum. One after another, on a loaded ClickHouse,
 // they took the read past its provider budget.
 func TestTeamBlockerEdgeRowStatementsAreInFlightTogether(t *testing.T) {
-	client := &togetherClient{wait: 2 * time.Second, all: make(chan struct{}), inner: &fakeClient{tables: []fakeTable{
+	client := &togetherClient{markers: teamBlockerStatementMarkers, wait: 2 * time.Second, all: make(chan struct{}), inner: &fakeClient{tables: []fakeTable{
 		{match: "GROUP BY team_id, repo_key", rows: [][]any{{"CHAOS", "00000000-0000-4000-8000-000000000001", "acme/repo"}}},
 		{match: "is_open AND start_unix IS NOT NULL", rows: [][]any{{"CHAOS", int64(5), int64(5), int64(5), time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC).UnixMilli()}}},
 		{match: "SELECT toInt64(uniqExact(if(", rows: [][]any{{int64(0)}}},
@@ -89,6 +93,36 @@ func TestTeamBlockerEdgeRowStatementsAreInFlightTogether(t *testing.T) {
 	wantInt(t, fields, "blocker_dependencies_current", 5)
 	if _, has := fields["oldest_blocked_age_days"]; !has {
 		t.Errorf("no age served: reason %+v", fields["oldest_blocked_age_unavailable_reason"])
+	}
+}
+
+// The work item blockers statement needs nothing from the team rollup, so it
+// is in flight together with the team rollup's edge-row statements, and its
+// facts follow the team facts, as before.
+func TestWorkItemBlockersStatementIsInFlightWithTheTeamRollup(t *testing.T) {
+	markers := append(append([]string{}, teamBlockerStatementMarkers...), workItemBlockersMarker)
+	client := &togetherClient{markers: markers, wait: 2 * time.Second, all: make(chan struct{}), inner: &fakeClient{tables: []fakeTable{
+		{match: "GROUP BY team_id, repo_key", rows: [][]any{{"CHAOS", "00000000-0000-4000-8000-000000000001", "acme/repo"}}},
+		{match: "is_open AND start_unix IS NOT NULL", rows: [][]any{{"CHAOS", int64(5), int64(5), int64(5), time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC).UnixMilli()}}},
+		{match: "arrayJoin({team_repo_pairs", rows: [][]any{{"CHAOS", int64(4), int64(5), int64(0), int64(0), int64(0), int64(0)}}},
+		{match: "SELECT toInt64(uniqExact(if(", rows: [][]any{{int64(0)}}},
+		{match: workItemBlockersMarker, rows: [][]any{{"WIDGET-099", "WIDGET-101", "blocks", "repo-1", "repo-9", uint64(1), uint8(1)}}},
+		{match: "FROM work_item_dependencies", rows: [][]any{{"00000000-0000-4000-8000-000000000001", int64(4), int64(5), int64(0), int64(3)}}},
+	}}}
+	provider := findProvider(t, devhealthfacts.NewProviders(client), contextfabric.FactBlockers)
+	team, item := teamSubject("CHAOS"), workItemSubject("repo-1", "WIDGET-101")
+	result, err := provider.ReadFacts(context.Background(), storage.Principal{OrgID: "org-1"}, contextfabric.FactQuery{
+		Time: contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent}, Kind: contextfabric.FactBlockers, Subjects: []contextfabric.SubjectRef{team, item},
+	})
+	if err != nil {
+		t.Fatalf("the read failed: %v", err)
+	}
+	if len(result.Facts) != 2 || result.Facts[0].Subject.CanonicalID != team.CanonicalID || result.Facts[1].Subject.CanonicalID != item.CanonicalID {
+		t.Fatalf("facts %+v, want the team fact, then the work item fact", result.Facts)
+	}
+	wantInt(t, result.Facts[0].Fields, "blocked_work_items_current", 4)
+	if blocker := result.Facts[1].Fields["blocked_by_work_item_id"].String; blocker == nil || *blocker != "WIDGET-099" {
+		t.Fatalf("work item fact %+v, want blocked by WIDGET-099", result.Facts[1].Fields)
 	}
 }
 
