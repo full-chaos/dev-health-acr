@@ -211,6 +211,17 @@ func TestSubmissionParity(t *testing.T) {
 	})
 }
 
+// The canonical-owner table (CHAOS-12091), on PostgreSQL; memoryinvestigation
+// runs the same table.
+func TestSubmissionCanonicalOwnerParity(t *testing.T) {
+	ctx := context.Background()
+	paritytest.RunSubmissionCanonicalOwnerSuite(t, func(t *testing.T) paritytest.SubmissionStore {
+		store, err := pginvestigation.NewStore(newInvestigationTestDatabase(t, ctx))
+		require.NoError(t, err)
+		return store
+	})
+}
+
 // Reuse never crosses principals: a row bound to A's submission is a reuse
 // candidate for A only; an unbound row stays a candidate for everyone in the
 // organization.

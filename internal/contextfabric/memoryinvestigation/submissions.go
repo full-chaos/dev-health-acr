@@ -21,6 +21,22 @@ var (
 	_ contextfabric.UsageReader             = (*Store)(nil)
 )
 
+// findSubmissionLocked returns the stored key and record that key names: the
+// same organization and submission id, and one owner (the same legacy pair,
+// or the same canonical user on the same surface, CHAOS-12091). A rotated
+// credential's request finds its user's record this way. Callers hold mu.
+func (s *Store) findSubmissionLocked(key contextfabric.SubmissionKey) (contextfabric.SubmissionKey, contextfabric.SubmissionRecord, bool) {
+	if record, found := s.submissions[key]; found {
+		return key, record, true
+	}
+	for stored, record := range s.submissions {
+		if stored.OrgID == key.OrgID && stored.SubmissionID == key.SubmissionID && contextfabric.SameSubmissionOwner(stored.Owner, key.Owner) {
+			return stored, record, true
+		}
+	}
+	return contextfabric.SubmissionKey{}, contextfabric.SubmissionRecord{}, false
+}
+
 func validSubmissionKey(key contextfabric.SubmissionKey) error {
 	if strings.TrimSpace(key.OrgID) == "" || key.Owner.Subject == "" || key.Owner.AuthenticationMethod == "" {
 		return errors.New("memoryinvestigation: submission organization and owner are required")
@@ -59,7 +75,7 @@ func (s *Store) completeSubmissionLocked(principal storage.Principal, orgID, res
 // hold mu.
 func (s *Store) ownedByLocked(resultID string, key contextfabric.SubmissionKey) bool {
 	stored, found := s.results[resultID]
-	return found && stored.orgID == key.OrgID && stored.owner != nil && *stored.owner == key.Owner
+	return found && stored.orgID == key.OrgID && stored.owner != nil && contextfabric.SameSubmissionOwner(*stored.owner, key.Owner)
 }
 
 // reconcileLocked applies the store's reconcile rule to one record. Callers
@@ -138,10 +154,10 @@ func (s *Store) AdmitSubmission(ctx context.Context, admission contextfabric.Sub
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if existing, found := s.submissions[admission.Key]; found {
+	if storedKey, existing, found := s.findSubmissionLocked(admission.Key); found {
 		reconciled, changed := s.reconcileLocked(existing, now)
 		if changed {
-			s.submissions[admission.Key] = reconciled
+			s.submissions[storedKey] = reconciled
 		}
 		return reconciled, false, nil
 	}
@@ -158,7 +174,7 @@ func (s *Store) AdmitSubmission(ctx context.Context, admission contextfabric.Sub
 			continue
 		}
 		orgRunning++
-		if key.Owner == admission.Key.Owner {
+		if contextfabric.SameSubmissionOwner(key.Owner, admission.Key.Owner) {
 			principalRunning++
 		}
 	}
@@ -194,13 +210,13 @@ func (s *Store) GetSubmission(ctx context.Context, key contextfabric.SubmissionK
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	record, found := s.submissions[key]
+	storedKey, record, found := s.findSubmissionLocked(key)
 	if !found {
 		return contextfabric.SubmissionRecord{}, contextfabric.ErrSubmissionNotFound
 	}
 	reconciled, changed := s.reconcileLocked(record, now)
 	if changed {
-		s.submissions[key] = reconciled
+		s.submissions[storedKey] = reconciled
 	}
 	return reconciled, nil
 }
@@ -215,7 +231,7 @@ func (s *Store) FinishSubmission(ctx context.Context, key contextfabric.Submissi
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	record, found := s.submissions[key]
+	storedKey, record, found := s.findSubmissionLocked(key)
 	if !found {
 		return contextfabric.SubmissionRecord{}, "", contextfabric.ErrSubmissionNotFound
 	}
@@ -227,12 +243,12 @@ func (s *Store) FinishSubmission(ctx context.Context, key contextfabric.Submissi
 	}
 	completion := contextfabric.SubmissionCompletionServedUnsaved
 	record.State = contextfabric.SubmissionDoneUnsaved
-	if servedResultID != "" && s.ownedByLocked(servedResultID, key) {
+	if servedResultID != "" && s.ownedByLocked(servedResultID, storedKey) {
 		completion = contextfabric.SubmissionCompletionServedStored
 		record.State, record.ResultID = contextfabric.SubmissionDone, servedResultID
 	}
 	record.UpdatedAt = now.UTC()
-	s.submissions[key] = record
+	s.submissions[storedKey] = record
 	return record, completion, nil
 }
 
@@ -246,13 +262,13 @@ func (s *Store) AbandonSubmission(ctx context.Context, key contextfabric.Submiss
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	record, found := s.submissions[key]
+	storedKey, record, found := s.findSubmissionLocked(key)
 	if !found {
 		return contextfabric.SubmissionRecord{}, contextfabric.ErrSubmissionNotFound
 	}
 	if record.State == contextfabric.SubmissionRunning {
 		record.State, record.UpdatedAt = contextfabric.SubmissionAbandoned, now.UTC()
-		s.submissions[key] = record
+		s.submissions[storedKey] = record
 	}
 	return record, nil
 }

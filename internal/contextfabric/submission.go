@@ -62,28 +62,95 @@ var ErrSubmissionNotFound = errors.New("context fabric: submission not found")
 // principal built without it rather than binding a result to an empty owner.
 var ErrSubmissionOwnerUnknown = errors.New("context fabric: submission owner has no subject")
 
-// SubmissionOwner is the identity a submission and its result are bound to:
-// the authentication boundary and its subject (storage.Principal.AuditActor).
-// A web user is its assertion subject; a credential is its credential (or
-// workload binding) id.
+// SubmissionOwnerSurface is the product surface a canonical owner acts
+// through (CHAOS-12091). A user's browser-made records and that user's MCP
+// records are separate: neither surface reads the other's.
+type SubmissionOwnerSurface string
+
+const (
+	// SubmissionSurfaceBrowser: the web app, by a web assertion or a
+	// browser-class credential.
+	SubmissionSurfaceBrowser SubmissionOwnerSurface = "browser"
+	// SubmissionSurfaceMCP: an MCP or device client, by an OAuth user or
+	// native device credential.
+	SubmissionSurfaceMCP SubmissionOwnerSurface = "mcp"
+)
+
+// SubmissionOwner is the identity a submission and its result are bound to.
+//
+// AuthenticationMethod and Subject are the legacy owner: the authentication
+// boundary and its subject (storage.Principal.AuditActor). A web user is its
+// assertion subject; a credential is its credential (or workload binding) id.
+//
+// UserID and Surface are the canonical owner (CHAOS-12091): the approving
+// user of a user-approved credential, or the web assertion's subject, on its
+// surface. They are empty for a principal with no user (operator and
+// workload credentials, and legacy credentials whose provenance was never
+// proven). A user's credentials rotate -- every browser token refresh makes
+// a new row -- while the user stays the same, so the owner match accepts
+// either: the same legacy pair, or the same user on the same surface.
 type SubmissionOwner struct {
 	AuthenticationMethod string
 	Subject              string
+	UserID               string
+	Surface              SubmissionOwnerSurface
 }
 
-// SubmissionOwnerOf is principal's owner identity.
+// SubmissionOwnerOf is principal's owner identity: the legacy pair, and the
+// canonical user and surface when principal has one.
 func SubmissionOwnerOf(principal storage.Principal) (SubmissionOwner, error) {
 	method, subject := principal.AuditActor()
 	if subject == "" {
 		return SubmissionOwner{}, ErrSubmissionOwnerUnknown
 	}
-	return SubmissionOwner{AuthenticationMethod: method, Subject: subject}, nil
+	userID, surface := canonicalSubmissionOwner(principal)
+	return SubmissionOwner{AuthenticationMethod: method, Subject: subject, UserID: userID, Surface: surface}, nil
 }
 
-// Is reports whether principal is this owner.
+// canonicalSubmissionOwner is principal's user and surface, or "" for a
+// principal that has no user. The surface is chosen from the credential's
+// immutable client class, never from anything the request carries.
+func canonicalSubmissionOwner(principal storage.Principal) (string, SubmissionOwnerSurface) {
+	switch principal.AuthenticationMethod {
+	case storage.AuthenticationMethodWebAssertion:
+		if principal.Subject == "" {
+			return "", ""
+		}
+		return principal.Subject, SubmissionSurfaceBrowser
+	case storage.AuthenticationMethodCredential:
+		if principal.ApprovingUserID == "" {
+			return "", ""
+		}
+		switch principal.ClientClass {
+		case storage.CredentialClientClassBrowser:
+			return principal.ApprovingUserID, SubmissionSurfaceBrowser
+		case storage.CredentialClientClassOAuthUser, storage.CredentialClientClassNativeDevice:
+			return principal.ApprovingUserID, SubmissionSurfaceMCP
+		}
+	}
+	return "", ""
+}
+
+// Is reports whether principal is this owner: the same legacy pair, or the
+// same canonical user on the same surface.
 func (o SubmissionOwner) Is(principal storage.Principal) bool {
-	method, subject := principal.AuditActor()
-	return subject != "" && o.AuthenticationMethod == method && o.Subject == subject
+	other, err := SubmissionOwnerOf(principal)
+	return err == nil && SameSubmissionOwner(o, other)
+}
+
+// SameSubmissionOwner reports whether a and b are one owner: the same
+// legacy pair, or the same non-empty canonical user on the same surface.
+func SameSubmissionOwner(a, b SubmissionOwner) bool {
+	if a.Subject != "" && a.AuthenticationMethod == b.AuthenticationMethod && a.Subject == b.Subject {
+		return true
+	}
+	return a.UserID != "" && a.UserID == b.UserID && a.Surface != "" && a.Surface == b.Surface
+}
+
+// ValidSubmissionOwnerSurface reports whether surface is "" or a member of
+// the closed vocabulary.
+func ValidSubmissionOwnerSurface(surface SubmissionOwnerSurface) bool {
+	return surface == "" || surface == SubmissionSurfaceBrowser || surface == SubmissionSurfaceMCP
 }
 
 // SubmissionKey is the unique key of a submission record.
