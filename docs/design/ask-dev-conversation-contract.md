@@ -378,7 +378,7 @@ retention." The web controls are I-32b; this item is the ACR store and route.
   row is not erased at the delete (it holds no content); it goes with its
   result.
 - **Retention (D-22).** One row per result (`acr.context_fabric_result_feedback`,
-  primary key `result_id`), with a foreign key to the result row `ON DELETE
+  migration `0063`, primary key `result_id`), with a foreign key to the result row `ON DELETE
   CASCADE`: whatever removes a result (the retention job, I-30) removes its
   feedback in the same statement. The organization purge lists the table
   before the results, and the write fence (0052) refuses a write for a
