@@ -1790,22 +1790,32 @@ check_ops_checkout_record_behaviour() {
       GITHUB_OUTPUT="$dir/output" GITHUB_ENV="$dir/env" GITHUB_STEP_SUMMARY="$dir/summary" \
       bash -e "$script" > "$dir/stdout" 2>&1
   }
-  local mode recorded
-  for mode in schedule_floating dispatch_input; do
-    run_record "$mode" "$other" || { printf 'ops-checkout record step failed in %s mode\n' "$mode" >&2; status=1; continue; }
+  # Every mode records the same three things (codex #1775 r2 P2): the step
+  # output, both job environment variables, and the summary's commit, mode
+  # and pin rows.
+  record_names() {
+    local mode="$1" pin="$2" recorded ok=0
     recorded="$(sed -n 's/^sha=//p' "$dir/output")"
     [ "$recorded" = "$ops_head" ] || {
-      printf 'ops-checkout record step in %s mode recorded sha %s, not the commit checked out (%s)\n' "$mode" "$recorded" "$ops_head" >&2; status=1; }
+      printf 'ops-checkout record step in %s mode recorded sha %s, not the commit checked out (%s)\n' "$mode" "$recorded" "$ops_head" >&2; ok=1; }
     if ! { grep -qxF "E2E_OPS_REF=$ops_head" "$dir/env" && grep -qxF "E2E_OPS_REF_MODE=$mode" "$dir/env"; }; then
-      printf 'ops-checkout record step in %s mode did not export E2E_OPS_REF=%s and its mode\n' "$mode" "$ops_head" >&2; status=1
+      printf 'ops-checkout record step in %s mode did not export E2E_OPS_REF=%s and E2E_OPS_REF_MODE=%s\n' "$mode" "$ops_head" "$mode" >&2; ok=1
     fi
-    if ! { grep -qF "commit: \`$ops_head\`" "$dir/summary" && grep -qF 'did NOT use the pin' "$dir/summary"; }; then
-      printf 'ops-checkout record step in %s mode: the summary does not name %s and say the pin was not used\n' "$mode" "$ops_head" >&2; status=1
+    if ! { grep -qxF -- "- commit: \`$ops_head\`" "$dir/summary" && grep -qxF -- "- chosen by: \`$mode\`" "$dir/summary" \
+        && grep -qxF -- "- pin (ci/fullstack-ops.pin): \`$pin\`" "$dir/summary"; }; then
+      printf 'ops-checkout record step in %s mode: the summary does not name commit %s, mode %s and pin %s\n' "$mode" "$ops_head" "$mode" "$pin" >&2; ok=1
     fi
+    return "$ok"
+  }
+  local mode
+  for mode in schedule_floating dispatch_input; do
+    run_record "$mode" "$other" || { printf 'ops-checkout record step failed in %s mode\n' "$mode" >&2; status=1; continue; }
+    record_names "$mode" "$other" || status=1
+    grep -qF 'did NOT use the pin' "$dir/summary" || {
+      printf 'ops-checkout record step in %s mode: the summary does not say the pin was not used\n' "$mode" >&2; status=1; }
   done
   if run_record pinned "$ops_head"; then
-    [ "$(sed -n 's/^sha=//p' "$dir/output")" = "$ops_head" ] || {
-      printf 'ops-checkout record step for a pinned run did not record the pinned commit\n' >&2; status=1; }
+    record_names pinned "$ops_head" || status=1
     ! grep -qF 'did NOT use the pin' "$dir/summary" || {
       printf 'ops-checkout record step says a pinned run did not use the pin\n' >&2; status=1; }
   else
@@ -2123,6 +2133,23 @@ replace_literal_line "$ops_checkout_action" "$record_summary_is_pin" \
   '          echo "- commit: \`$PIN\`"'
 mutate_or_die "$ops_checkout_action" "$record_summary_is_pin" 'record_summary_is_pin'
 assert_check_fails 'the record step summary names the pin as the commit' check_ops_checkout_record_behaviour "$record_summary_is_pin"
+record_env_skips_pinned="$tmpdir/ops-checkout-record-env-skips-pinned.yml"
+# shellcheck disable=SC2016  # the $ names are literal text in the action file
+replace_literal_line "$ops_checkout_action" "$record_env_skips_pinned" \
+  "        printf 'E2E_OPS_REF=%s\nE2E_OPS_REF_MODE=%s\n' \"\$sha\" \"\$MODE\" >> \"\$GITHUB_ENV\"" \
+  "        [ \"\$MODE\" = pinned ] || printf 'E2E_OPS_REF=%s\nE2E_OPS_REF_MODE=%s\n' \"\$sha\" \"\$MODE\" >> \"\$GITHUB_ENV\""
+mutate_or_die "$ops_checkout_action" "$record_env_skips_pinned" 'record_env_skips_pinned'
+assert_check_fails 'a pinned run no longer exports E2E_OPS_REF' check_ops_checkout_record_behaviour "$record_env_skips_pinned"
+record_summary_no_mode="$tmpdir/ops-checkout-record-summary-no-mode.yml"
+# shellcheck disable=SC2016  # the $ names are literal text in the action file
+replace_literal_line "$ops_checkout_action" "$record_summary_no_mode" '          echo "- chosen by: \`$MODE\`"' '          :'
+mutate_or_die "$ops_checkout_action" "$record_summary_no_mode" 'record_summary_no_mode'
+assert_check_fails 'the record step summary lost the mode row' check_ops_checkout_record_behaviour "$record_summary_no_mode"
+record_summary_no_pin="$tmpdir/ops-checkout-record-summary-no-pin.yml"
+# shellcheck disable=SC2016  # the $ names are literal text in the action file
+replace_literal_line "$ops_checkout_action" "$record_summary_no_pin" '          echo "- pin (ci/fullstack-ops.pin): \`$PIN\`"' '          :'
+mutate_or_die "$ops_checkout_action" "$record_summary_no_pin" 'record_summary_no_pin'
+assert_check_fails 'the record step summary lost the pin row' check_ops_checkout_record_behaviour "$record_summary_no_pin"
 record_mismatch_passes="$tmpdir/ops-checkout-record-mismatch-passes.yml"
 awk '/not the pinned %s/ { flag=1; print; next } flag && /^          exit 1$/ { flag=0; next } { flag=0; print }' "$ops_checkout_action" > "$record_mismatch_passes"
 mutate_or_die "$ops_checkout_action" "$record_mismatch_passes" 'record_mismatch_passes'
