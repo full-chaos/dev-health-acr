@@ -16,6 +16,7 @@ import (
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
 	"github.com/full-chaos/dev-health-go/readers"
+	"golang.org/x/sync/errgroup"
 )
 
 // work_item_dependencies has one free-text relationship_type column (see
@@ -609,21 +610,6 @@ func (p *BlockersProvider) readTeamRollup(ctx context.Context, principal storage
 FROM (`+edgeRows+`)
 GROUP BY rid
 ORDER BY rid`, settings)
-		if len(repoKeys) > 0 {
-			if scanErr := forEachRepoKeyChunk(repoKeys, func(chunk []string) error {
-				return readers.QueryOrgScopedNamed(ctx, p.facts.client, "ReadTeamBlockerRollup", statement, orgID, chunk, func(row readers.RowScanner) error {
-					var repoID string
-					var r blockerRollupRepo
-					if err := row.Scan(&repoID, &r.blockedItems, &r.blockerEdges, &r.excludedEdges, &r.weakestLinkRank); err != nil {
-						return err
-					}
-					byRepo[repoID] = r
-					return nil
-				}, authorizationBindings...)
-			}); scanErr != nil {
-				return outcome, scanErr
-			}
-		}
 		// Team totals: distinct blocked items and edges across two arms, the
 		// team's owned repositories (one row per team and repository pair) and
 		// the items of its owned projects that reach a repository through a
@@ -663,7 +649,9 @@ FROM (
 )
 GROUP BY team_id
 ORDER BY team_id`, settings)
-		if scanErr := forEachTeamIDChunk(teamIDs, func(teamChunk []string) error {
+		// A team chunk's owned repository keys and the bindings its totals and
+		// age statements share.
+		teamChunkScope := func(teamChunk []string) ([]string, []readers.Binding) {
 			chunkOwned := make(map[string][]teamOwnedRepo, len(teamChunk))
 			var pairs []string
 			for _, teamID := range teamChunk {
@@ -672,43 +660,77 @@ ORDER BY team_id`, settings)
 					pairs = append(pairs, teamID+blockerPairSeparator+repo.key)
 				}
 			}
-			extra := append([]readers.Binding{{Name: "team_repo_pairs", Value: pairs}, {Name: "team_ids", Value: teamChunk}}, authorizationBindings...)
-			err := readers.QueryOrgScopedNamed(ctx, p.facts.client, "ReadTeamBlockerTotals", totalsStatement, orgID, repoKeysOf(chunkOwned), func(row readers.RowScanner) error {
-				var teamID string
-				var t blockerTeamTotals
-				if err := row.Scan(&teamID, &t.blockedItems, &t.blockerEdges, &t.excludedEdges, &t.projectBlockedItems, &t.projectWeakestRank, &t.writerUnresolved); err != nil {
-					return err
+			return repoKeysOf(chunkOwned), append([]readers.Binding{{Name: "team_repo_pairs", Value: pairs}, {Name: "team_ids", Value: teamChunk}}, authorizationBindings...)
+		}
+		// The per-repository rollup, the team totals and the team age read the
+		// same edge rows and need nothing but the scope above, so they run
+		// together: the read takes the slowest of them, not their sum. One
+		// after another they took the read past its provider budget on a
+		// ClickHouse the run's other fact reads were loading at the same time.
+		// Each statement writes its own map; the first failure cancels the
+		// others and fails the read, as it did one after another.
+		group, groupCtx := errgroup.WithContext(ctx)
+		if len(repoKeys) > 0 {
+			group.Go(func() error {
+				return forEachRepoKeyChunk(repoKeys, func(chunk []string) error {
+					return readers.QueryOrgScopedNamed(groupCtx, p.facts.client, "ReadTeamBlockerRollup", statement, orgID, chunk, func(row readers.RowScanner) error {
+						var repoID string
+						var r blockerRollupRepo
+						if err := row.Scan(&repoID, &r.blockedItems, &r.blockerEdges, &r.excludedEdges, &r.weakestLinkRank); err != nil {
+							return err
+						}
+						byRepo[repoID] = r
+						return nil
+					}, authorizationBindings...)
+				})
+			})
+		}
+		group.Go(func() error {
+			return forEachTeamIDChunk(teamIDs, func(teamChunk []string) error {
+				chunkRepoKeys, extra := teamChunkScope(teamChunk)
+				return readers.QueryOrgScopedNamed(groupCtx, p.facts.client, "ReadTeamBlockerTotals", totalsStatement, orgID, chunkRepoKeys, func(row readers.RowScanner) error {
+					var teamID string
+					var t blockerTeamTotals
+					if err := row.Scan(&teamID, &t.blockedItems, &t.blockerEdges, &t.excludedEdges, &t.projectBlockedItems, &t.projectWeakestRank, &t.writerUnresolved); err != nil {
+						return err
+					}
+					totals[teamID] = t
+					return nil
+				}, extra...)
+			})
+		})
+		group.Go(func() error {
+			return forEachTeamIDChunk(teamIDs, func(teamChunk []string) error {
+				chunkRepoKeys, extra := teamChunkScope(teamChunk)
+				chunkAges := map[string]blockerTeamAge{}
+				ageErr := readers.QueryOrgScopedNamed(groupCtx, p.facts.client, "ReadTeamBlockerOldestAge", ageStatement, orgID, chunkRepoKeys, func(row readers.RowScanner) error {
+					var teamID string
+					var a blockerTeamAge
+					if err := row.Scan(&teamID, &a.openEdges, &a.edgesWithStart, &a.edgesWithExactStart, &a.oldestStartMillis); err != nil {
+						return err
+					}
+					chunkAges[teamID] = a
+					return nil
+				}, extra...)
+				if ageErr != nil {
+					// groupCtx: a cancellation, the caller's or a sibling
+					// statement's failure, fails the read; any other age
+					// failure leaves the age absent with a reason.
+					if err := ageReadFailure(groupCtx, "team", ageErr); err != nil {
+						return err
+					}
+					for _, teamID := range teamChunk {
+						ageUnavailable[teamID] = true
+					}
+					return nil
 				}
-				totals[teamID] = t
+				for teamID, a := range chunkAges {
+					ages[teamID] = a
+				}
 				return nil
-			}, extra...)
-			if err != nil {
-				return err
-			}
-			chunkAges := map[string]blockerTeamAge{}
-			ageErr := readers.QueryOrgScopedNamed(ctx, p.facts.client, "ReadTeamBlockerOldestAge", ageStatement, orgID, repoKeysOf(chunkOwned), func(row readers.RowScanner) error {
-				var teamID string
-				var a blockerTeamAge
-				if err := row.Scan(&teamID, &a.openEdges, &a.edgesWithStart, &a.edgesWithExactStart, &a.oldestStartMillis); err != nil {
-					return err
-				}
-				chunkAges[teamID] = a
-				return nil
-			}, extra...)
-			if ageErr != nil {
-				if err := ageReadFailure(ctx, "team", ageErr); err != nil {
-					return err
-				}
-				for _, teamID := range teamChunk {
-					ageUnavailable[teamID] = true
-				}
-				return nil
-			}
-			for teamID, a := range chunkAges {
-				ages[teamID] = a
-			}
-			return nil
-		}); scanErr != nil {
+			})
+		})
+		if scanErr := group.Wait(); scanErr != nil {
 			return outcome, scanErr
 		}
 	}
