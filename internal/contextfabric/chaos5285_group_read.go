@@ -370,6 +370,7 @@ func (e *Engine) readAdmittedGroupFacts(ctx context.Context, principal storage.P
 	// the projection this whole stage exists to remove.
 	bundle, err := e.facts.ReadFacts(ctx, principal, CanonicalFactRequest{
 		Question:                 factReadQuestion(interpretation, window),
+		EvidenceWindowStated:     factReadWindowStated(window),
 		Subjects:                 admitted,
 		Requirements:             requirements,
 		RequestedRepositoryScope: copyRequestedRepositoryScope(request.RequestedScope.RepositorySlugs),

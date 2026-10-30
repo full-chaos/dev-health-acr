@@ -354,6 +354,9 @@ type FactQuery struct {
 	TimeEndExclusive         bool
 	RequestedRepositoryScope []string
 	Parameters               map[string]string
+	// EvidenceWindowStated is CanonicalFactRequest.EvidenceWindowStated: the
+	// caller supplied Time.EvidenceWindow; it was not inferred.
+	EvidenceWindowStated bool
 }
 
 type FactProviderResult struct {
@@ -1673,6 +1676,7 @@ func buildFactQuery(request CanonicalFactRequest, requirement FactRequirement, c
 		Cohort:                   request.Cohort,
 		Time:                     request.Question.TimeContext,
 		TimeEndExclusive:         request.TimeEndExclusive,
+		EvidenceWindowStated:     request.EvidenceWindowStated,
 		RequestedRepositoryScope: requested,
 		Parameters:               parameters,
 	}, nil

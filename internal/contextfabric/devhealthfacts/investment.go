@@ -88,8 +88,29 @@ func (p *InvestmentProvider) LoadPrerequisites(ctx context.Context, principal st
 	return ctx, nil
 }
 
+// investmentTimeBound is resolveTimeBound plus the one current-axis case the
+// investment read adds (CHAOS-12142). A current-axis read whose evidence
+// window the caller stated (question_stated or clarification_confirmed,
+// FactQuery.EvidenceWindowStated) takes that window's [start, end) as its
+// bound: the same bound a range read with an exclusive end takes, so it reads
+// the same work units (workUnitEndStampPredicate, whole and by end stamp), the
+// same ownership and the same coverage reasons as a read_facts window of the
+// same bounds. With no window, an all_time window (no bounds) or an inferred
+// window, the current-axis read stays unbounded, over all history.
+func investmentTimeBound(query contextfabric.FactQuery) (factTimeBound, contextfabric.FactProviderResult, bool) {
+	bound, result, unsupported := resolveTimeBound(query)
+	if query.Time.Axis != contextfabric.TemporalCurrent || !query.EvidenceWindowStated {
+		return bound, result, unsupported
+	}
+	window := query.Time.EvidenceWindow
+	if window == nil || window.Start == nil || window.End == nil {
+		return bound, result, unsupported
+	}
+	return factTimeBound{active: true, hasStart: true, start: window.Start.UTC(), end: window.End.UTC(), endExclusive: true}, contextfabric.FactProviderResult{}, false
+}
+
 func (p *InvestmentProvider) ReadFacts(ctx context.Context, principal storage.Principal, query contextfabric.FactQuery) (result contextfabric.FactProviderResult, err error) {
-	timeBound, unsupportedResult, unsupported := resolveTimeBound(query)
+	timeBound, unsupportedResult, unsupported := investmentTimeBound(query)
 	if unsupported {
 		return unsupportedResult, nil
 	}

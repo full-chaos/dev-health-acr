@@ -3698,6 +3698,7 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 		workItemTuple:            workItemTuple,
 		LinkScopedSubjects:       linkScopedFactSubjects(ctx, request, subjects, tupleCensus),
 		Question:                 factReadQuestion(interpretation, effectiveWindow),
+		EvidenceWindowStated:     factReadWindowStated(effectiveWindow),
 		Subjects:                 subjects,
 		Cohort:                   graphContext.Cohort,
 		Requirements:             mergedFactRequirements,
