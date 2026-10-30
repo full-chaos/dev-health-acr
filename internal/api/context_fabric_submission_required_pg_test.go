@@ -27,10 +27,13 @@ import (
 const browserSubmissionOrg = "33333333-3333-4333-8333-333333333333"
 
 // issueBrowserCredential issues a credential and makes its row browser class.
-// No issuance path derives the browser class yet (the browser OAuth client,
-// filed separately, adds it), so the fixture writes the row that path will
-// write: the class, an approving user, a session and a family. The provenance
-// trigger refuses changing a set class, so this one fixture write runs with it
+// The fixture writes the row the browser issuance path writes: the class, an approving user, the client, a session and a family,
+// with a 10-minute expiry inside the family (migration 0061 refuses a browser
+// row without its client or outliving its family). The expiry is the
+// database's clock, not the harness's: the credential lookup reads only rows
+// with expires_at after CURRENT_TIMESTAMP, and the harness clock is fixed in
+// the past, so it also sees the credential as live. The provenance trigger
+// refuses changing a set class, so this one fixture write runs with it
 // disabled, and the test then reads the class back through authentication.
 func issueBrowserCredential(t *testing.T, admin *sql.DB, credentials *storage.CredentialLifecycle, now time.Time) string {
 	t.Helper()
@@ -46,14 +49,19 @@ func issueBrowserCredential(t *testing.T, admin *sql.DB, credentials *storage.Cr
 		t.Fatal(err)
 	}
 	ctx := context.Background()
-	for _, statement := range []string{
-		`ALTER TABLE acr.client_credentials DISABLE TRIGGER trg_client_credentials_provenance_immutable`,
-		`UPDATE acr.client_credentials SET client_class = 'browser', approving_user_id = 'user_browser_fixture', client_id = NULL,
-			session_id = 'session_browser_fixture', family_id = 'family_browser_fixture', family_expires_at = now() + interval '1 day'
-			WHERE credential_id = '` + issued.Credential.CredentialID + `'`,
-		`ALTER TABLE acr.client_credentials ENABLE TRIGGER trg_client_credentials_provenance_immutable`,
+	for _, statement := range []struct {
+		query string
+		args  []any
+	}{
+		{query: `ALTER TABLE acr.client_credentials DISABLE TRIGGER trg_client_credentials_provenance_immutable`},
+		{query: `UPDATE acr.client_credentials SET client_class = 'browser', approving_user_id = 'user_browser_fixture', client_id = $2,
+			session_id = 'session_browser_fixture', family_id = 'family_browser_fixture',
+			expires_at = now() + interval '10 minutes', family_expires_at = now() + interval '12 hours'
+			WHERE credential_id = $1`,
+			args: []any{issued.Credential.CredentialID, auth.DevBrowserClientID}},
+		{query: `ALTER TABLE acr.client_credentials ENABLE TRIGGER trg_client_credentials_provenance_immutable`},
 	} {
-		if _, err := admin.ExecContext(ctx, statement); err != nil {
+		if _, err := admin.ExecContext(ctx, statement.query, statement.args...); err != nil {
 			t.Fatalf("browser fixture: %v", err)
 		}
 	}
