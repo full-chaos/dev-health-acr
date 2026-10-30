@@ -25,15 +25,15 @@ import (
 // so another principal's thread, an unknown one, a deleted or expired one and
 // a malformed id are one answer.
 
-const (
-	// ContextFabricThreadsPath lists the caller's threads.
-	ContextFabricThreadsPath = "/api/v1/context-fabric/threads"
-	// ContextFabricThreadPath reads or deletes one of them.
-	ContextFabricThreadPath = "/api/v1/context-fabric/threads/{thread_id}"
-	// ContextFabricThreadLogMessage is every thread route's decision line:
-	// one per request.
-	ContextFabricThreadLogMessage = "context fabric thread"
-)
+// ContextFabricThreadsPath lists the caller's threads.
+const ContextFabricThreadsPath = "/api/v1/context-fabric/threads"
+
+// ContextFabricThreadPath reads or deletes one of them.
+const ContextFabricThreadPath = "/api/v1/context-fabric/threads/{thread_id}"
+
+// ContextFabricThreadLogMessage is every thread route's decision line:
+// one per request.
+const ContextFabricThreadLogMessage = "context fabric thread"
 
 // ThreadRouteOutcome is the closed outcome of the thread line.
 type ThreadRouteOutcome string
