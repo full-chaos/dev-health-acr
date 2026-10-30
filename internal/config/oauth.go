@@ -40,6 +40,9 @@ func (c Config) OAuthConfigured() bool {
 // runtime, and checks each value's shape. Values are never echoed.
 func validateOAuthConfig(c Config) error {
 	if !c.OAuthConfigured() {
+		if len(c.OAuthBrowserClients) > 0 || len(c.OAuthDevBrowserRedirectURIs) > 0 {
+			return errors.New("ACR_OAUTH_BROWSER_CLIENTS and ACR_OAUTH_DEV_BROWSER_REDIRECT_URIS require ACR_OAUTH_ISSUER")
+		}
 		return nil
 	}
 	if c.OAuthIssuer == "" {
@@ -87,7 +90,66 @@ func validateOAuthConfig(c Config) error {
 	if c.OAuthRequestPurgeGrace < c.OAuthClientIdleTTL {
 		return errors.New("ACR_OAUTH_REQUEST_PURGE_GRACE must not be shorter than ACR_OAUTH_CLIENT_IDLE_TTL")
 	}
+	return validateOAuthBrowserClients(c)
+}
+
+// validateOAuthBrowserClients checks the first-party browser client
+// configuration (CHAOS-12123). The browser class binds the acr-api resource,
+// ACR_OAUTH_ISSUER, so the issuer must be one of ACR_OAUTH_RESOURCES; a
+// metadata-document client needs metadata documents on; the static
+// development client is refused outside development. The OAuth service checks
+// each value's shape again at startup.
+func validateOAuthBrowserClients(c Config) error {
+	if len(c.OAuthBrowserClients) == 0 && len(c.OAuthDevBrowserRedirectURIs) == 0 {
+		return nil
+	}
+	if len(c.OAuthDevBrowserRedirectURIs) > 0 && c.Environment != "development" {
+		return errors.New("ACR_OAUTH_DEV_BROWSER_REDIRECT_URIS is allowed only when ACR_ENVIRONMENT is development")
+	}
+	if len(c.OAuthBrowserClients) > 0 && !c.OAuthClientMetadataDocuments {
+		return errors.New("ACR_OAUTH_BROWSER_CLIENTS requires ACR_OAUTH_CLIENT_METADATA_DOCUMENTS")
+	}
+	seen := make(map[string]struct{}, len(c.OAuthBrowserClients))
+	for _, client := range c.OAuthBrowserClients {
+		if !clientMetadataDocumentURL(client) {
+			return errors.New("ACR_OAUTH_BROWSER_CLIENTS must list https client ID metadata document URLs with a path")
+		}
+		if _, duplicate := seen[client]; duplicate {
+			return errors.New("ACR_OAUTH_BROWSER_CLIENTS must not repeat a client")
+		}
+		seen[client] = struct{}{}
+	}
+	for _, redirect := range c.OAuthDevBrowserRedirectURIs {
+		if !devBrowserRedirect(redirect) {
+			return errors.New("ACR_OAUTH_DEV_BROWSER_REDIRECT_URIS must list http loopback URLs with a port and a path")
+		}
+	}
+	issuerIsResource := false
+	for _, resource := range c.OAuthResources {
+		if resource == c.OAuthIssuer {
+			issuerIsResource = true
+		}
+	}
+	if !issuerIsResource {
+		return errors.New("ACR_OAUTH_BROWSER_CLIENTS requires ACR_OAUTH_ISSUER in ACR_OAUTH_RESOURCES: the browser class binds the acr-api resource")
+	}
 	return nil
+}
+
+func clientMetadataDocumentURL(value string) bool {
+	parsed, err := url.Parse(value)
+	if err != nil || parsed.Scheme != "https" || parsed.Host == "" || parsed.User != nil || parsed.Fragment != "" {
+		return false
+	}
+	return parsed.Path != "" && parsed.Path != "/" && !strings.HasSuffix(parsed.Path, "/")
+}
+
+func devBrowserRedirect(value string) bool {
+	parsed, err := url.Parse(value)
+	if err != nil || parsed.Scheme != "http" || parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" || parsed.Port() == "" {
+		return false
+	}
+	return loopbackHost(parsed.Hostname()) && parsed.Path != "" && parsed.Path != "/"
 }
 
 func loopbackHost(host string) bool {

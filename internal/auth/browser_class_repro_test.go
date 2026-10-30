@@ -14,9 +14,10 @@ func TestReproTheWebClientGetsAShortLivedBrowserToken(t *testing.T) {
 	h, clientID := browserHarness(t)
 	verifier, challenge := pkce(t)
 
+	// The web client names no resource: it binds the acr-api one.
 	token, err := h.oauth.Exchange(context.Background(), OAuthTokenRequest{
-		GrantType: "authorization_code", Code: h.login(t, clientID, challenge, testResource),
-		RedirectURI: testRedirect, ClientID: clientID, CodeVerifier: verifier, Resource: testResource,
+		GrantType: "authorization_code", Code: h.login(t, clientID, challenge, ""),
+		RedirectURI: testRedirect, ClientID: clientID, CodeVerifier: verifier,
 	})
 
 	if err != nil {
@@ -27,10 +28,16 @@ func TestReproTheWebClientGetsAShortLivedBrowserToken(t *testing.T) {
 	}
 }
 
-// browserHarness is an OAuth harness whose registered client is the web's
-// first-party client. Before the browser class exists, nothing marks it.
+// browserHarness is an OAuth harness whose client is the web's first-party
+// client: the development static browser client on the test redirect, the
+// acr-api resource (the issuer) beside the MCP one, and consent approvals
+// signed in web session sid_1.
 func browserHarness(t *testing.T) (*oauthHarness, string) {
 	t.Helper()
-	h := newOAuthHarness(t)
-	return h, h.register(t)
+	h := newOAuthHarnessWith(t, func(cfg *OAuthConfig) {
+		cfg.Resources = []string{testResource, testIssuer}
+		cfg.DevBrowserRedirectURIs = []string{testRedirect}
+	})
+	h.sessionID = "sid_1"
+	return h, DevBrowserClientID
 }

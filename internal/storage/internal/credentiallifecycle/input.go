@@ -21,8 +21,9 @@ const (
 type ClientClass string
 
 const (
-	// ClientClassBrowser is reserved for the first-party web browser client
-	// (CHAOS-12070); no issuance path derives it yet.
+	// ClientClassBrowser is the first-party web browser client (CHAOS-12123):
+	// an OAuth exchange whose caller names this class explicitly, with the
+	// web session it was approved in and a new token family.
 	ClientClassBrowser ClientClass = "browser"
 	// ClientClassOAuthUser is a user-approved credential issued by an OAuth
 	// exchange (authorization code or RFC 8628 device grant) to a client.
@@ -85,8 +86,17 @@ type CreateInput struct {
 	ApprovingUserID string
 	// ClientClass is derived by normalizeCreate from the issuance path
 	// (deriveClientClass). A caller that sets it must name the class the
-	// path derives; it can never choose one.
+	// path derives; it can never choose one -- except ClientClassBrowser on an
+	// OAuth exchange, which the OAuth service names for its configured
+	// first-party clients and which must carry the three fields below.
 	ClientClass ClientClass
+	// SessionID, FamilyID and FamilyExpiresAt belong to the browser class
+	// only (CHAOS-12123): the approving web session (from the locked device
+	// authorization row), the token family the credential starts, and the
+	// family's absolute end.
+	SessionID       string
+	FamilyID        string
+	FamilyExpiresAt *time.Time
 }
 
 type RotationReplacement struct {

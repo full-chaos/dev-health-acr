@@ -80,7 +80,7 @@ func (f *oauthPurgeFixture) redeemedDevice(expiresAt *time.Time) (storage.Device
 		CredentialID: credentialID, OrgID: grant.OrgID, Name: "purge fixture",
 		TokenPrefix: fmt.Sprintf("fcacr_purge%d", n), TokenHash: fmt.Sprintf("%064x", n),
 		RepositoryScopes: grant.RepositoryScopes, Scopes: grant.Scopes, ActorID: grant.ApprovingSubject,
-		ExpiresAt: expiresAt, Resource: "https://example.com/resource",
+		ExpiresAt: expiresAt, Resource: "https://example.com/resource", ClientID: "acrc_0123456789abcdef0123456789abcdef",
 	})
 	require.NoError(f.t, err)
 	return device.DeviceCodeHash, credentialID

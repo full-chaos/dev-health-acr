@@ -119,12 +119,34 @@ func normalizeCreate(input CreateInput) (CreateInput, error) {
 	if err != nil {
 		return CreateInput{}, err
 	}
+	input.SessionID, err = normalizeOptionalText("session id", input.SessionID, 256)
+	if err != nil {
+		return CreateInput{}, err
+	}
+	input.FamilyID, err = normalizeOptionalText("family id", input.FamilyID, 256)
+	if err != nil {
+		return CreateInput{}, err
+	}
 	class, err := deriveClientClass(input)
 	if err != nil {
 		return CreateInput{}, err
 	}
+	if input.ClientClass == ClientClassBrowser && class == ClientClassOAuthUser {
+		// The OAuth service names a first-party browser client explicitly;
+		// the class then needs everything a browser credential carries.
+		if input.ClientID == "" || input.SessionID == "" || input.FamilyID == "" || input.FamilyExpiresAt == nil || input.ExpiresAt == nil {
+			return CreateInput{}, invalid("browser credential")
+		}
+		if input.FamilyExpiresAt.Before(*input.ExpiresAt) {
+			return CreateInput{}, invalid("family expiry")
+		}
+		class = ClientClassBrowser
+	}
 	if input.ClientClass != "" && input.ClientClass != class {
 		return CreateInput{}, invalid("client class")
+	}
+	if class != ClientClassBrowser && (input.SessionID != "" || input.FamilyID != "" || input.FamilyExpiresAt != nil) {
+		return CreateInput{}, invalid("session or family")
 	}
 	input.ClientClass = class
 	return input, nil
@@ -162,6 +184,11 @@ func deriveClientClass(input CreateInput) (ClientClass, error) {
 				return "", invalid("client id")
 			}
 			return ClientClassNativeDevice, nil
+		}
+		// An OAuth exchange always names its client (both OAuth redeems
+		// refuse an empty one); the class needs it on the row.
+		if input.ClientID == "" {
+			return "", invalid("client id")
 		}
 		return ClientClassOAuthUser, nil
 	default:

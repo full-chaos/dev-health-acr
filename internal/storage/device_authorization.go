@@ -126,13 +126,16 @@ type DeviceAuthorization struct {
 	AuthorizedScopes              []string
 	ApprovingSubject              string
 	ApprovingAuthenticationMethod AuthenticationMethod
-	CreatedAt                     time.Time
-	ApprovedAt                    *time.Time
-	RedeemedAt                    *time.Time
-	RedeemedCredentialID          string
-	IssuanceProvenance            CredentialIssuanceProvenance
-	AckRequired                   bool
-	CredentialAckedAt             *time.Time
+	// ApprovingSessionID is the web session the approval was made in
+	// (CHAOS-12123), "" when the approving assertion named none.
+	ApprovingSessionID   string
+	CreatedAt            time.Time
+	ApprovedAt           *time.Time
+	RedeemedAt           *time.Time
+	RedeemedCredentialID string
+	IssuanceProvenance   CredentialIssuanceProvenance
+	AckRequired          bool
+	CredentialAckedAt    *time.Time
 }
 
 // CredentialUnacknowledged reports a redeemed record whose credential must be
@@ -160,6 +163,9 @@ type DeviceAuthorizationGrant struct {
 	Scopes                        []string
 	ApprovingSubject              string
 	ApprovingAuthenticationMethod AuthenticationMethod
+	// ApprovingSessionID is the approving web session (CHAOS-12123),
+	// optional.
+	ApprovingSessionID string
 }
 
 type DeviceAuthorizationStore interface {
@@ -273,6 +279,9 @@ func ValidateDeviceAuthorizationGrant(grant DeviceAuthorizationGrant) error {
 		return ErrInvalidDeviceAuthorization
 	}
 	if grant.ApprovingAuthenticationMethod != AuthenticationMethodWebAssertion || len(grant.RepositoryScopes) == 0 || len(grant.Scopes) == 0 {
+		return ErrInvalidDeviceAuthorization
+	}
+	if len(grant.ApprovingSessionID) > 256 || grant.ApprovingSessionID != strings.TrimSpace(grant.ApprovingSessionID) {
 		return ErrInvalidDeviceAuthorization
 	}
 	if slices.Contains(grant.RepositoryScopes, "*") && !slices.Equal(grant.RepositoryScopes, []string{"*"}) {

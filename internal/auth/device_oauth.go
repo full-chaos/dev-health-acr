@@ -23,6 +23,9 @@ type OAuthConsentAuthority interface {
 	ApproveForOAuth(ctx context.Context, principal storage.Principal, ref storage.DeviceCodeHash, repositoryScopes, scopes []string) error
 	DenyForOAuth(ctx context.Context, principal storage.Principal, ref storage.DeviceCodeHash) error
 	RedeemForResource(ctx context.Context, ref storage.DeviceCodeHash, clientID, resource string, scopes []string) (IssuedCredential, error)
+	// RedeemBrowserForResource is RedeemForResource for a configured
+	// first-party browser client (CHAOS-12123): it issues the browser class.
+	RedeemBrowserForResource(ctx context.Context, ref storage.DeviceCodeHash, clientID, resource string, scopes []string) (IssuedCredential, error)
 	// StartDeviceGrant starts a device authorization for RFC 8628's
 	// device_authorization endpoint.
 	StartDeviceGrant(ctx context.Context) (OAuthDeviceGrantStart, error)
@@ -189,6 +192,18 @@ var ErrOAuthDeviceNotApproved = errors.New("device authorization is not approved
 // bound to the protected resource the OAuth request named and carrying only
 // the scopes it asked for (a non-empty subset of the approved ones).
 func (s *DeviceFlowService) RedeemForResource(ctx context.Context, hash storage.DeviceCodeHash, clientID, resource string, scopes []string) (IssuedCredential, error) {
+	return s.redeemForResource(ctx, hash, clientID, resource, scopes, false)
+}
+
+// RedeemBrowserForResource issues the browser-class credential of an
+// approved authorization (CHAOS-12123): 10-minute access, a new token family,
+// and the approval's web session. An approval without a session is refused
+// with ErrBrowserSessionRequired and leaves the authorization approved.
+func (s *DeviceFlowService) RedeemBrowserForResource(ctx context.Context, hash storage.DeviceCodeHash, clientID, resource string, scopes []string) (IssuedCredential, error) {
+	return s.redeemForResource(ctx, hash, clientID, resource, scopes, true)
+}
+
+func (s *DeviceFlowService) redeemForResource(ctx context.Context, hash storage.DeviceCodeHash, clientID, resource string, scopes []string, browser bool) (IssuedCredential, error) {
 	if err := s.ready(ctx); err != nil {
 		return IssuedCredential{}, err
 	}
@@ -205,7 +220,7 @@ func (s *DeviceFlowService) RedeemForResource(ctx context.Context, hash storage.
 	if record.State != storage.DeviceAuthorizationStateApproved || !record.ExpiresAt.After(s.now().UTC()) {
 		return IssuedCredential{}, ErrOAuthDeviceNotApproved
 	}
-	issued, err := s.redeem(ctx, record, clientID, resource, scopes, false)
+	issued, err := s.redeemAs(ctx, record, clientID, resource, scopes, false, browser)
 	if err != nil {
 		var pollError *DevicePollError
 		if errors.As(err, &pollError) {

@@ -317,6 +317,7 @@ func credentialFromCreate(input storage.CredentialCreateInput, createdAt time.Ti
 		Resource:          input.Resource,
 		Provenance: contractsv1.CredentialProvenance{
 			ClientClass: string(input.ClientClass), ApprovingUserID: input.ApprovingUserID, ClientID: input.ClientID,
+			SessionID: input.SessionID, FamilyID: input.FamilyID, FamilyExpiresAt: cloneTime(input.FamilyExpiresAt),
 		},
 	}
 }

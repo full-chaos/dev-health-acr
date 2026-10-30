@@ -43,6 +43,9 @@ var (
 	ErrRateLimited         = errors.New("authentication rate limited")
 	ErrInvalidCredential   = errors.New("invalid credential request")
 	ErrStaleSelfCredential = errors.New("stale self credential")
+	// ErrBrowserCredentialRotation refuses rotating a browser-class
+	// credential (CHAOS-12123); it is an ErrInvalidCredential.
+	ErrBrowserCredentialRotation = fmt.Errorf("%w: a browser credential renews only by its refresh grant", ErrInvalidCredential)
 )
 
 var knownScopes = map[string]struct{}{
@@ -74,6 +77,14 @@ type CreateCredentialRequest struct {
 	// (CHAOS-12083). Set only by the OAuth exchanges, always with Resource;
 	// it becomes the credential's immutable provenance.
 	ClientID string
+	// ClientClass, FamilyID and FamilyExpiresAt are set only by the browser
+	// redemption (CHAOS-12123): the browser class for a configured
+	// first-party web client, the token family the credential starts, and
+	// the family's absolute end. The storage lifecycle accepts the browser
+	// class only on an OAuth exchange that carries all three.
+	ClientClass     storage.CredentialClientClass
+	FamilyID        string
+	FamilyExpiresAt *time.Time
 }
 
 type RotateCredentialRequest struct {
