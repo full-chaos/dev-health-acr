@@ -2,16 +2,19 @@ package auth
 
 import (
 	"bytes"
+	"context"
 	"crypto/ed25519"
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 )
@@ -318,3 +321,105 @@ func cloneWebClaims(t *testing.T, input map[string]any) map[string]any {
 type ioNopCloser struct{ *bytes.Reader }
 
 func (ioNopCloser) Close() error { return nil }
+
+// CHAOS-11996: a repository whose name starts with '.' (full-chaos/.github) is a
+// valid GitHub repository. One such scope used to fail the WHOLE assertion as a
+// bare invalid_token.
+func TestWebAssertionVerifier_acceptsADotLeadingRepositoryScope(t *testing.T) {
+	now := time.Date(2026, 7, 15, 12, 0, 0, 0, time.UTC)
+	public, private, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	verifier, err := NewWebAssertionVerifier(WebAssertionOptions{
+		Issuer: "https://web.example.test", Audience: "acr-api", JWKSPath: writeTestJWKS(t, "current", public), Now: func() time.Time { return now },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := []byte(`{}`)
+	request := httptest.NewRequest(http.MethodPost, "/api/v1/agent-context/context-packets", bytes.NewReader(body))
+	claims := webAssertionClaims(now, request, body)
+	claims["repository_scopes"] = []string{"full-chaos/.github", "full-chaos/ask-dev"}
+	request.Header.Set(WebAssertionHeader, signTestWebAssertion(t, private, "current", claims))
+
+	principal, err := verifier.Verify(request)
+
+	if err != nil {
+		t.Fatalf("assertion naming full-chaos/.github was refused: %v", err)
+	}
+	if !slices.Contains(principal.RepositoryScopes, "full-chaos/.github") || !RepositoryAllowed(principal.RepositoryScopes, "full-chaos/.github") {
+		t.Fatalf("principal scopes = %#v", principal.RepositoryScopes)
+	}
+}
+
+type recordingHandler struct{ records []slog.Record }
+
+func (h *recordingHandler) Enabled(_ context.Context, level slog.Level) bool {
+	return level >= slog.LevelInfo
+}
+func (h *recordingHandler) Handle(_ context.Context, r slog.Record) error {
+	h.records = append(h.records, r)
+	return nil
+}
+func (h *recordingHandler) WithAttrs([]slog.Attr) slog.Handler { return h }
+func (h *recordingHandler) WithGroup(string) slog.Handler      { return h }
+
+// A scope that is truly invalid still fails the assertion, and the log names
+// the scope and the reason instead of leaving a bare 401.
+func TestWebAssertionVerifier_logsTheRepositoryScopeThatRefusedTheAssertion(t *testing.T) {
+	now := time.Date(2026, 7, 15, 12, 0, 0, 0, time.UTC)
+	public, private, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := []byte(`{}`)
+	for _, test := range []struct {
+		scope  string
+		scopes []string
+		reason string
+	}{
+		{"full-chaos/..", []string{"full-chaos/ask-dev", "full-chaos/.."}, "reserved path name"},
+		{"full-chaos/a-", []string{"full-chaos/a-"}, "end with a letter or digit"},
+		{".full-chaos/x", []string{".full-chaos/x"}, "owner must start"},
+		{"nonsense", []string{"nonsense"}, "owner/repo"},
+		{"full-chaos/dup", []string{"full-chaos/dup", "full-chaos/dup"}, "duplicate"},
+		{"Full-Chaos/X", []string{"Full-Chaos/X"}, "normalized"},
+		{"", []string{"", "*"}, "owner/repo"},
+		{"", []string{"full-chaos/ask-dev", ""}, "owner/repo"},
+		{"*", []string{"*"}, "organization-wide"},
+		{"", []string{}, "no repository scope"},
+	} {
+		t.Run(test.scope, func(t *testing.T) {
+			handler := &recordingHandler{}
+			verifier, err := NewWebAssertionVerifier(WebAssertionOptions{
+				Issuer: "https://web.example.test", Audience: "acr-api", JWKSPath: writeTestJWKS(t, "current", public),
+				Now: func() time.Time { return now }, Logger: slog.New(handler),
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			request := httptest.NewRequest(http.MethodPost, "/api/v1/agent-context/context-packets", bytes.NewReader(body))
+			claims := webAssertionClaims(now, request, body)
+			claims["repository_scopes"] = test.scopes
+			request.Header.Set(WebAssertionHeader, signTestWebAssertion(t, private, "current", claims))
+
+			_, err = verifier.Verify(request)
+
+			if err == nil {
+				t.Fatal("invalid scope was accepted")
+			}
+			if len(handler.records) != 1 {
+				t.Fatalf("log records = %d, want 1", len(handler.records))
+			}
+			attrs := map[string]string{}
+			handler.records[0].Attrs(func(a slog.Attr) bool { attrs[a.Key] = a.Value.String(); return true })
+			if handler.records[0].Level != slog.LevelWarn {
+				t.Fatalf("log level = %v, want WARN (visible at Info)", handler.records[0].Level)
+			}
+			if attrs["class"] != "web_assertion_repository_scope_invalid" || attrs["scope"] != test.scope || !strings.Contains(attrs["reason"], test.reason) {
+				t.Fatalf("log attrs = %#v, want scope %q and a reason containing %q", attrs, test.scope, test.reason)
+			}
+		})
+	}
+}

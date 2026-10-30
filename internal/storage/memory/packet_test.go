@@ -160,3 +160,12 @@ func snapshotPacket(now time.Time) contractsv1.ContextPacket {
 		Compatibility: contractsv1.Compatibility{ServiceVersion: "test", MinimumSidecarVersion: "0.1.0", SupportedSchemaVersions: []string{contractsv1.ContextPacketSchema}},
 	}
 }
+
+func TestRepositoryAllowedAcceptsADotLeadingRepositoryName(t *testing.T) {
+	if !repositoryAllowed([]string{"full-chaos/*"}, "full-chaos/.github") || !repositoryAllowed([]string{"full-chaos/.github"}, "Full-Chaos/.github") {
+		t.Fatal("dot-leading repository was refused")
+	}
+	if repositoryAllowed([]string{"*"}, "full-chaos/..") || repositoryAllowed([]string{"*"}, "full-chaos/.") {
+		t.Fatal("path-traversal repository name was allowed")
+	}
+}

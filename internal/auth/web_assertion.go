@@ -136,6 +136,9 @@ func (v *WebAssertionVerifier) Verify(r *http.Request) (storage.Principal, error
 	}
 	claims, err := decodeWebAssertion[parsedWebAssertionClaims](parts[1])
 	if err != nil || !v.validClaims(claims, r) {
+		if err == nil {
+			v.logRepositoryScopeFault(r, claims)
+		}
 		return storage.Principal{}, ErrInvalidWebAssertion
 	}
 	expiresAt, _ := claims.ExpiresAt.Int64()
@@ -185,4 +188,30 @@ func (v *WebAssertionVerifier) validClaims(claims parsedWebAssertionClaims, r *h
 		return false
 	}
 	return claims.BodySHA256 == assertionBodyDigest(body)
+}
+
+// logRepositoryScopeFault records which signed repository scope made an
+// otherwise well-formed assertion fail, so the bare 401 has a cause in the log.
+// The claims are signature-verified by the time this runs.
+func (v *WebAssertionVerifier) logRepositoryScopeFault(r *http.Request, claims parsedWebAssertionClaims) {
+	if v.logger == nil || validWebRepositories(claims.RepositoryScopes, claims.Permissions, claims.Method, claims.Path) {
+		return
+	}
+	scope, reason := "", "no repository scope"
+	switch {
+	case len(claims.RepositoryScopes) == 0:
+	case len(claims.RepositoryScopes) == 1 && claims.RepositoryScopes[0] == "*":
+		scope, reason = "*", "organization-wide scope is only valid for credential issue on an organization-wide path"
+	default:
+		scope, reason, _ = webRepositoryScopeFault(claims.RepositoryScopes)
+	}
+	v.logger.WarnContext(r.Context(), "web assertion refused: invalid repository scope", "class", "web_assertion_repository_scope_invalid",
+		"scope", truncateLogValue(scope, 128), "reason", reason, "scope_count", len(claims.RepositoryScopes), "organization_id", claims.OrganizationID)
+}
+
+func truncateLogValue(value string, limit int) string {
+	if len(value) <= limit {
+		return value
+	}
+	return value[:limit] + "..."
 }

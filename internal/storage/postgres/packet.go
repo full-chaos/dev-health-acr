@@ -13,6 +13,7 @@ import (
 	"time"
 
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
+	"github.com/full-chaos/dev-health-acr/internal/reposlug"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
 	"github.com/full-chaos/dev-health-acr/internal/storage/orgfence"
 )
@@ -22,7 +23,6 @@ type PacketStore struct {
 	now func() time.Time
 }
 
-var repositoryPartPattern = regexp.MustCompile(`^[a-z0-9](?:[a-z0-9._-]{0,98}[a-z0-9])?$`)
 var uuidPattern = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$`)
 
 func NewPacketStore(db *sql.DB, now func() time.Time) (*PacketStore, error) {
@@ -148,7 +148,7 @@ func validResolution(value contractsv1.ScopeResolution) bool {
 func repositoryAllowed(scopes []string, slug string) bool {
 	normalized := strings.ToLower(strings.TrimSpace(slug))
 	parts := strings.Split(normalized, "/")
-	if len(parts) != 2 || !repositoryPartPattern.MatchString(parts[0]) || !repositoryPartPattern.MatchString(parts[1]) {
+	if len(parts) != 2 || !reposlug.ValidOwner(parts[0]) || !reposlug.ValidName(parts[1]) {
 		return false
 	}
 	owner := parts[0]

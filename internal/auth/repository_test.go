@@ -39,3 +39,32 @@ func TestNormalizeRepositoryScopesRejectsEmptyAndUnsafe(t *testing.T) {
 		}
 	}
 }
+
+// CHAOS-11996: GitHub accepts a leading '.' in a repository name (.github is the
+// standard organization configuration repository). Every grammar accepts it,
+// and the path-traversal names stay refused.
+func TestRepositoryScopesAcceptADotLeadingRepositoryName(t *testing.T) {
+	actual, err := NormalizeRepositoryScopes([]string{"Full-Chaos/.GitHub", "full-chaos/ask-dev"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(actual, []string{"full-chaos/.github", "full-chaos/ask-dev"}) {
+		t.Fatalf("scopes = %#v", actual)
+	}
+	principal := storage.Principal{RepositoryScopes: []string{"full-chaos/.github"}}
+	if err := AuthorizeRepository(principal, "FULL-CHAOS/.github"); err != nil {
+		t.Fatalf("exact dot-leading repository denied: %v", err)
+	}
+	owner := storage.Principal{RepositoryScopes: []string{"full-chaos/*"}}
+	if err := AuthorizeRepository(owner, "full-chaos/.github"); err != nil {
+		t.Fatalf("owner wildcard denied a dot-leading repository: %v", err)
+	}
+	for _, refused := range []string{"full-chaos/.", "full-chaos/..", ".full-chaos/x", "full-chaos/.github/x", "full-chaos/.a."} {
+		if _, err := NormalizeRepositorySlug(refused); err == nil {
+			t.Errorf("NormalizeRepositorySlug(%q) accepted", refused)
+		}
+		if _, err := NormalizeRepositoryScopes([]string{refused}); err == nil {
+			t.Errorf("NormalizeRepositoryScopes(%q) accepted", refused)
+		}
+	}
+}

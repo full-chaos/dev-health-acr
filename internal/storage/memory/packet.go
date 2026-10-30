@@ -4,13 +4,13 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"regexp"
 	"sort"
 	"strings"
 	"sync"
 	"time"
 
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
+	"github.com/full-chaos/dev-health-acr/internal/reposlug"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
 )
 
@@ -27,8 +27,6 @@ type packetSnapshot struct {
 	repoSlug  string
 	expiresAt time.Time
 }
-
-var repositoryPartPattern = regexp.MustCompile(`^[a-z0-9](?:[a-z0-9._-]{0,98}[a-z0-9])?$`)
 
 func NewPacketStore(now func() time.Time) *PacketStore {
 	return newPacketStore(now, nil)
@@ -183,7 +181,7 @@ func expiredSnapshotIDs(values map[string]packetSnapshot, before time.Time, limi
 func repositoryAllowed(scopes []string, slug string) bool {
 	normalized := strings.ToLower(strings.TrimSpace(slug))
 	parts := strings.Split(normalized, "/")
-	if len(parts) != 2 || !repositoryPartPattern.MatchString(parts[0]) || !repositoryPartPattern.MatchString(parts[1]) {
+	if len(parts) != 2 || !reposlug.ValidOwner(parts[0]) || !reposlug.ValidName(parts[1]) {
 		return false
 	}
 	owner := parts[0]
