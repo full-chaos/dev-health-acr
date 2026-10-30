@@ -64,6 +64,21 @@ Authorization is evaluated when middleware looks up the credential. A request au
 
 Successful use updates last-used metadata outside downstream business transactions and emits an audit event. Rejected token lookups cannot safely disclose or attribute credential state, so they are recorded in structured security logs instead of the organization audit table.
 
+### Issuance provenance (CHAOS-12083)
+
+Every credential row records how, and for whom, it was issued (migration `0058`):
+
+| Column | Meaning |
+| --- | --- |
+| `client_class` | Derived by the credential lifecycle from the issuance path, never chosen by a caller: `operator` (the `acr-api credentials` command), `workload` (RFC 8693 workload exchange), `native_device` (legacy device flow), `oauth_user` (OAuth authorization code or RFC 8628 device grant). `browser` is reserved for the first-party web client (CHAOS-12070). |
+| `approving_user_id` | The web-session subject that approved the device or OAuth authorization. The device-authorization store copies it from the locked authorization row inside the redemption transaction. Empty for `operator` and `workload`. |
+| `client_id` | The OAuth client the credential was issued to. |
+| `session_id`, `family_id`, `family_expires_at` | Reserved for the browser class (CHAOS-12070); no issuance path writes them yet. |
+
+The values are written once at issuance. Every rotation (operator rotate and self-rotate) copies them from the source row; no rotation or lifecycle request can set them, and a database trigger refuses an `UPDATE` that changes a set value. `created_by` stays an audit actor only: a self-rotation writes the rotating credential's id there, which is why it cannot identify the approving user. Authentication copies `client_class` and `approving_user_id` onto the `Principal`; policy that depends on how a credential was issued reads them, never a request header or `Origin`.
+
+The migration classifies existing rows only where the issuance records prove it: a row with a workload binding is `workload`; a row a device authorization redeemed takes that authorization's approver (and `oauth_user` when it is bound to a resource); a rotation successor inherits through the `credential_rotated` audit edge. Every other legacy row keeps a NULL class.
+
 ## Sidecar loading
 
 The local sidecar resolves a credential with a fixed precedence:

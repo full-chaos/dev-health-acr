@@ -84,6 +84,14 @@ type Principal struct {
 	RepositoryScopes     []string
 	Permissions          []string
 	ProductEntitlements  []string
+	// ClientClass and ApprovingUserID are the authenticating credential's
+	// immutable issuance provenance (CHAOS-12083), copied from its row by
+	// authentication. Empty for a web assertion, and ClientClass is empty on
+	// a legacy credential whose class could not be proven. Policy that
+	// depends on how a credential was issued reads these, never a request
+	// header or Origin.
+	ClientClass     CredentialClientClass
+	ApprovingUserID string
 }
 
 // AuthenticationMethod identifies the validated authentication boundary that
@@ -233,6 +241,23 @@ type CredentialRevocationInput = credentiallifecycle.RevocationInput
 func ValidateCredentialCreateInput(input CredentialCreateInput) error {
 	return credentiallifecycle.ValidateCreateInput(input)
 }
+
+// NormalizeCredentialCreateInput returns the stored form of input, including
+// the derived client class (CHAOS-12083).
+func NormalizeCredentialCreateInput(input CredentialCreateInput) (CredentialCreateInput, error) {
+	return credentiallifecycle.NormalizeCreateInput(input)
+}
+
+// CredentialClientClass is a credential's issuance class (CHAOS-12083).
+type CredentialClientClass = credentiallifecycle.ClientClass
+
+const (
+	CredentialClientClassBrowser      = credentiallifecycle.ClientClassBrowser
+	CredentialClientClassOAuthUser    = credentiallifecycle.ClientClassOAuthUser
+	CredentialClientClassNativeDevice = credentiallifecycle.ClientClassNativeDevice
+	CredentialClientClassOperator     = credentiallifecycle.ClientClassOperator
+	CredentialClientClassWorkload     = credentiallifecycle.ClientClassWorkload
+)
 
 type AuditEvent struct {
 	OrgID        string

@@ -56,7 +56,7 @@ func TestChaos7071DefaultApprovalNeverAuthorizesDataRead(t *testing.T) {
 	}
 	h.approveDevice(t, started.DeviceCodeHash, []string{"org/repo"})
 	for _, scopes := range [][]string{{ScopeDataRead}, {ScopeContextRead, ScopeDataRead}} {
-		if issued, err := h.devices.RedeemForResource(context.Background(), started.DeviceCodeHash, testResource, scopes); err == nil {
+		if issued, err := h.devices.RedeemForResource(context.Background(), started.DeviceCodeHash, testOAuthClientID, testResource, scopes); err == nil {
 			t.Fatalf("scopes %v redeemed as %v after a default approval", scopes, issued.Credential.Scopes)
 		}
 	}

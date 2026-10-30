@@ -59,7 +59,8 @@ func (s *credentialStore) List(ctx context.Context, orgID string) ([]contractsv1
 	}
 	rows, err := s.DB.QueryContext(ctx, `
 SELECT credential_id, name, token_prefix, org_id, repository_scopes, scopes,
-       created_at, expires_at, revoked_at, last_used_at, workload_binding_id, resource
+       created_at, expires_at, revoked_at, last_used_at, workload_binding_id, resource,
+       client_class, approving_user_id, client_id, session_id, family_id, family_expires_at
 FROM acr.client_credentials
 WHERE org_id = $1
 ORDER BY created_at, credential_id`, orgID)
@@ -87,7 +88,8 @@ func (s *credentialStore) GetByID(ctx context.Context, orgID, credentialID strin
 	}
 	row := s.DB.QueryRowContext(ctx, `
 SELECT credential_id, name, token_prefix, org_id, repository_scopes, scopes,
-       created_at, expires_at, revoked_at, last_used_at, workload_binding_id, resource
+       created_at, expires_at, revoked_at, last_used_at, workload_binding_id, resource,
+       client_class, approving_user_id, client_id, session_id, family_id, family_expires_at
 FROM acr.client_credentials
 WHERE org_id = $1 AND credential_id = $2`, orgID, credentialID)
 	credential, err := scanCredential(row)
@@ -100,7 +102,8 @@ func (s *credentialStore) FindByTokenHash(ctx context.Context, tokenHash string)
 	}
 	row := s.DB.QueryRowContext(ctx, `
 SELECT credential_id, name, token_prefix, org_id, repository_scopes, scopes,
-       created_at, expires_at, revoked_at, last_used_at, workload_binding_id, resource
+       created_at, expires_at, revoked_at, last_used_at, workload_binding_id, resource,
+       client_class, approving_user_id, client_id, session_id, family_id, family_expires_at
 FROM acr.client_credentials
 WHERE token_hash = $1
   AND revoked_at IS NULL
@@ -169,8 +172,10 @@ func insertCredential(ctx context.Context, executor execer, record storage.Crede
 INSERT INTO acr.client_credentials (
     credential_id, org_id, name, token_prefix, token_hash,
     repository_scopes, scopes, created_by, created_at, expires_at,
-    revoked_at, last_used_at, last_used_ip, last_used_user_agent, workload_binding_id, resource
-) VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7::jsonb, NULLIF($8, ''), $9, $10, $11, $12, NULLIF($13, '')::inet, NULLIF($14, ''), $15, NULLIF($16, ''))`,
+    revoked_at, last_used_at, last_used_ip, last_used_user_agent, workload_binding_id, resource,
+    client_class, approving_user_id, client_id, session_id, family_id, family_expires_at
+) VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7::jsonb, NULLIF($8, ''), $9, $10, $11, $12, NULLIF($13, '')::inet, NULLIF($14, ''), $15, NULLIF($16, ''),
+    NULLIF($17, ''), NULLIF($18, ''), NULLIF($19, ''), NULLIF($20, ''), NULLIF($21, ''), $22)`,
 		record.Metadata.CredentialID,
 		record.Metadata.OrgID,
 		record.Metadata.Name,
@@ -187,6 +192,12 @@ INSERT INTO acr.client_credentials (
 		record.LastUsedUserAgent,
 		workloadBindingID,
 		record.Metadata.Resource,
+		record.Metadata.Provenance.ClientClass,
+		record.Metadata.Provenance.ApprovingUserID,
+		record.Metadata.Provenance.ClientID,
+		record.Metadata.Provenance.SessionID,
+		record.Metadata.Provenance.FamilyID,
+		record.Metadata.Provenance.FamilyExpiresAt,
 	)
 	if err != nil {
 		return fmt.Errorf("insert credential: %w", sanitizeDatabaseError(err))
@@ -203,6 +214,8 @@ func scanCredential(row scanner) (contractsv1.ClientCredential, error) {
 	var repositoryJSON, scopeJSON []byte
 	var workloadBindingID sql.NullString
 	var resource sql.NullString
+	var clientClass, approvingUserID, clientID, sessionID, familyID sql.NullString
+	var familyExpiresAt sql.NullTime
 	err := row.Scan(
 		&credential.CredentialID,
 		&credential.Name,
@@ -216,9 +229,23 @@ func scanCredential(row scanner) (contractsv1.ClientCredential, error) {
 		&credential.LastUsedAt,
 		&workloadBindingID,
 		&resource,
+		&clientClass,
+		&approvingUserID,
+		&clientID,
+		&sessionID,
+		&familyID,
+		&familyExpiresAt,
 	)
 	if err != nil {
 		return contractsv1.ClientCredential{}, err
+	}
+	credential.Provenance = contractsv1.CredentialProvenance{
+		ClientClass: clientClass.String, ApprovingUserID: approvingUserID.String, ClientID: clientID.String,
+		SessionID: sessionID.String, FamilyID: familyID.String,
+	}
+	if familyExpiresAt.Valid {
+		value := familyExpiresAt.Time.UTC()
+		credential.Provenance.FamilyExpiresAt = &value
 	}
 	if err := json.Unmarshal(repositoryJSON, &credential.RepositoryScopes); err != nil {
 		return contractsv1.ClientCredential{}, fmt.Errorf("decode repository scopes: %w", err)

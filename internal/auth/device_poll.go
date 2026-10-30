@@ -144,10 +144,15 @@ func (s *DeviceFlowService) Poll(ctx context.Context, deviceCode string) (Issued
 	default:
 		return IssuedCredential{}, ErrInvalidDeviceFlow
 	}
-	return s.redeem(ctx, record, "", nil, true)
+	return s.redeem(ctx, record, "", "", nil, true)
 }
 
-func (s *DeviceFlowService) redeem(ctx context.Context, record storage.DeviceAuthorization, resource string, scopes []string, ackable bool) (IssuedCredential, error) {
+// redeem issues the credential of an approved device authorization. clientID
+// and resource are empty for the legacy native device flow and both set for an
+// OAuth exchange; the store derives the credential's client class from the
+// issuance path and takes its approving user from the authorization record
+// (CHAOS-12083).
+func (s *DeviceFlowService) redeem(ctx context.Context, record storage.DeviceAuthorization, clientID, resource string, scopes []string, ackable bool) (IssuedCredential, error) {
 	if scopes == nil {
 		scopes = []string{ScopeContextRead, ScopeEvidenceRead}
 	}
@@ -160,6 +165,7 @@ func (s *DeviceFlowService) redeem(ctx context.Context, record storage.DeviceAut
 		CreatedBy:        record.ApprovingSubject,
 		ExpiresAt:        &expiresAt,
 		Resource:         resource,
+		ClientID:         clientID,
 	})
 	if err != nil {
 		return IssuedCredential{}, fmt.Errorf("prepare device credential: %w", err)
