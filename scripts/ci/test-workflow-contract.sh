@@ -1578,6 +1578,173 @@ check_gomodcache_pins() {
   return "$status"
 }
 
+# CHAOS-11974: fullstack-acceptance checks dev-health-ops out at a pinned
+# commit (ci/fullstack-ops.pin) through ONE composite action, so an acr commit
+# that changes nothing cannot go red because ops main moved. Only the nightly
+# schedule floats (the drift canary), and every job names its ops commit when
+# it fails.
+check_fullstack_ops_pin() {
+  local file="$1" content
+  content="$(tr -d '[:space:]' < "$file")"
+  if ! printf '%s' "$content" | grep -Eq '^[0-9a-f]{40}$'; then
+    printf '%s must hold one full 40-hex commit SHA, not a branch, tag or abbreviation: %s\n' "$file" "$content" >&2
+    return 1
+  fi
+}
+
+check_ops_checkout_action() {
+  local file="$1" status=0 choose stripped
+  choose="$(awk '
+    /name: Choose the ops ref/ { grab=1 }
+    grab && /^    - / && !/name: Choose the ops ref/ { grab=0 }
+    grab { print }
+  ' "$file")"
+  stripped="$(printf '%s' "$choose" | sed 's/#.*$//')"
+  grep -qF '[0-9a-f]{40}' <<<"$stripped" || {
+    printf 'ops-checkout: the choose step does not require a full 40-hex pin in its own command (a comment does not count)\n' >&2; status=1; }
+  # shellcheck disable=SC2016
+  grep -qxF '        ref: ${{ steps.choose.outputs.ref }}' "$file" || {
+    # shellcheck disable=SC2016
+    printf 'ops-checkout: the checkout does not use the chosen ref (expected ref: ${{ steps.choose.outputs.ref }})\n' >&2; status=1; }
+  [ "$(grep -cF 'repository: full-chaos/dev-health-ops' "$file" || true)" -eq 1 ] || {
+    printf 'ops-checkout: must hold exactly one dev-health-ops checkout\n' >&2; status=1; }
+  # The only floating branch is the nightly schedule; everything else gets the pin.
+  # shellcheck disable=SC2016
+  if ! grep -A1 -xF '        elif [ "$GITHUB_EVENT_NAME" = schedule ]; then' <<<"$choose" | grep -qxF '          ref=""'; then
+    printf 'ops-checkout: the empty (floating) ref is not limited to the schedule event\n' >&2; status=1
+  fi
+  [ "$(grep -cxF '          ref=""' <<<"$choose" || true)" -eq 1 ] || {
+    printf 'ops-checkout: more than one branch floats on ops main\n' >&2; status=1; }
+  # shellcheck disable=SC2016
+  grep -qxF '          ref="$pin"' <<<"$choose" || {
+    printf 'ops-checkout: the default branch does not check out the pin\n' >&2; status=1; }
+  # shellcheck disable=SC2016
+  grep -qxF '        if [ "$MODE" = pinned ] && [ "$sha" != "$PIN" ]; then' "$file" || {
+    printf 'ops-checkout: a pinned run does not verify that it checked out the pin\n' >&2; status=1; }
+  grep -qF 'GITHUB_STEP_SUMMARY' "$file" || {
+    printf 'ops-checkout: the ops commit is not recorded in the job summary\n' >&2; status=1; }
+  return "$status"
+}
+
+# Codex #1768 r1 P3: the text checks above can pass while the chooser floats a
+# pull request. This EXECUTES the choose step's own script for every event and
+# asserts the ref and mode it emits.
+check_ops_checkout_chooser_behaviour() {
+  local file="$1" pin="$2" status=0 dir script
+  dir="$(mktemp -d)"
+  script="$dir/choose.sh"
+  awk '
+    /name: Choose the ops ref/ { in_step=1 }
+    in_step && /^      run: \|$/ { in_run=1; next }
+    in_run && /^    - / { exit }
+    in_run && NF > 0 && !/^        / { exit }
+    in_run { sub(/^        /, ""); print }
+  ' "$file" > "$script"
+  if [ ! -s "$script" ]; then
+    printf 'ops-checkout: could not extract the choose step script\n' >&2; rm -rf "$dir"; return 1
+  fi
+  mkdir -p "$dir/acr/ci"
+  printf '%s\n' "$pin" > "$dir/acr/ci/fullstack-ops.pin"
+  run_chooser() {
+    local event="$1" dispatch="$2" out="$dir/out"
+    : > "$out"
+    env -i PATH="$PATH" ACR_PATH="$dir/acr" DISPATCH_REF="$dispatch" GITHUB_EVENT_NAME="$event" GITHUB_OUTPUT="$out" \
+      bash -e "$script" >/dev/null 2>&1 || return 1
+    printf '%s|%s' "$(sed -n 's/^ref=//p' "$out")" "$(sed -n 's/^mode=//p' "$out")"
+  }
+  local cell got want
+  for cell in "pull_request||$pin|pinned" "push||$pin|pinned" "workflow_dispatch||$pin|pinned" \
+              "schedule|||schedule_floating" "workflow_dispatch|feature/x|feature/x|dispatch_input"; do
+    IFS='|' read -r event dispatch want_ref want_mode <<<"$cell"
+    want="$want_ref|$want_mode"
+    got="$(run_chooser "$event" "$dispatch")" || { printf 'ops-checkout chooser failed for %s\n' "$event" >&2; status=1; continue; }
+    [ "$got" = "$want" ] || { printf 'ops-checkout chooser for %s (dispatch "%s") gave ref|mode %s, want %s\n' "$event" "$dispatch" "$got" "$want" >&2; status=1; }
+  done
+  printf 'main\n' > "$dir/acr/ci/fullstack-ops.pin"
+  if run_chooser pull_request "" >/dev/null; then
+    printf 'ops-checkout chooser accepted a branch name as the pin\n' >&2; status=1
+  fi
+  rm -rf "$dir"
+  return "$status"
+}
+
+# Codex #1768 r1 P2 / r2 P3: a re-pin PR changes the product slice, so the PR
+# browser agreement job must run on it. This EXECUTES the decide step's own
+# script against a throwaway repository whose head commit changes only the
+# candidate path, and asserts run=true; an unrelated change must give
+# run=false, so the decision is shown to discriminate, not just to say yes.
+check_web_agreement_selects_ops_pin() {
+  local file="$1" status=0 dir script candidate got
+  dir="$(mktemp -d)"
+  script="$dir/decide.sh"
+  # shellcheck disable=SC2016  # ${PR_BASE}/${PR_HEAD} below are literal text the extracted script expands
+  awk '
+    /id: decide/ { in_step=1 }
+    in_step && /^        run: \|$/ { in_run=1; next }
+    in_run && /^      - / { exit }
+    in_run && NF > 0 && !/^          / { exit }
+    in_run { sub(/^          /, ""); print }
+  ' "$file" \
+    | sed -e 's/\${{ github\.event\.pull_request\.base\.sha }}/${PR_BASE}/' \
+          -e 's/\${{ github\.event\.pull_request\.head\.sha }}/${PR_HEAD}/' > "$script"
+  # shellcheck disable=SC2016  # ${{ is the literal GitHub expression marker
+  if [ ! -s "$script" ] || grep -qF '${{' "$script"; then
+    printf 'could not extract an executable web-agreement decide step from %s\n' "$file" >&2; rm -rf "$dir"; return 1
+  fi
+  decide_for() {
+    local changed="$1" repo="$dir/repo-${RANDOM}" out
+    out="$repo.out"
+    git init -q "$repo"
+    git -C "$repo" -c user.email=t@t -c user.name=t commit -q --allow-empty -m base
+    mkdir -p "$repo/$(dirname "$changed")"
+    printf 'x\n' > "$repo/$changed"
+    git -C "$repo" add -A
+    git -C "$repo" -c user.email=t@t -c user.name=t commit -q -m head
+    : > "$out"
+    (cd "$repo" && env PR_BASE="$(git rev-parse HEAD~1)" PR_HEAD="$(git rev-parse HEAD)" GITHUB_OUTPUT="$out" bash -e "$script") >/dev/null 2>&1 || return 1
+    sed -n 's/^run=//p' "$out"
+  }
+  for candidate in ci/fullstack-ops.pin .github/actions/ops-checkout/action.yml; do
+    got="$(decide_for "$candidate")" || { printf 'the web-agreement decide step failed to run for %s\n' "$candidate" >&2; status=1; continue; }
+    [ "$got" = true ] || {
+      printf 'the web-agreement decide step gives run=%s for a PR that changes only %s: a re-pin PR would skip the browser agreement\n' "$got" "$candidate" >&2; status=1; }
+  done
+  got="$(decide_for docs/unrelated-note.md)" || got=failed
+  [ "$got" = false ] || {
+    printf 'the web-agreement decide step gives run=%s for an unrelated change: it does not discriminate\n' "$got" >&2; status=1; }
+  rm -rf "$dir"
+  return "$status"
+}
+
+check_fullstack_ops_checkout_wiring() {
+  local file="$1" status=0 job block
+  if grep -qF 'repository: full-chaos/dev-health-ops' "$file"; then
+    printf '%s checks dev-health-ops out directly; every ops checkout must go through .github/actions/ops-checkout\n' "$file" >&2; status=1
+  fi
+  while IFS= read -r job; do
+    block="$(job_block "$file" "$job")"
+    grep -qF 'dev-health/ops' <<<"$block" || continue
+    grep -qxF '        uses: ./dev-health-acr/.github/actions/ops-checkout' <<<"$block" || {
+      printf 'job %s uses dev-health/ops without the ops-checkout action\n' "$job" >&2; status=1; continue; }
+    grep -qxF '        id: ops' <<<"$block" || {
+      printf 'job %s: the ops-checkout step has no id ops, so its outputs cannot be named\n' "$job" >&2; status=1; }
+    # shellcheck disable=SC2016
+    grep -qxF '          dispatch_ref: ${{ inputs.ops_ref }}' <<<"$block" || {
+      printf 'job %s does not pass the ops_ref dispatch input\n' "$job" >&2; status=1; }
+    local last
+    last="$(grep -E '^      - ' <<<"$block" | tail -1)"
+    [ "$last" = '      - name: Name the dev-health-ops commit of a failed run' ] || {
+      printf 'job %s: its last step is not the failed-run ops naming step (found: %s)\n' "$job" "$last" >&2; status=1; }
+    awk '/- name: Name the dev-health-ops commit of a failed run/ { grab=1 } grab' <<<"$block" | grep -qxF '        if: failure()' || {
+      printf 'job %s: the ops naming step does not run on failure\n' "$job" >&2; status=1; }
+    # shellcheck disable=SC2016
+    awk '/- name: Name the dev-health-ops commit of a failed run/ { grab=1 } grab' <<<"$block" | grep -qF 'OPS_SHA: ${{ steps.ops.outputs.sha }}' || {
+      printf 'job %s: the ops naming step does not name the checked-out commit\n' "$job" >&2; status=1; }
+  done < <(awk '/^jobs:/ { in_jobs=1; next } in_jobs && /^  [A-Za-z0-9_-]+:$/ { sub(/:$/, ""); sub(/^  /, ""); print }' "$file")
+  return "$status"
+}
+
+
 run_all_checks() {
   local file="$1"
   check_verify_job_exists "$file"
@@ -1626,6 +1793,15 @@ printf 'PASS: go-modcache action and tool pins satisfy the module cache checks\n
 fullstack_workflow="$repo_root/.github/workflows/fullstack-acceptance.yml"
 check_gomod_proxy_fallback "$fullstack_workflow"
 printf 'PASS: %s carries the GOPROXY fallback\n' "$fullstack_workflow"
+ops_checkout_action="$repo_root/.github/actions/ops-checkout/action.yml"
+fullstack_ops_pin="$repo_root/ci/fullstack-ops.pin"
+check_fullstack_ops_pin "$fullstack_ops_pin"
+check_ops_checkout_action "$ops_checkout_action"
+check_fullstack_ops_checkout_wiring "$fullstack_workflow"
+check_ops_checkout_chooser_behaviour "$ops_checkout_action" "$(tr -d '[:space:]' < "$fullstack_ops_pin")"
+check_web_agreement_selects_ops_pin "$fullstack_workflow"
+printf 'PASS: fullstack-acceptance checks dev-health-ops out at the pin through one action and names it on failure\n'
+printf 'PASS: the ops chooser, executed, pins PR/push/dispatch runs, floats only the schedule, and refuses a branch pin; a re-pin PR runs the browser agreement\n'
 for other_workflow in "$repo_root"/.github/workflows/*.yml; do
   check_container_switch_in_scope "$other_workflow"
 done
@@ -1718,6 +1894,83 @@ modcache_key_no_pins="$tmpdir/modcache-key-no-pins.yml"
 sed 's/ go.sum scripts\/ci\/go-tool-pins.txt | sha256sum/ go.sum | sha256sum/' "$modcache_action" > "$modcache_key_no_pins"
 cmp -s "$modcache_action" "$modcache_key_no_pins" && { printf 'NEGATIVE CONTROL SETUP FAILED: modcache_key_no_pins did not change the action\n' >&2; exit 1; }
 assert_check_fails 'the cache key stopped hashing the tool pins' check_gomodcache_action "$modcache_key_no_pins"
+
+# CHAOS-11974 negative controls. Each mutation must change its file and fail its check.
+mutate_or_die() {
+  local src="$1" dst="$2" desc="$3"
+  cmp -s "$src" "$dst" && { printf 'NEGATIVE CONTROL SETUP FAILED: %s did not change the file\n' "$desc" >&2; exit 1; }
+  return 0
+}
+pin_branch="$tmpdir/fullstack-ops-pin-branch"
+printf 'main\n' > "$pin_branch"
+assert_check_fails 'the fullstack ops pin names a branch' check_fullstack_ops_pin "$pin_branch"
+pin_short="$tmpdir/fullstack-ops-pin-short"
+cut -c1-12 "$fullstack_ops_pin" > "$pin_short"
+assert_check_fails 'the fullstack ops pin is abbreviated' check_fullstack_ops_pin "$pin_short"
+action_loose_regex="$tmpdir/ops-checkout-loose-regex.yml"
+sed 's/\^\[0-9a-f\]{40}\$/^[a-z0-9]+$/' "$ops_checkout_action" > "$action_loose_regex"
+mutate_or_die "$ops_checkout_action" "$action_loose_regex" 'action_loose_regex'
+assert_check_fails 'the ops pin check accepts a branch name' check_ops_checkout_action "$action_loose_regex"
+action_floating_checkout="$tmpdir/ops-checkout-floating.yml"
+sed 's/ref: ${{ steps.choose.outputs.ref }}/ref: main/' "$ops_checkout_action" > "$action_floating_checkout"
+mutate_or_die "$ops_checkout_action" "$action_floating_checkout" 'action_floating_checkout'
+assert_check_fails 'the ops checkout follows main while the pin is validated' check_ops_checkout_action "$action_floating_checkout"
+action_pr_floats="$tmpdir/ops-checkout-pr-floats.yml"
+# shellcheck disable=SC2016  # the $ names are literal text in the action file
+sed 's/\[ "\$GITHUB_EVENT_NAME" = schedule \]/[ "$GITHUB_EVENT_NAME" = pull_request ]/' "$ops_checkout_action" > "$action_pr_floats"
+mutate_or_die "$ops_checkout_action" "$action_pr_floats" 'action_pr_floats'
+assert_check_fails 'pull requests float on ops main' check_ops_checkout_action "$action_pr_floats"
+action_no_verify="$tmpdir/ops-checkout-no-verify.yml"
+# shellcheck disable=SC2016  # the $ names are literal text in the action file
+sed 's/if \[ "\$MODE" = pinned \] && \[ "\$sha" != "\$PIN" \]; then/if false; then/' "$ops_checkout_action" > "$action_no_verify"
+mutate_or_die "$ops_checkout_action" "$action_no_verify" 'action_no_verify'
+assert_check_fails 'a pinned run no longer verifies the pin it checked out' check_ops_checkout_action "$action_no_verify"
+wiring_direct="$tmpdir/fullstack-direct-ops.yml"
+awk '{ print } /uses: .\/dev-health-acr\/.github\/actions\/ops-checkout/ && !done { print "      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0"; print "        with:"; print "          repository: full-chaos/dev-health-ops"; print "          path: dev-health/ops2"; done=1 }' "$fullstack_workflow" > "$wiring_direct"
+mutate_or_die "$fullstack_workflow" "$wiring_direct" 'wiring_direct'
+assert_check_fails 'a job checks dev-health-ops out directly again' check_fullstack_ops_checkout_wiring "$wiring_direct"
+wiring_no_failure_step="$tmpdir/fullstack-no-failure-step.yml"
+awk '/- name: Name the dev-health-ops commit of a failed run/ && !done { skip=1; done=1; next } skip && /^      - |^  [A-Za-z0-9_-]+:$|^$/ { skip=0 } !skip { print }' "$fullstack_workflow" > "$wiring_no_failure_step"
+mutate_or_die "$fullstack_workflow" "$wiring_no_failure_step" 'wiring_no_failure_step'
+assert_check_fails 'a job lost the failed-run ops naming step' check_fullstack_ops_checkout_wiring "$wiring_no_failure_step"
+wiring_always="$tmpdir/fullstack-naming-always.yml"
+sed 's/^        if: failure()$/        if: always()/' "$fullstack_workflow" > "$wiring_always"
+mutate_or_die "$fullstack_workflow" "$wiring_always" 'wiring_always'
+assert_check_fails 'the ops naming step runs on success too' check_fullstack_ops_checkout_wiring "$wiring_always"
+chooser_pr_floats="$tmpdir/ops-checkout-chooser-pr-floats.yml"
+awk '{ print } /^          ref="\$pin"$/ && !done { print "          ref=\"\""; print "          mode=schedule_floating"; done=1 }' "$ops_checkout_action" > "$chooser_pr_floats"
+mutate_or_die "$ops_checkout_action" "$chooser_pr_floats" 'chooser_pr_floats'
+check_ops_checkout_action "$chooser_pr_floats" 2>/dev/null && printf 'NOTE: the text check alone passes this mutation (codex #1768 r1 P3); the behaviour check must not\n'
+behaviour_check() { check_ops_checkout_chooser_behaviour "$1" "$(tr -d '[:space:]' < "$fullstack_ops_pin")"; }
+assert_check_fails 'the chooser overwrites the pinned ref with a float' behaviour_check "$chooser_pr_floats"
+chooser_schedule_pinned="$tmpdir/ops-checkout-chooser-schedule-pinned.yml"
+awk '/^          ref=""$/ && !done { print "          ref=\"$pin\""; done=1; next } { print }' "$ops_checkout_action" > "$chooser_schedule_pinned"
+mutate_or_die "$ops_checkout_action" "$chooser_schedule_pinned" 'chooser_schedule_pinned'
+assert_check_fails 'the schedule canary no longer floats' behaviour_check "$chooser_schedule_pinned"
+chooser_dispatch_ignored="$tmpdir/ops-checkout-chooser-dispatch-ignored.yml"
+# shellcheck disable=SC2016  # the $ names are literal text in the action file
+sed 's/^        if \[ -n "\$DISPATCH_REF" \]; then$/        if false; then/' "$ops_checkout_action" > "$chooser_dispatch_ignored"
+mutate_or_die "$ops_checkout_action" "$chooser_dispatch_ignored" 'chooser_dispatch_ignored'
+assert_check_fails 'the dispatch ops_ref is ignored' behaviour_check "$chooser_dispatch_ignored"
+selector_no_pin="$tmpdir/fullstack-selector-no-pin.yml"
+awk '!/paths="\$\{paths\}\|ci\/fullstack-ops\\.pin"/' "$fullstack_workflow" > "$selector_no_pin"
+mutate_or_die "$fullstack_workflow" "$selector_no_pin" 'selector_no_pin'
+assert_check_fails 'the browser agreement selector lost the ops pin' check_web_agreement_selects_ops_pin "$selector_no_pin"
+selector_no_action="$tmpdir/fullstack-selector-no-action.yml"
+awk '!/paths="\$\{paths\}\|\\.github\/actions\/ops-checkout\/"/' "$fullstack_workflow" > "$selector_no_action"
+mutate_or_die "$fullstack_workflow" "$selector_no_action" 'selector_no_action'
+assert_check_fails 'the browser agreement selector lost the ops-checkout action' check_web_agreement_selects_ops_pin "$selector_no_action"
+decide_forced_false="$tmpdir/fullstack-decide-forced-false.yml"
+# shellcheck disable=SC2016  # the $ names are literal text in the workflow
+sed 's/^          if git diff --name-only "\$base" "\$head" | grep -Eq "\$paths"; then$/          if false; then/' "$fullstack_workflow" > "$decide_forced_false"
+mutate_or_die "$fullstack_workflow" "$decide_forced_false" 'decide_forced_false'
+assert_check_fails 'the browser agreement decision is forced false' check_web_agreement_selects_ops_pin "$decide_forced_false"
+decide_forced_true="$tmpdir/fullstack-decide-forced-true.yml"
+# shellcheck disable=SC2016  # the $ names are literal text in the workflow
+sed 's/^          if git diff --name-only "\$base" "\$head" | grep -Eq "\$paths"; then$/          if true; then/' "$fullstack_workflow" > "$decide_forced_true"
+mutate_or_die "$fullstack_workflow" "$decide_forced_true" 'decide_forced_true'
+assert_check_fails 'the browser agreement decision no longer discriminates' check_web_agreement_selects_ops_pin "$decide_forced_true"
+printf 'PASS: the CHAOS-11974 ops pin checks reject a branch pin, a short pin, a loose regex, a floating checkout, a floating pull request, a missing pin verification, a direct ops checkout, a missing and an always-on failure step\n'
 modcache_stale_pin="$tmpdir/modcache-stale-pin.txt"
 sed 's/^gotest.tools\/gotestsum@.*/gotest.tools\/gotestsum@v0.0.1/' "$modcache_pins" > "$modcache_stale_pin"
 assert_check_fails 'a tool pin drifted from the Makefile' check_gomodcache_pins "$modcache_stale_pin"

@@ -1,0 +1,95 @@
+name: ops-checkout
+description: >-
+  The one full-chaos/dev-health-ops checkout of a fullstack-acceptance job
+  (CHAOS-11974). A pull request, a push and a tag run check out the commit
+  pinned in ci/fullstack-ops.pin, so an acr commit that changes nothing cannot
+  go red because ops main moved. The nightly schedule run checks out ops main
+  HEAD on purpose (the drift canary that says when the pin is behind), and a
+  manual run may name a ref. Every run records the ops commit it used and how
+  that commit was chosen in the job summary; the job's own failure step names
+  it.
+inputs:
+  acr_path:
+    description: path of the dev-health-acr checkout that holds ci/fullstack-ops.pin
+    required: true
+  path:
+    description: path to check ops out into
+    required: true
+  dispatch_ref:
+    description: the workflow_dispatch ops_ref input; empty means none
+    required: false
+    default: ""
+outputs:
+  sha:
+    description: the ops commit checked out
+    value: ${{ steps.record.outputs.sha }}
+  mode:
+    description: pinned, schedule_floating or dispatch_input
+    value: ${{ steps.choose.outputs.mode }}
+  pin:
+    description: the commit ci/fullstack-ops.pin names
+    value: ${{ steps.choose.outputs.pin }}
+runs:
+  using: composite
+  steps:
+    - name: Choose the ops ref (pin, schedule float or dispatch input)
+      id: choose
+      shell: bash
+      env:
+        ACR_PATH: ${{ inputs.acr_path }}
+        DISPATCH_REF: ${{ inputs.dispatch_ref }}
+      run: |
+        set -euo pipefail
+        pin="$(tr -d '[:space:]' < "$ACR_PATH/ci/fullstack-ops.pin")"
+        # A pin that is not a full commit is not a pin: a branch or tag name
+        # resolves and then floats, which is the failure this file exists to
+        # stop.
+        if ! printf '%s' "$pin" | grep -Eq '^[0-9a-f]{40}$'; then
+          printf '::error title=ci/fullstack-ops.pin::must name a full 40-character lowercase commit SHA; it holds: %s\n' "$pin"
+          exit 1
+        fi
+        if [ -n "$DISPATCH_REF" ]; then
+          ref="$DISPATCH_REF"
+          mode=dispatch_input
+        elif [ "$GITHUB_EVENT_NAME" = schedule ]; then
+          ref=""
+          mode=schedule_floating
+        else
+          ref="$pin"
+          mode=pinned
+        fi
+        printf 'ref=%s\nmode=%s\npin=%s\n' "$ref" "$mode" "$pin" >> "$GITHUB_OUTPUT"
+    # actions/checkout v7.0.0 -- public repo, no token needed.
+    - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+      with:
+        repository: full-chaos/dev-health-ops
+        path: ${{ inputs.path }}
+        ref: ${{ steps.choose.outputs.ref }}
+        persist-credentials: false
+    - name: Record the ops commit this job uses
+      id: record
+      shell: bash
+      env:
+        OPS_PATH: ${{ inputs.path }}
+        MODE: ${{ steps.choose.outputs.mode }}
+        PIN: ${{ steps.choose.outputs.pin }}
+      run: |
+        set -euo pipefail
+        sha="$(git -C "$OPS_PATH" rev-parse HEAD)"
+        if [ "$MODE" = pinned ] && [ "$sha" != "$PIN" ]; then
+          printf '::error title=ops checkout::checked out %s, not the pinned %s\n' "$sha" "$PIN"
+          exit 1
+        fi
+        printf 'sha=%s\n' "$sha" >> "$GITHUB_OUTPUT"
+        printf 'E2E_OPS_REF=%s\nE2E_OPS_REF_MODE=%s\n' "$sha" "$MODE" >> "$GITHUB_ENV"
+        echo "ops ref: $sha ($MODE; pin $PIN)"
+        {
+          echo "### dev-health-ops"
+          echo
+          echo "- commit: \`$sha\`"
+          echo "- chosen by: \`$MODE\`"
+          echo "- pin (ci/fullstack-ops.pin): \`$PIN\`"
+          if [ "$MODE" != pinned ] && [ "$sha" != "$PIN" ]; then
+            echo "- this run did NOT use the pin: a failure here may be ops drift, not an acr change"
+          fi
+        } >> "$GITHUB_STEP_SUMMARY"
