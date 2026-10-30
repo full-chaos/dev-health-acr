@@ -347,9 +347,12 @@ Design, diagram and code map: `docs/design/context-fabric-architecture-diagrams.
 
 - **T2 Reservation fence.** A leased run saves under its record's reserved
   id like any submission. A takeover (`run_lost`) sets the record abandoned
-  and never removes it; a late save of a run that was taken over still
-  completes it bound to its owner (a saved result wins over the clock, the
-  existing reconcile rule), so nothing is ever stored unbound. The event log
+  and never removes it. A late save of a run that was taken over meets
+  Save's existing completion, which binds the result to the record's owner
+  and completes a running or abandoned record (code-read, not exercised by
+  this item's tests), so nothing is stored unbound; the record then reads
+  done while the log keeps its `run_lost` terminal, and a client that sees
+  `run_lost` reads the status and replays the result. The event log
   references the record (foreign key, cascade): removing a record removes its
   log, never the other way round.
 - **T6 Closed means closed everywhere.** Attach and cancel resolve the record
