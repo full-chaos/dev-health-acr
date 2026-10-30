@@ -152,11 +152,19 @@ func scalarFromFactValue(v FactValue) (ScalarValue, bool) {
 // they are and not as current (the answer may speak for another period), or
 // the failure statement when no value could be carried.
 func composeFailedSynthesisCurrentState(claims []ClaimedFact) string {
-	sentences := claimedFactSentences(claims)
-	if len(sentences) == 0 {
+	observed, derived := splitDerivedClaims(claims)
+	sentences, derivedSentences := claimedFactSentences(observed), claimedFactSentences(derived)
+	if len(sentences) == 0 && len(derivedSentences) == 0 {
 		return synthesisFailureCurrentState
 	}
-	return truncateAtSentenceBoundary("Canonical values read: "+strings.Join(sentences, "; ")+".", currentStateMaxLength)
+	var parts []string
+	if len(sentences) > 0 {
+		parts = append(parts, "Canonical values read: "+strings.Join(sentences, "; ")+".")
+	}
+	if len(derivedSentences) > 0 {
+		parts = append(parts, derivedValuesClause(derivedSentences))
+	}
+	return truncateAtSentenceBoundary(strings.Join(parts, " "), currentStateMaxLength)
 }
 
 // composeFailureCurrentState is composeFailedSynthesisCurrentState for a class:

@@ -2,13 +2,11 @@ package contextfabric
 
 import (
 	"context"
-	"log/slog"
 	"math"
 	"regexp"
 	"strconv"
 	"strings"
 
-	"github.com/full-chaos/dev-health-acr/internal/observability"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
 )
 
@@ -66,9 +64,11 @@ func DerivedNumberField(field string) (string, bool) {
 // hedgeWord matches the words that state a derived number as one.
 var hedgeWord = regexp.MustCompile(`(?i)\b(appears?|appeared|appearing|leans?|leaned|leaning|suggests?|suggested|suggesting)\b`)
 
-// numberToken matches a number as prose writes it: digits with optional
-// thousands separators and decimals, and an optional percent sign.
-var numberToken = regexp.MustCompile(`\d[\d,]*(?:\.\d+)?%?`)
+// numberToken matches a number as prose writes it: an optional sign (a minus
+// at the start or after a space or an opening bracket, never the hyphen of a
+// date), digits with optional thousands separators and decimals, and an
+// optional percent sign. The number is the first group.
+var numberToken = regexp.MustCompile(`(?:^|[\s(\[])(-?\d[\d,]*(?:\.\d+)?%?)|(\d[\d,]*(?:\.\d+)?%?)`)
 
 // DerivedNumberPhrasing is one answer's measure.
 type DerivedNumberPhrasing struct {
@@ -80,44 +80,52 @@ type DerivedNumberPhrasing struct {
 	Asserted int
 }
 
+// phrasingClaim is one derived value as prose may write it: its number forms,
+// and the words that name what it measures.
+type phrasingClaim struct {
+	forms map[string]struct{}
+	words *regexp.Regexp
+}
+
 // MeasureDerivedNumberPhrasing measures one answer. A sentence states a derived
 // number when it carries one of the answer's derived claimed-fact values as the
-// prose writes a number: the value verbatim, rounded to two decimals, or, for a
-// share between 0 and 1, as a whole percent. The prose read is everything a
-// reader is given to read: the lead (direct_judgment and deterministic_answer),
-// strongest_pressures, each driver's title, summary and qualification, each
-// finding's summary, limitations and warnings. current_state is a label: value
-// list the service composes, not phrasing, and is not read.
+// prose writes a number (the value verbatim, rounded to two decimals, or, for a
+// share between 0 and 1, as a whole percent) AND names what that value measures
+// (a word of its field, such as "risk" for a compounding risk score or
+// "quality" for the quality theme share; "investment", "mix" or "theme" for any
+// theme share). An unrelated number that only happens to be equal is not
+// counted. The prose read is everything a reader is given to read: the lead
+// (direct_judgment and deterministic_answer), current_state, strongest_pressures,
+// each driver's title, summary and qualification, each finding's summary,
+// limitations and warnings.
 func MeasureDerivedNumberPhrasing(result InvestigationResult) DerivedNumberPhrasing {
-	forms := map[string]struct{}{}
+	var claims []phrasingClaim
 	var measure DerivedNumberPhrasing
 	for _, claim := range result.ClaimedFacts {
-		_, derived := DerivedNumberField(claim.Field)
-		if len(claim.DerivedFrom) > 0 {
-			derived = true
-		}
-		if !derived {
+		if !derivedClaimOf(claim) {
 			continue
 		}
-		var claimForms []string
+		var forms []string
 		switch number, integer := claim.Value.Number, claim.Value.Integer; {
 		case number != nil && !math.IsNaN(*number) && !math.IsInf(*number, 0):
-			claimForms = numberForms(*number)
+			forms = numberForms(*number)
 		case integer != nil:
-			claimForms = []string{strconv.FormatInt(*integer, 10)}
+			forms = []string{strconv.FormatInt(*integer, 10)}
 		default:
 			continue
 		}
 		measure.DerivedValues++
-		for _, form := range claimForms {
-			forms[form] = struct{}{}
+		set := make(map[string]struct{}, len(forms))
+		for _, form := range forms {
+			set[form] = struct{}{}
 		}
+		claims = append(claims, phrasingClaim{forms: set, words: measureWords(claim.Field)})
 	}
-	if len(forms) == 0 {
+	if len(claims) == 0 {
 		return measure
 	}
 	for _, sentence := range readerSentences(result) {
-		if !statesAnyForm(sentence, forms) {
+		if !statesADerivedClaim(sentence, claims) {
 			continue
 		}
 		measure.Sentences++
@@ -126,6 +134,74 @@ func MeasureDerivedNumberPhrasing(result InvestigationResult) DerivedNumberPhras
 		}
 	}
 	return measure
+}
+
+// derivedClaimOf reports whether a claimed fact states a derived number: its
+// field is in the closed set, or it carries derived_from.
+func derivedClaimOf(claim ClaimedFact) bool {
+	if len(claim.DerivedFrom) > 0 {
+		return true
+	}
+	_, derived := DerivedNumberField(claim.Field)
+	return derived
+}
+
+// splitDerivedClaims splits claims into observations and derived values, each
+// in its original order. The service's own current_state lists them apart.
+func splitDerivedClaims(claims []ClaimedFact) (observed, derived []ClaimedFact) {
+	for _, claim := range claims {
+		if derivedClaimOf(claim) {
+			derived = append(derived, claim)
+			continue
+		}
+		observed = append(observed, claim)
+	}
+	return observed, derived
+}
+
+// derivedValuesClause lists derived values in current_state as what they are.
+func derivedValuesClause(sentences []string) string {
+	return "Derived values, which suggest rather than observe: " + strings.Join(sentences, "; ") + "."
+}
+
+// measureWordsSkipped are field-name parts that say when or how a value was
+// read, not what it measures.
+var measureWordsSkipped = map[string]bool{"latest": true, "rule": true, "basis": true, "prior": true, "theme": true}
+
+// measureWords matches a word that names what field measures: each part of the
+// field name, and for a theme share also "investment", "mix" and "theme".
+func measureWords(field string) *regexp.Regexp {
+	var words []string
+	for _, part := range strings.Split(field, "_") {
+		if len(part) > 2 && !measureWordsSkipped[part] {
+			words = append(words, regexp.QuoteMeta(part))
+		}
+	}
+	if basis, _ := DerivedNumberField(field); basis == derivedBasisModelCategorized {
+		words = append(words, "investment", "mix", "theme")
+	}
+	if len(words) == 0 {
+		return nil
+	}
+	return regexp.MustCompile(`(?i)\b(` + strings.Join(words, "|") + `)`)
+}
+
+func statesADerivedClaim(sentence string, claims []phrasingClaim) bool {
+	for _, claim := range claims {
+		if claim.words != nil && !claim.words.MatchString(sentence) {
+			continue
+		}
+		for _, match := range numberToken.FindAllStringSubmatch(sentence, -1) {
+			token := match[1]
+			if token == "" {
+				token = match[2]
+			}
+			if _, ok := claim.forms[strings.ReplaceAll(token, ",", "")]; ok {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // numberForms is every spelling the synthesis prompt allows prose to give a
@@ -143,15 +219,6 @@ func numberForms(value float64) []string {
 	return forms
 }
 
-func statesAnyForm(sentence string, forms map[string]struct{}) bool {
-	for _, token := range numberToken.FindAllString(sentence, -1) {
-		if _, ok := forms[strings.ReplaceAll(token, ",", "")]; ok {
-			return true
-		}
-	}
-	return false
-}
-
 func readerSentences(result InvestigationResult) []string {
 	texts := []string{result.DirectJudgment, result.DeterministicAnswer}
 	texts = append(texts, result.StrongestPressures...)
@@ -167,15 +234,19 @@ func readerSentences(result InvestigationResult) []string {
 	texts = append(texts, result.Warnings...)
 	var sentences []string
 	for _, text := range texts {
-		sentences = append(sentences, splitSentences(text)...)
+		sentences = append(sentences, splitSentences(text, true)...)
 	}
-	return sentences
+	// current_state is a list the service composes, "label: value; label:
+	// value." per clause: a ';' there separates list items, not sentences, so
+	// a clause's opening words cover every item in it.
+	return append(sentences, splitSentences(result.CurrentState, false)...)
 }
 
-// splitSentences ends a sentence at '.', '!', '?' or ';' followed by white
-// space or the end of the text, and at a line break. A decimal point is
-// followed by a digit, so it never ends a sentence.
-func splitSentences(text string) []string {
+// splitSentences ends a sentence at '.', '!' or '?' (and at ';' when
+// semicolons is set) followed by white space or the end of the text, and at a
+// line break. A decimal point is followed by a digit, so it never ends a
+// sentence.
+func splitSentences(text string, semicolons bool) []string {
 	var out []string
 	start := 0
 	runes := []rune(text)
@@ -186,28 +257,29 @@ func splitSentences(text string) []string {
 		start = end
 	}
 	for i, r := range runes {
-		switch r {
-		case '\n':
+		end := r == '.' || r == '!' || r == '?' || (semicolons && r == ';')
+		switch {
+		case r == '\n':
 			flush(i + 1)
-		case '.', '!', '?', ';':
-			if i+1 == len(runes) || runes[i+1] == ' ' || runes[i+1] == '\n' || runes[i+1] == '\t' {
-				flush(i + 1)
-			}
+		case end && (i+1 == len(runes) || runes[i+1] == ' ' || runes[i+1] == '\n' || runes[i+1] == '\t'):
+			flush(i + 1)
 		}
 	}
 	flush(len(runes))
 	return out
 }
 
-// recordDerivedNumberPhrasing logs one saved answer's measure at Info. Content
-// safe: the result id and three counts, never a sentence.
-func recordDerivedNumberPhrasing(ctx context.Context, principal storage.Principal, result InvestigationResult) {
-	measure := MeasureDerivedNumberPhrasing(result)
-	requestID, _ := observability.RequestIDFromContext(ctx)
-	slog.Default().InfoContext(ctx, "context fabric derived number phrasing",
+// RecordDerivedNumberPhrasing logs one stored answer's measure at Info, on the
+// engine's logger. Content safe: the result id and three counts, never a
+// sentence. saveResult calls it only for an answer the store accepted, so the
+// lines count stored answers.
+func (t SlogEngineTelemetry) RecordDerivedNumberPhrasing(ctx context.Context, principal storage.Principal, result InvestigationResult, measure DerivedNumberPhrasing) {
+	args := []any{
 		"org_id", SanitizeLogAttr(principal.OrgID), "result_id", SanitizeLogAttr(result.ResultID),
-		"request_id", SanitizeLogAttr(string(requestID)),
 		"synthesis_source", SanitizeLogAttr(string(result.Versions.SynthesisSource)),
 		"cf_derived_values", measure.DerivedValues, "cf_derived_number_sentences", measure.Sentences,
-		"cf_derived_number_asserted", measure.Asserted)
+		"cf_derived_number_asserted", measure.Asserted,
+	}
+	args = append(args, requestIDLogAttrs(ctx)...)
+	t.logger.InfoContext(ctx, "context fabric derived number phrasing", args...)
 }

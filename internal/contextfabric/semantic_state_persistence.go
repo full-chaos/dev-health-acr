@@ -171,8 +171,11 @@ func (e *Engine) saveResult(
 	}
 	// CHAOS-11600: every answer the engine saves logs how many of its
 	// sentences state a derived number, and how many state one as an
-	// observation (derived_number_phrasing.go).
-	recordDerivedNumberPhrasing(ctx, principal, result)
+	// observation (derived_number_phrasing.go). An answer the store refused
+	// was not saved, and is not counted.
+	if err == nil && e.telemetry != nil {
+		e.telemetry.RecordDerivedNumberPhrasing(ctx, principal, result, MeasureDerivedNumberPhrasing(result))
+	}
 	return err
 }
 

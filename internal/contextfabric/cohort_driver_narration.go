@@ -591,8 +591,10 @@ func cohortDriverJudgmentTitle(member CohortMember, driver CohortMemberDriver) s
 }
 
 // cohortDriverJudgmentSummary's template (CHAOS-4580, CHAOS-4533's narrator
-// half): "<signal> (weight W, value V) contributed C of <label>'s S
-// attention points." A prior version read "...contributed C points to
+// half): "<signal> (weight W, value V) appears to account for C of <label>'s
+// S attention points." The attention score and its signal values are derived
+// numbers, so the sentence states them as derived (CHAOS-11600: appears,
+// leans or suggests, never as an observation). A prior version read "...contributed C points to
 // <label>'s a S attention score.", which duplicated the possessive ("'s a")
 // into a stray article and inverted "points"/"score" against the rest of
 // the sentence -- fixed here rather than patched per-clause so the same
@@ -606,7 +608,7 @@ func cohortDriverJudgmentSummary(member CohortMember, driver CohortMemberDriver)
 		scoreText = fmt.Sprintf("%.1f", *member.Score)
 	}
 	return fmt.Sprintf(
-		"%s (weight %.0f, value %.2f) contributed %.1f of %s's %s attention points.",
+		"%s (weight %.0f, value %.2f) appears to account for %.1f of %s's %s attention points.",
 		cohortSignalDisplayName(driver.Signal), driver.Weight, driver.Value, driver.WeightContributed, member.Subject.Label, scoreText,
 	)
 }

@@ -1049,6 +1049,10 @@ type EngineTelemetry interface {
 	// RecordAnchorBindingTransition reports ONE shadow anchor binding
 	// decision: once per Save and once per reuse serve.
 	RecordAnchorBindingTransition(ctx context.Context, principal storage.Principal, event AnchorBindingTransitionEvent)
+	// RecordDerivedNumberPhrasing (CHAOS-11600) reports ONE stored answer's
+	// derived-number phrasing measure: once per Save the store accepted.
+	// Content-safe: the result id, the synthesis source and three counts.
+	RecordDerivedNumberPhrasing(ctx context.Context, principal storage.Principal, result InvestigationResult, measure DerivedNumberPhrasing)
 	// RecordModelRowsStripped (CHAOS-4355 follow-up, cf_model_rows_stripped)
 	// reports the count of ClaimedFacts entries whose model-authored Rows
 	// was cleared before draft.ValidateAgainst ran, so an operator can tell

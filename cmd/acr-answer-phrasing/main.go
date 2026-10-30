@@ -44,13 +44,15 @@ func readAnswer(path string) (contextfabric.InvestigationResult, error) {
 	if err := json.Unmarshal(raw, &wrapped); err != nil {
 		return contextfabric.InvestigationResult{}, fmt.Errorf("%s: not JSON: %w", path, err)
 	}
-	if wrapped.Result != nil {
-		return *wrapped.Result, nil
-	}
 	var result contextfabric.InvestigationResult
-	if err := json.Unmarshal(raw, &result); err != nil {
+	if wrapped.Result != nil {
+		result = *wrapped.Result
+	} else if err := json.Unmarshal(raw, &result); err != nil {
 		return contextfabric.InvestigationResult{}, fmt.Errorf("%s: %w", path, err)
 	}
+	// A wrapped document is held to the same check as a bare one: an empty or
+	// foreign object under "result" is not an answer, and is never counted as
+	// an answer with nothing derived in it.
 	if !strings.HasPrefix(result.SchemaVersion, "context_fabric_investigation_result.") {
 		return contextfabric.InvestigationResult{}, fmt.Errorf("%s: not an investigation result (schema_version %q)", path, result.SchemaVersion)
 	}
