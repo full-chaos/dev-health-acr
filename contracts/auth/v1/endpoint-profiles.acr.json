@@ -1236,7 +1236,8 @@
       "impersonation_policy": "not_applicable_non_main_app",
       "entitlement_requirement": null,
       "gaps": [
-        "entitlement_requirement: searched internal for entitlement code (internal/entitlements, internal/config/entitlement.go); whether the handler registered at internal/api/app.go:103 is gated by it was not traced; not determined."
+        "entitlement_requirement: searched internal for entitlement code (internal/entitlements, internal/config/entitlement.go); whether the handler registered at internal/api/app.go:103 is gated by it was not traced; not determined.",
+        "issued_credential: the browser refresh token (acrrt_, opaque, SHA-256 at rest, single use, rotated by grant_type=refresh_token, CHAOS-12124) has no credential class in the ops credential-classes contract yet; it is not listed until that class is registered."
       ],
       "id": "POST /token [dev-health-acr-api]",
       "method": "POST",
@@ -1245,7 +1246,7 @@
         "file": "internal/api/app.go",
         "line": 105
       },
-      "public_rationale": "OAuth 2.1 token endpoint (authorization_code grant, public clients, no refresh token; CHAOS-6233 added RFC 8628's device_code grant, dispatched by the grant_type form parameter); no principal on entry by definition.",
+      "public_rationale": "OAuth 2.1 token endpoint (authorization_code grant, public clients; CHAOS-12124 added the refresh_token grant for the first-party browser client only; CHAOS-6233 added RFC 8628's device_code grant, dispatched by the grant_type form parameter); no principal on entry by definition.",
       "primary_validator": {
         "description": "OAuthService.Exchange -- consumes the code atomically first (a refused exchange spends it), then requires the same client_id and redirect_uri, an S256 code_verifier matching the stored challenge, and a resource equal to the authorized one; redeems the approved device authorization bound to that resource. Rate limited per IP by AllowTokenRequest.",
         "anchor": {
@@ -1264,14 +1265,30 @@
           "direction": "returned_to_caller",
           "anchor": {
             "path": "internal/auth/device_oauth.go",
-            "line": 191,
-            "line_end": 208,
-            "note": "`func (s *DeviceFlowService) RedeemForResource(` `s.redeem(` -- redeem mints the fcacr_ credential (30-day expiry) with Resource bound; the authenticator admits it only with a matching X-ACR-Resource header"
+            "line": 194,
+            "line_end": 196,
+            "note": "`func (s *DeviceFlowService) RedeemForResource(` `s.redeemForResource(` -- redeem mints the fcacr_ credential (30-day expiry) with Resource bound; the authenticator admits it only with a matching X-ACR-Resource header"
           },
           "issuer": "acr credential Service (via DeviceFlowService.redeem)",
           "audience": "bound resource (X-ACR-Resource)",
           "algorithm": null,
           "lifetime_seconds": 2592000,
+          "key_source": null,
+          "verified_by": "acr:internal/auth/middleware.go:111"
+        },
+        {
+          "class_id": "acr_client_credential",
+          "direction": "returned_to_caller",
+          "anchor": {
+            "path": "internal/auth/device_oauth.go",
+            "line": 202,
+            "line_end": 204,
+            "note": "`func (s *DeviceFlowService) RedeemBrowserForResource(` `s.redeemForResource(` -- for a configured first-party browser client (CHAOS-12123) redeem mints a browser-class fcacr_ credential: 10-minute expiry, bound to the acr-api resource (the issuer), a new token family ending 12 hours after issuance, and the approving web session"
+          },
+          "issuer": "acr credential Service (via DeviceFlowService.redeemAs, browser class)",
+          "audience": "bound resource (X-ACR-Resource)",
+          "algorithm": null,
+          "lifetime_seconds": 600,
           "key_source": null,
           "verified_by": "acr:internal/auth/middleware.go:111"
         },
@@ -1292,6 +1309,44 @@
           "verified_by": "acr:internal/auth/middleware.go:111"
         }
       ]
+    },
+    {
+      "surface_kind": "rest",
+      "graphql_field_name": null,
+      "service": "dev-health-acr-api",
+      "classification": "public",
+      "accepted_credential_classes": [],
+      "token_shape": null,
+      "reachable_validators": [],
+      "tenant_requirement": "none",
+      "current_state_cache_behavior": "stateless",
+      "impersonation_policy": "not_applicable_non_main_app",
+      "entitlement_requirement": null,
+      "gaps": [
+        "accepted_credential_classes: the route takes a browser refresh token in its form body (CHAOS-12124); the ops credential-classes contract has no class for it yet, so none is listed until that class is registered.",
+        "entitlement_requirement: the handler (internal/api/app.go:121) is not gated by entitlement code; it only revokes a token family the refresh token names; not otherwise determined.",
+        "token_shape: the route takes a browser refresh token (acrrt_ + 43 base64url characters, opaque, SHA-256 at rest) in its form body, not a bearer; its credential class is not registered yet (see accepted_credential_classes); not determined."
+      ],
+      "id": "POST /revoke [dev-health-acr-api]",
+      "method": "POST",
+      "route": "/revoke",
+      "source": {
+        "file": "internal/api/app.go",
+        "line": 121
+      },
+      "public_rationale": "RFC 7009 token revocation for the first-party browser client's refresh token (CHAOS-12124): sign-out must work after every access token of the family has expired, so the route takes no bearer. Served only when a browser client is configured.",
+      "primary_validator": {
+        "description": "OAuthService.RevokeRefreshToken -- browser clients only (any other client is unauthorized_client); an access token is unsupported_token_type; a refresh token, known or not, is answered 200 and revokes its token family (the family row and every member credential) for the client that holds it. Rate limited per IP by AllowTokenRequest.",
+        "anchor": {
+          "path": "internal/auth/oauth.go",
+          "line": 1165,
+          "line_end": 1165,
+          "note": "func (s *OAuthService) RevokeRefreshToken("
+        }
+      },
+      "action": "oauth.token.revoke",
+      "resource_resolver": "Refresh token hash -> browser token family -> its member credentials (one organization).",
+      "disclosure_behavior": "RFC 7009 2.2: 200 {} for every refresh token, known, consumed or of a revoked family, so a caller cannot learn whether a token existed; 400 invalid_request, unauthorized_client or unsupported_token_type otherwise."
     },
     {
       "surface_kind": "rest",

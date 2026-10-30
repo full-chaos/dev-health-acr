@@ -43,6 +43,11 @@ const OAuthConsentPath = "/authorize/consent"
 // OAuthTokenPath is the token endpoint.
 const OAuthTokenPath = "/token"
 
+// OAuthRevocationPath is RFC 7009's revocation endpoint: it revokes a
+// browser token family by its refresh token (CHAOS-12124). It is served only
+// when a browser client is configured.
+const OAuthRevocationPath = "/revoke"
+
 // OAuthRegisterPath is the dynamic client registration endpoint.
 const OAuthRegisterPath = "/register"
 
@@ -67,24 +72,38 @@ type oauthAuthorizationServerMetadata struct {
 	CodeChallengeMethodsSupported     []string `json:"code_challenge_methods_supported"`
 	AuthorizationResponseIssParameter bool     `json:"authorization_response_iss_parameter_supported"`
 	ClientIDMetadataDocumentSupported bool     `json:"client_id_metadata_document_supported"`
+	// RevocationEndpoint and its auth methods are advertised only with the
+	// browser refresh grant (CHAOS-12124).
+	RevocationEndpoint                     string   `json:"revocation_endpoint,omitempty"`
+	RevocationEndpointAuthMethodsSupported []string `json:"revocation_endpoint_auth_methods_supported,omitempty"`
 }
 
 func (a *App) handleOAuthMetadata(w http.ResponseWriter, _ *http.Request) {
 	issuer := a.oauth.Issuer()
+	grantTypes := []string{"authorization_code", auth.OAuthDeviceCodeGrantType}
+	revocationEndpoint, revocationAuthMethods := "", []string(nil)
+	if a.oauth.RefreshGrantSupported() {
+		// The refresh grant serves the first-party browser client only;
+		// /register still downgrades a dynamic client asking for it.
+		grantTypes = append(grantTypes, "refresh_token")
+		revocationEndpoint, revocationAuthMethods = issuer+OAuthRevocationPath, []string{"none"}
+	}
 	writeOAuthJSON(w, http.StatusOK, oauthAuthorizationServerMetadata{
-		Issuer:                            issuer,
-		AuthorizationEndpoint:             issuer + OAuthAuthorizePath,
-		TokenEndpoint:                     issuer + OAuthTokenPath,
-		RegistrationEndpoint:              issuer + OAuthRegisterPath,
-		DeviceAuthorizationEndpoint:       issuer + OAuthDeviceAuthorizationPath,
-		ScopesSupported:                   auth.AdvertisedScopes(),
-		ResponseTypesSupported:            []string{"code"},
-		ResponseModesSupported:            []string{"query"},
-		GrantTypesSupported:               []string{"authorization_code", auth.OAuthDeviceCodeGrantType},
-		TokenEndpointAuthMethodsSupported: []string{"none"},
-		CodeChallengeMethodsSupported:     []string{"S256"},
-		AuthorizationResponseIssParameter: true,
-		ClientIDMetadataDocumentSupported: a.oauth.ClientMetadataDocumentsSupported(),
+		Issuer:                                 issuer,
+		AuthorizationEndpoint:                  issuer + OAuthAuthorizePath,
+		TokenEndpoint:                          issuer + OAuthTokenPath,
+		RegistrationEndpoint:                   issuer + OAuthRegisterPath,
+		DeviceAuthorizationEndpoint:            issuer + OAuthDeviceAuthorizationPath,
+		ScopesSupported:                        auth.AdvertisedScopes(),
+		ResponseTypesSupported:                 []string{"code"},
+		ResponseModesSupported:                 []string{"query"},
+		GrantTypesSupported:                    grantTypes,
+		TokenEndpointAuthMethodsSupported:      []string{"none"},
+		CodeChallengeMethodsSupported:          []string{"S256"},
+		AuthorizationResponseIssParameter:      true,
+		ClientIDMetadataDocumentSupported:      a.oauth.ClientMetadataDocumentsSupported(),
+		RevocationEndpoint:                     revocationEndpoint,
+		RevocationEndpointAuthMethodsSupported: revocationAuthMethods,
 	})
 }
 
@@ -701,6 +720,8 @@ type oauthTokenBody struct {
 	TokenType   string `json:"token_type"`
 	ExpiresIn   int64  `json:"expires_in"`
 	Scope       string `json:"scope"`
+	// RefreshToken is the browser class's refresh token (CHAOS-12124).
+	RefreshToken string `json:"refresh_token,omitempty"`
 }
 
 func (a *App) handleOAuthToken(w http.ResponseWriter, r *http.Request) {
@@ -733,11 +754,16 @@ func (a *App) handleOAuthToken(w http.ResponseWriter, r *http.Request) {
 	}
 	var token auth.OAuthToken
 	var err error
-	if form.Get("grant_type") == auth.OAuthDeviceCodeGrantType {
+	switch form.Get("grant_type") {
+	case auth.OAuthDeviceCodeGrantType:
 		token, err = a.oauth.ExchangeDeviceCode(r.Context(), auth.OAuthDeviceTokenRequest{
 			GrantType: form.Get("grant_type"), DeviceCode: form.Get("device_code"), ClientID: clientID,
 		})
-	} else {
+	case "refresh_token":
+		token, err = a.oauth.Refresh(r.Context(), auth.OAuthRefreshRequest{
+			GrantType: form.Get("grant_type"), RefreshToken: form.Get("refresh_token"), ClientID: clientID,
+		})
+	default:
 		token, err = a.oauth.Exchange(r.Context(), auth.OAuthTokenRequest{
 			GrantType: form.Get("grant_type"), Code: form.Get("code"), RedirectURI: form.Get("redirect_uri"),
 			ClientID: clientID, CodeVerifier: form.Get("code_verifier"), Resource: form.Get("resource"),
@@ -760,9 +786,63 @@ func (a *App) handleOAuthToken(w http.ResponseWriter, r *http.Request) {
 	}
 	writeOAuthJSON(w, http.StatusOK, oauthTokenBody{
 		AccessToken: token.Issued.Token, TokenType: "Bearer",
-		ExpiresIn: int64(token.ExpiresIn / time.Second), Scope: token.Scope,
+		ExpiresIn: int64(token.ExpiresIn / time.Second), Scope: token.Scope, RefreshToken: token.RefreshToken,
 	})
-	a.emitOAuthStepScopes(r, oauthvocab.StepToken, oauthvocab.OutcomeOK, token.ClientKind, http.StatusOK, strings.Fields(token.Scope))
+	outcome := oauthvocab.OutcomeOK
+	if token.Outcome != "" {
+		outcome = token.Outcome
+	}
+	a.emitOAuthStepScopes(r, oauthvocab.StepToken, outcome, token.ClientKind, http.StatusOK, strings.Fields(token.Scope))
+}
+
+// handleOAuthRevoke is RFC 7009's revocation endpoint for browser refresh
+// tokens (CHAOS-12124): it revokes the token's whole family and answers 200
+// for any refresh token, known or not (RFC 7009 §2.2), so it never tells a
+// caller whether a token existed. It works after every access token of the
+// family has expired: it needs only the refresh token and the client id.
+func (a *App) handleOAuthRevoke(w http.ResponseWriter, r *http.Request) {
+	parseErr := parseOAuthForm(w, r)
+	var clientID string
+	clientIDOK := false
+	if parseErr == nil {
+		clientID, clientIDOK = tokenClientID(r)
+	}
+	if a.oauthRateLimited(w, r, oauthvocab.StepRevoke, a.oauthLimitKey(r, clientID), a.runtime.DeviceAuthorizationLimiter.AllowTokenRequest) {
+		return
+	}
+	invalid := func() {
+		writeOAuthJSON(w, http.StatusBadRequest, oauthErrorBody{Error: "invalid_request"})
+		a.emitOAuthStep(r, oauthvocab.StepRevoke, oauthvocab.OutcomeInvalidRequest, "", http.StatusBadRequest)
+	}
+	if parseErr != nil || !clientIDOK {
+		invalid()
+		return
+	}
+	for _, values := range r.PostForm {
+		if len(values) > 1 {
+			invalid()
+			return
+		}
+	}
+	token := r.PostForm.Get("token")
+	if hint := r.PostForm.Get("token_type_hint"); token == "" || (hint != "" && hint != "refresh_token" && hint != "access_token") {
+		invalid()
+		return
+	}
+	revocation, err := a.oauth.RevokeRefreshToken(r.Context(), token, clientID)
+	if err != nil {
+		if refusal, ok := oauthOutcome(err); ok {
+			writeOAuthJSON(w, http.StatusBadRequest, oauthErrorBody{Error: refusal.Code})
+			a.emitOAuthRefusal(r, oauthvocab.StepRevoke, refusal, revocation.ClientKind, http.StatusBadRequest)
+			return
+		}
+		a.logOAuthDependencyFailure(r, oauthvocab.StepRevoke, err)
+		writeOAuthJSON(w, http.StatusServiceUnavailable, oauthErrorBody{Error: "temporarily_unavailable"})
+		a.emitOAuthStep(r, oauthvocab.StepRevoke, oauthvocab.OutcomeUnavailable, revocation.ClientKind, http.StatusServiceUnavailable)
+		return
+	}
+	writeOAuthJSON(w, http.StatusOK, struct{}{})
+	a.emitOAuthStep(r, oauthvocab.StepRevoke, revocation.Outcome, revocation.ClientKind, http.StatusOK)
 }
 
 // oauthClientRefusalReasons names each client refusal in plain words for the
@@ -918,6 +998,7 @@ func newOAuthService(deps Dependencies, deviceFlow *auth.DeviceFlowService) (*au
 	return auth.NewOAuthService(runtime.Store, deviceFlow, auth.OAuthConfig{
 		Issuer: runtime.Issuer, Resources: runtime.Resources, ClientMetadata: runtime.ClientMetadata, Now: deps.Now,
 		BrowserClients: runtime.BrowserClients, DevBrowserRedirectURIs: runtime.DevBrowserRedirectURIs,
+		BrowserRefresh: runtime.BrowserRefresh,
 	})
 }
 
@@ -939,4 +1020,7 @@ type OAuthRuntime struct {
 	// DevBrowserRedirectURIs turn on the development-only static browser
 	// client (auth.OAuthConfig.DevBrowserRedirectURIs).
 	DevBrowserRedirectURIs []string
+	// BrowserRefresh keeps the browser token families and refresh tokens
+	// (auth.OAuthConfig.BrowserRefresh, CHAOS-12124).
+	BrowserRefresh storage.BrowserRefreshStore
 }

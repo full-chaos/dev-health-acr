@@ -117,6 +117,9 @@ var purgeTables = []tableSpec{
 		OR ` + matchOrg("organization_id_hint") + `
 		OR device_code_hash IN (SELECT device_code_hash FROM acr.oauth_authorization_requests WHERE ` + matchOrg("bound_org_id") + `)`,
 		CascadedByDeviceCode: []string{"oauth_authorization_requests", "oauth_device_grants"}},
+	// CHAOS-12124: browser token families (their refresh tokens go by
+	// cascade); before client_credentials, whose browser rows they name.
+	{Name: "browser_token_families", Where: `org_id = $1::uuid`},
 	{Name: "client_credentials", Where: `org_id = $1::uuid`},
 	{Name: "workload_bindings", Where: `org_id = $1::uuid`},
 	{Name: "context_packet_snapshots", Where: `org_id = $1::uuid`},

@@ -195,8 +195,12 @@ type OAuthConfig struct {
 	// serve an https metadata document). The config layer refuses it outside
 	// the development environment.
 	DevBrowserRedirectURIs []string
-	Now                    func() time.Time
-	Random                 io.Reader
+	// BrowserRefresh keeps the browser token families (CHAOS-12124); it is
+	// required when a browser client is configured, and its refresh grant
+	// serves browser clients only.
+	BrowserRefresh storage.BrowserRefreshStore
+	Now            func() time.Time
+	Random         io.Reader
 }
 
 // DevBrowserClientID is the client id of the development-only static browser
@@ -223,6 +227,9 @@ type OAuthService struct {
 	browserClients  map[string]struct{}
 	devBrowser      *OAuthResolvedClient
 	browserResource string
+	// refresh runs the browser refresh grant (CHAOS-12124); nil when no
+	// browser client is configured.
+	refresh *BrowserRefreshService
 }
 
 // ErrInvalidOAuthConfig reports an unusable OAuth configuration.
@@ -304,8 +311,17 @@ func (s *OAuthService) configureBrowserClients(cfg OAuthConfig) error {
 		}
 	}
 	s.browserResource = s.issuer
+	refresh, err := NewBrowserRefreshService(cfg.BrowserRefresh, s.now, s.random)
+	if err != nil {
+		return ErrInvalidOAuthConfig
+	}
+	s.refresh = refresh
 	return nil
 }
+
+// RefreshGrantSupported reports whether the browser refresh grant and the
+// family revocation endpoint are served (a browser client is configured).
+func (s *OAuthService) RefreshGrantSupported() bool { return s.refresh != nil }
 
 // devBrowserRedirectURI accepts a static browser client redirect: an http
 // URL on a loopback host with an explicit port and a path, no user info,
@@ -995,6 +1011,12 @@ type OAuthToken struct {
 	ExpiresIn  time.Duration
 	Scope      string
 	ClientKind string
+	// RefreshToken is the browser class's refresh token (CHAOS-12124); empty
+	// for every other class.
+	RefreshToken string
+	// Outcome is the telemetry outcome of a token answered for a reason
+	// other than "ok" (a refresh grace replay); empty means ok.
+	Outcome string
 }
 
 const oauthTokenRedacted = "auth.OAuthToken{redacted}"
@@ -1063,7 +1085,106 @@ func (s *OAuthService) Exchange(ctx context.Context, request OAuthTokenRequest) 
 	if issued.Credential.ExpiresAt != nil {
 		lifetime = issued.Credential.ExpiresAt.Sub(s.now().UTC())
 	}
-	return OAuthToken{Issued: issued, ExpiresIn: lifetime, Scope: scope, ClientKind: pending.ClientKind}, nil
+	token := OAuthToken{Issued: issued, ExpiresIn: lifetime, Scope: scope, ClientKind: pending.ClientKind}
+	if browser {
+		// CHAOS-12124: the browser credential's family starts here. On a
+		// failure the access token never leaves the server (10 minutes).
+		refresh, err := s.refresh.Start(ctx, issued)
+		if err != nil {
+			return OAuthToken{ClientKind: pending.ClientKind}, fmt.Errorf("%w: start browser family: %w", ErrOAuthUnavailable, err)
+		}
+		token.RefreshToken = refresh
+	}
+	return token, nil
+}
+
+// OAuthRefreshRequest carries a grant_type=refresh_token /token request.
+type OAuthRefreshRequest struct {
+	GrantType    string
+	RefreshToken string
+	ClientID     string
+}
+
+// Refresh answers grant_type=refresh_token for a browser client
+// (CHAOS-12124): a rotation or a grace replay returns the successor pair;
+// every other decision is invalid_grant with the decision as its outcome.
+func (s *OAuthService) Refresh(ctx context.Context, request OAuthRefreshRequest) (OAuthToken, error) {
+	if request.GrantType != "refresh_token" || s.refresh == nil {
+		return OAuthToken{}, oauthError("unsupported_grant_type", oauthvocab.OutcomeUnsupportedGrantType, false)
+	}
+	if !s.isBrowserClient(request.ClientID) {
+		return OAuthToken{}, oauthError("unauthorized_client", oauthvocab.OutcomeUnauthorizedClient, false)
+	}
+	clientKind := storage.OAuthClientKindMetadataDocument
+	result, err := s.refresh.Refresh(ctx, request.RefreshToken, request.ClientID)
+	if err != nil {
+		return OAuthToken{ClientKind: clientKind}, fmt.Errorf("%w: refresh: %w", ErrOAuthUnavailable, err)
+	}
+	refuse := func(outcome string) (OAuthToken, error) {
+		return OAuthToken{ClientKind: clientKind}, oauthError("invalid_grant", outcome, false)
+	}
+	switch result.Decision {
+	case storage.BrowserRefreshRotated, storage.BrowserRefreshGraceReplay:
+	case storage.BrowserRefreshReuseRevoked:
+		return refuse(oauthvocab.OutcomeReuseRevoked)
+	case storage.BrowserRefreshFamilyExpired:
+		return refuse(oauthvocab.OutcomeFamilyExpired)
+	case storage.BrowserRefreshFamilyRevoked:
+		return refuse(oauthvocab.OutcomeFamilyRevoked)
+	case storage.BrowserRefreshClientMismatch:
+		return refuse(oauthvocab.OutcomeClientMismatch)
+	default:
+		return refuse(oauthvocab.OutcomeInvalidGrant)
+	}
+	lifetime := BrowserCredentialLifetime
+	if result.Issued.Credential.ExpiresAt != nil {
+		lifetime = result.Issued.Credential.ExpiresAt.Sub(s.now().UTC())
+	}
+	token := OAuthToken{
+		Issued: result.Issued, ExpiresIn: lifetime, Scope: strings.Join(result.Issued.Credential.Scopes, " "),
+		ClientKind: clientKind, RefreshToken: result.RefreshToken,
+	}
+	if result.Decision == storage.BrowserRefreshGraceReplay {
+		token.Outcome = oauthvocab.OutcomeGraceReplay
+	}
+	return token, nil
+}
+
+// OAuthRevocation is a family revocation's telemetry: its outcome and client
+// kind.
+type OAuthRevocation struct {
+	Outcome    string
+	ClientKind string
+}
+
+// RevokeRefreshToken revokes the browser token family of a refresh token
+// (RFC 7009, CHAOS-12124). Any refresh token -- unknown, consumed, of a
+// revoked family -- is answered as revoked (RFC 7009 §2.2); an access token
+// is unsupported_token_type, and a client that is not a browser client is
+// unauthorized_client.
+func (s *OAuthService) RevokeRefreshToken(ctx context.Context, token, clientID string) (OAuthRevocation, error) {
+	if s.refresh == nil || !s.isBrowserClient(clientID) {
+		return OAuthRevocation{Outcome: oauthvocab.OutcomeUnauthorizedClient}, oauthError("unauthorized_client", oauthvocab.OutcomeUnauthorizedClient, false)
+	}
+	clientKind := storage.OAuthClientKindMetadataDocument
+	if strings.HasPrefix(token, TokenPrefix) {
+		return OAuthRevocation{Outcome: oauthvocab.OutcomeUnsupportedTokenType, ClientKind: clientKind}, oauthError("unsupported_token_type", oauthvocab.OutcomeUnsupportedTokenType, false)
+	}
+	decision, err := s.refresh.RevokeFamily(ctx, token, clientID)
+	if err != nil {
+		return OAuthRevocation{ClientKind: clientKind}, fmt.Errorf("%w: revoke browser family: %w", ErrOAuthUnavailable, err)
+	}
+	outcome := oauthvocab.OutcomeOK
+	switch decision {
+	case storage.BrowserFamilyRevokedNow:
+	case storage.BrowserRefreshFamilyRevoked:
+		outcome = oauthvocab.OutcomeFamilyRevoked
+	case storage.BrowserRefreshClientMismatch:
+		outcome = oauthvocab.OutcomeClientMismatch
+	default:
+		outcome = oauthvocab.OutcomeInvalidGrant
+	}
+	return OAuthRevocation{Outcome: outcome, ClientKind: clientKind}, nil
 }
 
 // OAuthDeviceAuthorizationRequest carries POST /device_authorization's form

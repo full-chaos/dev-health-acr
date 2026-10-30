@@ -29,8 +29,13 @@ type provenanceFixture struct {
 
 func newProvenanceFixture(t *testing.T, ctx context.Context) provenanceFixture {
 	t.Helper()
+	return newProvenanceFixtureOn(t, ctx, newCredentialStoreDatabase(t, ctx))
+}
+
+// newProvenanceFixtureOn builds the fixture over a given database pool.
+func newProvenanceFixtureOn(t *testing.T, ctx context.Context, db *sql.DB) provenanceFixture {
+	t.Helper()
 	now := time.Date(2026, 10, 30, 12, 0, 0, 0, time.UTC)
-	db := newCredentialStoreDatabase(t, ctx)
 	audit, err := NewAuditStore(db)
 	require.NoError(t, err)
 	credentials, err := NewCredentialStore(db, audit)
