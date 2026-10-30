@@ -303,13 +303,20 @@ VALUES ($1, 'fam_startup', 'cred_startup', $2)`, strings.Repeat("a", 64), t0)
 	require.NoError(t, err)
 	count := func(table string) int { return h.count(t, table) }
 
-	// OAuth without a browser client: no family purge, so the role needs no DELETE there.
-	logger, logs := newOAuthPurgeStartupLogger()
-	components, err := openPostgres(ctx, h.config(), logger)
-	require.NoError(t, err, "OAuth without a browser client must start without DELETE on the browser tables")
-	require.NoError(t, components.close())
-	require.NotContains(t, logs.String(), "browser family purge")
-	require.Equal(t, 1, count("browser_token_families"))
+	// Feature off (ACR_OAUTH_BROWSER_CLIENTS and ACR_OAUTH_DEV_BROWSER_REDIRECT_URIS
+	// unset, today's deployments): no family purge, so a role with no DELETE
+	// on acr.client_credentials or acr.browser_token_families starts, with the
+	// OAuth login off and with it on.
+	noOAuth := h.config()
+	noOAuth.OAuthIssuer, noOAuth.OAuthResources, noOAuth.OAuthConsentURL = "", nil, ""
+	for name, featureOff := range map[string]config.Config{"OAuth off": noOAuth, "OAuth on": h.config()} {
+		logger, logs := newOAuthPurgeStartupLogger()
+		components, err := openPostgres(ctx, featureOff, logger)
+		require.NoError(t, err, "%s, no browser client: startup must not need DELETE on the browser tables", name)
+		require.NoError(t, components.close())
+		require.NotContains(t, logs.String(), "browser family purge", name)
+		require.Equal(t, 1, count("browser_token_families"), name)
+	}
 
 	cfg := h.config()
 	cfg.OAuthBrowserClients = []string{"https://www.example.test/acr/client-metadata.json"}
@@ -332,8 +339,8 @@ VALUES ($1, 'fam_startup', 'cred_startup', $2)`, strings.Repeat("a", 64), t0)
 
 	_, err = owner.ExecContext(ctx, `GRANT DELETE ON acr.client_credentials, acr.browser_token_families TO acr_purge_rt`)
 	require.NoError(t, err)
-	logger, logs = newOAuthPurgeStartupLogger()
-	components, err = openPostgres(ctx, cfg, logger)
+	logger, logs := newOAuthPurgeStartupLogger()
+	components, err := openPostgres(ctx, cfg, logger)
 	require.NoError(t, err)
 	require.NoError(t, components.close())
 	require.Equal(t, 0, count("browser_token_families"), "the startup purge deletes the ended family")
