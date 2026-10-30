@@ -837,7 +837,9 @@ func (e *Engine) walkCarriedWindow(ctx context.Context, principal storage.Princi
 // applied to the SOURCE side of a carry: an inferred window can never BE a
 // source, only ever a destination.
 func carriableWindow(window *contractsv1.ContextFabricEffectiveEvidenceWindow) *contractsv1.ContextFabricEffectiveEvidenceWindow {
-	if window == nil || window.Provenance == contractsv1.ContextFabricWindowInferredDefault {
+	// CHAOS-11601: a server_default window discloses what the reads used; it
+	// is no caller authority, so it is never a carry source either.
+	if !callerWindow(window) || window.Provenance == contractsv1.ContextFabricWindowInferredDefault {
 		return nil
 	}
 	copied := *window

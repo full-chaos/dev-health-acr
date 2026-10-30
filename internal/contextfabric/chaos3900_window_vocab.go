@@ -127,4 +127,5 @@ const (
 	WindowInferredDefault        = contractsv1.ContextFabricWindowInferredDefault
 	WindowQuestionStated         = contractsv1.ContextFabricWindowQuestionStated
 	WindowClarificationConfirmed = contractsv1.ContextFabricWindowClarificationConfirmed
+	WindowServerDefault          = contractsv1.ContextFabricWindowServerDefault
 )
