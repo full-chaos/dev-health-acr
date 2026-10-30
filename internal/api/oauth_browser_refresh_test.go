@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -128,5 +129,113 @@ func TestOAuthRefreshGrantIsAbsentWithoutABrowserClient(t *testing.T) {
 	}
 	if status, answer, _ := postOAuthForm(t, app, OAuthTokenPath, url.Values{"grant_type": {"refresh_token"}, "refresh_token": {"x"}, "client_id": {auth.DevBrowserClientID}}); status != http.StatusBadRequest || answer.Error != "unsupported_grant_type" {
 		t.Fatalf("refresh without a browser client = %d %q, want unsupported_grant_type", status, answer.Error)
+	}
+}
+
+// Sign-out from the web origin: the browser preflights /revoke and must read
+// its answer, so /revoke answers CORS for the listed origin like /token
+// (CHAOS-12124; found by the web lane against 1442f42f: preflight 405, POST
+// 200 with no Access-Control-Allow-Origin).
+func TestOAuthRevokeAnswersCORSForTheWebOrigin(t *testing.T) {
+	app, _, err := newOAuthTestApp(t, &OAuthRuntime{
+		Issuer: oauthTestIssuer, Resources: []string{oauthTestResource, oauthTestIssuer}, DevBrowserRedirectURIs: []string{oauthTestRedirect},
+	}, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	app.config.CORSAllowedOrigins = []string{corsTestOrigin}
+
+	for _, path := range []string{OAuthTokenPath, OAuthRevocationPath} {
+		preflight := httptest.NewRequest(http.MethodOptions, path, nil)
+		preflight.Header.Set("Origin", corsTestOrigin)
+		preflight.Header.Set("Access-Control-Request-Method", "POST")
+		preflight.Header.Set("Access-Control-Request-Headers", "content-type, x-request-id")
+		recorder := httptest.NewRecorder()
+		app.Handler().ServeHTTP(recorder, preflight)
+		if recorder.Code != http.StatusNoContent || recorder.Header().Get("Access-Control-Allow-Origin") != corsTestOrigin ||
+			!containsValue(recorder.Header().Values("Access-Control-Allow-Methods"), "POST") {
+			t.Fatalf("%s preflight: %d, Allow-Origin %q, Allow-Methods %q; want 204 for %s with POST", path, recorder.Code,
+				recorder.Header().Get("Access-Control-Allow-Origin"), recorder.Header().Get("Access-Control-Allow-Methods"), corsTestOrigin)
+		}
+		expectNoCredentialsOrWildcard(t, path+" preflight", recorder)
+	}
+
+	revoke := httptest.NewRequest(http.MethodPost, OAuthRevocationPath, strings.NewReader(url.Values{"token": {"acrrt_" + strings.Repeat("A", 43)}, "client_id": {auth.DevBrowserClientID}}.Encode()))
+	revoke.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	revoke.Header.Set("Origin", corsTestOrigin)
+	recorder := httptest.NewRecorder()
+	app.Handler().ServeHTTP(recorder, revoke)
+	expectCORSActual(t, "revoke", recorder, http.StatusOK, corsTestOrigin)
+	if strings.TrimSpace(recorder.Body.String()) != "{}" {
+		t.Fatalf("revoke body = %q, want {}", recorder.Body.String())
+	}
+
+	other := httptest.NewRequest(http.MethodOptions, OAuthRevocationPath, nil)
+	other.Header.Set("Origin", "https://evil.example")
+	other.Header.Set("Access-Control-Request-Method", "POST")
+	recorder = httptest.NewRecorder()
+	app.Handler().ServeHTTP(recorder, other)
+	expectNoCORS(t, "revoke preflight from an unlisted origin", recorder)
+}
+
+// Every user of a first-party browser client shares its public client_id, so
+// a client-keyed limit would put every browser session -- and anyone who
+// knows the id -- in one bucket (codex #1786 r2 P2). Its token and revoke
+// requests are limited per presented secret instead: a flood of bad refresh
+// tokens and bad revokes under the browser client id does not throttle a
+// real session's refresh or sign-out, while one token replayed past the
+// limit is still throttled. A dynamic client keeps its per-client bucket.
+func TestOAuthBrowserClientIsLimitedPerSecretNotPerSharedClientID(t *testing.T) {
+	app, _, err := newOAuthTestApp(t, &OAuthRuntime{
+		Issuer: oauthTestIssuer, Resources: []string{oauthTestResource, oauthTestIssuer}, DevBrowserRedirectURIs: []string{oauthTestRedirect},
+	}, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { oauthConsentExtraClaims = nil })
+	all := []string{"*"}
+	oauthConsentExtraClaims = map[string]any{"sid": "sess_limit"}
+	_, body := serveConsent(app, consentRequest(t, map[string]any{"action": "approve", "handle": authorizeToConsent(t, app, oauthTestAuthorizeQuery(auth.DevBrowserClientID)), "repository_scopes": all}, all, "rl1"))
+	redirect, _ := url.Parse(body["redirect_url"].(string))
+	status, login, raw := postOAuthForm(t, app, OAuthTokenPath, url.Values{"grant_type": {"authorization_code"}, "code": {redirect.Query().Get("code")},
+		"redirect_uri": {oauthTestRedirect}, "client_id": {auth.DevBrowserClientID}, "code_verifier": {strings.Repeat("v", 50)}})
+	if status != http.StatusOK {
+		t.Fatalf("login: %d %s", status, raw)
+	}
+
+	bad := func(i int) string { return "acrrt_" + strings.Repeat(strconv.Itoa(i%10), 43) + strconv.Itoa(i) }
+	for i := range 80 {
+		if status, _, _ := postOAuthForm(t, app, OAuthTokenPath, url.Values{"grant_type": {"refresh_token"}, "refresh_token": {bad(i)}, "client_id": {auth.DevBrowserClientID}}); status == http.StatusTooManyRequests {
+			t.Fatalf("refresh %d with a distinct bad token was throttled: the browser client's sessions share one bucket", i)
+		}
+		if status, _, _ := postOAuthForm(t, app, OAuthRevocationPath, url.Values{"token": {bad(i)}, "client_id": {auth.DevBrowserClientID}}); status == http.StatusTooManyRequests {
+			t.Fatalf("revoke %d with a distinct bad token was throttled: the browser client's sessions share one bucket", i)
+		}
+	}
+	status, rotated, raw := postOAuthForm(t, app, OAuthTokenPath, url.Values{"grant_type": {"refresh_token"}, "refresh_token": {login.RefreshToken}, "client_id": {auth.DevBrowserClientID}})
+	if status != http.StatusOK {
+		t.Fatalf("a real session's refresh after the flood: %d %s, want 200", status, raw)
+	}
+	if status, _, raw = postOAuthForm(t, app, OAuthRevocationPath, url.Values{"token": {rotated.RefreshToken}, "client_id": {auth.DevBrowserClientID}}); status != http.StatusOK {
+		t.Fatalf("a real session's sign-out after the flood: %d %s, want 200", status, raw)
+	}
+
+	// One presented token is still limited: replayed past the limit it is throttled.
+	replayed := map[int]int{}
+	for range 70 {
+		status, _, _ := postOAuthForm(t, app, OAuthTokenPath, url.Values{"grant_type": {"refresh_token"}, "refresh_token": {bad(999)}, "client_id": {auth.DevBrowserClientID}})
+		replayed[status]++
+	}
+	if replayed[http.StatusTooManyRequests] != 10 {
+		t.Fatalf("70 refreshes with one token: statuses %v, want 10x429", replayed)
+	}
+	// A dynamic client keeps its per-client bucket.
+	dynamic := map[int]int{}
+	for i := range 70 {
+		status, _, _ := postOAuthForm(t, app, OAuthTokenPath, url.Values{"grant_type": {"refresh_token"}, "refresh_token": {bad(i)}, "client_id": {"acrc_" + strings.Repeat("a", 32)}})
+		dynamic[status]++
+	}
+	if dynamic[http.StatusTooManyRequests] != 10 {
+		t.Fatalf("70 token calls for one dynamic client: statuses %v, want 10x429", dynamic)
 	}
 }

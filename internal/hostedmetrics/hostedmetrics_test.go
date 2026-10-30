@@ -79,3 +79,34 @@ func TestLatencyBucketsReachTheObservedP99(t *testing.T) {
 		}
 	}
 }
+
+// CHAOS-12008: the dropped-event counter adds the supplied count, not 1 per
+// call (grouped drops must not be undercounted), buckets an unknown stage, and
+// ignores a non-positive count.
+func TestInvestigationEventsDroppedRecordsTheSuppliedCount(t *testing.T) {
+	ctx := context.Background()
+	instruments, read := hostedmetricstest.New(t, hostedmetrics.Vocabularies{})
+	instruments.InvestigationEventsDropped(ctx, "reading_facts", 3)
+	instruments.InvestigationEventsDropped(ctx, "reading_facts", 2)
+	instruments.InvestigationEventsDropped(ctx, "synthesizing", 4)
+	instruments.InvestigationEventsDropped(ctx, "a stage from a caller", 7)
+	instruments.InvestigationEventsDropped(ctx, "validating", 0)
+	instruments.InvestigationEventsDropped(ctx, "validating", -2)
+	name := hostedmetrics.InvestigationEventsDroppedName
+	want := map[string]int64{
+		name + "{stage=reading_facts}": 5,
+		name + "{stage=synthesizing}":  4,
+		name + "{stage=other}":         7,
+	}
+	got := read()
+	for cell, value := range want {
+		if got[cell] != value {
+			t.Errorf("%s = %d, want %d", cell, got[cell], value)
+		}
+	}
+	for cell := range got {
+		if _, ok := want[cell]; !ok {
+			t.Errorf("unexpected cell %s = %d", cell, got[cell])
+		}
+	}
+}

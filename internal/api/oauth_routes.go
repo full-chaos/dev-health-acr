@@ -300,6 +300,33 @@ func (a *App) oauthLimitKey(r *http.Request, clientID string) string {
 	return "client:" + hex.EncodeToString(sum[:])
 }
 
+// oauthTokenLimitKey is the limiter key of a /token or /revoke request. Every
+// user of a first-party browser client shares its public client_id, so a
+// client key would put every browser session, and anyone who knows the id,
+// in one bucket (codex #1786 r2 P2): a flood of bad tokens would stop real
+// sessions from refreshing and signing out. A browser client's request is
+// keyed by the secret it presents instead (the code, the refresh token or the
+// revoked token), hashed like the client id. Any other client, or a browser
+// request that presents no secret, keeps oauthLimitKey.
+func (a *App) oauthTokenLimitKey(r *http.Request, clientID, secret string) string {
+	if secret != "" && a.oauth.IsBrowserClient(clientID) {
+		sum := sha256.Sum256([]byte(secret))
+		return "secret:" + hex.EncodeToString(sum[:])
+	}
+	return a.oauthLimitKey(r, clientID)
+}
+
+// tokenRequestSecret is the secret a /token request presents for its grant.
+func tokenRequestSecret(r *http.Request) string {
+	switch r.PostForm.Get("grant_type") {
+	case "refresh_token":
+		return r.PostForm.Get("refresh_token")
+	case "authorization_code":
+		return r.PostForm.Get("code")
+	}
+	return ""
+}
+
 func (a *App) oauthRateLimited(w http.ResponseWriter, r *http.Request, step, key string, allow func(string) DeviceAuthorizationLimitDecision) bool {
 	decision := allow(key)
 	if decision.Allowed {
@@ -726,12 +753,13 @@ type oauthTokenBody struct {
 
 func (a *App) handleOAuthToken(w http.ResponseWriter, r *http.Request) {
 	parseErr := parseOAuthForm(w, r)
-	var clientID string
+	var clientID, secret string
 	clientIDOK := false
 	if parseErr == nil {
 		clientID, clientIDOK = tokenClientID(r)
+		secret = tokenRequestSecret(r)
 	}
-	if a.oauthRateLimited(w, r, oauthvocab.StepToken, a.oauthLimitKey(r, clientID), a.runtime.DeviceAuthorizationLimiter.AllowTokenRequest) {
+	if a.oauthRateLimited(w, r, oauthvocab.StepToken, a.oauthTokenLimitKey(r, clientID, secret), a.runtime.DeviceAuthorizationLimiter.AllowTokenRequest) {
 		return
 	}
 	if parseErr != nil {
@@ -802,12 +830,13 @@ func (a *App) handleOAuthToken(w http.ResponseWriter, r *http.Request) {
 // family has expired: it needs only the refresh token and the client id.
 func (a *App) handleOAuthRevoke(w http.ResponseWriter, r *http.Request) {
 	parseErr := parseOAuthForm(w, r)
-	var clientID string
+	var clientID, secret string
 	clientIDOK := false
 	if parseErr == nil {
 		clientID, clientIDOK = tokenClientID(r)
+		secret = r.PostForm.Get("token")
 	}
-	if a.oauthRateLimited(w, r, oauthvocab.StepRevoke, a.oauthLimitKey(r, clientID), a.runtime.DeviceAuthorizationLimiter.AllowTokenRequest) {
+	if a.oauthRateLimited(w, r, oauthvocab.StepRevoke, a.oauthTokenLimitKey(r, clientID, secret), a.runtime.DeviceAuthorizationLimiter.AllowTokenRequest) {
 		return
 	}
 	invalid := func() {
