@@ -1649,6 +1649,13 @@ done < <(selected_tasks)
 # it here.
 [[ "${#TASKS[@]}" -gt 0 ]] || fs_die "no tasks were selected for scenario ${SCENARIO}"
 
+# CHAOS-12057: whether the web agreement check runs depends only on the selected tasks, so a
+# run that will not run it says so before any task is graded; a failed task then cannot
+# leave the run without that record.
+if web_check_enabled && ! web_agreement_task_selected; then
+  record_web_agreement_not_run
+fi
+
 for task in "${TASKS[@]}"; do
   case "$task" in
     task-004-foreign-repo-denied) run_foreign_repo_task ;;
@@ -1661,12 +1668,8 @@ if [[ "$SCENARIO" == 'self-test' ]]; then
   run_fault_self_test
 fi
 
-if web_check_enabled; then
-  if web_agreement_task_selected; then
-    run_web_agreement_check
-  else
-    record_web_agreement_not_run
-  fi
+if web_check_enabled && web_agreement_task_selected; then
+  run_web_agreement_check
 fi
 
 # The summary is mandatory: if no per-task report exists, no task was graded, and the run must
