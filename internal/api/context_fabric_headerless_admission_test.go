@@ -35,7 +35,7 @@ func TestAHeaderlessPlatformCreateCountsAgainstTheMonthlyAllowance(t *testing.T)
 	if got := harness.investigator.executions.Load(); got != 1 {
 		t.Fatalf("executions = %d, want 1", got)
 	}
-	if !strings.Contains(harness.logs[0].String(), `"outcome":"admitted_implicit"`) || !strings.Contains(harness.logs[1].String(), `"implicit":true`) {
+	if !strings.Contains(harness.logs[0].String(), `"outcome":"admitted_implicit","state":"running","request_id":"`+submissionTestRequestID+`","platform_run":true`) || !strings.Contains(harness.logs[1].String(), `"implicit":true`) {
 		t.Fatalf("the implicit admission and its refusal are not on the admission line:\n%s\n%s", harness.logs[0].String(), harness.logs[1].String())
 	}
 }

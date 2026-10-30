@@ -77,7 +77,9 @@ type admittedInvestigationSubmission struct {
 	// implicit is an admission of a create without X-ACR-Submission-ID
 	// (CHAOS-11997): it counts against the shared limits, its reserved id is
 	// never handed to the engine, and its record is released, not completed
-	// with a result, when the run ends.
+	// with a result, when the run ends -- or at its expiry (run budget +
+	// 30 s) when the store cannot record the end (over-counted, never
+	// under-counted; logged at Error).
 	implicit bool
 }
 
@@ -145,13 +147,14 @@ func (a *App) submissionExpiry(ctx context.Context) time.Time {
 	return a.now().Add(budget + contextfabric.SubmissionAbandonGrace)
 }
 
-func (a *App) logSubmissionAdmission(r *http.Request, principal storage.Principal, outcome SubmissionAdmissionOutcome, state contextfabric.SubmissionState, err error) {
+func (a *App) logSubmissionAdmission(r *http.Request, principal storage.Principal, outcome SubmissionAdmissionOutcome, state contextfabric.SubmissionState, err error, extra ...any) {
 	args := []any{
 		"org_id", contextfabric.SanitizeLogAttr(principal.OrgID),
 		"outcome", string(outcome),
 		"state", string(state),
 		"request_id", contextfabric.SanitizeLogAttr(RequestID(r.Context())),
 	}
+	args = append(args, extra...)
 	if err != nil {
 		args = append(args, "error_class", submissionStoreErrorClass(err))
 		a.logger.WarnContext(r.Context(), ContextFabricSubmissionLogMessage, args...)
@@ -278,7 +281,9 @@ func (a *App) admitImplicitInvestigation(w http.ResponseWriter, r *http.Request,
 		writeError(w, r, http.StatusServiceUnavailable, "store_unavailable", "Context Fabric investigation admission is temporarily unavailable", true, nil)
 		return nil, false
 	}
-	a.logSubmissionAdmission(r, principal, SubmissionOutcomeAdmittedImplicit, record.State, nil)
+	// platform_run: the admission counted one run of the deployment's model
+	// to the month's allowance (codex #1763 r3 P3).
+	a.logSubmissionAdmission(r, principal, SubmissionOutcomeAdmittedImplicit, record.State, nil, "platform_run", true)
 	return &admittedInvestigationSubmission{key: key, record: record, store: store, implicit: true}, true
 }
 
@@ -424,7 +429,8 @@ func (a *App) finishInvestigationSubmission(r *http.Request, principal storage.P
 	served := result.ResultID
 	if submission.implicit {
 		// The answer is not the record's: release the record (done_unsaved,
-		// no result named) so its concurrency slot is free.
+		// no result named) so its concurrency slot is free; if every attempt
+		// fails, the slot is held until the record's expiry.
 		served = ""
 	}
 	var record contextfabric.SubmissionRecord
