@@ -42,15 +42,19 @@ const (
 	SubmissionOutcomeRefusedPrincipalConcurrency SubmissionAdmissionOutcome = "refused_concurrency_principal"
 	SubmissionOutcomeRefusedOrgConcurrency       SubmissionAdmissionOutcome = "refused_concurrency_org"
 	SubmissionOutcomeRefusedAllowance            SubmissionAdmissionOutcome = "refused_allowance_exhausted"
+	// CHAOS-11997: a create without X-ACR-Submission-ID on the deployment's
+	// model, admitted under a server-minted key.
+	SubmissionOutcomeAdmittedImplicit SubmissionAdmissionOutcome = "admitted_implicit"
 )
 
 // SubmissionAdmissionOutcomeVocabulary is the closed set of outcomes.
-func SubmissionAdmissionOutcomeVocabulary() [12]SubmissionAdmissionOutcome {
-	return [12]SubmissionAdmissionOutcome{
+func SubmissionAdmissionOutcomeVocabulary() [13]SubmissionAdmissionOutcome {
+	return [13]SubmissionAdmissionOutcome{
 		SubmissionOutcomeAdmitted, SubmissionOutcomeReplayed, SubmissionOutcomeRefusedMismatch, SubmissionOutcomeRefusedInProgress,
 		SubmissionOutcomeRefusedUnsaved, SubmissionOutcomeRefusedAbandoned, SubmissionOutcomeStoreUnavailable, SubmissionOutcomeOwnerUnknown,
 		SubmissionOutcomeRefusedHeader,
 		SubmissionOutcomeRefusedPrincipalConcurrency, SubmissionOutcomeRefusedOrgConcurrency, SubmissionOutcomeRefusedAllowance,
+		SubmissionOutcomeAdmittedImplicit,
 	}
 }
 
@@ -58,17 +62,34 @@ func SubmissionAdmissionOutcomeVocabulary() [12]SubmissionAdmissionOutcome {
 // with an error: AbandonSubmission, not FinishSubmission, decided it.
 const submissionCompletionAbandonedOnError = "abandoned_on_error"
 
+// submissionCompletionImplicitReleased is the completion of an implicit
+// admission's run that served an answer (CHAOS-11997): the record leaves
+// running (done_unsaved: it names no result, by design) and frees its
+// concurrency slot. It is not a defect that the served id is not the
+// reserved one: the reservation is never handed to the engine.
+const submissionCompletionImplicitReleased = "implicit_released"
+
 // admittedInvestigationSubmission is the record this request admitted.
 type admittedInvestigationSubmission struct {
 	key    contextfabric.SubmissionKey
 	record contextfabric.SubmissionRecord
 	store  contextfabric.SubmissionStore
+	// implicit is an admission of a create without X-ACR-Submission-ID
+	// (CHAOS-11997): it counts against the shared limits, its reserved id is
+	// never handed to the engine, and its record is released, not completed
+	// with a result, when the run ends.
+	implicit bool
 }
 
 // investigationSubmissionID reads X-ACR-Submission-ID. Absent is ("", true);
-// one well-formed value is (value, true); anything else is ("", false).
+// one well-formed value is (value, true); anything else is ("", false),
+// including a value in the server's implicit namespace (CHAOS-11997).
 func investigationSubmissionID(r *http.Request) (string, bool) {
-	return investigationCorrelationHeader(r, contractsv1.ContextFabricSubmissionIDHeader)
+	id, ok := investigationCorrelationHeader(r, contractsv1.ContextFabricSubmissionIDHeader)
+	if ok && contextfabric.IsImplicitSubmissionID(id) {
+		return "", false
+	}
+	return id, ok
 }
 
 // investigationThreadID reads X-ACR-Thread-ID by the same rule.
@@ -187,7 +208,7 @@ func (a *App) admitInvestigationSubmission(w http.ResponseWriter, r *http.Reques
 	}, a.now())
 	var refused *contextfabric.SubmissionRefusedError
 	if errors.As(err, &refused) {
-		a.writeSubmissionRefused(w, r, principal, refused)
+		a.writeSubmissionRefused(w, r, principal, refused, false)
 		return nil, false
 	}
 	if err != nil {
@@ -203,6 +224,57 @@ func (a *App) admitInvestigationSubmission(w http.ResponseWriter, r *http.Reques
 	// other request admitted the key between the two reads.
 	a.answerSubmissionRecord(w, r, principal, record, digest)
 	return nil, false
+}
+
+// admitImplicitInvestigation admits a create WITHOUT X-ACR-Submission-ID that
+// runs on the deployment's model (CHAOS-11997) under a server-minted key, in
+// the same transaction and against the same shared limits as a submission:
+// the concurrency counts and the monthly allowance count it, and over a
+// limit it is refused 429 like a submission. Its reserved result id is
+// fresh and never handed to the engine, so the answer stays unbound
+// (organization-bearer reads by id, unchanged) and nothing can repeat the
+// key. With no submission store configured the create runs as before
+// (proceed, nil). Any other failure fails closed: the spend ceiling is not
+// skipped because its store cannot be reached.
+func (a *App) admitImplicitInvestigation(w http.ResponseWriter, r *http.Request, principal storage.Principal, request contextfabric.InvestigationRequest, threadID string) (*admittedInvestigationSubmission, bool) {
+	store := a.investigationSubmissions()
+	if store == nil {
+		return nil, true
+	}
+	key, err := contextfabric.SubmissionKeyFor(principal, contextfabric.NewImplicitSubmissionID())
+	if err != nil {
+		a.logSubmissionAdmission(r, principal, SubmissionOutcomeOwnerUnknown, "", err)
+		writeError(w, r, http.StatusInternalServerError, "internal_error", "Context Fabric investigation could not be admitted", false, nil)
+		return nil, false
+	}
+	digest, err := contextfabric.SubmissionRequestDigest(request)
+	if err != nil {
+		a.logSubmissionAdmission(r, principal, SubmissionOutcomeStoreUnavailable, "", err)
+		writeError(w, r, http.StatusInternalServerError, "internal_error", "Context Fabric investigation could not be admitted", false, nil)
+		return nil, false
+	}
+	record, admitted, err := store.AdmitSubmission(r.Context(), contextfabric.SubmissionAdmission{
+		Key: key, RequestDigest: digest, ReservedResultID: a.reserveResultID(), ThreadID: threadID, ExpiresAt: a.submissionExpiry(r.Context()),
+		Limits: a.config.AskDevLimits, PlatformRun: true,
+	}, a.now())
+	var refused *contextfabric.SubmissionRefusedError
+	switch {
+	case errors.As(err, &refused):
+		a.writeSubmissionRefused(w, r, principal, refused, true)
+		return nil, false
+	case err != nil:
+		a.logSubmissionAdmission(r, principal, SubmissionOutcomeStoreUnavailable, "", err)
+		writeError(w, r, http.StatusServiceUnavailable, "store_unavailable", "Context Fabric investigation admission is temporarily unavailable", true, nil)
+		return nil, false
+	case !admitted:
+		// A fresh 128-bit key that already exists: never expected; refused
+		// rather than run uncounted.
+		a.logSubmissionAdmission(r, principal, SubmissionOutcomeStoreUnavailable, record.State, errors.New("implicit submission key already admitted"))
+		writeError(w, r, http.StatusServiceUnavailable, "store_unavailable", "Context Fabric investigation admission is temporarily unavailable", true, nil)
+		return nil, false
+	}
+	a.logSubmissionAdmission(r, principal, SubmissionOutcomeAdmittedImplicit, record.State, nil)
+	return &admittedInvestigationSubmission{key: key, record: record, store: store, implicit: true}, true
 }
 
 // answerSubmissionRepeat answers a request whose submission key is already
@@ -274,12 +346,14 @@ func (a *App) answerSubmissionRecord(w http.ResponseWriter, r *http.Request, pri
 
 // writeSubmissionRefused answers an admission the shared limits refused
 // (CHAOS-11914): 429 with Retry-After; nothing was admitted or counted.
-func (a *App) writeSubmissionRefused(w http.ResponseWriter, r *http.Request, principal storage.Principal, refused *contextfabric.SubmissionRefusedError) {
+func (a *App) writeSubmissionRefused(w http.ResponseWriter, r *http.Request, principal storage.Principal, refused *contextfabric.SubmissionRefusedError, implicit bool) {
 	retryAfter := max(1, int((refused.RetryAfter+time.Second-1)/time.Second))
 	w.Header().Set("Retry-After", strconv.Itoa(retryAfter))
 	args := []any{
 		"org_id", contextfabric.SanitizeLogAttr(principal.OrgID),
 		"count", refused.Count, "limit", refused.Limit, "retry_after_seconds", retryAfter,
+		// CHAOS-11997: true for a create without X-ACR-Submission-ID.
+		"implicit", implicit,
 		"request_id", contextfabric.SanitizeLogAttr(RequestID(r.Context())),
 	}
 	switch refused.Refusal {
@@ -321,7 +395,7 @@ func (a *App) logSubmissionCompletion(r *http.Request, principal storage.Princip
 	case err != nil:
 		args = append(args, "error_class", submissionStoreErrorClass(err))
 		a.logger.ErrorContext(r.Context(), ContextFabricSubmissionCompletionLogMessage, args...)
-	case completion != submissionCompletionAbandonedOnError && !servedIsReserved && !reused:
+	case completion != submissionCompletionAbandonedOnError && completion != submissionCompletionImplicitReleased && !servedIsReserved && !reused:
 		args = append(args, "defect", submissionReservationUnused)
 		a.logger.ErrorContext(r.Context(), ContextFabricSubmissionCompletionLogMessage, args...)
 	default:
@@ -342,6 +416,13 @@ func (a *App) finishInvestigationSubmission(r *http.Request, principal storage.P
 	}
 	ctx, cancel := submissionWriteContext(r.Context())
 	defer cancel()
+	if submission.implicit {
+		// The answer is not the record's: release the record (done_unsaved,
+		// no result named) so its concurrency slot is free.
+		record, _, err := submission.store.FinishSubmission(ctx, submission.key, "", a.now())
+		a.logSubmissionCompletion(r, principal, submissionCompletionImplicitReleased, record.State, false, result.Reused, err)
+		return
+	}
 	record, completion, err := submission.store.FinishSubmission(ctx, submission.key, result.ResultID, a.now())
 	a.logSubmissionCompletion(r, principal, string(completion), record.State, result.ResultID == submission.record.ReservedResultID, result.Reused, err)
 }

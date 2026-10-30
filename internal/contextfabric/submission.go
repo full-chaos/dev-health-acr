@@ -230,6 +230,29 @@ type SubmissionUnsavedMarker interface {
 	MarkSubmissionUnsaved(ctx context.Context, principal storage.Principal, resultID string, now time.Time) (marked bool, err error)
 }
 
+// ImplicitSubmissionIDPrefix starts the server-minted submission id of an
+// implicit admission (CHAOS-11997): a create WITHOUT X-ACR-Submission-ID that
+// runs on the deployment's model is admitted under a fresh key of its own, so
+// the shared concurrency limits and the monthly allowance count it. Its
+// reserved result id never reaches the engine, so its answer stays unbound
+// (organization-bearer reads, as before), and nobody can repeat the key. A
+// client's X-ACR-Submission-ID may not start with it.
+const ImplicitSubmissionIDPrefix = "acr-implicit-"
+
+// NewImplicitSubmissionID mints an implicit admission's submission id: the
+// prefix and 128 random bits in hex (a valid submission id).
+func NewImplicitSubmissionID() string {
+	buf := make([]byte, 16)
+	//nolint:errcheck // see NewInvestigationResultID: unreachable by construction.
+	rand.Read(buf)
+	return ImplicitSubmissionIDPrefix + hex.EncodeToString(buf)
+}
+
+// IsImplicitSubmissionID reports whether id is in the implicit namespace.
+func IsImplicitSubmissionID(id string) bool {
+	return strings.HasPrefix(id, ImplicitSubmissionIDPrefix)
+}
+
 // NewInvestigationResultID mints a result id of the shape the hosted engine
 // mints: "result_" and 128 random bits in hex. crypto/rand.Read does not
 // fail on a supported platform (it aborts the process instead).
