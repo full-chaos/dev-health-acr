@@ -221,7 +221,7 @@ func (a *App) admitInvestigationSubmission(w http.ResponseWriter, r *http.Reques
 		return nil, false
 	}
 	if admitted {
-		a.logSubmissionAdmission(r, principal, SubmissionOutcomeAdmitted, record.State, nil)
+		a.logSubmissionAdmission(r, principal, SubmissionOutcomeAdmitted, record.State, nil, "owner_surface", ownerSurfaceOf(record))
 		return &admittedInvestigationSubmission{key: key, record: record, store: store}, true
 	}
 	// A repeat that raced the pre-gate lookup (answerSubmissionRepeat): the
@@ -283,7 +283,7 @@ func (a *App) admitImplicitInvestigation(w http.ResponseWriter, r *http.Request,
 	}
 	// platform_run: the admission counted one run of the deployment's model
 	// to the month's allowance (codex #1763 r3 P3).
-	a.logSubmissionAdmission(r, principal, SubmissionOutcomeAdmittedImplicit, record.State, nil, "platform_run", true)
+	a.logSubmissionAdmission(r, principal, SubmissionOutcomeAdmittedImplicit, record.State, nil, "platform_run", true, "owner_surface", ownerSurfaceOf(record))
 	return &admittedInvestigationSubmission{key: key, record: record, store: store, implicit: true}, true
 }
 
@@ -495,6 +495,15 @@ func retrySubmissionWrite(ctx context.Context, write func() error) error {
 		}
 	}
 	return err
+}
+
+// ownerSurfaceOf is the canonical owner surface a new record was admitted
+// under (CHAOS-12091): browser or mcp, "none" when its owner has no user.
+func ownerSurfaceOf(record contextfabric.SubmissionRecord) string {
+	if record.Key.Owner.Surface == "" {
+		return string(contextfabric.SubmissionOwnerMatchNone)
+	}
+	return string(record.Key.Owner.Surface)
 }
 
 // ownerMatchOf is the owner-match basis of record for principal

@@ -31,7 +31,11 @@ func TestReproTokenRotationKeepsTheSubmissionOwner(t *testing.T) {
 	if got := harness.investigator.executions.Load(); got != 1 {
 		t.Errorf("executions after a same-key retry by the rotated credential = %d, want 1", got)
 	}
-	// The status and admission lines name the match basis.
+	// The first admission names its canonical surface; the status and
+	// admission lines of the repeat name the match basis.
+	if logs := harness.logs[0].String(); !strings.Contains(logs, `"outcome":"admitted"`) || !strings.Contains(logs, `"owner_surface":"mcp"`) {
+		t.Errorf("the first admission does not name owner_surface mcp:\n%s", logs)
+	}
 	if logs := harness.logs[1].String(); !strings.Contains(logs, `"surface":"submission_status","outcome":"served","state":"done","request_id":"`+submissionTestRequestID+`","owner_match":"canonical"`) ||
 		!strings.Contains(logs, `"outcome":"replayed","state":"done","request_id":"`+submissionTestRequestID+`","owner_match":"canonical"`) {
 		t.Errorf("the rotated credential's lines do not name owner_match canonical:\n%s", logs)
