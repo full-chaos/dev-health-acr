@@ -262,6 +262,10 @@ GRANT SELECT, INSERT, UPDATE ON TABLE acr.context_fabric_usage_monthly TO :"runt
 REVOKE SELECT, INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER ON TABLE acr.context_fabric_threads FROM :"runtime_user";
 GRANT SELECT, INSERT, UPDATE ON TABLE acr.context_fabric_threads TO :"runtime_user";
 
+-- CHAOS-11949: INSERT internal/contextfabric/pginvestigation/runs.go AppendRunEvent and reapLostRun (the run_lost terminal), DELETE runs.go AppendRunEvent (the per-run cap), SELECT runs.go ReadRunEvents and RunTerminalOf
+REVOKE SELECT, INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER ON TABLE acr.context_fabric_investigation_run_events FROM :"runtime_user";
+GRANT SELECT, INSERT, DELETE ON TABLE acr.context_fabric_investigation_run_events TO :"runtime_user";
+
 -- INSERT internal/contextfabric/pginvestigation/submissions.go AdmitSubmission, SELECT submissions.go GetSubmission, UPDATE submissions.go FinishSubmission and store.go Save's completion
 REVOKE SELECT, INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER ON TABLE acr.context_fabric_investigation_submissions FROM :"runtime_user";
 GRANT SELECT, INSERT, UPDATE ON TABLE acr.context_fabric_investigation_submissions TO :"runtime_user";
@@ -352,6 +356,9 @@ GRANT SELECT, DELETE ON TABLE acr.context_fabric_projection_checkpoints TO :"pur
 -- purge table list: orgpurge purgeTables
 REVOKE SELECT, INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER ON TABLE acr.context_fabric_projection_rebuild_markers FROM :"purge_user";
 GRANT SELECT, DELETE ON TABLE acr.context_fabric_projection_rebuild_markers TO :"purge_user";
+-- purge table list: orgpurge purgeTables
+REVOKE SELECT, INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER ON TABLE acr.context_fabric_investigation_run_events FROM :"purge_user";
+GRANT SELECT, DELETE ON TABLE acr.context_fabric_investigation_run_events TO :"purge_user";
 -- purge table list: orgpurge purgeTables
 REVOKE SELECT, INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER ON TABLE acr.context_fabric_investigation_submissions FROM :"purge_user";
 GRANT SELECT, DELETE ON TABLE acr.context_fabric_investigation_submissions TO :"purge_user";

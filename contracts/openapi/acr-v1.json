@@ -469,7 +469,7 @@
         },
         "responses": {
           "200": {
-            "description": "Investigation result; status may be complete, partial, degraded, clarification_required, or no_match. schema_version is context_fabric_investigation_result.v1, or .v2 when the result minted an anchor membership-verify offer (CHAOS-4042). The body is the result plus, when the request asked synthesis_mode client and the turn reached synthesis, synthesis_input: the input for the caller's model to write the answer from. The result read by id never carries it. When options.max_serialized_bytes is below the size of the result, the body is instead the bounded consumer projection (context_fabric_answer_projection.v1) sized to that option, with projection_budget.full_result_omitted true and result_id naming the stored result, which GET by id serves whole against the service ceiling. A synthesis_mode client turn is never projected: its synthesis_input is outside options.max_serialized_bytes (the option bounds the result; the input has its own bound, the service ceiling), and a result over the option on such a turn is refused. text/event-stream (CHAOS-11909): served when Accept is exactly text/event-stream and the deployment has ACR_CONTEXT_FABRIC_EVENT_STREAM_ENABLED on; with the flag off the request gets 406 stream_unavailable before any admission work, and there is no fallback to application/json. Any other Accept value gets the application/json body, unchanged. The stream body is a sequence of Server-Sent Events frames -- `id: <seq>`, `event: <type>`, `data: <one event as one line of compact JSON, no field present as empty, zero or null>`, then a blank line -- and each data object validates against context_fabric_investigation_event.v1. accepted comes first, with the response headers, right after admission; stage events follow in the fixed stage order; a heartbeat follows when 10 seconds pass with no other event, so consecutive elapsed_ms values (accepted counting as 0) are at most 11 seconds apart (the bound is on silence; a heartbeat sooner than that is valid); exactly one terminal event, result or error, ends the stream. result.result is the application/json body this response has for the same request, byte for byte; error.error is the error.v1 envelope the same failure gets as an application/json error response, http_status included. A failure before the stream starts keeps its HTTP status and application/json error.v1 body. A stream that ends without a terminal event was interrupted.",
+            "description": "Investigation result; status may be complete, partial, degraded, clarification_required, or no_match. schema_version is context_fabric_investigation_result.v1, or .v2 when the result minted an anchor membership-verify offer (CHAOS-4042). The body is the result plus, when the request asked synthesis_mode client and the turn reached synthesis, synthesis_input: the input for the caller's model to write the answer from. The result read by id never carries it. When options.max_serialized_bytes is below the size of the result, the body is instead the bounded consumer projection (context_fabric_answer_projection.v1) sized to that option, with projection_budget.full_result_omitted true and result_id naming the stored result, which GET by id serves whole against the service ceiling. A synthesis_mode client turn is never projected: its synthesis_input is outside options.max_serialized_bytes (the option bounds the result; the input has its own bound, the service ceiling), and a result over the option on such a turn is refused. text/event-stream (CHAOS-11909): served when Accept is exactly text/event-stream and the deployment has ACR_CONTEXT_FABRIC_EVENT_STREAM_ENABLED on; with the flag off the request gets 406 stream_unavailable before any admission work, and there is no fallback to application/json. Any other Accept value gets the application/json body, unchanged. The stream body is a sequence of Server-Sent Events frames -- `id: <seq>`, `event: <type>`, `data: <one event as one line of compact JSON, no field present as empty, zero or null>`, then a blank line -- and each data object validates against context_fabric_investigation_event.v1. accepted comes first, with the response headers, right after admission; stage events follow in the fixed stage order; a heartbeat follows when 10 seconds pass with no other event, so consecutive elapsed_ms values (accepted counting as 0) are at most 11 seconds apart (the bound is on silence; a heartbeat sooner than that is valid); exactly one terminal event, result or error, ends the stream. result.result is the application/json body this response has for the same request, byte for byte; error.error is the error.v1 envelope the same failure gets as an application/json error response, http_status included. A failure before the stream starts keeps its HTTP status and application/json error.v1 body. A stream that ends without a terminal event was interrupted. Run lease (CHAOS-11949): with ACR_CONTEXT_FABRIC_RUN_LEASE_ENABLED on, a stream request that names X-ACR-Submission-ID runs under a lease ACR holds instead of its connection: a disconnect does not cancel the run, every event goes to the run's event log first, GET /api/v1/context-fabric/investigations/submissions/{submission_id}/events attaches to it again (Last-Event-ID) from any replica, and POST .../cancel cancels it (terminal error canceled); a run whose replica stops ends error run_lost.",
             "content": {
               "application/json": {
                 "schema": {
@@ -723,6 +723,172 @@
             "$ref": "#/components/responses/Error"
           },
           "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "426": {
+            "$ref": "#/components/responses/Error"
+          },
+          "429": {
+            "$ref": "#/components/responses/Error"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error"
+          },
+          "503": {
+            "$ref": "#/components/responses/Error"
+          },
+          "504": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/api/v1/context-fabric/investigations/submissions/{submission_id}/events": {
+      "get": {
+        "operationId": "attachContextFabricSubmissionEvents",
+        "summary": "Attach to the event stream of the caller's own leased run.",
+        "description": "CHAOS-11949 (Ask Dev plan §2.7.9). With the deployment's run lease on (ACR_CONTEXT_FABRIC_RUN_LEASE_ENABLED), a create request that asks for the event stream and names X-ACR-Submission-ID runs under a lease ACR holds: a disconnect does not cancel it, and every event of its stream goes to a Postgres event log before it goes to the connection. This route attaches to that stream from any replica. Accept must be exactly text/event-stream. Without Last-Event-ID the stream replays from accepted; with it, from the event after that seq. The events are the run's own, byte for byte: the same seq, request_id and data as the stream the create request opened (so a client checks the events it saw first followed by the attach's events as one stream). New events follow as the run writes them; while nothing is written for 10 seconds the response carries an SSE comment line ': keepalive' (no event, no seq). The stream ends with the run's terminal event: result carries the stored result exactly as GET /api/v1/context-fabric/investigations/{result_id} serves it to the caller now (the stored-result gate decides it again, surface submission_attach); error carries the run's error.v1 envelope -- the run's own failure, canceled (an explicit cancel), run_lost (its replica stopped and its lease of 15 seconds ended), or submission_unsaved (an answer that was served but not stored). The event log is bounded: it keeps the latest 128 non-terminal events of a run (ContextFabricInvestigationRunEventLogMaxEvents) and its terminal; it holds no result content and goes with its submission record (retention, thread delete, organization purge). A Last-Event-ID the log cannot serve -- malformed, repeated, never written, older than the kept window (no Last-Event-ID too, once accepted is gone), or at or past the terminal -- and a submission whose run was not leased are 410 cursor_expired (details.reason expired, ahead, ended, malformed or not_logged), before any stream: read the submission status and replay the result by id instead. The submission is keyed by the authenticated principal: another principal's id, an unknown, a malformed id and a turn of a deleted or expired thread answer the same 404 not_found. With the run lease off the route answers 404. Each attach is authorized afresh.",
+        "x-required-scope": "context:read",
+        "x-required-entitlement": "agent_context_runtime",
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {
+            "webAssertionAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/RequestID"
+          },
+          {
+            "$ref": "#/components/parameters/ClientVersion"
+          },
+          {
+            "name": "submission_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 8,
+              "maxLength": 128,
+              "pattern": "^[A-Za-z0-9._:-]{8,128}$"
+            }
+          },
+          {
+            "name": "Last-Event-ID",
+            "in": "header",
+            "required": false,
+            "description": "The seq of the last event the client received: a decimal integer from 0 to 9007199254740991, no sign, no leading zero. Absent is 0: replay from accepted.",
+            "schema": {
+              "type": "string",
+              "pattern": "^(0|[1-9][0-9]{0,15})$"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The run's event stream after the cursor, then its terminal.",
+            "content": {
+              "text/event-stream": {
+                "schema": {
+                  "$ref": "../jsonschema/v1/context_fabric_investigation_event.v1.schema.json"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "410": {
+            "description": "cursor_expired: the event log cannot serve this cursor, or the run was not leased.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "../jsonschema/v1/error.v1.schema.json"
+                }
+              }
+            }
+          },
+          "426": {
+            "$ref": "#/components/responses/Error"
+          },
+          "429": {
+            "$ref": "#/components/responses/Error"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error"
+          },
+          "503": {
+            "$ref": "#/components/responses/Error"
+          },
+          "504": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/api/v1/context-fabric/investigations/submissions/{submission_id}/cancel": {
+      "post": {
+        "operationId": "cancelContextFabricSubmissionRun",
+        "summary": "Cancel the caller's own leased run.",
+        "description": "CHAOS-11949 (Ask Dev plan §2.7.9). Cancels the run of the caller's submission when it runs under the deployment's run lease. 202: the run is running; the first request records the cancel time t_req (a repeat keeps it), and the replica holding the run cancels it -- at once on its own replica, within a second on another -- so it ends within 5 seconds (ContextFabricRunCancelEffectiveSeconds) with the terminal error canceled, and no model attempt starts after that. An answer that had already finished is kept: the run then ends with its result. 204: the submission is already final; nothing to cancel. 409 submission_in_progress (details.reason not_leased, Retry-After): the submission is running but was admitted without a lease, so nothing can stop it but its own end. The submission is keyed by the authenticated principal: another principal's id, an unknown, a malformed id and a turn of a deleted or expired thread answer the same 404 not_found, and change nothing. With the run lease off the route answers 404. No body.",
+        "x-required-scope": "context:read",
+        "x-required-entitlement": "agent_context_runtime",
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {
+            "webAssertionAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/RequestID"
+          },
+          {
+            "$ref": "#/components/parameters/ClientVersion"
+          },
+          {
+            "name": "submission_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 8,
+              "maxLength": 128,
+              "pattern": "^[A-Za-z0-9._:-]{8,128}$"
+            }
+          }
+        ],
+        "responses": {
+          "202": {
+            "description": "The cancel is recorded; the run ends with error canceled unless its answer had already finished."
+          },
+          "204": {
+            "description": "The submission is already final."
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "409": {
             "$ref": "#/components/responses/Error"
           },
           "426": {

@@ -82,6 +82,8 @@ var RuntimeGrants = []Grant{
 		Why: "INSERT ... ON CONFLICT DO UPDATE internal/contextfabric/pginvestigation/submissions.go AdmitSubmission (the monthly allowance), SELECT submissions.go ReadUsageMonthly"},
 	{Table: "context_fabric_threads", Privileges: []string{"SELECT", "INSERT", "UPDATE"},
 		Why: "INSERT ... ON CONFLICT DO UPDATE internal/contextfabric/pginvestigation/submissions.go AdmitSubmission (a thread turn), SELECT threads.go ListThreads and GetThread, UPDATE threads.go CloseThread"},
+	{Table: "context_fabric_investigation_run_events", Privileges: []string{"SELECT", "INSERT", "DELETE"},
+		Why: "CHAOS-11949: INSERT internal/contextfabric/pginvestigation/runs.go AppendRunEvent and reapLostRun (the run_lost terminal), DELETE runs.go AppendRunEvent (the per-run cap), SELECT runs.go ReadRunEvents and RunTerminalOf"},
 	{Table: "context_fabric_investigation_submissions", Privileges: []string{"SELECT", "INSERT", "UPDATE"},
 		Why: "INSERT internal/contextfabric/pginvestigation/submissions.go AdmitSubmission, SELECT submissions.go GetSubmission, UPDATE submissions.go FinishSubmission and store.go Save's completion"},
 	{Table: "context_fabric_structure_supersession_claims", Privileges: []string{"SELECT", "INSERT"},

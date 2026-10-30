@@ -21,6 +21,7 @@ var PurgeGrants = []Grant{
 	{Table: "oauth_device_grants", Privileges: []string{"SELECT"}, Why: "cascade count; removed by cascade"},
 	{Table: "context_fabric_projection_checkpoints", Privileges: []string{"SELECT", "DELETE"}, Why: "purge table list: orgpurge purgeTables"},
 	{Table: "context_fabric_projection_rebuild_markers", Privileges: []string{"SELECT", "DELETE"}, Why: "purge table list: orgpurge purgeTables"},
+	{Table: "context_fabric_investigation_run_events", Privileges: []string{"SELECT", "DELETE"}, Why: "purge table list: orgpurge purgeTables"},
 	{Table: "context_fabric_investigation_submissions", Privileges: []string{"SELECT", "DELETE"}, Why: "purge table list: orgpurge purgeTables"},
 	{Table: "context_fabric_usage_monthly", Privileges: []string{"SELECT", "DELETE"}, Why: "purge table list: orgpurge purgeTables"},
 	{Table: "context_fabric_threads", Privileges: []string{"SELECT", "DELETE"}, Why: "purge table list: orgpurge purgeTables"},

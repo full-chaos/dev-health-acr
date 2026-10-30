@@ -147,6 +147,11 @@ var exampleSchemaPairs = map[string]string{
 	"context_fabric_thread.v1.json":              "context_fabric_thread.v1.schema.json",
 	"context_fabric_thread_list.v1.json":         "context_fabric_thread_list.v1.schema.json",
 	"error_context_fabric_thread_closed.v1.json": "error.v1.schema.json",
+	// CHAOS-11949: the run lease's codes, written by the routes themselves
+	// (internal/api/context_fabric_run_lease_test.go).
+	"error_context_fabric_canceled.v1.json":       "error.v1.schema.json",
+	"error_context_fabric_run_lost.v1.json":       "error.v1.schema.json",
+	"error_context_fabric_cursor_expired.v1.json": "error.v1.schema.json",
 }
 
 // Options configures repository contract validation.

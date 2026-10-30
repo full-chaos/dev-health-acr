@@ -60,6 +60,9 @@ func seedStatements() []string {
 		`INSERT INTO acr.context_fabric_projection_rebuild_markers (org_id, started_at) VALUES ($1, now())`,
 		`INSERT INTO acr.context_fabric_investigation_submissions (org_id, owner_auth_method, owner_subject, submission_id, request_digest, reserved_result_id, state, admitted_at, updated_at, expires_at)
 		 VALUES ($1, 'web_assertion', 'user-seed', 'submission-' || $2, 'sha256:' || repeat('a', 64), 'result-' || $2, 'done_unsaved', now(), now(), now() + interval '1 minute')`,
+		// CHAOS-11949: one event of a leased run's log, referencing the record above.
+		`INSERT INTO acr.context_fabric_investigation_run_events (org_id, reserved_result_id, seq, event_type, last_stage_started, data, written_at)
+		 VALUES ($1, 'result-' || $2, 1, 'heartbeat', '', '{}', now())`,
 		`INSERT INTO acr.context_fabric_threads (org_id, owner_auth_method, owner_subject, thread_id, created_at, last_turn_at, turn_count, retention_days, expires_at)
 		 VALUES ($1, 'web_assertion', 'user-seed', 'thread-' || $2, now(), now(), 1, 0, now() + interval '1 day')`,
 		`INSERT INTO acr.context_fabric_usage_monthly (org_id, month, platform_runs, updated_at) VALUES ($1, date_trunc('month', now())::date, 3, now())`,
