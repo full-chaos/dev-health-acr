@@ -83,6 +83,11 @@ type parsedWebAssertionClaims struct {
 	Method           string      `json:"method"`
 	Path             string      `json:"path"`
 	BodySHA256       string      `json:"body_sha256"`
+	// SessionID and Impersonating are optional (CHAOS-12123): the web
+	// session the assertion was made in, and whether it impersonates. The web
+	// server derives both from its own session, never from the browser.
+	SessionID     string `json:"sid,omitempty"`
+	Impersonating bool   `json:"impersonating,omitempty"`
 }
 
 func NewWebAssertionVerifier(options WebAssertionOptions) (*WebAssertionVerifier, error) {
@@ -163,6 +168,8 @@ func (v *WebAssertionVerifier) Verify(r *http.Request) (storage.Principal, error
 		OrgID:                claims.OrganizationID,
 		RepositoryScopes:     normalizeWebRepositoryScopes(claims.RepositoryScopes),
 		Permissions:          normalizeWebPermissions(claims.Permissions),
+		SessionID:            strings.TrimSpace(claims.SessionID),
+		Impersonating:        claims.Impersonating,
 	}, nil
 }
 
@@ -180,7 +187,8 @@ func (v *WebAssertionVerifier) validClaims(claims parsedWebAssertionClaims, r *h
 		issuedAt > now.Add(webAssertionClockSkew).Unix() || notBefore > now.Add(webAssertionClockSkew).Unix() ||
 		expiresAt < now.Add(-webAssertionClockSkew).Unix() || expiresAt < issuedAt || expiresAt-issuedAt > int64(maxWebAssertionLifetime/time.Second) ||
 		claims.Method != r.Method || claims.Path != r.URL.EscapedPath() || r.URL.RawQuery != "" ||
-		!validWebRepositories(claims.RepositoryScopes, claims.Permissions, claims.Method, claims.Path) || !validWebPermissions(claims.Permissions) {
+		!validWebRepositories(claims.RepositoryScopes, claims.Permissions, claims.Method, claims.Path) || !validWebPermissions(claims.Permissions) ||
+		(claims.SessionID != "" && !validWebAssertionID(claims.SessionID)) {
 		return false
 	}
 	body, err := readAssertionBody(r, v.maxBodyBytes)

@@ -182,9 +182,30 @@ type OAuthConfig struct {
 	Resources []string
 	// ClientMetadata resolves client ID metadata documents; nil disables them.
 	ClientMetadata OAuthClientMetadataFetcher
-	Now            func() time.Time
-	Random         io.Reader
+	// BrowserClients (CHAOS-12123) are the first-party web browser client
+	// ids, each a client ID metadata document URL. A code exchange for one
+	// of them issues the browser class: a 10-minute credential bound to the
+	// issuer itself (the acr-api resource, which must then be one of
+	// Resources), in a token family tied to the approving web session. Empty
+	// turns the class off.
+	BrowserClients []string
+	// DevBrowserRedirectURIs turns on the development-only static browser
+	// client DevBrowserClientID, whose metadata is these exact http loopback
+	// redirect URIs instead of a fetched document (a local web app cannot
+	// serve an https metadata document). The config layer refuses it outside
+	// the development environment.
+	DevBrowserRedirectURIs []string
+	Now                    func() time.Time
+	Random                 io.Reader
 }
+
+// DevBrowserClientID is the client id of the development-only static browser
+// client (OAuthConfig.DevBrowserRedirectURIs). It has the shape of a client
+// ID metadata document URL and is never fetched.
+const DevBrowserClientID = "https://localhost/acr/dev-browser-client"
+
+// devBrowserClientName is the static browser client's display name.
+const devBrowserClientName = "Dev Health (development)"
 
 // OAuthService runs registration, authorization and token exchange.
 type OAuthService struct {
@@ -196,6 +217,12 @@ type OAuthService struct {
 	now       func() time.Time
 	randomMu  sync.Mutex
 	random    io.Reader
+	// browserClients, devBrowser and browserResource configure the
+	// first-party browser client (CHAOS-12123); browserResource is "" when
+	// no browser client is configured.
+	browserClients  map[string]struct{}
+	devBrowser      *OAuthResolvedClient
+	browserResource string
 }
 
 // ErrInvalidOAuthConfig reports an unusable OAuth configuration.
@@ -226,10 +253,87 @@ func NewOAuthService(store storage.OAuthStore, devices OAuthConsentAuthority, cf
 	if !storage.IsNil(cfg.ClientMetadata) {
 		metadata = cfg.ClientMetadata
 	}
-	return &OAuthService{
+	service := &OAuthService{
 		store: store, devices: devices, issuer: cfg.Issuer, resources: resources,
 		metadata: metadata, now: cfg.Now, random: cfg.Random,
-	}, nil
+	}
+	if err := service.configureBrowserClients(cfg); err != nil {
+		return nil, err
+	}
+	return service, nil
+}
+
+// configureBrowserClients validates and records the first-party browser
+// clients (CHAOS-12123). Each configured client must resolve (metadata
+// documents on), the issuer must be one of the resources (the browser
+// class binds only it), and no other resource may be an alias of it, so a
+// browser credential is never admitted on a hosted MCP endpoint.
+func (s *OAuthService) configureBrowserClients(cfg OAuthConfig) error {
+	if len(cfg.BrowserClients) == 0 && len(cfg.DevBrowserRedirectURIs) == 0 {
+		return nil
+	}
+	s.browserClients = make(map[string]struct{}, len(cfg.BrowserClients))
+	for _, clientID := range cfg.BrowserClients {
+		if s.metadata == nil || !storage.ValidOAuthClientMetadataURL(clientID) || clientID == DevBrowserClientID {
+			return ErrInvalidOAuthConfig
+		}
+		if _, duplicate := s.browserClients[clientID]; duplicate {
+			return ErrInvalidOAuthConfig
+		}
+		s.browserClients[clientID] = struct{}{}
+	}
+	if len(cfg.DevBrowserRedirectURIs) > 0 {
+		redirects := make([]string, 0, len(cfg.DevBrowserRedirectURIs))
+		for _, redirect := range cfg.DevBrowserRedirectURIs {
+			if !devBrowserRedirectURI(redirect) || slices.Contains(redirects, redirect) {
+				return ErrInvalidOAuthConfig
+			}
+			redirects = append(redirects, redirect)
+		}
+		s.devBrowser = &OAuthResolvedClient{
+			ClientID: DevBrowserClientID, Kind: storage.OAuthClientKindMetadataDocument,
+			Name: devBrowserClientName, RedirectURIs: redirects,
+		}
+	}
+	if !slices.Contains(s.resources, s.issuer) {
+		return ErrInvalidOAuthConfig
+	}
+	for _, resource := range s.resources {
+		if resource != s.issuer && SameResource(resource, s.issuer) {
+			return ErrInvalidOAuthConfig
+		}
+	}
+	s.browserResource = s.issuer
+	return nil
+}
+
+// devBrowserRedirectURI accepts a static browser client redirect: an http
+// URL on a loopback host with an explicit port and a path, no user info,
+// query or fragment.
+func devBrowserRedirectURI(value string) bool {
+	if !storage.ValidOAuthRedirectURI(value) {
+		return false
+	}
+	parsed, err := url.Parse(value)
+	if err != nil || parsed.Scheme != "http" || parsed.User != nil || parsed.RawQuery != "" || parsed.ForceQuery || parsed.Fragment != "" || parsed.Port() == "" {
+		return false
+	}
+	switch parsed.Hostname() {
+	case "localhost", "127.0.0.1", "::1":
+	default:
+		return false
+	}
+	return parsed.Path != "" && parsed.Path != "/"
+}
+
+// isBrowserClient reports whether a client id names a configured
+// first-party browser client.
+func (s *OAuthService) isBrowserClient(clientID string) bool {
+	if s.devBrowser != nil && clientID == DevBrowserClientID {
+		return true
+	}
+	_, ok := s.browserClients[clientID]
+	return ok
 }
 
 // ValidOAuthIssuer accepts an HTTPS origin (or an HTTP loopback origin for
@@ -367,6 +471,8 @@ type OAuthResolvedClient struct {
 	Kind         string
 	Name         string
 	RedirectURIs []string
+	// Browser marks a configured first-party browser client (CHAOS-12123).
+	Browser bool
 }
 
 // ResolveClient identifies a client by its ID: a dynamic registration, or a
@@ -377,6 +483,11 @@ func (s *OAuthService) ResolveClient(ctx context.Context, clientID string) (OAut
 		return OAuthResolvedClient{}, &OAuthError{Code: "invalid_client", Outcome: oauthvocab.OutcomeInvalidClientMetadata, ClientRefusal: refusal}
 	}
 	switch {
+	case s.devBrowser != nil && clientID == DevBrowserClientID:
+		client := *s.devBrowser
+		client.RedirectURIs = slices.Clone(s.devBrowser.RedirectURIs)
+		client.Browser = true
+		return client, nil
 	case storage.IsDynamicOAuthClientID(clientID):
 		client, err := s.store.GetClient(ctx, clientID)
 		if errors.Is(err, storage.ErrNotFound) {
@@ -413,7 +524,7 @@ func (s *OAuthService) ResolveClient(ctx context.Context, clientID string) (OAut
 		if len(name) > 200 || !utf8.ValidString(name) || strings.ContainsFunc(name, isControlRune) {
 			name = ""
 		}
-		return OAuthResolvedClient{ClientID: clientID, Kind: storage.OAuthClientKindMetadataDocument, Name: name, RedirectURIs: document.RedirectURIs}, nil
+		return OAuthResolvedClient{ClientID: clientID, Kind: storage.OAuthClientKindMetadataDocument, Name: name, RedirectURIs: document.RedirectURIs, Browser: s.isBrowserClient(clientID)}, nil
 	default:
 		return OAuthResolvedClient{}, &OAuthError{Code: "invalid_client", Outcome: oauthvocab.OutcomeInvalidClient, ClientRefusal: unresolvedClientRefusal(clientID)}
 	}
@@ -492,7 +603,10 @@ func (s *OAuthService) Authorize(ctx context.Context, request OAuthAuthorizeRequ
 	if matched {
 		matched = false
 		for _, candidate := range client.RedirectURIs {
-			if storage.MatchOAuthRedirectURI(candidate, request.RedirectURI, allowLocalhost) {
+			// The first-party browser client matches its redirect exactly:
+			// no loopback port variance (CHAOS-12123).
+			if (client.Browser && candidate == request.RedirectURI) ||
+				(!client.Browser && storage.MatchOAuthRedirectURI(candidate, request.RedirectURI, allowLocalhost)) {
 				matched = true
 				break
 			}
@@ -523,7 +637,7 @@ func (s *OAuthService) Authorize(ctx context.Context, request OAuthAuthorizeRequ
 	if request.CodeChallengeMethod != "S256" || !storage.ValidOAuthCodeChallenge(request.CodeChallenge) {
 		return refuse("invalid_request", oauthvocab.OutcomePKCERequired)
 	}
-	resource, ok := s.resolveResource(request.Resource)
+	resource, ok := s.resolveResource(request.Resource, client.Browser)
 	if !ok {
 		return refuse("invalid_target", oauthvocab.OutcomeInvalidTarget)
 	}
@@ -563,15 +677,27 @@ func (s *OAuthService) Authorize(ctx context.Context, request OAuthAuthorizeRequ
 
 // resolveResource returns the resource a request binds to: the one it named,
 // when this server issues for it, or the only configured resource when it
-// named none.
-func (s *OAuthService) resolveResource(requested string) (string, bool) {
-	if requested == "" {
-		if len(s.resources) == 1 {
-			return s.resources[0], true
+// named none. The acr-api resource (the issuer) is the browser class's own
+// (CHAOS-12123): the first-party browser client binds only it, and no other
+// client ever binds it, whether or not a browser client is configured.
+func (s *OAuthService) resolveResource(requested string, browser bool) (string, bool) {
+	if browser {
+		if s.browserResource != "" && (requested == "" || requested == s.browserResource) {
+			return s.browserResource, true
 		}
 		return "", false
 	}
-	if storage.ValidOAuthResource(requested) && slices.ContainsFunc(s.resources, func(r string) bool { return SameResource(r, requested) }) { // aliases: see SameResource
+	if requested == s.issuer {
+		return "", false
+	}
+	resources := slices.DeleteFunc(slices.Clone(s.resources), func(r string) bool { return r == s.issuer })
+	if requested == "" {
+		if len(resources) == 1 {
+			return resources[0], true
+		}
+		return "", false
+	}
+	if storage.ValidOAuthResource(requested) && slices.ContainsFunc(resources, func(r string) bool { return SameResource(r, requested) }) { // aliases: see SameResource
 		return requested, true
 	}
 	return "", false
@@ -774,6 +900,15 @@ func (s *OAuthService) ApproveConsent(ctx context.Context, handle string, princi
 	if err := s.bindConsentUser(ctx, request, principal); err != nil {
 		return OAuthConsentDecision{ClientKind: request.ClientKind}, err
 	}
+	// CHAOS-12123: no approval while the web session impersonates another
+	// user (chris decision 6), and the first-party browser client's approval
+	// must name the web session its token family is bound to.
+	if principal.Impersonating {
+		return OAuthConsentDecision{ClientKind: request.ClientKind}, oauthError(OAuthConsentCodeInvalid, oauthvocab.OutcomeImpersonating, false)
+	}
+	if s.isBrowserClient(request.ClientID) && principal.SessionID == "" {
+		return OAuthConsentDecision{ClientKind: request.ClientKind}, oauthError(OAuthConsentCodeInvalid, oauthvocab.OutcomeSessionRequired, false)
+	}
 	scope, ok := NormalizeOAuthScope(request.Scope)
 	if !ok {
 		return OAuthConsentDecision{ClientKind: request.ClientKind}, oauthError("invalid_scope", oauthvocab.OutcomeInvalidScope, false)
@@ -814,6 +949,8 @@ func (s *OAuthService) DenyConsent(ctx context.Context, handle string, principal
 // consentDecisionError maps a consent authority failure to its refusal.
 func consentDecisionError(err error) error {
 	switch {
+	case errors.Is(err, ErrImpersonatedApproval):
+		return oauthError(OAuthConsentCodeInvalid, oauthvocab.OutcomeImpersonating, false)
 	case errors.Is(err, ErrInvalidDeviceFlow):
 		return oauthError(OAuthConsentCodeInvalid, oauthvocab.OutcomeInvalidRequest, false)
 	case errors.Is(err, storage.ErrDeviceAuthorizationConflict):
@@ -901,9 +1038,23 @@ func (s *OAuthService) Exchange(ctx context.Context, request OAuthTokenRequest) 
 	if !ok {
 		return refuse("invalid_grant", oauthvocab.OutcomeInvalidGrant)
 	}
-	issued, err := s.devices.RedeemForResource(ctx, pending.DeviceCodeHash, pending.ClientID, pending.Resource, strings.Fields(scope))
+	// CHAOS-12123: the class follows the configured client, and the acr-api
+	// resource belongs to the browser class only, both ways: a request
+	// started under a different configuration is refused.
+	browser := s.isBrowserClient(pending.ClientID)
+	if (browser && (s.browserResource == "" || pending.Resource != s.browserResource)) || (!browser && pending.Resource == s.issuer) {
+		return refuse("invalid_target", oauthvocab.OutcomeResourceMismatch)
+	}
+	redeem := s.devices.RedeemForResource
+	if browser {
+		redeem = s.devices.RedeemBrowserForResource
+	}
+	issued, err := redeem(ctx, pending.DeviceCodeHash, pending.ClientID, pending.Resource, strings.Fields(scope))
 	if errors.Is(err, ErrOAuthDeviceNotApproved) {
 		return refuse("invalid_grant", oauthvocab.OutcomeInvalidGrant)
+	}
+	if errors.Is(err, ErrBrowserSessionRequired) {
+		return refuse("invalid_grant", oauthvocab.OutcomeSessionRequired)
 	}
 	if err != nil {
 		return OAuthToken{ClientKind: pending.ClientKind}, fmt.Errorf("%w: issue credential: %w", ErrOAuthUnavailable, err)
@@ -951,6 +1102,11 @@ func (s *OAuthService) StartDeviceAuthorization(ctx context.Context, request OAu
 	if err != nil {
 		return OAuthDeviceAuthorizationStart{}, err
 	}
+	// The first-party browser client uses the authorization-code grant only
+	// (CHAOS-12123).
+	if client.Browser {
+		return OAuthDeviceAuthorizationStart{ClientKind: client.Kind}, oauthError("unauthorized_client", oauthvocab.OutcomeUnauthorizedClient, false)
+	}
 	if len(request.Scope) > maxOAuthScopeLength || strings.ContainsFunc(request.Scope, isControlRune) {
 		return OAuthDeviceAuthorizationStart{ClientKind: client.Kind}, oauthError("invalid_request", oauthvocab.OutcomeInvalidRequest, false)
 	}
@@ -958,7 +1114,7 @@ func (s *OAuthService) StartDeviceAuthorization(ctx context.Context, request OAu
 	if !ok {
 		return OAuthDeviceAuthorizationStart{ClientKind: client.Kind}, oauthError("invalid_scope", oauthvocab.OutcomeInvalidScope, false)
 	}
-	resource, ok := s.resolveResource(request.Resource)
+	resource, ok := s.resolveResource(request.Resource, false)
 	if !ok {
 		return OAuthDeviceAuthorizationStart{ClientKind: client.Kind}, oauthError("invalid_target", oauthvocab.OutcomeInvalidTarget, false)
 	}
@@ -1022,6 +1178,9 @@ func (s *OAuthService) ExchangeDeviceCode(ctx context.Context, request OAuthDevi
 	}
 	if request.ClientID != grant.ClientID {
 		return refuse("invalid_grant", oauthvocab.OutcomeClientMismatch)
+	}
+	if s.isBrowserClient(grant.ClientID) || grant.Resource == s.issuer {
+		return refuse("unauthorized_client", oauthvocab.OutcomeUnauthorizedClient)
 	}
 	scope, ok := NormalizeOAuthScope(grant.Scope)
 	if !ok {

@@ -33,11 +33,12 @@ func (s *DeviceAuthorizationStore) Approve(ctx context.Context, hash storage.Use
 UPDATE acr.device_authorizations
 SET state = 'approved', authorized_org_id = $3::uuid,
     authorized_repository_scopes = $4::jsonb, authorized_scopes = $5::jsonb,
-    approving_subject = $6, approving_authentication_method = $7, approved_at = $2
+    approving_subject = $6, approving_authentication_method = $7, approved_at = $2,
+    approving_session_id = NULLIF($8, '')
 WHERE user_code_hash = $1 AND state = 'pending' AND expires_at > $2
 RETURNING `+deviceAuthorizationColumns,
 		hash.String(), now, grant.OrgID, string(repositories), string(scopes),
-		grant.ApprovingSubject, grant.ApprovingAuthenticationMethod,
+		grant.ApprovingSubject, grant.ApprovingAuthenticationMethod, grant.ApprovingSessionID,
 	)
 	record, err := scanDeviceAuthorization(row)
 	if err == nil {

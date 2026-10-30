@@ -16,7 +16,16 @@ import (
 )
 
 const (
-	DeviceCredentialLifetime          = 30 * 24 * time.Hour
+	DeviceCredentialLifetime = 30 * 24 * time.Hour
+	// BrowserCredentialLifetime is the access life of a browser-class
+	// credential (CHAOS-12123): the first-party web client's token.
+	BrowserCredentialLifetime = 10 * time.Minute
+	// BrowserFamilyLifetime is the absolute end of a browser credential's
+	// token family, counted from its first issuance: no refresh outlives it.
+	BrowserFamilyLifetime = 12 * time.Hour
+	// browserFamilyIDBytes is the random size of a token family id.
+	browserFamilyIDBytes = 16
+
 	deviceAuthorizationStartRedacted  = "auth.DeviceAuthorizationStart{redacted}"
 	deviceAuthorizationCredentialName = "device login"
 )
@@ -25,6 +34,13 @@ var (
 	ErrInvalidDeviceFlow    = errors.New("invalid device flow request")
 	ErrDeviceCodeCollision  = errors.New("device authorization code collision")
 	ErrDeviceCodeGeneration = errors.New("device authorization code generation failed")
+	// ErrImpersonatedApproval refuses an approval signed by a web session
+	// that impersonates another user (CHAOS-12123, chris decision 6: deny
+	// all while impersonating). It is an ErrInvalidDeviceFlow.
+	ErrImpersonatedApproval = fmt.Errorf("%w: the approving web session is impersonating", ErrInvalidDeviceFlow)
+	// ErrBrowserSessionRequired refuses a browser-class redemption whose
+	// approval named no web session. It is an ErrInvalidDeviceFlow.
+	ErrBrowserSessionRequired = fmt.Errorf("%w: a browser credential needs the approving web session", ErrInvalidDeviceFlow)
 )
 
 type DeviceFlowOptions struct {
@@ -242,6 +258,9 @@ func (s *DeviceFlowService) approveUserCodeHash(ctx context.Context, principal s
 	if !validDeviceApprovalPrincipal(principal) || !validApprovalScopes(scopes) {
 		return storage.DeviceAuthorization{}, ErrInvalidDeviceFlow
 	}
+	if principal.Impersonating {
+		return storage.DeviceAuthorization{}, ErrImpersonatedApproval
+	}
 	repositories, err := NormalizeRepositoryScopes(repositoryScopes)
 	if err != nil {
 		return storage.DeviceAuthorization{}, ErrInvalidDeviceFlow
@@ -271,6 +290,7 @@ func (s *DeviceFlowService) approveUserCodeHash(ctx context.Context, principal s
 		Scopes:                        slices.Clone(scopes),
 		ApprovingSubject:              principal.Subject,
 		ApprovingAuthenticationMethod: storage.AuthenticationMethodWebAssertion,
+		ApprovingSessionID:            principal.SessionID,
 	})
 	if err != nil {
 		return storage.DeviceAuthorization{}, fmt.Errorf("approve device authorization: %w", err)

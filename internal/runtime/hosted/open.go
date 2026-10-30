@@ -1351,7 +1351,10 @@ func oauthRuntime(cfg config.Config, store storage.OAuthStore) *api.OAuthRuntime
 	if !cfg.OAuthConfigured() {
 		return nil
 	}
-	runtime := &api.OAuthRuntime{Store: store, Issuer: cfg.OAuthIssuer, Resources: append([]string(nil), cfg.OAuthResources...), ConsentURL: cfg.OAuthConsentURL}
+	runtime := &api.OAuthRuntime{
+		Store: store, Issuer: cfg.OAuthIssuer, Resources: append([]string(nil), cfg.OAuthResources...), ConsentURL: cfg.OAuthConsentURL,
+		BrowserClients: append([]string(nil), cfg.OAuthBrowserClients...), DevBrowserRedirectURIs: append([]string(nil), cfg.OAuthDevBrowserRedirectURIs...),
+	}
 	if cfg.OAuthClientMetadataDocuments {
 		runtime.ClientMetadata = auth.NewPublicClientMetadataFetcher()
 	}

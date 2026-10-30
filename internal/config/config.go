@@ -300,6 +300,17 @@ type Config struct {
 	// existed, with no request and no live credential, before the purge
 	// loop may delete it. OAuthRequestPurgeGrace must not be shorter than it.
 	OAuthClientIdleTTL time.Duration
+	// OAuthBrowserClients (ACR_OAUTH_BROWSER_CLIENTS, comma separated,
+	// CHAOS-12123) are the first-party web browser client ids: client ID
+	// metadata document URLs. A code exchange for one issues the browser
+	// class (10-minute credentials bound to ACR_OAUTH_ISSUER, which must
+	// then be one of ACR_OAUTH_RESOURCES). Empty by default: the class is off.
+	OAuthBrowserClients []string
+	// OAuthDevBrowserRedirectURIs (ACR_OAUTH_DEV_BROWSER_REDIRECT_URIS,
+	// comma separated) turn on the static development browser client with
+	// these exact http loopback redirect URIs. Refused outside the
+	// development environment.
+	OAuthDevBrowserRedirectURIs []string
 
 	// dataQueryURL / dataQueryTimeout: internal ops query service call
 	// (ACR_DATA_QUERY_URL, ACR_DATA_QUERY_TIMEOUT); read via the
@@ -381,6 +392,8 @@ func load(lookup lookupEnv) (Config, error) {
 		OAuthIssuer:                    stringValue(lookup, "ACR_OAUTH_ISSUER", ""),
 		OAuthResources:                 oauthResources(stringValue(lookup, "ACR_OAUTH_RESOURCES", "")),
 		OAuthConsentURL:                stringValue(lookup, "ACR_OAUTH_CONSENT_URL", ""),
+		OAuthBrowserClients:            oauthResources(stringValue(lookup, "ACR_OAUTH_BROWSER_CLIENTS", "")),
+		OAuthDevBrowserRedirectURIs:    oauthResources(stringValue(lookup, "ACR_OAUTH_DEV_BROWSER_REDIRECT_URIS", "")),
 	}
 	// r1 P2 finding 1: the explicit dev opt-out (ACR_LOCAL_COMPOSITION_READY)
 	// must be the ONLY way to turn backing stores off -- a bare

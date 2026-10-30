@@ -243,6 +243,10 @@ func consentRequest(t *testing.T, body any, repositories []string, jti string) *
 // test that needs a second user sets it for the requests it builds.
 var oauthConsentSubject = "user_123"
 
+// oauthConsentExtraClaims are claims consentRequest adds (CHAOS-12123: the
+// web session sid and the impersonation state); a test sets and resets it.
+var oauthConsentExtraClaims map[string]any
+
 func signConsentAssertion(t *testing.T, request *http.Request, body []byte, repositories []string, jti string) string {
 	t.Helper()
 	now := time.Date(2026, 9, 21, 12, 0, 0, 0, time.UTC)
@@ -252,6 +256,9 @@ func signConsentAssertion(t *testing.T, request *http.Request, body []byte, repo
 		"repository_scopes": repositories, "permissions": []string{auth.WebAssertionPermissionCredentialIssue},
 		"iat": now.Unix(), "nbf": now.Unix(), "exp": now.Add(30 * time.Second).Unix(), "jti": jti,
 		"method": request.Method, "path": request.URL.EscapedPath(), "body_sha256": base64.RawURLEncoding.EncodeToString(digest[:]),
+	}
+	for name, value := range oauthConsentExtraClaims {
+		claims[name] = value
 	}
 	header, _ := json.Marshal(map[string]string{"alg": "EdDSA", "typ": "JWT", "kid": "current"})
 	payload, err := json.Marshal(claims)

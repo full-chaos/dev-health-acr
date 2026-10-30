@@ -64,6 +64,18 @@ const (
 	// authorization's interval since the last poll.
 	OutcomeSlowDown    = "slow_down"
 	OutcomeUnavailable = "unavailable"
+	// OutcomeSessionRequired: the first-party browser client's consent was
+	// approved by a web assertion that names no web session (sid).
+	OutcomeSessionRequired = "session_required"
+	// OutcomeImpersonating: an approval signed by a web session that is
+	// impersonating another user. Every approval is refused then.
+	OutcomeImpersonating = "impersonating"
+	// OutcomeUnauthorizedClient: a client used a grant its class may not use
+	// (the first-party browser client on the RFC 8628 device grant).
+	OutcomeUnauthorizedClient = "unauthorized_client"
+	// OutcomeRotationNotAllowed: a self-rotation of a browser-class
+	// credential, which renews only by its refresh grant.
+	OutcomeRotationNotAllowed = "rotation_not_allowed"
 )
 
 // OutcomeVocabulary lists every outcome, ok first.
@@ -74,6 +86,7 @@ func OutcomeVocabulary() []string {
 		OutcomeUnsupportedResponseType, OutcomeUnsupportedGrantType, OutcomePKCERequired, OutcomeInvalidTarget, OutcomeInvalidScope,
 		OutcomeInvalidGrant, OutcomePKCEMismatch, OutcomeRedirectMismatch, OutcomeClientMismatch,
 		OutcomeResourceMismatch, OutcomeUnauthenticated, OutcomeAuthorizationPending, OutcomeSlowDown, OutcomeRateLimited, OutcomeUnavailable,
+		OutcomeSessionRequired, OutcomeImpersonating, OutcomeUnauthorizedClient, OutcomeRotationNotAllowed,
 	}
 }
 

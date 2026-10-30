@@ -32,6 +32,9 @@ type oauthHarness struct {
 	store   storage.DeviceAuthorizationStore
 	creds   *storage.CredentialLifecycle
 	meta    *fakeMetadata
+	// sessionID is the web session (sid) the harness's consent approvals
+	// sign (CHAOS-12123); "" for none.
+	sessionID string
 }
 
 type fakeMetadata struct {
@@ -53,6 +56,17 @@ func (f *fakeMetadata) Fetch(_ context.Context, clientID string) (OAuthClientMet
 }
 
 func newOAuthHarness(t *testing.T, resources ...string) *oauthHarness {
+	t.Helper()
+	return newOAuthHarnessWith(t, func(cfg *OAuthConfig) {
+		if len(resources) > 0 {
+			cfg.Resources = resources
+		}
+	})
+}
+
+// newOAuthHarnessWith builds the harness with its OAuth configuration
+// changed by configure.
+func newOAuthHarnessWith(t *testing.T, configure func(*OAuthConfig)) *oauthHarness {
 	t.Helper()
 	h := &oauthHarness{now: time.Date(2026, 9, 21, 12, 0, 0, 0, time.UTC), meta: &fakeMetadata{documents: map[string]OAuthClientMetadata{}}}
 	clock := func() time.Time { return h.now }
@@ -80,10 +94,9 @@ func newOAuthHarness(t *testing.T, resources ...string) *oauthHarness {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(resources) == 0 {
-		resources = []string{testResource}
-	}
-	h.oauth, err = NewOAuthService(oauthStore, h.devices, OAuthConfig{Issuer: testIssuer, Resources: resources, ClientMetadata: h.meta, Now: clock})
+	cfg := OAuthConfig{Issuer: testIssuer, Resources: []string{testResource}, ClientMetadata: h.meta, Now: clock}
+	configure(&cfg)
+	h.oauth, err = NewOAuthService(oauthStore, h.devices, cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -129,7 +142,9 @@ func (h *oauthHarness) approveDevice(t *testing.T, hash storage.DeviceCodeHash, 
 // approve approves the request behind a handle and returns the redirect.
 func (h *oauthHarness) approve(t *testing.T, handle string, repositories []string) string {
 	t.Helper()
-	decision, err := h.oauth.ApproveConsent(context.Background(), handle, webPrincipal(repositories), repositories)
+	principal := webPrincipal(repositories)
+	principal.SessionID = h.sessionID
+	decision, err := h.oauth.ApproveConsent(context.Background(), handle, principal, repositories)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1043,7 +1058,7 @@ func TestResolveResourceAcceptsEndpointAliases(t *testing.T) {
 		"https://other.example.test/":    false,
 		"http://mcp.example.test/":       false,
 	} {
-		got, ok := s.resolveResource(requested)
+		got, ok := s.resolveResource(requested, false)
 		if ok != want || (ok && got != requested) {
 			t.Errorf("resolveResource(%q) = %q, %v; want ok=%v as requested", requested, got, ok, want)
 		}

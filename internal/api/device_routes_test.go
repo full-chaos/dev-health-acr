@@ -7,8 +7,10 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -392,6 +394,11 @@ func deviceTokenRequest(t *testing.T, deviceCode string) *http.Request {
 	})
 }
 
+// deviceApprovalExtraClaims are claims deviceApprovalRequest adds
+// (CHAOS-12123: the web session and impersonation state); a test sets and
+// resets it.
+var deviceApprovalExtraClaims map[string]any
+
 func deviceApprovalRequest[T contractsv1.DeviceApprovalRequest | contractsv1.DeviceApprovalPreviewRequest](t *testing.T, now time.Time, private ed25519.PrivateKey, approval T, jti string) *http.Request {
 	t.Helper()
 	request := deviceRequest(t, http.MethodPost, "/api/v1/oauth/device_approval", approval)
@@ -415,6 +422,9 @@ func deviceApprovalRequest[T contractsv1.DeviceApprovalRequest | contractsv1.Dev
 		"repository_scopes": repositoryScopes, "permissions": []string{auth.WebAssertionPermissionCredentialIssue},
 		"iat": now.Unix(), "nbf": now.Unix(), "exp": now.Add(30 * time.Second).Unix(), "jti": jti,
 		"method": request.Method, "path": request.URL.EscapedPath(), "body_sha256": base64.RawURLEncoding.EncodeToString(digest[:]),
+	}
+	for name, value := range deviceApprovalExtraClaims {
+		claims[name] = value
 	}
 	header, err := json.Marshal(map[string]string{"alg": "EdDSA", "typ": "JWT", "kid": "current"})
 	if err != nil {
@@ -522,4 +532,45 @@ func ackIDOrNil(id string) *string {
 		return nil
 	}
 	return &id
+}
+
+// CHAOS-12123: a typed-code approval signed by an impersonating web session
+// is refused, leaves the authorization pending, and its line names why.
+func TestDeviceApproval_refusesAnImpersonatingSession(t *testing.T) {
+	now := time.Date(2026, 7, 25, 12, 0, 0, 0, time.UTC)
+	public, private, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	verifier, err := auth.NewWebAssertionVerifier(auth.WebAssertionOptions{
+		Issuer: "https://web.example.test", Audience: "acr-api", JWKSPath: writeAPIJWKS(t, public), Now: func() time.Time { return now },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	app, _ := newHostedTestAppWithWebAssertions(t, nil, nil, nil, nil, nil, verifier)
+	logs := &bytes.Buffer{}
+	app.logger = slog.New(slog.NewJSONHandler(logs, &slog.HandlerOptions{Level: slog.LevelInfo}))
+	createdResponse := httptest.NewRecorder()
+	app.Handler().ServeHTTP(createdResponse, deviceRequest(t, http.MethodPost, "/api/v1/oauth/device_authorization", contractsv1.DeviceAuthorizationRequest{SchemaVersion: contractsv1.DeviceAuthorizationRequestSchema}))
+	var authorization contractsv1.DeviceAuthorizationResponse
+	if err := json.NewDecoder(createdResponse.Body).Decode(&authorization); err != nil {
+		t.Fatal(err)
+	}
+	approval := contractsv1.DeviceApprovalRequest{SchemaVersion: contractsv1.DeviceApprovalRequestSchema, UserCode: authorization.UserCode, RepositoryScopes: []string{"*"}}
+	t.Cleanup(func() { deviceApprovalExtraClaims = nil })
+
+	deviceApprovalExtraClaims = map[string]any{"sid": "sess_1", "impersonating": true}
+	refused := httptest.NewRecorder()
+	app.Handler().ServeHTTP(refused, deviceApprovalRequest(t, now, private, approval, "approval_impersonating"))
+	deviceApprovalExtraClaims = map[string]any{"sid": "sess_1"}
+	approved := httptest.NewRecorder()
+	app.Handler().ServeHTTP(approved, deviceApprovalRequest(t, now, private, approval, "approval_after"))
+
+	if refused.Code != http.StatusBadRequest || approved.Code != http.StatusOK {
+		t.Fatalf("impersonating approval = %d, then approval = %d %s; want 400 then 200", refused.Code, approved.Code, approved.Body.String())
+	}
+	if !strings.Contains(logs.String(), `"msg":"device approval refused","reason":"impersonating"`) {
+		t.Fatalf("no refusal line naming impersonating:\n%s", logs.String())
+	}
 }

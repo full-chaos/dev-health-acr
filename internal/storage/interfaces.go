@@ -92,6 +92,12 @@ type Principal struct {
 	// header or Origin.
 	ClientClass     CredentialClientClass
 	ApprovingUserID string
+	// SessionID and Impersonating are what a web assertion signs about the
+	// web session it was made in (CHAOS-12123): the ACP session id, and
+	// whether that session is impersonating another user. Empty and false
+	// for every other authentication.
+	SessionID     string
+	Impersonating bool
 }
 
 // AuthenticationMethod identifies the validated authentication boundary that

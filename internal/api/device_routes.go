@@ -191,6 +191,12 @@ func (a *App) writeDeviceApprovalError(w http.ResponseWriter, r *http.Request, e
 		writeError(w, r, http.StatusConflict, "device_authorization_conflict", "Device authorization is no longer pending", false, nil)
 		return
 	}
+	if errors.Is(err, auth.ErrImpersonatedApproval) {
+		// CHAOS-12123: the one refusal of this route named by its reason.
+		a.logger.InfoContext(r.Context(), "device approval refused",
+			"reason", oauthvocab.OutcomeImpersonating,
+			"request_id", RequestID(r.Context()))
+	}
 	if errors.Is(err, auth.ErrInvalidDeviceFlow) || errors.Is(err, storage.ErrDeviceAuthorizationNotFound) || errors.Is(err, storage.ErrDeviceAuthorizationExpired) {
 		writeError(w, r, http.StatusBadRequest, "invalid_request", "Device approval request is invalid", false, nil)
 		return
@@ -358,6 +364,9 @@ func (a *App) writeDeviceDependencyError(w http.ResponseWriter, r *http.Request)
 func (a *App) writeSelfLifecycleError(w http.ResponseWriter, r *http.Request, err error) {
 	if a.writeOrgPurged(w, r, err) {
 		return
+	}
+	if errors.Is(err, auth.ErrBrowserCredentialRotation) {
+		setCredentialLifecycleOutcome(r, oauthvocab.OutcomeRotationNotAllowed)
 	}
 	if errors.Is(err, auth.ErrInvalidCredential) {
 		writeError(w, r, http.StatusBadRequest, "invalid_request", "Credential lifecycle request is invalid", false, nil)
