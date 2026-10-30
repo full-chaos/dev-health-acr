@@ -3352,6 +3352,86 @@ sequenceDiagram
 `contracts/examples/v1/error_context_fabric_submission_*.v1.json` are the
 route's own bodies, regenerated with `ACR_WRITE_SUBMISSION_GOLDENS=1`.
 
+## 18 — Ask Dev conversations: the thread contract
+
+A thread is one principal's Ask Dev conversation: the submission records the
+principal admitted with one `X-ACR-Thread-ID`, keyed `(org_id, owner,
+thread_id)`, in turn order (`admitted_at`, then `submission_id`), plus its
+retention (`X-ACR-Thread-Retention-Days`: `0` = until 24 h after the last
+turn, `30` = until 30 days after it; the latest turn that named one decides;
+none named = `0`). The contract (`context_fabric_thread.v1`,
+`context_fabric_thread_list.v1`, the `thread_closed` 409, the gate surface
+`thread`) is published ahead of the store and routes that serve it. Design
+and obligations: `docs/design/ask-dev-conversation-contract.md`.
+
+```mermaid
+sequenceDiagram
+  participant W as web (per user, fresh assertion)
+  participant R as acr-api thread route (any replica)
+  participant S as Submission records + thread metadata (Postgres)
+  participant G as One serving decision (StoredResultGate surface thread + read-by-id rules)
+
+  W->>R: GET threads/{thread_id}?before=cursor
+  R->>S: the caller's key (org, owner, thread_id), one page of at most 100 turns
+  alt no open thread for this principal (unknown, another principal's, deleted, expired, malformed)
+    R-->>W: 404 not_found (one body)
+  else open thread
+    loop each done turn on the page
+      R->>G: would GET investigations/{result_id} serve it to the caller now?
+      alt served
+        G-->>R: result_id
+      else denied or withheld
+        G-->>R: result_withheld (no id)
+      else decision unavailable
+        R-->>W: 503 (never a partial thread)
+      end
+    end
+    R-->>W: 200 thread: retention, expires_at, turn_count, turns (state, question, result_id or result_withheld), earlier_turns_cursor?
+  end
+  W->>R: GET investigations/{result_id} (decided again)
+```
+
+The thread never carries answer content: a turn carries the caller's own
+admitted question, its submission state, and a result id only when the read
+by id would serve it now. A running turn is found again through the thread
+after a reload (plan §2.7.9).
+
+```mermaid
+stateDiagram-v2
+  [*] --> open: first turn admitted with X-ACR-Thread-ID
+  open --> open: turn admitted (last_turn_at and expires_at move)
+  open --> closed: DELETE threads/{thread_id}
+  open --> closed: now reaches expires_at
+  closed --> removed: retention job, after expires_at (closure record kept until then)
+  removed --> [*]
+  note right of closed
+    every read fails closed as unknown,
+    and a turn with its thread id or one of its
+    submission ids is 409 thread_closed
+  end note
+```
+
+What the store, the routes and the retention job must keep (design §6): the
+closure record outlives the content (T1); a reserved result is saved bound or
+not at all (T2); a result shared by answer reuse lives as long as a live turn
+names it (T3); one serving decision for the thread and the read by id (T4);
+an unsaved answer stays unsaved (T5); closed is closed on every read (T6); a
+thread holds at most 1000000 turns (T7). A thread read writes one aggregated
+decision line, not one `StoredResultAuthorization` line per turn.
+
+**Construction anchors:** `ContextFabricThread`, `ContextFabricThreadList`,
+`ParseContextFabricThreadRetention`, `ContextFabricThreadExpiresAt`,
+`ValidContextFabricThreadCursor`, `ErrorCodeThreadClosed`
+(`internal/contracts/v1/context_fabric_thread.go`); the consumer decoders
+`ParseContextFabricThread`, `ParseContextFabricThreadList`
+(`context_fabric_thread_parse.go`);
+`StoredResultSurfaceThread` (`internal/contextfabric/stored_result_authorization.go`);
+schemas `contracts/jsonschema/v1/context_fabric_thread.v1.schema.json` and
+`context_fabric_thread_list.v1.schema.json`; goldens
+`contracts/examples/v1/context_fabric_thread*.v1.json` and
+`error_context_fabric_thread_closed.v1.json`, encoder output regenerated with
+`ACR_WRITE_THREAD_GOLDENS=1`.
+
 ## Sources
 
 - Live code via `codegraph_explore` / `rg` on `dev-health-acr`: `engine.go`

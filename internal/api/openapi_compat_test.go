@@ -47,6 +47,10 @@ func TestHostedReadRoutesMatchOpenAPI(t *testing.T) {
 		{path: "/api/v1/context-fabric/investigations", method: "post", operation: "createContextFabricInvestigation", statuses: []string{"200", "400", "401", "403", "404", "406", "409", "413", "426", "429", "500", "502", "503", "504"}},
 		{path: "/api/v1/context-fabric/investigations/submissions/{submission_id}", method: "get", operation: "getContextFabricSubmissionStatus", statuses: []string{"200", "401", "403", "404", "426", "429", "500", "503", "504"}},
 		{path: "/api/v1/context-fabric/investigations/{result_id}", method: "get", operation: "getContextFabricInvestigation", statuses: []string{"200", "400", "401", "403", "404", "413", "426", "429", "500", "503", "504"}},
+		// The Ask Dev conversation routes (docs/design/ask-dev-conversation-contract.md).
+		{path: "/api/v1/context-fabric/threads", method: "get", operation: "listContextFabricThreads", statuses: []string{"200", "400", "401", "403", "426", "429", "500", "503", "504"}},
+		{path: "/api/v1/context-fabric/threads/{thread_id}", method: "get", operation: "getContextFabricThread", statuses: []string{"200", "400", "401", "403", "404", "426", "429", "500", "503", "504"}},
+		{path: "/api/v1/context-fabric/threads/{thread_id}", method: "delete", operation: "deleteContextFabricThread", statuses: []string{"204", "401", "403", "404", "426", "429", "500", "503", "504"}},
 		{path: "/api/v1/context-fabric/data/catalog", method: "get", operation: "readContextFabricDataCatalog", statuses: []string{"200", "400", "401", "403", "426", "429", "500", "501", "503"}},
 		{path: "/api/v1/context-fabric/data/subjects", method: "post", operation: "findContextFabricDataSubjects", statuses: []string{"200", "400", "401", "403", "413", "426", "429", "500", "501", "503"}},
 		{path: "/api/v1/context-fabric/data/operations", method: "post", operation: "runContextFabricDataOperation", statuses: []string{"200", "400", "401", "403", "413", "426", "429", "500", "501", "503"}},
@@ -73,6 +77,11 @@ func TestHostedReadRoutesMatchOpenAPI(t *testing.T) {
 	if parameter := document.Components.Parameters["ThreadID"]; parameter.Name != contractsv1.ContextFabricThreadIDHeader || parameter.Required || parameter.Description == "" {
 		t.Fatalf("OpenAPI ThreadID parameter = %#v", parameter)
 	}
+	// The thread retention header is optional, published, and its enum is
+	// the retention vocabulary.
+	if parameter := document.Components.Parameters["ThreadRetentionDays"]; parameter.Name != contractsv1.ContextFabricThreadRetentionHeader || parameter.Required || parameter.Description == "" {
+		t.Fatalf("OpenAPI ThreadRetentionDays parameter = %#v", parameter)
+	}
 	// CHAOS-11912: the submission header is optional and published.
 	if parameter := document.Components.Parameters["SubmissionID"]; parameter.Name != contractsv1.ContextFabricSubmissionIDHeader || parameter.Required || parameter.Description == "" {
 		t.Fatalf("OpenAPI SubmissionID parameter = %#v", parameter)
@@ -86,6 +95,9 @@ func TestHostedReadRoutesMatchOpenAPI(t *testing.T) {
 		{path: "/api/v1/context-fabric/investigations", method: "post"},
 		{path: "/api/v1/context-fabric/investigations/{result_id}", method: "get"},
 		{path: "/api/v1/context-fabric/investigations/submissions/{submission_id}", method: "get"},
+		{path: "/api/v1/context-fabric/threads", method: "get"},
+		{path: "/api/v1/context-fabric/threads/{thread_id}", method: "get"},
+		{path: "/api/v1/context-fabric/threads/{thread_id}", method: "delete"},
 	} {
 		if !hasSecurityAlternative(document.Paths[route.path][route.method].Security, "webAssertionAuth") {
 			t.Fatalf("%s %s must allow web assertions", route.method, route.path)

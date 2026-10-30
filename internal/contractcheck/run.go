@@ -141,6 +141,12 @@ var exampleSchemaPairs = map[string]string{
 	// (internal/api/context_fabric_submission_limits_test.go).
 	"error_context_fabric_concurrency_limited.v1.json": "error.v1.schema.json",
 	"error_context_fabric_allowance_exhausted.v1.json": "error.v1.schema.json",
+	// The Ask Dev conversation contract: the thread read, the thread list
+	// and the 409 thread_closed, each encoder output of production Go values
+	// (internal/contracts/v1/context_fabric_thread_test.go).
+	"context_fabric_thread.v1.json":              "context_fabric_thread.v1.schema.json",
+	"context_fabric_thread_list.v1.json":         "context_fabric_thread_list.v1.schema.json",
+	"error_context_fabric_thread_closed.v1.json": "error.v1.schema.json",
 }
 
 // Options configures repository contract validation.

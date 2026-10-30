@@ -1,0 +1,169 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://contracts.fullchaos.dev/acr/v1/context_fabric_thread.v1.schema.json",
+  "title": "Context Fabric Thread v1",
+  "description": "The caller's own Ask Dev conversation: GET /api/v1/context-fabric/threads/{thread_id}. A thread is the submission records one principal admitted with one X-ACR-Thread-ID, in admission order, plus its retention. It names each turn's result by id and carries no answer content; read a result with GET /api/v1/context-fabric/investigations/{result_id}, which decides the read again. Another principal's thread, an unknown, deleted, expired or malformed id get the same 404 not_found.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "thread_id",
+    "retention_days",
+    "turn_count",
+    "created_at",
+    "last_turn_at",
+    "expires_at",
+    "turns"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "context_fabric_thread.v1"
+    },
+    "thread_id": {
+      "type": "string",
+      "minLength": 8,
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9._:-]{8,128}$"
+    },
+    "retention_days": {
+      "type": "integer",
+      "enum": [
+        0,
+        30
+      ],
+      "description": "0: kept until 24 hours after the last turn. 30: kept until 30 days after the last turn. Set by X-ACR-Thread-Retention-Days on a turn; the latest turn that named one decides, and a thread whose turns named none has 0."
+    },
+    "turn_count": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "Every turn of the thread, at most 1000000 (a turn past it is refused 409 thread_closed). Turns before the served page are read with the before query parameter and earlier_turns_cursor.",
+      "maximum": 1000000
+    },
+    "created_at": {
+      "type": "string",
+      "format": "date-time",
+      "description": "The first turn's admitted_at.",
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\\.[0-9]+)?(Z|[+-][0-9]{2}:[0-9]{2})$"
+    },
+    "last_turn_at": {
+      "type": "string",
+      "format": "date-time",
+      "description": "The latest turn's admitted_at.",
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\\.[0-9]+)?(Z|[+-][0-9]{2}:[0-9]{2})$"
+    },
+    "expires_at": {
+      "type": "string",
+      "format": "date-time",
+      "description": "last_turn_at plus 24 hours (retention_days 0) or 30 days (retention_days 30). From it on, the thread and the results of its turns are not served on any read, and the retention job removes them.",
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\\.[0-9]+)?(Z|[+-][0-9]{2}:[0-9]{2})$"
+    },
+    "turns": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 100,
+      "description": "One page of at most 100 turns, oldest first (admitted_at, then submission_id): the latest turns, or the turns before the cursor the before query parameter named.",
+      "items": {
+        "$ref": "#/$defs/ThreadTurn"
+      }
+    },
+    "earlier_turns_cursor": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 512,
+      "pattern": "^[A-Za-z0-9_-]{1,512}$",
+      "description": "Present when turns earlier than this page exist: pass it back as the before query parameter. Opaque."
+    }
+  },
+  "$defs": {
+    "ThreadTurn": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "submission_id",
+        "state",
+        "admitted_at",
+        "updated_at"
+      ],
+      "properties": {
+        "submission_id": {
+          "type": "string",
+          "minLength": 8,
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9._:-]{8,128}$"
+        },
+        "state": {
+          "enum": [
+            "running",
+            "done",
+            "done_unsaved",
+            "abandoned"
+          ],
+          "description": "The submission's state, as GET /api/v1/context-fabric/investigations/submissions/{submission_id} serves it. A done_unsaved answer was shown once and is not recoverable; ask again."
+        },
+        "question": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 8000,
+          "description": "The question the turn was admitted with, as the caller sent it: the caller's own words, served so a reload can show a running, unsaved or abandoned turn too. Absent on a turn admitted before the service recorded questions."
+        },
+        "result_id": {
+          "type": "string",
+          "minLength": 8,
+          "maxLength": 256,
+          "description": "On a done turn whose result GET /api/v1/context-fabric/investigations/{result_id} would serve to the reader now (the stored-result gate admits the reader and the read's serving rules serve the result): the result's id."
+        },
+        "result_withheld": {
+          "const": true,
+          "description": "On a done turn whose result GET /api/v1/context-fabric/investigations/{result_id} would not serve to the reader now: the result is not served from this thread, and its id is not given."
+        },
+        "admitted_at": {
+          "type": "string",
+          "format": "date-time",
+          "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\\.[0-9]+)?(Z|[+-][0-9]{2}:[0-9]{2})$"
+        },
+        "updated_at": {
+          "type": "string",
+          "format": "date-time",
+          "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\\.[0-9]+)?(Z|[+-][0-9]{2}:[0-9]{2})$"
+        }
+      },
+      "if": {
+        "properties": {
+          "state": {
+            "const": "done"
+          }
+        }
+      },
+      "then": {
+        "oneOf": [
+          {
+            "required": [
+              "result_id"
+            ]
+          },
+          {
+            "required": [
+              "result_withheld"
+            ]
+          }
+        ]
+      },
+      "else": {
+        "not": {
+          "anyOf": [
+            {
+              "required": [
+                "result_id"
+              ]
+            },
+            {
+              "required": [
+                "result_withheld"
+              ]
+            }
+          ]
+        }
+      }
+    }
+  }
+}
