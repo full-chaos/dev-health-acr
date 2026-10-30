@@ -152,6 +152,9 @@ func (s *Store) AdmitSubmission(ctx context.Context, admission contextfabric.Sub
 	if admission.ThreadID != "" && !contextfabric.ValidSubmissionID(admission.ThreadID) {
 		return contextfabric.SubmissionRecord{}, false, errors.New("memoryinvestigation: thread id is malformed")
 	}
+	if admission.ThreadRetention != nil && !admission.ThreadRetention.Valid() {
+		return contextfabric.SubmissionRecord{}, false, errors.New("memoryinvestigation: thread retention is outside the closed set")
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if storedKey, existing, found := s.findSubmissionLocked(admission.Key); found {
@@ -159,7 +162,23 @@ func (s *Store) AdmitSubmission(ctx context.Context, admission contextfabric.Sub
 		if changed {
 			s.submissions[storedKey] = reconciled
 		}
+		reconciled.ThreadClosed = s.threadClosedLocked(reconciled, now)
 		return reconciled, false, nil
+	}
+	// CHAOS-11948: a new turn of a closed thread is refused before any
+	// limit is counted, and writes nothing.
+	// The row the caller reaches (a rotated credential of the same user on
+	// the same surface reaches the user's row, CHAOS-12091); a new thread is
+	// keyed by the caller's own owner.
+	var thread *contextfabric.ThreadRecord
+	threadKey := contextfabric.ThreadKey{OrgID: admission.Key.OrgID, Owner: admission.Key.Owner, ThreadID: admission.ThreadID}
+	if admission.ThreadID != "" {
+		if current, found := s.findThreadLocked(admission.Key.OrgID, admission.Key.Owner, admission.ThreadID); found {
+			if reason := current.ClosedReason(now); reason != "" {
+				return contextfabric.SubmissionRecord{}, false, &contextfabric.ThreadClosedError{Reason: reason}
+			}
+			thread, threadKey = &current, current.Key
+		}
 	}
 	index := reservedResultKey{orgID: admission.Key.OrgID, resultID: admission.ReservedResultID}
 	if _, taken := s.reserved[index]; taken {
@@ -195,6 +214,12 @@ func (s *Store) AdmitSubmission(ctx context.Context, admission contextfabric.Sub
 		Key: admission.Key, RequestDigest: admission.RequestDigest, ReservedResultID: admission.ReservedResultID, ThreadID: admission.ThreadID,
 		State: contextfabric.SubmissionRunning, AdmittedAt: now.UTC(), UpdatedAt: now.UTC(), ExpiresAt: admission.ExpiresAt.UTC(),
 	}
+	if admission.ThreadID != "" {
+		record.Question = admission.Question
+		record.ThreadOwner = threadKey.Owner
+		s.threads[rowKeyOf(threadKey)] = contextfabric.AdvanceThread(thread, threadKey,
+			contextfabric.ThreadTurnCursor{AdmittedAt: record.AdmittedAt, SubmissionID: admission.Key.SubmissionID}, admission.ThreadRetention)
+	}
 	s.submissions[admission.Key] = record
 	s.reserved[index] = admission.Key
 	return record, true, nil
@@ -218,6 +243,7 @@ func (s *Store) GetSubmission(ctx context.Context, key contextfabric.SubmissionK
 	if changed {
 		s.submissions[storedKey] = reconciled
 	}
+	reconciled.ThreadClosed = s.threadClosedLocked(reconciled, now)
 	return reconciled, nil
 }
 

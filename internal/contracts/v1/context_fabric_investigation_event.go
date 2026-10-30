@@ -450,6 +450,7 @@ var errorCodes = []string{
 	ErrorCodeSubmissionInProgress,
 	ErrorCodeSubmissionUnsaved,
 	ErrorCodeSubmissionAbandoned,
+	ErrorCodeSubmissionRequired,
 	ErrorCodeConcurrencyLimited,
 	ErrorCodeAllowanceExhausted,
 	ErrorCodeThreadClosed,

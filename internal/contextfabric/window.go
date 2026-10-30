@@ -1244,7 +1244,7 @@ func windowCanonicalizationOutcome(canon requestWindowCanonicalization, effectiv
 			return WindowCanonicalizationInferredDefault
 		}
 	}
-	if effective != nil {
+	if callerWindow(effective) {
 		if effective.Provenance == WindowQuestionStated {
 			return WindowCanonicalizationRequestStated
 		}

@@ -1049,6 +1049,10 @@ type EngineTelemetry interface {
 	// RecordAnchorBindingTransition reports ONE shadow anchor binding
 	// decision: once per Save and once per reuse serve.
 	RecordAnchorBindingTransition(ctx context.Context, principal storage.Principal, event AnchorBindingTransitionEvent)
+	// RecordDerivedNumberPhrasing (CHAOS-11600) reports ONE stored answer's
+	// derived-number phrasing measure: once per Save the store accepted.
+	// Content-safe: the result id, the synthesis source and three counts.
+	RecordDerivedNumberPhrasing(ctx context.Context, principal storage.Principal, result InvestigationResult, measure DerivedNumberPhrasing)
 	// RecordModelRowsStripped (CHAOS-4355 follow-up, cf_model_rows_stripped)
 	// reports the count of ClaimedFacts entries whose model-authored Rows
 	// was cleared before draft.ValidateAgainst ran, so an operator can tell
@@ -1518,7 +1522,9 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 		// published as `window_superseded`. A supersession is something that
 		// happened at save time to an answer that WAS produced; an error return
 		// produced no answer and keeps whatever reason its own exit assigned.
-		if servedErr == nil && continuation.Applies() && continuation.AppliedWindow != nil && served.EffectiveEvidenceWindow == nil {
+		// CHAOS-11601: a served server_default window is the reads' own
+		// disclosure, not the applied window, so it reads as none here.
+		if servedErr == nil && continuation.Applies() && continuation.AppliedWindow != nil && !callerWindow(served.EffectiveEvidenceWindow) {
 			continuation.Disposition = ContinuationWithheld
 			continuation = continuation.withReason(ContinuationReasonWindowSuperseded)
 			// The fields this reversal invalidates -- the applied window and
@@ -1995,6 +2001,10 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 				// of the reading persisted beside the stored row and that row's
 				// own resolution.
 				reusedCardinality = scopedMembershipCardinality(reusedCardinality, DecideCountPopulationScopeWithDigests(reusedReading.Frame, reusedReading.AnchorKind, reused.SubjectResolution, CommitBasisSetFromDigests(reused.SubjectResolution.CommitDecisionDigests), CommitDigestSetFromWire(reused.SubjectResolution.CommitDecisionDigests), CohortMemberSourceNotApplicable))
+				// CHAOS-12147: the stored coverage carries the graph read's
+				// denial detail, so a backfilled row states the same cut a
+				// fresh one does.
+				reusedCardinality = withCohortAuthorizationCut(reusedCardinality, reused.Coverage)
 				if backfilled, _, _ := appendMembershipCardinality(reused.Completeness.Outcomes, reusedCardinality, reusedPlanNarrowing(reused)); len(backfilled) > 0 {
 					reused.Completeness.Outcomes = backfilled
 				}
@@ -2046,6 +2056,10 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 					e.telemetry.RecordRetainedRankingAccounting(ctx, principal, event)
 				}
 			}
+			// CHAOS-12147: a stored count row that predates the cut statement
+			// is restated HERE, before the count lines below read the served
+			// row; finalizeServed's late writers then find it already stated.
+			reused, _ = restateCohortAuthorizationCutCount(reused)
 			reused.Completeness = ComputeAnswerCompleteness(reused)
 			BackfillStoredInterpretationProvenance(&reused.Versions)
 			BackfillStoredSynthesisSource(&reused.Versions)
@@ -3711,6 +3725,8 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 	// with no subjects fails here as a NAMED condition the route classifies,
 	// instead of rediscovering the unclassified 500.
 	var facts CanonicalFactBundle
+	// factsReadAt is the instant the fact read started (CHAOS-11601).
+	var factsReadAt time.Time
 	var periodPrior *periodDeltaPrior
 	defer func() { periodPrior.stop() }()
 	if workItemTuple {
@@ -3725,6 +3741,7 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 			periodPrior = e.startPeriodDeltaPriorRead(ctx, principal, *familyOutcome.Frame, subjects, priorAsOf, anchored)
 		}
 		startInvestigationStage(ctx, contractsv1.ContextFabricStageReadingFacts)
+		factsReadAt = e.now()
 		facts, err = e.facts.ReadFacts(ctx, principal, factRequest)
 		// CHAOS-4099 / CHAOS-4089 standing order: every scope-expansion decision
 		// this read made is reported here, immediately, whether it expanded,
@@ -4188,6 +4205,7 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 		Resolution: resolution, CohortSignalCitations: cohortSignalCitations,
 		EffectiveWindow: effectiveWindow, WindowCanon: windowCanon, WindowCarried: windowCarried,
 		ReadTimeClamp:  readTimeClamp,
+		FactsReadAt:    factsReadAt,
 		StructureCanon: structureCanon, CarriedStructureEntries: carriedStructureEntriesForServed,
 		CommitBases: commitBases, CommitDigests: commitDigests,
 		GroupedNarrowingBasis: stage2GroupedBasis,

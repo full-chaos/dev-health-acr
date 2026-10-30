@@ -102,6 +102,11 @@ func (a *App) ContextFabricSubmissionStatusHandler(submissions contextfabric.Sub
 			a.logSubmissionStatus(r, principal, SubmissionStatusStoreUnavailable, "", err)
 			writeError(w, r, http.StatusServiceUnavailable, "store_unavailable", "Context Fabric investigation submissions are temporarily unavailable", true, nil)
 			return
+		case record.ThreadClosed != "":
+			// CHAOS-11948 (design §6 T6): a turn of a deleted or expired
+			// thread is not found, like an unknown id.
+			a.writeSubmissionNotFound(w, r, principal)
+			return
 		}
 		status := contractsv1.ContextFabricSubmissionStatus{
 			SchemaVersion: contractsv1.ContextFabricSubmissionStatusSchema, SubmissionID: record.Key.SubmissionID,

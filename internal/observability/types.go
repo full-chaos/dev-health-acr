@@ -25,7 +25,11 @@ const (
 	OperationInvestigation       Operation = "investigation"
 	OperationInvestigationResult Operation = "investigation_result"
 	// OperationSubmissionStatus is the submission status read (CHAOS-11913).
-	OperationSubmissionStatus  Operation = "submission_status"
+	OperationSubmissionStatus Operation = "submission_status"
+	// OperationThreads and OperationThread are the Ask Dev conversation
+	// list and the thread read or delete (CHAOS-11948).
+	OperationThreads           Operation = "threads"
+	OperationThread            Operation = "thread"
 	OperationDataCatalog       Operation = "data_catalog"
 	OperationDataSubjects      Operation = "data_subjects"
 	OperationDataFacts         Operation = "data_facts"

@@ -145,8 +145,11 @@ type submissionHarness struct {
 	// another repository, so the stored-result gate denies the test
 	// credentials' reads from then on.
 	grantWithdrawn atomic.Bool
-	clock          *submissionClock
-	apps           []*App
+	// graphDown makes the live graph fail every stored-subject decision, so
+	// the stored-result gate answers unavailable (CHAOS-11948).
+	graphDown atomic.Bool
+	clock     *submissionClock
+	apps      []*App
 	// observed is each App\'s request observations.
 	observed     []*snapshotSink
 	logs         []*bytes.Buffer
@@ -164,17 +167,29 @@ type submissionHarness struct {
 // for PostgreSQL, one map for memory).
 func newSubmissionHarness(t *testing.T, stores ...submissionTestStore) *submissionHarness {
 	t.Helper()
+	return newSubmissionHarnessWithCredentials(t, nil, "org_1", stores...)
+}
+
+// newSubmissionHarnessWithCredentials is newSubmissionHarness over the given
+// credential store (nil: a memory one). CHAOS-12093 passes a PostgreSQL store,
+// the only one that can hold a browser-class row before an issuance path
+// derives that class. orgID is the organization of the harness's credentials
+// (a PostgreSQL credential row needs a UUID).
+func newSubmissionHarnessWithCredentials(t *testing.T, credentials *storage.CredentialLifecycle, orgID string, stores ...submissionTestStore) *submissionHarness {
+	t.Helper()
 	clock := &submissionClock{now: time.Date(2026, 10, 29, 12, 0, 0, 0, time.UTC)}
 	audit := memory.NewAuditStore()
-	credentials := newMemoryCredentialLifecycle(t, audit, clock.now)
+	if credentials == nil {
+		credentials = newMemoryCredentialLifecycle(t, audit, clock.now)
+	}
 	devices, err := memory.NewDeviceAuthorizationStore(memory.DeviceAuthorizationStoreOptions{Credentials: credentials, Now: clock.Now})
 	if err != nil {
 		t.Fatal(err)
 	}
 	harness := &submissionHarness{
 		t: t, clock: clock,
-		tokenA:       issueScopedCredential(t, credentials, audit, clock.now, []string{auth.ScopeContextRead}, []string{hostedTestRepository}),
-		tokenB:       issueScopedCredential(t, credentials, audit, clock.now, []string{auth.ScopeContextRead}, []string{hostedTestRepository}),
+		tokenA:       issueOrgCredential(t, credentials, orgID, clock.now, []string{auth.ScopeContextRead}, []string{hostedTestRepository}),
+		tokenB:       issueOrgCredential(t, credentials, orgID, clock.now, []string{auth.ScopeContextRead}, []string{hostedTestRepository}),
 		investigator: newCountingSubmissionInvestigator(stores[0], clock),
 		credentials:  credentials, devices: devices,
 	}
@@ -208,8 +223,9 @@ func newSubmissionHarness(t *testing.T, stores ...submissionTestStore) *submissi
 				}}},
 				Investigator:             harness.investigator,
 				InvestigationResults:     store,
-				StoredResultGate:         contextfabric.NewStoredResultGate(withdrawableGrantGraph{withdrawn: &harness.grantWithdrawn}),
+				StoredResultGate:         contextfabric.NewStoredResultGate(withdrawableGrantGraph{withdrawn: &harness.grantWithdrawn, down: &harness.graphDown}),
 				InvestigationSubmissions: store,
+				InvestigationThreads:     threadStoreOf(store),
 			},
 		}, testLogger(logs))
 		if err != nil {
@@ -228,9 +244,19 @@ func newSubmissionHarness(t *testing.T, stores ...submissionTestStore) *submissi
 type withdrawableGrantGraph struct {
 	subjectNodeGraph
 	withdrawn *atomic.Bool
+	down      *atomic.Bool
+}
+
+// threadStoreOf is the store's thread side, nil when it has none.
+func threadStoreOf(store submissionTestStore) contextfabric.ThreadStore {
+	threads, _ := store.(contextfabric.ThreadStore)
+	return threads
 }
 
 func (g withdrawableGrantGraph) AuthorizeStoredSubjects(ctx context.Context, principal storage.Principal, binding contextfabric.ResolvedGraphBinding, subjects []contextfabric.SubjectRef) ([]contextfabric.StoredSubjectOutcome, error) {
+	if g.down != nil && g.down.Load() {
+		return nil, errors.Join(contextfabric.ErrUnavailable, errors.New("injected graph failure"))
+	}
 	grant := []string{hostedTestRepository}
 	if g.withdrawn.Load() {
 		grant = []string{"acme/another-repository"}

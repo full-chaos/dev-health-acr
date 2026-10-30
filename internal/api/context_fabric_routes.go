@@ -40,6 +40,15 @@ func (a *App) investigator() contextfabric.Investigator {
 // code does not choose a graph backend or canonical fact adapter.
 func (a *App) ContextFabricInvestigationHandler(investigator contextfabric.Investigator) http.Handler {
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// CHAOS-12093: a browser-class credential names one well-formed
+		// submission id on every create, or the create is refused here,
+		// first: before the stream flag, the body, the header checks, the
+		// repeat answer, the gates and admission. Every other class meets
+		// the checks below in their old order.
+		if principal, ok := auth.PrincipalFromContext(r.Context()); ok && browserSubmissionRequired(principal, r) {
+			a.writeSubmissionRequired(w, r)
+			return
+		}
 		// CHAOS-11911: a stream request while the stream is off is refused
 		// at once, before any admission work, with no JSON fallback. Inside
 		// the protected boundary like every check below: an unauthenticated
@@ -92,6 +101,25 @@ func (a *App) ContextFabricInvestigationHandler(investigator contextfabric.Inves
 			writeError(w, r, http.StatusBadRequest, "invalid_request", "Context Fabric investigation thread id is invalid", false, nil)
 			return
 		}
+		// CHAOS-11948: a thread turn is a submission (the thread is the
+		// owner's submission records under one thread id), and the
+		// retention header belongs to a thread turn. Both refusals are
+		// explicit: a header is never silently ignored.
+		retention, retentionValid := investigationThreadRetention(r)
+		switch {
+		case !retentionValid:
+			a.logSubmissionHeaderRefused(r, contractsv1.ContextFabricThreadRetentionHeader)
+			writeError(w, r, http.StatusBadRequest, "invalid_request", "Context Fabric investigation thread retention must be 0 or 30", false, nil)
+			return
+		case threadID != "" && submissionID == "":
+			a.logSubmissionHeaderRefused(r, contractsv1.ContextFabricThreadIDHeader)
+			writeError(w, r, http.StatusBadRequest, "invalid_request", "A conversation turn needs an X-ACR-Submission-ID", false, nil)
+			return
+		case retention != nil && threadID == "":
+			a.logSubmissionHeaderRefused(r, contractsv1.ContextFabricThreadRetentionHeader)
+			writeError(w, r, http.StatusBadRequest, "invalid_request", "Context Fabric investigation thread retention needs an X-ACR-Thread-ID", false, nil)
+			return
+		}
 		principal, ok := auth.PrincipalFromContext(r.Context())
 		if !ok {
 			writeError(w, r, http.StatusUnauthorized, "invalid_token", "Missing or invalid ACR credential", false, nil)
@@ -130,7 +158,7 @@ func (a *App) ContextFabricInvestigationHandler(investigator contextfabric.Inves
 		var submission *admittedInvestigationSubmission
 		reservedResultID := ""
 		if submissionID != "" {
-			admitted, proceed := a.admitInvestigationSubmission(w, r, principal, request, submissionID, threadID, contextfabric.DeploymentModelBound(gatedCtx))
+			admitted, proceed := a.admitInvestigationSubmission(w, r, principal, request, submissionID, threadID, retention, contextfabric.DeploymentModelBound(gatedCtx))
 			if !proceed {
 				return
 			}
@@ -142,7 +170,7 @@ func (a *App) ContextFabricInvestigationHandler(investigator contextfabric.Inves
 			// under a server-minted key. Its reservation is NOT the run's:
 			// reservedResultID stays "", so the answer stays unbound
 			// (organization-bearer), exactly as before.
-			admitted, proceed := a.admitImplicitInvestigation(w, r, principal, request, threadID)
+			admitted, proceed := a.admitImplicitInvestigation(w, r, principal, request)
 			if !proceed {
 				return
 			}
