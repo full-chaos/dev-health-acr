@@ -16,6 +16,7 @@ import (
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
 	"github.com/full-chaos/dev-health-go/readers"
+	"golang.org/x/sync/errgroup"
 )
 
 // work_item_dependencies has one free-text relationship_type column (see
@@ -119,21 +120,50 @@ func (p *BlockersProvider) ReadFacts(ctx context.Context, principal storage.Prin
 	}()
 	facts := make([]contextfabric.CanonicalFact, 0, len(ids))
 	var teamOutcome teamRollupOutcome
-	if teamSubjects := subjectsOfKind(query.Subjects, contextfabric.SubjectTeam); len(teamSubjects) > 0 {
-		var teamErr error
-		teamOutcome, teamErr = p.readTeamRollup(ctx, principal, orgID, query.RequestedRepositoryScope, orgWideFigureAllowed(principal, query.RequestedRepositoryScope), teamSubjects, &facts)
-		if teamErr != nil {
-			return contextfabric.FactProviderResult{}, readFailure("query team blockers", teamErr)
+	var projectRejected int
+	// The team and project rollups and the work item read need nothing from
+	// each other, so they run together: the read takes the slower of them, not
+	// their sum (the team rollup alone is several statements). Each writes its
+	// own facts; the work item facts follow the rollup facts, as before. The
+	// first failure cancels the other and fails the read; the read it cancelled
+	// is not logged as a failure of its own.
+	group, groupCtx := errgroup.WithContext(ctx)
+	failed := func(action string, err error) error {
+		if ctx.Err() == nil && groupCtx.Err() != nil {
+			return err
 		}
-		rejected += teamOutcome.rejected
+		return readFailure(action, err)
 	}
-	if projectSubjects := subjectsOfKind(query.Subjects, contextfabric.SubjectProject); len(projectSubjects) > 0 {
-		projectRejected, projectErr := p.readProjectRollup(ctx, principal, orgID, query.RequestedRepositoryScope, projectSubjects, &facts)
-		if projectErr != nil {
-			return contextfabric.FactProviderResult{}, readFailure("query project blockers", projectErr)
+	group.Go(func() error {
+		if teamSubjects := subjectsOfKind(query.Subjects, contextfabric.SubjectTeam); len(teamSubjects) > 0 {
+			var teamErr error
+			teamOutcome, teamErr = p.readTeamRollup(groupCtx, principal, orgID, query.RequestedRepositoryScope, orgWideFigureAllowed(principal, query.RequestedRepositoryScope), teamSubjects, &facts)
+			if teamErr != nil {
+				return failed("query team blockers", teamErr)
+			}
 		}
-		rejected += projectRejected
+		if projectSubjects := subjectsOfKind(query.Subjects, contextfabric.SubjectProject); len(projectSubjects) > 0 {
+			var projectErr error
+			projectRejected, projectErr = p.readProjectRollup(groupCtx, principal, orgID, query.RequestedRepositoryScope, projectSubjects, &facts)
+			if projectErr != nil {
+				return failed("query project blockers", projectErr)
+			}
+		}
+		return nil
+	})
+	var workItemFacts []contextfabric.CanonicalFact
+	// CHAOS-5438: ONE owner -- see factBudget, and WorkProvider's identical
+	// note on why a single-branch provider uses it too.
+	budget := newFactBudget()
+	if len(ids) > 0 {
+		group.Go(func() error {
+			return p.readWorkItemBlockers(groupCtx, principal, orgID, query.RequestedRepositoryScope, ids, bySubject, budget, &workItemFacts, failed)
+		})
 	}
+	if err := group.Wait(); err != nil {
+		return contextfabric.FactProviderResult{}, err
+	}
+	rejected += teamOutcome.rejected + projectRejected
 	teamFactCount := len(facts)
 	if len(ids) == 0 {
 		state, emptyReason := currentAxisReadState(teamFactCount)
@@ -142,9 +172,17 @@ func (p *BlockersProvider) ReadFacts(ctx context.Context, principal storage.Prin
 		applyTeamsOwningProjectsOnly(ctx, p.facts.client, orgID, &result, query.Subjects, teamOutcome.teamsRequested, factTimeBound{})
 		return result, nil
 	}
-	// CHAOS-5438: ONE owner -- see factBudget, and WorkProvider's identical
-	// note on why a single-branch provider uses it too.
-	budget := newFactBudget()
+	facts = append(facts, workItemFacts...)
+	state, emptyReason := currentAxisReadState(len(facts))
+	result = contextfabric.FactProviderResult{Facts: facts, State: state, Reason: emptyReason, Version: QueryVersion, Truncated: budget.truncated() || teamOutcome.truncated}
+	applyTeamsOwningNothing(&result, query.Subjects, teamOutcome.teamsRequested, teamOutcome.teamsWithoutRepos)
+	applyTeamsOwningProjectsOnly(ctx, p.facts.client, orgID, &result, query.Subjects, teamOutcome.teamsRequested, factTimeBound{})
+	return result, nil
+}
+
+// readWorkItemBlockers reads the blockers of the work item subjects (ids, keyed
+// in bySubject) into facts.
+func (p *BlockersProvider) readWorkItemBlockers(ctx context.Context, principal storage.Principal, orgID string, requestedScope []string, ids []string, bySubject map[string]contextfabric.SubjectRef, budget *factBudget, facts *[]contextfabric.CanonicalFact, failed func(string, error) error) error {
 	// blockerRelationshipType is an internal Go constant, not a caller
 	// supplied value, so it is safe to inline as a SQL string literal here
 	// rather than a bound parameter.
@@ -165,10 +203,10 @@ func (p *BlockersProvider) ReadFacts(ctx context.Context, principal storage.Prin
 	// subject and the blocking item it names. A blocker is itself a work
 	// item's identity, so an authorized subject must never carry the id of
 	// one the principal may not see.
-	authorized, authorizationBindings := workItemAuthorizedIDsSQL(workItemRepositoryAuthorization(principal, query.RequestedRepositoryScope))
+	authorized, authorizationBindings := workItemAuthorizedIDsSQL(workItemRepositoryAuthorization(principal, requestedScope))
 	settings, settingsErr := workItemReaderSettings(ctx)
 	if settingsErr != nil {
-		return contextfabric.FactProviderResult{}, readFailure("query work item blockers", settingsErr)
+		return failed("query work item blockers", settingsErr)
 	}
 	statement := readers.WithSettings(withRowProbeLimit(`SELECT d.source_work_item_id, d.target_work_item_id, ifNull(d.relationship_type, ''), toString(t.repo_id), `+counterpartRepositoryColumnsSQL+`, toUInt8(ifNull(c.counterpart_open, `+strconv.Itoa(int(blockerOpenUnknown))+`))
 FROM work_item_dependencies AS d FINAL
@@ -217,7 +255,7 @@ LIMIT 1 BY toString(t.repo_id), `+blockedExpr("d")+`, `+blockerExpr("d")), setti
 		if ref, ok := counterpartWorkItemRef(sourceRepoID, sourceRepoCount, blockerID); ok {
 			fields["blocked_by_work_item_ref"] = contextfabric.StringFactValue(ref)
 		}
-		facts = append(facts, contextfabric.CanonicalFact{
+		*facts = append(*facts, contextfabric.CanonicalFact{
 			Kind: contextfabric.FactBlockers, Subject: subject,
 			Fields:         fields,
 			EvidenceRefIDs: []string{dependencyEvidenceRefID(storedSourceID, storedTargetID, relationKey)},
@@ -225,14 +263,10 @@ LIMIT 1 BY toString(t.repo_id), `+blockedExpr("d")+`, `+blockerExpr("d")), setti
 		return nil
 	}, authorizationBindings...)
 	if scanErr != nil {
-		return contextfabric.FactProviderResult{}, readFailure("query work item blockers", scanErr)
+		return failed("query work item blockers", scanErr)
 	}
 	budget.observe(rowCount)
-	state, emptyReason := currentAxisReadState(len(facts))
-	result = contextfabric.FactProviderResult{Facts: facts, State: state, Reason: emptyReason, Version: QueryVersion, Truncated: budget.truncated() || teamOutcome.truncated}
-	applyTeamsOwningNothing(&result, query.Subjects, teamOutcome.teamsRequested, teamOutcome.teamsWithoutRepos)
-	applyTeamsOwningProjectsOnly(ctx, p.facts.client, orgID, &result, query.Subjects, teamOutcome.teamsRequested, factTimeBound{})
-	return result, nil
+	return nil
 }
 
 // RequiredChildrenProvider implements contextfabric.FactProvider for
@@ -609,21 +643,6 @@ func (p *BlockersProvider) readTeamRollup(ctx context.Context, principal storage
 FROM (`+edgeRows+`)
 GROUP BY rid
 ORDER BY rid`, settings)
-		if len(repoKeys) > 0 {
-			if scanErr := forEachRepoKeyChunk(repoKeys, func(chunk []string) error {
-				return readers.QueryOrgScopedNamed(ctx, p.facts.client, "ReadTeamBlockerRollup", statement, orgID, chunk, func(row readers.RowScanner) error {
-					var repoID string
-					var r blockerRollupRepo
-					if err := row.Scan(&repoID, &r.blockedItems, &r.blockerEdges, &r.excludedEdges, &r.weakestLinkRank); err != nil {
-						return err
-					}
-					byRepo[repoID] = r
-					return nil
-				}, authorizationBindings...)
-			}); scanErr != nil {
-				return outcome, scanErr
-			}
-		}
 		// Team totals: distinct blocked items and edges across two arms, the
 		// team's owned repositories (one row per team and repository pair) and
 		// the items of its owned projects that reach a repository through a
@@ -663,7 +682,9 @@ FROM (
 )
 GROUP BY team_id
 ORDER BY team_id`, settings)
-		if scanErr := forEachTeamIDChunk(teamIDs, func(teamChunk []string) error {
+		// A team chunk's owned repository keys and the bindings its totals and
+		// age statements share.
+		teamChunkScope := func(teamChunk []string) ([]string, []readers.Binding) {
 			chunkOwned := make(map[string][]teamOwnedRepo, len(teamChunk))
 			var pairs []string
 			for _, teamID := range teamChunk {
@@ -672,43 +693,77 @@ ORDER BY team_id`, settings)
 					pairs = append(pairs, teamID+blockerPairSeparator+repo.key)
 				}
 			}
-			extra := append([]readers.Binding{{Name: "team_repo_pairs", Value: pairs}, {Name: "team_ids", Value: teamChunk}}, authorizationBindings...)
-			err := readers.QueryOrgScopedNamed(ctx, p.facts.client, "ReadTeamBlockerTotals", totalsStatement, orgID, repoKeysOf(chunkOwned), func(row readers.RowScanner) error {
-				var teamID string
-				var t blockerTeamTotals
-				if err := row.Scan(&teamID, &t.blockedItems, &t.blockerEdges, &t.excludedEdges, &t.projectBlockedItems, &t.projectWeakestRank, &t.writerUnresolved); err != nil {
-					return err
+			return repoKeysOf(chunkOwned), append([]readers.Binding{{Name: "team_repo_pairs", Value: pairs}, {Name: "team_ids", Value: teamChunk}}, authorizationBindings...)
+		}
+		// The per-repository rollup, the team totals and the team age read the
+		// same edge rows and need nothing but the scope above, so they run
+		// together: the read takes the slowest of them, not their sum. One
+		// after another they took the read past its provider budget on a
+		// ClickHouse the run's other fact reads were loading at the same time.
+		// Each statement writes its own map; the first failure cancels the
+		// others and fails the read, as it did one after another.
+		group, groupCtx := errgroup.WithContext(ctx)
+		if len(repoKeys) > 0 {
+			group.Go(func() error {
+				return forEachRepoKeyChunk(repoKeys, func(chunk []string) error {
+					return readers.QueryOrgScopedNamed(groupCtx, p.facts.client, "ReadTeamBlockerRollup", statement, orgID, chunk, func(row readers.RowScanner) error {
+						var repoID string
+						var r blockerRollupRepo
+						if err := row.Scan(&repoID, &r.blockedItems, &r.blockerEdges, &r.excludedEdges, &r.weakestLinkRank); err != nil {
+							return err
+						}
+						byRepo[repoID] = r
+						return nil
+					}, authorizationBindings...)
+				})
+			})
+		}
+		group.Go(func() error {
+			return forEachTeamIDChunk(teamIDs, func(teamChunk []string) error {
+				chunkRepoKeys, extra := teamChunkScope(teamChunk)
+				return readers.QueryOrgScopedNamed(groupCtx, p.facts.client, "ReadTeamBlockerTotals", totalsStatement, orgID, chunkRepoKeys, func(row readers.RowScanner) error {
+					var teamID string
+					var t blockerTeamTotals
+					if err := row.Scan(&teamID, &t.blockedItems, &t.blockerEdges, &t.excludedEdges, &t.projectBlockedItems, &t.projectWeakestRank, &t.writerUnresolved); err != nil {
+						return err
+					}
+					totals[teamID] = t
+					return nil
+				}, extra...)
+			})
+		})
+		group.Go(func() error {
+			return forEachTeamIDChunk(teamIDs, func(teamChunk []string) error {
+				chunkRepoKeys, extra := teamChunkScope(teamChunk)
+				chunkAges := map[string]blockerTeamAge{}
+				ageErr := readers.QueryOrgScopedNamed(groupCtx, p.facts.client, "ReadTeamBlockerOldestAge", ageStatement, orgID, chunkRepoKeys, func(row readers.RowScanner) error {
+					var teamID string
+					var a blockerTeamAge
+					if err := row.Scan(&teamID, &a.openEdges, &a.edgesWithStart, &a.edgesWithExactStart, &a.oldestStartMillis); err != nil {
+						return err
+					}
+					chunkAges[teamID] = a
+					return nil
+				}, extra...)
+				if ageErr != nil {
+					// groupCtx: a cancellation, the caller's or a sibling
+					// statement's failure, fails the read; any other age
+					// failure leaves the age absent with a reason.
+					if err := ageReadFailure(groupCtx, "team", ageErr); err != nil {
+						return err
+					}
+					for _, teamID := range teamChunk {
+						ageUnavailable[teamID] = true
+					}
+					return nil
 				}
-				totals[teamID] = t
+				for teamID, a := range chunkAges {
+					ages[teamID] = a
+				}
 				return nil
-			}, extra...)
-			if err != nil {
-				return err
-			}
-			chunkAges := map[string]blockerTeamAge{}
-			ageErr := readers.QueryOrgScopedNamed(ctx, p.facts.client, "ReadTeamBlockerOldestAge", ageStatement, orgID, repoKeysOf(chunkOwned), func(row readers.RowScanner) error {
-				var teamID string
-				var a blockerTeamAge
-				if err := row.Scan(&teamID, &a.openEdges, &a.edgesWithStart, &a.edgesWithExactStart, &a.oldestStartMillis); err != nil {
-					return err
-				}
-				chunkAges[teamID] = a
-				return nil
-			}, extra...)
-			if ageErr != nil {
-				if err := ageReadFailure(ctx, "team", ageErr); err != nil {
-					return err
-				}
-				for _, teamID := range teamChunk {
-					ageUnavailable[teamID] = true
-				}
-				return nil
-			}
-			for teamID, a := range chunkAges {
-				ages[teamID] = a
-			}
-			return nil
-		}); scanErr != nil {
+			})
+		})
+		if scanErr := group.Wait(); scanErr != nil {
 			return outcome, scanErr
 		}
 	}
