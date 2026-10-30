@@ -69,6 +69,12 @@ SELECT client_class, session_id, family_id, family_expires_at, client_id FROM ac
 	require.Equal(t, "fam_pg_1", family.String)
 	require.Equal(t, auth.DevBrowserClientID, client.String)
 	require.True(t, familyExpires.Time.Equal(fixture.now.Add(12*time.Hour)), "family expires at %v", familyExpires.Time)
+	var auditFamily, auditFamilyEnd sql.NullString
+	require.NoError(t, fixture.db.QueryRowContext(ctx, `
+SELECT metadata->>'family_id', metadata->>'family_expires_at' FROM acr.audit_events
+WHERE action = 'credential_created' AND resource_id = $1`, credential.CredentialID).Scan(&auditFamily, &auditFamilyEnd))
+	require.Equal(t, "fam_pg_1", auditFamily.String)
+	require.Equal(t, fixture.now.Add(12*time.Hour).UTC().Format(time.RFC3339), auditFamilyEnd.String)
 	read, err := fixture.creds.GetByID(ctx, credential.OrgID, credential.CredentialID)
 	require.NoError(t, err)
 	require.Equal(t, credential.Provenance.FamilyID, read.Provenance.FamilyID)
@@ -105,6 +111,14 @@ func TestBrowserSession_postgresConstraintsHold(t *testing.T) {
 	// The session is immutable like the rest of the provenance (0058).
 	_, err = fixture.db.ExecContext(ctx, `UPDATE acr.client_credentials SET session_id = 'other' WHERE credential_id = $1`, credential.CredentialID)
 	require.ErrorContains(t, err, "credential provenance is immutable")
+	// A browser row never outlives its family (0061): what a release without
+	// the rotation guard would write is refused.
+	_, err = fixture.db.ExecContext(ctx, `UPDATE acr.client_credentials SET expires_at = family_expires_at + interval '1 second' WHERE credential_id = $1`, credential.CredentialID)
+	require.ErrorContains(t, err, "ck_acr_client_credentials_browser_client")
+	_, err = fixture.db.ExecContext(ctx, `UPDATE acr.client_credentials SET expires_at = NULL WHERE credential_id = $1`, credential.CredentialID)
+	require.ErrorContains(t, err, "ck_acr_client_credentials_browser_client")
+	_, err = fixture.db.ExecContext(ctx, `UPDATE acr.client_credentials SET expires_at = family_expires_at WHERE credential_id = $1`, credential.CredentialID)
+	require.NoError(t, err)
 	// A browser row names its client (0061).
 	_, err = fixture.db.ExecContext(ctx, `ALTER TABLE acr.client_credentials DISABLE TRIGGER trg_client_credentials_provenance_immutable`)
 	require.NoError(t, err)

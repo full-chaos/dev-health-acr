@@ -3,6 +3,7 @@ package memory
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/full-chaos/dev-health-acr/internal/auth"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
@@ -44,6 +45,11 @@ func TestBrowserSession_redeemTakesTheSessionFromTheRecord(t *testing.T) {
 	require.Equal(t, "sid_1", credential.Provenance.SessionID)
 	require.Equal(t, "fam_1", credential.Provenance.FamilyID)
 	require.Equal(t, grant.ApprovingSubject, credential.Provenance.ApprovingUserID)
+	events := fixture.audit.Events()
+	created := events[len(events)-1]
+	require.Equal(t, storage.AuditActionCredentialCreated, created.Action)
+	require.Equal(t, "fam_1", created.Metadata["family_id"])
+	require.Equal(t, fixture.now.Add(auth.BrowserFamilyLifetime).UTC().Format(time.RFC3339), created.Metadata["family_expires_at"])
 }
 
 func TestBrowserSession_redeemRefusesAForgedOrMissingSession(t *testing.T) {

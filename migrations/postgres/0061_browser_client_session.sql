@@ -4,17 +4,22 @@
 --    it (sid); the approval stores it on the device authorization, and the
 --    browser-class credential redeemed from that authorization takes it from
 --    the locked row (session_id, migration 0058), never from the caller.
--- 2. A browser-class credential names the client it was issued to (0058
---    already requires its session and family).
+-- 2. A browser-class credential names the client it was issued to and never
+--    outlives its token family (0058 already requires its session and
+--    family). A release without the browser rotation guard -- a rollback --
+--    cannot mint a long-lived browser credential by rotating one: the row is
+--    refused.
 -- 3. The submission canonical-owner backfill of migration 0059, repeated:
 --    rows a replica on the release before 0059 wrote during that rollout
 --    carry no canonical owner, and the runner applies 0059 once. The
 --    statements are 0059's own and skip every row already classified.
 --
 -- Rollback: the column is nullable and the previous release neither reads
--- nor writes it; the new CHECK holds for every row the previous release can
--- write (it never writes the browser class). No inline BEGIN/COMMIT (the
--- runner wraps the file). Idempotent.
+-- nor writes it. The new CHECK holds for every row the previous release
+-- writes except one: its rotation of a browser credential (it has no browser
+-- guard and gives the successor 30 days), which the CHECK refuses -- the
+-- rotation fails closed. No inline BEGIN/COMMIT (the runner wraps the file).
+-- Idempotent.
 
 ALTER TABLE acr.device_authorizations
     ADD COLUMN IF NOT EXISTS approving_session_id TEXT;
@@ -33,7 +38,8 @@ ALTER TABLE acr.client_credentials
     DROP CONSTRAINT IF EXISTS ck_acr_client_credentials_browser_client;
 ALTER TABLE acr.client_credentials
     ADD CONSTRAINT ck_acr_client_credentials_browser_client CHECK (
-        client_class IS DISTINCT FROM 'browser' OR client_id IS NOT NULL
+        client_class IS DISTINCT FROM 'browser'
+        OR (client_id IS NOT NULL AND expires_at IS NOT NULL AND expires_at <= family_expires_at)
     );
 
 COMMENT ON COLUMN acr.client_credentials.session_id IS
