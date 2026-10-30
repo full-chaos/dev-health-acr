@@ -76,6 +76,18 @@ func (a *App) ContextFabricInvestigationHandler(investigator contextfabric.Inves
 			writeError(w, r, http.StatusBadRequest, "invalid_request", "Context Fabric investigation request is invalid", false, schemaViolationDetails())
 			return
 		}
+		principal, ok := auth.PrincipalFromContext(r.Context())
+		if !ok {
+			writeError(w, r, http.StatusUnauthorized, "invalid_token", "Missing or invalid ACR credential", false, nil)
+			return
+		}
+		// CHAOS-12093: a browser-class credential names one well-formed
+		// submission id on every create, or it is refused here, before the
+		// header checks below, the repeat answer, the gates and admission.
+		if browserSubmissionRequired(principal, r) {
+			a.writeSubmissionRequired(w, r)
+			return
+		}
 		// CHAOS-11912: a malformed submission id is a client error, refused
 		// before anything is admitted.
 		submissionID, submissionValid := investigationSubmissionID(r)
@@ -90,11 +102,6 @@ func (a *App) ContextFabricInvestigationHandler(investigator contextfabric.Inves
 		if !threadValid {
 			a.logSubmissionHeaderRefused(r, contractsv1.ContextFabricThreadIDHeader)
 			writeError(w, r, http.StatusBadRequest, "invalid_request", "Context Fabric investigation thread id is invalid", false, nil)
-			return
-		}
-		principal, ok := auth.PrincipalFromContext(r.Context())
-		if !ok {
-			writeError(w, r, http.StatusUnauthorized, "invalid_token", "Missing or invalid ACR credential", false, nil)
 			return
 		}
 		// CHAOS-11912 (round-3 F1): a repeat of an admitted submission runs

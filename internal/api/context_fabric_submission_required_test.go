@@ -107,8 +107,16 @@ func TestSubmissionRequiredGoldenIsTheWritersOwnBody(t *testing.T) {
 		t.Fatalf("golden differs from the writer's body (err %v):\n%s\nwant\n%s", err, body, golden)
 	}
 	line := logs.String()
-	if !strings.Contains(line, `"outcome":"`+string(SubmissionOutcomeRefusedSubmissionRequired)+`"`) || !strings.Contains(line, `"client_class":"browser"`) {
-		t.Fatalf("admission line does not name the outcome and the class:\n%s", line)
+	var admission map[string]any
+	for _, entry := range strings.Split(strings.TrimSpace(line), "\n") {
+		var decoded map[string]any
+		if json.Unmarshal([]byte(entry), &decoded) == nil && decoded["msg"] == ContextFabricSubmissionLogMessage {
+			admission = decoded
+		}
+	}
+	if admission == nil || admission["level"] != "INFO" || admission["outcome"] != string(SubmissionOutcomeRefusedSubmissionRequired) ||
+		admission["client_class"] != "browser" || admission["request_id"] != submissionTestRequestID {
+		t.Fatalf("admission line = %v, want an Info line naming the outcome, the class and the request id:\n%s", admission, line)
 	}
 	if strings.Contains(line, "secret header value") {
 		t.Fatalf("the header value reached the log:\n%s", line)
