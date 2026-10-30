@@ -600,7 +600,7 @@ func TestCohortDriverJudgmentSummary_NoStrayArticleOrDoubleNoun(t *testing.T) {
 		scored := member
 		scored.Score = &score
 		got := cohortDriverJudgmentSummary(scored, driver)
-		want := "readiness gap (weight 15, value 1.00) contributed 20.0 of Fullchaos's 46.7 attention points."
+		want := "readiness gap (weight 15, value 1.00) appears to account for 20.0 of Fullchaos's 46.7 attention points."
 		if got != want {
 			t.Fatalf("cohortDriverJudgmentSummary() = %q, want %q", got, want)
 		}
@@ -611,7 +611,7 @@ func TestCohortDriverJudgmentSummary_NoStrayArticleOrDoubleNoun(t *testing.T) {
 
 	t.Run("unranked member (nil Score)", func(t *testing.T) {
 		got := cohortDriverJudgmentSummary(member, driver)
-		want := "readiness gap (weight 15, value 1.00) contributed 20.0 of Fullchaos's unranked attention points."
+		want := "readiness gap (weight 15, value 1.00) appears to account for 20.0 of Fullchaos's unranked attention points."
 		if got != want {
 			t.Fatalf("cohortDriverJudgmentSummary() = %q, want %q", got, want)
 		}
