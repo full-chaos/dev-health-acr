@@ -173,8 +173,15 @@ func projectStatusDrivers(interpretation InterpretedQuestion, committed []Subjec
 	rowsCarried := make(map[string]bool, len(existingClaims))
 	for _, claim := range existingClaims {
 		takenClaims[claim.ClaimID] = struct{}{}
-		if claim.FactID != "" && (len(claim.Rows) > 0 || len(claim.TimeSeriesRows) > 0) {
+		if len(claim.Rows) == 0 && len(claim.TimeSeriesRows) == 0 {
+			continue
+		}
+		// A claim carries the rows of the fact it grounds to, named or not:
+		// the same resolution attachCanonicalRows used to attach them.
+		if claim.FactID != "" {
 			rowsCarried[claim.FactID] = true
+		} else if source, ok := claimSourceFact(facts, claim); ok && source.ID != "" {
+			rowsCarried[source.ID] = true
 		}
 	}
 	var drivers []DriverJudgment

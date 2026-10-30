@@ -397,3 +397,31 @@ func TestProjectStatusKindVocabularyNamesEachKindOnce(t *testing.T) {
 		t.Errorf("vocabulary = %q, want %q", got, want)
 	}
 }
+
+// TestProjectStatusClaimSharesTheRowsAClaimWithoutAFactIDCarries: a model
+// claim may carry a fact's rows without naming the fact (it grounds by kind
+// and subject). The status claim of that fact still does not serve the rows
+// a second time.
+func TestProjectStatusClaimSharesTheRowsAClaimWithoutAFactIDCarries(t *testing.T) {
+	project := acceptanceProject()
+	facts := projectStatusFacts(project)
+	facts[1].Fields["daily_workload"] = TableFactValue(FactTable{
+		Shape: FactTableTimeSeries, Key: []string{"day"}, Measures: []string{"backlog_size"}, Grain: GrainDay,
+		Rows: []FactValueRow{{Fields: map[string]FactValue{"day": StringFactValue("2026-10-26"), "backlog_size": IntegerFactValue(40)}}},
+	})
+	AssignFactIDs(facts)
+	model := []ClaimedFact{{ClaimID: "claim-model-backlog", Kind: FactWorkload, Subject: project, Field: "backlog_size", Value: convertFactValueScalar(facts[1].Fields["backlog_size"])}}
+	model, _, _, _ = attachCanonicalRows(model, facts)
+	if model[0].FactID != "" || len(model[0].Rows) != 1 {
+		t.Fatalf("model claim fact_id=%q rows=%d, want no fact id and the fact's 1 row", model[0].FactID, len(model[0].Rows))
+	}
+	_, claims, event := projectStatusDrivers(InterpretedQuestion{FactRequirements: projectStatusRequirements}, []SubjectRef{project}, facts, Coverage{}, nil, model, ItemAllocation{})
+	for _, claim := range claims {
+		if claim.Kind == FactWorkload && (claim.FactID != facts[1].ID || len(claim.Rows) != 0) {
+			t.Errorf("workload status claim fact_id=%q rows=%d, want fact %q and no second copy of its rows", claim.FactID, len(claim.Rows), facts[1].ID)
+		}
+	}
+	if event.RowsShared != 1 {
+		t.Errorf("rows shared = %d, want 1", event.RowsShared)
+	}
+}
