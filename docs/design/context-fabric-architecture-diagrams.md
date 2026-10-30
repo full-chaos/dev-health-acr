@@ -3132,7 +3132,8 @@ runs `deliverInvestigationOutcome` -- the ONE delivery the JSON path runs too
 `serveContextFabricInvestigationResult`) -- into a capture, then writes it as the
 one terminal: a 200 body as `result` byte for byte, an error body as `error`. A
 panic after the 200 ends the stream with an `internal_error` terminal instead of
-reaching the recovery middleware. Every frame write moves the write deadline 30 s
+reaching the recovery middleware; a panic on the pump goroutine is recovered there,
+marks the stream failed and cancels the run. Every frame write moves the write deadline 30 s
 ahead. A disconnect or a failed write cancels the run, logged once as `cancel
 effective` with `t_eff`; the model runtime logs one line per attempt start.
 

@@ -219,6 +219,23 @@ func (s *investigationEventStream) write(event contractsv1.ContextFabricInvestig
 	return nil
 }
 
+// errInvestigationStreamPanicked is the stream's failure after a panic on
+// the pump goroutine.
+var errInvestigationStreamPanicked = errors.New("investigation event stream: a panic on the pump goroutine")
+
+// failAfterPanic marks the stream failed after a panic on the pump goroutine
+// and ends the run, as a failed write does. Nothing more is written. (When a
+// write had already failed, the run is cancelled again: cancelling is
+// idempotent.)
+func (s *investigationEventStream) failAfterPanic() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.failed = errInvestigationStreamPanicked
+	if s.onWriteFailure != nil {
+		s.onWriteFailure()
+	}
+}
+
 func (s *investigationEventStream) fail(err error, event contractsv1.ContextFabricInvestigationEvent) error {
 	s.failed = err
 	s.logger.WarnContext(s.logCtx, "context fabric investigation event stream write failed",
@@ -510,6 +527,18 @@ func (a *App) serveInvestigationEventStream(w http.ResponseWriter, r *http.Reque
 	pumpStarted = true
 	go func() {
 		defer close(pumped)
+		// The pump runs on its own goroutine, where the handler's recovery
+		// cannot see a panic: it is recovered here, or it would crash the
+		// process. The writer that panicked is not trusted again, so the
+		// stream is marked failed and the run cancelled; the response ends
+		// without a terminal, which a consumer reads as interrupted.
+		defer func() {
+			if recovered := recover(); recovered != nil {
+				a.logger.ErrorContext(stream.logCtx, "request panic recovered",
+					"request_id", contextfabric.SanitizeLogAttr(requestID), "status", http.StatusOK, "failure_class", "event_stream_panic")
+				stream.failAfterPanic()
+			}
+		}()
 		stream.pump(sink.Transitions(), done)
 	}()
 	result, err := investigateRecovered(runCtx, investigator, principal, request)
@@ -536,6 +565,10 @@ func (a *App) serveInvestigationEventStream(w http.ResponseWriter, r *http.Reque
 // logInvestigationCancelEffective is the cancel_effective line: the moment
 // the run context ended (t_eff), with what ended it.
 func (a *App) logInvestigationCancelEffective(logCtx, requestCtx context.Context, stream *investigationEventStream, requestID, reserved string) {
+	// t_eff first: the lock below can be held by a frame write for as long as
+	// the connection takes (up to the write deadline), and t_eff is the moment
+	// the run context ended, not the moment the line could be written.
+	tEff := time.Now().UTC()
 	stream.mu.Lock()
 	writeFailed := stream.failed != nil
 	stream.mu.Unlock()
@@ -550,7 +583,7 @@ func (a *App) logInvestigationCancelEffective(logCtx, requestCtx context.Context
 	}
 	a.logger.InfoContext(logCtx, "context fabric investigation cancel effective",
 		"request_id", contextfabric.SanitizeLogAttr(requestID), "reserved_result_id", contextfabric.SanitizeLogAttr(reserved),
-		"cause", cause, "t_eff", time.Now().UTC().Format(time.RFC3339Nano))
+		"cause", cause, "t_eff", tEff.Format(time.RFC3339Nano))
 }
 
 // recordInvestigationEventsDropped counts and logs the stage transitions the
