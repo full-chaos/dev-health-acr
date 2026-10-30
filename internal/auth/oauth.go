@@ -342,6 +342,12 @@ func devBrowserRedirectURI(value string) bool {
 	return parsed.Path != "" && parsed.Path != "/"
 }
 
+// IsBrowserClient reports whether a client id names a configured first-party
+// browser client (the routes key its request limits per presented secret).
+func (s *OAuthService) IsBrowserClient(clientID string) bool {
+	return s != nil && s.isBrowserClient(clientID)
+}
+
 // isBrowserClient reports whether a client id names a configured
 // first-party browser client.
 func (s *OAuthService) isBrowserClient(clientID string) bool {

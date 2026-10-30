@@ -451,6 +451,12 @@ revocation.
   access token is `unsupported_token_type`. Served only with a browser client.
 - Revoking a browser credential (self-revoke or the operator command) revokes
   its family (`revoked_reason=member_revoked`). Rotation stays refused.
+- Request limits: `/token` and `/revoke` allow 60 requests a minute per key.
+  Every user of a first-party browser client shares its public `client_id`, so
+  its requests are keyed by the secret they present (the code, the refresh
+  token or the revoked token, hashed), not by the client: a flood under the
+  browser client id does not stop other sessions from refreshing or signing
+  out. Every other client stays keyed by its `client_id`.
 - The authorization server metadata lists `refresh_token` in
   `grant_types_supported` and names `revocation_endpoint` only when a browser
   client is configured; `/register` still downgrades a dynamic client that asks
