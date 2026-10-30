@@ -319,9 +319,9 @@ grep -Fq 'REDIS_URL: redis://valkey:6379/0' "$script" \
 # Device login is an acceptance precondition, not a postscript after the
 # OpenCode task reports have already been graded. Keep the browser agreement
 # check after the task loop because it consumes task-002's packet artifacts.
-device_login_line="$(grep -n '^  run_device_login_lifecycle$' "$script" | cut -d: -f1)"
-task_loop_line="$(grep -n '^for task in "${TASKS\[@\]}"; do$' "$script" | cut -d: -f1)"
-web_agreement_line="$(grep -nE '^ +run_web_agreement_check$' "$script" | cut -d: -f1)"
+device_login_line="$(grep -n '^  run_device_login_lifecycle$' "$script" | cut -d: -f1 || true)"
+task_loop_line="$(grep -n '^for task in "${TASKS\[@\]}"; do$' "$script" | cut -d: -f1 || true)"
+web_agreement_line="$(grep -nE '^ +run_web_agreement_check$' "$script" | cut -d: -f1 || true)"
 [[ -n "$device_login_line" && -n "$task_loop_line" && -n "$web_agreement_line" ]] \
   || fail 'device-login, task-loop, or web-agreement main-flow call is missing'
 [[ "$device_login_line" -lt "$task_loop_line" ]] \
@@ -367,7 +367,7 @@ for profile in smoke full; do
 done
 rm -rf "$gate_dir"
 main_gate="$(sed -n '/^if web_check_enabled; then$/,/^fi$/p' "$script" | grep -A4 'web_agreement_task_selected' || true)"
-grep -Fq 'run_web_agreement_check' <<<"$main_gate" && grep -Fq 'record_web_agreement_not_run' <<<"$main_gate" \
+{ grep -Fq 'run_web_agreement_check' <<<"$main_gate" && grep -Fq 'record_web_agreement_not_run' <<<"$main_gate"; } \
   || fail 'the main flow must run the agreement check only when its task was selected, and record the skip otherwise'
 grep -Fq 'record_web_readiness_failure' "$script" \
   || fail 'web readiness failures must retain sanitized timestamped diagnostics'
