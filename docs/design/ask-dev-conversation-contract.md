@@ -339,3 +339,59 @@ item that implements it.
   and the per-call access read (T7 of the direct-browser design) add the
   thread routes when they land. The retention job (I-30) removes the backing
   set after `expires_at`.
+
+## 10. Answer feedback (I-32a, CHAOS-11950)
+
+Plan AC: "Correct/useful per result; owner-checked (INV-1); covered by
+retention." The web controls are I-32b; this item is the ACR store and route.
+
+- **What is kept.** Per result: `correct` and `useful`, each `yes`, `no` or
+  `unset`, and when they were last set. No free text: the plan asks for two
+  flags, and a comment would be content the retention job, the purge and
+  every log would have to treat as a question.
+- **Route.** `GET` and `POST
+  /api/v1/context-fabric/investigations/feedback/{result_id}`
+  (`context_fabric_result_feedback.v1`; the POST body is
+  `context_fabric_result_feedback_request.v1`). The POST sets both flags at
+  once (the whole feedback, so a repeat is harmless; `unset` clears one) and
+  answers what is stored. Not `/investigations/{result_id}/feedback`: Go's mux
+  refuses that pattern beside `/investigations/submissions/{submission_id}`
+  (both match `/investigations/submissions/feedback`). `POST`, not `PUT`, so
+  the browser CORS method list stays `GET, POST, OPTIONS`.
+- **Owner check (INV-1).** The route first takes the read by id's serving
+  decision (`decideStoredResultServing`, new gate surface `feedback`). A
+  result the read by id would not serve to the caller gets the read by id's
+  own answer (`404 not_found`, or `503` when the decision cannot be taken),
+  so the route tells a caller nothing the read by id does not. A served
+  result that completed no Ask Dev submission (an MCP or Workbench result: it
+  has no owner, so another principal of the organization may read it) takes
+  no feedback and gets the same `404`: feedback is for Ask Dev results, and a
+  result outside any submission is outside the retention the plan names. The
+  store holds the rules again in the statement that reads or writes the row:
+  the caller's organization, the result's submission owner (`ownerMatchSQL`:
+  the same legacy pair, or the same user on the same surface, so a rotated
+  browser credential reaches the user's feedback and the user's MCP surface
+  does not, decision 5b), and the closed-thread rule (T6). A body is checked
+  before the result, so a malformed body is `400` for any id.
+- **Closed means closed (T6).** A result only a deleted or expired thread's
+  turns name takes no feedback read or write, as it is not served by id. The
+  row is not erased at the delete (it holds no content); it goes with its
+  result.
+- **Retention (D-22).** One row per result (`acr.context_fabric_result_feedback`,
+  primary key `result_id`), with a foreign key to the result row `ON DELETE
+  CASCADE`: whatever removes a result (the retention job, I-30) removes its
+  feedback in the same statement. The organization purge lists the table
+  before the results, and the write fence (0052) refuses a write for a
+  purged organization.
+- **Time.** `updated_at` never moves back: a set from a replica whose clock is
+  behind keeps the later stamp (`GREATEST`), so `updated_at >= created_at`
+  holds.
+- **Telemetry.** One `context fabric result feedback` line per request:
+  route (`get`, `set`), outcome (`read`, `set`, `invalid_request`,
+  `not_served`, `not_owned`, `gate_unavailable`, `not_found`,
+  `store_unavailable`, `invalid_record`), request id; no flag values, no
+  result id. The read by id's `stored result authorization` line, surface
+  `feedback`. Operation `result_feedback`.
+- **Not here.** The browser-class route list and the per-call access read
+  (T5/T7 of the direct-browser design) add this route when they land; CORS
+  already answers it (`investigations` class).

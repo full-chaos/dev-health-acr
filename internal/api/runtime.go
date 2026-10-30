@@ -96,6 +96,12 @@ type RuntimeDependencies struct {
 	// the submission's own transaction. Optional: without it the thread
 	// routes answer 503 store_unavailable.
 	InvestigationThreads contextfabric.ThreadStore
+	// ResultFeedback is the Ask Dev answer feedback store (CHAOS-11950) the
+	// feedback route reads and sets through. It must be the store
+	// InvestigationResults reads from: its statement holds the result
+	// row's owner and closed-thread rules. Optional: without it the
+	// feedback route answers 503.
+	ResultFeedback contextfabric.ResultFeedbackStore
 	// NewResultID mints the result id admission reserves for a submission.
 	// Nil uses contextfabric.NewInvestigationResultID.
 	NewResultID func() string
@@ -197,6 +203,9 @@ func (r *RuntimeDependencies) validate() error {
 	}
 	if r.InvestigationThreads != nil && storage.IsNil(r.InvestigationThreads) {
 		return errors.New("hosted context fabric investigation thread store must not be typed nil")
+	}
+	if r.ResultFeedback != nil && storage.IsNil(r.ResultFeedback) {
+		return errors.New("hosted context fabric result feedback store must not be typed nil")
 	}
 	if r.DataOperations != nil && storage.IsNil(r.DataOperations) {
 		return errors.New("hosted data operation runner must not be typed nil")

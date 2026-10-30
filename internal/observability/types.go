@@ -28,8 +28,11 @@ const (
 	OperationSubmissionStatus Operation = "submission_status"
 	// OperationThreads and OperationThread are the Ask Dev conversation
 	// list and the thread read or delete (CHAOS-11948).
-	OperationThreads           Operation = "threads"
-	OperationThread            Operation = "thread"
+	OperationThreads Operation = "threads"
+	OperationThread  Operation = "thread"
+	// OperationResultFeedback is the Ask Dev answer feedback read or set
+	// (CHAOS-11950).
+	OperationResultFeedback    Operation = "result_feedback"
 	OperationDataCatalog       Operation = "data_catalog"
 	OperationDataSubjects      Operation = "data_subjects"
 	OperationDataFacts         Operation = "data_facts"

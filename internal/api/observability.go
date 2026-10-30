@@ -81,6 +81,10 @@ func requestOperation(request *http.Request) observability.Operation {
 		if strings.HasPrefix(request.URL.Path, ContextFabricInvestigationsPath+"/submissions/") {
 			return observability.OperationSubmissionStatus
 		}
+		// The answer feedback route (CHAOS-11950), under the same prefix.
+		if strings.HasPrefix(request.URL.Path, ContextFabricInvestigationsPath+"/feedback/") {
+			return observability.OperationResultFeedback
+		}
 		if strings.HasPrefix(request.URL.Path, ContextFabricInvestigationsPath+"/") {
 			return observability.OperationInvestigationResult
 		}

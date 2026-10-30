@@ -130,6 +130,9 @@ var purgeTables = []tableSpec{
 	{Name: "context_fabric_usage_monthly", Where: matchOrg("org_id")},
 	// CHAOS-11948: the Ask Dev thread rows.
 	{Name: "context_fabric_threads", Where: matchOrg("org_id")},
+	// CHAOS-11950: Ask Dev answer feedback, before the results it names
+	// (its foreign key would also remove it with them).
+	{Name: "context_fabric_result_feedback", Where: matchOrg("org_id")},
 	{Name: "context_fabric_investigation_results", Where: matchOrg("org_id")},
 	{Name: "context_fabric_model_execution_receipts", Where: matchOrg("org_id")},
 	{Name: "context_fabric_org_model_config", Where: matchOrg("org_id")},

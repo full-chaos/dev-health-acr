@@ -19,6 +19,8 @@ func TestRequestOperationNamesEveryContextFabricRoute(t *testing.T) {
 		{http.MethodGet, ContextFabricThreadsPath, observability.OperationThreads},
 		{http.MethodGet, ContextFabricThreadsPath + "/thread-0001-ask-dev", observability.OperationThread},
 		{http.MethodDelete, ContextFabricThreadsPath + "/thread-0001-ask-dev", observability.OperationThread},
+		{http.MethodGet, ContextFabricInvestigationsPath + "/feedback/res_0123456789abcdef", observability.OperationResultFeedback},
+		{http.MethodPost, ContextFabricInvestigationsPath + "/feedback/res_0123456789abcdef", observability.OperationResultFeedback},
 		{http.MethodGet, ContextFabricDataCatalogPath, observability.OperationDataCatalog},
 		{http.MethodPost, ContextFabricDataSubjectsPath, observability.OperationDataSubjects},
 		{http.MethodPost, ContextFabricDataFactsPath, observability.OperationDataFacts},

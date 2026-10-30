@@ -132,6 +132,7 @@ func TestABrowserPreflightIsAnsweredBeforeAuthOnEveryBrowserRoute(t *testing.T) 
 		ContextFabricInvestigationsPath,
 		ContextFabricInvestigationsPath + "/result_cors_00000001",
 		ContextFabricInvestigationsPath + "/submissions/submission-cors-0001",
+		ContextFabricInvestigationsPath + "/feedback/result_cors_00000001",
 		"/api/v1/agent-context/evidence/ev_cors_0001",
 	} {
 		for _, origin := range []string{corsTestOrigin, "http://localhost"} {
@@ -295,6 +296,8 @@ func TestCORSIsAnsweredOnlyOnTheRegisteredBrowserRoutePaths(t *testing.T) {
 		ContextFabricInvestigationsPath + "/result_cors_00000001/nested",
 		ContextFabricInvestigationsPath + "/submissions/submission-cors-0001/nested",
 		ContextFabricInvestigationsPath + "/submissions/",
+		ContextFabricInvestigationsPath + "/feedback/result_cors_00000001/nested",
+		ContextFabricInvestigationsPath + "/feedback/",
 		ContextFabricInvestigationsPath + "x",
 		OAuthTokenPath + "/nested",
 	} {

@@ -85,11 +85,18 @@ const (
 	// aggregated line per thread read, not one StoredResultAuthorization line
 	// per turn (that event is one line per request).
 	StoredResultSurfaceThread StoredResultSurface = "thread"
+	// StoredResultSurfaceFeedback is the Ask Dev answer feedback read and
+	// write (GET and POST
+	// /api/v1/context-fabric/investigations/feedback/{result_id};
+	// CHAOS-11950). It takes the read by id's serving decision before it
+	// reads or sets a result's feedback, so a caller who cannot read the
+	// result cannot read or set its feedback. It never serves result content.
+	StoredResultSurfaceFeedback StoredResultSurface = "feedback"
 )
 
 // StoredResultSurfaceVocabulary is the closed set of surfaces.
-func StoredResultSurfaceVocabulary() [6]StoredResultSurface {
-	return [6]StoredResultSurface{StoredResultSurfaceResultByID, StoredResultSurfacePriorResult, StoredResultSurfaceAnswerReuse, StoredResultSurfaceEvidenceExpansion, StoredResultSurfaceFactRootRecheck, StoredResultSurfaceThread}
+func StoredResultSurfaceVocabulary() [7]StoredResultSurface {
+	return [7]StoredResultSurface{StoredResultSurfaceResultByID, StoredResultSurfacePriorResult, StoredResultSurfaceAnswerReuse, StoredResultSurfaceEvidenceExpansion, StoredResultSurfaceFactRootRecheck, StoredResultSurfaceThread, StoredResultSurfaceFeedback}
 }
 
 // StoredResultDecision is the served outcome.

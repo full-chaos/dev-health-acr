@@ -87,6 +87,9 @@ var corsBrowserRoutes = [...]struct{ pattern, class string }{
 	{ContextFabricInvestigationsPath, "investigations"},
 	{ContextFabricInvestigationResultPath, "investigations"},
 	{ContextFabricSubmissionStatusPath, "investigations"},
+	// CHAOS-11950: Ask Dev answer feedback (GET and POST, so the method list
+	// is unchanged).
+	{ContextFabricResultFeedbackPath, "investigations"},
 	{AgentContextEvidencePath, "evidence"},
 }
 

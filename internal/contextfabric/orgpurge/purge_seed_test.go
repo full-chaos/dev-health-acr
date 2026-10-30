@@ -65,6 +65,7 @@ func seedStatements() []string {
 		`INSERT INTO acr.context_fabric_usage_monthly (org_id, month, platform_runs, updated_at) VALUES ($1, date_trunc('month', now())::date, 3, now())`,
 		`INSERT INTO acr.context_fabric_usage_monthly (org_id, month, platform_runs, updated_at) VALUES ($1, (date_trunc('month', now()) - interval '1 month')::date, 7, now())`,
 		`INSERT INTO acr.context_fabric_investigation_results (result_id, org_id, payload, generated_at) VALUES ('result-' || $2, $1, '{}', now())`,
+		`INSERT INTO acr.context_fabric_result_feedback (result_id, org_id, correct, useful, created_at, updated_at) VALUES ('result-' || $2, $1, 'yes', 'unset', now(), now())`,
 		`INSERT INTO acr.context_fabric_model_execution_receipts (receipt_id, org_id, operation, provider, outcome, fallback_used, payload, started_at, completed_at)
 		 VALUES ('receipt-' || $2, $1, 'op', 'p', 'ok', false, '{}', now(), now())`,
 		`INSERT INTO acr.context_fabric_org_model_config (org_id, provider, model, credential_ciphertext, credential_kid) VALUES ($1, 'p', 'm', '\x00', 'kid')`,

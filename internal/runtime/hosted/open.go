@@ -217,10 +217,14 @@ func open(ctx context.Context, request buildRequest) (*Runtime, error) {
 	// CHAOS-11948: the thread store is the same store too: admission writes
 	// a thread turn in the submission's own transaction.
 	var investigationThreads contextfabric.ThreadStore
+	// CHAOS-11950: the feedback store is the same store: its statement holds
+	// the result row's owner and closed-thread rules.
+	var resultFeedback contextfabric.ResultFeedbackStore
 	if investigationResultStore != nil {
 		investigationResults = investigationResultStore
 		investigationSubmissions = investigationResultStore
 		investigationThreads = investigationResultStore
+		resultFeedback = investigationResultStore
 		runtime.submissionSweeper = startSubmissionSweeper(investigationResultStore, request.options.Logger, request.options.Now, submissionSweepInterval)
 	}
 	// The retrieval route decides every read with the engine's own gate, so
@@ -288,6 +292,7 @@ func open(ctx context.Context, request buildRequest) (*Runtime, error) {
 			StoredResultGate:           storedResultGate,
 			InvestigationSubmissions:   investigationSubmissions,
 			InvestigationThreads:       investigationThreads,
+			ResultFeedback:             resultFeedback,
 			NewResultID:                newInvestigationResultID,
 			SourceRows:                 sourceRows,
 			DirectReadGate:             directReadGate,

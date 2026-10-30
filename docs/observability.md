@@ -16,7 +16,8 @@ generated request ID for correlation and these bounded dimensions:
   Operations: `health`, `readiness`, `capabilities`, `context`, `evidence`,
   `snapshot`, `episode`, `investigation`, `investigation_result`,
   `submission_status`, `threads` (the Ask Dev conversation list), `thread` (one
-  conversation's read or delete), `data_catalog`, `data_subjects`, `data_facts`,
+  conversation's read or delete), `result_feedback` (the Ask Dev answer
+  feedback read or set), `data_catalog`, `data_subjects`, `data_facts`,
   `data_relationships`, `data_operations`, `data_graphql`, or `unknown`
 - `outcome`: `success`, `failure`, `denied`, `canceled`, or `unknown`
 - packet: lifecycle `status`, bytes, tokens, schema/baseline versions,
@@ -42,6 +43,14 @@ on a read the aggregated serving decision of its done turns (`turns`,
 A turn naming a deleted, expired or full conversation is refused on the
 admission line with outcome `refused_thread_closed` and a
 `thread_closed_reason`.
+
+The Ask Dev answer feedback route (CHAOS-11950) writes one line per request,
+`context fabric result feedback`: `route` (`get`, `set`) and a closed `outcome`
+(`read`, `set`, `invalid_request`, `not_served`, `not_owned`,
+`gate_unavailable`, `not_found`, `store_unavailable`, `invalid_record`); a
+`not_served` line names the read by id's `serving` outcome. It carries no flag
+value and no result id. The read by id's `stored result authorization` line is
+written too, with surface `feedback`.
 
 The sink receives the snapshot only, never a `context.Context`, request body,
 evidence reference, transcript, debug payload, credential, or arbitrary attribute

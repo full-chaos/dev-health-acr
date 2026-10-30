@@ -743,6 +743,159 @@
         }
       }
     },
+    "/api/v1/context-fabric/investigations/feedback/{result_id}": {
+      "get": {
+        "operationId": "getContextFabricResultFeedback",
+        "summary": "Read the caller's feedback on one of its own Ask Dev results.",
+        "description": "Whether the caller found the result correct and useful: yes, no or unset each, and when it was last set (absent when never set). A result GET /api/v1/context-fabric/investigations/{result_id} would not serve to the caller now (an unknown, malformed, another principal's or another organization's id, a result the caller's current grant does not admit, a withheld result, a result only a deleted or expired conversation names), and a result that completed no Ask Dev submission (it has no owner), get the read by id's own 404 not_found. Each call decides the read afresh; a decision that cannot be taken is 503. Strictly read-only.",
+        "x-required-scope": "context:read",
+        "x-required-entitlement": "agent_context_runtime",
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {
+            "webAssertionAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/RequestID"
+          },
+          {
+            "$ref": "#/components/parameters/ClientVersion"
+          },
+          {
+            "name": "result_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 8,
+              "maxLength": 256
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The caller's feedback on the result.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "../jsonschema/v1/context_fabric_result_feedback.v1.schema.json"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "426": {
+            "$ref": "#/components/responses/Error"
+          },
+          "429": {
+            "$ref": "#/components/responses/Error"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error"
+          },
+          "503": {
+            "$ref": "#/components/responses/Error"
+          },
+          "504": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      },
+      "post": {
+        "operationId": "setContextFabricResultFeedback",
+        "summary": "Set the caller's feedback on one of its own Ask Dev results.",
+        "description": "Sets both flags (correct, useful: yes, no or unset) and answers what is stored. The body is the whole feedback, so a repeat is harmless; unset clears a flag. There is no free text. A malformed body is 400 invalid_request before anything about the result is decided. A result GET /api/v1/context-fabric/investigations/{result_id} would not serve to the caller now (an unknown, malformed, another principal's or another organization's id, a result the caller's current grant does not admit, a withheld result, a result only a deleted or expired conversation names), and a result that completed no Ask Dev submission (it has no owner), get the read by id's own 404 not_found. Each call decides the read afresh; a decision that cannot be taken is 503. The feedback is part of the result's backing set: it goes with the result's retention and an organization purge.",
+        "x-required-scope": "context:read",
+        "x-required-entitlement": "agent_context_runtime",
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {
+            "webAssertionAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/RequestID"
+          },
+          {
+            "$ref": "#/components/parameters/ClientVersion"
+          },
+          {
+            "name": "result_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 8,
+              "maxLength": 256
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "../jsonschema/v1/context_fabric_result_feedback_request.v1.schema.json"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The feedback as stored.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "../jsonschema/v1/context_fabric_result_feedback.v1.schema.json"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "426": {
+            "$ref": "#/components/responses/Error"
+          },
+          "429": {
+            "$ref": "#/components/responses/Error"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error"
+          },
+          "503": {
+            "$ref": "#/components/responses/Error"
+          },
+          "504": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
     "/api/v1/context-fabric/threads": {
       "get": {
         "operationId": "listContextFabricThreads",

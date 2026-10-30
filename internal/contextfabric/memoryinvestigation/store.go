@@ -96,6 +96,9 @@ type Store struct {
 	// under mu by AdmitSubmission with the turn it admits, and by
 	// CloseThread.
 	threads map[threadRowKey]contextfabric.ThreadRecord
+	// feedback mirrors acr.context_fabric_result_feedback (CHAOS-11950):
+	// one entry per result id, written under mu by SetResultFeedback.
+	feedback map[string]contextfabric.ResultFeedback
 	// now stamps the updated_at a Save's completion writes; the submission
 	// methods take the caller's clock.
 	now func() time.Time
@@ -115,6 +118,7 @@ func NewStore() *Store {
 		reserved:    make(map[reservedResultKey]contextfabric.SubmissionKey),
 		usage:       make(map[usageKey]int64),
 		threads:     make(map[threadRowKey]contextfabric.ThreadRecord),
+		feedback:    make(map[string]contextfabric.ResultFeedback),
 		now:         time.Now,
 	}
 }

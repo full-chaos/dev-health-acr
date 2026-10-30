@@ -51,6 +51,9 @@ func TestHostedReadRoutesMatchOpenAPI(t *testing.T) {
 		{path: "/api/v1/context-fabric/threads", method: "get", operation: "listContextFabricThreads", statuses: []string{"200", "400", "401", "403", "426", "429", "500", "503", "504"}},
 		{path: "/api/v1/context-fabric/threads/{thread_id}", method: "get", operation: "getContextFabricThread", statuses: []string{"200", "400", "401", "403", "404", "426", "429", "500", "503", "504"}},
 		{path: "/api/v1/context-fabric/threads/{thread_id}", method: "delete", operation: "deleteContextFabricThread", statuses: []string{"204", "401", "403", "404", "426", "429", "500", "503", "504"}},
+		// Ask Dev answer feedback (CHAOS-11950).
+		{path: "/api/v1/context-fabric/investigations/feedback/{result_id}", method: "get", operation: "getContextFabricResultFeedback", statuses: []string{"200", "401", "403", "404", "426", "429", "500", "503", "504"}},
+		{path: "/api/v1/context-fabric/investigations/feedback/{result_id}", method: "post", operation: "setContextFabricResultFeedback", statuses: []string{"200", "400", "401", "403", "404", "426", "429", "500", "503", "504"}},
 		{path: "/api/v1/context-fabric/data/catalog", method: "get", operation: "readContextFabricDataCatalog", statuses: []string{"200", "400", "401", "403", "426", "429", "500", "501", "503"}},
 		{path: "/api/v1/context-fabric/data/subjects", method: "post", operation: "findContextFabricDataSubjects", statuses: []string{"200", "400", "401", "403", "413", "426", "429", "500", "501", "503"}},
 		{path: "/api/v1/context-fabric/data/operations", method: "post", operation: "runContextFabricDataOperation", statuses: []string{"200", "400", "401", "403", "413", "426", "429", "500", "501", "503"}},
@@ -98,6 +101,8 @@ func TestHostedReadRoutesMatchOpenAPI(t *testing.T) {
 		{path: "/api/v1/context-fabric/threads", method: "get"},
 		{path: "/api/v1/context-fabric/threads/{thread_id}", method: "get"},
 		{path: "/api/v1/context-fabric/threads/{thread_id}", method: "delete"},
+		{path: "/api/v1/context-fabric/investigations/feedback/{result_id}", method: "get"},
+		{path: "/api/v1/context-fabric/investigations/feedback/{result_id}", method: "post"},
 	} {
 		if !hasSecurityAlternative(document.Paths[route.path][route.method].Security, "webAssertionAuth") {
 			t.Fatalf("%s %s must allow web assertions", route.method, route.path)

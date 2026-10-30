@@ -80,6 +80,8 @@ var RuntimeGrants = []Grant{
 		Why: "SELECT internal/contextfabric/pginvestigation/store.go:395, INSERT store.go:284"},
 	{Table: "context_fabric_usage_monthly", Privileges: []string{"SELECT", "INSERT", "UPDATE"},
 		Why: "INSERT ... ON CONFLICT DO UPDATE internal/contextfabric/pginvestigation/submissions.go AdmitSubmission (the monthly allowance), SELECT submissions.go ReadUsageMonthly"},
+	{Table: "context_fabric_result_feedback", Privileges: []string{"SELECT", "INSERT", "UPDATE"},
+		Why: "SELECT internal/contextfabric/pginvestigation/feedback.go GetResultFeedback, INSERT ... ON CONFLICT DO UPDATE feedback.go SetResultFeedback"},
 	{Table: "context_fabric_threads", Privileges: []string{"SELECT", "INSERT", "UPDATE"},
 		Why: "INSERT ... ON CONFLICT DO UPDATE internal/contextfabric/pginvestigation/submissions.go AdmitSubmission (a thread turn), SELECT threads.go ListThreads and GetThread, UPDATE threads.go CloseThread"},
 	{Table: "context_fabric_investigation_submissions", Privileges: []string{"SELECT", "INSERT", "UPDATE"},

@@ -642,6 +642,122 @@
       }
     },
     {
+      "id": "GET /api/v1/context-fabric/investigations/feedback/{result_id} [dev-health-acr-api]",
+      "surface_kind": "rest",
+      "method": "GET",
+      "route": "/api/v1/context-fabric/investigations/feedback/{result_id}",
+      "graphql_field_name": null,
+      "service": "dev-health-acr-api",
+      "source": {
+        "file": "internal/api/app.go",
+        "line": 111
+      },
+      "classification": "protected",
+      "public_rationale": null,
+      "accepted_credential_classes": [
+        "acr_client_credential",
+        "acr_web_assertion"
+      ],
+      "primary_validator": {
+        "description": "protectedRuntimeHandler(RequestClassContext, ScopeContextRead, entitlement=true, allowWebAssertions=true), applied at the end of ContextFabricResultFeedbackHandler.",
+        "anchor": {
+          "path": "internal/api/context_fabric_result_feedback.go",
+          "line": 186,
+          "line_end": 186,
+          "note": "a.protectedRuntimeHandler(limits.RequestClassContext, auth.ScopeContextRead"
+        }
+      },
+      "token_shape": {
+        "token_type": "fcacr_ bearer OR X-ACR-Web-Assertion",
+        "issuer": null,
+        "audience": null,
+        "algorithm": null
+      },
+      "reachable_validators": [
+        {
+          "description": "Same single-dispatch guarantee -- see web_assertion_middleware.go:11-16.",
+          "anchor": {
+            "path": "internal/auth/web_assertion_middleware.go",
+            "line": 11,
+            "line_end": 16,
+            "note": "func (a *Authenticator) authenticateWebAssertion("
+          },
+          "is_intended_validator": true,
+          "reachable_but_not_owner": false
+        }
+      ],
+      "action": "context_fabric.result_feedback.read",
+      "resource_resolver": "result_id path param; the read by id's serving decision (stored-result gate, surface feedback) and the store's owner match on the result's submission owner, so only the caller's own Ask Dev result is reached (CHAOS-11950).",
+      "tenant_requirement": "org_scoped",
+      "current_state_cache_behavior": "Reads the caller's own feedback on one of its own Ask Dev results; writes nothing.",
+      "impersonation_policy": "not_applicable_non_main_app",
+      "entitlement_requirement": "agentContextRuntimeEntitlement",
+      "disclosure_behavior": "A result the read by id would not serve to the caller (unknown, malformed, another principal's, another organization's, denied, withheld, or only a closed thread's) and a result that completed no submission get the read by id's own 404 not_found; 400 invalid_request for a malformed body (before the result is decided); 503 when the decision or the store is unavailable.",
+      "gaps": [],
+      "class_disambiguator": {
+        "kind": "dedicated_header",
+        "name": "X-ACR-Web-Assertion"
+      }
+    },
+    {
+      "id": "POST /api/v1/context-fabric/investigations/feedback/{result_id} [dev-health-acr-api]",
+      "surface_kind": "rest",
+      "method": "POST",
+      "route": "/api/v1/context-fabric/investigations/feedback/{result_id}",
+      "graphql_field_name": null,
+      "service": "dev-health-acr-api",
+      "source": {
+        "file": "internal/api/app.go",
+        "line": 112
+      },
+      "classification": "protected",
+      "public_rationale": null,
+      "accepted_credential_classes": [
+        "acr_client_credential",
+        "acr_web_assertion"
+      ],
+      "primary_validator": {
+        "description": "protectedRuntimeHandler(RequestClassContext, ScopeContextRead, entitlement=true, allowWebAssertions=true), applied at the end of ContextFabricResultFeedbackHandler.",
+        "anchor": {
+          "path": "internal/api/context_fabric_result_feedback.go",
+          "line": 186,
+          "line_end": 186,
+          "note": "a.protectedRuntimeHandler(limits.RequestClassContext, auth.ScopeContextRead"
+        }
+      },
+      "token_shape": {
+        "token_type": "fcacr_ bearer OR X-ACR-Web-Assertion",
+        "issuer": null,
+        "audience": null,
+        "algorithm": null
+      },
+      "reachable_validators": [
+        {
+          "description": "Same single-dispatch guarantee -- see web_assertion_middleware.go:11-16.",
+          "anchor": {
+            "path": "internal/auth/web_assertion_middleware.go",
+            "line": 11,
+            "line_end": 16,
+            "note": "func (a *Authenticator) authenticateWebAssertion("
+          },
+          "is_intended_validator": true,
+          "reachable_but_not_owner": false
+        }
+      ],
+      "action": "context_fabric.result_feedback.set",
+      "resource_resolver": "result_id path param; the read by id's serving decision (stored-result gate, surface feedback) and the store's owner match on the result's submission owner, so only the caller's own Ask Dev result is reached (CHAOS-11950).",
+      "tenant_requirement": "org_scoped",
+      "current_state_cache_behavior": "Sets the caller's own feedback (two closed flags, no free text) on one of its own Ask Dev results; never touches another principal's rows.",
+      "impersonation_policy": "not_applicable_non_main_app",
+      "entitlement_requirement": "agentContextRuntimeEntitlement",
+      "disclosure_behavior": "A result the read by id would not serve to the caller (unknown, malformed, another principal's, another organization's, denied, withheld, or only a closed thread's) and a result that completed no submission get the read by id's own 404 not_found; 400 invalid_request for a malformed body (before the result is decided); 503 when the decision or the store is unavailable.",
+      "gaps": [],
+      "class_disambiguator": {
+        "kind": "dedicated_header",
+        "name": "X-ACR-Web-Assertion"
+      }
+    },
+    {
       "id": "GET /api/v1/context-fabric/data/catalog [dev-health-acr-api]",
       "surface_kind": "rest",
       "method": "GET",

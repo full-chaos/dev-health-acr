@@ -214,6 +214,7 @@ func newSubmissionHarness(t *testing.T, stores ...submissionTestStore) *submissi
 				StoredResultGate:         contextfabric.NewStoredResultGate(withdrawableGrantGraph{withdrawn: &harness.grantWithdrawn, down: &harness.graphDown}),
 				InvestigationSubmissions: store,
 				InvestigationThreads:     threadStoreOf(store),
+				ResultFeedback:           feedbackStoreOf(store),
 			},
 		}, testLogger(logs))
 		if err != nil {
@@ -239,6 +240,11 @@ type withdrawableGrantGraph struct {
 func threadStoreOf(store submissionTestStore) contextfabric.ThreadStore {
 	threads, _ := store.(contextfabric.ThreadStore)
 	return threads
+}
+
+func feedbackStoreOf(store submissionTestStore) contextfabric.ResultFeedbackStore {
+	feedback, _ := store.(contextfabric.ResultFeedbackStore)
+	return feedback
 }
 
 func (g withdrawableGrantGraph) AuthorizeStoredSubjects(ctx context.Context, principal storage.Principal, binding contextfabric.ResolvedGraphBinding, subjects []contextfabric.SubjectRef) ([]contextfabric.StoredSubjectOutcome, error) {

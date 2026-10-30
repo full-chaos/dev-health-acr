@@ -105,12 +105,14 @@ func TestStoredResultSurfacesServingToACallerCallTheFloodHelper(t *testing.T) {
 	servesToCaller := map[StoredResultSurface]string{
 		StoredResultSurfaceResultByID:        "../api/stored_result_serving.go",
 		StoredResultSurfaceThread:            "../api/stored_result_serving.go",
+		StoredResultSurfaceFeedback:          "../api/stored_result_serving.go",
 		StoredResultSurfaceAnswerReuse:       "answer_reuse.go",
 		StoredResultSurfaceEvidenceExpansion: "evidence_expansion.go",
 	}
 	sharedDecisionReaders := map[StoredResultSurface]string{
 		StoredResultSurfaceResultByID: "../api/context_fabric_result_routes.go",
 		StoredResultSurfaceThread:     "../api/context_fabric_threads.go",
+		StoredResultSurfaceFeedback:   "../api/context_fabric_result_feedback.go",
 	}
 	for surface, file := range sharedDecisionReaders {
 		source, err := os.ReadFile(file)
