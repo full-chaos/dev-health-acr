@@ -42,6 +42,7 @@ func TestAllSchemaVersionsIncludesEveryDeclaredSchemaConstant(t *testing.T) {
 		ContextFabricAnswerProjectionSchema,
 		ContextFabricProjectionBatchSchema,
 		ContextFabricInvestigationEventSchema,
+		ContextFabricSubmissionStatusSchema,
 		MCPContextForTaskRequestSchema,
 		MCPContextForTaskResponseSchema,
 		MCPSourceEvidenceRequestSchema,

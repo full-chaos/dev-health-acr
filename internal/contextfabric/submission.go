@@ -118,7 +118,11 @@ type SubmissionRecord struct {
 	State            SubmissionState
 	// ResultID is the final result id, set only in state done. It equals
 	// ReservedResultID unless the run served a reused answer.
-	ResultID   string
+	ResultID string
+	// ThreadID is the X-ACR-Thread-ID the submission was admitted with, ""
+	// when it named none (CHAOS-11913). It is not part of the digest: a
+	// retry of the key keeps the first admission's thread.
+	ThreadID   string
 	AdmittedAt time.Time
 	UpdatedAt  time.Time
 	// ExpiresAt is the admission time plus the run budget plus
@@ -131,7 +135,9 @@ type SubmissionAdmission struct {
 	Key              SubmissionKey
 	RequestDigest    string
 	ReservedResultID string
-	ExpiresAt        time.Time
+	// ThreadID is optional; when set it follows ValidSubmissionID's grammar.
+	ThreadID  string
+	ExpiresAt time.Time
 }
 
 // SubmissionCompletion names how a served run's record reached its final

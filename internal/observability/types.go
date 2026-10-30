@@ -24,12 +24,14 @@ const (
 
 	OperationInvestigation       Operation = "investigation"
 	OperationInvestigationResult Operation = "investigation_result"
-	OperationDataCatalog         Operation = "data_catalog"
-	OperationDataSubjects        Operation = "data_subjects"
-	OperationDataFacts           Operation = "data_facts"
-	OperationDataRelationships   Operation = "data_relationships"
-	OperationDataOperations      Operation = "data_operations"
-	OperationDataGraphQL         Operation = "data_graphql"
+	// OperationSubmissionStatus is the submission status read (CHAOS-11913).
+	OperationSubmissionStatus  Operation = "submission_status"
+	OperationDataCatalog       Operation = "data_catalog"
+	OperationDataSubjects      Operation = "data_subjects"
+	OperationDataFacts         Operation = "data_facts"
+	OperationDataRelationships Operation = "data_relationships"
+	OperationDataOperations    Operation = "data_operations"
+	OperationDataGraphQL       Operation = "data_graphql"
 )
 
 type Kind string

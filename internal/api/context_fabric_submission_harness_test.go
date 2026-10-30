@@ -7,6 +7,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -230,12 +231,24 @@ func (g withdrawableGrantGraph) AuthorizeStoredSubjects(ctx context.Context, pri
 // the submission id (none when ""), and the question.
 func (h *submissionHarness) post(app int, token, submissionID, question string) *httptest.ResponseRecorder {
 	h.t.Helper()
-	return h.postTo(h.apps[app].Handler(), token, submissionID, question)
+	return h.postThreadTo(h.apps[app].Handler(), token, submissionID, "", question)
 }
 
 // postTo is post through handler (for example one App's create handler built
 // over a nil investigator).
 func (h *submissionHarness) postTo(handler http.Handler, token, submissionID, question string) *httptest.ResponseRecorder {
+	h.t.Helper()
+	return h.postThreadTo(handler, token, submissionID, "", question)
+}
+
+// postThread is post with an X-ACR-Thread-ID (none when "").
+func (h *submissionHarness) postThread(app int, token, submissionID, threadID, question string) *httptest.ResponseRecorder {
+	h.t.Helper()
+	return h.postThreadTo(h.apps[app].Handler(), token, submissionID, threadID, question)
+}
+
+// postThreadTo is postThread through handler.
+func (h *submissionHarness) postThreadTo(handler http.Handler, token, submissionID, threadID, question string) *httptest.ResponseRecorder {
 	h.t.Helper()
 	body := investigationRequestBody()
 	body.Question = question
@@ -251,8 +264,23 @@ func (h *submissionHarness) postTo(handler http.Handler, token, submissionID, qu
 	if submissionID != "" {
 		request.Header.Set(contractsv1.ContextFabricSubmissionIDHeader, submissionID)
 	}
+	if threadID != "" {
+		request.Header.Set(contractsv1.ContextFabricThreadIDHeader, threadID)
+	}
 	recorder := httptest.NewRecorder()
 	handler.ServeHTTP(recorder, request)
+	return recorder
+}
+
+// status reads the submission status on app index, as token.
+func (h *submissionHarness) status(app int, token, submissionID string) *httptest.ResponseRecorder {
+	h.t.Helper()
+	request := httptest.NewRequest(http.MethodGet, strings.Replace(ContextFabricSubmissionStatusPath, "{submission_id}", submissionID, 1), nil)
+	request.Header.Set("Authorization", "Bearer "+token)
+	request.Header.Set("X-ACR-Client-Version", "1.0.0")
+	request.Header.Set("X-Request-ID", submissionTestRequestID)
+	recorder := httptest.NewRecorder()
+	h.apps[app].Handler().ServeHTTP(recorder, request)
 	return recorder
 }
 

@@ -3127,7 +3127,7 @@ response. The goldens `contracts/examples/v1/context_fabric_investigation_event_
 are encoder output, regenerated with `ACR_WRITE_INVESTIGATION_EVENT_GOLDENS=1`
 (`context_fabric_investigation_event_golden_test.go`).
 
-## 17 — Submission identity and its owner (CHAOS-11912)
+## 17 — Submission identity, its owner and its status (CHAOS-11912, CHAOS-11913)
 
 A create-investigation request that names `X-ACR-Submission-ID` is one user
 submit. Admission inserts one record keyed (organization, owner, submission id)
@@ -3235,12 +3235,42 @@ to its owner only) and `evidence_expansion`. The refusal is the unknown-id
 answer. `fact_root_recheck` reads no stored row: it re-decides the turn's own
 committed roots, which a carried root reached only through `prior_result`.
 
+**Status read and thread link (CHAOS-11913).** Admission stores the request's
+`X-ACR-Thread-ID` on the record (`thread_id`, migration `0056`; not part of the
+digest, so a retry keeps the first thread). `GET
+/api/v1/context-fabric/investigations/submissions/{submission_id}` serves the
+caller's own record as `context_fabric_submission_status.v1`: `state`,
+`reserved_result_id`, `result_id` (exactly when `done`), `thread_id`,
+`updated_at`. The record is keyed by the principal, so another principal's id,
+an unknown id and a malformed id are one 404; the read applies the reconcile
+rule and runs nothing.
+
+```mermaid
+sequenceDiagram
+  participant C as Client (lost the create response)
+  participant R as acr-api route (any replica)
+  participant S as Submission record (Postgres)
+  loop every 3 s until done, done_unsaved, abandoned or the deadline
+    C->>R: GET investigations/submissions/{submission_id}
+    R->>S: read the caller's key, reconciled
+    alt no record for this principal
+      R-->>C: 404 not_found (same as unknown or malformed)
+    else record
+      R-->>C: 200 state, reserved_result_id, result_id?, thread_id, updated_at
+    end
+  end
+  C->>R: GET investigations/{result_id} (re-authorized)
+```
+
 **Construction anchors:** `SubmissionStore`, `SubmissionRequestDigest`,
 `WithReservedResultID`, `mintResultID`, `markSubmissionUnsaved`
 (`internal/contextfabric/submission.go`); `storedResultOwnerRefusal`
 (`stored_result_authorization.go`); `admitInvestigationSubmission`,
 `finishInvestigationSubmission`, `abandonInvestigationSubmission`
-(`internal/api/context_fabric_submission.go`); `serveStoredInvestigationResult`
+(`internal/api/context_fabric_submission.go`);
+`ContextFabricSubmissionStatusHandler`
+(`internal/api/context_fabric_submission_status.go`);
+`ContextFabricSubmissionStatus` (`internal/contracts/v1/context_fabric_submission.go`); `serveStoredInvestigationResult`
 (`context_fabric_result_routes.go`); the Postgres store
 (`internal/contextfabric/pginvestigation/submissions.go`, `Save`'s
 `insertResultSQL` in `store.go`); migration

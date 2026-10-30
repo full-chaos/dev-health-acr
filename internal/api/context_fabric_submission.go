@@ -41,10 +41,11 @@ const (
 )
 
 // SubmissionAdmissionOutcomeVocabulary is the closed set of outcomes.
-func SubmissionAdmissionOutcomeVocabulary() [8]SubmissionAdmissionOutcome {
-	return [8]SubmissionAdmissionOutcome{
+func SubmissionAdmissionOutcomeVocabulary() [9]SubmissionAdmissionOutcome {
+	return [9]SubmissionAdmissionOutcome{
 		SubmissionOutcomeAdmitted, SubmissionOutcomeReplayed, SubmissionOutcomeRefusedMismatch, SubmissionOutcomeRefusedInProgress,
 		SubmissionOutcomeRefusedUnsaved, SubmissionOutcomeRefusedAbandoned, SubmissionOutcomeStoreUnavailable, SubmissionOutcomeOwnerUnknown,
+		SubmissionOutcomeRefusedHeader,
 	}
 }
 
@@ -62,7 +63,16 @@ type admittedInvestigationSubmission struct {
 // investigationSubmissionID reads X-ACR-Submission-ID. Absent is ("", true);
 // one well-formed value is (value, true); anything else is ("", false).
 func investigationSubmissionID(r *http.Request) (string, bool) {
-	values := r.Header.Values(contractsv1.ContextFabricSubmissionIDHeader)
+	return investigationCorrelationHeader(r, contractsv1.ContextFabricSubmissionIDHeader)
+}
+
+// investigationThreadID reads X-ACR-Thread-ID by the same rule.
+func investigationThreadID(r *http.Request) (string, bool) {
+	return investigationCorrelationHeader(r, contractsv1.ContextFabricThreadIDHeader)
+}
+
+func investigationCorrelationHeader(r *http.Request, header string) (string, bool) {
+	values := r.Header.Values(header)
 	switch {
 	case len(values) == 0:
 		return "", true
@@ -70,6 +80,20 @@ func investigationSubmissionID(r *http.Request) (string, bool) {
 		return "", false
 	}
 	return values[0], true
+}
+
+// SubmissionOutcomeRefusedHeader is the admission line's outcome for a
+// malformed or repeated X-ACR-Submission-ID or X-ACR-Thread-ID: refused
+// before anything is admitted.
+const SubmissionOutcomeRefusedHeader SubmissionAdmissionOutcome = "refused_header"
+
+// logSubmissionHeaderRefused records a header refusal on the admission line,
+// naming the header (a closed pair), never its value.
+func (a *App) logSubmissionHeaderRefused(r *http.Request, header string) {
+	a.logger.InfoContext(r.Context(), ContextFabricSubmissionLogMessage,
+		"outcome", string(SubmissionOutcomeRefusedHeader),
+		"header", header,
+		"request_id", contextfabric.SanitizeLogAttr(RequestID(r.Context())))
 }
 
 func (a *App) investigationSubmissions() contextfabric.SubmissionStore {
@@ -131,7 +155,7 @@ func submissionStoreErrorClass(err error) string {
 // admitInvestigationSubmission admits the request's submission, or answers a
 // repeat of its key. proceed is true only for a newly admitted record; every
 // other path has written the response.
-func (a *App) admitInvestigationSubmission(w http.ResponseWriter, r *http.Request, principal storage.Principal, request contextfabric.InvestigationRequest, submissionID string) (*admittedInvestigationSubmission, bool) {
+func (a *App) admitInvestigationSubmission(w http.ResponseWriter, r *http.Request, principal storage.Principal, request contextfabric.InvestigationRequest, submissionID, threadID string) (*admittedInvestigationSubmission, bool) {
 	store := a.investigationSubmissions()
 	if store == nil {
 		a.logSubmissionAdmission(r, principal, SubmissionOutcomeStoreUnavailable, "", nil)
@@ -151,7 +175,7 @@ func (a *App) admitInvestigationSubmission(w http.ResponseWriter, r *http.Reques
 		return nil, false
 	}
 	record, admitted, err := store.AdmitSubmission(r.Context(), contextfabric.SubmissionAdmission{
-		Key: key, RequestDigest: digest, ReservedResultID: a.reserveResultID(), ExpiresAt: a.submissionExpiry(r.Context()),
+		Key: key, RequestDigest: digest, ReservedResultID: a.reserveResultID(), ThreadID: threadID, ExpiresAt: a.submissionExpiry(r.Context()),
 	}, a.now())
 	if err != nil {
 		a.logSubmissionAdmission(r, principal, SubmissionOutcomeStoreUnavailable, "", err)

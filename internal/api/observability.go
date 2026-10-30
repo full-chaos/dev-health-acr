@@ -73,6 +73,11 @@ func requestOperation(request *http.Request) observability.Operation {
 		if strings.HasPrefix(request.URL.Path, "/api/v1/agent-context/evidence/") {
 			return observability.OperationEvidence
 		}
+		// The nested submission status route first (CHAOS-11913): it is
+		// under the same prefix as the result read.
+		if strings.HasPrefix(request.URL.Path, ContextFabricInvestigationsPath+"/submissions/") {
+			return observability.OperationSubmissionStatus
+		}
 		if strings.HasPrefix(request.URL.Path, ContextFabricInvestigationsPath+"/") {
 			return observability.OperationInvestigationResult
 		}

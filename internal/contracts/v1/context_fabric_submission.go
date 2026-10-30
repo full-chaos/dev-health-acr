@@ -1,5 +1,11 @@
 package v1
 
+import (
+	"fmt"
+	"slices"
+	"time"
+)
+
 // Submission identity on the create-investigation route (CHAOS-11912, Ask Dev
 // plan §2.7.5). A client names each user submit with a submission id; the
 // service runs it once, bound to the request's semantic digest and to the
@@ -37,4 +43,71 @@ const (
 // codes, each a 409 of the create-investigation route.
 func ContextFabricSubmissionErrorCodes() [4]string {
 	return [4]string{ErrorCodeSubmissionMismatch, ErrorCodeSubmissionInProgress, ErrorCodeSubmissionUnsaved, ErrorCodeSubmissionAbandoned}
+}
+
+// ContextFabricSubmissionStatusSchema is the schema_version of the
+// submission status read (CHAOS-11913).
+const ContextFabricSubmissionStatusSchema = "context_fabric_submission_status.v1"
+
+// ContextFabricSubmissionState is the closed state of a submission.
+type ContextFabricSubmissionState string
+
+const (
+	// ContextFabricSubmissionRunning: the run is live.
+	ContextFabricSubmissionRunning ContextFabricSubmissionState = "running"
+	// ContextFabricSubmissionDone: result_id names the final result.
+	ContextFabricSubmissionDone ContextFabricSubmissionState = "done"
+	// ContextFabricSubmissionDoneUnsaved: answered, not stored; no result_id.
+	ContextFabricSubmissionDoneUnsaved ContextFabricSubmissionState = "done_unsaved"
+	// ContextFabricSubmissionAbandoned: ended without an answer, or ran past
+	// its budget plus 30 seconds.
+	ContextFabricSubmissionAbandoned ContextFabricSubmissionState = "abandoned"
+)
+
+// ContextFabricSubmissionStateVocabulary is the closed set of states, in the
+// published enum's order.
+func ContextFabricSubmissionStateVocabulary() [4]ContextFabricSubmissionState {
+	return [4]ContextFabricSubmissionState{ContextFabricSubmissionRunning, ContextFabricSubmissionDone, ContextFabricSubmissionDoneUnsaved, ContextFabricSubmissionAbandoned}
+}
+
+// ContextFabricSubmissionStatus is the body of
+// GET /api/v1/context-fabric/investigations/submissions/{submission_id}: the
+// caller's own submission record. A client that lost a response polls it and
+// replays result_id when the state is done.
+type ContextFabricSubmissionStatus struct {
+	SchemaVersion    string                       `json:"schema_version"`
+	SubmissionID     string                       `json:"submission_id"`
+	State            ContextFabricSubmissionState `json:"state"`
+	ReservedResultID string                       `json:"reserved_result_id"`
+	// ResultID is present exactly when State is done; it is the reserved id,
+	// or the reused answer's id when the run served one.
+	ResultID string `json:"result_id,omitempty"`
+	// ThreadID is the X-ACR-Thread-ID the submission was admitted with, when
+	// it named one.
+	ThreadID  string    `json:"thread_id,omitempty"`
+	UpdatedAt time.Time `json:"updated_at"`
+}
+
+// Validate holds the status to its schema.
+func (s ContextFabricSubmissionStatus) Validate() error {
+	states := ContextFabricSubmissionStateVocabulary()
+	switch {
+	case s.SchemaVersion != ContextFabricSubmissionStatusSchema:
+		return fmt.Errorf("submission status schema_version must be %q", ContextFabricSubmissionStatusSchema)
+	case !ValidContextFabricClientCorrelationID(s.SubmissionID):
+		return fmt.Errorf("submission status submission_id violates v1 bounds")
+	case !slices.Contains(states[:], s.State):
+		return fmt.Errorf("submission status state is not a member of the closed vocabulary")
+	case !stringLengthBetween(s.ReservedResultID, 8, 256):
+		return fmt.Errorf("submission status reserved_result_id violates v1 bounds")
+	case (s.State == ContextFabricSubmissionDone) != (s.ResultID != ""):
+		return fmt.Errorf("submission status result_id is present exactly when the state is done")
+	case s.ResultID != "" && !stringLengthBetween(s.ResultID, 8, 256):
+		return fmt.Errorf("submission status result_id violates v1 bounds")
+	case s.ThreadID != "" && !ValidContextFabricClientCorrelationID(s.ThreadID):
+		return fmt.Errorf("submission status thread_id violates v1 bounds")
+	case s.UpdatedAt.IsZero():
+		return fmt.Errorf("submission status updated_at is required")
+	}
+	return nil
 }
