@@ -216,10 +216,33 @@ func TestSubmissionParity(t *testing.T) {
 func TestThreadParity(t *testing.T) {
 	ctx := context.Background()
 	paritytest.RunThreadSuite(t, func(t *testing.T, clock func() time.Time) paritytest.ThreadStore {
-		store, err := pginvestigation.NewStore(newInvestigationTestDatabase(t, ctx), pginvestigation.WithClock(clock))
+		db := newInvestigationTestDatabase(t, ctx)
+		store, err := pginvestigation.NewStore(db, pginvestigation.WithClock(clock))
 		require.NoError(t, err)
-		return store
+		return seedableThreadStore{Store: store, db: db}
 	})
+}
+
+// seedableThreadStore is a pginvestigation.Store whose thread rows the suite
+// can seed (paritytest.ThreadTurnCountSeeder).
+type seedableThreadStore struct {
+	*pginvestigation.Store
+	db *sql.DB
+}
+
+// SeedThreadTurnCount sets one thread row's turn_count.
+func (s seedableThreadStore) SeedThreadTurnCount(key contextfabric.ThreadKey, count int) error {
+	result, err := s.db.ExecContext(context.Background(), `
+UPDATE acr.context_fabric_threads SET turn_count = $5
+ WHERE org_id = $1 AND owner_auth_method = $2 AND owner_subject = $3 AND thread_id = $4`,
+		key.OrgID, key.Owner.AuthenticationMethod, key.Owner.Subject, key.ThreadID, count)
+	if err != nil {
+		return err
+	}
+	if rows, err := result.RowsAffected(); err != nil || rows != 1 {
+		return fmt.Errorf("seed thread turn count: %d rows, %v", rows, err)
+	}
+	return nil
 }
 
 // Reuse never crosses principals: a row bound to A's submission is a reuse

@@ -61,7 +61,9 @@ type ThreadRecord struct {
 }
 
 // Closed reports whether the thread is closed at now: deleted, or past its
-// expiry.
+// expiry. A full thread is not closed (design §6 T6 names delete and expiry
+// only): its turns, results and repeats are served, and ClosedReason
+// refuses only its new turns (T7).
 func (r ThreadRecord) Closed(now time.Time) bool {
 	return r.ClosedAt != nil || !now.Before(r.ExpiresAt)
 }

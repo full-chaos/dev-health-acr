@@ -290,9 +290,18 @@ item that implements it.
   and evidence expansion all fail closed; a result a live turn or a record
   with no thread names stays readable (T3). Expiry is compared with the store
   clock (`pginvestigation.WithClock`, the runtime's).
+- **Full is a bound, not a closure (T7).** A thread at 1 000 000 turns refuses
+  a new turn as `full`; its turns, their results, the status read and a
+  repeat of a turn's key are served as before (T6 names delete and expiry
+  only).
 - **Delete.** One transaction under the admission lock: `closed_at` set, the
   turns' questions erased; the submission records stay, so a run in flight
   still saves bound to its owner (T2), and its result stays hidden.
+- **Expiry.** From `expires_at` every read hides the thread, its questions and
+  its results (T6), but nothing is erased at that moment: the retention job
+  (I-30) removes the backing set, questions included. Until it lands, an
+  expired thread's questions stay stored, unreadable. A delete of an expired
+  thread is a no-op (`204`).
 - **Thread read (T4).** Each done turn's result goes through
   `decideStoredResultServing` (api), the decision the read by id and the replay
   take: the gate on surface `thread`, then the work-item tuple and flood rules.

@@ -20,6 +20,14 @@ type ThreadStore interface {
 	contextfabric.ThreadStore
 }
 
+// ThreadTurnCountSeeder sets a thread row's turn count directly, so the
+// suite reaches the 1,000,000-turn bound (design §6 T7) without that many
+// admissions. Each adapter's test supplies it; a store without it fails the
+// suite rather than skipping the case.
+type ThreadTurnCountSeeder interface {
+	SeedThreadTurnCount(key contextfabric.ThreadKey, count int) error
+}
+
 // ThreadClock is the suite's clock: the stores' own (Get's closed-thread
 // rule reads it) and the one the suite passes to every method.
 type ThreadClock struct{ now time.Time }
@@ -269,6 +277,49 @@ func RunThreadSuite(t *testing.T, newStore func(t *testing.T, clock func() time.
 		save(t, store, owner, "result_thread_unthreaded")
 		if _, err := store.Get(ctx, owner, "result_thread_unthreaded"); err != nil {
 			t.Fatalf("an unthreaded result: %v", err)
+		}
+	})
+
+	t.Run("a full thread refuses new turns only: its turns, results and repeats are served", func(t *testing.T) {
+		store, clock := setup(t)
+		seeder, ok := store.(ThreadTurnCountSeeder)
+		if !ok {
+			t.Fatalf("the store %T cannot seed a turn count: the full-thread case cannot run", store)
+		}
+		first := turn(t, store, clock, owner, "thread-parity-full", "full-1", &month)
+		save(t, store, owner, first.ReservedResultID)
+		key := threadKey(t, owner, "thread-parity-full")
+		if err := seeder.SeedThreadTurnCount(key, contractsv1.ContextFabricThreadMaxTurnCount); err != nil {
+			t.Fatalf("seed the turn count: %v", err)
+		}
+		// T7: a new turn is refused as full, before any write.
+		key2, _ := contextfabric.SubmissionKeyFor(owner, "submission-thread-full-2")
+		next := contextfabric.SubmissionAdmission{Key: key2, RequestDigest: first.RequestDigest, ReservedResultID: "result_thread_full_2", ThreadID: "thread-parity-full", ExpiresAt: clock.now.Add(time.Minute), Question: "one too many"}
+		var closed *contextfabric.ThreadClosedError
+		if _, _, err := store.AdmitSubmission(ctx, next, clock.now); !errors.As(err, &closed) || closed.Reason != contextfabric.ThreadClosedFull {
+			t.Fatalf("a turn past the bound = %v, want thread_closed full", err)
+		}
+		if _, err := store.GetSubmission(ctx, key2, clock.now); !errors.Is(err, contextfabric.ErrSubmissionNotFound) {
+			t.Fatalf("the refused turn was written: %v", err)
+		}
+		// T6 names only delete and expiry: a full thread is not closed.
+		page, err := store.GetThread(ctx, key, nil, 100, clock.now)
+		if err != nil || page.Thread.TurnCount != contractsv1.ContextFabricThreadMaxTurnCount || len(page.Turns) != 1 || page.Turns[0].Question != "question full-1" {
+			t.Fatalf("read of a full thread = %+v err=%v", page, err)
+		}
+		if threads, _, err := store.ListThreads(ctx, owner.OrgID, ownerOf(t, owner), nil, 10, clock.now); err != nil || len(threads) != 1 || threads[0].Key.ThreadID != "thread-parity-full" {
+			t.Fatalf("list with a full thread = %+v err=%v", threads, err)
+		}
+		if _, err := store.Get(ctx, owner, first.ReservedResultID); err != nil {
+			t.Fatalf("a full thread's result is hidden: %v", err)
+		}
+		record, err := store.GetSubmission(ctx, first.Key, clock.now)
+		if err != nil || record.ThreadClosed != "" || record.Question != "question full-1" {
+			t.Fatalf("a full thread's turn record = %+v err=%v", record, err)
+		}
+		again, admitted, err := store.AdmitSubmission(ctx, first, clock.now)
+		if err != nil || admitted || again.ThreadClosed != "" {
+			t.Fatalf("a repeat of a full thread's key = %+v admitted=%t err=%v, want a replay", again, admitted, err)
 		}
 	})
 
