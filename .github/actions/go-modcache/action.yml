@@ -1,8 +1,10 @@
 name: go-modcache
 description: >-
   The one Go module cache of a ci.yml run. mode=warm (only the gomodcache job)
-  fills it on a miss; mode=restore fails the job on a miss, so a consumer never
-  falls back to downloading modules silently.
+  fills it on a miss; mode=restore downloads the modules and pinned tools when
+  the restore brings nothing back (a miss, or a cache service error such as
+  "Egress is over the account limit") and says so in a warning annotation, so a
+  consumer never falls back silently and never fails on the cache service.
 inputs:
   mode:
     description: warm or restore
@@ -32,12 +34,20 @@ runs:
         path: ${{ steps.key.outputs.path }}
         key: ${{ steps.key.outputs.key }}
         lookup-only: ${{ inputs.mode == 'warm' }}
-        fail-on-cache-miss: ${{ inputs.mode == 'restore' }}
+        fail-on-cache-miss: false
     - name: Download every module and pinned tool once
-      if: ${{ inputs.mode == 'warm' && steps.restore.outputs.cache-hit != 'true' }}
+      if: ${{ steps.restore.outputs.cache-hit != 'true' }}
       shell: bash
+      env:
+        MODE: ${{ inputs.mode }}
+        KEY: ${{ steps.key.outputs.key }}
       run: |
         set -euo pipefail
+        # The gomodcache job saved this key, so a restore miss means the cache service did not answer.
+        if [ "$MODE" = restore ]; then
+          printf '::warning title=go-modcache::module cache %s was not restored; downloading the modules and pinned tools from GOPROXY\n' "$KEY"
+          printf 'go-modcache: module cache `%s` was not restored; this job downloaded the modules and pinned tools from GOPROXY.\n' "$KEY" >> "$GITHUB_STEP_SUMMARY"
+        fi
         scripts/ci/retry.sh go mod download
         bin="$(mktemp -d)"
         while IFS= read -r pin; do

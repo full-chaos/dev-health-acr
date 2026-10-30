@@ -1505,7 +1505,7 @@ check_content_sanity_steps() {
 # 1423 module fetches per run over 35 jobs). The gomodcache job downloads the
 # whole module and every pinned tool and is the only saver; every other job that
 # installs Go (plan excepted: it downloads nothing) depends on it and restores
-# in `restore` mode, which fails on a miss rather than falling back to a download.
+# in `restore` mode; a restore that brings nothing back downloads with a warning.
 check_gomodcache_wiring() {
   local file="$1" status=0 job block
   block="$(job_block "$file" gomodcache)"
@@ -1535,12 +1535,22 @@ check_gomodcache_wiring() {
   return "$status"
 }
 
-# The action itself: only warm mode saves, restore mode fails on a miss, and
-# the restored cache is checked against go.sum.
+# The action itself: only warm mode saves; a restore that brings nothing back
+# (a miss, or a cache service error such as "Egress is over the account limit")
+# downloads the modules and pinned tools with a warning annotation instead of
+# failing the job; the module cache is checked against go.sum.
 check_gomodcache_action() {
   local file="$1" status=0
-  grep -qxF "        fail-on-cache-miss: \${{ inputs.mode == 'restore' }}" "$file" || {
-    printf 'go-modcache restore does not fail on a miss in restore mode\n' >&2; status=1; }
+  grep -qxF "        fail-on-cache-miss: false" "$file" || {
+    printf 'go-modcache restore must not fail the job on a miss or a cache service error\n' >&2; status=1; }
+  grep -qxF "      if: \${{ steps.restore.outputs.cache-hit != 'true' }}" "$file" || {
+    printf 'go-modcache does not download the modules in every mode when the restore brought nothing back\n' >&2; status=1; }
+  grep -qF "::warning title=go-modcache::" "$file" || {
+    printf 'go-modcache restore fallback does not raise a warning annotation\n' >&2; status=1; }
+  if ! grep -qxF "        MODE: \${{ inputs.mode }}" "$file" \
+     || ! grep -qxF "        if [ \"\$MODE\" = restore ]; then" <<<"$(grep -B1 -F '::warning title=go-modcache::' "$file")"; then
+    printf 'go-modcache restore fallback warning is not limited to restore mode\n' >&2; status=1
+  fi
   [ "$(grep -cE 'uses: *actions/cache/save@' "$file" || true)" -eq 1 ] || {
     printf 'go-modcache must hold exactly one cache save step\n' >&2; status=1; }
   grep -qxF "      if: \${{ inputs.mode == 'warm' && steps.restore.outputs.cache-hit != 'true' }}" <<<"$(grep -B1 -A0 -E 'uses: *actions/cache/save@' "$file" | head -1; grep -E "^ +if: .*inputs.mode == 'warm' && steps.restore.outputs.cache-hit != 'true'" "$file" | tail -1)" || {
@@ -1662,7 +1672,8 @@ assert_check_fails 'flipped a hosted job'"'"'s cache: true to cache: false' chec
 
 # (gomodcache) a consumer that restores in warm mode (a second saver), one that
 # no longer needs gomodcache, one with no restore step, an action whose restore
-# can fall back silently, an action that saves in every mode, and a stale pin.
+# falls back with no warning or fails on a cache service error again, an action
+# that downloads in warm mode only, an action that saves in every mode, and a stale pin.
 modcache_two_savers="$tmpdir/modcache-two-savers.yml"
 awk '/^        with: \{mode: restore\}$/ && !done { sub(/restore/, "warm"); done=1 } { print }' "$workflow" > "$modcache_two_savers"
 cmp -s "$workflow" "$modcache_two_savers" && { printf 'NEGATIVE CONTROL SETUP FAILED: modcache_two_savers did not change the workflow\n' >&2; exit 1; }
@@ -1676,8 +1687,21 @@ awk '/^      - uses: .\/.github\/actions\/go-modcache$/ { n++ } n == 4 && /^    
 cmp -s "$workflow" "$modcache_no_restore" && { printf 'NEGATIVE CONTROL SETUP FAILED: modcache_no_restore did not change the workflow\n' >&2; exit 1; }
 assert_check_fails 'a Go job dropped its module cache restore' check_gomodcache_wiring "$modcache_no_restore"
 modcache_silent_miss="$tmpdir/modcache-silent-miss.yml"
-sed '/fail-on-cache-miss:/d' "$modcache_action" > "$modcache_silent_miss"
-assert_check_fails 'the restore no longer fails on a miss' check_gomodcache_action "$modcache_silent_miss"
+sed '/::warning title=go-modcache::/d' "$modcache_action" > "$modcache_silent_miss"
+cmp -s "$modcache_action" "$modcache_silent_miss" && { printf 'NEGATIVE CONTROL SETUP FAILED: modcache_silent_miss did not change the action\n' >&2; exit 1; }
+assert_check_fails 'the restore fallback downloads with no warning' check_gomodcache_action "$modcache_silent_miss"
+modcache_fail_on_miss="$tmpdir/modcache-fail-on-miss.yml"
+sed "s/^        fail-on-cache-miss: false\$/        fail-on-cache-miss: \${{ inputs.mode == 'restore' }}/" "$modcache_action" > "$modcache_fail_on_miss"
+cmp -s "$modcache_action" "$modcache_fail_on_miss" && { printf 'NEGATIVE CONTROL SETUP FAILED: modcache_fail_on_miss did not change the action\n' >&2; exit 1; }
+assert_check_fails 'the restore fails the job on a cache service error again' check_gomodcache_action "$modcache_fail_on_miss"
+modcache_warm_only_download="$tmpdir/modcache-warm-only-download.yml"
+sed "s/^      if: \${{ steps.restore.outputs.cache-hit != 'true' }}\$/      if: \${{ inputs.mode == 'warm' \&\& steps.restore.outputs.cache-hit != 'true' }}/" "$modcache_action" > "$modcache_warm_only_download"
+cmp -s "$modcache_action" "$modcache_warm_only_download" && { printf 'NEGATIVE CONTROL SETUP FAILED: modcache_warm_only_download did not change the action\n' >&2; exit 1; }
+assert_check_fails 'the download runs in warm mode only again' check_gomodcache_action "$modcache_warm_only_download"
+modcache_warn_every_mode="$tmpdir/modcache-warn-every-mode.yml"
+sed "s/^        if \\[ \"\\\$MODE\" = restore \\]; then\$/        if true; then/" "$modcache_action" > "$modcache_warn_every_mode"
+cmp -s "$modcache_action" "$modcache_warn_every_mode" && { printf 'NEGATIVE CONTROL SETUP FAILED: modcache_warn_every_mode did not change the action\n' >&2; exit 1; }
+assert_check_fails 'the fallback warning fires in warm mode too' check_gomodcache_action "$modcache_warn_every_mode"
 modcache_save_always="$tmpdir/modcache-save-always.yml"
 sed "s/^      if: \${{ inputs.mode == 'warm' \&\& steps.restore.outputs.cache-hit != 'true' }}\$/      if: \${{ true }}/" "$modcache_action" > "$modcache_save_always"
 cmp -s "$modcache_action" "$modcache_save_always" && { printf 'NEGATIVE CONTROL SETUP FAILED: modcache_save_always did not change the action\n' >&2; exit 1; }
