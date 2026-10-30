@@ -112,9 +112,11 @@ func (a *App) serveStoredInvestigationResult(w http.ResponseWriter, r *http.Requ
 	// canonical/projected result, so it unwraps to .Result immediately
 	// -- persistence metadata (GraphEpoch) is not part of the public
 	// response contract.
-	stored, err := results.Get(r.Context(), principal, resultID)
-	if err != nil {
-		a.writeInvestigationResultError(w, r, principal, err)
+	// CHAOS-11948: the read, the gate and the serving rules are one
+	// decision (decideStoredResultServing), shared with the thread read.
+	serving := decideStoredResultServing(r.Context(), principal, results, gate, resultID, contextfabric.StoredResultSurfaceResultByID)
+	if !serving.gated {
+		a.writeInvestigationResultError(w, r, principal, serving.err)
 		return
 	}
 	// The live authorization decision, before anything about the row
@@ -122,49 +124,38 @@ func (a *App) serveStoredInvestigationResult(w http.ResponseWriter, r *http.Requ
 	// grant does not admit does not exist for this caller, and is answered
 	// exactly like an unknown id. An undecidable read fails closed as
 	// unavailable. No gate configured is the same failure, never a pass.
-	authorization := contextfabric.StoredResultAuthorization{Surface: contextfabric.StoredResultSurfaceResultByID, Decision: contextfabric.StoredResultUnavailable, Reason: contextfabric.StoredResultReasonAuthorizerMissing}
-	if gate != nil {
-		authorization = gate.Authorize(r.Context(), principal, stored, contextfabric.StoredResultSurfaceResultByID)
-	}
-	authorizationArgs := contextfabric.StoredResultAuthorizationLogArgs(principal, authorization)
+	authorizationArgs := contextfabric.StoredResultAuthorizationLogArgs(principal, serving.authorization)
 	authorizationArgs = append(authorizationArgs, "request_id", contextfabric.SanitizeLogAttr(RequestID(r.Context())))
 	a.logger.InfoContext(r.Context(), contextfabric.StoredResultAuthorizationLogMessage, authorizationArgs...)
-	if err := authorization.ServingError(); err != nil {
+	if err := serving.authorization.ServingError(); err != nil {
 		a.writeInvestigationResultError(w, r, principal, err)
 		return
 	}
-	result := stored.Result
+	stored := serving.stored
 	// A stored project-to-work-item tuple has an independent census
-	// serving rule. Apply it immediately after the org-scoped read so a
+	// serving rule, applied immediately after the org-scoped read so a
 	// changed authorization digest is indistinguishable from a missing
 	// row, and so an unavailable census cannot be mistaken for a current
-	// population. This branch only transforms the in-memory serving copy;
-	// it never writes the stored result or starts a new investigation.
-	tupleDecision := contextfabric.ServeStoredWorkItemTuple(result, stored.SemanticState, stored.SemanticStateRead, principal)
-	if tupleDecision.Disposition != contextfabric.WorkItemTupleByIDNotApplicable {
-		args := contextfabric.WorkItemStoredServingLogArgs(tupleDecision.Event)
+	// population. It only transforms the in-memory serving copy; it never
+	// writes the stored result or starts a new investigation. Any other
+	// kind of stored result with a flooded limitation list cannot show the
+	// service disclosures: it is answered like an unknown id, as the
+	// work-item tuple is.
+	if serving.tuple.Disposition != contextfabric.WorkItemTupleByIDNotApplicable {
+		args := contextfabric.WorkItemStoredServingLogArgs(serving.tuple.Event)
 		args = append(args, "request_id", contextfabric.SanitizeLogAttr(RequestID(r.Context())), "org_id", contextfabric.SanitizeLogAttr(principal.OrgID))
 		a.logger.InfoContext(r.Context(), contextfabric.WorkItemStoredServingLogMessage, args...)
 	}
-	if tupleDecision.Err != nil {
-		a.writeInvestigationResultError(w, r, principal, tupleDecision.Err)
-		return
-	}
-	switch tupleDecision.Disposition {
-	case contextfabric.WorkItemTupleByIDNotFound:
+	switch serving.outcome {
+	case servingTupleWithheld, servingFloodWithheld:
 		a.writeInvestigationResultNotFound(w, r, principal)
 		return
-	case contextfabric.WorkItemTupleByIDServed, contextfabric.WorkItemTupleByIDStored:
-		result = tupleDecision.Result
-	case contextfabric.WorkItemTupleByIDNotApplicable:
-		// Any other kind of stored result with a flooded limitation list
-		// cannot show the service disclosures: it is answered like an
-		// unknown id, as the work-item tuple is.
-		if contextfabric.StoredResultFloodWithheld(result) {
-			a.writeInvestigationResultNotFound(w, r, principal)
-			return
-		}
+	case servingServed:
+	default:
+		a.writeInvestigationResultError(w, r, principal, serving.err)
+		return
 	}
+	result := serving.result
 	// CHAOS-4413 (codex xhigh round-1 P1, confirmed): a row persisted
 	// before Completeness existed reads back with the exact zero
 	// value ValidateStored's legacy exemption allows -- fine for the

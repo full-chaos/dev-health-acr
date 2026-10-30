@@ -101,8 +101,8 @@ SELECT ?, concat('filler-', repeat('x', 96), '-', toString(number)), concat('fil
 SELECT concat('filler-more-', repeat('x', 96), '-', toString(number)), ?, ?, 'filler', 'open', '', ?, '', 'linear', '', NULL FROM numbers(?)`,
 		repoUUID("repo-owned"), blockerMemoryOrg, at, uint64(blockerMemoryMoreFillerItems))
 	large, largeResult, largeErr := read()
-	// The roll-up, the totals, the oldest age and the unlinked count run on every read.
-	assertStatementMemoryFollowsEvidence(t, ctx, direct, "team blocker statements", small, large, 4)
+	// The roll-up, the totals with the oldest age, and the unlinked count run on every read.
+	assertStatementMemoryFollowsEvidence(t, ctx, direct, "team blocker statements", small, large, 3)
 	for hash, peak := range small {
 		t.Logf("team blocker statement %d peak memory at the smaller size: %d bytes (%.1f MiB)", hash, peak, float64(peak)/(1<<20))
 	}

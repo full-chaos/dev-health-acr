@@ -597,6 +597,43 @@ const blockerBreakdownProjectLimitation = "repository_breakdown lists the team's
 // population and is counted nowhere, neither as open nor as excluded.
 const blockerOpenPredicate = "lower(s.status) NOT IN ('done', '" + workItemCancelledStatus + "')"
 
+// teamBlockerTotalsSQL is the team totals statement: distinct blocked items and
+// edges across two arms, the team's owned repositories (one row per team and
+// repository pair) and the items of its owned projects that reach a repository
+// through a linked pull request row. One item in both arms is one blocked item.
+// The read groups by team, so team ids go in chunks under the statement's
+// result row cap; a team's rows live in one chunk only. withStart reads each
+// edge's start too and adds the age columns (edges with a start, edges with an
+// exact start, the earliest start), over the same rows.
+func teamBlockerTotalsSQL(statusPredicate, authorized, current string, withStart bool) string {
+	const projectArm = "arm = 'project'"
+	ageColumns, repositoryStart, projectStart := "", "", ""
+	if withStart {
+		ageColumns = `,
+  toInt64(uniqExactIf((tgt, src), is_open AND start_unix IS NOT NULL)), toInt64(uniqExactIf((tgt, src), is_open AND start_exact = 1)),
+  ifNull(toInt64(minIf(start_unix, is_open)), 0)`
+		repositoryStart = ", e.start_unix AS start_unix, e.start_exact AS start_exact"
+		projectStart = ", start_unix, start_exact"
+	}
+	return `SELECT team_id, toInt64(uniqExactIf(tgt, is_open)), toInt64(uniqExactIf((tgt, src), is_open)), toInt64(uniqExactIf((tgt, src), NOT is_open)),
+  toInt64(uniqExactIf(tgt, is_open AND ` + projectArm + `)),
+  toInt64(if(countIf(is_open AND ` + projectArm + `) > 0, minIf(item_rank, is_open AND ` + projectArm + `), minIf(item_rank, ` + projectArm + `))),
+  toInt64(uniqExactIf((tgt, src), is_open AND writer_unresolved = 1))` + ageColumns + `
+FROM (
+  SELECT tp.team_id AS team_id, e.tgt AS tgt, e.src AS src, toUInt8(e.is_open) AS is_open, toInt64(e.item_rank) AS item_rank, toUInt8(e.writer_unresolved) AS writer_unresolved, 'repository' AS arm` + repositoryStart + `
+  FROM (` + blockerEdgeRowsSQL(statusPredicate, authorized, current, withStart) + `) AS e
+  INNER JOIN (
+    SELECT splitByChar(char(31), pair)[1] AS team_id, splitByChar(char(31), pair)[2] AS rid_str
+    FROM (SELECT arrayJoin({team_repo_pairs:Array(String)}) AS pair)
+  ) AS tp ON tp.rid_str = toString(e.rid)
+  UNION ALL
+  SELECT team_id, tgt, src, toUInt8(is_open) AS is_open, toInt64(item_rank) AS item_rank, toUInt8(writer_unresolved) AS writer_unresolved, 'project' AS arm` + projectStart + `
+  FROM (` + blockerProjectEdgeRowsSQL(statusPredicate, authorized, current, withStart) + `)
+)
+GROUP BY team_id
+ORDER BY team_id`
+}
+
 // readTeamRollup serves a team subject on the current axis only:
 // work_item_dependencies carries no event time, so no window is claimed and
 // the counts are *_current. A blocker edge counts while the blocking item is
@@ -649,41 +686,16 @@ ORDER BY rid`, settings)
 		// linked pull request row. One item in both arms is one blocked item.
 		// The read groups by team, so team ids go in chunks under the
 		// statement's result row cap; a team's rows live in one chunk only.
-		const projectArm = "arm = 'project'"
-		totalsStatement := blockerStatement(`SELECT team_id, toInt64(uniqExactIf(tgt, is_open)), toInt64(uniqExactIf((tgt, src), is_open)), toInt64(uniqExactIf((tgt, src), NOT is_open)),
-  toInt64(uniqExactIf(tgt, is_open AND `+projectArm+`)),
-  toInt64(if(countIf(is_open AND `+projectArm+`) > 0, minIf(item_rank, is_open AND `+projectArm+`), minIf(item_rank, `+projectArm+`))),
-  toInt64(uniqExactIf((tgt, src), is_open AND writer_unresolved = 1))
-FROM (
-  SELECT tp.team_id AS team_id, e.tgt AS tgt, e.src AS src, toUInt8(e.is_open) AS is_open, toInt64(e.item_rank) AS item_rank, toUInt8(e.writer_unresolved) AS writer_unresolved, 'repository' AS arm
-  FROM (`+edgeRows+`) AS e
-  INNER JOIN (
-    SELECT splitByChar(char(31), pair)[1] AS team_id, splitByChar(char(31), pair)[2] AS rid_str
-    FROM (SELECT arrayJoin({team_repo_pairs:Array(String)}) AS pair)
-  ) AS tp ON tp.rid_str = toString(e.rid)
-  UNION ALL
-  SELECT team_id, tgt, src, toUInt8(is_open) AS is_open, toInt64(item_rank) AS item_rank, toUInt8(writer_unresolved) AS writer_unresolved, 'project' AS arm
-  FROM (`+blockerProjectEdgeRowsSQL(statusPredicate, authorized, current, false)+`)
-)
-GROUP BY team_id
-ORDER BY team_id`, settings)
-		ageStatement := blockerStatement(`SELECT team_id, toInt64(uniqExactIf((tgt, src), is_open)), toInt64(uniqExactIf((tgt, src), is_open AND start_unix IS NOT NULL)), toInt64(uniqExactIf((tgt, src), is_open AND start_exact = 1)),
-  ifNull(toInt64(minIf(start_unix, is_open)), 0)
-FROM (
-  SELECT tp.team_id AS team_id, e.tgt AS tgt, e.src AS src, toUInt8(e.is_open) AS is_open, e.start_unix AS start_unix, e.start_exact AS start_exact
-  FROM (`+blockerEdgeRowsSQL(statusPredicate, authorized, current, true)+`) AS e
-  INNER JOIN (
-    SELECT splitByChar(char(31), pair)[1] AS team_id, splitByChar(char(31), pair)[2] AS rid_str
-    FROM (SELECT arrayJoin({team_repo_pairs:Array(String)}) AS pair)
-  ) AS tp ON tp.rid_str = toString(e.rid)
-  UNION ALL
-  SELECT team_id, tgt, src, toUInt8(is_open) AS is_open, start_unix, start_exact
-  FROM (`+blockerProjectEdgeRowsSQL(statusPredicate, authorized, current, true)+`)
-)
-GROUP BY team_id
-ORDER BY team_id`, settings)
-		// A team chunk's owned repository keys and the bindings its totals and
-		// age statements share.
+		// The totals-with-age statement reads both arms once, with each edge's
+		// start: the age is a reading of the same edge rows, so one statement
+		// serves both and the edge rows are evaluated once, not twice. The
+		// totals-only statement is its fallback when it fails (the age's start
+		// read is the part a stack can lack): the counts are served and the age
+		// is absent with a reason.
+		totalsWithAgeStatement := blockerStatement(teamBlockerTotalsSQL(statusPredicate, authorized, current, true), settings)
+		totalsStatement := blockerStatement(teamBlockerTotalsSQL(statusPredicate, authorized, current, false), settings)
+		// A team chunk's owned repository keys and the bindings of its totals
+		// statements.
 		teamChunkScope := func(teamChunk []string) ([]string, []readers.Binding) {
 			chunkOwned := make(map[string][]teamOwnedRepo, len(teamChunk))
 			var pairs []string
@@ -695,13 +707,12 @@ ORDER BY team_id`, settings)
 			}
 			return repoKeysOf(chunkOwned), append([]readers.Binding{{Name: "team_repo_pairs", Value: pairs}, {Name: "team_ids", Value: teamChunk}}, authorizationBindings...)
 		}
-		// The per-repository rollup, the team totals and the team age read the
-		// same edge rows and need nothing but the scope above, so they run
-		// together: the read takes the slowest of them, not their sum. One
-		// after another they took the read past its provider budget on a
-		// ClickHouse the run's other fact reads were loading at the same time.
-		// Each statement writes its own map; the first failure cancels the
-		// others and fails the read, as it did one after another.
+		// The per-repository rollup and the team totals with age need nothing
+		// but the scope above, so they run together: the read takes the slower
+		// of them, not their sum. One after another they took the read past its
+		// provider budget on a ClickHouse the run's other fact reads were
+		// loading at the same time. Each writes its own maps; the first failure
+		// cancels the other and fails the read, as it did one after another.
 		group, groupCtx := errgroup.WithContext(ctx)
 		if len(repoKeys) > 0 {
 			group.Go(func() error {
@@ -721,6 +732,35 @@ ORDER BY team_id`, settings)
 		group.Go(func() error {
 			return forEachTeamIDChunk(teamIDs, func(teamChunk []string) error {
 				chunkRepoKeys, extra := teamChunkScope(teamChunk)
+				chunkTotals, chunkAges := map[string]blockerTeamTotals{}, map[string]blockerTeamAge{}
+				combinedErr := readers.QueryOrgScopedNamed(groupCtx, p.facts.client, "ReadTeamBlockerTotalsWithAge", totalsWithAgeStatement, orgID, chunkRepoKeys, func(row readers.RowScanner) error {
+					var teamID string
+					var t blockerTeamTotals
+					var a blockerTeamAge
+					if err := row.Scan(&teamID, &t.blockedItems, &t.blockerEdges, &t.excludedEdges, &t.projectBlockedItems, &t.projectWeakestRank, &t.writerUnresolved, &a.edgesWithStart, &a.edgesWithExactStart, &a.oldestStartMillis); err != nil {
+						return err
+					}
+					// The open edges the age is over are the totals' open edges.
+					a.openEdges = t.blockerEdges
+					chunkTotals[teamID], chunkAges[teamID] = t, a
+					return nil
+				}, extra...)
+				if combinedErr == nil {
+					for teamID, t := range chunkTotals {
+						totals[teamID], ages[teamID] = t, chunkAges[teamID]
+					}
+					return nil
+				}
+				// groupCtx: a cancellation, the caller's or a sibling
+				// statement's failure, fails the read; any other failure
+				// leaves the age absent with a reason, and the totals-only
+				// statement serves the counts.
+				if err := ageReadFailure(groupCtx, "team", combinedErr); err != nil {
+					return err
+				}
+				for _, teamID := range teamChunk {
+					ageUnavailable[teamID] = true
+				}
 				return readers.QueryOrgScopedNamed(groupCtx, p.facts.client, "ReadTeamBlockerTotals", totalsStatement, orgID, chunkRepoKeys, func(row readers.RowScanner) error {
 					var teamID string
 					var t blockerTeamTotals
@@ -730,37 +770,6 @@ ORDER BY team_id`, settings)
 					totals[teamID] = t
 					return nil
 				}, extra...)
-			})
-		})
-		group.Go(func() error {
-			return forEachTeamIDChunk(teamIDs, func(teamChunk []string) error {
-				chunkRepoKeys, extra := teamChunkScope(teamChunk)
-				chunkAges := map[string]blockerTeamAge{}
-				ageErr := readers.QueryOrgScopedNamed(groupCtx, p.facts.client, "ReadTeamBlockerOldestAge", ageStatement, orgID, chunkRepoKeys, func(row readers.RowScanner) error {
-					var teamID string
-					var a blockerTeamAge
-					if err := row.Scan(&teamID, &a.openEdges, &a.edgesWithStart, &a.edgesWithExactStart, &a.oldestStartMillis); err != nil {
-						return err
-					}
-					chunkAges[teamID] = a
-					return nil
-				}, extra...)
-				if ageErr != nil {
-					// groupCtx: a cancellation, the caller's or a sibling
-					// statement's failure, fails the read; any other age
-					// failure leaves the age absent with a reason.
-					if err := ageReadFailure(groupCtx, "team", ageErr); err != nil {
-						return err
-					}
-					for _, teamID := range teamChunk {
-						ageUnavailable[teamID] = true
-					}
-					return nil
-				}
-				for teamID, a := range chunkAges {
-					ages[teamID] = a
-				}
-				return nil
 			})
 		})
 		if scanErr := group.Wait(); scanErr != nil {

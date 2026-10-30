@@ -69,6 +69,9 @@ func requestOperation(request *http.Request) observability.Operation {
 		return observability.OperationDataOperations
 	case ContextFabricDataGraphQLPath:
 		return observability.OperationDataGraphQL
+	case ContextFabricThreadsPath:
+		// CHAOS-11948: the thread list.
+		return observability.OperationThreads
 	default:
 		if strings.HasPrefix(request.URL.Path, "/api/v1/agent-context/evidence/") {
 			return observability.OperationEvidence
@@ -80,6 +83,9 @@ func requestOperation(request *http.Request) observability.Operation {
 		}
 		if strings.HasPrefix(request.URL.Path, ContextFabricInvestigationsPath+"/") {
 			return observability.OperationInvestigationResult
+		}
+		if strings.HasPrefix(request.URL.Path, ContextFabricThreadsPath+"/") {
+			return observability.OperationThread
 		}
 		return observability.OperationUnknown
 	}

@@ -68,6 +68,10 @@ func (a *App) handleContextPacket(w http.ResponseWriter, r *http.Request) {
 	writeEncodedJSON(w, http.StatusOK, encoded)
 }
 
+// AgentContextEvidencePath is the evidence read route's mux pattern path
+// (app.go); CORS answers on exactly this pattern (cors.go).
+const AgentContextEvidencePath = "/api/v1/agent-context/evidence/{evidence_ref_id}"
+
 func (a *App) handleEvidence(w http.ResponseWriter, r *http.Request) {
 	principal, ok := auth.PrincipalFromContext(r.Context())
 	if !ok {
