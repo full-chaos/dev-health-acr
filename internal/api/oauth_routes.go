@@ -917,6 +917,7 @@ func newOAuthService(deps Dependencies, deviceFlow *auth.DeviceFlowService) (*au
 	}
 	return auth.NewOAuthService(runtime.Store, deviceFlow, auth.OAuthConfig{
 		Issuer: runtime.Issuer, Resources: runtime.Resources, ClientMetadata: runtime.ClientMetadata, Now: deps.Now,
+		BrowserClients: runtime.BrowserClients, DevBrowserRedirectURIs: runtime.DevBrowserRedirectURIs,
 	})
 }
 
@@ -932,4 +933,10 @@ type OAuthRuntime struct {
 	ClientMetadata auth.OAuthClientMetadataFetcher
 	// ConsentURL is the web consent page /authorize redirects the browser to.
 	ConsentURL string
+	// BrowserClients are the first-party web browser client ids
+	// (auth.OAuthConfig.BrowserClients, CHAOS-12123).
+	BrowserClients []string
+	// DevBrowserRedirectURIs turn on the development-only static browser
+	// client (auth.OAuthConfig.DevBrowserRedirectURIs).
+	DevBrowserRedirectURIs []string
 }

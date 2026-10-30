@@ -389,7 +389,7 @@ func TestCredentialStore_ResourceRoundTripsThroughDeviceRedeem(t *testing.T) {
 		CredentialID: "cred_resource_roundtrip", OrgID: grant.OrgID, Name: "resource roundtrip",
 		TokenPrefix: "fcacr_resourceroundtrip", TokenHash: strings.Repeat("d", 64),
 		RepositoryScopes: grant.RepositoryScopes, Scopes: grant.Scopes, ActorID: grant.ApprovingSubject,
-		Resource: "https://example.com/resource",
+		Resource: "https://example.com/resource", ClientID: "acrc_0123456789abcdef0123456789abcdef",
 	})
 	require.NoError(t, err)
 

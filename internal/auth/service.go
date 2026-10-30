@@ -161,6 +161,12 @@ func (s *Service) Rotate(ctx context.Context, request RotateCredentialRequest) (
 	if current.RevokedAt != nil {
 		return IssuedCredential{}, fmt.Errorf("%w: source credential is no longer active", ErrInvalidCredential)
 	}
+	// CHAOS-12123: a browser-class credential renews only by its refresh
+	// grant, inside its token family; a rotation would copy the class and
+	// family onto a successor with the caller's lifetime.
+	if current.Provenance.ClientClass == string(storage.CredentialClientClassBrowser) {
+		return IssuedCredential{}, ErrBrowserCredentialRotation
+	}
 	create := CreateCredentialRequest{
 		OrgID: current.OrgID, Name: request.Name, RepositoryScopes: request.RepositoryScopes,
 		Scopes: request.Scopes, CreatedBy: request.CreatedBy, ExpiresAt: request.ExpiresAt,
@@ -244,6 +250,7 @@ func (s *Service) issueCreateInput(request CreateCredentialRequest) (string, sto
 		ActorID: request.CreatedBy, ExpiresAt: cloneTime(request.ExpiresAt),
 		IssuanceProvenance: request.IssuanceProvenance, WorkloadBindingID: request.WorkloadBindingID,
 		Resource: request.Resource, ClientID: request.ClientID,
+		ClientClass: request.ClientClass, FamilyID: request.FamilyID, FamilyExpiresAt: cloneTime(request.FamilyExpiresAt),
 	}, nil
 
 }

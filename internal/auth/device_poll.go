@@ -2,8 +2,10 @@ package auth
 
 import (
 	"context"
+	"encoding/base64"
 	"errors"
 	"fmt"
+	"io"
 	"time"
 
 	"github.com/full-chaos/dev-health-acr/internal/storage"
@@ -153,11 +155,20 @@ func (s *DeviceFlowService) Poll(ctx context.Context, deviceCode string) (Issued
 // issuance path and takes its approving user from the authorization record
 // (CHAOS-12083).
 func (s *DeviceFlowService) redeem(ctx context.Context, record storage.DeviceAuthorization, clientID, resource string, scopes []string, ackable bool) (IssuedCredential, error) {
+	return s.redeemAs(ctx, record, clientID, resource, scopes, ackable, false)
+}
+
+// redeemAs is redeem with the class choice: browser issues the first-party
+// web client's credential (CHAOS-12123) -- a 10-minute access life, a new
+// token family that ends 12 hours after this issuance, and the web session
+// the approval was made in (the store takes it from the locked row).
+func (s *DeviceFlowService) redeemAs(ctx context.Context, record storage.DeviceAuthorization, clientID, resource string, scopes []string, ackable, browser bool) (IssuedCredential, error) {
 	if scopes == nil {
 		scopes = []string{ScopeContextRead, ScopeEvidenceRead}
 	}
-	expiresAt := s.now().UTC().Add(DeviceCredentialLifetime)
-	prepared, err := s.credentials.PrepareCreate(CreateCredentialRequest{
+	now := s.now().UTC()
+	expiresAt := now.Add(DeviceCredentialLifetime)
+	request := CreateCredentialRequest{
 		OrgID:            record.AuthorizedOrgID,
 		Name:             deviceAuthorizationCredentialName,
 		RepositoryScopes: record.AuthorizedRepositoryScopes,
@@ -166,7 +177,23 @@ func (s *DeviceFlowService) redeem(ctx context.Context, record storage.DeviceAut
 		ExpiresAt:        &expiresAt,
 		Resource:         resource,
 		ClientID:         clientID,
-	})
+	}
+	if browser {
+		if record.ApprovingSessionID == "" {
+			return IssuedCredential{}, ErrBrowserSessionRequired
+		}
+		familyID, err := s.familyID()
+		if err != nil {
+			return IssuedCredential{}, err
+		}
+		expiresAt = now.Add(BrowserCredentialLifetime)
+		familyExpiresAt := now.Add(BrowserFamilyLifetime)
+		request.Name = browserCredentialName
+		request.ClientClass = storage.CredentialClientClassBrowser
+		request.FamilyID = familyID
+		request.FamilyExpiresAt = &familyExpiresAt
+	}
+	prepared, err := s.credentials.PrepareCreate(request)
 	if err != nil {
 		return IssuedCredential{}, fmt.Errorf("prepare device credential: %w", err)
 	}
@@ -271,4 +298,19 @@ func (s *DeviceFlowService) AcknowledgeCredential(ctx context.Context, principal
 		return time.Time{}, fmt.Errorf("acknowledge device credential: %w", err)
 	}
 	return ackedAt, nil
+}
+
+// browserCredentialName names a browser-class credential.
+const browserCredentialName = "browser login"
+
+// familyID mints a token family id: 16 random bytes, base64url.
+func (s *DeviceFlowService) familyID() (string, error) {
+	buf := make([]byte, browserFamilyIDBytes)
+	s.randomMu.Lock()
+	_, err := io.ReadFull(s.random, buf)
+	s.randomMu.Unlock()
+	if err != nil {
+		return "", fmt.Errorf("generate token family id: %w", err)
+	}
+	return "fam_" + base64.RawURLEncoding.EncodeToString(buf), nil
 }

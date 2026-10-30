@@ -21,7 +21,7 @@ No HTTP handler embeds raw ClickHouse SQL. Versioned adapters return typed evide
 
 | Table | Purpose | Default retention |
 | --- | --- | --- |
-| `acr.client_credentials` | Hashed `fcacr_` credentials, scopes, repo allowlists, lifecycle metadata, immutable issuance provenance (client class, approving user, OAuth client; CHAOS-12083) | Until revoked/administratively removed |
+| `acr.client_credentials` | Hashed `fcacr_` credentials, scopes, repo allowlists, lifecycle metadata, immutable issuance provenance (client class, approving user, OAuth client; CHAOS-12083; for the browser class also its web session and token family, CHAOS-12123) | Until revoked/administratively removed |
 | `acr.context_packet_snapshots` | Immutable validated packet replay snapshots | 30 days |
 | `acr.agent_episodes` | Idempotent append-only agent-run evidence and redaction tombstones | 90 days |
 | `acr.audit_events` | Credential, read, denial, write, redaction, and purge audit trail | Policy-defined |
