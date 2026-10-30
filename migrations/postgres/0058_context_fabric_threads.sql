@@ -82,3 +82,20 @@ CREATE TRIGGER refuse_purged_org_insert BEFORE INSERT ON acr.context_fabric_thre
     FOR EACH ROW EXECUTE FUNCTION acr.context_fabric_refuse_purged_org();
 CREATE TRIGGER refuse_purged_org_update BEFORE UPDATE OF org_id ON acr.context_fabric_threads
     FOR EACH ROW WHEN (NEW.org_id IS DISTINCT FROM OLD.org_id) EXECUTE FUNCTION acr.context_fabric_refuse_purged_org();
+
+-- Thread turns admitted before this table existed (thread_id on the
+-- submission records since 0056) get their thread row, as AdvanceThread would
+-- have built it: first and latest turn, the count, retention 0 (no earlier
+-- turn could name one), expiry 24 hours after the latest turn. Without it
+-- their conversation would be unknown, and a later turn would start the
+-- count at 1 beside turns it does not count. An id the 0056 check (NOT
+-- VALID) would refuse is left out. Idempotent: an existing row is kept.
+INSERT INTO acr.context_fabric_threads
+    (org_id, owner_auth_method, owner_subject, thread_id, created_at, last_turn_at, turn_count, retention_days, expires_at)
+SELECT org_id, owner_auth_method, owner_subject, thread_id,
+       min(admitted_at), max(admitted_at), LEAST(count(*), 1000000)::integer, 0,
+       max(admitted_at) + interval '24 hours'
+  FROM acr.context_fabric_investigation_submissions
+ WHERE thread_id IS NOT NULL AND thread_id ~ '^[A-Za-z0-9._:-]{8,128}$'
+ GROUP BY org_id, owner_auth_method, owner_subject, thread_id
+ON CONFLICT (org_id, owner_auth_method, owner_subject, thread_id) DO NOTHING;

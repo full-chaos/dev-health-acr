@@ -73,6 +73,11 @@ type Store struct {
 	// thread's expiry with on Get and FindReusable, whose interface takes no
 	// clock. The submission and thread methods take the caller's.
 	now func() time.Time
+
+	// afterThreadSummaryRead runs in GetThread between the thread row read
+	// and the turns read. Tests set it (export_test.go) to commit an
+	// admission there; nil in production.
+	afterThreadSummaryRead func()
 }
 
 // StoreOption configures optional Store behavior. See WithAnswerReuse.

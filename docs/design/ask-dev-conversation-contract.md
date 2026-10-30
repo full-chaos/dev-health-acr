@@ -275,7 +275,10 @@ item that implements it.
   `expires_at` and `closed_at`. Admission writes it in the submission's own
   transaction, under the organization's admission lock and a row lock, with
   `contextfabric.AdvanceThread` (one rule for both stores). A turn's question is
-  a column on its submission record (`question`, thread turns only).
+  a column on its submission record (`question`, thread turns only). The
+  migration builds the row for thread turns admitted before it (`thread_id`
+  since 0056) the way `AdvanceThread` would have: retention `0`, expiry 24
+  hours after the latest turn.
 - **Admission.** A new key with `X-ACR-Thread-ID` joins the caller's thread; a
   closed thread (deleted, expired, or at 1 000 000 turns) refuses it before any
   limit is counted and writes nothing (`409 thread_closed`, reason on the
@@ -306,7 +309,10 @@ item that implements it.
   `decideStoredResultServing` (api), the decision the read by id and the replay
   take: the gate on surface `thread`, then the work-item tuple and flood rules.
   Served → `result_id`; denied, gone or withheld → `result_withheld`;
-  undecidable → `503`, never a partial thread. One aggregated `context fabric
+  undecidable → `503`, never a partial thread. The store reads the thread row
+  and its turns in one snapshot (Postgres: one repeatable-read, read-only
+  transaction after the reconcile), so a turn admitted during the read is in
+  the count and the turns, or in neither. One aggregated `context fabric
   thread` line per read (§4 telemetry).
 - **Cursors.** Opaque base64url JSON bound to the caller (a digest of
   organization and owner) and, for `before`, to the thread; a cursor another

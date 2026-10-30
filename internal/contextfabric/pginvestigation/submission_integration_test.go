@@ -544,3 +544,44 @@ func TestTheUsageAggregateGatesAndOutlivesItsRecords(t *testing.T) {
 	require.True(t, found)
 	require.Equal(t, int64(6), usage.PlatformRuns, "deleting submission records changes the aggregate")
 }
+
+// A thread read is one snapshot: an admission that commits while the read
+// is in progress is in neither the turn count nor the turns, so the page the
+// read returns is one the thread contract accepts (turn_count equals the
+// turns when they fit one page).
+func TestGetThreadReadsOneSnapshot(t *testing.T) {
+	runGetThreadReadsOneSnapshot(t, newInvestigationTestDatabase(t, context.Background()))
+}
+
+func runGetThreadReadsOneSnapshot(t *testing.T, db *sql.DB) {
+	ctx := context.Background()
+	now := time.Date(2026, 10, 30, 12, 0, 0, 0, time.UTC)
+	store, err := pginvestigation.NewStore(db, pginvestigation.WithClock(func() time.Time { return now }))
+	require.NoError(t, err)
+	owner := submissionPrincipal("user-thread-snapshot")
+	const threadID = "thread-snapshot-0001"
+	turn := func(submissionID, reserved string, at time.Time) {
+		admission := admissionFor(t, owner, submissionID, reserved, at)
+		admission.ThreadID, admission.Question = threadID, "question "+submissionID
+		_, admitted, err := store.AdmitSubmission(ctx, admission, at)
+		require.NoError(t, err)
+		require.True(t, admitted)
+	}
+	turn("submission-snapshot-1", "result_snapshot_0001", now)
+	key, err := contextfabric.ThreadKeyFor(owner, threadID)
+	require.NoError(t, err)
+
+	var once sync.Once
+	pginvestigation.SetAfterThreadSummaryRead(store, func() {
+		once.Do(func() { turn("submission-snapshot-2", "result_snapshot_0002", now.Add(time.Second)) })
+	})
+	page, err := store.GetThread(ctx, key, nil, 100, now.Add(2*time.Second))
+	require.NoError(t, err)
+	require.Equal(t, page.Thread.TurnCount, len(page.Turns), "a read mixed two snapshots: turn_count %d, %d turns", page.Thread.TurnCount, len(page.Turns))
+
+	pginvestigation.SetAfterThreadSummaryRead(store, nil)
+	page, err = store.GetThread(ctx, key, nil, 100, now.Add(2*time.Second))
+	require.NoError(t, err)
+	require.Equal(t, 2, page.Thread.TurnCount)
+	require.Len(t, page.Turns, 2)
+}
