@@ -1724,6 +1724,14 @@ check_web_agreement_selects_ops_pin() {
   return "$status"
 }
 
+# A job uses dev-health-ops when it runs the ops-checkout action, names the ops
+# checkout path, or names the ops repository. Codex #1775 r1 P2: selecting on
+# the checkout path alone let a job that checked ops out to another path fall
+# out of both the wiring and the failure-step checks.
+job_uses_ops() {
+  grep -qE 'actions/ops-checkout|dev-health/ops|dev-health-ops' <<<"$1"
+}
+
 check_fullstack_ops_checkout_wiring() {
   local file="$1" status=0 job block
   if grep -qF 'repository: full-chaos/dev-health-ops' "$file"; then
@@ -1731,7 +1739,7 @@ check_fullstack_ops_checkout_wiring() {
   fi
   while IFS= read -r job; do
     block="$(job_block "$file" "$job")"
-    grep -qF 'dev-health/ops' <<<"$block" || continue
+    job_uses_ops "$block" || continue
     grep -qxF '        uses: ./dev-health-acr/.github/actions/ops-checkout' <<<"$block" || {
       printf 'job %s uses dev-health/ops without the ops-checkout action\n' "$job" >&2; status=1; continue; }
     grep -qxF '        id: ops' <<<"$block" || {
@@ -1824,7 +1832,7 @@ check_fullstack_failure_step_behaviour() {
   dir="$(mktemp -d)"
   while IFS= read -r job; do
     block="$(job_block "$file" "$job")"
-    grep -qF 'dev-health/ops' <<<"$block" || continue
+    job_uses_ops "$block" || continue
     script="$dir/$job.sh"
     awk '
       /- name: Name the dev-health-ops commit of a failed run/ { in_step=1 }
@@ -1842,9 +1850,11 @@ check_fullstack_failure_step_behaviour() {
       printf 'job %s: the failed-run ops naming step itself failed\n' "$job" >&2; status=1; continue
     fi
     checked=$((checked + 1))
-    awk -v s="$sha" -v m="$mode" -v p="$pin" '/^::error / && index($0, s) && index($0, m) && index($0, p) { found=1 } END { exit !found }' "$dir/stdout" || {
+    # Order matters (codex #1775 r1 P2): the commit comes right after
+    # "dev-health-ops ", then the mode, then the pin, so swapped labels fail.
+    awk -v s="$sha" -v m="$mode" -v p="$pin" '/^::error / && index($0, "dev-health-ops " s " ") && index($0, s) < index($0, m) && index($0, m) < index($0, p) { found=1 } END { exit !found }' "$dir/stdout" || {
       printf 'job %s: the failed-run step emits no ::error line naming ops %s (%s, pin %s)\n' "$job" "$sha" "$mode" "$pin" >&2; status=1; }
-    awk -v s="$sha" -v m="$mode" -v p="$pin" 'index($0, s) && index($0, m) && index($0, p) { found=1 } END { exit !found }' "$dir/summary" || {
+    awk -v s="$sha" -v m="$mode" -v p="$pin" 'index($0, "dev-health-ops " s " ") && index($0, s) < index($0, m) && index($0, m) < index($0, p) { found=1 } END { exit !found }' "$dir/summary" || {
       printf 'job %s: the failed-run step writes no summary line naming ops %s (%s, pin %s)\n' "$job" "$sha" "$mode" "$pin" >&2; status=1; }
   done < <(awk '/^jobs:/ { in_jobs=1; next } in_jobs && /^  [A-Za-z0-9_-]+:$/ { sub(/:$/, ""); sub(/^  /, ""); print }' "$file")
   [ "$checked" -gt 0 ] || { printf 'no failed-run ops naming step was executed in %s\n' "$file" >&2; status=1; }
@@ -2123,6 +2133,39 @@ awk '/^          echo "::error title=fullstack-acceptance failed::/ && !done { p
 mutate_or_die "$fullstack_workflow" "$failure_step_no_error" 'failure_step_no_error'
 check_fullstack_ops_checkout_wiring "$failure_step_no_error" 2>/dev/null && printf 'NOTE: the wiring check alone passes a failure step that emits nothing (codex #1768 r3 P3); the behaviour check must not\n'
 assert_check_fails 'the first job'"'"'s failure step emits no ::error line' check_fullstack_failure_step_behaviour "$failure_step_no_error"
+failure_step_swapped="$tmpdir/fullstack-failure-step-swapped.yml"
+# shellcheck disable=SC2016  # the $ names are literal text in the workflow
+replace_literal_line "$fullstack_workflow" "$failure_step_swapped" \
+  '          echo "::error title=fullstack-acceptance failed::with dev-health-ops $sha (chosen by $mode; ci/fullstack-ops.pin $pin)"' \
+  '          echo "::error title=fullstack-acceptance failed::with dev-health-ops $pin (chosen by $mode; ci/fullstack-ops.pin $sha)"'
+mutate_or_die "$fullstack_workflow" "$failure_step_swapped" 'failure_step_swapped'
+assert_check_fails 'the first job'"'"'s failure step names the pin as the commit' check_fullstack_failure_step_behaviour "$failure_step_swapped"
+failure_summary_swapped="$tmpdir/fullstack-failure-summary-swapped.yml"
+# shellcheck disable=SC2016  # the $ names are literal text in the workflow
+replace_literal_line "$fullstack_workflow" "$failure_summary_swapped" \
+  "          printf '\\n**Failed with dev-health-ops %s (chosen by %s; pin %s).**\\n' \"\$sha\" \"\$mode\" \"\$pin\" >> \"\$GITHUB_STEP_SUMMARY\"" \
+  "          printf '\\n**Failed with dev-health-ops %s (chosen by %s; pin %s).**\\n' \"\$pin\" \"\$mode\" \"\$sha\" >> \"\$GITHUB_STEP_SUMMARY\""
+mutate_or_die "$fullstack_workflow" "$failure_summary_swapped" 'failure_summary_swapped'
+assert_check_fails 'the first job'"'"'s failure summary names the pin as the commit' check_fullstack_failure_step_behaviour "$failure_summary_swapped"
+job_other_path="$tmpdir/fullstack-job-other-ops-path.yml"
+awk '
+  /^  [A-Za-z0-9_-]+:$/ { in_job = ($0 == "  web-contract-changed:") }
+  in_job && $0 == "          path: dev-health/ops" && !moved { print "          path: ops"; moved=1; next }
+  in_job && /^          echo "::error title=fullstack-acceptance failed::/ { print "          :"; next }
+  in_job && /Failed with dev-health-ops/ { print "          :"; next }
+  { print }
+' "$fullstack_workflow" > "$job_other_path"
+mutate_or_die "$fullstack_workflow" "$job_other_path" 'job_other_path'
+assert_check_fails 'a job that checks ops out to another path has a silent failure step' check_fullstack_failure_step_behaviour "$job_other_path"
+wiring_other_path="$tmpdir/fullstack-wiring-other-ops-path.yml"
+awk '
+  /^  [A-Za-z0-9_-]+:$/ { in_job = ($0 == "  web-contract-changed:") }
+  in_job && $0 == "          path: dev-health/ops" && !moved { print "          path: ops"; moved=1; next }
+  in_job && $0 == "        uses: ./dev-health-acr/.github/actions/ops-checkout" { print "        uses: ./dev-health-acr/.github/actions/ops-checkout-fork"; next }
+  { print }
+' "$fullstack_workflow" > "$wiring_other_path"
+mutate_or_die "$fullstack_workflow" "$wiring_other_path" 'wiring_other_path'
+assert_check_fails 'a job that checks ops out to another path through another action escapes the wiring check' check_fullstack_ops_checkout_wiring "$wiring_other_path"
 failure_step_no_summary="$tmpdir/fullstack-failure-step-no-summary.yml"
 summary_lines="$(grep -c 'Failed with dev-health-ops' "$fullstack_workflow")"
 awk -v last="$summary_lines" '/Failed with dev-health-ops/ { n++; if (n == last) { print "          :"; next } } { print }' "$fullstack_workflow" > "$failure_step_no_summary"
