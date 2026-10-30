@@ -3402,7 +3402,9 @@ an unsaved answer stays unsaved (T5); closed is closed on every read (T6).
 **Construction anchors:** `ContextFabricThread`, `ContextFabricThreadList`,
 `ParseContextFabricThreadRetention`, `ContextFabricThreadExpiresAt`,
 `ValidContextFabricThreadCursor`, `ErrorCodeThreadClosed`
-(`internal/contracts/v1/context_fabric_thread.go`);
+(`internal/contracts/v1/context_fabric_thread.go`); the consumer decoders
+`ParseContextFabricThread`, `ParseContextFabricThreadList`
+(`context_fabric_thread_parse.go`);
 `StoredResultSurfaceThread` (`internal/contextfabric/stored_result_authorization.go`);
 schemas `contracts/jsonschema/v1/context_fabric_thread.v1.schema.json` and
 `context_fabric_thread_list.v1.schema.json`; goldens

@@ -155,7 +155,11 @@ func (t ContextFabricThreadTurn) Validate() error {
 		return fmt.Errorf("thread turn submission_id violates v1 bounds")
 	case !slices.Contains(states[:], t.State):
 		return fmt.Errorf("thread turn state is not a member of the closed vocabulary")
-	case t.Question != "" && !rawBoundedText(t.Question, 1, ContextFabricThreadQuestionMaxRunes):
+	// The question is the admitted request's, already held to that
+	// request's own rules; here it is held to the published bound exactly
+	// (1..8000 runes, no trimming), so the validator and the schema agree on
+	// every string.
+	case t.Question != "" && !stringLengthBetween(t.Question, 1, ContextFabricThreadQuestionMaxRunes):
 		return fmt.Errorf("thread turn question violates v1 bounds")
 	case t.ResultID != "" && !stringLengthBetween(t.ResultID, 8, 256):
 		return fmt.Errorf("thread turn result_id violates v1 bounds")

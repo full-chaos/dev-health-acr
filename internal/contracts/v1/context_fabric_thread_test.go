@@ -166,7 +166,7 @@ func TestThreadValidatorAndSchemaAgree(t *testing.T) {
 		"turn count zero":            {func(th *ContextFabricThread) { th.TurnCount = 0 }, false, false},
 		"a page before a later turn": {func(th *ContextFabricThread) { th.TurnCount = 5; shiftLast(th, time.Hour) }, true, false},
 		"no question recorded":       {func(th *ContextFabricThread) { th.Turns[0].Question = "" }, true, false},
-		"blank question":             {func(th *ContextFabricThread) { th.Turns[0].Question = "   " }, false, true},
+		"blank question":             {func(th *ContextFabricThread) { th.Turns[0].Question = "   " }, true, false},
 		"question too long":          {func(th *ContextFabricThread) { th.Turns[0].Question = strings.Repeat("q", 8001) }, false, false},
 		"question at the bound":      {func(th *ContextFabricThread) { th.Turns[0].Question = strings.Repeat("q", 8000) }, true, false},
 		"cursor while all served":    {func(th *ContextFabricThread) { th.EarlierTurnsCursor = "ZWFybGllcg" }, false, true},
@@ -209,6 +209,9 @@ func TestThreadValidatorAndSchemaAgree(t *testing.T) {
 			body, err := json.Marshal(thread)
 			if err != nil {
 				t.Fatal(err)
+			}
+			if _, parseErr := ParseContextFabricThread(body); (parseErr == nil) != (goErr == nil) {
+				t.Fatalf("Parse = %v on the writer's own bytes, Validate = %v", parseErr, goErr)
 			}
 			schemaErr := contractcheck.ValidateSerializedStrict("", threadSchemaFile, body)
 			switch {
@@ -302,6 +305,9 @@ func TestThreadListValidatorAndSchemaAgree(t *testing.T) {
 			body, err := json.Marshal(list)
 			if err != nil {
 				t.Fatal(err)
+			}
+			if _, parseErr := ParseContextFabricThreadList(body); (parseErr == nil) != (goErr == nil) {
+				t.Fatalf("Parse = %v on the writer's own bytes, Validate = %v", parseErr, goErr)
 			}
 			schemaErr := contractcheck.ValidateSerializedStrict("", threadListSchemaFile, body)
 			switch {
@@ -524,6 +530,116 @@ func TestThreadOpenAPIPublishesTheGoConstants(t *testing.T) {
 	for _, refused := range []string{"", strings.Repeat("Z", ContextFabricThreadCursorMaxLength+1), "a+b", "a/b", "a=", "a b", "é"} {
 		if ValidContextFabricThreadCursor(refused) {
 			t.Fatalf("cursor %q is accepted", refused)
+		}
+	}
+}
+
+// Parse and the published schema judge raw documents the same: the keys a
+// Go value cannot see (present as empty, false or null; missing; unknown;
+// given twice) are refused by both, so a consumer decoding with Parse and one
+// validating with the schema accept the same documents (round-1 review: Go
+// accepted an explicit empty question and result_withheld false).
+func TestThreadParseAndSchemaAgreeOnRawDocuments(t *testing.T) {
+	type document = map[string]any
+	golden := func(name string) document {
+		var value document
+		decoder := json.NewDecoder(bytes.NewReader(contextFabricGolden(t, name)))
+		decoder.UseNumber()
+		if err := decoder.Decode(&value); err != nil {
+			t.Fatal(err)
+		}
+		return value
+	}
+	turn := func(d document, index int) document { return d["turns"].([]any)[index].(document) }
+	summary := func(d document, index int) document { return d["threads"].([]any)[index].(document) }
+	encode := func(d document) []byte {
+		body, err := json.Marshal(d)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return body
+	}
+	type rawCase struct {
+		list   bool
+		body   func() []byte
+		valid  bool
+		goOnly bool
+	}
+	thread := func(mutate func(document)) func() []byte {
+		return func() []byte { d := golden("context_fabric_thread.v1.json"); mutate(d); return encode(d) }
+	}
+	list := func(mutate func(document)) func() []byte {
+		return func() []byte { d := golden("context_fabric_thread_list.v1.json"); mutate(d); return encode(d) }
+	}
+	cases := map[string]rawCase{
+		"thread golden":                  {false, thread(func(document) {}), true, false},
+		"explicit empty question":        {false, thread(func(d document) { turn(d, 0)["question"] = "" }), false, false},
+		"null question":                  {false, thread(func(d document) { turn(d, 0)["question"] = nil }), false, false},
+		"whitespace question":            {false, thread(func(d document) { turn(d, 0)["question"] = "   " }), true, false},
+		"withheld false beside a result": {false, thread(func(d document) { turn(d, 0)["result_withheld"] = false }), false, false},
+		"withheld false when running":    {false, thread(func(d document) { turn(d, 3)["result_withheld"] = false }), false, false},
+		"withheld null":                  {false, thread(func(d document) { turn(d, 3)["result_withheld"] = nil }), false, false},
+		"empty result_id when unsaved":   {false, thread(func(d document) { turn(d, 2)["result_id"] = "" }), false, false},
+		"empty earlier cursor":           {false, thread(func(d document) { d["earlier_turns_cursor"] = "" }), false, false},
+		"null earlier cursor":            {false, thread(func(d document) { d["earlier_turns_cursor"] = nil }), false, false},
+		"missing retention_days":         {false, thread(func(d document) { delete(d, "retention_days") }), false, false},
+		"null retention_days":            {false, thread(func(d document) { d["retention_days"] = nil }), false, false},
+		"missing turn_count":             {false, thread(func(d document) { delete(d, "turn_count") }), false, false},
+		"missing turn state":             {false, thread(func(d document) { delete(turn(d, 3), "state") }), false, false},
+		"null turns":                     {false, thread(func(d document) { d["turns"] = nil }), false, false},
+		"unknown top-level key":          {false, thread(func(d document) { d["title"] = "x" }), false, false},
+		"unknown turn key":               {false, thread(func(d document) { turn(d, 0)["answer"] = "x" }), false, false},
+		"retention as a string":          {false, thread(func(d document) { d["retention_days"] = "30" }), false, false},
+		"duplicate key": {false, func() []byte {
+			return bytes.Replace(contextFabricGolden(t, "context_fabric_thread.v1.json"), []byte(`{"schema_version"`), []byte(`{"thread_id":"thread-0000-11947-other","schema_version"`), 1)
+		}, false, true},
+		"duplicate turn key": {false, func() []byte {
+			return bytes.Replace(contextFabricGolden(t, "context_fabric_thread.v1.json"), []byte(`"state":"running"`), []byte(`"state":"done","state":"running"`), 1)
+		}, false, true},
+		"list golden":               {true, list(func(document) {}), true, false},
+		"empty next cursor":         {true, list(func(d document) { d["next_cursor"] = "" }), false, false},
+		"null next cursor":          {true, list(func(d document) { d["next_cursor"] = nil }), false, false},
+		"missing threads":           {true, list(func(d document) { delete(d, "threads"); delete(d, "next_cursor") }), false, false},
+		"null threads":              {true, list(func(d document) { d["threads"] = nil; delete(d, "next_cursor") }), false, false},
+		"summary missing retention": {true, list(func(d document) { delete(summary(d, 1), "retention_days") }), false, false},
+		"summary unknown key":       {true, list(func(d document) { summary(d, 0)["title"] = "x" }), false, false},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			body := tc.body()
+			var parseErr error
+			schemaFile := threadSchemaFile
+			if tc.list {
+				_, parseErr = ParseContextFabricThreadList(body)
+				schemaFile = threadListSchemaFile
+			} else {
+				_, parseErr = ParseContextFabricThread(body)
+			}
+			if (parseErr == nil) != tc.valid {
+				t.Fatalf("Parse = %v, want valid %t", parseErr, tc.valid)
+			}
+			// An unknown key is refused as unknown, not misreported as an
+			// empty value.
+			if strings.Contains(name, "unknown") && (parseErr == nil || !strings.Contains(parseErr.Error(), "unknown field")) {
+				t.Fatalf("Parse = %v, want an unknown field refusal", parseErr)
+			}
+			schemaErr := contractcheck.ValidateSerializedStrict("", schemaFile, body)
+			switch {
+			case tc.goOnly && schemaErr != nil:
+				t.Fatalf("a Go-only rule is also refused by the schema (%v)", schemaErr)
+			case !tc.goOnly && (schemaErr == nil) != tc.valid:
+				t.Fatalf("schema = %v, want valid %t", schemaErr, tc.valid)
+			}
+		})
+	}
+	raw := contextFabricGolden(t, "context_fabric_thread.v1.json")
+	for name, body := range map[string][]byte{
+		"trailing content": append(bytes.Clone(raw), []byte(`{}`)...),
+		"invalid UTF-8":    bytes.Replace(raw, []byte("dev-health-ops"), []byte{'d', 0xff}, 1),
+		"not an object":    []byte(`[]`),
+	} {
+		if _, err := ParseContextFabricThread(body); err == nil {
+			t.Fatalf("%s: Parse accepted it", name)
 		}
 	}
 }

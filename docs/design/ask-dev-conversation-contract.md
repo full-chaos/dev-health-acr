@@ -100,6 +100,16 @@ turn and list order, unique ids, `expires_at` = `last_turn_at` + window, the
 turns inside `created_at..last_turn_at`, `created_at` equal to the first
 turn on the page that reaches it, and a cursor only when earlier turns exist.
 
+A Go value cannot tell an absent key from a key given its zero value, so the
+consumer decoders `ParseContextFabricThread` and
+`ParseContextFabricThreadList` hold raw bytes to what the schema holds before
+`Validate`: no key twice, no unknown key, no trailing content, valid UTF-8,
+no key present as empty, false, zero or null where the writer omits the
+field, and no required key missing (a missing `retention_days` would
+otherwise read as `0`). Every string bound is the schema's exactly (the
+question is 1..8000 runes, untrimmed). A key given twice is the one rule
+only Go holds: JSON Schema has none for it.
+
 ### 3.2 Routes (published here, served by I-29)
 
 | Route | Success | Not the caller's, unknown, closed, malformed |
