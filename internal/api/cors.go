@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"net/http"
+	"net/url"
 	"strings"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
@@ -100,9 +101,16 @@ func CORSRouteClassVocabulary() [4]string {
 }
 
 func (a *App) corsMiddleware(next http.Handler) http.Handler {
-	allowed := make(map[string]struct{}, len(a.config.CORSAllowedOrigins))
+	// allowed maps a listed origin to itself, so every header and log value
+	// below is the configured string, never the request's. listedHosts holds
+	// the listed hosts, for the refusal line's near_miss.
+	allowed := make(map[string]string, len(a.config.CORSAllowedOrigins))
+	listedHosts := make(map[string]struct{}, len(a.config.CORSAllowedOrigins))
 	for _, origin := range a.config.CORSAllowedOrigins {
-		allowed[origin] = struct{}{}
+		allowed[origin] = origin
+		if parsed, err := url.Parse(origin); err == nil {
+			listedHosts[parsed.Hostname()] = struct{}{}
+		}
 	}
 	if len(allowed) == 0 {
 		return next
@@ -123,13 +131,21 @@ func (a *App) corsMiddleware(next http.Handler) http.Handler {
 			return
 		}
 		preflight := r.Method == http.MethodOptions && r.Header.Get("Access-Control-Request-Method") != ""
-		origin := origins[0]
-		if _, ok := allowed[origin]; !ok || len(origins) != 1 {
+		origin, ok := allowed[origins[0]]
+		if !ok || len(origins) != 1 {
+			// The refused Origin itself is never logged (CodeQL
+			// go/clear-text-logging): reason and near_miss are derived by
+			// comparison, so no request header string reaches the log.
+			reason := "not_listed"
+			if len(origins) != 1 {
+				reason = "multiple_origins"
+			}
 			noteCORSDecision(r, corsDecision{outcome: "refused", route: route, preflight: preflight})
 			a.logger.InfoContext(r.Context(), CORSRefusedLogMessage,
 				"route", route,
 				"preflight", preflight,
-				"origin", contextfabric.SanitizeLogAttr(truncateForLog(origin, 200)),
+				"reason", reason,
+				"near_miss", corsNearMiss(listedHosts, origins),
 				"request_id", contextfabric.SanitizeLogAttr(RequestID(r.Context())),
 			)
 			next.ServeHTTP(w, r)
@@ -151,9 +167,18 @@ func (a *App) corsMiddleware(next http.Handler) http.Handler {
 	})
 }
 
-func truncateForLog(value string, limit int) string {
-	if len(value) <= limit {
-		return value
+// corsNearMiss reports whether a refused Origin names a listed host under
+// another scheme, port or letter case: the usual sign of a misspelled allow
+// list entry rather than a foreign site.
+func corsNearMiss(listedHosts map[string]struct{}, origins []string) bool {
+	for _, origin := range origins {
+		parsed, err := url.Parse(origin)
+		if err != nil {
+			continue
+		}
+		if _, ok := listedHosts[strings.ToLower(parsed.Hostname())]; ok {
+			return true
+		}
 	}
-	return value[:limit]
+	return false
 }

@@ -308,3 +308,55 @@ func lastAccessLine(t *testing.T, logs *bytes.Buffer) map[string]any {
 	logs.Reset()
 	return found
 }
+
+// A refused Origin is never written to a log (CodeQL go/clear-text-logging):
+// the refusal line says why and whether it names a listed host, and nothing
+// from the request's Origin header reaches the log.
+func TestARefusedOriginIsNeverLoggedAndSaysWhy(t *testing.T) {
+	harness := corsHarness(t)
+	logs := harness.logs[0]
+	preflight := map[string]string{"Access-Control-Request-Method": "POST"}
+	for _, tc := range []struct {
+		origins  []string
+		reason   string
+		nearMiss bool
+		secret   string
+	}{
+		{[]string{"https://evil-refused.example"}, "not_listed", false, "evil-refused"},
+		{[]string{"http://www.fullchaos.dev"}, "not_listed", true, "http://www.fullchaos.dev"},
+		{[]string{"https://WWW.FULLCHAOS.dev"}, "not_listed", true, "FULLCHAOS"},
+		{[]string{"https://www.fullchaos.dev:8443"}, "not_listed", true, "8443"},
+		{[]string{corsTestOrigin, "https://second-refused.example"}, "multiple_origins", true, "second-refused"},
+	} {
+		logs.Reset()
+		request := httptest.NewRequest(http.MethodOptions, ContextFabricInvestigationsPath, nil)
+		for _, origin := range tc.origins {
+			request.Header.Add("Origin", origin)
+		}
+		for key, value := range preflight {
+			request.Header.Set(key, value)
+		}
+		recorder := httptest.NewRecorder()
+		harness.apps[0].Handler().ServeHTTP(recorder, request)
+		expectNoCORS(t, strings.Join(tc.origins, ","), recorder)
+		if strings.Contains(logs.String(), tc.secret) {
+			t.Fatalf("%v: the refused origin reached the log:\n%s", tc.origins, logs.String())
+		}
+		var refusal map[string]any
+		for _, line := range strings.Split(strings.TrimSpace(logs.String()), "\n") {
+			var entry map[string]any
+			if json.Unmarshal([]byte(line), &entry) == nil && entry["msg"] == CORSRefusedLogMessage {
+				refusal = entry
+			}
+		}
+		if refusal == nil {
+			t.Fatalf("%v: no %q line:\n%s", tc.origins, CORSRefusedLogMessage, logs.String())
+		}
+		if refusal["reason"] != tc.reason || refusal["near_miss"] != tc.nearMiss || refusal["route"] != "investigations" || refusal["preflight"] != true {
+			t.Fatalf("%v: refusal line = %v, want reason %s near_miss %v", tc.origins, refusal, tc.reason, tc.nearMiss)
+		}
+		if _, present := refusal["origin"]; present {
+			t.Fatalf("%v: the refusal line carries an origin field: %v", tc.origins, refusal)
+		}
+	}
+}
