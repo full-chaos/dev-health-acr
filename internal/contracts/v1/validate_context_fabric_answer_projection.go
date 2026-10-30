@@ -33,6 +33,9 @@ func (p ContextFabricAnswerProjection) validate(bounds contextFabricBounds) erro
 	if err := validateSemanticReadingOnResult(p.SemanticReading, p.Status, bounds); err != nil {
 		return err
 	}
+	if err := p.ModelSource.Validate(); err != nil {
+		return err
+	}
 	if p.SchemaVersion != ContextFabricAnswerProjectionSchema {
 		return fmt.Errorf("answer projection schema version must be %q", ContextFabricAnswerProjectionSchema)
 	}

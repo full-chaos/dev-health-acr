@@ -190,6 +190,10 @@ func TestPlatformModelPathIsReachedOnlyThroughTheServiceModelGate(t *testing.T) 
 		{name: "resolver constructions", got: sites.resolverConstructions, want: []string{
 			"internal/runtime/hosted/open.go:offerPhrasingRuntimeFor",
 			"internal/runtime/hosted/org_model_config.go:newOrgModelRuntimeResolver",
+			// A deployment with no per-organization store wraps its default
+			// runtime in a resolver with no per-organization support, composed
+			// into the same one engine, so every call records the platform source.
+			"internal/runtime/hosted/org_model_config.go:wrapWithOrgModelRuntimeResolver",
 		}},
 		{name: "engine constructions", got: sites.engineConstructions, want: []string{
 			"internal/runtime/hosted/open.go:buildContextFabricInvestigator",

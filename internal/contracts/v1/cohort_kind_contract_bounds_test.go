@@ -548,12 +548,28 @@ func TestOpenAPIPublishesNoIndependentSubjectKindVocabulary(t *testing.T) {
 // positives today.
 //
 // mixedVocabularyExceptions is the registry for a legitimately mixed enum, if
-// one is ever added. It is EMPTY on purpose. An entry is a reviewed decision
+// one is ever added. It holds only model_source, whose member "organization"
+// shares a word with the subject kinds. An entry is a reviewed decision
 // that a node may share words with this vocabulary without publishing it, and
 // it carries the reason; the alternative -- quietly loosening the predicate
 // again -- is how this test lost 14 sites the first time and one more the
 // second.
-var mixedVocabularyExceptions = map[string]string{}
+var mixedVocabularyExceptions = map[string]string{
+	"context_fabric_answer_projection.v1.schema.json/properties/model_source":                                               modelSourceMixedVocabularyReason,
+	"context_fabric_investigation_response.v1.schema.json/properties/model_source":                                          modelSourceMixedVocabularyReason,
+	"context_fabric_investigation_response.v2.schema.json/properties/model_source":                                          modelSourceMixedVocabularyReason,
+	"context_fabric_investigation_result.v1.schema.json/properties/model_source":                                            modelSourceMixedVocabularyReason,
+	"context_fabric_investigation_result.v2.schema.json/properties/model_source":                                            modelSourceMixedVocabularyReason,
+	"mcp_investigate_question_response.v1.schema.json/$defs/context_fabric_answer_projection.v1/properties/model_source":    modelSourceMixedVocabularyReason,
+	"mcp_investigate_question_response.v1.schema.json/$defs/context_fabric_investigation_result.v1/properties/model_source": modelSourceMixedVocabularyReason,
+	"mcp_investigation_result_response.v1.schema.json/$defs/context_fabric_investigation_result.v1/properties/model_source": modelSourceMixedVocabularyReason,
+}
+
+// modelSourceMixedVocabularyReason: model_source is the closed two-member
+// vocabulary organization | platform (whose model served a turn). Its member
+// "organization" is also a subject kind, a coincidence of the word: the field
+// names a model owner, never a cohort or subject kind.
+const modelSourceMixedVocabularyReason = "model_source: organization | platform, a model owner, not a subject kind"
 
 func publishesSubjectKinds(values []string, vocabulary map[string]struct{}) bool {
 	for _, value := range values {

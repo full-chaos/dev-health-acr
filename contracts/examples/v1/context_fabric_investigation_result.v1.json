@@ -885,5 +885,6 @@
     "claimed_facts_count": 4,
     "rows_count": 2,
     "state": "not_derived"
-  }
+  },
+  "model_source": "organization"
 }

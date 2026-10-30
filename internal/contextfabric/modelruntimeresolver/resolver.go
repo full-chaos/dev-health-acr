@@ -55,6 +55,7 @@ import (
 	"sync"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
+	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
 	"golang.org/x/sync/singleflight"
 )
@@ -120,24 +121,26 @@ func New(deploymentDefault contextfabric.ModelRuntime, configs contextfabric.Org
 }
 
 func (r *Resolver) InterpretQuestion(ctx context.Context, principal storage.Principal, request contextfabric.InvestigationRequest) (contextfabric.InterpretedQuestion, contextfabric.ModelExecutionReceipt, error) {
-	runtime, err := r.runtimeFor(ctx, principal.OrgID)
+	runtime, source, err := r.runtimeSourced(ctx, principal.OrgID)
 	if err != nil {
 		return contextfabric.InterpretedQuestion{}, contextfabric.ModelExecutionReceipt{}, err
 	}
 	if runtime == nil {
 		return contextfabric.InterpretedQuestion{}, contextfabric.ModelExecutionReceipt{}, contextfabric.ErrModelUnavailable
 	}
+	contextfabric.RecordModelSource(ctx, source)
 	return runtime.InterpretQuestion(ctx, principal, request)
 }
 
 func (r *Resolver) SynthesizeAnswer(ctx context.Context, principal storage.Principal, input contextfabric.SynthesisInput) (contextfabric.SynthesisDraft, contextfabric.ModelExecutionReceipt, error) {
-	runtime, err := r.runtimeFor(ctx, principal.OrgID)
+	runtime, source, err := r.runtimeSourced(ctx, principal.OrgID)
 	if err != nil {
 		return contextfabric.SynthesisDraft{}, contextfabric.ModelExecutionReceipt{}, err
 	}
 	if runtime == nil {
 		return contextfabric.SynthesisDraft{}, contextfabric.ModelExecutionReceipt{}, contextfabric.ErrModelUnavailable
 	}
+	contextfabric.RecordModelSource(ctx, source)
 	return runtime.SynthesizeAnswer(ctx, principal, input)
 }
 
@@ -146,7 +149,7 @@ func (r *Resolver) SynthesizeAnswer(ctx context.Context, principal storage.Princ
 // synthesis: the organization's own model first, the deployment default only
 // when the turn may use it.
 func (r *Resolver) PhraseStructureOffers(ctx context.Context, principal storage.Principal, input contextfabric.StructureOfferPhrasingInput) (contextfabric.StructureOfferPhrasingDraft, contextfabric.ModelExecutionReceipt, error) {
-	runtime, err := r.runtimeFor(ctx, principal.OrgID)
+	runtime, source, err := r.runtimeSourced(ctx, principal.OrgID)
 	if err != nil {
 		return contextfabric.StructureOfferPhrasingDraft{}, contextfabric.ModelExecutionReceipt{}, err
 	}
@@ -159,6 +162,7 @@ func (r *Resolver) PhraseStructureOffers(ctx context.Context, principal storage.
 		logger.WarnContext(ctx, "context fabric offer phrasing withheld: no model runtime", "org_id", contextfabric.SanitizeLogAttr(principal.OrgID), "basis", "no_model_configured", "request_id", contextfabric.SanitizeLogAttr(input.RequestID))
 		return contextfabric.StructureOfferPhrasingDraft{}, contextfabric.ModelExecutionReceipt{}, fmt.Errorf("%w: %w: no model runtime configured", contextfabric.ErrModelUnavailable, contextfabric.ErrPlatformModelWithheld)
 	}
+	contextfabric.RecordModelSource(ctx, source)
 	return phraser.PhraseStructureOffers(ctx, principal, input)
 }
 
@@ -168,8 +172,17 @@ func (r *Resolver) PhraseStructureOffers(ctx context.Context, principal storage.
 // InterpretQuestion/SynthesizeAnswer both convert that into
 // ErrModelUnavailable, matching the pre-CHAOS-3775 nil-runtime behavior.
 func (r *Resolver) runtimeFor(ctx context.Context, orgID string) (contextfabric.ModelRuntime, error) {
+	runtime, _, err := r.runtimeSourced(ctx, orgID)
+	return runtime, err
+}
+
+// runtimeSourced is runtimeFor plus whose model the runtime is: the
+// organization's own saved model, or the deployment's. The caller records it
+// once a model call is actually about to be made on the runtime.
+func (r *Resolver) runtimeSourced(ctx context.Context, orgID string) (contextfabric.ModelRuntime, contractsv1.ContextFabricModelSource, error) {
 	if r.Configs == nil || orgID == "" || contextfabric.DeploymentModelBound(ctx) {
-		return r.deploymentDefault(ctx, orgID)
+		runtime, err := r.deploymentDefault(ctx, orgID)
+		return runtime, contractsv1.ContextFabricModelSourcePlatform, err
 	}
 
 	resolved, ok, err := r.Configs.ResolveOrgModelConfig(ctx, orgID)
@@ -180,18 +193,19 @@ func (r *Resolver) runtimeFor(ctx context.Context, orgID string) (contextfabric.
 		// is the AC-3775-3 "broken credential does not fall back to the
 		// deployment credential" prohibition; it applies even before a
 		// provider call is ever attempted.
-		return nil, wrapUnavailable(orgID, err)
+		return nil, contractsv1.ContextFabricModelSourceOrganization, wrapUnavailable(orgID, err)
 	}
 	if !ok {
 		// AC-3775-3: no configuration at all -> deployment default.
-		return r.deploymentDefault(ctx, orgID)
+		runtime, err := r.deploymentDefault(ctx, orgID)
+		return runtime, contractsv1.ContextFabricModelSourcePlatform, err
 	}
 
 	r.mu.Lock()
 	entry, cached := r.cache[orgID]
 	r.mu.Unlock()
 	if cached && entry.generation == resolved.Generation {
-		return entry.runtime, entry.err
+		return entry.runtime, contractsv1.ContextFabricModelSourceOrganization, entry.err
 	}
 
 	// Coalesced via singleflight, keyed by orgID+generation so a request
@@ -241,7 +255,7 @@ func (r *Resolver) runtimeFor(ctx context.Context, orgID string) (contextfabric.
 		return buildResult{runtime: runtime, err: buildErr}, nil
 	})
 	result := value.(buildResult)
-	return result.runtime, result.err
+	return result.runtime, contractsv1.ContextFabricModelSourceOrganization, result.err
 }
 
 // errDeploymentModelWithheld refuses the deployment default to a turn that may

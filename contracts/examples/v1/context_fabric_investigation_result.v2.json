@@ -93,5 +93,6 @@
     "claimed_facts_count": 0,
     "rows_count": 0,
     "state": "not_derived"
-  }
+  },
+  "model_source": "platform"
 }

@@ -1482,6 +1482,7 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 		}
 	}()
 	ctx = WithWorkItemCensusRepositoryScopeRecorder(ctx)
+	ctx = WithModelSourceRecorder(ctx)
 	// Only the creator completes the response owner. Hosted requests borrow
 	// the transport's larger lifetime; direct calls end at this return.
 	if _, ok := WorkItemResponseOwnerFromContext(ctx); !ok {
