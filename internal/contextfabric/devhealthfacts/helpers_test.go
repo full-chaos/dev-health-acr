@@ -6,6 +6,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -61,9 +62,13 @@ const teamLinkCandidatesMarker = "SELECT cp.work_item_id AS work_item_id FROM wo
 type fakeClient struct {
 	tables  []fakeTable
 	queries []capturedQuery
+	// mu serializes Query: a provider may run its statements together.
+	mu sync.Mutex
 }
 
 func (c *fakeClient) Query(_ context.Context, statement string, bindings []contextpacket.ClickHouseBinding) (contextpacket.ClickHouseRowScanner, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	c.queries = append(c.queries, capturedQuery{statement: statement, bindings: bindings})
 	// A project population aggregate is answered only by a table that names
 	// its marker; every other table's match also occurs inside its text.

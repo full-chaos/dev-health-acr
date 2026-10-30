@@ -153,6 +153,10 @@ type submissionHarness struct {
 	tokenA       string
 	tokenB       string
 	investigator *countingSubmissionInvestigator
+	// credentials and devices are the shared credential and device
+	// authorization stores, for tests that issue a user-approved credential.
+	credentials *storage.CredentialLifecycle
+	devices     storage.DeviceAuthorizationStore
 }
 
 // newSubmissionHarness builds one App per store. Every App shares the
@@ -184,6 +188,7 @@ func newSubmissionHarnessWithCredentials(t *testing.T, credentials *storage.Cred
 		tokenA:       issueOrgCredential(t, credentials, orgID, clock.now, []string{auth.ScopeContextRead}, []string{hostedTestRepository}),
 		tokenB:       issueOrgCredential(t, credentials, orgID, clock.now, []string{auth.ScopeContextRead}, []string{hostedTestRepository}),
 		investigator: newCountingSubmissionInvestigator(stores[0], clock),
+		credentials:  credentials, devices: devices,
 	}
 	for _, store := range stores {
 		logs := &bytes.Buffer{}

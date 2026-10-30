@@ -35,7 +35,7 @@ func SubmissionStatusOutcomeVocabulary() [4]SubmissionStatusOutcome {
 	return [4]SubmissionStatusOutcome{SubmissionStatusServed, SubmissionStatusNotFound, SubmissionStatusStoreUnavailable, SubmissionStatusInvalidRecord}
 }
 
-func (a *App) logSubmissionStatus(r *http.Request, principal storage.Principal, outcome SubmissionStatusOutcome, state contextfabric.SubmissionState, err error) {
+func (a *App) logSubmissionStatus(r *http.Request, principal storage.Principal, outcome SubmissionStatusOutcome, state contextfabric.SubmissionState, err error, extra ...any) {
 	args := []any{
 		"org_id", contextfabric.SanitizeLogAttr(principal.OrgID),
 		"surface", "submission_status",
@@ -43,6 +43,7 @@ func (a *App) logSubmissionStatus(r *http.Request, principal storage.Principal, 
 		"state", string(state),
 		"request_id", contextfabric.SanitizeLogAttr(RequestID(r.Context())),
 	}
+	args = append(args, extra...)
 	if err != nil {
 		args = append(args, "error_class", submissionStoreErrorClass(err))
 		a.logger.WarnContext(r.Context(), ContextFabricSubmissionStatusLogMessage, args...)
@@ -112,7 +113,7 @@ func (a *App) ContextFabricSubmissionStatusHandler(submissions contextfabric.Sub
 			writeError(w, r, http.StatusInternalServerError, "internal_error", "Context Fabric investigation submission could not be served", false, nil)
 			return
 		}
-		a.logSubmissionStatus(r, principal, SubmissionStatusServed, record.State, nil)
+		a.logSubmissionStatus(r, principal, SubmissionStatusServed, record.State, nil, "owner_match", string(ownerMatchOf(principal, record)))
 		a.recordReadAudit(r.Context(), principal, "context_fabric_investigation_submission_status_read", "context_fabric_investigation_submission", record.ReservedResultID, "success", map[string]any{"state": string(record.State)})
 		writeJSON(w, http.StatusOK, status)
 	})
