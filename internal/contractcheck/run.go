@@ -131,6 +131,7 @@ var exampleSchemaPairs = map[string]string{
 	// CHAOS-11912: the four submission refusals, written by the route
 	// itself (internal/api/context_fabric_submission_test.go).
 	"error_context_fabric_submission_mismatch.v1.json":    "error.v1.schema.json",
+	"error_context_fabric_submission_required.v1.json":    "error.v1.schema.json",
 	"error_context_fabric_submission_in_progress.v1.json": "error.v1.schema.json",
 	"error_context_fabric_submission_unsaved.v1.json":     "error.v1.schema.json",
 	"error_context_fabric_submission_abandoned.v1.json":   "error.v1.schema.json",

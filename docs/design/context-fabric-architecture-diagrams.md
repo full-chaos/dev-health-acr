@@ -3273,6 +3273,13 @@ Repeat-key outcomes (the owner's retry of the same key):
 | `abandoned` | the run returned an error (abandoned at once) | `409 submission_abandoned` |
 | `abandoned` | running past `expires_at` (a pod that died mid-run), by reconcile or the sweeper | `409 submission_abandoned`, byte-identical to the row above |
 
+A browser-class credential (CHAOS-12093) must name the key: its create with a
+missing, malformed or repeated `X-ACR-Submission-ID` is `400
+submission_required`, before admission and model work, and leaves no record.
+The class comes from the credential row, never from the request; every other
+class keeps the optional header (a missing one is an implicit admission,
+CHAOS-11997).
+
 A client cannot tell the two `abandoned` causes apart, by design: the plan's
 recovery maps both to "Interrupted — ask again". Another principal's request
 on the same submission id is a new key of its own and never reaches the
