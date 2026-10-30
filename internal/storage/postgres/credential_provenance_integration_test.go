@@ -200,7 +200,7 @@ VALUES ('wlb_provenance', $1, 'cluster.local', 'ns', 'sa', 'uid', 'read', '["*"]
 func TestCredentialProvenance_orgBearerMigrationRelabelsCLIRowsAndKeepsImmutability(t *testing.T) {
 	ctx := context.Background()
 	f := newProvenanceFixture(t, ctx)
-	cli, err := f.service.Create(ctx, credentialCreateRequest("pre-0061 cli"))
+	cli, err := f.service.Create(ctx, credentialCreateRequest("pre-0062 cli"))
 	require.NoError(t, err)
 	cliSuccessor, err := f.service.Rotate(ctx, auth.RotateCredentialRequest{
 		OrgID: cli.Credential.OrgID, CredentialID: cli.Credential.CredentialID, CreatedBy: "operator@example.test", Overlap: time.Minute,
@@ -208,7 +208,7 @@ func TestCredentialProvenance_orgBearerMigrationRelabelsCLIRowsAndKeepsImmutabil
 	require.NoError(t, err)
 	native := f.redeemDevice(t, ctx, "M1", "", "")
 
-	// Make the CLI rows pre-0061 rows: the class the 0058 code wrote.
+	// Make the CLI rows pre-0062 rows: the class the 0058 code wrote.
 	_, err = f.db.ExecContext(ctx, `ALTER TABLE acr.client_credentials DISABLE TRIGGER trg_client_credentials_provenance_immutable`)
 	require.NoError(t, err)
 	_, err = f.db.ExecContext(ctx, `UPDATE acr.client_credentials SET client_class = 'operator' WHERE credential_id = ANY($1)`,
