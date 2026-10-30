@@ -107,6 +107,7 @@ func TestStoredResultSurfacesServingToACallerCallTheFloodHelper(t *testing.T) {
 	notServed := map[StoredResultSurface]string{
 		StoredResultSurfacePriorResult:     "out of scope: the engine reads a prior result to carry state into a new turn; the row is never returned to the caller",
 		StoredResultSurfaceFactRootRecheck: "out of scope: re-checks the committed root subjects of a turn before the fact read; the row is never returned to the caller",
+		StoredResultSurfaceThread:          "out of scope: the thread read names a turn's result id, or withholds it, and never serves result content",
 	}
 	for _, surface := range StoredResultSurfaceVocabulary() {
 		file, serves := servesToCaller[surface]

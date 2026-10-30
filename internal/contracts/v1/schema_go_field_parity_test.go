@@ -114,6 +114,8 @@ var schemaRootTypes = map[string]string{
 	"context_fabric_projection_batch.v1.schema.json":             "ContextFabricProjectionBatch",
 	"context_fabric_investigation_event.v1.schema.json":          "ContextFabricInvestigationEvent",
 	"context_fabric_submission_status.v1.schema.json":            "ContextFabricSubmissionStatus",
+	"context_fabric_thread.v1.schema.json":                       "ContextFabricThread",
+	"context_fabric_thread_list.v1.schema.json":                  "ContextFabricThreadList",
 	"context_packet.v1.schema.json":                              "ContextPacket",
 	"context_packet_item.v1.schema.json":                         "ContextPacketItem",
 	"context_packet_request.v1.schema.json":                      "ContextPacketRequest",

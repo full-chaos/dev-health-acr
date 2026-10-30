@@ -1,0 +1,39 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://contracts.fullchaos.dev/acr/v1/context_fabric_thread_list.v1.schema.json",
+  "title": "Context Fabric Thread List v1",
+  "description": "One page of the caller's own Ask Dev conversations: GET /api/v1/context-fabric/threads. Newest last_turn_at first, then thread_id. A deleted or expired thread is not listed.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "threads"],
+  "properties": {
+    "schema_version": { "const": "context_fabric_thread_list.v1" },
+    "threads": {
+      "type": "array",
+      "maxItems": 50,
+      "items": { "$ref": "#/$defs/ThreadSummary" }
+    },
+    "next_cursor": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 512,
+      "pattern": "^[A-Za-z0-9_-]{1,512}$",
+      "description": "Present when more threads follow this page: pass it back as the cursor query parameter. Opaque."
+    }
+  },
+  "$defs": {
+    "ThreadSummary": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["thread_id", "retention_days", "turn_count", "created_at", "last_turn_at", "expires_at"],
+      "properties": {
+        "thread_id": { "type": "string", "minLength": 8, "maxLength": 128, "pattern": "^[A-Za-z0-9._:-]{8,128}$" },
+        "retention_days": { "type": "integer", "enum": [0, 30] },
+        "turn_count": { "type": "integer", "minimum": 1 },
+        "created_at": { "type": "string", "format": "date-time" },
+        "last_turn_at": { "type": "string", "format": "date-time" },
+        "expires_at": { "type": "string", "format": "date-time" }
+      }
+    }
+  }
+}

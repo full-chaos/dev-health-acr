@@ -1,0 +1,1 @@
+{"schema_version":"error.v1","request_id":"req_00000000000000000000000000011947","error":{"code":"thread_closed","message":"The conversation was deleted or has expired; start a new one","http_status":409,"retryable":false}}

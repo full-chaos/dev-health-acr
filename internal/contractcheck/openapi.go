@@ -113,6 +113,11 @@ func validOpenAPIPath(path string) bool {
 		// CHAOS-11913: the caller's own submission record, listed one by
 		// one for the same reason.
 		"/api/v1/context-fabric/investigations/submissions/{submission_id}",
+		// The Ask Dev conversation list and thread
+		// (docs/design/ask-dev-conversation-contract.md), listed one by one
+		// for the same reason.
+		"/api/v1/context-fabric/threads",
+		"/api/v1/context-fabric/threads/{thread_id}",
 		// CHAOS-7071: the direct data routes of CHAOS-7036 (E.5), listed
 		// one by one for the same reason as above.
 		"/api/v1/context-fabric/data/catalog",

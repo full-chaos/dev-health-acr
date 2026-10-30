@@ -10936,7 +10936,8 @@
           "prior_result",
           "answer_reuse",
           "evidence_expansion",
-          "fact_root_recheck"
+          "fact_root_recheck",
+          "thread"
         ]
       },
       {

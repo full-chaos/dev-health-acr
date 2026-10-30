@@ -452,6 +452,7 @@ var errorCodes = []string{
 	ErrorCodeSubmissionAbandoned,
 	ErrorCodeConcurrencyLimited,
 	ErrorCodeAllowanceExhausted,
+	ErrorCodeThreadClosed,
 }
 
 func validErrorCode(code string) bool {

@@ -38,6 +38,11 @@ var AllSchemaVersions = []string{
 	// CHAOS-11913: the caller's own submission record
 	// (GET /api/v1/context-fabric/investigations/submissions/{submission_id}).
 	ContextFabricSubmissionStatusSchema,
+	// The Ask Dev conversation read and list
+	// (GET /api/v1/context-fabric/threads/{thread_id} and /threads).
+	// Published ahead of the routes that serve them.
+	ContextFabricThreadSchema,
+	ContextFabricThreadListSchema,
 	MCPContextForTaskRequestSchema,
 	MCPContextForTaskResponseSchema,
 	MCPSourceEvidenceRequestSchema,
