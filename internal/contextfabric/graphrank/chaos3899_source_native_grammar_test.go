@@ -497,3 +497,26 @@ func TestBindSourceNativeHandles_RepoSlugDotLeadingName(t *testing.T) {
 		})
 	}
 }
+
+// CHAOS-12009 review round 1: the provider-qualified URL recognizer accepts a
+// dot-leading repository name too, and still refuses a bare '.' or '..'.
+func TestBindSourceNativeHandles_ProviderURLDotLeadingName(t *testing.T) {
+	t.Parallel()
+	terms := func(question string) []string {
+		var out []string
+		for _, b := range BindSourceNativeHandles(question, nil, true) {
+			if b.Grammar == "provider_qualified_name" {
+				out = append(out, b.Term)
+			}
+		}
+		return out
+	}
+	if got := terms("check github.com/full-chaos/.github"); len(got) != 1 || got[0] != "github.com/full-chaos/.github" {
+		t.Fatalf("provider_qualified_name terms = %v, want [github.com/full-chaos/.github]", got)
+	}
+	for _, q := range []string{"see github.com/full-chaos/. now", "see github.com/full-chaos/.. now"} {
+		if got := terms(q); len(got) != 0 {
+			t.Fatalf("provider_qualified_name terms for %q = %v, want none", q, got)
+		}
+	}
+}

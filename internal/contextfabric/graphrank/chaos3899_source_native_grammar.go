@@ -225,7 +225,7 @@ func repoBareName(s string) string {
 // character). Group 2 is the actual match value -- valueGroup below
 // points at it, never at the whole match (which would include the guard
 // character).
-var providerQualifiedNamePattern = regexp.MustCompile(`(?i)(?:^|[^A-Za-z0-9._-])((?:github\.com|gitlab\.com)/[A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?/[A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?)`)
+var providerQualifiedNamePattern = regexp.MustCompile(`(?i)(?:^|[^A-Za-z0-9._-])((?:github\.com|gitlab\.com)/[A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?/\.*[A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?)`)
 
 // providerAliasKey transforms a provider_qualified_name match's own
 // URL-shaped extracted literal ("github.com/org/repo", the shape a
