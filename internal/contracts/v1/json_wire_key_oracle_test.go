@@ -393,7 +393,7 @@ var contractRootExemplars = []any{
 	AgentEpisode{}, AgentEpisodeCreate{}, Capabilities{}, ClientCredential{},
 	ContextFabricAnswerProjection{}, ContextFabricInvestigationRequest{},
 	ContextFabricInvestigationResult{},
-	ContextFabricProjectionBatch{},
+	ContextFabricProjectionBatch{}, ContextFabricInvestigationEvent{},
 	ContextPacket{}, ContextPacketItem{}, ContextPacketRequest{},
 	CredentialAckRequest{}, CredentialAckResponse{},
 	CredentialRevokeRequest{}, CredentialRevokeResponse{},

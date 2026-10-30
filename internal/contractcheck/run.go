@@ -110,6 +110,24 @@ var exampleSchemaPairs = map[string]string{
 	// see context_fabric_investigation_result.v2.schema.json's own
 	// description.
 	"context_fabric_investigation_result.v2.json": "context_fabric_investigation_result.v2.schema.json",
+	// CHAOS-11909: the investigation event stream. One golden per event
+	// type, one per result body shape and one per error class a stream can
+	// end on. Each file is the data line of one frame, encoded by
+	// MarshalContextFabricInvestigationEventData from production Go values;
+	// internal/contracts/v1's context_fabric_investigation_event_golden_test.go
+	// holds every file equal to that encoding. The two whole-stream goldens
+	// (*.sse) are not JSON; that test validates them frame by frame.
+	"context_fabric_investigation_event_accepted.v1.json":               "context_fabric_investigation_event.v1.schema.json",
+	"context_fabric_investigation_event_stage_started.v1.json":          "context_fabric_investigation_event.v1.schema.json",
+	"context_fabric_investigation_event_stage_completed.v1.json":        "context_fabric_investigation_event.v1.schema.json",
+	"context_fabric_investigation_event_heartbeat.v1.json":              "context_fabric_investigation_event.v1.schema.json",
+	"context_fabric_investigation_event_result.v1.json":                 "context_fabric_investigation_event.v1.schema.json",
+	"context_fabric_investigation_event_result_v2.v1.json":              "context_fabric_investigation_event.v1.schema.json",
+	"context_fabric_investigation_event_result_projection.v1.json":      "context_fabric_investigation_event.v1.schema.json",
+	"context_fabric_investigation_event_error_model_deadline.v1.json":   "context_fabric_investigation_event.v1.schema.json",
+	"context_fabric_investigation_event_error_request_deadline.v1.json": "context_fabric_investigation_event.v1.schema.json",
+	"context_fabric_investigation_event_error_budget_refusal.v1.json":   "context_fabric_investigation_event.v1.schema.json",
+	"error_context_fabric_stream_unavailable.v1.json":                   "error.v1.schema.json",
 }
 
 // Options configures repository contract validation.

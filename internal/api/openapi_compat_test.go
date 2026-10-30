@@ -43,7 +43,7 @@ func TestHostedReadRoutesMatchOpenAPI(t *testing.T) {
 		{path: "/api/v1/agent-context/context-packets", method: "post", operation: "createContextPacket", statuses: []string{"200", "400", "401", "403", "413", "426", "429", "500", "503", "504"}},
 		{path: "/api/v1/agent-context/evidence/{evidence_ref_id}", method: "get", operation: "getEvidence", statuses: []string{"200", "401", "403", "404", "413", "426", "429", "500", "503", "504"}},
 		{path: "/api/v1/agent-context/episodes", method: "post", operation: "createEpisode", statuses: []string{"200", "201", "204", "400", "401", "403", "404", "409", "413", "426", "429", "500", "503", "504"}},
-		{path: "/api/v1/context-fabric/investigations", method: "post", operation: "createContextFabricInvestigation", statuses: []string{"200", "400", "401", "403", "413", "426", "429", "500", "502", "503", "504"}},
+		{path: "/api/v1/context-fabric/investigations", method: "post", operation: "createContextFabricInvestigation", statuses: []string{"200", "400", "401", "403", "406", "413", "426", "429", "500", "502", "503", "504"}},
 		{path: "/api/v1/context-fabric/investigations/{result_id}", method: "get", operation: "getContextFabricInvestigation", statuses: []string{"200", "400", "401", "403", "404", "413", "426", "429", "500", "503", "504"}},
 		{path: "/api/v1/context-fabric/data/catalog", method: "get", operation: "readContextFabricDataCatalog", statuses: []string{"200", "400", "401", "403", "426", "429", "500", "501", "503"}},
 		{path: "/api/v1/context-fabric/data/subjects", method: "post", operation: "findContextFabricDataSubjects", statuses: []string{"200", "400", "401", "403", "413", "426", "429", "500", "501", "503"}},

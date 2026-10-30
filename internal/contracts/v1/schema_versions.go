@@ -31,6 +31,10 @@ var AllSchemaVersions = []string{
 	ContextFabricInvestigationResultSchemaV2,
 	ContextFabricAnswerProjectionSchema,
 	ContextFabricProjectionBatchSchema,
+	// CHAOS-11909: one event of the investigation event stream
+	// (Accept: text/event-stream on the create-investigation route).
+	// Reserved ahead of the route writer; the stream flag gates it.
+	ContextFabricInvestigationEventSchema,
 	MCPContextForTaskRequestSchema,
 	MCPContextForTaskResponseSchema,
 	MCPSourceEvidenceRequestSchema,

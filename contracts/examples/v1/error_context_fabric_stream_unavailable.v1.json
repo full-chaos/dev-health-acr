@@ -1,0 +1,1 @@
+{"schema_version":"error.v1","request_id":"req_01J0ACR011","error":{"code":"stream_unavailable","message":"The investigation event stream is not enabled on this deployment","http_status":406,"retryable":false}}

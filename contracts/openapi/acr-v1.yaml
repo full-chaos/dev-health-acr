@@ -1,5 +1,5 @@
 # Generated from acr-v1.json by `go run ./cmd/contractcheck -write`. DO NOT EDIT.
-# canonical-content-sha256: b779bc46ee6c8a5a351010e8fb2d06a591dcfa5a42e06c66d4d0784a890b78ef
+# canonical-content-sha256: 87f76f0596efda286cbaa3a32e28ad7633816fd21ad306882c7e366394b92ed9
 openapi: "3.1.0"
 info:
   description: "Private hosted API for evidence-backed agent context packets, authorized provenance expansion, replay snapshots, and opt-in episode writeback. External Push is a separate API plane."
@@ -632,13 +632,18 @@ paths:
                     "$ref": "../jsonschema/v1/context_fabric_investigation_response.v2.schema.json"
                   -
                     "$ref": "../jsonschema/v1/context_fabric_answer_projection.v1.schema.json"
-          description: "Investigation result; status may be complete, partial, degraded, clarification_required, or no_match. schema_version is context_fabric_investigation_result.v1, or .v2 when the result minted an anchor membership-verify offer (CHAOS-4042). The body is the result plus, when the request asked synthesis_mode client and the turn reached synthesis, synthesis_input: the input for the caller's model to write the answer from. The result read by id never carries it. When options.max_serialized_bytes is below the size of the result, the body is instead the bounded consumer projection (context_fabric_answer_projection.v1) sized to that option, with projection_budget.full_result_omitted true and result_id naming the stored result, which GET by id serves whole against the service ceiling. A synthesis_mode client turn is never projected: its synthesis_input is outside options.max_serialized_bytes (the option bounds the result; the input has its own bound, the service ceiling), and a result over the option on such a turn is refused."
+            text/event-stream:
+              schema:
+                "$ref": "../jsonschema/v1/context_fabric_investigation_event.v1.schema.json"
+          description: "Investigation result; status may be complete, partial, degraded, clarification_required, or no_match. schema_version is context_fabric_investigation_result.v1, or .v2 when the result minted an anchor membership-verify offer (CHAOS-4042). The body is the result plus, when the request asked synthesis_mode client and the turn reached synthesis, synthesis_input: the input for the caller's model to write the answer from. The result read by id never carries it. When options.max_serialized_bytes is below the size of the result, the body is instead the bounded consumer projection (context_fabric_answer_projection.v1) sized to that option, with projection_budget.full_result_omitted true and result_id naming the stored result, which GET by id serves whole against the service ceiling. A synthesis_mode client turn is never projected: its synthesis_input is outside options.max_serialized_bytes (the option bounds the result; the input has its own bound, the service ceiling), and a result over the option on such a turn is refused. text/event-stream (CHAOS-11909): served when Accept is exactly text/event-stream and the deployment has ACR_CONTEXT_FABRIC_EVENT_STREAM_ENABLED on; with the flag off the request gets 406 stream_unavailable before any admission work, and there is no fallback to application/json. Any other Accept value gets the application/json body, unchanged. The stream body is a sequence of Server-Sent Events frames -- `id: \u003cseq\u003e`, `event: \u003ctype\u003e`, `data: \u003cone event as one line of compact JSON, no field present as empty, zero or null\u003e`, then a blank line -- and each data object validates against context_fabric_investigation_event.v1. accepted comes first, with the response headers, right after admission; stage events follow in the fixed stage order; a heartbeat follows when 10 seconds pass with no other event, so consecutive elapsed_ms values (accepted counting as 0) are at most 11 seconds apart (the bound is on silence; a heartbeat sooner than that is valid); exactly one terminal event, result or error, ends the stream. result.result is the application/json body this response has for the same request, byte for byte; error.error is the error.v1 envelope the same failure gets as an application/json error response, http_status included. A failure before the stream starts keeps its HTTP status and application/json error.v1 body. A stream that ends without a terminal event was interrupted."
         "400":
           "$ref": "#/components/responses/ContextFabricInvestigationBadRequest"
         "401":
           "$ref": "#/components/responses/Error"
         "403":
           "$ref": "#/components/responses/ContextFabricInvestigationForbidden"
+        "406":
+          "$ref": "#/components/responses/ContextFabricInvestigationStreamUnavailable"
         "409":
           "$ref": "#/components/responses/ContextFabricInvestigationConflict"
         "413":
@@ -1041,6 +1046,26 @@ components:
                     type: "object"
                 type: "object"
       description: "Structured safe error. feature_not_enabled with details.reason service_model_not_entitled: a caller asked for an investigation that runs on the service's own model (interpretation, synthesis, or both), and the organization has no model configuration of its own and does not hold both acr_service_model and the platform admin grant platform_model_fallback. feature_not_enabled with details.reason own_model_gate_closed: the organization's own model configuration is saved but behind a closed byo_llm plan gate (for example a lapsed plan); the service's model is never used in its place. feature_not_enabled with details.reason ai_features_turned_off: the organization has a saved model configuration but acr_service_model is OFF (its own override), so ACR AI features are turned off for it. feature_not_enabled with details.reason byo_no_investigate_config: the organization's saved BYO model keys are for other purposes only and none is set for investigations; it is a BYO organization, so the service's model is never used in its place, even with platform_model_fallback. feature_not_enabled with details.reason own_model_turned_off: an organization admin turned the saved model configuration off (kept, not deleted), so the organization has no usable own model, and it does not hold both acr_service_model and platform_model_fallback; the service's model is never used in its place. No model call was made and nothing was stored in either case. Only service_model_not_entitled is served on the caller's own model: the same question with a supplied interpretation and synthesis_mode client. The other reasons refuse that path too, because the service's phrasing step still binds a model. Credential and web assertion callers are decided on the same rule."
+    ContextFabricInvestigationStreamUnavailable:
+      content:
+        application/json:
+          schema:
+            allOf:
+              -
+                "$ref": "../jsonschema/v1/error.v1.schema.json"
+              -
+                properties:
+                  error:
+                    properties:
+                      code:
+                        const: "stream_unavailable"
+                      http_status:
+                        const: 406
+                      retryable:
+                        const: false
+                    type: "object"
+                type: "object"
+      description: "Structured safe error with code stream_unavailable (CHAOS-11909): the request asked for the event stream (Accept: text/event-stream) and the deployment has ACR_CONTEXT_FABRIC_EVENT_STREAM_ENABLED off. Written before any admission work: no investigation ran and nothing was stored. Not retryable; there is no fallback to application/json."
     ContextFabricInvestigationUnprocessable:
       content:
         application/json:

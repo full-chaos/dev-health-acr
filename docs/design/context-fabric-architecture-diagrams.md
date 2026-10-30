@@ -3014,6 +3014,95 @@ subject's turns only; it makes no driver and does not change the commit gate.
 `committedEdgeClasses`, `attributeEdgesByFewestHops`, `logSharedEdgeBudget` and
 the admission call in `DiscoverContext` (`falkorgraph/reader.go`).
 
+## 16 — Investigation event stream (CHAOS-11909)
+
+`POST /api/v1/context-fabric/investigations` with `Accept: text/event-stream`
+answers with Server-Sent Events, one `context_fabric_investigation_event.v1`
+object per frame. CHAOS-11909 is the contract only: the schema, the Go type and
+validator, the stream grammar check, the frame encoder and decoder, and the
+goldens. The engine sink (CHAOS-11910) and the route writer behind
+`ACR_CONTEXT_FABRIC_EVENT_STREAM_ENABLED` (CHAOS-11911) produce it; the
+submission binding (CHAOS-11912) and the thread link (CHAOS-11913) fill the
+optional `submission_id` and `thread_id` of `accepted`. Until the route writer
+lands, no request is served a stream.
+
+```mermaid
+sequenceDiagram
+  participant W as Caller (web route)
+  participant R as acr-api route
+  participant E as Engine (request sink)
+
+  W->>R: POST investigations<br/>Accept: text/event-stream
+  alt stream flag off
+    R-->>W: 406 stream_unavailable (error.v1 JSON)<br/>before admission work, no JSON fallback
+  else failure before the stream starts
+    R-->>W: its HTTP status + error.v1 JSON (unchanged)
+  else admitted
+    R-->>W: 200 text/event-stream + accepted (seq 1)<br/>reserved_result_id, started_at, budget_seconds
+    R->>E: Investigate(ctx with sink)
+    E-->>R: stage started / completed, fixed order, skips allowed
+    R-->>W: stage events, then a heartbeat after 10 s with no other event
+    E-->>R: result or error
+    R-->>W: exactly one terminal, then close<br/>result.result = the JSON body, byte for byte<br/>error.error = the error.v1 envelope the JSON path writes
+  end
+  Note over W,R: a stream that ends with no terminal was interrupted:<br/>never read as answered, never read as failed
+```
+
+The grammar every stream follows. `ContextFabricInvestigationEventStreamCheck`
+(`internal/contracts/v1/context_fabric_investigation_event_stream.go`) is the
+one implementation of it; producer and consumer tests both use it.
+
+```mermaid
+stateDiagram-v2
+  [*] --> Accepted: accepted, seq 1
+  Accepted --> Open: stage started
+  Accepted --> Done: result
+  Accepted --> Done: error, no stage
+  Open --> Between: stage completed (the open stage)
+  Between --> Open: stage started, a LATER stage
+  Open --> Open: heartbeat naming the open stage
+  Between --> Between: heartbeat with no stage
+  Accepted --> Accepted: heartbeat with no stage
+  Between --> Done: result
+  Open --> Done: error naming the open stage
+  Between --> Done: error naming the last stage started
+  Done --> [*]
+```
+
+Rules the diagram does not draw: `seq` grows by exactly one (the writer assigns
+it, so a gap is a lost frame), `request_id` never changes, `elapsed_ms` never
+decreases and steps by at most 11 s (the 10 s heartbeat plus 1 s of scheduling
+slack; `accepted` counts as 0; the silence before a terminal is not measurable
+from the stream; the bound is on silence, so a heartbeat sooner than 10 s is
+valid), and the `error` event repeats `accepted`'s
+`reserved_result_id`. The data line is the writer's own encoding of the event:
+compact JSON in the writer's key order, no field present as empty, zero or null.
+Two Go decoders read it: `ParseContextFabricInvestigationEventData`, the
+consumer decode, accepts any JSON spelling of a valid event and refuses what the
+schema refuses (the result body included, validated in full against its own
+schema version); `DecodeContextFabricInvestigationEventData` additionally
+requires the writer's exact bytes, and `DecodeContextFabricInvestigationEventFrames`
+requires the writer's exact frames. `Validate`, which the encoder calls, runs the
+same result-body and error-`details` checks, so the writer cannot encode an
+event a consumer refuses. An empty stream, like one that ends before its
+terminal, is interrupted (`ErrContextFabricInvestigationStreamInterrupted`).
+Stage order is `interpreting`, `resolving_subjects`, `reading_facts`,
+`synthesizing`, `validating`; it is a wire vocabulary, distinct from the
+engine's internal failure stages (`internal/contextfabric/stage.go`). Progress
+events carry no claims.
+
+**Construction anchors:** `ContextFabricInvestigationEvent`, `Validate`,
+`contextFabricEventShapes`, `MarshalContextFabricInvestigationEventFrame`
+(`internal/contracts/v1/context_fabric_investigation_event.go`);
+`DecodeContextFabricInvestigationEventFrames` and the stream check
+(`context_fabric_investigation_event_stream.go`); the schema
+`contracts/jsonschema/v1/context_fabric_investigation_event.v1.schema.json`;
+the 406 code `stream_unavailable` in `error.v1.schema.json`; the OpenAPI
+`text/event-stream` body and `ContextFabricInvestigationStreamUnavailable`
+response. The goldens `contracts/examples/v1/context_fabric_investigation_event_*`
+are encoder output, regenerated with `ACR_WRITE_INVESTIGATION_EVENT_GOLDENS=1`
+(`context_fabric_investigation_event_golden_test.go`).
+
 ## Sources
 
 - Live code via `codegraph_explore` / `rg` on `dev-health-acr`: `engine.go`

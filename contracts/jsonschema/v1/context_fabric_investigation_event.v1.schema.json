@@ -1,0 +1,405 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://contracts.fullchaos.dev/acr/v1/context_fabric_investigation_event.v1.schema.json",
+  "title": "ACR Context Fabric Investigation Event v1",
+  "description": "One event of the investigation event stream: POST /api/v1/context-fabric/investigations with Accept: text/event-stream. Each Server-Sent Events frame is `id: <seq>`, `event: <type>`, `data: <this object as one line of compact JSON, with no field present as empty, zero or null>`, then a blank line. A stream is: accepted first, written with the response headers right after admission; stage events in the fixed stage order (a stage may be skipped, never revisited, at most one open at a time); a heartbeat when 10 seconds pass with no other event, so no two consecutive elapsed_ms values (accepted counting as 0) are more than 11 seconds apart (1 second of scheduling slack) -- the bound is on silence: a heartbeat sooner than that is valid, and a consumer accepts one at any time; exactly one terminal event, result or error, last. A stream that ends without a terminal event was interrupted: it is neither an answer nor a failure. Progress events carry no claims: no subject, label, count, fact, prompt or model text.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "type",
+    "request_id",
+    "seq"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "context_fabric_investigation_event.v1"
+    },
+    "type": {
+      "enum": [
+        "accepted",
+        "stage",
+        "heartbeat",
+        "result",
+        "error"
+      ],
+      "description": "The event type; the SSE event field carries the same value. result and error are terminal."
+    },
+    "request_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 256,
+      "description": "The request's X-Request-ID, the same on every event of a stream."
+    },
+    "seq": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 9007199254740991,
+      "description": "1 on accepted, then one more per event written. The writer assigns it, so a gap means a frame was lost in transit. The SSE id field carries the same number."
+    },
+    "reserved_result_id": {
+      "type": "string",
+      "minLength": 8,
+      "maxLength": 256,
+      "description": "On accepted and error: the result id minted at admission. The stored result carries it, except on answer reuse, where the terminal result's own result_id wins."
+    },
+    "submission_id": {
+      "type": "string",
+      "minLength": 8,
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9._:-]{8,128}$",
+      "description": "On accepted, optional: the request's X-ACR-Submission-ID, echoed once the route binds the investigation to a submission."
+    },
+    "thread_id": {
+      "type": "string",
+      "minLength": 8,
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9._:-]{8,128}$",
+      "description": "On accepted, optional: the request's X-ACR-Thread-ID, echoed once the route stores the thread link."
+    },
+    "started_at": {
+      "type": "string",
+      "format": "date-time",
+      "description": "On accepted: when the run started. elapsed_ms counts from it."
+    },
+    "budget_seconds": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 9007199254740991,
+      "description": "On accepted: the run budget, the smaller of the service request timeout and the caller's X-ACR-Wait-Budget-Seconds, in whole seconds rounded up."
+    },
+    "stage": {
+      "enum": [
+        "interpreting",
+        "resolving_subjects",
+        "reading_facts",
+        "synthesizing",
+        "validating"
+      ],
+      "description": "The closed stage vocabulary, in its one order. On stage: the stage this event opens or closes. On heartbeat: the open stage, absent when none is open. On error: the last stage started, absent when none started. These are internal tokens; a consumer maps them to its own words."
+    },
+    "state": {
+      "enum": [
+        "started",
+        "completed"
+      ],
+      "description": "On stage: whether the event opens or closes its stage."
+    },
+    "elapsed_ms": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 9007199254740991,
+      "description": "On stage and heartbeat: milliseconds since started_at. It never decreases along a stream, and steps by at most 11000 from the previous value (0 at accepted): the 10-second heartbeat plus 1 second of scheduling slack."
+    },
+    "result": {
+      "description": "On result: the JSON response body the same request gets without the stream, byte for byte -- the investigation response v1 or v2, or the bounded answer projection when options.max_serialized_bytes is below the size of the result.",
+      "oneOf": [
+        {
+          "$ref": "context_fabric_investigation_response.v1.schema.json"
+        },
+        {
+          "$ref": "context_fabric_investigation_response.v2.schema.json"
+        },
+        {
+          "$ref": "context_fabric_answer_projection.v1.schema.json"
+        }
+      ]
+    },
+    "error": {
+      "description": "On error: the error.v1 envelope the same failure gets as a JSON response, http_status included.",
+      "$ref": "error.v1.schema.json"
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "required": [
+          "type"
+        ],
+        "properties": {
+          "type": {
+            "const": "accepted"
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "reserved_result_id",
+          "started_at",
+          "budget_seconds"
+        ],
+        "not": {
+          "anyOf": [
+            {
+              "required": [
+                "stage"
+              ]
+            },
+            {
+              "required": [
+                "state"
+              ]
+            },
+            {
+              "required": [
+                "elapsed_ms"
+              ]
+            },
+            {
+              "required": [
+                "result"
+              ]
+            },
+            {
+              "required": [
+                "error"
+              ]
+            }
+          ]
+        }
+      }
+    },
+    {
+      "if": {
+        "required": [
+          "type"
+        ],
+        "properties": {
+          "type": {
+            "const": "stage"
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "stage",
+          "state",
+          "elapsed_ms"
+        ],
+        "not": {
+          "anyOf": [
+            {
+              "required": [
+                "reserved_result_id"
+              ]
+            },
+            {
+              "required": [
+                "submission_id"
+              ]
+            },
+            {
+              "required": [
+                "thread_id"
+              ]
+            },
+            {
+              "required": [
+                "started_at"
+              ]
+            },
+            {
+              "required": [
+                "budget_seconds"
+              ]
+            },
+            {
+              "required": [
+                "result"
+              ]
+            },
+            {
+              "required": [
+                "error"
+              ]
+            }
+          ]
+        }
+      }
+    },
+    {
+      "if": {
+        "required": [
+          "type"
+        ],
+        "properties": {
+          "type": {
+            "const": "heartbeat"
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "elapsed_ms"
+        ],
+        "not": {
+          "anyOf": [
+            {
+              "required": [
+                "reserved_result_id"
+              ]
+            },
+            {
+              "required": [
+                "submission_id"
+              ]
+            },
+            {
+              "required": [
+                "thread_id"
+              ]
+            },
+            {
+              "required": [
+                "started_at"
+              ]
+            },
+            {
+              "required": [
+                "budget_seconds"
+              ]
+            },
+            {
+              "required": [
+                "state"
+              ]
+            },
+            {
+              "required": [
+                "result"
+              ]
+            },
+            {
+              "required": [
+                "error"
+              ]
+            }
+          ]
+        }
+      }
+    },
+    {
+      "if": {
+        "required": [
+          "type"
+        ],
+        "properties": {
+          "type": {
+            "const": "result"
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "result"
+        ],
+        "not": {
+          "anyOf": [
+            {
+              "required": [
+                "reserved_result_id"
+              ]
+            },
+            {
+              "required": [
+                "submission_id"
+              ]
+            },
+            {
+              "required": [
+                "thread_id"
+              ]
+            },
+            {
+              "required": [
+                "started_at"
+              ]
+            },
+            {
+              "required": [
+                "budget_seconds"
+              ]
+            },
+            {
+              "required": [
+                "stage"
+              ]
+            },
+            {
+              "required": [
+                "state"
+              ]
+            },
+            {
+              "required": [
+                "elapsed_ms"
+              ]
+            },
+            {
+              "required": [
+                "error"
+              ]
+            }
+          ]
+        }
+      }
+    },
+    {
+      "if": {
+        "required": [
+          "type"
+        ],
+        "properties": {
+          "type": {
+            "const": "error"
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "error",
+          "reserved_result_id"
+        ],
+        "not": {
+          "anyOf": [
+            {
+              "required": [
+                "submission_id"
+              ]
+            },
+            {
+              "required": [
+                "thread_id"
+              ]
+            },
+            {
+              "required": [
+                "started_at"
+              ]
+            },
+            {
+              "required": [
+                "budget_seconds"
+              ]
+            },
+            {
+              "required": [
+                "state"
+              ]
+            },
+            {
+              "required": [
+                "elapsed_ms"
+              ]
+            },
+            {
+              "required": [
+                "result"
+              ]
+            }
+          ]
+        }
+      }
+    }
+  ]
+}
