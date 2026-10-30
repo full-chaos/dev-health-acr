@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/full-chaos/dev-health-acr/internal/auth"
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	"github.com/full-chaos/dev-health-acr/internal/contextpacket"
 	"github.com/full-chaos/dev-health-acr/internal/hostedmetrics"
 	"github.com/full-chaos/dev-health-acr/internal/limits"
@@ -38,6 +39,10 @@ type AppConfig struct {
 	// config.Config.ContextFabricEventStreamEnabled: the create-investigation
 	// route serves `Accept: text/event-stream` only when it is on.
 	ContextFabricEventStreamEnabled bool
+	// AskDevLimits are the shared admission limits of a request that names
+	// X-ACR-Submission-ID (CHAOS-11914). A zero field is the plan's default,
+	// never unlimited.
+	AskDevLimits contextfabric.SubmissionLimits
 }
 
 type Dependencies struct {

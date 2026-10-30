@@ -78,6 +78,8 @@ var RuntimeGrants = []Grant{
 		Why: "SELECT internal/contextfabric/pgprojection/org_purge_marker.go:46 (the tick's check), DELETE org_purge_marker.go:86 (discovery's clear); only the purge writes it"},
 	{Table: "context_fabric_investigation_results", Privileges: []string{"SELECT", "INSERT"},
 		Why: "SELECT internal/contextfabric/pginvestigation/store.go:395, INSERT store.go:284"},
+	{Table: "context_fabric_usage_monthly", Privileges: []string{"SELECT", "INSERT", "UPDATE"},
+		Why: "INSERT ... ON CONFLICT DO UPDATE internal/contextfabric/pginvestigation/submissions.go AdmitSubmission (the monthly allowance), SELECT submissions.go ReadUsageMonthly"},
 	{Table: "context_fabric_investigation_submissions", Privileges: []string{"SELECT", "INSERT", "UPDATE"},
 		Why: "INSERT internal/contextfabric/pginvestigation/submissions.go AdmitSubmission, SELECT submissions.go GetSubmission, UPDATE submissions.go FinishSubmission and store.go Save's completion"},
 	{Table: "context_fabric_structure_supersession_claims", Privileges: []string{"SELECT", "INSERT"},

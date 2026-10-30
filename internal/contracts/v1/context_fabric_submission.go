@@ -37,7 +37,25 @@ const (
 	// an answer, or ran past its budget plus 30 seconds. Not retryable with
 	// that id; ask again with a new one.
 	ErrorCodeSubmissionAbandoned = "submission_abandoned"
+
+	// ErrorCodeConcurrencyLimited: 429, the submission would exceed a shared
+	// running-run limit (CHAOS-11914). details.limit names which: principal
+	// or org. Retryable, after Retry-After; nothing was admitted.
+	ErrorCodeConcurrencyLimited = "concurrency_limited"
+	// ErrorCodeAllowanceExhausted: 429, the organization admitted its monthly
+	// allowance of runs on the deployment's model. Retry-After is the start
+	// of the next calendar month UTC; nothing was admitted.
+	ErrorCodeAllowanceExhausted = "allowance_exhausted"
+	// ContextFabricConcurrencyLimitDetailsKey is the error.details key that
+	// names the limit a concurrency_limited refusal hit.
+	ContextFabricConcurrencyLimitDetailsKey = "limit"
 )
+
+// ContextFabricConcurrencyLimitVocabulary is the closed set of
+// details.limit values.
+func ContextFabricConcurrencyLimitVocabulary() [2]string {
+	return [2]string{"principal", "org"}
+}
 
 // ContextFabricSubmissionErrorCodes is the closed set of submission refusal
 // codes, each a 409 of the create-investigation route.

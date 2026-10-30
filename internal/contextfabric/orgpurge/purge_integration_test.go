@@ -102,6 +102,15 @@ func TestPurgeRemovesOneOrganizationAndNothingElse(t *testing.T) {
 
 	beforeGone := rowCounts(t, r.db, orgGone)
 	beforeKept := rowCounts(t, r.db, orgKept)
+	// usageRows counts the monthly usage aggregate by its own query, apart
+	// from the production table list rowCounts follows.
+	usageRows := func(org string) int64 {
+		var n int64
+		require.NoError(t, r.db.QueryRowContext(ctx, `SELECT count(*) FROM acr.context_fabric_usage_monthly WHERE `+looseMatch("org_id"), org).Scan(&n))
+		return n
+	}
+	require.EqualValues(t, 2, usageRows(orgGone), "seeded usage months")
+	require.EqualValues(t, 2, usageRows(orgKept), "seeded usage months")
 	for _, table := range countedTables() {
 		require.NotZero(t, beforeGone[table], "seed must put a row in %s", table)
 	}
@@ -165,6 +174,11 @@ func TestPurgeRemovesOneOrganizationAndNothingElse(t *testing.T) {
 	}
 	require.False(t, graphExists(t, r.adapter, orgGone), "graph must be gone")
 	require.Equal(t, beforeKept, rowCounts(t, r.db, orgKept), "other org rows untouched")
+	// CHAOS-11914 (lead ruling 2026-10-29): the purge deletes the
+	// organization's monthly usage aggregate (both seeded months); the other
+	// organization's rows stay.
+	require.Zero(t, usageRows(orgGone), "usage aggregate rows of the purged organization")
+	require.EqualValues(t, 2, usageRows(orgKept), "the other organization's usage aggregate")
 	require.True(t, graphExists(t, r.adapter, orgKept), "other org graph untouched")
 
 	var audit int

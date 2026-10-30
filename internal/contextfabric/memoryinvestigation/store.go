@@ -89,6 +89,9 @@ type Store struct {
 	// completes a submission writes the result and the record together.
 	submissions map[contextfabric.SubmissionKey]contextfabric.SubmissionRecord
 	reserved    map[reservedResultKey]contextfabric.SubmissionKey
+	// usage mirrors acr.context_fabric_usage_monthly (CHAOS-11914): written
+	// under mu with the record it admits; nothing removes an entry.
+	usage map[usageKey]int64
 	// now stamps the updated_at a Save's completion writes; the submission
 	// methods take the caller's clock.
 	now func() time.Time
@@ -106,6 +109,7 @@ func NewStore() *Store {
 		results: make(map[string]entry), claims: make(map[structureSupersessionClaimKey]string),
 		submissions: make(map[contextfabric.SubmissionKey]contextfabric.SubmissionRecord),
 		reserved:    make(map[reservedResultKey]contextfabric.SubmissionKey),
+		usage:       make(map[usageKey]int64),
 		now:         time.Now,
 	}
 }

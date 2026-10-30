@@ -269,3 +269,158 @@ func RunSubmissionSuite(t *testing.T, newStore func(t *testing.T) SubmissionStor
 		}
 	})
 }
+
+// LimitsStore is a SubmissionStore that also reads the usage aggregate.
+type LimitsStore interface {
+	SubmissionStore
+	contextfabric.UsageReader
+}
+
+// RunSubmissionLimitsSuite runs the shared admission-limit table
+// (CHAOS-11914) against a store. newStore must return an EMPTY store per
+// case.
+func RunSubmissionLimitsSuite(t *testing.T, newStore func(t *testing.T) LimitsStore) {
+	t.Helper()
+	now := time.Date(2026, 10, 29, 12, 0, 0, 0, time.UTC)
+	org := "org-parity-limits"
+	principal := func(subject string) storage.Principal {
+		return storage.Principal{AuthenticationMethod: storage.AuthenticationMethodWebAssertion, Subject: subject, OrgID: org}
+	}
+	limits := contextfabric.SubmissionLimits{MaxRunningPerPrincipal: 2, MaxRunningPerOrg: 4, MonthlyPlatformRunAllowance: 3}
+	digest := "sha256:" + fmt.Sprintf("%064x", 11914)
+	admission := func(t *testing.T, who storage.Principal, name string, platform bool) contextfabric.SubmissionAdmission {
+		t.Helper()
+		key, err := contextfabric.SubmissionKeyFor(who, "submission-limits-"+name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return contextfabric.SubmissionAdmission{Key: key, RequestDigest: digest, ReservedResultID: "result_limits_" + name, ExpiresAt: now.Add(time.Minute), Limits: limits, PlatformRun: platform}
+	}
+	admit := func(t *testing.T, store LimitsStore, a contextfabric.SubmissionAdmission) {
+		t.Helper()
+		if _, admitted, err := store.AdmitSubmission(context.Background(), a, now); err != nil || !admitted {
+			t.Fatalf("admit %s = admitted %t, err %v", a.Key.SubmissionID, admitted, err)
+		}
+	}
+	refusedAs := func(t *testing.T, store LimitsStore, a contextfabric.SubmissionAdmission, want contextfabric.SubmissionRefusal, count int64) {
+		t.Helper()
+		_, admitted, err := store.AdmitSubmission(context.Background(), a, now)
+		var refused *contextfabric.SubmissionRefusedError
+		if admitted || !errors.As(err, &refused) || refused.Refusal != want || refused.Count != count || refused.RetryAfter <= 0 {
+			t.Fatalf("admit %s = admitted %t, err %v; want refused %s at %d", a.Key.SubmissionID, admitted, err, want, count)
+		}
+		// Nothing was written.
+		if _, err := store.GetSubmission(context.Background(), a.Key, now); !errors.Is(err, contextfabric.ErrSubmissionNotFound) {
+			t.Fatalf("a refused admission left a record: %v", err)
+		}
+	}
+	usage := func(t *testing.T, store LimitsStore) int64 {
+		t.Helper()
+		got, found, err := store.ReadUsageMonthly(context.Background(), org, now)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !found {
+			return 0
+		}
+		if got.CostMicroUSD != nil {
+			t.Fatalf("cost is not metered, but the aggregate carries %d", *got.CostMicroUSD)
+		}
+		return got.PlatformRuns
+	}
+
+	t.Run("principal limit, then org limit", func(t *testing.T) {
+		store := newStore(t)
+		a, b, c := principal("user-limits-a"), principal("user-limits-b"), principal("user-limits-c")
+		admit(t, store, admission(t, a, "a1", false))
+		admit(t, store, admission(t, a, "a2", false))
+		refusedAs(t, store, admission(t, a, "a3", false), contextfabric.SubmissionRefusedPrincipalConcurrency, 2)
+		admit(t, store, admission(t, b, "b1", false))
+		admit(t, store, admission(t, b, "b2", false))
+		refusedAs(t, store, admission(t, c, "c1", false), contextfabric.SubmissionRefusedOrgConcurrency, 4)
+		// A repeat of a running key at the limit is a repeat, never a refusal.
+		if record, admitted, err := store.AdmitSubmission(context.Background(), admission(t, a, "a1", false), now); err != nil || admitted || record.State != contextfabric.SubmissionRunning {
+			t.Fatalf("repeat at the limit = %+v admitted %t err %v", record, admitted, err)
+		}
+		// A run that ends frees its slot.
+		if _, err := store.AbandonSubmission(context.Background(), admission(t, b, "b1", false).Key, now); err != nil {
+			t.Fatal(err)
+		}
+		admit(t, store, admission(t, c, "c2", false))
+	})
+
+	t.Run("expired and stored runs do not count", func(t *testing.T) {
+		store := newStore(t)
+		a := principal("user-limits-expiry")
+		expired := admission(t, a, "e1", false)
+		expired.ExpiresAt = now.Add(time.Second)
+		if _, _, err := store.AdmitSubmission(context.Background(), expired, now); err != nil {
+			t.Fatal(err)
+		}
+		saved := admission(t, a, "e2", false)
+		admit(t, store, saved)
+		later := now.Add(2 * time.Second)
+		third := admission(t, a, "e3", false)
+		third.ExpiresAt = later.Add(time.Minute)
+		if _, admitted, err := store.AdmitSubmission(context.Background(), third, later); err != nil || !admitted {
+			t.Fatalf("past one expiry = admitted %t err %v", admitted, err)
+		}
+		fourth := admission(t, a, "e4", false)
+		fourth.ExpiresAt = later.Add(time.Minute)
+		if _, admitted, err := store.AdmitSubmission(context.Background(), fourth, later); admitted || err == nil {
+			t.Fatalf("e2 and e3 are live: fourth admitted %t err %v", admitted, err)
+		}
+		if err := store.Save(context.Background(), a, ValidResult(saved.ReservedResultID, "q"), nil, nil,
+			contextfabric.TimeAxisKeyFor(contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent}),
+			contextfabric.ReuseRetrievalIdentity{}, contextfabric.ReusePromptVersions{}, contextfabric.ReuseVersionAuthorities{}, 0, "",
+			contextfabric.SemanticStateAbsent(contextfabric.SemanticStateAbsenceTurnEndedBeforeInterpretation)); err != nil {
+			t.Fatal(err)
+		}
+		if _, admitted, err := store.AdmitSubmission(context.Background(), fourth, later); err != nil || !admitted {
+			t.Fatalf("after e2's save = admitted %t err %v", admitted, err)
+		}
+	})
+
+	t.Run("monthly allowance counts platform runs only", func(t *testing.T) {
+		store := newStore(t)
+		// Concurrency is not what this case measures: every run ends.
+		end := func(a contextfabric.SubmissionAdmission) {
+			if _, err := store.AbandonSubmission(context.Background(), a.Key, now); err != nil {
+				t.Fatal(err)
+			}
+		}
+		for index := 0; index < 3; index++ {
+			a := admission(t, principal(fmt.Sprintf("user-allow-%d", index)), fmt.Sprintf("p%d", index), true)
+			admit(t, store, a)
+			end(a)
+		}
+		if got := usage(t, store); got != 3 {
+			t.Fatalf("usage = %d, want 3", got)
+		}
+		refusedAs(t, store, admission(t, principal("user-allow-x"), "p3", true), contextfabric.SubmissionRefusedAllowanceExhausted, 3)
+		if got := usage(t, store); got != 3 {
+			t.Fatalf("a refused admission counted: usage = %d", got)
+		}
+		// A run on the organization's own model counts to concurrency only.
+		own := admission(t, principal("user-allow-own"), "own", false)
+		admit(t, store, own)
+		if got := usage(t, store); got != 3 {
+			t.Fatalf("an own-model run counted: usage = %d", got)
+		}
+		// A repeat of an admitted platform key is not counted again.
+		repeat := admission(t, principal("user-allow-0"), "p0", true)
+		if _, admitted, err := store.AdmitSubmission(context.Background(), repeat, now); err != nil || admitted {
+			t.Fatalf("repeat = admitted %t err %v", admitted, err)
+		}
+		if got := usage(t, store); got != 3 {
+			t.Fatalf("a repeat counted: usage = %d", got)
+		}
+		// The next month starts at zero.
+		next := admission(t, principal("user-allow-next"), "next", true)
+		nextMonth := time.Date(2026, 11, 1, 0, 0, 1, 0, time.UTC)
+		next.ExpiresAt = nextMonth.Add(time.Minute)
+		if _, admitted, err := store.AdmitSubmission(context.Background(), next, nextMonth); err != nil || !admitted {
+			t.Fatalf("next month = admitted %t err %v", admitted, err)
+		}
+	})
+}

@@ -35,16 +35,23 @@ func TestRateLimitLimitTokenMatchesTheErrorSchemaEnum(t *testing.T) {
 	if len(enum) == 0 {
 		t.Fatalf("error.v1 schema declares no details.%s enum", RateLimitDetailsLimitKey)
 	}
-	want := slices.Clone(RateLimitLimits())
+	want := slices.Clone(ErrorDetailsLimitVocabulary())
 	got := slices.Clone(enum)
 	slices.Sort(want)
 	slices.Sort(got)
 	if !slices.Equal(got, want) {
 		t.Fatalf("schema enum %v and Go vocabulary %v differ", got, want)
 	}
-	for _, token := range want {
+	for _, token := range RateLimitLimits() {
 		if !IsRateLimitLimit(token) {
 			t.Errorf("vocabulary member %q is rejected by IsRateLimitLimit", token)
+		}
+	}
+	// The concurrency tokens are not rate-limit budgets: the sidecar's
+	// rate-limit reading must not take them for one.
+	for _, token := range ContextFabricConcurrencyLimitVocabulary() {
+		if IsRateLimitLimit(token) {
+			t.Errorf("concurrency token %q reads as a rate-limit budget", token)
 		}
 	}
 }

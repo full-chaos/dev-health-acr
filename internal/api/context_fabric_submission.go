@@ -38,14 +38,19 @@ const (
 	SubmissionOutcomeRefusedAbandoned  SubmissionAdmissionOutcome = "refused_abandoned"
 	SubmissionOutcomeStoreUnavailable  SubmissionAdmissionOutcome = "store_unavailable"
 	SubmissionOutcomeOwnerUnknown      SubmissionAdmissionOutcome = "owner_unknown"
+	// CHAOS-11914: a new submission over a shared limit.
+	SubmissionOutcomeRefusedPrincipalConcurrency SubmissionAdmissionOutcome = "refused_concurrency_principal"
+	SubmissionOutcomeRefusedOrgConcurrency       SubmissionAdmissionOutcome = "refused_concurrency_org"
+	SubmissionOutcomeRefusedAllowance            SubmissionAdmissionOutcome = "refused_allowance_exhausted"
 )
 
 // SubmissionAdmissionOutcomeVocabulary is the closed set of outcomes.
-func SubmissionAdmissionOutcomeVocabulary() [9]SubmissionAdmissionOutcome {
-	return [9]SubmissionAdmissionOutcome{
+func SubmissionAdmissionOutcomeVocabulary() [12]SubmissionAdmissionOutcome {
+	return [12]SubmissionAdmissionOutcome{
 		SubmissionOutcomeAdmitted, SubmissionOutcomeReplayed, SubmissionOutcomeRefusedMismatch, SubmissionOutcomeRefusedInProgress,
 		SubmissionOutcomeRefusedUnsaved, SubmissionOutcomeRefusedAbandoned, SubmissionOutcomeStoreUnavailable, SubmissionOutcomeOwnerUnknown,
 		SubmissionOutcomeRefusedHeader,
+		SubmissionOutcomeRefusedPrincipalConcurrency, SubmissionOutcomeRefusedOrgConcurrency, SubmissionOutcomeRefusedAllowance,
 	}
 }
 
@@ -155,7 +160,7 @@ func submissionStoreErrorClass(err error) string {
 // admitInvestigationSubmission admits the request's submission, or answers a
 // repeat of its key. proceed is true only for a newly admitted record; every
 // other path has written the response.
-func (a *App) admitInvestigationSubmission(w http.ResponseWriter, r *http.Request, principal storage.Principal, request contextfabric.InvestigationRequest, submissionID, threadID string) (*admittedInvestigationSubmission, bool) {
+func (a *App) admitInvestigationSubmission(w http.ResponseWriter, r *http.Request, principal storage.Principal, request contextfabric.InvestigationRequest, submissionID, threadID string, platformRun bool) (*admittedInvestigationSubmission, bool) {
 	store := a.investigationSubmissions()
 	if store == nil {
 		a.logSubmissionAdmission(r, principal, SubmissionOutcomeStoreUnavailable, "", nil)
@@ -176,7 +181,15 @@ func (a *App) admitInvestigationSubmission(w http.ResponseWriter, r *http.Reques
 	}
 	record, admitted, err := store.AdmitSubmission(r.Context(), contextfabric.SubmissionAdmission{
 		Key: key, RequestDigest: digest, ReservedResultID: a.reserveResultID(), ThreadID: threadID, ExpiresAt: a.submissionExpiry(r.Context()),
+		// CHAOS-11914: the shared limits, and whether the run counts to the
+		// monthly allowance (it runs on the deployment's model).
+		Limits: a.config.AskDevLimits, PlatformRun: platformRun,
 	}, a.now())
+	var refused *contextfabric.SubmissionRefusedError
+	if errors.As(err, &refused) {
+		a.writeSubmissionRefused(w, r, principal, refused)
+		return nil, false
+	}
 	if err != nil {
 		a.logSubmissionAdmission(r, principal, SubmissionOutcomeStoreUnavailable, "", err)
 		writeError(w, r, http.StatusServiceUnavailable, "store_unavailable", "Context Fabric investigation submissions are temporarily unavailable", true, nil)
@@ -256,6 +269,30 @@ func (a *App) answerSubmissionRecord(w http.ResponseWriter, r *http.Request, pri
 	default:
 		a.logSubmissionAdmission(r, principal, SubmissionOutcomeRefusedAbandoned, record.State, nil)
 		writeError(w, r, http.StatusConflict, contractsv1.ErrorCodeSubmissionAbandoned, "The submission ended without an answer", false, nil)
+	}
+}
+
+// writeSubmissionRefused answers an admission the shared limits refused
+// (CHAOS-11914): 429 with Retry-After; nothing was admitted or counted.
+func (a *App) writeSubmissionRefused(w http.ResponseWriter, r *http.Request, principal storage.Principal, refused *contextfabric.SubmissionRefusedError) {
+	retryAfter := max(1, int((refused.RetryAfter+time.Second-1)/time.Second))
+	w.Header().Set("Retry-After", strconv.Itoa(retryAfter))
+	args := []any{
+		"org_id", contextfabric.SanitizeLogAttr(principal.OrgID),
+		"count", refused.Count, "limit", refused.Limit, "retry_after_seconds", retryAfter,
+		"request_id", contextfabric.SanitizeLogAttr(RequestID(r.Context())),
+	}
+	switch refused.Refusal {
+	case contextfabric.SubmissionRefusedAllowanceExhausted:
+		a.logger.WarnContext(r.Context(), ContextFabricSubmissionLogMessage, append([]any{"outcome", string(SubmissionOutcomeRefusedAllowance)}, args...)...)
+		writeError(w, r, http.StatusTooManyRequests, contractsv1.ErrorCodeAllowanceExhausted, "The organization used its monthly Ask Dev allowance", true, nil)
+	default:
+		outcome, limit := SubmissionOutcomeRefusedOrgConcurrency, "org"
+		if refused.Refusal == contextfabric.SubmissionRefusedPrincipalConcurrency {
+			outcome, limit = SubmissionOutcomeRefusedPrincipalConcurrency, "principal"
+		}
+		a.logger.InfoContext(r.Context(), ContextFabricSubmissionLogMessage, append([]any{"outcome", string(outcome)}, args...)...)
+		writeError(w, r, http.StatusTooManyRequests, contractsv1.ErrorCodeConcurrencyLimited, "Too many Ask Dev investigations are running", true, map[string]any{contractsv1.ContextFabricConcurrencyLimitDetailsKey: limit})
 	}
 }
 

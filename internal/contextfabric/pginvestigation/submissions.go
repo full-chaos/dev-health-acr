@@ -21,6 +21,7 @@ import (
 var (
 	_ contextfabric.SubmissionStore         = (*Store)(nil)
 	_ contextfabric.SubmissionUnsavedMarker = (*Store)(nil)
+	_ contextfabric.UsageReader             = (*Store)(nil)
 )
 
 const submissionColumns = `org_id, owner_auth_method, owner_subject, submission_id, request_digest, reserved_result_id, state, result_id, thread_id, admitted_at, updated_at, expires_at`
@@ -82,10 +83,18 @@ func (s *Store) configured() error {
 	return nil
 }
 
-// AdmitSubmission implements contextfabric.SubmissionStore. The INSERT is
-// first and the primary key decides: of any number of concurrent admissions
-// of one key, on any number of replicas, exactly one inserts; every other one
-// reads the record that one wrote.
+// submissionAdmissionLockClass is the advisory lock class that serializes
+// admissions of one organization (CHAOS-11914). It is not the projection
+// lock (20260812) or the organization write fence (20261014).
+const submissionAdmissionLockClass = 20261029
+
+// AdmitSubmission implements contextfabric.SubmissionStore. In ONE
+// transaction, serialized per organization by an advisory lock on every
+// replica: the INSERT comes first and the primary key decides a repeated
+// key (a repeat writes nothing and is never refused by a limit); a new
+// record is counted against the shared concurrency limits, a platform run
+// increments the month's aggregate under the allowance, and any refusal
+// rolls all of it back.
 func (s *Store) AdmitSubmission(ctx context.Context, admission contextfabric.SubmissionAdmission, now time.Time) (contextfabric.SubmissionRecord, bool, error) {
 	if err := s.configured(); err != nil {
 		return contextfabric.SubmissionRecord{}, false, err
@@ -101,7 +110,16 @@ func (s *Store) AdmitSubmission(ctx context.Context, admission contextfabric.Sub
 	}
 	threadID := sql.NullString{String: admission.ThreadID, Valid: admission.ThreadID != ""}
 	key := admission.Key
-	row := s.db.QueryRowContext(ctx, `
+	limits := admission.Limits.Effective()
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return contextfabric.SubmissionRecord{}, false, fmt.Errorf("admit investigation submission: begin: %w", sanitizeError(err))
+	}
+	defer func() { _ = tx.Rollback() }() // no-op once Commit succeeds
+	if _, err := tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock($1, hashtext($2))`, submissionAdmissionLockClass, key.OrgID); err != nil {
+		return contextfabric.SubmissionRecord{}, false, fmt.Errorf("admit investigation submission: lock: %w", sanitizeError(err))
+	}
+	row := tx.QueryRowContext(ctx, `
 INSERT INTO acr.context_fabric_investigation_submissions
     (org_id, owner_auth_method, owner_subject, submission_id, request_digest, reserved_result_id, state, thread_id, admitted_at, updated_at, expires_at)
 VALUES ($1, $2, $3, $4, $5, $6, 'running', $9, $7, $7, $8)
@@ -111,16 +129,80 @@ RETURNING `+submissionColumns,
 		admission.RequestDigest, admission.ReservedResultID, now.UTC(), admission.ExpiresAt.UTC(), threadID)
 	record, err := scanSubmission(row)
 	switch {
-	case err == nil:
-		return record, true, nil
-	case !errors.Is(err, sql.ErrNoRows):
+	case errors.Is(err, sql.ErrNoRows):
+		// A repeat of the key: nothing was written, no limit applies.
+		if err := tx.Commit(); err != nil {
+			return contextfabric.SubmissionRecord{}, false, fmt.Errorf("admit investigation submission: commit: %w", sanitizeError(err))
+		}
+		existing, err := s.GetSubmission(ctx, key, now)
+		if err != nil {
+			return contextfabric.SubmissionRecord{}, false, err
+		}
+		return existing, false, nil
+	case err != nil:
 		return contextfabric.SubmissionRecord{}, false, fmt.Errorf("admit investigation submission: %w", sanitizeError(err))
 	}
-	existing, err := s.GetSubmission(ctx, key, now)
-	if err != nil {
-		return contextfabric.SubmissionRecord{}, false, err
+	// The live runs, without the one just inserted: running, inside its
+	// budget, its reserved result not stored.
+	var principalRunning, orgRunning int64
+	if err := tx.QueryRowContext(ctx, `
+SELECT count(*) FILTER (WHERE s.owner_auth_method = $2 AND s.owner_subject = $3), count(*)
+  FROM acr.context_fabric_investigation_submissions s
+ WHERE s.org_id = $1 AND s.state = 'running' AND s.expires_at > $5 AND s.reserved_result_id <> $4
+   AND NOT `+storedResultExists,
+		key.OrgID, key.Owner.AuthenticationMethod, key.Owner.Subject, admission.ReservedResultID, now.UTC()).Scan(&principalRunning, &orgRunning); err != nil {
+		return contextfabric.SubmissionRecord{}, false, fmt.Errorf("admit investigation submission: count running: %w", sanitizeError(err))
 	}
-	return existing, false, nil
+	switch {
+	case principalRunning >= int64(limits.MaxRunningPerPrincipal):
+		return contextfabric.SubmissionRecord{}, false, &contextfabric.SubmissionRefusedError{Refusal: contextfabric.SubmissionRefusedPrincipalConcurrency, Count: principalRunning, Limit: int64(limits.MaxRunningPerPrincipal), RetryAfter: contextfabric.SubmissionConcurrencyRetryAfter}
+	case orgRunning >= int64(limits.MaxRunningPerOrg):
+		return contextfabric.SubmissionRecord{}, false, &contextfabric.SubmissionRefusedError{Refusal: contextfabric.SubmissionRefusedOrgConcurrency, Count: orgRunning, Limit: int64(limits.MaxRunningPerOrg), RetryAfter: contextfabric.SubmissionConcurrencyRetryAfter}
+	}
+	if admission.PlatformRun {
+		month := contextfabric.UsageMonth(now)
+		var runs int64
+		err := tx.QueryRowContext(ctx, `
+INSERT INTO acr.context_fabric_usage_monthly AS u (org_id, month, platform_runs, updated_at)
+VALUES ($1, $2, 1, $3)
+ON CONFLICT (org_id, month) DO UPDATE SET platform_runs = u.platform_runs + 1, updated_at = $3
+ WHERE u.platform_runs < $4
+RETURNING u.platform_runs`, key.OrgID, month, now.UTC(), limits.MonthlyPlatformRunAllowance).Scan(&runs)
+		switch {
+		case errors.Is(err, sql.ErrNoRows):
+			var current int64
+			if err := tx.QueryRowContext(ctx, `SELECT platform_runs FROM acr.context_fabric_usage_monthly WHERE org_id = $1 AND month = $2`, key.OrgID, month).Scan(&current); err != nil {
+				return contextfabric.SubmissionRecord{}, false, fmt.Errorf("admit investigation submission: read usage: %w", sanitizeError(err))
+			}
+			return contextfabric.SubmissionRecord{}, false, &contextfabric.SubmissionRefusedError{Refusal: contextfabric.SubmissionRefusedAllowanceExhausted, Count: current, Limit: limits.MonthlyPlatformRunAllowance, RetryAfter: contextfabric.AllowanceRetryAfter(now)}
+		case err != nil:
+			return contextfabric.SubmissionRecord{}, false, fmt.Errorf("admit investigation submission: count usage: %w", sanitizeError(err))
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return contextfabric.SubmissionRecord{}, false, fmt.Errorf("admit investigation submission: commit: %w", sanitizeError(err))
+	}
+	return record, true, nil
+}
+
+// ReadUsageMonthly implements contextfabric.UsageReader.
+func (s *Store) ReadUsageMonthly(ctx context.Context, orgID string, month time.Time) (contextfabric.UsageMonthly, bool, error) {
+	if err := s.configured(); err != nil {
+		return contextfabric.UsageMonthly{}, false, err
+	}
+	usage := contextfabric.UsageMonthly{OrgID: orgID, Month: contextfabric.UsageMonth(month)}
+	var cost sql.NullInt64
+	err := s.db.QueryRowContext(ctx, `SELECT platform_runs, cost_micro_usd FROM acr.context_fabric_usage_monthly WHERE org_id = $1 AND month = $2`, orgID, usage.Month).Scan(&usage.PlatformRuns, &cost)
+	switch {
+	case errors.Is(err, sql.ErrNoRows):
+		return contextfabric.UsageMonthly{}, false, nil
+	case err != nil:
+		return contextfabric.UsageMonthly{}, false, fmt.Errorf("read usage aggregate: %w", sanitizeError(err))
+	}
+	if cost.Valid {
+		usage.CostMicroUSD = &cost.Int64
+	}
+	return usage, true, nil
 }
 
 // GetSubmission implements contextfabric.SubmissionStore: the reconcile

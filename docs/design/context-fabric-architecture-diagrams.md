@@ -3149,7 +3149,7 @@ response. The goldens `contracts/examples/v1/context_fabric_investigation_event_
 are encoder output, regenerated with `ACR_WRITE_INVESTIGATION_EVENT_GOLDENS=1`
 (`context_fabric_investigation_event_golden_test.go`).
 
-## 17 — Submission identity, its owner and its status (CHAOS-11912, CHAOS-11913)
+## 17 — Submission identity, its owner, its status and the shared limits (CHAOS-11912, CHAOS-11913, CHAOS-11914)
 
 A create-investigation request that names `X-ACR-Submission-ID` is one user
 submit. Admission inserts one record keyed (organization, owner, submission id)
@@ -3256,6 +3256,33 @@ the submission replay), `prior_result` (parent chain, every
 to its owner only) and `evidence_expansion`. The refusal is the unknown-id
 answer. `fact_root_recheck` reads no stored row: it re-decides the turn's own
 committed roots, which a carried root reached only through `prior_result`.
+
+**Shared limits (CHAOS-11914).** A NEW key is admitted inside one
+transaction under a per-organization advisory lock: insert the record, count
+the live running records (inside their budget, reserved result not stored)
+for the principal and the organization, then, for a run on the deployment's
+model, increment `acr.context_fabric_usage_monthly` under the monthly
+allowance. Any refusal rolls all three back and answers `429
+concurrency_limited{limit}` or `429 allowance_exhausted`. A repeat of an
+existing key is decided before any limit and is never refused by one.
+Retention and result deletion keep the aggregate; the organization purge
+deletes the organization's rows, and the write fence covers the table.
+
+```mermaid
+flowchart TD
+  A[POST with X-ACR-Submission-ID] --> L[advisory lock: org]
+  L --> I{INSERT record<br/>ON CONFLICT DO NOTHING}
+  I -- conflict: a repeat --> R[commit, nothing written<br/>answer from the record]
+  I -- inserted --> P{principal running >= limit?}
+  P -- yes --> X1[rollback: 429 concurrency_limited limit=principal]
+  P -- no --> O{org running >= limit?}
+  O -- yes --> X2[rollback: 429 concurrency_limited limit=org]
+  O -- no --> M{platform-model run?}
+  M -- no --> C[commit: admitted]
+  M -- yes --> U{month aggregate < allowance?<br/>then +1}
+  U -- no --> X3[rollback: 429 allowance_exhausted]
+  U -- yes --> C
+```
 
 **Status read and thread link (CHAOS-11913).** Admission stores the request's
 `X-ACR-Thread-ID` on the record (`thread_id`, migration `0056`; not part of the

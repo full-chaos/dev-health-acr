@@ -26,6 +26,16 @@ func IsRateLimitBudgetRefusal(limit string) bool {
 // list IsRateLimitLimit and the published schema's enum are held equal to.
 func RateLimitLimits() []string { return []string{RateLimitRequestBudget, RateLimitCapabilitiesBudget} }
 
+// ErrorDetailsLimitVocabulary is every member of error.v1's details.limit
+// enum: the rate_limited budgets and, on a concurrency_limited refusal
+// (CHAOS-11914), the shared concurrency limit that refused it. The published
+// enum is held equal to this list; IsRateLimitLimit stays the rate_limited
+// subset.
+func ErrorDetailsLimitVocabulary() []string {
+	concurrency := ContextFabricConcurrencyLimitVocabulary()
+	return append(RateLimitLimits(), concurrency[:]...)
+}
+
 // IsRateLimitLimit reports whether limit is a member of the closed vocabulary.
 func IsRateLimitLimit(limit string) bool {
 	for _, member := range RateLimitLimits() {

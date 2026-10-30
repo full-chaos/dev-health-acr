@@ -1095,6 +1095,25 @@ organization defaults to epoch 0 (the legacy, unsuffixed graph key) until
 its first migration to the build-aside-and-swap pointer, so this dimension
 is inert for the whole fleet until that lands.
 
+### Ask Dev submissions and shared limits (CHAOS-11912, CHAOS-11914)
+
+A create-investigation request that names `X-ACR-Submission-ID` is one user submit: it is admitted once (a record in `acr.context_fabric_investigation_submissions`), runs at most once, and its result is served to its principal only. Admission enforces three SHARED limits, decided in one PostgreSQL transaction serialized per organization, so they hold across every replica:
+
+| Variable | Default | Scope | Counts |
+| --- | --- | --- | --- |
+| `ACR_ASK_DEV_MAX_RUNNING_PER_PRINCIPAL` | 2 (1–16) | shared, per principal | running submission runs inside their budget |
+| `ACR_ASK_DEV_MAX_RUNNING_PER_ORG` | 4 (≥ the per-principal limit, ≤ 64) | shared, per organization | the same, over the organization |
+| `ACR_ASK_DEV_MONTHLY_RUN_ALLOWANCE` | 1000 (1–5000) | shared, per organization and calendar month UTC | admitted runs on the deployment's own model |
+
+- A refusal is `429 concurrency_limited` (`details.limit` = `principal` or `org`, `Retry-After: 3`) or `429 allowance_exhausted` (`Retry-After` = the start of the next UTC month). Nothing is admitted or counted.
+- Not counted: a repeat of an admitted submission id (replay, in-progress, mismatch), a status read, a request without the header, a refused admission. A run on the organization's own model counts to the two concurrency limits only.
+- **Residual: a create without `X-ACR-Submission-ID` counts against no shared limit.** MCP and API callers (org-bearer) and ask-dev standalone send none; such a create is bounded only by the per-replica request rate limit. Counting them through an implicit, non-owner-binding admission record is filed separately and must land before the production Ask Dev gate opens.
+- Counted and never refunded: an admitted platform run that then fails, including a `429 rate_limited` from the model or graph runtime (that 429 carries no `Retry-After`). Its record ends `abandoned` and frees its concurrency slot at once.
+- The monthly aggregate `acr.context_fabric_usage_monthly` is content-free (counts only). Retention and result deletion leave it unchanged (deleting submission records or results does not refund a run). The organization purge deletes the organization's rows, so no row keyed by a purged organization stays, and the write fence refuses a later write for it.
+- **Cost is not metered.** ACR records token counts per model call (`ModelExecutionReceipt.Usage`) but no price, so `cost_micro_usd` stays NULL and a USD ceiling cannot be enforced in ACR; it is reported only.
+- **The request rate limit is per replica.** `ACR_REQUESTS_PER_MINUTE` (`limits.Manager`) counts in process memory: with N `acr-api` replicas the effective ceiling is N times the configured value. The three limits above are the shared ones.
+- A sweeper on every replica (every 30 s) completes running records whose result was stored and abandons those past their budget plus 30 s, so a run lost with its pod frees its concurrency slot.
+
 ### Vector and semantic retrieval (CHAOS-3778)
 
 Vector retrieval is **opt-in and off by default**. It is enabled by setting a

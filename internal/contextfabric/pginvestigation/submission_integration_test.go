@@ -3,6 +3,7 @@ package pginvestigation_test
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"sync"
 	"testing"
@@ -343,4 +344,169 @@ func TestFindReusableOwnedOnlyOffersOnlyTheReadersBoundRows(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, ok, "a submission's turn reuses its own principal's bound row")
 	require.NotNil(t, found.SubmissionOwner)
+}
+
+// CHAOS-11914: the shared limits table, on PostgreSQL.
+func TestSubmissionLimitsParity(t *testing.T) {
+	ctx := context.Background()
+	paritytest.RunSubmissionLimitsSuite(t, func(t *testing.T) paritytest.LimitsStore {
+		store, err := pginvestigation.NewStore(newInvestigationTestDatabase(t, ctx))
+		require.NoError(t, err)
+		return store
+	})
+}
+
+// Many concurrent admissions of DIFFERENT keys, over two pools, never admit
+// more than the limits: the count and the insert are one transaction,
+// serialized per organization.
+func TestSubmissionLimitsHoldUnderConcurrentAdmissions(t *testing.T) {
+	ctx := context.Background()
+	db, storeA, storeB := twoSubmissionStores(t, ctx)
+	now := time.Date(2026, 10, 29, 12, 0, 0, 0, time.UTC)
+	limits := contextfabric.SubmissionLimits{MaxRunningPerPrincipal: 2, MaxRunningPerOrg: 4, MonthlyPlatformRunAllowance: 1000}
+	var (
+		start, done sync.WaitGroup
+		mu          sync.Mutex
+		admitted    = map[string]int{}
+		refusals    = map[contextfabric.SubmissionRefusal]int{}
+		failures    []error
+	)
+	start.Add(1)
+	for index := 0; index < 24; index++ {
+		done.Add(1)
+		store := storeA
+		if index%2 == 1 {
+			store = storeB
+		}
+		subject := fmt.Sprintf("user-load-%d", index%4)
+		go func(index int, store *pginvestigation.Store, subject string) {
+			defer done.Done()
+			start.Wait()
+			admission := admissionFor(t, submissionPrincipal(subject), fmt.Sprintf("submission-load-%04d", index), fmt.Sprintf("result_load_%04d", index), now)
+			admission.Limits = limits
+			_, ok, err := store.AdmitSubmission(ctx, admission, now)
+			mu.Lock()
+			defer mu.Unlock()
+			var refused *contextfabric.SubmissionRefusedError
+			switch {
+			case errors.As(err, &refused):
+				refusals[refused.Refusal]++
+			case err != nil:
+				failures = append(failures, err)
+			case ok:
+				admitted[subject]++
+			}
+		}(index, store, subject)
+	}
+	start.Done()
+	done.Wait()
+	require.Empty(t, failures)
+	total := 0
+	for subject, count := range admitted {
+		require.LessOrEqual(t, count, 2, "principal %s over its limit", subject)
+		total += count
+	}
+	require.Equal(t, 4, total, "exactly the org limit is admitted (admitted %v, refused %v)", admitted, refusals)
+	require.Equal(t, 20, refusals[contextfabric.SubmissionRefusedPrincipalConcurrency]+refusals[contextfabric.SubmissionRefusedOrgConcurrency])
+	var rows int
+	require.NoError(t, db.QueryRowContext(ctx, `SELECT count(*) FROM acr.context_fabric_investigation_submissions WHERE state = 'running'`).Scan(&rows))
+	require.Equal(t, 4, rows, "refused admissions wrote no record")
+}
+
+// Codex round 2 F3: the monthly allowance holds under concurrent PLATFORM
+// admissions over two pools: with room under both concurrency limits, 24
+// concurrent platform runs against an allowance of 5 admit exactly 5, refuse
+// 19 as allowance_exhausted, and leave the aggregate at exactly 5 with 5
+// running records (a refused admission writes neither).
+func TestTheMonthlyAllowanceHoldsUnderConcurrentPlatformAdmissions(t *testing.T) {
+	ctx := context.Background()
+	db, storeA, storeB := twoSubmissionStores(t, ctx)
+	now := time.Date(2026, 10, 29, 12, 0, 0, 0, time.UTC)
+	limits := contextfabric.SubmissionLimits{MaxRunningPerPrincipal: 16, MaxRunningPerOrg: 64, MonthlyPlatformRunAllowance: 5}
+	var (
+		start, done sync.WaitGroup
+		mu          sync.Mutex
+		admitted    int
+		refusals    = map[contextfabric.SubmissionRefusal]int{}
+		failures    []error
+	)
+	start.Add(1)
+	for index := 0; index < 24; index++ {
+		done.Add(1)
+		store := storeA
+		if index%2 == 1 {
+			store = storeB
+		}
+		subject := fmt.Sprintf("user-allowance-%d", index%12)
+		go func(index int, store *pginvestigation.Store, subject string) {
+			defer done.Done()
+			start.Wait()
+			admission := admissionFor(t, submissionPrincipal(subject), fmt.Sprintf("submission-allowance-%04d", index), fmt.Sprintf("result_allowance_%04d", index), now)
+			admission.Limits = limits
+			admission.PlatformRun = true
+			_, ok, err := store.AdmitSubmission(ctx, admission, now)
+			mu.Lock()
+			defer mu.Unlock()
+			var refused *contextfabric.SubmissionRefusedError
+			switch {
+			case errors.As(err, &refused):
+				refusals[refused.Refusal]++
+			case err != nil:
+				failures = append(failures, err)
+			case ok:
+				admitted++
+			}
+		}(index, store, subject)
+	}
+	start.Done()
+	done.Wait()
+	require.Empty(t, failures)
+	require.Equal(t, 5, admitted, "exactly the allowance is admitted (refused %v)", refusals)
+	require.Equal(t, map[contextfabric.SubmissionRefusal]int{contextfabric.SubmissionRefusedAllowanceExhausted: 19}, refusals)
+	usage, found, err := storeA.ReadUsageMonthly(ctx, "org-submission", now)
+	require.NoError(t, err)
+	require.True(t, found)
+	require.EqualValues(t, 5, usage.PlatformRuns, "the aggregate counts the admitted platform runs only")
+	var rows int
+	require.NoError(t, db.QueryRowContext(ctx, `SELECT count(*) FROM acr.context_fabric_investigation_submissions WHERE state = 'running'`).Scan(&rows))
+	require.Equal(t, 5, rows, "refused admissions wrote no record")
+}
+
+// An aggregate already at the allowance (written back-dated, as an operator
+// or an earlier run would have) refuses the next platform run; deleting
+// every submission record leaves the aggregate unchanged.
+func TestTheUsageAggregateGatesAndOutlivesItsRecords(t *testing.T) {
+	ctx := context.Background()
+	db, store, _ := twoSubmissionStores(t, ctx)
+	now := time.Date(2026, 10, 29, 12, 0, 0, 0, time.UTC)
+	principal := submissionPrincipal("user-aggregate")
+	_, err := db.ExecContext(ctx, `INSERT INTO acr.context_fabric_usage_monthly (org_id, month, platform_runs, updated_at) VALUES ($1, $2, 5, $3)`, principal.OrgID, contextfabric.UsageMonth(now), now.Add(-24*time.Hour))
+	require.NoError(t, err)
+	limited := admissionFor(t, principal, "submission-aggregate-1", "result_aggregate_1", now)
+	limited.Limits, limited.PlatformRun = contextfabric.SubmissionLimits{MonthlyPlatformRunAllowance: 5}, true
+	_, admitted, err := store.AdmitSubmission(ctx, limited, now)
+	var refused *contextfabric.SubmissionRefusedError
+	require.False(t, admitted)
+	require.ErrorAs(t, err, &refused)
+	require.Equal(t, contextfabric.SubmissionRefusedAllowanceExhausted, refused.Refusal)
+	require.Equal(t, int64(5), refused.Count)
+	require.Equal(t, time.Date(2026, 11, 1, 0, 0, 0, 0, time.UTC).Sub(now), refused.RetryAfter)
+
+	allowed := admissionFor(t, principal, "submission-aggregate-2", "result_aggregate_2", now)
+	allowed.PlatformRun = true // default allowance 1000
+	_, admitted, err = store.AdmitSubmission(ctx, allowed, now)
+	require.NoError(t, err)
+	require.True(t, admitted)
+	usage, found, err := store.ReadUsageMonthly(ctx, principal.OrgID, now)
+	require.NoError(t, err)
+	require.True(t, found)
+	require.Equal(t, int64(6), usage.PlatformRuns)
+	require.Nil(t, usage.CostMicroUSD)
+
+	_, err = db.ExecContext(ctx, `DELETE FROM acr.context_fabric_investigation_submissions WHERE org_id = $1`, principal.OrgID)
+	require.NoError(t, err)
+	usage, found, err = store.ReadUsageMonthly(ctx, principal.OrgID, now)
+	require.NoError(t, err)
+	require.True(t, found)
+	require.Equal(t, int64(6), usage.PlatformRuns, "deleting submission records changes the aggregate")
 }

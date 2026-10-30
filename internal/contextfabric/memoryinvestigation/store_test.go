@@ -3,6 +3,7 @@ package memoryinvestigation_test
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -262,4 +263,33 @@ func TestStore_grantDigest(t *testing.T) {
 // (CHAOS-11912) against the in-memory store.
 func TestStore_submissionParity(t *testing.T) {
 	paritytest.RunSubmissionSuite(t, func(*testing.T) paritytest.SubmissionStore { return memoryinvestigation.NewStore() })
+}
+
+// TestStore_submissionLimitsParity runs the shared admission-limit table
+// (CHAOS-11914) against the in-memory store.
+func TestStore_submissionLimitsParity(t *testing.T) {
+	paritytest.RunSubmissionLimitsSuite(t, func(*testing.T) paritytest.LimitsStore { return memoryinvestigation.NewStore() })
+}
+
+// Deleting submission records (a retention job) leaves the usage aggregate
+// unchanged.
+func TestStore_deletingSubmissionsLeavesTheAggregate(t *testing.T) {
+	store := memoryinvestigation.NewStore()
+	now := time.Date(2026, 10, 29, 12, 0, 0, 0, time.UTC)
+	principal := storage.Principal{AuthenticationMethod: storage.AuthenticationMethodWebAssertion, Subject: "user-retention", OrgID: "org-retention"}
+	key, err := contextfabric.SubmissionKeyFor(principal, "submission-retention-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := store.AdmitSubmission(context.Background(), contextfabric.SubmissionAdmission{Key: key, RequestDigest: "sha256:" + strings.Repeat("a", 64), ReservedResultID: "result_retention_1", ExpiresAt: now.Add(time.Minute), PlatformRun: true}, now); err != nil {
+		t.Fatal(err)
+	}
+	store.DeleteSubmissionsForTest(principal.OrgID)
+	usage, found, err := store.ReadUsageMonthly(context.Background(), principal.OrgID, now)
+	if err != nil || !found || usage.PlatformRuns != 1 {
+		t.Fatalf("aggregate after deleting the records = %+v found %t err %v, want 1 run", usage, found, err)
+	}
+	if _, err := store.GetSubmission(context.Background(), key, now); !errors.Is(err, contextfabric.ErrSubmissionNotFound) {
+		t.Fatalf("the record survived the delete: %v", err)
+	}
 }
