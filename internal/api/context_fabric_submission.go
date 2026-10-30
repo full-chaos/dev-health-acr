@@ -421,14 +421,22 @@ func (a *App) finishInvestigationSubmission(r *http.Request, principal storage.P
 	}
 	ctx, cancel := submissionWriteContext(r.Context())
 	defer cancel()
+	served := result.ResultID
 	if submission.implicit {
 		// The answer is not the record's: release the record (done_unsaved,
 		// no result named) so its concurrency slot is free.
-		record, _, err := submission.store.FinishSubmission(ctx, submission.key, "", a.now())
+		served = ""
+	}
+	var record contextfabric.SubmissionRecord
+	var completion contextfabric.SubmissionCompletion
+	err := retrySubmissionWrite(ctx, func() (err error) {
+		record, completion, err = submission.store.FinishSubmission(ctx, submission.key, served, a.now())
+		return err
+	})
+	if submission.implicit {
 		a.logSubmissionCompletion(r, principal, submissionCompletionImplicitReleased, record.State, false, result.Reused, err)
 		return
 	}
-	record, completion, err := submission.store.FinishSubmission(ctx, submission.key, result.ResultID, a.now())
 	a.logSubmissionCompletion(r, principal, string(completion), record.State, result.ResultID == submission.record.ReservedResultID, result.Reused, err)
 }
 
@@ -440,6 +448,43 @@ func (a *App) abandonInvestigationSubmission(r *http.Request, principal storage.
 	}
 	ctx, cancel := submissionWriteContext(r.Context())
 	defer cancel()
-	record, err := submission.store.AbandonSubmission(ctx, submission.key, a.now())
+	var record contextfabric.SubmissionRecord
+	err := retrySubmissionWrite(ctx, func() (err error) {
+		record, err = submission.store.AbandonSubmission(ctx, submission.key, a.now())
+		return err
+	})
 	a.logSubmissionCompletion(r, principal, submissionCompletionAbandonedOnError, record.State, false, false, err)
+}
+
+// submissionWriteAttempts and submissionWriteBackoff bound the retry of a
+// record's final write (codex #1763 r2 P1). A record no saved result can
+// reconcile -- an implicit admission, an abandon, an unsaved answer -- holds
+// its concurrency slot until expires_at when that write is lost, so a
+// transient failure is retried inside the write context; a persistent one is
+// logged at Error and the slot is freed at expiry (the sweeper and the
+// admission count both skip a record past expires_at).
+const (
+	submissionWriteAttempts = 3
+	submissionWriteBackoff  = 50 * time.Millisecond
+)
+
+// retrySubmissionWrite runs write until it succeeds, the record is not found
+// (nothing to retry), the context ends, or the attempts run out; it returns
+// the last error.
+func retrySubmissionWrite(ctx context.Context, write func() error) error {
+	var err error
+	for attempt := 0; attempt < submissionWriteAttempts; attempt++ {
+		if err = write(); err == nil || errors.Is(err, contextfabric.ErrSubmissionNotFound) {
+			return err
+		}
+		if attempt == submissionWriteAttempts-1 {
+			break
+		}
+		select {
+		case <-ctx.Done():
+			return err
+		case <-time.After(submissionWriteBackoff << attempt):
+		}
+	}
+	return err
 }

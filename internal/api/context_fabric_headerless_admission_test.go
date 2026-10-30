@@ -2,9 +2,11 @@ package api
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -148,4 +150,76 @@ func TestAClientSubmissionIDWithTheImplicitPrefixIsAnOrdinarySubmission(t *testi
 	if got := harness.investigator.executions.Load(); got != 1 {
 		t.Fatalf("executions = %d, want 1", got)
 	}
+}
+
+// faultySubmissionStore is the memory store whose final writes fail the next
+// finishFailures / abandonFailures times.
+type faultySubmissionStore struct {
+	*memoryinvestigation.Store
+	finishFailures  atomic.Int32
+	abandonFailures atomic.Int32
+}
+
+var errInjectedSubmissionWrite = errors.New("injected submission write failure")
+
+func (s *faultySubmissionStore) FinishSubmission(ctx context.Context, key contextfabric.SubmissionKey, served string, now time.Time) (contextfabric.SubmissionRecord, contextfabric.SubmissionCompletion, error) {
+	if s.finishFailures.Add(-1) >= 0 {
+		return contextfabric.SubmissionRecord{}, "", errInjectedSubmissionWrite
+	}
+	return s.Store.FinishSubmission(ctx, key, served, now)
+}
+
+func (s *faultySubmissionStore) AbandonSubmission(ctx context.Context, key contextfabric.SubmissionKey, now time.Time) (contextfabric.SubmissionRecord, error) {
+	if s.abandonFailures.Add(-1) >= 0 {
+		return contextfabric.SubmissionRecord{}, errInjectedSubmissionWrite
+	}
+	return s.Store.AbandonSubmission(ctx, key, now)
+}
+
+func newFaultySubmissionHarness(t *testing.T) (*submissionHarness, *faultySubmissionStore) {
+	t.Helper()
+	var clock *submissionClock
+	store := &faultySubmissionStore{Store: memoryinvestigation.NewStoreWithClock(func() time.Time { return clock.Now() })}
+	harness := newSubmissionHarness(t, store)
+	clock = harness.clock
+	setSubmissionLimits(harness, contextfabric.SubmissionLimits{MaxRunningPerPrincipal: 1, MaxRunningPerOrg: 4})
+	return harness, store
+}
+
+// Codex #1763 r2 P1: a transient failure of the write that releases an
+// implicit record (nothing else can: no saved result reconciles it) is
+// retried, so the slot is free for the principal's next create. The same for
+// the abandon of a failed run.
+func TestATransientReleaseWriteFailureIsRetried(t *testing.T) {
+	harness, store := newFaultySubmissionHarness(t)
+	store.finishFailures.Store(1)
+	servedResultID(t, harness.post(0, harness.tokenA, "", submissionQuestion))
+	servedResultID(t, harness.post(0, harness.tokenA, "", submissionQuestion))
+	store.abandonFailures.Store(1)
+	harness.investigator.mode.Store(int32(runFail))
+	if failed := harness.post(0, harness.tokenA, "", submissionQuestion); failed.Code < 500 {
+		t.Fatalf("a failed run answered %d", failed.Code)
+	}
+	harness.investigator.mode.Store(int32(runSave))
+	servedResultID(t, harness.post(0, harness.tokenA, "", submissionQuestion))
+	for _, line := range strings.Split(harness.logs[0].String(), "\n") {
+		if strings.Contains(line, ContextFabricSubmissionCompletionLogMessage) && strings.Contains(line, `"error_class"`) {
+			t.Fatalf("a retried write was logged as failed: %s", line)
+		}
+	}
+}
+
+// A persistent release failure is logged at Error and holds the slot only
+// until the record's expiry (run budget + 30 s): the admission count skips a
+// record past expires_at.
+func TestAPersistentReleaseFailureFreesTheSlotAtExpiry(t *testing.T) {
+	harness, store := newFaultySubmissionHarness(t)
+	store.finishFailures.Store(int32(submissionWriteAttempts))
+	servedResultID(t, harness.post(0, harness.tokenA, "", submissionQuestion))
+	if !strings.Contains(harness.logs[0].String(), `"level":"ERROR"`) || !strings.Contains(harness.logs[0].String(), `"completion":"implicit_released"`) {
+		t.Fatalf("the lost release is not on an Error completion line:\n%s", harness.logs[0].String())
+	}
+	expectLimitRefusal(t, harness.post(0, harness.tokenA, "", submissionQuestion), contractsv1.ErrorCodeConcurrencyLimited, "principal")
+	harness.clock.Advance(24 * time.Hour)
+	servedResultID(t, harness.post(0, harness.tokenA, "", submissionQuestion))
 }
