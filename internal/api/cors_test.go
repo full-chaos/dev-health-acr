@@ -132,6 +132,9 @@ func TestABrowserPreflightIsAnsweredBeforeAuthOnEveryBrowserRoute(t *testing.T) 
 		ContextFabricInvestigationsPath,
 		ContextFabricInvestigationsPath + "/result_cors_00000001",
 		ContextFabricInvestigationsPath + "/submissions/submission-cors-0001",
+		// CHAOS-11949: attach and cancel.
+		ContextFabricInvestigationsPath + "/submissions/submission-cors-0001/events",
+		ContextFabricInvestigationsPath + "/submissions/submission-cors-0001/cancel",
 		"/api/v1/agent-context/evidence/ev_cors_0001",
 	} {
 		for _, origin := range []string{corsTestOrigin, "http://localhost"} {
@@ -145,7 +148,7 @@ func TestABrowserPreflightIsAnsweredBeforeAuthOnEveryBrowserRoute(t *testing.T) 
 			want := map[string]string{
 				"Access-Control-Allow-Origin":  origin,
 				"Access-Control-Allow-Methods": "GET, POST, OPTIONS",
-				"Access-Control-Allow-Headers": "Authorization, Content-Type, X-ACR-Client-Version, X-ACR-Submission-ID, X-ACR-Thread-ID, X-ACR-Wait-Budget-Seconds, X-ACR-Resource, X-Request-ID",
+				"Access-Control-Allow-Headers": "Authorization, Content-Type, X-ACR-Client-Version, X-ACR-Submission-ID, X-ACR-Thread-ID, X-ACR-Wait-Budget-Seconds, X-ACR-Resource, X-Request-ID, Last-Event-ID",
 				"Access-Control-Max-Age":       "600",
 			}
 			for key, value := range want {
