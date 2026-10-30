@@ -162,6 +162,21 @@ func (s *credentialStore) revokeCredential(ctx context.Context, input storage.Cr
 	}
 	record.Metadata.RevokedAt = ptrTime(now)
 	s.byID[input.CredentialID] = cloneRecord(record)
+	// CHAOS-12124: revoking a browser credential revokes its whole family.
+	if familyID, ok := browserFamilyOf(record.Metadata); ok {
+		for id, member := range s.byID {
+			if member.Metadata.OrgID != input.OrgID || member.Metadata.Provenance.FamilyID != familyID || member.Metadata.RevokedAt != nil {
+				continue
+			}
+			event := credentialRevokedEvent(member.Metadata, input.ActorID, now)
+			event.Metadata = map[string]any{"family_id": familyID, "family_revoke_reason": "member_revoked"}
+			if err := s.recordAudit(ctx, event); err != nil {
+				return contractsv1.ClientCredential{}, err
+			}
+			member.Metadata.RevokedAt = ptrTime(now)
+			s.byID[id] = cloneRecord(member)
+		}
+	}
 	return cloneCredential(record.Metadata), nil
 }
 

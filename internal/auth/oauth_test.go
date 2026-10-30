@@ -35,6 +35,8 @@ type oauthHarness struct {
 	// sessionID is the web session (sid) the harness's consent approvals
 	// sign (CHAOS-12123); "" for none.
 	sessionID string
+	// refresh is the browser token family store (CHAOS-12124).
+	refresh *memory.BrowserRefreshStore
 }
 
 type fakeMetadata struct {
@@ -94,7 +96,11 @@ func newOAuthHarnessWith(t *testing.T, configure func(*OAuthConfig)) *oauthHarne
 	if err != nil {
 		t.Fatal(err)
 	}
-	cfg := OAuthConfig{Issuer: testIssuer, Resources: []string{testResource}, ClientMetadata: h.meta, Now: clock}
+	h.refresh, err = memory.NewBrowserRefreshStore(credentials)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg := OAuthConfig{Issuer: testIssuer, Resources: []string{testResource}, ClientMetadata: h.meta, Now: clock, BrowserRefresh: h.refresh}
 	configure(&cfg)
 	h.oauth, err = NewOAuthService(oauthStore, h.devices, cfg)
 	if err != nil {

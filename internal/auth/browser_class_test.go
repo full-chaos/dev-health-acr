@@ -261,8 +261,8 @@ func TestBrowserClient_rotationIsRefused(t *testing.T) {
 }
 
 func TestBrowserClient_configurationIsChecked(t *testing.T) {
-	devices := newOAuthHarness(t).devices
-	store := newOAuthHarness(t).oauth.store
+	base := newOAuthHarness(t)
+	devices, store, refresh := base.devices, base.oauth.store, base.refresh
 	meta := &fakeMetadata{documents: map[string]OAuthClientMetadata{}}
 	const browserClient = "https://www.example.test/acr/client-metadata.json"
 	for name, tc := range map[string]struct {
@@ -283,6 +283,7 @@ func TestBrowserClient_configurationIsChecked(t *testing.T) {
 		"dev redirect without path":  {OAuthConfig{Resources: []string{testResource, testIssuer}, DevBrowserRedirectURIs: []string{"http://localhost:3000"}}, false},
 	} {
 		tc.cfg.Issuer = testIssuer
+		tc.cfg.BrowserRefresh = refresh
 		_, err := NewOAuthService(store, devices, tc.cfg)
 		if tc.wantOK != (err == nil) {
 			t.Errorf("%s: NewOAuthService error = %v, want ok=%v", name, err, tc.wantOK)
@@ -369,7 +370,7 @@ func TestBrowserClient_exchangeUnderAChangedConfigurationIsRefused(t *testing.T)
 	})
 	h.sessionID = "sid_1"
 	h.meta.documents[browserClient] = document
-	removed, err := NewOAuthService(h.oauth.store, h.devices, OAuthConfig{Issuer: testIssuer, Resources: []string{testResource, testIssuer}, ClientMetadata: h.meta, Now: h.oauth.now})
+	removed, err := NewOAuthService(h.oauth.store, h.devices, OAuthConfig{Issuer: testIssuer, Resources: []string{testResource, testIssuer}, ClientMetadata: h.meta, Now: h.oauth.now, BrowserRefresh: h.refresh})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -382,7 +383,7 @@ func TestBrowserClient_exchangeUnderAChangedConfigurationIsRefused(t *testing.T)
 	// client was made the browser client.
 	plain := newOAuthHarnessWith(t, func(cfg *OAuthConfig) { cfg.Resources = []string{testResource, testIssuer} })
 	plain.meta.documents[browserClient] = document
-	added, err := NewOAuthService(plain.oauth.store, plain.devices, OAuthConfig{Issuer: testIssuer, Resources: []string{testResource, testIssuer}, ClientMetadata: plain.meta, Now: plain.oauth.now, BrowserClients: []string{browserClient}})
+	added, err := NewOAuthService(plain.oauth.store, plain.devices, OAuthConfig{Issuer: testIssuer, Resources: []string{testResource, testIssuer}, ClientMetadata: plain.meta, Now: plain.oauth.now, BrowserClients: []string{browserClient}, BrowserRefresh: plain.refresh})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -429,7 +430,7 @@ func TestBrowserClient_aDeviceGrantOfANowBrowserClientIsRefused(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	added, err := NewOAuthService(plain.oauth.store, plain.devices, OAuthConfig{Issuer: testIssuer, Resources: []string{testResource, testIssuer}, ClientMetadata: plain.meta, Now: plain.oauth.now, BrowserClients: []string{browserClient}})
+	added, err := NewOAuthService(plain.oauth.store, plain.devices, OAuthConfig{Issuer: testIssuer, Resources: []string{testResource, testIssuer}, ClientMetadata: plain.meta, Now: plain.oauth.now, BrowserClients: []string{browserClient}, BrowserRefresh: plain.refresh})
 	if err != nil {
 		t.Fatal(err)
 	}

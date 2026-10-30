@@ -230,6 +230,14 @@ GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE acr.oauth_authorization_requests T
 REVOKE SELECT, INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER ON TABLE acr.oauth_device_grants FROM :"runtime_user";
 GRANT SELECT, INSERT ON TABLE acr.oauth_device_grants TO :"runtime_user";
 
+-- INSERT internal/storage/postgres/browser_refresh.go:54, SELECT ... FOR UPDATE (the family lock, checked as UPDATE) browser_refresh.go:95, UPDATE (revoke) browser_refresh.go:275
+REVOKE SELECT, INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER ON TABLE acr.browser_token_families FROM :"runtime_user";
+GRANT SELECT, INSERT, UPDATE ON TABLE acr.browser_token_families TO :"runtime_user";
+
+-- INSERT internal/storage/postgres/browser_refresh.go:59, SELECT browser_refresh.go:86 and ... FOR UPDATE, UPDATE (consume) browser_refresh.go:218; removed with its family by cascade
+REVOKE SELECT, INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER ON TABLE acr.browser_refresh_tokens FROM :"runtime_user";
+GRANT SELECT, INSERT, UPDATE ON TABLE acr.browser_refresh_tokens TO :"runtime_user";
+
 -- INSERT internal/storage/postgres/web_assertion_replay.go:24, SELECT and DELETE web_assertion_replay.go:33
 REVOKE SELECT, INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER ON TABLE acr.web_assertion_replays FROM :"runtime_user";
 GRANT SELECT, INSERT, DELETE ON TABLE acr.web_assertion_replays TO :"runtime_user";
@@ -322,6 +330,9 @@ GRANT SELECT, INSERT ON TABLE acr.context_fabric_structure_prior_revocations TO 
 -- the purge command verifies the schema when it opens its runtime: cmd/acr-projector/runtime.go:261
 REVOKE SELECT, INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER ON TABLE acr.schema_migrations FROM :"purge_user";
 GRANT SELECT ON TABLE acr.schema_migrations TO :"purge_user";
+-- purge table list: orgpurge purgeTables; cascades to its refresh tokens as the owner
+REVOKE SELECT, INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER ON TABLE acr.browser_token_families FROM :"purge_user";
+GRANT SELECT, DELETE ON TABLE acr.browser_token_families TO :"purge_user";
 -- DELETE of the organization's credentials (purge table list), SELECT in the device authorization predicate: internal/contextfabric/orgpurge/purge.go purgeTables
 REVOKE SELECT, INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER ON TABLE acr.client_credentials FROM :"purge_user";
 GRANT SELECT, DELETE ON TABLE acr.client_credentials TO :"purge_user";

@@ -129,6 +129,7 @@ func TestABrowserPreflightIsAnsweredBeforeAuthOnEveryBrowserRoute(t *testing.T) 
 	for _, path := range []string{
 		OAuthAuthorizationServerMetadataPath,
 		OAuthTokenPath,
+		OAuthRevocationPath,
 		ContextFabricInvestigationsPath,
 		ContextFabricInvestigationsPath + "/result_cors_00000001",
 		ContextFabricInvestigationsPath + "/submissions/submission-cors-0001",

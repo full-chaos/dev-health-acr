@@ -127,6 +127,9 @@ func (a *App) registerRoutes(mux routeMux) {
 		mux.HandleFunc("POST "+OAuthTokenPath, a.handleOAuthToken)
 		mux.HandleFunc("POST "+OAuthRegisterPath, a.handleOAuthRegister)
 		mux.HandleFunc("POST "+OAuthDeviceAuthorizationPath, a.handleOAuthDeviceAuthorization)
+		if a.oauth.RefreshGrantSupported() {
+			mux.HandleFunc("POST "+OAuthRevocationPath, a.handleOAuthRevoke)
+		}
 	}
 	mux.Handle("POST /api/v1/auth/credentials/self/ack", a.credentialLifecycleLine(oauthvocab.StepCredentialAck, a.selfLifecycleHandler(http.HandlerFunc(a.handleAcknowledgeSelfCredential))))
 }
