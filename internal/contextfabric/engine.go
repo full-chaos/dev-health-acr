@@ -1995,6 +1995,10 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 				// of the reading persisted beside the stored row and that row's
 				// own resolution.
 				reusedCardinality = scopedMembershipCardinality(reusedCardinality, DecideCountPopulationScopeWithDigests(reusedReading.Frame, reusedReading.AnchorKind, reused.SubjectResolution, CommitBasisSetFromDigests(reused.SubjectResolution.CommitDecisionDigests), CommitDigestSetFromWire(reused.SubjectResolution.CommitDecisionDigests), CohortMemberSourceNotApplicable))
+				// CHAOS-12147: the stored coverage carries the graph read's
+				// denial detail, so a backfilled row states the same cut a
+				// fresh one does.
+				reusedCardinality = withCohortAuthorizationCut(reusedCardinality, reused.Coverage)
 				if backfilled, _, _ := appendMembershipCardinality(reused.Completeness.Outcomes, reusedCardinality, reusedPlanNarrowing(reused)); len(backfilled) > 0 {
 					reused.Completeness.Outcomes = backfilled
 				}
