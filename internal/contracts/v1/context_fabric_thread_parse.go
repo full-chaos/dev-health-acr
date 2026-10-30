@@ -14,11 +14,13 @@ import (
 // value cannot tell an absent key from a key given its zero value, so
 // Validate alone would accept documents the published schema refuses. Parse
 // refuses them first: data that is not UTF-8, a key given twice anywhere, an
-// unknown key, trailing content, a key present as empty, false, zero or null
-// where the writer omits the field (question, result_id, result_withheld,
-// earlier_turns_cursor), and a required key that is missing (retention_days 0
-// is a valid value, so a missing one would otherwise read as retention 0).
-// It then holds the value to Validate.
+// unknown key, trailing content, a null anywhere (encoding/json reads a null
+// into a non-pointer field as no value at all, so "retention_days": null would
+// read as the valid retention 0; no field of either schema is nullable), a key
+// present as empty, false or zero where the writer omits the field (question,
+// result_id, result_withheld, earlier_turns_cursor), and a required key that
+// is missing (a missing retention_days would read as 0 too). It then holds
+// the value to Validate.
 func ParseContextFabricThread(data []byte) (ContextFabricThread, error) {
 	return parseContextFabricThreadDocument[ContextFabricThread](data)
 }
@@ -112,10 +114,12 @@ func rejectDuplicateJSONKeys(data []byte) error {
 	}
 }
 
-// sameJSONKeyPaths holds data to the keys its Go value writes back: a key in
-// data the writer omits was present as an empty, false, zero or null value,
-// and a key the writer writes that data lacks is a required key that was
-// missing (decoded as its zero value).
+// sameJSONKeyPaths holds data to the keys its Go value writes back: a null
+// anywhere in data is refused (it decodes as no value); a key in data the
+// writer omits was present as an empty, false or zero value, or under a
+// spelling encoding/json matched case-insensitively; and a key the writer
+// writes that data lacks is a required key that was missing (decoded as its
+// zero value).
 func sameJSONKeyPaths(data, written []byte) error {
 	var received, wrote any
 	if err := decodeJSONNumbers(data, &received); err != nil {
@@ -138,6 +142,8 @@ func decodeJSONNumbers(data []byte, target *any) error {
 
 func compareJSONKeyPaths(received, wrote any, path string) error {
 	switch r := received.(type) {
+	case nil:
+		return fmt.Errorf("thread document carries a null at %s; no field is nullable", pathOrRoot(path))
 	case map[string]any:
 		w, ok := wrote.(map[string]any)
 		if !ok {
@@ -156,7 +162,7 @@ func compareJSONKeyPaths(received, wrote any, path string) error {
 			wv, inWritten := w[key]
 			switch {
 			case inReceived && !inWritten:
-				return fmt.Errorf("thread document carries %s.%s with an empty, false, zero or null value; the writer omits an absent field", pathOrRoot(path), key)
+				return fmt.Errorf("thread document carries %s.%s, which the writer does not write: an empty, false or zero value of an optional field, or a key spelled in another case", pathOrRoot(path), key)
 			case !inReceived && inWritten:
 				return fmt.Errorf("thread document lacks the required key %s.%s", pathOrRoot(path), key)
 			}

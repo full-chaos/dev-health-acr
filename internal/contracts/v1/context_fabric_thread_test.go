@@ -643,3 +643,100 @@ func TestThreadParseAndSchemaAgreeOnRawDocuments(t *testing.T) {
 		}
 	}
 }
+
+// No key of either document may be null: encoding/json reads a null into a
+// non-pointer field as no value, so a null retention_days on a retention-0
+// thread read as the valid 0 (round-2 review). Every key of every object is
+// swept, on a retention-0 thread and list, so the sweep holds the case the
+// 30-day golden hid (there a null retention failed expires_at instead).
+func TestThreadParseRefusesNullAtEveryKey(t *testing.T) {
+	zeroThread := goldenThread()
+	zeroThread.Turns = slices.Clone(zeroThread.Turns)
+	setRetention(&zeroThread, ContextFabricThreadRetentionDay)
+	zeroThread.EarlierTurnsCursor = ""
+	zeroList := goldenThreadList()
+	threadBody, err := json.Marshal(zeroThread)
+	if err != nil {
+		t.Fatal(err)
+	}
+	listBody, err := json.Marshal(zeroList)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ParseContextFabricThread(threadBody); err != nil {
+		t.Fatalf("the retention-0 thread does not parse: %v", err)
+	}
+	if _, err := ParseContextFabricThreadList(listBody); err != nil {
+		t.Fatalf("the list does not parse: %v", err)
+	}
+	type target struct {
+		list   bool
+		object func(map[string]any) map[string]any
+	}
+	targets := map[string]target{
+		"thread":        {false, func(d map[string]any) map[string]any { return d }},
+		"thread turn 0": {false, func(d map[string]any) map[string]any { return d["turns"].([]any)[0].(map[string]any) }},
+		"thread turn 1": {false, func(d map[string]any) map[string]any { return d["turns"].([]any)[1].(map[string]any) }},
+		"list":          {true, func(d map[string]any) map[string]any { return d }},
+		"list entry 1":  {true, func(d map[string]any) map[string]any { return d["threads"].([]any)[1].(map[string]any) }},
+	}
+	swept := 0
+	for name, tg := range targets {
+		base := threadBody
+		schemaFile := threadSchemaFile
+		if tg.list {
+			base, schemaFile = listBody, threadListSchemaFile
+		}
+		var probe map[string]any
+		if err := json.Unmarshal(base, &probe); err != nil {
+			t.Fatal(err)
+		}
+		for key := range tg.object(probe) {
+			var doc map[string]any
+			decoder := json.NewDecoder(bytes.NewReader(base))
+			decoder.UseNumber()
+			if err := decoder.Decode(&doc); err != nil {
+				t.Fatal(err)
+			}
+			tg.object(doc)[key] = nil
+			body, err := json.Marshal(doc)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var parseErr error
+			if tg.list {
+				_, parseErr = ParseContextFabricThreadList(body)
+			} else {
+				_, parseErr = ParseContextFabricThread(body)
+			}
+			if parseErr == nil {
+				t.Errorf("%s: Parse accepts %s: null", name, key)
+			}
+			if err := contractcheck.ValidateSerializedStrict("", schemaFile, body); err == nil {
+				t.Errorf("%s: the schema accepts %s: null", name, key)
+			}
+			swept++
+		}
+	}
+	if swept < 20 {
+		t.Fatalf("swept %d keys; the sweep lost its targets", swept)
+	}
+	// A key spelled in another case: encoding/json matches it, the schema
+	// does not.
+	cased := bytes.Replace(threadBody, []byte(`"retention_days"`), []byte(`"Retention_Days"`), 1)
+	if _, err := ParseContextFabricThread(cased); err == nil {
+		t.Fatal("Parse accepts Retention_Days")
+	}
+	if err := contractcheck.ValidateSerializedStrict("", threadSchemaFile, cased); err == nil {
+		t.Fatal("the schema accepts Retention_Days")
+	}
+	// An integer written with a fraction or an exponent: both refuse it.
+	for _, spelling := range []string{"0.0", "0e0", "-0"} {
+		number := bytes.Replace(threadBody, []byte(`"retention_days":0`), []byte(`"retention_days":`+spelling), 1)
+		_, parseErr := ParseContextFabricThread(number)
+		schemaErr := contractcheck.ValidateSerializedStrict("", threadSchemaFile, number)
+		if (parseErr == nil) != (schemaErr == nil) {
+			t.Fatalf("retention_days %s: Parse = %v, schema = %v", spelling, parseErr, schemaErr)
+		}
+	}
+}
