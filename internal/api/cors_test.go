@@ -427,3 +427,41 @@ func TestARefusedOriginIsNeverLoggedAndSaysWhy(t *testing.T) {
 		}
 	}
 }
+
+// CHAOS-11950: the answer feedback route is a registered browser route. A
+// preflight for GET and for POST from the web origin is answered 204 with the
+// origin echoed, an actual response carries the headers, and an unregistered
+// path beside it answers no CORS (CHAOS-12125: registered patterns only).
+func TestCORSAnswersTheFeedbackRouteAndNoSiblingOfIt(t *testing.T) {
+	harness := corsHarness(t)
+	feedback := ContextFabricInvestigationsPath + "/feedback/result_cors_feedback_1"
+	for _, method := range []string{http.MethodGet, http.MethodPost} {
+		got := harness.cors(0, corsCall{method: http.MethodOptions, path: feedback, origin: corsTestOrigin, headers: map[string]string{
+			"Access-Control-Request-Method":  method,
+			"Access-Control-Request-Headers": "authorization, content-type, x-acr-client-version",
+		}})
+		if got.Code != http.StatusNoContent || got.Header().Get("Access-Control-Allow-Origin") != corsTestOrigin {
+			t.Fatalf("%s preflight on %s = %d, Allow-Origin %q; want 204 and %q", method, feedback, got.Code, got.Header().Get("Access-Control-Allow-Origin"), corsTestOrigin)
+		}
+		if !containsValue(got.Header().Values("Access-Control-Allow-Methods"), method) {
+			t.Fatalf("%s preflight: Allow-Methods %q lacks %s", method, got.Header().Get("Access-Control-Allow-Methods"), method)
+		}
+		expectNoCredentialsOrWildcard(t, method+" preflight", got)
+	}
+	actual := harness.cors(0, corsCall{method: http.MethodPost, path: feedback, origin: corsTestOrigin, token: harness.tokenA,
+		headers: map[string]string{"X-ACR-Client-Version": "1.0.0", "Content-Type": "application/json"},
+		body:    []byte(feedbackRequestBody("yes", "no"))})
+	if actual.Code != http.StatusNotFound || actual.Header().Get("Access-Control-Allow-Origin") != corsTestOrigin {
+		t.Fatalf("actual POST on an unknown result = %d, Allow-Origin %q; want 404 with %q", actual.Code, actual.Header().Get("Access-Control-Allow-Origin"), corsTestOrigin)
+	}
+	for _, sibling := range []string{
+		ContextFabricInvestigationsPath + "/feedbackx/result_cors_feedback_1",
+		ContextFabricInvestigationsPath + "/feedback/result_cors_feedback_1/votes",
+	} {
+		got := harness.cors(0, corsCall{method: http.MethodOptions, path: sibling, origin: corsTestOrigin, headers: map[string]string{"Access-Control-Request-Method": "POST"}})
+		if got.Code == http.StatusNoContent {
+			t.Fatalf("unregistered %s answered the preflight 204", sibling)
+		}
+		expectNoCORS(t, sibling, got)
+	}
+}
