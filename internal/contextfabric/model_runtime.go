@@ -3053,12 +3053,24 @@ func composeDirectJudgmentFrom(status InvestigationStatus, drivers []DriverJudgm
 // ClaimedFacts only -- the "current" observed values a claim restates. See
 // composeDeterministicAnswer's doc comment for why model prose
 // (draft.CurrentState) is never read here.
+//
+// CHAOS-11600: a derived value (a judged score, a model-categorized theme share,
+// a computed claim) is not an observation, so it is listed apart, in a clause
+// that says so, never under "Current observed values".
 func composeCurrentState(draft SynthesisDraft) string {
-	claims := claimedFactSentences(draft.ClaimedFacts)
-	if len(claims) == 0 {
+	observed, derived := splitDerivedClaims(draft.ClaimedFacts)
+	claims, derivedSentences := claimedFactSentences(observed), claimedFactSentences(derived)
+	if len(claims) == 0 && len(derivedSentences) == 0 {
 		return "No canonical facts were observed to describe the current state."
 	}
-	text := "Current observed values: " + strings.Join(claims, "; ") + "."
+	var parts []string
+	if len(claims) > 0 {
+		parts = append(parts, "Current observed values: "+strings.Join(claims, "; ")+".")
+	}
+	if len(derivedSentences) > 0 {
+		parts = append(parts, derivedValuesClause(derivedSentences))
+	}
+	text := strings.Join(parts, " ")
 	if qualified := qualifiedDriverCategories(draft.Drivers); len(qualified) > 0 {
 		text += " Not complete: " + strings.Join(qualified, "; ") + "."
 	}

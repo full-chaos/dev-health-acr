@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"regexp"
 	"sort"
 	"strconv"
 	"unicode/utf8"
@@ -591,8 +592,10 @@ func cohortDriverJudgmentTitle(member CohortMember, driver CohortMemberDriver) s
 }
 
 // cohortDriverJudgmentSummary's template (CHAOS-4580, CHAOS-4533's narrator
-// half): "<signal> (weight W, value V) contributed C of <label>'s S
-// attention points." A prior version read "...contributed C points to
+// half): "<signal> (weight W, value V) appears to account for C of <label>'s
+// S attention points." The attention score and its signal values are derived
+// numbers, so the sentence states them as derived (CHAOS-11600: appears,
+// leans or suggests, never as an observation). A prior version read "...contributed C points to
 // <label>'s a S attention score.", which duplicated the possessive ("'s a")
 // into a stray article and inverted "points"/"score" against the rest of
 // the sentence -- fixed here rather than patched per-clause so the same
@@ -600,13 +603,19 @@ func cohortDriverJudgmentTitle(member CohortMember, driver CohortMemberDriver) s
 // score. scoreText carries no possessive/article of its own; the sentence
 // supplies exactly one "'s" and one noun ("attention points"), whether or
 // not the member has a score.
+// cohortDriverSummaryShape matches what cohortDriverJudgmentSummary writes, and
+// what it wrote before CHAOS-11600 ("contributed"), so the derived-number
+// measure reads answers stored by an older build alike: every number in it is
+// derived, and the measure counts a summary in this shape as such a sentence.
+var cohortDriverSummaryShape = regexp.MustCompile(`^.+ \(weight -?\d+, value -?\d+\.\d{2}\) (?:appears to account for|contributed) -?\d+\.\d of .+'s .+ attention points\.$`)
+
 func cohortDriverJudgmentSummary(member CohortMember, driver CohortMemberDriver) string {
 	scoreText := "unranked"
 	if member.Score != nil {
 		scoreText = fmt.Sprintf("%.1f", *member.Score)
 	}
 	return fmt.Sprintf(
-		"%s (weight %.0f, value %.2f) contributed %.1f of %s's %s attention points.",
+		"%s (weight %.0f, value %.2f) appears to account for %.1f of %s's %s attention points.",
 		cohortSignalDisplayName(driver.Signal), driver.Weight, driver.Value, driver.WeightContributed, member.Subject.Label, scoreText,
 	)
 }

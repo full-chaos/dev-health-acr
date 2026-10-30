@@ -109,6 +109,20 @@ type MembershipCardinality struct {
 	// under. Set on a withheld value too, where every other field is zero, so
 	// the decision reaches telemetry beside the absence it caused.
 	Scope CountPopulationScope
+	// AuthorizationDenied is how many members of the counted kind the graph
+	// read COUNTED and authorization then removed (CHAOS-12147), read from the
+	// degrading graph_cohort_denied_by_authorization coverage detail by
+	// withCohortAuthorizationCut. Zero when nothing was denied or the denial
+	// was not measured.
+	//
+	// It is a FOURTH statement, beside Served, Declared and
+	// PopulationIncomplete, and it is kept apart from them on purpose: those
+	// three also feed the count sentence, the narrowing disclosure and the
+	// ranking row, and none of those describes an authorization cut. Only the
+	// count's outcome row reads it, so the completeness state stops reading a
+	// cut member set as the whole one without changing what the other
+	// surfaces say about the members the answer carries.
+	AuthorizationDenied int
 }
 
 // Narrowed reports whether the answer carries fewer members than were found.
@@ -183,6 +197,105 @@ func ComputeMembershipCardinality(cohort *Cohort, population int, narrowing []co
 		cardinality.Overrun = step.Overrun
 	}
 	return cardinality, true
+}
+
+// withCohortAuthorizationCut records on cardinality how many members of the
+// counted kind authorization removed from the member set, read from the
+// coverage the graph read filed (CHAOS-12147). See AuthorizationDenied.
+//
+// A withheld or unresolved cardinality is returned unchanged: there is no
+// count row to qualify. So is a work-item count: its census carries its own
+// authorization gap (work_item_authorization_gap.go), and the graph's cohort
+// denial counts members of the cohort kind, not work items.
+func withCohortAuthorizationCut(cardinality MembershipCardinality, coverage Coverage) MembershipCardinality {
+	if !cardinality.Resolved || cardinality.Kind == SubjectWorkItem {
+		return cardinality
+	}
+	cardinality.AuthorizationDenied = cohortAuthorizationDenied(coverage)
+	return cardinality
+}
+
+// cohortAuthorizationDenied is the largest count on a DEGRADING
+// graph_cohort_denied_by_authorization detail, or 0.
+//
+// Degrading only: the graph reader files the row as degrading whenever it
+// cut a member set, so a non-degrading one states no cut. Counted only: a
+// detail without a count measured nothing to declare. The LARGEST, not the
+// sum: the reader can file the code from two arms (the cohort census and the
+// project-deployments walk), and summing two views of one cut would declare
+// members twice; the largest is a measured lower bound on what was denied.
+func cohortAuthorizationDenied(coverage Coverage) int {
+	denied := 0
+	for _, detail := range coverage.Details {
+		if !detail.Degrading || detail.Code != contractsv1.ContextFabricCoverageDetailGraphCohortDeniedByAuthorization || detail.Count == nil {
+			continue
+		}
+		if *detail.Count > denied {
+			denied = *detail.Count
+		}
+	}
+	return denied
+}
+
+// restateCohortAuthorizationCutCount states the authorization cut on the
+// SERVED COPY of an answer whose count row predates it (CHAOS-12147).
+//
+// A result stored before the count row read the cut carries the denial detail
+// beside a `satisfied` assembled-result count row. Reuse never re-runs the
+// count step for a row that exists (hasAssembledOutcome), and a by-id read
+// never runs it at all, so both served that stored row and the completeness
+// state `complete`. This APPENDS the narrowed row the count step now writes,
+// built by the same builder from the stored row's own numbers; the stored row
+// is never rewritten (the outcome layer's APPEND invariant), and storage is
+// not touched. The completeness derivation reads any narrowed row, so the
+// served state is no longer `complete`.
+//
+// It reads the LAST assembled count row, and leaves alone: no cohort, a
+// work-item count (see withCohortAuthorizationCut), no measured denial, no
+// assembled count row (the backfill paths write one with the cut already
+// stated), and a last count row that is not `satisfied` (it already keeps the
+// state from `complete`). The last rule is also why a second pass appends
+// nothing: after a restatement the last count row is the narrowed one.
+//
+// It is called from ApplyServedStatusFloors, the one late writer every serving
+// surface runs, fresh, reused and by id. On a fresh answer the count row
+// already names the cut, so it is a no-op there.
+func restateCohortAuthorizationCutCount(result InvestigationResult) (InvestigationResult, bool) {
+	if result.Cohort == nil || result.Cohort.Kind == SubjectWorkItem {
+		return result, false
+	}
+	denied := cohortAuthorizationDenied(result.Coverage)
+	if denied == 0 {
+		return result, false
+	}
+	var stated *RequirementOutcomeRow
+	for index := range result.Completeness.Outcomes {
+		row := &result.Completeness.Outcomes[index]
+		if row.Stage != contractsv1.ContextFabricOutcomeStageAssembledResult || row.Obligation != string(ObligationCount) {
+			continue
+		}
+		stated = row
+	}
+	if stated == nil || stated.Outcome != contractsv1.ContextFabricRequirementSatisfied {
+		return result, false
+	}
+	if result.AnswerPlan != nil {
+		for _, requirement := range result.AnswerPlan.Requirements {
+			if requirement.Requirement == stated.Requirement && requirement.Subject == SubjectWorkItem {
+				return result, false
+			}
+		}
+	}
+	restated := membershipCardinalityOutcomeRow(MembershipCardinality{
+		Resolved:            true,
+		Kind:                result.Cohort.Kind,
+		Served:              stated.Served,
+		Declared:            stated.Declared,
+		AuthorizationDenied: denied,
+	}, stated.Requirement, stated.Obligation)
+	outcomes := appendOutcomeRows(result.Completeness.Outcomes, restated)
+	result.Completeness.Outcomes = outcomes
+	return result, true
 }
 
 // renderClampNarrowing finds the stage-1 `cardinality` step -- the pre-read
@@ -284,6 +397,36 @@ func membershipCardinalityOutcomeRow(cardinality MembershipCardinality, requirem
 		Impact:      contractsv1.ContextFabricAnswerImpactNone,
 		Served:      cardinality.Served,
 		Declared:    cardinality.Declared,
+	}
+	if cardinality.AuthorizationDenied > 0 {
+		// A MEMBER SET AUTHORIZATION CUT IS NEVER THE WHOLE ONE (CHAOS-12147).
+		//
+		// The graph read counted members of this kind and authorization
+		// removed AuthorizationDenied of them; the cohort can still say
+		// complete, because its census was complete -- the cut came after.
+		// `satisfied` here made the completeness state `complete` over a
+		// count the coverage itself called partial, while the status floor
+		// (applyDeniedCohortStatusFloor) already refused `complete` for the
+		// same detail. The row now states the cut the detail measured.
+		//
+		// Declared is what this turn OBSERVED: the members it counted plus
+		// the members the graph counted and denied. Both numbers are
+		// measured, and the denied count is already disclosed to this caller
+		// on the coverage detail, so the row discloses nothing new. It is an
+		// ordinary reduction, so the row validator needs no exception.
+		row.Outcome = contractsv1.ContextFabricRequirementNarrowed
+		row.Impact = contractsv1.ContextFabricAnswerImpactScope
+		row.Declared = cardinality.Declared + cardinality.AuthorizationDenied
+		row.CauseCoverage = contractsv1.ContextFabricCoverageDetailGraphCohortDeniedByAuthorization
+		// Observed: the graph read reported the denial with its count.
+		row.CauseObserved = true
+		if cardinality.Narrowed() {
+			// A narrowing step ALSO cut the authorized members: carry its
+			// basis too, so the row names both mechanisms.
+			row.CauseNarrowing = cardinality.Basis
+			row.CauseOverrun = cardinality.Overrun
+		}
+		return contractsv1.ContextFabricWithReductionRefinement(row)
 	}
 	if !cardinality.Narrowed() {
 		if !cardinality.PopulationIncomplete {
@@ -420,7 +563,11 @@ func appendMembershipCardinality(rows []RequirementOutcomeRow, cardinality Membe
 // same absence the row itself reports: nothing to say, said by saying
 // nothing rather than by logging a zero.
 func membershipCardinalityEventFrom(result InvestigationResult, family QuestionFamily) (MembershipCardinalityEvent, bool) {
-	for _, row := range result.Completeness.Outcomes {
+	// The LAST assembled count row, read backwards: a served copy can carry a
+	// restated row after a stored one (restateCohortAuthorizationCutCount),
+	// and the later row is the decision the served document ends on.
+	for index := len(result.Completeness.Outcomes) - 1; index >= 0; index-- {
+		row := result.Completeness.Outcomes[index]
 		if row.Stage != contractsv1.ContextFabricOutcomeStageAssembledResult {
 			continue
 		}
