@@ -19,10 +19,11 @@ package v1
 // So the SELECTION moves to the service, and a chart becomes a claimed
 // fact like any other:
 //
-// STATUS (CHAOS-4616): of the three rules this file's vocabulary declares,
-// two have producers -- the cohort attention-score bars and the per-driver
-// contribution stack, both proven on live data. `dated_fact_trend` is
-// WITHDRAWN; see ContextFabricRenderRuleDatedFactTrend's own comment.
+// STATUS (CHAOS-4616, CHAOS-4637): all three rules this file's vocabulary
+// declares have a producer -- the cohort attention-score bars, the
+// per-driver contribution stack, and `dated_fact_trend`. The trend rule was
+// withdrawn in CHAOS-4616 and has been live again since CHAOS-4637; see
+// ContextFabricRenderRuleDatedFactTrend's own comment.
 //
 //  1. Kind is a CLOSED vocabulary, fixed in full here and now
 //     (ContextFabricRenderKind) so a consumer can exhaustively switch on it
@@ -144,18 +145,22 @@ const (
 	// drivers. Produces the stacked per-driver contribution breakdown --
 	// check 8's "scores help prioritize; drivers explain", drawn.
 	ContextFabricRenderRuleCohortDriverContribution ContextFabricRenderShapeRule = "cohort_driver_contribution"
-	// ContextFabricRenderRuleDatedFactTrend is WITHDRAWN (CHAOS-4616): no
-	// producer selects it. It stays in the vocabulary so a document from a
-	// server that DID produce one still validates, and so the returning
-	// producer needs no contract change.
+	// ContextFabricRenderRuleDatedFactTrend fires when the plan authorizes a
+	// series and a claimed fact's row table DECLARES itself a time_series
+	// (CHAOS-4637, declaration-driven; selector: datedFactTrendShapes in
+	// internal/contextfabric/render_shapes.go, called from
+	// SelectRenderShapes). The axis is the declared key and exactly one
+	// declared measure (the claim's Field) is plotted; a table the producer
+	// declared but cannot satisfy gets no chart, never a partial or
+	// approximated one. Produces the dated line series.
 	//
-	// It was withdrawn because deciding which columns of a row table are
-	// measures and which are dimensions cannot be done from the table
-	// alone -- three successive inferences were each defeated in review,
-	// and the last shipped rule drew a line across two different work
-	// scopes measured once each as though one had changed over time. The
-	// information exists at the producer and is not on the wire; carrying
-	// it is CHAOS-4627.
+	// History: CHAOS-4616 withdrew the rule because deciding which columns of
+	// a row table are measures and which are dimensions cannot be done from
+	// the table alone -- three successive inferences were each defeated in
+	// review, and the last shipped rule drew a line across two different work
+	// scopes measured once each as though one had changed over time.
+	// CHAOS-4627 put the declaration on the wire and CHAOS-4637 made the rule
+	// read it, so there is no geometry left to infer from.
 	ContextFabricRenderRuleDatedFactTrend ContextFabricRenderShapeRule = "dated_fact_trend"
 )
 
