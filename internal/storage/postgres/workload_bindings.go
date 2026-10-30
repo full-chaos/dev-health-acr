@@ -50,7 +50,7 @@ WHERE trust_domain = $1 AND namespace = $2 AND service_account_name = $3 AND ser
 // NewWorkloadCredentialPurger returns a bounded, batched purge function for
 // expired workload-exchanged credential rows (acr.client_credentials rows
 // carrying a non-null workload_binding_id). A workload re-exchanges a
-// fresh row roughly every 10 minutes for as long as it runs, so these rows
+// fresh row roughly every 5 minutes (authverify.WorkloadAccessTokenLifetime, 300 s) for as long as it runs, so these rows
 // accumulate far faster than ordinary long-lived credentials; unlike
 // ordinary credentials they are hard-deleted once expired rather than left
 // revoked; the issuance audit event already captured everything worth

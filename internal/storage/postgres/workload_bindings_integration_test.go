@@ -9,6 +9,7 @@ import (
 
 	"github.com/full-chaos/dev-health-acr/internal/auth"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
+	"github.com/full-chaos/dev-health-go/authverify"
 	"github.com/stretchr/testify/require"
 )
 
@@ -150,4 +151,58 @@ VALUES ('wlb_test_3', $1, 'cluster.local', 'ns', 'sa', 'uid', 'read', '["*"]'::j
 	require.True(t, errors.Is(err, storage.ErrNotFound), "the expired workload row must be gone")
 	_, err = credentials.GetByID(ctx, workloadBindingTestOrgID, ordinaryExpired.Credential.CredentialID)
 	require.NoError(t, err, "an ordinary (non-workload) expired credential must never be purged by this function")
+}
+
+type exchangeSubjectValidator struct{ expiresAt time.Time }
+
+func (v exchangeSubjectValidator) Validate(context.Context, string) (authverify.SubjectIdentity, error) {
+	return authverify.SubjectIdentity{TrustDomain: "cluster.local", Namespace: "ns", ServiceAccountName: "sa", ServiceAccountUID: "uid", ExpiresAt: v.expiresAt}, nil
+}
+
+type exchangeGrantResolver struct{ binding authverify.WorkloadBinding }
+
+func (r exchangeGrantResolver) Resolve(context.Context, authverify.SubjectIdentity) (authverify.WorkloadBinding, error) {
+	return r.binding, nil
+}
+
+func TestWorkloadAccessTokenIssuer_overPostgresKeepsTheLifetimeWithinTheCeiling(t *testing.T) {
+	ctx := context.Background()
+	db := newCredentialStoreDatabase(t, ctx)
+	audit, err := NewAuditStore(db)
+	require.NoError(t, err)
+	credentials, err := NewCredentialStore(db, audit)
+	require.NoError(t, err)
+	service, err := auth.NewService(credentials, auth.ServiceOptions{})
+	require.NoError(t, err)
+
+	_, err = db.ExecContext(ctx, `
+INSERT INTO acr.workload_bindings (binding_id, org_id, trust_domain, namespace, service_account_name, service_account_uid, role, repository_scopes, created_at, created_by)
+VALUES ('wlb_lifetime_test', $1, 'cluster.local', 'ns', 'sa', 'uid', 'read', '["*"]'::jsonb, now(), 'test_actor')`, workloadBindingTestOrgID)
+	require.NoError(t, err)
+
+	// A clock reading with the worst-case sub-microsecond tail: timestamptz
+	// keeps microseconds, so the stored expiry differs from the issued one
+	// only if the driver rounds up.
+	now := func() time.Time { return time.Now().Truncate(time.Second).Add(999_999_999 * time.Nanosecond) }
+	issuer, err := auth.NewWorkloadAccessTokenIssuer(service, now)
+	require.NoError(t, err)
+	binding := authverify.WorkloadBinding{BindingID: "wlb_lifetime_test", OrgID: workloadBindingTestOrgID, GrantedScopes: auth.RoleScopes("read"), RepositoryScopes: []string{"*"}}
+
+	issued, err := issuer.Issue(ctx, binding, auth.RoleScopes("read"), time.Now().Add(time.Hour))
+	require.NoError(t, err)
+	require.NotNil(t, issued.IssuedAt)
+	require.NotNil(t, issued.ExpiresAt)
+	require.LessOrEqual(t, issued.ExpiresAt.Sub(*issued.IssuedAt), authverify.WorkloadTokenLifetimeCeiling)
+
+	stored, err := credentials.FindByTokenHash(ctx, auth.HashToken(issued.Token))
+	require.NoError(t, err)
+	require.NotNil(t, stored.ExpiresAt)
+	require.LessOrEqual(t, stored.ExpiresAt.Sub(*issued.IssuedAt), authverify.WorkloadTokenLifetimeCeiling, "the stored (microsecond) expiry must not lengthen the lifetime")
+
+	exchange, err := authverify.NewWorkloadTokenExchangeService(exchangeSubjectValidator{expiresAt: time.Now().Add(time.Hour)}, exchangeGrantResolver{binding: binding}, issuer)
+	require.NoError(t, err)
+	result, err := exchange.Exchange(ctx, "subject-token", nil)
+	require.NoError(t, err)
+	require.Greater(t, result.ExpiresIn, 0)
+	require.LessOrEqual(t, result.ExpiresIn, int(authverify.WorkloadTokenLifetimeCeiling/time.Second))
 }

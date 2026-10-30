@@ -6,7 +6,7 @@ require (
 	github.com/ClickHouse/clickhouse-go/v2 v2.47.0
 	github.com/FalkorDB/falkordb-go/v2 v2.1.0
 	github.com/containerd/errdefs v1.0.0
-	github.com/full-chaos/dev-health-go v0.26.0
+	github.com/full-chaos/dev-health-go v0.33.0
 	github.com/google/jsonschema-go v0.4.3
 	github.com/google/uuid v1.6.0
 	github.com/invopop/jsonschema v0.13.0

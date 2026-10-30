@@ -61,5 +61,5 @@ func (s *serviceAccessTokenIssuer) Issue(ctx context.Context, binding authverify
 	if err != nil {
 		return authverify.IssuedToken{}, err
 	}
-	return authverify.IssuedToken{Token: cred.Token, ExpiresAt: cred.Credential.ExpiresAt}, nil
+	return authverify.IssuedToken{Token: cred.Token, IssuedAt: &now, ExpiresAt: cred.Credential.ExpiresAt}, nil
 }

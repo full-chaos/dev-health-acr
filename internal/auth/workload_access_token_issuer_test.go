@@ -117,3 +117,72 @@ func TestWorkloadAccessTokenIssuer_marksProvenanceAndBindingID(t *testing.T) {
 		t.Fatalf("WorkloadBindingID = %v, want wlb_4", record.WorkloadBindingID)
 	}
 }
+
+func TestWorkloadAccessTokenIssuer_setsIssuedAtToTheInjectedNowWithinTheCeiling(t *testing.T) {
+	now := time.Date(2026, 8, 20, 12, 0, 0, 0, time.UTC)
+	binding := authverify.WorkloadBinding{BindingID: "wlb_6", OrgID: "11111111-1111-4111-8111-111111111111", GrantedScopes: RoleScopes("read"), RepositoryScopes: []string{"*"}}
+	cases := []struct {
+		name             string
+		subjectExpiresAt time.Time
+		wantLifetime     time.Duration
+	}{
+		{"full lifetime", now.Add(24 * time.Hour), authverify.WorkloadAccessTokenLifetime},
+		{"cut by subject expiry", now.Add(2 * time.Minute), 2 * time.Minute},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			issuer := newTestAccessTokenIssuer(t, func() time.Time { return now })
+			issued, err := issuer.Issue(context.Background(), binding, RoleScopes("read"), tc.subjectExpiresAt)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if issued.IssuedAt == nil || !issued.IssuedAt.Equal(now) {
+				t.Fatalf("issued_at = %v, want the injected now %v", issued.IssuedAt, now)
+			}
+			if issued.ExpiresAt == nil {
+				t.Fatal("expires_at is nil")
+			}
+			lifetime := issued.ExpiresAt.Sub(*issued.IssuedAt)
+			if lifetime != tc.wantLifetime {
+				t.Fatalf("lifetime = %v, want %v", lifetime, tc.wantLifetime)
+			}
+			if lifetime > authverify.WorkloadTokenLifetimeCeiling {
+				t.Fatalf("lifetime %v exceeds the ceiling %v", lifetime, authverify.WorkloadTokenLifetimeCeiling)
+			}
+		})
+	}
+}
+
+type stubSubjectValidator struct{ expiresAt time.Time }
+
+func (v stubSubjectValidator) Validate(context.Context, string) (authverify.SubjectIdentity, error) {
+	return authverify.SubjectIdentity{TrustDomain: "cluster.local", Namespace: "ns", ServiceAccountName: "sa", ServiceAccountUID: "uid-1", ExpiresAt: v.expiresAt}, nil
+}
+
+type stubGrantResolver struct{ binding authverify.WorkloadBinding }
+
+func (r stubGrantResolver) Resolve(context.Context, authverify.SubjectIdentity) (authverify.WorkloadBinding, error) {
+	return r.binding, nil
+}
+
+func TestWorkloadAccessTokenIssuer_passesTheWorkloadExchangeServiceLifetimeCheck(t *testing.T) {
+	// The exchange service reads time.Until on the issued expiry, so this
+	// cell runs on the real clock.
+	issuer := newTestAccessTokenIssuer(t, time.Now)
+	binding := authverify.WorkloadBinding{BindingID: "wlb_7", OrgID: "11111111-1111-4111-8111-111111111111", GrantedScopes: RoleScopes("read"), RepositoryScopes: []string{"*"}}
+	service, err := authverify.NewWorkloadTokenExchangeService(stubSubjectValidator{expiresAt: time.Now().Add(time.Hour)}, stubGrantResolver{binding: binding}, issuer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := service.Exchange(context.Background(), "subject-token", nil)
+	if err != nil {
+		t.Fatalf("exchange error = %v, want nil", err)
+	}
+	if !IsTokenShapeValid(result.AccessToken) {
+		t.Fatalf("access token %q does not match the ACR token shape", result.AccessToken)
+	}
+	maxExpiresIn := int(authverify.WorkloadTokenLifetimeCeiling / time.Second)
+	if result.ExpiresIn <= 0 || result.ExpiresIn > maxExpiresIn {
+		t.Fatalf("expires_in = %d, want in (0, %d]", result.ExpiresIn, maxExpiresIn)
+	}
+}
