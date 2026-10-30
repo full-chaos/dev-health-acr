@@ -13435,7 +13435,8 @@
         "closed_vocabulary": [
           "inferred_default",
           "question_stated",
-          "clarification_confirmed"
+          "clarification_confirmed",
+          "server_default"
         ]
       },
       {
