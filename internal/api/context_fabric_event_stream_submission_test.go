@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -146,4 +147,64 @@ func TestAnUnsavedStreamedAnswerMarksItsSubmission(t *testing.T) {
 	if got := harness.investigator.executions.Load(); got != 1 {
 		t.Fatalf("executions = %d, want 1", got)
 	}
+}
+
+// TestAStreamThatCannotStartAbandonsItsSubmission (round-2 finding): every
+// exit of the stream handler that never reaches the shared delivery
+// abandons the admitted record -- the first frame that cannot be written,
+// and a panic before the outcome -- so a retry of the key is answered
+// submission_abandoned at once, never submission_in_progress for a run that
+// does not exist.
+func TestAStreamThatCannotStartAbandonsItsSubmission(t *testing.T) {
+	t.Run("the first frame cannot be written", func(t *testing.T) {
+		harness, _ := newMemorySubmissionHarness(t, 1)
+		harness.apps[0].config.ContextFabricEventStreamEnabled = true
+		body := investigationRequestBody()
+		body.Question = submissionQuestion
+		encoded, err := json.Marshal(body)
+		if err != nil {
+			t.Fatal(err)
+		}
+		request := httptest.NewRequest(http.MethodPost, ContextFabricInvestigationsPath, bytes.NewReader(encoded))
+		request.Header.Set("Authorization", "Bearer "+harness.tokenA)
+		request.Header.Set("X-ACR-Client-Version", "1.0.0")
+		request.Header.Set("Content-Type", "application/json")
+		request.Header.Set("X-Request-ID", submissionTestRequestID)
+		request.Header.Set("Accept", contractsv1.ContextFabricInvestigationEventStreamMediaType)
+		request.Header.Set(contractsv1.ContextFabricSubmissionIDHeader, "submission-stream-04")
+		harness.apps[0].Handler().ServeHTTP(&failingWriter{}, request)
+		expectSubmissionRefusal(t, harness.post(0, harness.tokenA, "submission-stream-04", submissionQuestion), contractsv1.ErrorCodeSubmissionAbandoned)
+		if got := harness.investigator.executions.Load(); got != 0 {
+			t.Fatalf("executions = %d, want 0", got)
+		}
+	})
+	t.Run("a panic after the outcome keeps the record", func(t *testing.T) {
+		harness, _ := newMemorySubmissionHarness(t, 1)
+		harness.apps[0].logger = slog.New(panicOnMessage{Handler: harness.apps[0].logger.Handler(), message: "context fabric investigation event stream closed"})
+		stream := streamSubmission(t, harness, 0, "submission-stream-06")
+		if terminal := stream.events[len(stream.events)-1]; terminal.Type != contractsv1.ContextFabricInvestigationEventResult {
+			t.Fatalf("terminal %+v, want the result written before the panic", terminal)
+		}
+		// The delivery already made the record final: the panic must not
+		// abandon it, nor even try.
+		if strings.Contains(harness.logs[0].String(), `"completion":"abandoned_on_error"`) {
+			t.Fatalf("a panic after the outcome tried to abandon the record:\n%s", harness.logs[0].String())
+		}
+		accepted := stream.events[0]
+		if again := servedResultID(t, harness.post(0, harness.tokenA, "submission-stream-06", submissionQuestion)); again != accepted.ReservedResultID {
+			t.Fatalf("the JSON retry replayed %q, want %q", again, accepted.ReservedResultID)
+		}
+	})
+	t.Run("a panic before the outcome", func(t *testing.T) {
+		harness, _ := newMemorySubmissionHarness(t, 1)
+		harness.apps[0].logger = slog.New(panicOnMessage{Handler: harness.apps[0].logger.Handler(), message: "context fabric investigation event stream opened"})
+		stream := streamSubmission(t, harness, 0, "submission-stream-05")
+		if err := contractsv1.ValidateContextFabricInvestigationEventStream(stream.events); err != nil {
+			t.Fatalf("grammar: %v\n%s", err, stream.raw)
+		}
+		expectSubmissionRefusal(t, harness.post(0, harness.tokenA, "submission-stream-05", submissionQuestion), contractsv1.ErrorCodeSubmissionAbandoned)
+		if got := harness.investigator.executions.Load(); got != 0 {
+			t.Fatalf("executions = %d, want 0", got)
+		}
+	})
 }

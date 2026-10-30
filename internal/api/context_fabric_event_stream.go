@@ -463,6 +463,18 @@ func (a *App) serveInvestigationEventStream(w http.ResponseWriter, r *http.Reque
 	// into an error) must end the stream with an internal_error terminal: if
 	// it reached the recovery middleware, that would write a JSON error body
 	// into the open stream.
+	// outcomeDelivered is set when the run's outcome reaches the shared
+	// delivery, which decides the submission's record (done or abandoned).
+	// Every exit before it -- a first frame that cannot be written, a panic
+	// -- abandons the record: no run will finish it, and a retry of the key
+	// must not read "in progress" for a run that does not exist.
+	outcomeDelivered := false
+	abandonUndelivered := func() {
+		if !outcomeDelivered {
+			outcomeDelivered = true
+			a.abandonInvestigationSubmission(r, principal, submission)
+		}
+	}
 	pumpStarted, pumpStopped := false, false
 	done, pumped := make(chan struct{}), make(chan struct{})
 	stopPump := func() {
@@ -483,11 +495,13 @@ func (a *App) serveInvestigationEventStream(w http.ResponseWriter, r *http.Reque
 		cancelRun()
 		endCancelWatch()
 		stream.abort()
+		abandonUndelivered()
 		delivered = "error"
 	}()
 	budget := investigationBudgetSeconds(runCtx, time.Now())
 	if err := stream.accepted(budget, submissionID); err != nil {
 		endCancelWatch()
+		abandonUndelivered()
 		return "error"
 	}
 	a.logger.InfoContext(r.Context(), "context fabric investigation event stream opened",
@@ -504,6 +518,7 @@ func (a *App) serveInvestigationEventStream(w http.ResponseWriter, r *http.Reque
 	a.recordInvestigationEventsDropped(stream.logCtx, requestID, sink.DroppedByStage())
 
 	outcome := newInvestigationOutcomeCapture(w)
+	outcomeDelivered = true
 	delivered = a.deliverInvestigationOutcome(outcome, r, principal, request, submission, result, err, collectedSynthesisInput)
 	terminal := stream.finish(outcome)
 	stream.mu.Lock()
