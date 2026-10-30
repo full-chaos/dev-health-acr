@@ -46,6 +46,11 @@ type DeviceAuthorizationLimiter interface {
 	AllowApprovalAttempt(string, storage.UserCodeHash) DeviceAuthorizationLimitDecision
 	// AllowOAuthConsentRequest takes the SHA-256 of the request handle.
 	AllowOAuthConsentRequest(storage.OAuthSecretHash) DeviceAuthorizationLimitDecision
+	// AllowBrowserAuthorize admits one /authorize of a first-party browser
+	// client (its limiter key) from source: deviceCreationLimit per source
+	// and browserAuthorizeClientLimit for the client, counted only when both
+	// allow it (CHAOS-12156).
+	AllowBrowserAuthorize(client, source string) DeviceAuthorizationLimitDecision
 }
 
 type DeviceAuthorizationLimiterOptions struct {
@@ -95,26 +100,50 @@ func (l *deviceAuthorizationLimiter) AllowOAuthConsentRequest(handle storage.OAu
 	return l.allow("oauth:consent\x00"+handle.String(), oauthConsentRequestLimit)
 }
 
+func (l *deviceAuthorizationLimiter) AllowBrowserAuthorize(client, source string) DeviceAuthorizationLimitDecision {
+	return l.allowAll(
+		keyLimit{key: "oauth:browser-authorize:source\x00" + client + "\x00" + source, limit: deviceCreationLimit},
+		keyLimit{key: "oauth:browser-authorize:client\x00" + client, limit: browserAuthorizeClientLimit},
+	)
+}
+
+type keyLimit struct {
+	key   string
+	limit int
+}
+
 func (l *deviceAuthorizationLimiter) allow(key string, limit int) DeviceAuthorizationLimitDecision {
+	return l.allowAll(keyLimit{key: key, limit: limit})
+}
+
+// allowAll admits one request only when every window is under its limit, and
+// then counts it in every window; a refused request counts in none.
+func (l *deviceAuthorizationLimiter) allowAll(limits ...keyLimit) DeviceAuthorizationLimitDecision {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	now := l.clock.Now().UTC()
 	l.cleanup(now)
-	window, exists := l.windows[key]
-	if !exists {
-		if len(l.windows) >= l.maxKeys {
+	windows := make([]deviceAuthorizationWindow, len(limits))
+	for index, limit := range limits {
+		window, exists := l.windows[limit.key]
+		if !exists {
+			window = deviceAuthorizationWindow{started: now}
+		}
+		if window.count >= limit.limit {
+			return DeviceAuthorizationLimitDecision{RetryAfter: window.started.Add(deviceAuthorizationLimitWindow).Sub(now)}
+		}
+		windows[index] = window
+	}
+	for index, limit := range limits {
+		if _, exists := l.windows[limit.key]; !exists && len(l.windows) >= l.maxKeys {
 			// Never a hard lock-out: keys are attacker-choosable (a bogus
 			// client_id per request), so a full map would let one source
 			// refuse every new legitimate client. Evict the oldest window.
 			l.evictOldest()
 		}
-		window = deviceAuthorizationWindow{started: now}
+		windows[index].count++
+		l.windows[limit.key] = windows[index]
 	}
-	if window.count >= limit {
-		return DeviceAuthorizationLimitDecision{RetryAfter: window.started.Add(deviceAuthorizationLimitWindow).Sub(now)}
-	}
-	window.count++
-	l.windows[key] = window
 	return DeviceAuthorizationLimitDecision{Allowed: true}
 }
 
