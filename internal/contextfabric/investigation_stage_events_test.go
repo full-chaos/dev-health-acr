@@ -269,8 +269,10 @@ func TestStageEventOrderHoldsOnABudgetRefusal(t *testing.T) {
 	if calls < 2 {
 		t.Fatalf("synthesizer ran %d times; the fixture must reach the re-synthesis for this case to mean anything", calls)
 	}
+	// The refusal is decided inside synthesis (after the re-synthesis), so
+	// synthesizing is still open and the error names it.
 	got := stepsOf(run.transitions)
-	want := steps(both(stInterpreting), both(stResolving), both(stReading), both(stSynthesizing))
+	want := steps(both(stInterpreting), both(stResolving), both(stReading), []stageStep{startedStep(stSynthesizing)})
 	if !sameSteps(got, want) {
 		t.Fatalf("transitions %v, want %v", got, want)
 	}
@@ -549,5 +551,35 @@ func TestTheSinkTakesNoCallerFunction(t *testing.T) {
 		if sinkType.Field(index).Type.Kind() == reflect.Func {
 			t.Fatalf("InvestigationStageSink holds a function field %q", sinkType.Field(index).Name)
 		}
+	}
+}
+
+// TestSynthesisStaysOpenThroughTheBudgetRetry (round-3 finding): the stage-3
+// budget re-synthesis is still synthesis, so when it starts the reader must
+// not have been told synthesizing completed. The synthesizer reads what the
+// sink has delivered at the moment the second pass begins.
+func TestSynthesisStaysOpenThroughTheBudgetRetry(t *testing.T) {
+	calls := 0
+	engine := budgetStageEngine(t, budgetStageCohort(4), 20, budgetStageOptions(4, time.Second), &calls)
+	inner := engine.synthesizer
+	var atRetry []stageStep
+	retried := false
+	engine.synthesizer = synthesizerFunc(func(ctx context.Context, principal storage.Principal, input SynthesisInput) (InvestigationResult, error) {
+		if calls == 1 {
+			retried = true
+			atRetry = stepsOf(drainStageTransitions(investigationStageSinkFrom(ctx)))
+		}
+		return inner.Synthesize(ctx, principal, input)
+	})
+	sink := NewInvestigationStageSink(InvestigationStageSinkCapacity)
+	if _, err := engine.Investigate(WithInvestigationStageSink(context.Background(), sink), stageScenarioPrincipal(), validInvestigationRequestWithConfirmedWindow()); err == nil {
+		t.Fatal("the fixture must end in the budget refusal after one re-synthesis")
+	}
+	if !retried {
+		t.Fatal("the re-synthesis never ran; the test would mean nothing")
+	}
+	want := steps(both(stInterpreting), both(stResolving), both(stReading), []stageStep{startedStep(stSynthesizing)})
+	if !sameSteps(atRetry, want) {
+		t.Fatalf("delivered when the re-synthesis began %v, want %v (synthesizing still open)", atRetry, want)
 	}
 }

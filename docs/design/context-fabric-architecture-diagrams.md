@@ -3099,7 +3099,8 @@ call and the decisive `ResolveSubjects` call and the canonical fact read in
 `Investigate` (`engine.go`), `synthesizeAndAssemble` for `synthesizing`, and
 `finalizeServedAs` for `validating` (every serving path finalizes before its
 Save, so the Save is inside the stage). Each started/completed
-pair brackets its port call; the sink keeps the grammar (a repeat or an earlier
+pair brackets its port call, except `synthesizing`, which completes when
+`validating` starts, so the stage-3 budget re-synthesis stays inside it; the sink keeps the grammar (a repeat or an earlier
 stage is ignored, a stage still open when a later one starts is completed
 first), and `Investigate` completes the open stage when it returns a served
 answer. A failure leaves the stage open for the error terminal to name. The sink

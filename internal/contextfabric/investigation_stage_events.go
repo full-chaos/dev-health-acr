@@ -22,7 +22,9 @@ import (
 //	interpreting       the interpreter call in Investigate
 //	resolving_subjects the decisive ResolveSubjects call in Investigate
 //	reading_facts      the canonical fact read in Investigate
-//	synthesizing       synthesizeAndAssemble (every synthesis pass enters here)
+//	synthesizing       synthesizeAndAssemble (every synthesis pass enters
+//	                   here); it completes when validating starts, so the
+//	                   stage-3 budget re-synthesis stays inside it
 //	validating         finalizeServedAs: the final budget assertion and
 //	                   validation, which every serving path (fresh, reused,
 //	                   terminal) runs before its Save, so the Save is inside

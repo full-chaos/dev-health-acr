@@ -4209,7 +4209,10 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 		// error, rejection included, passes through here.
 		return InvestigationResult{}, withSynthesisNarrowingSnapshot(err, plan)
 	}
-	completeInvestigationStage(ctx, contractsv1.ContextFabricStageSynthesizing)
+	// synthesizing is NOT completed here: the stage-3 budget re-synthesis
+	// below is still synthesis. The stage completes when validating starts
+	// (finalizeServedAs), after any retry; a refusal leaves it open, and the
+	// error terminal names it.
 	pendingTelemetry.CohortRanked = rankedForServedResult
 	// CHAOS-4636 STAGE 3 -- measure the ASSEMBLED result and, if it does not
 	// fit, RE-SYNTHESIZE ONCE with a smaller input (design §6.3).
