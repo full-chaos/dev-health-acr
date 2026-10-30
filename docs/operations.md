@@ -858,6 +858,43 @@ single-flight/failure-isolation/backoff behavior are proved against real
 PostgreSQL (`testcontainers`) and fakes standing in for the graph backend
 and canonical source, following the same pattern.
 
+### Investigation event stream (CHAOS-11911)
+
+`ACR_CONTEXT_FABRIC_EVENT_STREAM_ENABLED` (default `false`) lets
+`POST /api/v1/context-fabric/investigations` answer a request with
+`Accept: text/event-stream` (exactly that value) as a Server-Sent Events
+stream of `context_fabric_investigation_event.v1` events. With it off, such a
+request gets `406 stream_unavailable` before any admission work; every other
+`Accept` value gets the JSON response, unchanged, whatever the flag. The
+contract and its grammar: `docs/design/context-fabric-architecture-diagrams.md`
+§16.
+
+What an operator can rely on and see:
+
+- A heartbeat frame follows 10 s with no other event, so an nginx ingress with
+  `proxy-read-timeout: 60` stays open on a long run; the response sets
+  `X-Accel-Buffering: no` and `Cache-Control: no-store, no-transform`.
+- Every frame write moves the connection's write deadline 30 s ahead
+  (`http.ResponseController`), so `ACR_WRITE_TIMEOUT` (an absolute deadline
+  for the whole response) does not cut a stream; a single write that cannot
+  finish in 30 s still fails.
+- The connection owns the run: a client that disconnects cancels the
+  investigation, and so does a failed frame write.
+- Log lines (all carry `request_id`): `context fabric investigation event
+  stream opened` (reserved id, budget), `... closed` (frames, terminal,
+  `events_dropped`, `write_failed`), `context fabric investigation cancel
+  effective` (`cause`: `client_disconnected`, `write_failed`, `deadline` or
+  `run_cancelled`; `t_eff`, RFC 3339 with nanoseconds),
+  `context fabric model attempt started` (one per model attempt: `attempt`,
+  `started_at`), and WARN `context fabric investigation events dropped`
+  (`stage`, `count`; written after the run) with the counter
+  `acr_investigation_events_dropped_total` (expected 0).
+- A stream that ends without a terminal event was interrupted (a disconnect,
+  pod loss); the stored result, when the save had finished, is read back by id.
+- A panic after the stream started (outside the investigator) logs ERROR
+  `request panic recovered` (`failure_class` `event_stream_panic`, status 200)
+  and ends the stream with an `internal_error` terminal.
+
 ### Context Fabric model provider (BYO LLM, CHAOS-3770)
 
 The investigation endpoint interprets the question and synthesises the

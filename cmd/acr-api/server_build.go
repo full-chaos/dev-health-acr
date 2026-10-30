@@ -164,6 +164,7 @@ func appConfig(cfg config.Config, serviceVersion string) api.AppConfig {
 		RevokedClientVersions:                       cfg.RevokedClientVersions,
 		ServerCompletenessAuthorityEnabled:          cfg.ServerCompletenessAuthorityEnabled,
 		ServerCompletenessAuthoritySymmetricEnabled: cfg.ServerCompletenessAuthoritySymmetricEnabled,
+		ContextFabricEventStreamEnabled:             cfg.ContextFabricEventStreamEnabled,
 	}
 }
 

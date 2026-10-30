@@ -61,13 +61,24 @@ func assertNoLineBreakSurvives(t *testing.T, buf *bytes.Buffer, got string, want
 	lines := 0
 	for _, line := range bytes.Split(bytes.TrimSpace(buf.Bytes()), []byte("\n")) {
 		var candidate map[string]any
-		if json.Unmarshal(line, &candidate) == nil {
+		if json.Unmarshal(line, &candidate) == nil && !isModelAttemptLine(candidate) {
 			lines++
 		}
 	}
 	if lines != wantLines {
 		t.Fatalf("emitted %d JSON log lines, want exactly %d -- more means the request id forged one; log = %s", lines, wantLines, buf.String())
 	}
+}
+
+// isModelAttemptLine is the per-attempt `context fabric model attempt
+// started` line (CHAOS-11911). It carries no value from the operation's
+// input: its request id is the context's (observability.WithRequestID,
+// format-checked by the request-id middleware) and is empty under the
+// context.Background these tables use, so a forged input id cannot reach it.
+// The tables count the lines the input CAN reach; TestEveryModelAttemptLogsItsStart
+// and TestTheModelAttemptLineCarriesNoInputValue pin the attempt line itself.
+func isModelAttemptLine(line map[string]any) bool {
+	return line["msg"] == "context fabric model attempt started"
 }
 
 // TestInterpretQuestionSanitizesRequestIDAcrossTheInputDomain is the
@@ -130,7 +141,7 @@ func TestSynthesizeAnswerSanitizesRequestIDAcrossTheInputDomain(t *testing.T) {
 			// sanitized value: each sanitizes at its own emission site.
 			for _, line := range bytes.Split(bytes.TrimSpace(buf.Bytes()), []byte("\n")) {
 				var candidate map[string]any
-				if json.Unmarshal(line, &candidate) != nil {
+				if json.Unmarshal(line, &candidate) != nil || isModelAttemptLine(candidate) {
 					continue
 				}
 				if candidate["request_id"] != got {

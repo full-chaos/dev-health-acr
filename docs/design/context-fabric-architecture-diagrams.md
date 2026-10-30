@@ -3115,6 +3115,27 @@ transitions. No sink installed: every report is a no-op, and the
 served answer is byte-equal to the goldens recorded before the sites existed
 (`testdata/investigation_stage_scenarios`).
 
+**Route writer (CHAOS-11911).** `internal/api/context_fabric_event_stream.go`.
+`Accept: text/event-stream` exactly, and `ACR_CONTEXT_FABRIC_EVENT_STREAM_ENABLED`
+on, select the stream; flag off is `406 stream_unavailable` before any admission
+work. Every check before the investigation runs, a repeat of a submission
+included, answers as on the JSON path. The route proves it can move the write
+deadline before anything is admitted. The result id is the submission's
+reservation (CHAOS-11912, `admitInvestigationSubmission`); a stream whose request
+names no submission reserves one with the same generator
+(`contextfabric.NewInvestigationResultID`, `WithReservedResultID`). The route
+installs the sink and writes the 200, the headers and `accepted` (with the
+submission id) together. A pump goroutine writes the sink's transitions and the
+heartbeats. When `Investigate` returns, the pump drains and stops, and the handler
+runs `deliverInvestigationOutcome` -- the ONE delivery the JSON path runs too
+(abandon or finish the submission, then `writeContextFabricError` or
+`serveContextFabricInvestigationResult`) -- into a capture, then writes it as the
+one terminal: a 200 body as `result` byte for byte, an error body as `error`. A
+panic after the 200 ends the stream with an `internal_error` terminal instead of
+reaching the recovery middleware. Every frame write moves the write deadline 30 s
+ahead. A disconnect or a failed write cancels the run, logged once as `cancel
+effective` with `t_eff`; the model runtime logs one line per attempt start.
+
 **Construction anchors:** `ContextFabricInvestigationEvent`, `Validate`,
 `contextFabricEventShapes`, `MarshalContextFabricInvestigationEventFrame`
 (`internal/contracts/v1/context_fabric_investigation_event.go`);

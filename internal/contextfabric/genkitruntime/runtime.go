@@ -22,6 +22,7 @@ import (
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/interpretprompt"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/synthesisprompt"
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
+	"github.com/full-chaos/dev-health-acr/internal/observability"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
 	"github.com/full-chaos/dev-health-go/llm"
 	"github.com/invopop/jsonschema"
@@ -2897,6 +2898,7 @@ func (r *Runtime) withRetryFor(ctx context.Context, fallbackFollows bool, fn fun
 			}
 			return outcomes, err
 		}
+		r.logAttemptStarted(ctx, attempt, started)
 		callCtx, cancel := context.WithTimeout(ctx, r.config.Timeout)
 		err := fn(callCtx)
 		modelTimedOut := errors.Is(callCtx.Err(), context.DeadlineExceeded) && ctx.Err() == nil
@@ -2989,6 +2991,24 @@ const (
 	retrySkipWaitOverBound = "wait_over_bound"
 	retrySkipDeadline      = "deadline_too_short"
 )
+
+// logAttemptStarted is one content-safe line per model attempt that passed
+// its pre-call cancellation check (CHAOS-11911): the request id, the attempt
+// number and its start time. With the event stream's `cancel effective` line
+// (t_eff) it makes "no attempt started after the run was cancelled" a fact
+// the logs show rather than one a reader infers.
+//
+// The request id is the request context's (observability.WithRequestID, set
+// by the request-id middleware), never a value from the operation's input;
+// it is empty when the context carries none.
+func (r *Runtime) logAttemptStarted(ctx context.Context, attempt int, started time.Time) {
+	requestID, _ := observability.RequestIDFromContext(ctx)
+	r.config.Logger.InfoContext(ctx, "context fabric model attempt started",
+		"request_id", contextfabric.SanitizeLogAttr(string(requestID)),
+		"attempt", attempt,
+		"started_at", contextfabric.SanitizeLogAttr(started.UTC().Format(time.RFC3339Nano)),
+	)
+}
 
 func (r *Runtime) logRetryDecision(ctx context.Context, class llm.ErrorClass, attempt int, wait time.Duration, retrying bool, reason string) {
 	r.config.Logger.InfoContext(ctx, "context fabric model call retry decision",
