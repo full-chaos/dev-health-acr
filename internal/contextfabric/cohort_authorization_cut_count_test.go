@@ -291,10 +291,12 @@ func TestAReusedStoredSatisfiedCountOverACutCohortIsRestated(t *testing.T) {
 	for _, member := range candidate.Cohort.Members {
 		committed = append(committed, member.Subject)
 	}
+	telemetry := &recordingTelemetry{}
 	engine := mustReuseTestEngine(t, EngineDependencies{
 		Graph:     graphReaderStub{resolution: SubjectResolution{Candidates: []SubjectCandidate{}, Committed: committed}},
 		Results:   &resultStoreStub{},
 		ReuseGate: readingReuseGate{stored: candidate, frame: countingFrame(SubjectTeam)},
+		Telemetry: telemetry,
 	})
 	served, err := engine.Investigate(context.Background(), reusePrincipal(), validInvestigationRequest())
 	if err != nil {
@@ -319,6 +321,22 @@ func TestAReusedStoredSatisfiedCountOverACutCohortIsRestated(t *testing.T) {
 	}
 	if err := served.Validate(); err != nil {
 		t.Fatalf("served result does not validate: %v", err)
+	}
+	// The operator lines describe the served row, not the stored one: they
+	// are emitted on the reuse path before the late writers run, so the
+	// restatement must already have happened there.
+	if len(telemetry.membershipCardinalities) != 1 {
+		t.Fatalf("membership cardinality events = %d, want 1", len(telemetry.membershipCardinalities))
+	}
+	if event := telemetry.membershipCardinalities[0]; event.Outcome != restated.Outcome || event.Declared != restated.Declared || event.Cause != restated.CauseCoverage {
+		t.Fatalf("membership cardinality event = %q %d/%d cause %q, want the served row %q %d/%d cause %q",
+			event.Outcome, event.Served, event.Declared, event.Cause, restated.Outcome, restated.Served, restated.Declared, restated.CauseCoverage)
+	}
+	if len(telemetry.countPopulationScopes) != 1 {
+		t.Fatalf("count population scope events = %d, want 1", len(telemetry.countPopulationScopes))
+	}
+	if event := telemetry.countPopulationScopes[0]; event.Assembly != restated.Outcome {
+		t.Fatalf("count population scope assembly = %q, want the served row's %q", event.Assembly, restated.Outcome)
 	}
 }
 

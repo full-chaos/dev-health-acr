@@ -2050,6 +2050,10 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 					e.telemetry.RecordRetainedRankingAccounting(ctx, principal, event)
 				}
 			}
+			// CHAOS-12147: a stored count row that predates the cut statement
+			// is restated HERE, before the count lines below read the served
+			// row; finalizeServed's late writers then find it already stated.
+			reused, _ = restateCohortAuthorizationCutCount(reused)
 			reused.Completeness = ComputeAnswerCompleteness(reused)
 			BackfillStoredInterpretationProvenance(&reused.Versions)
 			BackfillStoredSynthesisSource(&reused.Versions)
