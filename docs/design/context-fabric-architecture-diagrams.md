@@ -3545,8 +3545,8 @@ sequenceDiagram
     A->>A: cancel run ctx (t_eff, cancel effective line, cause cancel_requested)
     A->>P: record abandoned, terminal marker error{canceled}
     C-->>B: terminal error{canceled}
-    Note over A,C: pod loss: no renewal; after 15 s any replica takes over
-    C->>P: tx: running + lease ended -> abandoned, lease_holder=C, terminal error{run_lost} (once)
+    Note over A,C: pod loss, no renewal, after 15 s any replica takes over
+    C->>P: one tx, running and lease ended, so abandoned, lease_holder=C, terminal error{run_lost} once
 ```
 
 - **Owner.** The lease is four columns of the submission record (migration
