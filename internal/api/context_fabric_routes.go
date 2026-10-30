@@ -40,6 +40,15 @@ func (a *App) investigator() contextfabric.Investigator {
 // code does not choose a graph backend or canonical fact adapter.
 func (a *App) ContextFabricInvestigationHandler(investigator contextfabric.Investigator) http.Handler {
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// CHAOS-11911: a stream request while the stream is off is refused
+		// at once, before any admission work, with no JSON fallback. Inside
+		// the protected boundary like every check below: an unauthenticated
+		// caller learns nothing about the deployment's flags.
+		stream := wantsInvestigationEventStream(r)
+		if stream && !a.config.ContextFabricEventStreamEnabled {
+			a.writeInvestigationStreamUnavailable(w, r)
+			return
+		}
 		// The nil check MUST live inside the handler body, after
 		// protectedRuntimeHandler has already run (auth, scope, rate
 		// limit) -- not as an early return from this factory that skips
@@ -109,6 +118,12 @@ func (a *App) ContextFabricInvestigationHandler(investigator contextfabric.Inves
 		if !served {
 			return
 		}
+		// CHAOS-11911: a stream must be able to move its write deadline, or
+		// http.Server.WriteTimeout would cut it; proven before anything is
+		// admitted, so a refusal here leaves no submission behind.
+		if stream && !a.investigationEventStreamWritable(w, r) {
+			return
+		}
 		// CHAOS-11912 (INV-2): a request that names a submission is admitted
 		// first. A repeat of the key is answered here and never executes; an
 		// admitted one runs under the result id its record reserved.
@@ -122,8 +137,14 @@ func (a *App) ContextFabricInvestigationHandler(investigator contextfabric.Inves
 			submission = admitted
 			reservedResultID = submission.record.ReservedResultID
 		}
-		// With no submission the reserved id is "" and the context is the
-		// gated one unchanged.
+		// CHAOS-11911: the stream's `accepted` names the result id before the
+		// run, so a stream with no submission reserves one now (the same
+		// generator the engine mints with).
+		if stream && reservedResultID == "" {
+			reservedResultID = a.eventStream.reserveID()
+		}
+		// With no submission (and no stream) the reserved id is "" and the
+		// context is the gated one unchanged.
 		reservedCtx := contextfabric.WithReservedResultID(gatedCtx, reservedResultID)
 		investigateCtx, collectedSynthesisInput := contextfabric.WithSynthesisInputCollector(reservedCtx)
 		investigationStarted := a.now()
@@ -134,26 +155,39 @@ func (a *App) ContextFabricInvestigationHandler(investigator contextfabric.Inves
 		defer func() {
 			a.metrics.InvestigationLatency(r.Context(), deliveredStatus, a.now().Sub(investigationStarted))
 		}()
-		result, err := investigateRecovered(investigateCtx, investigator, principal, request)
-		if err != nil {
-			// The run ended without an answer: its record is final now, so a
-			// retry of the key is answered submission_abandoned at once
-			// instead of in_progress until the budget runs out.
-			a.abandonInvestigationSubmission(r, principal, submission)
-			if request.SuppliedSynthesis != nil && errors.Is(err, contextfabric.ErrSynthesisRejected) {
-				a.writeSuppliedSynthesisRejection(w, r, err)
-				return
-			}
-			a.writeContextFabricError(w, r, err)
+		if stream {
+			deliveredStatus = a.serveInvestigationEventStream(w, r, investigator, principal, request, submission, submissionID, reservedResultID, investigateCtx, collectedSynthesisInput)
 			return
 		}
-		// The record is final before the response is written: a client that
-		// loses the response and retries the key learns the outcome without
-		// a second execution.
-		a.finishInvestigationSubmission(r, principal, submission, result)
-		deliveredStatus = a.serveContextFabricInvestigationResult(w, r, principal, request, result, collectedSynthesisInput)
+		result, err := investigateRecovered(investigateCtx, investigator, principal, request)
+		deliveredStatus = a.deliverInvestigationOutcome(w, r, principal, request, submission, result, err, collectedSynthesisInput)
 	})
 	return a.protectedRuntimeHandler(limits.RequestClassContext, auth.ScopeContextRead, true, true, handler)
+}
+
+// deliverInvestigationOutcome delivers one run's outcome, the same for the
+// JSON response and the event stream (plan §2.7.3; CHAOS-11911): the stream
+// passes a capture as w and turns what it holds into its terminal event. A
+// failure abandons the submission and writes the classified error; an answer
+// completes the submission (before the response, so a lost response and a
+// retry of the key learn the outcome without a second execution) and goes
+// through serveContextFabricInvestigationResult. It reports the delivered
+// status for the latency metric.
+func (a *App) deliverInvestigationOutcome(w http.ResponseWriter, r *http.Request, principal storage.Principal, request contextfabric.InvestigationRequest, submission *admittedInvestigationSubmission, result contextfabric.InvestigationResult, err error, collectedSynthesisInput func() *contractsv1.ContextFabricSynthesisInput) string {
+	if err != nil {
+		// The run ended without an answer: its record is final now, so a
+		// retry of the key is answered submission_abandoned at once instead
+		// of in_progress until the budget runs out.
+		a.abandonInvestigationSubmission(r, principal, submission)
+		if request.SuppliedSynthesis != nil && errors.Is(err, contextfabric.ErrSynthesisRejected) {
+			a.writeSuppliedSynthesisRejection(w, r, err)
+			return "error"
+		}
+		a.writeContextFabricError(w, r, err)
+		return "error"
+	}
+	a.finishInvestigationSubmission(r, principal, submission, result)
+	return a.serveContextFabricInvestigationResult(w, r, principal, request, result, collectedSynthesisInput)
 }
 
 // serveContextFabricInvestigationResult is the one post-processing path of a

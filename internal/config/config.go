@@ -191,6 +191,13 @@ type Config struct {
 	// contextfabric.EngineOptions.ServerCompletenessAuthoritySymmetricEnabled's
 	// own doc comment for the mechanism.
 	ServerCompletenessAuthoritySymmetricEnabled bool
+	// ContextFabricEventStreamEnabled (CHAOS-11911,
+	// ACR_CONTEXT_FABRIC_EVENT_STREAM_ENABLED, default OFF) lets the
+	// create-investigation route answer `Accept: text/event-stream` with the
+	// investigation event stream. Off, such a request gets 406
+	// stream_unavailable before any admission work; every other request is
+	// unaffected either way.
+	ContextFabricEventStreamEnabled bool
 	// ServiceModelOpen (ACR_MCP_SERVICE_MODEL_DEFAULT=on; development and
 	// venues only, production is off) treats every organization as holding
 	// acr_service_model and platform_model_fallback. Unset or off: an

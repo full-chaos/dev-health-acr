@@ -163,8 +163,16 @@ func loadHostedRuntimeValues(lookup lookupEnv, cfg *Config, defaultRequireStores
 	if cfg.ServerCompletenessAuthoritySymmetricEnabled, err = boolValue(lookup, "ACR_CONTEXT_FABRIC_SERVER_COMPLETENESS_AUTHORITY_SYMMETRIC_ENABLED", false); err != nil {
 		return err
 	}
+	// CHAOS-11911: default OFF -- see Config.ContextFabricEventStreamEnabled.
+	if cfg.ContextFabricEventStreamEnabled, err = boolValue(lookup, ContextFabricEventStreamEnabledEnvVar, false); err != nil {
+		return err
+	}
 	return nil
 }
+
+// ContextFabricEventStreamEnabledEnvVar turns the investigation event stream
+// on (CHAOS-11911).
+const ContextFabricEventStreamEnabledEnvVar = "ACR_CONTEXT_FABRIC_EVENT_STREAM_ENABLED"
 
 func validateHostedRuntime(cfg Config) error {
 	connectionKindErr := validatePostgresConnectionKind(cfg)
@@ -248,6 +256,7 @@ func (c Config) SafeAttributes() []any {
 		"context_fabric_anchor_binding_carry_enabled", c.AnchorBindingCarryEnabled,
 		"context_fabric_server_completeness_authority_enabled", c.ServerCompletenessAuthorityEnabled,
 		"context_fabric_server_completeness_authority_symmetric_enabled", c.ServerCompletenessAuthoritySymmetricEnabled,
+		"context_fabric_event_stream_enabled", c.ContextFabricEventStreamEnabled,
 		"minimum_sidecar_version", c.MinimumSidecarVersion,
 		"entitlement_key", c.EntitlementKey,
 		"entitlement_mode", string(c.EntitlementMode()),

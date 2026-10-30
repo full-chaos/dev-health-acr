@@ -34,6 +34,10 @@ type AppConfig struct {
 	// config.Config.ServerCompletenessAuthoritySymmetricEnabled's own doc
 	// comment, for the same by-id route reason immediately above.
 	ServerCompletenessAuthoritySymmetricEnabled bool
+	// ContextFabricEventStreamEnabled mirrors
+	// config.Config.ContextFabricEventStreamEnabled: the create-investigation
+	// route serves `Accept: text/event-stream` only when it is on.
+	ContextFabricEventStreamEnabled bool
 }
 
 type Dependencies struct {
@@ -87,6 +91,9 @@ type App struct {
 	// transition line whenever either actually changes, instead of one
 	// line per poll. See ReadinessTransitionLogger's own doc comment.
 	readinessTransitions *ReadinessTransitionLogger
+	// eventStream holds the investigation event stream's timing (CHAOS-11911).
+	// NewApp sets the contract values; tests shorten them.
+	eventStream investigationEventStreamSettings
 }
 
 func NewApp(cfg AppConfig, deps Dependencies, logger *slog.Logger) (*App, error) {
@@ -220,6 +227,7 @@ func NewApp(cfg AppConfig, deps Dependencies, logger *slog.Logger) (*App, error)
 		oauth:                oauth,
 		oauthConsentURL:      oauthConsentURL(deps),
 		readinessTransitions: NewReadinessTransitionLogger(),
+		eventStream:          defaultInvestigationEventStreamSettings(),
 	}
 	if app.clientIP == nil {
 		app.clientIP = auth.RemoteAddressClientIP

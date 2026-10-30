@@ -28,6 +28,19 @@ func TestAppConfig_PassesThroughServerCompletenessAuthorityEnabled(t *testing.T)
 	}
 }
 
+// TestAppConfig_PassesThroughContextFabricEventStreamEnabled: the
+// create-investigation route reads the event stream switch from
+// api.AppConfig (CHAOS-11911), so a dropped pass-through would keep the
+// stream off whatever the deployment sets.
+func TestAppConfig_PassesThroughContextFabricEventStreamEnabled(t *testing.T) {
+	for _, enabled := range []bool{true, false} {
+		got := appConfig(config.Config{ContextFabricEventStreamEnabled: enabled}, "test-version")
+		if got.ContextFabricEventStreamEnabled != enabled {
+			t.Fatalf("appConfig(...).ContextFabricEventStreamEnabled = %v, want %v", got.ContextFabricEventStreamEnabled, enabled)
+		}
+	}
+}
+
 func TestPrepareServer_does_not_create_server_when_runtime_open_fails(t *testing.T) {
 	// Given
 	cfg := validServeConfig(t)

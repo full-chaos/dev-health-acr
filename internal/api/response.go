@@ -76,6 +76,12 @@ func classifyWriteError(err error) string {
 
 func (w *statusWriter) SetDenialCode(code string) { w.denialCode = code }
 
+// Unwrap lets http.ResponseController reach the connection beneath this
+// wrapper (CHAOS-11911): the investigation event stream sets a write deadline
+// and flushes after every frame, and both are http.ErrNotSupported through a
+// wrapper that does not unwrap.
+func (w *statusWriter) Unwrap() http.ResponseWriter { return w.ResponseWriter }
+
 func writeJSON(w http.ResponseWriter, status int, value any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Cache-Control", "no-store")
