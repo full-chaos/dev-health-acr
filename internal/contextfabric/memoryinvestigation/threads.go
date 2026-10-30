@@ -27,8 +27,58 @@ func validThreadKey(key contextfabric.ThreadKey) error {
 	return nil
 }
 
-func threadKeyOf(key contextfabric.SubmissionKey, threadID string) contextfabric.ThreadKey {
-	return contextfabric.ThreadKey{OrgID: key.OrgID, Owner: key.Owner, ThreadID: threadID}
+// threadRowKey is a thread row's identity: organization, the legacy pair of
+// the owner the row was created under, thread id.
+type threadRowKey struct {
+	orgID, method, subject, threadID string
+}
+
+func rowKeyOf(key contextfabric.ThreadKey) threadRowKey {
+	return threadRowKey{orgID: key.OrgID, method: key.Owner.AuthenticationMethod, subject: key.Owner.Subject, threadID: key.ThreadID}
+}
+
+// findThreadLocked is the row owner's threadID reaches in orgID: a row whose
+// owner is the same owner (contextfabric.SameSubmissionOwner); the row with
+// owner's own legacy pair first, then the earliest created, then the legacy
+// pair's order (the PostgreSQL store's ORDER BY). Callers hold mu.
+func (s *Store) findThreadLocked(orgID string, owner contextfabric.SubmissionOwner, threadID string) (contextfabric.ThreadRecord, bool) {
+	var best contextfabric.ThreadRecord
+	found := false
+	for key, thread := range s.threads {
+		if key.orgID != orgID || key.threadID != threadID || !contextfabric.SameSubmissionOwner(thread.Key.Owner, owner) {
+			continue
+		}
+		if !found || threadRowPreferred(thread, best, owner) {
+			best, found = thread, true
+		}
+	}
+	return best, found
+}
+
+// threadRowPreferred: row a is preferred over row b for owner.
+func threadRowPreferred(a, b contextfabric.ThreadRecord, owner contextfabric.SubmissionOwner) bool {
+	ownA := a.Key.Owner.AuthenticationMethod == owner.AuthenticationMethod && a.Key.Owner.Subject == owner.Subject
+	ownB := b.Key.Owner.AuthenticationMethod == owner.AuthenticationMethod && b.Key.Owner.Subject == owner.Subject
+	if ownA != ownB {
+		return ownA
+	}
+	if !a.CreatedAt.Equal(b.CreatedAt) {
+		return a.CreatedAt.Before(b.CreatedAt)
+	}
+	if a.Key.Owner.AuthenticationMethod != b.Key.Owner.AuthenticationMethod {
+		return a.Key.Owner.AuthenticationMethod < b.Key.Owner.AuthenticationMethod
+	}
+	return a.Key.Owner.Subject < b.Key.Owner.Subject
+}
+
+// recordThreadRow is the row a thread turn joined: its ThreadOwner's legacy
+// pair, or its own owner's for a record stored without one.
+func recordThreadRow(key contextfabric.SubmissionKey, record contextfabric.SubmissionRecord) threadRowKey {
+	owner := record.ThreadOwner
+	if owner.Subject == "" {
+		owner = key.Owner
+	}
+	return threadRowKey{orgID: key.OrgID, method: owner.AuthenticationMethod, subject: owner.Subject, threadID: record.ThreadID}
 }
 
 // threadClosedLocked is why a record's thread refuses a repeat of the key and
@@ -37,7 +87,7 @@ func (s *Store) threadClosedLocked(record contextfabric.SubmissionRecord, now ti
 	if record.ThreadID == "" {
 		return ""
 	}
-	thread, found := s.threads[threadKeyOf(record.Key, record.ThreadID)]
+	thread, found := s.threads[recordThreadRow(record.Key, record)]
 	switch {
 	case !found:
 		return ""
@@ -78,9 +128,19 @@ func (s *Store) ListThreads(ctx context.Context, orgID string, owner contextfabr
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	var open []contextfabric.ThreadRecord
+	// One row per thread id: the row the owner reaches (findThreadLocked).
+	reached := map[string]contextfabric.ThreadRecord{}
 	for key, thread := range s.threads {
-		if key.OrgID != orgID || key.Owner != owner || thread.Closed(now) {
+		if key.orgID != orgID || !contextfabric.SameSubmissionOwner(thread.Key.Owner, owner) {
+			continue
+		}
+		if best, seen := reached[key.threadID]; !seen || threadRowPreferred(thread, best, owner) {
+			reached[key.threadID] = thread
+		}
+	}
+	var open []contextfabric.ThreadRecord
+	for _, thread := range reached {
+		if thread.Closed(now) {
 			continue
 		}
 		if after != nil && !threadListAfter(thread, *after) {
@@ -121,13 +181,14 @@ func (s *Store) GetThread(ctx context.Context, key contextfabric.ThreadKey, befo
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	thread, found := s.threads[key]
+	thread, found := s.findThreadLocked(key.OrgID, key.Owner, key.ThreadID)
 	if !found || thread.Closed(now) {
 		return contextfabric.ThreadPage{}, contextfabric.ErrThreadNotFound
 	}
+	row := rowKeyOf(thread.Key)
 	var turns []contextfabric.ThreadTurn
 	for submissionKey, record := range s.submissions {
-		if record.ThreadID != key.ThreadID || threadKeyOf(submissionKey, record.ThreadID) != key {
+		if record.ThreadID != key.ThreadID || recordThreadRow(submissionKey, record) != row {
 			continue
 		}
 		cursor := contextfabric.ThreadTurnCursor{AdmittedAt: record.AdmittedAt, SubmissionID: submissionKey.SubmissionID}
@@ -168,15 +229,16 @@ func (s *Store) CloseThread(ctx context.Context, key contextfabric.ThreadKey, no
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	thread, found := s.threads[key]
+	thread, found := s.findThreadLocked(key.OrgID, key.Owner, key.ThreadID)
 	if !found || thread.Closed(now) {
 		return false, nil
 	}
 	closedAt := now.UTC()
 	thread.ClosedAt = &closedAt
-	s.threads[key] = thread
+	row := rowKeyOf(thread.Key)
+	s.threads[row] = thread
 	for submissionKey, record := range s.submissions {
-		if record.ThreadID == key.ThreadID && threadKeyOf(submissionKey, record.ThreadID) == key {
+		if record.ThreadID == key.ThreadID && recordThreadRow(submissionKey, record) == row {
 			record.Question = ""
 			s.submissions[submissionKey] = record
 		}

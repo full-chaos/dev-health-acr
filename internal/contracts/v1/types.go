@@ -412,6 +412,45 @@ type ClientCredential struct {
 	// is bound to (empty for every other issuance path). Server-side audience
 	// binding only: never serialized, and NOT part of the wire contract.
 	Resource string `json:"-"`
+	// Provenance records how, and for whom, this credential was issued
+	// (CHAOS-12083). Server-side only, like Resource: never serialized, and
+	// NOT part of the wire contract. It is written once at issuance and
+	// copied unchanged to every rotation successor; no rotation or
+	// lifecycle request can set it.
+	Provenance CredentialProvenance `json:"-"`
+}
+
+// CredentialProvenance is a credential's immutable issuance provenance
+// (CHAOS-12083). Server-side only; see ClientCredential.Provenance.
+type CredentialProvenance struct {
+	// ClientClass is the issuance class (the closed vocabulary in
+	// internal/storage: browser, oauth_user, native_device, operator,
+	// workload). Empty only on a legacy row whose class could not be proven
+	// from its issuance records.
+	ClientClass string
+	// ApprovingUserID is the web-session subject that approved the device or
+	// OAuth authorization behind the credential. Empty for operator and
+	// workload credentials.
+	ApprovingUserID string
+	// ClientID is the OAuth client the credential was issued to. Empty for
+	// every non-OAuth issuance, and on a legacy OAuth row whose
+	// authorization request no longer exists.
+	ClientID string
+	// SessionID, FamilyID and FamilyExpiresAt are reserved for the browser
+	// class (CHAOS-12070). No issuance path writes them yet; the store
+	// copies them through rotation like every other provenance field.
+	SessionID       string
+	FamilyID        string
+	FamilyExpiresAt *time.Time
+}
+
+// Clone returns a copy that shares no pointer with p.
+func (p CredentialProvenance) Clone() CredentialProvenance {
+	if p.FamilyExpiresAt != nil {
+		value := *p.FamilyExpiresAt
+		p.FamilyExpiresAt = &value
+	}
+	return p
 }
 
 type ErrorEnvelope struct {

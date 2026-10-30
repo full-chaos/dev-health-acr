@@ -26,6 +26,7 @@ type AppConfig struct {
 	MaxOutputTokens          int
 	MaxSerializedBytes       int
 	RevokedClientVersions    []string
+	CORSAllowedOrigins       []string // CHAOS-12086: exact browser origins for CORS on the browser routes (cors.go)
 	// ServerCompletenessAuthorityEnabled mirrors
 	// config.Config.ServerCompletenessAuthorityEnabled's own doc comment --
 	// read live by the by-id investigation-result route, since a stored
@@ -232,7 +233,7 @@ func NewApp(cfg AppConfig, deps Dependencies, logger *slog.Logger) (*App, error)
 		oauth:                oauth,
 		oauthConsentURL:      oauthConsentURL(deps),
 		readinessTransitions: NewReadinessTransitionLogger(),
-		eventStream:          defaultInvestigationEventStreamSettings(),
+		eventStream:          defaultInvestigationEventStreamSettings(cfg.MaxSerializedBytes),
 	}
 	if app.clientIP == nil {
 		app.clientIP = auth.RemoteAddressClientIP

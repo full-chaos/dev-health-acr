@@ -95,7 +95,7 @@ type Store struct {
 	// threads mirrors acr.context_fabric_threads (CHAOS-11948): written
 	// under mu by AdmitSubmission with the turn it admits, and by
 	// CloseThread.
-	threads map[contextfabric.ThreadKey]contextfabric.ThreadRecord
+	threads map[threadRowKey]contextfabric.ThreadRecord
 	// now stamps the updated_at a Save's completion writes; the submission
 	// methods take the caller's clock.
 	now func() time.Time
@@ -114,7 +114,7 @@ func NewStore() *Store {
 		submissions: make(map[contextfabric.SubmissionKey]contextfabric.SubmissionRecord),
 		reserved:    make(map[reservedResultKey]contextfabric.SubmissionKey),
 		usage:       make(map[usageKey]int64),
-		threads:     make(map[contextfabric.ThreadKey]contextfabric.ThreadRecord),
+		threads:     make(map[threadRowKey]contextfabric.ThreadRecord),
 		now:         time.Now,
 	}
 }

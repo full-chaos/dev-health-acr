@@ -901,7 +901,7 @@ func (s *OAuthService) Exchange(ctx context.Context, request OAuthTokenRequest) 
 	if !ok {
 		return refuse("invalid_grant", oauthvocab.OutcomeInvalidGrant)
 	}
-	issued, err := s.devices.RedeemForResource(ctx, pending.DeviceCodeHash, pending.Resource, strings.Fields(scope))
+	issued, err := s.devices.RedeemForResource(ctx, pending.DeviceCodeHash, pending.ClientID, pending.Resource, strings.Fields(scope))
 	if errors.Is(err, ErrOAuthDeviceNotApproved) {
 		return refuse("invalid_grant", oauthvocab.OutcomeInvalidGrant)
 	}
@@ -1027,7 +1027,7 @@ func (s *OAuthService) ExchangeDeviceCode(ctx context.Context, request OAuthDevi
 	if !ok {
 		return refuse("invalid_grant", oauthvocab.OutcomeInvalidGrant)
 	}
-	issued, err := s.devices.PollDeviceGrant(ctx, hash, grant.Resource, strings.Fields(scope))
+	issued, err := s.devices.PollDeviceGrant(ctx, hash, grant.ClientID, grant.Resource, strings.Fields(scope))
 	if err != nil {
 		var pollError *DevicePollError
 		if errors.As(err, &pollError) {

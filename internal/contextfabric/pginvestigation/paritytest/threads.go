@@ -280,6 +280,66 @@ func RunThreadSuite(t *testing.T, newStore func(t *testing.T, clock func() time.
 		}
 	})
 
+	// CHAOS-12091 on threads: the owner is the approving user on a surface.
+	credential := func(id, user string, class storage.CredentialClientClass) storage.Principal {
+		return storage.Principal{AuthenticationMethod: storage.AuthenticationMethodCredential, Subject: id, OrgID: owner.OrgID, ApprovingUserID: user, ClientClass: class}
+	}
+	t.Run("a rotated credential of the same user reaches the user's thread", func(t *testing.T) {
+		store, clock := setup(t)
+		before := credential("cred-thread-rot-a", "user-thread-rotating", storage.CredentialClientClassBrowser)
+		after := credential("cred-thread-rot-b", "user-thread-rotating", storage.CredentialClientClassBrowser)
+		first := turn(t, store, clock, before, "thread-parity-rotate", "rotate-1", nil)
+		clock.now = clock.now.Add(time.Second)
+		second := turn(t, store, clock, after, "thread-parity-rotate", "rotate-2", &month)
+		for _, reader := range []storage.Principal{before, after} {
+			page, err := store.GetThread(ctx, threadKey(t, reader, "thread-parity-rotate"), nil, 100, clock.now)
+			if err != nil || page.Thread.TurnCount != 2 || len(page.Turns) != 2 || page.Thread.RetentionDays != month ||
+				page.Turns[0].SubmissionID != first.Key.SubmissionID || page.Turns[1].SubmissionID != second.Key.SubmissionID {
+				t.Fatalf("read by %s = %+v err=%v", reader.Subject, page, err)
+			}
+			threads, _, err := store.ListThreads(ctx, owner.OrgID, ownerOf(t, reader), nil, 10, clock.now)
+			if err != nil || len(threads) != 1 || threads[0].TurnCount != 2 {
+				t.Fatalf("list by %s = %+v err=%v", reader.Subject, threads, err)
+			}
+		}
+		if closed, err := store.CloseThread(ctx, threadKey(t, after, "thread-parity-rotate"), clock.now); err != nil || !closed {
+			t.Fatalf("close by the rotated credential = %t %v", closed, err)
+		}
+		if _, err := store.GetThread(ctx, threadKey(t, before, "thread-parity-rotate"), nil, 100, clock.now); !errors.Is(err, contextfabric.ErrThreadNotFound) {
+			t.Fatalf("read by the earlier credential after the delete = %v", err)
+		}
+		for _, admitted := range []contextfabric.SubmissionAdmission{first, second} {
+			record, err := store.GetSubmission(ctx, admitted.Key, clock.now)
+			if err != nil || record.Question != "" || record.ThreadClosed != contextfabric.ThreadClosedDeleted {
+				t.Fatalf("turn %s after the delete = %+v err=%v", admitted.Key.SubmissionID, record, err)
+			}
+		}
+	})
+
+	t.Run("a user's MCP credential and browser are different threads (decision 5b)", func(t *testing.T) {
+		store, clock := setup(t)
+		browser := credential("cred-thread-5b-browser", "user-thread-5b", storage.CredentialClientClassBrowser)
+		mcp := credential("cred-thread-5b-mcp", "user-thread-5b", storage.CredentialClientClassOAuthUser)
+		turn(t, store, clock, browser, "thread-parity-5b", "5b-browser", nil)
+		turn(t, store, clock, mcp, "thread-parity-5b", "5b-mcp", nil)
+		for _, tc := range []struct {
+			reader storage.Principal
+			want   string
+		}{{browser, "submission-thread-5b-browser"}, {mcp, "submission-thread-5b-mcp"}} {
+			page, err := store.GetThread(ctx, threadKey(t, tc.reader, "thread-parity-5b"), nil, 100, clock.now)
+			if err != nil || page.Thread.TurnCount != 1 || len(page.Turns) != 1 || page.Turns[0].SubmissionID != tc.want {
+				t.Fatalf("read by %s = %+v err=%v", tc.reader.Subject, page, err)
+			}
+		}
+		if closed, err := store.CloseThread(ctx, threadKey(t, mcp, "thread-parity-5b"), clock.now); err != nil || !closed {
+			t.Fatalf("close by MCP = %t %v", closed, err)
+		}
+		page, err := store.GetThread(ctx, threadKey(t, browser, "thread-parity-5b"), nil, 100, clock.now)
+		if err != nil || len(page.Turns) != 1 || page.Turns[0].Question != "question 5b-browser" {
+			t.Fatalf("the browser thread after the MCP delete = %+v err=%v", page, err)
+		}
+	})
+
 	t.Run("a full thread refuses new turns only: its turns, results and repeats are served", func(t *testing.T) {
 		store, clock := setup(t)
 		seeder, ok := store.(ThreadTurnCountSeeder)

@@ -13,13 +13,20 @@ import (
 )
 
 // The thread store (CHAOS-11948) over acr.context_fabric_threads (migration
-// 0058) and the thread turns of acr.context_fabric_investigation_submissions.
+// 0060) and the thread turns of acr.context_fabric_investigation_submissions.
 // AdmitSubmission writes a thread row in the admission's own transaction
 // (submissions.go); the reads and the delete are here.
 
 var _ contextfabric.ThreadStore = (*Store)(nil)
 
-const threadColumns = `org_id, owner_auth_method, owner_subject, thread_id, created_at, last_turn_at, turn_count, retention_days, retention_set_by_admitted_at, retention_set_by_submission_id, expires_at, closed_at`
+const threadColumns = `org_id, owner_auth_method, owner_subject, thread_id, created_at, last_turn_at, turn_count, retention_days, retention_set_by_admitted_at, retention_set_by_submission_id, expires_at, closed_at, owner_user_id, owner_surface`
+
+// threadTurnOwnerMethodSQL and threadTurnOwnerSubjectSQL name the thread row a
+// submission (a thread turn) joined:
+// its thread_owner pair, or its own owner pair for a record stored without one
+// (a turn admitted before the link existed).
+const threadTurnOwnerMethodSQL = `COALESCE(thread_owner_auth_method, owner_auth_method)`
+const threadTurnOwnerSubjectSQL = `COALESCE(thread_owner_subject, owner_subject)`
 
 // queryRower is a *sql.DB or a *sql.Tx.
 type queryRower interface {
@@ -32,9 +39,14 @@ func scanThread(row submissionScanner) (contextfabric.ThreadRecord, error) {
 	var setByAt sql.NullTime
 	var setByID sql.NullString
 	var closedAt sql.NullTime
+	var ownerUser, ownerSurface sql.NullString
 	if err := row.Scan(&thread.Key.OrgID, &thread.Key.Owner.AuthenticationMethod, &thread.Key.Owner.Subject, &thread.Key.ThreadID,
-		&thread.CreatedAt, &thread.LastTurnAt, &thread.TurnCount, &retention, &setByAt, &setByID, &thread.ExpiresAt, &closedAt); err != nil {
+		&thread.CreatedAt, &thread.LastTurnAt, &thread.TurnCount, &retention, &setByAt, &setByID, &thread.ExpiresAt, &closedAt,
+		&ownerUser, &ownerSurface); err != nil {
 		return contextfabric.ThreadRecord{}, err
+	}
+	if ownerUser.Valid && ownerSurface.Valid {
+		thread.Key.Owner.UserID, thread.Key.Owner.Surface = ownerUser.String, contextfabric.SubmissionOwnerSurface(ownerSurface.String)
 	}
 	thread.RetentionDays = contractsv1.ContextFabricThreadRetentionDays(retention)
 	thread.CreatedAt, thread.LastTurnAt, thread.ExpiresAt = thread.CreatedAt.UTC(), thread.LastTurnAt.UTC(), thread.ExpiresAt.UTC()
@@ -58,14 +70,22 @@ func validThreadKey(key contextfabric.ThreadKey) error {
 	return nil
 }
 
-// readThreadForUpdate reads and row-locks a thread inside the admission
-// transaction (the organization's admission lock already serializes every
-// admission; the row lock also orders a concurrent delete).
-func readThreadForUpdate(ctx context.Context, tx *sql.Tx, key contextfabric.ThreadKey) (contextfabric.ThreadRecord, bool, error) {
-	thread, err := scanThread(tx.QueryRowContext(ctx, `
+// resolveThread is the row owner's threadID reaches in orgID
+// (contextfabric.ThreadKey): a row whose owner matches owner (ownerMatchSQL,
+// CHAOS-12091), the row with owner's own legacy pair first, then the earliest
+// created. forUpdate row-locks it inside the admission or delete transaction
+// (the organization's admission lock already serializes both).
+func resolveThread(ctx context.Context, q queryRower, orgID string, owner contextfabric.SubmissionOwner, threadID string, forUpdate bool) (contextfabric.ThreadRecord, bool, error) {
+	lock := ""
+	if forUpdate {
+		lock = "\n   FOR UPDATE"
+	}
+	thread, err := scanThread(q.QueryRowContext(ctx, `
 SELECT `+threadColumns+` FROM acr.context_fabric_threads
- WHERE org_id = $1 AND owner_auth_method = $2 AND owner_subject = $3 AND thread_id = $4
-   FOR UPDATE`, key.OrgID, key.Owner.AuthenticationMethod, key.Owner.Subject, key.ThreadID))
+ WHERE org_id = $1 AND thread_id = $2
+   AND `+ownerMatchSQL("owner_auth_method", "owner_subject", "owner_user_id", "owner_surface", "$3", "$4", "$5", "$6")+`
+ ORDER BY (owner_auth_method = $3 AND owner_subject = $4) DESC, created_at, owner_auth_method, owner_subject
+ LIMIT 1`+lock, orgID, threadID, owner.AuthenticationMethod, owner.Subject, owner.UserID, string(owner.Surface)))
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
 		return contextfabric.ThreadRecord{}, false, nil
@@ -85,13 +105,14 @@ func writeThread(ctx context.Context, tx *sql.Tx, thread contextfabric.ThreadRec
 	}
 	_, err := tx.ExecContext(ctx, `
 INSERT INTO acr.context_fabric_threads (`+threadColumns+`)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, NULL)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, NULL, NULLIF($12, ''), NULLIF($13, ''))
 ON CONFLICT (org_id, owner_auth_method, owner_subject, thread_id) DO UPDATE
    SET created_at = EXCLUDED.created_at, last_turn_at = EXCLUDED.last_turn_at, turn_count = EXCLUDED.turn_count,
        retention_days = EXCLUDED.retention_days, retention_set_by_admitted_at = EXCLUDED.retention_set_by_admitted_at,
        retention_set_by_submission_id = EXCLUDED.retention_set_by_submission_id, expires_at = EXCLUDED.expires_at`,
 		thread.Key.OrgID, thread.Key.Owner.AuthenticationMethod, thread.Key.Owner.Subject, thread.Key.ThreadID,
-		thread.CreatedAt.UTC(), thread.LastTurnAt.UTC(), thread.TurnCount, int(thread.RetentionDays), setByAt, setByID, thread.ExpiresAt.UTC())
+		thread.CreatedAt.UTC(), thread.LastTurnAt.UTC(), thread.TurnCount, int(thread.RetentionDays), setByAt, setByID, thread.ExpiresAt.UTC(),
+		thread.Key.Owner.UserID, string(thread.Key.Owner.Surface))
 	return sanitizeError(err)
 }
 
@@ -103,10 +124,14 @@ func (s *Store) recordThreadClosed(ctx context.Context, record contextfabric.Sub
 	}
 	var closedAt sql.NullTime
 	var expiresAt time.Time
+	row := record.ThreadOwner
+	if row.Subject == "" {
+		row = record.Key.Owner
+	}
 	err := s.db.QueryRowContext(ctx, `
 SELECT closed_at, expires_at FROM acr.context_fabric_threads
  WHERE org_id = $1 AND owner_auth_method = $2 AND owner_subject = $3 AND thread_id = $4`,
-		record.Key.OrgID, record.Key.Owner.AuthenticationMethod, record.Key.Owner.Subject, record.ThreadID).Scan(&closedAt, &expiresAt)
+		record.Key.OrgID, row.AuthenticationMethod, row.Subject, record.ThreadID).Scan(&closedAt, &expiresAt)
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
 		return "", nil
@@ -131,8 +156,8 @@ func hiddenByClosedThreadSQL(now string) string {
                    AND hs.thread_id IS NOT NULL)
      AND NOT EXISTS (SELECT 1 FROM acr.context_fabric_investigation_submissions ls
                       LEFT JOIN acr.context_fabric_threads lt
-                        ON lt.org_id = ls.org_id AND lt.owner_auth_method = ls.owner_auth_method
-                       AND lt.owner_subject = ls.owner_subject AND lt.thread_id = ls.thread_id
+                        ON lt.org_id = ls.org_id AND lt.owner_auth_method = COALESCE(ls.thread_owner_auth_method, ls.owner_auth_method)
+                       AND lt.owner_subject = COALESCE(ls.thread_owner_subject, ls.owner_subject) AND lt.thread_id = ls.thread_id
                      WHERE ls.org_id = r.org_id AND (ls.result_id = r.result_id OR ls.reserved_result_id = r.result_id)
                        AND (ls.thread_id IS NULL OR lt.thread_id IS NULL
                             OR (lt.closed_at IS NULL AND lt.expires_at > ` + now + `))))`
@@ -146,16 +171,22 @@ func (s *Store) ListThreads(ctx context.Context, orgID string, owner contextfabr
 	if strings.TrimSpace(orgID) == "" || owner.Subject == "" || owner.AuthenticationMethod == "" || limit < 1 {
 		return nil, false, errors.New("pginvestigation: thread list organization, owner and a positive limit are required")
 	}
-	args := []any{orgID, owner.AuthenticationMethod, owner.Subject, now.UTC(), limit + 1}
+	args := []any{orgID, owner.AuthenticationMethod, owner.Subject, now.UTC(), limit + 1, owner.UserID, string(owner.Surface)}
 	keyset := ""
 	if after != nil {
-		keyset = ` AND (last_turn_at < $6 OR (last_turn_at = $6 AND thread_id > $7))`
+		keyset = ` AND (last_turn_at < $8 OR (last_turn_at = $8 AND thread_id > $9))`
 		args = append(args, after.LastTurnAt.UTC(), after.ThreadID)
 	}
+	// One row per thread id: the row the owner reaches (resolveThread's
+	// order), then the open ones in list order.
 	rows, err := s.db.QueryContext(ctx, `
-SELECT `+threadColumns+` FROM acr.context_fabric_threads
- WHERE org_id = $1 AND owner_auth_method = $2 AND owner_subject = $3
-   AND closed_at IS NULL AND expires_at > $4`+keyset+`
+SELECT `+threadColumns+` FROM (
+  SELECT DISTINCT ON (thread_id) `+threadColumns+` FROM acr.context_fabric_threads
+   WHERE org_id = $1
+     AND `+ownerMatchSQL("owner_auth_method", "owner_subject", "owner_user_id", "owner_surface", "$2", "$3", "$6", "$7")+`
+   ORDER BY thread_id, (owner_auth_method = $2 AND owner_subject = $3) DESC, created_at, owner_auth_method, owner_subject
+) reached
+ WHERE closed_at IS NULL AND expires_at > $4`+keyset+`
  ORDER BY last_turn_at DESC, thread_id ASC
  LIMIT $5`, args...)
 	if err != nil {
@@ -194,8 +225,9 @@ func (s *Store) GetThread(ctx context.Context, key contextfabric.ThreadKey, befo
 	// current states.
 	if _, err := s.db.ExecContext(ctx, `
 UPDATE acr.context_fabric_investigation_submissions s`+reconcileSetSQL("$5")+`
-   AND s.org_id = $1 AND s.owner_auth_method = $2 AND s.owner_subject = $3 AND s.thread_id = $4`,
-		key.OrgID, key.Owner.AuthenticationMethod, key.Owner.Subject, key.ThreadID, now.UTC()); err != nil {
+   AND s.org_id = $1 AND s.thread_id = $4
+   AND `+ownerMatchSQL("s.owner_auth_method", "s.owner_subject", "s.owner_user_id", "s.owner_surface", "$2", "$3", "$6", "$7"),
+		key.OrgID, key.Owner.AuthenticationMethod, key.Owner.Subject, key.ThreadID, now.UTC(), key.Owner.UserID, string(key.Owner.Surface)); err != nil {
 		return contextfabric.ThreadPage{}, fmt.Errorf("reconcile thread turns: %w", sanitizeError(err))
 	}
 	thread, turns, err := s.readThreadSnapshot(ctx, key, before, limit+1, now)
@@ -235,11 +267,19 @@ func (s *Store) CloseThread(ctx context.Context, key contextfabric.ThreadKey, no
 	if _, err := tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock($1, hashtext($2))`, submissionAdmissionLockClass, key.OrgID); err != nil {
 		return false, fmt.Errorf("close thread: lock: %w", sanitizeError(err))
 	}
+	thread, found, err := resolveThread(ctx, tx, key.OrgID, key.Owner, key.ThreadID, true)
+	if err != nil {
+		return false, fmt.Errorf("close thread: read: %w", err)
+	}
+	if !found {
+		return false, nil
+	}
+	row := thread.Key.Owner
 	result, err := tx.ExecContext(ctx, `
 UPDATE acr.context_fabric_threads SET closed_at = $5
  WHERE org_id = $1 AND owner_auth_method = $2 AND owner_subject = $3 AND thread_id = $4
    AND closed_at IS NULL AND expires_at > $5`,
-		key.OrgID, key.Owner.AuthenticationMethod, key.Owner.Subject, key.ThreadID, now.UTC())
+		key.OrgID, row.AuthenticationMethod, row.Subject, key.ThreadID, now.UTC())
 	if err != nil {
 		return false, fmt.Errorf("close thread: %w", sanitizeError(err))
 	}
@@ -251,8 +291,9 @@ UPDATE acr.context_fabric_threads SET closed_at = $5
 	}
 	if _, err := tx.ExecContext(ctx, `
 UPDATE acr.context_fabric_investigation_submissions SET question = NULL
- WHERE org_id = $1 AND owner_auth_method = $2 AND owner_subject = $3 AND thread_id = $4 AND question IS NOT NULL`,
-		key.OrgID, key.Owner.AuthenticationMethod, key.Owner.Subject, key.ThreadID); err != nil {
+ WHERE org_id = $1 AND thread_id = $4 AND question IS NOT NULL
+   AND `+threadTurnOwnerMethodSQL+` = $2 AND `+threadTurnOwnerSubjectSQL+` = $3`,
+		key.OrgID, row.AuthenticationMethod, row.Subject, key.ThreadID); err != nil {
 		return false, fmt.Errorf("close thread: erase questions: %w", sanitizeError(err))
 	}
 	if err := tx.Commit(); err != nil {

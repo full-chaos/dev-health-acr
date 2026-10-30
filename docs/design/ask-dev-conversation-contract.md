@@ -267,17 +267,29 @@ item that implements it.
 
 ## 9. Implementation (I-29, CHAOS-11948)
 
-- **Thread row.** `acr.context_fabric_threads` (migration `0058`), keyed
-  `(org_id, owner_auth_method, owner_subject, thread_id)` exactly like the
-  submission records, so the owner re-key of the approving-user design (T2,
-  CHAOS-12091) moves both tables the same way. It holds `created_at`,
+- **Thread row.** `acr.context_fabric_threads` (migration `0060`), keyed
+  `(org_id, owner_auth_method, owner_subject, thread_id)` like the submission
+  records, with the canonical owner beside it (`owner_user_id`,
+  `owner_surface`; the approving-user design, T2, CHAOS-12091, migration
+  0059). A caller reaches a row when the legacy pair is the same or the
+  canonical user and surface are the same (`ownerMatchSQL`,
+  `contextfabric.SameSubmissionOwner`); if more than one row matches, the
+  caller's own legacy pair wins, then the earliest created. So a rotated
+  credential (a browser token refresh) of the same user reaches the user's
+  thread, and a user's MCP credential and browser are different threads
+  (chris decision 5b). A turn records the legacy pair of the row it joined
+  (`thread_owner_auth_method`, `thread_owner_subject`); the row's turns, its
+  delete and the closed-thread rule follow that link, so the turn count
+  always agrees with the turns. It holds `created_at`,
   `last_turn_at`, `turn_count`, `retention_days` and the turn that set it,
   `expires_at` and `closed_at`. Admission writes it in the submission's own
   transaction, under the organization's admission lock and a row lock, with
   `contextfabric.AdvanceThread` (one rule for both stores). A turn's question is
   a column on its submission record (`question`, thread turns only). The
   migration builds the row for thread turns admitted before it (`thread_id`
-  since 0056) the way `AdvanceThread` would have: retention `0`, expiry 24
+  since 0056) the way `AdvanceThread` would have, one per legacy pair, with
+  its records' canonical owner (the earliest row of a rotation takes it, as
+  0059 does): retention `0`, expiry 24
   hours after the latest turn.
 - **Admission.** A new key with `X-ACR-Thread-ID` joins the caller's thread; a
   closed thread (deleted, expired, or at 1 000 000 turns) refuses it before any
@@ -323,11 +335,7 @@ item that implements it.
   tests `TestAPriorResultTheCallerMayNotReadBindsLikeAMissingOne`, the owner
   case in `submission_test.go`). Another principal's same `thread_id` is
   another thread by key.
-- **Not here.** The surface split of chris decision 5b (an MCP credential may
-  not read browser history) arrives with the approving-user owner (T2,
-  CHAOS-12091), which must extend the thread key the same way; until then the
-  owner is the credential or the web-assertion subject, so a user's MCP
-  credential and browser are different owners. The browser-class route list
+- **Not here.** The browser-class route list
   and the per-call access read (T7 of the direct-browser design) add the
   thread routes when they land. The retention job (I-30) removes the backing
   set after `expires_at`.

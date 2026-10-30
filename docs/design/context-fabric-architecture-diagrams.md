@@ -3172,7 +3172,13 @@ reservation (CHAOS-11912, `admitInvestigationSubmission`); a stream whose reques
 names no submission reserves one with the same generator
 (`contextfabric.NewInvestigationResultID`, `WithReservedResultID`). The route
 installs the sink and writes the 200, the headers and `accepted` (with the
-submission id) together. A pump goroutine writes the sink's transitions and the
+submission id and the thread id the request sent) together. The writer caps
+bytes on the wire, framing included: a frame at most max serialized bytes + 64
+KiB (not written when over; a result over it ends as `error{budget_refusal}`),
+the stream at most 8 MiB, with the last max serialized bytes + 64 KiB reserved
+for the terminal -- a non-terminal frame that would cross into the reserve is
+not written, the stream ends with `error{budget_refusal}` inside it and the run
+is cancelled. A pump goroutine writes the sink's transitions and the
 heartbeats. When `Investigate` returns, the pump drains and stops, and the handler
 runs `deliverInvestigationOutcome` -- the ONE delivery the JSON path runs too
 (abandon or finish the submission, then `writeContextFabricError` or
@@ -3294,6 +3300,24 @@ stateDiagram-v2
   abandoned --> [*]
 ```
 
+**The owner (CHAOS-12091).** A `SubmissionOwner` is the legacy pair
+(authentication method, subject) plus a canonical owner: the approving user of
+a user-approved credential (its immutable provenance, migration 0058) or the
+web assertion's subject, on a surface -- `browser` (web assertion, browser
+class) or `mcp` (OAuth user, native device). Two owners are one when the
+legacy pair is the same OR the canonical user and surface are the same
+(`SameSubmissionOwner`; SQL `ownerMatchSQL`). So a rotated credential -- and
+every browser token refresh -- repeats, reads, completes and counts against its
+user's records, while the same user's other surface, another user and an
+operator or workload credential (no canonical owner) do not. The canonical
+owner lives in new columns (`owner_user_id`/`owner_surface`, and
+`submission_owner_user_id`/`submission_owner_surface` on results, migration
+0059) beside the unchanged legacy primary key, with a partial unique index on
+(organization, canonical owner, submission id); admission resolves an existing
+record of the same owner under the organization's advisory lock before it
+inserts. A replica on the previous release keeps reading and writing the legacy
+pair only.
+
 INV-1: `StoredResultGate.Authorize` refuses a result whose
 `SubmissionOwner` is not the reader (`owner_mismatch`, decided before the
 grant check) on every surface that reads a stored row: `result_by_id` (and
@@ -3383,15 +3407,16 @@ route's own bodies, regenerated with `ACR_WRITE_SUBMISSION_GOLDENS=1`.
 
 ## 18 — Ask Dev conversations: the thread contract
 
-A thread is one principal's Ask Dev conversation: the submission records the
-principal admitted with one `X-ACR-Thread-ID`, keyed `(org_id, owner,
-thread_id)`, in turn order (`admitted_at`, then `submission_id`), plus its
+A thread is one owner's Ask Dev conversation: the submission records the
+owner admitted with one `X-ACR-Thread-ID`, keyed `(org_id, owner,
+thread_id)` with the owner matched like a submission's (legacy pair or
+approving user and surface, CHAOS-12091), in turn order (`admitted_at`, then `submission_id`), plus its
 retention (`X-ACR-Thread-Retention-Days`: `0` = until 24 h after the last
 turn, `30` = until 30 days after it; the latest turn that named one decides;
 none named = `0`). The contract (`context_fabric_thread.v1`,
 `context_fabric_thread_list.v1`, the `thread_closed` 409, the gate surface
 `thread`) is served by the store and routes of CHAOS-11948: the thread row
-`acr.context_fabric_threads` (migration `0058`) is written by admission in the
+`acr.context_fabric_threads` (migration `0060`) is written by admission in the
 submission's own transaction, and the routes read and close it. Design and
 obligations: `docs/design/ask-dev-conversation-contract.md` (§6, §9).
 
@@ -3451,9 +3476,12 @@ thread holds at most 1000000 turns (T7). A thread read writes one aggregated
 decision line, not one `StoredResultAuthorization` line per turn.
 
 Admission of a thread turn, in one transaction under the organization's
-admission lock: the submission INSERT (the key decides races), the thread row
-read `FOR UPDATE`, a closed thread refused (`409 thread_closed`, nothing
-written), the shared limits, then `AdvanceThread` writes the row. The result
+admission lock: the repeat check, the thread row the caller reaches read `FOR
+UPDATE` (owner matched like a submission's, CHAOS-12091: a rotated
+credential of the same user on the same surface reaches the user's row; a
+user's browser and MCP never share one), a closed thread refused (`409
+thread_closed`, nothing written), the submission INSERT linking the row's
+legacy pair, the shared limits, then `AdvanceThread` writes the row. The result
 stores' `Get` and answer reuse hide a result that only closed threads' turns
 name, so every reader of a deleted or expired conversation's answers fails
 closed.
@@ -3465,7 +3493,7 @@ closed.
 `ContextFabricThreadListHandler`, `ContextFabricThreadHandler`
 (`internal/api/context_fabric_threads.go`); `decideStoredResultServing`
 (`internal/api/stored_result_serving.go`); migration
-`0058_context_fabric_threads.sql`.
+`0060_context_fabric_threads.sql`.
 
 **Construction anchors (contract):** `ContextFabricThread`, `ContextFabricThreadList`,
 `ParseContextFabricThreadRetention`, `ContextFabricThreadExpiresAt`,

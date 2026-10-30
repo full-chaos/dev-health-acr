@@ -27,7 +27,15 @@ import (
 // keeps the submission records, so a run still in flight saves bound to its
 // owner (T2).
 
-// ThreadKey is the unique key of a thread.
+// ThreadKey is the key of a thread. A row's identity is its organization,
+// its owner's legacy pair (AuthenticationMethod, Subject) and the thread id;
+// Owner also carries the row's canonical owner (UserID, Surface) when known.
+// A caller's key reaches a row when SameSubmissionOwner(row owner, caller
+// owner) holds (CHAOS-12091): a rotated credential of the same user on the
+// same surface reaches the user's thread, and the user's browser and MCP
+// surfaces never reach each other's (chris decision 5b). When more than one
+// row matches, the row with the caller's own legacy pair wins, then the
+// earliest created.
 type ThreadKey struct {
 	OrgID    string
 	Owner    SubmissionOwner

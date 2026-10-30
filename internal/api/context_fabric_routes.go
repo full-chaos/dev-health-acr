@@ -186,7 +186,7 @@ func (a *App) ContextFabricInvestigationHandler(investigator contextfabric.Inves
 			a.metrics.InvestigationLatency(r.Context(), deliveredStatus, a.now().Sub(investigationStarted))
 		}()
 		if stream {
-			deliveredStatus = a.serveInvestigationEventStream(w, r, investigator, principal, request, submission, submissionID, reservedResultID, investigateCtx, collectedSynthesisInput)
+			deliveredStatus = a.serveInvestigationEventStream(w, r, investigator, principal, request, submission, submissionID, threadID, reservedResultID, investigateCtx, collectedSynthesisInput)
 			return
 		}
 		result, err := investigateRecovered(investigateCtx, investigator, principal, request)
