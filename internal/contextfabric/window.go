@@ -1610,7 +1610,7 @@ func (e *Engine) windowVetoResult(ctx context.Context, principal storage.Princip
 	emptyCoverage := Coverage{Sources: []SourceObservation{}, DegradedReasons: []string{}}
 	result := InvestigationResult{
 		SchemaVersion:  InvestigationResultSchemaV1,
-		ResultID:       e.newResultID(),
+		ResultID:       e.mintResultID(ctx),
 		RequestID:      request.RequestID,
 		GeneratedAt:    e.now().UTC(),
 		Status:         InvestigationNoMatch,
@@ -1861,7 +1861,7 @@ func (e *Engine) windowConfirmationRequiredResult(
 	// on a turn that confirmed nothing of its own, which is precisely the
 	// turn a carry exists for.
 	confirmedStructureEcho = appendCarriedStructureEntry(confirmedStructureEcho, carriedStructureEntries...)
-	resultID := e.newResultID()
+	resultID := e.mintResultID(ctx)
 	windowClarification := composeWindowClarification(&effective, resultID, e.now())
 	emptyCoverage := Coverage{Sources: []SourceObservation{}, DegradedReasons: []string{}}
 

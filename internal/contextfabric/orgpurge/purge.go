@@ -123,6 +123,7 @@ var purgeTables = []tableSpec{
 	{Name: "agent_episodes", Where: `org_id = $1::uuid AND retention_class <> 'legal_hold'`},
 	{Name: "context_fabric_projection_checkpoints", Where: matchOrg("org_id")},
 	{Name: "context_fabric_projection_rebuild_markers", Where: matchOrg("org_id")},
+	{Name: "context_fabric_investigation_submissions", Where: matchOrg("org_id")},
 	{Name: "context_fabric_investigation_results", Where: matchOrg("org_id")},
 	{Name: "context_fabric_model_execution_receipts", Where: matchOrg("org_id")},
 	{Name: "context_fabric_org_model_config", Where: matchOrg("org_id")},

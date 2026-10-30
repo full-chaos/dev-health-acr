@@ -254,6 +254,10 @@ GRANT SELECT, DELETE ON TABLE acr.context_fabric_org_purge_markers TO :"runtime_
 REVOKE SELECT, INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER ON TABLE acr.context_fabric_investigation_results FROM :"runtime_user";
 GRANT SELECT, INSERT ON TABLE acr.context_fabric_investigation_results TO :"runtime_user";
 
+-- INSERT internal/contextfabric/pginvestigation/submissions.go AdmitSubmission, SELECT submissions.go GetSubmission, UPDATE submissions.go FinishSubmission and store.go Save's completion
+REVOKE SELECT, INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER ON TABLE acr.context_fabric_investigation_submissions FROM :"runtime_user";
+GRANT SELECT, INSERT, UPDATE ON TABLE acr.context_fabric_investigation_submissions TO :"runtime_user";
+
 -- SELECT internal/contextfabric/pginvestigation/store.go:491, INSERT store.go:345
 REVOKE SELECT, INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER ON TABLE acr.context_fabric_structure_supersession_claims FROM :"runtime_user";
 GRANT SELECT, INSERT ON TABLE acr.context_fabric_structure_supersession_claims TO :"runtime_user";
@@ -340,6 +344,9 @@ GRANT SELECT, DELETE ON TABLE acr.context_fabric_projection_checkpoints TO :"pur
 -- purge table list: orgpurge purgeTables
 REVOKE SELECT, INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER ON TABLE acr.context_fabric_projection_rebuild_markers FROM :"purge_user";
 GRANT SELECT, DELETE ON TABLE acr.context_fabric_projection_rebuild_markers TO :"purge_user";
+-- purge table list: orgpurge purgeTables
+REVOKE SELECT, INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER ON TABLE acr.context_fabric_investigation_submissions FROM :"purge_user";
+GRANT SELECT, DELETE ON TABLE acr.context_fabric_investigation_submissions TO :"purge_user";
 -- purge table list: orgpurge purgeTables
 REVOKE SELECT, INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER ON TABLE acr.context_fabric_investigation_results FROM :"purge_user";
 GRANT SELECT, DELETE ON TABLE acr.context_fabric_investigation_results TO :"purge_user";

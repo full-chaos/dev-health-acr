@@ -207,7 +207,11 @@ func parseSnippet(t *testing.T, source string) []*ast.File {
 // budget, or it measured nothing.
 func TestEveryBudgetedBodyIsMeasuredAgainstItsBudget(t *testing.T) {
 	found := scanBudgetedBuilders(parsePackageSources(t))
-	for _, known := range []string{"ContextFabricInvestigationHandler", "ContextFabricInvestigationResultHandler", "handleContextPacket"} {
+	// CHAOS-11912: the investigation route serves through
+	// serveContextFabricInvestigationResult and the result-by-id route (and
+	// the submission replay) through serveStoredInvestigationResult; those are
+	// where the bodies are measured now.
+	for _, known := range []string{"serveContextFabricInvestigationResult", "serveStoredInvestigationResult", "handleContextPacket"} {
 		if !slices.Contains(found.scanned, known) {
 			t.Fatalf("the census did not see %s among %v: it measured nothing", known, found.scanned)
 		}

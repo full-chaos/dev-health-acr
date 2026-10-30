@@ -56,6 +56,9 @@ type entry struct {
 	// the snapshot it saved or received cannot reach into this store. Get
 	// decodes it fresh, through the same codec PostgreSQL rows are read with.
 	semanticState []byte
+	// owner mirrors pginvestigation's submission_owner_* columns
+	// (CHAOS-11912): set when this Save completed a submission.
+	owner *contextfabric.SubmissionOwner
 }
 
 // structureSupersessionClaimKey is the in-memory twin of
@@ -80,11 +83,40 @@ type Store struct {
 	// exactly as atomic here as they are in Postgres's own single
 	// transaction.
 	claims map[structureSupersessionClaimKey]string // -> claimed_by_result_id
+	// submissions mirrors acr.context_fabric_investigation_submissions
+	// (CHAOS-11912), and reserved its (org_id, reserved_result_id) unique
+	// index. Both are guarded by mu, the store's transaction: a Save that
+	// completes a submission writes the result and the record together.
+	submissions map[contextfabric.SubmissionKey]contextfabric.SubmissionRecord
+	reserved    map[reservedResultKey]contextfabric.SubmissionKey
+	// now stamps the updated_at a Save's completion writes; the submission
+	// methods take the caller's clock.
+	now func() time.Time
+}
+
+// reservedResultKey is the (org_id, reserved_result_id) unique index.
+type reservedResultKey struct {
+	orgID    string
+	resultID string
 }
 
 // NewStore returns an empty Store.
 func NewStore() *Store {
-	return &Store{results: make(map[string]entry), claims: make(map[structureSupersessionClaimKey]string)}
+	return &Store{
+		results: make(map[string]entry), claims: make(map[structureSupersessionClaimKey]string),
+		submissions: make(map[contextfabric.SubmissionKey]contextfabric.SubmissionRecord),
+		reserved:    make(map[reservedResultKey]contextfabric.SubmissionKey),
+		now:         time.Now,
+	}
+}
+
+// NewStoreWithClock is NewStore whose Save stamps completions with now.
+func NewStoreWithClock(now func() time.Time) *Store {
+	store := NewStore()
+	if now != nil {
+		store.now = now
+	}
+	return store
 }
 
 // Save persists an immutable InvestigationResult snapshot. It never
@@ -202,7 +234,10 @@ func (s *Store) Save(ctx context.Context, principal storage.Principal, result co
 		key := structureSupersessionClaimKey{orgID: orgID, priorResultID: claim.priorResultID, member: claim.member}
 		s.claims[key] = resultID
 	}
-	s.results[resultID] = entry{orgID: orgID, payload: payload, parentResultID: strings.TrimSpace(parentResultID), grantDigest: contextfabric.StoredResultGrantDigest(principal), semanticState: semanticColumn}
+	// CHAOS-11912: the atomic completion pginvestigation's Save transaction
+	// makes, under the same lock as the result insert.
+	owner := s.completeSubmissionLocked(principal, orgID, resultID)
+	s.results[resultID] = entry{orgID: orgID, payload: payload, parentResultID: strings.TrimSpace(parentResultID), grantDigest: contextfabric.StoredResultGrantDigest(principal), semanticState: semanticColumn, owner: owner}
 	return nil
 }
 
@@ -307,7 +342,12 @@ func (s *Store) Get(ctx context.Context, principal storage.Principal, resultID s
 	// consumer (starting with the §2.2 ingress taint gate) must already
 	// treat that as "cannot prove", never a silent pass.
 	semanticState, semanticStatus := contextfabric.DecodeSemanticState(stored.semanticState)
-	return contextfabric.StoredInvestigationResult{Result: result, ParentResultID: stored.parentResultID, GrantDigest: stored.grantDigest, SemanticState: semanticState, SemanticStateRead: semanticStatus}, nil
+	var owner *contextfabric.SubmissionOwner
+	if stored.owner != nil {
+		copied := *stored.owner
+		owner = &copied
+	}
+	return contextfabric.StoredInvestigationResult{Result: result, ParentResultID: stored.parentResultID, GrantDigest: stored.grantDigest, SubmissionOwner: owner, SemanticState: semanticState, SemanticStateRead: semanticStatus}, nil
 }
 
 // ResultIDsCitingEvidence implements contextfabric.CitedEvidenceLookup: the

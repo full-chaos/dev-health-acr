@@ -408,7 +408,7 @@ func (e *Engine) synthesizeAndAssemble(ctx context.Context, principal storage.Pr
 		result.Drivers[index].Rank = 0
 	}
 	result.SchemaVersion = InvestigationResultSchemaV1
-	result.ResultID = e.newResultID()
+	result.ResultID = e.mintResultID(ctx)
 	result.RequestID = request.RequestID
 	result.GeneratedAt = e.now().UTC()
 	// Codex round-1 F8: explicit, not merely the zero value -- a

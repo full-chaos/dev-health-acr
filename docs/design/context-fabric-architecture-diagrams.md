@@ -3127,6 +3127,128 @@ response. The goldens `contracts/examples/v1/context_fabric_investigation_event_
 are encoder output, regenerated with `ACR_WRITE_INVESTIGATION_EVENT_GOLDENS=1`
 (`context_fabric_investigation_event_golden_test.go`).
 
+## 17 — Submission identity and its owner (CHAOS-11912)
+
+A create-investigation request that names `X-ACR-Submission-ID` is one user
+submit. Admission inserts one record keyed (organization, owner, submission id)
+before anything runs; the insert-first primary key decides every race, on every
+replica, so exactly one request of a key executes. The record is bound to the
+request's semantic digest (`SubmissionRequestDigest`: every body field but
+`request_id` and `consumer.name`/`consumer.version`; `consumer.surface` is
+included, trimmed, because the engine reads it as behaviour). The run executes under the result id the record
+reserved (`WithReservedResultID` into the engine's one mint,
+`mintResultID`), and the result store's `Save` completes the record and records
+its owner on the result row in the same statement. A request without the header
+is unchanged: no record, and its result keeps organization-bearer reads.
+
+```mermaid
+sequenceDiagram
+  participant C as Caller
+  participant R as acr-api route (any replica)
+  participant S as Submission record (Postgres)
+  participant E as Engine
+  participant T as Result row (Postgres)
+
+  C->>R: POST investigations + X-ACR-Submission-ID
+  R->>S: INSERT running (digest, reserved_result_id, expires_at)<br/>ON CONFLICT DO NOTHING
+  alt inserted (admitted)
+    R->>E: Investigate(ctx carries reserved id)
+    alt answer stored
+      E->>T: Save: ONE statement inserts the row with<br/>submission_owner_* and sets the record done
+    else answer served, save skipped (payload rejected)
+      E->>S: done_unsaved (where the save is skipped)
+    else run failed
+      R->>S: running → abandoned (at once)
+    end
+    R->>S: FinishSubmission backstop (running only):<br/>served id stored → done, else done_unsaved
+    R-->>C: the answer, or the error
+  else the key exists
+    R->>S: read, reconciled
+    alt digest differs
+      R-->>C: 409 submission_mismatch
+    else done
+      R->>T: read result_id, decided by StoredResultGate (result_by_id)
+      R-->>C: the stored result, as GET by id serves it
+    else running
+      R-->>C: 409 submission_in_progress, Retry-After 3
+    else done_unsaved
+      R-->>C: 409 submission_unsaved
+    else abandoned
+      R-->>C: 409 submission_abandoned
+    end
+  end
+  Note over R,S: no outcome of a repeated key runs the request again
+```
+
+Gate order. Authentication, scope, the rate limit, the body and the headers are
+checked first. A repeat of an admitted key is then answered, before the
+investigator, ClickHouse readiness and service-model gates: it executes nothing
+and reads only the submission and result stores, like a read by id. A new key
+meets those three gates, then admission (the race on admission is answered
+as a repeat).
+
+Repeat-key outcomes (the owner's retry of the same key):
+
+| Record state | How it was reached | A same-key retry gets |
+| --- | --- | --- |
+| any, request digest differs | — | `409 submission_mismatch` |
+| `done` | `Save` of the reserved id; reconcile; backstop (a reused answer was served) | the stored result, authorized live by `StoredResultGate` as GET by id is |
+| `running` | admitted, the run is in progress | `409 submission_in_progress`, `Retry-After: 3` |
+| `done_unsaved` | the engine skipped the save; backstop | `409 submission_unsaved` |
+| `abandoned` | the run returned an error (abandoned at once) | `409 submission_abandoned` |
+| `abandoned` | running past `expires_at` (a pod that died mid-run), by reconcile or the sweeper | `409 submission_abandoned`, byte-identical to the row above |
+
+A client cannot tell the two `abandoned` causes apart, by design: the plan's
+recovery maps both to "Interrupted — ask again". Another principal's request
+on the same submission id is a new key of its own and never reaches the
+record.
+
+The record's states. A stored reserved result always wins over the clock: the
+reconcile rule (on read and in the 30 s sweeper of every replica) completes a
+running record whose reserved result exists bound to the record's owner, and
+abandons a running record past
+`expires_at` = run budget + 30 s. A save that lands after its record was
+abandoned is still bound to the owner and completes the record.
+
+```mermaid
+stateDiagram-v2
+  [*] --> running: admitted (insert won)
+  running --> done: Save of the reserved id (same statement)
+  running --> done: reconcile, reserved result stored
+  running --> done: backstop, a reused answer was served
+  running --> done_unsaved: engine skipped the save / backstop
+  running --> abandoned: run failed
+  running --> abandoned: reconcile, past expires_at
+  abandoned --> done: late Save of the reserved id
+  done --> [*]
+  done_unsaved --> [*]
+  abandoned --> [*]
+```
+
+INV-1: `StoredResultGate.Authorize` refuses a result whose
+`SubmissionOwner` is not the reader (`owner_mismatch`, decided before the
+grant check) on every surface that reads a stored row: `result_by_id` (and
+the submission replay), `prior_result` (parent chain, every
+`prior_*_receipts` namespace, window carry, structure claims, through
+`authorizedResultStore`), `answer_reuse` (and `FindReusable` offers a bound row
+to its owner only) and `evidence_expansion`. The refusal is the unknown-id
+answer. `fact_root_recheck` reads no stored row: it re-decides the turn's own
+committed roots, which a carried root reached only through `prior_result`.
+
+**Construction anchors:** `SubmissionStore`, `SubmissionRequestDigest`,
+`WithReservedResultID`, `mintResultID`, `markSubmissionUnsaved`
+(`internal/contextfabric/submission.go`); `storedResultOwnerRefusal`
+(`stored_result_authorization.go`); `admitInvestigationSubmission`,
+`finishInvestigationSubmission`, `abandonInvestigationSubmission`
+(`internal/api/context_fabric_submission.go`); `serveStoredInvestigationResult`
+(`context_fabric_result_routes.go`); the Postgres store
+(`internal/contextfabric/pginvestigation/submissions.go`, `Save`'s
+`insertResultSQL` in `store.go`); migration
+`0055_context_fabric_investigation_submissions.sql`; the sweeper
+(`internal/runtime/hosted/submission_sweeper.go`). Goldens
+`contracts/examples/v1/error_context_fabric_submission_*.v1.json` are the
+route's own bodies, regenerated with `ACR_WRITE_SUBMISSION_GOLDENS=1`.
+
 ## Sources
 
 - Live code via `codegraph_explore` / `rg` on `dev-health-acr`: `engine.go`

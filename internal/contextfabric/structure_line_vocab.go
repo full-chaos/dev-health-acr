@@ -77,7 +77,7 @@ const storedResultDeniedDetailPrefix = "stored_result_denied_"
 func storedResultDeniedReasons() []StoredResultAuthorizationReason {
 	return []StoredResultAuthorizationReason{
 		StoredResultReasonOrganizationMismatch, StoredResultReasonSubjectDenied, StoredResultReasonSubjectAbsent, StoredResultReasonGroupUnproven,
-		StoredResultReasonGraphNotProjected, StoredResultReasonGrantMismatch, StoredResultReasonGrantUnrecorded,
+		StoredResultReasonGraphNotProjected, StoredResultReasonGrantMismatch, StoredResultReasonGrantUnrecorded, StoredResultReasonOwnerMismatch,
 	}
 }
 

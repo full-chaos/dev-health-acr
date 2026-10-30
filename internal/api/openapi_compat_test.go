@@ -5,6 +5,7 @@ import (
 	"os"
 	"testing"
 
+	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 	"github.com/full-chaos/dev-health-acr/internal/testsupport/repopath"
 )
 
@@ -43,7 +44,7 @@ func TestHostedReadRoutesMatchOpenAPI(t *testing.T) {
 		{path: "/api/v1/agent-context/context-packets", method: "post", operation: "createContextPacket", statuses: []string{"200", "400", "401", "403", "413", "426", "429", "500", "503", "504"}},
 		{path: "/api/v1/agent-context/evidence/{evidence_ref_id}", method: "get", operation: "getEvidence", statuses: []string{"200", "401", "403", "404", "413", "426", "429", "500", "503", "504"}},
 		{path: "/api/v1/agent-context/episodes", method: "post", operation: "createEpisode", statuses: []string{"200", "201", "204", "400", "401", "403", "404", "409", "413", "426", "429", "500", "503", "504"}},
-		{path: "/api/v1/context-fabric/investigations", method: "post", operation: "createContextFabricInvestigation", statuses: []string{"200", "400", "401", "403", "406", "413", "426", "429", "500", "502", "503", "504"}},
+		{path: "/api/v1/context-fabric/investigations", method: "post", operation: "createContextFabricInvestigation", statuses: []string{"200", "400", "401", "403", "404", "406", "409", "413", "426", "429", "500", "502", "503", "504"}},
 		{path: "/api/v1/context-fabric/investigations/{result_id}", method: "get", operation: "getContextFabricInvestigation", statuses: []string{"200", "400", "401", "403", "404", "413", "426", "429", "500", "503", "504"}},
 		{path: "/api/v1/context-fabric/data/catalog", method: "get", operation: "readContextFabricDataCatalog", statuses: []string{"200", "400", "401", "403", "426", "429", "500", "501", "503"}},
 		{path: "/api/v1/context-fabric/data/subjects", method: "post", operation: "findContextFabricDataSubjects", statuses: []string{"200", "400", "401", "403", "413", "426", "429", "500", "501", "503"}},
@@ -67,6 +68,10 @@ func TestHostedReadRoutesMatchOpenAPI(t *testing.T) {
 		}
 	}
 	assertOpenAPIParameter(t, document.Components.Parameters["RequestID"], "X-Request-ID", false, "Optional correlation ID for request tracing and audit. The service generates and returns a request ID when absent or invalid. It does not authenticate or authorize the caller.")
+	// CHAOS-11912: the submission header is optional and published.
+	if parameter := document.Components.Parameters["SubmissionID"]; parameter.Name != contractsv1.ContextFabricSubmissionIDHeader || parameter.Required || parameter.Description == "" {
+		t.Fatalf("OpenAPI SubmissionID parameter = %#v", parameter)
+	}
 	assertOpenAPIParameter(t, document.Components.Parameters["ClientVersion"], "X-ACR-Client-Version", true, "Required SemVer compatibility signal for protected routes. It is advisory only and does not authenticate or authorize the caller; unsupported versions return 426 version_mismatch.")
 	for _, route := range []struct{ path, method string }{
 		{path: "/api/v1/agent-context/capabilities", method: "get"},

@@ -453,10 +453,10 @@ func (e *Engine) terminalResult(
 	recordCohortStructureGate(ctx, e.telemetry, principal, cohortGateOutcome, interpretation.Shape)
 	// Hoisted so composeStructureNeeds below can mint deterministic offer
 	// ids from the SAME ResultID this result is actually saved under
-	// (CHAOS-3900 P1.C) -- calling e.newResultID() a second time inside
+	// (CHAOS-3900 P1.C) -- calling e.mintResultID(ctx) a second time inside
 	// the literal would mint a result identity StructureNeeds' own
 	// receipts were never keyed against.
-	resultID := e.newResultID()
+	resultID := e.mintResultID(ctx)
 	// CHAOS-3900 W1: a subjectless terminal still discloses the window it
 	// would have read evidence against, exactly like any other result --
 	// composeEffectiveWindow's own precedence rules apply identically

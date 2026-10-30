@@ -314,5 +314,10 @@ func (e *Engine) saveTerminalResult(
 	if err := remeasure(); err != nil {
 		return &terminalRemeasureError{Err: err}
 	}
+	// CHAOS-11912: the answer is served and not stored, so the submission it
+	// answers is done_unsaved -- written here, where the save was skipped, so
+	// a client that loses the response and retries the key learns it
+	// without a second execution.
+	e.markSubmissionUnsaved(ctx, principal, result.ResultID)
 	return nil
 }

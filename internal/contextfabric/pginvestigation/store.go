@@ -287,11 +287,56 @@ func (s *Store) Save(ctx context.Context, principal storage.Principal, result co
 		windowInferenceVersion, commitGateVersion, rankingFormulaVersion, questionFamilyVersion, ownershipRoutingVersion,
 		parentResultIDColumn, semanticStateColumn, contextfabric.StoredResultGrantDigest(principal), graphWalkVersion,
 	}
+	// CHAOS-11912: the saving principal's owner identity. A principal with
+	// no subject has none, so it completes no submission ('' matches no
+	// record: the columns are NOT NULL and never empty).
+	ownerMethod, ownerSubject := "", ""
+	if owner, ownerErr := contextfabric.SubmissionOwnerOf(principal); ownerErr == nil {
+		ownerMethod, ownerSubject = owner.AuthenticationMethod, owner.Subject
+	}
+	insertArgs = append(insertArgs, ownerMethod, ownerSubject)
+	// CHAOS-11912 (plan §2.7.5, atomic completion): ONE statement saves the
+	// result and completes the submission that reserved its id -- the
+	// running record whose reserved_result_id is this result's id and whose
+	// owner is the saving principal -- and records that owner on the row.
+	// Data-modifying CTEs commit with their statement (and, on the claim
+	// path, with the transaction), so there is no instant at which the
+	// result is stored and its record still running. The completion is
+	// conditional on THIS insert having written the row (EXISTS inserted):
+	// when the id already exists, nothing is completed here, and the
+	// replay path completes the record only after verifyIdempotentReplay
+	// proved the existing row is this result, in this organization
+	// (completeReplayedSubmission). The statement returns how many rows the
+	// insert wrote (0 or 1).
+	//
+	// The OWNER is bound whatever the record's state: a run that saves after
+	// its record was abandoned (it ran past budget + grace) still saves a
+	// result that belongs to that submission, never an unbound one any
+	// organization bearer could read. Such a late save also completes the
+	// abandoned record: nothing executes again, and the record now names
+	// the result that exists.
 	const insertResultSQL = `
+WITH reservation AS (
+    SELECT owner_auth_method, owner_subject FROM acr.context_fabric_investigation_submissions
+     WHERE org_id = $2 AND reserved_result_id = $1
+       AND owner_auth_method = $30 AND owner_subject = $31
+), inserted AS (
 INSERT INTO acr.context_fabric_investigation_results
-    (result_id, org_id, payload, generated_at, question_hash, contract_version, projection_version, model_identity, source_watermarks, invalidation_epoch, time_axis_key, embed_retrieval_identity, retrieval_policy_version, interpretation_prompt_version, synthesis_prompt_version, query_version, canonical_service_version, model_output_schema_version, identity_normalization_version, graph_epoch, window_inference_version, commit_gate_version, ranking_formula_version, question_family_version, ownership_routing_version, parent_result_id, semantic_state, grant_digest, graph_walk_version)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29)
-ON CONFLICT (result_id) DO NOTHING`
+    (result_id, org_id, payload, generated_at, question_hash, contract_version, projection_version, model_identity, source_watermarks, invalidation_epoch, time_axis_key, embed_retrieval_identity, retrieval_policy_version, interpretation_prompt_version, synthesis_prompt_version, query_version, canonical_service_version, model_output_schema_version, identity_normalization_version, graph_epoch, window_inference_version, commit_gate_version, ranking_formula_version, question_family_version, ownership_routing_version, parent_result_id, semantic_state, grant_digest, graph_walk_version, submission_owner_auth_method, submission_owner_subject)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29,
+        (SELECT owner_auth_method FROM reservation), (SELECT owner_subject FROM reservation))
+ON CONFLICT (result_id) DO NOTHING
+RETURNING 1
+), completed AS (
+    UPDATE acr.context_fabric_investigation_submissions
+       SET state = 'done', result_id = $1, updated_at = clock_timestamp()
+     WHERE org_id = $2 AND reserved_result_id = $1
+       AND owner_auth_method = $30 AND owner_subject = $31
+       AND state IN ('running', 'abandoned')
+       AND EXISTS (SELECT 1 FROM inserted)
+    RETURNING 1
+)
+SELECT count(*) FROM inserted`
 
 	// CHAOS-3927 P4 (design brief §2.1): claims is empty for the
 	// overwhelming majority of Saves (no ConfirmedStructure entry redeemed
@@ -303,18 +348,17 @@ ON CONFLICT (result_id) DO NOTHING`
 	// result and every claim persist, or neither does.
 	claims := structureSupersessionClaims(result)
 	if len(claims) == 0 {
-		insertResult, err := s.db.ExecContext(ctx, insertResultSQL, insertArgs...)
-		if err != nil {
+		var rows int64
+		if err := s.db.QueryRowContext(ctx, insertResultSQL, insertArgs...).Scan(&rows); err != nil {
 			return fmt.Errorf("save investigation result: %w", sanitizeError(err))
-		}
-		rows, err := insertResult.RowsAffected()
-		if err != nil {
-			return fmt.Errorf("save investigation result rows affected: %w", sanitizeError(err))
 		}
 		if rows == 1 {
 			return nil
 		}
-		return s.verifyIdempotentReplay(ctx, orgID, resultID, payload, semantic.State)
+		if err := s.verifyIdempotentReplay(ctx, orgID, resultID, payload, semantic.State); err != nil {
+			return err
+		}
+		return s.completeReplayedSubmission(ctx, orgID, resultID, ownerMethod, ownerSubject)
 	}
 
 	tx, err := s.db.BeginTx(ctx, nil)
@@ -323,13 +367,9 @@ ON CONFLICT (result_id) DO NOTHING`
 	}
 	defer func() { _ = tx.Rollback() }() // no-op once Commit succeeds below
 
-	insertResult, err := tx.ExecContext(ctx, insertResultSQL, insertArgs...)
-	if err != nil {
+	var rows int64
+	if err := tx.QueryRowContext(ctx, insertResultSQL, insertArgs...).Scan(&rows); err != nil {
 		return fmt.Errorf("save investigation result: %w", sanitizeError(err))
-	}
-	rows, err := insertResult.RowsAffected()
-	if err != nil {
-		return fmt.Errorf("save investigation result rows affected: %w", sanitizeError(err))
 	}
 	if rows != 1 {
 		// A row already existed for this result_id -- an idempotent
@@ -343,7 +383,10 @@ ON CONFLICT (result_id) DO NOTHING`
 		if rollbackErr := tx.Rollback(); rollbackErr != nil {
 			return fmt.Errorf("pginvestigation: rollback idempotent-replay transaction: %w", sanitizeError(rollbackErr))
 		}
-		return s.verifyIdempotentReplay(ctx, orgID, resultID, payload, semantic.State)
+		if err := s.verifyIdempotentReplay(ctx, orgID, resultID, payload, semantic.State); err != nil {
+			return err
+		}
+		return s.completeReplayedSubmission(ctx, orgID, resultID, ownerMethod, ownerSubject)
 	}
 
 	var conflicted []contractsv1.ContextFabricStructureNeedKind
@@ -379,6 +422,25 @@ ON CONFLICT (org_id, prior_result_id, member) DO NOTHING`,
 	}
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("pginvestigation: commit investigation result with structure claims: %w", sanitizeError(err))
+	}
+	return nil
+}
+
+// completeReplayedSubmission completes the submission a VERIFIED idempotent
+// replay saved for (CHAOS-11912): the existing row is this result, in this
+// organization, so the record whose reserved id it is can name it. Called
+// only after verifyIdempotentReplay succeeded.
+func (s *Store) completeReplayedSubmission(ctx context.Context, orgID, resultID, ownerMethod, ownerSubject string) error {
+	if _, err := s.db.ExecContext(ctx, `
+UPDATE acr.context_fabric_investigation_submissions s
+   SET state = 'done', result_id = $1, updated_at = clock_timestamp()
+ WHERE s.org_id = $2 AND s.reserved_result_id = $1
+   AND s.owner_auth_method = $3 AND s.owner_subject = $4
+   AND s.state IN ('running', 'abandoned')
+   AND EXISTS (SELECT 1 FROM acr.context_fabric_investigation_results r
+                WHERE r.result_id = $1 AND r.org_id = $2
+                  AND r.submission_owner_auth_method = $3 AND r.submission_owner_subject = $4)`, resultID, orgID, ownerMethod, ownerSubject); err != nil {
+		return fmt.Errorf("pginvestigation: complete the replayed result's submission: %w", sanitizeError(err))
 	}
 	return nil
 }
@@ -550,14 +612,15 @@ func (s *Store) Get(ctx context.Context, principal storage.Principal, resultID s
 	}
 
 	row := s.db.QueryRowContext(ctx, `
-SELECT payload, graph_epoch, created_at, parent_result_id, semantic_state, grant_digest FROM acr.context_fabric_investigation_results WHERE result_id = $1 AND org_id = $2`, resultID, orgID)
+SELECT payload, graph_epoch, created_at, parent_result_id, semantic_state, grant_digest, submission_owner_auth_method, submission_owner_subject FROM acr.context_fabric_investigation_results WHERE result_id = $1 AND org_id = $2`, resultID, orgID)
 	var payload []byte
 	var graphEpoch sql.NullInt64
 	var createdAt time.Time
 	var parentResultID sql.NullString
 	var semanticStateColumn []byte
 	var grantDigest sql.NullString
-	switch err := row.Scan(&payload, &graphEpoch, &createdAt, &parentResultID, &semanticStateColumn, &grantDigest); {
+	var ownerMethod, ownerSubject sql.NullString
+	switch err := row.Scan(&payload, &graphEpoch, &createdAt, &parentResultID, &semanticStateColumn, &grantDigest, &ownerMethod, &ownerSubject); {
 	case errors.Is(err, sql.ErrNoRows):
 		return contextfabric.StoredInvestigationResult{}, ErrNotFound
 	case err != nil:
@@ -603,7 +666,17 @@ SELECT payload, graph_epoch, created_at, parent_result_id, semantic_state, grant
 	// why. It never fails the read: the public result is still valid, and it
 	// is the continuation's decision what an unavailable reading means.
 	semanticState, semanticStatus := contextfabric.DecodeSemanticState(semanticStateColumn)
-	return contextfabric.StoredInvestigationResult{Result: result, GraphEpoch: graphEpochPtr, SavedAt: createdAt, ParentResultID: parentResultID.String, GrantDigest: grantDigest.String, SemanticState: semanticState, SemanticStateRead: semanticStatus}, nil
+	return contextfabric.StoredInvestigationResult{Result: result, GraphEpoch: graphEpochPtr, SavedAt: createdAt, ParentResultID: parentResultID.String, GrantDigest: grantDigest.String, SubmissionOwner: storedSubmissionOwner(ownerMethod, ownerSubject), SemanticState: semanticState, SemanticStateRead: semanticStatus}, nil
+}
+
+// storedSubmissionOwner decodes the submission_owner_* pair of a result row
+// (CHAOS-11912). The CHECK constraint holds the two together; a half pair
+// cannot be read, so it is treated as owned by nobody who can match it.
+func storedSubmissionOwner(method, subject sql.NullString) *contextfabric.SubmissionOwner {
+	if !method.Valid && !subject.Valid {
+		return nil
+	}
+	return &contextfabric.SubmissionOwner{AuthenticationMethod: method.String, Subject: subject.String}
 }
 
 // reuseColumnsFor computes the CHAOS-3782 reuse-key column values Save
@@ -851,6 +924,12 @@ func (s *Store) FindReusable(ctx context.Context, principal storage.Principal, k
 	}
 	orgID := strings.TrimSpace(principal.OrgID)
 	questionHash := strings.TrimSpace(key.QuestionHash)
+	// CHAOS-11912: the reader's owner identity; '' (no subject) matches only
+	// rows that completed no submission.
+	readerOwnerMethod, readerOwnerSubject := "", ""
+	if owner, ownerErr := contextfabric.SubmissionOwnerOf(principal); ownerErr == nil {
+		readerOwnerMethod, readerOwnerSubject = owner.AuthenticationMethod, owner.Subject
+	}
 	// CHAOS-3781: an empty TimeAxisKey means the caller could not
 	// canonicalize the requested time (a malformed historical context).
 	// Treat it exactly like an empty question hash or an empty identity
@@ -1039,10 +1118,17 @@ func (s *Store) FindReusable(ctx context.Context, principal storage.Principal, k
 	// pre-migration row holds NULL here and is permanently excluded. See
 	// ReuseKey.OwnershipRoutingVersion's own field doc comment.
 	row := s.db.QueryRowContext(ctx, `
-SELECT payload, source_watermarks, graph_epoch, created_at, parent_result_id, semantic_state, grant_digest
+SELECT payload, source_watermarks, graph_epoch, created_at, parent_result_id, semantic_state, grant_digest, submission_owner_auth_method, submission_owner_subject
 FROM acr.context_fabric_investigation_results
 WHERE org_id = $1
   AND question_hash = $2
+  -- CHAOS-11912: reuse never crosses principals. A row that completed a
+  -- submission is a candidate for its owner only; the stored-result gate
+  -- re-decides the same rule on the candidate this returns. A submission's
+  -- own turn ($25, ReuseKey.OwnedOnly) is offered its principal's bound
+  -- rows only, never an unbound one, so its record cannot name a result it
+  -- does not own (round-2 F1).
+  AND (((NOT $25) AND submission_owner_subject IS NULL) OR (submission_owner_auth_method = $23 AND submission_owner_subject = $24))
   AND contract_version = $3
   AND projection_version = $4
   AND model_identity = ANY($5)
@@ -1080,13 +1166,14 @@ LIMIT 1`,
 		key.EmbedRetrievalIdentity, key.RetrievalPolicyVersion, key.InterpretationPromptVersion, key.SynthesisPromptVersion,
 		key.QueryVersion, key.CanonicalServiceVersion, key.ModelOutputSchemaVersion, key.IdentityNormalizationVersion, key.GraphEpoch,
 		key.WindowInferenceVersion, key.CommitGateVersion, key.RankingFormulaVersion, key.QuestionFamilyVersion, key.OwnershipRoutingVersion,
-		key.GraphWalkVersion)
+		key.GraphWalkVersion, readerOwnerMethod, readerOwnerSubject, key.OwnedOnly)
 	var payload, sourceWatermarks, semanticStateColumn []byte
 	var graphEpoch sql.NullInt64
 	var createdAt time.Time
 	var parentResultID sql.NullString
 	var grantDigest sql.NullString
-	switch err := row.Scan(&payload, &sourceWatermarks, &graphEpoch, &createdAt, &parentResultID, &semanticStateColumn, &grantDigest); {
+	var ownerMethod, ownerSubject sql.NullString
+	switch err := row.Scan(&payload, &sourceWatermarks, &graphEpoch, &createdAt, &parentResultID, &semanticStateColumn, &grantDigest, &ownerMethod, &ownerSubject); {
 	case errors.Is(err, sql.ErrNoRows):
 		// CHAOS-3898 v4.1 F5: this ONE payload-bearing SELECT cannot by
 		// itself distinguish "no row matches at all" from "a row matches
@@ -1094,7 +1181,7 @@ LIMIT 1`,
 		// graph_epoch" -- classify with a SEPARATE, metadata-only query
 		// (no payload column in its select list, per design brief §5's
 		// SQL-predicate pin) before reporting the miss.
-		staleEpoch, classifyErr := s.matchesExceptGraphEpoch(ctx, orgID, questionHash, key)
+		staleEpoch, classifyErr := s.matchesExceptGraphEpoch(ctx, orgID, questionHash, key, readerOwnerMethod, readerOwnerSubject)
 		if classifyErr != nil {
 			return contextfabric.StoredInvestigationResult{}, false, contextfabric.ReuseMissNoCandidate, fmt.Errorf("classify reuse miss: %w", classifyErr)
 		}
@@ -1153,6 +1240,7 @@ LIMIT 1`,
 		SavedAt:           createdAt,
 		ParentResultID:    parentResultID.String,
 		GrantDigest:       grantDigest.String,
+		SubmissionOwner:   storedSubmissionOwner(ownerMethod, ownerSubject),
 		SemanticState:     semanticState,
 		SemanticStateRead: semanticStatus,
 	}, true, "", nil
@@ -1168,7 +1256,7 @@ LIMIT 1`,
 // this lookup's" -- proof the miss is ReuseMissStaleGraphEpoch, not
 // ReuseMissNoCandidate. Mirrors watermarksStillMatch's own no-payload
 // pattern.
-func (s *Store) matchesExceptGraphEpoch(ctx context.Context, orgID, questionHash string, key contextfabric.ReuseKey) (bool, error) {
+func (s *Store) matchesExceptGraphEpoch(ctx context.Context, orgID, questionHash string, key contextfabric.ReuseKey, ownerMethod, ownerSubject string) (bool, error) {
 	var exists bool
 	err := s.db.QueryRowContext(ctx, `
 SELECT EXISTS (
@@ -1194,6 +1282,7 @@ SELECT EXISTS (
       AND question_family_version = $19
       AND ownership_routing_version = $20
       AND graph_walk_version = $21
+      AND (((NOT $24) AND submission_owner_subject IS NULL) OR (submission_owner_auth_method = $22 AND submission_owner_subject = $23))
       AND source_watermarks IS NOT NULL
       AND invalidation_epoch IS NOT NULL
       AND created_at > now() - ($6 * INTERVAL '1 second')
@@ -1205,7 +1294,7 @@ SELECT EXISTS (
 		key.EmbedRetrievalIdentity, key.RetrievalPolicyVersion, key.InterpretationPromptVersion, key.SynthesisPromptVersion,
 		key.QueryVersion, key.CanonicalServiceVersion, key.ModelOutputSchemaVersion, key.IdentityNormalizationVersion,
 		key.WindowInferenceVersion, key.CommitGateVersion, key.RankingFormulaVersion, key.QuestionFamilyVersion, key.OwnershipRoutingVersion,
-		key.GraphWalkVersion,
+		key.GraphWalkVersion, ownerMethod, ownerSubject, key.OwnedOnly,
 	).Scan(&exists)
 	if err != nil {
 		return false, fmt.Errorf("classify reuse miss: %w", sanitizeError(err))
