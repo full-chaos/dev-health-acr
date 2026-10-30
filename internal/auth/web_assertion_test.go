@@ -355,7 +355,9 @@ func TestWebAssertionVerifier_acceptsADotLeadingRepositoryScope(t *testing.T) {
 
 type recordingHandler struct{ records []slog.Record }
 
-func (h *recordingHandler) Enabled(context.Context, slog.Level) bool { return true }
+func (h *recordingHandler) Enabled(_ context.Context, level slog.Level) bool {
+	return level >= slog.LevelInfo
+}
 func (h *recordingHandler) Handle(_ context.Context, r slog.Record) error {
 	h.records = append(h.records, r)
 	return nil
@@ -383,6 +385,8 @@ func TestWebAssertionVerifier_logsTheRepositoryScopeThatRefusedTheAssertion(t *t
 		{"nonsense", []string{"nonsense"}, "owner/repo"},
 		{"full-chaos/dup", []string{"full-chaos/dup", "full-chaos/dup"}, "duplicate"},
 		{"Full-Chaos/X", []string{"Full-Chaos/X"}, "normalized"},
+		{"*", []string{"*"}, "organization-wide"},
+		{"", []string{}, "no repository scope"},
 	} {
 		t.Run(test.scope, func(t *testing.T) {
 			handler := &recordingHandler{}
@@ -408,6 +412,9 @@ func TestWebAssertionVerifier_logsTheRepositoryScopeThatRefusedTheAssertion(t *t
 			}
 			attrs := map[string]string{}
 			handler.records[0].Attrs(func(a slog.Attr) bool { attrs[a.Key] = a.Value.String(); return true })
+			if handler.records[0].Level != slog.LevelWarn {
+				t.Fatalf("log level = %v, want WARN (visible at Info)", handler.records[0].Level)
+			}
 			if attrs["class"] != "web_assertion_repository_scope_invalid" || attrs["scope"] != test.scope || !strings.Contains(attrs["reason"], test.reason) {
 				t.Fatalf("log attrs = %#v, want scope %q and a reason containing %q", attrs, test.scope, test.reason)
 			}
