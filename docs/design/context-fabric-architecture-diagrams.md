@@ -603,7 +603,17 @@ members the caller's authorization removed carries the degrading
 `graph_cohort_denied_by_authorization` coverage row (its label counts the
 members excluded by authorization). The served status is floored from
 `complete` to `partial` whatever shape the plan had, so a cut member set is
-never read as the whole one.
+never read as the whole one. The completeness state says the same
+(CHAOS-12147): a count over the cut set is a `narrowed` outcome row with impact
+`scope` and cause `graph_cohort_denied_by_authorization`, served the members
+the answer carries over declared those members plus the members the row's count
+names, so `completeness.state` is never `complete` for it. Before this, the
+cohort could still say complete (its census was complete; the cut came after),
+the count row read `satisfied`, and the state read `complete` beside a partial
+coverage. A result stored before this keeps its stored row: every serving
+surface (fresh, reused, read by id) runs `ApplyServedStatusFloors`, which
+appends the narrowed row to the served copy when the last count row is still
+`satisfied`, and never rewrites the stored one.
 
 **A count of a repository's owning teams.** For a question about now, a read
 that found no owner, was not cut, and found ownership projected for the org
