@@ -321,10 +321,15 @@ func TestTheInvestigationStreamOnTheLiveStack(t *testing.T) {
 // TestJSONAndTheStreamServeTheSameLiveAnswer: the same request sent once as JSON and once as
 // the stream is answered the same: the stream's result is the JSON body once each run's own
 // identity (result_id, request_id, generated_at) is set aside.
+//
+// The turn asks for no clarification, so it names no receipt: a follow-up turn is not
+// repeatable (its receipt is superseded by the first answer, and the second run vetoes it as
+// stale), but this first turn is, and both paths run it.
 func TestJSONAndTheStreamServeTheSameLiveAnswer(t *testing.T) {
 	c := connect(t, "FG_ORG_TOKEN_FILE")
 	token := readTokenFile(t, "FG_ORG_TOKEN_FILE")
-	body := answeredTurn(t, c, token, ownerProject(t))
+	body := ownerTurnRequest(t, c, ownerProject(t))
+	body.Options.AllowClarification = false
 	jsonAnswer := postInvestigation(t, token, body, false, "")
 	if jsonAnswer.status != http.StatusOK || !strings.HasPrefix(jsonAnswer.contentType, "application/json") {
 		t.Fatalf("the JSON answer: %d %q %.1500s", jsonAnswer.status, jsonAnswer.contentType, jsonAnswer.raw)
