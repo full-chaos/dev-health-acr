@@ -264,6 +264,7 @@ type Config struct {
 	RequestsPerMinute                    int
 	RequestControls                      RequestControlsConfig
 	TrustedProxyCIDRs                    []string
+	CORSAllowedOrigins                   []string // CHAOS-12086: exact browser origins for CORS; empty answers none (cors.go)
 	DevHealthEntitlementURL              string
 	DevHealthEntitlementTokenFile        string
 	DevHealthEntitlementTimeout          time.Duration
@@ -368,6 +369,7 @@ func load(lookup lookupEnv) (Config, error) {
 		EntitlementKey:                 stringValue(lookup, "ACR_ENTITLEMENT_KEY", defaultEntitlementKey),
 		EvidenceIDActiveKID:            evidenceIDActiveKID,
 		TrustedProxyCIDRs:              stringListValue(lookup, "ACR_TRUSTED_PROXY_CIDRS"),
+		CORSAllowedOrigins:             stringListValue(lookup, CORSAllowedOriginsEnv),
 		DevHealthEntitlementURL:        stringValue(lookup, "ACR_DEV_HEALTH_ENTITLEMENT_URL", ""),
 		DevHealthEntitlementTokenFile:  stringValue(lookup, "ACR_DEV_HEALTH_ENTITLEMENT_TOKEN_FILE", ""),
 		DevHealthEntitlementProxyURL:   stringValue(lookup, "ACR_DEV_HEALTH_ENTITLEMENT_PROXY_URL", ""),
@@ -585,6 +587,9 @@ func (c Config) Validate() error {
 		return err
 	}
 	if err := validateTrustedProxyCIDRs(c.TrustedProxyCIDRs); err != nil {
+		return err
+	}
+	if err := validateCORSAllowedOrigins(c.Environment, c.CORSAllowedOrigins); err != nil {
 		return err
 	}
 	if err := validateEntitlementConfiguration(c); err != nil {

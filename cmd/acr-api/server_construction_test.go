@@ -6,6 +6,7 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
+	"net/http/httptest"
 	"testing"
 
 	"github.com/full-chaos/dev-health-acr/internal/api"
@@ -37,6 +38,33 @@ func TestAppConfig_PassesThroughContextFabricEventStreamEnabled(t *testing.T) {
 		got := appConfig(config.Config{ContextFabricEventStreamEnabled: enabled}, "test-version")
 		if got.ContextFabricEventStreamEnabled != enabled {
 			t.Fatalf("appConfig(...).ContextFabricEventStreamEnabled = %v, want %v", got.ContextFabricEventStreamEnabled, enabled)
+		}
+	}
+}
+
+// TestAppConfig_HandsTheLoadedCORSOriginsToTheApp (codex #1770 r1 P3): the
+// origins ACR_CORS_ALLOWED_ORIGINS loads must reach the constructed app, or
+// the deployment answers CORS for nobody whatever it sets. This loads the
+// variable, builds the app through appConfig, and sends a browser preflight.
+func TestAppConfig_HandsTheLoadedCORSOriginsToTheApp(t *testing.T) {
+	const origin = "https://www.fullchaos.dev"
+	t.Setenv(config.CORSAllowedOriginsEnv, origin)
+	cfg := validServeConfig(t)
+	app, err := api.NewApp(appConfig(cfg, "test-version"), api.Dependencies{Capabilities: api.StaticCapabilitiesProvider{}}, slog.New(slog.NewJSONHandler(&bytes.Buffer{}, nil)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	handler := app.InstrumentedHandler(http.NotFoundHandler())
+	for _, tc := range []struct {
+		origin, want string
+	}{{origin, origin}, {"https://evil.example", ""}} {
+		request := httptest.NewRequest(http.MethodOptions, api.ContextFabricInvestigationsPath, nil)
+		request.Header.Set("Origin", tc.origin)
+		request.Header.Set("Access-Control-Request-Method", http.MethodPost)
+		recorder := httptest.NewRecorder()
+		handler.ServeHTTP(recorder, request)
+		if got := recorder.Header().Get("Access-Control-Allow-Origin"); got != tc.want {
+			t.Fatalf("%s: Access-Control-Allow-Origin = %q, want %q (loaded origins %v)", tc.origin, got, tc.want, cfg.CORSAllowedOrigins)
 		}
 	}
 }

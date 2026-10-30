@@ -163,6 +163,7 @@ func appConfig(cfg config.Config, serviceVersion string) api.AppConfig {
 		MaxRequestBodyBytes: int64(cfg.MaxSerializedBytes), MaxEvidenceResponseBytes: int64(cfg.MaxSerializedBytes),
 		MaxItems: cfg.MaxItems, MaxOutputTokens: cfg.MaxOutputTokens, MaxSerializedBytes: cfg.MaxSerializedBytes,
 		RevokedClientVersions:                       cfg.RevokedClientVersions,
+		CORSAllowedOrigins:                          cfg.CORSAllowedOrigins,
 		ServerCompletenessAuthorityEnabled:          cfg.ServerCompletenessAuthorityEnabled,
 		ServerCompletenessAuthoritySymmetricEnabled: cfg.ServerCompletenessAuthoritySymmetricEnabled,
 		ContextFabricEventStreamEnabled:             cfg.ContextFabricEventStreamEnabled,
