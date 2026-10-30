@@ -121,7 +121,7 @@ func TestReadBudgetExceededOnRealClickHouseIsLoggedAtWarn(t *testing.T) {
 	provider := findProvider(t, providers, contextfabric.FactInvestment)
 
 	_, err := provider.ReadFacts(ctx, storage.Principal{OrgID: orgID}, contextfabric.FactQuery{
-		Time: contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent}, Kind: contextfabric.FactInvestment,
+		Time: investmentAllHistory(), Kind: contextfabric.FactInvestment,
 		Subjects: []contextfabric.SubjectRef{projectSubject("linear", "proj-1")},
 	})
 	if err == nil {

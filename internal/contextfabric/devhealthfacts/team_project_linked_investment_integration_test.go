@@ -99,7 +99,7 @@ func TestTeamInvestmentMixCountsProjectLinkedPullRequestsOfUnownedRepositories(t
 	read := func(team string) contextfabric.FactProviderResult {
 		t.Helper()
 		result, err := provider.ReadFacts(ctx, storage.Principal{OrgID: orgID, RepositoryScopes: []string{"*"}}, contextfabric.FactQuery{
-			Time: contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent}, Kind: contextfabric.FactInvestment,
+			Time: investmentAllHistory(), Kind: contextfabric.FactInvestment,
 			Subjects: []contextfabric.SubjectRef{teamSubject(team)},
 		})
 		if err != nil {

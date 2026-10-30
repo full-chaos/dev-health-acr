@@ -439,11 +439,6 @@ type CanonicalFactRequest struct {
 	// TimeEndExclusive says the range window in Question.TimeContext is [Start, End): its End is a UTC midnight that
 	// is not part of the window. Internal; set only by a trailing read_facts window.
 	TimeEndExclusive bool `json:"-"`
-	// EvidenceWindowStated says the caller supplied the evidence window in Question.TimeContext: stated in the question
-	// or the request (question_stated), or confirmed from an offered option (clarification_confirmed). An inferred
-	// default window leaves it false. Internal; set by the engine's fact reads from the effective window's provenance
-	// (factReadWindowStated). A provider whose no-window read differs from its windowed read keys on it (CHAOS-12142).
-	EvidenceWindowStated bool `json:"-"`
 	// RequestedRepositoryScope is the caller-owned repository scope carried
 	// into fact providers. It is copied from InvestigationRequest's
 	// RequestedScope.RepositorySlugs at each production request-construction

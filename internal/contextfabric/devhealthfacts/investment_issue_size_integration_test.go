@@ -85,7 +85,7 @@ func TestInvestmentMixIsWeighedByIssueSizeAndNamesItsCoverageAgainstRealClickHou
 	read := func(subject contextfabric.SubjectRef) contextfabric.CanonicalFact {
 		t.Helper()
 		result, err := provider.ReadFacts(ctx, storage.Principal{OrgID: orgID}, contextfabric.FactQuery{
-			Time: contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent},
+			Time: investmentAllHistory(),
 			Kind: contextfabric.FactInvestment, Subjects: []contextfabric.SubjectRef{subject},
 		})
 		if err != nil || len(result.Facts) != 1 {
@@ -149,7 +149,7 @@ func TestInvestmentMixIsWeighedByIssueSizeAndNamesItsCoverageAgainstRealClickHou
 	// the unit's size, and the page names the coverage of its whole scope.
 	result, err := provider.ReadFacts(contextfabric.WithInvestmentUnits(ctx, contextfabric.InvestmentUnitsRequest{Max: 50}),
 		storage.Principal{OrgID: orgID}, contextfabric.FactQuery{
-			Time: contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent},
+			Time: investmentAllHistory(),
 			Kind: contextfabric.FactInvestment, Subjects: []contextfabric.SubjectRef{teamSubject("team-1")},
 		})
 	if err != nil {
@@ -214,7 +214,7 @@ func TestInvestmentMixSaysWhenItIsMostlyUnsizedAgainstRealClickHouse(t *testing.
 	read := func() contextfabric.CanonicalFact {
 		t.Helper()
 		result, err := provider.ReadFacts(ctx, storage.Principal{OrgID: orgID}, contextfabric.FactQuery{
-			Time: contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent},
+			Time: investmentAllHistory(),
 			Kind: contextfabric.FactInvestment, Subjects: []contextfabric.SubjectRef{repositorySubject("repo-a")},
 		})
 		if err != nil || len(result.Facts) != 1 {

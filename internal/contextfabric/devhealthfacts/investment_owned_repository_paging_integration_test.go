@@ -68,7 +68,7 @@ func TestInvestmentMixOwnedRepositoriesAreServedInFullOnRealClickHouse(t *testin
 			subjects = append(subjects, teamSubject(team))
 		}
 		return provider.ReadFacts(ctx, storage.Principal{OrgID: investmentPagingOrg}, contextfabric.FactQuery{
-			Time: contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent}, Kind: contextfabric.FactInvestment, Subjects: subjects,
+			Time: investmentAllHistory(), Kind: contextfabric.FactInvestment, Subjects: subjects,
 		})
 	}
 

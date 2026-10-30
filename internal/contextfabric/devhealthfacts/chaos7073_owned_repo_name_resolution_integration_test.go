@@ -148,8 +148,12 @@ func (f *chaos7073Fixture) readProjectFact(kind contextfabric.FactKind, projectI
 	if kind != contextfabric.FactInvestment {
 		provider = findProvider(f.t, f.providers, kind)
 	}
+	timeContext := contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent}
+	if kind == contextfabric.FactInvestment {
+		timeContext = investmentAllHistory()
+	}
 	result, err := provider.ReadFacts(f.ctx, storage.Principal{OrgID: f.orgID}, contextfabric.FactQuery{
-		Time: contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent},
+		Time: timeContext,
 		Kind: kind, Subjects: []contextfabric.SubjectRef{projectSubject("linear", projectID)},
 	})
 	if err != nil {

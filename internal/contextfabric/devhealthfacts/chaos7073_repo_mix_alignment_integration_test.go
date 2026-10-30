@@ -95,7 +95,7 @@ func (f *chaos7073Fixture) member(runID, nodeID, workUnitID string, computedAt t
 func (f *chaos7073Fixture) mix(subject contextfabric.SubjectRef) map[string]float64 {
 	f.t.Helper()
 	result, err := f.provider.ReadFacts(f.ctx, storage.Principal{OrgID: f.orgID}, contextfabric.FactQuery{
-		Time: contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent},
+		Time: investmentAllHistory(),
 		Kind: contextfabric.FactInvestment, Subjects: []contextfabric.SubjectRef{subject},
 	})
 	if err != nil {

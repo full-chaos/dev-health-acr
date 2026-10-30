@@ -408,7 +408,7 @@ func TestProjectNativePhasedReadFailsContendedWhenItsInputsMoveOnEveryAttemptAga
 	rec := &mixEventRecorder{}
 	provider := findProvider(t, devhealthfacts.NewInstrumentedProviders(query, rec), contextfabric.FactInvestment)
 	_, err = provider.ReadFacts(devhealthfacts.WithProjectMixBetweenPhases(ctx, hook), storage.Principal{OrgID: orgID}, contextfabric.FactQuery{
-		Time: contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent}, Kind: contextfabric.FactInvestment,
+		Time: investmentAllHistory(), Kind: contextfabric.FactInvestment,
 		Subjects: []contextfabric.SubjectRef{projectSubject("linear", "n-p1")},
 	})
 	var failure *contextfabric.FactReadFailure

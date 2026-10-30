@@ -141,7 +141,7 @@ const (
 // "has not ended before the window" rule the owned-repository reads use) for a
 // historical one. Identity-resolved by the library's two-armed project match.
 func teamOwnedProjectsAsOfSQL(bound factTimeBound) string {
-	return "(SELECT provider, id, team_id FROM " + readers.ProjectOwnershipCatalogJoinSQL(readers.OwnershipValidityPredicate(bound.neutral())) + ")"
+	return "(SELECT provider, id, team_id FROM " + readers.ProjectOwnershipCatalogJoinSQL(readers.OwnershipValidityPredicate(bound.ownership().neutral())) + ")"
 }
 
 // teamProjectLinkRowsSQL is the one team-to-linked-pull-request reach: a
@@ -177,7 +177,7 @@ func teamProjectLinkRowsSQL(teamParam string, bound factTimeBound) string {
 // The team restriction rides on the ownership rows themselves, so only the
 // named teams' rows reach the identity join.
 func teamOwnedResolvedProjectsSQL(teamParam string, bound factTimeBound) string {
-	ownedByTeams := "(SELECT provider, id, team_id FROM " + readers.ProjectOwnershipCatalogJoinSQL(readers.OwnershipValidityPredicate(bound.neutral())+" AND team_id IN {"+teamParam+":Array(String)}") + ")"
+	ownedByTeams := "(SELECT provider, id, team_id FROM " + readers.ProjectOwnershipCatalogJoinSQL(readers.OwnershipValidityPredicate(bound.ownership().neutral())+" AND team_id IN {"+teamParam+":Array(String)}") + ")"
 	return `(SELECT t.team_id AS team_id, p.provider AS provider, p.join_key AS join_key FROM ` + ownedByTeams + ` AS t
     INNER JOIN ` + resolvedProjectsSQL + ` AS p ON p.provider = t.provider AND p.id = t.id
     WHERE p.key_resolution_count = 1)`
@@ -191,7 +191,7 @@ func teamOwnedResolvedProjectsSQL(teamParam string, bound factTimeBound) string 
 // identity resolution a second time; the exact set is the join with
 // teamOwnedResolvedProjectsSQL.
 func teamOwnedProjectKeyCandidatesSQL(teamParam string, bound factTimeBound) string {
-	validity := readers.OwnershipValidityPredicate(bound.neutral()) + " AND team_id IN {" + teamParam + ":Array(String)}"
+	validity := readers.OwnershipValidityPredicate(bound.ownership().neutral()) + " AND team_id IN {" + teamParam + ":Array(String)}"
 	scopes := `(SELECT project_id AS v FROM team_project_ownership FINAL WHERE org_id = {org_id:String} AND project_id IS NOT NULL` + validity + `
     UNION ALL
     SELECT ifNull(project_key, '') AS v FROM team_project_ownership FINAL WHERE org_id = {org_id:String} AND ifNull(project_key, '') != ''` + validity + `)`
