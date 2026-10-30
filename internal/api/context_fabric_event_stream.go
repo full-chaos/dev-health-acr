@@ -667,7 +667,10 @@ func (a *App) serveInvestigationEventStream(w http.ResponseWriter, r *http.Reque
 		"request_id", contextfabric.SanitizeLogAttr(requestID), "frames", frames, "terminal", string(terminal),
 		"outcome_status", outcome.status, "events_dropped", sink.Dropped(), "write_failed", writeFailed,
 		"bytes_written", written, "budget_exhausted", budgetExhausted)
-	if terminal == "" {
+	// The latency status is the answer the stream delivered: a result
+	// terminal carries it; an error terminal (the outcome's own error, or a
+	// budget_refusal that replaced an answer) and no terminal deliver none.
+	if terminal != contractsv1.ContextFabricInvestigationEventResult {
 		return "error"
 	}
 	return delivered

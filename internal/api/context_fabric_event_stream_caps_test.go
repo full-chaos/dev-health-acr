@@ -13,6 +13,8 @@ import (
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
+	"github.com/full-chaos/dev-health-acr/internal/hostedmetrics"
+	"github.com/full-chaos/dev-health-acr/internal/hostedmetrics/hostedmetricstest"
 )
 
 // The stream's byte caps (design "Ask Dev: browser calls ACR directly", §6):
@@ -160,6 +162,59 @@ func TestAStreamThatReachesItsByteBudgetEndsWithAValidTerminalInsideTheReserve(t
 	}
 	if strings.Contains(logs.String(), "the stream already carries its terminal event") {
 		t.Fatalf("a frame offered after the budget terminal was logged as a second terminal:\n%s", logs.String())
+	}
+}
+
+// TestAStreamBudgetTerminalIsAnErrorLatency: a stream that ends with
+// error{budget_refusal} delivered no answer, so its latency is "error", as on
+// the JSON path's 413, even when the run produced an answer: a result over the
+// frame cap, and an answer the run returned after the byte budget cancelled it.
+func TestAStreamBudgetTerminalIsAnErrorLatency(t *testing.T) {
+	answer := answering(t, "context_fabric_investigation_result.v1.json", nil)
+	cells := []struct {
+		name      string
+		investig  func(context.Context, contextfabric.InvestigationRequest) (contextfabric.InvestigationResult, error)
+		configure func(*App)
+		reason    string
+	}{
+		{"frame cap", answer, func(app *App) { app.eventStream.frameMaxBytes = 2048 }, "stream_frame_cap"},
+		{"byte budget", func(ctx context.Context, request contextfabric.InvestigationRequest) (contextfabric.InvestigationResult, error) {
+			select {
+			case <-ctx.Done():
+			case <-time.After(10 * time.Second):
+				return contextfabric.InvestigationResult{}, errors.New("the run was never cancelled")
+			}
+			return answer(context.Background(), request)
+		}, func(app *App) {
+			app.config.RequestTimeout = 20 * time.Second
+			app.eventStream.heartbeat = 2 * time.Millisecond
+			app.eventStream.frameMaxBytes = 1 << 20
+			app.eventStream.terminalReserve = 1 << 20
+			app.eventStream.totalMaxBytes = 1<<20 + 2400
+		}, "stream_byte_budget"},
+	}
+	for _, cell := range cells {
+		t.Run(cell.name, func(t *testing.T) {
+			instruments, read := hostedmetricstest.New(t, hostedmetrics.Vocabularies{})
+			app, token, _ := newStreamTestApp(t, investigatorOf(cell.investig))
+			app.metrics = instruments
+			cell.configure(app)
+			response := serveStream(t, app, token, investigationRequestBody(), nil)
+			last := response.events[len(response.events)-1]
+			if last.Type != contractsv1.ContextFabricInvestigationEventError || last.Error.Error.Details["reason"] != cell.reason {
+				t.Fatalf("terminal %+v, want error budget_refusal reason %s", last, cell.reason)
+			}
+			got := read()
+			samples := int64(0)
+			for key, value := range got {
+				if strings.HasPrefix(key, hostedmetrics.InvestigationLatencyName+"{") {
+					samples += value
+				}
+			}
+			if got[hostedmetrics.InvestigationLatencyName+"{status=error}"] != 1 || samples != 1 {
+				t.Fatalf("latency cells %v, want one error sample and no other", got)
+			}
+		})
 	}
 }
 
