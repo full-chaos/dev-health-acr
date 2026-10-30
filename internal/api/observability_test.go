@@ -181,12 +181,19 @@ func TestInstrumentedHandlerClassifiesScopeRepositoryAndRateLimitDenials(t *test
 
 func issueScopedCredential(t *testing.T, credentials *storage.CredentialLifecycle, _ *memory.AuditStore, now time.Time, scopes, repositories []string) string {
 	t.Helper()
+	return issueOrgCredential(t, credentials, "org_1", now, scopes, repositories)
+}
+
+// issueOrgCredential issues an operator credential of orgID and returns its
+// token.
+func issueOrgCredential(t *testing.T, credentials *storage.CredentialLifecycle, orgID string, now time.Time, scopes, repositories []string) string {
+	t.Helper()
 	service, err := auth.NewService(credentials, auth.ServiceOptions{Now: func() time.Time { return now }})
 	if err != nil {
 		t.Fatal(err)
 	}
 	issued, err := service.Create(context.Background(), auth.CreateCredentialRequest{
-		OrgID: "org_1", Name: "scoped credential", RepositoryScopes: repositories, Scopes: scopes, CreatedBy: "test_actor",
+		OrgID: orgID, Name: "scoped credential", RepositoryScopes: repositories, Scopes: scopes, CreatedBy: "test_actor",
 	})
 	if err != nil {
 		t.Fatal(err)
