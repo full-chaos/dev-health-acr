@@ -41,7 +41,7 @@ func ParseContextFabricThreadList(data []byte) (ContextFabricThreadList, error) 
 func parseContextFabricThreadDocument[T interface{ Validate() error }](data []byte) (T, error) {
 	var zero, value T
 	if !utf8.Valid(data) {
-		return zero, errors.New("thread document is not valid UTF-8")
+		return zero, errors.New("document is not valid UTF-8")
 	}
 	if err := rejectDuplicateJSONKeys(data); err != nil {
 		return zero, err
@@ -52,14 +52,14 @@ func parseContextFabricThreadDocument[T interface{ Validate() error }](data []by
 	decoder := json.NewDecoder(bytes.NewReader(data))
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(&value); err != nil {
-		return zero, fmt.Errorf("decode thread document: %w", err)
+		return zero, fmt.Errorf("decode document: %w", err)
 	}
 	if _, err := decoder.Token(); !errors.Is(err, io.EOF) {
-		return zero, errors.New("thread document has trailing content")
+		return zero, errors.New("document has trailing content")
 	}
 	written, err := json.Marshal(value)
 	if err != nil {
-		return zero, fmt.Errorf("encode thread document: %w", err)
+		return zero, fmt.Errorf("encode document: %w", err)
 	}
 	if err := sameJSONKeyPaths(data, written); err != nil {
 		return zero, err
@@ -73,7 +73,7 @@ func parseContextFabricThreadDocument[T interface{ Validate() error }](data []by
 // requireJSONIntegerLiterals decodes the document's first JSON value with
 // numbers kept as written (json.Decoder.UseNumber) and refuses every number that strconv.ParseInt does not read exactly as
 // an int64: a fraction, an exponent, or a value beyond int64. Every number in
-// a thread document is an integer field.
+// a thread document is an integer field (a feedback document has none).
 func requireJSONIntegerLiterals(data []byte) error {
 	var tree any
 	if err := decodeJSONNumbers(data, &tree); err != nil {
@@ -96,7 +96,7 @@ func requireJSONIntegerLiterals(data []byte) error {
 			}
 		case json.Number:
 			if _, err := strconv.ParseInt(string(v), 10, 64); err != nil {
-				return fmt.Errorf("thread document carries %s at %s; an integer field takes an integer literal (no fraction, no exponent, within int64)", string(v), pathOrRoot(path))
+				return fmt.Errorf("document carries %s at %s; an integer field takes an integer literal (no fraction, no exponent, within int64)", string(v), pathOrRoot(path))
 			}
 		}
 		return nil
@@ -122,7 +122,7 @@ func rejectDuplicateJSONKeys(data []byte) error {
 			return nil
 		}
 		if err != nil {
-			return fmt.Errorf("decode thread document: %w", err)
+			return fmt.Errorf("decode document: %w", err)
 		}
 		top := (*frame)(nil)
 		if len(stack) > 0 {
@@ -149,7 +149,7 @@ func rejectDuplicateJSONKeys(data []byte) error {
 		if top.expectKey {
 			key, _ := token.(string)
 			if top.keys[key] {
-				return fmt.Errorf("thread document names %q twice in one object", key)
+				return fmt.Errorf("document names %q twice in one object", key)
 			}
 			top.keys[key] = true
 			top.expectKey = false
@@ -183,7 +183,7 @@ func decodeJSONNumbers(data []byte, target *any) error {
 	decoder := json.NewDecoder(bytes.NewReader(data))
 	decoder.UseNumber()
 	if err := decoder.Decode(target); err != nil {
-		return fmt.Errorf("decode thread document: %w", err)
+		return fmt.Errorf("decode document: %w", err)
 	}
 	return nil
 }
@@ -191,11 +191,11 @@ func decodeJSONNumbers(data []byte, target *any) error {
 func compareJSONKeyPaths(received, wrote any, path string) error {
 	switch r := received.(type) {
 	case nil:
-		return fmt.Errorf("thread document carries a null at %s; no field is nullable", pathOrRoot(path))
+		return fmt.Errorf("document carries a null at %s; no field is nullable", pathOrRoot(path))
 	case map[string]any:
 		w, ok := wrote.(map[string]any)
 		if !ok {
-			return fmt.Errorf("thread document %s is an object where the writer writes none", pathOrRoot(path))
+			return fmt.Errorf("document %s is an object where the writer writes none", pathOrRoot(path))
 		}
 		keys := make([]string, 0, len(r))
 		for key := range r {
@@ -210,9 +210,9 @@ func compareJSONKeyPaths(received, wrote any, path string) error {
 			wv, inWritten := w[key]
 			switch {
 			case inReceived && !inWritten:
-				return fmt.Errorf("thread document carries %s.%s, which the writer does not write: an empty, false or zero value of an optional field, or a key spelled in another case", pathOrRoot(path), key)
+				return fmt.Errorf("document carries %s.%s, which the writer does not write: an empty, false or zero value of an optional field, or a key spelled in another case", pathOrRoot(path), key)
 			case !inReceived && inWritten:
-				return fmt.Errorf("thread document lacks the required key %s.%s", pathOrRoot(path), key)
+				return fmt.Errorf("document lacks the required key %s.%s", pathOrRoot(path), key)
 			}
 			if err := compareJSONKeyPaths(rv, wv, path+"."+key); err != nil {
 				return err
@@ -221,7 +221,7 @@ func compareJSONKeyPaths(received, wrote any, path string) error {
 	case []any:
 		w, ok := wrote.([]any)
 		if !ok || len(w) != len(r) {
-			return fmt.Errorf("thread document %s is an array the writer does not write back", pathOrRoot(path))
+			return fmt.Errorf("document %s is an array the writer does not write back", pathOrRoot(path))
 		}
 		for index := range r {
 			if err := compareJSONKeyPaths(r[index], w[index], fmt.Sprintf("%s[%d]", path, index)); err != nil {
