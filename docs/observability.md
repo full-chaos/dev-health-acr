@@ -26,7 +26,9 @@ generated request ID for correlation and these bounded dimensions:
 - `source_fallback`: `none`, `catalog`, `unavailable`, or `unknown`
 - query/ranking versions: canonical `context-query.v1`, `ranker.v11`, or `unknown`
 - denial class: `authentication`, `organization_scope`, `repository_scope`,
-  `license`, `rate_limit`, `none`, or `unknown`
+  `license`, `rate_limit`, `none`, or `unknown`. `rate_limit` covers the
+  request rate limit (`rate_limited`) and the shared Ask Dev admission
+  refusals (`concurrency_limited`, `allowance_exhausted`).
 
 The sink receives the snapshot only, never a `context.Context`, request body,
 evidence reference, transcript, debug payload, credential, or arbitrary attribute

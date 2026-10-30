@@ -17,6 +17,7 @@ import (
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 	"github.com/full-chaos/dev-health-acr/internal/limits"
+	"github.com/full-chaos/dev-health-acr/internal/observability"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
 	"github.com/full-chaos/dev-health-acr/internal/storage/memory"
 )
@@ -146,10 +147,12 @@ type submissionHarness struct {
 	grantWithdrawn atomic.Bool
 	clock          *submissionClock
 	apps           []*App
-	logs           []*bytes.Buffer
-	tokenA         string
-	tokenB         string
-	investigator   *countingSubmissionInvestigator
+	// observed is each App\'s request observations.
+	observed     []*snapshotSink
+	logs         []*bytes.Buffer
+	tokenA       string
+	tokenB       string
+	investigator *countingSubmissionInvestigator
 }
 
 // newSubmissionHarness builds one App per store. Every App shares the
@@ -179,8 +182,10 @@ func newSubmissionHarness(t *testing.T, stores ...submissionTestStore) *submissi
 		if err != nil {
 			t.Fatal(err)
 		}
+		sink := &snapshotSink{}
+		hooks := observability.NewHooks(sink, nil)
 		app, err := NewApp(AppConfig{ServiceName: "acr", ServiceVersion: "test", RequestTimeout: 30 * time.Second}, Dependencies{
-			Capabilities: StaticCapabilitiesProvider{Now: clock.Now, Value: hostedCapabilities()}, Limits: manager, Now: clock.Now,
+			Capabilities: StaticCapabilitiesProvider{Now: clock.Now, Value: hostedCapabilities()}, Limits: manager, Now: clock.Now, Observability: &hooks,
 			Runtime: &RuntimeDependencies{
 				Credentials: credentials, Audit: audit, Entitlements: EntitlementFunc(func(_ context.Context, _ string, entitlement string) (bool, error) {
 					_, refused := harness.denied.Load(entitlement)
@@ -206,6 +211,7 @@ func newSubmissionHarness(t *testing.T, stores ...submissionTestStore) *submissi
 			t.Fatal(err)
 		}
 		harness.apps = append(harness.apps, app)
+		harness.observed = append(harness.observed, sink)
 		harness.logs = append(harness.logs, logs)
 	}
 	return harness

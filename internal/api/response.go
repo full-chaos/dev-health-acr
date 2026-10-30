@@ -119,7 +119,9 @@ func denialForError(code string) observability.DenialClass {
 		return observability.DenialRepositoryScope
 	case "feature_not_enabled":
 		return observability.DenialLicense
-	case "rate_limited":
+	// CHAOS-11914: the shared Ask Dev admission refusals are rate-class
+	// denials too, so a dashboard grouped by denial_class sees them.
+	case "rate_limited", contractsv1.ErrorCodeConcurrencyLimited, contractsv1.ErrorCodeAllowanceExhausted:
 		return observability.DenialRateLimit
 	default:
 		return observability.DenialUnknown

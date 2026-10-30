@@ -15,6 +15,7 @@ import (
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	"github.com/full-chaos/dev-health-acr/internal/contractcheck"
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
+	"github.com/full-chaos/dev-health-acr/internal/observability"
 	"github.com/full-chaos/dev-health-acr/internal/testsupport/repopath"
 )
 
@@ -159,6 +160,54 @@ func TestSubmissionLimitGoldensAreTheRoutesOwnBodies(t *testing.T) {
 		}
 		if !bytes.Equal(golden, body) {
 			t.Fatalf("%s differs from the route's body:\n%s\nwant\n%s", name, body, golden)
+		}
+	}
+}
+
+// lastObservation is App app's most recent request observation.
+func (h *submissionHarness) lastObservation(app int) observability.SupportSnapshot {
+	h.t.Helper()
+	sink := h.observed[app]
+	sink.mu.Lock()
+	defer sink.mu.Unlock()
+	if len(sink.snapshots) == 0 {
+		h.t.Fatalf("app %d observed no request", app)
+	}
+	return sink.snapshots[len(sink.snapshots)-1]
+}
+
+// Codex round 2 F2: request observability classifies both shared-limit
+// refusals as rate-class denials (denial_class rate_limit), as it does the
+// request rate limit, never as unknown; the admitted request before each is
+// no denial.
+func TestSharedLimitRefusalsAreObservedAsRateLimitDenials(t *testing.T) {
+	{
+		harness, _ := newMemorySubmissionHarness(t, 1)
+		setSubmissionLimits(harness, contextfabric.SubmissionLimits{MaxRunningPerPrincipal: 1, MaxRunningPerOrg: 1})
+		harness.investigator.mode.Store(int32(runBlockThenSave))
+		finished := make(chan struct{})
+		go func() { harness.post(0, harness.tokenA, "submission-observe-1", submissionQuestion); close(finished) }()
+		<-harness.investigator.entered
+		expectLimitRefusal(t, harness.post(0, harness.tokenA, "submission-observe-2", submissionQuestion), contractsv1.ErrorCodeConcurrencyLimited, "principal")
+		if got := harness.lastObservation(0).Denial; got != observability.DenialRateLimit {
+			t.Fatalf("concurrency_limited observed as denial %q, want %q", got, observability.DenialRateLimit)
+		}
+		close(harness.investigator.release)
+		<-finished
+	}
+	{
+		harness, _ := newMemorySubmissionHarness(t, 1)
+		setSubmissionLimits(harness, contextfabric.SubmissionLimits{MonthlyPlatformRunAllowance: 1})
+		servedResultID(t, harness.post(0, harness.tokenA, "submission-observe-3", submissionQuestion))
+		if got := harness.lastObservation(0).Denial; got != observability.DenialNone {
+			t.Fatalf("an admitted run observed as denial %q, want none", got)
+		}
+		refused := harness.post(0, harness.tokenA, "submission-observe-4", submissionQuestion)
+		if refused.Code != http.StatusTooManyRequests || errorEnvelopeOf(t, refused).Error.Code != contractsv1.ErrorCodeAllowanceExhausted {
+			t.Fatalf("answer = %d %s, want 429 allowance_exhausted", refused.Code, refused.Body.String())
+		}
+		if got := harness.lastObservation(0).Denial; got != observability.DenialRateLimit {
+			t.Fatalf("allowance_exhausted observed as denial %q, want %q", got, observability.DenialRateLimit)
 		}
 	}
 }
