@@ -464,6 +464,23 @@ Request IDs, packet IDs, fixture IDs, image digests and repository SHAs are reta
 | Nightly / full | 001–005 | scripted (+ optional local smoke) | yes | schedule |
 | Release gate | 001–005 | scripted | yes | release; uses the built image and released `acr-mcp` archive |
 
+### 10.1 The dev-health-ops commit (CHAOS-11974)
+
+Every job that uses `dev-health/ops` checks it out through one composite action, `.github/actions/ops-checkout`:
+
+| Trigger | ops commit | Why |
+| --- | --- | --- |
+| pull request, push, tag | the commit in `ci/fullstack-ops.pin` | an acr commit that changes nothing cannot go red because ops main moved |
+| nightly schedule | ops main HEAD | the drift canary: a red nightly with a green pinned run says the pin is behind ops, not that acr broke |
+| manual run | the `ops_ref` input, else the pin | prove a candidate ops ref before re-pinning |
+
+- The pin must be a full 40-hex commit SHA. The action refuses anything else, and a pinned run fails if it checked out a different commit.
+- Every job writes the ops commit, how it was chosen, and the pin to its job summary (`E2E_OPS_REF`, `E2E_OPS_REF_MODE`).
+- A failed job ends with an error annotation that names that commit.
+- `scripts/ci/test-workflow-contract.sh` pins all of this, with negative controls.
+
+**Re-pinning:** set `ci/fullstack-ops.pin` to an ops commit that a fullstack-acceptance run proved green, taken from that run's summary or a manual run with `ops_ref`. Do it in its own acr PR. The web checkout still follows its default branch, unless the `web_ref` input says otherwise.
+
 ## 11. Acceptance criteria map
 
 Where each of CHAOS-3065's acceptance criteria is enforced, so a reviewer can check the claim

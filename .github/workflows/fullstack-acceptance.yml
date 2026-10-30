@@ -34,6 +34,13 @@ name: fullstack-acceptance
         required: false
         type: string
         default: ""
+      ops_ref:
+        description: >-
+          optional full-chaos/dev-health-ops ref to prove; empty uses the commit pinned in
+          ci/fullstack-ops.pin (CHAOS-11974)
+        required: false
+        type: string
+        default: ""
 
 permissions:
   contents: read
@@ -92,12 +99,16 @@ jobs:
         with:
           path: dev-health-acr
           persist-credentials: false
-      # actions/checkout v7.0.0 — public repo, no token needed.
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+      # CHAOS-11974: the one ops checkout -- the commit in ci/fullstack-ops.pin, ops main
+      # HEAD on the nightly schedule (the drift canary), or the dispatch input. It
+      # records the commit and how it was chosen in the job summary.
+      - name: Check out dev-health-ops (ci/fullstack-ops.pin)
+        id: ops
+        uses: ./dev-health-acr/.github/actions/ops-checkout
         with:
-          repository: full-chaos/dev-health-ops
+          acr_path: dev-health-acr
           path: dev-health/ops
-          persist-credentials: false
+          dispatch_ref: ${{ inputs.ops_ref }}
       # actions/checkout v7.0.0 — public repo, no token needed.
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
         with:
@@ -109,9 +120,7 @@ jobs:
         run: |
           set -euo pipefail
           cp dev-health-acr/.github/fullstack/compose.ci.yml dev-health/compose.yml
-          ops_ref="$(git -C dev-health/ops rev-parse HEAD)"
           web_ref="$(git -C dev-health/web rev-parse HEAD)"
-          echo "E2E_OPS_REF=$ops_ref" >> "$GITHUB_ENV"
           echo "E2E_WEB_REF=$web_ref" >> "$GITHUB_ENV"
       # E2E_WEB is 'off' on a pull_request (the web-agreement job below covers that path
       # instead) and 'on' otherwise -- see the "Run the full-stack acceptance gate" step's env
@@ -332,6 +341,17 @@ jobs:
           path: dev-health-acr/.tmp/fullstack/
           if-no-files-found: warn
           retention-days: 7
+      # CHAOS-11974: a red run names the dev-health-ops commit it ran against.
+      - name: Name the dev-health-ops commit of a failed run
+        if: failure()
+        env:
+          OPS_SHA: ${{ steps.ops.outputs.sha }}
+          OPS_MODE: ${{ steps.ops.outputs.mode }}
+          OPS_PIN: ${{ steps.ops.outputs.pin }}
+        run: |
+          sha="${OPS_SHA:-not checked out}" mode="${OPS_MODE:-none}" pin="${OPS_PIN:-unread}"
+          echo "::error title=fullstack-acceptance failed::with dev-health-ops $sha (chosen by $mode; ci/fullstack-ops.pin $pin)"
+          printf '\n**Failed with dev-health-ops %s (chosen by %s; pin %s).**\n' "$sha" "$mode" "$pin" >> "$GITHUB_STEP_SUMMARY"
 
   fixture-graph:
     name: fixture graph use-cases
@@ -354,12 +374,16 @@ jobs:
         with:
           path: dev-health-acr
           persist-credentials: false
-      # actions/checkout v7.0.0 — public repo, no token needed.
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+      # CHAOS-11974: the one ops checkout -- the commit in ci/fullstack-ops.pin, ops main
+      # HEAD on the nightly schedule (the drift canary), or the dispatch input. It
+      # records the commit and how it was chosen in the job summary.
+      - name: Check out dev-health-ops (ci/fullstack-ops.pin)
+        id: ops
+        uses: ./dev-health-acr/.github/actions/ops-checkout
         with:
-          repository: full-chaos/dev-health-ops
+          acr_path: dev-health-acr
           path: dev-health/ops
-          persist-credentials: false
+          dispatch_ref: ${{ inputs.ops_ref }}
       # actions/checkout v7.0.0 — public repo, no token needed.
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
         with:
@@ -387,6 +411,17 @@ jobs:
           path: dev-health-acr/.tmp/e2e/
           if-no-files-found: warn
           retention-days: 7
+      # CHAOS-11974: a red run names the dev-health-ops commit it ran against.
+      - name: Name the dev-health-ops commit of a failed run
+        if: failure()
+        env:
+          OPS_SHA: ${{ steps.ops.outputs.sha }}
+          OPS_MODE: ${{ steps.ops.outputs.mode }}
+          OPS_PIN: ${{ steps.ops.outputs.pin }}
+        run: |
+          sha="${OPS_SHA:-not checked out}" mode="${OPS_MODE:-none}" pin="${OPS_PIN:-unread}"
+          echo "::error title=fullstack-acceptance failed::with dev-health-ops $sha (chosen by $mode; ci/fullstack-ops.pin $pin)"
+          printf '\n**Failed with dev-health-ops %s (chosen by %s; pin %s).**\n' "$sha" "$mode" "$pin" >> "$GITHUB_STEP_SUMMARY"
 
   # CHAOS-9655: the devhealthsource schema freshness test compares the declared
   # ClickHouse schema (columns, order, engine, sorting key, projections) with a
@@ -406,12 +441,16 @@ jobs:
         with:
           path: dev-health-acr
           persist-credentials: false
-      # actions/checkout v7.0.0 — public repo, no token needed.
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+      # CHAOS-11974: the one ops checkout -- the commit in ci/fullstack-ops.pin, ops main
+      # HEAD on the nightly schedule (the drift canary), or the dispatch input. It
+      # records the commit and how it was chosen in the job summary.
+      - name: Check out dev-health-ops (ci/fullstack-ops.pin)
+        id: ops
+        uses: ./dev-health-acr/.github/actions/ops-checkout
         with:
-          repository: full-chaos/dev-health-ops
+          acr_path: dev-health-acr
           path: dev-health/ops
-          persist-credentials: false
+          dispatch_ref: ${{ inputs.ops_ref }}
       # actions/setup-go v6.5.0
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16
         with:
@@ -421,7 +460,6 @@ jobs:
       - name: Migrate a fresh ClickHouse with the ops checkout
         run: |
           set -euo pipefail
-          echo "ops ref: $(git -C dev-health/ops rev-parse HEAD)"
           net="acr-lsp-${GITHUB_RUN_ID}"
           docker network create "$net"
           docker run -d --name "${net}-ch" --network "$net" \
@@ -449,6 +487,17 @@ jobs:
           go test -count=1 -v -run '^TestLiveFileFactsShareOneFocusKeyAcrossTheThreeFileSources$' ./internal/contextpacket | tee "$RUNNER_TEMP/focus.log"
           grep -q -- '--- PASS: TestLiveFileFactsShareOneFocusKeyAcrossTheThreeFileSources' "$RUNNER_TEMP/focus.log"
           if grep -q -- '--- SKIP' "$RUNNER_TEMP/parity.log" "$RUNNER_TEMP/focus.log"; then echo '::error::live schema parity test skipped'; exit 1; fi
+      # CHAOS-11974: a red run names the dev-health-ops commit it ran against.
+      - name: Name the dev-health-ops commit of a failed run
+        if: failure()
+        env:
+          OPS_SHA: ${{ steps.ops.outputs.sha }}
+          OPS_MODE: ${{ steps.ops.outputs.mode }}
+          OPS_PIN: ${{ steps.ops.outputs.pin }}
+        run: |
+          sha="${OPS_SHA:-not checked out}" mode="${OPS_MODE:-none}" pin="${OPS_PIN:-unread}"
+          echo "::error title=fullstack-acceptance failed::with dev-health-ops $sha (chosen by $mode; ci/fullstack-ops.pin $pin)"
+          printf '\n**Failed with dev-health-ops %s (chosen by %s; pin %s).**\n' "$sha" "$mode" "$pin" >> "$GITHUB_STEP_SUMMARY"
   web-contract-changed:
     name: web agreement (contract paths)
     runs-on: ubuntu-24.04
@@ -505,13 +554,15 @@ jobs:
           else
             echo "run=false" >> "$GITHUB_OUTPUT"
           fi
-      # actions/checkout v7.0.0 — public repo, no token needed.
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+      # CHAOS-11974: the one ops checkout (see the compose job).
+      - name: Check out dev-health-ops (ci/fullstack-ops.pin)
+        id: ops
         if: steps.decide.outputs.run == 'true'
+        uses: ./dev-health-acr/.github/actions/ops-checkout
         with:
-          repository: full-chaos/dev-health-ops
+          acr_path: dev-health-acr
           path: dev-health/ops
-          persist-credentials: false
+          dispatch_ref: ${{ inputs.ops_ref }}
       # actions/checkout v7.0.0 — public repo, no token needed.
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
         if: steps.decide.outputs.run == 'true'
@@ -525,9 +576,7 @@ jobs:
         run: |
           set -euo pipefail
           cp dev-health-acr/.github/fullstack/compose.ci.yml dev-health/compose.yml
-          ops_ref="$(git -C dev-health/ops rev-parse HEAD)"
           web_ref="$(git -C dev-health/web rev-parse HEAD)"
-          echo "E2E_OPS_REF=$ops_ref" >> "$GITHUB_ENV"
           echo "E2E_WEB_REF=$web_ref" >> "$GITHUB_ENV"
       # fullstack-opencode.sh's render_web_override() imports
       # dev-health/web/node_modules/@playwright/test directly and run_web_agreement_check()
@@ -592,3 +641,14 @@ jobs:
           path: dev-health-acr/.tmp/fullstack/
           if-no-files-found: warn
           retention-days: 7
+      # CHAOS-11974: a red run names the dev-health-ops commit it ran against.
+      - name: Name the dev-health-ops commit of a failed run
+        if: failure()
+        env:
+          OPS_SHA: ${{ steps.ops.outputs.sha }}
+          OPS_MODE: ${{ steps.ops.outputs.mode }}
+          OPS_PIN: ${{ steps.ops.outputs.pin }}
+        run: |
+          sha="${OPS_SHA:-not checked out}" mode="${OPS_MODE:-none}" pin="${OPS_PIN:-unread}"
+          echo "::error title=fullstack-acceptance failed::with dev-health-ops $sha (chosen by $mode; ci/fullstack-ops.pin $pin)"
+          printf '\n**Failed with dev-health-ops %s (chosen by %s; pin %s).**\n' "$sha" "$mode" "$pin" >> "$GITHUB_STEP_SUMMARY"

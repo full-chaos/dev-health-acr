@@ -1578,6 +1578,83 @@ check_gomodcache_pins() {
   return "$status"
 }
 
+# CHAOS-11974: fullstack-acceptance checks dev-health-ops out at a pinned
+# commit (ci/fullstack-ops.pin) through ONE composite action, so an acr commit
+# that changes nothing cannot go red because ops main moved. Only the nightly
+# schedule floats (the drift canary), and every job names its ops commit when
+# it fails.
+check_fullstack_ops_pin() {
+  local file="$1" content
+  content="$(tr -d '[:space:]' < "$file")"
+  if ! printf '%s' "$content" | grep -Eq '^[0-9a-f]{40}$'; then
+    printf '%s must hold one full 40-hex commit SHA, not a branch, tag or abbreviation: %s\n' "$file" "$content" >&2
+    return 1
+  fi
+}
+
+check_ops_checkout_action() {
+  local file="$1" status=0 choose stripped
+  choose="$(awk '
+    /name: Choose the ops ref/ { grab=1 }
+    grab && /^    - / && !/name: Choose the ops ref/ { grab=0 }
+    grab { print }
+  ' "$file")"
+  stripped="$(printf '%s' "$choose" | sed 's/#.*$//')"
+  grep -qF '[0-9a-f]{40}' <<<"$stripped" || {
+    printf 'ops-checkout: the choose step does not require a full 40-hex pin in its own command (a comment does not count)\n' >&2; status=1; }
+  # shellcheck disable=SC2016
+  grep -qxF '        ref: ${{ steps.choose.outputs.ref }}' "$file" || {
+    # shellcheck disable=SC2016
+    printf 'ops-checkout: the checkout does not use the chosen ref (expected ref: ${{ steps.choose.outputs.ref }})\n' >&2; status=1; }
+  [ "$(grep -cF 'repository: full-chaos/dev-health-ops' "$file" || true)" -eq 1 ] || {
+    printf 'ops-checkout: must hold exactly one dev-health-ops checkout\n' >&2; status=1; }
+  # The only floating branch is the nightly schedule; everything else gets the pin.
+  # shellcheck disable=SC2016
+  if ! grep -A1 -xF '        elif [ "$GITHUB_EVENT_NAME" = schedule ]; then' <<<"$choose" | grep -qxF '          ref=""'; then
+    printf 'ops-checkout: the empty (floating) ref is not limited to the schedule event\n' >&2; status=1
+  fi
+  [ "$(grep -cxF '          ref=""' <<<"$choose" || true)" -eq 1 ] || {
+    printf 'ops-checkout: more than one branch floats on ops main\n' >&2; status=1; }
+  # shellcheck disable=SC2016
+  grep -qxF '          ref="$pin"' <<<"$choose" || {
+    printf 'ops-checkout: the default branch does not check out the pin\n' >&2; status=1; }
+  # shellcheck disable=SC2016
+  grep -qxF '        if [ "$MODE" = pinned ] && [ "$sha" != "$PIN" ]; then' "$file" || {
+    printf 'ops-checkout: a pinned run does not verify that it checked out the pin\n' >&2; status=1; }
+  grep -qF 'GITHUB_STEP_SUMMARY' "$file" || {
+    printf 'ops-checkout: the ops commit is not recorded in the job summary\n' >&2; status=1; }
+  return "$status"
+}
+
+check_fullstack_ops_checkout_wiring() {
+  local file="$1" status=0 job block
+  if grep -qF 'repository: full-chaos/dev-health-ops' "$file"; then
+    printf '%s checks dev-health-ops out directly; every ops checkout must go through .github/actions/ops-checkout\n' "$file" >&2; status=1
+  fi
+  for job in $(awk '/^jobs:/ { in_jobs=1; next } in_jobs && /^  [A-Za-z0-9_-]+:$/ { sub(/:$/, ""); sub(/^  /, ""); print }' "$file"); do
+    block="$(job_block "$file" "$job")"
+    grep -qF 'dev-health/ops' <<<"$block" || continue
+    grep -qxF '        uses: ./dev-health-acr/.github/actions/ops-checkout' <<<"$block" || {
+      printf 'job %s uses dev-health/ops without the ops-checkout action\n' "$job" >&2; status=1; continue; }
+    grep -qxF '        id: ops' <<<"$block" || {
+      printf 'job %s: the ops-checkout step has no id ops, so its outputs cannot be named\n' "$job" >&2; status=1; }
+    # shellcheck disable=SC2016
+    grep -qxF '          dispatch_ref: ${{ inputs.ops_ref }}' <<<"$block" || {
+      printf 'job %s does not pass the ops_ref dispatch input\n' "$job" >&2; status=1; }
+    local last
+    last="$(grep -E '^      - ' <<<"$block" | tail -1)"
+    [ "$last" = '      - name: Name the dev-health-ops commit of a failed run' ] || {
+      printf 'job %s: its last step is not the failed-run ops naming step (found: %s)\n' "$job" "$last" >&2; status=1; }
+    awk '/- name: Name the dev-health-ops commit of a failed run/ { grab=1 } grab' <<<"$block" | grep -qxF '        if: failure()' || {
+      printf 'job %s: the ops naming step does not run on failure\n' "$job" >&2; status=1; }
+    # shellcheck disable=SC2016
+    awk '/- name: Name the dev-health-ops commit of a failed run/ { grab=1 } grab' <<<"$block" | grep -qF 'OPS_SHA: ${{ steps.ops.outputs.sha }}' || {
+      printf 'job %s: the ops naming step does not name the checked-out commit\n' "$job" >&2; status=1; }
+  done
+  return "$status"
+}
+
+
 run_all_checks() {
   local file="$1"
   check_verify_job_exists "$file"
@@ -1626,6 +1703,12 @@ printf 'PASS: go-modcache action and tool pins satisfy the module cache checks\n
 fullstack_workflow="$repo_root/.github/workflows/fullstack-acceptance.yml"
 check_gomod_proxy_fallback "$fullstack_workflow"
 printf 'PASS: %s carries the GOPROXY fallback\n' "$fullstack_workflow"
+ops_checkout_action="$repo_root/.github/actions/ops-checkout/action.yml"
+fullstack_ops_pin="$repo_root/ci/fullstack-ops.pin"
+check_fullstack_ops_pin "$fullstack_ops_pin"
+check_ops_checkout_action "$ops_checkout_action"
+check_fullstack_ops_checkout_wiring "$fullstack_workflow"
+printf 'PASS: fullstack-acceptance checks dev-health-ops out at the pin through one action and names it on failure\n'
 for other_workflow in "$repo_root"/.github/workflows/*.yml; do
   check_container_switch_in_scope "$other_workflow"
 done
@@ -1718,6 +1801,48 @@ modcache_key_no_pins="$tmpdir/modcache-key-no-pins.yml"
 sed 's/ go.sum scripts\/ci\/go-tool-pins.txt | sha256sum/ go.sum | sha256sum/' "$modcache_action" > "$modcache_key_no_pins"
 cmp -s "$modcache_action" "$modcache_key_no_pins" && { printf 'NEGATIVE CONTROL SETUP FAILED: modcache_key_no_pins did not change the action\n' >&2; exit 1; }
 assert_check_fails 'the cache key stopped hashing the tool pins' check_gomodcache_action "$modcache_key_no_pins"
+
+# CHAOS-11974 negative controls. Each mutation must change its file and fail its check.
+mutate_or_die() {
+  local src="$1" dst="$2" desc="$3"
+  cmp -s "$src" "$dst" && { printf 'NEGATIVE CONTROL SETUP FAILED: %s did not change the file\n' "$desc" >&2; exit 1; }
+  return 0
+}
+pin_branch="$tmpdir/fullstack-ops-pin-branch"
+printf 'main\n' > "$pin_branch"
+assert_check_fails 'the fullstack ops pin names a branch' check_fullstack_ops_pin "$pin_branch"
+pin_short="$tmpdir/fullstack-ops-pin-short"
+cut -c1-12 "$fullstack_ops_pin" > "$pin_short"
+assert_check_fails 'the fullstack ops pin is abbreviated' check_fullstack_ops_pin "$pin_short"
+action_loose_regex="$tmpdir/ops-checkout-loose-regex.yml"
+sed 's/\^\[0-9a-f\]{40}\$/^[a-z0-9]+$/' "$ops_checkout_action" > "$action_loose_regex"
+mutate_or_die "$ops_checkout_action" "$action_loose_regex" 'action_loose_regex'
+assert_check_fails 'the ops pin check accepts a branch name' check_ops_checkout_action "$action_loose_regex"
+action_floating_checkout="$tmpdir/ops-checkout-floating.yml"
+sed 's/ref: ${{ steps.choose.outputs.ref }}/ref: main/' "$ops_checkout_action" > "$action_floating_checkout"
+mutate_or_die "$ops_checkout_action" "$action_floating_checkout" 'action_floating_checkout'
+assert_check_fails 'the ops checkout follows main while the pin is validated' check_ops_checkout_action "$action_floating_checkout"
+action_pr_floats="$tmpdir/ops-checkout-pr-floats.yml"
+sed 's/\[ "\$GITHUB_EVENT_NAME" = schedule \]/[ "$GITHUB_EVENT_NAME" = pull_request ]/' "$ops_checkout_action" > "$action_pr_floats"
+mutate_or_die "$ops_checkout_action" "$action_pr_floats" 'action_pr_floats'
+assert_check_fails 'pull requests float on ops main' check_ops_checkout_action "$action_pr_floats"
+action_no_verify="$tmpdir/ops-checkout-no-verify.yml"
+sed 's/if \[ "\$MODE" = pinned \] && \[ "\$sha" != "\$PIN" \]; then/if false; then/' "$ops_checkout_action" > "$action_no_verify"
+mutate_or_die "$ops_checkout_action" "$action_no_verify" 'action_no_verify'
+assert_check_fails 'a pinned run no longer verifies the pin it checked out' check_ops_checkout_action "$action_no_verify"
+wiring_direct="$tmpdir/fullstack-direct-ops.yml"
+awk '{ print } /uses: .\/dev-health-acr\/.github\/actions\/ops-checkout/ && !done { print "      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0"; print "        with:"; print "          repository: full-chaos/dev-health-ops"; print "          path: dev-health/ops2"; done=1 }' "$fullstack_workflow" > "$wiring_direct"
+mutate_or_die "$fullstack_workflow" "$wiring_direct" 'wiring_direct'
+assert_check_fails 'a job checks dev-health-ops out directly again' check_fullstack_ops_checkout_wiring "$wiring_direct"
+wiring_no_failure_step="$tmpdir/fullstack-no-failure-step.yml"
+awk '/- name: Name the dev-health-ops commit of a failed run/ && !done { skip=1; done=1; next } skip && /^      - |^  [A-Za-z0-9_-]+:$|^$/ { skip=0 } !skip { print }' "$fullstack_workflow" > "$wiring_no_failure_step"
+mutate_or_die "$fullstack_workflow" "$wiring_no_failure_step" 'wiring_no_failure_step'
+assert_check_fails 'a job lost the failed-run ops naming step' check_fullstack_ops_checkout_wiring "$wiring_no_failure_step"
+wiring_always="$tmpdir/fullstack-naming-always.yml"
+sed 's/^        if: failure()$/        if: always()/' "$fullstack_workflow" > "$wiring_always"
+mutate_or_die "$fullstack_workflow" "$wiring_always" 'wiring_always'
+assert_check_fails 'the ops naming step runs on success too' check_fullstack_ops_checkout_wiring "$wiring_always"
+printf 'PASS: the CHAOS-11974 ops pin checks reject a branch pin, a short pin, a loose regex, a floating checkout, a floating pull request, a missing pin verification, a direct ops checkout, a missing and an always-on failure step\n'
 modcache_stale_pin="$tmpdir/modcache-stale-pin.txt"
 sed 's/^gotest.tools\/gotestsum@.*/gotest.tools\/gotestsum@v0.0.1/' "$modcache_pins" > "$modcache_stale_pin"
 assert_check_fails 'a tool pin drifted from the Makefile' check_gomodcache_pins "$modcache_stale_pin"
