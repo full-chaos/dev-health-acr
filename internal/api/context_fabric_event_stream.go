@@ -643,7 +643,7 @@ func (a *App) serveInvestigationEventStream(w http.ResponseWriter, r *http.Reque
 	var lease *leasedRun
 	runStore := a.investigationRuns()
 	if submission != nil && submission.record.Leased() && runStore != nil {
-		lease = &leasedRun{key: contextfabric.RunKeyOf(submission.record), holder: submission.record.LeaseHolder, request: submission.record.RunRequestID}
+		lease = &leasedRun{key: contextfabric.RunKeyOf(submission.record), holder: submission.record.LeaseHolder, request: submission.record.RunRequestID, expiresAt: submission.record.LeaseExpiresAt}
 	}
 	runBase := investigateCtx
 	if lease != nil {

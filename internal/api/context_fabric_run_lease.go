@@ -130,7 +130,10 @@ type leasedRun struct {
 	key     contextfabric.RunKey
 	holder  string
 	request string
-	cancel  context.CancelCauseFunc
+	// expiresAt is the lease end admission wrote: the holder's renewals are
+	// timed from the lease itself, never from when its goroutine starts.
+	expiresAt time.Time
+	cancel    context.CancelCauseFunc
 
 	mu   sync.Mutex
 	tReq time.Time
@@ -191,11 +194,14 @@ func (r *runRegistry) cancel(key contextfabric.RunKey, tReq time.Time) bool {
 func (a *App) holdRunLease(logCtx context.Context, store contextfabric.RunStore, run *leasedRun) (stop func()) {
 	done, stopped := make(chan struct{}), make(chan struct{})
 	settings := a.runLease
+	// The renewal schedule is the lease's own: a renewal is due once less
+	// than ttl - renewInterval of the lease is left, so the first one comes
+	// renewInterval after admission whenever this goroutine gets to run.
+	leaseUntil, lastHeld := run.expiresAt, a.now()
 	go func() {
 		defer close(stopped)
 		ticker := time.NewTicker(settings.cancelPoll)
 		defer ticker.Stop()
-		lastRenewed, lastHeld := a.now(), a.now()
 		cancelSeen := false
 		for {
 			select {
@@ -205,7 +211,7 @@ func (a *App) holdRunLease(logCtx context.Context, store contextfabric.RunStore,
 			}
 			now := a.now()
 			var renewUntil time.Time
-			if now.Sub(lastRenewed) >= settings.renewInterval {
+			if !leaseUntil.After(now.Add(settings.ttl - settings.renewInterval)) {
 				renewUntil = now.Add(settings.ttl)
 			}
 			checkCtx, cancel := context.WithTimeout(logCtx, settings.checkTimeout)
@@ -243,7 +249,7 @@ func (a *App) holdRunLease(logCtx context.Context, store contextfabric.RunStore,
 			}
 			lastHeld = now
 			if check.Renewed {
-				lastRenewed = now
+				leaseUntil = renewUntil
 			}
 			if !check.CancelRequestedAt.IsZero() && !cancelSeen {
 				cancelSeen = true
