@@ -197,7 +197,7 @@ func compareJSONKeyPaths(received, wrote any, path string) error {
 		if !ok {
 			return fmt.Errorf("thread document %s is an object where the writer writes none", pathOrRoot(path))
 		}
-		keys := make([]string, 0, len(r)+len(w))
+		keys := make([]string, 0, len(r))
 		for key := range r {
 			keys = append(keys, key)
 		}
