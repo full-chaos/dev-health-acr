@@ -1264,14 +1264,30 @@
           "direction": "returned_to_caller",
           "anchor": {
             "path": "internal/auth/device_oauth.go",
-            "line": 191,
-            "line_end": 208,
-            "note": "`func (s *DeviceFlowService) RedeemForResource(` `s.redeem(` -- redeem mints the fcacr_ credential (30-day expiry) with Resource bound; the authenticator admits it only with a matching X-ACR-Resource header"
+            "line": 194,
+            "line_end": 196,
+            "note": "`func (s *DeviceFlowService) RedeemForResource(` `s.redeemForResource(` -- redeem mints the fcacr_ credential (30-day expiry) with Resource bound; the authenticator admits it only with a matching X-ACR-Resource header"
           },
           "issuer": "acr credential Service (via DeviceFlowService.redeem)",
           "audience": "bound resource (X-ACR-Resource)",
           "algorithm": null,
           "lifetime_seconds": 2592000,
+          "key_source": null,
+          "verified_by": "acr:internal/auth/middleware.go:111"
+        },
+        {
+          "class_id": "acr_client_credential",
+          "direction": "returned_to_caller",
+          "anchor": {
+            "path": "internal/auth/device_oauth.go",
+            "line": 202,
+            "line_end": 204,
+            "note": "`func (s *DeviceFlowService) RedeemBrowserForResource(` `s.redeemForResource(` -- for a configured first-party browser client (CHAOS-12123) redeem mints a browser-class fcacr_ credential: 10-minute expiry, bound to the acr-api resource (the issuer), a new token family ending 12 hours after issuance, and the approving web session"
+          },
+          "issuer": "acr credential Service (via DeviceFlowService.redeemAs, browser class)",
+          "audience": "bound resource (X-ACR-Resource)",
+          "algorithm": null,
+          "lifetime_seconds": 600,
           "key_source": null,
           "verified_by": "acr:internal/auth/middleware.go:111"
         },

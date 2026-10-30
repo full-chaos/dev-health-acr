@@ -62,7 +62,7 @@ func TestAcrDbInit_RuntimeRoleRunsTheOAuthPurge(t *testing.T) {
 			CredentialID: fmt.Sprintf("cred_runtime_purge_%d", serial), OrgID: grant.OrgID, Name: "runtime purge",
 			TokenPrefix: fmt.Sprintf("fcacr_runtimepurge%d", serial), TokenHash: fmt.Sprintf("%064x", serial),
 			RepositoryScopes: grant.RepositoryScopes, Scopes: grant.Scopes, ActorID: grant.ApprovingSubject,
-			ExpiresAt: &credentialEnd, Resource: "https://example.com/resource",
+			ExpiresAt: &credentialEnd, Resource: "https://example.com/resource", ClientID: "acrc_0123456789abcdef0123456789abcdef",
 		})
 		require.NoError(t, err)
 		return device.DeviceCodeHash
