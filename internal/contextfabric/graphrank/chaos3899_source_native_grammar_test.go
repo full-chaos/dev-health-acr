@@ -451,3 +451,49 @@ func TestBindSourceNativeHandles_ResolvesThroughRealProductionPath(t *testing.T)
 		t.Fatalf("provider_qualified_name did not resolve through the real production conversion path: %#v", providerBound)
 	}
 }
+
+// TestBindSourceNativeHandles_RepoSlugDotLeadingName pins CHAOS-12009: the
+// repo_slug grammar accepts a leading '.' on the repository part (the
+// internal/reposlug grammar; full-chaos/.github is the standard org config
+// repository) and nothing that is not an owner/name slug.
+func TestBindSourceNativeHandles_RepoSlugDotLeadingName(t *testing.T) {
+	t.Parallel()
+	repoSlugTerms := func(question string) []string {
+		var terms []string
+		for _, b := range BindSourceNativeHandles(question, nil, true) {
+			if b.Grammar == "repo_slug" {
+				terms = append(terms, b.Term)
+			}
+		}
+		return terms
+	}
+	for _, tc := range []struct{ name, question, want string }{
+		{"dot_github", "what happened to full-chaos/.github?", "full-chaos/.github"},
+		{"org_dot_github", "why did org/.github fail to build", "org/.github"},
+		{"dot_leading_with_dash", "check acme/.config-repo today", "acme/.config-repo"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			got := repoSlugTerms(tc.question)
+			if len(got) != 1 || got[0] != tc.want {
+				t.Fatalf("repo_slug terms for %q = %v, want [%s]", tc.question, got, tc.want)
+			}
+		})
+	}
+	for _, tc := range []struct{ name, question string }{
+		{"empty_name", "what happened to org/ yesterday"},
+		{"lone_dot", "what happened to org/. yesterday"},
+		{"dot_dot", "what happened to org/.. yesterday"},
+		{"double_slash", "what happened to org//.github"},
+		{"spaces_around_slash", "what happened to org / .github"},
+		{"space_after_slash", "what happened to org/ .github"},
+		{"digit_owner", "what happened to 3/.github"},
+	} {
+		t.Run("rejects_"+tc.name, func(t *testing.T) {
+			t.Parallel()
+			if got := repoSlugTerms(tc.question); len(got) != 0 {
+				t.Fatalf("repo_slug terms for %q = %v, want none", tc.question, got)
+			}
+		})
+	}
+}

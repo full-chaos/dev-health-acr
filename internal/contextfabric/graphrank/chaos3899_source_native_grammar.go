@@ -271,7 +271,8 @@ func providerAliasKey(s string) string {
 //     "provider:org/repo" alias shape before resolveSourceNative searches
 //     for it.
 //   - repo_slug: two path segments joined by "/", each REQUIRED to start
-//     with a letter (never a digit) -- excludes a bare numeric fraction
+//     with a letter (never a digit; the repository name may also start with
+//     '.', CHAOS-12009, full-chaos/.github, as internal/reposlug) -- excludes a bare numeric fraction
 //     ("3/4 of the tests passed", "24/7 on-call") or a ratio/date-like
 //     token, the ordinary-prose shape most likely to collide with a bare
 //     "word/word" pattern. avoidOverlapWith provider_qualified_name
@@ -317,7 +318,7 @@ var sourceNativeGrammarRegistry = []sourceNativeGrammarEntry{
 	},
 	{
 		name:             "repo_slug",
-		pattern:          regexp.MustCompile(`\b[A-Za-z][A-Za-z0-9._-]{0,38}/[A-Za-z][A-Za-z0-9._-]{0,38}\b`),
+		pattern:          regexp.MustCompile(`\b[A-Za-z][A-Za-z0-9._-]{0,38}/[A-Za-z.][A-Za-z0-9._-]{0,38}\b`),
 		valueGroup:       0,
 		lookupKey:        repoBareName,
 		avoidOverlapWith: []string{"provider_qualified_name"},
