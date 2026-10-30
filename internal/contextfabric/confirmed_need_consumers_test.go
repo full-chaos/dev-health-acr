@@ -1538,8 +1538,11 @@ func TestConfirmedNeedConsumers_RememberedWindowAppliesWhereTheReceiptDoes(t *te
 		if ledger.saveKey != receipt.saveKey || ledger.saveKey == control.saveKey {
 			t.Fatalf("save keys ledger=%q receipt=%q control=%q, want ledger == receipt != control", ledger.saveKey, receipt.saveKey, control.saveKey)
 		}
-		if control.result.EffectiveEvidenceWindow != nil || len(control.windows) != 0 || control.saveKey != RequestScopeTimeAxisKey(changed(InvestigationRequest{}), TimeAxisKeyFor(TimeContext{Axis: TemporalCurrent})) {
-			t.Fatalf("control: window=%#v ledger windows=%#v key=%q, want no window, no decision, the unwindowed key", control.result.EffectiveEvidenceWindow, control.windows, control.saveKey)
+		// CHAOS-11601: the control states the window its reads used
+		// (server_default), which is no caller window and keys nothing.
+		if callerWindow(control.result.EffectiveEvidenceWindow) || control.result.EffectiveEvidenceWindow == nil || control.result.EffectiveEvidenceWindow.Provenance != WindowServerDefault ||
+			len(control.windows) != 0 || control.saveKey != RequestScopeTimeAxisKey(changed(InvestigationRequest{}), TimeAxisKeyFor(TimeContext{Axis: TemporalCurrent})) {
+			t.Fatalf("control: window=%#v ledger windows=%#v key=%q, want only the server_default window, no decision, the unwindowed key", control.result.EffectiveEvidenceWindow, control.windows, control.saveKey)
 		}
 		last := func(o needTurnOutcome) WindowCanonicalizationOutcome { return o.windowCanons[len(o.windowCanons)-1] }
 		if last(ledger) != WindowCanonicalizationCarried || last(receipt) != WindowCanonicalizationReceiptConfirmed {

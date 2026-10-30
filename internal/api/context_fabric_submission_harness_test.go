@@ -167,17 +167,29 @@ type submissionHarness struct {
 // for PostgreSQL, one map for memory).
 func newSubmissionHarness(t *testing.T, stores ...submissionTestStore) *submissionHarness {
 	t.Helper()
+	return newSubmissionHarnessWithCredentials(t, nil, "org_1", stores...)
+}
+
+// newSubmissionHarnessWithCredentials is newSubmissionHarness over the given
+// credential store (nil: a memory one). CHAOS-12093 passes a PostgreSQL store,
+// the only one that can hold a browser-class row before an issuance path
+// derives that class. orgID is the organization of the harness's credentials
+// (a PostgreSQL credential row needs a UUID).
+func newSubmissionHarnessWithCredentials(t *testing.T, credentials *storage.CredentialLifecycle, orgID string, stores ...submissionTestStore) *submissionHarness {
+	t.Helper()
 	clock := &submissionClock{now: time.Date(2026, 10, 29, 12, 0, 0, 0, time.UTC)}
 	audit := memory.NewAuditStore()
-	credentials := newMemoryCredentialLifecycle(t, audit, clock.now)
+	if credentials == nil {
+		credentials = newMemoryCredentialLifecycle(t, audit, clock.now)
+	}
 	devices, err := memory.NewDeviceAuthorizationStore(memory.DeviceAuthorizationStoreOptions{Credentials: credentials, Now: clock.Now})
 	if err != nil {
 		t.Fatal(err)
 	}
 	harness := &submissionHarness{
 		t: t, clock: clock,
-		tokenA:       issueScopedCredential(t, credentials, audit, clock.now, []string{auth.ScopeContextRead}, []string{hostedTestRepository}),
-		tokenB:       issueScopedCredential(t, credentials, audit, clock.now, []string{auth.ScopeContextRead}, []string{hostedTestRepository}),
+		tokenA:       issueOrgCredential(t, credentials, orgID, clock.now, []string{auth.ScopeContextRead}, []string{hostedTestRepository}),
+		tokenB:       issueOrgCredential(t, credentials, orgID, clock.now, []string{auth.ScopeContextRead}, []string{hostedTestRepository}),
 		investigator: newCountingSubmissionInvestigator(stores[0], clock),
 		credentials:  credentials, devices: devices,
 	}

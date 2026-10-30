@@ -49,16 +49,19 @@ const (
 	// of the caller that is deleted, expired or full. The line also carries
 	// thread_closed_reason.
 	SubmissionOutcomeRefusedThreadClosed SubmissionAdmissionOutcome = "refused_thread_closed"
+	// CHAOS-12093: a browser-class create that names no single well-formed
+	// X-ACR-Submission-ID, refused before anything is admitted or run.
+	SubmissionOutcomeRefusedSubmissionRequired SubmissionAdmissionOutcome = "refused_submission_required"
 )
 
 // SubmissionAdmissionOutcomeVocabulary is the closed set of outcomes.
-func SubmissionAdmissionOutcomeVocabulary() [14]SubmissionAdmissionOutcome {
-	return [14]SubmissionAdmissionOutcome{
+func SubmissionAdmissionOutcomeVocabulary() [15]SubmissionAdmissionOutcome {
+	return [15]SubmissionAdmissionOutcome{
 		SubmissionOutcomeAdmitted, SubmissionOutcomeReplayed, SubmissionOutcomeRefusedMismatch, SubmissionOutcomeRefusedInProgress,
 		SubmissionOutcomeRefusedUnsaved, SubmissionOutcomeRefusedAbandoned, SubmissionOutcomeStoreUnavailable, SubmissionOutcomeOwnerUnknown,
 		SubmissionOutcomeRefusedHeader,
 		SubmissionOutcomeRefusedPrincipalConcurrency, SubmissionOutcomeRefusedOrgConcurrency, SubmissionOutcomeRefusedAllowance,
-		SubmissionOutcomeAdmittedImplicit, SubmissionOutcomeRefusedThreadClosed,
+		SubmissionOutcomeAdmittedImplicit, SubmissionOutcomeRefusedThreadClosed, SubmissionOutcomeRefusedSubmissionRequired,
 	}
 }
 
@@ -147,6 +150,32 @@ func (a *App) logSubmissionHeaderRefused(r *http.Request, header string) {
 		"outcome", string(SubmissionOutcomeRefusedHeader),
 		"header", header,
 		"request_id", contextfabric.SanitizeLogAttr(RequestID(r.Context())))
+}
+
+// browserSubmissionRequired reports whether r, a create by principal, must be
+// refused submission_required (CHAOS-12093, Ask Dev direct-browser design
+// §3.4): the credential is browser class and the request names no single
+// well-formed X-ACR-Submission-ID. A bearer holder controls the headers, so
+// the web client sending the id is no control; the class comes from the
+// credential row (CHAOS-12083), never from the request. Every other class,
+// and a web assertion, keeps the optional header.
+func browserSubmissionRequired(principal storage.Principal, r *http.Request) bool {
+	if principal.ClientClass != storage.CredentialClientClassBrowser {
+		return false
+	}
+	submissionID, valid := investigationSubmissionID(r)
+	return !valid || submissionID == ""
+}
+
+// writeSubmissionRequired refuses a browser-class create with no submission
+// id: one admission line (outcome and class, never a header value), then 400
+// submission_required.
+func (a *App) writeSubmissionRequired(w http.ResponseWriter, r *http.Request) {
+	a.logger.InfoContext(r.Context(), ContextFabricSubmissionLogMessage,
+		"outcome", string(SubmissionOutcomeRefusedSubmissionRequired),
+		"client_class", string(storage.CredentialClientClassBrowser),
+		"request_id", contextfabric.SanitizeLogAttr(RequestID(r.Context())))
+	writeError(w, r, http.StatusBadRequest, contractsv1.ErrorCodeSubmissionRequired, contractsv1.ContextFabricSubmissionRequiredMessage, false, nil)
 }
 
 func (a *App) investigationSubmissions() contextfabric.SubmissionStore {

@@ -1518,7 +1518,9 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 		// published as `window_superseded`. A supersession is something that
 		// happened at save time to an answer that WAS produced; an error return
 		// produced no answer and keeps whatever reason its own exit assigned.
-		if servedErr == nil && continuation.Applies() && continuation.AppliedWindow != nil && served.EffectiveEvidenceWindow == nil {
+		// CHAOS-11601: a served server_default window is the reads' own
+		// disclosure, not the applied window, so it reads as none here.
+		if servedErr == nil && continuation.Applies() && continuation.AppliedWindow != nil && !callerWindow(served.EffectiveEvidenceWindow) {
 			continuation.Disposition = ContinuationWithheld
 			continuation = continuation.withReason(ContinuationReasonWindowSuperseded)
 			// The fields this reversal invalidates -- the applied window and
@@ -3711,6 +3713,8 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 	// with no subjects fails here as a NAMED condition the route classifies,
 	// instead of rediscovering the unclassified 500.
 	var facts CanonicalFactBundle
+	// factsReadAt is the instant the fact read started (CHAOS-11601).
+	var factsReadAt time.Time
 	var periodPrior *periodDeltaPrior
 	defer func() { periodPrior.stop() }()
 	if workItemTuple {
@@ -3725,6 +3729,7 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 			periodPrior = e.startPeriodDeltaPriorRead(ctx, principal, *familyOutcome.Frame, subjects, priorAsOf, anchored)
 		}
 		startInvestigationStage(ctx, contractsv1.ContextFabricStageReadingFacts)
+		factsReadAt = e.now()
 		facts, err = e.facts.ReadFacts(ctx, principal, factRequest)
 		// CHAOS-4099 / CHAOS-4089 standing order: every scope-expansion decision
 		// this read made is reported here, immediately, whether it expanded,
@@ -4188,6 +4193,7 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 		Resolution: resolution, CohortSignalCitations: cohortSignalCitations,
 		EffectiveWindow: effectiveWindow, WindowCanon: windowCanon, WindowCarried: windowCarried,
 		ReadTimeClamp:  readTimeClamp,
+		FactsReadAt:    factsReadAt,
 		StructureCanon: structureCanon, CarriedStructureEntries: carriedStructureEntriesForServed,
 		CommitBases: commitBases, CommitDigests: commitDigests,
 		GroupedNarrowingBasis: stage2GroupedBasis,
