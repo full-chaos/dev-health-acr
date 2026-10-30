@@ -281,6 +281,17 @@ func credentialCreatedEvent(record storage.CredentialRecord) storage.AuditEvent 
 	if credential.Resource != "" {
 		metadata["resource"] = credential.Resource
 	}
+	// CHAOS-12083: the derived client class is a classification that later
+	// policy reads; the audit row records the decision and its inputs.
+	if credential.Provenance.ClientClass != "" {
+		metadata["client_class"] = credential.Provenance.ClientClass
+	}
+	if credential.Provenance.ApprovingUserID != "" {
+		metadata["approving_user_id"] = credential.Provenance.ApprovingUserID
+	}
+	if credential.Provenance.ClientID != "" {
+		metadata["client_id"] = credential.Provenance.ClientID
+	}
 	return storage.AuditEvent{
 		OrgID: credential.OrgID, ActorType: "user", ActorID: record.CreatedBy,
 		Action: storage.AuditActionCredentialCreated, ResourceType: "acr_credential", ResourceID: credential.CredentialID,
