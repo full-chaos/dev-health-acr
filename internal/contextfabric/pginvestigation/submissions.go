@@ -24,7 +24,7 @@ var (
 	_ contextfabric.UsageReader             = (*Store)(nil)
 )
 
-const submissionColumns = `org_id, owner_auth_method, owner_subject, submission_id, request_digest, reserved_result_id, state, result_id, thread_id, admitted_at, updated_at, expires_at, owner_user_id, owner_surface, question, thread_owner_auth_method, thread_owner_subject`
+const submissionColumns = `org_id, owner_auth_method, owner_subject, submission_id, request_digest, reserved_result_id, state, result_id, thread_id, admitted_at, updated_at, expires_at, owner_user_id, owner_surface, question, thread_owner_auth_method, thread_owner_subject, lease_holder, lease_expires_at, run_request_id, cancel_requested_at`
 
 // storedResultExists is the reconcile rule's condition: the record's reserved
 // result is stored for its organization AND bound to the record's own owner
@@ -64,11 +64,21 @@ type submissionScanner interface {
 func scanSubmission(row submissionScanner) (contextfabric.SubmissionRecord, error) {
 	var record contextfabric.SubmissionRecord
 	var state string
-	var resultID, threadID, ownerUser, ownerSurface, question, threadOwnerMethod, threadOwnerSubject sql.NullString
+	var resultID, threadID, ownerUser, ownerSurface, question, threadOwnerMethod, threadOwnerSubject, leaseHolder, runRequestID sql.NullString
+	var leaseExpiresAt, cancelRequestedAt sql.NullTime
 	if err := row.Scan(&record.Key.OrgID, &record.Key.Owner.AuthenticationMethod, &record.Key.Owner.Subject, &record.Key.SubmissionID,
 		&record.RequestDigest, &record.ReservedResultID, &state, &resultID, &threadID, &record.AdmittedAt, &record.UpdatedAt, &record.ExpiresAt,
-		&ownerUser, &ownerSurface, &question, &threadOwnerMethod, &threadOwnerSubject); err != nil {
+		&ownerUser, &ownerSurface, &question, &threadOwnerMethod, &threadOwnerSubject,
+		&leaseHolder, &leaseExpiresAt, &runRequestID, &cancelRequestedAt); err != nil {
 		return contextfabric.SubmissionRecord{}, err
+	}
+	// CHAOS-11949: the run lease, when the record was admitted under one.
+	record.LeaseHolder, record.RunRequestID = leaseHolder.String, runRequestID.String
+	if leaseExpiresAt.Valid {
+		record.LeaseExpiresAt = leaseExpiresAt.Time.UTC()
+	}
+	if cancelRequestedAt.Valid {
+		record.CancelRequestedAt = cancelRequestedAt.Time.UTC()
 	}
 	if ownerUser.Valid && ownerSurface.Valid {
 		record.Key.Owner.UserID, record.Key.Owner.Surface = ownerUser.String, contextfabric.SubmissionOwnerSurface(ownerSurface.String)
@@ -153,6 +163,17 @@ func (s *Store) AdmitSubmission(ctx context.Context, admission contextfabric.Sub
 	if admission.ThreadRetention != nil && !admission.ThreadRetention.Valid() {
 		return contextfabric.SubmissionRecord{}, false, errors.New("pginvestigation: thread retention is outside the closed set")
 	}
+	// CHAOS-11949: the run lease a new record is admitted under.
+	var leaseHolder, runRequestID sql.NullString
+	var leaseExpiresAt sql.NullTime
+	if admission.Lease != nil {
+		if !admission.Lease.Valid() || !admission.Lease.ExpiresAt.After(now) {
+			return contextfabric.SubmissionRecord{}, false, errors.New("pginvestigation: run lease holder, request id and a future lease expiry are required")
+		}
+		leaseHolder = sql.NullString{String: admission.Lease.Holder, Valid: true}
+		runRequestID = sql.NullString{String: admission.Lease.RequestID, Valid: true}
+		leaseExpiresAt = sql.NullTime{Time: admission.Lease.ExpiresAt.UTC(), Valid: true}
+	}
 	threadID := sql.NullString{String: admission.ThreadID, Valid: admission.ThreadID != ""}
 	// The question is stored with a thread turn only (CHAOS-11948).
 	question := sql.NullString{String: admission.Question, Valid: admission.ThreadID != "" && admission.Question != ""}
@@ -205,13 +226,14 @@ func (s *Store) AdmitSubmission(ctx context.Context, admission contextfabric.Sub
 	}
 	row := tx.QueryRowContext(ctx, `
 INSERT INTO acr.context_fabric_investigation_submissions
-    (org_id, owner_auth_method, owner_subject, submission_id, request_digest, reserved_result_id, state, thread_id, admitted_at, updated_at, expires_at, owner_user_id, owner_surface, question, thread_owner_auth_method, thread_owner_subject)
-VALUES ($1, $2, $3, $4, $5, $6, 'running', $9, $7, $7, $8, NULLIF($10, ''), NULLIF($11, ''), $12, $13, $14)
+    (org_id, owner_auth_method, owner_subject, submission_id, request_digest, reserved_result_id, state, thread_id, admitted_at, updated_at, expires_at, owner_user_id, owner_surface, question, thread_owner_auth_method, thread_owner_subject, lease_holder, lease_expires_at, run_request_id)
+VALUES ($1, $2, $3, $4, $5, $6, 'running', $9, $7, $7, $8, NULLIF($10, ''), NULLIF($11, ''), $12, $13, $14, $15, $16, $17)
 ON CONFLICT (org_id, owner_auth_method, owner_subject, submission_id) DO NOTHING
 RETURNING `+submissionColumns,
 		key.OrgID, key.Owner.AuthenticationMethod, key.Owner.Subject, key.SubmissionID,
 		admission.RequestDigest, admission.ReservedResultID, now.UTC(), admission.ExpiresAt.UTC(), threadID,
-		key.Owner.UserID, string(key.Owner.Surface), question, threadOwnerMethod, threadOwnerSubject)
+		key.Owner.UserID, string(key.Owner.Surface), question, threadOwnerMethod, threadOwnerSubject,
+		leaseHolder, leaseExpiresAt, runRequestID)
 	record, err := scanSubmission(row)
 	switch {
 	case errors.Is(err, sql.ErrNoRows):

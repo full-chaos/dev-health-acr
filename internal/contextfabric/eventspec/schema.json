@@ -10956,7 +10956,8 @@
           "answer_reuse",
           "evidence_expansion",
           "fact_root_recheck",
-          "thread"
+          "thread",
+          "submission_attach"
         ]
       },
       {

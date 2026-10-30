@@ -149,7 +149,13 @@ func (a *App) ContextFabricInvestigationHandler(investigator contextfabric.Inves
 		var submission *admittedInvestigationSubmission
 		reservedResultID := ""
 		if submissionID != "" {
-			admitted, proceed := a.admitInvestigationSubmission(w, r, principal, request, submissionID, threadID, retention, contextfabric.DeploymentModelBound(gatedCtx))
+			// CHAOS-11949: with the run lease on, a streamed submission runs
+			// under this replica's lease, written with the record.
+			var lease *contextfabric.RunLeaseGrant
+			if stream && a.runLeaseServed() {
+				lease = &contextfabric.RunLeaseGrant{Holder: a.runLease.holder, ExpiresAt: a.now().Add(a.runLease.ttl), RequestID: RequestID(r.Context())}
+			}
+			admitted, proceed := a.admitInvestigationSubmission(w, r, principal, request, submissionID, threadID, retention, contextfabric.DeploymentModelBound(gatedCtx), lease)
 			if !proceed {
 				return
 			}

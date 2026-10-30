@@ -93,6 +93,28 @@ type admittedInvestigationSubmission struct {
 	// 30 s) when the store cannot record the end (over-counted, never
 	// under-counted; logged at Error).
 	implicit bool
+	// final is the record as the serve path's last write left it (finish or
+	// abandon), nil when that write failed. A leased run's terminal marker
+	// is decided from it (CHAOS-11949).
+	final *contextfabric.SubmissionRecord
+}
+
+// resultMarker is the terminal marker of a leased run that served an answer:
+// the final result id when the record is done, unsaved when it is
+// done_unsaved, nil when the record's final state is not known.
+func (s *admittedInvestigationSubmission) resultMarker() *contextfabric.RunTerminal {
+	if s == nil || s.final == nil {
+		return nil
+	}
+	switch s.final.State {
+	case contextfabric.SubmissionDone:
+		if s.final.ResultID != "" {
+			return &contextfabric.RunTerminal{Kind: contextfabric.RunTerminalResult, ResultID: s.final.ResultID}
+		}
+	case contextfabric.SubmissionDoneUnsaved:
+		return &contextfabric.RunTerminal{Kind: contextfabric.RunTerminalUnsaved}
+	}
+	return nil
 }
 
 // investigationSubmissionID reads X-ACR-Submission-ID. Absent is ("", true);
@@ -215,7 +237,10 @@ func submissionStoreErrorClass(err error) string {
 // admitInvestigationSubmission admits the request's submission, or answers a
 // repeat of its key. proceed is true only for a newly admitted record; every
 // other path has written the response.
-func (a *App) admitInvestigationSubmission(w http.ResponseWriter, r *http.Request, principal storage.Principal, request contextfabric.InvestigationRequest, submissionID, threadID string, retention *contractsv1.ContextFabricThreadRetentionDays, platformRun bool) (*admittedInvestigationSubmission, bool) {
+//
+// lease (CHAOS-11949) is the run lease a new record is admitted under, nil
+// for a connection-owned run.
+func (a *App) admitInvestigationSubmission(w http.ResponseWriter, r *http.Request, principal storage.Principal, request contextfabric.InvestigationRequest, submissionID, threadID string, retention *contractsv1.ContextFabricThreadRetentionDays, platformRun bool, lease *contextfabric.RunLeaseGrant) (*admittedInvestigationSubmission, bool) {
 	store := a.investigationSubmissions()
 	if store == nil {
 		a.logSubmissionAdmission(r, principal, SubmissionOutcomeStoreUnavailable, "", nil)
@@ -242,6 +267,7 @@ func (a *App) admitInvestigationSubmission(w http.ResponseWriter, r *http.Reques
 		// CHAOS-11948: a thread turn keeps its question and may set the
 		// thread's retention.
 		Question: request.Question, ThreadRetention: retention,
+		Lease: lease,
 	}, a.now())
 	var refused *contextfabric.SubmissionRefusedError
 	if errors.As(err, &refused) {
@@ -259,7 +285,7 @@ func (a *App) admitInvestigationSubmission(w http.ResponseWriter, r *http.Reques
 		return nil, false
 	}
 	if admitted {
-		a.logSubmissionAdmission(r, principal, SubmissionOutcomeAdmitted, record.State, nil, "owner_surface", ownerSurfaceOf(record))
+		a.logSubmissionAdmission(r, principal, SubmissionOutcomeAdmitted, record.State, nil, "owner_surface", ownerSurfaceOf(record), "leased", record.Leased())
 		return &admittedInvestigationSubmission{key: key, record: record, store: store}, true
 	}
 	// A repeat that raced the pre-gate lookup (answerSubmissionRepeat): the
@@ -487,6 +513,9 @@ func (a *App) finishInvestigationSubmission(r *http.Request, principal storage.P
 		record, completion, err = submission.store.FinishSubmission(ctx, submission.key, served, a.now())
 		return err
 	})
+	if err == nil {
+		submission.final = &record
+	}
 	if submission.implicit {
 		a.logSubmissionCompletion(r, principal, submissionCompletionImplicitReleased, record.State, false, result.Reused, err)
 		return
@@ -507,6 +536,9 @@ func (a *App) abandonInvestigationSubmission(r *http.Request, principal storage.
 		record, err = submission.store.AbandonSubmission(ctx, submission.key, a.now())
 		return err
 	})
+	if err == nil {
+		submission.final = &record
+	}
 	a.logSubmissionCompletion(r, principal, submissionCompletionAbandonedOnError, record.State, false, false, err)
 }
 

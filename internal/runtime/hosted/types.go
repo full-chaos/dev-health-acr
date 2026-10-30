@@ -108,6 +108,8 @@ type Runtime struct {
 	// submissionSweeper (CHAOS-11912) writes through the same pool, so it
 	// is stopped before postgresClose like the sinks above.
 	submissionSweeper *submissionSweeper
+	// runTakeover (CHAOS-11949) takes over lost runs through the same pool.
+	runTakeover       *submissionSweeper
 	postgresClose     func() error
 	independentClosed bool
 	postgresClosed    bool
@@ -179,6 +181,15 @@ func (r *Runtime) Close() error {
 		cancel()
 		if sweeperErr != nil {
 			workerTimedOut = true
+		}
+	}
+	if r.runTakeover != nil {
+		closeCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		takeoverErr := r.runTakeover.Close(closeCtx)
+		cancel()
+		if takeoverErr != nil {
+			workerTimedOut = true
+			sweeperErr = errors.Join(sweeperErr, takeoverErr)
 		}
 	}
 	// The OTHER, unrelated closers (clickhouse, entitlement, ...) share no

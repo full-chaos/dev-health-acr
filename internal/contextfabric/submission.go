@@ -238,7 +238,19 @@ type SubmissionRecord struct {
 	// without a thread; a record stored without it is linked through its own
 	// owner.
 	ThreadOwner SubmissionOwner
+	// The run lease (CHAOS-11949): LeaseHolder is the replica that holds it
+	// (or that took over the lost run), LeaseExpiresAt when it ends unless
+	// renewed, RunRequestID the run's request id, CancelRequestedAt t_req of
+	// the first explicit cancel. All zero for a record admitted without a
+	// lease (a connection-owned run).
+	LeaseHolder       string
+	LeaseExpiresAt    time.Time
+	RunRequestID      string
+	CancelRequestedAt time.Time
 }
+
+// Leased reports whether the record was admitted under a run lease.
+func (r SubmissionRecord) Leased() bool { return r.LeaseHolder != "" }
 
 // SubmissionAdmission is what admission inserts.
 type SubmissionAdmission struct {
@@ -265,6 +277,10 @@ type SubmissionAdmission struct {
 	// PlatformRun is true when the run uses the deployment's own model: it
 	// then counts to the monthly allowance as well as to concurrency.
 	PlatformRun bool
+	// Lease is the run lease a NEW record is admitted under (CHAOS-11949),
+	// nil for a connection-owned run. A repeat of an existing key never
+	// takes a lease.
+	Lease *RunLeaseGrant
 }
 
 // SubmissionCompletion names how a served run's record reached its final

@@ -167,6 +167,7 @@ func appConfig(cfg config.Config, serviceVersion string) api.AppConfig {
 		ServerCompletenessAuthorityEnabled:          cfg.ServerCompletenessAuthorityEnabled,
 		ServerCompletenessAuthoritySymmetricEnabled: cfg.ServerCompletenessAuthoritySymmetricEnabled,
 		ContextFabricEventStreamEnabled:             cfg.ContextFabricEventStreamEnabled,
+		ContextFabricRunLeaseEnabled:                cfg.ContextFabricRunLeaseEnabled,
 		AskDevLimits: contextfabric.SubmissionLimits{
 			MaxRunningPerPrincipal: cfg.AskDevMaxRunningPerPrincipal, MaxRunningPerOrg: cfg.AskDevMaxRunningPerOrg,
 			MonthlyPlatformRunAllowance: int64(cfg.AskDevMonthlyPlatformRunAllowance),
