@@ -210,7 +210,9 @@ func TestRealInventoryRowCountMatchesTheWave0Baseline(t *testing.T) {
 	// credentials/self/ack route, less (26 = 17 / 9) the three
 	// context-fabric/model-config rows retired with the acr-side BYO store,
 	// and (27 = 18 / 9) the protected submission status route CHAOS-11913
-	// adds under /api/v1/context-fabric/investigations/submissions/.
+	// adds under /api/v1/context-fabric/investigations/submissions/, and
+	// (30 = 21 / 9) the three protected Ask Dev thread routes CHAOS-11948
+	// adds (list, read, delete).
 	// A different number is a finding to reconcile, not an adjustment.
 	root := repoRoot(t)
 	inventoryPath := filepath.Join(root, "contracts", "auth", "v1", "endpoint-profiles.acr.json")
@@ -219,8 +221,8 @@ func TestRealInventoryRowCountMatchesTheWave0Baseline(t *testing.T) {
 		t.Fatal(err)
 	}
 	rows := asArray(inventory["rows"])
-	if len(rows) != 27 {
-		t.Fatalf("expected 27 rows, got %d", len(rows))
+	if len(rows) != 30 {
+		t.Fatalf("expected 30 rows, got %d", len(rows))
 	}
 	var protected, public int
 	for _, r := range rows {
@@ -232,8 +234,8 @@ func TestRealInventoryRowCountMatchesTheWave0Baseline(t *testing.T) {
 			public++
 		}
 	}
-	if protected != 18 {
-		t.Errorf("expected 18 protected rows, got %d", protected)
+	if protected != 21 {
+		t.Errorf("expected 21 protected rows, got %d", protected)
 	}
 	if public != 9 {
 		t.Errorf("expected 9 public rows, got %d", public)

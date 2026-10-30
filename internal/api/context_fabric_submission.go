@@ -45,17 +45,29 @@ const (
 	// CHAOS-11997: a create without X-ACR-Submission-ID on the deployment's
 	// model, admitted under a server-minted key.
 	SubmissionOutcomeAdmittedImplicit SubmissionAdmissionOutcome = "admitted_implicit"
+	// CHAOS-11948: a new turn, or a repeat of a turn's key, naming a thread
+	// of the caller that is deleted, expired or full. The line also carries
+	// thread_closed_reason.
+	SubmissionOutcomeRefusedThreadClosed SubmissionAdmissionOutcome = "refused_thread_closed"
 )
 
 // SubmissionAdmissionOutcomeVocabulary is the closed set of outcomes.
-func SubmissionAdmissionOutcomeVocabulary() [13]SubmissionAdmissionOutcome {
-	return [13]SubmissionAdmissionOutcome{
+func SubmissionAdmissionOutcomeVocabulary() [14]SubmissionAdmissionOutcome {
+	return [14]SubmissionAdmissionOutcome{
 		SubmissionOutcomeAdmitted, SubmissionOutcomeReplayed, SubmissionOutcomeRefusedMismatch, SubmissionOutcomeRefusedInProgress,
 		SubmissionOutcomeRefusedUnsaved, SubmissionOutcomeRefusedAbandoned, SubmissionOutcomeStoreUnavailable, SubmissionOutcomeOwnerUnknown,
 		SubmissionOutcomeRefusedHeader,
 		SubmissionOutcomeRefusedPrincipalConcurrency, SubmissionOutcomeRefusedOrgConcurrency, SubmissionOutcomeRefusedAllowance,
-		SubmissionOutcomeAdmittedImplicit,
+		SubmissionOutcomeAdmittedImplicit, SubmissionOutcomeRefusedThreadClosed,
 	}
+}
+
+// writeThreadClosed is the 409 thread_closed of a turn naming a closed
+// thread: nothing ran and nothing was admitted. The reason (deleted,
+// expired, full) is on the admission line, never in the response.
+func (a *App) writeThreadClosed(w http.ResponseWriter, r *http.Request, principal storage.Principal, state contextfabric.SubmissionState, reason contextfabric.ThreadClosedReason) {
+	a.logSubmissionAdmission(r, principal, SubmissionOutcomeRefusedThreadClosed, state, nil, "thread_closed_reason", string(reason))
+	writeError(w, r, contractsv1.ContextFabricThreadClosedStatus, contractsv1.ErrorCodeThreadClosed, contractsv1.ContextFabricThreadClosedMessage, false, nil)
 }
 
 // submissionCompletionAbandonedOnError is the completion of a run that ended
@@ -92,6 +104,24 @@ func investigationSubmissionID(r *http.Request) (string, bool) {
 // investigationThreadID reads X-ACR-Thread-ID by the same rule.
 func investigationThreadID(r *http.Request) (string, bool) {
 	return investigationCorrelationHeader(r, contractsv1.ContextFabricThreadIDHeader)
+}
+
+// investigationThreadRetention reads X-ACR-Thread-Retention-Days (CHAOS-11948).
+// Absent is (nil, true); one value in the closed grammar is (value, true);
+// anything else, a repeated header included, is (nil, false).
+func investigationThreadRetention(r *http.Request) (*contractsv1.ContextFabricThreadRetentionDays, bool) {
+	values := r.Header.Values(contractsv1.ContextFabricThreadRetentionHeader)
+	switch {
+	case len(values) == 0:
+		return nil, true
+	case len(values) > 1:
+		return nil, false
+	}
+	retention, err := contractsv1.ParseContextFabricThreadRetention(values[0])
+	if err != nil {
+		return nil, false
+	}
+	return &retention, true
 }
 
 func investigationCorrelationHeader(r *http.Request, header string) (string, bool) {
@@ -185,7 +215,7 @@ func submissionStoreErrorClass(err error) string {
 // admitInvestigationSubmission admits the request's submission, or answers a
 // repeat of its key. proceed is true only for a newly admitted record; every
 // other path has written the response.
-func (a *App) admitInvestigationSubmission(w http.ResponseWriter, r *http.Request, principal storage.Principal, request contextfabric.InvestigationRequest, submissionID, threadID string, platformRun bool) (*admittedInvestigationSubmission, bool) {
+func (a *App) admitInvestigationSubmission(w http.ResponseWriter, r *http.Request, principal storage.Principal, request contextfabric.InvestigationRequest, submissionID, threadID string, retention *contractsv1.ContextFabricThreadRetentionDays, platformRun bool) (*admittedInvestigationSubmission, bool) {
 	store := a.investigationSubmissions()
 	if store == nil {
 		a.logSubmissionAdmission(r, principal, SubmissionOutcomeStoreUnavailable, "", nil)
@@ -209,10 +239,18 @@ func (a *App) admitInvestigationSubmission(w http.ResponseWriter, r *http.Reques
 		// CHAOS-11914: the shared limits, and whether the run counts to the
 		// monthly allowance (it runs on the deployment's model).
 		Limits: a.config.AskDevLimits, PlatformRun: platformRun,
+		// CHAOS-11948: a thread turn keeps its question and may set the
+		// thread's retention.
+		Question: request.Question, ThreadRetention: retention,
 	}, a.now())
 	var refused *contextfabric.SubmissionRefusedError
 	if errors.As(err, &refused) {
 		a.writeSubmissionRefused(w, r, principal, refused, false)
+		return nil, false
+	}
+	var closed *contextfabric.ThreadClosedError
+	if errors.As(err, &closed) {
+		a.writeThreadClosed(w, r, principal, "", closed.Reason)
 		return nil, false
 	}
 	if err != nil {
@@ -240,7 +278,7 @@ func (a *App) admitInvestigationSubmission(w http.ResponseWriter, r *http.Reques
 // key. With no submission store configured the create runs as before
 // (proceed, nil) and a Warn admission line. Any other failure fails closed: the spend ceiling is not
 // skipped because its store cannot be reached.
-func (a *App) admitImplicitInvestigation(w http.ResponseWriter, r *http.Request, principal storage.Principal, request contextfabric.InvestigationRequest, threadID string) (*admittedInvestigationSubmission, bool) {
+func (a *App) admitImplicitInvestigation(w http.ResponseWriter, r *http.Request, principal storage.Principal, request contextfabric.InvestigationRequest) (*admittedInvestigationSubmission, bool) {
 	store := a.investigationSubmissions()
 	if store == nil {
 		// A runtime composed without a submission store (the hosted runtime
@@ -261,8 +299,10 @@ func (a *App) admitImplicitInvestigation(w http.ResponseWriter, r *http.Request,
 		writeError(w, r, http.StatusInternalServerError, "internal_error", "Context Fabric investigation could not be admitted", false, nil)
 		return nil, false
 	}
+	// No thread: a thread turn needs a named submission (CHAOS-11948), so a
+	// create without X-ACR-Submission-ID never joins one.
 	record, admitted, err := store.AdmitSubmission(r.Context(), contextfabric.SubmissionAdmission{
-		Key: key, RequestDigest: digest, ReservedResultID: a.reserveResultID(), ThreadID: threadID, ExpiresAt: a.submissionExpiry(r.Context()),
+		Key: key, RequestDigest: digest, ReservedResultID: a.reserveResultID(), ExpiresAt: a.submissionExpiry(r.Context()),
 		Limits: a.config.AskDevLimits, PlatformRun: true,
 	}, a.now())
 	var refused *contextfabric.SubmissionRefusedError
@@ -330,6 +370,12 @@ func (a *App) answerSubmissionRecord(w http.ResponseWriter, r *http.Request, pri
 	if record.RequestDigest != digest {
 		a.logSubmissionAdmission(r, principal, SubmissionOutcomeRefusedMismatch, record.State, nil, "owner_match", string(match))
 		writeError(w, r, http.StatusConflict, contractsv1.ErrorCodeSubmissionMismatch, "The submission id was already used for a different request", false, nil)
+		return
+	}
+	// CHAOS-11948 (design §6 T1): a repeat of a turn of a deleted or expired
+	// thread is refused; nothing of the turn is served again.
+	if record.ThreadClosed != "" {
+		a.writeThreadClosed(w, r, principal, record.State, record.ThreadClosed)
 		return
 	}
 	switch record.State {

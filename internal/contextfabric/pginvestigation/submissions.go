@@ -24,7 +24,7 @@ var (
 	_ contextfabric.UsageReader             = (*Store)(nil)
 )
 
-const submissionColumns = `org_id, owner_auth_method, owner_subject, submission_id, request_digest, reserved_result_id, state, result_id, thread_id, admitted_at, updated_at, expires_at, owner_user_id, owner_surface`
+const submissionColumns = `org_id, owner_auth_method, owner_subject, submission_id, request_digest, reserved_result_id, state, result_id, thread_id, admitted_at, updated_at, expires_at, owner_user_id, owner_surface, question, thread_owner_auth_method, thread_owner_subject`
 
 // storedResultExists is the reconcile rule's condition: the record's reserved
 // result is stored for its organization AND bound to the record's own owner
@@ -64,10 +64,10 @@ type submissionScanner interface {
 func scanSubmission(row submissionScanner) (contextfabric.SubmissionRecord, error) {
 	var record contextfabric.SubmissionRecord
 	var state string
-	var resultID, threadID, ownerUser, ownerSurface sql.NullString
+	var resultID, threadID, ownerUser, ownerSurface, question, threadOwnerMethod, threadOwnerSubject sql.NullString
 	if err := row.Scan(&record.Key.OrgID, &record.Key.Owner.AuthenticationMethod, &record.Key.Owner.Subject, &record.Key.SubmissionID,
 		&record.RequestDigest, &record.ReservedResultID, &state, &resultID, &threadID, &record.AdmittedAt, &record.UpdatedAt, &record.ExpiresAt,
-		&ownerUser, &ownerSurface); err != nil {
+		&ownerUser, &ownerSurface, &question, &threadOwnerMethod, &threadOwnerSubject); err != nil {
 		return contextfabric.SubmissionRecord{}, err
 	}
 	if ownerUser.Valid && ownerSurface.Valid {
@@ -76,6 +76,10 @@ func scanSubmission(row submissionScanner) (contextfabric.SubmissionRecord, erro
 	record.State = contextfabric.SubmissionState(state)
 	record.ResultID = resultID.String
 	record.ThreadID = threadID.String
+	record.Question = question.String
+	if threadOwnerMethod.Valid && threadOwnerSubject.Valid {
+		record.ThreadOwner = contextfabric.SubmissionOwner{AuthenticationMethod: threadOwnerMethod.String, Subject: threadOwnerSubject.String}
+	}
 	record.AdmittedAt, record.UpdatedAt, record.ExpiresAt = record.AdmittedAt.UTC(), record.UpdatedAt.UTC(), record.ExpiresAt.UTC()
 	return record, nil
 }
@@ -146,7 +150,12 @@ func (s *Store) AdmitSubmission(ctx context.Context, admission contextfabric.Sub
 	if admission.ThreadID != "" && !contextfabric.ValidSubmissionID(admission.ThreadID) {
 		return contextfabric.SubmissionRecord{}, false, errors.New("pginvestigation: thread id is malformed")
 	}
+	if admission.ThreadRetention != nil && !admission.ThreadRetention.Valid() {
+		return contextfabric.SubmissionRecord{}, false, errors.New("pginvestigation: thread retention is outside the closed set")
+	}
 	threadID := sql.NullString{String: admission.ThreadID, Valid: admission.ThreadID != ""}
+	// The question is stored with a thread turn only (CHAOS-11948).
+	question := sql.NullString{String: admission.Question, Valid: admission.ThreadID != "" && admission.Question != ""}
 	key := admission.Key
 	limits := admission.Limits.Effective()
 	tx, err := s.db.BeginTx(ctx, nil)
@@ -172,15 +181,37 @@ func (s *Store) AdmitSubmission(ctx context.Context, admission contextfabric.Sub
 		}
 		return existing, false, nil
 	}
+	// CHAOS-11948: a new turn of a closed thread is refused before anything is
+	// written and before any limit is counted. The turn joins the row the
+	// caller reaches (a rotated credential of the same user on the same
+	// surface reaches the user's row, CHAOS-12091); a new thread is keyed by
+	// the caller's own owner. The record links the row by its legacy pair.
+	var thread *contextfabric.ThreadRecord
+	threadKey := contextfabric.ThreadKey{OrgID: key.OrgID, Owner: key.Owner, ThreadID: admission.ThreadID}
+	var threadOwnerMethod, threadOwnerSubject sql.NullString
+	if admission.ThreadID != "" {
+		current, found, err := resolveThread(ctx, tx, key.OrgID, key.Owner, admission.ThreadID, true)
+		if err != nil {
+			return contextfabric.SubmissionRecord{}, false, fmt.Errorf("admit investigation submission: read thread: %w", err)
+		}
+		if found {
+			if reason := current.ClosedReason(now); reason != "" {
+				return contextfabric.SubmissionRecord{}, false, &contextfabric.ThreadClosedError{Reason: reason}
+			}
+			thread, threadKey = &current, current.Key
+		}
+		threadOwnerMethod = sql.NullString{String: threadKey.Owner.AuthenticationMethod, Valid: true}
+		threadOwnerSubject = sql.NullString{String: threadKey.Owner.Subject, Valid: true}
+	}
 	row := tx.QueryRowContext(ctx, `
 INSERT INTO acr.context_fabric_investigation_submissions
-    (org_id, owner_auth_method, owner_subject, submission_id, request_digest, reserved_result_id, state, thread_id, admitted_at, updated_at, expires_at, owner_user_id, owner_surface)
-VALUES ($1, $2, $3, $4, $5, $6, 'running', $9, $7, $7, $8, NULLIF($10, ''), NULLIF($11, ''))
+    (org_id, owner_auth_method, owner_subject, submission_id, request_digest, reserved_result_id, state, thread_id, admitted_at, updated_at, expires_at, owner_user_id, owner_surface, question, thread_owner_auth_method, thread_owner_subject)
+VALUES ($1, $2, $3, $4, $5, $6, 'running', $9, $7, $7, $8, NULLIF($10, ''), NULLIF($11, ''), $12, $13, $14)
 ON CONFLICT (org_id, owner_auth_method, owner_subject, submission_id) DO NOTHING
 RETURNING `+submissionColumns,
 		key.OrgID, key.Owner.AuthenticationMethod, key.Owner.Subject, key.SubmissionID,
 		admission.RequestDigest, admission.ReservedResultID, now.UTC(), admission.ExpiresAt.UTC(), threadID,
-		key.Owner.UserID, string(key.Owner.Surface))
+		key.Owner.UserID, string(key.Owner.Surface), question, threadOwnerMethod, threadOwnerSubject)
 	record, err := scanSubmission(row)
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
@@ -232,6 +263,13 @@ RETURNING u.platform_runs`, key.OrgID, month, now.UTC(), limits.MonthlyPlatformR
 			return contextfabric.SubmissionRecord{}, false, &contextfabric.SubmissionRefusedError{Refusal: contextfabric.SubmissionRefusedAllowanceExhausted, Count: current, Limit: limits.MonthlyPlatformRunAllowance, RetryAfter: contextfabric.AllowanceRetryAfter(now)}
 		case err != nil:
 			return contextfabric.SubmissionRecord{}, false, fmt.Errorf("admit investigation submission: count usage: %w", sanitizeError(err))
+		}
+	}
+	if admission.ThreadID != "" {
+		next := contextfabric.AdvanceThread(thread, threadKey,
+			contextfabric.ThreadTurnCursor{AdmittedAt: record.AdmittedAt, SubmissionID: key.SubmissionID}, admission.ThreadRetention)
+		if err := writeThread(ctx, tx, next); err != nil {
+			return contextfabric.SubmissionRecord{}, false, fmt.Errorf("admit investigation submission: write thread: %w", err)
 		}
 	}
 	if err := tx.Commit(); err != nil {
@@ -291,6 +329,9 @@ SELECT `+submissionColumns+` FROM acr.context_fabric_investigation_submissions
 		return contextfabric.SubmissionRecord{}, contextfabric.ErrSubmissionNotFound
 	case err != nil:
 		return contextfabric.SubmissionRecord{}, fmt.Errorf("read investigation submission: %w", sanitizeError(err))
+	}
+	if record.ThreadClosed, err = s.recordThreadClosed(ctx, record, now); err != nil {
+		return contextfabric.SubmissionRecord{}, err
 	}
 	return record, nil
 }

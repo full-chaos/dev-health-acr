@@ -222,6 +222,22 @@ type SubmissionRecord struct {
 	// ExpiresAt is the admission time plus the run budget plus
 	// SubmissionAbandonGrace: a record still running at it is abandoned.
 	ExpiresAt time.Time
+	// Question is the question a thread turn was admitted with (CHAOS-11948),
+	// "" for a record that names no thread or whose thread was deleted (the
+	// delete erases it).
+	Question string
+	// ThreadClosed is set when the record's thread is closed at the read's
+	// clock: deleted or expired. A repeat of the key is then refused
+	// (409 thread_closed) and the status read answers not found.
+	ThreadClosed ThreadClosedReason
+	// ThreadOwner is the owner of the thread row the turn joined; its legacy
+	// pair (AuthenticationMethod, Subject) names the row. It is the caller's
+	// own owner when the turn started the thread, and the row's owner when the
+	// caller matched an existing row through SameSubmissionOwner -- a rotated
+	// credential of the same user on the same surface (CHAOS-12091). Zero
+	// without a thread; a record stored without it is linked through its own
+	// owner.
+	ThreadOwner SubmissionOwner
 }
 
 // SubmissionAdmission is what admission inserts.
@@ -230,8 +246,19 @@ type SubmissionAdmission struct {
 	RequestDigest    string
 	ReservedResultID string
 	// ThreadID is optional; when set it follows ValidSubmissionID's grammar.
+	// A new key with a thread id joins that thread of the key's owner, in
+	// the admission's own transaction: the thread row is created or
+	// advanced, and a closed thread (deleted, expired, or holding
+	// ContextFabricThreadMaxTurnCount turns) refuses the admission with a
+	// *ThreadClosedError and writes nothing (CHAOS-11948).
 	ThreadID  string
 	ExpiresAt time.Time
+	// Question is stored with a thread turn only (ThreadID set).
+	Question string
+	// ThreadRetention is the retention the turn names
+	// (X-ACR-Thread-Retention-Days), nil when it names none. The latest turn
+	// (turn order) that named one decides the thread's retention.
+	ThreadRetention *contractsv1.ContextFabricThreadRetentionDays
 	// Limits are the shared limits a NEW record is admitted under
 	// (CHAOS-11914); a repeat of an existing key is never refused by them.
 	Limits SubmissionLimits

@@ -17,8 +17,9 @@ import (
 // repository must pass nil options (the database default, READ COMMITTED,
 // which the integration test reads back from the pool).
 var explicitIsolation = map[string]string{
-	"internal/storage/postgres/oauth_purge.go":                "LevelReadCommitted",
-	"internal/contextfabric/pgprojection/org_purge_marker.go": "LevelRepeatableRead", // deletes purge markers only; writes no fenced table
+	"internal/storage/postgres/oauth_purge.go":                  "LevelReadCommitted",
+	"internal/contextfabric/pgprojection/org_purge_marker.go":   "LevelRepeatableRead", // deletes purge markers only; writes no fenced table
+	"internal/contextfabric/pginvestigation/thread_snapshot.go": "LevelRepeatableRead", // the thread read's snapshot (CHAOS-11948): read-only, writes nothing
 }
 
 func TestNoWriterOfAFencedTableRunsOutsideReadCommitted(t *testing.T) {
@@ -110,5 +111,17 @@ func TestNoWriterOfAFencedTableRunsOutsideReadCommitted(t *testing.T) {
 	}
 	if strings.Count(string(marker), "DELETE FROM") != 1 || !strings.Contains(string(marker), "DELETE FROM acr.context_fabric_org_purge_markers") {
 		t.Error("the repeatable-read marker transaction may delete from the purge marker table only")
+	}
+	snapshot, err := os.ReadFile(filepath.Join(root, "internal/contextfabric/pginvestigation/thread_snapshot.go"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(snapshot), "ReadOnly: true") {
+		t.Error("the repeatable-read thread snapshot must be a read-only transaction")
+	}
+	for _, write := range []string{"INSERT", "UPDATE", "DELETE", "ExecContext"} {
+		if strings.Contains(string(snapshot), write) {
+			t.Errorf("the repeatable-read thread snapshot's file now contains %q; it may only read", write)
+		}
 	}
 }

@@ -468,6 +468,180 @@
       }
     },
     {
+      "id": "GET /api/v1/context-fabric/threads [dev-health-acr-api]",
+      "surface_kind": "rest",
+      "method": "GET",
+      "route": "/api/v1/context-fabric/threads",
+      "graphql_field_name": null,
+      "service": "dev-health-acr-api",
+      "source": {
+        "file": "internal/api/app.go",
+        "line": 101
+      },
+      "classification": "protected",
+      "public_rationale": null,
+      "accepted_credential_classes": [
+        "acr_client_credential",
+        "acr_web_assertion"
+      ],
+      "primary_validator": {
+        "description": "protectedRuntimeHandler(RequestClassContext, ScopeContextRead, entitlement=true, allowWebAssertions=true), applied at the end of ContextFabricThreadListHandler.",
+        "anchor": {
+          "path": "internal/api/context_fabric_threads.go",
+          "line": 191,
+          "line_end": 191,
+          "note": "a.protectedRuntimeHandler(limits.RequestClassContext, auth.ScopeContextRead"
+        }
+      },
+      "token_shape": {
+        "token_type": "fcacr_ bearer OR X-ACR-Web-Assertion",
+        "issuer": null,
+        "audience": null,
+        "algorithm": null
+      },
+      "reachable_validators": [
+        {
+          "description": "Same single-dispatch guarantee -- see web_assertion_middleware.go:11-16.",
+          "anchor": {
+            "path": "internal/auth/web_assertion_middleware.go",
+            "line": 11,
+            "line_end": 16,
+            "note": "func (a *Authenticator) authenticateWebAssertion("
+          },
+          "is_intended_validator": true,
+          "reachable_but_not_owner": false
+        }
+      ],
+      "action": "context_fabric.thread.list",
+      "resource_resolver": "no path parameter; the list is keyed (org_id, owner auth method, owner subject) from the authenticated principal (SubmissionOwnerOf), so only the caller's own threads are read; a cursor is bound to the same owner and refused otherwise (CHAOS-11948).",
+      "tenant_requirement": "org_scoped",
+      "current_state_cache_behavior": "Reads the caller's own open threads; runs nothing.",
+      "impersonation_policy": "not_applicable_non_main_app",
+      "entitlement_requirement": "agentContextRuntimeEntitlement",
+      "disclosure_behavior": "400 invalid_request for a malformed limit or a malformed or foreign cursor; 503 store_unavailable on a store failure.",
+      "gaps": [],
+      "class_disambiguator": {
+        "kind": "dedicated_header",
+        "name": "X-ACR-Web-Assertion"
+      }
+    },
+    {
+      "id": "GET /api/v1/context-fabric/threads/{thread_id} [dev-health-acr-api]",
+      "surface_kind": "rest",
+      "method": "GET",
+      "route": "/api/v1/context-fabric/threads/{thread_id}",
+      "graphql_field_name": null,
+      "service": "dev-health-acr-api",
+      "source": {
+        "file": "internal/api/app.go",
+        "line": 102
+      },
+      "classification": "protected",
+      "public_rationale": null,
+      "accepted_credential_classes": [
+        "acr_client_credential",
+        "acr_web_assertion"
+      ],
+      "primary_validator": {
+        "description": "protectedRuntimeHandler(RequestClassContext, ScopeContextRead, entitlement=true, allowWebAssertions=true), applied at the end of ContextFabricThreadHandler.",
+        "anchor": {
+          "path": "internal/api/context_fabric_threads.go",
+          "line": 218,
+          "line_end": 218,
+          "note": "a.protectedRuntimeHandler(limits.RequestClassContext, auth.ScopeContextRead"
+        }
+      },
+      "token_shape": {
+        "token_type": "fcacr_ bearer OR X-ACR-Web-Assertion",
+        "issuer": null,
+        "audience": null,
+        "algorithm": null
+      },
+      "reachable_validators": [
+        {
+          "description": "Same single-dispatch guarantee -- see web_assertion_middleware.go:11-16.",
+          "anchor": {
+            "path": "internal/auth/web_assertion_middleware.go",
+            "line": 11,
+            "line_end": 16,
+            "note": "func (a *Authenticator) authenticateWebAssertion("
+          },
+          "is_intended_validator": true,
+          "reachable_but_not_owner": false
+        }
+      ],
+      "action": "context_fabric.thread.read",
+      "resource_resolver": "thread_id path param; the thread is keyed (org_id, owner auth method, owner subject, thread_id) from the authenticated principal, so another principal's or another organization's thread is not found by construction; each done turn's result id is named only when the result read by id would serve it (stored-result gate, surface thread) (CHAOS-11948).",
+      "tenant_requirement": "org_scoped",
+      "current_state_cache_behavior": "Reads the caller's own open thread and reconciles its unfinished turns like a status read; runs nothing.",
+      "impersonation_policy": "not_applicable_non_main_app",
+      "entitlement_requirement": "agentContextRuntimeEntitlement",
+      "disclosure_behavior": "writeThreadNotFound(): one 404 not_found envelope for unknown, malformed, deleted, expired and another principal's ids; 400 for a malformed or foreign before cursor; 503 on a store failure or an undecidable serving decision.",
+      "gaps": [],
+      "class_disambiguator": {
+        "kind": "dedicated_header",
+        "name": "X-ACR-Web-Assertion"
+      }
+    },
+    {
+      "id": "DELETE /api/v1/context-fabric/threads/{thread_id} [dev-health-acr-api]",
+      "surface_kind": "rest",
+      "method": "DELETE",
+      "route": "/api/v1/context-fabric/threads/{thread_id}",
+      "graphql_field_name": null,
+      "service": "dev-health-acr-api",
+      "source": {
+        "file": "internal/api/app.go",
+        "line": 103
+      },
+      "classification": "protected",
+      "public_rationale": null,
+      "accepted_credential_classes": [
+        "acr_client_credential",
+        "acr_web_assertion"
+      ],
+      "primary_validator": {
+        "description": "protectedRuntimeHandler(RequestClassContext, ScopeContextRead, entitlement=true, allowWebAssertions=true), applied at the end of ContextFabricThreadHandler.",
+        "anchor": {
+          "path": "internal/api/context_fabric_threads.go",
+          "line": 218,
+          "line_end": 218,
+          "note": "a.protectedRuntimeHandler(limits.RequestClassContext, auth.ScopeContextRead"
+        }
+      },
+      "token_shape": {
+        "token_type": "fcacr_ bearer OR X-ACR-Web-Assertion",
+        "issuer": null,
+        "audience": null,
+        "algorithm": null
+      },
+      "reachable_validators": [
+        {
+          "description": "Same single-dispatch guarantee -- see web_assertion_middleware.go:11-16.",
+          "anchor": {
+            "path": "internal/auth/web_assertion_middleware.go",
+            "line": 11,
+            "line_end": 16,
+            "note": "func (a *Authenticator) authenticateWebAssertion("
+          },
+          "is_intended_validator": true,
+          "reachable_but_not_owner": false
+        }
+      ],
+      "action": "context_fabric.thread.delete",
+      "resource_resolver": "thread_id path param; the thread is keyed from the authenticated principal like the read, so only the caller's own thread can be closed (CHAOS-11948).",
+      "tenant_requirement": "org_scoped",
+      "current_state_cache_behavior": "Closes the caller's own thread (closure recorded, turn questions erased); never touches another principal's rows.",
+      "impersonation_policy": "not_applicable_non_main_app",
+      "entitlement_requirement": "agentContextRuntimeEntitlement",
+      "disclosure_behavior": "204 for any well-formed id whether or not the caller had such an open thread (idempotent, existence-neutral); 404 not_found for a malformed id; 503 on a store failure.",
+      "gaps": [],
+      "class_disambiguator": {
+        "kind": "dedicated_header",
+        "name": "X-ACR-Web-Assertion"
+      }
+    },
+    {
       "id": "GET /api/v1/context-fabric/data/catalog [dev-health-acr-api]",
       "surface_kind": "rest",
       "method": "GET",
