@@ -1753,9 +1753,15 @@ check_fullstack_ops_checkout_wiring() {
       printf 'job %s: its last step is not the failed-run ops naming step (found: %s)\n' "$job" "$last" >&2; status=1; }
     awk '/- name: Name the dev-health-ops commit of a failed run/ { grab=1 } grab' <<<"$block" | grep -qxF '        if: failure()' || {
       printf 'job %s: the ops naming step does not run on failure\n' "$job" >&2; status=1; }
-    # shellcheck disable=SC2016
-    awk '/- name: Name the dev-health-ops commit of a failed run/ { grab=1 } grab' <<<"$block" | grep -qF 'OPS_SHA: ${{ steps.ops.outputs.sha }}' || {
-      printf 'job %s: the ops naming step does not name the checked-out commit\n' "$job" >&2; status=1; }
+    # Codex #1775 r3 P2: all three outputs, exactly. The behaviour check
+    # injects them itself, so only this check sees a dropped mapping.
+    local naming mapping
+    naming="$(awk '/- name: Name the dev-health-ops commit of a failed run/ { grab=1 } grab' <<<"$block")"
+    # shellcheck disable=SC2016  # the ${{ }} expressions are literal workflow text
+    for mapping in 'OPS_SHA: ${{ steps.ops.outputs.sha }}' 'OPS_MODE: ${{ steps.ops.outputs.mode }}' 'OPS_PIN: ${{ steps.ops.outputs.pin }}'; do
+      grep -qxF "          $mapping" <<<"$naming" || {
+        printf 'job %s: the ops naming step does not map %s\n' "$job" "$mapping" >&2; status=1; }
+    done
   done < <(awk '/^jobs:/ { in_jobs=1; next } in_jobs && /^  [A-Za-z0-9_-]+:$/ { sub(/:$/, ""); sub(/^  /, ""); print }' "$file")
   return "$status"
 }
@@ -2193,6 +2199,19 @@ awk '
 ' "$fullstack_workflow" > "$wiring_other_path"
 mutate_or_die "$fullstack_workflow" "$wiring_other_path" 'wiring_other_path'
 assert_check_fails 'a job that checks ops out to another path through another action escapes the wiring check' check_fullstack_ops_checkout_wiring "$wiring_other_path"
+wiring_no_mode="$tmpdir/fullstack-wiring-no-mode.yml"
+# shellcheck disable=SC2016  # the ${{ }} expression is literal workflow text
+replace_literal_line "$fullstack_workflow" "$wiring_no_mode" '          OPS_MODE: ${{ steps.ops.outputs.mode }}' '          OPS_MODE_UNUSED: none'
+mutate_or_die "$fullstack_workflow" "$wiring_no_mode" 'wiring_no_mode'
+check_fullstack_failure_step_behaviour "$wiring_no_mode" 2>/dev/null && printf 'NOTE: the behaviour check alone passes a dropped OPS_MODE mapping (codex #1775 r3 P2); the wiring check must not\n'
+assert_check_fails 'the first job'"'"'s failure step lost its OPS_MODE mapping' check_fullstack_ops_checkout_wiring "$wiring_no_mode"
+wiring_no_pin="$tmpdir/fullstack-wiring-no-pin.yml"
+# shellcheck disable=SC2016  # the ${{ }} expression is literal workflow text
+pin_lines="$(grep -cxF '          OPS_PIN: ${{ steps.ops.outputs.pin }}' "$fullstack_workflow")"
+# shellcheck disable=SC2016  # the ${{ }} expression is literal workflow text
+awk -v last="$pin_lines" '$0 == "          OPS_PIN: ${{ steps.ops.outputs.pin }}" { n++; if (n == last) { print "          OPS_PIN_UNUSED: none"; next } } { print }' "$fullstack_workflow" > "$wiring_no_pin"
+mutate_or_die "$fullstack_workflow" "$wiring_no_pin" 'wiring_no_pin'
+assert_check_fails 'the last job'"'"'s failure step lost its OPS_PIN mapping' check_fullstack_ops_checkout_wiring "$wiring_no_pin"
 failure_step_no_summary="$tmpdir/fullstack-failure-step-no-summary.yml"
 summary_lines="$(grep -c 'Failed with dev-health-ops' "$fullstack_workflow")"
 awk -v last="$summary_lines" '/Failed with dev-health-ops/ { n++; if (n == last) { print "          :"; next } } { print }' "$fullstack_workflow" > "$failure_step_no_summary"
