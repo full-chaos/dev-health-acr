@@ -115,7 +115,11 @@ value, as the standard reads it, from the literal's decimal digits and never
 through a float: a number spelled with a fraction or an exponent that equals
 an integer exactly (`30.0`, `4e0`) is that integer, and one that does not
 (`30.5`, `30.0000000000000001`) is not; trailing content is refused before
-any number is rewritten (an independent Draft
+any number is rewritten. Every timestamp carries the RFC 3339 shape the
+writer writes (uppercase `T` and `Z` or a numeric offset) as a schema
+`pattern`, since `format: date-time` is only an annotation; calendar
+validity (no 30 February) stays a Go-only rule. The list schema itself
+refuses a `next_cursor` on an empty page (an independent Draft
 2020-12 validator is the parity reference; contractcheck reads integers
 lexically and refuses those spellings, which ACR's writer never writes).
 

@@ -290,7 +290,7 @@ func TestThreadListValidatorAndSchemaAgree(t *testing.T) {
 		"golden":                   {func(*ContextFabricThreadList) {}, true, false},
 		"empty last page":          {func(l *ContextFabricThreadList) { l.Threads, l.NextCursor = []ContextFabricThreadSummary{}, "" }, true, false},
 		"absent threads":           {func(l *ContextFabricThreadList) { l.Threads, l.NextCursor = nil, "" }, false, false},
-		"cursor after empty page":  {func(l *ContextFabricThreadList) { l.Threads = []ContextFabricThreadSummary{} }, false, true},
+		"cursor after empty page":  {func(l *ContextFabricThreadList) { l.Threads = []ContextFabricThreadSummary{} }, false, false},
 		"malformed cursor":         {func(l *ContextFabricThreadList) { l.NextCursor = "a+b/c=" }, false, false},
 		"cursor too long":          {func(l *ContextFabricThreadList) { l.NextCursor = strings.Repeat("a", 513) }, false, false},
 		"wrong schema version":     {func(l *ContextFabricThreadList) { l.SchemaVersion = ContextFabricThreadSchema }, false, false},
@@ -900,6 +900,76 @@ func TestThreadParseRefusesTrailingContentAfterARewrite(t *testing.T) {
 	for _, trailing := range []string{`{}`, ` {}`, `[]`, `1`, `"x"`, `null`} {
 		if _, err := ParseContextFabricThread(append(bytes.Clone(body), trailing...)); err == nil {
 			t.Errorf("trailing %s after a rewritten number is accepted", trailing)
+		}
+	}
+}
+
+// Every timestamp is RFC 3339 in the writer's form (uppercase T and Z, or a
+// numeric offset), and Parse and both schema validators agree on the
+// spellings that differ from it (second confirmation pass: lowercase t/z was
+// refused by Go and accepted by the schema, whose date-time format is an
+// annotation). Calendar validity is the one timestamp rule only Go holds.
+func TestThreadTimestampsAgreeAcrossValidators(t *testing.T) {
+	thread := contextFabricGolden(t, "context_fabric_thread.v1.json")
+	list := contextFabricGolden(t, "context_fabric_thread_list.v1.json")
+	stamps := []struct {
+		list bool
+		key  string
+		from string
+	}{
+		{false, "created_at", `"created_at":"2026-10-29T12:00:00Z"`},
+		{false, "last_turn_at", `"last_turn_at":"2026-10-29T12:09:00Z"`},
+		{false, "expires_at", `"expires_at":"2026-11-28T12:09:00Z"`},
+		{false, "admitted_at", `"admitted_at":"2026-10-29T12:03:00Z"`},
+		{false, "updated_at", `"updated_at":"2026-10-29T12:04:00Z"`},
+		{true, "created_at", `"created_at":"2026-10-29T10:00:00Z"`},
+		{true, "last_turn_at", `"last_turn_at":"2026-10-29T10:00:00Z"`},
+		{true, "expires_at", `"expires_at":"2026-10-30T10:00:00Z"`},
+	}
+	spellings := []struct {
+		name   string
+		edit   func(string) string
+		valid  bool
+		goOnly bool
+	}{
+		{"lowercase t", func(v string) string { return strings.Replace(v, "T", "t", 1) }, false, false},
+		{"lowercase z", func(v string) string { return strings.Replace(v, "Z\"", "z\"", 1) }, false, false},
+		{"space separator", func(v string) string { return strings.Replace(v, "T", " ", 1) }, false, false},
+		{"no zone", func(v string) string { return strings.Replace(v, "Z\"", "\"", 1) }, false, false},
+		{"offset without colon", func(v string) string { return strings.Replace(v, "Z\"", "+0000\"", 1) }, false, false},
+		{"day 30 of February", func(v string) string { return v[:len(v)-22] + `"2026-02-30T12:00:00Z"` }, false, true},
+	}
+	for _, stamp := range stamps {
+		base, file := thread, threadSchemaFile
+		if stamp.list {
+			base, file = list, threadListSchemaFile
+		}
+		if !bytes.Contains(base, []byte(stamp.from)) {
+			t.Fatalf("the golden has no %s", stamp.from)
+		}
+		for _, spelling := range spellings {
+			edited := spelling.edit(stamp.from)
+			if edited == stamp.from {
+				t.Fatalf("%s %s: the edit changed nothing", stamp.key, spelling.name)
+			}
+			body := bytes.Replace(base, []byte(stamp.from), []byte(edited), 1)
+			var parseErr error
+			if stamp.list {
+				_, parseErr = ParseContextFabricThreadList(body)
+			} else {
+				_, parseErr = ParseContextFabricThread(body)
+			}
+			if (parseErr == nil) != spelling.valid {
+				t.Errorf("%s %s: Parse = %v, want valid %t", stamp.key, spelling.name, parseErr, spelling.valid)
+			}
+			localErr := contractcheck.ValidateSerializedStrict("", file, body)
+			standardErr := standardThreadSchemaErr(t, file, body)
+			switch {
+			case spelling.goOnly && standardErr != nil:
+				t.Errorf("%s %s: a Go-only rule is also refused by the standard validator (%v)", stamp.key, spelling.name, standardErr)
+			case !spelling.goOnly && ((localErr == nil) != spelling.valid || (standardErr == nil) != spelling.valid):
+				t.Errorf("%s %s: local = %v, standard = %v, want valid %t", stamp.key, spelling.name, localErr, standardErr, spelling.valid)
+			}
 		}
 	}
 }

@@ -119,11 +119,13 @@ func TestStoredResultSurfacesServingToACallerCallTheFloodHelper(t *testing.T) {
 	// included (docs/design/ask-dev-conversation-contract.md §4), so the
 	// change that adds its reader must move it to servesToCaller with the
 	// file that applies StoredResultFloodWithheld, or this test fails.
-	// A reader names the surface by its constant or by converting its
-	// value; both spellings are searched. NOT caught: an untyped "thread"
-	// literal passed straight where a StoredResultSurface is expected.
+	// A reader names the surface by its constant, by converting its value,
+	// or by passing the untyped literal as a gate call's surface argument;
+	// all three spellings are searched across the module. A source-text
+	// census: NOT caught is a reader that builds the value at run time (from
+	// a variable or a concatenation).
 	pendingReader := map[StoredResultSurface]*regexp.Regexp{
-		StoredResultSurfaceThread: regexp.MustCompile(`\bStoredResultSurfaceThread\b|StoredResultSurface\(\s*"thread"\s*\)`),
+		StoredResultSurfaceThread: regexp.MustCompile(`\bStoredResultSurfaceThread\b|StoredResultSurface\(\s*"thread"\s*\)|\b(Authorize|decide)\([^;]*?,\s*"thread"\s*\)`),
 	}
 	for surface, pattern := range pendingReader {
 		if users := productionFilesMatching(t, pattern, "stored_result_authorization.go"); len(users) > 0 {
@@ -149,14 +151,18 @@ func TestStoredResultSurfacesServingToACallerCallTheFloodHelper(t *testing.T) {
 	}
 }
 
-// productionFilesMatching lists the non-test Go files under internal/ whose
-// source matches pattern, except the files in exempt (matched by base name).
+// productionFilesMatching lists the module's non-test Go files whose source
+// matches pattern, except the files in exempt (matched by base name). It
+// walks from the module root, skipping the ignored build and tool trees.
 func productionFilesMatching(t *testing.T, pattern *regexp.Regexp, exempt ...string) []string {
 	t.Helper()
 	var users []string
-	err := filepath.WalkDir("..", func(path string, entry fs.DirEntry, err error) error {
+	err := filepath.WalkDir(filepath.Join("..", ".."), func(path string, entry fs.DirEntry, err error) error {
 		if err != nil {
 			return err
+		}
+		if entry.IsDir() && (entry.Name() == ".git" || entry.Name() == ".tmp" || entry.Name() == "node_modules" || entry.Name() == "vendor") {
+			return filepath.SkipDir
 		}
 		if entry.IsDir() || !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") || slices.Contains(exempt, filepath.Base(path)) {
 			return nil

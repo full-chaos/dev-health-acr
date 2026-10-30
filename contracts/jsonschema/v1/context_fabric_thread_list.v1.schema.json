@@ -25,7 +25,7 @@
       "minLength": 1,
       "maxLength": 512,
       "pattern": "^[A-Za-z0-9_-]{1,512}$",
-      "description": "Present when more threads follow this page: pass it back as the cursor query parameter. Opaque."
+      "description": "Present when more threads follow this page, and only on a page that lists at least one thread: pass it back as the cursor query parameter. Opaque."
     }
   },
   "$defs": {
@@ -61,16 +61,31 @@
         },
         "created_at": {
           "type": "string",
-          "format": "date-time"
+          "format": "date-time",
+          "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\\.[0-9]+)?(Z|[+-][0-9]{2}:[0-9]{2})$"
         },
         "last_turn_at": {
           "type": "string",
-          "format": "date-time"
+          "format": "date-time",
+          "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\\.[0-9]+)?(Z|[+-][0-9]{2}:[0-9]{2})$"
         },
         "expires_at": {
           "type": "string",
-          "format": "date-time"
+          "format": "date-time",
+          "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\\.[0-9]+)?(Z|[+-][0-9]{2}:[0-9]{2})$"
         }
+      }
+    }
+  },
+  "if": {
+    "required": [
+      "next_cursor"
+    ]
+  },
+  "then": {
+    "properties": {
+      "threads": {
+        "minItems": 1
       }
     }
   }
