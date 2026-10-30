@@ -396,3 +396,34 @@ func TestDerivedNumberPhrasingCountsTheCohortNarrationByConstruction(t *testing.
 		t.Fatalf("a summary outside the narration shape counted as narration: %+v", got)
 	}
 }
+
+// TestDerivedNumberPhrasingLeavesAFollowingWordToTheNextNumber (codex r3): a
+// measure word between two numbers of one clause names the later one.
+func TestDerivedNumberPhrasingLeavesAFollowingWordToTheNextNumber(t *testing.T) {
+	t.Parallel()
+	risk := []ClaimedFact{numberClaim("claim-risk-0001", FactHealth, "compounding_risk", 0.55)}
+	if got := MeasureDerivedNumberPhrasing(phrasingResult(risk, "The release velocity was 0.55 after the compounding risk score dropped to 0.20.")); got.Sentences != 0 {
+		t.Errorf("measure = %+v, want the risk score left to 0.20", got)
+	}
+	share := []ClaimedFact{numberClaim("claim-quality-01", FactInvestment, "theme_quality", 0.53)}
+	if got := MeasureDerivedNumberPhrasing(phrasingResult(share, "It is 0.53 of the investment mix.")); got.Sentences != 1 || got.Asserted != 1 {
+		t.Errorf("measure = %+v, want a following word with no later number still attached", got)
+	}
+}
+
+// TestDerivedNumberPhrasingEndsAQuotedSentence (codex r3): a stop followed by a
+// closing quote ends the sentence, so a hedge in the next sentence does not
+// qualify it.
+func TestDerivedNumberPhrasingEndsAQuotedSentence(t *testing.T) {
+	t.Parallel()
+	risk := []ClaimedFact{numberClaim("claim-risk-0001", FactHealth, "compounding_risk", 0.55)}
+	for _, text := range []string{
+		`"The compounding risk score is 0.55." It appears that the evidence supports this conclusion.`,
+		"(The compounding risk score is 0.55.) It appears that the evidence supports this conclusion.",
+		"“The compounding risk score is 0.55.” It appears that the evidence supports this conclusion.",
+	} {
+		if got := MeasureDerivedNumberPhrasing(phrasingResult(risk, text)); got.Sentences != 1 || got.Asserted != 1 {
+			t.Errorf("%q: measure = %+v, want 1 asserted", text, got)
+		}
+	}
+}

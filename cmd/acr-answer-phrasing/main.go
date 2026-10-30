@@ -56,10 +56,11 @@ func readAnswer(path string) (contextfabric.InvestigationResult, error) {
 	if !strings.HasPrefix(result.SchemaVersion, "context_fabric_investigation_result.") {
 		return contextfabric.InvestigationResult{}, fmt.Errorf("%s: not an investigation result (schema_version %q)", path, result.SchemaVersion)
 	}
-	// Every stored answer has a result id and a status; an object that only
-	// names the schema is not one.
-	if strings.TrimSpace(result.ResultID) == "" || strings.TrimSpace(string(result.Status)) == "" {
-		return contextfabric.InvestigationResult{}, fmt.Errorf("%s: not an investigation result (no result_id or status)", path)
+	// A stored answer passes the result contract's stored-read validation
+	// (the API's own read path); an object that only names the schema, or
+	// lacks the contract's required fields, is not one.
+	if err := contextfabric.ValidateStoredResult(result); err != nil {
+		return contextfabric.InvestigationResult{}, fmt.Errorf("%s: not a valid investigation result: %w", path, err)
 	}
 	return result, nil
 }

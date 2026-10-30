@@ -287,7 +287,7 @@ func numberSpans(sentence string) []numberSpan {
 
 // attachment reports whether the number numbers[i] is attached to one of the
 // measure words: one stands before it with no other number between them, or
-// after it in the same clause. It returns the span from the first attached
+// after it in the same clause with no other number after it there. It returns the span from the first attached
 // word to the number (or from the number to the last attached word after it).
 // A claim whose field names no usable word (unworded) attaches to every
 // matching number.
@@ -301,17 +301,17 @@ func attachment(words [][]int, numbers []numberSpan, i int, breaks [][]int, leng
 	if i > 0 {
 		previous = numbers[i-1].end
 	}
+	// A word after the number is its own only when no other number follows
+	// in the clause: "0.55 after the risk score dropped to 0.20" names the
+	// risk score for 0.20, not for 0.55 (codex r3).
 	_, clauseEnd := clauseAround(breaks, number.start, number.end, length)
-	next := clauseEnd
-	if i+1 < len(numbers) && numbers[i+1].start < next {
-		next = numbers[i+1].start
-	}
+	following := i+1 >= len(numbers) || numbers[i+1].start >= clauseEnd
 	for _, word := range words {
 		switch {
 		case word[0] >= previous && word[1] <= number.start:
 			attached = true
 			from = min(from, word[0])
-		case word[0] >= number.end && word[1] <= next:
+		case following && word[0] >= number.end && word[1] <= clauseEnd:
 			attached = true
 			to = max(to, word[1])
 		}
@@ -408,8 +408,8 @@ func readerSentences(result InvestigationResult) []readerSentence {
 }
 
 // splitSentences ends a sentence at '.', '!' or '?' (and at ';' when
-// semicolons is set) followed by white space or the end of the text, and at a
-// line break. A decimal point is followed by a digit, so it never ends a
+// semicolons is set), with any closing quotes or brackets after it, followed
+// by white space or the end of the text, and at a line break. A decimal point is followed by a digit, so it never ends a
 // sentence.
 func splitSentences(text string, semicolons bool) []string {
 	var out []string
@@ -423,11 +423,21 @@ func splitSentences(text string, semicolons bool) []string {
 	}
 	for i, r := range runes {
 		end := r == '.' || r == '!' || r == '?' || (semicolons && r == ';')
-		switch {
-		case r == '\n':
+		if r == '\n' {
 			flush(i + 1)
-		case end && (i+1 == len(runes) || runes[i+1] == ' ' || runes[i+1] == '\n' || runes[i+1] == '\t'):
-			flush(i + 1)
+			continue
+		}
+		if !end {
+			continue
+		}
+		// A closing quote or bracket after the stop belongs to the sentence
+		// it ends (codex r3: '"The score is 0.55." It appears ...').
+		j := i + 1
+		for j < len(runes) && strings.ContainsRune("\"'\u201d\u2019)]", runes[j]) {
+			j++
+		}
+		if j == len(runes) || runes[j] == ' ' || runes[j] == '\n' || runes[j] == '\t' {
+			flush(j)
 		}
 	}
 	flush(len(runes))
