@@ -319,15 +319,126 @@ grep -Fq 'REDIS_URL: redis://valkey:6379/0' "$script" \
 # Device login is an acceptance precondition, not a postscript after the
 # OpenCode task reports have already been graded. Keep the browser agreement
 # check after the task loop because it consumes task-002's packet artifacts.
-device_login_line="$(grep -n '^  run_device_login_lifecycle$' "$script" | cut -d: -f1)"
-task_loop_line="$(grep -n '^for task in "${TASKS\[@\]}"; do$' "$script" | cut -d: -f1)"
-web_agreement_line="$(grep -n '^  run_web_agreement_check$' "$script" | cut -d: -f1)"
+device_login_line="$(grep -n '^  run_device_login_lifecycle$' "$script" | cut -d: -f1 || true)"
+task_loop_line="$(grep -n '^for task in "${TASKS\[@\]}"; do$' "$script" | cut -d: -f1 || true)"
+web_agreement_line="$(grep -nE '^ +run_web_agreement_check$' "$script" | cut -d: -f1 || true)"
 [[ -n "$device_login_line" && -n "$task_loop_line" && -n "$web_agreement_line" ]] \
   || fail 'device-login, task-loop, or web-agreement main-flow call is missing'
 [[ "$device_login_line" -lt "$task_loop_line" ]] \
   || fail 'real device-login MCP acceptance must run before task grading begins'
 [[ "$task_loop_line" -lt "$web_agreement_line" ]] \
   || fail 'web agreement must remain after the task loop it compares against'
+
+# CHAOS-12057: the web agreement check compares task-002, which only the `full` profile runs.
+# EXECUTE the gate against the task sets tasks.json actually selects: full runs the check,
+# smoke (and self-test, which runs the smoke set) records it as not run, loudly, with an
+# artifact -- never fails every layer of a task it never ran, never skips silently.
+gate_fns="$(sed -n "/^WEB_AGREEMENT_TASK=/p; /^web_agreement_task_selected() {/,/^}/p; /^record_web_agreement_not_run() {/,/^}/p" "$script")"
+[[ "$(grep -c '^WEB_AGREEMENT_TASK=\|^web_agreement_task_selected() {\|^record_web_agreement_not_run() {' <<<"$gate_fns")" -eq 3 ]] \
+  || fail 'the web agreement gate (WEB_AGREEMENT_TASK, web_agreement_task_selected, record_web_agreement_not_run) is missing'
+grep -Fq "WEB_AGREEMENT_TASK='task-002-auth-refactor-branch'" "$script" \
+  || fail 'the web agreement check no longer names the task it compares'
+grep -Fq 'local task_id="$WEB_AGREEMENT_TASK"' "$script" \
+  || fail 'run_web_agreement_check must compare WEB_AGREEMENT_TASK, the task the gate checks'
+gate_dir="$(mktemp -d)"
+for profile in smoke full; do
+  mapfile -t profile_tasks < <(jq -r --arg p "$profile" '[.tasks[] | select(.profiles | index($p)) | .task_id] | .[]' "$fixtures/tasks.json")
+  verdict="$(
+    ARTIFACTS="$gate_dir/$profile" SCENARIO="$profile" bash -c '
+      set -euo pipefail
+      fs_note() { printf "[acr-fullstack] %s\n" "$*" >&2; }
+      eval "$1"; shift
+      TASKS=("$@")
+      mkdir -p "$ARTIFACTS"
+      if web_agreement_task_selected; then echo run; else record_web_agreement_not_run 2>"$ARTIFACTS/stderr"; echo not_run; fi
+    ' _ "$gate_fns" "${profile_tasks[@]}"
+  )"
+  case "$profile:$verdict" in
+    full:run) ;;
+    smoke:not_run)
+      grep -Fq 'WARN: web agreement check NOT RUN: scenario smoke does not run task-002-auth-refactor-branch' "$gate_dir/smoke/stderr" \
+        || fail 'a smoke run must say loudly that the web agreement check was not run'
+      jq -e '.schema_version == "fullstack_web_agreement_not_run.v1" and .scenario == "smoke" and .task_id == "task-002-auth-refactor-branch"' \
+        "$gate_dir/smoke/web-agreement-not-run.json" >/dev/null \
+        || fail 'a smoke run must leave the web-agreement-not-run artifact'
+      ;;
+    *) fail "the web agreement gate decided ${verdict} for the ${profile} profile" ;;
+  esac
+done
+rm -rf "$gate_dir"
+# EXECUTE the main flow itself, from the device-login block through the web agreement call,
+# with the real web_check_enabled, gate and task loop, and stubbed actions. A web-enabled smoke
+# run must prove device login and record the agreement check as not run BEFORE any task is
+# graded (codex #1772 r2 P1: a failed task must not lose that record); a full run must do device
+# login, the tasks, then the check; a run without the web check must do neither.
+web_check_fn="$(sed -n '/^web_check_enabled() {/,/^}/p' "$script")"
+device_login_call="$(grep -n '^  run_device_login_lifecycle$' "$script" | head -1 | cut -d: -f1 || true)"
+last_agreement_call="$(grep -nE '^ +(run_web_agreement_check|record_web_agreement_not_run)$' "$script" | tail -1 | cut -d: -f1 || true)"
+[[ -n "$web_check_fn" && -n "$device_login_call" && -n "$last_agreement_call" ]] \
+  || fail 'could not locate web_check_enabled, the device-login call or the web agreement calls'
+main_flow="$(awk -v from="$((device_login_call - 1))" -v to="$last_agreement_call" \
+  'NR >= from && (NR <= to || !done) { print; if (NR >= to && /^fi$/) done=1 }' "$script")"
+[[ "$(head -1 <<<"$main_flow")" == if* ]] || fail 'the device-login call is not the body of a top-level if block'
+for cell in 'smoke|on|' 'smoke|on|fail' 'full|on|' 'full|auto|' 'smoke|auto|' 'full|off|'; do
+  IFS='|' read -r profile web fail_first <<<"$cell"
+  mapfile -t profile_tasks < <(jq -r --arg p "$profile" '[.tasks[] | select(.profiles | index($p)) | .task_id] | .[]' "$fixtures/tasks.json")
+  graded="$(printf ' task%.0s' "${profile_tasks[@]}")"
+  case "$profile|$web|$fail_first" in
+    smoke\|on\|) want="device_login agreement_not_run${graded}" ;;
+    smoke\|on\|fail) want='device_login agreement_not_run task' ;;
+    full\|on\||full\|auto\|) want="device_login${graded} agreement_run" ;;
+    *) want="${graded# }" ;;
+  esac
+  got="$(
+    SCENARIO="$profile" WEB_CHECK="$web" FAIL_FIRST="$fail_first" bash -c '
+      set -euo pipefail
+      eval "$1"; eval "$2"; main="$3"; shift 3
+      export SELECTED="$*"
+      fs_die() { exit 1; }
+      selected_tasks() { printf "%s\n" $SELECTED; }
+      grade() { printf "task "; [[ -z "$FAIL_FIRST" ]] || return 1; }
+      run_client_task() { grade; }
+      run_foreign_repo_task() { grade; }
+      run_unavailable_evidence_task() { grade; }
+      run_fault_self_test() { :; }
+      run_device_login_lifecycle() { printf "device_login "; }
+      run_web_agreement_check() { printf "agreement_run "; }
+      record_web_agreement_not_run() { printf "agreement_not_run "; }
+      eval "$main"
+    ' _ "$gate_fns" "$web_check_fn" "$main_flow" "${profile_tasks[@]}"
+  )" && status=0 || status=$?
+  if [[ -n "$fail_first" ]]; then
+    [[ "$status" -ne 0 ]] || fail "scenario ${profile} with a failing task: the main flow did not fail"
+  else
+    [[ "$status" -eq 0 ]] || fail "the main flow failed to run for scenario ${profile}, web ${web}"
+  fi
+  [[ "${got% }" == "$want" ]] \
+    || fail "scenario ${profile} with web ${web}${fail_first:+ and a failing task}: the main flow did '${got% }', want '${want}'"
+done
+
+# EXECUTE run_web_agreement_check with its I/O stubbed (codex #1772 r2 P3): every task it reads
+# and asserts must be WEB_AGREEMENT_TASK, the task the gate selects, not just its first line.
+agreement_fn="$(sed -n '/^run_web_agreement_check() {/,/^}/p' "$script")"
+[[ -n "$agreement_fn" ]] || fail 'could not extract run_web_agreement_check'
+agreement_dir="$(mktemp -d)"
+mkdir -p "$agreement_dir/node_modules/@playwright/test"
+agreement_tasks="$(
+  WEB_ROOT="$agreement_dir" ARTIFACTS="$agreement_dir" bash -c '
+    set -euo pipefail
+    eval "$1"; eval "$2"
+    fs_die() { echo "fs_die: $*" >&2; exit 1; }
+    compose() { :; }; wait_web_ready() { :; }; bootstrap_web_user() { :; }
+    assert_repository_catalog_visible() { :; }; redact_log() { cat; }
+    task_field() { printf "%s\n" "$1" >>"$WEB_ROOT/tasks"; printf "value-of-%s" "$1"; }
+    node() { printf "%s\n" "${SVS_GOAL#value-of-}" >>"$WEB_ROOT/tasks"; }
+    assert_task() { printf "%s\n" "$1" >>"$WEB_ROOT/tasks"; }
+    WEB_PORT=1 WEB_EMAIL=e WEB_PASSWORD=p FULLSTACK_REPO_SLUG=r SCRIPT_DIR=. run_web_agreement_check
+    sort -u "$WEB_ROOT/tasks" | paste -sd, -
+  ' _ "$gate_fns" "$agreement_fn"
+)" || fail 'run_web_agreement_check failed to run with its I/O stubbed'
+rm -rf "$agreement_dir"
+[[ "$agreement_tasks" == 'task-002-auth-refactor-branch' ]] \
+  || fail "run_web_agreement_check read and asserted tasks '${agreement_tasks}', want only task-002-auth-refactor-branch"
 grep -Fq 'record_web_readiness_failure' "$script" \
   || fail 'web readiness failures must retain sanitized timestamped diagnostics'
 grep -Fq 'device-login-browser.mjs' "$script" \

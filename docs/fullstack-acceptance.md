@@ -560,6 +560,12 @@ its own, not deeply enough to catch a nested write inside a directory that alrea
 real boundary would need a container or a user namespace; that is a bigger change than this
 gate warranted.
 
+**A smoke run does not run the web agreement check (CHAOS-12057).** The check compares
+`task-002-auth-refactor-branch` (`WEB_AGREEMENT_TASK`), which only the `full` profile runs. A
+`smoke` run with the web check on, such as a manual dispatch, still runs the device-login
+lifecycle. Before it grades any task, it reports the agreement check as NOT RUN: a `WARN` line and
+`web-agreement-not-run.json` in the run artifacts, so a failed task cannot lose that record. Dispatch `scenario=full` to grade it.
+
 ## 13. Deferred
 
 TRD Phase D (Kind parity) is explicitly optional and is **not** delivered here; the Compose
