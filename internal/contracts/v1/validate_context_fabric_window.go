@@ -63,9 +63,19 @@ func (e ContextFabricEffectiveEvidenceWindow) validate() error {
 }
 
 func (e ContextFabricEffectiveEvidenceWindow) validateWithin(bounds contextFabricBounds) error {
-	requested := ContextFabricRequestedEvidenceWindow{Start: e.Start, End: e.End, RelativeID: e.RelativeID}
-	if err := requested.validate(); err != nil {
-		return err
+	if e.AsOf != nil {
+		// CHAOS-11601: the snapshot form states one instant and no window.
+		if e.Start != nil || e.End != nil || e.RelativeID != "" {
+			return fmt.Errorf("effective evidence window as_of must not carry start, end or relative_id")
+		}
+		if e.AsOf.IsZero() || !representableInstant(*e.AsOf) {
+			return fmt.Errorf("effective evidence window as_of is outside the representable range")
+		}
+	} else {
+		requested := ContextFabricRequestedEvidenceWindow{Start: e.Start, End: e.End, RelativeID: e.RelativeID}
+		if err := requested.validate(); err != nil {
+			return err
+		}
 	}
 	if !bounds.additiveOK(ValidContextFabricWindowProvenance(e.Provenance), string(e.Provenance)) {
 		return fmt.Errorf("effective evidence window provenance is invalid")

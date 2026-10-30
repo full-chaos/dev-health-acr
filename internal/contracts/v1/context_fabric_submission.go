@@ -14,7 +14,9 @@ import (
 //
 // The header is ContextFabricSubmissionIDHeader and its grammar is
 // ValidContextFabricClientCorrelationID (both declared with the event stream
-// contract, whose `accepted` event echoes the id). Optional: a request
+// contract, whose `accepted` event echoes the id). Optional, except for a
+// browser-class credential (CHAOS-12093), whose create without one is
+// ErrorCodeSubmissionRequired: a request
 // without it is run as before, with no submission record and an
 // organization-bearer result.
 const (
@@ -37,6 +39,15 @@ const (
 	// an answer, or ran past its budget plus 30 seconds. Not retryable with
 	// that id; ask again with a new one.
 	ErrorCodeSubmissionAbandoned = "submission_abandoned"
+	// ErrorCodeSubmissionRequired: 400, a create by a browser-class
+	// credential (CHAOS-12093) that names no single well-formed
+	// X-ACR-Submission-ID: it is missing, malformed or repeated. Refused
+	// before admission and model work; nothing was admitted or run. Not
+	// retryable as sent: send one submission id.
+	ErrorCodeSubmissionRequired = "submission_required"
+	// ContextFabricSubmissionRequiredMessage is the message of a
+	// submission_required refusal.
+	ContextFabricSubmissionRequiredMessage = "This credential must name one well-formed submission id on every create"
 
 	// ErrorCodeConcurrencyLimited: 429, the submission would exceed a shared
 	// running-run limit (CHAOS-11914). details.limit names which: principal

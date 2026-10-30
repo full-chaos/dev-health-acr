@@ -153,11 +153,19 @@ const (
 	// winr_ receipt naming one of this investigation's own prior stored
 	// WindowOptions -- the caller confirmed exactly what was offered.
 	ContextFabricWindowClarificationConfirmed ContextFabricWindowProvenance = "clarification_confirmed"
+	// ContextFabricWindowServerDefault (CHAOS-11601): the question names no
+	// period and no class default applied, so the answer states the window
+	// its reads actually used, with no caller authority. Two forms: the
+	// platform default trailing window (relative_id, start, end) when a read
+	// that counts over a window completed; else AsOf, the instant a
+	// current-state snapshot was read. Disclosed, never gated, never carried
+	// to a later turn as a committed window.
+	ContextFabricWindowServerDefault ContextFabricWindowProvenance = "server_default"
 )
 
 func ValidContextFabricWindowProvenance(value ContextFabricWindowProvenance) bool {
 	switch value {
-	case ContextFabricWindowInferredDefault, ContextFabricWindowQuestionStated, ContextFabricWindowClarificationConfirmed:
+	case ContextFabricWindowInferredDefault, ContextFabricWindowQuestionStated, ContextFabricWindowClarificationConfirmed, ContextFabricWindowServerDefault:
 		return true
 	default:
 		return false
@@ -197,9 +205,14 @@ type ContextFabricRequestedEvidenceWindow struct {
 // only when Provenance == inferred_default -- a caller- or
 // receipt-confirmed window carries no "confidence" of its own, since
 // nothing was inferred.
+//
+// AsOf (CHAOS-11601) is the third form: a current-state snapshot read at
+// that instant, with no read window. It is legal only with no Start, End or
+// RelativeID, so "not applicable" never reads as "missing".
 type ContextFabricEffectiveEvidenceWindow struct {
 	Start       *time.Time                    `json:"start,omitempty"`
 	End         *time.Time                    `json:"end,omitempty"`
+	AsOf        *time.Time                    `json:"as_of,omitempty"`
 	RelativeID  ContextFabricRelativeWindowID `json:"relative_id,omitempty"`
 	WindowClass ContextFabricWindowClass      `json:"window_class,omitempty"`
 	Provenance  ContextFabricWindowProvenance `json:"provenance"`

@@ -133,8 +133,8 @@ func init() {
 			kind:           vocabAdditive,
 			clientValidate: "contractsv1.ValidateStoredResult",
 			sites:          []string{"EffectiveEvidenceWindow.provenance"},
-			// schema: "inferred_default", "question_stated", "clarification_confirmed"
-			goSet:      []string{string(contractsv1.ContextFabricWindowInferredDefault), string(contractsv1.ContextFabricWindowQuestionStated), string(contractsv1.ContextFabricWindowClarificationConfirmed)},
+			// schema: "inferred_default", "question_stated", "clarification_confirmed", "server_default"
+			goSet:      []string{string(contractsv1.ContextFabricWindowInferredDefault), string(contractsv1.ContextFabricWindowQuestionStated), string(contractsv1.ContextFabricWindowClarificationConfirmed), string(contractsv1.ContextFabricWindowServerDefault)},
 			exhaustive: true,
 		},
 		outputVocabulary{

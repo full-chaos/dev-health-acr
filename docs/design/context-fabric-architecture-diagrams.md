@@ -275,6 +275,29 @@ carries' own seed population, so the bypass and the carry can never again name
 different sets; the closed `AnswerReuseBypassReason` counter reports which arm
 fired, a branch that was previously silent.
 
+**Every current-axis answer states its window (CHAOS-11601).** When the
+question names no period and its window class carries no default
+(`state_snapshot`, or no class), `composeEffectiveWindow` returns no window and
+the fact reads use their own default. The assembled result then states that
+default as provenance `server_default` (`server_default_window.go`): the
+default trailing window (`trailing_90d`, `[start of today − 90 d, start of
+today)` UTC, the devhealthfacts `default_trailing` rollup window) when a
+deployments, incidents, metrics or pull_requests read completed, else `as_of`,
+the instant the snapshot was read, window class `state_snapshot`. `as_of` is
+the effective window's third contract form, legal only with no start, end or
+relative_id. The window is stamped on the result only, after the window offer
+and the canonicalization outcome and before Validate and Save: the reads, the
+synthesis input, the gate and the reuse key are those of the request, so no
+number changes. A `server_default` window is no caller authority: it is never
+gated, never offered for confirmation, never a carry source
+(`carriableWindow`), never a reuse match for a request that states a window,
+and does not count as the applied window on a continuation. The kind list is
+pinned to the providers by
+`TestServerDefaultWindowKindsAreTheProvidersThatReadTheDefaultWindow`. Refusal
+and veto results (time bound, continuation, structure and window vetoes) read
+no state and carry no window. Investment reads all history when no window is
+given; CHAOS-12142 tracks investment ignoring a stated window.
+
 ---
 
 ## 2 — Candidate pool internals: why an offer-only hit can never commit
@@ -3272,6 +3295,13 @@ Repeat-key outcomes (the owner's retry of the same key):
 | `done_unsaved` | the engine skipped the save; backstop | `409 submission_unsaved` |
 | `abandoned` | the run returned an error (abandoned at once) | `409 submission_abandoned` |
 | `abandoned` | running past `expires_at` (a pod that died mid-run), by reconcile or the sweeper | `409 submission_abandoned`, byte-identical to the row above |
+
+A browser-class credential (CHAOS-12093) must name the key: its create with a
+missing, malformed or repeated `X-ACR-Submission-ID` is `400
+submission_required`, before admission and model work, and leaves no record.
+The class comes from the credential row, never from the request; every other
+class keeps the optional header (a missing one is an implicit admission,
+CHAOS-11997).
 
 A client cannot tell the two `abandoned` causes apart, by design: the plan's
 recovery maps both to "Interrupted — ask again". Another principal's request

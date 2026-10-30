@@ -40,6 +40,15 @@ func (a *App) investigator() contextfabric.Investigator {
 // code does not choose a graph backend or canonical fact adapter.
 func (a *App) ContextFabricInvestigationHandler(investigator contextfabric.Investigator) http.Handler {
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// CHAOS-12093: a browser-class credential names one well-formed
+		// submission id on every create, or the create is refused here,
+		// first: before the stream flag, the body, the header checks, the
+		// repeat answer, the gates and admission. Every other class meets
+		// the checks below in their old order.
+		if principal, ok := auth.PrincipalFromContext(r.Context()); ok && browserSubmissionRequired(principal, r) {
+			a.writeSubmissionRequired(w, r)
+			return
+		}
 		// CHAOS-11911: a stream request while the stream is off is refused
 		// at once, before any admission work, with no JSON fallback. Inside
 		// the protected boundary like every check below: an unauthenticated
