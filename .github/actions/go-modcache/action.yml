@@ -12,6 +12,9 @@ inputs:
 runs:
   using: composite
   steps:
+    # Only cache/download (the zips, .mod and .info files) is cached: Go
+    # extracts a module from its zip on first use with no network, and the
+    # extracted trees are about half of the compressed entry.
     # A directory of its own: setup-go restores its cache into the default
     # module cache, whose files are read-only, so extracting this cache over
     # that directory fails with "File exists".
@@ -23,9 +26,9 @@ runs:
       shell: bash
       run: |
         set -euo pipefail
-        printf 'key=gomod-v2-%s-%s-%s\n' "$RUNNER_OS" "$(go env GOVERSION)" \
+        printf 'key=gomod-v3-%s-%s-%s\n' "$RUNNER_OS" "$(go env GOVERSION)" \
           "$(cat go.mod go.sum scripts/ci/go-tool-pins.txt | sha256sum | cut -c1-24)" >> "$GITHUB_OUTPUT"
-        printf 'path=%s\n' "$(go env GOMODCACHE)" >> "$GITHUB_OUTPUT"
+        printf 'path=%s\n' "$(go env GOMODCACHE)/cache/download" >> "$GITHUB_OUTPUT"
     # actions/cache v6.1.0 (restore)
     - name: Restore the Go module cache
       id: restore
