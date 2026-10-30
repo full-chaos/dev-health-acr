@@ -243,7 +243,7 @@ func (s *Service) issueCreateInput(request CreateCredentialRequest) (string, sto
 		RepositoryScopes: append([]string(nil), request.RepositoryScopes...), Scopes: append([]string(nil), request.Scopes...),
 		ActorID: request.CreatedBy, ExpiresAt: cloneTime(request.ExpiresAt),
 		IssuanceProvenance: request.IssuanceProvenance, WorkloadBindingID: request.WorkloadBindingID,
-		Resource: request.Resource,
+		Resource: request.Resource, ClientID: request.ClientID,
 	}, nil
 
 }

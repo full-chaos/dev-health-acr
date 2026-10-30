@@ -40,7 +40,7 @@ func (s *stubConsentAuthority) DenyForOAuth(context.Context, storage.Principal, 
 	return s.denyErr
 }
 
-func (s *stubConsentAuthority) RedeemForResource(context.Context, storage.DeviceCodeHash, string, []string) (IssuedCredential, error) {
+func (s *stubConsentAuthority) RedeemForResource(context.Context, storage.DeviceCodeHash, string, string, []string) (IssuedCredential, error) {
 	return IssuedCredential{}, ErrOAuthDeviceNotApproved
 }
 
@@ -51,7 +51,7 @@ func (s *stubConsentAuthority) StartDeviceGrant(context.Context) (OAuthDeviceGra
 	}, nil
 }
 
-func (s *stubConsentAuthority) PollDeviceGrant(context.Context, storage.DeviceCodeHash, string, []string) (IssuedCredential, error) {
+func (s *stubConsentAuthority) PollDeviceGrant(context.Context, storage.DeviceCodeHash, string, string, []string) (IssuedCredential, error) {
 	return IssuedCredential{}, newDevicePollError(DevicePollAuthorizationPending, 0)
 }
 

@@ -15,6 +15,45 @@ const (
 	IssuanceProvenanceWorkloadExchange IssuanceProvenance = "workload_exchange"
 )
 
+// ClientClass is a credential's issuance class (CHAOS-12083). normalizeCreate
+// derives it from the issuance path; the vocabulary is closed and mirrored by
+// the acr.client_credentials client_class CHECK (migration 0058).
+type ClientClass string
+
+const (
+	// ClientClassBrowser is reserved for the first-party web browser client
+	// (CHAOS-12070); no issuance path derives it yet.
+	ClientClassBrowser ClientClass = "browser"
+	// ClientClassOAuthUser is a user-approved credential issued by an OAuth
+	// exchange (authorization code or RFC 8628 device grant) to a client.
+	ClientClassOAuthUser ClientClass = "oauth_user"
+	// ClientClassNativeDevice is a user-approved credential issued by the
+	// legacy native device flow (no OAuth client, no resource).
+	ClientClassNativeDevice ClientClass = "native_device"
+	// ClientClassOperator is a credential an operator issued directly (the
+	// acr-api credentials command). It has no approving user.
+	ClientClassOperator ClientClass = "operator"
+	// ClientClassWorkload is a credential minted by RFC 8693 workload token
+	// exchange. It has no approving user.
+	ClientClassWorkload ClientClass = "workload"
+)
+
+// Valid reports whether c is a member of the closed vocabulary.
+func (c ClientClass) Valid() bool {
+	switch c {
+	case ClientClassBrowser, ClientClassOAuthUser, ClientClassNativeDevice, ClientClassOperator, ClientClassWorkload:
+		return true
+	default:
+		return false
+	}
+}
+
+// UserApproved reports whether credentials of class c carry an approving
+// user.
+func (c ClientClass) UserApproved() bool {
+	return c == ClientClassBrowser || c == ClientClassOAuthUser || c == ClientClassNativeDevice
+}
+
 type CreateInput struct {
 	CredentialID       string
 	OrgID              string
@@ -35,6 +74,19 @@ type CreateInput struct {
 	// exchange that named one; never set alongside
 	// IssuanceProvenanceWorkloadExchange. normalizeCreate enforces both.
 	Resource string
+	// ClientID is the OAuth client the credential is issued to
+	// (CHAOS-12083). Only an OAuth exchange sets it, and only with a
+	// Resource.
+	ClientID string
+	// ApprovingUserID is the web-session subject that approved the device
+	// authorization behind a redeemed credential (CHAOS-12083). The device
+	// authorization store sets it from the locked authorization row, never
+	// from a caller, and it must be empty on every other issuance path.
+	ApprovingUserID string
+	// ClientClass is derived by normalizeCreate from the issuance path
+	// (deriveClientClass). A caller that sets it must name the class the
+	// path derives; it can never choose one.
+	ClientClass ClientClass
 }
 
 type RotationReplacement struct {

@@ -70,6 +70,10 @@ type CreateCredentialRequest struct {
 	// authenticator then admits the credential only on requests made for
 	// that resource (see ResourceHeader).
 	Resource string
+	// ClientID is the OAuth client the credential is issued to
+	// (CHAOS-12083). Set only by the OAuth exchanges, always with Resource;
+	// it becomes the credential's immutable provenance.
+	ClientID string
 }
 
 type RotateCredentialRequest struct {
@@ -114,6 +118,10 @@ func normalizeCreateRequest(request CreateCredentialRequest) (CreateCredentialRe
 	request.Scopes, err = normalizeScopes(request.Scopes)
 	if err != nil {
 		return request, err
+	}
+	request.ClientID = strings.TrimSpace(request.ClientID)
+	if request.ClientID != "" && request.Resource == "" {
+		return request, fmt.Errorf("%w: client_id requires a resource", ErrInvalidCredential)
 	}
 	return request, nil
 }

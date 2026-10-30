@@ -53,6 +53,12 @@ func (s *DeviceAuthorizationStore) redeem(ctx context.Context, hash storage.Devi
 	if !storage.DeviceAuthorizationCredentialMatches(record, input) {
 		return contractsv1.ClientCredential{}, storage.ErrInvalidDeviceAuthorization
 	}
+	// CHAOS-12083: the approving user comes from the authorization record,
+	// never from the caller; a caller value that differs is refused.
+	if input.ApprovingUserID != "" && input.ApprovingUserID != record.ApprovingSubject {
+		return contractsv1.ClientCredential{}, storage.ErrInvalidDeviceAuthorization
+	}
+	input.ApprovingUserID = record.ApprovingSubject
 	input.IssuanceProvenance = storage.CredentialIssuanceProvenanceDeviceAuthorization
 	// Mint first so a failed mint leaves the old credential live, then revoke
 	// the old one; a revocation that fails (including one that lost to an

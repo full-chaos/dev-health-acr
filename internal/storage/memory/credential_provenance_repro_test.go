@@ -57,4 +57,9 @@ func TestReproSelfRotationKeepsTheApprovingUser(t *testing.T) {
 		"the self-rotated successor must still name the user who approved the credential")
 }
 
-func approvingUserOf(record storage.CredentialRecord) string { return record.CreatedBy }
+// approvingUserOf reads the credential's immutable issuance provenance.
+// Before it existed, the only candidate was CreatedBy, which a self-rotation
+// overwrites with the rotating credential's own id.
+func approvingUserOf(record storage.CredentialRecord) string {
+	return record.Metadata.Provenance.ApprovingUserID
+}
