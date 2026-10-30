@@ -195,6 +195,7 @@ func TestThreadValidatorAndSchemaAgree(t *testing.T) {
 		"expires_at not computed":    {func(th *ContextFabricThread) { th.ExpiresAt = th.ExpiresAt.Add(time.Hour) }, false, true},
 		"expires_at with 0":          {func(th *ContextFabricThread) { th.RetentionDays = ContextFabricThreadRetentionDay }, false, true},
 		"last_turn_at not latest":    {func(th *ContextFabricThread) { shiftLast(th, -time.Minute) }, false, true},
+		"complete page, later last":  {func(th *ContextFabricThread) { shiftLast(th, time.Hour) }, false, true},
 		"created_at not first":       {func(th *ContextFabricThread) { th.CreatedAt = th.CreatedAt.Add(-time.Minute) }, false, true},
 		"turn before created_at":     {func(th *ContextFabricThread) { th.Turns[0].AdmittedAt = th.CreatedAt.Add(-time.Minute) }, false, true},
 		"tie broken by submission":   {func(th *ContextFabricThread) { tieFirstTwo(th) }, true, false},
@@ -826,6 +827,8 @@ func TestThreadParseReadsNumbersAsTheSchemaDoes(t *testing.T) {
 		{true, `"retention_days":0`, `"retention_days":0.0`, true, true, false},
 		{true, `"turn_count":1,`, `"turn_count":1e0,`, true, true, false},
 		{true, `"turn_count":4`, `"turn_count":1000001`, false, false, false},
+		{false, `"turn_count":4`, `"turn_count":1.1e-9223372036854775808`, false, false, false},
+		{true, `"turn_count":4`, `"turn_count":1e9223372036854775807`, false, false, false},
 		{false, `"retention_days":30`, `"retention_days":30.0000000000000001`, false, false, true},
 		{false, `"turn_count":4`, `"turn_count":4.0000000000000000001e0`, false, false, true},
 		{false, `"retention_days":30`, `"retention_days":3.0e1`, true, true, false},
@@ -882,6 +885,8 @@ func TestExactJSONInteger(t *testing.T) {
 	for _, literal := range []string{
 		"30.5", "30.0000000000000001", "3e-1", "1.5e0", "1e-5000", "1e5000", "1e99999999999999999999",
 		"9223372036854775808.0", "-9223372036854775809.0", "4.0000000000000000001e0",
+		"1.1e-9223372036854775808", "1e-9223372036854775808", "1e9223372036854775807", "10e9223372036854775807",
+		"1.5e9223372036854775807", "1e-9223372036854775809", "1e9223372036854775808", "100e9223372036854775807",
 	} {
 		if got, ok := exactJSONInteger(literal); ok {
 			t.Errorf("%s = %q, want not an int64 integer", literal, got)

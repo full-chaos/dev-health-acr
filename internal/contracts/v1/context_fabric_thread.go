@@ -275,6 +275,11 @@ func (t ContextFabricThread) Validate() error {
 	if t.EarlierTurnsCursor == "" && !t.Turns[0].AdmittedAt.Equal(t.CreatedAt) {
 		return fmt.Errorf("thread created_at must be the first turn's admitted_at on the page that reaches it (no earlier_turns_cursor)")
 	}
+	// A page that holds every turn is also the latest page: its last turn
+	// is the thread's last turn.
+	if len(t.Turns) == t.TurnCount && !t.Turns[len(t.Turns)-1].AdmittedAt.Equal(t.LastTurnAt) {
+		return fmt.Errorf("thread last_turn_at must be the last turn's admitted_at on a page that holds every turn")
+	}
 	return nil
 }
 

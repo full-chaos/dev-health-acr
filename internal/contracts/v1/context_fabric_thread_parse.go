@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"slices"
 	"strconv"
 	"strings"
@@ -132,25 +133,37 @@ func exactJSONInteger(literal string) (string, bool) {
 	if digits == "" {
 		return "0", true
 	}
-	exponent := 0
+	exponent := int64(0)
 	if hasExponent {
-		parsed, err := strconv.Atoi(exponentText)
+		parsed, err := strconv.ParseInt(exponentText, 10, 64)
 		if err != nil {
-			// Beyond int: a non-zero value is then out of int64 range or
+			// Beyond int64: a non-zero value is then out of int64 range or
 			// not an integer.
 			return "", false
 		}
 		exponent = parsed
 	}
-	// value = digits * 10^scale
-	scale := exponent - len(fraction)
-	trimmed := strings.TrimRight(digits, "0")
-	scale += len(digits) - len(trimmed)
-	digits = trimmed
-	if scale < 0 || len(digits)+scale > 19 {
+	// value = digits * 10^scale, scale = exponent - len(fraction) + the
+	// trailing zeros trimmed from digits. Every step is checked: the
+	// exponent is any int64, and an overflow here would read a fraction as
+	// an integer or ask strings.Repeat for a negative count (third
+	// confirmation pass: 1.1e-9223372036854775808 panicked).
+	fractionLength := int64(len(fraction))
+	if exponent < math.MinInt64+fractionLength {
 		return "", false
 	}
-	integer := digits + strings.Repeat("0", scale)
+	scale := exponent - fractionLength
+	trimmed := strings.TrimRight(digits, "0")
+	zeros := int64(len(digits) - len(trimmed))
+	if scale > math.MaxInt64-zeros {
+		return "", false
+	}
+	scale += zeros
+	digits = trimmed
+	if scale < 0 || scale > 19 || int64(len(digits))+scale > 19 {
+		return "", false
+	}
+	integer := digits + strings.Repeat("0", int(scale))
 	if negative {
 		integer = "-" + integer
 	}
