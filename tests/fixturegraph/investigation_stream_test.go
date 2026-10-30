@@ -207,8 +207,10 @@ func answeredTurn(t *testing.T, c *client, token, project string) contractsv1.Co
 }
 
 // normalizedRun is one answer body with the run's own identity removed: its result_id and
-// request_id, wherever they appear, and every generated_at. What remains is what the run
-// decided and served.
+// request_id wherever they appear; the moments it was made and read (every generated_at and
+// observed_at); and the references it minted for its own offers (every option_id and
+// receipt_id: bearer references bound to that result, so two runs never share them). What
+// remains is what the run decided and served.
 func normalizedRun(t *testing.T, raw []byte) any {
 	t.Helper()
 	d := decodeDoc(t, raw)
@@ -222,7 +224,11 @@ func normalizedRun(t *testing.T, raw []byte) any {
 		case map[string]any:
 			out := map[string]any{}
 			for k, item := range x {
-				if k == "generated_at" {
+				switch k {
+				case "generated_at", "observed_at":
+					continue
+				case "option_id", "receipt_id":
+					out[k] = "<" + k + ">"
 					continue
 				}
 				out[k] = walk(item)
@@ -249,9 +255,9 @@ func normalizedRun(t *testing.T, raw []byte) any {
 	return walk(d)
 }
 
-// differingPaths names up to ten paths at which two decoded JSON values differ.
+// differingPaths names up to forty paths at which two decoded JSON values differ.
 func differingPaths(a, b any, path string, out *[]string) {
-	if len(*out) >= 10 || reflect.DeepEqual(a, b) {
+	if len(*out) >= 40 || reflect.DeepEqual(a, b) {
 		return
 	}
 	am, aok := a.(map[string]any)
@@ -323,7 +329,7 @@ func TestTheInvestigationStreamOnTheLiveStack(t *testing.T) {
 
 // TestJSONAndTheStreamServeTheSameLiveAnswer: the same request sent once as JSON and once as
 // the stream is answered the same: the stream's result is the JSON body once each run's own
-// identity (result_id, request_id, generated_at) is set aside.
+// identity (see normalizedRun) is set aside.
 //
 // The turn asks for no clarification, so it names no receipt: a follow-up turn is not
 // repeatable (its receipt is superseded by the first answer, and the second run vetoes it as
