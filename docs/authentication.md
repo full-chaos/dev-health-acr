@@ -392,11 +392,31 @@ What the class changes:
 | Step | Browser client | Every other client |
 | --- | --- | --- |
 | `/authorize` redirect | exact string match (no loopback port variance) | loopback port variance as before |
+| `/authorize` request limit | 10 a minute per source address, under a ceiling of 600 a minute for the client (below) | 10 a minute per `client_id` |
 | Resource | the issuer only (none named = the issuer) | never the issuer; none named = the only other resource |
 | Consent | the web assertion must carry `sid`; refused while impersonating | refused while impersonating |
 | `/token` (code) | 10-minute credential, new token family, family ends 12 h after this issuance, session from the approval | 30-day credential |
 | RFC 8628 device grant | refused (`unauthorized_client`) | as before |
 | Rotation (self or operator) | refused: it renews only by its refresh grant (below) | as before |
+
+**`/authorize` request limit (CHAOS-12156).** Every user of the web app
+shares the browser client's public `client_id`, so a per-client bucket would
+put every login of every organization, and anyone who knows the id, in one
+bucket of 10 a minute. A browser client's `/authorize` presents no secret, so
+it is limited per source: 10 requests a minute per client address, the address
+acr-api resolves (see [Which address is counted](#which-address-is-counted)).
+A ceiling of 600 a minute bounds the client across every source. A request is
+counted only when both allow it, so a throttled source does not use the
+ceiling. Both are constants in code (`deviceCreationLimit`,
+`browserAuthorizeClientLimit`), held in memory per acr-api process: with N
+replicas the ceiling is up to N × 600. A refusal is `429` with `Retry-After`
+and the `authorize` step line's outcome `rate_limited`. The browser reaches
+acr-api's `/authorize` through the ingress, not through acr-mcp, so
+`ACR_TRUSTED_PROXY_CIDRS` on acr-api must then also hold the proxies between
+the browser and acr-api (the ingress controller and, where it is not the
+caller, the node or tunnel address). Without them every login is keyed on the
+ingress address: one bucket of 10 a minute again. Every other client keeps its
+per-`client_id` bucket.
 
 A code started under one configuration is not exchanged under another: a
 browser client's code must carry the issuer resource, and no other client's
@@ -490,7 +510,7 @@ Both gates key on the client address, resolved the same way: the TCP peer addres
 | Hop | Setting | Must contain |
 | --- | --- | --- |
 | acr-mcp | `ACR_MCP_TRUSTED_PROXY_CIDRS` (comma-separated CIDRs) | every proxy between the caller and acr-mcp (ingress controller and, where the tunnel or node-network source address is not the caller, that address) |
-| acr-api | `ACR_TRUSTED_PROXY_CIDRS` | the acr-mcp pod address range |
+| acr-api | `ACR_TRUSTED_PROXY_CIDRS` | the acr-mcp pod address range; with a first-party browser client, also the proxies between the browser and acr-api (its `/authorize` limit keys on this address) |
 
 acr-mcp states the address it resolved to acr-api as a single `X-Forwarded-For` value on every call it makes with a caller's bearer; it never relays the caller's own header. Without the acr-api setting, acr-api ignores that header and keys every MCP-forwarded failure on the acr-mcp pod address: one bucket for all MCP callers, so 20 bad tokens from anyone would answer `429` to every MCP caller. Without the acr-mcp setting, acr-mcp keys on the peer (the ingress), the same defect at the edge; it logs a `Warn` at startup ("edge gate keys on the peer address") so this is visible. The ingress must also pass `X-Forwarded-For` through (ingress-nginx drops it unless `use-forwarded-headers` is enabled).
 
