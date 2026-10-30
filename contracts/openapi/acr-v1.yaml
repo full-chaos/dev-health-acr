@@ -1,5 +1,5 @@
 # Generated from acr-v1.json by `go run ./cmd/contractcheck -write`. DO NOT EDIT.
-# canonical-content-sha256: c12a4a60dc46bbdf419de8c28b00bb8da1ee44508316926acd4a42e810e0e224
+# canonical-content-sha256: a462143bd2ef8a8f794635de6a9c41cc69174aeebc94fe3245c7bb591bc4e63f
 openapi: "3.1.0"
 info:
   description: "Private hosted API for evidence-backed agent context packets, authorized provenance expansion, replay snapshots, and opt-in episode writeback. External Push is a separate API plane."
@@ -1273,7 +1273,7 @@ components:
                         type: "object"
                     type: "object"
                 type: "object"
-      description: "Structured safe error. A supplied interpretation or supplied synthesis that was made under a contract this service does not run carries details.interpretation_contract or details.synthesis_contract. A supplied synthesis written from an input that is no longer the turn's input carries details.reason input_changed and details.synthesis_input, the new synthesis input. A repeat of an admitted X-ACR-Submission-ID (CHAOS-11912) is a 409 with code submission_mismatch (a different request used the id; not retryable), submission_in_progress (its run is still live; retryable, with Retry-After), submission_unsaved (answered, not stored; not retryable) or submission_abandoned (ended without an answer, or ran past its budget plus 30 seconds; not retryable). None of them runs the request. A turn whose X-ACR-Thread-ID, or X-ACR-Submission-ID, belongs to a conversation of the caller that was deleted or has expired is a 409 with code thread_closed (not retryable; start a new conversation). It runs nothing."
+      description: "Structured safe error. A supplied interpretation or supplied synthesis that was made under a contract this service does not run carries details.interpretation_contract or details.synthesis_contract. A supplied synthesis written from an input that is no longer the turn's input carries details.reason input_changed and details.synthesis_input, the new synthesis input. A repeat of an admitted X-ACR-Submission-ID (CHAOS-11912) is a 409 with code submission_mismatch (a different request used the id; not retryable), submission_in_progress (its run is still live; retryable, with Retry-After), submission_unsaved (answered, not stored; not retryable) or submission_abandoned (ended without an answer, or ran past its budget plus 30 seconds; not retryable). None of them runs the request. A turn whose X-ACR-Thread-ID, or X-ACR-Submission-ID, belongs to a conversation of the caller that was deleted, has expired or is full (1000000 turns) is a 409 with code thread_closed (not retryable; start a new conversation). It runs nothing."
       headers:
         Retry-After:
           description: "Seconds to wait before retrying the same submission id. Sent with submission_in_progress only."

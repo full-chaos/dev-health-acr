@@ -71,7 +71,7 @@ thread id once per conversation and sends it on every turn as
 | `schema_version` | const |
 | `thread_id` | client correlation grammar `^[A-Za-z0-9._:-]{8,128}$` |
 | `retention_days` | `0` or `30` |
-| `turn_count` | every turn of the thread, ≥ 1 |
+| `turn_count` | every turn of the thread, 1..1000000 (`ContextFabricThreadMaxTurnCount`) |
 | `created_at` | the first turn's `admitted_at` |
 | `last_turn_at` | the latest turn's `admitted_at` |
 | `expires_at` | `last_turn_at` + the retention window |
@@ -110,7 +110,11 @@ read as `0`; no field is nullable), no key present as empty, false or zero
 where the writer omits the field, and no required key missing (a missing
 `retention_days` would read as `0` too). Every string bound is the schema's exactly (the
 question is 1..8000 runes, untrimmed). A key given twice is the one rule
-only Go holds: JSON Schema has none for it.
+only Go holds: JSON Schema has none for it. A number is read by value, as
+the standard reads it: an integral number spelled with a fraction or an
+exponent (`30.0`, `4e0`) is the integer it equals (an independent Draft
+2020-12 validator is the parity reference; contractcheck reads integers
+lexically and refuses those spellings, which ACR's writer never writes).
 
 ### 3.2 Routes (published here, served by I-29)
 
@@ -133,7 +137,8 @@ Deleting closes the thread at once (§6).
 - `error.v1`: new code `thread_closed` (409, not retryable): the turn's
   `X-ACR-Thread-ID` (or `X-ACR-Submission-ID`) belongs to a thread of the
   caller that was deleted or has expired, while ACR holds its closure record
-  (§6 T1). Nothing runs. Start a new thread.
+  (§6 T1), or to a thread that holds 1000000 turns (§6 T7). Nothing runs.
+  Start a new thread.
 - `StoredResultGate`: new surface `thread` (§4), in the closed vocabulary and
   the `StoredResultAuthorization` event's vocabulary.
 - Nothing becomes required in a published schema; no member is removed or
@@ -158,9 +163,20 @@ shared function, live:
 - unavailable → the whole read is `503`, never a partial thread.
 
 So a thread never offers a link the reader cannot open now. The thread read
-never serves result content: the flood census classifies the surface as
-"not served to a caller", with that reason. The decision line is the
-existing `StoredResultAuthorization` event with `surface=thread`.
+never serves result content, but its id choice applies the flood rule, so
+the flood census holds the surface "out of scope" only while no production
+file names it: the change that adds the reader must classify it as serving
+and name the file that applies `StoredResultFloodWithheld`, or the census
+fails.
+
+Telemetry. One thread read decides up to 100 results, and the
+`StoredResultAuthorization` event is declared one line per request
+(`eventspec`, `zero_or_one_per_request`), so the thread read does not write
+one such line per turn. It writes ONE line per read, defined and certified
+by the item that adds it: the counts of done turns decided, served, withheld
+by closed reason (gate denial by reason, flood rule, work-item tuple, row
+gone) and the unavailable outcome, with the request id. The per-turn gate
+decisions feed that line's counts; no id or label is logged.
 
 Thread list, read and delete are keyed by the principal, the same principal
 check the submission status read uses: another principal's thread is not
@@ -216,6 +232,10 @@ item that implements it.
 - **T5 Unsaved stays unsaved.** A `done_unsaved` answer was shown once and is
   not recoverable. The turn keeps its question, so the client can say
   "answered but not saved — ask again".
+- **T7 A thread is bounded.** A turn that would make a thread hold more
+  than 1000000 turns is refused `409 thread_closed`. The bound gives
+  `turn_count` a published maximum, so every validator bounds it as Go's
+  `int` does; no retention window reaches it in practice.
 - **T6 Closed means closed everywhere.** From a delete or from `expires_at`,
   thread read, thread list, result by id (for the thread's results not named
   by a live thread, T3), submission status, replay and attach fail closed as

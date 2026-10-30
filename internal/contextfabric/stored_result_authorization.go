@@ -81,7 +81,9 @@ const (
 	// docs/design/ask-dev-conversation-contract.md §4). It decides the result
 	// of each done turn before naming it: admitted serves the turn's
 	// result_id, denied serves result_withheld and no id, unavailable fails
-	// the whole read. It never serves result content.
+	// the whole read. It never serves result content. Its decisions feed one
+	// aggregated line per thread read, not one StoredResultAuthorization line
+	// per turn (that event is one line per request).
 	StoredResultSurfaceThread StoredResultSurface = "thread"
 )
 

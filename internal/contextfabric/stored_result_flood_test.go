@@ -3,7 +3,11 @@ package contextfabric
 import (
 	"bytes"
 	"context"
+	"io/fs"
 	"os"
+	"path/filepath"
+	"slices"
+	"strings"
 	"testing"
 
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
@@ -107,7 +111,21 @@ func TestStoredResultSurfacesServingToACallerCallTheFloodHelper(t *testing.T) {
 	notServed := map[StoredResultSurface]string{
 		StoredResultSurfacePriorResult:     "out of scope: the engine reads a prior result to carry state into a new turn; the row is never returned to the caller",
 		StoredResultSurfaceFactRootRecheck: "out of scope: re-checks the committed root subjects of a turn before the fact read; the row is never returned to the caller",
-		StoredResultSurfaceThread:          "out of scope: the thread read names a turn's result id, or withholds it, and never serves result content",
+	}
+	// A surface whose reader does not exist yet. It is classified out of
+	// scope only while no production file names it: the thread read names a
+	// turn's result id only when the read by id would serve it, flood rule
+	// included (docs/design/ask-dev-conversation-contract.md §4), so the
+	// change that adds its reader must move it to servesToCaller with the
+	// file that applies StoredResultFloodWithheld, or this test fails.
+	pendingReader := map[StoredResultSurface]string{
+		StoredResultSurfaceThread: "StoredResultSurfaceThread",
+	}
+	for surface, identifier := range pendingReader {
+		if users := productionFilesNaming(t, identifier, "stored_result_authorization.go"); len(users) > 0 {
+			t.Fatalf("stored-result surface %q now has a production reader (%v): classify it as serving to a caller and name the file that applies StoredResultFloodWithheld", surface, users)
+		}
+		notServed[surface] = "out of scope until its reader exists: no production file names it (checked above)"
 	}
 	for _, surface := range StoredResultSurfaceVocabulary() {
 		file, serves := servesToCaller[surface]
@@ -125,4 +143,31 @@ func TestStoredResultSurfacesServingToACallerCallTheFloodHelper(t *testing.T) {
 			t.Fatalf("surface %q serves a stored result to a caller but %s does not call StoredResultFloodWithheld", surface, file)
 		}
 	}
+}
+
+// productionFilesNaming lists the non-test Go files under internal/ that name
+// identifier, except the files in exempt (matched by base name).
+func productionFilesNaming(t *testing.T, identifier string, exempt ...string) []string {
+	t.Helper()
+	var users []string
+	err := filepath.WalkDir("..", func(path string, entry fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if entry.IsDir() || !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") || slices.Contains(exempt, filepath.Base(path)) {
+			return nil
+		}
+		source, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		if bytes.Contains(source, []byte(identifier)) {
+			users = append(users, path)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return users
 }

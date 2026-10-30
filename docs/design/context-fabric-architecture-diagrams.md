@@ -3397,7 +3397,9 @@ What the store, the routes and the retention job must keep (design §6): the
 closure record outlives the content (T1); a reserved result is saved bound or
 not at all (T2); a result shared by answer reuse lives as long as a live turn
 names it (T3); one serving decision for the thread and the read by id (T4);
-an unsaved answer stays unsaved (T5); closed is closed on every read (T6).
+an unsaved answer stays unsaved (T5); closed is closed on every read (T6); a
+thread holds at most 1000000 turns (T7). A thread read writes one aggregated
+decision line, not one `StoredResultAuthorization` line per turn.
 
 **Construction anchors:** `ContextFabricThread`, `ContextFabricThreadList`,
 `ParseContextFabricThreadRetention`, `ContextFabricThreadExpiresAt`,

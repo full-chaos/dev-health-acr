@@ -6,7 +6,9 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"slices"
+	"strconv"
 	"unicode/utf8"
 )
 
@@ -21,6 +23,10 @@ import (
 // result_id, result_withheld, earlier_turns_cursor), and a required key that
 // is missing (a missing retention_days would read as 0 too). It then holds
 // the value to Validate.
+//
+// A number is read as JSON Schema reads it, by value: an integral number
+// spelled with a fraction or an exponent (30.0, 3e1) is the integer it equals,
+// as a standard validator of the published schema accepts it.
 func ParseContextFabricThread(data []byte) (ContextFabricThread, error) {
 	return parseContextFabricThreadDocument[ContextFabricThread](data)
 }
@@ -36,6 +42,10 @@ func parseContextFabricThreadDocument[T interface{ Validate() error }](data []by
 		return zero, errors.New("thread document is not valid UTF-8")
 	}
 	if err := rejectDuplicateJSONKeys(data); err != nil {
+		return zero, err
+	}
+	data, err := canonicalJSONIntegers(data)
+	if err != nil {
 		return zero, err
 	}
 	decoder := json.NewDecoder(bytes.NewReader(data))
@@ -57,6 +67,53 @@ func parseContextFabricThreadDocument[T interface{ Validate() error }](data []by
 		return zero, err
 	}
 	return value, nil
+}
+
+// canonicalJSONIntegers rewrites every integral number spelled with a
+// fraction or an exponent as the integer literal it equals, when the integer
+// is exactly representable (|n| <= 2^53), and leaves every other value as it
+// is: a non-integral number then fails the integer field it meets, and an
+// integral one beyond 2^53 fails it too (both bounded fields are far below).
+// The document is re-encoded; the key-path comparison runs on the result.
+func canonicalJSONIntegers(data []byte) ([]byte, error) {
+	var tree any
+	if err := decodeJSONNumbers(data, &tree); err != nil {
+		return nil, err
+	}
+	changed := false
+	var walk func(any) any
+	walk = func(value any) any {
+		switch v := value.(type) {
+		case map[string]any:
+			for key, item := range v {
+				v[key] = walk(item)
+			}
+		case []any:
+			for index, item := range v {
+				v[index] = walk(item)
+			}
+		case json.Number:
+			if _, err := strconv.ParseInt(string(v), 10, 64); err == nil {
+				return v
+			}
+			f, err := strconv.ParseFloat(string(v), 64)
+			if err != nil || math.IsInf(f, 0) || f != math.Trunc(f) || math.Abs(f) > 1<<53 {
+				return v
+			}
+			changed = true
+			return json.Number(strconv.FormatInt(int64(f), 10))
+		}
+		return value
+	}
+	tree = walk(tree)
+	if !changed {
+		return data, nil
+	}
+	canonical, err := json.Marshal(tree)
+	if err != nil {
+		return nil, fmt.Errorf("encode thread document: %w", err)
+	}
+	return canonical, nil
 }
 
 // rejectDuplicateJSONKeys refuses a document that names a key twice in any

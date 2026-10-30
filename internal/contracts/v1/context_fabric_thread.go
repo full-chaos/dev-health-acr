@@ -42,6 +42,12 @@ const (
 	// ContextFabricThreadCursorMaxLength bounds the opaque cursors: the
 	// list's next_cursor and the thread's earlier_turns_cursor.
 	ContextFabricThreadCursorMaxLength = 512
+	// ContextFabricThreadMaxTurnCount is the most turns a thread holds. A
+	// turn that would pass it is refused 409 thread_closed (the conversation
+	// is full). It is far above any thread retention allows in practice, and
+	// it gives turn_count a published maximum, so every validator of the
+	// schema bounds it as Go's int does.
+	ContextFabricThreadMaxTurnCount = 1_000_000
 	// ContextFabricThreadQuestionMaxRunes is the bound of a turn's question:
 	// the create-investigation request's own bound.
 	ContextFabricThreadQuestionMaxRunes = 8000
@@ -49,7 +55,8 @@ const (
 	// ErrorCodeThreadClosed: 409 on create investigation. X-ACR-Thread-ID,
 	// or X-ACR-Submission-ID, belongs to a thread of the caller that was
 	// deleted or has expired, while the service holds the thread's closure
-	// record (at least until its expires_at). Nothing runs. Not retryable;
+	// record (at least until its expires_at), or to a thread that holds
+	// ContextFabricThreadMaxTurnCount turns. Nothing runs. Not retryable;
 	// start a new thread.
 	ErrorCodeThreadClosed = "thread_closed"
 	// ContextFabricThreadClosedStatus and ContextFabricThreadClosedMessage
@@ -197,8 +204,8 @@ func (s ContextFabricThreadSummary) Validate() error {
 		return fmt.Errorf("thread thread_id violates v1 bounds")
 	case !s.RetentionDays.Valid():
 		return fmt.Errorf("thread retention_days is not a member of the closed vocabulary")
-	case s.TurnCount < 1:
-		return fmt.Errorf("thread turn_count must be at least 1")
+	case s.TurnCount < 1 || s.TurnCount > ContextFabricThreadMaxTurnCount:
+		return fmt.Errorf("thread turn_count must be 1..%d", ContextFabricThreadMaxTurnCount)
 	case s.CreatedAt.IsZero() || s.LastTurnAt.IsZero() || s.ExpiresAt.IsZero():
 		return fmt.Errorf("thread created_at, last_turn_at and expires_at are required")
 	case s.LastTurnAt.Before(s.CreatedAt):

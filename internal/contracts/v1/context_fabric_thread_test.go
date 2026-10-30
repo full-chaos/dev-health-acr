@@ -11,6 +11,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/jsonschema-go/jsonschema"
+
 	"github.com/full-chaos/dev-health-acr/internal/contractcheck"
 	"github.com/full-chaos/dev-health-acr/internal/testsupport/repopath"
 )
@@ -156,14 +158,22 @@ func TestThreadValidatorAndSchemaAgree(t *testing.T) {
 		goOnly bool
 	}
 	cases := map[string]mutation{
-		"golden":                     {func(*ContextFabricThread) {}, true, false},
-		"retention 0":                {func(th *ContextFabricThread) { setRetention(th, ContextFabricThreadRetentionDay) }, true, false},
-		"retention 7":                {func(th *ContextFabricThread) { setRetention(th, 7) }, false, false},
-		"wrong schema version":       {func(th *ContextFabricThread) { th.SchemaVersion = ContextFabricThreadListSchema }, false, false},
-		"malformed thread id":        {func(th *ContextFabricThread) { th.ThreadID = "bad thread" }, false, false},
-		"short thread id":            {func(th *ContextFabricThread) { th.ThreadID = "short" }, false, false},
-		"no turns":                   {func(th *ContextFabricThread) { th.Turns = []ContextFabricThreadTurn{} }, false, false},
-		"turn count zero":            {func(th *ContextFabricThread) { th.TurnCount = 0 }, false, false},
+		"golden":               {func(*ContextFabricThread) {}, true, false},
+		"retention 0":          {func(th *ContextFabricThread) { setRetention(th, ContextFabricThreadRetentionDay) }, true, false},
+		"retention 7":          {func(th *ContextFabricThread) { setRetention(th, 7) }, false, false},
+		"wrong schema version": {func(th *ContextFabricThread) { th.SchemaVersion = ContextFabricThreadListSchema }, false, false},
+		"malformed thread id":  {func(th *ContextFabricThread) { th.ThreadID = "bad thread" }, false, false},
+		"short thread id":      {func(th *ContextFabricThread) { th.ThreadID = "short" }, false, false},
+		"no turns":             {func(th *ContextFabricThread) { th.Turns = []ContextFabricThreadTurn{} }, false, false},
+		"turn count zero":      {func(th *ContextFabricThread) { th.TurnCount = 0 }, false, false},
+		"turn count at the maximum": {func(th *ContextFabricThread) {
+			th.TurnCount = ContextFabricThreadMaxTurnCount
+			th.EarlierTurnsCursor = "ZWFybGllcg"
+		}, true, false},
+		"turn count over the maximum": {func(th *ContextFabricThread) {
+			th.TurnCount = ContextFabricThreadMaxTurnCount + 1
+			th.EarlierTurnsCursor = "ZWFybGllcg"
+		}, false, false},
 		"a page before a later turn": {func(th *ContextFabricThread) { th.TurnCount = 5; shiftLast(th, time.Hour) }, true, false},
 		"no question recorded":       {func(th *ContextFabricThread) { th.Turns[0].Question = "" }, true, false},
 		"blank question":             {func(th *ContextFabricThread) { th.Turns[0].Question = "   " }, true, false},
@@ -624,11 +634,12 @@ func TestThreadParseAndSchemaAgreeOnRawDocuments(t *testing.T) {
 				t.Fatalf("Parse = %v, want an unknown field refusal", parseErr)
 			}
 			schemaErr := contractcheck.ValidateSerializedStrict("", schemaFile, body)
+			standardErr := standardThreadSchemaErr(t, schemaFile, body)
 			switch {
-			case tc.goOnly && schemaErr != nil:
-				t.Fatalf("a Go-only rule is also refused by the schema (%v)", schemaErr)
-			case !tc.goOnly && (schemaErr == nil) != tc.valid:
-				t.Fatalf("schema = %v, want valid %t", schemaErr, tc.valid)
+			case tc.goOnly && (schemaErr != nil || standardErr != nil):
+				t.Fatalf("a Go-only rule is also refused by a schema validator (local %v, standard %v)", schemaErr, standardErr)
+			case !tc.goOnly && ((schemaErr == nil) != tc.valid || (standardErr == nil) != tc.valid):
+				t.Fatalf("schema = %v, standard = %v, want valid %t", schemaErr, standardErr, tc.valid)
 			}
 		})
 	}
@@ -715,6 +726,9 @@ func TestThreadParseRefusesNullAtEveryKey(t *testing.T) {
 			if err := contractcheck.ValidateSerializedStrict("", schemaFile, body); err == nil {
 				t.Errorf("%s: the schema accepts %s: null", name, key)
 			}
+			if err := standardThreadSchemaErr(t, schemaFile, body); err == nil {
+				t.Errorf("%s: the standard validator accepts %s: null", name, key)
+			}
 			swept++
 		}
 	}
@@ -730,13 +744,95 @@ func TestThreadParseRefusesNullAtEveryKey(t *testing.T) {
 	if err := contractcheck.ValidateSerializedStrict("", threadSchemaFile, cased); err == nil {
 		t.Fatal("the schema accepts Retention_Days")
 	}
-	// An integer written with a fraction or an exponent: both refuse it.
-	for _, spelling := range []string{"0.0", "0e0", "-0"} {
+	// Integer spellings: Parse judges them as a standard validator does.
+	for _, spelling := range []string{"0.0", "0e0", "-0", "0.5"} {
 		number := bytes.Replace(threadBody, []byte(`"retention_days":0`), []byte(`"retention_days":`+spelling), 1)
 		_, parseErr := ParseContextFabricThread(number)
-		schemaErr := contractcheck.ValidateSerializedStrict("", threadSchemaFile, number)
-		if (parseErr == nil) != (schemaErr == nil) {
-			t.Fatalf("retention_days %s: Parse = %v, schema = %v", spelling, parseErr, schemaErr)
+		standardErr := standardThreadSchemaErr(t, threadSchemaFile, number)
+		if (parseErr == nil) != (standardErr == nil) {
+			t.Fatalf("retention_days %s: Parse = %v, standard schema = %v", spelling, parseErr, standardErr)
+		}
+	}
+}
+
+// standardThreadSchemaErr validates body against a published thread schema
+// with an independent Draft 2020-12 validator, which reads a number by value
+// as the standard does (contractcheck reads an integer lexically, so it
+// refuses 30.0 where a standard validator accepts it).
+func standardThreadSchemaErr(t *testing.T, file string, body []byte) error {
+	t.Helper()
+	raw, err := os.ReadFile(repopath.Path(t, "contracts", "jsonschema", "v1", file))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var schema jsonschema.Schema
+	if err := json.Unmarshal(raw, &schema); err != nil {
+		t.Fatal(err)
+	}
+	resolved, err := schema.Resolve(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var document any
+	if err := json.Unmarshal(body, &document); err != nil {
+		return err
+	}
+	return resolved.Validate(document)
+}
+
+// Parse reads a number as the published schema does, by value (round-3
+// review: Parse refused 30.0 and 4e0, which a standard validator accepts,
+// and accepted no turn_count bound while Go's int has one). Every case is
+// judged by Parse and by an independent standard validator; contractcheck's
+// lexical integer rule is recorded, not used as the reference.
+func TestThreadParseReadsNumbersAsTheSchemaDoes(t *testing.T) {
+	thread := contextFabricGolden(t, "context_fabric_thread.v1.json")
+	list := contextFabricGolden(t, "context_fabric_thread_list.v1.json")
+	type numberCase struct {
+		list          bool
+		from, to      string
+		valid         bool
+		localStricter bool
+	}
+	cases := []numberCase{
+		{false, `"retention_days":30`, `"retention_days":30.0`, true, true},
+		{false, `"retention_days":30`, `"retention_days":3e1`, true, true},
+		{false, `"retention_days":30`, `"retention_days":30.5`, false, false},
+		{false, `"retention_days":30`, `"retention_days":30.000`, true, true},
+		{false, `"turn_count":4`, `"turn_count":4.0`, true, true},
+		{false, `"turn_count":4`, `"turn_count":4e0`, true, true},
+		{false, `"turn_count":4`, `"turn_count":4.5`, false, false},
+		{false, `"turn_count":4`, `"turn_count":1000000`, true, false},
+		{false, `"turn_count":4`, `"turn_count":1000001`, false, false},
+		{false, `"turn_count":4`, `"turn_count":1e6`, true, true},
+		{false, `"turn_count":4`, `"turn_count":9223372036854775808`, false, false},
+		{false, `"turn_count":4`, `"turn_count":1e400`, false, false},
+		{true, `"retention_days":0`, `"retention_days":0.0`, true, true},
+		{true, `"turn_count":1,`, `"turn_count":1e0,`, true, true},
+		{true, `"turn_count":4`, `"turn_count":1000001`, false, false},
+	}
+	for _, tc := range cases {
+		base, file := thread, threadSchemaFile
+		if tc.list {
+			base, file = list, threadListSchemaFile
+		}
+		if !bytes.Contains(base, []byte(tc.from)) {
+			t.Fatalf("%s: the golden has no %s", tc.to, tc.from)
+		}
+		body := bytes.Replace(base, []byte(tc.from), []byte(tc.to), 1)
+		var parseErr error
+		if tc.list {
+			_, parseErr = ParseContextFabricThreadList(body)
+		} else {
+			_, parseErr = ParseContextFabricThread(body)
+		}
+		standardErr := standardThreadSchemaErr(t, file, body)
+		if (parseErr == nil) != tc.valid || (standardErr == nil) != tc.valid {
+			t.Errorf("%s: Parse = %v, standard schema = %v, want valid %t", tc.to, parseErr, standardErr, tc.valid)
+		}
+		localErr := contractcheck.ValidateSerializedStrict("", file, body)
+		if tc.localStricter != (tc.valid && localErr != nil) {
+			t.Errorf("%s: contractcheck = %v, want its lexical-integer refusal %t", tc.to, localErr, tc.localStricter)
 		}
 	}
 }

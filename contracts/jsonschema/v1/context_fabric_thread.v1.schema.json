@@ -36,7 +36,8 @@
     "turn_count": {
       "type": "integer",
       "minimum": 1,
-      "description": "Every turn of the thread. Turns before the served page are read with the before query parameter and earlier_turns_cursor."
+      "description": "Every turn of the thread, at most 1000000 (a turn past it is refused 409 thread_closed). Turns before the served page are read with the before query parameter and earlier_turns_cursor.",
+      "maximum": 1000000
     },
     "created_at": {
       "type": "string",
