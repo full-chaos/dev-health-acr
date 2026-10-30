@@ -169,6 +169,10 @@ func (e *Engine) saveResult(
 		}
 		e.recordAnchorBindingTransition(ctx, principal, *anchorEvent)
 	}
+	// CHAOS-11600: every answer the engine saves logs how many of its
+	// sentences state a derived number, and how many state one as an
+	// observation (derived_number_phrasing.go).
+	recordDerivedNumberPhrasing(ctx, principal, result)
 	return err
 }
 
