@@ -1565,7 +1565,7 @@ check_gomodcache_action() {
     printf 'go-modcache key is not the gomod-v3 prefix (a v2 entry holds the whole module cache, ~317 MB per restore)\n' >&2; status=1; }
   grep -qF "printf 'path=%s\\n' \"\$(go env GOMODCACHE)/cache/download\"" "$file" || {
     printf 'go-modcache saves and restores more than GOMODCACHE/cache/download (the extracted module trees double the entry)\n' >&2; status=1; }
-  if ! grep -A1 -F '::warning title=go-modcache::' "$file" | grep -qF '"$KEY" >> "$GITHUB_STEP_SUMMARY"'; then
+  if ! grep -A1 -F '::warning title=go-modcache::' "$file" | grep -qF "\"\$KEY\" >> \"\$GITHUB_STEP_SUMMARY\""; then
     printf 'go-modcache restore fallback does not write its job-summary line with the cache key\n' >&2; status=1
   fi
   return "$status"
@@ -2043,7 +2043,7 @@ sed '/GITHUB_STEP_SUMMARY/d' "$modcache_action" > "$modcache_no_summary"
 cmp -s "$modcache_action" "$modcache_no_summary" && { printf 'NEGATIVE CONTROL SETUP FAILED: modcache_no_summary did not change the action\n' >&2; exit 1; }
 assert_check_fails 'the restore fallback writes no job-summary line' check_gomodcache_action "$modcache_no_summary"
 modcache_summary_no_key="$tmpdir/modcache-summary-no-key.yml"
-sed 's/ "\$KEY" >> "\$GITHUB_STEP_SUMMARY"/ >> "$GITHUB_STEP_SUMMARY"/' "$modcache_action" > "$modcache_summary_no_key"
+sed "s/ \"\\\$KEY\" >> \"\\\$GITHUB_STEP_SUMMARY\"/ >> \"\\\$GITHUB_STEP_SUMMARY\"/" "$modcache_action" > "$modcache_summary_no_key"
 cmp -s "$modcache_action" "$modcache_summary_no_key" && { printf 'NEGATIVE CONTROL SETUP FAILED: modcache_summary_no_key did not change the action\n' >&2; exit 1; }
 assert_check_fails 'the job-summary line stopped naming the cache key' check_gomodcache_action "$modcache_summary_no_key"
 modcache_key_v2="$tmpdir/modcache-key-v2.yml"
