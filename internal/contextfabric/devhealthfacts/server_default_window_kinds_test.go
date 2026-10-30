@@ -39,8 +39,8 @@ func (c defaultWindowSpy) Query(ctx context.Context, statement string, bindings 
 // (CHAOS-11601): the engine states a server_default trailing_90d window only
 // when a read of contextfabric.ServerDefaultWindowKinds completed. This reads
 // every provider, for every subject kind it serves, on the current axis with
-// no evidence window, and records which kinds bind the platform default
-// window's start ([start of today - 90 days, start of today) in UTC). The two
+// no evidence window, and records which kinds bind both bounds of the platform
+// default window ([start of today - 90 days, start of today) in UTC). The two
 // sets must be equal: a provider that starts reading the default window
 // without joining the list would be stated as a snapshot, and a listed kind
 // that stops reading it would be stated as 90 days it never read.
@@ -81,7 +81,7 @@ func TestServerDefaultWindowKindsAreTheProvidersThatReadTheDefaultWindow(t *test
 				read[kind] = true
 			}
 			mu.Lock()
-			if slices.ContainsFunc(times, defaultStart.Equal) {
+			if slices.ContainsFunc(times, defaultStart.Equal) && slices.ContainsFunc(times, today.Equal) {
 				reading[kind] = true
 			}
 			mu.Unlock()
@@ -115,6 +115,6 @@ func TestServerDefaultWindowKindsAreTheProvidersThatReadTheDefaultWindow(t *test
 			strings.Join(missing, ", "), strings.Join(extra, ", "))
 	}
 	if len(reading) == 0 {
-		t.Fatal(fmt.Sprintf("no provider bound the default window start %s, so this test measures nothing", defaultStart))
+		t.Fatal(fmt.Sprintf("no provider bound the default window %s..%s, so this test measures nothing", defaultStart, today))
 	}
 }
