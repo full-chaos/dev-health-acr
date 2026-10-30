@@ -161,6 +161,112 @@ func TestSubmissionOnPostgresAcrossTwoInstances(t *testing.T) {
 		}
 	})
 
+	// CHAOS-11997: header-less platform creates and submissions of one
+	// principal share the shared concurrency limit across both instances;
+	// the implicit records are released when the runs end.
+	t.Run("headerless_and_submissions_share_the_limits", func(t *testing.T) {
+		harness := newPostgresSubmissionHarness(t, dsn)
+		// Fresh credentials per subtest: the principal limit isolates this
+		// subtest from rows the others left in the shared database.
+		setSubmissionLimits(harness, contextfabric.SubmissionLimits{MaxRunningPerPrincipal: 2, MaxRunningPerOrg: 64, MonthlyPlatformRunAllowance: 5000})
+		harness.investigator.mode.Store(int32(runBlockThenSave))
+		const contenders = 6
+		var (
+			start, done sync.WaitGroup
+			mu          sync.Mutex
+			codes       = map[string]int{}
+		)
+		start.Add(1)
+		for index := 0; index < contenders; index++ {
+			done.Add(1)
+			go func(index int) {
+				defer done.Done()
+				start.Wait()
+				submissionID := ""
+				if index%2 == 1 {
+					submissionID = fmt.Sprintf("submission-pg-mixed-%02d", index)
+				}
+				recorder := harness.post(index%2, harness.tokenA, submissionID, submissionQuestion)
+				mu.Lock()
+				defer mu.Unlock()
+				if recorder.Code == http.StatusOK {
+					codes["200"]++
+					return
+				}
+				codes[errorEnvelopeOf(t, recorder).Error.Code]++
+			}(index)
+		}
+		start.Done()
+		<-harness.investigator.entered
+		<-harness.investigator.entered
+		waitFor(t, func() bool {
+			mu.Lock()
+			defer mu.Unlock()
+			return codes[contractsv1.ErrorCodeConcurrencyLimited] == contenders-2
+		})
+		close(harness.investigator.release)
+		done.Wait()
+		if got := harness.investigator.executions.Load(); got != 2 {
+			t.Fatalf("executions = %d, want exactly the principal limit 2 (codes %v)", got, codes)
+		}
+		if codes["200"] != 2 || codes[contractsv1.ErrorCodeConcurrencyLimited] != contenders-2 {
+			t.Fatalf("codes = %v, want two 200 and %d concurrency_limited", codes, contenders-2)
+		}
+		var running int
+		if err := admin.QueryRowContext(context.Background(), `SELECT count(*) FROM acr.context_fabric_investigation_submissions WHERE submission_id LIKE 'acr-implicit-%' AND state = 'running'`).Scan(&running); err != nil {
+			t.Fatal(err)
+		}
+		if running != 0 {
+			t.Fatalf("%d implicit records still running after their runs ended", running)
+		}
+		// Whichever two won the slots, one more header-less create on each
+		// instance runs now (the slots are free) and leaves its implicit
+		// record released (done_unsaved, no result), never running.
+		releasedImplicit := func() int {
+			var n int
+			if err := admin.QueryRowContext(context.Background(), `SELECT count(*) FROM acr.context_fabric_investigation_submissions WHERE submission_id LIKE 'acr-implicit-%' AND state = 'done_unsaved' AND result_id IS NULL`).Scan(&n); err != nil {
+				t.Fatal(err)
+			}
+			return n
+		}
+		before := releasedImplicit()
+		harness.investigator.mode.Store(int32(runSave))
+		servedResultID(t, harness.post(0, harness.tokenA, "", submissionQuestion))
+		servedResultID(t, harness.post(1, harness.tokenA, "", submissionQuestion))
+		if after := releasedImplicit(); after != before+2 {
+			t.Fatalf("released implicit records %d → %d, want +2", before, after)
+		}
+		if err := admin.QueryRowContext(context.Background(), `SELECT count(*) FROM acr.context_fabric_investigation_submissions WHERE submission_id LIKE 'acr-implicit-%' AND state = 'running'`).Scan(&running); err != nil {
+			t.Fatal(err)
+		}
+		if running != 0 {
+			t.Fatalf("%d implicit records running after every run ended", running)
+		}
+	})
+
+	// CHAOS-11997: the monthly allowance counts header-less platform creates
+	// on either instance.
+	t.Run("headerless_allowance_across_instances", func(t *testing.T) {
+		harness := newPostgresSubmissionHarness(t, dsn)
+		var current int64
+		if err := admin.QueryRowContext(context.Background(), `SELECT coalesce(max(platform_runs), 0) FROM acr.context_fabric_usage_monthly WHERE org_id = 'org_1' AND month = $1`, contextfabric.UsageMonth(harness.clock.Now())).Scan(&current); err != nil {
+			t.Fatal(err)
+		}
+		setSubmissionLimits(harness, contextfabric.SubmissionLimits{MonthlyPlatformRunAllowance: current + 1})
+		servedResultID(t, harness.post(0, harness.tokenA, "", submissionQuestion))
+		expectLimitRefusal(t, harness.post(1, harness.tokenB, "", submissionQuestion), contractsv1.ErrorCodeAllowanceExhausted, "")
+		var after int64
+		if err := admin.QueryRowContext(context.Background(), `SELECT platform_runs FROM acr.context_fabric_usage_monthly WHERE org_id = 'org_1' AND month = $1`, contextfabric.UsageMonth(harness.clock.Now())).Scan(&after); err != nil {
+			t.Fatal(err)
+		}
+		if after != current+1 {
+			t.Fatalf("platform_runs = %d, want %d", after, current+1)
+		}
+		if got := harness.investigator.executions.Load(); got != 1 {
+			t.Fatalf("executions = %d, want 1", got)
+		}
+	})
+
 	t.Run("mismatch_across_instances", func(t *testing.T) {
 		harness := newPostgresSubmissionHarness(t, dsn)
 		servedResultID(t, harness.post(0, harness.tokenA, "submission-pg-mismatch", submissionQuestion))

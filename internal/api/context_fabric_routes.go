@@ -136,6 +136,17 @@ func (a *App) ContextFabricInvestigationHandler(investigator contextfabric.Inves
 			}
 			submission = admitted
 			reservedResultID = submission.record.ReservedResultID
+		} else if contextfabric.DeploymentModelBound(gatedCtx) {
+			// CHAOS-11997: a create without a submission id that runs on
+			// the deployment's model counts against the same shared limits,
+			// under a server-minted key. Its reservation is NOT the run's:
+			// reservedResultID stays "", so the answer stays unbound
+			// (organization-bearer), exactly as before.
+			admitted, proceed := a.admitImplicitInvestigation(w, r, principal, request, threadID)
+			if !proceed {
+				return
+			}
+			submission = admitted
 		}
 		// CHAOS-11911: the stream's `accepted` names the result id before the
 		// run, so a stream with no submission reserves one now (the same

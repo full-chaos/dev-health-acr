@@ -3267,6 +3267,12 @@ concurrency_limited{limit}` or `429 allowance_exhausted`. A repeat of an
 existing key is decided before any limit and is never refused by one.
 Retention and result deletion keep the aggregate; the organization purge
 deletes the organization's rows, and the write fence covers the table.
+A create WITHOUT the header that runs on the deployment's model (CHAOS-11997)
+is admitted the same way under a server-minted key (`acr-implicit-<hex>`):
+it counts against the three limits, its reservation never reaches the engine
+(the answer stays organization-bearer), and its record is released when the
+run ends, or at its expiry if the store cannot record the end (over-counted,
+never under-counted).
 
 ```mermaid
 flowchart TD
