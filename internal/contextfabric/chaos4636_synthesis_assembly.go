@@ -699,7 +699,7 @@ func (e *Engine) synthesizeAndAssemble(ctx context.Context, principal storage.Pr
 		// A turn that asks to write its own answer keeps its fixed answer
 		// text: the status sentence would say coverage was unavailable.
 		if len(narrated) > 0 && !clientSynthesisWithoutDraft(request) {
-			result.DirectJudgment, result.DeterministicAnswer = recomposeCohortAnswerNarrative(result.Status, result.SubjectResolution)
+			result.DirectJudgment, result.DeterministicAnswer = recomposeCohortAnswerNarrative(result.Status, result.Drivers, result.Cohort, result.SubjectResolution)
 			narrationEvent.AnswerNarrativeRecomposed = true
 		}
 		pending.CohortNarration = &narrationEvent
@@ -719,8 +719,8 @@ func (e *Engine) synthesizeAndAssemble(ctx context.Context, principal storage.Pr
 			result.Drivers = append(result.Drivers, statusDrivers...)
 			result.ClaimedFacts = append(result.ClaimedFacts, statusClaims...)
 			if !clientSynthesisWithoutDraft(request) {
-				result.DirectJudgment = composeDirectJudgmentFrom(result.Status, result.Drivers, result.SubjectResolution)
-				result.DeterministicAnswer = composeDeterministicAnswerFrom(result.Status, result.Drivers, result.ClaimedFacts, result.SubjectResolution)
+				result.DirectJudgment = composeDirectJudgmentFrom(result.Status, result.Drivers, result.Cohort, result.SubjectResolution)
+				result.DeterministicAnswer = composeDeterministicAnswerFrom(result.Status, result.Drivers, result.ClaimedFacts, result.Cohort, result.SubjectResolution)
 				result.CurrentState = composeCurrentState(SynthesisDraft{ClaimedFacts: result.ClaimedFacts, Drivers: result.Drivers})
 			}
 		}
@@ -743,6 +743,20 @@ func (e *Engine) synthesizeAndAssemble(ctx context.Context, principal storage.Pr
 			}
 			result.Drivers = append(result.Drivers, blockers.Drivers...)
 			result.ClaimedFacts = append(result.ClaimedFacts, blockers.Claims...)
+			// The engine ranks the principal drivers that explain each team's
+			// blockers by blocked count (CoveredRanks above): the most blocked
+			// team's is the quick answer to a blockers question. The lead prose
+			// was composed before those ranks existed, so it is composed again,
+			// by the composer the answer's path used. The engine's own blockers
+			// drivers are contributing and never reach the lead prose.
+			if !clientSynthesisWithoutDraft(request) && len(blockers.CoveredRanks) > 0 {
+				if pending.CohortNarration != nil && pending.CohortNarration.AnswerNarrativeRecomposed {
+					result.DirectJudgment, result.DeterministicAnswer = recomposeCohortAnswerNarrative(result.Status, result.Drivers, result.Cohort, result.SubjectResolution)
+				} else {
+					result.DirectJudgment = composeDirectJudgmentFrom(result.Status, result.Drivers, result.Cohort, result.SubjectResolution)
+					result.DeterministicAnswer = composeDeterministicAnswerFrom(result.Status, result.Drivers, result.ClaimedFacts, result.Cohort, result.SubjectResolution)
+				}
+			}
 			if blockers.Limitation != "" {
 				composed, displaced := appendBoundedLimitations(result.Limitations, []string{blockers.Limitation})
 				result.Limitations = composed
@@ -768,16 +782,25 @@ func (e *Engine) synthesizeAndAssemble(ctx context.Context, principal storage.Pr
 	// aware helper: the composer has already truncated to the contract length,
 	// so a blind append turns a valid answer into an invalid one.
 	// A client synthesis result keeps its fixed text; the count stays in the claim.
+	//
+	// The count is the quick answer to a question that owes one, so it LEADS
+	// both lead prose fields: the count sentence first, then the totals of a
+	// single subject's stored daily rows, then the composed prose as details.
+	var countSentences []string
 	if !clientSynthesisWithoutDraft(request) && cardinalityOwedByFrame(params.Frame, e.requirements, cardinality) {
-		result.DeterministicAnswer = appendCardinalitySentence(result.DeterministicAnswer, cardinalityAnswerSentence(cardinality))
+		if sentence := cardinalityAnswerSentence(cardinality); sentence != "" {
+			countSentences = append(countSentences, sentence)
+		}
 	}
 	// A count about one named subject is answered with the total of its stored
 	// daily rows, composed from the same facts the answer carries and stated
 	// with the days it rests on.
 	if cardinality.Scope.Decision == CountPopulationScopeSingleSubject && !clientSynthesisWithoutDraft(request) {
-		for _, sentence := range e.singleSubjectPeriodSentences(params) {
-			result.DeterministicAnswer = appendCardinalitySentence(result.DeterministicAnswer, sentence)
-		}
+		countSentences = append(countSentences, e.singleSubjectPeriodSentences(params)...)
+	}
+	if lead := strings.Join(countSentences, " "); lead != "" {
+		result.DeterministicAnswer = leadWithCountSentence(result.DeterministicAnswer, lead, deterministicAnswerMaxLength)
+		result.DirectJudgment = leadWithCountSentence(result.DirectJudgment, lead, directJudgmentMaxLength)
 	}
 	// CHAOS-4085: the post-synthesis commit-affirmation gate. Placed HERE
 	// deliberately -- after every composer that touches Limitations or

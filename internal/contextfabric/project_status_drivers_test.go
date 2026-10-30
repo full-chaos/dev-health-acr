@@ -55,7 +55,7 @@ func TestProjectStatusServerModeServesStatusFactsAsDrivers(t *testing.T) {
 	if len(result.ClaimedFacts) != 4 {
 		t.Errorf("claimed facts = %d, want 4", len(result.ClaimedFacts))
 	}
-	if !strings.Contains(result.DirectJudgment, "Principal driver: Open items: 40 (2026-10-30)") {
+	if !strings.HasPrefix(result.DirectJudgment, "Open items: 40 (2026-10-30). This investigation is partial") {
 		t.Errorf("judgment = %q", result.DirectJudgment)
 	}
 }

@@ -268,7 +268,11 @@ func projectStatusDrivers(interpretation InterpretedQuestion, committed []Subjec
 			}
 		}
 		claims = append(claims, claim)
+		// Rank is the engine's stated order, the observations' own: the
+		// open items first (the quick answer), the details after. Lead
+		// prose and the answer projection both read it.
 		drivers = append(drivers, DriverJudgment{
+			Rank:     len(drivers) + 1,
 			DriverID: driverID, Standing: DriverPrincipal, Category: observation.category,
 			Title: title, Summary: summary,
 			AffectedSubjects: []SubjectRef{project}, EvidenceRefIDs: fact.EvidenceRefIDs, ClaimedFactIDs: []string{claimID},

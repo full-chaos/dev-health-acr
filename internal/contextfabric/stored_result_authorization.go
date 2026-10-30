@@ -76,11 +76,20 @@ const (
 	// re-check of a turn's committed root subjects before the fact read
 	// (fact_root_recheck.go).
 	StoredResultSurfaceFactRootRecheck StoredResultSurface = "fact_root_recheck"
+	// StoredResultSurfaceThread is the Ask Dev thread read
+	// (GET /api/v1/context-fabric/threads/{thread_id};
+	// docs/design/ask-dev-conversation-contract.md §4). It decides the result
+	// of each done turn before naming it: admitted serves the turn's
+	// result_id, denied serves result_withheld and no id, unavailable fails
+	// the whole read. It never serves result content. Its decisions feed one
+	// aggregated line per thread read, not one StoredResultAuthorization line
+	// per turn (that event is one line per request).
+	StoredResultSurfaceThread StoredResultSurface = "thread"
 )
 
 // StoredResultSurfaceVocabulary is the closed set of surfaces.
-func StoredResultSurfaceVocabulary() [5]StoredResultSurface {
-	return [5]StoredResultSurface{StoredResultSurfaceResultByID, StoredResultSurfacePriorResult, StoredResultSurfaceAnswerReuse, StoredResultSurfaceEvidenceExpansion, StoredResultSurfaceFactRootRecheck}
+func StoredResultSurfaceVocabulary() [6]StoredResultSurface {
+	return [6]StoredResultSurface{StoredResultSurfaceResultByID, StoredResultSurfacePriorResult, StoredResultSurfaceAnswerReuse, StoredResultSurfaceEvidenceExpansion, StoredResultSurfaceFactRootRecheck, StoredResultSurfaceThread}
 }
 
 // StoredResultDecision is the served outcome.

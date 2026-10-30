@@ -1113,6 +1113,35 @@ dated rows it was read from. The rows are served once per answer: when another
 claim already carries the rows of the same fact, the status claim names the
 fact and carries none.
 
+**Lead prose leads with the quick answer, details after** (chris
+2026-10-30: "always lean towards whatever the quick answer is with details
+afterwards"). For an answer (complete, partial, degraded), `direct_judgment`
+and `deterministic_answer` open with the quick answer, then the status
+sentence, then the details. The quick answer is chosen from served data, never
+by sorting on driver id:
+
+| Answer shape | Quick answer |
+|---|---|
+| A question that owes a count (any family) | the server's count sentence ("Counted N …"), then a single subject's period totals and the period they rest on; both fields |
+| Project status (`subject_investigation`) | the first engine-ranked status driver: "Open items: N (DAY)" |
+| Team blockers | the principal driver that explains the most blocked team (engine rank by blocked count) |
+| A ranked cohort (`discovered_cohort_ranking`, a cohort whose ranking ran) | the first principal driver about the member of attention rank 1 |
+| Any other answer (single subject, ownership, unranked cohort, trend, investment) | the first principal driver in served order |
+
+Order of principal drivers (`principalDriversInAnswerOrder`): engine `Rank`
+first, by rank; then, for a ranked cohort, the drivers about its top member;
+then the rest in served order. A cohort answer whose drivers were narrated
+states the quick answer and the status sentence only (no driver list, as
+before); every other answer states the remaining principal drivers after the
+status sentence. No display language is added: the quick answer is a served
+driver title or the server's count sentence. A no_match or clarification head
+keeps the status sentence first. The served-status restate replaces the first
+model-path status sentence at a sentence boundary after the quick answer, so a
+head that leads with the quick answer still states its served status. A late
+status floor recomposes the lead prose keeping the count sentences that lead it
+and the narrated-cohort form; a reused answer stored with its count last is
+served with the count moved to the head, once.
+
 **Live data gap disclosed, not hidden (CH readback, 2026-08-27, org
 `70d529e0-3c06-4597-8480-794fd02328b6`):** investment (6 rows), workload (12
 rows), and readiness (17 rows) each returned real, non-zero rows for the
@@ -3143,7 +3172,13 @@ reservation (CHAOS-11912, `admitInvestigationSubmission`); a stream whose reques
 names no submission reserves one with the same generator
 (`contextfabric.NewInvestigationResultID`, `WithReservedResultID`). The route
 installs the sink and writes the 200, the headers and `accepted` (with the
-submission id) together. A pump goroutine writes the sink's transitions and the
+submission id and the thread id the request sent) together. The writer caps
+bytes on the wire, framing included: a frame at most max serialized bytes + 64
+KiB (not written when over; a result over it ends as `error{budget_refusal}`),
+the stream at most 8 MiB, with the last max serialized bytes + 64 KiB reserved
+for the terminal -- a non-terminal frame that would cross into the reserve is
+not written, the stream ends with `error{budget_refusal}` inside it and the run
+is cancelled. A pump goroutine writes the sink's transitions and the
 heartbeats. When `Investigate` returns, the pump drains and stops, and the handler
 runs `deliverInvestigationOutcome` -- the ONE delivery the JSON path runs too
 (abandon or finish the submission, then `writeContextFabricError` or
@@ -3369,6 +3404,86 @@ sequenceDiagram
 (`internal/runtime/hosted/submission_sweeper.go`). Goldens
 `contracts/examples/v1/error_context_fabric_submission_*.v1.json` are the
 route's own bodies, regenerated with `ACR_WRITE_SUBMISSION_GOLDENS=1`.
+
+## 18 — Ask Dev conversations: the thread contract
+
+A thread is one principal's Ask Dev conversation: the submission records the
+principal admitted with one `X-ACR-Thread-ID`, keyed `(org_id, owner,
+thread_id)`, in turn order (`admitted_at`, then `submission_id`), plus its
+retention (`X-ACR-Thread-Retention-Days`: `0` = until 24 h after the last
+turn, `30` = until 30 days after it; the latest turn that named one decides;
+none named = `0`). The contract (`context_fabric_thread.v1`,
+`context_fabric_thread_list.v1`, the `thread_closed` 409, the gate surface
+`thread`) is published ahead of the store and routes that serve it. Design
+and obligations: `docs/design/ask-dev-conversation-contract.md`.
+
+```mermaid
+sequenceDiagram
+  participant W as web (per user, fresh assertion)
+  participant R as acr-api thread route (any replica)
+  participant S as Submission records + thread metadata (Postgres)
+  participant G as One serving decision (StoredResultGate surface thread + read-by-id rules)
+
+  W->>R: GET threads/{thread_id}?before=cursor
+  R->>S: the caller's key (org, owner, thread_id), one page of at most 100 turns
+  alt no open thread for this principal (unknown, another principal's, deleted, expired, malformed)
+    R-->>W: 404 not_found (one body)
+  else open thread
+    loop each done turn on the page
+      R->>G: would GET investigations/{result_id} serve it to the caller now?
+      alt served
+        G-->>R: result_id
+      else denied or withheld
+        G-->>R: result_withheld (no id)
+      else decision unavailable
+        R-->>W: 503 (never a partial thread)
+      end
+    end
+    R-->>W: 200 thread: retention, expires_at, turn_count, turns (state, question, result_id or result_withheld), earlier_turns_cursor?
+  end
+  W->>R: GET investigations/{result_id} (decided again)
+```
+
+The thread never carries answer content: a turn carries the caller's own
+admitted question, its submission state, and a result id only when the read
+by id would serve it now. A running turn is found again through the thread
+after a reload (plan §2.7.9).
+
+```mermaid
+stateDiagram-v2
+  [*] --> open: first turn admitted with X-ACR-Thread-ID
+  open --> open: turn admitted (last_turn_at and expires_at move)
+  open --> closed: DELETE threads/{thread_id}
+  open --> closed: now reaches expires_at
+  closed --> removed: retention job, after expires_at (closure record kept until then)
+  removed --> [*]
+  note right of closed
+    every read fails closed as unknown,
+    and a turn with its thread id or one of its
+    submission ids is 409 thread_closed
+  end note
+```
+
+What the store, the routes and the retention job must keep (design §6): the
+closure record outlives the content (T1); a reserved result is saved bound or
+not at all (T2); a result shared by answer reuse lives as long as a live turn
+names it (T3); one serving decision for the thread and the read by id (T4);
+an unsaved answer stays unsaved (T5); closed is closed on every read (T6); a
+thread holds at most 1000000 turns (T7). A thread read writes one aggregated
+decision line, not one `StoredResultAuthorization` line per turn.
+
+**Construction anchors:** `ContextFabricThread`, `ContextFabricThreadList`,
+`ParseContextFabricThreadRetention`, `ContextFabricThreadExpiresAt`,
+`ValidContextFabricThreadCursor`, `ErrorCodeThreadClosed`
+(`internal/contracts/v1/context_fabric_thread.go`); the consumer decoders
+`ParseContextFabricThread`, `ParseContextFabricThreadList`
+(`context_fabric_thread_parse.go`);
+`StoredResultSurfaceThread` (`internal/contextfabric/stored_result_authorization.go`);
+schemas `contracts/jsonschema/v1/context_fabric_thread.v1.schema.json` and
+`context_fabric_thread_list.v1.schema.json`; goldens
+`contracts/examples/v1/context_fabric_thread*.v1.json` and
+`error_context_fabric_thread_closed.v1.json`, encoder output regenerated with
+`ACR_WRITE_THREAD_GOLDENS=1`.
 
 ## Sources
 

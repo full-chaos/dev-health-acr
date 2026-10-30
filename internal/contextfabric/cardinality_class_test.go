@@ -190,11 +190,11 @@ func TestTheServerClaimNamespaceIsRefusedForModelAuthoredClaims(t *testing.T) {
 // TestTheCountSentenceStandsWithinTheContractBound pins the arithmetic that
 // turned a valid answer into a rejected one.
 //
-// The composer truncates to the contract length, so a sentence appended after
-// it pushes the answer over and whole-result validation refuses the document.
-// Refusing to append instead would drop the count from an answer that owes
-// one. The count is the part the claim must agree with, so the earlier prose
-// gives and the sentence stands.
+// The composer truncates to the contract length, so a sentence added to it
+// pushes the answer over and whole-result validation refuses the document.
+// Refusing to add instead would drop the count from an answer that owes one.
+// The count is the part the claim must agree with, so the other prose gives
+// and the sentence stands -- at the head, as the quick answer.
 func TestTheCountSentenceStandsWithinTheContractBound(t *testing.T) {
 	t.Parallel()
 
@@ -217,7 +217,10 @@ func TestTheCountSentenceStandsWithinTheContractBound(t *testing.T) {
 		cell := cell
 		t.Run(cell.name, func(t *testing.T) {
 			t.Parallel()
-			got := appendCardinalitySentence(cell.answer, sentence)
+			got := leadWithCountSentence(cell.answer, sentence, deterministicAnswerMaxLength)
+			if !strings.HasPrefix(got, sentence) {
+				t.Errorf("the count sentence does not lead the answer -- the count is the quick answer: %q", got)
+			}
 			if n := len([]rune(got)); n > deterministicAnswerMaxLength {
 				t.Errorf("composed answer is %d runes, over the %d-rune contract bound -- %s", n, deterministicAnswerMaxLength, cell.why)
 			}
@@ -228,8 +231,8 @@ func TestTheCountSentenceStandsWithinTheContractBound(t *testing.T) {
 	}
 
 	// An empty sentence is not a reason to touch the answer at all.
-	if got := appendCardinalitySentence("Untouched.", ""); got != "Untouched." {
-		t.Errorf("appendCardinalitySentence with no sentence returned %q, want the answer unchanged", got)
+	if got := leadWithCountSentence("Untouched.", "", deterministicAnswerMaxLength); got != "Untouched." {
+		t.Errorf("leadWithCountSentence with no sentence returned %q, want the answer unchanged", got)
 	}
 }
 

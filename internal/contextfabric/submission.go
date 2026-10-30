@@ -147,6 +147,33 @@ func SameSubmissionOwner(a, b SubmissionOwner) bool {
 	return a.UserID != "" && a.UserID == b.UserID && a.Surface != "" && a.Surface == b.Surface
 }
 
+// SubmissionOwnerMatch is the closed decision basis of an owner match
+// (CHAOS-12091), for the admission and status lines.
+type SubmissionOwnerMatch string
+
+const (
+	// SubmissionOwnerMatchLegacy: the same legacy pair.
+	SubmissionOwnerMatchLegacy SubmissionOwnerMatch = "legacy"
+	// SubmissionOwnerMatchCanonical: another legacy pair, the same user on
+	// the same surface (a rotated credential).
+	SubmissionOwnerMatchCanonical SubmissionOwnerMatch = "canonical"
+	// SubmissionOwnerMatchNone: not one owner.
+	SubmissionOwnerMatchNone SubmissionOwnerMatch = "none"
+)
+
+// SubmissionOwnerMatchOf names which branch of SameSubmissionOwner, if any,
+// makes stored and request one owner.
+func SubmissionOwnerMatchOf(stored, request SubmissionOwner) SubmissionOwnerMatch {
+	switch {
+	case stored.Subject != "" && stored.AuthenticationMethod == request.AuthenticationMethod && stored.Subject == request.Subject:
+		return SubmissionOwnerMatchLegacy
+	case SameSubmissionOwner(stored, request):
+		return SubmissionOwnerMatchCanonical
+	default:
+		return SubmissionOwnerMatchNone
+	}
+}
+
 // ValidSubmissionOwnerSurface reports whether surface is "" or a member of
 // the closed vocabulary.
 func ValidSubmissionOwnerSurface(surface SubmissionOwnerSurface) bool {

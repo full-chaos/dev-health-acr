@@ -109,6 +109,14 @@ func TestCredentialProvenance_issuanceWritesTheClassAndRotationCopiesIt(t *testi
 	found, err := f.creds.FindByTokenHash(ctx, auth.HashToken(rotated.Token))
 	require.NoError(t, err)
 	require.Equal(t, oauth.Provenance, found.Provenance)
+	// The class decision and its inputs are on the credential_created audit row.
+	var class, approver, clientID sql.NullString
+	require.NoError(t, f.db.QueryRowContext(ctx, `
+SELECT metadata->>'client_class', metadata->>'approving_user_id', metadata->>'client_id' FROM acr.audit_events
+WHERE action = 'credential_created' AND resource_id = $1`, oauth.CredentialID).Scan(&class, &approver, &clientID))
+	require.Equal(t, "oauth_user", class.String)
+	require.Equal(t, credentialTestActorID, approver.String)
+	require.Equal(t, client, clientID.String)
 }
 
 func TestCredentialProvenance_isImmutableOnceSet(t *testing.T) {

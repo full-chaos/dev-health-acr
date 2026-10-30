@@ -62,6 +62,16 @@ import (
 // investigationEventStreamWriteTimeout is how long one frame write may take.
 const investigationEventStreamWriteTimeout = 30 * time.Second
 
+// The stream's byte caps (design "Ask Dev: browser calls ACR directly", §6;
+// the browser counts the same way). Sizes are wire bytes, framing included.
+const (
+	// investigationEventFrameSlackBytes is what one frame may take beyond the
+	// service's max serialized bytes: the event envelope and the framing.
+	investigationEventFrameSlackBytes = 64 << 10
+	// investigationEventStreamMaxBytes is the most the whole stream may take.
+	investigationEventStreamMaxBytes = 8 << 20
+)
+
 // investigationEventStreamSettings is the stream's timing. NewApp sets the
 // contract values; tests shorten them.
 type investigationEventStreamSettings struct {
@@ -76,18 +86,36 @@ type investigationEventStreamSettings struct {
 	// context.AfterFunc in production. Tests replace it to force each side of
 	// the race between the watcher's start and its stop.
 	afterFunc func(ctx context.Context, f func()) (stop func() bool)
+	// frameMaxBytes is the most one frame may take: max serialized bytes plus
+	// investigationEventFrameSlackBytes. A frame over it is not written.
+	frameMaxBytes int64
+	// totalMaxBytes is the most the stream may take. terminalReserve is the
+	// part of it only the terminal may use (equal to frameMaxBytes, so any
+	// terminal fits): non-terminal frames stop at totalMaxBytes minus it, and
+	// the stream then ends with error{budget_refusal} inside the reserve.
+	totalMaxBytes   int64
+	terminalReserve int64
+}
+
+// withByteCaps sets the stream's byte caps for the service's max serialized
+// bytes.
+func (s investigationEventStreamSettings) withByteCaps(maxSerializedBytes int) investigationEventStreamSettings {
+	s.frameMaxBytes = int64(maxSerializedBytes) + investigationEventFrameSlackBytes
+	s.totalMaxBytes = investigationEventStreamMaxBytes
+	s.terminalReserve = s.frameMaxBytes
+	return s
 }
 
 // defaultInvestigationEventStreamSettings is the contract's timing. started_at
 // and elapsed_ms use the wall clock, the clock the engine's stage sink stamps
 // transitions with.
-func defaultInvestigationEventStreamSettings() investigationEventStreamSettings {
+func defaultInvestigationEventStreamSettings(maxSerializedBytes int) investigationEventStreamSettings {
 	return investigationEventStreamSettings{
 		heartbeat:    contractsv1.ContextFabricInvestigationEventHeartbeatInterval,
 		writeTimeout: investigationEventStreamWriteTimeout,
 		reserveID:    contextfabric.NewInvestigationResultID,
 		afterFunc:    context.AfterFunc,
-	}
+	}.withByteCaps(maxSerializedBytes)
 }
 
 // wantsInvestigationEventStream reports whether the request asks for the
@@ -145,7 +173,11 @@ func (c *investigationOutcomeCapture) SetDenialCode(code string) {
 	}
 }
 
-var errInvestigationStreamTerminalWritten = errors.New("investigation event stream already carries its terminal event")
+var (
+	errInvestigationStreamTerminalWritten = errors.New("investigation event stream already carries its terminal event")
+	errInvestigationStreamFrameOverCap    = errors.New("investigation event stream frame is over the frame cap")
+	errInvestigationStreamBudgetExhausted = errors.New("investigation event stream reached its byte budget")
+)
 
 // investigationEventStream writes one request's frames. Every method that
 // writes takes mu; the pump and the handler never write at the same time
@@ -161,8 +193,10 @@ type investigationEventStream struct {
 	reserved   string
 	startedAt  time.Time
 	// onWriteFailure ends the run: nobody reads a stream that cannot be
-	// written.
-	onWriteFailure func()
+	// written. onBudgetExhausted ends it too: a stream that reached its byte
+	// budget has written its terminal.
+	onWriteFailure    func()
+	onBudgetExhausted func()
 
 	mu          sync.Mutex
 	check       contractsv1.ContextFabricInvestigationEventStreamCheck
@@ -172,12 +206,22 @@ type investigationEventStream struct {
 	lastStarted contractsv1.ContextFabricInvestigationStage
 	failed      error
 	terminal    contractsv1.ContextFabricInvestigationEventType
+	// written is the wire bytes written so far. budgetExhausted is set when a
+	// non-terminal frame would have crossed the non-terminal budget and the
+	// stream ended with error{budget_refusal}.
+	written         int64
+	budgetExhausted bool
 }
 
 // write puts one event on the wire. The caller holds s.mu.
 func (s *investigationEventStream) write(event contractsv1.ContextFabricInvestigationEvent) error {
 	if s.failed != nil {
 		return s.failed
+	}
+	// After the budget terminal the pump may still offer a frame; it is the
+	// budget's to refuse, not a second terminal.
+	if s.budgetExhausted {
+		return errInvestigationStreamBudgetExhausted
 	}
 	if s.terminal != "" {
 		s.logger.ErrorContext(s.logCtx, "context fabric investigation event refused: the stream already carries its terminal event",
@@ -189,8 +233,11 @@ func (s *investigationEventStream) write(event contractsv1.ContextFabricInvestig
 	event.RequestID = s.requestID
 	event.Seq = s.seq + 1
 	// The contract's own stream check runs BEFORE the write, so this writer
-	// can never put an event on the wire that the contract refuses.
-	if err := s.check.Next(event); err != nil {
+	// can never put an event on the wire that the contract refuses. It runs on
+	// a copy, committed only once the frame is written: a frame the byte caps
+	// refuse never moves the check's state.
+	check := s.check
+	if err := check.Next(event); err != nil {
 		s.logger.ErrorContext(s.logCtx, "context fabric investigation event refused by the stream contract",
 			"request_id", contextfabric.SanitizeLogAttr(s.requestID), "seq", event.Seq, "event_type", string(event.Type),
 			"failure_class", "event_stream_contract")
@@ -199,6 +246,25 @@ func (s *investigationEventStream) write(event contractsv1.ContextFabricInvestig
 	frame, err := contractsv1.MarshalContextFabricInvestigationEventFrame(event)
 	if err != nil {
 		return s.fail(err, event)
+	}
+	// The byte caps are measured on the frame itself, framing included.
+	size := int64(len(frame))
+	if size > s.settings.frameMaxBytes {
+		s.logger.ErrorContext(s.logCtx, "context fabric investigation event refused: the frame is over the frame cap",
+			"request_id", contextfabric.SanitizeLogAttr(s.requestID), "seq", event.Seq, "event_type", string(event.Type),
+			"frame_bytes", size, "frame_max_bytes", s.settings.frameMaxBytes, "failure_class", "event_stream_frame_cap")
+		return errInvestigationStreamFrameOverCap
+	}
+	if !event.Type.Terminal() && s.written+size > s.settings.totalMaxBytes-s.settings.terminalReserve {
+		return s.exhaustBudget(event, size)
+	}
+	if event.Type.Terminal() && s.written+size > s.settings.totalMaxBytes {
+		// Unreachable while the reserve is at least the frame cap; refused,
+		// never written over the total.
+		s.logger.ErrorContext(s.logCtx, "context fabric investigation event refused: the terminal is over the stream total",
+			"request_id", contextfabric.SanitizeLogAttr(s.requestID), "seq", event.Seq, "event_type", string(event.Type),
+			"written_bytes", s.written, "frame_bytes", size, "total_max_bytes", s.settings.totalMaxBytes, "failure_class", "event_stream_byte_budget")
+		return errInvestigationStreamBudgetExhausted
 	}
 	if err := s.controller.SetWriteDeadline(time.Now().Add(s.settings.writeTimeout)); err != nil {
 		return s.fail(err, event)
@@ -209,7 +275,9 @@ func (s *investigationEventStream) write(event contractsv1.ContextFabricInvestig
 	if err := s.controller.Flush(); err != nil {
 		return s.fail(err, event)
 	}
+	s.check = check
 	s.seq = event.Seq
+	s.written += size
 	if event.ElapsedMS != nil {
 		s.lastElapsed = *event.ElapsedMS
 	}
@@ -217,6 +285,27 @@ func (s *investigationEventStream) write(event contractsv1.ContextFabricInvestig
 		s.terminal = event.Type
 	}
 	return nil
+}
+
+// exhaustBudget ends a stream whose next non-terminal frame would cross the
+// non-terminal budget: that frame is not written, error{budget_refusal} is
+// written inside the terminal reserve, and the run is cancelled. The caller
+// holds s.mu.
+func (s *investigationEventStream) exhaustBudget(event contractsv1.ContextFabricInvestigationEvent, size int64) error {
+	s.logger.WarnContext(s.logCtx, "context fabric investigation event stream reached its byte budget",
+		"request_id", contextfabric.SanitizeLogAttr(s.requestID), "seq", event.Seq, "event_type", string(event.Type),
+		"written_bytes", s.written, "frame_bytes", size, "non_terminal_max_bytes", s.settings.totalMaxBytes-s.settings.terminalReserve,
+		"failure_class", "event_stream_byte_budget")
+	envelope := s.budgetRefusalEnvelope("stream_byte_budget")
+	err := s.write(contractsv1.ContextFabricInvestigationEvent{Type: contractsv1.ContextFabricInvestigationEventError, ReservedResultID: s.reserved, Stage: s.lastStarted, Error: &envelope})
+	s.budgetExhausted = true
+	if s.onBudgetExhausted != nil {
+		s.onBudgetExhausted()
+	}
+	if err != nil {
+		return err
+	}
+	return errInvestigationStreamBudgetExhausted
 }
 
 // errInvestigationStreamPanicked is the stream's failure after a panic on
@@ -258,14 +347,14 @@ func (s *investigationEventStream) elapsed(at time.Time) *int64 {
 	return &ms
 }
 
-// accepted writes the first event. submissionID is the request's
-// X-ACR-Submission-ID, "" when it names none.
-func (s *investigationEventStream) accepted(budgetSeconds int64, submissionID string) error {
+// accepted writes the first event. submissionID and threadID are the
+// request's X-ACR-Submission-ID and X-ACR-Thread-ID, "" when it sends none.
+func (s *investigationEventStream) accepted(budgetSeconds int64, submissionID, threadID string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	started := s.startedAt
 	return s.write(contractsv1.ContextFabricInvestigationEvent{
-		Type: contractsv1.ContextFabricInvestigationEventAccepted, ReservedResultID: s.reserved, SubmissionID: submissionID, StartedAt: &started, BudgetSeconds: budgetSeconds,
+		Type: contractsv1.ContextFabricInvestigationEventAccepted, ReservedResultID: s.reserved, SubmissionID: submissionID, ThreadID: threadID, StartedAt: &started, BudgetSeconds: budgetSeconds,
 	})
 }
 
@@ -352,6 +441,11 @@ func (s *investigationEventStream) pump(transitions <-chan contextfabric.Investi
 func (s *investigationEventStream) finish(outcome *investigationOutcomeCapture) contractsv1.ContextFabricInvestigationEventType {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	// A stream that reached its byte budget already carries its terminal,
+	// error{budget_refusal}; the run's own outcome is not streamed.
+	if s.budgetExhausted {
+		return s.terminal
+	}
 	if outcome.status == 0 {
 		return ""
 	}
@@ -374,9 +468,16 @@ func (s *investigationEventStream) finish(outcome *investigationOutcomeCapture) 
 	if s.failed != nil || errors.Is(err, errInvestigationStreamTerminalWritten) {
 		return ""
 	}
-	s.logger.ErrorContext(s.logCtx, "context fabric investigation outcome could not be streamed; serving internal_error",
-		"request_id", contextfabric.SanitizeLogAttr(s.requestID), "http_status", outcome.status, "outcome_type", string(event.Type), "failure_class", "event_stream_outcome")
-	fallback := s.internalErrorEnvelope()
+	// An outcome over the frame cap did not fit the stream: budget_refusal,
+	// the code the JSON path answers an answer over its bound with. Any other
+	// refusal is a route defect: internal_error.
+	fallback, served := s.internalErrorEnvelope(), "internal_error"
+	if errors.Is(err, errInvestigationStreamFrameOverCap) {
+		fallback, served = s.budgetRefusalEnvelope("stream_frame_cap"), "budget_refusal"
+	}
+	s.logger.ErrorContext(s.logCtx, "context fabric investigation outcome could not be streamed",
+		"request_id", contextfabric.SanitizeLogAttr(s.requestID), "http_status", outcome.status, "outcome_type", string(event.Type),
+		"served_code", served, "failure_class", "event_stream_outcome")
 	if s.write(contractsv1.ContextFabricInvestigationEvent{Type: contractsv1.ContextFabricInvestigationEventError, ReservedResultID: s.reserved, Stage: s.lastStarted, Error: &fallback}) != nil {
 		return ""
 	}
@@ -393,6 +494,15 @@ func (s *investigationEventStream) abort() {
 	}
 	envelope := s.internalErrorEnvelope()
 	_ = s.write(contractsv1.ContextFabricInvestigationEvent{Type: contractsv1.ContextFabricInvestigationEventError, ReservedResultID: s.reserved, Stage: s.lastStarted, Error: &envelope})
+}
+
+// budgetRefusalEnvelope is the terminal of a stream that ran out of bytes: the
+// frame cap (stream_frame_cap) or the non-terminal budget (stream_byte_budget).
+func (s *investigationEventStream) budgetRefusalEnvelope(reason string) contractsv1.ErrorEnvelope {
+	return contractsv1.ErrorEnvelope{SchemaVersion: contractsv1.ErrorSchema, RequestID: s.requestID, Error: contractsv1.ErrorDetail{
+		Code: "budget_refusal", Message: "The Context Fabric investigation event stream exceeded its byte budget", HTTPStatus: http.StatusRequestEntityTooLarge,
+		Details: map[string]any{"reason": reason, "frame_max_bytes": s.settings.frameMaxBytes, "stream_max_bytes": s.settings.totalMaxBytes},
+	}}
 }
 
 func (s *investigationEventStream) internalErrorEnvelope() contractsv1.ErrorEnvelope {
@@ -431,14 +541,14 @@ func (a *App) investigationEventStreamWritable(w http.ResponseWriter, r *http.Re
 // investigateCtx already carries the reserved result id (the submission's, or
 // one reserved for this stream). The outcome goes through
 // deliverInvestigationOutcome, the one delivery the JSON path uses too.
-func (a *App) serveInvestigationEventStream(w http.ResponseWriter, r *http.Request, investigator contextfabric.Investigator, principal storage.Principal, request contextfabric.InvestigationRequest, submission *admittedInvestigationSubmission, submissionID, reserved string, investigateCtx context.Context, collectedSynthesisInput func() *contractsv1.ContextFabricSynthesisInput) (delivered string) {
+func (a *App) serveInvestigationEventStream(w http.ResponseWriter, r *http.Request, investigator contextfabric.Investigator, principal storage.Principal, request contextfabric.InvestigationRequest, submission *admittedInvestigationSubmission, submissionID, threadID, reserved string, investigateCtx context.Context, collectedSynthesisInput func() *contractsv1.ContextFabricSynthesisInput) (delivered string) {
 	requestID := RequestID(r.Context())
 	controller := http.NewResponseController(w)
 	runCtx, cancelRun := context.WithCancel(investigateCtx)
 	defer cancelRun()
 	stream := &investigationEventStream{
 		w: w, controller: controller, settings: a.eventStream, logger: a.logger, logCtx: context.WithoutCancel(r.Context()),
-		requestID: requestID, reserved: reserved, startedAt: time.Now(), onWriteFailure: cancelRun,
+		requestID: requestID, reserved: reserved, startedAt: time.Now(), onWriteFailure: cancelRun, onBudgetExhausted: cancelRun,
 	}
 	sink := contextfabric.NewInvestigationStageSink(contextfabric.InvestigationStageSinkCapacity)
 	runCtx = contextfabric.WithInvestigationStageSink(runCtx, sink)
@@ -516,7 +626,7 @@ func (a *App) serveInvestigationEventStream(w http.ResponseWriter, r *http.Reque
 		delivered = "error"
 	}()
 	budget := investigationBudgetSeconds(runCtx, time.Now())
-	if err := stream.accepted(budget, submissionID); err != nil {
+	if err := stream.accepted(budget, submissionID, threadID); err != nil {
 		endCancelWatch()
 		abandonUndelivered()
 		return "error"
@@ -551,12 +661,16 @@ func (a *App) serveInvestigationEventStream(w http.ResponseWriter, r *http.Reque
 	delivered = a.deliverInvestigationOutcome(outcome, r, principal, request, submission, result, err, collectedSynthesisInput)
 	terminal := stream.finish(outcome)
 	stream.mu.Lock()
-	frames, writeFailed := stream.seq, stream.failed != nil
+	frames, writeFailed, written, budgetExhausted := stream.seq, stream.failed != nil, stream.written, stream.budgetExhausted
 	stream.mu.Unlock()
 	a.logger.InfoContext(r.Context(), "context fabric investigation event stream closed",
 		"request_id", contextfabric.SanitizeLogAttr(requestID), "frames", frames, "terminal", string(terminal),
-		"outcome_status", outcome.status, "events_dropped", sink.Dropped(), "write_failed", writeFailed)
-	if terminal == "" {
+		"outcome_status", outcome.status, "events_dropped", sink.Dropped(), "write_failed", writeFailed,
+		"bytes_written", written, "budget_exhausted", budgetExhausted)
+	// The latency status is the answer the stream delivered: a result
+	// terminal carries it; an error terminal (the outcome's own error, or a
+	// budget_refusal that replaced an answer) and no terminal deliver none.
+	if terminal != contractsv1.ContextFabricInvestigationEventResult {
 		return "error"
 	}
 	return delivered
@@ -570,12 +684,14 @@ func (a *App) logInvestigationCancelEffective(logCtx, requestCtx context.Context
 	// the run context ended, not the moment the line could be written.
 	tEff := time.Now().UTC()
 	stream.mu.Lock()
-	writeFailed := stream.failed != nil
+	writeFailed, budgetExhausted := stream.failed != nil, stream.budgetExhausted
 	stream.mu.Unlock()
 	cause := "run_cancelled"
 	switch {
 	case writeFailed:
 		cause = "write_failed"
+	case budgetExhausted:
+		cause = "stream_byte_budget"
 	case errors.Is(requestCtx.Err(), context.DeadlineExceeded):
 		cause = "deadline"
 	case errors.Is(requestCtx.Err(), context.Canceled):

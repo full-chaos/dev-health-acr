@@ -740,8 +740,13 @@ func selectMembersForDriverNarration(members []CohortMember, count int) []Cohort
 // out of DeterministicAnswer dies with it (sibling rip-out ticket deletes
 // prose-detail.ts): there is nothing left in the lead for it to parse.
 //
-// Both fields now compose to the SAME content: the bare status sentence,
-// independently truncated at each field's own bound.
+// Both fields compose to the SAME content, independently truncated at each
+// field's own bound: the quick answer, then the status sentence (chris
+// 2026-10-30: "always lean towards whatever the quick answer is with details
+// afterwards"). The quick answer is the first principal driver in answer order
+// (principalDriversInAnswerOrder): for a ranked cohort, a driver about its top
+// member. It is a served driver title, so no display language is added; the
+// details stay in the drivers themselves, never re-spliced into the lead.
 // ContextFabricInvestigationResult.Validate() requires a non-empty
 // DirectJudgment for an answer-capable (complete/partial) status, so it
 // cannot be cleared outright the way CurrentState's own "no canonical
@@ -753,8 +758,8 @@ func selectMembersForDriverNarration(members []CohortMember, count int) []Cohort
 // principal driver (see the engine call site's guard) -- a non-cohort
 // (single-subject) investigation never reaches this function, so its
 // DirectJudgment/DeterministicAnswer composition is completely untouched.
-func recomposeCohortAnswerNarrative(status InvestigationStatus, resolution SubjectResolution) (directJudgment, deterministicAnswer string) {
-	sentence := statusSentence(status, resolution)
+func recomposeCohortAnswerNarrative(status InvestigationStatus, drivers []DriverJudgment, cohort *Cohort, resolution SubjectResolution) (directJudgment, deterministicAnswer string) {
+	sentence := composeLeadProse(status, drivers, cohort, resolution, "")
 	directJudgment = truncateAtSentenceBoundary(sentence, directJudgmentMaxLength)
 	deterministicAnswer = truncateAtSentenceBoundary(sentence, deterministicAnswerMaxLength)
 	return directJudgment, deterministicAnswer

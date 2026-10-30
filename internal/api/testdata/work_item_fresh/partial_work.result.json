@@ -146,7 +146,7 @@
     "truncated": false,
     "population": 1
   },
-  "direct_judgment": "This investigation is complete.",
+  "direct_judgment": "Counted 1 work item. This investigation is complete.",
   "current_state": "Current observed values: status: open (work-1).",
   "strongest_pressures": [],
   "drivers": [],
@@ -241,7 +241,7 @@
     "interpretation_model_identity": "test-provider/test-model",
     "synthesis_source": "server"
   },
-  "deterministic_answer": "This investigation is complete. Counted 1 work item.",
+  "deterministic_answer": "Counted 1 work item. This investigation is complete.",
   "warnings": [],
   "reused": false,
   "effective_evidence_window": {

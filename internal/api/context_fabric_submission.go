@@ -221,7 +221,7 @@ func (a *App) admitInvestigationSubmission(w http.ResponseWriter, r *http.Reques
 		return nil, false
 	}
 	if admitted {
-		a.logSubmissionAdmission(r, principal, SubmissionOutcomeAdmitted, record.State, nil)
+		a.logSubmissionAdmission(r, principal, SubmissionOutcomeAdmitted, record.State, nil, "owner_surface", ownerSurfaceOf(record))
 		return &admittedInvestigationSubmission{key: key, record: record, store: store}, true
 	}
 	// A repeat that raced the pre-gate lookup (answerSubmissionRepeat): the
@@ -283,7 +283,7 @@ func (a *App) admitImplicitInvestigation(w http.ResponseWriter, r *http.Request,
 	}
 	// platform_run: the admission counted one run of the deployment's model
 	// to the month's allowance (codex #1763 r3 P3).
-	a.logSubmissionAdmission(r, principal, SubmissionOutcomeAdmittedImplicit, record.State, nil, "platform_run", true)
+	a.logSubmissionAdmission(r, principal, SubmissionOutcomeAdmittedImplicit, record.State, nil, "platform_run", true, "owner_surface", ownerSurfaceOf(record))
 	return &admittedInvestigationSubmission{key: key, record: record, store: store, implicit: true}, true
 }
 
@@ -325,8 +325,10 @@ func (a *App) answerSubmissionRepeat(w http.ResponseWriter, r *http.Request, pri
 // The digest is decided before the state: a key is only ever a retry of the
 // identical request. Nothing here executes.
 func (a *App) answerSubmissionRecord(w http.ResponseWriter, r *http.Request, principal storage.Principal, record contextfabric.SubmissionRecord, digest string) {
+	// CHAOS-12091: which owner branch made this record the caller's.
+	match := ownerMatchOf(principal, record)
 	if record.RequestDigest != digest {
-		a.logSubmissionAdmission(r, principal, SubmissionOutcomeRefusedMismatch, record.State, nil)
+		a.logSubmissionAdmission(r, principal, SubmissionOutcomeRefusedMismatch, record.State, nil, "owner_match", string(match))
 		writeError(w, r, http.StatusConflict, contractsv1.ErrorCodeSubmissionMismatch, "The submission id was already used for a different request", false, nil)
 		return
 	}
@@ -334,7 +336,7 @@ func (a *App) answerSubmissionRecord(w http.ResponseWriter, r *http.Request, pri
 	case contextfabric.SubmissionDone:
 		// Re-authorized: the stored result is read and decided by the gate
 		// like any read by id, never served from the record alone.
-		a.logSubmissionAdmission(r, principal, SubmissionOutcomeReplayed, record.State, nil)
+		a.logSubmissionAdmission(r, principal, SubmissionOutcomeReplayed, record.State, nil, "owner_match", string(match))
 		results := a.investigationResults()
 		if results == nil {
 			a.handleRuntimeUnavailable(w, r)
@@ -342,14 +344,14 @@ func (a *App) answerSubmissionRecord(w http.ResponseWriter, r *http.Request, pri
 		}
 		a.serveStoredInvestigationResult(w, r, principal, results, a.storedResultGate(), record.ResultID, "context_fabric_investigation_submission_replayed")
 	case contextfabric.SubmissionRunning:
-		a.logSubmissionAdmission(r, principal, SubmissionOutcomeRefusedInProgress, record.State, nil)
+		a.logSubmissionAdmission(r, principal, SubmissionOutcomeRefusedInProgress, record.State, nil, "owner_match", string(match))
 		w.Header().Set("Retry-After", strconv.Itoa(contractsv1.ContextFabricSubmissionInProgressRetryAfterSeconds))
 		writeError(w, r, http.StatusConflict, contractsv1.ErrorCodeSubmissionInProgress, "The submission is still running", true, nil)
 	case contextfabric.SubmissionDoneUnsaved:
-		a.logSubmissionAdmission(r, principal, SubmissionOutcomeRefusedUnsaved, record.State, nil)
+		a.logSubmissionAdmission(r, principal, SubmissionOutcomeRefusedUnsaved, record.State, nil, "owner_match", string(match))
 		writeError(w, r, http.StatusConflict, contractsv1.ErrorCodeSubmissionUnsaved, "The submission was answered but its answer was not saved", false, nil)
 	default:
-		a.logSubmissionAdmission(r, principal, SubmissionOutcomeRefusedAbandoned, record.State, nil)
+		a.logSubmissionAdmission(r, principal, SubmissionOutcomeRefusedAbandoned, record.State, nil, "owner_match", string(match))
 		writeError(w, r, http.StatusConflict, contractsv1.ErrorCodeSubmissionAbandoned, "The submission ended without an answer", false, nil)
 	}
 }
@@ -493,4 +495,23 @@ func retrySubmissionWrite(ctx context.Context, write func() error) error {
 		}
 	}
 	return err
+}
+
+// ownerSurfaceOf is the canonical owner surface a new record was admitted
+// under (CHAOS-12091): browser or mcp, "none" when its owner has no user.
+func ownerSurfaceOf(record contextfabric.SubmissionRecord) string {
+	if record.Key.Owner.Surface == "" {
+		return string(contextfabric.SubmissionOwnerMatchNone)
+	}
+	return string(record.Key.Owner.Surface)
+}
+
+// ownerMatchOf is the owner-match basis of record for principal
+// (CHAOS-12091), "none" when principal has no owner.
+func ownerMatchOf(principal storage.Principal, record contextfabric.SubmissionRecord) contextfabric.SubmissionOwnerMatch {
+	owner, err := contextfabric.SubmissionOwnerOf(principal)
+	if err != nil {
+		return contextfabric.SubmissionOwnerMatchNone
+	}
+	return contextfabric.SubmissionOwnerMatchOf(record.Key.Owner, owner)
 }
