@@ -11,7 +11,7 @@
 
 ## Judgment
 > ```
-> This investigation is complete.
+> Counted at least 2000 work items. This investigation is complete.
 > ```
 
 ## Current state
@@ -21,7 +21,7 @@
 
 ## Server-computed answer (computed by the server from stored facts, not written by a model)
 > ```
-> This investigation is complete. Counted at least 2000 work items.
+> Counted at least 2000 work items. This investigation is complete.
 > ```
 
 ## Cohort (1 of at least 2000 shown)

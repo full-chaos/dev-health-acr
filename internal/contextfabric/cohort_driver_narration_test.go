@@ -633,7 +633,7 @@ func TestRecomposeCohortAnswerNarrative(t *testing.T) {
 	t.Parallel()
 	wantSentence := "This investigation is partial: some canonical or graph coverage was unavailable."
 
-	directJudgment, deterministicAnswer := recomposeCohortAnswerNarrative(InvestigationPartial, SubjectResolution{})
+	directJudgment, deterministicAnswer := recomposeCohortAnswerNarrative(InvestigationPartial, nil, nil, SubjectResolution{})
 	if directJudgment != wantSentence {
 		t.Fatalf("directJudgment = %q, want %q (status sentence alone)", directJudgment, wantSentence)
 	}

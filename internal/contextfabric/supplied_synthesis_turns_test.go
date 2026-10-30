@@ -139,13 +139,13 @@ func (w *writeBackTurn) run(t *testing.T, question string) InvestigationResult {
 
 // E7: with an applied draft a count question carries the count sentence, as
 // the model path; the no-draft turn keeps its fixed text.
-func TestSuppliedSynthesisCountQuestionAppendsTheCountSentenceLikeTheModelPath(t *testing.T) {
+func TestSuppliedSynthesisCountQuestionLeadsWithTheCountSentenceLikeTheModelPath(t *testing.T) {
 	t.Parallel()
 	turn := newFrameWriteBackTurn(t, countingFrame(SubjectTeam), countedWriteBackDraft(InvestigationComplete), false, false)
 	result := turn.run(t, "count question")
 	want := cardinalityAnswerSentence(MembershipCardinality{Resolved: true, Kind: SubjectTeam, Served: 3, Declared: 3})
-	if !strings.HasSuffix(result.DeterministicAnswer, want) {
-		t.Fatalf("deterministic_answer = %q, want it to end with the count sentence %q", result.DeterministicAnswer, want)
+	if !strings.HasPrefix(result.DeterministicAnswer, want+" ") || !strings.HasPrefix(result.DirectJudgment, want+" ") {
+		t.Fatalf("deterministic_answer = %q direct_judgment = %q, want both to lead with the count sentence %q", result.DeterministicAnswer, result.DirectJudgment, want)
 	}
 	if result.DeterministicAnswer == contractsv1.ContextFabricClientSynthesisAnswer || !cardinalityClaimPresent(result) {
 		t.Fatalf("answer = %q count claim present = %v, want the composed answer and the count claim", result.DeterministicAnswer, cardinalityClaimPresent(result))
@@ -208,7 +208,7 @@ func TestSuppliedSynthesisCohortNarrativeIsRecomposedLikeTheModelPath(t *testing
 		t.Fatalf("narrative recomposed = %v / %v, want false on the no-draft call and true with a draft",
 			telemetry.cohortDriverNarrations[0].AnswerNarrativeRecomposed, telemetry.cohortDriverNarrations[1].AnswerNarrativeRecomposed)
 	}
-	wantJudgment, wantAnswer := recomposeCohortAnswerNarrative(result.Status, result.SubjectResolution)
+	wantJudgment, wantAnswer := recomposeCohortAnswerNarrative(result.Status, result.Drivers, result.Cohort, result.SubjectResolution)
 	if result.DirectJudgment != wantJudgment || result.DeterministicAnswer != wantAnswer {
 		t.Fatalf("direct_judgment = %q deterministic_answer = %q, want the recomposed %q / %q", result.DirectJudgment, result.DeterministicAnswer, wantJudgment, wantAnswer)
 	}

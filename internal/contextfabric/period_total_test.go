@@ -195,6 +195,13 @@ func TestASingleSubjectCountIsAnsweredWithThePeriodTotalOfItsDailyRows(t *testin
 			if !strings.Contains(result.DeterministicAnswer, fmt.Sprintf("Total of prs merged over the period: %d,", wantMerged)) {
 				t.Errorf("answer %q lacks the prs merged total %d", result.DeterministicAnswer, wantMerged)
 			}
+			// Quick answer first: the totals lead both lead prose fields, the
+			// period they rest on follows them, the composed prose after.
+			for name, text := range map[string]string{"deterministic_answer": result.DeterministicAnswer, "direct_judgment": result.DirectJudgment} {
+				if scope := strings.Index(text, "The period is "); !strings.HasPrefix(text, "Total of ") || scope < 0 {
+					t.Errorf("%s = %q, want the totals first, then the period", name, text)
+				}
+			}
 			for _, banned := range []string{"bus factor", "change failure", "Partial total", "compounding"} {
 				if strings.Contains(result.DeterministicAnswer, banned) {
 					t.Errorf("answer states a non-additive or partial value %q: %q", banned, result.DeterministicAnswer)

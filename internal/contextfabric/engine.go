@@ -2033,8 +2033,9 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 					} else {
 						cardinalityClaimSubjectRepair(principal, &reused, reusedReading)
 					}
-					if sentence := cardinalityAnswerSentence(reusedCardinality); sentence != "" && !strings.Contains(reused.DeterministicAnswer, sentence) {
-						reused.DeterministicAnswer = appendCardinalitySentence(reused.DeterministicAnswer, sentence)
+					if sentence := cardinalityAnswerSentence(reusedCardinality); sentence != "" {
+						reused.DeterministicAnswer = moveCountSentenceToHead(reused.DeterministicAnswer, sentence, deterministicAnswerMaxLength)
+						reused.DirectJudgment = moveCountSentenceToHead(reused.DirectJudgment, sentence, directJudgmentMaxLength)
 					}
 				}
 			}
