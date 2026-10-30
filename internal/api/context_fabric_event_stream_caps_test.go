@@ -223,9 +223,17 @@ func TestAStreamBudgetTerminalIsAnErrorLatency(t *testing.T) {
 func TestAcceptedEchoesTheRequestsThreadID(t *testing.T) {
 	for _, threadID := range []string{"thread_0123456789abcdef", ""} {
 		app, token, _ := newStreamTestApp(t, investigatorOf(answering(t, "context_fabric_investigation_result.v1.json", nil)))
+		if threadID != "" {
+			// A thread turn is a submission (CHAOS-11948): it needs a
+			// submission store and a submission id.
+			harness, _ := newMemorySubmissionHarness(t, 1)
+			app, token = harness.apps[0], harness.tokenA
+			app.config.ContextFabricEventStreamEnabled = true
+		}
 		server := httptest.NewServer(app.Handler())
 		request := investigationHTTPRequest(t, server.URL, token, contractsv1.ContextFabricInvestigationEventStreamMediaType, investigationRequestBody())
 		if threadID != "" {
+			request.Header.Set(contractsv1.ContextFabricSubmissionIDHeader, "submission-accepted-0001")
 			request.Header.Set(contractsv1.ContextFabricThreadIDHeader, threadID)
 		}
 		response, err := server.Client().Do(request)
