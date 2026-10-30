@@ -532,7 +532,9 @@ func TestBothConcurrencyBoundariesAgainstPlantedHeldRuns(t *testing.T) {
 	var planted []string
 	t.Cleanup(func() {
 		if len(planted) > 0 {
-			pg(t, fmt.Sprintf(`UPDATE %s SET state = 'abandoned', updated_at = now() WHERE org_id = %s AND submission_id IN (%s)`, submissionsTable, sqlStr(orgID(t)), sqlList(planted)))
+			// Only the planted runs still held: the one marked done keeps its result id,
+			// which an abandoned record may not carry.
+			pg(t, fmt.Sprintf(`UPDATE %s SET state = 'abandoned', updated_at = now() WHERE org_id = %s AND submission_id IN (%s) AND state = 'running'`, submissionsTable, sqlStr(orgID(t)), sqlList(planted)))
 		}
 	})
 
