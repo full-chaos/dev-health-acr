@@ -17,7 +17,13 @@ const (
 	// keyed by the handle, never the peer address: every consent request
 	// comes from the web server, and behind the ingress every public caller
 	// shares one peer address, so an address key throttles all users at once.
-	oauthConsentRequestLimit       = 20
+	oauthConsentRequestLimit = 20
+	// browserAuthorizeClientLimit is the per-process ceiling on /authorize
+	// requests of one first-party browser client in a window, across every
+	// source (CHAOS-12156). Every user of the web app shares the browser
+	// client's public id, so its /authorize is limited per source at
+	// deviceCreationLimit; this ceiling bounds the client as a whole.
+	browserAuthorizeClientLimit    = 600
 	defaultDeviceAuthorizationKeys = 4096
 )
 
