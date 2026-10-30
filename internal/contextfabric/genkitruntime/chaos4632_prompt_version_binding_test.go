@@ -110,7 +110,9 @@ func TestVersionedModelContractsAreBoundToTheirContent(t *testing.T) {
 			// v26 -> v27: the deficiency rule basis is dated by
 			// rule_basis_as_of_day when present. See DefaultSynthesisPromptVersion's
 			// own doc comment.
-			digest: "1c5d552517489186b9cd19ec0d7c18e782f93d9d8c9d9bc808ebd43957d7a0ee",
+			// v27 -> v28 (CHAOS-11600): every reader-facing sentence that states a
+			// derived number must carry appears, leans or suggests.
+			digest: "317c42bc219a1b882b76e528ba7a93899536457a94ff0e0c38e617f9509159c3",
 		},
 		{
 			name:    "interpretation model-output schema",

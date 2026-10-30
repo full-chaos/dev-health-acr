@@ -18,7 +18,8 @@ func TestComposeCurrentStateUsesDisplayNounsAndTwoDecimals(t *testing.T) {
 		{ClaimID: "c3", Kind: FactWorkload, Field: "forecast_pressure", Subject: subject, Value: ScalarValue{Number: &whole}},
 		{ClaimID: "c4", Kind: FactInvestment, Field: "attribution_basis", Subject: subject, Value: ScalarValue{String: &basis}},
 	}})
-	want := "Current observed values: compounding risk score: 0.99 (Team A); coverage gap score: 0.32 (Team A); forecast pressure score: 3 (Team A); attribution basis: share of pull request references over the team's owned repositories (Team A)."
+	// CHAOS-11600: the compounding risk score is derived, so it is listed apart.
+	want := "Current observed values: coverage gap score: 0.32 (Team A); forecast pressure score: 3 (Team A); attribution basis: share of pull request references over the team's owned repositories (Team A). Derived values, which suggest rather than observe: compounding risk score: 0.99 (Team A)."
 	if got != want {
 		t.Fatalf("CurrentState = %q, want %q", got, want)
 	}
@@ -35,7 +36,7 @@ func TestComposeFailedSynthesisCurrentStateUsesDisplayValues(t *testing.T) {
 	got := composeFailedSynthesisCurrentState([]ClaimedFact{
 		{ClaimID: "c1", Kind: FactHealth, Field: "compounding_risk", Subject: SubjectRef{Label: "Team A"}, Value: ScalarValue{Number: &risk}},
 	})
-	if want := "Canonical values read: compounding risk score: 0.99 (Team A)."; got != want {
+	if want := "Derived values, which suggest rather than observe: compounding risk score: 0.99 (Team A)."; got != want {
 		t.Fatalf("CurrentState = %q, want %q", got, want)
 	}
 }
