@@ -47,7 +47,7 @@ ALTER TABLE acr.client_credentials ADD CONSTRAINT ck_acr_client_credentials_clie
 ALTER TABLE acr.client_credentials DROP CONSTRAINT IF EXISTS ck_acr_client_credentials_provenance_lengths;
 ALTER TABLE acr.client_credentials ADD CONSTRAINT ck_acr_client_credentials_provenance_lengths CHECK (
     (approving_user_id IS NULL OR char_length(approving_user_id) BETWEEN 1 AND 200)
-    AND (client_id IS NULL OR char_length(client_id) BETWEEN 1 AND 256)
+    AND (client_id IS NULL OR char_length(client_id) BETWEEN 1 AND 2048)
     AND (session_id IS NULL OR char_length(session_id) BETWEEN 1 AND 256)
     AND (family_id IS NULL OR char_length(family_id) BETWEEN 1 AND 256)
 );

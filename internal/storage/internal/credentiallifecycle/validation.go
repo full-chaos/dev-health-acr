@@ -27,6 +27,12 @@ var (
 // duplicated by value, not by reference.
 const maxResourceLength = 2048
 
+// maxClientIDLength bounds ClientID: a client-ID metadata document client id
+// is an https URL as long as maxOAuthURILength in internal/storage (2048),
+// so the credential provenance admits every client id authorization admits
+// (duplicated by value for the same import-cycle reason as above).
+const maxClientIDLength = 2048
+
 var knownScopes = map[string]struct{}{
 	"context:read":  {},
 	"evidence:read": {},
@@ -105,7 +111,7 @@ func normalizeCreate(input CreateInput) (CreateInput, error) {
 	if err != nil {
 		return CreateInput{}, err
 	}
-	input.ClientID, err = normalizeOptionalText("client id", input.ClientID, 256)
+	input.ClientID, err = normalizeOptionalText("client id", input.ClientID, maxClientIDLength)
 	if err != nil {
 		return CreateInput{}, err
 	}
