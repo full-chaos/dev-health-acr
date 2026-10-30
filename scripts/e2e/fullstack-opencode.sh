@@ -1550,8 +1550,34 @@ assert_repository_catalog_visible() {
     || fs_die "the Ops repository catalog cannot see ${FULLSTACK_REPO_SLUG} (matched ${visible:-0} rows); the Explorer's picker would render empty and disabled"
 }
 
+# WEB_AGREEMENT_TASK is the one task the web agreement check compares: the browser renders
+# its Context Packet Explorer view and the check grades it against that task's API packet.
+# It is in the `full` profile only (testdata/fullstack/v1/tasks.json).
+WEB_AGREEMENT_TASK='task-002-auth-refactor-branch'
+
+# web_agreement_task_selected is true when this run's scenario ran WEB_AGREEMENT_TASK
+# (CHAOS-12057): `smoke` does not, so a smoke run with the web check on runs device login and
+# reports the agreement check as not run, instead of failing every layer of a task it never ran.
+web_agreement_task_selected() {
+  local task
+  for task in "${TASKS[@]}"; do
+    [[ "$task" == "$WEB_AGREEMENT_TASK" ]] && return 0
+  done
+  return 1
+}
+
+# record_web_agreement_not_run makes the skip loud and durable: a stderr line and an artifact,
+# so a reader of the run never takes the missing comparison for a passed one.
+record_web_agreement_not_run() {
+  local reason="scenario ${SCENARIO} does not run ${WEB_AGREEMENT_TASK}, the task the web agreement check compares; dispatch scenario=full to run it"
+  fs_note "WARN: web agreement check NOT RUN: ${reason}"
+  jq -n --arg reason "$reason" --arg scenario "$SCENARIO" --arg task "$WEB_AGREEMENT_TASK" \
+    '{schema_version:"fullstack_web_agreement_not_run.v1",scenario:$scenario,task_id:$task,reason:$reason}' \
+    >"$ARTIFACTS/web-agreement-not-run.json"
+}
+
 run_web_agreement_check() {
-  local task_id='task-002-auth-refactor-branch'
+  local task_id="$WEB_AGREEMENT_TASK"
   [[ -d "$WEB_ROOT/node_modules/@playwright/test" ]] || fs_die 'web dependencies with @playwright/test are required for the web agreement check'
   compose up -d bugsink web-fullstack >/dev/null
   wait_web_ready
@@ -1636,7 +1662,11 @@ if [[ "$SCENARIO" == 'self-test' ]]; then
 fi
 
 if web_check_enabled; then
-  run_web_agreement_check
+  if web_agreement_task_selected; then
+    run_web_agreement_check
+  else
+    record_web_agreement_not_run
+  fi
 fi
 
 # The summary is mandatory: if no per-task report exists, no task was graded, and the run must
