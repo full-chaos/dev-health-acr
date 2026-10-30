@@ -50,6 +50,23 @@ func TestSubmissionOwnerOf_canonicalOwnerPerPrincipal(t *testing.T) {
 	}
 }
 
+func TestSubmissionOwnerMatchOf(t *testing.T) {
+	first := SubmissionOwner{AuthenticationMethod: "credential", Subject: "cred_1", UserID: "user_1", Surface: SubmissionSurfaceMCP}
+	for name, tc := range map[string]struct {
+		request SubmissionOwner
+		want    SubmissionOwnerMatch
+	}{
+		"same pair":                {first, SubmissionOwnerMatchLegacy},
+		"rotated credential":       {SubmissionOwner{AuthenticationMethod: "credential", Subject: "cred_2", UserID: "user_1", Surface: SubmissionSurfaceMCP}, SubmissionOwnerMatchCanonical},
+		"same user, other surface": {SubmissionOwner{AuthenticationMethod: "web_assertion", Subject: "user_1", UserID: "user_1", Surface: SubmissionSurfaceBrowser}, SubmissionOwnerMatchNone},
+		"other user":               {SubmissionOwner{AuthenticationMethod: "credential", Subject: "cred_3", UserID: "user_2", Surface: SubmissionSurfaceMCP}, SubmissionOwnerMatchNone},
+	} {
+		if got := SubmissionOwnerMatchOf(first, tc.request); got != tc.want {
+			t.Errorf("%s: SubmissionOwnerMatchOf = %q, want %q", name, got, tc.want)
+		}
+	}
+}
+
 func TestSameSubmissionOwner(t *testing.T) {
 	legacy := SubmissionOwner{AuthenticationMethod: "credential", Subject: "cred_1"}
 	first := SubmissionOwner{AuthenticationMethod: "credential", Subject: "cred_1", UserID: "user_1", Surface: SubmissionSurfaceMCP}

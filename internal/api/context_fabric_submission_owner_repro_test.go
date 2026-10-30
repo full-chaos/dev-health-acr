@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"net/http"
+	"strings"
 	"testing"
 	"time"
 
@@ -29,6 +30,15 @@ func TestReproTokenRotationKeepsTheSubmissionOwner(t *testing.T) {
 	harness.post(1, successor, "submission-rotate-001", submissionQuestion)
 	if got := harness.investigator.executions.Load(); got != 1 {
 		t.Errorf("executions after a same-key retry by the rotated credential = %d, want 1", got)
+	}
+	// The status and admission lines name the match basis.
+	if logs := harness.logs[1].String(); !strings.Contains(logs, `"surface":"submission_status","outcome":"served","state":"done","request_id":"`+submissionTestRequestID+`","owner_match":"canonical"`) ||
+		!strings.Contains(logs, `"outcome":"replayed","state":"done","request_id":"`+submissionTestRequestID+`","owner_match":"canonical"`) {
+		t.Errorf("the rotated credential's lines do not name owner_match canonical:\n%s", logs)
+	}
+	harness.post(0, source.Token, "submission-rotate-001", submissionQuestion)
+	if logs := harness.logs[0].String(); !strings.Contains(logs, `"owner_match":"legacy"`) {
+		t.Errorf("the first credential's replay does not name owner_match legacy:\n%s", logs)
 	}
 }
 
