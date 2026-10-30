@@ -892,8 +892,13 @@ What an operator can rely on and see:
 - A stream that ends without a terminal event was interrupted (a disconnect,
   pod loss); the stored result, when the save had finished, is read back by id.
 - A panic after the stream started (outside the investigator) logs ERROR
-  `request panic recovered` (`failure_class` `event_stream_panic`, status 200)
-  and ends the stream with an `internal_error` terminal.
+  `request panic recovered` (`failure_class` `event_stream_panic`, status 200).
+  On the handler, the stream ends with an `internal_error` terminal. On the
+  pump goroutine (stage and heartbeat writes), the writer is not trusted again:
+  the stream is marked failed, the run is cancelled (`cancel effective` cause
+  `write_failed`), and the response ends without a terminal.
+- `t_eff` is taken when the run context ends, before the line waits for the
+  stream's lock (a frame write can hold it up to the 30 s write deadline).
 
 ### Context Fabric model provider (BYO LLM, CHAOS-3770)
 
