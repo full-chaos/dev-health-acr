@@ -91,7 +91,9 @@ var corsBrowserRoutes = [...]struct{ pattern, class string }{
 }
 
 // corsRouteClass is the closed name of a browser route ("" for any other
-// path).
+// path). path is the request's escaped path (URL.EscapedPath), so an escaped
+// "/" inside an identifier (an evidence reference can hold one) stays inside
+// its segment, as the mux reads it.
 func corsRouteClass(path string) string {
 	for _, route := range corsBrowserRoutes {
 		if corsPatternMatches(route.pattern, path) {
@@ -101,22 +103,27 @@ func corsRouteClass(path string) string {
 	return ""
 }
 
-// corsPatternMatches reports whether path matches a mux pattern's path,
-// segment by segment: a literal segment matches itself, and a {name}
+// corsPatternMatches reports whether an escaped path matches a mux pattern's
+// path the way the mux matches it: the escaped path splits on "/", each
+// segment is unescaped, a literal segment matches itself, and a {name}
 // wildcard matches exactly one non-empty segment.
-func corsPatternMatches(pattern, path string) bool {
-	want, got := strings.Split(pattern, "/"), strings.Split(path, "/")
+func corsPatternMatches(pattern, escapedPath string) bool {
+	want, got := strings.Split(pattern, "/"), strings.Split(escapedPath, "/")
 	if len(want) != len(got) {
 		return false
 	}
 	for i, segment := range want {
+		value, err := url.PathUnescape(got[i])
+		if err != nil {
+			return false
+		}
 		if strings.HasPrefix(segment, "{") && strings.HasSuffix(segment, "}") {
-			if got[i] == "" {
+			if value == "" {
 				return false
 			}
 			continue
 		}
-		if segment != got[i] {
+		if segment != value {
 			return false
 		}
 	}
@@ -144,7 +151,7 @@ func (a *App) corsMiddleware(next http.Handler) http.Handler {
 		return next
 	}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		route := corsRouteClass(r.URL.Path)
+		route := corsRouteClass(r.URL.EscapedPath())
 		if route == "" {
 			next.ServeHTTP(w, r)
 			return

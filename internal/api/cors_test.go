@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
 
@@ -257,6 +258,28 @@ func TestCORSIsAnsweredForTheListedOriginOnTheBrowserRoutesOnly(t *testing.T) {
 	if got := harness.investigator.executions.Load(); got != 6 {
 		t.Fatalf("executions = %d, want 6", got)
 	}
+}
+
+// CORS reads a path the way the mux routes it: the escaped path splits on
+// "/" and each segment is unescaped. An evidence reference may hold a "/" (a
+// team id such as ari:cloud:identity::team/1); the browser sends it escaped,
+// as one segment, and the mux routes it to the evidence read. An escaped
+// literal segment (%69nvestigations) is the literal the mux matches.
+func TestCORSReadsAnEscapedPathAsTheMuxRoutesIt(t *testing.T) {
+	harness := corsHarness(t)
+	for _, path := range []string{
+		"/api/v1/agent-context/evidence/" + url.PathEscape("ev:ari:cloud:identity::team/1"),
+		ContextFabricInvestigationsPath + "/" + url.PathEscape("result/escaped"),
+		"/api/v1/context-fabric/%69nvestigations",
+	} {
+		got := harness.cors(0, corsCall{method: http.MethodOptions, path: path, origin: corsTestOrigin, headers: map[string]string{"Access-Control-Request-Method": "GET", "Access-Control-Request-Headers": "authorization"}})
+		if got.Code != http.StatusNoContent || got.Header().Get("Access-Control-Allow-Origin") != corsTestOrigin {
+			t.Errorf("%s: preflight status %d, Access-Control-Allow-Origin %q; want 204 and %q", path, got.Code, got.Header().Get("Access-Control-Allow-Origin"), corsTestOrigin)
+		}
+	}
+	// A nested path stays nested when only its last part is escaped.
+	nested := "/api/v1/agent-context/evidence/ev_cors_0001/" + url.PathEscape("a/b")
+	expectNoCORS(t, nested, harness.cors(0, corsCall{method: http.MethodOptions, path: nested, origin: corsTestOrigin, headers: map[string]string{"Access-Control-Request-Method": "GET"}}))
 }
 
 // Only the registered browser routes answer CORS: a path under a browser
