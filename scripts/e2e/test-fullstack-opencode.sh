@@ -366,9 +366,37 @@ for profile in smoke full; do
   esac
 done
 rm -rf "$gate_dir"
-main_gate="$(sed -n '/^if web_check_enabled; then$/,/^fi$/p' "$script" | grep -A4 'web_agreement_task_selected' || true)"
-{ grep -Fq 'run_web_agreement_check' <<<"$main_gate" && grep -Fq 'record_web_agreement_not_run' <<<"$main_gate"; } \
-  || fail 'the main flow must run the agreement check only when its task was selected, and record the skip otherwise'
+# EXECUTE the main flow's own web blocks, not their text, with the real web_check_enabled
+# and gate and stubbed actions. A web-enabled smoke run must still prove device login and
+# record the agreement check as not run; a full run must do both; a run without the web
+# check must do neither. Only the top-level web blocks that hold these calls are run, so
+# web setup (fixtures, overrides) needs no stub.
+web_check_fn="$(sed -n '/^web_check_enabled() {/,/^}/p' "$script")"
+main_web_blocks="$(awk '
+  /^if .*web_check_enabled/ { grab=1; buf="" }
+  grab { buf = buf $0 "\n" }
+  grab && /^fi$/ { grab=0; if (buf ~ /run_device_login_lifecycle|web_agreement_task_selected|run_web_agreement_check|record_web_agreement_not_run/) printf "%s", buf }
+' "$script")"
+[[ -n "$web_check_fn" && -n "$main_web_blocks" ]] \
+  || fail 'could not extract web_check_enabled or the main-flow web blocks'
+for cell in 'smoke|on|device_login agreement_not_run' 'full|on|device_login agreement_run' \
+            'full|auto|device_login agreement_run' 'smoke|auto|' 'full|off|'; do
+  IFS='|' read -r profile web want <<<"$cell"
+  mapfile -t profile_tasks < <(jq -r --arg p "$profile" '[.tasks[] | select(.profiles | index($p)) | .task_id] | .[]' "$fixtures/tasks.json")
+  got="$(
+    SCENARIO="$profile" WEB_CHECK="$web" bash -c '
+      set -euo pipefail
+      eval "$1"; eval "$2"; main="$3"; shift 3
+      TASKS=("$@")
+      run_device_login_lifecycle() { printf "device_login "; }
+      run_web_agreement_check() { printf "agreement_run "; }
+      record_web_agreement_not_run() { printf "agreement_not_run "; }
+      eval "$main"
+    ' _ "$gate_fns" "$web_check_fn" "$main_web_blocks" "${profile_tasks[@]}"
+  )" || fail "the main-flow web blocks failed to run for scenario ${profile}, web ${web}"
+  [[ "${got% }" == "$want" ]] \
+    || fail "scenario ${profile} with web ${web}: the main flow did '${got% }', want '${want}'"
+done
 grep -Fq 'record_web_readiness_failure' "$script" \
   || fail 'web readiness failures must retain sanitized timestamped diagnostics'
 grep -Fq 'device-login-browser.mjs' "$script" \
