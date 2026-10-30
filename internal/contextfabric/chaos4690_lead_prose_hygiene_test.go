@@ -31,7 +31,7 @@ func TestChaos4690RecomposedCohortNarrativeWireFieldsCarryNoScoringArithmetic(t 
 	t.Parallel()
 	wantSentence := "This investigation is complete."
 
-	directJudgment, deterministicAnswer := recomposeCohortAnswerNarrative(InvestigationComplete, SubjectResolution{})
+	directJudgment, deterministicAnswer := recomposeCohortAnswerNarrative(InvestigationComplete, nil, nil, SubjectResolution{})
 
 	result := InvestigationResult{
 		Status:              InvestigationComplete,

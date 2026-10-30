@@ -880,10 +880,25 @@ What an operator can rely on and see:
   finish in 30 s still fails.
 - The connection owns the run: a client that disconnects cancels the
   investigation, and so does a failed frame write.
+- Byte caps, in wire bytes with the framing included (the browser counts the
+  same way): one frame at most `ACR_MAX_SERIALIZED_BYTES` + 64 KiB; the whole
+  stream at most 8 MiB, of which the last `ACR_MAX_SERIALIZED_BYTES` + 64 KiB is
+  reserved for the terminal. A frame over the frame cap is not written (ERROR
+  `... event refused: the frame is over the frame cap`, `failure_class`
+  `event_stream_frame_cap`); a result over it ends the stream with
+  `error{budget_refusal}` (413, `details.reason` `stream_frame_cap`). A
+  non-terminal frame that would cross 8 MiB minus the reserve is not written:
+  the stream ends with `error{budget_refusal}` (`details.reason`
+  `stream_byte_budget`) inside the reserve, and the run is cancelled (WARN
+  `... event stream reached its byte budget`, `failure_class`
+  `event_stream_byte_budget`; `cancel effective` cause `stream_byte_budget`).
+- `accepted` carries `thread_id` when the request sent `X-ACR-Thread-ID`, and
+  `submission_id` when it sent `X-ACR-Submission-ID`.
 - Log lines (all carry `request_id`): `context fabric investigation event
   stream opened` (reserved id, budget), `... closed` (frames, terminal,
-  `events_dropped`, `write_failed`), `context fabric investigation cancel
-  effective` (`cause`: `client_disconnected`, `write_failed`, `deadline` or
+  `events_dropped`, `write_failed`, `bytes_written`, `budget_exhausted`),
+  `context fabric investigation cancel effective` (`cause`:
+  `client_disconnected`, `write_failed`, `stream_byte_budget`, `deadline` or
   `run_cancelled`; `t_eff`, RFC 3339 with nanoseconds),
   `context fabric model attempt started` (one per model attempt: `attempt`,
   `started_at`), and WARN `context fabric investigation events dropped`

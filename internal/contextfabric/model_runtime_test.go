@@ -986,7 +986,7 @@ func TestComposeDeterministicAnswerTruncatesAtContractBoundWithManyDrivers(t *te
 			Confidence: 0.9, Current: true,
 		})
 	}
-	answer := composeDeterministicAnswer(draft, SubjectResolution{})
+	answer := composeDeterministicAnswer(draft, GraphContext{})
 	if len([]rune(answer)) > deterministicAnswerMaxLength {
 		t.Fatalf("composeDeterministicAnswer() length = %d, want <= %d", len([]rune(answer)), deterministicAnswerMaxLength)
 	}

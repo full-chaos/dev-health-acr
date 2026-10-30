@@ -3,7 +3,12 @@ package contextfabric
 import (
 	"bytes"
 	"context"
+	"io/fs"
 	"os"
+	"path/filepath"
+	"regexp"
+	"slices"
+	"strings"
 	"testing"
 
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
@@ -108,6 +113,26 @@ func TestStoredResultSurfacesServingToACallerCallTheFloodHelper(t *testing.T) {
 		StoredResultSurfacePriorResult:     "out of scope: the engine reads a prior result to carry state into a new turn; the row is never returned to the caller",
 		StoredResultSurfaceFactRootRecheck: "out of scope: re-checks the committed root subjects of a turn before the fact read; the row is never returned to the caller",
 	}
+	// A surface whose reader does not exist yet. It is classified out of
+	// scope only while no production file names it: the thread read names a
+	// turn's result id only when the read by id would serve it, flood rule
+	// included (docs/design/ask-dev-conversation-contract.md §4), so the
+	// change that adds its reader must move it to servesToCaller with the
+	// file that applies StoredResultFloodWithheld, or this test fails.
+	// A reader names the surface by its constant, by converting its value,
+	// or by passing the untyped literal as a gate call's surface argument;
+	// all three spellings are searched across the module. A source-text
+	// census: NOT caught is a reader that builds the value at run time (from
+	// a variable or a concatenation).
+	pendingReader := map[StoredResultSurface]*regexp.Regexp{
+		StoredResultSurfaceThread: regexp.MustCompile(`\bStoredResultSurfaceThread\b|StoredResultSurface\(\s*"thread"\s*\)|\b(Authorize|decide)\([^;]*?,\s*"thread"\s*\)`),
+	}
+	for surface, pattern := range pendingReader {
+		if users := productionFilesMatching(t, pattern, "stored_result_authorization.go"); len(users) > 0 {
+			t.Fatalf("stored-result surface %q now has a production reader (%v): classify it as serving to a caller and name the file that applies StoredResultFloodWithheld", surface, users)
+		}
+		notServed[surface] = "out of scope until its reader exists: no production file names it (checked above)"
+	}
 	for _, surface := range StoredResultSurfaceVocabulary() {
 		file, serves := servesToCaller[surface]
 		if _, skipped := notServed[surface]; !serves && !skipped {
@@ -124,4 +149,35 @@ func TestStoredResultSurfacesServingToACallerCallTheFloodHelper(t *testing.T) {
 			t.Fatalf("surface %q serves a stored result to a caller but %s does not call StoredResultFloodWithheld", surface, file)
 		}
 	}
+}
+
+// productionFilesMatching lists the module's non-test Go files whose source
+// matches pattern, except the files in exempt (matched by base name). It
+// walks from the module root, skipping the ignored build and tool trees.
+func productionFilesMatching(t *testing.T, pattern *regexp.Regexp, exempt ...string) []string {
+	t.Helper()
+	var users []string
+	err := filepath.WalkDir(filepath.Join("..", ".."), func(path string, entry fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if entry.IsDir() && (entry.Name() == ".git" || entry.Name() == ".tmp" || entry.Name() == "node_modules" || entry.Name() == "vendor") {
+			return filepath.SkipDir
+		}
+		if entry.IsDir() || !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") || slices.Contains(exempt, filepath.Base(path)) {
+			return nil
+		}
+		source, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		if pattern.Match(source) {
+			users = append(users, path)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return users
 }

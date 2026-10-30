@@ -130,7 +130,7 @@
     "complete": true,
     "truncated": false
   },
-  "direct_judgment": "This investigation is complete.",
+  "direct_judgment": "Counted 0 work items. This investigation is complete.",
   "current_state": "No canonical facts were observed to describe the current state.",
   "strongest_pressures": [],
   "drivers": [],
@@ -175,7 +175,7 @@
     "interpretation_model_identity": "test-provider/test-model",
     "synthesis_source": "server"
   },
-  "deterministic_answer": "This investigation is complete. Counted 0 work items.",
+  "deterministic_answer": "Counted 0 work items. This investigation is complete.",
   "warnings": [],
   "reused": false,
   "effective_evidence_window": {

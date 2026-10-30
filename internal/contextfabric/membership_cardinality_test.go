@@ -21,6 +21,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"strings"
 	"testing"
 	"time"
 
@@ -1094,6 +1095,55 @@ func TestAReusedAnswerStatesItsCardinality(t *testing.T) {
 	}
 	if err := contractsv1.ValidateContextFabricPlanRequirementOutcomeRow(rows[0]); err != nil {
 		t.Fatalf("the backfilled row does not validate: %v", err)
+	}
+	// The count is the quick answer: the reused answer leads both lead prose
+	// fields with it, as a fresh one does.
+	count := cardinalityAnswerSentence(MembershipCardinality{Resolved: true, Kind: SubjectTeam, Served: 3, Declared: 3})
+	if !strings.HasPrefix(served.DeterministicAnswer, count+" ") || !strings.HasPrefix(served.DirectJudgment, count+" ") {
+		t.Fatalf("reused deterministic_answer = %q direct_judgment = %q, want both to lead with %q", served.DeterministicAnswer, served.DirectJudgment, count)
+	}
+}
+
+// TestAReusedAnswerStoredWithTheCountLastLeadsWithIt: a document stored before
+// the count led the head carries its count sentence last. Reused, it is served
+// with the count moved to the head of both lead prose fields, stated once.
+func TestAReusedAnswerStoredWithTheCountLastLeadsWithIt(t *testing.T) {
+	t.Parallel()
+	project, candidate := reusableCandidate()
+	candidate.Cohort = countingCohort(SubjectTeam, 3)
+	candidate.SubjectResolution.Candidates = []SubjectCandidate{scopeAnchorMatch(project)}
+	candidate.Completeness.Outcomes = []RequirementOutcomeRow{{
+		Stage:       contractsv1.ContextFabricOutcomeStagePlanning,
+		Requirement: string(ObligationCount) + "/" + string(SubjectRoleMember) + "/" + string(SubjectTeam),
+		Obligation:  string(ObligationCount),
+		Outcome:     contractsv1.ContextFabricRequirementSatisfied,
+		Impact:      contractsv1.ContextFabricAnswerImpactNone,
+	}}
+	candidate.Completeness = ComputeAnswerCompleteness(candidate)
+	count := cardinalityAnswerSentence(MembershipCardinality{Resolved: true, Kind: SubjectTeam, Served: 3, Declared: 3})
+	status := statusSentence(candidate.Status, candidate.SubjectResolution)
+	candidate.DirectJudgment = status
+	candidate.DeterministicAnswer = status + " " + count
+	committed := []SubjectRef{project}
+	for _, member := range candidate.Cohort.Members {
+		committed = append(committed, member.Subject)
+	}
+	engine := mustReuseTestEngine(t, EngineDependencies{
+		Graph:     graphReaderStub{resolution: SubjectResolution{Candidates: []SubjectCandidate{}, Committed: committed}},
+		Results:   &resultStoreStub{},
+		ReuseGate: readingReuseGate{stored: candidate, frame: countingFrame(SubjectTeam)},
+	})
+	served, err := engine.Investigate(context.Background(), reusePrincipal(), validInvestigationRequest())
+	if err != nil {
+		t.Fatalf("Investigate() error = %v", err)
+	}
+	if !served.Reused {
+		t.Fatal("the fixture did not take the reuse path, so it proves nothing about it")
+	}
+	for name, text := range map[string]string{"deterministic_answer": served.DeterministicAnswer, "direct_judgment": served.DirectJudgment} {
+		if !strings.HasPrefix(text, count+" ") || strings.Count(text, count) != 1 {
+			t.Errorf("reused %s = %q, want it to lead with %q, stated once", name, text, count)
+		}
 	}
 }
 

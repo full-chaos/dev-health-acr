@@ -160,8 +160,8 @@ func decisiveClarificationResult() InvestigationResult {
 		CanonicalServiceVersion: "ops-v1", ModelIdentity: "unwired",
 	}
 	result.Status = InvestigationClarificationRequired
-	result.DirectJudgment = composeDirectJudgmentFrom(result.Status, result.Drivers, result.SubjectResolution)
-	result.DeterministicAnswer = composeDeterministicAnswerFrom(result.Status, result.Drivers, result.ClaimedFacts, result.SubjectResolution)
+	result.DirectJudgment = composeDirectJudgmentFrom(result.Status, result.Drivers, result.Cohort, result.SubjectResolution)
+	result.DeterministicAnswer = composeDeterministicAnswerFrom(result.Status, result.Drivers, result.ClaimedFacts, result.Cohort, result.SubjectResolution)
 	return result
 }
 
@@ -241,8 +241,8 @@ func TestChaos4098_OverrideRecomposesResolutionDependentServerText(t *testing.T)
 	// the point of recomposing rather than patching is that an overridden
 	// result is indistinguishable from one composed at no_match to begin
 	// with.
-	wantJudgment := composeDirectJudgmentFrom(InvestigationNoMatch, result.Drivers, result.SubjectResolution)
-	wantAnswer := composeDeterministicAnswerFrom(InvestigationNoMatch, result.Drivers, result.ClaimedFacts, result.SubjectResolution)
+	wantJudgment := composeDirectJudgmentFrom(InvestigationNoMatch, result.Drivers, result.Cohort, result.SubjectResolution)
+	wantAnswer := composeDeterministicAnswerFrom(InvestigationNoMatch, result.Drivers, result.ClaimedFacts, result.Cohort, result.SubjectResolution)
 	if result.DirectJudgment != wantJudgment {
 		t.Fatalf("direct_judgment = %q, want the shared renderer's output %q", result.DirectJudgment, wantJudgment)
 	}
@@ -259,7 +259,7 @@ func TestChaos4098_OverrideNeverFiresOnAnyOtherStatus(t *testing.T) {
 	} {
 		result := decisiveClarificationResult()
 		result.Status = status
-		result.DirectJudgment = composeDirectJudgmentFrom(status, result.Drivers, result.SubjectResolution)
+		result.DirectJudgment = composeDirectJudgmentFrom(status, result.Drivers, result.Cohort, result.SubjectResolution)
 		before := result.DirectJudgment
 		if outcome := applySynthesisStatusOverride(&result); outcome != nil {
 			t.Fatalf("status %q must not be overridden, got %+v", status, outcome)
@@ -308,8 +308,8 @@ func uncommittedClarificationResult() InvestigationResult {
 	// distinct from anything this override cares about -- the fixture's
 	// point is zero COMMITTED subjects, not a malformed resolution.
 	result.SubjectResolution = SubjectResolution{Candidates: []SubjectCandidate{}, Committed: []SubjectRef{}}
-	result.DirectJudgment = composeDirectJudgmentFrom(result.Status, result.Drivers, result.SubjectResolution)
-	result.DeterministicAnswer = composeDeterministicAnswerFrom(result.Status, result.Drivers, result.ClaimedFacts, result.SubjectResolution)
+	result.DirectJudgment = composeDirectJudgmentFrom(result.Status, result.Drivers, result.Cohort, result.SubjectResolution)
+	result.DeterministicAnswer = composeDeterministicAnswerFrom(result.Status, result.Drivers, result.ClaimedFacts, result.Cohort, result.SubjectResolution)
 	return result
 }
 
@@ -566,7 +566,7 @@ func TestChaos4098_OverrideOnAFullLimitationListStaysValid(t *testing.T) {
 func TestChaos4098_RetractionOnAFullLimitationListStaysValid(t *testing.T) {
 	result := decisiveClarificationResult()
 	result.Status = InvestigationPartial
-	result.DirectJudgment = composeDirectJudgmentFrom(result.Status, result.Drivers, result.SubjectResolution)
+	result.DirectJudgment = composeDirectJudgmentFrom(result.Status, result.Drivers, result.Cohort, result.SubjectResolution)
 	result.Limitations = fullModelLimitations()
 
 	outcomes := applyCommitAffirmation(&result, statisticalInputs(emptyAffirmationGraph(), emptyAffirmationFacts(), result))
@@ -588,7 +588,7 @@ func TestChaos4098_RetractionOnAFullLimitationListStaysValid(t *testing.T) {
 func TestChaos4098_DisplacementStillRequiresAServiceDisclosure(t *testing.T) {
 	result := decisiveClarificationResult()
 	result.Status = InvestigationPartial
-	result.DirectJudgment = composeDirectJudgmentFrom(result.Status, result.Drivers, result.SubjectResolution)
+	result.DirectJudgment = composeDirectJudgmentFrom(result.Status, result.Drivers, result.Cohort, result.SubjectResolution)
 	result.Limitations = fullModelLimitations()
 	result.LimitationsDisplaced = 1 // claimed, with no disclosure that would require one
 

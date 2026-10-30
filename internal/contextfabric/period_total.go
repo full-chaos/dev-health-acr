@@ -353,7 +353,8 @@ func (e *Engine) singleSubjectPeriodSentences(params synthesisAssemblyParams) []
 	if len(sentences) == 0 {
 		return nil
 	}
-	return append([]string{PeriodScopeSentence(params.EffectiveWindow, period)}, sentences...)
+	// The totals are the quick answer; the period they rest on follows them.
+	return append(sentences, PeriodScopeSentence(params.EffectiveWindow, period))
 }
 
 // unreadDailySeriesAbsences names a daily series whose read completed for the

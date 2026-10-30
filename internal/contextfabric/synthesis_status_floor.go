@@ -295,9 +295,9 @@ func applyOrganizationSubjectStatusFloor(result *InvestigationResult) {
 // status, recomposes the two prose fields from it, and discloses that the
 // narrative was withheld.
 func floorNoMatchTo(result *InvestigationResult, floor InvestigationStatus) {
+	from := result.Status
 	result.Status = floor
-	result.DirectJudgment = composeDirectJudgmentFrom(result.Status, result.Drivers, result.SubjectResolution)
-	result.DeterministicAnswer = composeDeterministicAnswerFrom(result.Status, result.Drivers, result.ClaimedFacts, result.SubjectResolution)
+	recomposeLeadProseForStatus(result, from)
 	composed, displaced := appendBoundedLimitations(result.Limitations, []string{synthesisNarrativeWithheldLimitation})
 	result.Limitations = composed
 	result.LimitationsDisplaced += displaced
