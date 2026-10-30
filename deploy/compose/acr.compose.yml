@@ -51,10 +51,6 @@ services:
       ACR_MIGRATION_DB_USER: ${ACR_MIGRATION_DB_USER:?ACR_MIGRATION_DB_USER is required}
       ACR_MIGRATION_DB_PASSWORD_FILE: /run/secrets/acr_migration_db_password
       ACR_ENABLE_EPISODE_WRITEBACK: ${ACR_ENABLE_EPISODE_WRITEBACK:-false}
-      # CHAOS-12140: the browser client settings acr-api reads; either one not
-      # blank grants the browser family purge its DELETE privileges.
-      ACR_OAUTH_BROWSER_CLIENTS: ${ACR_OAUTH_BROWSER_CLIENTS:-}
-      ACR_OAUTH_DEV_BROWSER_REDIRECT_URIS: ${ACR_OAUTH_DEV_BROWSER_REDIRECT_URIS:-}
       ACR_PURGE_DB_USER: ${ACR_PURGE_DB_USER:-}
       ACR_PURGE_DB_PASSWORD: ${ACR_PURGE_DB_PASSWORD:-}
     secrets: [acr_postgres_password, acr_runtime_db_password, acr_migration_db_password]
@@ -75,9 +71,6 @@ services:
       ACR_REQUIRE_BACKING_STORES: "true"
       ACR_POSTGRES_CONNECTION_KIND: direct
       ACR_ENABLE_EPISODE_WRITEBACK: ${ACR_ENABLE_EPISODE_WRITEBACK:-false}
-      # The same browser client settings acr-db-acl grants for (CHAOS-12140).
-      ACR_OAUTH_BROWSER_CLIENTS: ${ACR_OAUTH_BROWSER_CLIENTS:-}
-      ACR_OAUTH_DEV_BROWSER_REDIRECT_URIS: ${ACR_OAUTH_DEV_BROWSER_REDIRECT_URIS:-}
       ACR_DEVICE_VERIFICATION_URL: ${ACR_DEVICE_VERIFICATION_URL:-http://localhost:3000/acr/device}
       ACR_POSTGRES_DSN_FILE: /run/secrets/acr_runtime_dsn
       ACR_CLICKHOUSE_DSN_FILE: /run/secrets/acr_clickhouse_dsn

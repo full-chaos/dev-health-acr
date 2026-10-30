@@ -105,11 +105,14 @@ func TestComposeWorkloadGateFollowsTheRuntimeRule(t *testing.T) {
 	}
 }
 
-// TestComposeServicesPassTheBrowserClientSettings: the ACL service grants the
-// browser family purge's DELETE only when it sees a browser client setting, so
-// it must receive the same two settings acr-api reads (CHAOS-12140; codex
-// #1788 r2 P2: both were absent from acr-db-acl).
-func TestComposeServicesPassTheBrowserClientSettings(t *testing.T) {
+// TestComposeRunsNeitherTheBrowserClientNorItsGrants: the compose stack runs
+// acr-api without the OAuth login (no ACR_OAUTH_* setting), and a browser
+// client requires the login, so compose has no browser client and the ACL
+// service grants no browser family purge DELETE. Both services must agree:
+// a browser client setting on acr-api alone fails its configuration, and one
+// on acr-db-acl alone widens the runtime role for nothing (CHAOS-12140; codex
+// #1788 r3 P2: the settings passed to compose acr-api failed its startup).
+func TestComposeRunsNeitherTheBrowserClientNorItsGrants(t *testing.T) {
 	raw, err := os.ReadFile("../../deploy/compose/acr.compose.yml")
 	if err != nil {
 		t.Fatal(err)
@@ -123,13 +126,8 @@ func TestComposeServicesPassTheBrowserClientSettings(t *testing.T) {
 		if next := regexp.MustCompile(`\n  [a-z-]+:\n`).FindStringIndex(block[1:]); next != nil {
 			block = block[:next[0]+1]
 		}
-		for _, want := range []string{
-			"ACR_OAUTH_BROWSER_CLIENTS: ${ACR_OAUTH_BROWSER_CLIENTS:-}",
-			"ACR_OAUTH_DEV_BROWSER_REDIRECT_URIS: ${ACR_OAUTH_DEV_BROWSER_REDIRECT_URIS:-}",
-		} {
-			if !strings.Contains(block, want) {
-				t.Errorf("%s does not pass %s", service, want)
-			}
+		if strings.Contains(block, "ACR_OAUTH_") {
+			t.Errorf("%s carries an ACR_OAUTH_ setting; compose runs acr-api without the OAuth login, so it has no browser client", service)
 		}
 	}
 }
