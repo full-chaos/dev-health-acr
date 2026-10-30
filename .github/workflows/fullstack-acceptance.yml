@@ -547,6 +547,10 @@ jobs:
           paths="${paths}|\.github/fullstack/compose\.ci\.yml"
           paths="${paths}|deploy/compose/acr\.compose\.yml"
           paths="${paths}|\.github/workflows/fullstack-acceptance\.yml"
+          # CHAOS-11974: the ops commit the stack boots from, and the action that checks it
+          # out. A re-pin PR changes the product slice the browser agreement grades.
+          paths="${paths}|ci/fullstack-ops\.pin"
+          paths="${paths}|\.github/actions/ops-checkout/"
           paths="${paths}|Makefile"
           paths="${paths}|tests/fullstack/assertrun/)"
           if git diff --name-only "$base" "$head" | grep -Eq "$paths"; then

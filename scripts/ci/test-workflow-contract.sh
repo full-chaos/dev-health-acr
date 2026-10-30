@@ -1626,6 +1626,64 @@ check_ops_checkout_action() {
   return "$status"
 }
 
+# Codex #1768 r1 P3: the text checks above can pass while the chooser floats a
+# pull request. This EXECUTES the choose step's own script for every event and
+# asserts the ref and mode it emits.
+check_ops_checkout_chooser_behaviour() {
+  local file="$1" pin="$2" status=0 dir script
+  dir="$(mktemp -d)"
+  script="$dir/choose.sh"
+  awk '
+    /name: Choose the ops ref/ { in_step=1 }
+    in_step && /^      run: \|$/ { in_run=1; next }
+    in_run && /^    - / { exit }
+    in_run && NF > 0 && !/^        / { exit }
+    in_run { sub(/^        /, ""); print }
+  ' "$file" > "$script"
+  if [ ! -s "$script" ]; then
+    printf 'ops-checkout: could not extract the choose step script\n' >&2; rm -rf "$dir"; return 1
+  fi
+  mkdir -p "$dir/acr/ci"
+  printf '%s\n' "$pin" > "$dir/acr/ci/fullstack-ops.pin"
+  run_chooser() {
+    local event="$1" dispatch="$2" out="$dir/out"
+    : > "$out"
+    env -i PATH="$PATH" ACR_PATH="$dir/acr" DISPATCH_REF="$dispatch" GITHUB_EVENT_NAME="$event" GITHUB_OUTPUT="$out" \
+      bash -e "$script" >/dev/null 2>&1 || return 1
+    printf '%s|%s' "$(sed -n 's/^ref=//p' "$out")" "$(sed -n 's/^mode=//p' "$out")"
+  }
+  local cell got want
+  for cell in "pull_request||$pin|pinned" "push||$pin|pinned" "workflow_dispatch||$pin|pinned" \
+              "schedule|||schedule_floating" "workflow_dispatch|feature/x|feature/x|dispatch_input"; do
+    IFS='|' read -r event dispatch want_ref want_mode <<<"$cell"
+    want="$want_ref|$want_mode"
+    got="$(run_chooser "$event" "$dispatch")" || { printf 'ops-checkout chooser failed for %s\n' "$event" >&2; status=1; continue; }
+    [ "$got" = "$want" ] || { printf 'ops-checkout chooser for %s (dispatch "%s") gave ref|mode %s, want %s\n' "$event" "$dispatch" "$got" "$want" >&2; status=1; }
+  done
+  printf 'main\n' > "$dir/acr/ci/fullstack-ops.pin"
+  if run_chooser pull_request "" >/dev/null; then
+    printf 'ops-checkout chooser accepted a branch name as the pin\n' >&2; status=1
+  fi
+  rm -rf "$dir"
+  return "$status"
+}
+
+# Codex #1768 r1 P2: a re-pin PR changes the product slice, so the PR browser
+# agreement job must select it. EXECUTES the decide step's path selector.
+check_web_agreement_selects_ops_pin() {
+  local file="$1" status=0 assignments paths candidate
+  assignments="$(awk '/id: decide/ { grab=1 } grab && /^          paths=/ { print } grab && /if git diff --name-only/ { exit }' "$file")"
+  if [ -z "$assignments" ]; then
+    printf 'no web-agreement path selector found in %s\n' "$file" >&2; return 1
+  fi
+  paths="$(bash -c "$assignments"$'\n''printf %s "$paths"')"
+  for candidate in ci/fullstack-ops.pin .github/actions/ops-checkout/action.yml; do
+    grep -Eq "$paths" <<<"$candidate" || {
+      printf 'the web-agreement selector does not select %s: a re-pin PR would skip the browser agreement\n' "$candidate" >&2; status=1; }
+  done
+  return "$status"
+}
+
 check_fullstack_ops_checkout_wiring() {
   local file="$1" status=0 job block
   if grep -qF 'repository: full-chaos/dev-health-ops' "$file"; then
@@ -1708,7 +1766,10 @@ fullstack_ops_pin="$repo_root/ci/fullstack-ops.pin"
 check_fullstack_ops_pin "$fullstack_ops_pin"
 check_ops_checkout_action "$ops_checkout_action"
 check_fullstack_ops_checkout_wiring "$fullstack_workflow"
+check_ops_checkout_chooser_behaviour "$ops_checkout_action" "$(tr -d '[:space:]' < "$fullstack_ops_pin")"
+check_web_agreement_selects_ops_pin "$fullstack_workflow"
 printf 'PASS: fullstack-acceptance checks dev-health-ops out at the pin through one action and names it on failure\n'
+printf 'PASS: the ops chooser, executed, pins PR/push/dispatch runs, floats only the schedule, and refuses a branch pin; a re-pin PR runs the browser agreement\n'
 for other_workflow in "$repo_root"/.github/workflows/*.yml; do
   check_container_switch_in_scope "$other_workflow"
 done
@@ -1842,6 +1903,28 @@ wiring_always="$tmpdir/fullstack-naming-always.yml"
 sed 's/^        if: failure()$/        if: always()/' "$fullstack_workflow" > "$wiring_always"
 mutate_or_die "$fullstack_workflow" "$wiring_always" 'wiring_always'
 assert_check_fails 'the ops naming step runs on success too' check_fullstack_ops_checkout_wiring "$wiring_always"
+chooser_pr_floats="$tmpdir/ops-checkout-chooser-pr-floats.yml"
+awk '{ print } /^          ref="\$pin"$/ && !done { print "          ref=\"\""; print "          mode=schedule_floating"; done=1 }' "$ops_checkout_action" > "$chooser_pr_floats"
+mutate_or_die "$ops_checkout_action" "$chooser_pr_floats" 'chooser_pr_floats'
+check_ops_checkout_action "$chooser_pr_floats" 2>/dev/null && printf 'NOTE: the text check alone passes this mutation (codex #1768 r1 P3); the behaviour check must not\n'
+behaviour_check() { check_ops_checkout_chooser_behaviour "$1" "$(tr -d '[:space:]' < "$fullstack_ops_pin")"; }
+assert_check_fails 'the chooser overwrites the pinned ref with a float' behaviour_check "$chooser_pr_floats"
+chooser_schedule_pinned="$tmpdir/ops-checkout-chooser-schedule-pinned.yml"
+awk '/^          ref=""$/ && !done { print "          ref=\"$pin\""; done=1; next } { print }' "$ops_checkout_action" > "$chooser_schedule_pinned"
+mutate_or_die "$ops_checkout_action" "$chooser_schedule_pinned" 'chooser_schedule_pinned'
+assert_check_fails 'the schedule canary no longer floats' behaviour_check "$chooser_schedule_pinned"
+chooser_dispatch_ignored="$tmpdir/ops-checkout-chooser-dispatch-ignored.yml"
+sed 's/^        if \[ -n "\$DISPATCH_REF" \]; then$/        if false; then/' "$ops_checkout_action" > "$chooser_dispatch_ignored"
+mutate_or_die "$ops_checkout_action" "$chooser_dispatch_ignored" 'chooser_dispatch_ignored'
+assert_check_fails 'the dispatch ops_ref is ignored' behaviour_check "$chooser_dispatch_ignored"
+selector_no_pin="$tmpdir/fullstack-selector-no-pin.yml"
+awk '!/paths="\$\{paths\}\|ci\/fullstack-ops\\.pin"/' "$fullstack_workflow" > "$selector_no_pin"
+mutate_or_die "$fullstack_workflow" "$selector_no_pin" 'selector_no_pin'
+assert_check_fails 'the browser agreement selector lost the ops pin' check_web_agreement_selects_ops_pin "$selector_no_pin"
+selector_no_action="$tmpdir/fullstack-selector-no-action.yml"
+awk '!/paths="\$\{paths\}\|\\.github\/actions\/ops-checkout\/"/' "$fullstack_workflow" > "$selector_no_action"
+mutate_or_die "$fullstack_workflow" "$selector_no_action" 'selector_no_action'
+assert_check_fails 'the browser agreement selector lost the ops-checkout action' check_web_agreement_selects_ops_pin "$selector_no_action"
 printf 'PASS: the CHAOS-11974 ops pin checks reject a branch pin, a short pin, a loose regex, a floating checkout, a floating pull request, a missing pin verification, a direct ops checkout, a missing and an always-on failure step\n'
 modcache_stale_pin="$tmpdir/modcache-stale-pin.txt"
 sed 's/^gotest.tools\/gotestsum@.*/gotest.tools\/gotestsum@v0.0.1/' "$modcache_pins" > "$modcache_stale_pin"
