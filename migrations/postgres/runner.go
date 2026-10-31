@@ -71,25 +71,37 @@ func (r *Runner) Up(ctx context.Context, db *sql.DB) error {
 	return err
 }
 
+// ApplyReport is what one Apply did: the migrations it applied and the
+// operator credentials its reconcile step relabelled to org_bearer.
+type ApplyReport struct {
+	Applied    int
+	Relabelled int64
+}
+
 func (r *Runner) Apply(ctx context.Context, db *sql.DB) (int, error) {
+	report, err := r.ApplyWithReport(ctx, db)
+	return report.Applied, err
+}
+
+func (r *Runner) ApplyWithReport(ctx context.Context, db *sql.DB) (ApplyReport, error) {
 	conn, err := db.Conn(ctx)
 	if err != nil {
-		return 0, fmt.Errorf("acquire migration connection: %w", err)
+		return ApplyReport{}, fmt.Errorf("acquire migration connection: %w", err)
 	}
 	defer conn.Close()
 	if _, err := conn.ExecContext(ctx, "SELECT pg_advisory_lock($1)", advisoryLockID); err != nil {
-		return 0, fmt.Errorf("acquire migration lock: %w", err)
+		return ApplyReport{}, fmt.Errorf("acquire migration lock: %w", err)
 	}
 	defer func() { _, _ = conn.ExecContext(context.Background(), "SELECT pg_advisory_unlock($1)", advisoryLockID) }()
 	if err := ensureHistory(ctx, conn); err != nil {
-		return 0, err
+		return ApplyReport{}, err
 	}
 	applied, err := appliedMigrations(ctx, conn)
 	if err != nil {
-		return 0, err
+		return ApplyReport{}, err
 	}
 	if err := r.validateAppliedHistory(ctx, conn, applied); err != nil {
-		return 0, err
+		return ApplyReport{}, err
 	}
 	appliedVersions := make(map[int64]struct{}, len(applied))
 	for _, entry := range applied {
@@ -101,11 +113,19 @@ func (r *Runner) Apply(ctx context.Context, db *sql.DB) (int, error) {
 			continue
 		}
 		if err := applyMigration(ctx, conn, migration); err != nil {
-			return 0, err
+			return ApplyReport{}, err
 		}
 		count++
+		appliedVersions[migration.Version] = struct{}{}
 	}
-	return count, nil
+	if !reconcileClientClassApplies(appliedVersions) {
+		return ApplyReport{Applied: count}, nil
+	}
+	relabelled, err := reconcileClientClass(ctx, conn)
+	if err != nil {
+		return ApplyReport{}, err
+	}
+	return ApplyReport{Applied: count, Relabelled: relabelled}, nil
 }
 
 func (r *Runner) Status(ctx context.Context, db *sql.DB) ([]Migration, error) {
