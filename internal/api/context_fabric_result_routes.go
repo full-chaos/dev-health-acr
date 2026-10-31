@@ -313,6 +313,7 @@ func (a *App) serveStoredInvestigationResultOn(w http.ResponseWriter, r *http.Re
 	result = contextfabric.ApplyServerCompletenessAuthority(result, a.config.ServerCompletenessAuthorityEnabled, a.config.ServerCompletenessAuthoritySymmetricEnabled, completenessAuthority)
 	completenessAuthority.StatusCorrectionDisclosed = result.StatusCorrection != nil
 	completenessAuthority.LeadProseServedAsStored = contextfabric.LeadProseServedAsStored(result)
+	completenessAuthority.LegacySourceStateWordsServed = contextfabric.LegacySourceStateWordsServed(result)
 	completenessAuthorityArgs := contextfabric.CompletenessAuthorityLogArgs(completenessAuthority, principal.OrgID)
 	completenessAuthorityArgs = append(completenessAuthorityArgs, "request_id", contextfabric.SanitizeLogAttr(RequestID(r.Context())))
 	a.logger.InfoContext(r.Context(), "context fabric completeness authority", completenessAuthorityArgs...)
