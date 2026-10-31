@@ -220,6 +220,27 @@ func applyDeniedCohortStatusFloor(result *InvestigationResult) {
 	}
 }
 
+// applyUnverifiedProjectNarrowingStatusFloor (CHAOS-12242) floors a complete
+// answer whose graph read could not verify the requested project narrowing:
+// the degrading read_population_unverified detail with Raw
+// ProjectNarrowingUnverifiedRaw (CHAOS-12231). Something it admitted passed
+// the narrowing only on the "*" project list, so the answer may hold work of
+// other projects and is partial, never complete. It matches the code AND the
+// Raw: read_population_unverified also names read-population outcome rows,
+// which this floor does not read. Never promotes; leaves a refusal, degraded,
+// no_match and clarification as they are.
+func applyUnverifiedProjectNarrowingStatusFloor(result *InvestigationResult) {
+	if result == nil || result.Status != InvestigationComplete || result.RefusalBasis != "" {
+		return
+	}
+	for _, detail := range result.Coverage.Details {
+		if detail.Degrading && detail.Code == contractsv1.ContextFabricCoverageDetailReadPopulationUnverified && detail.Raw == ProjectNarrowingUnverifiedRaw {
+			floorNoMatchTo(result, InvestigationPartial)
+			return
+		}
+	}
+}
+
 // applyStatusPoolCutStatusFloor floors a complete answer that states its member
 // status was decided within a cut read: members past the read were not checked,
 // so the answer is partial.
@@ -249,6 +270,12 @@ func populationTruncatedNoMemberRowHolds(result InvestigationResult) bool {
 	return false
 }
 
+// ProjectNarrowingUnverifiedRaw is the Raw (and the degraded reason) of the
+// degrading read_population_unverified detail the graph read adds when it could
+// not verify a requested project narrowing (CHAOS-12231; falkorgraph writes it
+// from this constant).
+const ProjectNarrowingUnverifiedRaw = "project_narrowing_unverified"
+
 // ApplyServedStatusFloors is the one apply function of the served-status floors
 // that read only the finished document. Every serving point calls it: the
 // engine's late writers (fresh, reuse, vetoes) and the stored-result read
@@ -267,6 +294,7 @@ func ApplyServedStatusFloors(result InvestigationResult) InvestigationResult {
 	applyPopulationOutcomeStatusFloor(&result)
 	applyEmptyMemberSearchStatusFloor(&result)
 	applyDeniedCohortStatusFloor(&result)
+	applyUnverifiedProjectNarrowingStatusFloor(&result)
 	applyStatusPoolCutStatusFloor(&result)
 	applyOrganizationSubjectStatusFloor(&result)
 	if result.Status != before || restated {

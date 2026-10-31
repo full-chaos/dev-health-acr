@@ -622,6 +622,21 @@ the same way, appended to the served copy. Both restatements stay within the
 contract's outcome cap: at the cap the lowest-ranked row gives way first and the
 eviction is disclosed in the limitations, as for a lever row.
 
+**An unverified project narrowing is partial.** When a request narrowed by
+`scope.project_ids` admitted a node or edge only on the `"*"` project list, the
+graph read adds a degrading `read_population_unverified` detail with raw
+`project_narrowing_unverified` (CHAOS-12231). Its served status is floored
+from `complete` to `partial` (CHAOS-12242, `applyUnverifiedProjectNarrowingStatusFloor`
+in `ApplyServedStatusFloors`, so fresh, reused and read-by-id answers alike),
+through the same swap as the other floors. Completeness is recomputed from the
+outcome rows, which do not state the narrowing, so it can stay `complete`
+below the partial status (§9, "A status floor can put status below
+completeness"). It
+matches the code and the raw together, because `read_population_unverified`
+also names read-population outcome rows; it never promotes and leaves
+`degraded`, `no_match`, a clarification and a refusal as they are. A stored
+document is not rewritten.
+
 **A count of a repository's owning teams.** For a question about now, a read
 that found no owner, was not cut, and found ownership projected for the org
 (the active census holds a team, or the repository's own ownership edges name
@@ -2078,6 +2093,21 @@ flowchart TD
    document they describe. Under an outcome set it is not — every row could
    read `satisfied` while the served document had lost members and whole
    groups.
+
+   **A status floor can put `status` below `completeness.state`**
+   (CHAOS-12242). Completeness counts outcome rows only (vol 3 D25). A
+   served-status floor that reads a coverage detail or a limitation which no
+   outcome row states lowers the status alone. Two floors do this today:
+   `applyUnverifiedProjectNarrowingStatusFloor` (the degrading
+   `read_population_unverified` detail with raw `project_narrowing_unverified`)
+   and `applyStatusPoolCutStatusFloor` (the member-status pool-cut limitation).
+   Such an answer reads `status: partial` beside `completeness.state:
+   complete`: every requirement was met over the served population, and the
+   status plus the detail or limitation carry the disclosure. That is not the
+   authorization cut's case (CHAOS-12147/12153), where the cut removed members
+   and completeness itself was wrong, so outcome rows restate it.
+   `terminal_status` still equals `status`, and the completeness authority
+   never lifts a partial status back to complete.
 
 4. **`not_derived` is a state, not a missing field.** No frame, or no
    deriver, and the answer says its outcomes were never derived rather than
