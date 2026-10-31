@@ -265,6 +265,9 @@ type treeWalk struct {
 	// node admitted through one link is not denied for another. Nodes the
 	// read's grant clause kept out are not read, so not counted.
 	linkDeniedTargets int
+	// teamExcluded counts the distinct far-side issues a requested team
+	// narrowing left out of scope (CHAOS-12319): never in linkDeniedTargets.
+	teamExcluded int
 	// linkIssueTargets is set when the far side of the link is the issue (a
 	// repository's work items): the distinct linked issues before
 	// authorization, for a restricted caller read by a bounded count with no
@@ -1067,6 +1070,7 @@ func (a *Adapter) linkSegment(ctx context.Context, key, orgID string, state tree
 	}
 	out.linkTargets = len(seen)
 	out.linkDeniedTargets = len(seen) - len(admitted) - len(outOfNarrowing)
+	out.teamExcluded = len(outOfNarrowing)
 	if status.set() {
 		out.status.read = len(read)
 		out.status.held = map[string]bool{}

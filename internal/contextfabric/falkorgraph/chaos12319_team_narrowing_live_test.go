@@ -90,6 +90,10 @@ func assertTeamNarrowingInTheRepositoryWalk(t *testing.T, ctx context.Context, a
 		members   []string
 		outside   bool
 		truncated bool
+		// The decision basis the walk's Info line carries.
+		basis    contextfabric.TeamNarrowingBasis
+		excluded int
+		floor    contextfabric.TeamNarrowingFloor
 	}
 	anchor := contextfabric.SubjectRef{Kind: contextfabric.SubjectRepository, CanonicalID: memberAnchorID, Label: memberAnchorSlug}
 	check := func(t *testing.T, orgID string, grants []string, teams []string, w want) {
@@ -119,31 +123,34 @@ func assertTeamNarrowingInTheRepositoryWalk(t *testing.T, ctx context.Context, a
 		if walk.AnchorOutsideTeamNarrowing != w.outside || walk.Truncated != w.truncated {
 			t.Fatalf("grants %v teams %v: outside=%v truncated=%v, want outside=%v truncated=%v", grants, teams, walk.AnchorOutsideTeamNarrowing, walk.Truncated, w.outside, w.truncated)
 		}
+		if walk.TeamNarrowing != w.basis || walk.TeamExcluded != w.excluded || walk.TeamFloor != w.floor {
+			t.Fatalf("grants %v teams %v: basis=%q excluded=%d floor=%q, want %q %d %q", grants, teams, walk.TeamNarrowing, walk.TeamExcluded, walk.TeamFloor, w.basis, w.excluded, w.floor)
+		}
 	}
 	t.Run("the anchor is owned by team-B", func(t *testing.T) {
 		org := seedTeamNarrowingFixture(t, ctx, adapter, teamNarrowingFixture{})
 		check(t, org, nil, nil, want{members: all})
-		check(t, org, nil, []string{"team-B"}, want{members: all})
-		check(t, org, nil, []string{"team-B", "team-C"}, want{members: all})
+		check(t, org, nil, []string{"team-B"}, want{members: all, basis: contextfabric.TeamNarrowingAnchorOwned})
+		check(t, org, nil, []string{"team-B", "team-C"}, want{members: all, basis: contextfabric.TeamNarrowingAnchorOwned})
 		check(t, org, nil, []string{"*"}, want{members: all})
 		// (i) fails; (ii) admits the issues of team-C's project, a repository-less
 		// one and one with its own repository. The jira issue has no project:
 		// decided, not floored.
-		check(t, org, nil, []string{"team-C"}, want{members: []string{memberGithubIssue, memberLinearIssue}, outside: true})
-		check(t, org, nil, []string{"team-A"}, want{members: []string{}, outside: true})
+		check(t, org, nil, []string{"team-C"}, want{members: []string{memberGithubIssue, memberLinearIssue}, outside: true, basis: contextfabric.TeamNarrowingIssueProject, excluded: 6})
+		check(t, org, nil, []string{"team-A"}, want{members: []string{}, outside: true, basis: contextfabric.TeamNarrowingIssueProject, excluded: 8})
 		// A repository-restricted caller: the grants still decide first.
-		check(t, org, []string{memberAnchorSlug}, []string{"team-C"}, want{members: []string{memberLinearIssue}, outside: true})
+		check(t, org, []string{memberAnchorSlug}, []string{"team-C"}, want{members: []string{memberLinearIssue}, outside: true, basis: contextfabric.TeamNarrowingIssueProject, excluded: 4})
 	})
 	t.Run("an issue's project has no owner", func(t *testing.T) {
 		org := seedTeamNarrowingFixture(t, ctx, adapter, teamNarrowingFixture{unownedProject: true})
 		// The ownership (ii) needed is absent: floored, and still not admitted.
-		check(t, org, nil, []string{"team-C"}, want{members: []string{memberGithubIssue, memberLinearIssue}, outside: true, truncated: true})
+		check(t, org, nil, []string{"team-C"}, want{members: []string{memberGithubIssue, memberLinearIssue}, outside: true, truncated: true, basis: contextfabric.TeamNarrowingIssueProject, excluded: 6, floor: contextfabric.TeamNarrowingFloorProjectOwnerAbsent})
 		// (i) decides every issue; nothing else is read.
-		check(t, org, nil, []string{"team-B"}, want{members: all})
+		check(t, org, nil, []string{"team-B"}, want{members: all, basis: contextfabric.TeamNarrowingAnchorOwned})
 	})
 	t.Run("the anchor's ownership is not current", func(t *testing.T) {
 		org := seedTeamNarrowingFixture(t, ctx, adapter, teamNarrowingFixture{anchorOwnerEnded: true})
-		check(t, org, nil, []string{"team-B"}, want{members: []string{}, outside: true, truncated: true})
-		check(t, org, nil, []string{"team-C"}, want{members: []string{memberGithubIssue, memberLinearIssue}, outside: true, truncated: true})
+		check(t, org, nil, []string{"team-B"}, want{members: []string{}, outside: true, truncated: true, basis: contextfabric.TeamNarrowingIssueProject, excluded: 8, floor: contextfabric.TeamNarrowingFloorAnchorOwnershipUnknown})
+		check(t, org, nil, []string{"team-C"}, want{members: []string{memberGithubIssue, memberLinearIssue}, outside: true, truncated: true, basis: contextfabric.TeamNarrowingIssueProject, excluded: 6, floor: contextfabric.TeamNarrowingFloorAnchorOwnershipUnknown})
 	})
 }

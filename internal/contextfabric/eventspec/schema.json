@@ -9914,6 +9914,34 @@
         "applicability": "written when the read measured the population (every outcome but read_failed)"
       },
       {
+        "key": "team_narrowing",
+        "type": "string",
+        "presence": "conditional",
+        "closed_vocabulary": [
+          "anchor_owned",
+          "issue_project"
+        ],
+        "applicability": "written when the read measured the population and the request narrows by team"
+      },
+      {
+        "key": "team_excluded",
+        "type": "int",
+        "presence": "conditional",
+        "applicability": "written when the read measured the population and the request narrows by team"
+      },
+      {
+        "key": "team_floor_reason",
+        "type": "string",
+        "presence": "conditional",
+        "closed_vocabulary": [
+          "",
+          "anchor_ownership_unknown",
+          "project_owner_absent",
+          "ownership_read_cut"
+        ],
+        "applicability": "written when the read measured the population and the request narrows by team"
+      },
+      {
         "key": "reason",
         "type": "string",
         "presence": "conditional",

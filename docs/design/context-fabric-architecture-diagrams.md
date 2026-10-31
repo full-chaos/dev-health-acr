@@ -689,7 +689,12 @@ requested repository scope applies the same narrowing to each repository it
 walks, and is incomplete where that walk was floored. When no requested team owns the anchor, the anchor stays the subject
 and its own totals are not the team's: a walk with no member is `no_match`,
 never `no_pull_requests` or `unlinked`. The caller's grants and the rest of the
-request still decide first; the narrowing never widens.
+request still decide first; the narrowing never widens. The walk's Info line
+(`context_fabric: repository work item walk`) carries the decision basis when
+the request narrows by team: `team_narrowing` (`anchor_owned` or
+`issue_project`), `team_excluded` (issues left out of scope) and
+`team_floor_reason` (empty, `anchor_ownership_unknown`, `project_owner_absent`
+or `ownership_read_cut`). Counts and closed values only; no id.
 
 **A count of a repository's owning teams.** For a question about now, a read
 that found no owner, was not cut, and found ownership projected for the org
