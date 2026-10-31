@@ -288,3 +288,140 @@ func TestRequiredBaselineRefusesASchemaDeeperThanTheBound(t *testing.T) {
 		t.Fatalf("a schema deeper than the bound passed: %v", err)
 	}
 }
+
+// Only an unconditional declaration lets a field become required: a field the
+// baseline declared only under then, else, dependentSchemas or one anyOf or
+// oneOf branch is sent only when that branch applies, so an old body outside
+// it may lack the field (codex #1817 r2). A field declared that way still
+// counts as one an old body may carry, so a condition keyed by it applies.
+func TestRequiredBaselineCountsOnlyUnconditionalDeclarations(t *testing.T) {
+	requireZZ := func(body string) string {
+		return strings.Replace(body, `{"type":"object",`, `{"type":"object","required":["zz"],`, 1)
+	}
+	conditional := map[string]string{
+		"then":             `{"type":"object","properties":{"flag":{}},"if":{"required":["flag"]},"then":{"properties":{"zz":{}}}}`,
+		"else":             `{"type":"object","properties":{"flag":{}},"if":{"required":["flag"]},"else":{"properties":{"zz":{}}}}`,
+		"dependentSchemas": `{"type":"object","properties":{"flag":{}},"dependentSchemas":{"flag":{"properties":{"zz":{}}}}}`,
+		"anyOf":            `{"type":"object","anyOf":[{"properties":{"zz":{}}},{"properties":{"y":{}}}]}`,
+		"oneOf":            `{"type":"object","oneOf":[{"properties":{"zz":{}},"required":["zz"]},{"properties":{"y":{}},"required":["y"]}]}`,
+		"then, nested":     `{"type":"object","properties":{"flag":{}},"if":{"required":["flag"]},"then":{"properties":{"box":{"type":"object","properties":{"zz":{}}}}}}`,
+	}
+	var cases []locationCase
+	for name, body := range conditional {
+		current := requireZZ(body)
+		mention := `location "/"`
+		if name == "then, nested" {
+			current = strings.Replace(body, `"box":{"type":"object",`, `"box":{"type":"object","required":["zz"],`, 1)
+			mention = `location "/box"`
+		}
+		cases = append(cases, locationCase{name: "a field declared only under " + name, refused: true, mentions: []string{`"zz"`, mention},
+			base: one(body), current: one(current)})
+	}
+	cases = append(cases,
+		locationCase{name: "control: declared in an allOf member",
+			base:    one(`{"type":"object","allOf":[{"properties":{"zz":{}}}]}`),
+			current: one(`{"type":"object","required":["zz"],"allOf":[{"properties":{"zz":{}}}]}`)},
+		locationCase{name: "control: declared through a $ref",
+			base:    one(`{"type":"object","$ref":"#/$defs/S","$defs":{"S":{"properties":{"zz":{}}}}}`),
+			current: one(`{"type":"object","required":["zz"],"$ref":"#/$defs/S","$defs":{"S":{"properties":{"zz":{}}}}}`)},
+		locationCase{name: "a condition keyed by a field the baseline declared only under then still applies", refused: true, mentions: []string{`"zz"`},
+			base:    one(`{"type":"object","properties":{"flag":{}},"if":{"required":["flag"]},"then":{"properties":{"t":{}}}}`),
+			current: one(`{"type":"object","properties":{"flag":{},"zz":{}},"if":{"required":["flag"]},"then":{"properties":{"t":{}}},"dependentRequired":{"t":["zz"]}}`)},
+	)
+	// Under a then, the flag carries through every keyword that reaches a
+	// location: a declaration there is still conditional.
+	then := func(inner string) string {
+		return `{"type":"object","properties":{"flag":{}},"if":{"required":["flag"]},"then":` + inner + `}`
+	}
+	for _, c := range []struct{ name, base, current, at string }{
+		{"a $ref", then(`{"$ref":"#/$defs/S"}`) + ``, ``, `/`},
+		{"an allOf member", then(`{"allOf":[{"properties":{"zz":{}}}]}`), ``, `/`},
+		{"items", then(`{"properties":{"arr":{"type":"array","items":{"type":"object","properties":{"zz":{}}}}}}`), `items`, `/arr/[]`},
+		{"additionalProperties", then(`{"additionalProperties":{"type":"object","properties":{"zz":{}}}}`), `additional`, `/~{*}`},
+	} {
+		base := c.base
+		current := ""
+		switch c.current {
+		case "":
+			if c.name == "a $ref" {
+				base = strings.TrimSuffix(base, "}") + `,"$defs":{"S":{"properties":{"zz":{}}}}}`
+			}
+			current = strings.Replace(base, `{"type":"object",`, `{"type":"object","required":["zz"],`, 1)
+		case "items":
+			current = strings.Replace(base, `"items":{"type":"object",`, `"items":{"type":"object","required":["zz"],`, 1)
+		case "additional":
+			current = strings.Replace(base, `"additionalProperties":{"type":"object",`, `"additionalProperties":{"type":"object","required":["zz"],`, 1)
+		}
+		cases = append(cases, locationCase{name: "a field declared under a then through " + c.name, refused: true,
+			mentions: []string{`"zz"`, `location "` + c.at + `"`}, base: one(base), current: one(current)})
+	}
+	cases = append(cases, locationCase{name: "a new anyOf whose fields the baseline declared only under then", refused: true, mentions: []string{`"zz"`},
+		base:    one(`{"type":"object","properties":{"flag":{}},"if":{"required":["flag"]},"then":{"properties":{"zz":{},"y":{}}}}`),
+		current: one(`{"type":"object","properties":{"flag":{}},"if":{"required":["flag"]},"then":{"properties":{"zz":{},"y":{}}},"anyOf":[{"required":["zz"]},{"required":["y"]}]}`)})
+	runLocationCases(t, cases)
+}
+
+// A $ref resolves against the base URI of the nearest enclosing $id, so a
+// relative ref or a "#..." ref inside a nested resource names that resource,
+// not the document root (codex #1817 r2).
+func TestRequiredBaselineResolvesRefsAgainstANestedID(t *testing.T) {
+	result := func(thing string) string {
+		return `{"$id":"https://example.invalid/v1/result.json","type":"object","properties":{` +
+			`"via":{"$ref":"#/properties/box/properties/shared"},` +
+			`"box":{"$id":"https://example.invalid/v2/box.json","type":"object","$defs":{"T":` + thing + `,"F":false},"properties":{"local":{"$ref":"#/$defs/T"},"shared":{"$ref":"shared.json#/$defs/U"},"gone":{"$ref":"#/$defs/F"}}}}}`
+	}
+	shared := func(u string) string {
+		return `{"$id":"https://example.invalid/v2/shared.json","$defs":{"U":` + u + `}}`
+	}
+	thing := `{"type":"object","properties":{"n":{}}}`
+	files := func(thing, u string) map[string]string {
+		return map[string]string{"result.v1.schema.json": result(thing), "shared.v1.schema.json": shared(u)}
+	}
+	runLocationCases(t, []locationCase{
+		{name: "an unchanged schema with refs inside a nested $id resolves", base: files(thing, thing), current: files(thing, thing)},
+		{name: "a local ref inside the nested resource reaches its own $defs", refused: true, mentions: []string{`"zz"`, `location "/box/local"`},
+			base: files(thing, thing), current: files(`{"type":"object","required":["zz"],"properties":{"n":{},"zz":{}}}`, thing)},
+		{name: "a relative ref resolves against the nested $id", refused: true, mentions: []string{`"zz"`, `location "/box/shared"`},
+			base: files(thing, thing), current: files(thing, `{"type":"object","required":["zz"],"properties":{"n":{},"zz":{}}}`)},
+		{name: "control: requiring a field the nested target declared", base: files(thing, thing),
+			current: files(`{"type":"object","required":["n"],"properties":{"n":{}}}`, thing)},
+		{name: "a ref through the nested resource resolves against it", refused: true, mentions: []string{`"zz"`, `location "/via"`},
+			base: files(thing, thing), current: files(thing, `{"type":"object","required":["zz"],"properties":{"n":{},"zz":{}}}`)},
+		{name: "a property the nested resource forbids through a $ref is undeclared", refused: true, mentions: []string{`"gone"`, `location "/box"`},
+			base:    files(thing, thing),
+			current: map[string]string{"result.v1.schema.json": strings.Replace(result(thing), `"type":"object","$defs"`, `"type":"object","required":["gone"],"$defs"`, 1), "shared.v1.schema.json": shared(thing)}},
+		{name: "an anyOf branch's ref inside the nested resource counts its requirement", refused: true, mentions: []string{`"zz"`, `location "/box"`},
+			base:    map[string]string{"result.v1.schema.json": strings.Replace(result(thing), `"type":"object","$defs"`, `"type":"object","anyOf":[{"$ref":"#/$defs/T"}],"$defs"`, 1), "shared.v1.schema.json": shared(thing)},
+			current: map[string]string{"result.v1.schema.json": strings.Replace(result(`{"type":"object","required":["zz"],"properties":{"n":{},"zz":{}}}`), `"type":"object","$defs"`, `"type":"object","anyOf":[{"$ref":"#/$defs/T"}],"$defs"`, 1), "shared.v1.schema.json": shared(thing)}},
+	})
+}
+
+// A subschema's own $id sets the base of its own refs, wherever the walk meets
+// it: an anyOf branch, a property weighed for false, and a resource whose $id
+// is relative to its parent's (codex #1817 r2).
+func TestRequiredBaselineResolvesRefsInsideTheirOwnID(t *testing.T) {
+	plain := `{"type":"object","properties":{"n":{}}}`
+	needsZZ := `{"type":"object","required":["zz"],"properties":{"n":{},"zz":{}}}`
+	root := func(alt, required string) string {
+		return `{"$id":"https://example.invalid/v1/r.json","type":"object",` + required + `"properties":{` +
+			`"alt":{"type":"object","anyOf":[{"$id":"https://example.invalid/v3/alt.json","$defs":{"A":` + alt + `},"$ref":"#/$defs/A"}]},` +
+			`"gone":{"$id":"https://example.invalid/v3/g.json","$defs":{"G":false},"$ref":"#/$defs/G"},` +
+			`"rel":{"$ref":"box.json#/$defs/T"},` +
+			`"holder":{"$id":"box.json","$defs":{"T":{"type":"object","properties":{"s":{"$ref":"shared.json#/$defs/U"}}}}}}}`
+	}
+	shared := func(u string) string {
+		return `{"$id":"https://example.invalid/v1/shared.json","$defs":{"U":` + u + `}}`
+	}
+	files := func(r, u string) map[string]string {
+		return map[string]string{"r.v1.schema.json": r, "shared.v1.schema.json": shared(u)}
+	}
+	runLocationCases(t, []locationCase{
+		{name: "unchanged", base: files(root(plain, ``), plain), current: files(root(plain, ``), plain)},
+		{name: "an anyOf branch with its own $id requires a field", refused: true, mentions: []string{`"zz"`, `location "/alt"`},
+			base: files(root(plain, ``), plain), current: files(root(needsZZ, ``), plain)},
+		{name: "a property forbidden through its own $id's ref is undeclared", refused: true, mentions: []string{`"gone"`, `location "/"`},
+			base: files(root(plain, ``), plain), current: files(root(plain, `"required":["gone"],`), plain)},
+		{name: "a relative $id resolves against its parent's", refused: true, mentions: []string{`"zz"`, `location "/rel/s"`},
+			base: files(root(plain, ``), plain), current: files(root(plain, ``), needsZZ)},
+	})
+}
