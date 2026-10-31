@@ -295,9 +295,8 @@ func restateCohortAuthorizationCutCount(result InvestigationResult) (Investigati
 		Declared:            stated.Declared,
 		AuthorizationDenied: denied,
 	}, stated.Requirement, stated.Obligation)
-	outcomes := appendOutcomeRows(result.Completeness.Outcomes, restated)
-	result.Completeness.Outcomes = outcomes
-	return result, true
+	// Within the outcome cap, as the member read restatement (codex #1807 r1).
+	return appendServedRestatement(result, restated), true
 }
 
 // renderClampNarrowing finds the stage-1 `cardinality` step -- the pre-read

@@ -91,6 +91,27 @@ func restateCohortAuthorizationCutMemberReads(result InvestigationResult) (Inves
 	if len(restated) == 0 {
 		return result, false
 	}
-	result.Completeness.Outcomes = appendOutcomeRows(result.Completeness.Outcomes, restated...)
-	return result, true
+	return appendServedRestatement(result, restated...), true
+}
+
+// appendServedRestatement appends restated rows to a served copy within the
+// contract's outcome cap (codex #1807 r1). A stored answer can already hold
+// ContextFabricPlanRequirementOutcomeMaxCount rows; appending past it made the
+// served document invalid. At the cap the lowest-ranked row gives way first and
+// the eviction is disclosed in the limitations, the rule every lever row
+// follows (appendLeverOutcomeRow, D6080), so the answer is served valid and
+// still states the cut.
+func appendServedRestatement(result InvestigationResult, rows ...RequirementOutcomeRow) InvestigationResult {
+	outcomes := result.Completeness.Outcomes
+	evicted := 0
+	for _, row := range rows {
+		var gave int
+		outcomes, gave = appendLeverOutcomeRow(outcomes, row)
+		evicted += gave
+	}
+	result.Completeness.Outcomes = outcomes
+	var displaced int
+	result.Limitations, displaced = withOutcomeEvictionLimitation(result.Limitations, evicted)
+	result.LimitationsDisplaced += displaced
+	return result
 }

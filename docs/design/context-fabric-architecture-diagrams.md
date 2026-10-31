@@ -618,7 +618,9 @@ says the same (CHAOS-12153): its `each_member` population declares the members
 read plus the same denied count (`MembershipCardinality.AuthorizationDenied`,
 the field the count row reads), its chain begins with the cut, and the row is
 `narrowed` with that cause. A stored `satisfied` member read row is restated
-the same way, appended to the served copy.
+the same way, appended to the served copy. Both restatements stay within the
+contract's outcome cap: at the cap the lowest-ranked row gives way first and the
+eviction is disclosed in the limitations, as for a lever row.
 
 **A count of a repository's owning teams.** For a question about now, a read
 that found no owner, was not cut, and found ownership projected for the org
