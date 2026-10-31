@@ -67,6 +67,10 @@ type discoverTeamScope struct {
 	// missing: canonical id -> the ownership needed to decide it was absent,
 	// not current, or cut (only for a subject decided out of scope).
 	missing map[string]bool
+	// repositoriesOnly decides by repository ownership alone (CHAOS-12346,
+	// the census narrower): a work item only through a linked pull request,
+	// a project never (out of scope, no floor).
+	repositoriesOnly bool
 	// undecided: a cohort member candidate (of the member kind) or a status
 	// match was left out on missing ownership. Path endpoints never floor
 	// (lead ruling Q2 (a)), and a candidate of another kind loses no member.
@@ -289,14 +293,22 @@ func (s *discoverTeamScope) decide(ctx context.Context, subjects []contextfabric
 		}
 	}
 
-	// Projects: the projects to decide, plus the issues' own projects.
-	projectHits, projectHitsCut, err := a.walkStepHits(ctx, key, orgID, issues, issueProjectStep, current, budget)
+	// Projects: the projects to decide, plus the issues' own projects. A
+	// repositories-only decision reads none.
+	projectIssues := issues
+	if s.repositoriesOnly {
+		projectIssues = nil
+	}
+	projectHits, projectHitsCut, err := a.walkStepHits(ctx, key, orgID, projectIssues, issueProjectStep, current, budget)
 	if err != nil {
 		return err
 	}
 	projectsOf := map[string][]string{}
 	projectSet := map[string]bool{}
 	projects := append([]string{}, byKind[contextfabric.SubjectProject]...)
+	if s.repositoriesOnly {
+		projects = nil
+	}
 	for _, p := range projects {
 		projectSet[p] = true
 	}
@@ -351,6 +363,10 @@ func (s *discoverTeamScope) decide(ctx context.Context, subjects []contextfabric
 		floor(repo, !owned && missing)
 	}
 	for _, project := range byKind[contextfabric.SubjectProject] {
+		if s.repositoriesOnly {
+			s.inScope[project] = false
+			continue
+		}
 		owned := projectOwned[project]
 		s.inScope[project] = owned
 		floor(project, !owned && (!projectHasOwner[project] || cutProjects))
@@ -380,4 +396,36 @@ func (s *discoverTeamScope) decide(ctx context.Context, subjects []contextfabric
 		floor(issue, !reached && missing)
 	}
 	return nil
+}
+
+// resolutionTeamNarrowing is graphrank.ResolveDeps.TeamNarrowing (CHAOS-12346):
+// the general read's reach rule (decide) applied to resolution candidates and
+// census satisfiers, nil when the request narrows by no team. The organization
+// and teams are in neither set: a team candidate already passed the node rule,
+// and is never evidence that a rival is outside the team. A subject whose
+// ownership is missing is in neither.
+func (a *Adapter) resolutionTeamNarrowing(key, orgID string, scope contextfabric.RequestedScope, temporal temporalFilter) graphrank.TeamNarrowingFunc {
+	if requestedTeamNarrowing(scope) == nil {
+		return nil
+	}
+	return func(ctx context.Context, subjects []contextfabric.SubjectRef, repositoriesOnly bool) (graphrank.TeamNarrowingDecision, error) {
+		s := a.newDiscoverTeamScope(key, orgID, scope, temporal, nil)
+		s.repositoriesOnly = repositoriesOnly
+		if err := s.decide(ctx, subjects); err != nil {
+			return graphrank.TeamNarrowingDecision{}, err
+		}
+		decision := graphrank.TeamNarrowingDecision{In: map[string]bool{}, Out: map[string]bool{}}
+		for _, subject := range subjects {
+			id := subject.CanonicalID
+			switch {
+			case id == "" || subject.Kind == contextfabric.SubjectOrganization || subject.Kind == contextfabric.SubjectTeam:
+			case s.inScope[id]:
+				decision.In[id] = true
+			case s.missing[id]:
+			default:
+				decision.Out[id] = true
+			}
+		}
+		return decision, nil
+	}
 }

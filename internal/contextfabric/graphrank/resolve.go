@@ -505,6 +505,11 @@ type ResolveDeps struct {
 	// the walk was cut. nil: a work-item census under a requested repository
 	// scope cannot be read, and the round says so (census incomplete).
 	LinkScopedWorkItems func(ctx context.Context, scope contextfabric.RequestedScope) (tiers map[string]string, complete bool, err error)
+	// TeamNarrowing decides subjects under the request's team narrowing by the
+	// ownership reach rule (CHAOS-12346; team_narrowing_resolution.go). nil
+	// when the request narrows by no team, or the backend does not wire it:
+	// resolution is then unchanged.
+	TeamNarrowing TeamNarrowingFunc
 	// HandleGrammarChecker (CHAOS-3972 P3) is contextfabric.Engine's own
 	// offer-time grammar dependency, threaded through unchanged so
 	// explicitHandleOfferMaterial (chaos3900_structure_offers.go) can
@@ -3074,7 +3079,7 @@ func resolveSubjects(ctx context.Context, principal storage.Principal, request c
 				}}}
 			}
 			attestation := runShadowEvidenceRoundForResolution(ctx, principal, request, interpreted, exactResolution, hintClaimants, hintClaimants != nil,
-				unscopedVisibilityFor(principal, request) || repositoryNarrowedByUnrestrictedPrincipal(principal, request), deps, confirmedKind, confirmedAnchor, true)
+				unscopedVisibilityFor(principal, request) || repositoryNarrowedByUnrestrictedPrincipal(principal, request) || teamNarrowedByUnrestrictedPrincipal(principal, request, deps), deps, confirmedKind, confirmedAnchor, true)
 			hintGate := deps.CommitGatePolicy
 			if hintGate == (CommitGatePolicy{}) {
 				hintGate = DefaultCommitGatePolicy()
@@ -3730,6 +3735,21 @@ func resolveSubjects(ctx context.Context, principal storage.Principal, request c
 	// the un-widened retrievalDegraded -- see its own declaration above for
 	// why it must never reach the gate call itself.
 	resolution.RetrievalDegraded = retrievalDegraded || coverageFloorDegraded
+	// CHAOS-12346 (lead ruling (i)/(ii)): under a requested team narrowing, a
+	// first decision that committed nothing and offers a candidate inside the
+	// requested teams is decided again over the pool without the candidates
+	// outside them, as a repository narrowing's candidate admission decides:
+	// one left commits, several stay ambiguous among those. With no in-team
+	// offer, today's offers stand (no dead end); a commit stands (the subject
+	// is what the question names).
+	if teamPool, narrowed := teamNarrowedPool(ctx, request, deps, resolution, candidatesBySubject); narrowed {
+		pass++
+		candidatesBySubject = teamPool
+		resolution, firstPassBases, firstPassDigests = resolveFromMergedCandidatesWithAnchorSlot(candidatesBySubject, observationParentKey, observationBlocked, request.Options.MaxSubjectCandidates, request.Options.AllowClarification, searchTruncated, vectorArmSimilarity, deps.VectorMarginCommitThreshold, retrievalDegraded, effectiveSearchLimit, deps.CalibratedTopK, unscopedVisibility, gate, identity, identityTerms, identityLookup, firstPassTracer, request.RequestID, "", false, false, frameReservedKinds(frame, anchorScope.Kind), anchorReservedSlot{Kind: anchorScope.Kind, Source: anchorScope.Source}, &exactRefusal, kindRescue, pass)
+		commitBases.ResetTo(firstPassBases)
+		commitDigests.ResetTo(firstPassDigests)
+		resolution.RetrievalDegraded = retrievalDegraded || coverageFloorDegraded
+	}
 	// CHAOS-4154: confirmed-kind truncation scoping. Reachable ONLY when
 	// this resolution confirmed a kind, the resolution-wide searchTruncated
 	// bit is true, and the ordinary (unscoped) decision above committed
@@ -4006,7 +4026,7 @@ func resolveSubjects(ctx context.Context, principal storage.Principal, request c
 	if !offersOnly && deps.CensusFunc != nil && (stalledForCensus || committedScopeAnchorShadowsHandle(request.Question, resolution.Committed, frame)) {
 		// CHAOS-4300: false -- this is the pre-existing stalled-resolution
 		// call site, not the caller-hint short circuit's own new call above.
-		censusVisibility := unscopedVisibility || repositoryNarrowedByUnrestrictedPrincipal(principal, request)
+		censusVisibility := unscopedVisibility || repositoryNarrowedByUnrestrictedPrincipal(principal, request) || teamNarrowedByUnrestrictedPrincipal(principal, request, deps)
 		attestation := runShadowEvidenceRoundForResolution(ctx, principal, request, interpreted, resolution, aliasClaimantsByTerm, aliasIdentityComplete, censusVisibility, deps, confirmedKind, confirmedAnchor, false)
 		// CHAOS-3896 Slice C (design brief v6 §1.4): the round's Attestation
 		// is now CONSUMED in the commit decision, not merely traced. When it
@@ -4827,7 +4847,7 @@ func runShadowEvidenceRoundForResolution(ctx context.Context, principal storage.
 		PooledKinds: censusKinds, PooledSubjects: pooledSubjects, Trigger: evidenceRoundTrigger(resolution, callerHintShortCircuit), CurrentAxis: interpreted.TimeContext.Axis == contextfabric.TemporalCurrent,
 		UnscopedVisibility: unscopedVisibility, AliasClaimants: claimantsFromCandidateNodes(aliasClaimantsByTerm),
 		AliasLookupComplete: aliasIdentityComplete, CensusFunc: deps.CensusFunc,
-		NarrowSatisfiers:          callerNarrowingSatisfierFilter(principal, request, deps, workItemScope),
+		NarrowSatisfiers:          censusSatisfierNarrower(principal, request, deps, workItemScope),
 		CensusRepositories:        callerCensusRepositories(principal, request, deps),
 		workItemScope:             workItemScope,
 		PreNarrowingExplicitKinds: preNarrowingExplicitKinds,
@@ -5373,6 +5393,18 @@ func repositoryNarrowedByUnrestrictedPrincipal(principal storage.Principal, requ
 // principal": the satisfier narrowing and the in-query census filter both use it.
 func callerNarrowingApplies(principal storage.Principal, request contextfabric.InvestigationRequest, deps ResolveDeps) bool {
 	return repositoryNarrowedByUnrestrictedPrincipal(principal, request) && deps.ExactHint != nil
+}
+
+// censusSatisfierNarrower is the census's satisfier narrowing: the caller's
+// repository narrowing, or else its team narrowing (CHAOS-12346 (ii); the two
+// never both apply). A team narrowing has no in-query census filter
+// (callerCensusRepositories stays nil), so a single satisfier outside the team
+// still commits: the subject is what the question names (Anchor B).
+func censusSatisfierNarrower(principal storage.Principal, request contextfabric.InvestigationRequest, deps ResolveDeps, workItemScope *linkScope) SatisfierNarrower {
+	if narrow := callerNarrowingSatisfierFilter(principal, request, deps, workItemScope); narrow != nil {
+		return narrow
+	}
+	return teamNarrowingSatisfierFilter(principal, request, deps)
 }
 
 // callerCensusRepositories is the caller's own requested repository slugs when

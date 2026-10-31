@@ -724,10 +724,27 @@ narrowed the same way before they set the population; its count-only
 disclosures are CHAOS-12352. Each such read logs one
 `contextfabric.team_narrowing_general_read` line (requested teams, subjects
 decided, subjects excluded, and the floor value; log-only). A non-cohort read is
-not floored, the same as a truncated hop walk today (CHAOS-12348). Subject
-resolution is not narrowed by team. Kinds that hang off an owned entity
-(reviews, CI runs, deployments) are CHAOS-12345, and the resolution census is
-CHAOS-12346.
+not floored, the same as a truncated hop walk today (CHAOS-12348). Kinds that
+hang off an owned entity (reviews, CI runs, deployments) are CHAOS-12345.
+
+**Subject resolution under `scope.team_ids`** (CHAOS-12346, lead ruling (i)/(ii);
+`graphrank/team_narrowing_resolution.go`, decided by the same reach rule through
+`ResolveDeps.TeamNarrowing`). The first decision runs as today. When it commits
+nothing and offers at least one candidate inside the requested teams, the
+candidates decided outside them leave the pool as scope (never an authorization
+drop), and the pool is decided again. This is how a repository narrowing's
+candidate admission decides: one candidate left commits, several stay ambiguous
+among those. A candidate leaves only when every term it matched also matched an
+in-team offer. A candidate the question names by identity (exact label, alias,
+provider key), or one whose ownership is missing, never leaves. With no in-team
+offer, today's offers stand, so the conversation never dead-ends. A commit
+stands: the subject is what the question names (Anchor B). For an unrestricted
+principal's team-only narrowing, the resolution census runs, as it does for a
+repository narrowing. Its satisfier narrower keeps the satisfiers inside the
+requested teams' repositories (repository ownership only; a work item through a
+linked pull request), and the `shadow_caller_narrowing` trace line names the
+outcome. A team narrowing has no in-query census filter, so a single satisfier
+outside the team still commits.
 
 **A count of a repository's owning teams.** For a question about now, a read
 that found no owner, was not cut, and found ownership projected for the org
