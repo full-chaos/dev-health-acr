@@ -27,9 +27,11 @@ a grant:
 | `project_only` | an explicit set of projects, no repository inventory | true |
 
 `project_only` is a **restricted subtype**: a gate that does not decide it
-explicitly takes the restricted path. `auth.ClassifyGrant` keeps today's rule
-and never returns `project_only`. Only the access-read decoder (c5,
-CHAOS-12301) produces it.
+explicitly takes the restricted path. `auth.ClassifyGrant` returns
+`project_only` iff `storage.Principal.ProjectScopes` (canonical `project.v2`
+identities) is non-empty, whatever the repository list holds; otherwise it
+keeps today's rule. Only the access-read decoder (c5, CHAOS-12301) sets
+`ProjectScopes`, so nothing is `project_only` before c5.
 
 The three gate vocabularies derive from the grant class with no `default`.
 `project_only` maps to their restricted member, so no wire value changes:
@@ -132,19 +134,65 @@ A project identity is `project.v2:<EncodeSegment(provider)>:<EncodeSegment(id)>`
 
 Under `project_only` (c3, CHAOS-12299):
 
-- **Nodes.** A node is admitted when it is the caller's organization node, a
-  granted project, a work item whose `authorization_project_identities` meets
-  the grant exactly, or a team reached through `OWNED_BY_TEAM` from a granted
-  project. Absent membership denies.
-- **E1: structural edges.** An edge is admitted iff both endpoints pass the node
-  rule, at every edge decision site. The edge's own repository list is never
-  consulted. A real edge project list must intersect the grant; `"*"` or an
-  absent list defers to the endpoints. An unresolved optional endpoint does not
-  pass.
-- **E2: attribution edges.** `DOCUMENTED_BY` and `HAS_EPISODE` are denied, as a
-  typed limitation.
+- **Nodes** (`graphrank.AuthorizedAttributes`, `projectOnlyAdmits`). A node
+  is admitted only when it is the caller's own organization node, a project
+  node whose canonical id is in the grant, or a work item whose
+  `authorization_project_identities` meets the grant exactly
+  (`ProjectMembershipOf` is Member). Everything else is denied: a work item
+  with no stated membership, a team (ownership reach is CHAOS-12323), a pull
+  request (CHAOS-12308), a repository, a deployment, an incident, a document
+  and an episode. The repository grant is never consulted. An attribute map
+  with no subject kind (a synthetic repository or team decision) is denied, so
+  the direct data tools refuse every repository-anchored and team row.
+- **Requested narrowing.** A request that names projects is refused: nothing
+  is admitted, and it is never answered over the whole grant. The intersection
+  with the grant is CHAOS-12324 (after CHAOS-12229 maps raw ids). A requested
+  repository or team narrowing still narrows a node.
+- **E1: structural edges** (`graphrank.AuthorizedEdge`). An edge is admitted
+  iff both endpoints pass the node rule, at every edge decision site. The
+  edge's own repository and team lists are never consulted. A real edge
+  project list must hold a granted canonical identity; the projection writes
+  raw project ids there, so such an edge is denied until CHAOS-12229. `"*"` or
+  an absent list defers to the endpoints. An unresolved optional endpoint does
+  not pass (`sourcerow` `encodedTargets`). A link tier grants a project-only
+  caller no authority in the tree walk.
+- **E2: attribution edges.** `DOCUMENTED_BY` and `HAS_EPISODE` are denied.
+- **Reach.** A project-only caller reads no project or ownership reach. It is
+  restricted wherever a reader asks whether the caller sees only some
+  repositories (`needsProjectReach`), and fails closed there.
 - **The shared predicate.** It is `graphrank.ProjectMembershipOf`, and the
   request-side narrowing (CHAOS-12229) uses the same one.
+
+## Fail closed before c2 (c3 r1)
+
+Until c2 (CHAOS-12298) lands, c3 refuses a `project_only` principal every
+channel that reads its repository list or hashes only that list:
+
+- **Repositories.** `auth.AuthorizeRepository` refuses it every repository,
+  whatever its list holds, so every route and evidence read that authorizes a
+  repository through it refuses it. The storage episode checks refuse it too
+  (`storage.Principal.HoldsProjectGrant`, the rule `auth.ClassifyGrant`
+  reads).
+- **Work items.** `auth.WorkItemGrantSelectorSet` gives it the zero selector
+  set, which the reader denies, never the organization-wide one. Every
+  work-item read (status, work, actual completion, blockers, required
+  children, commitment, the tree filter, membership, the scope expander, the
+  repository-less admission, evidence and source rows) then reads nothing for
+  it, so a work-item subject's facts are withheld.
+- **Stored results and reuse.** It is refused every stored result
+  (`grant_mismatch`), makes no reuse lookup, and its results are never stored
+  as reusable, because the grant digest and the reuse key hash only the
+  repository list.
+- **Never unscoped (r3).** Every reader of "the caller sees every
+  repository" decides on the principal (`auth.ClassifyGrant`), never on the
+  raw list: the resolve census visibility, the organization figures
+  (`sourceHealthRestricted`, `orgWideFigureAllowed`), the work-item tuple
+  (`workItemRepositoryRestricted`), the graph reach (`needsProjectReach`) and
+  the link read, which binds no repository grant for it. A stored work-item
+  tuple, a context packet, an episode write or purge and the evidence
+  repository listing are refused to it too.
+- **Counts.** `withheld.edges_not_visible` and `page.examined` are unchanged:
+  they are the disclosure contract, the same for a restricted caller.
 
 ## Digests and reuse
 
@@ -169,6 +217,16 @@ c2, CHAOS-12298:
 ## Facts and aggregates
 
 - **Served:** intrinsic project facts, and the facts of member work items.
+- **Withheld in c3** (`devhealthfacts/project_only_withholding.go`,
+  `projectOnlyWithheld`): every project or organization fact this package
+  cannot prove intrinsic. That is the project facts of health, flow,
+  landscape, metrics, readiness and workload (built only from owning teams'
+  and their repositories' rows), the project and organization investment mixes
+  and unit listing, the project pull request and blocker roll-ups, commitment
+  and actual completion (items joined by `project_id`, not by exact
+  membership), and organization source health. The provider reads none of
+  those rows and serves no fact. The subject carries no reason of its own yet;
+  its typed label is CHAOS-12330.
 - **Typed limitation, with a coverage reason:** facts that rest on a team or on
   a cross-project population (F5).
 - **Org-wide figures:** a typed limitation (D3; CHAOS-12225 widens it later).

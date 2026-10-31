@@ -30,8 +30,10 @@ const (
 	// GrantProjectOnly: an organization with no repository inventory whose
 	// caller is granted an explicit set of projects (CHAOS-12107). It is a
 	// RESTRICTED subtype: every gate that does not decide it explicitly
-	// takes the restricted path. Nothing produces it until the access-read
-	// decoder accepts the ops project scope (CHAOS-12301).
+	// takes the restricted path. ClassifyGrant returns it for a non-empty
+	// storage.Principal.ProjectScopes (CHAOS-12299), which only the
+	// access-read decoder sets once it accepts the ops project scope
+	// (CHAOS-12301); until then nothing produces it.
 	GrantProjectOnly GrantClass = "project_only"
 )
 
@@ -52,12 +54,16 @@ func (c GrantClass) IsRestricted() bool {
 	return true
 }
 
-// ClassifyGrant returns the caller's grant class from its repository grant
-// list: empty is unrestricted, any entry that trims to "*" is universal, and
-// anything else is restricted. It never returns GrantProjectOnly: the project
-// grant arrives with the access-read decoder (CHAOS-12301).
+// ClassifyGrant returns the caller's grant class. A caller with a project grant
+// (principal.ProjectScopes non-empty) is project_only, whatever its repository
+// list says (CHAOS-12299); only the access-read decoder sets that grant
+// (CHAOS-12301). Otherwise it reads the repository grant list: empty is
+// unrestricted, any entry that trims to "*" is universal, and anything else is
+// restricted.
 func ClassifyGrant(principal storage.Principal) GrantClass {
 	switch {
+	case principal.HoldsProjectGrant():
+		return GrantProjectOnly
 	case len(principal.RepositoryScopes) == 0:
 		return GrantUnrestricted
 	case slices.ContainsFunc(principal.RepositoryScopes, func(scope string) bool { return strings.TrimSpace(scope) == "*" }):

@@ -4,6 +4,7 @@ import (
 	"context"
 	"slices"
 
+	"github.com/full-chaos/dev-health-acr/internal/auth"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/devhealthschema"
 	"github.com/full-chaos/dev-health-acr/internal/contextpacket"
@@ -309,7 +310,9 @@ WHERE ` + window.timestampExpr("ifNull(i.started_at, i.observed_at)")
 // the whole organization: no repository restriction on the principal ("*" or
 // none) and none requested for this read.
 func orgWideFigureAllowed(principal storage.Principal, requested []string) bool {
-	if len(requested) > 0 {
+	// A project-only caller never sees an organization-wide figure, whatever
+	// its repository list holds (CHAOS-12299 r3).
+	if len(requested) > 0 || auth.ClassifyGrant(principal) == auth.GrantProjectOnly {
 		return false
 	}
 	return len(principal.RepositoryScopes) == 0 || slices.Contains(principal.RepositoryScopes, "*")

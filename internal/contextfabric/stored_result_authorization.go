@@ -387,6 +387,12 @@ func storedResultOwnerRefusal(principal storage.Principal, stored StoredInvestig
 // result with no recorded digest (a pre-migration row) is refused to a
 // restricted reader: its computing grant cannot be proven.
 func storedResultGrantRefusal(principal storage.Principal, stored StoredInvestigationResult) (StoredResultAuthorizationReason, bool) {
+	// A project-only reader is refused every stored result (CHAOS-12299): the
+	// grant digest hashes only the repository list, so two different project
+	// grants share it until c2 gives them a p: digest (CHAOS-12298).
+	if auth.ClassifyGrant(principal) == auth.GrantProjectOnly {
+		return StoredResultReasonGrantMismatch, true
+	}
 	if classifyStoredResultPrincipalScope(principal) != StoredResultScopeRestricted {
 		return "", false
 	}
