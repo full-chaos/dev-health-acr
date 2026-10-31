@@ -207,6 +207,20 @@ type Config struct {
 	// stream_unavailable before any admission work; every other request is
 	// unaffected either way.
 	ContextFabricEventStreamEnabled bool
+	// AskDevRetentionEnabled (CHAOS-11952, ACR_ASK_DEV_RETENTION_ENABLED,
+	// default OFF) is the one switch for Ask Dev retention (plan D-22): on,
+	// the retention job removes the backing set of expired and deleted
+	// threads and of submissions with no thread, and a submission with no
+	// thread reads as closed 24 hours after its admission. Off, no job runs,
+	// no row is removed, the startup grant probe is skipped, and every read
+	// behaves as before; startup logs that retention is off.
+	AskDevRetentionEnabled bool
+	// AskDevRetentionPostgresDSN (ACR_POSTGRES_RETENTION_DSN or its _FILE) is
+	// the retention job's own role (internal/dbacl RetentionGrants, given by
+	// grant-runtime-acl), never the runtime role: the job's deletes do not
+	// widen the runtime's privileges. Required when AskDevRetentionEnabled is
+	// on; read only then.
+	AskDevRetentionPostgresDSN string
 	// ContextFabricRunLeaseEnabled (CHAOS-11949,
 	// ACR_CONTEXT_FABRIC_RUN_LEASE_ENABLED, default OFF) runs a streamed
 	// investigation that names X-ACR-Submission-ID under an ACR-owned lease:
