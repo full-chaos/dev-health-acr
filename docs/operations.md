@@ -942,6 +942,17 @@ What an operator can rely on and see:
   stream's lock (a frame write can hold it up to the 30 s write deadline).
 
 
+### Ask Dev thread list first question (CHAOS-12235)
+
+`ACR_THREAD_LIST_FIRST_QUESTION_ENABLED` (default `false`) serves the optional
+`first_question` on each `GET /api/v1/context-fabric/threads` item. Off, the
+item is exactly the earlier published shape. The switch exists because a
+client that validates the list against the earlier schema
+(`additionalProperties: false`) refuses the new field, and acr is rolled to
+production by more than one owner, so no roll order can be relied on. Turn it
+on only when every consumer's pin (web, ask-dev) accepts the field; then the
+switch is removed. The startup line reports `thread_list_first_question_enabled`.
+
 ### Ask Dev run lease (CHAOS-11949)
 
 `ACR_CONTEXT_FABRIC_RUN_LEASE_ENABLED` (default `false`; refused at start

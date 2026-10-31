@@ -224,6 +224,16 @@ type Config struct {
 	// by its connection, as before, and both routes answer 404. It needs
 	// ContextFabricEventStreamEnabled.
 	ContextFabricRunLeaseEnabled bool
+	// ThreadListFirstQuestionEnabled (CHAOS-12235,
+	// ACR_THREAD_LIST_FIRST_QUESTION_ENABLED, default OFF) serves the
+	// optional first_question on each thread list item. Off, the list omits
+	// it, exactly as before. A client that validates the list against the
+	// earlier published schema (additionalProperties false) refuses the
+	// field, and acr is rolled to production by more than one owner, so no
+	// roll order can be relied on: the switch is turned on only once every
+	// consumer's pin accepts the field, then removed (its removal ticket is
+	// filed with the web and ask-dev pin bumps).
+	ThreadListFirstQuestionEnabled bool
 	// ServiceModelOpen (ACR_MCP_SERVICE_MODEL_DEFAULT=on; development and
 	// venues only, production is off) treats every organization as holding
 	// acr_service_model and platform_model_fallback. Unset or off: an
