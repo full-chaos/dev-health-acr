@@ -21,9 +21,12 @@ type RequiredBaselineOptions struct {
 }
 
 // CheckRequiredAgainstTag fails when a published schema lists a field in
-// `required` that the same schema did not require at the previous prod roll
-// tag (prod-rev<N>, else v*). A field is optional for one release first; it may become required in
-// the next. With no tag the check passes and says so.
+// `required` that the same schema neither required nor declared in
+// `properties` (at the same path) at the previous prod roll tag (prod-rev<N>,
+// else v*). A field is optional for one release first; it may become required
+// in the next: a field the baseline declared optional may be required now, and
+// a field new since the baseline may not (CHAOS-12218). With no tag the check
+// passes and says so.
 func CheckRequiredAgainstTag(options RequiredBaselineOptions) error {
 	root, err := findRoot(options.Root)
 	if err != nil {
@@ -68,22 +71,25 @@ func CheckRequiredAgainstTag(options RequiredBaselineOptions) error {
 		}
 		compared++
 		for _, added := range newlyRequired(baseline, current, "") {
-			problems = append(problems, fmt.Sprintf("%s: field %q at %q is required now but was not required at %s; make it optional for one release first", name, added.field, added.path, tag))
+			problems = append(problems, fmt.Sprintf("%s: field %q at %q is required now but was neither required nor declared in properties at %s; make it optional for one release first", name, added.field, added.path, tag))
 		}
 	}
 	if len(problems) > 0 {
 		sort.Strings(problems)
 		return fmt.Errorf("newly required fields:\n  %s", strings.Join(problems, "\n  "))
 	}
-	fmt.Fprintf(out, "contractcheck required-baseline: %d schemas compared against %s, no newly required fields\n", compared, tag)
+	fmt.Fprintf(out, "contractcheck required-baseline: %d schemas compared against %s, no required field the baseline did not declare\n", compared, tag)
 	return nil
 }
 
 type addedRequired struct{ path, field string }
 
 // newlyRequired walks current beside baseline. Where both hold an object at
-// the same path, any `required` entry in current and not in baseline is
-// reported. A path absent from the baseline is a new subschema and is skipped.
+// the same path, a `required` entry in current is reported when the baseline
+// object at that path neither required it nor declared it in its own
+// `properties`. A field declared elsewhere in the baseline (another path, a
+// $ref, an allOf branch) counts as undeclared here. A path absent from the
+// baseline is a new subschema and is skipped.
 func newlyRequired(baseline, current any, path string) []addedRequired {
 	var found []addedRequired
 	switch cur := current.(type) {
@@ -99,6 +105,13 @@ func newlyRequired(baseline, current any, path string) []addedRequired {
 					if s, ok := v.(string); ok {
 						had[s] = true
 					}
+				}
+			}
+			// Declared optional at the baseline: the release the field was
+			// optional in has shipped, so it may be required now.
+			if declared, ok := base["properties"].(map[string]any); ok {
+				for field := range declared {
+					had[field] = true
 				}
 			}
 			for _, v := range list {

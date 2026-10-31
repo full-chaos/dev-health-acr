@@ -45,22 +45,28 @@ func writeBaseline(t *testing.T, dir, name, body string) {
 
 const schemaOneRequired = `{"type":"object","required":["a"],"properties":{"a":{},"b":{},"n":{"type":"object","required":["x"],"properties":{"x":{},"y":{}}}}}`
 
+// schemaRequiringANewField adds "c" to properties and to required at once: a
+// field new since any baseline built from schemaOneRequired, so always refused.
+var schemaRequiringANewField = strings.Replace(strings.Replace(schemaOneRequired, `"required":["a"]`, `"required":["a","c"]`, 1), `"b":{}`, `"b":{},"c":{}`, 1)
+
 func commitSchema(t *testing.T, dir, schema string) {
 	t.Helper()
 	writeBaseline(t, dir, "contracts/jsonschema/v1/a.v1.schema.json", schema)
 	runGit(t, dir, "commit", "-q", "-am", "change")
 }
 
+// A field that is new since the baseline cannot be required in the same
+// release that adds it: "c" is added to properties and to required at once.
 func TestRequiredBaselineRejectsNewlyRequiredField(t *testing.T) {
 	dir := baselineRepo(t, schemaOneRequired)
 	runGit(t, dir, "tag", "v1.0.0")
-	commitSchema(t, dir, strings.Replace(schemaOneRequired, `"required":["a"]`, `"required":["a","b"]`, 1))
+	commitSchema(t, dir, strings.Replace(strings.Replace(schemaOneRequired, `"required":["a"]`, `"required":["a","c"]`, 1), `"b":{}`, `"b":{},"c":{}`, 1))
 	var out bytes.Buffer
 	err := CheckRequiredAgainstTag(RequiredBaselineOptions{Root: dir, Out: &out})
 	if err == nil {
 		t.Fatal("expected newly required field to fail")
 	}
-	for _, want := range []string{"a.v1.schema.json", `"b"`, "v1.0.0"} {
+	for _, want := range []string{"a.v1.schema.json", `"c"`, "v1.0.0"} {
 		if !strings.Contains(err.Error(), want) {
 			t.Fatalf("error %q lacks %q", err, want)
 		}
@@ -70,10 +76,70 @@ func TestRequiredBaselineRejectsNewlyRequiredField(t *testing.T) {
 func TestRequiredBaselineRejectsNewlyRequiredNestedField(t *testing.T) {
 	dir := baselineRepo(t, schemaOneRequired)
 	runGit(t, dir, "tag", "v1.0.0")
-	commitSchema(t, dir, strings.Replace(schemaOneRequired, `"required":["x"]`, `"required":["x","y"]`, 1))
+	commitSchema(t, dir, strings.Replace(strings.Replace(schemaOneRequired, `"required":["x"]`, `"required":["x","z"]`, 1), `"y":{}`, `"y":{},"z":{}`, 1))
 	err := CheckRequiredAgainstTag(RequiredBaselineOptions{Root: dir})
-	if err == nil || !strings.Contains(err.Error(), "/properties/n") || !strings.Contains(err.Error(), `"y"`) {
+	if err == nil || !strings.Contains(err.Error(), "/properties/n") || !strings.Contains(err.Error(), `"z"`) {
 		t.Fatalf("expected nested failure, got %v", err)
+	}
+}
+
+// CHAOS-12218: the documented rule. A field the baseline declared in
+// properties (optional for at least that release) may be required now.
+func TestRequiredBaselineAllowsRequiringAFieldTheBaselineDeclared(t *testing.T) {
+	dir := baselineRepo(t, schemaOneRequired)
+	runGit(t, dir, "tag", "v1.0.0")
+	commitSchema(t, dir, strings.Replace(schemaOneRequired, `"required":["a"]`, `"required":["a","b"]`, 1))
+	var out bytes.Buffer
+	if err := CheckRequiredAgainstTag(RequiredBaselineOptions{Root: dir, Out: &out}); err != nil {
+		t.Fatalf("requiring a field the baseline declared optional was refused: %v", err)
+	}
+	if !strings.Contains(out.String(), "v1.0.0") {
+		t.Fatalf("output names no tag: %q", out.String())
+	}
+}
+
+func TestRequiredBaselineAllowsRequiringANestedFieldTheBaselineDeclared(t *testing.T) {
+	dir := baselineRepo(t, schemaOneRequired)
+	runGit(t, dir, "tag", "v1.0.0")
+	commitSchema(t, dir, strings.Replace(schemaOneRequired, `"required":["x"]`, `"required":["x","y"]`, 1))
+	if err := CheckRequiredAgainstTag(RequiredBaselineOptions{Root: dir}); err != nil {
+		t.Fatalf("requiring a nested field the baseline declared optional was refused: %v", err)
+	}
+}
+
+// Declared means declared at the SAME path: "b" is a root property at the
+// baseline, but the nested object never declared it.
+func TestRequiredBaselineRejectsAFieldDeclaredOnlyAtAnotherPath(t *testing.T) {
+	dir := baselineRepo(t, schemaOneRequired)
+	runGit(t, dir, "tag", "v1.0.0")
+	commitSchema(t, dir, strings.Replace(strings.Replace(schemaOneRequired, `"required":["x"]`, `"required":["x","b"]`, 1), `"y":{}`, `"y":{},"b":{}`, 1))
+	err := CheckRequiredAgainstTag(RequiredBaselineOptions{Root: dir})
+	if err == nil || !strings.Contains(err.Error(), "/properties/n") || !strings.Contains(err.Error(), `"b"`) {
+		t.Fatalf("a field declared only at another path was allowed: %v", err)
+	}
+}
+
+// The other direction: "x" is declared only inside the nested object at the
+// baseline, so requiring it at the root is requiring a new root field.
+func TestRequiredBaselineRejectsAFieldDeclaredOnlyInANestedObject(t *testing.T) {
+	dir := baselineRepo(t, schemaOneRequired)
+	runGit(t, dir, "tag", "v1.0.0")
+	commitSchema(t, dir, strings.Replace(strings.Replace(schemaOneRequired, `"required":["a"]`, `"required":["a","x"]`, 1), `"b":{}`, `"b":{},"x":{}`, 1))
+	err := CheckRequiredAgainstTag(RequiredBaselineOptions{Root: dir})
+	if err == nil || !strings.Contains(err.Error(), `"x"`) || !strings.Contains(err.Error(), `at "/"`) {
+		t.Fatalf("a root field declared only in a nested object at the baseline was allowed: %v", err)
+	}
+}
+
+// A baseline subschema with no properties declares nothing.
+func TestRequiredBaselineRejectsWhenTheBaselineDeclaredNoProperties(t *testing.T) {
+	const bare = `{"type":"object","required":["a"]}`
+	dir := baselineRepo(t, bare)
+	runGit(t, dir, "tag", "v1.0.0")
+	commitSchema(t, dir, `{"type":"object","required":["a","b"],"properties":{"a":{},"b":{}}}`)
+	err := CheckRequiredAgainstTag(RequiredBaselineOptions{Root: dir})
+	if err == nil || !strings.Contains(err.Error(), `"b"`) {
+		t.Fatalf("a field the baseline never declared was allowed: %v", err)
 	}
 }
 
@@ -114,7 +180,7 @@ func TestRequiredBaselineNoTagPassesLoudly(t *testing.T) {
 func TestRequiredBaselineSkipsTagAtHead(t *testing.T) {
 	dir := baselineRepo(t, schemaOneRequired)
 	runGit(t, dir, "tag", "v1.0.0")
-	commitSchema(t, dir, strings.Replace(schemaOneRequired, `"required":["a"]`, `"required":["a","b"]`, 1))
+	commitSchema(t, dir, schemaRequiringANewField)
 	runGit(t, dir, "tag", "v1.1.0")
 	err := CheckRequiredAgainstTag(RequiredBaselineOptions{Root: dir})
 	if err == nil || !strings.Contains(err.Error(), "v1.0.0") {
@@ -150,7 +216,7 @@ func TestRequiredBaselinePicksHighestProdRevNumber(t *testing.T) {
 func TestRequiredBaselineFallsBackToVersionTagWithoutProdRev(t *testing.T) {
 	dir := baselineRepo(t, schemaOneRequired)
 	runGit(t, dir, "tag", "v1.0.0")
-	commitSchema(t, dir, strings.Replace(schemaOneRequired, `"required":["a"]`, `"required":["a","b"]`, 1))
+	commitSchema(t, dir, schemaRequiringANewField)
 	err := CheckRequiredAgainstTag(RequiredBaselineOptions{Root: dir})
 	if err == nil || !strings.Contains(err.Error(), "v1.0.0") {
 		t.Fatalf("expected v1.0.0 fallback, got %v", err)
