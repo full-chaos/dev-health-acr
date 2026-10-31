@@ -2,7 +2,7 @@ package hosted
 
 import (
 	"context"
-	"errors"
+	"database/sql"
 	"fmt"
 	"log/slog"
 	"time"
@@ -10,14 +10,12 @@ import (
 	"github.com/full-chaos/dev-health-acr/internal/config"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/pginvestigation"
-	runtimepostgres "github.com/full-chaos/dev-health-acr/internal/runtime/postgres"
 )
 
 // The Ask Dev retention job (CHAOS-11952, plan §2.6 and D-22): a bounded
 // purge loop like the packet, OAuth and browser family purges, in every
-// acr-api replica, on a pool of its own connected as the retention role
-// (ACR_POSTGRES_RETENTION_DSN, internal/dbacl RetentionGrants), started only
-// when ACR_ASK_DEV_RETENTION_ENABLED is on. At startup the grant probe runs,
+// acr-api replica, on acr-api's own pool as the runtime role (CHAOS-12244),
+// started only when ACR_ASK_DEV_RETENTION_ENABLED is on. At startup the grant probe runs,
 // then a first pass: a role missing a grant fails startup loudly. Each pass handles
 // up to contextfabric.RetentionSweepBatch units, each in its own transaction
 // under the organization's admission lock, so replicas sweeping at once
@@ -76,29 +74,22 @@ func startRetentionPurgeLoop(ctx context.Context, sweeper contextfabric.Retentio
 }
 
 // startConfiguredRetention starts the retention job when
-// ACR_ASK_DEV_RETENTION_ENABLED is on: it opens a pool of its own from
-// ACR_POSTGRES_RETENTION_DSN (the retention role, internal/dbacl
-// RetentionGrants), runs the grant probe and a first pass, then the loop. Off,
-// it opens nothing, probes nothing, removes nothing, and logs once that
-// retention is off. The returned close stops the loop and closes the pool.
-func startConfiguredRetention(ctx context.Context, cfg config.Config, logger *slog.Logger) (func() error, error) {
+// ACR_ASK_DEV_RETENTION_ENABLED is on: on acr-api's own pool, as the runtime
+// role (CHAOS-12244: internal/dbacl RuntimeGrants holds every privilege the
+// job needs, RetentionPrivileges), it runs the grant probe and a first pass,
+// then the loop. Off, it probes nothing, removes nothing, and logs once that
+// retention is off. The returned close stops the loop; the pool is the
+// caller's.
+func startConfiguredRetention(ctx context.Context, cfg config.Config, database *sql.DB, logger *slog.Logger) (func() error, error) {
 	if !cfg.AskDevRetentionEnabled {
 		if logger != nil {
 			logger.InfoContext(ctx, RetentionPurgeLogMessage, "outcome", "disabled", "reason", "ACR_ASK_DEV_RETENTION_ENABLED is off; no row is removed")
 		}
 		return func() error { return nil }, nil
 	}
-	pool, err := runtimepostgres.Open(ctx, runtimepostgres.Config{DSN: cfg.AskDevRetentionPostgresDSN, PingTimeout: cfg.PostgresPingTimeout})
+	store, err := pginvestigation.NewStore(database, pginvestigation.WithUnthreadedRecordRetention(true))
 	if err != nil {
-		return nil, fmt.Errorf("open the retention role's pool: %w", err)
+		return nil, fmt.Errorf("create the retention store: %w", err)
 	}
-	store, err := pginvestigation.NewStore(pool, pginvestigation.WithUnthreadedRecordRetention(true))
-	if err != nil {
-		return nil, errors.Join(fmt.Errorf("create the retention store: %w", err), pool.Close())
-	}
-	stop, err := startRetentionPurgeLoop(ctx, store, logger, nil)
-	if err != nil {
-		return nil, errors.Join(err, pool.Close())
-	}
-	return func() error { return errors.Join(stop(), pool.Close()) }, nil
+	return startRetentionPurgeLoop(ctx, store, logger, nil)
 }

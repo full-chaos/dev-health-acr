@@ -1,7 +1,6 @@
 package hosted
 
 import (
-	"net/url"
 	"strings"
 	"testing"
 	"time"
@@ -11,52 +10,38 @@ import (
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/pginvestigation"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/pginvestigation/paritytest"
-	"github.com/full-chaos/dev-health-acr/internal/dbacl"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
 )
 
-// TestOpenPostgres_retentionRunsOnlyBehindItsSwitchAsItsOwnRole drives the
-// REAL openPostgres against a fresh migrated Postgres (CHAOS-11952):
-//   - switch off: no retention pool, no probe, nothing removed, one line that
-//     retention is off;
-//   - switch on, the retention role missing one grant, nothing due: the grant
-//     probe fails startup (an empty first pass would prove nothing);
-//   - switch on, the role holding exactly dbacl.RetentionGrants: the startup
-//     pass removes a record with no thread past its retention-0 window, with
-//     its result, through that role, and logs its counts-only line.
-func TestOpenPostgres_retentionRunsOnlyBehindItsSwitchAsItsOwnRole(t *testing.T) {
+// TestOpenPostgres_retentionRunsOnlyBehindItsSwitchAsTheRuntimeRole drives
+// the REAL openPostgres against a fresh migrated Postgres (CHAOS-11952,
+// CHAOS-12244: the job runs on acr-api's own pool as the runtime role):
+//   - switch off: no probe, nothing removed, one line that retention is off;
+//   - switch on, the runtime role missing one retention grant, nothing due:
+//     the grant probe fails startup (an empty first pass would prove nothing);
+//   - switch on with the grant back: the startup pass removes a record with
+//     no thread past its retention-0 window, with its result, through the
+//     runtime pool, and logs its counts-only line.
+//
+// cmd/acr-migrate TestRuntimeRoleRunsTheAskDevRetention proves the runtime
+// declaration (dbacl.RuntimeGrants) holds every privilege the job needs.
+func TestOpenPostgres_retentionRunsOnlyBehindItsSwitchAsTheRuntimeRole(t *testing.T) {
 	h := newOAuthPurgeStartupHarness(t)
 	ctx, owner := h.ctx, h.owner
-	for _, statement := range []string{
-		`CREATE ROLE acr_retention_rt LOGIN PASSWORD 'rt'`,
-		`GRANT USAGE ON SCHEMA acr TO acr_retention_rt`,
-	} {
-		_, err := owner.ExecContext(ctx, statement)
-		require.NoError(t, err, statement)
-	}
-	for _, statement := range dbacl.RetentionGrantStatements(dbacl.QuoteIdent("acr_retention_rt")) {
-		_, err := owner.ExecContext(ctx, statement.SQL)
-		require.NoError(t, err, statement.SQL)
-	}
-	parsed, err := url.Parse(h.runtimeDSN)
-	require.NoError(t, err)
-	parsed.User = url.UserPassword("acr_retention_rt", "rt")
-	retentionDSN := parsed.String()
-
 	cfg := h.config()
 	cfg.OAuthIssuer, cfg.OAuthResources, cfg.OAuthConsentURL = "", nil, ""
 
 	// Switch on, one grant missing, nothing due: the probe fails startup.
-	_, err = owner.ExecContext(ctx, `REVOKE DELETE ON acr.context_fabric_threads FROM acr_retention_rt`)
+	_, err := owner.ExecContext(ctx, `REVOKE DELETE ON acr.context_fabric_threads FROM acr_purge_rt`)
 	require.NoError(t, err)
 	on := cfg
-	on.AskDevRetentionEnabled, on.AskDevRetentionPostgresDSN = true, retentionDSN
+	on.AskDevRetentionEnabled = true
 	logger, _ := newOAuthPurgeStartupLogger()
 	_, err = openPostgres(ctx, on, logger)
-	require.Error(t, err, "a retention role without one of its grants must fail startup, with nothing due")
+	require.Error(t, err, "a runtime role without one of the retention grants must fail startup, with nothing due")
 	require.Contains(t, err.Error(), "enforce Ask Dev retention")
 	require.Contains(t, err.Error(), "permission denied for table context_fabric_threads")
-	_, err = owner.ExecContext(ctx, `GRANT DELETE ON acr.context_fabric_threads TO acr_retention_rt`)
+	_, err = owner.ExecContext(ctx, `GRANT DELETE ON acr.context_fabric_threads TO acr_purge_rt`)
 	require.NoError(t, err)
 
 	// A record with no thread, long past its window against the real clock.
@@ -88,7 +73,7 @@ func TestOpenPostgres_retentionRunsOnlyBehindItsSwitchAsItsOwnRole(t *testing.T)
 	require.Contains(t, logs.String(), "outcome=disabled")
 
 	// Switch on with every grant: the startup pass removes the record and
-	// its result through the retention role.
+	// its result through acr-api's runtime pool.
 	logger, logs = newOAuthPurgeStartupLogger()
 	components, err = openPostgres(ctx, on, logger)
 	require.NoError(t, err)

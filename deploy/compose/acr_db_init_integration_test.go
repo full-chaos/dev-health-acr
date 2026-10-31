@@ -28,8 +28,6 @@ import (
 	"database/sql"
 	"fmt"
 	"github.com/full-chaos/dev-health-acr/internal/chfixture/startterm"
-	"github.com/full-chaos/dev-health-acr/internal/contextfabric/pginvestigation"
-	"github.com/full-chaos/dev-health-acr/internal/dbacl"
 	"net/url"
 	"os"
 	"os/exec"
@@ -84,9 +82,6 @@ type acrDBInitHarness struct {
 	ctx         context.Context
 	runtimeDB   *sql.DB
 	migrationDB *sql.DB
-	// retentionDB is connected as the Ask Dev retention role the script
-	// provisions (CHAOS-11952).
-	retentionDB *sql.DB
 }
 
 // bootstrapACRDBInit runs the REAL acr-db-init.sh in both modes (roles, then
@@ -129,8 +124,6 @@ func bootstrapACRDBInit(t *testing.T) acrDBInitHarness {
 		runtimePassword   = "acr-runtime-test-password"
 		migrationUser     = "acr_migration_test"
 		migrationPassword = "acr-migration-test-password"
-		retentionUser     = "acr_retention_test"
-		retentionPassword = "acr-retention-test-password"
 	)
 	baseEnv := append(os.Environ(),
 		"POSTGRES_HOST="+host, "POSTGRES_PORT="+port, "POSTGRES_USER=postgres", "POSTGRES_PASSWORD=postgres",
@@ -138,7 +131,6 @@ func bootstrapACRDBInit(t *testing.T) acrDBInitHarness {
 		"ACR_RUNTIME_DB_USER="+runtimeUser, "ACR_RUNTIME_DB_PASSWORD="+runtimePassword,
 		"ACR_MIGRATION_DB_USER="+migrationUser, "ACR_MIGRATION_DB_PASSWORD="+migrationPassword,
 		"ACR_ENABLE_EPISODE_WRITEBACK=false",
-		"ACR_RETENTION_DB_USER="+retentionUser, "ACR_RETENTION_DB_PASSWORD="+retentionPassword,
 	)
 
 	runScript := func(mode string) {
@@ -181,21 +173,18 @@ func bootstrapACRDBInit(t *testing.T) acrDBInitHarness {
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, runtimeDB.Close()) })
 
-	retentionDSN := fmt.Sprintf("postgres://%s:%s@%s:%s/%s?sslmode=disable", retentionUser, retentionPassword, host, port, acrDBName)
-	retentionDB, err := runtimepostgres.Open(ctx, runtimepostgres.Config{DSN: retentionDSN})
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, retentionDB.Close()) })
-
-	return acrDBInitHarness{ctx: ctx, runtimeDB: runtimeDB, migrationDB: migrationDB, retentionDB: retentionDB}
+	return acrDBInitHarness{ctx: ctx, runtimeDB: runtimeDB, migrationDB: migrationDB}
 }
 
 // TestAcrDbInit_RuntimeRoleCanInsertIntoClarificationSelections is CHAOS-3859
 // sol review F1's grant proof: proves an INSERT into
 // acr.context_fabric_clarification_selections succeeds under the real
-// runtime-acl grants. Also asserts the negative control: a SELECT on the
-// SAME table as the SAME role fails -- this table is INSERT-only for the
-// runtime role (mirroring audit_events), so a passing INSERT test alone
-// would not catch an accidentally-too-permissive grant.
+// runtime-acl grants. The table is capture-only for the runtime role
+// (migration 0016, CHAOS-3859): it reads no selection back. The Ask Dev
+// retention job runs as the runtime role (CHAOS-12244), and its DELETE ...
+// WHERE org_id AND prior_result_id reads those two columns, so the runtime
+// holds SELECT on exactly them: a whole row or any other column is refused,
+// and so is UPDATE.
 func TestAcrDbInit_RuntimeRoleCanInsertIntoClarificationSelections(t *testing.T) {
 	h := bootstrapACRDBInit(t)
 	ctx, runtimeDB, migrationDB := h.ctx, h.runtimeDB, h.migrationDB
@@ -214,14 +203,22 @@ VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
 		"web_assertion", `[]`, `{}`)
 	require.NoError(t, err, "the runtime role must be able to INSERT into acr.context_fabric_clarification_selections (CHAOS-3859 sol review F1) -- if this fails with a permission error, acr-db-init.sh's runtime-acl grant list is missing this table again")
 
-	// Negative control: this table is INSERT-only for the runtime role
-	// (mirroring audit_events, migration 0016's own header comment) -- a
-	// SELECT must fail. Without this half, a future edit that accidentally
-	// granted SELECT too would pass the INSERT assertion above and this
-	// test would never notice the privilege escalation.
-	var count int
-	selectErr := runtimeDB.QueryRowContext(ctx, `SELECT count(*) FROM acr.context_fabric_clarification_selections`).Scan(&count)
-	require.Error(t, selectErr, "the runtime role must NOT be able to SELECT from acr.context_fabric_clarification_selections -- this table is insert-only for the runtime role")
+	// Negative controls: only the retention DELETE's two columns are
+	// readable (CHAOS-12244); a whole row, a content column and UPDATE are
+	// refused. Without them, a grant widened back to table SELECT would pass
+	// the assertions above unnoticed.
+	_, err = runtimeDB.ExecContext(ctx, `SELECT org_id, prior_result_id FROM acr.context_fabric_clarification_selections WHERE false`)
+	require.NoError(t, err, "the runtime role reads the retention DELETE's columns (CHAOS-12244)")
+	for _, read := range []string{"*", "question_hash", "offered_candidates", "pipeline_context", "selected_subject_canonical_id"} {
+		_, err := runtimeDB.ExecContext(ctx, `SELECT `+read+` FROM acr.context_fabric_clarification_selections WHERE false`)
+		require.Errorf(t, err, "the runtime role must NOT read %s of acr.context_fabric_clarification_selections -- the table is capture-only for the runtime", read)
+		require.Contains(t, err.Error(), "permission denied", read)
+	}
+	_, updateErr := runtimeDB.ExecContext(ctx, `UPDATE acr.context_fabric_clarification_selections SET org_id = org_id WHERE false`)
+	require.Error(t, updateErr, "the runtime role must NOT be able to UPDATE acr.context_fabric_clarification_selections")
+	require.Contains(t, updateErr.Error(), "permission denied")
+	_, err = runtimeDB.ExecContext(ctx, `DELETE FROM acr.context_fabric_clarification_selections WHERE org_id = $1 AND prior_result_id = ANY($2::text[])`, "org-acl-proof", []string{"result_none"})
+	require.NoError(t, err, "the retention job's DELETE runs as the runtime role (CHAOS-12244)")
 
 	// And the row genuinely landed -- confirmed via the MIGRATION role,
 	// which does have full access to its own tables.
@@ -474,42 +471,4 @@ func TestAcrDbInit_RuntimeRoleCanInsertIntoEveryOtherContextFabricTable(t *testi
 		_, err = runtimeDB.ExecContext(ctx, `DELETE FROM acr.context_fabric_org_purge_markers WHERE org_id = $1`, org)
 		require.NoError(t, err)
 	})
-}
-
-// CHAOS-11952: the compose bootstrap creates the Ask Dev retention role and
-// gives it exactly internal/dbacl.RetentionGrants (the generated block), and
-// the retention job's grant probe passes as that role.
-func TestAcrDbInit_RetentionRoleHoldsExactlyTheDeclarationAndPassesTheProbe(t *testing.T) {
-	h := bootstrapACRDBInit(t)
-	want := map[string]map[string]bool{}
-	for _, grant := range dbacl.RetentionGrants {
-		want[grant.Table] = map[string]bool{}
-		for _, privilege := range grant.Privileges {
-			want[grant.Table][privilege] = true
-		}
-	}
-	rows, err := h.migrationDB.QueryContext(h.ctx, `SELECT c.relname FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace WHERE n.nspname = 'acr' AND c.relkind IN ('r', 'p')`)
-	require.NoError(t, err)
-	var tables []string
-	for rows.Next() {
-		var table string
-		require.NoError(t, rows.Scan(&table))
-		tables = append(tables, table)
-	}
-	require.NoError(t, rows.Close())
-	require.NotEmpty(t, tables)
-	var mismatches []string
-	for _, table := range tables {
-		for _, privilege := range []string{"SELECT", "INSERT", "UPDATE", "DELETE", "TRUNCATE", "REFERENCES", "TRIGGER"} {
-			var has bool
-			require.NoError(t, h.migrationDB.QueryRowContext(h.ctx, `SELECT has_table_privilege('acr_retention_test', $1, $2)`, "acr."+table, privilege).Scan(&has))
-			if has != want[table][privilege] {
-				mismatches = append(mismatches, fmt.Sprintf("%s on %s: holds %t, declared %t", privilege, table, has, want[table][privilege]))
-			}
-		}
-	}
-	require.Empty(t, mismatches)
-	store, err := pginvestigation.NewStore(h.retentionDB, pginvestigation.WithUnthreadedRecordRetention(true))
-	require.NoError(t, err)
-	require.NoError(t, store.ProbeRetention(h.ctx), "the retention job's grant probe as the compose retention role")
 }

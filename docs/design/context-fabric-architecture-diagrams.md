@@ -3828,8 +3828,8 @@ is ops `internal/apiservice/acr/access.go` (CHAOS-12084, CHAOS-12128).
 
 The retention job removes the Ask Dev backing set (plan §2.6, D-22), behind
 `ACR_ASK_DEV_RETENTION_ENABLED` (default off): a bounded loop in every
-`acr-api` replica on a pool of its own as the retention role
-(`ACR_POSTGRES_RETENTION_DSN`, `internal/dbacl.RetentionGrants`), one
+`acr-api` replica on acr-api's own pool as the runtime role (CHAOS-12244;
+`internal/dbacl.RuntimeGrants` holds `RetentionPrivileges`), one
 transaction per unit under the organization's admission lock, results first. A unit is an expired thread
 (whole), a deleted thread (content now, the content-free closure record at
 expiry), or a submission with no thread (24 h after its admission). Kept: the
@@ -3839,8 +3839,8 @@ save (T2). Design: `docs/design/ask-dev-conversation-contract.md` §12.
 
 ```mermaid
 flowchart TD
-  S{"ACR_ASK_DEV_RETENTION_ENABLED?"} -->|off| O["no pool, no probe, nothing removed; one 'disabled' line"]
-  S -->|on| P["retention role pool; grant probe (every statement kind, on no row)"]
+  S{"ACR_ASK_DEV_RETENTION_ENABLED?"} -->|off| O["no probe, nothing removed; one 'disabled' line"]
+  S -->|on| P["runtime role pool; grant probe (every statement kind, on no row)"]
   P --> T["acr-api tick (5 min; first pass at startup)"]
   T --> D{"due units, oldest first, at most 500"}
   D -->|"thread: expires_at <= now"| X["expired thread"]
