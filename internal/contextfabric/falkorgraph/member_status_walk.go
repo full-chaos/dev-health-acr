@@ -123,6 +123,9 @@ type memberStatusWalk struct {
 	// returned (for a review status, the open pull requests read), held those
 	// of them holding the status, and kept the members the walk served.
 	read, kept int
+	// readIDs are the ids behind read (CHAOS-12352): a requested team
+	// narrowing counts the read's members inside the narrowing from them.
+	readIDs map[string]bool
 	// held are the ids of the authorized members the read decided hold the
 	// status.
 	held map[string]bool
@@ -160,6 +163,12 @@ type memberStatusWalk struct {
 func (w *memberStatusWalk) add(other memberStatusWalk) {
 	w.applied = w.applied || other.applied
 	w.read += other.read
+	for id := range other.readIDs {
+		if w.readIDs == nil {
+			w.readIDs = map[string]bool{}
+		}
+		w.readIDs[id] = true
+	}
 	w.kept += other.kept
 	w.reached = w.reached || other.reached
 	w.reachCut = w.reachCut || other.reachCut
@@ -241,7 +250,7 @@ func (a *Adapter) statusPagedHits(ctx context.Context, key, orgID string, state 
 	read := map[string]bool{}
 	kept := map[string]bool{}
 	pages := 0
-	defer func() { state.out.status.read, state.out.status.held = len(read), kept }()
+	defer func() { state.out.status.read, state.out.status.held, state.out.status.readIDs = len(read), kept, read }()
 	for _, source := range sources {
 		for skip := 0; ; skip += pageSize {
 			if state.collectLimit > 0 && len(kept) > state.collectLimit {

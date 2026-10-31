@@ -1496,9 +1496,20 @@ func (a *Adapter) DiscoverContext(ctx context.Context, principal storage.Princip
 	// names its arm -- and an undecided ownership keeps the population a lower
 	// bound.
 	statusMatched := statusWalk.matched
+	// CHAOS-12352: the members a cut status read checked, counted inside the
+	// narrowing for the pool cut disclosure (the walk's own count is the
+	// anchor's).
+	statusReadInScope := statusWalk.read
 	if statusWalk.applied && teamScope != nil {
 		if statusMatched, err = teamScope.inScopeIDs(ctx, statusPredicate.kind, statusWalk.matched); err != nil {
 			return contextfabric.GraphContext{}, graphNotProjectedError(err)
+		}
+		if statusWalk.poolCut {
+			readInScope, err := teamScope.inScopeIDs(ctx, statusPredicate.kind, statusWalk.readIDs)
+			if err != nil {
+				return contextfabric.GraphContext{}, graphNotProjectedError(err)
+			}
+			statusReadInScope = len(readInScope)
 		}
 	}
 	censusCoversThisCohort := (censusAdmitted && censusMembers > 0 && exactNameCensusCoversKind(declaredCohortKind)) ||
@@ -1545,6 +1556,12 @@ func (a *Adapter) DiscoverContext(ctx context.Context, principal storage.Princip
 		}
 		if statusWalk.poolCut {
 			statusPoolCut = contextfabric.MemberStatusPoolCut{Kind: statusPredicate.kind, Read: statusWalk.read, Pool: max(pool, 0)}
+			if teamScope != nil {
+				// CHAOS-12352 (Anchor: B): the pool is the anchor's count, never
+				// the requested team's, so it is not stated; the read counts the
+				// checked members inside the narrowing.
+				statusPoolCut.Read, statusPoolCut.Pool = statusReadInScope, 0
+			}
 		}
 		if a.config.Telemetry != nil {
 			a.config.Telemetry.RecordPullRequestStatusFilter(ctx, principal.OrgID, PullRequestStatusFilterDecision{
@@ -1593,7 +1610,15 @@ func (a *Adapter) DiscoverContext(ctx context.Context, principal storage.Princip
 	// status. That is an answer (zero matches), not a question with no members.
 	// A status read cut before it kept any member is an empty, cut member set,
 	// whatever it reached: the members past the cut were not checked.
-	statusNoMatch := (statusWalk.applied && (statusWalk.reached || statusWalk.poolCut) && statusWalk.kept == 0) ||
+	// CHAOS-12352: under a team narrowing the walk's kept count holds members
+	// outside the requested team; the narrowed matches decide whether none of
+	// the team's members holds the status (a measured zero, floored by the
+	// narrowing's own arm where ownership was missing).
+	statusKept := statusWalk.kept
+	if teamScope != nil && statusWalk.applied {
+		statusKept = len(statusMatched)
+	}
+	statusNoMatch := (statusWalk.applied && (statusWalk.reached || statusWalk.poolCut) && statusKept == 0) ||
 		(pullRequestFiltered.candidates > 0 && pullRequestFiltered.kept == 0) ||
 		(memberFiltered.candidates > 0 && memberFiltered.kept == 0)
 	// A pool filtered after its arms were cut counted the outside set over the
