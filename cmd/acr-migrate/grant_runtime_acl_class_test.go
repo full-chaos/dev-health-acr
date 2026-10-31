@@ -21,7 +21,7 @@ var (
 
 func migrationTables(t *testing.T) []string {
 	t.Helper()
-	files, err := filepath.Glob("../../migrations/postgres/*.sql")
+	files, err := filepath.Glob("../../migrations/postgres/[0-9]*.sql")
 	require.NoError(t, err)
 	require.NotEmpty(t, files, "no migration files found")
 	seen := map[string]bool{}
