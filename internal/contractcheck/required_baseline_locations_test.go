@@ -198,8 +198,93 @@ func TestRequiredBaselineWeighsConditionsAndAlternatives(t *testing.T) {
 			base:    one(`{"type":"object","properties":{"r":{},"s":{},"e":{}},"anyOf":[{"required":["r"]},{"required":["s","e"]}]}`),
 			current: one(`{"type":"object","properties":{"r":{},"s":{},"e":{},"as_of":{}},"anyOf":[{"required":["r"]},{"required":["as_of"]}]}`)},
 		{name: "a new anyOf one of whose alternatives needs only what the baseline required", base: base,
+			current: one(`{"type":"object","required":["a"],"properties":{"a":{},"b":{},"zz":{}},"anyOf":[{"required":["a"]},{"required":["b"]}],"allOf":[{"anyOf":[{"required":["a"]},{"required":["zz"]}]}]}`)},
+		// Codex #1817 r1 P2: a oneOf is exclusive, so an old body {a, zz}
+		// that meets two alternatives fails it. Only an unchanged oneOf is
+		// covered.
+		{name: "a new oneOf, even one an alternative of which the baseline required", base: base, refused: true, mentions: []string{`"zz"`},
 			current: one(`{"type":"object","required":["a"],"properties":{"a":{},"b":{},"zz":{}},"anyOf":[{"required":["a"]},{"required":["b"]}],"oneOf":[{"required":["a"]},{"required":["zz"]}]}`)},
+		{name: "a oneOf that gains an alternative", refused: true, mentions: []string{`"zz"`},
+			base:    one(`{"type":"object","properties":{"a":{},"b":{}},"oneOf":[{"required":["a"]},{"required":["b"]}]}`),
+			current: one(`{"type":"object","properties":{"a":{},"b":{},"zz":{}},"oneOf":[{"required":["a"]},{"required":["b"]},{"required":["zz"]}]}`)},
+		{name: "control: an unchanged oneOf naming a field properties never declared",
+			base:    one(`{"type":"object","properties":{"a":{}},"oneOf":[{"required":["a"]},{"required":["q"]}]}`),
+			current: one(`{"type":"object","properties":{"a":{}},"oneOf":[{"required":["a"]},{"required":["q"]}]}`)},
+		{name: "control: an unchanged oneOf",
+			base:    one(`{"type":"object","properties":{"a":{},"b":{}},"oneOf":[{"required":["a"]},{"required":["b"]}]}`),
+			current: one(`{"type":"object","properties":{"a":{},"b":{}},"oneOf":[{"required":["a"]},{"required":["b"]}]}`)},
 		{name: "a not names fields it forbids, not fields it requires", base: base,
 			current: one(`{"type":"object","required":["a"],"properties":{"a":{},"b":{}},"anyOf":[{"required":["a"]},{"required":["b"]}],"not":{"required":["zz"]}}`)},
 	})
+}
+
+// A condition inside an alternative still binds: the anyOf branch below
+// requires nothing itself, but its then requires zz of every body that
+// carries the declared field a.
+func TestRequiredBaselineChecksAConditionInsideAnAlternative(t *testing.T) {
+	runLocationCases(t, []locationCase{
+		{name: "anyOf branch whose then requires an undeclared field", refused: true, mentions: []string{`"zz"`},
+			base:    one(`{"type":"object","properties":{"a":{}}}`),
+			current: one(`{"type":"object","properties":{"a":{},"zz":{}},"anyOf":[{"if":{"required":["a"]},"then":{"required":["zz"]}}]}`)},
+	})
+}
+
+// A property name the baseline already admitted as an extra key is not new:
+// old bodies may carry it, so its members cannot become required.
+func TestRequiredBaselineTreatsAnAdmittedExtraKeyAsExisting(t *testing.T) {
+	runLocationCases(t, []locationCase{
+		{name: "a property matching a baseline patternProperties entry", refused: true, mentions: []string{`"id"`, `location "/x_new"`},
+			base:    one(`{"type":"object","properties":{"a":{}},"patternProperties":{"^x_":{"type":"object"}}}`),
+			current: one(`{"type":"object","properties":{"a":{},"x_new":` + itemSchema + `},"patternProperties":{"^x_":{"type":"object"}}}`)},
+		{name: "a property under a baseline additionalProperties schema", refused: true, mentions: []string{`"id"`, `location "/extra"`},
+			base:    one(`{"type":"object","properties":{"a":{}},"additionalProperties":{"type":"object"}}`),
+			current: one(`{"type":"object","properties":{"a":{},"extra":` + itemSchema + `},"additionalProperties":{"type":"object"}}`)},
+		{name: "control: a property under additionalProperties false is new",
+			base:    one(`{"type":"object","properties":{"a":{}},"additionalProperties":false}`),
+			current: one(`{"type":"object","properties":{"a":{},"extra":` + itemSchema + `},"additionalProperties":false}`)},
+	})
+}
+
+// Codex #1817 r1 P3s.
+func TestRequiredBaselineRoundOneEdges(t *testing.T) {
+	runLocationCases(t, []locationCase{
+		{name: "prefixItems positions are separate locations", refused: true, mentions: []string{`"id"`, `location "/[1]"`},
+			base:    one(`{"type":"array","prefixItems":[{"type":"object","properties":{"id":{}}},{"type":"object"}]}`),
+			current: one(`{"type":"array","prefixItems":[{"type":"object","properties":{"id":{}}},` + itemSchema + `]}`)},
+		{name: "a property whose $ref resolves to false was never optional", refused: true, mentions: []string{`"x"`},
+			base:    one(`{"type":"object","$defs":{"never":false},"properties":{"a":{},"x":{"$ref":"#/$defs/never"}}}`),
+			current: one(`{"type":"object","required":["x"],"$defs":{"never":{}},"properties":{"a":{},"x":{"$ref":"#/$defs/never"}}}`)},
+		{name: "required on a schema that admits no object has no effect",
+			base:    one(`{"type":"object","properties":{"s":{"type":"string"}}}`),
+			current: one(`{"type":"object","properties":{"s":{"type":"string","required":["x"]}}}`)},
+		{name: "control: required on a schema that may be an object counts", refused: true, mentions: []string{`"x"`},
+			base:    one(`{"type":"object","properties":{"s":{"type":["string","object"]}}}`),
+			current: one(`{"type":"object","properties":{"s":{"type":["string","object"],"required":["x"]}}}`)},
+	})
+}
+
+// A $ref by $id, not by file name, resolves through the target's $id.
+func TestRequiredBaselineResolvesARefByID(t *testing.T) {
+	common := func(required string) string {
+		return `{"$id":"https://example.invalid/schemas/shared.json","$defs":{"Needs":{"type":"object","required":[` + required + `],"properties":{"missing":{}}}}}`
+	}
+	result := `{"$id":"https://example.invalid/schemas/result.json","type":"object","properties":{"n":{"$ref":"shared.json#/$defs/Needs"}}}`
+	runLocationCases(t, []locationCase{
+		{name: "a ref by $id to an undeclared requirement", refused: true, mentions: []string{`"zz"`, `location "/n"`},
+			base:    map[string]string{"common.v1.schema.json": common(`"missing"`), "result.v1.schema.json": result},
+			current: map[string]string{"common.v1.schema.json": `{"$id":"https://example.invalid/schemas/shared.json","$defs":{"Needs":{"type":"object","required":["missing","zz"],"properties":{"missing":{},"zz":{}}}}}`, "result.v1.schema.json": result}},
+	})
+}
+
+// A schema nested deeper than the walk's bound is an error, never a pass.
+func TestRequiredBaselineRefusesASchemaDeeperThanTheBound(t *testing.T) {
+	deep := `{"type":"object","properties":{"a":{}}}`
+	for i := 0; i < maxLocationDepth+2; i++ {
+		deep = `{"type":"object","properties":{"n":` + deep + `}}`
+	}
+	dir := baselineFiles(t, one(deep))
+	commitFiles(t, dir, one(deep))
+	if err := CheckRequiredAgainstTag(RequiredBaselineOptions{Root: dir}); err == nil || !strings.Contains(err.Error(), "deeper") {
+		t.Fatalf("a schema deeper than the bound passed: %v", err)
+	}
 }

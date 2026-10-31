@@ -5,8 +5,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net/url"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -53,7 +55,7 @@ func CheckRequiredAgainstTag(options RequiredBaselineOptions) error {
 	// Every published schema at the tag and at HEAD, by file name: a $ref
 	// names another file by its base name (splitSchemaRef), so the facts of
 	// one schema can come from another (context_fabric_common.v1).
-	baseDocs, curDocs := schemaDocs{}, schemaDocs{}
+	baseDocs, curDocs := newSchemaDocs(), newSchemaDocs()
 	var names []string
 	for _, name := range strings.Split(strings.TrimSpace(files), "\n") {
 		if !strings.HasSuffix(name, ".schema.json") {
@@ -69,7 +71,7 @@ func CheckRequiredAgainstTag(options RequiredBaselineOptions) error {
 		if err := decoder.Decode(&baseline); err != nil {
 			return fmt.Errorf("%s at %s: %w", name, tag, err)
 		}
-		baseDocs[filepath.Base(name)] = baseline
+		baseDocs.add(filepath.Base(name), baseline)
 		names = append(names, name)
 	}
 	current, err := filepath.Glob(filepath.Join(root, filepath.FromSlash(publishedSchemaDir), "*", "*", "*.schema.json"))
@@ -81,13 +83,13 @@ func CheckRequiredAgainstTag(options RequiredBaselineOptions) error {
 		if err != nil {
 			return err
 		}
-		curDocs[filepath.Base(path)] = doc
+		curDocs.add(filepath.Base(path), doc)
 	}
 	var problems []string
 	compared := 0
 	for _, name := range names {
 		file := filepath.Base(name)
-		if _, ok := curDocs[file]; !ok {
+		if _, ok := curDocs.byFile[file]; !ok {
 			// Deleted or renamed since the tag: removal is not a required-field change.
 			continue
 		}
@@ -112,8 +114,46 @@ func CheckRequiredAgainstTag(options RequiredBaselineOptions) error {
 	return nil
 }
 
-// schemaDocs is a set of published schema documents by file base name.
-type schemaDocs map[string]any
+// schemaDocs is a set of published schema documents by file base name, with
+// each document's $id, so a $ref resolves against the referencing document's
+// $id as JSON Schema does, falling back to the file name (splitSchemaRef).
+type schemaDocs struct {
+	byFile map[string]any
+	byID   map[string]string
+}
+
+func newSchemaDocs() schemaDocs {
+	return schemaDocs{byFile: map[string]any{}, byID: map[string]string{}}
+}
+
+func (d schemaDocs) add(file string, doc any) {
+	d.byFile[file] = doc
+	if schema, ok := doc.(map[string]any); ok {
+		if id, ok := schema["$id"].(string); ok {
+			d.byID[strings.SplitN(id, "#", 2)[0]] = file
+		}
+	}
+}
+
+// resolve returns the file and JSON pointer a $ref in file names.
+func (d schemaDocs) resolve(file, ref string) (string, string) {
+	target, fragment := splitSchemaRef(file, ref)
+	if strings.HasPrefix(ref, "#") {
+		return target, fragment
+	}
+	if schema, ok := d.byFile[file].(map[string]any); ok {
+		if id, ok := schema["$id"].(string); ok {
+			base, errBase := url.Parse(id)
+			relative, errRef := url.Parse(strings.SplitN(ref, "#", 2)[0])
+			if errBase == nil && errRef == nil {
+				if byID, ok := d.byID[base.ResolveReference(relative).String()]; ok {
+					return byID, fragment
+				}
+			}
+		}
+	}
+	return target, fragment
+}
 
 // locationFacts is what one published schema says about each instance
 // location, a JSON pointer over the instance: "" is the body, "/name" a
@@ -135,6 +175,12 @@ type locationFacts struct {
 	shaped   map[string]bool                   // some applicable subschema has a properties map
 	seen     map[string]bool                   // some subschema other than false applies
 	groups   []alternativeGroup                // anyOf and oneOf branches' own requirements
+	// Extra keys an applicable subschema admits beside its properties: an
+	// additionalProperties or unevaluatedProperties other than false, and
+	// patternProperties. Old bodies may carry such a key, so a property
+	// named like one is not new (underNewProperty).
+	extraKeys map[string]bool
+	patterns  map[string][]string
 }
 
 // alternativeGroup is an anyOf or oneOf at a location: a body must meet one
@@ -145,10 +191,16 @@ type alternativeGroup struct {
 	location     string
 	alternatives [][]string
 	triggers     []trigger
+	// exclusive marks a oneOf: a body must meet exactly one alternative,
+	// so an old body meeting two fails it. A oneOf is covered only when no
+	// old body reaches it or a baseline oneOf there has the same
+	// alternatives (codex #1817 r1).
+	exclusive bool
 }
 
-// maxLocationDepth bounds the walk of a recursive schema. A recursion
-// repeats the facts it already produced, so nothing is lost.
+// maxLocationDepth bounds the walk. A recursive $ref stops on its own stack,
+// so only a schema this deeply nested reaches the bound, and that is an error
+// (a silent stop would be a pass on requirements never read).
 const maxLocationDepth = 64
 
 // trigger is a field that must be present at a location for a conditional
@@ -156,8 +208,8 @@ const maxLocationDepth = 64
 type trigger struct{ location, field string }
 
 func collectLocationFacts(docs schemaDocs, file string) (*locationFacts, error) {
-	facts := &locationFacts{required: map[string]map[string][][]trigger{}, declared: map[string]map[string]bool{}, shaped: map[string]bool{}, seen: map[string]bool{}}
-	return facts, facts.walk(docs, file, docs[file], "", map[string]bool{}, 0, nil, notInAlternative)
+	facts := &locationFacts{required: map[string]map[string][][]trigger{}, declared: map[string]map[string]bool{}, shaped: map[string]bool{}, seen: map[string]bool{}, extraKeys: map[string]bool{}, patterns: map[string][]string{}}
+	return facts, facts.walk(docs, file, docs.byFile[file], "", map[string]bool{}, 0, nil, notInAlternative)
 }
 
 // notInAlternative is the alternativeAt of a walk outside any anyOf or oneOf
@@ -192,9 +244,12 @@ func childLocation(location, name string) string {
 
 // alternativeAt is the location of the anyOf or oneOf branch being walked:
 // a requirement there belongs to the branch's alternative, not to the body.
+// It covers the branch's own required, $ref and allOf (directRequired); a
+// then, else or dependentSchemas inside the branch is a condition of its own
+// and counts as a requirement with its triggers.
 func (f *locationFacts) walk(docs schemaDocs, file string, node any, location string, refs map[string]bool, depth int, triggers []trigger, alternativeAt string) error {
 	if depth > maxLocationDepth {
-		return nil
+		return fmt.Errorf("schema nests deeper than %d steps at %s; the check cannot weigh it", maxLocationDepth, displayLocation(location))
 	}
 	switch schema := node.(type) {
 	case bool:
@@ -210,10 +265,10 @@ func (f *locationFacts) walk(docs schemaDocs, file string, node any, location st
 			if !ok {
 				return fmt.Errorf("$ref at %s must be a string", displayLocation(location))
 			}
-			target, fragment := splitSchemaRef(file, ref)
+			target, fragment := docs.resolve(file, ref)
 			key := target + "#" + fragment
 			if !refs[key] {
-				doc, ok := docs[target]
+				doc, ok := docs.byFile[target]
 				if !ok {
 					return fmt.Errorf("unresolved $ref %q", ref)
 				}
@@ -231,12 +286,14 @@ func (f *locationFacts) walk(docs schemaDocs, file string, node any, location st
 				}
 			}
 		}
-		if location != alternativeAt {
+		// required and dependentRequired constrain objects only: on a schema
+		// whose type admits no object they have no effect.
+		if location != alternativeAt && admitsObject(schema) {
 			for _, field := range stringList(schema["required"]) {
 				f.addRequired(location, field, triggers)
 			}
 		}
-		if dependent, ok := schema["dependentRequired"].(map[string]any); ok {
+		if dependent, ok := schema["dependentRequired"].(map[string]any); ok && admitsObject(schema) {
 			for key, fields := range dependent {
 				for _, field := range stringList(fields) {
 					f.addRequired(location, field, withTriggers(triggers, location, key))
@@ -246,7 +303,7 @@ func (f *locationFacts) walk(docs schemaDocs, file string, node any, location st
 		if properties, ok := schema["properties"].(map[string]any); ok {
 			f.shaped[location] = true
 			for name, sub := range properties {
-				if allowed, isBool := sub.(bool); isBool && !allowed {
+				if refusesEveryValue(docs, file, sub, 0) {
 					continue // forbidden there, never optional
 				}
 				addFact(f.declared, location, name)
@@ -257,6 +314,7 @@ func (f *locationFacts) walk(docs schemaDocs, file string, node any, location st
 		}
 		if patterns, ok := schema["patternProperties"].(map[string]any); ok {
 			for pattern, sub := range patterns {
+				f.patterns[location] = append(f.patterns[location], pattern)
 				if err := f.walk(docs, file, sub, location+"/~{"+pattern+"}", refs, depth+1, triggers, alternativeAt); err != nil {
 					return err
 				}
@@ -264,17 +322,23 @@ func (f *locationFacts) walk(docs schemaDocs, file string, node any, location st
 		}
 		for _, key := range []string{"additionalProperties", "unevaluatedProperties"} {
 			if sub, ok := schema[key]; ok {
+				if allowed, isBool := sub.(bool); !isBool || allowed {
+					f.extraKeys[location] = true
+				}
 				if err := f.walk(docs, file, sub, location+"/~{*}", refs, depth+1, triggers, alternativeAt); err != nil {
 					return err
 				}
 			}
 		}
+		// prefixItems (and the older array form of items) constrain one
+		// position each: "/[0]", "/[1]"; items, contains and
+		// unevaluatedItems any item: "/[]".
 		for _, key := range []string{"items", "prefixItems", "contains", "unevaluatedItems"} {
 			switch sub := schema[key].(type) {
 			case nil:
 			case []any:
-				for _, item := range sub {
-					if err := f.walk(docs, file, item, location+"/[]", refs, depth+1, triggers, alternativeAt); err != nil {
+				for index, item := range sub {
+					if err := f.walk(docs, file, item, location+"/["+strconv.Itoa(index)+"]", refs, depth+1, triggers, alternativeAt); err != nil {
 						return err
 					}
 				}
@@ -296,7 +360,7 @@ func (f *locationFacts) walk(docs schemaDocs, file string, node any, location st
 			if !ok {
 				continue
 			}
-			group := alternativeGroup{location: location, triggers: triggers}
+			group := alternativeGroup{location: location, triggers: triggers, exclusive: key == "oneOf"}
 			for _, branch := range branches {
 				group.alternatives = append(group.alternatives, directRequired(docs, file, branch, 0))
 				if err := f.walk(docs, file, branch, location, refs, depth+1, triggers, location); err != nil {
@@ -312,18 +376,18 @@ func (f *locationFacts) walk(docs schemaDocs, file string, node any, location st
 			if when, ok := schema["if"].(map[string]any); ok {
 				condition = stringList(when["required"])
 			}
-			if err := f.walk(docs, file, branch, location, refs, depth+1, withTriggers(triggers, location, condition...), alternativeAt); err != nil {
+			if err := f.walk(docs, file, branch, location, refs, depth+1, withTriggers(triggers, location, condition...), notInAlternative); err != nil {
 				return err
 			}
 		}
 		if branch, ok := schema["else"]; ok {
-			if err := f.walk(docs, file, branch, location, refs, depth+1, triggers, alternativeAt); err != nil {
+			if err := f.walk(docs, file, branch, location, refs, depth+1, triggers, notInAlternative); err != nil {
 				return err
 			}
 		}
 		if dependent, ok := schema["dependentSchemas"].(map[string]any); ok {
 			for key, branch := range dependent {
-				if err := f.walk(docs, file, branch, location, refs, depth+1, withTriggers(triggers, location, key), alternativeAt); err != nil {
+				if err := f.walk(docs, file, branch, location, refs, depth+1, withTriggers(triggers, location, key), notInAlternative); err != nil {
 					return err
 				}
 			}
@@ -340,9 +404,12 @@ func directRequired(docs schemaDocs, file string, node any, depth int) []string 
 		return nil
 	}
 	fields := stringList(schema["required"])
+	if !admitsObject(schema) {
+		fields = nil
+	}
 	if ref, ok := schema["$ref"].(string); ok {
-		target, fragment := splitSchemaRef(file, ref)
-		if doc, ok := docs[target]; ok {
+		target, fragment := docs.resolve(file, ref)
+		if doc, ok := docs.byFile[target]; ok {
 			if resolved, err := resolveJSONPointer(doc, fragment); err == nil {
 				fields = append(fields, directRequired(docs, target, resolved, depth+1)...)
 			}
@@ -426,6 +493,14 @@ func groupCovered(baseline *locationFacts, group alternativeGroup) bool {
 	if underNewProperty(baseline, group.location) || (len(group.triggers) > 0 && noOldBodyTriggers(baseline, [][]trigger{group.triggers})) {
 		return true
 	}
+	if group.exclusive {
+		for _, old := range baseline.groups {
+			if old.exclusive && old.location == group.location && sameAlternatives(old.alternatives, group.alternatives) {
+				return true
+			}
+		}
+		return false
+	}
 	for _, alternative := range group.alternatives {
 		met := true
 		for _, field := range alternative {
@@ -442,6 +517,9 @@ func groupCovered(baseline *locationFacts, group alternativeGroup) bool {
 		if old.location != group.location {
 			continue
 		}
+		if old.exclusive {
+			continue
+		}
 		every := true
 		for _, oldAlternative := range old.alternatives {
 			if !someSubset(group.alternatives, oldAlternative) {
@@ -452,6 +530,61 @@ func groupCovered(baseline *locationFacts, group alternativeGroup) bool {
 		if every {
 			return true
 		}
+	}
+	return false
+}
+
+func sameAlternatives(a, b [][]string) bool {
+	key := func(alternatives [][]string) string {
+		parts := make([]string, 0, len(alternatives))
+		for _, alternative := range alternatives {
+			fields := append([]string{}, alternative...)
+			sort.Strings(fields)
+			parts = append(parts, strings.Join(fields, "\x00"))
+		}
+		sort.Strings(parts)
+		return strings.Join(parts, "\x01")
+	}
+	return key(a) == key(b)
+}
+
+// admitsObject reports whether a schema's type allows an object (no type
+// allows anything).
+func admitsObject(schema map[string]any) bool {
+	switch kind := schema["type"].(type) {
+	case nil:
+		return true
+	case string:
+		return kind == "object"
+	case []any:
+		for _, k := range kind {
+			if k == "object" {
+				return true
+			}
+		}
+		return false
+	}
+	return true
+}
+
+// refusesEveryValue reports whether a schema is false, directly or through
+// its $ref.
+func refusesEveryValue(docs schemaDocs, file string, node any, depth int) bool {
+	switch schema := node.(type) {
+	case bool:
+		return !schema
+	case map[string]any:
+		ref, ok := schema["$ref"].(string)
+		if !ok || depth > maxLocationDepth {
+			return false
+		}
+		target, fragment := docs.resolve(file, ref)
+		doc, ok := docs.byFile[target]
+		if !ok {
+			return false
+		}
+		resolved, err := resolveJSONPointer(doc, fragment)
+		return err == nil && refusesEveryValue(docs, target, resolved, depth+1)
 	}
 	return false
 }
@@ -517,10 +650,30 @@ func underNewProperty(baseline *locationFacts, location string) bool {
 			parent = next
 			continue
 		}
-		if segment == "[]" || strings.HasPrefix(segment, "~{") {
+		if strings.HasPrefix(segment, "[") || strings.HasPrefix(segment, "~{") {
 			return false
 		}
+		if baseline.extraKeys[parent] || matchesAPattern(baseline.patterns[parent], unescapeSegment(segment)) {
+			return false // an old body may carry it as an extra key
+		}
 		return baseline.shaped[parent]
+	}
+	return false
+}
+
+func unescapeSegment(segment string) string {
+	return strings.ReplaceAll(strings.ReplaceAll(segment, "~1", "/"), "~0", "~")
+}
+
+// matchesAPattern reports whether name matches one of the patternProperties
+// patterns. A pattern Go cannot compile counts as a match: no exemption is
+// better than a wrong one.
+func matchesAPattern(patterns []string, name string) bool {
+	for _, pattern := range patterns {
+		re, err := regexp.Compile(pattern)
+		if err != nil || re.MatchString(name) {
+			return true
+		}
 	}
 	return false
 }
