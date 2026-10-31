@@ -86,9 +86,9 @@ func (s *Store) SweepRetention(ctx context.Context, now time.Time, limit int) (c
 
 // retentionProbeStatements are the kinds of statement the job runs, per
 // table, on no row: a SELECT and a DELETE on every table the job removes from,
-// and the UPDATE (also what SELECT ... FOR UPDATE needs) on the records. A
-// role missing any privilege dbacl.RetentionGrants declares is refused on one
-// of them.
+// and the UPDATE (also what SELECT ... FOR UPDATE needs) on the records. The
+// job runs as the runtime role (CHAOS-12244); a role missing any privilege
+// dbacl.RetentionPrivileges lists is refused on one of them.
 var retentionProbeStatements = func() []string {
 	var statements []string
 	for _, table := range []string{
@@ -230,8 +230,8 @@ func (s *Store) sweepRetentionThread(ctx context.Context, unit retentionThreadUn
 	var closedAt sql.NullTime
 	// No row lock: the organization's admission lock, held for the whole
 	// unit, already serializes it with every admission and delete, the only
-	// writers of a thread row (and the retention role holds no UPDATE on
-	// the threads, dbacl.RetentionGrants).
+	// writers of a thread row (and the job needs no UPDATE on the threads,
+	// dbacl.RetentionPrivileges).
 	err = tx.QueryRowContext(ctx, `
 SELECT expires_at, closed_at FROM acr.context_fabric_threads
  WHERE org_id = $1 AND owner_auth_method = $2 AND owner_subject = $3 AND thread_id = $4`, unit.orgID, unit.method, unit.subject, unit.threadID).Scan(&expiresAt, &closedAt)
