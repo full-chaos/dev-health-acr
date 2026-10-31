@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"database/sql"
 	"strings"
 	"testing"
 	"time"
@@ -109,6 +110,37 @@ func TestRuntimeRoleCanRunThePurgesTheRuntimeRuns(t *testing.T) {
 	// does not hold the privilege: the refusal names the class and the table.
 	disabled := newRuntimeRoleDatabase(t, ctx, runtimeRoleOptions{Role: "acr_purges_off_test"})
 	_, err = storagepostgres.NewWorkloadCredentialPurger(disabled.Runtime)(ctx, now, 10)
+	require.Error(t, err)
+	var class *storage.DependencyErrorClass
+	require.ErrorAs(t, err, &class)
+	require.Equal(t, "insufficient_privilege", class.Class)
+	require.Equal(t, "client_credentials", class.Table)
+}
+
+// CHAOS-12140: the browser family purge, as a runtime role granted exactly the
+// declaration with only the browser client on, runs (both statements and both
+// remaining probes); with the feature off the role holds no DELETE on
+// acr.client_credentials and the purge is refused there.
+func TestRuntimeRoleCanRunTheBrowserFamilyPurge(t *testing.T) {
+	ctx := context.Background()
+	now := time.Date(2026, 9, 1, 12, 0, 0, 0, time.UTC)
+	purge := func(db *sql.DB) error {
+		audit, err := storagepostgres.NewAuditStore(db)
+		require.NoError(t, err)
+		store, err := storagepostgres.NewBrowserRefreshStore(db, audit)
+		require.NoError(t, err)
+		if _, err := store.PurgeEndedFamilies(ctx, now, time.Hour, 10); err != nil {
+			return err
+		}
+		_, err = store.CountEndedFamiliesRemaining(ctx, now, time.Hour, 10)
+		return err
+	}
+
+	enabled := newRuntimeRoleDatabase(t, ctx, runtimeRoleOptions{Role: "acr_browser_purge_on_test", Features: dbacl.Features{dbacl.BrowserClient: true}})
+	require.NoError(t, purge(enabled.Runtime), "browser family purge with the browser client on")
+
+	disabled := newRuntimeRoleDatabase(t, ctx, runtimeRoleOptions{Role: "acr_browser_purge_off_test"})
+	err := purge(disabled.Runtime)
 	require.Error(t, err)
 	var class *storage.DependencyErrorClass
 	require.ErrorAs(t, err, &class)

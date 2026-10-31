@@ -73,7 +73,7 @@ func TestOrganizationThemeMixCountsASharedRepositoryOnceAgainstRealClickHouse(t 
 	read := func(subject contextfabric.SubjectRef) contextfabric.CanonicalFact {
 		t.Helper()
 		result, err := provider.ReadFacts(ctx, storage.Principal{OrgID: orgID}, contextfabric.FactQuery{
-			Time: contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent},
+			Time: investmentAllHistory(),
 			Kind: contextfabric.FactInvestment, Subjects: []contextfabric.SubjectRef{subject},
 		})
 		if err != nil || len(result.Facts) != 1 {
@@ -194,7 +194,7 @@ func TestOrganizationWithOnlyUnattributedEffortIsDisclosedAgainstRealClickHouse(
 		t.Fatalf("seed: %v", err)
 	}
 	result, err := provider.ReadFacts(ctx, storage.Principal{OrgID: orgID}, contextfabric.FactQuery{
-		Time: contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent},
+		Time: investmentAllHistory(),
 		Kind: contextfabric.FactInvestment, Subjects: []contextfabric.SubjectRef{organizationSubject(orgID), bareOrganizationSubject(orgID)},
 	})
 	if err != nil || len(result.Facts) != 1 {

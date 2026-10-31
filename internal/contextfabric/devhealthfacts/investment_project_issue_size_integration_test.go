@@ -87,7 +87,7 @@ func TestProjectMixesWeighAUnitLikeTheTeamLinkedMixAgainstRealClickHouse(t *test
 	read := func(subject contextfabric.SubjectRef) contextfabric.CanonicalFact {
 		t.Helper()
 		result, err := provider.ReadFacts(ctx, storage.Principal{OrgID: orgID}, contextfabric.FactQuery{
-			Time: contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent},
+			Time: investmentAllHistory(),
 			Kind: contextfabric.FactInvestment, Subjects: []contextfabric.SubjectRef{subject},
 		})
 		if err != nil || len(result.Facts) != 1 {

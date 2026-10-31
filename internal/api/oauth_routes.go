@@ -316,6 +316,25 @@ func (a *App) oauthTokenLimitKey(r *http.Request, clientID, secret string) strin
 	return a.oauthLimitKey(r, clientID)
 }
 
+// oauthAuthorizeRateLimited limits one /authorize. Every user of a
+// first-party browser client shares its public client_id, so a client key
+// would put every login of every org, and anyone who knows the id, in one
+// bucket (CHAOS-12156). A browser client's /authorize presents no secret, so
+// it is limited per source instead: the client address acr resolves (the
+// trusted-proxy walk of ACR_TRUSTED_PROXY_CIDRS), under a per-client ceiling
+// (AllowBrowserAuthorize). Every other client keeps oauthLimitKey.
+func (a *App) oauthAuthorizeRateLimited(w http.ResponseWriter, r *http.Request) bool {
+	clientID := r.URL.Query().Get("client_id")
+	limiter := a.runtime.DeviceAuthorizationLimiter
+	if clientID != "" && a.oauth.IsBrowserClient(clientID) {
+		source := "ip:" + a.clientIP(r)
+		return a.oauthRateLimited(w, r, oauthvocab.StepAuthorize, a.oauthLimitKey(r, clientID), func(client string) DeviceAuthorizationLimitDecision {
+			return limiter.AllowBrowserAuthorize(client, source)
+		})
+	}
+	return a.oauthRateLimited(w, r, oauthvocab.StepAuthorize, a.oauthLimitKey(r, clientID), limiter.AllowDeviceCreation)
+}
+
 // tokenRequestSecret is the secret a /token request presents for its grant.
 func tokenRequestSecret(r *http.Request) string {
 	switch r.PostForm.Get("grant_type") {
@@ -523,7 +542,7 @@ func (a *App) handleOAuthDeviceAuthorization(w http.ResponseWriter, r *http.Requ
 }
 
 func (a *App) handleOAuthAuthorize(w http.ResponseWriter, r *http.Request) {
-	if a.oauthRateLimited(w, r, oauthvocab.StepAuthorize, a.oauthLimitKey(r, r.URL.Query().Get("client_id")), a.runtime.DeviceAuthorizationLimiter.AllowDeviceCreation) {
+	if a.oauthAuthorizeRateLimited(w, r) {
 		return
 	}
 	query := r.URL.Query()

@@ -99,6 +99,9 @@ func (s *investmentSpan) reasonFor(subjectID, projectKey string, project bool, b
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if b.currentAxis {
+		return s.currentAxisReasonFor(subjectID, projectKey, project, b)
+	}
 	if project {
 		var reasons []string
 		if s.orgFound && b.start.Before(s.org) {
@@ -117,4 +120,29 @@ func (s *investmentSpan) reasonFor(subjectID, projectKey string, project bool, b
 	}
 	return fmt.Sprintf("%s: %s: the window starts %s but its earliest persisted work unit starts %s; the mix covers %s to %s only and the days before are not stored (not zero)",
 		investmentSpanReasonToken, subjectID, b.start.UTC().Format(time.RFC3339), earliest.UTC().Format(time.RFC3339), earliest.UTC().Format(time.RFC3339), b.end.UTC().Format(time.RFC3339))
+}
+
+// currentAxisReasonFor is reasonFor for a current-axis window. The window is
+// the answer's own (an evidence window or the default), stated by the answer,
+// and its bounds may come from the clock, so the reason names only the stored
+// instant, never the window's bounds. The caller holds s.mu.
+func (s *investmentSpan) currentAxisReasonFor(subjectID, projectKey string, project bool, b factTimeBound) string {
+	if project {
+		var reasons []string
+		if s.orgFound && b.start.Before(s.org) {
+			reasons = append(reasons, fmt.Sprintf("%s: %s: the window starts before the earliest persisted work unit of the organization, which starts %s",
+				investmentSpanReasonToken, subjectID, s.org.UTC().Format(time.RFC3339)))
+		}
+		if own, ok := s.byProject[projectKey]; ok && b.start.Before(own) {
+			reasons = append(reasons, fmt.Sprintf("%s: %s: this project's earliest linked unit overlapping the window starts %s, after the window starts; the history before the window was not read",
+				investmentProjectFirstUnitToken, subjectID, own.UTC().Format(time.RFC3339)))
+		}
+		return strings.Join(reasons, "; ")
+	}
+	earliest, ok := s.bySubject[subjectID]
+	if !ok || !b.start.Before(earliest) {
+		return ""
+	}
+	return fmt.Sprintf("%s: %s: the window starts before its earliest persisted work unit, which starts %s; the mix covers %s to the window end only and the days before are not stored (not zero)",
+		investmentSpanReasonToken, subjectID, earliest.UTC().Format(time.RFC3339), earliest.UTC().Format(time.RFC3339))
 }

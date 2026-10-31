@@ -158,7 +158,7 @@ func servedLinkedSetAndMixReads(t *testing.T, ctx context.Context, provider cont
 		mark := serverNowMicros(t, ctx, direct)
 		began := time.Now()
 		result, err := provider.ReadFacts(ctx, storage.Principal{OrgID: orgID, RepositoryScopes: []string{"*"}}, contextfabric.FactQuery{
-			Time: contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent}, Kind: contextfabric.FactInvestment,
+			Time: investmentAllHistory(), Kind: contextfabric.FactInvestment,
 			Subjects: []contextfabric.SubjectRef{teamSubject(linkedShapeTeam)},
 		})
 		wall := time.Since(began)

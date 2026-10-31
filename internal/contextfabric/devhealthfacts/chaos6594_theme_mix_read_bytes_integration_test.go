@@ -158,7 +158,7 @@ func TestThemeMixReadsScanWorkUnitInvestmentsOnceAgainstRealClickHouse(t *testin
 			var facts int
 			m := measureWorkUnitInvestmentsReads(t, ctx, direct, func() {
 				result, err := provider.ReadFacts(ctx, storage.Principal{OrgID: orgID}, contextfabric.FactQuery{
-					Time: contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent}, Kind: contextfabric.FactInvestment, Subjects: subjects(kind),
+					Time: investmentAllHistory(), Kind: contextfabric.FactInvestment, Subjects: subjects(kind),
 				})
 				if err != nil {
 					t.Fatalf("ReadFacts: %v\nserver: %s", err, lastServerException(ctx, direct))
@@ -304,7 +304,7 @@ func TestRepositoryThemeMixAcrossChunksIsCompleteAgainstRealClickHouse(t *testin
 	var facts int
 	m := measureWorkUnitInvestmentsReads(t, ctx, direct, func() {
 		result, err := provider.ReadFacts(ctx, storage.Principal{OrgID: orgID}, contextfabric.FactQuery{
-			Time: contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent}, Kind: contextfabric.FactInvestment, Subjects: subjects,
+			Time: investmentAllHistory(), Kind: contextfabric.FactInvestment, Subjects: subjects,
 		})
 		if err != nil {
 			t.Fatalf("ReadFacts: %v\nserver: %s", err, lastServerException(ctx, direct))

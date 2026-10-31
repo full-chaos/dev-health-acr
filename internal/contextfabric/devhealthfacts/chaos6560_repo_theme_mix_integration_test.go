@@ -60,7 +60,7 @@ func TestRepositoryThemeMixAgainstRealClickHouse(t *testing.T) {
 	read := func(label string) contextfabric.CanonicalFact {
 		t.Helper()
 		result, err := provider.ReadFacts(ctx, storage.Principal{OrgID: orgID}, contextfabric.FactQuery{
-			Time:     contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent},
+			Time:     investmentAllHistory(),
 			Kind:     contextfabric.FactInvestment,
 			Subjects: []contextfabric.SubjectRef{{Kind: contextfabric.SubjectRepository, CanonicalID: "repository:" + repoUUID(label), Label: label}},
 		})
@@ -171,7 +171,7 @@ func TestRepositoryThemeMixGitLabRangeAndChunkingAgainstRealClickHouse(t *testin
 		subjects = append(subjects, contextfabric.SubjectRef{Kind: contextfabric.SubjectRepository, CanonicalID: "repository:" + repoUUID(label), Label: label})
 	}
 	bulk, err := provider.ReadFacts(ctx, storage.Principal{OrgID: orgID}, contextfabric.FactQuery{
-		Time: contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent}, Kind: contextfabric.FactInvestment, Subjects: subjects,
+		Time: investmentAllHistory(), Kind: contextfabric.FactInvestment, Subjects: subjects,
 	})
 	if err != nil || len(bulk.Facts) != n {
 		t.Fatalf("bulk read: err=%v facts=%d, want %d", err, len(bulk.Facts), n)

@@ -31,7 +31,7 @@ import (
 // no evidence window, counts over the platform default trailing window. The
 // devhealthfacts provider-set test fails when a provider starts or stops
 // reading that window, so this list cannot drift from the providers.
-var serverDefaultWindowKinds = [...]FactKind{FactDeployments, FactIncidents, FactMetrics, FactPullRequests}
+var serverDefaultWindowKinds = [...]FactKind{FactDeployments, FactIncidents, FactInvestment, FactMetrics, FactPullRequests}
 
 // serverDefaultRelativeID is the platform default trailing window: the width
 // the default_trailing rollup window and windowDefaultPolicy share.
