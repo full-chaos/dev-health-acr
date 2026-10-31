@@ -96,6 +96,10 @@ type Store struct {
 	// under mu by AdmitSubmission with the turn it admits, and by
 	// CloseThread.
 	threads map[threadRowKey]contextfabric.ThreadRecord
+	// runEvents mirrors acr.context_fabric_investigation_run_events
+	// (CHAOS-11949), rows in seq order, guarded by mu. A run's rows go with
+	// its submission record.
+	runEvents map[contextfabric.RunKey][]contextfabric.RunEvent
 	// now stamps the updated_at a Save's completion writes; the submission
 	// methods take the caller's clock.
 	now func() time.Time
@@ -115,6 +119,7 @@ func NewStore() *Store {
 		reserved:    make(map[reservedResultKey]contextfabric.SubmissionKey),
 		usage:       make(map[usageKey]int64),
 		threads:     make(map[threadRowKey]contextfabric.ThreadRecord),
+		runEvents:   make(map[contextfabric.RunKey][]contextfabric.RunEvent),
 		now:         time.Now,
 	}
 }

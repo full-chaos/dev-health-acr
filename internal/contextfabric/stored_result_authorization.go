@@ -85,11 +85,17 @@ const (
 	// aggregated line per thread read, not one StoredResultAuthorization line
 	// per turn (that event is one line per request).
 	StoredResultSurfaceThread StoredResultSurface = "thread"
+	// StoredResultSurfaceSubmissionAttach (CHAOS-11949) is the attach to a
+	// leased run's event stream
+	// (GET /api/v1/context-fabric/investigations/submissions/{id}/events): its
+	// `result` terminal serves the run's final result exactly as the read by
+	// id would, decided again when the attach reaches it.
+	StoredResultSurfaceSubmissionAttach StoredResultSurface = "submission_attach"
 )
 
 // StoredResultSurfaceVocabulary is the closed set of surfaces.
-func StoredResultSurfaceVocabulary() [6]StoredResultSurface {
-	return [6]StoredResultSurface{StoredResultSurfaceResultByID, StoredResultSurfacePriorResult, StoredResultSurfaceAnswerReuse, StoredResultSurfaceEvidenceExpansion, StoredResultSurfaceFactRootRecheck, StoredResultSurfaceThread}
+func StoredResultSurfaceVocabulary() [7]StoredResultSurface {
+	return [7]StoredResultSurface{StoredResultSurfaceResultByID, StoredResultSurfacePriorResult, StoredResultSurfaceAnswerReuse, StoredResultSurfaceEvidenceExpansion, StoredResultSurfaceFactRootRecheck, StoredResultSurfaceThread, StoredResultSurfaceSubmissionAttach}
 }
 
 // StoredResultDecision is the served outcome.

@@ -48,6 +48,8 @@ var publicRoutes = []publicRoute{
 	{pattern: "POST " + ContextFabricInvestigationsPath, method: "POST", path: ContextFabricInvestigationsPath, gated: true},
 	{pattern: "GET " + ContextFabricInvestigationResultPath, method: "GET", path: "/api/v1/context-fabric/investigations/res_1", gated: true},
 	{pattern: "GET " + ContextFabricSubmissionStatusPath, method: "GET", path: "/api/v1/context-fabric/investigations/submissions/submission-0001", gated: true},
+	{pattern: "GET " + ContextFabricSubmissionEventsPath, method: "GET", path: "/api/v1/context-fabric/investigations/submissions/submission-0001/events", gated: true},
+	{pattern: "POST " + ContextFabricSubmissionCancelPath, method: "POST", path: "/api/v1/context-fabric/investigations/submissions/submission-0001/cancel", gated: true},
 	{pattern: "GET " + ContextFabricThreadsPath, method: "GET", path: ContextFabricThreadsPath, gated: true},
 	{pattern: "GET " + ContextFabricThreadPath, method: "GET", path: "/api/v1/context-fabric/threads/thread-0001", gated: true},
 	{pattern: "DELETE " + ContextFabricThreadPath, method: "DELETE", path: "/api/v1/context-fabric/threads/thread-0001", gated: true},
