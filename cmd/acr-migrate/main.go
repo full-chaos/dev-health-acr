@@ -154,15 +154,19 @@ func run(ctx context.Context, args []string, lookup lookupEnv, output io.Writer)
 	}
 	switch args[0] {
 	case "up":
-		count, err := runner.Apply(ctx, db)
+		report, err := runner.ApplyWithReport(ctx, db)
 		if err != nil {
 			return fmt.Errorf("apply migrations: %w", err)
 		}
-		if count == 0 {
-			_, err := fmt.Fprintln(output, "no migrations applied")
+		if report.Applied == 0 {
+			_, err = fmt.Fprintln(output, "no migrations applied")
+		} else {
+			_, err = fmt.Fprintf(output, "applied %d migrations\n", report.Applied)
+		}
+		if err != nil || report.Relabelled == 0 {
 			return err
 		}
-		_, err = fmt.Fprintf(output, "applied %d migrations\n", count)
+		_, err = fmt.Fprintf(output, "relabelled %d operator credential(s) to org_bearer\n", report.Relabelled)
 		return err
 	case "status":
 		status, err := runner.Status(ctx, db)

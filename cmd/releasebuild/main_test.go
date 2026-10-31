@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -174,11 +175,46 @@ func buildReleasebuildBinary(t *testing.T) string {
 	return binary
 }
 
+// releaseSourceRoot copies the client assets into a temp root with canonical
+// modes, so the result does not depend on the umask of the checkout.
 func releaseSourceRoot(t *testing.T) string {
 	t.Helper()
-	root, err := filepath.Abs(filepath.Join("..", ".."))
+	repo, err := filepath.Abs(filepath.Join("..", ".."))
 	if err != nil {
 		t.Fatalf("resolve repository root: %v", err)
+	}
+	root := t.TempDir()
+	err = filepath.WalkDir(filepath.Join(repo, "clients"), func(path string, entry fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		rel, err := filepath.Rel(repo, path)
+		if err != nil {
+			return err
+		}
+		target := filepath.Join(root, rel)
+		if entry.IsDir() {
+			return os.MkdirAll(target, 0o755)
+		}
+		info, err := entry.Info()
+		if err != nil {
+			return err
+		}
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		mode := os.FileMode(0o644)
+		if info.Mode().Perm()&0o100 != 0 {
+			mode = 0o755
+		}
+		if err := os.WriteFile(target, data, mode); err != nil {
+			return err
+		}
+		return os.Chmod(target, mode)
+	})
+	if err != nil {
+		t.Fatalf("copy client assets: %v", err)
 	}
 	return root
 }
