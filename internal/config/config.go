@@ -359,6 +359,12 @@ type Config struct {
 type lookupEnv func(string) (string, bool)
 
 // Load reads configuration from the process environment and validates it.
+// DefaultIdleTimeout is acr-api's server idle timeout when ACR_IDLE_TIMEOUT
+// is unset. The hosted API client closes an idle connection before this
+// (internal/sidecar clientIdleConnTimeout, CHAOS-12206), and its test pins the
+// two against each other.
+const DefaultIdleTimeout = defaultIdleTimeout
+
 func Load() (Config, error) {
 	return load(os.LookupEnv)
 }
