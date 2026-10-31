@@ -100,7 +100,6 @@ func TestPrincipalAccessRefusalsAndFailures(t *testing.T) {
 		want    error
 	}{
 		{"404 unknown organization", http.StatusNotFound, `{"detail":"Not found","code":"acr_organization_unknown"}`, "", entitlements.ErrPrincipalUnknown},
-		{"404 not a uuid", http.StatusNotFound, `{"detail":"Not found"}`, "", entitlements.ErrPrincipalUnknown},
 		{"400 invalid sid", http.StatusBadRequest, `{"detail":"Invalid request","code":"acr_access_invalid_sid"}`, accessSession, entitlements.ErrSessionInvalid},
 	} {
 		server, _, _ := accessServer(t, test.status, test.body)
@@ -116,6 +115,12 @@ func TestPrincipalAccessRefusalsAndFailures(t *testing.T) {
 		body    string
 		session string
 	}{
+		// codex #1798 r3: only the coded 404 is an unknown organization. A
+		// 404 without that code is a route Dev Health does not serve (an
+		// older go-api, a wrong origin): unavailable, never access_denied.
+		{"404 without a code", http.StatusNotFound, `{"detail":"Not found"}`, ""},
+		{"404 route not found", http.StatusNotFound, `404 page not found`, ""},
+		{"404 another code", http.StatusNotFound, `{"detail":"Not found","code":"route_not_found"}`, ""},
 		{"400 invalid query", http.StatusBadRequest, `{"detail":"Invalid request","code":"acr_access_invalid_query"}`, ""},
 		{"400 invalid sid without a session asked", http.StatusBadRequest, `{"code":"acr_access_invalid_sid"}`, ""},
 		{"401", http.StatusUnauthorized, `{}`, ""},
