@@ -58,8 +58,11 @@ every site that reads a grant class:
 - functions used as values;
 - conversions of a class to any other type (`string`, an interface, a named
   type of its own such as `type Wrapped GrantClass`), or implicitly to an
-  interface as an argument, composite element, struct field, assignment,
-  channel send or return;
+  interface as an argument, composite element, map key (in a literal or an
+  index), struct field, assignment, variable declaration, channel send or
+  return;
+- a typed constant of a class declared outside the class's own package: a
+  new class value its own package's pin cannot see;
 - collections of a class: a slice, array or map literal over a class, and a
   call argument of such a type (`slices.Contains`);
 - lookups in a map keyed by a class;
@@ -68,14 +71,17 @@ every site that reads a grant class:
   `needsProjectReach`, `orgWideFigureAllowed`, `sourceHealthRestricted`,
   `workItemRepositoryRestricted`, `admitsWildcard`).
 
-`decisions.tsv` also pins each class type's constant values. When a class
-gains, loses or renames a constant, the test fails and lists every row of that
-class to be decided again, comparisons as much as switches.
+`decisions.tsv` also pins each class type's constants as `Name=value`. When a
+class gains, loses or renames a constant, the test fails and lists every row of
+that class to be decided again, comparisons as much as switches. Two release
+targets that see different constants of one class fail the scan.
 
 It scans every distinct (GOOS, GOARCH) pair of the release matrix, and a
 decision inside a function literal counts for its enclosing declaration. It
 does not see a class inside a generic function, where it is a type parameter,
-inside a named struct transported whole, or through reflection or unsafe.
+inside a named struct transported whole, in a class-to-interface conversion
+inside a multi-value (tuple) assignment or call, or through reflection or
+unsafe.
 
 Every site has a row in `internal/cigates/grantclass/decisions.tsv` that says
 what `project_only` does there:

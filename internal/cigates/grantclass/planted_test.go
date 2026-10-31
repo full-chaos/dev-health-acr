@@ -26,35 +26,37 @@ func TestTheWalkerFindsEveryPlantedKind(t *testing.T) {
 	found := result.counts
 	const kinds = "internal/cigates/grantclass/testdata/planted/kinds/kinds.go"
 	want := map[site]int{
-		{kinds, "Compare", kindCompare}:               1,
-		{kinds, "SwitchPartial", kindSwitch}:          1,
-		{kinds, "SwitchPartial", kindSwitchPartial}:   1,
-		{kinds, "SwitchDefault", kindSwitch}:          1,
-		{kinds, "SwitchDefault", kindSwitchDefault}:   1,
-		{kinds, "SwitchExhaustive", kindSwitch}:       1,
-		{kinds, "TransportVar", kindTransport}:        1,
-		{kinds, "TransportMapKey", kindTransport}:     1,
-		{kinds, "DerivedField", kindCompare}:          1,
-		{kinds, "DerivedField", kindDerivedEscape}:    1,
-		{kinds, "DerivedLocal", kindCompare}:          1,
-		{kinds, "DerivedLocal", kindDerivedEscape}:    1,
-		{kinds, "Lookup", kindLookup}:                 1,
-		{kinds, "MethodValue", kindMethodValue}:       1,
-		{kinds, "TransportString", kindTransport}:     1,
-		{kinds, "TransportArgument", kindTransport}:   1,
-		{kinds, "TransportMap", kindTransport}:        1,
-		{kinds, "Classified", kindClassify}:           1,
-		{kinds, "RawGranted", kindRawGrant}:           1,
-		{kinds, "TwoDecisions", kindCompare}:          2,
-		{kinds, "CollectionSlice", kindCollection}:    1,
-		{kinds, "CollectionMapKey", kindCollection}:   1,
-		{kinds, "CollectionMapValue", kindCollection}: 1,
-		{kinds, "CollectionArgument", kindCollection}: 1,
-		{kinds, "TransportReturn", kindTransport}:     1,
-		{kinds, "TransportNamed", kindTransport}:      1,
-		{kinds, "TransportSend", kindTransport}:       1,
-		{kinds, "TransportField", kindTransport}:      1,
-		{kinds, "ClosureDecision", kindCompare}:       1,
+		{kinds, "Compare", kindCompare}:                 1,
+		{kinds, "SwitchPartial", kindSwitch}:            1,
+		{kinds, "SwitchPartial", kindSwitchPartial}:     1,
+		{kinds, "SwitchDefault", kindSwitch}:            1,
+		{kinds, "SwitchDefault", kindSwitchDefault}:     1,
+		{kinds, "SwitchExhaustive", kindSwitch}:         1,
+		{kinds, "TransportVar", kindTransport}:          1,
+		{kinds, "TransportMapKey", kindTransport}:       1,
+		{kinds, "DerivedField", kindCompare}:            1,
+		{kinds, "DerivedField", kindDerivedEscape}:      1,
+		{kinds, "DerivedLocal", kindCompare}:            1,
+		{kinds, "DerivedLocal", kindDerivedEscape}:      1,
+		{kinds, "Lookup", kindLookup}:                   1,
+		{kinds, "MethodValue", kindMethodValue}:         1,
+		{kinds, "TransportString", kindTransport}:       1,
+		{kinds, "TransportArgument", kindTransport}:     1,
+		{kinds, "TransportMap", kindTransport}:          1,
+		{kinds, "Classified", kindClassify}:             1,
+		{kinds, "RawGranted", kindRawGrant}:             1,
+		{kinds, "TwoDecisions", kindCompare}:            2,
+		{kinds, "CollectionSlice", kindCollection}:      1,
+		{kinds, "CollectionMapKey", kindCollection}:     1,
+		{kinds, "CollectionMapValue", kindCollection}:   1,
+		{kinds, "CollectionArgument", kindCollection}:   1,
+		{kinds, "TransportReturn", kindTransport}:       1,
+		{kinds, "TransportNamed", kindTransport}:        1,
+		{kinds, "TransportSend", kindTransport}:         1,
+		{kinds, "TransportField", kindTransport}:        1,
+		{kinds, "ClosureDecision", kindCompare}:         1,
+		{kinds, "const ExternalConstant", kindConstant}: 1,
+		{kinds, "TransportIndexKey", kindTransport}:     1,
 	}
 	if got, expected := render(found), render(want); got != expected {
 		t.Errorf("planted sites differ\n got:\n%s\nwant:\n%s", got, expected)
@@ -78,14 +80,18 @@ func scanPlanted(t *testing.T) scanResult {
 func TestAChangedClassVocabularyFailsWithEveryRowToReDecide(t *testing.T) {
 	result := scanPlanted(t)
 	const class = fixturesBase + "/classify.Class"
-	if got := strings.Join(result.vocabulary[class], ","); got != "a,b,c" {
-		t.Fatalf("planted vocabulary = %q, want a,b,c", got)
+	if got := strings.Join(result.vocabulary[class], ","); got != "A=a,B=b,C=c" {
+		t.Fatalf("planted vocabulary = %q, want A=a,B=b,C=c", got)
 	}
-	if problems := vocabularyProblems(result.vocabulary, map[string][]string{class: {"a", "b", "c"}}, result.classes); len(problems) != 0 {
+	if problems := vocabularyProblems(result.vocabulary, map[string][]string{class: {"A=a", "B=b", "C=c"}}, result.classes); len(problems) != 0 {
 		t.Fatalf("a pin that matches must pass, got %v", problems)
 	}
-	problems := vocabularyProblems(result.vocabulary, map[string][]string{class: {"a", "b"}}, result.classes)
-	if len(problems) != 1 || !strings.HasPrefix(problems[0], "class vocabulary changed: "+class+" pinned a,b, live a,b,c: re-decide these rows, then update the pin: ") {
+	// A renamed constant (same value, new name) changes the pin too.
+	if renamed := vocabularyProblems(result.vocabulary, map[string][]string{class: {"A=a", "B=b", "D=c"}}, result.classes); len(renamed) != 1 {
+		t.Fatalf("a renamed constant must fail the pin, got %v", renamed)
+	}
+	problems := vocabularyProblems(result.vocabulary, map[string][]string{class: {"A=a", "B=b"}}, result.classes)
+	if len(problems) != 1 || !strings.HasPrefix(problems[0], "class vocabulary changed: "+class+" pinned A=a,B=b, live A=a,B=b,C=c: re-decide these rows, then update the pin: ") {
 		t.Fatalf("a class that gained a constant must fail once with the re-decide list, got %v", problems)
 	}
 	const kinds = "internal/cigates/grantclass/testdata/planted/kinds/kinds.go"
@@ -177,5 +183,20 @@ func TestTheScanCoversEveryReleaseTarget(t *testing.T) {
 		if !got[pair] {
 			t.Errorf("release target %v is not scanned", pair)
 		}
+	}
+}
+
+// Two release targets that see a class with different constants fail the
+// scan (codex r3): one target must not overwrite the other.
+func TestReleaseTargetsThatDisagreeOnAVocabularyFail(t *testing.T) {
+	merged := map[string][]string{}
+	if problem := mergeVocabulary(merged, "x.Class", []string{"A=a", "B=b"}); problem != "" {
+		t.Fatalf("first target: %q, want none", problem)
+	}
+	if problem := mergeVocabulary(merged, "x.Class", []string{"A=a", "B=b"}); problem != "" {
+		t.Fatalf("an agreeing target: %q, want none", problem)
+	}
+	if problem := mergeVocabulary(merged, "x.Class", []string{"A=a", "B=b", "C=c"}); !strings.HasPrefix(problem, "class vocabulary differs between release targets: x.Class") {
+		t.Fatalf("a disagreeing target: %q, want the differs problem", problem)
 	}
 }

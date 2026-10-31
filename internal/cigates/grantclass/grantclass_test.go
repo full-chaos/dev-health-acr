@@ -66,7 +66,8 @@
 // NOT covered, stated: a class value inside a generic function, where it is a
 // type parameter and its comparisons are not class-typed; a named struct that
 // carries a class field, transported whole (the struct passed as an
-// interface, its field read elsewhere); reflection and unsafe; a decision made by reading RepositoryScopes directly outside the
+// interface, its field read elsewhere); a class-to-interface conversion
+// inside a multi-value (tuple) assignment or call; reflection and unsafe; a decision made by reading RepositoryScopes directly outside the
 // raw-grant classifiers (c2's sentinel covers those); generated code outside
 // every release build (pinned by name, as in rowsclose).
 package grantclass
@@ -139,8 +140,12 @@ var pinnedOutOfScope = []string{
 }
 
 const (
-	kindCompare       = "compare"
-	kindSwitch        = "switch"
+	kindCompare = "compare"
+	kindSwitch  = "switch"
+	// kindConstant is a typed constant of a class declared OUTSIDE the
+	// class's own package: a new class value the defining package's pin
+	// cannot see (codex r3).
+	kindConstant      = "constant"
 	kindSwitchPartial = "switch-partial"
 	kindSwitchDefault = "switch-default"
 	kindDerivedEscape = "derived-escape"
@@ -210,6 +215,18 @@ type scanResult struct {
 	loaded     map[string]bool
 }
 
+// mergeVocabulary adds one release target's vocabulary of a class, and names
+// the disagreement when another target saw a different one (codex r3): a
+// constant behind a build tag must not vanish from the pin check because a
+// later target overwrote it.
+func mergeVocabulary(merged map[string][]string, class string, values []string) string {
+	if prior, ok := merged[class]; ok && strings.Join(prior, ",") != strings.Join(values, ",") {
+		return fmt.Sprintf("class vocabulary differs between release targets: %s %s vs %s", class, strings.Join(prior, ","), strings.Join(values, ","))
+	}
+	merged[class] = values
+	return ""
+}
+
 func scan(t *testing.T, root string, patterns []string) scanResult {
 	t.Helper()
 	targets := releaseTargets()
@@ -246,7 +263,9 @@ func scan(t *testing.T, root string, patterns []string) scanResult {
 			}
 		}
 		for class, values := range result.vocabulary {
-			out.vocabulary[class] = values
+			if problem := mergeVocabulary(out.vocabulary, class, values); problem != "" {
+				out.problems = append(out.problems, problem)
+			}
 		}
 	}
 	sort.Strings(out.problems)
@@ -399,8 +418,13 @@ func siteHits(info *types.Info, stack []ast.Node, derived map[types.Object]strin
 	var hits []hit
 	switch n := node.(type) {
 	case *ast.IndexExpr:
-		if m, ok := types.Unalias(info.TypeOf(n.X)).Underlying().(*types.Map); ok && isClass(m.Key()) {
-			hits = append(hits, hit{kindLookup, typeClass(m.Key())})
+		if m, ok := types.Unalias(info.TypeOf(n.X)).Underlying().(*types.Map); ok {
+			if isClass(m.Key()) {
+				hits = append(hits, hit{kindLookup, typeClass(m.Key())})
+			} else if isInterface(m.Key()) && isClass(info.TypeOf(n.Index)) {
+				// m[c] with an interface key converts the class to it.
+				hits = append(hits, hit{kindTransport, typeClass(info.TypeOf(n.Index))})
+			}
 		}
 	case *ast.BinaryExpr:
 		if n.Op == token.EQL || n.Op == token.NEQ {
@@ -468,6 +492,13 @@ func siteHits(info *types.Info, stack []ast.Node, derived map[types.Object]strin
 			}
 		}
 	case *ast.ValueSpec:
+		for _, name := range n.Names {
+			if c, ok := info.Defs[name].(*types.Const); ok {
+				if named := className(c.Type()); named != nil && c.Pkg() != named.Obj().Pkg() {
+					hits = append(hits, hit{kindConstant, classKey(named)})
+				}
+			}
+		}
 		for i, value := range n.Values {
 			if i >= len(n.Names) || !isClass(info.TypeOf(value)) {
 				continue
@@ -728,7 +759,7 @@ func collectionClass(t types.Type) string {
 // class type, and whether it has a default clause.
 func switchCoverage(info *types.Info, stmt *ast.SwitchStmt, named *types.Named) (partial, hasDefault bool) {
 	want := map[string]bool{}
-	for _, value := range classVocabulary(named) {
+	for _, value := range classValues(named) {
 		want[value] = true
 	}
 	seen := map[string]bool{}
@@ -787,17 +818,30 @@ func typeClass(t types.Type) string {
 	return ""
 }
 
-// classVocabulary is the sorted string values of the constants of the class
-// type declared in its own package.
+// classVocabulary is the sorted Name=value entries of the constants of the
+// class type declared in its own package. The name is pinned with the value,
+// so a renamed constant changes the pin as much as a new one (codex r3); a
+// constant declared in another package is a site of its own (kindConstant).
 func classVocabulary(named *types.Named) []string {
-	var values []string
+	var entries []string
 	scope := named.Obj().Pkg().Scope()
 	for _, name := range scope.Names() {
 		if c, ok := scope.Lookup(name).(*types.Const); ok && types.Identical(c.Type(), named) && c.Val().Kind() == constant.String {
-			values = append(values, constant.StringVal(c.Val()))
+			entries = append(entries, name+"="+constant.StringVal(c.Val()))
 		}
 	}
-	sort.Strings(values)
+	sort.Strings(entries)
+	return entries
+}
+
+// classValues is the value half of a class's vocabulary entries, for the
+// switch check: a case names a value, not a constant.
+func classValues(named *types.Named) []string {
+	var values []string
+	for _, entry := range classVocabulary(named) {
+		_, value, _ := strings.Cut(entry, "=")
+		values = append(values, value)
+	}
 	return values
 }
 
@@ -844,6 +888,9 @@ func declSymbol(declaration ast.Decl) string {
 			switch spec := d.Specs[0].(type) {
 			case *ast.ValueSpec:
 				if len(spec.Names) > 0 {
+					if d.Tok == token.CONST {
+						return "const " + spec.Names[0].Name
+					}
 					return "var " + spec.Names[0].Name
 				}
 			case *ast.TypeSpec:

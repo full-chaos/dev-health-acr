@@ -1,10 +1,10 @@
 # Grant-class decisions: file<TAB>symbol<TAB>kind<TAB>count<TAB>decision<TAB>note. See grantclass_test.go and docs/design/context-fabric-project-only-scope.md.
 # decision: r-sub (restricted path is right for project_only), proj (project-aware logic due, ticket named), deny (refused), leave (repository-only, sentinel keeps it fail closed), consent (original consent grant), vocab (mapping, vocabulary or telemetry).
 # #vocab<TAB>class type<TAB>its sorted constant values: when a class gains, loses or renames a constant the test lists every row of that class to re-decide; update the pin after.
-#vocab	github.com/full-chaos/dev-health-acr/internal/auth.GrantClass	project_only,restricted,universal,unrestricted
-#vocab	github.com/full-chaos/dev-health-acr/internal/contextfabric.StoredResultPrincipalScope	restricted,universal,unrestricted
-#vocab	github.com/full-chaos/dev-health-acr/internal/contextfabric/directread.CallerClass	restricted,unrestricted
-#vocab	github.com/full-chaos/dev-health-acr/internal/contextfabric/directread/gatevocab.PrincipalClass	restricted,universal,unrestricted
+#vocab	github.com/full-chaos/dev-health-acr/internal/auth.GrantClass	GrantProjectOnly=project_only,GrantRestricted=restricted,GrantUniversal=universal,GrantUnrestricted=unrestricted
+#vocab	github.com/full-chaos/dev-health-acr/internal/contextfabric.StoredResultPrincipalScope	StoredResultScopeRestricted=restricted,StoredResultScopeUniversal=universal,StoredResultScopeUnrestricted=unrestricted
+#vocab	github.com/full-chaos/dev-health-acr/internal/contextfabric/directread.CallerClass	CallerRestricted=restricted,CallerUnrestricted=unrestricted
+#vocab	github.com/full-chaos/dev-health-acr/internal/contextfabric/directread/gatevocab.PrincipalClass	ClassRestricted=restricted,ClassUniversal=universal,ClassUnrestricted=unrestricted
 internal/api/context_fabric_data_catalog_route.go	App.contextFabricDataCatalogHandler	classify	1	r-sub	the catalog shows the principal class; project_only reads as restricted, so the catalog states the restricted operations (12107 v2 inventory)
 internal/api/context_fabric_data_catalog_route.go	App.contextFabricDataCatalogHandler	derived-escape	1	r-sub	the catalog shows the principal class; project_only reads as restricted, so the catalog states the restricted operations (12107 v2 inventory)
 internal/auth/grant_class.go	GrantClass.IsRestricted	switch	1	vocab	the restricted-subtype rule of the grant class itself (restricted and project_only)
@@ -44,6 +44,7 @@ internal/contextfabric/directread/operation_runner.go	run.gateAndScope	compare	1
 internal/contextfabric/directread/principal_class.go	ClassifyPrincipal	classify	2	vocab	the mapping from auth.GrantClass to the subject-gate principal class
 internal/contextfabric/directread/principal_class.go	ClassifyPrincipal	derived-escape	1	vocab	the mapping from auth.GrantClass to the subject-gate principal class
 internal/contextfabric/directread/principal_class.go	PrincipalClassForGrant	switch	1	vocab	the mapping from auth.GrantClass to the subject-gate principal class
+internal/contextfabric/directread/principal_class.go	const ClassUnrestricted	constant	3	vocab	the three gatevocab.PrincipalClass constants re-exported unchanged (same names and values); a constant added here would be a new class value outside gatevocab and is refused by this row's count
 internal/contextfabric/directread/read_relationships.go	RelationshipsReader.gateEdges	classify	1	r-sub	restricted callers gate every edge (12107 v2 inventory read_relationships.go:743); E1 for project_only is c3 CHAOS-12299
 internal/contextfabric/directread/read_relationships.go	RelationshipsReader.gateEdges	compare	1	r-sub	restricted callers gate every edge (12107 v2 inventory read_relationships.go:743); E1 for project_only is c3 CHAOS-12299
 internal/contextfabric/directread/relationships_telemetry.go	RelationshipsReadLogArgs	classify	1	vocab	telemetry: the principal class written to the log (closed vocabulary)

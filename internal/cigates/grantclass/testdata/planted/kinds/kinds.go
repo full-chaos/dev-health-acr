@@ -186,3 +186,13 @@ func TransportVar(c classify.Class) any {
 func TransportMapKey(c classify.Class) map[any]int {
 	return map[any]int{c: 1}
 }
+
+// ExternalConstant is a typed constant of the planted class declared outside
+// its own package: a new class value (constant kind).
+const ExternalConstant classify.Class = "external"
+
+// TransportIndexKey converts the class to an interface map key by indexing.
+func TransportIndexKey(c classify.Class) int {
+	keyed := map[any]int{}
+	return keyed[c]
+}
