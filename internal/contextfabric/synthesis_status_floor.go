@@ -249,6 +249,12 @@ func populationTruncatedNoMemberRowHolds(result InvestigationResult) bool {
 	return false
 }
 
+// ProjectNarrowingUnverifiedRaw is the Raw (and the degraded reason) of the
+// degrading read_population_unverified detail the graph read adds when it could
+// not verify a requested project narrowing (CHAOS-12231; falkorgraph writes it
+// from this constant).
+const ProjectNarrowingUnverifiedRaw = "project_narrowing_unverified"
+
 // ApplyServedStatusFloors is the one apply function of the served-status floors
 // that read only the finished document. Every serving point calls it: the
 // engine's late writers (fresh, reuse, vetoes) and the stored-result read
