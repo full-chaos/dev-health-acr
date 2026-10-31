@@ -15,11 +15,17 @@ FROM --platform=$BUILDPLATFORM ${ACR_IMAGE_MIRROR_PREFIX}golang:1.27.3-alpine3.2
 
 ARG TARGETOS
 ARG TARGETARCH
-ARG VERSION=0.0.0-dev
+ARG VERSION
 ARG COMMIT=unknown
 ARG BUILD_DATE=1970-01-01T00:00:00Z
 ARG SOURCE_DATE_EPOCH=0
 ARG BUILD_CACHE_ID=default
+
+# CHAOS-12198: VERSION has no default. An image built without it stamped
+# 0.0.0-dev into every binary, and hosted acr-mcp then refused every MCP call
+# (502 upstream_incompatible: older than the API's minimum sidecar version).
+# Checked before any work, so a build with no version fails at once.
+RUN [ -n "${VERSION}" ] || { echo 'VERSION is required: build with --build-arg VERSION=<version> (scripts/container/build.sh takes it from CONTAINER_VERSION)' >&2; exit 1; }
 
 WORKDIR /src
 
@@ -56,7 +62,7 @@ RUN --mount=type=cache,id=acr-go-build-${BUILD_CACHE_ID},target=/root/.cache/go-
 
 FROM gcr.io/distroless/static-debian12:nonroot@sha256:1b7b9f0f0e0a1d2155f531db587cc48ec26aaf97ab64364225f5bf18a054e66a AS acr-api
 
-ARG VERSION=0.0.0-dev
+ARG VERSION
 ARG COMMIT=unknown
 ARG BUILD_DATE=1970-01-01T00:00:00Z
 
@@ -99,7 +105,7 @@ RUN rm -f /mcp-root/usr/bin/sh /mcp-root/usr/bin/dash && \
 
 FROM scratch AS acr-mcp
 
-ARG VERSION=0.0.0-dev
+ARG VERSION
 ARG COMMIT=unknown
 ARG BUILD_DATE=1970-01-01T00:00:00Z
 

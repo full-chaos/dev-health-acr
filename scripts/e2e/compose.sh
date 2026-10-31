@@ -221,7 +221,8 @@ write_go_api_envelope_material() {
 ensure_image() {
   if [[ -z "$IMAGE" ]]; then
     local tag="${PROJECT}-acr-api:local"
-    CONTAINER_IMAGE="$tag" "$REPO_ROOT/scripts/container/build.sh" acr-api >/dev/null
+    # CHAOS-12198: the image version has no default; this test image names one.
+    CONTAINER_VERSION=0.0.0-e2e CONTAINER_IMAGE="$tag" "$REPO_ROOT/scripts/container/build.sh" acr-api >/dev/null
     IMAGE="${tag}@$(docker image inspect "$tag" --format '{{.Id}}')"
   fi
   [[ "$IMAGE" == *@sha256:* ]] || die 'ACR_E2E_IMAGE must be an immutable digest reference'

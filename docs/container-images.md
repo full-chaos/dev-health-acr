@@ -258,7 +258,22 @@ runs `acr-migrate up` successfully from the API image, reruns it to prove the
 no-op path is idempotent, and inspects migration status. Fixture credentials and
 DSNs remain process-local and are never printed or written to reports.
 
+Every image build names its version (CHAOS-12198). The Dockerfile's `VERSION`
+build-arg and `scripts/container/build.sh`'s `CONTAINER_VERSION` have no
+default, and a build without one fails before any work, naming the variable.
+An image with no version used to report `0.0.0-dev`, and hosted acr-mcp then
+refused every MCP call with 502 `upstream_incompatible`, because `0.0.0-dev` is
+older than the API's minimum sidecar version (`ACR_MINIMUM_SIDECAR_VERSION`,
+`0.1.0` by default). The release workflow passes the release version. CI's
+reproducibility and scan jobs pass `0.0.0-ci`, and the smoke and e2e harnesses
+pass their own test version: those images are never released. A hand build of
+an acr-mcp image that will serve hosted MCP calls passes at least the API's
+minimum, for example `docker build --target acr-mcp --build-arg VERSION=0.1.0 .`
+or `CONTAINER_VERSION=0.1.0 make container-oci`. `make container-test` passes
+its own test version and needs none.
+
 ```bash
+export CONTAINER_VERSION=0.1.0  # required by every image build (CHAOS-12198)
 make container-contract
 make container-pins
 make container-test

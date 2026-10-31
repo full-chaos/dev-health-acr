@@ -2247,6 +2247,9 @@ jobs:
       # for why (GHCR package write access is per-creating-repo, not shared
       # org-wide; the flat path 403'd against an existing ops-owned package).
       ACR_IMAGE_MIRROR_PREFIX: ghcr.io/${{ github.repository }}/
+      # CHAOS-12198: an image build has no default version; these images are
+      # built to be compared and scanned, never released, so they say so.
+      CONTAINER_VERSION: 0.0.0-ci
     steps:
       # actions/checkout v7.0.0
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
@@ -2318,6 +2321,9 @@ jobs:
       # for why (GHCR package write access is per-creating-repo, not shared
       # org-wide; the flat path 403'd against an existing ops-owned package).
       ACR_IMAGE_MIRROR_PREFIX: ghcr.io/${{ github.repository }}/
+      # CHAOS-12198: an image build has no default version; these images are
+      # built to be compared and scanned, never released, so they say so.
+      CONTAINER_VERSION: 0.0.0-ci
     steps:
       # actions/checkout v7.0.0
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0

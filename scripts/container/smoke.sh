@@ -12,6 +12,9 @@ api_image="acr-api:smoke-${invocation_id}"
 mcp_image="acr-mcp:smoke-${invocation_id}"
 prepared_context="${tmp_dir}/context"
 raw_build_log="${tmp_dir}/raw-build.log"
+raw_unversioned_log="${tmp_dir}/raw-unversioned-build.log"
+# CHAOS-12198: the image version has no default; every build here names one.
+smoke_version="0.0.0-smoke"
 raw_context_image="acr-build-context:smoke-${invocation_id}"
 raw_context_container=""
 raw_context_export="${tmp_dir}/raw-context.tar"
@@ -76,7 +79,21 @@ fi
 # actually built here.
 raw_syntax_ref="$(grep -oE '^# syntax=(.+)$' "${snapshot}/Dockerfile" | sed -E 's/^# syntax=//')"
 [[ -n "$raw_syntax_ref" ]] || fail 'could not resolve the "# syntax=" directive from the smoke build snapshot'
+# CHAOS-12198: the Dockerfile itself refuses a build with no VERSION, before
+# any work: the raw build path has no wrapper to catch it.
+if docker buildx build --target build --tag "${raw_context_image}-unversioned" \
+  --build-arg "ACR_IMAGE_MIRROR_PREFIX=${ACR_IMAGE_MIRROR_PREFIX:-}" \
+  --build-arg "BUILDKIT_SYNTAX=${ACR_IMAGE_MIRROR_PREFIX:-}${raw_syntax_ref}" \
+  --provenance=false --sbom=false "$snapshot" >"$raw_unversioned_log" 2>&1; then
+  cat "$raw_unversioned_log" >&2
+  fail 'the Dockerfile built with no VERSION build-arg'
+fi
+grep -Fq 'VERSION is required' "$raw_unversioned_log" || {
+  cat "$raw_unversioned_log" >&2
+  fail 'the Dockerfile refused a build with no VERSION without naming VERSION'
+}
 if ! docker buildx build --target build --tag "$raw_context_image" --load \
+  --build-arg "VERSION=${smoke_version}" \
   --build-arg "ACR_IMAGE_MIRROR_PREFIX=${ACR_IMAGE_MIRROR_PREFIX:-}" \
   --build-arg "BUILDKIT_SYNTAX=${ACR_IMAGE_MIRROR_PREFIX:-}${raw_syntax_ref}" \
   --provenance=false --sbom=false "$snapshot" >"$raw_build_log" 2>&1; then
@@ -95,7 +112,7 @@ fi
 
 set +e
 CONTAINER_SOURCE_ROOT="$snapshot" CONTAINER_CONTEXT="$snapshot" CONTAINER_ALLOW_DIRTY=1 \
-  "${repo_root}/scripts/container/build.sh" acr-api >"$ignored_build_log" 2>&1
+  CONTAINER_VERSION="$smoke_version" "${repo_root}/scripts/container/build.sh" acr-api >"$ignored_build_log" 2>&1
 ignored_build_status=$?
 set -e
 [[ "$ignored_build_status" -ne 0 ]] || fail 'container build accepted an ignored source-tree file'
@@ -103,7 +120,7 @@ grep -Fq 'ignored files exist inside container source paths' "$ignored_build_log
 
 rm -f "$unmatched_file_one" "$unmatched_file_two" "$ignored_nested_file"
 CONTAINER_SOURCE_ROOT="$snapshot" CONTAINER_CONTEXT="$snapshot" CONTAINER_ALLOW_DIRTY=1 \
-  CONTAINER_IMAGE="$api_image" "${repo_root}/scripts/container/build.sh" acr-api
+  CONTAINER_VERSION="$smoke_version" CONTAINER_IMAGE="$api_image" "${repo_root}/scripts/container/build.sh" acr-api
 CONTAINER_SOURCE_ROOT="$snapshot" CONTAINER_CONTEXT="$snapshot" CONTAINER_ALLOW_DIRTY=1 \
-  CONTAINER_IMAGE="$mcp_image" "${repo_root}/scripts/container/build.sh" acr-mcp
+  CONTAINER_VERSION="$smoke_version" CONTAINER_IMAGE="$mcp_image" "${repo_root}/scripts/container/build.sh" acr-mcp
 ACR_CONTAINER_SECRET_SENTINEL="$sentinel" "${repo_root}/scripts/container/verify.sh" "$api_image" "$mcp_image"
