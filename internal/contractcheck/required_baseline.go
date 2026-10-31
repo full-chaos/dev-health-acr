@@ -53,7 +53,9 @@ type RequiredBaselineOptions struct {
 // every field its baseline alternative required, and besides only fields
 // that alternative declared (pairCovered). A group with an inline
 // alternative keeps the earlier rules. An uncovered group always refuses
-// (groupReport): it names what its alternatives gained, else the fields no
+// (groupReport). A paired one names the fields its alternatives gained that
+// their baseline branches never declared, and each field an alternative no
+// longer requires on a line of its own. Another names the fields no
 // baseline alternative there required, else the fields neither required nor
 // declared outright there, else every field it requires, else the group
 // itself. The last two close an existing silent pass: before CHAOS-12331 an
@@ -76,6 +78,12 @@ type RequiredBaselineOptions struct {
 // retargeted, added or removed alternative. None of these occurs in the
 // release history (prod-rev49 to prod-rev67). A false refusal is loud; widen
 // the rule only with a real schema that hits it.
+//
+// Two limits accept, by design. The check does not weigh values: a const,
+// enum or type edit is not seen, so a $ref alternative whose discriminator
+// changed still pairs by its target. And a declaration in an enclosing
+// branch meets a requirement in a branch inside it, as a declaration outside
+// every branch meets one anywhere at its location.
 func CheckRequiredAgainstTag(options RequiredBaselineOptions) error {
 	root, err := findRoot(options.Root)
 	if err != nil {
@@ -148,6 +156,10 @@ func CheckRequiredAgainstTag(options RequiredBaselineOptions) error {
 		}
 		compared++
 		for _, added := range newlyRequiredAt(baseFacts, curFacts) {
+			if added.alternative > 0 {
+				problems = append(problems, fmt.Sprintf("%s: the %s at instance location %q changed: alternative %d no longer requires %q; a paired alternative may only gain fields its baseline branch declared (CHAOS-12331)", name, added.keyword, displayLocation(added.location), added.alternative, added.field))
+				continue
+			}
 			if added.field == "" {
 				problems = append(problems, fmt.Sprintf("%s: the %s at instance location %q changed since %s in a way the check cannot weigh (its alternatives require no field), so it may refuse a body the baseline accepted; keep its alternatives as they were for one release", name, added.keyword, displayLocation(added.location), tag))
 				continue
@@ -829,10 +841,14 @@ func stringList(raw any) []string {
 	return out
 }
 
-// addedRequired is one refusal: a field newly required at a location, or,
-// with no field, an anyOf or oneOf there (keyword) whose alternatives require
-// no field to name.
-type addedRequired struct{ location, field, keyword string }
+// addedRequired is one refusal: a field newly required at a location; with
+// alternative (1-based), a field that alternative of a paired anyOf or oneOf
+// there (keyword) no longer requires; or, with no field, an anyOf or oneOf
+// whose alternatives require no field to name.
+type addedRequired struct {
+	location, field, keyword string
+	alternative              int
+}
 
 // newlyRequiredAt reports each field current requires at an instance location
 // where the baseline neither required nor declared it, unless the location
@@ -880,21 +896,7 @@ func newlyRequiredAt(baseline, current *locationFacts) []addedRequired {
 		if groupCovered(baseline, group) {
 			continue
 		}
-		fields := groupReport(baseline, group)
-		if len(fields) == 0 {
-			keyword := "anyOf"
-			if group.exclusive {
-				keyword = "oneOf"
-			}
-			added := addedRequired{location: group.location, keyword: keyword}
-			if !reported[added] {
-				reported[added] = true
-				found = append(found, added)
-			}
-			continue
-		}
-		for _, field := range fields {
-			added := addedRequired{location: group.location, field: field}
+		for _, added := range groupReport(baseline, group) {
 			if reported[added] {
 				continue
 			}
@@ -905,18 +907,36 @@ func newlyRequiredAt(baseline, current *locationFacts) []addedRequired {
 	return found
 }
 
-// groupReport names the fields an uncovered group is refused for: for a group
-// paired with the baseline's, what its alternatives gained; for another group
-// where the baseline had groups, the fields no baseline alternative there
-// required; when that names nothing, the fields neither required nor declared
-// outright there; and when that names nothing, every field its alternatives
-// require. An uncovered group never passes silently: it is refused by name
-// even when its alternatives require no field.
-func groupReport(baseline *locationFacts, group alternativeGroup) []string {
+// groupReport is what an uncovered group is refused for, never nothing. A
+// group paired with the baseline's names the fields its alternatives gained
+// that their baseline branches never declared, and, each on a line of its
+// own, every field an alternative no longer requires: a lost requirement is
+// no new field, so it is not reported as one. Another group where the
+// baseline had groups names the fields no baseline alternative there
+// required. When that names nothing, it names the fields neither required
+// nor declared outright there; then every field its alternatives require;
+// then the group itself.
+func groupReport(baseline *locationFacts, group alternativeGroup) []addedRequired {
+	keyword := "anyOf"
+	if group.exclusive {
+		keyword = "oneOf"
+	}
 	var fields []string
 	if old := pairedGroup(baseline, group); old != nil {
+		var out []addedRequired
 		for i, alternative := range group.alternatives {
-			fields = append(fields, missingFrom(alternative, old.alternatives[i])...)
+			allowed := append(append([]string{}, old.alternatives[i]...), old.declared[i]...)
+			for _, field := range missingFrom(alternative, allowed) {
+				out = append(out, addedRequired{location: group.location, field: field})
+			}
+		}
+		for i, alternative := range group.alternatives {
+			for _, field := range missingFrom(old.alternatives[i], alternative) {
+				out = append(out, addedRequired{location: group.location, field: field, keyword: keyword, alternative: i + 1})
+			}
+		}
+		if len(out) > 0 {
+			return out
 		}
 	} else {
 		var required []string
@@ -950,7 +970,14 @@ func groupReport(baseline *locationFacts, group alternativeGroup) []string {
 			fields = append(fields, alternative...)
 		}
 	}
-	return fields
+	if len(fields) == 0 {
+		return []addedRequired{{location: group.location, keyword: keyword}}
+	}
+	out := make([]addedRequired, len(fields))
+	for i, field := range fields {
+		out[i] = addedRequired{location: group.location, field: field}
+	}
+	return out
 }
 
 // missingFrom is the fields not in of.
