@@ -210,8 +210,10 @@ func TestEveryBudgetedBodyIsMeasuredAgainstItsBudget(t *testing.T) {
 	// CHAOS-11912: the investigation route serves through
 	// serveContextFabricInvestigationResult and the result-by-id route (and
 	// the submission replay) through serveStoredInvestigationResult; those are
-	// where the bodies are measured now.
-	for _, known := range []string{"serveContextFabricInvestigationResult", "serveStoredInvestigationResult", "handleContextPacket"} {
+	// where the bodies are measured now. CHAOS-11949: the body of
+	// serveStoredInvestigationResult is serveStoredInvestigationResultOn,
+	// which the attach's result terminal takes on its own gate surface.
+	for _, known := range []string{"serveContextFabricInvestigationResult", "serveStoredInvestigationResultOn", "handleContextPacket"} {
 		if !slices.Contains(found.scanned, known) {
 			t.Fatalf("the census did not see %s among %v: it measured nothing", known, found.scanned)
 		}

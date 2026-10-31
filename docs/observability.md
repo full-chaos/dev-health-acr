@@ -15,8 +15,9 @@ generated request ID for correlation and these bounded dimensions:
 - `operation` and HTTP status class: finite endpoint families and `2xx`/`4xx`/`5xx`.
   Operations: `health`, `readiness`, `capabilities`, `context`, `evidence`,
   `snapshot`, `episode`, `investigation`, `investigation_result`,
-  `submission_status`, `threads` (the Ask Dev conversation list), `thread` (one
-  conversation's read or delete), `data_catalog`, `data_subjects`, `data_facts`,
+  `submission_status`, `submission_attach` and `submission_cancel` (a leased
+  run's attach and cancel, CHAOS-11949), `threads` (the Ask Dev conversation
+  list), `thread` (one conversation's read or delete), `data_catalog`, `data_subjects`, `data_facts`,
   `data_relationships`, `data_operations`, `data_graphql`, or `unknown`
 - `outcome`: `success`, `failure`, `denied`, `canceled`, or `unknown`
 - packet: lifecycle `status`, bytes, tokens, schema/baseline versions,
