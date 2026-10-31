@@ -782,6 +782,10 @@ func (e *Engine) synthesizeAndAssemble(ctx context.Context, principal storage.Pr
 			}
 		}
 	}
+	// CHAOS-12160: every claim is minted by now. An investment claim about a
+	// project says whether its value is the project's own mix or its owning
+	// teams' roll-up, from the fact it is grounded against.
+	result.ClaimedFacts = discloseInvestmentMix(result.ClaimedFacts, facts.Facts)
 	// THE PROSE, COMPOSED AFTER THE RECOMPOSE -- and the split from the mint
 	// above is deliberate, not an accident of layout.
 	//
