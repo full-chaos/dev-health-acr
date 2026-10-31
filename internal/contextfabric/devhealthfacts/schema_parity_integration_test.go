@@ -217,8 +217,14 @@ func TestLiveSchemaParityAcrossEveryFactProvider(t *testing.T) {
 			t.Fatalf("fact kind %q has no parity subject; add one so a new provider cannot go unasserted", capability.Kind)
 		}
 		t.Run(string(capability.Kind), func(t *testing.T) {
+			// Investment reads the 90-day default on a bare current axis
+			// (CHAOS-12142); all_time keeps its seeded rows in the scan.
+			timeContext := contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent}
+			if capability.Kind == contextfabric.FactInvestment {
+				timeContext = investmentAllHistory()
+			}
 			result, err := provider.ReadFacts(ctx, principal, contextfabric.FactQuery{
-				Time:     contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent},
+				Time:     timeContext,
 				Kind:     capability.Kind,
 				Subjects: []contextfabric.SubjectRef{subject},
 			})

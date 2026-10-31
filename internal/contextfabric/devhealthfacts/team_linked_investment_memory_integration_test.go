@@ -64,7 +64,7 @@ SELECT concat('` + prefix + `', toString(number)), ` + instant + `, ` + instant 
 		t.Helper()
 		mark := serverNowMicros(t, ctx, direct)
 		result, err := provider.ReadFacts(ctx, storage.Principal{OrgID: orgID, RepositoryScopes: []string{"*"}}, contextfabric.FactQuery{
-			Time: contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent}, Kind: contextfabric.FactInvestment,
+			Time: investmentAllHistory(), Kind: contextfabric.FactInvestment,
 			Subjects: []contextfabric.SubjectRef{teamSubject("team-1")},
 		})
 		if err != nil {

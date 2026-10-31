@@ -60,7 +60,7 @@ func readInvestmentFact(t *testing.T, providers []contextfabric.FactProvider, or
 	t.Helper()
 	provider := findProvider(t, providers, contextfabric.FactInvestment)
 	result, err := provider.ReadFacts(context.Background(), storage.Principal{OrgID: orgID}, contextfabric.FactQuery{
-		Time: contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent},
+		Time: investmentAllHistory(),
 		Kind: contextfabric.FactInvestment, Subjects: []contextfabric.SubjectRef{subject},
 	})
 	if err != nil {
@@ -277,7 +277,7 @@ func TestProjectThemeMixAgainstRealClickHouse(t *testing.T) {
 
 		provider := findProvider(t, providers, contextfabric.FactInvestment)
 		result, err := provider.ReadFacts(ctx, storage.Principal{OrgID: orgID}, contextfabric.FactQuery{
-			Time: contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent},
+			Time: investmentAllHistory(),
 			Kind: contextfabric.FactInvestment,
 			Subjects: []contextfabric.SubjectRef{
 				projectSubject("linear", "proj-p1"),
@@ -475,7 +475,7 @@ func TestProjectThemeMixAgainstRealClickHouse(t *testing.T) {
 
 		provider := findProvider(t, providers, contextfabric.FactInvestment)
 		result, err := provider.ReadFacts(ctx, storage.Principal{OrgID: orgID}, contextfabric.FactQuery{
-			Time: contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent},
+			Time: investmentAllHistory(),
 			Kind: contextfabric.FactInvestment,
 			Subjects: []contextfabric.SubjectRef{
 				projectSubject("linear", "proj-mix"),
@@ -586,7 +586,7 @@ func TestProjectThemeMixAgainstRealClickHouse(t *testing.T) {
 
 		provider := findProvider(t, providers, contextfabric.FactInvestment)
 		result, err := provider.ReadFacts(ctx, storage.Principal{OrgID: orgID}, contextfabric.FactQuery{
-			Time: contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent},
+			Time: investmentAllHistory(),
 			Kind: contextfabric.FactInvestment, Subjects: subjects,
 		})
 		if err != nil {
@@ -786,7 +786,7 @@ func TestProjectThemeMixReportsThroughReaderInstrumentation(t *testing.T) {
 
 	provider := findProvider(t, providers, contextfabric.FactInvestment)
 	if _, err := provider.ReadFacts(ctx, storage.Principal{OrgID: orgID}, contextfabric.FactQuery{
-		Time: contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent},
+		Time: investmentAllHistory(),
 		Kind: contextfabric.FactInvestment, Subjects: []contextfabric.SubjectRef{projectSubject("linear", "proj-instr")},
 	}); err != nil {
 		t.Fatalf("ReadFacts: %v", err)

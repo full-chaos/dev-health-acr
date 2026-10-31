@@ -87,7 +87,7 @@ func TestCHAOS4363ProjectRollupsAgainstRealClickHouse(t *testing.T) {
 		seedOwnership(orgID, "linear", "team-inv-a", "INV1")
 		provider := findProvider(t, providers, contextfabric.FactInvestment)
 		result, err := provider.ReadFacts(ctx, storage.Principal{OrgID: orgID}, contextfabric.FactQuery{
-			Time: contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent},
+			Time: investmentAllHistory(),
 			Kind: contextfabric.FactInvestment, Subjects: []contextfabric.SubjectRef{projectSubject("linear", "proj-inv")},
 		})
 		if err != nil {

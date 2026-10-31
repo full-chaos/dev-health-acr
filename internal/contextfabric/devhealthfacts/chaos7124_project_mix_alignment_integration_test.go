@@ -47,7 +47,7 @@ func (f *chaos7073Fixture) issueUnit(id, projectID, itemID string, effort float6
 func (f *chaos7073Fixture) projectMix(projectID string) (shares map[string]float64, workUnits int64, source string) {
 	f.t.Helper()
 	result, err := f.provider.ReadFacts(f.ctx, storage.Principal{OrgID: f.orgID}, contextfabric.FactQuery{
-		Time: contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent},
+		Time: investmentAllHistory(),
 		Kind: contextfabric.FactInvestment, Subjects: []contextfabric.SubjectRef{projectSubject("linear", projectID)},
 	})
 	if err != nil {

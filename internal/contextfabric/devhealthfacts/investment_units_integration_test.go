@@ -70,7 +70,7 @@ func TestInvestmentUnitsMatchTheMixAndPageAgainstRealClickHouse(t *testing.T) {
 			readCtx = contextfabric.WithInvestmentUnits(ctx, *req)
 		}
 		result, err := provider.ReadFacts(readCtx, storage.Principal{OrgID: orgID}, contextfabric.FactQuery{
-			Time: contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent},
+			Time: investmentAllHistory(),
 			Kind: contextfabric.FactInvestment, Subjects: []contextfabric.SubjectRef{team},
 		})
 		if err != nil {
