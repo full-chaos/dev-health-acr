@@ -20,7 +20,9 @@ import (
 // an authorization channel and keeps all three work-item readers on one
 // selector shape.
 func workItemRepositoryAuthorization(principal storage.Principal, requested []string) readers.AuthorizationScope {
-	granted := workItemRepositorySelectorSet(principal.RepositoryScopes, true)
+	// A project-only principal gets the zero set, which denies (CHAOS-12299):
+	// every work-item read here then reads nothing for it.
+	granted := auth.WorkItemGrantSelectorSet(principal)
 	var requestedSet *readers.RepositorySelectorSet
 	if len(requested) > 0 {
 		set := workItemRepositorySelectorSet(requested, false)

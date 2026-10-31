@@ -3,9 +3,8 @@ package devhealthfacts
 import (
 	"context"
 	"encoding/json"
-	"slices"
-	"strings"
 
+	"github.com/full-chaos/dev-health-acr/internal/auth"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
@@ -59,8 +58,12 @@ type sourceHealthData struct {
 	SourceHealth *[]sourceHealthRow `json:"sourceHealth"`
 }
 
+// sourceHealthRestricted reports whether the caller sees only some
+// repositories: a repository-restricted caller, and a project-only caller,
+// whatever its repository list holds (CHAOS-12299 r3). The organization
+// figures it guards are then withheld.
 func sourceHealthRestricted(principal storage.Principal) bool {
-	return len(principal.RepositoryScopes) > 0 && !slices.ContainsFunc(principal.RepositoryScopes, func(scope string) bool { return strings.TrimSpace(scope) == "*" })
+	return auth.ClassifyGrant(principal).IsRestricted()
 }
 
 func (p *SourceHealthProvider) ReadFacts(ctx context.Context, principal storage.Principal, query contextfabric.FactQuery) (result contextfabric.FactProviderResult, err error) {
@@ -72,7 +75,11 @@ func (p *SourceHealthProvider) ReadFacts(ctx context.Context, principal storage.
 	if err != nil {
 		return contextfabric.FactProviderResult{}, err
 	}
-	orgSubjectIDs, bySubject, rejected := subjectIndex(subjectsOfKind(query.Subjects, contextfabric.SubjectOrganization), organizationPrefix)
+	orgSubjects := subjectsOfKind(query.Subjects, contextfabric.SubjectOrganization)
+	if projectOnlyWithheld(principal) {
+		orgSubjects = nil
+	}
+	orgSubjectIDs, bySubject, rejected := subjectIndex(orgSubjects, organizationPrefix)
 	// ONE result variable and a deferred disclosure so no branch can skip the
 	// shape-rejection note (same construction as every provider here).
 	defer func() {

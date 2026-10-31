@@ -14,7 +14,7 @@ func (s *EpisodeStore) PreflightIdempotency(ctx context.Context, principal stora
 	if err := ctx.Err(); err != nil {
 		return storage.EpisodePreflightMiss, err
 	}
-	if !episodeRepositoryAllowed(principal.RepositoryScopes, create.Repository.Slug) {
+	if !principalEpisodeRepositoryAllowed(principal, create.Repository.Slug) {
 		return storage.EpisodePreflightMiss, storage.ErrNotFound
 	}
 	repositoryID, err := authorizedRepositoryStorageID(principal, create.Repository.Slug)

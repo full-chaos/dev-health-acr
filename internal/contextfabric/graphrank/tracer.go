@@ -519,6 +519,23 @@ func (t SlogResolutionTracer) Trace(event ResolutionTraceEvent) {
 			"distinct_kind_count", event.KindOfferDistinctKindCount,
 			"suppressed_by_cardinality", event.KindOfferSuppressedByCardinality,
 			"suppressed_by_unservable_declared_kind", event.KindOfferSuppressedByUnservableDeclaredKind)
+	case "page_hint_lookup":
+		// CHAOS-12230: at most one line per resolveSubjects call, Info like
+		// kind_offer_withheld above: a page hint that misses the exact lookup
+		// changes what the caller's question resolves to, and the line must be
+		// readable from an ordinary production log. Counts, one bool and
+		// closed subject-kind map keys only -- no canonical id, label,
+		// question or term reaches this line.
+		t.logger.InfoContext(ctx, "context fabric resolution trace: page hint lookup",
+			"request_id", contextfabric.SanitizeLogAttr(event.RequestID), "stage", contextfabric.SanitizeLogAttr(event.Stage),
+			"page_hints", event.PageHintCount,
+			"exact_hit", event.PageHintExactHit,
+			"label_fallback", event.PageHintLabelFallback,
+			"unresolved", event.PageHintUnresolved,
+			"search_fallback", event.PageHintSearchFallback,
+			"exact_hit_by_kind", event.PageHintExactHitByKind,
+			"label_fallback_by_kind", event.PageHintLabelFallbackByKind,
+			"unresolved_by_kind", event.PageHintUnresolvedByKind)
 	case "anchor_offer":
 		// CHAOS-4210: unconditional, mirroring kind_offer's own "fires on
 		// EVERY resolution" discipline -- see

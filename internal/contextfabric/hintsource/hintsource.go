@@ -66,6 +66,17 @@ const (
 	ConfirmedCandidateReceipt Source = "confirmed_candidate_receipt"
 )
 
+// AskDevPageContext is the source web writes on the subject hints it builds
+// from the Ask Dev page a question is asked from (CHAOS-12230): the page's
+// entities, each named by an id web builds in the canonical form
+// (contracts/examples/v1/context_fabric_canonical_id_vectors.v1.json).
+//
+// CALLER AUTHORED, and therefore deliberately NOT a Source and NOT in the
+// registry below: this engine never mints it, so Lookup classifies it like any
+// other caller string. It is named here only so the resolver can count how
+// these hints resolve without a second literal of the same wire string.
+const AskDevPageContext = "ask_dev_page_context"
+
 // Attributes are the INDEPENDENT FACTS about a source, kept apart on purpose:
 // authorship, and three policies read at three different decision points.
 //

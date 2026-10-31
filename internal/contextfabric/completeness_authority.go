@@ -271,6 +271,11 @@ type CompletenessAuthorityObservation struct {
 	// whose head had nothing to state in its place. Set by the caller that
 	// served the document, like StatusCorrectionDisclosed.
 	LeadProseServedAsStored bool
+	// LegacySourceStateWordsServed is true when the served document still
+	// carries the legacy truncated-read words (LegacySourceStateWordsServed):
+	// text the restatement did not rewrite, whether a provider's evidence
+	// with the same words or a form it missed. Set by the serving caller.
+	LegacySourceStateWordsServed bool
 
 	// OUTCOME ROW COUNTS -- what the model's own status decision (or this
 	// derivation's) had to work with, joinable against ModelStatus without
@@ -775,6 +780,7 @@ func CompletenessAuthorityLogArgs(event CompletenessAuthorityObservation, orgID 
 		"deciding_read_evaluation_gap", event.DecidingReadEvaluationGap,
 		"status_correction_disclosed", event.StatusCorrectionDisclosed,
 		"lead_prose_served_as_stored", event.LeadProseServedAsStored,
+		"legacy_source_state_words_served", event.LegacySourceStateWordsServed,
 		// THE ROWS THE STATUS DECISION HAD TO WORK WITH: what the model was
 		// given (today, nothing -- see genkitruntime's own synthesis input)
 		// and what this derivation itself read, both joinable against
