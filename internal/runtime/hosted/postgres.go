@@ -198,9 +198,16 @@ func openPostgres(ctx context.Context, cfg config.Config, logger *slog.Logger) (
 	if err != nil {
 		return fail(errors.Join(fmt.Errorf("purge expired oauth rows: %w", err), stopPurgeLoop(), stopWorkloadCredentialPurgeLoop()))
 	}
+	// CHAOS-12140: gated on a browser client being configured (see
+	// startConfiguredBrowserFamilyPurge); its initial purge proves DELETE on
+	// acr.client_credentials and acr.browser_token_families.
+	stopBrowserFamilyPurgeLoop, err := startConfiguredBrowserFamilyPurge(ctx, cfg, browserRefresh, logger)
+	if err != nil {
+		return fail(errors.Join(fmt.Errorf("purge ended browser token families: %w", err), stopPurgeLoop(), stopWorkloadCredentialPurgeLoop(), stopOAuthPurgeLoop()))
+	}
 	stopDeviceSweep, err := startDeviceCredentialSweep(ctx, devices, logger, packetPurgeSlogObserver(logger))
 	if err != nil {
-		return fail(errors.Join(fmt.Errorf("sweep unacknowledged device credentials: %w", err), stopPurgeLoop(), stopWorkloadCredentialPurgeLoop(), stopOAuthPurgeLoop()))
+		return fail(errors.Join(fmt.Errorf("sweep unacknowledged device credentials: %w", err), stopPurgeLoop(), stopWorkloadCredentialPurgeLoop(), stopOAuthPurgeLoop(), stopBrowserFamilyPurgeLoop()))
 	}
 	readinessTimeout := cfg.PostgresPingTimeout
 	if readinessTimeout <= 0 {
@@ -215,7 +222,7 @@ func openPostgres(ctx context.Context, cfg config.Config, logger *slog.Logger) (
 			return checkPostgresRuntime(checkContext, database, runner, cfg.EnableEpisodeWriteback)
 		},
 		close: func() error {
-			return errors.Join(stopPurgeLoop(), stopWorkloadCredentialPurgeLoop(), stopOAuthPurgeLoop(), stopDeviceSweep(), database.Close())
+			return errors.Join(stopPurgeLoop(), stopWorkloadCredentialPurgeLoop(), stopOAuthPurgeLoop(), stopBrowserFamilyPurgeLoop(), stopDeviceSweep(), database.Close())
 		},
 	}, nil
 }

@@ -121,6 +121,14 @@ func runtimeFeatures(lookup lookupEnv) dbacl.Features {
 	if strings.TrimSpace(audience) != "" && strings.TrimSpace(trustDomain) != "" {
 		features[dbacl.WorkloadTokenExchange] = true
 	}
+	// The browser class is on when either browser client setting holds
+	// something other than whitespace: config.Load splits a non-blank value
+	// into at least one client (config.OAuthBrowserClassConfigured).
+	browserClients, _ := lookup("ACR_OAUTH_BROWSER_CLIENTS")
+	devBrowserRedirects, _ := lookup("ACR_OAUTH_DEV_BROWSER_REDIRECT_URIS")
+	if strings.TrimSpace(browserClients) != "" || strings.TrimSpace(devBrowserRedirects) != "" {
+		features[dbacl.BrowserClient] = true
+	}
 	return features
 }
 

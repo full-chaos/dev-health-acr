@@ -104,6 +104,16 @@ spec:
             - name: ACR_WORKLOAD_TRUST_DOMAIN
               value: {{ .Values.workloadTokenExchange.trustDomain | quote }}
             {{- end }}
+            {{- if .Values.config.oauth.enabled }}
+            {{- with .Values.config.oauth.browserClients }}
+            - name: ACR_OAUTH_BROWSER_CLIENTS
+              value: {{ join "," . | quote }}
+            {{- end }}
+            {{- with .Values.config.oauth.devBrowserRedirectUris }}
+            - name: ACR_OAUTH_DEV_BROWSER_REDIRECT_URIS
+              value: {{ join "," . | quote }}
+            {{- end }}
+            {{- end }}
           resources:
             {{- toYaml .Values.migration.resources | nindent 12 }}
           volumeMounts:

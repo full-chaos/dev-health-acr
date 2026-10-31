@@ -113,8 +113,9 @@ func TestRuntimeGrantDeclaration_includesWhatTheReadinessCheckAsserts(t *testing
 // setting.
 func TestRuntimeGrantDeclaration_runtimeRoleHoldsExactlyTheDeclaration(t *testing.T) {
 	for name, features := range map[string]dbacl.Features{
-		"no optional feature":    {},
-		"every optional feature": {dbacl.EpisodeWriteback: true, dbacl.WorkloadTokenExchange: true},
+		"no optional feature":     {},
+		"every optional feature":  {dbacl.EpisodeWriteback: true, dbacl.WorkloadTokenExchange: true, dbacl.BrowserClient: true},
+		"only the browser client": {dbacl.BrowserClient: true},
 	} {
 		features := features
 		t.Run(name, func(t *testing.T) {
@@ -147,8 +148,20 @@ func TestRuntimeGrantDeclaration_runtimeRoleHoldsExactlyTheDeclaration(t *testin
 				require.NoError(t, database.Owner.QueryRowContext(ctx, `SELECT has_table_privilege($1, 'acr.agent_episodes', $2)`, database.Role, privilege).Scan(&has))
 				require.Equal(t, wantHeld, has, "agent_episodes %s with writeback %v", privilege, features[dbacl.EpisodeWriteback])
 			}
+			// A literal check, not derived from the declaration (CHAOS-12140):
+			// with no browser client the grant job adds no DELETE on the browser
+			// families, and DELETE on credentials only with workload exchange.
+			for table, wantHeld := range map[string]bool{
+				"acr.browser_token_families": features[dbacl.BrowserClient],
+				"acr.client_credentials":     features[dbacl.BrowserClient] || features[dbacl.WorkloadTokenExchange],
+				"acr.browser_refresh_tokens": false,
+			} {
+				var has bool
+				require.NoError(t, database.Owner.QueryRowContext(ctx, `SELECT has_table_privilege($1, $2, 'DELETE')`, database.Role, table).Scan(&has))
+				require.Equal(t, wantHeld, has, "DELETE on %s with features %v", table, features)
+			}
 			for _, grant := range dbacl.RuntimeGrants {
-				if !features[grant.Feature] && grant.Feature != dbacl.AlwaysOn {
+				if !features.Enabled(grant.Feature) {
 					continue
 				}
 				for _, sequence := range grant.Sequences {

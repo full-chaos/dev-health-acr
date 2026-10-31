@@ -16,6 +16,9 @@ const (
 	// request row has gone.
 	defaultOAuthRequestPurgeGrace = 30 * 24 * time.Hour
 	defaultOAuthClientIdleTTL     = 30 * 24 * time.Hour
+	// defaultOAuthBrowserFamilyPurgeGrace is how long an ended browser token
+	// family is kept before the CHAOS-12140 purge deletes it.
+	defaultOAuthBrowserFamilyPurgeGrace = 24 * time.Hour
 )
 
 // oauthResources splits the comma-separated ACR_OAUTH_RESOURCES value.
@@ -35,12 +38,19 @@ func (c Config) OAuthConfigured() bool {
 	return c.OAuthIssuer != "" || len(c.OAuthResources) > 0 || c.OAuthConsentURL != ""
 }
 
+// OAuthBrowserClassConfigured reports whether a first-party browser client is
+// configured (CHAOS-12123): the browser class, its token families and their
+// purge (CHAOS-12140) are on.
+func (c Config) OAuthBrowserClassConfigured() bool {
+	return len(c.OAuthBrowserClients) > 0 || len(c.OAuthDevBrowserRedirectURIs) > 0
+}
+
 // validateOAuthConfig requires the issuer and resources together, the web
 // approval surface (consent is the device flow's approval) and the hosted
 // runtime, and checks each value's shape. Values are never echoed.
 func validateOAuthConfig(c Config) error {
 	if !c.OAuthConfigured() {
-		if len(c.OAuthBrowserClients) > 0 || len(c.OAuthDevBrowserRedirectURIs) > 0 {
+		if c.OAuthBrowserClassConfigured() {
 			return errors.New("ACR_OAUTH_BROWSER_CLIENTS and ACR_OAUTH_DEV_BROWSER_REDIRECT_URIS require ACR_OAUTH_ISSUER")
 		}
 		return nil
@@ -100,8 +110,11 @@ func validateOAuthConfig(c Config) error {
 // development client is refused outside development. The OAuth service checks
 // each value's shape again at startup.
 func validateOAuthBrowserClients(c Config) error {
-	if len(c.OAuthBrowserClients) == 0 && len(c.OAuthDevBrowserRedirectURIs) == 0 {
+	if !c.OAuthBrowserClassConfigured() {
 		return nil
+	}
+	if c.OAuthBrowserFamilyPurgeGrace <= 0 {
+		return errors.New("ACR_OAUTH_BROWSER_FAMILY_PURGE_GRACE must be a positive duration")
 	}
 	if len(c.OAuthDevBrowserRedirectURIs) > 0 && c.Environment != "development" {
 		return errors.New("ACR_OAUTH_DEV_BROWSER_REDIRECT_URIS is allowed only when ACR_ENVIRONMENT is development")
