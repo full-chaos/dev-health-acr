@@ -616,3 +616,34 @@ NetworkPolicy egress to the OTLP collector port, when otel.enabled.
       port: {{ .Values.otel.egressPort }}
 {{- end -}}
 {{- end -}}
+
+{{/*
+CHAOS-12094 (F1): the acr-mcp hop proof. acr.mcpHopServiceAccount is the
+acr-mcp ServiceAccount acr-api accepts (acrMcp.hop.serviceAccount, or the one
+this chart renders for acr-mcp). acr.tokenReview is "true" when acr-api calls
+Kubernetes TokenReview: for the workload token exchange or for the hop check.
+*/}}
+{{- define "acr.mcpHopServiceAccount" -}}
+{{- .Values.acrMcp.hop.serviceAccount | default (printf "%s-mcp" (include "acr.fullname" .)) -}}
+{{- end -}}
+
+{{- define "acr.tokenReview" -}}
+{{- if or .Values.workloadTokenExchange.enabled .Values.config.mcpHop.required -}}true{{- end -}}
+{{- end -}}
+
+{{/*
+The hop check refuses every MCP-bound credential that does not come through
+acr-mcp with its hop, so it is only coherent when this release runs acr-mcp
+and acr-mcp sends the hop, and the OAuth login (which issues those
+credentials) is on.
+*/}}
+{{- define "acr.validateMcpHop" -}}
+{{- if .Values.config.mcpHop.required -}}
+{{- if not .Values.config.oauth.enabled -}}
+{{- fail "mcp-hop: config.mcpHop.required requires config.oauth.enabled (the hop decides OAuth credentials bound to an MCP resource)" -}}
+{{- end -}}
+{{- if not (and .Values.acrMcp.enabled .Values.acrMcp.hop.enabled) -}}
+{{- fail "mcp-hop: config.mcpHop.required requires acrMcp.enabled and acrMcp.hop.enabled (step 1 of the rollout: acr-mcp must send the hop first)" -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}

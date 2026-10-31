@@ -58,6 +58,8 @@ type Dependencies struct {
 	Runtime              *RuntimeDependencies
 	ClientIP             auth.ClientIPResolver
 	WebAssertions        *auth.WebAssertionVerifier
+	// MCPHop is the acr-mcp hop check (CHAOS-12094); nil requires none.
+	MCPHop *auth.MCPHopPolicy
 	// WebAssertionReplays is the shared used-id record the hosted runtime
 	// provides; the web assertion verifier fails closed without it.
 	WebAssertionReplays auth.WebAssertionReplayStore
@@ -161,7 +163,7 @@ func NewApp(cfg AppConfig, deps Dependencies, logger *slog.Logger) (*App, error)
 			return nil, errors.New("hosted read runtime requires request controls")
 		}
 		var err error
-		authenticator, err = auth.NewAuthenticator(deps.Runtime.Credentials, deps.Runtime.Audit, auth.AuthenticatorOptions{Now: deps.Now, Limiter: deps.AuthAttempts, Logger: logger, ClientIP: deps.ClientIP, WebAssertions: deps.WebAssertions, UsageTelemetry: deps.UsageTelemetry})
+		authenticator, err = auth.NewAuthenticator(deps.Runtime.Credentials, deps.Runtime.Audit, auth.AuthenticatorOptions{Now: deps.Now, Limiter: deps.AuthAttempts, Logger: logger, ClientIP: deps.ClientIP, WebAssertions: deps.WebAssertions, UsageTelemetry: deps.UsageTelemetry, MCPHop: deps.MCPHop})
 		if err != nil {
 			return nil, err
 		}

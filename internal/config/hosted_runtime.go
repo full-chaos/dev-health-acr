@@ -271,6 +271,7 @@ func (c Config) SafeAttributes() []any {
 		"oauth_resource_count", len(c.OAuthResources),
 		"oauth_consent_url_configured", c.OAuthConsentURL != "",
 		"oauth_client_metadata_documents", c.OAuthClientMetadataDocuments,
+		"mcp_hop_required", c.MCPHop.Required,
 	}
 }
 

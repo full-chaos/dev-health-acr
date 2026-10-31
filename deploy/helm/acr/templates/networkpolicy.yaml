@@ -141,7 +141,7 @@ spec:
          apiserver Service IP) becomes a chart change when a scale/
          multi-tenant deployment needs one -- track that separately, do not
          silently narrow this rule without a new ticket. */}}
-    {{- if and .Values.workloadTokenExchange.enabled .Values.networkPolicy.egress.kubernetesAPIPort }}
+    {{- if and (include "acr.tokenReview" .) .Values.networkPolicy.egress.kubernetesAPIPort }}
     - ports:
         - protocol: TCP
           port: {{ .Values.networkPolicy.egress.kubernetesAPIPort }}

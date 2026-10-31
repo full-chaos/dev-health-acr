@@ -69,6 +69,13 @@ data:
   ACR_OAUTH_DEV_BROWSER_REDIRECT_URIS: {{ join "," . | quote }}
   {{- end }}
   {{- end }}
+  {{- if .Values.config.mcpHop.required }}
+  {{- include "acr.validateMcpHop" . }}
+  ACR_MCP_HOP_REQUIRED: "true"
+  ACR_MCP_HOP_AUDIENCE: {{ .Values.acrMcp.hop.audience | quote }}
+  ACR_MCP_HOP_SERVICE_ACCOUNT_NAMESPACE: {{ .Release.Namespace | quote }}
+  ACR_MCP_HOP_SERVICE_ACCOUNT_NAME: {{ include "acr.mcpHopServiceAccount" . | quote }}
+  {{- end }}
   {{- if include "acr.remoteEntitlement" . }}
   ACR_DEV_HEALTH_ENTITLEMENT_URL: {{ .Values.config.entitlement.url | quote }}
   ACR_DEV_HEALTH_ENTITLEMENT_TIMEOUT: {{ .Values.config.entitlement.timeout | quote }}

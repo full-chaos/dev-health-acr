@@ -125,6 +125,12 @@ config:
     # Development only: exact http loopback redirect URIs of the static
     # development browser client (acr-api refuses it outside development).
     devBrowserRedirectUris: []
+  # CHAOS-12094 (F1) step 2: acr-api refuses a credential bound to an MCP
+  # resource unless the call carries a valid acr-mcp hop (acrMcp.hop). Needs
+  # config.oauth.enabled, acrMcp.enabled and acrMcp.hop.enabled; turns on
+  # acr-api's TokenReview access (RBAC, reviewer token, API egress).
+  mcpHop:
+    required: false
 
 # Existing-Secret-only credential contract. Each existingSecret is the NAME of a
 # Secret that already exists in the release namespace. This chart validates the
@@ -550,6 +556,24 @@ acrMcp:
   oauth:
     resourceUrl: ""
     authorizationServer: ""
+  # CHAOS-12094 (F1): the hop proof. acr-mcp sends a projected ServiceAccount
+  # token (this audience, expirationSeconds life) on every acr-api call, in
+  # X-ACR-MCP-Hop, so acr-api can admit a credential bound to an MCP
+  # resource only on a call acr-mcp forwards. A projected token, never a
+  # Secret: acr-mcp stays credential-less. Roll in two steps: (1)
+  # hop.enabled here (an older acr-api ignores the header); (2)
+  # config.mcpHop.required on acr-api, as its own deploy step.
+  hop:
+    enabled: false
+    # The TokenReview audience of the hop token; acr-api checks the same
+    # value (ACR_MCP_HOP_AUDIENCE).
+    audience: "dev-health-acr-api-mcp-hop"
+    # Projected token life in seconds; 600 is the shortest Kubernetes
+    # allows. kubelet rotates the file before it expires.
+    expirationSeconds: 600
+    # The acr-mcp ServiceAccount acr-api accepts. Empty = the one this chart
+    # renders for acr-mcp (<fullname>-mcp).
+    serviceAccount: ""
   logLevel: info
   # ACR_API_TIMEOUT: also bounds each per-request credential decision.
   apiTimeout: "15s"
