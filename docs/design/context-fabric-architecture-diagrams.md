@@ -613,7 +613,12 @@ the count row read `satisfied`, and the state read `complete` beside a partial
 coverage. A result stored before this keeps its stored row: every serving
 surface (fresh, reused, read by id) runs `ApplyServedStatusFloors`, which
 appends the narrowed row to the served copy when the last count row is still
-`satisfied`, and never rewrites the stored one.
+`satisfied`, and never rewrites the stored one. A member READ over the cut set
+says the same (CHAOS-12153): its `each_member` population declares the members
+read plus the same denied count (`MembershipCardinality.AuthorizationDenied`,
+the field the count row reads), its chain begins with the cut, and the row is
+`narrowed` with that cause. A stored `satisfied` member read row is restated
+the same way, appended to the served copy.
 
 **A count of a repository's owning teams.** For a question about now, a read
 that found no owner, was not cut, and found ownership projected for the org
