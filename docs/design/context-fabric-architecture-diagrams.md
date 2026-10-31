@@ -1218,8 +1218,12 @@ degraded forms) is replaced by the served status's sentence, or removed for
 complete. A head composed for complete that is served at a lower status (a
 budget lever, the completeness authority, a status floor) is recomposed from
 complete, so the served sentence stands after the count, where the composer
-states it. The client synthesis text and heads that are not a composition are
-left alone. A stored head with nothing to state in its place (no other content
+states it. A complete head with no principal driver has no composed part to
+match, so it is a composition only when it is empty, current_state's fallback
+sentence, or the server's own count and period sentences. Any other head --
+prose the server did not write -- is composed afresh by a status floor (whose
+limitation says the narrative was withheld), and left alone by a served copy,
+as is the client synthesis text. A stored head with nothing to state in its place (no other content
 and an empty current_state) is served as stored, never as an invalid document;
 the completeness authority line counts it (`lead_prose_served_as_stored`). No
 producing path composes that case. current_state's clause for drivers whose
