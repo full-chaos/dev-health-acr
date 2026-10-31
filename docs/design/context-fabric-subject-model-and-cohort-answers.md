@@ -81,7 +81,7 @@ A cohort whose requested member set authorization cut part of is not served `com
 degrading `graph_cohort_denied_by_authorization` coverage row floors a complete answer to `partial`,
 whatever shape the plan had, and the floor is applied again when a stored result is read by id.
 A count over that member set is a `narrowed` outcome row naming the same code (CHAOS-12147), so the
-completeness state is not `complete` either.
+completeness state is not `complete` either; so is a member read over it (CHAOS-12153), with the same denied count.
 
 ### 2b. Cohort retrieval was fulltext-only (CHAOS-4395, in flight)
 

@@ -52,6 +52,10 @@ type limitationAudit struct {
 }
 
 var auditedLimitationWrites = map[string]limitationAudit{
+	"appendServedRestatement#withOutcomeEvictionLimitation#0": {
+		sameShapedTotal: 1,
+		reason:          "the eviction disclosure is added by withOutcomeEvictionLimitation, which composes through appendBoundedLimitations (dedup, normalize, displace a model caveat); the call site only assigns its output",
+	},
 	"budgetTrimDisclose#withOutcomeEvictionLimitation#0": {
 		sameShapedTotal: 1,
 		reason:          "the eviction disclosure is added by withOutcomeEvictionLimitation, which composes through appendBoundedLimitations (dedup, normalize, displace a model caveat); the call site only assigns its output",
