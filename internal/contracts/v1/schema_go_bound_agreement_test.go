@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric/identity"
 	"github.com/full-chaos/dev-health-acr/internal/contractcheck"
 )
 
@@ -706,6 +707,9 @@ func TestSchemaAndGoBoundsAgree(t *testing.T) {
 		"common#$defs.EntityProjection.properties.previous_names.items.maxLength":                 512,
 		"common#$defs.EntityProjection.properties.previous_names.items.minLength":                 1,
 		"common#$defs.EntityProjection.properties.previous_names.maxItems":                        100,
+		"common#$defs.EntityProjection.properties.project_identities.items.maxLength":             identity.MaxNaturalKeyBytes,
+		"common#$defs.EntityProjection.properties.project_identities.items.minLength":             1,
+		"common#$defs.EntityProjection.properties.project_identities.maxItems":                    ContextFabricEntityProjectIdentitiesMax,
 		"common#$defs.EntityProjection.properties.properties.maxProperties":                       100,
 		"common#$defs.EntityProjection.properties.provider_aliases.items.maxLength":               512,
 		"common#$defs.EntityProjection.properties.provider_aliases.items.minLength":               1,

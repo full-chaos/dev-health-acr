@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"math"
 	"strings"
+
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric/identity"
 )
 
 func (v ContextFabricScalarValue) Validate() error {
@@ -151,6 +153,9 @@ func (e ContextFabricEntityProjection) Validate() error {
 	if err := validateReservedOrganizationScope(e.Subject.Kind, e.Authorization); err != nil {
 		return err
 	}
+	if err := validateEntityProjectIdentities(e.Subject.Kind, e.ProjectIdentities); err != nil {
+		return err
+	}
 	for provider, id := range e.ProviderIDs {
 		if !stringLengthBetween(provider, 1, 128) || !stringLengthBetween(id, 1, 512) || strings.TrimSpace(provider) != provider || strings.TrimSpace(id) != id {
 			return fmt.Errorf("provider identity violates v1 bounds")
@@ -160,6 +165,48 @@ func (e ContextFabricEntityProjection) Validate() error {
 		return fmt.Errorf("properties: %w", err)
 	}
 	return validateTimeRange(&e.ObservedAt, e.ValidFrom, e.ValidTo)
+}
+
+// ContextFabricEntityProjectIdentitiesMax bounds a work item's stated
+// project membership (CHAOS-12226), the same bound as every other
+// authorization list.
+const ContextFabricEntityProjectIdentitiesMax = contextFabricAuthorizationScopeMax
+
+// validateEntityProjectIdentities admits project_identities on a work item
+// only, and only canonical project.v2 identities: the exact spelling
+// identity.Derive produces for (provider, id), both non-empty. A wildcard, a
+// raw project id, another kind, or a spelling that decodes but is not the
+// one Derive writes is refused, so no stated set can widen into "any
+// project" or name one project two ways.
+func validateEntityProjectIdentities(kind ContextFabricSubjectKind, identities *[]string) error {
+	if identities == nil {
+		return nil
+	}
+	if kind != ContextFabricSubjectWorkItem {
+		return fmt.Errorf("project_identities is allowed only on a work item entity, not %q", kind)
+	}
+	if len(*identities) > ContextFabricEntityProjectIdentitiesMax {
+		return fmt.Errorf("project_identities exceeds v1 bound of %d", ContextFabricEntityProjectIdentitiesMax)
+	}
+	seen := make(map[string]struct{}, len(*identities))
+	for _, value := range *identities {
+		if _, dup := seen[value]; dup {
+			return fmt.Errorf("project_identities must be unique")
+		}
+		seen[value] = struct{}{}
+		if strings.ContainsRune(value, '|') {
+			return fmt.Errorf("project_identities must not contain '|'")
+		}
+		segments, ok := identity.Segments(identity.KindProject, value)
+		if !ok || len(segments) != 2 || segments[0] == "" || segments[1] == "" {
+			return fmt.Errorf("project_identities entry is not a canonical project identity")
+		}
+		canonical, omitted, err := identity.Derive(identity.KindProject, segments, nil)
+		if err != nil || omitted || canonical != value {
+			return fmt.Errorf("project_identities entry is not a canonical project identity")
+		}
+	}
+	return nil
 }
 
 func (r ContextFabricRelationshipProjection) Validate() error {

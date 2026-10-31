@@ -25,6 +25,7 @@ import (
 var ingestCursorColumns = map[string]struct{ expr, writer string }{
 	"repos":                                {"last_synced", "internal/providersync/stored_version.go:365 repos upsert; streamhandlers/external_clickhouse.go:185 (unchanged)"},
 	"work_items":                           {"w.last_synced", "migrations/clickhouse/009_raw_work_items.sql:26; providersync/linear_work_items_route.go:883, gitlab_work_items_rows.go:232"},
+	"work_items_project_membership":        {"c.membership_changed_at", "the newest of project_membership_transitions.ingested_at (ops migration 100, DEFAULT now64(3)) and projects.last_synced (migrations/clickhouse/051_team_attribution_dimensions.sql:13 DEFAULT now64(3)) over the work item's membership; CHAOS-12226"},
 	"work_items_hierarchy":                 {hierarchyCursorExpr, "the child's own work_items.last_synced (same column as work_items) or the newest last_synced of any row carrying its parent id"},
 	"git_pull_requests":                    {"p.last_synced", "providersync/github_prs_route.go:394 (unchanged)"},
 	"deployments":                          {"d.last_synced", "providersync/github_deployments_route.go:303"},
@@ -95,7 +96,9 @@ func cursorExpression(t *testing.T, table, statement string) string {
 func TestEveryProjectedTablePagesOnItsIngestColumnOrIsDisclosed(t *testing.T) {
 	registries := map[string][]entityTable{
 		"dev_health_clickhouse": entityTables,
-		"teams_projects":        teamsProjectsTables(&ambiguityLedger{}, &presenceTelemetryLedger{}, &teamAuthorizationLedger{}, &repositoryOwnershipLedger{}),
+		// CHAOS-12226: the registry with work-item project membership on.
+		"dev_health_clickhouse_membership": withWorkItemProjectMembership(entityTables),
+		"teams_projects":                   teamsProjectsTables(&ambiguityLedger{}, &presenceTelemetryLedger{}, &teamAuthorizationLedger{}, &repositoryOwnershipLedger{}),
 	}
 	cursor := cursorState{Since: time.Date(2026, 9, 30, 12, 0, 0, 0, time.UTC), After: "k", Space: cursorSpaceIngest}
 	seen := map[string]bool{}

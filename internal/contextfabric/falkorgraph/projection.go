@@ -261,6 +261,17 @@ func stubFailsClosed(kind contextfabric.SubjectKind) bool {
 // simply by whether entityOwned is non-nil -- no read-modify-write, no
 // COALESCE trick, no second query. This replaces
 // zepgraph.mergedSubjectAttributes' two-round-trip read-then-merge outright.
+// projectIdentitiesValue is the graph value of a stated project membership:
+// nil (remove the key) when not stated, else the sorted, deduplicated list.
+// UniqueSorted returns a non-nil list, so a stated empty set is written as
+// an empty list, never as null.
+func projectIdentitiesValue(identities *[]string) interface{} {
+	if identities == nil {
+		return nil
+	}
+	return graphrank.UniqueSorted(*identities)
+}
+
 func subjectMergeAttrs(subject contextfabric.SubjectRef, authorization contextfabric.AuthorizationScope, evidence []string, observedAt time.Time, validFrom, validTo *time.Time, sourceVersion string, entityOwned *contextfabric.EntityProjection, includeBodies bool) map[string]interface{} {
 	attrs := map[string]interface{}{
 		propLabel:         subject.Label,
@@ -300,6 +311,16 @@ func subjectMergeAttrs(subject contextfabric.SubjectRef, authorization contextfa
 		// Cypher null, not a marshaling error.
 		attrs[propValidFrom], attrs[propValidFromNs] = validTimeAttrs(validFrom)
 		attrs[propValidTo], attrs[propValidToNs] = validTimeAttrs(validTo)
+		if subject.Kind == contextfabric.SubjectWorkItem {
+			// CHAOS-12226: the work item's own entity write is the one
+			// writer of its project membership, and it asserts it either
+			// way, like the validity window above: the stated set (an
+			// explicit empty list when the work item is in no project), or
+			// null when the producer did not state it, which removes the key.
+			// No stub and no other kind ever writes it, and it never goes
+			// through authorizationValue, so it can never become "*".
+			attrs[propAuthzProjectIdentities] = projectIdentitiesValue(entityOwned.ProjectIdentities)
+		}
 	}
 	// A REFERENCED stub deliberately writes NO validity window at all
 	// (CHAOS-3781 round-1 F3). It previously copied the window of

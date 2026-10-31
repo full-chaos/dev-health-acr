@@ -451,6 +451,31 @@ phase 1 must be fully drained BEFORE this deploy). Run
 `acr-projector rebuild --org <organization-id>` for every projected
 organization; the rebuild reprojects and re-embeds in one pass.
 
+**Work-item project membership is a roll step, not a deploy step
+(CHAOS-12226).** `ACR_CONTEXT_FABRIC_PROJECT_WORK_ITEM_PROJECT_MEMBERSHIP_ENABLED`
+(helm `contextFabric.projector.workItemProjectMembershipEnabled`, default
+`false`) makes each work item state its current project membership, read from
+its own project link (`project_membership_presence`, resolved to exactly one
+`projects` row), on its graph node as `authorization_project_identities`: a
+list of canonical `project.v2:` identities, empty when the work item is in no
+project. It also adds the `work_items_project_membership` table, which
+re-emits a work item whose membership changed without the work item syncing
+(a transition, the loss of its last project, a change to a project it names).
+Every table of the source shares one cursor, so turning the flag on in an
+organization that is already projected backfills nothing by itself: only work
+items written afterwards, and membership changes after the current cursor,
+carry the value. **The roll step "work-item project membership on"** (needs an
+approved roll) is therefore: set the flag, then run
+`acr-projector rebuild --org <organization-id>` for every projected
+organization; the rebuild reads every table from zero, so every work item gets
+its current set. The deploy itself bumps no source version and changes no
+graph value while the flag is off. Until a work item is written with the flag
+on it carries no `authorization_project_identities`, and an absent value admits
+no project (fail closed). **Any later change of the flag goes with a rebuild in
+the same roll:** while the flag is off, membership changes are not followed,
+and every later work-item write removes the value, so a value written while it
+was on can be stale for a work item not written since.
+
 **A rebuild is likewise REQUIRED after deploying CHAOS-3835**
 (embed composition tag `t2` → `t3`, the T5 id-only skip decision —
 `isPureIdentifierSubject`, `id_only.go`). **This deploy does NOT bump

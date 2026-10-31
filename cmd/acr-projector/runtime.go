@@ -461,6 +461,7 @@ func clickhouseBackedSources(client contextpacket.ClickHouseQueryClient, cfg con
 		return nil, nil, err
 	}
 	clickhouseSource.WithWindowCarry(cfg.WindowCarry)
+	clickhouseSource.WithWorkItemProjectMembership(cfg.WorkItemProjectMembership)
 	teamsProjectsSource, err := devhealthsource.NewTeamsProjectsSource(client, cfg.TeamsProjectsEnabled)
 	if err != nil {
 		return nil, nil, err

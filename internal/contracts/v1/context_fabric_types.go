@@ -2360,11 +2360,18 @@ type ContextFabricEntityProjection struct {
 	ProviderIDs     map[string]string                   `json:"provider_ids,omitempty"`
 	Properties      map[string]ContextFabricScalarValue `json:"properties,omitempty"`
 	Authorization   ContextFabricAuthorizationScope     `json:"authorization"`
-	EvidenceRefIDs  []string                            `json:"evidence_ref_ids"`
-	ObservedAt      time.Time                           `json:"observed_at"`
-	ValidFrom       *time.Time                          `json:"valid_from,omitempty"`
-	ValidTo         *time.Time                          `json:"valid_to,omitempty"`
-	SourceVersion   string                              `json:"source_version"`
+	// ProjectIdentities (CHAOS-12226) is a work item's CURRENT project
+	// membership, as canonical project.v2 identities from its own project
+	// link (never from repositories, issue-key prefixes or team ownership).
+	// nil: the producer did not state it. An empty list: stated, and the work
+	// item is in no project. Only a work-item entity may carry it, and it is
+	// never "*". The graph writes it as authorization_project_identities.
+	ProjectIdentities *[]string  `json:"project_identities,omitempty"`
+	EvidenceRefIDs    []string   `json:"evidence_ref_ids"`
+	ObservedAt        time.Time  `json:"observed_at"`
+	ValidFrom         *time.Time `json:"valid_from,omitempty"`
+	ValidTo           *time.Time `json:"valid_to,omitempty"`
+	SourceVersion     string     `json:"source_version"`
 }
 
 type ContextFabricRelationshipProjection struct {
