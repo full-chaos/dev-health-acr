@@ -127,9 +127,9 @@ func buildTransport(cfg Config) (*http.Transport, error) {
 // origin, and acr-mcp shares one client's pool across every caller, so the
 // per-host cap is the whole pool. With the Go default of 2 idle connections
 // per host, a finished request's connection was closed whenever more than 2
-// were in flight, and the next request dialed again (measured: 428-451 new
-// acr-api connections for 1320 upstream calls by 32 workers, against 32 with
-// this pool).
+// were in flight, and the next request dialed again. Measured on the
+// in-process acr-mcp -> acr-api rig (32 workers, about 1320 upstream calls):
+// 288-380 new acr-api connections per run on Linux, against 32 with this pool.
 //
 // The two idle timeouts, stated together: the client closes an idle
 // connection before acr-api does, so no request goes out on a connection the
