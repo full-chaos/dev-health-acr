@@ -127,6 +127,14 @@ func TestThreadRoutes_listReadAndDelete(t *testing.T) {
 	if summary.ThreadID != threadTestID || summary.TurnCount != 3 || summary.RetentionDays != contractsv1.ContextFabricThreadRetentionMonth {
 		t.Fatalf("summary = %+v", summary)
 	}
+	// CHAOS-12235: the item names its first turn's question, on the wire,
+	// and the list line counts it without its text.
+	if summary.FirstQuestion != "Which teams own the ops repository?" {
+		t.Fatalf("first_question = %q, want the first turn's question", summary.FirstQuestion)
+	}
+	if logs := h.logs[0].String(); !strings.Contains(logs, `"route":"list"`) || !strings.Contains(logs, `"first_questions":1`) || strings.Contains(logs, "Which teams own the ops repository?") {
+		t.Fatalf("the list line must count the first question and never carry it:\n%s", logs)
+	}
 
 	thread := readThreadBody(t, h.threadCall(http.MethodGet, h.tokenA, threadPath(threadTestID)))
 	if len(thread.Turns) != 3 || thread.EarlierTurnsCursor != "" || thread.Turns[0].Question != "Which teams own the ops repository?" ||

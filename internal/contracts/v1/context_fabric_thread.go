@@ -195,6 +195,11 @@ type ContextFabricThreadSummary struct {
 	LastTurnAt time.Time `json:"last_turn_at"`
 	// ExpiresAt is ContextFabricThreadExpiresAt(LastTurnAt, RetentionDays).
 	ExpiresAt time.Time `json:"expires_at"`
+	// FirstQuestion (CHAOS-12235) is the question recorded on the thread's
+	// true first turn (the first in admitted_at, then submission id order),
+	// as the caller sent it. Absent when that turn recorded none. Additive and
+	// optional: an older client ignores it.
+	FirstQuestion string `json:"first_question,omitempty"`
 }
 
 // Validate holds the summary to its schema.
@@ -214,6 +219,8 @@ func (s ContextFabricThreadSummary) Validate() error {
 		return fmt.Errorf("a thread of one turn has last_turn_at equal to created_at")
 	case !s.ExpiresAt.Equal(ContextFabricThreadExpiresAt(s.LastTurnAt, s.RetentionDays)):
 		return fmt.Errorf("thread expires_at must be last_turn_at plus the retention window")
+	case s.FirstQuestion != "" && !stringLengthBetween(s.FirstQuestion, 1, ContextFabricThreadQuestionMaxRunes):
+		return fmt.Errorf("thread first_question violates v1 bounds")
 	}
 	return nil
 }
