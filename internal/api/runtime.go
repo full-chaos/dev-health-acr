@@ -53,9 +53,14 @@ type RuntimeDependencies struct {
 	DeviceAuthorizationLimiter DeviceAuthorizationLimiter
 	Audit                      storage.AuditStore
 	Entitlements               EntitlementProvider
-	Assembler                  ContextPacketAssembler
-	Evidence                   storage.EvidenceStore
-	Episodes                   EpisodeCreator
+	// PrincipalAccess is the per-call access read (CHAOS-12092): every
+	// protected call by a user-class credential reads it, uncached. Hosted
+	// remote entitlement mode always sets it; nil (local development and
+	// test mode) skips the read, and NewApp logs a Warn.
+	PrincipalAccess PrincipalAccessReader
+	Assembler       ContextPacketAssembler
+	Evidence        storage.EvidenceStore
+	Episodes        EpisodeCreator
 	// Investigator is optional -- context-fabric composition never fails
 	// closed over an unconfigured optional dependency (same convention as
 	// falkorgraph.Configured for the graph backend). When nil, the
@@ -302,7 +307,7 @@ func (a *App) requireEntitlement(entitlement string, next http.Handler) http.Han
 			writeError(w, r, http.StatusUnauthorized, "invalid_token", "Missing or invalid ACR credential", false, nil)
 			return
 		}
-		enabled, err := a.runtime.Entitlements.HasEntitlement(r.Context(), principal.OrgID, entitlement)
+		enabled, err := a.entitlementEnabled(r.Context(), principal, entitlement)
 		if err != nil {
 			a.writeEntitlementLookupError(w, r, err)
 			return
@@ -314,6 +319,15 @@ func (a *App) requireEntitlement(entitlement string, next http.Handler) http.Han
 		}
 		next.ServeHTTP(w, r)
 	})
+}
+
+// entitlementEnabled answers entitlement for principal; agent_context_runtime
+// comes from the request's live access read when one ran (CHAOS-12092).
+func (a *App) entitlementEnabled(ctx context.Context, principal storage.Principal, entitlement string) (bool, error) {
+	if entitlement == agentContextRuntimeEntitlement {
+		return a.agentContextRuntimeEntitled(ctx, principal)
+	}
+	return a.runtime.Entitlements.HasEntitlement(ctx, principal.OrgID, entitlement)
 }
 
 func (a *App) handleRuntimeUnavailable(w http.ResponseWriter, r *http.Request) {

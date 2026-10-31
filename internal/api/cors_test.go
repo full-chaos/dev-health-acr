@@ -134,6 +134,9 @@ func TestABrowserPreflightIsAnsweredBeforeAuthOnEveryBrowserRoute(t *testing.T) 
 		ContextFabricInvestigationsPath + "/result_cors_00000001",
 		ContextFabricInvestigationsPath + "/submissions/submission-cors-0001",
 		"/api/v1/agent-context/evidence/ev_cors_0001",
+		// CHAOS-12092: the conversation routes are browser routes.
+		ContextFabricThreadsPath,
+		ContextFabricThreadsPath + "/thread-cors-0001",
 	} {
 		for _, origin := range []string{corsTestOrigin, "http://localhost"} {
 			got := harness.cors(0, corsCall{method: http.MethodOptions, path: path, origin: origin, headers: map[string]string{
@@ -145,7 +148,7 @@ func TestABrowserPreflightIsAnsweredBeforeAuthOnEveryBrowserRoute(t *testing.T) 
 			}
 			want := map[string]string{
 				"Access-Control-Allow-Origin":  origin,
-				"Access-Control-Allow-Methods": "GET, POST, OPTIONS",
+				"Access-Control-Allow-Methods": "GET, POST, DELETE, OPTIONS",
 				"Access-Control-Allow-Headers": "Authorization, Content-Type, X-ACR-Client-Version, X-ACR-Submission-ID, X-ACR-Thread-ID, X-ACR-Wait-Budget-Seconds, X-ACR-Resource, X-Request-ID",
 				"Access-Control-Max-Age":       "600",
 			}
@@ -424,4 +427,26 @@ func TestARefusedOriginIsNeverLoggedAndSaysWhy(t *testing.T) {
 			t.Fatalf("%v: the refusal line carries an origin field: %v", tc.origins, refusal)
 		}
 	}
+}
+
+// CHAOS-12092 (codex #1777 r4): a browser deletes a conversation with DELETE,
+// so its preflight is answered with DELETE allowed, and the actual DELETE
+// response carries CORS like every other browser response.
+func TestTheConversationDeleteIsABrowserRoute(t *testing.T) {
+	harness := corsHarness(t)
+	path := ContextFabricThreadsPath + "/thread-cors-0001"
+	preflight := harness.cors(0, corsCall{method: http.MethodOptions, path: path, origin: corsTestOrigin, headers: map[string]string{
+		"Access-Control-Request-Method": "DELETE", "Access-Control-Request-Headers": "authorization, x-acr-client-version",
+	}})
+	if preflight.Code != http.StatusNoContent || preflight.Header().Get("Access-Control-Allow-Origin") != corsTestOrigin ||
+		!strings.Contains(preflight.Header().Get("Access-Control-Allow-Methods"), "DELETE") {
+		t.Fatalf("DELETE preflight: %d, Allow-Origin %q, Allow-Methods %q; want 204 for %s with DELETE", preflight.Code,
+			preflight.Header().Get("Access-Control-Allow-Origin"), preflight.Header().Get("Access-Control-Allow-Methods"), corsTestOrigin)
+	}
+	actual := harness.cors(0, corsCall{method: http.MethodDelete, path: path, origin: corsTestOrigin, token: harness.tokenA,
+		headers: map[string]string{"X-ACR-Client-Version": "1.0.0"}})
+	if actual.Header().Get("Access-Control-Allow-Origin") != corsTestOrigin {
+		t.Fatalf("actual DELETE: %d without Allow-Origin %s: %s", actual.Code, corsTestOrigin, actual.Body.String())
+	}
+	expectNoCredentialsOrWildcard(t, "DELETE", actual)
 }

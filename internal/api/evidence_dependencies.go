@@ -239,6 +239,12 @@ func NewApp(cfg AppConfig, deps Dependencies, logger *slog.Logger) (*App, error)
 		app.clientIP = auth.RemoteAddressClientIP
 	}
 	app.trackAuthenticator(authenticator)
+	if app.runtime != nil && app.principalAccess() == nil {
+		// CHAOS-12092: without a reader a user-class call is not re-checked
+		// live. Only local entitlement mode (development and test) composes
+		// a runtime this way; the hosted remote composition always sets it.
+		logger.Warn("per-call principal access read is off: user-class calls are not re-checked live")
+	}
 	return app, nil
 }
 

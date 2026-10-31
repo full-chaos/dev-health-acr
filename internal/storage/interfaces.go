@@ -98,6 +98,11 @@ type Principal struct {
 	// for every other authentication.
 	SessionID     string
 	Impersonating bool
+	// CredentialSessionID is the ACP web session a browser-class credential
+	// is bound to (its row's session_id, CHAOS-12123), copied by
+	// authentication; empty for every other credential and for a web
+	// assertion. The per-call access read (CHAOS-12092) checks it is live.
+	CredentialSessionID string
 }
 
 // AuthenticationMethod identifies the validated authentication boundary that

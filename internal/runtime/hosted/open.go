@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"github.com/full-chaos/dev-health-acr/internal/entitlements"
 	storagepostgres "github.com/full-chaos/dev-health-acr/internal/storage/postgres"
 	"github.com/full-chaos/dev-health-acr/internal/telemetryscrub"
 	"log/slog"
@@ -279,8 +280,9 @@ func open(ctx context.Context, request buildRequest) (*Runtime, error) {
 		EvidenceStoreFactory: clickhouse.factory, ClientIP: clientIP, UsageTelemetry: usageTelemetry,
 		WebAssertionReplays: webAssertionReplays,
 		Runtime: &api.RuntimeDependencies{
-			Credentials: postgres.credentials, Audit: postgres.audit, Entitlements: entitlement, Assembler: assembler,
-			Evidence: clickhouse.evidence, Episodes: episodeCreator, ReadinessChecks: livenessChecks, DataStoreChecks: dataStoreChecks,
+			Credentials: postgres.credentials, Audit: postgres.audit, Entitlements: entitlement, PrincipalAccess: principalAccessReader(entitlement),
+			Assembler: assembler,
+			Evidence:  clickhouse.evidence, Episodes: episodeCreator, ReadinessChecks: livenessChecks, DataStoreChecks: dataStoreChecks,
 			DeviceAuthorizations: postgres.devices, DeviceVerificationURL: request.config.DeviceVerificationURL,
 			DeviceAuthorizationLimiter: api.NewDeviceAuthorizationLimiter(api.ClockFunc(request.options.Now)),
 			Investigator:               investigator,
@@ -1342,6 +1344,19 @@ func closeAfterError(runtime *Runtime, cause error) error {
 		return errors.Join(cause, fmt.Errorf("close hosted runtime: %w", closeErr))
 	}
 	return cause
+}
+
+// principalAccessReader is the per-call access read (CHAOS-12092) of the
+// entitlement provider: the remote Dev Health client serves it; the local
+// development provider does not, and the read is then off (NewApp warns).
+// A signature drift must break the build, not silently turn the read off.
+var _ api.PrincipalAccessReader = (*entitlements.Client)(nil)
+
+func principalAccessReader(entitlement entitlementChecker) api.PrincipalAccessReader {
+	if reader, ok := entitlement.(api.PrincipalAccessReader); ok {
+		return reader
+	}
+	return nil
 }
 
 // oauthRuntime composes the OAuth login for hosted MCP clients, or nil when
