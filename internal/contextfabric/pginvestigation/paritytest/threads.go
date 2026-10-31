@@ -261,6 +261,101 @@ func RunThreadSuite(t *testing.T, newStore func(t *testing.T, clock func() time.
 		}
 	})
 
+	// CHAOS-12235: each list item names the question of its thread's TRUE
+	// first turn, in turn order (admitted_at, then submission id), whatever
+	// a thread read's page serves; absent when that turn recorded none; and
+	// another principal's turns never reach it.
+	t.Run("the list names each thread's first question from its true first turn", func(t *testing.T) {
+		listedIn := func(t *testing.T, store ThreadStore, clock *ThreadClock, principal storage.Principal) map[string]string {
+			t.Helper()
+			threads, _, err := store.ListThreads(ctx, principal.OrgID, ownerOf(t, principal), nil, contractsv1.ContextFabricThreadListMaxLimit, clock.now)
+			if err != nil {
+				t.Fatal(err)
+			}
+			out := map[string]string{}
+			for _, thread := range threads {
+				if _, twice := out[thread.Key.ThreadID]; twice {
+					t.Fatalf("thread %s is listed twice", thread.Key.ThreadID)
+				}
+				out[thread.Key.ThreadID] = thread.FirstQuestion
+			}
+			return out
+		}
+		// A long thread: more turns than one read serves (its own store, so
+		// its running turns do not meet the principal's admission limit).
+		longStore, longClock := setup(t)
+		long := contractsv1.ContextFabricThreadMaxServedTurns + 5
+		for i := range long {
+			longClock.now = start.Add(time.Duration(i+1) * time.Minute)
+			turn(t, longStore, longClock, owner, "thread-parity-first-long", fmt.Sprintf("first-long-%03d", i), nil)
+		}
+		page, err := longStore.GetThread(ctx, threadKey(t, owner, "thread-parity-first-long"), nil, contractsv1.ContextFabricThreadMaxServedTurns, longClock.now)
+		if err != nil || !page.EarlierTurns || page.Turns[0].Question == "question first-long-000" {
+			t.Fatalf("fixture: the latest page must not hold the first turn: %+v err=%v", page.Turns[:1], err)
+		}
+		if got := listedIn(t, longStore, longClock, owner)["thread-parity-first-long"]; got != "question first-long-000" {
+			t.Errorf("long thread first question = %q, want the true first turn's, not the served page's", got)
+		}
+
+		store, clock := setup(t)
+		listed := func(t *testing.T, principal storage.Principal) map[string]string {
+			t.Helper()
+			return listedIn(t, store, clock, principal)
+		}
+		// Turn order is admitted_at, not admission order nor submission id: a
+		// turn admitted later with an earlier clock (another replica's), and
+		// with the larger submission id, is the first.
+		clock.now = start.Add(2 * time.Minute)
+		turn(t, store, clock, owner, "thread-parity-first-order", "first-order-a-later-clock", nil)
+		clock.now = start.Add(time.Minute)
+		turn(t, store, clock, owner, "thread-parity-first-order", "first-order-z-earlier-clock", nil)
+		// A first turn that recorded no question: the field is absent, never
+		// the next turn's question.
+		clock.now = start.Add(3 * time.Minute)
+		key, _ := contextfabric.SubmissionKeyFor(owner, "submission-thread-first-legacy-1")
+		if _, admitted, err := store.AdmitSubmission(ctx, contextfabric.SubmissionAdmission{
+			Key: key, RequestDigest: "sha256:" + fmt.Sprintf("%064x", 12235), ReservedResultID: "result_thread_first_legacy_1",
+			ThreadID: "thread-parity-first-legacy", ExpiresAt: clock.now.Add(time.Minute),
+		}, clock.now); err != nil || !admitted {
+			t.Fatalf("admit a turn with no question: admitted=%t err=%v", admitted, err)
+		}
+		clock.now = start.Add(4 * time.Minute)
+		turn(t, store, clock, owner, "thread-parity-first-legacy", "first-legacy-2", nil)
+		// The same thread id under another principal is another thread.
+		clock.now = start.Add(5 * time.Minute)
+		turn(t, store, clock, stranger, "thread-parity-first-order", "first-stranger", nil)
+		clock.now = start.Add(10 * time.Minute)
+
+		got := listed(t, owner)
+		want := map[string]string{
+			"thread-parity-first-order":  "question first-order-z-earlier-clock",
+			"thread-parity-first-legacy": "",
+		}
+		for id, question := range want {
+			if q, ok := got[id]; !ok || q != question {
+				t.Errorf("%s first question = %q (listed %t), want %q", id, q, ok, question)
+			}
+		}
+		if got := listed(t, stranger); got["thread-parity-first-order"] != "question first-stranger" {
+			t.Errorf("the other principal's thread first question = %q, want its own first turn's", got["thread-parity-first-order"])
+		}
+
+		// A deleted thread is not listed, and its turns' questions are gone.
+		if closed, err := store.CloseThread(ctx, threadKey(t, owner, "thread-parity-first-order"), clock.now); err != nil || !closed {
+			t.Fatalf("close = %t %v", closed, err)
+		}
+		if q, ok := listed(t, owner)["thread-parity-first-order"]; ok {
+			t.Errorf("a deleted thread is listed with first question %q", q)
+		}
+		record, err := store.GetSubmission(ctx, contextfabric.SubmissionKey{OrgID: owner.OrgID, Owner: ownerOf(t, owner), SubmissionID: "submission-thread-first-order-z-earlier-clock"}, clock.now)
+		if err != nil || record.Question != "" {
+			t.Errorf("the deleted thread's first turn = %+v err=%v, want its question erased", record, err)
+		}
+		if got := listed(t, stranger); got["thread-parity-first-order"] != "question first-stranger" {
+			t.Errorf("deleting one principal's thread changed the other's first question to %q", got["thread-parity-first-order"])
+		}
+	})
+
 	t.Run("delete closes the thread, erases its questions and refuses its turns", func(t *testing.T) {
 		store, clock := setup(t)
 		first := turn(t, store, clock, owner, "thread-parity-delete", "delete-1", &month)

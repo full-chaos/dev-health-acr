@@ -164,7 +164,30 @@ func (s *Store) ListThreads(ctx context.Context, orgID string, owner contextfabr
 	if more {
 		open = open[:limit]
 	}
+	// CHAOS-12235: the question of each listed row's TRUE first turn (its
+	// own linked records, as GetThread reads them, in turn order).
+	for i := range open {
+		open[i].FirstQuestion = s.firstQuestionLocked(open[i])
+	}
 	return open, more, nil
+}
+
+// firstQuestionLocked is the question recorded on thread's first turn in
+// turn order, or "" when that turn recorded none.
+func (s *Store) firstQuestionLocked(thread contextfabric.ThreadRecord) string {
+	row := rowKeyOf(thread.Key)
+	var first *contextfabric.ThreadTurnCursor
+	question := ""
+	for submissionKey, record := range s.submissions {
+		if record.ThreadID != thread.Key.ThreadID || recordThreadRow(submissionKey, record) != row {
+			continue
+		}
+		cursor := contextfabric.ThreadTurnCursor{AdmittedAt: record.AdmittedAt, SubmissionID: submissionKey.SubmissionID}
+		if first == nil || cursor.Before(*first) {
+			first, question = &cursor, record.Question
+		}
+	}
+	return question
 }
 
 func threadListBefore(a, b contextfabric.ThreadRecord) bool {

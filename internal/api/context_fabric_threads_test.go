@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"github.com/full-chaos/dev-health-acr/internal/contractcheck"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -119,6 +120,9 @@ func TestThreadRoutes_listReadAndDelete(t *testing.T) {
 	h.clock.Advance(time.Minute)
 	servedResultID(t, h.turn(h.tokenA, "submission-11948-0003", threadTestID, "Compare with the quarter before.", ""))
 
+	// CHAOS-12235: the first_question switch is on for this test (see
+	// TestThreadRoutes_firstQuestionFollowsItsSwitch for both states).
+	h.apps[0].config.ThreadListFirstQuestionEnabled = true
 	list := readThreadListBody(t, h.threadCall(http.MethodGet, h.tokenA, ContextFabricThreadsPath))
 	if len(list.Threads) != 1 || list.NextCursor != "" {
 		t.Fatalf("list = %+v", list)
@@ -126,6 +130,14 @@ func TestThreadRoutes_listReadAndDelete(t *testing.T) {
 	summary := list.Threads[0]
 	if summary.ThreadID != threadTestID || summary.TurnCount != 3 || summary.RetentionDays != contractsv1.ContextFabricThreadRetentionMonth {
 		t.Fatalf("summary = %+v", summary)
+	}
+	// CHAOS-12235: the item names its first turn's question, on the wire,
+	// and the list line counts it without its text.
+	if summary.FirstQuestion != "Which teams own the ops repository?" {
+		t.Fatalf("first_question = %q, want the first turn's question", summary.FirstQuestion)
+	}
+	if logs := h.logs[0].String(); !strings.Contains(logs, `"route":"list"`) || !strings.Contains(logs, `"first_questions":1`) || strings.Contains(logs, "Which teams own the ops repository?") {
+		t.Fatalf("the list line must count the first question and never carry it:\n%s", logs)
 	}
 
 	thread := readThreadBody(t, h.threadCall(http.MethodGet, h.tokenA, threadPath(threadTestID)))
@@ -320,4 +332,40 @@ func TestThreadRoutes_refuseWithoutAStore(t *testing.T) {
 	recorder := httptest.NewRecorder()
 	h.apps[0].Handler().ServeHTTP(recorder, request)
 	expectErrorCode(t, recorder, http.StatusUnauthorized, "invalid_token")
+}
+
+// CHAOS-12235: first_question is served only when its switch is on. Off (the
+// default), the list item is the earlier published shape: no key at all, so a
+// client validating against that schema (additionalProperties false) accepts
+// it; the line counts 0. On, the item names its first turn's question.
+func TestThreadRoutes_firstQuestionFollowsItsSwitch(t *testing.T) {
+	h := threadHarness(t)
+	servedResultID(t, h.turn(h.tokenA, "submission-12235-0001", threadTestID, "Which teams own the ops repository?", ""))
+	h.clock.Advance(time.Minute)
+	servedResultID(t, h.turn(h.tokenA, "submission-12235-0002", threadTestID, "And last month?", ""))
+
+	if h.apps[0].config.ThreadListFirstQuestionEnabled {
+		t.Fatal("the harness app has the switch on by default")
+	}
+	off := h.threadCall(http.MethodGet, h.tokenA, ContextFabricThreadsPath)
+	readThreadListBody(t, off)
+	if strings.Contains(off.Body.String(), "first_question") {
+		t.Fatalf("switch off: the list carries first_question: %s", off.Body.String())
+	}
+	if err := contractcheck.ValidateSerializedStrict("", "context_fabric_thread_list.v1.schema.json", off.Body.Bytes()); err != nil {
+		t.Fatalf("switch off: the list fails the schema: %v", err)
+	}
+	if logs := h.logs[0].String(); !strings.Contains(logs, `"first_questions":0`) {
+		t.Fatalf("switch off: the list line must count 0 first questions:\n%s", logs)
+	}
+
+	h.apps[0].config.ThreadListFirstQuestionEnabled = true
+	h.logs[0].Reset()
+	on := readThreadListBody(t, h.threadCall(http.MethodGet, h.tokenA, ContextFabricThreadsPath))
+	if len(on.Threads) != 1 || on.Threads[0].FirstQuestion != "Which teams own the ops repository?" {
+		t.Fatalf("switch on: list = %+v, want the first turn's question", on)
+	}
+	if logs := h.logs[0].String(); !strings.Contains(logs, `"first_questions":1`) {
+		t.Fatalf("switch on: the list line must count 1 first question:\n%s", logs)
+	}
 }
