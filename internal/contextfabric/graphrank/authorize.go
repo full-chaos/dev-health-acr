@@ -107,6 +107,9 @@ func AuthorizedAttributes(principal storage.Principal, requested contextfabric.R
 	if len(requested.ProjectIDs) > 0 && !anyContainsAttr(attributes, authorizationProjectsAttr, requested.ProjectIDs) {
 		return false
 	}
+	if requestedProjectNarrowingDenies(requested, attributes) {
+		return false
+	}
 	if len(requested.TeamIDs) > 0 && !anyContainsAttr(attributes, authorizationTeamsAttr, requested.TeamIDs) {
 		return false
 	}
@@ -125,17 +128,50 @@ func AuthorizedAttributes(principal storage.Principal, requested contextfabric.R
 //
 // A requested "*" is no narrowing: ScopeMatch admits every node for it, so
 // there is nothing to verify, and a request that holds one is not reported.
+//
+// CHAOS-12229: once the narrowing is resolved to canonical identities
+// (RequestedScope.ProjectNarrowing), a node whose stated membership holds a
+// requested project is proven and not reported; a stated non-member is not
+// admitted at all when every requested id resolved
+// (requestedProjectNarrowingDenies). Everything else -- membership not
+// stated, a requested id that did not resolve, no resolution -- stays
+// unproven and is reported, never presented as narrowed.
 func ProjectNarrowingUnproven(requested contextfabric.RequestedScope, attributes map[string]interface{}) bool {
+	membership, applies := requestedProjectMembership(requested, attributes)
+	return applies && membership != ProjectMembershipMember
+}
+
+// requestedProjectNarrowingDenies reports whether a resolved project
+// narrowing refuses a node its "*" project list would otherwise admit: the
+// node's stated membership holds none of the requested projects, and every
+// requested id resolved, so nothing is left unverified (CHAOS-12229).
+func requestedProjectNarrowingDenies(requested contextfabric.RequestedScope, attributes map[string]interface{}) bool {
+	membership, applies := requestedProjectMembership(requested, attributes)
+	return applies && membership == ProjectMembershipNotMember && requested.ProjectNarrowing != nil && requested.ProjectNarrowing.Complete
+}
+
+// requestedProjectMembership is what a node's stated membership says about a
+// requested project narrowing, and whether the narrowing applies to the node
+// at all: a narrowing is requested (no requested "*", which narrows
+// nothing), and the node's project list is the "*" string that proves no
+// project. With no resolution, the membership is Unstated. A node with a real
+// project list is decided by that list, as before.
+func requestedProjectMembership(requested contextfabric.RequestedScope, attributes map[string]interface{}) (ProjectMembership, bool) {
 	if len(requested.ProjectIDs) == 0 {
-		return false
+		return ProjectMembershipUnstated, false
 	}
 	for _, id := range requested.ProjectIDs {
 		if strings.TrimSpace(id) == "*" {
-			return false
+			return ProjectMembershipUnstated, false
 		}
 	}
-	value, isString := attributes[authorizationProjectsAttr].(string)
-	return isString && value == "*"
+	if value, isString := attributes[authorizationProjectsAttr].(string); !isString || value != "*" {
+		return ProjectMembershipUnstated, false
+	}
+	if requested.ProjectNarrowing == nil {
+		return ProjectMembershipUnstated, true
+	}
+	return ProjectMembershipOf(attributes, requested.ProjectNarrowing.Identities), true
 }
 
 // AuthorizationProjectIdentitiesAttr is the work-item node attribute that
