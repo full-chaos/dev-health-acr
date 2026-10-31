@@ -2,6 +2,7 @@ package contextfabric
 
 import (
 	"context"
+	"fmt"
 	"regexp"
 	"strings"
 	"testing"
@@ -255,5 +256,70 @@ func TestADriverlessHeadTheServerDidNotWriteIsNotRecomposed(t *testing.T) {
 	served.DirectJudgment, served.DeterministicAnswer = prose, prose
 	if got := restateServedStatusHead(served); got.DirectJudgment != prose || got.DeterministicAnswer != prose {
 		t.Fatalf("served lower: lead prose = %q / %q, want %q left alone", got.DirectJudgment, got.DeterministicAnswer, prose)
+	}
+}
+
+// The pattern table recognizes every lead sentence the server composes, read
+// from the composers themselves: a changed or new composer form fails here,
+// instead of making a driverless complete head read as not composed (a floor
+// would then compose it afresh and drop its count). A new absence reason
+// constant must be added to the list below; an unknown reason takes the
+// composer's default branch, which the list covers.
+func TestThePatternTableRecognizesEveryServerLeadSentence(t *testing.T) {
+	t.Parallel()
+	var sentences []string
+	for _, kind := range contractsv1.ContextFabricSubjectKindVocabulary() {
+		for _, served := range []int{0, 1, 3} {
+			for _, cardinality := range []MembershipCardinality{
+				{Resolved: true, Kind: kind, Served: served, Declared: served},
+				{Resolved: true, Kind: kind, Served: served, Declared: served + 5},
+				{Resolved: true, Kind: kind, Served: served, Declared: served, PopulationIncomplete: true},
+				{Resolved: true, Kind: kind, Served: served, Declared: served + 5, PopulationIncomplete: true},
+			} {
+				sentences = append(sentences, cardinalityAnswerSentence(cardinality))
+			}
+		}
+	}
+	period := make([]string, 0, 30)
+	for day := 1; day <= 30; day++ {
+		period = append(period, fmt.Sprintf("2026-10-%02d", day))
+	}
+	totals := []PeriodTotal{
+		{Column: "merged_prs", Sum: 4, DaysWithRow: 30, DaysInPeriod: 30, Certified: true},
+		{Column: "merged_prs", Sum: 3, DaysWithRow: 28, DaysInPeriod: 30, MissingDays: period[3:5]},
+		{Column: "merged_prs", Sum: 1, DaysWithRow: 10, DaysInPeriod: 30, MissingDays: period[10:]},
+	}
+	var absences []PeriodTotalAbsence
+	for _, reason := range []string{PeriodTotalAbsenceNoRows, PeriodTotalAbsenceTruncated, PeriodTotalAbsenceTooLong, PeriodTotalAbsenceWithheld, PeriodTotalAbsenceInconsistent, "a_reason_no_branch_names"} {
+		absences = append(absences, PeriodTotalAbsence{Table: "daily_deploys", Reason: reason})
+	}
+	sentences = append(sentences, PeriodTotalSentences(totals, absences)...)
+	for id := range relativeWindowDurations {
+		sentences = append(sentences, PeriodScopeSentence(&contractsv1.ContextFabricEffectiveEvidenceWindow{RelativeID: id}, period))
+	}
+	sentences = append(sentences, PeriodScopeSentence(nil, period), PeriodScopeSentence(&contractsv1.ContextFabricEffectiveEvidenceWindow{}, period))
+	for _, sentence := range sentences {
+		if sentence == "" {
+			t.Fatal("a composer returned no sentence for an input built to compose one")
+		}
+		if !serverLeadSentencesOnly(sentence) {
+			t.Errorf("the server composes %q, and no pattern recognizes it", sentence)
+		}
+	}
+	// Joined as the assembly joins them, they are still the server's own.
+	if joined := strings.Join(sentences, " "); !serverLeadSentencesOnly(joined) {
+		t.Error("the composed lead sentences, joined, are not recognized")
+	}
+	// current_state's fallback, as composeCurrentState writes it, is read as
+	// an empty head, alone or after the count.
+	open := int64(3)
+	for _, draft := range []SynthesisDraft{{}, {ClaimedFacts: []ClaimedFact{{ClaimID: "claim-1", Kind: FactStatus, Field: "open_items", Value: ScalarValue{Integer: &open}}}}} {
+		fallback := leadProseFallback(composeCurrentState(draft))
+		if fallback == "" || withoutLeadProseFallback(fallback, fallback) != "" {
+			t.Errorf("the fallback %q is not read as an empty head", fallback)
+		}
+		if head := withoutLeadProseFallback(sentences[0]+" "+fallback, fallback); head != sentences[0] || !serverLeadSentencesOnly(head) {
+			t.Errorf("a count before the fallback %q leaves %q, want the count alone", fallback, head)
+		}
 	}
 }
