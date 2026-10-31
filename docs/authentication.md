@@ -70,8 +70,8 @@ Every credential row records how, and for whom, it was issued (migration `0058`)
 
 | Column | Meaning |
 | --- | --- |
-| `client_class` | Derived by the credential lifecycle from the issuance path, never chosen by a caller: `operator` (the `acr-api credentials` command), `workload` (RFC 8693 workload exchange), `native_device` (legacy device flow), `oauth_user` (OAuth authorization code or RFC 8628 device grant; it always names its client), `browser` (the first-party web browser client's code exchange, CHAOS-12123: the OAuth service names the class for a configured browser client, and the lifecycle accepts it only on an OAuth exchange that carries the session, the family and both expiries). |
-| `approving_user_id` | The web-session subject that approved the device or OAuth authorization. The device-authorization store copies it from the locked authorization row inside the redemption transaction. Empty for `operator` and `workload`. |
+| `client_class` | Derived by the credential lifecycle from the issuance path, never chosen by a caller: `org_bearer` (the `acr-api credentials` command, D6530; migration `0063` relabelled the rows the CLI had written as `operator`, and `operator` stays in the vocabulary with no writer), `workload` (RFC 8693 workload exchange), `native_device` (legacy device flow), `oauth_user` (OAuth authorization code or RFC 8628 device grant; it always names its client), `browser` (the first-party web browser client's code exchange, CHAOS-12123: the OAuth service names the class for a configured browser client, and the lifecycle accepts it only on an OAuth exchange that carries the session, the family and both expiries). |
+| `approving_user_id` | The web-session subject that approved the device or OAuth authorization. The device-authorization store copies it from the locked authorization row inside the redemption transaction. Empty for `org_bearer`, `operator` and `workload`. |
 | `client_id` | The OAuth client the credential was issued to. |
 | `session_id`, `family_id`, `family_expires_at` | Browser class only (CHAOS-12123): the web session (`sid`) the approval was made in -- the store copies it from the locked device-authorization row (`approving_session_id`, migration `0061`), never from the caller -- the token family the credential starts, and the family's absolute end (issuance + 12 h). |
 
@@ -269,7 +269,7 @@ Routes: `GET /.well-known/oauth-authorization-server`, `GET /authorize`,
   migration 0040), never on the wire. The authenticator accepts a bound
   credential only when the request carries `X-ACR-Resource` with exactly that
   value; the hosted MCP endpoint sets that header from its own configuration.
-  A credential without a binding (operator, device, workload) is unaffected.
+  A credential without a binding (org_bearer, operator, device, workload) is unaffected.
 - The header is caller-set, so a holder of an MCP-bound credential could call
   acr-api directly with the MCP resource value. With `ACR_MCP_HOP_REQUIRED=true`
   (CHAOS-12094, default off) acr-api admits a credential bound to an MCP

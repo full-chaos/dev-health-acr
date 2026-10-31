@@ -15,7 +15,7 @@ import (
 // the approving user comes from the authorization record, and a rotation
 // copies the source's provenance unchanged.
 
-func TestCredentialProvenance_operatorCreateIsOperatorWithNoApprover(t *testing.T) {
+func TestCredentialProvenance_cliCreateIsOrgBearerWithNoApprover(t *testing.T) {
 	fixture := newDeviceAuthorizationFixture(t)
 
 	issued, err := fixture.service.Create(context.Background(), auth.CreateCredentialRequest{
@@ -25,7 +25,7 @@ func TestCredentialProvenance_operatorCreateIsOperatorWithNoApprover(t *testing.
 	})
 
 	require.NoError(t, err)
-	require.Equal(t, contractsv1.CredentialProvenance{ClientClass: string(storage.CredentialClientClassOperator)}, issued.Credential.Provenance)
+	require.Equal(t, contractsv1.CredentialProvenance{ClientClass: string(storage.CredentialClientClassOrgBearer)}, issued.Credential.Provenance)
 	stored := fixture.storedByToken(t, issued.Token)
 	require.Equal(t, issued.Credential.Provenance, stored.Provenance)
 }

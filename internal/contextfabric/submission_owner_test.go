@@ -23,12 +23,14 @@ func TestSubmissionOwnerOf_canonicalOwnerPerPrincipal(t *testing.T) {
 		{"browser class", credential(storage.CredentialClientClassBrowser, "user_1"), "user_1", SubmissionSurfaceBrowser},
 		{"oauth user", credential(storage.CredentialClientClassOAuthUser, "user_1"), "user_1", SubmissionSurfaceMCP},
 		{"native device", credential(storage.CredentialClientClassNativeDevice, "user_1"), "user_1", SubmissionSurfaceMCP},
+		{"org_bearer", credential(storage.CredentialClientClassOrgBearer, ""), "", ""},
 		{"operator", credential(storage.CredentialClientClassOperator, ""), "", ""},
 		{"workload", credential(storage.CredentialClientClassWorkload, ""), "", ""},
 		{"legacy credential, no class", credential("", ""), "", ""},
 		{"a class with no approving user", credential(storage.CredentialClientClassOAuthUser, ""), "", ""},
 		{"an approving user on an operator class", credential(storage.CredentialClientClassOperator, "user_1"), "", ""},
-		{"an unknown class", credential("org_bearer", "user_1"), "", ""},
+		{"an approving user on an org_bearer class", credential(storage.CredentialClientClassOrgBearer, "user_1"), "", ""},
+		{"an unknown class", credential("service_account", "user_1"), "", ""},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
