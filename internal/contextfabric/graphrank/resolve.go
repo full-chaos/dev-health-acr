@@ -3132,10 +3132,6 @@ func resolveSubjects(ctx context.Context, principal storage.Principal, request c
 		return contextfabric.SubjectResolution{Candidates: []contextfabric.SubjectCandidate{}, Committed: []contextfabric.SubjectRef{}},
 			contextfabric.StructureOfferMaterial{}, nil
 	}
-	// From here the call searches its terms, which include every hint label
-	// (SubjectTerms): a page hint the exact lookup missed is now searched by
-	// its label (CHAOS-12230).
-	pageHints.searchFallbackRan()
 	// observationParentKey maps an observation (document/episode) subject
 	// key to its found canonical parent's subject key -- only set when
 	// traversal actually found one. observationBlocked marks an observation
@@ -3288,6 +3284,12 @@ func resolveSubjects(ctx context.Context, principal storage.Principal, request c
 	if err != nil {
 		return contextfabric.SubjectResolution{}, contextfabric.StructureOfferMaterial{}, err
 	}
+	// The term pass searched every term, every hint label among them
+	// (SubjectTerms): a page hint the exact lookup missed was searched by its
+	// label (CHAOS-12230). Marked only here, after the pass returned without
+	// error, because the pass stops at its first failing term and the labels
+	// come after the interpreted terms.
+	pageHints.searchFallbackRan()
 	if termRetrieval.searchTruncated {
 		searchTruncated = true
 	}

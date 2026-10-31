@@ -975,10 +975,12 @@ lookup`. A request resolves its hints once: by the offers-only resolution
 when the window gate asks for a window (a question that states none), else by
 the decisive resolution, and both count the same way. Each page hint takes one outcome: `exact_hit` (the exact id lookup
 found the node), `label_fallback` (it did not, the hint has a label, and the
-hybrid search ran, so the label was searched) or `unresolved` (it did not, and
-no search ran or the hint has no label). Fields: `request_id`, `stage`
-(`page_hint_lookup`), `page_hints`, `exact_hit`, `label_fallback`,
-`unresolved`, `search_fallback` (whether the search ran), and
+term search completed, so the label was searched) or `unresolved` (it did not,
+and the term search did not complete or the hint has no label). Fields:
+`request_id`, `stage` (`page_hint_lookup`), `page_hints`, `exact_hit`,
+`label_fallback`, `unresolved`, `search_fallback` (whether the term search
+completed: every term searched without error; a search that fails is
+`false`), and
 `exact_hit_by_kind`, `label_fallback_by_kind`, `unresolved_by_kind` (counts
 keyed by subject kind). The line carries no canonical id, label or question
 text. A rise in `label_fallback` or `unresolved` suggests web's ids no longer

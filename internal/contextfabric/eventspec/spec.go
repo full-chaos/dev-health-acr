@@ -662,9 +662,10 @@ var KindOfferWithheld = Event{
 // hintsource.AskDevPageContext, which web builds in acr's canonical form from
 // natural keys. Each such hint takes exactly one outcome: exact_hit (the exact
 // canonical-id lookup found the node), label_fallback (it did not, the hint
-// carried a label, and the call's hybrid search ran, so the label was searched)
-// or unresolved (it did not, and either no search ran or the hint had no
-// label). A rise in label_fallback or unresolved is how a drift between web's
+// carried a label, and the call's term search completed, so the label was
+// searched) or unresolved (it did not, and either the term search did not
+// complete -- it never ran, or it failed before or at a term -- or the hint had
+// no label). A rise in label_fallback or unresolved is how a drift between web's
 // id builder and acr's shows up.
 //
 // COUNTS ONLY: no canonical id, label, question or term -- the ids are exactly
@@ -692,8 +693,10 @@ var PageHintLookup = Event{
 		{Key: "exact_hit", Type: FieldInt, Presence: PresenceRequired},
 		{Key: "label_fallback", Type: FieldInt, Presence: PresenceRequired},
 		{Key: "unresolved", Type: FieldInt, Presence: PresenceRequired},
-		// Whether the call's hybrid search ran: the fact that separates a
-		// label_fallback from an unresolved hint that carried a label.
+		// Whether the call's term search completed (every term, each hint
+		// label among them, searched without error): the fact that separates
+		// a label_fallback from an unresolved hint that carried a label. A
+		// search that fails at a term is false.
 		{Key: "search_fallback", Type: FieldBool, Presence: PresenceRequired},
 		{Key: "exact_hit_by_kind", Type: FieldCountMap, Presence: PresenceRequired, ClosedVocabulary: arrayTokens(storedResultSubjectKindArr[:])},
 		{Key: "label_fallback_by_kind", Type: FieldCountMap, Presence: PresenceRequired, ClosedVocabulary: arrayTokens(storedResultSubjectKindArr[:])},

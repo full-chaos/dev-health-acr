@@ -88,3 +88,114 @@ func offersOnlyMarks(ctxs []context.Context) []bool {
 	}
 	return marks
 }
+
+// hintRecordingAcceptanceGraph records the subject hints of every
+// ResolveSubjects call, so a test can count the calls that carry page hints.
+type hintRecordingAcceptanceGraph struct {
+	*acceptanceGraphReader
+	hintsPerCall [][]SubjectHint
+}
+
+func (g *hintRecordingAcceptanceGraph) ResolveSubjects(ctx context.Context, principal storage.Principal, request InvestigationRequest, interpreted InterpretedQuestion, binding ResolvedGraphBinding, confirmedKind *ConfirmedExpectedKind, confirmedAnchor *ConfirmedAnchorSelection, frame *QuestionFrame, anchorKind SubjectKind) (SubjectResolution, StructureOfferMaterial, CommitBasisSet, CommitDecisionDigestSet, error) {
+	g.hintsPerCall = append(g.hintsPerCall, append([]SubjectHint(nil), request.RequestedScope.SubjectHints...))
+	return g.acceptanceGraphReader.ResolveSubjects(ctx, principal, request, interpreted, binding, confirmedKind, confirmedAnchor, frame, anchorKind)
+}
+
+// AuthorizeStoredSubjects admits every stored subject, as graphReaderStub's
+// does, so the stored answer reaches the reuse rules under test.
+func (g *hintRecordingAcceptanceGraph) AuthorizeStoredSubjects(ctx context.Context, principal storage.Principal, binding ResolvedGraphBinding, subjects []SubjectRef) ([]StoredSubjectOutcome, error) {
+	return graphReaderStub{}.AuthorizeStoredSubjects(ctx, principal, binding, subjects)
+}
+
+func (g *hintRecordingAcceptanceGraph) callsBySource(source string) int {
+	calls := 0
+	for _, hints := range g.hintsPerCall {
+		for _, hint := range hints {
+			if hint.Source == source {
+				calls++
+				break
+			}
+		}
+	}
+	return calls
+}
+
+// The answer-reuse recheck never carries the caller's page hints, so a reuse
+// miss followed by the fresh resolution still hands them to the graph once.
+// The recheck keeps the request's own hints only when the stored answer has
+// no subject to recheck (answer_reuse.go reuseAuthorizationStillHolds), and it
+// is reached only after requestHintsCommittedBy (answer_reuse.go, tryReuse):
+// every request hint must be one of the stored answer's committed subjects. A
+// request with a page hint therefore misses before the recheck when the stored
+// answer committed nothing, and otherwise rechecks the stored subjects under
+// hintsource.AnswerReuseAuthorizationRecheck.
+func TestAReuseMissDoesNotHandThePageHintsToTheGraphTwice(t *testing.T) {
+	t.Parallel()
+	hinted := func() []SubjectRef {
+		var subjects []SubjectRef
+		for _, hint := range pageContextHints() {
+			subjects = append(subjects, SubjectRef{Kind: hint.Kind, CanonicalID: hint.ID, Label: hint.Label})
+		}
+		return subjects
+	}
+	for _, tc := range []struct {
+		name         string
+		committed    []SubjectRef
+		wantOutcome  AnswerReuseOutcome
+		wantRechecks int
+	}{
+		// The confirmed-empty stored answer: refused before the recheck.
+		{name: "stored answer committed nothing", committed: []SubjectRef{}, wantOutcome: AnswerReuseMissHintNotCommitted, wantRechecks: 0},
+		// The stored answer committed the page subjects; the recheck runs on
+		// engine-minted hints, finds nothing, and the request goes fresh.
+		{name: "recheck fails", committed: hinted(), wantOutcome: AnswerReuseMissAuthorization, wantRechecks: 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			_, candidate := reusableCandidate()
+			candidate.SubjectResolution = SubjectResolution{Candidates: []SubjectCandidate{}, Committed: tc.committed}
+			// The request's confirmed trailing-90-day window, so the window
+			// rules let the stored answer through to the recheck.
+			candidate.EffectiveEvidenceWindow = &EffectiveEvidenceWindow{RelativeID: RelativeWindowTrailing90D, Provenance: WindowQuestionStated}
+			graph := &hintRecordingAcceptanceGraph{acceptanceGraphReader: &acceptanceGraphReader{
+				resolution: SubjectResolution{Candidates: []SubjectCandidate{}, Committed: []SubjectRef{}},
+				context:    emptyGraphContext(),
+			}}
+			telemetry := &recordingTelemetry{}
+			project := acceptanceProject()
+			runtime := fakeModelRuntime{interpreted: bootstrapInterpretation(), draft: bootstrapDraft(project), receipt: acceptanceReceipt()}
+			engine, err := NewEngine(EngineDependencies{
+				Interpreter: RuntimeQuestionInterpreter{Runtime: runtime},
+				Graph:       graph,
+				Facts: factReaderFunc(func(context.Context, storage.Principal, CanonicalFactRequest) (CanonicalFactBundle, error) {
+					return bootstrapFactBundle(project), nil
+				}),
+				Synthesizer: RuntimeAnswerSynthesizer{Runtime: runtime, Options: RuntimeAnswerSynthesizerOptions{ServiceVersion: "acceptance-test", Backend: "graph"}},
+				Results:     newMapResultStore(),
+				Telemetry:   telemetry,
+				ReuseGate: reuseGateFunc(func(context.Context, storage.Principal, ReuseKey) (InvestigationResult, bool, error) {
+					return candidate, true, nil
+				}),
+			}, EngineOptions{ServiceVersion: "acceptance-test", NewResultID: func() string { return freshTestResultID }})
+			if err != nil {
+				t.Fatalf("NewEngine() error = %v", err)
+			}
+			request := validInvestigationRequestWithConfirmedWindow()
+			request.RequestedScope.SubjectHints = pageContextHints()
+
+			result, err := engine.Investigate(context.Background(), acceptancePrincipal(), request)
+			if err != nil {
+				t.Fatalf("Investigate() error = %v", err)
+			}
+			if result.Reused || !reuseOutcomeSlicesEqual(telemetry.answerReuseOutcomes, []AnswerReuseOutcome{tc.wantOutcome}) {
+				t.Fatalf("reused=%v outcomes=%v, want a %s miss that goes fresh", result.Reused, telemetry.answerReuseOutcomes, tc.wantOutcome)
+			}
+			if got := graph.callsBySource(string(hintsource.AnswerReuseAuthorizationRecheck)); got != tc.wantRechecks {
+				t.Fatalf("recheck calls = %d, want %d (hints per call: %#v)", got, tc.wantRechecks, graph.hintsPerCall)
+			}
+			if got := graph.callsBySource(hintsource.AskDevPageContext); got != 1 {
+				t.Fatalf("ResolveSubjects calls carrying page hints = %d, want exactly 1 (hints per call: %#v)", got, graph.hintsPerCall)
+			}
+		})
+	}
+}

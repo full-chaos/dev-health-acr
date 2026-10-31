@@ -19,9 +19,11 @@ import (
 //   - exact_hit: ExactHint found its node (whether or not the principal may
 //     then see it -- the lookup, not authorization, is what is measured);
 //   - label_fallback: it was not found, it carries a label, and the call's
-//     hybrid search ran, so the label was one of the searched terms;
-//   - unresolved: it was not found, and either no search ran (the caller-hint
-//     short circuit, an inactive-team answer, an error) or it has no label.
+//     term search completed, so the label was one of the searched terms;
+//   - unresolved: it was not found, and either the term search did not
+//     complete (the caller-hint short circuit, an inactive-team answer, the
+//     identity-question exit, an error before or during the search) or it has
+//     no label.
 //
 // A hint the loop never looked up (no id: web sends none for a key whose id
 // would exceed the producer's byte bound) is not an exact hit, so it takes one
@@ -61,7 +63,8 @@ func (t *pageHintLookupTally) exactHit(index int) {
 	}
 }
 
-// searchFallbackRan records that the call went on to hybrid search.
+// searchFallbackRan records that the call's term search completed: every
+// term, each hint label among them, was searched without error.
 func (t *pageHintLookupTally) searchFallbackRan() { t.searchFallback = true }
 
 // event folds the tally into the one page_hint_lookup event, or reports false

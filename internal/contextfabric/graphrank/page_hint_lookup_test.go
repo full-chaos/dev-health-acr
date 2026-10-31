@@ -310,3 +310,35 @@ func TestPageHintLookupIsWrittenByTheOffersOnlyResolution(t *testing.T) {
 		t.Fatalf("offers-only line %+v differs from the decisive line %+v", offersOnly[0], decisive[0])
 	}
 }
+
+// A labelled miss is a label_fallback only when the term search actually
+// searched its label. The term pass returns at its first failing term, and
+// the interpreted terms come before the hint labels (SubjectTerms), so a
+// search that fails on the first term never reaches the label: the miss is
+// unresolved and search_fallback is false.
+func TestPageHintLookupCountsALabelledMissUnresolvedWhenTheSearchFails(t *testing.T) {
+	t.Parallel()
+	request := testRequest()
+	request.RequestedScope.SubjectHints = []contextfabric.SubjectHint{
+		pageHint(contextfabric.SubjectRepository, pageHintStaleRepoID, pageHintRepoLabel),
+	}
+	backend := &fakeGraphBackend{searchErr: errors.New("search backend unavailable")}
+	tracer := &captureResolutionTracer{}
+	deps := backend.deps()
+	deps.ResolutionTracer = tracer
+
+	if _, _, _, _, err := ResolveSubjectsWithCommitBasis(context.Background(), storage.Principal{OrgID: "org_1"}, request, testInterpreted("ask dev"), deps, nil, nil, nil, ""); err == nil {
+		t.Fatal("ResolveSubjectsWithCommitBasis() error = nil, want the search failure")
+	}
+	if len(backend.searchCalls) != 1 || backend.searchCalls[0] != "ask dev" {
+		t.Fatalf("search calls %q, want only the first (interpreted) term: the fixture must fail before the label", backend.searchCalls)
+	}
+	events := pageHintEvents(t, tracer)
+	if len(events) != 1 {
+		t.Fatalf("captured %d page_hint_lookup events, want exactly 1", len(events))
+	}
+	if got := events[0]; got.PageHintCount != 1 || got.PageHintLabelFallback != 0 || got.PageHintUnresolved != 1 || got.PageHintSearchFallback {
+		t.Fatalf("page_hint_lookup: hints=%d label_fallback=%d unresolved=%d search_fallback=%v, want 1 hint: 0 label_fallback, 1 unresolved, search_fallback=false",
+			got.PageHintCount, got.PageHintLabelFallback, got.PageHintUnresolved, got.PageHintSearchFallback)
+	}
+}
