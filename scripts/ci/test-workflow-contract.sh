@@ -1861,15 +1861,18 @@ check_pin_mismatch_names_head() {
     in_run && NF > 0 && !/^        / { exit }
     in_run { sub(/^        /, ""); print }
   ' "$action" > "$dir/record.sh"
-  awk '
-    /name: Name the dev-health-ops commit of a failed run/ { in_step=1 }
+  # Every failed-run step of the workflow, one file each (codex #1829 r1 P3).
+  awk -v dir="$dir" '
+    /name: Name the dev-health-ops commit of a failed run/ { n++; in_step=1; in_run=0; next }
     in_step && /^        run: \|$/ { in_run=1; next }
-    in_run && /^      - / { exit }
-    in_run && NF > 0 && !/^          / { exit }
-    in_run { sub(/^          /, ""); print }
-  ' "$workflow" > "$dir/failure.sh"
-  if [ ! -s "$dir/record.sh" ] || [ ! -s "$dir/failure.sh" ]; then
-    printf 'pin mismatch check: could not extract the record step or a failed-run step\n' >&2; rm -rf "$dir"; return 1
+    in_run && (/^      - / || (NF > 0 && !/^          /)) { in_step=0; in_run=0 }
+    in_run { line=$0; sub(/^          /, "", line); print line > (dir "/failure-" n ".sh") }
+  ' "$workflow"
+  local want steps
+  want="$(grep -c 'name: Name the dev-health-ops commit of a failed run' "$workflow")"
+  steps="$(find "$dir" -name 'failure-*.sh' -size +0 | wc -l | tr -d ' ')"
+  if [ ! -s "$dir/record.sh" ] || [ "$want" -eq 0 ] || [ "$steps" -ne "$want" ]; then
+    printf 'pin mismatch check: extracted the record step and %s of %s failed-run steps\n' "$steps" "$want" >&2; rm -rf "$dir"; return 1
   fi
   ops="$dir/ops"
   if ! { throwaway_git init -q "$ops" && throwaway_git -C "$ops" commit -q --allow-empty -m ops; }; then
@@ -1884,12 +1887,15 @@ check_pin_mismatch_names_head() {
     printf 'pin mismatch check: the record step passed a pin mismatch\n' >&2; status=1
   fi
   sha="$(sed -n 's/^sha=//p' "$dir/output")"
-  : > "$dir/summary"
-  env -i PATH="$PATH" OPS_SHA="$sha" OPS_MODE=pinned OPS_PIN="$other" GITHUB_STEP_SUMMARY="$dir/summary" \
-    bash -e "$dir/failure.sh" > "$dir/failure.out" 2>&1 || { printf 'pin mismatch check: the failed-run step itself failed\n' >&2; status=1; }
-  grep -qF "::error title=fullstack-acceptance failed::with dev-health-ops $ops_head (chosen by pinned; ci/fullstack-ops.pin $other)" "$dir/failure.out" || {
-    printf 'pin mismatch check: the failed-run step does not name the commit checked out (%s): %s\n' "$ops_head" "$(grep '^::error' "$dir/failure.out")" >&2; status=1; }
-  ! grep -qF 'not checked out' "$dir/failure.out" || { printf 'pin mismatch check: the failed-run step says "not checked out"\n' >&2; status=1; }
+  local step
+  for step in "$dir"/failure-*.sh; do
+    : > "$dir/summary"
+    env -i PATH="$PATH" OPS_SHA="$sha" OPS_MODE=pinned OPS_PIN="$other" GITHUB_STEP_SUMMARY="$dir/summary" \
+      bash -e "$step" > "$dir/failure.out" 2>&1 || { printf 'pin mismatch check: failed-run step %s itself failed\n' "${step##*/}" >&2; status=1; continue; }
+    grep -qF "::error title=fullstack-acceptance failed::with dev-health-ops $ops_head (chosen by pinned; ci/fullstack-ops.pin $other)" "$dir/failure.out" || {
+      printf 'pin mismatch check: failed-run step %s does not name the commit checked out (%s): %s\n' "${step##*/}" "$ops_head" "$(grep '^::error' "$dir/failure.out")" >&2; status=1; }
+    ! grep -qF 'not checked out' "$dir/failure.out" || { printf 'pin mismatch check: failed-run step %s says "not checked out"\n' "${step##*/}" >&2; status=1; }
+  done
   rm -rf "$dir"
   return "$status"
 }
@@ -2255,6 +2261,17 @@ replace_literal_line "$ops_checkout_action" "$record_mismatch_output_is_pin" \
 mutate_or_die "$ops_checkout_action" "$record_mismatch_output_is_pin" 'record_mismatch_output_is_pin'
 assert_check_fails 'a pin mismatch outputs the pin as the commit' check_ops_checkout_record_behaviour "$record_mismatch_output_is_pin"
 assert_check_fails 'a pin mismatch outputs the pin as the commit (fed to the failed-run step)' check_pin_mismatch_names_head_in_fullstack "$record_mismatch_output_is_pin"
+# Only the LAST job's failed-run step names the pin as the commit: the mismatch
+# check runs every failed-run step, not only the first (codex #1829 r1 P3).
+failure_step_last_swapped="$tmpdir/fullstack-failure-step-last-swapped.yml"
+# shellcheck disable=SC2016  # the $ names are literal text in the workflow
+FROM='          echo "::error title=fullstack-acceptance failed::with dev-health-ops $sha (chosen by $mode; ci/fullstack-ops.pin $pin)"' \
+TO='          echo "::error title=fullstack-acceptance failed::with dev-health-ops $pin (chosen by $mode; ci/fullstack-ops.pin $sha)"' \
+  awk 'NR == FNR { if ($0 == ENVIRON["FROM"]) last = FNR; next } FNR == last { print ENVIRON["TO"]; next } { print }' \
+  "$fullstack_workflow" "$fullstack_workflow" > "$failure_step_last_swapped"
+mutate_or_die "$fullstack_workflow" "$failure_step_last_swapped" 'failure_step_last_swapped'
+check_pin_mismatch_names_head_last_swapped() { check_pin_mismatch_names_head "$1" "$failure_step_last_swapped"; }
+assert_check_fails 'the last failed-run step names the pin as the commit on a pin mismatch' check_pin_mismatch_names_head_last_swapped "$ops_checkout_action"
 failure_step_no_error="$tmpdir/fullstack-failure-step-no-error.yml"
 awk '/^          echo "::error title=fullstack-acceptance failed::/ && !done { print "          :"; done=1; next } { print }' "$fullstack_workflow" > "$failure_step_no_error"
 mutate_or_die "$fullstack_workflow" "$failure_step_no_error" 'failure_step_no_error'
