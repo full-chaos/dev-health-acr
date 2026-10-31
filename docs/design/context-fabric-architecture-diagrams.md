@@ -703,7 +703,9 @@ the cohort candidates). Under `scope.team_ids`:
 
 - a team is decided by its own team list (the node rule, unchanged);
 - a repository or a project is in scope when it is currently `OWNED_BY_TEAM` a
-  requested team (any current edge, co-owners included);
+  requested team (any current edge, co-owners included). "Currently" holds on
+  every time axis: the ownership edge is read at the adapter clock, never at a
+  historical question's instant, as the repository walk's narrowing reads it;
 - a pull request is in scope when its repository (`BELONGS_TO_REPOSITORY`) is;
 - a work item is in scope by (i) an actual `LINKS_PULL_REQUEST` row of an
   admitted tier to a pull request of such a repository, or (ii) its own project;

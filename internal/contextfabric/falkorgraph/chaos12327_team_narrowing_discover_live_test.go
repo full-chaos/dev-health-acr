@@ -511,3 +511,102 @@ func TestLiveTheTeamNarrowingLineCertifiesFromTheRealProducer(t *testing.T) {
 		t.Fatalf("certify.Certify() error = %v", err)
 	}
 }
+
+// TestLiveATeamNarrowingDecidesOwnershipAtTheCurrentTimeOnAHistoricalAxis
+// (CHAOS-12327, review of CHAOS-12352 r2): the reach rule is CURRENT
+// ownership on every axis, as the repository walk's narrowing reads it.
+// acme/owned and project Ledger were owned by team-t until 12 hours ago and
+// by team-u since; a question as of 24 hours ago narrowed to team-t gets none
+// of the repository's pull requests nor the project, and one narrowed to
+// team-u gets them all.
+func TestLiveATeamNarrowingDecidesOwnershipAtTheCurrentTimeOnAHistoricalAxis(t *testing.T) {
+	ctx := context.Background()
+	adapter, _ := newLiveFalkorAdapter(t, ctx)
+	orgID := "live-12327-historical-owner-" + time.Now().UTC().Format("20060102T150405.000000000")
+	t.Cleanup(func() { _ = adapter.PurgeOrganization(context.Background(), orgID) })
+	now := time.Now().UTC()
+	entities, edges := teamStatusFloorFixture(orgID, now, "", 3)
+	switched := now.Add(-12 * time.Hour)
+	found := false
+	for i := range edges.Relationships {
+		if edges.Relationships[i].RelationshipID == "relationship_owned_team" {
+			edges.Relationships[i].ValidTo, found = &switched, true
+		}
+	}
+	if !found {
+		t.Fatal("the fixture has no team-t ownership edge to end")
+	}
+	teamU := contextfabric.SubjectRef{Kind: contextfabric.SubjectTeam, CanonicalID: "team:team-u", Label: "Team U"}
+	repo := contextfabric.SubjectRef{Kind: contextfabric.SubjectRepository, CanonicalID: "repository:acme-owned", Label: "acme/owned"}
+	created := now.Add(-48 * time.Hour)
+	entities.Entities = append(entities.Entities, contextfabric.EntityProjection{Subject: teamU, Aliases: []string{}, PreviousNames: []string{}, ProviderIDs: map[string]string{},
+		Authorization: contextfabric.AuthorizationScope{TeamIDs: []string{"team-u"}}, EvidenceRefIDs: []string{"evidence_team_u"}, ObservedAt: now, ValidFrom: &created, SourceVersion: "v1"})
+	edges.Relationships = append(edges.Relationships, contextfabric.RelationshipProjection{RelationshipID: "relationship_owned_team_u", Type: contractsv1.ContextFabricRelationshipOwnedByTeam,
+		From: repo, To: teamU, Derivation: contextfabric.DerivationCanonicalStructured, EpistemicStatus: contextfabric.EpistemicObserved,
+		Authorization: contextfabric.AuthorizationScope{RepositorySlugs: []string{"acme/owned"}, TeamIDs: []string{"team-u"}}, EvidenceRefIDs: []string{"evidence_relationship_owned_team_u"},
+		ObservedAt: now, ValidFrom: &switched, SourceVersion: "v1"})
+	teamT := contextfabric.SubjectRef{Kind: contextfabric.SubjectTeam, CanonicalID: "team:team-t", Label: "Team T"}
+	ledger := contextfabric.SubjectRef{Kind: contextfabric.SubjectProject, CanonicalID: "project:ledger", Label: "Ledger"}
+	started := "started"
+	entities.Entities = append(entities.Entities, contextfabric.EntityProjection{Subject: ledger, Aliases: []string{}, PreviousNames: []string{}, ProviderIDs: map[string]string{},
+		Properties: map[string]contextfabric.ScalarValue{"state": {String: &started}}, Authorization: contextfabric.AuthorizationScope{ProjectIDs: []string{"ledger"}},
+		EvidenceRefIDs: []string{"evidence_project_ledger"}, ObservedAt: now, ValidFrom: &created, SourceVersion: "v1"})
+	for _, o := range []struct {
+		id         string
+		owner      contextfabric.SubjectRef
+		teamID     string
+		from, till *time.Time
+	}{{"relationship_ledger_team_t", teamT, "team-t", &created, &switched}, {"relationship_ledger_team_u", teamU, "team-u", &switched, nil}} {
+		edges.Relationships = append(edges.Relationships, contextfabric.RelationshipProjection{RelationshipID: o.id, Type: contractsv1.ContextFabricRelationshipOwnedByTeam,
+			From: ledger, To: o.owner, Derivation: contextfabric.DerivationCanonicalStructured, EpistemicStatus: contextfabric.EpistemicObserved,
+			Authorization: contextfabric.AuthorizationScope{ProjectIDs: []string{"ledger"}, TeamIDs: []string{o.teamID}}, EvidenceRefIDs: []string{"evidence_" + o.id},
+			ObservedAt: now, ValidFrom: o.from, ValidTo: o.till, SourceVersion: "v1"})
+	}
+	for _, b := range []contextfabric.ProjectionBatch{entities, edges} {
+		if _, err := adapter.ApplyProjectionBatch(ctx, b); err != nil {
+			t.Fatalf("ApplyProjectionBatch(%s) error = %v", b.BatchID, err)
+		}
+	}
+	asOf := now.Add(-24 * time.Hour)
+	historical := contextfabric.TimeContext{Axis: contextfabric.TemporalValidTime, AsOf: &asOf}
+	for _, tc := range []struct {
+		team    string
+		kind    contextfabric.SubjectKind
+		status  string
+		members int
+	}{
+		{"team-t", contextfabric.SubjectPullRequest, "open", 0}, {"team-u", contextfabric.SubjectPullRequest, "open", 3},
+		{"team-t", contextfabric.SubjectProject, "started", 0}, {"team-u", contextfabric.SubjectProject, "started", 1},
+	} {
+		scoped := &contextfabric.ScopedSetExpression{AnchorTerms: []string{"Acme"}, MemberKind: tc.kind,
+			MemberQualifier: contextfabric.MemberQualifierStatus, MemberQualifierValue: tc.status}
+		request := contextfabric.GraphDiscoveryRequest{
+			Request: contextfabric.InvestigationRequest{
+				SchemaVersion: contextfabric.InvestigationRequestSchemaV1, RequestID: "request_12327_historical_owner",
+				Question: "which pull requests were open a day ago?", TimeContext: historical,
+				RequestedScope: contextfabric.RequestedScope{TeamIDs: []string{tc.team}},
+				Options: contextfabric.InvestigationOptions{MaxSubjectCandidates: 10, MaxCohortMembers: 50, MaxRelationshipPaths: 50,
+					MaxDrivers: 10, MaxEvidenceRefs: 100, MaxSerializedBytes: 262144},
+				Consumer: contextfabric.ConsumerInfo{Name: "test", Version: "v1", Surface: "test"},
+			},
+			Interpretation: contextfabric.InterpretedQuestion{Shape: contextfabric.ShapeDiscoveredCohort, TimeContext: historical},
+			Resolution:     contextfabric.SubjectResolution{Committed: []contextfabric.SubjectRef{}, Candidates: []contextfabric.SubjectCandidate{}},
+			Frame: &contextfabric.QuestionFrame{
+				Goals:             []contextfabric.InvestigationGoal{contextfabric.GoalAssessState},
+				SubjectExpression: contextfabric.SubjectExpression{Kind: contextfabric.SubjectExpressionChildrenOfScope, Scoped: scoped},
+				Temporal:          contextfabric.TemporalIntentCurrent, Version: contextfabric.QuestionFrameVersion,
+			},
+		}
+		gc, err := adapter.DiscoverContext(ctx, storage.Principal{OrgID: orgID}, request)
+		if err != nil {
+			t.Fatalf("%s %s: DiscoverContext() error = %v", tc.team, tc.kind, err)
+		}
+		members := 0
+		if gc.Cohort != nil {
+			members = len(gc.Cohort.Members)
+		}
+		if members != tc.members || gc.CohortPopulation != tc.members {
+			t.Fatalf("%s %s as of a day ago: members=%d population=%d, want %d: the narrowing reads the CURRENT owner", tc.team, tc.kind, members, gc.CohortPopulation, tc.members)
+		}
+	}
+}
