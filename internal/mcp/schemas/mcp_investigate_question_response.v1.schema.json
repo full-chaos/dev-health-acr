@@ -1683,6 +1683,9 @@
             },
             "value": {
               "$ref": "#/$defs/context_fabric_answer_projection.v1/$defs/ScalarValue"
+            },
+            "investment_mix": {
+              "$ref": "#/$defs/context_fabric_answer_projection.v1/$defs/ProjectedInvestmentMix"
             }
           },
           "required": [
@@ -2966,6 +2969,39 @@
             "before",
             "after"
           ]
+        },
+        "ProjectedInvestmentMix": {
+          "description": "Additive (CHAOS-12160): which attribution produced an investment claim's value about a project, and over how many work units in the read window. owning_team_rollup is the owning teams' roll-up, served because the project has no measurable work of its own in the window (project_own_work_unit_count says how many own units it has); project_native is the project's own work. Set by the server from the claim's grounding fact, never model-authored, and only on an investment claim.",
+          "properties": {
+            "investment_mix_source": {
+              "description": "Open vocabulary; documented values: project_native, owning_team_rollup. A client must tolerate values it does not know.",
+              "type": "string",
+              "x-documented-values": [
+                "project_native",
+                "owning_team_rollup"
+              ]
+            },
+            "project_own_work_unit_count": {
+              "minimum": 0,
+              "type": "integer"
+            },
+            "rollup_basis": {
+              "maxLength": 128,
+              "minLength": 1,
+              "type": "string"
+            },
+            "work_unit_count": {
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "investment_mix_source",
+            "rollup_basis",
+            "work_unit_count",
+            "project_own_work_unit_count"
+          ],
+          "type": "object"
         }
       },
       "description": "Bounded consumer projection of a context_fabric_investigation_result.v1 (CHAOS-3746). Produced by exactly one function so that the hosted API and the MCP sidecar cannot diverge. The projection SELECTS and DROPS: it never rewrites, re-ranks, re-judges, or re-words. direct_judgment, current_state, and every retained driver standing and category are copied verbatim, so consumer-specific truncation can never change the underlying judgment. Every drop is declared in projection_budget. result_id identifies the canonical result: a consumer that needs anything dropped fetches that result rather than asking for a fatter answer. Every identifier is opaque and must not be parsed.",
@@ -4716,6 +4752,9 @@
                 "difference",
                 "ratio"
               ]
+            },
+            "investment_mix": {
+              "$ref": "#/$defs/context_fabric_common.v1/$defs/ClaimedInvestmentMix"
             }
           },
           "required": [
@@ -9250,6 +9289,39 @@
             "served",
             "declared"
           ]
+        },
+        "ClaimedInvestmentMix": {
+          "description": "Additive (CHAOS-12160): which attribution produced an investment claim's value about a project, and over how many work units in the read window. owning_team_rollup is the owning teams' roll-up, served because the project has no measurable work of its own in the window (project_own_work_unit_count says how many own units it has); project_native is the project's own work. Set by the server from the claim's grounding fact, never model-authored, and only on an investment claim.",
+          "properties": {
+            "investment_mix_source": {
+              "description": "Open vocabulary; documented values: project_native, owning_team_rollup. A client must tolerate values it does not know.",
+              "type": "string",
+              "x-documented-values": [
+                "project_native",
+                "owning_team_rollup"
+              ]
+            },
+            "project_own_work_unit_count": {
+              "minimum": 0,
+              "type": "integer"
+            },
+            "rollup_basis": {
+              "maxLength": 128,
+              "minLength": 1,
+              "type": "string"
+            },
+            "work_unit_count": {
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "investment_mix_source",
+            "rollup_basis",
+            "work_unit_count",
+            "project_own_work_unit_count"
+          ],
+          "type": "object"
         }
       },
       "title": "ACR Context Fabric Common Shapes v1"

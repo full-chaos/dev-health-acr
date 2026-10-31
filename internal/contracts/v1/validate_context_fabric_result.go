@@ -1067,6 +1067,9 @@ func (c ContextFabricClaimedFact) validate(bounds contextFabricBounds) error {
 	if err := validateClaimedFactRowsCombined(c.Rows, c.TimeSeriesRows); err != nil {
 		return fmt.Errorf("rows+time_series_rows: %w", err)
 	}
+	if err := validateClaimedInvestmentMix(c.Kind, c.InvestmentMix, bounds); err != nil {
+		return fmt.Errorf("investment_mix: %w", err)
+	}
 	return nil
 }
 

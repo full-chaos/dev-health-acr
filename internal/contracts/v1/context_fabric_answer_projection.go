@@ -397,6 +397,11 @@ type ContextFabricProjectedFact struct {
 	// P2 if this projection stopped at the canonical result.
 	TimeSeriesRows  []ContextFabricClaimedFactRow  `json:"time_series_rows,omitempty"`
 	TimeSeriesTable *ContextFabricClaimedFactTable `json:"time_series_table,omitempty"`
+	// InvestmentMix mirrors ContextFabricClaimedFact.InvestmentMix
+	// (CHAOS-12160), passed through unchanged: the answer surface is where
+	// Ask Dev reads a fact from, so a roll-up disclosed only on the canonical
+	// result would still reach the reader as the project's own investment.
+	InvestmentMix *ContextFabricClaimedInvestmentMix `json:"investment_mix,omitempty"`
 }
 
 // ContextFabricProjectedCoverage reports one source's state. Reason is
