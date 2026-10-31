@@ -139,7 +139,7 @@ func TestByIDAStoredNotCompleteClauseIsServedInPlainWords(t *testing.T) {
 	const observed = "Current observed values: open items: 3."
 	stored := storedLeadProseAnswer(contractsv1.ContextFabricInvestigationComplete, "Counted 1 work item.", observed+" Not complete: readiness (partial: the source read was truncated).")
 	got, _ := readLeadProseByID(t, stored)
-	if want := observed + " Limited read: readiness (partial: the source read was truncated)."; got.CurrentState != want {
+	if want := observed + " Limited read: readiness (truncated: the source read was cut)."; got.CurrentState != want {
 		t.Fatalf("current_state = %q, want %q", got.CurrentState, want)
 	}
 	requireNoTemplatePhrase(t, "current_state", got.CurrentState)
@@ -187,7 +187,7 @@ func TestByIDTheWordsInAProviderValueAreNotRestated(t *testing.T) {
 	}
 	// ACR's clause after a provider value with the same words: only the clause is restated.
 	for stored, want := range map[string]string{
-		"Current observed values: note: Not complete: yet. Not complete: health (stale: the source read is out of date); readiness (partial: the source read was truncated).": "Current observed values: note: Not complete: yet. Limited read: health (stale: the source read is out of date); readiness (partial: the source read was truncated).",
+		"Current observed values: note: Not complete: yet. Not complete: health (stale: the source read is out of date); readiness (partial: the source read was truncated).": "Current observed values: note: Not complete: yet. Limited read: health (stale: the source read is out of date); readiness (truncated: the source read was cut).",
 		"Current observed values: note: Rollout began. Not complete: soon. Not complete: health (stale: the source read is out of date).":                                     "Current observed values: note: Rollout began. Not complete: soon. Limited read: health (stale: the source read is out of date).",
 	} {
 		if got, _ := readLeadProseByID(t, storedLeadProseAnswer(contractsv1.ContextFabricInvestigationComplete, "Counted 1 work item.", stored)); got.CurrentState != want {

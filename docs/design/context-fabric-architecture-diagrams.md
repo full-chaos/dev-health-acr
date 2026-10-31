@@ -1231,6 +1231,18 @@ source read was cut or is out of date reads "Limited read: …" (it was "Not
 complete: …"); a stored clause is restated on the served copy. The stored
 document is never rewritten.
 
+**A cut source read is labelled in plain words (CHAOS-12289).** A driver whose
+source read was cut is qualified "(truncated: the source read was cut)" (it was
+"(partial: the source read was truncated)", ACR's own state word), in the lead
+driver sentence, the principal driver list, current_state's limited-read
+clause and a project status summary; its server note reads "The service marks
+this driver as truncated: the source read was cut.". A stale read keeps "(stale:
+the source read is out of date)". Every served copy restates the stored words,
+and only where the server wrote them: anchored on a driver whose source read
+was cut, by its own title or category, or as the exact note or summary. A
+title or provider value that carries the same words is left as it is. A status
+floor reads a stored head in the current words before it recomposes.
+
 **Live data gap disclosed, not hidden (CH readback, 2026-08-27, org
 `70d529e0-3c06-4597-8480-794fd02328b6`):** investment (6 rows), workload (12
 rows), and readiness (17 rows) each returned real, non-zero rows for the

@@ -2,6 +2,7 @@ package contextfabric
 
 import (
 	"regexp"
+	"slices"
 	"strings"
 
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
@@ -51,7 +52,7 @@ const (
 // stored, unchanged (LeadProseServedAsStored counts that case). The stored
 // document is never rewritten: this is the served copy.
 func restateServedStatusHead(result InvestigationResult) InvestigationResult {
-	result.CurrentState = restateLimitedReadClause(result.CurrentState)
+	result = restateLegacySourceStateLabels(result)
 	if !statusAnswers(result.Status) {
 		return result
 	}
@@ -174,27 +175,90 @@ func withoutLeadProseFallback(head, fallback string) string {
 	return head
 }
 
-// legacyLimitedReadClause is the clause composeCurrentState closed
-// current_state with before CHAOS-12286, and only that clause: the last
-// sentence, " Not complete: " and then the qualified driver categories joined
-// by "; ", each ending in one of the source-state qualifiers it wrote
-// (FROZEN, as stored). The same words inside a provider's fact value are
+// legacyTruncatedQualifier, legacyTruncatedNote and
+// legacyTruncatedSummaryLabel are the words driverSourceStateCause gave a
+// truncated source read before CHAOS-12289 ("partial", ACR's own state word),
+// as the qualifier after a driver title or category, the server note on the
+// driver, and the project status summary label. FROZEN: they are the stored
+// texts.
+const (
+	legacyTruncatedQualifier    = " (partial: the source read was truncated)"
+	legacyTruncatedNote         = "The service marks this driver as partial: the source read was truncated."
+	legacyTruncatedSummaryLabel = legacyTruncatedQualifier + "."
+)
+
+// limitedReadClause is the clause composeCurrentState closes current_state
+// with, and only that clause: the last sentence, " Limited read: " (or the
+// legacy " Not complete: ") and then the qualified driver categories joined by
+// "; ", each ending in a source-state qualifier (the current ones, or the
+// legacy truncated one). The same words inside a provider's fact value are
 // evidence and never match: anywhere but this closing form, they are left as
 // they are.
-var legacyLimitedReadClause = func() *regexp.Regexp {
-	qualifier := `\((?:` + regexp.QuoteMeta("partial: the source read was truncated") + `|` + regexp.QuoteMeta("stale: the source read is out of date") + `)\)`
+var limitedReadClause = func() *regexp.Regexp {
+	qualifiers := []string{regexp.QuoteMeta(strings.TrimSpace(legacyTruncatedQualifier))}
+	for _, state := range []SourceState{SourceTruncated, SourceStale} {
+		qualifiers = append(qualifiers, regexp.QuoteMeta(strings.TrimSpace(driverSourceStateQualifier(state))))
+	}
+	qualifier := `(?:` + strings.Join(qualifiers, `|`) + `)`
 	item := `[^;().]+ ` + qualifier // a driver category has no "."
-	return regexp.MustCompile(`\.` + regexp.QuoteMeta(legacyLimitedReadPrefix) + `(` + item + `(?:; ` + item + `)*)\.$`)
+	prefix := `(?:` + regexp.QuoteMeta(legacyLimitedReadPrefix) + `|` + regexp.QuoteMeta(limitedReadPrefix) + `)`
+	return regexp.MustCompile(`\.` + prefix + `(` + item + `(?:; ` + item + `)*)\.$`)
 }()
 
-// restateLimitedReadClause states a stored current_state's legacy closing
-// " Not complete: " clause in the current words.
+// restateLimitedReadClause states a stored current_state's closing
+// limited-read clause in the current words: the prefix, and the truncated
+// qualifier of each item.
 func restateLimitedReadClause(currentState string) string {
-	match := legacyLimitedReadClause.FindStringSubmatchIndex(currentState)
+	match := limitedReadClause.FindStringSubmatchIndex(currentState)
 	if match == nil {
 		return currentState
 	}
-	return currentState[:match[0]] + "." + limitedReadPrefix + currentState[match[2]:match[3]] + "."
+	items := strings.ReplaceAll(currentState[match[2]:match[3]], legacyTruncatedQualifier, driverSourceStateQualifier(SourceTruncated))
+	return currentState[:match[0]] + "." + limitedReadPrefix + items + "."
+}
+
+// restateLegacySourceStateLabels states, on a served copy, the truncated-read
+// words a stored answer carries in what the composers write now, and only
+// where the server wrote them: each anchored on a driver whose source read
+// was cut, by its own title -- the lead sentence and the principal driver
+// list (leadDriverSentence, principalDriverTitles), the project status
+// summary (its title and label, exactly), and the server note (exactly) --
+// and the closing clause of current_state. Text that is not that, such as a
+// title or provider value that carries the same words, is left as it is. The
+// stored document is not rewritten: the drivers are copied.
+func restateLegacySourceStateLabels(result InvestigationResult) InvestigationResult {
+	result.CurrentState = restateLimitedReadClause(result.CurrentState)
+	current := driverSourceStateQualifier(SourceTruncated)
+	if current == legacyTruncatedQualifier {
+		return result
+	}
+	if !slices.ContainsFunc(result.Drivers, func(driver DriverJudgment) bool { return driver.SourceState == SourceTruncated }) {
+		return result
+	}
+	// A copy, so the stored document's drivers are not rewritten. Clone keeps
+	// an empty list non-nil, as the contract requires.
+	result.Drivers = slices.Clone(result.Drivers)
+	for index := range result.Drivers {
+		driver := &result.Drivers[index]
+		if driver.SourceState != SourceTruncated {
+			continue
+		}
+		if driver.SourceStateNote == legacyTruncatedNote {
+			driver.SourceStateNote = driverSourceStateNote(SourceTruncated)
+		}
+		title := strings.TrimSpace(driver.Title)
+		if title == "" {
+			continue
+		}
+		if driver.Summary == title+legacyTruncatedSummaryLabel {
+			driver.Summary = title + projectStatusStateLabel(SourceTruncated)
+		}
+		for _, base := range []string{strings.TrimRight(title, "."), title} {
+			result.DirectJudgment = strings.ReplaceAll(result.DirectJudgment, base+legacyTruncatedQualifier, base+current)
+			result.DeterministicAnswer = strings.ReplaceAll(result.DeterministicAnswer, base+legacyTruncatedQualifier, base+current)
+		}
+	}
+	return result
 }
 
 // quickAnswerSentence is the driver sentence the composer leads an answer's

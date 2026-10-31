@@ -31,7 +31,7 @@ func suppliedDriver(t *testing.T, factState, claimed SourceState, summary string
 func TestWriteBackNamesACorrectedStateBesideAnUntouchedSummary(t *testing.T) {
 	t.Parallel()
 	cases := map[SourceState]string{
-		SourceTruncated: "The service marks this driver as partial: the source read was truncated.",
+		SourceTruncated: "The service marks this driver as truncated: the source read was cut.",
 		SourceStale:     "The service marks this driver as stale: the source read is out of date.",
 	}
 	for state, want := range cases {
