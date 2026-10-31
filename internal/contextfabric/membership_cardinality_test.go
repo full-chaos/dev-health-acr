@@ -120,6 +120,14 @@ func newCountingEngine(t *testing.T, cohort *Cohort, frame *QuestionFrame, telem
 // that does not care about the population passes.
 func newCountingEngineWithPopulation(t *testing.T, cohort *Cohort, population int, frame *QuestionFrame, telemetry *recordingTelemetry) *Engine {
 	t.Helper()
+	return newCountingEngineWithGraphCoverage(t, cohort, population, Coverage{Sources: []SourceObservation{}, DegradedReasons: []string{}}, frame, telemetry)
+}
+
+// newCountingEngineWithGraphCoverage is newCountingEngineWithPopulation with
+// the coverage the GRAPH read reports, so a test can plant a graph detail
+// (an authorization cut, a census bound) beside the cohort it describes.
+func newCountingEngineWithGraphCoverage(t *testing.T, cohort *Cohort, population int, graphCoverage Coverage, frame *QuestionFrame, telemetry *recordingTelemetry) *Engine {
+	t.Helper()
 	anchor := SubjectRef{Kind: SubjectOrganization, CanonicalID: "org_1", Label: "Org"}
 
 	graph := graphReaderStub{
@@ -133,7 +141,7 @@ func newCountingEngineWithPopulation(t *testing.T, cohort *Cohort, population in
 		context: GraphContext{
 			Cohort: cohort, CohortPopulation: population, Paths: []RelationshipPath{}, DriverCandidates: []DriverJudgment{},
 			FactRequirements: []FactRequirement{}, EvidenceRefIDs: []string{},
-			Coverage: Coverage{Sources: []SourceObservation{}, DegradedReasons: []string{}},
+			Coverage: graphCoverage,
 		},
 	}
 	interpreted := InterpretedQuestion{

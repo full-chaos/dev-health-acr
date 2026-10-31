@@ -275,6 +275,29 @@ carries' own seed population, so the bypass and the carry can never again name
 different sets; the closed `AnswerReuseBypassReason` counter reports which arm
 fired, a branch that was previously silent.
 
+**Every current-axis answer states its window (CHAOS-11601).** When the
+question names no period and its window class carries no default
+(`state_snapshot`, or no class), `composeEffectiveWindow` returns no window and
+the fact reads use their own default. The assembled result then states that
+default as provenance `server_default` (`server_default_window.go`): the
+default trailing window (`trailing_90d`, `[start of today − 90 d, start of
+today)` UTC, the devhealthfacts `default_trailing` rollup window) when a
+deployments, incidents, metrics or pull_requests read completed, else `as_of`,
+the instant the snapshot was read, window class `state_snapshot`. `as_of` is
+the effective window's third contract form, legal only with no start, end or
+relative_id. The window is stamped on the result only, after the window offer
+and the canonicalization outcome and before Validate and Save: the reads, the
+synthesis input, the gate and the reuse key are those of the request, so no
+number changes. A `server_default` window is no caller authority: it is never
+gated, never offered for confirmation, never a carry source
+(`carriableWindow`), never a reuse match for a request that states a window,
+and does not count as the applied window on a continuation. The kind list is
+pinned to the providers by
+`TestServerDefaultWindowKindsAreTheProvidersThatReadTheDefaultWindow`. Refusal
+and veto results (time bound, continuation, structure and window vetoes) read
+no state and carry no window. Investment reads all history when no window is
+given; CHAOS-12142 tracks investment ignoring a stated window.
+
 ---
 
 ## 2 — Candidate pool internals: why an offer-only hit can never commit
@@ -580,7 +603,17 @@ members the caller's authorization removed carries the degrading
 `graph_cohort_denied_by_authorization` coverage row (its label counts the
 members excluded by authorization). The served status is floored from
 `complete` to `partial` whatever shape the plan had, so a cut member set is
-never read as the whole one.
+never read as the whole one. The completeness state says the same
+(CHAOS-12147): a count over the cut set is a `narrowed` outcome row with impact
+`scope` and cause `graph_cohort_denied_by_authorization`, served the members
+the answer carries over declared those members plus the members the row's count
+names, so `completeness.state` is never `complete` for it. Before this, the
+cohort could still say complete (its census was complete; the cut came after),
+the count row read `satisfied`, and the state read `complete` beside a partial
+coverage. A result stored before this keeps its stored row: every serving
+surface (fresh, reused, read by id) runs `ApplyServedStatusFloors`, which
+appends the narrowed row to the served copy when the last count row is still
+`satisfied`, and never rewrites the stored one.
 
 **A count of a repository's owning teams.** For a question about now, a read
 that found no owner, was not cut, and found ownership projected for the org

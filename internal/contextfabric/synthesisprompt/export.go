@@ -37,7 +37,10 @@ const (
 	// answer reused under v25 is never served with a bare score.
 	//
 	// v26 -> v27: the deficiency rule basis is dated by rule_basis_as_of_day when it is present, not only by rule_computed_at.
-	PromptVersion = "context-fabric-synthesis.v27"
+	//
+	// v27 -> v28 (CHAOS-11600): the prompt names the derived numbers (a compounding risk score, an investment theme share,
+	// a value the model computes) and asks every reader-facing sentence to state one with appears, leans or suggests.
+	PromptVersion = "context-fabric-synthesis.v28"
 	// OutputVersion names the model-output contract the prompt asks for.
 	OutputVersion = interpretprompt.OutputVersion
 )

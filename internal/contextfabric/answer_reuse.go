@@ -752,7 +752,9 @@ func (e *Engine) tryReuseWithReading(ctx context.Context, principal storage.Prin
 	// no-candidate miss -- never an error, always falls through to a
 	// fresh investigation.
 	if windowKey != "" {
-		if candidate.Interpretation.TimeContext.Axis != TemporalCurrent || candidate.EffectiveEvidenceWindow == nil {
+		// CHAOS-11601: a server_default window is the no-window request's own
+		// disclosure, never a match for a request that states a window.
+		if candidate.Interpretation.TimeContext.Axis != TemporalCurrent || !callerWindow(candidate.EffectiveEvidenceWindow) {
 			e.recordReuseOutcome(ctx, principal, AnswerReuseMissNoCandidate)
 			return InvestigationResult{}, false, false, storedCountReading{}, nil
 		}

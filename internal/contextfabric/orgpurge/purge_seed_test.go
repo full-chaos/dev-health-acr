@@ -35,6 +35,12 @@ func seedStatements() []string {
 		 VALUES ('wb-' || $2, $1::uuid, 'td-' || $2, 'ns', 'sa', 'uid-' || $2, 'read', now(), 'seed')`,
 		`INSERT INTO acr.client_credentials (credential_id, org_id, name, token_prefix, token_hash, created_at, workload_binding_id)
 		 VALUES ('cred-' || $2, $1::uuid, 'seed', 'fcacr_seed', 'hash-' || $2, now(), 'wb-' || $2)`,
+		// CHAOS-12124: a browser token family and its refresh token (no
+		// organization column; it goes with the family by cascade).
+		`INSERT INTO acr.browser_token_families (family_id, org_id, client_id, created_at, expires_at)
+		 VALUES ('fam-' || $2, $1::uuid, 'https://www.example.test/acr/client.json', now(), now() + interval '12 hours')`,
+		`INSERT INTO acr.browser_refresh_tokens (token_hash, family_id, credential_id, created_at)
+		 SELECT repeat(md5('rt' || $2), 2), 'fam-' || $2, 'cred-' || $2, now() WHERE $1::text <> ''`,
 		`INSERT INTO acr.device_authorizations (device_code_hash, user_code_hash, state, authorized_org_id, created_at, expires_at, poll_interval_seconds, issuance_provenance)
 		 VALUES (repeat(md5('d1' || $2), 2), repeat(md5('u1' || $2), 2), 'pending', $1::uuid, now(), now() + interval '10 minutes', 5, 'device_authorization')`,
 		`INSERT INTO acr.device_authorizations (device_code_hash, user_code_hash, state, authorized_org_id, created_at, expires_at, poll_interval_seconds, issuance_provenance, approved_at, redeemed_at, redeemed_credential_id)

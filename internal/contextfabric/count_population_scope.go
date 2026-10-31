@@ -569,7 +569,11 @@ func countPopulationScopeEventFrom(result InvestigationResult, scope CountPopula
 		event.MemberSetResolved = true
 		event.Members = len(result.Cohort.Members)
 	}
-	for _, row := range result.Completeness.Outcomes {
+	// The LAST matching row, read backwards: a served copy can carry a
+	// restated row after a stored one (restateCohortAuthorizationCutCount),
+	// and the later row is the decision the served document ends on.
+	for index := len(result.Completeness.Outcomes) - 1; index >= 0; index-- {
+		row := result.Completeness.Outcomes[index]
 		if row.Stage != contractsv1.ContextFabricOutcomeStageAssembledResult || row.Requirement != requirement || row.Obligation != obligation {
 			continue
 		}

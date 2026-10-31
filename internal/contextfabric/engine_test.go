@@ -2406,6 +2406,9 @@ func (r *recordingTelemetry) RecordTerminalSaveSkipped(_ context.Context, _ stor
 func (r *recordingTelemetry) RecordWorkItemReuse(context.Context, storage.Principal, WorkItemReuseEvent) {
 }
 
+func (r *recordingTelemetry) RecordDerivedNumberPhrasing(context.Context, storage.Principal, InvestigationResult, DerivedNumberPhrasing) {
+}
+
 func (r *recordingTelemetry) RecordStoredResultAuthorization(_ context.Context, _ storage.Principal, decision StoredResultAuthorization) {
 	r.storedResultAuthorizations = append(r.storedResultAuthorizations, decision)
 }

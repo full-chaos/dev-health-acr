@@ -690,11 +690,15 @@ func temporalLines(label *contractsv1.ContextFabricTemporalLabel) []string {
 }
 
 // windowBoundsText renders an effective evidence window's own bounds
-// structurally (CHAOS-3900 W2) -- RelativeID/Start/End are all
+// structurally (CHAOS-3900 W2) -- AsOf/RelativeID/Start/End are all
 // server-computed, closed-vocabulary or RFC3339 instants, never model- or
 // source-derived text, so this is inline-escaped like describeTimeContext
 // rather than wrapped as untrusted data.
 func windowBoundsText(w *contractsv1.ContextFabricEffectiveEvidenceWindow) string {
+	if w.AsOf != nil {
+		// CHAOS-11601: a current-state snapshot states its read instant.
+		return "as of " + w.AsOf.UTC().Format(time.RFC3339)
+	}
 	if w.RelativeID == contractsv1.ContextFabricRelativeWindowAllTime {
 		return "all time"
 	}

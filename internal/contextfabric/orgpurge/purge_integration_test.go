@@ -236,6 +236,7 @@ var countWhere = map[string]string{
 	"oauth_authorization_requests": looseMatch("bound_org_id"),
 	"oauth_device_grants":          `device_code_hash IN (SELECT device_code_hash FROM acr.device_authorizations WHERE authorized_org_id::text = $1)`,
 	"client_credentials":           `org_id::text = $1`, "workload_bindings": `org_id::text = $1`,
+	"browser_token_families":   `org_id::text = $1`,
 	"context_packet_snapshots": `org_id::text = $1`, "agent_episodes": `org_id::text = $1`,
 }
 

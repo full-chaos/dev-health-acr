@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+	"time"
 
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
@@ -98,7 +99,11 @@ type synthesisAssemblyParams struct {
 	EffectiveWindow       *contractsv1.ContextFabricEffectiveEvidenceWindow
 	// ReadTimeClamp is SynthesisInput.ReadTimeClamp, carried to every pass.
 	ReadTimeClamp ReadTimeClamp
-	WindowCanon   requestWindowCanonicalization
+	// FactsReadAt is the instant the canonical fact read started: the as_of
+	// of a server_default snapshot window and the clock of its default
+	// trailing bounds (CHAOS-11601). Zero when no fact read ran.
+	FactsReadAt time.Time
+	WindowCanon requestWindowCanonicalization
 	// WindowCarried is true when this turn's effective window was carried --
 	// by the same-conversation window carry or by the confirmed-need
 	// ledger's window consumer -- rather than confirmed, stated or inferred
@@ -342,6 +347,9 @@ func (e *Engine) synthesizeAndAssemble(ctx context.Context, principal storage.Pr
 	// every count surface of this pass reads, so the row, the claim and the
 	// sentence cannot disagree about it.
 	cardinality = scopedMembershipCardinality(cardinality, DecideCountPopulationScopeWithDigests(params.Frame, params.ScopeAnchorKind, params.Resolution, params.CommitBases, params.CommitDigests, params.Graph.CohortMemberSource))
+	// CHAOS-12147: a member set authorization cut is not the whole one; the
+	// count row says so from the graph read's own denial detail.
+	cardinality = withCohortAuthorizationCut(cardinality, params.Graph.Coverage)
 	// CHAOS-5732 (D47): a kind_census_truncated detail's Served
 	// is minted by falkorgraph's DiscoverContext, BEFORE stage 3's own
 	// budget narrowing can shrink graphContext.Cohort further -- the same
@@ -534,6 +542,16 @@ func (e *Engine) synthesizeAndAssemble(ctx context.Context, principal storage.Pr
 	if result.WindowClarification != nil && request.Options.WindowConfirmationMode == contractsv1.ContextFabricWindowConfirmationNudge {
 		result.Warnings = appendUniqueWarning(result.Warnings, windowConfirmationNudgeSentence)
 	}
+	// CHAOS-11601: a current-axis answer with no window states the one its
+	// reads used (server_default_window.go). After the window offer, the
+	// skipped-confirmation warning and the canonicalization outcome above,
+	// which describe what the request established; before Validate and Save,
+	// so the served and the stored answer carry the same window.
+	readAt := params.FactsReadAt
+	if readAt.IsZero() {
+		readAt = result.GeneratedAt
+	}
+	result.EffectiveEvidenceWindow = serverDefaultWindow(result.Interpretation.TimeContext.Axis, result.EffectiveEvidenceWindow, facts.ReadSubjects, readAt)
 	// CHAOS-3900 P1: the confirmed_structure echo, composed unconditionally
 	// (empty/nil when this request carried no structure receipts) --
 	// mirrors EffectiveEvidenceWindow's own placement, right beside the

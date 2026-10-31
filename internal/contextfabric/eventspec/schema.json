@@ -27,7 +27,8 @@
           "token",
           "credential_ack",
           "credential_rotate",
-          "credential_revoke"
+          "credential_revoke",
+          "revoke"
         ]
       },
       {
@@ -62,7 +63,12 @@
           "session_required",
           "impersonating",
           "unauthorized_client",
-          "rotation_not_allowed"
+          "rotation_not_allowed",
+          "grace_replay",
+          "reuse_revoked",
+          "family_expired",
+          "family_revoked",
+          "unsupported_token_type"
         ]
       },
       {
@@ -13440,7 +13446,8 @@
         "closed_vocabulary": [
           "inferred_default",
           "question_stated",
-          "clarification_confirmed"
+          "clarification_confirmed",
+          "server_default"
         ]
       },
       {

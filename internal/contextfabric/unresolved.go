@@ -710,6 +710,9 @@ func (e *Engine) terminalResult(
 	if e.telemetry != nil {
 		e.telemetry.RecordWindowCanonicalization(ctx, principal, windowCanonicalizationOutcome(windowCanon, result.EffectiveEvidenceWindow, windowCarried))
 	}
+	// CHAOS-11601: a subjectless terminal read no facts; on the current axis
+	// it states the instant it read the graph (server_default_window.go).
+	result.EffectiveEvidenceWindow = serverDefaultWindow(result.Interpretation.TimeContext.Axis, result.EffectiveEvidenceWindow, nil, result.GeneratedAt)
 	// CHAOS-3900 P1.F: StructureNeeds is composed on this subjectless-terminal
 	// path for the kind/anchor/handle members. windowConfirmationRequiredResult
 	// (window.go, CHAOS-4118) is the other call site, for the window member
