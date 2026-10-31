@@ -273,6 +273,14 @@ func TestStore_threadParity(t *testing.T) {
 	})
 }
 
+// TestStore_resultFeedbackParity runs the shared feedback table (CHAOS-11950)
+// against the in-memory store.
+func TestStore_resultFeedbackParity(t *testing.T) {
+	paritytest.RunResultFeedbackSuite(t, func(_ *testing.T, clock func() time.Time) paritytest.FeedbackStore {
+		return memoryinvestigation.NewStoreWithClock(clock)
+	})
+}
+
 // TestStore_submissionCanonicalOwnerParity runs the canonical-owner table
 // (CHAOS-12091) against the in-memory store.
 func TestStore_submissionCanonicalOwnerParity(t *testing.T) {

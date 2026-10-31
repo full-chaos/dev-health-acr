@@ -1,0 +1,65 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://contracts.fullchaos.dev/acr/v1/context_fabric_result_feedback.v1.schema.json",
+  "title": "Context Fabric Result Feedback v1",
+  "description": "The caller's feedback on one of its own Ask Dev results: GET and POST /api/v1/context-fabric/investigations/feedback/{result_id}. A result takes feedback only when GET /api/v1/context-fabric/investigations/{result_id} would serve it to the caller now and it completed an Ask Dev submission (it has an owner); any other result id, an unknown or malformed one included, gets the same 404 not_found. The feedback is part of the result's backing set and goes with its retention.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "result_id",
+    "correct",
+    "useful"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "context_fabric_result_feedback.v1"
+    },
+    "result_id": {
+      "type": "string",
+      "minLength": 8,
+      "maxLength": 256
+    },
+    "correct": {
+      "type": "string",
+      "enum": [
+        "yes",
+        "no",
+        "unset"
+      ],
+      "description": "Whether the caller found the answer correct: yes, no, or unset."
+    },
+    "useful": {
+      "type": "string",
+      "enum": [
+        "yes",
+        "no",
+        "unset"
+      ],
+      "description": "Whether the caller found the answer useful: yes, no, or unset."
+    },
+    "updated_at": {
+      "type": "string",
+      "format": "date-time",
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\\.[0-9]+)?(Z|[+-][0-9]{2}:[0-9]{2})$",
+      "description": "When the feedback was last set. Absent when it was never set; both flags are then unset."
+    }
+  },
+  "if": {
+    "not": {
+      "required": [
+        "updated_at"
+      ]
+    }
+  },
+  "then": {
+    "properties": {
+      "correct": {
+        "const": "unset"
+      },
+      "useful": {
+        "const": "unset"
+      }
+    }
+  }
+}

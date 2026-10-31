@@ -43,6 +43,10 @@ var AllSchemaVersions = []string{
 	// Published ahead of the routes that serve them.
 	ContextFabricThreadSchema,
 	ContextFabricThreadListSchema,
+	// Ask Dev answer feedback (CHAOS-11950):
+	// GET and POST /api/v1/context-fabric/investigations/feedback/{result_id}.
+	ContextFabricResultFeedbackSchema,
+	ContextFabricResultFeedbackRequestSchema,
 	MCPContextForTaskRequestSchema,
 	MCPContextForTaskResponseSchema,
 	MCPSourceEvidenceRequestSchema,

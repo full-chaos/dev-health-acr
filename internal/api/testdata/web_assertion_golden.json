@@ -98,6 +98,20 @@
       "web_assertion": true
     },
     {
+      "method": "GET",
+      "pattern": "/api/v1/context-fabric/investigations/feedback/{result_id}",
+      "path": "/api/v1/context-fabric/investigations/feedback/result-00000001",
+      "scope": "context:read",
+      "web_assertion": true
+    },
+    {
+      "method": "POST",
+      "pattern": "/api/v1/context-fabric/investigations/feedback/{result_id}",
+      "path": "/api/v1/context-fabric/investigations/feedback/result-00000001",
+      "scope": "context:read",
+      "web_assertion": true
+    },
+    {
       "method": "POST",
       "pattern": "/api/v1/oauth/device_approval",
       "path": "/api/v1/oauth/device_approval",

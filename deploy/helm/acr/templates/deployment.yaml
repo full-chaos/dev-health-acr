@@ -306,7 +306,7 @@ spec:
               mountPath: {{ .Values.config.webAssertion.mountPath | quote }}
               readOnly: true
             {{- end }}
-            {{- if .Values.workloadTokenExchange.enabled }}
+            {{- if include "acr.tokenReview" . }}
             - name: kubernetes-api-reviewer-token
               mountPath: /var/run/secrets/kubernetes.io/serviceaccount
               readOnly: true
@@ -361,9 +361,9 @@ spec:
               - key: {{ .Values.config.webAssertion.key | quote }}
                 path: {{ .Values.config.webAssertion.key | quote }}
         {{- end }}
-        {{- if .Values.workloadTokenExchange.enabled }}
+        {{- if include "acr.tokenReview" . }}
         # Explicit projected token for acr-api's OWN TokenReview calls
-        # (CHAOS-4013) -- deliberately NOT automountServiceAccountToken
+        # (CHAOS-4013 workload exchange, CHAOS-12094 hop check) -- deliberately NOT automountServiceAccountToken
         # (see this pod's spec.automountServiceAccountToken: false above);
         # this is the ONE token this deployment mounts for itself, scoped
         # to the default apiserver audience TokenReview expects the

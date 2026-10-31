@@ -91,11 +91,18 @@ const (
 	// `result` terminal serves the run's final result exactly as the read by
 	// id would, decided again when the attach reaches it.
 	StoredResultSurfaceSubmissionAttach StoredResultSurface = "submission_attach"
+	// StoredResultSurfaceFeedback is the Ask Dev answer feedback read and
+	// write (GET and POST
+	// /api/v1/context-fabric/investigations/feedback/{result_id};
+	// CHAOS-11950). It takes the read by id's serving decision before it
+	// reads or sets a result's feedback, so a caller who cannot read the
+	// result cannot read or set its feedback. It never serves result content.
+	StoredResultSurfaceFeedback StoredResultSurface = "feedback"
 )
 
 // StoredResultSurfaceVocabulary is the closed set of surfaces.
-func StoredResultSurfaceVocabulary() [7]StoredResultSurface {
-	return [7]StoredResultSurface{StoredResultSurfaceResultByID, StoredResultSurfacePriorResult, StoredResultSurfaceAnswerReuse, StoredResultSurfaceEvidenceExpansion, StoredResultSurfaceFactRootRecheck, StoredResultSurfaceThread, StoredResultSurfaceSubmissionAttach}
+func StoredResultSurfaceVocabulary() [8]StoredResultSurface {
+	return [8]StoredResultSurface{StoredResultSurfaceResultByID, StoredResultSurfacePriorResult, StoredResultSurfaceAnswerReuse, StoredResultSurfaceEvidenceExpansion, StoredResultSurfaceFactRootRecheck, StoredResultSurfaceThread, StoredResultSurfaceSubmissionAttach, StoredResultSurfaceFeedback}
 }
 
 // StoredResultDecision is the served outcome.

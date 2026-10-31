@@ -262,3 +262,48 @@ func TestOAuthBrowserClassConfigured(t *testing.T) {
 		}
 	}
 }
+
+// CHAOS-12094: the hop check is off by default; on, it needs the OAuth
+// issuer, the hosted runtime, an audience and the acr-mcp ServiceAccount.
+func TestLoad_mcpHopParse(t *testing.T) {
+	cfg, err := load(mapLookup(map[string]string{"ACR_LOCAL_COMPOSITION_READY": "true"}))
+	if err != nil || cfg.MCPHop != (MCPHopConfig{Audience: DefaultMCPHopAudience}) {
+		t.Fatalf("defaults: %+v err=%v", cfg.MCPHop, err)
+	}
+	_, err = load(mapLookup(map[string]string{"ACR_LOCAL_COMPOSITION_READY": "true", "ACR_MCP_HOP_REQUIRED": "maybe"}))
+	if err == nil || !strings.Contains(err.Error(), "ACR_MCP_HOP_REQUIRED") {
+		t.Fatalf("required=maybe: err = %v, want a parse error naming the key", err)
+	}
+}
+
+func TestValidateMCPHop(t *testing.T) {
+	valid := Config{
+		OAuthIssuer: "https://acr.example.test", RequireBackingStores: true,
+		MCPHop: MCPHopConfig{Required: true, Audience: DefaultMCPHopAudience, Namespace: "acr", ServiceAccount: "acr-mcp"},
+	}
+	for name, tc := range map[string]struct {
+		mutate func(*Config)
+		want   string
+	}{
+		"valid":             {func(*Config) {}, ""},
+		"off needs nothing": {func(c *Config) { *c = Config{MCPHop: MCPHopConfig{Audience: " "}} }, ""},
+		"no issuer":         {func(c *Config) { c.OAuthIssuer = "" }, "requires ACR_OAUTH_ISSUER"},
+		"not hosted":        {func(c *Config) { c.RequireBackingStores = false }, "requires the hosted runtime"},
+		"blank audience":    {func(c *Config) { c.MCPHop.Audience = "" }, "ACR_MCP_HOP_AUDIENCE must not be blank"},
+		"no namespace":      {func(c *Config) { c.MCPHop.Namespace = "" }, "ACR_MCP_HOP_SERVICE_ACCOUNT_NAMESPACE"},
+		"no serviceaccount": {func(c *Config) { c.MCPHop.ServiceAccount = "" }, "ACR_MCP_HOP_SERVICE_ACCOUNT_NAME"},
+	} {
+		cfg := valid
+		tc.mutate(&cfg)
+		err := validateMCPHop(cfg)
+		if tc.want == "" {
+			if err != nil {
+				t.Fatalf("%s: %v", name, err)
+			}
+			continue
+		}
+		if err == nil || !strings.Contains(err.Error(), tc.want) {
+			t.Fatalf("%s: err = %v, want %q", name, err, tc.want)
+		}
+	}
+}

@@ -64,6 +64,27 @@ func runThreadRoutesOnPostgres(t *testing.T, dsn string) {
 		expectErrorCode(t, h.status(0, h.tokenA, "submission-11948-pg-0002"), http.StatusNotFound, "not_found")
 	})
 
+	// CHAOS-11950: answer feedback across the two instances.
+	t.Run("feedback set on one instance is read on the other; another principal reaches it on neither", func(t *testing.T) {
+		h := newPostgresThreadHarness(t, dsn)
+		resultID := servedResultID(t, h.turnOn(0, h.tokenA, "submission-11950-pg-0001", "thread-11950-pg-feedback", "first", ""))
+		set := readFeedbackBody(t, h.feedbackCallOn(0, http.MethodPost, h.tokenA, resultID, feedbackRequestBody("yes", "no")))
+		read := readFeedbackBody(t, h.feedbackCallOn(1, http.MethodGet, h.tokenA, resultID, ""))
+		if read.Correct != contractsv1.ContextFabricResultFeedbackYes || read.Useful != contractsv1.ContextFabricResultFeedbackNo || !read.UpdatedAt.Equal(*set.UpdatedAt) {
+			t.Fatalf("instance 1 reads %+v, instance 0 set %+v", read, set)
+		}
+		for app := range 2 {
+			expectErrorCode(t, h.feedbackCallOn(app, http.MethodGet, h.tokenB, resultID, ""), http.StatusNotFound, "not_found")
+			expectErrorCode(t, h.feedbackCallOn(app, http.MethodPost, h.tokenB, resultID, feedbackRequestBody("no", "no")), http.StatusNotFound, "not_found")
+		}
+		if response := h.threadCallOn(1, http.MethodDelete, h.tokenA, threadPath("thread-11950-pg-feedback")); response.Code != http.StatusNoContent {
+			t.Fatalf("delete = %d", response.Code)
+		}
+		for app := range 2 {
+			expectErrorCode(t, h.feedbackCallOn(app, http.MethodGet, h.tokenA, resultID, ""), http.StatusNotFound, "not_found")
+		}
+	})
+
 	t.Run("concurrent turns on both instances count exactly", func(t *testing.T) {
 		h := newPostgresThreadHarness(t, dsn)
 		thread := "thread-11948-pg-race"

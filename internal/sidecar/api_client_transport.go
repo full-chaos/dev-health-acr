@@ -89,6 +89,13 @@ func (c *Client) callWithHeaders(ctx context.Context, method, subPath string, re
 	if c.cfg.Resource != "" {
 		req.Header.Set(auth.ResourceHeader, c.cfg.Resource)
 	}
+	if c.cfg.HopTokenFile != "" {
+		hop, err := readHopToken(c.cfg.HopTokenFile)
+		if err != nil {
+			return 0, err
+		}
+		req.Header.Set(auth.MCPHopHeader, hop)
+	}
 	if requestBody != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}

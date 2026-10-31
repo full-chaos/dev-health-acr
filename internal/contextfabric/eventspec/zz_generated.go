@@ -12347,6 +12347,7 @@ type MCPHTTPServingFields struct {
 	ListenAddress     string
 	Transport         string
 	BasePath          string
+	McpHop            bool
 	ServerVersion     string
 	ServerCommit      string
 	ProtocolRevisions []string
@@ -12364,7 +12365,7 @@ type MCPHTTPServingFields struct {
 
 // NewMCPHTTPServingFields is the generated constructor for MCPHTTPServingFields -- every
 // field MCPHTTPServing.Fields declares is a required parameter.
-func NewMCPHTTPServingFields(listenAddress string, transport string, basePath string, serverVersion string, serverCommit string, protocolRevisions []string, maxBodyBytes int) MCPHTTPServingFields {
+func NewMCPHTTPServingFields(listenAddress string, transport string, basePath string, mcpHop bool, serverVersion string, serverCommit string, protocolRevisions []string, maxBodyBytes int) MCPHTTPServingFields {
 	valid := true
 	if protocolRevisions == nil {
 		valid = false
@@ -12373,6 +12374,7 @@ func NewMCPHTTPServingFields(listenAddress string, transport string, basePath st
 		ListenAddress:     listenAddress,
 		Transport:         transport,
 		BasePath:          basePath,
+		McpHop:            mcpHop,
 		ServerVersion:     serverVersion,
 		ServerCommit:      serverCommit,
 		ProtocolRevisions: protocolRevisions,
@@ -12397,6 +12399,7 @@ func (f MCPHTTPServingFields) SlogArgs() []any {
 		"listen_address", contextfabric.SanitizeLogAttr(f.ListenAddress),
 		"transport", contextfabric.SanitizeLogAttr(f.Transport),
 		"base_path", contextfabric.SanitizeLogAttr(f.BasePath),
+		"mcp_hop", f.McpHop,
 		"server_version", contextfabric.SanitizeLogAttr(f.ServerVersion),
 		"server_commit", contextfabric.SanitizeLogAttr(f.ServerCommit),
 		"protocol_revisions", contextfabric.SanitizeLogStrings(f.ProtocolRevisions),

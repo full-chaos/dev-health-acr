@@ -10963,7 +10963,8 @@
           "evidence_expansion",
           "fact_root_recheck",
           "thread",
-          "submission_attach"
+          "submission_attach",
+          "feedback"
         ]
       },
       {
@@ -17647,6 +17648,11 @@
       {
         "key": "base_path",
         "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "mcp_hop",
+        "type": "bool",
         "presence": "required"
       },
       {

@@ -287,6 +287,10 @@ GRANT SELECT, INSERT ON TABLE acr.context_fabric_investigation_results TO :"runt
 REVOKE SELECT, INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER ON TABLE acr.context_fabric_usage_monthly FROM :"runtime_user";
 GRANT SELECT, INSERT, UPDATE ON TABLE acr.context_fabric_usage_monthly TO :"runtime_user";
 
+-- SELECT internal/contextfabric/pginvestigation/feedback.go GetResultFeedback, INSERT ... ON CONFLICT DO UPDATE feedback.go SetResultFeedback
+REVOKE SELECT, INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER ON TABLE acr.context_fabric_result_feedback FROM :"runtime_user";
+GRANT SELECT, INSERT, UPDATE ON TABLE acr.context_fabric_result_feedback TO :"runtime_user";
+
 -- INSERT ... ON CONFLICT DO UPDATE internal/contextfabric/pginvestigation/submissions.go AdmitSubmission (a thread turn), SELECT threads.go ListThreads and GetThread, UPDATE threads.go CloseThread
 REVOKE SELECT, INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER ON TABLE acr.context_fabric_threads FROM :"runtime_user";
 GRANT SELECT, INSERT, UPDATE ON TABLE acr.context_fabric_threads TO :"runtime_user";
@@ -400,6 +404,9 @@ GRANT SELECT, DELETE ON TABLE acr.context_fabric_usage_monthly TO :"purge_user";
 -- purge table list: orgpurge purgeTables
 REVOKE SELECT, INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER ON TABLE acr.context_fabric_threads FROM :"purge_user";
 GRANT SELECT, DELETE ON TABLE acr.context_fabric_threads TO :"purge_user";
+-- purge table list: orgpurge purgeTables
+REVOKE SELECT, INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER ON TABLE acr.context_fabric_result_feedback FROM :"purge_user";
+GRANT SELECT, DELETE ON TABLE acr.context_fabric_result_feedback TO :"purge_user";
 -- purge table list: orgpurge purgeTables
 REVOKE SELECT, INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER ON TABLE acr.context_fabric_investigation_results FROM :"purge_user";
 GRANT SELECT, DELETE ON TABLE acr.context_fabric_investigation_results TO :"purge_user";

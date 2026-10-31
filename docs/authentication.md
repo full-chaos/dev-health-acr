@@ -270,6 +270,29 @@ Routes: `GET /.well-known/oauth-authorization-server`, `GET /authorize`,
   credential only when the request carries `X-ACR-Resource` with exactly that
   value; the hosted MCP endpoint sets that header from its own configuration.
   A credential without a binding (org_bearer, operator, device, workload) is unaffected.
+- The header is caller-set, so a holder of an MCP-bound credential could call
+  acr-api directly with the MCP resource value. With `ACR_MCP_HOP_REQUIRED=true`
+  (CHAOS-12094, default off) acr-api admits a credential bound to an MCP
+  resource (any bound resource other than `ACR_OAUTH_ISSUER`) only on a call
+  that also carries acr-mcp's hop proof in `X-ACR-MCP-Hop`: a projected
+  ServiceAccount token of acr-mcp, which acr-api checks with Kubernetes
+  TokenReview for the audience `ACR_MCP_HOP_AUDIENCE` (default
+  `dev-health-acr-api-mcp-hop`) and the ServiceAccount
+  `ACR_MCP_HOP_SERVICE_ACCOUNT_NAMESPACE`/`ACR_MCP_HOP_SERVICE_ACCOUNT_NAME`.
+  A missing, unknown, expired or other-account hop is the same 401 as an
+  unknown credential (audit reason `mcp_hop_missing` or `mcp_hop_refused`); a
+  TokenReview outage is `503 upstream_unavailable` with an Error line
+  `mcp hop check failed`. A verified token is cached for its own life only.
+  The browser class (bound to the issuer) and unbound credentials need no
+  hop. acr-mcp sends the hop when `ACR_MCP_HOP_TOKEN_FILE` names its token
+  file (read fresh on every call; a file it cannot read stops the call). Its
+  `acr-mcp http serving` line carries `mcp_hop`, and acr-api's startup
+  configuration line carries `mcp_hop_required`. Helm: roll `acrMcp.hop.enabled`
+  first (acr-mcp sends the hop; an older acr-api ignores it) and wait until
+  that rollout is complete (every acr-mcp pod ready with the hop; an old pod
+  still serving would be refused), then `config.mcpHop.required` (needs `config.oauth.enabled`, `acrMcp.enabled`,
+  `acrMcp.hop.enabled`; it grants acr-api TokenReview access). Compose has no
+  Kubernetes, so the hop is off there.
 - Each OAuth request writes one `acr-api oauth step` line (step, outcome,
   client kind, status). Steps: `register`, `authorize` (ok = sent to the
   consent page), `consent_preview`, `consent` (ok = approved, `access_denied`
