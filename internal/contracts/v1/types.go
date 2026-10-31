@@ -429,8 +429,8 @@ type CredentialProvenance struct {
 	// from its issuance records.
 	ClientClass string
 	// ApprovingUserID is the web-session subject that approved the device or
-	// OAuth authorization behind the credential. Empty for operator and
-	// workload credentials.
+	// OAuth authorization behind the credential. Empty for org_bearer,
+	// operator and workload credentials.
 	ApprovingUserID string
 	// ClientID is the OAuth client the credential was issued to. Empty for
 	// every non-OAuth issuance, and on a legacy OAuth row whose

@@ -17,7 +17,7 @@ const (
 
 // ClientClass is a credential's issuance class (CHAOS-12083). normalizeCreate
 // derives it from the issuance path; the vocabulary is closed and mirrored by
-// the acr.client_credentials client_class CHECK (migrations 0058 and 0062).
+// the acr.client_credentials client_class CHECK (migrations 0058 and 0063).
 type ClientClass string
 
 const (

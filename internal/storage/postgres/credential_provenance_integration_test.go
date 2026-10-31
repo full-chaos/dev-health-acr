@@ -194,13 +194,13 @@ VALUES ('wlb_provenance', $1, 'cluster.local', 'ns', 'sa', 'uid', 'read', '["*"]
 		"a CLI row has no issuance record to prove its class: 0058 leaves it unclassified")
 }
 
-// Migration 0062 adds org_bearer (D6530) and relabels the rows the CLI path
+// Migration 0063 adds org_bearer (D6530) and relabels the rows the CLI path
 // wrote as operator before it: 0058 never backfills operator, and the CLI
 // create is the only writer of it, so every operator row is a CLI credential.
 func TestCredentialProvenance_orgBearerMigrationRelabelsCLIRowsAndKeepsImmutability(t *testing.T) {
 	ctx := context.Background()
 	f := newProvenanceFixture(t, ctx)
-	cli, err := f.service.Create(ctx, credentialCreateRequest("pre-0062 cli"))
+	cli, err := f.service.Create(ctx, credentialCreateRequest("pre-0063 cli"))
 	require.NoError(t, err)
 	cliSuccessor, err := f.service.Rotate(ctx, auth.RotateCredentialRequest{
 		OrgID: cli.Credential.OrgID, CredentialID: cli.Credential.CredentialID, CreatedBy: "operator@example.test", Overlap: time.Minute,
@@ -208,7 +208,7 @@ func TestCredentialProvenance_orgBearerMigrationRelabelsCLIRowsAndKeepsImmutabil
 	require.NoError(t, err)
 	native := f.redeemDevice(t, ctx, "M1", "", "")
 
-	// Make the CLI rows pre-0062 rows: the class the 0058 code wrote.
+	// Make the CLI rows pre-0063 rows: the class the 0058 code wrote.
 	_, err = f.db.ExecContext(ctx, `ALTER TABLE acr.client_credentials DISABLE TRIGGER trg_client_credentials_provenance_immutable`)
 	require.NoError(t, err)
 	_, err = f.db.ExecContext(ctx, `UPDATE acr.client_credentials SET client_class = 'operator' WHERE credential_id = ANY($1)`,
@@ -217,7 +217,7 @@ func TestCredentialProvenance_orgBearerMigrationRelabelsCLIRowsAndKeepsImmutabil
 	_, err = f.db.ExecContext(ctx, `ALTER TABLE acr.client_credentials ENABLE TRIGGER trg_client_credentials_provenance_immutable`)
 	require.NoError(t, err)
 
-	migration, err := migrationfiles.Files.ReadFile("0062_credential_org_bearer.sql")
+	migration, err := migrationfiles.Files.ReadFile("0063_credential_org_bearer.sql")
 	require.NoError(t, err)
 	for run := 1; run <= 2; run++ {
 		_, err = f.db.ExecContext(ctx, string(migration))
