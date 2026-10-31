@@ -10,6 +10,16 @@ case "$target" in
   *) printf 'unsupported container target: %s\n' "$target" >&2; exit 2 ;;
 esac
 
+# CHAOS-12198: the image version has no default. An image built without one
+# stamped 0.0.0-dev into every binary, and hosted acr-mcp then refused every
+# MCP call (502 upstream_incompatible: older than the API's minimum sidecar
+# version). Checked first, so the refusal needs no docker and starts no build.
+version="${CONTAINER_VERSION:-}"
+if [[ -z "$version" ]]; then
+  printf 'CONTAINER_VERSION is required: the version stamped into every binary of the image (for example CONTAINER_VERSION=0.1.0); an image with no version reports 0.0.0-dev, and hosted acr-mcp then refuses every MCP call\n' >&2
+  exit 2
+fi
+
 command -v docker >/dev/null || { printf 'docker is required\n' >&2; exit 1; }
 command -v pgrep >/dev/null || { printf 'pgrep is required\n' >&2; exit 1; }
 
@@ -41,7 +51,6 @@ fi
 image="${CONTAINER_IMAGE:-${target}:local}"
 platforms="${CONTAINER_PLATFORMS:-}"
 output="${CONTAINER_OUTPUT:-load}"
-version="${CONTAINER_VERSION:-0.0.0-dev}"
 commit="${CONTAINER_COMMIT:-$(git -C "$source_root" rev-parse HEAD)}"
 build_date="${CONTAINER_BUILD_DATE:-$(git -C "$source_root" show -s --format=%cI HEAD)}"
 source_date_epoch="${SOURCE_DATE_EPOCH:-$(git -C "$source_root" show -s --format=%ct HEAD)}"

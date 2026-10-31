@@ -3,6 +3,9 @@ set -euo pipefail
 
 api_image="${1:?usage: verify.sh <api-image> <mcp-image>}"
 mcp_image="${2:?usage: verify.sh <api-image> <mcp-image>}"
+# CHAOS-12198: the version the images were built with. Each binary must report
+# it: a build that took the version but stopped stamping it would otherwise pass.
+expected_version="${ACR_CONTAINER_EXPECTED_VERSION:?ACR_CONTAINER_EXPECTED_VERSION is required: the version the images were built with}"
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 sentinel="${ACR_CONTAINER_SECRET_SENTINEL:-ACR_CONTAINER_SECRET_SENTINEL_9b4f4fe1}"
 # Must stay on the version ACR actually ships against -- the same digest the
@@ -184,7 +187,17 @@ assert_no_sentinel() {
 assert_no_sentinel "$api_export" API
 assert_no_sentinel "$mcp_export" MCP
 
-docker run --rm "${readonly_probe_flags[@]}" "$api_image" --version >/dev/null
+# build.sh suffixes -dirty to a version it builds from a dirty tree.
+assert_reports_version() {
+  local label="$1" reported
+  shift
+  reported="$(docker run --rm "${readonly_probe_flags[@]}" "$@" | awk 'NR == 1 { print $1 }')"
+  if [[ "$reported" != "$expected_version" && "$reported" != "${expected_version}-dirty" ]]; then
+    printf '%s binary reports version %s; the image was built with %s\n' "$label" "${reported:-<none>}" "$expected_version" >&2
+    exit 1
+  fi
+}
+assert_reports_version API "$api_image" --version
 api_help="$(docker run --rm "${readonly_probe_flags[@]}" "$api_image" --help)"
 grep -Fq 'Usage: acr-api' <<<"$api_help"
 if docker run --rm --network none "${readonly_probe_flags[@]}" \
@@ -276,7 +289,7 @@ api_port="$(docker port "$api_container" 8080/tcp | awk -F: '{print $NF}')"
 curl --fail --silent --show-error --retry 20 --retry-connrefused \
   "http://127.0.0.1:${api_port}/healthz" | jq -e '.status == "ok"' >/dev/null
 
-docker run --rm "${readonly_probe_flags[@]}" "$mcp_image" version >/dev/null
+assert_reports_version MCP "$mcp_image" version
 docker run --rm "${readonly_probe_flags[@]}" "$mcp_image" metadata | jq -e \
   '.transport == "stdio" and .status == "read-only"' >/dev/null
 # Credential reads participate in the lifecycle lock even when no credential is

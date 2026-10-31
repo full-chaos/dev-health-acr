@@ -41,6 +41,12 @@
 #                                recreate=data-loss recipe)
 #   ACR_KIAC_KUBECONFIG          kubeconfig path override
 #   ACR_KIAC_ALLOW_VERSION_DRIFT set to 1 to downgrade the version-pin failure to a warning
+#   CONTAINER_VERSION            required by build-image: the version stamped into the
+#                                image (--build-arg VERSION). There is no default: an
+#                                image with none reports 0.0.0-dev, and hosted acr-mcp
+#                                then refuses every MCP call (CHAOS-12198). Use at least
+#                                the API's ACR_MINIMUM_SIDECAR_VERSION (0.1.0 by default).
+#   CONTAINER_COMMIT             optional with build-image: --build-arg COMMIT
 set -euo pipefail
 
 PINNED_KIAC="v0.5.1"
@@ -153,13 +159,17 @@ cmd_kubeconfig() {
 cmd_build_image() {
   [[ $# -ge 2 ]] || die "usage: kiac.sh build-image <tag> <context> [dockerfile]"
   local tag="$1" context="$2" dockerfile="${3:-}"
+  [[ -n "${CONTAINER_VERSION:-}" ]] \
+    || die "CONTAINER_VERSION is required: the version stamped into the image (for example CONTAINER_VERSION=0.1.0); an image with no version reports 0.0.0-dev, and hosted acr-mcp then refuses every MCP call"
   require_bin container ""
+  local build_args=(--build-arg "VERSION=${CONTAINER_VERSION}")
+  [[ -z "${CONTAINER_COMMIT:-}" ]] || build_args+=(--build-arg "COMMIT=${CONTAINER_COMMIT}")
   if [[ -n "$dockerfile" ]]; then
-    container build -t "$tag" -f "$dockerfile" "$context"
+    container build -t "$tag" "${build_args[@]}" -f "$dockerfile" "$context"
   else
-    container build -t "$tag" "$context"
+    container build -t "$tag" "${build_args[@]}" "$context"
   fi
-  log "built $tag into the apple/container image store"
+  log "built $tag (version ${CONTAINER_VERSION}) into the apple/container image store"
 }
 
 cmd_load_image() {
