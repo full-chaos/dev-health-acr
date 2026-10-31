@@ -173,6 +173,21 @@ VALUES ($1, $2, $3, $4, $5, 'expected_kind', 'receipt_drill', 'pull_request', tr
 		contextfabric.ReuseRetrievalIdentity{}, contextfabric.ReusePromptVersions{}, contextfabric.ReuseVersionAuthorities{}, 0, "",
 		contextfabric.SemanticStateAbsent(contextfabric.SemanticStateAbsenceTurnEndedBeforeInterpretation)))
 
+	// CHAOS-12235: what the list names before the pass. The deleted thread
+	// is not listed and the retention-0 one is still open (+20 h).
+	listOwner, err := contextfabric.SubmissionOwnerOf(owner)
+	require.NoError(t, err)
+	firstQuestions := func(at time.Time) map[string]string {
+		threads, _, err := reader.ListThreads(ctx, owner.OrgID, listOwner, nil, contractsv1.ContextFabricThreadListMaxLimit, at)
+		require.NoError(t, err)
+		out := map[string]string{}
+		for _, thread := range threads {
+			out[thread.Key.ThreadID] = thread.FirstQuestion
+		}
+		return out
+	}
+	require.Equal(t, map[string]string{"thread-drill-day": "drill question day-1", "thread-drill-live": "drill question live"}, firstQuestions(clock.now))
+
 	before := retentionCensus(t, ctx, db, owner.OrgID)
 	t.Logf("DRILL before (t0 %s): %s", start.Format(time.RFC3339), censusLine(before))
 
@@ -194,6 +209,15 @@ VALUES ($1, $2, $3, $4, $5, 'expected_kind', 'receipt_drill', 'pull_request', tr
 	t.Logf("DRILL sweep at %s: %+v", sweepAt.Format(time.RFC3339), sweep)
 	require.Empty(t, violations, "a removed result was served mid-unit (Q4)")
 	require.Equal(t, contextfabric.RetentionSweep{ThreadsRemoved: 1, ThreadsErased: 1, RecordsRemoved: 1, ResultsRemoved: 4}, sweep)
+	// CHAOS-12235: after the pass, only the live thread is listed, and no row
+	// of the organization holds an expired or deleted thread's question, so
+	// no list item can name one (the field is read from the turn, no copy).
+	require.Equal(t, map[string]string{"thread-drill-live": "drill question live"}, firstQuestions(sweepAt))
+	for _, gone := range []string{"drill question day-1", "drill question day-2", "drill question deleted"} {
+		var n int
+		require.NoError(t, db.QueryRowContext(ctx, `SELECT count(*) FROM acr.context_fabric_investigation_submissions WHERE org_id = $1 AND question = $2`, owner.OrgID, gone).Scan(&n))
+		require.Zero(t, n, "a removed thread's question %q is still stored", gone)
+	}
 
 	after := retentionCensus(t, ctx, db, owner.OrgID)
 	t.Logf("DRILL after: %s", censusLine(after))
