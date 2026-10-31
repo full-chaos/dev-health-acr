@@ -5504,6 +5504,9 @@ var RepositoryWorkItemWalk = Event{
 		{Key: "members", Type: FieldInt, Presence: PresenceConditional, Applicability: "written when the read measured the population (every outcome but read_failed)"},
 		{Key: "truncated", Type: FieldBool, Presence: PresenceConditional, Applicability: "written when the read measured the population (every outcome but read_failed)"},
 		{Key: "denied", Type: FieldInt, Presence: PresenceConditional, Applicability: "written when the read measured the population and applied no member filter"},
+		// CHAOS-12229: the walk admitted a member under a requested project
+		// narrowing only on its "*" project list; the answer discloses it.
+		{Key: "project_narrowing_unverified", Type: FieldBool, Presence: PresenceConditional, Applicability: "written when the read measured the population (every outcome but read_failed)"},
 		{Key: "reason", Type: FieldString, Presence: PresenceConditional, Applicability: "written when outcome=read_failed", ClosedVocabulary: []string{"", "s1_error", "read_limit_exceeded", "cancelled", "excluded_provider", "zero_authorized_overflow", "identity_omitted"}},
 		{Key: "request_id", Type: FieldString, Presence: PresenceConditional, Applicability: "written when the request context carries a request ID"},
 	},

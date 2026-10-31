@@ -37,6 +37,8 @@ func TestTheResolverMapsEachRequestedIdToExactlyOneProject(t *testing.T) {
 		"proj-1":   {"project.v2:linear:proj-1"},
 		"P-SHARED": {"project.v2:github:P-SHARED", "project.v2:jira:P-SHARED"},
 		"proj-bad": {"not-a-project-identity"},
+		"proj-np":  {"project.v2::proj-np"},
+		"proj-ni":  {"project.v2:linear:"},
 	}))
 	principal := storage.Principal{OrgID: "org_1"}
 	cases := map[string]struct {
@@ -50,6 +52,8 @@ func TestTheResolverMapsEachRequestedIdToExactlyOneProject(t *testing.T) {
 		"an id no project carries":      {[]string{"proj-9"}, []string{}, false},
 		"a resolved and an unknown id":  {[]string{"proj-1", "proj-9"}, []string{"project.v2:linear:proj-1"}, false},
 		"a non-canonical identity row":  {[]string{"proj-bad"}, []string{}, false},
+		"an identity with no provider":  {[]string{"proj-np"}, []string{}, false},
+		"an identity with no id":        {[]string{"proj-ni"}, []string{}, false},
 	}
 	for name, tc := range cases {
 		got, err := adapter.ResolveProjectNarrowing(context.Background(), principal, contextfabric.ResolvedGraphBinding{}, tc.ids)

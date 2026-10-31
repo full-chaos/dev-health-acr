@@ -59,6 +59,10 @@ type RepositoryWorkItemWalkEvent struct {
 	// listed member; it decides whether the answer carries the tier sentence.
 	LowerTierCut     bool
 	UnmeasuredReason WorkItemMembershipUnmeasuredReason
+	// ProjectNarrowingUnverified: a requested project narrowing admitted a
+	// member only on its "*" project list, and the answer discloses it
+	// (CHAOS-12229).
+	ProjectNarrowingUnverified bool
 }
 
 // repositoryWorkItemReading is what one measured read of a repository's work

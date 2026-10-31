@@ -140,7 +140,8 @@ func TestTheTuplePathDisclosesAnUnverifiedProjectNarrowing(t *testing.T) {
 				Members: []TreeWorkItemMember{treeMember(t, "ENG-1", TreeLinkTierNative)}, PullRequests: 1, LinkedIssues: 1,
 				ProjectNarrowingUnverified: unverified,
 			}}
-			engine := &Engine{treeWorkItemMembership: NewTreeWorkItemMembership(graph, &treeFilterFake{}, gate), telemetry: &recordingTelemetry{}}
+			telemetry := &recordingTelemetry{}
+			engine := &Engine{treeWorkItemMembership: NewTreeWorkItemMembership(graph, &treeFilterFake{}, gate), telemetry: telemetry}
 			request := InvestigationRequest{RequestedScope: RequestedScope{ProjectIDs: []string{"proj-1"}}}
 			got, _, err := engine.discoverWorkItemTuple(ctx, storage.Principal{OrgID: "org-1", RepositoryScopes: []string{"*"}}, request, ResolvedGraphBinding{}, repositoryAnchoredResolution(repositoryWorkItemAnchor), &AnswerPlan{}, workItemMemberFilter{})
 			if err != nil {
@@ -157,6 +158,10 @@ func TestTheTuplePathDisclosesAnUnverifiedProjectNarrowing(t *testing.T) {
 			}
 			if disclosed != unverified || got.Coverage.Partial != unverified || slices.Contains(got.Coverage.DegradedReasons, ProjectNarrowingUnverifiedRaw) != unverified {
 				t.Fatalf("coverage = %+v, want the unverified narrowing disclosed = %v", got.Coverage, unverified)
+			}
+			// Review r2 P3: the walk's Info line says it too.
+			if len(telemetry.repositoryWorkItemWalks) != 1 || telemetry.repositoryWorkItemWalks[0].ProjectNarrowingUnverified != unverified {
+				t.Fatalf("repository walk lines = %+v, want one with project_narrowing_unverified=%v", telemetry.repositoryWorkItemWalks, unverified)
 			}
 		})
 	}

@@ -6518,18 +6518,19 @@ func (f RenderShapeSelectionSummaryFields) SlogArgs() []any {
 // RepositoryWorkItemWalkFields is contextfabric.repository_work_item_walk's generated typed construction interface
 // (CHAOS-5516): one Go field per Field RepositoryWorkItemWalk.Fields declares in spec.go.
 type RepositoryWorkItemWalkFields struct {
-	OrgID        string
-	Outcome      string
-	AnchorKind   string
-	Filtered     bool
-	Restricted   bool
-	PullRequests int
-	LinkedIssues int
-	Members      int
-	Truncated    bool
-	Denied       int
-	Reason       string
-	RequestID    string
+	OrgID                      string
+	Outcome                    string
+	AnchorKind                 string
+	Filtered                   bool
+	Restricted                 bool
+	PullRequests               int
+	LinkedIssues               int
+	Members                    int
+	Truncated                  bool
+	Denied                     int
+	ProjectNarrowingUnverified bool
+	Reason                     string
+	RequestID                  string
 	// constructed (CHAOS-5516 r1 fix): an UNEXPORTED marker, generated on
 	// every RepositoryWorkItemWalkFields uniformly, set ONLY by NewRepositoryWorkItemWalkFields below. A caller
 	// outside this package cannot set an unexported field via a composite
@@ -6543,21 +6544,22 @@ type RepositoryWorkItemWalkFields struct {
 
 // NewRepositoryWorkItemWalkFields is the generated constructor for RepositoryWorkItemWalkFields -- every
 // field RepositoryWorkItemWalk.Fields declares is a required parameter.
-func NewRepositoryWorkItemWalkFields(orgID string, outcome string, anchorKind string, filtered bool, restricted bool, pullRequests int, linkedIssues int, members int, truncated bool, denied int, reason string, requestID string) RepositoryWorkItemWalkFields {
+func NewRepositoryWorkItemWalkFields(orgID string, outcome string, anchorKind string, filtered bool, restricted bool, pullRequests int, linkedIssues int, members int, truncated bool, denied int, projectNarrowingUnverified bool, reason string, requestID string) RepositoryWorkItemWalkFields {
 	return RepositoryWorkItemWalkFields{
-		OrgID:        orgID,
-		Outcome:      outcome,
-		AnchorKind:   anchorKind,
-		Filtered:     filtered,
-		Restricted:   restricted,
-		PullRequests: pullRequests,
-		LinkedIssues: linkedIssues,
-		Members:      members,
-		Truncated:    truncated,
-		Denied:       denied,
-		Reason:       reason,
-		RequestID:    requestID,
-		constructed:  true,
+		OrgID:                      orgID,
+		Outcome:                    outcome,
+		AnchorKind:                 anchorKind,
+		Filtered:                   filtered,
+		Restricted:                 restricted,
+		PullRequests:               pullRequests,
+		LinkedIssues:               linkedIssues,
+		Members:                    members,
+		Truncated:                  truncated,
+		Denied:                     denied,
+		ProjectNarrowingUnverified: projectNarrowingUnverified,
+		Reason:                     reason,
+		RequestID:                  requestID,
+		constructed:                true,
 	}
 }
 
@@ -6584,6 +6586,7 @@ func (f RepositoryWorkItemWalkFields) SlogArgs() []any {
 		"members", f.Members,
 		"truncated", f.Truncated,
 		"denied", f.Denied,
+		"project_narrowing_unverified", f.ProjectNarrowingUnverified,
 		"reason", contextfabric.SanitizeLogAttr(f.Reason),
 		"request_id", contextfabric.SanitizeLogAttr(f.RequestID),
 	}

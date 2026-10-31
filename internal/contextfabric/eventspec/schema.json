@@ -9907,6 +9907,12 @@
         "applicability": "written when the read measured the population and applied no member filter"
       },
       {
+        "key": "project_narrowing_unverified",
+        "type": "bool",
+        "presence": "conditional",
+        "applicability": "written when the read measured the population (every outcome but read_failed)"
+      },
+      {
         "key": "reason",
         "type": "string",
         "presence": "conditional",

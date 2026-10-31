@@ -94,10 +94,17 @@ func (a *Adapter) ResolveProjectNarrowing(ctx context.Context, principal storage
 
 // canonicalProjectIdentity reports whether value is a canonical project.v2
 // identity: the only form a stated membership holds, so the only form a
-// narrowing compares.
+// narrowing compares. Review r2: the prefix and the segment count are not
+// enough (project.v2::proj-1 has an empty provider); value must be exactly
+// what identity.Derive makes of its two non-empty segments. A malformed one
+// resolves nothing, so the narrowing is incomplete and never denies on it.
 func canonicalProjectIdentity(value string) bool {
 	segments, ok := identity.Segments(identity.KindProject, value)
-	return ok && len(segments) == 2
+	if !ok || len(segments) != 2 || segments[0] == "" || segments[1] == "" {
+		return false
+	}
+	derived, omitted, err := identity.Derive(identity.KindProject, segments, nil)
+	return err == nil && !omitted && derived == value
 }
 
 // distinctProjectIDs is projectIDs trimmed, without blanks or repeats, in
