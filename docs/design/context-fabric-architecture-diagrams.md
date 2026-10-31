@@ -666,6 +666,28 @@ item's stated membership decides too. Pull requests carry no membership yet
 line, `context fabric project narrowing resolution` (outcome, requested ids,
 resolved identities; never an id).
 
+**A requested team narrowing on the repository walk (CHAOS-12319).**
+Repository, project and work-item nodes carry the `"*"` team list, so the node
+rule narrows none of them; `"*"` is never team evidence. Team = ownership only.
+Under `scope.team_ids` (`falkorgraph/team_narrowing.go`) an issue is admitted
+when either:
+
+- (i) it is an issue of the anchor (the walk reaches every member through an
+  actual `LINKS_PULL_REQUEST` row, its tier named) and the anchor is currently
+  `OWNED_BY_TEAM` a requested team (any current edge, co-owners included); or
+- (ii) its own project (`BELONGS_TO_PROJECT`) is currently `OWNED_BY_TEAM` a
+  requested team.
+
+An issue that passes neither is out of the requested scope. It is not a member
+and not a denial: never in the walk's authorization count, and no
+authorization-gap disclosure. The walk is floored (truncated: the partial
+limitation and the population floor) only where the ownership it needed is
+absent, not current, or cut; an absent ownership row is missing data, not "not
+owned". When no requested team owns the anchor, the anchor stays the subject
+and its own totals are not the team's: a walk with no member is `no_match`,
+never `no_pull_requests` or `unlinked`. The caller's grants and the rest of the
+request still decide first; the narrowing never widens.
+
 **A count of a repository's owning teams.** For a question about now, a read
 that found no owner, was not cut, and found ownership projected for the org
 (the active census holds a team, or the repository's own ownership edges name

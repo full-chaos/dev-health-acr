@@ -53,6 +53,11 @@ type TreeWorkItemWalk struct {
 	// ProjectNarrowingUnverified: a requested project narrowing admitted a
 	// member only on its "*" project list (CHAOS-12229); the answer says so.
 	ProjectNarrowingUnverified bool
+	// AnchorOutsideTeamNarrowing: the request narrows by team and the anchor
+	// is not currently owned by a requested team (CHAOS-12319). The members
+	// are then only the issues whose own project a requested team owns, and
+	// the anchor's own totals are not the team's.
+	AnchorOutsideTeamNarrowing bool
 }
 
 // TreeWorkItemGraph walks the entity tree in the graph store.

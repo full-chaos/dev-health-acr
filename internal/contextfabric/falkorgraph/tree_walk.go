@@ -962,6 +962,9 @@ func (a *Adapter) linkSegment(ctx context.Context, key, orgID string, state tree
 	cypher := linkSegmentCypherWith(feed, link, temporal, restricted, state.ownershipEdges, status)
 	seen := map[string]bool{}
 	admitted := map[string]*node{}
+	// outOfNarrowing: issues out of a requested team narrowing (CHAOS-12319,
+	// team_narrowing.go). Scope, not authorization: never denied.
+	outOfNarrowing := map[string]bool{}
 	out.endTiers = map[string]string{}
 	// ends are the admitted far-side nodes in the read's order: strongest
 	// link tier first, so a cut keeps the higher tiers.
@@ -1013,6 +1016,12 @@ func (a *Adapter) linkSegment(ctx context.Context, key, orgID string, state tree
 				return nil, nil, err
 			}
 		}
+		var excluded map[string]bool
+		if link.to == treeIssue {
+			if excluded, err = teamNarrowingFrom(ctx).excluded(ctx, distinctIDs(ids)); err != nil {
+				return nil, nil, err
+			}
+		}
 		for _, l := range links {
 			id, far, tier := l.id, l.far, l.tier
 			authorized := state.linkRowAuthorized(l.row, feed, link, l.near, far, tier)
@@ -1025,6 +1034,10 @@ func (a *Adapter) linkSegment(ctx context.Context, key, orgID string, state tree
 			seen[id] = true
 			if !authorized {
 				state.deny()
+				continue
+			}
+			if excluded[id] {
+				outOfNarrowing[id] = true
 				continue
 			}
 			if admitted[id] == nil {
@@ -1043,7 +1056,7 @@ func (a *Adapter) linkSegment(ctx context.Context, key, orgID string, state tree
 		}
 	}
 	out.linkTargets = len(seen)
-	out.linkDeniedTargets = len(seen) - len(admitted)
+	out.linkDeniedTargets = len(seen) - len(admitted) - len(outOfNarrowing)
 	if status.set() {
 		out.status.read = len(read)
 		out.status.held = map[string]bool{}

@@ -110,6 +110,10 @@ func repositoryWorkItemWalkOutcome(census WorkItemMembershipCensus, measured boo
 		return RepositoryWorkItemWalkMembers
 	case restricted:
 		return RepositoryWorkItemWalkDenied
+	case census.AnchorOutsideTeamNarrowing:
+		// CHAOS-12319: the anchor's totals are not the team's; the answer
+		// does not give them as the reason (no pull request, unlinked).
+		return RepositoryWorkItemWalkNoMatch
 	case census.RepositoryPullRequests == 0:
 		return RepositoryWorkItemWalkNoPullRequests
 	case census.RepositoryLinkedIssues == 0:
