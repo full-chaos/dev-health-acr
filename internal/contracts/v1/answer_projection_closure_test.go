@@ -357,7 +357,10 @@ func TestEveryProjectionStringFieldIsClassified(t *testing.T) {
 		// server-minted sentence from a fixed table.
 		// CHAOS-11601: 256 -> 257 -- effective_evidence_window.as_of, a
 		// server-minted instant: trusted, never model prose.
-		{name: "answer_projection", root: "answer", prefix: "structured", untrusted: MCPInvestigateQuestionUntrustedFields, expectedPaths: 257},
+		// CHAOS-12160: 257 -> 259 -- key_facts[].investment_mix.investment_mix_source
+		// (a closed vocabulary) and .rollup_basis (a provider constant); both
+		// server-set from the grounding fact, never model-authored.
+		{name: "answer_projection", root: "answer", prefix: "structured", untrusted: MCPInvestigateQuestionUntrustedFields, expectedPaths: 259},
 		// CHAOS-4087: 213 -> 217 -- CommitDecisionDigest contributed four
 		// new string leaves (commit_gate, subject.kind, subject.canonical_id,
 		// subject.label).
@@ -440,7 +443,9 @@ func TestEveryProjectionStringFieldIsClassified(t *testing.T) {
 		// closed arithmetic vocabulary).
 		// CHAOS-11601: 377 -> 378 -- effective_evidence_window.as_of (see
 		// answer_projection above).
-		{name: "investigation_result", root: "result", prefix: "structured", untrusted: MCPInvestigationResultUntrustedFields, expectedPaths: 378},
+		// CHAOS-12160: 378 -> 380 -- claimed_facts[].investment_mix.investment_mix_source
+		// and .rollup_basis, the same two leaves as the projection.
+		{name: "investigation_result", root: "result", prefix: "structured", untrusted: MCPInvestigationResultUntrustedFields, expectedPaths: 380},
 	} {
 		t.Run(surface.name, func(t *testing.T) {
 			paths := stringPathsIn(t, documents, surface.root, surface.prefix)
@@ -498,6 +503,12 @@ func trustedBecauseClosed(path string) bool {
 	// the bare leaf "reason", which other shapes in this contract use for
 	// free text: allowlisting the leaf would trust them too.
 	if strings.HasSuffix(path, ".semantic_reading.reason") {
+		return true
+	}
+	// investment_mix (CHAOS-12160) is set by the server from the claim's
+	// grounding fact: investment_mix_source is a closed vocabulary and
+	// rollup_basis a provider constant. Neither is model-authored.
+	if strings.HasSuffix(path, ".investment_mix.investment_mix_source") || strings.HasSuffix(path, ".investment_mix.rollup_basis") {
 		return true
 	}
 	// claimed_facts[].operation is ContextFabricDerivationOperation (sum,

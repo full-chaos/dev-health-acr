@@ -427,6 +427,9 @@ func (p ContextFabricAnswerProjection) validateFacts(bounds contextFabricBounds)
 		if err := validateClaimedFactRowsCombined(fact.Rows, fact.TimeSeriesRows); err != nil {
 			return nil, fmt.Errorf("key fact rows+time_series_rows: %w", err)
 		}
+		if err := validateClaimedInvestmentMix(fact.Kind, fact.InvestmentMix, bounds); err != nil {
+			return nil, fmt.Errorf("key fact investment_mix: %w", err)
+		}
 		if _, exists := claims[fact.ClaimID]; exists {
 			return nil, fmt.Errorf("answer projection key fact claim IDs must be unique")
 		}

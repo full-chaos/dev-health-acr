@@ -153,8 +153,8 @@ const FactFieldThemeQualityBugfix = "theme_quality_bugfix"
 // no such field (a team subject) is reported as InvestmentMixSourceUnlabeled.
 const (
 	FactFieldInvestmentMixSource        = "investment_mix_source"
-	InvestmentMixSourceProjectNative    = "project_native"
-	InvestmentMixSourceOwningTeamRollup = "owning_team_rollup"
+	InvestmentMixSourceProjectNative    = string(contractsv1.ContextFabricInvestmentMixSourceProjectNative)
+	InvestmentMixSourceOwningTeamRollup = string(contractsv1.ContextFabricInvestmentMixSourceOwningTeamRollup)
 	InvestmentMixSourceUnlabeled        = "unlabeled"
 )
 
