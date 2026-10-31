@@ -113,6 +113,10 @@ func validOpenAPIPath(path string) bool {
 		// CHAOS-11913: the caller's own submission record, listed one by
 		// one for the same reason.
 		"/api/v1/context-fabric/investigations/submissions/{submission_id}",
+		// CHAOS-11949: attach to and cancel the caller's own leased run,
+		// listed one by one for the same reason.
+		"/api/v1/context-fabric/investigations/submissions/{submission_id}/events",
+		"/api/v1/context-fabric/investigations/submissions/{submission_id}/cancel",
 		// The Ask Dev conversation list and thread
 		// (docs/design/ask-dev-conversation-contract.md), listed one by one
 		// for the same reason.

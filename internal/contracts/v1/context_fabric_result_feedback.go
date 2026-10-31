@@ -13,7 +13,7 @@ import (
 // read or set its feedback, and gets the same 404. Only a result that
 // completed an Ask Dev submission (it has an owner) takes feedback; it is in
 // the result's backing set and goes with the result's retention. See
-// docs/design/ask-dev-conversation-contract.md §10.
+// docs/design/ask-dev-conversation-contract.md §11.
 const (
 	// ContextFabricResultFeedbackSchema is the schema_version of the
 	// feedback read: GET and POST

@@ -1,9 +1,9 @@
 # Ask Dev conversation contract (threads)
 
-Status: the contract (plan item I-28, acr #1762) and the store and routes
-(I-29, §9). the run lease, attach and cancel (I-S10a), feedback (I-32a)
-and the retention job (I-30) build on this contract and add their own parts
-of it. §6 lists what those items must keep.
+Status: the contract (plan item I-28, acr #1762), the store and routes
+(I-29, §9), and the run lease, attach and cancel (I-S10a, CHAOS-11949, §10).
+Feedback (I-32a) and the retention job (I-30) build on this contract and add
+their own parts of it. §6 lists what those items must keep.
 
 Plan of record: "Ask Dev in web — plan of record (2026-10-29)" (Linear), §2.0
 INV-1/INV-2/INV-4, §2.5, §2.6, §2.7.5, §2.7.9, §5.3 E6. Decisions of record
@@ -340,7 +340,34 @@ item that implements it.
   thread routes when they land. The retention job (I-30) removes the backing
   set after `expires_at`.
 
-## 10. Answer feedback (I-32a, CHAOS-11950)
+## 10. Run lease, attach and cancel (I-S10a, CHAOS-11949)
+
+Design, diagram and code map: `docs/design/context-fabric-architecture-diagrams.md`
+§19. What this item keeps of §6:
+
+- **T2 Reservation fence.** A leased run saves under its record's reserved
+  id like any submission. A takeover (`run_lost`) sets the record abandoned
+  and never removes it. A late save of a run that was taken over meets
+  Save's existing completion, which binds the result to the record's owner
+  and completes a running or abandoned record (code-read, not exercised by
+  this item's tests), so nothing is stored unbound; the record then reads
+  done while the log keeps its `run_lost` terminal, and a client that sees
+  `run_lost` reads the status and replays the result. The event log
+  references the record (foreign key, cascade): removing a record removes its
+  log, never the other way round.
+- **T6 Closed means closed everywhere.** Attach and cancel resolve the record
+  through the submission read, which reports a closed thread: a turn of a
+  deleted or expired thread answers 404 like an unknown id on both routes, and
+  a cancel of it writes nothing.
+- **INV-1.** Both routes are keyed by the caller's own principal; the
+  attach's `result` terminal is decided again by the stored-result gate on
+  the new surface `submission_attach`, through the same serving decision as
+  the read by id (T4).
+- **Retention (D-22).** The event log is in the backing set: bounded per run,
+  no result content, removed with its record; the organization purge names
+  the table. The retention job (I-30) removes it by removing the records.
+
+## 11. Answer feedback (I-32a, CHAOS-11950)
 
 Plan AC: "Correct/useful per result; owner-checked (INV-1); covered by
 retention." The web controls are I-32b; this item is the ACR store and route.

@@ -16,7 +16,7 @@ import (
 )
 
 // Ask Dev answer feedback (CHAOS-11950, docs/design/ask-dev-conversation-contract.md
-// §10). The route reads or sets the caller's feedback on one of its own
+// §11). The route reads or sets the caller's feedback on one of its own
 // results. It first takes the read by id's serving decision
 // (decideStoredResultServing, surface feedback): a result the read by id
 // would not serve to the caller gets the read by id's own answer, so the

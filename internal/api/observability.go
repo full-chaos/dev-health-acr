@@ -79,6 +79,13 @@ func requestOperation(request *http.Request) observability.Operation {
 		// The nested submission status route first (CHAOS-11913): it is
 		// under the same prefix as the result read.
 		if strings.HasPrefix(request.URL.Path, ContextFabricInvestigationsPath+"/submissions/") {
+			// CHAOS-11949: the attach and cancel routes under a submission.
+			switch {
+			case strings.HasSuffix(request.URL.Path, "/events"):
+				return observability.OperationSubmissionAttach
+			case strings.HasSuffix(request.URL.Path, "/cancel"):
+				return observability.OperationSubmissionCancel
+			}
 			return observability.OperationSubmissionStatus
 		}
 		// The answer feedback route (CHAOS-11950), under the same prefix.

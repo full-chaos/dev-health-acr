@@ -879,7 +879,8 @@ What an operator can rely on and see:
   for the whole response) does not cut a stream; a single write that cannot
   finish in 30 s still fails.
 - The connection owns the run: a client that disconnects cancels the
-  investigation, and so does a failed frame write.
+  investigation, and so does a failed frame write. Exception: with the run
+  lease on (below) a submission's streamed run is ACR's.
 - Byte caps, in wire bytes with the framing included (the browser counts the
   same way): one frame at most `ACR_MAX_SERIALIZED_BYTES` + 64 KiB; the whole
   stream at most 8 MiB, of which the last `ACR_MAX_SERIALIZED_BYTES` + 64 KiB is
@@ -914,6 +915,46 @@ What an operator can rely on and see:
   `write_failed`), and the response ends without a terminal.
 - `t_eff` is taken when the run context ends, before the line waits for the
   stream's lock (a frame write can hold it up to the 30 s write deadline).
+
+
+### Ask Dev run lease (CHAOS-11949)
+
+`ACR_CONTEXT_FABRIC_RUN_LEASE_ENABLED` (default `false`; refused at start
+without `ACR_CONTEXT_FABRIC_EVENT_STREAM_ENABLED`) runs a streamed create
+request that names `X-ACR-Submission-ID` under an ACR-owned lease. Design and
+diagram: `docs/design/context-fabric-architecture-diagrams.md` §19.
+
+- A disconnect does not cancel the run. The run writes every event to
+  `acr.context_fabric_investigation_run_events` first; the client attaches
+  again with `GET /api/v1/context-fabric/investigations/submissions/{id}/events`
+  (`Last-Event-ID`) on any replica, and cancels with `POST .../cancel`.
+- Lease 15 s, renewed every 5 s; cancel polled every 1 s (same-replica cancel
+  at once); bound t_eff - t_req <= 5 s. A run whose replica stops is taken over
+  by any replica within one lease term plus 5 s and ends `run_lost`.
+- The event log is bounded (128 non-terminal events per run plus the
+  terminal) and goes with its submission record (foreign key, cascade); the
+  organization purge names it.
+- Holder ids are the pod's host name plus 32 random bits; clock skew between
+  replicas shortens or lengthens the lease by the skew (the lease compares the
+  replicas' clocks).
+- Log lines (all carry `request_id`): `context fabric investigation run lease`
+  (WARN `outcome` `lease_lost` with `reason` `taken_over`, `record_gone`,
+  `record_final` or `renewal_unreachable`; WARN `check_failed`; INFO
+  `cancel_seen` with `t_req`), `context fabric investigation run taken over`
+  (WARN, one per run: `previous_holder`, `taker`, `lease_expired_at`,
+  `terminal_seq`), `context fabric investigation run attach` (`outcome`
+  `attached`, `terminal`, `detached`, `interrupted`, `ended`, `cursor_expired`
+  with `reason`, `not_found`, `refused`, `store_unavailable`),
+  `context fabric investigation run cancel` (`outcome` `requested` with
+  `t_req` and `holder_local`, `already_final`, `not_leased`, `not_found`),
+  `... event stream viewer detached`, ERROR `... run event log write failed`
+  (`failure_class` `event_log_write`; the run is cancelled, cause
+  `event_log_failed`). The cancel effective line of a leased run carries
+  `leased` true and its causes `cancel_requested` (with `t_req` and
+  `t_eff_minus_t_req_ms`), `lease_lost`, `event_log_failed`,
+  `stream_byte_budget` or `deadline`.
+- Rollback: turn the flag off. Runs already leased finish under their lease;
+  new runs are connection-owned; attach and cancel answer 404.
 
 ### Context Fabric model provider (BYO LLM, CHAOS-3770)
 

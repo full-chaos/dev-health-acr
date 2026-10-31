@@ -126,6 +126,10 @@ var purgeTables = []tableSpec{
 	{Name: "agent_episodes", Where: `org_id = $1::uuid AND retention_class <> 'legal_hold'`},
 	{Name: "context_fabric_projection_checkpoints", Where: matchOrg("org_id")},
 	{Name: "context_fabric_projection_rebuild_markers", Where: matchOrg("org_id")},
+	// CHAOS-11949: a leased run's event log, before the records it
+	// references (its foreign key cascades too; the purge names it so the
+	// census covers it).
+	{Name: "context_fabric_investigation_run_events", Where: matchOrg("org_id")},
 	{Name: "context_fabric_investigation_submissions", Where: matchOrg("org_id")},
 	// CHAOS-11914 (lead ruling 2026-10-29): retention and result deletion
 	// keep the monthly usage aggregate; an organization purge deletes it, so

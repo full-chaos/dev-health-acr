@@ -1,5 +1,5 @@
 -- CHAOS-11950 (Ask Dev plan item I-32a, contract
--- docs/design/ask-dev-conversation-contract.md §10): Ask Dev answer feedback.
+-- docs/design/ask-dev-conversation-contract.md §11): Ask Dev answer feedback.
 --
 -- One row per result: whether the result's owner found it correct and useful
 -- ('yes', 'no' or 'unset'), and when that was last set. No free text. The

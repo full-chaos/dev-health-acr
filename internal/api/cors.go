@@ -31,7 +31,7 @@ import (
 
 const (
 	corsAllowMethods  = "GET, POST, OPTIONS"
-	corsAllowHeaders  = "Authorization, Content-Type, X-ACR-Client-Version, X-ACR-Submission-ID, X-ACR-Thread-ID, X-ACR-Wait-Budget-Seconds, X-ACR-Resource, X-Request-ID"
+	corsAllowHeaders  = "Authorization, Content-Type, X-ACR-Client-Version, X-ACR-Submission-ID, X-ACR-Thread-ID, X-ACR-Wait-Budget-Seconds, X-ACR-Resource, X-Request-ID, Last-Event-ID"
 	corsExposeHeaders = "Retry-After, X-Request-ID"
 	corsMaxAgeSeconds = "600"
 )
@@ -90,6 +90,9 @@ var corsBrowserRoutes = [...]struct{ pattern, class string }{
 	{ContextFabricInvestigationsPath, "investigations"},
 	{ContextFabricInvestigationResultPath, "investigations"},
 	{ContextFabricSubmissionStatusPath, "investigations"},
+	// CHAOS-11949: attach (SSE, Last-Event-ID) and cancel of a leased run.
+	{ContextFabricSubmissionEventsPath, "investigations"},
+	{ContextFabricSubmissionCancelPath, "investigations"},
 	// CHAOS-11950: Ask Dev answer feedback (GET and POST, so the method list
 	// is unchanged).
 	{ContextFabricResultFeedbackPath, "investigations"},

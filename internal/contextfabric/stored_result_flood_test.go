@@ -105,6 +105,7 @@ func TestStoredResultSurfacesServingToACallerCallTheFloodHelper(t *testing.T) {
 	servesToCaller := map[StoredResultSurface]string{
 		StoredResultSurfaceResultByID:        "../api/stored_result_serving.go",
 		StoredResultSurfaceThread:            "../api/stored_result_serving.go",
+		StoredResultSurfaceSubmissionAttach:  "../api/stored_result_serving.go",
 		StoredResultSurfaceFeedback:          "../api/stored_result_serving.go",
 		StoredResultSurfaceAnswerReuse:       "answer_reuse.go",
 		StoredResultSurfaceEvidenceExpansion: "evidence_expansion.go",
@@ -112,7 +113,10 @@ func TestStoredResultSurfacesServingToACallerCallTheFloodHelper(t *testing.T) {
 	sharedDecisionReaders := map[StoredResultSurface]string{
 		StoredResultSurfaceResultByID: "../api/context_fabric_result_routes.go",
 		StoredResultSurfaceThread:     "../api/context_fabric_threads.go",
-		StoredResultSurfaceFeedback:   "../api/context_fabric_result_feedback.go",
+		// CHAOS-11949: the attach's result terminal is served by the route
+		// that serves a result by id, on its own surface.
+		StoredResultSurfaceSubmissionAttach: "../api/context_fabric_result_routes.go",
+		StoredResultSurfaceFeedback:         "../api/context_fabric_result_feedback.go",
 	}
 	for surface, file := range sharedDecisionReaders {
 		source, err := os.ReadFile(file)

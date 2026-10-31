@@ -207,6 +207,14 @@ type Config struct {
 	// stream_unavailable before any admission work; every other request is
 	// unaffected either way.
 	ContextFabricEventStreamEnabled bool
+	// ContextFabricRunLeaseEnabled (CHAOS-11949,
+	// ACR_CONTEXT_FABRIC_RUN_LEASE_ENABLED, default OFF) runs a streamed
+	// investigation that names X-ACR-Submission-ID under an ACR-owned lease:
+	// a disconnect no longer cancels it, its events go to a Postgres event
+	// log, and the attach and cancel routes serve. Off, every run is owned
+	// by its connection, as before, and both routes answer 404. It needs
+	// ContextFabricEventStreamEnabled.
+	ContextFabricRunLeaseEnabled bool
 	// ServiceModelOpen (ACR_MCP_SERVICE_MODEL_DEFAULT=on; development and
 	// venues only, production is off) treats every organization as holding
 	// acr_service_model and platform_model_fallback. Unset or off: an

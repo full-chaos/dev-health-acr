@@ -10963,6 +10963,7 @@
           "evidence_expansion",
           "fact_root_recheck",
           "thread",
+          "submission_attach",
           "feedback"
         ]
       },
