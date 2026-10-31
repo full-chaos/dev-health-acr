@@ -81,6 +81,9 @@ func parseAbsolute(raw string) (*url.URL, error) {
 	if err != nil || !u.IsAbs() || u.Opaque != "" || u.Host == "" {
 		return nil, errors.New("must be an absolute URL with a host")
 	}
+	if !strings.HasPrefix(raw, u.Scheme+"://") {
+		return nil, errors.New("the scheme must be written in lower case, followed by ://")
+	}
 	if u.User != nil || u.RawQuery != "" || u.ForceQuery || u.Fragment != "" || strings.Contains(raw, "#") {
 		return nil, errors.New("must hold no userinfo, query or fragment")
 	}
