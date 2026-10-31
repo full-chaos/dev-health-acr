@@ -30,7 +30,8 @@ var projectNarrowingLookupCypher = fmt.Sprintf(
 // resolves to exactly one identity contributes it; one that resolves to none,
 // or to more than one (the same raw id under two providers), contributes
 // nothing and makes the resolution incomplete, so it is never widened to a
-// guess. A requested "*" narrows nothing, and there is nothing to resolve.
+// guess. A project node with a malformed identity counts as one more node,
+// so its id is unresolved too. A requested "*" narrows nothing, and there is nothing to resolve.
 // The resolution only lets stated membership decide; it never admits a node
 // the request's raw ids and the caller's grants would not.
 func (a *Adapter) ResolveProjectNarrowing(ctx context.Context, principal storage.Principal, binding contextfabric.ResolvedGraphBinding, projectIDs []string) (*contractsv1.ContextFabricProjectNarrowing, error) {
@@ -62,10 +63,17 @@ func (a *Adapter) ResolveProjectNarrowing(ctx context.Context, principal storage
 		return nil, graphNotProjectedError(safeDependencyError("project narrowing lookup", err))
 	}
 	resolved := map[string]map[string]bool{}
+	malformed := map[string]bool{}
 	for _, row := range rows {
 		rid, _ := row["rid"].(string)
+		if rid == "" {
+			continue
+		}
 		canonical, _ := row["identity"].(string)
-		if rid == "" || !canonicalProjectIdentity(canonical) {
+		if !canonicalProjectIdentity(canonical) {
+			// Review r3: a malformed node for an id makes the id unresolved,
+			// even beside a well-formed one; it is never dropped as noise.
+			malformed[rid] = true
 			continue
 		}
 		if resolved[rid] == nil {
@@ -77,7 +85,7 @@ func (a *Adapter) ResolveProjectNarrowing(ctx context.Context, principal storage
 	seen := map[string]bool{}
 	for _, id := range requested {
 		identities := resolved[id]
-		if len(identities) != 1 {
+		if len(identities) != 1 || malformed[id] {
 			narrowing.Complete = false
 			continue
 		}

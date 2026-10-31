@@ -982,7 +982,8 @@
           "miss_degrade_invalid",
           "miss_count_scope",
           "miss_hint_not_committed",
-          "miss_scope_identity"
+          "miss_scope_identity",
+          "miss_project_narrowing_unverified"
         ]
       },
       {
@@ -13857,6 +13858,7 @@
           "anchor_unavailable",
           "membership_unavailable",
           "membership_changed",
+          "project_narrowing_unverified",
           "coverage_invalid",
           "hit"
         ]

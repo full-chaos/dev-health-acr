@@ -429,6 +429,7 @@ type recordingTelemetry struct {
 	terminalSaveSkipped         []TerminalSaveSkippedEvent
 	priorSubjectReceiptsSkipped []int
 	answerReuseOutcomes         []AnswerReuseOutcome
+	workItemReuses              []WorkItemReuseEvent
 	// answerReuseOwnershipRoutingVersions records, per RecordAnswerReuse
 	// call and in the same order as answerReuseOutcomes, the
 	// ownershipRoutingVersion argument that call carried.
@@ -2409,7 +2410,8 @@ func (r *recordingTelemetry) RecordTerminalSaveSkipped(_ context.Context, _ stor
 	r.terminalSaveSkipped = append(r.terminalSaveSkipped, event)
 }
 
-func (r *recordingTelemetry) RecordWorkItemReuse(context.Context, storage.Principal, WorkItemReuseEvent) {
+func (r *recordingTelemetry) RecordWorkItemReuse(_ context.Context, _ storage.Principal, event WorkItemReuseEvent) {
+	r.workItemReuses = append(r.workItemReuses, event)
 }
 
 func (r *recordingTelemetry) RecordDerivedNumberPhrasing(context.Context, storage.Principal, InvestigationResult, DerivedNumberPhrasing) {

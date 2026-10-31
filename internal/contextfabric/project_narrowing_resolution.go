@@ -109,10 +109,8 @@ func (e *Engine) resolveRequestedProjectNarrowing(ctx context.Context, principal
 // same thing through WorkItemMembershipResult (CHAOS-12229). Its served
 // status is then floored to partial (CHAOS-12242).
 func discloseUnverifiedProjectNarrowing(coverage *Coverage) {
-	for _, existing := range coverage.Details {
-		if existing.Code == contractsv1.ContextFabricCoverageDetailReadPopulationUnverified && existing.Raw == ProjectNarrowingUnverifiedRaw {
-			return
-		}
+	if coverageDisclosesUnverifiedProjectNarrowing(*coverage) {
+		return
 	}
 	detail := CoverageDetail{
 		DetailID: fmt.Sprintf("cov-graph-%02d", len(coverage.Details)+1), Source: "context-fabric:graph",
@@ -122,4 +120,19 @@ func discloseUnverifiedProjectNarrowing(coverage *Coverage) {
 	coverage.Partial = true
 	coverage.DegradedReasons = append(coverage.DegradedReasons, ProjectNarrowingUnverifiedRaw)
 	coverage.Details = append(coverage.Details, detail)
+}
+
+// coverageDisclosesUnverifiedProjectNarrowing reports whether coverage carries
+// the read_population_unverified detail of an unverified project narrowing.
+// Both reuse paths compare a fresh read against the stored answer with it
+// (review r3): the narrowing's resolution is not in the reuse key, so a stored
+// answer made while the narrowing was proven is never served clean to a
+// request whose narrowing is not.
+func coverageDisclosesUnverifiedProjectNarrowing(coverage Coverage) bool {
+	for _, existing := range coverage.Details {
+		if existing.Code == contractsv1.ContextFabricCoverageDetailReadPopulationUnverified && existing.Raw == ProjectNarrowingUnverifiedRaw {
+			return true
+		}
+	}
+	return false
 }

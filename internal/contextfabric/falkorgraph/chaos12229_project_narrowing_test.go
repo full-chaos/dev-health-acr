@@ -39,6 +39,7 @@ func TestTheResolverMapsEachRequestedIdToExactlyOneProject(t *testing.T) {
 		"proj-bad": {"not-a-project-identity"},
 		"proj-np":  {"project.v2::proj-np"},
 		"proj-ni":  {"project.v2:linear:"},
+		"proj-mix": {"project.v2:linear:proj-mix", "not-a-project-identity"},
 	}))
 	principal := storage.Principal{OrgID: "org_1"}
 	cases := map[string]struct {
@@ -46,14 +47,15 @@ func TestTheResolverMapsEachRequestedIdToExactlyOneProject(t *testing.T) {
 		want     []string
 		complete bool
 	}{
-		"one id, one project":           {[]string{"proj-1"}, []string{"project.v2:linear:proj-1"}, true},
-		"repeats and blanks are one id": {[]string{"proj-1", " proj-1 ", ""}, []string{"project.v2:linear:proj-1"}, true},
-		"an id under two providers":     {[]string{"P-SHARED"}, []string{}, false},
-		"an id no project carries":      {[]string{"proj-9"}, []string{}, false},
-		"a resolved and an unknown id":  {[]string{"proj-1", "proj-9"}, []string{"project.v2:linear:proj-1"}, false},
-		"a non-canonical identity row":  {[]string{"proj-bad"}, []string{}, false},
-		"an identity with no provider":  {[]string{"proj-np"}, []string{}, false},
-		"an identity with no id":        {[]string{"proj-ni"}, []string{}, false},
+		"one id, one project":                    {[]string{"proj-1"}, []string{"project.v2:linear:proj-1"}, true},
+		"repeats and blanks are one id":          {[]string{"proj-1", " proj-1 ", ""}, []string{"project.v2:linear:proj-1"}, true},
+		"an id under two providers":              {[]string{"P-SHARED"}, []string{}, false},
+		"an id no project carries":               {[]string{"proj-9"}, []string{}, false},
+		"a resolved and an unknown id":           {[]string{"proj-1", "proj-9"}, []string{"project.v2:linear:proj-1"}, false},
+		"a non-canonical identity row":           {[]string{"proj-bad"}, []string{}, false},
+		"an identity with no provider":           {[]string{"proj-np"}, []string{}, false},
+		"an identity with no id":                 {[]string{"proj-ni"}, []string{}, false},
+		"a valid and a malformed row for one id": {[]string{"proj-mix"}, []string{}, false},
 	}
 	for name, tc := range cases {
 		got, err := adapter.ResolveProjectNarrowing(context.Background(), principal, contextfabric.ResolvedGraphBinding{}, tc.ids)
