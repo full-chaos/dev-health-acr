@@ -126,7 +126,7 @@ func (a *App) requireLiveAccess(enforceFlags bool, next http.Handler) http.Handl
 			a.logger.ErrorContext(r.Context(), "principal access read failed",
 				"request_id", contextfabric.SanitizeLogAttr(RequestID(r.Context())), "failure_class", "principal_access",
 				"reason", entitlements.RejectionReason(err), "client_class", string(principal.ClientClass),
-				"credential_id", contextfabric.SanitizeLogAttr(principal.CredentialID), "elapsed_ms", elapsed.Milliseconds())
+				"elapsed_ms", elapsed.Milliseconds())
 			writeError(w, r, http.StatusServiceUnavailable, "upstream_unavailable", "Access service is temporarily unavailable", true, nil)
 			return
 		}
@@ -222,8 +222,7 @@ func (a *App) refuseLiveAccess(w http.ResponseWriter, r *http.Request, principal
 	a.recordReadAudit(r.Context(), principal, "access_denied", "acr_access", reason, "denied", nil)
 	a.logger.InfoContext(r.Context(), "principal access read refused",
 		"request_id", contextfabric.SanitizeLogAttr(RequestID(r.Context())), "reason", reason,
-		"client_class", string(principal.ClientClass), "credential_id", contextfabric.SanitizeLogAttr(principal.CredentialID),
-		"elapsed_ms", elapsed.Milliseconds())
+		"client_class", string(principal.ClientClass), "elapsed_ms", elapsed.Milliseconds())
 	writeError(w, r, http.StatusForbidden, contractsv1.ErrorCodeAccessDenied, contractsv1.ContextFabricAccessDeniedMessage, false, nil)
 }
 
