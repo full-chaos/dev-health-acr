@@ -281,3 +281,32 @@ func TestPageHintLookupIsWrittenWhenTheExactLookupFails(t *testing.T) {
 		t.Fatalf("page_hint_lookup = %+v, want 2 hints, both unresolved, search_fallback=false", got)
 	}
 }
+
+// The offers-only resolution writes the line too. Under the class-default
+// window gate it is the ONLY resolution its request runs (the engine returns
+// after it, contextfabric/page_hint_lookup_resolution_calls_test.go pins
+// that), so skipping it would leave a gated request -- the common case, a
+// question that states no window -- with no line at all. Its counts equal the
+// decisive call's for the same hints: the hint loop and the search run the
+// same way in both modes.
+func TestPageHintLookupIsWrittenByTheOffersOnlyResolution(t *testing.T) {
+	t.Parallel()
+	counts := func(ctx context.Context) []ResolutionTraceEvent {
+		request, backend, principal := threeOutcomeRequest()
+		tracer := &captureResolutionTracer{}
+		deps := backend.deps()
+		deps.ResolutionTracer = tracer
+		if _, _, _, _, err := ResolveSubjectsWithCommitBasis(ctx, principal, request, testInterpreted(), deps, nil, nil, nil, ""); err != nil {
+			t.Fatalf("ResolveSubjectsWithCommitBasis() error = %v", err)
+		}
+		return pageHintEvents(t, tracer)
+	}
+	offersOnly := counts(contextfabric.WithOffersOnlyResolution(context.Background()))
+	decisive := counts(context.Background())
+	if len(offersOnly) != 1 || len(decisive) != 1 {
+		t.Fatalf("page_hint_lookup events: offers-only %d, decisive %d; want exactly 1 each", len(offersOnly), len(decisive))
+	}
+	if !reflect.DeepEqual(offersOnly[0], decisive[0]) {
+		t.Fatalf("offers-only line %+v differs from the decisive line %+v", offersOnly[0], decisive[0])
+	}
+}

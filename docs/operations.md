@@ -969,9 +969,11 @@ regenerate it with `ACR_WRITE_CANONICAL_ID_VECTORS=1 go test
 ./internal/contextfabric/devhealthsource/ -run
 TestCanonicalIDVectorsMatchTheBuilders`.
 
-Log line (INFO, at most one per subject resolution whose request carries an
+Log line (INFO, at most one per request that carries an
 `ask_dev_page_context` hint): `context fabric resolution trace: page hint
-lookup`. Each page hint takes one outcome: `exact_hit` (the exact id lookup
+lookup`. A request resolves its hints once: by the offers-only resolution
+when the window gate asks for a window (a question that states none), else by
+the decisive resolution, and both count the same way. Each page hint takes one outcome: `exact_hit` (the exact id lookup
 found the node), `label_fallback` (it did not, the hint has a label, and the
 hybrid search ran, so the label was searched) or `unresolved` (it did not, and
 no search ran or the hint has no label). Fields: `request_id`, `stage`

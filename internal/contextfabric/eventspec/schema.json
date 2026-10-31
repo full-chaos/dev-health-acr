@@ -17012,7 +17012,7 @@
     "attribution": [
       "request_id"
     ],
-    "bounded_aggregation": "at most one line per resolveSubjects call -- emitted from one deferred statement once the call reached its subject-hint loop, and only when the request carries at least one ask_dev_page_context hint; CertifyAbsent asserts the request with none.",
+    "bounded_aggregation": "at most one line per request: emitted from one deferred statement once resolveSubjects reached its subject-hint loop, only when the request carries at least one ask_dev_page_context hint, by the one resolution that request runs with those hints (the gated offers-only resolution or the decisive one, never both); CertifyAbsent asserts the request with none.",
     "fields": [
       {
         "key": "request_id",

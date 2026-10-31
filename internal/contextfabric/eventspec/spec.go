@@ -669,16 +669,22 @@ var KindOfferWithheld = Event{
 //
 // COUNTS ONLY: no canonical id, label, question or term -- the ids are exactly
 // what this line must not carry. Subject kinds are closed-vocabulary values.
-// MultiplicityZeroOrOnePerRequest: a call whose request carries no page hint,
-// or that returns before the hint loop (the comparison dispatch, an
-// organization or context error), emits none.
+// MultiplicityZeroOrOnePerRequest: ONE PER REQUEST, from whichever single
+// resolution the request runs. A request runs the offers-only resolution under
+// the class-default window gate (the engine returns after it) or the decisive
+// one, never both, and both count the same hints the same way; the engine's
+// other resolutions (cohort group read, answer-reuse recheck) carry only
+// engine-minted hint sources (contextfabric/
+// page_hint_lookup_resolution_calls_test.go pins this). A request with no page
+// hint, or a call that returns before the hint loop (the comparison dispatch,
+// an organization or context error), emits none.
 var PageHintLookup = Event{
 	ID:                 "graphrank.page_hint_lookup",
 	Msg:                "context fabric resolution trace: page hint lookup",
 	Level:              LevelInfo,
 	Multiplicity:       MultiplicityZeroOrOnePerRequest,
 	Attribution:        []string{"request_id"},
-	BoundedAggregation: "at most one line per resolveSubjects call -- emitted from one deferred statement once the call reached its subject-hint loop, and only when the request carries at least one ask_dev_page_context hint; CertifyAbsent asserts the request with none.",
+	BoundedAggregation: "at most one line per request: emitted from one deferred statement once resolveSubjects reached its subject-hint loop, only when the request carries at least one ask_dev_page_context hint, by the one resolution that request runs with those hints (the gated offers-only resolution or the decisive one, never both); CertifyAbsent asserts the request with none.",
 	Fields: []Field{
 		{Key: "request_id", Type: FieldString, Presence: PresenceRequired},
 		{Key: "stage", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: []string{"page_hint_lookup"}},
