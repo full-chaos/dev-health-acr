@@ -45,6 +45,7 @@ WHERE `+queryLogSinceMark+` AND type = 'QueryFinish' AND query_kind = 'Select'
 		t.Fatalf("measurement did not happen: no hotspot statement logged; recent:\n%s", recentServerStatements(ctx, direct))
 	}
 	statementthreads.RequireThreadBound(t, ctx, direct, "file hotspots", threadless)
+	probeRequireApplied(t, ctx, direct, "groupArraySorted", markMicros)
 	return cost
 }
 
@@ -118,7 +119,7 @@ FROM numbers(?)`, org, repo, day, day, uint64(files)); err != nil {
 			type form struct{ name, clause string }
 			costs := map[string][2]hotspotStatementCost{}
 			for _, f := range []form{{"default_threads", ""}, {"max_threads_1", "\nSETTINGS max_threads = 1"}} {
-				restore := devhealthfacts.SetFileHotspotSettingsForTest(f.clause)
+				restore := devhealthfacts.SetFileHotspotSettingsForTest(probeClause(f.clause))
 				measure(small, smallSubjects) // cold read, unmeasured
 				costs[f.name] = [2]hotspotStatementCost{measure(small, smallSubjects), measure(large, largeSubjects)}
 				restore()

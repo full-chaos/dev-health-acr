@@ -1,0 +1,61 @@
+# INVESTIGATION PROBE (CHAOS-12168), throwaway branch only, never merged.
+# Repeats the two devhealthfacts memory tests on hosted runners, with and without
+# max_untracked_memory = 1 on the measured statements, plain, under CPU load and
+# under -race, and uploads the go test -json streams.
+name: probe-chaos-12168
+on:
+  push:
+    branches: [investigate/chaos-12168-memory-noise]
+permissions:
+  contents: read
+  packages: read
+env:
+  ACR_CONTAINER_TESTS: '1'
+  GOFLAGS: -trimpath
+  GOPROXY: https://proxy.golang.org|direct
+jobs:
+  probe:
+    name: probe (${{ matrix.variant }}, ${{ matrix.load }}, ${{ matrix.replica }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        variant: [default, untracked1]
+        load: [plain, cpuload, race]
+        replica: [1, 2]
+    env:
+      TESTCONTAINERS_HUB_IMAGE_NAME_PREFIX: ghcr.io/${{ github.repository }}
+      TESTCONTAINERS_RYUK_DISABLED: 'true'
+      TESTCONTAINERS_SESSION_ID: probe-${{ github.run_id }}-${{ strategy.job-index }}
+      ACR_PROBE_UNTRACKED: ${{ matrix.variant == 'untracked1' && '1' || '' }}
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        with: {persist-credentials: false}
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16
+        with:
+          go-version: '1.27.3'
+          cache: true
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@abd2ef45e78c5afb21d64d4ca52ee8550d9572c7
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: CPU load (cpuload only)
+        if: matrix.load == 'cpuload'
+        run: for i in $(seq "$(nproc)"); do (while :; do :; done) & done; echo "started $(nproc) busy loops"
+      - name: Run the two memory tests four times
+        run: |
+          set -uo pipefail
+          race=""; [ "${{ matrix.load }}" = race ] && race="-race"
+          go test $race -count=4 -timeout 85m -json \
+            -run '^(TestFileHotspotsStatementMemoryMergedAndPinnedMultiPartOnRealClickHouse|TestScopeExpanderStatementsFollowTheRequestedScopeOnRealClickHouse)$' \
+            ./internal/contextfabric/devhealthfacts > probe.json; echo "go test exit=$?"
+          grep -E '"Action":"(pass|fail)","Package":"[^"]*","Test":"Test(FileHotspots|ScopeExpander)[^"/]*"' probe.json | sed -E 's/.*"Action":"([a-z]+)".*"Test":"([^"]+)".*/\1 \2/' | sort | uniq -c
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        if: always()
+        with:
+          name: probe-${{ matrix.variant }}-${{ matrix.load }}-${{ matrix.replica }}
+          path: probe.json
+          retention-days: 7

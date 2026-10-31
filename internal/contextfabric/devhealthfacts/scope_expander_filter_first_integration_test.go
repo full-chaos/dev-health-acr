@@ -348,11 +348,12 @@ func TestScopeExpanderStatementsFollowTheRequestedScopeOnRealClickHouse(t *testi
 		// runs after the mark, and the logged text need not keep newlines.
 		fragment, _, _ = strings.Cut(fragment, "\n")
 		mark := serverNowMicros(t, ctx, direct)
-		if rows, err := query.Query(ctx, captured.statement, captured.bindings); err == nil {
+		if rows, err := query.Query(ctx, probeStatement(captured.statement), captured.bindings); err == nil {
 			for rows.Next() {
 			}
 			_ = rows.Close()
 		}
+		probeRequireApplied(t, ctx, direct, fragment, mark)
 		return peakOf(t, ctx, direct, table, fragment, mark), durationOf(t, ctx, direct, table, fragment, mark)
 	}
 	type variant struct{ peak, spread, duration uint64 }
