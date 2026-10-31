@@ -120,7 +120,9 @@ func TestPerTestDatabasesAreIsolatedAndDropped(t *testing.T) {
 	ctx := context.Background()
 	madeBefore, droppedBefore := perTestDatabasesMade.Load(), perTestDatabasesDropped.Load()
 	var databases [2]string
+	var skipped bool
 	t.Run("two databases", func(t *testing.T) {
+		defer func() { skipped = t.Skipped() }()
 		firstQuery, first := newCHAOS3780IntegrationClient(t, ctx)
 		secondQuery, second := newCHAOS3780IntegrationClient(t, ctx)
 		if err := first.Exec(ctx, "CREATE TABLE rows_a (x UInt8) ENGINE = MergeTree ORDER BY x"); err != nil {
@@ -158,6 +160,9 @@ func TestPerTestDatabasesAreIsolatedAndDropped(t *testing.T) {
 			t.Fatalf("per-test databases %v must differ and not be the default database", databases)
 		}
 	})
+	if skipped {
+		t.Skip("containers unavailable; the subtest skipped")
+	}
 	if made := perTestDatabasesMade.Load() - madeBefore; made != 2 {
 		t.Fatalf("databases created = %d, want 2", made)
 	}
