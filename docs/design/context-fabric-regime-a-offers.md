@@ -120,10 +120,11 @@ Three properties the implementation depends on:
   same way when it removes the last anchor option (CHAOS-11975), and the
   contract refuses the shape: `ValidateV2` and `ValidateStoredV2` require
   `structure_needs` with a non-empty `anchor_options`, and the published v2
-  schemas refuse an empty `anchor_options`. The schemas add `structure_needs`
-  and `anchor_options` to `required` in the next release (a field is
-  optional for one release before it becomes required). A v1-shaped body
-  labelled v2 is not a v2 result.
+  schemas refuse an empty `anchor_options`. Since CHAOS-12073 the v2 schemas
+  also list `structure_needs` (result and response) and `anchor_options`
+  (`StructureNeedsV2`) in `required`, one release after CHAOS-11975 shipped
+  them optional (a field is optional for one release before it becomes
+  required). A v1-shaped body labelled v2 is not a v2 result.
 
 There is no gate 1 any more (CHAOS-6557): a window the caller supplies -- the
 `evidence_window` field on any surface, or a single period stated in the
