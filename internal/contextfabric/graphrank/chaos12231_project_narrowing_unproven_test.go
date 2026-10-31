@@ -28,6 +28,10 @@ func TestProjectNarrowingUnprovenOnlyForTheWildcardString(t *testing.T) {
 		// denied by scopeContainsAttr, so it never passes the narrowing.
 		{name: "narrowed, other bare string", requested: narrowed, projects: "proj-1", present: true, want: false},
 		{name: "narrowed, key absent", requested: narrowed, present: false, want: false},
+		// A requested "*" admits every node through ScopeMatch, so the
+		// request names no narrowing to verify (codex r1 F2).
+		{name: "requested star, wildcard string", requested: contextfabric.RequestedScope{ProjectIDs: []string{"*"}}, projects: "*", present: true, want: false},
+		{name: "requested star beside a project, wildcard string", requested: contextfabric.RequestedScope{ProjectIDs: []string{"proj-1", " * "}}, projects: "*", present: true, want: false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

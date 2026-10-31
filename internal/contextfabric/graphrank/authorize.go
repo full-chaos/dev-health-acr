@@ -122,9 +122,17 @@ func AuthorizedAttributes(principal storage.Principal, requested contextfabric.R
 // AuthorizedAttributes admits exactly as before. A reader uses it to
 // disclose that the project narrowing it reports was not verified. The
 // strict fix needs real project membership and is CHAOS-12229.
+//
+// A requested "*" is no narrowing: ScopeMatch admits every node for it, so
+// there is nothing to verify, and a request that holds one is not reported.
 func ProjectNarrowingUnproven(requested contextfabric.RequestedScope, attributes map[string]interface{}) bool {
 	if len(requested.ProjectIDs) == 0 {
 		return false
+	}
+	for _, id := range requested.ProjectIDs {
+		if strings.TrimSpace(id) == "*" {
+			return false
+		}
 	}
 	value, isString := attributes[authorizationProjectsAttr].(string)
 	return isString && value == "*"

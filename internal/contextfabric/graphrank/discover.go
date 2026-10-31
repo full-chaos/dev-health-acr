@@ -44,6 +44,12 @@ type ResolvedEdge struct {
 	ValidAt   *string
 	InvalidAt *string
 	ExpiredAt *string
+	// EndpointProjectNarrowingUnproven: a requested project narrowing
+	// admitted at least one of this edge's endpoints only on the "*" project
+	// list (ProjectNarrowingUnproven, CHAOS-12231). The endpoint's attributes
+	// are not carried on the edge, so the reader that authorized the
+	// endpoints records it here. It decides nothing.
+	EndpointProjectNarrowingUnproven bool
 }
 
 // AdmitEdgesResult is AdmitEdges' output.

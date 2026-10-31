@@ -200,9 +200,9 @@ func TestAWildcardNodeTheGrantDeniedDisclosesNothing(t *testing.T) {
 func discoverEdgeUnderProjectNarrowing(t *testing.T, edgeProjects interface{}) contextfabric.GraphContext {
 	t.Helper()
 	origin := contextfabric.SubjectRef{Kind: contextfabric.SubjectProject, CanonicalID: "p1", Label: "Origin"}
-	endpoint := func(kind, id, label string) row {
+	endpoint := func(kind, id, label string, projects interface{}) row {
 		r := fakeSubjectNodeRow(kind, id, label)
-		r["n"].(*node).Properties["authorization_projects"] = []string{"p1"}
+		r["n"].(*node).Properties["authorization_projects"] = projects
 		return r
 	}
 	fake := &fakeConn{queryFunc: func(ctx context.Context, graphKey, cypher string, params map[string]interface{}, readOnly bool) ([]row, error) {
@@ -223,9 +223,9 @@ func discoverEdgeUnderProjectNarrowing(t *testing.T, edgeProjects interface{}) c
 		default: // nodeByKindID
 			switch params["id"] {
 			case "work_target":
-				return []row{endpoint("work_item", "work_target", "Target")}, nil
+				return []row{endpoint("work_item", "work_target", "Target", []string{"p1"})}, nil
 			case "p1":
-				return []row{endpoint("project", "p1", "Origin")}, nil
+				return []row{endpoint("project", "p1", "Origin", []string{"p1"})}, nil
 			default:
 				return nil, nil
 			}
@@ -251,4 +251,75 @@ func TestAnAdmittedWildcardEdgeIsDisclosed(t *testing.T) {
 
 func TestAnAdmittedEdgeWithARealProjectListDisclosesNothing(t *testing.T) {
 	assertNoUnverifiedNarrowing(t, discoverEdgeUnderProjectNarrowing(t, []string{"p1"}))
+}
+
+// discoverTextEdgeUnderProjectNarrowing: the question text matches project
+// p1 (no subject is committed), and p1's one edge reaches a work item. That
+// far endpoint enters the answer only through the edge (reader.go's text
+// arm resolves it in resolveEdge); it is never a cohort node.
+func discoverTextEdgeUnderProjectNarrowing(t *testing.T, targetProjects interface{}, incoming bool) contextfabric.GraphContext {
+	t.Helper()
+	endpoint := func(kind, id, label string, projects interface{}) *node {
+		n := fakeSubjectNodeRow(kind, id, label)["n"].(*node)
+		n.Properties["authorization_projects"] = projects
+		return n
+	}
+	fake := &fakeConn{queryFunc: func(ctx context.Context, graphKey, cypher string, params map[string]interface{}, readOnly bool) ([]row, error) {
+		switch {
+		case strings.Contains(cypher, "fulltext"):
+			return []row{{"node": endpoint("project", "p1", "Origin", []string{"p1"}), "score": 2.0}}, nil
+		case strings.Contains(cypher, "UNION"):
+			if params["id"] != "p1" {
+				return nil, nil
+			}
+			hit := row{
+				"r": &edge{Properties: map[string]interface{}{
+					propRelationType: "BLOCKS", propRelationshipID: "relationship_1", propEvidenceRefs: []string{"evidence_1"},
+					"authorization_projects": []string{"p1"},
+				}},
+				"srcKind": "project", "srcId": "p1", "dstKind": "work_item", "dstId": "work_target",
+			}
+			if incoming {
+				// The work item is the edge's SOURCE: (work_target)-[BLOCKS]->(p1).
+				hit["srcKind"], hit["srcId"], hit["dstKind"], hit["dstId"] = "work_item", "work_target", "project", "p1"
+			}
+			return []row{hit}, nil
+		default: // nodeByKindID
+			switch params["id"] {
+			case "work_target":
+				return []row{{"n": endpoint("work_item", "work_target", "Target", targetProjects)}}, nil
+			case "p1":
+				return []row{{"n": endpoint("project", "p1", "Origin", []string{"p1"})}}, nil
+			default:
+				return nil, nil
+			}
+		}
+	}}
+	request := fakeDiscoveryRequest(contextfabric.SubjectRef{Kind: contextfabric.SubjectProject, CanonicalID: "p1", Label: "Origin"}, 10)
+	request.Resolution = contextfabric.SubjectResolution{Candidates: []contextfabric.SubjectCandidate{}, Committed: []contextfabric.SubjectRef{}}
+	request.Request.Question = "Origin"
+	request.Request.RequestedScope.ProjectIDs = []string{"p1"}
+	result, err := newFakeAdapter(t, fake).DiscoverContext(context.Background(), storage.Principal{OrgID: "org-1"}, request)
+	if err != nil {
+		t.Fatalf("DiscoverContext() error = %v", err)
+	}
+	if findFakeEdge(result.Paths, "BLOCKS") == nil {
+		t.Fatalf("Paths = %#v, want the BLOCKS edge admitted", result.Paths)
+	}
+	return result
+}
+
+// Codex r1 F2: a text-discovered edge's far endpoint admitted only on "*"
+// reaches the answer through the edge, not the cohort pool, and is still
+// disclosed.
+func TestATextEdgeEndpointAdmittedOnlyByTheWildcardIsDisclosed(t *testing.T) {
+	for _, incoming := range []bool{false, true} {
+		t.Run(fmt.Sprintf("work item is source=%v", incoming), func(t *testing.T) {
+			assertUnverifiedNarrowingDisclosed(t, discoverTextEdgeUnderProjectNarrowing(t, "*", incoming))
+		})
+	}
+}
+
+func TestATextEdgeWhoseEndpointsNameTheProjectDisclosesNothing(t *testing.T) {
+	assertNoUnverifiedNarrowing(t, discoverTextEdgeUnderProjectNarrowing(t, []string{"p1"}, false))
 }

@@ -1957,7 +1957,9 @@ const projectNarrowingUnverifiedReason = "project_narrowing_unverified"
 // caller is authorized for it: the cohort pool still holds candidates that
 // authorization later drops, and a dropped node says nothing about the
 // answer. Every edge in edges already passed resolveEdge's authorization,
-// endpoints included.
+// endpoints included; an endpoint that passed only on "*" is recorded on the
+// edge (EndpointProjectNarrowingUnproven), because a text-discovered edge's
+// far endpoint is never in nodes.
 func projectNarrowingRestsOnWildcard(principal storage.Principal, scope contextfabric.RequestedScope, nodes []graphrank.CandidateNode, edges []graphrank.ResolvedEdge) bool {
 	for _, n := range nodes {
 		if graphrank.ProjectNarrowingUnproven(scope, n.Attributes) && authorizedNodeAttributes(principal, scope, n.Attributes) {
@@ -1965,7 +1967,7 @@ func projectNarrowingRestsOnWildcard(principal storage.Principal, scope contextf
 		}
 	}
 	for _, e := range edges {
-		if graphrank.ProjectNarrowingUnproven(scope, e.Attributes) {
+		if e.EndpointProjectNarrowingUnproven || graphrank.ProjectNarrowingUnproven(scope, e.Attributes) {
 			return true
 		}
 	}
