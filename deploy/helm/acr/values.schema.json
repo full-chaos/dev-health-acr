@@ -272,7 +272,9 @@
             "issuer": { "type": "string" },
             "resources": { "type": "array", "items": { "type": "string" } },
             "consentUrl": { "type": "string" },
-            "clientMetadataDocuments": { "type": "boolean" }
+            "clientMetadataDocuments": { "type": "boolean" },
+            "browserClients": { "type": "array", "items": { "type": "string" } },
+            "devBrowserRedirectUris": { "type": "array", "items": { "type": "string" } }
           }
         }
       }

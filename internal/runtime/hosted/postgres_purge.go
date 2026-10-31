@@ -33,6 +33,13 @@ const (
 	// runs at the packet snapshot cadence (one heartbeat line per tick).
 	defaultOAuthPurgeInterval   = 5 * time.Minute
 	defaultOAuthPurgeBatchLimit = 500
+
+	// The browser family purge (CHAOS-12140) runs at the same cadence: an
+	// active browser session adds one credential and one refresh row every
+	// 10 minutes, and an ended family waits out its grace (24 h by default)
+	// before it is eligible, so five minutes keeps the backlog to a tick.
+	defaultBrowserFamilyPurgeInterval   = 5 * time.Minute
+	defaultBrowserFamilyPurgeBatchLimit = 500
 )
 
 // packetPurgeFunc purges expired context packet snapshots up to a bounded
@@ -209,6 +216,65 @@ func startConfiguredOAuthPurge(ctx context.Context, cfg config.Config, purger oa
 		return func() error { return nil }, nil
 	}
 	return startOAuthPurgeLoop(ctx, oauthPurgeFunc(purger, cfg.OAuthRequestPurgeGrace, cfg.OAuthClientIdleTTL, logger), nil, packetPurgeSlogObserver(logger))
+}
+
+// browserFamilyPurgeFailureMessage is the browser family purge loop's own
+// message -- see packetPurgeFailureMessage's doc comment.
+const browserFamilyPurgeFailureMessage = "browser family purge tick failed; retrying on next tick"
+
+// browserFamilyPurger is *storagepostgres.BrowserRefreshStore's purge, as the
+// hosted runtime uses it (an interface so the tick's logging is testable
+// without a database).
+type browserFamilyPurger interface {
+	PurgeEndedFamilies(ctx context.Context, now time.Time, grace time.Duration, limit int) (storagepostgres.BrowserFamilyPurgeResult, error)
+	CountEndedFamiliesRemaining(ctx context.Context, now time.Time, grace time.Duration, limit int) (storagepostgres.BrowserFamilyPurgeRemaining, error)
+}
+
+// browserFamilyPurgeFunc adapts a browserFamilyPurger to a packetPurgeFunc
+// with the configured grace. Like oauthPurgeFunc, EVERY tick that reaches the
+// database logs exactly one info line (counts only, never an id), zeros
+// included, so a loop that stopped is a missing line: the deleted credentials
+// and families and, after a purge that did not fail, how many are STILL
+// eligible (each capped at the batch limit + 1). The line is written before an
+// error is returned, so a tick that deleted credentials and then failed on the
+// family statement is still visible, without the remaining counts.
+func browserFamilyPurgeFunc(purger browserFamilyPurger, grace time.Duration, logger *slog.Logger) packetPurgeFunc {
+	return func(ctx context.Context, before time.Time, limit int) (int, error) {
+		result, err := purger.PurgeEndedFamilies(ctx, before, grace, limit)
+		probed := false
+		var remaining storagepostgres.BrowserFamilyPurgeRemaining
+		if err == nil {
+			remaining, err = purger.CountEndedFamiliesRemaining(ctx, before, grace, limit)
+			probed = err == nil
+		}
+		// Constant keys in both forms, so the emit census resolves every one;
+		// member_rows, not "credentials": the shared redactor masks any key
+		// that holds a credential fragment, and these are counts.
+		switch {
+		case logger == nil:
+		case probed:
+			logger.InfoContext(ctx, "browser family purge", "member_rows", result.Credentials, "families", result.Families,
+				"member_rows_remaining", remaining.Credentials, "families_remaining", remaining.Families)
+		default:
+			logger.InfoContext(ctx, "browser family purge", "member_rows", result.Credentials, "families", result.Families)
+		}
+		return result.Credentials + result.Families, err
+	}
+}
+
+// startConfiguredBrowserFamilyPurge starts the CHAOS-12140 browser family
+// purge ONLY when a browser client is configured (cfg.OAuthBrowserClassConfigured),
+// for the workload purge's reason: its initial synchronous purge issues a
+// DELETE against acr.client_credentials and acr.browser_token_families, which
+// the runtime role holds only under the browser_client grant feature
+// (internal/dbacl), so a missing grant fails startup loudly and a deployment
+// without the browser class is never asked for it. Unconfigured, it does
+// nothing and returns a no-op close.
+func startConfiguredBrowserFamilyPurge(ctx context.Context, cfg config.Config, purger browserFamilyPurger, logger *slog.Logger) (func() error, error) {
+	if !cfg.OAuthBrowserClassConfigured() {
+		return func() error { return nil }, nil
+	}
+	return startBoundedPurgeLoop(ctx, browserFamilyPurgeFunc(purger, cfg.OAuthBrowserFamilyPurgeGrace, logger), nil, packetPurgeSlogObserver(logger), defaultBrowserFamilyPurgeInterval, defaultBrowserFamilyPurgeBatchLimit, browserFamilyPurgeFailureMessage)
 }
 
 // packetPurgeSlogObserver adapts a *slog.Logger into a

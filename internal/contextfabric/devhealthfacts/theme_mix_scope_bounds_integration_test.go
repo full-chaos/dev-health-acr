@@ -72,7 +72,7 @@ func TestThemeMixScopeAtAndAboveTheBoundServeTheSameMixAgainstRealClickHouse(t *
 		t.Helper()
 		before := budgetQueryLogTotals(t, ctx, direct, "work_unit_membership")
 		result, err := provider.ReadFacts(ctx, storage.Principal{OrgID: orgID}, contextfabric.FactQuery{
-			Time: contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent}, Kind: contextfabric.FactInvestment, Subjects: []contextfabric.SubjectRef{subject},
+			Time: investmentAllHistory(), Kind: contextfabric.FactInvestment, Subjects: []contextfabric.SubjectRef{subject},
 		})
 		if err != nil {
 			t.Fatalf("ReadFacts(%s): %v\nserver: %s", orgID, err, lastServerException(ctx, direct))

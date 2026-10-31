@@ -28,6 +28,15 @@ const (
 	// WorkloadTokenExchange is a configured workload token exchange: both
 	// ACR_WORKLOAD_TOKEN_EXCHANGE_AUDIENCE and ACR_WORKLOAD_TRUST_DOMAIN set.
 	WorkloadTokenExchange Feature = "workload_token_exchange"
+	// BrowserClient is a configured first-party browser client (CHAOS-12123):
+	// ACR_OAUTH_BROWSER_CLIENTS or ACR_OAUTH_DEV_BROWSER_REDIRECT_URIS set to
+	// something other than whitespace (config.OAuthBrowserClassConfigured).
+	BrowserClient Feature = "browser_client"
+	// CredentialPurge is derived, never set on its own: it is on when
+	// WorkloadTokenExchange or BrowserClient is, the two features whose purge
+	// loops delete acr.client_credentials rows (one declared row, since a
+	// privilege is declared once per table).
+	CredentialPurge Feature = "credential_purge"
 )
 
 // Grant is the privileges the runtime role holds on one table.
@@ -48,8 +57,8 @@ var RuntimeGrants = []Grant{
 		Why: "readiness check and migration verification read it: internal/runtime/hosted/postgres_readiness.go:20"},
 	{Table: "client_credentials", Privileges: []string{"SELECT", "INSERT", "UPDATE"},
 		Why: "SELECT internal/storage/postgres/credentials.go:61, INSERT credentials.go:167, UPDATE credentials.go:115 and credentials_audit.go:72"},
-	{Table: "client_credentials", Privileges: []string{"DELETE"}, Feature: WorkloadTokenExchange,
-		Why: "DELETE of expired workload credentials: internal/storage/postgres/workload_bindings.go:65, started only when workload token exchange is configured (internal/runtime/hosted/postgres.go:185)"},
+	{Table: "client_credentials", Privileges: []string{"DELETE"}, Feature: CredentialPurge,
+		Why: "DELETE of expired workload credentials: internal/storage/postgres/workload_bindings.go:65, started only when workload token exchange is configured (internal/runtime/hosted/postgres.go:185); DELETE of the member credentials of ended browser token families: internal/storage/postgres/browser_family_purge.go:84, started only when a browser client is configured (internal/runtime/hosted/postgres.go startConfiguredBrowserFamilyPurge)"},
 	{Table: "workload_bindings", Privileges: []string{"SELECT"}, Feature: WorkloadTokenExchange,
 		Why: "read only, no write path; the resolver is built only when workload token exchange is configured: internal/storage/postgres/workload_bindings.go:36, internal/runtime/hosted/workload_token_exchange.go:57"},
 	{Table: "context_packet_snapshots", Privileges: []string{"SELECT", "INSERT", "UPDATE", "DELETE"},
@@ -68,6 +77,8 @@ var RuntimeGrants = []Grant{
 		Why: "SELECT internal/storage/postgres/oauth.go:308, INSERT oauth.go:79; removed with its device_authorizations parent by cascade"},
 	{Table: "browser_token_families", Privileges: []string{"SELECT", "INSERT", "UPDATE"},
 		Why: "INSERT internal/storage/postgres/browser_refresh.go:54, SELECT ... FOR UPDATE (the family lock, checked as UPDATE) browser_refresh.go:95, UPDATE (revoke) browser_refresh.go:275"},
+	{Table: "browser_token_families", Privileges: []string{"DELETE"}, Feature: BrowserClient,
+		Why: "DELETE of ended browser token families: internal/storage/postgres/browser_family_purge.go:116, started only when a browser client is configured; their refresh rows go by cascade, which runs as the table owner"},
 	{Table: "browser_refresh_tokens", Privileges: []string{"SELECT", "INSERT", "UPDATE"},
 		Why: "INSERT internal/storage/postgres/browser_refresh.go:59, SELECT browser_refresh.go:86 and ... FOR UPDATE, UPDATE (consume) browser_refresh.go:218; removed with its family by cascade"},
 	{Table: "web_assertion_replays", Privileges: []string{"SELECT", "INSERT", "DELETE"},
@@ -124,7 +135,11 @@ var NoRuntimeAccess = map[string]string{}
 // Features is the set of enabled optional features.
 type Features map[Feature]bool
 
-func (f Features) enabled(feature Feature) bool {
+// Enabled reports whether rows gated on feature apply under f.
+func (f Features) Enabled(feature Feature) bool {
+	if feature == CredentialPurge {
+		return f[WorkloadTokenExchange] || f[BrowserClient]
+	}
 	return feature == AlwaysOn || f[feature]
 }
 
@@ -163,7 +178,7 @@ func GrantStatements(quotedRole string, features Features) []Statement {
 func grantStatements(grants []Grant, quotedRole string, features Features) []Statement {
 	var statements []Statement
 	for _, grant := range grants {
-		if !features.enabled(grant.Feature) {
+		if !features.Enabled(grant.Feature) {
 			continue
 		}
 		statements = append(statements, Statement{

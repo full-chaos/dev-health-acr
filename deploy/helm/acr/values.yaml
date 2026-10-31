@@ -115,6 +115,16 @@ config:
     # Accept client ID metadata documents (HTTPS client_id URLs). Fetches go
     # to public addresses only.
     clientMetadataDocuments: true
+    # First-party browser clients (CHAOS-12123): client ID metadata document
+    # URLs whose code exchange issues the 10-minute browser class; the issuer
+    # must then be one of resources. Empty = the class is off. Rendered for
+    # acr-api and for the grant-runtime-acl Job, which grants the browser
+    # family purge's DELETE privileges only when this or
+    # devBrowserRedirectUris is set (CHAOS-12140).
+    browserClients: []
+    # Development only: exact http loopback redirect URIs of the static
+    # development browser client (acr-api refuses it outside development).
+    devBrowserRedirectUris: []
 
 # Existing-Secret-only credential contract. Each existingSecret is the NAME of a
 # Secret that already exists in the release namespace. This chart validates the

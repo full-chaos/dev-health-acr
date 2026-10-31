@@ -157,7 +157,7 @@ func TestRepositoryScopedSplitStatementsStayUnderTheMemoryCeilingOnRealClickHous
 		for i := 0; i < 2; i++ {
 			mark = serverNowMicros(t, ctx, direct)
 			result, err := provider.ReadFacts(ctx, storage.Principal{OrgID: s.org}, contextfabric.FactQuery{
-				Time: contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent}, Kind: contextfabric.FactInvestment, Subjects: subjects,
+				Time: investmentAllHistory(), Kind: contextfabric.FactInvestment, Subjects: subjects,
 			})
 			if err != nil {
 				t.Fatalf("%s: ReadFacts: %v: %s", s.org, err, readFailureCause(err))

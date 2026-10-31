@@ -137,7 +137,7 @@ func TestCHAOS9197APseudoProjectOwnershipRowAttributesToNothingOnTheCanonicalBas
 
 	provider := findProvider(t, devhealthfacts.NewProviders(query), contextfabric.FactInvestment)
 	result, err := provider.ReadFacts(ctx, storage.Principal{OrgID: orgID}, contextfabric.FactQuery{
-		Time: contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent},
+		Time: investmentAllHistory(),
 		Kind: contextfabric.FactInvestment, Subjects: []contextfabric.SubjectRef{projectSubject("linear", "ghost-project")},
 	})
 	if err != nil {

@@ -62,6 +62,12 @@ data:
   ACR_OAUTH_RESOURCES: {{ join "," .Values.config.oauth.resources | quote }}
   ACR_OAUTH_CONSENT_URL: {{ .Values.config.oauth.consentUrl | quote }}
   ACR_OAUTH_CLIENT_METADATA_DOCUMENTS: {{ .Values.config.oauth.clientMetadataDocuments | quote }}
+  {{- with .Values.config.oauth.browserClients }}
+  ACR_OAUTH_BROWSER_CLIENTS: {{ join "," . | quote }}
+  {{- end }}
+  {{- with .Values.config.oauth.devBrowserRedirectUris }}
+  ACR_OAUTH_DEV_BROWSER_REDIRECT_URIS: {{ join "," . | quote }}
+  {{- end }}
   {{- end }}
   {{- if include "acr.remoteEntitlement" . }}
   ACR_DEV_HEALTH_ENTITLEMENT_URL: {{ .Values.config.entitlement.url | quote }}

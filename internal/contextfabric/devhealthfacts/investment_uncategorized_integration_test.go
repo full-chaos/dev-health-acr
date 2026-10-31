@@ -57,7 +57,7 @@ func TestInvestmentLeavesEvidenceGatedUnitsOutAgainstRealClickHouse(t *testing.T
 	read := func(ctx context.Context, subjects ...contextfabric.SubjectRef) contextfabric.FactProviderResult {
 		t.Helper()
 		result, err := provider.ReadFacts(ctx, storage.Principal{OrgID: orgID}, contextfabric.FactQuery{
-			Time: contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent}, Kind: contextfabric.FactInvestment, Subjects: subjects,
+			Time: investmentAllHistory(), Kind: contextfabric.FactInvestment, Subjects: subjects,
 		})
 		if err != nil {
 			t.Fatalf("ReadFacts: %v", err)
@@ -134,7 +134,7 @@ func TestInvestmentLeavesEvidenceGatedUnitsOutAgainstRealClickHouse(t *testing.T
 		t.Helper()
 		subject := organizationSubject(orgID)
 		result, err := provider.ReadFacts(ctx, storage.Principal{OrgID: orgID}, contextfabric.FactQuery{
-			Time: contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent}, Kind: contextfabric.FactInvestment, Subjects: []contextfabric.SubjectRef{subject},
+			Time: investmentAllHistory(), Kind: contextfabric.FactInvestment, Subjects: []contextfabric.SubjectRef{subject},
 		})
 		if err != nil {
 			t.Fatalf("ReadFacts: %v", err)

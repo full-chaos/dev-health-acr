@@ -1742,6 +1742,7 @@ func projectIdentityMatchSQL(alias, column string) string {
 // has not ended before the window start (a point-in-time bound uses its
 // instant). An unbounded read keeps the currently-owned rule.
 func ownershipValidityPredicate(timeBound factTimeBound) string {
+	timeBound = timeBound.ownership()
 	if timeBound.active {
 		param := boundEndParam
 		if timeBound.hasStart {
@@ -2716,8 +2717,9 @@ func explainTeamScopedProjectAbsence(bound factTimeBound, state contextfabric.So
 	// one: outOfRetentionReason says the window may predate the retained
 	// corpus, which is a statement about TIME, not routing (codex P2).
 	// Overwriting it would erase the distinction §19.8.3 exists to draw and
-	// replace a true reason with a less true one.
-	if bound.active {
+	// replace a true reason with a less true one. A current-axis window is not
+	// a historical read.
+	if bound.active && !bound.currentAxis {
 		return reason
 	}
 	for _, subject := range subjects {

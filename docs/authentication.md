@@ -489,6 +489,44 @@ revocation.
   revocation writes a `credential_created` / `credential_revoked` audit row with
   `family_id` (and `family_revoke_reason`).
 
+### Browser family purge (CHAOS-12140)
+
+Each refresh adds one refresh row and one browser credential row, so an active
+session adds about 73 of each over its 12 hours. With a browser client
+configured, acr-api purges ended families: one bounded purge at startup (a
+missing `DELETE` grant fails startup) and then one every 5 minutes, at most 500
+rows per statement.
+
+- A family has ended when its absolute end or its revocation is older than
+  `ACR_OAUTH_BROWSER_FAMILY_PURGE_GRACE` (default `24h`, must be positive when a
+  browser client is configured).
+- First the member credentials of ended families go (each is expired or
+  revoked by then; a credential still live is never deleted). A member of a
+  family that has not ended stays even when it is dead: the next refresh reads
+  it. Then the families go, once no member is left; their refresh rows go with
+  them (`ON DELETE CASCADE`, run as the table owner, so the runtime role needs
+  no `DELETE` on `acr.browser_refresh_tokens`).
+- A family's first credential comes from the code exchange, and the device
+  authorization that exchange redeemed names it (a foreign key with no delete
+  action). It stays until the OAuth purge deletes that device authorization
+  (`ACR_OAUTH_REQUEST_PURGE_GRACE` after its expiry); the next browser family
+  purge then deletes it by the family end the credential carries.
+- The runtime role needs `DELETE` on `acr.client_credentials` and
+  `acr.browser_token_families` (the `browser_client` rows of
+  `internal/dbacl`; `deploy/compose/acr-db-init.sh runtime-acl` and
+  `acr-migrate grant-runtime-acl` grant them when either browser client
+  setting is not blank). On Kubernetes set the clients as
+  `config.oauth.browserClients` (and `config.oauth.devBrowserRedirectUris` in
+  development): the chart renders them for acr-api and for the grant Job.
+- Every tick logs one `browser family purge` line at Info, zeros included
+  (the loop's heartbeat): `member_rows` (member credentials), `families`
+  (deleted) and, after a purge that did not fail, `member_rows_remaining`,
+  `families_remaining` (still
+  eligible, capped at the batch limit + 1), read the same way as the
+  `oauth purge` line. A failed tick logs the fixed warning
+  `browser family purge tick failed; retrying on next tick` with the error class
+  and table only.
+
 ## Per-call access re-check (CHAOS-12092)
 
 A user-class credential (class `browser`, `oauth_user` or `native_device`) is

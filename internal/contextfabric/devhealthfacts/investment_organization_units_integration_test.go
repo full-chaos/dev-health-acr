@@ -51,7 +51,7 @@ func TestOrganizationUnitsPageTiesToTheOrganizationFactAgainstRealClickHouse(t *
 	read := func(request contextfabric.InvestmentUnitsRequest) contextfabric.FactProviderResult {
 		t.Helper()
 		result, err := provider.ReadFacts(contextfabric.WithInvestmentUnits(ctx, request), storage.Principal{OrgID: orgID}, contextfabric.FactQuery{
-			Time: contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent}, Kind: contextfabric.FactInvestment,
+			Time: investmentAllHistory(), Kind: contextfabric.FactInvestment,
 			Subjects: []contextfabric.SubjectRef{organizationSubject(orgID)},
 		})
 		if err != nil {
