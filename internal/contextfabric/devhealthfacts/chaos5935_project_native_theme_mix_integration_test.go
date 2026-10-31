@@ -194,6 +194,66 @@ func TestProjectNativeThemeMixAgainstRealClickHouse(t *testing.T) {
 		if got := factInt(t, fact, "project_own_work_unit_count"); got != 0 {
 			t.Errorf("project_own_work_unit_count = %d, want 0 (the project has no work unit of its own)", got)
 		}
+		if got := factInt(t, fact, "project_own_uncategorized_unit_count"); got != 0 {
+			t.Errorf("project_own_uncategorized_unit_count = %d, want 0", got)
+		}
+	})
+
+	// CHAOS-12181: a roll-up project whose own units in the window are all
+	// evidence-gated counts them as its own, says how many are uncategorized,
+	// and names them in the roll-up reason. On v258 it read 0 own units with
+	// the reason of a project that has none.
+	t.Run("a_project_whose_own_units_are_all_evidence_gated_counts_them", func(t *testing.T) {
+		prior := map[string]float64{"feature_delivery": 0.2, "operational": 0.2, "maintenance": 0.2, "quality": 0.2, "risk": 0.2}
+		seedGatedIssueUnit := func(orgID, id, status, issue string) {
+			exec("gated issue unit "+id, `INSERT INTO work_unit_investments (work_unit_id, from_ts, to_ts, effort_value, theme_distribution_json, subcategory_distribution_json, structural_evidence_json, categorization_status, computed_at, org_id) VALUES (?,?,?,?,?,?,?,?,?,?)`,
+				id, at, at, 1.0, prior, map[string]float64{}, fmt.Sprintf(`{"issues":[%q],"prs":[]}`, issue), status, at, orgID)
+		}
+		for _, c := range []struct {
+			org, project string
+			statuses     []string
+		}{
+			{"org-gated-insufficient", "proj-gi", []string{"insufficient_evidence", "insufficient_evidence"}},
+			{"org-gated-notext", "proj-gn", []string{"no_text_sources"}},
+		} {
+			seedProject(c.project, c.org)
+			seedOwnedRepo(c.org, c.project, "team-"+c.project, "repo-"+c.project)
+			seedRepoUnit(c.org, "wu-rollup-"+c.project, "repo-"+c.project, 40, map[string]float64{"quality": 1.0})
+			for i, status := range c.statuses {
+				item := fmt.Sprintf("linear:%s-%d", c.project, i)
+				seedItem(c.org, item, c.project)
+				seedGatedIssueUnit(c.org, fmt.Sprintf("wu-gated-%s-%d", c.project, i), status, item)
+			}
+			subject := projectSubject("linear", c.project)
+			result, err := findProvider(t, providers, contextfabric.FactInvestment).ReadFacts(ctx, storage.Principal{OrgID: c.org}, contextfabric.FactQuery{
+				Time: investmentAllHistory(), Kind: contextfabric.FactInvestment, Subjects: []contextfabric.SubjectRef{subject},
+			})
+			if err != nil {
+				t.Fatalf("%s: ReadFacts: %v", c.org, err)
+			}
+			if len(result.Facts) != 1 {
+				t.Fatalf("%s: facts = %d, want 1", c.org, len(result.Facts))
+			}
+			fact := result.Facts[0]
+			if got := factString(t, fact, "investment_mix_source"); got != "owning_team_rollup" {
+				t.Fatalf("%s: investment_mix_source = %q, want owning_team_rollup (gated units carry no measurable work)", c.org, got)
+			}
+			gated := int64(len(c.statuses))
+			if got := factInt(t, fact, "project_own_work_unit_count"); got != gated {
+				t.Errorf("%s: project_own_work_unit_count = %d, want %d: the gated units are the project's own units in the window", c.org, got, gated)
+			}
+			if got := factInt(t, fact, "project_own_uncategorized_unit_count"); got != gated {
+				t.Errorf("%s: project_own_uncategorized_unit_count = %d, want %d", c.org, got, gated)
+			}
+			if got := factInt(t, fact, "work_unit_count"); got != 1 {
+				t.Errorf("%s: work_unit_count = %d, want the roll-up's 1", c.org, got)
+			}
+			reason := result.SubjectReasons[contextfabric.FactSubjectKey(subject)]
+			want := fmt.Sprintf("the project has %d work units of its own in the window, %d of them uncategorized", gated, gated)
+			if !strings.Contains(reason, want) {
+				t.Errorf("%s: reason = %q, want it to name the gated units (%q)", c.org, reason, want)
+			}
+		}
 	})
 
 	t.Run("native_units_with_zero_persisted_effort_are_kept_and_weigh_one", func(t *testing.T) {
