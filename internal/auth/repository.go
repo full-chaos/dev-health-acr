@@ -61,8 +61,11 @@ func RepositoryAllowed(scopes []string, slug string) bool {
 	return false
 }
 
+// AuthorizeRepository refuses a project-only principal every repository,
+// whatever its repository list holds: a project grant names no repository
+// (CHAOS-12299).
 func AuthorizeRepository(principal storage.Principal, slug string) error {
-	if !RepositoryAllowed(principal.RepositoryScopes, slug) {
+	if ClassifyGrant(principal) == GrantProjectOnly || !RepositoryAllowed(principal.RepositoryScopes, slug) {
 		return ErrRepositoryForbidden
 	}
 	return nil

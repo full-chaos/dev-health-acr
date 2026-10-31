@@ -50,10 +50,10 @@ FactActualCompletion
     leak rebound_func_value   0
     leak no_body              0
     leak unresolvable         0
-    calls followed            993
+    calls followed            992
     calls accounted           13
     calls not_a_call          12
-    calls excluded_by_design  100
+    calls excluded_by_design  101
     calls leaked              3
   fields             archived_items cancelled_count completed completed_at completed_count completion_ratio counted_work_items member_kind rollup_basis unknown_status_count work_item_count
 
@@ -66,10 +66,10 @@ FactBlockers
     leak rebound_func_value   0
     leak no_body              0
     leak unresolvable         1
-    calls followed            1142
+    calls followed            1141
     calls accounted           17
     calls not_a_call          15
-    calls excluded_by_design  318
+    calls excluded_by_design  319
     calls leaked              32
   fields             blocked_by_work_item_id blocked_by_work_item_ref blocked_work_items_current blocked_work_items_without_link_count blocker_active blocker_dependencies_current blocker_dependencies_excluded_by_status_current blocker_dependencies_writer_unresolved_current blocker_status_basis link_tier oldest_blocked_age_basis oldest_blocked_age_days oldest_blocked_age_unavailable_reason owned_repositories owned_repositories_omitted_count owned_repository_count project_blocked_work_items_current project_reached_repository_count repositories_with_data_count repositories_without_data_count repository_breakdown repository_breakdown_limitation repository_breakdown_omitted_count repository_id repository_link_basis repository_name repository_tables_basis rollup_basis
 
@@ -82,10 +82,10 @@ FactCommitment
     leak rebound_func_value   0
     leak no_body              0
     leak unresolvable         1
-    calls followed            992
+    calls followed            991
     calls accounted           13
     calls not_a_call          6
-    calls excluded_by_design  145
+    calls excluded_by_design  146
     calls leaked              7
   fields             as_of_day commitment_status days_to_target due_at issue_due_dates issue_due_dates_truncated items_closed items_open items_past_due_open items_total items_unavailable_reason items_unreadable_count items_unreadable_reason items_with_due_at items_without_due_at iteration_basis latest_sprint_end next_sprint_end past_due project_state sprint_kind sprint_refs_unresolved sprint_refs_unresolved_reason state_source status target_date target_date_provider unknown_status_count work_item_id
 
@@ -322,10 +322,10 @@ FactRequiredChildren
     leak rebound_func_value   0
     leak no_body              0
     leak unresolvable         0
-    calls followed            978
+    calls followed            977
     calls accounted           13
     calls not_a_call          5
-    calls excluded_by_design  79
+    calls excluded_by_design  80
     calls leaked              3
   fields             relationship_type required_child_work_item_id required_child_work_item_ref
 
@@ -386,10 +386,10 @@ FactStatus
     leak rebound_func_value   0
     leak no_body              0
     leak unresolvable         0
-    calls followed            978
+    calls followed            977
     calls accounted           15
     calls not_a_call          6
-    calls excluded_by_design  106
+    calls excluded_by_design  107
     calls leaked              4
   fields             status status_basis status_duration_seconds status_in_vocabulary status_provenance status_since status_since_basis
 
@@ -402,10 +402,10 @@ FactWork
     leak rebound_func_value   0
     leak no_body              0
     leak unresolvable         0
-    calls followed            971
+    calls followed            970
     calls accounted           13
     calls not_a_call          5
-    calls excluded_by_design  70
+    calls excluded_by_design  71
     calls leaked              2
   fields             title
 

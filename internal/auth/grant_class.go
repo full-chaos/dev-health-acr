@@ -62,7 +62,7 @@ func (c GrantClass) IsRestricted() bool {
 // restricted.
 func ClassifyGrant(principal storage.Principal) GrantClass {
 	switch {
-	case len(principal.ProjectScopes) > 0:
+	case principal.HoldsProjectGrant():
 		return GrantProjectOnly
 	case len(principal.RepositoryScopes) == 0:
 		return GrantUnrestricted

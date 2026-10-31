@@ -163,6 +163,29 @@ Under `project_only` (c3, CHAOS-12299):
 - **The shared predicate.** It is `graphrank.ProjectMembershipOf`, and the
   request-side narrowing (CHAOS-12229) uses the same one.
 
+## Fail closed before c2 (c3 r1)
+
+Until c2 (CHAOS-12298) lands, c3 refuses a `project_only` principal every
+channel that reads its repository list or hashes only that list:
+
+- **Repositories.** `auth.AuthorizeRepository` refuses it every repository,
+  whatever its list holds, so every route and evidence read that authorizes a
+  repository through it refuses it. The storage episode checks refuse it too
+  (`storage.Principal.HoldsProjectGrant`, the rule `auth.ClassifyGrant`
+  reads).
+- **Work items.** `auth.WorkItemGrantSelectorSet` gives it the zero selector
+  set, which the reader denies, never the organization-wide one. Every
+  work-item read (status, work, actual completion, blockers, required
+  children, commitment, the tree filter, membership, the scope expander, the
+  repository-less admission, evidence and source rows) then reads nothing for
+  it, so a work-item subject's facts are withheld.
+- **Stored results and reuse.** It is refused every stored result
+  (`grant_mismatch`), makes no reuse lookup, and its results are never stored
+  as reusable, because the grant digest and the reuse key hash only the
+  repository list.
+- **Counts.** `withheld.edges_not_visible` and `page.examined` are unchanged:
+  they are the disclosure contract, the same for a restricted caller.
+
 ## Digests and reuse
 
 c2, CHAOS-12298:

@@ -111,6 +111,14 @@ type Principal struct {
 	ProjectScopes []string
 }
 
+// HoldsProjectGrant reports whether the principal carries a project grant,
+// the one rule that makes it project_only (auth.ClassifyGrant). Storage code,
+// which cannot import auth, reads it to refuse such a principal every
+// repository-keyed record (CHAOS-12299).
+func (p Principal) HoldsProjectGrant() bool {
+	return len(p.ProjectScopes) > 0
+}
+
 // AuthenticationMethod identifies the validated authentication boundary that
 // derived a Principal. It is never supplied by a request payload.
 type AuthenticationMethod string

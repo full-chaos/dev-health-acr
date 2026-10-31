@@ -102,3 +102,33 @@ func TestTheOwnedByScanWithholdsAnAttributionEdgeFromAProjectOnlyCaller(t *testi
 		}
 	}
 }
+
+// CHAOS-12299 r1 F3, no change: withheld.edges_not_visible and page.examined
+// are the existing disclosure contract (missing is not healthy), the same for
+// a restricted caller. This pins today's counts for a project-only caller so
+// a change to them is deliberate: a granted project read with one
+// OWNED_BY_TEAM edge whose team end is denied serves no edge, examines one and
+// withholds one.
+func TestAProjectOnlyCallerSeesTheWithheldEdgeCountsOfTheDisclosureContract(t *testing.T) {
+	granted := subject(contractsv1.ContextFabricSubjectProject, "project.v2:github:P-1")
+	team := subject(contractsv1.ContextFabricSubjectTeam, "team:t")
+	node := func(ref contextfabric.SubjectRef) map[string]interface{} {
+		return map[string]interface{}{"subject_kind": string(ref.Kind), "canonical_id": ref.CanonicalID, "authorization_repositories": "*", "authorization_projects": "*"}
+	}
+	graph := &fakeEdgeGraph{fakeGraph: &fakeGraph{org: orgA, nodes: map[string]map[string]interface{}{
+		graphrank.SubjectKey(granted): node(granted),
+		graphrank.SubjectKey(team):    node(team),
+	}}}
+	graph.edges = []EdgeCandidate{edgeBetween("rel-owned", string(contractsv1.ContextFabricRelationshipOwnedByTeam), granted, team, map[string]interface{}{"authorization_projects": "*", "authorization_repositories": "*"})}
+	reader, _ := newRelReader(graph, nil)
+	principal := storage.Principal{OrgID: orgA, Subject: "u", CredentialID: "c", ProjectScopes: []string{"project.v2:github:P-1"}}
+	response, err := reader.Read(relCtx("project-only-counts"), principal, RelationshipsRequest{
+		Subject: RelationshipsSubject{Kind: string(granted.Kind), CanonicalID: granted.CanonicalID}, Direction: "out", Limit: 100,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(response.Edges) != 0 || response.Page.Examined != 1 || response.Withheld.EdgesNotVisible != 1 {
+		t.Fatalf("edges %d, examined %d, edges_not_visible %d; want 0, 1, 1 (the disclosure contract)", len(response.Edges), response.Page.Examined, response.Withheld.EdgesNotVisible)
+	}
+}

@@ -9,6 +9,12 @@ internal/api/context_fabric_data_catalog_route.go	App.contextFabricDataCatalogHa
 internal/api/context_fabric_data_catalog_route.go	App.contextFabricDataCatalogHandler	derived-escape	1	r-sub	the catalog shows the principal class; project_only reads as restricted, so the catalog states the restricted operations (12107 v2 inventory)
 internal/auth/grant_class.go	GrantClass.IsRestricted	switch	1	vocab	the restricted-subtype rule of the grant class itself (restricted and project_only)
 internal/auth/grant_class.go	GrantClassVocabulary	collection	1	vocab	the closed grant-class vocabulary
+internal/auth/repository.go	AuthorizeRepository	classify	1	deny	a project grant names no repository: project_only is refused every repository, whatever its list; c3 CHAOS-12299 r1 F1
+internal/auth/repository.go	AuthorizeRepository	compare	1	deny	a project grant names no repository: project_only is refused every repository, whatever its list; c3 CHAOS-12299 r1 F1
+internal/auth/work_item_grant.go	WorkItemGrantSelectorSet	classify	1	deny	project_only gets the zero (deny) selector set, never All; every work-item read reads nothing for it; c3 CHAOS-12299 r1 F2
+internal/auth/work_item_grant.go	WorkItemGrantSelectorSet	compare	1	deny	project_only gets the zero (deny) selector set, never All; every work-item read reads nothing for it; c3 CHAOS-12299 r1 F2
+internal/contextfabric/answer_reuse.go	Engine.tryReuseWithReading	classify	1	deny	project_only makes no reuse lookup until c2 class-tags the reuse key (CHAOS-12298); c3 CHAOS-12299 r1 F4
+internal/contextfabric/answer_reuse.go	Engine.tryReuseWithReading	compare	1	deny	project_only makes no reuse lookup until c2 class-tags the reuse key (CHAOS-12298); c3 CHAOS-12299 r1 F4
 internal/contextfabric/devhealthfacts/dependencies.go	BlockersProvider.ReadFacts	raw-grant	1	deny	orgWideFigureAllowed: an org-wide figure is a typed limitation under project_only (D3, CHAOS-12225); c3 CHAOS-12299 states it
 internal/contextfabric/devhealthfacts/incidents.go	IncidentsProvider.ReadFacts	raw-grant	1	deny	orgWideFigureAllowed: an org-wide figure is a typed limitation under project_only (D3, CHAOS-12225); c3 CHAOS-12299 states it
 internal/contextfabric/devhealthfacts/investment.go	InvestmentProvider.ReadFacts	raw-grant	1	r-sub	sourceHealthRestricted: project_only takes the restricted source-health path (12107 v2 inventory)
@@ -87,6 +93,8 @@ internal/contextfabric/graphrank/resolve.go	repositoryNarrowedByUnrestrictedPrin
 internal/contextfabric/graphrank/resolve.go	unscopedVisibilityFor	raw-grant	1	r-sub	scopesUnrestricted caller: project_only is restricted (12107 v2 inventory resolve.go:4880)
 internal/contextfabric/reuse_grant_scope.go	GrantScopedTimeAxisKey	classify	1	proj	the reuse key must be class-tagged so a project_only result never serves another class (R2-1, R2-4); c2 CHAOS-12298
 internal/contextfabric/reuse_grant_scope.go	GrantScopedTimeAxisKey	compare	1	proj	the reuse key must be class-tagged so a project_only result never serves another class (R2-1, R2-4); c2 CHAOS-12298
+internal/contextfabric/semantic_state_persistence.go	Engine.saveResult	classify	1	deny	a project_only result is never stored as reusable until c2 (CHAOS-12298); c3 CHAOS-12299 r1 F4
+internal/contextfabric/semantic_state_persistence.go	Engine.saveResult	compare	1	deny	a project_only result is never stored as reusable until c2 (CHAOS-12298); c3 CHAOS-12299 r1 F4
 internal/contextfabric/sourcerow/resolver.go	Resolver.encodedTargets	classify	1	proj	E1: an unresolved optional endpoint does not pass for project_only; c3 CHAOS-12299
 internal/contextfabric/sourcerow/resolver.go	Resolver.encodedTargets	compare	1	proj	E1: an unresolved optional endpoint does not pass for project_only; c3 CHAOS-12299
 internal/contextfabric/sourcerow/resolver.go	Resolver.projectTeamRow	raw-grant	1	deny	admitsWildcard denies project_only (a kindless decision): project-team evidence is refused, teams are denied in c3 (CHAOS-12323)
@@ -102,8 +110,8 @@ internal/contextfabric/stored_result_authorization.go	StoredResultGrantDigest	co
 internal/contextfabric/stored_result_authorization.go	StoredResultPrincipalScopeVocabulary	collection	1	vocab	the closed stored-result principal-scope vocabulary
 internal/contextfabric/stored_result_authorization.go	classifyStoredResultPrincipalScope	classify	2	vocab	the mapping from auth.GrantClass to the stored-result principal scope
 internal/contextfabric/stored_result_authorization.go	classifyStoredResultPrincipalScope	derived-escape	1	vocab	the mapping from auth.GrantClass to the stored-result principal scope
-internal/contextfabric/stored_result_authorization.go	storedResultGrantRefusal	classify	1	r-sub	restricted callers meet the grant-digest check, never the unrestricted bypass (12107 v2 inventory :379-389)
-internal/contextfabric/stored_result_authorization.go	storedResultGrantRefusal	compare	1	r-sub	restricted callers meet the grant-digest check, never the unrestricted bypass (12107 v2 inventory :379-389)
+internal/contextfabric/stored_result_authorization.go	storedResultGrantRefusal	classify	2	deny	project_only is refused every stored result until c2 gives it a p: digest (CHAOS-12298); the other hit is the restricted-scope check (r-sub); c3 CHAOS-12299 r1 F4
+internal/contextfabric/stored_result_authorization.go	storedResultGrantRefusal	compare	2	deny	project_only is refused every stored result until c2 gives it a p: digest (CHAOS-12298); the other hit is the restricted-scope check (r-sub); c3 CHAOS-12299 r1 F4
 internal/contextfabric/stored_result_authorization.go	storedResultScopeForGrant	switch	1	vocab	the mapping from auth.GrantClass to the stored-result principal scope
 internal/contextfabric/work_item_dispatch.go	Engine.discoverWorkItemTuple	raw-grant	1	r-sub	workItemRepositoryRestricted caller: project_only is restricted (12107 v2 inventory work_item_dispatch.go:65)
 internal/contextfabric/work_item_reuse.go	Engine.tryReuseWorkItemTuple	raw-grant	1	r-sub	workItemRepositoryRestricted caller: project_only is restricted (12107 v2 inventory work_item_reuse.go:92)
