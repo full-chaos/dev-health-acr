@@ -205,7 +205,7 @@ func packetWithinRequestLimits(packet contractsv1.ContextPacket, request contrac
 }
 
 func (a *App) allowReadEntitlement(w http.ResponseWriter, r *http.Request, principal storage.Principal) bool {
-	enabled, err := a.runtime.Entitlements.HasEntitlement(r.Context(), principal.OrgID, agentContextRuntimeEntitlement)
+	enabled, err := a.agentContextRuntimeEntitled(r.Context(), principal)
 	if err != nil {
 		a.writeEntitlementLookupError(w, r, err)
 		return false

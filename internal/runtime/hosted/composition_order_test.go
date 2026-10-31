@@ -12,6 +12,7 @@ import (
 	"github.com/full-chaos/dev-health-acr/internal/api"
 	"github.com/full-chaos/dev-health-acr/internal/config"
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
+	"github.com/full-chaos/dev-health-acr/internal/entitlements"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
 	"github.com/full-chaos/dev-health-acr/internal/storage/memory"
 )
@@ -279,6 +280,13 @@ func (f *fakeEntitlement) Check(context.Context) error {
 func (f *fakeEntitlement) Close() error {
 	*f.events = append(*f.events, "entitlement.close")
 	return nil
+}
+
+// PrincipalAccess makes the test provider serve the per-call access read
+// (CHAOS-12092), as the remote Dev Health client does: hosted remote mode
+// refuses to start without one.
+func (f *fakeEntitlement) PrincipalAccess(context.Context, string, string, string) (entitlements.PrincipalAccess, error) {
+	return entitlements.PrincipalAccess{}, nil
 }
 
 type fakeEvidenceStore struct{}
