@@ -2059,6 +2059,20 @@ prior epoch to roll back to), the only rollback is disabling the lifecycle
 flag application-wide, which reverts read/write to the legacy in-place
 path and leaves the just-built epoch orphaned until a future decision.
 
+### CHAOS-11195: acr-api as a client of the auth-service workload-token exchange
+
+`authWorkloadClient.enabled=true` (default false; off renders byte-equal to before) gives acr-api a projected ServiceAccount token
+(`auth-workload-subject`, audience `dev-health-workload-exchange`, 600 s, mode 0400, read-only, no `subPath`) at
+`/var/run/secrets/dev-health/auth-workload/token`, and the acr-api ConfigMap four variables: `ACR_AUTH_WORKLOAD_EXCHANGE_URL`
+(`authWorkloadClient.exchangeURL`, auth-service's origin), `ACR_AUTH_WORKLOAD_ALLOW_PLAIN_HTTP` (`allowPlainHTTP`),
+`ACR_AUTH_WORKLOAD_ISSUER` (`issuer`, auth-service's https token issuer) and `ACR_AUTH_WORKLOAD_SUBJECT_FILE`. The audience and the 600 s
+are not values: auth-service's exchange reviews against the one audience. Without Kubernetes the subject is a Compose bootstrap credential
+named by `ACR_AUTH_WORKLOAD_BOOTSTRAP_FILE` (exactly one of the two files). The client (`internal/authworkload`) is built at start from
+these variables with an explicit transport that never uses the environment proxy. A partial or invalid configuration stops the start; no
+exchange runs at start, no readiness check depends on it, and an auth-service outage does not stop acr-api. The subject file is read again
+for every exchange, so a rotated projected token is used without a restart. No call uses the client yet. The chart opens no egress to
+auth-service in this change.
+
 ### CHAOS-4076: NetworkPolicy apiserver egress and in-release FalkorDB PodSecurity
 
 **ServiceAccounts.** acr-api runs under its own ServiceAccount
