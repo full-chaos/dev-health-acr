@@ -1067,9 +1067,38 @@ func TestStore_grantDigest(t *testing.T) {
 	})
 
 	t.Run("column shape is enforced", func(t *testing.T) {
-		for _, bad := range []string{"", "g:short", "G:" + strings.Repeat("a", 32), "restricted"} {
-			_, err := db.ExecContext(ctx, `INSERT INTO acr.context_fabric_investigation_results (result_id, org_id, payload, generated_at, grant_digest) VALUES ($1, 'org-shape', '{}'::jsonb, now(), $2)`, "result-shape-"+strings.ReplaceAll(bad, ":", "_"), bad)
+		hex32 := strings.Repeat("0123456789abcdef", 2)
+		for i, bad := range []string{
+			"", "g:short", "G:" + strings.Repeat("a", 32), "restricted",
+			// CHAOS-12227: the project form is exactly p: and 32 lowercase
+			// hex; the work-item census's 64-hex envelope is NOT a grant
+			// digest (design v3 R2-1), nor is any other prefix or case.
+			"p:short", "p:" + hex32[:31], "p:" + hex32 + "0", "P:" + hex32, "p:" + strings.ToUpper(hex32),
+			"p:" + hex32 + hex32, "xp:" + hex32, "p:" + hex32 + "\n", "q:" + hex32, "p" + hex32, "p:",
+		} {
+			_, err := db.ExecContext(ctx, `INSERT INTO acr.context_fabric_investigation_results (result_id, org_id, payload, generated_at, grant_digest) VALUES ($1, 'org-shape', '{}'::jsonb, now(), $2)`, fmt.Sprintf("result-shape-refused-%02d", i), bad)
 			require.Error(t, err, "grant_digest %q must be refused", bad)
 		}
+	})
+
+	// CHAOS-12227 (design v3 V2): a project-only computing principal's digest
+	// is p: and 32 lowercase hex. The column accepts it beside every earlier
+	// form, and the store reads it back unchanged (no reader behavior changes
+	// here; CHAOS-12228 writes and gates it).
+	t.Run("the project digest form is accepted beside every earlier form", func(t *testing.T) {
+		hex32 := strings.Repeat("0123456789abcdef", 2)
+		for i, good := range []any{nil, "open", "g:" + hex32, "p:" + hex32, "p:" + strings.Repeat("f", 32)} {
+			_, err := db.ExecContext(ctx, `INSERT INTO acr.context_fabric_investigation_results (result_id, org_id, payload, generated_at, grant_digest) VALUES ($1, 'org-shape', '{}'::jsonb, now(), $2)`, fmt.Sprintf("result-shape-accepted-%02d", i), good)
+			require.NoError(t, err, "grant_digest %v must be accepted", good)
+		}
+		store := newStore(t)
+		principal := storage.Principal{OrgID: "org-project-digest"}
+		row := paritytest.ValidResult("result-project-digest", "is a project-scope digest stored as written?")
+		require.NoError(t, store.Save(ctx, principal, row, nil, nil, contextfabric.TimeAxisKeyFor(contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent}), contextfabric.ReuseRetrievalIdentity{}, contextfabric.ReusePromptVersions{}, contextfabric.ReuseVersionAuthorities{}, 0, "", contextfabric.SemanticStateAbsent(contextfabric.SemanticStateAbsenceTurnEndedBeforeInterpretation)))
+		_, err := db.ExecContext(ctx, `UPDATE acr.context_fabric_investigation_results SET grant_digest = $2 WHERE result_id = $1`, row.ResultID, "p:"+hex32)
+		require.NoError(t, err, "a saved row must take the project digest")
+		stored, err := store.Get(ctx, principal, row.ResultID)
+		require.NoError(t, err)
+		require.Equal(t, "p:"+hex32, stored.GrantDigest)
 	})
 }
