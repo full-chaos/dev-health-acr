@@ -1239,7 +1239,11 @@ clause and a project status summary; its server note reads "The service marks
 this driver as truncated: the source read was cut.". A stale read keeps "(stale:
 the source read is out of date)". Every served copy restates the stored words,
 and only where the server wrote them: anchored on a driver whose source read
-was cut, by its own title or category, or as the exact note or summary. A
+was cut, by its own title or category, or as the exact note or summary. The
+quick answer and the details list are rebuilt from the drivers in answer order
+and replaced only where they stand as whole sentences; current_state's closing
+clause is replaced only when it is exactly the clause the composer writes for
+this answer's own qualified drivers. A
 title or provider value that carries the same words is left as it is. A status
 floor reads a stored head in the current words before it recomposes.
 

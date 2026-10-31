@@ -3,6 +3,7 @@ package contextfabric
 import (
 	"regexp"
 	"slices"
+	"sort"
 	"strings"
 
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
@@ -187,34 +188,70 @@ const (
 	legacyTruncatedSummaryLabel = legacyTruncatedQualifier + "."
 )
 
-// limitedReadClause is the clause composeCurrentState closes current_state
-// with, and only that clause: the last sentence, " Limited read: " (or the
-// legacy " Not complete: ") and then the qualified driver categories joined by
-// "; ", each ending in a source-state qualifier (the current ones, or the
-// legacy truncated one). The same words inside a provider's fact value are
-// evidence and never match: anywhere but this closing form, they are left as
-// they are.
-var limitedReadClause = func() *regexp.Regexp {
-	qualifiers := []string{regexp.QuoteMeta(strings.TrimSpace(legacyTruncatedQualifier))}
-	for _, state := range []SourceState{SourceTruncated, SourceStale} {
-		qualifiers = append(qualifiers, regexp.QuoteMeta(strings.TrimSpace(driverSourceStateQualifier(state))))
-	}
-	qualifier := `(?:` + strings.Join(qualifiers, `|`) + `)`
-	item := `[^;().]+ ` + qualifier // a driver category has no "."
-	prefix := `(?:` + regexp.QuoteMeta(legacyLimitedReadPrefix) + `|` + regexp.QuoteMeta(limitedReadPrefix) + `)`
-	return regexp.MustCompile(`\.` + prefix + `(` + item + `(?:; ` + item + `)*)\.$`)
-}()
-
-// restateLimitedReadClause states a stored current_state's closing
-// limited-read clause in the current words: the prefix, and the truncated
-// qualifier of each item.
-func restateLimitedReadClause(currentState string) string {
-	match := limitedReadClause.FindStringSubmatchIndex(currentState)
-	if match == nil {
+// restateLimitedReadClause states current_state's closing limited-read clause
+// in the current words, and only when it is exactly the clause
+// composeCurrentState wrote for this answer's own drivers: the legacy
+// " Not complete: " or the current " Limited read: ", then the qualified
+// driver categories in the composer's order, with the legacy truncated
+// qualifier or the current ones, at the end of the field. Anything else -- a
+// provider value with the same words, a clause naming drivers this answer
+// does not carry, a clause cut by the length bound -- is left as stored.
+func restateLimitedReadClause(currentState string, drivers []DriverJudgment) string {
+	current := qualifiedDriverCategories(drivers)
+	if len(current) == 0 {
 		return currentState
 	}
-	items := strings.ReplaceAll(currentState[match[2]:match[3]], legacyTruncatedQualifier, driverSourceStateQualifier(SourceTruncated))
-	return currentState[:match[0]] + "." + limitedReadPrefix + items + "."
+	want := "." + limitedReadPrefix + strings.Join(current, "; ") + "."
+	for _, prefix := range []string{legacyLimitedReadPrefix, limitedReadPrefix} {
+		for _, items := range [][]string{legacyQualifiedDriverCategories(drivers), current} {
+			if from := "." + prefix + strings.Join(items, "; ") + "."; strings.HasSuffix(currentState, from) {
+				return strings.TrimSuffix(currentState, from) + want
+			}
+		}
+	}
+	return currentState
+}
+
+// legacyQualifiedDriverCategories is qualifiedDriverCategories as it read
+// before CHAOS-12289: the truncated qualifier in its legacy words, sorted the
+// same way.
+func legacyQualifiedDriverCategories(drivers []DriverJudgment) []string {
+	var qualified []string
+	for _, driver := range drivers {
+		switch {
+		case driver.SourceState == SourceTruncated:
+			qualified = append(qualified, driver.Category+legacyTruncatedQualifier)
+		default:
+			if qualifier := driverSourceStateQualifier(driver.SourceState); qualifier != "" {
+				qualified = append(qualified, driver.Category+qualifier)
+			}
+		}
+	}
+	sort.Strings(qualified)
+	return qualified
+}
+
+// replaceAtSentenceBoundary replaces the first occurrence of from that stands
+// as whole sentences of head: it starts at the head's start or after a
+// sentence that ends in ". ", "? " or "! ", and it ends at the head's end or
+// before a space. A copy of the same text inside another sentence (a title
+// that quotes it) is not touched.
+func replaceAtSentenceBoundary(head, from, to string) string {
+	for offset := 0; offset <= len(head); {
+		index := strings.Index(head[offset:], from)
+		if index < 0 {
+			return head
+		}
+		index += offset
+		end := index + len(from)
+		starts := index == 0 || strings.HasSuffix(head[:index], ". ") || strings.HasSuffix(head[:index], "? ") || strings.HasSuffix(head[:index], "! ")
+		ends := end == len(head) || head[end] == ' '
+		if starts && ends {
+			return head[:index] + to + head[end:]
+		}
+		offset = index + 1
+	}
+	return head
 }
 
 // restateLegacySourceStateLabels states, on a served copy, the truncated-read
@@ -227,7 +264,7 @@ func restateLimitedReadClause(currentState string) string {
 // title or provider value that carries the same words, is left as it is. The
 // stored document is not rewritten: the drivers are copied.
 func restateLegacySourceStateLabels(result InvestigationResult) InvestigationResult {
-	result.CurrentState = restateLimitedReadClause(result.CurrentState)
+	result.CurrentState = restateLimitedReadClause(result.CurrentState, result.Drivers)
 	current := driverSourceStateQualifier(SourceTruncated)
 	if current == legacyTruncatedQualifier {
 		return result
@@ -301,7 +338,7 @@ func restateLegacyLeadFragments(head string, drivers []DriverJudgment, cohort *C
 	if lead := ordered[0]; lead.SourceState == SourceTruncated {
 		title := strings.TrimRight(strings.TrimSpace(lead.Title), ".")
 		if legacy := title + legacyQualifier(lead) + "."; title != "" {
-			head = strings.Replace(head, legacy, leadDriverSentence(lead), 1)
+			head = replaceAtSentenceBoundary(head, legacy, leadDriverSentence(lead))
 		}
 	}
 	for _, list := range [][]DriverJudgment{ordered[1:], ordered} {
@@ -315,8 +352,8 @@ func restateLegacyLeadFragments(head string, drivers []DriverJudgment, cohort *C
 			}
 		}
 		from := label + strings.Join(legacy, "; ") + "."
-		if strings.Contains(head, from) {
-			return strings.Replace(head, from, label+strings.Join(principalDriverTitles(list), "; ")+".", 1)
+		if replaced := replaceAtSentenceBoundary(head, from, label+strings.Join(principalDriverTitles(list), "; ")+"."); replaced != head {
+			return replaced
 		}
 	}
 	return head

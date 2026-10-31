@@ -51,6 +51,8 @@ func TestByIDAStoredLegacySourceStateLabelIsServedInPlainWords(t *testing.T) {
 	stored.CurrentState = "Current observed values: open items: 3. Limited read: health (stale: the source read is out of date); readiness" + legacyTruncatedQualifier + "."
 	stored.Drivers[0].SourceStateNote = legacyTruncatedNote
 	stored.Drivers[0].Summary = title + legacyTruncatedQualifier + "."
+	// The clause names a stale health driver too: the answer carries one.
+	stored.Drivers[2].SourceState = contractsv1.ContextFabricSourceStale
 	stored.Completeness = contextfabric.ComputeAnswerCompleteness(stored)
 
 	got, logs := readLeadProseByID(t, stored)
@@ -127,5 +129,51 @@ func TestByIDTheSourceStateWordsInOtherTextAreKept(t *testing.T) {
 	}
 	if got.Drivers[0].Summary != stored.Drivers[0].Summary || got.Drivers[1].Title != stored.Drivers[1].Title {
 		t.Errorf("driver text = %q / %q, want as stored", got.Drivers[0].Summary, got.Drivers[1].Title)
+	}
+}
+
+// Review r2 P2 (1): a closing clause that names no driver of this answer is
+// not ACR's clause for it, and stays as stored.
+func TestByIDAClauseWithoutAMatchingCutDriverIsKept(t *testing.T) {
+	stored := storedTruncatedDriverAnswer(t)
+	stored.Drivers[0].SourceState = contractsv1.ContextFabricSourceAvailable
+	stored.Drivers[0].SourceStateNote = ""
+	stored.Drivers[0].SummaryCorrected = false
+	stored.CurrentState = "Current observed values: deployment note: Rollout began. Limited read: readiness" + legacyTruncatedQualifier + "."
+	stored.Completeness = contextfabric.ComputeAnswerCompleteness(stored)
+	got, logs := readLeadProseByID(t, stored)
+	if got.CurrentState != stored.CurrentState {
+		t.Fatalf("current_state = %q, want as stored %q", got.CurrentState, stored.CurrentState)
+	}
+	if !strings.Contains(logs, `"legacy_source_state_words_served":true`) {
+		t.Fatalf("the completeness authority line must state legacy_source_state_words_served=true: %s", logs)
+	}
+}
+
+// Review r2 P2 (2): a title that quotes the details-list fragment keeps its
+// text; the real list after it is restated.
+func TestByIDATitleQuotingTheDetailsListIsKept(t *testing.T) {
+	stored := storedTruncatedDriverAnswer(t)
+	const quoting = "Release status mentions Principal driver: CHAOS: operational deficiencies" + legacyTruncatedQualifier
+	stored.Drivers[0].Title = quoting
+	stored.Drivers[0].SourceState = contractsv1.ContextFabricSourceAvailable
+	stored.Drivers[0].SourceStateNote = ""
+	stored.Drivers[0].SummaryCorrected = false
+	stored.Drivers[1].SourceState = contractsv1.ContextFabricSourceTruncated
+	stored.DirectJudgment = quoting + ". Principal driver: CHAOS: operational deficiencies" + legacyTruncatedQualifier + "."
+	stored.Completeness = contextfabric.ComputeAnswerCompleteness(stored)
+	got, _ := readLeadProseByID(t, stored)
+	if want := quoting + ". Principal driver: CHAOS: operational deficiencies" + truncatedQualifier + "."; got.DirectJudgment != want {
+		t.Fatalf("direct_judgment = %q, want %q", got.DirectJudgment, want)
+	}
+}
+
+// The clause is ACR's only as the CLOSING sentence: the same words in the
+// middle of current_state stay as stored, even beside the cut driver they name.
+func TestByIDAClauseInTheMiddleIsNotTheClosingClause(t *testing.T) {
+	const middle = "Current observed values: note: x. Not complete: readiness (partial: the source read was truncated). Then more."
+	got, _ := readLeadProseByID(t, answerWithQualifiedDrivers(t, true, false, middle))
+	if got.CurrentState != middle {
+		t.Fatalf("current_state = %q, want as stored %q", got.CurrentState, middle)
 	}
 }

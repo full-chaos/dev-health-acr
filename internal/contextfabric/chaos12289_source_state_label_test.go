@@ -184,7 +184,7 @@ func TestAReusedAnswerCountsTheLegacySourceStateWordsItStillServes(t *testing.T)
 		currentState string
 		want         bool
 	}{
-		"restated":            {"Current observed values: open items: 3. Limited read: readiness" + legacyTruncatedQualifierForTest + ".", false},
+		"no legacy words":     {"Current observed values: open items: 3.", false},
 		"kept provider value": {"Current observed values: note: readiness" + legacyTruncatedQualifierForTest + ". Then more.", true},
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -232,6 +232,26 @@ func TestTheLegacyWordsFlagReadsEverySurface(t *testing.T) {
 		set(&result)
 		if !LegacySourceStateWordsServed(result) {
 			t.Errorf("%s: the legacy words are not flagged", name)
+		}
+	}
+}
+
+// A fragment is replaced only where it stands as whole sentences.
+func TestAFragmentIsReplacedOnlyAtASentenceBoundary(t *testing.T) {
+	t.Parallel()
+	const from, to = "A (old).", "A (new)."
+	for head, want := range map[string]string{
+		"A (old).":                      "A (new).",
+		"Counted 1 work item. A (old).": "Counted 1 work item. A (new).",
+		"A (old). Principal driver: B.": "A (new). Principal driver: B.",
+		"Is it? A (old).":               "Is it? A (new).",
+		"Note: A (old).":                "Note: A (old).",
+		"XA (old).":                     "XA (old).",
+		"A (old).B":                     "A (old).B",
+		"Title A (old). A (old).":       "Title A (old). A (new).",
+	} {
+		if got := replaceAtSentenceBoundary(head, from, to); got != want {
+			t.Errorf("replaceAtSentenceBoundary(%q) = %q, want %q", head, got, want)
 		}
 	}
 }
