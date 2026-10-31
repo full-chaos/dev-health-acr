@@ -1,0 +1,84 @@
+# INVESTIGATION PROBE (CHAOS-12168 fix plants), throwaway branch only, never merged.
+# Each leg applies one planted defect to the fix (1f3cbef0), asserts the plant applied, and runs the two
+# memory tests once in a fresh process. Expected: fix passes; every plant fails at its own check.
+name: probe-chaos-12168-plants
+on:
+  push:
+    branches: [investigate/chaos-12168-plants]
+permissions:
+  contents: read
+  packages: read
+env:
+  ACR_CONTAINER_TESTS: '1'
+  GOFLAGS: -trimpath
+  GOPROXY: https://proxy.golang.org|direct
+jobs:
+  plant:
+    name: plant (${{ matrix.leg }}, ${{ matrix.replica }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        leg: [fix, no-profile-no-guard, no-profile, scope-regression]
+        replica: [1, 2]
+    env:
+      TESTCONTAINERS_HUB_IMAGE_NAME_PREFIX: ghcr.io/${{ github.repository }}
+      TESTCONTAINERS_RYUK_DISABLED: 'true'
+      TESTCONTAINERS_SESSION_ID: plants-${{ github.run_id }}-${{ strategy.job-index }}
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        with: {persist-credentials: false}
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16
+        with:
+          go-version: '1.27.3'
+          cache: true
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@abd2ef45e78c5afb21d64d4ca52ee8550d9572c7
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Apply the plant
+        env:
+          LEG: ${{ matrix.leg }}
+        run: |
+          python3 - <<'PY'
+          import os
+          d = "internal/contextfabric/devhealthfacts/"
+          files_line = "\t\t\tFiles:      preciseMemoryAccountingFiles(),\n"
+          def rep(p, old, new):
+              s = open(p).read()
+              assert s.count(old) == 1, (p, old[:60], s.count(old))
+              open(p, "w").write(s.replace(old, new))
+          leg = os.environ["LEG"]
+          if leg in ("no-profile-no-guard", "no-profile"):
+              rep(d + "chaos5270_shared_container_test.go", files_line, "")
+              rep(d + "chaos3780_findings_integration_test.go", files_line, "")
+          if leg == "no-profile-no-guard":
+              rep(d + "precise_memory_accounting_test.go", 'if effective != "1" {', 'if false && effective != "1" {')
+          if leg == "scope-regression":
+              rep(d + "fact_scope_entity_tree_policies.go",
+                  "WHERE w.org_id = {org_id:String} AND w.work_item_id IN ` + workItemIDs + ` AND p.key_resolution_count = 1 AND ` + projectQualifiedKeySQL + ` IN {project_ids:Array(String)}",
+                  "WHERE w.org_id = {org_id:String} AND p.key_resolution_count = 1 AND ` + projectQualifiedKeySQL + ` IN {project_ids:Array(String)}")
+          print("plant applied:", leg)
+          PY
+          git diff --stat
+      - name: Run the two memory tests once
+        run: |
+          set -uo pipefail
+          go test -count=1 -timeout 50m -json \
+            -run '^(TestFileHotspotsStatementMemoryMergedAndPinnedMultiPartOnRealClickHouse|TestScopeExpanderStatementsFollowTheRequestedScopeOnRealClickHouse)$' \
+            ./internal/contextfabric/devhealthfacts > probe.json; echo "go test exit=$?"
+          grep -E '"Action":"(pass|fail)","Package":"[^"]*","Test":"Test(FileHotspots|ScopeExpander)[^"/]*"' probe.json | sed -E 's/.*"Action":"([a-z]+)".*"Test":"([^"]+)".*/\1 \2/' | sort | uniq -c
+          python3 -c 'import json,sys
+          for l in open("probe.json"):
+              try: o=json.loads(l).get("Output") or ""
+              except Exception: continue
+              if any(k in o for k in ("coarse", "max_untracked_memory =", "grew with unrelated", "grew with the run size", "start shared ClickHouse")): print(o.rstrip()[:300])'
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        if: always()
+        with:
+          name: plant-${{ matrix.leg }}-${{ matrix.replica }}
+          path: probe.json
+          retention-days: 7
