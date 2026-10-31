@@ -31,9 +31,7 @@
 package directread
 
 import (
-	"slices"
-	"strings"
-
+	"github.com/full-chaos/dev-health-acr/internal/auth"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/directread/gatevocab"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
 )
@@ -101,15 +99,25 @@ func ReasonVocabulary() [12]Reason { return gatevocab.ReasonVocabulary() }
 // ErrorClassVocabulary is the closed set of error classes.
 func ErrorClassVocabulary() [4]string { return gatevocab.ErrorClassVocabulary() }
 
-// ClassifyPrincipal returns the caller's class. It is the same rule as the
-// stored-result gate's principal scope, so both gates read a grant alike.
+// ClassifyPrincipal returns the caller's class: auth.ClassifyGrant through
+// PrincipalClassForGrant, the same grant class the stored-result gate's
+// principal scope derives from, so both gates read a grant alike.
 func ClassifyPrincipal(principal storage.Principal) PrincipalClass {
-	switch {
-	case len(principal.RepositoryScopes) == 0:
+	return PrincipalClassForGrant(auth.ClassifyGrant(principal))
+}
+
+// PrincipalClassForGrant is the subject gate's view of a grant class
+// (CHAOS-12297). project_only is a restricted subtype and reads as
+// ClassRestricted: a team or project still needs ownership reach, and no
+// wire value changes. An unknown class is restricted (fail closed).
+func PrincipalClassForGrant(class auth.GrantClass) PrincipalClass {
+	switch class {
+	case auth.GrantUnrestricted:
 		return ClassUnrestricted
-	case slices.ContainsFunc(principal.RepositoryScopes, func(scope string) bool { return strings.TrimSpace(scope) == "*" }):
+	case auth.GrantUniversal:
 		return ClassUniversal
-	default:
+	case auth.GrantRestricted, auth.GrantProjectOnly:
 		return ClassRestricted
 	}
+	return ClassRestricted
 }
