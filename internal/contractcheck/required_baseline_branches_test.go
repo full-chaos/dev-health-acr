@@ -146,10 +146,13 @@ func TestRequiredBaselineBranchControls(t *testing.T) {
 		{name: "a required field moves from one inline alternative to another", refused: true, mentions: []string{`field "c" at instance location "/"`},
 			base:    one(`{"type":"object","oneOf":[{"properties":{"a":{},"c":{}},"required":["a"]},{"properties":{"b":{},"c":{}},"required":["b","c"]}]}`),
 			current: one(`{"type":"object","oneOf":[{"properties":{"a":{},"c":{}},"required":["a","c"]},{"properties":{"b":{},"c":{}},"required":["b"]}]}`)},
+		// Paired: A's gain of c is allowed (A declared c), so the refusal
+		// names only what B lost.
 		{name: "a required field moves from one $ref alternative to another", refused: true,
-			mentions: []string{`field "c" at instance location "/"`}, absent: []string{`field "a"`, `field "b"`},
-			base:    one(refGroup("oneOf", ``, `"A":{"properties":{"a":{},"c":{}},"required":["a"]},"B":{"properties":{"b":{},"c":{}},"required":["b","c"]}`, "A", "B")),
-			current: one(refGroup("oneOf", ``, `"A":{"properties":{"a":{},"c":{}},"required":["a","c"]},"B":{"properties":{"b":{},"c":{}},"required":["b"]}`, "A", "B"))},
+			mentions: []string{`the oneOf at instance location "/" changed: alternative 2 no longer requires "c"`},
+			absent:   []string{`field "a"`, `field "b"`, `field "c"`},
+			base:     one(refGroup("oneOf", ``, `"A":{"properties":{"a":{},"c":{}},"required":["a"]},"B":{"properties":{"b":{},"c":{}},"required":["b","c"]}`, "A", "B")),
+			current:  one(refGroup("oneOf", ``, `"A":{"properties":{"a":{},"c":{}},"required":["a","c"]},"B":{"properties":{"b":{},"c":{}},"required":["b"]}`, "A", "B"))},
 		// A nested requirement inside alternative 1 whose field only
 		// alternative 0 declared there.
 		{name: "a nested requirement declared only in another $ref alternative", refused: true, mentions: []string{`field "x" at instance location "/box"`},
@@ -215,9 +218,10 @@ func TestRequiredBaselineBranchReporting(t *testing.T) {
 			base:    one(`{"type":"object",` + withK + `"oneOf":[{"properties":{"a":{},"b":{}},"required":["k","a","b"]},{"properties":{"c":{}},"required":["k","c"]}]}`),
 			current: one(`{"type":"object",` + withK + `"oneOf":[{"properties":{"a":{},"b":{}},"required":["k","a"]},{"properties":{"c":{}},"required":["k","c"]}]}`)},
 		{name: "a paired oneOf alternative that only loses a requirement", refused: true,
-			mentions: []string{`field "a" at instance location "/"`}, absent: []string{`field "k"`},
-			base:    one(refGroup("oneOf", withK, `"A":{"properties":{"a":{},"b":{}},"required":["k","a","b"]},"B":{"properties":{"c":{}},"required":["k","c"]}`, "A", "B")),
-			current: one(refGroup("oneOf", withK, `"A":{"properties":{"a":{},"b":{}},"required":["k","a"]},"B":{"properties":{"c":{}},"required":["k","c"]}`, "A", "B"))},
+			mentions: []string{`the oneOf at instance location "/" changed: alternative 1 no longer requires "b"`},
+			absent:   []string{`field "a"`, `field "c"`, `field "k"`},
+			base:     one(refGroup("oneOf", withK, `"A":{"properties":{"a":{},"b":{}},"required":["k","a","b"]},"B":{"properties":{"c":{}},"required":["k","c"]}`, "A", "B")),
+			current:  one(refGroup("oneOf", withK, `"A":{"properties":{"a":{},"b":{}},"required":["k","a"]},"B":{"properties":{"c":{}},"required":["k","c"]}`, "A", "B"))},
 		{name: "a oneOf that loses an alternative", refused: true, mentions: []string{`field "a" at instance location "/"`},
 			base:    one(`{"type":"object","oneOf":[{"properties":{"a":{}},"required":["a"]},{"properties":{"b":{}},"required":["b"]},{"properties":{"c":{}},"required":["c"]}]}`),
 			current: one(`{"type":"object","oneOf":[{"properties":{"a":{}},"required":["a"]},{"properties":{"b":{}},"required":["b"]}]}`)},
@@ -230,5 +234,26 @@ func TestRequiredBaselineBranchReporting(t *testing.T) {
 		{name: "a new oneOf whose alternatives require nothing", refused: true, mentions: []string{`oneOf at instance location "/v"`},
 			base:    one(`{"type":"object","properties":{"v":{}}}`),
 			current: one(`{"type":"object","properties":{"v":{"oneOf":[{"type":"object"},{"type":"object","properties":{"w":{}}}]}}}`)},
+	})
+}
+
+// A paired group whose alternative only lost a requirement is refused (an old
+// body may now meet two alternatives of the oneOf), with one line naming the
+// lost field, not a list of unchanged fields as "required now" (codex #1840
+// r1 P2-5).
+func TestRequiredBaselineBranchReportsALostRequirement(t *testing.T) {
+	kinds := func(bRequired, bExtra string) string {
+		return refGroup("oneOf", ``, `"A":{"properties":{"kind":{"const":"a"},"a":{}},"required":["kind","a"]},`+
+			`"B":{"properties":{"kind":{"const":"b"},"b":{},"c":{}`+bExtra+`},"required":[`+bRequired+`]}`, "A", "B")
+	}
+	runLocationCases(t, []locationCase{
+		{name: "a $ref alternative with a const discriminator loses a requirement", refused: true,
+			mentions: []string{`a.v1.schema.json: the oneOf at instance location "/" changed: alternative 2 no longer requires "b"; a paired alternative may only gain fields its baseline branch declared (CHAOS-12331)`},
+			absent:   []string{`field "a"`, `field "b"`, `field "c"`, `field "kind"`},
+			base:     one(kinds(`"kind","b","c"`, ``)), current: one(kinds(`"kind","c"`, ``))},
+		{name: "a $ref alternative loses a requirement and gains an undeclared one", refused: true,
+			mentions: []string{`the oneOf at instance location "/" changed: alternative 2 no longer requires "b"`, `field "zz" at instance location "/" is required now`},
+			absent:   []string{`field "a"`, `field "c"`, `field "kind"`},
+			base:     one(kinds(`"kind","b","c"`, ``)), current: one(kinds(`"kind","c","zz"`, `,"zz":{}`))},
 	})
 }
