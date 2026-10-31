@@ -131,6 +131,43 @@ func TestRequiredBaselineRejectsAFieldDeclaredOnlyInANestedObject(t *testing.T) 
 	}
 }
 
+// Codex #1816 r1 P2: a baseline schema of true accepts any value, so an
+// object that now requires a field there is a new constraint on bodies the
+// baseline already allowed.
+func TestRequiredBaselineRejectsAFieldRequiredWhereTheBaselineAcceptedAnything(t *testing.T) {
+	dir := baselineRepo(t, `{"type":"object","properties":{"box":true}}`)
+	runGit(t, dir, "tag", "v1.0.0")
+	commitSchema(t, dir, `{"type":"object","properties":{"box":{"type":"object","required":["id"],"properties":{"id":{}}}}}`)
+	err := CheckRequiredAgainstTag(RequiredBaselineOptions{Root: dir})
+	if err == nil || !strings.Contains(err.Error(), `"id"`) || !strings.Contains(err.Error(), "/properties/box") {
+		t.Fatalf("a field required where the baseline accepted anything was allowed: %v", err)
+	}
+}
+
+// A property whose schema was false was forbidden at the baseline, never
+// optional: no producer could send it, so it cannot become required.
+func TestRequiredBaselineRejectsRequiringAFieldTheBaselineForbade(t *testing.T) {
+	dir := baselineRepo(t, `{"type":"object","required":["a"],"properties":{"a":{},"b":false}}`)
+	runGit(t, dir, "tag", "v1.0.0")
+	commitSchema(t, dir, `{"type":"object","required":["a","b"],"properties":{"a":{},"b":{}}}`)
+	err := CheckRequiredAgainstTag(RequiredBaselineOptions{Root: dir})
+	if err == nil || !strings.Contains(err.Error(), `"b"`) {
+		t.Fatalf("requiring a field the baseline forbade was allowed: %v", err)
+	}
+}
+
+// The asymmetry: a baseline of false allowed no value at all, so no producer
+// sent the field; an object that now requires fields there is a new
+// subschema, as when the path was absent.
+func TestRequiredBaselineAllowsAnObjectWhereTheBaselineForbadeAnyValue(t *testing.T) {
+	dir := baselineRepo(t, `{"type":"object","properties":{"box":false}}`)
+	runGit(t, dir, "tag", "v1.0.0")
+	commitSchema(t, dir, `{"type":"object","properties":{"box":{"type":"object","required":["id"],"properties":{"id":{}}}}}`)
+	if err := CheckRequiredAgainstTag(RequiredBaselineOptions{Root: dir}); err != nil {
+		t.Fatalf("a new object where the baseline allowed nothing was refused: %v", err)
+	}
+}
+
 // A baseline subschema with no properties declares nothing.
 func TestRequiredBaselineRejectsWhenTheBaselineDeclaredNoProperties(t *testing.T) {
 	const bare = `{"type":"object","required":["a"]}`

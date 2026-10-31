@@ -87,16 +87,25 @@ type addedRequired struct{ path, field string }
 // newlyRequired walks current beside baseline. Where both hold an object at
 // the same path, a `required` entry in current is reported when the baseline
 // object at that path neither required it nor declared it in its own
-// `properties`. A field declared elsewhere in the baseline (another path, a
-// $ref, an allOf branch) counts as undeclared here. A path absent from the
-// baseline is a new subschema and is skipped.
+// `properties` (a property whose schema is false counts as undeclared). A
+// field declared elsewhere in the baseline (another path, a $ref, an allOf
+// branch) counts as undeclared here. A baseline of true at the path is an
+// object with nothing declared. A path absent from the baseline, or false
+// there, is a new subschema and is skipped.
 func newlyRequired(baseline, current any, path string) []addedRequired {
 	var found []addedRequired
 	switch cur := current.(type) {
 	case map[string]any:
 		base, ok := baseline.(map[string]any)
 		if !ok {
-			return nil
+			// A baseline schema of true accepts any value: every field this
+			// object now requires is a new constraint on bodies the baseline
+			// allowed (codex #1816 r1). Any other baseline (false, which
+			// allowed nothing here, or a non-schema) is a new subschema.
+			if accepted, isBool := baseline.(bool); !isBool || !accepted {
+				return nil
+			}
+			base = map[string]any{}
 		}
 		if list, ok := cur["required"].([]any); ok {
 			had := map[string]bool{}
@@ -109,8 +118,13 @@ func newlyRequired(baseline, current any, path string) []addedRequired {
 			}
 			// Declared optional at the baseline: the release the field was
 			// optional in has shipped, so it may be required now.
+			// A property whose schema is false was forbidden there, never
+			// optional, so it does not count as declared.
 			if declared, ok := base["properties"].(map[string]any); ok {
-				for field := range declared {
+				for field, schema := range declared {
+					if allowed, isBool := schema.(bool); isBool && !allowed {
+						continue
+					}
 					had[field] = true
 				}
 			}
