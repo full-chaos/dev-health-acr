@@ -16,6 +16,7 @@ var unboundedEvents = []string{
 	"devhealthfacts.fact_bytes_bound_exceeded",
 	"devhealthfacts.health_daily_health_cap_cut",
 	"devhealthfacts.owning_teams_truncated",
+	"devhealthfacts.project_owning_team_rollup",
 	"devhealthfacts.pull_request_project_native_first",
 	"devhealthfacts.rule_basis_day_absent",
 	"devhealthfacts.rule_basis_day_invalid",

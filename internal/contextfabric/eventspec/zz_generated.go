@@ -138,6 +138,7 @@ var ByID = map[string]Event{
 	"devhealthfacts.fact_bytes_bound_exceeded":            FactBytesBoundExceeded,
 	"devhealthfacts.health_daily_health_cap_cut":          HealthDailyHealthCapCut,
 	"devhealthfacts.owning_teams_truncated":               OwningTeamsTruncated,
+	"devhealthfacts.project_owning_team_rollup":           ProjectOwningTeamRollup,
 	"devhealthfacts.pull_request_project_native_first":    PullRequestProjectNativeFirst,
 	"devhealthfacts.rule_basis_day_absent":                DeficiencyRuleBasisDayAbsent,
 	"devhealthfacts.rule_basis_day_invalid":               DeficiencyRuleBasisDayInvalid,
@@ -9142,6 +9143,53 @@ func (f OwningTeamsTruncatedFields) SlogArgs() []any {
 	return []any{
 		"producer", contextfabric.SanitizeLogAttr(f.Producer),
 		"omitted", f.Omitted,
+	}
+}
+
+// ProjectOwningTeamRollupFields is devhealthfacts.project_owning_team_rollup's generated typed construction interface
+// (CHAOS-5516): one Go field per Field ProjectOwningTeamRollup.Fields declares in spec.go.
+type ProjectOwningTeamRollupFields struct {
+	RollupProjects                   int
+	ProjectOwnWorkUnitCount          int
+	ProjectOwnUncategorizedUnitCount int
+	// constructed (CHAOS-5516 r1 fix): an UNEXPORTED marker, generated on
+	// every ProjectOwningTeamRollupFields uniformly, set ONLY by NewProjectOwningTeamRollupFields below. A caller
+	// outside this package cannot set an unexported field via a composite
+	// literal -- not partially (one exported field set, the rest at their
+	// Go zero value) and not even by hand-setting every EXPORTED field --
+	// so this is the class fix for "a caller still assembles that event's
+	// field list": no composite literal built outside eventspec, complete or
+	// partial, can ever read as constructed.
+	constructed bool
+}
+
+// NewProjectOwningTeamRollupFields is the generated constructor for ProjectOwningTeamRollupFields -- every
+// field ProjectOwningTeamRollup.Fields declares is a required parameter.
+func NewProjectOwningTeamRollupFields(rollupProjects int, projectOwnWorkUnitCount int, projectOwnUncategorizedUnitCount int) ProjectOwningTeamRollupFields {
+	return ProjectOwningTeamRollupFields{
+		RollupProjects:                   rollupProjects,
+		ProjectOwnWorkUnitCount:          projectOwnWorkUnitCount,
+		ProjectOwnUncategorizedUnitCount: projectOwnUncategorizedUnitCount,
+		constructed:                      true,
+	}
+}
+
+// IsConstructed reports whether f was built by NewProjectOwningTeamRollupFields -- the ONE
+// exported way to read the unexported "constructed" marker from outside
+// this package. false for the Go zero value and for ANY composite literal
+// assembled elsewhere, complete or partial.
+func (f ProjectOwningTeamRollupFields) IsConstructed() bool { return f.constructed }
+
+// SlogArgs returns ProjectOwningTeamRollup's own declared fields as alternating slog
+// key/value pairs, in the SAME order spec.go declares them. Every
+// free-text string/[]string value is sanitized HERE, at its own
+// construction site inside this function's body -- the shape CHAOS-5544's
+// own instrument (TestNoUnsanitizedLogAttributeInContextFabric) requires.
+func (f ProjectOwningTeamRollupFields) SlogArgs() []any {
+	return []any{
+		"rollup_projects", f.RollupProjects,
+		"project_own_work_unit_count", f.ProjectOwnWorkUnitCount,
+		"project_own_uncategorized_unit_count", f.ProjectOwnUncategorizedUnitCount,
 	}
 }
 
