@@ -332,14 +332,6 @@
             "postgresDsnKey": { "type": "string" }
           }
         },
-        "retention": {
-          "type": "object",
-          "additionalProperties": false,
-          "properties": {
-            "existingSecret": { "type": "string" },
-            "postgresDsnKey": { "type": "string" }
-          }
-        },
         "entitlementToken": {
           "type": "object",
           "additionalProperties": false,
