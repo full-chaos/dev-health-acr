@@ -245,6 +245,7 @@ var schemaDefTypeOverrides = map[string]string{
 	"context_fabric_answer_projection.v1.schema.json#PriorSubjectReceiptDispositionEntry": "ContextFabricPriorSubjectReceiptEntry",
 	"context_fabric_answer_projection.v1.schema.json#ProjectedFactRow":                    "ContextFabricClaimedFactRow",
 	"context_fabric_answer_projection.v1.schema.json#ProjectedFactTable":                  "ContextFabricClaimedFactTable",
+	"context_fabric_answer_projection.v1.schema.json#ProjectedInvestmentMix":              "ContextFabricClaimedInvestmentMix",
 	"mcp_investigate_question_request.v1.schema.json#InvestigationBudget":                 "MCPInvestigationBudget",
 	"mcp_investigate_with_interpretation_request.v1.schema.json#InvestigationBudget":      "MCPInvestigationBudget",
 	"mcp_investigate_question_request.v1.schema.json#InvestigationScope":                  "MCPInvestigationScope",

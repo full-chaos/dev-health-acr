@@ -1895,6 +1895,13 @@ type ContextFabricClaimedFact struct {
 	// which is never time_series whenever this pair is populated (see the
 	// note above).
 	TimeSeriesTable *ContextFabricClaimedFactTable `json:"time_series_table,omitempty"`
+	// InvestmentMix (CHAOS-12160) is the OPTIONAL, additive disclosure of
+	// which attribution produced an investment claim's value about a
+	// project: the project's own work units, or its owning teams' roll-up,
+	// with the work units of each. Set by the server from the claim's
+	// grounding fact, never model-authored. See
+	// ContextFabricClaimedInvestmentMix.
+	InvestmentMix *ContextFabricClaimedInvestmentMix `json:"investment_mix,omitempty"`
 }
 
 // ContextFabricClaimedFactRow is one row of a claimed fact's OPTIONAL
