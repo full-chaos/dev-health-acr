@@ -91,11 +91,11 @@ func (a *Adapter) newDiscoverTeamScope(key, orgID string, scope contextfabric.Re
 func (s *discoverTeamScope) Undecided() bool { return s != nil && s.undecided }
 
 // floor is the read's floor value for the team-narrowing log line.
-func (s *discoverTeamScope) floor() contextfabric.TeamNarrowingFloor {
+func (s *discoverTeamScope) floor() contextfabric.TeamNarrowingReadFloor {
 	if s.Undecided() {
-		return contextfabric.TeamNarrowingFloorUndecided
+		return contextfabric.TeamNarrowingReadFloorUndecided
 	}
-	return contextfabric.TeamNarrowingFloorNone
+	return contextfabric.TeamNarrowingReadFloorNone
 }
 
 // counts reports the requested team ids, the subjects decided, and those

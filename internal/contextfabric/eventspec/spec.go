@@ -5318,7 +5318,7 @@ var TeamNarrowingGeneralRead = Event{
 		{Key: "requested_teams", Type: FieldInt, Presence: PresenceRequired},
 		{Key: "decided", Type: FieldInt, Presence: PresenceRequired},
 		{Key: "excluded", Type: FieldInt, Presence: PresenceRequired},
-		{Key: "floor", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: contextfabric.TeamNarrowingFloorVocabulary()},
+		{Key: "floor", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: contextfabric.TeamNarrowingReadFloorVocabulary()},
 		{Key: "request_id", Type: FieldString, Presence: PresenceConditional, Applicability: requestIDApplicability},
 	},
 }

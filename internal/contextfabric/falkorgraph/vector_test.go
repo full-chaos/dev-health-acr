@@ -1359,10 +1359,10 @@ func (r *recordingTelemetry) RecordCohortKindCensus(_ context.Context, orgID str
 type teamNarrowingReadRecord struct {
 	orgID                             string
 	requestedTeams, decided, excluded int
-	floor                             contextfabric.TeamNarrowingFloor
+	floor                             contextfabric.TeamNarrowingReadFloor
 }
 
-func (r *recordingTelemetry) RecordTeamNarrowingGeneralRead(_ context.Context, orgID string, requestedTeams, decided, excluded int, floor contextfabric.TeamNarrowingFloor) {
+func (r *recordingTelemetry) RecordTeamNarrowingGeneralRead(_ context.Context, orgID string, requestedTeams, decided, excluded int, floor contextfabric.TeamNarrowingReadFloor) {
 	r.teamNarrowingReads = append(r.teamNarrowingReads, teamNarrowingReadRecord{orgID: orgID, requestedTeams: requestedTeams, decided: decided, excluded: excluded, floor: floor})
 }
 

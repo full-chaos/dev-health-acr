@@ -583,7 +583,7 @@ type GraphTelemetry interface {
 	// those decided out of scope (scope, never a denial), and whether the read
 	// was floored because ownership it needed was missing. Counts only, never
 	// an id.
-	RecordTeamNarrowingGeneralRead(ctx context.Context, orgID string, requestedTeams, decided, excluded int, floor contextfabric.TeamNarrowingFloor)
+	RecordTeamNarrowingGeneralRead(ctx context.Context, orgID string, requestedTeams, decided, excluded int, floor contextfabric.TeamNarrowingReadFloor)
 	RecordCohortKindFulltext(ctx context.Context, orgID string, decision CohortKindFulltextDecision, memberKind contextfabric.SubjectKind, members int, truncated bool, addedByKindArm, duplicatesWithGeneral int, readErr error)
 	// RecordProjectDeploymentWalk (eventspec.ProjectDeploymentWalk) reports
 	// ONE DiscoverContext call that asks for the deployment members of a named
@@ -691,7 +691,7 @@ func (NoopTelemetry) RecordCohortKindBasis(context.Context, string, contextfabri
 }
 func (NoopTelemetry) RecordCohortKindCensus(context.Context, string, CohortKindCensusDecision, contextfabric.SubjectKind, []string, int, int, bool, error) {
 }
-func (NoopTelemetry) RecordTeamNarrowingGeneralRead(context.Context, string, int, int, int, contextfabric.TeamNarrowingFloor) {
+func (NoopTelemetry) RecordTeamNarrowingGeneralRead(context.Context, string, int, int, int, contextfabric.TeamNarrowingReadFloor) {
 }
 func (NoopTelemetry) RecordCohortKindFulltext(context.Context, string, CohortKindFulltextDecision, contextfabric.SubjectKind, int, bool, int, int, error) {
 }
@@ -1082,7 +1082,7 @@ func (t SlogTelemetry) RecordCohortKindFulltext(ctx context.Context, orgID strin
 
 // RecordTeamNarrowingGeneralRead logs at Info (eventspec.TeamNarrowingGeneralRead):
 // counts and a closed floor value only.
-func (t SlogTelemetry) RecordTeamNarrowingGeneralRead(ctx context.Context, orgID string, requestedTeams, decided, excluded int, floor contextfabric.TeamNarrowingFloor) {
+func (t SlogTelemetry) RecordTeamNarrowingGeneralRead(ctx context.Context, orgID string, requestedTeams, decided, excluded int, floor contextfabric.TeamNarrowingReadFloor) {
 	args := []any{
 		"org_id", contextfabric.SanitizeLogAttr(orgID),
 		"requested_teams", requestedTeams,

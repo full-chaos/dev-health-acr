@@ -202,7 +202,7 @@ func TestLiveATeamNarrowingFloorsACohortOnlyWhereOwnershipIsMissing(t *testing.T
 		// floor: the team-narrowing log line's floor ("" = no line, for no
 		// narrowing); armed: the cohort basis line names the
 		// team_narrowing_undecided arm.
-		floor contextfabric.TeamNarrowingFloor
+		floor contextfabric.TeamNarrowingReadFloor
 		armed bool
 	}
 	read := func(t *testing.T, orgID string, teams []string) want {
@@ -251,7 +251,7 @@ func TestLiveATeamNarrowingFloorsACohortOnlyWhereOwnershipIsMissing(t *testing.T
 		if err != nil {
 			t.Fatalf("teams %v: DiscoverContext() error = %v", teams, err)
 		}
-		var floor contextfabric.TeamNarrowingFloor
+		var floor contextfabric.TeamNarrowingReadFloor
 		switch len(recorder.teamNarrowingReads) {
 		case 0:
 		case 1:
@@ -294,10 +294,10 @@ func TestLiveATeamNarrowingFloorsACohortOnlyWhereOwnershipIsMissing(t *testing.T
 		want  want
 	}{
 		{"no narrowing", owned, nil, want{members: 5, complete: true}},
-		{"the owning team", owned, []string{"team-B"}, want{members: 5, complete: true, floor: contextfabric.TeamNarrowingFloorNone}},
-		{"a team that owns nothing: scope, complete", owned, []string{"team-A"}, want{members: 0, complete: true, floor: contextfabric.TeamNarrowingFloorNone}},
+		{"the owning team", owned, []string{"team-B"}, want{members: 5, complete: true, floor: contextfabric.TeamNarrowingReadFloorNone}},
+		{"a team that owns nothing: scope, complete", owned, []string{"team-A"}, want{members: 0, complete: true, floor: contextfabric.TeamNarrowingReadFloorNone}},
 		{"no current owner, no narrowing: complete", ended, nil, want{members: 5, complete: true}},
-		{"no current owner under a team: floored", ended, []string{"team-A"}, want{members: 0, complete: true, lowerBound: true, floor: contextfabric.TeamNarrowingFloorUndecided, armed: true}},
+		{"no current owner under a team: floored", ended, []string{"team-A"}, want{members: 0, complete: true, lowerBound: true, floor: contextfabric.TeamNarrowingReadFloorUndecided, armed: true}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			got := read(t, tc.orgID, tc.teams)
