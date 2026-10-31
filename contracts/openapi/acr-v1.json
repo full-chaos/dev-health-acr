@@ -3247,7 +3247,7 @@
     },
     "responses": {
       "Error": {
-        "description": "Structured safe error. On every protected route, a call by a user-class credential (browser, OAuth user, native device) re-reads the user's access live (CHAOS-12092): 403 access_denied when the user is not a member, is impersonating, the browser credential's session is not live, or the organization or user is unknown (one code for every reason); 403 feature_not_enabled when a required flag is off (agent_context_runtime, and ask_dev for the browser class); 409 no_repository when the credential's grant within the organization's live repository inventory is empty; 503 upstream_unavailable when the read fails.",
+        "description": "Structured safe error. On every protected route, a call by a user-class credential (browser, OAuth user, native device) re-reads the user's access live (CHAOS-12092): 403 access_denied when the user is not a member, is impersonating, the browser credential's session is not live, or the organization or user is unknown (one code for every reason); 403 feature_not_enabled when a required flag is off (agent_context_runtime, and ask_dev for the browser class), except on capabilities, which reports the live flag (200, entitlement false); 409 no_repository when the credential's grant within the organization's live repository inventory is empty; 503 upstream_unavailable when the read fails.",
         "content": {
           "application/json": {
             "schema": {

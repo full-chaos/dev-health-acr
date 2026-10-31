@@ -3574,8 +3574,8 @@ sequenceDiagram
       A-->>C: 503 upstream_unavailable
     else 404 / invalid sid / not member / impersonating / session not live
       A-->>C: 403 access_denied (one code)
-    else agent_context_runtime off, or ask_dev off (browser)
-      A-->>C: 403 feature_not_enabled
+    else agent_context_runtime off, or ask_dev off (browser), on any route but capabilities
+      A-->>C: 403 feature_not_enabled (capabilities: 200, entitlement false)
     else grant ∩ live inventory is empty
       A-->>C: 409 no_repository (never an [] scope)
     else granted

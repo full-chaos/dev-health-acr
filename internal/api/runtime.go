@@ -254,6 +254,19 @@ func (r *RuntimeDependencies) validate() error {
 }
 
 func (a *App) protectedRuntimeHandler(class limits.RequestClass, scope string, entitlement, allowWebAssertions bool, next http.Handler) http.Handler {
+	return a.protectedRuntimeChain(class, scope, entitlement, allowWebAssertions, true, next)
+}
+
+// protectedCapabilitiesHandler is the capabilities route's chain: the live
+// access read refuses a lost member, an impersonating user or a dead browser
+// session, but reports a flag that is off (200, the entitlement false) rather
+// than refusing it, because capabilities is how a client learns what is
+// enabled (CHAOS-12092, lead ruling).
+func (a *App) protectedCapabilitiesHandler(next http.Handler) http.Handler {
+	return a.protectedRuntimeChain(limits.RequestClassCapabilities, auth.ScopeContextRead, false, true, false, next)
+}
+
+func (a *App) protectedRuntimeChain(class limits.RequestClass, scope string, entitlement, allowWebAssertions, enforceLiveFlags bool, next http.Handler) http.Handler {
 	if a.runtime == nil || a.authenticator == nil {
 		return http.HandlerFunc(a.handleRuntimeUnavailable)
 	}
@@ -264,7 +277,7 @@ func (a *App) protectedRuntimeHandler(class limits.RequestClass, scope string, e
 	// CHAOS-12092: a user-class call is re-checked live, after the client
 	// version and the rate limit (a refused or throttled call costs Dev
 	// Health nothing) and before every handler and entitlement decision.
-	handler = a.requireLiveAccess(handler)
+	handler = a.requireLiveAccess(enforceLiveFlags, handler)
 	handler = a.requireClientVersion(handler)
 	handler = LimitMiddleware(a.limits, class, handler)
 	handler = a.authenticator.RequireScope(scope, handler)

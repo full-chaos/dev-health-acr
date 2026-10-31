@@ -78,8 +78,11 @@ func (a *App) principalAccess() PrincipalAccessReader {
 // the effective repository scope -- the grant within the live inventory -- is
 // empty (409 no_repository). A read that fails is 503, never 401. Otherwise
 // the handler runs with the principal narrowed to the effective scope and the
-// read kept in the context for the rest of the request.
-func (a *App) requireLiveAccess(next http.Handler) http.Handler {
+// read kept in the context for the rest of the request. With enforceFlags
+// false (the capabilities route, which is how a client learns what is
+// enabled) a flag that is off is not refused: the handler reports it from the
+// read.
+func (a *App) requireLiveAccess(enforceFlags bool, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		principal, ok := auth.PrincipalFromContext(r.Context())
 		if !ok {
@@ -132,7 +135,7 @@ func (a *App) requireLiveAccess(next http.Handler) http.Handler {
 			return
 		}
 		for _, entitlement := range requiredEntitlements(principal) {
-			if !accessGrants(access, entitlement) {
+			if enforceFlags && !accessGrants(access, entitlement) {
 				a.recordReadAudit(r.Context(), principal, "entitlement_denied", "acr_entitlement", entitlement, "denied", map[string]any{"source": "principal_access"})
 				a.logger.InfoContext(r.Context(), "principal access read refused",
 					"request_id", contextfabric.SanitizeLogAttr(RequestID(r.Context())), "reason", "entitlement_off",

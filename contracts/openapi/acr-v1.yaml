@@ -1,5 +1,5 @@
 # Generated from acr-v1.json by `go run ./cmd/contractcheck -write`. DO NOT EDIT.
-# canonical-content-sha256: a8f284bf46c973ae567011b0cd7dffcea54a4dfd6c940b280fecb2a253b9e14e
+# canonical-content-sha256: de707f63358156a085bb92634539b09ed560c0be57109a1320a715e570143c77
 openapi: "3.1.0"
 info:
   description: "Private hosted API for evidence-backed agent context packets, authorized provenance expansion, replay snapshots, and opt-in episode writeback. External Push is a separate API plane."
@@ -1360,7 +1360,7 @@ components:
         application/json:
           schema:
             "$ref": "../jsonschema/v1/error.v1.schema.json"
-      description: "Structured safe error. On every protected route, a call by a user-class credential (browser, OAuth user, native device) re-reads the user's access live (CHAOS-12092): 403 access_denied when the user is not a member, is impersonating, the browser credential's session is not live, or the organization or user is unknown (one code for every reason); 403 feature_not_enabled when a required flag is off (agent_context_runtime, and ask_dev for the browser class); 409 no_repository when the credential's grant within the organization's live repository inventory is empty; 503 upstream_unavailable when the read fails."
+      description: "Structured safe error. On every protected route, a call by a user-class credential (browser, OAuth user, native device) re-reads the user's access live (CHAOS-12092): 403 access_denied when the user is not a member, is impersonating, the browser credential's session is not live, or the organization or user is unknown (one code for every reason); 403 feature_not_enabled when a required flag is off (agent_context_runtime, and ask_dev for the browser class), except on capabilities, which reports the live flag (200, entitlement false); 409 no_repository when the credential's grant within the organization's live repository inventory is empty; 503 upstream_unavailable when the read fails."
   schemas:
     DataCatalogResponse:
       additionalProperties: false
