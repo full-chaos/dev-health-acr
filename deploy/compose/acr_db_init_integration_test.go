@@ -179,10 +179,11 @@ func bootstrapACRDBInit(t *testing.T) acrDBInitHarness {
 // TestAcrDbInit_RuntimeRoleCanInsertIntoClarificationSelections is CHAOS-3859
 // sol review F1's grant proof: proves an INSERT into
 // acr.context_fabric_clarification_selections succeeds under the real
-// runtime-acl grants. Also asserts the negative control: a SELECT on the
-// SAME table as the SAME role fails -- this table is INSERT-only for the
-// runtime role (mirroring audit_events), so a passing INSERT test alone
-// would not catch an accidentally-too-permissive grant.
+// runtime-acl grants. The table was INSERT-only for the runtime role until
+// CHAOS-12244: the Ask Dev retention job now runs as the runtime role, and its
+// DELETE ... WHERE org_id AND prior_result_id needs SELECT. The negative
+// control is now UPDATE: no runtime statement rewrites a selection, so a
+// grant that allowed it would be too permissive.
 func TestAcrDbInit_RuntimeRoleCanInsertIntoClarificationSelections(t *testing.T) {
 	h := bootstrapACRDBInit(t)
 	ctx, runtimeDB, migrationDB := h.ctx, h.runtimeDB, h.migrationDB
@@ -201,14 +202,15 @@ VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
 		"web_assertion", `[]`, `{}`)
 	require.NoError(t, err, "the runtime role must be able to INSERT into acr.context_fabric_clarification_selections (CHAOS-3859 sol review F1) -- if this fails with a permission error, acr-db-init.sh's runtime-acl grant list is missing this table again")
 
-	// Negative control: this table is INSERT-only for the runtime role
-	// (mirroring audit_events, migration 0016's own header comment) -- a
-	// SELECT must fail. Without this half, a future edit that accidentally
-	// granted SELECT too would pass the INSERT assertion above and this
-	// test would never notice the privilege escalation.
+	// SELECT is granted for the retention job's DELETE (CHAOS-12244); UPDATE
+	// is not. Without the UPDATE half, a future edit that granted UPDATE too
+	// would pass the assertions above and this test would never notice.
 	var count int
-	selectErr := runtimeDB.QueryRowContext(ctx, `SELECT count(*) FROM acr.context_fabric_clarification_selections`).Scan(&count)
-	require.Error(t, selectErr, "the runtime role must NOT be able to SELECT from acr.context_fabric_clarification_selections -- this table is insert-only for the runtime role")
+	require.NoError(t, runtimeDB.QueryRowContext(ctx, `SELECT count(*) FROM acr.context_fabric_clarification_selections`).Scan(&count),
+		"the runtime role must be able to SELECT from acr.context_fabric_clarification_selections for the retention job (CHAOS-12244)")
+	_, updateErr := runtimeDB.ExecContext(ctx, `UPDATE acr.context_fabric_clarification_selections SET selection_provenance = selection_provenance WHERE false`)
+	require.Error(t, updateErr, "the runtime role must NOT be able to UPDATE acr.context_fabric_clarification_selections")
+	require.Contains(t, updateErr.Error(), "permission denied")
 
 	// And the row genuinely landed -- confirmed via the MIGRATION role,
 	// which does have full access to its own tables.
