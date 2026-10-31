@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"strconv"
@@ -52,26 +53,29 @@ func TestRetentionRoleHoldsExactlyTheRetentionDeclaration(t *testing.T) {
 }
 
 // grant-runtime-acl refuses to give the retention privileges to a role the
-// runtime or the purge runs as.
+// runtime, the migrations or the purge runs as.
 func TestRetentionGrantTargetsAreARoleOfTheirOwn(t *testing.T) {
 	const runtimeDSN = "postgres://acr_runtime:x@h/acr"
+	const migrationDSN = "postgres://acr_owner:x@h/acr"
 	const purgeDSN = "postgres://acr_purge:x@h/acr"
 	for name, tc := range map[string]struct {
 		retention, purge string
 		want             []string
 		refused          string
 	}{
-		"distinct roles":                {retention: "postgres://acr_retention:x@h/acr", purge: purgeDSN, want: []string{"acr_retention"}},
-		"no purge role":                 {retention: "postgres://acr_retention:x@h/acr", want: []string{"acr_retention"}},
-		"role parameter":                {retention: "postgres://acr_login:x@h/acr?role=acr_retention", purge: purgeDSN, want: []string{"acr_login", "acr_retention"}},
-		"the runtime role":              {retention: runtimeDSN, purge: purgeDSN, refused: "the runtime runs as"},
-		"the runtime role by parameter": {retention: "postgres://acr_login:x@h/acr?role=acr_runtime", refused: "the runtime runs as"},
-		"the purge role":                {retention: purgeDSN, purge: purgeDSN, refused: "the purge runs as"},
-		"the purge role by parameter":   {retention: "postgres://acr_login:x@h/acr?role=acr_purge", purge: purgeDSN, refused: "the purge runs as"},
-		"login shared with the runtime": {retention: "postgres://acr_runtime:x@h/acr?role=acr_retention", refused: "the runtime runs as"},
+		"distinct roles":                  {retention: "postgres://acr_retention:x@h/acr", purge: purgeDSN, want: []string{"acr_retention"}},
+		"no purge role":                   {retention: "postgres://acr_retention:x@h/acr", want: []string{"acr_retention"}},
+		"role parameter":                  {retention: "postgres://acr_login:x@h/acr?role=acr_retention", purge: purgeDSN, want: []string{"acr_login", "acr_retention"}},
+		"the runtime role":                {retention: runtimeDSN, purge: purgeDSN, refused: "the runtime runs as"},
+		"the runtime role by parameter":   {retention: "postgres://acr_login:x@h/acr?role=acr_runtime", refused: "the runtime runs as"},
+		"the purge role":                  {retention: purgeDSN, purge: purgeDSN, refused: "the purge runs as"},
+		"the purge role by parameter":     {retention: "postgres://acr_login:x@h/acr?role=acr_purge", purge: purgeDSN, refused: "the purge runs as"},
+		"login shared with the runtime":   {retention: "postgres://acr_runtime:x@h/acr?role=acr_retention", refused: "the runtime runs as"},
+		"the migration role":              {retention: migrationDSN, refused: "the migrations runs as"},
+		"the migration role by parameter": {retention: "postgres://acr_login:x@h/acr?role=acr_owner", refused: "the migrations runs as"},
 	} {
 		t.Run(name, func(t *testing.T) {
-			got, err := retentionGrantTargets(tc.retention, runtimeDSN, tc.purge)
+			got, err := retentionGrantTargets(tc.retention, runtimeDSN, migrationDSN, tc.purge)
 			if tc.refused != "" {
 				require.ErrorContains(t, err, tc.refused)
 				return
@@ -198,4 +202,19 @@ VALUES ($1 || '_struct', $2, $3, $4, $5, 'expected_kind', 'receipt_job', 'pull_r
 	var unerased int
 	require.NoError(t, database.Owner.QueryRowContext(ctx, `SELECT count(*) FROM acr.context_fabric_investigation_submissions WHERE left(reserved_result_id, 7) <> 'erased_' OR result_id IS NOT NULL`).Scan(&unerased))
 	require.Zero(t, unerased, "every kept record is erased")
+}
+
+// grant-runtime-acl, run as the deployment runs it, refuses a retention DSN
+// that is the migration DSN (the schema owner): the job never runs as the
+// owner (codex #1808 r2).
+func TestGrantRuntimeACLRefusesTheMigrationRoleAsTheRetentionRole(t *testing.T) {
+	ctx := context.Background()
+	database := newRuntimeRoleDatabase(t, ctx, runtimeRoleOptions{Role: "acr_runtime_for_owner_refusal", SkipGrant: true})
+	env := map[string]string{
+		migrationDSNEnvironment: database.DSN,
+		runtimeDSNEnvironment:   "postgres://acr_runtime_for_owner_refusal:unused@runtime-dsn-is-never-dialed.invalid:5432/acr",
+		retentionDSNEnvironment: database.DSN,
+	}
+	err := run(ctx, []string{"grant-runtime-acl"}, environment(env), &bytes.Buffer{})
+	require.ErrorContains(t, err, "the migrations runs as")
 }

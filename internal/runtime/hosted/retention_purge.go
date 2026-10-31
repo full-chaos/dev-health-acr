@@ -30,9 +30,10 @@ const (
 	retentionPurgeFailureMessage = "ask dev retention tick failed; retrying on next tick"
 )
 
-// RetentionPurgeLogMessage is the retention pass's line: Info with the counts
-// only (never an id, a question or an owner) when a pass removed, erased or
-// fenced anything. A pass that found nothing writes nothing.
+// RetentionPurgeLogMessage is the retention pass's line: one per pass at Info,
+// a heartbeat, with the counts only (never an id, a question or an owner) and
+// outcome "removed" or "empty", so a pass that silently stops finding due rows
+// is visible at Info (codex #1808 r2). A failed pass is the loop's Warn line.
 const RetentionPurgeLogMessage = "context fabric retention sweep"
 
 // retentionPurgeFunc adapts a contextfabric.RetentionSweeper to the bounded
@@ -42,8 +43,12 @@ func retentionPurgeFunc(sweeper contextfabric.RetentionSweeper, logger *slog.Log
 		sweepCtx, cancel := context.WithTimeout(ctx, retentionPurgeTimeout)
 		defer cancel()
 		sweep, err := sweeper.SweepRetention(sweepCtx, now, limit)
-		if (sweep.Changed() || sweep.Fenced > 0) && logger != nil {
-			logger.InfoContext(ctx, RetentionPurgeLogMessage,
+		if err == nil && logger != nil {
+			outcome := "empty"
+			if sweep.Changed() || sweep.Fenced > 0 {
+				outcome = "removed"
+			}
+			logger.InfoContext(ctx, RetentionPurgeLogMessage, "outcome", outcome,
 				"threads_removed", sweep.ThreadsRemoved, "threads_erased", sweep.ThreadsErased,
 				"records_removed", sweep.RecordsRemoved, "results_removed", sweep.ResultsRemoved, "fenced", sweep.Fenced)
 		}

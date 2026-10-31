@@ -371,6 +371,30 @@ func RunRetentionSweepSuite(t *testing.T, newStore func(t *testing.T, clock func
 		}
 	})
 
+	t.Run("a removed result's claim on a live prior goes with it, re-opening the offer", func(t *testing.T) {
+		store, clock := setup(t)
+		// Prior A lives in a 30-day thread; B, with no thread, redeems a
+		// receipt of A and goes at 24 hours.
+		prior := admit(t, store, clock, "thread-sweep-claim-prior", "claim-prior", &month)
+		saveResult(t, store, ValidResult(prior.ReservedResultID, "prior"))
+		clock.now = clock.now.Add(time.Minute)
+		claimer := admit(t, store, clock, "", "claim-claimer", nil)
+		saveResult(t, store, ClaimBearingResult(claimer.ReservedResultID, "claimer", prior.ReservedResultID, "receipt_sweep_claim"))
+		if superseded, err := store.IsStructureSuperseded(ctx, owner.OrgID, prior.ReservedResultID, contractsv1.ContextFabricStructureNeedExpectedKind); err != nil || !superseded {
+			t.Fatalf("the claim before the sweep = %t %v", superseded, err)
+		}
+		if got := sweep(t, store, start.Add(25*time.Hour)); got.RecordsRemoved != 1 || got.ResultsRemoved != 1 {
+			t.Fatalf("the sweep = %+v, want the claimer and its result", got)
+		}
+		if superseded, err := store.IsStructureSuperseded(ctx, owner.OrgID, prior.ReservedResultID, contractsv1.ContextFabricStructureNeedExpectedKind); err != nil || superseded {
+			t.Fatalf("the live prior after its claimer went = superseded %t %v, want re-opened", superseded, err)
+		}
+		clock.now = start.Add(25 * time.Hour)
+		if _, err := store.Get(ctx, owner, prior.ReservedResultID); err != nil {
+			t.Fatalf("the live prior = %v, want kept", err)
+		}
+	})
+
 	t.Run("a pass handles at most limit units, oldest first", func(t *testing.T) {
 		store, clock := setup(t)
 		var admissions []contextfabric.SubmissionAdmission

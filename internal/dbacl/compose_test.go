@@ -342,7 +342,8 @@ func TestComposeBootstrapHandlesTheRetentionRoleSettings(t *testing.T) {
 }
 
 // The shipped compose services pass the retention role settings to the two
-// bootstrap stages.
+// bootstrap stages, and the switch and the role's DSN to acr-api (codex #1808
+// r2: provisioning the role is not enough if the API cannot use it).
 func TestComposeServicesPassTheRetentionSettings(t *testing.T) {
 	raw, err := os.ReadFile("../../deploy/compose/acr.compose.yml")
 	if err != nil {
@@ -361,6 +362,19 @@ func TestComposeServicesPassTheRetentionSettings(t *testing.T) {
 			if !strings.Contains(block, want) {
 				t.Errorf("%s does not pass %s", service, want)
 			}
+		}
+	}
+	start := strings.Index(string(raw), "\n  acr-api:")
+	if start < 0 {
+		t.Fatal("service acr-api not found")
+	}
+	block := string(raw)[start+1:]
+	if next := regexp.MustCompile(`\n  [a-z-]+:\n`).FindStringIndex(block[1:]); next != nil {
+		block = block[:next[0]+1]
+	}
+	for _, want := range []string{"ACR_ASK_DEV_RETENTION_ENABLED: ${ACR_ASK_DEV_RETENTION_ENABLED:-false}", "ACR_POSTGRES_RETENTION_DSN: ${ACR_POSTGRES_RETENTION_DSN:-}"} {
+		if !strings.Contains(block, want) {
+			t.Errorf("acr-api does not pass %s", want)
 		}
 	}
 }

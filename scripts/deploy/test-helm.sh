@@ -1333,6 +1333,14 @@ if [[ -n "$runtime_secret" ]]; then
   retention_must_fail "retention DSN that is the runtime DSN" "shared-runtime-retention-dsn" --set config.askDevRetentionEnabled=true \
     --set-string "credentials.retention.existingSecret=${runtime_secret}" --set-string credentials.retention.postgresDsnKey=ACR_POSTGRES_DSN
 fi
+migration_secret="$(python3 -c 'import sys,re; m=re.search(r"(?m)^  migration:\n(?:    .*\n)*?    existingSecret: \"?([^\"\s]+)", open(sys.argv[1]).read()); print(m.group(1) if m else "")' "$values")"
+if [[ -n "$migration_secret" ]]; then
+  retention_must_fail "retention DSN that is the migration DSN" "shared-migration-retention-dsn" --set config.askDevRetentionEnabled=true \
+    --set-string "credentials.retention.existingSecret=${migration_secret}" --set-string credentials.retention.postgresDsnKey=ACR_POSTGRES_MIGRATION_DSN
+fi
+retention_must_fail "retention DSN that is the purge DSN" "shared-purge-retention-dsn" --set config.askDevRetentionEnabled=true \
+  --set-string credentials.purge.existingSecret=acr-purge-credentials --set-string credentials.retention.existingSecret=acr-purge-credentials \
+  --set-string credentials.retention.postgresDsnKey=ACR_POSTGRES_PURGE_DSN
 
 # CHAOS-12094 (F1): the acr-mcp hop proof, rolled in two steps. Step 1
 # (acrMcp.hop.enabled): acr-mcp mounts ONE projected token of its own

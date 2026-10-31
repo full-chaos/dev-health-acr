@@ -370,8 +370,8 @@ DELETE FROM acr.context_fabric_investigation_submissions
 
 // removeRetainedResults removes the results the unit's records name, except
 // a result a live record still names (design §6 T3), with what is keyed by
-// them: the receipt selections and the supersession claims made on them, and
-// (by the foreign key's cascade) their feedback. It runs before the records
+// them: the receipt selections and the supersession claims made on them or
+// by them, and (by the foreign key's cascade) their feedback. It runs before the records
 // go, in the unit's transaction. It returns how many result rows went.
 func (s *Store) removeRetainedResults(ctx context.Context, tx *sql.Tx, orgID string, records []retentionRecord, now time.Time) (int, error) {
 	var named []string
@@ -419,7 +419,15 @@ SELECT id FROM unnest($2::text[]) AS named(id)
 		return 0, nil
 	}
 	for _, table := range []string{"context_fabric_clarification_selections", "context_fabric_structure_selections", "context_fabric_structure_supersession_claims"} {
-		if _, err := tx.ExecContext(ctx, `DELETE FROM acr.`+table+` WHERE org_id = $1 AND prior_result_id = ANY($2::text[])`, orgID, doomed); err != nil {
+		where := `prior_result_id = ANY($2::text[])`
+		if table == "context_fabric_structure_supersession_claims" {
+			// A claim exists exactly while the result that redeemed it
+			// exists (migration 0023, design brief §2.5): it goes with its
+			// claiming result too, re-opening a live prior's offer (codex
+			// #1808 r2).
+			where = `(prior_result_id = ANY($2::text[]) OR claimed_by_result_id = ANY($2::text[]))`
+		}
+		if _, err := tx.ExecContext(ctx, `DELETE FROM acr.`+table+` WHERE org_id = $1 AND `+where, orgID, doomed); err != nil {
 			return 0, fmt.Errorf("retention: remove %s: %w", table, sanitizeError(err))
 		}
 		s.retentionStep(table)

@@ -190,10 +190,11 @@ const retentionDSNEnvironment = "ACR_POSTGRES_RETENTION_DSN"
 
 // retentionGrantTargets returns the roles that receive the retention
 // privileges: every role the retention DSN runs as. It refuses when any of
-// them is a role the runtime or the purge DSN runs as, so the job's DELETE
-// grants never widen the runtime role (lead ruling: least privilege) and the
-// two grant sets never meet on one role.
-func retentionGrantTargets(retentionDSN, runtimeDSN, purgeDSN string) ([]string, error) {
+// them is a role the runtime, the migrations (the schema owner) or the purge
+// DSN runs as, so the job's DELETE grants never widen the runtime role (lead
+// ruling: least privilege), the job never runs as the schema owner (codex
+// #1808 r2), and the grant sets never meet on one role.
+func retentionGrantTargets(retentionDSN, runtimeDSN, migrationDSN, purgeDSN string) ([]string, error) {
 	retention, err := dsnRoles(retentionDSN)
 	if err != nil {
 		return nil, fmt.Errorf("retention DSN: %w", err)
@@ -205,6 +206,15 @@ func retentionGrantTargets(retentionDSN, runtimeDSN, purgeDSN string) ([]string,
 	}
 	for _, role := range runtime {
 		others[role] = "runtime"
+	}
+	if migrationDSN != "" {
+		migration, err := dsnRoles(migrationDSN)
+		if err != nil {
+			return nil, fmt.Errorf("migration DSN: %w", err)
+		}
+		for _, role := range migration {
+			others[role] = "migrations"
+		}
 	}
 	if purgeDSN != "" {
 		purge, err := dsnRoles(purgeDSN)
@@ -226,8 +236,8 @@ func retentionGrantTargets(retentionDSN, runtimeDSN, purgeDSN string) ([]string,
 // grantRetentionACL gives the Ask Dev retention job's own role exactly the
 // privileges its statements need (internal/dbacl RetentionGrants), as bare
 // idempotent GRANTs.
-func grantRetentionACL(ctx context.Context, db *sql.DB, retentionDSN, runtimeDSN, purgeDSN string, output io.Writer) error {
-	roles, err := retentionGrantTargets(retentionDSN, runtimeDSN, purgeDSN)
+func grantRetentionACL(ctx context.Context, db *sql.DB, retentionDSN, runtimeDSN, migrationDSN, purgeDSN string, output io.Writer) error {
+	roles, err := retentionGrantTargets(retentionDSN, runtimeDSN, migrationDSN, purgeDSN)
 	if err != nil {
 		return err
 	}

@@ -217,8 +217,11 @@ func (s *Store) removeRetainedResultsLocked(orgID string, keys []contextfabric.S
 			}
 			delete(s.results, id)
 			delete(s.feedback, id)
-			for claim := range s.claims {
-				if claim.orgID == orgID && claim.priorResultID == id {
+			// Claims made on the result, and claims it made: a claim
+			// exists exactly while its redeeming result does (migration
+			// 0023).
+			for claim, claimedBy := range s.claims {
+				if claim.orgID == orgID && (claim.priorResultID == id || claimedBy == id) {
 					delete(s.claims, claim)
 				}
 			}

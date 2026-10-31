@@ -156,7 +156,7 @@ func run(ctx context.Context, args []string, lookup lookupEnv, output io.Writer)
 		if retentionDSN == "" {
 			return nil
 		}
-		return grantRetentionACL(ctx, db, retentionDSN, runtimeDSN, purgeDSN, output)
+		return grantRetentionACL(ctx, db, retentionDSN, runtimeDSN, dsn, purgeDSN, output)
 	}
 	runner, err := migrations.Embedded()
 	if err != nil {

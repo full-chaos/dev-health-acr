@@ -76,8 +76,9 @@ func TestStartRetentionPurgeLoop_aFailedFirstPassFailsStartup(t *testing.T) {
 	}
 }
 
-// The pass logs one line with the counts only, when it removed, erased or
-// fenced anything, and nothing otherwise.
+// The pass logs one line with the counts only on every pass: "removed" when
+// it removed, erased or fenced anything, "empty" otherwise (a heartbeat, so a
+// due scan that stops finding rows shows at Info).
 func TestRetentionPurgeFunc_logsCountsOnly(t *testing.T) {
 	var buf bytes.Buffer
 	logger := slog.New(slog.NewJSONHandler(&buf, nil))
@@ -87,7 +88,7 @@ func TestRetentionPurgeFunc_logsCountsOnly(t *testing.T) {
 		t.Fatalf("pass = %d %v, want 6 units", n, err)
 	}
 	line := buf.String()
-	for _, want := range []string{`"msg":"` + RetentionPurgeLogMessage + `"`, `"threads_removed":2`, `"threads_erased":1`, `"records_removed":3`, `"results_removed":7`, `"fenced":1`} {
+	for _, want := range []string{`"msg":"` + RetentionPurgeLogMessage + `"`, `"outcome":"removed"`, `"threads_removed":2`, `"threads_erased":1`, `"records_removed":3`, `"results_removed":7`, `"fenced":1`} {
 		if !strings.Contains(line, want) {
 			t.Fatalf("log line %s lacks %s", line, want)
 		}
@@ -96,7 +97,12 @@ func TestRetentionPurgeFunc_logsCountsOnly(t *testing.T) {
 		t.Fatalf("want one line, got %q", line)
 	}
 	buf.Reset()
-	if _, err := retentionPurgeFunc(&fakeRetentionSweeper{}, logger)(context.Background(), time.Now(), 10); err != nil || buf.Len() != 0 {
-		t.Fatalf("an empty pass wrote %q (%v), want nothing", buf.String(), err)
+	if _, err := retentionPurgeFunc(&fakeRetentionSweeper{}, logger)(context.Background(), time.Now(), 10); err != nil ||
+		strings.Count(buf.String(), "\n") != 1 || !strings.Contains(buf.String(), `"outcome":"empty"`) || !strings.Contains(buf.String(), `"results_removed":0`) {
+		t.Fatalf("an empty pass wrote %q (%v), want one heartbeat line with outcome empty", buf.String(), err)
+	}
+	buf.Reset()
+	if _, err := retentionPurgeFunc(&fakeRetentionSweeper{err: errors.New("refused")}, logger)(context.Background(), time.Now(), 10); err == nil || buf.Len() != 0 {
+		t.Fatalf("a failed pass wrote %q (%v), want the error and no heartbeat (the loop's Warn line reports it)", buf.String(), err)
 	}
 }

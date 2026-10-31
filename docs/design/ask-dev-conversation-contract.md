@@ -454,7 +454,9 @@ back-dated rows." Rules: `internal/contextfabric/retention.go`; SQL:
   with the switch on). The runtime role is not widened (lead ruling: least
   privilege). The role holds exactly `internal/dbacl.RetentionGrants`, given by
   `grant-runtime-acl` (Helm `credentials.retention`, compose
-  `ACR_RETENTION_DB_USER`), and it must not be the runtime or the purge role.
+  `ACR_RETENTION_DB_USER`), and it must not be the runtime, the migration
+  (schema-owner) or the purge role: `grant-runtime-acl`, the Helm chart and the
+  compose bootstrap each refuse it.
   At startup a grant probe runs every kind of statement on no row (so a
   missing grant fails startup even when nothing is due), then a first pass.
   Each unit (one thread, or one record with no thread) is one transaction
@@ -462,15 +464,15 @@ back-dated rows." Rules: `internal/contextfabric/retention.go`; SQL:
   remove a unit once and no turn is admitted half-way through.
 - **Backing set.** Thread row; submission records (with questions); result
   rows (semantic state and reuse columns are columns of the row); the
-  clarification and structure selections and the supersession claims keyed
-  by a removed result (`prior_result_id`); the run event log (by its foreign
+  clarification and structure selections keyed by a removed result
+  (`prior_result_id`), the supersession claims made on it or by it (a claim
+  exists exactly while its redeeming result does, migration 0023); the run event log (by its foreign
   key's cascade, or explicitly when records are kept); the answer feedback
   (cascade). Kept: the usage aggregate (AC-6); model execution receipts, which
   carry no question, answer, principal or result id (lead ruling Q3 test;
   each keeps sha256 input and output digests of the content and the client's
   `request_id`, until the organization purge);
-  results no record names (MCP, Workbench); a claim whose prior result lives
-  (its claimer's id stays, as the fence of the live prior).
+  results no record names (MCP, Workbench).
 - **Expired thread.** The whole set goes, thread row included. Its ids are
   then unknown: the thread id starts a new thread (T1 residual).
 - **Deleted thread, not expired** (lead ruling Q1: the delete is the user's
@@ -501,6 +503,8 @@ back-dated rows." Rules: `internal/contextfabric/retention.go`; SQL:
   (`TestRetentionDrillOnBackDatedRows`).
 - **Org purge.** Removes the whole set and the kept tables
   (`TestOrgPurgeCoversTheRetentionBackingSet`).
-- **Telemetry.** One `context fabric retention sweep` line per pass that
-  removed, erased or fenced anything: counts only, never an id, a question or
-  an owner.
+- **Telemetry.** One `context fabric retention sweep` line per pass, a
+  heartbeat: `outcome=removed` or `outcome=empty` with the counts only, never
+  an id, a question or an owner (a due scan that stops finding rows shows at
+  Info). A failed pass is the loop's Warn line; the switch off is one
+  `outcome=disabled` line at startup.
