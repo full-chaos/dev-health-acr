@@ -219,10 +219,13 @@ type postgresComponents struct {
 	// requests, keyed off the SAME device_authorizations row devices
 	// above owns. Wired here so the API layer can compose it into the
 	// runtime bundle; this package does not itself expose an HTTP route.
-	oauth    storage.OAuthStore
-	audit    storage.AuditStore
-	packets  storage.PacketStore
-	episodes storage.EpisodeStore
+	oauth storage.OAuthStore
+	// browserRefresh keeps the browser token families and refresh tokens
+	// (CHAOS-12124).
+	browserRefresh storage.BrowserRefreshStore
+	audit          storage.AuditStore
+	packets        storage.PacketStore
+	episodes       storage.EpisodeStore
 	// workloadBindings is CHAOS-4013's read-only lookup store; see
 	// storage.WorkloadBindingStore's doc comment for why it has no write
 	// path here.

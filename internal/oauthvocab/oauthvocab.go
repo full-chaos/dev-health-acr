@@ -23,11 +23,14 @@ const (
 	StepCredentialAck    = "credential_ack"
 	StepCredentialRotate = "credential_rotate"
 	StepCredentialRevoke = "credential_revoke"
+	// StepRevoke is RFC 7009's revocation endpoint: the browser token
+	// family revocation by refresh token (CHAOS-12124).
+	StepRevoke = "revoke"
 )
 
 // StepVocabulary lists every step.
 func StepVocabulary() []string {
-	return []string{StepRegister, StepAuthorize, StepConsentPreview, StepConsent, StepDeviceAuthorization, StepToken, StepCredentialAck, StepCredentialRotate, StepCredentialRevoke}
+	return []string{StepRegister, StepAuthorize, StepConsentPreview, StepConsent, StepDeviceAuthorization, StepToken, StepCredentialAck, StepCredentialRotate, StepCredentialRevoke, StepRevoke}
 }
 
 // OAuth step outcomes. "ok" means the step did what it exists to do: a client
@@ -76,6 +79,18 @@ const (
 	// OutcomeRotationNotAllowed: a self-rotation of a browser-class
 	// credential, which renews only by its refresh grant.
 	OutcomeRotationNotAllowed = "rotation_not_allowed"
+	// The browser refresh grant (CHAOS-12124). OutcomeGraceReplay: a
+	// consumed refresh token inside the grace window answered with its
+	// unused successor again. OutcomeReuseRevoked: any other reuse of a
+	// consumed token, which revoked the family. OutcomeFamilyExpired: the
+	// family's absolute life ended. OutcomeFamilyRevoked: the family was
+	// already revoked. OutcomeUnsupportedTokenType: the revocation endpoint
+	// was given an access token.
+	OutcomeGraceReplay          = "grace_replay"
+	OutcomeReuseRevoked         = "reuse_revoked"
+	OutcomeFamilyExpired        = "family_expired"
+	OutcomeFamilyRevoked        = "family_revoked"
+	OutcomeUnsupportedTokenType = "unsupported_token_type"
 )
 
 // OutcomeVocabulary lists every outcome, ok first.
@@ -87,6 +102,7 @@ func OutcomeVocabulary() []string {
 		OutcomeInvalidGrant, OutcomePKCEMismatch, OutcomeRedirectMismatch, OutcomeClientMismatch,
 		OutcomeResourceMismatch, OutcomeUnauthenticated, OutcomeAuthorizationPending, OutcomeSlowDown, OutcomeRateLimited, OutcomeUnavailable,
 		OutcomeSessionRequired, OutcomeImpersonating, OutcomeUnauthorizedClient, OutcomeRotationNotAllowed,
+		OutcomeGraceReplay, OutcomeReuseRevoked, OutcomeFamilyExpired, OutcomeFamilyRevoked, OutcomeUnsupportedTokenType,
 	}
 }
 

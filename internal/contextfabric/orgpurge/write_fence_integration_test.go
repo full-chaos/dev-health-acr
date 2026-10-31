@@ -235,7 +235,7 @@ func TestWriteFenceRefusesEveryFencedTableAfterAPurge(t *testing.T) {
 			args = append(args, suffix)
 		}
 		switch {
-		case table == "oauth_device_grants", strings.Contains(statement, "approving_subject, created_at"):
+		case table == "oauth_device_grants", table == "browser_refresh_tokens", strings.Contains(statement, "approving_subject, created_at"):
 			continue // no organization column in the row
 		case table == "audit_events":
 			_, err := r.db.ExecContext(ctx, statement, args...)

@@ -53,6 +53,13 @@ func newOAuthTestApp(t *testing.T, oauthRuntime *OAuthRuntime, withWebAssertions
 	if oauthRuntime != nil && oauthRuntime.ConsentURL == "" {
 		oauthRuntime.ConsentURL = oauthTestConsentURL
 	}
+	if oauthRuntime != nil && oauthRuntime.BrowserRefresh == nil {
+		refresh, err := memory.NewBrowserRefreshStore(credentials)
+		if err != nil {
+			t.Fatal(err)
+		}
+		oauthRuntime.BrowserRefresh = refresh
+	}
 	var verifier *auth.WebAssertionVerifier
 	if withWebAssertions {
 		public, private, err := ed25519.GenerateKey(rand.Reader)
