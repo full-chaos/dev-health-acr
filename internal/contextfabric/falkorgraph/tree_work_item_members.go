@@ -109,11 +109,17 @@ func (a *Adapter) linkScopedIssues(ctx context.Context, key string, principal st
 			break
 		}
 		walked++
-		walk, err := a.treeMembers(ctx, key, principal.OrgID, principal, scope, anchor, treeIssue, limit+1, temporalFilter{})
+		// CHAOS-12319 review r1: each repository of the scope is a walk's
+		// anchor, with the same requested team narrowing.
+		walkCtx, narrowing, err := a.withTeamNarrowing(ctx, key, principal.OrgID, scope, anchor)
 		if err != nil {
 			return nil, false, err
 		}
-		complete = complete && !walk.truncated
+		walk, err := a.treeMembers(walkCtx, key, principal.OrgID, principal, scope, anchor, treeIssue, limit+1, temporalFilter{})
+		if err != nil {
+			return nil, false, err
+		}
+		complete = complete && !walk.truncated && !narrowing.Undecided()
 		for _, subject := range walk.linkSubjects {
 			tier := walk.memberTiers[subject.CanonicalID]
 			if best, seen := members[subject.CanonicalID]; !seen || tierRank(tier) < tierRank(best) {

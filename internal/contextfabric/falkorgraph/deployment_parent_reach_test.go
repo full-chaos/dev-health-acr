@@ -402,6 +402,9 @@ func seededWalkStep(byKey map[string]seededNode, edges []seededEdge, cypher stri
 			if other.workItemType != "" {
 				n.Properties[propWorkItemType] = other.workItemType
 			}
+			for k, v := range other.props {
+				n.Properties[k] = v
+			}
 			rows = append(rows, row{
 				"id": id, "b": n,
 				"r": &edge{Properties: map[string]interface{}{propRelationType: e.typ, propRelationshipID: fmt.Sprintf("rel_%03d", i), propEvidenceRefs: []string{fmt.Sprintf("evidence_%03d", i)}}},

@@ -682,8 +682,11 @@ An issue that passes neither is out of the requested scope. It is not a member
 and not a denial: never in the walk's authorization count, and no
 authorization-gap disclosure. The walk is floored (truncated: the partial
 limitation and the population floor) only where the ownership it needed is
-absent, not current, or cut; an absent ownership row is missing data, not "not
-owned". When no requested team owns the anchor, the anchor stays the subject
+absent, not current, or cut, and only for an issue the rest of the request
+admits (the narrowing reads nothing for an issue already refused); an absent
+ownership row is missing data, not "not owned". The link-scoped census of a
+requested repository scope applies the same narrowing to each repository it
+walks, and is incomplete where that walk was floored. When no requested team owns the anchor, the anchor stays the subject
 and its own totals are not the team's: a walk with no member is `no_match`,
 never `no_pull_requests` or `unlinked`. The caller's grants and the rest of the
 request still decide first; the narrowing never widens.

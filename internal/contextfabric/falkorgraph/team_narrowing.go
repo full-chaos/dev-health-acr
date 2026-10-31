@@ -45,10 +45,14 @@ type teamNarrowing struct {
 	requested map[string]bool
 	// anchorOwned: (i) holds, so every walked issue passes.
 	anchorOwned bool
+	// anchorUnknown: (i) could not be decided -- the anchor has no current
+	// owner, or the read was cut. It floors the walk only when an issue
+	// the rest of the request admits is then left to (ii) and not reached.
+	anchorUnknown bool
 
 	mu sync.Mutex
-	// undecided: an ownership read the narrowing needed was absent, not
-	// current, or cut.
+	// undecided: an ownership read the narrowing needed to decide an issue
+	// the rest of the request admits was absent, not current, or cut.
 	undecided bool
 }
 
@@ -84,9 +88,7 @@ func (a *Adapter) withTeamNarrowing(ctx context.Context, key, orgID string, scop
 		return ctx, nil, err
 	}
 	n.anchorOwned = n.anyRequested(hits)
-	if !n.anchorOwned && (cut || len(hits) == 0) {
-		n.undecided = true
-	}
+	n.anchorUnknown = !n.anchorOwned && (cut || len(hits) == 0)
 	return context.WithValue(ctx, teamNarrowingContextKey{}, n), n, nil
 }
 
@@ -110,8 +112,10 @@ var projectOwnersStep = walkStep{
 }
 
 // excluded returns the issues among ids that are out of the narrowing: (i)
-// does not hold and (ii) does not reach a requested team. A nil narrowing, or
-// one whose anchor a requested team owns, excludes nothing and reads nothing.
+// does not hold and (ii) does not reach a requested team. ids are the issues
+// the rest of the request already admits (review r1): an issue refused there
+// never floors the walk. A nil narrowing, or one whose anchor a requested
+// team owns, excludes nothing and reads nothing.
 func (n *teamNarrowing) excluded(ctx context.Context, ids []string) (map[string]bool, error) {
 	if n == nil || n.anchorOwned || len(ids) == 0 {
 		return nil, nil
@@ -143,22 +147,26 @@ func (n *teamNarrowing) excluded(ctx context.Context, ids []string) (map[string]
 			owned[h.from] = true
 		}
 	}
-	undecided := cut || ownersCut
+	undecided := false
 	out := map[string]bool{}
 	for _, id := range ids {
-		reached := false
+		reached, missing := false, false
 		for _, project := range projectsOf[id] {
 			if owned[project] {
 				reached = true
-				break
-			}
-			if !hasOwner[project] {
+			} else if !hasOwner[project] {
 				// No current owner: missing data, not "not owned".
-				undecided = true
+				missing = true
 			}
 		}
-		if !reached {
-			out[id] = true
+		if reached {
+			continue
+		}
+		out[id] = true
+		// The issue is left out on ownership that was not all there: (i)
+		// undecided, a project of its with no current owner, or a cut read.
+		if n.anchorUnknown || missing || cut || ownersCut {
+			undecided = true
 		}
 	}
 	if undecided {

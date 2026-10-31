@@ -1016,15 +1016,25 @@ func (a *Adapter) linkSegment(ctx context.Context, key, orgID string, state tree
 				return nil, nil, err
 			}
 		}
+		// Every row is decided by the rest of the request first; a requested
+		// team narrowing then reads only the issues that admits.
+		authorizedRows := make([]bool, len(links))
+		var authorizedIDs []string
+		for i, l := range links {
+			authorizedRows[i] = state.linkRowAuthorized(l.row, feed, link, l.near, l.far, l.tier)
+			if authorizedRows[i] && !(reviewed && !holding[l.id]) {
+				authorizedIDs = append(authorizedIDs, l.id)
+			}
+		}
 		var excluded map[string]bool
 		if link.to == treeIssue {
-			if excluded, err = teamNarrowingFrom(ctx).excluded(ctx, distinctIDs(ids)); err != nil {
+			if excluded, err = teamNarrowingFrom(ctx).excluded(ctx, distinctIDs(authorizedIDs)); err != nil {
 				return nil, nil, err
 			}
 		}
-		for _, l := range links {
+		for i, l := range links {
 			id, far, tier := l.id, l.far, l.tier
-			authorized := state.linkRowAuthorized(l.row, feed, link, l.near, far, tier)
+			authorized := authorizedRows[i]
 			if status.set() && authorized {
 				read[id] = true
 			}
