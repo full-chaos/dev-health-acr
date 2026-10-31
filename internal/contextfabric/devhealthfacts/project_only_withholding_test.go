@@ -76,32 +76,86 @@ func TestAProjectOnlyCallerIsServedNoTeamOrRepositoryRowOfAProjectHealthFact(t *
 	}
 }
 
-// The same withholding holds for every provider whose project fact rolls up
-// through team ownership: a project-only caller's project read issues no
-// statement and serves no fact; an unrestricted caller's still reads.
-func TestEveryTeamRollupProjectFactIsWithheldFromAProjectOnlyCaller(t *testing.T) {
+// Every guarded path (projectOnlyWithheld): a project-only caller's read of a
+// project or organization subject issues no statement and serves no fact; an
+// unrestricted caller's read of the same subject still issues one, so the pin
+// keeps its control.
+func TestEveryGuardedProjectAndOrganizationReadIsWithheldFromAProjectOnlyCaller(t *testing.T) {
 	t.Parallel()
-	for _, kind := range []contextfabric.FactKind{
-		contextfabric.FactHealth, contextfabric.FactFlow, contextfabric.FactLandscape,
-		contextfabric.FactMetrics, contextfabric.FactReadiness, contextfabric.FactWorkload,
+	project := projectSubject("linear", "proj-1")
+	organization := organizationSubject("org-1")
+	for _, tc := range []struct {
+		kind    contextfabric.FactKind
+		subject contextfabric.SubjectRef
+		units   bool
+	}{
+		{kind: contextfabric.FactHealth, subject: project},
+		{kind: contextfabric.FactFlow, subject: project},
+		{kind: contextfabric.FactLandscape, subject: project},
+		{kind: contextfabric.FactMetrics, subject: project},
+		{kind: contextfabric.FactReadiness, subject: project},
+		{kind: contextfabric.FactWorkload, subject: project},
+		{kind: contextfabric.FactInvestment, subject: project},
+		{kind: contextfabric.FactInvestment, subject: organization},
+		{kind: contextfabric.FactInvestment, subject: organization, units: true},
+		{kind: contextfabric.FactPullRequests, subject: project},
+		{kind: contextfabric.FactBlockers, subject: project},
+		{kind: contextfabric.FactCommitment, subject: project},
+		{kind: contextfabric.FactActualCompletion, subject: project},
 	} {
+		name := string(tc.kind) + "/" + string(tc.subject.Kind)
+		if tc.units {
+			name += "/units"
+		}
 		read := func(principal storage.Principal) (facts, statements int) {
 			client := &fakeClient{}
-			provider := findProvider(t, devhealthfacts.NewProviders(client), kind)
-			result, err := provider.ReadFacts(context.Background(), principal, contextfabric.FactQuery{
+			provider := findProvider(t, devhealthfacts.NewProviders(client), tc.kind)
+			ctx := context.Background()
+			if tc.units {
+				ctx = contextfabric.WithInvestmentUnits(ctx, contextfabric.InvestmentUnitsRequest{Max: 10})
+			}
+			query := contextfabric.FactQuery{
 				Time: contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent},
-				Kind: kind, Subjects: []contextfabric.SubjectRef{projectSubject("linear", "proj-1")},
-			})
+				Kind: tc.kind, Subjects: []contextfabric.SubjectRef{tc.subject},
+			}
+			if loader, ok := provider.(interface {
+				LoadPrerequisites(context.Context, storage.Principal, contextfabric.FactQuery) (context.Context, error)
+			}); ok {
+				loaded, err := loader.LoadPrerequisites(ctx, principal, query)
+				if err != nil {
+					t.Fatalf("%s: LoadPrerequisites() error = %v", name, err)
+				}
+				ctx = loaded
+			}
+			result, err := provider.ReadFacts(ctx, principal, query)
 			if err != nil {
-				t.Fatalf("%s: ReadFacts() error = %v", kind, err)
+				t.Fatalf("%s: ReadFacts() error = %v", name, err)
 			}
 			return len(result.Facts), len(client.queries)
 		}
 		if facts, statements := read(projectOnlyFactPrincipal()); facts != 0 || statements != 0 {
-			t.Errorf("%s: a project-only caller's project read issued %d statements and served %d facts, want none", kind, statements, facts)
+			t.Errorf("%s: a project-only caller's read issued %d statements and served %d facts, want none", name, statements, facts)
 		}
 		if _, statements := read(storage.Principal{OrgID: "org-1"}); statements == 0 {
-			t.Errorf("%s: an unrestricted caller's project read issued no statement; this pin lost its control", kind)
+			t.Errorf("%s: an unrestricted caller's read issued no statement; this pin lost its control", name)
+		}
+	}
+}
+
+// source_health reads an operation, not a statement: a project-only caller's
+// organization read makes no call and serves no fact; an unrestricted
+// caller's makes one.
+func TestSourceHealthIsWithheldFromAProjectOnlyCaller(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		principal storage.Principal
+		calls     int
+	}{{projectOnlyFactPrincipal(), 0}, {storage.Principal{OrgID: "org-1"}, 1}} {
+		caller := &fakeOperationCaller{outcome: devhealthfacts.OperationOutcome{Served: true, Complete: true, Data: sourceHealthData(
+			`{"provider":"github","scope":"git","lastSyncAt":"2026-10-08T01:00:00Z","lastFailure":null}`)}}
+		result := readSourceHealth(t, sourceHealthProvider(t, sourceHealthHolder(caller)), tc.principal, organizationSubject("org-1"))
+		if caller.calls != tc.calls || (tc.calls == 0 && len(result.Facts) != 0) {
+			t.Errorf("%v: %d operation calls and %d facts, want %d calls", tc.principal.ProjectScopes, caller.calls, len(result.Facts), tc.calls)
 		}
 	}
 }

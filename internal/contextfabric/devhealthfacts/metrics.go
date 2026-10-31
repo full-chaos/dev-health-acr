@@ -225,7 +225,7 @@ func (p *MetricsProvider) ReadFacts(ctx context.Context, principal storage.Princ
 		projectReachedTeams = reachedTeams
 	}
 
-	if projectSubjects := subjectsOfKind(query.Subjects, contextfabric.SubjectProject); len(projectSubjects) > 0 && !projectTeamRollupWithheld(principal) {
+	if projectSubjects := subjectsOfKind(query.Subjects, contextfabric.SubjectProject); len(projectSubjects) > 0 && !projectOnlyWithheld(principal) {
 		rowCount, rejected, scanErr := p.readProjectMetrics(ctx, orgID, projectSubjects, &facts, timeBound)
 		if scanErr != nil {
 			return contextfabric.FactProviderResult{}, readFailure("query project metrics", scanErr)
