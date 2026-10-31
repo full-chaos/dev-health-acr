@@ -178,7 +178,7 @@ func producerGrammars() []producerGrammar {
 		// work item, pull request, CI run, deployment: <repo>:<one id>; the
 		// catalog's locator is the one id, read in the ref's repository.
 		{kind: contractsv1.ContextFabricEvidenceEntityWorkItem, shape: "concat/2", repoAnchored: true, rowQuery: "work_items.v1", keyColumns: []string{"repo_id", "work_item_id"}, columns: []string{"repo_id", "work_item_id"}, sites: sites(
-			facts+"identity.go|ReadFacts*2", facts+"workitems.go|ReadFacts*3", source+"tables.go|queryWorkItems",
+			facts+"identity.go|ReadFacts*2", facts+"workitems.go|ReadFacts*3", source+"tables.go|scanWorkItemRow",
 			source+"issue_pull_request_link.go|queryIssuePullRequestLinks", source+"teams_projects_edges.go|querySubjectProjectMemberships", "internal/contextfabric/work_item_payload.go|canonicalWorkItemEvidenceRef")},
 		{kind: contractsv1.ContextFabricEvidenceEntityWorkItem, shape: "sql/1", rowQuery: "work_items.v1", keyColumns: []string{"work_item_id"}, columns: []string{"work_item_id"}, keyExceptions: readRepository, sites: sites(catalog)},
 		{kind: contractsv1.ContextFabricEvidenceEntityPullRequest, shape: "concat/2", repoAnchored: true, rowQuery: "pull_requests.v1", keyColumns: []string{"repo_id", "number"}, columns: []string{"repo_id", "number"}, sites: sites(

@@ -217,3 +217,28 @@ func TestAMembershipRowForAnotherWorkItemIsNeverAttached(t *testing.T) {
 		}
 	}
 }
+
+// Codex r2: EncodeSegment does not escape '|', and the contract refuses '|'
+// in every authorization value. A project whose provider or id holds one is
+// left out (the work item states the set without it), so the page's batch
+// stays valid instead of failing every work item on it.
+func TestAProjectWhoseIdentityHoldsASeparatorIsLeftOut(t *testing.T) {
+	t.Parallel()
+	at := time.Date(2026, 10, 31, 9, 0, 0, 0, time.UTC)
+	client := &fakeClient{tables: chaos12226Tables(at, [][]any{
+		membershipRow("repo-1", "WIDGET-101", "gh|org", "P-1", 1),
+		membershipRow("repo-1", "WIDGET-101", "github", "P|2", 1),
+		membershipRow("repo-1", "WIDGET-101", "github", "P-3", 1),
+	}, nil)}
+	batch, err := chaos12226Batch(t, client, true)
+	if err != nil {
+		t.Fatalf("next projection batch: %v", err)
+	}
+	entity, found := chaos12226WorkItems(batch)["work_item.v2:repo-1:WIDGET-101"]
+	if !found || entity.ProjectIdentities == nil {
+		t.Fatalf("WIDGET-101 not projected with a stated set: %+v", entity)
+	}
+	if !reflect.DeepEqual(*entity.ProjectIdentities, []string{"project.v2:github:P-3"}) {
+		t.Fatalf("ProjectIdentities = %v, want only [project.v2:github:P-3]", *entity.ProjectIdentities)
+	}
+}

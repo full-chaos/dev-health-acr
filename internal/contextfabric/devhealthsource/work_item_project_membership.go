@@ -173,11 +173,7 @@ func readWorkItemProjectMemberships(ctx context.Context, client contextpacket.Cl
 FROM project_membership_presence AS m
 LEFT JOIN ` + resolvedProjectsSubquery + ` AS p ON p.provider = m.provider AND p.join_key = m.project_id
 WHERE m.org_id = {org_id:String} AND m.subject_kind = 'work_item' AND (` + strings.Join(terms, " OR ") + `)`
-		rows, err := client.Query(ctx, statement, bindings)
-		if err != nil {
-			return nil, err
-		}
-		if err := scanWorkItemMembershipRows(rows, sets); err != nil {
+		if err := readWorkItemMembershipChunk(ctx, client, statement, bindings, sets); err != nil {
 			return nil, err
 		}
 	}
@@ -188,7 +184,13 @@ WHERE m.org_id = {org_id:String} AND m.subject_kind = 'work_item' AND (` + strin
 	return sets, nil
 }
 
-func scanWorkItemMembershipRows(rows contextpacket.ClickHouseRowScanner, sets map[workItemKey][]string) error {
+// readWorkItemMembershipChunk runs one membership statement and adds every
+// row that names exactly one project to sets.
+func readWorkItemMembershipChunk(ctx context.Context, client contextpacket.ClickHouseQueryClient, statement string, bindings []contextpacket.ClickHouseBinding, sets map[workItemKey][]string) error {
+	rows, err := client.Query(ctx, statement, bindings)
+	if err != nil {
+		return err
+	}
 	defer rows.Close()
 	seen := map[workItemKey]map[string]bool{}
 	for rows.Next() {
@@ -208,7 +210,12 @@ func scanWorkItemMembershipRows(rows contextpacket.ClickHouseRowScanner, sets ma
 		if err != nil {
 			return err
 		}
-		if omitted {
+		// The contract refuses '|' in every authorization value (it is the
+		// separator a delimited backend uses), and EncodeSegment does not
+		// escape it. A project whose provider or id holds one cannot be
+		// stated; it is left out, like an unresolved one, so the work item's
+		// batch stays valid instead of failing the whole page.
+		if omitted || strings.ContainsRune(projectCanonicalID, '|') {
 			continue
 		}
 		if seen[key] == nil {

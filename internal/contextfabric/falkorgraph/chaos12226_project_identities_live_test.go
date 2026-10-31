@@ -44,6 +44,9 @@ func TestLiveWorkItemProjectIdentitiesRoundTripThroughFalkorDB(t *testing.T) {
 			Entities: entities, Relationships: relationships, Contents: []contextfabric.ContentProjection{},
 			Episodes: []contextfabric.EpisodeProjection{}, Tombstones: []contextfabric.ProjectionTombstone{},
 		}
+		if entities == nil {
+			batch.Entities = []contextfabric.EntityProjection{}
+		}
 		if relationships == nil {
 			batch.Relationships = []contextfabric.RelationshipProjection{}
 		}
