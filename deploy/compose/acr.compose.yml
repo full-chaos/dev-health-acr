@@ -14,6 +14,8 @@ services:
       ACR_MIGRATION_DB_PASSWORD_FILE: /run/secrets/acr_migration_db_password
       ACR_PURGE_DB_USER: ${ACR_PURGE_DB_USER:-}
       ACR_PURGE_DB_PASSWORD: ${ACR_PURGE_DB_PASSWORD:-}
+      ACR_RETENTION_DB_USER: ${ACR_RETENTION_DB_USER:-}
+      ACR_RETENTION_DB_PASSWORD: ${ACR_RETENTION_DB_PASSWORD:-}
     secrets: [acr_postgres_password, acr_runtime_db_password, acr_migration_db_password]
     volumes:
       - ./deploy/compose/acr-db-init.sh:/usr/local/bin/acr-db-init:ro
@@ -53,6 +55,8 @@ services:
       ACR_ENABLE_EPISODE_WRITEBACK: ${ACR_ENABLE_EPISODE_WRITEBACK:-false}
       ACR_PURGE_DB_USER: ${ACR_PURGE_DB_USER:-}
       ACR_PURGE_DB_PASSWORD: ${ACR_PURGE_DB_PASSWORD:-}
+      ACR_RETENTION_DB_USER: ${ACR_RETENTION_DB_USER:-}
+      ACR_RETENTION_DB_PASSWORD: ${ACR_RETENTION_DB_PASSWORD:-}
     secrets: [acr_postgres_password, acr_runtime_db_password, acr_migration_db_password]
     volumes:
       - ./deploy/compose/acr-db-init.sh:/usr/local/bin/acr-db-init:ro
@@ -76,6 +80,10 @@ services:
       ACR_CLICKHOUSE_DSN_FILE: /run/secrets/acr_clickhouse_dsn
       ACR_EVIDENCE_ID_ACTIVE_KID_FILE: /run/secrets/acr_evidence_active_kid
       ACR_EVIDENCE_ID_KEYS_FILE: /run/secrets/acr_evidence_keys
+      # CHAOS-11952: Ask Dev retention, off by default. On, it needs the DSN of
+      # the retention role acr-db-init creates from ACR_RETENTION_DB_USER.
+      ACR_ASK_DEV_RETENTION_ENABLED: ${ACR_ASK_DEV_RETENTION_ENABLED:-false}
+      ACR_POSTGRES_RETENTION_DSN: ${ACR_POSTGRES_RETENTION_DSN:-}
     secrets: [acr_runtime_dsn, acr_clickhouse_dsn, acr_evidence_active_kid, acr_evidence_keys]
     depends_on:
       postgres: { condition: service_healthy }

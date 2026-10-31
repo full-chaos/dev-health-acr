@@ -14,6 +14,10 @@ set -eu
 : "${ACR_OAUTH_DEV_BROWSER_REDIRECT_URIS:=}"
 # The org purge runs as its own role. It exists only when an operator names one.
 : "${ACR_PURGE_DB_USER:=}"
+# The Ask Dev retention job runs as its own role (CHAOS-11952). It exists only
+# when an operator names one; acr-api uses it only with
+# ACR_ASK_DEV_RETENTION_ENABLED on.
+: "${ACR_RETENTION_DB_USER:=}"
 
 secret_value() {
   name="$1"
@@ -86,6 +90,18 @@ if [ -n "$ACR_PURGE_DB_USER" ]; then
   purge_password="$(secret_value ACR_PURGE_DB_PASSWORD)"
   purge_enabled=true
 fi
+retention_enabled=false
+retention_password=""
+if [ -n "$ACR_RETENTION_DB_USER" ]; then
+  # The retention job's privileges (DELETE on the Ask Dev backing set) must
+  # never reach a role the runtime, the migrations or the purge use.
+  if [ "$ACR_RETENTION_DB_USER" = "$ACR_RUNTIME_DB_USER" ] || [ "$ACR_RETENTION_DB_USER" = "$ACR_MIGRATION_DB_USER" ] || [ "$ACR_RETENTION_DB_USER" = "$POSTGRES_USER" ] || [ "$ACR_RETENTION_DB_USER" = "$ACR_PURGE_DB_USER" ]; then
+    printf 'ACR_RETENTION_DB_USER must be a role of its own: it equals the runtime, migration, admin or purge role\n' >&2
+    exit 2
+  fi
+  retention_password="$(secret_value ACR_RETENTION_DB_PASSWORD)"
+  retention_enabled=true
+fi
 ACR_MIGRATION_DB_PASSWORD="$(secret_value ACR_MIGRATION_DB_PASSWORD)"
 
 mode="${1:-roles}"
@@ -136,7 +152,8 @@ psql -v ON_ERROR_STOP=1 -h "$POSTGRES_HOST" -p "$POSTGRES_PORT" -U "$POSTGRES_US
   -v acr_db_name="$ACR_DB_NAME" \
   -v runtime_user="$ACR_RUNTIME_DB_USER" -v runtime_password="$ACR_RUNTIME_DB_PASSWORD" \
   -v migration_user="$ACR_MIGRATION_DB_USER" -v migration_password="$ACR_MIGRATION_DB_PASSWORD" \
-  -v purge_enabled="$purge_enabled" -v purge_user="$ACR_PURGE_DB_USER" -v purge_password="$purge_password" <<'SQL'
+  -v purge_enabled="$purge_enabled" -v purge_user="$ACR_PURGE_DB_USER" -v purge_password="$purge_password" \
+  -v retention_enabled="$retention_enabled" -v retention_user="$ACR_RETENTION_DB_USER" -v retention_password="$retention_password" <<'SQL'
 SELECT format('CREATE ROLE %I LOGIN PASSWORD %L', :'runtime_user', :'runtime_password')
 WHERE NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = :'runtime_user') \gexec
 SELECT format('CREATE ROLE %I LOGIN PASSWORD %L', :'migration_user', :'migration_password')
@@ -156,6 +173,13 @@ WHERE NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = :'purge_user') \gexec
 SELECT format('ALTER ROLE %I LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS NOINHERIT PASSWORD %L', :'purge_user', :'purge_password') \gexec
 SELECT format('REVOKE ALL PRIVILEGES ON DATABASE %I FROM %I', :'acr_db_name', :'purge_user') \gexec
 SELECT format('GRANT CONNECT ON DATABASE %I TO %I', :'acr_db_name', :'purge_user') \gexec
+\endif
+\if :retention_enabled
+SELECT format('CREATE ROLE %I LOGIN PASSWORD %L', :'retention_user', :'retention_password')
+WHERE NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = :'retention_user') \gexec
+SELECT format('ALTER ROLE %I LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS NOINHERIT PASSWORD %L', :'retention_user', :'retention_password') \gexec
+SELECT format('REVOKE ALL PRIVILEGES ON DATABASE %I FROM %I', :'acr_db_name', :'retention_user') \gexec
+SELECT format('GRANT CONNECT ON DATABASE %I TO %I', :'acr_db_name', :'retention_user') \gexec
 \endif
 SQL
 
@@ -178,7 +202,8 @@ if [ "$mode" = runtime-acl ]; then
     -v runtime_user="$ACR_RUNTIME_DB_USER" -v migration_user="$ACR_MIGRATION_DB_USER" \
     -v episode_writeback="$ACR_ENABLE_EPISODE_WRITEBACK" -v workload_token_exchange="$workload_token_exchange" \
     -v browser_client="$browser_client" -v credential_purge="$credential_purge" \
-    -v purge_enabled="$purge_enabled" -v purge_user="$ACR_PURGE_DB_USER" <<'SQL'
+    -v purge_enabled="$purge_enabled" -v purge_user="$ACR_PURGE_DB_USER" \
+    -v retention_enabled="$retention_enabled" -v retention_user="$ACR_RETENTION_DB_USER" <<'SQL'
 REVOKE USAGE, CREATE ON SCHEMA acr FROM PUBLIC;
 REVOKE USAGE, CREATE ON SCHEMA acr FROM :"runtime_user";
 ALTER SCHEMA acr OWNER TO :"migration_user";
@@ -196,6 +221,11 @@ GRANT USAGE ON SCHEMA acr TO :"runtime_user";
 REVOKE ALL PRIVILEGES ON ALL TABLES IN SCHEMA acr FROM :"purge_user";
 REVOKE ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA acr FROM :"purge_user";
 GRANT USAGE ON SCHEMA acr TO :"purge_user";
+\endif
+\if :retention_enabled
+REVOKE ALL PRIVILEGES ON ALL TABLES IN SCHEMA acr FROM :"retention_user";
+REVOKE ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA acr FROM :"retention_user";
+GRANT USAGE ON SCHEMA acr TO :"retention_user";
 \endif
 
 -- BEGIN GENERATED RUNTIME GRANTS (internal/dbacl; regenerate with DBACL_WRITE=1 go test ./internal/dbacl)
@@ -454,6 +484,32 @@ REVOKE SELECT, INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER ON TABLE ac
 GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE acr.context_fabric_org_purge_markers TO :"purge_user";
 \endif
 -- END GENERATED PURGE GRANTS
+
+-- BEGIN GENERATED RETENTION GRANTS (internal/dbacl; regenerate with DBACL_WRITE=1 go test ./internal/dbacl)
+\if :retention_enabled
+-- SELECT the due threads and the unit's thread row, DELETE an expired thread: internal/contextfabric/pginvestigation/retention.go dueRetentionThreads, sweepRetentionThread
+REVOKE SELECT, INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER ON TABLE acr.context_fabric_threads FROM :"retention_user";
+GRANT SELECT, DELETE ON TABLE acr.context_fabric_threads TO :"retention_user";
+-- SELECT the unit's records (FOR UPDATE, which needs UPDATE) and the live-record rule, UPDATE the T1 erase, DELETE the expired thread's records and a record with no thread: pginvestigation/retention.go
+REVOKE SELECT, INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER ON TABLE acr.context_fabric_investigation_submissions FROM :"retention_user";
+GRANT SELECT, UPDATE, DELETE ON TABLE acr.context_fabric_investigation_submissions TO :"retention_user";
+-- DELETE the results no live record names (its WHERE reads the row): pginvestigation/retention.go removeRetainedResults; the feedback goes by cascade, as the owner
+REVOKE SELECT, INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER ON TABLE acr.context_fabric_investigation_results FROM :"retention_user";
+GRANT SELECT, DELETE ON TABLE acr.context_fabric_investigation_results TO :"retention_user";
+-- DELETE a deleted thread's event logs before the erase rewrites the reserved ids: pginvestigation/retention.go sweepRetentionThread; an expired record's log goes by cascade, as the owner
+REVOKE SELECT, INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER ON TABLE acr.context_fabric_investigation_run_events FROM :"retention_user";
+GRANT SELECT, DELETE ON TABLE acr.context_fabric_investigation_run_events TO :"retention_user";
+-- DELETE the selections made on a removed result: pginvestigation/retention.go removeRetainedResults
+REVOKE SELECT, INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER ON TABLE acr.context_fabric_clarification_selections FROM :"retention_user";
+GRANT SELECT, DELETE ON TABLE acr.context_fabric_clarification_selections TO :"retention_user";
+-- DELETE the selections made on a removed result: pginvestigation/retention.go removeRetainedResults
+REVOKE SELECT, INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER ON TABLE acr.context_fabric_structure_selections FROM :"retention_user";
+GRANT SELECT, DELETE ON TABLE acr.context_fabric_structure_selections TO :"retention_user";
+-- DELETE the claims on a removed result: pginvestigation/retention.go removeRetainedResults
+REVOKE SELECT, INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER ON TABLE acr.context_fabric_structure_supersession_claims FROM :"retention_user";
+GRANT SELECT, DELETE ON TABLE acr.context_fabric_structure_supersession_claims TO :"retention_user";
+\endif
+-- END GENERATED RETENTION GRANTS
 
 ALTER DEFAULT PRIVILEGES FOR ROLE :"migration_user" IN SCHEMA acr REVOKE SELECT, INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER ON TABLES FROM PUBLIC;
 ALTER DEFAULT PRIVILEGES FOR ROLE :"migration_user" IN SCHEMA acr REVOKE ALL ON TABLES FROM :"runtime_user";
