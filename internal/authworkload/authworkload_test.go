@@ -120,13 +120,17 @@ func TestBuildDoesNotNeedTheSubjectFileOrTheExchangeAtStart(t *testing.T) {
 func TestBuildFailsClosedOnABadConfig(t *testing.T) {
 	good := config.AuthWorkloadConfig{ExchangeURL: "https://auth-service.example.test", Issuer: testIssuer, SubjectFile: "/var/run/secrets/dev-health/auth-workload/token"}
 	for name, mutate := range map[string]func(*config.AuthWorkloadConfig){
-		"no issuer":              func(c *config.AuthWorkloadConfig) { c.Issuer = "" },
-		"http issuer":            func(c *config.AuthWorkloadConfig) { c.Issuer = "http://auth.example.test" },
-		"no exchange url":        func(c *config.AuthWorkloadConfig) { c.ExchangeURL = "" },
-		"http without the allow": func(c *config.AuthWorkloadConfig) { c.ExchangeURL = "http://auth-service.example.test" },
-		"url with a path":        func(c *config.AuthWorkloadConfig) { c.ExchangeURL = "https://auth-service.example.test/internal" },
-		"no subject":             func(c *config.AuthWorkloadConfig) { c.SubjectFile = "" },
-		"two subjects":           func(c *config.AuthWorkloadConfig) { c.BootstrapFile = "/run/secrets/bootstrap" },
+		"no issuer":               func(c *config.AuthWorkloadConfig) { c.Issuer = "" },
+		"http issuer":             func(c *config.AuthWorkloadConfig) { c.Issuer = "http://auth.example.test" },
+		"no exchange url":         func(c *config.AuthWorkloadConfig) { c.ExchangeURL = "" },
+		"http without the allow":  func(c *config.AuthWorkloadConfig) { c.ExchangeURL = "http://auth-service.example.test" },
+		"url with a path":         func(c *config.AuthWorkloadConfig) { c.ExchangeURL = "https://auth-service.example.test/internal" },
+		"no subject":              func(c *config.AuthWorkloadConfig) { c.SubjectFile = "" },
+		"two subjects":            func(c *config.AuthWorkloadConfig) { c.BootstrapFile = "/run/secrets/bootstrap" },
+		"port above range":        func(c *config.AuthWorkloadConfig) { c.ExchangeURL = "https://auth-service.example.test:99999" },
+		"empty host label":        func(c *config.AuthWorkloadConfig) { c.ExchangeURL = "https://auth..service" },
+		"issuer port above range": func(c *config.AuthWorkloadConfig) { c.Issuer = "https://auth.example.test:99999" },
+		"issuer empty host label": func(c *config.AuthWorkloadConfig) { c.Issuer = "https://auth..example" },
 	} {
 		t.Run(name, func(t *testing.T) {
 			cfg := good

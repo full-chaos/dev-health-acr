@@ -1,0 +1,107 @@
+# field	allowPlainHTTP	value	verdict	note
+exchange	false	https://auth-service.example.test	accept	dns name
+exchange	false	https://auth-service	accept	single label service name
+exchange	false	https://auth-service.example.test:8095	accept	host:port
+exchange	false	https://auth-service.example.test:1	accept	port 1
+exchange	false	https://auth-service.example.test:65535	accept	port 65535
+exchange	false	https://10.1.2.3	accept	IPv4
+exchange	false	https://10.1.2.3:8095	accept	IPv4:port
+exchange	false	https://aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.example.test	accept	label of 63
+exchange	false	https://a-b.c-d.example.test	accept	inner hyphens
+exchange	false	https://1abc.example.test	accept	label starting with a digit
+exchange	false	https://auth-service.example.test:0	refuse	port 0
+exchange	false	https://auth-service.example.test:65536	refuse	port 65536
+exchange	false	https://auth-service.example.test:99999	refuse	port 99999
+exchange	false	https://auth-service.example.test:100000	refuse	port 100000
+exchange	false	https://auth-service.example.test:abc	refuse	port abc
+exchange	false	https://auth-service.example.test:12a	refuse	port 12a
+exchange	false	https://auth-service.example.test:-1	refuse	port -1
+exchange	false	https://auth-service.example.test:	refuse	port empty
+exchange	false	https://a..b	refuse	empty label
+exchange	false	https://auth..service	refuse	empty label
+exchange	false	https://.example.test	refuse	leading dot
+exchange	false	https://example.test.	refuse	trailing dot
+exchange	false	https://example.test.:8095	refuse	trailing dot with port
+exchange	false	https://aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.example.test	refuse	label of 64
+exchange	false	https://-a.example.test	refuse	leading hyphen
+exchange	false	https://a-.example.test	refuse	trailing hyphen
+exchange	false	https://a.-b.example.test	refuse	leading hyphen, inner label
+exchange	false	https://a_b.example.test	refuse	underscore
+exchange	false	https://a b.example.test	refuse	space
+exchange	false	https://	refuse	no host
+exchange	false	https://:8095	refuse	port only
+exchange	false	https://aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa	refuse	name over 253 characters
+exchange	false	https://user@auth-service.example.test	refuse	userinfo
+exchange	false	https://user:pw@auth-service.example.test	refuse	userinfo with password
+exchange	false	https://auth-service.example.test?x=1	refuse	query
+exchange	false	https://auth-service.example.test?	refuse	empty query
+exchange	false	https://auth-service.example.test#frag	refuse	fragment
+exchange	false	https://auth-service.example.test#	refuse	empty fragment
+exchange	false	ftp://auth-service.example.test	refuse	scheme
+exchange	false	auth-service.example.test	refuse	no scheme
+exchange	false	//auth-service.example.test	refuse	no scheme, slashes
+issuer	false	https://auth-service.example.test	accept	dns name
+issuer	false	https://auth-service	accept	single label service name
+issuer	false	https://auth-service.example.test:8095	accept	host:port
+issuer	false	https://auth-service.example.test:1	accept	port 1
+issuer	false	https://auth-service.example.test:65535	accept	port 65535
+issuer	false	https://10.1.2.3	accept	IPv4
+issuer	false	https://10.1.2.3:8095	accept	IPv4:port
+issuer	false	https://aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.example.test	accept	label of 63
+issuer	false	https://a-b.c-d.example.test	accept	inner hyphens
+issuer	false	https://1abc.example.test	accept	label starting with a digit
+issuer	false	https://auth-service.example.test:0	refuse	port 0
+issuer	false	https://auth-service.example.test:65536	refuse	port 65536
+issuer	false	https://auth-service.example.test:99999	refuse	port 99999
+issuer	false	https://auth-service.example.test:100000	refuse	port 100000
+issuer	false	https://auth-service.example.test:abc	refuse	port abc
+issuer	false	https://auth-service.example.test:12a	refuse	port 12a
+issuer	false	https://auth-service.example.test:-1	refuse	port -1
+issuer	false	https://auth-service.example.test:	refuse	port empty
+issuer	false	https://a..b	refuse	empty label
+issuer	false	https://auth..service	refuse	empty label
+issuer	false	https://.example.test	refuse	leading dot
+issuer	false	https://example.test.	refuse	trailing dot
+issuer	false	https://example.test.:8095	refuse	trailing dot with port
+issuer	false	https://aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.example.test	refuse	label of 64
+issuer	false	https://-a.example.test	refuse	leading hyphen
+issuer	false	https://a-.example.test	refuse	trailing hyphen
+issuer	false	https://a.-b.example.test	refuse	leading hyphen, inner label
+issuer	false	https://a_b.example.test	refuse	underscore
+issuer	false	https://a b.example.test	refuse	space
+issuer	false	https://	refuse	no host
+issuer	false	https://:8095	refuse	port only
+issuer	false	https://aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa	refuse	name over 253 characters
+issuer	false	https://user@auth-service.example.test	refuse	userinfo
+issuer	false	https://user:pw@auth-service.example.test	refuse	userinfo with password
+issuer	false	https://auth-service.example.test?x=1	refuse	query
+issuer	false	https://auth-service.example.test?	refuse	empty query
+issuer	false	https://auth-service.example.test#frag	refuse	fragment
+issuer	false	https://auth-service.example.test#	refuse	empty fragment
+issuer	false	ftp://auth-service.example.test	refuse	scheme
+issuer	false	auth-service.example.test	refuse	no scheme
+issuer	false	//auth-service.example.test	refuse	no scheme, slashes
+exchange	true	http://auth-service.example.test:8080	accept	http with allowPlainHTTP
+exchange	false	http://auth-service.example.test:8080	refuse	http without allowPlainHTTP
+issuer	true	http://auth.example.test	refuse	issuer is https only
+exchange	false	https://auth-service.example.test/	accept	root path
+exchange	false	https://auth-service.example.test/internal	refuse	path
+exchange	false	https://auth-service.example.test//	refuse	double slash
+issuer	false	https://auth.example.test/tenant-a	accept	one path segment
+issuer	false	https://auth.example.test/a/b/c/d/e/f/g/h	accept	eight path segments
+issuer	false	https://auth.example.test/a/b/c/d/e/f/g/h/i	refuse	nine path segments
+issuer	false	https://auth.example.test/	refuse	trailing slash
+issuer	false	https://auth.example.test//a	refuse	empty segment
+issuer	false	https://auth.example.test/.hidden	refuse	segment starting with a dot
+issuer	false	https://auth.example.test/a%2Fb	refuse	escape in a segment
+issuer	false	https://Auth.example.test	refuse	upper-case host (the client requires lower case)
+exchange	false	https://[::1]	accept	IPv6 loopback
+exchange	false	https://[2001:db8::1]:8095	accept	IPv6:port
+exchange	false	https://[2001:DB8:0:0:0:0:0:1]	accept	IPv6 full, upper case
+exchange	false	https://[::1	refuse	unclosed bracket
+exchange	false	https://[::zz]	refuse	bad IPv6
+exchange	false	https://[:::]	refuse	bad IPv6 colons
+exchange	false	https://[fe80::1%25eth0]	refuse	IPv6 zone
+exchange	false	https://[::1]:99999	refuse	IPv6 port out of range
+exchange	false	https://[::ffff:1.2.3.4]	refuse	IPv6 with an IPv4 tail
+issuer	false	https://[::1]	refuse	the issuer shape has no IP literal for IPv6

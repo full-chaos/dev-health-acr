@@ -100,3 +100,23 @@ func TestPrepareServerStartsWhileAuthServiceIsDown(t *testing.T) {
 		t.Fatalf("an auth-service outage must not stop acr-api: created=%v err=%v", created, err)
 	}
 }
+
+// A config built around the loader (a malformed URL a loader change let through) still stops the start.
+func TestPrepareServerRefusesMalformedAuthWorkloadURLs(t *testing.T) {
+	for name, mutate := range map[string]func(*config.AuthWorkloadConfig){
+		"exchange port above range": func(c *config.AuthWorkloadConfig) { c.ExchangeURL = "https://auth-service.example.test:99999" },
+		"exchange empty host label": func(c *config.AuthWorkloadConfig) { c.ExchangeURL = "https://auth..service" },
+		"issuer port above range":   func(c *config.AuthWorkloadConfig) { c.Issuer = "https://auth.example.test:99999" },
+		"issuer empty host label":   func(c *config.AuthWorkloadConfig) { c.Issuer = "https://auth..service" },
+	} {
+		t.Run(name, func(t *testing.T) {
+			cfg := workloadStartupConfig(t, "https://auth-service.example.test", "https://auth.example.test")
+			cfg.AuthWorkload.AllowPlainHTTP = false
+			mutate(&cfg.AuthWorkload)
+			created, _, err := prepareWithWorkload(t, cfg)
+			if err == nil || created {
+				t.Fatalf("a malformed URL must stop the start: created=%v err=%v", created, err)
+			}
+		})
+	}
+}
