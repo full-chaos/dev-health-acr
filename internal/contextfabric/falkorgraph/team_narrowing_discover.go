@@ -282,6 +282,10 @@ func (s *discoverTeamScope) decide(ctx context.Context, subjects []contextfabric
 	n := s.narrowing
 	a, key, orgID := n.adapter, n.key, n.orgID
 	current := currentOwnership(s.temporal, a.now())
+	// The rule is CURRENT ownership on every axis (CHAOS-12319, as the
+	// repository walk's narrowing reads it): an ownership edge is read at the
+	// adapter clock, never at a historical question's instant.
+	owned := currentOwnership(temporalFilter{}, a.now())
 	budget := exactNameCandidateQueryLimit
 
 	// Repositories reached by the pull requests and issues to decide, plus the
@@ -327,7 +331,7 @@ func (s *discoverTeamScope) decide(ctx context.Context, subjects []contextfabric
 			repos = append(repos, repo)
 		}
 	}
-	repoOwners, repoOwnersCut, err := a.walkStepHits(ctx, key, orgID, repos, repositoryOwnersStep, current, budget)
+	repoOwners, repoOwnersCut, err := a.walkStepHits(ctx, key, orgID, repos, repositoryOwnersStep, owned, budget)
 	if err != nil {
 		return err
 	}
@@ -358,7 +362,7 @@ func (s *discoverTeamScope) decide(ctx context.Context, subjects []contextfabric
 			projects = append(projects, project)
 		}
 	}
-	projectOwners, projectOwnersCut, err := a.walkStepHits(ctx, key, orgID, projects, projectOwnersStep, current, budget)
+	projectOwners, projectOwnersCut, err := a.walkStepHits(ctx, key, orgID, projects, projectOwnersStep, owned, budget)
 	if err != nil {
 		return err
 	}
