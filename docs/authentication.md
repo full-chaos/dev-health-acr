@@ -288,8 +288,9 @@ Routes: `GET /.well-known/oauth-authorization-server`, `GET /authorize`,
   file (read fresh on every call; a file it cannot read stops the call). Its
   `acr-mcp http serving` line carries `mcp_hop`, and acr-api's startup
   configuration line carries `mcp_hop_required`. Helm: roll `acrMcp.hop.enabled`
-  first (acr-mcp sends the hop; an older acr-api ignores it), then
-  `config.mcpHop.required` (needs `config.oauth.enabled`, `acrMcp.enabled`,
+  first (acr-mcp sends the hop; an older acr-api ignores it) and wait until
+  that rollout is complete (every acr-mcp pod ready with the hop; an old pod
+  still serving would be refused), then `config.mcpHop.required` (needs `config.oauth.enabled`, `acrMcp.enabled`,
   `acrMcp.hop.enabled`; it grants acr-api TokenReview access). Compose has no
   Kubernetes, so the hop is off there.
 - Each OAuth request writes one `acr-api oauth step` line (step, outcome,

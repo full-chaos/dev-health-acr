@@ -196,8 +196,10 @@ func (a *Authenticator) MiddlewareFor(allowWebAssertions bool, next http.Handler
 				return
 			default:
 				// The check could not run (TokenReview unreachable): fail
-				// closed, loudly, and never as the caller's fault.
-				a.logger.ErrorContext(r.Context(), "mcp hop check failed", "request_id", logsanitize.SanitizeLogAttr(requestID(r)), "failure_class", "mcp_hop_validator", "error", logsanitize.SanitizeLogAttr(err.Error()))
+				// closed, loudly, and never as the caller's fault. The line
+				// names the class only: the validator's error text is not
+				// logged (it can carry the API server address).
+				a.logger.ErrorContext(r.Context(), "mcp hop check failed", "request_id", logsanitize.SanitizeLogAttr(requestID(r)), "failure_class", "mcp_hop_validator")
 				a.writeError(w, r, http.StatusServiceUnavailable, "upstream_unavailable", "Credential service is temporarily unavailable", true, nil)
 				return
 			}
