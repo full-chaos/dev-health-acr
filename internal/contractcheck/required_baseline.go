@@ -20,13 +20,15 @@ type RequiredBaselineOptions struct {
 	Out  io.Writer
 }
 
-// CheckRequiredAgainstTag fails when a published schema lists a field in
-// `required` that the same schema neither required nor declared in
-// `properties` (at the same path) at the previous prod roll tag (prod-rev<N>,
-// else v*). A field is optional for one release first; it may become required
-// in the next: a field the baseline declared optional may be required now, and
-// a field new since the baseline may not (CHAOS-12218). With no tag the check
-// passes and says so.
+// CheckRequiredAgainstTag fails when a published schema requires a field at an
+// instance location where the same schema at the previous prod roll tag
+// (prod-rev<N>, else v*) neither required nor declared it (locationFacts,
+// newlyRequiredAt). A field is optional for one release first; it may become
+// required in the next: a field the baseline declared optional there may be
+// required now, and a field new since the baseline may not (CHAOS-12218),
+// however the requirement is reached -- a $ref, a combinator branch, items,
+// additionalProperties, or a baseline of true at any depth (CHAOS-12222).
+// With no tag the check passes and says so.
 func CheckRequiredAgainstTag(options RequiredBaselineOptions) error {
 	root, err := findRoot(options.Root)
 	if err != nil {
@@ -48,15 +50,13 @@ func CheckRequiredAgainstTag(options RequiredBaselineOptions) error {
 	if err != nil {
 		return err
 	}
-	var problems []string
-	compared := 0
+	// Every published schema at the tag and at HEAD, by file name: a $ref
+	// names another file by its base name (splitSchemaRef), so the facts of
+	// one schema can come from another (context_fabric_common.v1).
+	baseDocs, curDocs := schemaDocs{}, schemaDocs{}
+	var names []string
 	for _, name := range strings.Split(strings.TrimSpace(files), "\n") {
 		if !strings.HasSuffix(name, ".schema.json") {
-			continue
-		}
-		current, err := decodeJSONFile(filepath.Join(root, filepath.FromSlash(name)))
-		if err != nil {
-			// Deleted or renamed since the tag: removal is not a required-field change.
 			continue
 		}
 		raw, err := gitOutput(root, "show", tag+":"+name)
@@ -69,9 +69,39 @@ func CheckRequiredAgainstTag(options RequiredBaselineOptions) error {
 		if err := decoder.Decode(&baseline); err != nil {
 			return fmt.Errorf("%s at %s: %w", name, tag, err)
 		}
+		baseDocs[filepath.Base(name)] = baseline
+		names = append(names, name)
+	}
+	current, err := filepath.Glob(filepath.Join(root, filepath.FromSlash(publishedSchemaDir), "*", "*", "*.schema.json"))
+	if err != nil {
+		return err
+	}
+	for _, path := range current {
+		doc, err := decodeJSONFile(path)
+		if err != nil {
+			return err
+		}
+		curDocs[filepath.Base(path)] = doc
+	}
+	var problems []string
+	compared := 0
+	for _, name := range names {
+		file := filepath.Base(name)
+		if _, ok := curDocs[file]; !ok {
+			// Deleted or renamed since the tag: removal is not a required-field change.
+			continue
+		}
+		baseFacts, err := collectLocationFacts(baseDocs, file)
+		if err != nil {
+			return fmt.Errorf("%s at %s: %w", name, tag, err)
+		}
+		curFacts, err := collectLocationFacts(curDocs, file)
+		if err != nil {
+			return fmt.Errorf("%s: %w", name, err)
+		}
 		compared++
-		for _, added := range newlyRequired(baseline, current, "") {
-			problems = append(problems, fmt.Sprintf("%s: field %q at %q is required now but was neither required nor declared in properties at %s; make it optional for one release first", name, added.field, added.path, tag))
+		for _, added := range newlyRequiredAt(baseFacts, curFacts) {
+			problems = append(problems, fmt.Sprintf("%s: field %q at instance location %q is required now but was neither required nor declared there at %s; make it optional for one release first", name, added.field, displayLocation(added.location), tag))
 		}
 	}
 	if len(problems) > 0 {
@@ -82,90 +112,424 @@ func CheckRequiredAgainstTag(options RequiredBaselineOptions) error {
 	return nil
 }
 
-type addedRequired struct{ path, field string }
+// schemaDocs is a set of published schema documents by file base name.
+type schemaDocs map[string]any
 
-// newlyRequired walks current beside baseline. Where both hold an object at
-// the same path, a `required` entry in current is reported when the baseline
-// object at that path neither required it nor declared it in its own
-// `properties` (a property whose schema is false counts as undeclared). A
-// field declared elsewhere in the baseline (another path, a $ref, an allOf
-// branch) counts as undeclared here. A baseline of true at the path is an
-// object with nothing declared. A path absent from the baseline, or false
-// there, is a new subschema and is skipped.
-func newlyRequired(baseline, current any, path string) []addedRequired {
-	var found []addedRequired
-	switch cur := current.(type) {
+// locationFacts is what one published schema says about each instance
+// location, a JSON pointer over the instance: "" is the body, "/name" a
+// property, "/[]" any array item, "/~{*}" any additional property and
+// "/~{<pattern>}" a pattern property. Every subschema that applies to a
+// location contributes: the node itself, its $ref target (local or in another
+// published file), and its allOf, anyOf, oneOf, then, else and
+// dependentSchemas branches. An if branch is a condition, not a constraint,
+// and a not branch constrains nothing it names, so neither is read; $defs are
+// read only through a $ref (CHAOS-12222).
+//
+// A requirement under a then branch applies only to bodies that carry every
+// field its if requires; one under dependentRequired or dependentSchemas only
+// to bodies that carry the key. Each occurrence keeps those trigger fields,
+// so the comparison can tell a requirement no old body can trigger.
+type locationFacts struct {
+	required map[string]map[string][][]trigger // occurrences of each required field, each with its triggers
+	declared map[string]map[string]bool        // fields some applicable subschema declares in properties (false excluded)
+	shaped   map[string]bool                   // some applicable subschema has a properties map
+	seen     map[string]bool                   // some subschema other than false applies
+	groups   []alternativeGroup                // anyOf and oneOf branches' own requirements
+}
+
+// alternativeGroup is an anyOf or oneOf at a location: a body must meet one
+// alternative, each being the fields its branch itself requires there. Its
+// requirements are not single required fields, so the comparison weighs the
+// group as a whole: adding an alternative widens, it never tightens.
+type alternativeGroup struct {
+	location     string
+	alternatives [][]string
+	triggers     []trigger
+}
+
+// maxLocationDepth bounds the walk of a recursive schema. A recursion
+// repeats the facts it already produced, so nothing is lost.
+const maxLocationDepth = 64
+
+// trigger is a field that must be present at a location for a conditional
+// requirement to apply.
+type trigger struct{ location, field string }
+
+func collectLocationFacts(docs schemaDocs, file string) (*locationFacts, error) {
+	facts := &locationFacts{required: map[string]map[string][][]trigger{}, declared: map[string]map[string]bool{}, shaped: map[string]bool{}, seen: map[string]bool{}}
+	return facts, facts.walk(docs, file, docs[file], "", map[string]bool{}, 0, nil, notInAlternative)
+}
+
+// notInAlternative is the alternativeAt of a walk outside any anyOf or oneOf
+// branch. It is no location: "" is the body's own.
+const notInAlternative = "\x00"
+
+func (f *locationFacts) addRequired(location, field string, triggers []trigger) {
+	if f.required[location] == nil {
+		f.required[location] = map[string][][]trigger{}
+	}
+	f.required[location][field] = append(f.required[location][field], triggers)
+}
+
+func withTriggers(triggers []trigger, location string, fields ...string) []trigger {
+	out := append([]trigger{}, triggers...)
+	for _, field := range fields {
+		out = append(out, trigger{location: location, field: field})
+	}
+	return out
+}
+
+func addFact(set map[string]map[string]bool, location, field string) {
+	if set[location] == nil {
+		set[location] = map[string]bool{}
+	}
+	set[location][field] = true
+}
+
+func childLocation(location, name string) string {
+	return location + "/" + strings.ReplaceAll(strings.ReplaceAll(name, "~", "~0"), "/", "~1")
+}
+
+// alternativeAt is the location of the anyOf or oneOf branch being walked:
+// a requirement there belongs to the branch's alternative, not to the body.
+func (f *locationFacts) walk(docs schemaDocs, file string, node any, location string, refs map[string]bool, depth int, triggers []trigger, alternativeAt string) error {
+	if depth > maxLocationDepth {
+		return nil
+	}
+	switch schema := node.(type) {
+	case bool:
+		// true accepts any value and declares nothing; false allows none.
+		if schema {
+			f.seen[location] = true
+		}
+		return nil
 	case map[string]any:
-		base, ok := baseline.(map[string]any)
-		if !ok {
-			// A baseline schema of true accepts any value: every field this
-			// object now requires is a new constraint on bodies the baseline
-			// allowed (codex #1816 r1). Any other baseline (false, which
-			// allowed nothing here, or a non-schema) is a new subschema.
-			if accepted, isBool := baseline.(bool); !isBool || !accepted {
-				return nil
+		f.seen[location] = true
+		if raw, ok := schema["$ref"]; ok {
+			ref, ok := raw.(string)
+			if !ok {
+				return fmt.Errorf("$ref at %s must be a string", displayLocation(location))
 			}
-			base = map[string]any{}
+			target, fragment := splitSchemaRef(file, ref)
+			key := target + "#" + fragment
+			if !refs[key] {
+				doc, ok := docs[target]
+				if !ok {
+					return fmt.Errorf("unresolved $ref %q", ref)
+				}
+				resolved, err := resolveJSONPointer(doc, fragment)
+				if err != nil {
+					return fmt.Errorf("unresolved $ref %q: %w", ref, err)
+				}
+				inner := make(map[string]bool, len(refs)+1)
+				for k := range refs {
+					inner[k] = true
+				}
+				inner[key] = true
+				if err := f.walk(docs, target, resolved, location, inner, depth+1, triggers, alternativeAt); err != nil {
+					return err
+				}
+			}
 		}
-		if list, ok := cur["required"].([]any); ok {
-			had := map[string]bool{}
-			if old, ok := base["required"].([]any); ok {
-				for _, v := range old {
-					if s, ok := v.(string); ok {
-						had[s] = true
+		if location != alternativeAt {
+			for _, field := range stringList(schema["required"]) {
+				f.addRequired(location, field, triggers)
+			}
+		}
+		if dependent, ok := schema["dependentRequired"].(map[string]any); ok {
+			for key, fields := range dependent {
+				for _, field := range stringList(fields) {
+					f.addRequired(location, field, withTriggers(triggers, location, key))
+				}
+			}
+		}
+		if properties, ok := schema["properties"].(map[string]any); ok {
+			f.shaped[location] = true
+			for name, sub := range properties {
+				if allowed, isBool := sub.(bool); isBool && !allowed {
+					continue // forbidden there, never optional
+				}
+				addFact(f.declared, location, name)
+				if err := f.walk(docs, file, sub, childLocation(location, name), refs, depth+1, triggers, alternativeAt); err != nil {
+					return err
+				}
+			}
+		}
+		if patterns, ok := schema["patternProperties"].(map[string]any); ok {
+			for pattern, sub := range patterns {
+				if err := f.walk(docs, file, sub, location+"/~{"+pattern+"}", refs, depth+1, triggers, alternativeAt); err != nil {
+					return err
+				}
+			}
+		}
+		for _, key := range []string{"additionalProperties", "unevaluatedProperties"} {
+			if sub, ok := schema[key]; ok {
+				if err := f.walk(docs, file, sub, location+"/~{*}", refs, depth+1, triggers, alternativeAt); err != nil {
+					return err
+				}
+			}
+		}
+		for _, key := range []string{"items", "prefixItems", "contains", "unevaluatedItems"} {
+			switch sub := schema[key].(type) {
+			case nil:
+			case []any:
+				for _, item := range sub {
+					if err := f.walk(docs, file, item, location+"/[]", refs, depth+1, triggers, alternativeAt); err != nil {
+						return err
 					}
 				}
-			}
-			// Declared optional at the baseline: the release the field was
-			// optional in has shipped, so it may be required now.
-			// A property whose schema is false was forbidden there, never
-			// optional, so it does not count as declared.
-			if declared, ok := base["properties"].(map[string]any); ok {
-				for field, schema := range declared {
-					if allowed, isBool := schema.(bool); isBool && !allowed {
-						continue
-					}
-					had[field] = true
-				}
-			}
-			for _, v := range list {
-				if s, ok := v.(string); ok && !had[s] {
-					found = append(found, addedRequired{path: pathOrRoot(path), field: s})
+			default:
+				if err := f.walk(docs, file, sub, location+"/[]", refs, depth+1, triggers, alternativeAt); err != nil {
+					return err
 				}
 			}
 		}
-		keys := make([]string, 0, len(cur))
-		for k := range cur {
-			keys = append(keys, k)
+		if branches, ok := schema["allOf"].([]any); ok {
+			for _, branch := range branches {
+				if err := f.walk(docs, file, branch, location, refs, depth+1, triggers, alternativeAt); err != nil {
+					return err
+				}
+			}
 		}
-		sort.Strings(keys)
-		for _, k := range keys {
-			if k == "required" {
+		for _, key := range []string{"anyOf", "oneOf"} {
+			branches, ok := schema[key].([]any)
+			if !ok {
 				continue
 			}
-			if b, ok := base[k]; ok {
-				found = append(found, newlyRequired(b, cur[k], path+"/"+k)...)
+			group := alternativeGroup{location: location, triggers: triggers}
+			for _, branch := range branches {
+				group.alternatives = append(group.alternatives, directRequired(docs, file, branch, 0))
+				if err := f.walk(docs, file, branch, location, refs, depth+1, triggers, location); err != nil {
+					return err
+				}
+			}
+			f.groups = append(f.groups, group)
+		}
+		// then applies only when if matches: a body must carry every field
+		// the if requires. else applies whenever if fails, so it has none.
+		if branch, ok := schema["then"]; ok {
+			var condition []string
+			if when, ok := schema["if"].(map[string]any); ok {
+				condition = stringList(when["required"])
+			}
+			if err := f.walk(docs, file, branch, location, refs, depth+1, withTriggers(triggers, location, condition...), alternativeAt); err != nil {
+				return err
 			}
 		}
-	case []any:
-		base, ok := baseline.([]any)
-		if !ok {
-			return nil
+		if branch, ok := schema["else"]; ok {
+			if err := f.walk(docs, file, branch, location, refs, depth+1, triggers, alternativeAt); err != nil {
+				return err
+			}
 		}
-		for i := range cur {
-			if i < len(base) {
-				found = append(found, newlyRequired(base[i], cur[i], fmt.Sprintf("%s/%d", path, i))...)
+		if dependent, ok := schema["dependentSchemas"].(map[string]any); ok {
+			for key, branch := range dependent {
+				if err := f.walk(docs, file, branch, location, refs, depth+1, withTriggers(triggers, location, key), alternativeAt); err != nil {
+					return err
+				}
+			}
+		}
+	}
+	return nil
+}
+
+// directRequired is what a branch itself requires at its own location,
+// through its $ref and allOf members.
+func directRequired(docs schemaDocs, file string, node any, depth int) []string {
+	schema, ok := node.(map[string]any)
+	if !ok || depth > maxLocationDepth {
+		return nil
+	}
+	fields := stringList(schema["required"])
+	if ref, ok := schema["$ref"].(string); ok {
+		target, fragment := splitSchemaRef(file, ref)
+		if doc, ok := docs[target]; ok {
+			if resolved, err := resolveJSONPointer(doc, fragment); err == nil {
+				fields = append(fields, directRequired(docs, target, resolved, depth+1)...)
+			}
+		}
+	}
+	if members, ok := schema["allOf"].([]any); ok {
+		for _, member := range members {
+			fields = append(fields, directRequired(docs, file, member, depth+1)...)
+		}
+	}
+	return fields
+}
+
+func stringList(raw any) []string {
+	list, _ := raw.([]any)
+	out := make([]string, 0, len(list))
+	for _, v := range list {
+		if s, ok := v.(string); ok {
+			out = append(out, s)
+		}
+	}
+	return out
+}
+
+type addedRequired struct{ location, field string }
+
+// newlyRequiredAt reports each field current requires at an instance location
+// where the baseline neither required nor declared it, unless the location
+// lies under a property name new since the baseline: old producers never send
+// that property, so a new optional object may require its own members. The
+// exemption needs a named property under a baseline object that declares its
+// shape (has properties); a new item, additional property or pattern
+// property, or a property under a baseline of true, is a new constraint on
+// values old producers could already send.
+func newlyRequiredAt(baseline, current *locationFacts) []addedRequired {
+	var found []addedRequired
+	for location, fields := range current.required {
+		for field, occurrences := range fields {
+			if len(baseline.required[location][field]) > 0 || baseline.declared[location][field] {
+				continue
+			}
+			if underNewProperty(baseline, location) {
+				continue
+			}
+			if noOldBodyTriggers(baseline, occurrences) {
+				continue
+			}
+			found = append(found, addedRequired{location: location, field: field})
+		}
+	}
+	reported := map[addedRequired]bool{}
+	for _, f := range found {
+		reported[f] = true
+	}
+	for _, group := range current.groups {
+		if groupCovered(baseline, group) {
+			continue
+		}
+		for _, alternative := range group.alternatives {
+			for _, field := range alternative {
+				added := addedRequired{location: group.location, field: field}
+				if reported[added] || len(baseline.required[group.location][field]) > 0 || baseline.declared[group.location][field] {
+					continue
+				}
+				reported[added] = true
+				found = append(found, added)
 			}
 		}
 	}
 	return found
 }
 
-func pathOrRoot(path string) string {
-	if path == "" {
+// groupCovered reports whether every body the baseline accepted still meets
+// one alternative of an anyOf or oneOf, as far as required fields go. It
+// holds when the group never applies to an old body (a new property, or a
+// trigger no old body carries); when one alternative needs nothing, or only
+// fields the baseline required unconditionally there; or when a baseline
+// group at the same location had alternatives each at least as strict as one
+// of the current group's (adding an alternative widens).
+func groupCovered(baseline *locationFacts, group alternativeGroup) bool {
+	if underNewProperty(baseline, group.location) || (len(group.triggers) > 0 && noOldBodyTriggers(baseline, [][]trigger{group.triggers})) {
+		return true
+	}
+	for _, alternative := range group.alternatives {
+		met := true
+		for _, field := range alternative {
+			if !requiredUnconditionally(baseline, group.location, field) {
+				met = false
+				break
+			}
+		}
+		if met {
+			return true
+		}
+	}
+	for _, old := range baseline.groups {
+		if old.location != group.location {
+			continue
+		}
+		every := true
+		for _, oldAlternative := range old.alternatives {
+			if !someSubset(group.alternatives, oldAlternative) {
+				every = false
+				break
+			}
+		}
+		if every {
+			return true
+		}
+	}
+	return false
+}
+
+func requiredUnconditionally(baseline *locationFacts, location, field string) bool {
+	for _, triggers := range baseline.required[location][field] {
+		if len(triggers) == 0 {
+			return true
+		}
+	}
+	return false
+}
+
+// someSubset reports whether one of alternatives requires only fields of of.
+func someSubset(alternatives [][]string, of []string) bool {
+	set := map[string]bool{}
+	for _, field := range of {
+		set[field] = true
+	}
+	for _, alternative := range alternatives {
+		subset := true
+		for _, field := range alternative {
+			if !set[field] {
+				subset = false
+				break
+			}
+		}
+		if subset {
+			return true
+		}
+	}
+	return false
+}
+
+// noOldBodyTriggers reports whether every occurrence of a requirement waits
+// on a trigger field that the baseline neither required nor declared at its
+// location: an old body never carries that field, so the requirement never
+// applies to it. An unconditional occurrence always applies.
+func noOldBodyTriggers(baseline *locationFacts, occurrences [][]trigger) bool {
+	for _, triggers := range occurrences {
+		blocked := false
+		for _, t := range triggers {
+			if len(baseline.required[t.location][t.field]) == 0 && !baseline.declared[t.location][t.field] {
+				blocked = true
+				break
+			}
+		}
+		if !blocked {
+			return false
+		}
+	}
+	return true
+}
+
+func underNewProperty(baseline *locationFacts, location string) bool {
+	if location == "" {
+		return false
+	}
+	parent := ""
+	for _, segment := range strings.Split(strings.TrimPrefix(location, "/"), "/") {
+		next := parent + "/" + segment
+		if baseline.seen[next] {
+			parent = next
+			continue
+		}
+		if segment == "[]" || strings.HasPrefix(segment, "~{") {
+			return false
+		}
+		return baseline.shaped[parent]
+	}
+	return false
+}
+
+func displayLocation(location string) string {
+	if location == "" {
 		return "/"
 	}
-	return path
+	return location
 }
 
 // previousReleaseTag returns the baseline tag reachable from HEAD that does
