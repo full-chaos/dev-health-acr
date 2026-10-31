@@ -661,3 +661,19 @@ credentials) is on.
 {{- end -}}
 {{- end -}}
 {{- end -}}
+
+{{/*
+acr.validateEnvValueSources: a variable the chart renders from a value into the
+acr-api ConfigMap has ONE source. deployment.extraEnv is an env entry, and an
+env entry beats the ConfigMap (envFrom) silently, so the two together would
+leave the value unread. extraEnv alone (no value set) still renders.
+*/}}
+{{- define "acr.validateEnvValueSources" -}}
+{{- $fromValues := dict "ACR_TRUSTED_PROXY_CIDRS" (and .Values.config.trustedProxyCidrs "config.trustedProxyCidrs") "ACR_CORS_ALLOWED_ORIGINS" (and (default dict .Values.config.cors).allowedOrigins "config.cors.allowedOrigins") -}}
+{{- range $env := .Values.deployment.extraEnv -}}
+{{- $name := toString $env.name -}}
+{{- with (get $fromValues $name) -}}
+{{- fail (printf "env-source: deployment.extraEnv names %s while %s is set; set it in %s only" $name . .) -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
