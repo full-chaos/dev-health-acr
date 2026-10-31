@@ -3,6 +3,7 @@ package contextfabric
 import (
 	"testing"
 
+	"github.com/full-chaos/dev-health-acr/internal/auth"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
 )
 
@@ -25,5 +26,25 @@ func TestTheStoredResultScopeReadsAGrantAsBefore(t *testing.T) {
 		if got := classifyStoredResultPrincipalScope(storage.Principal{OrgID: "org_1", RepositoryScopes: tc.scopes}); got != tc.want {
 			t.Errorf("%s: classifyStoredResultPrincipalScope = %q, want %q", tc.name, got, tc.want)
 		}
+	}
+}
+
+// project_only reads as restricted, so its results meet the grant-digest
+// check, never the unrestricted bypass.
+func TestEveryGrantClassMapsOntoTheStoredResultScope(t *testing.T) {
+	t.Parallel()
+	want := map[auth.GrantClass]StoredResultPrincipalScope{
+		auth.GrantUnrestricted: StoredResultScopeUnrestricted,
+		auth.GrantUniversal:    StoredResultScopeUniversal,
+		auth.GrantRestricted:   StoredResultScopeRestricted,
+		auth.GrantProjectOnly:  StoredResultScopeRestricted,
+	}
+	for _, grant := range auth.GrantClassVocabulary() {
+		if got := storedResultScopeForGrant(grant); got != want[grant] {
+			t.Errorf("storedResultScopeForGrant(%s) = %q, want %q", grant, got, want[grant])
+		}
+	}
+	if storedResultScopeForGrant("bogus") != StoredResultScopeRestricted {
+		t.Error("an unknown grant class must map to restricted")
 	}
 }
