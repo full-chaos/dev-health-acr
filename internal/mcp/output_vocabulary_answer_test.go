@@ -138,6 +138,17 @@ func init() {
 			exhaustive: true,
 		},
 		outputVocabulary{
+			// CHAOS-12160: which attribution produced an investment claim's
+			// value about a project.
+			name:           "ClaimedInvestmentMix.investment_mix_source",
+			kind:           vocabAdditive,
+			clientValidate: "contractsv1.ValidateStoredResult",
+			sites:          []string{"ClaimedInvestmentMix.investment_mix_source", "ProjectedInvestmentMix.investment_mix_source"},
+			// schema: "project_native", "owning_team_rollup"
+			goSet:      []string{string(contractsv1.ContextFabricInvestmentMixSourceProjectNative), string(contractsv1.ContextFabricInvestmentMixSourceOwningTeamRollup)},
+			exhaustive: true,
+		},
+		outputVocabulary{
 			name:           "EffectiveEvidenceWindow.window_class",
 			kind:           vocabAdditive,
 			clientValidate: "contractsv1.ValidateStoredResult",

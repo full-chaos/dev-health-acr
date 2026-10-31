@@ -275,15 +275,22 @@ func TestSchemaAndGoBoundsAgree(t *testing.T) {
 		// field in isolation -- which the generic probe must do -- breaks
 		// the key-present-on-every-row invariant and the probe would
 		// attribute the resulting error to the wrong bound.
-		"common#$defs.ClaimedFactTable.properties.field.minLength":          1,
-		"common#$defs.ClaimedFactTable.properties.field.maxLength":          ContextFabricClaimedFieldMaxLength,
-		"common#$defs.ClaimedFactTable.properties.key.minItems":             1,
-		"common#$defs.ClaimedFactTable.properties.key.maxItems":             ContextFabricFactTableKeyMaxCount,
-		"common#$defs.ClaimedFactTable.properties.key.items.minLength":      1,
-		"common#$defs.ClaimedFactTable.properties.key.items.maxLength":      ContextFabricFactTableColumnMaxLength,
-		"common#$defs.ClaimedFactTable.properties.measures.maxItems":        ContextFabricFactTableMeasuresMaxCount,
-		"common#$defs.ClaimedFactTable.properties.measures.items.minLength": 1,
-		"common#$defs.ClaimedFactTable.properties.measures.items.maxLength": ContextFabricFactTableColumnMaxLength,
+		// CHAOS-12160: the investment mix disclosure, validated as a whole
+		// with its claim's kind (validateClaimedInvestmentMix), so it is
+		// mapped declaratively like the table above.
+		"common#$defs.ClaimedInvestmentMix.properties.rollup_basis.minLength":              1,
+		"common#$defs.ClaimedInvestmentMix.properties.rollup_basis.maxLength":              ContextFabricClaimedFieldMaxLength,
+		"common#$defs.ClaimedInvestmentMix.properties.work_unit_count.minimum":             0,
+		"common#$defs.ClaimedInvestmentMix.properties.project_own_work_unit_count.minimum": 0,
+		"common#$defs.ClaimedFactTable.properties.field.minLength":                         1,
+		"common#$defs.ClaimedFactTable.properties.field.maxLength":                         ContextFabricClaimedFieldMaxLength,
+		"common#$defs.ClaimedFactTable.properties.key.minItems":                            1,
+		"common#$defs.ClaimedFactTable.properties.key.maxItems":                            ContextFabricFactTableKeyMaxCount,
+		"common#$defs.ClaimedFactTable.properties.key.items.minLength":                     1,
+		"common#$defs.ClaimedFactTable.properties.key.items.maxLength":                     ContextFabricFactTableColumnMaxLength,
+		"common#$defs.ClaimedFactTable.properties.measures.maxItems":                       ContextFabricFactTableMeasuresMaxCount,
+		"common#$defs.ClaimedFactTable.properties.measures.items.minLength":                1,
+		"common#$defs.ClaimedFactTable.properties.measures.items.maxLength":                ContextFabricFactTableColumnMaxLength,
 		// CHAOS-4680: the third declared role, mapped declaratively for the
 		// identical reason key/measures above are.
 		"common#$defs.ClaimedFactTable.properties.observations.maxItems":        ContextFabricFactTableObservationsMaxCount,

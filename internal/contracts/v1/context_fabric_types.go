@@ -1895,6 +1895,19 @@ type ContextFabricClaimedFact struct {
 	// which is never time_series whenever this pair is populated (see the
 	// note above).
 	TimeSeriesTable *ContextFabricClaimedFactTable `json:"time_series_table,omitempty"`
+	// InvestmentMix (CHAOS-12160) is the OPTIONAL, additive disclosure of
+	// which attribution produced an investment claim's value about a
+	// project: the project's own work units, or its owning teams' roll-up,
+	// with the work units of each. Set by the server from the claim's
+	// grounding fact, never model-authored. See
+	// ContextFabricClaimedInvestmentMix.
+	//
+	// jsonschema:"-" keeps it out of the model output schema, which is
+	// inferred from this type (genkitruntime inferSchemaMap): a field the
+	// server stamps and strips from a draft is never offered to the model to
+	// write. The draft strip stays (StripModelAuthoredClaimedFactTableContent)
+	// for a reply or a supplied draft that carries it anyway.
+	InvestmentMix *ContextFabricClaimedInvestmentMix `json:"investment_mix,omitempty" jsonschema:"-"`
 }
 
 // ContextFabricClaimedFactRow is one row of a claimed fact's OPTIONAL

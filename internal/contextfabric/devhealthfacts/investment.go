@@ -285,6 +285,7 @@ func (p *InvestmentProvider) ReadFacts(ctx context.Context, principal storage.Pr
 	}
 	result = contextfabric.FactProviderResult{Facts: facts, State: state, Reason: retentionReason, Version: QueryVersion, Grain: timeBound.effectiveGrain(grainDaily), Truncated: truncated || omittedUnrepresentableCount > 0, OmittedCount: omittedUnrepresentableCount}
 	applyTeamsOwningNothing(&result, query.Subjects, teamsRequested, teamsOwningNothing)
+	discloseProjectRollups(&result)
 	projectCauses := applyTeamsOwningProjectsOnly(ctx, p.facts.client, orgID, &result, query.Subjects, teamsRequested, timeBound)
 	mixUnavailable = investmentMixNoOwnedCauses(mixUnavailable, len(teamsOwningNothing), projectCauses)
 	if mixUnavailable != "" {
@@ -1031,6 +1032,10 @@ func (p *InvestmentProvider) readProjectNativeThemeMix(ctx context.Context, orgI
 		return 0, "", err
 	}
 	withRow := make(map[string]bool, len(rows))
+	// ownUnits is each project's own work units in the window, whatever their
+	// effort: the count a roll-up served for the project discloses
+	// (CHAOS-12160).
+	ownUnits := make(map[string]int64, len(rows))
 	rowCount = len(rows)
 	if rowCount > maxProjectPopulationRows {
 		cutAfter = rows[maxProjectPopulationRows-1].ProjectSubjectKey
@@ -1045,6 +1050,7 @@ func (p *InvestmentProvider) readProjectNativeThemeMix(ctx context.Context, orgI
 			continue
 		}
 		withRow[row.ProjectSubjectKey] = true
+		ownUnits[row.ProjectSubjectKey] = int64(row.WorkUnits)
 		gated := int64(uncategorizedByProject[row.ProjectSubjectKey])
 		currentTotal := row.FeatureDelivery + row.Operational + row.Maintenance + row.Quality + row.Risk
 		if row.WorkUnits == 0 || currentTotal <= 0 {
@@ -1111,7 +1117,74 @@ func (p *InvestmentProvider) readProjectNativeThemeMix(ctx context.Context, orgI
 			recordInvestmentUncategorized(ctx, subject, 0, int64(gated), false)
 		}
 	}
+	stampProjectOwnWorkUnits(*facts, bySubject, ownUnits)
 	return rowCount, cutAfter, nil
+}
+
+// stampProjectOwnWorkUnits gives every project fact still served the owning
+// teams' roll-up the number of work units of its own the window holds
+// (CHAOS-12160): 0, or units with no measurable effort; only those projects
+// keep the roll-up (CHAOS-5935). ownUnits is keyed by project key, as
+// bySubject is; a project absent from it has none.
+func stampProjectOwnWorkUnits(facts []contextfabric.CanonicalFact, bySubject map[string]contextfabric.SubjectRef, ownUnits map[string]int64) {
+	for key, subject := range bySubject {
+		for i := range facts {
+			fact := &facts[i]
+			if fact.Kind != contextfabric.FactInvestment || fact.Subject.CanonicalID != subject.CanonicalID {
+				continue
+			}
+			if source, ok := fact.Fields[contextfabric.FactFieldInvestmentMixSource]; ok && source.String != nil && *source.String == contextfabric.InvestmentMixSourceOwningTeamRollup {
+				fact.Fields[investmentProjectOwnWorkUnitCountField] = contextfabric.IntegerFactValue(ownUnits[key])
+			}
+		}
+	}
+}
+
+// investmentProjectOwnWorkUnitCountField is the project's own work units in
+// the window, on a fact served the owning teams' roll-up (CHAOS-12160).
+const investmentProjectOwnWorkUnitCountField = "project_own_work_unit_count"
+
+// investmentProjectOwningTeamRollup names a project fact whose theme mix is
+// the owning teams' roll-up (CHAOS-5930 decision A: a disclosed roll-up).
+const investmentProjectOwningTeamRollup = "investment_project_owning_team_rollup"
+
+// discloseProjectRollups gives every project fact served the owning teams'
+// roll-up its own coverage reason, with the roll-up's units and the
+// project's own: the answer must not read the team's mix as the project's.
+func discloseProjectRollups(result *contextfabric.FactProviderResult) {
+	rollups, projects := 0, 0
+	for _, fact := range result.Facts {
+		if fact.Kind == contextfabric.FactInvestment && fact.Subject.Kind == contextfabric.SubjectProject {
+			projects++
+		}
+	}
+	for _, fact := range result.Facts {
+		if fact.Kind != contextfabric.FactInvestment || fact.Subject.Kind != contextfabric.SubjectProject {
+			continue
+		}
+		source, ok := fact.Fields[contextfabric.FactFieldInvestmentMixSource]
+		if !ok || source.String == nil || *source.String != contextfabric.InvestmentMixSourceOwningTeamRollup {
+			continue
+		}
+		var units, own int64
+		if v, ok := fact.Fields["work_unit_count"]; ok && v.Integer != nil {
+			units = *v.Integer
+		}
+		if v, ok := fact.Fields[investmentProjectOwnWorkUnitCountField]; ok && v.Integer != nil {
+			own = *v.Integer
+		}
+		addSubjectReasons(result, []contextfabric.SubjectRef{fact.Subject}, investmentProjectOwningTeamRollupReason(fact.Subject, units, own))
+		rollups++
+	}
+	// The request-level note leads the coverage reason, which is bounded: a
+	// read of many projects can cut the per-project reasons, never this one.
+	if rollups > 0 {
+		addRequestNote(result, fmt.Sprintf("%s for %d of %d projects with an investment fact: the theme mix is the owning teams' roll-up, not the project's own, because the project has no measurable work of its own in the window", investmentProjectOwningTeamRollup, rollups, projects))
+	}
+}
+
+func investmentProjectOwningTeamRollupReason(subject contextfabric.SubjectRef, units, own int64) string {
+	return fmt.Sprintf("%s: %s: the theme mix is the owning teams' roll-up over %d work units in the window, not the project's own; the project has %d work units of its own in the window", investmentProjectOwningTeamRollup, subject.CanonicalID, units, own)
 }
 
 // projectSpanKey is the "provider:id" key the project mixes name a project by

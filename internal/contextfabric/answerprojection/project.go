@@ -436,6 +436,10 @@ func projectDrivers(result contractsv1.ContextFabricInvestigationResult, bounds 
 				// reads from here.
 				TimeSeriesRows:  fact.TimeSeriesRows,
 				TimeSeriesTable: fact.TimeSeriesTable,
+				// InvestmentMix (CHAOS-12160): the roll-up disclosure is
+				// copied evidence too; a projection without it would serve a
+				// team roll-up as the project's own investment.
+				InvestmentMix: fact.InvestmentMix,
 			})
 		}
 		drivers = append(drivers, contractsv1.ContextFabricProjectedDriver{
@@ -502,6 +506,7 @@ func projectDrivers(result contractsv1.ContextFabricInvestigationResult, bounds 
 
 			TimeSeriesRows:  claim.TimeSeriesRows,
 			TimeSeriesTable: claim.TimeSeriesTable,
+			InvestmentMix:   claim.InvestmentMix,
 		})
 	}
 	// Eligible omissions are counted after member/fact admission in Project.
