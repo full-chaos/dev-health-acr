@@ -152,6 +152,9 @@ type memberStatusWalk struct {
 	// is a lower bound.
 	outsideSet     int
 	outsideAtLeast bool
+	// outsideIDs are the ids behind outsideSet (CHAOS-12352): a requested team
+	// narrowing counts the outside-set members inside the narrowing from them.
+	outsideIDs map[string]bool
 	// matched are the ids of the authorized members holding the status: the
 	// members kept, or when the member cap cut a set whose every member was
 	// decided, the bounded read of the matches; matchedAtLeast: that read was
@@ -178,6 +181,12 @@ func (w *memberStatusWalk) add(other memberStatusWalk) {
 	}
 	w.poolUnknown = w.poolUnknown || other.poolUnknown || (other.poolCut && other.pool < 0)
 	w.outsideSet += other.outsideSet
+	for id := range other.outsideIDs {
+		if w.outsideIDs == nil {
+			w.outsideIDs = map[string]bool{}
+		}
+		w.outsideIDs[id] = true
+	}
 	w.outsideAtLeast = w.outsideAtLeast || other.outsideAtLeast
 	for id := range other.matched {
 		if w.matched == nil {
@@ -383,11 +392,11 @@ func (a *Adapter) finishMemberStatus(ctx context.Context, key, orgID string, sta
 		probe.projected = true
 		// A cut count is a lower bound: at least that many members hold a
 		// status outside the set.
-		count, cut, err := a.authorizedHitCount(ctx, key, orgID, state, hop, frontier, probe, temporal)
+		ids, cut, err := a.authorizedHitIDs(ctx, key, orgID, state, hop, frontier, probe, temporal)
 		if err != nil {
 			return err
 		}
-		out.status.outsideSet, out.status.outsideAtLeast = count, cut
+		out.status.outsideSet, out.status.outsideAtLeast, out.status.outsideIDs = len(ids), cut, ids
 	}
 	return nil
 }
@@ -405,15 +414,8 @@ func keptMemberIDs(out *treeWalk) map[string]bool {
 	return ids
 }
 
-// authorizedHitCount counts the distinct nodes a step reaches from frontier
-// that the caller may see, bounded by the census bound, and reports whether
-// that read was cut.
-func (a *Adapter) authorizedHitCount(ctx context.Context, key, orgID string, state treeWalkState, hop treeHop, frontier []string, step walkStep, temporal temporalFilter) (int, bool, error) {
-	ids, cut, err := a.authorizedHitIDs(ctx, key, orgID, state, hop, frontier, step, temporal)
-	return len(ids), cut, err
-}
-
-// authorizedHitIDs are the ids authorizedHitCount counts.
+// authorizedHitIDs are the distinct nodes a step reaches from frontier that the
+// caller may see, bounded by the census bound, and whether that read was cut.
 func (a *Adapter) authorizedHitIDs(ctx context.Context, key, orgID string, state treeWalkState, hop treeHop, frontier []string, step walkStep, temporal temporalFilter) (map[string]bool, bool, error) {
 	hits, cut, err := a.walkStepHits(ctx, key, orgID, frontier, step, temporal, exactNameCandidateQueryLimit)
 	if err != nil {

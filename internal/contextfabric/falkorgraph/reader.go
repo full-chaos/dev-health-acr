@@ -1500,7 +1500,13 @@ func (a *Adapter) DiscoverContext(ctx context.Context, principal storage.Princip
 	// narrowing for the pool cut disclosure (the walk's own count is the
 	// anchor's).
 	statusReadInScope := statusWalk.read
+	statusOutsideInScope := statusWalk.outsideSet
 	if statusWalk.applied && teamScope != nil {
+		outsideInScope, err := teamScope.inScopeIDs(ctx, statusPredicate.kind, statusWalk.outsideIDs)
+		if err != nil {
+			return contextfabric.GraphContext{}, graphNotProjectedError(err)
+		}
+		statusOutsideInScope = len(outsideInScope)
 		if statusMatched, err = teamScope.inScopeIDs(ctx, statusPredicate.kind, statusWalk.matched); err != nil {
 			return contextfabric.GraphContext{}, graphNotProjectedError(err)
 		}
@@ -1634,7 +1640,9 @@ func (a *Adapter) DiscoverContext(ctx context.Context, principal storage.Princip
 	// prefix only: a lower bound.
 	statusOutsideSet, statusOutsideAtLeast := memberFiltered.outsideSet, cohortPoolTruncated
 	if statusWalk.applied {
-		statusOutsideSet, statusOutsideAtLeast = statusWalk.outsideSet, statusWalk.outsideAtLeast
+		// CHAOS-12352: under a team narrowing, only the outside-set members
+		// inside the narrowing are counted.
+		statusOutsideSet, statusOutsideAtLeast = statusOutsideInScope, statusWalk.outsideAtLeast
 	}
 	statusFiltered := statusWalk.applied || memberStatus != ""
 	statusReached := memberFiltered.candidates > 0
