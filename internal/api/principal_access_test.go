@@ -538,3 +538,25 @@ func TestTheHandlerSeesTheNarrowedScopeAndTheLiveFlag(t *testing.T) {
 		t.Fatalf("thread list (an entitlement-gated route) with the live flag on and the cached one off: %d %s, want 200", recorder.Code, code)
 	}
 }
+
+// A user-class row with no approving user has no one to read access for: it
+// is refused, without a read.
+func TestAUserClassCredentialWithoutAnApprovingUserIsRefusedWithoutARead(t *testing.T) {
+	harness, _ := newMemorySubmissionHarness(t, 1)
+	app := harness.apps[0]
+	reader := &fakePrincipalAccess{}
+	reader.set(grantedAccess(), nil)
+	app.runtime.PrincipalAccess = reader
+	authenticator, err := auth.NewAuthenticator(classCredentialStore{row: contractsv1.ClientCredential{
+		CredentialID: "oauth_no_user", OrgID: "org_1", RepositoryScopes: []string{"*"}, Scopes: []string{auth.ScopeContextRead},
+		Provenance: contractsv1.CredentialProvenance{ClientClass: string(storage.CredentialClientClassOAuthUser)},
+	}}, nil, auth.AuthenticatorOptions{Now: time.Now})
+	if err != nil {
+		t.Fatal(err)
+	}
+	app.authenticator = authenticator
+	recorder, code := serveProtected(app, harness.tokenA, protectedRoute{http.MethodGet, ContextFabricThreadsPath, ""}, nil)
+	if recorder.Code != http.StatusForbidden || code != contractsv1.ErrorCodeAccessDenied || len(reader.reset()) != 0 {
+		t.Fatalf("oauth_user without an approving user: %d %s, want 403 access_denied with no read", recorder.Code, code)
+	}
+}
