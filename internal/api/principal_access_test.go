@@ -231,6 +231,15 @@ func TestEveryProtectedRouteRereadsAccessForEveryUserClass(t *testing.T) {
 				recorder, code := serveProtected(app, harness.tokenA, route, nil)
 				calls := reader.reset()
 				refused := recorder.Code == denial.status && code == denial.code
+				// Capabilities is how a client learns what is enabled: a flag
+				// that is off is reported there (200, the entitlement false),
+				// never refused (lead ruling on #1798).
+				if route.path == "/api/v1/agent-context/capabilities" && denial.code == "feature_not_enabled" {
+					if recorder.Code != http.StatusOK || code != "" || len(calls) != 1 {
+						t.Errorf("%s capabilities, %s: %d %s after %d reads, want 200 after one read", class, denial.name, recorder.Code, code, len(calls))
+					}
+					continue
+				}
 				if denial.browserOnly && class != storage.CredentialClientClassBrowser {
 					if slices.Contains(accessCodes, code) || recorder.Code == http.StatusForbidden && code == "feature_not_enabled" {
 						t.Errorf("%s %s %s, %s: refused %d %s, want the call to pass (browser-only reason)", class, route.method, route.path, denial.name, recorder.Code, code)
@@ -558,5 +567,40 @@ func TestAUserClassCredentialWithoutAnApprovingUserIsRefusedWithoutARead(t *test
 	recorder, code := serveProtected(app, harness.tokenA, protectedRoute{http.MethodGet, ContextFabricThreadsPath, ""}, nil)
 	if recorder.Code != http.StatusForbidden || code != contractsv1.ErrorCodeAccessDenied || len(reader.reset()) != 0 {
 		t.Fatalf("oauth_user without an approving user: %d %s, want 403 access_denied with no read", recorder.Code, code)
+	}
+}
+
+// Capabilities reports the live flags and does not refuse on them: with
+// agent_context_runtime off it answers 200, the entitlement false and no
+// tool enabled, from the live read (not the cached provider, which says on).
+// Membership, session and impersonation still refuse it.
+func TestCapabilitiesReportsALiveFlagOffAndStillRefusesALostMember(t *testing.T) {
+	harness, _ := newMemorySubmissionHarness(t, 1)
+	app := harness.apps[0]
+	reader := &fakePrincipalAccess{}
+	app.runtime.PrincipalAccess = reader
+	app.runtime.Entitlements = EntitlementFunc(func(context.Context, string, string) (bool, error) { return true, nil })
+	route := protectedRoute{http.MethodGet, "/api/v1/agent-context/capabilities", ""}
+	for _, class := range userClasses() {
+		authenticateAsCredential(t, app, class, []string{"*"})
+		off := grantedAccess()
+		off.AgentContextRuntime, off.AskDev = false, false
+		reader.set(off, nil)
+		recorder, code := serveProtected(app, harness.tokenA, route, nil)
+		var capabilities contractsv1.Capabilities
+		if err := json.Unmarshal(recorder.Body.Bytes(), &capabilities); recorder.Code != http.StatusOK || code != "" || err != nil ||
+			capabilities.Entitlements.AgentContextRuntime || len(capabilities.EnabledTools) != 0 {
+			t.Fatalf("%s capabilities with the flags off: %d %s %+v (%v), want 200 with agent_context_runtime false and no tool", class, recorder.Code, code, capabilities.Entitlements, err)
+		}
+		if calls := reader.reset(); len(calls) != 1 {
+			t.Fatalf("%s capabilities: %d reads, want 1", class, len(calls))
+		}
+		lost := grantedAccess()
+		lost.Member = false
+		reader.set(lost, nil)
+		if recorder, code := serveProtected(app, harness.tokenA, route, nil); recorder.Code != http.StatusForbidden || code != contractsv1.ErrorCodeAccessDenied {
+			t.Fatalf("%s capabilities for a lost member: %d %s, want 403 access_denied", class, recorder.Code, code)
+		}
+		reader.reset()
 	}
 }
