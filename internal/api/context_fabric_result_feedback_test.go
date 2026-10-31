@@ -2,15 +2,20 @@ package api
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"reflect"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric/memoryinvestigation"
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
+	"github.com/full-chaos/dev-health-acr/internal/storage"
 )
 
 // The Ask Dev answer feedback route (CHAOS-11950) on the submission harness:
@@ -199,5 +204,48 @@ func TestResultFeedbackRoutes_aMalformedBodyIs400WhateverTheResult(t *testing.T)
 	}
 	if read := readFeedbackBody(t, h.feedbackCall(http.MethodGet, h.tokenA, resultID, "")); read.UpdatedAt != nil {
 		t.Fatalf("a refused body wrote feedback: %+v", read)
+	}
+}
+
+// floodingFeedbackStore is a memory store whose Get answers one result with
+// a limitation list that fills the cap with service disclosures, so the read
+// by id withholds it (the flood rule).
+type floodingFeedbackStore struct {
+	*memoryinvestigation.Store
+	flooded atomic.Value // result id
+}
+
+func (s *floodingFeedbackStore) Get(ctx context.Context, principal storage.Principal, resultID string) (contextfabric.StoredInvestigationResult, error) {
+	stored, err := s.Store.Get(ctx, principal, resultID)
+	if id, _ := s.flooded.Load().(string); err == nil && id == resultID {
+		stored.Result.Limitations = storedRouteGapLookalikes(contractsv1.ContextFabricLimitationsMaxCount)
+	}
+	return stored, err
+}
+
+// The flood rule holds on the feedback route by behaviour, not by source
+// text: a result the read by id withholds for its flooded limitations gets
+// the read by id's own 404 on GET and POST, and the POST writes nothing.
+func TestResultFeedbackRoutes_aFloodWithheldResultTakesNoFeedback(t *testing.T) {
+	store := &floodingFeedbackStore{Store: memoryinvestigation.NewStore()}
+	h := newSubmissionHarness(t, store)
+	resultID := servedResultID(t, h.post(0, h.tokenA, "submission-11950-0006", "Which repositories changed?"))
+	readFeedbackBody(t, h.feedbackCall(http.MethodPost, h.tokenA, resultID, feedbackRequestBody("yes", "yes")))
+	store.flooded.Store(resultID)
+	requireReadByIDAnswer(t, h, h.tokenA, resultID, h.feedbackCall(http.MethodGet, h.tokenA, resultID, ""), http.StatusNotFound)
+	requireReadByIDAnswer(t, h, h.tokenA, resultID, h.feedbackCall(http.MethodPost, h.tokenA, resultID, feedbackRequestBody("no", "no")), http.StatusNotFound)
+	named := 0
+	for _, line := range strings.Split(h.logs[0].String(), "\n") {
+		if strings.Contains(line, `"msg":"context fabric result feedback"`) && strings.Contains(line, `"outcome":"not_served"`) && strings.Contains(line, `"serving":"flood_withheld"`) {
+			named++
+		}
+	}
+	if named != 2 {
+		t.Fatalf("%d feedback lines name not_served / flood_withheld, want 2 (GET and POST):\n%s", named, h.logs[0].String())
+	}
+	store.flooded.Store("")
+	read := readFeedbackBody(t, h.feedbackCall(http.MethodGet, h.tokenA, resultID, ""))
+	if read.Correct != contractsv1.ContextFabricResultFeedbackYes || read.Useful != contractsv1.ContextFabricResultFeedbackYes {
+		t.Fatalf("the refused POST wrote feedback: %+v", read)
 	}
 }
