@@ -60,6 +60,24 @@ func scanThread(row submissionScanner) (contextfabric.ThreadRecord, error) {
 	return thread, nil
 }
 
+// threadTurnOwnerSQLOf is threadTurnOwnerMethodSQL or threadTurnOwnerSubjectSQL
+// qualified by a table alias: the thread row a turn joined, for a query that
+// also reads the thread row's own owner columns.
+func threadTurnOwnerSQLOf(alias, threadOwnerColumn, ownerColumn string) string {
+	return "COALESCE(" + alias + "." + threadOwnerColumn + ", " + alias + "." + ownerColumn + ")"
+}
+
+// withTrailingColumn scans a row whose last column follows the ones the
+// wrapped scan reads.
+type withTrailingColumn struct {
+	row  submissionScanner
+	last any
+}
+
+func (w withTrailingColumn) Scan(dest ...any) error {
+	return w.row.Scan(append(dest, w.last)...)
+}
+
 func validThreadKey(key contextfabric.ThreadKey) error {
 	if strings.TrimSpace(key.OrgID) == "" || key.Owner.Subject == "" || key.Owner.AuthenticationMethod == "" {
 		return errors.New("pginvestigation: thread organization and owner are required")
@@ -218,27 +236,44 @@ func (s *Store) ListThreads(ctx context.Context, orgID string, owner contextfabr
 		args = append(args, after.LastTurnAt.UTC(), after.ThreadID)
 	}
 	// One row per thread id: the row the owner reaches (resolveThread's
-	// order), then the open ones in list order.
+	// order), then the open ones in list order. CHAOS-12235: each listed
+	// row's first question is its TRUE first turn's (the row's own linked
+	// records, as readThreadSnapshot reads them, in turn order), read in this
+	// statement (one snapshot) and only for the page's rows; nothing is
+	// stored on the thread row.
 	rows, err := s.db.QueryContext(ctx, `
-SELECT `+threadColumns+` FROM (
-  SELECT DISTINCT ON (thread_id) `+threadColumns+` FROM acr.context_fabric_threads
-   WHERE org_id = $1
-     AND `+ownerMatchSQL("owner_auth_method", "owner_subject", "owner_user_id", "owner_surface", "$2", "$3", "$6", "$7")+`
-   ORDER BY thread_id, (owner_auth_method = $2 AND owner_subject = $3) DESC, created_at, owner_auth_method, owner_subject
-) reached
- WHERE closed_at IS NULL AND expires_at > $4`+keyset+`
- ORDER BY last_turn_at DESC, thread_id ASC
- LIMIT $5`, args...)
+SELECT `+threadColumns+`, first_turn.question FROM (
+  SELECT `+threadColumns+` FROM (
+    SELECT DISTINCT ON (thread_id) `+threadColumns+` FROM acr.context_fabric_threads
+     WHERE org_id = $1
+       AND `+ownerMatchSQL("owner_auth_method", "owner_subject", "owner_user_id", "owner_surface", "$2", "$3", "$6", "$7")+`
+     ORDER BY thread_id, (owner_auth_method = $2 AND owner_subject = $3) DESC, created_at, owner_auth_method, owner_subject
+  ) reached
+   WHERE closed_at IS NULL AND expires_at > $4`+keyset+`
+   ORDER BY last_turn_at DESC, thread_id ASC
+   LIMIT $5
+) page
+LEFT JOIN LATERAL (
+  SELECT s.question FROM acr.context_fabric_investigation_submissions s
+   WHERE s.org_id = page.org_id AND s.thread_id = page.thread_id
+     AND `+threadTurnOwnerSQLOf("s", "thread_owner_auth_method", "owner_auth_method")+` = page.owner_auth_method
+     AND `+threadTurnOwnerSQLOf("s", "thread_owner_subject", "owner_subject")+` = page.owner_subject
+   ORDER BY s.admitted_at, s.submission_id
+   LIMIT 1
+) first_turn ON true
+ ORDER BY last_turn_at DESC, thread_id ASC`, args...)
 	if err != nil {
 		return nil, false, fmt.Errorf("list threads: %w", sanitizeError(err))
 	}
 	defer rows.Close()
 	var threads []contextfabric.ThreadRecord
 	for rows.Next() {
-		thread, err := scanThread(rows)
+		var firstQuestion sql.NullString
+		thread, err := scanThread(withTrailingColumn{rows, &firstQuestion})
 		if err != nil {
 			return nil, false, fmt.Errorf("list threads: %w", sanitizeError(err))
 		}
+		thread.FirstQuestion = firstQuestion.String
 		threads = append(threads, thread)
 	}
 	if err := rows.Err(); err != nil {

@@ -45,6 +45,10 @@ type AppConfig struct {
 	// run admitted under a client-named submission runs under an ACR-owned
 	// lease, and the attach and cancel routes serve. It needs the stream.
 	ContextFabricRunLeaseEnabled bool
+	// ThreadListFirstQuestionEnabled mirrors
+	// config.Config.ThreadListFirstQuestionEnabled (CHAOS-12235): the thread
+	// list serves first_question only when it is on.
+	ThreadListFirstQuestionEnabled bool
 	// AskDevLimits are the shared admission limits of a request that names
 	// X-ACR-Submission-ID (CHAOS-11914). A zero field is the plan's default,
 	// never unlimited.
