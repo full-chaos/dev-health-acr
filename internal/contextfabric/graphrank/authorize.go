@@ -138,6 +138,72 @@ func ProjectNarrowingUnproven(requested contextfabric.RequestedScope, attributes
 	return isString && value == "*"
 }
 
+// AuthorizationProjectIdentitiesAttr is the work-item node attribute that
+// holds the work item's current project membership as canonical project.v2
+// identities (CHAOS-12226): a list, empty when the work item is in no project,
+// absent when no producer stated it. It is never "*" and never read with
+// wildcard meaning. falkorgraph writes it (propAuthzProjectIdentities).
+const AuthorizationProjectIdentitiesAttr = "authorization_project_identities"
+
+// ProjectMembership is what a node's authorization_project_identities says
+// about a set of projects (CHAOS-12299, shared with CHAOS-12229).
+type ProjectMembership uint8
+
+const (
+	// ProjectMembershipUnstated: the key is absent, or does not hold a list of
+	// strings. No membership is on record; each caller decides what that
+	// means (a request narrowing discloses it; a project-only grant denies).
+	ProjectMembershipUnstated ProjectMembership = iota
+	// ProjectMembershipMember: a stated list holds at least one wanted
+	// identity, compared exactly and case-sensitively.
+	ProjectMembershipMember
+	// ProjectMembershipNotMember: a stated list, possibly empty, holds none
+	// of the wanted identities.
+	ProjectMembershipNotMember
+)
+
+// ProjectMembershipOf reads only AuthorizationProjectIdentitiesAttr, never the
+// legacy authorization_projects, so its "*" never decides. Inside a stated
+// list "*" is an ordinary string that matches no canonical identity. It
+// accepts []string and the []interface{} of strings a graph read returns;
+// any other value is Unstated. An empty wanted set is never a member, so a
+// caller with nothing to match fails closed. wanted holds canonical
+// project.v2 identities; mapping raw ids to them is the caller's job.
+func ProjectMembershipOf(attributes map[string]interface{}, wanted []string) ProjectMembership {
+	stated, ok := statedProjectIdentities(attributes[AuthorizationProjectIdentitiesAttr])
+	if !ok {
+		return ProjectMembershipUnstated
+	}
+	for _, identity := range stated {
+		for _, want := range wanted {
+			if identity == want {
+				return ProjectMembershipMember
+			}
+		}
+	}
+	return ProjectMembershipNotMember
+}
+
+// statedProjectIdentities is the stated list, and whether the value is one.
+func statedProjectIdentities(value interface{}) ([]string, bool) {
+	switch list := value.(type) {
+	case []string:
+		return list, true
+	case []interface{}:
+		out := make([]string, 0, len(list))
+		for _, item := range list {
+			identity, isString := item.(string)
+			if !isString {
+				return nil, false
+			}
+			out = append(out, identity)
+		}
+		return out, true
+	default:
+		return nil, false
+	}
+}
+
 // AuthorizedThroughLink is the issue side of a link of record under a
 // requested scope: the requested repository scope follows the link (the
 // entity tree relates an issue to a repository only through its linked pull
