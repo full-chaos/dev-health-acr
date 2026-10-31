@@ -37,6 +37,15 @@ func TestThePrincipalAndCallerClassesReadAGrantAsBefore(t *testing.T) {
 			t.Errorf("%s: CallerClassFor(%q) = %q, want %q", tc.name, got, caller, tc.caller)
 		}
 	}
+	// CHAOS-12299: a project grant classifies the principal itself as
+	// project_only, which reads as restricted in both vocabularies, whatever
+	// its repository list holds.
+	for _, scopes := range [][]string{nil, {}, {"*"}, {"a/b"}} {
+		got := ClassifyPrincipal(storage.Principal{OrgID: "org_1", RepositoryScopes: scopes, ProjectScopes: []string{"project.v2:github:P-1"}})
+		if got != ClassRestricted || CallerClassFor(got) != CallerRestricted {
+			t.Errorf("project grant beside %q: ClassifyPrincipal = %q, CallerClassFor = %q, want restricted", scopes, got, CallerClassFor(got))
+		}
+	}
 	// An out-of-vocabulary class is restricted (fail closed), as before.
 	if got := CallerClassFor(PrincipalClass("bogus")); got != CallerRestricted {
 		t.Errorf("CallerClassFor(bogus) = %q, want %q", got, CallerRestricted)

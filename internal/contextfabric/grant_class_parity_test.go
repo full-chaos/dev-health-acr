@@ -31,6 +31,13 @@ func TestTheStoredResultScopeReadsAGrantAsBefore(t *testing.T) {
 			t.Errorf("%s: classifyStoredResultPrincipalScope = %q, want %q", tc.name, got, tc.want)
 		}
 	}
+	// CHAOS-12299: a project grant is project_only, stored as restricted,
+	// whatever the repository list holds.
+	for _, scopes := range [][]string{nil, {}, {"*"}, {"a/b"}} {
+		if got := classifyStoredResultPrincipalScope(storage.Principal{OrgID: "org_1", RepositoryScopes: scopes, ProjectScopes: []string{"project.v2:github:P-1"}}); got != StoredResultScopeRestricted {
+			t.Errorf("project grant beside %q: classifyStoredResultPrincipalScope = %q, want restricted", scopes, got)
+		}
+	}
 }
 
 // project_only reads as restricted, so its results meet the grant-digest

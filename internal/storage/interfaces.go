@@ -103,6 +103,12 @@ type Principal struct {
 	// authentication; empty for every other credential and for a web
 	// assertion. The per-call access read (CHAOS-12092) checks it is live.
 	CredentialSessionID string
+	// ProjectScopes is a project-only caller's grant (CHAOS-12107, CHAOS-12299):
+	// the canonical project.v2 identities of the projects it may read, in an
+	// organization with no repository inventory. Non-empty makes the caller
+	// project_only (auth.ClassifyGrant). Only the access-read decoder sets it
+	// (CHAOS-12301); empty for every other caller.
+	ProjectScopes []string
 }
 
 // AuthenticationMethod identifies the validated authentication boundary that
