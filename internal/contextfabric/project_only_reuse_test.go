@@ -50,9 +50,11 @@ func TestAProjectOnlyPrincipalNeverReusesAnAnswer(t *testing.T) {
 		{principal: reusePrincipal(), want: true},
 	} {
 		lookups := 0
+		telemetry := &recordingTelemetry{}
 		engine := mustReuseTestEngine(t, EngineDependencies{
-			Graph:   graphReaderStub{resolution: SubjectResolution{Candidates: []SubjectCandidate{}, Committed: []SubjectRef{project}}, bases: provenCommitBases(project)},
-			Results: &resultStoreStub{},
+			Graph:     graphReaderStub{resolution: SubjectResolution{Candidates: []SubjectCandidate{}, Committed: []SubjectRef{project}}, bases: provenCommitBases(project)},
+			Results:   &resultStoreStub{},
+			Telemetry: telemetry,
 			ReuseGate: reuseGateFunc(func(context.Context, storage.Principal, ReuseKey) (InvestigationResult, bool, error) {
 				lookups++
 				return candidate, true, nil
@@ -61,6 +63,9 @@ func TestAProjectOnlyPrincipalNeverReusesAnAnswer(t *testing.T) {
 		_, hit, _, _ := engine.tryReuse(context.Background(), tc.principal, validInvestigationRequest(), TimeContext{Axis: TemporalCurrent}, "", windowKeyRederivable, ResolvedGraphBinding{GraphKey: "some-key", Epoch: 0})
 		if hit != tc.want || (!tc.want && lookups != 0) {
 			t.Errorf("%v: hit = %v after %d lookups, want hit %v", tc.principal.ProjectScopes, hit, lookups, tc.want)
+		}
+		if !tc.want && !reuseOutcomeSlicesEqual(telemetry.answerReuseOutcomes, []AnswerReuseOutcome{AnswerReuseMissAuthorization}) {
+			t.Errorf("%v: reuse outcomes %v, want miss_authorization once", tc.principal.ProjectScopes, telemetry.answerReuseOutcomes)
 		}
 	}
 }

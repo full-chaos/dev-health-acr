@@ -241,7 +241,8 @@ func projectOnlyAdmits(principal storage.Principal, requested contextfabric.Requ
 	case contextfabric.SubjectOrganization:
 		return callersOrganizationAttr(principal, attributes)
 	case contextfabric.SubjectProject:
-		return slices.Contains(principal.ProjectScopes, strings.TrimSpace(StringAttribute(attributes, "canonical_id")))
+		// Exact: a canonical id is never trimmed or folded (CHAOS-12107 V3).
+		return slices.Contains(principal.ProjectScopes, StringAttribute(attributes, "canonical_id"))
 	case contextfabric.SubjectWorkItem:
 		return ProjectMembershipOf(attributes, principal.ProjectScopes) == ProjectMembershipMember
 	default:

@@ -46,6 +46,7 @@ func TestAProjectOnlyCallerIsAdmittedToExactlyItsOrganizationItsProjectsAndTheir
 		{name: "a granted project", attributes: projectOnlyNode(contextfabric.SubjectProject, "project.v2:github:P-1", nil), want: true},
 		{name: "a project outside the grant", attributes: projectOnlyNode(contextfabric.SubjectProject, "project.v2:github:P-2", nil), want: false},
 		{name: "a project named by its raw id", attributes: projectOnlyNode(contextfabric.SubjectProject, "P-1", nil), want: false},
+		{name: "a granted project id with spaces around it", attributes: projectOnlyNode(contextfabric.SubjectProject, " project.v2:github:P-1 ", nil), want: false},
 		{name: "a member work item", attributes: projectOnlyNode(contextfabric.SubjectWorkItem, "work_item.v2:r:W-1", member), want: true},
 		{name: "a work item of another project", attributes: projectOnlyNode(contextfabric.SubjectWorkItem, "work_item.v2:r:W-2", otherProject), want: false},
 		{name: "a work item in no project", attributes: projectOnlyNode(contextfabric.SubjectWorkItem, "work_item.v2:r:W-3", noProject), want: false},
