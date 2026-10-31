@@ -63,7 +63,7 @@ func TestRunner_upgradeTo67BackfillsGrantedClients(t *testing.T) {
 		created := redeemedAt.Add(-time.Minute)
 		_, err := db.ExecContext(ctx, `INSERT INTO acr.device_authorizations
 			(device_code_hash, user_code_hash, state, created_at, expires_at, poll_interval_seconds, issuance_provenance, approved_at, redeemed_at, redeemed_credential_id)
-			VALUES ($1, $2, 'redeemed', $3, $3 + INTERVAL '10 minutes', 5, 'device_authorization', $3, $4, $5)`,
+			VALUES ($1, $2, 'redeemed', $3, $3::timestamptz + INTERVAL '10 minutes', 5, 'device_authorization', $3, $4, $5)`,
 			device, strings.Repeat(seed, 63)+"0", created, redeemedAt, credentialID)
 		require.NoError(t, err)
 		return device
@@ -72,7 +72,7 @@ func TestRunner_upgradeTo67BackfillsGrantedClients(t *testing.T) {
 		t.Helper()
 		_, err := db.ExecContext(ctx, `INSERT INTO acr.oauth_authorization_requests
 			(handle_hash, device_code_hash, client_id, client_kind, redirect_uri, code_challenge, resource, created_at, expires_at)
-			VALUES ($1, $2, $3, 'dynamic', 'http://127.0.0.1:1/cb', $4, 'https://mcp.example.test/mcp', $5, $5 + INTERVAL '10 minutes')`,
+			VALUES ($1, $2, $3, 'dynamic', 'http://127.0.0.1:1/cb', $4, 'https://mcp.example.test/mcp', $5, $5::timestamptz + INTERVAL '10 minutes')`,
 			strings.Repeat(handleSeed, 64), device, clientID, strings.Repeat("A", 43), createdAt)
 		require.NoError(t, err)
 	}
@@ -89,13 +89,13 @@ func TestRunner_upgradeTo67BackfillsGrantedClients(t *testing.T) {
 	credential("cred-67-c", byGrant, t0.Add(time.Hour))
 	device := redeemedDevice("3", "cred-67-c", t0.Add(3*time.Hour))
 	_, err := db.ExecContext(ctx, `INSERT INTO acr.oauth_device_grants (device_code_hash, client_id, client_kind, resource, scope, created_at, expires_at)
-		VALUES ($1, $2, 'dynamic', 'https://mcp.example.test/mcp', 'context:read', $3, $3 + INTERVAL '10 minutes')`, device, byGrant, t0.Add(3*time.Hour))
+		VALUES ($1, $2, 'dynamic', 'https://mcp.example.test/mcp', 'context:read', $3, $3::timestamptz + INTERVAL '10 minutes')`, device, byGrant, t0.Add(3*time.Hour))
 	require.NoError(t, err)
 	// neverGranted: a request whose authorization was never redeemed.
 	pending := strings.Repeat("4", 64)
 	_, err = db.ExecContext(ctx, `INSERT INTO acr.device_authorizations
 		(device_code_hash, user_code_hash, state, created_at, expires_at, poll_interval_seconds, issuance_provenance)
-		VALUES ($1, $2, 'pending', $3, $3 + INTERVAL '10 minutes', 5, 'device_authorization')`, pending, strings.Repeat("5", 64), t0)
+		VALUES ($1, $2, 'pending', $3, $3::timestamptz + INTERVAL '10 minutes', 5, 'device_authorization')`, pending, strings.Repeat("5", 64), t0)
 	require.NoError(t, err)
 	request("6", pending, neverGranted, t0)
 
