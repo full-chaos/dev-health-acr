@@ -9,6 +9,7 @@ import (
 	"strings"
 	"unicode"
 
+	"github.com/full-chaos/dev-health-acr/internal/auth"
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
 
@@ -501,6 +502,14 @@ func (e *Engine) tryReuse(ctx context.Context, principal storage.Principal, requ
 // a hit, for the count scope decision on the reuse backfill.
 func (e *Engine) tryReuseWithReading(ctx context.Context, principal storage.Principal, request InvestigationRequest, effectiveTimeContext TimeContext, windowKey string, windowKeyEnc windowKeyEncoding, binding ResolvedGraphBinding) (InvestigationResult, bool, bool, storedCountReading, error) {
 	if e.reuseGate == nil {
+		return InvestigationResult{}, false, false, storedCountReading{}, nil
+	}
+	if auth.ClassifyGrant(principal) == auth.GrantProjectOnly {
+		// A project-only caller never reuses an answer (CHAOS-12299): the
+		// reuse key hashes only the repository list, so two different
+		// project grants share it until c2 class-tags it (CHAOS-12298). No
+		// lookup is made.
+		e.recordReuseOutcome(ctx, principal, AnswerReuseMissAuthorization)
 		return InvestigationResult{}, false, false, storedCountReading{}, nil
 	}
 	if CanonicalizeQuestion(request.Question) == "" {

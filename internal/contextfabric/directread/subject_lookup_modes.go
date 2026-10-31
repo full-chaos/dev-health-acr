@@ -173,7 +173,7 @@ func (l *SubjectLookup) scanOwnedBy(ctx context.Context, principal storage.Princ
 			return nil, false, err
 		}
 		for _, candidate := range page.Edges {
-			if EdgeGate(principal, candidate.Attributes, admitted[graphrank.SubjectKey(candidate.From.Subject)], admitted[graphrank.SubjectKey(candidate.To.Subject)]) != EdgeVisible {
+			if EdgeGate(principal, candidate.RelationType, candidate.Attributes, admitted[graphrank.SubjectKey(candidate.From.Subject)], admitted[graphrank.SubjectKey(candidate.To.Subject)]) != EdgeVisible {
 				continue
 			}
 			owned := candidate.From

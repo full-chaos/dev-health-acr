@@ -51,6 +51,13 @@ data:
   {{- with include "acr.otelEnv" (dict "root" . "name" .Values.otel.serviceNames.api) }}
   {{- . | nindent 2 }}
   {{- end }}
+  {{- if .Values.authWorkloadClient.enabled }}
+  {{- include "acr.validateAuthWorkloadClient" . }}
+  ACR_AUTH_WORKLOAD_EXCHANGE_URL: {{ .Values.authWorkloadClient.exchangeURL | quote }}
+  ACR_AUTH_WORKLOAD_ALLOW_PLAIN_HTTP: {{ .Values.authWorkloadClient.allowPlainHTTP | quote }}
+  ACR_AUTH_WORKLOAD_ISSUER: {{ .Values.authWorkloadClient.issuer | quote }}
+  ACR_AUTH_WORKLOAD_SUBJECT_FILE: {{ printf "%s/token" (include "acr.authWorkloadMountPath" .) | quote }}
+  {{- end }}
   {{- if .Values.workloadTokenExchange.enabled }}
   ACR_WORKLOAD_TOKEN_EXCHANGE_AUDIENCE: {{ .Values.workloadTokenExchange.audience | quote }}
   ACR_WORKLOAD_TRUST_DOMAIN: {{ .Values.workloadTokenExchange.trustDomain | quote }}

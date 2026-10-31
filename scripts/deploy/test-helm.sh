@@ -50,6 +50,9 @@ Usage: test-helm.sh --values <path> [--image <ref>] [--chart <path>] [--scenario
               The acr-api ServiceAccount scenarios: api-service-account-dedicated (positive),
               api-service-account-shared, api-service-account-default, api-service-account-default-exchange-off,
               service-account-name-collision.
+              The acr-api auth workload client scenarios (CHAOS-11195): auth-workload-client-on (positive),
+              auth-workload-client-off-render, auth-workload-client-bad-inputs,
+              auth-workload-client-presence-only.
 
 The harness only renders (helm template/lint) and validates output offline.
 EOF
@@ -272,6 +275,77 @@ sa_names = [name(d) for d in docs if kind(d) == 'ServiceAccount']
 if len(sa_names) != len(set(sa_names)): fail('a ServiceAccount name is rendered twice: %s' % sorted(n for n in set(sa_names) if sa_names.count(n) > 1))
 if any(sa(d) in (None, 'default') and kind(d) != 'StatefulSet' for d in workloads): fail('a workload pod resolves to the default ServiceAccount')
 print('  ok   api-sa: %s dedicated (automount off, no secrets), sole user is acr-api; projector %s clean; TokenReview bound to %s only' % (api_sa, proj_sa, api_sa))
+PY
+}
+
+# ---------------------------------------------------------------------------
+# acr-api auth workload client (CHAOS-11195): a projected ServiceAccount token
+# for the workload-token exchange, and the env the client is built from.
+# ---------------------------------------------------------------------------
+auth_workload_render() {
+  render \
+    --set authWorkloadClient.enabled=true \
+    --set-string "authWorkloadClient.exchangeURL=http://auth-service.acr-test.svc:8080" \
+    --set authWorkloadClient.allowPlainHTTP=true \
+    --set-string "authWorkloadClient.issuer=https://auth.example.test" \
+    "$@"
+}
+
+# auth_workload_assert <rendered-file>: acr-api carries one projected token for
+# the exchange audience, read-only, no subPath, and the four env values; the
+# existing reviewer token volume is untouched; acr-api keeps its own
+# ServiceAccount with automount off.
+auth_workload_assert() {
+  python3 - "$1" "$RELEASE" <<'PY' || exit 1
+import re, sys
+docs = open(sys.argv[1]).read().split('\n---\n')
+rel = sys.argv[2]
+def fail(msg):
+    print('  FAIL auth-workload: ' + msg, file=sys.stderr); sys.exit(1)
+def kind(d): m = re.search(r'(?m)^kind: (\S+)$', d); return m.group(1) if m else ''
+def name(d): m = re.search(r'(?m)^metadata:\n(?:  .*\n)*?  name: "?([^"\s]+)"?$', d); return m.group(1) if m else ''
+api = [d for d in docs if kind(d) == 'Deployment' and name(d) == rel]
+if len(api) != 1: fail('want one acr-api Deployment')
+api = api[0]
+vols = re.findall(r'(?ms)^        - name: auth-workload-subject\n(.*?)(?=^        - name: |\Z)', api)
+if len(vols) != 1: fail('want exactly one auth-workload-subject volume, got %d' % len(vols))
+vol = vols[0]
+for needle, why in (
+    ('projected:', 'a projected volume'),
+    ('defaultMode: 256', 'file mode 0400 (defaultMode 256)'),
+    ('audience: "dev-health-workload-exchange"', 'the literal exchange audience'),
+    ('expirationSeconds: 600', 'expirationSeconds 600'),
+    ('path: token', 'path token'),
+):
+    if needle not in vol: fail('volume lacks ' + why)
+if len(re.findall(r'serviceAccountToken:', vol)) != 1: fail('volume must hold exactly one serviceAccountToken source')
+if re.search(r'(?m)^\s+(secret|configMap|downwardAPI|emptyDir):', vol): fail('volume must hold only the projected token')
+mounts = re.findall(r'(?ms)^            - name: auth-workload-subject\n(.*?)(?=^            - name: |^      volumes:|\Z)', api)
+if len(mounts) != 1: fail('want exactly one auth-workload-subject mount, got %d' % len(mounts))
+m = mounts[0]
+if 'mountPath: "/var/run/secrets/dev-health/auth-workload"' not in m: fail('mount path is not /var/run/secrets/dev-health/auth-workload')
+if 'readOnly: true' not in m: fail('mount is not read-only')
+if 'subPath' in m: fail('mount uses subPath: it never receives token rotation')
+want = {
+    'ACR_AUTH_WORKLOAD_EXCHANGE_URL': 'http://auth-service.acr-test.svc:8080',
+    'ACR_AUTH_WORKLOAD_ALLOW_PLAIN_HTTP': 'true',
+    'ACR_AUTH_WORKLOAD_ISSUER': 'https://auth.example.test',
+    'ACR_AUTH_WORKLOAD_SUBJECT_FILE': '/var/run/secrets/dev-health/auth-workload/token',
+}
+cm = [d for d in docs if kind(d) == 'ConfigMap' and name(d) == rel + '-config']
+if len(cm) != 1: fail('want one acr-api ConfigMap')
+for k, v in want.items():
+    if not re.search(r'(?m)^  %s: "%s"$' % (k, re.escape(v)), cm[0]): fail('ConfigMap lacks %s: "%s"' % (k, v))
+if 'ACR_AUTH_WORKLOAD_BOOTSTRAP_FILE' in cm[0]: fail('ConfigMap carries a bootstrap file: the chart is the Kubernetes path')
+if 'ACR_AUTH_WORKLOAD' in api: fail('the acr-api container env must take these from the ConfigMap only')
+if not re.search(r'(?m)^      serviceAccountName: "' + re.escape(rel) + '-api"$', api): fail('acr-api is not on its own ServiceAccount')
+if not re.search(r'(?m)^      automountServiceAccountToken: false$', api): fail('acr-api pod must keep automountServiceAccountToken: false')
+rev = re.search(r'(?ms)^        - name: kubernetes-api-reviewer-token\n(.*?)(?=^        - name: |\Z)', api)
+if rev and 'dev-health-workload-exchange' in rev.group(1): fail('the reviewer token volume must not carry the exchange audience')
+for d in docs:
+    if name(d) != rel and kind(d) in ('Deployment', 'Job', 'StatefulSet', 'CronJob') and ('auth-workload-subject' in d or 'ACR_AUTH_WORKLOAD' in d): fail('%s %s carries the auth workload client' % (kind(d), name(d)))
+    if kind(d) == 'ConfigMap' and name(d) != rel + '-config' and 'ACR_AUTH_WORKLOAD' in d: fail('ConfigMap %s carries the auth workload client' % name(d))
+print('  ok   auth-workload: projected token (audience dev-health-workload-exchange, 600 s, 0400, read-only, no subPath) and four env values on acr-api only')
 PY
 }
 
@@ -510,6 +584,58 @@ case "$scenario" in
     negative service-account-name-collision-shared-is-mcp "service-account-name-collision" \
       --set-string "serviceAccount.name=${RELEASE}-mcp"
     printf 'RESULT: scenario service-account-name-collision passed\n'
+    exit 0 ;;
+  auth-workload-client-on)
+    printf 'scenario: auth-workload-client-on (projected exchange token, read-only mount, env)\n'
+    auth_workload_render >"$workdir/auth-workload-on.yaml"
+    auth_workload_assert "$workdir/auth-workload-on.yaml"
+    printf 'RESULT: scenario auth-workload-client-on passed\n'
+    exit 0 ;;
+  auth-workload-client-off-render)
+    printf 'scenario: auth-workload-client-off-render (off: other values set, render byte-equal to the render without the block)\n'
+    render >"$workdir/auth-workload-base.yaml"
+    render --set authWorkloadClient.enabled=false \
+      --set-string "authWorkloadClient.exchangeURL=http://auth-service.acr-test.svc:8080" \
+      --set authWorkloadClient.allowPlainHTTP=true \
+      --set-string "authWorkloadClient.issuer=https://auth.example.test" >"$workdir/auth-workload-off.yaml"
+    cmp -s "$workdir/auth-workload-base.yaml" "$workdir/auth-workload-off.yaml" || { diff -u "$workdir/auth-workload-base.yaml" "$workdir/auth-workload-off.yaml" >&2 || true; fail_gate "auth-workload: the off render differs from the render without the block"; }
+    if grep -qE 'ACR_AUTH_WORKLOAD|auth-workload-subject|dev-health-workload-exchange' "$workdir/auth-workload-off.yaml"; then fail_gate "auth-workload: the off render carries auth workload wiring"; fi
+    pass "auth-workload-client-off-render: off renders no volume, mount or env, byte-equal"
+    printf 'RESULT: scenario auth-workload-client-off-render passed\n'
+    exit 0 ;;
+  auth-workload-client-bad-inputs)
+    printf 'scenario: auth-workload-client-bad-inputs (a missing field fails the render naming the value; the audience and the expiry are no values)\n'
+    on=(--set authWorkloadClient.enabled=true)
+    url=(--set-string "authWorkloadClient.exchangeURL=https://auth-service.acr-test.svc")
+    iss=(--set-string "authWorkloadClient.issuer=https://auth.example.test")
+    negative auth-workload-missing-exchange-url "authWorkloadClient.exchangeURL" "${on[@]}" "${iss[@]}"
+    negative auth-workload-missing-issuer "authWorkloadClient.issuer" "${on[@]}" "${url[@]}"
+    negative auth-workload-audience-is-no-value "authWorkloadClient" "${on[@]}" "${url[@]}" "${iss[@]}" \
+      --set-string "authWorkloadClient.audience=dev-health-api"
+    negative auth-workload-expiration-is-no-value "authWorkloadClient" "${on[@]}" "${url[@]}" "${iss[@]}" \
+      --set authWorkloadClient.expirationSeconds=3600
+    printf 'RESULT: scenario auth-workload-client-bad-inputs passed\n'
+    exit 0 ;;
+  auth-workload-client-presence-only)
+    printf 'scenario: auth-workload-client-presence-only (the chart checks presence only: a malformed URL renders; acr-api refuses it at start)\n'
+    n=0
+    while IFS=$'\t' read -r field plain value verdict note; do
+      [[ -z "$field" || "$field" == \#* ]] && continue
+      [[ "$verdict" == refuse ]] || continue
+      n=$((n + 1))
+      jvalue="$(python3 -c 'import json,sys; print(json.dumps(sys.argv[1]))' "$value")"
+      if [[ "$field" == exchange ]]; then
+        args=(--set-json "authWorkloadClient.exchangeURL=$jvalue" --set-string "authWorkloadClient.issuer=https://auth.example.test")
+      else
+        args=(--set-string "authWorkloadClient.exchangeURL=https://auth-service.acr-test.svc" --set-json "authWorkloadClient.issuer=$jvalue")
+      fi
+      render --set authWorkloadClient.enabled=true --set "authWorkloadClient.allowPlainHTTP=$plain" "${args[@]}" >"$workdir/presence-only.yaml" 2>"$workdir/presence-only.err" \
+        || { printf '  FAIL %s %q (%s) failed to render, but the chart checks presence only: %s\n' "$field" "$value" "$note" "$(head -c 300 "$workdir/presence-only.err")" >&2; exit 1; }
+      grep -q 'ACR_AUTH_WORKLOAD_' "$workdir/presence-only.yaml" || fail_gate "auth-workload presence-only: $field $value rendered without the env"
+    done <"$(dirname "${BASH_SOURCE[0]}")/../../internal/config/testdata/auth_workload_urls.tsv"
+    [[ $n -gt 50 ]] || fail_gate "auth-workload presence-only: only $n malformed cells read from the corpus"
+    pass "auth-workload-client-presence-only: $n malformed values render (the Go validator refuses them at start)"
+    printf 'RESULT: scenario auth-workload-client-presence-only passed\n'
     exit 0 ;;
   happy) : ;;
   *) printf 'unknown scenario: %s\n' "$scenario" >&2; usage; exit 2 ;;

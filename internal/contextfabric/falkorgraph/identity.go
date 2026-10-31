@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric/graphrank"
 )
 
 func isAlreadyExists(err error) bool {
@@ -37,7 +38,7 @@ const (
 	// project membership as canonical project.v2 identities: a list, empty
 	// when the work item is in no project, absent when no producer stated
 	// it. Never "*" and never read with wildcard meaning.
-	propAuthzProjectIdentities = "authorization_project_identities"
+	propAuthzProjectIdentities = graphrank.AuthorizationProjectIdentitiesAttr
 	propEvidenceRefs           = "evidence_refs"
 	propSourceVersion          = "source_version"
 	propObservedAt             = "observed_at"    // RFC3339Nano, display/read-back only

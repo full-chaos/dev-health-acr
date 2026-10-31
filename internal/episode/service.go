@@ -222,7 +222,8 @@ func (s *Service) recordCompletion(ctx context.Context, principal storage.Princi
 }
 
 func authorizeWrite(principal storage.Principal) error {
-	if len(principal.RepositoryScopes) == 0 {
+	// A project grant names no repository (CHAOS-12299 r3).
+	if len(principal.RepositoryScopes) == 0 || auth.ClassifyGrant(principal) == auth.GrantProjectOnly {
 		return auth.ErrRepositoryForbidden
 	}
 	if !auth.HasScope(principal.Permissions, auth.ScopeEpisodeWrite) {

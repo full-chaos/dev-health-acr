@@ -57,7 +57,7 @@ func (s *EpisodeStore) PreflightIdempotency(ctx context.Context, principal stora
 	if err := ctx.Err(); err != nil {
 		return storage.EpisodePreflightMiss, err
 	}
-	if !episodeRepositoryAllowed(principal.RepositoryScopes, create.Repository.Slug) {
+	if !principalEpisodeRepositoryAllowed(principal, create.Repository.Slug) {
 		return storage.EpisodePreflightMiss, storage.ErrNotFound
 	}
 	digest, err := episodeDigest(create)
@@ -80,7 +80,7 @@ func (s *EpisodeStore) CreateIdempotent(ctx context.Context, principal storage.P
 	if err := ctx.Err(); err != nil {
 		return contractsv1.AgentEpisode{}, false, err
 	}
-	if !episodeRepositoryAllowed(principal.RepositoryScopes, create.Repository.Slug) {
+	if !principalEpisodeRepositoryAllowed(principal, create.Repository.Slug) {
 		return contractsv1.AgentEpisode{}, false, storage.ErrNotFound
 	}
 	s.mu.Lock()
@@ -125,7 +125,7 @@ func (s *EpisodeStore) Redact(_ context.Context, principal storage.Principal, ep
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	record, exists := s.byID[episodeID]
-	if !exists || record.orgID != principal.OrgID || record.episode.RedactionState == contractsv1.AgentEpisodeRedactionPurgedTombstone || episodeExpired(record.episode, s.now().UTC()) || record.episode.AgentEpisodeCreate.Repository.Slug == "" || !episodeRepositoryAllowed(principal.RepositoryScopes, record.episode.Repository.Slug) {
+	if !exists || record.orgID != principal.OrgID || record.episode.RedactionState == contractsv1.AgentEpisodeRedactionPurgedTombstone || episodeExpired(record.episode, s.now().UTC()) || record.episode.AgentEpisodeCreate.Repository.Slug == "" || !principalEpisodeRepositoryAllowed(principal, record.episode.Repository.Slug) {
 		return contractsv1.AgentEpisode{}, storage.ErrNotFound
 	}
 	if record.episode.RedactionState == contractsv1.AgentEpisodeRedactionActive {
@@ -190,7 +190,7 @@ func (s *EpisodeStore) PurgeExpiredForOrg(_ context.Context, principal storage.P
 }
 
 func (s *EpisodeStore) PurgeExpiredForPrincipal(_ context.Context, principal storage.Principal, before time.Time, limit int) (int, error) {
-	if strings.TrimSpace(principal.OrgID) == "" || len(principal.RepositoryScopes) == 0 {
+	if strings.TrimSpace(principal.OrgID) == "" || len(principal.RepositoryScopes) == 0 || principal.HoldsProjectGrant() {
 		return 0, storage.ErrNotFound
 	}
 	return s.purgeExpired(before, limit, principal.OrgID, principal.RepositoryScopes)
@@ -315,6 +315,12 @@ func defaultRetention(class string) time.Duration {
 	default:
 		return 0
 	}
+}
+
+// principalEpisodeRepositoryAllowed refuses a project-only principal every
+// episode repository, whatever its repository list holds (CHAOS-12299).
+func principalEpisodeRepositoryAllowed(principal storage.Principal, slug string) bool {
+	return !principal.HoldsProjectGrant() && episodeRepositoryAllowed(principal.RepositoryScopes, slug)
 }
 
 func episodeRepositoryAllowed(scopes []string, slug string) bool {

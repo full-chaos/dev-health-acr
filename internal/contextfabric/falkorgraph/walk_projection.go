@@ -8,12 +8,15 @@ import (
 )
 
 // A walk reads, of each node, only what it decides with: the identity (kind,
-// canonical id, label) and the three authorization lists. A Subject node can
+// canonical id, label), the three authorization lists, and a work item's
+// stated project membership (authorization_project_identities, CHAOS-12226;
+// read by graphrank.ProjectMembershipOf). A node without that property reads
+// it back as null, which the predicate takes as Unstated. A Subject node can
 // carry wide text and an embedding of thousands of numbers, and one link read
 // returns thousands of rows, so the walk's reads return a map of these
 // properties in place of the node. The link edge is read the same way: its tier,
 // its rank, its relationship id and the three authorization lists.
-var walkNodeProperties = []string{propKind, propCanonicalID, propLabel, propAuthzRepos, propAuthzProjects, propAuthzTeams}
+var walkNodeProperties = []string{propKind, propCanonicalID, propLabel, propAuthzRepos, propAuthzProjects, propAuthzTeams, propAuthzProjectIdentities}
 
 var walkLinkProperties = []string{propPropertyPrefix + linkTierProperty, propPropertyPrefix + linkRankProperty, propRelationshipID, propAuthzRepos, propAuthzProjects, propAuthzTeams}
 

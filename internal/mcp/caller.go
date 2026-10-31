@@ -284,6 +284,7 @@ func newCallerContext(principal *storage.Principal, client *sidecar.Client, capa
 		copied.RepositoryScopes = append([]string(nil), principal.RepositoryScopes...)
 		copied.Permissions = append([]string(nil), principal.Permissions...)
 		copied.ProductEntitlements = append([]string(nil), principal.ProductEntitlements...)
+		copied.ProjectScopes = append([]string(nil), principal.ProjectScopes...)
 		caller.principal = &copied
 	}
 	return caller

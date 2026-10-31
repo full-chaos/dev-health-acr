@@ -1978,8 +1978,8 @@ const (
 	// commit affirmation retraction and commit kept: one call in a loop over the committed subjects, published once.
 	commitAffirmationRetractionMaxLines = contractsv1.ContextFabricProjectedSubjectsMaxCount
 	commitKeptByNoMemberFoundMaxLines   = contractsv1.ContextFabricProjectedSubjectsMaxCount
-	// answer reuse outcome: 16 recordReuseOutcome call sites, each at most once per attempt.
-	answerReuseOutcomeMaxLines = 16 * passesPerRequest
+	// answer reuse outcome: 17 recordReuseOutcome call sites, each at most once per attempt.
+	answerReuseOutcomeMaxLines = 17 * passesPerRequest
 	// answer reuse containment: 3 recordReuseContainment call sites.
 	answerReuseContainmentMaxLines = 3 * passesPerRequest
 	// stored answerability: 2 call sites of the reuse surface, and the scope is the surface.

@@ -231,11 +231,11 @@ REVOKE SELECT, INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER ON TABLE ac
 GRANT SELECT, INSERT, UPDATE ON TABLE acr.agent_episodes TO :"runtime_user";
 \endif
 
--- SELECT internal/storage/postgres/device_authorization.go:88, INSERT device_authorization.go:61, UPDATE device_authorization.go:132, DELETE oauth_purge.go:167
+-- SELECT internal/storage/postgres/device_authorization.go:88, INSERT device_authorization.go:61, UPDATE device_authorization.go:132, DELETE oauth_purge.go:170
 REVOKE SELECT, INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER ON TABLE acr.device_authorizations FROM :"runtime_user";
 GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE acr.device_authorizations TO :"runtime_user";
 
--- SELECT internal/storage/postgres/oauth.go:66, INSERT oauth.go:104, DELETE oauth_purge.go:109; UPDATE because the idle-client purge locks rows with FOR UPDATE OF c SKIP LOCKED (oauth_purge.go:103), which Postgres checks as UPDATE
+-- SELECT internal/storage/postgres/oauth.go:66, INSERT oauth.go:104, DELETE oauth_purge.go:112; UPDATE because the idle-client purge locks rows with FOR UPDATE OF c SKIP LOCKED (oauth_purge.go:109), which Postgres checks as UPDATE, and the redeem sets last_granted_at (device_authorization_redeem.go markOAuthClientGranted)
 REVOKE SELECT, INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER ON TABLE acr.oauth_clients FROM :"runtime_user";
 GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE acr.oauth_clients TO :"runtime_user";
 
