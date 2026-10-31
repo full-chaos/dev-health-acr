@@ -170,6 +170,53 @@ func RunThreadSuite(t *testing.T, newStore func(t *testing.T, clock func() time.
 		}
 	})
 
+	// CHAOS-12148: the organization is part of the thread key. A principal of
+	// another organization with the owner's method, subject and thread id
+	// never joins, reads, lists or closes the owner's thread.
+	t.Run("another organization's principal with the same method, subject and thread id is another thread", func(t *testing.T) {
+		store, clock := setup(t)
+		otherOrg := storage.Principal{AuthenticationMethod: owner.AuthenticationMethod, Subject: owner.Subject, OrgID: owner.OrgID + "-other"}
+		turn(t, store, clock, owner, "thread-parity-cross-org", "cross-org-owner", &month)
+		clock.now = clock.now.Add(time.Second)
+		turn(t, store, clock, otherOrg, "thread-parity-cross-org", "cross-org-other", nil)
+		// The owner's thread holds its own turn only, with its question and
+		// its retention.
+		page, err := store.GetThread(ctx, threadKey(t, owner, "thread-parity-cross-org"), nil, 100, clock.now)
+		if err != nil || page.Thread.TurnCount != 1 || len(page.Turns) != 1 || page.Turns[0].SubmissionID != "submission-thread-cross-org-owner" ||
+			page.Turns[0].Question != "question cross-org-owner" || page.Thread.RetentionDays != month {
+			t.Fatalf("owner's thread = %+v err=%v", page, err)
+		}
+		// The other organization's principal has its own thread: one turn, its own.
+		other, err := store.GetThread(ctx, threadKey(t, otherOrg, "thread-parity-cross-org"), nil, 100, clock.now)
+		if err != nil || other.Thread.TurnCount != 1 || len(other.Turns) != 1 || other.Turns[0].SubmissionID != "submission-thread-cross-org-other" || other.Thread.RetentionDays != day {
+			t.Fatalf("other organization's thread = %+v err=%v", other, err)
+		}
+		// Each list names its own thread only.
+		for _, reader := range []storage.Principal{owner, otherOrg} {
+			threads, _, err := store.ListThreads(ctx, reader.OrgID, ownerOf(t, reader), nil, 10, clock.now)
+			if err != nil || len(threads) != 1 || threads[0].Key.OrgID != reader.OrgID || threads[0].TurnCount != 1 {
+				t.Fatalf("list for %s = %+v err=%v", reader.OrgID, threads, err)
+			}
+		}
+		// The other organization's delete closes its own thread only: the
+		// owner's stays open and keeps its question.
+		if closed, err := store.CloseThread(ctx, threadKey(t, otherOrg, "thread-parity-cross-org"), clock.now); err != nil || !closed {
+			t.Fatalf("the other organization closes its own = %t %v", closed, err)
+		}
+		page, err = store.GetThread(ctx, threadKey(t, owner, "thread-parity-cross-org"), nil, 100, clock.now)
+		if err != nil || page.Thread.ClosedAt != nil || len(page.Turns) != 1 || page.Turns[0].Question != "question cross-org-owner" {
+			t.Fatalf("the other organization's delete reached the owner's thread: %+v err=%v", page, err)
+		}
+		// And the owner's delete leaves the other organization's (already
+		// closed) thread as it was, without reopening or touching it.
+		if closed, err := store.CloseThread(ctx, threadKey(t, owner, "thread-parity-cross-org"), clock.now); err != nil || !closed {
+			t.Fatalf("owner closes its own = %t %v", closed, err)
+		}
+		if closed, err := store.CloseThread(ctx, threadKey(t, otherOrg, "thread-parity-cross-org"), clock.now); err != nil || closed {
+			t.Fatalf("a second close by the other organization = %t %v, want nothing to close", closed, err)
+		}
+	})
+
 	t.Run("pages hold the latest turns and the cursor reads the earlier ones", func(t *testing.T) {
 		store, clock := setup(t)
 		for i := range 5 {

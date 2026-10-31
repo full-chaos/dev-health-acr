@@ -492,6 +492,13 @@ revocation.
   (`revoked_reason=sign_out`) and answers `200 {}` for any refresh token, known
   or not; it works after every access token of the family has expired. An
   access token is `unsupported_token_type`. Served only with a browser client.
+- Credential class: `acr_browser_refresh_token` in the ops credential-class
+  contract (`contracts/auth/v1/credential-classes.json`, ops CHAOS-12141). The
+  endpoint profiles (`contracts/auth/v1/endpoint-profiles.acr.json`) list it as
+  issued on `POST /token` and accepted on `POST /revoke` (CHAOS-12174). It is
+  not on `POST /token`'s accepted classes: that route picks the class by the
+  `grant_type` form field, and the profile schema's class selector has no kind
+  for a form field yet (a stated gap on that row).
 - Revoking a browser credential (self-revoke or the operator command) revokes
   its family (`revoked_reason=member_revoked`). Rotation stays refused.
 - Request limits: `/token` and `/revoke` allow 60 requests a minute per key.
