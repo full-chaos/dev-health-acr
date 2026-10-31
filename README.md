@@ -193,6 +193,7 @@ the exact verified OCI archives to GHCR without rebuilding them and attaches the
 same archives to the GitHub Release.
 
 ```bash
+export CONTAINER_VERSION=0.1.0  # required by every image build (CHAOS-12198)
 make container-contract
 make container-pins
 make container-test

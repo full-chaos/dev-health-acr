@@ -634,8 +634,8 @@ Both gates key on the client address, resolved the same way: the TCP peer addres
 
 | Hop | Setting | Must contain |
 | --- | --- | --- |
-| acr-mcp | `ACR_MCP_TRUSTED_PROXY_CIDRS` (comma-separated CIDRs) | every proxy between the caller and acr-mcp (ingress controller and, where the tunnel or node-network source address is not the caller, that address) |
-| acr-api | `ACR_TRUSTED_PROXY_CIDRS` | the acr-mcp pod address range; with a first-party browser client, also the proxies between the browser and acr-api (its `/authorize` limit keys on this address) |
+| acr-mcp | `ACR_MCP_TRUSTED_PROXY_CIDRS` (comma-separated CIDRs; chart `acrMcp.trustedProxyCidrs`) | every proxy between the caller and acr-mcp (ingress controller and, where the tunnel or node-network source address is not the caller, that address) |
+| acr-api | `ACR_TRUSTED_PROXY_CIDRS` (chart `config.trustedProxyCidrs`; the render refuses the same variable in `deployment.extraEnv` while it is set) | the acr-mcp pod address range; with a first-party browser client, also the proxies between the browser and acr-api (its `/authorize` limit keys on this address) |
 
 acr-mcp states the address it resolved to acr-api as a single `X-Forwarded-For` value on every call it makes with a caller's bearer; it never relays the caller's own header. Without the acr-api setting, acr-api ignores that header and keys every MCP-forwarded failure on the acr-mcp pod address: one bucket for all MCP callers, so 20 bad tokens from anyone would answer `429` to every MCP caller. Without the acr-mcp setting, acr-mcp keys on the peer (the ingress), the same defect at the edge; it logs a `Warn` at startup ("edge gate keys on the peer address") so this is visible. The ingress must also pass `X-Forwarded-For` through (ingress-nginx drops it unless `use-forwarded-headers` is enabled).
 
