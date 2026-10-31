@@ -399,12 +399,13 @@ dho() {
 # request (ops CHAOS-9993). It talks to Postgres directly through dho, so it needs no running api, but
 # the schema may still be migrating when the services are first started: it retries, bounded by an
 # attempt count and a deadline, and logs each retry with the first line of dho's stderr and the final
-# outcome. The token is printed on stdout only; nothing else is.
+# outcome. The token is printed on stdout only; nothing else is. principal_access:read is the
+# per-call access read acr-api makes for every user-class call (CHAOS-12092; ops CHAOS-12084).
 mint_ops_service_token() {
   local attempt=1 max_attempts=30 deadline=$((SECONDS + 180)) token reason errfile
   errfile="$(mktemp)"
   while :; do
-    if token="$(dho service-credentials create --service acr --scope entitlements:read --scope llm_config:read 2>"$errfile")" && [[ "$token" == svc_acr_* ]]; then
+    if token="$(dho service-credentials create --service acr --scope entitlements:read --scope llm_config:read --scope principal_access:read 2>"$errfile")" && [[ "$token" == svc_acr_* ]]; then
       rm -f "$errfile"
       note "ops service credential minted (attempt ${attempt})"
       printf '%s' "$token"
