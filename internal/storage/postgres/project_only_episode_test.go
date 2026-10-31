@@ -36,7 +36,18 @@ func TestAProjectOnlyPrincipalIsRefusedPacketsAndPurges(t *testing.T) {
 	if !principalPacketRepositoryAllowed(storage.Principal{OrgID: "org_1", RepositoryScopes: []string{"*"}}, "acme/api") {
 		t.Error("a universal principal was refused a context-packet repository")
 	}
-	if _, err := (&EpisodeStore{}).PurgeExpiredForPrincipal(context.Background(), principal, time.Now(), 10); !errors.Is(err, storage.ErrNotFound) {
-		t.Errorf("PurgeExpiredForPrincipal = %v, want not found for a project-only principal", err)
+	// The store has no database: the refusal must come before any database
+	// call, so a purge that reaches the database is the failure this pins.
+	err := func() (err error) {
+		defer func() {
+			if r := recover(); r != nil {
+				err = errors.New("the purge reached the database")
+			}
+		}()
+		_, err = (&EpisodeStore{}).PurgeExpiredForPrincipal(context.Background(), principal, time.Now(), 10)
+		return err
+	}()
+	if !errors.Is(err, storage.ErrNotFound) {
+		t.Errorf("PurgeExpiredForPrincipal = %v, want not found before any database call for a project-only principal", err)
 	}
 }
