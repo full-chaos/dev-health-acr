@@ -1242,6 +1242,12 @@ func (a *Adapter) DiscoverContext(ctx context.Context, principal storage.Princip
 		}
 	}
 
+	// CHAOS-12327: a requested team narrowing decides every served subject by
+	// ownership; "*" is never team evidence (team_narrowing_discover.go).
+	teamScope := a.newDiscoverTeamScope(key, principal.OrgID, scope, temporal, request.Resolution.Committed)
+	if resolvedEdges, err = teamScope.edges(ctx, principal, scope, resolvedEdges); err != nil {
+		return contextfabric.GraphContext{}, graphNotProjectedError(err)
+	}
 	candidateEdges := make([]graphrank.CandidateEdge, 0, len(resolvedEdges))
 	for _, r := range resolvedEdges {
 		candidateEdges = append(candidateEdges, graphrank.CandidateEdge{
@@ -1480,6 +1486,10 @@ func (a *Adapter) DiscoverContext(ctx context.Context, principal storage.Princip
 	// third, parallel classification. The two censuses can never both run for
 	// one call (one requires zero committed subjects, the other requires a
 	// committed repository anchor), so the OR never blends two real runs.
+	// CHAOS-12327: the cohort's candidates under a requested team narrowing.
+	if cohortNodes, err = teamScope.nodes(ctx, principal, scope, cohortNodes); err != nil {
+		return contextfabric.GraphContext{}, graphNotProjectedError(err)
+	}
 	censusCoversThisCohort := (censusAdmitted && censusMembers > 0 && exactNameCensusCoversKind(declaredCohortKind)) ||
 		kindCensusMembers > 0 || statusCensusCovers ||
 		ownershipCensusMembers > 0
@@ -1490,6 +1500,11 @@ func (a *Adapter) DiscoverContext(ctx context.Context, principal storage.Princip
 	exactNameCutThisCohort := exactNameTruncated && !kindCensusRan
 	poolTruncationBasis, poolTruncationArms, cohortPoolTruncated := cohortPoolTruncation(
 		cohortFulltextTruncated, hopWalkTruncated, exactNameCutThisCohort, kindCensusTruncated, poolFailedLookups > 0, censusCoversThisCohort)
+	// CHAOS-12327 (lead ruling Q2): ownership a team narrowing needed was
+	// absent, not current, or cut -- the population floor, as the repository
+	// walk's truncation. No census covers it: a census fetches nodes, not their
+	// ownership.
+	cohortPoolTruncated = cohortPoolTruncated || teamScope.Undecided()
 	// request's OWN RequestedScope reaches admission completely unmodified
 	// here -- see the ownership-census filter above (graphrank.OwnsRepository)
 	// for where an ownership-routed call's membership is actually decided.

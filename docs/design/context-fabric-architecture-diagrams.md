@@ -691,6 +691,30 @@ and its own totals are not the team's: a walk with no member is `no_match`,
 never `no_pull_requests` or `unlinked`. The caller's grants and the rest of the
 request still decide first; the narrowing never widens.
 
+**A requested team narrowing on the general graph read (CHAOS-12327).** The
+same reach rule decides every subject `DiscoverContext` serves
+(`falkorgraph/team_narrowing_discover.go`, one call on the path edges and one on
+the cohort candidates). Under `scope.team_ids`:
+
+- a team is decided by its own team list (the node rule, unchanged);
+- a repository or a project is in scope when it is currently `OWNED_BY_TEAM` a
+  requested team (any current edge, co-owners included);
+- a pull request is in scope when its repository (`BELONGS_TO_REPOSITORY`) is;
+- a work item is in scope by (i) an actual `LINKS_PULL_REQUEST` row of an
+  admitted tier to a pull request of such a repository, or (ii) its own project;
+- the caller's organization node and the committed subjects stay (the subject is
+  what the question names); every other kind has no ownership path to a team
+  and is out of scope.
+
+A path is served only when both of its ends are in scope. An exclusion is scope:
+never a denial, never an authorization detail, never a floor. The read is
+floored only where the ownership it needed for a subject the rest of the request
+admits is absent, not current, or cut: the cohort's population floor (the
+cohort is truncated; an empty member set has a population lower bound). Subject
+resolution is not narrowed by team. Kinds that hang off an owned entity
+(reviews, CI runs, deployments) are CHAOS-12345, and the resolution census is
+CHAOS-12346.
+
 **A count of a repository's owning teams.** For a question about now, a read
 that found no owner, was not cut, and found ownership projected for the org
 (the active census holds a team, or the repository's own ownership edges name
