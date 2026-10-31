@@ -1,6 +1,7 @@
 # Context Fabric: the project-only grant scope
 
-Status: c1 (CHAOS-12297) is built; c2 through c5 are planned. Design of record:
+Status: c1 (CHAOS-12297), c2 (CHAOS-12298) and c3 (CHAOS-12299) are built; c4
+and c5 are planned. Design of record:
 CHAOS-12107 (v3 and its r3 addendum; Linear). Parent ticket: CHAOS-12228.
 
 ## Why
@@ -179,10 +180,11 @@ channel that reads its repository list or hashes only that list:
   children, commitment, the tree filter, membership, the scope expander, the
   repository-less admission, evidence and source rows) then reads nothing for
   it, so a work-item subject's facts are withheld.
-- **Stored results and reuse.** It is refused every stored result
-  (`grant_mismatch`), makes no reuse lookup, and its results are never stored
-  as reusable, because the grant digest and the reuse key hash only the
-  repository list.
+- **Stored results and reuse.** c3 refused it every stored result
+  (`grant_mismatch`), made no reuse lookup and stored none of its results as
+  reusable, because the grant digest and the reuse key hashed only the
+  repository list. c2 lifts all three: its digest and key are now class-tagged
+  and built from its project set (see "Digests and reuse").
 - **Never unscoped (r3).** Every reader of "the caller sees every
   repository" decides on the principal (`auth.ClassifyGrant`), never on the
   raw list: the resolve census visibility, the organization figures
@@ -196,23 +198,55 @@ channel that reads its repository list or hashes only that list:
 
 ## Digests and reuse
 
-c2, CHAOS-12298:
+c2, CHAOS-12298. Every other grant class keeps its digests and its reuse key
+byte for byte.
 
 - **Sentinel.** A `project_only` principal's repository list holds one reserved
-  value with the prefix `acr-reserved:`, so any site that still reads the raw
-  list fails closed. The prefix is refused where repository names enter acr and
-  is denied in the raw-equality matchers. No digest, reuse key or proof hashes
-  it as a repository.
-- **Stored-result grant digest.** It is `p:` plus 32 hex, a framed digest of
-  the canonical project set (migration 0066, CHAOS-12227).
-- **Work-item census digest.** It keeps its 64-hex envelope over a class-tagged
-  grant plus the requested-scope inputs. The reuse key is class-tagged.
+  value, `contractsv1.ProjectOnlyRepositoryScope` (`acr-reserved:project-only`;
+  the prefix is `contractsv1.ReservedRepositoryScopePrefix`, compared trimmed
+  and case-insensitive), so any site that still reads the raw list sees a
+  restricted list that matches nothing. The access-read decoder (c5) sets it.
+  - Refused where repository names enter acr: credential scopes
+    (`auth.NormalizeRepositoryScopes`, by name, before the slug grammar), the
+    projection port (`ContextFabricAuthorizationScope.Validate`, every entity,
+    relationship and scope it guards) and the source slug producer
+    (`devhealthsource.repoAuthorization` writes the unresolved sentinel).
+  - Denied in the raw-equality matchers: `graphrank.ScopeMatch` never matches a
+    reserved value (its raw fallback would otherwise match a node holding the
+    same value) and `auth.RepositoryAllowed` skips one.
+  - No digest or reuse key hashes it: the project-only forms below are built
+    from the project set alone.
+- **The project grant digest.** `projectGrantDigest`
+  (`internal/contextfabric/reuse_grant_scope.go`): the canonical `project.v2`
+  identities, compared exactly (never trimmed or case-folded), de-duplicated,
+  sorted and framed (a domain tag, then each entry length-prefixed), SHA-256,
+  128 bits.
+- **Stored-result grant digest.** `p:` plus those 32 hex
+  (`StoredResultGrantDigest`; migration 0066, CHAOS-12227, admits the form). A
+  project-only reader is a restricted reader of the gate: it is served only a
+  result whose digest equals its own, never `open`, `g:` or another `p:`; a
+  restricted reader's `g:` digest never equals a `p:` one.
+- **Reuse key.** Class-tagged: `+p:` plus the project grant digest for
+  `project_only`, `+g:` for a restricted grant, the bare key for unrestricted
+  and universal (`GrantScopedTimeAxisKey`, the lookup and the only Save both).
+  Two different project grants never share a key.
+- **Work-item census digest.** It keeps its 64-hex envelope. For
+  `project_only` the document is class-tagged: `grant_class` plus the sorted
+  project set, and an empty repository grant list
+  (`WorkItemAuthorizationDigest`). The two fields are omitted for every other
+  class, so their documents are unchanged.
 - **R2-4.** An unrestricted or universal reader may read a `project_only`
-  result. No new unrestricted investigation reuses one, and the served result
-  keeps its `project_only` limitations and coverage as stored.
-- **R3-3.** A census-backed work-item tuple read by an unrestricted reader is
-  not-found, because the census digest is recomputed for the reader
-  (`internal/contextfabric/work_item_stored_serving.go`).
+  result: the stored-result gate checks no digest for them, as before. No new
+  unrestricted or universal investigation reuses one, because its reuse key
+  never equals a `+p:` key, and the served result keeps its `project_only`
+  limitations and coverage exactly as stored.
+- **R3-3.** A census-backed work-item tuple computed under one grant class is
+  not-found to a reader of another, because the census digest is recomputed
+  for the reader (`internal/contextfabric/work_item_stored_serving.go`).
+- **Postgres.** The `p:` replay (identical, changed, repository, universal and
+  unrestricted grants) is the shared parity suite
+  `paritytest.RunProjectGrantDigestReplaySuite`, run by both adapters (the
+  Postgres one under the `integration` build tag).
 
 ## Facts and aggregates
 
