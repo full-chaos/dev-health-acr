@@ -81,17 +81,33 @@ func TestScopeExpanderSlopeGuardOnRun41221131667(t *testing.T) {
 	}
 }
 
-// A name that is not a scope expander statement would silently keep min
-// against min for the statement it meant; a precise-spread statement must not
-// lose its sensitivity.
+// The set is exactly the three reviewed statements: a dropped name silently
+// returns that statement to the false failure, an added name silently lowers
+// that statement's sensitivity. Each must be a real scope expander statement
+// that runs multithreaded (the reason for the set), and none may be a
+// precise-spread statement.
 func TestNoisySlopeStatementsNameRealNoisyStatements(t *testing.T) {
-	labels := map[string]bool{}
+	want := []string{"historicalDropCount", "historicalTouchCount", "projectRepositoriesAsOf"}
+	if len(noisySlopeStatements) != len(want) {
+		t.Errorf("noisySlopeStatements has %d names, want exactly %v", len(noisySlopeStatements), want)
+	}
+	for _, name := range want {
+		if !noisySlopeStatements[name] {
+			t.Errorf("noisySlopeStatements does not name %q", name)
+		}
+	}
+	threadBound := map[string]bool{}
 	for _, statement := range scopeExpanderStatements {
-		labels[statement.label] = true
+		threadBound[statement.label] = statement.threadBound
 	}
 	for name := range noisySlopeStatements {
-		if !labels[name] {
+		bound, found := threadBound[name]
+		if !found {
 			t.Errorf("noisySlopeStatements names %q, which is not a scope expander statement", name)
+			continue
+		}
+		if bound {
+			t.Errorf("%q runs thread-bound, so its spread is not multithread variance: it must keep min against min", name)
 		}
 		if preciseSpreadStatements[name] {
 			t.Errorf("%q is both a precise-spread statement and a min-against-max statement", name)
