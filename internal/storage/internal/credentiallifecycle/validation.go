@@ -166,7 +166,7 @@ func deriveClientClass(input CreateInput) (ClientClass, error) {
 		if input.ClientID != "" {
 			return "", invalid("client id")
 		}
-		return ClientClassOperator, nil
+		return ClientClassOrgBearer, nil
 	case IssuanceProvenanceWorkloadExchange:
 		if input.ApprovingUserID != "" {
 			return "", invalid("approving user")
