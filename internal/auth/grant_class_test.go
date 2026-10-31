@@ -20,6 +20,10 @@ func TestClassifyGrantReadsTheRepositoryGrantList(t *testing.T) {
 		{name: "star with spaces", scopes: []string{" * "}, want: GrantUniversal},
 		{name: "one repository", scopes: []string{"a/b"}, want: GrantRestricted},
 		{name: "repository and star", scopes: []string{"a/b", "*"}, want: GrantUniversal},
+		{name: "star before a repository", scopes: []string{"*", "a/b"}, want: GrantUniversal},
+		{name: "duplicate repositories", scopes: []string{"a/b", "a/b"}, want: GrantRestricted},
+		{name: "duplicate stars", scopes: []string{"*", "*"}, want: GrantUniversal},
+		{name: "whitespace-only entry", scopes: []string{" "}, want: GrantRestricted},
 	} {
 		if got := ClassifyGrant(storage.Principal{OrgID: "org_1", RepositoryScopes: tc.scopes}); got != tc.want {
 			t.Errorf("%s: ClassifyGrant = %q, want %q", tc.name, got, tc.want)

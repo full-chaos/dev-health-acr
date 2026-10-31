@@ -22,6 +22,10 @@ func TestTheStoredResultScopeReadsAGrantAsBefore(t *testing.T) {
 		{name: "star with spaces", scopes: []string{" * "}, want: StoredResultScopeUniversal},
 		{name: "one repository", scopes: []string{"a/b"}, want: StoredResultScopeRestricted},
 		{name: "repository and star", scopes: []string{"a/b", "*"}, want: StoredResultScopeUniversal},
+		{name: "star before a repository", scopes: []string{"*", "a/b"}, want: StoredResultScopeUniversal},
+		{name: "duplicate repositories", scopes: []string{"a/b", "a/b"}, want: StoredResultScopeRestricted},
+		{name: "duplicate stars", scopes: []string{"*", "*"}, want: StoredResultScopeUniversal},
+		{name: "whitespace-only entry", scopes: []string{" "}, want: StoredResultScopeRestricted},
 	} {
 		if got := classifyStoredResultPrincipalScope(storage.Principal{OrgID: "org_1", RepositoryScopes: tc.scopes}); got != tc.want {
 			t.Errorf("%s: classifyStoredResultPrincipalScope = %q, want %q", tc.name, got, tc.want)

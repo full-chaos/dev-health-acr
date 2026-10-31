@@ -24,6 +24,10 @@ func TestThePrincipalAndCallerClassesReadAGrantAsBefore(t *testing.T) {
 		{name: "star with spaces", scopes: []string{" * "}, class: ClassUniversal, caller: CallerUnrestricted},
 		{name: "one repository", scopes: []string{"a/b"}, class: ClassRestricted, caller: CallerRestricted},
 		{name: "repository and star", scopes: []string{"a/b", "*"}, class: ClassUniversal, caller: CallerUnrestricted},
+		{name: "star before a repository", scopes: []string{"*", "a/b"}, class: ClassUniversal, caller: CallerUnrestricted},
+		{name: "duplicate repositories", scopes: []string{"a/b", "a/b"}, class: ClassRestricted, caller: CallerRestricted},
+		{name: "duplicate stars", scopes: []string{"*", "*"}, class: ClassUniversal, caller: CallerUnrestricted},
+		{name: "whitespace-only entry", scopes: []string{" "}, class: ClassRestricted, caller: CallerRestricted},
 	} {
 		got := ClassifyPrincipal(storage.Principal{OrgID: "org_1", RepositoryScopes: tc.scopes})
 		if got != tc.class {
