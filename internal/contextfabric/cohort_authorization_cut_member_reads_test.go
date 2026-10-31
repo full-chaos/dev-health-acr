@@ -523,3 +523,68 @@ func TestAnUnreconciledCutPopulationNamesTheCutAsInferred(t *testing.T) {
 		t.Fatalf("row does not validate: %v", err)
 	}
 }
+
+// atOutcomeCap pads a stored answer to the contract's outcome cap with copies
+// of its own planning member-read row, keeping it valid.
+func atOutcomeCap(t *testing.T, stored InvestigationResult) InvestigationResult {
+	t.Helper()
+	var planning RequirementOutcomeRow
+	for _, row := range stored.Completeness.Outcomes {
+		if row.Requirement == memberReadsRequirement && row.Stage == contractsv1.ContextFabricOutcomeStagePlanning {
+			planning = row
+		}
+	}
+	if planning.Requirement == "" {
+		t.Fatal("fixture: no planning member read row to pad with")
+	}
+	for len(stored.Completeness.Outcomes) < contractsv1.ContextFabricPlanRequirementOutcomeMaxCount {
+		stored.Completeness.Outcomes = append([]RequirementOutcomeRow{planning}, stored.Completeness.Outcomes...)
+	}
+	stored.Completeness = ComputeAnswerCompleteness(stored)
+	if err := stored.Validate(); err != nil {
+		t.Fatalf("fixture: the stored answer at the cap does not validate: %v", err)
+	}
+	return stored
+}
+
+// Codex #1807 r1 P2: a stored answer already at the contract's outcome cap.
+// The restated row must not make the served document invalid: at the cap the
+// lowest-ranked row gives way and the eviction is disclosed (D6080), the
+// served answer validates, and it is not complete.
+func TestARestatementAtTheOutcomeCapIsServedValidAndDisclosed(t *testing.T) {
+	t.Parallel()
+	for name, stored := range map[string]InvestigationResult{
+		"member read": atOutcomeCap(t, storedPreFixCutAnswer(t)),
+		"count":       atOutcomeCap(t, storedPreFixCutCountAnswer(t)),
+	} {
+		t.Run(name, func(t *testing.T) {
+			served := ApplyServedStatusFloors(stored)
+			if got := len(served.Completeness.Outcomes); got > contractsv1.ContextFabricPlanRequirementOutcomeMaxCount {
+				t.Fatalf("served outcomes = %d, over the cap %d", got, contractsv1.ContextFabricPlanRequirementOutcomeMaxCount)
+			}
+			if err := served.Validate(); err != nil {
+				t.Fatalf("the served answer at the cap does not validate: %v", err)
+			}
+			if got := served.Completeness.State; got == contractsv1.ContextFabricAnswerCompletenessComplete {
+				t.Fatalf("served completeness.state = %q over an authorization cut member set", got)
+			}
+			if outcomeRowsEvicted(served.Limitations) < 1 {
+				t.Fatalf("a row gave way at the cap but no eviction is disclosed: %v", served.Limitations)
+			}
+		})
+	}
+}
+
+// storedPreFixCutCountAnswer is storedPreFixCutAnswer for a question that
+// also counts the members: a stale satisfied count row beside the member read.
+func storedPreFixCutCountAnswer(t *testing.T) InvestigationResult {
+	t.Helper()
+	stored := runAuthorizationCutCohortQuestion(t, 4, Coverage{Sources: []SourceObservation{}, DegradedReasons: []string{}},
+		[]InvestigationGoal{GoalAssessState, GoalCountOrAggregate})
+	cut := cohortAuthorizationCutCoverage(cohortAuthorizationCutDenied, true)
+	stored.Coverage.Details = append(stored.Coverage.Details, cut.Details...)
+	stored.Coverage.DegradedReasons = append(stored.Coverage.DegradedReasons, cut.DegradedReasons...)
+	stored.Coverage.Partial = true
+	stored.Completeness = ComputeAnswerCompleteness(stored)
+	return stored
+}
