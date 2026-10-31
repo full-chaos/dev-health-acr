@@ -30,7 +30,7 @@ The default listen address is `127.0.0.1:8080` (dictation 811: loopback-only, so
 | `ACR_READ_HEADER_TIMEOUT` | `5s` | HTTP header timeout |
 | `ACR_READ_TIMEOUT` | `20s` | HTTP read timeout |
 | `ACR_WRITE_TIMEOUT` | `20s` | HTTP write timeout — must stay >= `ACR_REQUEST_TIMEOUT` + 5s (CHAOS-4330); rejected at startup otherwise |
-| `ACR_IDLE_TIMEOUT` | `60s` | HTTP idle timeout |
+| `ACR_IDLE_TIMEOUT` | `60s` | HTTP idle timeout. Must be more than 45s, the hosted API client's idle timeout (acr-mcp, the sidecar); acr-api refuses to start otherwise. The client then closes an idle connection first, so no request goes out on a connection the server is closing |
 | `ACR_SHUTDOWN_TIMEOUT` | `10s` | Graceful shutdown budget |
 | `ACR_MINIMUM_SIDECAR_VERSION` | `0.1.0` | Capabilities handshake floor |
 | `ACR_ENTITLEMENT_KEY` | `agent_context_runtime` | Fixed product entitlement key; other values are rejected |
