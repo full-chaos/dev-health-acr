@@ -311,6 +311,11 @@ spec:
               mountPath: /var/run/secrets/kubernetes.io/serviceaccount
               readOnly: true
             {{- end }}
+            {{- if .Values.authWorkloadClient.enabled }}
+            - name: auth-workload-subject
+              mountPath: {{ include "acr.authWorkloadMountPath" . | quote }}
+              readOnly: true
+            {{- end }}
       # deployment.extraContainers is intentionally never rendered; the
       volumes:
         - name: tmp
@@ -385,4 +390,18 @@ spec:
                     - path: namespace
                       fieldRef:
                         fieldPath: metadata.namespace
+        {{- end }}
+        {{- if .Values.authWorkloadClient.enabled }}
+        # CHAOS-11195: the subject token of acr-api's workload-token exchange client. Audience and lifetime are
+        # fixed: auth-service reviews every subject against the one audience dev-health-workload-exchange, and 600 s
+        # is the Kubernetes minimum. 0400 (defaultMode 256); kubelet adds group read for the pod's fsGroup. The
+        # client reads the file again for every exchange, so the mount has no subPath (it would never rotate).
+        - name: auth-workload-subject
+          projected:
+            defaultMode: 256
+            sources:
+              - serviceAccountToken:
+                  path: token
+                  audience: "dev-health-workload-exchange"
+                  expirationSeconds: 600
         {{- end }}

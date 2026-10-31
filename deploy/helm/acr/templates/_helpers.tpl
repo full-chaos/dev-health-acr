@@ -650,6 +650,33 @@ credentials) is on.
 {{- end -}}
 
 {{/*
+CHAOS-11195: acr-api's workload-token exchange client. The subject token is a projected ServiceAccount token
+mounted here (read-only, no subPath). The exchange URL is auth-service's origin (https, or http with
+allowPlainHTTP for a cluster-internal Service); the issuer is auth-service's https token issuer URL, which
+every workload token must carry. The exchange audience is not a value: ops reviews against one audience.
+*/}}
+{{- define "acr.authWorkloadMountPath" -}}/var/run/secrets/dev-health/auth-workload{{- end -}}
+
+{{- define "acr.validateAuthWorkloadClient" -}}
+{{- $c := .Values.authWorkloadClient -}}
+{{- if not $c.exchangeURL -}}
+{{- fail "auth-workload-client: authWorkloadClient.exchangeURL is required when authWorkloadClient.enabled" -}}
+{{- end -}}
+{{- if not (regexMatch "^https?://[A-Za-z0-9]([A-Za-z0-9.-]*[A-Za-z0-9])?(:[0-9]{1,5})?/?$" $c.exchangeURL) -}}
+{{- fail "auth-workload-client: authWorkloadClient.exchangeURL must hold only a scheme, a host and a port" -}}
+{{- end -}}
+{{- if and (hasPrefix "http://" $c.exchangeURL) (not $c.allowPlainHTTP) -}}
+{{- fail "auth-workload-client: authWorkloadClient.exchangeURL is http: set authWorkloadClient.allowPlainHTTP for a cluster-internal Service" -}}
+{{- end -}}
+{{- if not $c.issuer -}}
+{{- fail "auth-workload-client: authWorkloadClient.issuer is required when authWorkloadClient.enabled" -}}
+{{- end -}}
+{{- if not (regexMatch "^https://[a-z0-9]([a-z0-9.-]{0,251}[a-z0-9])?(:[0-9]{1,5})?(/[A-Za-z0-9_~-][A-Za-z0-9._~-]{0,63}){0,8}$" $c.issuer) -}}
+{{- fail "auth-workload-client: authWorkloadClient.issuer must be auth-service's https token issuer URL" -}}
+{{- end -}}
+{{- end -}}
+
+{{/*
 acr.validateEnvValueSources: a variable the chart renders from a value into the
 acr-api ConfigMap has ONE source. deployment.extraEnv is an env entry, and an
 env entry beats the ConfigMap (envFrom) silently, so the two together would
