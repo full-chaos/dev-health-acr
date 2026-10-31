@@ -1,17 +1,33 @@
 package contextfabric
 
 import (
+	"context"
 	"regexp"
 	"strings"
 	"testing"
 
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
+	"github.com/full-chaos/dev-health-acr/internal/storage"
 )
 
 // CHAOS-12286: ACR's own lead prose never restates the answer status or the
 // completeness state in its machine word (chris 2026-10-31: a person is never
 // shown one). The status sentences say what is known instead; a complete
 // answer has none.
+
+// legacyStatusSentence is the sentence statusSentence wrote for status before
+// CHAOS-12286, as stored answers carry it.
+func legacyStatusSentence(status InvestigationStatus) string {
+	switch status {
+	case InvestigationComplete:
+		return legacyModelPathStatusSentences[0]
+	case InvestigationPartial:
+		return legacyModelPathStatusSentences[1]
+	case InvestigationDegraded:
+		return legacyModelPathStatusSentences[2]
+	}
+	return ""
+}
 
 // acrRawStateWord matches an answer status or completeness state word.
 var acrRawStateWord = regexp.MustCompile(`(?i)\b(complete|partial|degraded|not_derived|no_match|clarification_required)\b`)
@@ -135,5 +151,50 @@ func TestAHeadWithoutAStatusSentenceIsLeftAlone(t *testing.T) {
 	got := restateServedStatusHead(result)
 	if got.DirectJudgment != contractsv1.ContextFabricClientSynthesisAnswer || got.DeterministicAnswer != contractsv1.ContextFabricClientSynthesisAnswer {
 		t.Fatalf("lead prose = %q / %q, want the client synthesis text unchanged", got.DirectJudgment, got.DeterministicAnswer)
+	}
+}
+
+// Through the engine's reuse path: a stored complete head with nothing to
+// state in its place is served as stored and counted on the authority line;
+// with a current_state to fall back to, it is not.
+func TestAReusedHeadWithNothingInItsPlaceIsServedAsStoredAndCounted(t *testing.T) {
+	t.Parallel()
+	for name, tc := range map[string]struct {
+		currentState string
+		wantHead     string
+		wantCounted  bool
+	}{
+		"no current_state":   {"", legacyStatusSentence(InvestigationComplete), true},
+		"with current_state": {"Current observed values: open items: 3.", "Current observed values: open items: 3.", false},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			project, candidate := servedHeadCandidate(InvestigationComplete)
+			candidate.DirectJudgment = legacyStatusSentence(InvestigationComplete)
+			candidate.DeterministicAnswer = legacyStatusSentence(InvestigationComplete)
+			candidate.CurrentState = tc.currentState
+			telemetry := &recordingTelemetry{}
+			engine := completenessAuthorityTestEngine(t, EngineDependencies{
+				Graph: graphReaderStub{resolution: SubjectResolution{Candidates: []SubjectCandidate{}, Committed: []SubjectRef{project}}},
+				ReuseGate: reuseGateFunc(func(context.Context, storage.Principal, ReuseKey) (InvestigationResult, bool, error) {
+					return candidate, true, nil
+				}),
+				Telemetry: telemetry,
+			}, false, false)
+			result, err := engine.Investigate(context.Background(), reusePrincipal(), validInvestigationRequest())
+			if err != nil {
+				t.Fatalf("Investigate() error = %v", err)
+			}
+			if result.Status != InvestigationComplete || result.DirectJudgment != tc.wantHead || result.DeterministicAnswer != tc.wantHead {
+				t.Fatalf("served %q with lead prose %q / %q, want complete with %q", result.Status, result.DirectJudgment, result.DeterministicAnswer, tc.wantHead)
+			}
+			if err := result.Validate(); err != nil {
+				t.Fatalf("served result invalid: %v", err)
+			}
+			n := len(telemetry.completenessAuthorities)
+			if n == 0 || telemetry.completenessAuthorities[n-1].LeadProseServedAsStored != tc.wantCounted {
+				t.Fatalf("authority observations = %+v, want the last to count lead_prose_served_as_stored=%v", telemetry.completenessAuthorities, tc.wantCounted)
+			}
+		})
 	}
 }

@@ -631,7 +631,7 @@ func TestCohortDriverJudgmentSummary_NoStrayArticleOrDoubleNoun(t *testing.T) {
 // per the CHAOS-4690 ruling.
 func TestRecomposeCohortAnswerNarrative(t *testing.T) {
 	t.Parallel()
-	wantSentence := "This investigation is partial: some canonical or graph coverage was unavailable."
+	wantSentence := "Some canonical or graph coverage was unavailable."
 
 	directJudgment, deterministicAnswer := recomposeCohortAnswerNarrative(InvestigationPartial, nil, nil, SubjectResolution{})
 	if directJudgment != wantSentence {

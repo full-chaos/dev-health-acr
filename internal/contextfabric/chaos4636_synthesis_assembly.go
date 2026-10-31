@@ -824,6 +824,10 @@ func (e *Engine) synthesizeAndAssemble(ctx context.Context, principal storage.Pr
 		result.DeterministicAnswer = leadWithCountSentence(result.DeterministicAnswer, lead, deterministicAnswerMaxLength)
 		result.DirectJudgment = leadWithCountSentence(result.DirectJudgment, lead, directJudgmentMaxLength)
 	}
+	// CHAOS-12286: the lead prose as every serving point states it, before
+	// Validate and Save: a complete answer with no principal driver and no
+	// count composes no head, and takes current_state's first sentence.
+	result = restateServedStatusHead(result)
 	// CHAOS-4085: the post-synthesis commit-affirmation gate. Placed HERE
 	// deliberately -- after every composer that touches Limitations or
 	// Coverage has run (retrieval degradation, temporal disclosures), and

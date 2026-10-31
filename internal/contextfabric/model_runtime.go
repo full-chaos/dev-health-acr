@@ -3081,7 +3081,9 @@ func composeCurrentState(draft SynthesisDraft) string {
 	}
 	text := strings.Join(parts, " ")
 	if qualified := qualifiedDriverCategories(draft.Drivers); len(qualified) > 0 {
-		text += " Not complete: " + strings.Join(qualified, "; ") + "."
+		// CHAOS-12286: plain words, not a completeness word. The legacy
+		// prefix is restated on stored answers (legacyLimitedReadPrefix).
+		text += limitedReadPrefix + strings.Join(qualified, "; ") + "."
 	}
 	return truncateAtSentenceBoundary(text, currentStateMaxLength)
 }
@@ -3133,26 +3135,22 @@ func composeDeterministicAnswerFrom(status InvestigationStatus, drivers []Driver
 //
 // It adds no display language of its own (CHAOS-4690): the quick answer is a
 // served driver title, and the status sentence and the details label are the
-// ones these fields already carried.
+// ones these fields already carried. A complete answer has no status sentence
+// (CHAOS-12286), so with no principal driver it composes nothing.
 func composeLeadProse(status InvestigationStatus, drivers []DriverJudgment, cohort *Cohort, resolution SubjectResolution, detailsLabel string) string {
 	ordered := principalDriversInAnswerOrder(drivers, cohort)
-	sentence := statusSentence(status, resolution)
-	var b strings.Builder
+	parts := make([]string, 0, 3)
 	if len(ordered) > 0 && statusAnswers(status) {
-		b.WriteString(leadDriverSentence(ordered[0]))
-		b.WriteString(" ")
-		b.WriteString(sentence)
+		parts = append(parts, leadDriverSentence(ordered[0]))
 		ordered = ordered[1:]
-	} else {
-		b.WriteString(sentence)
+	}
+	if sentence := statusSentence(status, resolution); sentence != "" {
+		parts = append(parts, sentence)
 	}
 	if detailsLabel != "" && len(ordered) > 0 {
-		b.WriteString(" ")
-		b.WriteString(detailsLabel)
-		b.WriteString(strings.Join(principalDriverTitles(ordered), "; "))
-		b.WriteString(".")
+		parts = append(parts, detailsLabel+strings.Join(principalDriverTitles(ordered), "; ")+".")
 	}
-	return strings.TrimSpace(b.String())
+	return strings.TrimSpace(strings.Join(parts, " "))
 }
 
 // recomposeLeadProseForStatus recomposes both lead prose fields after the
@@ -3162,24 +3160,47 @@ func composeLeadProse(status InvestigationStatus, drivers []DriverJudgment, coho
 // list. Recomposing from the drivers alone dropped the count of a counting
 // answer and gave a narrated cohort its driver list back.
 func recomposeLeadProseForStatus(result *InvestigationResult, from InvestigationStatus) {
-	result.DirectJudgment = recomposeLeadField(result.DirectJudgment, from, result.Status, result.Drivers, result.Cohort, result.SubjectResolution, "Principal driver: ", directJudgmentMaxLength)
-	result.DeterministicAnswer = recomposeLeadField(result.DeterministicAnswer, from, result.Status, result.Drivers, result.Cohort, result.SubjectResolution, "Principal driver(s): ", deterministicAnswerMaxLength)
+	fallback := leadProseFallback(result.CurrentState)
+	result.DirectJudgment = recomposeLeadField(result.DirectJudgment, fallback, from, result.Status, result.Drivers, result.Cohort, result.SubjectResolution, "Principal driver: ", directJudgmentMaxLength)
+	result.DeterministicAnswer = recomposeLeadField(result.DeterministicAnswer, fallback, from, result.Status, result.Drivers, result.Cohort, result.SubjectResolution, "Principal driver(s): ", deterministicAnswerMaxLength)
+	// A recomposed complete head with nothing else in it falls back to
+	// current_state's first sentence, as every served head does.
+	*result = restateServedStatusHead(*result)
 }
 
 // recomposeLeadField finds which composition head is (with the details label,
 // or the narrated-cohort form without it), keeps the sentences the server put
 // before it, and composes the same form for the new status. A head that is
 // neither form is composed afresh with the label, as before.
-func recomposeLeadField(head string, from, to InvestigationStatus, drivers []DriverJudgment, cohort *Cohort, resolution SubjectResolution, label string, maxRunes int) string {
+//
+// CHAOS-12286: the head is first read as `from` composes it now. A stored
+// head's legacy status sentence is restated to `from`'s current one (none,
+// for complete), and a head that is only current_state's fallback sentence is
+// read as empty. A complete head with no principal driver composes nothing
+// (old is ""), so what the server put there -- the count -- is all kept, and
+// the new status's sentence is stated after it: the composer's own order.
+func recomposeLeadField(head, fallback string, from, to InvestigationStatus, drivers []DriverJudgment, cohort *Cohort, resolution SubjectResolution, label string, maxRunes int) string {
+	if recomposed, ok := recomposeComposedLead(head, fallback, from, to, drivers, cohort, resolution, label, maxRunes); ok {
+		return recomposed
+	}
+	return truncateAtSentenceBoundary(composeLeadProse(to, drivers, cohort, resolution, label), maxRunes)
+}
+
+// recomposeComposedLead is recomposeLeadField for a head that is one of the
+// composition forms of `from`; ok is false for any other head, which it leaves
+// to its caller.
+func recomposeComposedLead(head, fallback string, from, to InvestigationStatus, drivers []DriverJudgment, cohort *Cohort, resolution SubjectResolution, label string, maxRunes int) (string, bool) {
+	head = restateHeadSentence(head, statusSentence(from, resolution), quickAnswerOf(drivers, cohort), maxRunes)
+	head = withoutLeadProseFallback(head, fallback)
 	for _, form := range []string{label, ""} {
 		old := truncateAtSentenceBoundary(composeLeadProse(from, drivers, cohort, resolution, form), maxRunes)
-		if head != old && !strings.HasSuffix(head, " "+old) {
+		if old != "" && head != old && !strings.HasSuffix(head, " "+old) {
 			continue
 		}
 		lead := strings.TrimSpace(strings.TrimSuffix(head, old))
-		return leadWithCountSentence(truncateAtSentenceBoundary(composeLeadProse(to, drivers, cohort, resolution, form), maxRunes), lead, maxRunes)
+		return leadWithCountSentence(truncateAtSentenceBoundary(composeLeadProse(to, drivers, cohort, resolution, form), maxRunes), lead, maxRunes), true
 	}
-	return truncateAtSentenceBoundary(composeLeadProse(to, drivers, cohort, resolution, label), maxRunes)
+	return head, false
 }
 
 // statusAnswers reports whether a status serves an answer a quick answer can
@@ -3300,14 +3321,22 @@ func driverAffectsAny(driver DriverJudgment, subjects []SubjectRef) bool {
 // cause (the caller disallowed clarification) and says so in its own
 // limitation; a model-authored no_match may have any number of reasons, and
 // asserting one here would be a guess.
+//
+// CHAOS-12286: the answer branches never restate the status in its machine
+// word (chris 2026-10-31: a person is never shown ACR's own status or
+// completeness word; web shows this sentence verbatim above its status pill).
+// partial and degraded say what was limited; complete states nothing, and
+// composeLeadProse then leads with the next sentence (an empty head falls back
+// to current_state's first sentence, servedLeadField). The texts these branches
+// wrote before are in legacyModelPathStatusSentences, for stored answers.
 func statusSentence(status InvestigationStatus, resolution SubjectResolution) string {
 	switch status {
 	case InvestigationComplete:
-		return "This investigation is complete."
+		return ""
 	case InvestigationPartial:
-		return "This investigation is partial: some canonical or graph coverage was unavailable."
+		return "Some canonical or graph coverage was unavailable."
 	case InvestigationDegraded:
-		return "This investigation is degraded: coverage was limited."
+		return "Coverage was limited."
 	case InvestigationClarificationRequired:
 		return "Clarification is required before this question can be answered."
 	case InvestigationNoMatch:

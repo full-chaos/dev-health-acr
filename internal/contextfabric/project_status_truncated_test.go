@@ -190,7 +190,7 @@ func TestProjectStatusQualifierReachesTheComposedAnswerProse(t *testing.T) {
 			t.Errorf("%s = %q, want the partial label on the estimate driver", name, text)
 		}
 	}
-	if !strings.Contains(result.CurrentState, "Not complete: readiness "+projectStatusPartialLabel) {
+	if !strings.Contains(result.CurrentState, "Limited read: readiness "+projectStatusPartialLabel) {
 		t.Errorf("current_state = %q, want the readiness qualification", result.CurrentState)
 	}
 }

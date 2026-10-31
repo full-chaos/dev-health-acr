@@ -1182,6 +1182,36 @@ status floor recomposes the lead prose keeping the count sentences that lead it
 and the narrated-cohort form; a reused answer stored with its count last is
 served with the count moved to the head, once.
 
+**The status sentence states no status word (CHAOS-12286).** A person is never
+shown ACR's own status or completeness word (chris 2026-10-31); web shows the
+lead prose verbatim above its status pill. So the status sentence says what was
+limited, and a complete answer has none:
+
+| Served status | Status sentence |
+|---|---|
+| complete | none |
+| partial | "Some canonical or graph coverage was unavailable." |
+| degraded | "Coverage was limited." |
+
+A complete answer with no principal driver and no count sentence has an empty
+head; it takes current_state's first sentence, as composed (a provider's fact
+value in it is evidence and is kept). The same function settles the head of a
+fresh answer before it is validated and saved, and of every served copy (fresh,
+reused, read by id), whether or not its status changed: a stored answer's
+legacy sentence ("This investigation is complete." and its partial and
+degraded forms) is replaced by the served status's sentence, or removed for
+complete. A head composed for complete that is served at a lower status (a
+budget lever, the completeness authority, a status floor) is recomposed from
+complete, so the served sentence stands after the count, where the composer
+states it. The client synthesis text and heads that are not a composition are
+left alone. A stored head with nothing to state in its place (no other content
+and an empty current_state) is served as stored, never as an invalid document;
+the completeness authority line counts it (`lead_prose_served_as_stored`). No
+producing path composes that case. current_state's clause for drivers whose
+source read was cut or is out of date reads "Limited read: …" (it was "Not
+complete: …"); a stored clause is restated on the served copy. The stored
+document is never rewritten.
+
 **Live data gap disclosed, not hidden (CH readback, 2026-08-27, org
 `70d529e0-3c06-4597-8480-794fd02328b6`):** investment (6 rows), workload (12
 rows), and readiness (17 rows) each returned real, non-zero rows for the

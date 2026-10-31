@@ -759,9 +759,10 @@ func selectMembersForDriverNarration(members []CohortMember, count int) []Cohort
 // ContextFabricInvestigationResult.Validate() requires a non-empty
 // DirectJudgment for an answer-capable (complete/partial) status, so it
 // cannot be cleared outright the way CurrentState's own "no canonical
-// facts" fallback can; the status sentence is the one content every
-// investigation composes regardless of drivers, so it is what both fields
-// share now that neither carries a driver clause.
+// facts" fallback can; the quick answer (a narrated principal driver, which
+// this function always has) and the status sentence are what both fields
+// share now that neither carries a driver clause. A complete answer states
+// no status sentence (CHAOS-12286), so its fields are the quick answer.
 //
 // Only ever called when the cohort produced at least one narrated
 // principal driver (see the engine call site's guard) -- a non-cohort

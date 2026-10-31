@@ -4268,6 +4268,9 @@ var CompletenessAuthority = Event{
 		{Key: "deciding_cause_narrowing", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: contextfabric.CompletenessAuthorityLineVocabulary("deciding_cause_narrowing")},
 		{Key: "deciding_read_evaluation_gap", Type: FieldBool, Presence: PresenceRequired},
 		{Key: "status_correction_disclosed", Type: FieldBool, Presence: PresenceRequired},
+		// CHAOS-12286: the served document kept a stored head's legacy status
+		// sentence because nothing could state the head in its place.
+		{Key: "lead_prose_served_as_stored", Type: FieldBool, Presence: PresenceRequired},
 		{Key: "outcome_rows_total", Type: FieldInt, Presence: PresenceRequired},
 	},
 		append(completenessAuthorityOutcomeRowFields(),

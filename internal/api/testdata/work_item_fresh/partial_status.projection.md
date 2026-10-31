@@ -11,7 +11,7 @@
 
 ## Judgment
 > ```
-> Counted 1 work item. This investigation is complete.
+> Counted 1 work item.
 > ```
 
 ## Current state
@@ -21,7 +21,7 @@
 
 ## Server-computed answer (computed by the server from stored facts, not written by a model)
 > ```
-> Counted 1 work item. This investigation is complete.
+> Counted 1 work item.
 > ```
 
 ## Cohort (1 of 1 shown)

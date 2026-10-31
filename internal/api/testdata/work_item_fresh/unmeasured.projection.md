@@ -10,7 +10,7 @@
 
 ## Judgment
 > ```
-> This investigation is complete.
+> No canonical facts were observed to describe the current state.
 > ```
 
 ## Current state
@@ -20,7 +20,7 @@
 
 ## Server-computed answer (computed by the server from stored facts, not written by a model)
 > ```
-> This investigation is complete.
+> No canonical facts were observed to describe the current state.
 > ```
 
 ## Limitations
