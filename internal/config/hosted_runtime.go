@@ -167,6 +167,18 @@ func loadHostedRuntimeValues(lookup lookupEnv, cfg *Config, defaultRequireStores
 	if cfg.ContextFabricEventStreamEnabled, err = boolValue(lookup, ContextFabricEventStreamEnabledEnvVar, false); err != nil {
 		return err
 	}
+	// CHAOS-11952: default OFF -- see Config.AskDevRetentionEnabled.
+	if cfg.AskDevRetentionEnabled, err = boolValue(lookup, AskDevRetentionEnabledEnvVar, false); err != nil {
+		return err
+	}
+	if cfg.AskDevRetentionEnabled {
+		if cfg.AskDevRetentionPostgresDSN, err = SecretValue(lookup, AskDevRetentionPostgresDSNEnvVar); err != nil {
+			return err
+		}
+		if strings.TrimSpace(cfg.AskDevRetentionPostgresDSN) == "" {
+			return errors.New(AskDevRetentionEnabledEnvVar + " needs " + AskDevRetentionPostgresDSNEnvVar + " (or its _FILE): the retention job runs as its own role")
+		}
+	}
 	// CHAOS-11949: default OFF -- see Config.ContextFabricRunLeaseEnabled.
 	if cfg.ContextFabricRunLeaseEnabled, err = boolValue(lookup, ContextFabricRunLeaseEnabledEnvVar, false); err != nil {
 		return err
@@ -176,6 +188,13 @@ func loadHostedRuntimeValues(lookup lookupEnv, cfg *Config, defaultRequireStores
 	}
 	return nil
 }
+
+// AskDevRetentionEnabledEnvVar turns Ask Dev retention on (CHAOS-11952).
+const AskDevRetentionEnabledEnvVar = "ACR_ASK_DEV_RETENTION_ENABLED"
+
+// AskDevRetentionPostgresDSNEnvVar is the retention job's own role's DSN
+// (CHAOS-11952).
+const AskDevRetentionPostgresDSNEnvVar = "ACR_POSTGRES_RETENTION_DSN"
 
 // ContextFabricRunLeaseEnabledEnvVar runs streamed submissions under an
 // ACR-owned lease (CHAOS-11949).
@@ -269,6 +288,8 @@ func (c Config) SafeAttributes() []any {
 		"context_fabric_server_completeness_authority_symmetric_enabled", c.ServerCompletenessAuthoritySymmetricEnabled,
 		"context_fabric_event_stream_enabled", c.ContextFabricEventStreamEnabled,
 		"context_fabric_run_lease_enabled", c.ContextFabricRunLeaseEnabled,
+		"ask_dev_retention_enabled", c.AskDevRetentionEnabled,
+		"ask_dev_retention_role_configured", c.AskDevRetentionPostgresDSN != "",
 		"minimum_sidecar_version", c.MinimumSidecarVersion,
 		"entitlement_key", c.EntitlementKey,
 		"entitlement_mode", string(c.EntitlementMode()),

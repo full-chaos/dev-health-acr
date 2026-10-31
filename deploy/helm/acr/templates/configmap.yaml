@@ -39,6 +39,7 @@ data:
   ACR_MAX_SERIALIZED_BYTES: {{ .Values.config.maxSerializedBytes | quote }}
   ACR_REQUESTS_PER_MINUTE: {{ .Values.config.requestsPerMinute | quote }}
   ACR_ENABLE_EPISODE_WRITEBACK: {{ .Values.config.enableEpisodeWriteback | quote }}
+  ACR_ASK_DEV_RETENTION_ENABLED: {{ .Values.config.askDevRetentionEnabled | default false | quote }}
   ACR_DEVICE_VERIFICATION_URL: {{ .Values.config.deviceVerificationUrl | quote }}
   {{- with include "acr.otelEnv" (dict "root" . "name" .Values.otel.serviceNames.api) }}
   {{- . | nindent 2 }}

@@ -27,6 +27,21 @@ import (
 // keeps the submission records, so a run still in flight saves bound to its
 // owner (T2).
 
+// UnthreadedRecordRetention is the retention of a submission record with no
+// thread (CHAOS-11952, lead ruling Q2): it is an Ask Dev result's record all
+// the same, so it is retained as a one-turn thread with retention 0, keyed on
+// its own admission (its only turn). From UnthreadedRecordExpiresAt the record
+// reads closed (ThreadClosedExpired) and the result it names is not served,
+// as for an expired thread; the retention job then removes both. A result no
+// record names (MCP, Workbench) is out of scope.
+const UnthreadedRecordRetention = contractsv1.ContextFabricThreadRetentionDay
+
+// UnthreadedRecordExpiresAt is the expiry of a record with no thread: its
+// admission plus the retention-0 window, by the thread contract's own rule.
+func UnthreadedRecordExpiresAt(admittedAt time.Time) time.Time {
+	return contractsv1.ContextFabricThreadExpiresAt(admittedAt, UnthreadedRecordRetention)
+}
+
 // ThreadKey is the key of a thread. A row's identity is its organization,
 // its owner's legacy pair (AuthenticationMethod, Subject) and the thread id;
 // Owner also carries the row's canonical owner (UserID, Surface) when known.

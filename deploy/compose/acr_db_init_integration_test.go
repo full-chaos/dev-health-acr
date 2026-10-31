@@ -28,6 +28,8 @@ import (
 	"database/sql"
 	"fmt"
 	"github.com/full-chaos/dev-health-acr/internal/chfixture/startterm"
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric/pginvestigation"
+	"github.com/full-chaos/dev-health-acr/internal/dbacl"
 	"net/url"
 	"os"
 	"os/exec"
@@ -82,6 +84,9 @@ type acrDBInitHarness struct {
 	ctx         context.Context
 	runtimeDB   *sql.DB
 	migrationDB *sql.DB
+	// retentionDB is connected as the Ask Dev retention role the script
+	// provisions (CHAOS-11952).
+	retentionDB *sql.DB
 }
 
 // bootstrapACRDBInit runs the REAL acr-db-init.sh in both modes (roles, then
@@ -124,6 +129,8 @@ func bootstrapACRDBInit(t *testing.T) acrDBInitHarness {
 		runtimePassword   = "acr-runtime-test-password"
 		migrationUser     = "acr_migration_test"
 		migrationPassword = "acr-migration-test-password"
+		retentionUser     = "acr_retention_test"
+		retentionPassword = "acr-retention-test-password"
 	)
 	baseEnv := append(os.Environ(),
 		"POSTGRES_HOST="+host, "POSTGRES_PORT="+port, "POSTGRES_USER=postgres", "POSTGRES_PASSWORD=postgres",
@@ -131,6 +138,7 @@ func bootstrapACRDBInit(t *testing.T) acrDBInitHarness {
 		"ACR_RUNTIME_DB_USER="+runtimeUser, "ACR_RUNTIME_DB_PASSWORD="+runtimePassword,
 		"ACR_MIGRATION_DB_USER="+migrationUser, "ACR_MIGRATION_DB_PASSWORD="+migrationPassword,
 		"ACR_ENABLE_EPISODE_WRITEBACK=false",
+		"ACR_RETENTION_DB_USER="+retentionUser, "ACR_RETENTION_DB_PASSWORD="+retentionPassword,
 	)
 
 	runScript := func(mode string) {
@@ -173,7 +181,12 @@ func bootstrapACRDBInit(t *testing.T) acrDBInitHarness {
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, runtimeDB.Close()) })
 
-	return acrDBInitHarness{ctx: ctx, runtimeDB: runtimeDB, migrationDB: migrationDB}
+	retentionDSN := fmt.Sprintf("postgres://%s:%s@%s:%s/%s?sslmode=disable", retentionUser, retentionPassword, host, port, acrDBName)
+	retentionDB, err := runtimepostgres.Open(ctx, runtimepostgres.Config{DSN: retentionDSN})
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, retentionDB.Close()) })
+
+	return acrDBInitHarness{ctx: ctx, runtimeDB: runtimeDB, migrationDB: migrationDB, retentionDB: retentionDB}
 }
 
 // TestAcrDbInit_RuntimeRoleCanInsertIntoClarificationSelections is CHAOS-3859
@@ -461,4 +474,42 @@ func TestAcrDbInit_RuntimeRoleCanInsertIntoEveryOtherContextFabricTable(t *testi
 		_, err = runtimeDB.ExecContext(ctx, `DELETE FROM acr.context_fabric_org_purge_markers WHERE org_id = $1`, org)
 		require.NoError(t, err)
 	})
+}
+
+// CHAOS-11952: the compose bootstrap creates the Ask Dev retention role and
+// gives it exactly internal/dbacl.RetentionGrants (the generated block), and
+// the retention job's grant probe passes as that role.
+func TestAcrDbInit_RetentionRoleHoldsExactlyTheDeclarationAndPassesTheProbe(t *testing.T) {
+	h := bootstrapACRDBInit(t)
+	want := map[string]map[string]bool{}
+	for _, grant := range dbacl.RetentionGrants {
+		want[grant.Table] = map[string]bool{}
+		for _, privilege := range grant.Privileges {
+			want[grant.Table][privilege] = true
+		}
+	}
+	rows, err := h.migrationDB.QueryContext(h.ctx, `SELECT c.relname FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace WHERE n.nspname = 'acr' AND c.relkind IN ('r', 'p')`)
+	require.NoError(t, err)
+	var tables []string
+	for rows.Next() {
+		var table string
+		require.NoError(t, rows.Scan(&table))
+		tables = append(tables, table)
+	}
+	require.NoError(t, rows.Close())
+	require.NotEmpty(t, tables)
+	var mismatches []string
+	for _, table := range tables {
+		for _, privilege := range []string{"SELECT", "INSERT", "UPDATE", "DELETE", "TRUNCATE", "REFERENCES", "TRIGGER"} {
+			var has bool
+			require.NoError(t, h.migrationDB.QueryRowContext(h.ctx, `SELECT has_table_privilege('acr_retention_test', $1, $2)`, "acr."+table, privilege).Scan(&has))
+			if has != want[table][privilege] {
+				mismatches = append(mismatches, fmt.Sprintf("%s on %s: holds %t, declared %t", privilege, table, has, want[table][privilege]))
+			}
+		}
+	}
+	require.Empty(t, mismatches)
+	store, err := pginvestigation.NewStore(h.retentionDB, pginvestigation.WithUnthreadedRecordRetention(true))
+	require.NoError(t, err)
+	require.NoError(t, store.ProbeRetention(h.ctx), "the retention job's grant probe as the compose retention role")
 }
