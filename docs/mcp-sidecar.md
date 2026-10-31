@@ -556,7 +556,10 @@ the hosted API grants this credential. Optional `include_full_result` asks for
 the canonical result alongside the projection: if it would exceed the byte
 budget it is dropped whole and `projection_budget.full_result_omitted` is set,
 rather than any document being truncated into invalid JSON. The projection
-stays complete either way, and `result_id` remains available.
+stays complete either way, and `result_id` remains available. `full_result` is
+the stored result unchanged: `context_fabric_investigation_result.v1`, or `.v2`
+when the result carries a membership-verify anchor option. The output schema
+admits both (CHAOS-12334); a v2 result is never narrowed to v1.
 
 `subject_receipts` in the response bind a follow-up turn to the subjects this
 answer resolved: pass them back as `prior_subject_receipts`.
@@ -579,7 +582,8 @@ misleading.
 
 Fetches the full canonical result of an earlier investigation by its opaque
 `result_id`, for when the bounded answer omitted detail you need. It narrows
-nothing.
+nothing: `structured` is the stored result as v1 or v2, and the output schema
+admits both (CHAOS-12334).
 
 **Scope:** Read-only. Requires `ACR_API_URL` and a valid credential.
 Authorization is enforced again on this call: a `result_id` is a handle, never
