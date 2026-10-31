@@ -1635,6 +1635,17 @@
           },
           "is_intended_validator": true,
           "reachable_but_not_owner": false
+        },
+        {
+          "description": "OAuthService.Refresh -- the refresh_token grant branch (form grant_type=refresh_token, CHAOS-12124): browser clients only (any other client is unauthorized_client). BrowserRefreshService.Refresh checks the acrrt_ shape and rotates the presented token under its family's lock: a live token rotates, an unused successor presented again within the 30-second grace returns the same pair, a reused token revokes the family, and an ended or revoked family is invalid_grant. Rate limited by AllowTokenRequest, keyed for a browser client by the hash of the presented refresh token (oauthTokenLimitKey).",
+          "anchor": {
+            "path": "internal/auth/oauth.go",
+            "line": 1117,
+            "line_end": 1117,
+            "note": "func (s *OAuthService) Refresh("
+          },
+          "is_intended_validator": true,
+          "reachable_but_not_owner": false
         }
       ],
       "tenant_requirement": "org_scoped",
@@ -1643,7 +1654,8 @@
       "entitlement_requirement": null,
       "gaps": [
         "entitlement_requirement: searched internal for entitlement code (internal/entitlements, internal/config/entitlement.go); whether the handler registered at internal/api/app.go:103 is gated by it was not traced; not determined.",
-        "issued_credential: the browser refresh token (acrrt_, opaque, SHA-256 at rest, single use, rotated by grant_type=refresh_token, CHAOS-12124) has no credential class in the ops credential-classes contract yet; it is not listed until that class is registered."
+        "accepted_credential_classes: the refresh_token grant also consumes acr_browser_refresh_token (the form's refresh_token field; validator OAuthService.Refresh, listed in reachable_validators). It is not listed: the route picks the class by the grant_type form field, and class_disambiguator (endpoint-profile.schema.json, required when two classes are accepted) has no kind for a form field; an ops contract change is needed first.",
+        "issued_credential: the successor refresh token's lifetime_seconds is null: it is valid until its token family ends (BrowserFamilyLifetime, 12 hours after the login), so its window at mint time is the family's remaining life, not a literal."
       ],
       "id": "POST /token [dev-health-acr-api]",
       "method": "POST",
@@ -1713,6 +1725,54 @@
           "lifetime_seconds": 2592000,
           "key_source": null,
           "verified_by": "acr:internal/auth/middleware.go:111"
+        },
+        {
+          "class_id": "acr_browser_refresh_token",
+          "direction": "returned_to_caller",
+          "anchor": {
+            "path": "internal/auth/oauth.go",
+            "line": 1098,
+            "line_end": 1098,
+            "note": "`func (s *OAuthService) Exchange(` `s.refresh.Start(` -- the code exchange of a configured first-party browser client (CHAOS-12124) starts the token family and returns its first refresh token (acrrt_ + 43 base64url characters from 32 random bytes, SHA-256 at rest, single use)"
+          },
+          "issuer": "acr BrowserRefreshService.Start",
+          "audience": "acr-api POST /token (grant_type=refresh_token) and POST /revoke, for the browser client the token family was started for",
+          "algorithm": null,
+          "lifetime_seconds": 43200,
+          "key_source": null,
+          "verified_by": "acr:internal/auth/browser_refresh.go:145"
+        },
+        {
+          "class_id": "acr_browser_refresh_token",
+          "direction": "returned_to_caller",
+          "anchor": {
+            "path": "internal/auth/oauth.go",
+            "line": 1125,
+            "line_end": 1125,
+            "note": "`func (s *OAuthService) Refresh(` `s.refresh.Refresh(` -- a refresh_token grant rotation or grace replay returns the successor refresh token, derived from the presented token and a stored 32-byte seed (SHA-256 at rest, single use)"
+          },
+          "issuer": "acr BrowserRefreshService.Refresh",
+          "audience": "acr-api POST /token (grant_type=refresh_token) and POST /revoke, for the browser client the token family was started for",
+          "algorithm": null,
+          "lifetime_seconds": null,
+          "key_source": null,
+          "verified_by": "acr:internal/auth/browser_refresh.go:145"
+        },
+        {
+          "class_id": "acr_client_credential",
+          "direction": "returned_to_caller",
+          "anchor": {
+            "path": "internal/auth/oauth.go",
+            "line": 1125,
+            "line_end": 1125,
+            "note": "`func (s *OAuthService) Refresh(` `s.refresh.Refresh(` -- the same rotation or grace replay returns a new browser-class fcacr_ credential with the successor refresh token: 10-minute expiry, bound to the acr-api resource (the issuer), in the same token family"
+          },
+          "issuer": "acr BrowserRefreshService.Refresh (successor credential, browser class)",
+          "audience": "bound resource (X-ACR-Resource)",
+          "algorithm": null,
+          "lifetime_seconds": 600,
+          "key_source": null,
+          "verified_by": "acr:internal/auth/middleware.go:111"
         }
       ]
     },
@@ -1721,17 +1781,22 @@
       "graphql_field_name": null,
       "service": "dev-health-acr-api",
       "classification": "public",
-      "accepted_credential_classes": [],
-      "token_shape": null,
+      "accepted_credential_classes": [
+        "acr_browser_refresh_token"
+      ],
+      "token_shape": {
+        "token_type": "opaque browser refresh token (acrrt_ + 43 base64url characters, SHA-256 at rest, single use) in the form body, not a bearer",
+        "issuer": "acr-api BrowserRefreshService",
+        "audience": "acr-api POST /token (grant_type=refresh_token) and POST /revoke, for the browser client the token family was started for",
+        "algorithm": null
+      },
       "reachable_validators": [],
       "tenant_requirement": "none",
       "current_state_cache_behavior": "stateless",
       "impersonation_policy": "not_applicable_non_main_app",
       "entitlement_requirement": null,
       "gaps": [
-        "accepted_credential_classes: the route takes a browser refresh token in its form body (CHAOS-12124); the ops credential-classes contract has no class for it yet, so none is listed until that class is registered.",
-        "entitlement_requirement: the handler (internal/api/app.go:121) is not gated by entitlement code; it only revokes a token family the refresh token names; not otherwise determined.",
-        "token_shape: the route takes a browser refresh token (acrrt_ + 43 base64url characters, opaque, SHA-256 at rest) in its form body, not a bearer; its credential class is not registered yet (see accepted_credential_classes); not determined."
+        "entitlement_requirement: the handler (internal/api/app.go:121) is not gated by entitlement code; it only revokes a token family the refresh token names; not otherwise determined."
       ],
       "id": "POST /revoke [dev-health-acr-api]",
       "method": "POST",
