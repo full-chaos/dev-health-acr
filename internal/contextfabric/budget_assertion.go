@@ -406,6 +406,7 @@ func (e *Engine) servedLateWriters(ctx context.Context, result InvestigationResu
 	}
 	observation.StatusCorrectionDisclosed = result.StatusCorrection != nil
 	observation.LeadProseServedAsStored = LeadProseServedAsStored(result)
+	observation.LegacySourceStateWordsServed = LegacySourceStateWordsServed(result)
 	return result, observation
 }
 

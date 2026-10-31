@@ -348,6 +348,9 @@ type Config struct {
 	// acr-mcp's projected ServiceAccount token (auth.MCPHopHeader), checked
 	// through Kubernetes TokenReview. See mcp_hop.go.
 	MCPHop MCPHopConfig
+	// AuthWorkload (CHAOS-11195) configures acr-api's client of the auth-service workload-token exchange; zero is
+	// off. See auth_workload.go.
+	AuthWorkload AuthWorkloadConfig
 
 	// dataQueryURL / dataQueryTimeout: internal ops query service call
 	// (ACR_DATA_QUERY_URL, ACR_DATA_QUERY_TIMEOUT); read via the
@@ -476,6 +479,9 @@ func load(lookup lookupEnv) (Config, error) {
 	if cfg.MCPHop, err = mcpHopValue(lookup); err != nil {
 		return Config{}, err
 	}
+	if cfg.AuthWorkload, err = authWorkloadValue(lookup); err != nil {
+		return Config{}, err
+	}
 
 	if cfg.RequestTimeout, err = durationValue(lookup, "ACR_REQUEST_TIMEOUT", defaultRequestTimeout); err != nil {
 		return Config{}, err
@@ -555,6 +561,9 @@ func load(lookup lookupEnv) (Config, error) {
 }
 
 func (c Config) Validate() error {
+	if err := c.AuthWorkload.Validate(); err != nil {
+		return err
+	}
 	switch c.Environment {
 	case "development", "test", "staging", "production":
 	default:

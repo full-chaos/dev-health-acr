@@ -31,6 +31,14 @@ import (
 // result the contract accepts. The exemption is pinned by an executed cell
 // below: if the legacy rule ever goes away, the cell fails and the exemption
 // must go with it.
+//
+// Two more pairs differ by schema version (CHAOS-12073). The v2 result
+// requires structure_needs and v2's StructureNeedsV2 requires anchor_options,
+// while v1 and v2 share one Go type (ContextFabricInvestigationResult,
+// ContextFabricStructureNeeds) on which both stay omitempty, because v1 keeps
+// them optional. v2's rule is enforced by the v2 schema and ValidateV2 /
+// ValidateStoredResult, not by the presence walker. Those exemptions apply to
+// the v2 documents only, and an executed cell pins their reason too.
 func TestTheWirePresenceCheckRequiresExactlyTheSchemasRequiredKeysForAResult(t *testing.T) {
 	t.Parallel()
 	root := moduleRootForParity(t)
@@ -48,8 +56,14 @@ func TestTheWirePresenceCheckRequiresExactlyTheSchemasRequiredKeysForAResult(t *
 	legacyExemptions := map[string]map[string]bool{
 		"ContextFabricAnswerCompleteness": {"state": true},
 	}
+	// Keyed by document and $def ("" is the document root): only the v2
+	// documents, never the v1 ones that share the Go type.
+	versionExemptions := map[string]map[string]bool{
+		"context_fabric_investigation_result.v2.schema.json#":   {"structure_needs": true},
+		"context_fabric_common.v1.schema.json#StructureNeedsV2": {"anchor_options": true},
+	}
 
-	checked, exemptionsUsed := 0, 0
+	checked, exemptionsUsed, versionExemptionsUsed := 0, 0, 0
 	for _, b := range bindings {
 		if !resultDocuments[b.document] || !reachable[b.named.Obj().Name()] {
 			continue
@@ -88,6 +102,10 @@ func TestTheWirePresenceCheckRequiresExactlyTheSchemasRequiredKeysForAResult(t *
 				exemptionsUsed++
 				continue
 			}
+			if versionExemptions[b.document+"#"+b.defName][key] {
+				versionExemptionsUsed++
+				continue
+			}
 			schemaOnly = append(schemaOnly, key)
 		}
 		sort.Strings(walkerOnly)
@@ -105,6 +123,9 @@ func TestTheWirePresenceCheckRequiresExactlyTheSchemasRequiredKeysForAResult(t *
 	}
 	if exemptionsUsed == 0 {
 		t.Error("the completeness.state legacy exemption matched nothing; remove it")
+	}
+	if versionExemptionsUsed != 2 {
+		t.Errorf("the v2 version exemptions matched %d pairs, want exactly 2 (result.v2 structure_needs, StructureNeedsV2 anchor_options)", versionExemptionsUsed)
 	}
 	t.Logf("PRESENCE PARITY: %d schema objects reachable from an investigation result compared; %d legacy exemption(s) used", checked, exemptionsUsed)
 
@@ -192,4 +213,67 @@ func reachableStructNames(root reflect.Type) map[string]bool {
 	}
 	walk(root)
 	return seen
+}
+
+// THE VERSION EXEMPTIONS' REASON, EXECUTED (CHAOS-12073). The shared Go type
+// omits structure_needs and anchor_options, and v1 accepts that. v2 refuses
+// it in the schema and in ValidateV2.
+func TestV2RequiresWhatTheSharedGoTypeOmits(t *testing.T) {
+	t.Parallel()
+	hasKey := func(encoded []byte, path ...string) bool {
+		var node any
+		if err := json.Unmarshal(encoded, &node); err != nil {
+			t.Fatal(err)
+		}
+		for _, key := range path {
+			object, ok := node.(map[string]any)
+			if !ok {
+				return false
+			}
+			if node, ok = object[key]; !ok {
+				return false
+			}
+		}
+		return true
+	}
+	v1 := validContextFabricContractResult()
+	v1.StructureNeeds = nil
+	encoded, err := json.Marshal(v1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if hasKey(encoded, "structure_needs") {
+		t.Fatal("a v1 result with no structure needs put structure_needs on the wire; the Go tag is no longer omitempty")
+	}
+	if err := contractcheck.ValidateSerialized("", "context_fabric_investigation_result.v1.schema.json", encoded); err != nil {
+		t.Fatalf("v1 refused a result without structure_needs, so the v1 field is no longer optional: %v", err)
+	}
+	v2 := v1
+	v2.SchemaVersion = ContextFabricInvestigationResultSchemaV2
+	encoded, err = json.Marshal(v2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := contractcheck.ValidateSerialized("", "context_fabric_investigation_result.v2.schema.json", encoded); err == nil {
+		t.Error("the v2 schema accepted a result without structure_needs")
+	}
+	if err := v2.ValidateV2(); err == nil {
+		t.Error("ValidateV2 accepted a result without structure_needs")
+	}
+	noAnchor := withOneV2AnchorOption(validContextFabricContractResult())
+	noAnchor.SchemaVersion = ContextFabricInvestigationResultSchemaV2
+	noAnchor.StructureNeeds.AnchorOptions = nil
+	encoded, err = json.Marshal(noAnchor)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if hasKey(encoded, "structure_needs", "anchor_options") {
+		t.Fatal("empty anchor options went on the wire; the Go tag is no longer omitempty")
+	}
+	if err := contractcheck.ValidateSerialized("", "context_fabric_investigation_result.v2.schema.json", encoded); err == nil {
+		t.Error("the v2 schema accepted structure_needs without anchor_options")
+	}
+	if err := noAnchor.ValidateV2(); err == nil {
+		t.Error("ValidateV2 accepted structure_needs without an anchor option")
+	}
 }

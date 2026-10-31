@@ -402,26 +402,26 @@ func TestChaos7074_T15_EdgeGate(t *testing.T) {
 // clause; the node clauses still apply to them).
 func TestChaos7074_EdgeGateClauses(t *testing.T) {
 	deny := map[string]interface{}{"authorization_repositories": []string{"acme/b"}}
-	if EdgeGate(restrictedA, deny, true, true) != EdgeWithheldAttributes {
+	if EdgeGate(restrictedA, "", deny, true, true) != EdgeWithheldAttributes {
 		t.Fatal("edge clause")
 	}
 	open := map[string]interface{}{"authorization_repositories": []string{"acme/a"}}
-	if EdgeGate(restrictedA, open, false, true) != EdgeWithheldSource {
+	if EdgeGate(restrictedA, "", open, false, true) != EdgeWithheldSource {
 		t.Fatal("source clause")
 	}
-	if EdgeGate(restrictedA, open, true, false) != EdgeWithheldTarget {
+	if EdgeGate(restrictedA, "", open, true, false) != EdgeWithheldTarget {
 		t.Fatal("target clause")
 	}
-	if EdgeGate(unrestricted, deny, false, true) != EdgeWithheldSource {
+	if EdgeGate(unrestricted, "", deny, false, true) != EdgeWithheldSource {
 		t.Fatal("unrestricted caller still needs visible ends")
 	}
-	if EdgeGate(restrictedA, open, true, true) != EdgeVisible {
+	if EdgeGate(restrictedA, "", open, true, true) != EdgeVisible {
 		t.Fatal("granted edge with visible ends")
 	}
 	// CHAOS-7080 (#691): a "*" edge proves no repository, so a restricted
 	// caller does not see it; an unrestricted caller does.
 	wildcard := map[string]interface{}{"authorization_repositories": "*"}
-	if EdgeGate(restrictedA, wildcard, true, true) != EdgeWithheldAttributes || EdgeGate(unrestricted, wildcard, true, true) != EdgeVisible {
+	if EdgeGate(restrictedA, "", wildcard, true, true) != EdgeWithheldAttributes || EdgeGate(unrestricted, "", wildcard, true, true) != EdgeVisible {
 		t.Fatal("wildcard edge")
 	}
 }

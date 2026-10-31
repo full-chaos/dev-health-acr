@@ -3160,6 +3160,9 @@ func composeLeadProse(status InvestigationStatus, drivers []DriverJudgment, coho
 // list. Recomposing from the drivers alone dropped the count of a counting
 // answer and gave a narrated cohort its driver list back.
 func recomposeLeadProseForStatus(result *InvestigationResult, from InvestigationStatus) {
+	// A stored head is read in the current words first, so it matches what
+	// `from` composes now (CHAOS-12289).
+	*result = restateLegacySourceStateLabels(*result)
 	fallback := leadProseFallback(result.CurrentState)
 	result.DirectJudgment = recomposeLeadField(result.DirectJudgment, fallback, from, result.Status, result.Drivers, result.Cohort, result.SubjectResolution, "Principal driver: ", directJudgmentMaxLength)
 	result.DeterministicAnswer = recomposeLeadField(result.DeterministicAnswer, fallback, from, result.Status, result.Drivers, result.Cohort, result.SubjectResolution, "Principal driver(s): ", deterministicAnswerMaxLength)

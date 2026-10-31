@@ -1,6 +1,7 @@
 package auth
 
 import (
+	"github.com/full-chaos/dev-health-acr/internal/storage"
 	"sort"
 	"strings"
 
@@ -87,4 +88,16 @@ func workItemRepositorySelector(raw string) (workItemSelectorKind, string, bool)
 		return 0, "", false
 	}
 	return workItemSelectorExact, normalized, true
+}
+
+// WorkItemGrantSelectorSet is a principal's work-item repository grant, the
+// one translation of a principal into the reader's selector set. A
+// project-only principal gets the zero set, which the reader denies: its
+// project grant names no repository, and its empty list must never read as
+// the organization-wide grant (CHAOS-12299).
+func WorkItemGrantSelectorSet(principal storage.Principal) readers.RepositorySelectorSet {
+	if ClassifyGrant(principal) == GrantProjectOnly {
+		return readers.RepositorySelectorSet{}
+	}
+	return WorkItemRepositorySelectorSet(principal.RepositoryScopes, true)
 }

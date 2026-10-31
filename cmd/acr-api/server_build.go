@@ -10,6 +10,7 @@ import (
 
 	"github.com/full-chaos/dev-health-acr/internal/api"
 	"github.com/full-chaos/dev-health-acr/internal/auth"
+	"github.com/full-chaos/dev-health-acr/internal/authworkload"
 	"github.com/full-chaos/dev-health-acr/internal/config"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
@@ -45,6 +46,11 @@ func prepareServer(ctx context.Context, request serverBuildRequest) (serverRunne
 	}
 	if request.serviceVersion == "" {
 		request.serviceVersion = version.Current().Version
+	}
+	// CHAOS-11195: start-up proof only. The client is built, not used: no exchange runs and no readiness check
+	// waits on it, so an auth-service outage never stops acr-api. A bad config stops the start; there is no fallback.
+	if _, err := authworkload.Build(request.config.AuthWorkload, request.logger); err != nil {
+		return nil, nil, fmt.Errorf("initialize auth workload client: %w", err)
 	}
 	dependencies, closeRuntime, err := applicationDependencies(ctx, request)
 	if err != nil {
