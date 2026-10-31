@@ -1438,7 +1438,7 @@ proxy_cors_must_fail "CORS origins from both the value and extraEnv" "deployment
   --set-string 'deployment.extraEnv[0].name=ACR_CORS_ALLOWED_ORIGINS' --set-string 'deployment.extraEnv[0].value=https://other.example.test'
 # extraEnv alone (the form environments use today) still renders, unchanged.
 proxy_env_only="$(render --set-string 'deployment.extraEnv[0].name=ACR_TRUSTED_PROXY_CIDRS' --set-string 'deployment.extraEnv[0].value=10.42.0.0/24')"
-grep -A1 -F -- '- name: ACR_TRUSTED_PROXY_CIDRS' <<<"$proxy_env_only" | grep -qF 'value: "10.42.0.0/24"' || fail_gate "proxy-cors: deployment.extraEnv ACR_TRUSTED_PROXY_CIDRS alone no longer renders"
+grep -A1 -F -- '- name: ACR_TRUSTED_PROXY_CIDRS' <<<"$proxy_env_only" | grep -qE 'value: "?10\.42\.0\.0/24"?$' || fail_gate "proxy-cors: deployment.extraEnv ACR_TRUSTED_PROXY_CIDRS alone no longer renders"
 pass "proxy-cors: deployment.extraEnv alone still renders the variable"
 
 printf 'RESULT: happy path passed all gates\n'
