@@ -23,8 +23,10 @@ const principalAccessSchemaVersion = "acr_principal_access.v1"
 const invalidSessionCode = "acr_access_invalid_sid"
 
 var (
-	// ErrPrincipalUnknown means Dev Health answered 404 for the organization
-	// or the user: the principal has no access. It is never a grant.
+	// ErrPrincipalUnknown means Dev Health answered its coded 404
+	// (acr_organization_unknown): the organization does not exist, so the
+	// principal has no access. It is never a grant. A user Dev Health does
+	// not know is a 200 with member false.
 	ErrPrincipalUnknown = errors.New("Dev Health does not know the principal")
 	// ErrSessionInvalid means Dev Health refused the bound session id as not
 	// a session id: the session is not live. It is never a grant.
@@ -53,8 +55,9 @@ type SessionAccess struct {
 }
 
 // PrincipalAccess reads, without any cache, the access of userID in orgID,
-// and the liveness of sessionID when it is not empty. A 404 is
-// ErrPrincipalUnknown; a 400 for the session id is ErrSessionInvalid; a
+// and the liveness of sessionID when it is not empty. The 404 coded
+// acr_organization_unknown is ErrPrincipalUnknown; a 400 for the session id
+// is ErrSessionInvalid; any other 404 (a route Dev Health does not serve), a
 // transport failure, a timeout, every other status and a body that is not
 // exactly the acr_principal_access.v1 document for this org, user and session
 // are a rejection (unavailable): an outage never reads as an answer.
@@ -77,7 +80,13 @@ func (c *Client) PrincipalAccess(ctx context.Context, orgID, userID, sessionID s
 	switch response.StatusCode {
 	case http.StatusOK:
 	case http.StatusNotFound:
-		return PrincipalAccess{}, ErrPrincipalUnknown
+		// Only the coded 404 is an answer: the read sends canonical UUIDs,
+		// so an uncoded 404 is a route this Dev Health does not serve (an
+		// older go-api, a wrong origin), which must stay 503, never a deny.
+		if bodyCode(response.Body, c.maxBody) == unknownOrganizationCode {
+			return PrincipalAccess{}, ErrPrincipalUnknown
+		}
+		return PrincipalAccess{}, rejected(reasonStatus)
 	case http.StatusBadRequest:
 		if sessionID != "" && bodyCode(response.Body, c.maxBody) == invalidSessionCode {
 			return PrincipalAccess{}, ErrSessionInvalid

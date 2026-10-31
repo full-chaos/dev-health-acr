@@ -551,10 +551,10 @@ There is no cache across calls; inside one request the read is reused. The
 
 | Live answer | acr-api answer |
 | --- | --- |
-| not a member; impersonating (`impersonating` or `session.impersonating`); browser session not live; Dev Health 404 (organization or user unknown) or 400 `acr_access_invalid_sid`; a user-class row without an approving user, or a browser row without a session | 403 `access_denied`. One code for every reason, so the answer says nothing about which exists; the reason is on the Info line `principal access read refused` and on the `access_denied` audit row |
+| not a member; impersonating (`impersonating` or `session.impersonating`); browser session not live; Dev Health 404 `acr_organization_unknown` (a user Dev Health does not know is `member: false`) or 400 `acr_access_invalid_sid`; a user-class row without an approving user, or a browser row without a session | 403 `access_denied`. One code for every reason, so the answer says nothing about which exists; the reason is on the Info line `principal access read refused` and on the `access_denied` audit row |
 | `agent_context_runtime` off, or `ask_dev` off for the browser class | 403 `feature_not_enabled` (audit `entitlement_denied`, `source=principal_access`), on every route but capabilities: `GET /api/v1/agent-context/capabilities` is how a client learns what is enabled, so it answers 200 with `entitlements.agent_context_runtime` from this read (false, no tool enabled) and still refuses the rows above |
 | effective scope empty | 409 `no_repository` |
-| read failed: transport, timeout, any other status, a body that is not exactly `acr_principal_access.v1` for this org, user and session | 503 `upstream_unavailable` (Error line `principal access read failed` with the rejection reason); never 401, never a stale answer |
+| read failed: transport, timeout, a 404 without `acr_organization_unknown` (a route this Dev Health does not serve), any other status, a body that is not exactly `acr_principal_access.v1` for this org, user and session | 503 `upstream_unavailable` (Error line `principal access read failed` with the rejection reason); never 401, never a stale answer |
 
 **Effective scope.** The credential's repository grant within the
 organization's live inventory: every inventory repository the grant allows
