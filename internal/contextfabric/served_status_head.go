@@ -174,10 +174,27 @@ func withoutLeadProseFallback(head, fallback string) string {
 	return head
 }
 
-// restateLimitedReadClause states a stored current_state's legacy " Not
-// complete: " clause in the current words.
+// legacyLimitedReadClause is the clause composeCurrentState closed
+// current_state with before CHAOS-12286, and only that clause: the last
+// sentence, " Not complete: " and then the qualified driver categories joined
+// by "; ", each ending in one of the source-state qualifiers it wrote
+// (FROZEN, as stored). The same words inside a provider's fact value are
+// evidence and never match: anywhere but this closing form, they are left as
+// they are.
+var legacyLimitedReadClause = func() *regexp.Regexp {
+	qualifier := `\((?:` + regexp.QuoteMeta("partial: the source read was truncated") + `|` + regexp.QuoteMeta("stale: the source read is out of date") + `)\)`
+	item := `[^;().]+ ` + qualifier // a driver category has no "."
+	return regexp.MustCompile(`\.` + regexp.QuoteMeta(legacyLimitedReadPrefix) + `(` + item + `(?:; ` + item + `)*)\.$`)
+}()
+
+// restateLimitedReadClause states a stored current_state's legacy closing
+// " Not complete: " clause in the current words.
 func restateLimitedReadClause(currentState string) string {
-	return strings.Replace(currentState, "."+legacyLimitedReadPrefix, "."+limitedReadPrefix, 1)
+	match := legacyLimitedReadClause.FindStringSubmatchIndex(currentState)
+	if match == nil {
+		return currentState
+	}
+	return currentState[:match[0]] + "." + limitedReadPrefix + currentState[match[2]:match[3]] + "."
 }
 
 // quickAnswerSentence is the driver sentence the composer leads an answer's

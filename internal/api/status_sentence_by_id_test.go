@@ -170,3 +170,28 @@ func TestByIDAFlooredHeadTheServerDidNotWriteIsWithheld(t *testing.T) {
 		t.Fatalf("served %q with %q / %q, want partial with %q", got.Status, got.DirectJudgment, got.DeterministicAnswer, want)
 	}
 }
+
+// Review r3: the same words in a provider's fact value are evidence. Only
+// ACR's own closing clause is restated.
+func TestByIDTheWordsInAProviderValueAreNotRestated(t *testing.T) {
+	for _, currentState := range []string{
+		"Current observed values: deployment note: Rollout began. Not complete: acceptance is pending.",
+		"Current observed values: deployment note: Rollout began. Not complete: acceptance is pending. Not complete: readiness (partial: the source read was truncated) or not.",
+		// The clause's shape, not at the end: not the closing clause.
+		"Current observed values: note: x. Not complete: readiness (partial: the source read was truncated). Then more.",
+	} {
+		got, _ := readLeadProseByID(t, storedLeadProseAnswer(contractsv1.ContextFabricInvestigationComplete, "Counted 1 work item.", currentState))
+		if got.CurrentState != currentState {
+			t.Fatalf("current_state = %q, want the provider value as stored, %q", got.CurrentState, currentState)
+		}
+	}
+	// ACR's clause after a provider value with the same words: only the clause is restated.
+	for stored, want := range map[string]string{
+		"Current observed values: note: Not complete: yet. Not complete: health (stale: the source read is out of date); readiness (partial: the source read was truncated).": "Current observed values: note: Not complete: yet. Limited read: health (stale: the source read is out of date); readiness (partial: the source read was truncated).",
+		"Current observed values: note: Rollout began. Not complete: soon. Not complete: health (stale: the source read is out of date).":                                     "Current observed values: note: Rollout began. Not complete: soon. Limited read: health (stale: the source read is out of date).",
+	} {
+		if got, _ := readLeadProseByID(t, storedLeadProseAnswer(contractsv1.ContextFabricInvestigationComplete, "Counted 1 work item.", stored)); got.CurrentState != want {
+			t.Fatalf("current_state = %q, want %q", got.CurrentState, want)
+		}
+	}
+}
