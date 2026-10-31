@@ -76,6 +76,26 @@ func TestByIDAStoredLegacySourceStateLabelIsServedInPlainWords(t *testing.T) {
 	}
 }
 
+// The same words beside a driver whose read was not cut, or in a summary that
+// is not the project status summary, stay as stored, while the cut driver's
+// own qualifier beside them is restated.
+func TestByIDOnlyTheCutDriversOwnWordsAreRestated(t *testing.T) {
+	stored := storedTruncatedDriverAnswer(t)
+	const title = "Release acceptance remains incomplete"
+	other := " Principal driver: CHAOS: operational deficiencies" + legacyTruncatedQualifier + "."
+	stored.DirectJudgment = title + legacyTruncatedQualifier + "." + other
+	stored.Drivers[0].Summary = "The readiness feed reported" + legacyTruncatedQualifier + " twice."
+	stored.Completeness = contextfabric.ComputeAnswerCompleteness(stored)
+
+	got, _ := readLeadProseByID(t, stored)
+	if want := title + truncatedQualifier + "." + other; got.DirectJudgment != want {
+		t.Errorf("direct_judgment = %q, want %q", got.DirectJudgment, want)
+	}
+	if got.Drivers[0].Summary != stored.Drivers[0].Summary {
+		t.Errorf("summary = %q, want as stored %q", got.Drivers[0].Summary, stored.Drivers[0].Summary)
+	}
+}
+
 // The same words in text ACR did not write about this driver stay as stored.
 func TestByIDTheSourceStateWordsInOtherTextAreKept(t *testing.T) {
 	stored := storedTruncatedDriverAnswer(t)

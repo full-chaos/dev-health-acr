@@ -50,11 +50,15 @@ func TestEverySourceStateLabelStatesNoStateWord(t *testing.T) {
 // labelledAnswer is a complete answer composed now for two principal drivers
 // in state, with the project status summary and the server note on the first.
 func labelledAnswer(state SourceState) InvestigationResult {
+	return labelledAnswerTitled(state, "Release acceptance remains incomplete", "Health risk")
+}
+
+func labelledAnswerTitled(state SourceState, first, second string) InvestigationResult {
 	open := int64(3)
 	result := validInvestigationResult()
 	result.Drivers = []DriverJudgment{
-		{DriverID: "driver_1", Standing: DriverPrincipal, Category: "readiness", Title: "Release acceptance remains incomplete", SourceState: state},
-		{DriverID: "driver_2", Standing: DriverPrincipal, Category: "health", Title: "Health risk", SourceState: state},
+		{DriverID: "driver_1", Standing: DriverPrincipal, Category: "readiness", Title: first, SourceState: state},
+		{DriverID: "driver_2", Standing: DriverPrincipal, Category: "health", Title: second, SourceState: state},
 	}
 	result.Drivers[0].Summary = result.Drivers[0].Title + projectStatusStateLabel(state)
 	result.Drivers[0].SourceStateNote = driverSourceStateNote(state)
@@ -93,8 +97,17 @@ func asStoredBefore(result InvestigationResult, notComplete bool) InvestigationR
 func TestALegacySourceStateLabelIsServedAsTheComposersWriteItNow(t *testing.T) {
 	t.Parallel()
 	for _, state := range everySourceState {
-		for _, notComplete := range []bool{false, true} {
-			current := labelledAnswer(state)
+		for _, variant := range []struct {
+			notComplete   bool
+			first, second string
+		}{
+			{false, "Release acceptance remains incomplete", "Health risk"},
+			{true, "Release acceptance remains incomplete", "Health risk"},
+			// Titles that end in ".": the lead sentence trims it, the list keeps it.
+			{false, "Release acceptance remains incomplete.", "Health risk."},
+		} {
+			notComplete := variant.notComplete
+			current := labelledAnswerTitled(state, variant.first, variant.second)
 			stored := asStoredBefore(current, notComplete)
 			if state == SourceTruncated && stored.DirectJudgment == current.DirectJudgment {
 				t.Fatalf("fixture: the stored answer for %q does not carry the legacy words", state)
@@ -124,6 +137,9 @@ func TestALegacySourceStateLabelIsServedAsTheComposersWriteItNow(t *testing.T) {
 func TestAFlooredAnswerStoredWithTheLegacyLabelKeepsItsHead(t *testing.T) {
 	t.Parallel()
 	current := labelledAnswer(SourceTruncated)
+	// A count leads the head, so composing afresh would lose it.
+	current.DirectJudgment = "Counted 3 teams. " + current.DirectJudgment
+	current.DeterministicAnswer = "Counted 3 teams. " + current.DeterministicAnswer
 	current.Limitations = []string{poolCutAnswer("", "").Limitations[0]}
 	current.Completeness = ComputeAnswerCompleteness(current)
 	want := ApplyServedStatusFloors(current)
