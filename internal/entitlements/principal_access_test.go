@@ -143,6 +143,10 @@ func TestPrincipalAccessRefusalsAndFailures(t *testing.T) {
 		{"repos blank entry", http.StatusOK, accessDocument(false, `{"kind":"repos","repos":[" "]}`), ""},
 		{"trailing JSON", http.StatusOK, accessDocument(false, `{"kind":"none"}`) + `{}`, ""},
 		{"not an object", http.StatusOK, `[]`, ""},
+		// A non-200 status is never an answer, whatever its body says.
+		{"503 with a document", http.StatusServiceUnavailable, accessDocument(false, `{"kind":"repos","repos":["acme/api"]}`), ""},
+		{"403 with a document", http.StatusForbidden, accessDocument(false, `{"kind":"repos","repos":["acme/api"]}`), ""},
+		{"202 with a document", http.StatusAccepted, accessDocument(false, `{"kind":"repos","repos":["acme/api"]}`), ""},
 	} {
 		server, _, _ := accessServer(t, test.status, test.body)
 		access, err := newAccessClient(t, server).PrincipalAccess(context.Background(), accessOrg, accessUser, test.session)

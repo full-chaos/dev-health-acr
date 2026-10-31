@@ -4,10 +4,11 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"slices"
+	"strings"
 	"testing"
 
 	"github.com/full-chaos/dev-health-acr/internal/config"
-	"github.com/full-chaos/dev-health-acr/internal/entitlements"
 )
 
 // CHAOS-12092: the hosted remote entitlement provider is the per-call access
@@ -37,38 +38,69 @@ func TestTheRemoteEntitlementClientIsThePerCallAccessReader(t *testing.T) {
 	}
 }
 
-// readingEntitlement is the test entitlement provider that also serves the
-// principal access read.
-type readingEntitlement struct{ fakeEntitlement }
+// rowOnlyEntitlement is an entitlement provider without the access read.
+type rowOnlyEntitlement struct{ events *[]string }
 
-func (readingEntitlement) PrincipalAccess(context.Context, string, string, string) (entitlements.PrincipalAccess, error) {
-	return entitlements.PrincipalAccess{}, nil
+func (rowOnlyEntitlement) HasEntitlement(context.Context, string, string) (bool, error) {
+	return true, nil
+}
+func (rowOnlyEntitlement) Check(context.Context) error { return nil }
+func (e rowOnlyEntitlement) Close() error {
+	*e.events = append(*e.events, "entitlement.close")
+	return nil
 }
 
 // open composes the provider's access read into the runtime the API serves
-// from, and composes none for a provider without one.
-func TestOpenComposesTheEntitlementProvidersAccessRead(t *testing.T) {
-	for _, reads := range []bool{true, false} {
-		events := []string{}
-		request := testBuildRequest(t, &events, "")
-		var provider entitlementChecker = &fakeEntitlement{events: &events}
-		if reads {
-			provider = &readingEntitlement{fakeEntitlement{events: &events}}
+// from. In remote entitlement mode a provider without one is refused at
+// startup (fail closed: user-class calls would not be re-checked); only
+// local entitlement mode (development and test) runs without one.
+func TestOpenComposesTheAccessReadAndRefusesToStartWithoutOneInRemoteMode(t *testing.T) {
+	events := []string{}
+	request := testBuildRequest(t, &events, "")
+	provider := &fakeEntitlement{events: &events}
+	request.factories.newEntitlement = func(config.Config) (entitlementChecker, error) { return provider, nil }
+	runtime, err := open(context.Background(), request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := runtime.Dependencies.Runtime.PrincipalAccess; any(got) != any(provider) {
+		t.Errorf("composed access reader = %v, want the entitlement provider", got)
+	}
+	if closeErr := runtime.Close(); closeErr != nil {
+		t.Error(closeErr)
+	}
+
+	events = nil
+	request = testBuildRequest(t, &events, "")
+	request.factories.newEntitlement = func(config.Config) (entitlementChecker, error) { return rowOnlyEntitlement{events: &events}, nil }
+	if request.config.EntitlementMode() != config.EntitlementModeRemote {
+		t.Fatal("precondition: the test configuration is remote entitlement mode")
+	}
+	if runtime, err := open(context.Background(), request); err == nil || !strings.Contains(err.Error(), "principal access read") {
+		if runtime != nil {
+			_ = runtime.Close()
 		}
-		request.factories.newEntitlement = func(config.Config) (entitlementChecker, error) { return provider, nil }
-		runtime, err := open(context.Background(), request)
-		if err != nil {
-			t.Fatal(err)
-		}
-		got := runtime.Dependencies.Runtime.PrincipalAccess
-		if reads && any(got) != any(provider) {
-			t.Errorf("composed access reader = %v, want the entitlement provider", got)
-		}
-		if !reads && got != nil {
-			t.Errorf("composed access reader = %v for a provider without one, want nil", got)
-		}
-		if closeErr := runtime.Close(); closeErr != nil {
-			t.Error(closeErr)
-		}
+		t.Fatalf("remote mode without an access read: open err = %v, want a refusal naming the principal access read", err)
+	}
+	if !slices.Contains(events, "entitlement.close") {
+		t.Fatalf("the refused start did not close the entitlement provider: %v", events)
+	}
+
+	events = nil
+	request = testBuildRequest(t, &events, "")
+	request.config.DevHealthEntitlementURL, request.config.DevHealthEntitlementTokenFile = "", ""
+	if request.config.EntitlementMode() != config.EntitlementModeLocal {
+		t.Fatal("precondition: the test configuration is local entitlement mode")
+	}
+	request.factories.newEntitlement = func(config.Config) (entitlementChecker, error) { return rowOnlyEntitlement{events: &events}, nil }
+	runtime, err = open(context.Background(), request)
+	if err != nil {
+		t.Fatalf("local mode without an access read: open err = %v, want it to start", err)
+	}
+	if runtime.Dependencies.Runtime.PrincipalAccess != nil {
+		t.Errorf("local mode composed access reader = %v, want nil", runtime.Dependencies.Runtime.PrincipalAccess)
+	}
+	if closeErr := runtime.Close(); closeErr != nil {
+		t.Error(closeErr)
 	}
 }

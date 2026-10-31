@@ -55,8 +55,9 @@ type RuntimeDependencies struct {
 	Entitlements               EntitlementProvider
 	// PrincipalAccess is the per-call access read (CHAOS-12092): every
 	// protected call by a user-class credential reads it, uncached. Hosted
-	// remote entitlement mode always sets it; nil (local development and
-	// test mode) skips the read, and NewApp logs a Warn.
+	// remote entitlement mode always sets it and refuses to start without
+	// it; nil (local development and test mode) skips the read, and NewApp
+	// logs a Warn.
 	PrincipalAccess PrincipalAccessReader
 	Assembler       ContextPacketAssembler
 	Evidence        storage.EvidenceStore

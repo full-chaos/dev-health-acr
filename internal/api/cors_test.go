@@ -301,6 +301,10 @@ func TestCORSIsAnsweredOnlyOnTheRegisteredBrowserRoutePaths(t *testing.T) {
 		ContextFabricInvestigationsPath + "/submissions/",
 		ContextFabricInvestigationsPath + "x",
 		OAuthTokenPath + "/nested",
+		// CHAOS-12092: the conversation routes, exactly.
+		ContextFabricThreadsPath + "/",
+		ContextFabricThreadsPath + "/thread-cors-0001/nested",
+		ContextFabricThreadsPath + "x",
 	} {
 		t.Run(path, func(t *testing.T) {
 			got := harness.cors(0, corsCall{method: http.MethodOptions, path: path, origin: corsTestOrigin, headers: preflight})
@@ -344,6 +348,12 @@ func TestEveryCORSDecisionIsOnTheAccessLog(t *testing.T) {
 			map[string]any{"cors": "allowed", "cors_route": "investigations", "cors_preflight": true, "cors_origin": corsTestOrigin}},
 		{"submission route", corsCall{method: http.MethodOptions, path: ContextFabricInvestigationsPath + "/submissions/submission-cors-0001", origin: corsTestOrigin, headers: preflight},
 			map[string]any{"cors": "allowed", "cors_route": "investigations", "cors_preflight": true, "cors_origin": corsTestOrigin}},
+		{"thread list route", corsCall{method: http.MethodOptions, path: ContextFabricThreadsPath, origin: corsTestOrigin, headers: preflight},
+			map[string]any{"cors": "allowed", "cors_route": "investigations", "cors_preflight": true, "cors_origin": corsTestOrigin}},
+		{"thread route", corsCall{method: http.MethodOptions, path: ContextFabricThreadsPath + "/thread-cors-0001", origin: corsTestOrigin, headers: map[string]string{"Access-Control-Request-Method": "DELETE"}},
+			map[string]any{"cors": "allowed", "cors_route": "investigations", "cors_preflight": true, "cors_origin": corsTestOrigin}},
+		{"thread delete actual", corsCall{method: http.MethodDelete, path: ContextFabricThreadsPath + "/thread-cors-0001", origin: corsTestOrigin, token: harness.tokenA, headers: map[string]string{"X-ACR-Client-Version": "1.0.0"}},
+			map[string]any{"cors": "allowed", "cors_route": "investigations", "cors_preflight": false, "cors_origin": corsTestOrigin}},
 		{"token route", corsCall{method: http.MethodOptions, path: OAuthTokenPath, origin: corsTestOrigin, headers: preflight},
 			map[string]any{"cors": "allowed", "cors_route": "oauth_token", "cors_preflight": true, "cors_origin": corsTestOrigin}},
 		{"no origin", corsCall{method: http.MethodGet, path: OAuthAuthorizationServerMetadataPath},

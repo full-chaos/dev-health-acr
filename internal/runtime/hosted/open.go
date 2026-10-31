@@ -114,6 +114,13 @@ func open(ctx context.Context, request buildRequest) (*Runtime, error) {
 		return nil, closeAfterError(runtime, fmt.Errorf("initialize entitlement runtime: %w", err))
 	}
 	runtime.closers = []func() error{entitlement.Close, clickhouse.close}
+	// CHAOS-12092: every user-class call is re-checked live through the
+	// entitlement provider's principal access read. In remote entitlement
+	// mode a provider without one refuses the start (fail closed); only local
+	// entitlement mode (development and test) runs without it.
+	if request.config.EntitlementMode() == config.EntitlementModeRemote && principalAccessReader(entitlement) == nil {
+		return nil, closeAfterError(runtime, errors.New("initialize entitlement runtime: the entitlement provider serves no principal access read"))
+	}
 
 	var episodeCreator api.EpisodeCreator
 	if request.config.EnableEpisodeWriteback {
