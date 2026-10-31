@@ -1557,10 +1557,19 @@ func (a *Adapter) DiscoverContext(ctx context.Context, principal storage.Princip
 		if statusWalk.poolCut {
 			statusPoolCut = contextfabric.MemberStatusPoolCut{Kind: statusPredicate.kind, Read: statusWalk.read, Pool: max(pool, 0)}
 			if teamScope != nil {
-				// CHAOS-12352 (Anchor: B): the pool is the anchor's count, never
-				// the requested team's, so it is not stated; the read counts the
-				// checked members inside the narrowing.
-				statusPoolCut.Read, statusPoolCut.Pool = statusReadInScope, 0
+				// CHAOS-12352 (Anchor: B): the read counts the checked members
+				// inside the narrowing. The pool is the anchor's count: it is the
+				// requested team's only when rule (i) holds (every committed
+				// anchor is owned by a requested team), and is not stated
+				// otherwise.
+				owned, err := teamScope.committedOwned(ctx, request.Resolution.Committed)
+				if err != nil {
+					return contextfabric.GraphContext{}, graphNotProjectedError(err)
+				}
+				statusPoolCut.Read = statusReadInScope
+				if !owned {
+					statusPoolCut.Pool = 0
+				}
 			}
 		}
 		if a.config.Telemetry != nil {

@@ -67,7 +67,7 @@ func TestLiveATeamNarrowingStatesTheStatusPoolCutInsideTheNarrowing(t *testing.T
 	}{
 		{"no narrowing: the first 26 of the 250 read", nil, contextfabric.MemberStatusPoolCut{Kind: contextfabric.SubjectPullRequest, Read: 26, Pool: 250}},
 		{"a narrowing that reaches none: a cut read that reached none of its members", []string{"team-other"}, contextfabric.MemberStatusPoolCut{Kind: contextfabric.SubjectPullRequest, Read: 0, Pool: 0}},
-		{"the owning team: its 26 read, no pool stated", []string{"alpha"}, contextfabric.MemberStatusPoolCut{Kind: contextfabric.SubjectPullRequest, Read: 26, Pool: 0}},
+		{"the owning team (rule (i) holds): its 26 read of its 250", []string{"alpha"}, contextfabric.MemberStatusPoolCut{Kind: contextfabric.SubjectPullRequest, Read: 26, Pool: 250}},
 	} {
 		teams := tc.teams
 		scoped := &contextfabric.ScopedSetExpression{AnchorTerms: []string{repo.Label}, MemberKind: contextfabric.SubjectPullRequest,

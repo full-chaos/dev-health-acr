@@ -193,6 +193,47 @@ func (s *discoverTeamScope) inScopeIDs(ctx context.Context, kind contextfabric.S
 	return out, nil
 }
 
+// committedOwned reports whether rule (i) holds for every committed subject
+// (CHAOS-12352): a repository or project currently OWNED_BY_TEAM a requested
+// team, or a team whose own team list names one ("*" is never evidence). Then
+// an anchor-level total is the requested team's. No committed subject, any
+// other kind, a missing node or a cut read: false.
+func (s *discoverTeamScope) committedOwned(ctx context.Context, committed []contextfabric.SubjectRef) (bool, error) {
+	if s == nil || len(committed) == 0 {
+		return false, nil
+	}
+	n := s.narrowing
+	a := n.adapter
+	current := currentOwnership(s.temporal, a.now())
+	for _, subject := range committed {
+		switch subject.Kind {
+		case contextfabric.SubjectRepository, contextfabric.SubjectProject:
+			step := repositoryOwnersStep
+			if subject.Kind == contextfabric.SubjectProject {
+				step = projectOwnersStep
+			}
+			hits, cut, err := a.walkStepHits(ctx, n.key, n.orgID, []string{subject.CanonicalID}, step, current, exactNameCandidateQueryLimit)
+			if err != nil {
+				return false, err
+			}
+			if cut || !n.anyRequested(hits) {
+				return false, nil
+			}
+		case contextfabric.SubjectTeam:
+			team, err := a.nodeByKindID(ctx, n.key, n.orgID, string(subject.Kind), subject.CanonicalID, s.temporal)
+			if err != nil {
+				return false, err
+			}
+			if !n.isRequested(team) {
+				return false, nil
+			}
+		default:
+			return false, nil
+		}
+	}
+	return true, nil
+}
+
 // admits reports whether a decided subject is in scope. A committed subject,
 // a team (AuthorizedAttributes decides it) and the organization always pass.
 func (s *discoverTeamScope) admits(subject contextfabric.SubjectRef) bool {
