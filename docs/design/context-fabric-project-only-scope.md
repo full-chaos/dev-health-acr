@@ -55,13 +55,22 @@ every site that reads a grant class:
 - a comparison or classifier result that leaves its function (a derived bool,
   directly or through a local variable);
 - functions used as values;
-- conversions to `string` or an interface, explicit or as an argument,
-  composite element, assignment or return;
+- conversions of a class to any other type (`string`, an interface, a named
+  type of its own such as `type Wrapped GrantClass`), or implicitly to an
+  interface as an argument, composite element, struct field, assignment,
+  channel send or return;
+- collections of a class: a slice, array or map literal over a class, and a
+  call argument of such a type (`slices.Contains`);
 - lookups in a map keyed by a class;
 - calls of the classifiers;
 - calls of the raw repository-grant classifiers (`scopesUnrestricted`,
   `needsProjectReach`, `orgWideFigureAllowed`, `sourceHealthRestricted`,
   `workItemRepositoryRestricted`, `admitsWildcard`).
+
+It scans every distinct (GOOS, GOARCH) pair of the release matrix, and a
+decision inside a function literal counts for its enclosing declaration. It
+does not see a class inside a generic function, where it is a type parameter,
+or through reflection or unsafe.
 
 Every site has a row in `internal/cigates/grantclass/decisions.tsv` that says
 what `project_only` does there:

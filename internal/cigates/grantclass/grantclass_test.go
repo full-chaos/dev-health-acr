@@ -25,9 +25,17 @@
 //	method-value    a function or method whose signature takes, returns or
 //	                has a receiver of a class type, used as a value instead
 //	                of being called
-//	transport       a class value converted to a string or an interface
-//	                (explicitly, or as a call argument, composite element,
-//	                assignment or return of interface type)
+//	transport       a class value converted to any other type: explicitly
+//	                (string, an interface, another named type such as
+//	                `type Wrapped GrantClass`, another class), or implicitly
+//	                to an interface as a call argument, composite element
+//	                (slice, array, map or struct field), assignment, channel
+//	                send or return
+//	collection      a composite literal whose element, map key or map value
+//	                type is a class ([]GrantClass{...}, map[GrantClass]X,
+//	                map[string]GrantClass{...}), and a call argument whose
+//	                type is a slice, array or map of a class (the vocabulary
+//	                and membership checks such as slices.Contains)
 //	classify        a call of a classifier or a vocabulary mapping
 //	raw-grant       a call of a classifier that reads the raw repository
 //	                grant list instead of a class (c2's reserved sentinel
@@ -43,9 +51,11 @@
 // undecided. An unlisted site, a count that differs, a row without a note
 // and a row that matches nothing FAIL too.
 //
-// NOT covered, stated: a class value carried through a variable of a
-// non-class type other than string or an interface (a named string type of
-// its own); a decision made by reading RepositoryScopes directly outside the
+// A site inside a function literal is keyed to its enclosing declaration.
+//
+// NOT covered, stated: a class value inside a generic function, where it is a
+// type parameter and its comparisons are not class-typed; reflection and
+// unsafe; a decision made by reading RepositoryScopes directly outside the
 // raw-grant classifiers (c2's sentinel covers those); generated code outside
 // every release build (pinned by name, as in rowsclose).
 package grantclass
@@ -126,6 +136,7 @@ const (
 	kindTransport     = "transport"
 	kindClassify      = "classify"
 	kindLookup        = "lookup"
+	kindCollection    = "collection"
 	kindRawGrant      = "raw-grant"
 )
 
@@ -322,7 +333,7 @@ func siteKinds(info *types.Info, stack []ast.Node, derived map[types.Object]bool
 		}
 	case *ast.CallExpr:
 		if tv, ok := info.Types[n.Fun]; ok && tv.IsType() {
-			if len(n.Args) == 1 && isClass(info.TypeOf(n.Args[0])) && isStringOrInterface(tv.Type) {
+			if len(n.Args) == 1 && isClass(info.TypeOf(n.Args[0])) && !types.Identical(tv.Type, info.TypeOf(n.Args[0])) {
 				kinds = append(kinds, kindTransport)
 			}
 			return kinds
@@ -339,8 +350,22 @@ func siteKinds(info *types.Info, stack []ast.Node, derived map[types.Object]bool
 			}
 		}
 		kinds = append(kinds, implicitTransports(info, n)...)
+		for _, arg := range n.Args {
+			if isClassCollection(info.TypeOf(arg)) {
+				kinds = append(kinds, kindCollection)
+			}
+		}
 	case *ast.CompositeLit:
+		if isClassCollection(info.TypeOf(n)) {
+			kinds = append(kinds, kindCollection)
+		}
 		kinds = append(kinds, compositeTransports(info, n)...)
+	case *ast.ReturnStmt:
+		kinds = append(kinds, returnTransports(info, n, stack)...)
+	case *ast.SendStmt:
+		if ch, ok := types.Unalias(info.TypeOf(n.Chan)).Underlying().(*types.Chan); ok && isClass(info.TypeOf(n.Value)) && isInterface(ch.Elem()) {
+			kinds = append(kinds, kindTransport)
+		}
 	case *ast.AssignStmt:
 		for i, rhs := range n.Rhs {
 			if i < len(n.Lhs) && len(n.Lhs) == len(n.Rhs) && isClass(info.TypeOf(rhs)) && isInterface(info.TypeOf(n.Lhs[i])) {
@@ -486,6 +511,26 @@ func implicitTransports(info *types.Info, call *ast.CallExpr) []string {
 func compositeTransports(info *types.Info, lit *ast.CompositeLit) []string {
 	var element types.Type
 	switch u := types.Unalias(info.TypeOf(lit)).Underlying().(type) {
+	case *types.Struct:
+		var kinds []string
+		for i, elt := range lit.Elts {
+			value, field := elt, (*types.Var)(nil)
+			if kv, ok := elt.(*ast.KeyValueExpr); ok {
+				value = kv.Value
+				if key, isIdent := kv.Key.(*ast.Ident); isIdent {
+					field, _ = info.Uses[key].(*types.Var)
+					if field == nil {
+						field, _ = info.ObjectOf(key).(*types.Var)
+					}
+				}
+			} else if i < u.NumFields() {
+				field = u.Field(i)
+			}
+			if field != nil && isInterface(field.Type()) && isClass(info.TypeOf(value)) {
+				kinds = append(kinds, kindTransport)
+			}
+		}
+		return kinds
 	case *types.Map:
 		element = u.Elem()
 	case *types.Slice:
@@ -509,6 +554,49 @@ func compositeTransports(info *types.Info, lit *ast.CompositeLit) []string {
 		}
 	}
 	return kinds
+}
+
+// returnTransports: a class value returned where the enclosing function's
+// result type is an interface (any, error, fmt.Stringer).
+func returnTransports(info *types.Info, ret *ast.ReturnStmt, stack []ast.Node) []string {
+	var sig *types.Signature
+	for i := len(stack) - 2; i >= 0 && sig == nil; i-- {
+		switch fn := stack[i].(type) {
+		case *ast.FuncLit:
+			sig, _ = info.TypeOf(fn).(*types.Signature)
+		case *ast.FuncDecl:
+			if obj, ok := info.Defs[fn.Name].(*types.Func); ok {
+				sig, _ = obj.Type().(*types.Signature)
+			}
+		}
+	}
+	if sig == nil || sig.Results().Len() != len(ret.Results) {
+		return nil
+	}
+	var kinds []string
+	for i, result := range ret.Results {
+		if isClass(info.TypeOf(result)) && isInterface(sig.Results().At(i).Type()) {
+			kinds = append(kinds, kindTransport)
+		}
+	}
+	return kinds
+}
+
+// isClassCollection: a slice, array or map whose element, key or value type
+// is a class.
+func isClassCollection(t types.Type) bool {
+	if t == nil {
+		return false
+	}
+	switch u := types.Unalias(t).Underlying().(type) {
+	case *types.Slice:
+		return isClass(u.Elem())
+	case *types.Array:
+		return isClass(u.Elem())
+	case *types.Map:
+		return isClass(u.Key()) || isClass(u.Elem())
+	}
+	return false
 }
 
 // switchCoverage: whether the tagged switch names every constant of the
@@ -570,14 +658,6 @@ func isInterface(t types.Type) bool {
 	}
 	_, ok := types.Unalias(t).Underlying().(*types.Interface)
 	return ok
-}
-
-func isStringOrInterface(t types.Type) bool {
-	if isInterface(t) {
-		return true
-	}
-	basic, ok := types.Unalias(t).(*types.Basic)
-	return ok && basic.Kind() == types.String
 }
 
 func calledFunc(info *types.Info, call *ast.CallExpr) *types.Func {
@@ -751,13 +831,17 @@ func scopeProblems(outside, pinned []string) []string {
 	return nil
 }
 
+// releaseTargets is every distinct (GOOS, GOARCH) pair of the release
+// matrix: a file built only for one architecture (an arm64 build tag) is
+// scanned too.
 func releaseTargets() [][2]string {
-	seen := map[string]bool{}
+	seen := map[[2]string]bool{}
 	var targets [][2]string
 	for _, target := range releasebuild.Matrix() {
-		if !seen[target.GOOS] {
-			seen[target.GOOS] = true
-			targets = append(targets, [2]string{target.GOOS, target.GOARCH})
+		pair := [2]string{target.GOOS, target.GOARCH}
+		if !seen[pair] {
+			seen[pair] = true
+			targets = append(targets, pair)
 		}
 	}
 	return targets

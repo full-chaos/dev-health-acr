@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/full-chaos/dev-health-acr/internal/releasebuild"
 	"github.com/full-chaos/dev-health-acr/internal/testsupport/repopath"
 )
 
@@ -29,21 +30,30 @@ func TestTheWalkerFindsEveryPlantedKind(t *testing.T) {
 	}
 	const kinds = "internal/cigates/grantclass/testdata/planted/kinds/kinds.go"
 	want := map[site]int{
-		{kinds, "Compare", kindCompare}:             1,
-		{kinds, "SwitchPartial", kindSwitchPartial}: 1,
-		{kinds, "SwitchDefault", kindSwitchDefault}: 1,
-		{kinds, "DerivedField", kindCompare}:        1,
-		{kinds, "DerivedField", kindDerivedEscape}:  1,
-		{kinds, "DerivedLocal", kindCompare}:        1,
-		{kinds, "DerivedLocal", kindDerivedEscape}:  1,
-		{kinds, "Lookup", kindLookup}:               1,
-		{kinds, "MethodValue", kindMethodValue}:     1,
-		{kinds, "TransportString", kindTransport}:   1,
-		{kinds, "TransportArgument", kindTransport}: 1,
-		{kinds, "TransportMap", kindTransport}:      1,
-		{kinds, "Classified", kindClassify}:         1,
-		{kinds, "RawGranted", kindRawGrant}:         1,
-		{kinds, "TwoDecisions", kindCompare}:        2,
+		{kinds, "Compare", kindCompare}:               1,
+		{kinds, "SwitchPartial", kindSwitchPartial}:   1,
+		{kinds, "SwitchDefault", kindSwitchDefault}:   1,
+		{kinds, "DerivedField", kindCompare}:          1,
+		{kinds, "DerivedField", kindDerivedEscape}:    1,
+		{kinds, "DerivedLocal", kindCompare}:          1,
+		{kinds, "DerivedLocal", kindDerivedEscape}:    1,
+		{kinds, "Lookup", kindLookup}:                 1,
+		{kinds, "MethodValue", kindMethodValue}:       1,
+		{kinds, "TransportString", kindTransport}:     1,
+		{kinds, "TransportArgument", kindTransport}:   1,
+		{kinds, "TransportMap", kindTransport}:        1,
+		{kinds, "Classified", kindClassify}:           1,
+		{kinds, "RawGranted", kindRawGrant}:           1,
+		{kinds, "TwoDecisions", kindCompare}:          2,
+		{kinds, "CollectionSlice", kindCollection}:    1,
+		{kinds, "CollectionMapKey", kindCollection}:   1,
+		{kinds, "CollectionMapValue", kindCollection}: 1,
+		{kinds, "CollectionArgument", kindCollection}: 1,
+		{kinds, "TransportReturn", kindTransport}:     1,
+		{kinds, "TransportNamed", kindTransport}:      1,
+		{kinds, "TransportSend", kindTransport}:       1,
+		{kinds, "TransportField", kindTransport}:      1,
+		{kinds, "ClosureDecision", kindCompare}:       1,
 	}
 	if got, expected := render(found), render(want); got != expected {
 		t.Errorf("planted sites differ\n got:\n%s\nwant:\n%s", got, expected)
@@ -96,5 +106,29 @@ func TestTheScopePinFailsWhenTheOutsideSetChanges(t *testing.T) {
 	}
 	if got := scopeProblems([]string{"a.go", "b.go"}, []string{"a.go"}); len(got) != 1 {
 		t.Errorf("a new outside file must fail, got %v", got)
+	}
+}
+
+// The scan covers every distinct (GOOS, GOARCH) pair of the release matrix,
+// so a file built only for one architecture is read too.
+func TestTheScanCoversEveryReleaseTarget(t *testing.T) {
+	want := map[[2]string]bool{}
+	for _, target := range releasebuild.Matrix() {
+		want[[2]string{target.GOOS, target.GOARCH}] = true
+	}
+	got := map[[2]string]bool{}
+	for _, pair := range releaseTargets() {
+		if got[pair] {
+			t.Errorf("release target %v scanned twice", pair)
+		}
+		got[pair] = true
+	}
+	if len(got) != len(want) {
+		t.Fatalf("scanned %d release targets %v, want the %d distinct pairs %v", len(got), got, len(want), want)
+	}
+	for pair := range want {
+		if !got[pair] {
+			t.Errorf("release target %v is not scanned", pair)
+		}
 	}
 }

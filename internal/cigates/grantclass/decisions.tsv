@@ -2,6 +2,7 @@
 # decision: r-sub (restricted path is right for project_only), proj (project-aware logic due, ticket named), deny (refused), leave (repository-only, sentinel keeps it fail closed), consent (original consent grant), vocab (mapping, vocabulary or telemetry).
 internal/api/context_fabric_data_catalog_route.go	App.contextFabricDataCatalogHandler	classify	1	r-sub	the catalog shows the principal class; project_only reads as restricted, so the catalog states the restricted operations (12107 v2 inventory)
 internal/api/context_fabric_data_catalog_route.go	App.contextFabricDataCatalogHandler	derived-escape	1	r-sub	the catalog shows the principal class; project_only reads as restricted, so the catalog states the restricted operations (12107 v2 inventory)
+internal/auth/grant_class.go	GrantClassVocabulary	collection	1	vocab	the closed grant-class vocabulary
 internal/contextfabric/devhealthfacts/dependencies.go	BlockersProvider.ReadFacts	raw-grant	1	deny	orgWideFigureAllowed: an org-wide figure is a typed limitation under project_only (D3, CHAOS-12225); c3 CHAOS-12299 states it
 internal/contextfabric/devhealthfacts/incidents.go	IncidentsProvider.ReadFacts	raw-grant	1	deny	orgWideFigureAllowed: an org-wide figure is a typed limitation under project_only (D3, CHAOS-12225); c3 CHAOS-12299 states it
 internal/contextfabric/devhealthfacts/investment.go	InvestmentProvider.ReadFacts	raw-grant	1	r-sub	sourceHealthRestricted: project_only takes the restricted source-health path (12107 v2 inventory)
@@ -13,6 +14,7 @@ internal/contextfabric/directread/data_catalog.go	catalogOperation	compare	1	r-s
 internal/contextfabric/directread/embedded_subject_gate.go	EmbeddedSubjectGate.Filter	classify	1	r-sub	the Restricted bool sent to FilterEmbeddedSubjects (embedded_subjects.go:107): project_only filters as restricted (12107 v2 inventory)
 internal/contextfabric/directread/embedded_subject_gate.go	EmbeddedSubjectGate.Filter	compare	1	r-sub	the Restricted bool sent to FilterEmbeddedSubjects (embedded_subjects.go:107): project_only filters as restricted (12107 v2 inventory)
 internal/contextfabric/directread/embedded_subject_gate.go	EmbeddedSubjectGate.Filter	derived-escape	1	r-sub	the Restricted bool sent to FilterEmbeddedSubjects (embedded_subjects.go:107): project_only filters as restricted (12107 v2 inventory)
+internal/contextfabric/directread/gatevocab/gatevocab.go	PrincipalClassVocabulary	collection	1	vocab	the closed principal-class vocabulary (eventspec derives its field vocabulary from it)
 internal/contextfabric/directread/graphql_query.go	GraphQLQueryLogArgs	transport	1	vocab	telemetry: the caller class written to the log (closed vocabulary)
 internal/contextfabric/directread/graphql_query.go	GraphQLRunner.Run	classify	2	r-sub	the GraphQL caller class: project_only runs with the restricted policy (12107 v2 inventory graphql_query.go:357)
 internal/contextfabric/directread/graphql_query.go	GraphQLRunner.Run	derived-escape	1	r-sub	the GraphQL caller class: project_only runs with the restricted policy (12107 v2 inventory graphql_query.go:357)
@@ -20,7 +22,10 @@ internal/contextfabric/directread/graphql_query.go	gqlRun.answer	compare	1	r-sub
 internal/contextfabric/directread/graphql_query.go	gqlRun.finishRoot	compare	1	r-sub	restricted callers get the restricted root policy
 internal/contextfabric/directread/graphql_query.go	gqlRun.tryCandidate	compare	1	r-sub	restricted callers get the restricted root policy
 internal/contextfabric/directread/graphql_schema_view.go	BuildCatalogSchema	compare	1	r-sub	the schema view shows a restricted caller the restricted roots
+internal/contextfabric/directread/operation_policy.go	CallerClassVocabulary	collection	1	vocab	the closed caller-class vocabulary
 internal/contextfabric/directread/operation_policy.go	OperationPolicy.Scope	compare	1	r-sub	the per-caller scope of an operation: project_only reads the restricted scope
+internal/contextfabric/directread/operation_policy.go	knownCallerClass	collection	1	vocab	artifact validation: membership in the closed caller-class vocabulary
+internal/contextfabric/directread/operation_policy.go	validateOperation	collection	3	vocab	artifact validation over the closed caller-class vocabulary (one scope per class); no runtime decision
 internal/contextfabric/directread/operation_policy.go	validateOperation	compare	1	vocab	artifact validation over the closed caller-class vocabulary (one scope per class); no runtime decision
 internal/contextfabric/directread/operation_policy.go	validateOperation	lookup	3	vocab	artifact validation over the closed caller-class vocabulary (one scope per class); no runtime decision
 internal/contextfabric/directread/operation_policy.go	validateOperation	transport	3	vocab	artifact validation over the closed caller-class vocabulary (one scope per class); no runtime decision
@@ -45,6 +50,9 @@ internal/contextfabric/directread/subject_lookup_modes.go	SubjectLookup.scanHand
 internal/contextfabric/directread/telemetry.go	AuthorizationLogArgs	transport	1	vocab	telemetry: the principal class written to the log (closed vocabulary)
 internal/contextfabric/engine_fact_gate.go	gatedFactReader.ReadFacts	classify	1	r-sub	restricted callers get the gated fact read (12107 v2 inventory engine_fact_gate.go:132)
 internal/contextfabric/engine_fact_gate.go	gatedFactReader.ReadFacts	compare	1	r-sub	restricted callers get the gated fact read (12107 v2 inventory engine_fact_gate.go:132)
+internal/contextfabric/eventspec/spec.go	var DirectReadAuthorization	collection	1	vocab	the event field vocabulary of principal_class, derived from the closed vocabulary
+internal/contextfabric/eventspec/spec.go	var DirectRelationshipsRead	collection	1	vocab	the event field vocabulary of principal_class, derived from the closed vocabulary
+internal/contextfabric/eventspec/spec.go	var StoredResultAuthorization	collection	1	vocab	the event field vocabulary of principal_scope, derived from the closed vocabulary
 internal/contextfabric/fact_root_recheck.go	Engine.recheckCommittedRoots	classify	1	r-sub	restricted callers recheck committed roots (12107 v2 inventory fact_root_recheck.go:37)
 internal/contextfabric/fact_root_recheck.go	Engine.recheckCommittedRoots	compare	1	r-sub	restricted callers recheck committed roots (12107 v2 inventory fact_root_recheck.go:37)
 internal/contextfabric/falkorgraph/organization_status_census.go	Adapter.statusCensusPage	raw-grant	1	r-sub	needsProjectReach caller: project_only takes the restricted census path (12107 v2 inventory)
@@ -67,6 +75,7 @@ internal/contextfabric/stored_result_authorization.go	StoredResultGate.decide	co
 internal/contextfabric/stored_result_authorization.go	StoredResultGate.decide	derived-escape	1	r-sub	the decision records the principal scope; project_only reads as restricted
 internal/contextfabric/stored_result_authorization.go	StoredResultGrantDigest	classify	1	proj	the stored-result grant digest must be p: plus the framed project set under project_only (12107 v3 V4, migration 0066); c2 CHAOS-12298
 internal/contextfabric/stored_result_authorization.go	StoredResultGrantDigest	compare	1	proj	the stored-result grant digest must be p: plus the framed project set under project_only (12107 v3 V4, migration 0066); c2 CHAOS-12298
+internal/contextfabric/stored_result_authorization.go	StoredResultPrincipalScopeVocabulary	collection	1	vocab	the closed stored-result principal-scope vocabulary
 internal/contextfabric/stored_result_authorization.go	classifyStoredResultPrincipalScope	classify	2	vocab	the mapping from auth.GrantClass to the stored-result principal scope
 internal/contextfabric/stored_result_authorization.go	classifyStoredResultPrincipalScope	derived-escape	1	vocab	the mapping from auth.GrantClass to the stored-result principal scope
 internal/contextfabric/stored_result_authorization.go	storedResultGrantRefusal	classify	1	r-sub	restricted callers meet the grant-digest check, never the unrestricted bypass (12107 v2 inventory :379-389)

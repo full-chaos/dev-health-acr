@@ -3,6 +3,7 @@ package kinds
 
 import (
 	"fmt"
+	"slices"
 
 	"github.com/full-chaos/dev-health-acr/internal/cigates/grantclass/testdata/planted/classify"
 )
@@ -99,4 +100,64 @@ func TwoDecisions(c classify.Class) int {
 		return 2
 	}
 	return 3
+}
+
+// CollectionSlice: a slice literal of classes.
+func CollectionSlice() []classify.Class {
+	return []classify.Class{classify.A}
+}
+
+// CollectionMapKey: a map keyed by a class.
+func CollectionMapKey() map[classify.Class]int {
+	return map[classify.Class]int{classify.A: 1}
+}
+
+// CollectionMapValue: a map whose values are classes.
+func CollectionMapValue() map[string]classify.Class {
+	return map[string]classify.Class{"a": classify.A}
+}
+
+// CollectionArgument: a membership check over a class collection.
+func CollectionArgument(c classify.Class, known []classify.Class) bool {
+	return slices.Contains(known, c)
+}
+
+// TransportReturn: a class returned as an interface.
+func TransportReturn(c classify.Class) any {
+	return c
+}
+
+// Wrapped is a named type of its own over the class: converting to it
+// carries the class past every class-typed check.
+type Wrapped classify.Class
+
+// TransportNamed: a conversion to another named type.
+func TransportNamed(c classify.Class) Wrapped {
+	return Wrapped(c)
+}
+
+// TransportSend: a class sent on a channel of interface values.
+func TransportSend(c classify.Class, out chan any) {
+	out <- c
+}
+
+// Envelope carries an interface field.
+type Envelope struct{ Value any }
+
+// TransportField: a class stored in an interface-typed struct field.
+func TransportField(c classify.Class) Envelope {
+	return Envelope{Value: c}
+}
+
+// ClosureDecision: a decision inside a function literal is keyed to the
+// enclosing declaration.
+func ClosureDecision(c classify.Class) int {
+	count := 0
+	check := func() {
+		if c == classify.C {
+			count++
+		}
+	}
+	check()
+	return count
 }

@@ -23,7 +23,7 @@ func Passed(c classify.Class) classify.Class {
 
 func identity(c classify.Class) classify.Class { return c }
 
-// Vocabulary lists the classes as classes.
-func Vocabulary() []classify.Class {
-	return []classify.Class{classify.A, classify.B, classify.C}
+// Kept returns a class as a class: no conversion, no transport.
+func Kept(c classify.Class) (classify.Class, error) {
+	return c, nil
 }
