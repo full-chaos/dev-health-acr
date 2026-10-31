@@ -1033,9 +1033,11 @@ func (p *InvestmentProvider) readProjectNativeThemeMix(ctx context.Context, orgI
 	}
 	withRow := make(map[string]bool, len(rows))
 	// ownUnits is each project's own work units in the window, whatever their
-	// effort: the count a roll-up served for the project discloses
-	// (CHAOS-12160).
+	// effort and categorization: the count a roll-up served for the project
+	// discloses (CHAOS-12160). An evidence-gated unit is one of them
+	// (CHAOS-12181); ownGated says how many.
 	ownUnits := make(map[string]int64, len(rows))
+	ownGated := make(map[string]int64, len(uncategorizedByProject))
 	rowCount = len(rows)
 	if rowCount > maxProjectPopulationRows {
 		cutAfter = rows[maxProjectPopulationRows-1].ProjectSubjectKey
@@ -1117,16 +1119,27 @@ func (p *InvestmentProvider) readProjectNativeThemeMix(ctx context.Context, orgI
 			recordInvestmentUncategorized(ctx, subject, 0, int64(gated), false)
 		}
 	}
-	stampProjectOwnWorkUnits(*facts, bySubject, ownUnits)
+	// CHAOS-12181: the reducer skips a gated unit before it makes a row, so a
+	// project whose own units are all gated has no row. Its gated units are
+	// still its own units in the window: counted here, never read as 0.
+	for key, gated := range uncategorizedByProject {
+		if _, ok := bySubject[key]; ok && gated > 0 {
+			ownUnits[key] += int64(gated)
+			ownGated[key] = int64(gated)
+		}
+	}
+	stampProjectOwnWorkUnits(*facts, bySubject, ownUnits, ownGated)
 	return rowCount, cutAfter, nil
 }
 
 // stampProjectOwnWorkUnits gives every project fact still served the owning
 // teams' roll-up the number of work units of its own the window holds
 // (CHAOS-12160): 0, or units with no measurable effort; only those projects
-// keep the roll-up (CHAOS-5935). ownUnits is keyed by project key, as
-// bySubject is; a project absent from it has none.
-func stampProjectOwnWorkUnits(facts []contextfabric.CanonicalFact, bySubject map[string]contextfabric.SubjectRef, ownUnits map[string]int64) {
+// keep the roll-up (CHAOS-5935). An evidence-gated unit counts (CHAOS-12181),
+// and project_own_uncategorized_unit_count says how many of the own units are
+// gated. ownUnits and ownGated are keyed by project key, as bySubject is; a
+// project absent from them has none.
+func stampProjectOwnWorkUnits(facts []contextfabric.CanonicalFact, bySubject map[string]contextfabric.SubjectRef, ownUnits, ownGated map[string]int64) {
 	for key, subject := range bySubject {
 		for i := range facts {
 			fact := &facts[i]
@@ -1135,6 +1148,7 @@ func stampProjectOwnWorkUnits(facts []contextfabric.CanonicalFact, bySubject map
 			}
 			if source, ok := fact.Fields[contextfabric.FactFieldInvestmentMixSource]; ok && source.String != nil && *source.String == contextfabric.InvestmentMixSourceOwningTeamRollup {
 				fact.Fields[investmentProjectOwnWorkUnitCountField] = contextfabric.IntegerFactValue(ownUnits[key])
+				fact.Fields[investmentProjectOwnUncategorizedUnitCountField] = contextfabric.IntegerFactValue(ownGated[key])
 			}
 		}
 	}
@@ -1143,6 +1157,12 @@ func stampProjectOwnWorkUnits(facts []contextfabric.CanonicalFact, bySubject map
 // investmentProjectOwnWorkUnitCountField is the project's own work units in
 // the window, on a fact served the owning teams' roll-up (CHAOS-12160).
 const investmentProjectOwnWorkUnitCountField = "project_own_work_unit_count"
+
+// investmentProjectOwnUncategorizedUnitCountField is how many of those own
+// units are evidence-gated (insufficient_evidence or no_text_sources on the
+// unit's latest row), on the same fact (CHAOS-12181). A fact field only: the
+// served claim's investment_mix carries project_own_work_unit_count alone.
+const investmentProjectOwnUncategorizedUnitCountField = "project_own_uncategorized_unit_count"
 
 // investmentProjectOwningTeamRollup names a project fact whose theme mix is
 // the owning teams' roll-up (CHAOS-5930 decision A: a disclosed roll-up).
@@ -1166,14 +1186,17 @@ func discloseProjectRollups(result *contextfabric.FactProviderResult) {
 		if !ok || source.String == nil || *source.String != contextfabric.InvestmentMixSourceOwningTeamRollup {
 			continue
 		}
-		var units, own int64
+		var units, own, gated int64
 		if v, ok := fact.Fields["work_unit_count"]; ok && v.Integer != nil {
 			units = *v.Integer
 		}
 		if v, ok := fact.Fields[investmentProjectOwnWorkUnitCountField]; ok && v.Integer != nil {
 			own = *v.Integer
 		}
-		addSubjectReasons(result, []contextfabric.SubjectRef{fact.Subject}, investmentProjectOwningTeamRollupReason(fact.Subject, units, own))
+		if v, ok := fact.Fields[investmentProjectOwnUncategorizedUnitCountField]; ok && v.Integer != nil {
+			gated = *v.Integer
+		}
+		addSubjectReasons(result, []contextfabric.SubjectRef{fact.Subject}, investmentProjectOwningTeamRollupReason(fact.Subject, units, own, gated))
 		rollups++
 	}
 	// The request-level note leads the coverage reason, which is bounded: a
@@ -1183,8 +1206,14 @@ func discloseProjectRollups(result *contextfabric.FactProviderResult) {
 	}
 }
 
-func investmentProjectOwningTeamRollupReason(subject contextfabric.SubjectRef, units, own int64) string {
-	return fmt.Sprintf("%s: %s: the theme mix is the owning teams' roll-up over %d work units in the window, not the project's own; the project has %d work units of its own in the window", investmentProjectOwningTeamRollup, subject.CanonicalID, units, own)
+func investmentProjectOwningTeamRollupReason(subject contextfabric.SubjectRef, units, own, gated int64) string {
+	reason := fmt.Sprintf("%s: %s: the theme mix is the owning teams' roll-up over %d work units in the window, not the project's own; the project has %d work units of its own in the window", investmentProjectOwningTeamRollup, subject.CanonicalID, units, own)
+	if gated > 0 {
+		// CHAOS-12181: the gated part is named, so a count of own units beside
+		// a roll-up does not read as measured work the mix left out.
+		reason += fmt.Sprintf(", %d of them uncategorized (too little text to categorize: insufficient_evidence or no_text_sources)", gated)
+	}
+	return reason
 }
 
 // projectSpanKey is the "provider:id" key the project mixes name a project by

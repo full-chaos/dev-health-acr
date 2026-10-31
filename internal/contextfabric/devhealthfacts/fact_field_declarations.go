@@ -1098,6 +1098,7 @@ func investmentFields() []fieldDecl {
 			declAggregate(fInt("native_multi_placed_unit_count", "count")),
 			declAggregate(fInt("owning_team_rollup_work_unit_count", "count")),
 			fInt("project_own_work_unit_count", "count"),
+			fInt("project_own_uncategorized_unit_count", "count"),
 		),
 	)
 }

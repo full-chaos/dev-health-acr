@@ -1338,7 +1338,12 @@ import (
 // investment_mix discloses (CHAOS-12160). An answer saved under v257 holds an
 // all-history mix for a question that named no period, and a roll-up claim
 // with no disclosure.
-const QueryVersion = "devhealthfacts.clickhouse.v258"
+// v258 -> v259: a project served the owning teams' roll-up counts its
+// evidence-gated own units in project_own_work_unit_count, says how many in
+// project_own_uncategorized_unit_count, and names them in the roll-up reason
+// (CHAOS-12181). An answer saved under v258 says 0 own units for a project
+// whose own units in the window were all gated.
+const QueryVersion = "devhealthfacts.clickhouse.v259"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each
