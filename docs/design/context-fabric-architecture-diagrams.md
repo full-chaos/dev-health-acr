@@ -3594,7 +3594,7 @@ refuses a purged organization's write.
 `ContextFabricResultFeedback`, `ContextFabricResultFeedbackRequest`,
 `ParseContextFabricResultFeedbackRequest`
 (`internal/contracts/v1/context_fabric_result_feedback.go`); migration
-`0063_context_fabric_result_feedback.sql`; parity table
+`0065_context_fabric_result_feedback.sql`; parity table
 `paritytest.RunResultFeedbackSuite`.
 
 ## Sources
