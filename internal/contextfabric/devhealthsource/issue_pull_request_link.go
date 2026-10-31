@@ -87,6 +87,10 @@ var issuePullRequestLinkOutranked = "toUInt8(l.provenance != 'native' AND (l.wor
 var pullRequestWorkItemTypes = map[string]struct{}{"pr": {}, "merge_request": {}}
 
 // pullRequestCanonicalID is the pull_request node id queryPullRequests mints.
+// Every producer site that mints a pull request node or points an edge at one
+// calls it (CHAOS-12230), and the published canonical-id vectors
+// (contracts/examples/v1/context_fabric_canonical_id_vectors.v1.json) are its
+// output.
 func pullRequestCanonicalID(repoID string, number int64) string {
 	return fmt.Sprintf("pull_request:%s:%d", repoID, number)
 }
