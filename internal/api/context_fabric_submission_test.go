@@ -129,9 +129,7 @@ func TestAnAbandonOnErrorAndAnAbandonAtExpiryAnswerARetryAlike(t *testing.T) {
 		harness.post(0, harness.tokenA, "submission-abandon-x", submissionQuestion)
 	}()
 	<-harness.investigator.entered
-	// Past the record's expiry (run budget + 30 s), inside its retention-0
-	// window: at 24 hours the record itself closes (CHAOS-11952).
-	harness.clock.Advance(time.Hour)
+	harness.clock.Advance(24 * time.Hour)
 	atExpiry := harness.post(1, harness.tokenA, "submission-abandon-x", submissionQuestion)
 	close(harness.investigator.release)
 	<-done
@@ -519,14 +517,16 @@ func TestANonOwnerCannotTellAnotherPrincipalsSubmissionExists(t *testing.T) {
 	}
 }
 
-// CHAOS-11952 (lead ruling Q2): a submission with no thread is a one-turn
-// thread with retention 0. One second before its admission + 24 hours its
+// CHAOS-11952 (lead ruling Q2), with ACR_ASK_DEV_RETENTION_ENABLED on (the
+// store's unthreaded record retention): a submission with no thread is a
+// one-turn thread with retention 0. One second before its admission + 24 hours its
 // answer, its status and a repeat are served as before; from 24 hours every
 // read fails closed, before the retention job removes the record: the result
 // by id and the status read as unknown, and a repeat is 409 thread_closed and
 // runs nothing.
 func TestASubmissionWithNoThreadClosesTwentyFourHoursAfterItsAdmission(t *testing.T) {
-	harness, _ := newMemorySubmissionHarness(t, 1)
+	harness, store := newMemorySubmissionHarness(t, 1)
+	store.WithUnthreadedRecordRetention(true)
 	harness.investigator.mode.Store(int32(runSave))
 	admitted := harness.clock.Now()
 	resultID := servedResultID(t, harness.post(0, harness.tokenA, "submission-retention-0001", submissionQuestion))
@@ -580,5 +580,27 @@ func TestASubmissionsSaveAfterItsRecordWasRemovedStoresNothing(t *testing.T) {
 	}
 	if got := harness.get(0, harness.tokenB, record.ReservedResultID); got.Code != http.StatusNotFound {
 		t.Fatalf("another bearer reads the reserved id = %d, want 404", got.Code)
+	}
+}
+
+// CHAOS-11952 (lead ruling 2): with retention off (the default), a
+// submission with no thread reads as before, at 24 hours and a year later:
+// its answer and its status are served and a repeat replays it.
+func TestASubmissionWithNoThreadStaysReadableWithRetentionOff(t *testing.T) {
+	harness, _ := newMemorySubmissionHarness(t, 1)
+	harness.investigator.mode.Store(int32(runSave))
+	resultID := servedResultID(t, harness.post(0, harness.tokenA, "submission-retention-0002", submissionQuestion))
+	harness.clock.Advance(400 * 24 * time.Hour)
+	if got := harness.get(0, harness.tokenA, resultID); got.Code != http.StatusOK {
+		t.Fatalf("the answer a year later with retention off = %d %s, want 200", got.Code, got.Body.String())
+	}
+	if got := harness.status(0, harness.tokenA, "submission-retention-0002"); got.Code != http.StatusOK {
+		t.Fatalf("the status a year later with retention off = %d %s, want 200", got.Code, got.Body.String())
+	}
+	if replayed := servedResultID(t, harness.post(0, harness.tokenA, "submission-retention-0002", submissionQuestion)); replayed != resultID {
+		t.Fatalf("a repeat with retention off served %s, want the stored %s", replayed, resultID)
+	}
+	if got := harness.investigator.executions.Load(); got != 1 {
+		t.Fatalf("executions = %d, want 1", got)
 	}
 }

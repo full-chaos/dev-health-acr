@@ -59,9 +59,10 @@ thread id once per conversation and sends it on every turn as
   (plan §2.6, D-22) under §6.
 - Results with no submission link (MCP, Workbench) are not in any thread and
   are out of scope.
-- **A submission with no thread** (I-30, CHAOS-11952, lead ruling Q2) is
-  still an Ask Dev result's record: it is retained as a one-turn thread with
-  retention `0`, keyed on its own admission (`admitted_at` + 24 hours,
+- **A submission with no thread** (I-30, CHAOS-11952, lead ruling Q2; with
+  `ACR_ASK_DEV_RETENTION_ENABLED` on, §12) is still an Ask Dev result's
+  record: it is retained as a one-turn thread with retention `0`, keyed on its
+  own admission (`admitted_at` + 24 hours,
   `contextfabric.UnthreadedRecordExpiresAt`). From then its result, its
   status, replay and attach fail closed and a repeat of its id is
   `409 thread_closed`, as for an expired thread; the job then removes both.
@@ -440,20 +441,34 @@ back-dated rows." Rules: `internal/contextfabric/retention.go`; SQL:
 `pginvestigation/retention.go`; memory twin: `memoryinvestigation/retention.go`
 (one parity table, `paritytest/retention_sweep.go`).
 
+- **Switch.** `ACR_ASK_DEV_RETENTION_ENABLED`, default off (lead ruling,
+  plan §2.10). Off: no job runs, no row is removed, there is no startup grant
+  probe, a submission with no thread reads as before (live), and startup logs
+  that retention is off. On: the job runs and the read rule for a submission
+  with no thread holds. The two never diverge: the store's sweep refuses
+  (`ErrRetentionReadRuleOff`) when its read rule is off.
 - **Where.** A bounded purge loop in every `acr-api` replica
-  (`runtime/hosted/retention_purge.go`, every 5 minutes, 500 units a pass).
-  Its first pass runs at startup and proves the runtime role's DELETE grants
-  (`internal/dbacl`): a missing grant fails startup. Each unit (one thread, or
-  one record with no thread) is one transaction under the organization's
-  admission lock, so replicas sweeping at once remove a unit once and no turn
-  is admitted half-way through.
+  (`runtime/hosted/retention_purge.go`, every 5 minutes, 500 units a pass),
+  started with the other Postgres purge loops, **on a pool of its own
+  connected as the retention role** (`ACR_POSTGRES_RETENTION_DSN`, required
+  with the switch on). The runtime role is not widened (lead ruling: least
+  privilege). The role holds exactly `internal/dbacl.RetentionGrants`, given by
+  `grant-runtime-acl` (Helm `credentials.retention`, compose
+  `ACR_RETENTION_DB_USER`), and it must not be the runtime or the purge role.
+  At startup a grant probe runs every kind of statement on no row (so a
+  missing grant fails startup even when nothing is due), then a first pass.
+  Each unit (one thread, or one record with no thread) is one transaction
+  under the organization's admission lock, so replicas sweeping at once
+  remove a unit once and no turn is admitted half-way through.
 - **Backing set.** Thread row; submission records (with questions); result
   rows (semantic state and reuse columns are columns of the row); the
   clarification and structure selections and the supersession claims keyed
   by a removed result (`prior_result_id`); the run event log (by its foreign
   key's cascade, or explicitly when records are kept); the answer feedback
   (cascade). Kept: the usage aggregate (AC-6); model execution receipts, which
-  carry no question, answer, principal or result id (lead ruling Q3 test);
+  carry no question, answer, principal or result id (lead ruling Q3 test;
+  each keeps sha256 input and output digests of the content and the client's
+  `request_id`, until the organization purge);
   results no record names (MCP, Workbench); a claim whose prior result lives
   (its claimer's id stays, as the fence of the live prior).
 - **Expired thread.** The whole set goes, thread row included. Its ids are
@@ -471,7 +486,12 @@ back-dated rows." Rules: `internal/contextfabric/retention.go`; SQL:
   record's run deadline. A save under a submission's reserved id
   (`WithSubmissionReservedResultID`) whose record is gone is refused
   (`ErrReservationGone`) and stores nothing, in the insert's own statement;
-  a stream's own reservation (no record) saves unbound as before.
+  a stream's own reservation (no record) saves unbound as before. The save
+  locks the reservation row (`FOR NO KEY UPDATE`), so a save that starts
+  while the job removes the record waits for the job and is then refused,
+  never storing a result no record names. The refusal holds with the switch
+  off too; without the job no record vanishes (the org purge's write fence
+  refuses the save first), so it changes nothing users see.
 - **T3.** A result a live record names (answer reuse within one owner) stays
   until the last naming unit goes.
 - **Order (lead ruling Q4).** In each unit the results and what is keyed by

@@ -81,6 +81,11 @@ type Store struct {
 	// retentionStepHook runs after each statement of a retention unit's
 	// transaction (CHAOS-11952); test builds only (SetRetentionStepHook).
 	retentionStepHook func(step string)
+	// unthreadedRetention is CHAOS-11952's read rule for a record with no
+	// thread (WithUnthreadedRecordRetention): it closes, and the result it
+	// names is hidden, 24 hours after its admission. Off (the default), such
+	// a record stays live, as before.
+	unthreadedRetention bool
 }
 
 // StoreOption configures optional Store behavior. See WithAnswerReuse.
@@ -95,6 +100,20 @@ func WithClock(now func() time.Time) StoreOption {
 		}
 	}
 }
+
+// WithUnthreadedRecordRetention turns on CHAOS-11952's read rule for a
+// submission record with no thread (lead ruling Q2): a one-turn thread with
+// retention 0, closed from contextfabric.UnthreadedRecordExpiresAt. The
+// runtime sets it from config.Config.AskDevRetentionEnabled, the same switch
+// as the retention job, so a release never changes what users can read
+// without the job.
+func WithUnthreadedRecordRetention(enabled bool) StoreOption {
+	return func(s *Store) { s.unthreadedRetention = enabled }
+}
+
+// UnthreadedRecordRetention reports whether the store's read rule for a
+// record with no thread is on (WithUnthreadedRecordRetention).
+func (s *Store) UnthreadedRecordRetention() bool { return s.unthreadedRetention }
 
 func (s *Store) clock() time.Time {
 	if s.now == nil {
@@ -345,11 +364,18 @@ func (s *Store) Save(ctx context.Context, principal storage.Principal, result co
 	// organization bearer could read. Such a late save also completes the
 	// abandoned record: nothing executes again, and the record now names
 	// the result that exists.
+	//
+	// CHAOS-11952: the reservation row is locked (FOR NO KEY UPDATE), so a
+	// save cannot read a record the retention job is removing and then
+	// insert after it is gone: it waits for the job's transaction, then
+	// finds no reservation, and a reserved save ($34) inserts nothing and is
+	// refused (refuseReservationGone).
 	const insertResultSQL = `
 WITH reservation AS (
     SELECT owner_auth_method, owner_subject, owner_user_id, owner_surface FROM acr.context_fabric_investigation_submissions
      WHERE org_id = $2 AND reserved_result_id = $1
        AND ` + submissionOwnerMatch + `
+       FOR NO KEY UPDATE
 ), inserted AS (
 INSERT INTO acr.context_fabric_investigation_results
     (result_id, org_id, payload, generated_at, question_hash, contract_version, projection_version, model_identity, source_watermarks, invalidation_epoch, time_axis_key, embed_retrieval_identity, retrieval_policy_version, interpretation_prompt_version, synthesis_prompt_version, query_version, canonical_service_version, model_output_schema_version, identity_normalization_version, graph_epoch, window_inference_version, commit_gate_version, ranking_formula_version, question_family_version, ownership_routing_version, parent_result_id, semantic_state, grant_digest, graph_walk_version, submission_owner_auth_method, submission_owner_subject, submission_owner_user_id, submission_owner_surface)
@@ -687,7 +713,7 @@ SELECT payload, graph_epoch, created_at, parent_result_id, semantic_state, grant
  WHERE r.result_id = $1 AND r.org_id = $2
    -- CHAOS-11948 (design §6 T6): a result only closed threads' turns name is
    -- not served on any read; the caller sees an unknown id.
-   AND NOT `+hiddenByClosedThreadSQL("$3"), resultID, orgID, s.clock())
+   AND NOT `+s.hiddenByClosedThreadSQL("$3"), resultID, orgID, s.clock())
 	var payload []byte
 	var graphEpoch sql.NullInt64
 	var createdAt time.Time
@@ -1230,7 +1256,7 @@ WHERE org_id = $1
   AND question_hash = $2
   -- CHAOS-11948 (design §6 T6): a result only closed threads' turns name is
   -- never reused.
-  AND NOT `+hiddenByClosedThreadSQL("$28")+`
+  AND NOT `+s.hiddenByClosedThreadSQL("$28")+`
   -- CHAOS-11912: reuse never crosses principals. A row that completed a
   -- submission is a candidate for its owner only; the stored-result gate
   -- re-decides the same rule on the candidate this returns. A submission's

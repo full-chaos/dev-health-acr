@@ -24,6 +24,31 @@ type RetentionStore interface {
 	IsStructureSuperseded(ctx context.Context, orgID, priorResultID string, member contractsv1.ContextFabricStructureNeedKind) (bool, error)
 }
 
+// RunRetentionSwitchSuite pins that the job and the read rule for a record
+// with no thread are one switch (CHAOS-11952): a store whose read rule is off
+// refuses to sweep, and removes nothing. newStore returns a store with the
+// read rule off.
+func RunRetentionSwitchSuite(t *testing.T, newStore func(t *testing.T) RetentionStore) {
+	t.Helper()
+	store := newStore(t)
+	owner := storage.Principal{AuthenticationMethod: storage.AuthenticationMethodWebAssertion, Subject: "user-switch", OrgID: "org-parity-switch"}
+	key, err := contextfabric.SubmissionKeyFor(owner, "submission-switch-0001")
+	if err != nil {
+		t.Fatal(err)
+	}
+	at := time.Date(2026, 10, 1, 9, 0, 0, 0, time.UTC)
+	admission := contextfabric.SubmissionAdmission{Key: key, RequestDigest: "sha256:" + fmt.Sprintf("%064x", 119522), ReservedResultID: "result_switch_0001", ExpiresAt: at.Add(time.Minute)}
+	if _, admitted, err := store.AdmitSubmission(context.Background(), admission, at); err != nil || !admitted {
+		t.Fatalf("admit = %t %v", admitted, err)
+	}
+	if got, err := store.SweepRetention(context.Background(), at.Add(48*time.Hour), 0); !errors.Is(err, contextfabric.ErrRetentionReadRuleOff) || got.Changed() {
+		t.Fatalf("a sweep with the read rule off = %+v %v, want ErrRetentionReadRuleOff and nothing removed", got, err)
+	}
+	if _, err := store.GetSubmission(context.Background(), key, at.Add(48*time.Hour)); err != nil {
+		t.Fatalf("the record after the refused sweep = %v, want kept", err)
+	}
+}
+
 // RunRetentionSweepSuite runs the retention job's store table (CHAOS-11952,
 // plan §2.6, D-22; contract §2 and §6) against a store, on back-dated rows
 // written by the stores' own producers (admission, save, delete, event log,

@@ -143,10 +143,20 @@ func run(ctx context.Context, args []string, lookup lookupEnv, output io.Writer)
 		if err != nil {
 			return err
 		}
-		if purgeDSN == "" {
+		if purgeDSN != "" {
+			if err := grantPurgeACL(ctx, db, purgeDSN, runtimeDSN, output); err != nil {
+				return err
+			}
+		}
+		// CHAOS-11952: the Ask Dev retention job's own role, when named.
+		retentionDSN, err := config.SecretValue(lookup, retentionDSNEnvironment)
+		if err != nil {
+			return err
+		}
+		if retentionDSN == "" {
 			return nil
 		}
-		return grantPurgeACL(ctx, db, purgeDSN, runtimeDSN, output)
+		return grantRetentionACL(ctx, db, retentionDSN, runtimeDSN, purgeDSN, output)
 	}
 	runner, err := migrations.Embedded()
 	if err != nil {

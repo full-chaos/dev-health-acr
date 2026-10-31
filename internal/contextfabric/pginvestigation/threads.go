@@ -119,11 +119,12 @@ ON CONFLICT (org_id, owner_auth_method, owner_subject, thread_id) DO UPDATE
 // recordThreadClosed is why a record's thread refuses a repeat of the key and
 // hides the record from a status read: deleted or expired.
 //
-// A record with no thread is a one-turn thread with retention 0
-// (CHAOS-11952): expired from contextfabric.UnthreadedRecordExpiresAt.
+// A record with no thread is a one-turn thread with retention 0 when the
+// store's unthreaded retention is on (CHAOS-11952): expired from
+// contextfabric.UnthreadedRecordExpiresAt. Off, it stays live.
 func (s *Store) recordThreadClosed(ctx context.Context, record contextfabric.SubmissionRecord, now time.Time) (contextfabric.ThreadClosedReason, error) {
 	if record.ThreadID == "" {
-		if !now.Before(contextfabric.UnthreadedRecordExpiresAt(record.AdmittedAt)) {
+		if s.unthreadedRetention && !now.Before(contextfabric.UnthreadedRecordExpiresAt(record.AdmittedAt)) {
 			return contextfabric.ThreadClosedExpired, nil
 		}
 		return "", nil
@@ -159,10 +160,15 @@ var unthreadedRecordWindowSQL = fmt.Sprintf("interval '%d seconds'", int64(conte
 // liveRecordSQL holds for a submission record ls (with its thread row lt
 // LEFT JOINed) that is not closed at now: a turn of an open, unexpired
 // thread; a turn whose thread row is missing (a turn admitted before the row
-// existed); or a record with no thread inside its retention-0 window
-// (CHAOS-11952).
-func liveRecordSQL(ls, lt, now string) string {
-	return `((` + ls + `.thread_id IS NULL AND ` + ls + `.admitted_at + ` + unthreadedRecordWindowSQL + ` > ` + now + `)
+// existed); or a record with no thread. With the store's unthreaded retention
+// on (CHAOS-11952), a record with no thread is live only inside its
+// retention-0 window.
+func (s *Store) liveRecordSQL(ls, lt, now string) string {
+	unthreaded := ls + `.thread_id IS NULL`
+	if s.unthreadedRetention {
+		unthreaded = `(` + ls + `.thread_id IS NULL AND ` + ls + `.admitted_at + ` + unthreadedRecordWindowSQL + ` > ` + now + `)`
+	}
+	return `(` + unthreaded + `
           OR (` + ls + `.thread_id IS NOT NULL AND (` + lt + `.thread_id IS NULL OR (` + lt + `.closed_at IS NULL AND ` + lt + `.expires_at > ` + now + `))))`
 }
 
@@ -174,19 +180,27 @@ func recordThreadJoinSQL(ls, lt string) string {
 }
 
 // hiddenByClosedThreadSQL is the closed-thread rule for a result row r
-// (design §6 T6): r is named by at least one submission record of its
-// organization (as the record's final or reserved result) and by no live
-// record (liveRecordSQL). $now is the store clock. A result one live record
-// names stays readable (T3); a result no record names (MCP, Workbench) is out
-// of scope. A record with no thread closes 24 hours after its admission, like
-// a one-turn thread with retention 0 (CHAOS-11952, lead ruling Q2).
-func hiddenByClosedThreadSQL(now string) string {
+// (design §6 T6): r is named by a submission record of its organization (as
+// the record's final or reserved result) and by no live record
+// (liveRecordSQL). $now is the store clock. A result one live record names
+// stays readable (T3). Which records count: with the store's unthreaded
+// retention off, only thread turns can hide a result (a record with no
+// thread is always live), exactly the rule before CHAOS-11952; on, a record
+// with no thread closes 24 hours after its admission, like a one-turn thread
+// with retention 0 (lead ruling Q2). A result no record names (MCP,
+// Workbench) is out of scope either way.
+func (s *Store) hiddenByClosedThreadSQL(now string) string {
+	named := `hs.org_id = r.org_id AND (hs.result_id = r.result_id OR hs.reserved_result_id = r.result_id)`
+	if !s.unthreadedRetention {
+		named += `
+                   AND hs.thread_id IS NOT NULL`
+	}
 	return `(EXISTS (SELECT 1 FROM acr.context_fabric_investigation_submissions hs
-                 WHERE hs.org_id = r.org_id AND (hs.result_id = r.result_id OR hs.reserved_result_id = r.result_id))
+                 WHERE ` + named + `)
      AND NOT EXISTS (SELECT 1 FROM acr.context_fabric_investigation_submissions ls
                       ` + recordThreadJoinSQL("ls", "lt") + `
                      WHERE ls.org_id = r.org_id AND (ls.result_id = r.result_id OR ls.reserved_result_id = r.result_id)
-                       AND ` + liveRecordSQL("ls", "lt", now) + `))`
+                       AND ` + s.liveRecordSQL("ls", "lt", now) + `))`
 }
 
 // ListThreads implements contextfabric.ThreadStore.

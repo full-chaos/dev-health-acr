@@ -67,6 +67,11 @@ config:
   maxSerializedBytes: 262144
   requestsPerMinute: 60
   enableEpisodeWriteback: false
+  # CHAOS-11952: Ask Dev retention (plan D-22), default off. On, acr-api runs
+  # the retention job as the role credentials.retention names (required then)
+  # and a submission with no thread reads as closed 24 hours after its
+  # admission. Off, no row is removed and every read is as before.
+  askDevRetentionEnabled: false
   # Absolute browser URL shown by the device authorization flow. This normally
   # points at the Dev Health Web approval page, not at acr-api itself.
   deviceVerificationUrl: ""
@@ -163,6 +168,14 @@ credentials:
   purge:
     existingSecret: ""
     postgresDsnKey: ACR_POSTGRES_PURGE_DSN
+  # Optional Postgres DSN of the Ask Dev retention job's own role
+  # (CHAOS-11952). acr-api connects with it only when
+  # config.askDevRetentionEnabled is on (then it is required); the grant Job
+  # reads it for the role name only and gives that role exactly the retention
+  # privileges. MUST NOT be the runtime or the purge role.
+  retention:
+    existingSecret: ""
+    postgresDsnKey: ACR_POSTGRES_RETENTION_DSN
   # Bearer token used to authenticate to the Dev Health Ops entitlement service.
   entitlementToken:
     existingSecret: ""

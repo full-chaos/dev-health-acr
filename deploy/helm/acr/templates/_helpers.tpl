@@ -272,6 +272,13 @@ enforces that the migration DSN is not the runtime DSN reference.
 {{- if and (eq $runtimeSecret $migrationSecret) (eq $runtimeKey $migrationKey) -}}
 {{- fail (printf "shared-runtime-migration-dsn: the migration DSN reference (%s/%s) must differ from the runtime DSN reference; a schema-owner migration credential must never reuse the least-privilege runtime credential" $migrationSecret $migrationKey) -}}
 {{- end -}}
+{{- if .Values.config.askDevRetentionEnabled -}}
+{{- $retentionSecret := include "acr.requireSecretName" (dict "name" ($c.retention.existingSecret | default "") "label" "retention-role-required" "field" "credentials.retention.existingSecret") -}}
+{{- $retentionKey := $c.retention.postgresDsnKey | default "ACR_POSTGRES_RETENTION_DSN" -}}
+{{- if and (eq $runtimeSecret $retentionSecret) (eq $runtimeKey $retentionKey) -}}
+{{- fail "shared-runtime-retention-dsn: the retention DSN reference must differ from the runtime DSN reference; the retention job runs as a role of its own (CHAOS-11952)" -}}
+{{- end -}}
+{{- end -}}
 {{- end -}}
 
 {{/*

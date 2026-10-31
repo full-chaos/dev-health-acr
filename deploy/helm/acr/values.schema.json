@@ -218,6 +218,7 @@
         "maxSerializedBytes": { "type": "integer", "minimum": 8192, "maximum": 1048576 },
         "requestsPerMinute": { "type": "integer", "minimum": 1 },
         "enableEpisodeWriteback": { "type": "boolean" },
+        "askDevRetentionEnabled": { "type": "boolean" },
         "deviceVerificationUrl": { "type": "string" },
         "entitlement": {
           "type": "object",
@@ -315,6 +316,14 @@
           }
         },
         "purge": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "existingSecret": { "type": "string" },
+            "postgresDsnKey": { "type": "string" }
+          }
+        },
+        "retention": {
           "type": "object",
           "additionalProperties": false,
           "properties": {

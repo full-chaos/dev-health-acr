@@ -21,6 +21,9 @@ func (s *Store) SweepRetention(ctx context.Context, now time.Time, limit int) (c
 	if err := ctx.Err(); err != nil {
 		return sweep, err
 	}
+	if !s.unthreadedRetention {
+		return sweep, contextfabric.ErrRetentionReadRuleOff
+	}
 	if limit < 1 {
 		limit = contextfabric.RetentionSweepBatch
 	}
@@ -45,6 +48,12 @@ func (s *Store) SweepRetention(ctx context.Context, now time.Time, limit int) (c
 		}
 	}
 	return sweep, nil
+}
+
+// ProbeRetention implements contextfabric.RetentionSweeper: the memory store
+// holds no privileges, so there is nothing to prove.
+func (s *Store) ProbeRetention(ctx context.Context) error {
+	return ctx.Err()
 }
 
 // threadRecordsLocked lists the records whose thread row is row. Callers

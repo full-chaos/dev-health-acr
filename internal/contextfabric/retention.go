@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"strings"
 	"time"
 )
@@ -46,6 +47,12 @@ import (
 // to, until the window has passed.
 const RetentionSaveWindow = time.Hour
 
+// ErrRetentionReadRuleOff is a sweep on a store whose read rule for a record
+// with no thread is off: the job and that rule are one switch
+// (config.Config.AskDevRetentionEnabled), so the job never removes what the
+// reads would still serve, nor runs where the reads say nothing expires.
+var ErrRetentionReadRuleOff = errors.New("context fabric: the retention sweep needs the store's unthreaded record retention on")
+
 // RetentionSweepBatch is the default number of units one pass handles.
 const RetentionSweepBatch = 500
 
@@ -76,6 +83,10 @@ func (s RetentionSweep) Changed() bool {
 // no-op.
 type RetentionSweeper interface {
 	SweepRetention(ctx context.Context, now time.Time, limit int) (RetentionSweep, error)
+	// ProbeRetention runs every kind of statement the job runs, on no row,
+	// and changes nothing: the startup proof that the job's role holds its
+	// grants, whether or not anything is due yet.
+	ProbeRetention(ctx context.Context) error
 }
 
 // RetentionFenced reports whether a record can still save at now, so

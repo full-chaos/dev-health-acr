@@ -54,6 +54,9 @@ func (s *Store) SweepRetention(ctx context.Context, now time.Time, limit int) (c
 	if err := s.configured(); err != nil {
 		return sweep, err
 	}
+	if !s.unthreadedRetention {
+		return sweep, contextfabric.ErrRetentionReadRuleOff
+	}
 	if limit < 1 {
 		limit = contextfabric.RetentionSweepBatch
 	}
@@ -79,6 +82,42 @@ func (s *Store) SweepRetention(ctx context.Context, now time.Time, limit int) (c
 		}
 	}
 	return sweep, nil
+}
+
+// retentionProbeStatements are the kinds of statement the job runs, per
+// table, on no row: a SELECT and a DELETE on every table the job removes from,
+// and the UPDATE (also what SELECT ... FOR UPDATE needs) on the records. A
+// role missing any privilege dbacl.RetentionGrants declares is refused on one
+// of them.
+var retentionProbeStatements = func() []string {
+	var statements []string
+	for _, table := range []string{
+		"context_fabric_threads", "context_fabric_investigation_submissions", "context_fabric_investigation_results",
+		"context_fabric_investigation_run_events", "context_fabric_clarification_selections", "context_fabric_structure_selections",
+		"context_fabric_structure_supersession_claims",
+	} {
+		statements = append(statements, `SELECT 1 FROM acr.`+table+` WHERE false`, `DELETE FROM acr.`+table+` WHERE false`)
+	}
+	return append(statements, `UPDATE acr.context_fabric_investigation_submissions SET updated_at = updated_at WHERE false`)
+}()
+
+// ProbeRetention implements contextfabric.RetentionSweeper: the probe
+// statements in one transaction it rolls back.
+func (s *Store) ProbeRetention(ctx context.Context) error {
+	if err := s.configured(); err != nil {
+		return err
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("retention probe: begin: %w", sanitizeError(err))
+	}
+	defer func() { _ = tx.Rollback() }()
+	for _, statement := range retentionProbeStatements {
+		if _, err := tx.ExecContext(ctx, statement); err != nil {
+			return fmt.Errorf("retention probe: %w", sanitizeError(err))
+		}
+	}
+	return nil
 }
 
 // dueRetentionThreads lists thread rows that are expired, or deleted with a
@@ -189,10 +228,13 @@ func (s *Store) sweepRetentionThread(ctx context.Context, unit retentionThreadUn
 	defer func() { _ = tx.Rollback() }() // no-op once Commit succeeds
 	var expiresAt time.Time
 	var closedAt sql.NullTime
+	// No row lock: the organization's admission lock, held for the whole
+	// unit, already serializes it with every admission and delete, the only
+	// writers of a thread row (and the retention role holds no UPDATE on
+	// the threads, dbacl.RetentionGrants).
 	err = tx.QueryRowContext(ctx, `
 SELECT expires_at, closed_at FROM acr.context_fabric_threads
- WHERE org_id = $1 AND owner_auth_method = $2 AND owner_subject = $3 AND thread_id = $4
-   FOR UPDATE`, unit.orgID, unit.method, unit.subject, unit.threadID).Scan(&expiresAt, &closedAt)
+ WHERE org_id = $1 AND owner_auth_method = $2 AND owner_subject = $3 AND thread_id = $4`, unit.orgID, unit.method, unit.subject, unit.threadID).Scan(&expiresAt, &closedAt)
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
 		// Another pass removed it first.
@@ -355,7 +397,7 @@ SELECT id FROM unnest($2::text[]) AS named(id)
  WHERE NOT EXISTS (SELECT 1 FROM acr.context_fabric_investigation_submissions ls
                     `+recordThreadJoinSQL("ls", "lt")+`
                    WHERE ls.org_id = $1 AND (ls.result_id = named.id OR ls.reserved_result_id = named.id)
-                     AND `+liveRecordSQL("ls", "lt", "$3")+`)`, orgID, named, now)
+                     AND `+s.liveRecordSQL("ls", "lt", "$3")+`)`, orgID, named, now)
 	if err != nil {
 		return 0, fmt.Errorf("retention: decide results: %w", sanitizeError(err))
 	}

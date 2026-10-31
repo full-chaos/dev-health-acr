@@ -22,6 +22,7 @@ func TestComposeScriptCarriesTheGeneratedGrants(t *testing.T) {
 	for _, block := range []struct{ begin, end, want string }{
 		{ComposeBeginMarker, ComposeEndMarker, RenderCompose()},
 		{ComposePurgeBeginMarker, ComposePurgeEndMarker, RenderComposePurge()},
+		{ComposeRetentionBeginMarker, ComposeRetentionEndMarker, RenderComposeRetention()},
 	} {
 		begin := strings.Index(script, block.begin)
 		end := strings.Index(script, block.end)
@@ -272,6 +273,91 @@ func TestComposeServicesPassThePurgeSettings(t *testing.T) {
 			block = block[:next[0]+1]
 		}
 		for _, want := range []string{"ACR_PURGE_DB_USER: ${ACR_PURGE_DB_USER:-}", "ACR_PURGE_DB_PASSWORD: ${ACR_PURGE_DB_PASSWORD:-}"} {
+			if !strings.Contains(block, want) {
+				t.Errorf("%s does not pass %s", service, want)
+			}
+		}
+	}
+}
+
+// CHAOS-11952: the compose bootstrap creates the retention role only when an
+// operator names one, never as a role the runtime, the migrations, the admin
+// or the purge use, and passes its settings to psql.
+func TestComposeBootstrapHandlesTheRetentionRoleSettings(t *testing.T) {
+	bin := t.TempDir()
+	record := filepath.Join(bin, "psql.args")
+	for name, body := range map[string]string{
+		"pg_isready": "#!/bin/sh\nexit 0\n",
+		"psql":       "#!/bin/sh\nprintf '%s\\n' \"$*\" >> " + record + "\ncat >/dev/null\n",
+	} {
+		if err := os.WriteFile(filepath.Join(bin, name), []byte(body), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	base := []string{
+		"PATH=" + bin + ":" + os.Getenv("PATH"), "POSTGRES_USER=postgres", "POSTGRES_PASSWORD=admin-secret",
+		"ACR_RUNTIME_DB_USER=acr_runtime", "ACR_RUNTIME_DB_PASSWORD=runtime-secret",
+		"ACR_MIGRATION_DB_USER=acr_migrate", "ACR_MIGRATION_DB_PASSWORD=migrate-secret",
+		"ACR_PURGE_DB_USER=acr_purge", "ACR_PURGE_DB_PASSWORD=purge-secret",
+	}
+	for _, tc := range []struct {
+		name    string
+		env     []string
+		wantErr string
+		want    []string
+	}{
+		{"no retention user", nil, "", []string{"retention_enabled=false"}},
+		{"retention user", []string{"ACR_RETENTION_DB_USER=acr_retention", "ACR_RETENTION_DB_PASSWORD=retention-secret"}, "", []string{"retention_enabled=true", "retention_user=acr_retention", "retention_password=retention-secret"}},
+		{"retention user is the runtime user", []string{"ACR_RETENTION_DB_USER=acr_runtime", "ACR_RETENTION_DB_PASSWORD=x"}, "ACR_RETENTION_DB_USER must be a role of its own", nil},
+		{"retention user is the migration user", []string{"ACR_RETENTION_DB_USER=acr_migrate", "ACR_RETENTION_DB_PASSWORD=x"}, "ACR_RETENTION_DB_USER must be a role of its own", nil},
+		{"retention user is the admin user", []string{"ACR_RETENTION_DB_USER=postgres", "ACR_RETENTION_DB_PASSWORD=x"}, "ACR_RETENTION_DB_USER must be a role of its own", nil},
+		{"retention user is the purge user", []string{"ACR_RETENTION_DB_USER=acr_purge", "ACR_RETENTION_DB_PASSWORD=x"}, "ACR_RETENTION_DB_USER must be a role of its own", nil},
+		{"no password", []string{"ACR_RETENTION_DB_USER=acr_retention"}, "ACR_RETENTION_DB_PASSWORD or ACR_RETENTION_DB_PASSWORD_FILE is required", nil},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_ = os.Remove(record)
+			command := exec.Command("sh", composeScript, "roles")
+			command.Env = append(append([]string{}, base...), tc.env...)
+			out, err := command.CombinedOutput()
+			if tc.wantErr != "" {
+				if err == nil || !strings.Contains(string(out), tc.wantErr) {
+					t.Fatalf("want refusal %q, got err=%v out=%s", tc.wantErr, err, out)
+				}
+				if recorded, _ := os.ReadFile(record); len(recorded) != 0 {
+					t.Fatalf("a refused configuration must not reach psql: %s", recorded)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("script failed: %v: %s", err, out)
+			}
+			args, _ := os.ReadFile(record)
+			for _, want := range tc.want {
+				if !strings.Contains(string(args), want) {
+					t.Fatalf("psql was not given %q: %s", want, args)
+				}
+			}
+		})
+	}
+}
+
+// The shipped compose services pass the retention role settings to the two
+// bootstrap stages.
+func TestComposeServicesPassTheRetentionSettings(t *testing.T) {
+	raw, err := os.ReadFile("../../deploy/compose/acr.compose.yml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, service := range []string{"acr-db-init", "acr-db-acl"} {
+		start := strings.Index(string(raw), "\n  "+service+":")
+		if start < 0 {
+			t.Fatalf("service %s not found", service)
+		}
+		block := string(raw)[start+1:]
+		if next := regexp.MustCompile(`\n  [a-z-]+:\n`).FindStringIndex(block[1:]); next != nil {
+			block = block[:next[0]+1]
+		}
+		for _, want := range []string{"ACR_RETENTION_DB_USER: ${ACR_RETENTION_DB_USER:-}", "ACR_RETENTION_DB_PASSWORD: ${ACR_RETENTION_DB_PASSWORD:-}"} {
 			if !strings.Contains(block, want) {
 				t.Errorf("%s does not pass %s", service, want)
 			}

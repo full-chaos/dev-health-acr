@@ -89,9 +89,9 @@ func TestRetentionDrillOnBackDatedRows(t *testing.T) {
 	db := newInvestigationTestDatabase(t, ctx)
 	start := time.Date(2026, 10, 1, 9, 0, 0, 0, time.UTC)
 	clock := &drillClock{now: start}
-	store, err := pginvestigation.NewStore(db, pginvestigation.WithClock(clock.Now))
+	store, err := pginvestigation.NewStore(db, pginvestigation.WithClock(clock.Now), pginvestigation.WithUnthreadedRecordRetention(true))
 	require.NoError(t, err)
-	reader, err := pginvestigation.NewStore(db, pginvestigation.WithClock(clock.Now))
+	reader, err := pginvestigation.NewStore(db, pginvestigation.WithClock(clock.Now), pginvestigation.WithUnthreadedRecordRetention(true))
 	require.NoError(t, err)
 	owner := storage.Principal{AuthenticationMethod: storage.AuthenticationMethodWebAssertion, Subject: "user-drill", OrgID: "org-retention-drill"}
 	month := contractsv1.ContextFabricThreadRetentionMonth
@@ -244,4 +244,58 @@ VALUES ($1, $2, $3, $4, $5, 'expected_kind', 'receipt_drill', 'pull_request', tr
 			require.Zero(t, n, "%s.%s still names %s", column.table, column.column, id)
 		}
 	}
+}
+
+// Codex #1808 r1 (T2 under a race): a reserved save that starts while the
+// retention job holds the record it is removing waits for the job's
+// transaction, then finds no reservation and is refused, storing nothing.
+// Without the reservation row lock the save would read the record from its
+// snapshot, insert, and leave a result no record names.
+func TestARetentionRemovalRacesAReservedSaveAndTheSaveIsRefused(t *testing.T) {
+	ctx := context.Background()
+	db := newInvestigationTestDatabase(t, ctx)
+	start := time.Date(2026, 10, 1, 9, 0, 0, 0, time.UTC)
+	store, err := pginvestigation.NewStore(db, pginvestigation.WithUnthreadedRecordRetention(true))
+	require.NoError(t, err)
+	saver, err := pginvestigation.NewStore(db)
+	require.NoError(t, err)
+	owner := storage.Principal{AuthenticationMethod: storage.AuthenticationMethodWebAssertion, Subject: "user-race", OrgID: "org-retention-race"}
+	key, err := contextfabric.SubmissionKeyFor(owner, "submission-race-0001")
+	require.NoError(t, err)
+	admission := contextfabric.SubmissionAdmission{Key: key, RequestDigest: "sha256:" + fmt.Sprintf("%064x", 31), ReservedResultID: "result_race_0001", ExpiresAt: start.Add(time.Minute)}
+	_, admitted, err := store.AdmitSubmission(ctx, admission, start)
+	require.NoError(t, err)
+	require.True(t, admitted)
+
+	saveDone := make(chan error, 1)
+	pginvestigation.SetRetentionStepHook(store, func(step string) {
+		if step != "record" {
+			return
+		}
+		// Mid-unit: the record is deleted but not committed. A late save of
+		// its reserved id starts now and must wait for the unit.
+		go func() {
+			saveDone <- saver.Save(contextfabric.WithSubmissionReservedResultID(ctx, admission.ReservedResultID), owner, paritytest.ValidResult(admission.ReservedResultID, "race"), nil, nil,
+				contextfabric.TimeAxisKeyFor(contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent}),
+				contextfabric.ReuseRetrievalIdentity{}, contextfabric.ReusePromptVersions{}, contextfabric.ReuseVersionAuthorities{}, 0, "",
+				contextfabric.SemanticStateAbsent(contextfabric.SemanticStateAbsenceTurnEndedBeforeInterpretation))
+		}()
+		select {
+		case err := <-saveDone:
+			saveDone <- err
+		case <-time.After(500 * time.Millisecond):
+		}
+	})
+	sweep, err := store.SweepRetention(ctx, start.Add(48*time.Hour), 0)
+	require.NoError(t, err)
+	require.Equal(t, 1, sweep.RecordsRemoved)
+	select {
+	case err := <-saveDone:
+		require.ErrorIs(t, err, contextfabric.ErrReservationGone, "the racing save")
+	case <-time.After(10 * time.Second):
+		t.Fatal("the racing save never returned")
+	}
+	var n int
+	require.NoError(t, db.QueryRowContext(ctx, `SELECT count(*) FROM acr.context_fabric_investigation_results WHERE result_id = $1`, admission.ReservedResultID).Scan(&n))
+	require.Zero(t, n, "the racing save stored a result no record names")
 }

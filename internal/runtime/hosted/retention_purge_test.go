@@ -16,11 +16,20 @@ import (
 // CHAOS-11952: the Ask Dev retention loop, without a database.
 
 type fakeRetentionSweeper struct {
-	mu     sync.Mutex
-	sweep  contextfabric.RetentionSweep
-	err    error
-	calls  int
-	limits []int
+	mu       sync.Mutex
+	sweep    contextfabric.RetentionSweep
+	err      error
+	probeErr error
+	probes   int
+	calls    int
+	limits   []int
+}
+
+func (f *fakeRetentionSweeper) ProbeRetention(context.Context) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.probes++
+	return f.probeErr
 }
 
 func (f *fakeRetentionSweeper) SweepRetention(_ context.Context, _ time.Time, limit int) (contextfabric.RetentionSweep, error) {
@@ -40,8 +49,21 @@ func TestStartRetentionPurgeLoop_runsAPassAtStartupWithTheBatch(t *testing.T) {
 	if err := stop(); err != nil {
 		t.Fatal(err)
 	}
-	if sweeper.calls != 1 || sweeper.limits[0] != contextfabric.RetentionSweepBatch {
-		t.Fatalf("startup passes = %d limits %v, want one pass of %d", sweeper.calls, sweeper.limits, contextfabric.RetentionSweepBatch)
+	if sweeper.probes != 1 || sweeper.calls != 1 || sweeper.limits[0] != contextfabric.RetentionSweepBatch {
+		t.Fatalf("startup probes = %d passes = %d limits %v, want one probe and one pass of %d", sweeper.probes, sweeper.calls, sweeper.limits, contextfabric.RetentionSweepBatch)
+	}
+}
+
+// A refused grant probe fails startup before any pass runs (codex #1808 r1:
+// an empty first pass runs no DELETE, so it proves nothing on its own).
+func TestStartRetentionPurgeLoop_aRefusedProbeFailsStartupBeforeAnyPass(t *testing.T) {
+	refused := errors.New("permission denied for table context_fabric_threads (SQLSTATE 42501)")
+	sweeper := &fakeRetentionSweeper{probeErr: refused}
+	if _, err := startRetentionPurgeLoop(context.Background(), sweeper, nil, nil); !errors.Is(err, refused) {
+		t.Fatalf("startup with a refused probe = %v, want the refusal", err)
+	}
+	if sweeper.calls != 0 {
+		t.Fatalf("passes after a refused probe = %d, want 0", sweeper.calls)
 	}
 }
 

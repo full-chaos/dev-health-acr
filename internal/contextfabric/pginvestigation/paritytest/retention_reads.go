@@ -34,8 +34,13 @@ type SubmissionRecordRemover interface {
 //   - T2: a save under a reserved result id whose record is gone is refused
 //     and stores nothing, never an unbound row the organization could read.
 //
+// The rule for a record with no thread is behind the retention switch
+// (config.Config.AskDevRetentionEnabled, lead ruling 2): newStore's retention
+// argument is that switch, and the suite drives both states. Off, a record
+// with no thread keeps today's behaviour; on, it closes at 24 hours.
+//
 // newStore must return an EMPTY store per case whose own clock is clock.Now.
-func RunRetentionReadSuite(t *testing.T, newStore func(t *testing.T, clock func() time.Time) ThreadStore) {
+func RunRetentionReadSuite(t *testing.T, newStore func(t *testing.T, clock func() time.Time, retention bool) ThreadStore) {
 	t.Helper()
 	start := time.Date(2026, 10, 29, 12, 0, 0, 0, time.UTC)
 	owner := storage.Principal{AuthenticationMethod: storage.AuthenticationMethodWebAssertion, Subject: "user-retention-owner", OrgID: "org-parity-retention"}
@@ -43,7 +48,7 @@ func RunRetentionReadSuite(t *testing.T, newStore func(t *testing.T, clock func(
 	setup := func(t *testing.T) (ThreadStore, *ThreadClock) {
 		t.Helper()
 		clock := &ThreadClock{now: start}
-		return newStore(t, clock.Now), clock
+		return newStore(t, clock.Now, true), clock
 	}
 	month := contractsv1.ContextFabricThreadRetentionMonth
 	admit := func(t *testing.T, store ThreadStore, clock *ThreadClock, threadID, name string, retention *contractsv1.ContextFabricThreadRetentionDays) contextfabric.SubmissionAdmission {
@@ -143,6 +148,42 @@ func RunRetentionReadSuite(t *testing.T, newStore func(t *testing.T, clock func(
 		repeat.ExpiresAt = clock.now.Add(time.Minute)
 		if again, admittedAgain, err := store.AdmitSubmission(ctx, repeat, clock.now); err != nil || admittedAgain || again.ThreadClosed != contextfabric.ThreadClosedExpired {
 			t.Fatalf("a repeat of the expired lone id = %+v admitted=%t err=%v, want the record, closed (expired)", again, admittedAgain, err)
+		}
+	})
+
+	t.Run("Q2 with retention off: a record with no thread keeps today's behaviour", func(t *testing.T) {
+		clock := &ThreadClock{now: start}
+		store := newStore(t, clock.Now, false)
+		lone := admit(t, store, clock, "", "lone-off", nil)
+		mustSave(t, store, lone.ReservedResultID)
+		clock.now = start.Add(400 * 24 * time.Hour)
+		if _, err := store.Get(ctx, owner, lone.ReservedResultID); err != nil {
+			t.Fatalf("the lone record's result a year later with retention off = %v, want readable", err)
+		}
+		if record, err := store.GetSubmission(ctx, lone.Key, clock.now); err != nil || record.ThreadClosed != "" {
+			t.Fatalf("the lone record a year later with retention off = %+v %v, want open", record, err)
+		}
+	})
+
+	t.Run("Q2 with retention off: a record with no thread keeps a result a closed thread's turn reuses readable", func(t *testing.T) {
+		clock := &ThreadClock{now: start}
+		store := newStore(t, clock.Now, false)
+		lone := admit(t, store, clock, "", "lone-shared", nil)
+		mustSave(t, store, lone.ReservedResultID)
+		// A later turn of a thread served the lone record's stored result
+		// (answer reuse within one owner), then the thread was deleted.
+		turn := admit(t, store, clock, "thread-retention-shared", "shared-turn", &month)
+		if record, _, err := store.FinishSubmission(ctx, turn.Key, lone.ReservedResultID, clock.now); err != nil || record.ResultID != lone.ReservedResultID {
+			t.Fatalf("finish the turn with the lone result = %+v %v", record, err)
+		}
+		if closed, err := store.CloseThread(ctx, threadKey(t, "thread-retention-shared"), clock.now); err != nil || !closed {
+			t.Fatalf("delete = %t %v", closed, err)
+		}
+		// Off: the record with no thread is live, as on main, so the result
+		// it names stays readable however old it is.
+		clock.now = start.Add(400 * 24 * time.Hour)
+		if _, err := store.Get(ctx, owner, lone.ReservedResultID); err != nil {
+			t.Fatalf("the shared result a year later with retention off = %v, want readable", err)
 		}
 	})
 

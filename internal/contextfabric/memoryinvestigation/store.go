@@ -106,6 +106,9 @@ type Store struct {
 	// now stamps the updated_at a Save's completion writes; the submission
 	// methods take the caller's clock.
 	now func() time.Time
+	// unthreadedRetention is CHAOS-11952's read rule for a record with no
+	// thread (WithUnthreadedRecordRetention); off by default.
+	unthreadedRetention bool
 }
 
 // reservedResultKey is the (org_id, reserved_result_id) unique index.
@@ -126,6 +129,14 @@ func NewStore() *Store {
 		feedback:    make(map[string]contextfabric.ResultFeedback),
 		now:         time.Now,
 	}
+}
+
+// WithUnthreadedRecordRetention turns on CHAOS-11952's read rule for a
+// record with no thread (the pginvestigation option of the same name) and
+// returns the store.
+func (s *Store) WithUnthreadedRecordRetention(enabled bool) *Store {
+	s.unthreadedRetention = enabled
+	return s
 }
 
 // NewStoreWithClock is NewStore whose Save stamps completions with now.
