@@ -358,13 +358,19 @@ type Config struct {
 
 type lookupEnv func(string) (string, bool)
 
-// Load reads configuration from the process environment and validates it.
 // DefaultIdleTimeout is acr-api's server idle timeout when ACR_IDLE_TIMEOUT
-// is unset. The hosted API client closes an idle connection before this
-// (internal/sidecar clientIdleConnTimeout, CHAOS-12206), and its test pins the
-// two against each other.
+// is unset (CHAOS-12206).
 const DefaultIdleTimeout = defaultIdleTimeout
 
+// HostedClientIdleConnTimeout is how long the hosted API client (acr-mcp, the
+// local sidecar; internal/sidecar clientIdleConnTimeout) keeps an idle
+// connection (CHAOS-12206). Validate refuses an ACR_IDLE_TIMEOUT at or below
+// it: the client must close an idle connection before the server does, or a
+// request can go out on a connection the server is closing, and a POST on it
+// is not retried. internal/sidecar's test pins the two values equal.
+const HostedClientIdleConnTimeout = 45 * time.Second
+
+// Load reads configuration from the process environment and validates it.
 func Load() (Config, error) {
 	return load(os.LookupEnv)
 }
@@ -586,6 +592,12 @@ func (c Config) Validate() error {
 		return fmt.Errorf(
 			"ACR_WRITE_TIMEOUT (%s) must be at least %s more than ACR_REQUEST_TIMEOUT (%s), or a real investigation using its full request budget can have its response write cut off mid-handler",
 			c.WriteTimeout, minWriteTimeoutHeadroom, c.RequestTimeout,
+		)
+	}
+	if c.IdleTimeout <= HostedClientIdleConnTimeout {
+		return fmt.Errorf(
+			"ACR_IDLE_TIMEOUT (%s) must be more than %s, the hosted API client's idle timeout: the client must close an idle connection before the server does, or a request can go out on a connection the server is closing",
+			c.IdleTimeout, HostedClientIdleConnTimeout,
 		)
 	}
 	if strings.TrimSpace(c.MinimumSidecarVersion) == "" {

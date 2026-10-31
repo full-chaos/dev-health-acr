@@ -137,7 +137,9 @@ func buildTransport(cfg Config) (*http.Transport, error) {
 // it is replayable, so a POST would fail. Keep clientIdleConnTimeout below
 // hostedAPIServerIdleTimeout, and that equal to acr-api's default
 // (config.DefaultIdleTimeout; the chart's config.idleTimeout sets
-// ACR_IDLE_TIMEOUT). api_client_idle_pool_test.go pins both.
+// ACR_IDLE_TIMEOUT). acr-api refuses to start with an ACR_IDLE_TIMEOUT at or
+// below config.HostedClientIdleConnTimeout, which must equal
+// clientIdleConnTimeout. api_client_idle_pool_test.go pins all three.
 const (
 	// hostedAPIServerIdleTimeout is acr-api's server idle timeout.
 	hostedAPIServerIdleTimeout = 60 * time.Second

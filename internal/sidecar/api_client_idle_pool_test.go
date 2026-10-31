@@ -25,6 +25,12 @@ import (
 // fail.
 func TestTheClientClosesAnIdleConnectionBeforeTheHostedAPIDoes(t *testing.T) {
 	t.Parallel()
+	// acr-api refuses an ACR_IDLE_TIMEOUT at or below the client's idle
+	// timeout (codex #1815 r1 P2: a runtime override), against the value it
+	// names; that value must be the one the transport uses.
+	if clientIdleConnTimeout != config.HostedClientIdleConnTimeout {
+		t.Fatalf("clientIdleConnTimeout = %s, but acr-api's config refuses idle timeouts against %s", clientIdleConnTimeout, config.HostedClientIdleConnTimeout)
+	}
 	if hostedAPIServerIdleTimeout != config.DefaultIdleTimeout {
 		t.Fatalf("hostedAPIServerIdleTimeout = %s, but acr-api's default server idle timeout is %s: the stated pair is stale", hostedAPIServerIdleTimeout, config.DefaultIdleTimeout)
 	}
