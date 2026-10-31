@@ -14,8 +14,10 @@ import (
 // (CHAOS-12352, review r1): "acme/api's started projects" walks repository ->
 // pull request -> linked issue -> project, and counts the projects whose state
 // is outside the closed set. acme/api's issues belong to project:linked (no
-// state) and one also to project:odd (state "weird"); neither is owned by the
-// requested team, so under the narrowing neither is counted.
+// state, no owner) and one also to project:odd (state "weird", owned by team
+// Beta). Under a narrowing, an outside-set project counts only when it is
+// owned by a requested team; one with no owner is undecided, so the count is a
+// lower bound. Neither is a status match, so neither floors the population.
 func TestLiveATeamNarrowingCountsTheStatusOutsideSetInsideTheNarrowing(t *testing.T) {
 	ctx := context.Background()
 	adapter := newLiveAdapter(t, ctx)
@@ -33,13 +35,21 @@ func TestLiveATeamNarrowingCountsTheStatusOutsideSetInsideTheNarrowing(t *testin
 		Type: contractsv1.ContextFabricRelationshipBelongsToProject, From: contextfabric.SubjectRef{Kind: contextfabric.SubjectWorkItem, CanonicalID: "work_item:acme:001", Label: "Issue 1"}, To: odd,
 		Derivation: contextfabric.DerivationCanonicalStructured, EpistemicStatus: contextfabric.EpistemicObserved, Authorization: scope,
 		EvidenceRefIDs: []string{"evidence_issue_001_project_odd"}, ObservedAt: time.Now().UTC(), ValidFrom: &created, SourceVersion: "v1"})
+	beta := contextfabric.SubjectRef{Kind: contextfabric.SubjectTeam, CanonicalID: "team:beta", Label: "Beta"}
+	batch.Entities = append(batch.Entities, contextfabric.EntityProjection{Subject: beta, Aliases: []string{}, PreviousNames: []string{}, ProviderIDs: map[string]string{},
+		Authorization: contextfabric.AuthorizationScope{TeamIDs: []string{"team-beta"}}, EvidenceRefIDs: []string{"evidence_team_beta"},
+		ObservedAt: time.Now().UTC(), ValidFrom: &created, SourceVersion: "v1"})
+	edges.Relationships = append(edges.Relationships, contextfabric.RelationshipProjection{RelationshipID: "relationship_project_odd_team_beta",
+		Type: contractsv1.ContextFabricRelationshipOwnedByTeam, From: odd, To: beta,
+		Derivation: contextfabric.DerivationCanonicalStructured, EpistemicStatus: contextfabric.EpistemicObserved, Authorization: scope,
+		EvidenceRefIDs: []string{"evidence_project_odd_team_beta"}, ObservedAt: time.Now().UTC(), ValidFrom: &created, SourceVersion: "v1"})
 	for _, b := range []contextfabric.ProjectionBatch{batch, edges} {
 		if _, err := adapter.ApplyProjectionBatch(ctx, b); err != nil {
 			t.Fatalf("ApplyProjectionBatch(%s) error = %v", b.BatchID, err)
 		}
 	}
 	repository := contextfabric.SubjectRef{Kind: contextfabric.SubjectRepository, CanonicalID: "repository:acme-api", Label: "acme/api"}
-	read := func(t *testing.T, teams []string) contextfabric.MemberStatusOutsideSet {
+	read := func(t *testing.T, teams []string) contextfabric.GraphContext {
 		t.Helper()
 		scoped := &contextfabric.ScopedSetExpression{AnchorTerms: []string{repository.Label}, MemberKind: contextfabric.SubjectProject,
 			MemberQualifier: contextfabric.MemberQualifierStatus, MemberQualifierValue: "started"}
@@ -69,14 +79,26 @@ func TestLiveATeamNarrowingCountsTheStatusOutsideSetInsideTheNarrowing(t *testin
 		if err != nil {
 			t.Fatalf("teams %v: DiscoverContext() error = %v", teams, err)
 		}
-		return gc.MemberStatusOutsideSet
+		return gc
 	}
-	unnarrowed := read(t, nil)
-	t.Logf("no narrowing: %+v", unnarrowed)
-	if unnarrowed.Count < 2 {
-		t.Fatalf("no narrowing: outside set %+v, want at least project:linked and project:odd counted (the fixture must reach them)", unnarrowed)
+	if got := read(t, nil).MemberStatusOutsideSet; got.Count != 2 || got.AtLeast {
+		t.Fatalf("no narrowing: outside set %+v, want exactly 2 (project:linked and project:odd; the fixture must reach them)", got)
 	}
-	if got := read(t, []string{"team-other"}); got.Count != 0 {
-		t.Fatalf("teams [team-other]: outside set %+v, want 0: no reached project is owned by the requested team", got)
+	for _, tc := range []struct {
+		name    string
+		teams   []string
+		count   int
+		atLeast bool
+	}{
+		{"the owner of project:odd: it is counted; ownerless project:linked makes the count a lower bound", []string{"team-beta"}, 1, true},
+		{"a team that owns neither: project:odd is out of scope; project:linked keeps the count a lower bound", []string{"team-other"}, 0, true},
+	} {
+		gc := read(t, tc.teams)
+		if got := gc.MemberStatusOutsideSet; got.Count != tc.count || got.AtLeast != tc.atLeast {
+			t.Fatalf("%s: outside set %+v, want count %d, at least %v", tc.name, got, tc.count, tc.atLeast)
+		}
+		if gc.CohortPopulationLowerBound {
+			t.Fatalf("%s: the population is a lower bound; an outside-set project is not a status match, so its missing ownership must not floor the cohort", tc.name)
+		}
 	}
 }

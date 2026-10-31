@@ -172,25 +172,38 @@ func (s *discoverTeamScope) nodes(ctx context.Context, principal storage.Princip
 // inScopeIDs decides ids of one kind (members a status walk already
 // authorized) and returns those in scope. A nil scope returns ids unchanged.
 func (s *discoverTeamScope) inScopeIDs(ctx context.Context, kind contextfabric.SubjectKind, ids map[string]bool) (map[string]bool, error) {
+	out, undecided, err := s.inScopeIDsUnfloored(ctx, kind, ids)
+	if undecided {
+		s.undecided = true
+	}
+	return out, err
+}
+
+// inScopeIDsUnfloored is inScopeIDs for ids that are not cohort candidates (the
+// members a status read checked, or those outside the status set): it never
+// floors the read (Q2 (a)). undecided reports that the ownership needed for at
+// least one id was missing, so a count of the result is a lower bound.
+func (s *discoverTeamScope) inScopeIDsUnfloored(ctx context.Context, kind contextfabric.SubjectKind, ids map[string]bool) (map[string]bool, bool, error) {
 	if s == nil {
-		return ids, nil
+		return ids, false, nil
 	}
 	subjects := make([]contextfabric.SubjectRef, 0, len(ids))
 	for id := range ids {
 		subjects = append(subjects, contextfabric.SubjectRef{Kind: kind, CanonicalID: id})
 	}
 	if err := s.decide(ctx, subjects); err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	out := make(map[string]bool, len(ids))
+	undecided := false
 	for id := range ids {
 		if s.admits(contextfabric.SubjectRef{Kind: kind, CanonicalID: id}) {
 			out[id] = true
 		} else if s.missing[id] {
-			s.undecided = true
+			undecided = true
 		}
 	}
-	return out, nil
+	return out, undecided, nil
 }
 
 // committedOwned reports whether rule (i) holds for every committed subject

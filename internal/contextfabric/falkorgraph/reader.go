@@ -1500,18 +1500,20 @@ func (a *Adapter) DiscoverContext(ctx context.Context, principal storage.Princip
 	// narrowing for the pool cut disclosure (the walk's own count is the
 	// anchor's).
 	statusReadInScope := statusWalk.read
-	statusOutsideInScope := statusWalk.outsideSet
+	statusOutsideInScope, statusOutsideAtLeastInScope := statusWalk.outsideSet, statusWalk.outsideAtLeast
 	if statusWalk.applied && teamScope != nil {
-		outsideInScope, err := teamScope.inScopeIDs(ctx, statusPredicate.kind, statusWalk.outsideIDs)
+		// The members outside the status set are not cohort candidates: a
+		// missing ownership makes their count a lower bound, never a floor.
+		outsideInScope, outsideUndecided, err := teamScope.inScopeIDsUnfloored(ctx, statusPredicate.kind, statusWalk.outsideIDs)
 		if err != nil {
 			return contextfabric.GraphContext{}, graphNotProjectedError(err)
 		}
-		statusOutsideInScope = len(outsideInScope)
+		statusOutsideInScope, statusOutsideAtLeastInScope = len(outsideInScope), statusOutsideAtLeastInScope || outsideUndecided
 		if statusMatched, err = teamScope.inScopeIDs(ctx, statusPredicate.kind, statusWalk.matched); err != nil {
 			return contextfabric.GraphContext{}, graphNotProjectedError(err)
 		}
 		if statusWalk.poolCut {
-			readInScope, err := teamScope.inScopeIDs(ctx, statusPredicate.kind, statusWalk.readIDs)
+			readInScope, _, err := teamScope.inScopeIDsUnfloored(ctx, statusPredicate.kind, statusWalk.readIDs)
 			if err != nil {
 				return contextfabric.GraphContext{}, graphNotProjectedError(err)
 			}
@@ -1642,7 +1644,7 @@ func (a *Adapter) DiscoverContext(ctx context.Context, principal storage.Princip
 	if statusWalk.applied {
 		// CHAOS-12352: under a team narrowing, only the outside-set members
 		// inside the narrowing are counted.
-		statusOutsideSet, statusOutsideAtLeast = statusOutsideInScope, statusWalk.outsideAtLeast
+		statusOutsideSet, statusOutsideAtLeast = statusOutsideInScope, statusOutsideAtLeastInScope
 	}
 	statusFiltered := statusWalk.applied || memberStatus != ""
 	statusReached := memberFiltered.candidates > 0
