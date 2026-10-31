@@ -55,6 +55,10 @@ type fakeTable struct {
 	// unpaginated batch may leave it nil (all rows are returned, unfiltered,
 	// as before).
 	cursorOf func(row []any) (observedAt time.Time, rowKey string)
+	// unfiltered serves every row of a key-filtered read (the CHAOS-12226
+	// membership read), ignoring the keys the statement names, so a test can
+	// prove the producer itself never attaches a row for a key it did not ask.
+	unfiltered bool
 }
 
 type fakeClient struct {
@@ -65,7 +69,19 @@ type fakeClient struct {
 	// query, for CHAOS-4566's once-per-run assertion: a plain call count
 	// through fakeClient's real dispatch, not a mock expectation.
 	ambiguousProjectKeysQueries int
+
+	// workItemMembershipQueries counts the CHAOS-12226 page membership reads.
+	workItemMembershipQueries int
 }
+
+// workItemMembershipMarker and workItemMembershipRefreshMarker identify the
+// CHAOS-12226 reads (work_item_project_membership.go). Both keep their own
+// dispatch: the refresh statement names work_items, which the substring loop
+// would otherwise serve from the work-item table's rows.
+const (
+	workItemMembershipMarker        = "AS membership_repo_id"
+	workItemMembershipRefreshMarker = "AS membership_changed_at"
+)
 
 // ambiguousProjectKeysMarker identifies the catalog ambiguity count
 // (countAmbiguousProjectKeysInCatalog, teams_projects_edges.go). It keeps its
@@ -102,6 +118,26 @@ func (c *fakeClient) Query(_ context.Context, statement string, bindings []conte
 		}
 		return &fakeScanner{}, nil
 	}
+	if strings.Contains(statement, workItemMembershipMarker) {
+		c.workItemMembershipQueries++
+		return c.workItemMemberships(bindings)
+	}
+	if strings.Contains(statement, workItemMembershipRefreshMarker) {
+		for _, table := range c.tables {
+			if table.match != workItemMembershipRefreshMarker {
+				continue
+			}
+			if table.err != nil {
+				return nil, table.err
+			}
+			rows := table.rows
+			if table.cursorOf != nil {
+				rows = applyCursor(rows, table.cursorOf, bindings)
+			}
+			return &fakeScanner{rows: rows}, nil
+		}
+		return &fakeScanner{}, nil
+	}
 	if strings.Contains(statement, "AS description_incident_id") {
 		return &fakeScanner{rows: c.incidentDescriptions(bindings)}, nil
 	}
@@ -122,6 +158,43 @@ func (c *fakeClient) Query(_ context.Context, statement string, bindings []conte
 			}
 			return &fakeScanner{rows: rows}, nil
 		}
+	}
+	return &fakeScanner{}, nil
+}
+
+// workItemMemberships serves the page membership read: the rows of the
+// table registered under workItemMembershipMarker whose (repo_id,
+// work_item_id) -- the row's first two values -- the statement's bindings
+// name, as the real statement's WHERE does.
+func (c *fakeClient) workItemMemberships(bindings []contextpacket.ClickHouseBinding) (contextpacket.ClickHouseRowScanner, error) {
+	bound := map[string]any{}
+	for _, binding := range bindings {
+		bound[binding.Name] = binding.Value
+	}
+	for _, table := range c.tables {
+		if table.match != workItemMembershipMarker {
+			continue
+		}
+		if table.err != nil {
+			return nil, table.err
+		}
+		if table.unfiltered {
+			return &fakeScanner{rows: table.rows}, nil
+		}
+		var out [][]any
+		for _, row := range table.rows {
+			for i := 0; ; i++ {
+				repo, ok := bound[fmt.Sprintf("r%d", i)]
+				if !ok {
+					break
+				}
+				if row[0] == repo && row[1] == bound[fmt.Sprintf("w%d", i)] {
+					out = append(out, row)
+					break
+				}
+			}
+		}
+		return &fakeScanner{rows: out}, nil
 	}
 	return &fakeScanner{}, nil
 }

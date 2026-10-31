@@ -3439,6 +3439,29 @@
           "type": "object"
         },
         "EntityProjection": {
+          "allOf": [
+            {
+              "description": "CHAOS-12226: only a work-item entity may state project_identities.",
+              "if": {
+                "properties": {
+                  "subject": {
+                    "properties": {
+                      "kind": {
+                        "const": "work_item"
+                      }
+                    }
+                  }
+                }
+              },
+              "else": {
+                "not": {
+                  "required": [
+                    "project_identities"
+                  ]
+                }
+              }
+            }
+          ],
           "else": {
             "properties": {
               "authorization": {
@@ -3479,6 +3502,18 @@
             },
             "authorization": {
               "$ref": "#/$defs/context_fabric_common.v1/$defs/EntityAuthorizationScope"
+            },
+            "project_identities": {
+              "description": "CHAOS-12226: a work item's current project membership, as canonical project.v2 identities from its own project link. Absent: not stated. Empty: stated, in no project. Only a work-item entity may carry it; never a wildcard.",
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 256,
+                "pattern": "^project\\.v2:(?:[^:|%]|%25|%3A)+:(?:[^:|%]|%25|%3A)+$"
+              },
+              "maxItems": 200,
+              "uniqueItems": true
             },
             "evidence_ref_ids": {
               "items": {
