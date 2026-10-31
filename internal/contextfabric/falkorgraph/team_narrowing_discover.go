@@ -64,8 +64,12 @@ type discoverTeamScope struct {
 	keep map[string]bool
 	// inScope / decided: canonical id -> in scope, for every subject decided.
 	inScope, decided map[string]bool
-	// undecided: an ownership read needed to decide an admitted subject was
-	// absent, not current, or cut.
+	// missing: canonical id -> the ownership needed to decide it was absent,
+	// not current, or cut (only for a subject decided out of scope).
+	missing map[string]bool
+	// undecided: a cohort member candidate (of the member kind) or a status
+	// match was left out on missing ownership. Path endpoints never floor
+	// (lead ruling Q2 (a)), and a candidate of another kind loses no member.
 	undecided bool
 }
 
@@ -78,7 +82,7 @@ func (a *Adapter) newDiscoverTeamScope(key, orgID string, scope contextfabric.Re
 	}
 	s := &discoverTeamScope{
 		narrowing: &teamNarrowing{adapter: a, key: key, orgID: orgID, requested: requested},
-		temporal:  temporal, keep: map[string]bool{}, inScope: map[string]bool{}, decided: map[string]bool{},
+		temporal:  temporal, keep: map[string]bool{}, inScope: map[string]bool{}, decided: map[string]bool{}, missing: map[string]bool{},
 	}
 	for _, subject := range committed {
 		s.keep[subject.CanonicalID] = true
@@ -134,9 +138,11 @@ func (s *discoverTeamScope) edges(ctx context.Context, principal storage.Princip
 	return kept, nil
 }
 
-// nodes keeps the candidate nodes that are in scope. A node the rest of the
-// request refuses is kept for that check to refuse (and count), as before.
-func (s *discoverTeamScope) nodes(ctx context.Context, principal storage.Principal, scope contextfabric.RequestedScope, nodes []graphrank.CandidateNode) ([]graphrank.CandidateNode, error) {
+// nodes keeps the cohort candidate nodes that are in scope. A node the rest of
+// the request refuses is kept for that check to refuse (and count), as before.
+// A candidate of memberKind (any kind when memberKind is empty) left out on
+// missing ownership floors the read: a member may be missing.
+func (s *discoverTeamScope) nodes(ctx context.Context, principal storage.Principal, scope contextfabric.RequestedScope, memberKind contextfabric.SubjectKind, nodes []graphrank.CandidateNode) ([]graphrank.CandidateNode, error) {
 	if s == nil {
 		return nodes, nil
 	}
@@ -154,6 +160,10 @@ func (s *discoverTeamScope) nodes(ctx context.Context, principal storage.Princip
 		subject, ok := graphrank.NodeSubject(n)
 		if !ok || !graphrank.AuthorizedAttributes(principal, scope, n.Attributes) || s.admits(subject) {
 			kept = append(kept, n)
+			continue
+		}
+		if s.missing[subject.CanonicalID] && (memberKind == "" || subject.Kind == memberKind) {
+			s.undecided = true
 		}
 	}
 	return kept, nil
@@ -176,6 +186,8 @@ func (s *discoverTeamScope) inScopeIDs(ctx context.Context, kind contextfabric.S
 	for id := range ids {
 		if s.admits(contextfabric.SubjectRef{Kind: kind, CanonicalID: id}) {
 			out[id] = true
+		} else if s.missing[id] {
+			s.undecided = true
 		}
 	}
 	return out, nil
@@ -324,25 +336,25 @@ func (s *discoverTeamScope) decide(ctx context.Context, subjects []contextfabric
 		}
 		return false, missing || prReposCut
 	}
-	floor := func(missing bool) {
+	floor := func(id string, missing bool) {
 		if missing {
-			s.undecided = true
+			s.missing[id] = true
 		}
 	}
 	for _, repo := range byKind[contextfabric.SubjectRepository] {
 		owned, missing := repoReach(repo)
 		s.inScope[repo] = owned
-		floor(!owned && missing)
+		floor(repo, !owned && missing)
 	}
 	for _, project := range byKind[contextfabric.SubjectProject] {
 		owned := projectOwned[project]
 		s.inScope[project] = owned
-		floor(!owned && (!projectHasOwner[project] || cutProjects))
+		floor(project, !owned && (!projectHasOwner[project] || cutProjects))
 	}
 	for _, pr := range prs {
 		owned, missing := prReach(pr)
 		s.inScope[pr] = owned
-		floor(!owned && missing)
+		floor(pr, !owned && missing)
 	}
 	for _, issue := range issues {
 		reached, missing := false, linksCut || projectHitsCut
@@ -361,7 +373,7 @@ func (s *discoverTeamScope) decide(ctx context.Context, subjects []contextfabric
 			}
 		}
 		s.inScope[issue] = reached
-		floor(!reached && missing)
+		floor(issue, !reached && missing)
 	}
 	return nil
 }

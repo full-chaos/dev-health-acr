@@ -1487,8 +1487,19 @@ func (a *Adapter) DiscoverContext(ctx context.Context, principal storage.Princip
 	// one call (one requires zero committed subjects, the other requires a
 	// committed repository anchor), so the OR never blends two real runs.
 	// CHAOS-12327: the cohort's candidates under a requested team narrowing.
-	if cohortNodes, err = teamScope.nodes(ctx, principal, scope, cohortNodes); err != nil {
+	if cohortNodes, err = teamScope.nodes(ctx, principal, scope, declaredCohortKind, cohortNodes); err != nil {
 		return contextfabric.GraphContext{}, graphNotProjectedError(err)
+	}
+	// CHAOS-12327 (review r1, r2): the status walk's matches were read before
+	// the team narrowing, so they are narrowed by it too -- before the pool is
+	// classified, so an ownership missing for a match past the read still
+	// names its arm -- and an undecided ownership keeps the population a lower
+	// bound.
+	statusMatched := statusWalk.matched
+	if statusWalk.applied && teamScope != nil {
+		if statusMatched, err = teamScope.inScopeIDs(ctx, statusPredicate.kind, statusWalk.matched); err != nil {
+			return contextfabric.GraphContext{}, graphNotProjectedError(err)
+		}
 	}
 	censusCoversThisCohort := (censusAdmitted && censusMembers > 0 && exactNameCensusCoversKind(declaredCohortKind)) ||
 		kindCensusMembers > 0 || statusCensusCovers ||
@@ -1598,15 +1609,6 @@ func (a *Adapter) DiscoverContext(ctx context.Context, principal storage.Princip
 	}
 	cohort, cohortAuthzDropped, cohortKindScopedAuthzDropped, cohortKind, cohortKindBasis, cohortPopulation := graphrank.DiscoveredCohort(principal, request, cohortNodes, cohortPoolTruncated, isInternalSubject)
 	cohortPopulationLowerBound := cohortPoolTruncated
-	// CHAOS-12327 (review r1): the status walk's matches were read before the
-	// team narrowing, so they are narrowed by it too, and an undecided
-	// ownership keeps the population a lower bound.
-	statusMatched := statusWalk.matched
-	if statusWalk.applied && teamScope != nil {
-		if statusMatched, err = teamScope.inScopeIDs(ctx, statusPredicate.kind, statusWalk.matched); err != nil {
-			return contextfabric.GraphContext{}, graphNotProjectedError(err)
-		}
-	}
 	if statusWalk.applied && len(statusMatched) > cohortPopulation {
 		// The member cap cut a set of decided matches: the population is the
 		// counted matches, a lower bound only when that count was cut.

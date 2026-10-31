@@ -1,13 +1,18 @@
 package falkorgraph
 
 import (
+	"bytes"
 	"context"
+	"fmt"
+	"log/slog"
 	"slices"
 	"sort"
 	"testing"
 	"time"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric/eventspec"
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric/eventspec/certify"
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
 )
@@ -327,5 +332,182 @@ func seedTeamDiscoverReview(t *testing.T, ctx context.Context, adapter *Adapter,
 		if _, err := adapter.ApplyProjectionBatch(ctx, batch); err != nil {
 			t.Fatalf("ApplyProjectionBatch(%s) error = %v", batch.BatchID, err)
 		}
+	}
+}
+
+// TestLiveATeamNarrowingKeepsTheStatusPopulationALowerBoundWhereOwnershipIsMissing
+// (CHAOS-12327, review r1 and r2): the organization's open pull requests under a
+// team narrowing, when the status census is cut past the member read. team-t
+// owns acme/owned and its 30 open pull requests; acme/orphan has no owner and
+// one open pull request. The read serves 25. The status count decides all 31
+// matches, so the population is the team's 30 -- a lower bound, because one
+// match's ownership was missing, even though the count itself was complete.
+// The orphan is first by id (inside the 25 read) or last (only in the status
+// count, past the read): either way the floor is logged and its pool arm named.
+// With no orphan pull request, the ownerless repository is a candidate of
+// another kind: it loses no member, so the read is not floored.
+func TestLiveATeamNarrowingKeepsTheStatusPopulationALowerBoundWhereOwnershipIsMissing(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		orphanID string
+		owned    int
+		floored  bool
+	}{
+		{"orphan pull request first by id", teamStatusFloorOrphanPR, 30, true},
+		{"orphan pull request past the read", teamStatusFloorLateOrphanPR, 30, true},
+		{"ownerless repository with no pull request", "", 10, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) { assertTeamStatusFloor(t, tc.orphanID, tc.owned, tc.floored) })
+	}
+}
+
+func assertTeamStatusFloor(t *testing.T, orphanID string, owned int, floored bool) {
+	ctx := context.Background()
+	adapter, _ := newLiveFalkorAdapter(t, ctx)
+	orgID := "live-12327-status-floor-" + time.Now().UTC().Format("20060102T150405.000000000")
+	t.Cleanup(func() { _ = adapter.PurgeOrganization(context.Background(), orgID) })
+	entities, edges := teamStatusFloorFixture(orgID, time.Now().UTC(), orphanID, owned)
+	for _, b := range []contextfabric.ProjectionBatch{entities, edges} {
+		if _, err := adapter.ApplyProjectionBatch(ctx, b); err != nil {
+			t.Fatalf("ApplyProjectionBatch(%s) error = %v", b.BatchID, err)
+		}
+	}
+	scoped := &contextfabric.ScopedSetExpression{AnchorTerms: []string{"Acme"}, MemberKind: contextfabric.SubjectPullRequest,
+		MemberQualifier: contextfabric.MemberQualifierStatus, MemberQualifierValue: "open"}
+	request := contextfabric.GraphDiscoveryRequest{
+		Request: contextfabric.InvestigationRequest{
+			SchemaVersion: contextfabric.InvestigationRequestSchemaV1, RequestID: "request_12327_status_floor",
+			Question: "which pull requests are open?", TimeContext: contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent},
+			RequestedScope: contextfabric.RequestedScope{TeamIDs: []string{"team-t"}},
+			Options: contextfabric.InvestigationOptions{
+				MaxSubjectCandidates: 10, MaxCohortMembers: 50, MaxRelationshipPaths: 50,
+				MaxDrivers: 10, MaxEvidenceRefs: 100, MaxSerializedBytes: 262144,
+			},
+			Consumer: contextfabric.ConsumerInfo{Name: "test", Version: "v1", Surface: "test"},
+		},
+		Interpretation: contextfabric.InterpretedQuestion{
+			Shape: contextfabric.ShapeDiscoveredCohort, TimeContext: contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent},
+		},
+		Resolution: contextfabric.SubjectResolution{Committed: []contextfabric.SubjectRef{}, Candidates: []contextfabric.SubjectCandidate{}},
+		Frame: &contextfabric.QuestionFrame{
+			Goals:             []contextfabric.InvestigationGoal{contextfabric.GoalAssessState},
+			SubjectExpression: contextfabric.SubjectExpression{Kind: contextfabric.SubjectExpressionChildrenOfScope, Scoped: scoped},
+			Temporal:          contextfabric.TemporalIntentCurrent,
+			Version:           contextfabric.QuestionFrameVersion,
+		},
+	}
+	recorder := &recordingTelemetry{}
+	adapter.config.Telemetry = recorder
+	gc, err := adapter.DiscoverContext(ctx, storage.Principal{OrgID: orgID}, request)
+	if err != nil {
+		t.Fatalf("DiscoverContext() error = %v", err)
+	}
+	wantFloor := contextfabric.TeamNarrowingReadFloorNone
+	if floored {
+		wantFloor = contextfabric.TeamNarrowingReadFloorUndecided
+	}
+	if len(recorder.teamNarrowingReads) != 1 || recorder.teamNarrowingReads[0].floor != wantFloor {
+		t.Fatalf("team narrowing lines %+v, want one with floor=%s", recorder.teamNarrowingReads, wantFloor)
+	}
+	armed := false
+	for _, basis := range recorder.cohortKindBases {
+		armed = armed || slices.Contains(basis.poolTruncationArms, CohortPoolTruncationArmTeamNarrowingUndecided)
+	}
+	if armed != floored {
+		t.Fatalf("cohort kind basis lines %+v: pool arm %s named=%v, want %v (named exactly when the floor is logged)", recorder.cohortKindBases, CohortPoolTruncationArmTeamNarrowingUndecided, armed, floored)
+	}
+	if gc.Cohort == nil {
+		t.Fatal("no member set served, want the team's open pull requests")
+	}
+	for _, m := range gc.Cohort.Members {
+		if m.Subject.CanonicalID == orphanID {
+			t.Fatalf("served %s, whose repository has no owner: out of the narrowing", orphanID)
+		}
+	}
+	if gc.CohortPopulation != owned || gc.CohortPopulationLowerBound != floored {
+		t.Fatalf("population=%d lower bound=%v (members %d), want %d and lower bound %v",
+			gc.CohortPopulation, gc.CohortPopulationLowerBound, len(gc.Cohort.Members), owned, floored)
+	}
+}
+
+const (
+	teamStatusFloorOrphanPR     = "pull_request:aaa-orphan:001"
+	teamStatusFloorLateOrphanPR = "pull_request:zzz-orphan:001"
+)
+
+// teamStatusFloorFixture: team-t owns acme/owned (owned open pull requests);
+// acme/orphan has no owner (one open pull request orphanID, or none for "").
+func teamStatusFloorFixture(orgID string, observed time.Time, orphanID string, ownedPRs int) (contextfabric.ProjectionBatch, contextfabric.ProjectionBatch) {
+	created := observed.Add(-48 * time.Hour)
+	text := func(value string) contextfabric.ScalarValue { return contextfabric.ScalarValue{String: &value} }
+	entity := func(subject contextfabric.SubjectRef, scope contextfabric.AuthorizationScope, properties map[string]contextfabric.ScalarValue) contextfabric.EntityProjection {
+		return contextfabric.EntityProjection{
+			Subject: subject, Aliases: []string{}, PreviousNames: []string{}, ProviderIDs: map[string]string{},
+			Properties: properties, Authorization: scope, EvidenceRefIDs: []string{"evidence_" + subject.CanonicalID},
+			ObservedAt: observed, ValidFrom: &created, SourceVersion: "v1",
+		}
+	}
+	relationship := func(id string, typ contractsv1.ContextFabricRelationshipType, from, to contextfabric.SubjectRef, scope contextfabric.AuthorizationScope) contextfabric.RelationshipProjection {
+		return contextfabric.RelationshipProjection{
+			RelationshipID: id, Type: typ, From: from, To: to,
+			Derivation: contextfabric.DerivationCanonicalStructured, EpistemicStatus: contextfabric.EpistemicObserved,
+			Authorization: scope, EvidenceRefIDs: []string{"evidence_" + id}, ObservedAt: observed, ValidFrom: &created, SourceVersion: "v1",
+		}
+	}
+	owned := contextfabric.AuthorizationScope{RepositorySlugs: []string{"acme/owned"}}
+	orphanScope := contextfabric.AuthorizationScope{RepositorySlugs: []string{"acme/orphan"}}
+	team := contextfabric.SubjectRef{Kind: contextfabric.SubjectTeam, CanonicalID: "team:team-t", Label: "Team T"}
+	repo := contextfabric.SubjectRef{Kind: contextfabric.SubjectRepository, CanonicalID: "repository:acme-owned", Label: "acme/owned"}
+	orphan := contextfabric.SubjectRef{Kind: contextfabric.SubjectRepository, CanonicalID: "repository:acme-orphan", Label: "acme/orphan"}
+	entities := []contextfabric.EntityProjection{
+		entity(team, contextfabric.AuthorizationScope{TeamIDs: []string{"team-t"}}, nil),
+		entity(repo, owned, nil), entity(orphan, orphanScope, nil),
+	}
+	relationships := []contextfabric.RelationshipProjection{
+		relationship("relationship_owned_team", contractsv1.ContextFabricRelationshipOwnedByTeam, repo, team,
+			contextfabric.AuthorizationScope{RepositorySlugs: []string{"acme/owned"}, TeamIDs: []string{"team-t"}}),
+	}
+	open := map[string]contextfabric.ScalarValue{"state": text("open")}
+	if orphanID != "" {
+		pr := contextfabric.SubjectRef{Kind: contextfabric.SubjectPullRequest, CanonicalID: orphanID, Label: "PR orphan"}
+		entities = append(entities, entity(pr, orphanScope, open))
+		relationships = append(relationships, relationship("relationship_orphan_pr_repository", contractsv1.ContextFabricRelationshipBelongsToRepository, pr, orphan, orphanScope))
+	}
+	for i := 1; i <= ownedPRs; i++ {
+		pr := contextfabric.SubjectRef{Kind: contextfabric.SubjectPullRequest, CanonicalID: fmt.Sprintf("pull_request:owned:%03d", i), Label: fmt.Sprintf("PR #%d", i)}
+		entities = append(entities, entity(pr, owned, open))
+		relationships = append(relationships, relationship(fmt.Sprintf("relationship_owned_pr_%03d_repository", i), contractsv1.ContextFabricRelationshipBelongsToRepository, pr, repo, owned))
+	}
+	base := contextfabric.ProjectionBatch{
+		SchemaVersion: contextfabric.ProjectionBatchSchemaV1, OrgID: orgID, Source: "live-test", SourceVersion: "v1", GeneratedAt: observed,
+		Entities: []contextfabric.EntityProjection{}, Relationships: []contextfabric.RelationshipProjection{},
+		Contents: []contextfabric.ContentProjection{}, Episodes: []contextfabric.EpisodeProjection{}, Tombstones: []contextfabric.ProjectionTombstone{},
+	}
+	e, r := base, base
+	e.BatchID, e.Cursor, e.NextCursor, e.Entities = "batch_12327_status_floor_0001", "", "cursor-1", entities
+	r.BatchID, r.Cursor, r.NextCursor, r.Relationships = "batch_12327_status_floor_0002", "cursor-1", "cursor-2", relationships
+	return e, r
+}
+
+// TestLiveTheTeamNarrowingLineCertifiesFromTheRealProducer: the general read's
+// team-narrowing line, emitted by the real DiscoverContext into a real
+// slog.JSONHandler, certifies against eventspec.TeamNarrowingGeneralRead.
+func TestLiveTheTeamNarrowingLineCertifiesFromTheRealProducer(t *testing.T) {
+	ctx := context.Background()
+	adapter, _ := newLiveFalkorAdapter(t, ctx)
+	orgID := seedTeamNarrowingFixture(t, ctx, adapter, teamNarrowingFixture{anchorOwnerEnded: true})
+	var buf bytes.Buffer
+	adapter.config.Telemetry = SlogTelemetry{Logger: slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelInfo}))}
+	repo := contextfabric.SubjectRef{Kind: contextfabric.SubjectRepository, CanonicalID: memberAnchorID, Label: memberAnchorSlug}
+	discoverUnderTeams(t, ctx, adapter, orgID, repo, nil, []string{"team-A"})
+	log, err := certify.Parse(buf.Bytes())
+	if err != nil {
+		t.Fatalf("certify.Parse() error = %v", err)
+	}
+	if _, err := certify.Certify(log, certify.Assertion{
+		Event: eventspec.TeamNarrowingGeneralRead,
+		Want:  map[string]any{"org_id": orgID, "requested_teams": 1, "floor": string(contextfabric.TeamNarrowingReadFloorUndecided)},
+	}); err != nil {
+		t.Fatalf("certify.Certify() error = %v", err)
 	}
 }
