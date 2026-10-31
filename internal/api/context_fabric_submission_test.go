@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -12,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/memoryinvestigation"
 	"github.com/full-chaos/dev-health-acr/internal/contractcheck"
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
@@ -127,7 +129,9 @@ func TestAnAbandonOnErrorAndAnAbandonAtExpiryAnswerARetryAlike(t *testing.T) {
 		harness.post(0, harness.tokenA, "submission-abandon-x", submissionQuestion)
 	}()
 	<-harness.investigator.entered
-	harness.clock.Advance(24 * time.Hour)
+	// Past the record's expiry (run budget + 30 s), inside its retention-0
+	// window: at 24 hours the record itself closes (CHAOS-11952).
+	harness.clock.Advance(time.Hour)
 	atExpiry := harness.post(1, harness.tokenA, "submission-abandon-x", submissionQuestion)
 	close(harness.investigator.release)
 	<-done
@@ -512,5 +516,69 @@ func TestANonOwnerCannotTellAnotherPrincipalsSubmissionExists(t *testing.T) {
 	// when the runtime was ready.
 	if got := harness.investigator.executions.Load(); got != 3 {
 		t.Fatalf("executions = %d, want 3", got)
+	}
+}
+
+// CHAOS-11952 (lead ruling Q2): a submission with no thread is a one-turn
+// thread with retention 0. One second before its admission + 24 hours its
+// answer, its status and a repeat are served as before; from 24 hours every
+// read fails closed, before the retention job removes the record: the result
+// by id and the status read as unknown, and a repeat is 409 thread_closed and
+// runs nothing.
+func TestASubmissionWithNoThreadClosesTwentyFourHoursAfterItsAdmission(t *testing.T) {
+	harness, _ := newMemorySubmissionHarness(t, 1)
+	harness.investigator.mode.Store(int32(runSave))
+	admitted := harness.clock.Now()
+	resultID := servedResultID(t, harness.post(0, harness.tokenA, "submission-retention-0001", submissionQuestion))
+
+	harness.clock.Advance(admitted.Add(24*time.Hour - time.Second).Sub(harness.clock.Now()))
+	if got := harness.get(0, harness.tokenA, resultID); got.Code != http.StatusOK {
+		t.Fatalf("the answer inside 24 hours = %d %s", got.Code, got.Body.String())
+	}
+	if got := harness.status(0, harness.tokenA, "submission-retention-0001"); got.Code != http.StatusOK {
+		t.Fatalf("the status inside 24 hours = %d %s", got.Code, got.Body.String())
+	}
+
+	harness.clock.Advance(time.Second)
+	if got := harness.get(0, harness.tokenA, resultID); got.Code != http.StatusNotFound {
+		t.Fatalf("the answer at 24 hours = %d %s, want 404", got.Code, got.Body.String())
+	}
+	if got := harness.status(0, harness.tokenA, "submission-retention-0001"); got.Code != http.StatusNotFound {
+		t.Fatalf("the status at 24 hours = %d %s, want 404", got.Code, got.Body.String())
+	}
+	expectSubmissionRefusal(t, harness.post(0, harness.tokenA, "submission-retention-0001", submissionQuestion), contractsv1.ErrorCodeThreadClosed)
+	if got := harness.investigator.executions.Load(); got != 1 {
+		t.Fatalf("executions = %d, want 1 (the repeat runs nothing)", got)
+	}
+}
+
+// CHAOS-11952 (design §6 T2): the route marks a named submission's
+// reservation, so a run whose record the retention job removed mid-run saves
+// nothing: never an unbound row the organization could read. The answer is
+// not served as stored, and the reserved id reads as unknown.
+func TestASubmissionsSaveAfterItsRecordWasRemovedStoresNothing(t *testing.T) {
+	harness, store := newMemorySubmissionHarness(t, 1)
+	harness.investigator.mode.Store(int32(runBlockThenSave))
+	done := make(chan *httptest.ResponseRecorder, 1)
+	go func() { done <- harness.post(0, harness.tokenA, "submission-fenced-0001", submissionQuestion) }()
+	<-harness.investigator.entered
+	status := harness.status(0, harness.tokenA, "submission-fenced-0001")
+	if status.Code != http.StatusOK {
+		t.Fatalf("status while running = %d %s", status.Code, status.Body.String())
+	}
+	var record contractsv1.ContextFabricSubmissionStatus
+	if err := json.Unmarshal(status.Body.Bytes(), &record); err != nil || record.ReservedResultID == "" {
+		t.Fatalf("status body %s: %v", status.Body.String(), err)
+	}
+	store.DeleteSubmissionsForTest(principalOfResult(t, harness).OrgID)
+	close(harness.investigator.release)
+	if answer := <-done; answer.Code == http.StatusOK {
+		t.Fatalf("a run whose record is gone answered 200 %s", answer.Body.String())
+	}
+	if _, err := store.Get(context.Background(), principalOfResult(t, harness), record.ReservedResultID); !errors.Is(err, contextfabric.ErrInvestigationResultNotFound) {
+		t.Fatalf("the reserved id after the refused save = %v, want not found (stored unbound)", err)
+	}
+	if got := harness.get(0, harness.tokenB, record.ReservedResultID); got.Code != http.StatusNotFound {
+		t.Fatalf("another bearer reads the reserved id = %d, want 404", got.Code)
 	}
 }

@@ -262,13 +262,31 @@ func TestStore_grantDigest(t *testing.T) {
 // TestStore_submissionParity runs the shared submission behavior table
 // (CHAOS-11912) against the in-memory store.
 func TestStore_submissionParity(t *testing.T) {
-	paritytest.RunSubmissionSuite(t, func(*testing.T) paritytest.SubmissionStore { return memoryinvestigation.NewStore() })
+	paritytest.RunSubmissionSuite(t, func(_ *testing.T, clock func() time.Time) paritytest.SubmissionStore {
+		return memoryinvestigation.NewStoreWithClock(clock)
+	})
 }
 
 // TestStore_threadParity runs the shared thread table (CHAOS-11948) against
 // the in-memory store.
 func TestStore_threadParity(t *testing.T) {
 	paritytest.RunThreadSuite(t, func(_ *testing.T, clock func() time.Time) paritytest.ThreadStore {
+		return memoryinvestigation.NewStoreWithClock(clock)
+	})
+}
+
+// TestStore_retentionReadParity runs the retention read rules (CHAOS-11952)
+// against the in-memory store.
+func TestStore_retentionReadParity(t *testing.T) {
+	paritytest.RunRetentionReadSuite(t, func(_ *testing.T, clock func() time.Time) paritytest.ThreadStore {
+		return memoryinvestigation.NewStoreWithClock(clock)
+	})
+}
+
+// TestStore_retentionSweepParity runs the retention job's store table
+// (CHAOS-11952) against the in-memory store.
+func TestStore_retentionSweepParity(t *testing.T) {
+	paritytest.RunRetentionSweepSuite(t, func(_ *testing.T, clock func() time.Time) paritytest.RetentionStore {
 		return memoryinvestigation.NewStoreWithClock(clock)
 	})
 }

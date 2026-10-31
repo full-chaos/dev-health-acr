@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric/pginvestigation"
 	"log/slog"
 	"os"
 	"time"
@@ -209,6 +210,18 @@ func openPostgres(ctx context.Context, cfg config.Config, logger *slog.Logger) (
 	if err != nil {
 		return fail(errors.Join(fmt.Errorf("sweep unacknowledged device credentials: %w", err), stopPurgeLoop(), stopWorkloadCredentialPurgeLoop(), stopOAuthPurgeLoop(), stopBrowserFamilyPurgeLoop()))
 	}
+	// CHAOS-11952: the Ask Dev retention job over the investigation store's
+	// tables (a store of its own on the same pool; the sweep takes its
+	// clock from the loop). Its first pass proves the runtime role's DELETE
+	// grants on the backing set, so a missing grant fails startup loudly.
+	retentionStore, err := pginvestigation.NewStore(database)
+	if err != nil {
+		return fail(errors.Join(fmt.Errorf("create the Ask Dev retention store: %w", err), stopPurgeLoop(), stopWorkloadCredentialPurgeLoop(), stopOAuthPurgeLoop(), stopBrowserFamilyPurgeLoop(), stopDeviceSweep()))
+	}
+	stopRetentionLoop, err := startRetentionPurgeLoop(ctx, retentionStore, logger, nil)
+	if err != nil {
+		return fail(errors.Join(fmt.Errorf("enforce Ask Dev retention: %w", err), stopPurgeLoop(), stopWorkloadCredentialPurgeLoop(), stopOAuthPurgeLoop(), stopBrowserFamilyPurgeLoop(), stopDeviceSweep()))
+	}
 	readinessTimeout := cfg.PostgresPingTimeout
 	if readinessTimeout <= 0 {
 		readinessTimeout = defaultPostgresReadinessTimeout
@@ -222,7 +235,7 @@ func openPostgres(ctx context.Context, cfg config.Config, logger *slog.Logger) (
 			return checkPostgresRuntime(checkContext, database, runner, cfg.EnableEpisodeWriteback)
 		},
 		close: func() error {
-			return errors.Join(stopPurgeLoop(), stopWorkloadCredentialPurgeLoop(), stopOAuthPurgeLoop(), stopBrowserFamilyPurgeLoop(), stopDeviceSweep(), database.Close())
+			return errors.Join(stopRetentionLoop(), stopPurgeLoop(), stopWorkloadCredentialPurgeLoop(), stopOAuthPurgeLoop(), stopBrowserFamilyPurgeLoop(), stopDeviceSweep(), database.Close())
 		},
 	}, nil
 }

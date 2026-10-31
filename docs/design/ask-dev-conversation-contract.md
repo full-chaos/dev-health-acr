@@ -59,6 +59,16 @@ thread id once per conversation and sends it on every turn as
   (plan §2.6, D-22) under §6.
 - Results with no submission link (MCP, Workbench) are not in any thread and
   are out of scope.
+- **A submission with no thread** (I-30, CHAOS-11952, lead ruling Q2) is
+  still an Ask Dev result's record: it is retained as a one-turn thread with
+  retention `0`, keyed on its own admission (`admitted_at` + 24 hours,
+  `contextfabric.UnthreadedRecordExpiresAt`). From then its result, its
+  status, replay and attach fail closed and a repeat of its id is
+  `409 thread_closed`, as for an expired thread; the job then removes both.
+  It appears in no history. A web follow-up whose parent is such a result
+  fails closed the same way once the parent is past its window. An implicit
+  admission (`acr-implicit-…`, CHAOS-11997) names no result, so removing it
+  removes only the record.
 
 ## 3. Wire
 
@@ -314,9 +324,8 @@ item that implements it.
   still saves bound to its owner (T2), and its result stays hidden.
 - **Expiry.** From `expires_at` every read hides the thread, its questions and
   its results (T6), but nothing is erased at that moment: the retention job
-  (I-30) removes the backing set, questions included. Until it lands, an
-  expired thread's questions stay stored, unreadable. A delete of an expired
-  thread is a no-op (`204`).
+  (I-30, §12) removes the backing set, questions included, on its next pass.
+  A delete of an expired thread is a no-op (`204`).
 - **Thread read (T4).** Each done turn's result goes through
   `decideStoredResultServing` (api), the decision the read by id and the replay
   take: the gate on surface `thread`, then the work-item tuple and flood rules.
@@ -422,3 +431,56 @@ retention." The web controls are I-32b; this item is the ACR store and route.
 - **Not here.** The browser-class route list and the per-call access read
   (T5/T7 of the direct-browser design) add this route when they land; CORS
   already answers it (`investigations` class).
+
+## 12. Retention job (I-30, CHAOS-11952)
+
+Plan AC: "D-22 rows incl. event log and feedback; `0` ≤24 h, `30` 30 days,
+org purge; replay/redemption/attach fail closed after expiry; drill on
+back-dated rows." Rules: `internal/contextfabric/retention.go`; SQL:
+`pginvestigation/retention.go`; memory twin: `memoryinvestigation/retention.go`
+(one parity table, `paritytest/retention_sweep.go`).
+
+- **Where.** A bounded purge loop in every `acr-api` replica
+  (`runtime/hosted/retention_purge.go`, every 5 minutes, 500 units a pass).
+  Its first pass runs at startup and proves the runtime role's DELETE grants
+  (`internal/dbacl`): a missing grant fails startup. Each unit (one thread, or
+  one record with no thread) is one transaction under the organization's
+  admission lock, so replicas sweeping at once remove a unit once and no turn
+  is admitted half-way through.
+- **Backing set.** Thread row; submission records (with questions); result
+  rows (semantic state and reuse columns are columns of the row); the
+  clarification and structure selections and the supersession claims keyed
+  by a removed result (`prior_result_id`); the run event log (by its foreign
+  key's cascade, or explicitly when records are kept); the answer feedback
+  (cascade). Kept: the usage aggregate (AC-6); model execution receipts, which
+  carry no question, answer, principal or result id (lead ruling Q3 test);
+  results no record names (MCP, Workbench); a claim whose prior result lives
+  (its claimer's id stays, as the fence of the live prior).
+- **Expired thread.** The whole set goes, thread row included. Its ids are
+  then unknown: the thread id starts a new thread (T1 residual).
+- **Deleted thread, not expired** (lead ruling Q1: the delete is the user's
+  act; retention is a ceiling). Reads fail closed at the delete (§9). The
+  first pass after `closed_at` removes the content and keeps the closure
+  record (T1): the thread row, and each record with its id and digest but no
+  question, no result id (`done` becomes `done_unsaved`) and the reserved id
+  replaced by `erased_` + hex SHA-256 of it. A repeat is still `409
+  thread_closed`. At `expires_at` the closure goes like an expired thread.
+- **Record with no thread.** Removed with its result at `admitted_at` + 24 h.
+- **T2.** A unit with a record still `running` or `abandoned` is left for a
+  later pass until `contextfabric.RetentionSaveWindow` (1 hour) past the
+  record's run deadline. A save under a submission's reserved id
+  (`WithSubmissionReservedResultID`) whose record is gone is refused
+  (`ErrReservationGone`) and stores nothing, in the insert's own statement;
+  a stream's own reservation (no record) saves unbound as before.
+- **T3.** A result a live record names (answer reuse within one owner) stays
+  until the last naming unit goes.
+- **Order (lead ruling Q4).** In each unit the results and what is keyed by
+  them go first, then the records, then the thread row, in one transaction.
+  The drill reads every removed result from a second connection after each
+  statement and must see none served
+  (`TestRetentionDrillOnBackDatedRows`).
+- **Org purge.** Removes the whole set and the kept tables
+  (`TestOrgPurgeCoversTheRetentionBackingSet`).
+- **Telemetry.** One `context fabric retention sweep` line per pass that
+  removed, erased or fenced anything: counts only, never an id, a question or
+  an owner.

@@ -189,8 +189,10 @@ func (a *App) ContextFabricInvestigationHandler(investigator contextfabric.Inves
 			reservedResultID = a.eventStream.reserveID()
 		}
 		// With no submission (and no stream) the reserved id is "" and the
-		// context is the gated one unchanged.
-		reservedCtx := contextfabric.WithReservedResultID(gatedCtx, reservedResultID)
+		// context is the gated one unchanged. A named submission's
+		// reservation is marked as such: its save must find the record
+		// (CHAOS-11952, design §6 T2); a stream's own reservation has none.
+		reservedCtx := contextfabric.WithReservedResultIDFor(gatedCtx, reservedResultID, submission != nil && !submission.implicit)
 		investigateCtx, collectedSynthesisInput := contextfabric.WithSynthesisInputCollector(reservedCtx)
 		investigationStarted := a.now()
 		// The latency is recorded once, when the request ends, under the

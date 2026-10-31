@@ -24,7 +24,11 @@ type SubmissionStore interface {
 // store, so the memory and PostgreSQL adapters cannot disagree about a state
 // transition. newStore must return an EMPTY store per case (a fresh
 // database for PostgreSQL): the sweep case counts exactly.
-func RunSubmissionSuite(t *testing.T, newStore func(t *testing.T) SubmissionStore) {
+//
+// newStore receives the suite's clock: the stores' own reads (Get's
+// closed-record rule, CHAOS-11952: a record with no thread closes 24 hours
+// after its admission) must run on the same time as the records it admits.
+func RunSubmissionSuite(t *testing.T, newStore func(t *testing.T, clock func() time.Time) SubmissionStore) {
 	t.Helper()
 	now := time.Date(2026, 10, 29, 12, 0, 0, 0, time.UTC)
 	owner := storage.Principal{AuthenticationMethod: storage.AuthenticationMethodWebAssertion, Subject: "user-parity-owner", OrgID: "org-parity-submission"}
@@ -62,7 +66,7 @@ func RunSubmissionSuite(t *testing.T, newStore func(t *testing.T) SubmissionStor
 	}
 
 	t.Run("a repeat admission reads the first record", func(t *testing.T) {
-		store := newStore(t)
+		store := newStore(t, func() time.Time { return now })
 		first := admit(t, store, "repeat")
 		again := first
 		again.ReservedResultID = "result_parity_repeat_other"
@@ -74,7 +78,7 @@ func RunSubmissionSuite(t *testing.T, newStore func(t *testing.T) SubmissionStor
 	})
 
 	t.Run("the thread is stored and a repeat keeps the first", func(t *testing.T) {
-		store := newStore(t)
+		store := newStore(t, func() time.Time { return now })
 		key, err := contextfabric.SubmissionKeyFor(owner, "submission-parity-thread")
 		if err != nil {
 			t.Fatal(err)
@@ -104,7 +108,7 @@ func RunSubmissionSuite(t *testing.T, newStore func(t *testing.T) SubmissionStor
 	})
 
 	t.Run("save completes the record and binds the owner", func(t *testing.T) {
-		store := newStore(t)
+		store := newStore(t, func() time.Time { return now })
 		admission := admit(t, store, "save")
 		save(t, store, owner, admission.ReservedResultID)
 		record := state(t, store, admission.Key, now)
@@ -122,7 +126,7 @@ func RunSubmissionSuite(t *testing.T, newStore func(t *testing.T) SubmissionStor
 	})
 
 	t.Run("expiry abandons and a late save still binds and completes", func(t *testing.T) {
-		store := newStore(t)
+		store := newStore(t, func() time.Time { return now })
 		admission := admit(t, store, "expiry")
 		if record := state(t, store, admission.Key, now.Add(30*time.Second)); record.State != contextfabric.SubmissionRunning {
 			t.Fatalf("before expiry = %s", record.State)
@@ -142,7 +146,7 @@ func RunSubmissionSuite(t *testing.T, newStore func(t *testing.T) SubmissionStor
 	})
 
 	t.Run("finish: served stored, served unsaved, already final", func(t *testing.T) {
-		store := newStore(t)
+		store := newStore(t, func() time.Time { return now })
 		// A reused answer the owner's own earlier submission saved.
 		earlier := admit(t, store, "finish-earlier")
 		save(t, store, owner, earlier.ReservedResultID)
@@ -175,7 +179,7 @@ func RunSubmissionSuite(t *testing.T, newStore func(t *testing.T) SubmissionStor
 	// Round-2 F1: a done record names a result bound to the record's own
 	// owner, never another principal's result and never an unbound one.
 	t.Run("a record is done only with a result its owner owns", func(t *testing.T) {
-		store := newStore(t)
+		store := newStore(t, func() time.Time { return now })
 		strangerKey, err := contextfabric.SubmissionKeyFor(stranger, "submission-parity-strangers")
 		if err != nil {
 			t.Fatal(err)
@@ -206,7 +210,7 @@ func RunSubmissionSuite(t *testing.T, newStore func(t *testing.T) SubmissionStor
 	})
 
 	t.Run("unsaved mark: owner only, running only", func(t *testing.T) {
-		store := newStore(t)
+		store := newStore(t, func() time.Time { return now })
 		admission := admit(t, store, "mark")
 		if marked, err := store.MarkSubmissionUnsaved(context.Background(), stranger, admission.ReservedResultID, now); err != nil || marked {
 			t.Fatalf("stranger marked = %t err=%v", marked, err)
@@ -223,7 +227,7 @@ func RunSubmissionSuite(t *testing.T, newStore func(t *testing.T) SubmissionStor
 	})
 
 	t.Run("abandon leaves a final record final", func(t *testing.T) {
-		store := newStore(t)
+		store := newStore(t, func() time.Time { return now })
 		running := admit(t, store, "abandon-running")
 		if record, err := store.AbandonSubmission(context.Background(), running.Key, now); err != nil || record.State != contextfabric.SubmissionAbandoned {
 			t.Fatalf("abandon = %+v err=%v", record, err)
@@ -236,7 +240,7 @@ func RunSubmissionSuite(t *testing.T, newStore func(t *testing.T) SubmissionStor
 	})
 
 	t.Run("keys are per owner and unknown keys are not found", func(t *testing.T) {
-		store := newStore(t)
+		store := newStore(t, func() time.Time { return now })
 		admission := admit(t, store, "per-owner")
 		strangerKey, err := contextfabric.SubmissionKeyFor(stranger, admission.Key.SubmissionID)
 		if err != nil {
@@ -253,7 +257,7 @@ func RunSubmissionSuite(t *testing.T, newStore func(t *testing.T) SubmissionStor
 	})
 
 	t.Run("sweep counts what it changes", func(t *testing.T) {
-		store := newStore(t)
+		store := newStore(t, func() time.Time { return now })
 		expired := admit(t, store, "sweep-expired")
 		_ = admit(t, store, "sweep-live")
 		sweep, err := store.SweepSubmissions(context.Background(), now.Add(30*time.Second))

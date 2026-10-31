@@ -121,7 +121,9 @@ func TestSaveCompletesItsSubmissionAndBindsTheOwner(t *testing.T) {
 	ctx := context.Background()
 	_, store, other := twoSubmissionStores(t, ctx)
 	owner := submissionPrincipal("user-owner")
-	now := time.Date(2026, 10, 29, 12, 0, 0, 0, time.UTC)
+	// The admission is on the store's own clock (time.Now): a record with no
+	// thread closes 24 hours after its admission (CHAOS-11952).
+	now := time.Now().UTC().Truncate(time.Second)
 	admission := admissionFor(t, owner, "submission-save-0001", "result_save_bound_01", now)
 	_, ok, err := store.AdmitSubmission(ctx, admission, now)
 	require.NoError(t, err)
@@ -207,8 +209,8 @@ func TestARunningRecordWithAStoredResultIsCompletedOnReadAndBySweep(t *testing.T
 // runs the same table, so the adapters cannot disagree.
 func TestSubmissionParity(t *testing.T) {
 	ctx := context.Background()
-	paritytest.RunSubmissionSuite(t, func(t *testing.T) paritytest.SubmissionStore {
-		store, err := pginvestigation.NewStore(newInvestigationTestDatabase(t, ctx))
+	paritytest.RunSubmissionSuite(t, func(t *testing.T, clock func() time.Time) paritytest.SubmissionStore {
+		store, err := pginvestigation.NewStore(newInvestigationTestDatabase(t, ctx), pginvestigation.WithClock(clock))
 		require.NoError(t, err)
 		return store
 	})
@@ -223,6 +225,29 @@ func TestThreadParity(t *testing.T) {
 		store, err := pginvestigation.NewStore(db, pginvestigation.WithClock(clock))
 		require.NoError(t, err)
 		return seedableThreadStore{Store: store, db: db}
+	})
+}
+
+// TestRetentionReadParity runs the retention read rules (CHAOS-11952) on
+// PostgreSQL; memoryinvestigation runs the same table.
+func TestRetentionReadParity(t *testing.T) {
+	ctx := context.Background()
+	paritytest.RunRetentionReadSuite(t, func(t *testing.T, clock func() time.Time) paritytest.ThreadStore {
+		db := newInvestigationTestDatabase(t, ctx)
+		store, err := pginvestigation.NewStore(db, pginvestigation.WithClock(clock))
+		require.NoError(t, err)
+		return seedableThreadStore{Store: store, db: db}
+	})
+}
+
+// TestRetentionSweepParity runs the retention job's store table
+// (CHAOS-11952) on PostgreSQL; memoryinvestigation runs the same table.
+func TestRetentionSweepParity(t *testing.T) {
+	ctx := context.Background()
+	paritytest.RunRetentionSweepSuite(t, func(t *testing.T, clock func() time.Time) paritytest.RetentionStore {
+		store, err := pginvestigation.NewStore(newInvestigationTestDatabase(t, ctx), pginvestigation.WithClock(clock))
+		require.NoError(t, err)
+		return store
 	})
 }
 
@@ -243,6 +268,23 @@ func TestResultFeedbackParity(t *testing.T) {
 type seedableThreadStore struct {
 	*pginvestigation.Store
 	db *sql.DB
+}
+
+// RemoveSubmissionRecord deletes one submission record (its log goes by the
+// foreign key's cascade), as the retention job does
+// (paritytest.SubmissionRecordRemover).
+func (s seedableThreadStore) RemoveSubmissionRecord(key contextfabric.SubmissionKey) error {
+	result, err := s.db.ExecContext(context.Background(), `
+DELETE FROM acr.context_fabric_investigation_submissions
+ WHERE org_id = $1 AND owner_auth_method = $2 AND owner_subject = $3 AND submission_id = $4`,
+		key.OrgID, key.Owner.AuthenticationMethod, key.Owner.Subject, key.SubmissionID)
+	if err != nil {
+		return err
+	}
+	if rows, err := result.RowsAffected(); err != nil || rows != 1 {
+		return fmt.Errorf("remove submission record: %d rows, %v", rows, err)
+	}
+	return nil
 }
 
 // SeedThreadTurnCount sets one thread row's turn_count.
@@ -280,7 +322,9 @@ func TestFindReusableNeverOffersAnotherPrincipalsSubmissionResult(t *testing.T) 
 	owner := submissionPrincipal("user-reuse-owner")
 	stranger := submissionPrincipal("user-reuse-stranger")
 	setCheckpointWatermark(t, ctx, db, owner.OrgID, "linear", "wm-1")
-	now := time.Date(2026, 10, 29, 12, 0, 0, 0, time.UTC)
+	// The admission is on the store's own clock (time.Now): a record with no
+	// thread closes 24 hours after its admission (CHAOS-11952).
+	now := time.Now().UTC().Truncate(time.Second)
 
 	admission := admissionFor(t, owner, "submission-reuse-0001", "result_reuse_bound01", now)
 	_, ok, err := store.AdmitSubmission(ctx, admission, now)
@@ -379,7 +423,9 @@ func TestFindReusableOwnedOnlyOffersOnlyTheReadersBoundRows(t *testing.T) {
 	db, store, _ := twoSubmissionStores(t, ctx)
 	owner := submissionPrincipal("user-owned-only")
 	setCheckpointWatermark(t, ctx, db, owner.OrgID, "linear", "wm-1")
-	now := time.Date(2026, 10, 29, 12, 0, 0, 0, time.UTC)
+	// The admission is on the store's own clock (time.Now): a record with no
+	// thread closes 24 hours after its admission (CHAOS-11952).
+	now := time.Now().UTC().Truncate(time.Second)
 
 	unbound := reusableResult("result_owned_only_plain", owner.OrgID, "Is the plain owned-only question on track?")
 	saveWithReuseSnapshot(t, ctx, store, owner, unbound)

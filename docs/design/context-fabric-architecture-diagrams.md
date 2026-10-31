@@ -3686,6 +3686,36 @@ refuses a purged organization's write.
 `0065_context_fabric_result_feedback.sql`; parity table
 `paritytest.RunResultFeedbackSuite`.
 
+## 21 — Ask Dev retention (CHAOS-11952)
+
+The retention job removes the Ask Dev backing set (plan §2.6, D-22): a bounded
+loop in every `acr-api` replica, one transaction per unit under the
+organization's admission lock, results first. A unit is an expired thread
+(whole), a deleted thread (content now, the content-free closure record at
+expiry), or a submission with no thread (24 h after its admission). Kept: the
+usage aggregate, model receipts, results no record names (MCP, Workbench), a
+result a live record names (T3), and any unit with a record that can still
+save (T2). Design: `docs/design/ask-dev-conversation-contract.md` §12.
+
+```mermaid
+flowchart TD
+  T["acr-api tick (5 min; first pass at startup proves the DELETE grants)"] --> D{"due units, oldest first, at most 500"}
+  D -->|"thread: expires_at <= now"| X["expired thread"]
+  D -->|"thread: closed_at set, a record not erased"| C["deleted thread"]
+  D -->|"record: no thread, admitted_at + 24 h <= now"| L["record with no thread"]
+  X --> F{"a record running, or abandoned < 1 h past its deadline? (T2)"}
+  C --> F
+  L --> F
+  F -->|yes| K["left for a later pass (fenced)"]
+  F -->|no| R["one transaction, org admission lock:<br/>results not named by a live record (T3)<br/>+ selections and claims on them<br/>(feedback by cascade)"]
+  R --> X2["expired: records (event log by cascade), thread row"]
+  R --> C2["deleted: event logs; records erased<br/>(no question, no result id, reserved id = erased_ + sha256)"]
+  R --> L2["no thread: the record"]
+  X2 --> E["commit; one counts-only log line per pass"]
+  C2 --> E
+  L2 --> E
+```
+
 ## Sources
 
 - Live code via `codegraph_explore` / `rg` on `dev-health-acr`: `engine.go`

@@ -8,6 +8,10 @@ import (
 	"time"
 
 	"github.com/full-chaos/dev-health-acr/internal/auth"
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric/pginvestigation"
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric/pginvestigation/paritytest"
+	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 	"github.com/full-chaos/dev-health-acr/internal/dbacl"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
 	storagepostgres "github.com/full-chaos/dev-health-acr/internal/storage/postgres"
@@ -146,4 +150,70 @@ func TestRuntimeRoleCanRunTheBrowserFamilyPurge(t *testing.T) {
 	require.ErrorAs(t, err, &class)
 	require.Equal(t, "insufficient_privilege", class.Class)
 	require.Equal(t, "client_credentials", class.Table)
+}
+
+// CHAOS-11952: the Ask Dev retention job, as a runtime role granted exactly
+// the declaration, removes an expired thread's whole backing set (the
+// cascades to the event log and the feedback run as the owner), erases a
+// deleted thread's records and removes a record with no thread. Without the
+// DELETE grant on the results the same pass is refused there (SQLSTATE 42501
+// on that table): the grant is what lets the job run, and a missing one fails
+// the first pass at startup.
+func TestRuntimeRoleCanRunTheAskDevRetention(t *testing.T) {
+	ctx := context.Background()
+	start := time.Date(2026, 10, 1, 9, 0, 0, 0, time.UTC)
+	seedAndSweep := func(db *sql.DB) (contextfabric.RetentionSweep, error) {
+		clock := start
+		store, err := pginvestigation.NewStore(db, pginvestigation.WithClock(func() time.Time { return clock }))
+		require.NoError(t, err)
+		owner := storage.Principal{AuthenticationMethod: storage.AuthenticationMethodWebAssertion, Subject: "user-retention-role", OrgID: "org-retention-role"}
+		month := contractsv1.ContextFabricThreadRetentionMonth
+		for _, turn := range []struct {
+			name, thread string
+			retention    *contractsv1.ContextFabricThreadRetentionDays
+		}{{"expired", "thread-role-expired", nil}, {"deleted", "thread-role-deleted", &month}, {"lone", "", nil}} {
+			key, err := contextfabric.SubmissionKeyFor(owner, "submission-role-"+turn.name)
+			require.NoError(t, err)
+			admission := contextfabric.SubmissionAdmission{Key: key, RequestDigest: "sha256:" + strings.Repeat("0", 64), ReservedResultID: "result_role_" + turn.name,
+				ThreadID: turn.thread, ExpiresAt: clock.Add(time.Minute), ThreadRetention: turn.retention}
+			if turn.thread != "" {
+				admission.Question = "role question " + turn.name
+			}
+			_, admitted, err := store.AdmitSubmission(ctx, admission, clock)
+			require.NoError(t, err)
+			require.True(t, admitted)
+			require.NoError(t, store.Save(contextfabric.WithSubmissionReservedResultID(ctx, admission.ReservedResultID), owner, paritytest.ValidResult(admission.ReservedResultID, "role "+turn.name), nil, nil,
+				contextfabric.TimeAxisKeyFor(contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent}),
+				contextfabric.ReuseRetrievalIdentity{}, contextfabric.ReusePromptVersions{}, contextfabric.ReuseVersionAuthorities{}, 0, "",
+				contextfabric.SemanticStateAbsent(contextfabric.SemanticStateAbsenceTurnEndedBeforeInterpretation)))
+			appended, err := store.AppendRunEvent(ctx, contextfabric.RunKey{OrgID: owner.OrgID, ReservedResultID: admission.ReservedResultID},
+				contextfabric.RunEvent{Seq: 1, Type: contractsv1.ContextFabricInvestigationEventResult, Terminal: &contextfabric.RunTerminal{Kind: contextfabric.RunTerminalResult, ResultID: admission.ReservedResultID}}, 0, clock)
+			require.NoError(t, err)
+			require.True(t, appended)
+			_, err = store.SetResultFeedback(ctx, owner, admission.ReservedResultID, contractsv1.ContextFabricResultFeedbackYes, contractsv1.ContextFabricResultFeedbackNo, clock)
+			require.NoError(t, err)
+		}
+		deletedKey, err := contextfabric.ThreadKeyFor(owner, "thread-role-deleted")
+		require.NoError(t, err)
+		closed, err := store.CloseThread(ctx, deletedKey, clock)
+		require.NoError(t, err)
+		require.True(t, closed)
+		clock = start.Add(25 * time.Hour)
+		return store.SweepRetention(ctx, clock, 0)
+	}
+
+	granted := newRuntimeRoleDatabase(t, ctx, runtimeRoleOptions{Role: "acr_retention_on_test"})
+	sweep, err := seedAndSweep(granted.Runtime)
+	require.NoError(t, err, "the retention pass as the runtime role")
+	require.Equal(t, contextfabric.RetentionSweep{ThreadsRemoved: 1, ThreadsErased: 1, RecordsRemoved: 1, ResultsRemoved: 3}, sweep)
+
+	revoked := newRuntimeRoleDatabase(t, ctx, runtimeRoleOptions{Role: "acr_retention_off_test"})
+	_, err = revoked.Owner.ExecContext(ctx, `REVOKE DELETE ON acr.context_fabric_investigation_results FROM `+dbacl.QuoteIdent(revoked.Role))
+	require.NoError(t, err)
+	_, err = seedAndSweep(revoked.Runtime)
+	require.Error(t, err)
+	// The investigation store names the refusal by its SQLSTATE and table
+	// (sanitizeError keeps the server's message, never a DSN).
+	require.Contains(t, err.Error(), "permission denied for table context_fabric_investigation_results")
+	require.Contains(t, err.Error(), "SQLSTATE 42501")
 }

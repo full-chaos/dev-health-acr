@@ -227,8 +227,12 @@ func (s *floodingFeedbackStore) Get(ctx context.Context, principal storage.Princ
 // text: a result the read by id withholds for its flooded limitations gets
 // the read by id's own 404 on GET and POST, and the POST writes nothing.
 func TestResultFeedbackRoutes_aFloodWithheldResultTakesNoFeedback(t *testing.T) {
-	store := &floodingFeedbackStore{Store: memoryinvestigation.NewStore()}
+	// The store reads on the harness clock: a record with no thread closes
+	// 24 hours after its admission (CHAOS-11952).
+	var clock func() time.Time
+	store := &floodingFeedbackStore{Store: memoryinvestigation.NewStoreWithClock(func() time.Time { return clock() })}
 	h := newSubmissionHarness(t, store)
+	clock = h.clock.Now
 	resultID := servedResultID(t, h.post(0, h.tokenA, "submission-11950-0006", "Which repositories changed?"))
 	readFeedbackBody(t, h.feedbackCall(http.MethodPost, h.tokenA, resultID, feedbackRequestBody("yes", "yes")))
 	store.flooded.Store(resultID)

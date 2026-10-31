@@ -226,6 +226,13 @@ func (s *Store) Save(ctx context.Context, principal storage.Principal, result co
 		return nil
 	}
 
+	// CHAOS-11952 (design §6 T2): a reserved save whose record is gone (the
+	// retention job removed it) is refused before anything is written, the
+	// rule pginvestigation's insert holds in its own statement.
+	if contextfabric.IsReservedSave(ctx, resultID) && !s.reservationHeldLocked(principal, orgID, resultID) {
+		return contextfabric.ErrReservationGone
+	}
+
 	// CHAOS-3927 P4 (design brief §2.1): every ConfirmedStructure entry
 	// that redeemed a receipt (Disposition=applied, Source=receipt) must
 	// win its own (org, prior_result_id, member) claim before this result

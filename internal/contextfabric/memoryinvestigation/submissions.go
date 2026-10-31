@@ -47,6 +47,18 @@ func validSubmissionKey(key contextfabric.SubmissionKey) error {
 	return nil
 }
 
+// reservationHeldLocked: a record of orgID whose reserved result id is
+// resultID exists and is owned by principal (the reservation a reserved save
+// completes). Callers hold mu.
+func (s *Store) reservationHeldLocked(principal storage.Principal, orgID, resultID string) bool {
+	key, found := s.reserved[reservedResultKey{orgID: orgID, resultID: resultID}]
+	if !found {
+		return false
+	}
+	record, ok := s.submissions[key]
+	return ok && record.Key.Owner.Is(principal)
+}
+
 // completeSubmissionLocked is Save's completion: the record whose reserved
 // result id is resultID and whose owner is principal binds the saved row to
 // that owner, whatever its state, and a running or abandoned one becomes

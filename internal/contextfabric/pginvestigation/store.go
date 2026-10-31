@@ -78,6 +78,9 @@ type Store struct {
 	// and the turns read. Tests set it (export_test.go) to commit an
 	// admission there; nil in production.
 	afterThreadSummaryRead func()
+	// retentionStepHook runs after each statement of a retention unit's
+	// transaction (CHAOS-11952); test builds only (SetRetentionStepHook).
+	retentionStepHook func(step string)
 }
 
 // StoreOption configures optional Store behavior. See WithAnswerReuse.
@@ -318,6 +321,10 @@ func (s *Store) Save(ctx context.Context, principal storage.Principal, result co
 	// record: the columns are NOT NULL and never empty).
 	owner := submissionOwnerArgsOf(principal)
 	insertArgs = append(insertArgs, owner.method, owner.subject, owner.user, owner.surface)
+	// CHAOS-11952 (design §6 T2): a reserved save ($34) inserts only when its
+	// record still holds the reservation; the statement says whether it did.
+	reservedSave := contextfabric.IsReservedSave(ctx, resultID)
+	insertArgs = append(insertArgs, reservedSave)
 	// CHAOS-11912 (plan §2.7.5, atomic completion): ONE statement saves the
 	// result and completes the submission that reserved its id -- the
 	// running record whose reserved_result_id is this result's id and whose
@@ -346,9 +353,10 @@ WITH reservation AS (
 ), inserted AS (
 INSERT INTO acr.context_fabric_investigation_results
     (result_id, org_id, payload, generated_at, question_hash, contract_version, projection_version, model_identity, source_watermarks, invalidation_epoch, time_axis_key, embed_retrieval_identity, retrieval_policy_version, interpretation_prompt_version, synthesis_prompt_version, query_version, canonical_service_version, model_output_schema_version, identity_normalization_version, graph_epoch, window_inference_version, commit_gate_version, ranking_formula_version, question_family_version, ownership_routing_version, parent_result_id, semantic_state, grant_digest, graph_walk_version, submission_owner_auth_method, submission_owner_subject, submission_owner_user_id, submission_owner_surface)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29,
+SELECT $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29,
         (SELECT owner_auth_method FROM reservation), (SELECT owner_subject FROM reservation),
-        (SELECT owner_user_id FROM reservation), (SELECT owner_surface FROM reservation))
+        (SELECT owner_user_id FROM reservation), (SELECT owner_surface FROM reservation)
+ WHERE NOT $34::boolean OR EXISTS (SELECT 1 FROM reservation)
 ON CONFLICT (result_id) DO NOTHING
 RETURNING 1
 ), completed AS (
@@ -360,7 +368,7 @@ RETURNING 1
        AND EXISTS (SELECT 1 FROM inserted)
     RETURNING 1
 )
-SELECT count(*) FROM inserted`
+SELECT (SELECT count(*) FROM inserted), (NOT $34::boolean OR EXISTS (SELECT 1 FROM reservation))`
 
 	// CHAOS-3927 P4 (design brief §2.1): claims is empty for the
 	// overwhelming majority of Saves (no ConfirmedStructure entry redeemed
@@ -373,11 +381,15 @@ SELECT count(*) FROM inserted`
 	claims := structureSupersessionClaims(result)
 	if len(claims) == 0 {
 		var rows int64
-		if err := s.db.QueryRowContext(ctx, insertResultSQL, insertArgs...).Scan(&rows); err != nil {
+		var held bool
+		if err := s.db.QueryRowContext(ctx, insertResultSQL, insertArgs...).Scan(&rows, &held); err != nil {
 			return fmt.Errorf("save investigation result: %w", sanitizeError(err))
 		}
 		if rows == 1 {
 			return nil
+		}
+		if err := s.refuseReservationGone(ctx, orgID, resultID, held); err != nil {
+			return err
 		}
 		if err := s.verifyIdempotentReplay(ctx, orgID, resultID, payload, semantic.State); err != nil {
 			return err
@@ -392,8 +404,21 @@ SELECT count(*) FROM inserted`
 	defer func() { _ = tx.Rollback() }() // no-op once Commit succeeds below
 
 	var rows int64
-	if err := tx.QueryRowContext(ctx, insertResultSQL, insertArgs...).Scan(&rows); err != nil {
+	var held bool
+	if err := tx.QueryRowContext(ctx, insertResultSQL, insertArgs...).Scan(&rows, &held); err != nil {
 		return fmt.Errorf("save investigation result: %w", sanitizeError(err))
+	}
+	if rows != 1 && !held {
+		if rollbackErr := tx.Rollback(); rollbackErr != nil {
+			return fmt.Errorf("pginvestigation: rollback refused reserved save: %w", sanitizeError(rollbackErr))
+		}
+		if err := s.refuseReservationGone(ctx, orgID, resultID, held); err != nil {
+			return err
+		}
+		if err := s.verifyIdempotentReplay(ctx, orgID, resultID, payload, semantic.State); err != nil {
+			return err
+		}
+		return s.completeReplayedSubmission(ctx, orgID, resultID, owner)
 	}
 	if rows != 1 {
 		// A row already existed for this result_id -- an idempotent
@@ -446,6 +471,26 @@ ON CONFLICT (org_id, prior_result_id, member) DO NOTHING`,
 	}
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("pginvestigation: commit investigation result with structure claims: %w", sanitizeError(err))
+	}
+	return nil
+}
+
+// refuseReservationGone is the refusal of a reserved save whose record is
+// gone (CHAOS-11952, design §6 T2): the insert skipped the row because no
+// record holds the reservation. When the result row already exists (a
+// replay of a result the job kept because a live record names it, T3), the
+// caller goes on to the idempotent replay check, as the memory store does;
+// otherwise nothing is stored and the save is refused.
+func (s *Store) refuseReservationGone(ctx context.Context, orgID, resultID string, held bool) error {
+	if held {
+		return nil
+	}
+	var exists bool
+	if err := s.db.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM acr.context_fabric_investigation_results WHERE result_id = $1)`, resultID).Scan(&exists); err != nil {
+		return fmt.Errorf("save investigation result: read the refused reserved id: %w", sanitizeError(err))
+	}
+	if !exists {
+		return contextfabric.ErrReservationGone
 	}
 	return nil
 }

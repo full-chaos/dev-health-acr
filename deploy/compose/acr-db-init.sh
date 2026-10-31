@@ -263,9 +263,9 @@ GRANT SELECT, INSERT, UPDATE ON TABLE acr.browser_refresh_tokens TO :"runtime_us
 REVOKE SELECT, INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER ON TABLE acr.web_assertion_replays FROM :"runtime_user";
 GRANT SELECT, INSERT, DELETE ON TABLE acr.web_assertion_replays TO :"runtime_user";
 
--- insert-only capture sink: internal/contextfabric/pgclarification/sink.go:387
+-- INSERT the capture sink: internal/contextfabric/pgclarification/sink.go:387; SELECT and DELETE the Ask Dev retention job's removal of the selections made on a removed result (CHAOS-11952): internal/contextfabric/pginvestigation/retention.go removeRetainedResults
 REVOKE SELECT, INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER ON TABLE acr.context_fabric_clarification_selections FROM :"runtime_user";
-GRANT INSERT ON TABLE acr.context_fabric_clarification_selections TO :"runtime_user";
+GRANT SELECT, INSERT, DELETE ON TABLE acr.context_fabric_clarification_selections TO :"runtime_user";
 
 -- SELECT internal/contextfabric/pgprojection/checkpoints.go:38, INSERT checkpoints.go:99, UPDATE checkpoints.go:80, DELETE checkpoints.go:258
 REVOKE SELECT, INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER ON TABLE acr.context_fabric_projection_checkpoints FROM :"runtime_user";
@@ -279,33 +279,33 @@ GRANT SELECT, INSERT, DELETE ON TABLE acr.context_fabric_projection_rebuild_mark
 REVOKE SELECT, INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER ON TABLE acr.context_fabric_org_purge_markers FROM :"runtime_user";
 GRANT SELECT, DELETE ON TABLE acr.context_fabric_org_purge_markers TO :"runtime_user";
 
--- SELECT internal/contextfabric/pginvestigation/store.go:395, INSERT store.go:284
+-- SELECT internal/contextfabric/pginvestigation/store.go:395, INSERT store.go:284; DELETE the Ask Dev retention job (CHAOS-11952): pginvestigation/retention.go removeRetainedResults (feedback goes by cascade, as the owner)
 REVOKE SELECT, INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER ON TABLE acr.context_fabric_investigation_results FROM :"runtime_user";
-GRANT SELECT, INSERT ON TABLE acr.context_fabric_investigation_results TO :"runtime_user";
+GRANT SELECT, INSERT, DELETE ON TABLE acr.context_fabric_investigation_results TO :"runtime_user";
 
 -- INSERT ... ON CONFLICT DO UPDATE internal/contextfabric/pginvestigation/submissions.go AdmitSubmission (the monthly allowance), SELECT submissions.go ReadUsageMonthly
 REVOKE SELECT, INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER ON TABLE acr.context_fabric_usage_monthly FROM :"runtime_user";
 GRANT SELECT, INSERT, UPDATE ON TABLE acr.context_fabric_usage_monthly TO :"runtime_user";
 
--- SELECT internal/contextfabric/pginvestigation/feedback.go GetResultFeedback, INSERT ... ON CONFLICT DO UPDATE feedback.go SetResultFeedback
+-- SELECT internal/contextfabric/pginvestigation/feedback.go GetResultFeedback, INSERT ... ON CONFLICT DO UPDATE feedback.go SetResultFeedback; removed with its result by cascade (CHAOS-11952 retention), which runs as the table owner
 REVOKE SELECT, INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER ON TABLE acr.context_fabric_result_feedback FROM :"runtime_user";
 GRANT SELECT, INSERT, UPDATE ON TABLE acr.context_fabric_result_feedback TO :"runtime_user";
 
--- INSERT ... ON CONFLICT DO UPDATE internal/contextfabric/pginvestigation/submissions.go AdmitSubmission (a thread turn), SELECT threads.go ListThreads and GetThread, UPDATE threads.go CloseThread
+-- INSERT ... ON CONFLICT DO UPDATE internal/contextfabric/pginvestigation/submissions.go AdmitSubmission (a thread turn), SELECT threads.go ListThreads and GetThread, UPDATE threads.go CloseThread; SELECT ... FOR UPDATE and DELETE the Ask Dev retention job (CHAOS-11952): retention.go sweepRetentionThread
 REVOKE SELECT, INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER ON TABLE acr.context_fabric_threads FROM :"runtime_user";
-GRANT SELECT, INSERT, UPDATE ON TABLE acr.context_fabric_threads TO :"runtime_user";
+GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE acr.context_fabric_threads TO :"runtime_user";
 
 -- CHAOS-11949: INSERT internal/contextfabric/pginvestigation/runs.go AppendRunEvent and reapLostRun (the run_lost terminal), DELETE runs.go AppendRunEvent (the per-run cap), SELECT runs.go ReadRunEvents and RunTerminalOf
 REVOKE SELECT, INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER ON TABLE acr.context_fabric_investigation_run_events FROM :"runtime_user";
 GRANT SELECT, INSERT, DELETE ON TABLE acr.context_fabric_investigation_run_events TO :"runtime_user";
 
--- INSERT internal/contextfabric/pginvestigation/submissions.go AdmitSubmission, SELECT submissions.go GetSubmission, UPDATE submissions.go FinishSubmission and store.go Save's completion
+-- INSERT internal/contextfabric/pginvestigation/submissions.go AdmitSubmission, SELECT submissions.go GetSubmission, UPDATE submissions.go FinishSubmission and store.go Save's completion; UPDATE (the erase) and DELETE the Ask Dev retention job (CHAOS-11952): retention.go sweepRetentionThread and sweepRetentionRecord (event logs go by cascade, as the owner)
 REVOKE SELECT, INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER ON TABLE acr.context_fabric_investigation_submissions FROM :"runtime_user";
-GRANT SELECT, INSERT, UPDATE ON TABLE acr.context_fabric_investigation_submissions TO :"runtime_user";
+GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE acr.context_fabric_investigation_submissions TO :"runtime_user";
 
--- SELECT internal/contextfabric/pginvestigation/store.go:491, INSERT store.go:345
+-- SELECT internal/contextfabric/pginvestigation/store.go:491, INSERT store.go:345; DELETE the Ask Dev retention job's removal of the claims on a removed result (CHAOS-11952): retention.go removeRetainedResults
 REVOKE SELECT, INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER ON TABLE acr.context_fabric_structure_supersession_claims FROM :"runtime_user";
-GRANT SELECT, INSERT ON TABLE acr.context_fabric_structure_supersession_claims TO :"runtime_user";
+GRANT SELECT, INSERT, DELETE ON TABLE acr.context_fabric_structure_supersession_claims TO :"runtime_user";
 
 -- SELECT internal/contextfabric/pginvestigation/store.go:748, INSERT and upsert store.go:1290
 REVOKE SELECT, INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER ON TABLE acr.context_fabric_reuse_invalidations FROM :"runtime_user";
@@ -332,9 +332,9 @@ GRANT SELECT, INSERT, UPDATE ON TABLE acr.context_fabric_graph_epoch_retirements
 REVOKE SELECT, INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER ON TABLE acr.context_fabric_graph_build_source_progress FROM :"runtime_user";
 GRANT SELECT, INSERT, UPDATE ON TABLE acr.context_fabric_graph_build_source_progress TO :"runtime_user";
 
--- INSERT internal/contextfabric/pgstructureselection/sink.go:423, SELECT structurepriorcuration/curate.go:104
+-- INSERT internal/contextfabric/pgstructureselection/sink.go:423, SELECT structurepriorcuration/curate.go:104; DELETE the Ask Dev retention job's removal of the selections made on a removed result (CHAOS-11952): pginvestigation/retention.go removeRetainedResults
 REVOKE SELECT, INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER ON TABLE acr.context_fabric_structure_selections FROM :"runtime_user";
-GRANT SELECT, INSERT ON TABLE acr.context_fabric_structure_selections TO :"runtime_user";
+GRANT SELECT, INSERT, DELETE ON TABLE acr.context_fabric_structure_selections TO :"runtime_user";
 
 -- SELECT internal/contextfabric/pgstructurepriors/store.go:130, INSERT store.go:221
 REVOKE SELECT, INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER ON TABLE acr.context_fabric_structure_priors FROM :"runtime_user";
