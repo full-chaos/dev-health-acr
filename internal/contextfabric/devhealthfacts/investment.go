@@ -1128,7 +1128,7 @@ func (p *InvestmentProvider) readProjectNativeThemeMix(ctx context.Context, orgI
 			ownGated[key] = int64(gated)
 		}
 	}
-	stampProjectOwnWorkUnits(*facts, bySubject, ownUnits, ownGated)
+	stampAndLogProjectOwnWorkUnits(ctx, *facts, bySubject, ownUnits, ownGated)
 	return rowCount, cutAfter, nil
 }
 
@@ -1138,8 +1138,9 @@ func (p *InvestmentProvider) readProjectNativeThemeMix(ctx context.Context, orgI
 // keep the roll-up (CHAOS-5935). An evidence-gated unit counts (CHAOS-12181),
 // and project_own_uncategorized_unit_count says how many of the own units are
 // gated. ownUnits and ownGated are keyed by project key, as bySubject is; a
-// project absent from them has none.
-func stampProjectOwnWorkUnits(facts []contextfabric.CanonicalFact, bySubject map[string]contextfabric.SubjectRef, ownUnits, ownGated map[string]int64) {
+// project absent from them has none. It returns how many roll-up facts it
+// stamped and the own and gated unit totals over them, for the Info line.
+func stampProjectOwnWorkUnits(facts []contextfabric.CanonicalFact, bySubject map[string]contextfabric.SubjectRef, ownUnits, ownGated map[string]int64) (rollups int, own, gated int64) {
 	for key, subject := range bySubject {
 		for i := range facts {
 			fact := &facts[i]
@@ -1149,9 +1150,24 @@ func stampProjectOwnWorkUnits(facts []contextfabric.CanonicalFact, bySubject map
 			if source, ok := fact.Fields[contextfabric.FactFieldInvestmentMixSource]; ok && source.String != nil && *source.String == contextfabric.InvestmentMixSourceOwningTeamRollup {
 				fact.Fields[investmentProjectOwnWorkUnitCountField] = contextfabric.IntegerFactValue(ownUnits[key])
 				fact.Fields[investmentProjectOwnUncategorizedUnitCountField] = contextfabric.IntegerFactValue(ownGated[key])
+				rollups++
+				own += ownUnits[key]
+				gated += ownGated[key]
 			}
 		}
 	}
+	return rollups, own, gated
+}
+
+// stampAndLogProjectOwnWorkUnits stamps the roll-up facts and writes the
+// devhealthfacts.project_owning_team_rollup Info line when it stamped any:
+// counts only, so a gated-unit undercount shows at Info (CHAOS-12181).
+func stampAndLogProjectOwnWorkUnits(ctx context.Context, facts []contextfabric.CanonicalFact, bySubject map[string]contextfabric.SubjectRef, ownUnits, ownGated map[string]int64) {
+	rollups, own, gated := stampProjectOwnWorkUnits(facts, bySubject, ownUnits, ownGated)
+	if rollups == 0 {
+		return
+	}
+	slog.InfoContext(ctx, "devhealthfacts.project_owning_team_rollup", append([]any{"rollup_projects", rollups, "project_own_work_unit_count", own, "project_own_uncategorized_unit_count", gated}, requestIDLogAttrs(ctx)...)...)
 }
 
 // investmentProjectOwnWorkUnitCountField is the project's own work units in
