@@ -257,7 +257,8 @@ func TestEveryProtectedRouteRereadsAccessForEveryUserClass(t *testing.T) {
 	}
 }
 
-// Operator, workload, legacy credentials and web assertions carry no user:
+// Org-bearer, operator, workload, legacy credentials and web assertions carry
+// no user (design §2.5):
 // the read is never made for them, and their behaviour is unchanged.
 func TestTheAccessReadIsNotMadeForNonUserCredentials(t *testing.T) {
 	harness, _ := newMemorySubmissionHarness(t, 1)
@@ -265,7 +266,7 @@ func TestTheAccessReadIsNotMadeForNonUserCredentials(t *testing.T) {
 	reader := &fakePrincipalAccess{}
 	reader.set(entitlements.PrincipalAccess{}, errors.New("must not be read"))
 	app.runtime.PrincipalAccess = reader
-	for _, class := range []storage.CredentialClientClass{storage.CredentialClientClassOperator, storage.CredentialClientClassWorkload, ""} {
+	for _, class := range []storage.CredentialClientClass{storage.CredentialClientClassOrgBearer, storage.CredentialClientClassOperator, storage.CredentialClientClassWorkload, ""} {
 		authenticateAsCredential(t, app, class, []string{"*"})
 		for _, route := range protectedRoutes() {
 			recorder, code := serveProtected(app, harness.tokenA, route, nil)

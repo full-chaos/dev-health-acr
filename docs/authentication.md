@@ -575,8 +575,8 @@ entitlement client as the reader, and refuses to start when the entitlement
 provider serves no principal access read (fail closed). Local entitlement mode
 (development and test only) has no reader: the re-check is off and acr-api logs
 a Warn at startup.
-Operator, workload and legacy credentials and web assertions carry no user and
-are not re-checked.
+Org-bearer, operator, workload and legacy credentials and web assertions carry
+no user and are not re-checked.
 
 ## Rate limiting
 
