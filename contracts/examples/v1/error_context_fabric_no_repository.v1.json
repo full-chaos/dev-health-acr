@@ -1,0 +1,1 @@
+{"schema_version":"error.v1","request_id":"req_00000000000000000000000000011912","error":{"code":"no_repository","message":"No repository is in scope for this credential","http_status":409,"retryable":false}}
