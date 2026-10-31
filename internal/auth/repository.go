@@ -5,6 +5,7 @@ import (
 	"sort"
 	"strings"
 
+	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 	"github.com/full-chaos/dev-health-acr/internal/reposlug"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
 )
@@ -19,6 +20,13 @@ func NormalizeRepositoryScopes(scopes []string) ([]string, error) {
 	result := make([]string, 0, len(scopes))
 	for _, raw := range scopes {
 		scope := strings.ToLower(strings.TrimSpace(raw))
+		// CHAOS-12298: the reserved prefix is acr's own (a project-only
+		// principal's repository list), never a credential's scope. Refused
+		// by name, before the slug grammar, so it stays refused if the
+		// grammar ever widens.
+		if contractsv1.IsReservedRepositoryScope(scope) {
+			return nil, fmt.Errorf("%w: reserved repository scope prefix %q", ErrInvalidCredential, raw)
+		}
 		if !validRepositoryScope(scope) {
 			return nil, fmt.Errorf("%w: invalid repository scope %q", ErrInvalidCredential, raw)
 		}
@@ -50,6 +58,9 @@ func RepositoryAllowed(scopes []string, slug string) bool {
 	for _, raw := range scopes {
 		scope := strings.ToLower(strings.TrimSpace(raw))
 		switch {
+		case contractsv1.IsReservedRepositoryScope(scope):
+			// CHAOS-12298: a reserved value is never a grant.
+			continue
 		case scope == "*":
 			return true
 		case scope == normalized:

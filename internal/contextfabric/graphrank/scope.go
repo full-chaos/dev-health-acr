@@ -4,6 +4,7 @@ import (
 	"strings"
 
 	"github.com/full-chaos/dev-health-acr/internal/auth"
+	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 )
 
 // ScopeMatch reports whether a node/edge's decoded authorization list (a
@@ -27,8 +28,16 @@ import (
 // write) stays in the backend package; entries reaching this function are
 // assumed to already be the backend's best-effort decoded list, which may
 // legitimately be empty (denies, per the caller loop below).
+//
+// A reserved value (contractsv1.ReservedRepositoryScopePrefix, CHAOS-12298) is
+// never a match, whatever the entries hold: a project-only principal's
+// repository list holds one, and the raw fallback of exactScopeMatch would
+// otherwise match a node that carried the same value.
 func ScopeMatch(entries []string, value string, kind ScopeValueKind) bool {
 	value = strings.TrimSpace(value)
+	if contractsv1.IsReservedRepositoryScope(value) {
+		return false
+	}
 	if value == "*" {
 		return true
 	}
