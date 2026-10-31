@@ -12,8 +12,8 @@ type authWorkloadURLCell struct {
 	plainHTTP                   bool
 }
 
-// authWorkloadURLCells is the one corpus both paths are held to: this Go validator and the Helm check
-// (scripts/deploy/test-helm.sh scenario auth-workload-client-url-corpus reads the same file).
+// authWorkloadURLCells is the corpus of the one validator (also decided at prepareServer in cmd/acr-api; the Helm
+// scenario auth-workload-client-presence-only reads its malformed cells to show the chart renders them).
 func authWorkloadURLCells(t *testing.T) []authWorkloadURLCell {
 	t.Helper()
 	file, err := os.Open("testdata/auth_workload_urls.tsv")

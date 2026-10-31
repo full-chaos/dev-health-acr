@@ -651,63 +651,22 @@ credentials) is on.
 
 {{/*
 CHAOS-11195: acr-api's workload-token exchange client. The subject token is a projected ServiceAccount token
-mounted here (read-only, no subPath). The exchange URL is auth-service's origin (https, or http with
-allowPlainHTTP for a cluster-internal Service); the issuer is auth-service's https token issuer URL, which
-every workload token must carry. The exchange audience is not a value: ops reviews against one audience.
+mounted here (read-only, no subPath). The exchange URL is auth-service's origin and the issuer is auth-service's https token issuer URL, which
+every workload token must carry; acr-api checks both at start. The exchange audience is not a value: ops reviews against one audience.
 */}}
 {{- define "acr.authWorkloadMountPath" -}}/var/run/secrets/dev-health/auth-workload{{- end -}}
 
 {{- define "acr.validateAuthWorkloadClient" -}}
 {{- /*
-The URL rules of the Go validator (internal/config/auth_workload_url.go), held to one corpus
-(internal/config/testdata/auth_workload_urls.tsv; test-helm.sh scenario auth-workload-client-url-corpus).
-A DNS host has labels of 1 to 63 letters, digits and hyphens (none starting or ending with a hyphen, none empty, no
-trailing dot) and at most 253 characters; an IPv4 literal is accepted; an IPv6 literal only for exchangeURL. The port is
-1 to 65535. No userinfo, query or fragment. exchangeURL: https, or http with allowPlainHTTP, no path but "/".
-issuer: https, lower-case host, at most eight path segments.
+Presence only. The URL rules (scheme, host labels, port range, no userinfo, query or fragment) live in one place, the Go
+validator that acr-api runs at start (internal/config/auth_workload_url.go): a chart pattern drifts from it and refuses
+values the client accepts (a trailing slash, an IPv6 literal). A malformed value renders and stops the start.
 */ -}}
-{{- $c := .Values.authWorkloadClient -}}
-{{- $label := "[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?" -}}
-{{- $lowerLabel := "[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?" -}}
-{{- $octet := "(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9]?[0-9])" -}}
-{{- $ipv4 := printf "%s(\\.%s){3}" $octet $octet -}}
-{{- $h := "[0-9a-fA-F]{1,4}" -}}
-{{- $ipv6 := printf "\\[(%s)\\]" (list (printf "(%s:){7}%s" $h $h) (printf "(%s:){1,7}:" $h) (printf "(%s:){1,6}:%s" $h $h) (printf "(%s:){1,5}(:%s){1,2}" $h $h) (printf "(%s:){1,4}(:%s){1,3}" $h $h) (printf "(%s:){1,3}(:%s){1,4}" $h $h) (printf "(%s:){1,2}(:%s){1,5}" $h $h) (printf "%s:((:%s){1,6})" $h $h) (printf ":((:%s){1,7}|:)" $h) | join "|") -}}
-{{- $dns := printf "%s(\\.%s)*" $label $label -}}
-{{- $lowerDns := printf "%s(\\.%s)*" $lowerLabel $lowerLabel -}}
-{{- if not $c.exchangeURL -}}
+{{- if not .Values.authWorkloadClient.exchangeURL -}}
 {{- fail "auth-workload-client: authWorkloadClient.exchangeURL is required when authWorkloadClient.enabled" -}}
 {{- end -}}
-{{- $exchange := printf "^(https?)://(%s|%s|%s)(:[0-9]{1,5})?/?$" $ipv4 $ipv6 $dns -}}
-{{- if not (regexMatch $exchange $c.exchangeURL) -}}
-{{- fail "auth-workload-client: authWorkloadClient.exchangeURL must be a scheme (https, or http with allowPlainHTTP), a host and a port: a DNS name (labels of 1 to 63 letters, digits and hyphens, none empty, no trailing dot), an IPv4 or a bracketed IPv6 address, and a port from 1 to 65535" -}}
-{{- end -}}
-{{- if and (hasPrefix "http://" $c.exchangeURL) (not $c.allowPlainHTTP) -}}
-{{- fail "auth-workload-client: authWorkloadClient.exchangeURL is http: set authWorkloadClient.allowPlainHTTP for a cluster-internal Service" -}}
-{{- end -}}
-{{- include "acr.authWorkloadURLHostPort" (dict "key" "exchangeURL" "url" $c.exchangeURL) -}}
-{{- if not $c.issuer -}}
+{{- if not .Values.authWorkloadClient.issuer -}}
 {{- fail "auth-workload-client: authWorkloadClient.issuer is required when authWorkloadClient.enabled" -}}
-{{- end -}}
-{{- $issuer := printf "^https://(%s|%s)(:[0-9]{1,5})?(/[A-Za-z0-9_~-][A-Za-z0-9._~-]{0,63}){0,8}$" $ipv4 $lowerDns -}}
-{{- if not (regexMatch $issuer $c.issuer) -}}
-{{- fail "auth-workload-client: authWorkloadClient.issuer must be auth-service's https token issuer URL: a lower-case DNS name (labels of 1 to 63 letters, digits and hyphens, none empty, no trailing dot) or an IPv4 address, a port from 1 to 65535, at most eight path segments" -}}
-{{- end -}}
-{{- include "acr.authWorkloadURLHostPort" (dict "key" "issuer" "url" $c.issuer) -}}
-{{- end -}}
-
-{{/* The host is at most 253 characters and the port is 1 to 65535 (the patterns above fix the shape only). */}}
-{{- define "acr.authWorkloadURLHostPort" -}}
-{{- $authority := regexReplaceAll "^[a-z]+://([^/]*)(/.*)?$" .url "${1}" -}}
-{{- $port := regexFind ":[0-9]+$" $authority | trimPrefix ":" -}}
-{{- $host := regexReplaceAll ":[0-9]+$" $authority "" -}}
-{{- if gt (len $host) 253 -}}
-{{- fail (printf "auth-workload-client: authWorkloadClient.%s host is longer than 253 characters" .key) -}}
-{{- end -}}
-{{- if $port -}}
-{{- if or (lt (atoi $port) 1) (gt (atoi $port) 65535) -}}
-{{- fail (printf "auth-workload-client: authWorkloadClient.%s port must be from 1 to 65535" .key) -}}
-{{- end -}}
 {{- end -}}
 {{- end -}}
 

@@ -9,10 +9,10 @@ import (
 	"strings"
 )
 
-// The URL rules of the auth workload client, one validator for both fields. The Helm helper
-// acr.validateAuthWorkloadClient holds the same rules; internal/config/testdata/auth_workload_urls.tsv is the corpus
-// both are held to. They are at least as strict as the client's own (dev-health-go workloadtoken endpoint and issuer
-// shape), so a value that passes here is one the client builds from.
+// The URL rules of the auth workload client: ONE validator, run at start (Validate), for both fields. The chart checks
+// presence only, so a pattern there cannot drift from these rules. They are at least as strict as the client's own
+// (dev-health-go workloadtoken endpoint and issuer shape), so a value that passes here is one the client builds from.
+// internal/config/testdata/auth_workload_urls.tsv is the corpus the tests hold them to.
 var (
 	dnsLabel = regexp.MustCompile(`^[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?$`)
 	// issuerPathSegment is the client's issuer path segment: at most eight, none empty, none starting with a dot.
