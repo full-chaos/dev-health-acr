@@ -9,8 +9,9 @@ import (
 
 // A walk reads, of each node, only what it decides with: the identity (kind,
 // canonical id, label), the three authorization lists, and a work item's
-// stated project membership (CHAOS-12229: a requested project narrowing is
-// decided by it; absent, the map holds null and the membership is unstated). A Subject node can
+// stated project membership (authorization_project_identities, CHAOS-12226;
+// read by graphrank.ProjectMembershipOf). A node without that property reads
+// it back as null, which the predicate takes as Unstated. A Subject node can
 // carry wide text and an embedding of thousands of numbers, and one link read
 // returns thousands of rows, so the walk's reads return a map of these
 // properties in place of the node. The link edge is read the same way: its tier,
