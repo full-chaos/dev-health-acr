@@ -209,9 +209,9 @@ func openPostgres(ctx context.Context, cfg config.Config, logger *slog.Logger) (
 	if err != nil {
 		return fail(errors.Join(fmt.Errorf("sweep unacknowledged device credentials: %w", err), stopPurgeLoop(), stopWorkloadCredentialPurgeLoop(), stopOAuthPurgeLoop(), stopBrowserFamilyPurgeLoop()))
 	}
-	// CHAOS-11952: the Ask Dev retention job, behind its switch, on a pool of
-	// its own connected as the retention role (never the runtime role).
-	stopRetentionLoop, err := startConfiguredRetention(ctx, cfg, logger)
+	// CHAOS-11952: the Ask Dev retention job, behind its switch, on acr-api's
+	// own pool as the runtime role (CHAOS-12244: no role of its own).
+	stopRetentionLoop, err := startConfiguredRetention(ctx, cfg, database, logger)
 	if err != nil {
 		return fail(errors.Join(fmt.Errorf("enforce Ask Dev retention: %w", err), stopPurgeLoop(), stopWorkloadCredentialPurgeLoop(), stopOAuthPurgeLoop(), stopBrowserFamilyPurgeLoop(), stopDeviceSweep()))
 	}

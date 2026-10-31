@@ -1,24 +1,18 @@
 package config
 
-import (
-	"strings"
-	"testing"
-)
+import "testing"
 
-// CHAOS-11952: Ask Dev retention is one switch, default off; on, it needs
-// the retention role's own DSN, and the DSN is read only then.
+// CHAOS-11952: Ask Dev retention is one switch, default off. CHAOS-12244: the
+// job runs as the runtime role, so the switch alone turns it on; a retention
+// DSN left in the environment is ignored, not required.
 func TestLoad_askDevRetention(t *testing.T) {
-	cfg, err := load(mapLookup(map[string]string{"ACR_LOCAL_COMPOSITION_READY": "true", "ACR_POSTGRES_RETENTION_DSN": "postgres://acr_retention:x@h/acr"}))
-	if err != nil || cfg.AskDevRetentionEnabled || cfg.AskDevRetentionPostgresDSN != "" {
-		t.Fatalf("default: enabled=%t dsn set=%t err=%v, want off and the DSN unread", cfg.AskDevRetentionEnabled, cfg.AskDevRetentionPostgresDSN != "", err)
+	cfg, err := load(mapLookup(map[string]string{"ACR_LOCAL_COMPOSITION_READY": "true"}))
+	if err != nil || cfg.AskDevRetentionEnabled {
+		t.Fatalf("default: enabled=%t err=%v, want off", cfg.AskDevRetentionEnabled, err)
 	}
-	_, err = load(mapLookup(map[string]string{"ACR_LOCAL_COMPOSITION_READY": "true", "ACR_ASK_DEV_RETENTION_ENABLED": "true"}))
-	if err == nil || !strings.Contains(err.Error(), "ACR_POSTGRES_RETENTION_DSN") {
-		t.Fatalf("on without the DSN: err = %v, want a refusal naming ACR_POSTGRES_RETENTION_DSN", err)
-	}
-	cfg, err = load(mapLookup(map[string]string{"ACR_LOCAL_COMPOSITION_READY": "true", "ACR_ASK_DEV_RETENTION_ENABLED": "true", "ACR_POSTGRES_RETENTION_DSN": "postgres://acr_retention:x@h/acr"}))
-	if err != nil || !cfg.AskDevRetentionEnabled || cfg.AskDevRetentionPostgresDSN != "postgres://acr_retention:x@h/acr" {
-		t.Fatalf("on with the DSN: enabled=%t err=%v", cfg.AskDevRetentionEnabled, err)
+	cfg, err = load(mapLookup(map[string]string{"ACR_LOCAL_COMPOSITION_READY": "true", "ACR_ASK_DEV_RETENTION_ENABLED": "true"}))
+	if err != nil || !cfg.AskDevRetentionEnabled {
+		t.Fatalf("on with no other setting: enabled=%t err=%v, want on", cfg.AskDevRetentionEnabled, err)
 	}
 	if _, err = load(mapLookup(map[string]string{"ACR_LOCAL_COMPOSITION_READY": "true", "ACR_ASK_DEV_RETENTION_ENABLED": "soon"})); err == nil {
 		t.Fatal("ACR_ASK_DEV_RETENTION_ENABLED=soon was accepted")

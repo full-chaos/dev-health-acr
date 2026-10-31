@@ -449,14 +449,22 @@ back-dated rows." Rules: `internal/contextfabric/retention.go`; SQL:
   (`ErrRetentionReadRuleOff`) when its read rule is off.
 - **Where.** A bounded purge loop in every `acr-api` replica
   (`runtime/hosted/retention_purge.go`, every 5 minutes, 500 units a pass),
-  started with the other Postgres purge loops, **on a pool of its own
-  connected as the retention role** (`ACR_POSTGRES_RETENTION_DSN`, required
-  with the switch on). The runtime role is not widened (lead ruling: least
-  privilege). The role holds exactly `internal/dbacl.RetentionGrants`, given by
-  `grant-runtime-acl` (Helm `credentials.retention`, compose
-  `ACR_RETENTION_DB_USER`), and it must not be the runtime, the migration
-  (schema-owner) or the purge role: `grant-runtime-acl`, the Helm chart and the
-  compose bootstrap each refuse it.
+  started with the other Postgres purge loops, **on acr-api's own pool, as the
+  runtime role** (CHAOS-12244: no role, credential or DSN of its own; chris
+  rejected a dedicated role). `internal/dbacl.RuntimeGrants` holds every
+  privilege the job's statements need (`internal/dbacl.RetentionPrivileges`:
+  SELECT and DELETE on the threads, the records, the results, the run event
+  log, the structure selections and the claims, and UPDATE on the records for
+  the erase), and `grant-runtime-acl`, the Helm grant Job and the compose
+  bootstrap grant them with the rest of the runtime set. The clarification
+  selections stay capture-only for the runtime (migration 0016, CHAOS-3859):
+  runtime: INSERT, DELETE (retention, CHAOS-12244) and SELECT on only
+  `org_id` and `prior_result_id`, the two columns the retention DELETE's
+  WHERE reads; no table SELECT and no UPDATE, so the runtime reads no
+  selection back. The purge role was
+  not chosen: it is the operator's credential for `acr-projector purge`, and
+  it also deletes credentials, device authorizations and token families
+  across every organization, so it stays out of the serving pod.
   At startup a grant probe runs every kind of statement on no row (so a
   missing grant fails startup even when nothing is due), then a first pass.
   Each unit (one thread, or one record with no thread) is one transaction

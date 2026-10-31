@@ -41,9 +41,17 @@ const (
 
 // Grant is the privileges the runtime role holds on one table.
 type Grant struct {
-	Table      string
+	Table string
+	// Privileges are table-level.
 	Privileges []string
-	Feature    Feature
+	// SelectColumns, when set, grants SELECT on these columns only: the
+	// role may read them (in a WHERE) and no other column. Privileges then
+	// holds no SELECT. The clarification selections are capture-only for the
+	// runtime (migration 0016, CHAOS-3859): nothing in the runtime reads a
+	// selection back, and the column grant keeps that structural while the
+	// retention job removes them (CHAOS-12244).
+	SelectColumns []string
+	Feature       Feature
 	// Sequences are sequences the table's inserts draw from; the role needs USAGE.
 	Sequences []string
 	// Why cites the runtime code that needs each privilege.
@@ -83,28 +91,28 @@ var RuntimeGrants = []Grant{
 		Why: "INSERT internal/storage/postgres/browser_refresh.go:59, SELECT browser_refresh.go:86 and ... FOR UPDATE, UPDATE (consume) browser_refresh.go:218; removed with its family by cascade"},
 	{Table: "web_assertion_replays", Privileges: []string{"SELECT", "INSERT", "DELETE"},
 		Why: "INSERT internal/storage/postgres/web_assertion_replay.go:24, SELECT and DELETE web_assertion_replay.go:33"},
-	{Table: "context_fabric_clarification_selections", Privileges: []string{"INSERT"},
-		Why: "insert-only capture sink: internal/contextfabric/pgclarification/sink.go:387"},
+	{Table: "context_fabric_clarification_selections", Privileges: []string{"INSERT", "DELETE"}, SelectColumns: []string{"org_id", "prior_result_id"},
+		Why: "INSERT the capture sink: internal/contextfabric/pgclarification/sink.go:387; DELETE, and SELECT on only the two columns its WHERE reads, the Ask Dev retention job's removal of the selections made on a removed result (CHAOS-11952, CHAOS-12244): internal/contextfabric/pginvestigation/retention.go removeRetainedResults. No table SELECT: the table stays capture-only for the runtime (migration 0016, CHAOS-3859)"},
 	{Table: "context_fabric_projection_checkpoints", Privileges: []string{"SELECT", "INSERT", "UPDATE", "DELETE"},
 		Why: "SELECT internal/contextfabric/pgprojection/checkpoints.go:38, INSERT checkpoints.go:99, UPDATE checkpoints.go:80, DELETE checkpoints.go:258"},
 	{Table: "context_fabric_projection_rebuild_markers", Privileges: []string{"SELECT", "INSERT", "DELETE"},
 		Why: "SELECT internal/contextfabric/pgprojection/rebuild_marker.go:63, INSERT rebuild_marker.go:43, DELETE rebuild_marker.go:79"},
 	{Table: "context_fabric_org_purge_markers", Privileges: []string{"SELECT", "DELETE"},
 		Why: "SELECT internal/contextfabric/pgprojection/org_purge_marker.go:46 (the tick's check), DELETE org_purge_marker.go:86 (discovery's clear); only the purge writes it"},
-	{Table: "context_fabric_investigation_results", Privileges: []string{"SELECT", "INSERT"},
-		Why: "SELECT internal/contextfabric/pginvestigation/store.go:395, INSERT store.go:284"},
+	{Table: "context_fabric_investigation_results", Privileges: []string{"SELECT", "INSERT", "DELETE"},
+		Why: "SELECT internal/contextfabric/pginvestigation/store.go:395, INSERT store.go:284; DELETE the Ask Dev retention job (CHAOS-11952, CHAOS-12244): pginvestigation/retention.go removeRetainedResults (feedback goes by cascade, as the owner)"},
 	{Table: "context_fabric_usage_monthly", Privileges: []string{"SELECT", "INSERT", "UPDATE"},
 		Why: "INSERT ... ON CONFLICT DO UPDATE internal/contextfabric/pginvestigation/submissions.go AdmitSubmission (the monthly allowance), SELECT submissions.go ReadUsageMonthly"},
 	{Table: "context_fabric_result_feedback", Privileges: []string{"SELECT", "INSERT", "UPDATE"},
-		Why: "SELECT internal/contextfabric/pginvestigation/feedback.go GetResultFeedback, INSERT ... ON CONFLICT DO UPDATE feedback.go SetResultFeedback"},
-	{Table: "context_fabric_threads", Privileges: []string{"SELECT", "INSERT", "UPDATE"},
-		Why: "INSERT ... ON CONFLICT DO UPDATE internal/contextfabric/pginvestigation/submissions.go AdmitSubmission (a thread turn), SELECT threads.go ListThreads and GetThread, UPDATE threads.go CloseThread"},
+		Why: "SELECT internal/contextfabric/pginvestigation/feedback.go GetResultFeedback, INSERT ... ON CONFLICT DO UPDATE feedback.go SetResultFeedback; removed with its result by cascade (CHAOS-11952 retention, CHAOS-12244), which runs as the table owner"},
+	{Table: "context_fabric_threads", Privileges: []string{"SELECT", "INSERT", "UPDATE", "DELETE"},
+		Why: "INSERT ... ON CONFLICT DO UPDATE internal/contextfabric/pginvestigation/submissions.go AdmitSubmission (a thread turn), SELECT threads.go ListThreads and GetThread, UPDATE threads.go CloseThread; SELECT ... FOR UPDATE and DELETE the Ask Dev retention job (CHAOS-11952, CHAOS-12244): retention.go sweepRetentionThread"},
 	{Table: "context_fabric_investigation_run_events", Privileges: []string{"SELECT", "INSERT", "DELETE"},
 		Why: "CHAOS-11949: INSERT internal/contextfabric/pginvestigation/runs.go AppendRunEvent and reapLostRun (the run_lost terminal), DELETE runs.go AppendRunEvent (the per-run cap), SELECT runs.go ReadRunEvents and RunTerminalOf"},
-	{Table: "context_fabric_investigation_submissions", Privileges: []string{"SELECT", "INSERT", "UPDATE"},
-		Why: "INSERT internal/contextfabric/pginvestigation/submissions.go AdmitSubmission, SELECT submissions.go GetSubmission, UPDATE submissions.go FinishSubmission and store.go Save's completion"},
-	{Table: "context_fabric_structure_supersession_claims", Privileges: []string{"SELECT", "INSERT"},
-		Why: "SELECT internal/contextfabric/pginvestigation/store.go:491, INSERT store.go:345"},
+	{Table: "context_fabric_investigation_submissions", Privileges: []string{"SELECT", "INSERT", "UPDATE", "DELETE"},
+		Why: "INSERT internal/contextfabric/pginvestigation/submissions.go AdmitSubmission, SELECT submissions.go GetSubmission, UPDATE submissions.go FinishSubmission and store.go Save's completion; UPDATE (the erase) and DELETE the Ask Dev retention job (CHAOS-11952, CHAOS-12244): retention.go sweepRetentionThread and sweepRetentionRecord (event logs go by cascade, as the owner)"},
+	{Table: "context_fabric_structure_supersession_claims", Privileges: []string{"SELECT", "INSERT", "DELETE"},
+		Why: "SELECT internal/contextfabric/pginvestigation/store.go:491, INSERT store.go:345; DELETE the Ask Dev retention job's removal of the claims on a removed result (CHAOS-11952, CHAOS-12244): retention.go removeRetainedResults"},
 	{Table: "context_fabric_reuse_invalidations", Privileges: []string{"SELECT", "INSERT", "UPDATE"},
 		Why: "SELECT internal/contextfabric/pginvestigation/store.go:748, INSERT and upsert store.go:1290"},
 	{Table: "context_fabric_org_model_config", Privileges: []string{"SELECT", "INSERT", "UPDATE", "DELETE"},
@@ -118,8 +126,8 @@ var RuntimeGrants = []Grant{
 		Why: "SELECT internal/contextfabric/pglifecycle/store.go:469, INSERT store.go:328, UPDATE store.go:496"},
 	{Table: "context_fabric_graph_build_source_progress", Privileges: []string{"SELECT", "INSERT", "UPDATE"},
 		Why: "SELECT internal/contextfabric/pglifecycle/store.go:172, INSERT and upsert store.go:153"},
-	{Table: "context_fabric_structure_selections", Privileges: []string{"SELECT", "INSERT"},
-		Why: "INSERT internal/contextfabric/pgstructureselection/sink.go:423, SELECT structurepriorcuration/curate.go:104"},
+	{Table: "context_fabric_structure_selections", Privileges: []string{"SELECT", "INSERT", "DELETE"},
+		Why: "INSERT internal/contextfabric/pgstructureselection/sink.go:423, SELECT structurepriorcuration/curate.go:104; DELETE the Ask Dev retention job's removal of the selections made on a removed result (CHAOS-11952, CHAOS-12244): pginvestigation/retention.go removeRetainedResults"},
 	{Table: "context_fabric_structure_priors", Privileges: []string{"SELECT", "INSERT"},
 		Why: "SELECT internal/contextfabric/pgstructurepriors/store.go:130, INSERT store.go:221"},
 	{Table: "context_fabric_structure_prior_pointer", Privileges: []string{"SELECT", "INSERT", "UPDATE"},
@@ -168,9 +176,29 @@ func QuoteIdent(name string) string {
 
 // Statement is one GRANT with the table and privileges it covers.
 type Statement struct {
-	Table      string
-	Privileges []string
-	SQL        string
+	Table         string
+	Privileges    []string
+	SelectColumns []string
+	SQL           string
+}
+
+// PrivilegeList is the privilege clause of a GRANT for grant: its table-level
+// privileges, then SELECT on its columns when it has any.
+func PrivilegeList(grant Grant) string {
+	return privilegeClause(grant.Privileges, grant.SelectColumns)
+}
+
+// PrivilegeList is the statement's privilege clause, as in its GRANT.
+func (s Statement) PrivilegeList() string {
+	return privilegeClause(s.Privileges, s.SelectColumns)
+}
+
+func privilegeClause(privileges, selectColumns []string) string {
+	clause := append([]string{}, privileges...)
+	if len(selectColumns) > 0 {
+		clause = append(clause, "SELECT ("+strings.Join(selectColumns, ", ")+")")
+	}
+	return strings.Join(clause, ", ")
 }
 
 // GrantStatements returns the idempotent GRANTs for the runtime role under
@@ -186,9 +214,10 @@ func grantStatements(grants []Grant, quotedRole string, features Features) []Sta
 			continue
 		}
 		statements = append(statements, Statement{
-			Table:      grant.Table,
-			Privileges: grant.Privileges,
-			SQL:        fmt.Sprintf("GRANT %s ON TABLE acr.%s TO %s", strings.Join(grant.Privileges, ", "), grant.Table, quotedRole),
+			Table:         grant.Table,
+			Privileges:    grant.Privileges,
+			SelectColumns: grant.SelectColumns,
+			SQL:           fmt.Sprintf("GRANT %s ON TABLE acr.%s TO %s", PrivilegeList(grant), grant.Table, quotedRole),
 		})
 		for _, sequence := range grant.Sequences {
 			statements = append(statements, Statement{
