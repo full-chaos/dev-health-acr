@@ -1,0 +1,1 @@
+{"schema_version":"error.v1","request_id":"req_00000000000000000000000000011949","error":{"code":"cursor_expired","message":"The event stream cannot resume from this cursor; read the submission status instead","http_status":410,"retryable":false,"details":{"reason":"ahead"}}}

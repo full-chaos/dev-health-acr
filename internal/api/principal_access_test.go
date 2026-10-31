@@ -110,7 +110,8 @@ func authenticateAsCredential(t *testing.T, app *App, class storage.CredentialCl
 
 type protectedRoute struct{ method, path, body string }
 
-// protectedRoutes are every route app.go wraps in protectedRuntimeHandler.
+// protectedRoutes are every route app.go wraps in protectedRuntimeHandler (and
+// capabilities, in protectedCapabilitiesHandler).
 func protectedRoutes() []protectedRoute {
 	investigation, _ := json.Marshal(investigationRequestBody())
 	return []protectedRoute{
@@ -121,6 +122,9 @@ func protectedRoutes() []protectedRoute {
 		{http.MethodPost, ContextFabricInvestigationsPath, string(investigation)},
 		{http.MethodGet, "/api/v1/context-fabric/investigations/res_access_test", ""},
 		{http.MethodGet, "/api/v1/context-fabric/investigations/submissions/submission-access-01", ""},
+		// CHAOS-11949 (#1793): attach to a leased run, and cancel it.
+		{http.MethodGet, "/api/v1/context-fabric/investigations/submissions/submission-access-01/events", ""},
+		{http.MethodPost, "/api/v1/context-fabric/investigations/submissions/submission-access-01/cancel", ""},
 		{http.MethodGet, ContextFabricThreadsPath, ""},
 		{http.MethodGet, "/api/v1/context-fabric/threads/thread-access-0001", ""},
 		{http.MethodDelete, "/api/v1/context-fabric/threads/thread-access-0001", ""},

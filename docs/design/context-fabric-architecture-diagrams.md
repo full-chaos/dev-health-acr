@@ -3548,7 +3548,96 @@ schemas `contracts/jsonschema/v1/context_fabric_thread.v1.schema.json` and
 `error_context_fabric_thread_closed.v1.json`, encoder output regenerated with
 `ACR_WRITE_THREAD_GOLDENS=1`.
 
-## 19 — Per-call access re-check (CHAOS-12092)
+## 19 — Ask Dev run lease, event log, attach and cancel (CHAOS-11949)
+
+Plan of record §2.7.9 (INV-7, Phase 4). With
+`ACR_CONTEXT_FABRIC_RUN_LEASE_ENABLED` on (default off; it needs the event
+stream), a create request that asks for the stream and names
+`X-ACR-Submission-ID` runs under a lease ACR holds, not under its connection.
+Off, every run is connection-owned exactly as §16 says, and the attach and
+cancel routes answer 404.
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant B as Browser
+    participant A as acr-api replica A (holder)
+    participant P as Postgres
+    participant C as acr-api replica C (other)
+    B->>A: POST /investigations (Accept: text/event-stream, X-ACR-Submission-ID)
+    A->>P: admission tx: submission row + lease_holder=A, lease_expires_at=now+15s, run_request_id
+    A->>P: append accepted (seq 1) to run_events
+    A-->>B: 200 + accepted
+    loop every event (stage, heartbeat)
+        A->>P: append event (seq n), prune to the latest 128
+        A-->>B: frame seq n (skipped once the viewer is gone)
+    end
+    Note over B,A: disconnect: the viewer is gone, the run is not (detached context)
+    loop holder loop (1 s)
+        A->>P: renew lease every 5 s / read cancel_requested_at
+    end
+    B->>C: GET /submissions/{id}/events, Last-Event-ID: n
+    C->>P: read run_events after n (410 cursor_expired if the log cannot serve n)
+    C-->>B: frames n+1.. (the run's own bytes), ': keepalive' while quiet
+    B->>C: POST /submissions/{id}/cancel
+    C->>P: cancel_requested_at = t_req (first request only), 202
+    A->>P: poll sees t_req
+    A->>A: cancel run ctx (t_eff, cancel effective line, cause cancel_requested)
+    A->>P: record abandoned, terminal marker error{canceled}
+    C-->>B: terminal error{canceled}
+    Note over A,C: pod loss, no renewal, after 15 s any replica takes over
+    C->>P: one tx, running and lease ended, so abandoned, lease_holder=C, terminal error{run_lost} once
+```
+
+- **Owner.** The lease is four columns of the submission record (migration
+  `0064`): `lease_holder`, `lease_expires_at`, `run_request_id`,
+  `cancel_requested_at`. Admission writes the first three in its own
+  transaction. The holder (`holdRunLease`, `internal/api/context_fabric_run_lease.go`)
+  renews every `RunLeaseRenewInterval` (5 s) for `RunLeaseTTL` (15 s) and reads
+  the record every `RunCancelPollInterval` (1 s). A renewal and a takeover are
+  both conditional updates of the row, so exactly one applies.
+- **Event log.** `acr.context_fabric_investigation_run_events`, keyed
+  `(org_id, reserved_result_id, seq)`, foreign key to the submission row `ON
+  DELETE CASCADE`: whatever removes the record (retention, purge) removes the
+  log. A non-terminal row is the event's data payload byte for byte, written
+  BEFORE the frame goes to the connection, so a client that saw seq n finds
+  n+1 in the log. The terminal row is a marker: the final result id,
+  `unsaved`, or the error.v1 envelope; never result content (plan N2). The
+  writer keeps the latest `ContextFabricInvestigationRunEventLogMaxEvents`
+  (128) non-terminal rows; the terminal is never pruned. Each row carries
+  the last stage started, so a terminal written by another replica names it.
+- **Attach.** `GET .../submissions/{id}/events` replays from the log with the
+  run's seq and request id (prefix + attach = one stream of the §16 grammar)
+  and tails it every 500 ms. A cursor the log cannot serve (malformed, ahead,
+  older than the window, at the terminal; no log at all) is `410
+  cursor_expired` before any stream. The `result` terminal is the stored
+  result read by id now, through the gate on surface `submission_attach`.
+- **Cancel.** `POST .../submissions/{id}/cancel`: 202 records t_req (first
+  request only); the holder sees it at once on its own replica (registry) or
+  at its next poll, cancels the run's context (cause `cancel_requested`) and
+  logs `t_eff` with `t_req`. The run ends `error{canceled}` unless its answer
+  had already finished. 204 for a final record; 409 `submission_in_progress`
+  (`not_leased`) for a running record admitted without a lease.
+- **Pod loss.** Every replica's takeover loop (5 s, `internal/runtime/hosted/run_takeover.go`)
+  and an attach whose record's lease ended take over the run: abandoned,
+  `lease_holder` = the taker, terminal `error{run_lost}`, once. The old
+  holder, if it wakes, finds the run not its own and cancels it (cause
+  `lease_lost`); its own terminal does not replace `run_lost`.
+- **Ownership.** Both routes resolve the record by the caller's own key
+  (INV-1): another principal's, unknown, malformed and closed-thread ids are
+  one 404.
+
+Code: `internal/contextfabric/run_lease.go` (types, `RunStore`),
+`internal/contextfabric/pginvestigation/runs.go`,
+`internal/contextfabric/memoryinvestigation/runs.go`,
+`internal/api/context_fabric_run_lease.go` (holder, registry, log writer),
+`internal/api/context_fabric_run_routes.go` (attach, cancel),
+`internal/api/context_fabric_event_stream.go` (lease mode of the writer),
+`internal/contracts/v1/context_fabric_run_lease.go` (codes, cap, cursor
+grammar). Proofs: `internal/api/context_fabric_run_lease_test.go` (memory) and
+`context_fabric_run_lease_pg_test.go` (Postgres, one pool per replica).
+
+## 20 — Per-call access re-check (CHAOS-12092)
 
 Every protected call by a user-class credential (browser, OAuth user, native
 device) re-reads the user's access in Dev Health, live and uncached (North Star

@@ -102,6 +102,16 @@ type RuntimeDependencies struct {
 	// the submission's own transaction. Optional: without it the thread
 	// routes answer 503 store_unavailable.
 	InvestigationThreads contextfabric.ThreadStore
+	// InvestigationRuns is the run lease and event log store (CHAOS-11949).
+	// It must be the store InvestigationSubmissions admits through: the lease
+	// is a column of the submission record and the log references it.
+	// Optional: without it a streamed submission is connection-owned (as with
+	// the run lease off) and the attach and cancel routes answer 503
+	// store_unavailable.
+	InvestigationRuns contextfabric.RunStore
+	// RunHolderID names this replica as a run lease holder and taker
+	// (CHAOS-11949). Empty: the App mints one at start.
+	RunHolderID string
 	// NewResultID mints the result id admission reserves for a submission.
 	// Nil uses contextfabric.NewInvestigationResultID.
 	NewResultID func() string
@@ -203,6 +213,9 @@ func (r *RuntimeDependencies) validate() error {
 	}
 	if r.InvestigationThreads != nil && storage.IsNil(r.InvestigationThreads) {
 		return errors.New("hosted context fabric investigation thread store must not be typed nil")
+	}
+	if r.InvestigationRuns != nil && storage.IsNil(r.InvestigationRuns) {
+		return errors.New("hosted context fabric investigation run store must not be typed nil")
 	}
 	if r.DataOperations != nil && storage.IsNil(r.DataOperations) {
 		return errors.New("hosted data operation runner must not be typed nil")

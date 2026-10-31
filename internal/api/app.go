@@ -103,6 +103,9 @@ func (a *App) registerRoutes(mux routeMux) {
 	mux.Handle("POST "+ContextFabricInvestigationsPath, a.ContextFabricInvestigationHandler(a.investigator()))
 	mux.Handle("GET "+ContextFabricInvestigationResultPath, a.ContextFabricInvestigationResultHandler(a.investigationResults(), a.storedResultGate()))
 	mux.Handle("GET "+ContextFabricSubmissionStatusPath, a.ContextFabricSubmissionStatusHandler(a.investigationSubmissions()))
+	// CHAOS-11949: attach to and cancel a leased run.
+	mux.Handle("GET "+ContextFabricSubmissionEventsPath, a.ContextFabricSubmissionEventsHandler())
+	mux.Handle("POST "+ContextFabricSubmissionCancelPath, a.ContextFabricSubmissionCancelHandler())
 	// CHAOS-11948: the Ask Dev conversation routes.
 	mux.Handle("GET "+ContextFabricThreadsPath, a.ContextFabricThreadListHandler())
 	mux.Handle("GET "+ContextFabricThreadPath, a.ContextFabricThreadHandler())

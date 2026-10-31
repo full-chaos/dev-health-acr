@@ -211,6 +211,21 @@ type investigationEventStream struct {
 	// stream ended with error{budget_refusal}.
 	written         int64
 	budgetExhausted bool
+
+	// The run lease (CHAOS-11949). log is the run's event log, nil for a
+	// connection-owned run. With a log, every event is written to it before
+	// the connection, a failed connection write marks the viewer gone (the
+	// run goes on), and a failed log write ends the run (onLogFailure).
+	log          *runEventLog
+	onLogFailure func()
+	viewerGone   bool
+	// resultMarker is the terminal marker of a `result` event: the final
+	// result id, or unsaved. nil writes no marker (an attach then reads the
+	// terminal from the record).
+	resultMarker *contextfabric.RunTerminal
+	// logTerminalTaken: the log already held a terminal when this stream
+	// wrote its own (another replica took the run over).
+	logTerminalTaken bool
 }
 
 // write puts one event on the wire. The caller holds s.mu.
@@ -266,14 +281,23 @@ func (s *investigationEventStream) write(event contractsv1.ContextFabricInvestig
 			"written_bytes", s.written, "frame_bytes", size, "total_max_bytes", s.settings.totalMaxBytes, "failure_class", "event_stream_byte_budget")
 		return errInvestigationStreamBudgetExhausted
 	}
-	if err := s.controller.SetWriteDeadline(time.Now().Add(s.settings.writeTimeout)); err != nil {
-		return s.fail(err, event)
+	if s.log != nil {
+		if err := s.appendToLog(event); err != nil {
+			return err
+		}
 	}
-	if _, err := s.w.Write(frame); err != nil {
-		return s.fail(err, event)
-	}
-	if err := s.controller.Flush(); err != nil {
-		return s.fail(err, event)
+	if !s.viewerGone {
+		if err := s.writeFrame(frame); err != nil {
+			if s.log == nil {
+				return s.fail(err, event)
+			}
+			// A leased run outlives its connection: the viewer is gone, the
+			// log goes on.
+			s.viewerGone = true
+			s.logger.InfoContext(s.logCtx, "context fabric investigation event stream viewer detached",
+				"request_id", contextfabric.SanitizeLogAttr(s.requestID), "seq", event.Seq, "event_type", string(event.Type),
+				"write_error", classifyWriteError(err))
+		}
 	}
 	s.check = check
 	s.seq = event.Seq
@@ -285,6 +309,69 @@ func (s *investigationEventStream) write(event contractsv1.ContextFabricInvestig
 		s.terminal = event.Type
 	}
 	return nil
+}
+
+// writeFrame puts one frame on the connection under its write deadline.
+func (s *investigationEventStream) writeFrame(frame []byte) error {
+	if err := s.controller.SetWriteDeadline(time.Now().Add(s.settings.writeTimeout)); err != nil {
+		return err
+	}
+	if _, err := s.w.Write(frame); err != nil {
+		return err
+	}
+	return s.controller.Flush()
+}
+
+// appendToLog writes event to the run's log (CHAOS-11949): a non-terminal
+// event as its data payload, a terminal as its marker. The caller holds s.mu.
+func (s *investigationEventStream) appendToLog(event contractsv1.ContextFabricInvestigationEvent) error {
+	lastStarted := s.lastStarted
+	if event.Type == contractsv1.ContextFabricInvestigationEventStage && event.State == contractsv1.ContextFabricStageStarted {
+		lastStarted = event.Stage
+	}
+	row := contextfabric.RunEvent{Seq: event.Seq, Type: event.Type, LastStageStarted: lastStarted}
+	switch event.Type {
+	case contractsv1.ContextFabricInvestigationEventResult:
+		if s.resultMarker == nil {
+			s.logger.ErrorContext(s.logCtx, "context fabric investigation run terminal not logged: the record's final state is unknown",
+				"request_id", contextfabric.SanitizeLogAttr(s.requestID), "seq", event.Seq, "failure_class", "event_log_terminal_unknown")
+			return nil
+		}
+		row.Terminal = s.resultMarker
+	case contractsv1.ContextFabricInvestigationEventError:
+		envelope := *event.Error
+		row.Terminal = &contextfabric.RunTerminal{Kind: contextfabric.RunTerminalError, Error: &envelope}
+	default:
+		data, err := contractsv1.MarshalContextFabricInvestigationEventData(event)
+		if err != nil {
+			return s.failLog(err, event)
+		}
+		row.Data = data
+	}
+	appended, err := s.log.append(s.logCtx, row)
+	if err != nil {
+		return s.failLog(err, event)
+	}
+	if row.Terminal != nil && !appended {
+		s.logTerminalTaken = true
+		s.logger.WarnContext(s.logCtx, "context fabric investigation run terminal not logged: the log already holds one",
+			"request_id", contextfabric.SanitizeLogAttr(s.requestID), "seq", event.Seq, "event_type", string(event.Type),
+			"failure_class", "event_log_terminal_taken")
+	}
+	return nil
+}
+
+// failLog ends a leased run whose log cannot be written: an event the log
+// does not hold would be a gap for every later attach. The caller holds s.mu.
+func (s *investigationEventStream) failLog(err error, event contractsv1.ContextFabricInvestigationEvent) error {
+	s.failed = err
+	s.logger.ErrorContext(s.logCtx, "context fabric investigation run event log write failed",
+		"request_id", contextfabric.SanitizeLogAttr(s.requestID), "seq", event.Seq, "event_type", string(event.Type),
+		"error_class", submissionStoreErrorClass(err), "failure_class", "event_log_write")
+	if s.onLogFailure != nil {
+		s.onLogFailure()
+	}
+	return err
 }
 
 // exhaustBudget ends a stream whose next non-terminal frame would cross the
@@ -322,6 +409,10 @@ func (s *investigationEventStream) failAfterPanic() {
 	s.failed = errInvestigationStreamPanicked
 	if s.onWriteFailure != nil {
 		s.onWriteFailure()
+	}
+	// A leased run whose writer is gone cannot keep its log either.
+	if s.log != nil && s.onLogFailure != nil {
+		s.onLogFailure()
 	}
 }
 
@@ -541,19 +632,51 @@ func (a *App) investigationEventStreamWritable(w http.ResponseWriter, r *http.Re
 // investigateCtx already carries the reserved result id (the submission's, or
 // one reserved for this stream). The outcome goes through
 // deliverInvestigationOutcome, the one delivery the JSON path uses too.
+//
+// leased (CHAOS-11949) is the run lease of a submission admitted under one,
+// nil for a connection-owned run. A leased run's context is detached from the
+// request (it keeps the request's deadline), its events go to the run's log
+// first, and its holder loop renews the lease and watches for a cancel.
 func (a *App) serveInvestigationEventStream(w http.ResponseWriter, r *http.Request, investigator contextfabric.Investigator, principal storage.Principal, request contextfabric.InvestigationRequest, submission *admittedInvestigationSubmission, submissionID, threadID, reserved string, investigateCtx context.Context, collectedSynthesisInput func() *contractsv1.ContextFabricSynthesisInput) (delivered string) {
 	requestID := RequestID(r.Context())
 	controller := http.NewResponseController(w)
-	runCtx, cancelRun := context.WithCancel(investigateCtx)
+	var lease *leasedRun
+	runStore := a.investigationRuns()
+	if submission != nil && submission.record.Leased() && runStore != nil {
+		lease = &leasedRun{key: contextfabric.RunKeyOf(submission.record), holder: submission.record.LeaseHolder, request: submission.record.RunRequestID, expiresAt: submission.record.LeaseExpiresAt}
+	}
+	runBase := investigateCtx
+	if lease != nil {
+		// Detach (plan §2.7.9): the run is the lease's, not the connection's.
+		// The request's deadline is kept; its cancel is not. Every write the
+		// delivery makes after a disconnect needs a live context, so the
+		// request is detached the same way.
+		var cancelBase, cancelRequest context.CancelFunc
+		runBase, cancelBase = detachedContext(investigateCtx)
+		defer cancelBase()
+		var detachedRequest context.Context
+		detachedRequest, cancelRequest = detachedContext(r.Context())
+		defer cancelRequest()
+		r = r.WithContext(detachedRequest)
+	}
+	runCtx, cancelRunCause := context.WithCancelCause(runBase)
+	cancelRun := func() { cancelRunCause(nil) }
 	defer cancelRun()
 	stream := &investigationEventStream{
 		w: w, controller: controller, settings: a.eventStream, logger: a.logger, logCtx: context.WithoutCancel(r.Context()),
 		requestID: requestID, reserved: reserved, startedAt: time.Now(), onWriteFailure: cancelRun, onBudgetExhausted: cancelRun,
 	}
+	if lease != nil {
+		lease.cancel = cancelRunCause
+		stream.log = &runEventLog{store: runStore, run: lease.key, settings: a.runLease, now: a.now}
+		stream.onLogFailure = func() { cancelRunCause(errRunEventLogFailed) }
+		// A failed connection write no longer ends the run.
+		stream.onWriteFailure = nil
+	}
 	sink := contextfabric.NewInvestigationStageSink(contextfabric.InvestigationStageSinkCapacity)
 	runCtx = contextfabric.WithInvestigationStageSink(runCtx, sink)
 	logCancel := func() {
-		a.logInvestigationCancelEffective(stream.logCtx, r.Context(), stream, requestID, reserved)
+		a.logRunCancelEffective(stream.logCtx, r.Context(), runCtx, stream, requestID, reserved, lease)
 	}
 	cancelLogged := make(chan struct{})
 	stopCancelWatch := a.eventStream.afterFunc(runCtx, func() {
@@ -579,6 +702,10 @@ func (a *App) serveInvestigationEventStream(w http.ResponseWriter, r *http.Reque
 			logCancel()
 		}
 	}
+	// The holder loop of a leased run, from `accepted` until the run ends.
+	stopHolder := func() {}
+	removeRun := func() {}
+	defer func() { removeRun() }()
 	header := w.Header()
 	header.Set("Content-Type", contractsv1.ContextFabricInvestigationEventStreamMediaType)
 	header.Set("Cache-Control", "no-store, no-transform")
@@ -617,6 +744,7 @@ func (a *App) serveInvestigationEventStream(w http.ResponseWriter, r *http.Reque
 			return
 		}
 		stopPump()
+		stopHolder()
 		a.logger.ErrorContext(stream.logCtx, "request panic recovered",
 			"request_id", contextfabric.SanitizeLogAttr(requestID), "status", http.StatusOK, "failure_class", "event_stream_panic")
 		cancelRun()
@@ -632,7 +760,12 @@ func (a *App) serveInvestigationEventStream(w http.ResponseWriter, r *http.Reque
 		return "error"
 	}
 	a.logger.InfoContext(r.Context(), "context fabric investigation event stream opened",
-		"request_id", contextfabric.SanitizeLogAttr(requestID), "reserved_result_id", contextfabric.SanitizeLogAttr(reserved), "budget_seconds", budget)
+		"request_id", contextfabric.SanitizeLogAttr(requestID), "reserved_result_id", contextfabric.SanitizeLogAttr(reserved), "budget_seconds", budget,
+		"leased", lease != nil)
+	if lease != nil {
+		removeRun = a.runs.add(lease)
+		stopHolder = a.holdRunLease(stream.logCtx, runStore, lease)
+	}
 
 	pumpStarted = true
 	go func() {
@@ -653,20 +786,32 @@ func (a *App) serveInvestigationEventStream(w http.ResponseWriter, r *http.Reque
 	}()
 	result, err := investigateRecovered(runCtx, investigator, principal, request)
 	stopPump()
+	stopHolder()
 	endCancelWatch()
 	a.recordInvestigationEventsDropped(stream.logCtx, requestID, sink.DroppedByStage())
 
 	outcome := newInvestigationOutcomeCapture(w)
 	outcomeDelivered = true
-	delivered = a.deliverInvestigationOutcome(outcome, r, principal, request, submission, result, err, collectedSynthesisInput)
+	if lease != nil && err != nil && a.deliverEndedLeasedRun(outcome, r, principal, submission, runCtx) {
+		delivered = "error"
+	} else {
+		delivered = a.deliverInvestigationOutcome(outcome, r, principal, request, submission, result, err, collectedSynthesisInput)
+	}
+	if lease != nil {
+		stream.mu.Lock()
+		stream.resultMarker = submission.resultMarker()
+		stream.mu.Unlock()
+	}
 	terminal := stream.finish(outcome)
 	stream.mu.Lock()
 	frames, writeFailed, written, budgetExhausted := stream.seq, stream.failed != nil, stream.written, stream.budgetExhausted
+	viewerGone, terminalTaken := stream.viewerGone, stream.logTerminalTaken
 	stream.mu.Unlock()
 	a.logger.InfoContext(r.Context(), "context fabric investigation event stream closed",
 		"request_id", contextfabric.SanitizeLogAttr(requestID), "frames", frames, "terminal", string(terminal),
 		"outcome_status", outcome.status, "events_dropped", sink.Dropped(), "write_failed", writeFailed,
-		"bytes_written", written, "budget_exhausted", budgetExhausted)
+		"bytes_written", written, "budget_exhausted", budgetExhausted,
+		"leased", lease != nil, "viewer_detached", viewerGone, "log_terminal_taken", terminalTaken)
 	// The latency status is the answer the stream delivered: a result
 	// terminal carries it; an error terminal (the outcome's own error, or a
 	// budget_refusal that replaced an answer) and no terminal deliver none.
@@ -674,6 +819,69 @@ func (a *App) serveInvestigationEventStream(w http.ResponseWriter, r *http.Reque
 		return "error"
 	}
 	return delivered
+}
+
+// detachedContext is ctx without its cancel but with its deadline.
+func detachedContext(ctx context.Context) (context.Context, context.CancelFunc) {
+	detached := context.WithoutCancel(ctx)
+	if deadline, ok := ctx.Deadline(); ok {
+		return context.WithDeadline(detached, deadline)
+	}
+	return context.WithCancel(detached)
+}
+
+// deliverEndedLeasedRun delivers the outcome of a leased run that ended on
+// its owner's cancel (error{canceled}) or on a lost lease (error{run_lost})
+// instead of the engine's error. handled is false for any other end.
+func (a *App) deliverEndedLeasedRun(w http.ResponseWriter, r *http.Request, principal storage.Principal, submission *admittedInvestigationSubmission, runCtx context.Context) (handled bool) {
+	cause := context.Cause(runCtx)
+	switch {
+	case errors.Is(cause, errRunCancelRequested):
+		a.abandonInvestigationSubmission(r, principal, submission)
+		writeError(w, r, contractsv1.ContextFabricCanceledStatus, contractsv1.ErrorCodeCanceled, contractsv1.ContextFabricCanceledMessage, false, nil)
+		return true
+	case errors.Is(cause, errRunLeaseLost):
+		a.abandonInvestigationSubmission(r, principal, submission)
+		writeError(w, r, contractsv1.ContextFabricRunLostStatus, contractsv1.ErrorCodeRunLost, contractsv1.ContextFabricRunLostMessage, false, nil)
+		return true
+	}
+	return false
+}
+
+// logRunCancelEffective is logInvestigationCancelEffective for any run: a
+// leased run's causes are its own (cancel_requested with t_req, lease_lost,
+// event_log_failed, the budget, the deadline); a disconnect is not one.
+func (a *App) logRunCancelEffective(logCtx, requestCtx, runCtx context.Context, stream *investigationEventStream, requestID, reserved string, lease *leasedRun) {
+	if lease == nil {
+		a.logInvestigationCancelEffective(logCtx, requestCtx, stream, requestID, reserved)
+		return
+	}
+	tEff := time.Now().UTC()
+	stream.mu.Lock()
+	budgetExhausted := stream.budgetExhausted
+	stream.mu.Unlock()
+	cause := "run_cancelled"
+	args := []any{}
+	switch reason := context.Cause(runCtx); {
+	case errors.Is(reason, errRunCancelRequested):
+		cause = "cancel_requested"
+		if tReq := lease.cancelRequestedAt(); !tReq.IsZero() {
+			args = append(args, "t_req", tReq.Format(time.RFC3339Nano), "t_eff_minus_t_req_ms", tEff.Sub(tReq).Milliseconds())
+		}
+	case errors.Is(reason, errRunLeaseLost):
+		cause = "lease_lost"
+	case errors.Is(reason, errRunEventLogFailed):
+		cause = "event_log_failed"
+	case budgetExhausted:
+		cause = "stream_byte_budget"
+	case errors.Is(runCtx.Err(), context.DeadlineExceeded):
+		cause = "deadline"
+	}
+	args = append([]any{
+		"request_id", contextfabric.SanitizeLogAttr(requestID), "reserved_result_id", contextfabric.SanitizeLogAttr(reserved),
+		"cause", cause, "t_eff", tEff.Format(time.RFC3339Nano), "leased", true,
+	}, args...)
+	a.logger.InfoContext(logCtx, "context fabric investigation cancel effective", args...)
 }
 
 // logInvestigationCancelEffective is the cancel_effective line: the moment
