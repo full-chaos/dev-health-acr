@@ -1,9 +1,6 @@
 package devhealthfacts_test
 
-import (
-	"math"
-	"testing"
-)
+import "testing"
 
 // noisySlopeStatements are the scope expander statements whose three warm runs
 // still move by MBs under precise memory accounting (CHAOS-12317): they run at
@@ -32,17 +29,20 @@ func slopeGrew(smallMin, smallSpread, largeMin, floor uint64, minAgainstMax bool
 }
 
 // minDetectableGrowth is the smallest rise of the larger size's min over the
-// smaller size's min that slopeGrew reports, for these readings.
+// smaller size's min that slopeGrew reports, for these readings. It searches
+// slopeGrew itself (monotonic in largeMin), so it is the guard's exact
+// boundary, float rounding included, not a closed form that can drift from it.
 func minDetectableGrowth(smallMin, smallSpread, floor uint64, minAgainstMax bool) uint64 {
-	base := smallMin
-	if minAgainstMax {
-		base = smallMin + smallSpread
+	lo, hi := smallMin, smallMin+2*(smallMin+smallSpread)+floor+2
+	for lo < hi {
+		mid := lo + (hi-lo)/2
+		if slopeGrew(smallMin, smallSpread, mid, floor, minAgainstMax) {
+			hi = mid
+		} else {
+			lo = mid + 1
+		}
 	}
-	need := floor + 1
-	if byRatio := uint64(math.Floor((statementMemorySlope-1)*float64(base))) + 1; byRatio > need {
-		need = byRatio
-	}
-	return base - smallMin + need
+	return lo - smallMin
 }
 
 func TestScopeExpanderSlopeGuardOnRun41221131667(t *testing.T) {
@@ -74,6 +74,24 @@ func TestScopeExpanderSlopeGuardOnRun41221131667(t *testing.T) {
 	}
 	if detect <= smallSpread {
 		t.Errorf("minDetectableGrowth %d is not above the smaller size's spread %d: the stated cost is wrong", detect, smallSpread)
+	}
+	// The printed number is the boundary for every floor in use, both guards,
+	// and a grid of readings across the sizes this test measures.
+	floors := []uint64{arrayMemoryFloor}
+	for _, own := range slopeFloors {
+		floors = append(floors, own)
+	}
+	for _, f := range floors {
+		for small := uint64(1 << 20); small < 400<<20; small += 104729 {
+			for _, spread := range []uint64{0, 160, 485_375, smallSpread} {
+				for _, minAgainstMax := range []bool{false, true} {
+					d := minDetectableGrowth(small, spread, f, minAgainstMax)
+					if slopeGrew(small, spread, small+d-1, f, minAgainstMax) || !slopeGrew(small, spread, small+d, f, minAgainstMax) {
+						t.Fatalf("minDetectableGrowth(%d, %d, %d, %v) = %d is not the boundary of slopeGrew", small, spread, f, minAgainstMax, d)
+					}
+				}
+			}
+		}
 	}
 	// Every other statement keeps min against min.
 	if !slopeGrew(smallMin, smallSpread, largeMin, floor, noisySlopeStatements["projectLinkedRepositories"]) {
