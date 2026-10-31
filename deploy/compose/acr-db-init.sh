@@ -204,7 +204,7 @@ REVOKE SELECT, INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER ON TABLE ac
 GRANT SELECT ON TABLE acr.schema_migrations TO :"runtime_user";
 
 -- SELECT internal/storage/postgres/credentials.go:61, INSERT credentials.go:167, UPDATE credentials.go:115 and credentials_audit.go:72
--- DELETE of expired workload credentials: internal/storage/postgres/workload_bindings.go:65, started only when workload token exchange is configured (internal/runtime/hosted/postgres.go:185); DELETE of the member credentials of ended browser token families: internal/storage/postgres/browser_family_purge.go:85, started only when a browser client is configured (internal/runtime/hosted/postgres.go startConfiguredBrowserFamilyPurge)
+-- DELETE of expired workload credentials: internal/storage/postgres/workload_bindings.go:65, started only when workload token exchange is configured (internal/runtime/hosted/postgres.go:185); DELETE of the member credentials of ended browser token families: internal/storage/postgres/browser_family_purge.go:84, started only when a browser client is configured (internal/runtime/hosted/postgres.go startConfiguredBrowserFamilyPurge)
 REVOKE SELECT, INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER ON TABLE acr.client_credentials FROM :"runtime_user";
 GRANT SELECT, INSERT, UPDATE ON TABLE acr.client_credentials TO :"runtime_user";
 \if :credential_purge
@@ -248,7 +248,7 @@ REVOKE SELECT, INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER ON TABLE ac
 GRANT SELECT, INSERT ON TABLE acr.oauth_device_grants TO :"runtime_user";
 
 -- INSERT internal/storage/postgres/browser_refresh.go:54, SELECT ... FOR UPDATE (the family lock, checked as UPDATE) browser_refresh.go:95, UPDATE (revoke) browser_refresh.go:275
--- DELETE of ended browser token families: internal/storage/postgres/browser_family_purge.go:117, started only when a browser client is configured; their refresh rows go by cascade, which runs as the table owner
+-- DELETE of ended browser token families: internal/storage/postgres/browser_family_purge.go:116, started only when a browser client is configured; their refresh rows go by cascade, which runs as the table owner
 REVOKE SELECT, INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER ON TABLE acr.browser_token_families FROM :"runtime_user";
 GRANT SELECT, INSERT, UPDATE ON TABLE acr.browser_token_families TO :"runtime_user";
 \if :browser_client
