@@ -51,7 +51,7 @@ func verifyPreciseMemoryAccounting(ctx context.Context, direct clickhousedriver.
 		return fmt.Errorf("read max_untracked_memory: %w", err)
 	}
 	if effective != "1" {
-		return fmt.Errorf("the test ClickHouse server runs max_untracked_memory = %s, want 1 (CHAOS-12168): query_log memory peaks would be off by up to one 4 MiB step per thread", effective)
+		return fmt.Errorf("the test ClickHouse server runs max_untracked_memory = %s, want 1 (CHAOS-12168): every measured memory peak would be off by up to one 4 MiB step per thread", effective)
 	}
 	return nil
 }
