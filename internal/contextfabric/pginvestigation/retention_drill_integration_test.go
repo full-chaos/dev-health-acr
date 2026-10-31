@@ -299,3 +299,44 @@ func TestARetentionRemovalRacesAReservedSaveAndTheSaveIsRefused(t *testing.T) {
 	require.NoError(t, db.QueryRowContext(ctx, `SELECT count(*) FROM acr.context_fabric_investigation_results WHERE result_id = $1`, admission.ReservedResultID).Scan(&n))
 	require.Zero(t, n, "the racing save stored a result no record names")
 }
+
+// CHAOS-12214: a pass that fails partway returns the counts of the units it
+// had already committed, with the error, so the retention loop's failed line
+// says what was removed. Here two records with no thread are due; the pass is
+// cancelled inside the second unit, before its commit.
+func TestARetentionPassThatFailsPartwayReturnsWhatItCommitted(t *testing.T) {
+	ctx := context.Background()
+	db := newInvestigationTestDatabase(t, ctx)
+	start := time.Date(2026, 10, 1, 9, 0, 0, 0, time.UTC)
+	store, err := pginvestigation.NewStore(db, pginvestigation.WithUnthreadedRecordRetention(true))
+	require.NoError(t, err)
+	owner := storage.Principal{AuthenticationMethod: storage.AuthenticationMethodWebAssertion, Subject: "user-partial", OrgID: "org-retention-partial"}
+	for i, name := range []string{"one", "two"} {
+		key, err := contextfabric.SubmissionKeyFor(owner, "submission-partial-"+name)
+		require.NoError(t, err)
+		admission := contextfabric.SubmissionAdmission{Key: key, RequestDigest: "sha256:" + fmt.Sprintf("%064x", 40+i), ReservedResultID: "result_partial_" + name, ExpiresAt: start.Add(time.Minute)}
+		_, admitted, err := store.AdmitSubmission(ctx, admission, start)
+		require.NoError(t, err)
+		require.True(t, admitted, name)
+	}
+
+	sweepCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	units := 0
+	pginvestigation.SetRetentionStepHook(store, func(step string) {
+		if step != "record" {
+			return
+		}
+		units++
+		if units == 2 {
+			cancel() // inside the second unit, before its commit
+		}
+	})
+	sweep, err := store.SweepRetention(sweepCtx, start.Add(25*time.Hour), 0)
+	require.Error(t, err, "the pass was cancelled inside its second unit")
+	require.Equal(t, 2, units, "the pass did not reach its second unit")
+	require.Equal(t, contextfabric.RetentionSweep{RecordsRemoved: 1}, sweep, "a failed pass must return the units it committed")
+	var left int
+	require.NoError(t, db.QueryRowContext(ctx, `SELECT count(*) FROM acr.context_fabric_investigation_submissions WHERE org_id = $1`, owner.OrgID).Scan(&left))
+	require.Equal(t, 1, left, "the first unit committed and the second rolled back")
+}
