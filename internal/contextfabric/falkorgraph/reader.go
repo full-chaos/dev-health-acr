@@ -1783,7 +1783,8 @@ func (a *Adapter) DiscoverContext(ctx context.Context, principal storage.Princip
 	// denied reason is told nothing more: the project walk counts its cut
 	// before authorization.
 	anchoredCutEmpty := cohort == nil && deploymentAnchorReadCut && projectDeploymentsDenied < 0
-	partial := failedLookups > 0 || admission.DroppedUnknownRelationshipTypeCount > 0 || exactNameTruncated || cohortCutByAuthz || kindCensusTruncated || projectDeploymentsUnlinked >= 0 || projectDeploymentsDenied >= 0 || anchoredCutEmpty
+	projectNarrowingUnverified := projectNarrowingRestsOnWildcard(principal, request.Request.RequestedScope, cohortNodes, orderedResolved)
+	partial := failedLookups > 0 || admission.DroppedUnknownRelationshipTypeCount > 0 || exactNameTruncated || cohortCutByAuthz || kindCensusTruncated || projectDeploymentsUnlinked >= 0 || projectDeploymentsDenied >= 0 || anchoredCutEmpty || projectNarrowingUnverified
 	var degradedReasons []string
 	var coverageDetails []contextfabric.CoverageDetail
 	// CHAOS-4690: every degraded reason this reader composes gets a paired
@@ -1898,6 +1899,17 @@ func (a *Adapter) DiscoverContext(ctx context.Context, principal storage.Princip
 		slog.Default().Warn("context_fabric: dropped relationship edge(s) with a type outside the closed vocabulary",
 			"count", admission.DroppedUnknownRelationshipTypeCount, "types", contextfabric.SanitizeLogStrings(admission.DroppedUnknownRelationshipTypeNames))
 	}
+	if projectNarrowingUnverified {
+		// CHAOS-12231: the request asked for a project narrowing, and
+		// something this call admitted passed it only on the "*" project
+		// list, which names no project. The answer must not read as narrowed
+		// to the requested projects. read_population_unverified says what is
+		// missing: the set the answer covers could not be identified. No
+		// count: no member set of the requested projects was enumerated, so
+		// there is no number to give. Admission is unchanged.
+		degradedReasons = append(degradedReasons, projectNarrowingUnverifiedReason)
+		appendGraphDetail(contractsv1.ContextFabricCoverageDetailReadPopulationUnverified, true, nil, projectNarrowingUnverifiedReason, "context-fabric:graph")
+	}
 	sources := []contextfabric.SourceObservation{{Source: "context-fabric:graph", State: contextfabric.SourceAvailable, ObservedAt: ptrTime(a.now().UTC())}}
 	if unbounded > 0 {
 		// A distinct source row rather than a degraded reason: this is not
@@ -1932,6 +1944,34 @@ func (a *Adapter) DiscoverContext(ctx context.Context, principal storage.Princip
 			Details:         coverageDetails,
 		},
 	}, nil
+}
+
+// projectNarrowingUnverifiedReason is the degraded reason, and the paired
+// detail's Raw, for a project narrowing this call could not verify.
+const projectNarrowingUnverifiedReason = "project_narrowing_unverified"
+
+// projectNarrowingRestsOnWildcard reports whether a requested project
+// narrowing admitted any node or edge of this call only on the "*" project
+// list (graphrank.ProjectNarrowingUnproven). It reads the same admitted sets
+// countUnboundedValidity reads. A node in nodes is counted only when the
+// caller is authorized for it: the cohort pool still holds candidates that
+// authorization later drops, and a dropped node says nothing about the
+// answer. Every edge in edges already passed resolveEdge's authorization,
+// endpoints included; an endpoint that passed only on "*" is recorded on the
+// edge (EndpointProjectNarrowingUnproven), because a text-discovered edge's
+// far endpoint is never in nodes.
+func projectNarrowingRestsOnWildcard(principal storage.Principal, scope contextfabric.RequestedScope, nodes []graphrank.CandidateNode, edges []graphrank.ResolvedEdge) bool {
+	for _, n := range nodes {
+		if graphrank.ProjectNarrowingUnproven(scope, n.Attributes) && authorizedNodeAttributes(principal, scope, n.Attributes) {
+			return true
+		}
+	}
+	for _, e := range edges {
+		if e.EndpointProjectNarrowingUnproven || graphrank.ProjectNarrowingUnproven(scope, e.Attributes) {
+			return true
+		}
+	}
+	return false
 }
 
 // countUnboundedValidity counts the admitted nodes and edges that carry no
