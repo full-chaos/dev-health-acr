@@ -495,10 +495,11 @@ revocation.
 - Credential class: `acr_browser_refresh_token` in the ops credential-class
   contract (`contracts/auth/v1/credential-classes.json`, ops CHAOS-12141). The
   endpoint profiles (`contracts/auth/v1/endpoint-profiles.acr.json`) list it as
-  issued on `POST /token` and accepted on `POST /revoke` (CHAOS-12174). It is
-  not on `POST /token`'s accepted classes: that route picks the class by the
-  `grant_type` form field, and the profile schema's class selector has no kind
-  for a form field yet (a stated gap on that row).
+  issued on `POST /token` and accepted on `POST /token` and `POST /revoke`
+  (CHAOS-12174, CHAOS-12187). `POST /token` picks the class by the `grant_type`
+  form field: its row names the selector `class_disambiguator: grant_type /
+  refresh_token`, owned by this class alone; the other grants
+  (`authorization_code`, the device-code grant) are `acr_device_flow_code`.
 - Revoking a browser credential (self-revoke or the operator command) revokes
   its family (`revoked_reason=member_revoked`). Rotation stays refused.
 - Request limits: `/token` and `/revoke` allow 60 requests a minute per key.
