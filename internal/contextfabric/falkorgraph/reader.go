@@ -1498,13 +1498,11 @@ func (a *Adapter) DiscoverContext(ctx context.Context, principal storage.Princip
 	// fetches. When the kind-scoped census ran, the cohort's kind came from that
 	// census, so the exact-name cut is not a loss from this cohort's pool.
 	exactNameCutThisCohort := exactNameTruncated && !kindCensusRan
-	poolTruncationBasis, poolTruncationArms, cohortPoolTruncated := cohortPoolTruncation(
-		cohortFulltextTruncated, hopWalkTruncated, exactNameCutThisCohort, kindCensusTruncated, poolFailedLookups > 0, censusCoversThisCohort)
 	// CHAOS-12327 (lead ruling Q2): ownership a team narrowing needed was
 	// absent, not current, or cut -- the population floor, as the repository
-	// walk's truncation. No census covers it: a census fetches nodes, not their
-	// ownership.
-	cohortPoolTruncated = cohortPoolTruncated || teamScope.Undecided()
+	// walk's truncation, on its own arm: no census covers it.
+	poolTruncationBasis, poolTruncationArms, cohortPoolTruncated := cohortPoolTruncation(
+		cohortFulltextTruncated, hopWalkTruncated, exactNameCutThisCohort, kindCensusTruncated, poolFailedLookups > 0, teamScope.Undecided(), censusCoversThisCohort)
 	// request's OWN RequestedScope reaches admission completely unmodified
 	// here -- see the ownership-census filter above (graphrank.OwnsRepository)
 	// for where an ownership-routed call's membership is actually decided.
@@ -1600,10 +1598,23 @@ func (a *Adapter) DiscoverContext(ctx context.Context, principal storage.Princip
 	}
 	cohort, cohortAuthzDropped, cohortKindScopedAuthzDropped, cohortKind, cohortKindBasis, cohortPopulation := graphrank.DiscoveredCohort(principal, request, cohortNodes, cohortPoolTruncated, isInternalSubject)
 	cohortPopulationLowerBound := cohortPoolTruncated
-	if statusWalk.applied && len(statusWalk.matched) > cohortPopulation {
+	// CHAOS-12327 (review r1): the status walk's matches were read before the
+	// team narrowing, so they are narrowed by it too, and an undecided
+	// ownership keeps the population a lower bound.
+	statusMatched := statusWalk.matched
+	if statusWalk.applied && teamScope != nil {
+		if statusMatched, err = teamScope.inScopeIDs(ctx, statusPredicate.kind, statusWalk.matched); err != nil {
+			return contextfabric.GraphContext{}, graphNotProjectedError(err)
+		}
+	}
+	if statusWalk.applied && len(statusMatched) > cohortPopulation {
 		// The member cap cut a set of decided matches: the population is the
 		// counted matches, a lower bound only when that count was cut.
-		cohortPopulation, cohortPopulationLowerBound = len(statusWalk.matched), statusWalk.matchedAtLeast
+		cohortPopulation, cohortPopulationLowerBound = len(statusMatched), statusWalk.matchedAtLeast || teamScope.Undecided()
+	}
+	if teamScope != nil && a.config.Telemetry != nil {
+		requested, decided, excluded := teamScope.counts()
+		a.config.Telemetry.RecordTeamNarrowingGeneralRead(ctx, principal.OrgID, requested, decided, excluded, teamScope.floor())
 	}
 	cohortKindScopedAuthzDropped, anchorReachDenied := anchorReachDeniedCount(cohortKind, cohortNodes, principal, request, edgeFilters.ReachDenied, cohortKindScopedAuthzDropped)
 	if cohort != nil && deploymentAnchor != nil {

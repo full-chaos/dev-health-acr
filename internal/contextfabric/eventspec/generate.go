@@ -398,6 +398,8 @@ func goVarName(e Event) string {
 		return "ConfirmedNeedLedger"
 	case CohortKindFulltext.ID:
 		return "CohortKindFulltext"
+	case TeamNarrowingGeneralRead.ID:
+		return "TeamNarrowingGeneralRead"
 	case ProjectDeploymentWalk.ID:
 		return "ProjectDeploymentWalk"
 	case RepositoryWorkItemWalk.ID:

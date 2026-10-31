@@ -199,6 +199,11 @@ func TestLiveATeamNarrowingFloorsACohortOnlyWhereOwnershipIsMissing(t *testing.T
 		members             int
 		complete, truncated bool
 		lowerBound          bool
+		// floor: the team-narrowing log line's floor ("" = no line, for no
+		// narrowing); armed: the cohort basis line names the
+		// team_narrowing_undecided arm.
+		floor contextfabric.TeamNarrowingFloor
+		armed bool
 	}
 	read := func(t *testing.T, orgID string, teams []string) want {
 		t.Helper()
@@ -238,12 +243,34 @@ func TestLiveATeamNarrowingFloorsACohortOnlyWhereOwnershipIsMissing(t *testing.T
 			Bases:           bases,
 			Binding:         binding,
 		}
+		recorder := &recordingTelemetry{}
+		previous := adapter.config.Telemetry
+		adapter.config.Telemetry = recorder
 		gc, err := adapter.DiscoverContext(ctx, principal, request)
+		adapter.config.Telemetry = previous
 		if err != nil {
 			t.Fatalf("teams %v: DiscoverContext() error = %v", teams, err)
 		}
+		var floor contextfabric.TeamNarrowingFloor
+		switch len(recorder.teamNarrowingReads) {
+		case 0:
+		case 1:
+			line := recorder.teamNarrowingReads[0]
+			floor = line.floor
+			if line.requestedTeams != len(teams) || line.excluded > line.decided {
+				t.Errorf("teams %v: team narrowing line %+v, want requested_teams=%d and excluded <= decided", teams, line, len(teams))
+			}
+		default:
+			t.Errorf("teams %v: %d team narrowing lines, want at most one per call", teams, len(recorder.teamNarrowingReads))
+		}
+		armed := false
+		for _, basis := range recorder.cohortKindBases {
+			for _, arm := range basis.poolTruncationArms {
+				armed = armed || arm == CohortPoolTruncationArmTeamNarrowingUndecided
+			}
+		}
 		if gc.Cohort == nil {
-			return want{complete: true, lowerBound: gc.CohortPopulationLowerBound}
+			return want{complete: true, lowerBound: gc.CohortPopulationLowerBound, floor: floor, armed: armed}
 		}
 		n := 0
 		for _, m := range gc.Cohort.Members {
@@ -256,7 +283,7 @@ func TestLiveATeamNarrowingFloorsACohortOnlyWhereOwnershipIsMissing(t *testing.T
 				t.Errorf("teams %v: %s, want no authorization detail for a scope exclusion", teams, d.Code)
 			}
 		}
-		return want{members: n, complete: gc.Cohort.Complete, truncated: gc.Cohort.Truncated, lowerBound: gc.CohortPopulationLowerBound}
+		return want{members: n, complete: gc.Cohort.Complete, truncated: gc.Cohort.Truncated, lowerBound: gc.CohortPopulationLowerBound, floor: floor, armed: armed}
 	}
 	owned := seedTeamNarrowingFixture(t, ctx, adapter, teamNarrowingFixture{})
 	ended := seedTeamNarrowingFixture(t, ctx, adapter, teamNarrowingFixture{anchorOwnerEnded: true})
@@ -267,10 +294,10 @@ func TestLiveATeamNarrowingFloorsACohortOnlyWhereOwnershipIsMissing(t *testing.T
 		want  want
 	}{
 		{"no narrowing", owned, nil, want{members: 5, complete: true}},
-		{"the owning team", owned, []string{"team-B"}, want{members: 5, complete: true}},
-		{"a team that owns nothing: scope, complete", owned, []string{"team-A"}, want{members: 0, complete: true}},
+		{"the owning team", owned, []string{"team-B"}, want{members: 5, complete: true, floor: contextfabric.TeamNarrowingFloorNone}},
+		{"a team that owns nothing: scope, complete", owned, []string{"team-A"}, want{members: 0, complete: true, floor: contextfabric.TeamNarrowingFloorNone}},
 		{"no current owner, no narrowing: complete", ended, nil, want{members: 5, complete: true}},
-		{"no current owner under a team: floored", ended, []string{"team-A"}, want{members: 0, complete: true, lowerBound: true}},
+		{"no current owner under a team: floored", ended, []string{"team-A"}, want{members: 0, complete: true, lowerBound: true, floor: contextfabric.TeamNarrowingFloorUndecided, armed: true}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			got := read(t, tc.orgID, tc.teams)

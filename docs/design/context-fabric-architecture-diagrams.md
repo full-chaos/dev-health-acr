@@ -710,7 +710,14 @@ A path is served only when both of its ends are in scope. An exclusion is scope:
 never a denial, never an authorization detail, never a floor. The read is
 floored only where the ownership it needed for a subject the rest of the request
 admits is absent, not current, or cut: the cohort's population floor (the
-cohort is truncated; an empty member set has a population lower bound). Subject
+cohort is truncated; an empty member set has a population lower bound), on its
+own pool-truncation arm `team_narrowing_undecided`, which no census covers (a
+census fetches nodes, not their ownership). The member status walk's matches are
+narrowed the same way before they set the population; its count-only
+disclosures are CHAOS-12352. Each such read logs one
+`contextfabric.team_narrowing_general_read` line (requested teams, subjects
+decided, subjects excluded, and the floor value; log-only). A non-cohort read is
+not floored, the same as a truncated hop walk today (CHAOS-12348). Subject
 resolution is not narrowed by team. Kinds that hang off an owned entity
 (reviews, CI runs, deployments) are CHAOS-12345, and the resolution census is
 CHAOS-12346.

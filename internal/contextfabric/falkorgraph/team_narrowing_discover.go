@@ -90,6 +90,26 @@ func (a *Adapter) newDiscoverTeamScope(key, orgID string, scope contextfabric.Re
 // narrowing needed was absent, not current, or cut.
 func (s *discoverTeamScope) Undecided() bool { return s != nil && s.undecided }
 
+// floor is the read's floor value for the team-narrowing log line.
+func (s *discoverTeamScope) floor() contextfabric.TeamNarrowingFloor {
+	if s.Undecided() {
+		return contextfabric.TeamNarrowingFloorUndecided
+	}
+	return contextfabric.TeamNarrowingFloorNone
+}
+
+// counts reports the requested team ids, the subjects decided, and those
+// decided out of scope (committed subjects, teams and the organization are
+// never decided, so never counted).
+func (s *discoverTeamScope) counts() (requested, decided, excluded int) {
+	for id := range s.decided {
+		if !s.inScope[id] {
+			excluded++
+		}
+	}
+	return len(s.narrowing.requested), len(s.decided), excluded
+}
+
 // edges keeps the resolved edges whose two endpoints are in scope. An edge
 // the rest of the request refuses is kept for that check to refuse, as before.
 func (s *discoverTeamScope) edges(ctx context.Context, principal storage.Principal, scope contextfabric.RequestedScope, edges []graphrank.ResolvedEdge) ([]graphrank.ResolvedEdge, error) {
@@ -137,6 +157,28 @@ func (s *discoverTeamScope) nodes(ctx context.Context, principal storage.Princip
 		}
 	}
 	return kept, nil
+}
+
+// inScopeIDs decides ids of one kind (members a status walk already
+// authorized) and returns those in scope. A nil scope returns ids unchanged.
+func (s *discoverTeamScope) inScopeIDs(ctx context.Context, kind contextfabric.SubjectKind, ids map[string]bool) (map[string]bool, error) {
+	if s == nil {
+		return ids, nil
+	}
+	subjects := make([]contextfabric.SubjectRef, 0, len(ids))
+	for id := range ids {
+		subjects = append(subjects, contextfabric.SubjectRef{Kind: kind, CanonicalID: id})
+	}
+	if err := s.decide(ctx, subjects); err != nil {
+		return nil, err
+	}
+	out := make(map[string]bool, len(ids))
+	for id := range ids {
+		if s.admits(contextfabric.SubjectRef{Kind: kind, CanonicalID: id}) {
+			out[id] = true
+		}
+	}
+	return out, nil
 }
 
 // admits reports whether a decided subject is in scope. A committed subject,
