@@ -94,6 +94,13 @@ type readPopulation struct {
 	// answer does not carry is accounted for by a recorded plan step. Empty
 	// otherwise, and then the partially-read arm keeps its prior cause.
 	Narrowing []contractsv1.ContextFabricRequirementRefinement
+	// AuthorizationDenied (CHAOS-12153) is how many members of this
+	// population's kind the graph read counted and authorization then removed:
+	// MembershipCardinality.AuthorizationDenied, the same field the count row
+	// reads. Declared includes them and Narrowing, when it reconciles, begins
+	// with their step, so a member read over an authorization-cut member set
+	// is never read as the whole one. Zero for every other population.
+	AuthorizationDenied int
 }
 
 // readPopulationEvidence is everything the evaluator needs to decide a
@@ -435,6 +442,50 @@ func cohortMemberPopulation(cohort *Cohort, cardinality MembershipCardinality, n
 			population.Narrowing = cohortNarrowingRefinements(chain)
 		}
 	}
+	return withMemberAuthorizationCut(population, cardinality.AuthorizationDenied)
+}
+
+// withMemberAuthorizationCut states an authorization cut on the each_member
+// population (CHAOS-12153).
+//
+// The graph read counted members of the cohort's kind and authorization
+// removed `denied` of them; the cohort can still say complete, because its
+// census was complete and the cut came after. Before this the member READ rows
+// read the served members as the whole population: `satisfied`, and
+// completeness `complete`, while the status floor and the count row
+// (CHAOS-12147) already said partial for the same detail.
+//
+// Declared becomes what the turn observed, the members it read plus the
+// members the graph counted and denied: the count row's own Declared, from the
+// same field (withCohortAuthorizationCut), so the two rows cannot state two
+// different cuts. The denied count is already disclosed on the coverage
+// detail, so the row discloses nothing new. The cut is the FIRST step of the
+// member chain: it happened in the graph read, before any plan step. When the
+// plan's own chain did not reconcile there is no chain to extend, and the
+// partially-read arm names the cause without one.
+//
+// A work-item cohort never gets here with a denial: withCohortAuthorizationCut
+// leaves its cardinality alone (its census carries its own gap).
+func withMemberAuthorizationCut(population readPopulation, denied int) readPopulation {
+	if denied <= 0 || population.Census == populationAbsent {
+		return population
+	}
+	cut := contractsv1.ContextFabricRequirementRefinement{
+		Stage:    contractsv1.ContextFabricOutcomeStageAssembledResult,
+		Coverage: contractsv1.ContextFabricCoverageDetailGraphCohortDeniedByAuthorization,
+		Before:   population.Declared + denied,
+		After:    population.Declared,
+	}
+	switch {
+	case len(population.Narrowing) > 0:
+		population.Narrowing = append([]contractsv1.ContextFabricRequirementRefinement{cut}, population.Narrowing...)
+	case population.Declared == len(population.Subjects):
+		// Nothing else cut the member list: the denial is the whole chain
+		// down to the members the answer carries.
+		population.Narrowing = []contractsv1.ContextFabricRequirementRefinement{cut}
+	}
+	population.Declared += denied
+	population.AuthorizationDenied = denied
 	return population
 }
 
@@ -787,6 +838,15 @@ func readPopulationOutcomeRow(
 		if len(population.Narrowing) > 0 {
 			return narrowedPopulationOutcomeRow(row, population, read, servedKinds, threshold, evidence)
 		}
+		// CHAOS-12153: an authorization cut whose member chain did not
+		// reconcile. The cut is the row's cause, but some of the shortfall is
+		// members no recorded step accounts for (that is what "did not
+		// reconcile" means), so the flag says inferred: it never overstates.
+		if population.AuthorizationDenied > 0 {
+			row.CauseCoverage = contractsv1.ContextFabricCoverageDetailGraphCohortDeniedByAuthorization
+			row.CauseObserved = false
+			return row
+		}
 		if code, observed := unreadSubjectCause(population, servedKinds, threshold, evidence.coverage, evidence.assignment); observed {
 			row.CauseCoverage = code
 			row.CauseObserved = true
@@ -925,13 +985,21 @@ func narrowedPopulationOutcomeRow(
 		}
 	}
 	row.CauseCoverage = ""
+	// CHAOS-12153: an authorization cut is the chain's first step and the
+	// row's coverage cause, as on the count row; a later unread part keeps
+	// its own code on its own refinement.
+	if population.AuthorizationDenied > 0 {
+		row.CauseCoverage = contractsv1.ContextFabricCoverageDetailGraphCohortDeniedByAuthorization
+	}
 	row.CauseObserved = true
 	if carried := len(population.Subjects); read < carried {
 		code, observed := unreadSubjectCause(population, servedKinds, threshold, evidence.coverage, evidence.assignment)
 		if !observed {
 			code = contractsv1.ContextFabricCoverageDetailFactNarrowed
 		}
-		row.CauseCoverage = code
+		if population.AuthorizationDenied == 0 {
+			row.CauseCoverage = code
+		}
 		row.CauseObserved = observed
 		refinements = append(refinements, contractsv1.ContextFabricRequirementRefinement{
 			Stage:    contractsv1.ContextFabricOutcomeStageAssembledResult,

@@ -261,6 +261,9 @@ func ApplyServedStatusFloors(result InvestigationResult) InvestigationResult {
 	// CHAOS-12147: a stored count row that predates the authorization-cut
 	// statement is restated on the served copy before the floors read it.
 	result, restated := restateCohortAuthorizationCutCount(result)
+	// CHAOS-12153: and its member read rows, from the same denied count.
+	result, restatedReads := restateCohortAuthorizationCutMemberReads(result)
+	restated = restated || restatedReads
 	applyPopulationOutcomeStatusFloor(&result)
 	applyEmptyMemberSearchStatusFloor(&result)
 	applyDeniedCohortStatusFloor(&result)
