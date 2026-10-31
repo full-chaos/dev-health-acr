@@ -354,3 +354,69 @@ func TestTheRunLogIsBoundedAndGoesWithItsRecordOnPostgres(t *testing.T) {
 		t.Fatalf("reserved id %q", reserved)
 	}
 }
+
+// The lease columns are all or nothing: a holder without its request id, a
+// request id without its holder, and a holder without an expiry are refused
+// by the table itself (a CHECK whose branch reads NULL would pass them).
+func TestTheLeaseColumnsAreAllOrNothingOnPostgres(t *testing.T) {
+	dsn, admin := runLeasePostgres(t)
+	harness, _ := newPostgresLeaseHarness(t, dsn, 1)
+	servedResultID(t, harness.post(0, harness.tokenA, "submission-pgck-0001", submissionQuestion))
+	for name, set := range map[string]string{
+		"holder_without_request_id": `lease_holder = 'replica-a', lease_expires_at = now(), run_request_id = NULL`,
+		"request_id_without_holder": `lease_holder = NULL, lease_expires_at = now(), run_request_id = 'req_1'`,
+		"holder_without_expiry":     `lease_holder = 'replica-a', lease_expires_at = NULL, run_request_id = 'req_1'`,
+		"cancel_without_lease":      `cancel_requested_at = now()`,
+	} {
+		_, err := admin.ExecContext(context.Background(), `UPDATE acr.context_fabric_investigation_submissions SET `+set+` WHERE submission_id = 'submission-pgck-0001'`)
+		if err == nil || !strings.Contains(err.Error(), "ck_acr_cf_investigation_submissions_lease") {
+			t.Errorf("%s: %v, want the lease check to refuse it", name, err)
+		}
+	}
+	if _, err := admin.ExecContext(context.Background(), `UPDATE acr.context_fabric_investigation_submissions SET lease_holder = 'replica-a', lease_expires_at = now(), run_request_id = 'req_1' WHERE submission_id = 'submission-pgck-0001'`); err != nil {
+		t.Fatalf("a whole lease is refused: %v", err)
+	}
+}
+
+// The event row shapes are closed with no NULL hole: a terminal with no
+// marker, a result marker with no result id and an error marker with no
+// envelope are refused.
+func TestTheRunEventShapesHaveNoNullHoleOnPostgres(t *testing.T) {
+	dsn, admin := runLeasePostgres(t)
+	harness, _ := newPostgresLeaseHarness(t, dsn, 1)
+	harness.investigator.mode.Store(int32(runSave))
+	stream, _ := openLiveStream(t, harness.streamRequest(harness.serveApp(0), harness.tokenA, "submission-pgshape01"))
+	if stream == nil {
+		t.Fatal("no stream")
+	}
+	accepted, _ := stream.next(5 * time.Second)
+	stream.rest(5 * time.Second)
+	reserved := accepted.event.ReservedResultID
+	// Without the run's own terminal, so the one-terminal index does not
+	// answer first.
+	if _, err := admin.ExecContext(context.Background(), `DELETE FROM acr.context_fabric_investigation_run_events WHERE reserved_result_id = $1 AND terminal_kind IS NOT NULL`, reserved); err != nil {
+		t.Fatal(err)
+	}
+	seq := 900
+	for name, values := range map[string]string{
+		"result_without_kind":      `'result', '', NULL, NULL, NULL, NULL`,
+		"result_without_result_id": `'result', '', NULL, 'result', NULL, NULL`,
+		"error_without_envelope":   `'error', '', NULL, 'error', NULL, NULL`,
+		"error_without_kind":       `'error', '', NULL, NULL, NULL, '{}'`,
+	} {
+		// Each case in its own rolled-back transaction: a row the check let
+		// through must not take the run's one terminal slot from the next.
+		tx, err := admin.BeginTx(context.Background(), nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, err = tx.ExecContext(context.Background(), `INSERT INTO acr.context_fabric_investigation_run_events
+    (org_id, reserved_result_id, seq, event_type, last_stage_started, data, terminal_kind, terminal_result_id, terminal_error, written_at)
+VALUES ('org_1', $1, $2, `+values+`, now())`, reserved, seq)
+		_ = tx.Rollback()
+		seq++
+		if err == nil || !strings.Contains(err.Error(), "ck_acr_cf_investigation_run_events_shape") {
+			t.Errorf("%s: %v, want the shape check to refuse it", name, err)
+		}
+	}
+}

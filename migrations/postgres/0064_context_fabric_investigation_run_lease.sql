@@ -49,10 +49,12 @@ ALTER TABLE acr.context_fabric_investigation_submissions
     DROP CONSTRAINT IF EXISTS ck_acr_cf_investigation_submissions_lease;
 ALTER TABLE acr.context_fabric_investigation_submissions
     ADD CONSTRAINT ck_acr_cf_investigation_submissions_lease CHECK (
+        -- Every branch is TRUE or FALSE, never NULL: a CHECK passes on NULL,
+        -- so a NULL column must not reach char_length unguarded.
         (lease_holder IS NULL AND lease_expires_at IS NULL AND run_request_id IS NULL AND cancel_requested_at IS NULL)
-        OR (char_length(lease_holder) BETWEEN 1 AND 200
+        OR (lease_holder IS NOT NULL AND char_length(lease_holder) BETWEEN 1 AND 200
             AND lease_expires_at IS NOT NULL
-            AND char_length(run_request_id) BETWEEN 1 AND 128)
+            AND run_request_id IS NOT NULL AND char_length(run_request_id) BETWEEN 1 AND 128)
     );
 
 -- The takeover reads running records whose lease ended.
@@ -83,15 +85,17 @@ CREATE TABLE IF NOT EXISTS acr.context_fabric_investigation_run_events (
     CONSTRAINT ck_acr_cf_investigation_run_events_seq CHECK (seq BETWEEN 1 AND 9007199254740991),
     CONSTRAINT ck_acr_cf_investigation_run_events_type CHECK (event_type IN ('accepted', 'stage', 'heartbeat', 'result', 'error')),
     CONSTRAINT ck_acr_cf_investigation_run_events_stage CHECK (last_stage_started IN ('', 'interpreting', 'resolving_subjects', 'reading_facts', 'synthesizing', 'validating')),
+    -- Every branch is TRUE or FALSE, never NULL (a CHECK passes on NULL):
+    -- each nullable column is tested IS [NOT] NULL before it is compared.
     CONSTRAINT ck_acr_cf_investigation_run_events_shape CHECK (
         (event_type IN ('accepted', 'stage', 'heartbeat')
             AND data IS NOT NULL AND char_length(data) BETWEEN 2 AND 65536
             AND terminal_kind IS NULL AND terminal_result_id IS NULL AND terminal_error IS NULL)
-        OR (event_type = 'result' AND data IS NULL AND terminal_error IS NULL
-            AND ((terminal_kind = 'result' AND char_length(terminal_result_id) BETWEEN 8 AND 256)
+        OR (event_type = 'result' AND data IS NULL AND terminal_error IS NULL AND terminal_kind IS NOT NULL
+            AND ((terminal_kind = 'result' AND terminal_result_id IS NOT NULL AND char_length(terminal_result_id) BETWEEN 8 AND 256)
               OR (terminal_kind = 'unsaved' AND terminal_result_id IS NULL)))
-        OR (event_type = 'error' AND data IS NULL AND terminal_kind = 'error' AND terminal_result_id IS NULL
-            AND char_length(terminal_error) BETWEEN 2 AND 16384)
+        OR (event_type = 'error' AND data IS NULL AND terminal_kind IS NOT NULL AND terminal_kind = 'error' AND terminal_result_id IS NULL
+            AND terminal_error IS NOT NULL AND char_length(terminal_error) BETWEEN 2 AND 16384)
     )
 );
 
