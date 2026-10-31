@@ -41,16 +41,17 @@ const (
 	// imported because internal/config must not depend on a Context Fabric
 	// adapter package; the two are pinned equal by a test rather than by
 	// hope (see TestOrgActivityWindowDefaultMatchesTheAdapter).
-	defaultProjectorOrgActivityWindow = 720 * time.Hour
-	envContextFabricPollInterval      = "ACR_CONTEXT_FABRIC_PROJECTION_POLL_INTERVAL"
-	envContextFabricConcurrency       = "ACR_CONTEXT_FABRIC_PROJECTION_CONCURRENCY"
-	envContextFabricDrainBudget       = "ACR_CONTEXT_FABRIC_PROJECTION_DRAIN_BATCH_BUDGET"
-	envContextFabricCountCheck        = "ACR_CONTEXT_FABRIC_PROJECTION_COUNT_CHECK_INTERVAL"
-	envContextFabricTeamsProjects     = "ACR_CONTEXT_FABRIC_PROJECT_TEAMS_PROJECTS_ENABLED"
-	envEpisodeWriteback               = "ACR_ENABLE_EPISODE_WRITEBACK"
-	envContextFabricGraphReads        = "ACR_CONTEXT_FABRIC_GRAPH_READS_ENABLED"
-	envProjectorListenAddress         = "ACR_PROJECTOR_ADDR"
-	envProjectorEnvironment           = "ACR_ENVIRONMENT"
+	defaultProjectorOrgActivityWindow  = 720 * time.Hour
+	envContextFabricPollInterval       = "ACR_CONTEXT_FABRIC_PROJECTION_POLL_INTERVAL"
+	envContextFabricConcurrency        = "ACR_CONTEXT_FABRIC_PROJECTION_CONCURRENCY"
+	envContextFabricDrainBudget        = "ACR_CONTEXT_FABRIC_PROJECTION_DRAIN_BATCH_BUDGET"
+	envContextFabricCountCheck         = "ACR_CONTEXT_FABRIC_PROJECTION_COUNT_CHECK_INTERVAL"
+	envContextFabricTeamsProjects      = "ACR_CONTEXT_FABRIC_PROJECT_TEAMS_PROJECTS_ENABLED"
+	envContextFabricWorkItemMembership = "ACR_CONTEXT_FABRIC_PROJECT_WORK_ITEM_PROJECT_MEMBERSHIP_ENABLED"
+	envEpisodeWriteback                = "ACR_ENABLE_EPISODE_WRITEBACK"
+	envContextFabricGraphReads         = "ACR_CONTEXT_FABRIC_GRAPH_READS_ENABLED"
+	envProjectorListenAddress          = "ACR_PROJECTOR_ADDR"
+	envProjectorEnvironment            = "ACR_ENVIRONMENT"
 )
 
 // ProjectorConfig is cmd/acr-projector's process configuration. It shares
@@ -151,6 +152,14 @@ type ProjectorConfig struct {
 	// source-vs-graph count checks; negative disables them.
 	CountCheckInterval   time.Duration
 	TeamsProjectsEnabled bool
+	// WorkItemProjectMembership
+	// (ACR_CONTEXT_FABRIC_PROJECT_WORK_ITEM_PROJECT_MEMBERSHIP_ENABLED,
+	// default false; CHAOS-12226) states each work item's current project
+	// membership on its graph node and adds the membership refresh table.
+	// The refresh table's cursor starts empty, so turning this on sweeps
+	// every work item with membership history: it is the backfill roll step
+	// (CHAOS-12107 ruling: chris approves it), never a default.
+	WorkItemProjectMembership bool
 	// EpisodeWriteback mirrors acr-api's flag of the same name. It gates the
 	// episodes projection source: with write-back off nothing writes
 	// acr.agent_episodes and the runtime role has no grant on it.
@@ -310,6 +319,9 @@ func loadProjector(lookup lookupEnv, required requiredStores) (ProjectorConfig, 
 	if cfg.TeamsProjectsEnabled, err = boolValue(lookup, envContextFabricTeamsProjects, true); err != nil {
 		return ProjectorConfig{}, err
 	}
+	if cfg.WorkItemProjectMembership, err = boolValue(lookup, envContextFabricWorkItemMembership, false); err != nil {
+		return ProjectorConfig{}, err
+	}
 	if cfg.EpisodeWriteback, err = boolValue(lookup, envEpisodeWriteback, false); err != nil {
 		return ProjectorConfig{}, err
 	}
@@ -415,7 +427,7 @@ func (c ProjectorConfig) SafeAttributes() []any {
 		"organization_count", len(c.OrgIDs), "org_discovery_enabled", c.OrgDiscoveryEnabled,
 		"org_activity_window", c.OrgActivityWindow.String(), "org_discovery_deny_count", len(c.OrgDiscoveryDenyIDs),
 		"poll_interval", c.PollInterval.String(), "overlap", c.Overlap.String(), "window_pass_interval", c.WindowPassInterval.String(), "window_carry", c.WindowCarry,
-		"concurrency", c.Concurrency, "drain_batch_budget", c.DrainBatchBudget, "teams_projects_enabled", c.TeamsProjectsEnabled, "episode_writeback_enabled", c.EpisodeWriteback,
+		"concurrency", c.Concurrency, "drain_batch_budget", c.DrainBatchBudget, "teams_projects_enabled", c.TeamsProjectsEnabled, "work_item_project_membership_enabled", c.WorkItemProjectMembership, "episode_writeback_enabled", c.EpisodeWriteback,
 		"require_backing_stores", c.RequireBackingStores, "local_composition_ready", c.LocalCompositionReady,
 	}
 }

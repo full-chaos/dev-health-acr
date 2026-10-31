@@ -249,6 +249,12 @@ type ClickHouseProjectionSource struct {
 	// dev-health-go client default.
 	readByteLimit uint64
 
+	// workItemProjectMembership (CHAOS-12226) states each work item's
+	// current project membership and adds the membership refresh table
+	// (WithWorkItemProjectMembership). Off by default: turning it on is the
+	// backfill roll step.
+	workItemProjectMembership bool
+
 	// endedLinksBound overrides relationcurrent.MaxEndedLinks when positive (tests).
 	endedLinksBound int
 
@@ -327,6 +333,29 @@ func NewClickHouseProjectionSource(client contextpacket.ClickHouseQueryClient) (
 		return nil, fmt.Errorf("devhealthsource: clickhouse query client is required")
 	}
 	return &ClickHouseProjectionSource{client: client, now: time.Now, logger: slog.Default(), overlap: defaultReprojectOverlap, windowInterval: DefaultWindowPassInterval, windowCarry: true, window: newWindowMemo()}, nil
+}
+
+// WithWorkItemProjectMembership turns on the work-item project membership
+// (CHAOS-12226): every work-item entity states its current project set
+// (ProjectIdentities), and the work_items_project_membership table re-emits a
+// work item whose membership changed without the work item syncing. The
+// table's cursor starts empty, so the first pass after turning it on sweeps
+// every work item with membership history: turn it on as the roll step that
+// backfills, never as a default. Off, a work item states nothing and the
+// graph key stays absent (fail closed).
+func (s *ClickHouseProjectionSource) WithWorkItemProjectMembership(enabled bool) *ClickHouseProjectionSource {
+	s.workItemProjectMembership = enabled
+	return s
+}
+
+// tables is this source's producer registry: entityTables as declared, or,
+// with work-item project membership on, the same list with the work-item
+// producer stating membership and the refresh table after it.
+func (s *ClickHouseProjectionSource) tables() []entityTable {
+	if !s.workItemProjectMembership {
+		return entityTables
+	}
+	return withWorkItemProjectMembership(entityTables)
 }
 
 // WithOverlap sets the trailing re-read window once caught up (CHAOS-7263;
@@ -513,7 +542,7 @@ func (s *ClickHouseProjectionSource) plan(fromCursor string) sourcePlan {
 		client:  s.client,
 		source:  SourceName,
 		version: ClickHouseSourceVersion,
-		tables:  entityTables,
+		tables:  s.tables(),
 		now:     s.now,
 		logger:  s.logger,
 		seed: func(orgID string) []candidate {

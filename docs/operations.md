@@ -451,6 +451,26 @@ phase 1 must be fully drained BEFORE this deploy). Run
 `acr-projector rebuild --org <organization-id>` for every projected
 organization; the rebuild reprojects and re-embeds in one pass.
 
+**Work-item project membership is a roll step, not a deploy step
+(CHAOS-12226).** `ACR_CONTEXT_FABRIC_PROJECT_WORK_ITEM_PROJECT_MEMBERSHIP_ENABLED`
+(helm `contextFabric.projector.workItemProjectMembershipEnabled`, default
+`false`) makes each work item state its current project membership, read from
+its own project link (`project_membership_presence`, resolved to exactly one
+`projects` row), on its graph node as `authorization_project_identities`: a
+list of canonical `project.v2:` identities, empty when the work item is in no
+project. It also adds the `work_items_project_membership` table, which
+re-emits a work item whose membership changed without the work item syncing
+(a transition, the loss of its last project, a change to a project it names).
+That table starts with an empty cursor, so the first pass after turning the
+flag on sweeps every work item with membership history: it IS the backfill,
+and turning it on needs an approved roll. The deploy itself bumps no source
+version and changes no graph value while the flag is off. A work item
+projected before the flag was on carries no `authorization_project_identities`
+until it is written again; an absent value admits no project (fail closed). To
+cover work items with no membership input at all, run
+`acr-projector rebuild --org <organization-id>` in the same approved roll.
+Turning the flag off again makes every later work-item write remove the value.
+
 **A rebuild is likewise REQUIRED after deploying CHAOS-3835**
 (embed composition tag `t2` → `t3`, the T5 id-only skip decision —
 `isPureIdentifierSubject`, `id_only.go`). **This deploy does NOT bump
