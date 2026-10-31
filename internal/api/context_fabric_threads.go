@@ -172,8 +172,12 @@ func (a *App) ContextFabricThreadListHandler() http.Handler {
 			return
 		}
 		list := contractsv1.ContextFabricThreadList{SchemaVersion: contractsv1.ContextFabricThreadListSchema, Threads: make([]contractsv1.ContextFabricThreadSummary, 0, len(records))}
+		firstQuestions := 0
 		for _, record := range records {
 			list.Threads = append(list.Threads, threadSummary(record))
+			if record.FirstQuestion != "" {
+				firstQuestions++
+			}
 		}
 		if more && len(records) > 0 {
 			last := records[len(records)-1]
@@ -184,7 +188,10 @@ func (a *App) ContextFabricThreadListHandler() http.Handler {
 			writeError(w, r, http.StatusInternalServerError, "internal_error", "Context Fabric threads could not be served", false, nil)
 			return
 		}
-		a.logThreadRoute(r, principal, threadRouteList, ThreadRouteListed, nil, "threads", len(list.Threads), "more", more)
+		// first_questions counts the items that carry one (CHAOS-12235): a
+		// count, never the text, so a derivation that stops naming them is
+		// visible at Info.
+		a.logThreadRoute(r, principal, threadRouteList, ThreadRouteListed, nil, "threads", len(list.Threads), "more", more, "first_questions", firstQuestions)
 		a.recordReadAudit(r.Context(), principal, "context_fabric_thread_list_read", "context_fabric_thread", "", "success", map[string]any{"threads": len(list.Threads)})
 		writeJSON(w, http.StatusOK, list)
 	})
@@ -331,6 +338,7 @@ func threadSummary(record contextfabric.ThreadRecord) contractsv1.ContextFabricT
 	return contractsv1.ContextFabricThreadSummary{
 		ThreadID: record.Key.ThreadID, RetentionDays: record.RetentionDays, TurnCount: record.TurnCount,
 		CreatedAt: record.CreatedAt.UTC(), LastTurnAt: record.LastTurnAt.UTC(), ExpiresAt: record.ExpiresAt.UTC(),
+		FirstQuestion: record.FirstQuestion,
 	}
 }
 

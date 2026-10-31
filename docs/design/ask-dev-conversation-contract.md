@@ -101,9 +101,24 @@ turn exactly one of:
 
 `context_fabric_thread_list.v1` — `GET /api/v1/context-fabric/threads`:
 `threads[]` (≤ 50) of summaries (`thread_id`, `retention_days`, `turn_count`,
-`created_at`, `last_turn_at`, `expires_at`), newest `last_turn_at` first, then
-`thread_id`; `next_cursor` (opaque, present when more threads exist). Query:
-`limit` 1..50 (default 20), `cursor`. Closed threads are not listed.
+`created_at`, `last_turn_at`, `expires_at`, and the optional `first_question`),
+newest `last_turn_at` first, then `thread_id`; `next_cursor` (opaque, present
+when more threads exist). Query: `limit` 1..50 (default 20), `cursor`. Closed
+threads are not listed.
+
+`first_question` (CHAOS-12235, additive) is the question recorded on the
+thread's **true first turn**: the first of the row's own linked records in turn
+order (`admitted_at`, then `submission_id`), not the first turn of a served
+page (a read serves the latest 100). It is read from that turn's record in the
+same statement as the list, with the same owner match as the thread read, and
+is never stored on the thread row or anywhere else. It is absent (never empty)
+when that turn recorded no question: a turn admitted before questions were
+recorded, or a question a delete erased. So delete and retention cover it
+with no step of their own: a deleted thread is not listed and its questions
+are erased; an expired thread is not listed, and retention removes its records
+(or erases a deleted thread's) — no list item can name a question no record
+holds. The list's Info line counts the items that carry one (`first_questions`),
+never the text.
 
 Both cursors share one grammar (`ValidContextFabricThreadCursor`: 1..512
 URL-safe base64 characters). The Go validators hold what the schema cannot:
