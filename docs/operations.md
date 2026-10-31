@@ -969,6 +969,19 @@ regenerate it with `ACR_WRITE_CANONICAL_ID_VECTORS=1 go test
 ./internal/contextfabric/devhealthsource/ -run
 TestCanonicalIDVectorsMatchTheBuilders`.
 
+Log line (INFO, at most one per subject resolution whose request carries an
+`ask_dev_page_context` hint): `context fabric resolution trace: page hint
+lookup`. Each page hint takes one outcome: `exact_hit` (the exact id lookup
+found the node), `label_fallback` (it did not, the hint has a label, and the
+hybrid search ran, so the label was searched) or `unresolved` (it did not, and
+no search ran or the hint has no label). Fields: `request_id`, `stage`
+(`page_hint_lookup`), `page_hints`, `exact_hit`, `label_fallback`,
+`unresolved`, `search_fallback` (whether the search ran), and
+`exact_hit_by_kind`, `label_fallback_by_kind`, `unresolved_by_kind` (counts
+keyed by subject kind). The line carries no canonical id, label or question
+text. A rise in `label_fallback` or `unresolved` suggests web's ids no longer
+match acr's, or that the subject is not in the graph yet.
+
 ### Ask Dev run lease (CHAOS-11949)
 
 `ACR_CONTEXT_FABRIC_RUN_LEASE_ENABLED` (default `false`; refused at start

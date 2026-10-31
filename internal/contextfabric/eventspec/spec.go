@@ -656,6 +656,45 @@ var KindOfferWithheld = Event{
 	},
 }
 
+// PageHintLookup is the Info line (graphrank/tracer.go, case
+// "page_hint_lookup", CHAOS-12230) reporting how the Ask Dev page-context
+// subject hints of one resolveSubjects call resolved: hints whose source is
+// hintsource.AskDevPageContext, which web builds in acr's canonical form from
+// natural keys. Each such hint takes exactly one outcome: exact_hit (the exact
+// canonical-id lookup found the node), label_fallback (it did not, the hint
+// carried a label, and the call's hybrid search ran, so the label was searched)
+// or unresolved (it did not, and either no search ran or the hint had no
+// label). A rise in label_fallback or unresolved is how a drift between web's
+// id builder and acr's shows up.
+//
+// COUNTS ONLY: no canonical id, label, question or term -- the ids are exactly
+// what this line must not carry. Subject kinds are closed-vocabulary values.
+// MultiplicityZeroOrOnePerRequest: a call whose request carries no page hint,
+// or that returns before the hint loop (the comparison dispatch, an
+// organization or context error), emits none.
+var PageHintLookup = Event{
+	ID:                 "graphrank.page_hint_lookup",
+	Msg:                "context fabric resolution trace: page hint lookup",
+	Level:              LevelInfo,
+	Multiplicity:       MultiplicityZeroOrOnePerRequest,
+	Attribution:        []string{"request_id"},
+	BoundedAggregation: "at most one line per resolveSubjects call -- emitted from one deferred statement once the call reached its subject-hint loop, and only when the request carries at least one ask_dev_page_context hint; CertifyAbsent asserts the request with none.",
+	Fields: []Field{
+		{Key: "request_id", Type: FieldString, Presence: PresenceRequired},
+		{Key: "stage", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: []string{"page_hint_lookup"}},
+		{Key: "page_hints", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "exact_hit", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "label_fallback", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "unresolved", Type: FieldInt, Presence: PresenceRequired},
+		// Whether the call's hybrid search ran: the fact that separates a
+		// label_fallback from an unresolved hint that carried a label.
+		{Key: "search_fallback", Type: FieldBool, Presence: PresenceRequired},
+		{Key: "exact_hit_by_kind", Type: FieldCountMap, Presence: PresenceRequired, ClosedVocabulary: arrayTokens(storedResultSubjectKindArr[:])},
+		{Key: "label_fallback_by_kind", Type: FieldCountMap, Presence: PresenceRequired, ClosedVocabulary: arrayTokens(storedResultSubjectKindArr[:])},
+		{Key: "unresolved_by_kind", Type: FieldCountMap, Presence: PresenceRequired, ClosedVocabulary: arrayTokens(storedResultSubjectKindArr[:])},
+	},
+}
+
 // Corroboration is the Debug per-candidate line (graphrank/tracer.go, case
 // "corroboration", event.CorroborationSummary==false) emitted once per
 // candidate every corroboration pass processes, unconditionally (retrieval-
@@ -5493,7 +5532,7 @@ var All = []Event{
 	RetainedRankingAccounting,
 	WorkItemTupleAdmission,
 	WorkItemAuthorizationGap,
-	RankedCutSummary, AnchorSlotDisplaced, DecisionSummary, Search, KindOfferWithheld,
+	RankedCutSummary, AnchorSlotDisplaced, DecisionSummary, Search, KindOfferWithheld, PageHintLookup,
 	Corroboration, CorroborationSummary, ReservedKindAdmitted, OfferPool, OfferPoolSummary,
 	Decision, SearchQuestion, AliasLookup, AnchorPool, KindCoverageFloor, ConfirmedKindRescue, KindScopedSemantic,
 	IdentityUniverse, KindHintSearch, ExactNameSearch, AnchorOffer,

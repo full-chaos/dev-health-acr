@@ -1962,6 +1962,19 @@ type ResolutionTraceEvent struct {
 	ConfirmedKindVectorScopeRivalCountAboveTau int64
 	ConfirmedKindVectorScopeSnapshotStable     bool
 	ConfirmedKindVectorScopeDurationMS         int64
+	// PageHint* (stage == "page_hint_lookup" ONLY, CHAOS-12230): how this
+	// call's Ask Dev page-context subject hints resolved -- see
+	// pageHintLookupTally (page_hint_lookup.go) for the one-outcome-per-hint
+	// rule. Counts, one bool and subject-kind keys only: never the hint's id
+	// or label.
+	PageHintCount               int
+	PageHintExactHit            int
+	PageHintLabelFallback       int
+	PageHintUnresolved          int
+	PageHintSearchFallback      bool
+	PageHintExactHitByKind      map[string]int
+	PageHintLabelFallbackByKind map[string]int
+	PageHintUnresolvedByKind    map[string]int
 }
 
 // traceTermHash is the ONE place a search term is ever hashed for
@@ -2819,7 +2832,16 @@ func resolveSubjects(ctx context.Context, principal storage.Principal, request c
 	// authorization event) so this count never over-reports.
 	subjectCandidatesAuthzDropped := 0
 	var inactiveHints []contractsv1.ContextFabricInactiveHint
-	for _, hint := range request.RequestedScope.SubjectHints {
+	// CHAOS-12230: the page_hint_lookup line, built here at the hint loop and
+	// emitted by ONE deferred call, so every return below -- the inactive-team
+	// answer, the caller-hint short circuit, the identity-question exit, every
+	// error and the ordinary end -- writes it, and none can skip it. The
+	// returns above this point (organization, context, the comparison
+	// dispatch) never reach the loop and write none. The tracer is read now:
+	// the deferred call reports to the tracer this call was given.
+	pageHints := newPageHintLookupTally(request)
+	defer pageHints.emit(deps.ResolutionTracer)
+	for hintIndex, hint := range request.RequestedScope.SubjectHints {
 		if strings.TrimSpace(hint.ID) == "" || hint.Kind == "" {
 			continue
 		}
@@ -2863,6 +2885,9 @@ func resolveSubjects(ctx context.Context, principal storage.Principal, request c
 			}
 			continue
 		}
+		// The exact lookup found the node: the outcome is decided here, before
+		// authorization, because the line measures the id, not the grant.
+		pageHints.exactHit(hintIndex)
 		// allowExactMatch=true: subject.Label here is the caller's own
 		// explicit hint label, legitimately eligible to exact-match --
 		// unlike CHAOS-3838's question-provenance marker below, this is
@@ -3107,6 +3132,10 @@ func resolveSubjects(ctx context.Context, principal storage.Principal, request c
 		return contextfabric.SubjectResolution{Candidates: []contextfabric.SubjectCandidate{}, Committed: []contextfabric.SubjectRef{}},
 			contextfabric.StructureOfferMaterial{}, nil
 	}
+	// From here the call searches its terms, which include every hint label
+	// (SubjectTerms): a page hint the exact lookup missed is now searched by
+	// its label (CHAOS-12230).
+	pageHints.searchFallbackRan()
 	// observationParentKey maps an observation (document/episode) subject
 	// key to its found canonical parent's subject key -- only set when
 	// traversal actually found one. observationBlocked marks an observation
