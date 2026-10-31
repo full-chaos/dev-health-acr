@@ -618,7 +618,7 @@ func TestTheRepositoryWalkLineCarriesCountsOnlyWhenMeasured(t *testing.T) {
 		{"measured unfiltered", RepositoryWorkItemWalkEvent{Outcome: RepositoryWorkItemWalkUnlinked, PullRequests: 4, Measured: true},
 			[]string{"outcome", "anchor_kind", "filtered", "restricted", "pull_requests", "linked_issues", "members", "population", "truncated", "lower_tier_cut", "denied", "project_excluded"}, []string{"reason"}},
 		{"measured filtered", RepositoryWorkItemWalkEvent{Outcome: RepositoryWorkItemWalkNoMatch, Filtered: true, Measured: true},
-			[]string{"pull_requests", "linked_issues", "members", "population", "truncated", "lower_tier_cut"}, []string{"denied", "reason"}},
+			[]string{"pull_requests", "linked_issues", "members", "population", "truncated", "lower_tier_cut", "project_excluded"}, []string{"denied", "reason"}},
 		{"read failed", RepositoryWorkItemWalkEvent{Outcome: RepositoryWorkItemWalkReadFailed, UnmeasuredReason: WorkItemMembershipUnmeasuredS1Error},
 			[]string{"outcome", "reason"}, []string{"pull_requests", "linked_issues", "members", "truncated", "denied", "project_excluded"}},
 	} {
