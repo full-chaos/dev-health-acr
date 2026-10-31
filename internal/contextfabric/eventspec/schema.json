@@ -2073,6 +2073,11 @@
         "presence": "required"
       },
       {
+        "key": "legacy_source_state_words_served",
+        "type": "bool",
+        "presence": "required"
+      },
+      {
         "key": "outcome_rows_total",
         "type": "int",
         "presence": "required"

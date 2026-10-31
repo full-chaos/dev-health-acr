@@ -53,7 +53,10 @@ func TestByIDAStoredLegacySourceStateLabelIsServedInPlainWords(t *testing.T) {
 	stored.Drivers[0].Summary = title + legacyTruncatedQualifier + "."
 	stored.Completeness = contextfabric.ComputeAnswerCompleteness(stored)
 
-	got, _ := readLeadProseByID(t, stored)
+	got, logs := readLeadProseByID(t, stored)
+	if !strings.Contains(logs, `"legacy_source_state_words_served":false`) {
+		t.Errorf("the completeness authority line must state legacy_source_state_words_served=false: %s", logs)
+	}
 	if want := title + truncatedQualifier + ". Principal driver: CHAOS: operational deficiencies."; got.DirectJudgment != want {
 		t.Errorf("direct_judgment = %q, want %q", got.DirectJudgment, want)
 	}
@@ -111,7 +114,11 @@ func TestByIDTheSourceStateWordsInOtherTextAreKept(t *testing.T) {
 	stored.Drivers[0].Summary = "Release acceptance remains incomplete; the readiness feed reported" + legacyTruncatedQualifier + "."
 	stored.Completeness = contextfabric.ComputeAnswerCompleteness(stored)
 
-	got, _ := readLeadProseByID(t, stored)
+	got, logs := readLeadProseByID(t, stored)
+	// The words are kept as evidence, and the Info line says they were served.
+	if !strings.Contains(logs, `"legacy_source_state_words_served":true`) {
+		t.Errorf("the completeness authority line must state legacy_source_state_words_served=true: %s", logs)
+	}
 	if got.DirectJudgment != stored.DirectJudgment {
 		t.Errorf("direct_judgment = %q, want as stored %q", got.DirectJudgment, stored.DirectJudgment)
 	}

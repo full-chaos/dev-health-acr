@@ -253,12 +253,73 @@ func restateLegacySourceStateLabels(result InvestigationResult) InvestigationRes
 		if driver.Summary == title+legacyTruncatedSummaryLabel {
 			driver.Summary = title + projectStatusStateLabel(SourceTruncated)
 		}
-		for _, base := range []string{strings.TrimRight(title, "."), title} {
-			result.DirectJudgment = strings.ReplaceAll(result.DirectJudgment, base+legacyTruncatedQualifier, base+current)
-			result.DeterministicAnswer = strings.ReplaceAll(result.DeterministicAnswer, base+legacyTruncatedQualifier, base+current)
+	}
+	result.DirectJudgment = restateLegacyLeadFragments(result.DirectJudgment, result.Drivers, result.Cohort, "Principal driver: ")
+	result.DeterministicAnswer = restateLegacyLeadFragments(result.DeterministicAnswer, result.Drivers, result.Cohort, "Principal driver(s): ")
+	return result
+}
+
+// LegacySourceStateWordsServed reports whether a served copy still carries
+// the legacy truncated-read words in its lead prose, current_state, or a
+// driver's summary or note: text the restatement left as it was, a provider's
+// evidence with the same words, or a stored form it does not know. The
+// completeness authority line counts it (legacy_source_state_words_served),
+// so a missed rewrite is visible at Info.
+func LegacySourceStateWordsServed(result InvestigationResult) bool {
+	carries := func(text string) bool {
+		return strings.Contains(text, legacyTruncatedQualifier) || strings.Contains(text, legacyTruncatedNote)
+	}
+	if carries(result.DirectJudgment) || carries(result.DeterministicAnswer) || carries(result.CurrentState) {
+		return true
+	}
+	return slices.ContainsFunc(result.Drivers, func(driver DriverJudgment) bool {
+		return carries(driver.Summary) || carries(driver.SourceStateNote)
+	})
+}
+
+// restateLegacyLeadFragments restates the two places composeLeadProse put a
+// driver's qualifier, at their composed position and nowhere else: the quick
+// answer (the first principal driver in answer order, leadDriverSentence)
+// and the details list (label, the other principal drivers' titles joined by
+// "; ", principalDriverTitles). Each is rebuilt from the drivers in answer
+// order with the legacy qualifier and replaced, once, by what the composers
+// write now. A list is tried both after a quick answer and as a whole, so a
+// head composed under either form is found. A title that merely carries the
+// same words is never touched, because only the whole composed fragment
+// matches.
+func restateLegacyLeadFragments(head string, drivers []DriverJudgment, cohort *Cohort, label string) string {
+	ordered := principalDriversInAnswerOrder(drivers, cohort)
+	if len(ordered) == 0 {
+		return head
+	}
+	legacyQualifier := func(driver DriverJudgment) string {
+		if driver.SourceState == SourceTruncated {
+			return legacyTruncatedQualifier
+		}
+		return driverSourceStateQualifier(driver.SourceState)
+	}
+	if lead := ordered[0]; lead.SourceState == SourceTruncated {
+		title := strings.TrimRight(strings.TrimSpace(lead.Title), ".")
+		if legacy := title + legacyQualifier(lead) + "."; title != "" {
+			head = strings.Replace(head, legacy, leadDriverSentence(lead), 1)
 		}
 	}
-	return result
+	for _, list := range [][]DriverJudgment{ordered[1:], ordered} {
+		if !slices.ContainsFunc(list, func(driver DriverJudgment) bool { return driver.SourceState == SourceTruncated }) {
+			continue
+		}
+		legacy := make([]string, 0, len(list))
+		for _, driver := range list {
+			if title := strings.TrimSpace(driver.Title); title != "" {
+				legacy = append(legacy, title+legacyQualifier(driver))
+			}
+		}
+		from := label + strings.Join(legacy, "; ") + "."
+		if strings.Contains(head, from) {
+			return strings.Replace(head, from, label+strings.Join(principalDriverTitles(list), "; ")+".", 1)
+		}
+	}
+	return head
 }
 
 // quickAnswerSentence is the driver sentence the composer leads an answer's

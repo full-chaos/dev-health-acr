@@ -1,8 +1,11 @@
 package contextfabric
 
 import (
+	"context"
 	"strings"
 	"testing"
+
+	"github.com/full-chaos/dev-health-acr/internal/storage"
 )
 
 // CHAOS-12289: the label for a driver whose source read was cut named ACR's
@@ -146,5 +149,89 @@ func TestAFlooredAnswerStoredWithTheLegacyLabelKeepsItsHead(t *testing.T) {
 	got := ApplyServedStatusFloors(asStoredBefore(current, false))
 	if got.Status != InvestigationPartial || got.DirectJudgment != want.DirectJudgment || got.DeterministicAnswer != want.DeterministicAnswer {
 		t.Fatalf("floored legacy answer: %q with %q / %q, want %q / %q", got.Status, got.DirectJudgment, got.DeterministicAnswer, want.DirectJudgment, want.DeterministicAnswer)
+	}
+}
+
+// Review r1 P3: a driver titled with a cut driver's title plus the legacy
+// words keeps its title; only the cut driver's own qualifier is restated.
+func TestATitleThatIsACutTitlePlusTheLegacyWordsIsKept(t *testing.T) {
+	t.Parallel()
+	result := validInvestigationResult()
+	result.Drivers = []DriverJudgment{
+		{DriverID: "driver_1", Standing: DriverPrincipal, Category: "readiness", Title: "Release acceptance", SourceState: SourceTruncated},
+		{DriverID: "driver_2", Standing: DriverPrincipal, Category: "health", Title: "Release acceptance" + legacyTruncatedQualifierForTest, SourceState: SourceAvailable},
+	}
+	stored := result
+	stored.DirectJudgment = "Release acceptance" + legacyTruncatedQualifierForTest + ". Principal driver: Release acceptance" + legacyTruncatedQualifierForTest + "."
+	stored.DeterministicAnswer = "Release acceptance" + legacyTruncatedQualifierForTest + ". Principal driver(s): Release acceptance" + legacyTruncatedQualifierForTest + "."
+	want := result
+	want.DirectJudgment = composeDirectJudgmentFrom(result.Status, result.Drivers, nil, result.SubjectResolution)
+	want.DeterministicAnswer = composeDeterministicAnswerFrom(result.Status, result.Drivers, nil, nil, result.SubjectResolution)
+	if want.DirectJudgment != "Release acceptance (truncated: the source read was cut). Principal driver: Release acceptance"+legacyTruncatedQualifierForTest+"." {
+		t.Fatalf("fixture: the composer writes %q", want.DirectJudgment)
+	}
+	got := restateServedStatusHead(stored)
+	if got.DirectJudgment != want.DirectJudgment || got.DeterministicAnswer != want.DeterministicAnswer {
+		t.Fatalf("lead prose = %q / %q, want %q / %q", got.DirectJudgment, got.DeterministicAnswer, want.DirectJudgment, want.DeterministicAnswer)
+	}
+}
+
+// Through the engine's reuse path: the authority observation says whether the
+// served copy still carries the legacy words.
+func TestAReusedAnswerCountsTheLegacySourceStateWordsItStillServes(t *testing.T) {
+	t.Parallel()
+	for name, tc := range map[string]struct {
+		currentState string
+		want         bool
+	}{
+		"restated":            {"Current observed values: open items: 3. Limited read: readiness" + legacyTruncatedQualifierForTest + ".", false},
+		"kept provider value": {"Current observed values: note: readiness" + legacyTruncatedQualifierForTest + ". Then more.", true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			project, candidate := servedHeadCandidate(InvestigationComplete)
+			candidate.CurrentState = tc.currentState
+			telemetry := &recordingTelemetry{}
+			engine := completenessAuthorityTestEngine(t, EngineDependencies{
+				Graph: graphReaderStub{resolution: SubjectResolution{Candidates: []SubjectCandidate{}, Committed: []SubjectRef{project}}},
+				ReuseGate: reuseGateFunc(func(context.Context, storage.Principal, ReuseKey) (InvestigationResult, bool, error) {
+					return candidate, true, nil
+				}),
+				Telemetry: telemetry,
+			}, false, false)
+			if _, err := engine.Investigate(context.Background(), reusePrincipal(), validInvestigationRequest()); err != nil {
+				t.Fatalf("Investigate() error = %v", err)
+			}
+			n := len(telemetry.completenessAuthorities)
+			if n == 0 || telemetry.completenessAuthorities[n-1].LegacySourceStateWordsServed != tc.want {
+				t.Fatalf("authority observations = %+v, want legacy_source_state_words_served=%v", telemetry.completenessAuthorities, tc.want)
+			}
+		})
+	}
+}
+
+// Each surface the Info flag reads.
+func TestTheLegacyWordsFlagReadsEverySurface(t *testing.T) {
+	t.Parallel()
+	base := validInvestigationResult()
+	base.Drivers = []DriverJudgment{{DriverID: "driver_1", Standing: DriverPrincipal, Category: "readiness", Title: "Readiness", SourceState: SourceAvailable}}
+	if LegacySourceStateWordsServed(base) {
+		t.Fatal("a result with no legacy words is flagged")
+	}
+	for name, set := range map[string]func(*InvestigationResult){
+		"direct_judgment":      func(r *InvestigationResult) { r.DirectJudgment += legacyTruncatedQualifierForTest },
+		"deterministic_answer": func(r *InvestigationResult) { r.DeterministicAnswer += legacyTruncatedQualifierForTest },
+		"current_state":        func(r *InvestigationResult) { r.CurrentState += legacyTruncatedQualifierForTest },
+		"summary": func(r *InvestigationResult) {
+			r.Drivers[0].Summary = "Readiness" + legacyTruncatedQualifierForTest + "."
+		},
+		"note": func(r *InvestigationResult) { r.Drivers[0].SourceStateNote = legacyTruncatedNoteForTest },
+	} {
+		result := base
+		result.Drivers = append([]DriverJudgment(nil), base.Drivers...)
+		set(&result)
+		if !LegacySourceStateWordsServed(result) {
+			t.Errorf("%s: the legacy words are not flagged", name)
+		}
 	}
 }
