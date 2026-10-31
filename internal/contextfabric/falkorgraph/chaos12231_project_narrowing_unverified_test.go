@@ -243,10 +243,12 @@ func discoverEdgeUnderProjectNarrowing(t *testing.T, edgeProjects interface{}) c
 	return result
 }
 
-// Clause 4: an admitted edge whose own project list is "*" passed the
-// narrowing unverified, even when both endpoints name the project.
-func TestAnAdmittedWildcardEdgeIsDisclosed(t *testing.T) {
-	assertUnverifiedNarrowingDisclosed(t, discoverEdgeUnderProjectNarrowing(t, "*"))
+// Clause 4, as CHAOS-12229 Q4 rules it (endpoints decide): an admitted edge
+// whose own project list is "*" defers to its endpoints. Both endpoints name
+// the project here, so nothing is unverified. Before CHAOS-12229 this edge
+// was disclosed on its own "*".
+func TestAnAdmittedWildcardEdgeDefersToItsEndpoints(t *testing.T) {
+	assertNoUnverifiedNarrowing(t, discoverEdgeUnderProjectNarrowing(t, "*"))
 }
 
 func TestAnAdmittedEdgeWithARealProjectListDisclosesNothing(t *testing.T) {

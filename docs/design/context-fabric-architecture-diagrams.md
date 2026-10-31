@@ -637,6 +637,35 @@ also names read-population outcome rows; it never promotes and leaves
 `degraded`, `no_match`, a clarification and a refusal as they are. A stored
 document is not rewritten.
 
+**Stated project membership decides a requested project narrowing
+(CHAOS-12229).** A `"*"` project list proves no project. Before the first graph
+read, the engine resolves the request's raw `scope.project_ids` to canonical
+`project.v2` identities through the project nodes (a project node's
+`authorization_projects` is its own raw id; its canonical id is its identity):
+the optional `ProjectNarrowingResolver`, implemented by the FalkorDB adapter.
+A raw id that resolves to none, or to more than one (the same id under two
+providers), is never widened; it makes the resolution incomplete. The resolved
+narrowing travels on the request scope as a Go-only field, not on the wire.
+For a node whose project list is `"*"`, `graphrank.ProjectMembershipOf` over
+its stated `authorization_project_identities` (CHAOS-12226) then decides:
+
+| Stated membership | Resolution | Admitted | Reported unverified |
+|---|---|---|---|
+| holds a requested project | any | yes | no |
+| holds none (or is empty) | complete | no | — |
+| holds none (or is empty) | incomplete | yes | yes |
+| not stated (no list) | any | yes | yes |
+| any | did not run (no resolver, or it failed) | yes | yes |
+
+A node with a real project list is still decided by that list. The repository
+grant is checked first, as before. An edge's own `"*"` defers to its endpoints
+(they decide; the edge is reported only when an endpoint is unverified). Tree
+walks read `authorization_project_identities` with the node, so a walked work
+item's stated membership decides too. Pull requests carry no membership yet
+(CHAOS-12308), so they stay reported unverified. Each resolution is one Info
+line, `context fabric project narrowing resolution` (outcome, requested ids,
+resolved identities; never an id).
+
 **A count of a repository's owning teams.** For a question about now, a read
 that found no owner, was not cut, and found ownership projected for the org
 (the active census holds a team, or the repository's own ownership edges name

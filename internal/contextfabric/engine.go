@@ -870,6 +870,10 @@ type EngineTelemetry interface {
 	// called at most once per Investigate call's prior consult (the read is
 	// shared between both DP4(a) sites -- see Investigate's own call site).
 	RecordPriorDegradation(ctx context.Context, principal storage.Principal, state PriorDegradationState)
+	// RecordProjectNarrowingResolution (CHAOS-12229) reports how a requested
+	// project narrowing resolved to canonical identities, at most once per
+	// investigation and only when one is requested: counts only, never ids.
+	RecordProjectNarrowingResolution(ctx context.Context, principal storage.Principal, event ProjectNarrowingResolutionEvent)
 	// RecordOfferPhrasing (CHAOS-4171 PR2) reports ONE applyOfferPhrasing
 	// attempt's classified outcome -- generated / rejected_by_guard /
 	// fell_back_structural / call_failed, the ratified telemetry names
@@ -1684,6 +1688,10 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 		// conflating the two populations is exactly what this split fixes.
 		return InvestigationResult{}, stageError(StageGraphBinding, fmt.Errorf("resolve graph binding: %w", err))
 	}
+	// CHAOS-12229: a requested project narrowing is resolved to canonical
+	// identities once, here, so every graph read of this investigation lets
+	// stated project membership decide. Unresolved, it stays unverified.
+	request.RequestedScope = e.resolveRequestedProjectNarrowing(ctx, principal, binding, request.RequestedScope)
 
 	// CHAOS-3900 W1: canonicalize the REQUEST-side evidence window --
 	// receipt resolution and validation -- BEFORE tryReuse, so a resolved

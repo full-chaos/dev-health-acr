@@ -539,6 +539,8 @@ type recordingTelemetry struct {
 	// list-not-count discipline.
 	priorConsulted    []priorConsultedRecord
 	priorDegradations []PriorDegradationState
+	// projectNarrowingResolutions (CHAOS-12229) is every resolution line.
+	projectNarrowingResolutions []ProjectNarrowingResolutionEvent
 	// offerPhrasingOutcomes (CHAOS-4171 PR2) mirrors the SAME
 	// list-not-count discipline.
 	offerPhrasingOutcomes []OfferPhrasingOutcome
@@ -1025,6 +1027,10 @@ func (r *recordingTelemetry) RecordPriorConsulted(_ context.Context, _ storage.P
 
 func (r *recordingTelemetry) RecordPriorDegradation(_ context.Context, _ storage.Principal, state PriorDegradationState) {
 	r.priorDegradations = append(r.priorDegradations, state)
+}
+
+func (r *recordingTelemetry) RecordProjectNarrowingResolution(_ context.Context, _ storage.Principal, event ProjectNarrowingResolutionEvent) {
+	r.projectNarrowingResolutions = append(r.projectNarrowingResolutions, event)
 }
 
 func (r *recordingTelemetry) RecordOfferPhrasing(_ context.Context, _ storage.Principal, outcome OfferPhrasingOutcome) {

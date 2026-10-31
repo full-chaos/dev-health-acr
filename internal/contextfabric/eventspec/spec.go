@@ -2313,6 +2313,24 @@ var PriorDegradation = Event{
 	},
 }
 
+// ProjectNarrowingResolution is the Info line of how a requested project narrowing resolved to canonical project identities (CHAOS-12229).
+var ProjectNarrowingResolution = Event{
+	ID:                       "contextfabric.project_narrowing_resolution",
+	Msg:                      "context fabric project narrowing resolution",
+	Level:                    LevelInfo,
+	Multiplicity:             MultiplicityZeroOrOnePerRequest,
+	RequiredOnlyConstruction: true,
+	Attribution:              []string{"request_id"},
+	BoundedAggregation:       "at most one line per investigation, and only when the request names a project narrowing: the narrowing is resolved once, before the first graph read.",
+	Fields: []Field{
+		{Key: "org_id", Type: FieldString, Presence: PresenceRequired},
+		{Key: "outcome", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: contextfabric.ProjectNarrowingOutcomeVocabulary()},
+		{Key: "requested_ids", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "resolved_identities", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "request_id", Type: FieldString, Presence: PresenceConditional, Applicability: requestIDApplicability},
+	},
+}
+
 // ProjectedRowsCount is the Info line of how many canonical rows a synthesis attached to its claims, and whether the attachment was truncated.
 var ProjectedRowsCount = Event{
 	ID:                       "contextfabric.projected_rows_count",
@@ -5596,6 +5614,7 @@ var All = []Event{
 	PriorConsulted,
 	PriorDegradationPointerDangling,
 	PriorDegradation,
+	ProjectNarrowingResolution,
 	ProjectedRowsCount,
 	ProjectedRowsByFactKind,
 	DualTableFacts,

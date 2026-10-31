@@ -1,0 +1,113 @@
+package contextfabric
+
+import (
+	"context"
+	"errors"
+	"testing"
+
+	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
+	"github.com/full-chaos/dev-health-acr/internal/storage"
+)
+
+// CHAOS-12229: a requested project narrowing is resolved to canonical
+// identities once per investigation, before the first graph read, and every
+// graph read sees the resolved scope.
+
+// resolvingGraph is the acceptance graph with the optional resolver.
+type resolvingGraph struct {
+	*acceptanceGraphReader
+	narrowing *contractsv1.ContextFabricProjectNarrowing
+	err       error
+	calls     int
+	asked     []string
+}
+
+func (g *resolvingGraph) ResolveProjectNarrowing(_ context.Context, _ storage.Principal, _ ResolvedGraphBinding, projectIDs []string) (*contractsv1.ContextFabricProjectNarrowing, error) {
+	g.calls++
+	g.asked = append([]string(nil), projectIDs...)
+	return g.narrowing, g.err
+}
+
+func projectNarrowedInvestigation(t *testing.T, graph GraphReader, projectIDs ...string) (*recordingTelemetry, error) {
+	t.Helper()
+	project := acceptanceProject()
+	facts := factReaderFunc(func(context.Context, storage.Principal, CanonicalFactRequest) (CanonicalFactBundle, error) {
+		return bootstrapFactBundle(project), nil
+	})
+	telemetry := &recordingTelemetry{}
+	engine := buildAcceptanceEngineWithTelemetry(t, graph, facts, bootstrapInterpretation(), bootstrapDraft(project), nil, telemetry)
+	request := validInvestigationRequestWithConfirmedWindow()
+	request.RequestedScope.ProjectIDs = projectIDs
+	_, err := engine.Investigate(context.Background(), acceptancePrincipal(), request)
+	return telemetry, err
+}
+
+func acceptanceGraphFor() *acceptanceGraphReader {
+	project := acceptanceProject()
+	return &acceptanceGraphReader{
+		resolution: SubjectResolution{Candidates: []SubjectCandidate{}, Committed: []SubjectRef{project}},
+		context:    bootstrapGraphContext(project),
+	}
+}
+
+func TestARequestedProjectNarrowingIsResolvedOnceAndReachesTheGraphReads(t *testing.T) {
+	t.Parallel()
+	narrowing := &contractsv1.ContextFabricProjectNarrowing{Identities: []string{"project.v2:linear:proj-1"}, Complete: true}
+	graph := &resolvingGraph{acceptanceGraphReader: acceptanceGraphFor(), narrowing: narrowing}
+	telemetry, err := projectNarrowedInvestigation(t, graph, "proj-1")
+	if err != nil {
+		t.Fatalf("Investigate() error = %v", err)
+	}
+	if graph.calls != 1 || len(graph.asked) != 1 || graph.asked[0] != "proj-1" {
+		t.Fatalf("resolver calls = %d with %v, want one call for [proj-1]", graph.calls, graph.asked)
+	}
+	if got := graph.lastRequest.RequestedScope.ProjectNarrowing; got != narrowing {
+		t.Fatalf("the graph read saw ProjectNarrowing %+v, want the resolved narrowing", got)
+	}
+	if len(telemetry.projectNarrowingResolutions) != 1 {
+		t.Fatalf("resolution lines = %+v, want one", telemetry.projectNarrowingResolutions)
+	}
+	if got := telemetry.projectNarrowingResolutions[0]; got.Outcome != ProjectNarrowingResolved || got.RequestedIDs != 1 || got.ResolvedIdentities != 1 {
+		t.Fatalf("resolution line = %+v, want resolved, 1 requested, 1 identity", got)
+	}
+}
+
+func TestAnUnresolvedProjectNarrowingStaysOnTheUnverifiedPath(t *testing.T) {
+	t.Parallel()
+	cases := map[string]struct {
+		graph   GraphReader
+		outcome ProjectNarrowingOutcome
+	}{
+		"no resolver":              {acceptanceGraphFor(), ProjectNarrowingResolverAbsent},
+		"the resolver fails":       {&resolvingGraph{acceptanceGraphReader: acceptanceGraphFor(), err: errors.New("graph down")}, ProjectNarrowingFailed},
+		"an incomplete resolution": {&resolvingGraph{acceptanceGraphReader: acceptanceGraphFor(), narrowing: &contractsv1.ContextFabricProjectNarrowing{Identities: []string{}, Complete: false}}, ProjectNarrowingIncomplete},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			telemetry, err := projectNarrowedInvestigation(t, tc.graph, "proj-1")
+			if err != nil {
+				t.Fatalf("Investigate() error = %v", err)
+			}
+			if len(telemetry.projectNarrowingResolutions) != 1 || telemetry.projectNarrowingResolutions[0].Outcome != tc.outcome {
+				t.Fatalf("resolution lines = %+v, want one %q", telemetry.projectNarrowingResolutions, tc.outcome)
+			}
+		})
+	}
+}
+
+// No narrowing, or a requested "*" (it narrows nothing): no resolution and
+// no line.
+func TestNoProjectNarrowingIsNotResolved(t *testing.T) {
+	t.Parallel()
+	for name, ids := range map[string][]string{"none": nil, "a requested wildcard": {"*"}} {
+		graph := &resolvingGraph{acceptanceGraphReader: acceptanceGraphFor()}
+		telemetry, err := projectNarrowedInvestigation(t, graph, ids...)
+		if err != nil {
+			t.Fatalf("%s: Investigate() error = %v", name, err)
+		}
+		if graph.calls != 0 || len(telemetry.projectNarrowingResolutions) != 0 {
+			t.Fatalf("%s: resolver calls %d, lines %+v, want none", name, graph.calls, telemetry.projectNarrowingResolutions)
+		}
+	}
+}

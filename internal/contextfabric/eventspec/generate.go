@@ -322,6 +322,8 @@ func goVarName(e Event) string {
 		return "PriorDegradationPointerDangling"
 	case PriorDegradation.ID:
 		return "PriorDegradation"
+	case ProjectNarrowingResolution.ID:
+		return "ProjectNarrowingResolution"
 	case ProjectedRowsCount.ID:
 		return "ProjectedRowsCount"
 	case ProjectedRowsByFactKind.ID:

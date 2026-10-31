@@ -8679,6 +8679,50 @@
     ]
   },
   {
+    "id": "contextfabric.project_narrowing_resolution",
+    "msg": "context fabric project narrowing resolution",
+    "level": "info",
+    "multiplicity": "zero_or_one_per_request",
+    "attribution": [
+      "request_id"
+    ],
+    "bounded_aggregation": "at most one line per investigation, and only when the request names a project narrowing: the narrowing is resolved once, before the first graph read.",
+    "fields": [
+      {
+        "key": "org_id",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "outcome",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "resolved",
+          "incomplete",
+          "resolver_absent",
+          "failed"
+        ]
+      },
+      {
+        "key": "requested_ids",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "resolved_identities",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "request_id",
+        "type": "string",
+        "presence": "conditional",
+        "applicability": "written when the request context carries a request ID"
+      }
+    ]
+  },
+  {
     "id": "contextfabric.project_status_drivers",
     "msg": "context fabric project status drivers",
     "level": "info",

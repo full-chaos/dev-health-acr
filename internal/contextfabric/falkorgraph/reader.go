@@ -1967,7 +1967,10 @@ func projectNarrowingRestsOnWildcard(principal storage.Principal, scope contextf
 		}
 	}
 	for _, e := range edges {
-		if e.EndpointProjectNarrowingUnproven || graphrank.ProjectNarrowingUnproven(scope, e.Attributes) {
+		// CHAOS-12229 (Q4): the endpoints decide. An edge's own "*" project
+		// list proves nothing and claims nothing; its endpoints' membership
+		// is what the narrowing rests on.
+		if e.EndpointProjectNarrowingUnproven {
 			return true
 		}
 	}
