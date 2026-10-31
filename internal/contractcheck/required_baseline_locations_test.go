@@ -445,4 +445,14 @@ func TestRequiredBaselineIgnoresAnIDInsideInstanceData(t *testing.T) {
 				base: files(plain), current: files(`{"type":"object","required":["zz"],"properties":{"n":{},"zz":{}}}`)},
 		})
 	}
+	// A property or def named like an instance keyword is a subschema: its
+	// $id is indexed.
+	named := func(s string) map[string]string {
+		return map[string]string{"r.v1.schema.json": `{"$id":"https://example.invalid/v1/r.json","type":"object","properties":{` +
+			`"use":{"$ref":"https://example.invalid/v1/d.json#/$defs/T"},"default":{"$id":"https://example.invalid/v1/d.json","$defs":{"T":` + s + `}}}}`}
+	}
+	runLocationCases(t, []locationCase{
+		{name: "a property named default is a schema resource", refused: true, mentions: []string{`"zz"`, `location "/use"`},
+			base: named(plain), current: named(`{"type":"object","required":["zz"],"properties":{"n":{},"zz":{}}}`)},
+	})
 }
