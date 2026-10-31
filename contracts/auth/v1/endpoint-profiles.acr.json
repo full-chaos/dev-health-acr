@@ -1616,8 +1616,13 @@
       "service": "dev-health-acr-api",
       "classification": "public",
       "accepted_credential_classes": [
-        "acr_device_flow_code"
+        "acr_device_flow_code",
+        "acr_browser_refresh_token"
       ],
+      "class_disambiguator": {
+        "kind": "grant_type",
+        "name": "refresh_token"
+      },
       "token_shape": {
         "token_type": "OAuth authorization code (opaque, 256-bit, SHA-256 at rest, 2-minute TTL, single use) standing for an approved device authorization",
         "issuer": "acr-api OAuthService",
@@ -1654,7 +1659,6 @@
       "entitlement_requirement": null,
       "gaps": [
         "entitlement_requirement: searched internal for entitlement code (internal/entitlements, internal/config/entitlement.go); whether the handler registered at internal/api/app.go:103 is gated by it was not traced; not determined.",
-        "accepted_credential_classes: the refresh_token grant also consumes acr_browser_refresh_token (the form's refresh_token field; validator OAuthService.Refresh, listed in reachable_validators). It is not listed: the route picks the class by the grant_type form field, and class_disambiguator (endpoint-profile.schema.json, required when two classes are accepted) has no kind for a form field; an ops contract change is needed first.",
         "issued_credential: the successor refresh token's lifetime_seconds is null: it is valid until its token family ends (BrowserFamilyLifetime, 12 hours after the login), so its window at mint time is the family's remaining life, not a literal."
       ],
       "id": "POST /token [dev-health-acr-api]",
