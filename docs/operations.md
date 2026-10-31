@@ -953,6 +953,39 @@ production by more than one owner, so no roll order can be relied on. Turn it
 on only when every consumer's pin (web, ask-dev) accepts the field; then the
 switch is removed. The startup line reports `thread_list_first_question_enabled`.
 
+### Ask Dev page context subject hints (CHAOS-12230)
+
+Web sends the entities of the page an Ask Dev question is asked from as
+`requested_scope.subject_hints[]` with source `ask_dev_page_context`, each id
+built in acr's canonical form from its natural keys. Only an id byte-equal to
+the projected node commits on that identity; any other id falls back to label
+search. `contracts/examples/v1/context_fabric_canonical_id_vectors.v1.json`
+(schema `context_fabric_canonical_id_vectors.v1`) holds test vectors for the
+organization, repository, team, pull request, work item and project ids, each
+the output of the builder the projector itself calls; a work item or project
+key whose id would exceed 256 bytes is `omitted: true`, and the caller then
+sends no id. CI fails when the file differs from the builders' output;
+regenerate it with `ACR_WRITE_CANONICAL_ID_VECTORS=1 go test
+./internal/contextfabric/devhealthsource/ -run
+TestCanonicalIDVectorsMatchTheBuilders`.
+
+Log line (INFO, at most one per request that carries an
+`ask_dev_page_context` hint): `context fabric resolution trace: page hint
+lookup`. A request resolves its hints once: by the offers-only resolution
+when the window gate asks for a window (a question that states none), else by
+the decisive resolution, and both count the same way. Each page hint takes one outcome: `exact_hit` (the exact id lookup
+found the node), `label_fallback` (it did not, the hint has a label, and the
+term search completed, so the label was searched) or `unresolved` (it did not,
+and the term search did not complete or the hint has no label). Fields:
+`request_id`, `stage` (`page_hint_lookup`), `page_hints`, `exact_hit`,
+`label_fallback`, `unresolved`, `search_fallback` (whether the term search
+completed: every term searched without error; a search that fails is
+`false`), and
+`exact_hit_by_kind`, `label_fallback_by_kind`, `unresolved_by_kind` (counts
+keyed by subject kind). The line carries no canonical id, label or question
+text. A rise in `label_fallback` or `unresolved` suggests web's ids no longer
+match acr's, or that the subject is not in the graph yet.
+
 ### Ask Dev run lease (CHAOS-11949)
 
 `ACR_CONTEXT_FABRIC_RUN_LEASE_ENABLED` (default `false`; refused at start

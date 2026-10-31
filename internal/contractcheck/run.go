@@ -164,6 +164,11 @@ var exampleSchemaPairs = map[string]string{
 	"context_fabric_result_feedback.v1.json":         "context_fabric_result_feedback.v1.schema.json",
 	"context_fabric_result_feedback_unset.v1.json":   "context_fabric_result_feedback.v1.schema.json",
 	"context_fabric_result_feedback_request.v1.json": "context_fabric_result_feedback_request.v1.schema.json",
+	// CHAOS-12230: canonical-id test vectors, the output of the projector's
+	// own id builders (internal/contextfabric/devhealthsource/
+	// canonical_id_vectors_test.go holds the file equal to that output;
+	// ACR_WRITE_CANONICAL_ID_VECTORS=1 rewrites it).
+	"context_fabric_canonical_id_vectors.v1.json": "context_fabric_canonical_id_vectors.v1.schema.json",
 }
 
 // Options configures repository contract validation.
