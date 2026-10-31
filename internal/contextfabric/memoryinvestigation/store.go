@@ -106,6 +106,9 @@ type Store struct {
 	// now stamps the updated_at a Save's completion writes; the submission
 	// methods take the caller's clock.
 	now func() time.Time
+	// unthreadedRetention is CHAOS-11952's read rule for a record with no
+	// thread (WithUnthreadedRecordRetention); off by default.
+	unthreadedRetention bool
 }
 
 // reservedResultKey is the (org_id, reserved_result_id) unique index.
@@ -126,6 +129,14 @@ func NewStore() *Store {
 		feedback:    make(map[string]contextfabric.ResultFeedback),
 		now:         time.Now,
 	}
+}
+
+// WithUnthreadedRecordRetention turns on CHAOS-11952's read rule for a
+// record with no thread (the pginvestigation option of the same name) and
+// returns the store.
+func (s *Store) WithUnthreadedRecordRetention(enabled bool) *Store {
+	s.unthreadedRetention = enabled
+	return s
 }
 
 // NewStoreWithClock is NewStore whose Save stamps completions with now.
@@ -224,6 +235,13 @@ func (s *Store) Save(ctx context.Context, principal storage.Principal, result co
 		// reaches this far -- see the fresh-insert branch below), so there is
 		// nothing left to claim.
 		return nil
+	}
+
+	// CHAOS-11952 (design §6 T2): a reserved save whose record is gone (the
+	// retention job removed it) is refused before anything is written, the
+	// rule pginvestigation's insert holds in its own statement.
+	if contextfabric.IsReservedSave(ctx, resultID) && !s.reservationHeldLocked(principal, orgID, resultID) {
+		return contextfabric.ErrReservationGone
 	}
 
 	// CHAOS-3927 P4 (design brief §2.1): every ConfirmedStructure entry

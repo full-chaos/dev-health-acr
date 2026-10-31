@@ -273,6 +273,28 @@ func TestStore_threadParity(t *testing.T) {
 	})
 }
 
+// TestStore_retentionReadParity runs the retention read rules (CHAOS-11952)
+// against the in-memory store.
+func TestStore_retentionReadParity(t *testing.T) {
+	paritytest.RunRetentionReadSuite(t, func(_ *testing.T, clock func() time.Time, retention bool) paritytest.ThreadStore {
+		return memoryinvestigation.NewStoreWithClock(clock).WithUnthreadedRecordRetention(retention)
+	})
+}
+
+// TestStore_retentionSwitchParity: with the read rule off, the memory store
+// refuses to sweep (CHAOS-11952).
+func TestStore_retentionSwitchParity(t *testing.T) {
+	paritytest.RunRetentionSwitchSuite(t, func(*testing.T) paritytest.RetentionStore { return memoryinvestigation.NewStore() })
+}
+
+// TestStore_retentionSweepParity runs the retention job's store table
+// (CHAOS-11952) against the in-memory store.
+func TestStore_retentionSweepParity(t *testing.T) {
+	paritytest.RunRetentionSweepSuite(t, func(_ *testing.T, clock func() time.Time) paritytest.RetentionStore {
+		return memoryinvestigation.NewStoreWithClock(clock).WithUnthreadedRecordRetention(true)
+	})
+}
+
 // TestStore_resultFeedbackParity runs the shared feedback table (CHAOS-11950)
 // against the in-memory store.
 func TestStore_resultFeedbackParity(t *testing.T) {

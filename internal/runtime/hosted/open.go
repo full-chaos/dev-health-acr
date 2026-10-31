@@ -816,7 +816,9 @@ func buildContextFabricInvestigator(ctx context.Context, request buildRequest, p
 	reuseEnabled := request.config.AnswerReuseMaxAge > 0
 	// CHAOS-11948: Get and FindReusable decide the closed-thread rule on the
 	// runtime's clock, the one the thread routes pass.
-	storeOpts := []pginvestigation.StoreOption{pginvestigation.WithClock(request.options.Now)}
+	// CHAOS-11952: the read rule for a submission with no thread follows the
+	// retention switch, the one the retention job runs on.
+	storeOpts := []pginvestigation.StoreOption{pginvestigation.WithClock(request.options.Now), pginvestigation.WithUnthreadedRecordRetention(request.config.AskDevRetentionEnabled)}
 	if reuseEnabled {
 		storeOpts = append(storeOpts, pginvestigation.WithAnswerReuse(request.config.AnswerReuseMaxAge))
 	}
