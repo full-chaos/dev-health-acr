@@ -3,6 +3,8 @@ package graphrank
 import (
 	"context"
 	"errors"
+	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
@@ -182,5 +184,70 @@ func TestResolveSubjects_CallerHintRoundUsesTheTeamNarrowingVisibility(t *testin
 	events := tracer.evidenceRoundEvents()
 	if len(events) != 1 || events[0].ShadowReason == string(ReasonScopedVisibility) {
 		t.Fatalf("evidence_round = %+v, want the round past the scoped-visibility gate for a team-narrowed unrestricted principal", events)
+	}
+}
+
+// poolTeamNarrowing decides the resolution pool (not the census): in/out name
+// the candidates inside and outside the requested teams.
+func poolTeamNarrowing(in, out map[string]bool) TeamNarrowingFunc {
+	return func(_ context.Context, subjects []contextfabric.SubjectRef, repositoriesOnly bool) (TeamNarrowingDecision, error) {
+		decision := TeamNarrowingDecision{In: map[string]bool{}, Out: map[string]bool{}}
+		if repositoriesOnly {
+			return decision, nil
+		}
+		for _, s := range subjects {
+			switch {
+			case in[s.CanonicalID]:
+				decision.In[s.CanonicalID] = true
+			case out[s.CanonicalID]:
+				decision.Out[s.CanonicalID] = true
+			}
+		}
+		return decision, nil
+	}
+}
+
+// TestResolveSubjects_ATeamNarrowingKeepsAnOutOfTeamCoverageFindOutOfTheOffers
+// (CHAOS-12346 review r1): a kind-coverage find reaches the offer builders
+// outside the pool. Once the narrowing settles the pool toward the team, an
+// out-of-team coverage find must not come back through the offers.
+func TestResolveSubjects_ATeamNarrowingKeepsAnOutOfTeamCoverageFindOutOfTheOffers(t *testing.T) {
+	t.Parallel()
+	node := func(kind contextfabric.SubjectKind, id, label string, relevance float64) CandidateNode {
+		n := candidateNode(kind, id, label, relevance, "*")
+		n.Attributes["authorization_teams"] = "*"
+		return n
+	}
+	backend := &fakeGraphBackend{
+		enableSearchKind: true,
+		searchResults: map[string][]CandidateNode{"outage": {
+			node(contextfabric.SubjectWorkItem, "wi_in_1", "Outage work item one", 0.8),
+			node(contextfabric.SubjectWorkItem, "wi_in_2", "Outage work item two", 0.8),
+			node(contextfabric.SubjectWorkItem, "wi_out", "Outage work item three", 0.8),
+		}},
+		searchKindResults: map[string]map[contextfabric.SubjectKind][]CandidateNode{
+			"outage": {contextfabric.SubjectPullRequest: {node(contextfabric.SubjectPullRequest, "pr_out", "Outage PR", 0.68)}},
+		},
+	}
+	deps := backend.deps()
+	deps.TeamNarrowing = poolTeamNarrowing(inTeam("wi_in_1", "wi_in_2"), inTeam("wi_out", "pr_out"))
+	request := testRequest()
+	request.RequestedScope.TeamIDs = []string{"team-b"}
+	resolution, offer, err := ResolveSubjects(context.Background(), storage.Principal{OrgID: "org_1"}, request, testInterpreted("outage"), deps, nil, nil)
+	if err != nil {
+		t.Fatalf("ResolveSubjects() error = %v", err)
+	}
+	for _, c := range resolution.Candidates {
+		if c.Subject.CanonicalID == "wi_out" || c.Subject.CanonicalID == "pr_out" {
+			t.Fatalf("resolution.Candidates = %#v, want the out-of-team candidates left out", resolution.Candidates)
+		}
+	}
+	if rendered := fmt.Sprintf("%+v", offer); strings.Contains(rendered, "pr_out") || strings.Contains(rendered, "wi_out") {
+		t.Fatalf("structure offers %s, want no out-of-team candidate: the pool was settled toward the team", rendered)
+	}
+	for _, option := range offer.KindOptions {
+		if option.Kind == contextfabric.SubjectPullRequest {
+			t.Fatalf("offer.KindOptions = %#v, want no pull_request kind: its only find is outside the team", offer.KindOptions)
+		}
 	}
 }

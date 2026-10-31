@@ -3742,7 +3742,8 @@ func resolveSubjects(ctx context.Context, principal storage.Principal, request c
 	// one left commits, several stay ambiguous among those. With no in-team
 	// offer, today's offers stand (no dead end); a commit stands (the subject
 	// is what the question names).
-	if teamPool, narrowed := teamNarrowedPool(ctx, request, deps, resolution, candidatesBySubject); narrowed {
+	teamPool, teamOffers := teamNarrowedPool(ctx, request, deps, resolution, candidatesBySubject)
+	if teamOffers != nil {
 		pass++
 		candidatesBySubject = teamPool
 		resolution, firstPassBases, firstPassDigests = resolveFromMergedCandidatesWithAnchorSlot(candidatesBySubject, observationParentKey, observationBlocked, request.Options.MaxSubjectCandidates, request.Options.AllowClarification, searchTruncated, vectorArmSimilarity, deps.VectorMarginCommitThreshold, retrievalDegraded, effectiveSearchLimit, deps.CalibratedTopK, unscopedVisibility, gate, identity, identityTerms, identityLookup, firstPassTracer, request.RequestID, "", false, false, frameReservedKinds(frame, anchorScope.Kind), anchorReservedSlot{Kind: anchorScope.Kind, Source: anchorScope.Source}, &exactRefusal, kindRescue, pass)
@@ -4158,6 +4159,9 @@ func resolveSubjects(ctx context.Context, principal storage.Principal, request c
 	// carries a duplicate regardless of append order. The ranked_cut
 	// trace loop immediately below is the one place that DID need its own
 	// dedup guard for this (fixed there, not here).
+	// CHAOS-12346 review r1: a pool settled toward a requested team narrows
+	// these offer-only finds by the same rule before they reach the offers.
+	teamOffers.narrow(ctx, request, deps, &coverageCandidates, &lowPopulationOfferCandidates, &kindScopedSemanticCandidates)
 	coverageCandidates = append(coverageCandidates, lowPopulationOfferCandidates...)
 	semanticStart := len(coverageCandidates)
 	coverageCandidates = append(coverageCandidates, kindScopedSemanticCandidates...)

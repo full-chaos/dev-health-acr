@@ -58,9 +58,11 @@ func isIdentityMatched(candidate contextfabric.SubjectCandidate) bool {
 // in-team offer. A candidate matched by identity (exact, alias, provider key),
 // or whose ownership is missing, never leaves. ok is false, and the pool
 // unchanged, when nothing leaves or the ownership read fails (which logs).
-func teamNarrowedPool(ctx context.Context, request contextfabric.InvestigationRequest, deps ResolveDeps, first contextfabric.SubjectResolution, pool map[string]contextfabric.SubjectCandidate) (map[string]contextfabric.SubjectCandidate, bool) {
+// A settled pool returns its scope, which narrows the offer builders' own
+// inputs the same way (teamOfferScope.narrow).
+func teamNarrowedPool(ctx context.Context, request contextfabric.InvestigationRequest, deps ResolveDeps, first contextfabric.SubjectResolution, pool map[string]contextfabric.SubjectCandidate) (map[string]contextfabric.SubjectCandidate, *teamOfferScope) {
 	if deps.TeamNarrowing == nil || len(request.RequestedScope.TeamIDs) == 0 || len(first.Committed) > 0 || len(first.Candidates) == 0 || len(pool) < 2 {
-		return pool, false
+		return pool, nil
 	}
 	subjects := make([]contextfabric.SubjectRef, 0, len(pool)+len(first.Candidates))
 	for _, candidate := range pool {
@@ -73,7 +75,7 @@ func teamNarrowedPool(ctx context.Context, request contextfabric.InvestigationRe
 	if err != nil {
 		slog.WarnContext(ctx, "context fabric resolution: the team narrowing could not decide the candidates; offers are not narrowed",
 			"request_id", contextfabric.SanitizeLogAttr(request.RequestID))
-		return pool, false
+		return pool, nil
 	}
 	anyInTeam := false
 	termInTeam := map[string]bool{}
@@ -87,23 +89,71 @@ func teamNarrowedPool(ctx context.Context, request contextfabric.InvestigationRe
 		}
 	}
 	if !anyInTeam {
-		return pool, false
+		return pool, nil
 	}
+	scope := &teamOfferScope{termInTeam: termInTeam}
 	kept := make(map[string]contextfabric.SubjectCandidate, len(pool))
 	dropped := 0
 	for key, candidate := range pool {
-		if decision.Out[candidate.Subject.CanonicalID] && !isIdentityMatched(candidate) && everyTermInTeam(candidate.MatchedTerms, termInTeam) {
+		if scope.leaves(decision, candidate) {
 			dropped++
 			continue
 		}
 		kept[key] = candidate
 	}
 	if dropped == 0 {
-		return pool, false
+		return pool, nil
 	}
 	slog.DebugContext(ctx, "context fabric resolution: candidates outside the requested teams left the pool as scope",
 		"request_id", contextfabric.SanitizeLogAttr(request.RequestID), "dropped", dropped, "kept", len(kept))
-	return kept, true
+	return kept, scope
+}
+
+// teamOfferScope is the narrowing a settled pool was decided under
+// (CHAOS-12346 review r1). The offer builders read finds outside the pool
+// (the kind coverage floor, the low-population rescue, the kind-scoped
+// semantic arm); they are narrowed by the same rule, so a candidate that left
+// the pool never comes back through an offer.
+type teamOfferScope struct {
+	termInTeam map[string]bool
+}
+
+// leaves is the one drop rule: decided outside the requested teams, not
+// matched by identity, and every term it matched has an in-team offer.
+func (s *teamOfferScope) leaves(decision TeamNarrowingDecision, candidate contextfabric.SubjectCandidate) bool {
+	return decision.Out[candidate.Subject.CanonicalID] && !isIdentityMatched(candidate) && everyTermInTeam(candidate.MatchedTerms, s.termInTeam)
+}
+
+// narrow applies leaves to each offer input, with one ownership read for all
+// of them. A failed read leaves them unchanged, and logs.
+func (s *teamOfferScope) narrow(ctx context.Context, request contextfabric.InvestigationRequest, deps ResolveDeps, inputs ...*[]contextfabric.SubjectCandidate) {
+	if s == nil {
+		return
+	}
+	var subjects []contextfabric.SubjectRef
+	for _, input := range inputs {
+		for _, candidate := range *input {
+			subjects = append(subjects, candidate.Subject)
+		}
+	}
+	if len(subjects) == 0 {
+		return
+	}
+	decision, err := deps.TeamNarrowing(ctx, subjects, false)
+	if err != nil {
+		slog.WarnContext(ctx, "context fabric resolution: the team narrowing could not decide the offer-only finds; they are not narrowed",
+			"request_id", contextfabric.SanitizeLogAttr(request.RequestID))
+		return
+	}
+	for _, input := range inputs {
+		kept := (*input)[:0:0]
+		for _, candidate := range *input {
+			if !s.leaves(decision, candidate) {
+				kept = append(kept, candidate)
+			}
+		}
+		*input = kept
+	}
 }
 
 // everyTermInTeam: each term the candidate matched also matched an in-team
