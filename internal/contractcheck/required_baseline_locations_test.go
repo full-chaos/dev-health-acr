@@ -425,3 +425,24 @@ func TestRequiredBaselineResolvesRefsInsideTheirOwnID(t *testing.T) {
 			base: files(root(plain, ``), plain), current: files(root(plain, ``), needsZZ)},
 	})
 }
+
+// An $id inside instance data (examples, const, enum, default) names no schema
+// resource, so it cannot take a published schema's URI (codex #1817 r3).
+func TestRequiredBaselineIgnoresAnIDInsideInstanceData(t *testing.T) {
+	plain := `{"type":"object","properties":{"n":{}}}`
+	for _, keyword := range []string{"examples", "const", "enum", "default"} {
+		data := `{"$id":"https://example.invalid/target","$defs":{"S":` + plain + `}}`
+		if keyword == "examples" || keyword == "enum" {
+			data = "[" + data + "]"
+		}
+		consumer := `{"$id":"https://example.invalid/consumer","type":"object","properties":{"use":{"$ref":"https://example.invalid/target#/$defs/S"}},"` + keyword + `":` + data + `}`
+		target := func(s string) string { return `{"$id":"https://example.invalid/target","$defs":{"S":` + s + `}}` }
+		files := func(s string) map[string]string {
+			return map[string]string{"a_consumer.v1.schema.json": consumer, "z_target.v1.schema.json": target(s)}
+		}
+		runLocationCases(t, []locationCase{
+			{name: "an $id under " + keyword + " does not hide the real resource", refused: true, mentions: []string{`"zz"`, `location "/use"`},
+				base: files(plain), current: files(`{"type":"object","required":["zz"],"properties":{"n":{},"zz":{}}}`)},
+		})
+	}
+}

@@ -159,8 +159,19 @@ func (d schemaDocs) add(file string, doc any) {
 	d.indexIDs(file, doc, "", "")
 }
 
-// indexIDs records every $id in a document, at any depth, by its absolute
-// URI.
+// instanceKeywords hold instance data, not subschemas: an $id inside them
+// names no schema resource (codex #1817 r3).
+var instanceKeywords = map[string]bool{"const": true, "enum": true, "default": true, "examples": true}
+
+// schemaMapKeywords map names to subschemas: a name there is not a keyword.
+var schemaMapKeywords = map[string]bool{"properties": true, "patternProperties": true, "$defs": true, "definitions": true, "dependentSchemas": true}
+
+func pointerToken(name string) string {
+	return strings.ReplaceAll(strings.ReplaceAll(name, "~", "~0"), "/", "~1")
+}
+
+// indexIDs records the $id of every schema resource in a document, at any
+// depth, by its absolute URI; the first claimant of a URI keeps it.
 func (d schemaDocs) indexIDs(file string, node any, pointer, base string) {
 	switch n := node.(type) {
 	case map[string]any:
@@ -172,7 +183,18 @@ func (d schemaDocs) indexIDs(file string, node any, pointer, base string) {
 			base = abs
 		}
 		for key, child := range n {
-			d.indexIDs(file, child, pointer+"/"+strings.ReplaceAll(strings.ReplaceAll(key, "~", "~0"), "/", "~1"), base)
+			at := pointer + "/" + pointerToken(key)
+			switch {
+			case instanceKeywords[key]:
+			case schemaMapKeywords[key]:
+				if named, ok := child.(map[string]any); ok {
+					for name, sub := range named {
+						d.indexIDs(file, sub, at+"/"+pointerToken(name), base)
+					}
+				}
+			default:
+				d.indexIDs(file, child, at, base)
+			}
 		}
 	case []any:
 		for index, child := range n {
