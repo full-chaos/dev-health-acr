@@ -191,7 +191,7 @@ func (p *HealthProvider) ReadFacts(ctx context.Context, principal storage.Princi
 		truncated = truncated || rowCount >= maxFactRowsPerQuery
 	}
 
-	if projectSubjects := subjectsOfKind(query.Subjects, contextfabric.SubjectProject); len(projectSubjects) > 0 {
+	if projectSubjects := subjectsOfKind(query.Subjects, contextfabric.SubjectProject); len(projectSubjects) > 0 && !projectTeamRollupWithheld(principal) {
 		rowCount, rejected, breakdownTruncated, scanErr := p.readProjectHealth(ctx, orgID, projectSubjects, &facts, timeBound)
 		if scanErr != nil {
 			return contextfabric.FactProviderResult{}, readFailure("query project health", scanErr)

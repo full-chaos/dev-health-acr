@@ -102,7 +102,7 @@ func (p *WorkloadProvider) ReadFacts(ctx context.Context, principal storage.Prin
 		rejectedCount += rejected
 	}
 
-	if projectSubjects := subjectsOfKind(query.Subjects, contextfabric.SubjectProject); len(projectSubjects) > 0 {
+	if projectSubjects := subjectsOfKind(query.Subjects, contextfabric.SubjectProject); len(projectSubjects) > 0 && !projectTeamRollupWithheld(principal) {
 		rowCount, rejected, breakdownTruncated, scanErr := p.readProjectWorkload(ctx, orgID, projectSubjects, &facts, timeBound)
 		if scanErr != nil {
 			return contextfabric.FactProviderResult{}, readFailure("query project workload", scanErr)

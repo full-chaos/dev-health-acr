@@ -186,6 +186,14 @@ c2, CHAOS-12298:
 ## Facts and aggregates
 
 - **Served:** intrinsic project facts, and the facts of member work items.
+- **Withheld in c3** (`devhealthfacts/project_only_withholding.go`): a
+  project fact that rolls up through team ownership. The project facts of
+  health, flow, landscape, metrics, readiness and workload are built only from
+  the rows of the teams that own the project (and, for health, those teams'
+  repositories), so none of their fields is intrinsic to the project. For a
+  `project_only` caller the provider reads none of those rows and serves no
+  such fact. The subject carries no reason of its own yet; its typed label is
+  CHAOS-12330.
 - **Typed limitation, with a coverage reason:** facts that rest on a team or on
   a cross-project population (F5).
 - **Org-wide figures:** a typed limitation (D3; CHAOS-12225 widens it later).
