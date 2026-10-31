@@ -287,7 +287,21 @@ func TestComposeServicesPassTheRetentionSwitchOnly(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(raw), "ACR_ASK_DEV_RETENTION_ENABLED: ${ACR_ASK_DEV_RETENTION_ENABLED:-false}") {
+	// The acr-api service block: from its key to the next service key.
+	var api []string
+	inAPI := false
+	for _, line := range strings.Split(string(raw), "\n") {
+		if strings.HasPrefix(line, "  ") && !strings.HasPrefix(line, "   ") && strings.HasSuffix(line, ":") {
+			inAPI = line == "  acr-api:"
+		}
+		if inAPI {
+			api = append(api, line)
+		}
+	}
+	if len(api) == 0 {
+		t.Fatal("compose has no acr-api service")
+	}
+	if !strings.Contains(strings.Join(api, "\n"), "ACR_ASK_DEV_RETENTION_ENABLED: ${ACR_ASK_DEV_RETENTION_ENABLED:-false}") {
 		t.Error("acr-api does not pass ACR_ASK_DEV_RETENTION_ENABLED, off by default")
 	}
 	for _, gone := range []string{"ACR_RETENTION_DB_USER", "ACR_RETENTION_DB_PASSWORD", "ACR_POSTGRES_RETENTION_DSN"} {
