@@ -75,6 +75,10 @@ type noMatchSynthesizer struct{}
 func (noMatchSynthesizer) Synthesize(context.Context, storage.Principal, contextfabric.SynthesisInput) (contextfabric.InvestigationResult, error) {
 	return contextfabric.InvestigationResult{
 		Status: contextfabric.InvestigationNoMatch, StrongestPressures: []string{}, Drivers: []contextfabric.DriverJudgment{},
+		// The current_state the production synthesizer composes for a draft
+		// with no claimed facts (composeCurrentState): a floored answer's
+		// head falls back to it (CHAOS-12286).
+		CurrentState:  "No canonical facts were observed to describe the current state.",
 		RemainingWork: []contextfabric.Finding{}, ReadinessGaps: []contextfabric.Finding{}, Paths: []contextfabric.RelationshipPath{},
 		Conflicts: []contextfabric.Finding{}, Limitations: []string{}, EvidenceRefIDs: []string{},
 		ClaimedFacts:        []contextfabric.ClaimedFact{},

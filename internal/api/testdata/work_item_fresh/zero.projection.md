@@ -10,7 +10,7 @@
 
 ## Judgment
 > ```
-> Counted 0 work items. This investigation is complete.
+> Counted 0 work items.
 > ```
 
 ## Current state
@@ -20,7 +20,7 @@
 
 ## Server-computed answer (computed by the server from stored facts, not written by a model)
 > ```
-> Counted 0 work items. This investigation is complete.
+> Counted 0 work items.
 > ```
 
 ## Cohort (0 of 0 shown)

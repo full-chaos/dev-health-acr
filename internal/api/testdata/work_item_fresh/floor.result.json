@@ -155,7 +155,7 @@
     "population": 2000,
     "population_lower_bound": true
   },
-  "direct_judgment": "Counted at least 2000 work items. This investigation is complete.",
+  "direct_judgment": "Counted at least 2000 work items.",
   "current_state": "Current observed values: status: open (Implement the thing); title: Implement the thing (Implement the thing).",
   "strongest_pressures": [],
   "drivers": [],
@@ -261,7 +261,7 @@
     "interpretation_model_identity": "test-provider/test-model",
     "synthesis_source": "server"
   },
-  "deterministic_answer": "Counted at least 2000 work items. This investigation is complete.",
+  "deterministic_answer": "Counted at least 2000 work items.",
   "warnings": [],
   "reused": false,
   "effective_evidence_window": {

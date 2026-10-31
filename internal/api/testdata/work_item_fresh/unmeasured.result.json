@@ -123,7 +123,7 @@
       }
     ]
   },
-  "direct_judgment": "This investigation is complete.",
+  "direct_judgment": "No canonical facts were observed to describe the current state.",
   "current_state": "No canonical facts were observed to describe the current state.",
   "strongest_pressures": [],
   "drivers": [],
@@ -155,7 +155,7 @@
     "interpretation_model_identity": "test-provider/test-model",
     "synthesis_source": "server"
   },
-  "deterministic_answer": "This investigation is complete.",
+  "deterministic_answer": "No canonical facts were observed to describe the current state.",
   "warnings": [],
   "reused": false,
   "effective_evidence_window": {

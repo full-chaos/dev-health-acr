@@ -6,10 +6,10 @@
   "status": "complete",
   "question": "What is the state and count of this project's work items?",
   "reused": false,
-  "direct_judgment": "This investigation is complete.",
+  "direct_judgment": "No canonical facts were observed to describe the current state.",
   "current_state": "No canonical facts were observed to describe the current state.",
   "strongest_pressures": [],
-  "deterministic_answer": "This investigation is complete.",
+  "deterministic_answer": "No canonical facts were observed to describe the current state.",
   "committed_subjects": [
     {
       "kind": "project",

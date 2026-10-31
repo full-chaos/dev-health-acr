@@ -55,7 +55,7 @@ func TestProjectStatusServerModeServesStatusFactsAsDrivers(t *testing.T) {
 	if len(result.ClaimedFacts) != 4 {
 		t.Errorf("claimed facts = %d, want 4", len(result.ClaimedFacts))
 	}
-	if !strings.HasPrefix(result.DirectJudgment, "Open items: 40 (2026-10-30). This investigation is partial") {
+	if !strings.HasPrefix(result.DirectJudgment, "Open items: 40 (2026-10-30). Some canonical or graph coverage was unavailable.") {
 		t.Errorf("judgment = %q", result.DirectJudgment)
 	}
 }

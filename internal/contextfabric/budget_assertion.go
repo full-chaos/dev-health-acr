@@ -405,6 +405,7 @@ func (e *Engine) servedLateWriters(ctx context.Context, result InvestigationResu
 		result.Completeness = ComputeAnswerCompleteness(result)
 	}
 	observation.StatusCorrectionDisclosed = result.StatusCorrection != nil
+	observation.LeadProseServedAsStored = LeadProseServedAsStored(result)
 	return result, observation
 }
 

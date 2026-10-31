@@ -266,6 +266,11 @@ type CompletenessAuthorityObservation struct {
 	// by the derivation (the measurement is unconditional, the flip is
 	// gated).
 	StatusCorrectionDisclosed bool
+	// LeadProseServedAsStored is true when the served document still carries
+	// a legacy status sentence (LeadProseServedAsStored): a stored answer
+	// whose head had nothing to state in its place. Set by the caller that
+	// served the document, like StatusCorrectionDisclosed.
+	LeadProseServedAsStored bool
 
 	// OUTCOME ROW COUNTS -- what the model's own status decision (or this
 	// derivation's) had to work with, joinable against ModelStatus without
@@ -769,6 +774,7 @@ func CompletenessAuthorityLogArgs(event CompletenessAuthorityObservation, orgID 
 		"deciding_cause_narrowing", SanitizeLogAttr(string(event.DecidingCauseNarrowing)),
 		"deciding_read_evaluation_gap", event.DecidingReadEvaluationGap,
 		"status_correction_disclosed", event.StatusCorrectionDisclosed,
+		"lead_prose_served_as_stored", event.LeadProseServedAsStored,
 		// THE ROWS THE STATUS DECISION HAD TO WORK WITH: what the model was
 		// given (today, nothing -- see genkitruntime's own synthesis input)
 		// and what this derivation itself read, both joinable against
