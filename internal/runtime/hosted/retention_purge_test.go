@@ -101,8 +101,38 @@ func TestRetentionPurgeFunc_logsCountsOnly(t *testing.T) {
 		strings.Count(buf.String(), "\n") != 1 || !strings.Contains(buf.String(), `"outcome":"empty"`) || !strings.Contains(buf.String(), `"results_removed":0`) {
 		t.Fatalf("an empty pass wrote %q (%v), want one heartbeat line with outcome empty", buf.String(), err)
 	}
+}
+
+// CHAOS-12214: a pass that fails partway already committed some units (each
+// is its own transaction, counted only after its commit). Its line says what
+// it removed, at Warn, with outcome failed and the counts only; the error
+// itself is the loop's own Warn line.
+func TestRetentionPurgeFunc_aFailedPassLogsWhatItAlreadyRemoved(t *testing.T) {
+	var buf bytes.Buffer
+	logger := slog.New(slog.NewJSONHandler(&buf, nil))
+	refused := errors.New("refused: private detail")
+	partial := contextfabric.RetentionSweep{ThreadsRemoved: 1, ThreadsErased: 2, RecordsRemoved: 3, ResultsRemoved: 4, Fenced: 5}
+	n, err := retentionPurgeFunc(&fakeRetentionSweeper{sweep: partial, err: refused}, logger)(context.Background(), time.Now(), 10)
+	if !errors.Is(err, refused) || n != 6 {
+		t.Fatalf("failed pass = %d %v, want the error and the 6 units it committed", n, err)
+	}
+	line := buf.String()
+	if strings.Count(line, "\n") != 1 {
+		t.Fatalf("a failed pass wrote %q, want one line", line)
+	}
+	for _, want := range []string{`"level":"WARN"`, `"msg":"` + RetentionPurgeLogMessage + `"`, `"outcome":"failed"`, `"threads_removed":1`, `"threads_erased":2`, `"records_removed":3`, `"results_removed":4`, `"fenced":5`} {
+		if !strings.Contains(line, want) {
+			t.Fatalf("failed pass line %s lacks %s", line, want)
+		}
+	}
+	if strings.Contains(line, "private detail") {
+		t.Fatalf("failed pass line %s carries the error; counts only (the loop's Warn line reports the error)", line)
+	}
+
+	// A pass that fails before its first commit says so too, with zeros.
 	buf.Reset()
-	if _, err := retentionPurgeFunc(&fakeRetentionSweeper{err: errors.New("refused")}, logger)(context.Background(), time.Now(), 10); err == nil || buf.Len() != 0 {
-		t.Fatalf("a failed pass wrote %q (%v), want the error and no heartbeat (the loop's Warn line reports it)", buf.String(), err)
+	if _, err := retentionPurgeFunc(&fakeRetentionSweeper{err: refused}, logger)(context.Background(), time.Now(), 10); err == nil ||
+		strings.Count(buf.String(), "\n") != 1 || !strings.Contains(buf.String(), `"outcome":"failed"`) || !strings.Contains(buf.String(), `"results_removed":0`) {
+		t.Fatalf("a pass that failed before any commit wrote %q (%v), want one failed line with zero counts", buf.String(), err)
 	}
 }

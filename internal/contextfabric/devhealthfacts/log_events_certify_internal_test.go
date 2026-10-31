@@ -372,3 +372,31 @@ func TestThePullRequestProjectLineCertifiesThroughItsProducer(t *testing.T) {
 		certifyLinkLine(t, buf, eventspec.PullRequestProjectNativeFirst, tc.want)
 	}
 }
+
+// CHAOS-12181: the roll-up Info line states the own and the evidence-gated
+// own unit counts of the projects served the owning teams' roll-up, through
+// the function the project theme mix read calls; a read that served no
+// roll-up writes no line.
+func TestTheProjectRollupLineCertifiesThroughItsProducer(t *testing.T) {
+	ctx := observability.WithRequestID(context.Background(), linkLineRequestID)
+	gated, plain, native := cutTestSubject("gated"), cutTestSubject("plain"), cutTestSubject("native")
+	facts := []contextfabric.CanonicalFact{
+		rollupTestFact(gated, contextfabric.InvestmentMixSourceOwningTeamRollup, 40),
+		rollupTestFact(plain, contextfabric.InvestmentMixSourceOwningTeamRollup, 40),
+		rollupTestFact(native, contextfabric.InvestmentMixSourceProjectNative, 9),
+	}
+	bySubject := map[string]contextfabric.SubjectRef{"linear:gated": gated, "linear:plain": plain, "linear:native": native}
+	buf := captureLinkLines(t)
+	// Own 3 (one categorized, two gated) against gated 2: the two counts
+	// differ, so the line cannot pass with one written in place of the other.
+	stampAndLogProjectOwnWorkUnits(ctx, facts, bySubject, map[string]int64{"linear:gated": 3, "linear:native": 9}, map[string]int64{"linear:gated": 2})
+	certifyLinkLine(t, buf, eventspec.ProjectOwningTeamRollup, map[string]any{
+		"rollup_projects": 2, "project_own_work_unit_count": 3, "project_own_uncategorized_unit_count": 2,
+	})
+
+	buf = captureLinkLines(t)
+	stampAndLogProjectOwnWorkUnits(ctx, []contextfabric.CanonicalFact{rollupTestFact(native, contextfabric.InvestmentMixSourceProjectNative, 9)}, bySubject, map[string]int64{"linear:native": 9}, map[string]int64{})
+	if strings.Contains(buf.String(), eventspec.ProjectOwningTeamRollup.Msg) {
+		t.Fatalf("a read that served no roll-up wrote the roll-up line: %s", buf.String())
+	}
+}

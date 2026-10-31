@@ -506,5 +506,7 @@ back-dated rows." Rules: `internal/contextfabric/retention.go`; SQL:
 - **Telemetry.** One `context fabric retention sweep` line per pass, a
   heartbeat: `outcome=removed` or `outcome=empty` with the counts only, never
   an id, a question or an owner (a due scan that stops finding rows shows at
-  Info). A failed pass is the loop's Warn line; the switch off is one
-  `outcome=disabled` line at startup.
+  Info). A pass that fails logs the same line at Warn with `outcome=failed`
+  and the counts of the units it had already committed (each unit is counted
+  only after its commit, CHAOS-12214); the error itself is the loop's own Warn
+  line. The switch off is one `outcome=disabled` line at startup.

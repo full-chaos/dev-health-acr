@@ -29,7 +29,9 @@ type ContextFabricClaimedInvestmentMix struct {
 	WorkUnitCount int64 `json:"work_unit_count"`
 	// ProjectOwnWorkUnitCount is the number of the project's own work units
 	// in the read window. For owning_team_rollup it is why the roll-up is
-	// served: 0, or units with no measurable effort.
+	// served: 0, or units with no measurable effort. An evidence-gated unit
+	// (too little text to categorize) is one of them and counts here; the
+	// grounding fact says how many in project_own_uncategorized_unit_count.
 	ProjectOwnWorkUnitCount int64 `json:"project_own_work_unit_count"`
 }
 

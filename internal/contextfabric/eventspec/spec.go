@@ -3352,6 +3352,24 @@ var TeamPRLinkStateNativeFirst = Event{
 	},
 }
 
+// ProjectOwningTeamRollup is the Info line of a project theme mix read that served the owning teams' roll-up to one or more projects (CHAOS-12160): how many projects, and how many work units of their own and evidence-gated own units they hold in the window (CHAOS-12181). Counts only.
+var ProjectOwningTeamRollup = Event{
+	ID:                       "devhealthfacts.project_owning_team_rollup",
+	Msg:                      "devhealthfacts.project_owning_team_rollup",
+	Level:                    LevelInfo,
+	Multiplicity:             MultiplicityZeroOrManyPerRequest,
+	UnboundedReason:          "one line per project theme mix read that served a roll-up, so the count follows the project investment reads a request makes; the line carries the request id when the context has one.",
+	RequiredOnlyConstruction: true,
+	Attribution:              []string{"request_id"},
+	BoundedAggregation:       "one line per project theme mix read that served a roll-up.",
+	Fields: []Field{
+		{Key: "rollup_projects", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "project_own_work_unit_count", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "project_own_uncategorized_unit_count", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "request_id", Type: FieldString, Presence: PresenceConditional, Applicability: "written when the request context carries a request ID"},
+	},
+}
+
 // PullRequestProjectNativeFirst is the Info line of the fallback-only rule of the pull request project links: how many project rows and fallback links were read, how many links and rows a native link covers and were dropped, and how many of the dropped rows a native link of their pull request covers. Counts and a closed outcome only.
 var PullRequestProjectNativeFirst = Event{
 	ID:                       "devhealthfacts.pull_request_project_native_first",
@@ -5538,6 +5556,7 @@ var All = []Event{
 	TeamLinkedMixNativeFirst,
 	TeamLinkedMixSet,
 	TeamPRLinkStateNativeFirst,
+	ProjectOwningTeamRollup,
 	PullRequestProjectNativeFirst,
 	ProjectStatusDrivers,
 	TeamBlockersDrivers,

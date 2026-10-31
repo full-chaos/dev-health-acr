@@ -115,12 +115,39 @@ func buildTransport(cfg Config) (*http.Transport, error) {
 		Proxy:                 proxyFunc,
 		TLSClientConfig:       tlsConfig,
 		ForceAttemptHTTP2:     true,
-		MaxIdleConns:          10,
-		IdleConnTimeout:       90 * time.Second,
+		MaxIdleConns:          clientMaxIdleConns,
+		MaxIdleConnsPerHost:   clientMaxIdleConns,
+		IdleConnTimeout:       clientIdleConnTimeout,
 		TLSHandshakeTimeout:   10 * time.Second,
 		ExpectContinueTimeout: 1 * time.Second,
 	}, nil
 }
+
+// The idle pool of the hosted API client (CHAOS-12206). A client talks to one
+// origin, and acr-mcp shares one client's pool across every caller, so the
+// per-host cap is the whole pool. With the Go default of 2 idle connections
+// per host, a finished request's connection was closed whenever more than 2
+// were in flight, and the next request dialed again. Measured on the
+// in-process acr-mcp -> acr-api rig (32 workers, about 1320 upstream calls):
+// 288-380 new acr-api connections per run on Linux, against 32 with this pool.
+//
+// The two idle timeouts, stated together: the client closes an idle
+// connection before acr-api does, so no request goes out on a connection the
+// server is closing at that moment. net/http retries such a request only when
+// it is replayable, so a POST would fail. Keep clientIdleConnTimeout below
+// hostedAPIServerIdleTimeout, and that equal to acr-api's default
+// (config.DefaultIdleTimeout; the chart's config.idleTimeout sets
+// ACR_IDLE_TIMEOUT). acr-api refuses to start with an ACR_IDLE_TIMEOUT at or
+// below config.HostedClientIdleConnTimeout, which must equal
+// clientIdleConnTimeout. api_client_idle_pool_test.go pins all three.
+const (
+	// hostedAPIServerIdleTimeout is acr-api's server idle timeout.
+	hostedAPIServerIdleTimeout = 60 * time.Second
+	// clientIdleConnTimeout is how long the client keeps an idle connection.
+	clientIdleConnTimeout = 45 * time.Second
+	// clientMaxIdleConns is the idle pool for the client's one origin.
+	clientMaxIdleConns = 64
+)
 
 // maxCACertBundleBytes bounds how many bytes of a configured CA bundle
 // loadCACertPool will read. Real CA bundles, even large ones layering many
