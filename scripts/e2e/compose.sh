@@ -227,10 +227,29 @@ ensure_image() {
   [[ "$IMAGE" == *@sha256:* ]] || die 'ACR_E2E_IMAGE must be an immutable digest reference'
 }
 
+# render_go_api_clickhouse_login writes go-api's own ClickHouse login file: ops's generated
+# users.d file (docker/clickhouse-users.d/dho_api_ch.xml, exactly the api's grant manifest,
+# SELECT on repos included) with its database renamed to this run's isolated one. ops says a
+# stack whose CLICKHOUSE_DB is not `default` must mount its own file, or go-api is never ready;
+# without the login go-api starts with clickhouse_configured:false and every principal access
+# read answers 503 (CHAOS-12183). No grant is widened: only the database name changes.
+render_go_api_clickhouse_login() {
+  local source="$STATE/stage/ops/docker/clickhouse-users.d/dho_api_ch.xml" target="$STATE/clickhouse/dho_api_ch.xml" db
+  db="$(ops_clickhouse_database)"
+  [[ -f "$source" ]] || die "the ops checkout has no go-api ClickHouse login file (${source#"$STATE/stage/"})"
+  grep -q ' ON default\.' "$source" || die 'the ops go-api ClickHouse login file grants nothing on the default database: its shape changed'
+  mkdir -p "$STATE/clickhouse"
+  (umask 022; sed "s/ ON default\./ ON ${db}./g" "$source" > "$target")
+  ! grep -q ' ON default\.' "$target" || die 'the go-api ClickHouse login file still names the default database'
+  grep -q " ON ${db}\.repos<" "$target" || die 'the go-api ClickHouse login file grants no SELECT on repos'
+}
+
 render_override() {
-  local pg runtime migration ch jwt db postgres_port clickhouse_http_port clickhouse_native_port redis_port
+  local pg runtime migration ch jwt db postgres_port clickhouse_http_port clickhouse_native_port redis_port api_ch
   pg="$(<"$STATE/secrets/postgres-password")"; runtime="$(<"$STATE/secrets/runtime-password")"; migration="$(<"$STATE/secrets/migration-password")"; ch="$(<"$STATE/secrets/clickhouse-password")"
   jwt="$(random_secret)"
+  api_ch="$(random_secret)"
+  render_go_api_clickhouse_login
   db="acr_${PROJECT//-/}_e2e"
   write_container_secret "$STATE/secrets/runtime-dsn" "postgres://acr_runtime:${runtime}@postgres:5432/${db}?sslmode=disable"
   write_container_secret "$STATE/secrets/migration-dsn" "postgres://acr_migration:${migration}@postgres:5432/${db}?sslmode=disable"
@@ -249,16 +268,18 @@ services:
   clickhouse:
     image: "${CLICKHOUSE_IMAGE}"
     ports: !override []
-    environment: { CLICKHOUSE_USER: default, CLICKHOUSE_PASSWORD: ch, CLICKHOUSE_DB: default, CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: "1" }
-    volumes: ["clickhouse_data:/var/lib/clickhouse", "${STATE}/clickhouse/client-readonly.xml:/run/acr-e2e/clickhouse-client-readonly.xml:ro"]
+    environment: { CLICKHOUSE_USER: default, CLICKHOUSE_PASSWORD: ch, CLICKHOUSE_DB: default, CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: "1", DHO_API_CH_PASSWORD: "${api_ch}" }
+    volumes: ["clickhouse_data:/var/lib/clickhouse", "${STATE}/clickhouse/client-readonly.xml:/run/acr-e2e/clickhouse-client-readonly.xml:ro", "${STATE}/clickhouse/dho_api_ch.xml:/etc/clickhouse-server/users.d/dho_api_ch.xml:ro"]
     healthcheck: { test: ["CMD-SHELL", "clickhouse-client --host clickhouse --port 9000 --user default --password ch --query 'SELECT 1'"], interval: 5s, timeout: 5s, retries: 12, start_period: 10s }
   pgbouncer: { image: "${PGBOUNCER_IMAGE}" }
   valkey:
     image: "${VALKEY_IMAGE}"
     ports: !override []
   mailpit: { image: "${MAILPIT_IMAGE}" }
+  # go-api's own ClickHouse login (render_go_api_clickhouse_login): the principal access read's
+  # repository inventory runs on it (CHAOS-12183).
   go-api:
-    environment: { JWT_SECRET_KEY: "${jwt}" }
+    environment: { JWT_SECRET_KEY: "${jwt}", DEV_HEALTH_CH_API_HOST: clickhouse, DEV_HEALTH_CH_API_PORT: "9000", DEV_HEALTH_CH_API_USER: dho_api_ch, DEV_HEALTH_CH_API_PASSWORD: "${api_ch}", DEV_HEALTH_CH_API_DB: "${db}" }
   # query-api authenticates the Go-served REST routes with the user's edge access token, the HS256
   # JWT the Go api mints with JWT_SECRET_KEY (cmd/query-api edge_verifier_config.go). It needs
   # the same per-run secret as api, or every routed call answers 401 (CHAOS-6326).
