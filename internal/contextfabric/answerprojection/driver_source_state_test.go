@@ -31,7 +31,7 @@ func TestProjectionCarriesTheServerNoteAndFlag(t *testing.T) {
 	for index := range result.Drivers {
 		if result.Drivers[index].DriverID == "driver_principal_1" {
 			result.Drivers[index].SourceState = contractsv1.ContextFabricSourceTruncated
-			result.Drivers[index].SourceStateNote = "The service marks this driver as partial: the source read was truncated."
+			result.Drivers[index].SourceStateNote = "The service marks this driver as truncated: the source read was cut."
 			result.Drivers[index].SummaryCorrected = true
 		}
 	}
