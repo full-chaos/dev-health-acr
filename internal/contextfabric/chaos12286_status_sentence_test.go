@@ -214,3 +214,46 @@ func TestAReusedHeadWithNothingInItsPlaceIsServedAsStoredAndCounted(t *testing.T
 		})
 	}
 }
+
+// A complete head with no principal driver is a composition only when it is
+// the server's own lead sentences; prose the server did not write is not.
+func TestOnlyTheServersLeadSentencesMakeADriverlessHeadComposed(t *testing.T) {
+	t.Parallel()
+	for head, want := range map[string]bool{
+		"":                                  true,
+		"Counted 1 work item.":              true,
+		"Counted at least 2000 work items.": true,
+		"Counted 3 teams of 5 found.":       true,
+		"Counted 1 work item. Total of merged prs over the period: 4, summed from 30 of 30 days, every day of the period having a stored row. The period is the 30 most recent completed UTC days, 2026-10-01 to 2026-10-30; today's partial day is not in the total.": true,
+		"Partial total of merged prs over the period: 3, summed from the 28 of 30 days that have a stored row; no row is stored for 2026-10-04, 2026-10-05, and those days are not counted as zero, so this is not the total of the period.":                           true,
+		"The stored deploy rows for the period reached the limit of 400 rows one read returns and extend beyond the period, so some days of the period may be missing and no total is stated.":                                                                         true,
+		"No stored deploy row exists for any day of the period, so no total is stated.":                       true,
+		"Some stored deploy rows were withheld from this caller, so no total is stated.":                      true,
+		"The period is longer than the 400 daily rows one read returns, so no deploy total is stated for it.": true,
+		"Ask Dev is on track.":                      false,
+		"Counted 1 work item. Ask Dev is on track.": false,
+		"Ask Dev is on track. Counted 1 work item.": false,
+	} {
+		if got := serverLeadSentencesOnly(head); got != want {
+			t.Errorf("serverLeadSentencesOnly(%q) = %v, want %v", head, got, want)
+		}
+	}
+}
+
+// A driverless complete head the server did not write: a floor withholds it
+// (composes afresh, as its limitation says), and a served copy at a lower
+// status without a floor leaves it alone.
+func TestADriverlessHeadTheServerDidNotWriteIsNotRecomposed(t *testing.T) {
+	t.Parallel()
+	const prose = "Ask Dev is on track."
+	floored := ApplyServedStatusFloors(poolCutAnswer(prose, "Current observed values: open items: 3."))
+	if want := "Some canonical or graph coverage was unavailable."; floored.Status != InvestigationPartial || floored.DirectJudgment != want || floored.DeterministicAnswer != want {
+		t.Fatalf("floored: %q with %q / %q, want partial with %q", floored.Status, floored.DirectJudgment, floored.DeterministicAnswer, want)
+	}
+	served := validInvestigationResult()
+	served.Status = InvestigationPartial
+	served.DirectJudgment, served.DeterministicAnswer = prose, prose
+	if got := restateServedStatusHead(served); got.DirectJudgment != prose || got.DeterministicAnswer != prose {
+		t.Fatalf("served lower: lead prose = %q / %q, want %q left alone", got.DirectJudgment, got.DeterministicAnswer, prose)
+	}
+}

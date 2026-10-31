@@ -3190,11 +3190,21 @@ func recomposeLeadField(head, fallback string, from, to InvestigationStatus, dri
 // recomposeComposedLead is recomposeLeadField for a head that is one of the
 // composition forms of `from`; ok is false for any other head, which it leaves
 // to its caller.
+//
+// A complete answer with no principal driver composes nothing (old is ""), so
+// no suffix marks its head as composed. It is a composition only when what is
+// left is the server's own lead sentences (count and period sentences,
+// serverLeadSentencesOnly) or nothing; any other head -- prose the server did
+// not write -- is not, and its caller composes afresh or leaves it alone, as
+// for any unrecognized head.
 func recomposeComposedLead(head, fallback string, from, to InvestigationStatus, drivers []DriverJudgment, cohort *Cohort, resolution SubjectResolution, label string, maxRunes int) (string, bool) {
 	head = restateHeadSentence(head, statusSentence(from, resolution), quickAnswerOf(drivers, cohort), maxRunes)
 	head = withoutLeadProseFallback(head, fallback)
 	for _, form := range []string{label, ""} {
 		old := truncateAtSentenceBoundary(composeLeadProse(from, drivers, cohort, resolution, form), maxRunes)
+		if old == "" && !serverLeadSentencesOnly(head) {
+			continue
+		}
 		if old != "" && head != old && !strings.HasSuffix(head, " "+old) {
 			continue
 		}

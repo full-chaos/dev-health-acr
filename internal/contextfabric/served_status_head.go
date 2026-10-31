@@ -111,6 +111,40 @@ func LeadProseServedAsStored(result InvestigationResult) bool {
 	return false
 }
 
+// serverLeadSentences are the sentences the server puts before the composed
+// lead prose of an answer: the count sentence (cardinalityAnswerSentence) and
+// a single subject's period totals, absences and period scope
+// (PeriodTotalSentences, PeriodScopeSentence).
+var serverLeadSentences = []*regexp.Regexp{
+	regexp.MustCompile(`^Counted (?:at least )?\d+ [^.]*\.$`),
+	regexp.MustCompile(`^(?:Partial total|Total) of .+ over the period: \d+, summed from .+\.$`),
+	regexp.MustCompile(`^No stored .+ row exists for any day of the period, so no total is stated\.$`),
+	regexp.MustCompile(`^The stored .+ rows for the period (?:reached the limit of|could not be read as) .+\.$`),
+	regexp.MustCompile(`^Some stored .+ rows were withheld from this caller, so no total is stated\.$`),
+	regexp.MustCompile(`^The period is (?:longer than the|the) .+\.$`),
+}
+
+// serverLeadSentencesOnly reports whether head is empty or every sentence of
+// it is one of serverLeadSentences: the head of a complete answer with no
+// principal driver, as the server composes it.
+func serverLeadSentencesOnly(head string) bool {
+	for rest := strings.TrimSpace(head); rest != ""; {
+		sentence := leadProseFallback(rest)
+		matched := false
+		for _, pattern := range serverLeadSentences {
+			if pattern.MatchString(sentence) {
+				matched = true
+				break
+			}
+		}
+		if !matched {
+			return false
+		}
+		rest = strings.TrimSpace(strings.TrimPrefix(rest, sentence))
+	}
+	return true
+}
+
 // leadProseFallback is current_state's first sentence, as composed: the head
 // of a complete answer that states nothing else. A provider's fact value in it
 // ("status: Complete") is evidence and is kept as it is.

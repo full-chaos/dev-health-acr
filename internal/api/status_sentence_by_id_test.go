@@ -144,3 +144,29 @@ func TestByIDAStoredNotCompleteClauseIsServedInPlainWords(t *testing.T) {
 	}
 	requireNoTemplatePhrase(t, "current_state", got.CurrentState)
 }
+
+// Review r2: a stored complete head the server did not write, floored by id,
+// is withheld and recomposed for the served status (the floor discloses the
+// withholding); it is not kept with a status sentence appended.
+func TestByIDAFlooredHeadTheServerDidNotWriteIsWithheld(t *testing.T) {
+	stored := storedLeadProseAnswer(contractsv1.ContextFabricInvestigationComplete, "Ask Dev is on track.", "Current observed values: open items: 3.")
+	stored.Limitations = []string{contractsv1.ContextFabricMemberStatusPoolCutLimitation("project", 50, 120)}
+	stored.Completeness = contextfabric.ComputeAnswerCompleteness(stored)
+	app, token, _ := newCompletenessAuthorityTestApp(t, legacyResultStore{result: stored}, false)
+	recorder := httptest.NewRecorder()
+	app.Handler().ServeHTTP(recorder, investigationResultRequest(t, token, stored.ResultID))
+	if recorder.Code != 200 {
+		t.Fatalf("status = %d (body %s)", recorder.Code, recorder.Body.String())
+	}
+	var got contractsv1.ContextFabricInvestigationResult
+	if err := json.Unmarshal(recorder.Body.Bytes(), &got); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if err := got.Validate(); err != nil {
+		t.Fatalf("served result invalid: %v", err)
+	}
+	const want = "Some canonical or graph coverage was unavailable."
+	if got.Status != contractsv1.ContextFabricInvestigationPartial || got.DirectJudgment != want || got.DeterministicAnswer != want {
+		t.Fatalf("served %q with %q / %q, want partial with %q", got.Status, got.DirectJudgment, got.DeterministicAnswer, want)
+	}
+}
