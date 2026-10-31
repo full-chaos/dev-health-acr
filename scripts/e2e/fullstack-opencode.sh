@@ -1334,18 +1334,32 @@ run_device_login_read_acceptance() {
 
   future_count="$(clickhouse_query "SELECT count() FROM ${db}.repos FINAL WHERE org_id = '${org_id}' AND repo = '${FULLSTACK_FUTURE_SLUG}'")"
   [[ "$future_count" == 0 ]] || fs_die 'the future-repository acceptance fixture unexpectedly exists in the analytics catalog'
+  # CHAOS-12092: a user-class credential's effective scope is its grant within the
+  # organization's LIVE repository inventory ("*" is the inventory, re-read on every call).
+  # A same-organization repository the catalog does not hold yet is outside it: refused at
+  # authorization (repo_forbidden), with no data read.
   device_login_mcp_roundtrip "$FULLSTACK_FUTURE_SLUG" "$ARTIFACTS/device-login-future-context.json"
   jq -e '
+    .id == 2 and .result != null and (.result.isError // false)
+    and ([.result.content[]? | select(.type == "text") | .text]
+         | any(startswith("repo_forbidden: acr api error: code=repo_forbidden status=403 ")))
+    and ((.result | tostring) | test("future-service-canary"; "i") | not)
+  ' "$ARTIFACTS/device-login-future-context.json" >/dev/null \
+    || fs_die 'the organization-wide device credential was not refused for a repository outside the live inventory'
+  # The same credential (the same device-login token, no new consent) reaches that
+  # repository as soon as the inventory holds it: the grant is re-read live, never frozen
+  # at consent (#64's intent: an organization-wide credential covers repositories added later).
+  clickhouse_query "INSERT INTO ${db}.repos (id, repo, ref, created_at, settings, tags, last_synced, org_id, provider) VALUES (generateUUIDv4(), '${FULLSTACK_FUTURE_SLUG}', 'main', now64(3), NULL, NULL, now64(3), '${org_id}', 'future-service-canary')" >/dev/null
+  device_login_mcp_roundtrip "$FULLSTACK_FUTURE_SLUG" "$ARTIFACTS/device-login-future-cataloged-context.json"
+  jq -e '
     .id == 2 and .result != null
+    and ((.result | tostring) | test("repo_forbidden|credential scope|category: auth"; "i") | not)
     and (if (.result.isError // false)
          then (.result.content | tostring | test("no_data"; "i"))
          else .result.structuredContent.schema_version == "mcp_context_for_task_response.v1"
-           and .result.structuredContent.structured.resolved_scope.resolution == "unresolved"
-           and (.result.structuredContent.structured.resolved_scope.fallback_reasons | index("authorized_repository_not_found")) != null
          end)
-    and ((.result | tostring) | test("repo_forbidden|credential scope|category: auth"; "i") | not)
-  ' "$ARTIFACTS/device-login-future-context.json" >/dev/null \
-    || fs_die 'the organization-wide device credential rejected an uncataloged same-organization repository at authorization'
+  ' "$ARTIFACTS/device-login-future-cataloged-context.json" >/dev/null \
+    || fs_die 'the organization-wide device credential was refused for a repository the live inventory now holds'
 
   # A foreign-organization canary exists in storage under a different OrgID.
   # The wildcard grant may name its slug, but every read must remain bound to

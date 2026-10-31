@@ -3686,6 +3686,61 @@ refuses a purged organization's write.
 `0065_context_fabric_result_feedback.sql`; parity table
 `paritytest.RunResultFeedbackSuite`.
 
+## 21 — Per-call access re-check (CHAOS-12092)
+
+Every protected call by a user-class credential (browser, OAuth user, native
+device) re-reads the user's access in Dev Health, live and uncached (North Star
+check 18), before its handler. The read decides membership, impersonation, the
+browser session, the two flags and the effective repository scope; the
+investigation create also checks the budget the read left. Refusals answer
+before admission, so they leave no submission row and start no model attempt.
+
+```mermaid
+sequenceDiagram
+  participant C as Browser / MCP client (user-class bearer)
+  participant A as acr-api protectedRuntimeHandler
+  participant O as Dev Health go-api (principal access read)
+  participant H as Route handler
+
+  C->>A: request (bearer)
+  A->>A: authenticate row, scope, rate limit, client version
+  alt operator / workload / legacy / web assertion
+    A->>H: unchanged (no read)
+  else browser, oauth_user, native_device
+    A->>O: GET .../orgs/{org}/principals/{approving user}/access [?sid browser only]
+    alt read failed (transport, timeout, 4xx/5xx, bad body)
+      A-->>C: 503 upstream_unavailable
+    else 404 / invalid sid / not member / impersonating / session not live
+      A-->>C: 403 access_denied (one code)
+    else agent_context_runtime off, or ask_dev off (browser), on any route but capabilities
+      A-->>C: 403 feature_not_enabled (capabilities: 200, entitlement false)
+    else grant ∩ live inventory is empty
+      A-->>C: 409 no_repository (never an [] scope)
+    else granted
+      A->>H: principal narrowed to grant ∩ inventory, read kept for the request
+      opt POST investigations
+        H->>H: budget left < 10 s? → 503 budget_exhausted (before admission)
+      end
+    end
+  end
+```
+
+Legend: the read is made once per request and reused inside it
+(`liveAccessFromContext`); `requireEntitlement`, the capabilities route and the
+context-packet route read `agent_context_runtime` from it, not from the
+30-second entitlement cache. Anchors: `requireLiveAccess`,
+`effectiveRepositoryScope`, `liveAccessBudgetExhausted`
+(`internal/api/principal_access.go`); the wrapper order in
+`protectedRuntimeHandler` (`internal/api/runtime.go`); the budget check in
+`ContextFabricInvestigationHandler` (`internal/api/context_fabric_routes.go`);
+`auth.NarrowRepositoryScopes` (`internal/auth/middleware.go`); the client
+`(*entitlements.Client).PrincipalAccess` and its strict decoder
+(`internal/entitlements/principal_access.go`); the hosted wiring
+`principalAccessReader` (`internal/runtime/hosted/open.go`); the codes
+`ErrorCodeAccessDenied`, `ErrorCodeNoRepository`, `ErrorCodeBudgetExhausted`
+(`internal/contracts/v1/principal_access.go`). The Dev Health side of the read
+is ops `internal/apiservice/acr/access.go` (CHAOS-12084, CHAOS-12128).
+
 ## Sources
 
 - Live code via `codegraph_explore` / `rg` on `dev-health-acr`: `engine.go`

@@ -7,6 +7,7 @@ import (
 	"database/sql/driver"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"net"
@@ -226,8 +227,9 @@ func (a *Authenticator) MiddlewareFor(allowWebAssertions bool, next http.Handler
 			Permissions:      append([]string(nil), credential.Scopes...),
 			// CHAOS-12083: the credential row's immutable issuance
 			// provenance, never anything the request carries.
-			ClientClass:     storage.CredentialClientClass(credential.Provenance.ClientClass),
-			ApprovingUserID: credential.Provenance.ApprovingUserID,
+			ClientClass:         storage.CredentialClientClass(credential.Provenance.ClientClass),
+			ApprovingUserID:     credential.Provenance.ApprovingUserID,
+			CredentialSessionID: credential.Provenance.SessionID,
 		}
 		ctx := context.WithValue(r.Context(), principalKey{}, principal)
 		release()
@@ -328,6 +330,32 @@ func (a *Authenticator) RequireRepository(resolve func(*http.Request) string, ne
 func PrincipalFromContext(ctx context.Context) (storage.Principal, bool) {
 	principal, ok := ctx.Value(principalKey{}).(storage.Principal)
 	return principal, ok
+}
+
+// ErrEmptyRepositoryScope refuses narrowing a principal to no repository: an
+// empty RepositoryScopes slice reads as unrestricted downstream, so an empty
+// effective scope is a typed deny-all, never [] (CHAOS-12092).
+var ErrEmptyRepositoryScope = errors.New("effective repository scope is empty")
+
+// NarrowRepositoryScopes returns ctx with its authenticated principal's
+// repository scopes replaced by scopes, the live effective scope the per-call
+// access read computed (CHAOS-12092). It only narrows: every scope must be
+// one the principal's own scopes allow, and scopes must not be empty.
+func NarrowRepositoryScopes(ctx context.Context, scopes []string) (context.Context, error) {
+	principal, ok := PrincipalFromContext(ctx)
+	if !ok {
+		return ctx, errors.New("no authenticated principal to narrow")
+	}
+	if len(scopes) == 0 {
+		return ctx, ErrEmptyRepositoryScope
+	}
+	for _, scope := range scopes {
+		if !RepositoryAllowed(principal.RepositoryScopes, scope) {
+			return ctx, fmt.Errorf("repository scope %q widens the principal", scope)
+		}
+	}
+	principal.RepositoryScopes = append([]string(nil), scopes...)
+	return context.WithValue(ctx, principalKey{}, principal), nil
 }
 
 // recordUnknownFailure sanitizes `ip` at the log site so the invariant
