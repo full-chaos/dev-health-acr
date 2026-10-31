@@ -563,6 +563,10 @@ acrMcp:
   # Secret: acr-mcp stays credential-less. Roll in two steps: (1)
   # hop.enabled here (an older acr-api ignores the header); (2)
   # config.mcpHop.required on acr-api, as its own deploy step.
+  # The name of acr-mcp's ServiceAccount. Empty = <fullname>-mcp. It is the
+  # ServiceAccount this chart renders, the pod runs as, and the identity
+  # acr-api accepts as the hop (config.mcpHop.required).
+  serviceAccountName: ""
   hop:
     enabled: false
     # The TokenReview audience of the hop token; acr-api checks the same
@@ -571,9 +575,6 @@ acrMcp:
     # Projected token life in seconds; 600 is the shortest Kubernetes
     # allows. kubelet rotates the file before it expires.
     expirationSeconds: 600
-    # The acr-mcp ServiceAccount acr-api accepts. Empty = the one this chart
-    # renders for acr-mcp (<fullname>-mcp).
-    serviceAccount: ""
   logLevel: info
   # ACR_API_TIMEOUT: also bounds each per-request credential decision.
   apiTimeout: "15s"

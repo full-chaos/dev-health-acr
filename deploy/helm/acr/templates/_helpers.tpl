@@ -149,7 +149,7 @@ subject, on one identity.
 */}}
 {{- define "acr.validateServiceAccountNames" -}}
 {{- $full := include "acr.fullname" . -}}
-{{- $entries := list (list "acr-api" (include "acr.apiServiceAccountName" .)) (list "serviceAccount.*" (include "acr.serviceAccountName" .)) (list "acr-migrate" (printf "%s-migrate" $full)) (list "acr-mcp" (printf "%s-mcp" $full)) -}}
+{{- $entries := list (list "acr-api" (include "acr.apiServiceAccountName" .)) (list "serviceAccount.*" (include "acr.serviceAccountName" .)) (list "acr-migrate" (printf "%s-migrate" $full)) (list "acr-mcp" (include "acr.mcpServiceAccountName" .)) -}}
 {{- if .Values.workloadTokenExchange.enabled -}}
 {{- range $i, $c := .Values.workloadTokenExchange.consumerServiceAccounts -}}
 {{- $src := printf "workloadTokenExchange.consumerServiceAccounts[%d]" $i -}}
@@ -618,13 +618,14 @@ NetworkPolicy egress to the OTLP collector port, when otel.enabled.
 {{- end -}}
 
 {{/*
-CHAOS-12094 (F1): the acr-mcp hop proof. acr.mcpHopServiceAccount is the
-acr-mcp ServiceAccount acr-api accepts (acrMcp.hop.serviceAccount, or the one
-this chart renders for acr-mcp). acr.tokenReview is "true" when acr-api calls
+CHAOS-12094 (F1): the acr-mcp hop proof. acr.mcpServiceAccountName is the ONE
+name of acr-mcp's ServiceAccount (acrMcp.serviceAccountName, default
+<fullname>-mcp): the ServiceAccount this chart renders, the pod's
+serviceAccountName, and the identity acr-api's hop check accepts. acr.tokenReview is "true" when acr-api calls
 Kubernetes TokenReview: for the workload token exchange or for the hop check.
 */}}
-{{- define "acr.mcpHopServiceAccount" -}}
-{{- .Values.acrMcp.hop.serviceAccount | default (printf "%s-mcp" (include "acr.fullname" .)) -}}
+{{- define "acr.mcpServiceAccountName" -}}
+{{- .Values.acrMcp.serviceAccountName | default (printf "%s-mcp" (include "acr.fullname" .)) -}}
 {{- end -}}
 
 {{- define "acr.tokenReview" -}}

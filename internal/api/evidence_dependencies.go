@@ -92,6 +92,7 @@ type App struct {
 	oauthConsentURL      string
 	clientIP             auth.ClientIPResolver
 	usageTelemetry       *auth.UsageTelemetry
+	mcpHop               *auth.MCPHopPolicy
 	metrics              *hostedmetrics.Instruments
 	closers              appClosers
 	// readinessTransitions (dictation 811) tracks the last OBSERVED /readyz
@@ -229,6 +230,7 @@ func NewApp(cfg AppConfig, deps Dependencies, logger *slog.Logger) (*App, error)
 		authenticator:        authenticator,
 		clientIP:             deps.ClientIP,
 		usageTelemetry:       deps.UsageTelemetry,
+		mcpHop:               deps.MCPHop,
 		metrics:              deps.Metrics,
 		credentialService:    credentialService,
 		deviceFlow:           deviceFlow,
@@ -249,7 +251,7 @@ func (a *App) ProtectedHandler(class limits.RequestClass, next http.Handler) htt
 }
 
 func (a *App) AuthenticatedHandler(credentials storage.CredentialStore, audit storage.AuditStore, class limits.RequestClass, next http.Handler) (http.Handler, error) {
-	authenticator, err := auth.NewAuthenticator(credentials, audit, auth.AuthenticatorOptions{Now: a.now, Limiter: a.authAttempts, Logger: a.logger, ClientIP: a.clientIP, UsageTelemetry: a.usageTelemetry})
+	authenticator, err := auth.NewAuthenticator(credentials, audit, auth.AuthenticatorOptions{Now: a.now, Limiter: a.authAttempts, Logger: a.logger, ClientIP: a.clientIP, UsageTelemetry: a.usageTelemetry, MCPHop: a.mcpHop})
 	if err != nil {
 		return nil, err
 	}

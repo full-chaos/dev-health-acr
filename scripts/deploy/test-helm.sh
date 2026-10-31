@@ -1322,9 +1322,14 @@ done
 [[ -n "$(extract_doc ClusterRoleBinding '  name: "?[^\n"]*-token-review"?\n' <<<"$hop2")" ]] || fail_gate "mcp-hop: step 2 renders no TokenReview binding for acr-api"
 grep -qF 'kubernetes-api-reviewer-token' <<<"$(extract_doc Deployment 'component: api' <<<"$hop2")" || fail_gate "mcp-hop: step 2 acr-api lacks its reviewer token"
 pass "mcp-hop: step 2 requires the hop for the acr-mcp ServiceAccount and grants acr-api TokenReview"
-hop_custom="$(render "${oauth_args[@]}" --set acrMcp.hop.enabled=true --set config.mcpHop.required=true --set-string acrMcp.hop.serviceAccount=edge-mcp)"
-grep -qF 'ACR_MCP_HOP_SERVICE_ACCOUNT_NAME: "edge-mcp"' <<<"$hop_custom" || fail_gate "mcp-hop: acrMcp.hop.serviceAccount does not set the accepted ServiceAccount"
-pass "mcp-hop: acrMcp.hop.serviceAccount names the accepted ServiceAccount"
+# One name (codex #1799 r1 P2): a custom acrMcp.serviceAccountName is the
+# ServiceAccount rendered, the pod's, and the one acr-api accepts.
+hop_custom="$(render "${oauth_args[@]}" --set acrMcp.hop.enabled=true --set config.mcpHop.required=true --set-string acrMcp.serviceAccountName=edge-mcp)"
+grep -qF 'ACR_MCP_HOP_SERVICE_ACCOUNT_NAME: "edge-mcp"' <<<"$hop_custom" || fail_gate "mcp-hop: acrMcp.serviceAccountName does not set the accepted ServiceAccount"
+grep -qF 'serviceAccountName: "edge-mcp"' <<<"$(extract_doc Deployment '  name: "?[^\n"]*-mcp"?\n' <<<"$hop_custom")" || fail_gate "mcp-hop: the acr-mcp pod does not run as acrMcp.serviceAccountName"
+grep -qE '^  name: "?edge-mcp"?$' <<<"$(extract_doc ServiceAccount 'name: "?edge-mcp"?' <<<"$hop_custom")" || fail_gate "mcp-hop: the chart does not render the acrMcp.serviceAccountName ServiceAccount"
+if grep -qF "${RELEASE}-mcp\"" <<<"$(extract_doc ServiceAccount 'component: mcp' <<<"$hop_custom")"; then fail_gate "mcp-hop: the default acr-mcp ServiceAccount is still rendered beside the custom one"; fi
+pass "mcp-hop: acrMcp.serviceAccountName is the rendered ServiceAccount, the pod's, and the accepted hop identity"
 oauth_must_fail "mcp hop required before acr-mcp sends it" "requires acrMcp.enabled and acrMcp.hop.enabled" "${oauth_args[@]}" --set config.mcpHop.required=true
 oauth_must_fail "mcp hop required without the OAuth login" "requires config.oauth.enabled" --set acrMcp.enabled=true --set-string "acrMcp.image.reference=${mcp_image}" \
   --set acrMcp.hop.enabled=true --set config.mcpHop.required=true

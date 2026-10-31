@@ -46,7 +46,7 @@ spec:
         {{- toYaml . | nindent 8 }}
         {{- end }}
     spec:
-      serviceAccountName: {{ printf "%s-mcp" (include "acr.fullname" .) | quote }}
+      serviceAccountName: {{ include "acr.mcpServiceAccountName" . | quote }}
       automountServiceAccountToken: false
       {{- include "acr.imagePullSecrets" . | nindent 6 }}
       securityContext:
