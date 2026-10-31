@@ -76,8 +76,11 @@ func TestAnUnverifiedProjectNarrowingFloorsACompleteAnswerToPartial(t *testing.T
 	if !result.Coverage.Partial {
 		t.Fatal("coverage.partial = false")
 	}
-	if result.Completeness.State == contractsv1.ContextFabricAnswerCompletenessComplete {
-		t.Fatalf("completeness.state = %q beside a partial status", result.Completeness.State)
+	// Completeness is recomputed from the outcome rows only (it may stay
+	// complete below this status: team-lead ruling, option 1), and
+	// terminal_status follows the served status.
+	if want := ComputeAnswerCompleteness(result); result.Completeness.State != want.State || result.Completeness.TerminalStatus != InvestigationPartial {
+		t.Fatalf("completeness = %q / terminal %q, want the outcome rows' %q and terminal partial", result.Completeness.State, result.Completeness.TerminalStatus, want.State)
 	}
 	// The floor uses the swap every no_match floor uses: the draft's prose,
 	// written for a complete answer, is recomposed and its withholding said.
@@ -139,8 +142,8 @@ func TestTheUnverifiedNarrowingFloorMatchesCodeRawAndDegradingAndNeverPromotes(t
 				t.Fatalf("served status = %q, want %q", got.Status, tc.want)
 			}
 			if tc.want == InvestigationPartial && tc.status == InvestigationComplete {
-				if got.Completeness.State == contractsv1.ContextFabricAnswerCompletenessComplete {
-					t.Fatalf("completeness.state = %q: it was not recomputed after the floor", got.Completeness.State)
+				if want := ComputeAnswerCompleteness(got); got.Completeness.State != want.State || got.Completeness.TerminalStatus != InvestigationPartial {
+					t.Fatalf("completeness = %q / terminal %q: not recomputed after the floor (want %q, terminal partial)", got.Completeness.State, got.Completeness.TerminalStatus, want.State)
 				}
 				if again := ApplyServedStatusFloors(got); again.Status != InvestigationPartial || len(again.Limitations) != len(got.Limitations) {
 					t.Fatalf("a second apply moved the answer again: %q, %d limitations (was %d)", again.Status, len(again.Limitations), len(got.Limitations))
