@@ -855,7 +855,9 @@ func (r *Resolver) encodedTargets(ctx context.Context, principal storage.Princip
 			return nil, err
 		}
 		if len(found[index]) == 0 {
-			allowed = allowed && end.optional
+			// E1 (CHAOS-12299): an unresolved optional endpoint does not
+			// pass for a project-only caller; both ends must pass.
+			allowed = allowed && end.optional && auth.ClassifyGrant(principal) != auth.GrantProjectOnly
 			continue
 		}
 		allowed = allowed && len(admittedEnds) > 0

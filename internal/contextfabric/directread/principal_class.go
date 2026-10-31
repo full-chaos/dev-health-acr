@@ -108,8 +108,9 @@ func ClassifyPrincipal(principal storage.Principal) PrincipalClass {
 
 // PrincipalClassForGrant is the subject gate's view of a grant class
 // (CHAOS-12297). project_only is a restricted subtype and reads as
-// ClassRestricted: a team or project still needs ownership reach, and no
-// wire value changes. An unknown class is restricted (fail closed).
+// ClassRestricted, and no wire value changes. The subject gate reads no
+// ownership reach for it: the project-only node rule decides its projects and
+// denies its teams (CHAOS-12299). An unknown class is restricted (fail closed).
 func PrincipalClassForGrant(class auth.GrantClass) PrincipalClass {
 	switch class {
 	case auth.GrantUnrestricted:

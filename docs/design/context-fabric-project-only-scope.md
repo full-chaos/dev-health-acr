@@ -27,9 +27,11 @@ a grant:
 | `project_only` | an explicit set of projects, no repository inventory | true |
 
 `project_only` is a **restricted subtype**: a gate that does not decide it
-explicitly takes the restricted path. `auth.ClassifyGrant` keeps today's rule
-and never returns `project_only`. Only the access-read decoder (c5,
-CHAOS-12301) produces it.
+explicitly takes the restricted path. `auth.ClassifyGrant` returns
+`project_only` iff `storage.Principal.ProjectScopes` (canonical `project.v2`
+identities) is non-empty, whatever the repository list holds; otherwise it
+keeps today's rule. Only the access-read decoder (c5, CHAOS-12301) sets
+`ProjectScopes`, so nothing is `project_only` before c5.
 
 The three gate vocabularies derive from the grant class with no `default`.
 `project_only` maps to their restricted member, so no wire value changes:
@@ -132,17 +134,32 @@ A project identity is `project.v2:<EncodeSegment(provider)>:<EncodeSegment(id)>`
 
 Under `project_only` (c3, CHAOS-12299):
 
-- **Nodes.** A node is admitted when it is the caller's organization node, a
-  granted project, a work item whose `authorization_project_identities` meets
-  the grant exactly, or a team reached through `OWNED_BY_TEAM` from a granted
-  project. Absent membership denies.
-- **E1: structural edges.** An edge is admitted iff both endpoints pass the node
-  rule, at every edge decision site. The edge's own repository list is never
-  consulted. A real edge project list must intersect the grant; `"*"` or an
-  absent list defers to the endpoints. An unresolved optional endpoint does not
-  pass.
-- **E2: attribution edges.** `DOCUMENTED_BY` and `HAS_EPISODE` are denied, as a
-  typed limitation.
+- **Nodes** (`graphrank.AuthorizedAttributes`, `projectOnlyAdmits`). A node
+  is admitted only when it is the caller's own organization node, a project
+  node whose canonical id is in the grant, or a work item whose
+  `authorization_project_identities` meets the grant exactly
+  (`ProjectMembershipOf` is Member). Everything else is denied: a work item
+  with no stated membership, a team (ownership reach is CHAOS-12323), a pull
+  request (CHAOS-12308), a repository, a deployment, an incident, a document
+  and an episode. The repository grant is never consulted. An attribute map
+  with no subject kind (a synthetic repository or team decision) is denied, so
+  the direct data tools refuse every repository-anchored and team row.
+- **Requested narrowing.** A request that names projects is refused: nothing
+  is admitted, and it is never answered over the whole grant. The intersection
+  with the grant is CHAOS-12324 (after CHAOS-12229 maps raw ids). A requested
+  repository or team narrowing still narrows a node.
+- **E1: structural edges** (`graphrank.AuthorizedEdge`). An edge is admitted
+  iff both endpoints pass the node rule, at every edge decision site. The
+  edge's own repository and team lists are never consulted. A real edge
+  project list must hold a granted canonical identity; the projection writes
+  raw project ids there, so such an edge is denied until CHAOS-12229. `"*"` or
+  an absent list defers to the endpoints. An unresolved optional endpoint does
+  not pass (`sourcerow` `encodedTargets`). A link tier grants a project-only
+  caller no authority in the tree walk.
+- **E2: attribution edges.** `DOCUMENTED_BY` and `HAS_EPISODE` are denied.
+- **Reach.** A project-only caller reads no project or ownership reach. It is
+  restricted wherever a reader asks whether the caller sees only some
+  repositories (`needsProjectReach`), and fails closed there.
 - **The shared predicate.** It is `graphrank.ProjectMembershipOf`, and the
   request-side narrowing (CHAOS-12229) uses the same one.
 

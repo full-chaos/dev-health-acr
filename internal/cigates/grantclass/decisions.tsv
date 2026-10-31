@@ -1,5 +1,5 @@
 # Grant-class decisions: file<TAB>symbol<TAB>kind<TAB>count<TAB>decision<TAB>note. See grantclass_test.go and docs/design/context-fabric-project-only-scope.md.
-# decision: r-sub (restricted path is right for project_only), proj (project-aware logic due, ticket named), deny (refused), leave (repository-only, sentinel keeps it fail closed), consent (original consent grant), vocab (mapping, vocabulary or telemetry).
+# decision: r-sub (restricted path is right for project_only), proj (project-aware logic, built or due in the ticket named), deny (refused), leave (repository-only, sentinel keeps it fail closed), consent (original consent grant), vocab (mapping, vocabulary or telemetry).
 # #vocab<TAB>class type<TAB>its sorted constant values: when a class gains, loses or renames a constant the test lists every row of that class to re-decide; update the pin after.
 #vocab	github.com/full-chaos/dev-health-acr/internal/auth.GrantClass	GrantProjectOnly=project_only,GrantRestricted=restricted,GrantUniversal=universal,GrantUnrestricted=unrestricted
 #vocab	github.com/full-chaos/dev-health-acr/internal/contextfabric.StoredResultPrincipalScope	StoredResultScopeRestricted=restricted,StoredResultScopeUniversal=universal,StoredResultScopeUnrestricted=unrestricted
@@ -40,7 +40,7 @@ internal/contextfabric/directread/operation_runner.go	OperationReadLogArgs	trans
 internal/contextfabric/directread/operation_runner.go	OperationRunner.Run	classify	2	r-sub	the operation caller class: project_only runs with the restricted policy; the project scope itself is gateAndScope (proj)
 internal/contextfabric/directread/operation_runner.go	OperationRunner.Run	derived-escape	1	r-sub	the operation caller class: project_only runs with the restricted policy; the project scope itself is gateAndScope (proj)
 internal/contextfabric/directread/operation_runner.go	run.execute	compare	2	r-sub	restricted callers get the restricted operation path (operation_runner.go:534, :581)
-internal/contextfabric/directread/operation_runner.go	run.gateAndScope	compare	1	proj	the operation scope must narrow to the granted projects under project_only (12107 v2 inventory operation_runner.go:706-745); c3 CHAOS-12299
+internal/contextfabric/directread/operation_runner.go	run.gateAndScope	compare	1	deny	project_only is restricted here: every repository it names or its grant lists is denied by the node rule, so the operation is refused; project-scoped operations are not in c3 (CHAOS-12299)
 internal/contextfabric/directread/principal_class.go	ClassifyPrincipal	classify	2	vocab	the mapping from auth.GrantClass to the subject-gate principal class
 internal/contextfabric/directread/principal_class.go	ClassifyPrincipal	derived-escape	1	vocab	the mapping from auth.GrantClass to the subject-gate principal class
 internal/contextfabric/directread/principal_class.go	PrincipalClassForGrant	switch	1	vocab	the mapping from auth.GrantClass to the subject-gate principal class
@@ -49,9 +49,10 @@ internal/contextfabric/directread/read_relationships.go	RelationshipsReader.gate
 internal/contextfabric/directread/read_relationships.go	RelationshipsReader.gateEdges	compare	1	r-sub	restricted callers gate every edge (12107 v2 inventory read_relationships.go:743); E1 for project_only is c3 CHAOS-12299
 internal/contextfabric/directread/relationships_telemetry.go	RelationshipsReadLogArgs	classify	1	vocab	telemetry: the principal class written to the log (closed vocabulary)
 internal/contextfabric/directread/relationships_telemetry.go	RelationshipsReadLogArgs	transport	1	vocab	telemetry: the principal class written to the log (closed vocabulary)
-internal/contextfabric/directread/subject_gate.go	SubjectGate.decide	classify	1	r-sub	the decision records the principal class; project_only reads as restricted
+internal/contextfabric/directread/subject_gate.go	SubjectGate.decide	classify	2	proj	ClassifyPrincipal takes the restricted path; ClassifyGrant skips the ownership reach for project_only, whose projects the node rule decides and whose teams it denies; c3 CHAOS-12299
+internal/contextfabric/directread/subject_gate.go	SubjectGate.decide	compare	1	proj	no ownership reach for project_only; c3 CHAOS-12299
 internal/contextfabric/directread/subject_gate.go	SubjectGate.decide	derived-escape	1	r-sub	the decision records the principal class; project_only reads as restricted
-internal/contextfabric/directread/subject_gate.go	needsOwnershipReach	compare	1	proj	team reach through a granted project replaces repository ownership reach under project_only (12107 v2 inventory subject_gate.go:313, :414); c3 CHAOS-12299
+internal/contextfabric/directread/subject_gate.go	needsOwnershipReach	compare	1	r-sub	project_only is restricted here: decide skips the reach for it, and markInactiveTeams reach check denies it every team (ownershipReachAdmits never admits it); c3 CHAOS-12299
 internal/contextfabric/directread/subject_lookup.go	SubjectLookup.Find	classify	1	r-sub	restricted callers get the restricted lookup (12107 v2 inventory subject_lookup.go:383)
 internal/contextfabric/directread/subject_lookup.go	SubjectLookup.Find	compare	1	r-sub	restricted callers get the restricted lookup (12107 v2 inventory subject_lookup.go:383)
 internal/contextfabric/directread/subject_lookup_modes.go	SubjectLookup.scanHandle	classify	1	r-sub	restricted callers get the restricted lookup (12107 v2 inventory subject_lookup_modes.go:246)
@@ -65,17 +66,28 @@ internal/contextfabric/eventspec/spec.go	var StoredResultAuthorization	collectio
 internal/contextfabric/fact_root_recheck.go	Engine.recheckCommittedRoots	classify	1	r-sub	restricted callers recheck committed roots (12107 v2 inventory fact_root_recheck.go:37)
 internal/contextfabric/fact_root_recheck.go	Engine.recheckCommittedRoots	compare	1	r-sub	restricted callers recheck committed roots (12107 v2 inventory fact_root_recheck.go:37)
 internal/contextfabric/falkorgraph/organization_status_census.go	Adapter.statusCensusPage	raw-grant	1	r-sub	needsProjectReach caller: project_only takes the restricted census path (12107 v2 inventory)
-internal/contextfabric/falkorgraph/project_reach.go	Adapter.withProjectReach	raw-grant	1	proj	project reach must use the granted projects under project_only (12107 v2 inventory project_reach.go:61); c3 CHAOS-12299
+internal/contextfabric/falkorgraph/project_reach.go	Adapter.withProjectReach	classify	1	proj	project_only reads no project reach: the node rule decides a project by canonical id; c3 CHAOS-12299
+internal/contextfabric/falkorgraph/project_reach.go	Adapter.withProjectReach	compare	1	proj	project_only reads no project reach; c3 CHAOS-12299
+internal/contextfabric/falkorgraph/project_reach.go	Adapter.withProjectReach	raw-grant	1	proj	project_only returns before any reach is read (its classify row): the node rule decides a project by canonical id; c3 CHAOS-12299
+internal/contextfabric/falkorgraph/project_reach.go	needsProjectReach	classify	1	r-sub	project_only is restricted at every reader of this (census, deployment walk, link segment): it fails closed there; c3 CHAOS-12299
 internal/contextfabric/falkorgraph/reader.go	Adapter.DiscoverContext	raw-grant	1	r-sub	needsProjectReach caller: project_only takes the restricted path (12107 v2 inventory reader.go:743)
 internal/contextfabric/falkorgraph/tree_walk.go	Adapter.linkSegment	raw-grant	1	r-sub	needsProjectReach caller: project_only takes the restricted walk (12107 v2 inventory tree_walk.go:931)
+internal/contextfabric/falkorgraph/tree_walk.go	treeWalkState.admitted	classify	1	proj	project_only: every link position is decided by the node rule, a link tier grants no authority; c3 CHAOS-12299
+internal/contextfabric/falkorgraph/tree_walk.go	treeWalkState.admitted	compare	1	proj	project_only: every link position is decided by the node rule; c3 CHAOS-12299
 internal/contextfabric/falkorgraph/tree_walk.go	treeWalkState.narrowed	raw-grant	1	r-sub	needsProjectReach caller: project_only takes the restricted walk (12107 v2 inventory tree_walk.go:376)
-internal/contextfabric/graphrank/authorize.go	AuthorizedAttributes	raw-grant	1	proj	node admission must read authorization_project_identities exactly under project_only (12107 v2 inventory authorize.go:75-103); c3 CHAOS-12299
+internal/contextfabric/graphrank/authorize.go	AuthorizedAttributes	classify	1	proj	project_only takes the project-only node rule (projectOnlyAdmits): own organization, granted project, member work item; c3 CHAOS-12299
+internal/contextfabric/graphrank/authorize.go	AuthorizedAttributes	compare	1	proj	project_only takes the project-only node rule (projectOnlyAdmits); c3 CHAOS-12299
+internal/contextfabric/graphrank/authorize.go	AuthorizedAttributes	raw-grant	1	leave	project_only never reaches this read: AuthorizedAttributes returns projectOnlyAdmits first (c3 CHAOS-12299)
+internal/contextfabric/graphrank/authorize.go	AuthorizedEdge	classify	1	proj	E1/E2 edge half for project_only: attribution denied, a real project list must hold a granted identity, else the ends decide; c3 CHAOS-12299
+internal/contextfabric/graphrank/authorize.go	AuthorizedEdge	compare	1	proj	E1/E2 edge half for project_only; c3 CHAOS-12299
 internal/contextfabric/graphrank/resolve.go	repositoryNarrowedByUnrestrictedPrincipal	raw-grant	1	r-sub	scopesUnrestricted caller: project_only is restricted (12107 v2 inventory resolve.go:5365)
 internal/contextfabric/graphrank/resolve.go	unscopedVisibilityFor	raw-grant	1	r-sub	scopesUnrestricted caller: project_only is restricted (12107 v2 inventory resolve.go:4880)
 internal/contextfabric/reuse_grant_scope.go	GrantScopedTimeAxisKey	classify	1	proj	the reuse key must be class-tagged so a project_only result never serves another class (R2-1, R2-4); c2 CHAOS-12298
 internal/contextfabric/reuse_grant_scope.go	GrantScopedTimeAxisKey	compare	1	proj	the reuse key must be class-tagged so a project_only result never serves another class (R2-1, R2-4); c2 CHAOS-12298
-internal/contextfabric/sourcerow/resolver.go	Resolver.projectTeamRow	raw-grant	1	proj	admitsWildcard: project-team evidence must be admitted through a granted project under project_only (12107 r3 R3-1 sourcerow:593); c3 CHAOS-12299
-internal/contextfabric/sourcerow/resolver.go	Resolver.teamAdmitted	raw-grant	3	proj	admitsWildcard: team evidence must be admitted through a granted project under project_only (12107 v2 inventory sourcerow); c3 CHAOS-12299
+internal/contextfabric/sourcerow/resolver.go	Resolver.encodedTargets	classify	1	proj	E1: an unresolved optional endpoint does not pass for project_only; c3 CHAOS-12299
+internal/contextfabric/sourcerow/resolver.go	Resolver.encodedTargets	compare	1	proj	E1: an unresolved optional endpoint does not pass for project_only; c3 CHAOS-12299
+internal/contextfabric/sourcerow/resolver.go	Resolver.projectTeamRow	raw-grant	1	deny	admitsWildcard denies project_only (a kindless decision): project-team evidence is refused, teams are denied in c3 (CHAOS-12323)
+internal/contextfabric/sourcerow/resolver.go	Resolver.teamAdmitted	raw-grant	3	deny	admitsWildcard denies project_only: team evidence is refused, teams are denied in c3 (CHAOS-12323)
 internal/contextfabric/stored_result_authorization.go	StoredResultAuthorizationLogArgs	transport	1	vocab	telemetry: the principal scope written to the log (closed vocabulary)
 internal/contextfabric/stored_result_authorization.go	StoredResultGate.Authorize	classify	1	r-sub	the refusal records the principal scope; project_only reads as restricted
 internal/contextfabric/stored_result_authorization.go	StoredResultGate.Authorize	derived-escape	1	r-sub	the refusal records the principal scope; project_only reads as restricted

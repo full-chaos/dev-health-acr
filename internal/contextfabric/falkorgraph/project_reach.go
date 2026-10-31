@@ -8,6 +8,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/full-chaos/dev-health-acr/internal/auth"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
@@ -43,12 +44,12 @@ type projectReachContextKey struct{}
 // repositories (sorted, never empty: noProjectOwnershipSentinel when none).
 type projectReach map[string][]string
 
-// needsProjectReach: only a repository-restricted caller's reads change.
+// needsProjectReach: the caller sees only some repositories. That is a
+// repository-restricted caller, and a project-only caller, which holds none
+// (CHAOS-12299): every site that reads this takes the restricted path for it,
+// whatever its repository list holds, and so fails closed there.
 func needsProjectReach(principal storage.Principal) bool {
-	if len(principal.RepositoryScopes) == 0 {
-		return false
-	}
-	return !slices.ContainsFunc(principal.RepositoryScopes, func(scope string) bool { return strings.TrimSpace(scope) == "*" })
+	return auth.ClassifyGrant(principal).IsRestricted()
 }
 
 // withProjectReach returns ctx carrying a LAZY project reach for a
@@ -58,7 +59,9 @@ func needsProjectReach(principal storage.Principal) bool {
 // call. A call that never reads a project node issues no extra query. ctx is
 // returned unchanged for an unrestricted or universal caller.
 func (a *Adapter) withProjectReach(ctx context.Context, key string, principal storage.Principal) (context.Context, error) {
-	if !needsProjectReach(principal) {
+	// A project-only caller needs no reach: the node rule decides a project
+	// by its canonical id, never by the repositories it reaches (CHAOS-12299).
+	if !needsProjectReach(principal) || auth.ClassifyGrant(principal) == auth.GrantProjectOnly {
 		return ctx, nil
 	}
 	orgID := strings.TrimSpace(principal.OrgID)
