@@ -2,9 +2,12 @@ package v1
 
 import (
 	"encoding/json"
+	"os"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/xeipuuv/gojsonschema"
 )
 
 // CHAOS-12226: a work-item entity may state its current project membership
@@ -110,6 +113,59 @@ func TestProjectIdentitiesKeepNotStatedApartFromEmpty(t *testing.T) {
 		}
 		if (back.ProjectIdentities == nil) != (tc.identities == nil) {
 			t.Errorf("%s: round trip stated=%v, want %v", name, back.ProjectIdentities != nil, tc.identities != nil)
+		}
+	}
+}
+
+// The published schema agrees with the Go validator on every value above
+// (codex r1 P3): the same canonical spellings pass and the same malformed
+// ones fail the items pattern, and the schema, too, admits the property on a
+// work item only.
+func TestTheSchemaAgreesWithGoOnProjectIdentities(t *testing.T) {
+	t.Parallel()
+	raw, err := os.ReadFile("../../../contracts/jsonschema/v1/context_fabric_common.v1.schema.json")
+	if err != nil {
+		t.Fatalf("read schema: %v", err)
+	}
+	var document map[string]any
+	if err := json.Unmarshal(raw, &document); err != nil {
+		t.Fatalf("decode schema: %v", err)
+	}
+	entity := document["$defs"].(map[string]any)["EntityProjection"].(map[string]any)
+	property := entity["properties"].(map[string]any)["project_identities"]
+	conditional := entity["allOf"]
+	validate := func(schema any, instance any) bool {
+		t.Helper()
+		encoded, err := json.Marshal(instance)
+		if err != nil {
+			t.Fatalf("marshal instance: %v", err)
+		}
+		result, err := gojsonschema.Validate(gojsonschema.NewGoLoader(schema), gojsonschema.NewBytesLoader(encoded))
+		if err != nil {
+			t.Fatalf("validate %s: %v", encoded, err)
+		}
+		return result.Valid()
+	}
+	for _, value := range []string{"project.v2:github:P-1", "project.v2:jira:ENG", "project.v2:linear:a%3Ab", "project.v2:github:50%25"} {
+		goErr := chaos12226WorkItem(chaos12226List(value)).Validate()
+		if goErr != nil || !validate(property, []string{value}) {
+			t.Errorf("%q: go err=%v, schema valid=%v; want both to accept", value, goErr, validate(property, []string{value}))
+		}
+	}
+	for _, value := range []string{"*", "P-1", "team.v2:github:T-1", "project.v2:github", "project.v2:github:P:1", "project.v2::P-1", "project.v2:github:", "project.v2:github:50%", "project.v2:github:a%3ab", "project.v2:github:a|b"} {
+		goErr := chaos12226WorkItem(chaos12226List(value)).Validate()
+		if goErr == nil || validate(property, []string{value}) {
+			t.Errorf("%q: go err=%v, schema valid=%v; want both to refuse", value, goErr, validate(property, []string{value}))
+		}
+	}
+	for kind, want := range map[string]bool{"work_item": true, "team": false, "project": false} {
+		instance := map[string]any{"subject": map[string]any{"kind": kind}, "project_identities": []string{}}
+		if got := validate(map[string]any{"allOf": conditional}, instance); got != want {
+			t.Errorf("schema: %s entity with project_identities valid=%v, want %v", kind, got, want)
+		}
+		delete(instance, "project_identities")
+		if !validate(map[string]any{"allOf": conditional}, instance) {
+			t.Errorf("schema: %s entity without project_identities refused", kind)
 		}
 	}
 }

@@ -338,11 +338,12 @@ func NewClickHouseProjectionSource(client contextpacket.ClickHouseQueryClient) (
 // WithWorkItemProjectMembership turns on the work-item project membership
 // (CHAOS-12226): every work-item entity states its current project set
 // (ProjectIdentities), and the work_items_project_membership table re-emits a
-// work item whose membership changed without the work item syncing. The
-// table's cursor starts empty, so the first pass after turning it on sweeps
-// every work item with membership history: turn it on as the roll step that
-// backfills, never as a default. Off, a work item states nothing and the
-// graph key stays absent (fail closed).
+// work item whose membership changed without the work item syncing. It
+// shares the source's one cursor, so turning it on backfills nothing by
+// itself: the backfill is a from-zero rebuild, and any change of the flag
+// goes with one, in a roll chris approves. Off, a work item states nothing
+// and each later write removes the graph key (fail closed); a value written
+// while it was on stays until that write or the rebuild.
 func (s *ClickHouseProjectionSource) WithWorkItemProjectMembership(enabled bool) *ClickHouseProjectionSource {
 	s.workItemProjectMembership = enabled
 	return s

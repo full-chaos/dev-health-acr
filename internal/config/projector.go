@@ -156,9 +156,12 @@ type ProjectorConfig struct {
 	// (ACR_CONTEXT_FABRIC_PROJECT_WORK_ITEM_PROJECT_MEMBERSHIP_ENABLED,
 	// default false; CHAOS-12226) states each work item's current project
 	// membership on its graph node and adds the membership refresh table.
-	// The refresh table's cursor starts empty, so turning this on sweeps
-	// every work item with membership history: it is the backfill roll step
-	// (CHAOS-12107 ruling: chris approves it), never a default.
+	// Turning it on backfills nothing by itself: the source's tables share
+	// one cursor, so in an organization already projected only work items
+	// written afterwards, and membership changes after that cursor, carry
+	// it. The backfill is `acr-projector rebuild --org`, which reads every
+	// table from zero. Any change of this flag goes with a rebuild in the
+	// same approved roll (CHAOS-12107 ruling: chris approves it).
 	WorkItemProjectMembership bool
 	// EpisodeWriteback mirrors acr-api's flag of the same name. It gates the
 	// episodes projection source: with write-back off nothing writes

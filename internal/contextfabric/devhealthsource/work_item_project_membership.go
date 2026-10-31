@@ -19,10 +19,14 @@ import (
 // membership history, its latest transition into a project. Never a
 // repository, an issue-key prefix or team ownership (CHAOS-12107 v3 V1).
 //
-// Both reads are on only when WithWorkItemProjectMembership enables them,
-// because the refresh table starts with an empty cursor: turning it on
-// sweeps every work item with membership history, which is the backfill and
-// a roll step (CHAOS-12107 ruling), never a default.
+// Both reads are on only when WithWorkItemProjectMembership enables them.
+// The tables of this source share one cursor (cursor.go), so turning them on
+// in an organization already projected states membership only for work items
+// written afterwards and for membership changes after that cursor; the
+// backfill is a from-zero rebuild (snapshotRead reads every table whole), a
+// roll step chris approves (CHAOS-12107 ruling), never a default. While they
+// are off, membership changes are not followed, so a value written while
+// they were on can go stale: any change of the flag goes with a rebuild.
 
 // workItemMembershipMarker names the page membership read.
 const workItemMembershipMarker = "AS membership_repo_id"

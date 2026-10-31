@@ -518,9 +518,10 @@ contextFabric:
     teamsProjectsEnabled: false
     # CHAOS-12226: states each work item's current project membership on its
     # graph node (authorization_project_identities) and adds the membership
-    # refresh table. Its cursor starts empty, so turning it on sweeps every
-    # work item with membership history: the backfill roll step, which needs
-    # an approved roll. Keep false until then.
+    # refresh table. Turning it on backfills nothing by itself (the source's
+    # tables share one cursor): the backfill is `acr-projector rebuild --org`
+    # in the same approved roll, and so is any later change of this flag.
+    # Keep false until then.
     workItemProjectMembershipEnabled: false
     podAnnotations: {}
     podLabels: {}

@@ -461,15 +461,20 @@ list of canonical `project.v2:` identities, empty when the work item is in no
 project. It also adds the `work_items_project_membership` table, which
 re-emits a work item whose membership changed without the work item syncing
 (a transition, the loss of its last project, a change to a project it names).
-That table starts with an empty cursor, so the first pass after turning the
-flag on sweeps every work item with membership history: it IS the backfill,
-and turning it on needs an approved roll. The deploy itself bumps no source
-version and changes no graph value while the flag is off. A work item
-projected before the flag was on carries no `authorization_project_identities`
-until it is written again; an absent value admits no project (fail closed). To
-cover work items with no membership input at all, run
-`acr-projector rebuild --org <organization-id>` in the same approved roll.
-Turning the flag off again makes every later work-item write remove the value.
+Every table of the source shares one cursor, so turning the flag on in an
+organization that is already projected backfills nothing by itself: only work
+items written afterwards, and membership changes after the current cursor,
+carry the value. **The roll step "work-item project membership on"** (needs an
+approved roll) is therefore: set the flag, then run
+`acr-projector rebuild --org <organization-id>` for every projected
+organization; the rebuild reads every table from zero, so every work item gets
+its current set. The deploy itself bumps no source version and changes no
+graph value while the flag is off. Until a work item is written with the flag
+on it carries no `authorization_project_identities`, and an absent value admits
+no project (fail closed). **Any later change of the flag goes with a rebuild in
+the same roll:** while the flag is off, membership changes are not followed,
+and every later work-item write removes the value, so a value written while it
+was on can be stale for a work item not written since.
 
 **A rebuild is likewise REQUIRED after deploying CHAOS-3835**
 (embed composition tag `t2` → `t3`, the T5 id-only skip decision —

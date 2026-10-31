@@ -3439,6 +3439,29 @@
           "type": "object"
         },
         "EntityProjection": {
+          "allOf": [
+            {
+              "description": "CHAOS-12226: only a work-item entity may state project_identities.",
+              "if": {
+                "properties": {
+                  "subject": {
+                    "properties": {
+                      "kind": {
+                        "const": "work_item"
+                      }
+                    }
+                  }
+                }
+              },
+              "else": {
+                "not": {
+                  "required": [
+                    "project_identities"
+                  ]
+                }
+              }
+            }
+          ],
           "else": {
             "properties": {
               "authorization": {
@@ -3487,7 +3510,7 @@
                 "type": "string",
                 "minLength": 1,
                 "maxLength": 256,
-                "pattern": "^project\\.v2:[^:|]+:[^:|]+$"
+                "pattern": "^project\\.v2:(?:[^:|%]|%25|%3A)+:(?:[^:|%]|%25|%3A)+$"
               },
               "maxItems": 200,
               "uniqueItems": true
