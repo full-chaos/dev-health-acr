@@ -1948,7 +1948,7 @@ func (a *Adapter) DiscoverContext(ctx context.Context, principal storage.Princip
 
 // projectNarrowingUnverifiedReason is the degraded reason, and the paired
 // detail's Raw, for a project narrowing this call could not verify.
-const projectNarrowingUnverifiedReason = "project_narrowing_unverified"
+const projectNarrowingUnverifiedReason = contextfabric.ProjectNarrowingUnverifiedRaw
 
 // projectNarrowingRestsOnWildcard reports whether a requested project
 // narrowing admitted any node or edge of this call only on the "*" project
