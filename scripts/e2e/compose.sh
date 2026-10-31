@@ -399,12 +399,13 @@ dho() {
 # request (ops CHAOS-9993). It talks to Postgres directly through dho, so it needs no running api, but
 # the schema may still be migrating when the services are first started: it retries, bounded by an
 # attempt count and a deadline, and logs each retry with the first line of dho's stderr and the final
-# outcome. The token is printed on stdout only; nothing else is.
+# outcome. The token is printed on stdout only; nothing else is. principal_access:read is the
+# per-call access read acr-api makes for every user-class call (CHAOS-12092; ops CHAOS-12084).
 mint_ops_service_token() {
   local attempt=1 max_attempts=30 deadline=$((SECONDS + 180)) token reason errfile
   errfile="$(mktemp)"
   while :; do
-    if token="$(dho service-credentials create --service acr --scope entitlements:read --scope llm_config:read 2>"$errfile")" && [[ "$token" == svc_acr_* ]]; then
+    if token="$(dho service-credentials create --service acr --scope entitlements:read --scope llm_config:read --scope principal_access:read 2>"$errfile")" && [[ "$token" == svc_acr_* ]]; then
       rm -f "$errfile"
       note "ops service credential minted (attempt ${attempt})"
       printf '%s' "$token"
@@ -520,6 +521,29 @@ seed_synthetic_evidence() {
   assert_scoped_repository 'acme/live-e2e'
 }
 
+# probe_ops_principal_access proves go-api's own ClickHouse login serves the principal access
+# read end to end (CHAOS-12183): the read for this run's organization, as the svc_acr_
+# credential, answers acr_principal_access.v1 with the seeded repositories as its inventory
+# (kind repos, not none), which go-api reads with SELECT on repos. Any user id works: the
+# inventory is the organization's. It runs after the seed hook, whatever corpus that seeds.
+probe_ops_principal_access() {
+  local org_id user_id output body
+  org_id="$(<"$STATE/org-id")"
+  user_id="00000000-0000-4000-8000-000000000000"
+  # shellcheck disable=SC2016 # $ACR_PROBE_TOKEN and $ACR_PROBE_URL are expanded by the probe container's sh.
+  if ! output="$(ACR_PROBE_TOKEN="$(<"$STATE/ops-probe-token")" ACR_PROBE_URL="http://go-api:8091/api/v1/internal/acr/orgs/${org_id}/principals/${user_id}/access" \
+    compose run --rm --no-deps -T -e ACR_PROBE_TOKEN -e ACR_PROBE_URL --entrypoint sh acr-tls-proxy -c 'wget -q -O - --header "Authorization: Bearer $ACR_PROBE_TOKEN" "$ACR_PROBE_URL"' 2>&1)"; then
+    printf '%s\n' "$output" | redact_log >&2
+    die 'the Go ops api principal access read failed (is its ClickHouse login configured?)'
+  fi
+  body="$(printf '%s\n' "$output" | tail -n 1)"
+  if ! jq -e '.schema_version == "acr_principal_access.v1" and .repository_scope.kind == "repos" and (.repository_scope.repos | length) > 0' <<<"$body" >/dev/null; then
+    printf '%s\n' "$body" | redact_log >&2
+    die 'the Go ops api principal access read did not serve the seeded repository inventory'
+  fi
+  note "go-api principal access read served the repository inventory (repos: $(jq -r '.repository_scope.repos | length' <<<"$body"))"
+}
+
 grant_clickhouse_reader() {
   local db
   db="$(ops_clickhouse_database)"
@@ -536,6 +560,7 @@ bootstrap_ops() {
   provision_ops_control_plane
   provision_evidence_database
   "$ACR_E2E_SEED_HOOK"
+  probe_ops_principal_access
   grant_clickhouse_reader
 }
 
