@@ -2106,6 +2106,36 @@ exchange runs at start, no readiness check depends on it, and an auth-service ou
 for every exchange, so a rotated projected token is used without a restart. No call uses the client yet. The chart opens no egress to
 auth-service in this change.
 
+### acr-api workload credential on Compose (overlay)
+
+`deploy/compose/acr-auth-workload.compose.yml` is an overlay for the ops Compose stack (profile `auth`); the default render is byte-equal
+without it. It sets `ACR_AUTH_WORKLOAD_BOOTSTRAP_FILE=/run/workload/acr-api.bootstrap`, `ACR_AUTH_WORKLOAD_EXCHANGE_URL=http://auth-service:8095`,
+`ACR_AUTH_WORKLOAD_ALLOW_PLAIN_HTTP=true` and `ACR_AUTH_WORKLOAD_ISSUER=${AUTH_TOKEN_ISSUER_URL}` (required: a render without it refuses; the
+issuer must equal auth-service's). acr-api mounts the credential volume `acr_workload_bootstrap` read-only. The credential is written into the
+volume by the `acr-workload-bootstrap` one-shot, so no host copy exists (a host file under a Compose secret keeps the host owner and mode, and the
+acr-api uid 65532 cannot read a host 0600 file). The overlay adds one network, `acr_auth_workload`, with auth-service and acr-api only; acr-api
+never joins `auth_plane`.
+
+Run, with the ops stack that carries the `acr-api` workload row in `auth-workload-seed`:
+
+1. `export AUTH_TOKEN_ISSUER_URL=https://<issuer>`
+2. `docker compose -f compose.yml -f acr/deploy/compose/acr.compose.yml -f acr/deploy/compose/acr-auth-workload.compose.yml --profile auth run --rm acr-workload-bootstrap`
+   (runs the ops seed and the volume one-shot first; writes the file, mode 0600, uid 65532; the database keeps only its hash).
+3. `... --profile auth up -d auth-service acr-api`
+
+The bootstrap one-shot is not a `depends_on` of acr-api: a later `up` would run it again. `bootstrap-create` refuses while a live credential exists,
+and its `-out` refuses a file that exists. Keep the `credential=<id>` line it prints (it holds no value).
+
+- **Rotation** (before the 720 h expiry): remove the file as its owner,
+  `... --profile auth run --rm --user 65532:65532 --entrypoint sh acr-workload-volume -c 'rm /run/workload/acr-api.bootstrap'`, then
+  `... --profile auth run --rm acr-workload-bootstrap workloads bootstrap-rotate -workload acr-api -out /run/workload/acr-api.bootstrap -overlap 1h -apply`
+  (the previous credential stays valid for the overlap). acr-api reads the file again for every exchange, so it needs no restart.
+- **Revoke** (a leaked or retired credential): `... run --rm acr-workload-bootstrap workloads bootstrap-revoke -credential <id> -reason <reason> -apply`.
+  Revocation is terminal. To issue a new one, remove the file as above and run `bootstrap-create` (step 2) again.
+  Without a live credential acr-api keeps running: no readiness check depends on the exchange.
+
+`down -v` deletes the volume.
+
 ### CHAOS-4076: NetworkPolicy apiserver egress and in-release FalkorDB PodSecurity
 
 **ServiceAccounts.** acr-api runs under its own ServiceAccount

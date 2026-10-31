@@ -1,0 +1,75 @@
+# Overlay: acr-api presents a Compose bootstrap credential to auth-service's workload-token exchange.
+# Not in the default render: pass it after acr.compose.yml, with the ops stack's `auth` profile on.
+#
+# Order (the one-shots are never a depends_on of acr-api: a later `up` would run bootstrap-create again, and it refuses a
+# workload with a live credential):
+#   0. export AUTH_TOKEN_ISSUER_URL=<the issuer auth-service signs under, https>  (a render without it refuses)
+#   1. run --rm acr-workload-bootstrap   first runs the ops seed (it holds the acr-api row) and the volume one-shot, then writes
+#                                        the credential into the volume (0600, uid 65532). No host copy of it exists.
+#   2. up auth-service acr-api
+# The credential lives in a named volume that acr-api mounts read-only. A host file under a Compose secret keeps the host
+# owner and mode, so the uid 65532 of acr-api could not read a 0600 host file. `down -v` deletes the volume.
+services:
+  acr-workload-volume:
+    image: postgres:18-alpine@sha256:a1d02e4bd40c94d3bf2bdd3678c137388e76d9efcd23c285e9429d336a834b44
+    profiles: [auth]
+    network_mode: none
+    restart: "no"
+    read_only: true
+    user: "0:0"
+    cap_drop: [ALL]
+    cap_add: [CHOWN]
+    security_opt: [no-new-privileges:true]
+    entrypoint: ["/bin/sh", "-eu", "-c"]
+    command: ['[ "$$(stat -c %u:%a /run/workload)" = 65532:700 ] || { chmod 0700 /run/workload && chown 65532:65532 /run/workload; }']
+    volumes:
+      - acr_workload_bootstrap:/run/workload
+
+  acr-workload-bootstrap:
+    image: ${DEV_HEALTH_GO_AUTH_MIGRATE_IMAGE:-ghcr.io/full-chaos/dev-health-go-auth-migrate:local}
+    command: ["workloads", "bootstrap-create", "-workload", "acr-api", "-out", "/run/workload/acr-api.bootstrap", "-apply"]
+    profiles: [auth]
+    networks: [auth_plane]
+    restart: "no"
+    read_only: true
+    user: "65532:65532"
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    tmpfs: [/tmp]
+    environment:
+      AUTH_MIGRATION_DATABASE_URI: host=postgres port=5432 user=${POSTGRES_USER:-postgres} password='${POSTGRES_PASSWORD:-postgres}' dbname=${POSTGRES_DB:-postgres} sslmode=disable
+      AUTH_DATABASE_SCHEMA: ${AUTH_DATABASE_SCHEMA:-auth}
+      AUTH_USERS_OWNED: ${AUTH_USERS_OWNED:-false}
+      AUTH_RUNTIME_DATABASE_ROLE: ${AUTH_RUNTIME_DATABASE_ROLE:-devhealth_auth}
+    volumes:
+      - acr_workload_bootstrap:/run/workload
+    depends_on:
+      acr-workload-volume:
+        condition: service_completed_successfully
+      auth-workload-seed:
+        condition: service_completed_successfully
+
+  acr-api:
+    environment:
+      ACR_AUTH_WORKLOAD_BOOTSTRAP_FILE: /run/workload/acr-api.bootstrap
+      ACR_AUTH_WORKLOAD_EXCHANGE_URL: http://auth-service:8095
+      ACR_AUTH_WORKLOAD_ALLOW_PLAIN_HTTP: "true"
+      ACR_AUTH_WORKLOAD_ISSUER: ${AUTH_TOKEN_ISSUER_URL:?AUTH_TOKEN_ISSUER_URL is required}
+    volumes:
+      - type: volume
+        source: acr_workload_bootstrap
+        target: /run/workload
+        read_only: true
+    networks: [acr_auth_workload]
+
+  auth-service:
+    networks: [acr_auth_workload]
+
+volumes:
+  acr_workload_bootstrap:
+    driver: local
+
+networks:
+  # Only auth-service and acr-api join it: acr-api never joins auth_plane (CHAOS-4886).
+  acr_auth_workload:
+    driver: bridge
