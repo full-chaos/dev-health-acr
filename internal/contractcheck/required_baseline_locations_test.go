@@ -48,6 +48,7 @@ type locationCase struct {
 	current  map[string]string
 	refused  bool
 	mentions []string // substrings the refusal must carry
+	absent   []string // substrings the refusal must not carry
 }
 
 func runLocationCases(t *testing.T, cases []locationCase) {
@@ -64,6 +65,11 @@ func runLocationCases(t *testing.T, cases []locationCase) {
 				for _, want := range c.mentions {
 					if !strings.Contains(err.Error(), want) {
 						t.Fatalf("refusal %q lacks %q", err, want)
+					}
+				}
+				for _, unwanted := range c.absent {
+					if strings.Contains(err.Error(), unwanted) {
+						t.Fatalf("refusal %q names %q", err, unwanted)
 					}
 				}
 				return
@@ -289,11 +295,13 @@ func TestRequiredBaselineRefusesASchemaDeeperThanTheBound(t *testing.T) {
 	}
 }
 
-// Only an unconditional declaration lets a field become required: a field the
-// baseline declared only under then, else, dependentSchemas or one anyOf or
-// oneOf branch is sent only when that branch applies, so an old body outside
-// it may lack the field (codex #1817 r2). A field declared that way still
-// counts as one an old body may carry, so a condition keyed by it applies.
+// Only an unconditional declaration lets a field become required outside
+// every branch: a field the baseline declared only under then, else,
+// dependentSchemas or one anyOf or oneOf branch is sent only when that branch
+// applies, so an old body outside it may lack the field (codex #1817 r2). A
+// field declared that way still counts as one an old body may carry, so a
+// condition keyed by it applies. Inside the same branch it may become
+// required (CHAOS-12331).
 func TestRequiredBaselineCountsOnlyUnconditionalDeclarations(t *testing.T) {
 	requireZZ := func(body string) string {
 		return strings.Replace(body, `{"type":"object",`, `{"type":"object","required":["zz"],`, 1)
@@ -311,8 +319,11 @@ func TestRequiredBaselineCountsOnlyUnconditionalDeclarations(t *testing.T) {
 		current := requireZZ(body)
 		mention := `location "/"`
 		if name == "then, nested" {
-			current = strings.Replace(body, `"box":{"type":"object",`, `"box":{"type":"object","required":["zz"],`, 1)
+			// required outside the then, at the location it declared zz
+			current = strings.Replace(body, `"properties":{"flag":{}}`, `"properties":{"flag":{},"box":{"type":"object","required":["zz"]}}`, 1)
 			mention = `location "/box"`
+			cases = append(cases, locationCase{name: "control: a field declared under then, nested, required in that then",
+				base: one(body), current: one(strings.Replace(body, `"box":{"type":"object",`, `"box":{"type":"object","required":["zz"],`, 1))})
 		}
 		cases = append(cases, locationCase{name: "a field declared only under " + name, refused: true, mentions: []string{`"zz"`, mention},
 			base: one(body), current: one(current)})
@@ -348,9 +359,14 @@ func TestRequiredBaselineCountsOnlyUnconditionalDeclarations(t *testing.T) {
 			}
 			current = strings.Replace(base, `{"type":"object",`, `{"type":"object","required":["zz"],`, 1)
 		case "items":
-			current = strings.Replace(base, `"items":{"type":"object",`, `"items":{"type":"object","required":["zz"],`, 1)
+			// required outside the then, at the location it declared zz
+			current = strings.Replace(base, `"properties":{"flag":{}}`, `"properties":{"flag":{},"arr":{"type":"array","items":{"type":"object","required":["zz"]}}}`, 1)
+			cases = append(cases, locationCase{name: "control: a field declared under a then through items, required in that then",
+				base: one(base), current: one(strings.Replace(base, `"items":{"type":"object",`, `"items":{"type":"object","required":["zz"],`, 1))})
 		case "additional":
-			current = strings.Replace(base, `"additionalProperties":{"type":"object",`, `"additionalProperties":{"type":"object","required":["zz"],`, 1)
+			current = strings.Replace(base, `{"type":"object","properties":{"flag":{}}`, `{"type":"object","additionalProperties":{"type":"object","required":["zz"]},"properties":{"flag":{}}`, 1)
+			cases = append(cases, locationCase{name: "control: a field declared under a then through additionalProperties, required in that then",
+				base: one(base), current: one(strings.Replace(base, `"additionalProperties":{"type":"object",`, `"additionalProperties":{"type":"object","required":["zz"],`, 1))})
 		}
 		cases = append(cases, locationCase{name: "a field declared under a then through " + c.name, refused: true,
 			mentions: []string{`"zz"`, `location "` + c.at + `"`}, base: one(base), current: one(current)})
@@ -454,5 +470,43 @@ func TestRequiredBaselineIgnoresAnIDInsideInstanceData(t *testing.T) {
 	runLocationCases(t, []locationCase{
 		{name: "a property named default is a schema resource", refused: true, mentions: []string{`"zz"`, `location "/use"`},
 			base: named(plain), current: named(`{"type":"object","required":["zz"],"properties":{"n":{},"zz":{}}}`)},
+	})
+}
+
+// Branches that only look alike are different branches (CHAOS-12331): a
+// declaration in one never meets a requirement in the other. Each of these
+// was accepted by a draft of the widened rule and is refused by the checker
+// before it too.
+func TestRequiredBaselineRefusesBranchesThatOnlyLookAlike(t *testing.T) {
+	thens := func(first, second string) string {
+		return `{"type":"object","properties":{"f":{},"g":{}},"allOf":[` + first + `,` + second + `]}`
+	}
+	runLocationCases(t, []locationCase{
+		{name: "a second then at the same location requires a field only the first declared", refused: true, mentions: []string{`field "x" at instance location "/"`},
+			base:    one(thens(`{"if":{"required":["f"]},"then":{"properties":{"x":{}}}}`, `{"if":{"required":["g"]},"then":{"properties":{"y":{}}}}`)),
+			current: one(thens(`{"if":{"required":["f"]},"then":{"properties":{"x":{}}}}`, `{"if":{"required":["g"]},"then":{"required":["x"],"properties":{"x":{},"y":{}}}}`))},
+		// Both thens apply to the same bodies here, so this refusal is
+		// conservative: two thens at one location never share an element.
+		{name: "a second then with the same if requires a field only the first declared", refused: true, mentions: []string{`field "x" at instance location "/"`},
+			base:    one(thens(`{"if":{"required":["f"]},"then":{"properties":{"x":{}}}}`, `{"if":{"required":["f"]},"then":{"properties":{"y":{}}}}`)),
+			current: one(thens(`{"if":{"required":["f"]},"then":{"properties":{"x":{}}}}`, `{"if":{"required":["f"]},"then":{"required":["x"],"properties":{"x":{},"y":{}}}}`))},
+		{name: "a then whose if changed requires a field the old then declared", refused: true, mentions: []string{`field "x" at instance location "/"`},
+			base:    one(`{"type":"object","properties":{"f":{},"g":{}},"if":{"required":["f"]},"then":{"properties":{"x":{}}}}`),
+			current: one(`{"type":"object","properties":{"f":{},"g":{}},"if":{"required":["g"]},"then":{"required":["x"],"properties":{"x":{}}}}`)},
+		{name: "a then whose if changed through a $ref requires a field the old then declared", refused: true, mentions: []string{`field "x" at instance location "/"`},
+			base:    one(`{"type":"object","properties":{"f":{},"g":{}},"$defs":{"C":{"required":["f"]}},"if":{"$ref":"#/$defs/C"},"then":{"properties":{"x":{}}}}`),
+			current: one(`{"type":"object","properties":{"f":{},"g":{}},"$defs":{"C":{"required":["g"]}},"if":{"$ref":"#/$defs/C"},"then":{"required":["x"],"properties":{"x":{}}}}`)},
+		{name: "swapped allOf members holding if and then, beside a tightening", refused: true, mentions: []string{`field "x" at instance location "/"`},
+			base:    one(thens(`{"if":{"required":["f"]},"then":{"properties":{"x":{}}}}`, `{"if":{"required":["g"]},"then":{"properties":{"y":{}}}}`)),
+			current: one(thens(`{"if":{"required":["g"]},"then":{"required":["x"],"properties":{"y":{},"x":{}}}}`, `{"if":{"required":["f"]},"then":{"properties":{"x":{}}}}`))},
+		{name: "a second dependentSchemas entry requires a field only the first declared", refused: true, mentions: []string{`field "x" at instance location "/"`},
+			base:    one(`{"type":"object","properties":{"f":{},"g":{}},"dependentSchemas":{"f":{"properties":{"x":{}}},"g":{"properties":{"y":{}}}}}`),
+			current: one(`{"type":"object","properties":{"f":{},"g":{}},"dependentSchemas":{"f":{"properties":{"x":{}}},"g":{"required":["x"],"properties":{"x":{},"y":{}}}}}`)},
+		// Inline alternatives swapped: positionally each only gains what the
+		// baseline alternative at its index declared, but the b alternative
+		// now requires x, which only the a alternative declared.
+		{name: "swapped inline alternatives, beside a tightening", refused: true, mentions: []string{`field "x" at instance location "/"`},
+			base:    one(`{"type":"object","oneOf":[{"properties":{"kind":{"const":"a"},"x":{}},"required":["kind"]},{"properties":{"kind":{"const":"b"}},"required":["kind"]}]}`),
+			current: one(`{"type":"object","oneOf":[{"properties":{"kind":{"const":"b"},"x":{}},"required":["kind","x"]},{"properties":{"kind":{"const":"a"},"x":{}},"required":["kind"]}]}`)},
 	})
 }
