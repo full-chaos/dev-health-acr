@@ -4319,6 +4319,9 @@ var CompletenessAuthority = Event{
 		// CHAOS-12286: the served document kept a stored head's legacy status
 		// sentence because nothing could state the head in its place.
 		{Key: "lead_prose_served_as_stored", Type: FieldBool, Presence: PresenceRequired},
+		// CHAOS-12289: the served document still carries the legacy
+		// truncated-read words after the restatement.
+		{Key: "legacy_source_state_words_served", Type: FieldBool, Presence: PresenceRequired},
 		{Key: "outcome_rows_total", Type: FieldInt, Presence: PresenceRequired},
 	},
 		append(completenessAuthorityOutcomeRowFields(),
