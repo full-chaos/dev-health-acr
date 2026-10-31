@@ -331,6 +331,13 @@ const (
 	// no selector identity, so it is never served to a selector-scoped
 	// request; the request takes the fresh path.
 	AnswerReuseMissScopeIdentity AnswerReuseOutcome = "miss_scope_identity"
+	// AnswerReuseMissProjectNarrowingUnverified (CHAOS-12229): the recheck
+	// read admitted a node under the request's project narrowing only on its
+	// "*" project list, and the stored answer does not disclose that. The
+	// narrowing's resolution is not in the reuse key, so the stored answer
+	// may have been made while it was proven; the request takes the fresh
+	// path, which discloses it.
+	AnswerReuseMissProjectNarrowingUnverified AnswerReuseOutcome = "miss_project_narrowing_unverified"
 )
 
 // AnswerReuseBypassReason is the closed vocabulary naming WHY a request
@@ -1077,6 +1084,13 @@ func (e *Engine) reuseAuthorizationStillHolds(ctx context.Context, principal sto
 		// different answer. Refuse, exactly as before this ticket.
 		verdict.Refused = true
 		verdict.Outcome = AnswerReuseMissEvidenceContainment
+	}
+	// CHAOS-12229 review r3: the recheck admitted a node under the request's
+	// project narrowing only on its "*" project list; a stored answer that
+	// does not say so is not served.
+	if !verdict.Refused && coverageDisclosesUnverifiedProjectNarrowing(graphContext.Coverage) && !coverageDisclosesUnverifiedProjectNarrowing(candidate.Coverage) {
+		verdict.Refused = true
+		verdict.Outcome = AnswerReuseMissProjectNarrowingUnverified
 	}
 	return verdict
 }

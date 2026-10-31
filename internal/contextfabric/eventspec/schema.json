@@ -982,7 +982,8 @@
           "miss_degrade_invalid",
           "miss_count_scope",
           "miss_hint_not_committed",
-          "miss_scope_identity"
+          "miss_scope_identity",
+          "miss_project_narrowing_unverified"
         ]
       },
       {
@@ -8684,6 +8685,50 @@
     ]
   },
   {
+    "id": "contextfabric.project_narrowing_resolution",
+    "msg": "context fabric project narrowing resolution",
+    "level": "info",
+    "multiplicity": "zero_or_one_per_request",
+    "attribution": [
+      "request_id"
+    ],
+    "bounded_aggregation": "at most one line per investigation, and only when the request names a project narrowing: the narrowing is resolved once, before the first graph read.",
+    "fields": [
+      {
+        "key": "org_id",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "outcome",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "resolved",
+          "incomplete",
+          "resolver_absent",
+          "failed"
+        ]
+      },
+      {
+        "key": "requested_ids",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "resolved_identities",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "request_id",
+        "type": "string",
+        "presence": "conditional",
+        "applicability": "written when the request context carries a request ID"
+      }
+    ]
+  },
+  {
     "id": "contextfabric.project_status_drivers",
     "msg": "context fabric project status drivers",
     "level": "info",
@@ -9866,6 +9911,12 @@
         "type": "int",
         "presence": "conditional",
         "applicability": "written when the read measured the population and applied no member filter"
+      },
+      {
+        "key": "project_narrowing_unverified",
+        "type": "bool",
+        "presence": "conditional",
+        "applicability": "written when the read measured the population (every outcome but read_failed)"
       },
       {
         "key": "reason",
@@ -13812,6 +13863,7 @@
           "anchor_unavailable",
           "membership_unavailable",
           "membership_changed",
+          "project_narrowing_unverified",
           "coverage_invalid",
           "hit"
         ]

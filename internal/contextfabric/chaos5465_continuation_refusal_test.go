@@ -1109,11 +1109,12 @@ func TestWindowContinuation_EveryRequestFieldIsDecidedByName(t *testing.T) {
 		"supplied_interpretation": {"exempt", "who interpreted this turn, not what is asked: its contract is checked at the start of the turn, and once the interpreter accepts that contract a supplied interpretation enters where the model's own does and the continuation decision reads neither", func(r *InvestigationRequest) {
 			r.SuppliedInterpretation = &SuppliedInterpretation{Output: json.RawMessage(`{}`), ModelOutputVersion: "schema-v1", PromptVersion: "prompt-v1"}
 		}},
-		"supplied_synthesis":               {"exempt", "who writes the answer, not what is asked: refused at the start of the turn unless it names the contract and the input it was written from, and read only at the synthesis step, after the continuation decision", nil},
-		"synthesis_mode":                   {"exempt", "who writes the answer, not what is asked: the continuation decision is made before synthesis and reads neither", func(r *InvestigationRequest) { r.SynthesisMode = SynthesisModeClient }},
-		"requested_scope.repository_slugs": {"disqualifier", "a stated repository scope", func(r *InvestigationRequest) { r.RequestedScope.RepositorySlugs = []string{"widget-service"} }},
-		"requested_scope.project_ids":      {"disqualifier", "a stated project scope", func(r *InvestigationRequest) { r.RequestedScope.ProjectIDs = []string{"project_ask_dev"} }},
-		"requested_scope.team_ids":         {"disqualifier", "a stated team scope", func(r *InvestigationRequest) { r.RequestedScope.TeamIDs = []string{"team_platform"} }},
+		"supplied_synthesis":                  {"exempt", "who writes the answer, not what is asked: refused at the start of the turn unless it names the contract and the input it was written from, and read only at the synthesis step, after the continuation decision", nil},
+		"synthesis_mode":                      {"exempt", "who writes the answer, not what is asked: the continuation decision is made before synthesis and reads neither", func(r *InvestigationRequest) { r.SynthesisMode = SynthesisModeClient }},
+		"requested_scope.repository_slugs":    {"disqualifier", "a stated repository scope", func(r *InvestigationRequest) { r.RequestedScope.RepositorySlugs = []string{"widget-service"} }},
+		"requested_scope.project_ids":         {"disqualifier", "a stated project scope", func(r *InvestigationRequest) { r.RequestedScope.ProjectIDs = []string{"project_ask_dev"} }},
+		"requested_scope.go:ProjectNarrowing": {"exempt", "not a wire field (CHAOS-12229): the engine's own resolution of project_ids to canonical identities, set after admission from the project nodes; a caller never sends it, and project_ids above already decides", nil},
+		"requested_scope.team_ids":            {"disqualifier", "a stated team scope", func(r *InvestigationRequest) { r.RequestedScope.TeamIDs = []string{"team_platform"} }},
 		"requested_scope.subject_hints": {"disqualifier", "a stated subject hint", func(r *InvestigationRequest) {
 			r.RequestedScope.SubjectHints = []contractsv1.ContextFabricSubjectHint{{Kind: contractsv1.ContextFabricSubjectTeam, Label: "platform", Source: "caller"}}
 		}},
@@ -1155,7 +1156,13 @@ func TestWindowContinuation_EveryRequestFieldIsDecidedByName(t *testing.T) {
 		tag := strings.Split(field.Tag.Get("json"), ",")[0]
 		if field.Type == reflect.TypeOf(RequestedScope{}) || field.Type == reflect.TypeOf(InvestigationOptions{}) {
 			for j := 0; j < field.Type.NumField(); j++ {
-				names = append(names, tag+"."+strings.Split(field.Type.Field(j).Tag.Get("json"), ",")[0])
+				sub := strings.Split(field.Type.Field(j).Tag.Get("json"), ",")[0]
+				if sub == "-" {
+					// A Go-only field is named by its Go name, so it still
+					// needs a decision of its own.
+					sub = "go:" + field.Type.Field(j).Name
+				}
+				names = append(names, tag+"."+sub)
 			}
 			continue
 		}

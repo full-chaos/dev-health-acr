@@ -70,6 +70,7 @@ func AnswerReuseOutcomeVocabulary() []string {
 		string(AnswerReuseMissGraphNotProjected), string(AnswerReuseHitDegraded),
 		string(AnswerReuseMissRecheckUnavailable), string(AnswerReuseMissDegradeInvalid),
 		string(AnswerReuseMissCountScope), string(AnswerReuseMissHintNotCommitted), string(AnswerReuseMissScopeIdentity),
+		string(AnswerReuseMissProjectNarrowingUnverified),
 	}
 }
 
@@ -673,6 +674,14 @@ func (t SlogEngineTelemetry) RecordPriorDegradation(ctx context.Context, princip
 		return
 	}
 	t.logger.InfoContext(ctx, "context fabric prior consultation degraded", args...)
+}
+
+// RecordProjectNarrowingResolution implements EngineTelemetry (CHAOS-12229):
+// the outcome (a closed enum) and two counts, never a project id.
+func (t SlogEngineTelemetry) RecordProjectNarrowingResolution(ctx context.Context, principal storage.Principal, event ProjectNarrowingResolutionEvent) {
+	args := append([]any{"org_id", SanitizeLogAttr(principal.OrgID), "outcome", SanitizeLogAttr(string(event.Outcome)),
+		"requested_ids", event.RequestedIDs, "resolved_identities", event.ResolvedIdentities}, requestIDLogAttrs(ctx)...)
+	t.logger.InfoContext(ctx, "context fabric project narrowing resolution", args...)
 }
 
 // RecordOfferPhrasing implements EngineTelemetry (CHAOS-4171 PR2). outcome
@@ -3063,6 +3072,7 @@ func (t SlogEngineTelemetry) RecordRepositoryWorkItemWalk(ctx context.Context, p
 			"population", event.Population,
 			"truncated", event.Truncated,
 			"lower_tier_cut", event.LowerTierCut,
+			"project_narrowing_unverified", event.ProjectNarrowingUnverified,
 		)
 		if !event.Filtered {
 			args = append(args, "denied", event.Denied)

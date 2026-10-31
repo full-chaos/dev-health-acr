@@ -111,6 +111,14 @@ func (e *Engine) tryReuseWorkItemTuple(ctx context.Context, principal storage.Pr
 	if !workItemReuseMembershipEqual(candidate, census, current) {
 		return InvestigationResult{}, false, nil
 	}
+	// CHAOS-12229 review r3: the re-walk admitted a member under the
+	// request's project narrowing only on its "*" project list; a stored
+	// answer that does not say so is not served (the fresh tuple path
+	// discloses it).
+	event.Decision = "project_narrowing_unverified"
+	if current.ProjectNarrowingUnverified && !coverageDisclosesUnverifiedProjectNarrowing(candidate.Coverage) {
+		return InvestigationResult{}, false, nil
+	}
 	servingEvent := newWorkItemStoredServingEvent(StoredAnswerabilitySurfaceReuse, stored.SemanticStateRead, candidate)
 	servingEvent.CensusRead = event.CensusRead
 	servingEvent.Basis = "digest_matched"

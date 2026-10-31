@@ -58,6 +58,7 @@ func (a *Adapter) TreeWorkItemMembers(ctx context.Context, principal storage.Pri
 	out := contextfabric.TreeWorkItemWalk{
 		PullRequests: walk.linkSources, LinkedIssues: max(walk.linkIssueTargets, 0),
 		Denied: walk.linkDeniedTargets, Truncated: walk.truncated,
+		ProjectNarrowingUnverified: walk.projectNarrowingUnverified,
 	}
 	for _, subject := range walk.linkSubjects {
 		out.Members = append(out.Members, contextfabric.TreeWorkItemMember{Subject: subject, Tier: walk.memberTiers[subject.CanonicalID]})

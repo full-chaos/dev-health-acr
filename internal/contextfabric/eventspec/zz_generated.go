@@ -90,6 +90,7 @@ var ByID = map[string]Event{
 	"contextfabric.prior_subject_receipt_skip_reason":     PriorSubjectReceiptSkipReason,
 	"contextfabric.prior_subject_receipts_skipped":        PriorSubjectReceiptsSkipped,
 	"contextfabric.project_deployment_walk":               ProjectDeploymentWalk,
+	"contextfabric.project_narrowing_resolution":          ProjectNarrowingResolution,
 	"contextfabric.project_status_drivers":                ProjectStatusDrivers,
 	"contextfabric.projected_rows_by_fact_kind":           ProjectedRowsByFactKind,
 	"contextfabric.projected_rows_count":                  ProjectedRowsCount,
@@ -5826,6 +5827,56 @@ func (f ProjectDeploymentWalkFields) SlogArgs() []any {
 	}
 }
 
+// ProjectNarrowingResolutionFields is contextfabric.project_narrowing_resolution's generated typed construction interface
+// (CHAOS-5516): one Go field per Field ProjectNarrowingResolution.Fields declares in spec.go.
+type ProjectNarrowingResolutionFields struct {
+	OrgID              string
+	Outcome            string
+	RequestedIDs       int
+	ResolvedIdentities int
+	// constructed (CHAOS-5516 r1 fix): an UNEXPORTED marker, generated on
+	// every ProjectNarrowingResolutionFields uniformly, set ONLY by NewProjectNarrowingResolutionFields below. A caller
+	// outside this package cannot set an unexported field via a composite
+	// literal -- not partially (one exported field set, the rest at their
+	// Go zero value) and not even by hand-setting every EXPORTED field --
+	// so this is the class fix for "a caller still assembles that event's
+	// field list": no composite literal built outside eventspec, complete or
+	// partial, can ever read as constructed.
+	constructed bool
+}
+
+// NewProjectNarrowingResolutionFields is the generated constructor for ProjectNarrowingResolutionFields -- every
+// field ProjectNarrowingResolution.Fields declares is a required parameter.
+func NewProjectNarrowingResolutionFields(orgID string, outcome string, requestedIDs int, resolvedIdentities int) ProjectNarrowingResolutionFields {
+	return ProjectNarrowingResolutionFields{
+		OrgID:              orgID,
+		Outcome:            outcome,
+		RequestedIDs:       requestedIDs,
+		ResolvedIdentities: resolvedIdentities,
+		constructed:        true,
+	}
+}
+
+// IsConstructed reports whether f was built by NewProjectNarrowingResolutionFields -- the ONE
+// exported way to read the unexported "constructed" marker from outside
+// this package. false for the Go zero value and for ANY composite literal
+// assembled elsewhere, complete or partial.
+func (f ProjectNarrowingResolutionFields) IsConstructed() bool { return f.constructed }
+
+// SlogArgs returns ProjectNarrowingResolution's own declared fields as alternating slog
+// key/value pairs, in the SAME order spec.go declares them. Every
+// free-text string/[]string value is sanitized HERE, at its own
+// construction site inside this function's body -- the shape CHAOS-5544's
+// own instrument (TestNoUnsanitizedLogAttributeInContextFabric) requires.
+func (f ProjectNarrowingResolutionFields) SlogArgs() []any {
+	return []any{
+		"org_id", contextfabric.SanitizeLogAttr(f.OrgID),
+		"outcome", contextfabric.SanitizeLogAttr(f.Outcome),
+		"requested_ids", f.RequestedIDs,
+		"resolved_identities", f.ResolvedIdentities,
+	}
+}
+
 // ProjectStatusDriversFields is contextfabric.project_status_drivers's generated typed construction interface
 // (CHAOS-5516): one Go field per Field ProjectStatusDrivers.Fields declares in spec.go.
 type ProjectStatusDriversFields struct {
@@ -6471,18 +6522,19 @@ func (f RenderShapeSelectionSummaryFields) SlogArgs() []any {
 // RepositoryWorkItemWalkFields is contextfabric.repository_work_item_walk's generated typed construction interface
 // (CHAOS-5516): one Go field per Field RepositoryWorkItemWalk.Fields declares in spec.go.
 type RepositoryWorkItemWalkFields struct {
-	OrgID        string
-	Outcome      string
-	AnchorKind   string
-	Filtered     bool
-	Restricted   bool
-	PullRequests int
-	LinkedIssues int
-	Members      int
-	Truncated    bool
-	Denied       int
-	Reason       string
-	RequestID    string
+	OrgID                      string
+	Outcome                    string
+	AnchorKind                 string
+	Filtered                   bool
+	Restricted                 bool
+	PullRequests               int
+	LinkedIssues               int
+	Members                    int
+	Truncated                  bool
+	Denied                     int
+	ProjectNarrowingUnverified bool
+	Reason                     string
+	RequestID                  string
 	// constructed (CHAOS-5516 r1 fix): an UNEXPORTED marker, generated on
 	// every RepositoryWorkItemWalkFields uniformly, set ONLY by NewRepositoryWorkItemWalkFields below. A caller
 	// outside this package cannot set an unexported field via a composite
@@ -6496,21 +6548,22 @@ type RepositoryWorkItemWalkFields struct {
 
 // NewRepositoryWorkItemWalkFields is the generated constructor for RepositoryWorkItemWalkFields -- every
 // field RepositoryWorkItemWalk.Fields declares is a required parameter.
-func NewRepositoryWorkItemWalkFields(orgID string, outcome string, anchorKind string, filtered bool, restricted bool, pullRequests int, linkedIssues int, members int, truncated bool, denied int, reason string, requestID string) RepositoryWorkItemWalkFields {
+func NewRepositoryWorkItemWalkFields(orgID string, outcome string, anchorKind string, filtered bool, restricted bool, pullRequests int, linkedIssues int, members int, truncated bool, denied int, projectNarrowingUnverified bool, reason string, requestID string) RepositoryWorkItemWalkFields {
 	return RepositoryWorkItemWalkFields{
-		OrgID:        orgID,
-		Outcome:      outcome,
-		AnchorKind:   anchorKind,
-		Filtered:     filtered,
-		Restricted:   restricted,
-		PullRequests: pullRequests,
-		LinkedIssues: linkedIssues,
-		Members:      members,
-		Truncated:    truncated,
-		Denied:       denied,
-		Reason:       reason,
-		RequestID:    requestID,
-		constructed:  true,
+		OrgID:                      orgID,
+		Outcome:                    outcome,
+		AnchorKind:                 anchorKind,
+		Filtered:                   filtered,
+		Restricted:                 restricted,
+		PullRequests:               pullRequests,
+		LinkedIssues:               linkedIssues,
+		Members:                    members,
+		Truncated:                  truncated,
+		Denied:                     denied,
+		ProjectNarrowingUnverified: projectNarrowingUnverified,
+		Reason:                     reason,
+		RequestID:                  requestID,
+		constructed:                true,
 	}
 }
 
@@ -6537,6 +6590,7 @@ func (f RepositoryWorkItemWalkFields) SlogArgs() []any {
 		"members", f.Members,
 		"truncated", f.Truncated,
 		"denied", f.Denied,
+		"project_narrowing_unverified", f.ProjectNarrowingUnverified,
 		"reason", contextfabric.SanitizeLogAttr(f.Reason),
 		"request_id", contextfabric.SanitizeLogAttr(f.RequestID),
 	}

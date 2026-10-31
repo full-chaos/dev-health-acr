@@ -1075,6 +1075,24 @@ type ContextFabricRequestedScope struct {
 	ProjectIDs      []string                   `json:"project_ids,omitempty"`
 	TeamIDs         []string                   `json:"team_ids,omitempty"`
 	SubjectHints    []ContextFabricSubjectHint `json:"subject_hints,omitempty"`
+	// ProjectNarrowing is NOT a wire field (CHAOS-12229): the service's own
+	// resolution of ProjectIDs to canonical project identities, set once per
+	// investigation from the project nodes. nil means no resolution ran, and a
+	// requested project narrowing then keeps the unverified path. It never
+	// widens a request: it only lets stated project membership decide.
+	ProjectNarrowing *ContextFabricProjectNarrowing `json:"-"`
+}
+
+// ContextFabricProjectNarrowing is a requested project narrowing resolved to
+// canonical project.v2 identities (CHAOS-12229). Identities holds the
+// identities the requested raw ids resolved to, each exactly one; Complete is
+// true only when every requested id resolved to exactly one identity. A
+// requested id that resolved to none, or to more than one (the same raw id
+// under two providers), is not in Identities and makes Complete false: it is
+// never widened to a guess.
+type ContextFabricProjectNarrowing struct {
+	Identities []string
+	Complete   bool
 }
 
 type ContextFabricSubjectHint struct {
