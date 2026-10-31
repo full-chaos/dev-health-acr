@@ -266,6 +266,7 @@ const (
 	CredentialClientClassBrowser      = credentiallifecycle.ClientClassBrowser
 	CredentialClientClassOAuthUser    = credentiallifecycle.ClientClassOAuthUser
 	CredentialClientClassNativeDevice = credentiallifecycle.ClientClassNativeDevice
+	CredentialClientClassOrgBearer    = credentiallifecycle.ClientClassOrgBearer
 	CredentialClientClassOperator     = credentiallifecycle.ClientClassOperator
 	CredentialClientClassWorkload     = credentiallifecycle.ClientClassWorkload
 )
