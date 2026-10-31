@@ -31,7 +31,7 @@ func RunSubmissionCanonicalOwnerSuite(t *testing.T, newStore func(t *testing.T) 
 	otherUser := device("cred_parity_other", "user-parity-other")
 	browserSameUser := storage.Principal{AuthenticationMethod: storage.AuthenticationMethodWebAssertion, Subject: "user-parity-device", OrgID: org}
 	operator := storage.Principal{AuthenticationMethod: storage.AuthenticationMethodCredential, Subject: "cred_parity_operator", CredentialID: "cred_parity_operator", OrgID: org,
-		ClientClass: storage.CredentialClientClassOperator}
+		ClientClass: storage.CredentialClientClassOrgBearer}
 	digest := "sha256:" + fmt.Sprintf("%064x", 12091)
 	admission := func(t *testing.T, who storage.Principal, name string, limits contextfabric.SubmissionLimits) contextfabric.SubmissionAdmission {
 		t.Helper()

@@ -319,6 +319,11 @@ type Config struct {
 	// these exact http loopback redirect URIs. Refused outside the
 	// development environment.
 	OAuthDevBrowserRedirectURIs []string
+	// OAuthBrowserFamilyPurgeGrace (ACR_OAUTH_BROWSER_FAMILY_PURGE_GRACE,
+	// default 24h, CHAOS-12140) is how long a browser token family is kept
+	// after it ended (its absolute end or its revocation) before the purge
+	// loop deletes it, its refresh rows and its member credentials.
+	OAuthBrowserFamilyPurgeGrace time.Duration
 
 	// dataQueryURL / dataQueryTimeout: internal ops query service call
 	// (ACR_DATA_QUERY_URL, ACR_DATA_QUERY_TIMEOUT); read via the
@@ -427,6 +432,9 @@ func load(lookup lookupEnv) (Config, error) {
 		return Config{}, err
 	}
 	if cfg.OAuthClientIdleTTL, err = durationValue(lookup, "ACR_OAUTH_CLIENT_IDLE_TTL", defaultOAuthClientIdleTTL); err != nil {
+		return Config{}, err
+	}
+	if cfg.OAuthBrowserFamilyPurgeGrace, err = durationValue(lookup, "ACR_OAUTH_BROWSER_FAMILY_PURGE_GRACE", defaultOAuthBrowserFamilyPurgeGrace); err != nil {
 		return Config{}, err
 	}
 

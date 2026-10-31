@@ -432,7 +432,7 @@ func TestProjectRollupDuplicateThemeKeysServeTheSummedShareAgainstRealClickHouse
 
 	provider := findProvider(t, devhealthfacts.NewProviders(query), contextfabric.FactInvestment)
 	result, err := provider.ReadFacts(ctx, storage.Principal{OrgID: orgID}, contextfabric.FactQuery{
-		Time: contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent}, Kind: contextfabric.FactInvestment,
+		Time: investmentAllHistory(), Kind: contextfabric.FactInvestment,
 		Subjects: []contextfabric.SubjectRef{projectSubject("linear", "proj-d")},
 	})
 	if err != nil {

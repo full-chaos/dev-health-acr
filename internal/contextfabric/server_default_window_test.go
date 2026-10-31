@@ -36,18 +36,39 @@ func TestServerDefaultWindowStatesTheDefaultTrailingWindowAWindowedReadUsed(t *t
 }
 
 // TestServerDefaultWindowIsASnapshotWithoutAWindowedRead: reads that count no
-// window (a latest value, a status, all-history investment) give the instant
-// of the read, not a window no read used.
+// window (a latest value, a status) give the instant of the read, not a window
+// no read used.
 func TestServerDefaultWindowIsASnapshotWithoutAWindowedRead(t *testing.T) {
 	t.Parallel()
 	for name, read := range map[string]FactReadSubjects{
-		"snapshot kinds": readOf(FactHealth, FactReadiness, FactWorkload, FactInvestment, FactStatus, FactFlow),
+		"snapshot kinds": readOf(FactHealth, FactReadiness, FactWorkload, FactStatus, FactFlow),
 		"no read":        nil,
 	} {
 		got := serverDefaultWindow(TemporalCurrent, nil, read, serverDefaultReadAt)
 		if got == nil || got.Provenance != WindowServerDefault || got.AsOf == nil || !got.AsOf.Equal(serverDefaultReadAt) || got.AsOf.Location() != time.UTC ||
 			got.WindowClass != contractsv1.ContextFabricWindowClassStateSnapshot || got.Start != nil || got.End != nil || got.RelativeID != "" {
 			t.Errorf("%s: window = %+v, want server_default state_snapshot as_of %s", name, got, serverDefaultReadAt.UTC())
+		}
+	}
+}
+
+// TestServerDefaultWindowOfAnAnswerWhoseOnlyWindowedReadIsInvestment
+// (CHAOS-12142): a current-axis investment read with no committed window
+// counts over the default trailing 90 days, so an answer whose only windowed
+// read is investment states that window, never as_of.
+func TestServerDefaultWindowOfAnAnswerWhoseOnlyWindowedReadIsInvestment(t *testing.T) {
+	t.Parallel()
+	utc := serverDefaultReadAt.UTC()
+	wantEnd := time.Date(utc.Year(), utc.Month(), utc.Day(), 0, 0, 0, 0, time.UTC)
+	wantStart := wantEnd.Add(-90 * 24 * time.Hour)
+	for name, read := range map[string]FactReadSubjects{
+		"investment alone":            readOf(FactInvestment),
+		"investment beside snapshots": readOf(FactHealth, FactInvestment, FactStatus, FactWorkload),
+	} {
+		got := serverDefaultWindow(TemporalCurrent, nil, read, serverDefaultReadAt)
+		if got == nil || got.Provenance != WindowServerDefault || got.RelativeID != RelativeWindowTrailing90D || got.AsOf != nil ||
+			got.Start == nil || got.End == nil || !got.Start.Equal(wantStart) || !got.End.Equal(wantEnd) {
+			t.Errorf("%s: window = %+v, want server_default trailing_90d %s..%s, not as_of", name, got, wantStart, wantEnd)
 		}
 	}
 }

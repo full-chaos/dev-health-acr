@@ -578,7 +578,7 @@ func TestCHAOS3780FindingsAgainstRealClickHouse(t *testing.T) {
 		const orgID = "org-f4-inv"
 		provider := findProvider(t, providers, contextfabric.FactInvestment)
 		result, err := provider.ReadFacts(ctx, storage.Principal{OrgID: orgID}, contextfabric.FactQuery{
-			Time: contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent},
+			Time: investmentAllHistory(),
 			Kind: contextfabric.FactInvestment, Subjects: []contextfabric.SubjectRef{{
 				Kind: contextfabric.SubjectTeam, CanonicalID: "team:TEAM1", Label: "TEAM1",
 			}},

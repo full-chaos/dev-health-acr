@@ -10,6 +10,8 @@ set -eu
 : "${ACR_ENABLE_EPISODE_WRITEBACK:=false}"
 : "${ACR_WORKLOAD_TOKEN_EXCHANGE_AUDIENCE:=}"
 : "${ACR_WORKLOAD_TRUST_DOMAIN:=}"
+: "${ACR_OAUTH_BROWSER_CLIENTS:=}"
+: "${ACR_OAUTH_DEV_BROWSER_REDIRECT_URIS:=}"
 # The org purge runs as its own role. It exists only when an operator names one.
 : "${ACR_PURGE_DB_USER:=}"
 
@@ -104,6 +106,20 @@ workload_token_exchange=false
 if [ -n "$(trim "$ACR_WORKLOAD_TOKEN_EXCHANGE_AUDIENCE")" ] && [ -n "$(trim "$ACR_WORKLOAD_TRUST_DOMAIN")" ]; then
   workload_token_exchange=true
 fi
+# A first-party browser client is configured when either browser client
+# setting holds something other than whitespace, the same rule the hosted
+# runtime applies (config.OAuthBrowserClassConfigured): its family purge
+# deletes ended browser token families and their credentials.
+browser_client=false
+if [ -n "$(trim "$ACR_OAUTH_BROWSER_CLIENTS")" ] || [ -n "$(trim "$ACR_OAUTH_DEV_BROWSER_REDIRECT_URIS")" ]; then
+  browser_client=true
+fi
+# Both purge loops above delete acr.client_credentials rows: the runtime role
+# holds DELETE there when either feature is on (internal/dbacl CredentialPurge).
+credential_purge=false
+if [ "$workload_token_exchange" = true ] || [ "$browser_client" = true ]; then
+  credential_purge=true
+fi
 
 export PGPASSWORD="$POSTGRES_PASSWORD"
 attempts=0
@@ -161,6 +177,7 @@ if [ "$mode" = runtime-acl ]; then
   psql -v ON_ERROR_STOP=1 -h "$POSTGRES_HOST" -p "$POSTGRES_PORT" -U "$POSTGRES_USER" -d "$ACR_DB_NAME" \
     -v runtime_user="$ACR_RUNTIME_DB_USER" -v migration_user="$ACR_MIGRATION_DB_USER" \
     -v episode_writeback="$ACR_ENABLE_EPISODE_WRITEBACK" -v workload_token_exchange="$workload_token_exchange" \
+    -v browser_client="$browser_client" -v credential_purge="$credential_purge" \
     -v purge_enabled="$purge_enabled" -v purge_user="$ACR_PURGE_DB_USER" <<'SQL'
 REVOKE USAGE, CREATE ON SCHEMA acr FROM PUBLIC;
 REVOKE USAGE, CREATE ON SCHEMA acr FROM :"runtime_user";
@@ -187,10 +204,10 @@ REVOKE SELECT, INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER ON TABLE ac
 GRANT SELECT ON TABLE acr.schema_migrations TO :"runtime_user";
 
 -- SELECT internal/storage/postgres/credentials.go:61, INSERT credentials.go:167, UPDATE credentials.go:115 and credentials_audit.go:72
--- DELETE of expired workload credentials: internal/storage/postgres/workload_bindings.go:65, started only when workload token exchange is configured (internal/runtime/hosted/postgres.go:185)
+-- DELETE of expired workload credentials: internal/storage/postgres/workload_bindings.go:65, started only when workload token exchange is configured (internal/runtime/hosted/postgres.go:185); DELETE of the member credentials of ended browser token families: internal/storage/postgres/browser_family_purge.go:84, started only when a browser client is configured (internal/runtime/hosted/postgres.go startConfiguredBrowserFamilyPurge)
 REVOKE SELECT, INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER ON TABLE acr.client_credentials FROM :"runtime_user";
 GRANT SELECT, INSERT, UPDATE ON TABLE acr.client_credentials TO :"runtime_user";
-\if :workload_token_exchange
+\if :credential_purge
 GRANT DELETE ON TABLE acr.client_credentials TO :"runtime_user";
 \endif
 
@@ -231,8 +248,12 @@ REVOKE SELECT, INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER ON TABLE ac
 GRANT SELECT, INSERT ON TABLE acr.oauth_device_grants TO :"runtime_user";
 
 -- INSERT internal/storage/postgres/browser_refresh.go:54, SELECT ... FOR UPDATE (the family lock, checked as UPDATE) browser_refresh.go:95, UPDATE (revoke) browser_refresh.go:275
+-- DELETE of ended browser token families: internal/storage/postgres/browser_family_purge.go:116, started only when a browser client is configured; their refresh rows go by cascade, which runs as the table owner
 REVOKE SELECT, INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER ON TABLE acr.browser_token_families FROM :"runtime_user";
 GRANT SELECT, INSERT, UPDATE ON TABLE acr.browser_token_families TO :"runtime_user";
+\if :browser_client
+GRANT DELETE ON TABLE acr.browser_token_families TO :"runtime_user";
+\endif
 
 -- INSERT internal/storage/postgres/browser_refresh.go:59, SELECT browser_refresh.go:86 and ... FOR UPDATE, UPDATE (consume) browser_refresh.go:218; removed with its family by cascade
 REVOKE SELECT, INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER ON TABLE acr.browser_refresh_tokens FROM :"runtime_user";

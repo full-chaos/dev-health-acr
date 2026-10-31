@@ -150,6 +150,7 @@ func TestValidateOAuthBrowserClients(t *testing.T) {
 		OAuthConsentURL: "https://www.example.test/acr/authorize", WebAssertionJWKSFile: "/run/jwks.json", RequireBackingStores: true,
 		OAuthRequestPurgeGrace: 30 * 24 * time.Hour, OAuthClientIdleTTL: 30 * 24 * time.Hour,
 		OAuthClientMetadataDocuments: true, OAuthBrowserClients: []string{client},
+		OAuthBrowserFamilyPurgeGrace: 24 * time.Hour,
 	}
 	for _, tc := range []struct {
 		name   string
@@ -158,6 +159,15 @@ func TestValidateOAuthBrowserClients(t *testing.T) {
 	}{
 		{"browser client", func(*Config) {}, ""},
 		{"off", func(c *Config) { c.OAuthBrowserClients = nil; c.OAuthResources = c.OAuthResources[:1] }, ""},
+		{"family purge grace zero", func(c *Config) { c.OAuthBrowserFamilyPurgeGrace = 0 }, "ACR_OAUTH_BROWSER_FAMILY_PURGE_GRACE must be a positive duration"},
+		{"family purge grace negative", func(c *Config) { c.OAuthBrowserFamilyPurgeGrace = -time.Hour }, "ACR_OAUTH_BROWSER_FAMILY_PURGE_GRACE must be a positive duration"},
+		{"family purge grace unused when off", func(c *Config) {
+			c.OAuthBrowserClients, c.OAuthBrowserFamilyPurgeGrace = nil, 0
+		}, ""},
+		{"dev client alone needs the grace too", func(c *Config) {
+			c.Environment, c.OAuthBrowserClients, c.OAuthBrowserFamilyPurgeGrace = "development", nil, 0
+			c.OAuthDevBrowserRedirectURIs = []string{"http://localhost:3000/acr/callback"}
+		}, "ACR_OAUTH_BROWSER_FAMILY_PURGE_GRACE must be a positive duration"},
 		{"issuer not a resource", func(c *Config) { c.OAuthResources = c.OAuthResources[:1] }, "requires ACR_OAUTH_ISSUER in ACR_OAUTH_RESOURCES"},
 		{"no metadata documents", func(c *Config) { c.OAuthClientMetadataDocuments = false }, "requires ACR_OAUTH_CLIENT_METADATA_DOCUMENTS"},
 		{"http client", func(c *Config) { c.OAuthBrowserClients = []string{"http://www.example.test/acr/client.json"} }, "https client ID metadata document URLs"},
@@ -217,5 +227,38 @@ func TestLoad_oauthBrowserClientsParse(t *testing.T) {
 	cfg, err = load(mapLookup(map[string]string{"ACR_LOCAL_COMPOSITION_READY": "true"}))
 	if err != nil || len(cfg.OAuthBrowserClients) != 0 || len(cfg.OAuthDevBrowserRedirectURIs) != 0 {
 		t.Fatalf("defaults: browser clients %q dev redirects %q err=%v", cfg.OAuthBrowserClients, cfg.OAuthDevBrowserRedirectURIs, err)
+	}
+}
+
+// CHAOS-12140: the browser family purge grace defaults to 24 h and is read
+// from ACR_OAUTH_BROWSER_FAMILY_PURGE_GRACE.
+func TestLoad_oauthBrowserFamilyPurgeGraceParse(t *testing.T) {
+	cfg, err := load(mapLookup(map[string]string{"ACR_LOCAL_COMPOSITION_READY": "true"}))
+	if err != nil || cfg.OAuthBrowserFamilyPurgeGrace != 24*time.Hour {
+		t.Fatalf("default: grace=%v err=%v", cfg.OAuthBrowserFamilyPurgeGrace, err)
+	}
+	cfg, err = load(mapLookup(map[string]string{"ACR_LOCAL_COMPOSITION_READY": "true", "ACR_OAUTH_BROWSER_FAMILY_PURGE_GRACE": "36h"}))
+	if err != nil || cfg.OAuthBrowserFamilyPurgeGrace != 36*time.Hour {
+		t.Fatalf("override: grace=%v err=%v", cfg.OAuthBrowserFamilyPurgeGrace, err)
+	}
+	_, err = load(mapLookup(map[string]string{"ACR_LOCAL_COMPOSITION_READY": "true", "ACR_OAUTH_BROWSER_FAMILY_PURGE_GRACE": "soon"}))
+	if err == nil || !strings.Contains(err.Error(), "ACR_OAUTH_BROWSER_FAMILY_PURGE_GRACE") {
+		t.Fatalf("grace=soon: err = %v, want a parse error naming the key", err)
+	}
+}
+
+func TestOAuthBrowserClassConfigured(t *testing.T) {
+	for name, tc := range map[string]struct {
+		cfg  Config
+		want bool
+	}{
+		"nothing":            {Config{}, false},
+		"OAuth only":         {Config{OAuthIssuer: "https://acr.example.test"}, false},
+		"browser client":     {Config{OAuthBrowserClients: []string{"https://www.example.test/acr/c.json"}}, true},
+		"development client": {Config{OAuthDevBrowserRedirectURIs: []string{"http://localhost:3000/acr/callback"}}, true},
+	} {
+		if got := tc.cfg.OAuthBrowserClassConfigured(); got != tc.want {
+			t.Fatalf("%s: OAuthBrowserClassConfigured = %t, want %t", name, got, tc.want)
+		}
 	}
 }

@@ -130,7 +130,7 @@ func (b factTimeBound) retentionState(rowCount int) (contextfabric.SourceState, 
 	if rowCount > 0 {
 		return contextfabric.SourceAvailable, ""
 	}
-	if b.active {
+	if b.active && !b.currentAxis {
 		return contextfabric.SourceNoData, outOfRetentionReason
 	}
 	return contextfabric.SourceNoData, emptyReadReason
@@ -193,6 +193,24 @@ type factTimeBound struct {
 	// endExclusive says end is the first instant outside the window, not its last (a trailing read_facts window ends
 	// at today 00:00 UTC). Unset keeps the inclusive predicates unchanged.
 	endExclusive bool
+	// currentAxis says this bound is the window of a CURRENT-axis read (the
+	// investment read's committed evidence window or the 90-day default,
+	// investmentTimeBound), not a historical question. It bounds the rows that
+	// have a period (work units by end stamp); everything that is about the
+	// state at a past time stays current: ownership is the currently-owned rule
+	// (ownership), an empty read is a plain empty read, the grain is exact, and
+	// no historical disclosure is added. This is how every window-bound rollup
+	// reads the current axis (resolveRollupWindow beside an inactive bound).
+	currentAxis bool
+}
+
+// ownership is the bound an ownership read takes: a current-axis window leaves
+// ownership on the currently-owned rule; any other bound is unchanged.
+func (b factTimeBound) ownership() factTimeBound {
+	if b.currentAxis {
+		return factTimeBound{}
+	}
+	return b
 }
 
 // resolveTimeBound is the single decision every Tier A and Tier B provider
@@ -378,7 +396,7 @@ const (
 // from a provider that actually contributed facts, so a current-axis
 // answer's grain never reaches a temporal label anyway (there is none).
 func (b factTimeBound) effectiveGrain(providerGrain contextfabric.TemporalGrain) contextfabric.TemporalGrain {
-	if !b.active {
+	if !b.active || b.currentAxis {
 		return grainExact
 	}
 	return providerGrain

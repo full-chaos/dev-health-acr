@@ -61,7 +61,7 @@ func TestTeamThemeMixIsTheSumOfOwnedRepositoriesAgainstRealClickHouse(t *testing
 	read := func(subject contextfabric.SubjectRef) contextfabric.CanonicalFact {
 		t.Helper()
 		result, err := provider.ReadFacts(ctx, storage.Principal{OrgID: orgID}, contextfabric.FactQuery{
-			Time: contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent},
+			Time: investmentAllHistory(),
 			Kind: contextfabric.FactInvestment, Subjects: []contextfabric.SubjectRef{subject},
 		})
 		if err != nil {
@@ -137,7 +137,7 @@ func TestTeamThemeMixOverManyOwnedRepositoriesIsCompleteAgainstRealClickHouse(t 
 	}
 	for run := 0; run < 2; run++ { // repeat: an unordered LIMIT used to vary across reads
 		result, err := provider.ReadFacts(ctx, storage.Principal{OrgID: orgID}, contextfabric.FactQuery{
-			Time: contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent}, Kind: contextfabric.FactInvestment,
+			Time: investmentAllHistory(), Kind: contextfabric.FactInvestment,
 			Subjects: []contextfabric.SubjectRef{teamSubject("team-many")},
 		})
 		if err != nil || len(result.Facts) != 1 {

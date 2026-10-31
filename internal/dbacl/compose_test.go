@@ -105,6 +105,81 @@ func TestComposeWorkloadGateFollowsTheRuntimeRule(t *testing.T) {
 	}
 }
 
+// TestComposeRunsNeitherTheBrowserClientNorItsGrants: the compose stack runs
+// acr-api without the OAuth login (no ACR_OAUTH_* setting), and a browser
+// client requires the login, so compose has no browser client and the ACL
+// service grants no browser family purge DELETE. Both services must agree:
+// a browser client setting on acr-api alone fails its configuration, and one
+// on acr-db-acl alone widens the runtime role for nothing (CHAOS-12140; codex
+// #1788 r3 P2: the settings passed to compose acr-api failed its startup).
+func TestComposeRunsNeitherTheBrowserClientNorItsGrants(t *testing.T) {
+	raw, err := os.ReadFile("../../deploy/compose/acr.compose.yml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, service := range []string{"acr-db-acl", "acr-api"} {
+		start := strings.Index(string(raw), "\n  "+service+":")
+		if start < 0 {
+			t.Fatalf("service %s not found", service)
+		}
+		block := string(raw)[start+1:]
+		if next := regexp.MustCompile(`\n  [a-z-]+:\n`).FindStringIndex(block[1:]); next != nil {
+			block = block[:next[0]+1]
+		}
+		if strings.Contains(block, "ACR_OAUTH_") {
+			t.Errorf("%s carries an ACR_OAUTH_ setting; compose runs acr-api without the OAuth login, so it has no browser client", service)
+		}
+	}
+}
+
+// TestComposeBrowserGateFollowsTheRuntimeRule runs the script's gates for
+// CHAOS-12140 with real shell: browser_client is on when either browser client
+// setting holds something other than whitespace (config.OAuthBrowserClassConfigured),
+// and credential_purge (DELETE on acr.client_credentials) is on with it or with
+// workload token exchange -- the rule dbacl.Features.Enabled applies.
+func TestComposeBrowserGateFollowsTheRuntimeRule(t *testing.T) {
+	raw, err := os.ReadFile(composeScript)
+	if err != nil {
+		t.Fatal(err)
+	}
+	script := string(raw)
+	begin := strings.Index(script, "trim() {")
+	end := strings.Index(script, "export PGPASSWORD=")
+	if begin < 0 || end < begin {
+		t.Fatal("the feature gates were not found in the compose script")
+	}
+	gate := script[begin:end]
+	for _, tc := range []struct {
+		clients, devRedirects, audience, trust string
+		want                                   string
+	}{
+		{"", "", "", "", "false false"},
+		{" \t", " ", "", "", "false false"},
+		{"https://www.example.test/acr/c.json", "", "", "", "true true"},
+		{"", " http://localhost:3000/acr/callback ", "", "", "true true"},
+		{"", "", "https://acr.test", "cluster.test", "false true"},
+		{"https://www.example.test/acr/c.json", "", "https://acr.test", "cluster.test", "true true"},
+	} {
+		command := exec.Command("sh", "-c", gate+"\nprintf '%s %s' \"$browser_client\" \"$credential_purge\"")
+		command.Env = []string{
+			"ACR_OAUTH_BROWSER_CLIENTS=" + tc.clients, "ACR_OAUTH_DEV_BROWSER_REDIRECT_URIS=" + tc.devRedirects,
+			"ACR_WORKLOAD_TOKEN_EXCHANGE_AUDIENCE=" + tc.audience, "ACR_WORKLOAD_TRUST_DOMAIN=" + tc.trust, "PATH=" + os.Getenv("PATH"),
+		}
+		out, err := command.CombinedOutput()
+		if err != nil {
+			t.Fatalf("%q/%q: %v: %s", tc.clients, tc.devRedirects, err, out)
+		}
+		if string(out) != tc.want {
+			t.Fatalf("clients %q dev %q audience %q trust %q: browser_client credential_purge = %q, want %q", tc.clients, tc.devRedirects, tc.audience, tc.trust, out, tc.want)
+		}
+	}
+	for _, variable := range []string{`-v browser_client="$browser_client"`, `-v credential_purge="$credential_purge"`} {
+		if !strings.Contains(script, variable) {
+			t.Fatalf("the runtime-acl psql call does not pass %s", variable)
+		}
+	}
+}
+
 // TestComposeBootstrapHandlesThePurgeRoleSettings runs the real script with
 // stand-ins for pg_isready and psql that only record what they are given, so no
 // database is involved: with a purge user and a password (direct or from a

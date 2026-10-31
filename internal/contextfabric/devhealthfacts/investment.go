@@ -88,8 +88,41 @@ func (p *InvestmentProvider) LoadPrerequisites(ctx context.Context, principal st
 	return ctx, nil
 }
 
+// investmentTimeBound is resolveTimeBound with the current axis resolved as
+// every window-bound rollup resolves it (resolveRollupWindow, the rule
+// metrics.go applies to its series; CHAOS-12142, lead ruling on DW0): the
+// answer's committed evidence window when it carries one, all history for the
+// all_time window, else the platform default of the trailing 90 days ending at
+// 00:00 UTC today (WindowDefaultPolicy90D). The window bounds the work units:
+// each counts whole in the window that holds its end stamp
+// (workUnitEndStampPredicate), as in a range read with an exclusive end. The
+// rest stays the current axis (factTimeBound.currentAxis): currently-owned
+// ownership, no prior-window comparison, current-axis empty-read and grain
+// rules. defaulted reports the platform default, which the read discloses
+// (investmentDefaultWindowReason).
+func investmentTimeBound(query contextfabric.FactQuery) (bound factTimeBound, result contextfabric.FactProviderResult, unsupported, defaulted bool) {
+	bound, result, unsupported = resolveTimeBound(query)
+	if query.Time.Axis != contextfabric.TemporalCurrent {
+		return bound, result, unsupported, false
+	}
+	// On the current axis resolveRollupWindow gives both ends or neither (the
+	// all_time window, which reads all history).
+	window := resolveRollupWindow(bound, query.Time.EvidenceWindow, clock())
+	if !window.hasStart {
+		return bound, result, unsupported, false
+	}
+	return factTimeBound{active: true, hasStart: true, start: window.start, end: window.end, endExclusive: window.endExclusive, currentAxis: true},
+		contextfabric.FactProviderResult{}, false, window.basis == "default_trailing"
+}
+
+// investmentDefaultWindowReason names the period a current-axis read with no
+// committed window was served over. It names the period, not its dates: the
+// dates come from the clock, and the client input carries no clock-derived
+// bound (synthesisprompt withoutClockWindowEchoes).
+const investmentDefaultWindowReason = "investment_default_window: no period was given, so investment is read over the platform default window, the trailing 90 days ending at 00:00 UTC today, by work-unit end stamp"
+
 func (p *InvestmentProvider) ReadFacts(ctx context.Context, principal storage.Principal, query contextfabric.FactQuery) (result contextfabric.FactProviderResult, err error) {
-	timeBound, unsupportedResult, unsupported := resolveTimeBound(query)
+	timeBound, unsupportedResult, unsupported, defaultWindow := investmentTimeBound(query)
 	if unsupported {
 		return unsupportedResult, nil
 	}
@@ -275,8 +308,11 @@ func (p *InvestmentProvider) ReadFacts(ctx context.Context, principal storage.Pr
 		addRequestNote(&result, investmentProjectMixCutReason(len(projectsMixCut), len(subjectsOfKind(query.Subjects, contextfabric.SubjectProject))-rejectedProjectCount(query.Subjects)))
 		addSubjectReasons(&result, projectsMixCut, investmentProjectMixCutOwnReason)
 	}
-	if timeBound.active {
+	if timeBound.active && !timeBound.currentAxis {
 		addScopedReason(&result, query.Subjects, subjectsOfKind(query.Subjects, contextfabric.SubjectTeam), investmentOwnershipAsSynced)
+	}
+	if defaultWindow {
+		addRequestNote(&result, investmentDefaultWindowReason)
 	}
 	if teamLinksUnwindowed {
 		addScopedReason(&result, query.Subjects, subjectsOfKind(query.Subjects, contextfabric.SubjectTeam), teamProjectLinksUnwindowedReason)
@@ -357,7 +393,7 @@ func (p *InvestmentProvider) readTeamThemeMix(ctx context.Context, orgID string,
 	// unit distributions (investment_repo_mix.go). Never a member vote and
 	// never a work-item majority vote.
 	var priorBound *factTimeBound
-	if timeBound.active && timeBound.hasStart {
+	if timeBound.active && timeBound.hasStart && !timeBound.currentAxis {
 		duration := timeBound.end.Sub(timeBound.start)
 		priorBound = &factTimeBound{active: true, hasStart: true, start: timeBound.start.Add(-duration), end: timeBound.start}
 	}
@@ -427,7 +463,7 @@ func (p *InvestmentProvider) readTeamThemeMix(ctx context.Context, orgID string,
 		if l, ok := linked[teamID]; ok && l.total() > 0 {
 			fields["attribution_basis"] = contextfabric.StringFactValue(repoMixBasis + "_over_team_repo_ownership_and_project_links")
 			fields["project_reached_repository_count"] = contextfabric.IntegerFactValue(int64(len(reachedOnly[teamID])))
-			if timeBound.active {
+			if timeBound.active && !timeBound.currentAxis {
 				linksUnwindowed = true
 			}
 			if teamRollupTablesIncluded(len(ids)) {
@@ -914,7 +950,7 @@ func (p *InvestmentProvider) readProjectThemeMix(ctx context.Context, orgID stri
 		// this producer supports both current and an explicit requested
 		// range (workUnitEndStampPredicate), unlike the sibling
 		// completion roll-up's current-only scope.
-		if timeBound.active {
+		if timeBound.active && !timeBound.currentAxis {
 			fields["population_window"] = contextfabric.StringFactValue("requested_range")
 		} else {
 			fields["population_window"] = contextfabric.StringFactValue("current")
@@ -1043,7 +1079,7 @@ func (p *InvestmentProvider) readProjectNativeThemeMix(ctx context.Context, orgI
 		fields["effort_unit_count"] = contextfabric.IntegerFactValue(int64(row.WorkUnits))
 		fields["spanning_unit_count"] = contextfabric.IntegerFactValue(int64(row.SpanningUnits))
 		fields["native_multi_placed_unit_count"] = contextfabric.IntegerFactValue(int64(row.MultiPlacedUnits))
-		if timeBound.active {
+		if timeBound.active && !timeBound.currentAxis {
 			fields["population_window"] = contextfabric.StringFactValue("requested_range")
 		} else {
 			fields["population_window"] = contextfabric.StringFactValue("current")

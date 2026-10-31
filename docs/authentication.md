@@ -70,8 +70,8 @@ Every credential row records how, and for whom, it was issued (migration `0058`)
 
 | Column | Meaning |
 | --- | --- |
-| `client_class` | Derived by the credential lifecycle from the issuance path, never chosen by a caller: `operator` (the `acr-api credentials` command), `workload` (RFC 8693 workload exchange), `native_device` (legacy device flow), `oauth_user` (OAuth authorization code or RFC 8628 device grant; it always names its client), `browser` (the first-party web browser client's code exchange, CHAOS-12123: the OAuth service names the class for a configured browser client, and the lifecycle accepts it only on an OAuth exchange that carries the session, the family and both expiries). |
-| `approving_user_id` | The web-session subject that approved the device or OAuth authorization. The device-authorization store copies it from the locked authorization row inside the redemption transaction. Empty for `operator` and `workload`. |
+| `client_class` | Derived by the credential lifecycle from the issuance path, never chosen by a caller: `org_bearer` (the `acr-api credentials` command, D6530; migration `0063` relabelled the rows the CLI had written as `operator`, and `operator` stays in the vocabulary with no writer), `workload` (RFC 8693 workload exchange), `native_device` (legacy device flow), `oauth_user` (OAuth authorization code or RFC 8628 device grant; it always names its client), `browser` (the first-party web browser client's code exchange, CHAOS-12123: the OAuth service names the class for a configured browser client, and the lifecycle accepts it only on an OAuth exchange that carries the session, the family and both expiries). |
+| `approving_user_id` | The web-session subject that approved the device or OAuth authorization. The device-authorization store copies it from the locked authorization row inside the redemption transaction. Empty for `org_bearer`, `operator` and `workload`. |
 | `client_id` | The OAuth client the credential was issued to. |
 | `session_id`, `family_id`, `family_expires_at` | Browser class only (CHAOS-12123): the web session (`sid`) the approval was made in -- the store copies it from the locked device-authorization row (`approving_session_id`, migration `0061`), never from the caller -- the token family the credential starts, and the family's absolute end (issuance + 12 h). |
 
@@ -269,7 +269,7 @@ Routes: `GET /.well-known/oauth-authorization-server`, `GET /authorize`,
   migration 0040), never on the wire. The authenticator accepts a bound
   credential only when the request carries `X-ACR-Resource` with exactly that
   value; the hosted MCP endpoint sets that header from its own configuration.
-  A credential without a binding (operator, device, workload) is unaffected.
+  A credential without a binding (org_bearer, operator, device, workload) is unaffected.
 - Each OAuth request writes one `acr-api oauth step` line (step, outcome,
   client kind, status). Steps: `register`, `authorize` (ok = sent to the
   consent page), `consent_preview`, `consent` (ok = approved, `access_denied`
@@ -488,6 +488,44 @@ revocation.
   `invalid_grant`, `unsupported_token_type`. Every successor and every
   revocation writes a `credential_created` / `credential_revoked` audit row with
   `family_id` (and `family_revoke_reason`).
+
+### Browser family purge (CHAOS-12140)
+
+Each refresh adds one refresh row and one browser credential row, so an active
+session adds about 73 of each over its 12 hours. With a browser client
+configured, acr-api purges ended families: one bounded purge at startup (a
+missing `DELETE` grant fails startup) and then one every 5 minutes, at most 500
+rows per statement.
+
+- A family has ended when its absolute end or its revocation is older than
+  `ACR_OAUTH_BROWSER_FAMILY_PURGE_GRACE` (default `24h`, must be positive when a
+  browser client is configured).
+- First the member credentials of ended families go (each is expired or
+  revoked by then; a credential still live is never deleted). A member of a
+  family that has not ended stays even when it is dead: the next refresh reads
+  it. Then the families go, once no member is left; their refresh rows go with
+  them (`ON DELETE CASCADE`, run as the table owner, so the runtime role needs
+  no `DELETE` on `acr.browser_refresh_tokens`).
+- A family's first credential comes from the code exchange, and the device
+  authorization that exchange redeemed names it (a foreign key with no delete
+  action). It stays until the OAuth purge deletes that device authorization
+  (`ACR_OAUTH_REQUEST_PURGE_GRACE` after its expiry); the next browser family
+  purge then deletes it by the family end the credential carries.
+- The runtime role needs `DELETE` on `acr.client_credentials` and
+  `acr.browser_token_families` (the `browser_client` rows of
+  `internal/dbacl`; `deploy/compose/acr-db-init.sh runtime-acl` and
+  `acr-migrate grant-runtime-acl` grant them when either browser client
+  setting is not blank). On Kubernetes set the clients as
+  `config.oauth.browserClients` (and `config.oauth.devBrowserRedirectUris` in
+  development): the chart renders them for acr-api and for the grant Job.
+- Every tick logs one `browser family purge` line at Info, zeros included
+  (the loop's heartbeat): `member_rows` (member credentials), `families`
+  (deleted) and, after a purge that did not fail, `member_rows_remaining`,
+  `families_remaining` (still
+  eligible, capped at the batch limit + 1), read the same way as the
+  `oauth purge` line. A failed tick logs the fixed warning
+  `browser family purge tick failed; retrying on next tick` with the error class
+  and table only.
 
 ## Rate limiting
 

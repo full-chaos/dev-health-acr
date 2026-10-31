@@ -28,7 +28,7 @@ func TestThemeMixRefusalNamesTheBudgetAndMeasuredFactsAgainstRealClickHouse(t *t
 	seedBudgetFixtureOrg(t, ctx, direct, orgID, budgetFixtureUnits, false)
 
 	_, err := provider.ReadFacts(ctx, storage.Principal{OrgID: orgID}, contextfabric.FactQuery{
-		Time: contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent}, Kind: contextfabric.FactInvestment, Subjects: budgetFixtureSubjects(),
+		Time: investmentAllHistory(), Kind: contextfabric.FactInvestment, Subjects: budgetFixtureSubjects(),
 	})
 	var failure *contextfabric.FactReadFailure
 	if !errors.As(err, &failure) {

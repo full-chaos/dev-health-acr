@@ -49,7 +49,7 @@ func TestTeamMixIsStandaloneAgainstRealClickHouse(t *testing.T) {
 			subjects = append(subjects, teamSubject(id))
 		}
 		result, err := provider.ReadFacts(ctx, storage.Principal{OrgID: orgID}, contextfabric.FactQuery{
-			Time: contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent},
+			Time: investmentAllHistory(),
 			Kind: contextfabric.FactInvestment, Subjects: subjects,
 		})
 		if err != nil {

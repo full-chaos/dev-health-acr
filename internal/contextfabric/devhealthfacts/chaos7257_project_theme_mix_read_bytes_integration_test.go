@@ -474,7 +474,7 @@ func checkProjectThemeMixByteBudget(t *testing.T, units int, growth bool) {
 	}
 	mark := serverNowMicros(t, ctx, direct)
 	result, err := provider.ReadFacts(ctx, storage.Principal{OrgID: orgID}, contextfabric.FactQuery{
-		Time: contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent}, Kind: contextfabric.FactInvestment, Subjects: subjects,
+		Time: investmentAllHistory(), Kind: contextfabric.FactInvestment, Subjects: subjects,
 	})
 	statements := statementsSince(t, ctx, direct, mark)
 	for i, s := range statements {

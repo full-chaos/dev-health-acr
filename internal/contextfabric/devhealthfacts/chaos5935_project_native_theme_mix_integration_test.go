@@ -111,7 +111,7 @@ func TestProjectNativeThemeMixAgainstRealClickHouse(t *testing.T) {
 		}
 		provider := findProvider(t, providers, contextfabric.FactInvestment)
 		result, err := provider.ReadFacts(ctx, storage.Principal{OrgID: orgID}, contextfabric.FactQuery{
-			Time: contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent}, Kind: contextfabric.FactInvestment, Subjects: subjects,
+			Time: investmentAllHistory(), Kind: contextfabric.FactInvestment, Subjects: subjects,
 		})
 		if err != nil {
 			t.Fatalf("ReadFacts: %v", err)

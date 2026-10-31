@@ -20,9 +20,9 @@ func TestNormalizeCreate_derivesClientClassPerIssuancePath(t *testing.T) {
 		want   ClientClass
 		wantOK bool
 	}{
-		{"operator", func(*CreateInput) {}, ClientClassOperator, true},
-		{"operator refuses an approving user", func(in *CreateInput) { in.ApprovingUserID = "user_1" }, "", false},
-		{"operator refuses a client id", func(in *CreateInput) { in.ClientID = client }, "", false},
+		{"cli credential is org_bearer", func(*CreateInput) {}, ClientClassOrgBearer, true},
+		{"org_bearer refuses an approving user", func(in *CreateInput) { in.ApprovingUserID = "user_1" }, "", false},
+		{"org_bearer refuses a client id", func(in *CreateInput) { in.ClientID = client }, "", false},
 		{"workload", func(in *CreateInput) {
 			in.IssuanceProvenance = IssuanceProvenanceWorkloadExchange
 			in.WorkloadBindingID = "binding-1"
@@ -56,8 +56,11 @@ func TestNormalizeCreate_derivesClientClassPerIssuancePath(t *testing.T) {
 			in.ClientID = client
 		}, ClientClassOAuthUser, true},
 		{"a caller class equal to the derived one is kept", func(in *CreateInput) {
+			in.ClientClass = ClientClassOrgBearer
+		}, ClientClassOrgBearer, true},
+		{"operator has no writer: a caller cannot ask for it", func(in *CreateInput) {
 			in.ClientClass = ClientClassOperator
-		}, ClientClassOperator, true},
+		}, "", false},
 		{"a caller class that differs is refused", func(in *CreateInput) {
 			in.ClientClass = ClientClassBrowser
 		}, "", false},
@@ -96,19 +99,19 @@ func TestNormalizeCreate_derivesClientClassPerIssuancePath(t *testing.T) {
 }
 
 func TestClientClass_vocabularyIsClosed(t *testing.T) {
-	for _, class := range []ClientClass{ClientClassBrowser, ClientClassOAuthUser, ClientClassNativeDevice, ClientClassOperator, ClientClassWorkload} {
+	for _, class := range []ClientClass{ClientClassBrowser, ClientClassOAuthUser, ClientClassNativeDevice, ClientClassOrgBearer, ClientClassOperator, ClientClassWorkload} {
 		if !class.Valid() {
 			t.Fatalf("%q.Valid() = false", class)
 		}
 	}
-	for _, class := range []ClientClass{"", "org_bearer", "Browser"} {
+	for _, class := range []ClientClass{"", "Org_Bearer", "Browser"} {
 		if class.Valid() {
 			t.Fatalf("%q.Valid() = true", class)
 		}
 	}
 	for class, want := range map[ClientClass]bool{
 		ClientClassBrowser: true, ClientClassOAuthUser: true, ClientClassNativeDevice: true,
-		ClientClassOperator: false, ClientClassWorkload: false,
+		ClientClassOrgBearer: false, ClientClassOperator: false, ClientClassWorkload: false,
 	} {
 		if class.UserApproved() != want {
 			t.Fatalf("%q.UserApproved() = %v, want %v", class, !want, want)
