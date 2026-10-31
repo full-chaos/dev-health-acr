@@ -217,7 +217,8 @@ func (s *discoverTeamScope) committedOwned(ctx context.Context, committed []cont
 	}
 	n := s.narrowing
 	a := n.adapter
-	current := currentOwnership(s.temporal, a.now())
+	// Current ownership on every axis, as decide reads it.
+	owned := currentOwnership(temporalFilter{}, a.now())
 	for _, subject := range committed {
 		switch subject.Kind {
 		case contextfabric.SubjectRepository, contextfabric.SubjectProject:
@@ -225,7 +226,7 @@ func (s *discoverTeamScope) committedOwned(ctx context.Context, committed []cont
 			if subject.Kind == contextfabric.SubjectProject {
 				step = projectOwnersStep
 			}
-			hits, cut, err := a.walkStepHits(ctx, n.key, n.orgID, []string{subject.CanonicalID}, step, current, exactNameCandidateQueryLimit)
+			hits, cut, err := a.walkStepHits(ctx, n.key, n.orgID, []string{subject.CanonicalID}, step, owned, exactNameCandidateQueryLimit)
 			if err != nil {
 				return false, err
 			}

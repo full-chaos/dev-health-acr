@@ -47,9 +47,20 @@ func TestLiveATeamNarrowingStatesTheStatusPoolCutInsideTheNarrowing(t *testing.T
 	teamEntity := entity(team, nil)
 	teamEntity.Authorization = contextfabric.AuthorizationScope{TeamIDs: []string{"alpha"}}
 	e.Entities = append(e.Entities, teamEntity, entity(repo, nil))
+	// Alpha owns acme/big since 12 hours ago; beta owned it before. The
+	// narrowing reads the CURRENT owner on every axis.
+	switched := observed.Add(-12 * time.Hour)
+	former := contextfabric.SubjectRef{Kind: contextfabric.SubjectTeam, CanonicalID: "team:beta", Label: "Beta"}
+	formerEntity := entity(former, nil)
+	formerEntity.Authorization = contextfabric.AuthorizationScope{TeamIDs: []string{"beta"}}
+	e.Entities = append(e.Entities, formerEntity)
 	owner := rel("rel_repo_team", contractsv1.ContextFabricRelationshipOwnedByTeam, repo, team)
 	owner.Authorization = contextfabric.AuthorizationScope{RepositorySlugs: []string{"acme/big"}, TeamIDs: []string{"alpha"}}
-	r.Relationships = append(r.Relationships, owner)
+	owner.ValidFrom = &switched
+	formerOwner := rel("rel_repo_team_beta", contractsv1.ContextFabricRelationshipOwnedByTeam, repo, former)
+	formerOwner.Authorization = contextfabric.AuthorizationScope{RepositorySlugs: []string{"acme/big"}, TeamIDs: []string{"beta"}}
+	formerOwner.ValidTo = &switched
+	r.Relationships = append(r.Relationships, owner, formerOwner)
 	for i := 1; i <= 250; i++ {
 		pr := contextfabric.SubjectRef{Kind: contextfabric.SubjectPullRequest, CanonicalID: fmt.Sprintf("pull_request:big:%03d", i), Label: fmt.Sprintf("PR #%d", i)}
 		e.Entities = append(e.Entities, entity(pr, map[string]contextfabric.ScalarValue{"state": {String: &open}}))
@@ -60,16 +71,25 @@ func TestLiveATeamNarrowingStatesTheStatusPoolCutInsideTheNarrowing(t *testing.T
 			t.Fatalf("ApplyProjectionBatch(%s) error = %v", b.BatchID, err)
 		}
 	}
+	dayAgo := observed.Add(-24 * time.Hour)
+	historical := contextfabric.TimeContext{Axis: contextfabric.TemporalValidTime, AsOf: &dayAgo}
 	for _, tc := range []struct {
 		name  string
 		teams []string
 		want  contextfabric.MemberStatusPoolCut
+		time  contextfabric.TimeContext
 	}{
-		{"no narrowing: the first 26 of the 250 read", nil, contextfabric.MemberStatusPoolCut{Kind: contextfabric.SubjectPullRequest, Read: 26, Pool: 250}},
-		{"a narrowing that reaches none: a cut read that reached none of its members", []string{"team-other"}, contextfabric.MemberStatusPoolCut{Kind: contextfabric.SubjectPullRequest, Read: 0, Pool: 0}},
-		{"the owning team (rule (i) holds): its 26 read of its 250", []string{"alpha"}, contextfabric.MemberStatusPoolCut{Kind: contextfabric.SubjectPullRequest, Read: 26, Pool: 250}},
+		{"no narrowing: the first 26 of the 250 read", nil, contextfabric.MemberStatusPoolCut{Kind: contextfabric.SubjectPullRequest, Read: 26, Pool: 250}, contextfabric.TimeContext{}},
+		{"a narrowing that reaches none: a cut read that reached none of its members", []string{"team-other"}, contextfabric.MemberStatusPoolCut{Kind: contextfabric.SubjectPullRequest, Read: 0, Pool: 0}, contextfabric.TimeContext{}},
+		{"the owning team (rule (i) holds): its 26 read of its 250", []string{"alpha"}, contextfabric.MemberStatusPoolCut{Kind: contextfabric.SubjectPullRequest, Read: 26, Pool: 250}, contextfabric.TimeContext{}},
+		{"a day ago, the current owner: its 26 read of its 250", []string{"alpha"}, contextfabric.MemberStatusPoolCut{Kind: contextfabric.SubjectPullRequest, Read: 26, Pool: 250}, historical},
+		{"a day ago, the former owner: no pool stated", []string{"beta"}, contextfabric.MemberStatusPoolCut{Kind: contextfabric.SubjectPullRequest, Read: 0, Pool: 0}, historical},
 	} {
 		teams := tc.teams
+		timeContext := tc.time
+		if timeContext.Axis == "" {
+			timeContext = contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent}
+		}
 		scoped := &contextfabric.ScopedSetExpression{AnchorTerms: []string{repo.Label}, MemberKind: contextfabric.SubjectPullRequest,
 			MemberQualifier: contextfabric.MemberQualifierStatus, MemberQualifierValue: "awaiting_review"}
 		bases := contextfabric.CommitBasisSet{}
@@ -77,12 +97,12 @@ func TestLiveATeamNarrowingStatesTheStatusPoolCutInsideTheNarrowing(t *testing.T
 		request := contextfabric.GraphDiscoveryRequest{
 			Request: contextfabric.InvestigationRequest{
 				SchemaVersion: contextfabric.InvestigationRequestSchemaV1, RequestID: "request_12352b",
-				Question: "which pull requests of acme/big await review?", TimeContext: contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent},
+				Question: "which pull requests of acme/big await review?", TimeContext: timeContext,
 				RequestedScope: contextfabric.RequestedScope{TeamIDs: teams},
 				Options:        contextfabric.InvestigationOptions{MaxSubjectCandidates: 10, MaxCohortMembers: 50, MaxRelationshipPaths: 50, MaxDrivers: 10, MaxEvidenceRefs: 100, MaxSerializedBytes: 262144},
 				Consumer:       contextfabric.ConsumerInfo{Name: "test", Version: "v1", Surface: "test"},
 			},
-			Interpretation: contextfabric.InterpretedQuestion{Shape: contextfabric.ShapeDiscoveredCohort, TimeContext: contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent}},
+			Interpretation: contextfabric.InterpretedQuestion{Shape: contextfabric.ShapeDiscoveredCohort, TimeContext: timeContext},
 			Resolution: contextfabric.SubjectResolution{Committed: []contextfabric.SubjectRef{repo}, Candidates: []contextfabric.SubjectCandidate{{
 				ReceiptID: "receipt_anchor", Subject: repo, State: contextfabric.ResolutionCommitted,
 				MatchedTerms: []string{repo.Label}, MatchReasons: []string{"matched"}, Confidence: 1, EvidenceRefIDs: []string{},
