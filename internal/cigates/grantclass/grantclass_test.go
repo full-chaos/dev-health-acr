@@ -92,7 +92,6 @@ var classifiers = map[string]bool{
 	modulePath + "/internal/contextfabric/directread.ClassifyPrincipal":       true,
 	modulePath + "/internal/contextfabric/directread.PrincipalClassForGrant":  true,
 	modulePath + "/internal/contextfabric/directread.CallerClassFor":          true,
-	modulePath + "/internal/contextfabric/directread.CallerClassForGrant":     true,
 	modulePath + "/internal/contextfabric.classifyStoredResultPrincipalScope": true,
 	modulePath + "/internal/contextfabric.storedResultScopeForGrant":          true,
 	fixturesBase + "/classify.Classify":                                       true,

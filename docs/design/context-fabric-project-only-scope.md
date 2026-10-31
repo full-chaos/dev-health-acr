@@ -31,12 +31,13 @@ explicitly takes the restricted path. `auth.ClassifyGrant` keeps today's rule
 and never returns `project_only`. Only the access-read decoder (c5,
 CHAOS-12301) produces it.
 
-The three gate vocabularies derive from the grant class through one exhaustive
-mapping each, with no `default`. `project_only` maps to their restricted member,
-so no wire value changes:
+The three gate vocabularies derive from the grant class with no `default`.
+`project_only` maps to their restricted member, so no wire value changes:
 
 - `directread.PrincipalClassForGrant` (`internal/contextfabric/directread/principal_class.go`);
-- `directread.CallerClassForGrant` (`internal/contextfabric/directread/operation_policy.go`);
+- the operation policy's caller class reads the grant through it:
+  `directread.CallerClassFor(PrincipalClassForGrant(...))`
+  (`internal/contextfabric/directread/operation_policy.go`);
 - `storedResultScopeForGrant` (`internal/contextfabric/stored_result_authorization.go`).
 
 Those vocabularies are closed in the event specification (`internal/contextfabric/eventspec/spec.go`:

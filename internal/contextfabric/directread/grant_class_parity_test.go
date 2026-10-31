@@ -56,11 +56,12 @@ func TestEveryGrantClassMapsOntoTheDirectReadVocabularies(t *testing.T) {
 		if got := PrincipalClassForGrant(grant); got != want[grant].class {
 			t.Errorf("PrincipalClassForGrant(%s) = %q, want %q", grant, got, want[grant].class)
 		}
-		if got := CallerClassForGrant(grant); got != want[grant].caller {
-			t.Errorf("CallerClassForGrant(%s) = %q, want %q", grant, got, want[grant].caller)
+		// The operation policy reads a grant through the principal class.
+		if got := CallerClassFor(PrincipalClassForGrant(grant)); got != want[grant].caller {
+			t.Errorf("CallerClassFor(PrincipalClassForGrant(%s)) = %q, want %q", grant, got, want[grant].caller)
 		}
 	}
-	if PrincipalClassForGrant("bogus") != ClassRestricted || CallerClassForGrant("bogus") != CallerRestricted {
+	if PrincipalClassForGrant("bogus") != ClassRestricted || CallerClassFor(PrincipalClassForGrant("bogus")) != CallerRestricted {
 		t.Error("an unknown grant class must map to restricted in both vocabularies")
 	}
 }

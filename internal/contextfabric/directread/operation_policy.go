@@ -105,8 +105,6 @@ import (
 
 	"github.com/vektah/gqlparser/v2/ast"
 	"github.com/vektah/gqlparser/v2/parser"
-
-	"github.com/full-chaos/dev-health-acr/internal/auth"
 )
 
 // OperationCatalogueContract is the contract name the artifact carries.
@@ -180,19 +178,6 @@ func CallerClassFor(class PrincipalClass) CallerClass {
 	case ClassUnrestricted, ClassUniversal:
 		return CallerUnrestricted
 	case ClassRestricted:
-		return CallerRestricted
-	}
-	return CallerRestricted
-}
-
-// CallerClassForGrant is the operation policy's view of a grant class
-// (CHAOS-12297): unrestricted and universal are unrestricted; restricted and
-// project_only are restricted. An unknown class is restricted (fail closed).
-func CallerClassForGrant(class auth.GrantClass) CallerClass {
-	switch class {
-	case auth.GrantUnrestricted, auth.GrantUniversal:
-		return CallerUnrestricted
-	case auth.GrantRestricted, auth.GrantProjectOnly:
 		return CallerRestricted
 	}
 	return CallerRestricted
