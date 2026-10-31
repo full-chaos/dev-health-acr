@@ -106,7 +106,9 @@ newest `last_turn_at` first, then `thread_id`; `next_cursor` (opaque, present
 when more threads exist). Query: `limit` 1..50 (default 20), `cursor`. Closed
 threads are not listed.
 
-`first_question` (CHAOS-12235, additive) is the question recorded on the
+`first_question` (CHAOS-12235, additive; served only while
+`ACR_THREAD_LIST_FIRST_QUESTION_ENABLED` is on, default off, until every
+consumer's pin accepts it) is the question recorded on the
 thread's **true first turn**: the first of the row's own linked records in turn
 order (`admitted_at`, then `submission_id`), not the first turn of a served
 page (a read serves the latest 100). It is read from that turn's record in the

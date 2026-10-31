@@ -46,6 +46,18 @@ func TestAppConfig_PassesThroughContextFabricEventStreamEnabled(t *testing.T) {
 // origins ACR_CORS_ALLOWED_ORIGINS loads must reach the constructed app, or
 // the deployment answers CORS for nobody whatever it sets. This loads the
 // variable, builds the app through appConfig, and sends a browser preflight.
+
+// CHAOS-12235: the thread list's first_question switch reaches the API's own
+// config in both states.
+func TestAppConfigCarriesTheThreadListFirstQuestionSwitch(t *testing.T) {
+	for _, enabled := range []bool{true, false} {
+		got := appConfig(config.Config{ThreadListFirstQuestionEnabled: enabled}, "test-version")
+		if got.ThreadListFirstQuestionEnabled != enabled {
+			t.Fatalf("appConfig(...).ThreadListFirstQuestionEnabled = %v, want %v", got.ThreadListFirstQuestionEnabled, enabled)
+		}
+	}
+}
+
 func TestAppConfig_HandsTheLoadedCORSOriginsToTheApp(t *testing.T) {
 	const origin = "https://www.fullchaos.dev"
 	t.Setenv(config.CORSAllowedOriginsEnv, origin)

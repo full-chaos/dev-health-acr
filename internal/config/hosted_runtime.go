@@ -186,8 +186,17 @@ func loadHostedRuntimeValues(lookup lookupEnv, cfg *Config, defaultRequireStores
 	if cfg.ContextFabricRunLeaseEnabled && !cfg.ContextFabricEventStreamEnabled {
 		return errors.New(ContextFabricRunLeaseEnabledEnvVar + " needs " + ContextFabricEventStreamEnabledEnvVar)
 	}
+	// CHAOS-12235: default OFF -- see Config.ThreadListFirstQuestionEnabled.
+	if cfg.ThreadListFirstQuestionEnabled, err = boolValue(lookup, ThreadListFirstQuestionEnabledEnvVar, false); err != nil {
+		return err
+	}
 	return nil
 }
+
+// ThreadListFirstQuestionEnabledEnvVar serves first_question on the thread
+// list items (CHAOS-12235). A temporary switch: removed once every consumer
+// accepts the field.
+const ThreadListFirstQuestionEnabledEnvVar = "ACR_THREAD_LIST_FIRST_QUESTION_ENABLED"
 
 // AskDevRetentionEnabledEnvVar turns Ask Dev retention on (CHAOS-11952).
 const AskDevRetentionEnabledEnvVar = "ACR_ASK_DEV_RETENTION_ENABLED"
@@ -288,6 +297,7 @@ func (c Config) SafeAttributes() []any {
 		"context_fabric_server_completeness_authority_symmetric_enabled", c.ServerCompletenessAuthoritySymmetricEnabled,
 		"context_fabric_event_stream_enabled", c.ContextFabricEventStreamEnabled,
 		"context_fabric_run_lease_enabled", c.ContextFabricRunLeaseEnabled,
+		"thread_list_first_question_enabled", c.ThreadListFirstQuestionEnabled,
 		"ask_dev_retention_enabled", c.AskDevRetentionEnabled,
 		"ask_dev_retention_role_configured", c.AskDevRetentionPostgresDSN != "",
 		"minimum_sidecar_version", c.MinimumSidecarVersion,

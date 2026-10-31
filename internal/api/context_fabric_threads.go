@@ -174,10 +174,17 @@ func (a *App) ContextFabricThreadListHandler() http.Handler {
 		list := contractsv1.ContextFabricThreadList{SchemaVersion: contractsv1.ContextFabricThreadListSchema, Threads: make([]contractsv1.ContextFabricThreadSummary, 0, len(records))}
 		firstQuestions := 0
 		for _, record := range records {
-			list.Threads = append(list.Threads, threadSummary(record))
-			if record.FirstQuestion != "" {
+			summary := threadSummary(record)
+			// CHAOS-12235: served only when the switch is on (see
+			// config.Config.ThreadListFirstQuestionEnabled); off, the item is
+			// exactly the earlier published shape.
+			if !a.config.ThreadListFirstQuestionEnabled {
+				summary.FirstQuestion = ""
+			}
+			if summary.FirstQuestion != "" {
 				firstQuestions++
 			}
+			list.Threads = append(list.Threads, summary)
 		}
 		if more && len(records) > 0 {
 			last := records[len(records)-1]
