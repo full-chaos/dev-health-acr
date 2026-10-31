@@ -1129,7 +1129,7 @@ func TestAReusedAnswerStoredWithTheCountLastLeadsWithIt(t *testing.T) {
 	}}
 	candidate.Completeness = ComputeAnswerCompleteness(candidate)
 	count := cardinalityAnswerSentence(MembershipCardinality{Resolved: true, Kind: SubjectTeam, Served: 3, Declared: 3})
-	status := statusSentence(candidate.Status, candidate.SubjectResolution)
+	status := legacyStatusSentence(candidate.Status)
 	candidate.DirectJudgment = status
 	candidate.DeterministicAnswer = status + " " + count
 	committed := []SubjectRef{project}
@@ -1149,7 +1149,7 @@ func TestAReusedAnswerStoredWithTheCountLastLeadsWithIt(t *testing.T) {
 		t.Fatal("the fixture did not take the reuse path, so it proves nothing about it")
 	}
 	for name, text := range map[string]string{"deterministic_answer": served.DeterministicAnswer, "direct_judgment": served.DirectJudgment} {
-		if !strings.HasPrefix(text, count+" ") || strings.Count(text, count) != 1 {
+		if (text != count && !strings.HasPrefix(text, count+" ")) || strings.Count(text, count) != 1 {
 			t.Errorf("reused %s = %q, want it to lead with %q, stated once", name, text, count)
 		}
 	}

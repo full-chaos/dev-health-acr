@@ -21,11 +21,8 @@ type runtimeRoleDatabase struct {
 	Owner   *sql.DB // the migration role: owns every table and may grant
 	Runtime *sql.DB // connected as the runtime role
 	Purge   *sql.DB // connected as the purge role, when the options name one
-	// Retention is connected as the Ask Dev retention role (CHAOS-11952),
-	// when the options name one.
-	Retention *sql.DB
-	Role      string
-	DSN       string // the owner DSN
+	Role    string
+	DSN     string // the owner DSN
 }
 
 type runtimeRoleOptions struct {
@@ -39,10 +36,6 @@ type runtimeRoleOptions struct {
 	// PurgeRole names a second login role for the org purge. When set, its DSN
 	// reaches grant-runtime-acl, which gives it the purge privileges.
 	PurgeRole string
-	// RetentionRole names a login role for the Ask Dev retention job
-	// (CHAOS-11952). When set, its DSN reaches grant-runtime-acl, which gives
-	// it the retention privileges.
-	RetentionRole string
 }
 
 func newRuntimeRoleDatabase(t *testing.T, ctx context.Context, options runtimeRoleOptions) *runtimeRoleDatabase {
@@ -79,16 +72,6 @@ func newRuntimeRoleDatabase(t *testing.T, ctx context.Context, options runtimeRo
 			require.NoError(t, err)
 		}
 	}
-	if options.RetentionRole != "" {
-		for _, statement := range []string{
-			`CREATE ROLE ` + dbacl.QuoteIdent(options.RetentionRole) + ` LOGIN PASSWORD 'retention-test-password'`,
-			`GRANT CONNECT ON DATABASE acr TO ` + dbacl.QuoteIdent(options.RetentionRole),
-			`GRANT USAGE ON SCHEMA acr TO ` + dbacl.QuoteIdent(options.RetentionRole),
-		} {
-			_, err = owner.ExecContext(ctx, statement)
-			require.NoError(t, err)
-		}
-	}
 	if options.BeforeGrant != nil {
 		options.BeforeGrant(t, owner)
 	}
@@ -100,9 +83,6 @@ func newRuntimeRoleDatabase(t *testing.T, ctx context.Context, options runtimeRo
 		}
 		if options.PurgeRole != "" {
 			env[purgeDSNEnvironment] = "postgres://" + options.PurgeRole + ":unused@purge-dsn-is-never-dialed.invalid:5432/acr"
-		}
-		if options.RetentionRole != "" {
-			env[retentionDSNEnvironment] = "postgres://" + options.RetentionRole + ":unused@retention-dsn-is-never-dialed.invalid:5432/acr"
 		}
 		if options.Features[dbacl.EpisodeWriteback] {
 			env["ACR_ENABLE_EPISODE_WRITEBACK"] = "true"
@@ -129,13 +109,6 @@ func newRuntimeRoleDatabase(t *testing.T, ctx context.Context, options runtimeRo
 		purgeConfig.User, purgeConfig.Password = options.PurgeRole, "purge-test-password"
 		database.Purge = stdlib.OpenDB(*purgeConfig)
 		t.Cleanup(func() { require.NoError(t, database.Purge.Close()) })
-	}
-	if options.RetentionRole != "" {
-		retentionConfig, err := pgx.ParseConfig(migrationDSN)
-		require.NoError(t, err)
-		retentionConfig.User, retentionConfig.Password = options.RetentionRole, "retention-test-password"
-		database.Retention = stdlib.OpenDB(*retentionConfig)
-		t.Cleanup(func() { require.NoError(t, database.Retention.Close()) })
 	}
 	return database
 }

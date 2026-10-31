@@ -63,8 +63,10 @@ func assertFreshTupleSurfaces(t *testing.T, fixture *freshTupleProducerFixture, 
 		if strings.HasPrefix(failure, "floor") {
 			sentence = "Counted at least 2000 work items."
 		}
-		// The count is the quick answer, so it leads both lead prose fields.
-		if !strings.HasPrefix(result.DeterministicAnswer, sentence+" ") || !strings.HasPrefix(result.DirectJudgment, sentence+" ") {
+		// The count is the quick answer, so it leads both lead prose fields;
+		// a complete answer states no status sentence after it (CHAOS-12286).
+		leads := func(text string) bool { return text == sentence || strings.HasPrefix(text, sentence+" ") }
+		if !leads(result.DeterministicAnswer) || !leads(result.DirectJudgment) {
 			t.Fatalf("actual count prose=%q direct=%q, want both to lead with %q", result.DeterministicAnswer, result.DirectJudgment, sentence)
 		}
 	}

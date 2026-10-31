@@ -144,7 +144,8 @@ func TestSuppliedSynthesisCountQuestionLeadsWithTheCountSentenceLikeTheModelPath
 	turn := newFrameWriteBackTurn(t, countingFrame(SubjectTeam), countedWriteBackDraft(InvestigationComplete), false, false)
 	result := turn.run(t, "count question")
 	want := cardinalityAnswerSentence(MembershipCardinality{Resolved: true, Kind: SubjectTeam, Served: 3, Declared: 3})
-	if !strings.HasPrefix(result.DeterministicAnswer, want+" ") || !strings.HasPrefix(result.DirectJudgment, want+" ") {
+	leads := func(text string) bool { return text == want || strings.HasPrefix(text, want+" ") }
+	if !leads(result.DeterministicAnswer) || !leads(result.DirectJudgment) {
 		t.Fatalf("deterministic_answer = %q direct_judgment = %q, want both to lead with the count sentence %q", result.DeterministicAnswer, result.DirectJudgment, want)
 	}
 	if result.DeterministicAnswer == contractsv1.ContextFabricClientSynthesisAnswer || !cardinalityClaimPresent(result) {

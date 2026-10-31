@@ -29,12 +29,14 @@ import (
 // no regex or substring inspection anywhere in the call path.
 func TestChaos4690RecomposedCohortNarrativeWireFieldsCarryNoScoringArithmetic(t *testing.T) {
 	t.Parallel()
-	wantSentence := "This investigation is complete."
+	// CHAOS-12286: a complete answer states no status sentence, so the
+	// status-sentence-alone case is the partial one.
+	wantSentence := "Some canonical or graph coverage was unavailable."
 
-	directJudgment, deterministicAnswer := recomposeCohortAnswerNarrative(InvestigationComplete, nil, nil, SubjectResolution{})
+	directJudgment, deterministicAnswer := recomposeCohortAnswerNarrative(InvestigationPartial, nil, nil, SubjectResolution{})
 
 	result := InvestigationResult{
-		Status:              InvestigationComplete,
+		Status:              InvestigationPartial,
 		DirectJudgment:      directJudgment,
 		DeterministicAnswer: deterministicAnswer,
 	}

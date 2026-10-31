@@ -94,16 +94,6 @@ spec:
                   name: {{ .Values.credentials.purge.existingSecret | quote }}
                   key: {{ .Values.credentials.purge.postgresDsnKey | default "ACR_POSTGRES_PURGE_DSN" | quote }}
             {{- end }}
-            {{- if .Values.credentials.retention.existingSecret }}
-            # Read-only, like the DSNs above: only its user name is used, to
-            # give the Ask Dev retention job's own role its privileges
-            # (CHAOS-11952). Never dialed.
-            - name: ACR_POSTGRES_RETENTION_DSN
-              valueFrom:
-                secretKeyRef:
-                  name: {{ .Values.credentials.retention.existingSecret | quote }}
-                  key: {{ .Values.credentials.retention.postgresDsnKey | default "ACR_POSTGRES_RETENTION_DSN" | quote }}
-            {{- end }}
             # Which optional runtime features hold their table privileges: the
             # same settings the workloads read (templates/configmap.yaml).
             - name: ACR_ENABLE_EPISODE_WRITEBACK

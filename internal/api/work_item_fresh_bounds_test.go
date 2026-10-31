@@ -233,7 +233,9 @@ func runFreshTupleCanonicalBound(t *testing.T, mode string) {
 	if census.State != contextfabric.WorkItemMembershipCensusFloor || census.Value != 2000 || census.Retained != wantRetained {
 		t.Fatalf("persisted canonical floor=%+v", census)
 	}
-	if !strings.HasPrefix(result.DeterministicAnswer, "Counted at least 2000 work items. ") || !strings.HasPrefix(result.DirectJudgment, "Counted at least 2000 work items. ") {
+	const floorCount = "Counted at least 2000 work items."
+	leads := func(text string) bool { return text == floorCount || strings.HasPrefix(text, floorCount+" ") }
+	if !leads(result.DeterministicAnswer) || !leads(result.DirectJudgment) {
 		t.Fatalf("floor count prose=%q direct=%q, want both to lead with the count", result.DeterministicAnswer, result.DirectJudgment)
 	}
 	projection := answerprojection.Project(result, answerprojection.Budget{})

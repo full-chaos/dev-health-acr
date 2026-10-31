@@ -622,6 +622,21 @@ the same way, appended to the served copy. Both restatements stay within the
 contract's outcome cap: at the cap the lowest-ranked row gives way first and the
 eviction is disclosed in the limitations, as for a lever row.
 
+**An unverified project narrowing is partial.** When a request narrowed by
+`scope.project_ids` admitted a node or edge only on the `"*"` project list, the
+graph read adds a degrading `read_population_unverified` detail with raw
+`project_narrowing_unverified` (CHAOS-12231). Its served status is floored
+from `complete` to `partial` (CHAOS-12242, `applyUnverifiedProjectNarrowingStatusFloor`
+in `ApplyServedStatusFloors`, so fresh, reused and read-by-id answers alike),
+through the same swap as the other floors. Completeness is recomputed from the
+outcome rows, which do not state the narrowing, so it can stay `complete`
+below the partial status (§9, "A status floor can put status below
+completeness"). It
+matches the code and the raw together, because `read_population_unverified`
+also names read-population outcome rows; it never promotes and leaves
+`degraded`, `no_match`, a clarification and a refusal as they are. A stored
+document is not rewritten.
+
 **A count of a repository's owning teams.** For a question about now, a read
 that found no owner, was not cut, and found ownership projected for the org
 (the active census holds a team, or the repository's own ownership edges name
@@ -1181,6 +1196,40 @@ head that leads with the quick answer still states its served status. A late
 status floor recomposes the lead prose keeping the count sentences that lead it
 and the narrated-cohort form; a reused answer stored with its count last is
 served with the count moved to the head, once.
+
+**The status sentence states no status word (CHAOS-12286).** A person is never
+shown ACR's own status or completeness word (chris 2026-10-31); web shows the
+lead prose verbatim above its status pill. So the status sentence says what was
+limited, and a complete answer has none:
+
+| Served status | Status sentence |
+|---|---|
+| complete | none |
+| partial | "Some canonical or graph coverage was unavailable." |
+| degraded | "Coverage was limited." |
+
+A complete answer with no principal driver and no count sentence has an empty
+head; it takes current_state's first sentence, as composed (a provider's fact
+value in it is evidence and is kept). The same function settles the head of a
+fresh answer before it is validated and saved, and of every served copy (fresh,
+reused, read by id), whether or not its status changed: a stored answer's
+legacy sentence ("This investigation is complete." and its partial and
+degraded forms) is replaced by the served status's sentence, or removed for
+complete. A head composed for complete that is served at a lower status (a
+budget lever, the completeness authority, a status floor) is recomposed from
+complete, so the served sentence stands after the count, where the composer
+states it. A complete head with no principal driver has no composed part to
+match, so it is a composition only when it is empty, current_state's fallback
+sentence, or the server's own count and period sentences. Any other head --
+prose the server did not write -- is composed afresh by a status floor (whose
+limitation says the narrative was withheld), and left alone by a served copy,
+as is the client synthesis text. A stored head with nothing to state in its place (no other content
+and an empty current_state) is served as stored, never as an invalid document;
+the completeness authority line counts it (`lead_prose_served_as_stored`). No
+producing path composes that case. current_state's clause for drivers whose
+source read was cut or is out of date reads "Limited read: …" (it was "Not
+complete: …"); a stored clause is restated on the served copy. The stored
+document is never rewritten.
 
 **Live data gap disclosed, not hidden (CH readback, 2026-08-27, org
 `70d529e0-3c06-4597-8480-794fd02328b6`):** investment (6 rows), workload (12
@@ -2048,6 +2097,21 @@ flowchart TD
    document they describe. Under an outcome set it is not — every row could
    read `satisfied` while the served document had lost members and whole
    groups.
+
+   **A status floor can put `status` below `completeness.state`**
+   (CHAOS-12242). Completeness counts outcome rows only (vol 3 D25). A
+   served-status floor that reads a coverage detail or a limitation which no
+   outcome row states lowers the status alone. Two floors do this today:
+   `applyUnverifiedProjectNarrowingStatusFloor` (the degrading
+   `read_population_unverified` detail with raw `project_narrowing_unverified`)
+   and `applyStatusPoolCutStatusFloor` (the member-status pool-cut limitation).
+   Such an answer reads `status: partial` beside `completeness.state:
+   complete`: every requirement was met over the served population, and the
+   status plus the detail or limitation carry the disclosure. That is not the
+   authorization cut's case (CHAOS-12147/12153), where the cut removed members
+   and completeness itself was wrong, so outcome rows restate it.
+   `terminal_status` still equals `status`, and the completeness authority
+   never lifts a partial status back to complete.
 
 4. **`not_derived` is a state, not a missing field.** No frame, or no
    deriver, and the answer says its outcomes were never derived rather than
@@ -3752,8 +3816,8 @@ is ops `internal/apiservice/acr/access.go` (CHAOS-12084, CHAOS-12128).
 
 The retention job removes the Ask Dev backing set (plan §2.6, D-22), behind
 `ACR_ASK_DEV_RETENTION_ENABLED` (default off): a bounded loop in every
-`acr-api` replica on a pool of its own as the retention role
-(`ACR_POSTGRES_RETENTION_DSN`, `internal/dbacl.RetentionGrants`), one
+`acr-api` replica on acr-api's own pool as the runtime role (CHAOS-12244;
+`internal/dbacl.RuntimeGrants` holds `RetentionPrivileges`), one
 transaction per unit under the organization's admission lock, results first. A unit is an expired thread
 (whole), a deleted thread (content now, the content-free closure record at
 expiry), or a submission with no thread (24 h after its admission). Kept: the
@@ -3763,8 +3827,8 @@ save (T2). Design: `docs/design/ask-dev-conversation-contract.md` §12.
 
 ```mermaid
 flowchart TD
-  S{"ACR_ASK_DEV_RETENTION_ENABLED?"} -->|off| O["no pool, no probe, nothing removed; one 'disabled' line"]
-  S -->|on| P["retention role pool; grant probe (every statement kind, on no row)"]
+  S{"ACR_ASK_DEV_RETENTION_ENABLED?"} -->|off| O["no probe, nothing removed; one 'disabled' line"]
+  S -->|on| P["runtime role pool; grant probe (every statement kind, on no row)"]
   P --> T["acr-api tick (5 min; first pass at startup)"]
   T --> D{"due units, oldest first, at most 500"}
   D -->|"thread: expires_at <= now"| X["expired thread"]

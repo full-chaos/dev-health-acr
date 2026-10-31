@@ -213,14 +213,9 @@ type Config struct {
 	// threads and of submissions with no thread, and a submission with no
 	// thread reads as closed 24 hours after its admission. Off, no job runs,
 	// no row is removed, the startup grant probe is skipped, and every read
-	// behaves as before; startup logs that retention is off.
+	// behaves as before; startup logs that retention is off. The job runs in
+	// acr-api as the runtime role (CHAOS-12244): it needs no DSN of its own.
 	AskDevRetentionEnabled bool
-	// AskDevRetentionPostgresDSN (ACR_POSTGRES_RETENTION_DSN or its _FILE) is
-	// the retention job's own role (internal/dbacl RetentionGrants, given by
-	// grant-runtime-acl), never the runtime role: the job's deletes do not
-	// widen the runtime's privileges. Required when AskDevRetentionEnabled is
-	// on; read only then.
-	AskDevRetentionPostgresDSN string
 	// ContextFabricRunLeaseEnabled (CHAOS-11949,
 	// ACR_CONTEXT_FABRIC_RUN_LEASE_ENABLED, default OFF) runs a streamed
 	// investigation that names X-ACR-Submission-ID under an ACR-owned lease:

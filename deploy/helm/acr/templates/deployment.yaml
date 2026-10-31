@@ -133,16 +133,6 @@ spec:
                 secretKeyRef:
                   name: {{ .Values.credentials.runtime.existingSecret | quote }}
                   key: {{ .Values.credentials.runtime.evidenceIdKeysKey | default "ACR_EVIDENCE_ID_KEYS" | quote }}
-            {{- if .Values.config.askDevRetentionEnabled }}
-            # CHAOS-11952: the retention job's own role; read only with
-            # config.askDevRetentionEnabled on (acr.validateCredentials
-            # requires it then).
-            - name: ACR_POSTGRES_RETENTION_DSN
-              valueFrom:
-                secretKeyRef:
-                  name: {{ .Values.credentials.retention.existingSecret | quote }}
-                  key: {{ .Values.credentials.retention.postgresDsnKey | default "ACR_POSTGRES_RETENTION_DSN" | quote }}
-            {{- end }}
             {{- if eq .Values.config.postgresConnectionKind "pgbouncer" }}
             - name: ACR_POSTGRES_POOLER_ADMIN_DSN
               valueFrom:

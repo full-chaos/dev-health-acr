@@ -65,10 +65,18 @@ func TestRestateServedStatusHeadEveryPair(t *testing.T) {
 				result.Status = served
 				drivers := result.Drivers
 				got := restateServedStatusHead(result)
-				if want := composeDirectJudgmentFrom(served, drivers, result.Cohort, result.SubjectResolution); got.DirectJudgment != want {
+				// A complete head with nothing else in it is current_state's
+				// first sentence (CHAOS-12286).
+				orFallback := func(head string) string {
+					if head == "" {
+						return leadProseFallback(result.CurrentState)
+					}
+					return head
+				}
+				if want := orFallback(composeDirectJudgmentFrom(served, drivers, result.Cohort, result.SubjectResolution)); got.DirectJudgment != want {
 					t.Fatalf("DirectJudgment = %q, want %q", got.DirectJudgment, want)
 				}
-				if want := composeDeterministicAnswerFrom(served, drivers, result.ClaimedFacts, result.Cohort, result.SubjectResolution); got.DeterministicAnswer != want {
+				if want := orFallback(composeDeterministicAnswerFrom(served, drivers, result.ClaimedFacts, result.Cohort, result.SubjectResolution)); got.DeterministicAnswer != want {
 					t.Fatalf("DeterministicAnswer = %q, want %q", got.DeterministicAnswer, want)
 				}
 			})
@@ -90,7 +98,7 @@ func TestRestateServedStatusHeadLeavesOtherTerminalsAlone(t *testing.T) {
 
 func TestRestateServedStatusHeadFindsTheFirstStatusSentenceAtASentenceBoundary(t *testing.T) {
 	t.Parallel()
-	complete := statusSentence(InvestigationComplete, SubjectResolution{})
+	complete := legacyStatusSentence(InvestigationComplete)
 	partial := statusSentence(InvestigationPartial, SubjectResolution{})
 	degraded := statusSentence(InvestigationDegraded, SubjectResolution{})
 	for _, row := range []struct {
@@ -166,7 +174,7 @@ func TestRestateServedStatusHeadKeepsTheCountSentenceAtTheLengthBound(t *testing
 		build func(status InvestigationStatus, filler string) string
 	}{
 		{"deterministic answer stored with the count last", deterministicAnswerMaxLength, func(status InvestigationStatus, filler string) string {
-			return storedHeadEndingWithCount(statusSentence(status, SubjectResolution{})+" Principal driver(s): "+filler+".", count, deterministicAnswerMaxLength)
+			return storedHeadEndingWithCount(legacyStatusSentence(status)+" Principal driver(s): "+filler+".", count, deterministicAnswerMaxLength)
 		}},
 	} {
 		for fill := row.maxes - 140; fill <= row.maxes; fill += 7 {
@@ -206,7 +214,7 @@ func TestRestateServedStatusHeadKeepsALeadingCountSentenceAtTheLengthBound(t *te
 	partial := statusSentence(InvestigationPartial, SubjectResolution{})
 	for _, maxes := range []int{directJudgmentMaxLength, deterministicAnswerMaxLength} {
 		for fill := maxes - 140; fill <= maxes; fill += 7 {
-			body := lead + " " + statusSentence(InvestigationComplete, SubjectResolution{}) + " Principal driver(s): " + strings.Repeat("a", fill-160) + "; " + strings.Repeat("b", 60) + "."
+			body := lead + " " + legacyStatusSentence(InvestigationComplete) + " Principal driver(s): " + strings.Repeat("a", fill-160) + "; " + strings.Repeat("b", 60) + "."
 			stale := leadWithCountSentence(body, count, maxes)
 			got := restateHeadSentence(stale, partial, "", maxes)
 			if len([]rune(got)) > maxes {
@@ -224,7 +232,7 @@ func TestRestateServedStatusHeadKeepsALeadingCountSentenceAtTheLengthBound(t *te
 // that leads the head, even when the driver's title reads like a status.
 func TestRestateServedStatusHeadStepsOverAQuickAnswerThatReadsLikeAStatus(t *testing.T) {
 	t.Parallel()
-	complete := statusSentence(InvestigationComplete, SubjectResolution{})
+	complete := legacyStatusSentence(InvestigationComplete)
 	partial := statusSentence(InvestigationPartial, SubjectResolution{})
 	result := InvestigationResult{Status: InvestigationComplete, Drivers: []DriverJudgment{{DriverID: "driver_mimic", Standing: DriverPrincipal, Title: complete}}}
 	result.DirectJudgment = composeDirectJudgmentFrom(result.Status, result.Drivers, nil, result.SubjectResolution)

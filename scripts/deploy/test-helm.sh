@@ -1297,50 +1297,23 @@ for bad_consent in "" "https://www.example.test" "https://www.example.test/" "ht
   oauth_must_fail "consent url '${bad_consent}'" "config.oauth.consentUrl" "${oauth_args[@]}" --set-string "config.oauth.consentUrl=${bad_consent}"
 done
 
-# CHAOS-11952: Ask Dev retention is one switch, default off. Off renders the
-# switch false and no retention DSN for acr-api; the retention role's DSN
-# reaches the grant-runtime-acl Job whenever credentials.retention names it (so
-# the grants exist before the switch flips), and acr-api only with the switch
-# on, which then requires it.
+# CHAOS-11952: Ask Dev retention is one switch, default off. CHAOS-12244: the
+# job runs as acr-api's runtime role, so the chart renders the switch and
+# nothing else: no retention credential, DSN or grant-Job input exists, and
+# credentials.retention is refused by the schema.
 retention_off="$(render)"
 grep -qF 'ACR_ASK_DEV_RETENTION_ENABLED: "false"' <<<"$(browser_doc "$retention_off" ConfigMap -config)" || fail_gate "retention: the default render must set ACR_ASK_DEV_RETENTION_ENABLED false"
-if grep -qF 'ACR_POSTGRES_RETENTION_DSN' <<<"$retention_off"; then
-  fail_gate "retention: the default render must carry no retention DSN"
-fi
-pass "retention: the default render is off, with no retention DSN"
-retention_secret_args=(--set-string credentials.retention.existingSecret=acr-retention-credentials)
-retention_provisioned="$(render "${retention_secret_args[@]}")"
-grep -A3 -F -- '- name: ACR_POSTGRES_RETENTION_DSN' <<<"$(browser_doc "$retention_provisioned" Job -grant-runtime-acl)" | grep -qF 'name: "acr-retention-credentials"' || fail_gate "retention: the grant-runtime-acl Job lacks the retention role's DSN"
-if grep -qF 'ACR_POSTGRES_RETENTION_DSN' <<<"$(browser_doc "$retention_provisioned" Deployment "")"; then
-  fail_gate "retention: acr-api must not read the retention DSN with the switch off"
-fi
-pass "retention: credentials.retention reaches the grant Job; acr-api reads it only with the switch on"
-retention_on="$(render "${retention_secret_args[@]}" --set config.askDevRetentionEnabled=true)"
+retention_on="$(render --set config.askDevRetentionEnabled=true)"
 grep -qF 'ACR_ASK_DEV_RETENTION_ENABLED: "true"' <<<"$(browser_doc "$retention_on" ConfigMap -config)" || fail_gate "retention: the switch on must render ACR_ASK_DEV_RETENTION_ENABLED true"
-grep -A3 -F -- '- name: ACR_POSTGRES_RETENTION_DSN' <<<"$(browser_doc "$retention_on" Deployment "")" | grep -qF 'name: "acr-retention-credentials"' || fail_gate "retention: acr-api lacks the retention DSN with the switch on"
-pass "retention: the switch on renders it and the retention DSN for acr-api"
-retention_must_fail() {
-  local name="$1" expect="$2"; shift 2
-  local out status
-  set +e; out="$(render "$@" 2>&1)"; status=$?; set -e
-  [[ $status -ne 0 ]] || fail_gate "retention: ${name} rendered but must fail closed"
-  grep -qF "$expect" <<<"$out" || fail_gate "retention: ${name} failed without naming ${expect}"
-  pass "retention: ${name} fails closed naming '${expect}'"
-}
-retention_must_fail "switch on without a retention role" "retention-role-required" --set config.askDevRetentionEnabled=true
-runtime_secret="$(python3 -c 'import sys,re; m=re.search(r"(?m)^  runtime:\n(?:    .*\n)*?    existingSecret: \"?([^\"\s]+)", open(sys.argv[1]).read()); print(m.group(1) if m else "")' "$values")"
-if [[ -n "$runtime_secret" ]]; then
-  retention_must_fail "retention DSN that is the runtime DSN" "shared-runtime-retention-dsn" --set config.askDevRetentionEnabled=true \
-    --set-string "credentials.retention.existingSecret=${runtime_secret}" --set-string credentials.retention.postgresDsnKey=ACR_POSTGRES_DSN
-fi
-migration_secret="$(python3 -c 'import sys,re; m=re.search(r"(?m)^  migration:\n(?:    .*\n)*?    existingSecret: \"?([^\"\s]+)", open(sys.argv[1]).read()); print(m.group(1) if m else "")' "$values")"
-if [[ -n "$migration_secret" ]]; then
-  retention_must_fail "retention DSN that is the migration DSN" "shared-migration-retention-dsn" --set config.askDevRetentionEnabled=true \
-    --set-string "credentials.retention.existingSecret=${migration_secret}" --set-string credentials.retention.postgresDsnKey=ACR_POSTGRES_MIGRATION_DSN
-fi
-retention_must_fail "retention DSN that is the purge DSN" "shared-purge-retention-dsn" --set config.askDevRetentionEnabled=true \
-  --set-string credentials.purge.existingSecret=acr-purge-credentials --set-string credentials.retention.existingSecret=acr-purge-credentials \
-  --set-string credentials.retention.postgresDsnKey=ACR_POSTGRES_PURGE_DSN
+for rendered in "$retention_off" "$retention_on"; do
+  if grep -qF 'RETENTION_DSN' <<<"$rendered"; then
+    fail_gate "retention: a render carries a retention DSN; the job runs as the runtime role"
+  fi
+done
+pass "retention: the switch renders off and on, with no retention DSN either way"
+set +e; retention_cred_out="$(render --set-string credentials.retention.existingSecret=acr-retention-credentials 2>&1)"; retention_cred_status=$?; set -e
+[[ $retention_cred_status -ne 0 ]] || fail_gate "retention: credentials.retention rendered but must be refused"
+pass "retention: credentials.retention is refused"
 
 # CHAOS-12094 (F1): the acr-mcp hop proof, rolled in two steps. Step 1
 # (acrMcp.hop.enabled): acr-mcp mounts ONE projected token of its own
