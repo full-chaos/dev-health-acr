@@ -78,7 +78,7 @@ var RuntimeGrants = []Grant{
 	{Table: "device_authorizations", Privileges: []string{"SELECT", "INSERT", "UPDATE", "DELETE"},
 		Why: "SELECT internal/storage/postgres/device_authorization.go:88, INSERT device_authorization.go:61, UPDATE device_authorization.go:132, DELETE oauth_purge.go:167"},
 	{Table: "oauth_clients", Privileges: []string{"SELECT", "INSERT", "UPDATE", "DELETE"},
-		Why: "SELECT internal/storage/postgres/oauth.go:66, INSERT oauth.go:104, DELETE oauth_purge.go:109; UPDATE because the idle-client purge locks rows with FOR UPDATE OF c SKIP LOCKED (oauth_purge.go:103), which Postgres checks as UPDATE"},
+		Why: "SELECT internal/storage/postgres/oauth.go:66, INSERT oauth.go:104, DELETE oauth_purge.go:109; UPDATE because the idle-client purge locks rows with FOR UPDATE OF c SKIP LOCKED (oauth_purge.go:103), which Postgres checks as UPDATE, and the redeem sets last_granted_at (device_authorization_redeem.go markOAuthClientGranted)"},
 	{Table: "oauth_authorization_requests", Privileges: []string{"SELECT", "INSERT", "UPDATE", "DELETE"},
 		Why: "SELECT internal/storage/postgres/oauth.go:165, INSERT oauth.go:68, UPDATE oauth.go:185, DELETE oauth_purge.go:59"},
 	{Table: "oauth_device_grants", Privileges: []string{"SELECT", "INSERT"},
