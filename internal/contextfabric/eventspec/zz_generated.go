@@ -1576,6 +1576,7 @@ type CompletenessAuthorityFields struct {
 	DecidingReadEvaluationGap           bool
 	StatusCorrectionDisclosed           bool
 	LeadProseServedAsStored             bool
+	LegacySourceStateWordsServed        bool
 	OutcomeRowsTotal                    int
 	OutcomeRowsSatisfied                int
 	OutcomeRowsNarrowed                 int
@@ -1621,7 +1622,7 @@ type CompletenessAuthorityFields struct {
 
 // NewCompletenessAuthorityFields is the generated constructor for CompletenessAuthorityFields -- every
 // field CompletenessAuthority.Fields declares is a required parameter.
-func NewCompletenessAuthorityFields(orgID string, modelStatus string, disposition string, basis string, serverState string, derived bool, disagreed bool, wouldFlip bool, direction string, version string, decidingRequirement string, decidingStage string, decidingOutcome string, decidingCauseOverrun string, decidingCauseCoverage string, decidingCauseNarrowing string, decidingReadEvaluationGap bool, statusCorrectionDisclosed bool, leadProseServedAsStored bool, outcomeRowsTotal int, outcomeRowsSatisfied int, outcomeRowsNarrowed int, outcomeRowsUnavailable int, outcomeRowsNotApplicable int, outcomeRowsNotAttempted int, claimedFactsIdentity int, claimedFactsMembership int, claimedFactsStatus int, claimedFactsActualCompletion int, claimedFactsWork int, claimedFactsBlockers int, claimedFactsRequiredChildren int, claimedFactsPullRequests int, claimedFactsReviews int, claimedFactsContinuousIntegration int, claimedFactsDeployments int, claimedFactsIncidents int, claimedFactsMetrics int, claimedFactsHealth int, claimedFactsWorkload int, claimedFactsInvestment int, claimedFactsReadiness int, claimedFactsOperationalDeficiencies int, claimedFactsSourceHealth int, claimedFactsEvidence int, claimedFactsFlow int, claimedFactsLandscape int, claimedFactsSecurityAlerts int, claimedFactsCommitment int, claimedFactsFileHotspots int, requestID string) CompletenessAuthorityFields {
+func NewCompletenessAuthorityFields(orgID string, modelStatus string, disposition string, basis string, serverState string, derived bool, disagreed bool, wouldFlip bool, direction string, version string, decidingRequirement string, decidingStage string, decidingOutcome string, decidingCauseOverrun string, decidingCauseCoverage string, decidingCauseNarrowing string, decidingReadEvaluationGap bool, statusCorrectionDisclosed bool, leadProseServedAsStored bool, legacySourceStateWordsServed bool, outcomeRowsTotal int, outcomeRowsSatisfied int, outcomeRowsNarrowed int, outcomeRowsUnavailable int, outcomeRowsNotApplicable int, outcomeRowsNotAttempted int, claimedFactsIdentity int, claimedFactsMembership int, claimedFactsStatus int, claimedFactsActualCompletion int, claimedFactsWork int, claimedFactsBlockers int, claimedFactsRequiredChildren int, claimedFactsPullRequests int, claimedFactsReviews int, claimedFactsContinuousIntegration int, claimedFactsDeployments int, claimedFactsIncidents int, claimedFactsMetrics int, claimedFactsHealth int, claimedFactsWorkload int, claimedFactsInvestment int, claimedFactsReadiness int, claimedFactsOperationalDeficiencies int, claimedFactsSourceHealth int, claimedFactsEvidence int, claimedFactsFlow int, claimedFactsLandscape int, claimedFactsSecurityAlerts int, claimedFactsCommitment int, claimedFactsFileHotspots int, requestID string) CompletenessAuthorityFields {
 	return CompletenessAuthorityFields{
 		OrgID:                               orgID,
 		ModelStatus:                         modelStatus,
@@ -1642,6 +1643,7 @@ func NewCompletenessAuthorityFields(orgID string, modelStatus string, dispositio
 		DecidingReadEvaluationGap:           decidingReadEvaluationGap,
 		StatusCorrectionDisclosed:           statusCorrectionDisclosed,
 		LeadProseServedAsStored:             leadProseServedAsStored,
+		LegacySourceStateWordsServed:        legacySourceStateWordsServed,
 		OutcomeRowsTotal:                    outcomeRowsTotal,
 		OutcomeRowsSatisfied:                outcomeRowsSatisfied,
 		OutcomeRowsNarrowed:                 outcomeRowsNarrowed,
@@ -1710,6 +1712,7 @@ func (f CompletenessAuthorityFields) SlogArgs() []any {
 		"deciding_read_evaluation_gap", f.DecidingReadEvaluationGap,
 		"status_correction_disclosed", f.StatusCorrectionDisclosed,
 		"lead_prose_served_as_stored", f.LeadProseServedAsStored,
+		"legacy_source_state_words_served", f.LegacySourceStateWordsServed,
 		"outcome_rows_total", f.OutcomeRowsTotal,
 		"outcome_rows_satisfied", f.OutcomeRowsSatisfied,
 		"outcome_rows_narrowed", f.OutcomeRowsNarrowed,

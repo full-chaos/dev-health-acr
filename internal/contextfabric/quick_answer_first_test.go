@@ -99,7 +99,7 @@ func TestLeadDriverSentenceKeepsTheQualifierInsideOneSentence(t *testing.T) {
 	}{
 		{"Open items: 3 (2026-10-30)", "", "Open items: 3 (2026-10-30)."},
 		{"Fullchaos is the sole qualified team.", "", "Fullchaos is the sole qualified team."},
-		{"Fullchaos has elevated health risk.", SourceTruncated, "Fullchaos has elevated health risk (partial: the source read was truncated)."},
+		{"Fullchaos has elevated health risk.", SourceTruncated, "Fullchaos has elevated health risk (truncated: the source read was cut)."},
 		{"Is it ready?", "", "Is it ready?"},
 		{"Forecast backlog: 1 item", SourceStale, "Forecast backlog: 1 item (stale: the source read is out of date)."},
 	} {

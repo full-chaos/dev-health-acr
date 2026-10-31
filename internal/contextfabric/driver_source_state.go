@@ -86,7 +86,10 @@ func claimSourceState(facts []CanonicalFact, claim ClaimedFact) SourceState {
 func driverSourceStateCause(state SourceState) (label, cause string) {
 	switch state {
 	case SourceTruncated:
-		return "partial", "the source read was truncated"
+		// CHAOS-12286/12289: plain words, not ACR's state word "partial".
+		// The words stored answers carry are restated on the served copy
+		// (legacyTruncatedQualifier, legacyTruncatedNote).
+		return "truncated", "the source read was cut"
 	case SourceStale:
 		return "stale", "the source read is out of date"
 	}
