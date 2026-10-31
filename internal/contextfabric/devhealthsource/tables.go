@@ -345,13 +345,28 @@ WHERE org_id = {org_id:String}` + sincePredicate(cursor, "last_synced", "id") + 
 // because that value IS the row's own natural-key value, not an absence to
 // special-case). The pagination rowKey (D-6) carries the same qualifier.
 func queryWorkItems(ctx context.Context, client contextpacket.ClickHouseQueryClient, orgID string, cursor cursorState, limit int) ([]candidate, bool, error) {
-	const rowKey = "concat(toString(w.repo_id), ':', w.work_item_id)"
-	statement := `SELECT w.work_item_id, toString(w.repo_id), ifNull(r.repo, ''), ifNull(w.title, ''), ifNull(w.status, ''), ifNull(w.url, ''), w.updated_at,
-       w.created_at, ` + nullableTimestamp("coalesce(w.completed_at, w.closed_at)") + `,
-       ifNull(w.type, ''), ifNull(w.native_team_key, ''), ifNull(w.project_name, ''), w.labels, w.last_synced
+	statement := workItemColumns + `, w.last_synced
 FROM work_items AS w FINAL LEFT JOIN repos AS r FINAL ON r.id = w.repo_id AND r.org_id = w.org_id
-WHERE w.org_id = {org_id:String}` + sincePredicate(cursor, "w.last_synced", rowKey) + orderBy("w.last_synced", rowKey)
-	return fetchIngest(ctx, client, statement, rowLimitBindings(orgID, cursor, limit), limit, func(r contextpacket.ClickHouseRowScanner) ([]candidate, error) {
+WHERE w.org_id = {org_id:String}` + sincePredicate(cursor, "w.last_synced", workItemRowKey) + orderBy("w.last_synced", workItemRowKey)
+	return fetchIngest(ctx, client, statement, rowLimitBindings(orgID, cursor, limit), limit, scanWorkItemRow)
+}
+
+// workItemRowKey is the work-item keyset tiebreaker, the row's own
+// (repo_id, work_item_id).
+const workItemRowKey = "concat(toString(w.repo_id), ':', w.work_item_id)"
+
+// workItemColumns is the SELECT list scanWorkItemRow reads, before the
+// trailing cursor column each statement adds.
+var workItemColumns = `SELECT w.work_item_id, toString(w.repo_id), ifNull(r.repo, ''), ifNull(w.title, ''), ifNull(w.status, ''), ifNull(w.url, ''), w.updated_at,
+       w.created_at, ` + nullableTimestamp("coalesce(w.completed_at, w.closed_at)") + `,
+       ifNull(w.type, ''), ifNull(w.native_team_key, ''), ifNull(w.project_name, ''), w.labels`
+
+// scanWorkItemRow builds one work item's entity (and its repository edge)
+// from a row of workItemColumns. It is the one row builder of the work-item
+// entity: queryWorkItems and the membership refresh (CHAOS-12226) both use
+// it, so the two cannot write a work item differently.
+func scanWorkItemRow(r contextpacket.ClickHouseRowScanner) ([]candidate, error) {
+	{
 		var workItemID, repoID, repoSlug, title, status, url string
 		var itemType, teamKey, projectName string
 		var labels []string
@@ -420,7 +435,7 @@ WHERE w.org_id = {org_id:String}` + sincePredicate(cursor, "w.last_synced", rowK
 			candidates = append(candidates, belongsToRepository(subject, repoSlug, repoID, observedAt, evidenceRefID, rowSortKey, validFrom, validTo))
 		}
 		return candidates, nil
-	})
+	}
 }
 
 // queryPullRequests scans git_pull_requests.number into a uint32 (CHAOS-3789):
