@@ -605,3 +605,48 @@ func TestCapabilitiesReportsALiveFlagOffAndStillRefusesALostMember(t *testing.T)
 		reader.reset()
 	}
 }
+
+// A granted read writes one Debug line with its basis: the class, the
+// decision, the effective scope size against the inventory size and the read
+// latency, and no id but the request id.
+func TestAGrantedAccessReadWritesItsBasisAtDebug(t *testing.T) {
+	harness, _ := newMemorySubmissionHarness(t, 1)
+	app := harness.apps[0]
+	reader := &fakePrincipalAccess{}
+	access := grantedAccess()
+	access.Repositories = []string{hostedTestRepository, "other-org/other-repo"}
+	reader.set(access, nil)
+	app.runtime.PrincipalAccess = reader
+	owner, _, _ := strings.Cut(hostedTestRepository, "/")
+	authenticateAsCredential(t, app, storage.CredentialClientClassOAuthUser, []string{owner + "/*"})
+	logs := harness.logs[0]
+	logs.Reset()
+	recorder, code := serveProtected(app, harness.tokenA, protectedRoute{http.MethodGet, ContextFabricThreadsPath, ""}, map[string]string{"X-Request-ID": submissionTestRequestID})
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("thread list: %d %s, want 200", recorder.Code, code)
+	}
+	var granted map[string]any
+	for _, entry := range strings.Split(strings.TrimSpace(logs.String()), "\n") {
+		var decoded map[string]any
+		if json.Unmarshal([]byte(entry), &decoded) == nil && decoded["msg"] == "principal access read granted" {
+			if granted != nil {
+				t.Fatalf("two granted lines for one call:\n%s", logs.String())
+			}
+			granted = decoded
+		}
+	}
+	if granted == nil || granted["level"] != "DEBUG" || granted["client_class"] != "oauth_user" || granted["decision"] != "granted" ||
+		granted["scope_repositories"] != float64(1) || granted["inventory_repositories"] != float64(2) ||
+		granted["flags_enforced"] != true || granted["request_id"] != submissionTestRequestID {
+		t.Fatalf("granted line = %v, want one Debug line with oauth_user, granted, scope 1 of 2, flags enforced:\n%s", granted, logs.String())
+	}
+	if _, ok := granted["elapsed_ms"]; !ok {
+		t.Fatalf("granted line has no read latency: %v", granted)
+	}
+	encoded, _ := json.Marshal(granted)
+	for _, id := range []string{"credential_id", "user_id", "org_id", "session_id", accessTestUserID, accessTestSessionID} {
+		if strings.Contains(string(encoded), id) {
+			t.Fatalf("the granted line carries %q: %s", id, encoded)
+		}
+	}
+}

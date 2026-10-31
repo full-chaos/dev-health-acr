@@ -155,6 +155,12 @@ func (a *App) requireLiveAccess(enforceFlags bool, next http.Handler) http.Handl
 			return
 		}
 		ctx = context.WithValue(ctx, liveAccessKey{}, liveAccess{access: access})
+		// A granted read's basis, at Debug (one line per user-class call):
+		// a narrowing regression is visible here, not only as a 2xx.
+		a.logger.DebugContext(ctx, "principal access read granted",
+			"request_id", contextfabric.SanitizeLogAttr(RequestID(ctx)), "client_class", string(principal.ClientClass),
+			"decision", "granted", "scope_repositories", len(effective), "inventory_repositories", len(access.Repositories),
+			"flags_enforced", enforceFlags, "elapsed_ms", elapsed.Milliseconds())
 		next.ServeHTTP(w, r.WithContext(ctx))
 	})
 }

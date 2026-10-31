@@ -556,6 +556,11 @@ There is no cache across calls; inside one request the read is reused. The
 | effective scope empty | 409 `no_repository` |
 | read failed: transport, timeout, a 404 without `acr_organization_unknown` (a route this Dev Health does not serve), any other status, a body that is not exactly `acr_principal_access.v1` for this org, user and session | 503 `upstream_unavailable` (Error line `principal access read failed` with the rejection reason); never 401, never a stale answer |
 
+A granted read writes one Debug line, `principal access read granted`, with
+`client_class`, `decision`, `scope_repositories` (the effective scope's size),
+`inventory_repositories`, `flags_enforced` (false on capabilities) and
+`elapsed_ms`, and no id but the request id.
+
 **Effective scope.** The credential's repository grant within the
 organization's live inventory: every inventory repository the grant allows
 (`*` allows all of them, `owner/*` that owner's), normalized and sorted. The
