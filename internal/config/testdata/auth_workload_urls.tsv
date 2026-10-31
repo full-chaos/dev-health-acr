@@ -105,3 +105,5 @@ exchange	false	https://[fe80::1%25eth0]	refuse	IPv6 zone
 exchange	false	https://[::1]:99999	refuse	IPv6 port out of range
 exchange	false	https://[::ffff:1.2.3.4]	refuse	IPv6 with an IPv4 tail
 issuer	false	https://[::1]	refuse	the issuer shape has no IP literal for IPv6
+exchange	false	HTTPS://auth-service.example.test	refuse	upper-case scheme
+issuer	false	HTTPS://auth.example.test	refuse	upper-case scheme

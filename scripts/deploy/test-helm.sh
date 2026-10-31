@@ -51,7 +51,8 @@ Usage: test-helm.sh --values <path> [--image <ref>] [--chart <path>] [--scenario
               api-service-account-shared, api-service-account-default, api-service-account-default-exchange-off,
               service-account-name-collision.
               The acr-api auth workload client scenarios (CHAOS-11195): auth-workload-client-on (positive),
-              auth-workload-client-off-render, auth-workload-client-bad-inputs.
+              auth-workload-client-off-render, auth-workload-client-bad-inputs,
+              auth-workload-client-url-corpus.
 
 The harness only renders (helm template/lint) and validates output offline.
 EOF
@@ -620,6 +621,33 @@ case "$scenario" in
     negative auth-workload-expiration-is-no-value "authWorkloadClient" "${on[@]}" "${url[@]}" "${iss[@]}" \
       --set authWorkloadClient.expirationSeconds=3600
     printf 'RESULT: scenario auth-workload-client-bad-inputs passed\n'
+    exit 0 ;;
+  auth-workload-client-url-corpus)
+    printf 'scenario: auth-workload-client-url-corpus (the chart holds the URL rules of the Go validator: the same corpus, both fields)\n'
+    corpus="$(dirname "${BASH_SOURCE[0]}")/../../internal/config/testdata/auth_workload_urls.tsv"
+    [[ -f "$corpus" ]] || fail_gate "auth-workload-url-corpus: $corpus is missing"
+    cells=0
+    while IFS=$'\t' read -r field plain value verdict note; do
+      [[ -z "$field" || "$field" == \#* ]] && continue
+      cells=$((cells + 1))
+      jvalue="$(python3 -c 'import json,sys; print(json.dumps(sys.argv[1]))' "$value")"
+      if [[ "$field" == exchange ]]; then
+        args=(--set-json "authWorkloadClient.exchangeURL=$jvalue" --set-string "authWorkloadClient.issuer=https://auth.example.test")
+      else
+        args=(--set-string "authWorkloadClient.exchangeURL=https://auth-service.acr-test.svc" --set-json "authWorkloadClient.issuer=$jvalue")
+      fi
+      set +e
+      out="$(render --set authWorkloadClient.enabled=true --set "authWorkloadClient.allowPlainHTTP=$plain" "${args[@]}" 2>&1)"
+      status=$?
+      set -e
+      if [[ "$verdict" == accept && $status -ne 0 ]]; then printf '  FAIL %s %q (%s) was refused: %s\n' "$field" "$value" "$note" "$(head -c 300 <<<"$out")" >&2; exit 1; fi
+      if [[ "$verdict" == refuse ]]; then
+        [[ $status -ne 0 ]] || { printf '  FAIL %s %q (%s) rendered but must fail closed\n' "$field" "$value" "$note" >&2; exit 1; }
+        grep -qF "authWorkloadClient." <<<"$out" || { printf '  FAIL %s %q (%s) failed without naming authWorkloadClient.*: %s\n' "$field" "$value" "$note" "$(head -c 300 <<<"$out")" >&2; exit 1; }
+      fi
+    done <"$corpus"
+    pass "auth-workload-client-url-corpus: $cells cells agree with the Go validator"
+    printf 'RESULT: scenario auth-workload-client-url-corpus passed\n'
     exit 0 ;;
   happy) : ;;
   *) printf 'unknown scenario: %s\n' "$scenario" >&2; usage; exit 2 ;;
