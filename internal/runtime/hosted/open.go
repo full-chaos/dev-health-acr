@@ -221,11 +221,18 @@ func open(ctx context.Context, request buildRequest) (*Runtime, error) {
 	// CHAOS-11948: the thread store is the same store too: admission writes
 	// a thread turn in the submission's own transaction.
 	var investigationThreads contextfabric.ThreadStore
+	// CHAOS-11949: the run lease and its event log are the same store too:
+	// the lease is a column of the record and the log references it. Every
+	// replica takes over runs whose holder stopped renewing.
+	var investigationRuns contextfabric.RunStore
+	runHolderID := api.NewRunHolderID()
 	if investigationResultStore != nil {
 		investigationResults = investigationResultStore
 		investigationSubmissions = investigationResultStore
 		investigationThreads = investigationResultStore
+		investigationRuns = investigationResultStore
 		runtime.submissionSweeper = startSubmissionSweeper(investigationResultStore, request.options.Logger, request.options.Now, submissionSweepInterval)
+		runtime.runTakeover = startRunTakeover(investigationResultStore, runHolderID, request.options.Logger, request.options.Now, runTakeoverInterval)
 	}
 	// The retrieval route decides every read with the engine's own gate, so
 	// a stored answer and a prior-result read take one decision. Nil only
@@ -292,6 +299,8 @@ func open(ctx context.Context, request buildRequest) (*Runtime, error) {
 			StoredResultGate:           storedResultGate,
 			InvestigationSubmissions:   investigationSubmissions,
 			InvestigationThreads:       investigationThreads,
+			InvestigationRuns:          investigationRuns,
+			RunHolderID:                runHolderID,
 			NewResultID:                newInvestigationResultID,
 			SourceRows:                 sourceRows,
 			DirectReadGate:             directReadGate,

@@ -40,6 +40,11 @@ type AppConfig struct {
 	// config.Config.ContextFabricEventStreamEnabled: the create-investigation
 	// route serves `Accept: text/event-stream` only when it is on.
 	ContextFabricEventStreamEnabled bool
+	// ContextFabricRunLeaseEnabled mirrors
+	// config.Config.ContextFabricRunLeaseEnabled (CHAOS-11949): a streamed
+	// run admitted under a client-named submission runs under an ACR-owned
+	// lease, and the attach and cancel routes serve. It needs the stream.
+	ContextFabricRunLeaseEnabled bool
 	// AskDevLimits are the shared admission limits of a request that names
 	// X-ACR-Submission-ID (CHAOS-11914). A zero field is the plan's default,
 	// never unlimited.
@@ -103,6 +108,12 @@ type App struct {
 	// eventStream holds the investigation event stream's timing (CHAOS-11911).
 	// NewApp sets the contract values; tests shorten them.
 	eventStream investigationEventStreamSettings
+	// runLease holds the run lease's timing and this replica's holder id
+	// (CHAOS-11949). NewApp sets the contract values; tests shorten them.
+	runLease runLeaseSettings
+	// runs are the leased runs this replica holds, for a cancel that lands
+	// on the holder's own replica.
+	runs *runRegistry
 }
 
 func NewApp(cfg AppConfig, deps Dependencies, logger *slog.Logger) (*App, error) {
@@ -238,6 +249,11 @@ func NewApp(cfg AppConfig, deps Dependencies, logger *slog.Logger) (*App, error)
 		oauthConsentURL:      oauthConsentURL(deps),
 		readinessTransitions: NewReadinessTransitionLogger(),
 		eventStream:          defaultInvestigationEventStreamSettings(cfg.MaxSerializedBytes),
+		runLease:             defaultRunLeaseSettings(deps.Runtime),
+		runs:                 newRunRegistry(),
+	}
+	if cfg.ContextFabricRunLeaseEnabled && !cfg.ContextFabricEventStreamEnabled {
+		return nil, errors.New("the context fabric run lease needs the investigation event stream")
 	}
 	if app.clientIP == nil {
 		app.clientIP = auth.RemoteAddressClientIP

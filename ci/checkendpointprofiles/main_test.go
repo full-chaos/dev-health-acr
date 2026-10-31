@@ -212,8 +212,10 @@ func TestRealInventoryRowCountMatchesTheWave0Baseline(t *testing.T) {
 	// and (27 = 18 / 9) the protected submission status route CHAOS-11913
 	// adds under /api/v1/context-fabric/investigations/submissions/, and
 	// (30 = 21 / 9) the three protected Ask Dev thread routes CHAOS-11948
-	// adds (list, read, delete), and (31 = 21 / 10) the public RFC 7009
-	// POST /revoke route CHAOS-12124 adds for the browser refresh token.
+	// adds (list, read, delete), (31 = 21 / 10) the public RFC 7009
+	// POST /revoke route CHAOS-12124 adds for the browser refresh token,
+	// and (33 = 23 / 10) the protected attach and cancel routes of a
+	// leased run CHAOS-11949 adds.
 	// A different number is a finding to reconcile, not an adjustment.
 	root := repoRoot(t)
 	inventoryPath := filepath.Join(root, "contracts", "auth", "v1", "endpoint-profiles.acr.json")
@@ -222,8 +224,8 @@ func TestRealInventoryRowCountMatchesTheWave0Baseline(t *testing.T) {
 		t.Fatal(err)
 	}
 	rows := asArray(inventory["rows"])
-	if len(rows) != 31 {
-		t.Fatalf("expected 31 rows, got %d", len(rows))
+	if len(rows) != 33 {
+		t.Fatalf("expected 33 rows, got %d", len(rows))
 	}
 	var protected, public int
 	for _, r := range rows {
@@ -235,8 +237,8 @@ func TestRealInventoryRowCountMatchesTheWave0Baseline(t *testing.T) {
 			public++
 		}
 	}
-	if protected != 21 {
-		t.Errorf("expected 21 protected rows, got %d", protected)
+	if protected != 23 {
+		t.Errorf("expected 23 protected rows, got %d", protected)
 	}
 	if public != 10 {
 		t.Errorf("expected 10 public rows, got %d", public)
