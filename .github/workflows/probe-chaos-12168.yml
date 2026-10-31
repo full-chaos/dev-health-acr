@@ -1,6 +1,6 @@
 # INVESTIGATION PROBE (CHAOS-12168), throwaway branch only, never merged.
 # Repeats the two devhealthfacts memory tests on hosted runners, with and without
-# max_untracked_memory = 1 on the measured statements, plain, under CPU load and
+# max_untracked_memory = 1 server-wide (both fixtures' containers, v3), plain, under CPU load and
 # under -race, and uploads the go test -json streams.
 name: probe-chaos-12168
 on:
@@ -45,13 +45,16 @@ jobs:
       - name: CPU load (cpuload only)
         if: matrix.load == 'cpuload'
         run: for i in $(seq "$(nproc)"); do (while :; do :; done) & done; echo "started $(nproc) busy loops"
-      - name: Run the two memory tests four times
+      - name: Run the two memory tests four times, one fresh process (and container) each
         run: |
           set -uo pipefail
           race=""; [ "${{ matrix.load }}" = race ] && race="-race"
-          go test $race -count=4 -timeout 85m -json \
-            -run '^(TestFileHotspotsStatementMemoryMergedAndPinnedMultiPartOnRealClickHouse|TestScopeExpanderStatementsFollowTheRequestedScopeOnRealClickHouse)$' \
-            ./internal/contextfabric/devhealthfacts > probe.json; echo "go test exit=$?"
+          : > probe.json
+          for i in 1 2 3 4; do
+            go test $race -count=1 -timeout 40m -json \
+              -run '^(TestFileHotspotsStatementMemoryMergedAndPinnedMultiPartOnRealClickHouse|TestScopeExpanderStatementsFollowTheRequestedScopeOnRealClickHouse)$' \
+              ./internal/contextfabric/devhealthfacts >> probe.json; echo "go test round $i exit=$?"
+          done
           grep -E '"Action":"(pass|fail)","Package":"[^"]*","Test":"Test(FileHotspots|ScopeExpander)[^"/]*"' probe.json | sed -E 's/.*"Action":"([a-z]+)".*"Test":"([^"]+)".*/\1 \2/' | sort | uniq -c
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         if: always()
