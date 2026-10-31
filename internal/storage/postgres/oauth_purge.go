@@ -61,7 +61,9 @@ USING expired
 WHERE r.handle_hash = expired.handle_hash`
 
 // idleOAuthClientPredicate selects a dynamic (RFC 7591) client registered
-// before $1 that is idle: no request row left (rows are kept while inside the
+// before $1 that never completed a grant (CHAOS-12320: last_granted_at, set
+// by the redeem; a granted client is kept for good, as its MCP client reuses
+// the stored client_id at the next sign-in) and is idle: no request row left (rows are kept while inside the
 // purge grace or while backing a live credential), no device grant created
 // since $1, and no live credential (at $3) reachable through any device grant
 // of theirs. The client_id pattern is the same shape migration 0040 forces on
@@ -70,6 +72,7 @@ WHERE r.handle_hash = expired.handle_hash`
 // deleted here.
 const idleOAuthClientPredicate = `
       c.created_at < $1
+      AND c.last_granted_at IS NULL
       AND c.client_id ~ '^acrc_[0-9a-f]{32}$'
       AND NOT EXISTS (
           SELECT 1 FROM acr.oauth_authorization_requests r
