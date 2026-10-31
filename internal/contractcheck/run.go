@@ -135,6 +135,11 @@ var exampleSchemaPairs = map[string]string{
 	"error_context_fabric_submission_in_progress.v1.json": "error.v1.schema.json",
 	"error_context_fabric_submission_unsaved.v1.json":     "error.v1.schema.json",
 	"error_context_fabric_submission_abandoned.v1.json":   "error.v1.schema.json",
+	// CHAOS-12092: the per-call access read's refusals, written by the
+	// route itself (internal/api/principal_access_test.go).
+	"error_context_fabric_access_denied.v1.json":    "error.v1.schema.json",
+	"error_context_fabric_no_repository.v1.json":    "error.v1.schema.json",
+	"error_context_fabric_budget_exhausted.v1.json": "error.v1.schema.json",
 	// CHAOS-11913: the submission status read, written by the route itself
 	// (internal/api/context_fabric_submission_status_test.go).
 	"context_fabric_submission_status.v1.json": "context_fabric_submission_status.v1.schema.json",

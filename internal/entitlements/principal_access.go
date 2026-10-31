@@ -130,12 +130,12 @@ func bodyCode(body io.Reader, maxBytes int64) string {
 }
 
 type principalAccessDocument struct {
-	SchemaVersion   *string `json:"schema_version"`
-	OrgID           *string `json:"org_id"`
-	UserID          *string `json:"user_id"`
-	Member          *bool   `json:"member"`
-	Impersonating   *bool   `json:"impersonating"`
-	Session         *struct {
+	SchemaVersion *string `json:"schema_version"`
+	OrgID         *string `json:"org_id"`
+	UserID        *string `json:"user_id"`
+	Member        *bool   `json:"member"`
+	Impersonating *bool   `json:"impersonating"`
+	Session       *struct {
 		Live          *bool `json:"live"`
 		Impersonating *bool `json:"impersonating"`
 	} `json:"session"`

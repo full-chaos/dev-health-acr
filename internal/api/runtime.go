@@ -260,6 +260,10 @@ func (a *App) protectedRuntimeHandler(class limits.RequestClass, scope string, e
 	if entitlement {
 		handler = a.requireEntitlement(agentContextRuntimeEntitlement, handler)
 	}
+	// CHAOS-12092: a user-class call is re-checked live, after the client
+	// version and the rate limit (a refused or throttled call costs Dev
+	// Health nothing) and before every handler and entitlement decision.
+	handler = a.requireLiveAccess(handler)
 	handler = a.requireClientVersion(handler)
 	handler = LimitMiddleware(a.limits, class, handler)
 	handler = a.authenticator.RequireScope(scope, handler)

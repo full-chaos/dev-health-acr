@@ -30,7 +30,7 @@ import (
 // the browser refuses the response; the refusal is logged.
 
 const (
-	corsAllowMethods  = "GET, POST, OPTIONS"
+	corsAllowMethods  = "GET, POST, DELETE, OPTIONS"
 	corsAllowHeaders  = "Authorization, Content-Type, X-ACR-Client-Version, X-ACR-Submission-ID, X-ACR-Thread-ID, X-ACR-Wait-Budget-Seconds, X-ACR-Resource, X-Request-ID"
 	corsExposeHeaders = "Retry-After, X-Request-ID"
 	corsMaxAgeSeconds = "600"
@@ -91,6 +91,10 @@ var corsBrowserRoutes = [...]struct{ pattern, class string }{
 	{ContextFabricInvestigationResultPath, "investigations"},
 	{ContextFabricSubmissionStatusPath, "investigations"},
 	{AgentContextEvidencePath, "evidence"},
+	// CHAOS-12092: the Ask Dev conversation routes (CHAOS-11948), each
+	// re-checked live per call like every other browser route.
+	{ContextFabricThreadsPath, "investigations"},
+	{ContextFabricThreadPath, "investigations"},
 }
 
 // corsRouteClass is the closed name of a browser route ("" for any other

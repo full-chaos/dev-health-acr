@@ -489,6 +489,55 @@ revocation.
   revocation writes a `credential_created` / `credential_revoked` audit row with
   `family_id` (and `family_revoke_reason`).
 
+## Per-call access re-check (CHAOS-12092)
+
+A user-class credential (class `browser`, `oauth_user` or `native_device`) is
+re-checked live on **every** protected call: every route behind the runtime
+wrapper (capabilities, context packets, evidence, episodes, the investigation
+create, replay and status, the conversation routes and the data routes),
+including each call acr-mcp forwards with the user's bearer. acr-api reads the
+Dev Health principal access read once per request, after authentication, the
+scope check, the rate limit and the client-version check, and before the
+handler:
+
+`GET /api/v1/internal/acr/orgs/{org_id}/principals/{approving_user_id}/access[?sid=<session id>]`
+
+with the service credential (`svc_acr_`, scope `principal_access:read`; a
+credential without that scope gets 403 from Dev Health, which acr-api answers
+503). `sid` is sent for the browser class only: its credential's bound session
+(`session_id`). OAuth user and native device credentials are row-only (no
+session), and still get the membership, impersonation, flag and scope checks.
+There is no cache across calls; inside one request the read is reused. The
+30-second entitlement cache is not used for a user-class call:
+`agent_context_runtime` comes from this read.
+
+| Live answer | acr-api answer |
+| --- | --- |
+| not a member; impersonating (`impersonating` or `session.impersonating`); browser session not live; Dev Health 404 (organization or user unknown) or 400 `acr_access_invalid_sid`; a user-class row without an approving user, or a browser row without a session | 403 `access_denied`. One code for every reason, so the answer says nothing about which exists; the reason is on the Info line `principal access read refused` and on the `access_denied` audit row |
+| `agent_context_runtime` off, or `ask_dev` off for the browser class | 403 `feature_not_enabled` (audit `entitlement_denied`, `source=principal_access`) |
+| effective scope empty | 409 `no_repository` |
+| read failed: transport, timeout, any other status, a body that is not exactly `acr_principal_access.v1` for this org, user and session | 503 `upstream_unavailable` (Error line `principal access read failed` with the rejection reason); never 401, never a stale answer |
+
+**Effective scope.** The credential's repository grant within the
+organization's live inventory: every inventory repository the grant allows
+(`*` allows all of them, `owner/*` that owner's), normalized and sorted. The
+handler runs with the principal narrowed to that list. An empty list is a typed
+deny-all, refused 409 `no_repository` before any handler: the principal's
+scopes are never set to `[]`, which reads as unrestricted downstream.
+
+**Budget.** On the investigation create the read runs inside the request's
+budget (min of `X-ACR-Wait-Budget-Seconds` and `ACR_REQUEST_TIMEOUT`, counted
+from arrival). When what is left after the read is below the 10-second minimum
+the create is 503 `budget_exhausted` (retryable), refused before the repeat
+answer, the gates and admission: no submission row and no model attempt. A
+user-class create that sends exactly the minimum budget is therefore refused.
+
+**Composition.** Hosted remote entitlement mode wires the Dev Health
+entitlement client as the reader. Local entitlement mode (development and test
+only) has no reader: the re-check is off and acr-api logs a Warn at startup.
+Operator, workload and legacy credentials and web assertions carry no user and
+are not re-checked.
+
 ## Rate limiting
 
 There are two per-address gates against credential guessing, one at each hop, and both count **failed** authentications only. A request that presents **no credential** (no `Authorization` header, and at acr-api no web assertion) is not a failed authentication: it is the first step of an MCP client's authorization discovery. It gets its `401` (at acr-mcp with the `WWW-Authenticate` discovery challenge), the same answer under or over the budget, and it is never counted and never gated; no credential-store or acr-api work is done for it.

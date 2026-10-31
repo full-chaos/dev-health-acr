@@ -7,15 +7,19 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"slices"
+	"strings"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/full-chaos/dev-health-acr/internal/auth"
+	"github.com/full-chaos/dev-health-acr/internal/contractcheck"
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 	"github.com/full-chaos/dev-health-acr/internal/entitlements"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
+	"github.com/full-chaos/dev-health-acr/internal/testsupport/repopath"
 )
 
 // CHAOS-12092 (Ask Dev direct-browser design §3.1-3.2, North Star check 18):
@@ -45,6 +49,10 @@ func (f *fakePrincipalAccess) PrincipalAccess(ctx context.Context, orgID, userID
 	f.calls = append(f.calls, principalAccessCall{org: orgID, user: userID, session: sessionID})
 	access, err, delay := f.access, f.err, f.delay
 	f.mu.Unlock()
+	if sessionID == "" {
+		// As the real read: no session object unless one was asked for.
+		access.Session = nil
+	}
 	if delay > 0 {
 		select {
 		case <-time.After(delay):
@@ -196,8 +204,11 @@ func TestEveryProtectedRouteRereadsAccessForEveryUserClass(t *testing.T) {
 	app := harness.apps[0]
 	reader := &fakePrincipalAccess{}
 	app.runtime.PrincipalAccess = reader
+	owner, _, _ := strings.Cut(hostedTestRepository, "/")
 	for _, class := range userClasses() {
-		authenticateAsCredential(t, app, class, []string{"*"})
+		// An owner grant, so a live inventory of another owner's
+		// repositories is outside it.
+		authenticateAsCredential(t, app, class, []string{owner + "/*"})
 		wantSession := ""
 		if class == storage.CredentialClientClassBrowser {
 			wantSession = accessTestSessionID
@@ -216,11 +227,12 @@ func TestEveryProtectedRouteRereadsAccessForEveryUserClass(t *testing.T) {
 			}
 			for _, denial := range accessDenials() {
 				reader.set(denial.access(), denial.err)
+				attempts := harness.investigator.executions.Load()
 				recorder, code := serveProtected(app, harness.tokenA, route, nil)
 				calls := reader.reset()
 				refused := recorder.Code == denial.status && code == denial.code
 				if denial.browserOnly && class != storage.CredentialClientClassBrowser {
-					if slices.Contains(accessCodes, code) || code == "feature_not_enabled" && denial.code == "feature_not_enabled" {
+					if slices.Contains(accessCodes, code) || recorder.Code == http.StatusForbidden && code == "feature_not_enabled" {
 						t.Errorf("%s %s %s, %s: refused %d %s, want the call to pass (browser-only reason)", class, route.method, route.path, denial.name, recorder.Code, code)
 					}
 					continue
@@ -228,11 +240,11 @@ func TestEveryProtectedRouteRereadsAccessForEveryUserClass(t *testing.T) {
 				if !refused || len(calls) != 1 {
 					t.Errorf("%s %s %s, %s: %d %s after %d reads, want %d %s after one read: %s", class, route.method, route.path, denial.name, recorder.Code, code, len(calls), denial.status, denial.code, recorder.Body.String())
 				}
+				if got := harness.investigator.executions.Load(); got != attempts {
+					t.Errorf("%s %s %s, %s: a refused call made %d model attempts", class, route.method, route.path, denial.name, got-attempts)
+				}
 			}
 		}
-	}
-	if got := harness.investigator.executions.Load(); got != 0 {
-		t.Fatalf("model attempts = %d, want 0 (no create was admitted past a refusal, and no granted create had a valid budget path)", got)
 	}
 }
 
@@ -423,5 +435,106 @@ func TestASlowAccessReadExhaustsTheCreateBudgetBeforeAdmission(t *testing.T) {
 	status, code := serveProtected(app, harness.tokenA, protectedRoute{http.MethodGet, "/api/v1/context-fabric/investigations/submissions/submission-access-01", ""}, nil)
 	if status.Code != http.StatusNotFound || code != "not_found" {
 		t.Fatalf("status of the refused submission: %d %s, want 404 not_found (no row): %s", status.Code, code, status.Body.String())
+	}
+}
+
+// The three refusals' bodies, written through the route by its own writers,
+// are the published examples and validate against error.v1.
+// ACR_WRITE_ACCESS_GOLDENS=1 rewrites them.
+func TestTheAccessRefusalsAreThePublishedExamples(t *testing.T) {
+	harness, _ := newMemorySubmissionHarness(t, 1)
+	app := harness.apps[0]
+	reader := &fakePrincipalAccess{}
+	app.runtime.PrincipalAccess = reader
+	authenticateAsCredential(t, app, storage.CredentialClientClassBrowser, []string{"*"})
+	investigation, _ := json.Marshal(investigationRequestBody())
+	notMember := grantedAccess()
+	notMember.Member = false
+	noRepository := grantedAccess()
+	noRepository.Repositories = nil
+	for _, example := range []struct {
+		file   string
+		access entitlements.PrincipalAccess
+		delay  time.Duration
+		route  protectedRoute
+		budget string
+		status int
+	}{
+		{"error_context_fabric_access_denied.v1.json", notMember, 0, protectedRoute{http.MethodGet, ContextFabricThreadsPath, ""}, "", http.StatusForbidden},
+		{"error_context_fabric_no_repository.v1.json", noRepository, 0, protectedRoute{http.MethodGet, ContextFabricThreadsPath, ""}, "", http.StatusConflict},
+	} {
+		reader.set(example.access, nil)
+		recorder, _ := serveProtected(app, harness.tokenA, example.route, map[string]string{"X-Request-ID": submissionTestRequestID})
+		checkAccessGolden(t, example.file, recorder, example.status)
+	}
+	// budget_exhausted: a 10 s budget is below the minimum as soon as the
+	// read has taken any time at all.
+	reader.set(grantedAccess(), nil)
+	reader.mu.Lock()
+	reader.delay = 10 * time.Millisecond
+	reader.mu.Unlock()
+	recorder, _ := serveProtected(app, harness.tokenA, protectedRoute{http.MethodPost, ContextFabricInvestigationsPath, string(investigation)},
+		map[string]string{"X-Request-ID": submissionTestRequestID, contractsv1.ContextFabricWaitBudgetHeader: "10"})
+	checkAccessGolden(t, "error_context_fabric_budget_exhausted.v1.json", recorder, http.StatusServiceUnavailable)
+	if got := harness.investigator.executions.Load(); got != 0 {
+		t.Fatalf("model attempts = %d, want 0", got)
+	}
+}
+
+func checkAccessGolden(t *testing.T, file string, recorder *httptest.ResponseRecorder, status int) {
+	t.Helper()
+	if recorder.Code != status {
+		t.Fatalf("%s: status %d, want %d: %s", file, recorder.Code, status, recorder.Body.String())
+	}
+	body := append(bytes.TrimRight(recorder.Body.Bytes(), "\n"), '\n')
+	if err := contractcheck.ValidateSerializedStrict("", "error.v1.schema.json", body); err != nil {
+		t.Fatalf("%s: schema rejects the body: %v", file, err)
+	}
+	path := repopath.Path(t, "contracts", "examples", "v1", file)
+	if os.Getenv("ACR_WRITE_ACCESS_GOLDENS") == "1" {
+		if err := os.WriteFile(path, body, 0o644); err != nil {
+			t.Fatal(err)
+		}
+		return
+	}
+	golden, err := os.ReadFile(path)
+	if err != nil || !bytes.Equal(golden, body) {
+		t.Fatalf("%s differs from the route's body (err %v):\n%s\nwant\n%s", file, err, body, golden)
+	}
+}
+
+// The handler runs with the principal narrowed to the effective scope: a "*"
+// grant reaches only the live inventory's repositories. The route-level
+// entitlement gate and the context-packet route take agent_context_runtime
+// from the live read, not from the cached provider (which says off here).
+func TestTheHandlerSeesTheNarrowedScopeAndTheLiveFlag(t *testing.T) {
+	harness, _ := newMemorySubmissionHarness(t, 1)
+	app := harness.apps[0]
+	reader := &fakePrincipalAccess{}
+	reader.set(grantedAccess(), nil)
+	app.runtime.PrincipalAccess = reader
+	app.runtime.Entitlements = EntitlementFunc(func(_ context.Context, _ string, entitlement string) (bool, error) {
+		return entitlement != agentContextRuntimeEntitlement, nil
+	})
+	authenticateAsCredential(t, app, storage.CredentialClientClassNativeDevice, []string{"*"})
+	serve := func(request *http.Request) (*httptest.ResponseRecorder, string) {
+		recorder := httptest.NewRecorder()
+		app.Handler().ServeHTTP(recorder, request)
+		var envelope struct {
+			Error struct {
+				Code string `json:"code"`
+			} `json:"error"`
+		}
+		_ = json.Unmarshal(recorder.Body.Bytes(), &envelope)
+		return recorder, envelope.Error.Code
+	}
+	if recorder, code := serve(contextPacketRequest(t, app, harness.tokenA, contextRequestFor("other-org/other-repo"))); recorder.Code != http.StatusForbidden || code != "repo_forbidden" {
+		t.Fatalf("context packet outside the live inventory under a * grant: %d %s, want 403 repo_forbidden", recorder.Code, code)
+	}
+	if recorder, code := serve(contextPacketRequest(t, app, harness.tokenA, contextRequestFor(hostedTestRepository))); code == "repo_forbidden" || code == "feature_not_enabled" {
+		t.Fatalf("context packet inside the live inventory: %d %s, want it past the scope and flag gates", recorder.Code, code)
+	}
+	if recorder, code := serveProtected(app, harness.tokenA, protectedRoute{http.MethodGet, ContextFabricThreadsPath, ""}, nil); recorder.Code != http.StatusOK {
+		t.Fatalf("thread list (an entitlement-gated route) with the live flag on and the cached one off: %d %s, want 200", recorder.Code, code)
 	}
 }
