@@ -3163,9 +3163,10 @@ func recomposeLeadProseForStatus(result *InvestigationResult, from Investigation
 	fallback := leadProseFallback(result.CurrentState)
 	result.DirectJudgment = recomposeLeadField(result.DirectJudgment, fallback, from, result.Status, result.Drivers, result.Cohort, result.SubjectResolution, "Principal driver: ", directJudgmentMaxLength)
 	result.DeterministicAnswer = recomposeLeadField(result.DeterministicAnswer, fallback, from, result.Status, result.Drivers, result.Cohort, result.SubjectResolution, "Principal driver(s): ", deterministicAnswerMaxLength)
-	// A recomposed complete head with nothing else in it falls back to
-	// current_state's first sentence, as every served head does.
-	*result = restateServedStatusHead(*result)
+	// A recomposed complete head with nothing else in it is filled from
+	// current_state by restateServedStatusHead, which every floored answer
+	// reaches before it is validated: the assembly's settle (fresh) or the
+	// completeness authority's apply step (every serving point).
 }
 
 // recomposeLeadField finds which composition head is (with the details label,

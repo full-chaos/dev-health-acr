@@ -77,6 +77,7 @@ func TestComposeLeadProseStatesTheQuickAnswerFirstOnlyForAnAnswer(t *testing.T) 
 	}{
 		{"partial with details", InvestigationPartial, "Principal driver: ", "Quick answer. " + partial + " Principal driver: Detail."},
 		{"complete, no details label", InvestigationComplete, "", "Quick answer."},
+		{"complete with details", InvestigationComplete, "Principal driver: ", "Quick answer. Principal driver: Detail."},
 		{"degraded", InvestigationDegraded, "Principal driver(s): ", "Quick answer. " + statusSentence(InvestigationDegraded, SubjectResolution{}) + " Principal driver(s): Detail."},
 		{"no_match keeps the status first", InvestigationNoMatch, "Principal driver: ", statusSentence(InvestigationNoMatch, SubjectResolution{}) + " Principal driver: Quick answer; Detail."},
 		{"clarification keeps the status first", InvestigationClarificationRequired, "Principal driver: ", statusSentence(InvestigationClarificationRequired, SubjectResolution{}) + " Principal driver: Quick answer; Detail."},

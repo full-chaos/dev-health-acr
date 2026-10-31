@@ -139,6 +139,22 @@ func TestACompleteHeadWithNothingElseIsCurrentStatesFirstSentence(t *testing.T) 
 	}
 }
 
+// Removing a status sentence leaves no stray space where it stood.
+func TestARemovedStatusSentenceLeavesNoStraySpace(t *testing.T) {
+	t.Parallel()
+	complete := legacyStatusSentence(InvestigationComplete)
+	for head, want := range map[string]string{
+		complete + " Principal driver: A.":            "Principal driver: A.",
+		"Counted 1 work item. " + complete:            "Counted 1 work item.",
+		"Lead. " + complete + " Principal driver: A.": "Lead. Principal driver: A.",
+		complete: "",
+	} {
+		if got := restateHeadSentence(head, "", "", directJudgmentMaxLength); got != want {
+			t.Errorf("restateHeadSentence(%q) = %q, want %q", head, got, want)
+		}
+	}
+}
+
 // A head no composer of this package wrote (a client-written answer) is not
 // touched.
 func TestAHeadWithoutAStatusSentenceIsLeftAlone(t *testing.T) {
