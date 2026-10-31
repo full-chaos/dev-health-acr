@@ -576,6 +576,58 @@ if grep -q 'documented base-image exception' "${repo_root}/docs/container-images
   exit 1
 fi
 
+# 19. CHAOS-12198: an image build with no version is refused before BuildKit
+# runs. An image built with no VERSION stamped 0.0.0-dev into every binary,
+# and hosted acr-mcp then refused every MCP call (502 upstream_incompatible:
+# older than the API's minimum sidecar version). This drives build.sh against
+# a stub docker that records every call: with CONTAINER_VERSION unset or empty
+# the build must fail naming it and never reach docker; with it set (the
+# positive control) the value must reach --build-arg VERSION.
+version_fixture="$(mktemp -d)"
+trap 'rm -rf "$version_fixture"' EXIT
+cat >"${version_fixture}/docker" <<'EOF'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >>"${CONTAINER_TEST_DOCKER_CALLS:?}"
+EOF
+chmod +x "${version_fixture}/docker"
+for unset_form in unset empty; do
+  calls="${version_fixture}/calls-${unset_form}.log"
+  log="${version_fixture}/build-${unset_form}.log"
+  version_env=(-u CONTAINER_VERSION)
+  [[ "$unset_form" == unset ]] || version_env=(CONTAINER_VERSION=)
+  set +e
+  env "${version_env[@]}" PATH="${version_fixture}:$PATH" CONTAINER_TEST_DOCKER_CALLS="$calls" \
+    CONTAINER_ALLOW_DIRTY=1 CONTAINER_IMAGE=acr-api:version-probe \
+    "${repo_root}/scripts/container/build.sh" acr-api >"$log" 2>&1
+  version_status=$?
+  set -e
+  if [[ "$version_status" -eq 0 || -s "$calls" ]]; then
+    printf 'build.sh with CONTAINER_VERSION %s exited %s and called docker:\n' "$unset_form" "$version_status" >&2
+    cat "$calls" "$log" >&2 2>/dev/null || true
+    exit 1
+  fi
+  grep -q 'CONTAINER_VERSION' "$log" || {
+    printf 'build.sh refused a build with CONTAINER_VERSION %s without naming CONTAINER_VERSION:\n' "$unset_form" >&2
+    cat "$log" >&2
+    exit 1
+  }
+done
+calls="${version_fixture}/calls-set.log"
+PATH="${version_fixture}:$PATH" CONTAINER_TEST_DOCKER_CALLS="$calls" \
+  CONTAINER_VERSION=0.1.0-contract CONTAINER_ALLOW_DIRTY=1 CONTAINER_IMAGE=acr-api:version-probe \
+  "${repo_root}/scripts/container/build.sh" acr-api >"${version_fixture}/build-set.log" 2>&1 || {
+  printf 'build.sh with CONTAINER_VERSION set failed against the stub docker:\n' >&2
+  cat "${version_fixture}/build-set.log" >&2
+  exit 1
+}
+grep -Eq -- '--build-arg VERSION=0\.1\.0-contract(-dirty)? ' "$calls" || {
+  printf 'build.sh did not pass CONTAINER_VERSION to --build-arg VERSION:\n' >&2
+  cat "$calls" >&2
+  exit 1
+}
+rm -rf "$version_fixture"
+trap - EXIT
+
 timeout_fixture="$(mktemp -d)"
 timeout_parent_pid="${timeout_fixture}/parent.pid"
 timeout_child_pid="${timeout_fixture}/child.pid"
@@ -610,6 +662,7 @@ PATH="${timeout_fixture}:$PATH" \
   CONTAINER_TEST_CHILD_PID="$timeout_child_pid" \
   CONTAINER_TEST_LATE_CHILD_PID="$timeout_late_child_pid" \
   CONTAINER_ALLOW_DIRTY=1 \
+  CONTAINER_VERSION=0.1.0-contract \
   CONTAINER_BUILD_TIMEOUT=1 \
   CONTAINER_BUILD_KILL_GRACE=1 \
   "${repo_root}/scripts/container/build.sh" acr-api >"${timeout_fixture}/timeout.log" 2>&1
@@ -635,6 +688,7 @@ PATH="${timeout_fixture}:$PATH" \
   CONTAINER_TEST_CHILD_PID="$timeout_child_pid" \
   CONTAINER_TEST_LATE_CHILD_PID="$timeout_late_child_pid" \
   CONTAINER_ALLOW_DIRTY=1 \
+  CONTAINER_VERSION=0.1.0-contract \
   CONTAINER_BUILD_TIMEOUT=30 \
   CONTAINER_BUILD_KILL_GRACE=1 \
   "${repo_root}/scripts/container/build.sh" acr-api >/dev/null 2>&1 &

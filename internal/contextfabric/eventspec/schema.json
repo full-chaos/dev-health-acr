@@ -14180,6 +14180,40 @@
     ]
   },
   {
+    "id": "devhealthfacts.project_owning_team_rollup",
+    "msg": "devhealthfacts.project_owning_team_rollup",
+    "level": "info",
+    "multiplicity": "zero_or_many_per_request",
+    "attribution": [
+      "request_id"
+    ],
+    "bounded_aggregation": "one line per project theme mix read that served a roll-up.",
+    "unbounded_reason": "one line per project theme mix read that served a roll-up, so the count follows the project investment reads a request makes; the line carries the request id when the context has one.",
+    "fields": [
+      {
+        "key": "rollup_projects",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "project_own_work_unit_count",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "project_own_uncategorized_unit_count",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "request_id",
+        "type": "string",
+        "presence": "conditional",
+        "applicability": "written when the request context carries a request ID"
+      }
+    ]
+  },
+  {
     "id": "devhealthfacts.pull_request_project_native_first",
     "msg": "devhealthfacts.pull_request_project_native_first",
     "level": "info",
