@@ -186,6 +186,13 @@ type Config struct {
 	// forwards on every hosted API call (auth.ResourceHeader). It is set only
 	// by the hosted transport, from its own configuration; empty sends none.
 	Resource string
+	// HopTokenFile is the hosted MCP endpoint's projected ServiceAccount
+	// token (CHAOS-12094): set only by the hosted transport, from its own
+	// configuration. Set, every hosted API call carries the token, read
+	// fresh, in auth.MCPHopHeader, so acr-api can tell a call this endpoint
+	// forwards from a caller that sets the resource header itself. Empty
+	// sends none.
+	HopTokenFile string
 	// LogLevel controls the sidecar's structured diagnostic verbosity (see
 	// internal/mcp.Serve). ACR_LOG_LEVEL accepts "debug", "info", "warn", or
 	// "error" (case-insensitive); default is "info". LogLevel never gates

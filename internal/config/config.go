@@ -324,6 +324,11 @@ type Config struct {
 	// after it ended (its absolute end or its revocation) before the purge
 	// loop deletes it, its refresh rows and its member credentials.
 	OAuthBrowserFamilyPurgeGrace time.Duration
+	// MCPHop (CHAOS-12094, F1): with Required, acr-api admits a credential
+	// bound to an MCP resource only on a call acr-mcp forwards, proven by
+	// acr-mcp's projected ServiceAccount token (auth.MCPHopHeader), checked
+	// through Kubernetes TokenReview. See mcp_hop.go.
+	MCPHop MCPHopConfig
 
 	// dataQueryURL / dataQueryTimeout: internal ops query service call
 	// (ACR_DATA_QUERY_URL, ACR_DATA_QUERY_TIMEOUT); read via the
@@ -435,6 +440,9 @@ func load(lookup lookupEnv) (Config, error) {
 		return Config{}, err
 	}
 	if cfg.OAuthBrowserFamilyPurgeGrace, err = durationValue(lookup, "ACR_OAUTH_BROWSER_FAMILY_PURGE_GRACE", defaultOAuthBrowserFamilyPurgeGrace); err != nil {
+		return Config{}, err
+	}
+	if cfg.MCPHop, err = mcpHopValue(lookup); err != nil {
 		return Config{}, err
 	}
 
@@ -636,6 +644,9 @@ func (c Config) Validate() error {
 		}
 	}
 	if err := validateWebAssertionConfig(c); err != nil {
+		return err
+	}
+	if err := validateMCPHop(c); err != nil {
 		return err
 	}
 	if err := validateOAuthConfig(c); err != nil {
