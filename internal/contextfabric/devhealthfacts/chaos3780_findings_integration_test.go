@@ -46,6 +46,7 @@ func newDedicatedClickHouseIntegrationClientWithOptions(t *testing.T, ctx contex
 		ContainerRequest: testcontainers.ContainerRequest{
 			Image: chfixture.Image, ExposedPorts: []string{"9000/tcp"},
 			Env:        map[string]string{"CLICKHOUSE_USER": "acr", "CLICKHOUSE_PASSWORD": "acr", "CLICKHOUSE_DB": "default"},
+			Files:      preciseMemoryAccountingFiles(),
 			WaitingFor: wait.ForListeningPort("9000/tcp").WithStartupTimeout(2 * time.Minute),
 		},
 		Started: true,
@@ -87,6 +88,10 @@ func newDedicatedClickHouseIntegrationClientWithOptions(t *testing.T, ctx contex
 			t.Fatalf("clickhouse not ready for connections: %v", pingErr)
 		}
 		time.Sleep(500 * time.Millisecond)
+	}
+	// CHAOS-12168: the memory guards need precise accounting.
+	if err := verifyPreciseMemoryAccounting(ctx, direct); err != nil {
+		t.Fatal(err)
 	}
 
 	options := runtimeclickhouse.Options{
