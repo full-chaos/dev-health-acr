@@ -73,10 +73,17 @@ func TestAProjectOnlyCallerReadsNoProjectReachAndIsRestricted(t *testing.T) {
 	t.Parallel()
 	for _, principal := range []storage.Principal{
 		projectOnlyWalkPrincipal(),
+		{OrgID: "org_1", RepositoryScopes: []string{"*"}, ProjectScopes: []string{"project.v2:github:P-1"}},
 		{OrgID: "org_1", RepositoryScopes: []string{"acme/api"}, ProjectScopes: []string{"project.v2:github:P-1"}},
 	} {
+		// needsProjectReach is what statusCensusPage, DiscoverContext's
+		// deployment walk outcome, linkSegment and treeWalkState.narrowed
+		// read (CHAOS-12299 r3).
 		if !needsProjectReach(principal) {
 			t.Errorf("%v: a project-only caller is not restricted", principal.RepositoryScopes)
+		}
+		if !(treeWalkState{principal: principal}).narrowed() {
+			t.Errorf("%v: a project-only caller's tree walk is not narrowed", principal.RepositoryScopes)
 		}
 		ctx, err := (&Adapter{}).withProjectReach(context.Background(), "key", principal)
 		if err != nil || ctx.Value(projectReachContextKey{}) != nil {
@@ -106,5 +113,24 @@ func TestResolveEdgeRefusesAProjectOnlyCallerAnAttributionEdgeBeforeItsEnds(t *t
 	_, resolution, reason, err := (&Adapter{}).resolveEdge(context.Background(), "key", "org_1", projectOnlyWalkPrincipal(), contextfabric.RequestedScope{}, ce, temporalFilter{})
 	if err != nil || resolution != edgeFiltered || reason != edgeFilterReasonAuthz {
 		t.Fatalf("resolveEdge = %v/%v/%v, want filtered on authorization", resolution, reason, err)
+	}
+}
+
+// CHAOS-12299 r3: the link read binds no repository grant for a project-only
+// caller, whatever its repository list, so "*" never matches every
+// repository in the read; the node rule then decides each row.
+func TestTheLinkReadBindsNoRepositoryGrantForAProjectOnlyCaller(t *testing.T) {
+	t.Parallel()
+	for _, scopes := range [][]string{nil, {"*"}, {"acme/api"}} {
+		params := linkSegmentGrants(map[string]interface{}{}, storage.Principal{OrgID: "org_1", RepositoryScopes: scopes, ProjectScopes: []string{"project.v2:github:P-1"}})
+		for _, key := range []string{"grantRaw", "grantNorm", "grantOwners"} {
+			if values, _ := params[key].([]interface{}); len(values) != 0 {
+				t.Errorf("%q: %s = %v, want empty", scopes, key, values)
+			}
+		}
+	}
+	params := linkSegmentGrants(map[string]interface{}{}, storage.Principal{OrgID: "org_1", RepositoryScopes: []string{"acme/api"}})
+	if values, _ := params["grantRaw"].([]interface{}); len(values) != 1 {
+		t.Errorf("a restricted caller's link grant = %v, want its one repository as before", params["grantRaw"])
 	}
 }

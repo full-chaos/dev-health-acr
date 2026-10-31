@@ -862,7 +862,13 @@ func linkSegmentParams(orgID string, anchor contextfabric.SubjectRef, feed, link
 
 // linkSegmentGrants binds a restricted caller's grants to the link read.
 func linkSegmentGrants(params map[string]interface{}, principal storage.Principal) map[string]interface{} {
-	bindRepositoryMatch(params, "grant", principal.RepositoryScopes)
+	selectors := principal.RepositoryScopes
+	if auth.ClassifyGrant(principal) == auth.GrantProjectOnly {
+		// A project grant names no repository (CHAOS-12299 r3): "*" must not
+		// match every repository in the read. The node rule decides each row.
+		selectors = nil
+	}
+	bindRepositoryMatch(params, "grant", selectors)
 	params["noRepository"] = noRepositoryScope
 	params["authorityTiers"] = authorityLinkTiers()
 	return params

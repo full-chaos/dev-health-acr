@@ -55,3 +55,38 @@ func TestAProjectOnlyPrincipalGetsNoReadPlan(t *testing.T) {
 		t.Fatalf("the fixture principal's plan = %+v, %v; want its one granted repository", plan.WorkItemGrant, err)
 	}
 }
+
+// CHAOS-12299 r3 extra site, clickhouse_evidence.go: a project-only principal
+// with a "*" repository list makes no read at all, not even the authorized
+// repository listing; the fixture principal's read lists them.
+func TestAProjectOnlyPrincipalListsNoEvidenceRepository(t *testing.T) {
+	for _, tc := range []struct {
+		principal storage.Principal
+		listed    bool
+	}{{storage.Principal{OrgID: "org-fixture", RepositoryScopes: []string{"*"}, ProjectScopes: []string{"project.v2:github:P-1"}}, false}, {fixturePrincipal(), true}} {
+		client := &countingClient{scriptedClient: scriptedClient{gateIDs: []string{"PROJ-5"}}}
+		codec := fixtureEvidenceCodec(t)
+		store, err := contextpacket.NewClickHouseEvidenceStoreWithOptions(contextpacket.NewCatalogClickHouseRows(client), contextpacket.EvidenceStoreOptions{Codec: codec})
+		if err != nil {
+			t.Fatal(err)
+		}
+		handle, err := codec.Encode("org-fixture", "20000000-0000-4000-8000-000000000002", "work_graph.v1", "acr:v1:work-graph:edge", false)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, _ = store.ResolveEvidence(context.Background(), tc.principal, handle)
+		if (client.statements > 0) != tc.listed {
+			t.Errorf("%v: %d statements, want listed=%v", tc.principal.ProjectScopes, client.statements, tc.listed)
+		}
+	}
+}
+
+type countingClient struct {
+	scriptedClient
+	statements int
+}
+
+func (c *countingClient) Query(ctx context.Context, statement string, bindings []contextpacket.ClickHouseBinding) (contextpacket.ClickHouseRowScanner, error) {
+	c.statements++
+	return c.scriptedClient.Query(ctx, statement, bindings)
+}

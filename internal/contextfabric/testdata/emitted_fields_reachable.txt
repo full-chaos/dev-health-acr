@@ -69,7 +69,7 @@ FactBlockers
     calls followed            1141
     calls accounted           17
     calls not_a_call          15
-    calls excluded_by_design  319
+    calls excluded_by_design  320
     calls leaked              32
   fields             blocked_by_work_item_id blocked_by_work_item_ref blocked_work_items_current blocked_work_items_without_link_count blocker_active blocker_dependencies_current blocker_dependencies_excluded_by_status_current blocker_dependencies_writer_unresolved_current blocker_status_basis link_tier oldest_blocked_age_basis oldest_blocked_age_days oldest_blocked_age_unavailable_reason owned_repositories owned_repositories_omitted_count owned_repository_count project_blocked_work_items_current project_reached_repository_count repositories_with_data_count repositories_without_data_count repository_breakdown repository_breakdown_limitation repository_breakdown_omitted_count repository_id repository_link_basis repository_name repository_tables_basis rollup_basis
 
@@ -197,7 +197,7 @@ FactIncidents
     calls followed            1065
     calls accounted           14
     calls not_a_call          9
-    calls excluded_by_design  263
+    calls excluded_by_design  264
     calls leaked              19
   fields             incident_attribution_basis incidents_count_window org_incidents_not_attributable_count_window owned_repositories owned_repositories_omitted_count owned_repository_count project_reached_repository_count repositories_with_data_count repositories_without_data_count repository_breakdown repository_breakdown_omitted_count repository_id repository_name repository_tables_basis resolved_incidents_count_window rollup_basis severity status window_basis window_end window_start
 
@@ -213,7 +213,7 @@ FactInvestment
     calls followed            1386
     calls accounted           15
     calls not_a_call          74
-    calls excluded_by_design  878
+    calls excluded_by_design  877
     calls leaked              70
   fields             attribution attribution_basis denominator effort_unit_count investment_mix_source link_tier measure mix_source native_multi_placed_unit_count next_cursor owned_repository_count owning_team_rollup_work_unit_count page_share_total population_window project_own_uncategorized_unit_count project_own_work_unit_count project_reached_repositories project_reached_repositories_omitted_count project_reached_repository_count repo_count repositories_in_scope repository_id repository_link_basis repository_name rollup_basis scope scope_share_total scope_unattributed_rows scope_unattributed_total scope_unit_rows share share_in_scope sizing_coverage sizing_note source spanning_unit_count team_count theme theme_breakdown theme_quality_bugfix unattributed_effort_share uncategorized_unit_count uncategorized_unit_share unit_attribution_basis unit_effort_value unit_from unit_issue_size unit_kind unit_mix_source unit_pull_request_count unit_refs_unresolved unit_to unit_unresolved_refs unit_weight units_refs_unresolved units_returned unsized_unit_count weighted_effort work_unit_count work_unit_id work_units_without_repo_link
 
@@ -373,7 +373,7 @@ FactSourceHealth
     calls followed            973
     calls accounted           13
     calls not_a_call          1
-    calls excluded_by_design  72
+    calls excluded_by_design  71
     calls leaked              1
   fields             last_failure_occurred_at last_failure_stage last_sync_at provider scope
 

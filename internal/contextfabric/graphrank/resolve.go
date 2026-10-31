@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/full-chaos/dev-health-acr/internal/auth"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/eventspec"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/hintsource"
@@ -4909,7 +4910,11 @@ func scopesUnrestricted(scopes []string) bool {
 // second copy that could silently drift from what authorization actually
 // enforces.
 func unscopedVisibilityFor(principal storage.Principal, request contextfabric.InvestigationRequest) bool {
-	return scopesUnrestricted(principal.RepositoryScopes) &&
+	// A project-only caller is never unscoped, whatever its repository list
+	// holds (CHAOS-12299 r3): an organization-wide census must not decide
+	// its answer.
+	return auth.ClassifyGrant(principal) != auth.GrantProjectOnly &&
+		scopesUnrestricted(principal.RepositoryScopes) &&
 		len(request.RequestedScope.RepositorySlugs) == 0 &&
 		len(request.RequestedScope.ProjectIDs) == 0 &&
 		len(request.RequestedScope.TeamIDs) == 0
@@ -5394,7 +5399,9 @@ func appendCensusAttestedCommit(resolution *contextfabric.SubjectResolution, can
 // existence oracle; the attested satisfier is still authorized against the
 // requested scope when it is merged.
 func repositoryNarrowedByUnrestrictedPrincipal(principal storage.Principal, request contextfabric.InvestigationRequest) bool {
-	return scopesUnrestricted(principal.RepositoryScopes) &&
+	// A project-only caller is never an unrestricted principal (CHAOS-12299 r3).
+	return auth.ClassifyGrant(principal) != auth.GrantProjectOnly &&
+		scopesUnrestricted(principal.RepositoryScopes) &&
 		len(request.RequestedScope.RepositorySlugs) > 0 &&
 		len(request.RequestedScope.ProjectIDs) == 0 &&
 		len(request.RequestedScope.TeamIDs) == 0

@@ -190,7 +190,7 @@ func (s *EpisodeStore) PurgeExpiredForOrg(_ context.Context, principal storage.P
 }
 
 func (s *EpisodeStore) PurgeExpiredForPrincipal(_ context.Context, principal storage.Principal, before time.Time, limit int) (int, error) {
-	if strings.TrimSpace(principal.OrgID) == "" || len(principal.RepositoryScopes) == 0 {
+	if strings.TrimSpace(principal.OrgID) == "" || len(principal.RepositoryScopes) == 0 || principal.HoldsProjectGrant() {
 		return 0, storage.ErrNotFound
 	}
 	return s.purgeExpired(before, limit, principal.OrgID, principal.RepositoryScopes)

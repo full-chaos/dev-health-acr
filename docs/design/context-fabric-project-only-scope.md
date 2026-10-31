@@ -183,6 +183,14 @@ channel that reads its repository list or hashes only that list:
   (`grant_mismatch`), makes no reuse lookup, and its results are never stored
   as reusable, because the grant digest and the reuse key hash only the
   repository list.
+- **Never unscoped (r3).** Every reader of "the caller sees every
+  repository" decides on the principal (`auth.ClassifyGrant`), never on the
+  raw list: the resolve census visibility, the organization figures
+  (`sourceHealthRestricted`, `orgWideFigureAllowed`), the work-item tuple
+  (`workItemRepositoryRestricted`), the graph reach (`needsProjectReach`) and
+  the link read, which binds no repository grant for it. A stored work-item
+  tuple, a context packet, an episode write or purge and the evidence
+  repository listing are refused to it too.
 - **Counts.** `withheld.edges_not_visible` and `page.examined` are unchanged:
   they are the disclosure contract, the same for a restricted caller.
 
