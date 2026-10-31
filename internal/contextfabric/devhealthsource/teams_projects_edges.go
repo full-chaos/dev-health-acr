@@ -642,8 +642,7 @@ func querySubjectProjectMemberships(ctx context.Context, client contextpacket.Cl
 			// Legacy pull_request canonical id scheme -- see this
 			// function's own doc comment on why identity.Derive is
 			// deliberately never used here.
-			pullRequestCanonicalID := fmt.Sprintf("pull_request:%s:%d", repoID, number)
-			fromSubject = contractsv1.ContextFabricSubjectRef{Kind: contractsv1.ContextFabricSubjectPullRequest, CanonicalID: pullRequestCanonicalID, Label: fmt.Sprintf("PR #%d", number)}
+			fromSubject = contractsv1.ContextFabricSubjectRef{Kind: contractsv1.ContextFabricSubjectPullRequest, CanonicalID: pullRequestCanonicalID(repoID, int64(number)), Label: fmt.Sprintf("PR #%d", number)}
 			evidenceRefID = contractsv1.EvidenceRefID(contractsv1.ContextFabricEvidenceEntityPullRequest, repoID+":"+subjectID)
 			// Unlike a Linear work item, a pull request always belongs to a
 			// real git repository -- git_pull_requests.repo_id is a
@@ -1186,8 +1185,8 @@ func repositoryTeamRelationshipID(repositoryCanonicalID, teamID, provider, sourc
 // repositoryCanonicalID is the repository subject's canonical id, the exact
 // shape queryRepositories (tables.go) mints for the node, so this edge's From
 // endpoint lands on the projected repository rather than a stub no entity
-// write ever fills.
-func repositoryCanonicalID(repoID string) string { return "repository:" + repoID }
+// write ever fills. Both read contextfabric.RepositoryCanonicalID (CHAOS-12230).
+func repositoryCanonicalID(repoID string) string { return contextfabric.RepositoryCanonicalID(repoID) }
 
 // projectMembershipRelationshipID is the subject<->project BELONGS_TO_PROJECT
 // edge's identity (CHAOS-4635), covering both the work-item and pull-request
