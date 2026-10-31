@@ -53,6 +53,8 @@ var publicRoutes = []publicRoute{
 	{pattern: "GET " + ContextFabricThreadsPath, method: "GET", path: ContextFabricThreadsPath, gated: true},
 	{pattern: "GET " + ContextFabricThreadPath, method: "GET", path: "/api/v1/context-fabric/threads/thread-0001", gated: true},
 	{pattern: "DELETE " + ContextFabricThreadPath, method: "DELETE", path: "/api/v1/context-fabric/threads/thread-0001", gated: true},
+	{pattern: "GET " + ContextFabricResultFeedbackPath, method: "GET", path: "/api/v1/context-fabric/investigations/feedback/res_00000001", gated: true},
+	{pattern: "POST " + ContextFabricResultFeedbackPath, method: "POST", path: "/api/v1/context-fabric/investigations/feedback/res_00000001", gated: true},
 	{pattern: "GET " + ContextFabricDataCatalogPath, method: "GET", path: ContextFabricDataCatalogPath, gated: true},
 	{pattern: "POST " + ContextFabricDataSubjectsPath, method: "POST", path: ContextFabricDataSubjectsPath, gated: true},
 	{pattern: "POST " + ContextFabricDataFactsPath, method: "POST", path: ContextFabricDataFactsPath, gated: true},

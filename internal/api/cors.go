@@ -93,6 +93,9 @@ var corsBrowserRoutes = [...]struct{ pattern, class string }{
 	// CHAOS-11949: attach (SSE, Last-Event-ID) and cancel of a leased run.
 	{ContextFabricSubmissionEventsPath, "investigations"},
 	{ContextFabricSubmissionCancelPath, "investigations"},
+	// CHAOS-11950: Ask Dev answer feedback (GET and POST, so the method list
+	// is unchanged).
+	{ContextFabricResultFeedbackPath, "investigations"},
 	{AgentContextEvidencePath, "evidence"},
 	// CHAOS-12092: the Ask Dev conversation routes (CHAOS-11948), each
 	// re-checked live per call like every other browser route.

@@ -158,6 +158,12 @@ var exampleSchemaPairs = map[string]string{
 	"error_context_fabric_canceled.v1.json":       "error.v1.schema.json",
 	"error_context_fabric_run_lost.v1.json":       "error.v1.schema.json",
 	"error_context_fabric_cursor_expired.v1.json": "error.v1.schema.json",
+	// Ask Dev answer feedback (CHAOS-11950): the read and the request,
+	// encoder output of production Go values
+	// (internal/contracts/v1/context_fabric_result_feedback_test.go).
+	"context_fabric_result_feedback.v1.json":         "context_fabric_result_feedback.v1.schema.json",
+	"context_fabric_result_feedback_unset.v1.json":   "context_fabric_result_feedback.v1.schema.json",
+	"context_fabric_result_feedback_request.v1.json": "context_fabric_result_feedback_request.v1.schema.json",
 }
 
 // Options configures repository contract validation.

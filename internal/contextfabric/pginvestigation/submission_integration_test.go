@@ -226,6 +226,18 @@ func TestThreadParity(t *testing.T) {
 	})
 }
 
+// TestResultFeedbackParity runs the shared feedback table (CHAOS-11950) on
+// PostgreSQL.
+func TestResultFeedbackParity(t *testing.T) {
+	ctx := context.Background()
+	paritytest.RunResultFeedbackSuite(t, func(t *testing.T, clock func() time.Time) paritytest.FeedbackStore {
+		db := newInvestigationTestDatabase(t, ctx)
+		store, err := pginvestigation.NewStore(db, pginvestigation.WithClock(clock))
+		require.NoError(t, err)
+		return seedableThreadStore{Store: store, db: db}
+	})
+}
+
 // seedableThreadStore is a pginvestigation.Store whose thread rows the suite
 // can seed (paritytest.ThreadTurnCountSeeder).
 type seedableThreadStore struct {

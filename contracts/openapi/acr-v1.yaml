@@ -1,5 +1,5 @@
 # Generated from acr-v1.json by `go run ./cmd/contractcheck -write`. DO NOT EDIT.
-# canonical-content-sha256: 39f1c39d949cfdac0bb3029364b74f84bf259f8590591e011aacd8d884473cc1
+# canonical-content-sha256: 415e0c05af37bf45c5549387924b9dfa15d9ca68adc3a72a4c4cd054e96b65f5
 openapi: "3.1.0"
 info:
   description: "Private hosted API for evidence-backed agent context packets, authorized provenance expansion, replay snapshots, and opt-in episode writeback. External Push is a separate API plane."
@@ -675,6 +675,109 @@ paths:
           bearerAuth: []
         -
           webAssertionAuth: []
+      x-required-entitlement: "agent_context_runtime"
+      x-required-scope: "context:read"
+  "/api/v1/context-fabric/investigations/feedback/{result_id}":
+    get:
+      description: "Whether the caller found the result correct and useful: yes, no or unset each, and when it was last set (absent when never set). A result GET /api/v1/context-fabric/investigations/{result_id} would not serve to the caller now (an unknown, malformed, another principal's or another organization's id, a result the caller's current grant does not admit, a withheld result, a result only a deleted or expired conversation names), and a result that completed no Ask Dev submission (it has no owner), get the read by id's own 404 not_found. Each call decides the read afresh; a decision that cannot be taken is 503. Strictly read-only."
+      operationId: "getContextFabricResultFeedback"
+      parameters:
+        -
+          "$ref": "#/components/parameters/RequestID"
+        -
+          "$ref": "#/components/parameters/ClientVersion"
+        -
+          in: "path"
+          name: "result_id"
+          required: true
+          schema:
+            maxLength: 256
+            minLength: 8
+            type: "string"
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                "$ref": "../jsonschema/v1/context_fabric_result_feedback.v1.schema.json"
+          description: "The caller's feedback on the result."
+        "401":
+          "$ref": "#/components/responses/Error"
+        "403":
+          "$ref": "#/components/responses/Error"
+        "404":
+          "$ref": "#/components/responses/Error"
+        "426":
+          "$ref": "#/components/responses/Error"
+        "429":
+          "$ref": "#/components/responses/Error"
+        "500":
+          "$ref": "#/components/responses/Error"
+        "503":
+          "$ref": "#/components/responses/Error"
+        "504":
+          "$ref": "#/components/responses/Error"
+      security:
+        -
+          bearerAuth: []
+        -
+          webAssertionAuth: []
+      summary: "Read the caller's feedback on one of its own Ask Dev results."
+      x-required-entitlement: "agent_context_runtime"
+      x-required-scope: "context:read"
+    post:
+      description: "Sets both flags (correct, useful: yes, no or unset) and answers what is stored. The body is the whole feedback, so a repeat is harmless; unset clears a flag. There is no free text. A malformed body is 400 invalid_request before anything about the result is decided. A result GET /api/v1/context-fabric/investigations/{result_id} would not serve to the caller now (an unknown, malformed, another principal's or another organization's id, a result the caller's current grant does not admit, a withheld result, a result only a deleted or expired conversation names), and a result that completed no Ask Dev submission (it has no owner), get the read by id's own 404 not_found. Each call decides the read afresh; a decision that cannot be taken is 503. The feedback is part of the result's backing set: it goes with the result's retention and an organization purge."
+      operationId: "setContextFabricResultFeedback"
+      parameters:
+        -
+          "$ref": "#/components/parameters/RequestID"
+        -
+          "$ref": "#/components/parameters/ClientVersion"
+        -
+          in: "path"
+          name: "result_id"
+          required: true
+          schema:
+            maxLength: 256
+            minLength: 8
+            type: "string"
+      requestBody:
+        content:
+          application/json:
+            schema:
+              "$ref": "../jsonschema/v1/context_fabric_result_feedback_request.v1.schema.json"
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                "$ref": "../jsonschema/v1/context_fabric_result_feedback.v1.schema.json"
+          description: "The feedback as stored."
+        "400":
+          "$ref": "#/components/responses/Error"
+        "401":
+          "$ref": "#/components/responses/Error"
+        "403":
+          "$ref": "#/components/responses/Error"
+        "404":
+          "$ref": "#/components/responses/Error"
+        "426":
+          "$ref": "#/components/responses/Error"
+        "429":
+          "$ref": "#/components/responses/Error"
+        "500":
+          "$ref": "#/components/responses/Error"
+        "503":
+          "$ref": "#/components/responses/Error"
+        "504":
+          "$ref": "#/components/responses/Error"
+      security:
+        -
+          bearerAuth: []
+        -
+          webAssertionAuth: []
+      summary: "Set the caller's feedback on one of its own Ask Dev results."
       x-required-entitlement: "agent_context_runtime"
       x-required-scope: "context:read"
   "/api/v1/context-fabric/investigations/submissions/{submission_id}":

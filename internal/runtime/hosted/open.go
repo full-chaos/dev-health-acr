@@ -234,11 +234,15 @@ func open(ctx context.Context, request buildRequest) (*Runtime, error) {
 	// replica takes over runs whose holder stopped renewing.
 	var investigationRuns contextfabric.RunStore
 	runHolderID := api.NewRunHolderID()
+	// CHAOS-11950: the feedback store is the same store: its statement holds
+	// the result row's owner and closed-thread rules.
+	var resultFeedback contextfabric.ResultFeedbackStore
 	if investigationResultStore != nil {
 		investigationResults = investigationResultStore
 		investigationSubmissions = investigationResultStore
 		investigationThreads = investigationResultStore
 		investigationRuns = investigationResultStore
+		resultFeedback = investigationResultStore
 		runtime.submissionSweeper = startSubmissionSweeper(investigationResultStore, request.options.Logger, request.options.Now, submissionSweepInterval)
 		runtime.runTakeover = startRunTakeover(investigationResultStore, runHolderID, request.options.Logger, request.options.Now, runTakeoverInterval)
 	}
@@ -310,6 +314,7 @@ func open(ctx context.Context, request buildRequest) (*Runtime, error) {
 			InvestigationThreads:       investigationThreads,
 			InvestigationRuns:          investigationRuns,
 			RunHolderID:                runHolderID,
+			ResultFeedback:             resultFeedback,
 			NewResultID:                newInvestigationResultID,
 			SourceRows:                 sourceRows,
 			DirectReadGate:             directReadGate,

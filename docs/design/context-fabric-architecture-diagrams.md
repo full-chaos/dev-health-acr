@@ -3637,7 +3637,56 @@ Code: `internal/contextfabric/run_lease.go` (types, `RunStore`),
 grammar). Proofs: `internal/api/context_fabric_run_lease_test.go` (memory) and
 `context_fabric_run_lease_pg_test.go` (Postgres, one pool per replica).
 
-## 20 — Per-call access re-check (CHAOS-12092)
+## 20 — Ask Dev answer feedback (CHAOS-11950)
+
+The owner of an Ask Dev result says whether it was correct and useful (`yes`,
+`no` or `unset` each; no free text). `GET` and `POST
+/api/v1/context-fabric/investigations/feedback/{result_id}`
+(`context_fabric_result_feedback.v1`, request
+`context_fabric_result_feedback_request.v1`). The route takes the read by
+id's serving decision first (gate surface `feedback`), so a caller gets
+nothing the read by id would not give it; the store holds the owner and
+closed-thread rules again in the statement that reads or writes the row.
+Design: `docs/design/ask-dev-conversation-contract.md` §11.
+
+```mermaid
+sequenceDiagram
+  participant W as browser (owner)
+  participant R as acr-api feedback route
+  participant G as One serving decision (StoredResultGate surface feedback + read-by-id rules)
+  participant S as Result row + feedback row (Postgres)
+
+  W->>R: POST investigations/feedback/{result_id} {correct, useful}
+  R->>R: body checked first (400 for any id)
+  R->>G: would GET investigations/{result_id} serve it to the caller now?
+  alt not served (unknown, another principal's, denied, withheld, closed thread)
+    R-->>W: the read by id's own 404 (or 503 when undecidable)
+  else served, but no submission owner (MCP or Workbench result)
+    R-->>W: 404 not_found
+  else served and owned
+    R->>S: INSERT ... SELECT FROM the result row WHERE org, owner match, not hidden by a closed thread ON CONFLICT DO UPDATE
+    S-->>R: stored flags and updated_at (no row: 404)
+    R-->>W: 200 feedback
+  end
+```
+
+The feedback row is in the result's backing set: its foreign key removes it
+with its result (`ON DELETE CASCADE`, so the retention job, I-30, removes it
+with the result), the organization purge lists it, and the write fence
+refuses a purged organization's write.
+
+**Construction anchors:** `ResultFeedbackStore`, `ResultFeedback`
+(`internal/contextfabric/result_feedback.go`); `pginvestigation/feedback.go`
+(`GetResultFeedback`, `SetResultFeedback`, `feedbackResultSQL`);
+`memoryinvestigation/feedback.go`; `ContextFabricResultFeedbackHandler`
+(`internal/api/context_fabric_result_feedback.go`); `StoredResultSurfaceFeedback`;
+`ContextFabricResultFeedback`, `ContextFabricResultFeedbackRequest`,
+`ParseContextFabricResultFeedbackRequest`
+(`internal/contracts/v1/context_fabric_result_feedback.go`); migration
+`0065_context_fabric_result_feedback.sql`; parity table
+`paritytest.RunResultFeedbackSuite`.
+
+## 21 — Per-call access re-check (CHAOS-12092)
 
 Every protected call by a user-class credential (browser, OAuth user, native
 device) re-reads the user's access in Dev Health, live and uncached (North Star

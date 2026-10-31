@@ -32,8 +32,11 @@ const (
 	OperationThread  Operation = "thread"
 	// OperationSubmissionAttach and OperationSubmissionCancel are the
 	// attach to and the cancel of a leased run (CHAOS-11949).
-	OperationSubmissionAttach  Operation = "submission_attach"
-	OperationSubmissionCancel  Operation = "submission_cancel"
+	OperationSubmissionAttach Operation = "submission_attach"
+	OperationSubmissionCancel Operation = "submission_cancel"
+	// OperationResultFeedback is the Ask Dev answer feedback read or set
+	// (CHAOS-11950).
+	OperationResultFeedback    Operation = "result_feedback"
 	OperationDataCatalog       Operation = "data_catalog"
 	OperationDataSubjects      Operation = "data_subjects"
 	OperationDataFacts         Operation = "data_facts"

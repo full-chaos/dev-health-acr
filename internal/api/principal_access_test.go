@@ -125,6 +125,9 @@ func protectedRoutes() []protectedRoute {
 		// CHAOS-11949 (#1793): attach to a leased run, and cancel it.
 		{http.MethodGet, "/api/v1/context-fabric/investigations/submissions/submission-access-01/events", ""},
 		{http.MethodPost, "/api/v1/context-fabric/investigations/submissions/submission-access-01/cancel", ""},
+		// CHAOS-11950 (#1792): read and set the owner's feedback on a result.
+		{http.MethodGet, "/api/v1/context-fabric/investigations/feedback/res_access_test", ""},
+		{http.MethodPost, "/api/v1/context-fabric/investigations/feedback/res_access_test", `{"rating":"up"}`},
 		{http.MethodGet, ContextFabricThreadsPath, ""},
 		{http.MethodGet, "/api/v1/context-fabric/threads/thread-access-0001", ""},
 		{http.MethodDelete, "/api/v1/context-fabric/threads/thread-access-0001", ""},
