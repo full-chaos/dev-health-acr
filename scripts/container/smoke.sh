@@ -123,4 +123,5 @@ CONTAINER_SOURCE_ROOT="$snapshot" CONTAINER_CONTEXT="$snapshot" CONTAINER_ALLOW_
   CONTAINER_VERSION="$smoke_version" CONTAINER_IMAGE="$api_image" "${repo_root}/scripts/container/build.sh" acr-api
 CONTAINER_SOURCE_ROOT="$snapshot" CONTAINER_CONTEXT="$snapshot" CONTAINER_ALLOW_DIRTY=1 \
   CONTAINER_VERSION="$smoke_version" CONTAINER_IMAGE="$mcp_image" "${repo_root}/scripts/container/build.sh" acr-mcp
-ACR_CONTAINER_SECRET_SENTINEL="$sentinel" "${repo_root}/scripts/container/verify.sh" "$api_image" "$mcp_image"
+ACR_CONTAINER_EXPECTED_VERSION="$smoke_version" ACR_CONTAINER_SECRET_SENTINEL="$sentinel" \
+  "${repo_root}/scripts/container/verify.sh" "$api_image" "$mcp_image"

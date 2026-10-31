@@ -226,7 +226,8 @@ Local builds that select the canonical `Dockerfile` use
 `Dockerfile.dockerignore`, whose reviewed allowlist admits exactly `Dockerfile`,
 `go.mod`, `go.sum`, Go sources under `cmd/**`, Go and embedded JSON under
 `internal/**`, and Go plus SQL migration files under `migrations/**`. This makes
-`docker build .` and Docker Compose useful for local development without sending
+`docker build --build-arg VERSION=<version> .` (the version is required, see
+below) and Docker Compose useful for local development without sending
 files outside those reviewed paths and extensions to BuildKit. Local builds may
 include ignored files whose paths and extensions match the allowlist; keep local
 credentials outside source directories. Builders without Dockerfile-specific
