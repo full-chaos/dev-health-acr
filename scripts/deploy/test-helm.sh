@@ -52,7 +52,7 @@ Usage: test-helm.sh --values <path> [--image <ref>] [--chart <path>] [--scenario
               service-account-name-collision.
               The acr-api auth workload client scenarios (CHAOS-11195): auth-workload-client-on (positive),
               auth-workload-client-off-render, auth-workload-client-bad-inputs,
-              auth-workload-client-url-corpus.
+              auth-workload-client-presence-only.
 
 The harness only renders (helm template/lint) and validates output offline.
 EOF
@@ -604,50 +604,38 @@ case "$scenario" in
     printf 'RESULT: scenario auth-workload-client-off-render passed\n'
     exit 0 ;;
   auth-workload-client-bad-inputs)
-    printf 'scenario: auth-workload-client-bad-inputs (each missing or bad field fails the render naming the value; the audience is no value)\n'
+    printf 'scenario: auth-workload-client-bad-inputs (a missing field fails the render naming the value; the audience and the expiry are no values)\n'
     on=(--set authWorkloadClient.enabled=true)
     url=(--set-string "authWorkloadClient.exchangeURL=https://auth-service.acr-test.svc")
     iss=(--set-string "authWorkloadClient.issuer=https://auth.example.test")
     negative auth-workload-missing-exchange-url "authWorkloadClient.exchangeURL" "${on[@]}" "${iss[@]}"
     negative auth-workload-missing-issuer "authWorkloadClient.issuer" "${on[@]}" "${url[@]}"
-    negative auth-workload-plain-http-without-allow "authWorkloadClient.exchangeURL" "${on[@]}" "${iss[@]}" \
-      --set-string "authWorkloadClient.exchangeURL=http://auth-service.acr-test.svc"
-    negative auth-workload-url-with-path "authWorkloadClient.exchangeURL" "${on[@]}" "${iss[@]}" \
-      --set-string "authWorkloadClient.exchangeURL=https://auth-service.acr-test.svc/internal"
-    negative auth-workload-http-issuer "authWorkloadClient.issuer" "${on[@]}" "${url[@]}" \
-      --set-string "authWorkloadClient.issuer=http://auth.example.test"
     negative auth-workload-audience-is-no-value "authWorkloadClient" "${on[@]}" "${url[@]}" "${iss[@]}" \
       --set-string "authWorkloadClient.audience=dev-health-api"
     negative auth-workload-expiration-is-no-value "authWorkloadClient" "${on[@]}" "${url[@]}" "${iss[@]}" \
       --set authWorkloadClient.expirationSeconds=3600
     printf 'RESULT: scenario auth-workload-client-bad-inputs passed\n'
     exit 0 ;;
-  auth-workload-client-url-corpus)
-    printf 'scenario: auth-workload-client-url-corpus (the chart holds the URL rules of the Go validator: the same corpus, both fields)\n'
-    corpus="$(dirname "${BASH_SOURCE[0]}")/../../internal/config/testdata/auth_workload_urls.tsv"
-    [[ -f "$corpus" ]] || fail_gate "auth-workload-url-corpus: $corpus is missing"
-    cells=0
+  auth-workload-client-presence-only)
+    printf 'scenario: auth-workload-client-presence-only (the chart checks presence only: a malformed URL renders; acr-api refuses it at start)\n'
+    n=0
     while IFS=$'\t' read -r field plain value verdict note; do
       [[ -z "$field" || "$field" == \#* ]] && continue
-      cells=$((cells + 1))
+      [[ "$verdict" == refuse ]] || continue
+      n=$((n + 1))
       jvalue="$(python3 -c 'import json,sys; print(json.dumps(sys.argv[1]))' "$value")"
       if [[ "$field" == exchange ]]; then
         args=(--set-json "authWorkloadClient.exchangeURL=$jvalue" --set-string "authWorkloadClient.issuer=https://auth.example.test")
       else
         args=(--set-string "authWorkloadClient.exchangeURL=https://auth-service.acr-test.svc" --set-json "authWorkloadClient.issuer=$jvalue")
       fi
-      set +e
-      out="$(render --set authWorkloadClient.enabled=true --set "authWorkloadClient.allowPlainHTTP=$plain" "${args[@]}" 2>&1)"
-      status=$?
-      set -e
-      if [[ "$verdict" == accept && $status -ne 0 ]]; then printf '  FAIL %s %q (%s) was refused: %s\n' "$field" "$value" "$note" "$(head -c 300 <<<"$out")" >&2; exit 1; fi
-      if [[ "$verdict" == refuse ]]; then
-        [[ $status -ne 0 ]] || { printf '  FAIL %s %q (%s) rendered but must fail closed\n' "$field" "$value" "$note" >&2; exit 1; }
-        grep -qF "authWorkloadClient." <<<"$out" || { printf '  FAIL %s %q (%s) failed without naming authWorkloadClient.*: %s\n' "$field" "$value" "$note" "$(head -c 300 <<<"$out")" >&2; exit 1; }
-      fi
-    done <"$corpus"
-    pass "auth-workload-client-url-corpus: $cells cells agree with the Go validator"
-    printf 'RESULT: scenario auth-workload-client-url-corpus passed\n'
+      render --set authWorkloadClient.enabled=true --set "authWorkloadClient.allowPlainHTTP=$plain" "${args[@]}" >"$workdir/presence-only.yaml" 2>"$workdir/presence-only.err" \
+        || { printf '  FAIL %s %q (%s) failed to render, but the chart checks presence only: %s\n' "$field" "$value" "$note" "$(head -c 300 "$workdir/presence-only.err")" >&2; exit 1; }
+      grep -q 'ACR_AUTH_WORKLOAD_' "$workdir/presence-only.yaml" || fail_gate "auth-workload presence-only: $field $value rendered without the env"
+    done <"$(dirname "${BASH_SOURCE[0]}")/../../internal/config/testdata/auth_workload_urls.tsv"
+    [[ $n -gt 50 ]] || fail_gate "auth-workload presence-only: only $n malformed cells read from the corpus"
+    pass "auth-workload-client-presence-only: $n malformed values render (the Go validator refuses them at start)"
+    printf 'RESULT: scenario auth-workload-client-presence-only passed\n'
     exit 0 ;;
   happy) : ;;
   *) printf 'unknown scenario: %s\n' "$scenario" >&2; usage; exit 2 ;;

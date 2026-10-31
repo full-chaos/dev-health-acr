@@ -121,3 +121,39 @@ func TestPrepareServerRefusesMalformedAuthWorkloadURLs(t *testing.T) {
 		})
 	}
 }
+
+// The start-up path is the one validator of both URLs: every cell of the corpus (the r1 table, the malformed forms and
+// the valid ones: trailing slash, IPv6, a single-label service name, host:port) is decided at prepareServer.
+func TestPrepareServerDecidesTheURLCorpus(t *testing.T) {
+	cells, err := os.ReadFile("../../internal/config/testdata/auth_workload_urls.tsv")
+	if err != nil {
+		t.Fatal(err)
+	}
+	base := workloadStartupConfig(t, "https://auth-service.example.test", "https://auth.example.test")
+	n := 0
+	for _, line := range strings.Split(string(cells), "\n") {
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		parts := strings.Split(line, "\t")
+		field, plain, value, verdict := parts[0], parts[1] == "true", parts[2], parts[3]
+		cfg := base
+		cfg.AuthWorkload = config.AuthWorkloadConfig{ExchangeURL: "https://auth-service.example.test", Issuer: "https://auth.example.test", SubjectFile: base.AuthWorkload.SubjectFile, AllowPlainHTTP: plain}
+		if field == "issuer" {
+			cfg.AuthWorkload.Issuer = value
+		} else {
+			cfg.AuthWorkload.ExchangeURL = value
+		}
+		created, _, err := prepareWithWorkload(t, cfg)
+		n++
+		if verdict == "accept" && (err != nil || !created) {
+			t.Errorf("%s %q must start: created=%v err=%v", field, value, created, err)
+		}
+		if verdict == "refuse" && (err == nil || created) {
+			t.Errorf("%s %q must refuse the start: created=%v", field, value, created)
+		}
+	}
+	if n < 100 {
+		t.Fatalf("read %d cells", n)
+	}
+}
