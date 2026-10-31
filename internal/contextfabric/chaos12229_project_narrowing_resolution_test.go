@@ -3,6 +3,7 @@ package contextfabric
 import (
 	"context"
 	"errors"
+	"slices"
 	"testing"
 
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
@@ -122,5 +123,41 @@ func TestAResolvedScopeIsNotResolvedAgain(t *testing.T) {
 	scope := engine.resolveRequestedProjectNarrowing(context.Background(), acceptancePrincipal(), ResolvedGraphBinding{}, RequestedScope{ProjectIDs: []string{"proj-1"}, ProjectNarrowing: preset})
 	if scope.ProjectNarrowing != preset || graph.calls != 0 || len(telemetry.projectNarrowingResolutions) != 0 {
 		t.Fatalf("narrowing %+v, resolver calls %d, lines %d: want the preset narrowing, no call, no line", scope.ProjectNarrowing, graph.calls, len(telemetry.projectNarrowingResolutions))
+	}
+}
+
+// Review r1 P2: the repository work-item walk (the tuple path) reports a
+// member it admitted only on its "*" project list, and the tuple read
+// discloses it in its graph coverage (degrading, partial), as the general
+// graph read does; the served status is then floored (CHAOS-12242).
+func TestTheTuplePathDisclosesAnUnverifiedProjectNarrowing(t *testing.T) {
+	for name, unverified := range map[string]bool{"an unverified member": true, "every member proven": false} {
+		t.Run(name, func(t *testing.T) {
+			gate, _ := NewWorkItemMembershipGate(1, 0)
+			ctx, owner := NewWorkItemResponseOwnerContext(context.Background())
+			defer owner.Complete()
+			graph := &treeGraphFake{walk: TreeWorkItemWalk{
+				Members: []TreeWorkItemMember{treeMember(t, "ENG-1", TreeLinkTierNative)}, PullRequests: 1, LinkedIssues: 1,
+				ProjectNarrowingUnverified: unverified,
+			}}
+			engine := &Engine{treeWorkItemMembership: NewTreeWorkItemMembership(graph, &treeFilterFake{}, gate), telemetry: &recordingTelemetry{}}
+			request := InvestigationRequest{RequestedScope: RequestedScope{ProjectIDs: []string{"proj-1"}}}
+			got, _, err := engine.discoverWorkItemTuple(ctx, storage.Principal{OrgID: "org-1", RepositoryScopes: []string{"*"}}, request, ResolvedGraphBinding{}, repositoryAnchoredResolution(repositoryWorkItemAnchor), &AnswerPlan{}, workItemMemberFilter{})
+			if err != nil {
+				t.Fatalf("discoverWorkItemTuple() error = %v", err)
+			}
+			if graph.calls != 1 || got.Cohort == nil {
+				t.Fatalf("premise: walk calls %d, cohort %+v: the tuple read did not measure", graph.calls, got.Cohort)
+			}
+			disclosed := false
+			for _, detail := range got.Coverage.Details {
+				if detail.Code == contractsv1.ContextFabricCoverageDetailReadPopulationUnverified && detail.Raw == ProjectNarrowingUnverifiedRaw && detail.Degrading && detail.Label != "" {
+					disclosed = true
+				}
+			}
+			if disclosed != unverified || got.Coverage.Partial != unverified || slices.Contains(got.Coverage.DegradedReasons, ProjectNarrowingUnverifiedRaw) != unverified {
+				t.Fatalf("coverage = %+v, want the unverified narrowing disclosed = %v", got.Coverage, unverified)
+			}
+		})
 	}
 }

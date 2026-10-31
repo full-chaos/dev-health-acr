@@ -69,3 +69,50 @@ func assertWalkReadsStatedMembership(t *testing.T, ctx context.Context, adapter 
 		}
 	}
 }
+
+// Review r1 P2, on a real FalkorDB: the repository work-item walk reports, in
+// TreeWorkItemWalk, that a requested project narrowing admitted its linked
+// issues only on their "*" project lists (no issue states a membership here),
+// and reports nothing without a narrowing.
+func TestLiveTheRepositoryWalkReportsAnUnverifiedProjectNarrowing(t *testing.T) {
+	ctx := context.Background()
+	adapter, _ := newLiveFalkorAdapter(t, ctx)
+	assertRepositoryWalkReportsUnverifiedNarrowing(t, ctx, adapter)
+}
+
+func assertRepositoryWalkReportsUnverifiedNarrowing(t *testing.T, ctx context.Context, adapter *Adapter) {
+	t.Helper()
+	orgID := "live-12229-tree-" + time.Now().UTC().Format("20060102T150405.000000000")
+	t.Cleanup(func() { _ = adapter.PurgeOrganization(context.Background(), orgID) })
+	entities, relationships := newLiveMemberFixture(orgID, time.Now().UTC(), nil, liveMemberLinks())
+	for _, batch := range []contextfabric.ProjectionBatch{entities, relationships} {
+		if _, err := adapter.ApplyProjectionBatch(ctx, batch); err != nil {
+			t.Fatalf("ApplyProjectionBatch(%s) error = %v", batch.BatchID, err)
+		}
+	}
+	principal := storage.Principal{OrgID: orgID}
+	binding, err := adapter.ResolveInvestigationBinding(ctx, principal)
+	if err != nil {
+		t.Fatalf("ResolveInvestigationBinding() error = %v", err)
+	}
+	anchor := contextfabric.SubjectRef{Kind: contextfabric.SubjectRepository, CanonicalID: memberAnchorID, Label: memberAnchorSlug}
+	for name, tc := range map[string]struct {
+		scope contextfabric.RequestedScope
+		want  bool
+	}{
+		"no narrowing": {contextfabric.RequestedScope{}, false},
+		"a narrowing no issue proves": {contextfabric.RequestedScope{ProjectIDs: []string{"proj-1"},
+			ProjectNarrowing: &contractsv1.ContextFabricProjectNarrowing{Identities: []string{"project.v2:linear:proj-1"}, Complete: true}}, true},
+	} {
+		walk, err := adapter.TreeWorkItemMembers(ctx, principal, binding, tc.scope, anchor, 25)
+		if err != nil {
+			t.Fatalf("%s: TreeWorkItemMembers() error = %v", name, err)
+		}
+		if len(walk.Members) == 0 {
+			t.Fatalf("%s: premise: the walk admitted no member", name)
+		}
+		if walk.ProjectNarrowingUnverified != tc.want {
+			t.Fatalf("%s: ProjectNarrowingUnverified = %v, want %v", name, walk.ProjectNarrowingUnverified, tc.want)
+		}
+	}
+}

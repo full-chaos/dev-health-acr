@@ -101,3 +101,45 @@ func TestAnEdgeWithAWildcardProjectListDefersToItsEndpoints(t *testing.T) {
 		t.Fatal("a node with unstated membership is not reported")
 	}
 }
+
+// Review r1 P2: a tree walk narrows every issue by its stated membership --
+// a repository-less issue (admitted by its link) included -- and records an
+// issue it admitted only on its "*" project list.
+func TestATreeWalkNarrowsEveryIssueByStatedMembership(t *testing.T) {
+	scope := contextfabric.RequestedScope{
+		ProjectIDs:       []string{"proj-1"},
+		ProjectNarrowing: &contractsv1.ContextFabricProjectNarrowing{Identities: []string{"project.v2:linear:proj-1"}, Complete: true},
+	}
+	issue := func(repositories []string, stated interface{}) *node {
+		properties := map[string]interface{}{
+			propKind: string(contextfabric.SubjectWorkItem), propCanonicalID: "work_item.v2:00000000-0000-0000-0000-000000000000:ENG-1",
+			propAuthzRepos: repositories, propAuthzProjects: "*",
+		}
+		if stated != nil {
+			properties[propAuthzProjectIdentities] = stated
+		}
+		return &node{Properties: properties}
+	}
+	repositoryLessRepos, ownRepository := []string{noRepositoryScope}, []string{"acme/api"}
+	native := linkTier{name: "native", grantsAuthority: true}
+	for name, tc := range map[string]struct {
+		n          *node
+		admitted   bool
+		unverified bool
+	}{
+		"a repository-less member":                   {issue(repositoryLessRepos, []interface{}{"project.v2:linear:proj-1"}), true, false},
+		"a repository-less issue of another project": {issue(repositoryLessRepos, []interface{}{"project.v2:linear:proj-2"}), false, false},
+		"a repository-less issue, unstated":          {issue(repositoryLessRepos, nil), true, true},
+		"an issue of its own repository, a member":   {issue(ownRepository, []interface{}{"project.v2:linear:proj-1"}), true, false},
+		"an issue of its own repository, another":    {issue(ownRepository, []interface{}{"project.v2:linear:proj-2"}), false, false},
+		"an issue of its own repository, unstated":   {issue(ownRepository, nil), true, true},
+	} {
+		state := treeWalkState{out: &treeWalk{}, principal: storage.Principal{OrgID: "org_1"}, scope: scope}
+		if got := state.admitted(treeIssue, tc.n, native); got != tc.admitted {
+			t.Errorf("%s: admitted = %v, want %v", name, got, tc.admitted)
+		}
+		if state.out.projectNarrowingUnverified != tc.unverified {
+			t.Errorf("%s: recorded unverified = %v, want %v", name, state.out.projectNarrowingUnverified, tc.unverified)
+		}
+	}
+}

@@ -2,6 +2,7 @@ package contextfabric
 
 import (
 	"context"
+	"fmt"
 	"strings"
 
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
@@ -99,4 +100,26 @@ func (e *Engine) resolveRequestedProjectNarrowing(ctx context.Context, principal
 		e.telemetry.RecordProjectNarrowingResolution(ctx, principal, event)
 	}
 	return scope
+}
+
+// discloseUnverifiedProjectNarrowing adds, once, the degrading
+// read_population_unverified detail (raw project_narrowing_unverified) the
+// general graph read adds when a requested project narrowing admitted a node
+// only on its "*" project list: the work-item tuple path's walk reports the
+// same thing through WorkItemMembershipResult (CHAOS-12229). Its served
+// status is then floored to partial (CHAOS-12242).
+func discloseUnverifiedProjectNarrowing(coverage *Coverage) {
+	for _, existing := range coverage.Details {
+		if existing.Code == contractsv1.ContextFabricCoverageDetailReadPopulationUnverified && existing.Raw == ProjectNarrowingUnverifiedRaw {
+			return
+		}
+	}
+	detail := CoverageDetail{
+		DetailID: fmt.Sprintf("cov-graph-%02d", len(coverage.Details)+1), Source: "context-fabric:graph",
+		Code: contractsv1.ContextFabricCoverageDetailReadPopulationUnverified, Degrading: true, Raw: ProjectNarrowingUnverifiedRaw,
+	}
+	detail.Label = contractsv1.ComposeCoverageDetailLabel(detail)
+	coverage.Partial = true
+	coverage.DegradedReasons = append(coverage.DegradedReasons, ProjectNarrowingUnverifiedRaw)
+	coverage.Details = append(coverage.Details, detail)
 }

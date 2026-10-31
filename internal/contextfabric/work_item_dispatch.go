@@ -90,6 +90,9 @@ func (e *Engine) discoverWorkItemTuple(ctx context.Context, principal storage.Pr
 		return graph, census, nil
 	}
 	measured = true
+	if membership.ProjectNarrowingUnverified {
+		discloseUnverifiedProjectNarrowing(&graph.Coverage)
+	}
 	// A filtered read never measures the denied partition: its count would be
 	// the denied items' count for one status, a distribution the unfiltered
 	// read does not give. The filtered answer states one fixed exclusion

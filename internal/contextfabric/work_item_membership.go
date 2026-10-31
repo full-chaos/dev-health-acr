@@ -205,6 +205,9 @@ type WorkItemMembershipGrantShape struct {
 type WorkItemMembershipResult struct {
 	Members []WorkItemMembershipMember
 	Census  WorkItemMembershipCensus
+	// ProjectNarrowingUnverified: a graph walk admitted a member under a
+	// requested project narrowing only on its "*" project list (CHAOS-12229).
+	ProjectNarrowingUnverified bool
 }
 
 // WorkItemMembershipLease must remain held until the complete future answer

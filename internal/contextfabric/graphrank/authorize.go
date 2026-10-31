@@ -104,10 +104,7 @@ func AuthorizedAttributes(principal storage.Principal, requested contextfabric.R
 	if len(requested.RepositorySlugs) > 0 && !requestedRepositoriesAdmit(attributes, requested.RepositorySlugs) {
 		return false
 	}
-	if len(requested.ProjectIDs) > 0 && !anyContainsAttr(attributes, authorizationProjectsAttr, requested.ProjectIDs) {
-		return false
-	}
-	if requestedProjectNarrowingDenies(requested, attributes) {
+	if !ProjectNarrowingAdmits(requested, attributes) {
 		return false
 	}
 	if len(requested.TeamIDs) > 0 && !anyContainsAttr(attributes, authorizationTeamsAttr, requested.TeamIDs) {
@@ -139,6 +136,19 @@ func AuthorizedAttributes(principal storage.Principal, requested contextfabric.R
 func ProjectNarrowingUnproven(requested contextfabric.RequestedScope, attributes map[string]interface{}) bool {
 	membership, applies := requestedProjectMembership(requested, attributes)
 	return applies && membership != ProjectMembershipMember
+}
+
+// ProjectNarrowingAdmits is the requested-project part of AuthorizedAttributes
+// alone: no project narrowing, or a real project list that holds a requested
+// id, or a "*" list that stated membership does not refuse
+// (requestedProjectNarrowingDenies). A reader that decides a node's grants by
+// another rule (a tree walk's repository-less issue, admitted by its link)
+// still applies the requested narrowing through it (CHAOS-12229).
+func ProjectNarrowingAdmits(requested contextfabric.RequestedScope, attributes map[string]interface{}) bool {
+	if len(requested.ProjectIDs) > 0 && !anyContainsAttr(attributes, authorizationProjectsAttr, requested.ProjectIDs) {
+		return false
+	}
+	return !requestedProjectNarrowingDenies(requested, attributes)
 }
 
 // requestedProjectNarrowingDenies reports whether a resolved project
