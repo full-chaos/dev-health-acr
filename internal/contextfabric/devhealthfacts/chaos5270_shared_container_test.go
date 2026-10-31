@@ -519,6 +519,7 @@ func startSharedClickHouseContainer(tb testing.TB) (*runtimeclickhouse.Client, c
 		ContainerRequest: testcontainers.ContainerRequest{
 			Image: chfixture.Image, ExposedPorts: []string{"9000/tcp"},
 			Env:        map[string]string{"CLICKHOUSE_USER": "acr", "CLICKHOUSE_PASSWORD": "acr", "CLICKHOUSE_DB": "default"},
+			Files:      preciseMemoryAccountingFiles(),
 			WaitingFor: wait.ForListeningPort("9000/tcp").WithStartupTimeout(2 * time.Minute),
 			LogConsumerCfg: &testcontainers.LogConsumerConfig{
 				Consumers: []testcontainers.LogConsumer{sharedClickHouseDeathBuf},
@@ -582,6 +583,13 @@ func startSharedClickHouseContainer(tb testing.TB) (*runtimeclickhouse.Client, c
 			return nil, nil, "", nil, fmt.Errorf("clickhouse not ready for connections: %w", pingErr)
 		}
 		time.Sleep(500 * time.Millisecond)
+	}
+	// CHAOS-12168: the memory guards need precise accounting; a server without
+	// the profile fails every test that uses it (sharedClickHouseFixture).
+	if err := verifyPreciseMemoryAccounting(ctx, direct); err != nil {
+		logCleanupErr("close native connection", direct.Close())
+		terminate()
+		return nil, nil, "", nil, err
 	}
 
 	query, err := runtimeclickhouse.NewClickHouseQueryClientWithOptions(runtimeclickhouse.Options{

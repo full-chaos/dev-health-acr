@@ -39,6 +39,19 @@ const scopeStatementCeiling = uint64(32 << 20)
 // still trips it: the organization-wide check below fails the test otherwise.
 var slopeFloors = map[string]uint64{"historicalDropCount": 8 << 20, "historicalTouchCount": 8 << 20, "projectRepositories": 6 << 20, "projectRepositoriesAsOf": 6 << 20}
 
+// preciseSpreadStatements are the scope expander statements whose three warm
+// runs agree to a few KB under precise memory accounting (CHAOS-12168): at
+// most 16,951 bytes over 48 hosted runs at each size. The default accounting
+// spread them by up to 4,272,370 bytes. A spread over measurementSpreadLimit
+// means the measurement is coarse again, and the slope guard would compare
+// noise. The other statements still move by MBs between runs: that is
+// multithread allocation variance, which their slope floors cover.
+var preciseSpreadStatements = map[string]bool{"projectLinkedRepositories": true, "projectRepositories": true, "projectUnlinkedIssueCount": true, "teamUnlinkedIssueCount": true, "projectWorkItems": true}
+
+// measurementSpreadLimit is the largest spread a preciseSpreadStatements
+// reading may have: 64 KiB, about four times the largest spread measured.
+const measurementSpreadLimit = uint64(64 << 10)
+
 // workItemSelectionCeiling bounds the two work-item selections, whose
 // authorization relations cost a fixed amount per thread: the peak measured
 // at two threads on merged parts (21.8 MB at 100k and 300k unrelated work
@@ -436,6 +449,16 @@ func TestScopeExpanderStatementsFollowTheRequestedScopeOnRealClickHouse(t *testi
 		t.Logf("PEAK %s scoped small=%d large=%d (spread %d/%d) org-wide small=%d large=%d (spread %d/%d)", label, s.scoped.peak, l.scoped.peak, s.scoped.spread, l.scoped.spread, s.orgWide.peak, l.orgWide.peak, s.orgWide.spread, l.orgWide.spread)
 		if s.scoped.peak == 0 || l.scoped.peak == 0 || s.orgWide.peak == 0 || l.orgWide.peak == 0 {
 			t.Fatalf("%s: measurement did not happen (small %+v, large %+v)", label, s, l)
+		}
+		if preciseSpreadStatements[label] {
+			for _, reading := range []struct {
+				size   string
+				spread uint64
+			}{{"smaller", s.scoped.spread}, {"larger", l.scoped.spread}} {
+				if reading.spread > measurementSpreadLimit {
+					t.Errorf("%s: three warm runs at the %s size spread by %d bytes, want at most %d: the memory measurement is coarse (CHAOS-12168), so the slope guard would compare noise", label, reading.size, reading.spread, measurementSpreadLimit)
+				}
+			}
 		}
 		floor := arrayMemoryFloor
 		if own, ok := slopeFloors[label]; ok {
