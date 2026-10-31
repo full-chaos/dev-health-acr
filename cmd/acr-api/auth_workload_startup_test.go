@@ -58,7 +58,8 @@ func prepareWithWorkload(t *testing.T, cfg config.Config) (serverCreated bool, r
 }
 
 func TestPrepareServerRefusesABadAuthWorkloadConfig(t *testing.T) {
-	cfg := workloadStartupConfig(t, "http://127.0.0.1:1", "http://auth.example.test")
+	cfg := workloadStartupConfig(t, "http://127.0.0.1:1", "https://auth.example.test")
+	cfg.AuthWorkload.Issuer = "http://auth.example.test"
 	created, _, err := prepareWithWorkload(t, cfg)
 	if err == nil || !strings.Contains(err.Error(), "auth workload") {
 		t.Fatalf("a bad auth workload config must stop the start naming it: %v", err)

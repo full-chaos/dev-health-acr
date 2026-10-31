@@ -36,6 +36,12 @@ func (a AuthWorkloadConfig) Validate() error {
 	if a.Issuer == "" {
 		return errors.New("ACR_AUTH_WORKLOAD_ISSUER is required when the auth workload client is configured")
 	}
+	if err := validateExchangeURL(a.ExchangeURL, a.AllowPlainHTTP); err != nil {
+		return errors.New("ACR_AUTH_WORKLOAD_EXCHANGE_URL is invalid: " + err.Error())
+	}
+	if err := validateIssuerURL(a.Issuer); err != nil {
+		return errors.New("ACR_AUTH_WORKLOAD_ISSUER is invalid: " + err.Error())
+	}
 	switch {
 	case a.SubjectFile == "" && a.BootstrapFile == "":
 		return errors.New("ACR_AUTH_WORKLOAD_SUBJECT_FILE or ACR_AUTH_WORKLOAD_BOOTSTRAP_FILE is required when the auth workload client is configured")
