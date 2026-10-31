@@ -1084,11 +1084,20 @@ func StripModelAuthoredClaimedFactTableContent(claims []ClaimedFact) (cleaned []
 		// counterpart carries no genuine second table would survive
 		// un-clobbered: attachCanonicalRows only OVERWRITES the pair when
 		// a real secondary field exists, never clears it when none does.
-		if len(claim.Rows) > 0 || claim.Table != nil || len(claim.TimeSeriesRows) > 0 || claim.TimeSeriesTable != nil {
+		//
+		// CHAOS-12160 (codex r1, P2, executed on #1800): InvestmentMix is the
+		// same rule again. It is server content, set from the claim's
+		// grounding fact by discloseInvestmentMix once every claim is minted,
+		// and the contract refuses a value it cannot carry (an unknown source,
+		// or the field on a non-investment claim), so a model-authored value
+		// would reject the whole draft. Stripped here and counted as server
+		// content the model authored.
+		if len(claim.Rows) > 0 || claim.Table != nil || len(claim.TimeSeriesRows) > 0 || claim.TimeSeriesTable != nil || claim.InvestmentMix != nil {
 			claim.Rows = nil
 			claim.Table = nil
 			claim.TimeSeriesRows = nil
 			claim.TimeSeriesTable = nil
+			claim.InvestmentMix = nil
 			strippedCount++
 		}
 		cleaned[i] = claim

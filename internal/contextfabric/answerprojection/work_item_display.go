@@ -31,7 +31,7 @@ func workItemDirectClaims(result v1.ContextFabricInvestigationResult) map[subjec
 }
 
 func projectedScalarFact(f v1.ContextFabricClaimedFact) v1.ContextFabricProjectedFact {
-	return v1.ContextFabricProjectedFact{ClaimID: f.ClaimID, Kind: f.Kind, Subject: f.Subject, Field: f.Field, Value: f.Value}
+	return v1.ContextFabricProjectedFact{ClaimID: f.ClaimID, Kind: f.Kind, Subject: f.Subject, Field: f.Field, Value: f.Value, InvestmentMix: f.InvestmentMix}
 }
 
 // Count the union of eligible driver, server and direct member claims once,
