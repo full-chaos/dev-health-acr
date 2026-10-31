@@ -143,7 +143,8 @@ func TestRequiredBaselineBranchControls(t *testing.T) {
 		// (3) c moves from B's requirements to A's. A gains c, which its
 		// baseline branch declared, but B loses c: an old body {a, b} met
 		// only A and now meets B too, so it fails the oneOf.
-		{name: "a required field moves from one inline alternative to another", refused: true, mentions: []string{`field "c" at instance location "/"`},
+		{name: "a required field moves from one inline alternative to another", refused: true,
+			mentions: []string{`the oneOf at instance location "/" changed its alternatives (2 at v1.0.0, 2 now)`}, absent: []string{`field "c"`},
 			base:    one(`{"type":"object","oneOf":[{"properties":{"a":{},"c":{}},"required":["a"]},{"properties":{"b":{},"c":{}},"required":["b","c"]}]}`),
 			current: one(`{"type":"object","oneOf":[{"properties":{"a":{},"c":{}},"required":["a","c"]},{"properties":{"b":{},"c":{}},"required":["b"]}]}`)},
 		// Paired: A's gain of c is allowed (A declared c), so the refusal
@@ -210,30 +211,44 @@ func TestRequiredBaselineBranchReporting(t *testing.T) {
 			base:    one(`{"type":"object","oneOf":[{"properties":{"a":{}},"required":["a"]},{"properties":{"b":{}},"required":["b"]}]}`),
 			current: one(`{"type":"object","oneOf":[{"properties":{"a":{}},"required":["a"]},{"properties":{"b":{}},"required":["b"]},{"properties":{"zz":{}},"required":["zz"]}]}`)},
 		// An old body {a, c} met only B; A no longer requires b, so it meets
-		// both and fails the oneOf. Nothing was added, so the report falls
-		// back to the alternatives' fields, without k, which the baseline
-		// declared outright.
+		// both and fails the oneOf. The group is not paired (its alternatives
+		// are inline) and no field is new, so the refusal names the group.
 		{name: "a oneOf alternative that only loses a requirement", refused: true,
-			mentions: []string{`field "a" at instance location "/"`}, absent: []string{`field "k"`},
-			base:    one(`{"type":"object",` + withK + `"oneOf":[{"properties":{"a":{},"b":{}},"required":["k","a","b"]},{"properties":{"c":{}},"required":["k","c"]}]}`),
-			current: one(`{"type":"object",` + withK + `"oneOf":[{"properties":{"a":{},"b":{}},"required":["k","a"]},{"properties":{"c":{}},"required":["k","c"]}]}`)},
+			mentions: []string{`the oneOf at instance location "/" changed its alternatives (2 at v1.0.0, 2 now)`},
+			absent:   []string{`field "a"`, `field "c"`, `field "k"`},
+			base:     one(`{"type":"object",` + withK + `"oneOf":[{"properties":{"a":{},"b":{}},"required":["k","a","b"]},{"properties":{"c":{}},"required":["k","c"]}]}`),
+			current:  one(`{"type":"object",` + withK + `"oneOf":[{"properties":{"a":{},"b":{}},"required":["k","a"]},{"properties":{"c":{}},"required":["k","c"]}]}`)},
 		{name: "a paired oneOf alternative that only loses a requirement", refused: true,
 			mentions: []string{`the oneOf at instance location "/" changed: alternative 1 no longer requires "b"`},
 			absent:   []string{`field "a"`, `field "c"`, `field "k"`},
 			base:     one(refGroup("oneOf", withK, `"A":{"properties":{"a":{},"b":{}},"required":["k","a","b"]},"B":{"properties":{"c":{}},"required":["k","c"]}`, "A", "B")),
 			current:  one(refGroup("oneOf", withK, `"A":{"properties":{"a":{},"b":{}},"required":["k","a"]},"B":{"properties":{"c":{}},"required":["k","c"]}`, "A", "B"))},
-		{name: "a oneOf that loses an alternative", refused: true, mentions: []string{`field "a" at instance location "/"`},
-			base:    one(`{"type":"object","oneOf":[{"properties":{"a":{}},"required":["a"]},{"properties":{"b":{}},"required":["b"]},{"properties":{"c":{}},"required":["c"]}]}`),
-			current: one(`{"type":"object","oneOf":[{"properties":{"a":{}},"required":["a"]},{"properties":{"b":{}},"required":["b"]}]}`)},
-		// Every field is declared outright, so the narrower reports are
-		// empty; the group still refuses. The checker before CHAOS-12331
-		// passed both of these silently.
-		{name: "a oneOf over fields the baseline declared outright loses a requirement", refused: true, mentions: []string{`field "a" at instance location "/"`},
+		// Codex #1840 r2 P3: an old body {c} met the third alternative only;
+		// a and b are not newly required, so the refusal names the group.
+		{name: "a oneOf that loses an alternative", refused: true,
+			mentions: []string{`a.v1.schema.json: the oneOf at instance location "/" changed its alternatives (3 at v1.0.0, 2 now)`},
+			absent:   []string{`field "a"`, `field "b"`, `field "c"`},
+			base:     one(`{"type":"object","oneOf":[{"properties":{"a":{}},"required":["a"]},{"properties":{"b":{}},"required":["b"]},{"properties":{"c":{}},"required":["c"]}]}`),
+			current:  one(`{"type":"object","oneOf":[{"properties":{"a":{}},"required":["a"]},{"properties":{"b":{}},"required":["b"]}]}`)},
+		// Every field is declared outright, so no field is new; the group
+		// still refuses. The checker before CHAOS-12331 passed these
+		// silently.
+		{name: "a oneOf over fields the baseline declared outright loses a requirement", refused: true,
+			mentions: []string{`the oneOf at instance location "/" changed its alternatives (2 at v1.0.0, 2 now)`}, absent: []string{`field "a"`},
 			base:    one(`{"type":"object","properties":{"a":{},"b":{},"c":{}},"oneOf":[{"required":["a","b"]},{"required":["c"]}]}`),
 			current: one(`{"type":"object","properties":{"a":{},"b":{},"c":{}},"oneOf":[{"required":["a"]},{"required":["c"]}]}`)},
-		{name: "a new oneOf whose alternatives require nothing", refused: true, mentions: []string{`oneOf at instance location "/v"`},
-			base:    one(`{"type":"object","properties":{"v":{}}}`),
-			current: one(`{"type":"object","properties":{"v":{"oneOf":[{"type":"object"},{"type":"object","properties":{"w":{}}}]}}}`)},
+		{name: "a new oneOf over fields the baseline declared outright", refused: true,
+			mentions: []string{`the oneOf at instance location "/" changed its alternatives (0 at v1.0.0, 2 now)`}, absent: []string{`field "a"`, `field "b"`},
+			base:    one(`{"type":"object","properties":{"a":{},"b":{}}}`),
+			current: one(`{"type":"object","properties":{"a":{},"b":{}},"oneOf":[{"required":["a"]},{"required":["b"]}]}`)},
+		{name: "a new oneOf names the fields the baseline did not declare outright", refused: true,
+			mentions: []string{`field "zz" at instance location "/"`}, absent: []string{`field "k"`, `field "a"`},
+			base:    one(`{"type":"object","properties":{"k":{},"a":{}}}`),
+			current: one(`{"type":"object","properties":{"k":{},"a":{},"zz":{}},"oneOf":[{"required":["k","a"]},{"required":["zz"]}]}`)},
+		{name: "a new oneOf whose alternatives require nothing", refused: true,
+			mentions: []string{`the oneOf at instance location "/v" changed since v1.0.0 in a way the check cannot weigh`},
+			base:     one(`{"type":"object","properties":{"v":{}}}`),
+			current:  one(`{"type":"object","properties":{"v":{"oneOf":[{"type":"object"},{"type":"object","properties":{"w":{}}}]}}}`)},
 	})
 }
 
@@ -255,5 +270,68 @@ func TestRequiredBaselineBranchReportsALostRequirement(t *testing.T) {
 			mentions: []string{`the oneOf at instance location "/" changed: alternative 2 no longer requires "b"`, `field "zz" at instance location "/" is required now`},
 			absent:   []string{`field "a"`, `field "c"`, `field "kind"`},
 			base:     one(kinds(`"kind","b","c"`, ``)), current: one(kinds(`"kind","c","zz"`, `,"zz":{}`))},
+	})
+}
+
+// Codex #1840 r2: two $ref groups at one location are different groups even
+// with the same targets in order: a declaration made beside a $ref in the
+// first never covers a requirement in the second. The baseline body
+// {"a":true,"b":true,"z":true} meets A in both groups (N refuses a body with
+// a); requiring x in the second group's A breaks it.
+func TestRequiredBaselineBranchSeparatesGroupsByPosition(t *testing.T) {
+	groups := func(first0, second0 string) string {
+		return `{"type":"object","properties":{"a":{},"b":{},"z":{}},"$defs":{"A":{"required":["a"]},"N":{"not":{"required":["a"]}}},"allOf":[` +
+			`{"oneOf":[` + first0 + `,{"$ref":"#/$defs/N"}]},{"oneOf":[` + second0 + `,{"$ref":"#/$defs/N"}]}]}`
+	}
+	runLocationCases(t, []locationCase{
+		{name: "a second $ref group requires a field declared beside the first group's $ref", refused: true, mentions: []string{`field "x" at instance location "/"`},
+			base:    one(groups(`{"$ref":"#/$defs/A","properties":{"x":{}}}`, `{"$ref":"#/$defs/A"}`)),
+			current: one(groups(`{"$ref":"#/$defs/A","properties":{"x":{}}}`, `{"$ref":"#/$defs/A","required":["x"]}`))},
+		{name: "a second $ref group requires a nested field only the first group declared", refused: true, mentions: []string{`field "x" at instance location "/box"`},
+			base: one(groups(`{"$ref":"#/$defs/A","properties":{"box":{"type":"object","properties":{"x":{}}}}}`,
+				`{"$ref":"#/$defs/A","properties":{"box":{"type":"object"}}}`)),
+			current: one(groups(`{"$ref":"#/$defs/A","properties":{"box":{"type":"object","properties":{"x":{}}}}}`,
+				`{"$ref":"#/$defs/A","properties":{"box":{"type":"object","required":["x"]}}}`))},
+	})
+}
+
+// Codex #1840 r2: a property some part of the schema forbids (false) is not
+// declared there, even when another part declares it. A forbid counts where
+// it applies: at its own branch and every branch inside it.
+func TestRequiredBaselineBranchForbiddenIsNotDeclared(t *testing.T) {
+	runLocationCases(t, []locationCase{
+		// The baseline body {"a":true} meets A; A now requires x, which A
+		// forbids, so it breaks.
+		{name: "an alternative requires a field it forbids beside an allOf member declaring it", refused: true, mentions: []string{`field "x" at instance location "/"`},
+			base: one(refGroup("oneOf", `"properties":{"a":{},"b":{}},`,
+				`"A":{"properties":{"x":false},"allOf":[{"properties":{"x":{}}}],"required":["a"]},"B":{"required":["b"]}`, "A", "B")),
+			current: one(refGroup("oneOf", `"properties":{"a":{},"b":{}},`,
+				`"A":{"properties":{"x":false},"allOf":[{"properties":{"x":{}}}],"required":["a","x"]},"B":{"required":["b"]}`, "A", "B"))},
+		{name: "an alternative requires a field its allOf member forbids", refused: true, mentions: []string{`field "x" at instance location "/"`},
+			base: one(refGroup("oneOf", `"properties":{"a":{},"b":{}},`,
+				`"A":{"properties":{"x":{}},"allOf":[{"properties":{"x":false}}],"required":["a"]},"B":{"required":["b"]}`, "A", "B")),
+			current: one(refGroup("oneOf", `"properties":{"a":{},"b":{}},`,
+				`"A":{"properties":{"x":{}},"allOf":[{"properties":{"x":false}}],"required":["a","x"]},"B":{"required":["b"]}`, "A", "B"))},
+		{name: "an alternative requires a field its $ref target forbids", refused: true, mentions: []string{`field "x" at instance location "/"`},
+			base: one(refGroup("oneOf", `"properties":{"a":{},"b":{}},`,
+				`"F":{"properties":{"x":false}},"A":{"$ref":"#/$defs/F","properties":{"x":{}},"required":["a"]},"B":{"required":["b"]}`, "A", "B")),
+			current: one(refGroup("oneOf", `"properties":{"a":{},"b":{}},`,
+				`"F":{"properties":{"x":false}},"A":{"$ref":"#/$defs/F","properties":{"x":{}},"required":["a","x"]},"B":{"required":["b"]}`, "A", "B"))},
+		{name: "an alternative requires a field the body forbids outright", refused: true, mentions: []string{`field "x" at instance location "/"`},
+			base: one(refGroup("oneOf", `"properties":{"a":{},"b":{},"x":false},`,
+				`"A":{"properties":{"x":{}},"required":["a"]},"B":{"required":["b"]}`, "A", "B")),
+			current: one(refGroup("oneOf", `"properties":{"a":{},"b":{},"x":false},`,
+				`"A":{"properties":{"x":{}},"required":["a","x"]},"B":{"required":["b"]}`, "A", "B"))},
+		{name: "the body requires a field it forbids beside an allOf member declaring it", refused: true, mentions: []string{`field "x" at instance location "/"`},
+			base:    one(`{"type":"object","properties":{"a":{},"x":false},"allOf":[{"properties":{"x":{}}}]}`),
+			current: one(`{"type":"object","required":["x"],"properties":{"a":{},"x":false},"allOf":[{"properties":{"x":{}}}]}`)},
+		{name: "a then requires a field it declares and the body forbids", refused: true, mentions: []string{`field "x" at instance location "/"`},
+			base:    one(`{"type":"object","properties":{"f":{},"x":false},"if":{"required":["f"]},"then":{"properties":{"x":{}}}}`),
+			current: one(`{"type":"object","properties":{"f":{},"x":false},"if":{"required":["f"]},"then":{"required":["x"],"properties":{"x":{}}}}`)},
+		// A forbid under a then holds only where the then applies: outside
+		// it the field stays declared.
+		{name: "control: a field forbidden only under a then stays declared outside it",
+			base:    one(`{"type":"object","properties":{"f":{},"x":{}},"if":{"required":["f"]},"then":{"properties":{"x":false}}}`),
+			current: one(`{"type":"object","required":["x"],"properties":{"f":{},"x":{}},"if":{"required":["f"]},"then":{"properties":{"x":false}}}`)},
 	})
 }

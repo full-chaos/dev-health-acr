@@ -42,25 +42,29 @@ type RequiredBaselineOptions struct {
 // (CHAOS-12331). A then or else is the same branch when its location, schema
 // position and if (compared through the if's $refs) are the same; a
 // dependentSchemas entry when its location, position and key are; a $ref
-// alternative when its group's location, keyword and alternative count, its
-// index and its $ref target are. A declaration under an inline alternative
-// counts for nothing: an inline alternative is known only by its position,
-// so a reorder could fake it.
+// alternative when its group's location, keyword, schema position and
+// alternative count, its index and its $ref target are. A declaration under
+// an inline alternative counts for nothing: an inline alternative is known
+// only by its position, so a reorder could fake it. A property that some
+// subschema forbids (false) at a location is not declared there under the
+// forbid's branch or any branch inside it, whatever another part declares.
 //
 // An anyOf or oneOf whose alternatives are all $refs pairs with the baseline
-// group at its location with the same keyword, alternative count, enclosing
-// branch and targets in order. It is covered when each alternative requires
-// every field its baseline alternative required, and besides only fields
-// that alternative declared (pairCovered). A group with an inline
-// alternative keeps the earlier rules. An uncovered group always refuses
+// group at its location with the same keyword, schema position, alternative
+// count, enclosing branch and targets in order. It is covered when each
+// alternative requires every field its baseline alternative required, and
+// besides only fields that alternative declared (pairCovered). A group with
+// an inline alternative keeps the earlier rules. An uncovered group always refuses
 // (groupReport). A paired one names the fields its alternatives gained that
 // their baseline branches never declared, and each field an alternative no
 // longer requires on a line of its own. Another names the fields no
-// baseline alternative there required, else the fields neither required nor
-// declared outright there, else every field it requires, else the group
-// itself. The last two close an existing silent pass: before CHAOS-12331 an
-// uncovered oneOf over fields the baseline declared outright, or one whose
-// alternatives require no field, was accepted with nothing reported.
+// baseline alternative there required (with no baseline group there, the
+// fields neither required nor declared outright there). When no field is
+// newly required, the refusal names the group: its alternative counts at
+// the baseline and now, or the group alone when its alternatives require no
+// field. Naming the group closes an existing silent pass: before CHAOS-12331
+// an uncovered oneOf over fields the baseline declared outright, or one
+// whose alternatives require no field, was accepted with nothing reported.
 //
 // Assumption: acr is the only producer of these bodies, and it emits only the
 // fields its schema declares. So a property name new since the baseline was
@@ -156,6 +160,10 @@ func CheckRequiredAgainstTag(options RequiredBaselineOptions) error {
 		}
 		compared++
 		for _, added := range newlyRequiredAt(baseFacts, curFacts) {
+			if added.changed {
+				problems = append(problems, fmt.Sprintf("%s: the %s at instance location %q changed its alternatives (%d at %s, %d now); no field is newly required, but a body the baseline accepted may no longer meet it; keep its alternatives as they were for one release (CHAOS-12331)", name, added.keyword, displayLocation(added.location), added.was, tag, added.now))
+				continue
+			}
 			if added.alternative > 0 {
 				problems = append(problems, fmt.Sprintf("%s: the %s at instance location %q changed: alternative %d no longer requires %q; a paired alternative may only gain fields its baseline branch declared (CHAOS-12331)", name, added.keyword, displayLocation(added.location), added.alternative, added.field))
 				continue
@@ -355,8 +363,12 @@ type locationFacts struct {
 	// the conditional ones, still says which fields an old body may carry
 	// (noOldBodyTriggers).
 	declaredAlways map[string]map[string]bool
-	// declaredIn is the branch paths each declaration was made under.
+	// declaredIn is the branch paths each declaration was made under, and
+	// forbidden the branch paths some subschema forbade the field (false)
+	// under. A forbid holds under its own branch and every branch inside it,
+	// so a declaration there counts for nothing (settleDeclarations).
 	declaredIn map[string]map[string]map[string]bool
+	forbidden  map[string]map[string]map[string]bool
 	shaped     map[string]bool    // some applicable subschema has a properties map
 	seen       map[string]bool    // some subschema other than false applies
 	groups     []alternativeGroup // anyOf and oneOf branches' own requirements
@@ -376,12 +388,14 @@ type alternativeGroup struct {
 	location     string
 	alternatives [][]string
 	// declared is each alternative's own declared fields there
-	// (directDeclared), targets each alternative's $ref target ("" for an
-	// inline alternative, alternativeTarget), and branch the branch path the
-	// group sits under. They pair the group with the baseline's
-	// (pairedGroup).
+	// (directDeclared, less what an enclosing branch forbids), targets each
+	// alternative's $ref target ("" for an inline alternative,
+	// alternativeTarget), pointer the schema position of the node holding
+	// the group, and branch the branch path the group sits under. They pair
+	// the group with the baseline's (pairedGroup).
 	declared [][]string
 	targets  []string
+	pointer  string
 	branch   string
 	triggers []trigger
 	// exclusive marks a oneOf: a body must meet exactly one alternative,
@@ -528,15 +542,16 @@ func alternativeTarget(docs schemaDocs, scope schemaScope, node any) string {
 	return ""
 }
 
-// alternativeElement names one alternative: its group's location, keyword and
-// alternative count, its index, and its $ref target. An inline alternative's
-// element begins with inlineMark: a declaration under it never meets a
-// requirement (declaredUnder).
-func alternativeElement(location, keyword string, count, index int, target string) string {
+// alternativeElement names one alternative: its group's location, keyword,
+// schema position and alternative count, its index, and its $ref target, so
+// two groups at one location never share an element. An inline
+// alternative's element begins with inlineMark: a declaration under it
+// never meets a requirement (declaredUnder).
+func alternativeElement(location, keyword, pointer string, count, index int, target string) string {
 	if target == "" {
-		return inlineMark + branchParts(location, keyword, strconv.Itoa(count), strconv.Itoa(index))
+		return inlineMark + branchParts(location, keyword, pointer, strconv.Itoa(count), strconv.Itoa(index))
 	}
-	return branchSep + branchParts(location, keyword, strconv.Itoa(count), strconv.Itoa(index), target)
+	return branchSep + branchParts(location, keyword, pointer, strconv.Itoa(count), strconv.Itoa(index), target)
 }
 
 // underBranch reports whether a path lies under prefix: prefix is the path
@@ -562,8 +577,61 @@ func (f *locationFacts) declaredUnder(location, field, path string) bool {
 }
 
 func collectLocationFacts(docs schemaDocs, file string) (*locationFacts, error) {
-	facts := &locationFacts{required: map[string]map[string][]requiredOccurrence{}, declared: map[string]map[string]bool{}, declaredAlways: map[string]map[string]bool{}, declaredIn: map[string]map[string]map[string]bool{}, shaped: map[string]bool{}, seen: map[string]bool{}, extraKeys: map[string]bool{}, patterns: map[string][]string{}}
-	return facts, facts.walk(docs, schemaScope{file: file}, docs.byFile[file], file+"#", "", map[string]bool{}, 0, nil, notInAlternative, "")
+	facts := &locationFacts{required: map[string]map[string][]requiredOccurrence{}, declared: map[string]map[string]bool{}, declaredAlways: map[string]map[string]bool{}, declaredIn: map[string]map[string]map[string]bool{}, forbidden: map[string]map[string]map[string]bool{}, shaped: map[string]bool{}, seen: map[string]bool{}, extraKeys: map[string]bool{}, patterns: map[string][]string{}}
+	if err := facts.walk(docs, schemaScope{file: file}, docs.byFile[file], file+"#", "", map[string]bool{}, 0, nil, notInAlternative, ""); err != nil {
+		return facts, err
+	}
+	facts.settleDeclarations()
+	return facts, nil
+}
+
+// settleDeclarations drops each declaration a forbid holds over (one at the
+// same location under the declaration's branch or one enclosing it), then
+// fills declared and declaredAlways from what is left, and drops from each
+// group's declared fields what a branch enclosing the group forbids there.
+// It runs after the walk, because a forbid may sit in a part walked after
+// the declaration it cancels.
+func (f *locationFacts) settleDeclarations() {
+	for location, fields := range f.declaredIn {
+		for field, paths := range fields {
+			for path := range paths {
+				if f.forbiddenOver(location, field, path) {
+					delete(paths, path)
+				}
+			}
+			if len(paths) == 0 {
+				delete(fields, field)
+				continue
+			}
+			addFact(f.declared, location, field)
+			if paths[""] {
+				addFact(f.declaredAlways, location, field)
+			}
+		}
+	}
+	for i := range f.groups {
+		group := &f.groups[i]
+		for j, fields := range group.declared {
+			var kept []string
+			for _, field := range fields {
+				if !f.forbiddenOver(group.location, field, group.branch) {
+					kept = append(kept, field)
+				}
+			}
+			group.declared[j] = kept
+		}
+	}
+}
+
+// forbiddenOver reports whether some subschema forbids a field at a location
+// under the branch path path or one enclosing it.
+func (f *locationFacts) forbiddenOver(location, field, path string) bool {
+	for prefix := range f.forbidden[location][field] {
+		if underBranch(path, prefix) {
+			return true
+		}
+	}
+	return false
 }
 
 // notInAlternative is the alternativeAt of a walk outside any anyOf or oneOf
@@ -577,18 +645,24 @@ func (f *locationFacts) addRequired(location, field string, triggers []trigger, 
 	f.required[location][field] = append(f.required[location][field], requiredOccurrence{triggers: triggers, branch: branch})
 }
 
+// addDeclared and addForbidden record a declaration and a forbid with their
+// branch paths; settleDeclarations derives declared and declaredAlways.
 func (f *locationFacts) addDeclared(location, field, branch string) {
-	addFact(f.declared, location, field)
-	if branch == "" {
-		addFact(f.declaredAlways, location, field)
+	addPath(f.declaredIn, location, field, branch)
+}
+
+func (f *locationFacts) addForbidden(location, field, branch string) {
+	addPath(f.forbidden, location, field, branch)
+}
+
+func addPath(set map[string]map[string]map[string]bool, location, field, branch string) {
+	if set[location] == nil {
+		set[location] = map[string]map[string]bool{}
 	}
-	if f.declaredIn[location] == nil {
-		f.declaredIn[location] = map[string]map[string]bool{}
+	if set[location][field] == nil {
+		set[location][field] = map[string]bool{}
 	}
-	if f.declaredIn[location][field] == nil {
-		f.declaredIn[location][field] = map[string]bool{}
-	}
-	f.declaredIn[location][field][branch] = true
+	set[location][field][branch] = true
 }
 
 func withTriggers(triggers []trigger, location string, fields ...string) []trigger {
@@ -670,7 +744,8 @@ func (f *locationFacts) walk(docs schemaDocs, scope schemaScope, node any, point
 			f.shaped[location] = true
 			for name, sub := range properties {
 				if refusesEveryValue(docs, scope, sub, 0) {
-					continue // forbidden there, never optional
+					f.addForbidden(location, name, branch) // forbidden there, never optional
+					continue
 				}
 				f.addDeclared(location, name, branch)
 				if err := f.walk(docs, scope, sub, pointer+"/properties/"+pointerToken(name), childLocation(location, name), refs, depth+1, triggers, alternativeAt, branch); err != nil {
@@ -726,13 +801,13 @@ func (f *locationFacts) walk(docs schemaDocs, scope schemaScope, node any, point
 			if !ok {
 				continue
 			}
-			group := alternativeGroup{location: location, branch: branch, triggers: triggers, exclusive: key == "oneOf"}
+			group := alternativeGroup{location: location, pointer: pointer, branch: branch, triggers: triggers, exclusive: key == "oneOf"}
 			for index, alternative := range branches {
 				target := alternativeTarget(docs, scope, alternative)
 				group.alternatives = append(group.alternatives, directRequired(docs, scope, alternative, 0))
 				group.declared = append(group.declared, directDeclared(docs, scope, alternative, 0))
 				group.targets = append(group.targets, target)
-				if err := f.walk(docs, scope, alternative, pointer+"/"+key+"/"+strconv.Itoa(index), location, refs, depth+1, triggers, location, branch+alternativeElement(location, key, len(branches), index, target)); err != nil {
+				if err := f.walk(docs, scope, alternative, pointer+"/"+key+"/"+strconv.Itoa(index), location, refs, depth+1, triggers, location, branch+alternativeElement(location, key, pointer, len(branches), index, target)); err != nil {
 					return err
 				}
 			}
@@ -802,32 +877,43 @@ func directRequired(docs schemaDocs, scope schemaScope, node any, depth int) []s
 
 // directDeclared is what a branch itself declares in properties at its own
 // location, through its $ref and allOf members, as directRequired reads its
-// requirements. A property whose schema refuses every value is not declared.
+// requirements. A property that any of those parts forbids (its schema
+// refuses every value) is not declared, even where another part declares it.
 func directDeclared(docs schemaDocs, scope schemaScope, node any, depth int) []string {
+	declared, forbidden := directProperties(docs, scope, node, depth)
+	return missingFrom(declared, forbidden)
+}
+
+// directProperties is the properties a branch's own parts declare and forbid
+// at its location, through its $ref and allOf members.
+func directProperties(docs schemaDocs, scope schemaScope, node any, depth int) (declared, forbidden []string) {
 	schema, ok := node.(map[string]any)
 	if !ok || depth > maxLocationDepth {
-		return nil
+		return nil, nil
 	}
 	scope = scope.enter(schema)
-	var fields []string
 	if properties, ok := schema["properties"].(map[string]any); ok {
 		for name, sub := range properties {
-			if !refusesEveryValue(docs, scope, sub, 0) {
-				fields = append(fields, name)
+			if refusesEveryValue(docs, scope, sub, 0) {
+				forbidden = append(forbidden, name)
+			} else {
+				declared = append(declared, name)
 			}
 		}
 	}
 	if ref, ok := schema["$ref"].(string); ok {
 		if resolved, target, _, err := docs.resolve(scope, ref); err == nil {
-			fields = append(fields, directDeclared(docs, target, resolved, depth+1)...)
+			d, f := directProperties(docs, target, resolved, depth+1)
+			declared, forbidden = append(declared, d...), append(forbidden, f...)
 		}
 	}
 	if members, ok := schema["allOf"].([]any); ok {
 		for _, member := range members {
-			fields = append(fields, directDeclared(docs, scope, member, depth+1)...)
+			d, f := directProperties(docs, scope, member, depth+1)
+			declared, forbidden = append(declared, d...), append(forbidden, f...)
 		}
 	}
-	return fields
+	return declared, forbidden
 }
 
 func stringList(raw any) []string {
@@ -843,11 +929,15 @@ func stringList(raw any) []string {
 
 // addedRequired is one refusal: a field newly required at a location; with
 // alternative (1-based), a field that alternative of a paired anyOf or oneOf
-// there (keyword) no longer requires; or, with no field, an anyOf or oneOf
-// whose alternatives require no field to name.
+// there (keyword) no longer requires; with changed, an anyOf or oneOf whose
+// alternatives changed (was at the baseline, now) with no field newly
+// required to name; or, with no field, an anyOf or oneOf whose alternatives
+// require no field to name.
 type addedRequired struct {
 	location, field, keyword string
 	alternative              int
+	changed                  bool
+	was, now                 int
 }
 
 // newlyRequiredAt reports each field current requires at an instance location
@@ -911,17 +1001,17 @@ func newlyRequiredAt(baseline, current *locationFacts) []addedRequired {
 // group paired with the baseline's names the fields its alternatives gained
 // that their baseline branches never declared, and, each on a line of its
 // own, every field an alternative no longer requires: a lost requirement is
-// no new field, so it is not reported as one. Another group where the
-// baseline had groups names the fields no baseline alternative there
-// required. When that names nothing, it names the fields neither required
-// nor declared outright there; then every field its alternatives require;
-// then the group itself.
+// no new field, so it is not reported as one. Another group names the fields
+// no baseline alternative at its location required, or, where the baseline
+// had no group there, the fields neither required nor declared outright
+// there. When that names no field, the refusal names the group: its
+// alternative counts, or, when its alternatives require no field at all, the
+// group alone.
 func groupReport(baseline *locationFacts, group alternativeGroup) []addedRequired {
 	keyword := "anyOf"
 	if group.exclusive {
 		keyword = "oneOf"
 	}
-	var fields []string
 	if old := pairedGroup(baseline, group); old != nil {
 		var out []addedRequired
 		for i, alternative := range group.alternatives {
@@ -938,25 +1028,24 @@ func groupReport(baseline *locationFacts, group alternativeGroup) []addedRequire
 		if len(out) > 0 {
 			return out
 		}
-	} else {
-		var required []string
-		paired := false
-		for _, old := range baseline.groups {
-			if old.location != group.location {
-				continue
-			}
-			paired = true
-			for _, alternative := range old.alternatives {
-				required = append(required, alternative...)
-			}
+	}
+	var fields []string
+	atLocation := false
+	var required []string
+	for _, old := range baseline.groups {
+		if old.location != group.location {
+			continue
 		}
-		if paired {
-			for _, alternative := range group.alternatives {
-				fields = append(fields, missingFrom(alternative, required)...)
-			}
+		atLocation = true
+		for _, alternative := range old.alternatives {
+			required = append(required, alternative...)
 		}
 	}
-	if len(fields) == 0 {
+	if atLocation {
+		for _, alternative := range group.alternatives {
+			fields = append(fields, missingFrom(alternative, required)...)
+		}
+	} else {
 		for _, alternative := range group.alternatives {
 			for _, field := range alternative {
 				if len(baseline.required[group.location][field]) == 0 && !baseline.declaredAlways[group.location][field] {
@@ -965,19 +1054,43 @@ func groupReport(baseline *locationFacts, group alternativeGroup) []addedRequire
 			}
 		}
 	}
-	if len(fields) == 0 {
-		for _, alternative := range group.alternatives {
-			fields = append(fields, alternative...)
+	if len(fields) > 0 {
+		out := make([]addedRequired, len(fields))
+		for i, field := range fields {
+			out[i] = addedRequired{location: group.location, field: field}
+		}
+		return out
+	}
+	anyField := false
+	for _, alternative := range group.alternatives {
+		if len(alternative) > 0 {
+			anyField = true
 		}
 	}
-	if len(fields) == 0 {
+	if !anyField {
 		return []addedRequired{{location: group.location, keyword: keyword}}
 	}
-	out := make([]addedRequired, len(fields))
-	for i, field := range fields {
-		out[i] = addedRequired{location: group.location, field: field}
+	return []addedRequired{{location: group.location, keyword: keyword, changed: true, was: baselineCount(baseline, group), now: len(group.alternatives)}}
+}
+
+// baselineCount is the number of alternatives of the baseline group a
+// changed group replaces: the one at its location with its keyword and
+// schema position, else the first there with its keyword, else none (0).
+func baselineCount(baseline *locationFacts, group alternativeGroup) int {
+	count := 0
+	found := false
+	for _, old := range baseline.groups {
+		if old.location != group.location || old.exclusive != group.exclusive {
+			continue
+		}
+		if old.pointer == group.pointer {
+			return len(old.alternatives)
+		}
+		if !found {
+			count, found = len(old.alternatives), true
+		}
 	}
-	return out
+	return count
 }
 
 // missingFrom is the fields not in of.
@@ -996,14 +1109,15 @@ func missingFrom(fields, of []string) []string {
 }
 
 // pairedGroup is the baseline group a current group continues: at the same
-// location, with the same keyword, enclosing branch path and number of
-// alternatives, every alternative on both sides a $ref, and the same targets
-// in order. An inline alternative is known only by its position, so a group
-// holding one never pairs: it keeps the other coverage rules.
+// location, with the same keyword, schema position, enclosing branch path and
+// number of alternatives, every alternative on both sides a $ref, and the
+// same targets in order. An inline alternative is known only by its
+// position, so a group holding one never pairs: it keeps the other coverage
+// rules.
 func pairedGroup(baseline *locationFacts, group alternativeGroup) *alternativeGroup {
 	for i := range baseline.groups {
 		old := &baseline.groups[i]
-		if old.location != group.location || old.exclusive != group.exclusive || old.branch != group.branch {
+		if old.location != group.location || old.exclusive != group.exclusive || old.pointer != group.pointer || old.branch != group.branch {
 			continue
 		}
 		if len(old.alternatives) != len(group.alternatives) {
