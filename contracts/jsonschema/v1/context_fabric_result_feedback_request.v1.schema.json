@@ -1,0 +1,36 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://contracts.fullchaos.dev/acr/v1/context_fabric_result_feedback_request.v1.schema.json",
+  "title": "Context Fabric Result Feedback Request v1",
+  "description": "Sets the caller's feedback on one of its own Ask Dev results: POST /api/v1/context-fabric/investigations/feedback/{result_id}. The body is the whole feedback, so a repeat is harmless. Both flags are required; unset clears one. No field is nullable.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "correct",
+    "useful"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "context_fabric_result_feedback_request.v1"
+    },
+    "correct": {
+      "type": "string",
+      "enum": [
+        "yes",
+        "no",
+        "unset"
+      ],
+      "description": "Whether the caller found the answer correct: yes, no, or unset."
+    },
+    "useful": {
+      "type": "string",
+      "enum": [
+        "yes",
+        "no",
+        "unset"
+      ],
+      "description": "Whether the caller found the answer useful: yes, no, or unset."
+    }
+  }
+}

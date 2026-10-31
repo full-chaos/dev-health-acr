@@ -395,6 +395,7 @@ var contractRootExemplars = []any{
 	ContextFabricInvestigationResult{},
 	ContextFabricProjectionBatch{}, ContextFabricInvestigationEvent{}, ContextFabricSubmissionStatus{},
 	ContextFabricThread{}, ContextFabricThreadList{},
+	ContextFabricResultFeedback{}, ContextFabricResultFeedbackRequest{},
 	ContextPacket{}, ContextPacketItem{}, ContextPacketRequest{},
 	CredentialAckRequest{}, CredentialAckResponse{},
 	CredentialRevokeRequest{}, CredentialRevokeResponse{},

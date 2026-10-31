@@ -122,6 +122,9 @@ func validOpenAPIPath(path string) bool {
 		// for the same reason.
 		"/api/v1/context-fabric/threads",
 		"/api/v1/context-fabric/threads/{thread_id}",
+		// Ask Dev answer feedback (CHAOS-11950), listed for the same
+		// reason.
+		"/api/v1/context-fabric/investigations/feedback/{result_id}",
 		// CHAOS-7071: the direct data routes of CHAOS-7036 (E.5), listed
 		// one by one for the same reason as above.
 		"/api/v1/context-fabric/data/catalog",

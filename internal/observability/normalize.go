@@ -106,7 +106,7 @@ func normalizeDenial(value DenialClass) DenialClass {
 func normalizeOperation(value Operation) Operation {
 	switch value {
 	case OperationHealth, OperationReadiness, OperationCapabilities, OperationContext, OperationEvidence, OperationSnapshot, OperationEpisode,
-		OperationInvestigation, OperationInvestigationResult, OperationSubmissionStatus, OperationSubmissionAttach, OperationSubmissionCancel, OperationThreads, OperationThread, OperationDataCatalog, OperationDataSubjects,
+		OperationInvestigation, OperationInvestigationResult, OperationSubmissionStatus, OperationSubmissionAttach, OperationSubmissionCancel, OperationThreads, OperationThread, OperationResultFeedback, OperationDataCatalog, OperationDataSubjects,
 		OperationDataFacts, OperationDataRelationships, OperationDataOperations, OperationDataGraphQL:
 		return value
 	default:
