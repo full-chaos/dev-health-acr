@@ -13,6 +13,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sync"
 	"testing"
 	"time"
 
@@ -163,4 +164,53 @@ func TestProjectMixReadAnswersThroughWritesThatChangeNoAnswerAgainstRealClickHou
 			t.Fatalf("the answer differs from the single statement's: %v", diff)
 		}
 	})
+}
+
+// The scope statement pins each unit to the version it read (work_unit_id,
+// computed_at), and the later phases read exactly that version. A recompute that
+// writes the same content under a newer computed_at, followed by a merge, deletes
+// the pinned version (work_unit_investments is ReplacingMergeTree(computed_at)).
+// The unit must still be in the answer: the single statement reads the newer,
+// identical version and counts it.
+func TestProjectNativeMixKeepsAPinnedUnitThroughARecomputeAndAMergeAgainstRealClickHouse(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	window := devhealthfacts.ProjectMixWindow{}
+	const orgID = "org-12177-pinned-merge"
+	query, direct := newScopedCHAOS7257Client(t, nil)
+	createCHAOS7257Tables(t, ctx, direct)
+	at := seedCHAOS7257Native(t, ctx, direct, orgID)
+	insertNativeVersion(t, ctx, direct, orgID, "nu-pin", "feature_delivery", at.Add(-time.Hour))
+	insertMembership(t, ctx, direct, orgID, "nu-pin", at)
+	ids := []string{"linear:n-p1", "linear:n-p2", "linear:n-p3"}
+	before := runNativeStatement(t, ctx, query, "SingleNativeBefore", devhealthfacts.ProjectNativeStatement(window, 201), orgID, ids, window)
+	var once sync.Once
+	got, err := devhealthfacts.RunProjectNativeMix(devhealthfacts.WithProjectMixAfterScope(ctx, func() {
+		once.Do(func() {
+			insertNativeVersion(t, ctx, direct, orgID, "nu-pin", "feature_delivery", at.Add(-30*time.Minute))
+			if err := direct.Exec(ctx, `SYSTEM START MERGES work_unit_investments`); err != nil {
+				t.Fatalf("start merges: %v", err)
+			}
+			if err := direct.Exec(ctx, `OPTIMIZE TABLE work_unit_investments FINAL`); err != nil {
+				t.Fatalf("merge: %v", err)
+			}
+		})
+	}), query, orgID, ids, window, 201)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var versions uint64
+	if err := direct.QueryRow(ctx, `SELECT count() FROM work_unit_investments WHERE org_id = ? AND work_unit_id = 'nu-pin'`, orgID).Scan(&versions); err != nil {
+		t.Fatal(err)
+	}
+	after := runNativeStatement(t, ctx, query, "SingleNativeAfter", devhealthfacts.ProjectNativeStatement(window, 201), orgID, ids, window)
+	if versions != 1 {
+		t.Fatalf("control: %d physical versions of nu-pin after the merge, want 1 (the pinned one deleted)", versions)
+	}
+	if diff := nativeRowsDiffer(before, after); diff != nil {
+		t.Fatalf("control: the identical recompute changed the single statement's answer: %v", diff)
+	}
+	if diff := nativeRowsDiffer(after, nativeRowsOf(got)); diff != nil {
+		t.Fatalf("the phased answer lost the pinned unit after its version was merged away: %v\nwant %+v\ngot  %+v", diff, after, nativeRowsOf(got))
+	}
 }
