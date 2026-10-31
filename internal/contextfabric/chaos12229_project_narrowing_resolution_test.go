@@ -100,7 +100,7 @@ func TestAnUnresolvedProjectNarrowingStaysOnTheUnverifiedPath(t *testing.T) {
 // no line.
 func TestNoProjectNarrowingIsNotResolved(t *testing.T) {
 	t.Parallel()
-	for name, ids := range map[string][]string{"none": nil, "a requested wildcard": {"*"}} {
+	for name, ids := range map[string][]string{"none": nil, "a requested wildcard": {"*"}, "a requested wildcard beside an id": {"*", "proj-1"}} {
 		graph := &resolvingGraph{acceptanceGraphReader: acceptanceGraphFor()}
 		telemetry, err := projectNarrowedInvestigation(t, graph, ids...)
 		if err != nil {
@@ -109,5 +109,18 @@ func TestNoProjectNarrowingIsNotResolved(t *testing.T) {
 		if graph.calls != 0 || len(telemetry.projectNarrowingResolutions) != 0 {
 			t.Fatalf("%s: resolver calls %d, lines %+v, want none", name, graph.calls, telemetry.projectNarrowingResolutions)
 		}
+	}
+}
+
+// A scope already resolved is not resolved again.
+func TestAResolvedScopeIsNotResolvedAgain(t *testing.T) {
+	t.Parallel()
+	graph := &resolvingGraph{acceptanceGraphReader: acceptanceGraphFor(), narrowing: &contractsv1.ContextFabricProjectNarrowing{Complete: true}}
+	telemetry := &recordingTelemetry{}
+	engine := &Engine{graph: graph, telemetry: telemetry}
+	preset := &contractsv1.ContextFabricProjectNarrowing{Identities: []string{"project.v2:linear:proj-1"}, Complete: true}
+	scope := engine.resolveRequestedProjectNarrowing(context.Background(), acceptancePrincipal(), ResolvedGraphBinding{}, RequestedScope{ProjectIDs: []string{"proj-1"}, ProjectNarrowing: preset})
+	if scope.ProjectNarrowing != preset || graph.calls != 0 || len(telemetry.projectNarrowingResolutions) != 0 {
+		t.Fatalf("narrowing %+v, resolver calls %d, lines %d: want the preset narrowing, no call, no line", scope.ProjectNarrowing, graph.calls, len(telemetry.projectNarrowingResolutions))
 	}
 }

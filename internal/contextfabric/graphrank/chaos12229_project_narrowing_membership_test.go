@@ -51,6 +51,7 @@ func TestARequestedProjectNarrowingAdmitsByStatedMembership(t *testing.T) {
 		{"a stated non-member, no requested id resolved", narrowedTo(false), wildcardProjectNode([]string{otherIdentity}), true, true},
 		{"unstated membership", narrowedTo(true, requestedIdentity), wildcardProjectNode(nil), true, true},
 		{"no resolution ran (today's path)", contextfabric.RequestedScope{ProjectIDs: []string{"proj-1"}}, wildcardProjectNode([]string{otherIdentity}), true, true},
+		{"a requested wildcard narrows nothing", contextfabric.RequestedScope{ProjectIDs: []string{"*", "proj-1"}, ProjectNarrowing: &contractsv1.ContextFabricProjectNarrowing{Identities: []string{requestedIdentity}, Complete: true}}, wildcardProjectNode([]string{otherIdentity}), true, false},
 		{"a real project list still decides", narrowedTo(true, requestedIdentity), map[string]interface{}{"authorization_repositories": []string{"acme/api"}, "authorization_projects": []string{"proj-2"}, AuthorizationProjectIdentitiesAttr: []string{requestedIdentity}}, false, false},
 		{"the requested raw id on a real project list", narrowedTo(true, requestedIdentity), map[string]interface{}{"authorization_repositories": []string{"acme/api"}, "authorization_projects": []string{"proj-1"}}, true, false},
 	}
