@@ -36,6 +36,7 @@ var operationalLogEvents = map[string]string{
 	"investment membership scope cold load":                "membership scope cache load report",
 	"devhealthfacts.project_mix_inputs_changed":            "project mix retry report",
 	"devhealthfacts.project_mix_contended":                 "project mix contention report",
+	"devhealthfacts.project_mix_pinned_versions_missing":   "project mix retry report: pinned unit versions no longer stored",
 	"devhealthfacts.blocker_authorization":                 "authorization basis report of the blocker read (mode, authorized endpoint count, bound); it logs a query-plan choice (shape and count) and does not decide the answer (MCP 2026-10-16)",
 	"devhealthfacts.landscape_retracted_rows":              "debug data-quality report of retraction rows",
 	"devhealthfacts.read_budget_exceeded":                  "warn report of a query that hit the read budget (reader and ClickHouse code)",
