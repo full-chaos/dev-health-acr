@@ -504,6 +504,26 @@ func TestLoad_rejectsWriteTimeoutBelowRequestTimeoutPlusHeadroom(t *testing.T) {
 	}
 }
 
+// CHAOS-12206 (codex #1815 r1 P2): the hosted API client (acr-mcp, the
+// sidecar) keeps an idle connection for 45s, so acr-api must keep its own
+// longer. A shorter ACR_IDLE_TIMEOUT lets the client send a request on a
+// connection the server is closing; a POST on it is not retried.
+func TestLoad_rejectsAnIdleTimeoutAtOrBelowTheHostedClientIdleTimeout(t *testing.T) {
+	for _, idle := range []string{"1s", "30s", "45s"} {
+		_, err := load(mapLookup(map[string]string{"ACR_IDLE_TIMEOUT": idle, "ACR_LOCAL_COMPOSITION_READY": "true"}))
+		if err == nil || !strings.Contains(err.Error(), "ACR_IDLE_TIMEOUT") || !strings.Contains(err.Error(), "45s") {
+			t.Errorf("load(ACR_IDLE_TIMEOUT=%s) error = %v, want an error naming ACR_IDLE_TIMEOUT and the client's 45s", idle, err)
+		}
+	}
+}
+
+// The boundary: just above the client's idle timeout is accepted.
+func TestLoad_acceptsAnIdleTimeoutJustAboveTheHostedClientIdleTimeout(t *testing.T) {
+	if _, err := load(mapLookup(map[string]string{"ACR_IDLE_TIMEOUT": "46s", "ACR_LOCAL_COMPOSITION_READY": "true"})); err != nil {
+		t.Fatalf("load(ACR_IDLE_TIMEOUT=46s) error = %v, want no error", err)
+	}
+}
+
 // The default pair itself (15s/20s, exactly minWriteTimeoutHeadroom apart)
 // must stay valid -- the ticket that added this check is explicit that
 // changing the defaults is out of scope.
