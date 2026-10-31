@@ -30,10 +30,13 @@ const (
 	retentionPurgeFailureMessage = "ask dev retention tick failed; retrying on next tick"
 )
 
-// RetentionPurgeLogMessage is the retention pass's line: one per pass at Info,
-// a heartbeat, with the counts only (never an id, a question or an owner) and
-// outcome "removed" or "empty", so a pass that silently stops finding due rows
-// is visible at Info (codex #1808 r2). A failed pass is the loop's Warn line.
+// RetentionPurgeLogMessage is the retention pass's line: one per pass, a
+// heartbeat, with the counts only (never an id, a question or an owner). A pass
+// that succeeds logs it at Info with outcome "removed" or "empty", so a pass
+// that silently stops finding due rows is visible at Info (codex #1808 r2). A
+// pass that fails logs it at Warn with outcome "failed" and the counts of the
+// units it had already committed, which the store counts only after each
+// unit's commit (CHAOS-12214); the error itself is the loop's own Warn line.
 const RetentionPurgeLogMessage = "context fabric retention sweep"
 
 // retentionPurgeFunc adapts a contextfabric.RetentionSweeper to the bounded
@@ -43,12 +46,15 @@ func retentionPurgeFunc(sweeper contextfabric.RetentionSweeper, logger *slog.Log
 		sweepCtx, cancel := context.WithTimeout(ctx, retentionPurgeTimeout)
 		defer cancel()
 		sweep, err := sweeper.SweepRetention(sweepCtx, now, limit)
-		if err == nil && logger != nil {
-			outcome := "empty"
-			if sweep.Changed() || sweep.Fenced > 0 {
+		if logger != nil {
+			level, outcome := slog.LevelInfo, "empty"
+			switch {
+			case err != nil:
+				level, outcome = slog.LevelWarn, "failed"
+			case sweep.Changed() || sweep.Fenced > 0:
 				outcome = "removed"
 			}
-			logger.InfoContext(ctx, RetentionPurgeLogMessage, "outcome", outcome,
+			logger.Log(ctx, level, RetentionPurgeLogMessage, "outcome", outcome,
 				"threads_removed", sweep.ThreadsRemoved, "threads_erased", sweep.ThreadsErased,
 				"records_removed", sweep.RecordsRemoved, "results_removed", sweep.ResultsRemoved, "fenced", sweep.Fenced)
 		}
