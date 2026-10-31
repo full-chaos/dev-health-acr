@@ -1331,7 +1331,14 @@ import (
 // (insufficient_evidence, no_text_sources) and count it in
 // uncategorized_unit_count. An answer saved under v256 holds the fixed uniform
 // prior of those units in its theme shares.
-const QueryVersion = "devhealthfacts.clickhouse.v257"
+// v257 -> v258: a current-axis Investment read takes the committed evidence
+// window, else the trailing 90 days (CHAOS-12142), and a project served the
+// owning teams' roll-up carries project_own_work_unit_count and the
+// investment_project_owning_team_rollup reason, which the served claim's
+// investment_mix discloses (CHAOS-12160). An answer saved under v257 holds an
+// all-history mix for a question that named no period, and a roll-up claim
+// with no disclosure.
+const QueryVersion = "devhealthfacts.clickhouse.v258"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each

@@ -167,7 +167,9 @@ func TestProjectNativeThemeMixAgainstRealClickHouse(t *testing.T) {
 		if got := factString(t, fact, "rollup_basis"); got != "project_work_items_issue_evidence_work_unit_investments" {
 			t.Errorf("rollup_basis = %q", got)
 		}
-		absent(t, fact, "team_count", "repo_count", "work_units_without_repo_link")
+		// CHAOS-12160: a project served its own mix carries no roll-up count
+		// of its own units; work_unit_count is that count.
+		absent(t, fact, "team_count", "repo_count", "work_units_without_repo_link", "project_own_work_unit_count")
 	})
 
 	t.Run("a_project_with_no_native_units_keeps_the_labelled_rollup", func(t *testing.T) {
@@ -186,6 +188,11 @@ func TestProjectNativeThemeMixAgainstRealClickHouse(t *testing.T) {
 		absent(t, fact, "effort_unit_count", "spanning_unit_count", "owning_team_rollup_work_unit_count")
 		if got := factInt(t, fact, "team_count"); got != 1 {
 			t.Errorf("team_count = %d, want 1", got)
+		}
+		// CHAOS-12160: the disclosed roll-up names the project's own units
+		// in the window, here none.
+		if got := factInt(t, fact, "project_own_work_unit_count"); got != 0 {
+			t.Errorf("project_own_work_unit_count = %d, want 0 (the project has no work unit of its own)", got)
 		}
 	})
 
