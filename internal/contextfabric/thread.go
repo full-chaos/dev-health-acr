@@ -81,6 +81,13 @@ type ThreadRecord struct {
 	// RetentionSetBy is the turn whose X-ACR-Thread-Retention-Days set
 	// RetentionDays, nil while no turn named one (the default applies).
 	RetentionSetBy *ThreadTurnCursor
+	// FirstQuestion (CHAOS-12235) is the question recorded on the thread's
+	// true first turn: the first of the row's own linked records in turn
+	// order (admitted_at, then submission id), whatever a page serves. Empty
+	// when that turn recorded none (admitted before questions were recorded,
+	// or erased by a delete). Only ListThreads sets it; it is read from the
+	// turn's record, never stored on the thread row.
+	FirstQuestion string
 }
 
 // Closed reports whether the thread is closed at now: deleted, or past its

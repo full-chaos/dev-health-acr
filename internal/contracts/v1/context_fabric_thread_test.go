@@ -55,6 +55,9 @@ func goldenThread() ContextFabricThread {
 
 func goldenThreadList() ContextFabricThreadList {
 	newest := goldenThread().Summary()
+	// CHAOS-12235: the newest names its first turn's question; the older
+	// one's first turn recorded none, so it has no first_question.
+	newest.FirstQuestion = "Which teams own the ops repository?"
 	older := ContextFabricThreadSummary{
 		ThreadID: "thread-0000-11947-older", RetentionDays: ContextFabricThreadRetentionDay, TurnCount: 1,
 		CreatedAt: threadGoldenStart.Add(-2 * time.Hour), LastTurnAt: threadGoldenStart.Add(-2 * time.Hour),
@@ -303,6 +306,15 @@ func TestThreadListValidatorAndSchemaAgree(t *testing.T) {
 		"over the page limit":      {func(l *ContextFabricThreadList) { l.Threads = manySummaries(51) }, false, false},
 		"at the page limit":        {func(l *ContextFabricThreadList) { l.Threads = manySummaries(50) }, true, false},
 		"same last turn, id order": {func(l *ContextFabricThreadList) { l.Threads = manySummaries(2) }, true, false},
+		// CHAOS-12235: first_question is optional, 1..8000 characters (the
+		// schema counts code points, Go counts runes: the same unit).
+		"first question at the bound": {func(l *ContextFabricThreadList) {
+			l.Threads[0].FirstQuestion = strings.Repeat("é", ContextFabricThreadQuestionMaxRunes)
+		}, true, false},
+		"first question over the bound": {func(l *ContextFabricThreadList) {
+			l.Threads[0].FirstQuestion = strings.Repeat("a", ContextFabricThreadQuestionMaxRunes+1)
+		}, false, false},
+		"first question on the older thread": {func(l *ContextFabricThreadList) { l.Threads[1].FirstQuestion = "?" }, true, false},
 	}
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -931,5 +943,33 @@ func TestThreadParseRefusesTrailingContent(t *testing.T) {
 		if _, err := ParseContextFabricThread(append(bytes.Clone(body), trailing...)); err == nil {
 			t.Errorf("trailing %s is accepted", trailing)
 		}
+	}
+}
+
+// CHAOS-12235: a summary whose first turn recorded no question has no
+// first_question on the wire at all (never an empty string), so an older
+// client and the schema see the field only when it is real.
+func TestThreadSummaryOmitsAnUnrecordedFirstQuestion(t *testing.T) {
+	t.Parallel()
+	list := goldenThreadList()
+	body, err := json.Marshal(list)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var raw struct {
+		Threads []map[string]json.RawMessage `json:"threads"`
+	}
+	if err := json.Unmarshal(body, &raw); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := raw.Threads[0]["first_question"]; !ok {
+		t.Fatalf("the thread with a recorded first question lacks first_question: %s", body)
+	}
+	if value, ok := raw.Threads[1]["first_question"]; ok {
+		t.Fatalf("the thread with no recorded first question carries first_question %s", value)
+	}
+	empty := `{"schema_version":"context_fabric_thread_list.v1","threads":[{"thread_id":"thread-0000-11947-older","retention_days":0,"turn_count":1,"created_at":"2026-10-29T10:00:00Z","last_turn_at":"2026-10-29T10:00:00Z","expires_at":"2026-10-30T10:00:00Z","first_question":""}]}`
+	if err := contractcheck.ValidateSerializedStrict("", threadListSchemaFile, []byte(empty)); err == nil {
+		t.Fatal("the schema accepts an empty first_question")
 	}
 }
