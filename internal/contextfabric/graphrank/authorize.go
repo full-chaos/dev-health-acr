@@ -113,6 +113,23 @@ func AuthorizedAttributes(principal storage.Principal, requested contextfabric.R
 	return true
 }
 
+// ProjectNarrowingUnproven reports whether a requested project narrowing
+// admits these attributes only because their project list is the "*"
+// string (CHAOS-12231). The projection writes an empty project list as "*",
+// and scopeContainsAttr admits "*" for every requested project id, so such a
+// node or edge passes AuthorizedAttributes' ProjectIDs check with nothing
+// showing that it belongs to a requested project. It decides nothing:
+// AuthorizedAttributes admits exactly as before. A reader uses it to
+// disclose that the project narrowing it reports was not verified. The
+// strict fix needs real project membership and is CHAOS-12229.
+func ProjectNarrowingUnproven(requested contextfabric.RequestedScope, attributes map[string]interface{}) bool {
+	if len(requested.ProjectIDs) == 0 {
+		return false
+	}
+	value, isString := attributes[authorizationProjectsAttr].(string)
+	return isString && value == "*"
+}
+
 // AuthorizedThroughLink is the issue side of a link of record under a
 // requested scope: the requested repository scope follows the link (the
 // entity tree relates an issue to a repository only through its linked pull
