@@ -40,6 +40,11 @@ const (
 	// server that mints credentials for this resource (the acr-api public
 	// origin).
 	AuthorizationServerEnvironment = "ACR_MCP_AUTHORIZATION_SERVER"
+	// HopTokenFileEnvironment is this endpoint's projected ServiceAccount
+	// token file (CHAOS-12094). Set, every hosted API call carries it so
+	// acr-api can admit an MCP-bound credential only on a call this endpoint
+	// forwards. The chart mounts it; empty sends no hop (today's behavior).
+	HopTokenFileEnvironment = "ACR_MCP_HOP_TOKEN_FILE"
 	// TrustedProxyCIDRsEnvironment lists the proxies (comma-separated CIDRs)
 	// whose X-Forwarded-For the edge failure gate believes. Empty: the gate
 	// keys on the peer address.
@@ -84,6 +89,9 @@ type ServeOptions struct {
 	// refused.
 	ResourceURL         string
 	AuthorizationServer string
+	// HopTokenFile is the projected ServiceAccount token file (see
+	// HopTokenFileEnvironment); empty sends no hop.
+	HopTokenFile string
 	// Telemetry is the process's OTLP export (the http transport only). It is
 	// set by the command, never read from the environment here. nil serves
 	// without export and writes no export line.
@@ -164,6 +172,7 @@ func ServeOptionsFromEnvironment(lookup func(string) (string, bool)) (ServeOptio
 		set(HTTPBasePathEnvironment, func(v string) error { opts.BasePath = v; return nil }),
 		set(ResourceURLEnvironment, func(v string) error { opts.ResourceURL = v; return nil }),
 		set(AuthorizationServerEnvironment, func(v string) error { opts.AuthorizationServer = v; return nil }),
+		set(HopTokenFileEnvironment, func(v string) error { opts.HopTokenFile = strings.TrimSpace(v); return nil }),
 		set(TrustedProxyCIDRsEnvironment, func(v string) error { opts.TrustedProxyCIDRs = v; return nil }),
 		set(HTTPMaxBodyBytesEnvironment, func(v string) error {
 			n, err := strconv.ParseInt(v, 10, 64)
@@ -317,6 +326,7 @@ func serveHTTPOn(ctx context.Context, listener net.Listener, cfg *ProcessConfig,
 		"listen_address", listener.Addr().String(),
 		"transport", TransportHTTP,
 		"base_path", opts.BasePath,
+		"mcp_hop", opts.HopTokenFile != "",
 		"server_version", identity.Version,
 		"server_commit", identity.Commit,
 		"protocol_revisions", ProtocolRevisions(TransportHTTP),
@@ -349,6 +359,7 @@ func serveHTTPOn(ctx context.Context, listener net.Listener, cfg *ProcessConfig,
 // hosted API call forwards.
 func newServeProcessConfig(sidecarCfg sidecar.Config, identity version.Info, diagnostics io.Writer, opts ServeOptions) (*ProcessConfig, error) {
 	sidecarCfg.Resource = opts.ResourceURL
+	sidecarCfg.HopTokenFile = opts.HopTokenFile
 	// The answer a wait budget produces is written to the caller; a write
 	// deadline inside the budget cuts it off.
 	reserve := time.Duration(contractsv1.ContextFabricSynthesisCompositionReserveSeconds) * time.Second

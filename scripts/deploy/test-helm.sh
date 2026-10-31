@@ -1297,6 +1297,43 @@ for bad_consent in "" "https://www.example.test" "https://www.example.test/" "ht
   oauth_must_fail "consent url '${bad_consent}'" "config.oauth.consentUrl" "${oauth_args[@]}" --set-string "config.oauth.consentUrl=${bad_consent}"
 done
 
+# CHAOS-12094 (F1): the acr-mcp hop proof, rolled in two steps. Step 1
+# (acrMcp.hop.enabled): acr-mcp mounts ONE projected token of its own
+# ServiceAccount for the hop audience (600 s) and names its file, and nothing
+# else changes (no Secret, automount still off, acr-api unchanged). Step 2
+# (config.mcpHop.required): acr-api requires the hop for the acr-mcp
+# ServiceAccount, and gains TokenReview access. Required without step 1, or
+# without the OAuth login, fails closed.
+hop1="$(render --set acrMcp.enabled=true --set-string "acrMcp.image.reference=${mcp_image}" --set acrMcp.hop.enabled=true)"
+hop1_mcp="$(extract_doc Deployment '  name: "?[^\n"]*-mcp"?\n' <<<"$hop1")"
+[[ -n "$hop1_mcp" ]] || fail_gate "mcp-hop: step 1 render is missing the acr-mcp Deployment"
+for want in 'audience: "dev-health-acr-api-mcp-hop"' 'expirationSeconds: 600' 'path: token' 'value: /var/run/secrets/acr-mcp-hop/token' 'automountServiceAccountToken: false'; do
+  grep -qF "$want" <<<"$hop1_mcp" || fail_gate "mcp-hop: step 1 acr-mcp Deployment lacks ${want}"
+done
+[[ "$(grep -c 'serviceAccountToken:' <<<"$hop1_mcp")" == 1 ]] || fail_gate "mcp-hop: step 1 acr-mcp must project exactly one ServiceAccount token"
+if grep -qE 'secretKeyRef|secretName|secretRef|ACR_API_TOKEN' <<<"$hop1_mcp"; then fail_gate "mcp-hop: step 1 acr-mcp references a Secret"; fi
+if grep -qE 'ACR_MCP_HOP_REQUIRED|-token-review' <<<"$hop1"; then fail_gate "mcp-hop: step 1 changed acr-api (required or TokenReview access)"; fi
+pass "mcp-hop: step 1 projects one hop-audience token into acr-mcp and leaves acr-api unchanged"
+hop2="$(render "${oauth_args[@]}" --set acrMcp.hop.enabled=true --set config.mcpHop.required=true)"
+hop2_cm="$(extract_doc ConfigMap '  name: "?[^\n"]*-config"?\n' '-mcp-config|-migrate-config|-projector-config' <<<"$hop2")"
+for want in 'ACR_MCP_HOP_REQUIRED: "true"' 'ACR_MCP_HOP_AUDIENCE: "dev-health-acr-api-mcp-hop"' "ACR_MCP_HOP_SERVICE_ACCOUNT_NAMESPACE: \"${NAMESPACE}\"" "ACR_MCP_HOP_SERVICE_ACCOUNT_NAME: \"${RELEASE}-mcp\""; do
+  grep -qF "$want" <<<"$hop2_cm" || fail_gate "mcp-hop: step 2 acr-api ConfigMap lacks ${want}"
+done
+[[ -n "$(extract_doc ClusterRoleBinding '  name: "?[^\n"]*-token-review"?\n' <<<"$hop2")" ]] || fail_gate "mcp-hop: step 2 renders no TokenReview binding for acr-api"
+grep -qF 'kubernetes-api-reviewer-token' <<<"$(extract_doc Deployment 'component: api' <<<"$hop2")" || fail_gate "mcp-hop: step 2 acr-api lacks its reviewer token"
+pass "mcp-hop: step 2 requires the hop for the acr-mcp ServiceAccount and grants acr-api TokenReview"
+# One name (codex #1799 r1 P2): a custom acrMcp.serviceAccountName is the
+# ServiceAccount rendered, the pod's, and the one acr-api accepts.
+hop_custom="$(render "${oauth_args[@]}" --set acrMcp.hop.enabled=true --set config.mcpHop.required=true --set-string acrMcp.serviceAccountName=edge-mcp)"
+grep -qF 'ACR_MCP_HOP_SERVICE_ACCOUNT_NAME: "edge-mcp"' <<<"$hop_custom" || fail_gate "mcp-hop: acrMcp.serviceAccountName does not set the accepted ServiceAccount"
+grep -qF 'serviceAccountName: "edge-mcp"' <<<"$(extract_doc Deployment '  name: "?[^\n"]*-mcp"?\n' <<<"$hop_custom")" || fail_gate "mcp-hop: the acr-mcp pod does not run as acrMcp.serviceAccountName"
+grep -qE '^  name: "?edge-mcp"?$' <<<"$(extract_doc ServiceAccount 'name: "?edge-mcp"?' <<<"$hop_custom")" || fail_gate "mcp-hop: the chart does not render the acrMcp.serviceAccountName ServiceAccount"
+if grep -qF "${RELEASE}-mcp\"" <<<"$(extract_doc ServiceAccount 'component: mcp' <<<"$hop_custom")"; then fail_gate "mcp-hop: the default acr-mcp ServiceAccount is still rendered beside the custom one"; fi
+pass "mcp-hop: acrMcp.serviceAccountName is the rendered ServiceAccount, the pod's, and the accepted hop identity"
+oauth_must_fail "mcp hop required before acr-mcp sends it" "requires acrMcp.enabled and acrMcp.hop.enabled" "${oauth_args[@]}" --set config.mcpHop.required=true
+oauth_must_fail "mcp hop required without the OAuth login" "requires config.oauth.enabled" --set acrMcp.enabled=true --set-string "acrMcp.image.reference=${mcp_image}" \
+  --set acrMcp.hop.enabled=true --set config.mcpHop.required=true
+
 # Gate: OTLP export. Off by default: no OTEL_ key anywhere and no collector
 # egress. On: every workload ConfigMap (api, mcp, projector) carries the three
 # keys with its own service name, and both the api and mcp NetworkPolicies

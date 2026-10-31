@@ -17650,6 +17650,11 @@
         "presence": "required"
       },
       {
+        "key": "mcp_hop",
+        "type": "bool",
+        "presence": "required"
+      },
+      {
         "key": "server_version",
         "type": "string",
         "presence": "required"

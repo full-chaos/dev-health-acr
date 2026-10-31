@@ -1,11 +1,11 @@
 {{- /*
 CHAOS-4013: the minimal RBAC acr-api's own ServiceAccount needs to validate
-a workload's subject_token via Kubernetes TokenReview -- create on
+a workload's subject_token (and, CHAOS-12094, acr-mcp's hop token) via Kubernetes TokenReview -- create on
 tokenreviews.authentication.k8s.io ONLY (design brief). tokenreviews is a
 cluster-scoped resource, so this is a ClusterRole/ClusterRoleBinding rather
 than a namespaced Role/RoleBinding; it grants nothing else.
 */ -}}
-{{- if .Values.workloadTokenExchange.enabled }}
+{{- if include "acr.tokenReview" . }}
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:

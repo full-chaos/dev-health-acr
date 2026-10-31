@@ -15,6 +15,7 @@ import (
 	"github.com/full-chaos/dev-health-acr/internal/limits"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
 	"github.com/full-chaos/dev-health-acr/internal/storage/memory"
+	"github.com/full-chaos/dev-health-go/authverify"
 )
 
 func TestLimitMiddlewareReturnsCorrelatedRateLimitDenial(t *testing.T) {
@@ -240,4 +241,56 @@ func issueCredential(t *testing.T, credentials *storage.CredentialLifecycle, _ *
 		t.Fatal(err)
 	}
 	return issued.Token
+}
+
+type apiHopValidator struct{}
+
+func (apiHopValidator) Validate(context.Context, string) (authverify.SubjectIdentity, error) {
+	return authverify.SubjectIdentity{}, authverify.ErrSubjectTokenInvalid
+}
+
+// CHAOS-12094 (codex #1799 r1 P3): an authenticator AuthenticatedHandler
+// builds enforces the app's hop check too.
+func TestAppAuthenticatedHandlerEnforcesTheMCPHop(t *testing.T) {
+	now := time.Date(2026, 10, 31, 2, 0, 0, 0, time.UTC)
+	audit := memory.NewAuditStore()
+	credentials := newMemoryCredentialLifecycle(t, audit, now)
+	service, err := auth.NewService(credentials, auth.ServiceOptions{Now: func() time.Time { return now }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	issued, err := service.Create(context.Background(), auth.CreateCredentialRequest{OrgID: "org_1", Name: "mcp", RepositoryScopes: []string{"o/r"}, Scopes: []string{auth.ScopeContextRead}, CreatedBy: "test", Resource: "https://mcp.example.test/mcp"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	policy, err := auth.NewMCPHopPolicy(auth.MCPHopPolicyOptions{Validator: apiHopValidator{}, Namespace: "acr", ServiceAccount: "acr-mcp", Issuer: "https://acr.example.test"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	manager, err := limits.NewManager(limits.Options{Policies: limits.PolicySet{Evidence: limits.EvidencePolicy{Window: time.Minute, PerOrgLimit: 10}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	app, err := NewApp(AppConfig{ServiceName: "acr", ServiceVersion: "test", RequestTimeout: time.Second}, Dependencies{
+		Capabilities: StaticCapabilitiesProvider{Value: contractsv1.Capabilities{SchemaVersion: contractsv1.CapabilitiesSchema}},
+		Limits:       manager, Now: func() time.Time { return now }, MCPHop: policy,
+	}, testLogger(&bytes.Buffer{}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	handler, err := app.AuthenticatedHandler(credentials, audit, limits.RequestClassEvidence, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := httptest.NewRequest(http.MethodGet, "/evidence", nil)
+	request.Header.Set("Authorization", "Bearer "+issued.Token)
+	request.Header.Set(auth.ResourceHeader, "https://mcp.example.test/mcp")
+	request.Header.Set("X-Request-ID", "req_0123456789abcdef0123456789abcdef")
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusUnauthorized {
+		t.Fatalf("MCP-bound bearer without a hop through AuthenticatedHandler = %d, want 401", response.Code)
+	}
 }

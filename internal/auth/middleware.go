@@ -33,6 +33,9 @@ type AuthenticatorOptions struct {
 	ClientIP        ClientIPResolver
 	WebAssertions   *WebAssertionVerifier
 	UsageTelemetry  *UsageTelemetry
+	// MCPHop, when set, requires acr-mcp's hop proof on every call of a
+	// credential bound to an MCP resource (CHAOS-12094). Nil requires none.
+	MCPHop *MCPHopPolicy
 }
 
 type Authenticator struct {
@@ -46,6 +49,7 @@ type Authenticator struct {
 	webAssertions   *WebAssertionVerifier
 	usageTelemetry  *UsageTelemetry
 	ownsTelemetry   bool
+	mcpHop          *MCPHopPolicy
 }
 
 func NewAuthenticator(store storage.CredentialStore, audit storage.AuditStore, options AuthenticatorOptions) (*Authenticator, error) {
@@ -83,7 +87,7 @@ func NewAuthenticator(store storage.CredentialStore, audit storage.AuditStore, o
 	return &Authenticator{
 		store: store, audit: audit, now: options.Now, limiter: options.Limiter, logger: options.Logger,
 		detachedTimeout: options.DetachedTimeout, clientIP: options.ClientIP, webAssertions: options.WebAssertions,
-		usageTelemetry: telemetry, ownsTelemetry: ownsTelemetry,
+		usageTelemetry: telemetry, ownsTelemetry: ownsTelemetry, mcpHop: options.MCPHop,
 	}, nil
 }
 
@@ -181,6 +185,25 @@ func (a *Authenticator) MiddlewareFor(allowWebAssertions bool, next http.Handler
 		if !resourceAdmitted(credential.Resource, r.Header.Values(ResourceHeader)) {
 			a.rejectCredential(w, r, ip, "resource_mismatch", &credential, decision, now)
 			return
+		}
+		if a.mcpHop.requires(credential.Resource) {
+			switch err := a.mcpHop.verify(r.Context(), r.Header.Values(MCPHopHeader)); {
+			case err == nil:
+			case errors.Is(err, errMCPHopMissing):
+				a.rejectCredential(w, r, ip, "mcp_hop_missing", &credential, decision, now)
+				return
+			case errors.Is(err, errMCPHopRefused):
+				a.rejectCredential(w, r, ip, "mcp_hop_refused", &credential, decision, now)
+				return
+			default:
+				// The check could not run (TokenReview unreachable): fail
+				// closed, loudly, and never as the caller's fault. The line
+				// names the class only: the validator's error text is not
+				// logged (it can carry the API server address).
+				a.logger.ErrorContext(r.Context(), "mcp hop check failed", "request_id", logsanitize.SanitizeLogAttr(requestID(r)), "failure_class", "mcp_hop_validator")
+				a.writeError(w, r, http.StatusServiceUnavailable, "upstream_unavailable", "Credential service is temporarily unavailable", true, nil)
+				return
+			}
 		}
 		if decision.OverBudget {
 			a.logger.DebugContext(r.Context(), "ACR authentication admitted over failure budget", "remote_ip", logsanitize.SanitizeLogAttr(ip), "request_id", logsanitize.SanitizeLogAttr(requestID(r)))

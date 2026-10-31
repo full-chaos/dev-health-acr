@@ -65,6 +65,18 @@ const projectMixPinnedFilter = `
                                   FROM (SELECT arrayJoin(JSONExtract({pin_json:String}, 'Array(Tuple(String, Int64))')) AS pin)
                               )`
 
+// projectMixPinnedPresenceStatement counts the pinned (work unit, version) pairs
+// that are still stored. work_unit_investments is ReplacingMergeTree(computed_at):
+// a newer version and a merge delete the pinned one, and every phase that reads
+// through projectMixPinnedFilter then silently misses that unit. An attempt whose
+// count falls short of the pins it took is retried, never answered.
+const projectMixPinnedPresenceStatement = `SELECT count() AS pinned_present FROM (
+    SELECT work_unit_id, toUnixTimestamp64Milli(computed_at) AS version_ms
+    FROM work_unit_investments
+    WHERE org_id = {org_id:String}` + projectMixPinnedFilter + `
+    GROUP BY work_unit_id, version_ms
+)`
+
 // projectMixBoundLinkCTE is the project -> owned repository / owning team link
 // table phase 0 captured, bound as data: a phase never re-derives ownership, so
 // one answer never mixes two ownership states.
@@ -453,7 +465,14 @@ func readProjectRollupMixRowsOnce(ctx context.Context, client contextpacket.Clic
 	if err != nil {
 		return nil, false, err
 	}
+	missing, err := readProjectMixPinnedMissing(ctx, client, orgID, ids, scope)
+	if err != nil {
+		return nil, false, err
+	}
 	changed := !slices.Equal(before, after)
+	if projectMixPinnedMissing(ctx, "owning_team_rollup", missing) {
+		changed = true
+	}
 	for i := range rows {
 		rows[i].ExcludedNoRepoLink = excluded[rows[i].ProjectKey]
 		rows[i].BugfixWeighted = bugfix[rows[i].ProjectKey]
@@ -613,7 +632,14 @@ func readProjectNativeMixRowsOnce(ctx context.Context, client contextpacket.Clic
 	if err != nil {
 		return nil, nil, nil, nil, false, err
 	}
+	missing, err := readProjectMixPinnedMissing(ctx, client, orgID, ids, scope)
+	if err != nil {
+		return nil, nil, nil, nil, false, err
+	}
 	changed := !slices.Equal(before, after)
+	if projectMixPinnedMissing(ctx, "project_native", missing) {
+		changed = true
+	}
 
 	projectCount := make(map[string]int, len(pUnit))
 	for _, unit := range pUnit {
@@ -695,6 +721,13 @@ func readProjectNativeMixRowsOnce(ctx context.Context, client contextpacket.Clic
 // current maximum. A background merge that collapses duplicate versions between
 // the two digests also moves the count; that is a retry, never a wrong answer.
 // The digest statements read the input tables only, never work_unit_investments.
+//
+// work_unit_investments is pinned instead (projectMixPinnedFilter), and a pin can
+// be lost: a newer version and a merge delete the pinned one, after which every
+// phase silently misses the unit. So an attempt also counts, after its last
+// phase, the pinned pairs still stored (projectMixPinnedPresenceStatement); a
+// shortfall is retried exactly like a moved digest, and exhausts into the same
+// ProjectMixContendedError.
 
 const projectMixMaxAttempts = 3
 
@@ -748,6 +781,34 @@ func readProjectMixInputs(ctx context.Context, client contextpacket.ClickHouseQu
 		return row.Scan(dest...)
 	})
 	return digests, err
+}
+
+// readProjectMixPinnedMissing reports how many of scope's pinned pairs are no
+// longer stored. It runs after the last phase of an attempt: a pinned version
+// deleted before any phase read it is still missing then.
+func readProjectMixPinnedMissing(ctx context.Context, client contextpacket.ClickHouseQueryClient, orgID string, ids []string, scope projectMixScope) (int, error) {
+	var present uint64
+	if err := readers.QueryOrgScopedNamed(ctx, client, "ReadProjectMixPinnedVersions", projectMixPinnedPresenceStatement, orgID, ids, func(row contextpacket.ClickHouseRowScanner) error {
+		return row.Scan(&present)
+	}, scope.bindings()...); err != nil {
+		return 0, err
+	}
+	pinned := uint64(len(scope.unitIDs))
+	if present >= pinned {
+		return 0, nil
+	}
+	return int(pinned - present), nil
+}
+
+// projectMixPinnedMissing marks an attempt whose pinned versions were not all
+// stored at its end: the attempt is retried like one whose inputs moved, and the
+// event names the mix and how many pins were gone.
+func projectMixPinnedMissing(ctx context.Context, mix string, missing int) bool {
+	if missing == 0 {
+		return false
+	}
+	slog.WarnContext(ctx, "devhealthfacts.project_mix_pinned_versions_missing", "mix", contextfabric.SanitizeLogAttr(mix), "missing", missing)
+	return true
 }
 
 // projectMixAfterBaselineKey carries a test hook run right after the baseline
