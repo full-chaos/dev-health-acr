@@ -207,6 +207,20 @@ type Config struct {
 	// stream_unavailable before any admission work; every other request is
 	// unaffected either way.
 	ContextFabricEventStreamEnabled bool
+	// AskDevRetentionEnabled (CHAOS-11952, ACR_ASK_DEV_RETENTION_ENABLED,
+	// default OFF) is the one switch for Ask Dev retention (plan D-22): on,
+	// the retention job removes the backing set of expired and deleted
+	// threads and of submissions with no thread, and a submission with no
+	// thread reads as closed 24 hours after its admission. Off, no job runs,
+	// no row is removed, the startup grant probe is skipped, and every read
+	// behaves as before; startup logs that retention is off.
+	AskDevRetentionEnabled bool
+	// AskDevRetentionPostgresDSN (ACR_POSTGRES_RETENTION_DSN or its _FILE) is
+	// the retention job's own role (internal/dbacl RetentionGrants, given by
+	// grant-runtime-acl), never the runtime role: the job's deletes do not
+	// widen the runtime's privileges. Required when AskDevRetentionEnabled is
+	// on; read only then.
+	AskDevRetentionPostgresDSN string
 	// ContextFabricRunLeaseEnabled (CHAOS-11949,
 	// ACR_CONTEXT_FABRIC_RUN_LEASE_ENABLED, default OFF) runs a streamed
 	// investigation that names X-ACR-Submission-ID under an ACR-owned lease:
@@ -343,6 +357,18 @@ type Config struct {
 }
 
 type lookupEnv func(string) (string, bool)
+
+// DefaultIdleTimeout is acr-api's server idle timeout when ACR_IDLE_TIMEOUT
+// is unset (CHAOS-12206).
+const DefaultIdleTimeout = defaultIdleTimeout
+
+// HostedClientIdleConnTimeout is how long the hosted API client (acr-mcp, the
+// local sidecar; internal/sidecar clientIdleConnTimeout) keeps an idle
+// connection (CHAOS-12206). Validate refuses an ACR_IDLE_TIMEOUT at or below
+// it: the client must close an idle connection before the server does, or a
+// request can go out on a connection the server is closing, and a POST on it
+// is not retried. internal/sidecar's test pins the two values equal.
+const HostedClientIdleConnTimeout = 45 * time.Second
 
 // Load reads configuration from the process environment and validates it.
 func Load() (Config, error) {
@@ -566,6 +592,12 @@ func (c Config) Validate() error {
 		return fmt.Errorf(
 			"ACR_WRITE_TIMEOUT (%s) must be at least %s more than ACR_REQUEST_TIMEOUT (%s), or a real investigation using its full request budget can have its response write cut off mid-handler",
 			c.WriteTimeout, minWriteTimeoutHeadroom, c.RequestTimeout,
+		)
+	}
+	if c.IdleTimeout <= HostedClientIdleConnTimeout {
+		return fmt.Errorf(
+			"ACR_IDLE_TIMEOUT (%s) must be more than %s, the hosted API client's idle timeout: the client must close an idle connection before the server does, or a request can go out on a connection the server is closing",
+			c.IdleTimeout, HostedClientIdleConnTimeout,
 		)
 	}
 	if strings.TrimSpace(c.MinimumSidecarVersion) == "" {

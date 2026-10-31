@@ -68,7 +68,7 @@ corrected IP.
 ## Image path (no registry, no Docker)
 
 ```bash
-deploy/local/kiac.sh build-image acr-api:dev . [Dockerfile]  # container build
+CONTAINER_VERSION=0.1.0 deploy/local/kiac.sh build-image acr-api:dev . [Dockerfile]  # container build; the version is required (CHAOS-12198)
 deploy/local/kiac.sh load-image acr-api:dev                  # -> every node's containerd
 ```
 
@@ -470,7 +470,8 @@ procs --json 'acr-projector'                                  # MUST be empty be
 # defaults to the LAST one in the file (acr-mcp, missing acr-migrate/
 # acr-api/acr-projector entirely), a real incident this recipe also
 # hit live. Always pass --target explicitly:
-docker build --target acr-api -t dev-health-acr:dev .
+# VERSION is required (CHAOS-12198): with none, the build fails at once.
+docker build --target acr-api --build-arg VERSION=0.1.0 -t dev-health-acr:dev .
 docker save dev-health-acr:dev -o /tmp/dev-health-acr-dev.tar
 container image load -i /tmp/dev-health-acr-dev.tar
 container image tag docker.io/library/dev-health-acr:dev dev-health-acr:dev

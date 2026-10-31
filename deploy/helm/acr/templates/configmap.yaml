@@ -39,7 +39,15 @@ data:
   ACR_MAX_SERIALIZED_BYTES: {{ .Values.config.maxSerializedBytes | quote }}
   ACR_REQUESTS_PER_MINUTE: {{ .Values.config.requestsPerMinute | quote }}
   ACR_ENABLE_EPISODE_WRITEBACK: {{ .Values.config.enableEpisodeWriteback | quote }}
+  ACR_ASK_DEV_RETENTION_ENABLED: {{ .Values.config.askDevRetentionEnabled | default false | quote }}
   ACR_DEVICE_VERIFICATION_URL: {{ .Values.config.deviceVerificationUrl | quote }}
+  {{- include "acr.validateEnvValueSources" . }}
+  {{- with .Values.config.trustedProxyCidrs }}
+  ACR_TRUSTED_PROXY_CIDRS: {{ join "," . | quote }}
+  {{- end }}
+  {{- with (default dict .Values.config.cors).allowedOrigins }}
+  ACR_CORS_ALLOWED_ORIGINS: {{ join "," . | quote }}
+  {{- end }}
   {{- with include "acr.otelEnv" (dict "root" . "name" .Values.otel.serviceNames.api) }}
   {{- . | nindent 2 }}
   {{- end }}

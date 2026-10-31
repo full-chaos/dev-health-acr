@@ -57,6 +57,24 @@ const SubmissionAbandonGrace = 30 * time.Second
 // ErrSubmissionNotFound is a GetSubmission that found no record for the key.
 var ErrSubmissionNotFound = errors.New("context fabric: submission not found")
 
+// ErrReservationGone is a Save of a submission's reserved result id whose
+// record is gone (design §6 T2, CHAOS-11952): the retention job removed it,
+// or a delete erased it. The result is not stored. Storing it would leave an
+// unbound row, readable by the whole organization
+// (stored_result_authorization.go admits unbound results by design). A
+// reserved save is a Save whose ctx carries a submission's reservation
+// (WithSubmissionReservedResultID) and whose result has that id.
+var ErrReservationGone = errors.New("context fabric: the submission record of this reserved result id is gone; the result is not stored")
+
+// IsReservedSave reports whether a Save of resultID under ctx is the reserved
+// save of a submission record (WithSubmissionReservedResultID with resultID):
+// such a save must find its record, or it is refused with ErrReservationGone.
+// A stream's own reservation (WithReservedResultID, no record) is not one.
+func IsReservedSave(ctx context.Context, resultID string) bool {
+	reservation, ok := ctx.Value(resultIDReservationKey{}).(*resultIDReservation)
+	return ok && reservation != nil && reservation.submission && reservation.id != "" && reservation.id == resultID
+}
+
 // ErrSubmissionOwnerUnknown: the principal carries no subject, so no owner
 // can be recorded. Validated authentication always sets one; this refuses a
 // principal built without it rather than binding a result to an empty owner.
@@ -443,6 +461,11 @@ func SubmissionRequestDigest(request InvestigationRequest) (string, error) {
 type resultIDReservation struct {
 	id    string
 	mints atomic.Int64
+	// submission marks the reservation of a submission record
+	// (WithSubmissionReservedResultID): its save must find the record
+	// (CHAOS-11952, design §6 T2). A stream with no submission reserves an
+	// id too, with no record behind it.
+	submission bool
 }
 
 type resultIDReservationKey struct{}
@@ -454,6 +477,23 @@ func WithReservedResultID(ctx context.Context, resultID string) context.Context 
 		return ctx
 	}
 	return context.WithValue(ctx, resultIDReservationKey{}, &resultIDReservation{id: resultID})
+}
+
+// WithSubmissionReservedResultID is WithReservedResultID for the reserved
+// result id of a submission record: a save of that id must find the record,
+// or it is refused with ErrReservationGone (CHAOS-11952, design §6 T2).
+func WithSubmissionReservedResultID(ctx context.Context, resultID string) context.Context {
+	return WithReservedResultIDFor(ctx, resultID, true)
+}
+
+// WithReservedResultIDFor is WithReservedResultID (submissionRecord false) or
+// WithSubmissionReservedResultID (true) in one call, for a caller that
+// decides which at run time.
+func WithReservedResultIDFor(ctx context.Context, resultID string, submissionRecord bool) context.Context {
+	if resultID == "" {
+		return ctx
+	}
+	return context.WithValue(ctx, resultIDReservationKey{}, &resultIDReservation{id: resultID, submission: submissionRecord})
 }
 
 // ReservedResultID is the reserved result id ctx carries, if any. It does

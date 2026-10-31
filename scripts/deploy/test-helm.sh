@@ -1297,6 +1297,51 @@ for bad_consent in "" "https://www.example.test" "https://www.example.test/" "ht
   oauth_must_fail "consent url '${bad_consent}'" "config.oauth.consentUrl" "${oauth_args[@]}" --set-string "config.oauth.consentUrl=${bad_consent}"
 done
 
+# CHAOS-11952: Ask Dev retention is one switch, default off. Off renders the
+# switch false and no retention DSN for acr-api; the retention role's DSN
+# reaches the grant-runtime-acl Job whenever credentials.retention names it (so
+# the grants exist before the switch flips), and acr-api only with the switch
+# on, which then requires it.
+retention_off="$(render)"
+grep -qF 'ACR_ASK_DEV_RETENTION_ENABLED: "false"' <<<"$(browser_doc "$retention_off" ConfigMap -config)" || fail_gate "retention: the default render must set ACR_ASK_DEV_RETENTION_ENABLED false"
+if grep -qF 'ACR_POSTGRES_RETENTION_DSN' <<<"$retention_off"; then
+  fail_gate "retention: the default render must carry no retention DSN"
+fi
+pass "retention: the default render is off, with no retention DSN"
+retention_secret_args=(--set-string credentials.retention.existingSecret=acr-retention-credentials)
+retention_provisioned="$(render "${retention_secret_args[@]}")"
+grep -A3 -F -- '- name: ACR_POSTGRES_RETENTION_DSN' <<<"$(browser_doc "$retention_provisioned" Job -grant-runtime-acl)" | grep -qF 'name: "acr-retention-credentials"' || fail_gate "retention: the grant-runtime-acl Job lacks the retention role's DSN"
+if grep -qF 'ACR_POSTGRES_RETENTION_DSN' <<<"$(browser_doc "$retention_provisioned" Deployment "")"; then
+  fail_gate "retention: acr-api must not read the retention DSN with the switch off"
+fi
+pass "retention: credentials.retention reaches the grant Job; acr-api reads it only with the switch on"
+retention_on="$(render "${retention_secret_args[@]}" --set config.askDevRetentionEnabled=true)"
+grep -qF 'ACR_ASK_DEV_RETENTION_ENABLED: "true"' <<<"$(browser_doc "$retention_on" ConfigMap -config)" || fail_gate "retention: the switch on must render ACR_ASK_DEV_RETENTION_ENABLED true"
+grep -A3 -F -- '- name: ACR_POSTGRES_RETENTION_DSN' <<<"$(browser_doc "$retention_on" Deployment "")" | grep -qF 'name: "acr-retention-credentials"' || fail_gate "retention: acr-api lacks the retention DSN with the switch on"
+pass "retention: the switch on renders it and the retention DSN for acr-api"
+retention_must_fail() {
+  local name="$1" expect="$2"; shift 2
+  local out status
+  set +e; out="$(render "$@" 2>&1)"; status=$?; set -e
+  [[ $status -ne 0 ]] || fail_gate "retention: ${name} rendered but must fail closed"
+  grep -qF "$expect" <<<"$out" || fail_gate "retention: ${name} failed without naming ${expect}"
+  pass "retention: ${name} fails closed naming '${expect}'"
+}
+retention_must_fail "switch on without a retention role" "retention-role-required" --set config.askDevRetentionEnabled=true
+runtime_secret="$(python3 -c 'import sys,re; m=re.search(r"(?m)^  runtime:\n(?:    .*\n)*?    existingSecret: \"?([^\"\s]+)", open(sys.argv[1]).read()); print(m.group(1) if m else "")' "$values")"
+if [[ -n "$runtime_secret" ]]; then
+  retention_must_fail "retention DSN that is the runtime DSN" "shared-runtime-retention-dsn" --set config.askDevRetentionEnabled=true \
+    --set-string "credentials.retention.existingSecret=${runtime_secret}" --set-string credentials.retention.postgresDsnKey=ACR_POSTGRES_DSN
+fi
+migration_secret="$(python3 -c 'import sys,re; m=re.search(r"(?m)^  migration:\n(?:    .*\n)*?    existingSecret: \"?([^\"\s]+)", open(sys.argv[1]).read()); print(m.group(1) if m else "")' "$values")"
+if [[ -n "$migration_secret" ]]; then
+  retention_must_fail "retention DSN that is the migration DSN" "shared-migration-retention-dsn" --set config.askDevRetentionEnabled=true \
+    --set-string "credentials.retention.existingSecret=${migration_secret}" --set-string credentials.retention.postgresDsnKey=ACR_POSTGRES_MIGRATION_DSN
+fi
+retention_must_fail "retention DSN that is the purge DSN" "shared-purge-retention-dsn" --set config.askDevRetentionEnabled=true \
+  --set-string credentials.purge.existingSecret=acr-purge-credentials --set-string credentials.retention.existingSecret=acr-purge-credentials \
+  --set-string credentials.retention.postgresDsnKey=ACR_POSTGRES_PURGE_DSN
+
 # CHAOS-12094 (F1): the acr-mcp hop proof, rolled in two steps. Step 1
 # (acrMcp.hop.enabled): acr-mcp mounts ONE projected token of its own
 # ServiceAccount for the hop audience (600 s) and names its file, and nothing
@@ -1405,5 +1450,40 @@ other_deps="$(awk 'BEGIN{RS="\n---\n"} /\nkind: Deployment\n/ && !/\n  name: [^\
 [[ -n "$other_deps" ]] || fail_gate "projector-strategy: no non-projector Deployment in the render (the untouched check would be vacuous)"
 if grep -q 'type: Recreate' <<<"$other_deps"; then fail_gate "projector-strategy: acr-api/acr-mcp Deployments must not render Recreate"; fi
 pass "projector-strategy: acr-api and acr-mcp strategies are untouched"
+
+# Gate: acr-api's trusted proxy networks and CORS origins are chart values
+# (config.trustedProxyCidrs, config.cors.allowedOrigins), rendered into the
+# acr-api ConfigMap only when set. deployment.extraEnv may not name the same
+# variable while the value is set: an env entry silently beats the ConfigMap.
+proxy_cors_render="$(render --set-string 'config.trustedProxyCidrs[0]=10.42.0.0/24' --set-string 'config.trustedProxyCidrs[1]=192.0.2.10/32' \
+  --set-string 'config.cors.allowedOrigins[0]=https://www.example.test' --set-string 'config.cors.allowedOrigins[1]=http://localhost:3000')"
+proxy_cors_cm="$(browser_doc "$proxy_cors_render" ConfigMap -config)"
+grep -qF "name: ${RELEASE}-config" <<<"$proxy_cors_cm" || fail_gate "proxy-cors: the acr-api ConfigMap was not found"
+grep -qxF '  ACR_TRUSTED_PROXY_CIDRS: "10.42.0.0/24,192.0.2.10/32"' <<<"$proxy_cors_cm" || fail_gate "proxy-cors: config.trustedProxyCidrs does not render ACR_TRUSTED_PROXY_CIDRS in the acr-api ConfigMap"
+grep -qxF '  ACR_CORS_ALLOWED_ORIGINS: "https://www.example.test,http://localhost:3000"' <<<"$proxy_cors_cm" || fail_gate "proxy-cors: config.cors.allowedOrigins does not render ACR_CORS_ALLOWED_ORIGINS in the acr-api ConfigMap"
+pass "proxy-cors: config.trustedProxyCidrs and config.cors.allowedOrigins render into the acr-api ConfigMap"
+proxy_cors_off="$(render)"
+if grep -qE 'ACR_TRUSTED_PROXY_CIDRS|ACR_CORS_ALLOWED_ORIGINS' <<<"$proxy_cors_off"; then
+  fail_gate "proxy-cors: the render without the values must carry neither variable"
+fi
+pass "proxy-cors: unset values render neither variable"
+proxy_cors_must_fail() {
+  local name="$1" expect="$2"; shift 2
+  local out status
+  set +e; out="$(render "$@" 2>&1)"; status=$?; set -e
+  [[ $status -ne 0 ]] || fail_gate "proxy-cors: ${name} rendered but must fail closed"
+  grep -qF "$expect" <<<"$out" || fail_gate "proxy-cors: ${name} failed without naming ${expect}"
+  pass "proxy-cors: ${name} fails closed naming '${expect}'"
+}
+proxy_cors_must_fail "proxy CIDRs from both the value and extraEnv" "deployment.extraEnv names ACR_TRUSTED_PROXY_CIDRS" \
+  --set-string 'config.trustedProxyCidrs[0]=10.42.0.0/24' \
+  --set-string 'deployment.extraEnv[0].name=ACR_TRUSTED_PROXY_CIDRS' --set-string 'deployment.extraEnv[0].value=10.0.0.0/8'
+proxy_cors_must_fail "CORS origins from both the value and extraEnv" "deployment.extraEnv names ACR_CORS_ALLOWED_ORIGINS" \
+  --set-string 'config.cors.allowedOrigins[0]=https://www.example.test' \
+  --set-string 'deployment.extraEnv[0].name=ACR_CORS_ALLOWED_ORIGINS' --set-string 'deployment.extraEnv[0].value=https://other.example.test'
+# extraEnv alone (the form environments use today) still renders, unchanged.
+proxy_env_only="$(render --set-string 'deployment.extraEnv[0].name=ACR_TRUSTED_PROXY_CIDRS' --set-string 'deployment.extraEnv[0].value=10.42.0.0/24')"
+grep -A1 -F -- '- name: ACR_TRUSTED_PROXY_CIDRS' <<<"$proxy_env_only" | grep -qE 'value: "?10\.42\.0\.0/24"?$' || fail_gate "proxy-cors: deployment.extraEnv ACR_TRUSTED_PROXY_CIDRS alone no longer renders"
+pass "proxy-cors: deployment.extraEnv alone still renders the variable"
 
 printf 'RESULT: happy path passed all gates\n'

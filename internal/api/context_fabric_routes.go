@@ -125,6 +125,14 @@ func (a *App) ContextFabricInvestigationHandler(investigator contextfabric.Inves
 			writeError(w, r, http.StatusUnauthorized, "invalid_token", "Missing or invalid ACR credential", false, nil)
 			return
 		}
+		// CHAOS-12092 (design §3.2): the access read ran inside this
+		// request's budget; when what is left is below the minimum the
+		// create is refused before admission, the repeat answer and the
+		// gates: no submission row and no model attempt.
+		if liveAccessBudgetExhausted(r.Context()) {
+			a.writeBudgetExhausted(w, r, principal)
+			return
+		}
 		// CHAOS-11912 (round-3 F1): a repeat of an admitted submission runs
 		// nothing, so it is answered before the service-model gate, which
 		// decides EXECUTION on the deployment's model.
@@ -189,8 +197,10 @@ func (a *App) ContextFabricInvestigationHandler(investigator contextfabric.Inves
 			reservedResultID = a.eventStream.reserveID()
 		}
 		// With no submission (and no stream) the reserved id is "" and the
-		// context is the gated one unchanged.
-		reservedCtx := contextfabric.WithReservedResultID(gatedCtx, reservedResultID)
+		// context is the gated one unchanged. A named submission's
+		// reservation is marked as such: its save must find the record
+		// (CHAOS-11952, design §6 T2); a stream's own reservation has none.
+		reservedCtx := contextfabric.WithReservedResultIDFor(gatedCtx, reservedResultID, submission != nil && !submission.implicit)
 		investigateCtx, collectedSynthesisInput := contextfabric.WithSynthesisInputCollector(reservedCtx)
 		investigationStarted := a.now()
 		// The latency is recorded once, when the request ends, under the

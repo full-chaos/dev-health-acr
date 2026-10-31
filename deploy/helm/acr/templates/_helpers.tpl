@@ -272,6 +272,19 @@ enforces that the migration DSN is not the runtime DSN reference.
 {{- if and (eq $runtimeSecret $migrationSecret) (eq $runtimeKey $migrationKey) -}}
 {{- fail (printf "shared-runtime-migration-dsn: the migration DSN reference (%s/%s) must differ from the runtime DSN reference; a schema-owner migration credential must never reuse the least-privilege runtime credential" $migrationSecret $migrationKey) -}}
 {{- end -}}
+{{- if .Values.config.askDevRetentionEnabled -}}
+{{- $retentionSecret := include "acr.requireSecretName" (dict "name" ($c.retention.existingSecret | default "") "label" "retention-role-required" "field" "credentials.retention.existingSecret") -}}
+{{- $retentionKey := $c.retention.postgresDsnKey | default "ACR_POSTGRES_RETENTION_DSN" -}}
+{{- if and (eq $runtimeSecret $retentionSecret) (eq $runtimeKey $retentionKey) -}}
+{{- fail "shared-runtime-retention-dsn: the retention DSN reference must differ from the runtime DSN reference; the retention job runs as a role of its own (CHAOS-11952)" -}}
+{{- end -}}
+{{- if and (eq $migrationSecret $retentionSecret) (eq $migrationKey $retentionKey) -}}
+{{- fail "shared-migration-retention-dsn: the retention DSN reference must differ from the migration DSN reference; the retention job never runs as the schema owner (CHAOS-11952)" -}}
+{{- end -}}
+{{- if and $c.purge.existingSecret (eq ($c.purge.existingSecret | default "") $retentionSecret) (eq ($c.purge.postgresDsnKey | default "ACR_POSTGRES_PURGE_DSN") $retentionKey) -}}
+{{- fail "shared-purge-retention-dsn: the retention DSN reference must differ from the purge DSN reference; the two grant sets never meet on one role (CHAOS-11952)" -}}
+{{- end -}}
+{{- end -}}
 {{- end -}}
 
 {{/*
@@ -645,6 +658,22 @@ credentials) is on.
 {{- end -}}
 {{- if not (and .Values.acrMcp.enabled .Values.acrMcp.hop.enabled) -}}
 {{- fail "mcp-hop: config.mcpHop.required requires acrMcp.enabled and acrMcp.hop.enabled (step 1 of the rollout: acr-mcp must send the hop first)" -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+
+{{/*
+acr.validateEnvValueSources: a variable the chart renders from a value into the
+acr-api ConfigMap has ONE source. deployment.extraEnv is an env entry, and an
+env entry beats the ConfigMap (envFrom) silently, so the two together would
+leave the value unread. extraEnv alone (no value set) still renders.
+*/}}
+{{- define "acr.validateEnvValueSources" -}}
+{{- $fromValues := dict "ACR_TRUSTED_PROXY_CIDRS" (and .Values.config.trustedProxyCidrs "config.trustedProxyCidrs") "ACR_CORS_ALLOWED_ORIGINS" (and (default dict .Values.config.cors).allowedOrigins "config.cors.allowedOrigins") -}}
+{{- range $env := .Values.deployment.extraEnv -}}
+{{- $name := toString $env.name -}}
+{{- with (get $fromValues $name) -}}
+{{- fail (printf "env-source: deployment.extraEnv names %s while %s is set; set it in %s only" $name . .) -}}
 {{- end -}}
 {{- end -}}
 {{- end -}}

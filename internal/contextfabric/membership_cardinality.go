@@ -118,10 +118,12 @@ type MembershipCardinality struct {
 	// It is a FOURTH statement, beside Served, Declared and
 	// PopulationIncomplete, and it is kept apart from them on purpose: those
 	// three also feed the count sentence, the narrowing disclosure and the
-	// ranking row, and none of those describes an authorization cut. Only the
-	// count's outcome row reads it, so the completeness state stops reading a
-	// cut member set as the whole one without changing what the other
-	// surfaces say about the members the answer carries.
+	// ranking row, and none of those describes an authorization cut. Only
+	// OUTCOME rows read it -- the count's, and the member read rows' through
+	// the each_member population (CHAOS-12153, withMemberAuthorizationCut) --
+	// so the completeness state stops reading a cut member set as the whole
+	// one without changing what the other surfaces say about the members the
+	// answer carries.
 	AuthorizationDenied int
 }
 
@@ -293,9 +295,8 @@ func restateCohortAuthorizationCutCount(result InvestigationResult) (Investigati
 		Declared:            stated.Declared,
 		AuthorizationDenied: denied,
 	}, stated.Requirement, stated.Obligation)
-	outcomes := appendOutcomeRows(result.Completeness.Outcomes, restated)
-	result.Completeness.Outcomes = outcomes
-	return result, true
+	// Within the outcome cap, as the member read restatement (codex #1807 r1).
+	return appendServedRestatement(result, restated), true
 }
 
 // renderClampNarrowing finds the stage-1 `cardinality` step -- the pre-read

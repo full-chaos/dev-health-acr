@@ -457,6 +457,9 @@ var errorCodes = []string{
 	ErrorCodeCanceled,
 	ErrorCodeRunLost,
 	ErrorCodeCursorExpired,
+	ErrorCodeAccessDenied,
+	ErrorCodeNoRepository,
+	ErrorCodeBudgetExhausted,
 }
 
 func validErrorCode(code string) bool {

@@ -787,14 +787,28 @@ func TestAuthMatrixConcurrentCallersNeverBleedIdentity(t *testing.T) {
 	target, stack, e, callers := inProcessTarget(t)
 	f := target.fixture
 	const perCaller = 50
+	// concurrentWorkers bounds how many of the 3*perCaller workers run at
+	// once. Released together, all 150 opened about 150 new loopback
+	// connections to acr-api at the same moment (each MCP request makes
+	// its own upstream calls). On a loaded macOS host some of those NEW
+	// connections were reset at connect or at the TLS handshake (never a
+	// reused one), and the credential decision reports that transport
+	// failure as 503 "could not decide the credential": the test failed
+	// on host capacity, not on isolation. 32 interleaved workers of three
+	// callers are still parallel, and the in_flight bounds below assert
+	// both sides: the requests overlapped, and the burst stayed bounded.
+	const concurrentWorkers = 32
 
 	var wg sync.WaitGroup
 	start := make(chan struct{})
+	slots := make(chan struct{}, concurrentWorkers)
 	launch := func(caller string, i int, work func(id func(step string) string)) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
 			<-start
+			slots <- struct{}{}
+			defer func() { <-slots }()
 			work(func(step string) string { return fmt.Sprintf("conc.%s.%03d.%s", caller, i, step) })
 		}()
 	}
@@ -898,6 +912,9 @@ func TestAuthMatrixConcurrentCallersNeverBleedIdentity(t *testing.T) {
 	}
 	if maxInFlight < 2 {
 		t.Errorf("the requests never overlapped (max in_flight %d): the concurrency was not exercised", maxInFlight)
+	}
+	if maxInFlight > concurrentWorkers {
+		t.Errorf("max in_flight %d is over the %d concurrent workers: the burst is not bounded", maxInFlight, concurrentWorkers)
 	}
 	if n := e.handler.InFlight(); n != 0 {
 		t.Errorf("in-flight gauge %d after every request completed", n)

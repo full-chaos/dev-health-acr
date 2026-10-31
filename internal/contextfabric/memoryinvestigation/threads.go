@@ -82,9 +82,16 @@ func recordThreadRow(key contextfabric.SubmissionKey, record contextfabric.Submi
 }
 
 // threadClosedLocked is why a record's thread refuses a repeat of the key and
-// hides the record from a status read: deleted or expired. Callers hold mu.
+// hides the record from a status read: deleted or expired. With the store's
+// unthreaded retention on (CHAOS-11952), a record with no thread is a
+// one-turn thread with retention 0: expired from
+// contextfabric.UnthreadedRecordExpiresAt; off, it stays live. Callers hold
+// mu.
 func (s *Store) threadClosedLocked(record contextfabric.SubmissionRecord, now time.Time) contextfabric.ThreadClosedReason {
 	if record.ThreadID == "" {
+		if s.unthreadedRetention && !now.Before(contextfabric.UnthreadedRecordExpiresAt(record.AdmittedAt)) {
+			return contextfabric.ThreadClosedExpired
+		}
 		return ""
 	}
 	thread, found := s.threads[recordThreadRow(record.Key, record)]
@@ -99,18 +106,22 @@ func (s *Store) threadClosedLocked(record contextfabric.SubmissionRecord, now ti
 	return ""
 }
 
-// hiddenByClosedThreadLocked: resultID is named by at least one thread turn
-// of orgID (its final or its reserved result) and every record that names it
-// belongs to a closed thread. Such a result is not served on any read (design
-// §6 T6); a result one live turn, or one record with no thread, names stays
-// readable (T3). Callers hold mu.
+// hiddenByClosedThreadLocked: resultID is named by at least one submission
+// record of orgID (its final or its reserved result) and every record that
+// names it is closed: a turn of a closed thread, or (with the store's
+// unthreaded retention on, CHAOS-11952) a record with no thread past its
+// retention-0 expiry. Off, a record with no thread keeps its result
+// readable, as before. Such a result is not served on
+// any read (design §6 T6); a result one live record names stays readable
+// (T3), and a result no record names (MCP, Workbench) is out of scope.
+// Callers hold mu.
 func (s *Store) hiddenByClosedThreadLocked(orgID, resultID string, now time.Time) bool {
 	named := false
 	for key, record := range s.submissions {
 		if key.OrgID != orgID || (record.ResultID != resultID && record.ReservedResultID != resultID) {
 			continue
 		}
-		if record.ThreadID == "" || s.threadClosedLocked(record, now) == "" {
+		if s.threadClosedLocked(record, now) == "" {
 			return false
 		}
 		named = true

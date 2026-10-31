@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"github.com/full-chaos/dev-health-acr/internal/entitlements"
 	storagepostgres "github.com/full-chaos/dev-health-acr/internal/storage/postgres"
 	"github.com/full-chaos/dev-health-acr/internal/telemetryscrub"
 	"log/slog"
@@ -113,6 +114,13 @@ func open(ctx context.Context, request buildRequest) (*Runtime, error) {
 		return nil, closeAfterError(runtime, fmt.Errorf("initialize entitlement runtime: %w", err))
 	}
 	runtime.closers = []func() error{entitlement.Close, clickhouse.close}
+	// CHAOS-12092: every user-class call is re-checked live through the
+	// entitlement provider's principal access read. In remote entitlement
+	// mode a provider without one refuses the start (fail closed); only local
+	// entitlement mode (development and test) runs without it.
+	if request.config.EntitlementMode() == config.EntitlementModeRemote && principalAccessReader(entitlement) == nil {
+		return nil, closeAfterError(runtime, errors.New("initialize entitlement runtime: the entitlement provider serves no principal access read"))
+	}
 
 	var episodeCreator api.EpisodeCreator
 	if request.config.EnableEpisodeWriteback {
@@ -294,8 +302,9 @@ func open(ctx context.Context, request buildRequest) (*Runtime, error) {
 		EvidenceStoreFactory: clickhouse.factory, ClientIP: clientIP, UsageTelemetry: usageTelemetry,
 		WebAssertionReplays: webAssertionReplays, MCPHop: mcpHop,
 		Runtime: &api.RuntimeDependencies{
-			Credentials: postgres.credentials, Audit: postgres.audit, Entitlements: entitlement, Assembler: assembler,
-			Evidence: clickhouse.evidence, Episodes: episodeCreator, ReadinessChecks: livenessChecks, DataStoreChecks: dataStoreChecks,
+			Credentials: postgres.credentials, Audit: postgres.audit, Entitlements: entitlement, PrincipalAccess: principalAccessReader(entitlement),
+			Assembler: assembler,
+			Evidence:  clickhouse.evidence, Episodes: episodeCreator, ReadinessChecks: livenessChecks, DataStoreChecks: dataStoreChecks,
 			DeviceAuthorizations: postgres.devices, DeviceVerificationURL: request.config.DeviceVerificationURL,
 			DeviceAuthorizationLimiter: api.NewDeviceAuthorizationLimiter(api.ClockFunc(request.options.Now)),
 			Investigator:               investigator,
@@ -807,7 +816,9 @@ func buildContextFabricInvestigator(ctx context.Context, request buildRequest, p
 	reuseEnabled := request.config.AnswerReuseMaxAge > 0
 	// CHAOS-11948: Get and FindReusable decide the closed-thread rule on the
 	// runtime's clock, the one the thread routes pass.
-	storeOpts := []pginvestigation.StoreOption{pginvestigation.WithClock(request.options.Now)}
+	// CHAOS-11952: the read rule for a submission with no thread follows the
+	// retention switch, the one the retention job runs on.
+	storeOpts := []pginvestigation.StoreOption{pginvestigation.WithClock(request.options.Now), pginvestigation.WithUnthreadedRecordRetention(request.config.AskDevRetentionEnabled)}
 	if reuseEnabled {
 		storeOpts = append(storeOpts, pginvestigation.WithAnswerReuse(request.config.AnswerReuseMaxAge))
 	}
@@ -1360,6 +1371,19 @@ func closeAfterError(runtime *Runtime, cause error) error {
 		return errors.Join(cause, fmt.Errorf("close hosted runtime: %w", closeErr))
 	}
 	return cause
+}
+
+// principalAccessReader is the per-call access read (CHAOS-12092) of the
+// entitlement provider: the remote Dev Health client serves it; the local
+// development provider does not, and the read is then off (NewApp warns).
+// A signature drift must break the build, not silently turn the read off.
+var _ api.PrincipalAccessReader = (*entitlements.Client)(nil)
+
+func principalAccessReader(entitlement entitlementChecker) api.PrincipalAccessReader {
+	if reader, ok := entitlement.(api.PrincipalAccessReader); ok {
+		return reader
+	}
+	return nil
 }
 
 // oauthRuntime composes the OAuth login for hosted MCP clients, or nil when

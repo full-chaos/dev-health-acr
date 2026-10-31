@@ -24,10 +24,10 @@ var _ contextfabric.ResultFeedbackStore = (*Store)(nil)
 
 // feedbackResultSQL is the result row the caller owns feedback on, over $1
 // result id, $2 org id, $3 now and the caller's owner $4-$7.
-func feedbackResultSQL() string {
+func (s *Store) feedbackResultSQL() string {
 	return `r.result_id = $1 AND r.org_id = $2
    AND ` + ownerMatchSQL("r.submission_owner_auth_method", "r.submission_owner_subject", "r.submission_owner_user_id", "r.submission_owner_surface", "$4", "$5", "$6", "$7") + `
-   AND NOT ` + hiddenByClosedThreadSQL("$3")
+   AND NOT ` + s.hiddenByClosedThreadSQL("$3")
 }
 
 func feedbackArgs(principal storage.Principal, resultID string, now time.Time) ([]any, error) {
@@ -57,7 +57,7 @@ func (s *Store) GetResultFeedback(ctx context.Context, principal storage.Princip
 SELECT f.correct, f.useful, f.updated_at
   FROM acr.context_fabric_investigation_results r
   LEFT JOIN acr.context_fabric_result_feedback f ON f.result_id = r.result_id AND f.org_id = r.org_id
- WHERE `+feedbackResultSQL(), args...).Scan(&correct, &useful, &updatedAt)
+ WHERE `+s.feedbackResultSQL(), args...).Scan(&correct, &useful, &updatedAt)
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
 		return contextfabric.ResultFeedback{}, ErrNotFound
@@ -89,7 +89,7 @@ func (s *Store) SetResultFeedback(ctx context.Context, principal storage.Princip
 INSERT INTO acr.context_fabric_result_feedback (result_id, org_id, correct, useful, created_at, updated_at)
 SELECT r.result_id, r.org_id, $8, $9, $3, $3
   FROM acr.context_fabric_investigation_results r
- WHERE `+feedbackResultSQL()+`
+ WHERE `+s.feedbackResultSQL()+`
 ON CONFLICT (result_id) DO UPDATE
    SET correct = EXCLUDED.correct, useful = EXCLUDED.useful,
        updated_at = GREATEST(acr.context_fabric_result_feedback.updated_at, EXCLUDED.updated_at)

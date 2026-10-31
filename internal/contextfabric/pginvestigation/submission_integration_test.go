@@ -226,6 +226,40 @@ func TestThreadParity(t *testing.T) {
 	})
 }
 
+// TestRetentionReadParity runs the retention read rules (CHAOS-11952) on
+// PostgreSQL; memoryinvestigation runs the same table.
+func TestRetentionReadParity(t *testing.T) {
+	ctx := context.Background()
+	paritytest.RunRetentionReadSuite(t, func(t *testing.T, clock func() time.Time, retention bool) paritytest.ThreadStore {
+		db := newInvestigationTestDatabase(t, ctx)
+		store, err := pginvestigation.NewStore(db, pginvestigation.WithClock(clock), pginvestigation.WithUnthreadedRecordRetention(retention))
+		require.NoError(t, err)
+		return seedableThreadStore{Store: store, db: db}
+	})
+}
+
+// TestRetentionSwitchParity: with the read rule off, the PostgreSQL store
+// refuses to sweep (CHAOS-11952).
+func TestRetentionSwitchParity(t *testing.T) {
+	ctx := context.Background()
+	paritytest.RunRetentionSwitchSuite(t, func(t *testing.T) paritytest.RetentionStore {
+		store, err := pginvestigation.NewStore(newInvestigationTestDatabase(t, ctx))
+		require.NoError(t, err)
+		return store
+	})
+}
+
+// TestRetentionSweepParity runs the retention job's store table
+// (CHAOS-11952) on PostgreSQL; memoryinvestigation runs the same table.
+func TestRetentionSweepParity(t *testing.T) {
+	ctx := context.Background()
+	paritytest.RunRetentionSweepSuite(t, func(t *testing.T, clock func() time.Time) paritytest.RetentionStore {
+		store, err := pginvestigation.NewStore(newInvestigationTestDatabase(t, ctx), pginvestigation.WithClock(clock), pginvestigation.WithUnthreadedRecordRetention(true))
+		require.NoError(t, err)
+		return store
+	})
+}
+
 // TestResultFeedbackParity runs the shared feedback table (CHAOS-11950) on
 // PostgreSQL.
 func TestResultFeedbackParity(t *testing.T) {
@@ -243,6 +277,23 @@ func TestResultFeedbackParity(t *testing.T) {
 type seedableThreadStore struct {
 	*pginvestigation.Store
 	db *sql.DB
+}
+
+// RemoveSubmissionRecord deletes one submission record (its log goes by the
+// foreign key's cascade), as the retention job does
+// (paritytest.SubmissionRecordRemover).
+func (s seedableThreadStore) RemoveSubmissionRecord(key contextfabric.SubmissionKey) error {
+	result, err := s.db.ExecContext(context.Background(), `
+DELETE FROM acr.context_fabric_investigation_submissions
+ WHERE org_id = $1 AND owner_auth_method = $2 AND owner_subject = $3 AND submission_id = $4`,
+		key.OrgID, key.Owner.AuthenticationMethod, key.Owner.Subject, key.SubmissionID)
+	if err != nil {
+		return err
+	}
+	if rows, err := result.RowsAffected(); err != nil || rows != 1 {
+		return fmt.Errorf("remove submission record: %d rows, %v", rows, err)
+	}
+	return nil
 }
 
 // SeedThreadTurnCount sets one thread row's turn_count.
