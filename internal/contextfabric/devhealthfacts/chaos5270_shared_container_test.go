@@ -519,6 +519,7 @@ func startSharedClickHouseContainer(tb testing.TB) (*runtimeclickhouse.Client, c
 		ContainerRequest: testcontainers.ContainerRequest{
 			Image: chfixture.Image, ExposedPorts: []string{"9000/tcp"},
 			Env:        map[string]string{"CLICKHOUSE_USER": "acr", "CLICKHOUSE_PASSWORD": "acr", "CLICKHOUSE_DB": "default"},
+			Files:      probeContainerFiles(),
 			WaitingFor: wait.ForListeningPort("9000/tcp").WithStartupTimeout(2 * time.Minute),
 			LogConsumerCfg: &testcontainers.LogConsumerConfig{
 				Consumers: []testcontainers.LogConsumer{sharedClickHouseDeathBuf},
