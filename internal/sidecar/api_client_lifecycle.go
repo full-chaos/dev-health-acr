@@ -218,6 +218,13 @@ func (c *LifecycleClient) callPublic(ctx context.Context, path string, request a
 	if c.cfg.Resource != "" {
 		httpRequest.Header.Set(auth.ResourceHeader, c.cfg.Resource)
 	}
+	if c.cfg.HopTokenFile != "" {
+		hop, err := readHopToken(c.cfg.HopTokenFile)
+		if err != nil {
+			return err
+		}
+		httpRequest.Header.Set(auth.MCPHopHeader, hop)
+	}
 	httpResponse, err := c.http.Do(httpRequest)
 	if err != nil {
 		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {

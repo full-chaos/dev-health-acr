@@ -244,6 +244,8 @@ var MCPHTTPServing = Event{
 		{Key: "listen_address", Type: FieldString, Presence: PresenceRequired},
 		{Key: "transport", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: MCPTransportVocabulary()},
 		{Key: "base_path", Type: FieldString, Presence: PresenceRequired},
+		// CHAOS-12094: whether every hosted API call carries the hop proof.
+		{Key: "mcp_hop", Type: FieldBool, Presence: PresenceRequired},
 		{Key: "server_version", Type: FieldString, Presence: PresenceRequired},
 		{Key: "server_commit", Type: FieldString, Presence: PresenceRequired},
 		{Key: "protocol_revisions", Type: FieldStringSlice, Presence: PresenceRequired, ClosedVocabulary: MCPHTTPProtocolRevisionVocabulary()},

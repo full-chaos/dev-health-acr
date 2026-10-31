@@ -41,11 +41,12 @@ import (
 )
 
 // CHAOS-7271: phased project mix reads. chaos7271RollupStatements is the roll-up
-// mix's statement count (scope, repo themes, repo bugfix, evidence arm); the native mix adds
-// scope, placement and unit values.
+// mix's statement count (scope, repo themes, repo bugfix, evidence arm, and the
+// pinned-version presence check of CHAOS-12179); the native mix adds scope,
+// placement, unit values and its own presence check.
 const (
-	chaos7271RollupStatements  = 4
-	chaos7271PhasedStatements  = 8
+	chaos7271RollupStatements  = 5
+	chaos7271PhasedStatements  = 10
 	chaos7271DigestStatements  = 4
 	chaos7271MainRollupBytes1x = 39384274
 	chaos7271MainNativeBytes1x = 39687121
@@ -508,7 +509,7 @@ func checkProjectThemeMixByteBudget(t *testing.T, units int, growth bool) {
 	// reads every wide column, and the phases of one mix read at most
 	// chaos7271MaxMixGrowth times what the one statement of that mix read on main.
 	if len(statements) != chaos7271PhasedStatements {
-		t.Fatalf("project investment read logged %d statements over work_unit_investments, want %d (roll-up: scope, repo arm, evidence arm; native: scope, placement, theme values, bugfix values)",
+		t.Fatalf("project investment read logged %d statements over work_unit_investments, want %d (roll-up: scope, repo arm, evidence arm, pinned presence; native: scope, placement, theme values, bugfix values, pinned presence)",
 			len(statements), chaos7271PhasedStatements)
 	}
 	var rollupSum, nativeSum uint64

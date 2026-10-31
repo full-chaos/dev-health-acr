@@ -249,7 +249,7 @@ func TestServeHTTPTransportServesAndShutsDownGracefully(t *testing.T) {
 		t.Fatal(err)
 	}
 	if _, err := certify.Certify(log, certify.Assertion{Event: eventspec.MCPHTTPServing, Want: map[string]any{
-		"listen_address": address, "transport": "http", "base_path": "/mcp",
+		"listen_address": address, "transport": "http", "base_path": "/mcp", "mcp_hop": false,
 		"server_version": testIdentity.Version, "server_commit": testIdentity.Commit,
 		"max_body_bytes": acrmcp.DefaultHTTPMaxBodyBytes,
 	}}); err != nil {

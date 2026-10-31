@@ -2,7 +2,10 @@
 acr-mcp Deployment: the hosted, stateless Streamable HTTP MCP server. It is its
 own workload from its own image, never a sidecar of acr-api. It carries no
 credential: no Secret is mounted or read into its environment, and no
-ServiceAccount token is mounted. The only Secret reference it can carry is the
+ServiceAccount token is mounted except, with acrMcp.hop.enabled (CHAOS-12094),
+one projected token of its own ServiceAccount for the hop audience only, which
+proves to acr-api that a call comes through acr-mcp. It opens nothing on its
+own. The only Secret reference it can carry is the
 chart-wide imagePullSecrets (registry pull auth). Every request is decided on the caller's own
 bearer, which acr-mcp forwards to acr-api. Because no state lives in the pod,
 replicas are interchangeable and any replica may serve any request.
@@ -43,7 +46,7 @@ spec:
         {{- toYaml . | nindent 8 }}
         {{- end }}
     spec:
-      serviceAccountName: {{ printf "%s-mcp" (include "acr.fullname" .) | quote }}
+      serviceAccountName: {{ include "acr.mcpServiceAccountName" . | quote }}
       automountServiceAccountToken: false
       {{- include "acr.imagePullSecrets" . | nindent 6 }}
       securityContext:
@@ -85,6 +88,11 @@ spec:
           envFrom:
             - configMapRef:
                 name: {{ include "acr.fullname" . }}-mcp-config
+          {{- if $m.hop.enabled }}
+          env:
+            - name: ACR_MCP_HOP_TOKEN_FILE
+              value: /var/run/secrets/acr-mcp-hop/token
+          {{- end }}
           livenessProbe:
             httpGet:
               path: /healthz
@@ -112,8 +120,25 @@ spec:
           volumeMounts:
             - name: tmp
               mountPath: /tmp
+            {{- if $m.hop.enabled }}
+            - name: mcp-hop-token
+              mountPath: /var/run/secrets/acr-mcp-hop
+              readOnly: true
+            {{- end }}
       terminationGracePeriodSeconds: {{ $m.terminationGracePeriodSeconds }}
       volumes:
         - name: tmp
           emptyDir: {}
+        {{- if $m.hop.enabled }}
+        # CHAOS-12094: the hop proof. A projected token of this pod's own
+        # ServiceAccount, for the hop audience only (acr-api checks it with
+        # TokenReview), never a Secret. No subPath: kubelet rotates the file.
+        - name: mcp-hop-token
+          projected:
+            sources:
+              - serviceAccountToken:
+                  audience: {{ $m.hop.audience | quote }}
+                  expirationSeconds: {{ $m.hop.expirationSeconds }}
+                  path: token
+        {{- end }}
 {{- end }}

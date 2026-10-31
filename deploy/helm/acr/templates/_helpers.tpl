@@ -149,7 +149,7 @@ subject, on one identity.
 */}}
 {{- define "acr.validateServiceAccountNames" -}}
 {{- $full := include "acr.fullname" . -}}
-{{- $entries := list (list "acr-api" (include "acr.apiServiceAccountName" .)) (list "serviceAccount.*" (include "acr.serviceAccountName" .)) (list "acr-migrate" (printf "%s-migrate" $full)) (list "acr-mcp" (printf "%s-mcp" $full)) -}}
+{{- $entries := list (list "acr-api" (include "acr.apiServiceAccountName" .)) (list "serviceAccount.*" (include "acr.serviceAccountName" .)) (list "acr-migrate" (printf "%s-migrate" $full)) (list "acr-mcp" (include "acr.mcpServiceAccountName" .)) -}}
 {{- if .Values.workloadTokenExchange.enabled -}}
 {{- range $i, $c := .Values.workloadTokenExchange.consumerServiceAccounts -}}
 {{- $src := printf "workloadTokenExchange.consumerServiceAccounts[%d]" $i -}}
@@ -614,5 +614,37 @@ NetworkPolicy egress to the OTLP collector port, when otel.enabled.
 - ports:
     - protocol: TCP
       port: {{ .Values.otel.egressPort }}
+{{- end -}}
+{{- end -}}
+
+{{/*
+CHAOS-12094 (F1): the acr-mcp hop proof. acr.mcpServiceAccountName is the ONE
+name of acr-mcp's ServiceAccount (acrMcp.serviceAccountName, default
+<fullname>-mcp): the ServiceAccount this chart renders, the pod's
+serviceAccountName, and the identity acr-api's hop check accepts. acr.tokenReview is "true" when acr-api calls
+Kubernetes TokenReview: for the workload token exchange or for the hop check.
+*/}}
+{{- define "acr.mcpServiceAccountName" -}}
+{{- .Values.acrMcp.serviceAccountName | default (printf "%s-mcp" (include "acr.fullname" .)) -}}
+{{- end -}}
+
+{{- define "acr.tokenReview" -}}
+{{- if or .Values.workloadTokenExchange.enabled .Values.config.mcpHop.required -}}true{{- end -}}
+{{- end -}}
+
+{{/*
+The hop check refuses every MCP-bound credential that does not come through
+acr-mcp with its hop, so it is only coherent when this release runs acr-mcp
+and acr-mcp sends the hop, and the OAuth login (which issues those
+credentials) is on.
+*/}}
+{{- define "acr.validateMcpHop" -}}
+{{- if .Values.config.mcpHop.required -}}
+{{- if not .Values.config.oauth.enabled -}}
+{{- fail "mcp-hop: config.mcpHop.required requires config.oauth.enabled (the hop decides OAuth credentials bound to an MCP resource)" -}}
+{{- end -}}
+{{- if not (and .Values.acrMcp.enabled .Values.acrMcp.hop.enabled) -}}
+{{- fail "mcp-hop: config.mcpHop.required requires acrMcp.enabled and acrMcp.hop.enabled (step 1 of the rollout: acr-mcp must send the hop first)" -}}
+{{- end -}}
 {{- end -}}
 {{- end -}}

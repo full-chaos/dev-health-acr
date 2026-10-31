@@ -194,6 +194,10 @@ func open(ctx context.Context, request buildRequest) (*Runtime, error) {
 	if err != nil {
 		return nil, closeAfterError(runtime, fmt.Errorf("initialize workload token exchange: %w", err))
 	}
+	mcpHop, err := buildMCPHopPolicy(request.config, request.options.Now, os.LookupEnv)
+	if err != nil {
+		return nil, closeAfterError(runtime, fmt.Errorf("initialize mcp hop check: %w", err))
+	}
 	// CHAOS-3859: clarificationSink owns a background worker goroutine
 	// that must stop BEFORE postgres.close() tears down the pool it
 	// writes through -- same ordering Runtime.Close already gives
@@ -288,7 +292,7 @@ func open(ctx context.Context, request buildRequest) (*Runtime, error) {
 	runtime.Dependencies = api.Dependencies{
 		Capabilities: capabilities, Now: request.options.Now, Observability: &hooks, Limits: manager, AuthAttempts: authAttempts,
 		EvidenceStoreFactory: clickhouse.factory, ClientIP: clientIP, UsageTelemetry: usageTelemetry,
-		WebAssertionReplays: webAssertionReplays,
+		WebAssertionReplays: webAssertionReplays, MCPHop: mcpHop,
 		Runtime: &api.RuntimeDependencies{
 			Credentials: postgres.credentials, Audit: postgres.audit, Entitlements: entitlement, Assembler: assembler,
 			Evidence: clickhouse.evidence, Episodes: episodeCreator, ReadinessChecks: livenessChecks, DataStoreChecks: dataStoreChecks,

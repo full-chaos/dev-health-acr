@@ -26,6 +26,7 @@ var workUnitInvestmentsReadExceptions = map[string]string{
 	"investment_project_mix_phased.go|projectMixScopeStatementScoped":     "phase 0 pins every in-window unit, gated or not, so the later phases can count the gated ones",
 	"investment_project_mix_phased.go|projectNativePlacementStatement":    "placement only; the native mix drops gated units in Go by the flag of the theme values statement",
 	"investment_project_mix_phased.go|projectNativeBugfixValuesStatement": "joined in Go to the theme values, whose flag drops gated units",
+	"investment_project_mix_phased.go|projectMixPinnedPresenceStatement":  "presence probe: counts the pinned (unit, version) pairs still stored, gated or not; reads no mix",
 	"investment_project_rollup_mix.go|projectRollupMixStatement":          "parity oracle of the phased roll-up, never served",
 	"investment_project_native_mix.go|projectNativeMixStatement":          "parity oracle of the phased native mix, never served",
 }
@@ -386,6 +387,7 @@ func TestInvestmentProjectMixesLeaveGatedUnitsOutAndSayHowMany(t *testing.T) {
 			[]time.Time{uncategorizedAt, uncategorizedAt, uncategorizedAt, uncategorizedAt}, []uint8{0, 0, 0, 0}, []uint8{1, 1, 0, 1},
 		}}},
 		{marker: "groupArray(bugfix_share)", rows: [][]any{{[]string{"u5", "u6", "u7", "u8"}, []float64{0, 0, 0, 0}}}},
+		{marker: "AS pinned_present", rows: [][]any{{uint64(8)}}},
 	}}
 	result := readInvestmentWith(t, client, rollup, gatedOnly, native)
 	assertUncategorizedCoverage(t, "roll-up", investmentFactOf(result, rollup), 2, 2)

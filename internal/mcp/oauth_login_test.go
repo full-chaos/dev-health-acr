@@ -78,6 +78,9 @@ type oauthStack struct {
 	mcpLogs    *syncBuffer
 	approve    atomic.Bool
 	deny       atomic.Bool
+	// hopFile is the endpoint's hop token file (CHAOS-12094); empty sends
+	// no hop.
+	hopFile string
 }
 
 type swapHandler struct {
@@ -97,7 +100,14 @@ func (s *swapHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 // endpoint's own URL) and the endpoint.
 func newOAuthStack(t *testing.T, extraResources ...string) *oauthStack {
 	t.Helper()
-	s := &oauthStack{t: t, clock: &oauthClock{}, apiLogs: &syncBuffer{}, mcpLogs: &syncBuffer{}}
+	return newOAuthStackWith(t, nil, "", extraResources...)
+}
+
+// newOAuthStackWith builds the stack with acr-api's hop check (nil: none) and
+// the endpoint's hop token file (empty: none).
+func newOAuthStackWith(t *testing.T, hop *auth.MCPHopPolicy, hopFile string, extraResources ...string) *oauthStack {
+	t.Helper()
+	s := &oauthStack{t: t, clock: &oauthClock{}, apiLogs: &syncBuffer{}, mcpLogs: &syncBuffer{}, hopFile: hopFile}
 	s.approve.Store(true)
 
 	apiSwap := &swapHandler{h: http.NotFoundHandler()}
@@ -165,7 +175,7 @@ func newOAuthStack(t *testing.T, extraResources ...string) *oauthStack {
 			SupportedSchemaVersions: contractsv1.AllSchemaVersions,
 			Limits:                  contractsv1.CapabilityLimits{MaxItems: 30, MaxOutputTokens: 4000, MaxSerializedBytes: 262144, RequestsPerMinute: 60},
 		}},
-		Limits: manager, Now: s.clock.now, WebAssertions: verifier,
+		Limits: manager, Now: s.clock.now, WebAssertions: verifier, MCPHop: hop,
 		Runtime: &api.RuntimeDependencies{
 			Credentials: credentials, Audit: audit,
 			Entitlements: api.EntitlementFunc(func(context.Context, string, string) (bool, error) { return true, nil }),
@@ -221,6 +231,7 @@ func (s *oauthStack) newEndpoint(resourceURL string) *acrmcp.HTTPHandler {
 	opts.Transport = acrmcp.TransportHTTP
 	opts.ResourceURL = resourceURL
 	opts.AuthorizationServer = s.api.URL
+	opts.HopTokenFile = s.hopFile
 	handler, err := acrmcp.NewServeHTTPHandler(s.sidecarConfig(), testIdentity, s.mcpLogs, opts)
 	if err != nil {
 		s.t.Fatal(err)
