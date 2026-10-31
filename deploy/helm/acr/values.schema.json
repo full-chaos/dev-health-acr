@@ -220,6 +220,14 @@
         "enableEpisodeWriteback": { "type": "boolean" },
         "askDevRetentionEnabled": { "type": "boolean" },
         "deviceVerificationUrl": { "type": "string" },
+        "trustedProxyCidrs": { "type": "array", "items": { "type": "string", "minLength": 1 }, "description": "Proxy networks whose X-Forwarded-For acr-api believes (ACR_TRUSTED_PROXY_CIDRS): ingress controller, node or tunnel address, acr-mcp pod range. Empty renders nothing." },
+        "cors": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "allowedOrigins": { "type": "array", "items": { "type": "string", "minLength": 1 }, "description": "Exact browser origins acr-api answers CORS for (ACR_CORS_ALLOWED_ORIGINS). Empty renders nothing." }
+          }
+        },
         "entitlement": {
           "type": "object",
           "additionalProperties": true,
