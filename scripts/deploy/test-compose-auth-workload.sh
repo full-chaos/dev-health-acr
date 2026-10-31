@@ -77,6 +77,11 @@ if jq -e '.services["acr-api"].secrets // [] | map(.source) | any(test("workload
   fail 'no workload secret file may be mounted'
 fi
 
+# acr-api never depends on the bootstrap one-shot: a later `up` would run bootstrap-create again, and it refuses a live credential.
+if jq -e '.services["acr-api"].depends_on // {} | has("acr-workload-bootstrap") or has("acr-workload-volume")' "$work/overlay.json" >/dev/null; then
+  fail 'acr-api must not depend on the workload one-shots'
+fi
+
 # The issuer is required: no value and no default.
 if render overlay >"$work/noissuer.json" 2>"$work/noissuer.err"; then fail 'a render without AUTH_TOKEN_ISSUER_URL must refuse'; fi
 grep -Fq 'AUTH_TOKEN_ISSUER_URL is required' "$work/noissuer.err" || fail 'the refusal must name AUTH_TOKEN_ISSUER_URL'
