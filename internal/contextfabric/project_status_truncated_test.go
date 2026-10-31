@@ -9,7 +9,7 @@ import (
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 )
 
-const projectStatusPartialLabel = "(partial: the source read was truncated)"
+const projectStatusPartialLabel = "(truncated: the source read was cut)"
 
 func truncatedReadinessFacts(p SubjectRef) []CanonicalFact {
 	facts := projectStatusFacts(p)
@@ -52,7 +52,7 @@ func TestProjectStatusTruncatedReadinessCandidateCarriesThePartialLabel(t *testi
 	if len(rig.encoded) == 0 || strings.Count(string(rig.encoded[0]), "project-status-") != 4 {
 		t.Fatalf("synthesis_input must carry 4 project status candidates")
 	}
-	if got := strings.Count(string(rig.encoded[0]), "partial: the source read was truncated"); got != 2 {
+	if got := strings.Count(string(rig.encoded[0]), "truncated: the source read was cut"); got != 2 {
 		t.Errorf("synthesis_input carries %d partial labels, want 2 (open items and estimate coverage)", got)
 	}
 	var decoded any
