@@ -88,7 +88,10 @@ func (s *Store) SweepRetention(ctx context.Context, now time.Time, limit int) (c
 // table, on no row: a SELECT and a DELETE on every table the job removes from,
 // and the UPDATE (also what SELECT ... FOR UPDATE needs) on the records. The
 // job runs as the runtime role (CHAOS-12244); a role missing any privilege
-// dbacl.RetentionPrivileges lists is refused on one of them.
+// dbacl.RetentionPrivileges lists is refused on one of them. The clarification
+// selections are readable by the runtime on the two columns the DELETE's WHERE
+// reads only (a column grant: the table is capture-only for the runtime,
+// migration 0016), so their probe reads exactly those columns.
 var retentionProbeStatements = func() []string {
 	var statements []string
 	for _, table := range []string{
@@ -96,7 +99,11 @@ var retentionProbeStatements = func() []string {
 		"context_fabric_investigation_run_events", "context_fabric_clarification_selections", "context_fabric_structure_selections",
 		"context_fabric_structure_supersession_claims",
 	} {
-		statements = append(statements, `SELECT 1 FROM acr.`+table+` WHERE false`, `DELETE FROM acr.`+table+` WHERE false`)
+		read := "1"
+		if table == "context_fabric_clarification_selections" {
+			read = "org_id, prior_result_id"
+		}
+		statements = append(statements, `SELECT `+read+` FROM acr.`+table+` WHERE false`, `DELETE FROM acr.`+table+` WHERE false`)
 	}
 	return append(statements, `UPDATE acr.context_fabric_investigation_submissions SET updated_at = updated_at WHERE false`)
 }()

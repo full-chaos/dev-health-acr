@@ -263,9 +263,9 @@ GRANT SELECT, INSERT, UPDATE ON TABLE acr.browser_refresh_tokens TO :"runtime_us
 REVOKE SELECT, INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER ON TABLE acr.web_assertion_replays FROM :"runtime_user";
 GRANT SELECT, INSERT, DELETE ON TABLE acr.web_assertion_replays TO :"runtime_user";
 
--- INSERT the capture sink: internal/contextfabric/pgclarification/sink.go:387; SELECT and DELETE the Ask Dev retention job's removal of the selections made on a removed result (CHAOS-11952, CHAOS-12244): internal/contextfabric/pginvestigation/retention.go removeRetainedResults
+-- INSERT the capture sink: internal/contextfabric/pgclarification/sink.go:387; DELETE, and SELECT on only the two columns its WHERE reads, the Ask Dev retention job's removal of the selections made on a removed result (CHAOS-11952, CHAOS-12244): internal/contextfabric/pginvestigation/retention.go removeRetainedResults. No table SELECT: the table stays capture-only for the runtime (migration 0016, CHAOS-3859)
 REVOKE SELECT, INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER ON TABLE acr.context_fabric_clarification_selections FROM :"runtime_user";
-GRANT SELECT, INSERT, DELETE ON TABLE acr.context_fabric_clarification_selections TO :"runtime_user";
+GRANT INSERT, DELETE, SELECT (org_id, prior_result_id) ON TABLE acr.context_fabric_clarification_selections TO :"runtime_user";
 
 -- SELECT internal/contextfabric/pgprojection/checkpoints.go:38, INSERT checkpoints.go:99, UPDATE checkpoints.go:80, DELETE checkpoints.go:258
 REVOKE SELECT, INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER ON TABLE acr.context_fabric_projection_checkpoints FROM :"runtime_user";

@@ -95,18 +95,38 @@ VALUES ($1 || '_struct', $2, $3, $4, $5, 'expected_kind', 'receipt_job', 'pull_r
 	role := dbacl.QuoteIdent("acr_runtime_retention_job_test")
 
 	require.NoError(t, retention.ProbeRetention(ctx), "the probe on an empty database, as the runtime role")
+	requireClarificationSelectionsCaptureOnly(t, ctx, database)
+	orgs := 1
 	for index, grant := range dbacl.RetentionPrivileges {
-		for _, privilege := range grant.Privileges {
+		privileges := append([]string{}, grant.Privileges...)
+		if len(grant.SelectColumns) > 0 {
+			privileges = append(privileges, "SELECT ("+strings.Join(grant.SelectColumns, ", ")+")")
+		}
+		for position, privilege := range privileges {
 			name := grant.Table + "/" + privilege
 			_, err := database.Owner.ExecContext(ctx, `REVOKE `+privilege+` ON acr.`+grant.Table+` FROM `+role)
 			require.NoError(t, err)
 			err = retention.ProbeRetention(ctx)
 			require.Error(t, err, "the probe without %s", name)
 			require.Contains(t, err.Error(), "permission denied for table "+grant.Table, "the probe without %s", name)
-			seed(fmt.Sprintf("org-retention-job-%02d-%s", index, strings.ToLower(privilege)))
+			seed(fmt.Sprintf("org-retention-job-%02d-%d", index, position))
+			orgs++
 			_, err = retention.SweepRetention(ctx, sweepAt, 0)
 			require.Error(t, err, "a pass without %s", name)
 			_, err = database.Owner.ExecContext(ctx, `GRANT `+privilege+` ON acr.`+grant.Table+` TO `+role)
+			require.NoError(t, err)
+		}
+	}
+	// Each column of a column grant is needed alone too: the probe reads
+	// exactly the DELETE's columns, so a grant missing one fails it.
+	for _, grant := range dbacl.RetentionPrivileges {
+		for _, column := range grant.SelectColumns {
+			_, err := database.Owner.ExecContext(ctx, `REVOKE SELECT (`+column+`) ON acr.`+grant.Table+` FROM `+role)
+			require.NoError(t, err)
+			err = retention.ProbeRetention(ctx)
+			require.Error(t, err, "the probe without SELECT on %s.%s", grant.Table, column)
+			require.Contains(t, err.Error(), "permission denied for table "+grant.Table)
+			_, err = database.Owner.ExecContext(ctx, `GRANT SELECT (`+column+`) ON acr.`+grant.Table+` TO `+role)
 			require.NoError(t, err)
 		}
 	}
@@ -127,12 +147,41 @@ VALUES ($1 || '_struct', $2, $3, $4, $5, 'expected_kind', 'receipt_job', 'pull_r
 	require.Zero(t, count("context_fabric_clarification_selections"))
 	require.Zero(t, count("context_fabric_structure_selections"))
 	require.Zero(t, count("context_fabric_structure_supersession_claims"))
-	orgs := 1
-	for _, grant := range dbacl.RetentionPrivileges {
-		orgs += len(grant.Privileges)
-	}
 	require.Equal(t, orgs, count("context_fabric_threads"), "one closure record per organization")
 	var unerased int
 	require.NoError(t, database.Owner.QueryRowContext(ctx, `SELECT count(*) FROM acr.context_fabric_investigation_submissions WHERE left(reserved_result_id, 7) <> 'erased_' OR result_id IS NOT NULL`).Scan(&unerased))
 	require.Zero(t, unerased, "every kept record is erased")
+}
+
+// requireClarificationSelectionsCaptureOnly checks, as the runtime role with
+// grant-runtime-acl's real grants, that the clarification selections stay
+// capture-only (migration 0016, CHAOS-3859): the retention DELETE's two WHERE
+// columns are readable, no other column is (each read from the live table),
+// a whole row is not, and no UPDATE is allowed (CHAOS-12244).
+func requireClarificationSelectionsCaptureOnly(t *testing.T, ctx context.Context, database *runtimeRoleDatabase) {
+	t.Helper()
+	const table = "acr.context_fabric_clarification_selections"
+	_, err := database.Runtime.ExecContext(ctx, `SELECT org_id, prior_result_id FROM `+table+` WHERE false`)
+	require.NoError(t, err, "the runtime role reads the retention DELETE's columns")
+	rows, err := database.Owner.QueryContext(ctx, `SELECT column_name FROM information_schema.columns WHERE table_schema = 'acr' AND table_name = 'context_fabric_clarification_selections' ORDER BY ordinal_position`)
+	require.NoError(t, err)
+	var content []string
+	for rows.Next() {
+		var column string
+		require.NoError(t, rows.Scan(&column))
+		if column != "org_id" && column != "prior_result_id" {
+			content = append(content, column)
+		}
+	}
+	require.NoError(t, rows.Err())
+	require.NoError(t, rows.Close())
+	require.NotEmpty(t, content)
+	for _, read := range append(content, "*") {
+		_, err := database.Runtime.ExecContext(ctx, `SELECT `+read+` FROM `+table+` WHERE false`)
+		require.Error(t, err, "the runtime role must not read %s of the clarification selections", read)
+		require.Contains(t, err.Error(), "permission denied for table context_fabric_clarification_selections", read)
+	}
+	_, err = database.Runtime.ExecContext(ctx, `UPDATE `+table+` SET org_id = org_id WHERE false`)
+	require.Error(t, err, "the runtime role must not update the clarification selections")
+	require.Contains(t, err.Error(), "permission denied for table context_fabric_clarification_selections")
 }

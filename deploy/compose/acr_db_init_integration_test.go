@@ -179,11 +179,12 @@ func bootstrapACRDBInit(t *testing.T) acrDBInitHarness {
 // TestAcrDbInit_RuntimeRoleCanInsertIntoClarificationSelections is CHAOS-3859
 // sol review F1's grant proof: proves an INSERT into
 // acr.context_fabric_clarification_selections succeeds under the real
-// runtime-acl grants. The table was INSERT-only for the runtime role until
-// CHAOS-12244: the Ask Dev retention job now runs as the runtime role, and its
-// DELETE ... WHERE org_id AND prior_result_id needs SELECT. The negative
-// control is now UPDATE: no runtime statement rewrites a selection, so a
-// grant that allowed it would be too permissive.
+// runtime-acl grants. The table is capture-only for the runtime role
+// (migration 0016, CHAOS-3859): it reads no selection back. The Ask Dev
+// retention job runs as the runtime role (CHAOS-12244), and its DELETE ...
+// WHERE org_id AND prior_result_id reads those two columns, so the runtime
+// holds SELECT on exactly them: a whole row or any other column is refused,
+// and so is UPDATE.
 func TestAcrDbInit_RuntimeRoleCanInsertIntoClarificationSelections(t *testing.T) {
 	h := bootstrapACRDBInit(t)
 	ctx, runtimeDB, migrationDB := h.ctx, h.runtimeDB, h.migrationDB
@@ -202,15 +203,22 @@ VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
 		"web_assertion", `[]`, `{}`)
 	require.NoError(t, err, "the runtime role must be able to INSERT into acr.context_fabric_clarification_selections (CHAOS-3859 sol review F1) -- if this fails with a permission error, acr-db-init.sh's runtime-acl grant list is missing this table again")
 
-	// SELECT is granted for the retention job's DELETE (CHAOS-12244); UPDATE
-	// is not. Without the UPDATE half, a future edit that granted UPDATE too
-	// would pass the assertions above and this test would never notice.
-	var count int
-	require.NoError(t, runtimeDB.QueryRowContext(ctx, `SELECT count(*) FROM acr.context_fabric_clarification_selections`).Scan(&count),
-		"the runtime role must be able to SELECT from acr.context_fabric_clarification_selections for the retention job (CHAOS-12244)")
-	_, updateErr := runtimeDB.ExecContext(ctx, `UPDATE acr.context_fabric_clarification_selections SET selection_provenance = selection_provenance WHERE false`)
+	// Negative controls: only the retention DELETE's two columns are
+	// readable (CHAOS-12244); a whole row, a content column and UPDATE are
+	// refused. Without them, a grant widened back to table SELECT would pass
+	// the assertions above unnoticed.
+	_, err = runtimeDB.ExecContext(ctx, `SELECT org_id, prior_result_id FROM acr.context_fabric_clarification_selections WHERE false`)
+	require.NoError(t, err, "the runtime role reads the retention DELETE's columns (CHAOS-12244)")
+	for _, read := range []string{"*", "question_hash", "offered_candidates", "pipeline_context", "selected_subject_canonical_id"} {
+		_, err := runtimeDB.ExecContext(ctx, `SELECT `+read+` FROM acr.context_fabric_clarification_selections WHERE false`)
+		require.Errorf(t, err, "the runtime role must NOT read %s of acr.context_fabric_clarification_selections -- the table is capture-only for the runtime", read)
+		require.Contains(t, err.Error(), "permission denied", read)
+	}
+	_, updateErr := runtimeDB.ExecContext(ctx, `UPDATE acr.context_fabric_clarification_selections SET org_id = org_id WHERE false`)
 	require.Error(t, updateErr, "the runtime role must NOT be able to UPDATE acr.context_fabric_clarification_selections")
 	require.Contains(t, updateErr.Error(), "permission denied")
+	_, err = runtimeDB.ExecContext(ctx, `DELETE FROM acr.context_fabric_clarification_selections WHERE org_id = $1 AND prior_result_id = ANY($2::text[])`, "org-acl-proof", []string{"result_none"})
+	require.NoError(t, err, "the retention job's DELETE runs as the runtime role (CHAOS-12244)")
 
 	// And the row genuinely landed -- confirmed via the MIGRATION role,
 	// which does have full access to its own tables.

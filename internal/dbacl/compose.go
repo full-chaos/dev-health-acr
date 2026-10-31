@@ -41,7 +41,7 @@ func RenderCompose() string {
 			if grant.Feature != AlwaysOn {
 				fmt.Fprintf(&out, "\\if :%s\n", grant.Feature)
 			}
-			fmt.Fprintf(&out, "GRANT %s ON TABLE acr.%s TO :\"runtime_user\";\n", strings.Join(grant.Privileges, ", "), table)
+			fmt.Fprintf(&out, "GRANT %s ON TABLE acr.%s TO :\"runtime_user\";\n", PrivilegeList(grant), table)
 			for _, sequence := range grant.Sequences {
 				fmt.Fprintf(&out, "GRANT USAGE ON SEQUENCE acr.%s TO :\"runtime_user\";\n", sequence)
 			}
@@ -69,7 +69,7 @@ func RenderComposePurge() string {
 	for _, grant := range PurgeGrants {
 		fmt.Fprintf(&out, "-- %s\n", grant.Why)
 		fmt.Fprintf(&out, "REVOKE SELECT, INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER ON TABLE acr.%s FROM :\"purge_user\";\n", grant.Table)
-		fmt.Fprintf(&out, "GRANT %s ON TABLE acr.%s TO :\"purge_user\";\n", strings.Join(grant.Privileges, ", "), grant.Table)
+		fmt.Fprintf(&out, "GRANT %s ON TABLE acr.%s TO :\"purge_user\";\n", PrivilegeList(grant), grant.Table)
 	}
 	out.WriteString("\\endif\n" + ComposePurgeEndMarker + "\n")
 	return out.String()

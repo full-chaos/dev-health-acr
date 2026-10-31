@@ -454,9 +454,14 @@ back-dated rows." Rules: `internal/contextfabric/retention.go`; SQL:
   rejected a dedicated role). `internal/dbacl.RuntimeGrants` holds every
   privilege the job's statements need (`internal/dbacl.RetentionPrivileges`:
   SELECT and DELETE on the threads, the records, the results, the run event
-  log, the two selection tables and the claims, and UPDATE on the records for
+  log, the structure selections and the claims, and UPDATE on the records for
   the erase), and `grant-runtime-acl`, the Helm grant Job and the compose
-  bootstrap grant them with the rest of the runtime set. The purge role was
+  bootstrap grant them with the rest of the runtime set. The clarification
+  selections stay capture-only for the runtime (migration 0016, CHAOS-3859):
+  runtime: INSERT, DELETE (retention, CHAOS-12244) and SELECT on only
+  `org_id` and `prior_result_id`, the two columns the retention DELETE's
+  WHERE reads; no table SELECT and no UPDATE, so the runtime reads no
+  selection back. The purge role was
   not chosen: it is the operator's credential for `acr-projector purge`, and
   it also deletes credentials, device authorizations and token families
   across every organization, so it stays out of the serving pod.

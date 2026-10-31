@@ -41,9 +41,17 @@ const (
 
 // Grant is the privileges the runtime role holds on one table.
 type Grant struct {
-	Table      string
+	Table string
+	// Privileges are table-level.
 	Privileges []string
-	Feature    Feature
+	// SelectColumns, when set, grants SELECT on these columns only: the
+	// role may read them (in a WHERE) and no other column. Privileges then
+	// holds no SELECT. The clarification selections are capture-only for the
+	// runtime (migration 0016, CHAOS-3859): nothing in the runtime reads a
+	// selection back, and the column grant keeps that structural while the
+	// retention job removes them (CHAOS-12244).
+	SelectColumns []string
+	Feature       Feature
 	// Sequences are sequences the table's inserts draw from; the role needs USAGE.
 	Sequences []string
 	// Why cites the runtime code that needs each privilege.
@@ -83,8 +91,8 @@ var RuntimeGrants = []Grant{
 		Why: "INSERT internal/storage/postgres/browser_refresh.go:59, SELECT browser_refresh.go:86 and ... FOR UPDATE, UPDATE (consume) browser_refresh.go:218; removed with its family by cascade"},
 	{Table: "web_assertion_replays", Privileges: []string{"SELECT", "INSERT", "DELETE"},
 		Why: "INSERT internal/storage/postgres/web_assertion_replay.go:24, SELECT and DELETE web_assertion_replay.go:33"},
-	{Table: "context_fabric_clarification_selections", Privileges: []string{"SELECT", "INSERT", "DELETE"},
-		Why: "INSERT the capture sink: internal/contextfabric/pgclarification/sink.go:387; SELECT and DELETE the Ask Dev retention job's removal of the selections made on a removed result (CHAOS-11952, CHAOS-12244): internal/contextfabric/pginvestigation/retention.go removeRetainedResults"},
+	{Table: "context_fabric_clarification_selections", Privileges: []string{"INSERT", "DELETE"}, SelectColumns: []string{"org_id", "prior_result_id"},
+		Why: "INSERT the capture sink: internal/contextfabric/pgclarification/sink.go:387; DELETE, and SELECT on only the two columns its WHERE reads, the Ask Dev retention job's removal of the selections made on a removed result (CHAOS-11952, CHAOS-12244): internal/contextfabric/pginvestigation/retention.go removeRetainedResults. No table SELECT: the table stays capture-only for the runtime (migration 0016, CHAOS-3859)"},
 	{Table: "context_fabric_projection_checkpoints", Privileges: []string{"SELECT", "INSERT", "UPDATE", "DELETE"},
 		Why: "SELECT internal/contextfabric/pgprojection/checkpoints.go:38, INSERT checkpoints.go:99, UPDATE checkpoints.go:80, DELETE checkpoints.go:258"},
 	{Table: "context_fabric_projection_rebuild_markers", Privileges: []string{"SELECT", "INSERT", "DELETE"},
@@ -168,9 +176,29 @@ func QuoteIdent(name string) string {
 
 // Statement is one GRANT with the table and privileges it covers.
 type Statement struct {
-	Table      string
-	Privileges []string
-	SQL        string
+	Table         string
+	Privileges    []string
+	SelectColumns []string
+	SQL           string
+}
+
+// PrivilegeList is the privilege clause of a GRANT for grant: its table-level
+// privileges, then SELECT on its columns when it has any.
+func PrivilegeList(grant Grant) string {
+	return privilegeClause(grant.Privileges, grant.SelectColumns)
+}
+
+// PrivilegeList is the statement's privilege clause, as in its GRANT.
+func (s Statement) PrivilegeList() string {
+	return privilegeClause(s.Privileges, s.SelectColumns)
+}
+
+func privilegeClause(privileges, selectColumns []string) string {
+	clause := append([]string{}, privileges...)
+	if len(selectColumns) > 0 {
+		clause = append(clause, "SELECT ("+strings.Join(selectColumns, ", ")+")")
+	}
+	return strings.Join(clause, ", ")
 }
 
 // GrantStatements returns the idempotent GRANTs for the runtime role under
@@ -186,9 +214,10 @@ func grantStatements(grants []Grant, quotedRole string, features Features) []Sta
 			continue
 		}
 		statements = append(statements, Statement{
-			Table:      grant.Table,
-			Privileges: grant.Privileges,
-			SQL:        fmt.Sprintf("GRANT %s ON TABLE acr.%s TO %s", strings.Join(grant.Privileges, ", "), grant.Table, quotedRole),
+			Table:         grant.Table,
+			Privileges:    grant.Privileges,
+			SelectColumns: grant.SelectColumns,
+			SQL:           fmt.Sprintf("GRANT %s ON TABLE acr.%s TO %s", PrivilegeList(grant), grant.Table, quotedRole),
 		})
 		for _, sequence := range grant.Sequences {
 			statements = append(statements, Statement{
