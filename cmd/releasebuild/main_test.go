@@ -208,7 +208,10 @@ func releaseSourceRoot(t *testing.T) string {
 		if info.Mode().Perm()&0o100 != 0 {
 			mode = 0o755
 		}
-		return os.WriteFile(target, data, mode)
+		if err := os.WriteFile(target, data, mode); err != nil {
+			return err
+		}
+		return os.Chmod(target, mode)
 	})
 	if err != nil {
 		t.Fatalf("copy client assets: %v", err)
