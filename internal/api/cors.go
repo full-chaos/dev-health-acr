@@ -84,6 +84,9 @@ func (d *corsDecision) logFields() []any {
 var corsBrowserRoutes = [...]struct{ pattern, class string }{
 	{OAuthAuthorizationServerMetadataPath, "oauth_metadata"},
 	{OAuthTokenPath, "oauth_token"},
+	// CHAOS-12124: sign-out revokes the family from the browser; it must
+	// read the answer.
+	{OAuthRevocationPath, "oauth_revoke"},
 	{ContextFabricInvestigationsPath, "investigations"},
 	{ContextFabricInvestigationResultPath, "investigations"},
 	{ContextFabricSubmissionStatusPath, "investigations"},
@@ -134,8 +137,8 @@ func corsPatternMatches(pattern, escapedPath string) bool {
 }
 
 // CORSRouteClassVocabulary is the closed set of browser route names.
-func CORSRouteClassVocabulary() [4]string {
-	return [4]string{"oauth_metadata", "oauth_token", "investigations", "evidence"}
+func CORSRouteClassVocabulary() [5]string {
+	return [5]string{"oauth_metadata", "oauth_token", "oauth_revoke", "investigations", "evidence"}
 }
 
 func (a *App) corsMiddleware(next http.Handler) http.Handler {

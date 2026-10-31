@@ -8,6 +8,7 @@ package dbacl
 var PurgeGrants = []Grant{
 	{Table: "schema_migrations", Privileges: []string{"SELECT"},
 		Why: "the purge command verifies the schema when it opens its runtime: cmd/acr-projector/runtime.go:261"},
+	{Table: "browser_token_families", Privileges: []string{"SELECT", "DELETE"}, Why: "purge table list: orgpurge purgeTables; cascades to its refresh tokens as the owner"},
 	{Table: "client_credentials", Privileges: []string{"SELECT", "DELETE"},
 		Why: "DELETE of the organization's credentials (purge table list), SELECT in the device authorization predicate: internal/contextfabric/orgpurge/purge.go purgeTables"},
 	{Table: "workload_bindings", Privileges: []string{"SELECT", "DELETE"}, Why: "purge table list: orgpurge purgeTables"},

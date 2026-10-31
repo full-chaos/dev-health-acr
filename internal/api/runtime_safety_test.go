@@ -321,3 +321,7 @@ func (*typedNilDeviceAuthorizationLimiter) AllowApprovalAttempt(string, storage.
 func (*typedNilDeviceAuthorizationLimiter) AllowOAuthConsentRequest(storage.OAuthSecretHash) DeviceAuthorizationLimitDecision {
 	return DeviceAuthorizationLimitDecision{}
 }
+
+func (*typedNilDeviceAuthorizationLimiter) AllowBrowserAuthorize(string, string) DeviceAuthorizationLimitDecision {
+	return DeviceAuthorizationLimitDecision{}
+}

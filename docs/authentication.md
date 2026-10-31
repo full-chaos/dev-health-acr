@@ -392,11 +392,31 @@ What the class changes:
 | Step | Browser client | Every other client |
 | --- | --- | --- |
 | `/authorize` redirect | exact string match (no loopback port variance) | loopback port variance as before |
+| `/authorize` request limit | 10 a minute per source address, under a ceiling of 600 a minute for the client (below) | 10 a minute per `client_id` |
 | Resource | the issuer only (none named = the issuer) | never the issuer; none named = the only other resource |
 | Consent | the web assertion must carry `sid`; refused while impersonating | refused while impersonating |
 | `/token` (code) | 10-minute credential, new token family, family ends 12 h after this issuance, session from the approval | 30-day credential |
 | RFC 8628 device grant | refused (`unauthorized_client`) | as before |
-| Rotation (self or operator) | refused: it renews only by its refresh grant | as before |
+| Rotation (self or operator) | refused: it renews only by its refresh grant (below) | as before |
+
+**`/authorize` request limit (CHAOS-12156).** Every user of the web app
+shares the browser client's public `client_id`, so a per-client bucket would
+put every login of every organization, and anyone who knows the id, in one
+bucket of 10 a minute. A browser client's `/authorize` presents no secret, so
+it is limited per source: 10 requests a minute per client address, the address
+acr-api resolves (see [Which address is counted](#which-address-is-counted)).
+A ceiling of 600 a minute bounds the client across every source. A request is
+counted only when both allow it, so a throttled source does not use the
+ceiling. Both are constants in code (`deviceCreationLimit`,
+`browserAuthorizeClientLimit`), held in memory per acr-api process: with N
+replicas the ceiling is up to N × 600. A refusal is `429` with `Retry-After`
+and the `authorize` step line's outcome `rate_limited`. The browser reaches
+acr-api's `/authorize` through the ingress, not through acr-mcp, so
+`ACR_TRUSTED_PROXY_CIDRS` on acr-api must then also hold the proxies between
+the browser and acr-api (the ingress controller and, where it is not the
+caller, the node or tunnel address). Without them every login is keyed on the
+ingress address: one bucket of 10 a minute again. Every other client keeps its
+per-`client_id` bucket.
 
 A code started under one configuration is not exchanged under another: a
 browser client's code must carry the issuer resource, and no other client's
@@ -417,6 +437,57 @@ one), `impersonating`, `unauthorized_client` (browser client on the device
 grant), `rotation_not_allowed` (step `credential_rotate`). A refused typed-code
 approval writes one Info line `device approval refused` with
 `reason=impersonating`.
+
+### Browser refresh grant and family revocation (CHAOS-12124)
+
+A browser-class code exchange also returns `refresh_token`: an opaque,
+single-use token (`acrrt_` + 43 base64url characters, never a bearer) bound to
+the credential's token family. Only its SHA-256 hash is stored
+(`acr.browser_refresh_tokens`, migration `0062`); the family row
+(`acr.browser_token_families`) holds the client, the absolute end and the
+revocation.
+
+- `POST /token` `grant_type=refresh_token`, `refresh_token`, `client_id`
+  (browser clients only; any other client is `unauthorized_client`, and with no
+  browser client configured the grant is `unsupported_grant_type`). Under the
+  family row lock (every replica) the presented token is consumed and a
+  successor pair is issued: a new 10-minute access credential (provenance
+  copied: class, approving user, client, session, family, family end) and a new
+  refresh token. The successor's life never passes the family end, and no
+  refresh extends it.
+- **Grace.** The same consumed token presented again within 30 seconds, while
+  its successor is still unused and live, is answered with the **same**
+  successor pair (a lost response retried, two tabs). No token is kept: the
+  successor tokens are an HMAC of the presented token over a random rotation
+  seed stored on the consumed row, and the answer is refused unless they hash
+  to the stored successor. Two replicas refreshing one token at once produce
+  one rotation; both answers carry the same pair.
+- **Reuse.** Any other presentation of a consumed token revokes the whole
+  family: the family row (`revoked_reason=reuse`) and every member credential.
+- `POST /revoke` (RFC 7009): `token` (a refresh token), optional
+  `token_type_hint`, `client_id`. It revokes the token's family
+  (`revoked_reason=sign_out`) and answers `200 {}` for any refresh token, known
+  or not; it works after every access token of the family has expired. An
+  access token is `unsupported_token_type`. Served only with a browser client.
+- Revoking a browser credential (self-revoke or the operator command) revokes
+  its family (`revoked_reason=member_revoked`). Rotation stays refused.
+- Request limits: `/token` and `/revoke` allow 60 requests a minute per key.
+  Every user of a first-party browser client shares its public `client_id`, so
+  its requests are keyed by the secret they present (the code, the refresh
+  token or the revoked token, hashed), not by the client: a flood under the
+  browser client id does not stop other sessions from refreshing or signing
+  out. Every other client stays keyed by its `client_id`.
+- The authorization server metadata lists `refresh_token` in
+  `grant_types_supported` and names `revocation_endpoint` only when a browser
+  client is configured; `/register` still downgrades a dynamic client that asks
+  for the refresh grant.
+- Telemetry, on the OAuth step line (closed vocabulary): `step=token` with
+  `ok` (rotated), `grace_replay`, `reuse_revoked`, `family_expired`,
+  `family_revoked`, `client_mismatch`, `invalid_grant` (unknown token);
+  `step=revoke` with `ok`, `family_revoked`, `client_mismatch`,
+  `invalid_grant`, `unsupported_token_type`. Every successor and every
+  revocation writes a `credential_created` / `credential_revoked` audit row with
+  `family_id` (and `family_revoke_reason`).
 
 ## Rate limiting
 
@@ -439,7 +510,7 @@ Both gates key on the client address, resolved the same way: the TCP peer addres
 | Hop | Setting | Must contain |
 | --- | --- | --- |
 | acr-mcp | `ACR_MCP_TRUSTED_PROXY_CIDRS` (comma-separated CIDRs) | every proxy between the caller and acr-mcp (ingress controller and, where the tunnel or node-network source address is not the caller, that address) |
-| acr-api | `ACR_TRUSTED_PROXY_CIDRS` | the acr-mcp pod address range |
+| acr-api | `ACR_TRUSTED_PROXY_CIDRS` | the acr-mcp pod address range; with a first-party browser client, also the proxies between the browser and acr-api (its `/authorize` limit keys on this address) |
 
 acr-mcp states the address it resolved to acr-api as a single `X-Forwarded-For` value on every call it makes with a caller's bearer; it never relays the caller's own header. Without the acr-api setting, acr-api ignores that header and keys every MCP-forwarded failure on the acr-mcp pod address: one bucket for all MCP callers, so 20 bad tokens from anyone would answer `429` to every MCP caller. Without the acr-mcp setting, acr-mcp keys on the peer (the ingress), the same defect at the edge; it logs a `Warn` at startup ("edge gate keys on the peer address") so this is visible. The ingress must also pass `X-Forwarded-For` through (ingress-nginx drops it unless `use-forwarded-headers` is enabled).
 
