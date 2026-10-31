@@ -178,3 +178,39 @@ func TestDiscloseInvestmentMixSetsTheFieldFromTheFactAlone(t *testing.T) {
 }
 
 func stringPtr(v string) *string { return &v }
+
+// Codex r1 P2 on #1800: the model-output schema is inferred from the claim
+// type, so a draft may carry investment_mix. A draft value the contract
+// refuses (an unknown source, or the field on a non-investment claim) must not
+// reject the draft: it is server content, stripped before validation like a
+// model-authored table, and set again from the fact.
+func TestAnInvalidDraftInvestmentMixDoesNotRejectTheAnswer(t *testing.T) {
+	t.Parallel()
+	bad := &contractsv1.ContextFabricClaimedInvestmentMix{InvestmentMixSource: "team_vote", RollupBasis: " padded", WorkUnitCount: -1}
+	result, _ := serveInvestmentClaim(t, investmentFactForTest(SubjectRef{}, InvestmentMixSourceOwningTeamRollup, map[string]FactValue{
+		"work_unit_count":             IntegerFactValue(7240),
+		"project_own_work_unit_count": IntegerFactValue(0),
+	}), bad)
+	got := servedClaim(t, result, "claim_investment_quality").InvestmentMix
+	if got == nil || got.InvestmentMixSource != contractsv1.ContextFabricInvestmentMixSourceOwningTeamRollup || got.WorkUnitCount != 7240 {
+		t.Fatalf("investment_mix = %+v, want the fact's owning_team_rollup over 7240 units", got)
+	}
+	if servedClaim(t, result, "claim_readiness_bootstrap").InvestmentMix != nil {
+		t.Fatalf("readiness claim carries an investment disclosure")
+	}
+}
+
+func TestTheDraftStripClearsAModelAuthoredInvestmentMix(t *testing.T) {
+	t.Parallel()
+	mix := &contractsv1.ContextFabricClaimedInvestmentMix{InvestmentMixSource: "team_vote"}
+	cleaned, stripped := StripModelAuthoredClaimedFactTableContent([]ClaimedFact{
+		{ClaimID: "claim_status_current", Kind: FactStatus, InvestmentMix: mix},
+		{ClaimID: "claim_plain", Kind: FactStatus},
+	})
+	if cleaned[0].InvestmentMix != nil || cleaned[1].InvestmentMix != nil {
+		t.Fatalf("investment_mix survived the strip: %+v", cleaned)
+	}
+	if stripped != 1 {
+		t.Fatalf("stripped = %d, want 1 (the claim that carried server content)", stripped)
+	}
+}

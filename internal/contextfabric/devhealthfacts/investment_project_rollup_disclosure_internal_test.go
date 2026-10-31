@@ -74,3 +74,10 @@ func TestDiscloseProjectRollupsNamesTheRollupInTheProjectsReason(t *testing.T) {
 		t.Errorf("a read with no roll-up carries note %q and reasons %v", none.RequestNote, none.SubjectReasons)
 	}
 }
+
+func TestQueryVersionMovedPastTheUndisclosedRollup(t *testing.T) {
+	t.Parallel()
+	if QueryVersion <= "devhealthfacts.clickhouse.v257" {
+		t.Fatalf("QueryVersion = %q, want v258 or later -- an answer saved with an all-history mix for a no-period question, or a roll-up claim with no disclosure, must not be reused", QueryVersion)
+	}
+}
