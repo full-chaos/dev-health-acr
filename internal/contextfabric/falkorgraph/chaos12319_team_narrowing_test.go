@@ -131,12 +131,14 @@ func TestATeamNarrowingFloorsOnlyForAnIssueTheRestOfTheRequestAdmits(t *testing.
 	for name, tc := range map[string]struct {
 		scope         contextfabric.RequestedScope
 		wantTruncated bool
+		wantExcluded  int
+		wantFloor     contextfabric.TeamNarrowingFloor
 	}{
 		// The project narrowing already refuses the issue: its project's
 		// missing owner is not needed to decide this request.
-		"the rest of the request refuses the issue": {refused, false},
+		"the rest of the request refuses the issue": {refused, false, 0, contextfabric.TeamNarrowingFloorNone},
 		// The issue is admitted otherwise and left to (ii), whose owner is missing.
-		"the rest of the request admits the issue": {contextfabric.RequestedScope{}, true},
+		"the rest of the request admits the issue": {contextfabric.RequestedScope{}, true, 1, contextfabric.TeamNarrowingFloorProjectOwnerAbsent},
 	} {
 		tc.scope.TeamIDs = []string{"requested"}
 		walk, err := adapter.TreeWorkItemMembers(context.Background(), storage.Principal{OrgID: "org-1"}, contextfabric.ResolvedGraphBinding{}, tc.scope, anchor, 25)
@@ -145,6 +147,33 @@ func TestATeamNarrowingFloorsOnlyForAnIssueTheRestOfTheRequestAdmits(t *testing.
 		}
 		if len(walk.Members) != 0 || walk.Truncated != tc.wantTruncated || !walk.AnchorOutsideTeamNarrowing {
 			t.Fatalf("%s: members=%d truncated=%v outside=%v, want 0, truncated=%v, outside", name, len(walk.Members), walk.Truncated, walk.AnchorOutsideTeamNarrowing, tc.wantTruncated)
+		}
+		if walk.TeamNarrowing != contextfabric.TeamNarrowingIssueProject || walk.TeamExcluded != tc.wantExcluded || walk.TeamFloor != tc.wantFloor {
+			t.Fatalf("%s: basis=%q excluded=%d floor=%q, want issue_project %d %q", name, walk.TeamNarrowing, walk.TeamExcluded, walk.TeamFloor, tc.wantExcluded, tc.wantFloor)
+		}
+	}
+}
+
+// One walk reads several link pages; its floor reason is the strongest any
+// page gave, in either order, and a page with none changes nothing.
+func TestATeamNarrowingKeepsTheStrongestFloorReason(t *testing.T) {
+	cut, anchor, project := contextfabric.TeamNarrowingFloorOwnershipReadCut, contextfabric.TeamNarrowingFloorAnchorOwnershipUnknown, contextfabric.TeamNarrowingFloorProjectOwnerAbsent
+	for name, tc := range map[string]struct {
+		pages []contextfabric.TeamNarrowingFloor
+		want  contextfabric.TeamNarrowingFloor
+	}{
+		"weaker then stronger": {[]contextfabric.TeamNarrowingFloor{project, cut}, cut},
+		"stronger then weaker": {[]contextfabric.TeamNarrowingFloor{cut, project}, cut},
+		"anchor over project":  {[]contextfabric.TeamNarrowingFloor{project, anchor, project}, anchor},
+		"a page with none":     {[]contextfabric.TeamNarrowingFloor{project, contextfabric.TeamNarrowingFloorNone}, project},
+		"no page floors":       {[]contextfabric.TeamNarrowingFloor{contextfabric.TeamNarrowingFloorNone}, contextfabric.TeamNarrowingFloorNone},
+	} {
+		n := &teamNarrowing{}
+		for _, floor := range tc.pages {
+			n.recordFloor(floor)
+		}
+		if n.Floor() != tc.want || n.Undecided() != (tc.want != contextfabric.TeamNarrowingFloorNone) {
+			t.Fatalf("%s: floor=%q undecided=%v, want %q", name, n.Floor(), n.Undecided(), tc.want)
 		}
 	}
 }

@@ -63,6 +63,11 @@ type RepositoryWorkItemWalkEvent struct {
 	// member only on its "*" project list, and the answer discloses it
 	// (CHAOS-12229).
 	ProjectNarrowingUnverified bool
+	// TeamNarrowing, TeamExcluded and TeamFloor: a requested team
+	// narrowing's decision basis (CHAOS-12319); empty without one.
+	TeamNarrowing TeamNarrowingBasis
+	TeamExcluded  int
+	TeamFloor     TeamNarrowingFloor
 }
 
 // repositoryWorkItemReading is what one measured read of a repository's work

@@ -5533,6 +5533,12 @@ var RepositoryWorkItemWalk = Event{
 		// CHAOS-12229: the walk admitted a member under a requested project
 		// narrowing only on its "*" project list; the answer discloses it.
 		{Key: "project_narrowing_unverified", Type: FieldBool, Presence: PresenceConditional, Applicability: "written when the read measured the population (every outcome but read_failed)"},
+		// CHAOS-12319: a requested team narrowing's decision basis -- the
+		// rule that decided, the issues it left out of scope, and why it
+		// floored the walk. Counts and closed values only.
+		{Key: "team_narrowing", Type: FieldString, Presence: PresenceConditional, Applicability: "written when the read measured the population and the request narrows by team", ClosedVocabulary: contextfabric.TeamNarrowingBasisVocabulary()},
+		{Key: "team_excluded", Type: FieldInt, Presence: PresenceConditional, Applicability: "written when the read measured the population and the request narrows by team"},
+		{Key: "team_floor_reason", Type: FieldString, Presence: PresenceConditional, Applicability: "written when the read measured the population and the request narrows by team", ClosedVocabulary: contextfabric.TeamNarrowingFloorVocabulary()},
 		{Key: "reason", Type: FieldString, Presence: PresenceConditional, Applicability: "written when outcome=read_failed", ClosedVocabulary: []string{"", "s1_error", "read_limit_exceeded", "cancelled", "excluded_provider", "zero_authorized_overflow", "identity_omitted"}},
 		{Key: "request_id", Type: FieldString, Presence: PresenceConditional, Applicability: "written when the request context carries a request ID"},
 	},

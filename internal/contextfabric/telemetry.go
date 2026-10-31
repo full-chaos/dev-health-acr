@@ -3074,6 +3074,13 @@ func (t SlogEngineTelemetry) RecordRepositoryWorkItemWalk(ctx context.Context, p
 			"lower_tier_cut", event.LowerTierCut,
 			"project_narrowing_unverified", event.ProjectNarrowingUnverified,
 		)
+		if event.TeamNarrowing != "" {
+			args = append(args,
+				"team_narrowing", SanitizeLogAttr(string(event.TeamNarrowing)),
+				"team_excluded", event.TeamExcluded,
+				"team_floor_reason", SanitizeLogAttr(string(event.TeamFloor)),
+			)
+		}
 		if !event.Filtered {
 			args = append(args, "denied", event.Denied)
 		}

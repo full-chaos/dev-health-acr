@@ -213,6 +213,11 @@ type WorkItemMembershipResult struct {
 	// ProjectNarrowingUnverified: a graph walk admitted a member under a
 	// requested project narrowing only on its "*" project list (CHAOS-12229).
 	ProjectNarrowingUnverified bool
+	// TeamNarrowing, TeamExcluded and TeamFloor are the walk's team narrowing
+	// decision basis (TreeWorkItemWalk), for the walk's Info line.
+	TeamNarrowing TeamNarrowingBasis
+	TeamExcluded  int
+	TeamFloor     TeamNarrowingFloor
 }
 
 // WorkItemMembershipLease must remain held until the complete future answer

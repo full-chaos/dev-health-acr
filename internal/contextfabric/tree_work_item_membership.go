@@ -58,6 +58,13 @@ type TreeWorkItemWalk struct {
 	// are then only the issues whose own project a requested team owns, and
 	// the anchor's own totals are not the team's.
 	AnchorOutsideTeamNarrowing bool
+	// TeamNarrowing is the rule that decided a requested team narrowing
+	// (empty without one), TeamExcluded how many distinct issues it left out
+	// of scope, and TeamFloor why it floored the walk (empty when it did
+	// not). The repository walk Info line carries them (CHAOS-12319).
+	TeamNarrowing TeamNarrowingBasis
+	TeamExcluded  int
+	TeamFloor     TeamNarrowingFloor
 }
 
 // TreeWorkItemGraph walks the entity tree in the graph store.
@@ -85,4 +92,43 @@ type TreeWorkItemFilter interface {
 	// sorted, and how many members it could not read (rejected or beyond a
 	// read bound), which makes the kept set a floor.
 	FilterTreeWorkItems(ctx context.Context, principal storage.Principal, request TreeWorkItemFilterRequest) (kept []string, unread int, err error)
+}
+
+// TeamNarrowingBasis is the rule that decided one walk's requested team
+// narrowing (CHAOS-12319): (i) the anchor is owned by a requested team, so
+// every walked issue is in scope; (ii) it is not, so each issue's own project
+// decides.
+type TeamNarrowingBasis string
+
+const (
+	TeamNarrowingAnchorOwned  TeamNarrowingBasis = "anchor_owned"
+	TeamNarrowingIssueProject TeamNarrowingBasis = "issue_project"
+)
+
+// TeamNarrowingBasisVocabulary is the closed set of the walk line's
+// team_narrowing field.
+func TeamNarrowingBasisVocabulary() []string {
+	return []string{string(TeamNarrowingAnchorOwned), string(TeamNarrowingIssueProject)}
+}
+
+// TeamNarrowingFloor is why a requested team narrowing floored the walk: the
+// ownership it needed to decide an issue the request admits was missing.
+type TeamNarrowingFloor string
+
+const (
+	TeamNarrowingFloorNone TeamNarrowingFloor = ""
+	// TeamNarrowingFloorAnchorOwnershipUnknown: the anchor has no current
+	// owner, so (i) could not be decided.
+	TeamNarrowingFloorAnchorOwnershipUnknown TeamNarrowingFloor = "anchor_ownership_unknown"
+	// TeamNarrowingFloorProjectOwnerAbsent: an issue left out has a project
+	// with no current owner.
+	TeamNarrowingFloorProjectOwnerAbsent TeamNarrowingFloor = "project_owner_absent"
+	// TeamNarrowingFloorOwnershipReadCut: an ownership read was bounded.
+	TeamNarrowingFloorOwnershipReadCut TeamNarrowingFloor = "ownership_read_cut"
+)
+
+// TeamNarrowingFloorVocabulary is the closed set of the walk line's
+// team_floor_reason field.
+func TeamNarrowingFloorVocabulary() []string {
+	return []string{string(TeamNarrowingFloorNone), string(TeamNarrowingFloorAnchorOwnershipUnknown), string(TeamNarrowingFloorProjectOwnerAbsent), string(TeamNarrowingFloorOwnershipReadCut)}
 }

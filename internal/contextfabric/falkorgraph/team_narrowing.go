@@ -46,14 +46,17 @@ type teamNarrowing struct {
 	// anchorOwned: (i) holds, so every walked issue passes.
 	anchorOwned bool
 	// anchorUnknown: (i) could not be decided -- the anchor has no current
-	// owner, or the read was cut. It floors the walk only when an issue
-	// the rest of the request admits is then left to (ii) and not reached.
-	anchorUnknown bool
+	// owner, or the read was cut (anchorCut). It floors the walk only when an
+	// issue the rest of the request admits is then left to (ii) and not
+	// reached.
+	anchorUnknown, anchorCut bool
 
 	mu sync.Mutex
 	// undecided: an ownership read the narrowing needed to decide an issue
-	// the rest of the request admits was absent, not current, or cut.
+	// the rest of the request admits was absent, not current, or cut; floor
+	// is why, the strongest reason seen (a cut read first).
 	undecided bool
+	floor     contextfabric.TeamNarrowingFloor
 }
 
 // requestedTeamNarrowing returns the requested team ids that narrow: blanks
@@ -89,6 +92,7 @@ func (a *Adapter) withTeamNarrowing(ctx context.Context, key, orgID string, scop
 	}
 	n.anchorOwned = n.anyRequested(hits)
 	n.anchorUnknown = !n.anchorOwned && (cut || len(hits) == 0)
+	n.anchorCut = !n.anchorOwned && cut
 	return context.WithValue(ctx, teamNarrowingContextKey{}, n), n, nil
 }
 
@@ -147,7 +151,7 @@ func (n *teamNarrowing) excluded(ctx context.Context, ids []string) (map[string]
 			owned[h.from] = true
 		}
 	}
-	undecided := false
+	floor := contextfabric.TeamNarrowingFloorNone
 	out := map[string]bool{}
 	for _, id := range ids {
 		reached, missing := false, false
@@ -165,16 +169,67 @@ func (n *teamNarrowing) excluded(ctx context.Context, ids []string) (map[string]
 		out[id] = true
 		// The issue is left out on ownership that was not all there: (i)
 		// undecided, a project of its with no current owner, or a cut read.
-		if n.anchorUnknown || missing || cut || ownersCut {
-			undecided = true
+		switch {
+		case cut || ownersCut || n.anchorCut:
+			floor = contextfabric.TeamNarrowingFloorOwnershipReadCut
+		case n.anchorUnknown && floor != contextfabric.TeamNarrowingFloorOwnershipReadCut:
+			floor = contextfabric.TeamNarrowingFloorAnchorOwnershipUnknown
+		case missing && floor == contextfabric.TeamNarrowingFloorNone:
+			floor = contextfabric.TeamNarrowingFloorProjectOwnerAbsent
 		}
 	}
-	if undecided {
-		n.mu.Lock()
-		n.undecided = true
-		n.mu.Unlock()
-	}
+	n.recordFloor(floor)
 	return out, nil
+}
+
+// recordFloor merges one link page's floor reason into the walk's: the walk
+// is floored once any page floors it, and keeps the strongest reason seen.
+func (n *teamNarrowing) recordFloor(floor contextfabric.TeamNarrowingFloor) {
+	if floor == contextfabric.TeamNarrowingFloorNone {
+		return
+	}
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	n.undecided = true
+	if floorRank(floor) < floorRank(n.floor) {
+		n.floor = floor
+	}
+}
+
+// floorRank orders floor reasons, strongest first; none ranks last.
+func floorRank(floor contextfabric.TeamNarrowingFloor) int {
+	switch floor {
+	case contextfabric.TeamNarrowingFloorOwnershipReadCut:
+		return 0
+	case contextfabric.TeamNarrowingFloorAnchorOwnershipUnknown:
+		return 1
+	case contextfabric.TeamNarrowingFloorProjectOwnerAbsent:
+		return 2
+	default:
+		return 3
+	}
+}
+
+// Basis is the rule that decided the narrowing, empty without one.
+func (n *teamNarrowing) Basis() contextfabric.TeamNarrowingBasis {
+	switch {
+	case n == nil:
+		return ""
+	case n.anchorOwned:
+		return contextfabric.TeamNarrowingAnchorOwned
+	default:
+		return contextfabric.TeamNarrowingIssueProject
+	}
+}
+
+// Floor is why the narrowing floored the walk, empty when it did not.
+func (n *teamNarrowing) Floor() contextfabric.TeamNarrowingFloor {
+	if n == nil {
+		return contextfabric.TeamNarrowingFloorNone
+	}
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	return n.floor
 }
 
 // Undecided reports whether an ownership read the narrowing needed was
