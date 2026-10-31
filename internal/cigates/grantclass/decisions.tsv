@@ -1,7 +1,13 @@
 # Grant-class decisions: file<TAB>symbol<TAB>kind<TAB>count<TAB>decision<TAB>note. See grantclass_test.go and docs/design/context-fabric-project-only-scope.md.
 # decision: r-sub (restricted path is right for project_only), proj (project-aware logic due, ticket named), deny (refused), leave (repository-only, sentinel keeps it fail closed), consent (original consent grant), vocab (mapping, vocabulary or telemetry).
+# #vocab<TAB>class type<TAB>its sorted constant values: when a class gains, loses or renames a constant the test lists every row of that class to re-decide; update the pin after.
+#vocab	github.com/full-chaos/dev-health-acr/internal/auth.GrantClass	project_only,restricted,universal,unrestricted
+#vocab	github.com/full-chaos/dev-health-acr/internal/contextfabric.StoredResultPrincipalScope	restricted,universal,unrestricted
+#vocab	github.com/full-chaos/dev-health-acr/internal/contextfabric/directread.CallerClass	restricted,unrestricted
+#vocab	github.com/full-chaos/dev-health-acr/internal/contextfabric/directread/gatevocab.PrincipalClass	restricted,universal,unrestricted
 internal/api/context_fabric_data_catalog_route.go	App.contextFabricDataCatalogHandler	classify	1	r-sub	the catalog shows the principal class; project_only reads as restricted, so the catalog states the restricted operations (12107 v2 inventory)
 internal/api/context_fabric_data_catalog_route.go	App.contextFabricDataCatalogHandler	derived-escape	1	r-sub	the catalog shows the principal class; project_only reads as restricted, so the catalog states the restricted operations (12107 v2 inventory)
+internal/auth/grant_class.go	GrantClass.IsRestricted	switch	1	vocab	the restricted-subtype rule of the grant class itself (restricted and project_only)
 internal/auth/grant_class.go	GrantClassVocabulary	collection	1	vocab	the closed grant-class vocabulary
 internal/contextfabric/devhealthfacts/dependencies.go	BlockersProvider.ReadFacts	raw-grant	1	deny	orgWideFigureAllowed: an org-wide figure is a typed limitation under project_only (D3, CHAOS-12225); c3 CHAOS-12299 states it
 internal/contextfabric/devhealthfacts/incidents.go	IncidentsProvider.ReadFacts	raw-grant	1	deny	orgWideFigureAllowed: an org-wide figure is a typed limitation under project_only (D3, CHAOS-12225); c3 CHAOS-12299 states it
@@ -22,6 +28,7 @@ internal/contextfabric/directread/graphql_query.go	gqlRun.answer	compare	1	r-sub
 internal/contextfabric/directread/graphql_query.go	gqlRun.finishRoot	compare	1	r-sub	restricted callers get the restricted root policy
 internal/contextfabric/directread/graphql_query.go	gqlRun.tryCandidate	compare	1	r-sub	restricted callers get the restricted root policy
 internal/contextfabric/directread/graphql_schema_view.go	BuildCatalogSchema	compare	1	r-sub	the schema view shows a restricted caller the restricted roots
+internal/contextfabric/directread/operation_policy.go	CallerClassFor	switch	1	vocab	the mapping from the principal class to the operation caller class
 internal/contextfabric/directread/operation_policy.go	CallerClassVocabulary	collection	1	vocab	the closed caller-class vocabulary
 internal/contextfabric/directread/operation_policy.go	OperationPolicy.Scope	compare	1	r-sub	the per-caller scope of an operation: project_only reads the restricted scope
 internal/contextfabric/directread/operation_policy.go	knownCallerClass	collection	1	vocab	artifact validation: membership in the closed caller-class vocabulary
@@ -36,6 +43,7 @@ internal/contextfabric/directread/operation_runner.go	run.execute	compare	2	r-su
 internal/contextfabric/directread/operation_runner.go	run.gateAndScope	compare	1	proj	the operation scope must narrow to the granted projects under project_only (12107 v2 inventory operation_runner.go:706-745); c3 CHAOS-12299
 internal/contextfabric/directread/principal_class.go	ClassifyPrincipal	classify	2	vocab	the mapping from auth.GrantClass to the subject-gate principal class
 internal/contextfabric/directread/principal_class.go	ClassifyPrincipal	derived-escape	1	vocab	the mapping from auth.GrantClass to the subject-gate principal class
+internal/contextfabric/directread/principal_class.go	PrincipalClassForGrant	switch	1	vocab	the mapping from auth.GrantClass to the subject-gate principal class
 internal/contextfabric/directread/read_relationships.go	RelationshipsReader.gateEdges	classify	1	r-sub	restricted callers gate every edge (12107 v2 inventory read_relationships.go:743); E1 for project_only is c3 CHAOS-12299
 internal/contextfabric/directread/read_relationships.go	RelationshipsReader.gateEdges	compare	1	r-sub	restricted callers gate every edge (12107 v2 inventory read_relationships.go:743); E1 for project_only is c3 CHAOS-12299
 internal/contextfabric/directread/relationships_telemetry.go	RelationshipsReadLogArgs	classify	1	vocab	telemetry: the principal class written to the log (closed vocabulary)
@@ -80,5 +88,6 @@ internal/contextfabric/stored_result_authorization.go	classifyStoredResultPrinci
 internal/contextfabric/stored_result_authorization.go	classifyStoredResultPrincipalScope	derived-escape	1	vocab	the mapping from auth.GrantClass to the stored-result principal scope
 internal/contextfabric/stored_result_authorization.go	storedResultGrantRefusal	classify	1	r-sub	restricted callers meet the grant-digest check, never the unrestricted bypass (12107 v2 inventory :379-389)
 internal/contextfabric/stored_result_authorization.go	storedResultGrantRefusal	compare	1	r-sub	restricted callers meet the grant-digest check, never the unrestricted bypass (12107 v2 inventory :379-389)
+internal/contextfabric/stored_result_authorization.go	storedResultScopeForGrant	switch	1	vocab	the mapping from auth.GrantClass to the stored-result principal scope
 internal/contextfabric/work_item_dispatch.go	Engine.discoverWorkItemTuple	raw-grant	1	r-sub	workItemRepositoryRestricted caller: project_only is restricted (12107 v2 inventory work_item_dispatch.go:65)
 internal/contextfabric/work_item_reuse.go	Engine.tryReuseWorkItemTuple	raw-grant	1	r-sub	workItemRepositoryRestricted caller: project_only is restricted (12107 v2 inventory work_item_reuse.go:92)

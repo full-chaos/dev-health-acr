@@ -51,7 +51,8 @@ information (the `rowsclose` machinery, `internal/cigates/sourceload`). It finds
 every site that reads a grant class:
 
 - comparisons;
-- tagged switches that miss a class or carry a `default`;
+- every tagged switch over a class (an exhaustive one is a decision too),
+  and separately one that misses a class or carries a `default`;
 - a comparison or classifier result that leaves its function (a derived bool,
   directly or through a local variable);
 - functions used as values;
@@ -67,10 +68,14 @@ every site that reads a grant class:
   `needsProjectReach`, `orgWideFigureAllowed`, `sourceHealthRestricted`,
   `workItemRepositoryRestricted`, `admitsWildcard`).
 
+`decisions.tsv` also pins each class type's constant values. When a class
+gains, loses or renames a constant, the test fails and lists every row of that
+class to be decided again, comparisons as much as switches.
+
 It scans every distinct (GOOS, GOARCH) pair of the release matrix, and a
 decision inside a function literal counts for its enclosing declaration. It
 does not see a class inside a generic function, where it is a type parameter,
-or through reflection or unsafe.
+inside a named struct transported whole, or through reflection or unsafe.
 
 Every site has a row in `internal/cigates/grantclass/decisions.tsv` that says
 what `project_only` does there:

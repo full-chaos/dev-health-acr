@@ -19,20 +19,21 @@ var plantedPackages = []string{"classify", "kinds", "negative"}
 // (TransportArgument, TransportMap) and a second decision inside one function
 // (TwoDecisions, counted twice).
 func TestTheWalkerFindsEveryPlantedKind(t *testing.T) {
-	root := repopath.Root(t)
-	var patterns []string
-	for _, name := range plantedPackages {
-		patterns = append(patterns, fixturesBase+"/"+name)
-	}
-	found, problems, _ := scan(t, root, patterns)
-	for _, problem := range problems {
+	result := scanPlanted(t)
+	for _, problem := range result.problems {
 		t.Error(problem)
 	}
+	found := result.counts
 	const kinds = "internal/cigates/grantclass/testdata/planted/kinds/kinds.go"
 	want := map[site]int{
 		{kinds, "Compare", kindCompare}:               1,
+		{kinds, "SwitchPartial", kindSwitch}:          1,
 		{kinds, "SwitchPartial", kindSwitchPartial}:   1,
+		{kinds, "SwitchDefault", kindSwitch}:          1,
 		{kinds, "SwitchDefault", kindSwitchDefault}:   1,
+		{kinds, "SwitchExhaustive", kindSwitch}:       1,
+		{kinds, "TransportVar", kindTransport}:        1,
+		{kinds, "TransportMapKey", kindTransport}:     1,
 		{kinds, "DerivedField", kindCompare}:          1,
 		{kinds, "DerivedField", kindDerivedEscape}:    1,
 		{kinds, "DerivedLocal", kindCompare}:          1,
@@ -57,6 +58,52 @@ func TestTheWalkerFindsEveryPlantedKind(t *testing.T) {
 	}
 	if got, expected := render(found), render(want); got != expected {
 		t.Errorf("planted sites differ\n got:\n%s\nwant:\n%s", got, expected)
+	}
+}
+
+// scanPlanted scans the planted packages.
+func scanPlanted(t *testing.T) scanResult {
+	t.Helper()
+	var patterns []string
+	for _, name := range plantedPackages {
+		patterns = append(patterns, fixturesBase+"/"+name)
+	}
+	return scan(t, repopath.Root(t), patterns)
+}
+
+// A class whose constant set differs from its pin fails, and the failure
+// lists every row of that class to be decided again; a matching pin passes.
+// The planted class has a, b and c: a pin of a and b is the class having
+// gained c without the pin moving.
+func TestAChangedClassVocabularyFailsWithEveryRowToReDecide(t *testing.T) {
+	result := scanPlanted(t)
+	const class = fixturesBase + "/classify.Class"
+	if got := strings.Join(result.vocabulary[class], ","); got != "a,b,c" {
+		t.Fatalf("planted vocabulary = %q, want a,b,c", got)
+	}
+	if problems := vocabularyProblems(result.vocabulary, map[string][]string{class: {"a", "b", "c"}}, result.classes); len(problems) != 0 {
+		t.Fatalf("a pin that matches must pass, got %v", problems)
+	}
+	problems := vocabularyProblems(result.vocabulary, map[string][]string{class: {"a", "b"}}, result.classes)
+	if len(problems) != 1 || !strings.HasPrefix(problems[0], "class vocabulary changed: "+class+" pinned a,b, live a,b,c: re-decide these rows, then update the pin: ") {
+		t.Fatalf("a class that gained a constant must fail once with the re-decide list, got %v", problems)
+	}
+	const kinds = "internal/cigates/grantclass/testdata/planted/kinds/kinds.go"
+	for key := range result.counts {
+		if key.file != kinds {
+			continue
+		}
+		if row := fmt.Sprintf("%s %s %s", key.file, key.symbol, key.kind); !strings.Contains(problems[0], row) {
+			t.Errorf("the re-decide list is missing %s", row)
+		}
+	}
+	missing := vocabularyProblems(result.vocabulary, map[string][]string{}, result.classes)
+	if len(missing) != 1 || !strings.HasPrefix(missing[0], "NO VOCABULARY PIN: "+class) {
+		t.Fatalf("a class with no pin must fail, got %v", missing)
+	}
+	stale := vocabularyProblems(map[string][]string{}, map[string][]string{class: {"a"}}, result.classes)
+	if len(stale) != 1 || !strings.HasPrefix(stale[0], "STALE vocabulary pin: "+class) {
+		t.Fatalf("a pin for no loaded class must fail, got %v", stale)
 	}
 }
 

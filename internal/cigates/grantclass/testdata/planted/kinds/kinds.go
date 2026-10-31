@@ -161,3 +161,28 @@ func ClosureDecision(c classify.Class) int {
 	check()
 	return count
 }
+
+// SwitchExhaustive names every class and has no default: still a decision,
+// recorded as a switch row (a class added with its case still needs one).
+func SwitchExhaustive(c classify.Class) int {
+	switch c {
+	case classify.A:
+		return 1
+	case classify.B:
+		return 2
+	case classify.C:
+		return 3
+	}
+	return 0
+}
+
+// TransportVar: a class stored in an interface variable by its declaration.
+func TransportVar(c classify.Class) any {
+	var exposed any = c
+	return exposed
+}
+
+// TransportMapKey: a class used as an interface-typed map key.
+func TransportMapKey(c classify.Class) map[any]int {
+	return map[any]int{c: 1}
+}

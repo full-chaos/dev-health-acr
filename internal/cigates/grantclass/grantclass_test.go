@@ -11,6 +11,9 @@
 //
 //	compare         ==/!= with a class-typed operand (every package: a
 //	                decision inside the type's own package is still one)
+//	switch          a tagged switch over a class value: a decision even when
+//	                it names every member and has no default (a class added
+//	                with its own case still changes what the switch does)
 //	switch-partial  a tagged switch over a class value that does not name
 //	                every member of the vocabulary
 //	switch-default  a tagged switch over a class value with a default clause
@@ -29,8 +32,9 @@
 //	                (string, an interface, another named type such as
 //	                `type Wrapped GrantClass`, another class), or implicitly
 //	                to an interface as a call argument, composite element
-//	                (slice, array, map or struct field), assignment, channel
-//	                send or return
+//	                (slice or array element, map key or value, struct
+//	                field), assignment, variable declaration, channel send
+//	                or return
 //	collection      a composite literal whose element, map key or map value
 //	                type is a class ([]GrantClass{...}, map[GrantClass]X,
 //	                map[string]GrantClass{...}), and a call argument whose
@@ -53,9 +57,16 @@
 //
 // A site inside a function literal is keyed to its enclosing declaration.
 //
+// decisions.tsv also pins each class type's constant values (a #vocab line).
+// When a class gains, loses or renames a constant, the test fails and lists
+// every row of that class: each was decided for the old set and is decided
+// again, then the pin is updated (CHAOS-12107: a new class without a decision
+// at every site turns the gate red, for comparisons as much as for switches).
+//
 // NOT covered, stated: a class value inside a generic function, where it is a
-// type parameter and its comparisons are not class-typed; reflection and
-// unsafe; a decision made by reading RepositoryScopes directly outside the
+// type parameter and its comparisons are not class-typed; a named struct that
+// carries a class field, transported whole (the struct passed as an
+// interface, its field read elsewhere); reflection and unsafe; a decision made by reading RepositoryScopes directly outside the
 // raw-grant classifiers (c2's sentinel covers those); generated code outside
 // every release build (pinned by name, as in rowsclose).
 package grantclass
@@ -129,6 +140,7 @@ var pinnedOutOfScope = []string{
 
 const (
 	kindCompare       = "compare"
+	kindSwitch        = "switch"
 	kindSwitchPartial = "switch-partial"
 	kindSwitchDefault = "switch-default"
 	kindDerivedEscape = "derived-escape"
@@ -151,21 +163,32 @@ type decisionRow struct {
 	note     string
 }
 
+// hit is one site in a declaration and the class type it concerns, keyed
+// "<package path>.<type name>".
+type hit struct{ kind, class string }
+
+// authGrantClass is the class a raw-grant classifier decides for: it reads
+// the grant list the grant class is derived from.
+const authGrantClass = modulePath + "/internal/auth.GrantClass"
+
 func TestEveryGrantClassDecisionIsRecorded(t *testing.T) {
 	root := repopath.Root(t)
-	found, problems, loaded := scan(t, root, []string{"./..."})
+	result := scan(t, root, []string{"./..."})
 	if path := os.Getenv("GRANTCLASS_DUMP"); path != "" {
-		dump(t, path, found)
+		dump(t, path, result)
 	}
-	problems = append(problems, compare(found, readDecisions(t, decisionsFile))...)
-	problems = append(problems, scopeProblems(outsideBuild(t, root, loaded), pinnedOutOfScope)...)
+	rows, pins := readDecisions(t, decisionsFile)
+	problems := append([]string{}, result.problems...)
+	problems = append(problems, compare(result.counts, rows)...)
+	problems = append(problems, vocabularyProblems(result.vocabulary, pins, result.classes)...)
+	problems = append(problems, scopeProblems(outsideBuild(t, root, result.loaded), pinnedOutOfScope)...)
 	for _, problem := range problems {
 		t.Error(problem)
 	}
 	if len(problems) > 0 {
 		t.Log("fix: give the site a decisions.tsv row (r-sub, proj, deny, leave, consent or vocab) that says what project_only does there; see docs/design/context-fabric-project-only-scope.md")
 	}
-	t.Logf("grant-class sites: %d, in %d distinct (file, symbol, kind) keys; all decided in decisions.tsv", sum(found), len(found))
+	t.Logf("grant-class sites: %d, in %d distinct (file, symbol, kind) keys; all decided in decisions.tsv", sum(result.counts), len(result.counts))
 }
 
 func sum(counts map[site]int) int {
@@ -176,7 +199,18 @@ func sum(counts map[site]int) int {
 	return total
 }
 
-func scan(t *testing.T, root string, patterns []string) (map[site]int, []string, map[string]bool) {
+// scanResult is the union of every release target's scan.
+type scanResult struct {
+	counts map[site]int
+	// classes is the set of class types each site concerns.
+	classes map[site]map[string]bool
+	// vocabulary is each class type's live constant values, sorted.
+	vocabulary map[string][]string
+	problems   []string
+	loaded     map[string]bool
+}
+
+func scan(t *testing.T, root string, patterns []string) scanResult {
 	t.Helper()
 	targets := releaseTargets()
 	results := make([]targetScan, len(targets))
@@ -189,32 +223,44 @@ func scan(t *testing.T, root string, patterns []string) (map[site]int, []string,
 		}()
 	}
 	wait.Wait()
-	found := map[site]int{}
-	var problems []string
-	loaded := map[string]bool{}
+	out := scanResult{counts: map[site]int{}, classes: map[site]map[string]bool{}, vocabulary: map[string][]string{}, loaded: map[string]bool{}}
 	for _, result := range results {
 		if result.err != nil {
 			t.Fatalf("load: %v", result.err)
 		}
-		problems = append(problems, result.problems...)
+		out.problems = append(out.problems, result.problems...)
 		for name := range result.loaded {
-			loaded[name] = true
+			out.loaded[name] = true
 		}
 		for key, count := range result.counts {
-			if count > found[key] {
-				found[key] = count
+			if count > out.counts[key] {
+				out.counts[key] = count
 			}
 		}
+		for key, classes := range result.classes {
+			if out.classes[key] == nil {
+				out.classes[key] = map[string]bool{}
+			}
+			for class := range classes {
+				out.classes[key][class] = true
+			}
+		}
+		for class, values := range result.vocabulary {
+			out.vocabulary[class] = values
+		}
 	}
-	sort.Strings(problems)
-	return found, uniqueStrings(problems), loaded
+	sort.Strings(out.problems)
+	out.problems = uniqueStrings(out.problems)
+	return out
 }
 
 type targetScan struct {
-	counts   map[site]int
-	problems []string
-	loaded   map[string]bool
-	err      error
+	counts     map[site]int
+	classes    map[site]map[string]bool
+	vocabulary map[string][]string
+	problems   []string
+	loaded     map[string]bool
+	err        error
 }
 
 func scanTarget(root string, patterns []string, target [2]string) targetScan {
@@ -222,12 +268,22 @@ func scanTarget(root string, patterns []string, target [2]string) targetScan {
 	if err != nil {
 		return targetScan{err: err}
 	}
-	result := targetScan{counts: map[site]int{}, loaded: map[string]bool{}}
+	result := targetScan{counts: map[site]int{}, classes: map[site]map[string]bool{}, vocabulary: map[string][]string{}, loaded: map[string]bool{}}
 	result.problems = loader.Problems(target[0], target[1])
 	for _, pkg := range loader.Roots {
 		unit := loader.Units[pkg.ID]
 		for _, name := range pkg.GoFiles {
 			result.loaded[name] = true
+		}
+		if unit.Types != nil {
+			scope := unit.Types.Scope()
+			for _, name := range scope.Names() {
+				if typeName, ok := scope.Lookup(name).(*types.TypeName); ok {
+					if named := className(typeName.Type()); named != nil && named.Obj() == typeName {
+						result.vocabulary[classKey(named)] = classVocabulary(named)
+					}
+				}
+			}
 		}
 		for _, file := range unit.Files {
 			rel, relErr := filepath.Rel(root, loader.Fset.Position(file.Pos()).Filename)
@@ -237,8 +293,15 @@ func scanTarget(root string, patterns []string, target [2]string) targetScan {
 			rel = filepath.ToSlash(rel)
 			for _, declaration := range file.Decls {
 				symbol := declSymbol(declaration)
-				for _, kind := range sitesIn(unit.Info, declaration) {
-					result.counts[site{rel, symbol, kind}]++
+				for _, h := range sitesIn(unit.Info, declaration) {
+					key := site{rel, symbol, h.kind}
+					result.counts[key]++
+					if result.classes[key] == nil {
+						result.classes[key] = map[string]bool{}
+					}
+					if h.class != "" {
+						result.classes[key][h.class] = true
+					}
 				}
 			}
 		}
@@ -246,10 +309,11 @@ func scanTarget(root string, patterns []string, target [2]string) targetScan {
 	return result
 }
 
-// sitesIn is the kind of every grant-class site in declaration.
-func sitesIn(info *types.Info, declaration ast.Decl) []string {
+// sitesIn is every grant-class site in declaration. A site inside a function
+// literal belongs to the declaration that encloses it.
+func sitesIn(info *types.Info, declaration ast.Decl) []hit {
 	derived := derivedLocals(info, declaration)
-	var kinds []string
+	var hits []hit
 	var stack []ast.Node
 	ast.Inspect(declaration, func(node ast.Node) bool {
 		if node == nil {
@@ -257,17 +321,18 @@ func sitesIn(info *types.Info, declaration ast.Decl) []string {
 			return true
 		}
 		stack = append(stack, node)
-		kinds = append(kinds, siteKinds(info, stack, derived)...)
+		hits = append(hits, siteHits(info, stack, derived)...)
 		return true
 	})
-	return kinds
+	return hits
 }
 
 // derivedLocals is every local variable of declaration assigned a class
-// comparison or a classifier result: a use of one that escapes is a derived
-// bool (or class) leaving the deciding function.
-func derivedLocals(info *types.Info, declaration ast.Decl) map[types.Object]bool {
-	derived := map[types.Object]bool{}
+// comparison or a classifier result, with the class it was decided over: a
+// use of one that escapes is a derived bool (or class) leaving the deciding
+// function.
+func derivedLocals(info *types.Info, declaration ast.Decl) map[types.Object]string {
+	derived := map[types.Object]string{}
 	ast.Inspect(declaration, func(node ast.Node) bool {
 		assign, ok := node.(*ast.AssignStmt)
 		if !ok || len(assign.Lhs) != len(assign.Rhs) {
@@ -275,11 +340,13 @@ func derivedLocals(info *types.Info, declaration ast.Decl) map[types.Object]bool
 		}
 		for i, rhs := range assign.Rhs {
 			ident, isIdent := assign.Lhs[i].(*ast.Ident)
-			if !isIdent || !isDecision(info, rhs) {
+			if !isIdent {
 				continue
 			}
-			if obj := info.ObjectOf(ident); obj != nil {
-				derived[obj] = true
+			if class, decided := decisionClass(info, rhs); decided {
+				if obj := info.ObjectOf(ident); obj != nil {
+					derived[obj] = class
+				}
 			}
 		}
 		return true
@@ -287,107 +354,146 @@ func derivedLocals(info *types.Info, declaration ast.Decl) map[types.Object]bool
 	return derived
 }
 
-// isDecision: expr is a class comparison or a classifier call, possibly
-// negated or parenthesized.
-func isDecision(info *types.Info, expr ast.Expr) bool {
+// decisionClass: expr is a class comparison or a classifier call, possibly
+// negated or parenthesized, and the class it decides over.
+func decisionClass(info *types.Info, expr ast.Expr) (string, bool) {
 	switch e := expr.(type) {
 	case *ast.ParenExpr:
-		return isDecision(info, e.X)
+		return decisionClass(info, e.X)
 	case *ast.UnaryExpr:
-		return e.Op == token.NOT && isDecision(info, e.X)
+		if e.Op == token.NOT {
+			return decisionClass(info, e.X)
+		}
 	case *ast.BinaryExpr:
-		return (e.Op == token.EQL || e.Op == token.NEQ) && (isClass(info.TypeOf(e.X)) || isClass(info.TypeOf(e.Y)))
+		if e.Op == token.EQL || e.Op == token.NEQ {
+			if class := operandClass(info, e); class != "" {
+				return class, true
+			}
+		}
 	case *ast.CallExpr:
-		fn := calledFunc(info, e)
-		return fn != nil && classifiers[funcKey(fn)]
+		if fn := calledFunc(info, e); fn != nil && classifiers[funcKey(fn)] {
+			return signatureClass(fn.Type().(*types.Signature)), true
+		}
 	}
-	return false
+	return "", false
 }
 
-func siteKinds(info *types.Info, stack []ast.Node, derived map[types.Object]bool) []string {
+// rawGrantClass is the class a raw-grant classifier decides for: the grant
+// class (a planted classifier decides for its own package's class).
+func rawGrantClass(fn *types.Func) string {
+	if fn.Pkg() != nil && strings.HasPrefix(fn.Pkg().Path(), fixturesBase+"/") {
+		return fn.Pkg().Path() + ".Class"
+	}
+	return authGrantClass
+}
+
+func operandClass(info *types.Info, e *ast.BinaryExpr) string {
+	if class := typeClass(info.TypeOf(e.X)); class != "" {
+		return class
+	}
+	return typeClass(info.TypeOf(e.Y))
+}
+
+func siteHits(info *types.Info, stack []ast.Node, derived map[types.Object]string) []hit {
 	node := stack[len(stack)-1]
-	var kinds []string
+	var hits []hit
 	switch n := node.(type) {
 	case *ast.IndexExpr:
 		if m, ok := types.Unalias(info.TypeOf(n.X)).Underlying().(*types.Map); ok && isClass(m.Key()) {
-			kinds = append(kinds, kindLookup)
+			hits = append(hits, hit{kindLookup, typeClass(m.Key())})
 		}
 	case *ast.BinaryExpr:
-		if (n.Op == token.EQL || n.Op == token.NEQ) && (isClass(info.TypeOf(n.X)) || isClass(info.TypeOf(n.Y))) {
-			kinds = append(kinds, kindCompare)
-			if escapes(stack) {
-				kinds = append(kinds, kindDerivedEscape)
+		if n.Op == token.EQL || n.Op == token.NEQ {
+			if class := operandClass(info, n); class != "" {
+				hits = append(hits, hit{kindCompare, class})
+				if escapes(stack) {
+					hits = append(hits, hit{kindDerivedEscape, class})
+				}
 			}
 		}
 	case *ast.SwitchStmt:
 		if n.Tag != nil {
 			if named := className(info.TypeOf(n.Tag)); named != nil {
+				class := classKey(named)
+				hits = append(hits, hit{kindSwitch, class})
 				partial, hasDefault := switchCoverage(info, n, named)
 				if partial {
-					kinds = append(kinds, kindSwitchPartial)
+					hits = append(hits, hit{kindSwitchPartial, class})
 				}
 				if hasDefault {
-					kinds = append(kinds, kindSwitchDefault)
+					hits = append(hits, hit{kindSwitchDefault, class})
 				}
 			}
 		}
 	case *ast.CallExpr:
 		if tv, ok := info.Types[n.Fun]; ok && tv.IsType() {
 			if len(n.Args) == 1 && isClass(info.TypeOf(n.Args[0])) && !types.Identical(tv.Type, info.TypeOf(n.Args[0])) {
-				kinds = append(kinds, kindTransport)
+				hits = append(hits, hit{kindTransport, typeClass(info.TypeOf(n.Args[0]))})
 			}
-			return kinds
+			return hits
 		}
 		if fn := calledFunc(info, n); fn != nil {
 			switch {
 			case classifiers[funcKey(fn)]:
-				kinds = append(kinds, kindClassify)
+				class := signatureClass(fn.Type().(*types.Signature))
+				hits = append(hits, hit{kindClassify, class})
 				if escapes(stack) {
-					kinds = append(kinds, kindDerivedEscape)
+					hits = append(hits, hit{kindDerivedEscape, class})
 				}
 			case rawGrantClassifiers[funcKey(fn)]:
-				kinds = append(kinds, kindRawGrant)
+				hits = append(hits, hit{kindRawGrant, rawGrantClass(fn)})
 			}
 		}
-		kinds = append(kinds, implicitTransports(info, n)...)
+		hits = append(hits, implicitTransports(info, n)...)
 		for _, arg := range n.Args {
-			if isClassCollection(info.TypeOf(arg)) {
-				kinds = append(kinds, kindCollection)
+			if class := collectionClass(info.TypeOf(arg)); class != "" {
+				hits = append(hits, hit{kindCollection, class})
 			}
 		}
 	case *ast.CompositeLit:
-		if isClassCollection(info.TypeOf(n)) {
-			kinds = append(kinds, kindCollection)
+		if class := collectionClass(info.TypeOf(n)); class != "" {
+			hits = append(hits, hit{kindCollection, class})
 		}
-		kinds = append(kinds, compositeTransports(info, n)...)
+		hits = append(hits, compositeTransports(info, n)...)
 	case *ast.ReturnStmt:
-		kinds = append(kinds, returnTransports(info, n, stack)...)
+		hits = append(hits, returnTransports(info, n, stack)...)
 	case *ast.SendStmt:
 		if ch, ok := types.Unalias(info.TypeOf(n.Chan)).Underlying().(*types.Chan); ok && isClass(info.TypeOf(n.Value)) && isInterface(ch.Elem()) {
-			kinds = append(kinds, kindTransport)
+			hits = append(hits, hit{kindTransport, typeClass(info.TypeOf(n.Value))})
 		}
 	case *ast.AssignStmt:
 		for i, rhs := range n.Rhs {
 			if i < len(n.Lhs) && len(n.Lhs) == len(n.Rhs) && isClass(info.TypeOf(rhs)) && isInterface(info.TypeOf(n.Lhs[i])) {
-				kinds = append(kinds, kindTransport)
+				hits = append(hits, hit{kindTransport, typeClass(info.TypeOf(rhs))})
+			}
+		}
+	case *ast.ValueSpec:
+		for i, value := range n.Values {
+			if i >= len(n.Names) || !isClass(info.TypeOf(value)) {
+				continue
+			}
+			if obj := info.Defs[n.Names[i]]; obj != nil && isInterface(obj.Type()) {
+				hits = append(hits, hit{kindTransport, typeClass(info.TypeOf(value))})
 			}
 		}
 	case *ast.SelectorExpr:
-		if isMethodValue(info, n, stack) {
-			kinds = append(kinds, kindMethodValue)
+		if class := methodValueClass(info, n, stack); class != "" {
+			hits = append(hits, hit{kindMethodValue, class})
 		}
 	case *ast.Ident:
 		if parent, ok := parentOf(stack).(*ast.SelectorExpr); ok && parent.Sel == n {
-			return kinds
+			return hits
 		}
-		if isMethodValue(info, n, stack) {
-			kinds = append(kinds, kindMethodValue)
+		if class := methodValueClass(info, n, stack); class != "" {
+			hits = append(hits, hit{kindMethodValue, class})
 		}
-		if obj := info.Uses[n]; obj != nil && derived[obj] && escapes(stack) {
-			kinds = append(kinds, kindDerivedEscape)
+		if obj := info.Uses[n]; obj != nil {
+			if class, ok := derived[obj]; ok && escapes(stack) {
+				hits = append(hits, hit{kindDerivedEscape, class})
+			}
 		}
 	}
-	return kinds
+	return hits
 }
 
 // escapes: the expression at the top of stack (a comparison or a classifier
@@ -436,9 +542,9 @@ func parentOf(stack []ast.Node) ast.Node {
 	return stack[len(stack)-2]
 }
 
-// isMethodValue: expr names a function or method whose signature touches a
-// class type, and it is not the callee of a call.
-func isMethodValue(info *types.Info, expr ast.Expr, stack []ast.Node) bool {
+// methodValueClass: expr names a function or method whose signature touches
+// a class type, and it is not the callee of a call; the class it touches.
+func methodValueClass(info *types.Info, expr ast.Expr, stack []ast.Node) string {
 	var obj types.Object
 	switch e := expr.(type) {
 	case *ast.Ident:
@@ -451,37 +557,48 @@ func isMethodValue(info *types.Info, expr ast.Expr, stack []ast.Node) bool {
 		}
 	}
 	fn, ok := obj.(*types.Func)
-	if !ok || !signatureTouchesClass(fn.Type().(*types.Signature)) {
-		return false
+	if !ok {
+		return ""
+	}
+	class := signatureClass(fn.Type().(*types.Signature))
+	if class == "" {
+		return ""
 	}
 	if call, isCall := parentOf(stack).(*ast.CallExpr); isCall && call.Fun == expr {
-		return false
+		return ""
 	}
-	return true
+	return class
 }
 
-func signatureTouchesClass(sig *types.Signature) bool {
-	if recv := sig.Recv(); recv != nil && isClass(recv.Type()) {
-		return true
-	}
-	for _, tuple := range []*types.Tuple{sig.Params(), sig.Results()} {
-		for i := 0; i < tuple.Len(); i++ {
-			if isClass(tuple.At(i).Type()) {
-				return true
-			}
+// signatureClass is the first class type a signature touches: its results,
+// then its receiver, then its parameters ("" when none).
+func signatureClass(sig *types.Signature) string {
+	for i := 0; i < sig.Results().Len(); i++ {
+		if class := typeClass(sig.Results().At(i).Type()); class != "" {
+			return class
 		}
 	}
-	return false
+	if recv := sig.Recv(); recv != nil {
+		if class := typeClass(recv.Type()); class != "" {
+			return class
+		}
+	}
+	for i := 0; i < sig.Params().Len(); i++ {
+		if class := typeClass(sig.Params().At(i).Type()); class != "" {
+			return class
+		}
+	}
+	return ""
 }
 
 // implicitTransports: a class-typed argument passed to an interface-typed
 // parameter (slog attributes, fmt verbs, eventspec emitters).
-func implicitTransports(info *types.Info, call *ast.CallExpr) []string {
+func implicitTransports(info *types.Info, call *ast.CallExpr) []hit {
 	sig, ok := types.Unalias(info.TypeOf(call.Fun)).Underlying().(*types.Signature)
 	if !ok {
 		return nil
 	}
-	var kinds []string
+	var hits []hit
 	params := sig.Params()
 	for i, arg := range call.Args {
 		if !isClass(info.TypeOf(arg)) {
@@ -500,19 +617,24 @@ func implicitTransports(info *types.Info, call *ast.CallExpr) []string {
 			paramType = params.At(i).Type()
 		}
 		if paramType != nil && isInterface(paramType) {
-			kinds = append(kinds, kindTransport)
+			hits = append(hits, hit{kindTransport, typeClass(info.TypeOf(arg))})
 		}
 	}
-	return kinds
+	return hits
 }
 
-// compositeTransports: a class value as an element of a composite literal
-// whose element type is an interface (a map[string]any of attributes).
-func compositeTransports(info *types.Info, lit *ast.CompositeLit) []string {
-	var element types.Type
+// compositeTransports: a class value stored as an interface in a composite
+// literal: a slice or array element, a map key or value, or a struct field of
+// interface type (a map[string]any of attributes, a map[any]int).
+func compositeTransports(info *types.Info, lit *ast.CompositeLit) []hit {
+	var hits []hit
+	add := func(slot types.Type, value ast.Expr) {
+		if slot != nil && isInterface(slot) && isClass(info.TypeOf(value)) {
+			hits = append(hits, hit{kindTransport, typeClass(info.TypeOf(value))})
+		}
+	}
 	switch u := types.Unalias(info.TypeOf(lit)).Underlying().(type) {
 	case *types.Struct:
-		var kinds []string
 		for i, elt := range lit.Elts {
 			value, field := elt, (*types.Var)(nil)
 			if kv, ok := elt.(*ast.KeyValueExpr); ok {
@@ -526,39 +648,39 @@ func compositeTransports(info *types.Info, lit *ast.CompositeLit) []string {
 			} else if i < u.NumFields() {
 				field = u.Field(i)
 			}
-			if field != nil && isInterface(field.Type()) && isClass(info.TypeOf(value)) {
-				kinds = append(kinds, kindTransport)
+			if field != nil {
+				add(field.Type(), value)
 			}
 		}
-		return kinds
 	case *types.Map:
-		element = u.Elem()
+		for _, elt := range lit.Elts {
+			if kv, ok := elt.(*ast.KeyValueExpr); ok {
+				add(u.Key(), kv.Key)
+				add(u.Elem(), kv.Value)
+			}
+		}
 	case *types.Slice:
-		element = u.Elem()
+		for _, elt := range lit.Elts {
+			add(u.Elem(), elementValue(elt))
+		}
 	case *types.Array:
-		element = u.Elem()
-	default:
-		return nil
-	}
-	if !isInterface(element) {
-		return nil
-	}
-	var kinds []string
-	for _, elt := range lit.Elts {
-		value := elt
-		if kv, ok := elt.(*ast.KeyValueExpr); ok {
-			value = kv.Value
-		}
-		if isClass(info.TypeOf(value)) {
-			kinds = append(kinds, kindTransport)
+		for _, elt := range lit.Elts {
+			add(u.Elem(), elementValue(elt))
 		}
 	}
-	return kinds
+	return hits
+}
+
+func elementValue(elt ast.Expr) ast.Expr {
+	if kv, ok := elt.(*ast.KeyValueExpr); ok {
+		return kv.Value
+	}
+	return elt
 }
 
 // returnTransports: a class value returned where the enclosing function's
 // result type is an interface (any, error, fmt.Stringer).
-func returnTransports(info *types.Info, ret *ast.ReturnStmt, stack []ast.Node) []string {
+func returnTransports(info *types.Info, ret *ast.ReturnStmt, stack []ast.Node) []hit {
 	var sig *types.Signature
 	for i := len(stack) - 2; i >= 0 && sig == nil; i-- {
 		switch fn := stack[i].(type) {
@@ -573,41 +695,41 @@ func returnTransports(info *types.Info, ret *ast.ReturnStmt, stack []ast.Node) [
 	if sig == nil || sig.Results().Len() != len(ret.Results) {
 		return nil
 	}
-	var kinds []string
+	var hits []hit
 	for i, result := range ret.Results {
 		if isClass(info.TypeOf(result)) && isInterface(sig.Results().At(i).Type()) {
-			kinds = append(kinds, kindTransport)
+			hits = append(hits, hit{kindTransport, typeClass(info.TypeOf(result))})
 		}
 	}
-	return kinds
+	return hits
 }
 
-// isClassCollection: a slice, array or map whose element, key or value type
-// is a class.
-func isClassCollection(t types.Type) bool {
+// collectionClass: the class of a slice, array or map whose element, key or
+// value type is a class ("" when none).
+func collectionClass(t types.Type) string {
 	if t == nil {
-		return false
+		return ""
 	}
 	switch u := types.Unalias(t).Underlying().(type) {
 	case *types.Slice:
-		return isClass(u.Elem())
+		return typeClass(u.Elem())
 	case *types.Array:
-		return isClass(u.Elem())
+		return typeClass(u.Elem())
 	case *types.Map:
-		return isClass(u.Key()) || isClass(u.Elem())
+		if class := typeClass(u.Key()); class != "" {
+			return class
+		}
+		return typeClass(u.Elem())
 	}
-	return false
+	return ""
 }
 
 // switchCoverage: whether the tagged switch names every constant of the
 // class type, and whether it has a default clause.
 func switchCoverage(info *types.Info, stmt *ast.SwitchStmt, named *types.Named) (partial, hasDefault bool) {
 	want := map[string]bool{}
-	scope := named.Obj().Pkg().Scope()
-	for _, name := range scope.Names() {
-		if c, ok := scope.Lookup(name).(*types.Const); ok && types.Identical(c.Type(), named) {
-			want[c.Val().ExactString()] = true
-		}
+	for _, value := range classVocabulary(named) {
+		want[value] = true
 	}
 	seen := map[string]bool{}
 	for _, clause := range stmt.Body.List {
@@ -621,7 +743,7 @@ func switchCoverage(info *types.Info, stmt *ast.SwitchStmt, named *types.Named) 
 		}
 		for _, expr := range cc.List {
 			if tv, ok := info.Types[expr]; ok && tv.Value != nil && tv.Value.Kind() == constant.String {
-				seen[tv.Value.ExactString()] = true
+				seen[constant.StringVal(tv.Value)] = true
 			}
 		}
 	}
@@ -651,6 +773,33 @@ func className(t types.Type) *types.Named {
 }
 
 func isClass(t types.Type) bool { return className(t) != nil }
+
+// classKey is "<package path>.<type name>".
+func classKey(named *types.Named) string {
+	return named.Obj().Pkg().Path() + "." + named.Obj().Name()
+}
+
+// typeClass is the class key of t ("" when t is not a class type).
+func typeClass(t types.Type) string {
+	if named := className(t); named != nil {
+		return classKey(named)
+	}
+	return ""
+}
+
+// classVocabulary is the sorted string values of the constants of the class
+// type declared in its own package.
+func classVocabulary(named *types.Named) []string {
+	var values []string
+	scope := named.Obj().Pkg().Scope()
+	for _, name := range scope.Names() {
+		if c, ok := scope.Lookup(name).(*types.Const); ok && types.Identical(c.Type(), named) && c.Val().Kind() == constant.String {
+			values = append(values, constant.StringVal(c.Val()))
+		}
+	}
+	sort.Strings(values)
+	return values
+}
 
 func isInterface(t types.Type) bool {
 	if t == nil {
@@ -743,7 +892,12 @@ func compare(found map[site]int, rows map[site]decisionRow) []string {
 	return problems
 }
 
-func readDecisions(t *testing.T, name string) map[site]decisionRow {
+// vocabularyPinPrefix starts a decisions.tsv line that pins one class
+// type's constant values: #vocab<TAB><package path>.<type><TAB><sorted
+// values, comma-separated>.
+const vocabularyPinPrefix = "#vocab\t"
+
+func readDecisions(t *testing.T, name string) (map[site]decisionRow, map[string][]string) {
 	t.Helper()
 	handle, err := os.Open(name)
 	if err != nil {
@@ -751,10 +905,22 @@ func readDecisions(t *testing.T, name string) map[site]decisionRow {
 	}
 	defer handle.Close()
 	rows := map[site]decisionRow{}
+	pins := map[string][]string{}
 	scanner := bufio.NewScanner(handle)
 	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
 	for line := 1; scanner.Scan(); line++ {
 		text := scanner.Text()
+		if strings.HasPrefix(text, vocabularyPinPrefix) {
+			fields := strings.Split(text, "\t")
+			if len(fields) != 3 || fields[1] == "" || fields[2] == "" {
+				t.Fatalf("%s:%d: a vocabulary pin is #vocab<TAB>type<TAB>values", name, line)
+			}
+			if _, dup := pins[fields[1]]; dup {
+				t.Fatalf("%s:%d: duplicate vocabulary pin %s", name, line, fields[1])
+			}
+			pins[fields[1]] = strings.Split(fields[2], ",")
+			continue
+		}
 		if text == "" || strings.HasPrefix(text, "#") {
 			continue
 		}
@@ -775,18 +941,57 @@ func readDecisions(t *testing.T, name string) map[site]decisionRow {
 	if err := scanner.Err(); err != nil {
 		t.Fatal(err)
 	}
-	return rows
+	return rows, pins
+}
+
+// vocabularyProblems compares each class type's live constant set with its
+// pin. A class that gained, lost or renamed a constant has decisions that
+// were taken for the old set: every site of that type is listed to be
+// decided again (CHAOS-12107: a new class without a decision at every site
+// turns the gate red), and the pin is updated after.
+func vocabularyProblems(live, pins map[string][]string, classes map[site]map[string]bool) []string {
+	var problems []string
+	for class, values := range live {
+		pin, ok := pins[class]
+		if ok && strings.Join(pin, ",") == strings.Join(values, ",") {
+			continue
+		}
+		var rows []string
+		for key, siteClasses := range classes {
+			if siteClasses[class] {
+				rows = append(rows, fmt.Sprintf("%s %s %s", key.file, key.symbol, key.kind))
+			}
+		}
+		sort.Strings(rows)
+		if !ok {
+			problems = append(problems, fmt.Sprintf("NO VOCABULARY PIN: %s has %s; add %s%s\t%s, and decide every row of it: %s", class, strings.Join(values, ","), vocabularyPinPrefix, class, strings.Join(values, ","), strings.Join(rows, "; ")))
+			continue
+		}
+		problems = append(problems, fmt.Sprintf("class vocabulary changed: %s pinned %s, live %s: re-decide these rows, then update the pin: %s", class, strings.Join(pin, ","), strings.Join(values, ","), strings.Join(rows, "; ")))
+	}
+	for class := range pins {
+		if _, ok := live[class]; !ok {
+			problems = append(problems, fmt.Sprintf("STALE vocabulary pin: %s is no longer a loaded class type", class))
+		}
+	}
+	sort.Strings(problems)
+	return problems
 }
 
 // dump writes the found sites as decisions.tsv skeleton rows (decision open)
 // when GRANTCLASS_DUMP names a file: the starting point for a new row.
-func dump(t *testing.T, path string, found map[site]int) {
+func dump(t *testing.T, path string, result scanResult) {
 	t.Helper()
-	var lines []string
-	for key, count := range found {
+	var pins, lines []string
+	for class, values := range result.vocabulary {
+		pins = append(pins, vocabularyPinPrefix+class+"\t"+strings.Join(values, ","))
+	}
+	sort.Strings(pins)
+	for key, count := range result.counts {
 		lines = append(lines, fmt.Sprintf("%s\t%s\t%s\t%d\topen\t", key.file, key.symbol, key.kind, count))
 	}
 	sort.Strings(lines)
+	lines = append(pins, lines...)
 	if err := os.WriteFile(path, []byte(strings.Join(lines, "\n")+"\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
