@@ -666,6 +666,14 @@ item's stated membership decides too. Pull requests carry no membership yet
 line, `context fabric project narrowing resolution` (outcome, requested ids,
 resolved identities; never an id).
 
+**A project-narrowing exclusion is scope, not authorization (CHAOS-12329).**
+A node the caller's grants admit that a requested project narrowing leaves out
+is out of the requested scope. The repository walk decides each link row
+without the narrowing as well: a row that passes then is counted apart
+(`project_excluded` on the walk's Info line), never in the walk's authorization
+count, so it gives no authorization-gap disclosure and no degraded answer. What
+the grants hide is still denied.
+
 **A requested team narrowing on the repository walk (CHAOS-12319).**
 Repository, project and work-item nodes carry the `"*"` team list, so the node
 rule narrows none of them; `"*"` is never team evidence. Team = ownership only.

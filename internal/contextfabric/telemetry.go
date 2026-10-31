@@ -3073,6 +3073,7 @@ func (t SlogEngineTelemetry) RecordRepositoryWorkItemWalk(ctx context.Context, p
 			"truncated", event.Truncated,
 			"lower_tier_cut", event.LowerTierCut,
 			"project_narrowing_unverified", event.ProjectNarrowingUnverified,
+			"project_excluded", event.ProjectExcluded,
 		)
 		if event.TeamNarrowing != "" {
 			args = append(args,

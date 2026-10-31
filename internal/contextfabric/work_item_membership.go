@@ -218,6 +218,8 @@ type WorkItemMembershipResult struct {
 	TeamNarrowing TeamNarrowingBasis
 	TeamExcluded  int
 	TeamFloor     TeamNarrowingFloor
+	// ProjectExcluded: TreeWorkItemWalk.ProjectExcluded, for the walk line.
+	ProjectExcluded int
 }
 
 // WorkItemMembershipLease must remain held until the complete future answer
