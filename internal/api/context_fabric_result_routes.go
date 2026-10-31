@@ -104,6 +104,13 @@ func (a *App) ContextFabricInvestigationResultHandler(results contextfabric.Inve
 // submission and a read by id are one serving path and cannot drift.
 // auditAction names the read on the audit trail.
 func (a *App) serveStoredInvestigationResult(w http.ResponseWriter, r *http.Request, principal storage.Principal, results contextfabric.InvestigationResultStore, gate StoredResultAuthorizer, resultID, auditAction string) {
+	a.serveStoredInvestigationResultOn(w, r, principal, results, gate, resultID, auditAction, contextfabric.StoredResultSurfaceResultByID)
+}
+
+// serveStoredInvestigationResultOn is serveStoredInvestigationResult on the
+// reader's own gate surface (CHAOS-11949: the attach's result terminal is
+// surface submission_attach).
+func (a *App) serveStoredInvestigationResultOn(w http.ResponseWriter, r *http.Request, principal storage.Principal, results contextfabric.InvestigationResultStore, gate StoredResultAuthorizer, resultID, auditAction string, surface contextfabric.StoredResultSurface) {
 	// Organization scoping is the store's binding precondition (see
 	// contextfabric.InvestigationResultStore). The principal comes
 	// from authentication, never from the path or a payload.
@@ -114,7 +121,7 @@ func (a *App) serveStoredInvestigationResult(w http.ResponseWriter, r *http.Requ
 	// response contract.
 	// CHAOS-11948: the read, the gate and the serving rules are one
 	// decision (decideStoredResultServing), shared with the thread read.
-	serving := decideStoredResultServing(r.Context(), principal, results, gate, resultID, contextfabric.StoredResultSurfaceResultByID)
+	serving := decideStoredResultServing(r.Context(), principal, results, gate, resultID, surface)
 	if !serving.gated {
 		a.writeInvestigationResultError(w, r, principal, serving.err)
 		return
