@@ -64,6 +64,20 @@
     },
     {
       "method": "GET",
+      "pattern": "/api/v1/context-fabric/investigations/submissions/{submission_id}/events",
+      "path": "/api/v1/context-fabric/investigations/submissions/submission-00000001/events",
+      "scope": "context:read",
+      "web_assertion": true
+    },
+    {
+      "method": "POST",
+      "pattern": "/api/v1/context-fabric/investigations/submissions/{submission_id}/cancel",
+      "path": "/api/v1/context-fabric/investigations/submissions/submission-00000001/cancel",
+      "scope": "context:read",
+      "web_assertion": true
+    },
+    {
+      "method": "GET",
       "pattern": "/api/v1/context-fabric/threads",
       "path": "/api/v1/context-fabric/threads",
       "scope": "context:read",

@@ -134,6 +134,8 @@ func (s *Store) DeleteSubmissionsForTest(orgID string) {
 		if key.OrgID == orgID {
 			delete(s.submissions, key)
 			delete(s.reserved, reservedResultKey{orgID: orgID, resultID: record.ReservedResultID})
+			// The log goes with its record (the foreign key's cascade).
+			delete(s.runEvents, contextfabric.RunKeyOf(record))
 		}
 	}
 }
@@ -154,6 +156,9 @@ func (s *Store) AdmitSubmission(ctx context.Context, admission contextfabric.Sub
 	}
 	if admission.ThreadRetention != nil && !admission.ThreadRetention.Valid() {
 		return contextfabric.SubmissionRecord{}, false, errors.New("memoryinvestigation: thread retention is outside the closed set")
+	}
+	if admission.Lease != nil && (!admission.Lease.Valid() || !admission.Lease.ExpiresAt.After(now)) {
+		return contextfabric.SubmissionRecord{}, false, errors.New("memoryinvestigation: run lease holder, request id and a future lease expiry are required")
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -213,6 +218,10 @@ func (s *Store) AdmitSubmission(ctx context.Context, admission contextfabric.Sub
 	record := contextfabric.SubmissionRecord{
 		Key: admission.Key, RequestDigest: admission.RequestDigest, ReservedResultID: admission.ReservedResultID, ThreadID: admission.ThreadID,
 		State: contextfabric.SubmissionRunning, AdmittedAt: now.UTC(), UpdatedAt: now.UTC(), ExpiresAt: admission.ExpiresAt.UTC(),
+	}
+	// CHAOS-11949: the run lease a new record is admitted under.
+	if admission.Lease != nil {
+		record.LeaseHolder, record.LeaseExpiresAt, record.RunRequestID = admission.Lease.Holder, admission.Lease.ExpiresAt.UTC(), admission.Lease.RequestID
 	}
 	if admission.ThreadID != "" {
 		record.Question = admission.Question
