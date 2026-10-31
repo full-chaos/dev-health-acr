@@ -481,3 +481,25 @@ func TestLoadProjector_unsetPostgresStartupRetryUsesDefaults(t *testing.T) {
 		}
 	}
 }
+
+// CHAOS-12226: work-item project membership is off unless turned on; turning
+// it on is the backfill roll step.
+func TestWorkItemProjectMembershipDefaultsToOff(t *testing.T) {
+	t.Parallel()
+	cfg, err := loadProjector(mapLookup(map[string]string{"ACR_LOCAL_COMPOSITION_READY": "true"}), requiredStoresAll)
+	if err != nil {
+		t.Fatalf("loadProjector: %v", err)
+	}
+	if cfg.WorkItemProjectMembership {
+		t.Fatal("ACR_CONTEXT_FABRIC_PROJECT_WORK_ITEM_PROJECT_MEMBERSHIP_ENABLED must default to false: turning it on backfills")
+	}
+	on, err := loadProjector(mapLookup(map[string]string{
+		envContextFabricWorkItemMembership: "true", "ACR_LOCAL_COMPOSITION_READY": "true",
+	}), requiredStoresAll)
+	if err != nil {
+		t.Fatalf("loadProjector: %v", err)
+	}
+	if !on.WorkItemProjectMembership {
+		t.Fatal("ACR_CONTEXT_FABRIC_PROJECT_WORK_ITEM_PROJECT_MEMBERSHIP_ENABLED=true must turn it on")
+	}
+}

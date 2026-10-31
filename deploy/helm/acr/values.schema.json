@@ -147,6 +147,7 @@
             "pollInterval": { "type": "string" },
             "concurrency": { "type": "integer", "minimum": 1 },
             "teamsProjectsEnabled": { "type": "boolean" },
+            "workItemProjectMembershipEnabled": { "type": "boolean" },
             "podAnnotations": { "type": "object", "additionalProperties": true },
             "podLabels": { "type": "object", "additionalProperties": true },
             "nodeSelector": { "type": "object", "additionalProperties": true },

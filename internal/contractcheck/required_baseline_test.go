@@ -78,7 +78,7 @@ func TestRequiredBaselineRejectsNewlyRequiredNestedField(t *testing.T) {
 	runGit(t, dir, "tag", "v1.0.0")
 	commitSchema(t, dir, strings.Replace(strings.Replace(schemaOneRequired, `"required":["x"]`, `"required":["x","z"]`, 1), `"y":{}`, `"y":{},"z":{}`, 1))
 	err := CheckRequiredAgainstTag(RequiredBaselineOptions{Root: dir})
-	if err == nil || !strings.Contains(err.Error(), "/properties/n") || !strings.Contains(err.Error(), `"z"`) {
+	if err == nil || !strings.Contains(err.Error(), `location "/n"`) || !strings.Contains(err.Error(), `"z"`) {
 		t.Fatalf("expected nested failure, got %v", err)
 	}
 }
@@ -114,7 +114,7 @@ func TestRequiredBaselineRejectsAFieldDeclaredOnlyAtAnotherPath(t *testing.T) {
 	runGit(t, dir, "tag", "v1.0.0")
 	commitSchema(t, dir, strings.Replace(strings.Replace(schemaOneRequired, `"required":["x"]`, `"required":["x","b"]`, 1), `"y":{}`, `"y":{},"b":{}`, 1))
 	err := CheckRequiredAgainstTag(RequiredBaselineOptions{Root: dir})
-	if err == nil || !strings.Contains(err.Error(), "/properties/n") || !strings.Contains(err.Error(), `"b"`) {
+	if err == nil || !strings.Contains(err.Error(), `location "/n"`) || !strings.Contains(err.Error(), `"b"`) {
 		t.Fatalf("a field declared only at another path was allowed: %v", err)
 	}
 }
@@ -126,7 +126,7 @@ func TestRequiredBaselineRejectsAFieldDeclaredOnlyInANestedObject(t *testing.T) 
 	runGit(t, dir, "tag", "v1.0.0")
 	commitSchema(t, dir, strings.Replace(strings.Replace(schemaOneRequired, `"required":["a"]`, `"required":["a","x"]`, 1), `"b":{}`, `"b":{},"x":{}`, 1))
 	err := CheckRequiredAgainstTag(RequiredBaselineOptions{Root: dir})
-	if err == nil || !strings.Contains(err.Error(), `"x"`) || !strings.Contains(err.Error(), `at "/"`) {
+	if err == nil || !strings.Contains(err.Error(), `"x"`) || !strings.Contains(err.Error(), `location "/"`) {
 		t.Fatalf("a root field declared only in a nested object at the baseline was allowed: %v", err)
 	}
 }
@@ -139,7 +139,7 @@ func TestRequiredBaselineRejectsAFieldRequiredWhereTheBaselineAcceptedAnything(t
 	runGit(t, dir, "tag", "v1.0.0")
 	commitSchema(t, dir, `{"type":"object","properties":{"box":{"type":"object","required":["id"],"properties":{"id":{}}}}}`)
 	err := CheckRequiredAgainstTag(RequiredBaselineOptions{Root: dir})
-	if err == nil || !strings.Contains(err.Error(), `"id"`) || !strings.Contains(err.Error(), "/properties/box") {
+	if err == nil || !strings.Contains(err.Error(), `"id"`) || !strings.Contains(err.Error(), `location "/box"`) {
 		t.Fatalf("a field required where the baseline accepted anything was allowed: %v", err)
 	}
 }

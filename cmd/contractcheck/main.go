@@ -12,7 +12,7 @@ func main() {
 	root := flag.String("root", ".", "repository root or a path inside it")
 	write := flag.Bool("write", false, "regenerate derived contract artifacts")
 	quiet := flag.Bool("quiet", false, "suppress successful checks")
-	requiredBaseline := flag.Bool("required-baseline", false, "fail when a published schema newly requires a field the previous release tag neither required nor declared in properties at the same path")
+	requiredBaseline := flag.Bool("required-baseline", false, "fail when a published schema requires a field at an instance location where the previous release tag neither required nor declared it")
 	flag.Parse()
 
 	if *requiredBaseline {
