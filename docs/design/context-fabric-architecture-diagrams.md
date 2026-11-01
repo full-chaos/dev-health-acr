@@ -466,6 +466,9 @@ flowchart TB
   PROJ["Project<br/>projects"]
   TEAM["Team<br/>teams"]
   DEP["Deployment<br/>deployments"]
+  CIRUN["CI run<br/>ci_pipeline_runs"]
+  INC["Incident<br/>operational_incidents"]
+  PRREV["Pull request review<br/>git_pull_request_reviews"]
   PRW["pull-request work item<br/>work_item, type pr or merge_request<br/>(not in the tree)"]
 
   PR ==>|"BELONGS_TO_REPOSITORY<br/>git_pull_requests.repo_id<br/>queryPullRequests"| REPO
@@ -474,6 +477,10 @@ flowchart TB
   REPO -.->|"OWNED_BY_TEAM<br/>team_repo_ownership<br/>queryRepositoryTeams"| TEAM
   PROJ -.->|"OWNED_BY_TEAM<br/>team_project_ownership<br/>queryProjectTeams"| TEAM
   DEP -.->|"BELONGS_TO_REPOSITORY<br/>deployments.repo_id<br/>queryDeployments"| REPO
+  CIRUN -.->|"BELONGS_TO_REPOSITORY<br/>ci_pipeline_runs.repo_id<br/>queryCIRuns"| REPO
+  INC -.->|"BELONGS_TO_REPOSITORY, one per mapped repository<br/>the active service repository mappings<br/>queryIncidents"| REPO
+  DEP -.->|"CORRELATED_WITH_INCIDENT, relevance only<br/>work_graph_deployment_incident_edges"| INC
+  PRREV -.->|"BELONGS_TO_PULL_REQUEST<br/>git_pull_request_reviews<br/>queryPullRequestReviews"| PR
   REPO x-.-|"NOT tree: BELONGS_TO_REPOSITORY<br/>of the issue's own repo_id"| ISSUE
   ISSUE -.-x|"NOT ownership: OWNED_BY_TEAM<br/>work_item_team_attributions (attribution)"| TEAM
   PRW -.-x|"NOT a link: RELATES_TO<br/>work_item_dependencies<br/>(issue-to-issue relations only)"| ISSUE
@@ -482,7 +489,7 @@ flowchart TB
   classDef leaf fill:#1e3a5f,stroke:#60a5fa,color:#ffffff
   classDef aside fill:#3f3f46,stroke:#a1a1aa,color:#ffffff
   class REPO,PR,ISSUE,PROJ tree
-  class TEAM,DEP leaf
+  class TEAM,DEP,CIRUN,INC,PRREV leaf
   class PRW aside
 ```
 
@@ -746,6 +753,15 @@ the cohort candidates). Under `scope.team_ids`:
 - a pull request is in scope when its repository (`BELONGS_TO_REPOSITORY`) is;
 - a work item is in scope by (i) an actual `LINKS_PULL_REQUEST` row of an
   admitted tier to a pull request of such a repository, or (ii) its own project;
+- a pull request review is in scope when its pull request
+  (`BELONGS_TO_PULL_REQUEST`) is;
+- a CI run or a deployment is in scope when its repository
+  (`BELONGS_TO_REPOSITORY`) is owned so;
+- an incident is in scope when a repository it belongs to is owned so (one
+  `BELONGS_TO_REPOSITORY` edge for each repository its service maps to). Never
+  through `CORRELATED_WITH_INCIDENT`: that is relevance, not ownership. An
+  incident with no repository edge has missing ownership: it is undecided, not
+  out of scope (CHAOS-12345);
 - the caller's organization node and the committed subjects stay (the subject is
   what the question names); every other kind has no ownership path to a team
   and is out of scope.
@@ -765,8 +781,7 @@ the outside-the-set count (a missing ownership makes it a lower bound, never a
 floor), and the pool cut, whose total is stated only when every committed anchor
 is currently owned by a requested team. Each such read logs one
 `contextfabric.team_narrowing_general_read` line (requested teams, subjects
-decided, subjects excluded, and the floor value; log-only). Kinds that hang off
-an owned entity (reviews, CI runs, deployments) are CHAOS-12345.
+decided, subjects excluded, and the floor value; log-only).
 
 **A cut read that is not a cohort read says so (CHAOS-12348).** A read that is
 not a cohort read is served as paths, so it has no cohort to carry the floor
