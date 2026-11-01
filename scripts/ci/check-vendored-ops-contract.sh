@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Usage: check-vendored-ops-contract.sh <ops-contract-root>
+# Usage: check-vendored-ops-contract.sh <ops-contract-root> [vendored-dir]
 #
 # <ops-contract-root> is a checkout of the ops commit ci/ops-contract.pin
 # names. The vendored copy of the ops-owned acr credential lifecycle event
@@ -10,7 +10,7 @@ set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 ops_root="${1:?usage: check-vendored-ops-contract.sh <ops-contract-root>}"
-vendored="$repo_root/contracts/auth/v1/ops-vendored"
+vendored="${2:-$repo_root/contracts/auth/v1/ops-vendored}"
 ops_base="$ops_root/contracts/auth/v1"
 
 schema_rel=jsonschema/acr-credential-lifecycle-event.v1.schema.json

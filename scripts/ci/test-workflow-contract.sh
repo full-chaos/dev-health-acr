@@ -618,12 +618,36 @@ check_ops_contract_sparse_list_carries_referenced_schemas() {
   done
 }
 
+# workflow_step_block prints the lines of the one step named $3 in job $2 of
+# workflow $1 (the step's "- name:" line and everything up to the next step).
+workflow_step_block() {
+  awk -v job="$2" -v name="      - name: $3" '
+    /^  [A-Za-z0-9_-]+:[[:space:]]*$/ { current = $1; sub(/:$/, "", current); grab = 0; next }
+    /^      - / { grab = (current == job && $0 == name) }
+    grab { print }
+  ' "$1"
+}
+
+# check_named_step requires the step $3 in job $2 to be one step whose only
+# content, after its name line, is a run line equal to $4: nothing can append a
+# status swallower, a condition, a wrapper or a continue-on-error to it, and a
+# second step of the same name adds its own lines to the body and fails.
+check_named_step() {
+  local file="$1" job="$2" name="$3" run="$4" block body
+  block="$(workflow_step_block "$file" "$job" "$name")"
+  body="$(grep -vE '^[[:space:]]*(#.*)?$' <<<"$block" | tail -n +2)"
+  if [ "$body" != "        run: $run" ]; then
+    printf 'step "%s" in job %s must be one step whose only line after its name is "run: %s" (found: %s)\n' "$name" "$job" "$run" "$body" >&2
+    return 1
+  fi
+}
+
 # The vendored copy of the ops-owned acr credential lifecycle event contract
 # is only a pin check if the sparse list delivers the pinned files and a step
 # diffs them against the vendored tree; a deleted step or path leaves the copy
 # unchecked with every job green.
 check_vendored_lifecycle_contract_wiring() {
-  local file="$1" block step
+  local file="$1" block
   block="$(awk '
     /path: \.ops-contract/ { grab=1 }
     grab && /sparse-checkout: \|/ { inlist=1; next }
@@ -637,23 +661,8 @@ check_vendored_lifecycle_contract_wiring() {
       return 1
     fi
   done
-  step="$(awk '
-    /Verify the vendored lifecycle contract against the pinned ops contract/ { grab=1 }
-    grab && /^      - / && !/Verify the vendored lifecycle contract/ { grab=0 }
-    grab { print }
-  ' "$file")"
-  if ! grep -qF 'scripts/ci/check-vendored-ops-contract.sh' <<<"$step" || ! grep -qF '.ops-contract' <<<"$step"; then
-    printf 'no step runs check-vendored-ops-contract.sh against .ops-contract in %s\n' "$file" >&2
-    return 1
-  fi
-  if grep -qE 'continue-on-error|\|\| true' <<<"$step"; then
-    printf 'the vendored lifecycle contract step swallows its own failure\n' >&2
-    return 1
-  fi
-  if ! grep -qF 'scripts/ci/test-vendored-ops-contract.sh' "$file"; then
-    printf 'no step runs test-vendored-ops-contract.sh in %s\n' "$file" >&2
-    return 1
-  fi
+  check_named_step "$file" contracts 'Verify the vendored lifecycle contract against the pinned ops contract' 'scripts/ci/check-vendored-ops-contract.sh .ops-contract' || return 1
+  check_named_step "$file" scripts 'Verify the vendored ops contract check' 'scripts/ci/test-vendored-ops-contract.sh' || return 1
 }
 
 # A pin that accepts a branch name is not a pin: the sparse checkout would
@@ -3252,6 +3261,57 @@ vendored_test_removed="$tmpdir/vendored-test-removed.yml"
 grep -vF 'scripts/ci/test-vendored-ops-contract.sh' "$workflow" > "$vendored_test_removed"
 assert_check_fails 'dropped the vendored contract check test from the scripts job' \
   check_vendored_lifecycle_contract_wiring "$vendored_test_removed"
+
+# (n4) each named step is validated by its name, job and exact command: no
+# suffix that swallows its exit status, no condition, no wrapper, no extra key.
+cmp_name='Verify the vendored lifecycle contract against the pinned ops contract'
+cmp_run='        run: scripts/ci/check-vendored-ops-contract.sh .ops-contract'
+neg_name='Verify the vendored ops contract check'
+neg_run='        run: scripts/ci/test-vendored-ops-contract.sh'
+mutate_line() { # in out exact-line replacement
+  awk -v want="$3" -v repl="$4" '$0 == want { print repl; next } { print }' "$1" > "$2"
+}
+after_name_line() { # in out step-name inserted-line
+  awk -v name="      - name: $3" -v add="$4" '{ print } $0 == name { print add }' "$1" > "$2"
+}
+vm="$tmpdir/vm-compare-true.yml"; mutate_line "$workflow" "$vm" "$cmp_run" "$cmp_run || true"
+assert_check_fails 'comparison step swallows its status with || true' check_vendored_lifecycle_contract_wiring "$vm"
+vm="$tmpdir/vm-compare-colon.yml"; mutate_line "$workflow" "$vm" "$cmp_run" "$cmp_run || :"
+assert_check_fails 'comparison step swallows its status with || :' check_vendored_lifecycle_contract_wiring "$vm"
+vm="$tmpdir/vm-compare-exit0.yml"; mutate_line "$workflow" "$vm" "$cmp_run" "$cmp_run; exit 0"
+assert_check_fails 'comparison step ends with ; exit 0' check_vendored_lifecycle_contract_wiring "$vm"
+vm="$tmpdir/vm-compare-if.yml"; after_name_line "$workflow" "$vm" "$cmp_name" '        if: false'
+assert_check_fails 'comparison step is disabled by if: false' check_vendored_lifecycle_contract_wiring "$vm"
+vm="$tmpdir/vm-test-colon.yml"; mutate_line "$workflow" "$vm" "$neg_run" "$neg_run || :"
+assert_check_fails 'negative-control step swallows its status with || :' check_vendored_lifecycle_contract_wiring "$vm"
+vm="$tmpdir/vm-test-echo.yml"; mutate_line "$workflow" "$vm" "$neg_run" '        run: echo scripts/ci/test-vendored-ops-contract.sh'
+assert_check_fails 'negative-control step only echoes its script name' check_vendored_lifecycle_contract_wiring "$vm"
+vm="$tmpdir/vm-test-coe.yml"; after_name_line "$workflow" "$vm" "$neg_name" '        continue-on-error: true'
+assert_check_fails 'negative-control step has continue-on-error' check_vendored_lifecycle_contract_wiring "$vm"
+vm="$tmpdir/vm-compare-wrong-job.yml"
+awk -v name="      - name: $cmp_name" -v run="$cmp_run" '
+  $0 == name { skip = 2 } skip > 0 { skip--; next } { print }
+  /^  container-contract-smoke:/ && !done { }
+' "$workflow" > "$vm"
+awk -v name="      - name: $cmp_name" -v run="$cmp_run" '
+  /^  container-contract-smoke:/ && !done { print "  scratch-job-for-the-control:"; print "    steps:"; print name; print run; done=1 } { print }
+' "$vm" > "$vm.2"
+assert_check_fails 'comparison step moved to another job' check_vendored_lifecycle_contract_wiring "$vm.2"
+
+vm="$tmpdir/vm-compare-args.yml"; mutate_line "$workflow" "$vm" "$cmp_run" "$cmp_run --extra-argument"
+assert_check_fails 'comparison step run line only starts with the script call (extra argument)' check_vendored_lifecycle_contract_wiring "$vm"
+vm="$tmpdir/vm-test-args.yml"; mutate_line "$workflow" "$vm" "$neg_run" "$neg_run --extra-argument"
+assert_check_fails 'negative-control step run line only starts with the script call (extra argument)' check_vendored_lifecycle_contract_wiring "$vm"
+vm="$tmpdir/vm-test-exit0.yml"; mutate_line "$workflow" "$vm" "$neg_run" "$neg_run; exit 0"
+assert_check_fails 'negative-control step ends with ; exit 0' check_vendored_lifecycle_contract_wiring "$vm"
+vm="$tmpdir/vm-compare-and.yml"; mutate_line "$workflow" "$vm" "$cmp_run" "$cmp_run && echo done"
+assert_check_fails 'comparison step run line only starts with the script call (&& suffix)' check_vendored_lifecycle_contract_wiring "$vm"
+vm="$tmpdir/vm-compare-duplicate.yml"
+awk -v name="      - name: $cmp_name" -v run="$cmp_run" '{ print } $0 == run { print name; print "        run: echo second step with the same name" }' "$workflow" > "$vm"
+assert_check_fails 'a second step carries the comparison step name' check_vendored_lifecycle_contract_wiring "$vm"
+vm="$tmpdir/vm-test-duplicate.yml"
+awk -v name="      - name: $neg_name" -v run="$neg_run" '{ print } $0 == run { print name; print "        run: echo second step with the same name" }' "$workflow" > "$vm"
+assert_check_fails 'a second step carries the negative-control step name' check_vendored_lifecycle_contract_wiring "$vm"
 
 # (o) remove the pin's full-SHA requirement, restoring the floating-ref hole.
 pin_regex_removed="$tmpdir/pin-regex-removed.yml"
