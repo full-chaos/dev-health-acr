@@ -955,18 +955,7 @@ func ValidContextFabricRelationshipType(value ContextFabricRelationshipType) boo
 // closed ContextFabricRelationshipType vocabulary members. See that type's
 // doc comment (CHAOS-3779, closing drift item D9 / the H4 lesson).
 func validContextFabricRelationshipType(value ContextFabricRelationshipType) bool {
-	switch value {
-	case ContextFabricRelationshipBelongsToRepository, ContextFabricRelationshipBelongsToPullRequest,
-		ContextFabricRelationshipCorrelatedWithIncident, ContextFabricRelationshipRelatedTo,
-		ContextFabricRelationshipDocumentedBy, ContextFabricRelationshipHasEpisode,
-		ContextFabricRelationshipBlocks, ContextFabricRelationshipPartOf,
-		ContextFabricRelationshipRelatesTo, ContextFabricRelationshipDuplicates,
-		ContextFabricRelationshipBelongsToProject, ContextFabricRelationshipOwnedByTeam,
-		ContextFabricRelationshipLinksPullRequest:
-		return true
-	default:
-		return false
-	}
+	return slices.Contains(contextFabricRelationshipTypes[:], value)
 }
 
 func validEpistemicStatus(value ContextFabricEpistemicStatus) bool {

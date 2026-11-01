@@ -167,6 +167,11 @@ func composeVocabularyLabels(result InvestigationResult) map[string]string {
 		words.add(contractsv1.ContextFabricVocabularyDriverSourceState, string(driver.SourceState))
 		words.noteWhen(driver.SummaryCorrected, contractsv1.ContextFabricAnswerNoteSummaryCorrected)
 	}
+	for _, path := range result.Paths {
+		for _, edge := range path.Edges {
+			words.add(contractsv1.ContextFabricVocabularyRelationshipType, string(edge.Type))
+		}
+	}
 	for _, findings := range [][]contractsv1.ContextFabricFinding{result.RemainingWork, result.ReadinessGaps, result.Conflicts} {
 		for _, finding := range findings {
 			words.add(contractsv1.ContextFabricVocabularyFactKind, finding.Kind)

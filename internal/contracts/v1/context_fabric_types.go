@@ -369,6 +369,31 @@ const (
 	ContextFabricRelationshipLinksPullRequest ContextFabricRelationshipType = "LINKS_PULL_REQUEST"
 )
 
+// contextFabricRelationshipTypes is the one list of the closed vocabulary. The
+// validator reads it. The display words are a table of their own, and
+// TestTheListTheTableAndTheSchemaNameOneSet holds that table and the published
+// schema to this list, so a member cannot be accepted and go unworded.
+var contextFabricRelationshipTypes = [...]ContextFabricRelationshipType{
+	ContextFabricRelationshipBelongsToRepository,
+	ContextFabricRelationshipBelongsToPullRequest,
+	ContextFabricRelationshipCorrelatedWithIncident,
+	ContextFabricRelationshipRelatedTo,
+	ContextFabricRelationshipDocumentedBy,
+	ContextFabricRelationshipHasEpisode,
+	ContextFabricRelationshipBlocks,
+	ContextFabricRelationshipPartOf,
+	ContextFabricRelationshipRelatesTo,
+	ContextFabricRelationshipDuplicates,
+	ContextFabricRelationshipBelongsToProject,
+	ContextFabricRelationshipOwnedByTeam,
+	ContextFabricRelationshipLinksPullRequest,
+}
+
+// ContextFabricRelationshipTypeVocabulary returns the closed vocabulary.
+func ContextFabricRelationshipTypeVocabulary() [len(contextFabricRelationshipTypes)]ContextFabricRelationshipType {
+	return contextFabricRelationshipTypes
+}
+
 type ContextFabricSourceState string
 
 const (

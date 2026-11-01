@@ -283,6 +283,7 @@ declares and what the table labels are one set.
 | `fact_field` | `claimed_facts[].field`, the keys of `rows[].fields` and of `time_series_rows[].fields` (one row per declared name, with its unit) |
 | `driver_source_state` | `drivers[].source_state` (the registry's word, as on a coverage row) |
 | `cohort_score_meaning` | `cohort.score_meaning` (what the score measures) |
+| `relationship_type` | `paths[].edges[].type` (reads between the edge's two ends; an edge says two things are linked, never that one caused the other) |
 | `window_relative_id`, `window_provenance` | `effective_evidence_window.relative_id`, `.provenance` |
 
 **Notes.** A field a reader sees as one line has one word for this result, under
@@ -360,7 +361,7 @@ change, and no string is parsed.
 **Bound.** Each label is 1 to 160 characters, a key at most 128, and the map at
 most 8,192 entries, the bound of `evidence_ref_labels`. That is not the working
 limit. The map holds only the values in one result, so the whole registry is its
-ceiling: 125 entries and 5,999 bytes, 9.2% of the 65,536-byte answer budget, plus
+ceiling: 138 entries and 6,698 bytes, 10.2% of the 65,536-byte answer budget, plus
 the notes. The fact field table has one row per declared name, so it stands
 apart: 357 entries and 20,924 bytes, 31.9% of the budget, which no answer carries.
 One result holds only its own fields: a claim adds its field and the columns of
