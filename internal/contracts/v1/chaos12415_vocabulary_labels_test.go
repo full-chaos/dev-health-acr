@@ -2,6 +2,7 @@ package v1
 
 import (
 	"encoding/json"
+	"maps"
 	"os"
 	"regexp"
 	"slices"
@@ -143,6 +144,10 @@ func vocabularySources(t *testing.T) map[ContextFabricVocabulary][][]string {
 		ContextFabricVocabularyFactKind: {
 			closedVocabularyStrings(facts[:]), schema("Finding", "kind"), schema("ClaimedFact", "kind"),
 		},
+		// The values are declarations this package cannot import, so the table
+		// is its own source here. The proof over the real declarations, both
+		// ways, is devhealthfacts/chaos12418_fact_field_labels_test.go.
+		ContextFabricVocabularyFactField:        {slices.Sorted(maps.Keys(ContextFabricFactFieldLabels()))},
 		ContextFabricVocabularyWindowRelativeID: {closedVocabularyStrings(windows[:]), schema("EffectiveEvidenceWindow", "relative_id")},
 		ContextFabricVocabularyWindowProvenance: {schema("EffectiveEvidenceWindow", "provenance")},
 	}
@@ -303,6 +308,10 @@ func TestTheWholeRegistryFitsInASmallShareOfTheAnswerBudget(t *testing.T) {
 	const budget = 65536
 	all := map[string]string{}
 	for _, name := range ContextFabricVocabularyNames() {
+		// The fact field table has its own bound below.
+		if name == ContextFabricVocabularyFactField {
+			continue
+		}
 		for _, entry := range contextFabricVocabularyEntries(name) {
 			all[ContextFabricVocabularyLabelKey(name, entry.value)] = entry.label
 		}
@@ -421,5 +430,48 @@ func TestAnAbsentMapIsNotOnTheWire(t *testing.T) {
 	}
 	if strings.Contains(string(encoded), "vocabulary_labels") {
 		t.Fatal("an answer with no map still carries the key: every old pin would refuse it")
+	}
+}
+
+// The fact field table has a row per declared name, so it is the one table that
+// is a large share of the budget. No answer carries it: one result holds only its
+// own fields, and the bound that matters is per kind, in devhealthfacts. This
+// bound keeps the table's growth in view (CHAOS-12418).
+func TestTheFactFieldTableStaysUnderHalfOfTheAnswerBudget(t *testing.T) {
+	const budget = 65536
+	all := map[string]string{}
+	for _, entry := range contextFabricVocabularyEntries(ContextFabricVocabularyFactField) {
+		all[ContextFabricVocabularyLabelKey(ContextFabricVocabularyFactField, entry.value)] = entry.label
+	}
+	if len(all) == 0 {
+		t.Fatal("the table is empty: this measured nothing")
+	}
+	encoded, err := json.Marshal(all)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(encoded) > budget/2 {
+		t.Errorf("the fact field table is %d bytes (%d entries), over half of the %d-byte answer budget", len(encoded), len(all), budget)
+	}
+	t.Logf("fact field table: %d entries, %d bytes, %.1f%% of %d", len(all), len(encoded), float64(len(encoded))*100/budget, budget)
+}
+
+// One value keeps one word in prose and on a screen: a field the prose names by
+// hand reads that noun in its label, followed by no more than its unit.
+func TestAFieldLabelAgreesWithItsProseNoun(t *testing.T) {
+	checked := 0
+	for field := range contextFabricFactFieldNounOverrides {
+		label, ok := contextFabricFactFieldLabels[field]
+		if !ok {
+			continue
+		}
+		checked++
+		noun := ContextFabricFactFieldNoun(field)
+		if trimmed := strings.TrimSuffix(strings.ToLower(label), " (ratio)"); trimmed != noun {
+			t.Errorf("field %q reads %q in prose and %q in its label", field, noun, label)
+		}
+	}
+	if checked == 0 {
+		t.Fatal("no field has both a noun and a label: this measured nothing")
 	}
 }
