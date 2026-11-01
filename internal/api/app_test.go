@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -31,8 +32,8 @@ func (evidenceRows) EvidenceRows(context.Context, contextpacket.ReadPlan) ([]con
 	return nil, nil, nil, nil
 }
 
-func testLogger(buffer *bytes.Buffer) *slog.Logger {
-	return slog.New(slog.NewJSONHandler(buffer, &slog.HandlerOptions{Level: slog.LevelDebug}))
+func testLogger(sink io.Writer) *slog.Logger {
+	return slog.New(slog.NewJSONHandler(sink, &slog.HandlerOptions{Level: slog.LevelDebug}))
 }
 
 func testApp(t *testing.T, checks ...ReadinessCheck) *App {

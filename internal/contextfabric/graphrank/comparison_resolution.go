@@ -224,6 +224,9 @@ func publishComparisonResolution(run comparisonResolutionRun, budget int) (conte
 		Committed:  []contextfabric.SubjectRef{},
 
 		OutsideRequestedRepositories: len(run.outsideRequested),
+		// CHAOS-12451: on a hold too. An operand that saw less than it should
+		// is a statement about the answer, whichever form the answer takes.
+		RetrievalDegraded: run.retrievalDegraded(),
 	}
 	bases := contextfabric.CommitBasisSet{}
 	digests := contextfabric.CommitDecisionDigestSet{}
@@ -772,6 +775,9 @@ func resolveOneOperandSlot(
 	}
 	searchTruncated := retrieval.searchTruncated
 	retrievalDegraded := retrieval.retrievalDegraded
+	// CHAOS-12451: as in the single-subject path, a failed observation traversal
+	// reaches the answer and never this slot's gate.
+	traversalDegraded := retrieval.traversalDegraded
 
 	// EVERY PER-TERM ARM THE SINGLE-SUBJECT PATH RUNS, in its order, over THIS
 	// SLOT'S OWN TERMS: ordinary search above, then the keyed alias claimants,
@@ -791,7 +797,7 @@ func resolveOneOperandSlot(
 	// The slot's own stated kind is its only hint: a caller-supplied expected
 	// kind names the question's kinds, not which operand each belongs to.
 	if isAliasLookupScopedKind(slot.Kind) {
-		_, _, hintedTruncated, hintedDegraded, hintedErr := applyKindHintedPoolSearch(ctx, principal, request, deps, slot.Terms,
+		hintedTraversalDegraded, _, hintedTruncated, hintedDegraded, hintedErr := applyKindHintedPoolSearch(ctx, principal, request, deps, slot.Terms,
 			candidatesBySubject, observationParentKey, observationBlocked, identity, identityTerms,
 			[]contextfabric.SubjectKind{slot.Kind}, contest, nil)
 		if hintedErr != nil {
@@ -799,12 +805,14 @@ func resolveOneOperandSlot(
 		}
 		searchTruncated = searchTruncated || hintedTruncated
 		retrievalDegraded = retrievalDegraded || hintedDegraded
+		traversalDegraded += hintedTraversalDegraded
 	}
-	_, _, exactNameTruncated, exactNameErr := applyExactNameArm(ctx, principal, request, deps, slot.Terms,
+	exactNameTraversalDegraded, _, exactNameTruncated, exactNameErr := applyExactNameArm(ctx, principal, request, deps, slot.Terms,
 		candidatesBySubject, observationParentKey, observationBlocked, identity, identityTerms, contest)
 	if exactNameErr != nil {
 		return operandSlotRun{}, exactNameErr
 	}
+	traversalDegraded += exactNameTraversalDegraded
 	searchTruncated = searchTruncated || exactNameTruncated
 
 	gate := deps.CommitGatePolicy
@@ -851,7 +859,7 @@ func resolveOneOperandSlot(
 		bases:             bases,
 		digests:           digests,
 		receiptBound:      len(preCommitted) > 0,
-		retrievalDegraded: retrievalDegraded,
+		retrievalDegraded: retrievalDegraded || traversalDegraded > 0,
 		// Recorded from the value HANDED TO the resolver, not re-derived, so
 		// the line reports the bound that ran rather than a second opinion
 		// about what it should have been.

@@ -90,7 +90,7 @@ type phrasingRouteRig struct {
 	model    *clientRouteModel
 	phrasing *countingPhrasingRuntime
 	byo      *countingPhrasingRuntime
-	logs     *bytes.Buffer
+	logs     *lockedBuffer
 }
 
 // newPhrasingRouteRig composes the real API over the real engine with the
@@ -102,7 +102,7 @@ func newPhrasingRouteRig(t *testing.T, grants *serviceModelGrants, hasBYO bool) 
 
 func newPhrasingRouteRigWith(t *testing.T, grants *serviceModelGrants, hasBYO, absentDeployment bool) *phrasingRouteRig {
 	t.Helper()
-	logs := &bytes.Buffer{}
+	logs := &lockedBuffer{}
 	logger := slog.New(slog.NewJSONHandler(logs, &slog.HandlerOptions{Level: slog.LevelDebug}))
 	rig := &phrasingRouteRig{model: &clientRouteModel{}, phrasing: &countingPhrasingRuntime{}, byo: &countingPhrasingRuntime{}, logs: logs}
 	supplied, err := genkitruntime.NewSuppliedInterpreter(genkitruntime.SuppliedInterpreterConfig{Logger: logger})
@@ -198,7 +198,7 @@ func (r *phrasingRouteRig) postRaw(t *testing.T) *httptest.ResponseRecorder {
 	return recorder
 }
 
-func phrasingOutcomes(logs *bytes.Buffer) []string {
+func phrasingOutcomes(logs *lockedBuffer) []string {
 	var outcomes []string
 	for _, line := range strings.Split(strings.TrimSpace(logs.String()), "\n") {
 		var entry struct {
@@ -254,7 +254,7 @@ func newWindowGatePhrasingRig(t *testing.T, grants *serviceModelGrants, hasBYO b
 
 func newWindowGatePhrasingRigWith(t *testing.T, grants *serviceModelGrants, hasBYO, absentDeployment bool) *phrasingRouteRig {
 	t.Helper()
-	logs := &bytes.Buffer{}
+	logs := &lockedBuffer{}
 	logger := slog.New(slog.NewJSONHandler(logs, &slog.HandlerOptions{Level: slog.LevelDebug}))
 	rig := &phrasingRouteRig{model: &clientRouteModel{}, phrasing: &countingPhrasingRuntime{}, byo: &countingPhrasingRuntime{}, logs: logs}
 	project := contextfabric.SubjectProject

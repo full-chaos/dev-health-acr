@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -96,7 +97,7 @@ func decodeServiceModelRefusal(t *testing.T, recorder *httptest.ResponseRecorder
 	return body
 }
 
-func serviceModelDecisionBasis(t *testing.T, logs *bytes.Buffer) []string {
+func serviceModelDecisionBasis(t *testing.T, logs fmt.Stringer) []string {
 	t.Helper()
 	var bases []string
 	for _, line := range strings.Split(strings.TrimSpace(logs.String()), "\n") {

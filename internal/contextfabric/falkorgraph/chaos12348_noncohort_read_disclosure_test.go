@@ -20,9 +20,12 @@ import (
 //   - graph_team_narrowing_undecided_paths: under scope.team_ids a path edge was
 //     dropped because an endpoint's ownership was absent, not current, or cut.
 //
-// A cohort read keeps its population floor and gains neither. "Non-cohort" is
-// the reader's own test: the frame gives no servable member kind
-// (CohortMemberKindForFrame), the test DiscoveredCohort gates a cohort on.
+// A cohort read keeps its population floor and gains neither, for a spent budget
+// and for ownership cut, which is what these tests pin. A node read cut at its
+// limit is the one case a cohort read files the first row: see
+// chaos12451_node_edges_bound_live_test.go. "Non-cohort" is the reader's own
+// test: the frame gives no servable member kind (CohortMemberKindForFrame), the
+// test DiscoveredCohort gates a cohort on.
 
 const (
 	hopWalkTruncatedCode    = "graph_hop_walk_truncated"

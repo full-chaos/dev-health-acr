@@ -285,6 +285,93 @@ Two things preserve rigor on the markdown path, where the full JSON document is 
 An optional pinned local model (Ollama/llama.cpp, temperature 0) may run in a separate
 non-blocking profile using rubric checks. It never gates.
 
+### 6.2 Service mode: answering the engine's own model calls (CHAOS-12461)
+
+The engine makes its own model calls (interpretation, synthesis, offer phrasing). They offer no
+tools, so the OpenCode script never answers them. A plan with a `service` section makes the
+oracle answer them from a per-question plan, so a live run needs no call to a real model.
+A plan without a `service` section behaves exactly as before; a call that offers tools is
+always answered by the OpenCode script, service section or not.
+
+**Spend hazard, read first.** `ACR_CONTEXT_FABRIC_MODEL_BASE_URL` alone does not keep a question
+off a real model. The per-organization source (`ACR_CONTEXT_FABRIC_ORG_LLM_CONFIG_SOURCE`,
+default `ops`) answers first, and an organization that saved its own model configuration is sent
+to that organization's provider, base URL and credential. Set both of these on `acr-api` before
+anything else:
+
+```text
+ACR_CONTEXT_FABRIC_ORG_LLM_CONFIG_SOURCE=off
+ACR_MCP_SERVICE_MODEL_DEFAULT=on
+```
+
+`off` needs `ACR_MCP_SERVICE_MODEL_DEFAULT=on` (acr-api refuses to start otherwise), and
+`ACR_MCP_SERVICE_MODEL_DEFAULT=on` is refused when `ACR_ENVIRONMENT=production`. The control is
+`internal/runtime/hosted/oracle_spend_guard_test.go`: with both settings an organization that has
+its own model configuration resolves to the oracle and its configuration is never read; without
+them it resolves to its own base URL and credential (that case is the red control).
+
+Then point `acr-api` at the oracle. No other variable or flag is added:
+
+```text
+ACR_CONTEXT_FABRIC_MODEL_PROVIDER=oracle
+ACR_CONTEXT_FABRIC_MODEL=context-fabric-oracle
+ACR_CONTEXT_FABRIC_MODEL_BASE_URL=http://<oracle-host>:<port>/v1/
+ACR_CONTEXT_FABRIC_MODEL_ALLOW_INSECURE_BASE_URL=true
+ACR_CONTEXT_FABRIC_MODEL_API_KEY=dummy-not-a-key     # any text; the oracle ignores it
+```
+
+Run the oracle with `go run ./tests/fullstack/modeloracle --plan <plan.json> --log-dir <dir>
+--host <address> --port <port>`. `--host` defaults to `127.0.0.1`; a pod reaches it only if
+`--host` is an address the pod can route to (`0.0.0.0` binds all interfaces). There is no
+container image for it.
+
+Plan format (`testdata/service-plan.v1.json` is a complete example that the tests run):
+
+```json
+"service": {"questions": [{
+  "question": "What is the status of full-chaos/dev-health-web?",
+  "delay_ms": {"interpret": 0, "synthesize": 0, "phrase": 0},
+  "interpretation": { "shape": "single_subject", "requested_judgment": "status", "...": "..." },
+  "synthesis": {"status": "complete", "direct_judgment": "...", "current_state": "...",
+                "strongest_pressures": [], "limitations": ["..."],
+                "driver": {"title": "...", "summary": "...", "category": "narrative"},
+                "deterministic_answer": "...", "min_evidence_refs": 1},
+  "offer_phrasing": [{"label": "<exact option label>", "phrasing": "..."}]
+}]}
+```
+
+* **Key.** The exact question text, read from the `question` field of the request's user message.
+  There is no normalisation and no default: a question with no entry gets a
+  `fullstack_model_service_failure.v1` envelope (operation, question, reason) in place of a reply.
+  The engine sees an invalid output; the oracle records the call as `failed`.
+* **Operation.** The engine puts the output schema of each operation in the system message. The
+  oracle reads that schema's property names: `fact_requirements` is interpretation,
+  `deterministic_answer` is synthesis, `phrasings` is offer phrasing. Exactly one must match.
+  No prompt wording is used. A change to an output type that moves a marker fails every call with
+  an envelope, and `TestOperationDiscriminatorMatchesTheEnginesRealSchemas` goes red.
+* **Evidence is never in the plan.** Synthesis cites the evidence refs and the committed subject
+  found in the real request, and restates the first scalar canonical fact as its one claim (without
+  a claim the engine draws a second time). If the request holds fewer refs than `min_evidence_refs`,
+  or no committed subject, the call fails with the envelope.
+* **Offer phrasing is optional.** Its request carries no question, so the one entry whose
+  `offer_phrasing` labels cover every offered label answers it; none, or more than one, is a failure.
+  A plan with no `offer_phrasing` fails every phrasing call loudly, and the engine falls back to
+  its structural labels.
+* **Delay.** `delay_ms` holds each kind of call that long. Delays run side by side (the oracle
+  holds no lock while it waits) and stop quietly when the request is cancelled; such a call is
+  recorded as `cancelled`. Keep each single delay under the 45 s model timeout unless a timeout is
+  the point.
+* **State.** None. The same question gets the same reply from any oracle instance, every time.
+* **Counts.** `GET /service/calls` returns `started`, `in_flight`, `answered`, `failed`,
+  `cancelled`, a `by_question` map of the same counts per operation, and every call in order. The
+  same snapshot is written to `model-observations.json` under `service`.
+* **Bounds are the engine's.** The oracle does not check bounds. A reply that breaks one is served
+  by the engine as a degraded answer, not an error, so assert a `complete` or `partial` status.
+
+The proof is `engine_service_test.go`: the real `modelprovider.New` runtime and the real
+`contextfabric.Engine` over the oracle on loopback. The graph reader and canonical fact reader are
+the only fakes. It needs no Docker.
+
 ## 7. Assertion layers
 
 `tests/fullstack/assertrun` fails the suite unless every layer passes, and every failure

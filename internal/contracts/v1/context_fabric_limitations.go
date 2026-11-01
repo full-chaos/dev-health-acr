@@ -792,8 +792,9 @@ const ContextFabricSubjectTermsFrameOverBoundLimitation = "The supplied interpre
 const ContextFabricInactiveTeamHintLimitation = "The team named in this request is inactive, so no canonical facts were read for it. The server did not search for a team of the same name. When a single readable active team of the same name exists, its id is in subject_resolution.inactive_hints and you can ask again naming that id; otherwise no id is given."
 
 // ContextFabricGraphHopWalkTruncatedLimitation is the sentence of an answer
-// that is not a cohort answer whose graph read spent its edge budget with
-// candidates left (the graph_hop_walk_truncated coverage detail).
+// that carries the graph_hop_walk_truncated coverage detail: an answer that is
+// not a cohort answer whose graph read spent its edge budget, or an answer of
+// either kind whose read of one node stopped at its limit.
 const ContextFabricGraphHopWalkTruncatedLimitation = "The read of this subject's links stopped at its limit, so this answer may leave out links that were not read."
 
 // ContextFabricGraphTeamNarrowingUndecidedPathsLimitation is the sentence of an

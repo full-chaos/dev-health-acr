@@ -3775,7 +3775,11 @@ func resolveSubjects(ctx context.Context, principal storage.Principal, request c
 	// OR'd in HERE, informationally, AFTER the gate already decided using
 	// the un-widened retrievalDegraded -- see its own declaration above for
 	// why it must never reach the gate call itself.
-	resolution.RetrievalDegraded = retrievalDegraded || coverageFloorDegraded
+	// CHAOS-12451 (lead ruling): a failed observation traversal, a cut read or a
+	// backend failure alike, lost a parent the answer may need. As with the
+	// coverage floor, it reaches the answer here and never the gate, which has
+	// already decided: the blocked observation is the gate's own answer to it.
+	resolution.RetrievalDegraded = retrievalDegraded || coverageFloorDegraded || traversalDegraded > 0
 	// CHAOS-12346 (lead ruling (i)/(ii)): under a requested team narrowing, a
 	// first decision that committed nothing and offers a candidate inside the
 	// requested teams is decided again over the pool without the candidates
@@ -3790,7 +3794,7 @@ func resolveSubjects(ctx context.Context, principal storage.Principal, request c
 		resolution, firstPassBases, firstPassDigests = resolveFromMergedCandidatesWithAnchorSlot(candidatesBySubject, observationParentKey, observationBlocked, request.Options.MaxSubjectCandidates, request.Options.AllowClarification, searchTruncated, vectorArmSimilarity, deps.VectorMarginCommitThreshold, retrievalDegraded, effectiveSearchLimit, deps.CalibratedTopK, unscopedVisibility, gate, identity, identityTerms, identityLookup, firstPassTracer, request.RequestID, "", false, false, frameReservedKinds(frame, anchorScope.Kind), anchorReservedSlot{Kind: anchorScope.Kind, Source: anchorScope.Source}, &exactRefusal, kindRescue, pass)
 		commitBases.ResetTo(firstPassBases)
 		commitDigests.ResetTo(firstPassDigests)
-		resolution.RetrievalDegraded = retrievalDegraded || coverageFloorDegraded
+		resolution.RetrievalDegraded = retrievalDegraded || coverageFloorDegraded || traversalDegraded > 0
 	}
 	// CHAOS-4154: confirmed-kind truncation scoping. Reachable ONLY when
 	// this resolution confirmed a kind, the resolution-wide searchTruncated
@@ -3972,7 +3976,7 @@ func resolveSubjects(ctx context.Context, principal storage.Principal, request c
 				// merged with the first pass's.
 				commitBases.ResetTo(scopedBases)
 				commitDigests.ResetTo(scopedDigests)
-				resolution.RetrievalDegraded = retrievalDegraded || coverageFloorDegraded
+				resolution.RetrievalDegraded = retrievalDegraded || coverageFloorDegraded || traversalDegraded > 0
 				scopedDecisionTracer.keep()
 			}
 		}
@@ -4023,7 +4027,7 @@ func resolveSubjects(ctx context.Context, principal storage.Principal, request c
 			}
 			if semantic.ran {
 				kindScopedSemanticCandidates = semantic.candidates
-				resolution.RetrievalDegraded = resolution.RetrievalDegraded || semantic.degraded
+				resolution.RetrievalDegraded = resolution.RetrievalDegraded || semantic.degraded || semantic.traversalDegraded > 0
 				if semantic.traversalDegraded > 0 && deps.TraversalDegraded != nil {
 					deps.TraversalDegraded(ctx, principal.OrgID, semantic.traversalDegraded)
 				}
@@ -4107,7 +4111,7 @@ func resolveSubjects(ctx context.Context, principal storage.Principal, request c
 					resolution, censusBases, censusDigests = resolveFromMergedCandidatesWithAnchorSlot(candidatesBySubject, observationParentKey, observationBlocked, request.Options.MaxSubjectCandidates, request.Options.AllowClarification, searchTruncated, vectorArmSimilarity, deps.VectorMarginCommitThreshold, retrievalDegraded, effectiveSearchLimit, deps.CalibratedTopK, unscopedVisibility, gate, identity, identityTerms, identityLookup, deps.ResolutionTracer, request.RequestID, attestedKey, false, false, nil, anchorReservedSlot{}, &exactRefusal, kindRescue, pass)
 					commitBases.ResetTo(censusBases)
 					commitDigests.ResetTo(censusDigests)
-					resolution.RetrievalDegraded = retrievalDegraded || coverageFloorDegraded
+					resolution.RetrievalDegraded = retrievalDegraded || coverageFloorDegraded || traversalDegraded > 0
 				}
 			}
 		}

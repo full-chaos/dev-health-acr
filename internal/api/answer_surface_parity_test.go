@@ -292,14 +292,14 @@ func newParityHostedAppWithBudget(t *testing.T, investigator contextfabric.Inves
 
 // newParityHostedAppWithLogs is newParityHostedAppWithBudget writing the App's
 // log lines into logs, for a test that reads a line a route emitted.
-func newParityHostedAppWithLogs(t *testing.T, investigator contextfabric.Investigator, results contextfabric.InvestigationResultStore, resources limits.ResourceBudget, logs *bytes.Buffer) (*App, string) {
+func newParityHostedAppWithLogs(t *testing.T, investigator contextfabric.Investigator, results contextfabric.InvestigationResultStore, resources limits.ResourceBudget, logs io.Writer) (*App, string) {
 	t.Helper()
 	return newParityHostedAppForRepositories(t, investigator, results, resources, logs, []string{hostedTestRepository})
 }
 
 // newParityHostedAppForRepositories is the hosted app with a credential
 // granted repositories ("*": every repository).
-func newParityHostedAppForRepositories(t *testing.T, investigator contextfabric.Investigator, results contextfabric.InvestigationResultStore, resources limits.ResourceBudget, logs *bytes.Buffer, repositories []string) (*App, string) {
+func newParityHostedAppForRepositories(t *testing.T, investigator contextfabric.Investigator, results contextfabric.InvestigationResultStore, resources limits.ResourceBudget, logs io.Writer, repositories []string) (*App, string) {
 	t.Helper()
 	now := time.Date(2026, 8, 13, 12, 0, 0, 0, time.UTC)
 	audit := memory.NewAuditStore()

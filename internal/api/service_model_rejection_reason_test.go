@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -63,7 +64,7 @@ func rejectingEntitlementClient(t *testing.T, status int, body string, closed bo
 	return client
 }
 
-func logReasons(t *testing.T, logs *bytes.Buffer, msg string) []string {
+func logReasons(t *testing.T, logs fmt.Stringer, msg string) []string {
 	t.Helper()
 	var reasons []string
 	for _, line := range strings.Split(strings.TrimSpace(logs.String()), "\n") {

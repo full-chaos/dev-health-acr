@@ -71,12 +71,7 @@ func run() error {
 	}
 	log.Printf("modeloracle listening on %s:%d for task %s", *host, bound, plan.TaskID)
 
-	mux := http.NewServeMux()
-	mux.HandleFunc("/v1/models", srv.handleModels)
-	mux.HandleFunc("/v1/chat/completions", srv.handleChatCompletions)
-	mux.HandleFunc("/health", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusNoContent) })
-
-	httpServer := &http.Server{Handler: mux, ReadHeaderTimeout: 10 * time.Second}
+	httpServer := &http.Server{Handler: srv.routes(), ReadHeaderTimeout: 10 * time.Second}
 	shutdown := make(chan os.Signal, 1)
 	signal.Notify(shutdown, syscall.SIGINT, syscall.SIGTERM)
 
@@ -119,6 +114,19 @@ type server struct {
 	observed  Observation
 	toolNames map[string]string
 	finalSent bool
+
+	// serviceCalls records every no-tools call a service plan answered or refused.
+	serviceCalls []*serviceCall
+}
+
+// routes is the oracle's HTTP surface, split out so a test can serve the same handlers.
+func (s *server) routes() *http.ServeMux {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/v1/models", s.handleModels)
+	mux.HandleFunc("/v1/chat/completions", s.handleChatCompletions)
+	mux.HandleFunc("/service/calls", s.handleServiceCalls)
+	mux.HandleFunc("/health", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusNoContent) })
+	return mux
 }
 
 func (s *server) finish(httpServer *http.Server) error {
@@ -131,6 +139,10 @@ func (s *server) finish(httpServer *http.Server) error {
 // writeObservations records exactly what the scripted model saw, so the assertion tool can
 // prove the final answer transcribed the live stack instead of the plan.
 func (s *server) writeObservations() error {
+	var service serviceSnapshot
+	if s.plan.Service != nil {
+		service = s.snapshotService()
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	payload := map[string]any{
@@ -143,6 +155,9 @@ func (s *server) writeObservations() error {
 		"injected_fault":  string(s.plan.Fault),
 		"model_id":        modelID,
 		"invented_ref_id": inventedEvidenceRefIDIfUsed(s.plan.Fault),
+	}
+	if s.plan.Service != nil {
+		payload["service"] = service
 	}
 	encoded, err := json.MarshalIndent(payload, "", "  ")
 	if err != nil {
