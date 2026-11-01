@@ -3325,6 +3325,12 @@ for job in scripts contracts; do
   assert_check_fails "the $job job has if: false" check_vendored_lifecycle_contract_wiring "$vm"
 done
 
+vm="$tmpdir/vm-job-contracts-if-replaced.yml"
+awk '/^  contracts:/ { in_job = 1; print; next } /^  [A-Za-z0-9_-]+:[[:space:]]*$/ { in_job = 0 } in_job && $0 == "    if: needs.plan.outputs.heavy == '"'"'true'"'"'" { print "    if: false"; next } { print }' "$workflow" > "$vm"
+assert_check_fails 'the contracts job heavy gate is replaced by if: false' check_vendored_lifecycle_contract_wiring "$vm"
+vm="$tmpdir/vm-job-scripts-if-added.yml"; after_job_header "$workflow" "$vm" scripts "    if: needs.plan.outputs.heavy == 'true'"
+assert_check_fails 'the scripts job gains the heavy gate' check_vendored_lifecycle_contract_wiring "$vm"
+
 # (o) remove the pin's full-SHA requirement, restoring the floating-ref hole.
 pin_regex_removed="$tmpdir/pin-regex-removed.yml"
 grep -vF '[0-9a-f]{40}' "$workflow" > "$pin_regex_removed"
