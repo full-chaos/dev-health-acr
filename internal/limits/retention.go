@@ -23,7 +23,7 @@ func (m *Manager) windowFor(class RequestClass, subject Subject, policy quotaPol
 			delete(window.quotaCredential, credentialID)
 		}
 	}
-	if _, exists := window.credentials[subject.CredentialID]; !exists && len(window.credentials) >= m.maxCredentials {
+	if _, exists := window.credentials[subject.key()]; !exists && len(window.credentials) >= m.maxCredentials {
 		return nil, m.capacityDenied()
 	}
 	return window, Decision{Allowed: true}

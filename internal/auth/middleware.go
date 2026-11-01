@@ -212,7 +212,8 @@ func (a *Authenticator) MiddlewareFor(allowWebAssertions bool, next http.Handler
 		// Subject is the credential's own ID for every ordinary credential,
 		// but for a workload-exchanged token (CHAOS-4013) it is the STABLE
 		// binding_id instead -- quotas (limits_middleware.go) key on
-		// Subject, and a workload re-exchanges a fresh credential row
+		// Subject when the credential has no approving user (a user's
+		// credentials key on the owner), and a workload re-exchanges a fresh credential row
 		// roughly every 10 minutes, so keying quotas on CredentialID would
 		// reset them on every exchange and exhaust tracked-credential
 		// capacity.
