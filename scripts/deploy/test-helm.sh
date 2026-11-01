@@ -655,9 +655,9 @@ case "$scenario" in
     auth_workload_render --set-string "authWorkloadClient.projectionURL=   " >"$workdir/projection-blank-on.yaml"
     if grep -q ACR_AUTH_PROJECTION_URL "$workdir/projection-blank-on.yaml"; then fail_gate "auth-projection: a whitespace projectionURL rendered the env with the client on"; fi
     auth_workload_render --set-string "authWorkloadClient.projectionURL=  http://auth-service.acr-test.svc:8080  " >"$workdir/projection-padded.yaml"
-    n="$(grep -c 'ACR_AUTH_PROJECTION_URL: "http://auth-service.acr-test.svc:8080"' "$workdir/projection-padded.yaml")"
+    n="$(grep -c 'ACR_AUTH_PROJECTION_URL: "http://auth-service.acr-test.svc:8080"' "$workdir/projection-padded.yaml" || true)"
     [[ "$n" -eq 1 ]] || fail_gate "auth-projection: a padded projectionURL rendered untrimmed or not at all in the ConfigMap ($n)"
-    n="$(grep -c 'value: "http://auth-service.acr-test.svc:8080"' "$workdir/projection-padded.yaml")"
+    n="$(grep -c 'value: "http://auth-service.acr-test.svc:8080"' "$workdir/projection-padded.yaml" || true)"
     [[ "$n" -ge 1 ]] || fail_gate "auth-projection: a padded projectionURL rendered untrimmed in the runtime ACL job"
     pass "auth-projection-url: on renders the URL twice, off never, whitespace is unset, a padded URL renders trimmed, and the client is required"
     printf 'RESULT: scenario auth-projection-url passed\n'
