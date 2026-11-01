@@ -749,6 +749,49 @@ func TestAFailedReachDeniesAndKeepsTheCall(t *testing.T) {
 	}
 }
 
+// The real call, from a failed keyed read to the sentence the turn owes. The same
+// turn with reads that worked does not owe it. Its reads reach the line.
+func TestATurnDisclosesAFailedLinkRead(t *testing.T) {
+	t.Parallel()
+	resolve := func(failure error) (string, int, int) {
+		reads := 0
+		telemetry := &recordingTelemetry{}
+		adapter := newFakeAdapterWithTelemetry(t, &fakeConn{linkReachFunc: func(context.Context, string, map[string]interface{}) ([]row, error) {
+			reads++
+			return nil, failure
+		}}, telemetry)
+		request := contextfabric.InvestigationRequest{
+			SchemaVersion: contextfabric.InvestigationRequestSchemaV1, RequestID: "request_12456002",
+			Question: "why is CHAOS-11516 blocked?", TimeContext: contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent},
+			Options:  contextfabric.InvestigationOptions{MaxSubjectCandidates: 10, MaxCohortMembers: 50, MaxRelationshipPaths: 50, MaxDrivers: 10, MaxEvidenceRefs: 100, MaxSerializedBytes: 262144, AllowClarification: true},
+			Consumer: contextfabric.ConsumerInfo{Name: "test", Version: "v1", Surface: "test"},
+		}
+		interpreted := contextfabric.InterpretedQuestion{
+			Shape: contextfabric.ShapeOpen, RequestedJudgment: "status", SubjectTerms: []string{"CHAOS-11516"},
+			TimeContext: contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent}, FactRequirements: []contextfabric.FactRequirement{{Kind: contextfabric.FactStatus}},
+		}
+		resolution, _, _, _, err := adapter.ResolveSubjects(context.Background(), restrictedReachCaller(t), request, interpreted, contextfabric.ResolvedGraphBinding{}, nil, nil, nil, "")
+		if err != nil {
+			t.Fatalf("ResolveSubjects() error = %v", err)
+		}
+		lineReads := 0
+		for _, line := range telemetry.linkReaches {
+			lineReads += line.reads
+		}
+		return resolution.WorkItemLinkLimitation, reads, lineReads
+	}
+	sentence, reads, lineReads := resolve(errors.New("timeout"))
+	if sentence != contractsv1.ContextFabricWorkItemLinksUnreadLimitation {
+		t.Fatalf("limitation = %q after a failed read", sentence)
+	}
+	if reads == 0 || lineReads != reads {
+		t.Fatalf("keyed reads = %d, the lines add up to %d", reads, lineReads)
+	}
+	if sentence, _, _ := resolve(nil); sentence == contractsv1.ContextFabricWorkItemLinksUnreadLimitation {
+		t.Fatal("reads that worked gave the failed-read sentence")
+	}
+}
+
 // A stored-subject decision does not read a failed read as a denial.
 func TestAFailedReachAtTheStoredGateIsNoDenial(t *testing.T) {
 	t.Parallel()
