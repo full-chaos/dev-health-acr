@@ -21,6 +21,7 @@ func TestLiveATeamNarrowingStatusPopulationCountsOnlyTheTeamsMembers(t *testing.
 	orgID := "live-12327-status-population-" + time.Now().UTC().Format("20060102T150405.000000000")
 	t.Cleanup(func() { _ = adapter.PurgeOrganization(context.Background(), orgID) })
 	batch, edges, team, _, _ := memberStatusCapFixture(orgID, time.Now().UTC())
+	var readAnchoredOpen func(*testing.T, contextfabric.SubjectRef, []string) contextfabric.GraphContext
 	for _, b := range []contextfabric.ProjectionBatch{batch, edges} {
 		if _, err := adapter.ApplyProjectionBatch(ctx, b); err != nil {
 			t.Fatalf("ApplyProjectionBatch(%s) error = %v", b.BatchID, err)
@@ -28,6 +29,12 @@ func TestLiveATeamNarrowingStatusPopulationCountsOnlyTheTeamsMembers(t *testing.
 	}
 	read := func(t *testing.T, teams []string) contextfabric.GraphContext {
 		t.Helper()
+		return readAnchoredOpen(t, team, teams)
+	}
+	repository := contextfabric.SubjectRef{Kind: contextfabric.SubjectRepository, CanonicalID: "repository:acme-api", Label: "acme/api"}
+	readAnchoredOpen = func(t *testing.T, anchor contextfabric.SubjectRef, teams []string) contextfabric.GraphContext {
+		t.Helper()
+		team := anchor
 		scoped := &contextfabric.ScopedSetExpression{AnchorTerms: []string{team.Label}, MemberKind: contextfabric.SubjectPullRequest,
 			MemberQualifier: contextfabric.MemberQualifierStatus, MemberQualifierValue: "open"}
 		bases := contextfabric.CommitBasisSet{}
@@ -81,6 +88,27 @@ func TestLiveATeamNarrowingStatusPopulationCountsOnlyTheTeamsMembers(t *testing.
 		gc := read(t, []string{"team-other"})
 		if members(gc) != 0 || gc.CohortPopulation != 0 {
 			t.Fatalf("members=%d population=%d, want 0 and 0: the population counts only members inside the narrowing", members(gc), gc.CohortPopulation)
+		}
+	})
+	// CHAOS-12352: none of the narrowed team's members holds the status while
+	// other members do: that is a measured zero (an empty, complete member
+	// set), exactly as when nobody holds it -- never a read with no member set.
+	t.Run("a repository anchor under a narrowing that reaches none of its pull requests: a measured zero", func(t *testing.T) {
+		gc := readAnchoredOpen(t, repository, []string{"team-other"})
+		if gc.Cohort == nil {
+			t.Fatal("no member set served, want the measured zero (an empty, complete member set)")
+		}
+		if len(gc.Cohort.Members) != 0 || !gc.Cohort.Complete || gc.Cohort.Truncated {
+			t.Fatalf("members=%d complete=%v truncated=%v, want an empty, complete member set", len(gc.Cohort.Members), gc.Cohort.Complete, gc.Cohort.Truncated)
+		}
+	})
+	t.Run("a narrowing that reaches none of them: a measured zero, not a missing set", func(t *testing.T) {
+		gc := read(t, []string{"team-other"})
+		if gc.Cohort == nil {
+			t.Fatal("no member set served, want the measured zero (an empty, complete member set)")
+		}
+		if len(gc.Cohort.Members) != 0 || !gc.Cohort.Complete || gc.Cohort.Truncated {
+			t.Fatalf("members=%d complete=%v truncated=%v, want an empty, complete member set", len(gc.Cohort.Members), gc.Cohort.Complete, gc.Cohort.Truncated)
 		}
 	})
 }
