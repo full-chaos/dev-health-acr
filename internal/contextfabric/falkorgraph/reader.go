@@ -100,6 +100,9 @@ func (a *Adapter) ResolveSubjects(ctx context.Context, principal storage.Princip
 	// subject outside the window simply stops resolving here).
 	temporal := newTemporalFilter(interpreted.TimeContext)
 	deps := graphrank.ResolveDeps{
+		// CHAOS-12346: the general read's reach rule for resolution candidates
+		// and census satisfiers; nil when the request narrows by no team.
+		TeamNarrowing: a.resolutionTeamNarrowing(key, principal.OrgID, request.RequestedScope, temporal),
 		ExactHint: func(ctx context.Context, subject contextfabric.SubjectRef) (graphrank.CandidateNode, bool, error) {
 			cypher := fmt.Sprintf("MATCH (n:%s {%s:$org, %s:$kind, %s:$id}) WHERE true%s RETURN n",
 				labelSubject, propOrgID, propKind, propCanonicalID, temporal.predicate("n"))
@@ -754,7 +757,7 @@ func (a *Adapter) DiscoverContext(ctx context.Context, principal storage.Princip
 					Outcome: outcome, AnchorKind: subject.Kind, AnchorBasis: deploymentAnchorBasis,
 					Committed: len(request.Resolution.Committed),
 					Issues:    walk.linkSources, LinkedPullRequests: walk.linkTargets, Members: len(walk.nodes), Denied: walk.denied,
-					Truncated: walk.truncated, Err: err,
+					Truncated: walk.truncated, AnchorOutOfScope: walk.anchorOutOfScope, Err: err,
 				})
 			}
 		} else if orgStatusAnchor != nil && subject == *orgStatusAnchor {

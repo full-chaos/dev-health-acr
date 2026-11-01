@@ -108,6 +108,20 @@ func assertWebAssertionScenario(t *testing.T, baseURL string, private ed25519.Pr
 		if err := os.WriteFile(jwksPath, []byte(`{"keys":[]}`), 0o600); err != nil {
 			t.Fatal(err)
 		}
+	case "retired-key":
+		rewriteRealBinaryJWKSWithRetireAfter(t, jwksPath, private, time.Now().UTC().Add(-time.Second))
+	case "retiring-key":
+		rewriteRealBinaryJWKSWithRetireAfter(t, jwksPath, private, time.Now().UTC().Add(time.Hour))
+		response := doWebAssertionRequest(t, baseURL, private, path, http.MethodPost, requestBody, mutate, false)
+		defer response.Body.Close()
+		if response.StatusCode != http.StatusOK {
+			contents, err := io.ReadAll(response.Body)
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Fatalf("retiring key status = %d body=%s", response.StatusCode, contents)
+		}
+		return
 	case "foreign-scope":
 		requestBody.Repository.Slug = "other-org/other-repo"
 		wantStatus = http.StatusForbidden
@@ -206,4 +220,22 @@ func writeRealBinaryJWKS(t *testing.T, public ed25519.PublicKey) string {
 		t.Fatal(err)
 	}
 	return path
+}
+
+// rewriteRealBinaryJWKSWithRetireAfter rewrites the JWKS file in place (the
+// server rereads it on every assertion) so the "current" key carries a
+// retire_after.
+func rewriteRealBinaryJWKSWithRetireAfter(t *testing.T, path string, private ed25519.PrivateKey, retireAfter time.Time) {
+	t.Helper()
+	public := private.Public().(ed25519.PublicKey)
+	encoded, err := json.Marshal(map[string]any{"keys": []map[string]string{{
+		"kty": "OKP", "crv": "Ed25519", "kid": "current", "alg": "EdDSA", "x": base64.RawURLEncoding.EncodeToString(public),
+		"retire_after": retireAfter.Format(time.RFC3339),
+	}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, encoded, 0o600); err != nil {
+		t.Fatal(err)
+	}
 }
