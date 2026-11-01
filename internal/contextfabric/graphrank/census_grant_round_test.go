@@ -700,6 +700,9 @@ func TestAFailedWorkItemReadDeniesAndDiscloses(t *testing.T) {
 	backend = &fakeGraphBackend{searchResults: map[string][]CandidateNode{}, searchTruncated: true}
 	deps = backend.deps()
 	deps.CensusFunc = (&grantCensusSpy{}).census
+	deps.LinkScopedWorkItems = func(context.Context, contextfabric.RequestedScope) (map[string]string, bool, error) {
+		return map[string]string{}, true, nil
+	}
 	resolution, _, _, _, err = ResolveSubjectsWithCommitBasis(context.Background(), restrictedCaller(t, grantRepoInside, grantRepoBeside), narrowed, testInterpreted("CHAOS-11516"), deps, nil, nil, nil, "")
 	if err != nil {
 		t.Fatal(err)
