@@ -1,6 +1,7 @@
 package entitlements
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"net/url"
@@ -35,6 +36,20 @@ type Config struct {
 	PositiveCacheTTL time.Duration
 	NegativeCacheTTL time.Duration
 	CacheCapacity    int
+	// Workload, when set, selects the workload-token credential: every call
+	// sends a token it mints for the dev-health-api audience, TokenFile is
+	// never opened and no service token is ever loaded. Nil keeps the
+	// service-token credential read from TokenFile.
+	Workload TokenSource
+	// Observe, when set, receives one closed (credential, outcome) pair per
+	// outgoing call.
+	Observe func(ctx context.Context, credential, outcome string)
+}
+
+// TokenSource mints a workload access token for an audience; a
+// *workloadtoken.Client is one.
+type TokenSource interface {
+	Token(ctx context.Context, audience string, scope ...string) (string, error)
 }
 
 func (c Config) withDefaults() Config {
@@ -66,7 +81,7 @@ func (c Config) validate() error {
 	if c.BaseURL.Scheme != "https" && c.BaseURL.Scheme != "http" {
 		return errors.New("Dev Health entitlement URL must use HTTP or HTTPS")
 	}
-	if strings.TrimSpace(c.TokenFile) == "" {
+	if c.Workload == nil && strings.TrimSpace(c.TokenFile) == "" {
 		return errors.New("Dev Health entitlement token file is required")
 	}
 	if c.Timeout < minTimeout || c.Timeout > maxTimeout {

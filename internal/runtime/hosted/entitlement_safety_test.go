@@ -11,7 +11,7 @@ import (
 func TestNewEntitlement_local_provider_is_allow_all_and_offline(t *testing.T) {
 	cfg := config.Config{Environment: "test"}
 
-	provider, err := newEntitlement(cfg)
+	provider, err := newEntitlement(cfg, entitlementDeps{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -60,7 +60,7 @@ func TestNewEntitlement_does_not_expose_malformed_URL_values(t *testing.T) {
 			cfg.DevHealthEntitlementProxyURL = proxy
 
 			// When
-			_, err := newEntitlement(cfg)
+			_, err := newEntitlement(cfg, entitlementDeps{})
 
 			// Then
 			if err == nil {

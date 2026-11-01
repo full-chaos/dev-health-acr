@@ -101,7 +101,9 @@ func (c *Client) PrincipalAccess(ctx context.Context, orgID, userID, sessionID s
 	if err != nil {
 		return PrincipalAccess{}, rejected(reasonTransport)
 	}
-	request.Header.Set("Authorization", "Bearer "+c.token)
+	if !c.authorize(ctx, request) {
+		return PrincipalAccess{}, rejected(reasonTransport)
+	}
 	response, err := c.http.Do(request)
 	if err != nil {
 		return PrincipalAccess{}, rejected(reasonTransport)

@@ -63,6 +63,12 @@ func mergeConfig(base, overrides entitlements.Config) entitlements.Config {
 	if overrides.CacheCapacity != 0 {
 		base.CacheCapacity = overrides.CacheCapacity
 	}
+	if overrides.Workload != nil {
+		base.Workload = overrides.Workload
+	}
+	if overrides.Observe != nil {
+		base.Observe = overrides.Observe
+	}
 	return base
 }
 
