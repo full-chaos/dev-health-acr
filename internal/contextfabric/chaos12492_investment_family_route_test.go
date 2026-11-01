@@ -83,9 +83,44 @@ func TestATrendFrameStaysUnreachable(t *testing.T) {
 	}
 }
 
+// A model pick is judged against the precedence table, which still has no row
+// for this family. The route's exception does not change that count.
+func TestAModelPickOfTheFamilyStaysOutsideThePrecedenceTable(t *testing.T) {
+	t.Parallel()
+	got := ResolveFamilyForSample(FamilySample{Shape: ShapeSingleSubject, SubjectTerms: []string{"acme/widgets"}, ModelFamily: QuestionFamilyInvestmentAllocation})
+	if got.IncompatibilityReason != FamilyIncompatibilityUnreachable || got.AttemptedFamily != QuestionFamilyInvestmentAllocation || !got.Downgraded {
+		t.Fatalf("outcome %+v, want the reason that names the table's range", got)
+	}
+}
+
+// A stored answer was planned under the table it records. The bump is what keeps
+// an answer planned as subject_investigation from being replayed for these
+// questions, because the reuse lookup runs before interpretation.
+func TestTheTableVersionFencesAnswersPlannedBeforeThisChange(t *testing.T) {
+	t.Parallel()
+	if QuestionFamilyTableVersion == "question-family.v4" {
+		t.Fatal("the family table changed and its version did not: reuse would replay the old plan")
+	}
+}
+
+// routedByTheTableAlone is the route with the named subject exception taken out,
+// which is the route before this change.
+func routedByTheTableAlone(agreement FamilyAgreement) (QuestionFamily, FamilyRouteSource, FamilyRouteDisposition) {
+	for _, rule := range familyRouteTable {
+		if rule.class != agreement.Class {
+			continue
+		}
+		if rule.source == FamilyRouteProjected {
+			return agreement.ProjectedFamily, rule.source, rule.disposition
+		}
+		return agreement.PrecedenceFamily, rule.source, rule.disposition
+	}
+	return agreement.PrecedenceFamily, FamilyRoutePrecedence, FamilyRouteDeclinedUnexplained
+}
+
 // No question without the goal changes family: over every goal set of one or two
-// goals without it, every expression kind and every shape, the served family is
-// what the route served before this change.
+// goals without it, every expression kind and every shape, the decision is what
+// the table alone decides, which is the route before this change.
 func TestNoFrameWithoutTheGoalChangesFamily(t *testing.T) {
 	t.Parallel()
 	var goals []InvestigationGoal
@@ -102,10 +137,14 @@ func TestNoFrameWithoutTheGoalChangesFamily(t *testing.T) {
 		for _, second := range goals {
 			for _, expression := range expressions {
 				for _, shape := range allInvestigationShapes() {
-					got := routedFamily(goalFrame(expression, first, second), FamilySample{Shape: shape, SubjectTerms: []string{"acme/widgets"}})
+					sample := FamilySample{Shape: shape, SubjectTerms: []string{"acme/widgets"}}
+					frame := goalFrame(expression, first, second)
+					agreement := ClassifyFamilyAgreement(DeriveQuestionFamily(frame), ResolveFamilyForSample(sample))
+					got := RouteQuestionFamily(agreement)
+					family, source, disposition := routedByTheTableAlone(agreement)
 					checked++
-					if got.Family == QuestionFamilyInvestmentAllocation {
-						t.Fatalf("goals %v, %s, %s: served investment_allocation", []InvestigationGoal{first, second}, expression.Kind, shape)
+					if got.Family != family || got.Source != source || got.Disposition != disposition {
+						t.Fatalf("goals %v, %s, %s: decision %+v, want %s from %s, %s", []InvestigationGoal{first, second}, expression.Kind, shape, got, family, source, disposition)
 					}
 				}
 			}
@@ -139,9 +178,26 @@ func TestTheAllocationPlanKeepsWhatItsQuestionsHad(t *testing.T) {
 	if !slices.Equal(allocation.AskOrder, subject.AskOrder) {
 		t.Errorf("ask order %v, want %v", allocation.AskOrder, subject.AskOrder)
 	}
+	// The plan a turn receives, from the real builder, under one budget.
+	budget := ResponseBudget{MaxItems: 30, MaxSerializedBytes: 262144}
+	planned := func(family QuestionFamily) AnswerPlan {
+		return PlanAnswer(PlanAnswerInput{Family: QuestionFamilyOutcome{Family: family}, Budget: budget, MaxCohortMembers: 50})
+	}
+	allocated, investigated := planned(QuestionFamilyInvestmentAllocation), planned(QuestionFamilySubjectInvestigation)
+	if allocated.Family != QuestionFamilyInvestmentAllocation {
+		t.Fatalf("planned family %q", allocated.Family)
+	}
+	if allocated.Budget != investigated.Budget {
+		t.Errorf("planned budget %+v, want %+v", allocated.Budget, investigated.Budget)
+	}
+	for _, axis := range investigated.Axes {
+		if !slices.Contains(allocated.Axes, axis) {
+			t.Errorf("planned axes %v lost %q", allocated.Axes, axis)
+		}
+	}
 	for _, kind := range []contractsv1.ContextFabricRenderKind{contractsv1.ContextFabricRenderKindTable, contractsv1.ContextFabricRenderKindSeries,
 		contractsv1.ContextFabricRenderKindTreemap, contractsv1.ContextFabricRenderKindSunburst} {
-		if !slices.Contains(allocation.RenderKinds, kind) {
+		if !slices.Contains(allocated.RenderKinds, kind) {
 			t.Errorf("render kind %q is not planned", kind)
 		}
 	}

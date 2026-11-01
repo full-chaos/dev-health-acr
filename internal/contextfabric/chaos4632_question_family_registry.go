@@ -689,7 +689,12 @@ func LookupQuestionFamily(family QuestionFamily) (QuestionFamilyDefinition, bool
 // single-subject answer planned under MaxItems below the profile cap plus ten
 // serves more members than a v3 answer did. Stored answers planned at one
 // member per group must not be replayed as the v4 plan.
-const QuestionFamilyTableVersion = "question-family.v4"
+//
+// v4 -> v5: a named subject's investment question is served
+// investment_allocation (CHAOS-12492), and that family's axes, ask order and
+// render kinds changed. Stored answers planned as subject_investigation for
+// these questions must not be replayed as the v5 plan.
+const QuestionFamilyTableVersion = "question-family.v5"
 
 func allStructureNeedKinds() []StructureNeedKind {
 	wire := contractsv1.ContextFabricStructureNeedKindVocabulary()

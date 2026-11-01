@@ -49,7 +49,7 @@
     "answer_plan": {
       "family": "subject_investigation",
       "family_source": "model",
-      "family_version": "question-family.v4",
+      "family_version": "question-family.v5",
       "require_drivers": false,
       "require_ranking": false,
       "render_kinds": [
@@ -196,7 +196,7 @@
     "answer_plan": {
       "family": "subject_investigation",
       "family_source": "model",
-      "family_version": "question-family.v4",
+      "family_version": "question-family.v5",
       "require_drivers": false,
       "require_ranking": false,
       "render_kinds": [
@@ -343,7 +343,7 @@
     "answer_plan": {
       "family": "subject_investigation",
       "family_source": "model",
-      "family_version": "question-family.v4",
+      "family_version": "question-family.v5",
       "require_drivers": false,
       "require_ranking": false,
       "render_kinds": [
