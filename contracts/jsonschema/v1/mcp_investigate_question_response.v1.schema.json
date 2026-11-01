@@ -3134,6 +3134,16 @@
           "maxProperties": 8192,
           "type": "object"
         },
+        "vocabulary_labels": {
+          "additionalProperties": {
+            "maxLength": 160,
+            "minLength": 1,
+            "type": "string"
+          },
+          "description": "CHAOS-12413: display label per value of a closed vocabulary shown in this result, keyed <vocabulary>:<value>. A consumer looks a word up and needs no table; a value with no entry takes its generic path. Additive: absent on every result written before this field existed, and nothing emits it until the pin train that carries it has landed.",
+          "maxProperties": 8192,
+          "type": "object"
+        },
         "generated_at": {
           "format": "date-time",
           "type": "string"
@@ -3441,6 +3451,16 @@
             "type": "string"
           },
           "description": "CHAOS-4690: display label per evidence ref id reachable on this result; on a fresh write the key set equals the result's own evidence-ref closure exactly.",
+          "maxProperties": 8192,
+          "type": "object"
+        },
+        "vocabulary_labels": {
+          "additionalProperties": {
+            "maxLength": 160,
+            "minLength": 1,
+            "type": "string"
+          },
+          "description": "CHAOS-12413: display label per value of a closed vocabulary shown in this result, keyed <vocabulary>:<value>. A consumer looks a word up and needs no table; a value with no entry takes its generic path. Additive: absent on every result written before this field existed, and nothing emits it until the pin train that carries it has landed.",
           "maxProperties": 8192,
           "type": "object"
         },
@@ -3835,6 +3855,16 @@
             "type": "string"
           },
           "description": "CHAOS-4690: display label per evidence ref id reachable on this result; on a fresh write the key set equals the result's own evidence-ref closure exactly.",
+          "maxProperties": 8192,
+          "type": "object"
+        },
+        "vocabulary_labels": {
+          "additionalProperties": {
+            "maxLength": 160,
+            "minLength": 1,
+            "type": "string"
+          },
+          "description": "CHAOS-12413: display label per value of a closed vocabulary shown in this result, keyed <vocabulary>:<value>. A consumer looks a word up and needs no table; a value with no entry takes its generic path. Additive: absent on every result written before this field existed, and nothing emits it until the pin train that carries it has landed.",
           "maxProperties": 8192,
           "type": "object"
         },
