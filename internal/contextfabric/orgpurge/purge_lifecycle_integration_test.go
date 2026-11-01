@@ -59,7 +59,7 @@ func valuesOf(extra string) string {
 func purgeRows(t *testing.T, db *sql.DB, aggregate string) []purgeRow {
 	t.Helper()
 	rows, err := db.QueryContext(context.Background(), `
-SELECT aggregate_id, revision, event_type, payload->'payload'->>'actor_type', coalesce(payload->'payload'->>'actor_ref', '')
+SELECT aggregate_id, revision, event_type, coalesce(payload->'payload'->>'actor_type', ''), coalesce(payload->'payload'->>'actor_ref', '')
 FROM acr.credential_lifecycle_outbox WHERE aggregate_id = $1 ORDER BY revision`, aggregate)
 	require.NoError(t, err)
 	defer rows.Close()
@@ -121,14 +121,24 @@ func TestPurgeLifecycle_ALegacyLiveCredentialGetsRevisionOneThenTheEvent(t *test
 func TestPurgeLifecycle_OutboxRowsSurviveThePurgeAndASecondRunWritesNothing(t *testing.T) {
 	r := newRig(t)
 	insertPurgeCredential(t, r.db, orgGone, "cred_pl_survive", "live")
+	// An outbox row of a credential long gone, and the live credential's own
+	// revision 1 (written by hand: a credential inserted by SQL has none, and
+	// the purge would otherwise add that first touch too).
 	_, err := r.db.ExecContext(context.Background(), `
 INSERT INTO acr.credential_lifecycle_outbox (outbox_id, org_id, aggregate_id, revision, event_type, payload, created_at)
-VALUES (gen_random_uuid(), $1::uuid, 'cred_pl_old', 1, 'acr_credential.issued', '{}'::jsonb, now())`, orgGone)
+VALUES (gen_random_uuid(), $1::uuid, 'cred_pl_old', 1, 'acr_credential.issued', '{}'::jsonb, now()),
+       (gen_random_uuid(), $1::uuid, 'cred_pl_survive', 1, 'acr_credential.issued', '{}'::jsonb, now())`, orgGone)
 	require.NoError(t, err)
 	before := count(t, r.db, `SELECT count(*) FROM acr.credential_lifecycle_outbox WHERE org_id = $1::uuid`, orgGone)
+	require.Equal(t, 2, before)
 	purgeOrg(t, r, orgGone)
 	after := count(t, r.db, `SELECT count(*) FROM acr.credential_lifecycle_outbox WHERE org_id = $1::uuid`, orgGone)
-	require.Equal(t, before+1, after, "no outbox row is deleted; the live credential's revoked row is added (its issued row existed)")
+	require.Equal(t, before+1, after, "no outbox row is deleted; only the live credential's revoked row is added")
+	require.Equal(t, 1, count(t, r.db, `SELECT count(*) FROM acr.credential_lifecycle_outbox WHERE aggregate_id = 'cred_pl_old' AND revision = 1`), "the old row survives")
+	require.Equal(t, []purgeRow{
+		{"cred_pl_survive", 1, "acr_credential.issued", "", ""},
+		{"cred_pl_survive", 2, "acr_credential.revoked", "system", ""},
+	}, purgeRows(t, r.db, "cred_pl_survive"), "the hand-written revision 1 stays; the purge adds revision 2 only")
 	purgeOrg(t, r, orgGone)
 	require.Equal(t, after, count(t, r.db, `SELECT count(*) FROM acr.credential_lifecycle_outbox WHERE org_id = $1::uuid`, orgGone), "a second run writes nothing")
 }
@@ -202,6 +212,7 @@ func TestPurgeLifecycle_ARevokeCommittingWhileTheDeleteWaitsGivesExactlyOneRevok
 	require.NoError(t, purgeErr)
 	rows := purgeRows(t, r.db, "cred_pl_race")
 	require.Len(t, rows, 2, "the revoke's two rows only: the purge wrote nothing for the terminal credential")
+	require.Equal(t, "user", rows[1].ActorType, "the one revoked row is the revoke's, not a system row from the purge")
 	require.Equal(t, "revoker", rows[1].ActorRef)
 	require.Equal(t, 1, count(t, r.db, `SELECT count(*) FROM acr.credential_lifecycle_outbox WHERE aggregate_id = 'cred_pl_race' AND event_type = 'acr_credential.revoked'`))
 }
