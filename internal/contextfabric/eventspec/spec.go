@@ -656,6 +656,54 @@ var KindOfferWithheld = Event{
 	},
 }
 
+// PageHintLookup is the Info line (graphrank/tracer.go, case
+// "page_hint_lookup", CHAOS-12230) reporting how the Ask Dev page-context
+// subject hints of one resolveSubjects call resolved: hints whose source is
+// hintsource.AskDevPageContext, which web builds in acr's canonical form from
+// natural keys. Each such hint takes exactly one outcome: exact_hit (the exact
+// canonical-id lookup found the node), label_fallback (it did not, the hint
+// carried a label, and the call's term search completed, so the label was
+// searched) or unresolved (it did not, and either the term search did not
+// complete -- it never ran, or it failed before or at a term -- or the hint had
+// no label). A rise in label_fallback or unresolved is how a drift between web's
+// id builder and acr's shows up.
+//
+// COUNTS ONLY: no canonical id, label, question or term -- the ids are exactly
+// what this line must not carry. Subject kinds are closed-vocabulary values.
+// MultiplicityZeroOrOnePerRequest: ONE PER REQUEST, from whichever single
+// resolution the request runs. A request runs the offers-only resolution under
+// the class-default window gate (the engine returns after it) or the decisive
+// one, never both, and both count the same hints the same way; the engine's
+// other resolutions (cohort group read, answer-reuse recheck) carry only
+// engine-minted hint sources (contextfabric/
+// page_hint_lookup_resolution_calls_test.go pins this). A request with no page
+// hint, or a call that returns before the hint loop (the comparison dispatch,
+// an organization or context error), emits none.
+var PageHintLookup = Event{
+	ID:                 "graphrank.page_hint_lookup",
+	Msg:                "context fabric resolution trace: page hint lookup",
+	Level:              LevelInfo,
+	Multiplicity:       MultiplicityZeroOrOnePerRequest,
+	Attribution:        []string{"request_id"},
+	BoundedAggregation: "at most one line per request: emitted from one deferred statement once resolveSubjects reached its subject-hint loop, only when the request carries at least one ask_dev_page_context hint, by the one resolution that request runs with those hints (the gated offers-only resolution or the decisive one, never both); CertifyAbsent asserts the request with none.",
+	Fields: []Field{
+		{Key: "request_id", Type: FieldString, Presence: PresenceRequired},
+		{Key: "stage", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: []string{"page_hint_lookup"}},
+		{Key: "page_hints", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "exact_hit", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "label_fallback", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "unresolved", Type: FieldInt, Presence: PresenceRequired},
+		// Whether the call's term search completed (every term, each hint
+		// label among them, searched without error): the fact that separates
+		// a label_fallback from an unresolved hint that carried a label. A
+		// search that fails at a term is false.
+		{Key: "search_fallback", Type: FieldBool, Presence: PresenceRequired},
+		{Key: "exact_hit_by_kind", Type: FieldCountMap, Presence: PresenceRequired, ClosedVocabulary: arrayTokens(storedResultSubjectKindArr[:])},
+		{Key: "label_fallback_by_kind", Type: FieldCountMap, Presence: PresenceRequired, ClosedVocabulary: arrayTokens(storedResultSubjectKindArr[:])},
+		{Key: "unresolved_by_kind", Type: FieldCountMap, Presence: PresenceRequired, ClosedVocabulary: arrayTokens(storedResultSubjectKindArr[:])},
+	},
+}
+
 // Corroboration is the Debug per-candidate line (graphrank/tracer.go, case
 // "corroboration", event.CorroborationSummary==false) emitted once per
 // candidate every corroboration pass processes, unconditionally (retrieval-
@@ -1930,8 +1978,8 @@ const (
 	// commit affirmation retraction and commit kept: one call in a loop over the committed subjects, published once.
 	commitAffirmationRetractionMaxLines = contractsv1.ContextFabricProjectedSubjectsMaxCount
 	commitKeptByNoMemberFoundMaxLines   = contractsv1.ContextFabricProjectedSubjectsMaxCount
-	// answer reuse outcome: 16 recordReuseOutcome call sites, each at most once per attempt.
-	answerReuseOutcomeMaxLines = 16 * passesPerRequest
+	// answer reuse outcome: 17 recordReuseOutcome call sites, each at most once per attempt.
+	answerReuseOutcomeMaxLines = 17 * passesPerRequest
 	// answer reuse containment: 3 recordReuseContainment call sites.
 	answerReuseContainmentMaxLines = 3 * passesPerRequest
 	// stored answerability: 2 call sites of the reuse surface, and the scope is the surface.
@@ -4289,6 +4337,9 @@ var CompletenessAuthority = Event{
 		// CHAOS-12286: the served document kept a stored head's legacy status
 		// sentence because nothing could state the head in its place.
 		{Key: "lead_prose_served_as_stored", Type: FieldBool, Presence: PresenceRequired},
+		// CHAOS-12289: the served document still carries the legacy
+		// truncated-read words after the restatement.
+		{Key: "legacy_source_state_words_served", Type: FieldBool, Presence: PresenceRequired},
 		{Key: "outcome_rows_total", Type: FieldInt, Presence: PresenceRequired},
 	},
 		append(completenessAuthorityOutcomeRowFields(),
@@ -5523,7 +5574,7 @@ var All = []Event{
 	RetainedRankingAccounting,
 	WorkItemTupleAdmission,
 	WorkItemAuthorizationGap,
-	RankedCutSummary, AnchorSlotDisplaced, DecisionSummary, Search, KindOfferWithheld,
+	RankedCutSummary, AnchorSlotDisplaced, DecisionSummary, Search, KindOfferWithheld, PageHintLookup,
 	Corroboration, CorroborationSummary, ReservedKindAdmitted, OfferPool, OfferPoolSummary,
 	Decision, SearchQuestion, AliasLookup, AnchorPool, KindCoverageFloor, ConfirmedKindRescue, KindScopedSemantic,
 	IdentityUniverse, KindHintSearch, ExactNameSearch, AnchorOffer,

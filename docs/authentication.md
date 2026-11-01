@@ -336,6 +336,12 @@ statement:
   `720h`) after its own expiry, unless the device authorization behind it
   redeemed a credential that is still unrevoked and unexpired; such a request
   is kept until that credential ends.
+- A dynamically registered client that completed a token exchange is never
+  deleted: the redeem records `last_granted_at` on it, and its MCP client reuses
+  the stored client ID at the next sign-in, after its 30-day credential ends
+  (there is no refresh for these clients). A row needs a signed-in user's
+  consent, so these rows stay bounded. The rule below applies only to a client
+  that never completed one.
 - A dynamically registered client is deleted when it was registered more than
   `ACR_OAUTH_CLIENT_IDLE_TTL` (default `720h`) ago and has no request row left,
   no device grant created inside that window, and no live credential obtained

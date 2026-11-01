@@ -548,12 +548,19 @@ func TestOpenAPIPublishesNoIndependentSubjectKindVocabulary(t *testing.T) {
 // positives today.
 //
 // mixedVocabularyExceptions is the registry for a legitimately mixed enum, if
-// one is ever added. It is EMPTY on purpose. An entry is a reviewed decision
+// one is ever added. An entry is a reviewed decision
 // that a node may share words with this vocabulary without publishing it, and
 // it carries the reason; the alternative -- quietly loosening the predicate
 // again -- is how this test lost 14 sites the first time and one more the
 // second.
-var mixedVocabularyExceptions = map[string]string{}
+var mixedVocabularyExceptions = map[string]string{
+	// CHAOS-12230: not a wire payload. The canonical-id vectors artifact is a
+	// generated test-vector file, and its kind enum lists exactly the six
+	// kinds it carries vectors for (the kinds a caller builds an id for from
+	// natural keys); each kind's natural key and id shape is constrained by
+	// its own if/then. No request, response or tool carries this enum.
+	"context_fabric_canonical_id_vectors.v1.schema.json/$defs/Vector/properties/kind": "a generated test-vector artifact, not a wire payload: the enum is the six kinds the file carries canonical-id vectors for, by design a subset",
+}
 
 func publishesSubjectKinds(values []string, vocabulary map[string]struct{}) bool {
 	for _, value := range values {

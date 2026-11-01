@@ -1040,7 +1040,7 @@ func endpointLookupUUID(err error) string {
 }
 
 func (a *Adapter) resolveEdge(ctx context.Context, key, orgID string, principal storage.Principal, scope contextfabric.RequestedScope, ce graphrank.CandidateEdge, temporal temporalFilter) (graphrank.ResolvedEdge, edgeResolution, edgeFilterReason, error) {
-	if !authorizedEdgeAttributes(principal, scope, ce.Attributes) {
+	if !authorizedEdgeAttributes(principal, scope, ce.Name, ce.Attributes) {
 		return graphrank.ResolvedEdge{}, edgeFiltered, edgeFilterReasonAuthz, nil
 	}
 	fromKind, fromID := splitSubjectUUID(ce.SourceNodeUUID)
@@ -1106,8 +1106,8 @@ func (a *Adapter) resolveEdge(ctx context.Context, key, orgID string, principal 
 // endpoint's. resolveEdge applies both to every edge of the generic walk, and
 // the team anchor's member read applies the same two (tree_walk.go), so the
 // two reads cannot decide one edge differently.
-func authorizedEdgeAttributes(principal storage.Principal, scope contextfabric.RequestedScope, attributes map[string]interface{}) bool {
-	return graphrank.AuthorizedAttributes(principal, scope, attributes)
+func authorizedEdgeAttributes(principal storage.Principal, scope contextfabric.RequestedScope, relation string, attributes map[string]interface{}) bool {
+	return graphrank.AuthorizedEdge(principal, scope, relation, attributes)
 }
 
 func authorizedNodeAttributes(principal storage.Principal, scope contextfabric.RequestedScope, attributes map[string]interface{}) bool {

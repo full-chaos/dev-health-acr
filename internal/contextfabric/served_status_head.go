@@ -2,6 +2,8 @@ package contextfabric
 
 import (
 	"regexp"
+	"slices"
+	"sort"
 	"strings"
 
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
@@ -51,7 +53,7 @@ const (
 // stored, unchanged (LeadProseServedAsStored counts that case). The stored
 // document is never rewritten: this is the served copy.
 func restateServedStatusHead(result InvestigationResult) InvestigationResult {
-	result.CurrentState = restateLimitedReadClause(result.CurrentState)
+	result = restateLegacySourceStateLabels(result)
 	if !statusAnswers(result.Status) {
 		return result
 	}
@@ -174,27 +176,187 @@ func withoutLeadProseFallback(head, fallback string) string {
 	return head
 }
 
-// legacyLimitedReadClause is the clause composeCurrentState closed
-// current_state with before CHAOS-12286, and only that clause: the last
-// sentence, " Not complete: " and then the qualified driver categories joined
-// by "; ", each ending in one of the source-state qualifiers it wrote
-// (FROZEN, as stored). The same words inside a provider's fact value are
-// evidence and never match: anywhere but this closing form, they are left as
-// they are.
-var legacyLimitedReadClause = func() *regexp.Regexp {
-	qualifier := `\((?:` + regexp.QuoteMeta("partial: the source read was truncated") + `|` + regexp.QuoteMeta("stale: the source read is out of date") + `)\)`
-	item := `[^;().]+ ` + qualifier // a driver category has no "."
-	return regexp.MustCompile(`\.` + regexp.QuoteMeta(legacyLimitedReadPrefix) + `(` + item + `(?:; ` + item + `)*)\.$`)
-}()
+// legacyTruncatedQualifier, legacyTruncatedNote and
+// legacyTruncatedSummaryLabel are the words driverSourceStateCause gave a
+// truncated source read before CHAOS-12289 ("partial", ACR's own state word),
+// as the qualifier after a driver title or category, the server note on the
+// driver, and the project status summary label. FROZEN: they are the stored
+// texts.
+const (
+	legacyTruncatedQualifier    = " (partial: the source read was truncated)"
+	legacyTruncatedNote         = "The service marks this driver as partial: the source read was truncated."
+	legacyTruncatedSummaryLabel = legacyTruncatedQualifier + "."
+)
 
-// restateLimitedReadClause states a stored current_state's legacy closing
-// " Not complete: " clause in the current words.
-func restateLimitedReadClause(currentState string) string {
-	match := legacyLimitedReadClause.FindStringSubmatchIndex(currentState)
-	if match == nil {
+// restateLimitedReadClause states current_state's closing limited-read clause
+// in the current words, and only when it is exactly the clause
+// composeCurrentState wrote for this answer's own drivers: the legacy
+// " Not complete: " or the current " Limited read: ", then the qualified
+// driver categories in the composer's order, with the legacy truncated
+// qualifier or the current ones, at the end of the field. Anything else -- a
+// provider value with the same words, a clause naming drivers this answer
+// does not carry, a clause cut by the length bound -- is left as stored.
+func restateLimitedReadClause(currentState string, drivers []DriverJudgment) string {
+	current := qualifiedDriverCategories(drivers)
+	if len(current) == 0 {
 		return currentState
 	}
-	return currentState[:match[0]] + "." + limitedReadPrefix + currentState[match[2]:match[3]] + "."
+	want := "." + limitedReadPrefix + strings.Join(current, "; ") + "."
+	for _, prefix := range []string{legacyLimitedReadPrefix, limitedReadPrefix} {
+		for _, items := range [][]string{legacyQualifiedDriverCategories(drivers), current} {
+			if from := "." + prefix + strings.Join(items, "; ") + "."; strings.HasSuffix(currentState, from) {
+				return strings.TrimSuffix(currentState, from) + want
+			}
+		}
+	}
+	return currentState
+}
+
+// legacyQualifiedDriverCategories is qualifiedDriverCategories as it read
+// before CHAOS-12289: the truncated qualifier in its legacy words, sorted the
+// same way.
+func legacyQualifiedDriverCategories(drivers []DriverJudgment) []string {
+	var qualified []string
+	for _, driver := range drivers {
+		switch {
+		case driver.SourceState == SourceTruncated:
+			qualified = append(qualified, driver.Category+legacyTruncatedQualifier)
+		default:
+			if qualifier := driverSourceStateQualifier(driver.SourceState); qualifier != "" {
+				qualified = append(qualified, driver.Category+qualifier)
+			}
+		}
+	}
+	sort.Strings(qualified)
+	return qualified
+}
+
+// replaceAtSentenceBoundary replaces the first occurrence of from that stands
+// as whole sentences of head: it starts at the head's start or after a
+// sentence that ends in ". ", "? " or "! ", and it ends at the head's end or
+// before a space. A copy of the same text inside another sentence (a title
+// that quotes it) is not touched.
+func replaceAtSentenceBoundary(head, from, to string) string {
+	for offset := 0; offset <= len(head); {
+		index := strings.Index(head[offset:], from)
+		if index < 0 {
+			return head
+		}
+		index += offset
+		end := index + len(from)
+		starts := index == 0 || strings.HasSuffix(head[:index], ". ") || strings.HasSuffix(head[:index], "? ") || strings.HasSuffix(head[:index], "! ")
+		ends := end == len(head) || head[end] == ' '
+		if starts && ends {
+			return head[:index] + to + head[end:]
+		}
+		offset = index + 1
+	}
+	return head
+}
+
+// restateLegacySourceStateLabels states, on a served copy, the truncated-read
+// words a stored answer carries in what the composers write now, and only
+// where the server wrote them: each anchored on a driver whose source read
+// was cut, by its own title -- the lead sentence and the principal driver
+// list (leadDriverSentence, principalDriverTitles), the project status
+// summary (its title and label, exactly), and the server note (exactly) --
+// and the closing clause of current_state. Text that is not that, such as a
+// title or provider value that carries the same words, is left as it is. The
+// stored document is not rewritten: the drivers are copied.
+func restateLegacySourceStateLabels(result InvestigationResult) InvestigationResult {
+	result.CurrentState = restateLimitedReadClause(result.CurrentState, result.Drivers)
+	current := driverSourceStateQualifier(SourceTruncated)
+	if current == legacyTruncatedQualifier {
+		return result
+	}
+	if !slices.ContainsFunc(result.Drivers, func(driver DriverJudgment) bool { return driver.SourceState == SourceTruncated }) {
+		return result
+	}
+	// A copy, so the stored document's drivers are not rewritten. Clone keeps
+	// an empty list non-nil, as the contract requires.
+	result.Drivers = slices.Clone(result.Drivers)
+	for index := range result.Drivers {
+		driver := &result.Drivers[index]
+		if driver.SourceState != SourceTruncated {
+			continue
+		}
+		if driver.SourceStateNote == legacyTruncatedNote {
+			driver.SourceStateNote = driverSourceStateNote(SourceTruncated)
+		}
+		title := strings.TrimSpace(driver.Title)
+		if title == "" {
+			continue
+		}
+		if driver.Summary == title+legacyTruncatedSummaryLabel {
+			driver.Summary = title + projectStatusStateLabel(SourceTruncated)
+		}
+	}
+	result.DirectJudgment = restateLegacyLeadFragments(result.DirectJudgment, result.Drivers, result.Cohort, "Principal driver: ")
+	result.DeterministicAnswer = restateLegacyLeadFragments(result.DeterministicAnswer, result.Drivers, result.Cohort, "Principal driver(s): ")
+	return result
+}
+
+// LegacySourceStateWordsServed reports whether a served copy still carries
+// the legacy truncated-read words in its lead prose, current_state, or a
+// driver's summary or note: text the restatement left as it was, a provider's
+// evidence with the same words, or a stored form it does not know. The
+// completeness authority line counts it (legacy_source_state_words_served),
+// so a missed rewrite is visible at Info.
+func LegacySourceStateWordsServed(result InvestigationResult) bool {
+	carries := func(text string) bool {
+		return strings.Contains(text, legacyTruncatedQualifier) || strings.Contains(text, legacyTruncatedNote)
+	}
+	if carries(result.DirectJudgment) || carries(result.DeterministicAnswer) || carries(result.CurrentState) {
+		return true
+	}
+	return slices.ContainsFunc(result.Drivers, func(driver DriverJudgment) bool {
+		return carries(driver.Summary) || carries(driver.SourceStateNote)
+	})
+}
+
+// restateLegacyLeadFragments restates the two places composeLeadProse put a
+// driver's qualifier, at their composed position and nowhere else: the quick
+// answer (the first principal driver in answer order, leadDriverSentence)
+// and the details list (label, the other principal drivers' titles joined by
+// "; ", principalDriverTitles). Each is rebuilt from the drivers in answer
+// order with the legacy qualifier and replaced, once, by what the composers
+// write now. A list is tried both after a quick answer and as a whole, so a
+// head composed under either form is found. A title that merely carries the
+// same words is never touched, because only the whole composed fragment
+// matches.
+func restateLegacyLeadFragments(head string, drivers []DriverJudgment, cohort *Cohort, label string) string {
+	ordered := principalDriversInAnswerOrder(drivers, cohort)
+	if len(ordered) == 0 {
+		return head
+	}
+	legacyQualifier := func(driver DriverJudgment) string {
+		if driver.SourceState == SourceTruncated {
+			return legacyTruncatedQualifier
+		}
+		return driverSourceStateQualifier(driver.SourceState)
+	}
+	if lead := ordered[0]; lead.SourceState == SourceTruncated {
+		title := strings.TrimRight(strings.TrimSpace(lead.Title), ".")
+		if legacy := title + legacyQualifier(lead) + "."; title != "" {
+			head = replaceAtSentenceBoundary(head, legacy, leadDriverSentence(lead))
+		}
+	}
+	for _, list := range [][]DriverJudgment{ordered[1:], ordered} {
+		if !slices.ContainsFunc(list, func(driver DriverJudgment) bool { return driver.SourceState == SourceTruncated }) {
+			continue
+		}
+		legacy := make([]string, 0, len(list))
+		for _, driver := range list {
+			if title := strings.TrimSpace(driver.Title); title != "" {
+				legacy = append(legacy, title+legacyQualifier(driver))
+			}
+		}
+		from := label + strings.Join(legacy, "; ") + "."
+		if replaced := replaceAtSentenceBoundary(head, from, label+strings.Join(principalDriverTitles(list), "; ")+"."); replaced != head {
+			return replaced
+		}
+	}
+	return head
 }
 
 // quickAnswerSentence is the driver sentence the composer leads an answer's

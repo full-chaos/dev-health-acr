@@ -75,7 +75,7 @@ func BuildReadPlanV1(principal storage.Principal, request contractsv1.ContextPac
 		TimeWindowDays:       request.Scope.TimeWindowDays,
 		IncludeLowConfidence: request.Options.IncludeLowConfidence,
 		Statement:            clickHouseEvidenceQueryV1,
-		WorkItemGrant:        auth.WorkItemRepositorySelectorSet(principal.RepositoryScopes, true),
+		WorkItemGrant:        auth.WorkItemGrantSelectorSet(principal),
 	}, nil
 }
 

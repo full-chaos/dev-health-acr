@@ -3,8 +3,8 @@ package contextfabric
 import (
 	"context"
 	"slices"
-	"strings"
 
+	"github.com/full-chaos/dev-health-acr/internal/auth"
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
 )
@@ -98,10 +98,9 @@ func workItemRepositoryRestricted(principal storage.Principal, requested []strin
 	if len(requested) > 0 {
 		return true
 	}
-	if len(principal.RepositoryScopes) == 0 {
-		return false
-	}
-	return !slices.ContainsFunc(principal.RepositoryScopes, func(scope string) bool { return strings.TrimSpace(scope) == "*" })
+	// A repository-restricted caller, and a project-only caller whatever its
+	// repository list holds (CHAOS-12299 r3).
+	return auth.ClassifyGrant(principal).IsRestricted()
 }
 
 // repositoryWorkItemWalkOutcome classifies one finished read. A restricted

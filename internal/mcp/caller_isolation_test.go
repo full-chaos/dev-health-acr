@@ -439,6 +439,7 @@ func TestResolveCallerCarriesAnAuthenticatedPrincipalByValue(t *testing.T) {
 		OrgID:                "org_1",
 		CredentialID:         "cred_1",
 		RepositoryScopes:     []string{"acme/widgets"},
+		ProjectScopes:        []string{"project.v2:github:P-1"},
 		Permissions:          []string{"context:read", "evidence:read"},
 	}
 
@@ -447,12 +448,14 @@ func TestResolveCallerCarriesAnAuthenticatedPrincipalByValue(t *testing.T) {
 	require.NoError(t, err)
 	principal.OrgID = "org_mutated"
 	principal.RepositoryScopes[0] = "other/repo"
+	principal.ProjectScopes[0] = "project.v2:github:P-2"
 
 	// Then
 	carried, ok := caller.Principal()
 	require.True(t, ok)
 	require.Equal(t, "org_1", carried.OrgID)
 	require.Equal(t, []string{"acme/widgets"}, carried.RepositoryScopes)
+	require.Equal(t, []string{"project.v2:github:P-1"}, carried.ProjectScopes, "the project grant is copied too (CHAOS-12299)")
 
 	// And a caller resolved without one reports absence rather than a zero
 	// principal that would read as an authenticated identity.

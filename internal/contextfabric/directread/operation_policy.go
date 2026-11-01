@@ -171,14 +171,16 @@ func CallerClassVocabulary() [2]CallerClass {
 
 // CallerClassFor maps the subject gate's principal class onto the policy's
 // caller class: unrestricted and universal ("*") callers are unrestricted.
-// Any unknown class is restricted (fail closed).
+// Every member of the closed vocabulary is named; any unknown class is
+// restricted (fail closed).
 func CallerClassFor(class PrincipalClass) CallerClass {
 	switch class {
 	case ClassUnrestricted, ClassUniversal:
 		return CallerUnrestricted
-	default:
+	case ClassRestricted:
 		return CallerRestricted
 	}
+	return CallerRestricted
 }
 
 // CostClass is the D.6 cost class.

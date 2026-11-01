@@ -46,10 +46,14 @@ type subjectGrant struct {
 	subject          string
 	credentialID     string
 	repositoryScopes []string
-	subjects         []contextfabric.SubjectRef
-	requestID        string
-	expiresAt        time.Time
-	spent            atomic.Bool
+	// projectScopes binds the proof to the project grant too (CHAOS-12299):
+	// two project-only principals that differ only in their projects never
+	// share a proof. nil for a principal with no project grant.
+	projectScopes []string
+	subjects      []contextfabric.SubjectRef
+	requestID     string
+	expiresAt     time.Time
+	spent         atomic.Bool
 }
 
 func issue(ctx context.Context, principal storage.Principal, subjects []contextfabric.SubjectRef, issuedAt time.Time) AuthorizedSubjects {
@@ -59,6 +63,7 @@ func issue(ctx context.Context, principal storage.Principal, subjects []contextf
 		subject:          principal.Subject,
 		credentialID:     principal.CredentialID,
 		repositoryScopes: slices.Clone(principal.RepositoryScopes),
+		projectScopes:    slices.Clone(principal.ProjectScopes),
 		subjects:         slices.Clone(subjects),
 		requestID:        string(requestID),
 		expiresAt:        issuedAt.Add(AuthorizationTTL),
@@ -102,7 +107,8 @@ func (a AuthorizedSubjects) IssuedTo(principal storage.Principal) bool {
 		a.grant.orgID == principal.OrgID &&
 		a.grant.subject == principal.Subject &&
 		a.grant.credentialID == principal.CredentialID &&
-		slices.Equal(a.grant.repositoryScopes, principal.RepositoryScopes)
+		slices.Equal(a.grant.repositoryScopes, principal.RepositoryScopes) &&
+		slices.Equal(a.grant.projectScopes, principal.ProjectScopes)
 }
 
 // ErrUngatedRead is returned by every direct read handed an AuthorizedSubjects
