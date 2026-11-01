@@ -1013,6 +1013,19 @@ repository's pull requests and filtered by the dev-health-go
 (project ownership, the anchor gate, requested scope) is a named exception in
 the test, asserted exactly.
 
+**A requested repository scope refuses, and says so (CHAOS-12360).** A subject
+term whose match lies outside the requested repositories is not a candidate and
+is not offered: the narrowing is the caller's. For an unrestricted principal,
+whose grant covers the subject, a terminal result states the count of such
+subjects in a closed limitation, with no names, so the caller can widen the
+scope. A node counts when the offer rule would admit it without the narrowing,
+in any arm that finds a subject term, and a subject the resolution committed is
+not counted. A restricted or project-only caller never gets the count, because for them it is
+an existence oracle; a stored result that carries it is refused to them by the
+grant check every stored read takes. A comparison states the distinct subjects
+of both operands. The window confirmation runs before any search, so it has
+nothing to state.
+
 **A requested repository scope follows the link (CHAOS-8694).** An issue is in
 a requested repository scope when it is linked to a pull request of a named
 repository, whatever its own repository: the scope is tested on the pull
