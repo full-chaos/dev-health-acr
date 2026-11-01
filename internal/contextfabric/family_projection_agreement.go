@@ -54,7 +54,9 @@ const (
 	// (trend or investment_allocation) that the precedence table declares
 	// deliberately unreachable in its slice. Not a mis-route on either
 	// side: the two tables have different reachable ranges, and this class
-	// counts exactly that difference.
+	// counts exactly that difference. CHAOS-12492: the route serves the
+	// projection for a named subject's investment row, and the class keeps
+	// counting that case, because the precedence table still cannot reach it.
 	FamilyAgreementGoalRowUnreachable FamilyAgreementClass = "goal_row_unreachable_in_precedence"
 
 	// FamilyAgreementPrecedenceComparisonRow: the precedence table fired its
@@ -151,6 +153,10 @@ type FamilyAgreement struct {
 	ProjectedFamily QuestionFamily
 	// ProjectedRow is which §13.4.1 row fired.
 	ProjectedRow FamilyProjectionRow
+	// ProjectedTopology is the frame's subject expression kind, which the
+	// route reads where one row serves two topologies (row 7: a named subject
+	// and the organization scope).
+	ProjectedTopology SubjectExpressionKind
 	// PrecedenceFamily is what the shipped table routed. THIS IS THE ONE
 	// THAT IS SERVED.
 	PrecedenceFamily QuestionFamily
@@ -196,10 +202,11 @@ type FamilyAgreement struct {
 //  7. Everything else, named `unexplained` rather than absorbed.
 func ClassifyFamilyAgreement(projection FamilyProjection, precedence FamilySampleOutcome) FamilyAgreement {
 	agreement := FamilyAgreement{
-		ProjectedFamily:  projection.Family,
-		ProjectedRow:     projection.Row,
-		PrecedenceFamily: precedence.Family,
-		PrecedenceRow:    precedence.Row,
+		ProjectedFamily:   projection.Family,
+		ProjectedRow:      projection.Row,
+		ProjectedTopology: projection.Topology,
+		PrecedenceFamily:  precedence.Family,
+		PrecedenceRow:     precedence.Row,
 	}
 	agreement.Class = classifyFamilyAgreement(projection, precedence)
 	agreement.Agreed = agreement.Class == FamilyAgreementAgreed
