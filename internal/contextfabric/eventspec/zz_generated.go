@@ -5762,6 +5762,7 @@ type ProjectDeploymentWalkFields struct {
 	Members            int
 	Denied             int
 	Truncated          bool
+	AnchorOutOfScope   bool
 	Error              string
 	RequestID          string
 	// constructed (CHAOS-5516 r1 fix): an UNEXPORTED marker, generated on
@@ -5777,7 +5778,7 @@ type ProjectDeploymentWalkFields struct {
 
 // NewProjectDeploymentWalkFields is the generated constructor for ProjectDeploymentWalkFields -- every
 // field ProjectDeploymentWalk.Fields declares is a required parameter.
-func NewProjectDeploymentWalkFields(orgID string, outcome string, anchorKind string, anchorBasis string, committed int, issues int, linkedPullRequests int, members int, denied int, truncated bool, error string, requestID string) ProjectDeploymentWalkFields {
+func NewProjectDeploymentWalkFields(orgID string, outcome string, anchorKind string, anchorBasis string, committed int, issues int, linkedPullRequests int, members int, denied int, truncated bool, anchorOutOfScope bool, error string, requestID string) ProjectDeploymentWalkFields {
 	return ProjectDeploymentWalkFields{
 		OrgID:              orgID,
 		Outcome:            outcome,
@@ -5789,6 +5790,7 @@ func NewProjectDeploymentWalkFields(orgID string, outcome string, anchorKind str
 		Members:            members,
 		Denied:             denied,
 		Truncated:          truncated,
+		AnchorOutOfScope:   anchorOutOfScope,
 		Error:              error,
 		RequestID:          requestID,
 		constructed:        true,
@@ -5818,6 +5820,7 @@ func (f ProjectDeploymentWalkFields) SlogArgs() []any {
 		"members", f.Members,
 		"denied", f.Denied,
 		"truncated", f.Truncated,
+		"anchor_out_of_scope", f.AnchorOutOfScope,
 		"error", contextfabric.SanitizeLogAttr(f.Error),
 		"request_id", contextfabric.SanitizeLogAttr(f.RequestID),
 	}

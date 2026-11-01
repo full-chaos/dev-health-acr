@@ -1097,7 +1097,8 @@ func (t SlogTelemetry) RecordProjectDeploymentWalk(ctx context.Context, orgID st
 		args = append(args,
 			"members", decision.Members,
 			"denied", decision.Denied,
-			"truncated", decision.Truncated)
+			"truncated", decision.Truncated,
+			"anchor_out_of_scope", decision.AnchorOutOfScope)
 	}
 	if decision.Err != nil {
 		args = append(args, "error", contextfabric.SanitizeLogAttr(telemetryscrub.ErrorClass(decision.Err)))

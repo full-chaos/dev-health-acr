@@ -274,6 +274,9 @@ type treeWalk struct {
 	// hopProjectExcluded: the nodes a cohort member walk's hops left out of
 	// a requested project narrowing (CHAOS-12361), never denied.
 	hopProjectExcluded map[string]bool
+	// anchorOutOfScope: the requested project narrowing alone refused the
+	// anchor, so the walk did not run (CHAOS-12361).
+	anchorOutOfScope bool
 	// linkIssueTargets is set when the far side of the link is the issue (a
 	// repository's work items): the distinct linked issues before
 	// authorization, for a restricted caller read by a bounded count with no
@@ -1127,5 +1130,18 @@ func (a *Adapter) linkSegment(ctx context.Context, key, orgID string, state tree
 // the tree: a project through its issues' linked pull requests' repositories,
 // a team through the repositories it owns, a repository directly.
 func (a *Adapter) anchorDeploymentMembers(ctx context.Context, key, orgID string, principal storage.Principal, scope contextfabric.RequestedScope, anchor contextfabric.SubjectRef, collectLimit int, temporal temporalFilter) (treeWalk, error) {
+	// CHAOS-12361 review r2: the deployment route decides its anchor as the
+	// team anchor route does. An anchor the requested project narrowing alone
+	// refuses is out of scope: none of its deployments is a member, and none
+	// is denied (project_narrowing_scope.go).
+	if len(scope.ProjectIDs) > 0 {
+		n, err := a.nodeByKindID(ctx, key, orgID, string(anchor.Kind), anchor.CanonicalID, temporal)
+		if err != nil {
+			return treeWalk{anchorKind: anchor.Kind}, err
+		}
+		if n != nil && anchorOutOfProjectScope(principal, scope, toCandidateNode(n).Attributes) {
+			return treeWalk{anchorKind: anchor.Kind, anchorOutOfScope: true}, nil
+		}
+	}
 	return a.treeMembers(ctx, key, orgID, principal, scope, anchor, treeDeployment, collectLimit, temporal)
 }

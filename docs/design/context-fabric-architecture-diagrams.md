@@ -679,7 +679,10 @@ list is outside the requested projects) is out of scope, not hidden, so every
 member under it is out of scope too. Such members are counted apart
 (`project_excluded` on the team anchor walk line) and never reach the walk's
 authorization counts, so no `graph_cohort_denied_by_authorization` detail and no
-denied-cohort floor come from them.
+denied-cohort floor come from them. The deployment route
+(`anchorDeploymentMembers`) decides its anchor the same way: an anchor out of
+the narrowing reads no deployment (`anchor_out_of_scope` on the project
+deployment walk line).
 
 **A requested team narrowing on the repository walk (CHAOS-12319).**
 Repository, project and work-item nodes carry the `"*"` team list, so the node

@@ -297,7 +297,7 @@ func TestEveryProjectDeploymentWalkOutcomeIsEmittedByTheRealProducer(t *testing.
 			if len(lines) != 1 {
 				t.Fatalf("%d lines, want one", len(lines))
 			}
-			for _, key := range []string{"issues", "linked_pull_requests", "members", "denied", "truncated"} {
+			for _, key := range []string{"issues", "linked_pull_requests", "members", "denied", "truncated", "anchor_out_of_scope"} {
 				measured := outcome != ProjectDeploymentWalkNotRouted && outcome != ProjectDeploymentWalkReadFailed
 				if key == "issues" || key == "linked_pull_requests" {
 					measured = measured && decisions[0].AnchorKind == contextfabric.SubjectProject

@@ -1,6 +1,11 @@
 package falkorgraph
 
-import "context"
+import (
+	"context"
+
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
+	"github.com/full-chaos/dev-health-acr/internal/storage"
+)
 
 // CHAOS-12329: a requested project narrowing is SCOPE, not authorization. The
 // walk's admission (treeWalkState.admitted, through graphrank's node rule)
@@ -66,4 +71,16 @@ func (s treeWalkState) excludeByScope(n *node) {
 		s.out.hopProjectExcluded = map[string]bool{}
 	}
 	s.out.hopProjectExcluded[canonicalIDOf(n)] = true
+}
+
+// anchorOutOfProjectScope reports whether an anchor is refused only by the
+// request's project narrowing: its own project list is outside the requested
+// projects, while the caller's grants and the rest of the request admit it.
+func anchorOutOfProjectScope(principal storage.Principal, scope contextfabric.RequestedScope, attributes map[string]interface{}) bool {
+	if len(scope.ProjectIDs) == 0 || authorizedNodeAttributes(principal, scope, attributes) {
+		return false
+	}
+	unscoped := scope
+	unscoped.ProjectIDs, unscoped.ProjectNarrowing = nil, nil
+	return authorizedNodeAttributes(principal, unscoped, attributes)
 }

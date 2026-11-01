@@ -5471,6 +5471,9 @@ var ProjectDeploymentWalk = Event{
 		{Key: "members", Type: FieldInt, Presence: PresenceConditional, Applicability: "written when the walk finished (every outcome but not_routed and read_failed)"},
 		{Key: "denied", Type: FieldInt, Presence: PresenceConditional, Applicability: "written when the walk finished (every outcome but not_routed and read_failed)"},
 		{Key: "truncated", Type: FieldBool, Presence: PresenceConditional, Applicability: "written when the walk finished (every outcome but not_routed and read_failed)"},
+		// CHAOS-12361: the requested project narrowing alone refused the
+		// anchor, so no deployment was read.
+		{Key: "anchor_out_of_scope", Type: FieldBool, Presence: PresenceConditional, Applicability: "written when the walk finished (every outcome but not_routed and read_failed)"},
 		{Key: "error", Type: FieldString, Presence: PresenceConditional, Applicability: "written when outcome=read_failed"},
 		{Key: "request_id", Type: FieldString, Presence: PresenceConditional, Applicability: "written when the request context carries a request ID"},
 	},

@@ -2,6 +2,7 @@ package falkorgraph
 
 import (
 	"context"
+	"slices"
 	"sort"
 	"testing"
 
@@ -98,7 +99,7 @@ func TestACohortWalkCountsAProjectNarrowingExclusionAsScope(t *testing.T) {
 			}
 			sort.Strings(got)
 			sort.Strings(tc.wantMembers)
-			if len(got) != len(tc.wantMembers) || (len(got) > 0 && got[0] != tc.wantMembers[0]) {
+			if !slices.Equal(got, tc.wantMembers) {
 				t.Fatalf("members = %v, want %v", got, tc.wantMembers)
 			}
 			// Only what the grants hide is denied, in both counts.
@@ -259,6 +260,102 @@ func TestATeamAnchorWalkCountsALinkReadExclusion(t *testing.T) {
 		members := len(walk.nodes)
 		if members != tc.members || walk.denied != 0 || decision.ProjectExcluded != tc.outside {
 			t.Fatalf("%s: members=%d denied=%d link excluded=%d hop excluded=%d info excluded=%d, want %d 0 %d", name, members, walk.denied, walk.projectExcluded, len(walk.hopProjectExcluded), decision.ProjectExcluded, tc.members, tc.outside)
+		}
+	}
+}
+
+// Review r2 P2: the deployment route (anchorDeploymentMembers) decides its
+// anchor as the team anchor route does. A project anchor the requested
+// narrowing alone refuses is out of scope: the walk reads nothing, serves no
+// deployment and denies none; its own project, or no narrowing, walks.
+func TestTheDeploymentRouteKeepsAnAnchorOutOfTheNarrowingOutOfScope(t *testing.T) {
+	const project = "project.v2:linear:payments"
+	nodes := []seededNode{{kind: "project", id: project, label: "payments", props: map[string]interface{}{propAuthzProjects: []string{"payments"}, propAuthzTeams: "*", propAuthzRepos: "*"}}}
+	narrowed := func(id string) contextfabric.RequestedScope {
+		return contextfabric.RequestedScope{ProjectIDs: []string{id}, ProjectNarrowing: &contractsv1.ContextFabricProjectNarrowing{Identities: []string{"project.v2:linear:" + id}, Complete: true}}
+	}
+	anchor := contextfabric.SubjectRef{Kind: contextfabric.SubjectProject, CanonicalID: project, Label: "payments"}
+	open := func() storage.Principal { return storage.Principal{OrgID: "org-1"} }
+	for name, tc := range map[string]struct {
+		scope      contextfabric.RequestedScope
+		outOfScope bool
+		principal  func() storage.Principal
+	}{
+		"no narrowing":             {contextfabric.RequestedScope{}, false, open},
+		"the anchor's own project": {narrowed("payments"), false, open},
+		"another project":          {narrowed("requested"), true, open},
+		// The caller's grants refuse the anchor even without the narrowing
+		// (no project reach on this read): that is not a scope decision, and
+		// the walk runs and decides every node as before.
+		"another project, an anchor the grants refuse": {narrowed("requested"), false, func() storage.Principal {
+			return storage.Principal{OrgID: "org-1", RepositoryScopes: []string{"acme/api"}}
+		}},
+	} {
+		conn := seededGraphConn(nodes, nil)
+		inner, walked := conn.queryFunc, 0
+		conn.queryFunc = func(ctx context.Context, key, cypher string, params map[string]interface{}, readOnly bool) ([]row, error) {
+			if params["fromKind"] != nil || params["linkRel"] != nil {
+				walked++
+			}
+			return inner(ctx, key, cypher, params, readOnly)
+		}
+		walk, err := newFakeAdapter(t, conn).anchorDeploymentMembers(context.Background(), "key", "org-1", tc.principal(), tc.scope, anchor, 50, newTemporalFilter(contextfabric.TimeContext{}))
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		if walk.anchorOutOfScope != tc.outOfScope || (walked == 0) != tc.outOfScope || len(walk.nodes) != 0 || walk.denied != 0 {
+			t.Fatalf("%s: out of scope=%v walked=%d members=%d denied=%d, want out of scope=%v", name, walk.anchorOutOfScope, walked, len(walk.nodes), walk.denied, tc.outOfScope)
+		}
+		if got := projectDeploymentWalkOutcome(walk, false, nil); tc.outOfScope && got == ProjectDeploymentWalkDenied {
+			t.Fatalf("%s: outcome %s for an anchor out of scope", name, got)
+		}
+	}
+}
+
+// The same through DiscoverContext's deployment route (review r2's shape):
+// the reader serves no deployment under an anchor out of scope, and the
+// walk's Info decision carries anchor_out_of_scope.
+func TestTheDeploymentRouteDecisionCarriesAnAnchorOutOfScope(t *testing.T) {
+	const (
+		projectID = "project:payments"
+		issueID   = "work_item:linear:ENG-1"
+		prID      = "pull_request:github:acme/api:1"
+		repoID    = "repository:github:acme/api"
+		deployID  = "deployment:acme/api:1"
+	)
+	s := projectSeed{nodes: []seededNode{
+		{kind: "project", id: projectID, label: "payments", props: map[string]interface{}{propAuthzProjects: []string{"payments"}}},
+		{kind: "work_item", id: issueID, label: "ENG-1", repos: []string{noRepositoryScope}, workItemType: "issue", props: map[string]interface{}{propAuthzProjects: "*"}},
+		{kind: "pull_request", id: prID, label: "PR 1", repos: []string{"acme/api"}},
+		{kind: "repository", id: repoID, label: "acme/api", repos: []string{"acme/api"}},
+		{kind: "deployment", id: deployID, label: "deploy 1", repos: []string{"acme/api"}},
+	}, edges: []seededEdge{
+		{"BELONGS_TO_PROJECT", "work_item", issueID, "project", projectID, ""},
+		linkEdge(issueID, prID, "native"),
+		{"BELONGS_TO_REPOSITORY", "pull_request", prID, "repository", repoID, ""},
+		{"BELONGS_TO_REPOSITORY", "deployment", deployID, "repository", repoID, ""},
+	}}
+	for name, tc := range map[string]struct {
+		scope      contextfabric.RequestedScope
+		outOfScope bool
+	}{
+		"no narrowing": {contextfabric.RequestedScope{}, false},
+		"another project": {contextfabric.RequestedScope{ProjectIDs: []string{"requested"},
+			ProjectNarrowing: &contractsv1.ContextFabricProjectNarrowing{Identities: []string{"project.v2:linear:requested"}, Complete: true}}, true},
+	} {
+		request := projectDeploymentsRequest()
+		request.Request.RequestedScope = tc.scope
+		recording := &recordingTelemetry{}
+		result, err := newFakeAdapterWithTelemetry(t, seededGraphConn(s.nodes, s.edges), recording).DiscoverContext(context.Background(), storage.Principal{OrgID: "org-1"}, request)
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		served := 0
+		if result.Cohort != nil {
+			served = len(result.Cohort.Members)
+		}
+		if len(recording.projectDeploymentWalks) != 1 || recording.projectDeploymentWalks[0].AnchorOutOfScope != tc.outOfScope || (served == 0) != tc.outOfScope {
+			t.Fatalf("%s: served=%d decisions=%+v, want anchor out of scope=%v", name, served, recording.projectDeploymentWalks, tc.outOfScope)
 		}
 	}
 }
