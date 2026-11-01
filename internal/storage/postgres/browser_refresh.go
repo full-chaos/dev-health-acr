@@ -276,8 +276,9 @@ func (s *BrowserRefreshStore) revokeBrowserFamilyTx(ctx context.Context, tx *sql
 	return revokeBrowserFamilyTx(ctx, tx, s.audit, orgID, familyID, reason, actorID, credentiallifecycle.Actor{Type: credentiallifecycle.ActorUser, Ref: actorID}, now)
 }
 
-// revokeBrowserFamilyTx writes every sibling event with the one actor the caller
-// mapped: nothing here rebuilds an actor from the actor id.
+// revokeBrowserFamilyTx writes every sibling event with the actor the caller
+// mapped (FamilyMemberActor: a self revoke's siblings are revoked by the system);
+// nothing here rebuilds an actor from the actor id.
 func revokeBrowserFamilyTx(ctx context.Context, tx *sql.Tx, audit *AuditStore, orgID, familyID, reason, actorID string, actor credentiallifecycle.Actor, now time.Time) (int, error) {
 	if _, err := tx.ExecContext(ctx, `
 UPDATE acr.browser_token_families SET revoked_at = $2, revoked_reason = $3
@@ -324,7 +325,7 @@ WHERE org_id = $1::uuid AND family_id = $2 AND revoked_at IS NULL`, orgID, famil
 		if err := audit.record(ctx, tx, event); err != nil {
 			return 0, err
 		}
-		if err := audit.appendLifecycle(ctx, tx, credentiallifecycle.Facts{Kind: credentiallifecycle.KindRevoked, Credential: member, At: now, Actor: actor}); err != nil {
+		if err := audit.appendLifecycle(ctx, tx, credentiallifecycle.Facts{Kind: credentiallifecycle.KindRevoked, Credential: member, At: now, Actor: credentiallifecycle.FamilyMemberActor(actor)}); err != nil {
 			return 0, err
 		}
 	}

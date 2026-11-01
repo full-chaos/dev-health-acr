@@ -185,9 +185,15 @@ func (s *credentialStore) revokeCredential(ctx context.Context, input storage.Cr
 		slices.Sort(siblings)
 		ids = append(ids, siblings...)
 	}
+	memberActor := func(id string) credentiallifecycle.Actor {
+		if id == input.CredentialID {
+			return actor
+		}
+		return credentiallifecycle.FamilyMemberActor(actor)
+	}
 	ledgerMark, eventMark := s.audit.ledger.Len(), s.audit.eventCount()
 	for _, id := range ids {
-		facts := credentiallifecycle.Facts{Kind: credentiallifecycle.KindRevoked, Credential: s.byID[id].Metadata, At: now, Actor: actor}
+		facts := credentiallifecycle.Facts{Kind: credentiallifecycle.KindRevoked, Credential: s.byID[id].Metadata, At: now, Actor: memberActor(id)}
 		if err := s.recordMutation(ctx, events[id], nil, facts); err != nil {
 			s.audit.ledger.TruncateTo(ledgerMark)
 			s.audit.truncateEvents(eventMark)

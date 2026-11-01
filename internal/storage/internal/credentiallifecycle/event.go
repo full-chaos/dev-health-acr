@@ -385,3 +385,13 @@ func RollbackActor(in RotationRollbackInput) Actor {
 	}
 	return Actor{Type: ActorUser, Ref: in.ActorID}
 }
+
+// FamilyMemberActor is the actor of a sibling in a browser family revoke: the
+// initiator's own actor, except that a credential which revoked itself did not
+// revoke its siblings, so they are revoked by the system with no reference.
+func FamilyMemberActor(initiator Actor) Actor {
+	if initiator.Type == ActorCredential {
+		return Actor{Type: ActorSystem}
+	}
+	return initiator
+}
