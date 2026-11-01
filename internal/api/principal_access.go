@@ -169,12 +169,13 @@ func (a *App) requireLiveAccess(enforceFlags bool, next http.Handler) http.Handl
 }
 
 // narrowLiveScope narrows the principal to the live answer. With no repository
-// inventory and live projects the answer is a project grant, which only a "*"
-// consent grant may take (auth.NarrowToProjectScopes, CHAOS-12107 D2): any other
-// grant is refused like an empty scope. Every other answer is the repository
-// path, unchanged, so an organization with repositories never reads projects.
+// inventory the only scope left is a project grant, which only a "*" consent
+// grant with live projects may take (auth.NarrowToProjectScopes, CHAOS-12107
+// D2): anything else there is refused, as an empty scope always was. Every other
+// answer is the repository path, unchanged, so an organization with repositories
+// never reads projects.
 func narrowLiveScope(ctx context.Context, effective []string, access entitlements.PrincipalAccess) (context.Context, error) {
-	if len(access.Repositories) == 0 && len(access.Projects) > 0 {
+	if len(access.Repositories) == 0 {
 		return auth.NarrowToProjectScopes(ctx, access.Projects)
 	}
 	return auth.NarrowRepositoryScopes(ctx, effective)
