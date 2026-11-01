@@ -4,6 +4,7 @@ import (
 	"context"
 	"log/slog"
 
+	"github.com/full-chaos/dev-health-acr/internal/auth"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
@@ -28,9 +29,11 @@ type TeamNarrowingFunc func(ctx context.Context, subjects []contextfabric.Subjec
 // the request is the caller's own team narrowing of an otherwise unrestricted
 // principal. Like repositoryNarrowedByUnrestrictedPrincipal, such a narrowing
 // cannot hide anything the principal could not already see, so it does not
-// make the census an existence oracle.
+// make the census an existence oracle. A project-only caller is never an
+// unrestricted principal, whatever its repository list (CHAOS-12299 r3).
 func teamNarrowedByUnrestrictedPrincipal(principal storage.Principal, request contextfabric.InvestigationRequest, deps ResolveDeps) bool {
-	return scopesUnrestricted(principal.RepositoryScopes) &&
+	return auth.ClassifyGrant(principal) != auth.GrantProjectOnly &&
+		scopesUnrestricted(principal.RepositoryScopes) &&
 		len(request.RequestedScope.TeamIDs) > 0 &&
 		len(request.RequestedScope.RepositorySlugs) == 0 &&
 		len(request.RequestedScope.ProjectIDs) == 0 &&

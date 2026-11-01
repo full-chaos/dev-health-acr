@@ -251,3 +251,31 @@ func TestResolveSubjects_ATeamNarrowingKeepsAnOutOfTeamCoverageFindOutOfTheOffer
 		}
 	}
 }
+
+// TestAProjectOnlyCallerIsNeverAnUnrestrictedPrincipalNarrowingByTeam
+// (CHAOS-12299 r3 applied to the team path): a project-only caller with an
+// empty or "*" repository list is never an unrestricted principal, so an
+// organization-wide census never runs for its team narrowing.
+func TestAProjectOnlyCallerIsNeverAnUnrestrictedPrincipalNarrowingByTeam(t *testing.T) {
+	t.Parallel()
+	narrowing := censusTeamNarrowing(nil, nil, new(int), nil)
+	deps := ResolveDeps{TeamNarrowing: narrowing}
+	request := contextfabric.InvestigationRequest{RequestedScope: contextfabric.RequestedScope{TeamIDs: []string{"team-b"}}}
+	for _, scopes := range [][]string{nil, {}, {"*"}} {
+		principal := storage.Principal{OrgID: "org_1", RepositoryScopes: scopes, ProjectScopes: []string{"project.v2:github:P-1"}}
+		if teamNarrowedByUnrestrictedPrincipal(principal, request, deps) {
+			t.Errorf("%q: a project-only caller counts as an unrestricted principal narrowing by team", scopes)
+		}
+		if teamNarrowingSatisfierFilter(principal, request, deps) != nil {
+			t.Errorf("%q: a project-only caller gets the team satisfier narrower", scopes)
+		}
+	}
+	for _, tc := range []struct {
+		scopes []string
+		want   bool
+	}{{nil, true}, {[]string{"*"}, true}, {[]string{"acme/api"}, false}} {
+		if got := teamNarrowedByUnrestrictedPrincipal(storage.Principal{OrgID: "org_1", RepositoryScopes: tc.scopes}, request, deps); got != tc.want {
+			t.Errorf("%q: teamNarrowedByUnrestrictedPrincipal = %v, want %v", tc.scopes, got, tc.want)
+		}
+	}
+}

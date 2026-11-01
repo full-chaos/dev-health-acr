@@ -777,7 +777,7 @@ provider key), or one whose ownership is missing, never leaves. With no in-team
 offer, today's offers stand, so the conversation never dead-ends. A commit
 stands: the subject is what the question names (Anchor B). For an unrestricted
 principal's team-only narrowing, the resolution census runs, as it does for a
-repository narrowing. Its satisfier narrower keeps the satisfiers inside the
+repository narrowing; a project-only caller is never an unrestricted principal. Its satisfier narrower keeps the satisfiers inside the
 requested teams' repositories (repository ownership only; a work item through a
 linked pull request), and the `shadow_caller_narrowing` trace line names the
 outcome. A team narrowing has no in-query census filter, so a single satisfier
