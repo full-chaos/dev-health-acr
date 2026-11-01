@@ -23,9 +23,9 @@ import (
 
 type fakeConn struct {
 	queryFunc func(ctx context.Context, graphKey, cypher string, params map[string]interface{}, readOnly bool) ([]row, error)
-	// linkReachFunc answers a restricted call's link reach (link_reach.go). That
-	// read runs on every such call, so a test that does not set it reads an
-	// empty reach and its queryFunc sees only the statements it is about.
+	// linkReachFunc answers the keyed link read (link_reach.go). That read
+	// follows every read of a restricted call, so a test that does not set it
+	// proves no link and its queryFunc sees only the statements it is about.
 	linkReachFunc   func(ctx context.Context, cypher string, params map[string]interface{}) ([]row, error)
 	constraintsFunc func(ctx context.Context, graphKey string) ([]constraintStatus, error)
 	indexesFunc     func(ctx context.Context, graphKey string) ([]indexStatus, error)

@@ -5396,12 +5396,13 @@ var TeamNarrowingGeneralRead = Event{
 // workItemLinkReachOutcome is the closed vocabulary of WorkItemLinkReach's
 // "outcome" field -- see falkorgraph.WorkItemLinkReachOutcomeVocabulary, the
 // producer's own list this one must never drift from.
-var workItemLinkReachOutcome = []string{"read", "cut", "failed"}
+var workItemLinkReachOutcome = []string{"read", "failed"}
 
-// WorkItemLinkReach (CHAOS-12456) is the Info line of one read of a restricted
-// caller's native-link reach: how it ended, the rows it read, and how long it
-// took. A failed or cut reach serves a different sentence, and this is the line
-// that says why, so a failed read also writes a Warn line beside it. Counts and
+// WorkItemLinkReach (CHAOS-12456) is the Info line of the keyed native-link reads
+// of one adapter call of a restricted caller: the reads it issued (one for each
+// wrapped read), the ids and rows they carried, how many failed, and their total
+// time. A failed read serves a different sentence, and this is the line that says
+// why, so a call with a failed read also writes a Warn line beside it. Counts and
 // a closed value only, never an id or a slug.
 var WorkItemLinkReach = Event{
 	ID:              "contextfabric.work_item_link_reach",
@@ -5413,7 +5414,10 @@ var WorkItemLinkReach = Event{
 	Fields: []Field{
 		{Key: "org_id", Type: FieldString, Presence: PresenceRequired},
 		{Key: "outcome", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: workItemLinkReachOutcome},
+		{Key: "reads", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "ids", Type: FieldInt, Presence: PresenceRequired},
 		{Key: "rows", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "failed", Type: FieldInt, Presence: PresenceRequired},
 		{Key: "elapsed_ms", Type: FieldInt, Presence: PresenceRequired},
 		{Key: "request_id", Type: FieldString, Presence: PresenceConditional, Applicability: requestIDApplicability},
 	},

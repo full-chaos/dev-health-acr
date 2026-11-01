@@ -3,6 +3,7 @@ package falkorgraph
 import (
 	"context"
 	"fmt"
+	"maps"
 	"slices"
 	"sort"
 	"strings"
@@ -22,154 +23,229 @@ import (
 // granted (ruling (a); AGENTS.md "Entity tree"). explicit_text and heuristic
 // links never grant, and a project's owning team is never the relation.
 //
-// Same pattern as project_reach.go. The reach is read LIVE once per adapter
-// call, and each repo-less node a read returns gains an in-memory attribute that
+// Same pattern as project_reach.go, but read per page. Each wrapped read is
+// followed by ONE keyed read of the repo-less work items that read returned, and
+// each of them that a link joins to the grant gains an in-memory attribute that
 // the shared predicate tests. Nothing is stored on a node, so nothing needs a
 // rebuild, and a read site that is not wrapped keeps the sentinel and denies: a
 // missed site fails CLOSED. The sentinel itself stays, so every walk keeps its
 // own tier rule (repositoryLess, admitted).
 //
-// THE READ IS ANCHORED ON THE GRANT and runs at a fixed place, the first read of
-// the call, whatever that read returned. So no statement depends on a subject
-// outside the grant: a keyed read of the page's ids would run only when the page
-// held a repo-less node, a hidden one included.
+// THE KEYED READ RUNS ONCE FOR EVERY WRAPPED READ, an empty page included, and
+// its text is one constant. So a subject outside the grant changes no statement
+// and no count of statements: a hidden item changes only the id list. Reading
+// only when a page held an id would make the read itself the signal.
 //
 // A failed read admits nothing. It is recorded, the call goes on, and the turn
 // discloses it. A stored-subject decision fails instead (stored_subjects.go): a
 // read that failed is not a denial.
 
-// linkReachMaxRows bounds one reach read. The row past it marks a cut. The ids a
-// cut read holds are proven and stay; every other item stays denied and the turn
-// discloses it.
-const linkReachMaxRows = 20000
-
 type linkReachContextKey struct{}
 
-// WorkItemLinkReachOutcome is how one reach read ended
+// WorkItemLinkReachOutcome is how the link reads of one adapter call ended
 // (eventspec.WorkItemLinkReach).
 type WorkItemLinkReachOutcome string
 
 const (
-	// WorkItemLinkReachRead: the read finished, inside the bound.
+	// WorkItemLinkReachRead: every read of the call finished.
 	WorkItemLinkReachRead WorkItemLinkReachOutcome = "read"
-	// WorkItemLinkReachCut: the read stopped at linkReachMaxRows.
-	WorkItemLinkReachCut WorkItemLinkReachOutcome = "cut"
-	// WorkItemLinkReachFailed: the read returned an error.
+	// WorkItemLinkReachFailed: at least one read returned an error.
 	WorkItemLinkReachFailed WorkItemLinkReachOutcome = "failed"
 )
 
 // WorkItemLinkReachOutcomeVocabulary is the closed list of outcomes.
 func WorkItemLinkReachOutcomeVocabulary() []string {
-	return []string{string(WorkItemLinkReachRead), string(WorkItemLinkReachCut), string(WorkItemLinkReachFailed)}
+	return []string{string(WorkItemLinkReachRead), string(WorkItemLinkReachFailed)}
 }
 
-// lazyLinkReach is one call's reach, read at its first read.
-type lazyLinkReach struct {
+// WorkItemLinkReachTally is the sum of the link reads of one adapter call: 27
+// reads in a turn is too loud for one Info line each. Counts only.
+type WorkItemLinkReachTally struct {
+	// Reads is the keyed reads issued, one for each wrapped read.
+	Reads int
+	// IDs is the ids the reads carried, zero for an empty page.
+	IDs int
+	// Rows is the link rows the reads returned, before the gate's own check.
+	Rows int
+	// Failed is the reads that returned an error.
+	Failed int
+	// Elapsed is the time of the reads added up.
+	Elapsed time.Duration
+}
+
+// Outcome is failed when any read failed.
+func (t WorkItemLinkReachTally) Outcome() WorkItemLinkReachOutcome {
+	if t.Failed > 0 {
+		return WorkItemLinkReachFailed
+	}
+	return WorkItemLinkReachRead
+}
+
+// linkReachStatement is the keyed read. It is one constant: the page and the
+// grant are parameters, so no subject can change its text.
+var linkReachStatement = func() string {
+	pullRequest := treeNodeVar{name: "p"}
+	return fmt.Sprintf("MATCH (w:%s {%s:$org, %s:$workItem})-[r:%s]->(p:%s {%s:$org, %s:$pullRequest}) "+
+		"WHERE w.%s IN $ids AND r.%s = $links AND r.%s = $native AND $noRepository IN w.%s AND %s "+
+		"RETURN w.%s AS id, p.%s AS repos",
+		labelSubject, propOrgID, propKind, labelRelation, labelSubject, propOrgID, propKind,
+		propCanonicalID, propRelationType, propPropertyPrefix+linkTierProperty, propAuthzRepos, pullRequest.repositoryMatchClause("grant"),
+		propCanonicalID, propAuthzRepos)
+}()
+
+// linkReach is the state of one call's link reads: the caller they read for, the
+// tally of its line, and the first failure, which the call discloses.
+type linkReach struct {
 	key       string
 	principal storage.Principal
 	telemetry GraphTelemetry
-	once      sync.Once
-	reach     map[string][]string
+	mu        sync.Mutex
+	tally     WorkItemLinkReachTally
 	err       error
-	cut       bool
 }
 
 // withLinkReach adds a reach to ctx for a restricted caller. A project-only
-// caller holds no repository list to anchor on, and an unrestricted or universal
+// caller holds no repository list to match, and an unrestricted or universal
 // caller needs no link: both read nothing. A reach held on ctx is reused only by
 // the same graph, organization and repository scopes: it is one caller's grant.
 func (a *Adapter) withLinkReach(ctx context.Context, key string, principal storage.Principal) context.Context {
 	if auth.ClassifyGrant(principal) != auth.GrantRestricted {
 		return ctx
 	}
-	if held, ok := ctx.Value(linkReachContextKey{}).(*lazyLinkReach); ok && held.key == key && held.principal.OrgID == principal.OrgID &&
+	if held, ok := ctx.Value(linkReachContextKey{}).(*linkReach); ok && held.key == key && held.principal.OrgID == principal.OrgID &&
 		slices.Equal(held.principal.RepositoryScopes, principal.RepositoryScopes) {
 		return ctx
 	}
-	return context.WithValue(ctx, linkReachContextKey{}, &lazyLinkReach{key: key, principal: principal, telemetry: a.config.Telemetry})
+	return context.WithValue(ctx, linkReachContextKey{}, &linkReach{key: key, principal: principal, telemetry: a.config.Telemetry})
 }
 
-func (l *lazyLinkReach) load(ctx context.Context, inner conn) {
-	l.once.Do(func() {
-		started := time.Now()
-		outcome, read := WorkItemLinkReachFailed, 0
-		defer func() {
-			if l.telemetry != nil {
-				l.telemetry.RecordWorkItemLinkReach(ctx, l.principal.OrgID, outcome, read, time.Since(started))
-			}
-		}()
-		pullRequest := treeNodeVar{name: "p"}
-		cypher := fmt.Sprintf("MATCH (w:%s {%s:$org, %s:$workItem})-[r:%s]->(p:%s {%s:$org, %s:$pullRequest}) "+
-			"WHERE r.%s = $links AND r.%s = $native AND $noRepository IN w.%s AND %s "+
-			"RETURN w.%s AS id, p.%s AS repos ORDER BY id LIMIT %d",
-			labelSubject, propOrgID, propKind, labelRelation, labelSubject, propOrgID, propKind,
-			propRelationType, propPropertyPrefix+linkTierProperty, propAuthzRepos, pullRequest.repositoryMatchClause("grant"),
-			propCanonicalID, propAuthzRepos, linkReachMaxRows+1)
-		params := map[string]interface{}{
-			"org": strings.TrimSpace(l.principal.OrgID), "workItem": string(contractsv1.ContextFabricSubjectWorkItem),
-			"pullRequest": string(contractsv1.ContextFabricSubjectPullRequest),
-			"links":       string(contractsv1.ContextFabricRelationshipLinksPullRequest), "native": linkTiers[0].name, "noRepository": noRepositoryScope,
-		}
-		bindRepositoryMatch(params, "grant", l.principal.RepositoryScopes)
-		// The reach read runs on the INNER conn: it is never rewritten.
-		rows, err := inner.query(ctx, l.key, cypher, params, true)
-		if err != nil {
+// read is the one keyed read of a page. It runs whatever the page holds. It runs
+// on the INNER conn, so it is never rewritten. A failed read is a nil map, which
+// admits nothing.
+func (l *linkReach) read(ctx context.Context, inner conn, page []row) linkedRepositories {
+	ids := repoLessWorkItemIDs(page)
+	params := map[string]interface{}{
+		"org": strings.TrimSpace(l.principal.OrgID), "workItem": string(contractsv1.ContextFabricSubjectWorkItem),
+		"pullRequest": string(contractsv1.ContextFabricSubjectPullRequest), "ids": ids,
+		"links": string(contractsv1.ContextFabricRelationshipLinksPullRequest), "native": linkTiers[0].name, "noRepository": noRepositoryScope,
+	}
+	bindRepositoryMatch(params, "grant", l.principal.RepositoryScopes)
+	started := time.Now()
+	rows, err := inner.query(ctx, l.key, linkReachStatement, params, true)
+	elapsed := time.Since(started)
+
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.tally.Reads++
+	l.tally.IDs += len(ids)
+	l.tally.Rows += len(rows)
+	l.tally.Elapsed += elapsed
+	if err != nil {
+		l.tally.Failed++
+		if l.err == nil {
 			l.err = graphNotProjectedError(safeDependencyError("read work item link reach", err))
-			return
 		}
-		outcome = WorkItemLinkReachRead
-		if len(rows) > linkReachMaxRows {
-			l.cut = true
-			outcome = WorkItemLinkReachCut
-			rows = rows[:linkReachMaxRows]
+		return nil
+	}
+	sets := map[string]map[string]struct{}{}
+	for _, row := range rows {
+		id, _ := row["id"].(string)
+		if id == "" {
+			continue
 		}
-		read = len(rows)
-		sets := map[string]map[string]struct{}{}
-		for _, row := range rows {
-			id, _ := row["id"].(string)
-			if id == "" {
+		for _, repository := range rowStringSlice(row, "repos") {
+			// The statement's match is a necessary condition only: an owner
+			// grant also matches a three-part slug by its prefix. The map holds
+			// what the gate admits, so a slug outside the grant never enters
+			// this process's attributes.
+			if !auth.RepositoryAllowed(l.principal.RepositoryScopes, repository) {
 				continue
 			}
-			for _, repository := range rowStringSlice(row, "repos") {
-				// The statement's match is a necessary condition only: an
-				// owner grant also matches a three-part slug by its prefix.
-				// The map holds what the gate admits, so a slug outside the
-				// grant never enters this process's attributes.
-				if !auth.RepositoryAllowed(l.principal.RepositoryScopes, repository) {
-					continue
-				}
-				if sets[id] == nil {
-					sets[id] = map[string]struct{}{}
-				}
-				sets[id][repository] = struct{}{}
+			if sets[id] == nil {
+				sets[id] = map[string]struct{}{}
 			}
+			sets[id][repository] = struct{}{}
 		}
-		l.reach = make(map[string][]string, len(sets))
-		for id, set := range sets {
-			list := make([]string, 0, len(set))
-			for repository := range set {
-				list = append(list, repository)
-			}
-			sort.Strings(list)
-			l.reach[id] = list
+	}
+	reached := make(linkedRepositories, len(sets))
+	for id, set := range sets {
+		list := make([]string, 0, len(set))
+		for repository := range set {
+			list = append(list, repository)
 		}
-	})
+		sort.Strings(list)
+		reached[id] = list
+	}
+	return reached
 }
 
-// incomplete reports a read that failed or was cut: an item it does not hold
-// is unknown, not unlinked.
-func (l *lazyLinkReach) incomplete() bool { return l.err != nil || l.cut }
+// reportLinkReach writes the line of one adapter call and starts a new tally, so
+// a call inside a call writes its own reads and the outer one the rest. A call
+// that read nothing writes nothing. The failure stays: the turn still owes its
+// sentence.
+func reportLinkReach(ctx context.Context) {
+	l, ok := ctx.Value(linkReachContextKey{}).(*linkReach)
+	if !ok {
+		return
+	}
+	l.mu.Lock()
+	tally := l.tally
+	l.tally = WorkItemLinkReachTally{}
+	l.mu.Unlock()
+	if tally.Reads > 0 && l.telemetry != nil {
+		l.telemetry.RecordWorkItemLinkReach(ctx, l.principal.OrgID, tally)
+	}
+}
 
-// rewrite adds the attribute to a repo-less work item the reach holds, walking
+// repoLessWorkItem is a node the keyed read is about.
+func repoLessWorkItem(n *node) bool {
+	return n != nil && propStringValue(n.Properties[propKind]) == string(contractsv1.ContextFabricSubjectWorkItem) && repositoryLess(n)
+}
+
+// repoLessWorkItemIDs is the sorted, distinct ids of the repo-less work items of
+// a page, walking lists (paths, collected nodes). It is never nil: an empty page
+// binds an empty list, not null.
+func repoLessWorkItemIDs(page []row) []interface{} {
+	seen := map[string]struct{}{}
+	var collect func(value interface{})
+	collect = func(value interface{}) {
+		switch v := value.(type) {
+		case *node:
+			if repoLessWorkItem(v) {
+				seen[propStringValue(v.Properties[propCanonicalID])] = struct{}{}
+			}
+		case []interface{}:
+			for _, item := range v {
+				collect(item)
+			}
+		}
+	}
+	for _, r := range page {
+		for _, value := range r {
+			collect(value)
+		}
+	}
+	ids := make([]interface{}, 0, len(seen))
+	for _, id := range slices.Sorted(maps.Keys(seen)) {
+		ids = append(ids, id)
+	}
+	return ids
+}
+
+// linkedRepositories is what one keyed read proved: a page's repo-less work item
+// to the granted repositories its native links reach. It lives for one read.
+type linkedRepositories map[string][]string
+
+// rewrite adds the attribute to a repo-less work item the read holds, walking
 // lists (paths, collected nodes). The node is copied: a cached or shared node
 // value is never mutated in place.
-func (l *lazyLinkReach) rewrite(value interface{}) interface{} {
+func (l linkedRepositories) rewrite(value interface{}) interface{} {
 	switch v := value.(type) {
 	case *node:
-		if v == nil || propStringValue(v.Properties[propKind]) != string(contractsv1.ContextFabricSubjectWorkItem) || !repositoryLess(v) {
+		if !repoLessWorkItem(v) {
 			return v
 		}
-		repositories, linked := l.reach[propStringValue(v.Properties[propCanonicalID])]
+		repositories, linked := l[propStringValue(v.Properties[propCanonicalID])]
 		if !linked {
 			return v
 		}
@@ -192,20 +268,17 @@ func (l *lazyLinkReach) rewrite(value interface{}) interface{} {
 	}
 }
 
-// linkReachIncomplete reports the call's reach as failed or cut. False with no
-// reach on ctx, and false until the first read.
-func linkReachIncomplete(ctx context.Context) bool {
-	lazy, ok := ctx.Value(linkReachContextKey{}).(*lazyLinkReach)
-	return ok && lazy.incomplete()
-}
-
-// linkReachError is the failed read, for a decision that must not read it as a
-// denial. A cut is not an error: the ids it holds are proven.
+// linkReachError is the call's first failed read: an item that read did not
+// prove is unknown, not unlinked. A decision must not read it as a denial. Nil
+// with no reach on ctx.
 func linkReachError(ctx context.Context) error {
-	if lazy, ok := ctx.Value(linkReachContextKey{}).(*lazyLinkReach); ok {
-		return lazy.err
+	l, ok := ctx.Value(linkReachContextKey{}).(*linkReach)
+	if !ok {
+		return nil
 	}
-	return nil
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.err
 }
 
 // repoLessNodesRead reports a repo-less work item among nodes.

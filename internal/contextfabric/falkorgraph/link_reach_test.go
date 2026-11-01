@@ -6,6 +6,8 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"maps"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
@@ -33,14 +35,20 @@ type linkEdgeRow struct {
 	repo       string
 }
 
-// reachRows answers the reach statement from edges, by what the statement and
-// its parameters carry: the tier it asks for and the grant it matches.
+// reachRows answers the keyed read from edges, by what the statement and its
+// parameters carry: the page it keys on, the tier it asks for and the grant it
+// matches.
 func reachRows(t *testing.T, edges []linkEdgeRow, cypher string, params map[string]interface{}) []row {
 	t.Helper()
+	keyed := strings.Contains(cypher, ".canonical_id IN $ids")
 	wantsNative := strings.Contains(cypher, "$native")
 	matchesGrant := strings.Contains(cypher, "$grantRaw")
+	page, _ := params["ids"].([]interface{})
 	var rows []row
 	for _, edge := range edges {
+		if keyed && !slices.Contains(page, interface{}(edge.item)) {
+			continue
+		}
 		if wantsNative && edge.tier != params["native"] {
 			continue
 		}
@@ -71,7 +79,7 @@ func repoLessNode(id string) *node {
 func readNode(t *testing.T, fake *fakeConn, principal storage.Principal, n *node) (graphrank.CandidateNode, context.Context) {
 	t.Helper()
 	adapter := newFakeAdapter(t, fake)
-	ctx, err := adapter.withProjectReach(context.Background(), "k", principal)
+	ctx, _, err := adapter.withProjectReach(context.Background(), "k", principal)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -122,9 +130,10 @@ func TestTheLinkReachHoldsOnlyGrantedNativeLinks(t *testing.T) {
 	}
 }
 
-// The statement is the rule: native, the link relation, repo-less, the grant,
-// no temporal term (validity in time is not an authorization input).
-func TestTheLinkReachStatementIsAnchoredOnTheGrant(t *testing.T) {
+// The statement is the rule: the page's ids, native, the link relation, repo-less,
+// the grant, no temporal term (validity in time is not an authorization input),
+// and no cap.
+func TestTheLinkReachStatementIsKeyedOnThePage(t *testing.T) {
 	t.Parallel()
 	var statement string
 	var params map[string]interface{}
@@ -133,7 +142,7 @@ func TestTheLinkReachStatementIsAnchoredOnTheGrant(t *testing.T) {
 		return nil, nil
 	}}
 	readNode(t, fake, restrictedReachCaller(t), repoLessNode(repoLessItemID))
-	for _, want := range []string{"(w:Subject {org_id:$org,", "(p:Subject {org_id:$org,", "r.relation_type = $links", "r.property_link_provenance = $native", "$noRepository IN w.authorization_repositories", "$grantRaw", "LIMIT 20001"} {
+	for _, want := range []string{"(w:Subject {org_id:$org,", "(p:Subject {org_id:$org,", "w.canonical_id IN $ids", "r.relation_type = $links", "r.property_link_provenance = $native", "$noRepository IN w.authorization_repositories", "$grantRaw"} {
 		if !strings.Contains(statement, want) {
 			t.Fatalf("statement %q lacks %q", statement, want)
 		}
@@ -141,30 +150,55 @@ func TestTheLinkReachStatementIsAnchoredOnTheGrant(t *testing.T) {
 	if params["native"] != "native" || params["links"] != string(contractsv1.ContextFabricRelationshipLinksPullRequest) || params["noRepository"] != contractsv1.ContextFabricNoRepositorySentinel {
 		t.Fatalf("params = %v", params)
 	}
+	if !slices.Equal(params["ids"].([]interface{}), []interface{}{repoLessItemID}) {
+		t.Fatalf("ids = %v", params["ids"])
+	}
 	if strings.Contains(statement, "valid_") || strings.Contains(statement, "$asOf") {
 		t.Fatalf("statement %q carries a temporal term: a merged pull request's link must still count", statement)
 	}
+	if strings.Contains(statement, "LIMIT") {
+		t.Fatalf("statement %q carries a cap", statement)
+	}
 }
 
-// Rows outside the grant cannot fill the reach: the statement drops them before
-// its LIMIT, so an item inside stays proven.
-func TestOutsideLinksCannotCutTheReach(t *testing.T) {
+// No cap and no cut: a page past the old bound is read whole, and every item is
+// proven.
+func TestALargePageIsReadWhole(t *testing.T) {
 	t.Parallel()
-	edges := make([]linkEdgeRow, 0, linkReachMaxRows+2)
-	for i := range linkReachMaxRows + 1 {
-		edges = append(edges, linkEdgeRow{fmt.Sprintf("work_item.v2:z:linear:OUT-%d", i), "native", reachOutsideRepo})
+	const size = 20001
+	page := make([]row, 0, size)
+	for i := range size {
+		page = append(page, row{"n": repoLessNode(fmt.Sprintf("work_item.v2:z:linear:KEY-%06d", i))})
 	}
-	edges = append(edges, linkEdgeRow{repoLessItemID, "native", reachInsideRepo})
-	fake := &fakeConn{linkReachFunc: func(_ context.Context, cypher string, params map[string]interface{}) ([]row, error) {
-		return reachRows(t, edges, cypher, params), nil
-	}}
 	principal := restrictedReachCaller(t)
-	candidate, ctx := readNode(t, fake, principal, repoLessNode(repoLessItemID))
-	if linkReachIncomplete(ctx) {
-		t.Fatal("rows outside the grant cut the reach")
+	telemetry := &recordingTelemetry{}
+	fake := &fakeConn{
+		linkReachFunc: func(_ context.Context, _ string, params map[string]interface{}) ([]row, error) {
+			rows := make([]row, 0, size)
+			for _, id := range params["ids"].([]interface{}) {
+				rows = append(rows, row{"id": id, "repos": []interface{}{reachInsideRepo}})
+			}
+			return rows, nil
+		},
+		queryFunc: func(context.Context, string, string, map[string]interface{}, bool) ([]row, error) { return page, nil },
 	}
-	if !graphrank.AuthorizedAttributes(principal, contextfabric.RequestedScope{}, candidate.Attributes) {
-		t.Fatal("the inside item was not admitted")
+	adapter := newFakeAdapterWithTelemetry(t, fake, telemetry)
+	ctx, finish, err := adapter.withProjectReach(context.Background(), "k", principal)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rows, err := adapter.api.query(ctx, "k", "MATCH (n) RETURN n", nil, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	finish()
+	for _, r := range rows {
+		if !graphrank.AuthorizedAttributes(principal, contextfabric.RequestedScope{}, toCandidateNode(r["n"].(*node)).Attributes) {
+			t.Fatalf("%v was not admitted", r["n"])
+		}
+	}
+	if want := []linkReachRecord{{orgID: "org_1", outcome: WorkItemLinkReachRead, reads: 1, ids: size, rows: size}}; !slices.Equal(telemetry.linkReaches, want) {
+		t.Fatalf("lines = %+v, want %+v", telemetry.linkReaches, want)
 	}
 }
 
@@ -201,6 +235,9 @@ func TestANativeLinkNeverWidensAGitHubOrGitLabItem(t *testing.T) {
 			if graphrank.AuthorizedAttributes(principal, contextfabric.RequestedScope{}, candidate.Attributes) {
 				t.Fatal("a native link widened an item whose own repository is outside the grant")
 			}
+			if got := (linkedRepositories{id: {reachInsideRepo}}).rewrite(n); got != interface{}(n) {
+				t.Fatalf("rewrite changed an item with its own repository: %+v", got)
+			}
 		})
 	}
 }
@@ -216,6 +253,9 @@ func TestOnlyAWorkItemTakesALink(t *testing.T) {
 	candidate, _ := readNode(t, fake, restrictedReachCaller(t), n)
 	if _, held := candidate.Attributes[graphrank.AuthorizationLinkRepositoriesAttr]; held {
 		t.Fatal("a node of another kind took a link")
+	}
+	if got := (linkedRepositories{id: {reachInsideRepo}}).rewrite(n); got != interface{}(n) {
+		t.Fatalf("rewrite changed a node of another kind: %+v", got)
 	}
 }
 
@@ -261,7 +301,7 @@ func TestWithLinkReachBindsOnlyARestrictedCaller(t *testing.T) {
 	t.Parallel()
 	adapter := newFakeAdapter(t, &fakeConn{})
 	bound := func(principal storage.Principal) bool {
-		_, ok := adapter.withLinkReach(context.Background(), "k", principal).Value(linkReachContextKey{}).(*lazyLinkReach)
+		_, ok := adapter.withLinkReach(context.Background(), "k", principal).Value(linkReachContextKey{}).(*linkReach)
 		return ok
 	}
 	if !bound(restrictedReachCaller(t)) {
@@ -276,7 +316,7 @@ func TestWithLinkReachBindsOnlyARestrictedCaller(t *testing.T) {
 			t.Fatalf("%s: a reach bound", name)
 		}
 	}
-	// A call inside a call reads the reach once.
+	// A call inside a call keeps the caller's reach.
 	first := adapter.withLinkReach(context.Background(), "k", restrictedReachCaller(t))
 	second := adapter.withLinkReach(first, "k", restrictedReachCaller(t))
 	if first.Value(linkReachContextKey{}) != second.Value(linkReachContextKey{}) {
@@ -285,7 +325,7 @@ func TestWithLinkReachBindsOnlyARestrictedCaller(t *testing.T) {
 }
 
 // A reach is one caller's grant. A context that passes to another caller must
-// not lend it: another scope, another organization or another graph reads again.
+// not lend it: another scope, another organization or another graph binds its own.
 func TestAHeldReachIsReusedOnlyByTheSameCaller(t *testing.T) {
 	t.Parallel()
 	adapter := newFakeAdapter(t, &fakeConn{})
@@ -306,89 +346,204 @@ func TestAHeldReachIsReusedOnlyByTheSameCaller(t *testing.T) {
 	}
 }
 
-// One line per read, whatever else the call reads, and none for a caller with no
-// reach. The line carries counts and a closed value only.
-func TestTheReachReportsOneLinePerRead(t *testing.T) {
+// reachSubjects is n work items for one AuthorizeStoredSubjects call: a stored
+// batch holds 256, so 257 is two wrapped reads.
+func reachSubjects(n int) []contextfabric.SubjectRef {
+	subjects := make([]contextfabric.SubjectRef, 0, n)
+	for i := range n {
+		subjects = append(subjects, contextfabric.SubjectRef{Kind: contextfabric.SubjectWorkItem, CanonicalID: fmt.Sprintf("work_item.v2:z:linear:KEY-%06d", i)})
+	}
+	return subjects
+}
+
+// One line per adapter call, adding up its reads, from the real call. It carries
+// counts and a closed value only.
+func TestTheReachReportsOneLinePerCall(t *testing.T) {
 	t.Parallel()
-	principal := restrictedReachCaller(t)
-	full := make([]linkEdgeRow, 0, linkReachMaxRows+1)
-	for i := range linkReachMaxRows + 1 {
-		full = append(full, linkEdgeRow{fmt.Sprintf("work_item.v2:z:linear:KEY-%06d", i), "native", reachInsideRepo})
+	binding := contextfabric.ResolvedGraphBinding{GraphKey: "acr-cf-fake-key", Epoch: 1}
+	repoLess := func(_ context.Context, _ string, _ string, params map[string]interface{}, _ bool) ([]row, error) {
+		var rows []row
+		for _, target := range params["targets"].([]interface{}) {
+			rows = append(rows, row{"n": repoLessNode(target.(map[string]interface{})["id"].(string))})
+		}
+		return rows, nil
+	}
+	nothing := func(context.Context, string, string, map[string]interface{}, bool) ([]row, error) { return nil, nil }
+	linked := func(_ context.Context, _ string, params map[string]interface{}) ([]row, error) {
+		var rows []row
+		for _, id := range params["ids"].([]interface{}) {
+			rows = append(rows, row{"id": id, "repos": []interface{}{reachInsideRepo}})
+		}
+		return rows, nil
+	}
+	failing := func(context.Context, string, map[string]interface{}) ([]row, error) {
+		return nil, errors.New("timeout")
+	}
+	failsFirst := func() func(context.Context, string, map[string]interface{}) ([]row, error) {
+		reads := 0
+		return func(ctx context.Context, cypher string, params map[string]interface{}) ([]row, error) {
+			if reads++; reads == 1 {
+				return nil, errors.New("timeout")
+			}
+			return linked(ctx, cypher, params)
+		}
 	}
 	cases := []struct {
-		name    string
-		reach   func(context.Context, string, map[string]interface{}) ([]row, error)
-		outcome WorkItemLinkReachOutcome
-		rows    int
+		name  string
+		page  func(context.Context, string, string, map[string]interface{}, bool) ([]row, error)
+		reach func(context.Context, string, map[string]interface{}) ([]row, error)
+		want  linkReachRecord
 	}{
-		{"read", func(_ context.Context, cypher string, params map[string]interface{}) ([]row, error) {
-			return reachRows(t, []linkEdgeRow{{repoLessItemID, "native", reachInsideRepo}, {"work_item.v2:z:linear:OTHER-1", "native", reachInsideRepo}}, cypher, params), nil
-		}, WorkItemLinkReachRead, 2},
-		{"empty", func(context.Context, string, map[string]interface{}) ([]row, error) { return nil, nil }, WorkItemLinkReachRead, 0},
-		{"cut", func(_ context.Context, cypher string, params map[string]interface{}) ([]row, error) {
-			return reachRows(t, full, cypher, params), nil
-		}, WorkItemLinkReachCut, linkReachMaxRows},
-		{"failed", func(context.Context, string, map[string]interface{}) ([]row, error) {
-			return nil, errors.New("timeout")
-		}, WorkItemLinkReachFailed, 0},
+		{"read", repoLess, linked, linkReachRecord{orgID: "org_1", outcome: WorkItemLinkReachRead, reads: 2, ids: 257, rows: 257}},
+		{"empty pages", nothing, linked, linkReachRecord{orgID: "org_1", outcome: WorkItemLinkReachRead, reads: 2}},
+		{"every read failed", repoLess, failing, linkReachRecord{orgID: "org_1", outcome: WorkItemLinkReachFailed, reads: 2, ids: 257, failed: 2}},
+		{"one read failed", repoLess, failsFirst(), linkReachRecord{orgID: "org_1", outcome: WorkItemLinkReachFailed, reads: 2, ids: 257, rows: 1, failed: 1}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			telemetry := &recordingTelemetry{}
-			fake := &fakeConn{linkReachFunc: tc.reach, queryFunc: func(context.Context, string, string, map[string]interface{}, bool) ([]row, error) { return nil, nil }}
-			adapter := newFakeAdapterWithTelemetry(t, fake, telemetry)
-			ctx, err := adapter.withProjectReach(context.Background(), "k", principal)
-			if err != nil {
-				t.Fatal(err)
-			}
-			for range 2 {
-				if _, err := adapter.api.query(ctx, "k", "MATCH (n) RETURN n", nil, true); err != nil {
-					t.Fatal(err)
-				}
-			}
-			want := []linkReachRecord{{orgID: "org_1", outcome: tc.outcome, rows: tc.rows}}
-			if !slices.Equal(telemetry.linkReaches, want) {
+			adapter := newFakeAdapterWithTelemetry(t, &fakeConn{linkReachFunc: tc.reach, queryFunc: tc.page}, telemetry)
+			_, _ = adapter.AuthorizeStoredSubjects(context.Background(), restrictedReachCaller(t), binding, reachSubjects(257))
+			if want := []linkReachRecord{tc.want}; !slices.Equal(telemetry.linkReaches, want) {
 				t.Fatalf("lines = %+v, want %+v", telemetry.linkReaches, want)
 			}
 		})
 	}
+	t.Run("a call that read nothing", func(t *testing.T) {
+		t.Parallel()
+		telemetry := &recordingTelemetry{}
+		adapter := newFakeAdapterWithTelemetry(t, &fakeConn{}, telemetry)
+		if _, err := adapter.AuthorizeStoredSubjects(context.Background(), restrictedReachCaller(t), binding, nil); err != nil {
+			t.Fatal(err)
+		}
+		if len(telemetry.linkReaches) != 0 {
+			t.Fatalf("lines = %+v, want none", telemetry.linkReaches)
+		}
+	})
+	t.Run("unrestricted", func(t *testing.T) {
+		t.Parallel()
+		telemetry := &recordingTelemetry{}
+		adapter := newFakeAdapterWithTelemetry(t, &fakeConn{queryFunc: repoLess}, telemetry)
+		if _, err := adapter.AuthorizeStoredSubjects(context.Background(), userprincipal.Authenticated(t, "org_1", nil), binding, reachSubjects(2)); err != nil {
+			t.Fatal(err)
+		}
+		if len(telemetry.linkReaches) != 0 {
+			t.Fatalf("lines = %+v, want none", telemetry.linkReaches)
+		}
+	})
+}
+
+// The elapsed time is the sum of the reads, not the last one.
+func TestTheLineAddsUpTheTimeOfTheReads(t *testing.T) {
+	t.Parallel()
+	reads := 0
 	telemetry := &recordingTelemetry{}
-	fake := &fakeConn{queryFunc: func(context.Context, string, string, map[string]interface{}, bool) ([]row, error) { return nil, nil }}
+	fake := &fakeConn{linkReachFunc: func(context.Context, string, map[string]interface{}) ([]row, error) {
+		if reads++; reads == 1 {
+			time.Sleep(40 * time.Millisecond)
+		}
+		return nil, nil
+	}}
 	adapter := newFakeAdapterWithTelemetry(t, fake, telemetry)
-	ctx, err := adapter.withProjectReach(context.Background(), "k", userprincipal.Authenticated(t, "org_1", nil))
+	ctx, finish, err := adapter.withProjectReach(context.Background(), "k", restrictedReachCaller(t))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := adapter.api.query(ctx, "k", "MATCH (n) RETURN n", nil, true); err != nil {
-		t.Fatal(err)
+	for range 2 {
+		if _, err := adapter.api.query(ctx, "k", "MATCH (n) RETURN n", nil, true); err != nil {
+			t.Fatal(err)
+		}
 	}
-	if len(telemetry.linkReaches) != 0 {
-		t.Fatalf("unrestricted: lines = %+v, want none", telemetry.linkReaches)
+	finish()
+	if telemetry.linkReachElapsed < 40*time.Millisecond {
+		t.Fatalf("elapsed = %v, want the first read's 40ms in it", telemetry.linkReachElapsed)
 	}
 }
 
-// The real producer into a real slog.JSONHandler, against the spec. A failed
-// read is loud: it writes a Warn line as well. No id and no slug on any line.
+// A call inside a call writes its own reads and the outer one the rest, so no
+// read is counted twice. The failure stays past the inner line: the turn still
+// owes its sentence.
+func TestACallInsideACallWritesItsOwnReads(t *testing.T) {
+	t.Parallel()
+	telemetry := &recordingTelemetry{}
+	fake := &fakeConn{linkReachFunc: func(context.Context, string, map[string]interface{}) ([]row, error) {
+		return nil, errors.New("timeout")
+	}}
+	adapter := newFakeAdapterWithTelemetry(t, fake, telemetry)
+	principal := restrictedReachCaller(t)
+	outer, finishOuter, err := adapter.withProjectReach(context.Background(), "k", principal)
+	if err != nil {
+		t.Fatal(err)
+	}
+	inner, finishInner, err := adapter.withProjectReach(outer, "k", principal)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, ctx := range []context.Context{inner, inner, outer} {
+		if _, err := adapter.api.query(ctx, "k", "MATCH (n) RETURN n", nil, true); err != nil {
+			t.Fatal(err)
+		}
+	}
+	finishInner()
+	if linkReachError(outer) == nil {
+		t.Fatal("the inner line cleared the failure")
+	}
+	if _, err := adapter.api.query(outer, "k", "MATCH (n) RETURN n", nil, true); err != nil {
+		t.Fatal(err)
+	}
+	finishOuter()
+	want := []linkReachRecord{
+		{orgID: "org_1", outcome: WorkItemLinkReachFailed, reads: 3, failed: 3},
+		{orgID: "org_1", outcome: WorkItemLinkReachFailed, reads: 1, failed: 1},
+	}
+	if !slices.Equal(telemetry.linkReaches, want) {
+		t.Fatalf("lines = %+v, want %+v", telemetry.linkReaches, want)
+	}
+}
+
+// A caller with no reach still gets a finish, and it writes nothing.
+func TestFinishIsSafeForACallerWithNoReach(t *testing.T) {
+	t.Parallel()
+	telemetry := &recordingTelemetry{}
+	adapter := newFakeAdapterWithTelemetry(t, &fakeConn{}, telemetry)
+	for _, principal := range []storage.Principal{userprincipal.Authenticated(t, "org_1", nil), userprincipal.ProjectOnly(t, "org_1", []string{"project.v2:github:P-1"})} {
+		_, finish, err := adapter.withProjectReach(context.Background(), "k", principal)
+		if err != nil {
+			t.Fatal(err)
+		}
+		finish()
+	}
+	if len(telemetry.linkReaches) != 0 {
+		t.Fatalf("lines = %+v, want none", telemetry.linkReaches)
+	}
+}
+
+// The real producer into a real slog.JSONHandler, against the spec. A call with
+// a failed read is loud: it writes a Warn line as well. No id and no slug on any
+// line.
 func TestTheReachLineCertifiesFromTheRealProducer(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
+		tally   WorkItemLinkReachTally
 		outcome WorkItemLinkReachOutcome
-		rows    int
 		warn    bool
-	}{{WorkItemLinkReachRead, 3, false}, {WorkItemLinkReachCut, linkReachMaxRows, false}, {WorkItemLinkReachFailed, 0, true}} {
+	}{
+		{WorkItemLinkReachTally{Reads: 27, IDs: 5, Rows: 3, Elapsed: 1500 * time.Millisecond}, WorkItemLinkReachRead, false},
+		{WorkItemLinkReachTally{Reads: 27, IDs: 5, Rows: 3, Failed: 1, Elapsed: 1500 * time.Millisecond}, WorkItemLinkReachFailed, true},
+	} {
 		t.Run(string(tc.outcome), func(t *testing.T) {
 			t.Parallel()
 			var buf bytes.Buffer
 			telemetry := SlogTelemetry{Logger: slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelInfo}))}
-			telemetry.RecordWorkItemLinkReach(context.Background(), "org_1", tc.outcome, tc.rows, 1500*time.Millisecond)
+			telemetry.RecordWorkItemLinkReach(context.Background(), "org_1", tc.tally)
 			log, err := certify.Parse(buf.Bytes())
 			if err != nil {
 				t.Fatalf("certify.Parse() error = %v", err)
 			}
 			if _, err := certify.Certify(log, certify.Assertion{
 				Event: eventspec.WorkItemLinkReach,
-				Want:  map[string]any{"org_id": "org_1", "outcome": string(tc.outcome), "rows": tc.rows, "elapsed_ms": 1500},
+				Want:  map[string]any{"org_id": "org_1", "outcome": string(tc.outcome), "reads": 27, "ids": 5, "rows": 3, "failed": tc.tally.Failed, "elapsed_ms": 1500},
 			}); err != nil {
 				t.Fatalf("certify.Certify() error = %v", err)
 			}
@@ -408,38 +563,152 @@ func TestTheReachOutcomeVocabularyIsTheProducers(t *testing.T) {
 	}
 }
 
-// The reach runs at the first read, whatever that read returned, and once. So a
-// hidden repo-less node in a page changes no statement.
-func TestTheReachReadDoesNotDependOnWhatARowHolds(t *testing.T) {
+// The differential. One keyed read follows every wrapped read, whatever the page
+// held, in one text. A hidden repo-less item changes the id list and nothing else.
+func TestAHiddenItemChangesOnlyTheIDList(t *testing.T) {
 	t.Parallel()
-	statements := func(rows []row) []string {
-		var seen []string
+	type keyedRead struct {
+		statement string
+		params    map[string]interface{}
+	}
+	run := func(page []row) ([]keyedRead, []string) {
+		var keyed []keyedRead
+		var order []string
 		fake := &fakeConn{
-			linkReachFunc: func(context.Context, string, map[string]interface{}) ([]row, error) {
-				seen = append(seen, "reach")
+			linkReachFunc: func(_ context.Context, cypher string, params map[string]interface{}) ([]row, error) {
+				keyed = append(keyed, keyedRead{cypher, params})
+				order = append(order, "keyed")
 				return nil, nil
 			},
 			queryFunc: func(context.Context, string, string, map[string]interface{}, bool) ([]row, error) {
-				seen = append(seen, "read")
-				return rows, nil
+				order = append(order, "read")
+				return page, nil
 			},
 		}
 		adapter := newFakeAdapter(t, fake)
-		ctx, err := adapter.withProjectReach(context.Background(), "k", restrictedReachCaller(t))
+		ctx, _, err := adapter.withProjectReach(context.Background(), "k", restrictedReachCaller(t))
 		if err != nil {
 			t.Fatal(err)
 		}
-		for range 2 {
+		for range 3 {
 			if _, err := adapter.api.query(ctx, "k", "MATCH (n) RETURN n", nil, true); err != nil {
 				t.Fatal(err)
 			}
 		}
-		return seen
+		return keyed, order
 	}
-	empty := statements(nil)
-	hidden := statements([]row{{"n": repoLessNode("work_item.v2:z:linear:HIDDEN-1")}})
-	if !slices.Equal(empty, hidden) || !slices.Equal(empty, []string{"read", "reach", "read"}) {
-		t.Fatalf("statements: empty page %v, page with a hidden item %v", empty, hidden)
+	hiddenID := "work_item.v2:z:linear:HIDDEN-1"
+	empty, emptyOrder := run(nil)
+	hidden, hiddenOrder := run([]row{{"n": repoLessNode(hiddenID)}})
+	repository, _ := run([]row{{"n": &node{Properties: map[string]interface{}{propKind: string(contractsv1.ContextFabricSubjectRepository), propCanonicalID: "repository:acme/alpha", propAuthzRepos: []string{reachInsideRepo}}}}})
+	want := []string{"read", "keyed", "read", "keyed", "read", "keyed"}
+	if !slices.Equal(emptyOrder, want) || !slices.Equal(hiddenOrder, want) {
+		t.Fatalf("order: empty page %v, page with a hidden item %v, want %v", emptyOrder, hiddenOrder, want)
+	}
+	for index := range empty {
+		for name, other := range map[string]keyedRead{"hidden": hidden[index], "repository": repository[index]} {
+			if other.statement != empty[index].statement {
+				t.Fatalf("%s: statement %q, empty page %q", name, other.statement, empty[index].statement)
+			}
+			left, right := maps.Clone(other.params), maps.Clone(empty[index].params)
+			delete(left, "ids")
+			delete(right, "ids")
+			if !reflect.DeepEqual(left, right) {
+				t.Fatalf("%s: params %v, empty page %v", name, left, right)
+			}
+		}
+		ids, ok := empty[index].params["ids"].([]interface{})
+		if !ok || ids == nil || len(ids) != 0 {
+			t.Fatalf("empty page ids = %#v, want an empty list, not null", empty[index].params["ids"])
+		}
+		if !slices.Equal(hidden[index].params["ids"].([]interface{}), []interface{}{hiddenID}) {
+			t.Fatalf("hidden ids = %v", hidden[index].params["ids"])
+		}
+	}
+}
+
+// The ids are the page's repo-less work items, distinct and sorted, read through
+// lists. A work item with a repository, another kind and a nil node are not in it.
+func TestThePageIDsAreTheRepoLessWorkItems(t *testing.T) {
+	t.Parallel()
+	first, second, third := "work_item.v2:z:linear:A-1", "work_item.v2:z:linear:A-2", "work_item.v2:z:linear:A-3"
+	withRepository := &node{Properties: map[string]interface{}{propKind: string(contractsv1.ContextFabricSubjectWorkItem), propCanonicalID: "work_item.v2:z:gh:acme/alpha#1", propAuthzRepos: []string{reachInsideRepo}}}
+	project := &node{Properties: map[string]interface{}{propKind: string(contractsv1.ContextFabricSubjectProject), propCanonicalID: "project:p-1", propAuthzRepos: []string{noRepositoryScope}}}
+	var missing *node
+	got := repoLessWorkItemIDs([]row{
+		{"n": repoLessNode(third), "path": []interface{}{repoLessNode(first), repoLessNode(third), withRepository, []interface{}{repoLessNode(second), project}}},
+		{"n": repoLessNode(first), "m": missing, "count": 3},
+	})
+	if want := []interface{}{first, second, third}; !slices.Equal(got, want) {
+		t.Fatalf("ids = %v, want %v", got, want)
+	}
+	if empty := repoLessWorkItemIDs(nil); empty == nil || len(empty) != 0 {
+		t.Fatalf("empty page = %#v, want an empty list, not null", empty)
+	}
+}
+
+// A linked item inside a path takes the attribute, and the node read is not
+// touched: a cached or shared value stays as it was.
+func TestRewriteReadsListsAndCopiesTheNode(t *testing.T) {
+	t.Parallel()
+	original := repoLessNode(repoLessItemID)
+	got := linkedRepositories{repoLessItemID: {reachInsideRepo}}.rewrite([]interface{}{[]interface{}{original}})
+	copied := got.([]interface{})[0].([]interface{})[0].(*node)
+	if linked, _ := copied.Properties[graphrank.AuthorizationLinkRepositoriesAttr].([]string); !slices.Equal(linked, []string{reachInsideRepo}) {
+		t.Fatalf("attribute = %v", copied.Properties)
+	}
+	if _, held := original.Properties[graphrank.AuthorizationLinkRepositoriesAttr]; held || copied == original {
+		t.Fatal("rewrite mutated the node it read")
+	}
+}
+
+// Each read proves its own page. Nothing one read learned admits a node of the
+// next, and a failed read denies its own page only. The failure stays on the call.
+func TestEachReadProvesItsOwnPage(t *testing.T) {
+	t.Parallel()
+	principal := restrictedReachCaller(t)
+	first, second := repoLessItemID, "work_item.v2:z:linear:CHAOS-2"
+	edges := []linkEdgeRow{{first, "native", reachInsideRepo}, {second, "native", reachInsideRepo}}
+	var pages [][]interface{}
+	failFirst := true
+	fake := &fakeConn{linkReachFunc: func(_ context.Context, cypher string, params map[string]interface{}) ([]row, error) {
+		pages = append(pages, params["ids"].([]interface{}))
+		if failFirst {
+			failFirst = false
+			return nil, errors.New("timeout")
+		}
+		return reachRows(t, edges, cypher, params), nil
+	}}
+	adapter := newFakeAdapter(t, fake)
+	ctx, _, err := adapter.withProjectReach(context.Background(), "k", principal)
+	if err != nil {
+		t.Fatal(err)
+	}
+	read := func(id string) bool {
+		t.Helper()
+		fake.queryFunc = func(context.Context, string, string, map[string]interface{}, bool) ([]row, error) {
+			return []row{{"n": repoLessNode(id)}}, nil
+		}
+		rows, err := adapter.api.query(ctx, "k", "MATCH (n) RETURN n", nil, true)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return graphrank.AuthorizedAttributes(principal, contextfabric.RequestedScope{}, toCandidateNode(rows[0]["n"].(*node)).Attributes)
+	}
+	if read(first) {
+		t.Fatal("a failed read admitted its page")
+	}
+	if !read(second) {
+		t.Fatal("a failed read denied the next page")
+	}
+	if !read(first) {
+		t.Fatal("the failure of an earlier read denied this page")
+	}
+	if linkReachError(ctx) == nil {
+		t.Fatal("the failed read was not kept for the disclosure")
+	}
+	if want := [][]interface{}{{first}, {second}, {first}}; !reflect.DeepEqual(pages, want) {
+		t.Fatalf("pages = %v, want %v", pages, want)
 	}
 }
 
@@ -451,7 +720,7 @@ func TestAWriteDoesNotReadTheReach(t *testing.T) {
 		return nil, nil
 	}}
 	adapter := newFakeAdapter(t, fake)
-	ctx, err := adapter.withProjectReach(context.Background(), "k", restrictedReachCaller(t))
+	ctx, _, err := adapter.withProjectReach(context.Background(), "k", restrictedReachCaller(t))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -474,33 +743,8 @@ func TestAFailedReachDeniesAndKeepsTheCall(t *testing.T) {
 	if graphrank.AuthorizedAttributes(principal, contextfabric.RequestedScope{}, candidate.Attributes) {
 		t.Fatal("a failed read admitted the item")
 	}
-	if !linkReachIncomplete(ctx) {
+	if linkReachError(ctx) == nil {
 		t.Fatal("the failed read was not reported")
-	}
-}
-
-// At the cap the ids read stay proven; the rest stay denied, and the read is
-// reported as cut.
-func TestACutReachKeepsWhatItProved(t *testing.T) {
-	t.Parallel()
-	edges := make([]linkEdgeRow, 0, linkReachMaxRows+1)
-	for i := range linkReachMaxRows + 1 {
-		edges = append(edges, linkEdgeRow{fmt.Sprintf("work_item.v2:z:linear:KEY-%06d", i), "native", reachInsideRepo})
-	}
-	fake := &fakeConn{linkReachFunc: func(_ context.Context, cypher string, params map[string]interface{}) ([]row, error) {
-		return reachRows(t, edges, cypher, params), nil
-	}}
-	principal := restrictedReachCaller(t)
-	first, ctx := readNode(t, fake, principal, repoLessNode(edges[0].item))
-	if !graphrank.AuthorizedAttributes(principal, contextfabric.RequestedScope{}, first.Attributes) {
-		t.Fatal("an id the cut read holds was not admitted")
-	}
-	if !linkReachIncomplete(ctx) {
-		t.Fatal("the cut was not reported")
-	}
-	last, _ := readNode(t, fake, principal, repoLessNode(edges[linkReachMaxRows].item))
-	if graphrank.AuthorizedAttributes(principal, contextfabric.RequestedScope{}, last.Attributes) {
-		t.Fatal("the id past the cap was admitted")
 	}
 }
 

@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -1160,6 +1161,9 @@ type recordingTelemetry struct {
 	cohortKindBases []cohortKindBasisRecord
 	// linkReaches records every RecordWorkItemLinkReach call (CHAOS-12456).
 	linkReaches []linkReachRecord
+	// linkReachElapsed adds up their elapsed time.
+	linkReachElapsed time.Duration
+	linkReachMu      sync.Mutex
 	// teamNarrowingReads records every RecordTeamNarrowingGeneralRead call (CHAOS-12327).
 	teamNarrowingReads []teamNarrowingReadRecord
 
@@ -1359,16 +1363,19 @@ func (r *recordingTelemetry) RecordCohortKindCensus(_ context.Context, orgID str
 	})
 }
 
-// RecordWorkItemLinkReach records one reach read.
-func (r *recordingTelemetry) RecordWorkItemLinkReach(_ context.Context, orgID string, outcome WorkItemLinkReachOutcome, rows int, _ time.Duration) {
-	r.linkReaches = append(r.linkReaches, linkReachRecord{orgID: orgID, outcome: outcome, rows: rows})
+// RecordWorkItemLinkReach records the line of one adapter call.
+func (r *recordingTelemetry) RecordWorkItemLinkReach(_ context.Context, orgID string, tally WorkItemLinkReachTally) {
+	r.linkReachMu.Lock()
+	defer r.linkReachMu.Unlock()
+	r.linkReachElapsed += tally.Elapsed
+	r.linkReaches = append(r.linkReaches, linkReachRecord{orgID: orgID, outcome: tally.Outcome(), reads: tally.Reads, ids: tally.IDs, rows: tally.Rows, failed: tally.Failed})
 }
 
 // linkReachRecord is one RecordWorkItemLinkReach call.
 type linkReachRecord struct {
-	orgID   string
-	outcome WorkItemLinkReachOutcome
-	rows    int
+	orgID                    string
+	outcome                  WorkItemLinkReachOutcome
+	reads, ids, rows, failed int
 }
 
 // teamNarrowingReadRecord is one RecordTeamNarrowingGeneralRead call.

@@ -505,9 +505,9 @@ type ResolveDeps struct {
 	// RunShadowEvidenceRound's own doc comment for what runs when it is
 	// set, and why the round can never influence `resolution` regardless.
 	CensusFunc CensusFunc
-	// WorkItemLinksUnread reports that the call's work-item link read failed or
-	// was cut, so an item it does not hold is unknown, not unlinked. Nil means no
-	// such read.
+	// WorkItemLinksUnread reports that a work-item link read of the call failed,
+	// so an item it did not prove is unknown, not unlinked. Nil means no such
+	// read.
 	WorkItemLinksUnread func() bool
 	// LinkScopedWorkItems returns the work items in a requested repository
 	// scope: the issues the repository-to-issue walk of the entity tree

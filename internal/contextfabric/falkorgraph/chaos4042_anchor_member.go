@@ -40,10 +40,11 @@ func (a *Adapter) AnchorMember(ctx context.Context, principal storage.Principal,
 	}
 	// CHAOS-7080: a repository-restricted caller's reads see each project's
 	// live ownership reach in place of its "*" (project_reach.go).
-	ctx, err = a.withProjectReach(ctx, key, principal)
+	ctx, finish, err := a.withProjectReach(ctx, key, principal)
 	if err != nil {
 		return graphrank.GraphAnchorMemberResult{}, err
 	}
+	defer finish()
 	n, err := a.nodeByKindID(ctx, key, principal.OrgID, string(kind), canonicalID, temporalFilter{})
 	if err != nil {
 		if errors.Is(err, ErrNotFound) {

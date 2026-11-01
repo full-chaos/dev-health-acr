@@ -13854,12 +13854,26 @@
         "presence": "required",
         "closed_vocabulary": [
           "read",
-          "cut",
           "failed"
         ]
       },
       {
+        "key": "reads",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "ids",
+        "type": "int",
+        "presence": "required"
+      },
+      {
         "key": "rows",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "failed",
         "type": "int",
         "presence": "required"
       },

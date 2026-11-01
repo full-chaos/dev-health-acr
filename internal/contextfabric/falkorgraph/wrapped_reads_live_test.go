@@ -70,13 +70,47 @@ func (l *wrappedReadLog) reset() (int, int, []string) {
 	return total, nodes, lines
 }
 
+// keyedReadLog sits under the reach conn and counts the keyed reads.
+type keyedReadLog struct {
+	conn
+	mu    sync.Mutex
+	reads int
+}
+
+func (l *keyedReadLog) query(ctx context.Context, key, cypher string, params map[string]interface{}, readOnly bool) ([]row, error) {
+	if cypher == linkReachStatement {
+		l.mu.Lock()
+		l.reads++
+		l.mu.Unlock()
+	}
+	return l.conn.query(ctx, key, cypher, params, readOnly)
+}
+
+func (l *keyedReadLog) reset() int {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	reads := l.reads
+	l.reads = 0
+	return reads
+}
+
 // TestLiveWrappedReadsOfATurn counts what one real Engine turn reads on the
-// graph under a link reach, on a repository, a team and a work-item question.
+// graph under a link reach, on a repository, a team and a work-item question. A
+// keyed read follows each wrapped read, empty pages included, on the real server,
+// and the lines of the turn add up to them with none failed.
 func TestLiveWrappedReadsOfATurn(t *testing.T) {
 	ctx := context.Background()
 	adapter, _ := newLiveFalkorAdapter(t, ctx)
-	log := &wrappedReadLog{conn: adapter.api, shapes: map[string]int{}}
+	wrapped, ok := adapter.api.(projectReachConn)
+	if !ok {
+		t.Fatalf("adapter.api is %T, want the reach conn", adapter.api)
+	}
+	keyed := &keyedReadLog{conn: wrapped.conn}
+	wrapped.conn = keyed
+	log := &wrappedReadLog{conn: wrapped, shapes: map[string]int{}}
 	adapter.api = log
+	telemetry := &recordingTelemetry{}
+	adapter.config.Telemetry = telemetry
 
 	stamp := time.Now().UTC().Format("20060102T150405.000000000")
 	routeOrg := "live-wrapped-reads-" + stamp
@@ -116,6 +150,10 @@ func TestLiveWrappedReadsOfATurn(t *testing.T) {
 		}
 		runCtx, _ := contextfabric.WithSynthesisInputCollector(ctx)
 		log.reset()
+		keyed.reset()
+		telemetry.linkReachMu.Lock()
+		telemetry.linkReaches = nil
+		telemetry.linkReachMu.Unlock()
 		result, err := engine.Investigate(runCtx, principal, contextfabric.InvestigationRequest{
 			SchemaVersion: contextfabric.InvestigationRequestSchemaV1, RequestID: "request_12456001",
 			Question:    question,
@@ -127,6 +165,21 @@ func TestLiveWrappedReadsOfATurn(t *testing.T) {
 		// is what this test is for.
 		total, nodes, shapes := log.reset()
 		t.Logf("%s: status=%s err=%v committed=%d wrapped reads=%d, with a whole node=%d\n%s", name, result.Status, err, len(result.SubjectResolution.Committed), total, nodes, strings.Join(shapes, "\n"))
+		if reads := keyed.reset(); total == 0 || reads != total {
+			t.Errorf("%s: keyed reads = %d, wrapped reads = %d, want one for each", name, reads, total)
+		}
+		telemetry.linkReachMu.Lock()
+		defer telemetry.linkReachMu.Unlock()
+		lineReads := 0
+		for _, line := range telemetry.linkReaches {
+			lineReads += line.reads
+			if line.failed != 0 || line.outcome != WorkItemLinkReachRead {
+				t.Errorf("%s: line %+v, want no failed read", name, line)
+			}
+		}
+		if lineReads != total {
+			t.Errorf("%s: the lines add up to %d reads, want %d", name, lineReads, total)
+		}
 	}
 	open := func(term string) contextfabric.QuestionInterpreter {
 		return fixedInterpreter{interpretation: contextfabric.InterpretedQuestion{

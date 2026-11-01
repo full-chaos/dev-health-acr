@@ -58,20 +58,24 @@ func needsProjectReach(principal storage.Principal) bool {
 // call returns a project node carrying the "*" wildcard, and at most once per
 // call. A call that never reads a project node issues no extra query. ctx is
 // returned unchanged for an unrestricted or universal caller.
-func (a *Adapter) withProjectReach(ctx context.Context, key string, principal storage.Principal) (context.Context, error) {
+//
+// finish ends the adapter call: defer it. It writes the call's link reach line
+// (link_reach.go), and it is never nil when err is nil.
+func (a *Adapter) withProjectReach(ctx context.Context, key string, principal storage.Principal) (reached context.Context, finish func(), err error) {
 	// A project-only caller needs no reach: the node rule decides a project
 	// by its canonical id, never by the repositories it reaches (CHAOS-12299).
 	if !needsProjectReach(principal) || auth.ClassifyGrant(principal) == auth.GrantProjectOnly {
-		return ctx, nil
+		return ctx, func() {}, nil
 	}
 	orgID := strings.TrimSpace(principal.OrgID)
 	if orgID == "" {
-		return nil, fmt.Errorf("%w: authenticated organization is required", contextfabric.ErrUnavailable)
+		return nil, nil, fmt.Errorf("%w: authenticated organization is required", contextfabric.ErrUnavailable)
 	}
 	// CHAOS-12456: every site that sees a project's reach sees the links of a
 	// repo-less work item too (link_reach.go).
 	ctx = a.withLinkReach(ctx, key, principal)
-	return context.WithValue(ctx, projectReachContextKey{}, &lazyProjectReach{adapter: a, key: key, orgID: orgID}), nil
+	ctx = context.WithValue(ctx, projectReachContextKey{}, &lazyProjectReach{adapter: a, key: key, orgID: orgID})
+	return ctx, func() { reportLinkReach(ctx) }, nil
 }
 
 // lazyProjectReach loads one call's project reach on first use.
@@ -150,11 +154,11 @@ func (c projectReachConn) query(ctx context.Context, graphKey, cypher string, pa
 	if err != nil || !readOnly {
 		return rows, err
 	}
-	if links, ok := ctx.Value(linkReachContextKey{}).(*lazyLinkReach); ok {
-		links.load(ctx, c.conn)
+	if links, ok := ctx.Value(linkReachContextKey{}).(*linkReach); ok {
+		reached := links.read(ctx, c.conn, rows)
 		for _, r := range rows {
 			for column, value := range r {
-				r[column] = links.rewrite(value)
+				r[column] = reached.rewrite(value)
 			}
 		}
 	}

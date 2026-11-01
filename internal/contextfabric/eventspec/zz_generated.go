@@ -8805,7 +8805,10 @@ func (f WorkItemAuthorizationGapFields) SlogArgs() []any {
 type WorkItemLinkReachFields struct {
 	OrgID     string
 	Outcome   string
+	Reads     int
+	IDs       int
 	Rows      int
+	Failed    int
 	ElapsedMs int
 	RequestID string
 	// constructed (CHAOS-5516 r1 fix): an UNEXPORTED marker, generated on
@@ -8821,11 +8824,14 @@ type WorkItemLinkReachFields struct {
 
 // NewWorkItemLinkReachFields is the generated constructor for WorkItemLinkReachFields -- every
 // field WorkItemLinkReach.Fields declares is a required parameter.
-func NewWorkItemLinkReachFields(orgID string, outcome string, rows int, elapsedMs int, requestID string) WorkItemLinkReachFields {
+func NewWorkItemLinkReachFields(orgID string, outcome string, reads int, iDs int, rows int, failed int, elapsedMs int, requestID string) WorkItemLinkReachFields {
 	return WorkItemLinkReachFields{
 		OrgID:       orgID,
 		Outcome:     outcome,
+		Reads:       reads,
+		IDs:         iDs,
 		Rows:        rows,
+		Failed:      failed,
 		ElapsedMs:   elapsedMs,
 		RequestID:   requestID,
 		constructed: true,
@@ -8847,7 +8853,10 @@ func (f WorkItemLinkReachFields) SlogArgs() []any {
 	return []any{
 		"org_id", contextfabric.SanitizeLogAttr(f.OrgID),
 		"outcome", contextfabric.SanitizeLogAttr(f.Outcome),
+		"reads", f.Reads,
+		"ids", f.IDs,
 		"rows", f.Rows,
+		"failed", f.Failed,
 		"elapsed_ms", f.ElapsedMs,
 		"request_id", contextfabric.SanitizeLogAttr(f.RequestID),
 	}

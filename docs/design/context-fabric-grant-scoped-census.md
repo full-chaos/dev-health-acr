@@ -83,10 +83,11 @@ with a bound handle and nothing committed, the round now runs whatever
 and `shadow_unscoped_visibility` is false. On every other line it is false.
 
 `contextfabric.work_item_link_reach` (Info, `context_fabric: work item link reach`)
-is one line per reach read of a restricted caller: `outcome` (`read`, `cut`,
-`failed`), `rows`, `elapsed_ms`, and `request_id` when the context has one. Counts
-and a closed value only, never an id or a slug. A failed read also writes a Warn
-line. This is where the live run reads the cost of the reach.
+is one line per adapter call of a restricted caller that read the graph, adding up
+its keyed reads: `outcome` (`read`, `failed`), `reads`, `ids`, `rows`, `failed`,
+total `elapsed_ms`, and `request_id` when the context has one. Counts and a closed
+value only, never an id or a slug. A call with a failed read also writes a Warn line.
+This is where the live run reads the cost of the reach.
 
 ## Work items
 
@@ -115,14 +116,25 @@ repositories are never the relation.
   requested selector needs a real repository, so it would deny every repo-less row.
 
 **The node gate.** A repo-less node carries only the no-repository sentinel, so the
-gate cannot decide from it. `falkorgraph/link_reach.go` reads, once per adapter
-call, the native `LINKS_PULL_REQUEST` edges to pull requests of the grant, and adds
-`authorization_link_repositories` in memory to each repo-less node a read returns.
+gate cannot decide from it. `falkorgraph/link_reach.go` follows each wrapped read
+with one keyed read: for the repo-less work items that page returned, the native
+`LINKS_PULL_REQUEST` edges to pull requests of the grant. It adds
+`authorization_link_repositories` in memory to each item a link proves.
 `AuthorizedAttributes` tests it only when the node's list is the sentinel alone.
 
 - Nothing is stored, so no rebuild. A site that is not wrapped denies.
-- The read is anchored on the grant and runs at the first read of the call, whatever
-  that read returned. So no statement depends on a subject outside the grant.
+- The keyed read runs once for every wrapped read, an empty page included, and its
+  text is one constant. So a subject outside the grant changes no statement and no
+  count of statements. It changes the id list only. Reading only when a page held
+  an id would make the read itself the signal.
+- The proof lives for one read, so a read proves its own page and no other. There
+  is no cap and no cut: the id list is what the page held.
+- Cost. A grant-wide reach, read once per call, took 45 to 63 ms (median 53) for
+  8,482 rows on askdev-1. That misses the 50 ms gate, and a cap on it would deny. The
+  keyed read took 0.11 to 1.28 ms there, with an empty list and with 50 ids. A real
+  engine turn makes 27 wrapped reads on a repository question, 19 on a work item and
+  16 on a team (`TestLiveWrappedReadsOfATurn`, up to synthesis). So a repository
+  turn costs about 35 ms at the top of that range, by arithmetic.
 - A link to a pull request outside the grant, beside one inside, admits the item.
   The outside one is not read. A merged pull request or a closed issue still counts:
   validity in time is not an authorization input.
@@ -131,9 +143,8 @@ call, the native `LINKS_PULL_REQUEST` edges to pull requests of the grant, and a
 
 | Failure | Subject | Caller reads |
 | --- | --- | --- |
-| Reach read fails in a turn | stays denied, the turn goes on | `ContextFabricWorkItemLinksUnreadLimitation` |
-| Reach read fails at the stored gate or the recheck | `ErrUnavailable` | 503, never `no_match` |
-| Reach cut at `linkReachMaxRows` | an id it holds is proven; the rest stay denied | the same sentence |
+| Keyed read fails in a turn | stays denied, the turn goes on | `ContextFabricWorkItemLinksUnreadLimitation` |
+| Keyed read fails at the stored gate or the recheck | `ErrUnavailable` | 503, never `no_match` |
 | Census error, deadline or row bound | `census_error` | the same sentence |
 | Census names an item, node gate refuses (projection lag) | `refused` | the same sentence |
 
@@ -167,6 +178,11 @@ the gate through search.
   and the statement sequence is identical. One matching outside row costs
   ClickHouse a row filter. That is not measurable as a proof, so the tests assert
   the sequence. A sub-millisecond difference stays a named residual.
+- **Timing of the keyed read.** A hidden repo-less item on a page adds one id to the
+  list, so the read's duration can follow the id count. The statement and the count
+  of statements do not change. The difference stays inside the 0.11 to 1.28 ms range
+  above, across an empty list and 50 ids. The 50 ms gate stands and the live run
+  measures it.
 - **A slug the grant cannot hold.** `NormalizeRepositorySlug` accepts owner/name
   only. A grant entry of another shape refuses that caller's census; it never
   widens it.

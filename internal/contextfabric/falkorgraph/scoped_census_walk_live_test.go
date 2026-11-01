@@ -487,7 +487,7 @@ func TestTheScopedCensusAndTheDeploymentWalkFollowTheLinkOnRealStores(t *testing
 			{OrgID: s.orgID, Subject: "u", CredentialID: "c", RepositoryScopes: []string{"acme/svc", "acme/other"}},
 		} {
 			scope := contextfabric.RequestedScope{RepositorySlugs: []string{"acme/svc"}}
-			reachCtx, err := adapter.withProjectReach(ctx, key, principal)
+			reachCtx, _, err := adapter.withProjectReach(ctx, key, principal)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -553,7 +553,7 @@ func TestTheScopedCensusAndTheDeploymentWalkFollowTheLinkOnRealStores(t *testing
 			{"granted the pull request's repository only: the grants still apply to the issue", []string{"acme/svc"}, nil, nil},
 		} {
 			principal := storage.Principal{OrgID: s.orgID, Subject: "u", CredentialID: "c", RepositoryScopes: c.grants}
-			reachCtx, err := adapter.withProjectReach(ctx, key, principal)
+			reachCtx, _, err := adapter.withProjectReach(ctx, key, principal)
 			if err != nil {
 				t.Fatal(err)
 			}

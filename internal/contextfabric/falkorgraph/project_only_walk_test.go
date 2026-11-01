@@ -91,7 +91,7 @@ func TestAProjectOnlyCallerReadsNoProjectReachAndIsRestricted(t *testing.T) {
 		if !(treeWalkState{principal: principal}).narrowed() {
 			t.Errorf("%v: a project-only caller's tree walk is not narrowed", principal.RepositoryScopes)
 		}
-		ctx, err := (&Adapter{}).withProjectReach(context.Background(), "key", principal)
+		ctx, _, err := (&Adapter{}).withProjectReach(context.Background(), "key", principal)
 		if err != nil || ctx.Value(projectReachContextKey{}) != nil {
 			t.Errorf("%v: project reach armed for a project-only caller (err %v)", principal.RepositoryScopes, err)
 		}
