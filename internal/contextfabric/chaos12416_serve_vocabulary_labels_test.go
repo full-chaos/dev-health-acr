@@ -114,6 +114,12 @@ func wordRows() []wordRow {
 		{"claimed fact kind", func(r *InvestigationResult) {
 			r.ClaimedFacts = []contractsv1.ContextFabricClaimedFact{{Kind: contractsv1.ContextFabricFactBlockers}}
 		}, map[string]string{"fact_kind:blockers": "blockers"}},
+		{"driver source state", func(r *InvestigationResult) {
+			r.Drivers = []contractsv1.ContextFabricDriverJudgment{{SourceState: contractsv1.ContextFabricSourceStale}}
+		}, map[string]string{"driver_source_state:stale": "may be out of date"}},
+		{"cohort score meaning", func(r *InvestigationResult) {
+			r.Cohort = &contractsv1.ContextFabricCohort{ScoreMeaning: contractsv1.ContextFabricCohortScoreMeaningAttention}
+		}, map[string]string{"cohort_score_meaning:attention": "Attention score: higher means more pressure. It does not measure performance."}},
 		{"claimed fact field", func(r *InvestigationResult) {
 			r.ClaimedFacts = []contractsv1.ContextFabricClaimedFact{{Field: "completion_ratio"}}
 		}, map[string]string{"fact_field:completion_ratio": "Completion ratio"}},
@@ -385,7 +391,7 @@ func TestNoStatusWordMeansNoStatusTier(t *testing.T) {
 func TestOnlyTheServeFunctionSetsTheMap(t *testing.T) {
 	root := repopath.Root(t)
 	const declaringFields = 2 // the result and the projection
-	want := map[string]bool{"ServeVocabularyLabels": true, "Project": true, "ShedVocabularyLabels": true, "restateStatusWords": true}
+	want := map[string]bool{"ServeVocabularyLabels": true, "Project": true, "ShedVocabularyLabels": true, "restateStatusWords": true, "dropDisplacedCountWord": true}
 	files, declared := 0, 0
 	writers := map[string]bool{}
 	var strays []string

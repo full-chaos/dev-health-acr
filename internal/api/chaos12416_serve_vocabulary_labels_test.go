@@ -224,8 +224,11 @@ func TestEveryReadOfAnAnswerCarriesItsWords(t *testing.T) {
 	if !reused.Reused {
 		t.Fatal("the real reuse path did not run")
 	}
-	if !maps.Equal(reused.VocabularyLabels, fresh.VocabularyLabels) {
-		t.Errorf("reused map %v, fresh map %v", reused.VocabularyLabels, fresh.VocabularyLabels)
+	// A reused answer says so (CHAOS-12487). Every other word is the fresh one.
+	wantReused := maps.Clone(fresh.VocabularyLabels)
+	wantReused[v1.ContextFabricAnswerNoteReused.Key()], _ = v1.ContextFabricAnswerNoteWord(v1.ContextFabricAnswerNoteReused)
+	if !maps.Equal(reused.VocabularyLabels, wantReused) {
+		t.Errorf("reused map %v, want %v", reused.VocabularyLabels, wantReused)
 	}
 
 	after, err := rig.store.Get(context.Background(), principal, fresh.ResultID)
