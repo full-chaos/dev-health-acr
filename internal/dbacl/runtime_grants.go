@@ -60,6 +60,8 @@ type Grant struct {
 	// outbox publisher marks published_at and nothing else.
 	UpdateColumns []string
 	Feature       Feature
+	// RevokeWhenOff makes the grant job revoke this table-level privilege when the feature is off.
+	RevokeWhenOff bool
 	// Sequences are sequences the table's inserts draw from; the role needs USAGE.
 	Sequences []string
 	// Why cites the runtime code that needs each privilege.

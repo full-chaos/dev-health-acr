@@ -13,11 +13,14 @@ func TestTheOutboxHoldsUpdateOnPublishedAtOnlyAndOnlyWithThePublisher(t *testing
 			continue
 		}
 		for _, privilege := range grant.Privileges {
-			if privilege != "SELECT" && privilege != "INSERT" {
-				t.Errorf("the outbox holds table-level %s: the runtime role may only read and append it", privilege)
+			if privilege != "SELECT" && privilege != "INSERT" && privilege != "DELETE" {
+				t.Errorf("the outbox holds table-level %s: the runtime role may read, append and (with the publisher) reap it", privilege)
 			}
 		}
 		if len(grant.UpdateColumns) == 0 {
+			if grant.Feature != AlwaysOn && len(grant.Privileges) == 1 && grant.Privileges[0] == "DELETE" {
+				continue
+			}
 			if grant.Feature != AlwaysOn {
 				t.Errorf("the SELECT, INSERT row is the mutation path's and is always on, not %q", grant.Feature)
 			}
