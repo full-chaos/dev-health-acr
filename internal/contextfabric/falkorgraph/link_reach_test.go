@@ -270,6 +270,12 @@ func TestWithLinkReachBindsOnlyARestrictedCaller(t *testing.T) {
 			t.Fatalf("%s: a reach bound", name)
 		}
 	}
+	// A call inside a call reads the reach once.
+	first := withLinkReach(context.Background(), "k", restrictedReachCaller(t))
+	second := withLinkReach(first, "k", restrictedReachCaller(t))
+	if first.Value(linkReachContextKey{}) != second.Value(linkReachContextKey{}) {
+		t.Fatal("a nested call bound a second reach")
+	}
 }
 
 // The reach runs at the first read, whatever that read returned, and once. So a

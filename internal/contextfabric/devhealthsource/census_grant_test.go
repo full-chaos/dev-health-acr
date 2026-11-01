@@ -225,6 +225,9 @@ func TestAGrantedWorkItemCensusCarriesTheLinkArmOnEveryStatement(t *testing.T) {
 					if strings.Contains(arm, "wia_project_auth.wia_project_repositories") || strings.Contains(arm, "authorized_repo_all") || strings.Contains(arm, "authorized_repo_slugs") {
 						t.Fatalf("statement %d keeps an id by another arm: %s", i, arm)
 					}
+					if !strings.Contains(statement, "wia_link.work_item_id IN (SELECT w.work_item_id FROM work_items AS w WHERE") {
+						t.Fatalf("statement %d does not narrow the link aggregate to the handle's candidates", i)
+					}
 					if !strings.Contains(statement, "max_rows_to_read = 3000000") {
 						t.Fatalf("statement %d carries no row bound", i)
 					}
