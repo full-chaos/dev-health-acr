@@ -83,6 +83,15 @@ const (
 	workItemMembershipRefreshMarker = "AS membership_changed_at"
 )
 
+// pullRequestMembershipLinkMarker and pullRequestMembershipRefreshMarker
+// identify the CHAOS-12308 reads (pull_request_project_membership.go). The
+// link read names work_items, and the refresh read embeds the work-item
+// refresh subquery, so both dispatch before those.
+const (
+	pullRequestMembershipLinkMarker    = "AS membership_link_repo_id"
+	pullRequestMembershipRefreshMarker = "AS pull_request_membership_changed_at"
+)
+
 // ambiguousProjectKeysMarker identifies the catalog ambiguity count
 // (countAmbiguousProjectKeysInCatalog, teams_projects_edges.go). It keeps its
 // own dispatch because that statement names `projects`, which the substring
@@ -113,6 +122,20 @@ func (c *fakeClient) Query(_ context.Context, statement string, bindings []conte
 	if strings.Contains(statement, endedLinksMarker) {
 		for _, table := range c.tables {
 			if table.match == endedLinksMarker {
+				return &fakeScanner{rows: table.rows}, nil
+			}
+		}
+		return &fakeScanner{}, nil
+	}
+	for _, marker := range []string{pullRequestMembershipLinkMarker, pullRequestMembershipRefreshMarker} {
+		if !strings.Contains(statement, marker) {
+			continue
+		}
+		for _, table := range c.tables {
+			if table.match == marker {
+				if table.err != nil {
+					return nil, table.err
+				}
 				return &fakeScanner{rows: table.rows}, nil
 			}
 		}

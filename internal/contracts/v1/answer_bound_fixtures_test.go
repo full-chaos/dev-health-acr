@@ -525,7 +525,9 @@ const irreducibleAnswerBytes = 1023
 // 521759242 -> 521950245 (+191003, measured locally): the vocabulary gained file_hotspots and the coverage entry bound moved 101 -> 105, so the maximal coverage arrays each gain four entries.
 // 521950245 -> 530912315 (+8962070, measured locally): CHAOS-12415's
 // vocabulary_labels at its entry bound, each key and label at their own bound.
-const maximalAnswerBytes = 530912315
+// 530912315 -> 530924315 (+12000, measured locally): the vocabulary gained the two
+// lower-tier coverage detail codes (CHAOS-12308).
+const maximalAnswerBytes = 530924315
 
 func TestIrreducibleAndMaximalFixturesAreValid(t *testing.T) {
 	for _, tc := range []struct {

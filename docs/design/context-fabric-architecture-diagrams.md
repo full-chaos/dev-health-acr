@@ -668,8 +668,11 @@ A node with a real project list is still decided by that list. The repository
 grant is checked first, as before. An edge's own `"*"` defers to its endpoints
 (they decide; the edge is reported only when an endpoint is unverified). Tree
 walks read `authorization_project_identities` with the node, so a walked work
-item's stated membership decides too. Pull requests carry no membership yet
-(CHAOS-12308), so they stay reported unverified. Each resolution is one Info
+item's stated membership decides too. A pull request states the union of its
+linked issues' sets with the weakest link tier (CHAOS-12308): a native tier
+decides like a work item, and a lower tier stays admitted and reported
+unverified, with a count per tier in `graph_answer_pull_requests_on_*_links`.
+Each resolution is one Info
 line, `context fabric project narrowing resolution` (outcome, requested ids,
 resolved identities; never an id).
 

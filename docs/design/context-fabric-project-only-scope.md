@@ -131,18 +131,64 @@ A project identity is `project.v2:<EncodeSegment(provider)>:<EncodeSegment(id)>`
   authorization, in the principal, the node attribute, the fact selectors and
   the digests.
 
+## Pull request membership
+
+A pull request reaches a project only through its issues' actual linked rows
+(the entity tree), so it has no project link of its own. Its
+`authorization_project_identities` (CHAOS-12308) is the union of the sets of the
+issues linked to it in `work_graph_issue_pr`, read through the link producer's
+rules: a lower-tier row a native link covers contributes nothing, and neither
+does an unknown tier or a pull-request-typed work item. The `pull_request` arm
+of `project_membership_presence` is not read.
+
+- **Tier.** The property `project_membership_tier` names the WEAKEST tier among
+  the contributing links. No existing field can hold it: a link's tier lives on
+  each `LINKS_PULL_REQUEST` edge, which an authorization decision on the node
+  never reads, and `project_identities` is a set with no per-entry provenance.
+- **What the tier decides.** `project_only` admits only a native membership.
+  Under a requested narrowing a lower tier neither proves nor denies: the node
+  stays admitted and is reported unverified, like an unstated one, and its tier
+  stays on the node. A consumer never presents a lower tier as native.
+- **Naming the tier: two different numbers.** The answer names it through
+  `graph_answer_pull_requests_on_explicit_text_links` and
+  `graph_answer_pull_requests_on_heuristic_links`, non-degrading coverage
+  details whose count is the pull requests IN THE ANSWER: the cohort members and
+  edge endpoints of the general read that rest on that tier.
+  `read_population_unverified` stays the degrading disclosure, with no count.
+  The walk lines carry `walk_crossed_pull_requests_explicit_text` and
+  `walk_crossed_pull_requests_heuristic`: the pull requests a walk CROSSED on
+  that tier. An issue decides for itself, so a crossed pull request need not
+  reach the answer, and neither number stands for the other.
+- **A colliding issue id.** `work_items` is keyed by
+  `(org_id, repo_id, work_item_id)` and a link row names no issue repository, so
+  one link id can join two rows. The row in the pull request's own repository is
+  what the link names; with none, the link names no project and is counted
+  (`ambiguous_links`). A pull-request work item takes part in that choice and
+  then contributes nothing, so an issue elsewhere never stands in for it. A
+  wrong project would admit a project-only caller.
+- **Unstated, not empty.** With no contributing link the pull request states
+  nothing, so it stays on the disclosed path and never reads as "in no project".
+  A set over the contract's bound is unstated too: never a partial set.
+- **A lost link.** Ops deletes a lower-tier row a native link outranks, so no
+  stamp finds that pull request again. `retractOutrankedLinks` clears its set
+  and tier at projection, last link or not: unstated is the disclosed path,
+  never a wider one. A native-tier set is kept: it stands on native links alone,
+  and this path deletes no native link.
+
 ## Graph admission
 
 Under `project_only` (c3, CHAOS-12299):
 
 - **Nodes** (`graphrank.AuthorizedAttributes`, `projectOnlyAdmits`). A node
   is admitted only when it is the caller's own organization node, a project
-  node whose canonical id is in the grant, or a work item whose
+  node whose canonical id is in the grant, a work item whose
   `authorization_project_identities` meets the grant exactly
-  (`ProjectMembershipOf` is Member). Everything else is denied: a work item
-  with no stated membership, a team (ownership reach is CHAOS-12323), a pull
-  request (CHAOS-12308), a repository, a deployment, an incident, a document
-  and an episode. The repository grant is never consulted. An attribute map
+  (`ProjectMembershipOf` is Member), or a pull request whose stated membership
+  meets the grant exactly and stands on native links only (CHAOS-12308; a link's
+  tier grants no authority, see "Pull request membership"). Everything else is
+  denied: a work item or a pull request with no stated membership, a pull
+  request with a lower-tier membership, a team (ownership reach is CHAOS-12323),
+  a repository, a deployment, an incident, a document and an episode. The repository grant is never consulted. An attribute map
   with no subject kind (a synthetic repository or team decision) is denied, so
   the direct data tools refuse every repository-anchored and team row.
 - **Requested narrowing.** A request that names projects is refused: nothing

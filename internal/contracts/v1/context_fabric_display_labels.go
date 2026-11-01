@@ -620,6 +620,13 @@ func ComposeCoverageDetailLabel(d ContextFabricCoverageDetail) string {
 		label = countPhrase(d.Count, "relationship edge", "relationship edges") + " of an unrecognized type dropped"
 	case ContextFabricCoverageDetailGraphValidityUnbounded:
 		label = countPhrase(d.Count, "undated element", "undated elements") + " included at the requested time"
+	case ContextFabricCoverageDetailGraphAnswerPullRequestsOnExplicitTextLinks:
+		// These two count pull requests IN THE ANSWER (cohort members and edge
+		// endpoints). The walk line's walk_crossed_pull_requests_* counts the
+		// pull requests a walk crossed: a different number, never shown here.
+		label = countPhrase(d.Count, "pull request", "pull requests") + " tied to the requested project only by a text reference"
+	case ContextFabricCoverageDetailGraphAnswerPullRequestsOnHeuristicLinks:
+		label = countPhrase(d.Count, "pull request", "pull requests") + " tied to the requested project only by an inferred link"
 	case ContextFabricCoverageDetailReuseAuxiliaryRefsStripped:
 		label = countPhrase(d.Count, "supporting item is", "supporting items are") + " no longer visible to you and were removed"
 	case ContextFabricCoverageDetailAnswerTerminatedBeforeAttempt:

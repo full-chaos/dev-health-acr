@@ -71,6 +71,9 @@ type RepositoryWorkItemWalkEvent struct {
 	// ProjectExcluded: the linked issues a requested project narrowing left
 	// out of scope (CHAOS-12329); never counted in Denied.
 	ProjectExcluded int
+	// Crossed: the pull requests the walk crossed on a lower link tier
+	// (CHAOS-12308). Not the answer's count.
+	Crossed CrossedPullRequests
 }
 
 // repositoryWorkItemReading is what one measured read of a repository's work

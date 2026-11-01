@@ -129,7 +129,7 @@ func (m *TreeWorkItemMembership) read(ctx context.Context, principal storage.Pri
 	servedTierRank, cutTierRank := -1, -1
 	out := WorkItemMembershipResult{Members: make([]WorkItemMembershipMember, 0, min(len(members), served)), ProjectNarrowingUnverified: walk.ProjectNarrowingUnverified,
 		TeamNarrowing: walk.TeamNarrowing, TeamExcluded: walk.TeamExcluded, TeamFloor: walk.TeamFloor,
-		ProjectExcluded: walk.ProjectExcluded}
+		ProjectExcluded: walk.ProjectExcluded, Crossed: walk.Crossed}
 	for _, member := range members {
 		segments, ok := identity.Segments(identity.KindWorkItem, member.Subject.CanonicalID)
 		if !ok || len(segments) != 2 {

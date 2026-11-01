@@ -2397,8 +2397,12 @@ type ContextFabricEntityProjection struct {
 	// membership, as canonical project.v2 identities from its own project
 	// link (never from repositories, issue-key prefixes or team ownership).
 	// nil: the producer did not state it. An empty list: stated, and the work
-	// item is in no project. Only a work-item entity may carry it, and it is
-	// never "*". The graph writes it as authorization_project_identities.
+	// item is in no project. On a pull request (CHAOS-12308) it is the union
+	// of the sets of the issues linked to it by actual link rows, and the
+	// entity property ContextFabricProjectMembershipTierProperty names the
+	// weakest contributing tier. Only a work-item or a pull-request entity
+	// may carry it, and it is never "*". The graph writes it as
+	// authorization_project_identities.
 	ProjectIdentities *[]string  `json:"project_identities,omitempty"`
 	EvidenceRefIDs    []string   `json:"evidence_ref_ids"`
 	ObservedAt        time.Time  `json:"observed_at"`
@@ -2406,6 +2410,15 @@ type ContextFabricEntityProjection struct {
 	ValidTo           *time.Time `json:"valid_to,omitempty"`
 	SourceVersion     string     `json:"source_version"`
 }
+
+// ContextFabricProjectMembershipTierProperty is the pull request entity
+// property that names the WEAKEST link tier among the links contributing to
+// its ProjectIdentities (CHAOS-12308). No existing field can hold it: the tier
+// of a link lives on each LINKS_PULL_REQUEST edge, which an authorization
+// decision on the node never reads, and ProjectIdentities is a set of
+// identities with no per-entry provenance. A consumer names this tier and
+// never presents a lower tier as native.
+const ContextFabricProjectMembershipTierProperty = "project_membership_tier"
 
 type ContextFabricRelationshipProjection struct {
 	RelationshipID  string                              `json:"relationship_id"`

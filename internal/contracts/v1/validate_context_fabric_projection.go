@@ -177,8 +177,8 @@ func (e ContextFabricEntityProjection) Validate() error {
 // authorization list.
 const ContextFabricEntityProjectIdentitiesMax = contextFabricAuthorizationScopeMax
 
-// validateEntityProjectIdentities admits project_identities on a work item
-// only, and only canonical project.v2 identities: the exact spelling
+// validateEntityProjectIdentities admits project_identities on a work item or
+// a pull request only (CHAOS-12308), and only canonical project.v2 identities: the exact spelling
 // identity.Derive produces for (provider, id), both non-empty. A wildcard, a
 // raw project id, another kind, or a spelling that decodes but is not the
 // one Derive writes is refused, so no stated set can widen into "any
@@ -187,8 +187,8 @@ func validateEntityProjectIdentities(kind ContextFabricSubjectKind, identities *
 	if identities == nil {
 		return nil
 	}
-	if kind != ContextFabricSubjectWorkItem {
-		return fmt.Errorf("project_identities is allowed only on a work item entity, not %q", kind)
+	if kind != ContextFabricSubjectWorkItem && kind != ContextFabricSubjectPullRequest {
+		return fmt.Errorf("project_identities is allowed only on a work item or a pull request entity, not %q", kind)
 	}
 	if len(*identities) > ContextFabricEntityProjectIdentitiesMax {
 		return fmt.Errorf("project_identities exceeds v1 bound of %d", ContextFabricEntityProjectIdentitiesMax)

@@ -5443,6 +5443,10 @@ var TeamAnchorWalk = Event{
 		// CHAOS-12361: members a requested project narrowing left out of
 		// scope; never counted in denied.
 		{Key: "project_excluded", Type: FieldInt, Presence: PresenceConditional, Applicability: "written when the read finished (every outcome but read_failed)"},
+		// CHAOS-12308: pull requests the walk crossed on a lower link tier: a
+		// different number from the answer's graph_answer_pull_requests_on_*.
+		{Key: "walk_crossed_pull_requests_explicit_text", Type: FieldInt, Presence: PresenceConditional, Applicability: "written when the read finished (every outcome but read_failed)"},
+		{Key: "walk_crossed_pull_requests_heuristic", Type: FieldInt, Presence: PresenceConditional, Applicability: "written when the read finished (every outcome but read_failed)"},
 		{Key: "truncated", Type: FieldBool, Presence: PresenceConditional, Applicability: "written when the read finished (every outcome but read_failed)"},
 		{Key: "error", Type: FieldString, Presence: PresenceConditional, Applicability: "written when outcome=read_failed"},
 		{Key: "request_id", Type: FieldString, Presence: PresenceConditional, Applicability: "written when the request context carries a request ID"},
@@ -5614,6 +5618,10 @@ var RepositoryWorkItemWalk = Event{
 		// CHAOS-12329: linked issues a requested project narrowing left out
 		// of scope; never counted in denied.
 		{Key: "project_excluded", Type: FieldInt, Presence: PresenceConditional, Applicability: "written when the read measured the population (every outcome but read_failed)"},
+		// CHAOS-12308: pull requests the walk crossed on a lower link tier: a
+		// different number from the answer's graph_answer_pull_requests_on_*.
+		{Key: "walk_crossed_pull_requests_explicit_text", Type: FieldInt, Presence: PresenceConditional, Applicability: "written when the read measured the population (every outcome but read_failed)"},
+		{Key: "walk_crossed_pull_requests_heuristic", Type: FieldInt, Presence: PresenceConditional, Applicability: "written when the read measured the population (every outcome but read_failed)"},
 		{Key: "team_narrowing", Type: FieldString, Presence: PresenceConditional, Applicability: "written when the read measured the population and the request narrows by team", ClosedVocabulary: contextfabric.TeamNarrowingBasisVocabulary()},
 		{Key: "team_excluded", Type: FieldInt, Presence: PresenceConditional, Applicability: "written when the read measured the population and the request narrows by team"},
 		{Key: "team_floor_reason", Type: FieldString, Presence: PresenceConditional, Applicability: "written when the read measured the population and the request narrows by team", ClosedVocabulary: contextfabric.TeamNarrowingFloorVocabulary()},

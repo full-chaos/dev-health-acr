@@ -1159,6 +1159,8 @@ func (t SlogTelemetry) RecordTeamAnchorWalk(ctx context.Context, orgID string, d
 			"members", decision.Members,
 			"denied", decision.Denied,
 			"project_excluded", decision.ProjectExcluded,
+			"walk_crossed_pull_requests_explicit_text", decision.Crossed.ExplicitText,
+			"walk_crossed_pull_requests_heuristic", decision.Crossed.Heuristic,
 			"truncated", decision.Truncated)
 	}
 	if decision.Err != nil {
