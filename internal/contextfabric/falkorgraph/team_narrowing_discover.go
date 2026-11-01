@@ -27,9 +27,15 @@ import (
 //     LINKS_PULL_REQUEST row of an admitted tier to one of that repository's
 //     pull requests -- or (ii) its own project (BELONGS_TO_PROJECT) is owned
 //     so. Never its own repository column, a key prefix or person membership;
+//   - pull request review: its pull request (BELONGS_TO_PULL_REQUEST) is in
+//     scope;
+//   - CI run, deployment: its repository (BELONGS_TO_REPOSITORY) is owned so;
+//   - incident: a repository it belongs to (BELONGS_TO_REPOSITORY, one edge per
+//     mapped repository) is owned so. Never CORRELATED_WITH_INCIDENT: that is
+//     relevance, not ownership;
 //   - organization: the caller's organization node stays;
 //   - every other kind has no ownership path to a team and is out of scope
-//     (lead ruling Q1).
+//     (lead ruling Q1; CHAOS-12345 for the kinds above).
 //
 // The committed subjects stay subjects (Anchor: B): only their neighbours are
 // narrowed, and a committed subject outside the narrowing does not make its
@@ -54,6 +60,24 @@ var issuePullRequestStep = walkStep{
 var pullRequestRepositoryStep = walkStep{
 	fromKind: contractsv1.ContextFabricSubjectPullRequest, toKind: contractsv1.ContextFabricSubjectRepository,
 	relation: contractsv1.ContextFabricRelationshipBelongsToRepository, direction: walkOut,
+}
+
+// reviewPullRequestStep reads a review's pull request.
+var reviewPullRequestStep = walkStep{
+	fromKind: contractsv1.ContextFabricSubjectPullRequestReview, toKind: contractsv1.ContextFabricSubjectPullRequest,
+	relation: contractsv1.ContextFabricRelationshipBelongsToPullRequest, direction: walkOut,
+}
+
+// repositoryChildSteps read the repository of each kind that hangs off one by
+// its own BELONGS_TO_REPOSITORY edge (CHAOS-12345). An incident has one edge per
+// repository its service maps to.
+var repositoryChildSteps = []walkStep{
+	{fromKind: contractsv1.ContextFabricSubjectCIRun, toKind: contractsv1.ContextFabricSubjectRepository,
+		relation: contractsv1.ContextFabricRelationshipBelongsToRepository, direction: walkOut},
+	{fromKind: contractsv1.ContextFabricSubjectDeployment, toKind: contractsv1.ContextFabricSubjectRepository,
+		relation: contractsv1.ContextFabricRelationshipBelongsToRepository, direction: walkOut},
+	{fromKind: contractsv1.ContextFabricSubjectIncident, toKind: contractsv1.ContextFabricSubjectRepository,
+		relation: contractsv1.ContextFabricRelationshipBelongsToRepository, direction: walkOut},
 }
 
 // discoverTeamScope is one general read's requested team narrowing.
@@ -281,7 +305,9 @@ func (s *discoverTeamScope) decide(ctx context.Context, subjects []contextfabric
 		switch subject.Kind {
 		case contextfabric.SubjectTeam, contextfabric.SubjectOrganization:
 			continue
-		case contextfabric.SubjectRepository, contextfabric.SubjectProject, contextfabric.SubjectPullRequest, contextfabric.SubjectWorkItem:
+		case contextfabric.SubjectRepository, contextfabric.SubjectProject, contextfabric.SubjectPullRequest, contextfabric.SubjectWorkItem,
+			contractsv1.ContextFabricSubjectPullRequestReview, contractsv1.ContextFabricSubjectCIRun,
+			contractsv1.ContextFabricSubjectDeployment, contractsv1.ContextFabricSubjectIncident:
 			byKind[subject.Kind] = append(byKind[subject.Kind], id)
 		default:
 			// No ownership path to a team: out of scope, decided, no floor.
@@ -322,6 +348,20 @@ func (s *discoverTeamScope) decide(ctx context.Context, subjects []contextfabric
 			linkedPRs = append(linkedPRs, pr)
 		}
 	}
+	reviews := byKind[contractsv1.ContextFabricSubjectPullRequestReview]
+	reviewHits, reviewHitsCut, err := a.walkStepHits(ctx, key, orgID, reviews, reviewPullRequestStep, s.temporal, budget)
+	if err != nil {
+		return err
+	}
+	reviewPRsOf := map[string][]string{}
+	for _, h := range reviewHits {
+		pr := canonicalIDOf(h.to)
+		reviewPRsOf[h.from] = append(reviewPRsOf[h.from], pr)
+		if !prSet[pr] {
+			prSet[pr] = true
+			linkedPRs = append(linkedPRs, pr)
+		}
+	}
 	prRepos, prReposCut, err := a.walkStepHits(ctx, key, orgID, append(append([]string{}, prs...), linkedPRs...), pullRequestRepositoryStep, s.temporal, budget)
 	if err != nil {
 		return err
@@ -338,6 +378,25 @@ func (s *discoverTeamScope) decide(ctx context.Context, subjects []contextfabric
 		if !repoSet[repo] {
 			repoSet[repo] = true
 			repos = append(repos, repo)
+		}
+	}
+	childRepositoriesCut := false
+	var repositoryChildren []string
+	for _, step := range repositoryChildSteps {
+		children := byKind[step.fromKind]
+		repositoryChildren = append(repositoryChildren, children...)
+		hits, cut, err := a.walkStepHits(ctx, key, orgID, children, step, s.temporal, budget)
+		if err != nil {
+			return err
+		}
+		childRepositoriesCut = childRepositoriesCut || cut
+		for _, h := range hits {
+			repo := canonicalIDOf(h.to)
+			reposOf[h.from] = append(reposOf[h.from], repo)
+			if !repoSet[repo] {
+				repoSet[repo] = true
+				repos = append(repos, repo)
+			}
 		}
 	}
 	repoOwners, repoOwnersCut, err := a.walkStepHits(ctx, key, orgID, repos, repositoryOwnersStep, owned, budget)
@@ -396,10 +455,11 @@ func (s *discoverTeamScope) decide(ctx context.Context, subjects []contextfabric
 	repoReach := func(repo string) (owned, missing bool) {
 		return repoOwned[repo], !repoOwned[repo] && (!repoHasOwner[repo] || repoOwnersCut)
 	}
-	prReach := func(pr string) (owned, missing bool) {
-		rs := reposOf[pr]
+	// repositoriesReach: any repository of the subject is owned. No repository
+	// edge: its ownership is missing.
+	repositoriesReach := func(id string, cut bool) (owned, missing bool) {
+		rs := reposOf[id]
 		if len(rs) == 0 {
-			// No repository edge: the pull request's ownership is missing.
 			return false, true
 		}
 		for _, r := range rs {
@@ -409,8 +469,9 @@ func (s *discoverTeamScope) decide(ctx context.Context, subjects []contextfabric
 				missing = true
 			}
 		}
-		return false, missing || prReposCut
+		return false, missing || cut
 	}
+	prReach := func(pr string) (owned, missing bool) { return repositoriesReach(pr, prReposCut) }
 	floor := func(id string, missing bool) {
 		if missing {
 			s.missing[id] = true
@@ -434,6 +495,23 @@ func (s *discoverTeamScope) decide(ctx context.Context, subjects []contextfabric
 		owned, missing := prReach(pr)
 		s.inScope[pr] = owned
 		floor(pr, !owned && missing)
+	}
+	for _, child := range repositoryChildren {
+		owned, missing := repositoriesReach(child, childRepositoriesCut)
+		s.inScope[child] = owned
+		floor(child, !owned && missing)
+	}
+	for _, review := range reviews {
+		reached, missing := false, reviewHitsCut || len(reviewPRsOf[review]) == 0
+		for _, pr := range reviewPRsOf[review] {
+			if o, m := prReach(pr); o {
+				reached = true
+			} else if m {
+				missing = true
+			}
+		}
+		s.inScope[review] = reached
+		floor(review, !reached && missing)
 	}
 	for _, issue := range issues {
 		reached, missing := false, linksCut || projectHitsCut
