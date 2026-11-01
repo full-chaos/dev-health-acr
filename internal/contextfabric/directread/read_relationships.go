@@ -639,7 +639,7 @@ func (r *RelationshipsReader) frontier(ctx context.Context, principal storage.Pr
 			return nil, "", err
 		}
 		for _, candidate := range page.Edges {
-			if EdgeGate(principal, candidate.Attributes, admitted[graphrank.SubjectKey(candidate.From.Subject)], admitted[graphrank.SubjectKey(candidate.To.Subject)]) != EdgeVisible {
+			if EdgeGate(principal, candidate.RelationType, candidate.Attributes, admitted[graphrank.SubjectKey(candidate.From.Subject)], admitted[graphrank.SubjectKey(candidate.To.Subject)]) != EdgeVisible {
 				continue
 			}
 			if plan.currentOnly && inactiveBlocker(candidate) {
@@ -744,7 +744,7 @@ func (r *RelationshipsReader) gateEdges(ctx context.Context, principal storage.P
 	served := make([]ServedEdge, 0, len(candidates))
 	var withheld RelationshipsWithheld
 	for _, candidate := range candidates {
-		reason := EdgeGate(principal, candidate.Attributes,
+		reason := EdgeGate(principal, candidate.RelationType, candidate.Attributes,
 			admitted[graphrank.SubjectKey(candidate.From.Subject)], admitted[graphrank.SubjectKey(candidate.To.Subject)])
 		if reason != EdgeVisible {
 			withheld.EdgesNotVisible++

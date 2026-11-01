@@ -1,0 +1,296 @@
+# Context Fabric: the project-only grant scope
+
+Status: c1 (CHAOS-12297), c2 (CHAOS-12298) and c3 (CHAOS-12299) are built; c4
+and c5 are planned. Design of record:
+CHAOS-12107 (v3 and its r3 addendum; Linear). Parent ticket: CHAOS-12228.
+
+## Why
+
+An organization whose Dev Health inventory holds projects but no repositories
+cannot use Ask Dev today. Every ACR gate reads a caller's grant as a
+repository list. An empty list means *unrestricted* (no repository check), so a
+no-repository organization either gets every answer refused (`409
+no_repository`, `internal/api/principal_access.go:146-219`) or, if it were let
+through, would read the whole organization. The project-only scope admits such
+a caller under an explicit set of projects instead. It never widens to
+unrestricted or `*`, and it leaves every other caller exactly as it is.
+
+## The grant class
+
+`auth.GrantClass` (`internal/auth/grant_class.go`) is the one classification of
+a grant:
+
+| Class | Grant | `IsRestricted()` |
+|---|---|---|
+| `unrestricted` | no repository grant list | false |
+| `universal` | the list holds `*` | false |
+| `restricted` | specific repositories or owner wildcards | true |
+| `project_only` | an explicit set of projects, no repository inventory | true |
+
+`project_only` is a **restricted subtype**: a gate that does not decide it
+explicitly takes the restricted path. `auth.ClassifyGrant` returns
+`project_only` iff `storage.Principal.ProjectScopes` (canonical `project.v2`
+identities) is non-empty, whatever the repository list holds; otherwise it
+keeps today's rule. Only the access-read decoder (c5, CHAOS-12301) sets
+`ProjectScopes`, so nothing is `project_only` before c5.
+
+The three gate vocabularies derive from the grant class with no `default`.
+`project_only` maps to their restricted member, so no wire value changes:
+
+- `directread.PrincipalClassForGrant` (`internal/contextfabric/directread/principal_class.go`);
+- the operation policy's caller class reads the grant through it:
+  `directread.CallerClassFor(PrincipalClassForGrant(...))`
+  (`internal/contextfabric/directread/operation_policy.go`);
+- `storedResultScopeForGrant` (`internal/contextfabric/stored_result_authorization.go`).
+
+Those vocabularies are closed in the event specification (`internal/contextfabric/eventspec/spec.go`:
+`principal_scope`, `principal_class`, `caller_class`), and the caller class
+drives the operation-policy artifact (`contracts/mcp/operations.v1.json`).
+
+## The decision gate
+
+`internal/cigates/grantclass` loads every release build with full type
+information (the `rowsclose` machinery, `internal/cigates/sourceload`). It finds
+every site that reads a grant class:
+
+- comparisons;
+- every tagged switch over a class (an exhaustive one is a decision too),
+  and separately one that misses a class or carries a `default`;
+- a comparison or classifier result that leaves its function (a derived bool,
+  directly or through a local variable);
+- functions used as values;
+- conversions of a class to any other type (`string`, an interface, a named
+  type of its own such as `type Wrapped GrantClass`), or implicitly to an
+  interface as an argument, composite element, map key (in a literal or an
+  index), struct field, assignment, variable declaration, channel send or
+  return;
+- a typed constant of a class declared outside the class's own package: a
+  new class value its own package's pin cannot see;
+- collections of a class: a slice, array or map literal over a class, and a
+  call argument of such a type (`slices.Contains`);
+- lookups in a map keyed by a class;
+- calls of the classifiers;
+- calls of the raw repository-grant classifiers (`scopesUnrestricted`,
+  `needsProjectReach`, `orgWideFigureAllowed`, `sourceHealthRestricted`,
+  `workItemRepositoryRestricted`, `admitsWildcard`).
+
+`decisions.tsv` also pins each class type's constants as `Name=value`. When a
+class gains, loses or renames a constant, the test fails and lists every row of
+that class to be decided again, comparisons as much as switches. Two release
+targets that see different constants of one class fail the scan.
+
+It scans every distinct (GOOS, GOARCH) pair of the release matrix, and a
+decision inside a function literal counts for its enclosing declaration. It
+does not see a class inside a generic function, where it is a type parameter,
+inside a named struct transported whole, in a class-to-interface conversion
+inside a multi-value (tuple) assignment or call, or through reflection or
+unsafe.
+
+Every site has a row in `internal/cigates/grantclass/decisions.tsv` that says
+what `project_only` does there:
+
+- `r-sub`: the restricted path is right;
+- `proj`: project-aware logic is due, and the ticket is named;
+- `deny`: refused;
+- `leave`: a repository-only branch `project_only` never reaches;
+- `consent`: the original consent grant;
+- `vocab`: a mapping, vocabulary or telemetry.
+
+An unlisted site, an undecided (`open`) row, a count that differs (a second
+decision added inside a listed function), a row without a note and a stale row
+all fail. `planted_test.go` proves each kind is found.
+
+## Membership: the issue's own project link
+
+A work item's current project membership is
+`authorization_project_identities` on its graph node (CHAOS-12226).
+
+- **Source.** It is read from the ops view `project_membership_presence` (the
+  work item's own `project_id`, or its latest transition into a project) and
+  resolved to exactly one `projects` row. It is never taken from repositories,
+  issue-key prefixes or team ownership (the entity tree:
+  `ops/docs/contribute/architecture/data-and-storage.md`).
+- **Shape.** It is a list of canonical identities. An empty list means *in no
+  project*; an absent value means *not stated*, and admits nothing. `"*"` never
+  has wildcard meaning.
+- **Turning it on is a roll step.** It is written only with
+  `ACR_CONTEXT_FABRIC_PROJECT_WORK_ITEM_PROJECT_MEMBERSHIP_ENABLED` (default
+  off). Turning it on needs an approved `acr-projector rebuild --org`, because
+  the source's tables share one cursor; see `docs/operations.md`.
+
+## One identity encoding
+
+A project identity is `project.v2:<EncodeSegment(provider)>:<EncodeSegment(id)>`
+(`internal/contextfabric/identity`, `Derive`).
+
+- **Decode.** Ops sends `{provider, id}` pairs (ops CHAOS-12224). acr derives
+  the canonical form once, at decode. An empty or invalid pair, an oversized
+  identity or a duplicate rejects the read. A non-empty set never becomes the
+  empty (unrestricted) grant.
+- **Where it is used.** The canonical form is the only one used for
+  authorization, in the principal, the node attribute, the fact selectors and
+  the digests.
+
+## Graph admission
+
+Under `project_only` (c3, CHAOS-12299):
+
+- **Nodes** (`graphrank.AuthorizedAttributes`, `projectOnlyAdmits`). A node
+  is admitted only when it is the caller's own organization node, a project
+  node whose canonical id is in the grant, or a work item whose
+  `authorization_project_identities` meets the grant exactly
+  (`ProjectMembershipOf` is Member). Everything else is denied: a work item
+  with no stated membership, a team (ownership reach is CHAOS-12323), a pull
+  request (CHAOS-12308), a repository, a deployment, an incident, a document
+  and an episode. The repository grant is never consulted. An attribute map
+  with no subject kind (a synthetic repository or team decision) is denied, so
+  the direct data tools refuse every repository-anchored and team row.
+- **Requested narrowing.** A request that names projects is refused: nothing
+  is admitted, and it is never answered over the whole grant. The intersection
+  with the grant is CHAOS-12324 (after CHAOS-12229 maps raw ids). A requested
+  repository or team narrowing still narrows a node.
+- **E1: structural edges** (`graphrank.AuthorizedEdge`). An edge is admitted
+  iff both endpoints pass the node rule, at every edge decision site. The
+  edge's own repository and team lists are never consulted. A real edge
+  project list must hold a granted canonical identity; the projection writes
+  raw project ids there, so such an edge is denied until CHAOS-12229. `"*"` or
+  an absent list defers to the endpoints. An unresolved optional endpoint does
+  not pass (`sourcerow` `encodedTargets`). A link tier grants a project-only
+  caller no authority in the tree walk.
+- **E2: attribution edges.** `DOCUMENTED_BY` and `HAS_EPISODE` are denied.
+- **Reach.** A project-only caller reads no project or ownership reach. It is
+  restricted wherever a reader asks whether the caller sees only some
+  repositories (`needsProjectReach`), and fails closed there.
+- **The shared predicate.** It is `graphrank.ProjectMembershipOf`, and the
+  request-side narrowing (CHAOS-12229) uses the same one.
+
+## Fail closed before c2 (c3 r1)
+
+Until c2 (CHAOS-12298) lands, c3 refuses a `project_only` principal every
+channel that reads its repository list or hashes only that list:
+
+- **Repositories.** `auth.AuthorizeRepository` refuses it every repository,
+  whatever its list holds, so every route and evidence read that authorizes a
+  repository through it refuses it. The storage episode checks refuse it too
+  (`storage.Principal.HoldsProjectGrant`, the rule `auth.ClassifyGrant`
+  reads).
+- **Work items.** `auth.WorkItemGrantSelectorSet` gives it the zero selector
+  set, which the reader denies, never the organization-wide one. Every
+  work-item read (status, work, actual completion, blockers, required
+  children, commitment, the tree filter, membership, the scope expander, the
+  repository-less admission, evidence and source rows) then reads nothing for
+  it, so a work-item subject's facts are withheld.
+- **Stored results and reuse.** c3 refused it every stored result
+  (`grant_mismatch`), made no reuse lookup and stored none of its results as
+  reusable, because the grant digest and the reuse key hashed only the
+  repository list. c2 lifts all three: its digest and key are now class-tagged
+  and built from its project set (see "Digests and reuse").
+- **Never unscoped (r3).** Every reader of "the caller sees every
+  repository" decides on the principal (`auth.ClassifyGrant`), never on the
+  raw list: the resolve census visibility, the organization figures
+  (`sourceHealthRestricted`, `orgWideFigureAllowed`), the work-item tuple
+  (`workItemRepositoryRestricted`), the graph reach (`needsProjectReach`) and
+  the link read, which binds no repository grant for it. A stored work-item
+  tuple, a context packet, an episode write or purge and the evidence
+  repository listing are refused to it too.
+- **Counts.** `withheld.edges_not_visible` and `page.examined` are unchanged:
+  they are the disclosure contract, the same for a restricted caller.
+
+## Digests and reuse
+
+c2, CHAOS-12298. Every other grant class keeps its digests and its reuse key
+byte for byte.
+
+- **Sentinel.** A `project_only` principal's repository list holds one reserved
+  value, `contractsv1.ProjectOnlyRepositoryScope` (`acr-reserved:project-only`;
+  the prefix is `contractsv1.ReservedRepositoryScopePrefix`, compared trimmed
+  and case-insensitive), so any site that still reads the raw list sees a
+  restricted list that matches nothing. The access-read decoder (c5) sets it.
+  - Refused where repository names enter acr: credential scopes
+    (`auth.NormalizeRepositoryScopes`, by name, before the slug grammar), the
+    projection port (`ContextFabricAuthorizationScope.Validate`, every entity,
+    relationship and scope it guards) and the source slug producer
+    (`devhealthsource.repoAuthorization` writes the unresolved sentinel).
+  - Denied in the raw-equality matchers: `graphrank.ScopeMatch` never matches a
+    reserved value (its raw fallback would otherwise match a node holding the
+    same value) and `auth.RepositoryAllowed` skips one.
+  - No digest or reuse key hashes it: the project-only forms below are built
+    from the project set alone.
+- **The project grant digest.** `projectGrantDigest`
+  (`internal/contextfabric/reuse_grant_scope.go`): the canonical `project.v2`
+  identities, compared exactly (never trimmed or case-folded), de-duplicated,
+  sorted and framed (a domain tag, then each entry length-prefixed), SHA-256,
+  128 bits.
+- **Stored-result grant digest.** `p:` plus those 32 hex
+  (`StoredResultGrantDigest`; migration 0066, CHAOS-12227, admits the form). A
+  project-only reader is a restricted reader of the gate: it is served only a
+  result whose digest equals its own, never `open`, `g:` or another `p:`; a
+  restricted reader's `g:` digest never equals a `p:` one.
+- **Reuse key.** Class-tagged: `+p:` plus the project grant digest for
+  `project_only`, `+g:` for a restricted grant, the bare key for unrestricted
+  and universal (`GrantScopedTimeAxisKey`, the lookup and the only Save both).
+  Two different project grants never share a key.
+- **Work-item census digest.** It keeps its 64-hex envelope. For
+  `project_only` the document is class-tagged: `grant_class` plus the sorted
+  project set, and an empty repository grant list
+  (`WorkItemAuthorizationDigest`). The two fields are omitted for every other
+  class, so their documents are unchanged.
+- **R2-4.** An unrestricted or universal reader may read a `project_only`
+  result: the stored-result gate checks no digest for them, as before. No new
+  unrestricted or universal investigation reuses one, because its reuse key
+  never equals a `+p:` key, and the served result keeps its `project_only`
+  limitations and coverage exactly as stored.
+- **R3-3.** A census-backed work-item tuple computed under one grant class is
+  not-found to a reader of another, because the census digest is recomputed
+  for the reader (`internal/contextfabric/work_item_stored_serving.go`).
+- **Postgres.** The `p:` replay (identical, changed, repository, universal and
+  unrestricted grants) is the shared parity suite
+  `paritytest.RunProjectGrantDigestReplaySuite`, run by both adapters (the
+  Postgres one under the `integration` build tag).
+
+## Facts and aggregates
+
+- **Served:** intrinsic project facts, and the facts of member work items.
+- **Withheld in c3** (`devhealthfacts/project_only_withholding.go`,
+  `projectOnlyWithheld`): every project or organization fact this package
+  cannot prove intrinsic. That is the project facts of health, flow,
+  landscape, metrics, readiness and workload (built only from owning teams'
+  and their repositories' rows), the project and organization investment mixes
+  and unit listing, the project pull request and blocker roll-ups, commitment
+  and actual completion (items joined by `project_id`, not by exact
+  membership), and organization source health. The provider reads none of
+  those rows and serves no fact. The subject carries no reason of its own yet;
+  its typed label is CHAOS-12330.
+- **Typed limitation, with a coverage reason:** facts that rest on a team or on
+  a cross-project population (F5).
+- **Org-wide figures:** a typed limitation (D3; CHAOS-12225 widens it later).
+
+## Observability
+
+c4, CHAOS-12300. At Info, corpus-safe (never ids):
+
+- the admission basis: class, project count and digest class;
+- the E1/E2 decision basis;
+- a grant-equality result;
+- membership outcomes `missing`, `stale` and `cleared`, never folded into
+  "absent".
+
+## The split and the roll order
+
+| Step | Ticket | What it does | Behavior change |
+|---|---|---|---|
+| c1 | CHAOS-12297 | the grant class, the decision gate, this document | none |
+| c2 | CHAOS-12298 | the sentinel, digests and reuse keyed by class | none until c5 |
+| c3 | CHAOS-12299 | graph and fact admission, the shared membership predicate | none until c5 |
+| c4 | CHAOS-12300 | Info observability | logging only |
+| c5 | CHAOS-12301 | the access-read decoder: the ONLY change that admits `project_only` | admits `project_only` |
+
+The roll order is fixed: acr with c5 live in production BEFORE ops turns on
+`ACR_ACCESS_PROJECT_SCOPE`. The decoder refuses unknown fields today
+(`internal/entitlements/principal_access.go`), so the reverse order fails
+closed.
+
+The ops access read answers an inventory above 100 with a 503 and a code:
+`acr_access_project_scope_over_limit` or
+`acr_access_repository_scope_over_limit`. c5 maps each code to a typed
+limitation of access; every other 503 stays a plain unavailable.

@@ -402,8 +402,10 @@ func TestScopeExpanderStatementsFollowTheRequestedScopeOnRealClickHouse(t *testi
 	// the smaller size's AND over it by more than a fixed floor. A cost that
 	// grows with the rows lifts all three runs, so the minimum carries it;
 	// the floor keeps a small statement's jitter out.
-	grew := func(small, large variant, floor uint64) bool {
-		return float64(large.peak) > statementMemorySlope*float64(small.peak) && large.peak > small.peak+floor
+	// CHAOS-12317: a noisySlopeStatements row compares the larger size's min
+	// with the smaller size's max; every other row min with min (slopeGrew).
+	grew := func(label string, small, large variant, floor uint64) bool {
+		return slopeGrew(small.peak, small.spread, large.peak, floor, noisySlopeStatements[label])
 	}
 
 	// The guard reads merged parts; production tables are not one part, so
@@ -446,7 +448,15 @@ func TestScopeExpanderStatementsFollowTheRequestedScopeOnRealClickHouse(t *testi
 	for _, statement := range scopeExpanderStatements {
 		label := statement.label
 		s, l := small[label], large[label]
-		t.Logf("PEAK %s scoped small=%d large=%d (spread %d/%d) org-wide small=%d large=%d (spread %d/%d)", label, s.scoped.peak, l.scoped.peak, s.scoped.spread, l.scoped.spread, s.orgWide.peak, l.orgWide.peak, s.orgWide.spread, l.orgWide.spread)
+		floor := arrayMemoryFloor
+		if own, ok := slopeFloors[label]; ok {
+			floor = own
+		}
+		guard := "min-vs-min"
+		if noisySlopeStatements[label] {
+			guard = "min-vs-max"
+		}
+		t.Logf("PEAK %s scoped small=%d large=%d (spread %d/%d) org-wide small=%d large=%d (spread %d/%d) guard=%s min_detectable_growth=%d", label, s.scoped.peak, l.scoped.peak, s.scoped.spread, l.scoped.spread, s.orgWide.peak, l.orgWide.peak, s.orgWide.spread, l.orgWide.spread, guard, minDetectableGrowth(s.scoped.peak, s.scoped.spread, floor, noisySlopeStatements[label]))
 		if s.scoped.peak == 0 || l.scoped.peak == 0 || s.orgWide.peak == 0 || l.orgWide.peak == 0 {
 			t.Fatalf("%s: measurement did not happen (small %+v, large %+v)", label, s, l)
 		}
@@ -460,11 +470,7 @@ func TestScopeExpanderStatementsFollowTheRequestedScopeOnRealClickHouse(t *testi
 				}
 			}
 		}
-		floor := arrayMemoryFloor
-		if own, ok := slopeFloors[label]; ok {
-			floor = own
-		}
-		if grew(s.scoped, l.scoped, floor) {
+		if grew(label, s.scoped, l.scoped, floor) {
 			t.Errorf("%s grew with unrelated organization rows: %d bytes at the larger size, %d at the smaller", label, l.scoped.peak, s.scoped.peak)
 		}
 		ceiling := scopeStatementCeiling
@@ -477,7 +483,7 @@ func TestScopeExpanderStatementsFollowTheRequestedScopeOnRealClickHouse(t *testi
 			}
 		}
 		if !statement.threadBound {
-			if !grew(s.orgWide, l.orgWide, floor) {
+			if !grew(label, s.orgWide, l.orgWide, floor) {
 				t.Errorf("%s: the organization-wide form did not grow (%d bytes at the larger size, %d at the smaller): the guard cannot fail on this data", label, l.orgWide.peak, s.orgWide.peak)
 			}
 			continue

@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://contracts.fullchaos.dev/acr/v1/context_fabric_investigation_result.v2.schema.json",
   "title": "ACR Context Fabric Investigation Result v2",
-  "description": "CHAOS-4042 (sol-max ruling): identical to Investigation Result v1 in every field except structure_needs, whose anchor_options carry AnchorOptionV2 (membership-verify) semantics instead of AnchorOption (unique-claimant). A result only ever carries this schema_version when it minted at least one membership-verify anchor option; v1 AnchorOption/results stay permanently unique-claimant and are never reinterpreted under this schema. CHAOS-11975: a v2 result carries at least one membership-verify anchor option in structure_needs.anchor_options; ACR's validator refuses one without, and this schema requires structure_needs from the next release.",
+  "description": "CHAOS-4042 (sol-max ruling): identical to Investigation Result v1 in every field except structure_needs, whose anchor_options carry AnchorOptionV2 (membership-verify) semantics instead of AnchorOption (unique-claimant). A result only ever carries this schema_version when it minted at least one membership-verify anchor option; v1 AnchorOption/results stay permanently unique-claimant and are never reinterpreted under this schema. CHAOS-11975: a v2 result carries at least one membership-verify anchor option in structure_needs.anchor_options; ACR's validator refuses one without, and this schema requires structure_needs (CHAOS-12073; it shipped optional in the release before).",
   "type": "object",
   "additionalProperties": false,
   "properties": {
@@ -328,7 +328,8 @@
     "deterministic_answer",
     "warnings",
     "reused",
-    "completeness"
+    "completeness",
+    "structure_needs"
   ],
   "allOf": [
     {

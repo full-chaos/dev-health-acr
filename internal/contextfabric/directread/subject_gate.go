@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/full-chaos/dev-health-acr/internal/auth"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/graphrank"
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
@@ -260,12 +261,16 @@ func (g *SubjectGate) decide(ctx context.Context, principal storage.Principal, r
 			return finish(decision)
 		default:
 			var groupIndexes []int
+			// A project-only caller's project is decided by the node rule
+			// (its canonical id is in the grant) and its teams are denied
+			// there, so no ownership reach is read (CHAOS-12299).
+			reach := auth.ClassifyGrant(principal) != auth.GrantProjectOnly
 			for position, outcome := range outcomes {
 				index := graphIndexes[position]
 				switch outcome {
 				case contextfabric.StoredSubjectAdmitted:
 					decision.Outcomes[index].Outcome = SubjectAdmitted
-					if needsOwnershipReach(decision.PrincipalClass, decision.Outcomes[index].Subject.Kind) {
+					if reach && needsOwnershipReach(decision.PrincipalClass, decision.Outcomes[index].Subject.Kind) {
 						groupIndexes = append(groupIndexes, index)
 					}
 				case contextfabric.StoredSubjectDenied:
@@ -308,7 +313,10 @@ func (g *SubjectGate) decide(ctx context.Context, principal storage.Principal, r
 
 // needsOwnershipReach: a team or project is admitted to a restricted caller
 // only through a repository it reaches by ownership. An unrestricted or
-// universal caller holds every repository, so the node check suffices.
+// universal caller holds every repository, so the node check suffices. A
+// project-only caller is restricted here: decide skips the reach for it (the
+// node rule decides), and markInactiveTeams' reach check denies it every team,
+// since ownershipReachAdmits never admits a project-only caller.
 func needsOwnershipReach(class PrincipalClass, kind contextfabric.SubjectKind) bool {
 	return class == ClassRestricted && (kind == contractsv1.ContextFabricSubjectTeam || kind == contractsv1.ContextFabricSubjectProject)
 }

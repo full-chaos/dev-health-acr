@@ -292,7 +292,7 @@ func TestOAuthAuthorizeNamesTheClientRefusal(t *testing.T) {
 		{name: "root client id", clientID: "https://client.example.test/",
 			refusal: "unsupported_client_id", reason: "is not a form this server accepts"},
 		{name: "unknown registered client", clientID: "acrc_00000000000000000000000000000000",
-			refusal: "unknown_client", reason: "is not registered with this server"},
+			refusal: "unknown_client", reason: "registration with this server has ended. Disconnect it in the application, then connect again."},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			switch {

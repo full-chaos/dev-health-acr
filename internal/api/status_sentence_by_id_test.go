@@ -135,11 +135,31 @@ func TestByIDAHeadWithNothingToFallBackToIsServedAsStored(t *testing.T) {
 	}
 }
 
+// answerWithQualifiedDrivers is the contract example answer whose readiness
+// driver's read was cut (readinessCut) and whose health driver's read is out
+// of date (healthStale): the drivers a limited-read clause names, which the
+// served copy's restatement is anchored on (CHAOS-12289).
+func answerWithQualifiedDrivers(t *testing.T, readinessCut, healthStale bool, currentState string) contractsv1.ContextFabricInvestigationResult {
+	t.Helper()
+	stored := storedTruncatedDriverAnswer(t)
+	if !readinessCut {
+		stored.Drivers[0].SourceState = contractsv1.ContextFabricSourceAvailable
+		stored.Drivers[0].SourceStateNote = ""
+		stored.Drivers[0].SummaryCorrected = false
+	}
+	if healthStale {
+		stored.Drivers[2].SourceState = contractsv1.ContextFabricSourceStale
+	}
+	stored.CurrentState = currentState
+	stored.Completeness = contextfabric.ComputeAnswerCompleteness(stored)
+	return stored
+}
+
 func TestByIDAStoredNotCompleteClauseIsServedInPlainWords(t *testing.T) {
 	const observed = "Current observed values: open items: 3."
-	stored := storedLeadProseAnswer(contractsv1.ContextFabricInvestigationComplete, "Counted 1 work item.", observed+" Not complete: readiness (partial: the source read was truncated).")
+	stored := answerWithQualifiedDrivers(t, true, false, observed+" Not complete: readiness (partial: the source read was truncated).")
 	got, _ := readLeadProseByID(t, stored)
-	if want := observed + " Limited read: readiness (partial: the source read was truncated)."; got.CurrentState != want {
+	if want := observed + " Limited read: readiness (truncated: the source read was cut)."; got.CurrentState != want {
 		t.Fatalf("current_state = %q, want %q", got.CurrentState, want)
 	}
 	requireNoTemplatePhrase(t, "current_state", got.CurrentState)
@@ -186,12 +206,15 @@ func TestByIDTheWordsInAProviderValueAreNotRestated(t *testing.T) {
 		}
 	}
 	// ACR's clause after a provider value with the same words: only the clause is restated.
-	for stored, want := range map[string]string{
-		"Current observed values: note: Not complete: yet. Not complete: health (stale: the source read is out of date); readiness (partial: the source read was truncated).": "Current observed values: note: Not complete: yet. Limited read: health (stale: the source read is out of date); readiness (partial: the source read was truncated).",
-		"Current observed values: note: Rollout began. Not complete: soon. Not complete: health (stale: the source read is out of date).":                                     "Current observed values: note: Rollout began. Not complete: soon. Limited read: health (stale: the source read is out of date).",
+	for _, tc := range []struct {
+		readinessCut, healthStale bool
+		stored, want              string
+	}{
+		{true, true, "Current observed values: note: Not complete: yet. Not complete: health (stale: the source read is out of date); readiness (partial: the source read was truncated).", "Current observed values: note: Not complete: yet. Limited read: health (stale: the source read is out of date); readiness (truncated: the source read was cut)."},
+		{false, true, "Current observed values: note: Rollout began. Not complete: soon. Not complete: health (stale: the source read is out of date).", "Current observed values: note: Rollout began. Not complete: soon. Limited read: health (stale: the source read is out of date)."},
 	} {
-		if got, _ := readLeadProseByID(t, storedLeadProseAnswer(contractsv1.ContextFabricInvestigationComplete, "Counted 1 work item.", stored)); got.CurrentState != want {
-			t.Fatalf("current_state = %q, want %q", got.CurrentState, want)
+		if got, _ := readLeadProseByID(t, answerWithQualifiedDrivers(t, tc.readinessCut, tc.healthStale, tc.stored)); got.CurrentState != tc.want {
+			t.Fatalf("current_state = %q, want %q", got.CurrentState, tc.want)
 		}
 	}
 }

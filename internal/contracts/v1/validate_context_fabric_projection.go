@@ -129,6 +129,11 @@ func (s ContextFabricAuthorizationScope) validateWithRepositoryMax(repositoryMax
 	if containsSeparatorCharacter(s.RepositorySlugs) || containsSeparatorCharacter(s.ProjectIDs) || containsSeparatorCharacter(s.TeamIDs) {
 		return fmt.Errorf("authorization scope value must not contain '|'")
 	}
+	// CHAOS-12298: a reserved repository-scope value is never a repository a
+	// node belongs to; a project-only principal's repository list holds one.
+	if containsReservedRepositoryScope(s.RepositorySlugs) {
+		return fmt.Errorf("authorization scope repository slug must not use the reserved prefix %q", ReservedRepositoryScopePrefix)
+	}
 	return nil
 }
 

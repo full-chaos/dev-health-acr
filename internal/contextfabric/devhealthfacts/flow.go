@@ -106,7 +106,7 @@ func (p *FlowProvider) ReadFacts(ctx context.Context, principal storage.Principa
 		rejectedCount += rejected
 	}
 
-	if projectSubjects := subjectsOfKind(query.Subjects, contextfabric.SubjectProject); len(projectSubjects) > 0 {
+	if projectSubjects := subjectsOfKind(query.Subjects, contextfabric.SubjectProject); len(projectSubjects) > 0 && !projectOnlyWithheld(principal) {
 		rowCount, rowsOmitted, rejected, scanErr := p.readProjectFlow(ctx, orgID, projectSubjects, &facts, timeBound)
 		if scanErr != nil {
 			return contextfabric.FactProviderResult{}, readFailure("query project flow", scanErr)

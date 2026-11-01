@@ -23,7 +23,7 @@ func episodeDigest(payload []byte) string {
 }
 
 func authorizedRepositoryStorageID(principal storage.Principal, slug string) (string, error) {
-	if strings.TrimSpace(principal.OrgID) == "" || !episodeRepositoryAllowed(principal.RepositoryScopes, slug) {
+	if strings.TrimSpace(principal.OrgID) == "" || !principalEpisodeRepositoryAllowed(principal, slug) {
 		return "", storage.ErrNotFound
 	}
 	digest := sha256.Sum256([]byte(strings.ToLower(strings.TrimSpace(principal.OrgID)) + "\x00" + strings.ToLower(strings.TrimSpace(slug))))
@@ -68,6 +68,12 @@ func redactedCreate(value contractsv1.AgentEpisodeCreate) contractsv1.AgentEpiso
 	value.Artifacts = contractsv1.EpisodeArtifacts{FilesTouched: []string{}, ArtifactURIs: []string{}, TestsRun: []string{}}
 	value.Transcript = contractsv1.TranscriptRef{Mode: "none"}
 	return value
+}
+
+// principalEpisodeRepositoryAllowed refuses a project-only principal every
+// episode repository, whatever its repository list holds (CHAOS-12299).
+func principalEpisodeRepositoryAllowed(principal storage.Principal, slug string) bool {
+	return !principal.HoldsProjectGrant() && episodeRepositoryAllowed(principal.RepositoryScopes, slug)
 }
 
 func episodeRepositoryAllowed(scopes []string, slug string) bool {

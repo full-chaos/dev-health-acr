@@ -64,16 +64,7 @@ func (e *Engine) resolveRequestedProjectNarrowing(ctx context.Context, principal
 	if scope.ProjectNarrowing != nil {
 		return scope
 	}
-	requested := 0
-	for _, id := range scope.ProjectIDs {
-		switch strings.TrimSpace(id) {
-		case "":
-		case "*":
-			return scope
-		default:
-			requested++
-		}
-	}
+	requested := requestedProjectNarrowingIDs(scope.ProjectIDs)
 	if requested == 0 {
 		return scope
 	}
@@ -100,6 +91,33 @@ func (e *Engine) resolveRequestedProjectNarrowing(ctx context.Context, principal
 		e.telemetry.RecordProjectNarrowingResolution(ctx, principal, event)
 	}
 	return scope
+}
+
+// requestedProjectNarrowingIDs counts the requested project ids that narrow:
+// blanks do not count, and a requested "*" narrows nothing, so it gives 0.
+func requestedProjectNarrowingIDs(projectIDs []string) int {
+	requested := 0
+	for _, id := range projectIDs {
+		switch strings.TrimSpace(id) {
+		case "":
+		case "*":
+			return 0
+		default:
+			requested++
+		}
+	}
+	return requested
+}
+
+// requestedProjectNarrowingUnproven reports whether the request narrows by
+// project and its resolution did not prove the narrowing: none (the resolver
+// failed or is absent) or an incomplete one. Then a node may be admitted
+// only on its "*" project list (CHAOS-12325).
+func requestedProjectNarrowingUnproven(scope RequestedScope) bool {
+	if requestedProjectNarrowingIDs(scope.ProjectIDs) == 0 {
+		return false
+	}
+	return scope.ProjectNarrowing == nil || !scope.ProjectNarrowing.Complete
 }
 
 // discloseUnverifiedProjectNarrowing adds, once, the degrading

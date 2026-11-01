@@ -57,6 +57,8 @@ var clientResponses = []struct {
 	{"source_evidence", "mcp_source_evidence_response.v1.json", decodeAndValidate[contractsv1.MCPSourceEvidenceResponse], nil},
 	{"investigate_question", "mcp_investigate_question_response.v1.json", decodeAndValidate[contractsv1.MCPInvestigateQuestionResponse], contractsv1.MCPInvestigateQuestionUntrustedFields},
 	{"investigation_result", "mcp_investigation_result_response.v1.json", decodeAndValidate[contractsv1.MCPInvestigationResultResponse], contractsv1.MCPInvestigationResultUntrustedFields},
+	{"investigate_question", "mcp_investigate_question_response_full_result_v2.v1.json", decodeAndValidate[contractsv1.MCPInvestigateQuestionResponse], nil},
+	{"investigation_result", "mcp_investigation_result_response_result_v2.v1.json", decodeAndValidate[contractsv1.MCPInvestigationResultResponse], nil},
 	{"record_episode", "mcp_record_episode_response.v1.json", decodeAndValidateRead[contractsv1.MCPRecordEpisodeResponse], nil},
 }
 

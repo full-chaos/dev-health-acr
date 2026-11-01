@@ -102,7 +102,7 @@ func TraverseObservationToSubject(
 		// "this document belongs to this subject" is itself scoped more
 		// narrowly. A clean authorization denial is a definitive answer,
 		// not a failure, so it does not set uncertain.
-		if !AuthorizedAttributes(principal, scope, edge.Attributes) {
+		if !AuthorizedEdge(principal, scope, edge.Name, edge.Attributes) {
 			continue
 		}
 		source, verified := getVerifiedNode(ctx, edge.SourceNodeUUID)
