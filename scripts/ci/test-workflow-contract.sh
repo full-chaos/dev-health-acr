@@ -3302,6 +3302,21 @@ awk -v name="      - name: $cmp_name" -v run="$cmp_run" '
 ' "$vm" > "$vm.2"
 assert_check_fails 'comparison step moved to another job' check_vendored_lifecycle_contract_wiring "$vm.2"
 
+vm="$tmpdir/vm-compare-args.yml"; mutate_line "$workflow" "$vm" "$cmp_run" "$cmp_run --extra-argument"
+assert_check_fails 'comparison step run line only starts with the script call (extra argument)' check_vendored_lifecycle_contract_wiring "$vm"
+vm="$tmpdir/vm-test-args.yml"; mutate_line "$workflow" "$vm" "$neg_run" "$neg_run --extra-argument"
+assert_check_fails 'negative-control step run line only starts with the script call (extra argument)' check_vendored_lifecycle_contract_wiring "$vm"
+vm="$tmpdir/vm-test-exit0.yml"; mutate_line "$workflow" "$vm" "$neg_run" "$neg_run; exit 0"
+assert_check_fails 'negative-control step ends with ; exit 0' check_vendored_lifecycle_contract_wiring "$vm"
+vm="$tmpdir/vm-compare-and.yml"; mutate_line "$workflow" "$vm" "$cmp_run" "$cmp_run && echo done"
+assert_check_fails 'comparison step run line only starts with the script call (&& suffix)' check_vendored_lifecycle_contract_wiring "$vm"
+vm="$tmpdir/vm-compare-duplicate.yml"
+awk -v name="      - name: $cmp_name" -v run="$cmp_run" '{ print } $0 == run { print name; print "        run: echo second step with the same name" }' "$workflow" > "$vm"
+assert_check_fails 'a second step carries the comparison step name' check_vendored_lifecycle_contract_wiring "$vm"
+vm="$tmpdir/vm-test-duplicate.yml"
+awk -v name="      - name: $neg_name" -v run="$neg_run" '{ print } $0 == run { print name; print "        run: echo second step with the same name" }' "$workflow" > "$vm"
+assert_check_fails 'a second step carries the negative-control step name' check_vendored_lifecycle_contract_wiring "$vm"
+
 # (o) remove the pin's full-SHA requirement, restoring the floating-ref hole.
 pin_regex_removed="$tmpdir/pin-regex-removed.yml"
 grep -vF '[0-9a-f]{40}' "$workflow" > "$pin_regex_removed"
