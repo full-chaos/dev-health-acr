@@ -459,6 +459,15 @@ func (e *Engine) synthesizeAndAssemble(ctx context.Context, principal storage.Pr
 		result.LimitationsDisplaced += displaced
 		result.Coverage.Partial = true
 	}
+	// CHAOS-12456: a failed link read may have left a work item out, whatever
+	// committed. The other link sentence is about a turn that resolved none, and
+	// the terminal states it.
+	if resolution.WorkItemLinkLimitation == contractsv1.ContextFabricWorkItemLinksUnreadLimitation {
+		composed, displaced := appendBoundedLimitations(result.Limitations, []string{resolution.WorkItemLinkLimitation})
+		result.Limitations = composed
+		result.LimitationsDisplaced += displaced
+		result.Coverage.Partial = true
+	}
 	result = withMemberStatusOutsideSet(result, graphContext.MemberStatusOutsideSet)
 	result = withMemberStatusPoolCut(result, graphContext.MemberStatusPoolCut)
 	result = withMemberStatusNoneReached(result, graphContext.MemberStatusOutsideSet, graphContext.MemberStatusPoolCut, graphContext.Cohort, params.ScopeAnchorKind)

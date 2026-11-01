@@ -36,7 +36,12 @@ func NewCensusFunc(client contextpacket.ClickHouseQueryClient) graphrank.CensusF
 		grant, grantBound := contextfabric.CensusGrantFrom(ctx)
 		if grantBound {
 			var applied bool
-			if predicate, applied = withGrantFilter(kind, predicate, grant); !applied {
+			if kind == contextfabric.SubjectWorkItem {
+				predicate, applied = withWorkItemGrantFilter(orgID, predicate, grant, handleValue, handleBound)
+			} else {
+				predicate, applied = withGrantFilter(kind, predicate, grant)
+			}
+			if !applied {
 				return graphrank.CensusOutcome{}, graphrank.ErrCensusGrantNotApplied
 			}
 		}

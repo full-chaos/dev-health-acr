@@ -592,6 +592,10 @@ type GraphTelemetry interface {
 	// was floored because ownership it needed was missing. Counts only, never
 	// an id.
 	RecordTeamNarrowingGeneralRead(ctx context.Context, orgID string, requestedTeams, decided, excluded int, floor contextfabric.TeamNarrowingReadFloor)
+	// RecordWorkItemLinkReach (eventspec.WorkItemLinkReach) reports the link
+	// reads of ONE adapter call of a restricted caller (link_reach.go). Counts
+	// and a closed value only.
+	RecordWorkItemLinkReach(ctx context.Context, orgID string, tally WorkItemLinkReachTally)
 	RecordCohortKindFulltext(ctx context.Context, orgID string, decision CohortKindFulltextDecision, memberKind contextfabric.SubjectKind, members int, truncated bool, addedByKindArm, duplicatesWithGeneral int, readErr error)
 	// RecordProjectDeploymentWalk (eventspec.ProjectDeploymentWalk) reports
 	// ONE DiscoverContext call that asks for the deployment members of a named
@@ -699,6 +703,8 @@ func (NoopTelemetry) RecordCohortExactNameCensusGate(context.Context, string, bo
 func (NoopTelemetry) RecordCohortKindBasis(context.Context, string, contextfabric.SubjectKind, graphrank.CohortKindBasis, bool, CohortPoolTruncationBasis, []CohortPoolTruncationArm) {
 }
 func (NoopTelemetry) RecordCohortKindCensus(context.Context, string, CohortKindCensusDecision, contextfabric.SubjectKind, []string, int, int, bool, error) {
+}
+func (NoopTelemetry) RecordWorkItemLinkReach(context.Context, string, WorkItemLinkReachTally) {
 }
 func (NoopTelemetry) RecordTeamNarrowingGeneralRead(context.Context, string, int, int, int, contextfabric.TeamNarrowingReadFloor) {
 }
@@ -1114,6 +1120,34 @@ func (t SlogTelemetry) RecordTeamNarrowingGeneralRead(ctx context.Context, orgID
 		"floor", contextfabric.SanitizeLogAttr(string(floor)),
 	}
 	t.logger().Info(eventspec.TeamNarrowingGeneralRead.Msg, append(args, graphRequestIDLogAttrs(ctx)...)...)
+}
+
+// RecordWorkItemLinkReach logs at Info, once per adapter call: the live run reads
+// its cost here. A call with a failed read also logs at Warn: it leaves a repo-less
+// work item unknown for this caller, so it must not pass as an ordinary line.
+//
+// Every key is a literal at the call, so emitscan reads each one. request_id rides
+// on the logger: it is omitted, never written empty, when the context has none.
+func (t SlogTelemetry) RecordWorkItemLinkReach(ctx context.Context, orgID string, tally WorkItemLinkReachTally) {
+	logger := t.logger()
+	if requestID, ok := observability.RequestIDFromContext(ctx); ok {
+		logger = logger.With("request_id", contextfabric.SanitizeLogAttr(string(requestID)))
+	}
+	outcome := tally.Outcome()
+	logger.Info(eventspec.WorkItemLinkReach.Msg,
+		"org_id", contextfabric.SanitizeLogAttr(orgID),
+		"outcome", contextfabric.SanitizeLogAttr(string(outcome)),
+		"reads", tally.Reads,
+		"ids", tally.IDs,
+		"rows", tally.Rows,
+		"failed", tally.Failed,
+		"elapsed_ms", tally.Elapsed.Milliseconds())
+	if outcome == WorkItemLinkReachFailed {
+		logger.Warn("context_fabric: work item link reach failed: a repo-less work item stays unknown for this caller",
+			"org_id", contextfabric.SanitizeLogAttr(orgID),
+			"reads", tally.Reads,
+			"failed", tally.Failed)
+	}
 }
 
 // RecordProjectDeploymentWalk logs at Info. The walk counts ride only on an

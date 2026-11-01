@@ -2,6 +2,7 @@ package graphrank
 
 import (
 	"context"
+	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 	"testing"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
@@ -178,6 +179,31 @@ func TestAComparisonCountsEachSubjectOnceAcrossItsOperands(t *testing.T) {
 	}
 	if len(resolution.Candidates) != 0 || len(resolution.Committed) != 0 {
 		t.Fatalf("candidates %v, committed %v, want none: the narrowing stands", resolution.Candidates, resolution.Committed)
+	}
+}
+
+// A comparison reads through the same conn, so a failed link read is stated on
+// it too (CHAOS-12456), on a hold or an answer.
+func TestAComparisonStatesAFailedLinkRead(t *testing.T) {
+	t.Parallel()
+	deps := slotGateDeps(map[string][]CandidateNode{
+		"alpha": {outsideRepositoryNode("repository:worker", "acme/payments-worker")},
+		"beta":  {outsideRepositoryNode("repository:gateway", "acme/payments-gateway")},
+	}, &slotGateTracer{})
+	deps.WorkItemLinksUnread = func() bool { return true }
+	comparison := contextfabric.ComparisonOperands{
+		Admission: contextfabric.ComparisonAdmittedNamedPair,
+		Slots: []contextfabric.ComparisonOperandSlot{
+			{Position: 0, Variant: contextfabric.ComparisonOperandNamed, Kind: contextfabric.SubjectRepository, Terms: []string{"alpha"}},
+			{Position: 1, Variant: contextfabric.ComparisonOperandNamed, Kind: contextfabric.SubjectRepository, Terms: []string{"beta"}},
+		},
+	}
+	resolution, _, _, err := resolveNamedComparison(context.Background(), restrictedCaller(t, grantRepoInside), slotGateRequest(), deps, comparison, nil)
+	if err != nil {
+		t.Fatalf("resolveNamedComparison() error = %v", err)
+	}
+	if resolution.WorkItemLinkLimitation != contractsv1.ContextFabricWorkItemLinksUnreadLimitation {
+		t.Fatalf("limitation = %q, want the unread sentence", resolution.WorkItemLinkLimitation)
 	}
 }
 

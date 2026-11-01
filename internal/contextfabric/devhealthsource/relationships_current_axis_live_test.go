@@ -80,7 +80,9 @@ func TestRelationshipsCurrentAxisServesEndedSubjectsOnRealStores(t *testing.T) {
 		linMovedOpen, linMovedDone   = "linear:MOVE-1", "linear:MOVE-2"
 		linMovedRetired              = "linear:MOVE-3"
 		linEarly                     = "linear:EARLY-1"
+		linOutside, linLower         = "linear:OUT-1", "linear:LOW-1"
 		prLate                       = 13
+		prLower, prOtherLinked       = 14, 22
 		ghDone                       = "gh:acme/svc#1"
 		prMerged, prOpen, prOtherNum = 11, 12, 21
 	)
@@ -103,6 +105,8 @@ func TestRelationshipsCurrentAxisServesEndedSubjectsOnRealStores(t *testing.T) {
 		linMovedDone:    {zeroRepo, ago(40), &done, "linear", "done"},
 		linMovedRetired: {zeroRepo, ago(40), nil, "linear", "in progress"},
 		linEarly:        {zeroRepo, ago(40), &earlyDone, "linear", "done"},
+		linOutside:      {zeroRepo, ago(30), nil, "linear", "in progress"},
+		linLower:        {zeroRepo, ago(30), nil, "linear", "in progress"},
 		ghDone:          {repoSvc, ago(30), &done, "github", "closed"},
 	}
 	for id, item := range items {
@@ -129,6 +133,11 @@ func TestRelationshipsCurrentAxisServesEndedSubjectsOnRealStores(t *testing.T) {
 	exec("other pull request", `INSERT INTO git_pull_requests (repo_id, org_id, number, title, state, created_at, merged_at, closed_at, last_synced) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		repoOther, orgID, uint32(prOtherNum), "other PR", "merged", ago(20), otherMerged, otherMerged, now)
 
+	exec("lower-tier pull request", `INSERT INTO git_pull_requests (repo_id, org_id, number, title, state, created_at, last_synced) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		repoSvc, orgID, uint32(prLower), "lower-tier PR", "open", ago(20), now)
+	exec("other linked pull request", `INSERT INTO git_pull_requests (repo_id, org_id, number, title, state, created_at, last_synced) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		repoOther, orgID, uint32(prOtherLinked), "other linked PR", "open", ago(20), now)
+
 	type seededLink struct {
 		issue, tier, prRepo string
 		number              uint32
@@ -141,6 +150,8 @@ func TestRelationshipsCurrentAxisServesEndedSubjectsOnRealStores(t *testing.T) {
 		{ghDone, "native", repoSvc, prMerged},
 		{ghDone, "native", repoOther, prOtherNum}, // native: ghDone has a native link, so a lower-tier one is never written
 		{linEarly, "native", repoSvc, prLate},
+		{linOutside, "native", repoOther, prOtherLinked}, // its only link: to a repository the caller does not hold
+		{linLower, "explicit_text", repoSvc, prLower},    // its only link: to acme/svc, below the native tier
 	} {
 		exec(fmt.Sprintf("link %d", i), `INSERT INTO work_graph_issue_pr (repo_id, work_item_id, pr_number, confidence, provenance, evidence, last_synced, org_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
 			l.prRepo, l.issue, l.number, float32(0.9), l.tier, "", now.Add(time.Duration(i)*time.Second), orgID)
@@ -188,7 +199,7 @@ func TestRelationshipsCurrentAxisServesEndedSubjectsOnRealStores(t *testing.T) {
 	}
 	prID := func(repo string, number int) string { return fmt.Sprintf("pull_request:%s:%d", repo, number) }
 	idPRMerged, idPROpen, idPROther := prID(repoSvc, prMerged), prID(repoSvc, prOpen), prID(repoOther, prOtherNum)
-	idPRLate := prID(repoSvc, prLate)
+	idPRLate, idPRLower, idPROtherLinked := prID(repoSvc, prLate), prID(repoSvc, prLower), prID(repoOther, prOtherLinked)
 	idReview, _, err := identity.Derive(identity.KindPullRequestReview, []string{repoSvc, fmt.Sprint(prMerged), "rv-after-merge"}, nil)
 	if err != nil {
 		t.Fatal(err)
@@ -460,13 +471,43 @@ func TestRelationshipsCurrentAxisServesEndedSubjectsOnRealStores(t *testing.T) {
 	})
 
 	t.Run("restricted caller", func(t *testing.T) {
-		t.Run("merged pull request: the repository-less issues stay withheld", func(t *testing.T) {
+		// CHAOS-12456 ruling (a): a repository-less issue reaches a restricted
+		// caller by a native link of record to a pull request of a granted
+		// repository, and by nothing else.
+		t.Run("merged pull request: repository-less issues natively linked to it are served", func(t *testing.T) {
 			a := read(t, svcOnly, request("pull_request", idPRMerged, "in", links))
-			expect(t, a, "complete", 2, link(ghDone, idPRMerged)+" "+links)
-			for _, hidden := range []string{workItemID(linDone), workItemID(linWip)} {
-				if strings.Contains(a.raw, hidden) {
-					t.Fatalf("served document names %s, which the caller may not see", hidden)
-				}
+			expect(t, a, "complete", 0, link(ghDone, idPRMerged)+" "+links, link(linDone, idPRMerged)+" "+links, link(linWip, idPRMerged)+" "+links)
+		})
+		// A denial echoes the subject the caller asked about, and nothing else: a
+		// denied read of an issue never names its pull request.
+		t.Run("a lower-tier link to a granted repository grants nothing", func(t *testing.T) {
+			if a := read(t, unrestricted, request("work_item", workItemID(linLower), "out", links)); at(t, a, link(linLower, idPRLower)+" "+links).tier != "explicit_text" {
+				t.Fatalf("the fixture's link is not lower tier: %+v", a.edges)
+			}
+			a := read(t, svcOnly, request("pull_request", idPRLower, "in", links))
+			expect(t, a, "complete", 1)
+			if strings.Contains(a.raw, workItemID(linLower)) {
+				t.Fatalf("served document names %s, which the caller may not see", workItemID(linLower))
+			}
+			denied := read(t, svcOnly, request("work_item", workItemID(linLower), "out"))
+			expect(t, denied, string(directread.RelationshipsDenied), 0)
+			if strings.Contains(denied.raw, idPRLower) {
+				t.Fatalf("the denial names %s: %s", idPRLower, denied.raw)
+			}
+		})
+		t.Run("a native link to an ungranted repository grants nothing", func(t *testing.T) {
+			if a := read(t, unrestricted, request("work_item", workItemID(linOutside), "out", links)); at(t, a, link(linOutside, idPROtherLinked)+" "+links).tier != "native" {
+				t.Fatalf("the fixture's link is not native: %+v", a.edges)
+			}
+			denied := read(t, svcOnly, request("work_item", workItemID(linOutside), "out"))
+			expect(t, denied, string(directread.RelationshipsDenied), 0)
+			if strings.Contains(denied.raw, idPROtherLinked) {
+				t.Fatalf("the denial names %s: %s", idPROtherLinked, denied.raw)
+			}
+			pullRequest := read(t, svcOnly, request("pull_request", idPROtherLinked, "in", links))
+			expect(t, pullRequest, string(directread.RelationshipsDenied), 0)
+			if strings.Contains(pullRequest.raw, workItemID(linOutside)) {
+				t.Fatalf("served document names %s, which the caller may not see", workItemID(linOutside))
 			}
 		})
 		t.Run("completed issue: the link to an ungranted repository stays withheld", func(t *testing.T) {
@@ -493,9 +534,9 @@ func TestRelationshipsCurrentAxisServesEndedSubjectsOnRealStores(t *testing.T) {
 			a := read(t, svcOnly, request("pull_request", idPROther, "in", links))
 			expect(t, a, string(directread.RelationshipsDenied), 0)
 		})
-		t.Run("repository-less completed issue is refused", func(t *testing.T) {
-			a := read(t, svcOnly, request("work_item", workItemID(linDone), "out"))
-			expect(t, a, string(directread.RelationshipsDenied), 0)
+		t.Run("repository-less completed issue natively linked to a granted repository is served", func(t *testing.T) {
+			a := read(t, svcOnly, request("work_item", workItemID(linDone), "out", links))
+			expect(t, a, "complete", 0, link(linDone, idPRMerged)+" "+links)
 		})
 	})
 }

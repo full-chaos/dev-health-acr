@@ -82,10 +82,8 @@ type refusedRedemption struct {
 }
 
 func refusedRedemptions(t *testing.T) []refusedRedemption {
-	restricted := userprincipal.Narrowed(t, "org_reuse", []string{"acme/*"}, []string{"acme/api"})
 	projectOnly := userprincipal.ProjectOnly(t, "org_reuse", []string{"project.v2:github:P-1"})
 	return []refusedRedemption{
-		{"restricted caller, work item", restricted, contextfabric.SubjectWorkItem, "work_item_ticket_key", "CHAOS-11516"},
 		{"project-only caller, work item", projectOnly, contextfabric.SubjectWorkItem, "work_item_ticket_key", "CHAOS-11516"},
 		{"project-only caller, pull request", projectOnly, contextfabric.SubjectPullRequest, "pull_request_number", "5063"},
 		{"project-only caller, ci run", projectOnly, contractsv1.ContextFabricSubjectCIRun, "ci_run_id", "554433"},
@@ -179,6 +177,47 @@ func TestARedemptionInsideTheGrantPasses(t *testing.T) {
 	if !errors.Is(err, contextfabric.ErrHandleRedemptionPassedForTest) {
 		t.Fatalf("Investigate() error = %v, want the turn past the redemption", err)
 	}
+}
+
+// CHAOS-12456: a restricted caller's work-item redemption is read inside the
+// grant through the native-link arm. The dead end PR1 left is closed for a linked
+// item, and an unlinked one is a veto that reads as any absent row does.
+func TestAWorkItemRedemptionIsDecidedByTheLinkArm(t *testing.T) {
+	t.Parallel()
+	restricted := userprincipal.Narrowed(t, "org_reuse", []string{"acme/*"}, []string{"acme/api"})
+	option := redemptionOption(contextfabric.SubjectWorkItem, "work_item_ticket_key", "CHAOS-11516")
+	t.Run("linked", func(t *testing.T) {
+		t.Parallel()
+		client := &redemptionClient{count: 1}
+		calls := 0
+		_, err := contextfabric.RedeemHandleOfferForTest(t, restricted, option, productionVerifier(client, &calls))
+		if !errors.Is(err, contextfabric.ErrHandleRedemptionPassedForTest) {
+			t.Fatalf("Investigate() error = %v, want the turn past the redemption", err)
+		}
+		if len(client.statements) == 0 || !strings.Contains(client.statements[0], "wia_link_auth.wia_link_repositories") {
+			t.Fatalf("statements = %q, want the link arm in them", client.statements)
+		}
+	})
+	t.Run("not linked", func(t *testing.T) {
+		t.Parallel()
+		client := &redemptionClient{count: 0}
+		calls := 0
+		result, err := contextfabric.RedeemHandleOfferForTest(t, restricted, option, productionVerifier(client, &calls))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if result.DeterministicAnswer != unresolvedSentence || len(result.ConfirmedStructure) != 1 || result.ConfirmedStructure[0].Disposition != contractsv1.ContextFabricStructureDispositionVetoedUnresolved {
+			t.Fatalf("result = %+v, want the unresolved veto", result)
+		}
+	})
+	t.Run("remembered and linked", func(t *testing.T) {
+		t.Parallel()
+		client := &redemptionClient{count: 1}
+		calls := 0
+		if reason, ok := contextfabric.ReverifyRememberedHandleForTest(restricted, contextfabric.SubjectWorkItem, "work_item_ticket_key", "CHAOS-11516", productionVerifier(client, &calls)); !ok || reason != "" {
+			t.Fatalf("reverify = %q %v, want it kept", reason, ok)
+		}
+	})
 }
 
 // A remembered handle replays the same read: it is dropped alone, with no

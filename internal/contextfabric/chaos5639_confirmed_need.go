@@ -225,9 +225,12 @@ type ConfirmedNeedMemberDrop struct {
 // (in the same shape a redeemed receipt produces), the members dropped at
 // reverify, and the id of the result they came from, for disclosure.
 type confirmedNeedLedgerResult struct {
-	Outcome        ConfirmedNeedLedgerOutcome
-	Entries        []confirmedStructureMember
-	Dropped        []ConfirmedNeedMemberDrop
+	Outcome ConfirmedNeedLedgerOutcome
+	Entries []confirmedStructureMember
+	Dropped []ConfirmedNeedMemberDrop
+	// DroppedHandle is the remembered handle reverify dropped, for its wire
+	// disclosure (composeDroppedHandleEntry); nil with none.
+	DroppedHandle  *ConfirmedNeedEntry
 	SourceResultID string
 	// CandidateHintEvicted is set by the engine when this turn's redeemed
 	// candidate pick took the last hint slot from a caller-supplied hint.
@@ -334,9 +337,14 @@ func (e *Engine) resolveConfirmedNeedLedger(ctx context.Context, principal stora
 	}
 	entries := make([]confirmedStructureMember, 0, len(stored.SemanticState.ConfirmedNeeds))
 	var dropped []ConfirmedNeedMemberDrop
+	var droppedHandle *ConfirmedNeedEntry
 	for _, entry := range stored.SemanticState.ConfirmedNeeds {
 		if reason, ok := e.reverifyRememberedNeed(ctx, principal, request, binding, stored.Result.SchemaVersion, entry); !ok {
 			dropped = append(dropped, ConfirmedNeedMemberDrop{Member: entry.Member, Reason: reason})
+			if entry.Member == contractsv1.ContextFabricStructureNeedSubjectHandle {
+				kept := entry
+				droppedHandle = &kept
+			}
 			continue
 		}
 		entries = append(entries, confirmedStructureMember{
@@ -346,7 +354,7 @@ func (e *Engine) resolveConfirmedNeedLedger(ctx context.Context, principal stora
 			Basis: entry.Basis,
 		})
 	}
-	return confirmedNeedLedgerResult{Outcome: ConfirmedNeedLedgerHit, Entries: entries, Dropped: dropped, SourceResultID: parent, Parent: evidence}
+	return confirmedNeedLedgerResult{Outcome: ConfirmedNeedLedgerHit, Entries: entries, Dropped: dropped, DroppedHandle: droppedHandle, SourceResultID: parent, Parent: evidence}
 }
 
 // reverifyRememberedNeed replays, for ONE remembered member, the redemption-time
@@ -691,6 +699,23 @@ func composeCarriedNeedEntry(member contractsv1.ContextFabricStructureNeedKind, 
 		// the new one.
 		Provenance:  provenanceForConfirmedNeedBasis(entry.Basis),
 		Disposition: contractsv1.ContextFabricStructureDispositionApplied,
+	}
+}
+
+// composeDroppedHandleEntry discloses a remembered handle that failed its
+// reverify (CHAOS-12456). Before this a drop reached telemetry only, and the
+// caller saw its confirmed handle vanish. A handle supplied this turn supersedes
+// the remembered one and carries the member's one entry.
+func composeDroppedHandleEntry(ledger confirmedNeedLedgerResult, request InvestigationRequest) *contractsv1.ContextFabricConfirmedStructureEntry {
+	if ledger.DroppedHandle == nil || len(request.PriorHandleReceipts) > 0 || len(request.SubjectHandles) > 0 {
+		return nil
+	}
+	return &contractsv1.ContextFabricConfirmedStructureEntry{
+		Member: ledger.DroppedHandle.Member, AppliedValue: ledger.DroppedHandle.AppliedValue,
+		Source:        contractsv1.ContextFabricStructureSourceCarried,
+		PriorResultID: ledger.SourceResultID,
+		Provenance:    provenanceForConfirmedNeedBasis(ledger.DroppedHandle.Basis),
+		Disposition:   contractsv1.ContextFabricStructureDispositionVetoedUnresolved,
 	}
 }
 
