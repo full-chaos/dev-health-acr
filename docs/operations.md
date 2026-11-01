@@ -2240,6 +2240,35 @@ exchange runs at start, no readiness check depends on it, and an auth-service ou
 for every exchange, so a rotated projected token is used without a restart. No call uses the client yet. The chart opens no egress to
 auth-service in this change.
 
+### CHAOS-11198: the credential lifecycle outbox publisher
+
+`ACR_AUTH_PROJECTION_URL` (auth-service's origin, the shape of `ACR_AUTH_WORKLOAD_EXCHANGE_URL`; unset is off) starts a background publisher in
+every acr-api pod. It needs the auth workload client of CHAOS-11195 (`ACR_AUTH_WORKLOAD_*`): a URL with no client stops the start, and the error
+names the variable, not its value. Starting makes no network call; an auth-service outage never stops acr-api or blocks a credential mutation,
+which only inserts outbox rows. The route (`POST /internal/v1/acr/credential-events`), the token audience (`auth-service`) and the scope
+(`credential_events.publish`) are fixed in `internal/authprojection`, not settings.
+
+Every 30 s the publisher sends up to 100 events, one per transaction: it claims the oldest unpublished event (`FOR UPDATE SKIP LOCKED`; the
+claim skips any aggregate with an earlier unpublished revision, so a revision never goes before the one before it, across pods too), posts the
+stored envelope byte for byte, and sets `published_at` only on a `204`. A crash or a failed commit after the answer re-sends that one event; the
+endpoint answers a duplicate `204`. The transaction sets `statement_timeout` 10 s and `idle_in_transaction_session_timeout` 20 s, above the 5 s
+request limit (the transaction is idle while the POST runs); the runtime pool sets neither.
+
+| Answer | What the publisher does |
+| --- | --- |
+| `204` | marks the event published |
+| `409` reason `gap`, `400`, `409` reason `digest_mismatch`, any other answer | no mark; holds the aggregate (excluded from the claim; 30 s, doubling, at most 5 min; kept in memory, so a restart retries it) |
+| `401`, `403`, no usable token | no mark; ends the tick, no hold |
+| `429`, `503` | no mark; ends the tick and pauses for `Retry-After` (at most 5 min; 30 s when none) |
+| no answer (transport failure, 5 s timeout) | no mark; holds the aggregate and ends the tick |
+
+A held aggregate is never skipped past: its later revisions wait with it, and the endpoint's projection is a view that W9-7 reconciles. The log lines
+carry counts only (`applied`, `gap`, `digest_mismatch`, `refused`, `other`, `no_answer`, `held`, `stopped_by`); they name no aggregate, credential,
+token or answer. A held aggregate shows as the `held` count; find it with
+`SELECT aggregate_id, min(revision) FROM acr.credential_lifecycle_outbox WHERE published_at IS NULL GROUP BY 1 ORDER BY 2 LIMIT 20;`. The runtime role
+holds `UPDATE (published_at)` on the outbox (a column grant, from `internal/dbacl`) and no other new privilege. The chart value and the egress to
+auth-service come with the roll of the endpoint; nothing publishes before then.
+
 ### acr-api workload credential on Compose (overlay)
 
 `deploy/compose/acr-auth-workload.compose.yml` is an overlay for the ops Compose stack (profile `auth`); the default render is byte-equal
