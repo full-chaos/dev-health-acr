@@ -106,7 +106,7 @@ func TestLiveWorkItemRefTombstoneOnlyDeletesTheStubOnceOrphaned(t *testing.T) {
 	if stub == nil {
 		t.Fatal("work_item_ref stub was deleted while edge2 still referenced it -- the conditional orphan check did not hold")
 	}
-	remaining, err := adapter.edgesOfNode(ctx, key, orgID, subjectUUID("work_item_ref", refID), temporalFilter{})
+	remaining, _, err := adapter.edgesOfNode(ctx, key, orgID, subjectUUID("work_item_ref", refID), temporalFilter{})
 	if err != nil {
 		t.Fatalf("edgesOfNode() error = %v", err)
 	}

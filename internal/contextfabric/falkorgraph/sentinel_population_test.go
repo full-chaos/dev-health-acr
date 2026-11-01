@@ -40,6 +40,7 @@ var declaredSentinels = map[string]error{
 	"errConstraintBootstrapTimedOut": errConstraintBootstrapTimedOut,
 	"errVectorIndexNotReady":         errVectorIndexNotReady,
 	"errAdapterRequiresConn":         errAdapterRequiresConn,
+	"errNodeEdgesCut":                errNodeEdgesCut,
 }
 
 // notAProjectionSentinel names every declared error that cannot reach a
@@ -48,6 +49,7 @@ var declaredSentinels = map[string]error{
 // boundary -- if that stops being true the entry must move to neutralClass.
 var notAProjectionSentinel = map[string]string{
 	"errAdapterRequiresConn": "construction-time programming error: New() rejects a config with no conn, before any port method exists to return it",
+	"errNodeEdgesCut":        "stays inside the reader: TraverseObservationToSubject turns any edge error into ObservationTraversalErrored, so no port method returns it",
 	// Offline calibration and sweep tooling. These are returned by the
 	// exported Calibrate*/Recall*/oracle helpers, which no ProjectionBackend
 	// or GraphReader method calls.
