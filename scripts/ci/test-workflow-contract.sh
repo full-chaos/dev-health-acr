@@ -628,6 +628,25 @@ workflow_step_block() {
   ' "$1"
 }
 
+# check_job_unconditional refuses a job-level continue-on-error on job $2, and a
+# job-level if other than the single gate $3 (empty: none): either makes the job,
+# and the steps the guard pins, a no-op or a green failure. A renamed or
+# removed job is refused by check_named_step, which looks the step up inside it.
+check_job_unconditional() {
+  local file="$1" job="$2" allowed="$3" keys
+  keys="$(awk -v header="  $job:" '
+    /^  [A-Za-z0-9_-]+:[[:space:]]*$/ { grab = ($0 == header); next }
+    grab && /^    (if|continue-on-error):/ { print }
+  ' "$file")"
+  if [ -n "$allowed" ]; then
+    keys="$(grep -vxF "    if: $allowed" <<<"$keys" || true)"
+  fi
+  if [ -n "$keys" ]; then
+    printf 'job %s must run unconditionally and fail on failure (found: %s)\n' "$job" "$keys" >&2
+    return 1
+  fi
+}
+
 # check_named_step requires the step $3 in job $2 to be one step whose only
 # content, after its name line, is a run line equal to $4: nothing can append a
 # status swallower, a condition, a wrapper or a continue-on-error to it, and a
@@ -661,6 +680,8 @@ check_vendored_lifecycle_contract_wiring() {
       return 1
     fi
   done
+  check_job_unconditional "$file" contracts "needs.plan.outputs.heavy == 'true'" || return 1
+  check_job_unconditional "$file" scripts "" || return 1
   check_named_step "$file" contracts 'Verify the vendored lifecycle contract against the pinned ops contract' 'scripts/ci/check-vendored-ops-contract.sh .ops-contract' || return 1
   check_named_step "$file" scripts 'Verify the vendored ops contract check' 'scripts/ci/test-vendored-ops-contract.sh' || return 1
 }
@@ -3312,6 +3333,30 @@ assert_check_fails 'a second step carries the comparison step name' check_vendor
 vm="$tmpdir/vm-test-duplicate.yml"
 awk -v name="      - name: $neg_name" -v run="$neg_run" '{ print } $0 == run { print name; print "        run: echo second step with the same name" }' "$workflow" > "$vm"
 assert_check_fails 'a second step carries the negative-control step name' check_vendored_lifecycle_contract_wiring "$vm"
+
+# (n5) the jobs that hold the two named steps must run them unconditionally and
+# fail on their failure: no job-level continue-on-error, no job-level if.
+after_job_header() { # in out job inserted-line
+  awk -v header="  $3:" -v add="$4" '{ print } $0 == header { print add }' "$1" > "$2"
+}
+for job in scripts contracts; do
+  vm="$tmpdir/vm-job-$job-coe.yml"; after_job_header "$workflow" "$vm" "$job" '    continue-on-error: true'
+  assert_check_fails "the $job job has continue-on-error: true" check_vendored_lifecycle_contract_wiring "$vm"
+  vm="$tmpdir/vm-job-$job-if.yml"; after_job_header "$workflow" "$vm" "$job" '    if: false'
+  assert_check_fails "the $job job has if: false" check_vendored_lifecycle_contract_wiring "$vm"
+done
+
+vm="$tmpdir/vm-job-contracts-if-replaced.yml"
+awk '/^  contracts:/ { in_job = 1; print; next } /^  [A-Za-z0-9_-]+:[[:space:]]*$/ { in_job = 0 } in_job && $0 == "    if: needs.plan.outputs.heavy == '"'"'true'"'"'" { print "    if: false"; next } { print }' "$workflow" > "$vm"
+assert_check_fails 'the contracts job heavy gate is replaced by if: false' check_vendored_lifecycle_contract_wiring "$vm"
+vm="$tmpdir/vm-job-scripts-if-added.yml"; after_job_header "$workflow" "$vm" scripts "    if: needs.plan.outputs.heavy == 'true'"
+assert_check_fails 'the scripts job gains the heavy gate' check_vendored_lifecycle_contract_wiring "$vm"
+
+for job in scripts contracts; do
+  vm="$tmpdir/vm-job-$job-renamed.yml"
+  awk -v header="  $job:" -v renamed="  ${job}-renamed:" '$0 == header { print renamed; next } { print }' "$workflow" > "$vm"
+  assert_check_fails "the $job job holding the pinned step is renamed" check_vendored_lifecycle_contract_wiring "$vm"
+done
 
 # (o) remove the pin's full-SHA requirement, restoring the floating-ref hole.
 pin_regex_removed="$tmpdir/pin-regex-removed.yml"
