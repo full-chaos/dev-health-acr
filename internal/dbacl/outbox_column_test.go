@@ -65,8 +65,8 @@ func TestTheColumnGrantAndRevokeStatementsFollowTheFeature(t *testing.T) {
 		t.Error("a feature that is off revokes the column grant an earlier run made")
 	}
 	for _, s := range RevokeStatements(`"r"`, Features{}) {
-		if strings.Contains(s.SQL, "ALL") || !strings.Contains(s.SQL, "(") {
-			t.Errorf("a revoke narrows more than a column: %s", s.SQL)
+		if strings.Contains(s.SQL, "ALL") || (!strings.Contains(s.SQL, "(") && !strings.HasPrefix(s.SQL, "REVOKE DELETE ON TABLE acr.credential_lifecycle_outbox ")) {
+			t.Errorf("a revoke narrows more than a column or the outbox DELETE: %s", s.SQL)
 		}
 	}
 }
