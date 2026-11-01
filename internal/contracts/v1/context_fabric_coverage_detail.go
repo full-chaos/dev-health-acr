@@ -336,6 +336,31 @@ const (
 	// and the answer says so rather than reading as complete.
 	ContextFabricCoverageDetailGraphNoMemberFound ContextFabricCoverageDetailCode = "graph_no_member_found"
 
+	// ContextFabricCoverageDetailGraphHopWalkTruncated: a read that is not a
+	// cohort read (its answer is served as relationship paths) walked out
+	// from a committed subject and spent its edge budget with candidates
+	// left, so the neighbourhood it served is part of what it reached.
+	// Nothing was counted: the candidates past the budget were not read.
+	//
+	// A cohort read never carries it: its loss is its cohort's Truncated and
+	// its population floor. It is not `graph_walk_cut_before_member`, which
+	// says a member read found nothing before its cut; here the read served
+	// what it reached.
+	ContextFabricCoverageDetailGraphHopWalkTruncated ContextFabricCoverageDetailCode = "graph_hop_walk_truncated"
+
+	// ContextFabricCoverageDetailGraphTeamNarrowingUndecidedPaths: under a
+	// requested team narrowing, on a read that is not a cohort read, a path
+	// edge was dropped because the ownership that decides an endpoint was
+	// absent, not current, or cut. Count is the distinct endpoints whose
+	// missing ownership removed an edge.
+	//
+	// A drop of an endpoint decided out of the narrowing is correct scope and
+	// files nothing, and an edge with one such end counts no end: that end
+	// alone removes it. An absent ownership row is missing data, not "not
+	// owned". A cohort read never carries it: its loss is its population
+	// floor.
+	ContextFabricCoverageDetailGraphTeamNarrowingUndecidedPaths ContextFabricCoverageDetailCode = "graph_team_narrowing_undecided_paths"
+
 	// ContextFabricCoverageDetailSynthesisInputBounded: the facts read of one
 	// fact kind were reduced to fit the model input bound, so answer
 	// synthesis was given Served of the Declared facts read of that kind.
@@ -405,6 +430,8 @@ var contextFabricCoverageDetailCodes = [...]ContextFabricCoverageDetailCode{
 	ContextFabricCoverageDetailComputedPopulationAbsent,
 	ContextFabricCoverageDetailRequirementNotEvaluable,
 	ContextFabricCoverageDetailGraphNoMemberFound,
+	ContextFabricCoverageDetailGraphHopWalkTruncated,
+	ContextFabricCoverageDetailGraphTeamNarrowingUndecidedPaths,
 	ContextFabricCoverageDetailSynthesisInputBounded,
 	ContextFabricCoverageDetailSynthesisModelFailed,
 	ContextFabricCoverageDetailSynthesisNotRun,
@@ -731,6 +758,12 @@ var coverageDetailFieldRules = map[ContextFabricCoverageDetailCode]coverageDetai
 	ContextFabricCoverageDetailRequirementNotEvaluable: {},
 	// Kind alone: no count (nothing was counted), no Declared/Served.
 	ContextFabricCoverageDetailGraphNoMemberFound: {requireKind: true},
+	// No count and no kind: the candidates past the budget were not read, so
+	// there is nothing to count.
+	ContextFabricCoverageDetailGraphHopWalkTruncated: {},
+	// Count required: the distinct endpoints whose missing ownership removed
+	// an edge.
+	ContextFabricCoverageDetailGraphTeamNarrowingUndecidedPaths: {requireCount: true, allowCount: true},
 	// Fact kind, Declared and Served, all three REQUIRED, and nothing else:
 	// "this fact kind: Declared were read, Served were given to synthesis".
 	ContextFabricCoverageDetailSynthesisInputBounded: {
