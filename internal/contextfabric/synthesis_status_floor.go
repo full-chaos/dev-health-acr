@@ -318,6 +318,8 @@ func ApplyServedStatusFloors(result InvestigationResult) InvestigationResult {
 	applyProjectScopeWithheldStatusFloor(&result)
 	applyStatusPoolCutStatusFloor(&result)
 	applyOrganizationSubjectStatusFloor(&result)
+	// Last, so a floor that withholds the narrative keeps its own swap.
+	applyCutGraphReadStatusFloor(&result)
 	if result.Status != before || restated {
 		result.Completeness = ComputeAnswerCompleteness(result)
 	}
@@ -344,6 +346,54 @@ func applyOrganizationSubjectStatusFloor(result *InvestigationResult) {
 		return
 	}
 	floorNoMatchTo(result, InvestigationPartial)
+}
+
+// applyCutGraphReadStatusFloor (CHAOS-12348) floors a complete answer whose
+// graph read was cut or narrowed on missing ownership: a degrading
+// graph_hop_walk_truncated or graph_team_narrowing_undecided_paths row. The
+// answer rests on part of the subject's neighbourhood, so it is partial, never
+// complete, and it stands: each cause states its own sentence and nothing is
+// withheld. Never promotes; leaves a refusal, degraded, no_match and
+// clarification as they are.
+func applyCutGraphReadStatusFloor(result *InvestigationResult) {
+	if result == nil || result.Status != InvestigationComplete || result.RefusalBasis != "" {
+		return
+	}
+	for _, detail := range result.Coverage.Details {
+		if !detail.Degrading {
+			continue
+		}
+		switch detail.Code {
+		case contractsv1.ContextFabricCoverageDetailGraphHopWalkTruncated:
+			floorKeepingNarrative(result, InvestigationPartial, contractsv1.ContextFabricGraphHopWalkTruncatedLimitation)
+		case contractsv1.ContextFabricCoverageDetailGraphTeamNarrowingUndecidedPaths:
+			floorKeepingNarrative(result, InvestigationPartial, contractsv1.ContextFabricGraphTeamNarrowingUndecidedPathsLimitation)
+		}
+	}
+}
+
+// floorKeepingNarrative is the status-only floor, for an answer that stands and
+// whose status alone is too high. It sets the status to floor, sets
+// Coverage.Partial, and appends limitation, the caller's own sentence, through
+// appendBoundedLimitations. It writes no lead prose and states no
+// narrative-withheld sentence; floorNoMatchTo is the swap for an answer the
+// service replaces.
+//
+// The caller holds the guards: this function does not read the status it
+// replaces, so a caller that checks nothing can promote. It knows no cause.
+// ApplyServedStatusFloors recomputes completeness when the status moved, so a
+// caller belongs there.
+//
+// The lead fields still state the served status: DirectJudgment and
+// DeterministicAnswer are server-composed, and restateServedStatusHead, which
+// every serving point runs after the floors, states the status sentence in a
+// head the server composed and leaves any other head as it is.
+func floorKeepingNarrative(result *InvestigationResult, floor InvestigationStatus, limitation string) {
+	result.Status = floor
+	result.Coverage.Partial = true
+	composed, displaced := appendBoundedLimitations(result.Limitations, []string{limitation})
+	result.Limitations = composed
+	result.LimitationsDisplaced += displaced
 }
 
 // floorNoMatchTo is the one status swap every no_match floor uses: it sets the
