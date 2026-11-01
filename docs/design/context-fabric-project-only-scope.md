@@ -178,7 +178,9 @@ of `project_membership_presence` is not read.
   is a full refresh. A change re-states every subject once: the digest is per
   organization and cannot name the project. The same refresh runs daily, because
   a row that lands behind the cursor moves no digest, and this table feeds
-  authorization, so a late retraction must not wait for an unrelated write.
+  authorization, so a late retraction must not wait for an unrelated write. It
+  reads every subject with transition history as well as the presence view,
+  because a final REMOVE takes a subject out of that view.
 - **A lost link.** Ops deletes a lower-tier row a native link outranks, so no
   stamp finds that pull request again. `retractOutrankedLinks` clears its set
   and tier at projection, last link or not: unstated is the disclosed path,

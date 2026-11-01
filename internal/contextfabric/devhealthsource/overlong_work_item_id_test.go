@@ -191,7 +191,7 @@ func TestAPageOfOnlyOverlongKeysIsWalkedPastToTheRowsBeyond(t *testing.T) {
 	if len(labels) != 5 {
 		t.Fatalf("entities = %v, want the 5 fitting work items", labels)
 	}
-	if !strings.Contains(log.String(), `"action":"deferred"`) || !strings.Contains(log.String(), `"max_key_bytes":296`) {
+	if !strings.Contains(log.String(), `"action":"deferred"`) || !strings.Contains(log.String(), `"max_key_bytes":268`) {
 		t.Fatalf("no WARN names the cursor limit and the deferral: %.400s", log.String())
 	}
 }

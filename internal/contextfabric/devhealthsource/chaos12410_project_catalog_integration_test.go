@@ -208,6 +208,29 @@ func TestLiveTheMembershipRefreshFollowsTheCatalogNotItsStamp(t *testing.T) {
 				cursor = next
 			}
 
+			// A late retraction: I-2 leaves its last project, and the REMOVE
+			// lands behind the cursor. The presence view then has no row for
+			// it at all, so the daily pass must find it some other way.
+			mustExec(t, ctx, direct, `INSERT INTO project_membership_transitions (org_id, source_id, repo_id, subject_kind, subject_id, provider, from_project_id, to_project_id, from_project_key, to_project_key, actor, occurred_at, last_synced, event_id, ingested_at) VALUES (?, NULL, ?, 'work_item', 'I-2', ?, ?, '', '', '', '', ?, ?, 'ev-late-remove', ?)`,
+				org, repo, provider, id("P1"), at(), late, late)
+			sync()
+			if quiet, next := drain(cursor); len(quiet.workItems) != 0 || len(quiet.pullRequests) != 0 {
+				t.Fatalf("a quiet sync before the daily pass re-emitted %+v", quiet)
+			} else {
+				cursor = next
+			}
+			retracted, next := drain(chaos12410WithField(t, cursor, devhealthsource.AgeProjectCatalogField(chaos12410CursorField(t, cursor), devhealthsource.ProjectCatalogFullRefreshEvery)))
+			if got, stated := retracted.sets[item]; !stated || len(got) != 0 {
+				t.Fatalf("after the daily pass a late REMOVE left I-2 at %v (stated %v); emitted %+v", got, stated, retracted)
+			}
+			if got, stated := retracted.sets[pullRequest]; stated {
+				t.Fatalf("after the daily pass a late REMOVE left the pull request at %v; emitted %+v", got, retracted)
+			}
+			if len(retracted.pullRequests) == 0 {
+				t.Fatalf("the daily pass did not re-state the pull request: %+v", retracted)
+			}
+			cursor = next
+
 			// A cursor that lost the digest is a full refresh, never a skip.
 			lost, _ := drain(chaos12410WithField(t, cursor, ""))
 			if len(lost.workItems) < 2 || len(lost.pullRequests) < 1 {

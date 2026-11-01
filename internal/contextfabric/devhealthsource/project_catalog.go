@@ -36,6 +36,10 @@ import (
 //     feeds authorization, and a row that lands behind the cursor past the
 //     overlap, a retraction included, moves no digest. It must not wait for an
 //     unrelated write, so repair is scheduled.
+//   - A refresh still ahead of the cursor keeps its stamp, whatever else
+//     happens: none of its rows has been read, so they will read the current
+//     catalog when the cursor reaches them. Renewing it would let a lagging
+//     cursor chase the clock and never finish.
 //
 // The digest and the position are one cursor value, so they commit together.
 // A crash before the write leaves the old cursor: its digest mismatches and the
@@ -123,6 +127,9 @@ func decideProjectCatalog(field string, position time.Time, fromZero bool, diges
 	switch {
 	case !ok:
 		reason = "digest_absent"
+	case stored.owed && position.Before(stored.refreshAt):
+		stored.digest = digest
+		return stored, ""
 	case stored.digest != digest:
 		reason = "catalog_changed"
 	case !now.Before(stored.refreshAt.Add(projectCatalogFullRefreshEvery)):
@@ -151,18 +158,26 @@ func projectRefreshFrom(ctx context.Context) time.Time {
 	return at
 }
 
-// projectRefreshArm is the arm of the membership change subquery: every
-// subject of the organization at the refresh stamp. Empty when no refresh is
-// owed, or when the cursor is already past it.
+// projectRefreshArm is the arms of the membership change subquery: every
+// subject of the organization at the refresh stamp, which is every subject
+// with a presence row and every subject with transition history. Presence
+// alone is not enough: a final REMOVE takes a subject out of the view, and that
+// is the retraction a late row must not lose. Empty when no refresh is owed, or
+// when the cursor is already past it.
 func projectRefreshArm(cursor cursorState, refreshAt time.Time) string {
 	if refreshAt.IsZero() || cursor.Since.After(refreshAt) {
 		return ""
 	}
+	stamp := refreshAt.UnixMilli()
 	return fmt.Sprintf(`
     UNION ALL
-    SELECT m.repo_id AS repo_id, m.subject_id AS subject_id, fromUnixTimestamp64Milli(toInt64(%d), 'UTC') AS stamp
+    SELECT m.repo_id AS repo_id, m.subject_id AS subject_id, fromUnixTimestamp64Milli(toInt64(%[1]d), 'UTC') AS stamp
     FROM project_membership_presence AS m
-    WHERE m.org_id = {org_id:String} AND m.subject_kind = 'work_item'`, refreshAt.UnixMilli())
+    WHERE m.org_id = {org_id:String} AND m.subject_kind = 'work_item'
+    UNION ALL
+    SELECT repo_id, subject_id, fromUnixTimestamp64Milli(toInt64(%[1]d), 'UTC') AS stamp
+    FROM project_membership_transitions
+    WHERE org_id = {org_id:String} AND subject_kind = 'work_item'`, stamp)
 }
 
 func readProjectCatalogDigest(ctx context.Context, client contextpacket.ClickHouseQueryClient, orgID string) (uint64, time.Time, error) {
@@ -206,9 +221,11 @@ func (p sourcePlan) projectCatalogFor(ctx context.Context, checkpoint contextfab
 	return decided, reason, nil
 }
 
-// carried writes the catalog on a cursor this call hands back. A cursor with
-// no room keeps its position and drops the field, which reads as absent: one
-// more full refresh, never a skip. A dimension cursor has no room by design.
+// carried writes the catalog on a cursor this call hands back. Every fact
+// cursor reserves the room (cursorCatalogHeadroom), so the field does not drop
+// and restart a pass. Should it ever not fit, the position survives and the
+// field reads as absent: one more full refresh, never a skip. A dimension
+// cursor has no room by design.
 func (c projectCatalog) carried(ctx context.Context, cursor string) string {
 	state, err := decodeCursor(cursor)
 	if err != nil || state.Dim != nil || state.Space == "" {
