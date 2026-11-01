@@ -40,3 +40,44 @@ func TestAFailedObservationTraversalDegradesRetrieval(t *testing.T) {
 		})
 	}
 }
+
+// TestAFailedOperandTraversalDegradesTheComparison (CHAOS-12451, lead ruling):
+// the comparison resolver published no retrieval signal, so a failed traversal in
+// one operand reached no answer, whether the comparison published or held.
+func TestAFailedOperandTraversalDegradesTheComparison(t *testing.T) {
+	t.Parallel()
+	alpha := exactMatchNode(contextfabric.SubjectTeam, "team_alpha", "alpha")
+	beta := exactMatchNode(contextfabric.SubjectTeam, "team_beta", "beta")
+	document := observationNode("node-document-erroring", "document_error", "alpha review", 0.9)
+	for name, tc := range map[string]struct {
+		pool      map[string][]CandidateNode
+		traversal ObservationTraversal
+		committed int
+		want      bool
+	}{
+		"published, failed":    {map[string][]CandidateNode{"alpha": {alpha, document}, "beta": {beta}}, ObservationTraversalErrored, 2, true},
+		"published, no parent": {map[string][]CandidateNode{"alpha": {alpha, document}, "beta": {beta}}, ObservationNoParent, 2, false},
+		"held, failed":         {map[string][]CandidateNode{"alpha": {document}, "beta": {beta}}, ObservationTraversalErrored, 0, true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			backend := &fakeGraphBackend{
+				searchResults: tc.pool,
+				traverse: func(context.Context, string, CandidateNode, bool) (contextfabric.SubjectCandidate, ObservationTraversal) {
+					return contextfabric.SubjectCandidate{}, tc.traversal
+				},
+			}
+			resolution, _, _, _, err := ResolveSubjectsWithCommitBasis(context.Background(), storage.Principal{OrgID: "org-1"},
+				slotGateRequest(), testInterpreted("alpha", "beta"), backend.deps(), nil, nil, twoNamedSlotGateFrame(), "")
+			if err != nil {
+				t.Fatalf("ResolveSubjectsWithCommitBasis() error = %v", err)
+			}
+			if len(resolution.Committed) != tc.committed {
+				t.Fatalf("committed = %v, want %d: this case does not reach the path it names", resolution.Committed, tc.committed)
+			}
+			if resolution.RetrievalDegraded != tc.want {
+				t.Fatalf("RetrievalDegraded = %v, want %v", resolution.RetrievalDegraded, tc.want)
+			}
+		})
+	}
+}
