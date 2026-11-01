@@ -93,7 +93,7 @@ func TestServedPayloadsValidateAgainstTheirOwnOutputSchemas(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, outcome := range []string{"fact_served", "read_no_fact", "measured_zero", "not_applicable", "unavailable", "stale", "truncated", "withheld_response_budget"} {
+	for _, outcome := range []string{"fact_served", "read_no_fact", "measured_zero", "not_applicable", "unavailable", "stale", "truncated", "withheld_response_budget", "withheld_project_scope"} {
 		body := mutatedExample(t, factsExample, func(doc map[string]any) {
 			rows, _ := doc["coverage"].([]any)
 			for _, row := range rows {

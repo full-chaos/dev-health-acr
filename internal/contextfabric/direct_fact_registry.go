@@ -10,12 +10,18 @@ func (r *FactCapabilityRegistry) WithoutScopeExpansion() *FactCapabilityRegistry
 		return nil
 	}
 	direct := *r
+	direct.scopeResolver = r.withoutScopeExpansionResolver()
+	return &direct
+}
+
+// withoutScopeExpansionResolver is a resolver over the same policy table with
+// no expander: every policy fails closed and nothing is read.
+func (r *FactCapabilityRegistry) withoutScopeExpansionResolver() *FactReadScopeResolver {
 	var policies map[FactKind]map[SubjectKind]factScopePolicyRule
 	if r.scopeResolver != nil {
 		policies = r.scopeResolver.policies
 	}
-	direct.scopeResolver = NewFactReadScopeResolverWithPolicies(nil, policies)
-	return &direct
+	return NewFactReadScopeResolverWithPolicies(nil, policies)
 }
 
 // DirectReadFactSource is the fact source the direct read tools read
