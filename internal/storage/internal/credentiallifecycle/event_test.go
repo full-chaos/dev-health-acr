@@ -455,3 +455,30 @@ func TestLedgerEnforcesTheRevisionKey(t *testing.T) {
 		t.Fatal("Rows must return a copy")
 	}
 }
+
+func TestTheSchemaOracleIsNotVacuous(t *testing.T) {
+	resolved := vendoredSchema(t)
+	row, err := BuildRow(Facts{Kind: KindIssued, Credential: legacyCredential("cred_oracle0000001"), At: time.Now(), Actor: Actor{ActorUser, "admin"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, mutate := range map[string]func(map[string]any){
+		"token prefix member": func(m map[string]any) {
+			m["payload"].(map[string]any)["change"].(map[string]any)["token_prefix"] = secretPref
+		},
+		"bad org": func(m map[string]any) { m["payload"].(map[string]any)["organization_id"] = "org_" },
+		"seventh class": func(m map[string]any) {
+			m["payload"].(map[string]any)["change"].(map[string]any)["acr_class"] = "other"
+		},
+		"system with ref": func(m map[string]any) { m["payload"].(map[string]any)["actor_type"] = "system" },
+	} {
+		var doc map[string]any
+		if err := json.Unmarshal(row.Payload, &doc); err != nil {
+			t.Fatal(err)
+		}
+		mutate(doc)
+		if err := resolved.Validate(doc); err == nil {
+			t.Errorf("%s: the vendored schema accepted a mutated payload", name)
+		}
+	}
+}
