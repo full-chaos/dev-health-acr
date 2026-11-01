@@ -36,6 +36,10 @@ type AppConfig struct {
 	// config.Config.ServerCompletenessAuthoritySymmetricEnabled's own doc
 	// comment, for the same by-id route reason immediately above.
 	ServerCompletenessAuthoritySymmetricEnabled bool
+	// ContextFabricVocabularyLabelsEnabled mirrors
+	// config.Config.ContextFabricVocabularyLabelsEnabled: both doors that
+	// serve a result read it (contextfabric.ServeVocabularyLabels).
+	ContextFabricVocabularyLabelsEnabled bool
 	// ContextFabricEventStreamEnabled mirrors
 	// config.Config.ContextFabricEventStreamEnabled: the create-investigation
 	// route serves `Accept: text/event-stream` only when it is on.

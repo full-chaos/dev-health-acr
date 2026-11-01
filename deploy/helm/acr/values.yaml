@@ -302,6 +302,13 @@ contextFabric:
   # only constructs the falkorgraph adapter when both
   # EnableContextFabricInvestigations and falkorgraph.Configured() hold.
   readsEnabled: false
+  # CHAOS-12416: serves the vocabulary_labels map on every answer. An existing
+  # deploy order cannot protect main: the result root is
+  # additionalProperties:false and acr and web roll separately, so a consumer
+  # on a pin without the field fails every answer that holds the map. Keep
+  # false until every consumer's pin is deployed. A follow-up ticket removes
+  # the flag then. See docs/operations.md.
+  vocabularyLabelsEnabled: false
   # FalkorDB graph backend (ADR 0009), consumed by acr-projector's
   # ProjectionBackend (contextFabric.projector below wires these values
   # into that Deployment). Empty addr leaves Context Fabric unconfigured --

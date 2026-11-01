@@ -140,7 +140,8 @@ type ContextFabricAnswerProjection struct {
 	// option, and web reads it, so it must carry the map; and the MCP tool
 	// calls the same answerprojection.Project, so leaving MCP out would take a
 	// second code path. Both untrusted-content lists name it. Project copies
-	// it from CHAOS-12416, with the composition; nothing sets it before that.
+	// it whole, and a door sheds it before a row when the bound needs that
+	// (answerprojection.WithoutVocabularyLabels, CHAOS-12416).
 	VocabularyLabels map[string]string `json:"vocabulary_labels,omitempty"`
 	// Temporal is CHAOS-3781's temporal label, copied verbatim, and like
 	// Limitations it is never dropped. Nil means the answer is about

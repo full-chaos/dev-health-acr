@@ -317,6 +317,11 @@ func (a *App) serveStoredInvestigationResultOn(w http.ResponseWriter, r *http.Re
 	completenessAuthorityArgs := contextfabric.CompletenessAuthorityLogArgs(completenessAuthority, principal.OrgID)
 	completenessAuthorityArgs = append(completenessAuthorityArgs, "request_id", contextfabric.SanitizeLogAttr(RequestID(r.Context())))
 	a.logger.InfoContext(r.Context(), "context fabric completeness authority", completenessAuthorityArgs...)
+	// The served words, composed on a copy after the document's last writer.
+	// The stored row is not touched, so it gets them with no migration.
+	maximumBytes := int64(a.config.MaxSerializedBytes)
+	answer := result
+	result, wordsShed := contextfabric.ServeVocabularyLabels(answer, a.config.ContextFabricVocabularyLabelsEnabled, maximumBytes)
 	// The consumer projection is served from THIS route, through the
 	// same answerprojection.Project the MCP tool calls (CHAOS-3746
 	// codex round-1 F2). Before this, the API only ever returned the
@@ -333,7 +338,11 @@ func (a *App) serveStoredInvestigationResultOn(w http.ResponseWriter, r *http.Re
 	var payload any = result
 	if view == investigationViewProjection {
 		budget.MaxSerializedBytes = a.config.MaxSerializedBytes
-		projection := answerprojection.Project(result, budget)
+		// The canonical document may stand over the bound where its projection
+		// does not, so the words are measured on the projection below.
+		labeled, _ := contextfabric.ServeVocabularyLabels(answer, a.config.ContextFabricVocabularyLabelsEnabled, 0)
+		projection := answerprojection.Project(labeled, budget)
+		wordsShed = false
 		// Validate before emitting (codex round-6 F2). The route
 		// serves a DERIVED document, and the derivation runs over
 		// stored rows that are validated leniently -- so a projection
@@ -352,9 +361,13 @@ func (a *App) serveStoredInvestigationResultOn(w http.ResponseWriter, r *http.Re
 		a.logger.InfoContext(r.Context(), "context fabric answer display", displayArgs...)
 		payload = projection
 	}
-	maximumBytes := int64(a.config.MaxSerializedBytes)
 	itemCounts := contextFabricResultItemCounts(result)
 	encoded, measuredBytes, sizeErr := marshalContextFabricResponse(payload)
+	if projection, projected := payload.(contractsv1.ContextFabricAnswerProjection); sizeErr == nil && projected && measuredBytes > maximumBytes {
+		// A word never refuses an answer.
+		encoded, measuredBytes, sizeErr = marshalContextFabricResponse(answerprojection.WithoutVocabularyLabels(projection))
+		wordsShed = true
+	}
 	if sizeErr != nil {
 		writeError(w, r, http.StatusInternalServerError, "internal_error", "Context Fabric investigation result could not be serialized", false, nil)
 		return
@@ -403,6 +416,7 @@ func (a *App) serveStoredInvestigationResultOn(w http.ResponseWriter, r *http.Re
 		})
 		return
 	}
+	a.logVocabularyLabelsShed(r, wordsShed, "result_by_id", maximumBytes)
 	a.logContextFabricResponseBudgetMeasured(r, contractsv1.ContextFabricPlannedItemCeiling(result, a.config.MaxItems), measuredBytes, maximumBytes, estimatedTokens, itemCounts)
 	a.recordReadAudit(r.Context(), principal, auditAction, "context_fabric_investigation", result.ResultID, "success", map[string]any{"investigation_status": result.Status, "view": string(view)})
 	writeEncodedJSON(w, http.StatusOK, encoded)

@@ -178,6 +178,17 @@ type Config struct {
 	// deployment after the corpus gate. The retired
 	// ACR_CONTEXT_FABRIC_ANCHOR_BINDING_FOLLOW_UP_ENABLED is not read.
 	AnchorBindingCarryEnabled bool
+	// ContextFabricVocabularyLabelsEnabled (CHAOS-12416,
+	// ACR_CONTEXT_FABRIC_VOCABULARY_LABELS_ENABLED) serves the
+	// vocabulary_labels map at both doors that serve a result
+	// (contextfabric.ServeVocabularyLabels). Default OFF, because a deploy
+	// order cannot protect main: the result root is additionalProperties:false,
+	// and acr and web roll separately, so a consumer on a pin that does not
+	// carry the field fails every answer that holds the map. Turn it on after
+	// every consumer's pin is deployed. A follow-up ticket removes the flag
+	// then. Off serves no map; coverage.sources[] words are stamped either way,
+	// because those fields are on every pin.
+	ContextFabricVocabularyLabelsEnabled bool
 	// ServerCompletenessAuthorityEnabled (CHAOS-5640,
 	// ACR_CONTEXT_FABRIC_SERVER_COMPLETENESS_AUTHORITY_ENABLED) is the
 	// gated FLIP's master switch -- default OFF, same "ships dark"

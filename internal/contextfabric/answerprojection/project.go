@@ -22,6 +22,7 @@ package answerprojection
 
 import (
 	"encoding/json"
+	"maps"
 	"sort"
 	"strings"
 
@@ -122,6 +123,14 @@ func standingRank(standing contractsv1.ContextFabricDriverStanding) int {
 	}
 }
 
+// WithoutVocabularyLabels sheds the served words from a projection that does
+// not fit with them (CHAOS-12416). They are optional: a consumer takes its
+// generic path, and a word never costs a row or an answer.
+func WithoutVocabularyLabels(projection contractsv1.ContextFabricAnswerProjection) contractsv1.ContextFabricAnswerProjection {
+	projection.VocabularyLabels = nil
+	return projection
+}
+
 // Project derives the bounded consumer projection of result.
 //
 // The returned projection is a pure function of (result, budget). It
@@ -210,6 +219,7 @@ func Project(result contractsv1.ContextFabricInvestigationResult, budget Budget)
 		FactScopeCensus:        result.FactScopeCensus,
 		FactScopeCensusOmitted: result.FactScopeCensusOmitted,
 		EvidenceRefLabels:      evidenceRefLabels,
+		VocabularyLabels:       maps.Clone(result.VocabularyLabels),
 		Temporal:               projectTemporal(result),
 		CoveragePartial:        result.Coverage.Partial,
 		Limitations:            limitations,

@@ -251,13 +251,15 @@ func (a *App) deliverInvestigationOutcome(w http.ResponseWriter, r *http.Request
 // audit line and the write. It returns the status the latency metric records:
 // the result's status when the answer was written, "error" when a gate
 // refused it.
-func (a *App) serveContextFabricInvestigationResult(w http.ResponseWriter, r *http.Request, principal storage.Principal, request contextfabric.InvestigationRequest, result contextfabric.InvestigationResult, collectedSynthesisInput func() *contractsv1.ContextFabricSynthesisInput) string {
+func (a *App) serveContextFabricInvestigationResult(w http.ResponseWriter, r *http.Request, principal storage.Principal, request contextfabric.InvestigationRequest, answer contextfabric.InvestigationResult, collectedSynthesisInput func() *contractsv1.ContextFabricSynthesisInput) string {
 	// The service ceiling is the only line past which an answer is
 	// refused. The caller's own max_serialized_bytes bounds what is
 	// SERVED: an answer that measures over it is delivered as the
 	// bounded projection below, never refused and never oversize.
 	maximumBytes := int64(a.config.MaxSerializedBytes)
 	callerBytes := int64(request.Options.MaxSerializedBytes)
+	wordsBound := a.investigationWordsBound(answer, callerBytes, collectedSynthesisInput())
+	result, wordsShed := contextfabric.ServeVocabularyLabels(answer, a.config.ContextFabricVocabularyLabelsEnabled, wordsBound)
 	itemCounts := contextFabricResultItemCounts(result)
 	encoded, measuredBytes, sizeErr := marshalContextFabricResponse(result)
 	if sizeErr != nil {
@@ -330,7 +332,11 @@ func (a *App) serveContextFabricInvestigationResult(w http.ResponseWriter, r *ht
 			})
 			return "error"
 		}
-		projection, projectionEncoded, projectionBytes, budget, fits := a.projectToCallerOption(result, request.Options)
+		// The canonical document stands over the caller's bound, so the words
+		// are measured on the projection, which sheds them if it must.
+		labeled, _ := contextfabric.ServeVocabularyLabels(answer, a.config.ContextFabricVocabularyLabelsEnabled, 0)
+		projection, projectionEncoded, projectionBytes, budget, fits := a.projectToCallerOption(labeled, request.Options)
+		wordsShed = labeled.VocabularyLabels != nil && projection.VocabularyLabels == nil
 		if !fits {
 			a.logContextFabricResponseBudgetExceeded(r, contractsv1.ContextFabricPlannedItemCeiling(result, a.config.MaxItems), "projection_bytes", projectionBytes, callerBytes, estimatedTokens, itemCounts)
 			writeError(w, r, http.StatusRequestEntityTooLarge, "budget_refusal", "Context Fabric investigation response exceeded service limits", false, map[string]any{
@@ -386,10 +392,48 @@ func (a *App) serveContextFabricInvestigationResult(w http.ResponseWriter, r *ht
 		}
 		synthesisInputBytes = int(envelopeBytes - measuredBytes)
 	}
+	a.logVocabularyLabelsShed(r, wordsShed, "investigation_create", wordsBound)
 	a.logContextFabricResponseBudgetMeasured(r, contractsv1.ContextFabricPlannedItemCeiling(result, a.config.MaxItems), measuredBytes, maximumBytes, estimatedTokens, itemCounts, "synthesis_input_bytes", synthesisInputBytes, "projected", projected != nil, "served_bytes", servedBytes, "caller_max_serialized_bytes", callerBytes)
 	a.recordReadAudit(r.Context(), principal, "context_fabric_investigation_completed", "context_fabric_investigation", result.ResultID, "success", map[string]any{"investigation_status": result.Status})
 	writeEncodedJSON(w, http.StatusOK, encoded)
 	return string(result.Status)
+}
+
+// investigationWordsBound is the most the canonical answer may measure with its
+// served words: the tighter of the service and caller bounds, less what the
+// synthesis-input envelope adds to the body, because that body is held to the
+// same bound. The envelope's cost does not depend on the words, so it is
+// measured once on the answer as the engine returned it. A cost that cannot be
+// measured leaves the bound as it is, and the envelope check still stands.
+func (a *App) investigationWordsBound(answer contextfabric.InvestigationResult, callerBytes int64, synthesisInput *contractsv1.ContextFabricSynthesisInput) int64 {
+	bound := int64(a.config.MaxSerializedBytes)
+	if callerBytes > 0 && callerBytes < bound {
+		bound = callerBytes
+	}
+	if synthesisInput == nil {
+		return bound
+	}
+	_, bare, err := marshalContextFabricResponse(answer)
+	if err != nil {
+		return bound
+	}
+	_, enveloped, err := marshalContextFabricResponse(contractsv1.ContextFabricInvestigationResponse{ContextFabricInvestigationResult: answer, SynthesisInput: synthesisInput})
+	if err != nil {
+		return bound
+	}
+	// Never zero or below: a non-positive bound measures nothing.
+	return max(1, bound-(enveloped-bare))
+}
+
+// logVocabularyLabelsShed says when a served document left its words out to
+// stay within bound. The fallback is the generic path, so an operator reads it
+// here and not from a reader's report.
+func (a *App) logVocabularyLabelsShed(r *http.Request, shed bool, surface string, bound int64) {
+	if !shed {
+		return
+	}
+	a.logger.InfoContext(r.Context(), "context fabric vocabulary labels shed",
+		"request_id", contextfabric.SanitizeLogAttr(RequestID(r.Context())), "surface", surface, "bound_bytes", contextfabric.SanitizeLogInt(bound))
 }
 
 // maxProjectionShrinkSteps bounds how often projectToCallerOption halves the
@@ -434,6 +478,13 @@ func (a *App) projectToCallerOption(result contractsv1.ContextFabricInvestigatio
 		encoded, bytes, err = marshalContextFabricResponse(projection)
 		if err != nil {
 			return projection, nil, 0, budget, false
+		}
+		if bytes > int64(options.MaxSerializedBytes) {
+			// A word never costs a row: the map goes before the counts do.
+			projection = answerprojection.WithoutVocabularyLabels(projection)
+			if encoded, bytes, err = marshalContextFabricResponse(projection); err != nil {
+				return projection, nil, 0, budget, false
+			}
 		}
 		if bytes <= int64(options.MaxSerializedBytes) {
 			return projection, encoded, bytes, budget, true

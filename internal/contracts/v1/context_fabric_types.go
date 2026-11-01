@@ -2221,8 +2221,9 @@ type ContextFabricInvestigationResult struct {
 	// this result, so a consumer looks a word up and needs no table: a new
 	// value needs no consumer change. A value with no entry takes the
 	// consumer's generic path. Additive and optional, but the result root is
-	// additionalProperties:false, so an old pin REFUSES it: nothing emits it
-	// until the pin train that carries this field has landed (CHAOS-12416).
+	// additionalProperties:false, so an old pin REFUSES it. The serve function
+	// composes it on a served copy, behind a default-off flag, and nothing
+	// stores it: contextfabric.ServeVocabularyLabels (CHAOS-12416).
 	VocabularyLabels map[string]string       `json:"vocabulary_labels,omitempty"`
 	Versions         ContextFabricVersionSet `json:"versions"`
 	// DeterministicAnswer is the service's own answer sentence. Required on

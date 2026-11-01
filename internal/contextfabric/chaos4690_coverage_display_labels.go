@@ -9,7 +9,8 @@ import (
 // immediately before that exit's own Validate/ValidateResult call (never
 // on the tryReuse path -- a stored result is immutable, and a legacy
 // stored row carrying no EvidenceRefLabels map at all is the RULED
-// exception, design §7.3).
+// exception, design §7.3). A stored row's coverage sources get their words on
+// the served copy: ServeVocabularyLabels (CHAOS-12416).
 //
 // It does two things, both idempotent and safe to call unconditionally
 // regardless of how result.Coverage was composed:
