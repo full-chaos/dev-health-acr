@@ -292,3 +292,26 @@ func TestLifecycleTick_AnEmptyScopeRowIsSkippedAndTheNormalRowsStillGetTheirEven
 	require.Equal(t, "acr_credential.expired", f.rows(t, "cred_tk_zz_normal_expired")[1].EventType, "the normal expired row got its event")
 	require.Len(t, f.rows(t, "cred_tk_zz_normal_live"), 1, "and the normal live row its first touch")
 }
+
+// A credential whose table row says live but whose stream says revoked (acr
+// never produces it: a revocation is never undone) is terminal for the tick and
+// the writer, so it gets no expired row, and the retention gate keeps it: the
+// stream decides, the table is not asked again.
+func TestLifecycleTick_ARowUnrevokedAgainWhileItsStreamIsRevokedIsNeverEventedAndNeverDeleted(t *testing.T) {
+	f := newTickFixture(t)
+	issued, err := f.service.Create(f.ctx, credentialCreateRequest("tick-planted"))
+	require.NoError(t, err)
+	id := issued.Credential.CredentialID
+	_, err = f.service.Revoke(f.ctx, credentialTestOrgID, id, credentialTestActorID)
+	require.NoError(t, err)
+	_, err = f.db.ExecContext(f.ctx, `UPDATE acr.client_credentials SET revoked_at = NULL, expires_at = `+past+` WHERE credential_id = $1`, id)
+	require.NoError(t, err)
+	before := f.rows(t, id)
+	require.Equal(t, "acr_credential.revoked", before[len(before)-1].EventType)
+	require.Zero(t, f.run(t, 100).Expired, "its stream is terminal: no expired row")
+	require.Equal(t, before, f.rows(t, id))
+	deleted, err := NewWorkloadCredentialPurger(f.db)(f.ctx, tickNow, 500)
+	require.NoError(t, err)
+	require.Zero(t, deleted)
+	require.Equal(t, 1, f.count(t, `SELECT count(*) FROM acr.client_credentials WHERE credential_id = $1`, id))
+}

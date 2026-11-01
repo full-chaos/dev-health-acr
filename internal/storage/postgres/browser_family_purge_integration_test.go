@@ -119,6 +119,14 @@ func TestBrowserFamilyPurge_postgresDeletesEndedFamiliesAndKeepsTheRest(t *testi
 	fixture.signOut(t, ctx, planted, now.Add(20*time.Minute))
 	_, err = fixture.db.ExecContext(ctx, `UPDATE acr.client_credentials SET revoked_at = NULL, expires_at = $2 WHERE credential_id = $1`, planted.members[0], now.Add(5*time.Hour))
 	require.NoError(t, err)
+	// Planting a revoked member live again by SQL is a state acr never produces (a
+	// revocation is never undone). Its stream still says revoked (the sign-out
+	// wrote a revoked row), and the tick and the writer treat a revoked row as
+	// terminal: it would never get an expired event and the gate would keep it
+	// for ever. The plant undoes the revoked row with the revocation, so the
+	// credential is live in both the table and the stream.
+	_, err = fixture.db.ExecContext(ctx, `DELETE FROM acr.credential_lifecycle_outbox WHERE aggregate_id = $1 AND event_type = 'acr_credential.revoked'`, planted.members[0])
+	require.NoError(t, err)
 
 	untouched := fixture.purgeFamily(t, ctx, "p5")
 
