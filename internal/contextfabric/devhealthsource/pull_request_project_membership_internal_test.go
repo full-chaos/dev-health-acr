@@ -72,6 +72,11 @@ func TestALinkIdIsResolvedToOneIssueOrToNone(t *testing.T) {
 	link := func(repoID, id string) pullRequestIssueLink {
 		return pullRequestIssueLink{issue: workItemKey{repoID: repoID, workItemID: id}, tier: "native"}
 	}
+	typed := func(repoID, id string) pullRequestIssueLink {
+		row := link(repoID, id)
+		row.pullRequestTyped = true
+		return row
+	}
 	for name, tc := range map[string]struct {
 		rows      []pullRequestIssueLink
 		want      []pullRequestIssueLink
@@ -80,6 +85,12 @@ func TestALinkIdIsResolvedToOneIssueOrToNone(t *testing.T) {
 		"one row in another repository": {[]pullRequestIssueLink{link("repo-b", "I-1")}, []pullRequestIssueLink{link("repo-b", "I-1")}, 0},
 		"the own repository wins":       {[]pullRequestIssueLink{link("repo-b", "I-1"), link("repo-a", "I-1")}, []pullRequestIssueLink{link("repo-a", "I-1")}, 0},
 		"no row in the own repository":  {[]pullRequestIssueLink{link("repo-b", "I-1"), link("repo-c", "I-1")}, []pullRequestIssueLink{}, 1},
+		// A pull-request work item takes part in the choice, then contributes
+		// nothing: the issue elsewhere never stands in for it.
+		"the own row is a pull request item":  {[]pullRequestIssueLink{typed("repo-a", "I-1"), link("repo-b", "I-1")}, []pullRequestIssueLink{}, 0},
+		"the only row is a pull request item": {[]pullRequestIssueLink{typed("repo-b", "I-1")}, []pullRequestIssueLink{}, 0},
+		"a pull request item elsewhere":       {[]pullRequestIssueLink{link("repo-a", "I-1"), typed("repo-b", "I-1")}, []pullRequestIssueLink{link("repo-a", "I-1")}, 0},
+		"no own row, one a pull request item": {[]pullRequestIssueLink{typed("repo-b", "I-1"), link("repo-c", "I-1")}, []pullRequestIssueLink{}, 1},
 	} {
 		got, ambiguous := resolveLinkedIssues(key, tc.rows)
 		if !reflect.DeepEqual(got, tc.want) || ambiguous != tc.ambiguous {

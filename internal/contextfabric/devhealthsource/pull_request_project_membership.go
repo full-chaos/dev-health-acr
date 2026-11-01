@@ -51,10 +51,13 @@ type pullRequestKey struct {
 	number uint32
 }
 
-// pullRequestIssueLink is one contributing link row of a pull request.
+// pullRequestIssueLink is one link row of a pull request, joined to one work
+// item. pullRequestTyped keeps a pull-request work item until the link id is
+// resolved: dropped earlier, a foreign issue would be the only row left.
 type pullRequestIssueLink struct {
-	issue workItemKey
-	tier  string
+	issue            workItemKey
+	tier             string
+	pullRequestTyped bool
 }
 
 // queryPullRequestsWithMembership is queryPullRequests with each emitted pull
@@ -274,10 +277,10 @@ func pullRequestKeyOf(canonicalID string) (pullRequestKey, bool) {
 }
 
 // readPullRequestIssueLinks reads the link rows of exactly the named pull
-// requests, keeping what the link producer would project: a known tier, a
-// non-pull-request issue row, and no lower-tier row a native row covers
-// (issuePullRequestLinkOutranked). ambiguous counts the links
-// resolveLinkedIssues dropped.
+// requests, keeping what the link producer would project: a known tier and no
+// lower-tier row a native row covers (issuePullRequestLinkOutranked). A
+// pull-request work item goes in resolveLinkedIssues, after the link id is
+// resolved. ambiguous counts the links that dropped.
 func readPullRequestIssueLinks(ctx context.Context, client contextpacket.ClickHouseQueryClient, orgID string, keys []pullRequestKey) (map[pullRequestKey][]pullRequestIssueLink, int, error) {
 	links := make(map[pullRequestKey][]pullRequestIssueLink, len(keys))
 	for start := 0; start < len(keys); start += workItemMembershipReadKeys {
@@ -308,10 +311,12 @@ WHERE l.org_id = {org_id:String} AND (` + strings.Join(terms, " OR ") + `)`
 }
 
 // resolveLinkedIssues keeps one issue per link id of a pull request. A link
-// id that joined one row is that issue. One that joined several is the row in
+// id that joined one row is that row. One that joined several is the row in
 // the pull request's own repository; with none, it cannot be told which issue
 // the link names, so it contributes nothing and is counted: a wrong project
-// would admit a project-only caller, and unstated is the disclosed path.
+// would admit a project-only caller, and unstated is the disclosed path. A
+// pull-request work item contributes nothing, but it takes part in the
+// choice, because it can be what the link names.
 func resolveLinkedIssues(key pullRequestKey, rows []pullRequestIssueLink) ([]pullRequestIssueLink, int) {
 	byID := map[string][]pullRequestIssueLink{}
 	for _, row := range rows {
@@ -320,16 +325,17 @@ func resolveLinkedIssues(key pullRequestKey, rows []pullRequestIssueLink) ([]pul
 	resolved := make([]pullRequestIssueLink, 0, len(byID))
 	ambiguous := 0
 	for _, candidates := range byID {
-		if len(candidates) == 1 {
-			resolved = append(resolved, candidates[0])
-			continue
+		chosen := 0
+		if len(candidates) > 1 {
+			chosen = slices.IndexFunc(candidates, func(row pullRequestIssueLink) bool { return row.issue.repoID == key.repoID })
 		}
-		own := slices.IndexFunc(candidates, func(row pullRequestIssueLink) bool { return row.issue.repoID == key.repoID })
-		if own < 0 {
+		if chosen < 0 {
 			ambiguous++
 			continue
 		}
-		resolved = append(resolved, candidates[own])
+		if !candidates[chosen].pullRequestTyped {
+			resolved = append(resolved, candidates[chosen])
+		}
 	}
 	return resolved, ambiguous
 }
@@ -353,11 +359,9 @@ func readPullRequestIssueLinkChunk(ctx context.Context, client contextpacket.Cli
 		if _, known := issuePullRequestLinkTierRank[strings.TrimSpace(provenance)]; !known {
 			continue
 		}
-		if _, isPullRequest := pullRequestWorkItemTypes[issueType]; isPullRequest {
-			continue
-		}
+		_, isPullRequest := pullRequestWorkItemTypes[issueType]
 		key := pullRequestKey{repoID: prRepoID, number: number}
-		links[key] = append(links[key], pullRequestIssueLink{issue: workItemKey{repoID: issueRepoID, workItemID: workItemID}, tier: strings.TrimSpace(provenance)})
+		links[key] = append(links[key], pullRequestIssueLink{issue: workItemKey{repoID: issueRepoID, workItemID: workItemID}, tier: strings.TrimSpace(provenance), pullRequestTyped: isPullRequest})
 	}
 	return rows.Err()
 }

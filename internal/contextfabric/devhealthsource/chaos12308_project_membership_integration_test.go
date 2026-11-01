@@ -75,7 +75,7 @@ func TestLivePullRequestMembershipComesFromItsLinkedIssues(t *testing.T) {
 		mustExec(t, ctx, direct, `INSERT INTO work_graph_issue_pr (repo_id, work_item_id, pr_number, confidence, provenance, evidence, last_synced, org_id) VALUES (toUUID(?), ?, ?, 0.9, ?, '', ?, ?)`,
 			repo, issue, number, tier, at, org)
 	}
-	for number := uint32(1); number <= 7; number++ {
+	for number := uint32(1); number <= 8; number++ {
 		pull(github, number)
 		pull(gitlab, number)
 	}
@@ -104,6 +104,13 @@ func TestLivePullRequestMembershipComesFromItsLinkedIssues(t *testing.T) {
 	workItem("I-DUP", zeroRepositoryUUID, "jira", "JI", t1)
 	link(github, "I-DUP", 7, "native", t1)
 	link(gitlab, "I-DUP", 7, "native", t1)
+	// The row in the pull request's own repository is a pull-request work
+	// item, and the other row is an issue of a project: the link names the
+	// first, which contributes nothing, never the second.
+	mustExec(t, ctx, direct, `INSERT INTO work_items (work_item_id, repo_id, org_id, title, status, url, parent_id, type, provider, project_id, updated_at, created_at, last_synced) VALUES ('I-MIX', ?, ?, 'PR item', 'open', '', '', 'pr', 'github', '', ?, ?, ?)`,
+		github, org, t1, t1, t1)
+	workItem("I-MIX", zeroRepositoryUUID, "jira", "JI", t1)
+	link(github, "I-MIX", 8, "native", t1)
 	// A link row of another organization on the same key contributes nothing,
 	// also when that organization holds an issue with the same id.
 	mustExec(t, ctx, direct, `INSERT INTO work_items (work_item_id, repo_id, org_id, title, status, url, parent_id, provider, project_id, updated_at, created_at, last_synced) VALUES ('I-LI', ?, 'org-other', 'Other', 'open', '', '', 'linear', 'LI', ?, ?, ?)`,
@@ -168,6 +175,7 @@ func TestLivePullRequestMembershipComesFromItsLinkedIssues(t *testing.T) {
 		id(gitlab, 2): {[]string{"project.v2:github:ghprojv2%3AGH"}, "native"},
 		id(github, 7): {[]string{"project.v2:github:ghprojv2%3AGH"}, "native"},
 		id(gitlab, 7): {},
+		id(github, 8): {},
 		id(github, 6): {[]string{"project.v2:gitlab:GL"}, "native"},
 	} {
 		got, found := stated[pullRequest]
