@@ -158,13 +158,15 @@ func CohortPoolTruncationArmVocabulary() []CohortPoolTruncationArm {
 // one says no subject of any servable kind exists in this org and the other
 // found some and clipped them. The caller counts, this function decides.
 //
-// UNREACHABLE BY CONSTRUCTION, classified anyway. `censusCovers` requires
-// ZERO committed subjects and `hopWalkTruncated` requires at least one (the
-// walk only runs per committed subject), so the two are mutually exclusive in
-// production; `exactNameTruncated` is likewise only ever assigned inside the
-// census branch. Those combinations are still named below rather than left to
-// a default, because a classification over a closed space is an allow-list and
-// a future caller that reaches one should inherit a stated answer.
+// REACHABLE SINCE CHAOS-12451: `censusCovers` requires ZERO committed subjects,
+// and `hopWalkTruncated` is also set by the text arm, which runs with none, so a
+// census can cover a cut text read. It covers the members that read dropped, not
+// the read's path edges: DiscoverContext files graph_hop_walk_truncated for those.
+// UNREACHABLE BY CONSTRUCTION, classified anyway: `exactNameTruncated` is only
+// ever assigned inside the census branch. Those combinations are named below
+// rather than left to a default, because a classification over a closed space
+// is an allow-list and a future caller that reaches one should inherit a stated
+// answer.
 func cohortPoolTruncation(fulltextTruncated, hopWalkTruncated, exactNameTruncated, kindCensusTruncated, endpointLookupFailed, teamNarrowingUndecided, censusCovers bool) (CohortPoolTruncationBasis, []CohortPoolTruncationArm, bool) {
 	arms := make([]CohortPoolTruncationArm, 0, len(CohortPoolTruncationArmVocabulary()))
 	if fulltextTruncated {

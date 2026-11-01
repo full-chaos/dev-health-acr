@@ -786,16 +786,27 @@ candidates inside the narrowing. Each such read logs one
 `contextfabric.team_narrowing_general_read` line (requested teams, subjects
 decided, subjects excluded, and the floor value; log-only).
 
-**A cut read that is not a cohort read says so (CHAOS-12348).** A read that is
-not a cohort read is served as paths, so it has no cohort to carry the floor
-above, and its coverage says what it lost. "Not a cohort read" is the reader's
-own test: `CohortMemberKindForFrame` gives no servable member kind, the test
+**A cut read says so (CHAOS-12348, CHAOS-12451).** A read that is not a cohort
+read is served as paths, so it has no cohort to carry the floor above, and its
+coverage says what it lost. "Not a cohort read" is the reader's own test:
+`CohortMemberKindForFrame` gives no servable member kind, the test
 `DiscoveredCohort` gates a cohort on. A cohort read that found no member stays a
-cohort read and keeps its floor. Two degrading graph rows, each paired with its
-reason:
+cohort read and keeps its floor. A cohort read has one case of its own: a node
+read cut at its limit that its floor does not show, beside a team anchor or under
+a census that covers the pool. Its population can be whole with path edges
+missing, so it files the first row below and is partial. Two degrading graph
+rows, each paired with its reason:
 
-- `graph_hop_walk_truncated` (raw `hop_walk_truncated`, no count): a committed
-  subject's hop walk spent its edge budget with candidates left.
+- `graph_hop_walk_truncated` (raw `hop_walk_truncated`, no count): on a read that
+  is not a cohort read, a committed subject's hop walk spent its edge budget with
+  candidates left. On a read of either kind, a read of one node's edges stopped at
+  its limit of 5,000 rows, in the hop walk or in the text arm. The read sorts
+  structural kinds first and CI runs last, and edges past the cut do not compete
+  for the budget.
+- A failed observation traversal is not a graph row, because it happens during
+  resolution: a read cut at its limit or a backend failure leaves the observation
+  unable to commit and its parent not proposed, and sets `RetrievalDegraded`, so
+  the answer carries the retrieval limitation.
 - `graph_team_narrowing_undecided_paths` (raw
   `team_narrowing_undecided_paths:<n>`): under `scope.team_ids`, a path edge was
   dropped because an endpoint's ownership was absent, not current, or cut. The
@@ -3375,7 +3386,7 @@ on retries. Save, reuse, by-id and response-owner boundaries remain those in §1
 flowchart TD
   WALK["DiscoverContext walks each committed subject<br/>hopWalk collects a hop in questionEdgesFirst order:<br/>own edges the question names, then gate edges, then the rest"] --> TEXT["full-text arm: matched subjects<br/>RankEdgesByOrigin, no classes"]
   WALK --> ATTR["attributeEdgesByFewestHops<br/>breadth-first over every resolved edge;<br/>tie: the earlier origin; own = one hop"]
-  WALK --> CUT["edge budget spent with candidates left, on a read<br/>that is not a cohort read: degrading<br/>graph_hop_walk_truncated, status floored to partial (§3)"]
+  WALK --> CUT["edge budget spent with candidates left on a read<br/>that is not a cohort read, or a node's edge read cut<br/>at its limit that a population floor does not show: degrading<br/>graph_hop_walk_truncated, status floored to partial (§3)"]
   TEXT --> ATTR
   ATTR --> CLASS["committedEdgeClasses (committed subjects only)<br/>0 own + NamedByQuestion (fact kind in the question's<br/>fact_requirements, From kind the table names)<br/>1 gate edge: DriverSubject is the subject<br/>2 other own; 3 further out"]
   CLASS --> RANK["RankEdgesByOrigin<br/>tier 1 committed (resolution order), tier 2 text matches<br/>per tier: runs of equal confidence; origins take turns per run<br/>per origin: class, then id"]

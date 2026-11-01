@@ -5,8 +5,10 @@ import (
 	"testing"
 )
 
-// CHAOS-12348: the two rows a non-cohort graph read files when its candidate
-// set lost something. The wire values are pinned here as literals.
+// CHAOS-12348: the two rows a graph read files when its candidate set lost
+// something: a read that is not a cohort read, and since CHAOS-12451 a cohort
+// read for the first row when a node read was cut and its population floor does
+// not show it. The wire values are pinned here as literals.
 
 func TestTheCutGraphReadCodesHaveTheirWireValues(t *testing.T) {
 	if got := ContextFabricCoverageDetailGraphHopWalkTruncated; got != "graph_hop_walk_truncated" {
