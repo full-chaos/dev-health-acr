@@ -263,4 +263,20 @@ func TestCredentialOutboxClass_RotateOfALegacyParentWritesTheParentsRevisionOneF
 	}, lifecycleRows(t, f.ctx, f.db, pid))
 	require.Equal(t, []outboxRow{{child.Credential.CredentialID, 1, "acr_credential.rotated", "user", credentialTestActorID}},
 		lifecycleRows(t, f.ctx, f.db, child.Credential.CredentialID))
+
+	// With an overlap the replaced credential is not revoked, so no revoked
+	// append can write its revision 1 as a side effect: only the first touch
+	// the rotation itself makes can. A rotation that skips it leaves the
+	// parent without any row while the rotated row names it.
+	live, err := f.service.Create(f.ctx, credentialCreateRequest("class-legacy-parent-overlap"))
+	require.NoError(t, err)
+	lid := live.Credential.CredentialID
+	_, err = f.db.ExecContext(f.ctx, `DELETE FROM acr.credential_lifecycle_outbox`)
+	require.NoError(t, err)
+	overlapChild, err := f.service.Rotate(f.ctx, auth.RotateCredentialRequest{OrgID: credentialTestOrgID, CredentialID: lid, CreatedBy: credentialTestActorID, Overlap: time.Minute})
+	require.NoError(t, err)
+	require.Equal(t, []outboxRow{{lid, 1, "acr_credential.issued", "system", ""}}, lifecycleRows(t, f.ctx, f.db, lid),
+		"the parent's revision 1 (issued, system, no ref) exists before the rotated event that names it")
+	require.Equal(t, []outboxRow{{overlapChild.Credential.CredentialID, 1, "acr_credential.rotated", "user", credentialTestActorID}},
+		lifecycleRows(t, f.ctx, f.db, overlapChild.Credential.CredentialID))
 }
