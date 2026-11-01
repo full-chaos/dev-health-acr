@@ -34,6 +34,7 @@ var serviceLimitationRecognisers = []limitationRecogniser{
 	{"work_item_member_filter", contractsv1.IsContextFabricWorkItemMemberFilterLimitation},
 	{"pull_request_status", contractsv1.IsContextFabricPullRequestStatusLimitation},
 	{"member_status", contractsv1.IsContextFabricMemberStatusLimitation},
+	{"outside_requested_repositories", contractsv1.IsContextFabricOutsideRequestedRepositoriesLimitation},
 	{"degraded_without", contractsv1.IsContextFabricDegradedWithoutLimitation},
 	{"work_item_repository", contractsv1.IsContextFabricWorkItemRepositoryLimitation},
 	{"work_item_listed", contractsv1.IsContextFabricWorkItemListedLimitation},

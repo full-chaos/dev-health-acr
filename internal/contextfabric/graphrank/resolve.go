@@ -4497,6 +4497,7 @@ func resolveSubjects(ctx context.Context, principal storage.Principal, request c
 		handleOffer,
 	)
 	offerMaterial.SubjectFloor = subjectFloorOutcome(offerFloorPoolRows, resolution, offerMaterial)
+	resolution.OutsideRequestedRepositories = len(termRetrieval.outsideRequested)
 	return resolution, offerMaterial, nil
 }
 
@@ -5197,6 +5198,10 @@ type termRetrievalOutcome struct {
 	// authorization denied them -- never an invalid or bookkeeping node, so
 	// this can never over-report.
 	authzDropped int
+	// outsideRequested holds the subjects only the requested repository
+	// narrowing refused (recordOutsideRequestedRepositories). Nil when there
+	// are none.
+	outsideRequested map[string]struct{}
 }
 
 // retrieveCandidatesForTerms runs the per-term retrieval pass: one Search per
@@ -5279,6 +5284,7 @@ func retrieveCandidatesForTerms(
 		termTraversalDegraded, termAuthzDropped := mergeSearchResults(ctx, principal, request, deps, term, results, candidatesBySubject, observationParentKey, observationBlocked, true, vectorArmSimilarity, identity, identityTerms, admission)
 		outcome.traversalDegraded += termTraversalDegraded
 		outcome.authzDropped += termAuthzDropped
+		outcome.outsideRequested = recordOutsideRequestedRepositories(principal, request, deps, term, results, admission, outcome.outsideRequested)
 	}
 	return outcome, nil
 }

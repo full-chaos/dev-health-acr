@@ -94,6 +94,9 @@ type operandSlotRun struct {
 	// still propagate to the aggregate.
 	retrievalDegraded bool
 
+	// outsideRequested is what this slot's term retrieval recorded.
+	outsideRequested map[string]struct{}
+
 	// searchLimit is the retrieval bound this slot was RESOLVED UNDER, taken
 	// from the value actually handed to the resolver rather than re-derived
 	// afterwards. Carried so the slot's own observable can report it and be
@@ -163,6 +166,18 @@ func (r comparisonResolutionRun) retrievalDegraded() bool {
 	return false
 }
 
+// outsideRequestedRepositories counts the distinct subjects the slots recorded
+// (CHAOS-12360): two operands can match the same subject.
+func (r comparisonResolutionRun) outsideRequestedRepositories() int {
+	outside := map[string]struct{}{}
+	for _, slot := range r.slots {
+		for key := range slot.outsideRequested {
+			outside[key] = struct{}{}
+		}
+	}
+	return len(outside)
+}
+
 // publishable is ruling 1A, in one place.
 //
 // Committed subjects are released ONLY when every condition holds: the pair
@@ -218,6 +233,8 @@ func publishComparisonResolution(run comparisonResolutionRun, budget int) (conte
 	resolution := contextfabric.SubjectResolution{
 		Candidates: combineSlotCandidates(run, budget),
 		Committed:  []contextfabric.SubjectRef{},
+
+		OutsideRequestedRepositories: run.outsideRequestedRepositories(),
 	}
 	bases := contextfabric.CommitBasisSet{}
 	digests := contextfabric.CommitDecisionDigestSet{}
@@ -843,6 +860,7 @@ func resolveOneOperandSlot(
 		digests:           digests,
 		receiptBound:      len(preCommitted) > 0,
 		retrievalDegraded: retrievalDegraded,
+		outsideRequested:  retrieval.outsideRequested,
 		// Recorded from the value HANDED TO the resolver, not re-derived, so
 		// the line reports the bound that ran rather than a second opinion
 		// about what it should have been.
