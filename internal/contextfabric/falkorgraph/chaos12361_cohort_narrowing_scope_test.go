@@ -185,3 +185,80 @@ func TestACohortWalkCountsAnIntermediateProjectOutOfTheNarrowingAsScope(t *testi
 		}
 	}
 }
+
+// Review r1 P2: a project-anchored pull request walk reads its members in the
+// fused link read (project -> issue -> pull request); what the narrowing
+// leaves out there is counted in that read's scope count, and the team anchor
+// walk's Info count includes it.
+func TestATeamAnchorWalkCountsALinkReadExclusion(t *testing.T) {
+	const (
+		project = "project.v2:linear:proj-p"
+		issueID = "work_item.v2:11111111-1111-1111-1111-111111111111:1"
+		pr      = "pull_request:github:acme/api:1"
+	)
+	nodes := []seededNode{
+		{kind: "project", id: project, label: "proj-p", props: map[string]interface{}{propAuthzProjects: []string{"proj-p"}, propAuthzTeams: "*", propAuthzRepos: "*"}},
+		{kind: "work_item", id: issueID, label: issueID, repos: []string{"acme/api"}, workItemType: "issue", props: map[string]interface{}{
+			propAuthzProjects: "*", propAuthzTeams: "*", graphrank.AuthorizationProjectIdentitiesAttr: []string{project},
+		}},
+		{kind: "repository", id: "repository:github:acme/api", label: "acme/api", repos: []string{"acme/api"}},
+		{kind: "pull_request", id: pr, label: pr, repos: []string{"acme/api"}, props: map[string]interface{}{propAuthzProjects: "*", propAuthzTeams: "*"}},
+	}
+	edges := []seededEdge{
+		{"BELONGS_TO_PROJECT", "work_item", issueID, "project", project, ""},
+		{"BELONGS_TO_REPOSITORY", "pull_request", pr, "repository", "repository:github:acme/api", ""},
+		linkEdge(issueID, pr, "native"),
+	}
+	production := func(conn *fakeConn) *fakeConn {
+		inner := conn.queryFunc
+		conn.queryFunc = func(ctx context.Context, key, cypher string, params map[string]interface{}, readOnly bool) ([]row, error) {
+			rows, err := inner(ctx, key, cypher, params, readOnly)
+			if err != nil {
+				return rows, err
+			}
+			for _, r := range rows {
+				for _, k := range []string{"m", "b"} {
+					if n, ok := r[k].(*node); ok {
+						if _, set := n.Properties[propAuthzTeams]; !set {
+							n.Properties[propAuthzTeams] = "*"
+						}
+						if _, set := n.Properties[propAuthzProjects]; !set {
+							n.Properties[propAuthzProjects] = "*"
+						}
+					}
+				}
+				for _, k := range []string{"r", "rl", "ra"} {
+					if e, ok := r[k].(*edge); ok {
+						e.Properties[propAuthzProjects], e.Properties[propAuthzTeams] = "*", "*"
+						if _, set := e.Properties[propAuthzRepos]; !set {
+							e.Properties[propAuthzRepos] = []string{"acme/api"}
+						}
+					}
+				}
+			}
+			return rows, nil
+		}
+		return conn
+	}
+	anchor := contextfabric.SubjectRef{Kind: contextfabric.SubjectProject, CanonicalID: project, Label: "proj-p"}
+	for name, tc := range map[string]struct {
+		scope            contextfabric.RequestedScope
+		members, outside int
+	}{
+		"no narrowing": {contextfabric.RequestedScope{}, 1, 0},
+		"another project": {contextfabric.RequestedScope{ProjectIDs: []string{"proj-1"},
+			ProjectNarrowing: &contractsv1.ContextFabricProjectNarrowing{Identities: []string{"project.v2:linear:proj-1"}, Complete: true}}, 0, 1},
+	} {
+		walk, err := newFakeAdapter(t, production(seededGraphConn(nodes, edges))).teamAnchorMembers(context.Background(), "key", "org-1", storage.Principal{OrgID: "org-1"}, tc.scope, anchor, treePullRequest, 25, temporalFilter{}, memberStatusPredicate{})
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		var tally teamAnchorWalkTally
+		tally.add(walk)
+		decision := tally.decision(contextfabric.SubjectProject, contextfabric.SubjectPullRequest, 1, nil)
+		members := len(walk.nodes)
+		if members != tc.members || walk.denied != 0 || decision.ProjectExcluded != tc.outside {
+			t.Fatalf("%s: members=%d denied=%d link excluded=%d hop excluded=%d info excluded=%d, want %d 0 %d", name, members, walk.denied, walk.projectExcluded, len(walk.hopProjectExcluded), decision.ProjectExcluded, tc.members, tc.outside)
+		}
+	}
+}

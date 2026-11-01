@@ -59,7 +59,9 @@ func (t *teamAnchorWalkTally) add(walk treeWalk) {
 	t.ran = true
 	t.members += len(walk.nodes)
 	t.denied += walk.denied
-	t.projectExcluded += len(walk.hopProjectExcluded)
+	// Hop exclusions and the fused link read's (review r1): disjoint, since
+	// an excluded node is never walked further.
+	t.projectExcluded += len(walk.hopProjectExcluded) + walk.projectExcluded
 	t.truncated = t.truncated || walk.truncated
 	t.anchorDenied = t.anchorDenied || walk.anchorDenied
 }
