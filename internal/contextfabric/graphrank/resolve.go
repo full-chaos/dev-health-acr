@@ -1805,6 +1805,18 @@ type ResolutionTraceEvent struct {
 	// event came from a caller-explicit subject_handle rather than the
 	// shadow round's attested satisfier.
 	CensusCommitHandleExplicit bool
+	// CensusListed, CensusListingReads, CensusListingRefused,
+	// CensusListingElapsedMs, CensusListingOutcome and CensusListingReason
+	// (evidence_census_listing stage only, CHAOS-12467): what listing a census's
+	// satisfiers as candidates did. Counts and closed values, never an id: the
+	// satisfier ids are not traced (slice B doc §4). CensusCount carries the count
+	// the listing spoke for.
+	CensusListed           int
+	CensusListingReads     int
+	CensusListingRefused   int
+	CensusListingElapsedMs int64
+	CensusListingOutcome   string
+	CensusListingReason    string
 	// ShadowSourceNativeMatchCount/ShadowSourceNativeAnyResolved
 	// (evidence_source_native stage ONLY, CHAOS-3899 WIDENING measurement --
 	// chris-ratified pre-registered shadow measurement, 2026-08-19): the
@@ -4076,8 +4088,11 @@ func resolveSubjects(ctx context.Context, principal storage.Principal, request c
 	// CHAOS-12456 ruling 1: searchTruncated is set before authorization, so
 	// rows a restricted caller cannot see fill the page and would decide
 	// whether its round runs. With a bound handle the round runs either way.
-	stalledForCensus := len(resolution.Committed) == 0 && (searchTruncated || grantScopedHandleBound(principal, request))
+	// CHAOS-12467 ruling 1: the same for every caller but project-only. An
+	// unrestricted caller was told "found no candidate" with no census asked.
+	stalledForCensus := len(resolution.Committed) == 0 && (searchTruncated || handleBoundRound(principal, request))
 	var handleRound workItemHandleRound
+	var undecidingHandle *BoundHandle
 	if !offersOnly && deps.CensusFunc != nil && (stalledForCensus || committedScopeAnchorShadowsHandle(request.Question, resolution.Committed, frame)) {
 		// CHAOS-4300: false -- this is the pre-existing stalled-resolution
 		// call site, not the caller-hint short circuit's own new call above.
@@ -4124,6 +4139,11 @@ func resolveSubjects(ctx context.Context, principal storage.Principal, request c
 					resolution.RetrievalDegraded = retrievalDegraded || coverageFloorDegraded || traversalDegraded > 0
 				}
 			}
+		}
+		// CHAOS-12467: a census that counted a subject the turn did not commit
+		// lists it. After the commit decision, so it cannot change that decision.
+		if stalledForCensus {
+			resolution, undecidingHandle = listCensusSatisfiers(ctx, principal, request, deps, attestation, resolution)
 		}
 		// CHAOS-3896 Slice B: presentation only -- SurvivorsFirstOrder's own
 		// doc comment is the contract (same membership, same length, order
@@ -4371,6 +4391,7 @@ func resolveSubjects(ctx context.Context, principal storage.Principal, request c
 	// unconditional kind_offer event candidateOfferDiag already does.
 	handleOffer, handleOfferDiag := handleOfferMaterial(request.Question, request.SubjectHandles, deps.HandleGrammarChecker, kindOfferCandidates)
 	handleOffer = redeemableHandleOffer(principal, handleOffer, handleRound, kindOfferCandidates)
+	handleOffer = withoutUndecidingHandle(handleOffer, undecidingHandle)
 	// CHAOS-4012 v22: offerKind/candidateOfferCount ride the SAME
 	// unconditional "kind_offer" stage kind_offer's own fields already use
 	// (team-lead ruling: same-change telemetry) -- offerKind is "kind",
@@ -5474,10 +5495,17 @@ func grantScopedCensus(principal storage.Principal) bool {
 	return auth.ClassifyGrant(principal) == auth.GrantRestricted
 }
 
-// grantScopedHandleBound reports a restricted caller's question that binds a
-// handle: its census round does not depend on the search page.
-func grantScopedHandleBound(principal storage.Principal, request contextfabric.InvestigationRequest) bool {
-	return grantScopedCensus(principal) && len(BindHandles(request.Question)) > 0
+// handleBoundRound reports a question whose handle runs the census round whatever
+// the search says. A restricted caller's round does not depend on the search page
+// (CHAOS-12456). Neither does an unrestricted caller's with one handle
+// (CHAOS-12467): for it two handles stay a truncated search's question. A
+// project-only caller holds neither shape of grant, so it never does.
+func handleBoundRound(principal storage.Principal, request contextfabric.InvestigationRequest) bool {
+	handles := len(BindHandles(request.Question))
+	if grantScopedCensus(principal) {
+		return handles > 0
+	}
+	return handles == 1 && scopesUnrestricted(principal.RepositoryScopes)
 }
 
 // repositoryNarrowedInsideGrant is a restricted caller's repository narrowing.

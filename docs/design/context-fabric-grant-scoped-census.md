@@ -1,7 +1,7 @@
 # Grant-scoped evidence census
 
-CHAOS-12452 (PR1) and CHAOS-12456 (PR2). Plans and rulings: the tickets. This
-records what shipped.
+CHAOS-12452 (PR1), CHAOS-12456 (PR2) and CHAOS-12467 (the listing). Plans and
+rulings: the tickets. This records what shipped.
 
 ## The rule
 
@@ -59,6 +59,64 @@ inside subject committed only beside hidden rows
 (`TestHiddenRowsInAFullPageDoNotDecideARestrictedRound`). For a restricted caller
 with a bound handle and nothing committed, the round now runs whatever
 `searchTruncated` says.
+
+CHAOS-12467 ruling 1 extends this to every caller but project-only: an unrestricted
+caller with one bound handle and nothing committed runs the round, whatever the
+search says. Before, an empty search gave that caller "Retrieval found no candidate"
+with no census asked. **This changes what an unrestricted caller gets: a lone
+satisfier now commits where it gave `no_match`.** The line under Gates stands: for an
+unrestricted principal, a satisfier outside the request must not decide
+(`TestARequestedRepositoryStillDecidesForAnUnrestrictedCaller`). Two handles stay a
+truncated search's question for that caller.
+
+## When a census counts more than it commits
+
+A census count must never read as "found nothing". `listCensusSatisfiers`
+(`graphrank/census_satisfier_listing.go`) runs after the commit decision, for the kind
+the question's one handle was applied to, when nothing committed. It lists what the
+census proved as ambiguous candidates, so it cannot commit. An anchor-only census
+counts a population and is never listed.
+
+| Census | Result | Next turn |
+| --- | --- | --- |
+| 1, committed | unchanged | |
+| 1, not committed (a rival hypothesis) | listed | a receipt, or `repos=` |
+| 1, the graph or the gate refused it | `no_match`, the count sentence (a lone work item for a restricted caller: its own sentence) | `repos=`, or retry |
+| 2 to K | `clarification_required`, all listed | a receipt, or `repos=` |
+| K+1 to 999 | `clarification_required`, K listed, the partial sentence | a receipt, or `repos=` |
+| Over 999: no ids held | `no_match`, the count sentence | `repos=` |
+| A set that did not close; every id refused | `no_match`, the count sentence | `repos=` |
+| `narrowed_to_many` | the kept ids only | a receipt |
+| `narrowed_to_one` | commits, unchanged | |
+| `narrowed_to_none`, team | all listed: with no in-team offer, today's offers stand (Anchor B) | a receipt |
+| `narrowed_to_none`, repository | unchanged: the narrowing's own sentence | widen |
+| `census_truncated`, `satisfier_read_failed` | `no_match`, the count sentence: a narrowing the caller asked for is never dropped in silence | `repos=` |
+| `census_error`, deadline, historical axis, no census | unchanged: nothing was counted | |
+| Clarification not allowed | `no_match`, candidates attached, the existing sentence | a receipt |
+
+- **K** is `min(MaxSubjectCandidates, 25)`, the bound on a narrowing's keyed reads.
+  Below 2 nothing is listed, and the count is stated. Reads are bounded by K too, on
+  one deadline. Over the set budget (999) no statement is added.
+- **Order** is sorted canonical id. Satisfiers go ahead of the pool, so a noisy pool
+  cannot fill the budget.
+- **The sentences** are `ContextFabricCensusUnlistedLimitation` and
+  `ContextFabricCensusListedLimitation`. One text for every cause, a count and never
+  a name. With nothing listed the sentence is checked ahead of the floor and the
+  exclusion prompt: both would be false in that state, and a clarification with
+  nothing to redeem is refused (CHAOS-5637).
+- **A handle two subjects satisfy is not offered.** A redeemed handle never reaches a
+  commit, so the option would loop. Candidates carry receipts instead.
+- **Labels are the server's.** A label is the handle, the caller's granted slug or the
+  tracker, and the title unless the title is a raw id (CHAOS-12468). `matched_terms`
+  holds the handle as the question wrote it, never the census marker. The slug comes
+  from `auth.RepositoryAllowed`, never from its position in the node's list: a node can
+  list an old slug. A pool-built candidate keeps its label, so the prompt's id suffix
+  cue can still reach one (CHAOS-12468).
+- **Side channels.** The ids are inside the grant, each passes the node gate, and the
+  trace carries counts only (`evidence_census_listing`). Outside rows change no
+  candidate, label, offer, sentence, trace, statement or graph read
+  (`TestAListingChangesNothingOutsideTheGrant`). Project-only never reaches the census,
+  so it gets none of this.
 
 ## Gates
 
@@ -156,7 +214,7 @@ A requested repository narrows the census, so a zero there gives neither sentenc
 
 **Handles.** A linked item passes `VerifyHandle`, fresh and remembered. A work-item
 handle option mints for a restricted caller only from evidence inside the grant: an
-inside count of at least 1, or a candidate the node gate admitted. So no option
+inside count of exactly 1, or a candidate the node gate admitted. So no option
 dead-ends. A remembered handle that fails its reverify is echoed as `carried`,
 `vetoed_unresolved`, so it no longer vanishes in telemetry alone.
 

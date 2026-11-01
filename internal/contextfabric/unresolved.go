@@ -352,6 +352,10 @@ func noMatchLimitationSubjectNotFound(subjectTerms []string, requestedKind Subje
 	return head + ". Nothing was offered and no canonical facts were read. Candidates that matched only part of the name were not offered. Name the subject you mean, or rephrase the question so it names one."
 }
 
+// censusUnlistedTerminalReason (CHAOS-12467): a census counted a subject and the
+// turn could not list any. It is not an empty pool.
+const censusUnlistedTerminalReason = "census_unlisted"
+
 // noMatchRequestedKind is the kind the question asked about, when one is
 // determinable: the winning reading's requested kind, else the caller's
 // single explicit expected kind.
@@ -626,6 +630,13 @@ func (e *Engine) terminalResult(
 		limitations, linkDisplaced = appendBoundedLimitations(limitations, []string{resolution.WorkItemLinkLimitation})
 		conflictDisplaced += linkDisplaced
 	}
+	// CHAOS-12467: a count this result does not list in full. With nothing listed
+	// it is already the terminal's own sentence, and the append dedupes it.
+	if resolution.CensusLimitation != "" {
+		var censusDisplaced int
+		limitations, censusDisplaced = appendBoundedLimitations(limitations, []string{resolution.CensusLimitation})
+		conflictDisplaced += censusDisplaced
+	}
 	answer := statusSentence(status, resolution)
 	if status == InvestigationClarificationRequired && resolution.ClarificationPrompt != "" {
 		answer += " " + resolution.ClarificationPrompt
@@ -898,6 +909,11 @@ func subjectlessTerminalReason(gate FrameGate, resolution SubjectResolution, sub
 	if len(resolution.Candidates) > 0 {
 		return "ambiguous"
 	}
+	// CHAOS-12467: ahead of the exclusion arm, as the terminal is: a census
+	// counted a subject, so this pool is neither withheld nor empty.
+	if resolution.CensusLimitation != "" && !resolution.GraphNotProjected {
+		return censusUnlistedTerminalReason
+	}
 	// Checked BEFORE graph_not_projected and the authz/empty arms, because
 	// it is the most specific claim available about WHY this pool is empty:
 	// the other three all describe what retrieval found, and this one
@@ -1082,6 +1098,12 @@ func resolveTerminalStatus(request InvestigationRequest, resolution *SubjectReso
 		// by this ticket's own test rather than by inspection. The two
 		// arms differ in STATUS for two different reasons; they never
 		// differed in what actually happened to the pool.
+		// CHAOS-12467: ahead of the floor and the exclusion prompt. A census counted
+		// a subject, so "nothing matched" and "only by semantic similarity" are
+		// both false here, and with nothing listed there is nothing to confirm.
+		if resolution.CensusLimitation != "" && !resolution.GraphNotProjected {
+			return InvestigationNoMatch, resolution.CensusLimitation
+		}
 		if subjectFloor.Refused && !resolution.GraphNotProjected {
 			return InvestigationNoMatch, noMatchLimitationOfferFloorEmptied
 		}

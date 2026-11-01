@@ -158,6 +158,8 @@ func goVarName(e Event) string {
 		return "EvidenceProbe"
 	case EvidenceCensusCommit.ID:
 		return "EvidenceCensusCommit"
+	case EvidenceCensusListing.ID:
+		return "EvidenceCensusListing"
 	case EvidenceSourceNative.ID:
 		return "EvidenceSourceNative"
 	case EvidenceSourceNativeProbe.ID:
