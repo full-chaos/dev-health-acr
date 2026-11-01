@@ -744,8 +744,11 @@ admits is absent, not current, or cut: the cohort's population floor (the
 cohort is truncated; an empty member set has a population lower bound), on its
 own pool-truncation arm `team_narrowing_undecided`, which no census covers (a
 census fetches nodes, not their ownership). The member status walk's matches are
-narrowed the same way before they set the population; its count-only
-disclosures are CHAOS-12352. Each such read logs one
+narrowed the same way before they set the population, and its count-only
+disclosures are read inside the narrowing too (CHAOS-12352): the measured zero,
+the outside-the-set count (a missing ownership makes it a lower bound, never a
+floor), and the pool cut, whose total is stated only when every committed anchor
+is currently owned by a requested team. Each such read logs one
 `contextfabric.team_narrowing_general_read` line (requested teams, subjects
 decided, subjects excluded, and the floor value; log-only). A non-cohort read is
 not floored, the same as a truncated hop walk today (CHAOS-12348). Kinds that
