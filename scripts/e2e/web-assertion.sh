@@ -11,7 +11,7 @@ if [[ $# -gt 0 ]]; then
 fi
 
 case "$scenario" in
-  happy|wrong-issuer|wrong-audience|wrong-alg|wrong-kid|expired|future|overlong|method|path|body|removed-key|foreign-scope|write-route|token-confusion) ;;
+  happy|wrong-issuer|wrong-audience|wrong-alg|wrong-kid|expired|future|overlong|method|path|body|removed-key|retired-key|retiring-key|foreign-scope|write-route|token-confusion) ;;
   *)
     printf 'unsupported web assertion scenario: %s\n' "$scenario" >&2
     exit 64
