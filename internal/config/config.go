@@ -305,6 +305,7 @@ type Config struct {
 	CORSAllowedOrigins                   []string // CHAOS-12086: exact browser origins for CORS; empty answers none (cors.go)
 	DevHealthEntitlementURL              string
 	DevHealthEntitlementTokenFile        string
+	DevHealthEntitlementCredential       string
 	DevHealthEntitlementTimeout          time.Duration
 	DevHealthEntitlementMaxResponseBytes int64
 	DevHealthEntitlementProxyURL         string
@@ -448,6 +449,7 @@ func load(lookup lookupEnv) (Config, error) {
 		DevHealthEntitlementTokenFile:  stringValue(lookup, "ACR_DEV_HEALTH_ENTITLEMENT_TOKEN_FILE", ""),
 		DevHealthEntitlementProxyURL:   stringValue(lookup, "ACR_DEV_HEALTH_ENTITLEMENT_PROXY_URL", ""),
 		DevHealthEntitlementCACertPath: stringValue(lookup, "ACR_DEV_HEALTH_ENTITLEMENT_CA_BUNDLE", ""),
+		DevHealthEntitlementCredential: strings.TrimSpace(stringValue(lookup, "ACR_DEV_HEALTH_ENTITLEMENT_CREDENTIAL", "")),
 		WebAssertionIssuer:             stringValue(lookup, "ACR_WEB_ASSERTION_ISSUER", ""),
 		WebAssertionAudience:           stringValue(lookup, "ACR_WEB_ASSERTION_AUDIENCE", ""),
 		WebAssertionJWKSFile:           stringValue(lookup, "ACR_WEB_ASSERTION_JWKS_FILE", ""),

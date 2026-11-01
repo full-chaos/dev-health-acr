@@ -359,7 +359,11 @@ SELECT `+submissionColumns+` FROM acr.context_fabric_investigation_submissions
 }
 
 // FinishSubmission implements contextfabric.SubmissionStore: one conditional
-// update on a running record, then the read.
+// update on a running record, then the read. The served result is stored for
+// the record when it is bound to the record's owner by the one owner rule
+// (ownerMatchSQL): a reused answer can be from another credential of the same
+// user on the same surface, so a later Connect, and the legacy pair alone would
+// mark a stored answer unsaved.
 func (s *Store) FinishSubmission(ctx context.Context, key contextfabric.SubmissionKey, servedResultID string, now time.Time) (contextfabric.SubmissionRecord, contextfabric.SubmissionCompletion, error) {
 	if err := s.configured(); err != nil {
 		return contextfabric.SubmissionRecord{}, "", err
@@ -377,9 +381,9 @@ func (s *Store) FinishSubmission(ctx context.Context, key contextfabric.Submissi
 	var stored sql.NullBool
 	err := s.db.QueryRowContext(ctx, `
 WITH served AS (
-    SELECT EXISTS (SELECT 1 FROM acr.context_fabric_investigation_results
-                    WHERE result_id = $5 AND org_id = $1 AND $5 <> ''
-                      AND submission_owner_auth_method = $2 AND submission_owner_subject = $3) AS stored
+    SELECT EXISTS (SELECT 1 FROM acr.context_fabric_investigation_results r
+                    WHERE r.result_id = $5 AND r.org_id = $1 AND $5 <> ''
+                      AND `+ownerMatchSQL("r.submission_owner_auth_method", "r.submission_owner_subject", "r.submission_owner_user_id", "r.submission_owner_surface", "$2", "$3", "$7", "$8")+`) AS stored
 )
 UPDATE acr.context_fabric_investigation_submissions s
    SET state = CASE WHEN (SELECT stored FROM served) THEN 'done' ELSE 'done_unsaved' END,
@@ -388,7 +392,7 @@ UPDATE acr.context_fabric_investigation_submissions s
  WHERE s.org_id = $1 AND s.owner_auth_method = $2 AND s.owner_subject = $3 AND s.submission_id = $4
    AND s.state = 'running'
 RETURNING (SELECT stored FROM served)`,
-		key.OrgID, key.Owner.AuthenticationMethod, key.Owner.Subject, key.SubmissionID, servedResultID, now.UTC()).Scan(&stored)
+		key.OrgID, key.Owner.AuthenticationMethod, key.Owner.Subject, key.SubmissionID, servedResultID, now.UTC(), key.Owner.UserID, string(key.Owner.Surface)).Scan(&stored)
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return contextfabric.SubmissionRecord{}, "", fmt.Errorf("finish investigation submission: %w", sanitizeError(err))
 	}

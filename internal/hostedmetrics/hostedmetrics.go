@@ -36,11 +36,13 @@ const (
 	// CHAOS-11910: a stage transition the investigation event sink refused
 	// because its buffer was full.
 	InvestigationEventsDroppedName = "acr_investigation_events_dropped_total"
+	// CHAOS-11203: one count per Dev Health entitlement client call, by the credential it carries.
+	EntitlementCredentialName = "acr_entitlement_credential_total"
 )
 
 // Names lists every instrument this package creates.
 func Names() []string {
-	return []string{ToolCallsName, ToolLatencyName, AnswersName, BudgetRefusalsName, AnswerReuseName, RequirementOutcomesName, FactReadAbortsName, InvestigationLatencyName, ClickHouseNearMemoryCapName, ClickHousePeakUnobservedName, OutcomeRowsEvictedName, LimitationSkippedName, QueryEmbedFallbacksName, ProjectionPairFailuresName, GraphBootstrapWaitsName, GraphBootstrapWaitName, InvestigationEventsDroppedName}
+	return []string{ToolCallsName, ToolLatencyName, AnswersName, BudgetRefusalsName, AnswerReuseName, RequirementOutcomesName, FactReadAbortsName, InvestigationLatencyName, ClickHouseNearMemoryCapName, ClickHousePeakUnobservedName, OutcomeRowsEvictedName, LimitationSkippedName, QueryEmbedFallbacksName, ProjectionPairFailuresName, GraphBootstrapWaitsName, GraphBootstrapWaitName, InvestigationEventsDroppedName, EntitlementCredentialName}
 }
 
 // LatencyBucketsSeconds are the explicit histogram boundaries. They reach 300 s
@@ -87,6 +89,7 @@ type Instruments struct {
 	bootstrapWaits     metric.Int64Counter
 	bootstrapWait      metric.Float64Histogram
 	eventsDropped      metric.Int64Counter
+	entitlementCred    metric.Int64Counter
 	vocab              Vocabularies
 }
 
@@ -125,6 +128,7 @@ func New(meter metric.Meter, vocab Vocabularies) (*Instruments, error) {
 		bootstrapWaits:     counter(GraphBootstrapWaitsName, "Graph writers that waited behind another writer's bootstrap of the same graph key, by outcome."),
 		bootstrapWait:      histogram(GraphBootstrapWaitName, "Time a graph writer waited behind another writer's bootstrap of the same graph key, by outcome."),
 		eventsDropped:      counter(InvestigationEventsDroppedName, "Investigation stage transitions the event stream sink dropped because its buffer was full, by stage."),
+		entitlementCred:    counter(EntitlementCredentialName, "Dev Health entitlement client calls by credential and outcome."),
 		vocab:              vocab,
 	}
 	if err := errors.Join(errs...); err != nil {
@@ -212,6 +216,22 @@ func (i *Instruments) InvestigationEventsDropped(ctx context.Context, stage stri
 		return
 	}
 	i.eventsDropped.Add(ctx, count, metric.WithAttributes(attribute.String("stage", bucket(stage, investigationEventStages))))
+}
+
+var (
+	entitlementCredentials = []string{"service_token", "workload"}
+	entitlementOutcomes    = []string{"sent", "token_unavailable"}
+)
+
+// EntitlementCredential records one Dev Health entitlement client call: which credential it carries, and whether it
+// was sent or held back because no workload token could be minted.
+func (i *Instruments) EntitlementCredential(ctx context.Context, credential, outcome string) {
+	if i == nil {
+		return
+	}
+	i.entitlementCred.Add(ctx, 1, metric.WithAttributes(
+		attribute.String("class", bucket(credential, entitlementCredentials)),
+		attribute.String("outcome", bucket(outcome, entitlementOutcomes))))
 }
 
 // InvestigationLatency records one investigation request's latency by its

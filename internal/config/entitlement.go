@@ -13,9 +13,31 @@ const (
 	EntitlementModeRemote EntitlementMode = "remote"
 )
 
+// EntitlementCredential names the credential the Dev Health entitlement client sends: the service token read from
+// ACR_DEV_HEALTH_ENTITLEMENT_TOKEN_FILE, or a workload token from the auth workload client. The flag is the only
+// switch; there is no runtime fallback from one to the other.
+type EntitlementCredential string
+
+const (
+	EntitlementCredentialServiceToken EntitlementCredential = "service_token"
+	EntitlementCredentialWorkload     EntitlementCredential = "workload"
+)
+
+// EntitlementCredential reports the credential ACR_DEV_HEALTH_ENTITLEMENT_CREDENTIAL selects; unset is the service
+// token.
+func (c Config) EntitlementCredential() EntitlementCredential {
+	if EntitlementCredential(c.DevHealthEntitlementCredential) == EntitlementCredentialWorkload {
+		return EntitlementCredentialWorkload
+	}
+	return EntitlementCredentialServiceToken
+}
+
 // EntitlementMode reports the automatically selected entitlement provider.
 // Validation guarantees local mode is reachable only in development and test.
 func (c Config) EntitlementMode() EntitlementMode {
+	if c.EntitlementCredential() == EntitlementCredentialWorkload {
+		return EntitlementModeRemote
+	}
 	if (c.Environment == "development" || c.Environment == "test") && strings.TrimSpace(c.DevHealthEntitlementURL) == "" && strings.TrimSpace(c.DevHealthEntitlementTokenFile) == "" {
 		return EntitlementModeLocal
 	}
@@ -23,6 +45,13 @@ func (c Config) EntitlementMode() EntitlementMode {
 }
 
 func validateEntitlementConfiguration(c Config) error {
+	switch c.DevHealthEntitlementCredential {
+	case "", string(EntitlementCredentialServiceToken):
+	case string(EntitlementCredentialWorkload):
+		return validateWorkloadEntitlement(c)
+	default:
+		return errors.New("ACR_DEV_HEALTH_ENTITLEMENT_CREDENTIAL must be service_token or workload")
+	}
 	urlConfigured := strings.TrimSpace(c.DevHealthEntitlementURL) != ""
 	tokenConfigured := strings.TrimSpace(c.DevHealthEntitlementTokenFile) != ""
 	if urlConfigured != tokenConfigured {
@@ -54,4 +83,16 @@ func validateDevHealthEntitlementURL(c Config) error {
 		return nil
 	}
 	return errors.New("ACR_DEV_HEALTH_ENTITLEMENT_URL must use HTTP or HTTPS")
+}
+
+// validateWorkloadEntitlement is the workload credential's input check: the origin and the auth workload client are
+// required. A token file may stay set (a rollback needs it mounted); the workload credential never reads it.
+func validateWorkloadEntitlement(c Config) error {
+	if strings.TrimSpace(c.DevHealthEntitlementURL) == "" {
+		return errors.New("ACR_DEV_HEALTH_ENTITLEMENT_URL is required when ACR_DEV_HEALTH_ENTITLEMENT_CREDENTIAL is workload")
+	}
+	if !c.AuthWorkload.Enabled() {
+		return errors.New("ACR_AUTH_WORKLOAD_* must be configured when ACR_DEV_HEALTH_ENTITLEMENT_CREDENTIAL is workload")
+	}
+	return validateDevHealthEntitlementURL(c)
 }

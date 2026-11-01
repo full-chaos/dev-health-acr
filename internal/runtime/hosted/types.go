@@ -284,7 +284,7 @@ type episodeServiceRequest struct {
 type componentFactories struct {
 	openPostgres   func(context.Context, config.Config, *slog.Logger) (postgresComponents, error)
 	openClickHouse func(context.Context, clickHouseOpenRequest) (clickHouseComponents, error)
-	newEntitlement func(config.Config) (entitlementChecker, error)
+	newEntitlement func(config.Config, entitlementDeps) (entitlementChecker, error)
 	newEpisode     func(episodeServiceRequest) (api.EpisodeCreator, error)
 }
 
