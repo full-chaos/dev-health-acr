@@ -11001,6 +11001,7 @@ type EvidenceRoundFields struct {
 	ShadowDIdentityHash                string
 	ShadowPreconditionUnproven         bool
 	ShadowUnscopedVisibility           bool
+	ShadowGrantScoped                  bool
 	ShadowNonCensusedSurvivor          bool
 	ShadowHandleGrammarBound           bool
 	ShadowAnchorUniqueClaimant         bool
@@ -11030,7 +11031,7 @@ type EvidenceRoundFields struct {
 
 // NewEvidenceRoundFields is the generated constructor for EvidenceRoundFields -- every
 // field EvidenceRound.Fields declares is a required parameter.
-func NewEvidenceRoundFields(requestID string, shadowOutcome string, shadowReason string, shadowDIdentityHash string, shadowPreconditionUnproven bool, shadowUnscopedVisibility bool, shadowNonCensusedSurvivor bool, shadowHandleGrammarBound bool, shadowAnchorUniqueClaimant bool, shadowAnchorReceiptConfirmed bool, shadowKindsCensused int, shadowKindInsensitivityEvaluated bool, shadowKindInsensitivityOutcome string, shadowKindInsensitivityMode string, shadowHandleInsensitivityEvaluated bool, shadowHandleInsensitivityOutcome string, shadowCallerHintShortCircuit bool, shadowSurvivorExcludedReason string, shadowTrigger string, shadowCallerNarrowing string, shadowNarrowedFrom int, shadowNarrowedTo int) EvidenceRoundFields {
+func NewEvidenceRoundFields(requestID string, shadowOutcome string, shadowReason string, shadowDIdentityHash string, shadowPreconditionUnproven bool, shadowUnscopedVisibility bool, shadowGrantScoped bool, shadowNonCensusedSurvivor bool, shadowHandleGrammarBound bool, shadowAnchorUniqueClaimant bool, shadowAnchorReceiptConfirmed bool, shadowKindsCensused int, shadowKindInsensitivityEvaluated bool, shadowKindInsensitivityOutcome string, shadowKindInsensitivityMode string, shadowHandleInsensitivityEvaluated bool, shadowHandleInsensitivityOutcome string, shadowCallerHintShortCircuit bool, shadowSurvivorExcludedReason string, shadowTrigger string, shadowCallerNarrowing string, shadowNarrowedFrom int, shadowNarrowedTo int) EvidenceRoundFields {
 	return EvidenceRoundFields{
 		RequestID:                          requestID,
 		ShadowOutcome:                      shadowOutcome,
@@ -11038,6 +11039,7 @@ func NewEvidenceRoundFields(requestID string, shadowOutcome string, shadowReason
 		ShadowDIdentityHash:                shadowDIdentityHash,
 		ShadowPreconditionUnproven:         shadowPreconditionUnproven,
 		ShadowUnscopedVisibility:           shadowUnscopedVisibility,
+		ShadowGrantScoped:                  shadowGrantScoped,
 		ShadowNonCensusedSurvivor:          shadowNonCensusedSurvivor,
 		ShadowHandleGrammarBound:           shadowHandleGrammarBound,
 		ShadowAnchorUniqueClaimant:         shadowAnchorUniqueClaimant,
@@ -11078,6 +11080,7 @@ func (f EvidenceRoundFields) SlogArgs() []any {
 		"shadow_d_identity_hash", contextfabric.SanitizeLogAttr(f.ShadowDIdentityHash),
 		"shadow_precondition_unproven", f.ShadowPreconditionUnproven,
 		"shadow_unscoped_visibility", f.ShadowUnscopedVisibility,
+		"shadow_grant_scoped", f.ShadowGrantScoped,
 		"shadow_non_censused_survivor", f.ShadowNonCensusedSurvivor,
 		"shadow_handle_grammar_bound", f.ShadowHandleGrammarBound,
 		"shadow_anchor_unique_claimant", f.ShadowAnchorUniqueClaimant,

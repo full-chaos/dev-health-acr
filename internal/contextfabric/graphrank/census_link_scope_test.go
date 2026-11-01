@@ -148,16 +148,14 @@ func TestAWorkItemCensusUnderARequestedScopeCountsTheLinkedSatisfiers(t *testing
 	}
 }
 
-// TestALinkScopedSatisfierStillMeetsTheCallersGrants: the census does not run
-// for a restricted caller, and the commit of a link-scoped satisfier tests the
-// issue against the rest of the request.
+// TestALinkScopedSatisfierStillMeetsTheCallersGrants: a work-item census for a
+// restricted caller decides nothing (CHAOS-12452 PR2 owns that read), and the
+// commit of a link-scoped satisfier tests the issue against the rest of the
+// request.
 func TestALinkScopedSatisfierStillMeetsTheCallersGrants(t *testing.T) {
 	t.Parallel()
-	restricted := storage.Principal{OrgID: "org_1", RepositoryScopes: []string{linkScopeSlug}}
-	resolution, _, probe := resolveLinkScoped(t, restricted, walkedPopulation([]string{linkScopeItem(1)}, true, nil))
-	if len(probe.filters) != 0 {
-		t.Fatalf("census ran %d times for a restricted caller, want none", len(probe.filters))
-	}
+	restricted := restrictedCaller(t, linkScopeSlug)
+	resolution, _, _ := resolveLinkScoped(t, restricted, walkedPopulation([]string{linkScopeItem(1)}, true, nil))
 	for _, s := range resolution.Committed {
 		if s.Kind == contextfabric.SubjectWorkItem {
 			t.Fatalf("committed %s for a restricted caller", s.CanonicalID)

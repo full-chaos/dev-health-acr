@@ -21,6 +21,20 @@ const maxCensusRepositoryFilter = 200
 // that is not a well-formed owner/name or owner/* entry, or too many slugs --
 // so the caller falls back to the post-filter alone.
 func withRepositoryFilter(kind graphrank.CensusKind, predicate CensusPredicate, slugs []string) (CensusPredicate, bool) {
+	return andRepositories(kind, predicate, slugs, "census_repo")
+}
+
+// withGrantFilter ANDs the caller's repository grant onto predicate, through
+// the same restriction under its own binding names, so a requested narrowing
+// can sit beside it (CHAOS-12452). A false return is the end of the read: a
+// grant has no post-filter to fall back to, so NewCensusFunc refuses the
+// census with no statement. The same conditions make it false, and a reserved
+// value is one of the slugs that is not well-formed.
+func withGrantFilter(kind graphrank.CensusKind, predicate CensusPredicate, grant []string) (CensusPredicate, bool) {
+	return andRepositories(kind, predicate, grant, "census_grant")
+}
+
+func andRepositories(kind graphrank.CensusKind, predicate CensusPredicate, slugs []string, bindingPrefix string) (CensusPredicate, bool) {
 	entry, ok := censusKindRegistryEntries[kind]
 	if !ok {
 		return predicate, false
@@ -33,7 +47,7 @@ func withRepositoryFilter(kind graphrank.CensusKind, predicate CensusPredicate, 
 	var bindings []contextpacket.ClickHouseBinding
 	for i, slug := range slugs {
 		value := strings.ToLower(strings.TrimSpace(slug))
-		name := fmt.Sprintf("census_repo_%d", i)
+		name := fmt.Sprintf("%s_%d", bindingPrefix, i)
 		if owner, wildcard := strings.CutSuffix(value, "/*"); wildcard {
 			normalized, err := auth.NormalizeRepositorySlug(owner + "/x")
 			if err != nil || owner == "" {

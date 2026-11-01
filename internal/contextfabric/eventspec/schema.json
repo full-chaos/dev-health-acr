@@ -16328,6 +16328,11 @@
         "presence": "required"
       },
       {
+        "key": "shadow_grant_scoped",
+        "type": "bool",
+        "presence": "required"
+      },
+      {
         "key": "shadow_non_censused_survivor",
         "type": "bool",
         "presence": "required"

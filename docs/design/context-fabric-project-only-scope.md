@@ -239,6 +239,11 @@ channel that reads its repository list or hashes only that list:
   the link read, which binds no repository grant for it. A stored work-item
   tuple, a context packet, an episode write or purge and the evidence
   repository listing are refused to it too.
+- **Census (CHAOS-12452).** A restricted caller's census now runs inside its
+  repository grant (see `context-fabric-grant-scoped-census.md`). A project-only
+  caller's stays refused: `grantScopedCensus` is false by class, so its round
+  stops at `scoped_visibility`, and `ScopeCensusToCaller` binds the reserved
+  value, which every census refuses with no statement.
 - **Counts.** `withheld.edges_not_visible` and `page.examined` are unchanged:
   they are the disclosure contract, the same for a restricted caller.
 

@@ -397,7 +397,7 @@ func (e *Engine) reverifyRememberedNeed(ctx context.Context, principal storage.P
 		if e.handleVerifier == nil || entry.PatternID == "" {
 			return ConfirmedNeedMemberDropReverifyUnavailable, false
 		}
-		ok, reason := e.handleVerifier(ctx, principal.OrgID, entry.AppliedKind, entry.PatternID, entry.AppliedValue)
+		ok, reason := e.handleVerifier(ScopeCensusToCaller(ctx, principal), principal.OrgID, entry.AppliedKind, entry.PatternID, entry.AppliedValue)
 		if !ok || reason != HandleVerificationValid {
 			return ConfirmedNeedMemberDropReverifyNotConfirmed, false
 		}

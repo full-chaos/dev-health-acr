@@ -40,6 +40,13 @@ func teamNarrowedByUnrestrictedPrincipal(principal storage.Principal, request co
 		deps.TeamNarrowing != nil
 }
 
+// teamNarrowedInsideGrant is a restricted caller's team narrowing, read by the
+// census path only (CHAOS-12452): the satisfiers are already inside the grant.
+// grantScopedRequest has already refused a request that also narrows otherwise.
+func teamNarrowedInsideGrant(principal storage.Principal, request contextfabric.InvestigationRequest, deps ResolveDeps) bool {
+	return grantScopedCensus(principal) && len(request.RequestedScope.TeamIDs) > 0 && deps.TeamNarrowing != nil
+}
+
 // isIdentityMatched reports whether a candidate matched a term by identity
 // (exact label, alias or provider key): it is a subject the question names,
 // so a team narrowing never drops it (Anchor B).
@@ -176,7 +183,7 @@ func everyTermInTeam(terms []string, termInTeam map[string]bool) bool {
 // leaves the set undecided (ok false), as a work item with no walk does for a
 // repository narrowing, so nothing is narrowed on missing ownership.
 func teamNarrowingSatisfierFilter(principal storage.Principal, request contextfabric.InvestigationRequest, deps ResolveDeps) SatisfierNarrower {
-	if !teamNarrowedByUnrestrictedPrincipal(principal, request, deps) {
+	if !teamNarrowedByUnrestrictedPrincipal(principal, request, deps) && !teamNarrowedInsideGrant(principal, request, deps) {
 		return nil
 	}
 	return func(ctx context.Context, kind CensusKind, canonicalIDs []string) ([]string, bool) {
