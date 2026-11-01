@@ -81,3 +81,30 @@ func TestTheLifecycleTickInitialFailureFailsStartup(t *testing.T) {
 		t.Fatalf("err = %v: the first tick proves the privileges and fails startup", err)
 	}
 }
+
+func TestTheLifecycleTickNamesEverySkippedCredentialOnEveryTick(t *testing.T) {
+	logger, buffer := tickLogger()
+	ticker := &fakeLifecycleTicker{result: storagepostgres.LifecycleTickResult{Expired: 1, Skipped: 2, SkippedIDs: []string{"cred_bad_one", "cred_bad_two"}}}
+	stop, err := startCredentialLifecycleTick(context.Background(), ticker, logger, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = stop()
+	out := buffer.String()
+	for _, want := range []string{credentialLifecycleTickSkippedMessage, "credential_id=cred_bad_one", "credential_id=cred_bad_two", "skipped=2"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("log lacks %q: %s", want, out)
+		}
+	}
+
+	logger, buffer = tickLogger()
+	onlySkipped := &fakeLifecycleTicker{result: storagepostgres.LifecycleTickResult{Skipped: 1, SkippedIDs: []string{"cred_bad_one"}}}
+	stop, err = startCredentialLifecycleTick(context.Background(), onlySkipped, logger, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = stop()
+	if !strings.Contains(buffer.String(), "credential_id=cred_bad_one") {
+		t.Errorf("a tick that only skipped still names the credential: %s", buffer.String())
+	}
+}

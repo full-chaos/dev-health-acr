@@ -270,3 +270,25 @@ VALUES ('cred_tk_browser', $1::uuid, 'b', 'fcacr_b', 'hash-b', '["context:read"]
 	require.NoError(t, err)
 	require.Equal(t, 1, result.Credentials)
 }
+
+// One credential no event can describe (an empty scope list, written by hand)
+// must not stop the others: the tick skips it, counts it, names it, and writes
+// nothing for it, every tick.
+func TestLifecycleTick_AnEmptyScopeRowIsSkippedAndTheNormalRowsStillGetTheirEvents(t *testing.T) {
+	f := newTickFixture(t)
+	insertTickCredential(t, f.db, "cred_tk_zz_normal_expired", past, "NULL")
+	insertTickCredential(t, f.db, "cred_tk_zz_normal_live", future, "NULL")
+	insertTickCredential(t, f.db, "cred_tk_aa_noscope_expired", "'2026-11-01T00:00:00Z'::timestamptz", "NULL")
+	insertTickCredential(t, f.db, "cred_tk_aa_noscope_live", future, "NULL")
+	_, err := f.db.ExecContext(f.ctx, `UPDATE acr.client_credentials SET scopes = '[]'::jsonb WHERE credential_id LIKE 'cred_tk_aa_noscope_%'`)
+	require.NoError(t, err)
+	for tick := 1; tick <= 2; tick++ {
+		result := f.run(t, 100)
+		require.Equal(t, 2, result.Skipped, "tick %d counts both bad rows again", tick)
+		require.ElementsMatch(t, []string{"cred_tk_aa_noscope_expired", "cred_tk_aa_noscope_live"}, result.SkippedIDs)
+		require.Empty(t, f.rows(t, "cred_tk_aa_noscope_expired"), "no row for the credential no event can describe")
+		require.Empty(t, f.rows(t, "cred_tk_aa_noscope_live"))
+	}
+	require.Equal(t, "acr_credential.expired", f.rows(t, "cred_tk_zz_normal_expired")[1].EventType, "the normal expired row got its event")
+	require.Len(t, f.rows(t, "cred_tk_zz_normal_live"), 1, "and the normal live row its first touch")
+}
