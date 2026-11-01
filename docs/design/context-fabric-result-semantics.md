@@ -264,19 +264,18 @@ outlive its value.
 
 | Vocabulary | Field |
 |---|---|
-| `answer_status` | `completeness.terminal_status` |
-| `completeness_state` | `completeness.state` |
-| `requirement_outcome` | `completeness.outcomes[].outcome` |
-| `answer_impact` | `completeness.outcomes[].impact` |
+| `answer_status` | `status`, `completeness.terminal_status`, `status_correction.replaced_status` (by the rule below) |
+| `requirement_outcome` | `completeness.outcomes[].outcome`, `status_correction.deciding_outcome` |
 | `candidate_state` | `subject_resolution.candidates[].state` |
 | `prior_receipt_disposition` | `prior_subject_receipt_dispositions[].disposition` |
 | `structure_disposition` | `confirmed_structure[].disposition` |
 | `subject_kind`, `subject_kind_plural` | `cohort.kind`, `coverage.details[].kind` |
-| `member_outcome`, `member_data_completeness` | `cohort.members[].outcome`, `.data_completeness` |
-| `ranking_signal` | `drivers[].signal`, `missing_signals[]` (the prose noun) |
-| `threshold_label` | `drivers[].threshold_labels[]` |
-| `driver_window`, `driver_standing` | `drivers[].window`, `drivers[].standing` |
-| `fact_kind` | `findings[].kind`, `claimed_facts[].kind` (the registry's word) |
+| `member_outcome` | `cohort.members[].outcome` |
+| `ranking_signal` | `cohort.members[].drivers[].signal`, `.missing_signals[]` (the prose noun) |
+| `threshold_label` | `cohort.members[].drivers[].threshold_labels[]` |
+| `driver_window` | `cohort.members[].drivers[].window` |
+| `driver_standing` | `drivers[].standing` |
+| `fact_kind` | `remaining_work[].kind`, `readiness_gaps[].kind`, `conflicts[].kind`, `claimed_facts[].kind` (the registry's word) |
 | `window_relative_id`, `window_provenance` | `effective_evidence_window.relative_id`, `.provenance` |
 
 **Not served, on purpose.** `completeness.outcomes[].requirement` is not a
@@ -284,23 +283,86 @@ vocabulary: it is a composite coordinate, `obligation/role/subject`, so it takes
 the generic path. `obligation`, the cause and refinement fields, plan narrowing,
 and driver category, epistemic status and derivation stay in the fold.
 `claimed_facts[].field` and the keys of `rows[].fields` are free strings declared
-per kind (CHAOS-12418).
+per kind (CHAOS-12418). `completeness.state` and `data_completeness`
+are never shown, and `outcomes[].impact` goes to the fold (CHAOS-12245,
+CHAOS-12413): their tables are removed.
+
+**The answer status word.** One function (`ContextFabricAnswerStatusLabel`) gives
+every `answer_status:<status>`, and the note below reads it, so the two cannot
+disagree. The word for `complete` also reads the result's completeness state, so
+a value keeps one key and its word follows this result (CHAOS-12245):
+
+| Status | Completeness state | Word |
+|---|---|---|
+| `complete` | `complete` | Full answer |
+| `complete` | `not_derived`, or none | Answer |
+| `complete` | `partial`, `degraded` | Answer, not fully covered |
+| `partial` | any | Partial answer |
+| `degraded` | any | Degraded answer |
+| `clarification_required` | any | Answer needs your confirmation |
+| `no_match` | any | No answer |
+
+`no_match` says "No answer", not web's "No answer: no matching subject", because
+the stop of ruling B also ends in `no_match`. These words are in sentence case
+because a reader sees each as a whole label, and the note quotes them.
+
+**The correction note.** `status_correction:note` is one sentence the service
+composes for one result, so consumers hold no table for it (CHAOS-12413 ruling 2).
+It is the only key that is not a table row, and it is present when the result or
+`completeness` carries a status correction:
+
+> The service lowered this answer from Answer to Partial answer: health was read
+> only in part.
+
+Each status reads the function above, so the note never holds a raw status word.
+A direction reads "lowered", or "raised" for `degraded_to_partial`, the only raise.
+The clause names the obligation (the first part of `deciding_requirement`) and the
+outcome. An obligation or outcome with no word drops the clause, and a direction
+outside the vocabulary reads "changed". With no word for a status there is no note:
+a raw token is never the fallback.
 
 **Source state words.** Each state keeps its own word, because unknown, stale,
 no data, not applicable and zero are different statements (North Star check 12).
-`no_data` stays "no data": "zero rows" is true of only one of its three paths.
+`no_data` stays "no data": "zero rows" is true of only one of its three paths. A stored result reads
+today's words with no migration: `coverage.sources[].label` and `.state_label` are
+stamped from the structured source and state on the served copy (ruling 3, which
+narrows CHAOS-4690 design §7.3 for these two fields). `degraded_reasons[]` does not
+change, and no string is parsed.
 
 **Bound.** Each label is 1 to 160 characters, a key at most 128, and the map at
 most 8,192 entries, the bound of `evidence_ref_labels`. That is not the working
 limit. The map holds only the values in one result, so the whole registry is its
-ceiling: 125 entries and 5,885 bytes, 9% of the 65,536-byte answer budget.
+ceiling: 114 entries and 5,374 bytes, 8.2% of the 65,536-byte answer budget, plus
+the one note.
 
-**Rollout.** The result root is `additionalProperties:false`, and ask-dev treats
-a validation failure as an upstream failure. So the field is additive and
-optional but NOT safe on an old pin: emitting it early fails every answer. It
-ships in two acr steps around a pin train. CHAOS-12415 adds the type, schemas,
-tables and tests, and nothing sets the map (`TestNoProductionCodeSetsVocabularyLabels`).
-CHAOS-12416 composes it at serve, on a served copy, after the train.
+**Where it is composed.** `contextfabric.ServeVocabularyLabels` is the only writer
+(`TestOnlyTheServeFunctionSetsTheMap`). Two doors call it, after the document's last
+writer: `serveContextFabricInvestigationResult`, for every engine exit, fresh,
+reused or fitted, on the JSON response and the event stream; and
+`serveStoredInvestigationResultOn`, for the read by id, the replay of a done
+submission and the attach terminal. The engine saves its result before either door,
+so the stored document never carries a word
+(`TestEveryDoorThatEncodesAnAnswerComposesItsWords`). A read of a stored row
+composes the map again, so a change of the registry reaches old answers.
+
+**Budget.** The map counts against the byte budget it is served under, and a word
+never costs a row or an answer. The engine fits the document with no map. Each door
+then adds the words only if the document stays within its bound, which is the
+tighter of the service and caller bounds, less the synthesis input on a client
+turn. It sheds the map first, then the stamped source words, and the input document
+stands if neither fits. A document over the caller's bound goes to the projection
+as before: the projection carries the map and sheds it before any count is halved.
+A consumer with no map takes its generic path. So an answer cut to the ceiling
+usually carries no map, and the line `context fabric vocabulary labels shed` says so.
+
+**Rollout.** The result root is `additionalProperties:false`, and ask-dev treats a
+validation failure as an upstream failure. So the field is additive and optional
+but NOT safe on an old pin: emitting it early fails every answer. An existing
+deploy order cannot protect `main`, because acr and web roll separately. So
+`ACR_CONTEXT_FABRIC_VOCABULARY_LABELS_ENABLED` (default off) gates the map, and a
+follow-up ticket removes the flag once every consumer's pin is deployed. Off serves
+no map. The stamped source words are served in both states, because those fields
+are on every pin. See `docs/operations.md`.
 
 **MCP.** The map is carried on MCP too. The API serves the same
 `answerprojection.Project` output when an answer is over a caller's byte option
