@@ -1208,7 +1208,7 @@ var unsaturatedByDesign = map[string]string{
 	"result.ClaimedFacts[0].Subject.Label":                              "subject-ref width, same shared builder",
 	"result.SubjectResolution.Committed[0].CanonicalID":                 "subject-ref width, same shared builder",
 	"result.SubjectResolution.Committed[0].Label":                       "subject-ref width, same shared builder",
-	"result.SubjectResolution.OutsideRequestedRepositories": "json:\"-\": never serialized, so it cannot grow the document; its one wire form is a limitation sentence, which the limitation bounds cover",
+	"result.SubjectResolution.OutsideRequestedRepositories":             "json:\"-\": never serialized, so it cannot grow the document; its one wire form is a limitation sentence, which the limitation bounds cover",
 	"result.Versions.ContractVersion":                                   "must stay the real schema identifier to mean anything; the validator bounds only its length, so a padded value would validate while making the document nonsense",
 }
 
