@@ -52,8 +52,11 @@ that cannot apply keeps its old fallback; the grant stays in the statement.
   narrowing, a repository narrowing, or a team narrowing with its reader wired
   gets a census. A project narrowing, or repositories with teams, does not: as
   for an unrestricted principal, a satisfier outside the request must not decide.
-- `recordOutsideRequestedRepository` keeps its own CHAOS-12446 rule: only an
-  unrestricted principal is counted.
+- The count of matches outside the requested repositories is CHAOS-12446's own
+  rule: it holds what the caller's grant admits, and only ordinary search feeds
+  it. The census reads inside the grant AND the request, and a satisfier the
+  request refuses leaves before the merge, so the census neither adds to that
+  count nor contradicts it.
 - Unrestricted and universal callers bind nothing. Their statements do not
   change.
 - Project-only stays refused. See `context-fabric-project-only-scope.md`.
@@ -72,9 +75,19 @@ entity tree accepts, so a work-item census under a grant is the refusal error:
   reported `scoped_visibility`. The outcome does not change.
 - A restricted caller's `handr_` redemption of a work-item handle is now vetoed
   (`reverify_rejected`), where an organization-wide census used to answer yes or
-  no. That answer was an existence oracle. PR2 restores the redemption inside
-  the grant.
+  no. That answer was an existence oracle: an offer is minted from the question
+  alone, so a caller could name any key and read the verdict. PR2 restores the
+  redemption inside the grant.
 - The same holds for a project-only caller, for every kind.
+- The caller reads the fresh veto as status `no_match` (label "no answer"), the
+  sentence "a structure confirmation receipt could not be resolved", and the
+  echoed member with disposition `vetoed_unresolved`. That is the text of every
+  unresolved veto, a real absence included: it never says the handle does not
+  exist, and a refused census cannot be told from an absent row.
+- A remembered handle that fails the same read is dropped alone, as any remembered
+  member is. The drop goes to telemetry (`reverify_not_confirmed`); the caller
+  gets no sentence, and the turn runs as if the handle was never confirmed.
+- Until PR2 the offer is still minted, so that option ends in the veto.
 
 A round that pools a work item beside a pull request is reported the same way:
 one refused kind leaves the round incomplete, so it clarifies.

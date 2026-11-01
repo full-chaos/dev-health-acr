@@ -598,17 +598,106 @@ func TestAWorkItemCensusForARestrictedCallerIsRefusedForEveryProvider(t *testing
 	}
 }
 
-// CHAOS-12446 keeps its own rule: for a restricted caller the count of matches
-// outside a requested repository stays an existence oracle.
-func TestTheOutsideRequestedCountStaysForAnUnrestrictedPrincipal(t *testing.T) {
+// CHAOS-12446 ruling (a), FINAL: the count of matches outside the requested
+// repositories holds what the caller's own grant admits, and only ordinary
+// search feeds it. The grant-scoped census reads inside the grant AND the
+// request, so it neither adds to that count nor contradicts it.
+func TestTheCensusAndTheOutsideCountAgreeForARestrictedCaller(t *testing.T) {
 	t.Parallel()
-	request := testRequest()
-	request.RequestedScope.RepositorySlugs = []string{grantRepoInside}
-	if repositoryNarrowedByUnrestrictedPrincipal(restrictedCaller(t, grantRepoInside), request) {
-		t.Fatal("a restricted caller counts as an unrestricted principal narrowing by repository")
+	grant := []string{grantRepoInside, grantRepoBeside}
+	narrowed := func(r *contextfabric.InvestigationRequest, _ *ResolveDeps) {
+		r.RequestedScope.RepositorySlugs = []string{grantRepoInside}
 	}
-	if !repositoryNarrowedByUnrestrictedPrincipal(userprincipal.Authenticated(t, "org_1", nil), request) {
-		t.Fatal("control: an unrestricted caller's narrowing was not recognised")
+	beside := grantRow{contextfabric.SubjectPullRequest, "5063", grantPRBeside, grantRepoBeside}
+	inside := grantRow{contextfabric.SubjectPullRequest, "5063", grantPRInside, grantRepoInside}
+	outside := grantRow{contextfabric.SubjectPullRequest, "5063", grantPROutside, grantRepoOutside}
+	pool := func() *fakeGraphBackend {
+		return grantBackend(grantNode(grantPRInside, grantRepoInside, 0.8), grantNode(grantPRBeside, grantRepoBeside, 0.8), grantNode(grantPROutside, grantRepoOutside, 0.8))
+	}
+	t.Run("a match inside the grant and outside the request", func(t *testing.T) {
+		t.Parallel()
+		backend := grantBackend(grantNode(grantPRBeside, grantRepoBeside, 0.8), grantNode(grantPROutside, grantRepoOutside, 0.8))
+		spy := &grantCensusSpy{rows: []grantRow{beside, outside}}
+		resolution, tracer := resolveGranted(t, backend, restrictedCaller(t, grant...), spy.census, narrowed)
+		if len(spy.calls) == 0 {
+			t.Fatal("no census ran")
+		}
+		if resolution.OutsideRequestedRepositories != 1 {
+			t.Fatalf("outside %d, want 1: the match the grant covers, once, and never the hidden one", resolution.OutsideRequestedRepositories)
+		}
+		if len(resolution.Committed) != 0 {
+			t.Fatalf("committed = %v, want none: the narrowing stands", resolution.Committed)
+		}
+		if round := onlyRound(t, tracer); round.ShadowCallerNarrowing != narrowedToNone || round.ShadowOutcome == string(ShadowWouldCommit) {
+			t.Fatalf("round = narrowing %q outcome %q, want narrowed_to_none and no commit", round.ShadowCallerNarrowing, round.ShadowOutcome)
+		}
+		// The same turn with no census: the count is search's alone.
+		withoutCensus, _ := resolveGranted(t, backend, restrictedCaller(t, grant...), nil, narrowed)
+		if withoutCensus.OutsideRequestedRepositories != resolution.OutsideRequestedRepositories {
+			t.Fatalf("outside %d with a census, %d without: the census changed the count", resolution.OutsideRequestedRepositories, withoutCensus.OutsideRequestedRepositories)
+		}
+	})
+	t.Run("a match in the request beside one outside it", func(t *testing.T) {
+		t.Parallel()
+		spy := &grantCensusSpy{rows: []grantRow{inside, beside, outside}}
+		resolution, tracer := resolveGranted(t, pool(), restrictedCaller(t, grant...), spy.census, narrowed)
+		if ids := scopeAnchorCommittedIDs(resolution); len(ids) != 1 || ids[0] != grantPRInside {
+			t.Fatalf("committed = %v, want the match in the request", ids)
+		}
+		if resolution.OutsideRequestedRepositories != 1 {
+			t.Fatalf("outside %d, want 1: the committed subject is not outside, the hidden one never counts", resolution.OutsideRequestedRepositories)
+		}
+		if probes := tracer.eventsForStage("evidence_probe"); len(probes) != 1 || probes[0].CensusCount != 1 {
+			t.Fatalf("evidence_probe = %+v, want count 1 inside the grant and the request", probes)
+		}
+	})
+	t.Run("a census satisfier outside the request never enters the count", func(t *testing.T) {
+		t.Parallel()
+		// The requested filter could not apply, so the census read the grant
+		// alone and named a subject outside the request that search never found.
+		fallback := func(context.Context, string, CensusKind, string, bool, contextfabric.SubjectKind, string, bool) (CensusOutcome, error) {
+			return CensusOutcome{Count: 1, CensusReadAt: time.Now().UTC(), SatisfierCanonicalID: grantPRBeside, GrantApplied: true}, nil
+		}
+		backend := grantBackend(grantNode(grantPRBeside, grantRepoBeside, 0.8))
+		backend.searchResults = map[string][]CandidateNode{}
+		resolution, tracer := resolveGranted(t, backend, restrictedCaller(t, grant...), fallback, narrowed)
+		if commits := tracer.eventsForStage("evidence_census_commit"); len(commits) != 1 || commits[0].Outcome != "refused" {
+			t.Fatalf("evidence_census_commit = %+v, want the satisfier refused by the request", commits)
+		}
+		if resolution.OutsideRequestedRepositories != 0 || len(resolution.Committed) != 0 {
+			t.Fatalf("outside %d committed %v, want 0 and none: search is the only source of the count", resolution.OutsideRequestedRepositories, resolution.Committed)
+		}
+	})
+}
+
+// A handle option is minted from the question alone, so a restricted and a
+// project-only caller both hold a handr_ receipt to redeem: the redemption's
+// census was reachable for both before CHAOS-12452 bound the grant on it.
+func TestAHandleOfferReachesTheCallersARedemptionRefuses(t *testing.T) {
+	t.Parallel()
+	for name, principal := range map[string]storage.Principal{
+		"restricted":   restrictedCaller(t, grantRepoInside),
+		"project only": userprincipal.ProjectOnly(t, "org_1", []string{"project.v2:github:P-1"}),
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			backend := &fakeGraphBackend{searchTruncated: true}
+			deps := backend.deps()
+			deps.HandleGrammarChecker = func(kind contextfabric.SubjectKind, patternID, value string) (string, bool) {
+				return "work_items.work_item_id", ValidateHandleGrammar(kind, patternID, value)
+			}
+			spy := &grantCensusSpy{}
+			deps.CensusFunc = spy.census
+			request := testRequest()
+			request.Question = "why is CHAOS-11516 blocked?"
+			_, offers, _, _, err := ResolveSubjectsWithCommitBasis(context.Background(), principal, request, testInterpreted("CHAOS-11516"), deps, nil, nil, nil, "")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(offers.HandleOptions) != 1 || offers.HandleOptions[0].Kind != contextfabric.SubjectWorkItem || offers.HandleOptions[0].Value != "CHAOS-11516" {
+				t.Fatalf("handle options = %+v, want the work item the question names", offers.HandleOptions)
+			}
+		})
 	}
 }
 
