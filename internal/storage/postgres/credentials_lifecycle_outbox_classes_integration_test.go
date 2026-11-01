@@ -2,7 +2,9 @@ package postgres
 
 import (
 	"context"
+	"crypto/sha256"
 	"database/sql"
+	"encoding/hex"
 	"testing"
 	"time"
 
@@ -279,4 +281,107 @@ func TestCredentialOutboxClass_RotateOfALegacyParentWritesTheParentsRevisionOneF
 		"the parent's revision 1 (issued, system, no ref) exists before the rotated event that names it")
 	require.Equal(t, []outboxRow{{overlapChild.Credential.CredentialID, 1, "acr_credential.rotated", "user", credentialTestActorID}},
 		lifecycleRows(t, f.ctx, f.db, overlapChild.Credential.CredentialID))
+}
+
+func browserFamilyMembers(t *testing.T, f outboxFixture, family string, n int) []string {
+	t.Helper()
+	end := time.Now().UTC().Add(24 * time.Hour)
+	var ids []string
+	for i := 0; i < n; i++ {
+		suffix := family + string(rune('a'+i))
+		expires := time.Now().UTC().Add(time.Hour)
+		credential, err := f.store.CreateCredential(f.ctx, storage.CredentialCreateInput{
+			CredentialID: "cred_" + suffix, OrgID: credentialTestOrgID, Name: suffix, TokenPrefix: "fcacr_abcdefghij",
+			TokenHash:        sha256Hex(suffix),
+			RepositoryScopes: []string{"acme/widgets"}, Scopes: []string{"context:read"}, ActorID: "web-user-1",
+			ExpiresAt: &expires, IssuanceProvenance: storage.CredentialIssuanceProvenanceDeviceAuthorization,
+			ApprovingUserID: "web-user-1", Resource: "https://acr.example/mcp", ClientID: "client-1",
+			ClientClass: storage.CredentialClientClassBrowser, SessionID: "sess-" + family, FamilyID: family, FamilyExpiresAt: &end,
+		})
+		require.NoError(t, err)
+		ids = append(ids, credential.CredentialID)
+	}
+	return ids
+}
+
+func sha256Hex(value string) string {
+	sum := sha256.Sum256([]byte(value))
+	return hex.EncodeToString(sum[:])
+}
+
+func requireFamilyRows(t *testing.T, f outboxFixture, ids []string, wantType string, wantRef func(id string) string) {
+	t.Helper()
+	for _, id := range ids {
+		rows := lifecycleRows(t, f.ctx, f.db, id)
+		require.Len(t, rows, 2, id)
+		require.Equal(t, 2, rows[1].Revision, id)
+		require.Equal(t, "acr_credential.revoked", rows[1].EventType, id)
+		require.Equal(t, wantType, rows[1].ActorType, "%s: every member keeps the mapped actor type", id)
+		require.Equal(t, wantRef(id), rows[1].ActorRef, id)
+	}
+}
+
+func TestCredentialOutboxClass_FamilyRevokeByUserKeepsTheActorOnEveryMember(t *testing.T) {
+	f := newOutboxFixture(t)
+	ids := browserFamilyMembers(t, f, "famuser", 3)
+	_, err := f.service.Revoke(f.ctx, credentialTestOrgID, ids[0], "web-user-1")
+	require.NoError(t, err)
+	requireFamilyRows(t, f, ids, "user", func(string) string { return "web-user-1" })
+}
+
+func TestCredentialOutboxClass_FamilyRevokeByOperatorKeepsTheActorOnEveryMember(t *testing.T) {
+	f := newOutboxFixture(t)
+	ids := browserFamilyMembers(t, f, "famoperator", 3)
+	_, err := f.service.RevokeAsOperator(f.ctx, credentialTestOrgID, ids[0], "operator_1", "")
+	require.NoError(t, err)
+	requireFamilyRows(t, f, ids, "operator", func(string) string { return "operator_1" })
+}
+
+func TestCredentialOutboxClass_FamilyRevokeBySelfNamesEachMemberAsItsOwnActor(t *testing.T) {
+	f := newOutboxFixture(t)
+	ids := browserFamilyMembers(t, f, "famself", 3)
+	_, err := f.service.RevokeSelf(f.ctx, principalOf(ids[0], []string{"acme/widgets"}, []string{"context:read"}))
+	require.NoError(t, err)
+	// The contract fixes a credential actor's reference to the row's own
+	// aggregate, so each member names itself.
+	requireFamilyRows(t, f, ids, "credential", func(id string) string { return id })
+}
+
+func TestCredentialOutboxClass_RefreshReuseAndSignOutRevokeTheFamilyAsTheRefreshGrant(t *testing.T) {
+	ctx := context.Background()
+	fixture := newRefreshFixture(t, ctx, newCredentialStoreDatabase(t, ctx))
+	f := outboxFixture{ctx: ctx, db: fixture.db}
+	members := func(familyID string) []string {
+		rows, err := fixture.db.QueryContext(ctx, `SELECT credential_id FROM acr.client_credentials WHERE family_id = $1 ORDER BY credential_id`, familyID)
+		require.NoError(t, err)
+		defer rows.Close()
+		var ids []string
+		for rows.Next() {
+			var id string
+			require.NoError(t, rows.Scan(&id))
+			ids = append(ids, id)
+		}
+		require.NoError(t, rows.Err())
+		return ids
+	}
+
+	reuseFamily, first := fixture.startFamily(t, ctx, "ru1")
+	_, err := fixture.service.Refresh(ctx, first, auth.DevBrowserClientID)
+	require.NoError(t, err)
+	*fixture.clock = fixture.clock.Add(auth.BrowserRefreshGrace + time.Second)
+	reuse, err := fixture.service.Refresh(ctx, first, auth.DevBrowserClientID)
+	require.NoError(t, err)
+	require.Equal(t, storage.BrowserRefreshReuseRevoked, reuse.Decision)
+	reuseIDs := members(reuseFamily)
+	require.Len(t, reuseIDs, 2)
+	requireFamilyRows(t, f, reuseIDs, "user", func(string) string { return "oauth_refresh_grant" })
+
+	*fixture.clock = fixture.now
+	signedFamily, token := fixture.startFamily(t, ctx, "so1")
+	decision, err := fixture.service.RevokeFamily(ctx, token, auth.DevBrowserClientID)
+	require.NoError(t, err)
+	require.Equal(t, storage.BrowserFamilyRevokedNow, decision)
+	signedIDs := members(signedFamily)
+	require.Len(t, signedIDs, 1)
+	requireFamilyRows(t, f, signedIDs, "user", func(string) string { return "oauth_refresh_grant" })
 }
