@@ -1,7 +1,10 @@
 package falkorgraph
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
+	"log/slog"
 	"strings"
 	"testing"
 
@@ -189,4 +192,88 @@ func TestALinkSegmentDenialReportsItsBasis(t *testing.T) {
 		t.Fatalf("basis %+v, want %+v", walk.filters.Basis, want)
 	}
 	assertBasisSums(t, walk, 0)
+}
+
+// #1850 r2, end to end: a project-only team-anchored question is answered by a
+// tree walk alone (the generic walk's edge read never runs), every owned
+// project is refused, and DiscoverContext carries the walk's basis to the
+// production Info line: the grant class, the authz_* fields, and parts that
+// add up to authz.
+func TestATreeWalkOnlyDiscoveryWritesTheProjectOnlyEdgeFilterLine(t *testing.T) {
+	anchor := contextfabric.SubjectRef{Kind: contextfabric.SubjectTeam, CanonicalID: "team:chaos", Label: "Fullchaos"}
+	frame := &contextfabric.QuestionFrame{
+		Goals: []contextfabric.InvestigationGoal{contextfabric.GoalCountOrAggregate},
+		SubjectExpression: contextfabric.SubjectExpression{
+			Kind:   contextfabric.SubjectExpressionChildrenOfScope,
+			Scoped: &contextfabric.ScopedSetExpression{AnchorTerms: []string{"Fullchaos"}, MemberKind: contextfabric.SubjectProject},
+		},
+		Temporal: contextfabric.TemporalIntentCurrent,
+		Version:  contextfabric.QuestionFrameVersion,
+	}
+	genericEdgeReads := 0
+	fake := &fakeConn{queryFunc: func(_ context.Context, _, cypher string, params map[string]interface{}, _ bool) ([]row, error) {
+		switch {
+		case strings.Contains(cypher, "fulltext"):
+			return nil, nil
+		case strings.Contains(cypher, "UNION"):
+			if cypher != "MATCH UNION" { // withWalkStepReads' own marker
+				genericEdgeReads++
+			}
+			if params["id"] != anchor.CanonicalID {
+				return nil, nil
+			}
+			var rows []row
+			for _, id := range []string{"p1", "p2", "p3"} {
+				rows = append(rows, row{
+					"r":       &edge{Properties: map[string]interface{}{propRelationType: "OWNED_BY_TEAM", propRelationshipID: "rel_" + id}},
+					"srcKind": "project", "srcId": id, "dstKind": "team", "dstId": anchor.CanonicalID,
+				})
+			}
+			return rows, nil
+		default:
+			switch id, _ := params["id"].(string); id {
+			case anchor.CanonicalID:
+				return []row{fakeSubjectNodeRow("team", id, "Fullchaos")}, nil
+			case "p1", "p2", "p3":
+				return []row{fakeSubjectNodeRow("project", id, "Project "+id)}, nil
+			}
+			return nil, nil
+		}
+	}}
+	var buffer bytes.Buffer
+	telemetry := SlogTelemetry{Logger: slog.New(slog.NewJSONHandler(&buffer, nil))}
+	adapter := newFakeAdapterWithTelemetry(t, withWalkStepReads(fake), telemetry)
+	request := ownershipRoutingRequest(frame, anchor)
+	request.Request.Question = "which projects does team Fullchaos own?"
+	request.ScopeAnchorKind = contextfabric.SubjectTeam
+	if _, err := adapter.DiscoverContext(context.Background(), treeProjectOnly(), request); err != nil {
+		t.Fatalf("DiscoverContext() error = %v", err)
+	}
+	if genericEdgeReads != 0 {
+		t.Fatalf("the generic walk read edges %d times: the tree walk is not the only source of denials", genericEdgeReads)
+	}
+	var line map[string]any
+	for _, entry := range strings.Split(strings.TrimSpace(buffer.String()), "\n") {
+		var decoded map[string]any
+		if json.Unmarshal([]byte(entry), &decoded) == nil && decoded["msg"] == "context_fabric: relationship edges filtered" {
+			line = decoded
+		}
+	}
+	if line == nil {
+		t.Fatalf("no edge-filter line:\n%s", buffer.String())
+	}
+	if line["grant_class"] != "project_only" {
+		t.Fatalf("grant_class = %v, want project_only on a tree-walk-only denial: %v", line["grant_class"], line)
+	}
+	sum := 0.0
+	for _, key := range []string{"authz_endpoint", "authz_attribution_relation", "authz_project_list", "authz_project_narrowing", "authz_unclassified"} {
+		value, ok := line[key].(float64)
+		if !ok {
+			t.Fatalf("%s missing from the line: %v", key, line)
+		}
+		sum += value
+	}
+	if authz := line["authz"]; authz != float64(3) || sum != 3 {
+		t.Fatalf("authz %v, parts sum %v; want 3 and 3: %v", authz, sum, line)
+	}
 }
