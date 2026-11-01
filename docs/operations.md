@@ -956,7 +956,7 @@ value in that result, and the status correction sentence.
 **Why it is a flag.** An existing deploy order cannot protect `main`. The result
 root is `additionalProperties:false`, and acr and web roll separately, so a
 consumer on a pin that does not carry the field fails every answer that holds
-the map. A follow-up ticket removes the flag once every consumer's pin is
+the map. CHAOS-12458 removes the flag once every consumer's pin is
 deployed.
 
 | State | What is served |

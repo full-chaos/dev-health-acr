@@ -185,7 +185,7 @@ type Config struct {
 	// order cannot protect main: the result root is additionalProperties:false,
 	// and acr and web roll separately, so a consumer on a pin that does not
 	// carry the field fails every answer that holds the map. Turn it on after
-	// every consumer's pin is deployed. A follow-up ticket removes the flag
+	// every consumer's pin is deployed. CHAOS-12458 removes the flag
 	// then. Off serves no map; coverage.sources[] words are stamped either way,
 	// because those fields are on every pin.
 	ContextFabricVocabularyLabelsEnabled bool
