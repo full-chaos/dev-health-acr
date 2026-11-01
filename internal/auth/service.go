@@ -184,6 +184,9 @@ func (s *Service) Rotate(ctx context.Context, request RotateCredentialRequest) (
 	if err != nil {
 		return IssuedCredential{}, err
 	}
+	if !rotationWithinParent(current, normalized) {
+		return IssuedCredential{}, ErrRotationWiderThanParent
+	}
 	if normalized.ExpiresAt != nil && !normalized.ExpiresAt.After(now) {
 		return IssuedCredential{}, fmt.Errorf("%w: expires_at must be in the future", ErrInvalidCredential)
 	}
