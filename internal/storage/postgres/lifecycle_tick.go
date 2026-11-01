@@ -3,6 +3,7 @@ package postgres
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"time"
 
@@ -61,6 +62,11 @@ type LifecycleTickResult struct {
 	Expired    int
 	FirstTouch int
 	Full       bool
+	// Skipped counts the credentials the event mapper refuses (an empty scope
+	// list, written by hand): no event describes them, so the tick leaves them
+	// and names them every run; SkippedIDs are their ids.
+	Skipped    int
+	SkippedIDs []string
 }
 
 func NewCredentialLifecycleTick(db *sql.DB, audit *AuditStore) (*LifecycleTick, error) {
@@ -87,27 +93,42 @@ func (t *LifecycleTick) Tick(ctx context.Context, now time.Time, limit int) (Lif
 	if err != nil {
 		return LifecycleTickResult{}, fmt.Errorf("select expired credentials: %w", err)
 	}
+	var skipped []string
+	writtenExpired := 0
 	for _, row := range expiredRows {
-		facts := credentiallifecycle.Facts{Kind: credentiallifecycle.KindExpired, Credential: row, At: now, Actor: credentiallifecycle.Actor{Type: credentiallifecycle.ActorSystem}}
-		if err := credentiallifecycle.Append(ctx, sink, facts); err != nil {
+		skip, err := appendTickExpired(ctx, sink, row, now)
+		if err != nil {
 			return LifecycleTickResult{}, fmt.Errorf("record credential lifecycle event: %w", err)
 		}
+		if skip {
+			skipped = append(skipped, row.CredentialID)
+			continue
+		}
+		writtenExpired++
 	}
 	touchRows, err := readCredentialsFor(ctx, tx, LifecycleTickFirstTouchSQL, now, limit)
 	if err != nil {
 		return LifecycleTickResult{}, fmt.Errorf("select untouched credentials: %w", err)
 	}
+	writtenTouch := 0
 	for _, row := range touchRows {
-		if err := credentiallifecycle.EnsureIssued(ctx, sink, row); err != nil {
+		skip, err := ensureTickFirstTouch(ctx, sink, row)
+		if err != nil {
 			return LifecycleTickResult{}, fmt.Errorf("record credential lifecycle event: %w", err)
 		}
+		if skip {
+			skipped = append(skipped, row.CredentialID)
+			continue
+		}
+		writtenTouch++
 	}
 	if err := tx.Commit(); err != nil {
 		return LifecycleTickResult{}, fmt.Errorf("commit credential lifecycle tick: %w", sanitizeDatabaseError(err))
 	}
 	return LifecycleTickResult{
-		Expired: len(expiredRows), FirstTouch: len(touchRows),
-		Full: len(expiredRows) >= limit || len(touchRows) >= limit,
+		Expired: writtenExpired, FirstTouch: writtenTouch,
+		Full:    len(expiredRows) >= limit || len(touchRows) >= limit,
+		Skipped: len(skipped), SkippedIDs: skipped,
 	}, nil
 }
 
@@ -129,4 +150,27 @@ func readCredentialsFor(ctx context.Context, tx *sql.Tx, statement string, now t
 		return nil, sanitizeDatabaseError(err)
 	}
 	return rows, nil
+}
+
+// appendTickExpired writes a credential's expired event (its first touch first).
+// A mapper refusal (the credential cannot be described: an empty scope list)
+// happens before any SQL of that row and leaves the transaction healthy, so the
+// row is skipped; a database error, or a revision conflict, is returned and
+// rolls the tick back.
+func appendTickExpired(ctx context.Context, sink credentiallifecycle.Sink, row contractsv1.ClientCredential, now time.Time) (skipped bool, err error) {
+	facts := credentiallifecycle.Facts{Kind: credentiallifecycle.KindExpired, Credential: row, At: now, Actor: credentiallifecycle.Actor{Type: credentiallifecycle.ActorSystem}}
+	return tickWriteSkippingRefusals(credentiallifecycle.Append(ctx, sink, facts))
+}
+
+// ensureTickFirstTouch writes a live credential's revision 1, skipping a
+// credential the mapper refuses like appendTickExpired.
+func ensureTickFirstTouch(ctx context.Context, sink credentiallifecycle.Sink, row contractsv1.ClientCredential) (skipped bool, err error) {
+	return tickWriteSkippingRefusals(credentiallifecycle.EnsureIssued(ctx, sink, row))
+}
+
+func tickWriteSkippingRefusals(err error) (bool, error) {
+	if errors.Is(err, credentiallifecycle.ErrInvalidEvent) {
+		return true, nil
+	}
+	return false, err
 }
