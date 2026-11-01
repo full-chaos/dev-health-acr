@@ -108,7 +108,7 @@ func TestEveryGuardedProjectAndOrganizationReadIsWithheldFromAProjectOnlyCaller(
 		if tc.units {
 			name += "/units"
 		}
-		read := func(principal storage.Principal) (facts, statements int) {
+		read := func(principal storage.Principal) (facts, statements int, state contextfabric.SourceState) {
 			client := &fakeClient{}
 			provider := findProvider(t, devhealthfacts.NewProviders(client), tc.kind)
 			ctx := context.Background()
@@ -132,12 +132,17 @@ func TestEveryGuardedProjectAndOrganizationReadIsWithheldFromAProjectOnlyCaller(
 			if err != nil {
 				t.Fatalf("%s: ReadFacts() error = %v", name, err)
 			}
-			return len(result.Facts), len(client.queries)
+			return len(result.Facts), len(client.queries), result.State
 		}
-		if facts, statements := read(projectOnlyFactPrincipal()); facts != 0 || statements != 0 {
+		facts, statements, state := read(projectOnlyFactPrincipal())
+		if facts != 0 || statements != 0 {
 			t.Errorf("%s: a project-only caller's read issued %d statements and served %d facts, want none", name, statements, facts)
 		}
-		if _, statements := read(storage.Principal{OrgID: "org-1"}); statements == 0 {
+		// CHAOS-12330: a read that served nothing never claims the source answered.
+		if state == contextfabric.SourceAvailable {
+			t.Errorf("%s: a withheld read reports %q with no fact, which reads as a complete answer", name, state)
+		}
+		if _, statements, _ := read(storage.Principal{OrgID: "org-1"}); statements == 0 {
 			t.Errorf("%s: an unrestricted caller's read issued no statement; this pin lost its control", name)
 		}
 	}
@@ -146,6 +151,11 @@ func TestEveryGuardedProjectAndOrganizationReadIsWithheldFromAProjectOnlyCaller(
 // source_health reads an operation, not a statement: a project-only caller's
 // organization read makes no call and serves no fact; an unrestricted
 // caller's makes one.
+//
+// CHAOS-12330: the withheld read is not_applicable with a reason, like the
+// repository-restricted arm beside it. c3's guard emptied the subjects, which
+// skipped that arm and left `available` with no fact: the answer read as
+// complete.
 func TestSourceHealthIsWithheldFromAProjectOnlyCaller(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
@@ -157,6 +167,15 @@ func TestSourceHealthIsWithheldFromAProjectOnlyCaller(t *testing.T) {
 		result := readSourceHealth(t, sourceHealthProvider(t, sourceHealthHolder(caller)), tc.principal, organizationSubject("org-1"))
 		if caller.calls != tc.calls || (tc.calls == 0 && len(result.Facts) != 0) {
 			t.Errorf("%v: %d operation calls and %d facts, want %d calls", tc.principal.ProjectScopes, caller.calls, len(result.Facts), tc.calls)
+		}
+		if tc.calls != 0 {
+			continue
+		}
+		if result.State != contextfabric.SourceNotApplicable {
+			t.Errorf("a project-only organization read has state %q, want %q", result.State, contextfabric.SourceNotApplicable)
+		}
+		if result.Reason == "" || strings.Contains(result.Reason, "repository") {
+			t.Errorf("a project-only organization read has reason %q, want one that does not call the caller repository-bound", result.Reason)
 		}
 	}
 }

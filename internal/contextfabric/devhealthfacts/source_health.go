@@ -19,11 +19,12 @@ const organizationPrefix = "organization:"
 
 // Closed limitation reasons the provider answers instead of facts.
 const (
-	sourceHealthRestrictedReason = "org-level fact; caller scope is repository-bound"
-	sourceHealthUnsetReason      = "source health read is not configured: no operation runner"
-	sourceHealthNotServedReason  = "source health root not served: "
-	sourceHealthUnreadableReason = "source health answer could not be read"
-	sourceHealthIncompleteReason = "source health answer is incomplete"
+	sourceHealthRestrictedReason  = "org-level fact; caller scope is repository-bound"
+	sourceHealthProjectOnlyReason = "org-level fact; caller scope is project-bound"
+	sourceHealthUnsetReason       = "source health read is not configured: no operation runner"
+	sourceHealthNotServedReason   = "source health root not served: "
+	sourceHealthUnreadableReason  = "source health answer could not be read"
+	sourceHealthIncompleteReason  = "source health answer is incomplete"
 )
 
 // SourceHealthProvider implements contextfabric.FactProvider for
@@ -75,11 +76,7 @@ func (p *SourceHealthProvider) ReadFacts(ctx context.Context, principal storage.
 	if err != nil {
 		return contextfabric.FactProviderResult{}, err
 	}
-	orgSubjects := subjectsOfKind(query.Subjects, contextfabric.SubjectOrganization)
-	if projectOnlyWithheld(principal) {
-		orgSubjects = nil
-	}
-	orgSubjectIDs, bySubject, rejected := subjectIndex(orgSubjects, organizationPrefix)
+	orgSubjectIDs, bySubject, rejected := subjectIndex(subjectsOfKind(query.Subjects, contextfabric.SubjectOrganization), organizationPrefix)
 	// ONE result variable and a deferred disclosure so no branch can skip the
 	// shape-rejection note (same construction as every provider here).
 	defer func() {
@@ -94,6 +91,11 @@ func (p *SourceHealthProvider) ReadFacts(ctx context.Context, principal storage.
 		// Nothing asked, or every organization subject was rejected for shape.
 	case !requested:
 		// A different organization than the caller's: never honored.
+	case projectOnlyWithheld(principal):
+		// CHAOS-12330: not_applicable like the arm below, never an emptied
+		// subject list, which leaves `available` with no fact and reads as a
+		// complete answer.
+		result = limitation(contextfabric.SourceNotApplicable, sourceHealthProjectOnlyReason)
 	case sourceHealthRestricted(principal):
 		result = limitation(contextfabric.SourceNotApplicable, sourceHealthRestrictedReason)
 	default:
