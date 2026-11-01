@@ -587,6 +587,9 @@ func TestTheReachLinesCarryTheRequestID(t *testing.T) {
 		if line["request_id"] != requestID {
 			t.Fatalf("line %v, want request_id %s", line, requestID)
 		}
+		if line["org_id"] != "org_1" || line["reads"] != float64(2) || line["failed"] != float64(1) {
+			t.Fatalf("line %v, want the organization and the counts", line)
+		}
 	}
 	for _, line := range lines(context.Background()) {
 		if _, held := line["request_id"]; held {
