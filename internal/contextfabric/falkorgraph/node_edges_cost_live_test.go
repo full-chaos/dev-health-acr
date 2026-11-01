@@ -234,9 +234,9 @@ func TestNodeEdgesReadOnlyTheNodesOwnEdges(t *testing.T) {
 		if legacy == cypher {
 			t.Fatalf("%s: the single-pattern in arm could not be rebuilt from the statement: the comparison measured nothing\n%s", c.name, cypher)
 		}
-		params := c.temporal.bind(map[string]interface{}{"org": v.orgID, "kind": string(c.subject.Kind), "id": c.subject.CanonicalID})
+		params := c.temporal.bind(map[string]interface{}{"org": v.orgID, "kind": string(c.subject.Kind), "id": c.subject.CanonicalID, "lim": v.adapter.config.NodeEdgeReadLimit + 1})
 
-		served, err := v.adapter.edgesOfNode(ctx, v.key, v.orgID, uuid, c.temporal)
+		served, _, err := v.adapter.edgesOfNode(ctx, v.key, v.orgID, uuid, c.temporal)
 		if err != nil {
 			t.Fatalf("%s: edgesOfNode: %v", c.name, err)
 		}

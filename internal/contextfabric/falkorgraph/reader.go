@@ -166,7 +166,7 @@ func (a *Adapter) ResolveSubjects(ctx context.Context, principal storage.Princip
 		Traverse: func(ctx context.Context, term string, observation graphrank.CandidateNode, allowExactMatch bool) (contextfabric.SubjectCandidate, graphrank.ObservationTraversal) {
 			return graphrank.TraverseObservationToSubject(ctx, principal, request.RequestedScope, term, observation, isInternalSubject, allowExactMatch,
 				func(ctx context.Context, uuid string) ([]graphrank.CandidateEdge, error) {
-					return a.edgesOfNode(ctx, key, principal.OrgID, uuid, temporal)
+					return a.observationEdges(ctx, key, principal.OrgID, uuid, temporal)
 				},
 				func(ctx context.Context, uuid string) (graphrank.CandidateNode, bool) {
 					n, err := a.nodeByUUID(ctx, key, principal.OrgID, uuid, temporal)
@@ -1045,7 +1045,8 @@ func (a *Adapter) DiscoverContext(ctx context.Context, principal storage.Princip
 			seenNode[nk] = true
 			resolvedNodes = append(resolvedNodes, n)
 		}
-		textEdges, err := a.edgesOfNode(ctx, key, principal.OrgID, n.UUID, temporal)
+		textEdges, edgesCut, err := a.edgesOfNode(ctx, key, principal.OrgID, n.UUID, temporal)
+		hopWalkTruncated = hopWalkTruncated || edgesCut
 		if err != nil {
 			// CHAOS-4077: see graphNotProjectedError's own doc comment
 			// above -- unreachable for a genuinely never-projected org in

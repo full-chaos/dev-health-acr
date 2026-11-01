@@ -305,6 +305,9 @@ func newWithAPI(config Config, client conn) (*Adapter, error) {
 	if config.MaxResults == 0 {
 		config.MaxResults = 25
 	}
+	if config.NodeEdgeReadLimit == 0 {
+		config.NodeEdgeReadLimit = defaultNodeEdgeReadLimit
+	}
 	if config.PoolSize == 0 {
 		config.PoolSize = 10
 	}
