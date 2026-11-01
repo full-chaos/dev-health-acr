@@ -9,6 +9,7 @@ import (
 
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
+	"github.com/full-chaos/dev-health-acr/internal/storage/internal/credentiallifecycle"
 )
 
 func (s *DeviceAuthorizationStore) Redeem(ctx context.Context, hash storage.DeviceCodeHash, input storage.CredentialCreateInput) (contractsv1.ClientCredential, error) {
@@ -111,6 +112,9 @@ FROM acr.device_authorizations WHERE device_code_hash = $1 FOR UPDATE`, hash.Str
 		return contractsv1.ClientCredential{}, err
 	}
 	if err := s.audit.record(ctx, tx, credentialCreatedEvent(credentialRecord)); err != nil {
+		return contractsv1.ClientCredential{}, err
+	}
+	if err := s.audit.appendLifecycle(ctx, tx, credentiallifecycle.Facts{Kind: credentiallifecycle.CreateKind(input), Credential: credential, At: now, Actor: credentiallifecycle.CreateActor(input)}); err != nil {
 		return contractsv1.ClientCredential{}, err
 	}
 	result, err := tx.ExecContext(ctx, `
