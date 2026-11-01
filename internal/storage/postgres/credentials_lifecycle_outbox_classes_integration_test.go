@@ -1,0 +1,266 @@
+package postgres
+
+import (
+	"context"
+	"database/sql"
+	"testing"
+	"time"
+
+	"github.com/stretchr/testify/require"
+
+	"github.com/full-chaos/dev-health-acr/internal/auth"
+	"github.com/full-chaos/dev-health-acr/internal/storage"
+	"github.com/full-chaos/dev-health-acr/internal/storage/internal/credentiallifecycle"
+)
+
+// One cell per call-site class of the lifecycle outbox writer. Each reads the
+// rows of the aggregates the flow touched from a real database; the lead's
+// mutant trees remove one append call each and name the cell that must fail.
+
+func lifecycleRows(t *testing.T, ctx context.Context, db *sql.DB, aggregate string) []outboxRow {
+	t.Helper()
+	result, err := db.QueryContext(ctx, `
+SELECT aggregate_id, revision, event_type, payload->'payload'->>'actor_type', coalesce(payload->'payload'->>'actor_ref', '')
+FROM acr.credential_lifecycle_outbox WHERE aggregate_id = $1 ORDER BY revision`, aggregate)
+	require.NoError(t, err)
+	defer result.Close()
+	var out []outboxRow
+	for result.Next() {
+		var row outboxRow
+		require.NoError(t, result.Scan(&row.Aggregate, &row.Revision, &row.EventType, &row.ActorType, &row.ActorRef))
+		out = append(out, row)
+	}
+	require.NoError(t, result.Err())
+	return out
+}
+
+func wireRef(t *testing.T, value string) string {
+	t.Helper()
+	ref, err := credentiallifecycle.WireRef(value)
+	require.NoError(t, err)
+	return ref
+}
+
+func principalOf(id string, repositories, scopes []string) storage.Principal {
+	return storage.Principal{
+		AuthenticationMethod: storage.AuthenticationMethodCredential, Subject: id,
+		OrgID: credentialTestOrgID, CredentialID: id, RepositoryScopes: repositories, Permissions: scopes,
+	}
+}
+
+func TestCredentialOutboxClass_IssueWritesIssuedRevisionOne(t *testing.T) {
+	f := newOutboxFixture(t)
+	issued, err := f.service.Create(f.ctx, credentialCreateRequest("class-issue"))
+	require.NoError(t, err)
+	id := issued.Credential.CredentialID
+	require.Equal(t, []outboxRow{{id, 1, "acr_credential.issued", "user", credentialTestActorID}}, lifecycleRows(t, f.ctx, f.db, id))
+}
+
+func TestCredentialOutboxClass_WorkloadExchangeWritesIssuedBySystem(t *testing.T) {
+	f := newOutboxFixture(t)
+	_, err := f.db.ExecContext(f.ctx, `
+INSERT INTO acr.workload_bindings (binding_id, org_id, trust_domain, namespace, service_account_name, service_account_uid, role, repository_scopes, created_at, created_by)
+VALUES ('wlb_outbox_test', $1, 'cluster.local', 'ns', 'sa', 'uid', 'read', '["*"]'::jsonb, now(), 'test_actor')`, workloadBindingTestOrgID)
+	require.NoError(t, err)
+	issued, err := f.service.Create(f.ctx, auth.CreateCredentialRequest{
+		OrgID: workloadBindingTestOrgID, Name: "workload:wlb_outbox_test", RepositoryScopes: []string{"*"}, Scopes: []string{auth.ScopeContextRead},
+		CreatedBy: "wlb_outbox_test", IssuanceProvenance: storage.CredentialIssuanceProvenanceWorkloadExchange, WorkloadBindingID: "wlb_outbox_test",
+	})
+	require.NoError(t, err)
+	id := issued.Credential.CredentialID
+	require.Equal(t, []outboxRow{{id, 1, "acr_credential.issued", "system", ""}}, lifecycleRows(t, f.ctx, f.db, id))
+}
+
+func TestCredentialOutboxClass_DeviceRedeemWritesDeviceRedeemed(t *testing.T) {
+	ctx := context.Background()
+	fixture := newProvenanceFixture(t, ctx)
+	approved, grant := fixture.approveWithSession(t, ctx, "dv1", "")
+	prepared, err := fixture.service.PrepareCreate(auth.CreateCredentialRequest{
+		OrgID: grant.OrgID, Name: "device login", RepositoryScopes: grant.RepositoryScopes, Scopes: grant.Scopes, CreatedBy: grant.ApprovingSubject,
+		ExpiresAt: postgresPointerTime(fixture.now.Add(24 * time.Hour)),
+	})
+	require.NoError(t, err)
+	credential, err := fixture.devices.Redeem(ctx, approved.DeviceCodeHash, prepared.StorageInput())
+	require.NoError(t, err)
+	id := credential.CredentialID
+	require.Equal(t, []outboxRow{{id, 1, "acr_credential.device_redeemed", "user", wireRef(t, grant.ApprovingSubject)}}, lifecycleRows(t, ctx, fixture.db, id))
+}
+
+func TestCredentialOutboxClass_BrowserRedeemWritesIssued(t *testing.T) {
+	ctx := context.Background()
+	fixture := newProvenanceFixture(t, ctx)
+	approved, grant := fixture.approveWithSession(t, ctx, "br1", "sid_br1")
+	credential, err := fixture.devices.Redeem(ctx, approved.DeviceCodeHash, fixture.browserInput(t, grant, ""))
+	require.NoError(t, err)
+	id := credential.CredentialID
+	require.Equal(t, []outboxRow{{id, 1, "acr_credential.issued", "user", wireRef(t, grant.ApprovingSubject)}}, lifecycleRows(t, ctx, fixture.db, id))
+	var class string
+	require.NoError(t, fixture.db.QueryRowContext(ctx, `SELECT payload->'payload'->'change'->>'acr_class' FROM acr.credential_lifecycle_outbox WHERE aggregate_id = $1`, id).Scan(&class))
+	require.Equal(t, "browser", class)
+}
+
+func TestCredentialOutboxClass_BrowserRefreshWritesTheSuccessorAndLeavesThePredecessorLive(t *testing.T) {
+	ctx := context.Background()
+	fixture := newRefreshFixture(t, ctx, newCredentialStoreDatabase(t, ctx))
+	familyID, first := fixture.startFamily(t, ctx, "rf1")
+	var predecessor string
+	require.NoError(t, fixture.db.QueryRowContext(ctx, `SELECT credential_id FROM acr.client_credentials WHERE family_id = $1`, familyID).Scan(&predecessor))
+	before := lifecycleRows(t, ctx, fixture.db, predecessor)
+	require.Len(t, before, 1)
+
+	rotated, err := fixture.service.Refresh(ctx, first, auth.DevBrowserClientID)
+	require.NoError(t, err)
+	require.Equal(t, storage.BrowserRefreshRotated, rotated.Decision)
+	successor := rotated.Issued.Credential.CredentialID
+	require.Equal(t, []outboxRow{{successor, 1, "acr_credential.issued", "system", ""}}, lifecycleRows(t, ctx, fixture.db, successor))
+	require.Equal(t, before, lifecycleRows(t, ctx, fixture.db, predecessor), "the predecessor stays live: no event at refresh")
+}
+
+func TestCredentialOutboxClass_RotateWritesRotatedAndLeavesTheParentLiveWithOverlap(t *testing.T) {
+	f := newOutboxFixture(t)
+	parent, err := f.service.Create(f.ctx, credentialCreateRequest("class-rotate"))
+	require.NoError(t, err)
+	child, err := f.service.Rotate(f.ctx, auth.RotateCredentialRequest{OrgID: credentialTestOrgID, CredentialID: parent.Credential.CredentialID, CreatedBy: credentialTestActorID, Overlap: time.Minute})
+	require.NoError(t, err)
+	cid := child.Credential.CredentialID
+	require.Equal(t, []outboxRow{{cid, 1, "acr_credential.rotated", "user", credentialTestActorID}}, lifecycleRows(t, f.ctx, f.db, cid))
+	require.Len(t, lifecycleRows(t, f.ctx, f.db, parent.Credential.CredentialID), 1, "overlap above 0: no revoked row for the parent")
+	var parentRef string
+	require.NoError(t, f.db.QueryRowContext(f.ctx, `SELECT payload->'payload'->'change'->>'rotation_parent_id' FROM acr.credential_lifecycle_outbox WHERE aggregate_id = $1`, cid).Scan(&parentRef))
+	require.Equal(t, parent.Credential.CredentialID, parentRef)
+}
+
+func TestCredentialOutboxClass_OverlapZeroWritesTheParentsRevokedRow(t *testing.T) {
+	f := newOutboxFixture(t)
+	parent, err := f.service.Create(f.ctx, credentialCreateRequest("class-overlap0"))
+	require.NoError(t, err)
+	pid := parent.Credential.CredentialID
+	_, err = f.service.Rotate(f.ctx, auth.RotateCredentialRequest{OrgID: credentialTestOrgID, CredentialID: pid, CreatedBy: credentialTestActorID})
+	require.NoError(t, err)
+	require.Equal(t, []outboxRow{
+		{pid, 1, "acr_credential.issued", "user", credentialTestActorID},
+		{pid, 2, "acr_credential.revoked", "user", credentialTestActorID},
+	}, lifecycleRows(t, f.ctx, f.db, pid))
+}
+
+func TestCredentialOutboxClass_AdminRevokeWritesRevokedByTheUser(t *testing.T) {
+	f := newOutboxFixture(t)
+	issued, err := f.service.Create(f.ctx, credentialCreateRequest("class-admin-revoke"))
+	require.NoError(t, err)
+	id := issued.Credential.CredentialID
+	_, err = f.service.Revoke(f.ctx, credentialTestOrgID, id, credentialTestActorID)
+	require.NoError(t, err)
+	require.Equal(t, []outboxRow{
+		{id, 1, "acr_credential.issued", "user", credentialTestActorID},
+		{id, 2, "acr_credential.revoked", "user", credentialTestActorID},
+	}, lifecycleRows(t, f.ctx, f.db, id))
+}
+
+func TestCredentialOutboxClass_SelfRevokeWritesRevokedByTheCredential(t *testing.T) {
+	f := newOutboxFixture(t)
+	issued, err := f.service.Create(f.ctx, credentialCreateRequest("class-self-revoke"))
+	require.NoError(t, err)
+	id := issued.Credential.CredentialID
+	_, err = f.service.RevokeSelf(f.ctx, principalOf(id, issued.Credential.RepositoryScopes, issued.Credential.Scopes))
+	require.NoError(t, err)
+	require.Equal(t, []outboxRow{
+		{id, 1, "acr_credential.issued", "user", credentialTestActorID},
+		{id, 2, "acr_credential.revoked", "credential", id},
+	}, lifecycleRows(t, f.ctx, f.db, id))
+}
+
+func TestCredentialOutboxClass_SelfRotateAndRollbackNameTheCredentialAsActor(t *testing.T) {
+	f := newOutboxFixture(t)
+	source, err := f.service.Create(f.ctx, credentialCreateRequest("class-self-rotate"))
+	require.NoError(t, err)
+	sid := source.Credential.CredentialID
+	rotation, err := f.service.RotateSelf(f.ctx, principalOf(sid, source.Credential.RepositoryScopes, source.Credential.Scopes))
+	require.NoError(t, err)
+	cid := rotation.Issued.Credential.CredentialID
+	require.Equal(t, []outboxRow{{cid, 1, "acr_credential.rotated", "credential", sid}}, lifecycleRows(t, f.ctx, f.db, cid))
+	require.Len(t, lifecycleRows(t, f.ctx, f.db, sid), 1)
+
+	_, err = f.service.RollbackSelfRotation(f.ctx, principalOf(cid, rotation.Issued.Credential.RepositoryScopes, rotation.Issued.Credential.Scopes), rotation.Receipt)
+	require.NoError(t, err)
+	require.Equal(t, []outboxRow{
+		{cid, 1, "acr_credential.rotated", "credential", sid},
+		{cid, 2, "acr_credential.revoked", "credential", cid},
+	}, lifecycleRows(t, f.ctx, f.db, cid), "the rollback is the successor revoking itself")
+}
+
+func TestCredentialOutboxClass_FamilyRevokeWritesARevokedRowForEveryMember(t *testing.T) {
+	ctx := context.Background()
+	fixture := newRefreshFixture(t, ctx, newCredentialStoreDatabase(t, ctx))
+	familyID, first := fixture.startFamily(t, ctx, "fr1")
+	successor, err := fixture.service.Refresh(ctx, first, auth.DevBrowserClientID)
+	require.NoError(t, err)
+	_, err = fixture.creds.RevokeCredential(ctx, storage.CredentialRevocationInput{
+		OrgID: successor.Issued.Credential.OrgID, CredentialID: successor.Issued.Credential.CredentialID, ActorID: credentialTestActorID,
+	})
+	require.NoError(t, err)
+	live, revoked := familyCredentials(t, ctx, fixture.db, familyID)
+	require.Equal(t, 0, live)
+	require.Equal(t, 2, revoked)
+	members, err := fixture.db.QueryContext(ctx, `SELECT credential_id FROM acr.client_credentials WHERE family_id = $1 ORDER BY credential_id`, familyID)
+	require.NoError(t, err)
+	defer members.Close()
+	count := 0
+	for members.Next() {
+		var id string
+		require.NoError(t, members.Scan(&id))
+		rows := lifecycleRows(t, ctx, fixture.db, id)
+		require.Len(t, rows, 2, id)
+		require.Equal(t, 2, rows[1].Revision, id)
+		require.Equal(t, "acr_credential.revoked", rows[1].EventType, id)
+		count++
+	}
+	require.NoError(t, members.Err())
+	require.Equal(t, 2, count)
+}
+
+func TestCredentialOutboxClass_AckSweepWritesRevokedBySystem(t *testing.T) {
+	f := newPostgresAckFixture(t)
+	first, err := f.redeemAckable(t)
+	require.NoError(t, err)
+	f.now = f.now.Add(storage.DeviceCredentialAckWindow)
+	revoked, err := f.store.RevokeUnacknowledged(f.ctx, 10)
+	require.NoError(t, err)
+	require.Equal(t, 1, revoked)
+	rows := lifecycleRows(t, f.ctx, f.db, first)
+	require.Equal(t, []outboxRow{
+		{first, 1, "acr_credential.device_redeemed", "user", wireRef(t, f.grant.ApprovingSubject)},
+		{first, 2, "acr_credential.revoked", "system", ""},
+	}, rows)
+}
+
+func TestCredentialOutboxClass_ReplacedCredentialRevokeWritesRevokedBySystem(t *testing.T) {
+	f := newPostgresAckFixture(t)
+	first, err := f.redeemAckable(t)
+	require.NoError(t, err)
+	f.now = f.now.Add(storage.DeviceCredentialAckWindow - time.Second)
+	second, err := f.redeemAckable(t)
+	require.NoError(t, err)
+	require.Equal(t, []outboxRow{
+		{first, 1, "acr_credential.device_redeemed", "user", wireRef(t, f.grant.ApprovingSubject)},
+		{first, 2, "acr_credential.revoked", "system", ""},
+	}, lifecycleRows(t, f.ctx, f.db, first))
+	require.Equal(t, []outboxRow{{second, 1, "acr_credential.device_redeemed", "user", wireRef(t, f.grant.ApprovingSubject)}},
+		lifecycleRows(t, f.ctx, f.db, second))
+}
+
+func TestCredentialOutboxClass_RotateOfALegacyParentWritesTheParentsRevisionOneFirst(t *testing.T) {
+	f := newOutboxFixture(t)
+	parent, err := f.service.Create(f.ctx, credentialCreateRequest("class-legacy-parent"))
+	require.NoError(t, err)
+	pid := parent.Credential.CredentialID
+	_, err = f.db.ExecContext(f.ctx, `DELETE FROM acr.credential_lifecycle_outbox`)
+	require.NoError(t, err)
+	child, err := f.service.Rotate(f.ctx, auth.RotateCredentialRequest{OrgID: credentialTestOrgID, CredentialID: pid, CreatedBy: credentialTestActorID})
+	require.NoError(t, err)
+	require.Equal(t, []outboxRow{
+		{pid, 1, "acr_credential.issued", "system", ""},
+		{pid, 2, "acr_credential.revoked", "user", credentialTestActorID},
+	}, lifecycleRows(t, f.ctx, f.db, pid))
+	require.Equal(t, []outboxRow{{child.Credential.CredentialID, 1, "acr_credential.rotated", "user", credentialTestActorID}},
+		lifecycleRows(t, f.ctx, f.db, child.Credential.CredentialID))
+}
