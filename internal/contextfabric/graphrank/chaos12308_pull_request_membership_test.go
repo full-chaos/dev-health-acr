@@ -77,7 +77,9 @@ func TestAProjectOnlyCallerIsAdmittedToAPullRequestOnlyOnANativeMembership(t *te
 func TestLowerTierMembershipNamesOnlyAStatedLowerTier(t *testing.T) {
 	const wanted = "project.v2:linear:wanted"
 	narrowed := contextfabric.RequestedScope{ProjectIDs: []string{"wanted"}, ProjectNarrowing: &contractsv1.ContextFabricProjectNarrowing{Identities: []string{wanted}, Complete: true}}
-	workItem := pullRequestAttributes("heuristic", wanted)
+	// Of another project, so the narrowing is unproven for it and only the kind
+	// keeps it out.
+	workItem := pullRequestAttributes("heuristic", "project.v2:linear:other")
 	workItem["subject_kind"] = string(contextfabric.SubjectWorkItem)
 	for name, tc := range map[string]struct {
 		scope      contextfabric.RequestedScope
