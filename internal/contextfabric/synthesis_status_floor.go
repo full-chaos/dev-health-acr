@@ -248,18 +248,33 @@ func applyUnverifiedProjectNarrowingStatusFloor(result *InvestigationResult) {
 // (CHAOS-12301, lead ruling (b)): every fact kind is withheld from this caller,
 // so withholding the narrative too would leave it almost no written answer, even
 // a correct graph-only one. No withheld value can be in it: the registry refuses
-// the read before any provider runs, so synthesis is never given one. Never
-// promotes; leaves a refusal, degraded, no_match and clarification as they are.
+// the read before any provider runs, so synthesis is never given one.
+//
+// An answer another floor already lowered to partial still states the grant: it
+// gains the sentence and nothing else, and the appender's own dedupe keeps a
+// re-served copy to one. Never promotes; leaves a refusal, degraded, no_match
+// and clarification as they are.
 func applyProjectScopeWithheldStatusFloor(result *InvestigationResult) {
-	if result == nil || result.Status != InvestigationComplete || result.RefusalBasis != "" {
+	if result == nil || result.RefusalBasis != "" || !readWithheldByProjectScope(*result) {
 		return
 	}
+	switch result.Status {
+	case InvestigationComplete:
+		floorKeepingNarrative(result, InvestigationPartial, contractsv1.ContextFabricProjectScopeWithheldLimitation)
+	case InvestigationPartial:
+		composed, displaced := appendBoundedLimitations(result.Limitations, []string{contractsv1.ContextFabricProjectScopeWithheldLimitation})
+		result.Limitations = composed
+		result.LimitationsDisplaced += displaced
+	}
+}
+
+func readWithheldByProjectScope(result InvestigationResult) bool {
 	for _, detail := range result.Coverage.Details {
 		if detail.Code == contractsv1.ContextFabricCoverageDetailProjectScopeWithheld {
-			floorKeepingNarrative(result, InvestigationPartial, contractsv1.ContextFabricProjectScopeWithheldLimitation)
-			return
+			return true
 		}
 	}
+	return false
 }
 
 // applyStatusPoolCutStatusFloor floors a complete answer that states its member

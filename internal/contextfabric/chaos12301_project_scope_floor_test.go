@@ -60,40 +60,132 @@ func TestAProjectOnlyServedHeadStatesPartial(t *testing.T) {
 	}
 }
 
+func countOf(limitations []string, sentence string) int {
+	count := 0
+	for _, limitation := range limitations {
+		if limitation == sentence {
+			count++
+		}
+	}
+	return count
+}
+
 // Every floor that withholds the narrative keeps its swap on a project-only
 // answer, each for its own reason, whichever side of the old position it ran on.
-func TestAProjectScopeRowLeavesANarrativeWithholdingFloorItsOwnSwap(t *testing.T) {
+// The answer still states the grant: partial, that floor's own disclosure and
+// the project-scope sentence, each exactly once, however often it is served.
+func TestANarrativeWithholdingFloorLeavesTheProjectScopeSentence(t *testing.T) {
 	t.Parallel()
-	for name, build := range map[string]func(*testing.T) InvestigationResult{
-		"an unverified project narrowing": func(t *testing.T) InvestigationResult {
-			return storedWithRows(t, unverifiedNarrowingDetail(), projectScopeRow())
-		},
-		"a denied cohort": func(t *testing.T) InvestigationResult {
+	poolCut := contractsv1.ContextFabricMemberStatusPoolCutLimitation("project", 10, 40)
+	for name, test := range map[string]struct {
+		build func(*testing.T) InvestigationResult
+		own   string
+	}{
+		"a denied cohort": {func(t *testing.T) InvestigationResult {
 			denied := detailFixture(contractsv1.ContextFabricCoverageDetailGraphCohortDeniedByAuthorization, "context-fabric:graph", true, "cohort_denied:2", withCount(2))
 			return storedWithRows(t, denied, projectScopeRow())
-		},
-		"a status filter over a cut read": func(t *testing.T) InvestigationResult {
+		}, ""},
+		"an unverified project narrowing": {func(t *testing.T) InvestigationResult {
+			return storedWithRows(t, unverifiedNarrowingDetail(), projectScopeRow())
+		}, ""},
+		"a status filter over a cut read": {func(t *testing.T) InvestigationResult {
 			stored := storedWithRows(t, projectScopeRow())
-			stored.Limitations = append(stored.Limitations, contractsv1.ContextFabricMemberStatusPoolCutLimitation("project", 10, 40))
+			stored.Limitations = append(stored.Limitations, poolCut)
 			return stored
-		},
-		"an organization survey": func(t *testing.T) InvestigationResult {
+		}, poolCut},
+		"an organization survey": {func(t *testing.T) InvestigationResult {
 			stored := storedWithRows(t, projectScopeRow())
 			stored.Limitations = append(stored.Limitations, contractsv1.ContextFabricOrganizationSurveyNoMembersLimitation)
 			return stored
-		},
+		}, contractsv1.ContextFabricOrganizationSurveyNoMembersLimitation},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
-			stored := build(t)
+			stored := test.build(t)
 			if stored.Status != InvestigationComplete {
 				t.Fatalf("fixture: stored status = %q", stored.Status)
 			}
 			served := ApplyServedStatusFloors(stored)
-			if served.Status != InvestigationPartial || !slices.Contains(served.Limitations, synthesisNarrativeWithheldLimitation) {
-				t.Fatalf("served %q, limitations %v, want the sibling floor's own withheld sentence", served.Status, served.Limitations)
+			for round := range 2 {
+				if served.Status != InvestigationPartial {
+					t.Fatalf("serve %d: status %q, want partial", round, served.Status)
+				}
+				if got := countOf(served.Limitations, synthesisNarrativeWithheldLimitation); got != 1 {
+					t.Fatalf("serve %d: %d narrative-withheld sentences, want the sibling's one: %v", round, got, served.Limitations)
+				}
+				if got := countOf(served.Limitations, contractsv1.ContextFabricProjectScopeWithheldLimitation); got != 1 {
+					t.Fatalf("serve %d: %d project-scope sentences, want exactly one: %v", round, got, served.Limitations)
+				}
+				if test.own != "" && countOf(served.Limitations, test.own) != 1 {
+					t.Fatalf("serve %d: %d of the floor's own disclosure, want one: %v", round, countOf(served.Limitations, test.own), served.Limitations)
+				}
+				served = ApplyServedStatusFloors(served)
 			}
 		})
+	}
+}
+
+// Already partial: the sentence joins and nothing else moves.
+func TestAPartialAnswerGainsOnlyTheProjectScopeSentence(t *testing.T) {
+	t.Parallel()
+	before := withheldFloorResult(InvestigationPartial)
+	after := before
+	after.Limitations = slices.Clone(before.Limitations)
+	applyProjectScopeWithheldStatusFloor(&after)
+	if countOf(after.Limitations, contractsv1.ContextFabricProjectScopeWithheldLimitation) != 1 {
+		t.Fatalf("limitations = %v, want the project-scope sentence once", after.Limitations)
+	}
+	if slices.Contains(after.Limitations, synthesisNarrativeWithheldLimitation) {
+		t.Fatalf("limitations = %v, want no narrative-withheld sentence", after.Limitations)
+	}
+	unchanged := after
+	unchanged.Limitations, unchanged.LimitationsDisplaced = before.Limitations, before.LimitationsDisplaced
+	if !reflect.DeepEqual(unchanged, before) {
+		t.Fatalf("something but the sentence moved: %+v, was %+v", unchanged, before)
+	}
+	applyProjectScopeWithheldStatusFloor(&after)
+	if countOf(after.Limitations, contractsv1.ContextFabricProjectScopeWithheldLimitation) != 1 {
+		t.Fatalf("a second pass added a copy: %v", after.Limitations)
+	}
+}
+
+// A partial answer's full list makes room as every disclosure does, and says so.
+func TestAFullPartialAnswerCountsTheCaveatTheSentenceDisplaced(t *testing.T) {
+	t.Parallel()
+	result := withheldFloorResult(InvestigationPartial)
+	result.Limitations = result.Limitations[:0:0]
+	for len(result.Limitations) < contractsv1.ContextFabricLimitationsMaxCount {
+		result.Limitations = append(result.Limitations, "A model caveat "+strings.Repeat("x", len(result.Limitations)+1))
+	}
+	applyProjectScopeWithheldStatusFloor(&result)
+	if result.LimitationsDisplaced != 1 || countOf(result.Limitations, contractsv1.ContextFabricProjectScopeWithheldLimitation) != 1 {
+		t.Fatalf("displaced %d, limitations %v", result.LimitationsDisplaced, result.Limitations)
+	}
+}
+
+// Everything else stays as it is: no detail, a refusal at any status, and every
+// status but complete and partial.
+func TestTheProjectScopeSentenceLeavesEveryOtherAnswerAlone(t *testing.T) {
+	t.Parallel()
+	sentence := contractsv1.ContextFabricProjectScopeWithheldLimitation
+	for _, status := range []InvestigationStatus{InvestigationDegraded, InvestigationNoMatch, InvestigationClarificationRequired} {
+		result := withheldFloorResult(status)
+		applyProjectScopeWithheldStatusFloor(&result)
+		if result.Status != status || slices.Contains(result.Limitations, sentence) {
+			t.Fatalf("%q: status %q, limitations %v, want it untouched", status, result.Status, result.Limitations)
+		}
+	}
+	refused := withheldFloorResult(InvestigationPartial)
+	refused.RefusalBasis = contractsv1.ContextFabricRefusalBasisUnspecified
+	applyProjectScopeWithheldStatusFloor(&refused)
+	if slices.Contains(refused.Limitations, sentence) {
+		t.Fatalf("a partial refusal gained the sentence: %v", refused.Limitations)
+	}
+	plain := withheldFloorResult(InvestigationPartial)
+	plain.Coverage = Coverage{Sources: []SourceObservation{}, DegradedReasons: []string{}}
+	applyProjectScopeWithheldStatusFloor(&plain)
+	if slices.Contains(plain.Limitations, sentence) {
+		t.Fatalf("a partial answer with no refusal gained the sentence: %v", plain.Limitations)
 	}
 }
 

@@ -339,8 +339,8 @@ carries a reason.
   withholds the narrative (`ApplyServedStatusFloors`), so it never pre-empts one.
   A denied cohort, an unverified project narrowing, a status filter over a cut
   read and an organization survey each withhold the narrative for their own
-  reason, on a project-only answer too. Those answers do not carry the floor's
-  sentence; their `project_scope_withheld` details still name what was refused.
+  reason, on a project-only answer too. Such an answer still states the grant:
+  already partial, it gains the project-scope sentence and nothing else.
 - **read_facts.** Each row reads outcome `withheld_project_scope` with
   `kind_state: unauthorized`, and the read is partial.
 - **A request that names projects (ruling B).** The engine stops before every
