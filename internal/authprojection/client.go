@@ -115,7 +115,11 @@ func (c *Client) Post(ctx context.Context, body []byte) Result {
 		return Result{Outcome: OutcomeNoAnswer}
 	}
 	defer func() { _ = response.Body.Close() }()
-	answer, _ := io.ReadAll(io.LimitReader(response.Body, maxAnswerBytes))
+	answer, err := io.ReadAll(io.LimitReader(response.Body, maxAnswerBytes))
+	if err != nil {
+		// A body that ended early may hold a reason code that is not the whole answer: never classify it.
+		return Result{Outcome: OutcomeNoAnswer}
+	}
 	return classify(response.StatusCode, response.Header.Get("Retry-After"), answer)
 }
 
