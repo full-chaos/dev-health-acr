@@ -49,6 +49,11 @@ type oracleHarness struct {
 // startOracle serves plan on loopback and builds the real runtime against it.
 func startOracle(t *testing.T, planJSON []byte) *oracleHarness {
 	t.Helper()
+	return startOracleWithTimeout(t, planJSON, 10*time.Second)
+}
+
+func startOracleWithTimeout(t *testing.T, planJSON []byte, modelTimeout time.Duration) *oracleHarness {
+	t.Helper()
 	dir := t.TempDir()
 	path := filepath.Join(dir, "plan.json")
 	if err := os.WriteFile(path, planJSON, 0o600); err != nil {
@@ -63,7 +68,7 @@ func startOracle(t *testing.T, planJSON []byte) *oracleHarness {
 	t.Cleanup(ts.Close)
 	rt, err := modelprovider.New(context.Background(), modelprovider.Config{
 		Provider: "oracle", BaseURL: ts.URL + "/v1/", Model: modelID, APIKey: llm.NewSecret("dummy-not-a-key"),
-		Timeout: 10 * time.Second, MaxAttempts: 1, AllowInsecureBaseURL: true,
+		Timeout: modelTimeout, MaxAttempts: 1, AllowInsecureBaseURL: true,
 	})
 	if err != nil {
 		t.Fatalf("modelprovider.New: %v", err)
