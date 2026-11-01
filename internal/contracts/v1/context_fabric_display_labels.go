@@ -52,18 +52,20 @@ var contextFabricFactKindLabels = map[ContextFabricFactKind]string{
 }
 
 // contextFabricSourceStateLabels labels every member of the closed source
-// state vocabulary.
+// state vocabulary. The words are ruled per row (CHAOS-12413): "no data" stays,
+// because an empty read is only one of its three paths, so it must not read
+// as zero.
 var contextFabricSourceStateLabels = map[ContextFabricSourceState]string{
 	ContextFabricSourceAvailable:     "available",
 	ContextFabricSourceStale:         "may be out of date",
 	ContextFabricSourceUnavailable:   "unavailable",
-	ContextFabricSourceUnconfigured:  "not configured",
-	ContextFabricSourceUnauthorized:  "not authorized",
+	ContextFabricSourceUnconfigured:  "not set up",
+	ContextFabricSourceUnauthorized:  "not readable with your access",
 	ContextFabricSourceNoData:        "no data",
-	ContextFabricSourceTruncated:     "partially included",
-	ContextFabricSourceConflicted:    "conflicting data",
+	ContextFabricSourceTruncated:     "partly included",
+	ContextFabricSourceConflicted:    "sources disagree",
 	ContextFabricSourceNotApplicable: "not applicable",
-	ContextFabricSourcePruned:        "not needed",
+	ContextFabricSourcePruned:        "not needed for this question",
 }
 
 // contextFabricEvidenceEntityLabels labels every member of the closed
