@@ -628,6 +628,28 @@ workflow_step_block() {
   ' "$1"
 }
 
+# check_job_unconditional refuses a job-level continue-on-error on job $2, and a
+# job-level if other than the single gate $3 (empty: none): either makes the job,
+# and the steps the guard pins, a no-op or a green failure.
+check_job_unconditional() {
+  local file="$1" job="$2" allowed="$3" keys
+  if [ -z "$(awk -v header="  $job:" '$0 == header { print "x" }' "$file")" ]; then
+    printf 'no job %s in %s\n' "$job" "$file" >&2
+    return 1
+  fi
+  keys="$(awk -v header="  $job:" '
+    /^  [A-Za-z0-9_-]+:[[:space:]]*$/ { grab = ($0 == header); next }
+    grab && /^    (if|continue-on-error):/ { print }
+  ' "$file")"
+  if [ -n "$allowed" ]; then
+    keys="$(grep -vxF "    if: $allowed" <<<"$keys" || true)"
+  fi
+  if [ -n "$keys" ]; then
+    printf 'job %s must run unconditionally and fail on failure (found: %s)\n' "$job" "$keys" >&2
+    return 1
+  fi
+}
+
 # check_named_step requires the step $3 in job $2 to be one step whose only
 # content, after its name line, is a run line equal to $4: nothing can append a
 # status swallower, a condition, a wrapper or a continue-on-error to it, and a
@@ -661,6 +683,8 @@ check_vendored_lifecycle_contract_wiring() {
       return 1
     fi
   done
+  check_job_unconditional "$file" contracts "needs.plan.outputs.heavy == 'true'" || return 1
+  check_job_unconditional "$file" scripts "" || return 1
   check_named_step "$file" contracts 'Verify the vendored lifecycle contract against the pinned ops contract' 'scripts/ci/check-vendored-ops-contract.sh .ops-contract' || return 1
   check_named_step "$file" scripts 'Verify the vendored ops contract check' 'scripts/ci/test-vendored-ops-contract.sh' || return 1
 }
