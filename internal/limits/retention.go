@@ -13,7 +13,7 @@ func (m *Manager) windowFor(class RequestClass, subject Subject, policy quotaPol
 		if len(byOrg) >= m.maxOrganizations {
 			return nil, m.capacityDenied()
 		}
-		window = &usageWindow{started: now, quotaStarted: now, lastTouched: now, quotaCredential: make(map[string]int64), credentials: make(map[string]UsageCounters)}
+		window = &usageWindow{started: now, quotaStarted: now, lastTouched: now, quotaCredential: make(map[string]int64), credentials: make(map[string]UsageCounters), touched: make(map[string]time.Time), running: make(map[string]int)}
 		byOrg[subject.OrgID] = window
 	}
 	if m.quotaExpired(window, policy, now) {
@@ -24,9 +24,34 @@ func (m *Manager) windowFor(class RequestClass, subject Subject, policy quotaPol
 		}
 	}
 	if _, exists := window.credentials[subject.key()]; !exists && len(window.credentials) >= m.maxCredentials {
-		return nil, m.capacityDenied()
+		m.forgetIdle(window, policy, now)
+		if len(window.credentials) >= m.maxCredentials {
+			return nil, m.capacityDenied()
+		}
 	}
 	return window, Decision{Allowed: true}
+}
+
+// forgetIdle removes the subjects a full set no longer needs, so the cap counts
+// live subjects and not every subject since the last sweep: one steady caller
+// stops that sweep. A subject goes when no claim of it is running and it has not
+// been seen for a retention. A retention is at least the quota window, so a
+// removed subject's quota count has already expired: waiting is no way around a
+// quota. It runs only when a new subject finds the set full, so it costs a pass
+// over the cap at most. A removed subject's Usage totals go with it.
+func (m *Manager) forgetIdle(window *usageWindow, policy quotaPolicy, now time.Time) {
+	retention := m.retentionOf(policy)
+	for key, touched := range window.touched {
+		if window.running[key] == 0 && !now.Before(touched.Add(retention)) {
+			delete(window.credentials, key)
+			delete(window.touched, key)
+		}
+	}
+}
+
+// retentionOf is how long state of a class is kept with no activity.
+func (m *Manager) retentionOf(policy quotaPolicy) time.Duration {
+	return max(m.retention, policy.Window)
 }
 
 func (m *Manager) sweep(now time.Time) {
@@ -44,8 +69,7 @@ func (m *Manager) sweep(now time.Time) {
 }
 
 func (m *Manager) expired(window *usageWindow, policy quotaPolicy, now time.Time) bool {
-	retention := max(m.retention, policy.Window)
-	return !now.Before(window.lastTouched.Add(retention))
+	return !now.Before(window.lastTouched.Add(m.retentionOf(policy)))
 }
 
 func (m *Manager) quotaExpired(window *usageWindow, policy quotaPolicy, now time.Time) bool {
@@ -72,4 +96,5 @@ func (window *usageWindow) denied(credentialID string, now time.Time) {
 	credential.Denied++
 	window.credentials[credentialID] = credential
 	window.lastTouched = now
+	window.touched[credentialID] = now
 }

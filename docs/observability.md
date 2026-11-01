@@ -141,7 +141,9 @@ Per-organization and per-credential request/resource totals come from the bounde
 A user's credentials count as one credential here: the user on one surface, so a
 refresh or a new Connect neither starts a new quota nor takes a new tracked
 subject. Workload, org-bearer and operator credentials count one by one, a
-workload by its binding.
+workload by its binding. A subject with no running request and no request for
+the retention leaves the tracked set once the set is full, and its totals go with
+it.
 
 ## What leaves a span
 
