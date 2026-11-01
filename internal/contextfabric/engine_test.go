@@ -429,6 +429,7 @@ type recordingTelemetry struct {
 	terminalSaveSkipped         []TerminalSaveSkippedEvent
 	priorSubjectReceiptsSkipped []int
 	answerReuseOutcomes         []AnswerReuseOutcome
+	workItemReuses              []WorkItemReuseEvent
 	// answerReuseOwnershipRoutingVersions records, per RecordAnswerReuse
 	// call and in the same order as answerReuseOutcomes, the
 	// ownershipRoutingVersion argument that call carried.
@@ -539,6 +540,8 @@ type recordingTelemetry struct {
 	// list-not-count discipline.
 	priorConsulted    []priorConsultedRecord
 	priorDegradations []PriorDegradationState
+	// projectNarrowingResolutions (CHAOS-12229) is every resolution line.
+	projectNarrowingResolutions []ProjectNarrowingResolutionEvent
 	// offerPhrasingOutcomes (CHAOS-4171 PR2) mirrors the SAME
 	// list-not-count discipline.
 	offerPhrasingOutcomes []OfferPhrasingOutcome
@@ -1025,6 +1028,10 @@ func (r *recordingTelemetry) RecordPriorConsulted(_ context.Context, _ storage.P
 
 func (r *recordingTelemetry) RecordPriorDegradation(_ context.Context, _ storage.Principal, state PriorDegradationState) {
 	r.priorDegradations = append(r.priorDegradations, state)
+}
+
+func (r *recordingTelemetry) RecordProjectNarrowingResolution(_ context.Context, _ storage.Principal, event ProjectNarrowingResolutionEvent) {
+	r.projectNarrowingResolutions = append(r.projectNarrowingResolutions, event)
 }
 
 func (r *recordingTelemetry) RecordOfferPhrasing(_ context.Context, _ storage.Principal, outcome OfferPhrasingOutcome) {
@@ -2403,7 +2410,8 @@ func (r *recordingTelemetry) RecordTerminalSaveSkipped(_ context.Context, _ stor
 	r.terminalSaveSkipped = append(r.terminalSaveSkipped, event)
 }
 
-func (r *recordingTelemetry) RecordWorkItemReuse(context.Context, storage.Principal, WorkItemReuseEvent) {
+func (r *recordingTelemetry) RecordWorkItemReuse(_ context.Context, _ storage.Principal, event WorkItemReuseEvent) {
+	r.workItemReuses = append(r.workItemReuses, event)
 }
 
 func (r *recordingTelemetry) RecordDerivedNumberPhrasing(context.Context, storage.Principal, InvestigationResult, DerivedNumberPhrasing) {

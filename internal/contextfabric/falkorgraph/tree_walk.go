@@ -246,6 +246,9 @@ type treeWalk struct {
 	// anchorDenied: the anchor itself is hidden from the caller.
 	anchorDenied bool
 	truncated    bool
+	// projectNarrowingUnverified: an admitted issue passed a requested
+	// project narrowing only on its "*" project list (CHAOS-12229).
+	projectNarrowingUnverified bool
 	// hasLink: the path crosses the issue <> pull request link.
 	hasLink bool
 	// linkSources is how many nodes the hop that feeds the link reached (a
@@ -360,6 +363,12 @@ func (s treeWalkState) authorized(n *node) bool {
 // scope; the issue is tested against the caller's grants and the rest of the
 // request (graphrank.AuthorizedThroughLink), never against the scope by its
 // own repository.
+//
+// CHAOS-12229: a requested project narrowing applies to every issue, a
+// repository-less one included (graphrank.ProjectNarrowingAdmits), and an
+// issue admitted only on its "*" project list is recorded
+// (projectNarrowingUnverified), so the answer discloses it as the general
+// graph read does.
 func (s treeWalkState) admitted(position treePosition, n *node, tier linkTier) bool {
 	if auth.ClassifyGrant(s.principal) == auth.GrantProjectOnly {
 		// CHAOS-12299: a project-only caller is decided by the node rule at
@@ -368,13 +377,18 @@ func (s treeWalkState) admitted(position treePosition, n *node, tier linkTier) b
 		// list (narrowed is false for it): only stated membership admits.
 		return s.authorized(n)
 	}
-	if position == treeIssue && repositoryLess(n) {
-		return tier.grantsAuthority || !s.narrowed()
+	if position != treeIssue {
+		return s.authorized(n)
 	}
-	if position == treeIssue {
-		return graphrank.AuthorizedThroughLink(s.principal, s.scope, toCandidateNode(n).Attributes)
+	attributes := toCandidateNode(n).Attributes
+	admitted := graphrank.AuthorizedThroughLink(s.principal, s.scope, attributes)
+	if repositoryLess(n) {
+		admitted = (tier.grantsAuthority || !s.narrowed()) && graphrank.ProjectNarrowingAdmits(s.scope, attributes)
 	}
-	return s.authorized(n)
+	if admitted && graphrank.ProjectNarrowingUnproven(s.scope, attributes) {
+		s.out.projectNarrowingUnverified = true
+	}
+	return admitted
 }
 
 // narrowed reports whether the caller sees only some repositories: a

@@ -50,6 +50,9 @@ type TreeWorkItemWalk struct {
 	// Truncated: the walk was cut at the limit or at its read bound; Members
 	// is then a floor, not the population.
 	Truncated bool
+	// ProjectNarrowingUnverified: a requested project narrowing admitted a
+	// member only on its "*" project list (CHAOS-12229); the answer says so.
+	ProjectNarrowingUnverified bool
 }
 
 // TreeWorkItemGraph walks the entity tree in the graph store.

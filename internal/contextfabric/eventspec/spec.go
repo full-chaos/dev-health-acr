@@ -2361,6 +2361,24 @@ var PriorDegradation = Event{
 	},
 }
 
+// ProjectNarrowingResolution is the Info line of how a requested project narrowing resolved to canonical project identities (CHAOS-12229).
+var ProjectNarrowingResolution = Event{
+	ID:                       "contextfabric.project_narrowing_resolution",
+	Msg:                      "context fabric project narrowing resolution",
+	Level:                    LevelInfo,
+	Multiplicity:             MultiplicityZeroOrOnePerRequest,
+	RequiredOnlyConstruction: true,
+	Attribution:              []string{"request_id"},
+	BoundedAggregation:       "at most one line per investigation, and only when the request names a project narrowing: the narrowing is resolved once, before the first graph read.",
+	Fields: []Field{
+		{Key: "org_id", Type: FieldString, Presence: PresenceRequired},
+		{Key: "outcome", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: contextfabric.ProjectNarrowingOutcomeVocabulary()},
+		{Key: "requested_ids", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "resolved_identities", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "request_id", Type: FieldString, Presence: PresenceConditional, Applicability: requestIDApplicability},
+	},
+}
+
 // ProjectedRowsCount is the Info line of how many canonical rows a synthesis attached to its claims, and whether the attachment was truncated.
 var ProjectedRowsCount = Event{
 	ID:                       "contextfabric.projected_rows_count",
@@ -4559,7 +4577,7 @@ var WorkItemReuse = Event{
 	BoundedAggregation: "at most one tuple candidate per request; one decision records the first declined guard or the hit, and the current requested team scope",
 	Fields: []Field{
 		{Key: "org_id", Type: FieldString, Presence: PresenceRequired},
-		{Key: "decision", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: []string{"reading_unavailable", "member_filter_not_reusable", "payload_rejected", "census_unavailable", "digest_changed", "anchor_unavailable", "membership_unavailable", "membership_changed", "coverage_invalid", "hit"}},
+		{Key: "decision", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: []string{"reading_unavailable", "member_filter_not_reusable", "payload_rejected", "census_unavailable", "digest_changed", "anchor_unavailable", "membership_unavailable", "membership_changed", "project_narrowing_unverified", "coverage_invalid", "hit"}},
 		{Key: "reject_reason", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: contextfabric.SemanticStatePersistenceLineVocabulary("reject_reason")},
 		{Key: "semantic_read", Type: FieldString, Presence: PresenceRequired},
 		{Key: "census_read", Type: FieldString, Presence: PresenceRequired},
@@ -5537,6 +5555,9 @@ var RepositoryWorkItemWalk = Event{
 		{Key: "members", Type: FieldInt, Presence: PresenceConditional, Applicability: "written when the read measured the population (every outcome but read_failed)"},
 		{Key: "truncated", Type: FieldBool, Presence: PresenceConditional, Applicability: "written when the read measured the population (every outcome but read_failed)"},
 		{Key: "denied", Type: FieldInt, Presence: PresenceConditional, Applicability: "written when the read measured the population and applied no member filter"},
+		// CHAOS-12229: the walk admitted a member under a requested project
+		// narrowing only on its "*" project list; the answer discloses it.
+		{Key: "project_narrowing_unverified", Type: FieldBool, Presence: PresenceConditional, Applicability: "written when the read measured the population (every outcome but read_failed)"},
 		{Key: "reason", Type: FieldString, Presence: PresenceConditional, Applicability: "written when outcome=read_failed", ClosedVocabulary: []string{"", "s1_error", "read_limit_exceeded", "cancelled", "excluded_provider", "zero_authorized_overflow", "identity_omitted"}},
 		{Key: "request_id", Type: FieldString, Presence: PresenceConditional, Applicability: "written when the request context carries a request ID"},
 	},
@@ -5647,6 +5668,7 @@ var All = []Event{
 	PriorConsulted,
 	PriorDegradationPointerDangling,
 	PriorDegradation,
+	ProjectNarrowingResolution,
 	ProjectedRowsCount,
 	ProjectedRowsByFactKind,
 	DualTableFacts,

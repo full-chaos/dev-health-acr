@@ -90,6 +90,9 @@ func (e *Engine) discoverWorkItemTuple(ctx context.Context, principal storage.Pr
 		return graph, census, nil
 	}
 	measured = true
+	if membership.ProjectNarrowingUnverified {
+		discloseUnverifiedProjectNarrowing(&graph.Coverage)
+	}
 	// A filtered read never measures the denied partition: its count would be
 	// the denied items' count for one status, a distribution the unfiltered
 	// read does not give. The filtered answer states one fixed exclusion
@@ -499,6 +502,7 @@ func (e *Engine) recordRepositoryWorkItemWalk(ctx context.Context, principal sto
 	if measured {
 		event.PullRequests, event.LinkedIssues = membership.Census.RepositoryPullRequests, membership.Census.RepositoryLinkedIssues
 		event.LowerTierCut = membership.Census.LowerTierCut
+		event.ProjectNarrowingUnverified = membership.ProjectNarrowingUnverified
 		event.Members, event.Population = members, membership.Census.AuthorizedPopulation
 		event.Truncated = membership.Census.PopulationIncomplete || membership.Census.State == WorkItemMembershipCensusFloor || members < event.Population
 		if !filtered {
