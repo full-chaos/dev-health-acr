@@ -1,6 +1,7 @@
 package dbacl
 
 import (
+	"os"
 	"strings"
 	"testing"
 )
@@ -72,5 +73,25 @@ func TestTheComposeBlockGatesTheColumnGrantOnThePublisher(t *testing.T) {
 	want := "\\if :auth_projection\nGRANT UPDATE (published_at) ON TABLE acr.credential_lifecycle_outbox TO :\"runtime_user\";\n\\endif"
 	if !strings.Contains(block, want) {
 		t.Errorf("the compose block lacks the gated column grant:\n%s", block)
+	}
+}
+
+// A table-level REVOKE does not remove a column privilege, so the compose block's feature-off branch must revoke the
+// column grant itself.
+func TestTheComposeBlockRevokesTheColumnGrantWhenThePublisherIsOff(t *testing.T) {
+	const want = "\\if :auth_projection\nGRANT UPDATE (published_at) ON TABLE acr.credential_lifecycle_outbox TO :\"runtime_user\";\n" +
+		"\\else\nREVOKE UPDATE (published_at) ON TABLE acr.credential_lifecycle_outbox FROM :\"runtime_user\";\n\\endif"
+	if block := RenderCompose(); !strings.Contains(block, want) {
+		t.Errorf("the generated compose block lacks the feature-off column REVOKE:\n%s", block)
+	}
+	raw, err := os.ReadFile(composeScript)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(raw), want) {
+		t.Errorf("%s lacks the feature-off column REVOKE", composeScript)
+	}
+	if strings.Count(RenderCompose(), "REVOKE UPDATE (published_at)") != 1 {
+		t.Error("exactly one column REVOKE: the declaration has one column row")
 	}
 }
