@@ -154,6 +154,10 @@ spec:
             # declares itself off. See values.yaml's own comment.
             - name: ACR_CONTEXT_FABRIC_VOCABULARY_LABELS_ENABLED
               value: {{ .Values.contextFabric.vocabularyLabelsEnabled | default false | quote }}
+            # CHAOS-12472: always rendered, like the flag above. Ask Dev's Stop
+            # needs it; see values.yaml's own comment.
+            - name: ACR_CONTEXT_FABRIC_RUN_LEASE_ENABLED
+              value: {{ include "acr.runLeaseEnabled" . | quote }}
             {{- if .Values.contextFabric.falkor.addr }}
             - name: ACR_CONTEXT_FABRIC_FALKOR_ADDR
               value: {{ .Values.contextFabric.falkor.addr | quote }}
