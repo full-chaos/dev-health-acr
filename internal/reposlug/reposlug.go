@@ -6,24 +6,28 @@ package reposlug
 
 import "regexp"
 
+// NamePattern is the grammar of a repository name as one RE2 group, with no
+// anchor, so a ClickHouse statement can apply the rule ValidName applies. It
+// holds no backslash, quote or '?', so it reads the same as a SQL string
+// literal. Its first branch is one alphanumeric character, which is how a lone
+// '.' stays out; its second is 2-100 characters.
+const NamePattern = `([a-z0-9]|[a-z0-9.][a-z0-9._-]{0,98}[a-z0-9])`
+
 var (
 	// ownerPattern: an alphanumeric first and last character, 1-100 characters.
 	ownerPattern = regexp.MustCompile(`^[a-z0-9](?:[a-z0-9._-]{0,98}[a-z0-9])?$`)
 	// namePattern: as ownerPattern, but a leading '.' is allowed. GitHub accepts
 	// it for repository names (full-chaos/.github is the standard organization
 	// configuration repository).
-	namePattern = regexp.MustCompile(`^[a-z0-9.](?:[a-z0-9._-]{0,98}[a-z0-9])?$`)
+	namePattern = regexp.MustCompile(`^` + NamePattern + `$`)
 )
 
 // ValidOwner reports whether a lower-cased owner part is valid.
 func ValidOwner(part string) bool { return ownerPattern.MatchString(part) }
 
-// ValidName reports whether a lower-cased repository name part is valid.
-// "." is refused explicitly (a lone '.' otherwise matches the pattern); ".."
-// is refused by the pattern, whose last character must be alphanumeric.
-func ValidName(part string) bool {
-	return part != "." && namePattern.MatchString(part)
-}
+// ValidName reports whether a lower-cased repository name part is valid. "."
+// and ".." are refused by the pattern: its last character must be alphanumeric.
+func ValidName(part string) bool { return namePattern.MatchString(part) }
 
 // Fault names why a lower-cased owner/repo slug part is invalid, or "" when it
 // is valid. owner selects the owner grammar.

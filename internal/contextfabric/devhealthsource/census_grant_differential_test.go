@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"reflect"
+	"regexp"
 	"slices"
 	"sort"
 	"strings"
@@ -14,6 +15,7 @@ import (
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/devhealthsource"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/graphrank"
 	"github.com/full-chaos/dev-health-acr/internal/contextpacket"
+	"github.com/full-chaos/dev-health-acr/internal/storage"
 	"github.com/full-chaos/dev-health-acr/internal/testsupport/userprincipal"
 )
 
@@ -39,8 +41,11 @@ type grantRepository struct {
 type grantWorld struct {
 	org                                                      string
 	insideGitHub, insideGitLab, outsideGitHub, outsideGitLab grantRepository
-	client                                                   contextpacket.ClickHouseQueryClient
-	add                                                      func(t *testing.T, repository grantRepository)
+	// nestedGitLab and malformed sit under the insideGitHub owner, and the
+	// graph gate refuses both slugs: they are outside an owner grant.
+	nestedGitLab, malformed grantRepository
+	client                  contextpacket.ClickHouseQueryClient
+	add                     func(t *testing.T, repository grantRepository)
 }
 
 type grantStatementLog struct {
@@ -107,9 +112,19 @@ func grantCandidateNode(world grantWorld, repository grantRepository) graphrank.
 // difference between two turns can only come from the census.
 func observeGrantTurn(t *testing.T, world grantWorld) grantObservation {
 	t.Helper()
+	principal := userprincipal.Narrowed(t, world.org, []string{"acme/*", "group/*"}, []string{world.insideGitHub.slug, world.insideGitLab.slug})
+	return observeTurnAs(t, world, principal, nil)
+}
+
+// observeTurnAs is observeGrantTurn for one principal, with extra graph nodes.
+func observeTurnAs(t *testing.T, world grantWorld, principal storage.Principal, extra map[string]graphrank.CandidateNode) grantObservation {
+	t.Helper()
 	nodes := map[string]graphrank.CandidateNode{}
 	for _, repository := range []grantRepository{world.insideGitHub, world.insideGitLab, world.outsideGitHub, world.outsideGitLab} {
 		nodes[grantCanonicalID(world, repository)] = grantCandidateNode(world, repository)
+	}
+	for id, node := range extra {
+		nodes[id] = node
 	}
 	log := &grantStatementLog{inner: world.client}
 	tracer := &grantTracer{}
@@ -144,7 +159,6 @@ func observeGrantTurn(t *testing.T, world grantWorld) grantObservation {
 		Shape: contextfabric.ShapeOpen, RequestedJudgment: "status", SubjectTerms: []string{grantTerm},
 		TimeContext: contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent}, FactRequirements: []contextfabric.FactRequirement{{Kind: contextfabric.FactStatus}},
 	}
-	principal := userprincipal.Narrowed(t, world.org, []string{"acme/*", "group/*"}, []string{world.insideGitHub.slug, world.insideGitLab.slug})
 	resolution, offers, bases, digests, err := graphrank.ResolveSubjectsWithCommitBasis(context.Background(), principal, request, interpreted, deps, nil, nil, nil, "")
 	if err != nil {
 		t.Fatalf("ResolveSubjectsWithCommitBasis: %v", err)
@@ -254,6 +268,39 @@ func anInsideSatisfierBesideAnOutsideOneCommits(t *testing.T, build grantWorldBu
 	}
 }
 
+// anOwnerGrantReadsOnlyWhatTheGateAdmits: an owner wildcard admits exactly the
+// two-part slugs the graph gate admits, through the census count and through a
+// turn. The turn is the caller-visible half (codex r2, CHAOS-12455): the node
+// of a repository now at acme/group/secret still lists an old in-grant slug, so
+// the gate alone would have committed the row a prefix let through.
+func anOwnerGrantReadsOnlyWhatTheGateAdmits(t *testing.T, build grantWorldBuilder) {
+	world := build(t, "owner wildcard")
+	world.add(t, world.insideGitHub)
+	world.add(t, world.nestedGitLab)
+	world.add(t, world.malformed)
+	ctx := contextfabric.WithCensusGrant(context.Background(), []string{"acme/*"})
+	outcome, err := devhealthsource.NewCensusFunc(world.client)(ctx, world.org, contextfabric.SubjectPullRequest, fmt.Sprint(grantNumber), true, "", "", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := grantCanonicalID(world, world.insideGitHub); outcome.Count != 1 || outcome.SatisfierCanonicalID != want {
+		t.Fatalf("census = %+v, want only %s", outcome, want)
+	}
+
+	alone := build(t, "owner wildcard turn")
+	stale := map[string]graphrank.CandidateNode{}
+	for _, repository := range []grantRepository{alone.nestedGitLab, alone.malformed} {
+		node := grantCandidateNode(alone, repository)
+		node.Attributes["authorization_repositories"] = []string{"acme/old-name"}
+		stale[grantCanonicalID(alone, repository)] = node
+	}
+	principal := userprincipal.Authenticated(t, alone.org, []string{"acme/*"})
+	none := observeTurnAs(t, alone, principal, stale)
+	alone.add(t, alone.nestedGitLab)
+	alone.add(t, alone.malformed)
+	assertSameTurn(t, none, observeTurnAs(t, alone, principal, stale))
+}
+
 // grantStatementModel answers a census statement from rows, evaluating only
 // what the statement and its bindings carry: the organization, the number, and
 // each repository filter whose clause is in the text. A statement with no grant
@@ -278,10 +325,22 @@ func filterAdmits(statement string, values map[string]any, prefix, slug string) 
 		}
 		seen = true
 		want := fmt.Sprint(value)
-		if slug == want || (strings.HasSuffix(want, "/") && strings.HasPrefix(slug, want)) {
+		if slug == want || (strings.HasSuffix(want, "/") && strings.HasPrefix(slug, want) && slugShapeAdmits(statement, name, slug)) {
 			return true
 		}
 	}
+}
+
+// slugShapeAdmits runs the regular expression of the named clause, when the
+// clause has one. It is the statement's own text, so the model reads the rule
+// the statement carries: both engines are RE2.
+func slugShapeAdmits(statement, name, slug string) bool {
+	_, after, found := strings.Cut(statement, "{"+name+":String}) AND match(lower(trimBoth(repo)), '")
+	if !found {
+		return true
+	}
+	expression, _, _ := strings.Cut(after, "'")
+	return regexp.MustCompile(expression).MatchString(slug)
 }
 
 func (m *grantStatementModel) Query(ctx context.Context, statement string, bindings []contextpacket.ClickHouseBinding) (contextpacket.ClickHouseRowScanner, error) {
@@ -309,6 +368,8 @@ func grantModelWorld(_ *testing.T, _ string) grantWorld {
 		insideGitLab:  grantRepository{"11111111-0000-4000-8000-000000000002", "group/beta", "gitlab"},
 		outsideGitHub: grantRepository{"22222222-0000-4000-8000-000000000001", "other/secret", "github"},
 		outsideGitLab: grantRepository{"22222222-0000-4000-8000-000000000002", "elsewhere/hidden", "gitlab"},
+		nestedGitLab:  grantRepository{"22222222-0000-4000-8000-000000000003", "acme/group/secret", "gitlab"},
+		malformed:     grantRepository{"22222222-0000-4000-8000-000000000004", "acme/trailing-", "github"},
 		client:        model,
 	}
 	world.add = func(_ *testing.T, repository grantRepository) {
@@ -330,4 +391,9 @@ func TestAnOutsideSatisfierIsNeverCountedNamedOrOffered(t *testing.T) {
 func TestAnInsideSatisfierBesideAnOutsideOneCommits(t *testing.T) {
 	t.Parallel()
 	anInsideSatisfierBesideAnOutsideOneCommits(t, grantModelWorld)
+}
+
+func TestAnOwnerGrantReadsOnlyWhatTheGateAdmits(t *testing.T) {
+	t.Parallel()
+	anOwnerGrantReadsOnlyWhatTheGateAdmits(t, grantModelWorld)
 }

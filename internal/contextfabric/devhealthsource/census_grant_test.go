@@ -13,6 +13,7 @@ import (
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/graphrank"
 	"github.com/full-chaos/dev-health-acr/internal/contextpacket"
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
+	"github.com/full-chaos/dev-health-acr/internal/reposlug"
 )
 
 type grantedKind struct {
@@ -104,8 +105,9 @@ func TestAGrantOwnerWildcardIsApplied(t *testing.T) {
 	if err != nil || !outcome.GrantApplied {
 		t.Fatalf("census = %+v %v, want the grant applied", outcome, err)
 	}
-	if !strings.Contains(client.calls[0], "startsWith(lower(trimBoth(repo)), {census_grant_0:String})") || bindingValues(client.bindings[0])["census_grant_0"] != "acme/" {
-		t.Fatalf("statement = %q bindings %v, want an owner prefix clause", client.calls[0], client.bindings[0])
+	shape := "startsWith(lower(trimBoth(repo)), {census_grant_0:String}) AND match(lower(trimBoth(repo)), '^[^/]+/" + reposlug.NamePattern + "$')"
+	if !strings.Contains(client.calls[0], shape) || bindingValues(client.bindings[0])["census_grant_0"] != "acme/" {
+		t.Fatalf("statement = %q bindings %v, want the owner prefix and the slug shape", client.calls[0], client.bindings[0])
 	}
 }
 

@@ -30,6 +30,8 @@ func grantClickHouseWorld(t *testing.T, name string) grantWorld {
 		insideGitLab:  repository("inside-gitlab", "group/beta", "gitlab"),
 		outsideGitHub: repository("outside-github", "other/secret", "github"),
 		outsideGitLab: repository("outside-gitlab", "elsewhere/hidden", "gitlab"),
+		nestedGitLab:  repository("nested-gitlab", "acme/group/secret", "gitlab"),
+		malformed:     repository("malformed", "acme/trailing-", "github"),
 		client:        query,
 		add: func(t *testing.T, repository grantRepository) {
 			t.Helper()
@@ -50,4 +52,8 @@ func TestAnOutsideSatisfierIsNeverCountedNamedOrOfferedOnClickHouse(t *testing.T
 
 func TestAnInsideSatisfierBesideAnOutsideOneCommitsOnClickHouse(t *testing.T) {
 	anInsideSatisfierBesideAnOutsideOneCommits(t, grantClickHouseWorld)
+}
+
+func TestAnOwnerGrantReadsOnlyWhatTheGateAdmitsOnClickHouse(t *testing.T) {
+	anOwnerGrantReadsOnlyWhatTheGateAdmits(t, grantClickHouseWorld)
 }

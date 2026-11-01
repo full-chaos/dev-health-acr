@@ -39,6 +39,12 @@ requested repository filter, under its own binding names (`census_grant_N`):
 the count, the set read and the row read all carry it. A requested narrowing
 ANDs a second clause (`census_repo_N`) beside it.
 
+An owner wildcard in a grant admits what the graph gate admits for that owner:
+a valid two-part slug (`reposlug.NamePattern`), not only the prefix. `acme/*`
+does not cover `acme/group/secret` or `acme/trailing-`, because
+`NormalizeRepositorySlug` refuses both. A requested filter keeps its prefix: it
+has a post-filter, and its statement stays byte-identical.
+
 `ErrCensusGrantNotApplied` ends the read, with no statement, for: more than 200
 slugs, a bare `*`, an invalid or reserved slug, an empty list, or a kind with no
 repository column. The round reports it as `census_error`. A requested filter
