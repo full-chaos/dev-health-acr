@@ -381,8 +381,8 @@ func TestRevokeOfALegacyCredentialWritesFirstTouchThenTheEvent(t *testing.T) {
 	if err := Append(context.Background(), sink, Facts{Kind: KindRevoked, Credential: cred, At: at, Actor: Actor{ActorUser, "admin"}}); err != nil {
 		t.Fatal(err)
 	}
-	if got := revisions(sink, cred.CredentialID); len(got) != 3 || got[2] != 3 {
-		t.Fatalf("a later event after first touch must be rev 3, got %v", got)
+	if got := revisions(sink, cred.CredentialID); len(got) != 2 {
+		t.Fatalf("a second revoked on a revoked aggregate writes nothing (one terminal row per credential), got %v", got)
 	}
 }
 
