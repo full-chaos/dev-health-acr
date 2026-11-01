@@ -281,7 +281,8 @@ func TestNoVocabularyFoldsTwoValuesIntoOneWord(t *testing.T) {
 // operational_deficiency (a finding) and operational_deficiencies (a claimed
 // fact) are one thing in two published spellings.
 func sameFindingAndFactKind(a, b string) bool {
-	return strings.HasPrefix(a, "operational_deficienc") && strings.HasPrefix(b, "operational_deficienc")
+	return (a == "operational_deficiency" && b == "operational_deficiencies") ||
+		(a == "operational_deficiencies" && b == "operational_deficiency")
 }
 
 var vocabularyKeyShape = regexp.MustCompile(`^[a-z][a-z_]*:[^\s:]+$`)
