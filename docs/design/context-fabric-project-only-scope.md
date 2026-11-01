@@ -149,6 +149,21 @@ of `project_membership_presence` is not read.
   Under a requested narrowing a lower tier neither proves nor denies: the node
   stays admitted and is reported unverified, like an unstated one, and its tier
   stays on the node. A consumer never presents a lower tier as native.
+- **Naming the tier: two different numbers.** The answer names it through
+  `graph_answer_pull_requests_on_explicit_text_links` and
+  `graph_answer_pull_requests_on_heuristic_links`, non-degrading coverage
+  details whose count is the pull requests IN THE ANSWER: the cohort members and
+  edge endpoints of the general read that rest on that tier.
+  `read_population_unverified` stays the degrading disclosure, with no count.
+  The walk lines carry `walk_crossed_pull_requests_explicit_text` and
+  `walk_crossed_pull_requests_heuristic`: the pull requests a walk CROSSED on
+  that tier. An issue decides for itself, so a crossed pull request need not
+  reach the answer, and neither number stands for the other.
+- **A colliding issue id.** `work_items` is keyed by
+  `(org_id, repo_id, work_item_id)` and a link row names no issue repository, so
+  one link id can join two rows. The row in the pull request's own repository is
+  the issue; with none, the link names no project and is counted
+  (`ambiguous_links`). A wrong project would admit a project-only caller.
 - **Unstated, not empty.** With no contributing link the pull request states
   nothing, so it stays on the disclosed path and never reads as "in no project".
   A set over the contract's bound is unstated too: never a partial set.

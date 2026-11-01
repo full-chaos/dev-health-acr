@@ -3,6 +3,7 @@ package devhealthsource
 import (
 	"context"
 	"fmt"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -60,5 +61,29 @@ func TestTheRefreshPageCutsAtItsLimitAndStandsAtTheChangeStamp(t *testing.T) {
 	}
 	if len(seen) != 2 {
 		t.Fatalf("page holds %d pull requests, want the limit of 2", len(seen))
+	}
+}
+
+// One link id can join several work items: the row in the pull request's own
+// repository is the issue, and with none the link names no project.
+func TestALinkIdIsResolvedToOneIssueOrToNone(t *testing.T) {
+	t.Parallel()
+	key := pullRequestKey{repoID: "repo-a", number: 7}
+	link := func(repoID, id string) pullRequestIssueLink {
+		return pullRequestIssueLink{issue: workItemKey{repoID: repoID, workItemID: id}, tier: "native"}
+	}
+	for name, tc := range map[string]struct {
+		rows      []pullRequestIssueLink
+		want      []pullRequestIssueLink
+		ambiguous int
+	}{
+		"one row in another repository": {[]pullRequestIssueLink{link("repo-b", "I-1")}, []pullRequestIssueLink{link("repo-b", "I-1")}, 0},
+		"the own repository wins":       {[]pullRequestIssueLink{link("repo-b", "I-1"), link("repo-a", "I-1")}, []pullRequestIssueLink{link("repo-a", "I-1")}, 0},
+		"no row in the own repository":  {[]pullRequestIssueLink{link("repo-b", "I-1"), link("repo-c", "I-1")}, []pullRequestIssueLink{}, 1},
+	} {
+		got, ambiguous := resolveLinkedIssues(key, tc.rows)
+		if !reflect.DeepEqual(got, tc.want) || ambiguous != tc.ambiguous {
+			t.Errorf("%s: resolved %v, %d ambiguous; want %v, %d", name, got, ambiguous, tc.want, tc.ambiguous)
+		}
 	}
 }

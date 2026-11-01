@@ -6544,23 +6544,25 @@ func (f RenderShapeSelectionSummaryFields) SlogArgs() []any {
 // RepositoryWorkItemWalkFields is contextfabric.repository_work_item_walk's generated typed construction interface
 // (CHAOS-5516): one Go field per Field RepositoryWorkItemWalk.Fields declares in spec.go.
 type RepositoryWorkItemWalkFields struct {
-	OrgID                      string
-	Outcome                    string
-	AnchorKind                 string
-	Filtered                   bool
-	Restricted                 bool
-	PullRequests               int
-	LinkedIssues               int
-	Members                    int
-	Truncated                  bool
-	Denied                     int
-	ProjectNarrowingUnverified bool
-	ProjectExcluded            int
-	TeamNarrowing              string
-	TeamExcluded               int
-	TeamFloorReason            string
-	Reason                     string
-	RequestID                  string
+	OrgID                               string
+	Outcome                             string
+	AnchorKind                          string
+	Filtered                            bool
+	Restricted                          bool
+	PullRequests                        int
+	LinkedIssues                        int
+	Members                             int
+	Truncated                           bool
+	Denied                              int
+	ProjectNarrowingUnverified          bool
+	ProjectExcluded                     int
+	WalkCrossedPullRequestsExplicitText int
+	WalkCrossedPullRequestsHeuristic    int
+	TeamNarrowing                       string
+	TeamExcluded                        int
+	TeamFloorReason                     string
+	Reason                              string
+	RequestID                           string
 	// constructed (CHAOS-5516 r1 fix): an UNEXPORTED marker, generated on
 	// every RepositoryWorkItemWalkFields uniformly, set ONLY by NewRepositoryWorkItemWalkFields below. A caller
 	// outside this package cannot set an unexported field via a composite
@@ -6574,26 +6576,28 @@ type RepositoryWorkItemWalkFields struct {
 
 // NewRepositoryWorkItemWalkFields is the generated constructor for RepositoryWorkItemWalkFields -- every
 // field RepositoryWorkItemWalk.Fields declares is a required parameter.
-func NewRepositoryWorkItemWalkFields(orgID string, outcome string, anchorKind string, filtered bool, restricted bool, pullRequests int, linkedIssues int, members int, truncated bool, denied int, projectNarrowingUnverified bool, projectExcluded int, teamNarrowing string, teamExcluded int, teamFloorReason string, reason string, requestID string) RepositoryWorkItemWalkFields {
+func NewRepositoryWorkItemWalkFields(orgID string, outcome string, anchorKind string, filtered bool, restricted bool, pullRequests int, linkedIssues int, members int, truncated bool, denied int, projectNarrowingUnverified bool, projectExcluded int, walkCrossedPullRequestsExplicitText int, walkCrossedPullRequestsHeuristic int, teamNarrowing string, teamExcluded int, teamFloorReason string, reason string, requestID string) RepositoryWorkItemWalkFields {
 	return RepositoryWorkItemWalkFields{
-		OrgID:                      orgID,
-		Outcome:                    outcome,
-		AnchorKind:                 anchorKind,
-		Filtered:                   filtered,
-		Restricted:                 restricted,
-		PullRequests:               pullRequests,
-		LinkedIssues:               linkedIssues,
-		Members:                    members,
-		Truncated:                  truncated,
-		Denied:                     denied,
-		ProjectNarrowingUnverified: projectNarrowingUnverified,
-		ProjectExcluded:            projectExcluded,
-		TeamNarrowing:              teamNarrowing,
-		TeamExcluded:               teamExcluded,
-		TeamFloorReason:            teamFloorReason,
-		Reason:                     reason,
-		RequestID:                  requestID,
-		constructed:                true,
+		OrgID:                               orgID,
+		Outcome:                             outcome,
+		AnchorKind:                          anchorKind,
+		Filtered:                            filtered,
+		Restricted:                          restricted,
+		PullRequests:                        pullRequests,
+		LinkedIssues:                        linkedIssues,
+		Members:                             members,
+		Truncated:                           truncated,
+		Denied:                              denied,
+		ProjectNarrowingUnverified:          projectNarrowingUnverified,
+		ProjectExcluded:                     projectExcluded,
+		WalkCrossedPullRequestsExplicitText: walkCrossedPullRequestsExplicitText,
+		WalkCrossedPullRequestsHeuristic:    walkCrossedPullRequestsHeuristic,
+		TeamNarrowing:                       teamNarrowing,
+		TeamExcluded:                        teamExcluded,
+		TeamFloorReason:                     teamFloorReason,
+		Reason:                              reason,
+		RequestID:                           requestID,
+		constructed:                         true,
 	}
 }
 
@@ -6622,6 +6626,8 @@ func (f RepositoryWorkItemWalkFields) SlogArgs() []any {
 		"denied", f.Denied,
 		"project_narrowing_unverified", f.ProjectNarrowingUnverified,
 		"project_excluded", f.ProjectExcluded,
+		"walk_crossed_pull_requests_explicit_text", f.WalkCrossedPullRequestsExplicitText,
+		"walk_crossed_pull_requests_heuristic", f.WalkCrossedPullRequestsHeuristic,
 		"team_narrowing", contextfabric.SanitizeLogAttr(f.TeamNarrowing),
 		"team_excluded", f.TeamExcluded,
 		"team_floor_reason", contextfabric.SanitizeLogAttr(f.TeamFloorReason),
@@ -8034,17 +8040,19 @@ func (f SynthesisStatusOverrideFields) SlogArgs() []any {
 // TeamAnchorWalkFields is contextfabric.team_anchor_walk's generated typed construction interface
 // (CHAOS-5516): one Go field per Field TeamAnchorWalk.Fields declares in spec.go.
 type TeamAnchorWalkFields struct {
-	OrgID           string
-	Outcome         string
-	AnchorKind      string
-	MemberKind      string
-	Committed       int
-	Members         int
-	Denied          int
-	ProjectExcluded int
-	Truncated       bool
-	Error           string
-	RequestID       string
+	OrgID                               string
+	Outcome                             string
+	AnchorKind                          string
+	MemberKind                          string
+	Committed                           int
+	Members                             int
+	Denied                              int
+	ProjectExcluded                     int
+	WalkCrossedPullRequestsExplicitText int
+	WalkCrossedPullRequestsHeuristic    int
+	Truncated                           bool
+	Error                               string
+	RequestID                           string
 	// constructed (CHAOS-5516 r1 fix): an UNEXPORTED marker, generated on
 	// every TeamAnchorWalkFields uniformly, set ONLY by NewTeamAnchorWalkFields below. A caller
 	// outside this package cannot set an unexported field via a composite
@@ -8058,20 +8066,22 @@ type TeamAnchorWalkFields struct {
 
 // NewTeamAnchorWalkFields is the generated constructor for TeamAnchorWalkFields -- every
 // field TeamAnchorWalk.Fields declares is a required parameter.
-func NewTeamAnchorWalkFields(orgID string, outcome string, anchorKind string, memberKind string, committed int, members int, denied int, projectExcluded int, truncated bool, error string, requestID string) TeamAnchorWalkFields {
+func NewTeamAnchorWalkFields(orgID string, outcome string, anchorKind string, memberKind string, committed int, members int, denied int, projectExcluded int, walkCrossedPullRequestsExplicitText int, walkCrossedPullRequestsHeuristic int, truncated bool, error string, requestID string) TeamAnchorWalkFields {
 	return TeamAnchorWalkFields{
-		OrgID:           orgID,
-		Outcome:         outcome,
-		AnchorKind:      anchorKind,
-		MemberKind:      memberKind,
-		Committed:       committed,
-		Members:         members,
-		Denied:          denied,
-		ProjectExcluded: projectExcluded,
-		Truncated:       truncated,
-		Error:           error,
-		RequestID:       requestID,
-		constructed:     true,
+		OrgID:                               orgID,
+		Outcome:                             outcome,
+		AnchorKind:                          anchorKind,
+		MemberKind:                          memberKind,
+		Committed:                           committed,
+		Members:                             members,
+		Denied:                              denied,
+		ProjectExcluded:                     projectExcluded,
+		WalkCrossedPullRequestsExplicitText: walkCrossedPullRequestsExplicitText,
+		WalkCrossedPullRequestsHeuristic:    walkCrossedPullRequestsHeuristic,
+		Truncated:                           truncated,
+		Error:                               error,
+		RequestID:                           requestID,
+		constructed:                         true,
 	}
 }
 
@@ -8096,6 +8106,8 @@ func (f TeamAnchorWalkFields) SlogArgs() []any {
 		"members", f.Members,
 		"denied", f.Denied,
 		"project_excluded", f.ProjectExcluded,
+		"walk_crossed_pull_requests_explicit_text", f.WalkCrossedPullRequestsExplicitText,
+		"walk_crossed_pull_requests_heuristic", f.WalkCrossedPullRequestsHeuristic,
 		"truncated", f.Truncated,
 		"error", contextfabric.SanitizeLogAttr(f.Error),
 		"request_id", contextfabric.SanitizeLogAttr(f.RequestID),

@@ -176,3 +176,107 @@ func TestLiveAWalkReadsAPullRequestsMembershipAndTier(t *testing.T) {
 		t.Fatalf("admitted, unproven, project-only = %v, want %v", got, want)
 	}
 }
+
+// A repository walk's fused link read counts the pull requests it crossed on a
+// lower tier. The issues here state no membership, so each decides for itself,
+// and a pull request of another project is crossed too: it stays admitted.
+func TestLiveARepositoryWalkCountsThePullRequestsItCrossedOnALowerTier(t *testing.T) {
+	ctx := context.Background()
+	adapter, _ := newLiveFalkorAdapter(t, ctx)
+	org := "live-12308-crossed-" + time.Now().UTC().Format("20060102T150405.000000000")
+	t.Cleanup(func() { _ = adapter.PurgeOrganization(context.Background(), org) })
+	const wanted, other = "project.v2:linear:proj-1", "project.v2:linear:proj-2"
+	issue := func(id string) string { return "work_item.v2:00000000-0000-0000-0000-000000000000:" + id }
+	links := []liveMemberLink{
+		{issue: issue("A"), pullRequest: "pull_request:acme/svc:1", slug: memberAnchorSlug, tier: "explicit_text"},
+		{issue: issue("B"), pullRequest: "pull_request:acme/svc:2", slug: memberAnchorSlug, tier: "heuristic"},
+		{issue: issue("C"), pullRequest: "pull_request:acme/svc:3", slug: memberAnchorSlug, tier: "native"},
+		{issue: issue("D"), pullRequest: "pull_request:acme/svc:4", slug: memberAnchorSlug, tier: "explicit_text"},
+	}
+	entities, relationships := newLiveMemberFixture(org, time.Now().UTC(), nil, links)
+	stated := map[string]struct {
+		tier, identity string
+	}{
+		"pull_request:acme/svc:1": {"explicit_text", wanted},
+		"pull_request:acme/svc:2": {"heuristic", other},
+		"pull_request:acme/svc:3": {"native", wanted},
+	}
+	for i := range entities.Entities {
+		statement, found := stated[entities.Entities[i].Subject.CanonicalID]
+		if !found {
+			continue
+		}
+		tier, set := statement.tier, []string{statement.identity}
+		entities.Entities[i].ProjectIdentities = &set
+		entities.Entities[i].Properties = map[string]contextfabric.ScalarValue{contractsv1.ContextFabricProjectMembershipTierProperty: {String: &tier}}
+	}
+	for _, batch := range []contextfabric.ProjectionBatch{entities, relationships} {
+		if _, err := adapter.ApplyProjectionBatch(ctx, batch); err != nil {
+			t.Fatalf("ApplyProjectionBatch(%s) error = %v", batch.BatchID, err)
+		}
+	}
+	principal := storage.Principal{OrgID: org}
+	binding, err := adapter.ResolveInvestigationBinding(ctx, principal)
+	if err != nil {
+		t.Fatalf("ResolveInvestigationBinding() error = %v", err)
+	}
+	anchor := contextfabric.SubjectRef{Kind: contextfabric.SubjectRepository, CanonicalID: memberAnchorID, Label: memberAnchorSlug}
+	narrowed := contextfabric.RequestedScope{ProjectIDs: []string{"proj-1"}, ProjectNarrowing: &contractsv1.ContextFabricProjectNarrowing{Identities: []string{wanted}, Complete: true}}
+	walk, err := adapter.TreeWorkItemMembers(ctx, principal, binding, narrowed, anchor, 25)
+	if err != nil {
+		t.Fatalf("TreeWorkItemMembers() error = %v", err)
+	}
+	if want := (contextfabric.CrossedPullRequests{ExplicitText: 1, Heuristic: 1}); walk.Crossed != want {
+		t.Fatalf("crossed = %+v, want %+v (members %d)", walk.Crossed, want, len(walk.Members))
+	}
+	plain, err := adapter.TreeWorkItemMembers(ctx, principal, binding, contextfabric.RequestedScope{}, anchor, 25)
+	if err != nil {
+		t.Fatalf("TreeWorkItemMembers() error = %v", err)
+	}
+	if plain.Crossed != (contextfabric.CrossedPullRequests{}) {
+		t.Fatalf("no narrowing crossed %+v, want none", plain.Crossed)
+	}
+}
+
+// A walk from a project reaches pull requests as the far side of the link
+// read: those count too.
+func TestLiveAProjectWalkCountsThePullRequestsItReachedOnALowerTier(t *testing.T) {
+	ctx := context.Background()
+	adapter, _ := newLiveFalkorAdapter(t, ctx)
+	org := "live-12308-far-" + time.Now().UTC().Format("20060102T150405.000000000")
+	key := graphKey(adapter.config.GraphPrefix, org)
+	t.Cleanup(func() { _ = adapter.PurgeOrganization(context.Background(), org) })
+	const wanted = "project.v2:linear:proj-1"
+	issueID := "work_item.v2:00000000-0000-0000-0000-000000000000:A"
+	anchor := contextfabric.SubjectRef{Kind: contextfabric.SubjectProject, CanonicalID: wanted, Label: "proj-1"}
+	links := []liveMemberLink{{issue: issueID, pullRequest: "pull_request:acme/svc:1", slug: memberAnchorSlug, tier: "explicit_text"}}
+	entities, relationships := newLiveMemberFixture(org, time.Now().UTC(), func(add func(contextfabric.SubjectRef, contextfabric.AuthorizationScope, string), relate func(string, contractsv1.ContextFabricRelationshipType, contextfabric.SubjectRef, contextfabric.SubjectRef, contextfabric.AuthorizationScope, string)) {
+		add(anchor, contextfabric.AuthorizationScope{ProjectIDs: []string{"proj-1"}}, "")
+		relate("issue_project", contractsv1.ContextFabricRelationshipBelongsToProject, contextfabric.SubjectRef{Kind: contextfabric.SubjectWorkItem, CanonicalID: issueID, Label: "issue"}, anchor,
+			contextfabric.AuthorizationScope{RepositorySlugs: []string{noRepositoryScope}}, "")
+	}, links)
+	for i := range entities.Entities {
+		if entities.Entities[i].Subject.Kind != contextfabric.SubjectPullRequest {
+			continue
+		}
+		tier, set := "explicit_text", []string{wanted}
+		entities.Entities[i].ProjectIdentities = &set
+		entities.Entities[i].Properties = map[string]contextfabric.ScalarValue{contractsv1.ContextFabricProjectMembershipTierProperty: {String: &tier}}
+	}
+	for _, batch := range []contextfabric.ProjectionBatch{entities, relationships} {
+		if _, err := adapter.ApplyProjectionBatch(ctx, batch); err != nil {
+			t.Fatalf("ApplyProjectionBatch(%s) error = %v", batch.BatchID, err)
+		}
+	}
+	narrowed := contextfabric.RequestedScope{ProjectIDs: []string{"proj-1"}, ProjectNarrowing: &contractsv1.ContextFabricProjectNarrowing{Identities: []string{wanted}, Complete: true}}
+	walk, err := adapter.treeMembers(ctx, key, org, storage.Principal{OrgID: org}, narrowed, anchor, treePullRequest, 25, temporalFilter{})
+	if err != nil {
+		t.Fatalf("treeMembers() error = %v", err)
+	}
+	if len(walk.linkSubjects) != 1 {
+		t.Fatalf("premise: the walk reached %d pull requests, want 1", len(walk.linkSubjects))
+	}
+	if got := crossedPullRequests(walk.crossedLowerTier); got != (contextfabric.CrossedPullRequests{ExplicitText: 1}) {
+		t.Fatalf("crossed = %+v, want the far-side pull request", got)
+	}
+}

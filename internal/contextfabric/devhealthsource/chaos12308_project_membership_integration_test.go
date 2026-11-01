@@ -75,7 +75,7 @@ func TestLivePullRequestMembershipComesFromItsLinkedIssues(t *testing.T) {
 		mustExec(t, ctx, direct, `INSERT INTO work_graph_issue_pr (repo_id, work_item_id, pr_number, confidence, provenance, evidence, last_synced, org_id) VALUES (toUUID(?), ?, ?, 0.9, ?, '', ?, ?)`,
 			repo, issue, number, tier, at, org)
 	}
-	for number := uint32(1); number <= 6; number++ {
+	for number := uint32(1); number <= 7; number++ {
 		pull(github, number)
 		pull(gitlab, number)
 	}
@@ -96,6 +96,14 @@ func TestLivePullRequestMembershipComesFromItsLinkedIssues(t *testing.T) {
 	// github#3 is covered: it contributes nothing and #3 is unstated.
 	link(github, "I-LI", 3, "heuristic", t1)
 	link(github, "I-LI", 4, "native", t1)
+	// One id held by two work items of the organization: work_items is keyed
+	// by (org_id, repo_id, work_item_id), and a link row names no issue
+	// repository. The row in the pull request's own repository is the issue;
+	// with none, the link is ambiguous and names no project.
+	workItem("I-DUP", github, "github", "ghprojv2:GH", t1)
+	workItem("I-DUP", zeroRepositoryUUID, "jira", "JI", t1)
+	link(github, "I-DUP", 7, "native", t1)
+	link(gitlab, "I-DUP", 7, "native", t1)
 	// A link row of another organization on the same key contributes nothing,
 	// also when that organization holds an issue with the same id.
 	mustExec(t, ctx, direct, `INSERT INTO work_items (work_item_id, repo_id, org_id, title, status, url, parent_id, provider, project_id, updated_at, created_at, last_synced) VALUES ('I-LI', ?, 'org-other', 'Other', 'open', '', '', 'linear', 'LI', ?, ?, ?)`,
@@ -158,6 +166,8 @@ func TestLivePullRequestMembershipComesFromItsLinkedIssues(t *testing.T) {
 		id(github, 4): {[]string{"project.v2:linear:LI"}, "native"},
 		id(github, 5): {},
 		id(gitlab, 2): {[]string{"project.v2:github:ghprojv2%3AGH"}, "native"},
+		id(github, 7): {[]string{"project.v2:github:ghprojv2%3AGH"}, "native"},
+		id(gitlab, 7): {},
 		id(github, 6): {[]string{"project.v2:gitlab:GL"}, "native"},
 	} {
 		got, found := stated[pullRequest]

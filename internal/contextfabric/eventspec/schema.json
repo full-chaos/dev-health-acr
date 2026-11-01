@@ -2026,6 +2026,8 @@
           "graph_cohort_denied_by_authorization",
           "graph_unknown_relationship_type",
           "graph_validity_unbounded",
+          "graph_answer_pull_requests_on_explicit_text_links",
+          "graph_answer_pull_requests_on_heuristic_links",
           "reuse_auxiliary_refs_stripped",
           "answer_terminated_before_attempt",
           "population_truncated",
@@ -7216,6 +7218,8 @@
           "graph_cohort_denied_by_authorization",
           "graph_unknown_relationship_type",
           "graph_validity_unbounded",
+          "graph_answer_pull_requests_on_explicit_text_links",
+          "graph_answer_pull_requests_on_heuristic_links",
           "reuse_auxiliary_refs_stripped",
           "answer_terminated_before_attempt",
           "population_truncated",
@@ -9521,6 +9525,8 @@
           "graph_cohort_denied_by_authorization",
           "graph_unknown_relationship_type",
           "graph_validity_unbounded",
+          "graph_answer_pull_requests_on_explicit_text_links",
+          "graph_answer_pull_requests_on_heuristic_links",
           "reuse_auxiliary_refs_stripped",
           "answer_terminated_before_attempt",
           "population_truncated",
@@ -9975,6 +9981,18 @@
         "applicability": "written when the read measured the population (every outcome but read_failed)"
       },
       {
+        "key": "walk_crossed_pull_requests_explicit_text",
+        "type": "int",
+        "presence": "conditional",
+        "applicability": "written when the read measured the population (every outcome but read_failed)"
+      },
+      {
+        "key": "walk_crossed_pull_requests_heuristic",
+        "type": "int",
+        "presence": "conditional",
+        "applicability": "written when the read measured the population (every outcome but read_failed)"
+      },
+      {
         "key": "team_narrowing",
         "type": "string",
         "presence": "conditional",
@@ -10161,6 +10179,8 @@
           "graph_cohort_denied_by_authorization",
           "graph_unknown_relationship_type",
           "graph_validity_unbounded",
+          "graph_answer_pull_requests_on_explicit_text_links",
+          "graph_answer_pull_requests_on_heuristic_links",
           "reuse_auxiliary_refs_stripped",
           "answer_terminated_before_attempt",
           "population_truncated",
@@ -12441,6 +12461,18 @@
       },
       {
         "key": "project_excluded",
+        "type": "int",
+        "presence": "conditional",
+        "applicability": "written when the read finished (every outcome but read_failed)"
+      },
+      {
+        "key": "walk_crossed_pull_requests_explicit_text",
+        "type": "int",
+        "presence": "conditional",
+        "applicability": "written when the read finished (every outcome but read_failed)"
+      },
+      {
+        "key": "walk_crossed_pull_requests_heuristic",
         "type": "int",
         "presence": "conditional",
         "applicability": "written when the read finished (every outcome but read_failed)"

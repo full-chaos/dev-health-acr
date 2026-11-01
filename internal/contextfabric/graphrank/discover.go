@@ -50,6 +50,9 @@ type ResolvedEdge struct {
 	// are not carried on the edge, so the reader that authorized the
 	// endpoints records it here. It decides nothing.
 	EndpointProjectNarrowingUnproven bool
+	// EndpointLowerTierPullRequests: LowerTierEndpoints of this edge's
+	// endpoints, for the count the reader discloses per tier (CHAOS-12308).
+	EndpointLowerTierPullRequests map[string]string
 }
 
 // AdmitEdgesResult is AdmitEdges' output.

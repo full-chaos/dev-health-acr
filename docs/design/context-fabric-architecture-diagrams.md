@@ -664,7 +664,8 @@ walks read `authorization_project_identities` with the node, so a walked work
 item's stated membership decides too. A pull request states the union of its
 linked issues' sets with the weakest link tier (CHAOS-12308): a native tier
 decides like a work item, and a lower tier stays admitted and reported
-unverified. Each resolution is one Info
+unverified, with a count per tier in `graph_answer_pull_requests_on_*_links`.
+Each resolution is one Info
 line, `context fabric project narrowing resolution` (outcome, requested ids,
 resolved identities; never an id).
 

@@ -142,6 +142,42 @@ func ProjectNarrowingUnproven(requested contextfabric.RequestedScope, attributes
 	return applies && membership != ProjectMembershipMember
 }
 
+// LowerTierMembershipOf names the lower link tier a pull request's stated
+// membership stands on, when a requested project narrowing cannot rest on it
+// (CHAOS-12308): the tier a consumer must name. "" for every other node: a
+// native membership proves, and an unstated one has no tier to name.
+func LowerTierMembershipOf(requested contextfabric.RequestedScope, attributes map[string]interface{}) string {
+	if !lowerTierProjectMembership(attributes) || !ProjectNarrowingUnproven(requested, attributes) {
+		return ""
+	}
+	if _, stated := statedProjectIdentities(attributes[AuthorizationProjectIdentitiesAttr]); !stated {
+		return ""
+	}
+	switch tier := StringAttribute(attributes, ProjectMembershipTierAttr); tier {
+	case contextfabric.TreeLinkTierExplicitText, contextfabric.TreeLinkTierHeuristic:
+		return tier
+	default:
+		return ""
+	}
+}
+
+// LowerTierEndpoints is LowerTierMembershipOf over one edge's endpoints:
+// canonical id to tier, nil when neither has one.
+func LowerTierEndpoints(requested contextfabric.RequestedScope, endpoints ...map[string]interface{}) map[string]string {
+	var tiers map[string]string
+	for _, attributes := range endpoints {
+		tier := LowerTierMembershipOf(requested, attributes)
+		if tier == "" {
+			continue
+		}
+		if tiers == nil {
+			tiers = map[string]string{}
+		}
+		tiers[StringAttribute(attributes, "canonical_id")] = tier
+	}
+	return tiers
+}
+
 // ProjectNarrowingAdmits is the requested-project part of AuthorizedAttributes
 // alone: no project narrowing, or a real project list that holds a requested
 // id, or a "*" list that stated membership does not refuse

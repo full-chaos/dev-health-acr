@@ -1156,6 +1156,7 @@ func (a *Adapter) resolveEdge(ctx context.Context, key, orgID string, principal 
 		Relevance: ce.Relevance, Score: ce.Score, Attributes: ce.Attributes,
 		CreatedAt: ce.CreatedAt, ValidAt: ce.ValidAt, InvalidAt: ce.InvalidAt, ExpiredAt: ce.ExpiredAt,
 		EndpointProjectNarrowingUnproven: graphrank.ProjectNarrowingUnproven(scope, fromCandidate.Attributes) || graphrank.ProjectNarrowingUnproven(scope, toCandidate.Attributes),
+		EndpointLowerTierPullRequests:    graphrank.LowerTierEndpoints(scope, fromCandidate.Attributes, toCandidate.Attributes),
 	}, edgeAdmitted, edgeFilterReasonNone, nil
 }
 

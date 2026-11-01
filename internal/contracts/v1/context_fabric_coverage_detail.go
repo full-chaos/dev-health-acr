@@ -84,6 +84,19 @@ const (
 	// at a requested historical time carrying no validity window (the
 	// context-fabric:graph-validity-windows source row). Never degrading.
 	ContextFabricCoverageDetailGraphValidityUnbounded ContextFabricCoverageDetailCode = "graph_validity_unbounded"
+	// ContextFabricCoverageDetailGraphAnswerPullRequestsOnExplicitTextLinks and
+	// ContextFabricCoverageDetailGraphAnswerPullRequestsOnHeuristicLinks
+	// (CHAOS-12308) name the tier a lower-tier project membership stands on,
+	// one code per tier: a consumer names the tier and never presents a lower
+	// tier as native. Count is the distinct pull requests IN THE ANSWER: the
+	// cohort members and edge endpoints of the general graph read that a
+	// requested project narrowing admitted on that tier. It is not the walk
+	// line's walk_crossed_pull_requests_*, which counts the pull requests a
+	// walk crossed on its way to issues, whether or not they reach the answer.
+	// Never degrading: read_population_unverified degrades such an answer, and
+	// keeps its own rule (no count) and its reuse comparison.
+	ContextFabricCoverageDetailGraphAnswerPullRequestsOnExplicitTextLinks ContextFabricCoverageDetailCode = "graph_answer_pull_requests_on_explicit_text_links"
+	ContextFabricCoverageDetailGraphAnswerPullRequestsOnHeuristicLinks    ContextFabricCoverageDetailCode = "graph_answer_pull_requests_on_heuristic_links"
 
 	// ContextFabricCoverageDetailReuseAuxiliaryRefsStripped: this answer
 	// was served from the stored-result reuse path, and the authorization
@@ -382,6 +395,8 @@ var contextFabricCoverageDetailCodes = [...]ContextFabricCoverageDetailCode{
 	ContextFabricCoverageDetailGraphCohortDeniedByAuthorization,
 	ContextFabricCoverageDetailGraphUnknownRelationshipType,
 	ContextFabricCoverageDetailGraphValidityUnbounded,
+	ContextFabricCoverageDetailGraphAnswerPullRequestsOnExplicitTextLinks,
+	ContextFabricCoverageDetailGraphAnswerPullRequestsOnHeuristicLinks,
 	ContextFabricCoverageDetailReuseAuxiliaryRefsStripped,
 	ContextFabricCoverageDetailAnswerTerminatedBeforeAttempt,
 	ContextFabricCoverageDetailPopulationTruncated,
@@ -685,9 +700,11 @@ var coverageDetailFieldRules = map[ContextFabricCoverageDetailCode]coverageDetai
 	ContextFabricCoverageDetailGraphProjectDeploymentsUnlinked:  {requireCount: true, allowCount: true},
 	ContextFabricCoverageDetailWorkItemRepositoryUnlinked:       {requireCount: true, allowCount: true},
 	// Kind alone: no count (nothing was counted), no Declared/Served.
-	ContextFabricCoverageDetailGraphWalkCutBeforeMember:   {requireKind: true},
-	ContextFabricCoverageDetailGraphValidityUnbounded:     {requireCount: true, allowCount: true},
-	ContextFabricCoverageDetailReuseAuxiliaryRefsStripped: {requireCount: true, allowCount: true},
+	ContextFabricCoverageDetailGraphWalkCutBeforeMember:                   {requireKind: true},
+	ContextFabricCoverageDetailGraphValidityUnbounded:                     {requireCount: true, allowCount: true},
+	ContextFabricCoverageDetailReuseAuxiliaryRefsStripped:                 {requireCount: true, allowCount: true},
+	ContextFabricCoverageDetailGraphAnswerPullRequestsOnExplicitTextLinks: {requireCount: true, allowCount: true},
+	ContextFabricCoverageDetailGraphAnswerPullRequestsOnHeuristicLinks:    {requireCount: true, allowCount: true},
 	// No fact kind and NO COUNT. The count is the tempting one and it is
 	// refused deliberately: the only number available here is the size of
 	// the set that WAS resolved, which the outcome row already carries as
@@ -837,6 +854,7 @@ func coverageDetailCodeQualifiesSourceTruncation(code ContextFabricCoverageDetai
 func ContextFabricCoverageDetailCodeMayDegrade(code ContextFabricCoverageDetailCode) bool {
 	switch code {
 	case ContextFabricCoverageDetailFactPruned, ContextFabricCoverageDetailGraphValidityUnbounded,
+		ContextFabricCoverageDetailGraphAnswerPullRequestsOnExplicitTextLinks, ContextFabricCoverageDetailGraphAnswerPullRequestsOnHeuristicLinks,
 		ContextFabricCoverageDetailFactReadOriginState, ContextFabricCoverageDetailSynthesisInputBounded,
 		ContextFabricCoverageDetailSynthesisModelFailed, ContextFabricCoverageDetailSynthesisNotRun, ContextFabricCoverageDetailFactScoreWithheld:
 		return false

@@ -71,3 +71,43 @@ func TestAProjectOnlyCallerIsAdmittedToAPullRequestOnlyOnANativeMembership(t *te
 		}
 	}
 }
+
+// The tier a consumer must name: only a pull request's stated lower tier, and
+// only under a requested narrowing it cannot prove.
+func TestLowerTierMembershipNamesOnlyAStatedLowerTier(t *testing.T) {
+	const wanted = "project.v2:linear:wanted"
+	narrowed := contextfabric.RequestedScope{ProjectIDs: []string{"wanted"}, ProjectNarrowing: &contractsv1.ContextFabricProjectNarrowing{Identities: []string{wanted}, Complete: true}}
+	workItem := pullRequestAttributes("heuristic", wanted)
+	workItem["subject_kind"] = string(contextfabric.SubjectWorkItem)
+	for name, tc := range map[string]struct {
+		scope      contextfabric.RequestedScope
+		attributes map[string]interface{}
+		want       string
+	}{
+		"explicit text":          {narrowed, pullRequestAttributes("explicit_text", wanted), "explicit_text"},
+		"heuristic":              {narrowed, pullRequestAttributes("heuristic", wanted), "heuristic"},
+		"another project":        {narrowed, pullRequestAttributes("heuristic", "project.v2:linear:other"), "heuristic"},
+		"native":                 {narrowed, pullRequestAttributes("native", wanted), ""},
+		"an unknown tier":        {narrowed, pullRequestAttributes("inferred", wanted), ""},
+		"unstated":               {narrowed, pullRequestAttributes(""), ""},
+		"a tier and no set":      {narrowed, withoutIdentities(pullRequestAttributes("heuristic", wanted)), ""},
+		"a work item":            {narrowed, workItem, ""},
+		"no requested narrowing": {contextfabric.RequestedScope{}, pullRequestAttributes("heuristic", wanted), ""},
+	} {
+		if got := LowerTierMembershipOf(tc.scope, tc.attributes); got != tc.want {
+			t.Errorf("%s: tier = %q, want %q", name, got, tc.want)
+		}
+	}
+	if got := LowerTierEndpoints(narrowed, pullRequestAttributes("native", wanted), pullRequestAttributes("native", wanted)); got != nil {
+		t.Errorf("no lower-tier endpoint: %v, want nil", got)
+	}
+	got := LowerTierEndpoints(narrowed, pullRequestAttributes("native", wanted), pullRequestAttributes("explicit_text", wanted))
+	if len(got) != 1 || got["pull_request:r:1"] != "explicit_text" {
+		t.Errorf("endpoints = %v", got)
+	}
+}
+
+func withoutIdentities(attributes map[string]interface{}) map[string]interface{} {
+	delete(attributes, AuthorizationProjectIdentitiesAttr)
+	return attributes
+}

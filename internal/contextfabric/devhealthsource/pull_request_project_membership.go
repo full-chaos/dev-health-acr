@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -23,7 +24,11 @@ import (
 // ownership, or the pull_request arm of project_membership_presence.
 //
 // project_membership_tier names the weakest tier among the links that
-// contributed, so a lower tier is never presented as native. When no linked
+// contributed, so a lower tier is never presented as native. work_items is
+// keyed by (org_id, repo_id, work_item_id) and a link row names no issue
+// repository, so one link id can join several rows: the row in the pull
+// request's own repository is the issue, and with none the link is ambiguous
+// and names no project (resolveLinkedIssues). When no linked
 // issue contributes, the pull request states nothing (unstated, not empty):
 // it stays on the disclosed path and is never read as "in no project". A set
 // over the contract's bound is unstated too: a partial set is never stated.
@@ -180,7 +185,7 @@ func statePullRequestProjectMemberships(ctx context.Context, client contextpacke
 		}
 		targets[key] = append(targets[key], entity)
 	}
-	links, err := readPullRequestIssueLinks(ctx, client, orgID, keys)
+	links, ambiguous, err := readPullRequestIssueLinks(ctx, client, orgID, keys)
 	if err != nil {
 		return err
 	}
@@ -222,7 +227,7 @@ func statePullRequestProjectMemberships(ctx context.Context, client contextpacke
 	}
 	slog.InfoContext(ctx, "context fabric: pull request project membership stated",
 		"pull_requests", len(keys), "stated_native", statedByTier["native"], "stated_explicit_text", statedByTier["explicit_text"],
-		"stated_heuristic", statedByTier["heuristic"], "over_bound", overBound)
+		"stated_heuristic", statedByTier["heuristic"], "over_bound", overBound, "ambiguous_links", ambiguous)
 	return nil
 }
 
@@ -271,8 +276,9 @@ func pullRequestKeyOf(canonicalID string) (pullRequestKey, bool) {
 // readPullRequestIssueLinks reads the link rows of exactly the named pull
 // requests, keeping what the link producer would project: a known tier, a
 // non-pull-request issue row, and no lower-tier row a native row covers
-// (issuePullRequestLinkOutranked).
-func readPullRequestIssueLinks(ctx context.Context, client contextpacket.ClickHouseQueryClient, orgID string, keys []pullRequestKey) (map[pullRequestKey][]pullRequestIssueLink, error) {
+// (issuePullRequestLinkOutranked). ambiguous counts the links
+// resolveLinkedIssues dropped.
+func readPullRequestIssueLinks(ctx context.Context, client contextpacket.ClickHouseQueryClient, orgID string, keys []pullRequestKey) (map[pullRequestKey][]pullRequestIssueLink, int, error) {
 	links := make(map[pullRequestKey][]pullRequestIssueLink, len(keys))
 	for start := 0; start < len(keys); start += workItemMembershipReadKeys {
 		chunk := keys[start:min(start+workItemMembershipReadKeys, len(keys))]
@@ -289,10 +295,43 @@ FROM work_graph_issue_pr AS l FINAL
 INNER JOIN work_items AS w FINAL ON w.org_id = l.org_id AND w.work_item_id = l.work_item_id
 WHERE l.org_id = {org_id:String} AND (` + strings.Join(terms, " OR ") + `)`
 		if err := readPullRequestIssueLinkChunk(ctx, client, statement, bindings, links); err != nil {
-			return nil, err
+			return nil, 0, err
 		}
 	}
-	return links, nil
+	ambiguous := 0
+	for key, rows := range links {
+		resolved, dropped := resolveLinkedIssues(key, rows)
+		links[key] = resolved
+		ambiguous += dropped
+	}
+	return links, ambiguous, nil
+}
+
+// resolveLinkedIssues keeps one issue per link id of a pull request. A link
+// id that joined one row is that issue. One that joined several is the row in
+// the pull request's own repository; with none, it cannot be told which issue
+// the link names, so it contributes nothing and is counted: a wrong project
+// would admit a project-only caller, and unstated is the disclosed path.
+func resolveLinkedIssues(key pullRequestKey, rows []pullRequestIssueLink) ([]pullRequestIssueLink, int) {
+	byID := map[string][]pullRequestIssueLink{}
+	for _, row := range rows {
+		byID[row.issue.workItemID] = append(byID[row.issue.workItemID], row)
+	}
+	resolved := make([]pullRequestIssueLink, 0, len(byID))
+	ambiguous := 0
+	for _, candidates := range byID {
+		if len(candidates) == 1 {
+			resolved = append(resolved, candidates[0])
+			continue
+		}
+		own := slices.IndexFunc(candidates, func(row pullRequestIssueLink) bool { return row.issue.repoID == key.repoID })
+		if own < 0 {
+			ambiguous++
+			continue
+		}
+		resolved = append(resolved, candidates[own])
+	}
+	return resolved, ambiguous
 }
 
 func readPullRequestIssueLinkChunk(ctx context.Context, client contextpacket.ClickHouseQueryClient, statement string, bindings []contextpacket.ClickHouseBinding, links map[pullRequestKey][]pullRequestIssueLink) error {
