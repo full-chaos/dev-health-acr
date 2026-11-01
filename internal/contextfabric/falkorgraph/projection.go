@@ -311,15 +311,19 @@ func subjectMergeAttrs(subject contextfabric.SubjectRef, authorization contextfa
 		// Cypher null, not a marshaling error.
 		attrs[propValidFrom], attrs[propValidFromNs] = validTimeAttrs(validFrom)
 		attrs[propValidTo], attrs[propValidToNs] = validTimeAttrs(validTo)
-		if subject.Kind == contextfabric.SubjectWorkItem {
+		if subject.Kind == contextfabric.SubjectWorkItem || subject.Kind == contextfabric.SubjectPullRequest {
 			// CHAOS-12226: the work item's own entity write is the one
 			// writer of its project membership, and it asserts it either
 			// way, like the validity window above: the stated set (an
 			// explicit empty list when the work item is in no project), or
 			// null when the producer did not state it, which removes the key.
 			// No stub and no other kind ever writes it, and it never goes
-			// through authorizationValue, so it can never become "*".
+			// through authorizationValue, so it can never become "*". A pull
+			// request's own write does the same (CHAOS-12308), with the tier.
 			attrs[propAuthzProjectIdentities] = projectIdentitiesValue(entityOwned.ProjectIdentities)
+			if _, stated := attrs[propProjectMembershipTier]; subject.Kind == contextfabric.SubjectPullRequest && !stated {
+				attrs[propProjectMembershipTier] = nil
+			}
 		}
 	}
 	// A REFERENCED stub deliberately writes NO validity window at all
@@ -1052,14 +1056,15 @@ func (a *Adapter) deleteOutrankedLinks(ctx context.Context, key string, batch co
 	for _, tier := range linkTiers[1:] {
 		lower = append(lower, tier.name)
 	}
-	where := fmt.Sprintf("WHERE r.%s = $rel AND r.%s%s IN $lower WITH DISTINCT r DELETE r RETURN count(r) AS n", propRelationType, propPropertyPrefix, safeName(linkTierProperty))
+	where := fmt.Sprintf("WHERE r.%s = $rel AND r.%s%s IN $lower WITH DISTINCT r, pr DELETE r RETURN pr.%s AS id", propRelationType, propPropertyPrefix, safeName(linkTierProperty), propCanonicalID)
 	retracted := int64(0)
+	lostLink := map[string]bool{}
 	for _, side := range []struct {
 		rows    []interface{}
 		pattern string
 	}{
-		{issues, fmt.Sprintf("(a:%s {%s:$org, %s:row.kind, %s:row.id})-[r:%s]->()", labelSubject, propOrgID, propKind, propCanonicalID, labelRelation)},
-		{pullRequests, fmt.Sprintf("()-[r:%s]->(b:%s {%s:$org, %s:row.kind, %s:row.id})", labelRelation, labelSubject, propOrgID, propKind, propCanonicalID)},
+		{issues, fmt.Sprintf("(a:%s {%s:$org, %s:row.kind, %s:row.id})-[r:%s]->(pr)", labelSubject, propOrgID, propKind, propCanonicalID, labelRelation)},
+		{pullRequests, fmt.Sprintf("()-[r:%s]->(pr:%s {%s:$org, %s:row.kind, %s:row.id})", labelRelation, labelSubject, propOrgID, propKind, propCanonicalID)},
 	} {
 		if len(side.rows) == 0 {
 			continue
@@ -1070,10 +1075,46 @@ func (a *Adapter) deleteOutrankedLinks(ctx context.Context, key string, batch co
 			return 0, 0, classifyProjectionError("retract outranked issue pull request links", err)
 		}
 		for _, r := range rows {
-			if n, ok := r["n"].(int64); ok {
-				retracted += n
+			if id, ok := r["id"].(string); ok {
+				retracted++
+				lostLink[id] = true
 			}
 		}
 	}
+	if err := a.clearLinkedProjectMembership(ctx, key, batch.OrgID, lostLink); err != nil {
+		return 0, 0, err
+	}
 	return natives, retracted, nil
+}
+
+// clearLinkedProjectMembership (CHAOS-12308) returns a pull request that lost
+// a lower-tier link to unstated. Its stated set is a union over its links, and
+// the ops build DELETES a retracted row, so no ClickHouse stamp finds this
+// pull request again; the projection is where the loss is known. Unstated is
+// the disclosed path, never a wider one: the next write of the pull request
+// states the set again from the links it still has, and a pull request whose
+// last link went stays unstated. A native tier is kept: that set stands on
+// native links alone, this path deletes no native link, and this runs after
+// the batch's entity writes, so clearing it would erase a current statement.
+func (a *Adapter) clearLinkedProjectMembership(ctx context.Context, key, orgID string, ids map[string]bool) error {
+	if len(ids) == 0 {
+		return nil
+	}
+	rows := make([]interface{}, 0, len(ids))
+	for id := range ids {
+		rows = append(rows, id)
+	}
+	cypher := fmt.Sprintf("UNWIND $ids AS id MATCH (p:%s {%s:$org, %s:$kind, %s:id}) WHERE coalesce(p.%s, '') <> $native SET p.%s = null, p.%s = null RETURN count(p) AS n",
+		labelSubject, propOrgID, propKind, propCanonicalID, propProjectMembershipTier, propAuthzProjectIdentities, propProjectMembershipTier)
+	params := map[string]interface{}{"ids": rows, "org": orgID, "kind": string(contextfabric.SubjectPullRequest), "native": contextfabric.TreeLinkTierNative}
+	result, err := a.api.query(ctx, key, cypher, params, false)
+	if err != nil {
+		return classifyProjectionError("clear a pull request's project membership", err)
+	}
+	for _, r := range result {
+		if n, ok := r["n"].(int64); ok && n > 0 {
+			slog.InfoContext(ctx, "context fabric: pull requests returned to unstated project membership after a lost link", "pull_requests", n)
+		}
+	}
+	return nil
 }

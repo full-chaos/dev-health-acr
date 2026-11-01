@@ -25,6 +25,15 @@ const (
 	TreeLinkTierHeuristic    = contractsv1.EvidenceProvenanceHeuristic
 )
 
+// CrossedPullRequests counts, per lower link tier, the distinct pull requests
+// one walk crossed while a requested project narrowing applied and their stated
+// membership stands on that tier (CHAOS-12308). A walk line count only: the
+// answer's count is the graph_answer_pull_requests_on_*_links coverage detail,
+// which counts cohort members and edge endpoints of the general read.
+type CrossedPullRequests struct {
+	ExplicitText, Heuristic int
+}
+
 // TreeWorkItemMember is one walked issue and the strongest tier of the
 // authorized links that reached it.
 type TreeWorkItemMember struct {
@@ -69,6 +78,8 @@ type TreeWorkItemWalk struct {
 	// narrowing left out of scope (CHAOS-12329). Never in Denied, which is
 	// only what the caller's grants hid.
 	ProjectExcluded int
+	// Crossed: the pull requests this walk crossed on a lower link tier.
+	Crossed CrossedPullRequests
 }
 
 // TreeWorkItemGraph walks the entity tree in the graph store.

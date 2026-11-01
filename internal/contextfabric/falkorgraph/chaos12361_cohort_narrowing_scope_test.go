@@ -368,7 +368,7 @@ func TestTheDeploymentRouteDecisionCarriesAnAnchorOutOfScope(t *testing.T) {
 func TestTheWalkLinesCarryTheScopeValues(t *testing.T) {
 	var buf bytes.Buffer
 	telemetry := SlogTelemetry{Logger: slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelInfo}))}
-	telemetry.RecordTeamAnchorWalk(context.Background(), "org-1", TeamAnchorWalkDecision{Outcome: TeamAnchorWalkNoMembers, AnchorKind: contextfabric.SubjectProject, MemberKind: contextfabric.SubjectWorkItem, Committed: 1, ProjectExcluded: 3})
+	telemetry.RecordTeamAnchorWalk(context.Background(), "org-1", TeamAnchorWalkDecision{Crossed: contextfabric.CrossedPullRequests{ExplicitText: 4, Heuristic: 5}, Outcome: TeamAnchorWalkNoMembers, AnchorKind: contextfabric.SubjectProject, MemberKind: contextfabric.SubjectWorkItem, Committed: 1, ProjectExcluded: 3})
 	telemetry.RecordProjectDeploymentWalk(context.Background(), "org-1", ProjectDeploymentWalkDecision{Outcome: ProjectDeploymentWalkNoDeployments, AnchorKind: contextfabric.SubjectProject, Committed: 1, AnchorOutOfScope: true})
 	var lines []map[string]any
 	for _, raw := range bytes.Split(bytes.TrimSpace(buf.Bytes()), []byte("\n")) {
@@ -380,5 +380,9 @@ func TestTheWalkLinesCarryTheScopeValues(t *testing.T) {
 	}
 	if len(lines) != 2 || lines[0]["project_excluded"] != float64(3) || lines[1]["anchor_out_of_scope"] != true {
 		t.Fatalf("lines = %v, want project_excluded=3 and anchor_out_of_scope=true", lines)
+	}
+	// CHAOS-12308: the crossed pull requests, per tier, by their own names.
+	if lines[0]["walk_crossed_pull_requests_explicit_text"] != float64(4) || lines[0]["walk_crossed_pull_requests_heuristic"] != float64(5) {
+		t.Fatalf("team anchor line = %v, want the crossed counts", lines[0])
 	}
 }

@@ -3,6 +3,7 @@ package v1
 import (
 	"fmt"
 	"strings"
+	"unicode"
 )
 
 // This file is CHAOS-4690's structured-coverage wire surface: one
@@ -84,6 +85,19 @@ const (
 	// at a requested historical time carrying no validity window (the
 	// context-fabric:graph-validity-windows source row). Never degrading.
 	ContextFabricCoverageDetailGraphValidityUnbounded ContextFabricCoverageDetailCode = "graph_validity_unbounded"
+	// ContextFabricCoverageDetailGraphAnswerPullRequestsOnExplicitTextLinks and
+	// ContextFabricCoverageDetailGraphAnswerPullRequestsOnHeuristicLinks
+	// (CHAOS-12308) name the tier a lower-tier project membership stands on,
+	// one code per tier: a consumer names the tier and never presents a lower
+	// tier as native. Count is the distinct pull requests IN THE ANSWER: the
+	// cohort members and edge endpoints of the general graph read that a
+	// requested project narrowing admitted on that tier. It is not the walk
+	// line's walk_crossed_pull_requests_*, which counts the pull requests a
+	// walk crossed on its way to issues, whether or not they reach the answer.
+	// Never degrading: read_population_unverified degrades such an answer, and
+	// keeps its own rule (no count) and its reuse comparison.
+	ContextFabricCoverageDetailGraphAnswerPullRequestsOnExplicitTextLinks ContextFabricCoverageDetailCode = "graph_answer_pull_requests_on_explicit_text_links"
+	ContextFabricCoverageDetailGraphAnswerPullRequestsOnHeuristicLinks    ContextFabricCoverageDetailCode = "graph_answer_pull_requests_on_heuristic_links"
 
 	// ContextFabricCoverageDetailReuseAuxiliaryRefsStripped: this answer
 	// was served from the stored-result reuse path, and the authorization
@@ -417,6 +431,8 @@ var contextFabricCoverageDetailCodes = [...]ContextFabricCoverageDetailCode{
 	ContextFabricCoverageDetailGraphCohortDeniedByAuthorization,
 	ContextFabricCoverageDetailGraphUnknownRelationshipType,
 	ContextFabricCoverageDetailGraphValidityUnbounded,
+	ContextFabricCoverageDetailGraphAnswerPullRequestsOnExplicitTextLinks,
+	ContextFabricCoverageDetailGraphAnswerPullRequestsOnHeuristicLinks,
 	ContextFabricCoverageDetailReuseAuxiliaryRefsStripped,
 	ContextFabricCoverageDetailAnswerTerminatedBeforeAttempt,
 	ContextFabricCoverageDetailPopulationTruncated,
@@ -571,8 +587,17 @@ func stringInVocabulary(value string, vocabulary []string) bool {
 // whole-set discard); Raw restates the legacy composed string and shares
 // its bound.
 const (
-	ContextFabricCoverageDetailIDMaxLength       = 64
-	ContextFabricCoverageDetailLabelMaxLength    = 160
+	ContextFabricCoverageDetailIDMaxLength    = 64
+	ContextFabricCoverageDetailLabelMaxLength = 160
+	// ContextFabricVocabularyLabelKeyMaxLength bounds a vocabulary_labels key,
+	// "<vocabulary>:<value>" (CHAOS-12415).
+	ContextFabricVocabularyLabelKeyMaxLength = 128
+	// ContextFabricVocabularyLabelsMaxEntries bounds the map as
+	// evidence_ref_labels is bounded. It is not the working limit: the map
+	// holds only values in one result, so the whole registry is its ceiling
+	// (125 entries, 5,885 bytes, 9% of the 65,536-byte answer budget,
+	// measured by TestTheWholeRegistryFitsInASmallShareOfTheAnswerBudget).
+	ContextFabricVocabularyLabelsMaxEntries      = 8192
 	ContextFabricCoverageDetailPhrasingMaxLength = 400
 	ContextFabricCoverageDetailRawMaxLength      = ContextFabricCoverageDegradedReasonMaxLength
 	// contextFabricCoverageDetailKindsMaxCount bounds the two subject-kind
@@ -726,9 +751,11 @@ var coverageDetailFieldRules = map[ContextFabricCoverageDetailCode]coverageDetai
 	ContextFabricCoverageDetailGraphProjectDeploymentsUnlinked:  {requireCount: true, allowCount: true},
 	ContextFabricCoverageDetailWorkItemRepositoryUnlinked:       {requireCount: true, allowCount: true},
 	// Kind alone: no count (nothing was counted), no Declared/Served.
-	ContextFabricCoverageDetailGraphWalkCutBeforeMember:   {requireKind: true},
-	ContextFabricCoverageDetailGraphValidityUnbounded:     {requireCount: true, allowCount: true},
-	ContextFabricCoverageDetailReuseAuxiliaryRefsStripped: {requireCount: true, allowCount: true},
+	ContextFabricCoverageDetailGraphWalkCutBeforeMember:                   {requireKind: true},
+	ContextFabricCoverageDetailGraphValidityUnbounded:                     {requireCount: true, allowCount: true},
+	ContextFabricCoverageDetailReuseAuxiliaryRefsStripped:                 {requireCount: true, allowCount: true},
+	ContextFabricCoverageDetailGraphAnswerPullRequestsOnExplicitTextLinks: {requireCount: true, allowCount: true},
+	ContextFabricCoverageDetailGraphAnswerPullRequestsOnHeuristicLinks:    {requireCount: true, allowCount: true},
 	// No fact kind and NO COUNT. The count is the tempting one and it is
 	// refused deliberately: the only number available here is the size of
 	// the set that WAS resolved, which the outcome row already carries as
@@ -889,6 +916,7 @@ func coverageDetailCodeQualifiesSourceTruncation(code ContextFabricCoverageDetai
 func ContextFabricCoverageDetailCodeMayDegrade(code ContextFabricCoverageDetailCode) bool {
 	switch code {
 	case ContextFabricCoverageDetailFactPruned, ContextFabricCoverageDetailGraphValidityUnbounded,
+		ContextFabricCoverageDetailGraphAnswerPullRequestsOnExplicitTextLinks, ContextFabricCoverageDetailGraphAnswerPullRequestsOnHeuristicLinks,
 		ContextFabricCoverageDetailFactReadOriginState, ContextFabricCoverageDetailSynthesisInputBounded,
 		ContextFabricCoverageDetailSynthesisModelFailed, ContextFabricCoverageDetailSynthesisNotRun, ContextFabricCoverageDetailFactScoreWithheld:
 		return false
@@ -1237,6 +1265,53 @@ func ContextFabricEvidenceRefClosure(r ContextFabricInvestigationResult) map[str
 		add(candidate.EvidenceRefIDs)
 	}
 	return closure
+}
+
+// validateVocabularyLabels checks the shape of a vocabulary_labels map: each
+// key is "<vocabulary>:<value>" and each label is a bounded, trimmed string.
+// The vocabulary is NOT checked against the names published here: a stored row
+// written by a newer build must still read.
+func validateVocabularyLabels(labels map[string]string) error {
+	if len(labels) > ContextFabricVocabularyLabelsMaxEntries {
+		return fmt.Errorf("label map has %d entries, over the bound of %d", len(labels), ContextFabricVocabularyLabelsMaxEntries)
+	}
+	for key, label := range labels {
+		if !validVocabularyLabelKey(key) {
+			return fmt.Errorf("key %q is not <vocabulary>:<value>", key)
+		}
+		if strings.TrimSpace(label) != label || !stringLengthBetween(label, 1, ContextFabricCoverageDetailLabelMaxLength) {
+			return fmt.Errorf("label of %q violates its bounds", key)
+		}
+	}
+	return nil
+}
+
+func validVocabularyLabelKey(key string) bool {
+	if !stringLengthBetween(key, 3, ContextFabricVocabularyLabelKeyMaxLength) {
+		return false
+	}
+	vocabulary, value, _ := strings.Cut(key, ":")
+	if value == "" || strings.ContainsFunc(value, func(r rune) bool { return r == ':' || unicode.IsSpace(r) }) {
+		return false
+	}
+	if vocabulary == "" || vocabulary[0] < 'a' || vocabulary[0] > 'z' {
+		return false
+	}
+	return !strings.ContainsFunc(vocabulary, func(r rune) bool { return r != '_' && (r < 'a' || r > 'z') })
+}
+
+func (r ContextFabricInvestigationResult) validateVocabularyLabelsField() error {
+	if err := validateVocabularyLabels(r.VocabularyLabels); err != nil {
+		return fmt.Errorf("vocabulary_labels: %w", err)
+	}
+	return nil
+}
+
+func (p ContextFabricAnswerProjection) validateVocabularyLabelsField() error {
+	if err := validateVocabularyLabels(p.VocabularyLabels); err != nil {
+		return fmt.Errorf("vocabulary_labels: %w", err)
+	}
+	return nil
 }
 
 // validateEvidenceRefLabels enforces exact key equality between a non-nil

@@ -275,6 +275,9 @@ type treeWalk struct {
 	// hopProjectExcluded: the nodes a cohort member walk's hops left out of
 	// a requested project narrowing (CHAOS-12361), never denied.
 	hopProjectExcluded map[string]bool
+	// crossedLowerTier: the pull requests this walk crossed whose stated
+	// membership stands on a lower link tier, id to tier (CHAOS-12308).
+	crossedLowerTier map[string]string
 	// anchorOutOfScope: the requested project narrowing alone refused the
 	// anchor, so the walk did not run (CHAOS-12361).
 	anchorOutOfScope bool
@@ -648,6 +651,7 @@ func (s treeWalkState) advance(hop treeHop, hits []walkHit, parents map[string]c
 		if !ok {
 			continue
 		}
+		s.noteCrossed(h.to)
 		reached[subject.CanonicalID] = h
 		subjects[subject.CanonicalID] = subject
 	}
@@ -681,6 +685,7 @@ func (s treeWalkState) members(hop treeHop, hits []walkHit, parents map[string]c
 			s.denyOwned(hop, h.to)
 			continue
 		}
+		s.noteCrossed(h.to)
 		id := canonicalIDOf(h.to)
 		if tier, ok := s.out.endTiers[h.from]; ok {
 			if s.out.memberTiers == nil {
@@ -1157,6 +1162,8 @@ func (a *Adapter) linkSegment(ctx context.Context, key, orgID string, state tree
 				ends = append(ends, id)
 			}
 			admitted[id] = far
+			state.noteCrossed(l.near)
+			state.noteCrossed(far)
 			// The strongest admitted tier wins; a later, weaker row never
 			// overwrites it.
 			if best, ok := out.endTiers[id]; !ok || tierRank(tier.name) < tierRank(best) {

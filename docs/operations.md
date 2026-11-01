@@ -487,8 +487,16 @@ carry the value. **The roll step "work-item project membership on"** (needs an
 approved roll) is therefore: set the flag, then run
 `acr-projector rebuild --org <organization-id>` for every projected
 organization; the rebuild reads every table from zero, so every work item gets
-its current set. The deploy itself bumps no source version and changes no
-graph value while the flag is off. Until a work item is written with the flag
+its current set. The same flag makes each pull request state the union of the
+sets of the issues linked to it by `work_graph_issue_pr` rows (CHAOS-12308),
+with the weakest contributing link tier in `property_project_membership_tier`,
+and adds `pull_requests_project_membership`, which re-emits a pull request when
+a link row of it, a linked issue or a linked issue's membership input moves.
+The Info line `context fabric: pull request project membership stated` counts
+them by tier, and a pull request that lost a link and went back to unstated is
+counted by `context fabric: pull requests returned to unstated project
+membership after a lost link`. The deploy itself bumps no source version and
+changes no graph value while the flag is off. Until a work item is written with the flag
 on it carries no `authorization_project_identities`, and an absent value admits
 no project (fail closed). **Any later change of the flag goes with a rebuild in
 the same roll:** while the flag is off, membership changes are not followed,

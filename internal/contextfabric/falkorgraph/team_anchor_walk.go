@@ -39,7 +39,10 @@ type TeamAnchorWalkDecision struct {
 	// ProjectExcluded: members a requested project narrowing left out of
 	// scope (CHAOS-12361); never counted in Denied.
 	ProjectExcluded int
-	Truncated       bool
+	// Crossed: the pull requests these walks crossed on a lower link tier
+	// (CHAOS-12308), for the walk line only.
+	Crossed   contextfabric.CrossedPullRequests
+	Truncated bool
 	// Err is the failed read.
 	Err error
 }
@@ -49,6 +52,7 @@ type teamAnchorWalkTally struct {
 	ran             bool
 	members, denied int
 	projectExcluded int
+	crossed         map[string]string
 	truncated       bool
 	// anchorDenied: a team the caller cannot see was read, so the read is
 	// denied even when it owns nothing.
@@ -62,12 +66,18 @@ func (t *teamAnchorWalkTally) add(walk treeWalk) {
 	// Hop exclusions and the fused link read's (review r1): disjoint, since
 	// an excluded node is never walked further.
 	t.projectExcluded += len(walk.hopProjectExcluded) + walk.projectExcluded
+	if len(walk.crossedLowerTier) > 0 && t.crossed == nil {
+		t.crossed = map[string]string{}
+	}
+	for id, tier := range walk.crossedLowerTier {
+		t.crossed[id] = tier
+	}
 	t.truncated = t.truncated || walk.truncated
 	t.anchorDenied = t.anchorDenied || walk.anchorDenied
 }
 
 func (t teamAnchorWalkTally) decision(anchorKind, memberKind contextfabric.SubjectKind, committed int, err error) TeamAnchorWalkDecision {
-	d := TeamAnchorWalkDecision{AnchorKind: anchorKind, MemberKind: memberKind, Committed: committed, Members: t.members, Denied: t.denied, ProjectExcluded: t.projectExcluded, Truncated: t.truncated, Err: err}
+	d := TeamAnchorWalkDecision{AnchorKind: anchorKind, MemberKind: memberKind, Committed: committed, Members: t.members, Denied: t.denied, ProjectExcluded: t.projectExcluded, Crossed: crossedPullRequests(t.crossed), Truncated: t.truncated, Err: err}
 	switch {
 	case err != nil:
 		d.Outcome = TeamAnchorWalkReadFailed

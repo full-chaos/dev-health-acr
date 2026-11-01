@@ -1917,7 +1917,19 @@ func (a *Adapter) DiscoverContext(ctx context.Context, principal storage.Princip
 		// for; guarded on cohort.Kind matching declaredCohortKind so a
 		// future cohort-kind divergence reports zero rather than another
 		// kind's count.
+		//
+		// CHAOS-12357: under a team narrowing the figure counts the candidates
+		// inside the narrowing, so it stays a floor of the requested team's
+		// members, never the organization's.
 		declaredCensus := kindCensusMembers
+		if teamScope != nil {
+			declaredCensus = 0
+			for _, n := range cohortNodes {
+				if subject, ok := graphrank.NodeSubject(n); ok && subject.Kind == declaredCohortKind {
+					declaredCensus++
+				}
+			}
+		}
 		served := 0
 		if cohort != nil && cohort.Kind == declaredCohortKind {
 			served = len(cohort.Members)
@@ -2008,6 +2020,21 @@ func (a *Adapter) DiscoverContext(ctx context.Context, principal storage.Princip
 		// there is no number to give. Admission is unchanged.
 		degradedReasons = append(degradedReasons, projectNarrowingUnverifiedReason)
 		appendGraphDetail(contractsv1.ContextFabricCoverageDetailReadPopulationUnverified, true, nil, projectNarrowingUnverifiedReason, "context-fabric:graph")
+		// CHAOS-12308: a consumer names the tier a lower-tier membership stands
+		// on. One non-degrading detail per tier with a count; the detail above
+		// keeps its rule.
+		onLowerTier := answerPullRequestsOnLowerTier(principal, request.Request.RequestedScope, cohortNodes, orderedResolved)
+		for _, lower := range []struct {
+			tier string
+			code contractsv1.ContextFabricCoverageDetailCode
+		}{
+			{contextfabric.TreeLinkTierExplicitText, contractsv1.ContextFabricCoverageDetailGraphAnswerPullRequestsOnExplicitTextLinks},
+			{contextfabric.TreeLinkTierHeuristic, contractsv1.ContextFabricCoverageDetailGraphAnswerPullRequestsOnHeuristicLinks},
+		} {
+			if count := onLowerTier[lower.tier]; count > 0 {
+				appendGraphDetail(lower.code, false, &count, fmt.Sprintf("pull requests in this answer whose project membership stands on %s links: %d", lower.tier, count), "context-fabric:graph")
+			}
+		}
 	}
 	sources := []contextfabric.SourceObservation{{Source: "context-fabric:graph", State: contextfabric.SourceAvailable, ObservedAt: ptrTime(a.now().UTC())}}
 	if unbounded > 0 {
@@ -2078,6 +2105,29 @@ func projectNarrowingRestsOnWildcard(principal storage.Principal, scope contextf
 		}
 	}
 	return false
+}
+
+// answerPullRequestsOnLowerTier counts, per lower link tier, the distinct pull
+// requests IN THE ANSWER whose stated membership stands on that tier: the
+// admitted cohort members and the endpoints of admitted edges (CHAOS-12308).
+// It is not the walk line's walk_crossed_pull_requests_*.
+func answerPullRequestsOnLowerTier(principal storage.Principal, scope contextfabric.RequestedScope, nodes []graphrank.CandidateNode, edges []graphrank.ResolvedEdge) map[string]int {
+	tiers := map[string]string{}
+	for _, n := range nodes {
+		if tier := graphrank.LowerTierMembershipOf(scope, n.Attributes); tier != "" && authorizedNodeAttributes(principal, scope, n.Attributes) {
+			tiers[graphrank.StringAttribute(n.Attributes, "canonical_id")] = tier
+		}
+	}
+	for _, e := range edges {
+		for id, tier := range e.EndpointLowerTierPullRequests {
+			tiers[id] = tier
+		}
+	}
+	counts := map[string]int{}
+	for _, tier := range tiers {
+		counts[tier]++
+	}
+	return counts
 }
 
 // countUnboundedValidity counts the admitted nodes and edges that carry no

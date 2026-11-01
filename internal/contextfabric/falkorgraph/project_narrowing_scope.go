@@ -4,6 +4,7 @@ import (
 	"context"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric/graphrank"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
 )
 
@@ -27,6 +28,36 @@ func (s treeWalkState) withoutProjectNarrowing() treeWalkState {
 	// CHAOS-12361: an anchor the narrowing alone refuses is not denied here.
 	s.anchorDenied = s.anchorDeniedUnscoped
 	return s
+}
+
+// noteCrossed records a pull request the walk crossed whose stated membership
+// stands on a lower link tier (CHAOS-12308). The walk line reports these; the
+// answer's own count is answerPullRequestsOnLowerTier, a different number: an
+// issue decides for itself, so a crossed pull request need not reach the
+// answer.
+func (s treeWalkState) noteCrossed(n *node) {
+	tier := graphrank.LowerTierMembershipOf(s.scope, toCandidateNode(n).Attributes)
+	if tier == "" {
+		return
+	}
+	if s.out.crossedLowerTier == nil {
+		s.out.crossedLowerTier = map[string]string{}
+	}
+	s.out.crossedLowerTier[canonicalIDOf(n)] = tier
+}
+
+// crossedPullRequests folds crossedLowerTier into the walk line's counts.
+func crossedPullRequests(crossed map[string]string) contextfabric.CrossedPullRequests {
+	var out contextfabric.CrossedPullRequests
+	for _, tier := range crossed {
+		switch tier {
+		case contextfabric.TreeLinkTierExplicitText:
+			out.ExplicitText++
+		case contextfabric.TreeLinkTierHeuristic:
+			out.Heuristic++
+		}
+	}
+	return out
 }
 
 // narrowsByProject reports whether the request narrows by project at all.

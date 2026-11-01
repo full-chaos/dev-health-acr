@@ -43,6 +43,8 @@ func validDetailForCode(code ContextFabricCoverageDetailCode) ContextFabricCover
 		ContextFabricCoverageDetailGraphCohortDeniedByAuthorization,
 		ContextFabricCoverageDetailGraphProjectDeploymentsUnlinked,
 		ContextFabricCoverageDetailWorkItemRepositoryUnlinked,
+		ContextFabricCoverageDetailGraphAnswerPullRequestsOnExplicitTextLinks,
+		ContextFabricCoverageDetailGraphAnswerPullRequestsOnHeuristicLinks,
 		ContextFabricCoverageDetailGraphUnknownRelationshipType:
 		d.Source, d.Count = "context-fabric:graph", intPtr(3)
 	case ContextFabricCoverageDetailGraphExactNameCandidatesTruncated:

@@ -614,6 +614,11 @@ exception is an organization with no repository inventory whose read carries
 other grant stays 409 `no_repository` (CHAOS-12301; see
 [the project-only design](design/context-fabric-project-only-scope.md#admission)).
 
+The OpenAPI lists this 409 on every route behind the access check (every
+route in `protectedRoutes()`); `TestEveryProtectedRouteListsNoRepositoryInTheOpenAPI`
+fails when one omits it. The credential lifecycle routes and
+`oauth/device_approval` do not pass this check; their 409 is a different code.
+
 **Budget.** On the investigation create the read runs inside the request's
 budget (min of `X-ACR-Wait-Budget-Seconds` and `ACR_REQUEST_TIMEOUT`, counted
 from arrival). When what is left after the read is below the 10-second minimum
