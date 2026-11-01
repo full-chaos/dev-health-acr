@@ -3971,7 +3971,6 @@ flowchart TD
   L2 --> E
 ```
 
-||||||| 7d4c5423
 ## Sources
 
 - Live code via `codegraph_explore` / `rg` on `dev-health-acr`: `engine.go`
