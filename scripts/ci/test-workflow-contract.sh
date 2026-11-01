@@ -3313,6 +3313,18 @@ vm="$tmpdir/vm-test-duplicate.yml"
 awk -v name="      - name: $neg_name" -v run="$neg_run" '{ print } $0 == run { print name; print "        run: echo second step with the same name" }' "$workflow" > "$vm"
 assert_check_fails 'a second step carries the negative-control step name' check_vendored_lifecycle_contract_wiring "$vm"
 
+# (n5) the jobs that hold the two named steps must run them unconditionally and
+# fail on their failure: no job-level continue-on-error, no job-level if.
+after_job_header() { # in out job inserted-line
+  awk -v header="  $3:" -v add="$4" '{ print } $0 == header { print add }' "$1" > "$2"
+}
+for job in scripts contracts; do
+  vm="$tmpdir/vm-job-$job-coe.yml"; after_job_header "$workflow" "$vm" "$job" '    continue-on-error: true'
+  assert_check_fails "the $job job has continue-on-error: true" check_vendored_lifecycle_contract_wiring "$vm"
+  vm="$tmpdir/vm-job-$job-if.yml"; after_job_header "$workflow" "$vm" "$job" '    if: false'
+  assert_check_fails "the $job job has if: false" check_vendored_lifecycle_contract_wiring "$vm"
+done
+
 # (o) remove the pin's full-SHA requirement, restoring the floating-ref hole.
 pin_regex_removed="$tmpdir/pin-regex-removed.yml"
 grep -vF '[0-9a-f]{40}' "$workflow" > "$pin_regex_removed"
