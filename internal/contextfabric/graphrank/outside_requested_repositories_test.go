@@ -126,9 +126,10 @@ func TestAKindTheQuestionDoesNotAskForIsNotAMatchOutside(t *testing.T) {
 		"another kind refused": {&contestAdmission{scope: contestScope{MemberKind: contextfabric.SubjectPullRequest}}, 1},
 		"the kind is refused":  {&contestAdmission{scope: contestScope{MemberKind: contextfabric.SubjectRepository}}, 0},
 	} {
-		got := recordOutsideRequestedRepositories(storage.Principal{OrgID: "org_1"}, request, deps, "payments-worker", []CandidateNode{worker}, tc.admission, nil)
-		if len(got) != tc.want {
-			t.Fatalf("%s: outside %d, want %d", name, len(got), tc.want)
+		deps.outsideRequested = map[string]struct{}{}
+		recordOutsideRequestedRepository(storage.Principal{OrgID: "org_1"}, request, deps, "payments-worker", worker, true, tc.admission)
+		if len(deps.outsideRequested) != tc.want {
+			t.Fatalf("%s: outside %d, want %d", name, len(deps.outsideRequested), tc.want)
 		}
 	}
 }
@@ -160,5 +161,28 @@ func TestAComparisonCountsEachSubjectOnceAcrossItsOperands(t *testing.T) {
 	}
 	if len(resolution.Candidates) != 0 || len(resolution.Committed) != 0 {
 		t.Fatalf("candidates %v, committed %v, want none: the narrowing stands", resolution.Candidates, resolution.Committed)
+	}
+}
+
+// TestEveryTermArmCountsAMatchOutsideTheRequestedRepositories (CHAOS-12360,
+// codex r1): a keyed alias or the exact-name arm can be the only arm that finds
+// a subject, and the narrowing refuses it there as it does in ordinary search.
+func TestEveryTermArmCountsAMatchOutsideTheRequestedRepositories(t *testing.T) {
+	t.Parallel()
+	narrowed := contextfabric.RequestedScope{RepositorySlugs: []string{"acme/payments-api"}}
+	worker := candidateNode(contextfabric.SubjectRepository, "repository:worker", "payments-worker", 0.8, []string{"acme/payments-worker"})
+	for name, backend := range map[string]*fakeGraphBackend{
+		"a keyed alias":      {enableAliasLookup: true, aliasLookupComplete: true, aliasLookupClaimants: map[string][]CandidateNode{"payments-worker": {worker}}},
+		"the exact-name arm": {enableExactNameCandidates: true, exactNameCandidates: []CandidateNode{worker}},
+	} {
+		request := testRequest()
+		request.RequestedScope = narrowed
+		resolution, _, err := ResolveSubjects(context.Background(), storage.Principal{OrgID: "org_1"}, request, testInterpreted("payments-worker"), backend.deps(), nil, nil)
+		if err != nil {
+			t.Fatalf("%s: ResolveSubjects() error = %v", name, err)
+		}
+		if resolution.OutsideRequestedRepositories != 1 || len(resolution.Candidates) != 0 {
+			t.Fatalf("%s: outside %d, candidates %d; want 1 and 0", name, resolution.OutsideRequestedRepositories, len(resolution.Candidates))
+		}
 	}
 }

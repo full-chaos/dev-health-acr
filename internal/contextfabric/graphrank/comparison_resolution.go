@@ -94,9 +94,6 @@ type operandSlotRun struct {
 	// still propagate to the aggregate.
 	retrievalDegraded bool
 
-	// outsideRequested is what this slot's term retrieval recorded.
-	outsideRequested map[string]struct{}
-
 	// searchLimit is the retrieval bound this slot was RESOLVED UNDER, taken
 	// from the value actually handed to the resolver rather than re-derived
 	// afterwards. Carried so the slot's own observable can report it and be
@@ -135,6 +132,10 @@ func (s operandSlotRun) resolved() bool { return s.state() == operandSlotResolve
 // comparisonResolutionRun owns the ordered operand runs and the aggregate
 // publication decision.
 type comparisonResolutionRun struct {
+	// outsideRequested is the set every slot's merges record into
+	// (recordOutsideRequestedRepository).
+	outsideRequested map[string]struct{}
+
 	// admission is the classifier's verdict, carried so publication can
 	// distinguish a held scoped pair from a pair that simply did not resolve.
 	admission contextfabric.ComparisonAdmission
@@ -164,18 +165,6 @@ func (r comparisonResolutionRun) retrievalDegraded() bool {
 		}
 	}
 	return false
-}
-
-// outsideRequestedRepositories counts the distinct subjects the slots recorded
-// (CHAOS-12360): two operands can match the same subject.
-func (r comparisonResolutionRun) outsideRequestedRepositories() int {
-	outside := map[string]struct{}{}
-	for _, slot := range r.slots {
-		for key := range slot.outsideRequested {
-			outside[key] = struct{}{}
-		}
-	}
-	return len(outside)
 }
 
 // publishable is ruling 1A, in one place.
@@ -234,7 +223,7 @@ func publishComparisonResolution(run comparisonResolutionRun, budget int) (conte
 		Candidates: combineSlotCandidates(run, budget),
 		Committed:  []contextfabric.SubjectRef{},
 
-		OutsideRequestedRepositories: run.outsideRequestedRepositories(),
+		OutsideRequestedRepositories: len(run.outsideRequested),
 	}
 	bases := contextfabric.CommitBasisSet{}
 	digests := contextfabric.CommitDecisionDigestSet{}
@@ -491,7 +480,10 @@ func resolveNamedComparison(
 	// to remember it.
 	contest *contestAdmission,
 ) (contextfabric.SubjectResolution, contextfabric.CommitBasisSet, contextfabric.CommitDecisionDigestSet, error) {
-	run := comparisonResolutionRun{admission: comparison.Admission}
+	// Every slot's merges record here, so two operands that match one subject
+	// count it once (CHAOS-12360).
+	deps.outsideRequested = map[string]struct{}{}
+	run := comparisonResolutionRun{admission: comparison.Admission, outsideRequested: deps.outsideRequested}
 
 	// THE POLICY LINE FIRES AT DISPATCH, before every other line and before
 	// anything can fail or return -- the scoped hold included. If it is absent
@@ -860,7 +852,6 @@ func resolveOneOperandSlot(
 		digests:           digests,
 		receiptBound:      len(preCommitted) > 0,
 		retrievalDegraded: retrievalDegraded,
-		outsideRequested:  retrieval.outsideRequested,
 		// Recorded from the value HANDED TO the resolver, not re-derived, so
 		// the line reports the bound that ran rather than a second opinion
 		// about what it should have been.

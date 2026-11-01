@@ -78,3 +78,29 @@ func TestAStoredOutsideMatchCountNeverReachesARestrictedOrProjectOnlyReader(t *t
 		}
 	}
 }
+
+// TestARefusedGroupAxisKeepsTheCountOfMatchesOutside (CHAOS-12360, codex r1):
+// this refusal empties the resolution it serves, and the count is not part of
+// what it empties: the narrowing refused a real match all the same.
+func TestARefusedGroupAxisKeepsTheCountOfMatchesOutside(t *testing.T) {
+	t.Parallel()
+	recorder := &groupReadRecorder{facts: func(CanonicalFactRequest) CanonicalFactBundle {
+		bundle := emptyFactBundle()
+		bundle.Coverage.Sources = []SourceObservation{{Source: "canonical_fact:metrics", State: SourceAvailable}}
+		return bundle
+	}}
+	members := []CohortMember{{Subject: SubjectRef{Kind: SubjectTeam, CanonicalID: TeamCanonicalID("team_security"), Label: "Security"}}}
+	engine, request := groupReadEngineFixtureConfigured(t, &recordingTelemetry{}, recorder, members, nil, SubjectTeam, nil, nil, func(config *groupReadFixtureConfig) {
+		config.graph.resolution.OutsideRequestedRepositories = 2
+	})
+	result, err := engine.Investigate(context.Background(), storage.Principal{OrgID: "org_1"}, request)
+	if err != nil {
+		t.Fatalf("Investigate() error = %v", err)
+	}
+	if result.RefusalBasis != contractsv1.ContextFabricRefusalBasisFrameInvariantViolated {
+		t.Fatalf("refusal basis %q: the fixture must reach the collapsed-axis refusal", result.RefusalBasis)
+	}
+	if !slices.Contains(result.Limitations, contractsv1.ContextFabricOutsideRequestedRepositoriesLimitation(2)) {
+		t.Fatalf("limitations %q: the count is gone", result.Limitations)
+	}
+}

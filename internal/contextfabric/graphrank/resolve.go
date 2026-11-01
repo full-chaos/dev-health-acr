@@ -231,6 +231,11 @@ type ResolveDeps struct {
 	// backend) reaches SearchKind. A backend with no kind-scoped query path
 	// can safely leave this nil.
 	SearchKind func(ctx context.Context, term string, kind contextfabric.SubjectKind, limit int) (candidates []CandidateNode, truncated bool, degraded bool, err error)
+	// outsideRequested is this resolution's own set of subjects only the
+	// requested repository narrowing refused
+	// (recordOutsideRequestedRepository). The resolver allocates it; a merge
+	// outside a resolution has none and records nothing.
+	outsideRequested map[string]struct{}
 	// ExactNameCandidates (CHAOS-4348) returns EVERY repository/project/team
 	// node (isAliasLookupScopedKind) in this organization's authorized,
 	// temporally-valid scope, ONCE per resolution -- not term-scoped, not
@@ -2748,6 +2753,7 @@ func resolveSubjects(ctx context.Context, principal storage.Principal, request c
 	if err := ctx.Err(); err != nil {
 		return contextfabric.SubjectResolution{}, contextfabric.StructureOfferMaterial{}, err
 	}
+	deps.outsideRequested = map[string]struct{}{}
 	// COMPARISON DISPATCH -- BEFORE SubjectTerms FLATTENS THE QUESTION.
 	//
 	// This position is what binds each operand. One line below, SubjectTerms reduces the
@@ -4497,7 +4503,7 @@ func resolveSubjects(ctx context.Context, principal storage.Principal, request c
 		handleOffer,
 	)
 	offerMaterial.SubjectFloor = subjectFloorOutcome(offerFloorPoolRows, resolution, offerMaterial)
-	resolution.OutsideRequestedRepositories = len(termRetrieval.outsideRequested)
+	resolution.OutsideRequestedRepositories = len(deps.outsideRequested)
 	return resolution, offerMaterial, nil
 }
 
@@ -5065,6 +5071,7 @@ func mergeSearchResults(ctx context.Context, principal storage.Principal, reques
 		if !ok {
 			if !nodeAuthorized {
 				authzDropped++
+				recordOutsideRequestedRepository(principal, request, deps, term, node, allowExactMatch, admission)
 			}
 			continue
 		}
@@ -5198,10 +5205,6 @@ type termRetrievalOutcome struct {
 	// authorization denied them -- never an invalid or bookkeeping node, so
 	// this can never over-report.
 	authzDropped int
-	// outsideRequested holds the subjects only the requested repository
-	// narrowing refused (recordOutsideRequestedRepositories). Nil when there
-	// are none.
-	outsideRequested map[string]struct{}
 }
 
 // retrieveCandidatesForTerms runs the per-term retrieval pass: one Search per
@@ -5284,7 +5287,6 @@ func retrieveCandidatesForTerms(
 		termTraversalDegraded, termAuthzDropped := mergeSearchResults(ctx, principal, request, deps, term, results, candidatesBySubject, observationParentKey, observationBlocked, true, vectorArmSimilarity, identity, identityTerms, admission)
 		outcome.traversalDegraded += termTraversalDegraded
 		outcome.authzDropped += termAuthzDropped
-		outcome.outsideRequested = recordOutsideRequestedRepositories(principal, request, deps, term, results, admission, outcome.outsideRequested)
 	}
 	return outcome, nil
 }
