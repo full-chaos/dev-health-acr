@@ -124,14 +124,11 @@ func standingRank(standing contractsv1.ContextFabricDriverStanding) int {
 }
 
 // ShedVocabularyLabels narrows a projection's words to tier, the same tiers as
-// the canonical document (CHAOS-12416): the fact field words go first and the
-// status words go last, because with no map a cut answer reads a neutral pill. A
-// word never costs a row or an answer, and a consumer takes its generic path for
-// what is gone.
+// the canonical document (CHAOS-12416): the status words go last, because with
+// no map a cut answer reads a neutral pill. A word never costs a row or an
+// answer, and a consumer takes its generic path for what is gone.
 func ShedVocabularyLabels(projection contractsv1.ContextFabricAnswerProjection, tier contractsv1.ContextFabricVocabularyLabelsTier) contractsv1.ContextFabricAnswerProjection {
 	switch tier {
-	case contractsv1.ContextFabricVocabularyLabelsNoFactFields:
-		projection.VocabularyLabels = contractsv1.ContextFabricVocabularyLabelsWithoutFactFields(projection.VocabularyLabels)
 	case contractsv1.ContextFabricVocabularyLabelsStatusOnly:
 		projection.VocabularyLabels = contractsv1.ContextFabricStatusVocabularyLabels(projection.VocabularyLabels)
 	case contractsv1.ContextFabricVocabularyLabelsNone:

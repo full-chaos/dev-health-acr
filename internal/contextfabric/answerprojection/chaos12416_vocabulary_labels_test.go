@@ -30,17 +30,15 @@ func TestProjectKeepsAnAbsentMapAbsent(t *testing.T) {
 }
 
 func TestShedVocabularyLabelsNarrowsByTier(t *testing.T) {
-	labels := map[string]string{"answer_status:partial": "Partial answer", "status_correction:note": "A sentence.", "subject_kind:team": "team", "fact_field:day": "Day"}
-	noFields := map[string]string{"answer_status:partial": "Partial answer", "status_correction:note": "A sentence.", "subject_kind:team": "team"}
+	labels := map[string]string{"answer_status:partial": "Partial answer", "status_correction:note": "A sentence.", "subject_kind:team": "team"}
 	status := map[string]string{"answer_status:partial": "Partial answer", "status_correction:note": "A sentence."}
 	for name, row := range map[string]struct {
 		tier contractsv1.ContextFabricVocabularyLabelsTier
 		want map[string]string
 	}{
-		"full":           {contractsv1.ContextFabricVocabularyLabelsFull, labels},
-		"no fact fields": {contractsv1.ContextFabricVocabularyLabelsNoFactFields, noFields},
-		"status only":    {contractsv1.ContextFabricVocabularyLabelsStatusOnly, status},
-		"none":           {contractsv1.ContextFabricVocabularyLabelsNone, nil},
+		"full":        {contractsv1.ContextFabricVocabularyLabelsFull, labels},
+		"status only": {contractsv1.ContextFabricVocabularyLabelsStatusOnly, status},
+		"none":        {contractsv1.ContextFabricVocabularyLabelsNone, nil},
 	} {
 		t.Run(name, func(t *testing.T) {
 			shed := ShedVocabularyLabels(contractsv1.ContextFabricAnswerProjection{ResultID: "result_one", VocabularyLabels: labels}, row.tier)

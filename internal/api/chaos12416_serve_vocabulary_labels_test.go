@@ -382,16 +382,6 @@ func statusWordsOf(t *testing.T, labels map[string]string) map[string]string {
 	return kept
 }
 
-// fieldlessWordsOf is the no_fact_fields tier of a full map (CHAOS-12418).
-func fieldlessWordsOf(t *testing.T, labels map[string]string) map[string]string {
-	t.Helper()
-	kept := v1.ContextFabricVocabularyLabelsWithoutFactFields(labels)
-	if len(kept) == 0 || len(kept) == len(labels) {
-		t.Fatalf("the full map must hold field words and others, or this proves nothing: %v", labels)
-	}
-	return kept
-}
-
 // A stored result fitted near the ceiling still serves within it: the ceiling is
 // a byte exact line, each tier goes in turn, and a label never refuses it.
 func TestAStoredResultNearTheCeilingServesWithinIt(t *testing.T) {
@@ -415,20 +405,11 @@ func TestAStoredResultNearTheCeilingServesWithinIt(t *testing.T) {
 	}
 
 	app.config.MaxSerializedBytes = labeled.Body.Len() - 1
-	fieldless := readByID(t, app, token, seeded.ResultID, "")
-	if fieldless.Code != http.StatusOK || fieldless.Body.Len() > app.config.MaxSerializedBytes || !maps.Equal(decodeLabeled(t, fieldless.Body.Bytes()).VocabularyLabels, fieldlessWordsOf(t, full)) {
-		t.Fatalf("one byte short of the map: %d, %d bytes of %d: %s", fieldless.Code, fieldless.Body.Len(), app.config.MaxSerializedBytes, fieldless.Body.String())
-	}
-	if !strings.Contains(logs.String(), shedLine) || !strings.Contains(logs.String(), tierLine(v1.ContextFabricVocabularyLabelsNoFactFields)) {
-		t.Fatalf("the shed did not name its tier:\n%s", logs.String())
-	}
-
-	app.config.MaxSerializedBytes = fieldless.Body.Len() - 1
 	tiered := readByID(t, app, token, seeded.ResultID, "")
 	if tiered.Code != http.StatusOK || tiered.Body.Len() > app.config.MaxSerializedBytes || !maps.Equal(decodeLabeled(t, tiered.Body.Bytes()).VocabularyLabels, keep) {
-		t.Fatalf("one byte short of the field-less map: %d, %d bytes of %d: %s", tiered.Code, tiered.Body.Len(), app.config.MaxSerializedBytes, tiered.Body.String())
+		t.Fatalf("one byte short of the map: %d, %d bytes of %d: %s", tiered.Code, tiered.Body.Len(), app.config.MaxSerializedBytes, tiered.Body.String())
 	}
-	if !strings.Contains(logs.String(), tierLine(v1.ContextFabricVocabularyLabelsStatusOnly)) {
+	if !strings.Contains(logs.String(), shedLine) || !strings.Contains(logs.String(), tierLine(v1.ContextFabricVocabularyLabelsStatusOnly)) {
 		t.Fatalf("the shed did not name its tier:\n%s", logs.String())
 	}
 
@@ -479,21 +460,9 @@ func TestAProjectionByIDShedsItsWordsBeforeARefusal(t *testing.T) {
 
 	full := decodeProjection(t, projected.Body.Bytes()).VocabularyLabels
 	app.config.MaxSerializedBytes = projected.Body.Len() - 1
-	fieldless := readByID(t, app, token, row.ResultID, "view=projection")
-	if fieldless.Code != http.StatusOK || fieldless.Body.Len() > app.config.MaxSerializedBytes {
-		t.Fatalf("projection one byte over: %d, %d bytes of %d", fieldless.Code, fieldless.Body.Len(), app.config.MaxSerializedBytes)
-	}
-	if got := decodeProjection(t, fieldless.Body.Bytes()).VocabularyLabels; !maps.Equal(got, fieldlessWordsOf(t, full)) {
-		t.Fatalf("the no_fact_fields tier holds %v", got)
-	}
-	if !strings.Contains(logs.String(), tierLine(v1.ContextFabricVocabularyLabelsNoFactFields)) {
-		t.Fatalf("the shed did not name its tier:\n%s", logs.String())
-	}
-
-	app.config.MaxSerializedBytes = fieldless.Body.Len() - 1
 	tiered := readByID(t, app, token, row.ResultID, "view=projection")
 	if tiered.Code != http.StatusOK || tiered.Body.Len() > app.config.MaxSerializedBytes {
-		t.Fatalf("projection one byte over the field-less map: %d, %d bytes of %d", tiered.Code, tiered.Body.Len(), app.config.MaxSerializedBytes)
+		t.Fatalf("projection one byte over: %d, %d bytes of %d", tiered.Code, tiered.Body.Len(), app.config.MaxSerializedBytes)
 	}
 	if got := decodeProjection(t, tiered.Body.Bytes()).VocabularyLabels; !maps.Equal(got, statusWordsOf(t, full)) {
 		t.Fatalf("the status tier holds %v", got)
@@ -540,21 +509,9 @@ func TestACreatedAnswerThatFitsOnlyWithFewerWordsStaysCanonical(t *testing.T) {
 	full := decodeLabeled(t, labeled.Body.Bytes()).VocabularyLabels
 
 	body.Options.MaxSerializedBytes = labeled.Body.Len() - 1
-	fieldless := serveJSON(t, app, token, body)
-	if fieldless.Code != http.StatusOK || fieldless.Body.Len() > body.Options.MaxSerializedBytes {
-		t.Fatalf("create one byte short: %d, %d bytes of %d", fieldless.Code, fieldless.Body.Len(), body.Options.MaxSerializedBytes)
-	}
-	if got := decodeLabeled(t, fieldless.Body.Bytes()).VocabularyLabels; !maps.Equal(got, fieldlessWordsOf(t, full)) {
-		t.Fatalf("the no_fact_fields tier holds %v", got)
-	}
-	if !strings.Contains(logs.String(), tierLine(v1.ContextFabricVocabularyLabelsNoFactFields)) {
-		t.Fatalf("the shed did not name its tier:\n%s", logs.String())
-	}
-
-	body.Options.MaxSerializedBytes = fieldless.Body.Len() - 1
 	tiered := serveJSON(t, app, token, body)
 	if tiered.Code != http.StatusOK || tiered.Body.Len() > body.Options.MaxSerializedBytes {
-		t.Fatalf("create one byte short of the field-less map: %d, %d bytes of %d", tiered.Code, tiered.Body.Len(), body.Options.MaxSerializedBytes)
+		t.Fatalf("create one byte short: %d, %d bytes of %d", tiered.Code, tiered.Body.Len(), body.Options.MaxSerializedBytes)
 	}
 	var keys map[string]json.RawMessage
 	if err := json.Unmarshal(tiered.Body.Bytes(), &keys); err != nil {
@@ -658,19 +615,9 @@ func TestAProjectionShedsItsWordsBeforeItsRows(t *testing.T) {
 	}
 
 	options.MaxSerializedBytes = int(wholeBytes) - 1
-	fieldless, _, fieldlessBytes, budget, fieldlessTier, fits := app.projectToCallerOption(labeled, answer, options)
-	if !fits || fieldlessBytes > wholeBytes-1 || fieldlessTier != v1.ContextFabricVocabularyLabelsNoFactFields {
-		t.Fatalf("one byte short: fits=%v %d bytes tier %q", fits, fieldlessBytes, fieldlessTier)
-	}
-	if !maps.Equal(fieldless.VocabularyLabels, fieldlessWordsOf(t, whole.VocabularyLabels)) {
-		t.Fatalf("the no_fact_fields tier holds %v", fieldless.VocabularyLabels)
-	}
-	rowsIntact(t, fieldless, budget)
-
-	options.MaxSerializedBytes = int(fieldlessBytes) - 1
 	status, _, statusBytes, budget, statusTier, fits := app.projectToCallerOption(labeled, answer, options)
-	if !fits || statusBytes > fieldlessBytes-1 || statusTier != v1.ContextFabricVocabularyLabelsStatusOnly {
-		t.Fatalf("one byte short of the field-less map: fits=%v %d bytes tier %q", fits, statusBytes, statusTier)
+	if !fits || statusBytes > wholeBytes-1 || statusTier != v1.ContextFabricVocabularyLabelsStatusOnly {
+		t.Fatalf("one byte short: fits=%v %d bytes tier %q", fits, statusBytes, statusTier)
 	}
 	if !maps.Equal(status.VocabularyLabels, statusWordsOf(t, whole.VocabularyLabels)) {
 		t.Fatalf("the status tier holds %v", status.VocabularyLabels)
@@ -694,29 +641,6 @@ func TestAProjectionsTierNamesWhatItHolds(t *testing.T) {
 	}
 	if _, _, _, tier, err := fitProjectionWords(v1.ContextFabricAnswerProjection{}, 1); err != nil || tier != v1.ContextFabricVocabularyLabelsOff {
 		t.Fatalf("no map: tier %q (%v), want off", tier, err)
-	}
-	onlyFields := v1.ContextFabricAnswerProjection{VocabularyLabels: map[string]string{"fact_field:day": "Day"}}
-	if fitted, _, _, tier, err := fitProjectionWords(onlyFields, 1); err != nil || tier != v1.ContextFabricVocabularyLabelsNone || fitted.VocabularyLabels != nil {
-		t.Fatalf("only field words: tier %q map %v (%v), want none", tier, fitted.VocabularyLabels, err)
-	}
-}
-
-// CHAOS-12418: the field words go first, so a field word never costs a chip its
-// word.
-func TestAProjectionShedsItsFieldWordsFirst(t *testing.T) {
-	projection := v1.ContextFabricAnswerProjection{VocabularyLabels: map[string]string{
-		"answer_status:partial": "Partial answer", "subject_kind:team": "team", "fact_field:day": "Day",
-	}}
-	_, _, wholeBytes, tier, err := fitProjectionWords(projection, 1<<20)
-	if err != nil || tier != v1.ContextFabricVocabularyLabelsFull {
-		t.Fatalf("no shed: tier %q (%v)", tier, err)
-	}
-	fitted, _, _, tier, err := fitProjectionWords(projection, wholeBytes-1)
-	if err != nil || tier != v1.ContextFabricVocabularyLabelsNoFactFields {
-		t.Fatalf("one byte short: tier %q (%v)", tier, err)
-	}
-	if want := map[string]string{"answer_status:partial": "Partial answer", "subject_kind:team": "team"}; !maps.Equal(fitted.VocabularyLabels, want) {
-		t.Fatalf("the tier holds %v", fitted.VocabularyLabels)
 	}
 }
 
@@ -784,15 +708,12 @@ func TestTheWordsBoundLeavesRoomForTheSynthesisInput(t *testing.T) {
 	app := &App{config: AppConfig{MaxSerializedBytes: v1.ContextFabricSerializedBytesMax}}
 	statusOnly, _ := cf.ServeVocabularyLabels(answer, true, 0)
 	statusOnly.VocabularyLabels = v1.ContextFabricStatusVocabularyLabels(labeled.VocabularyLabels)
-	fieldless, _ := cf.ServeVocabularyLabels(answer, true, 0)
-	fieldless.VocabularyLabels = fieldlessWordsOf(t, labeled.VocabularyLabels)
 	for name, row := range map[string]struct {
 		caller int64
 		tier   v1.ContextFabricVocabularyLabelsTier
 	}{
 		"exactly the envelope with its words": {envelope(labeled), v1.ContextFabricVocabularyLabelsFull},
-		"one byte short":                      {envelope(labeled) - 1, v1.ContextFabricVocabularyLabelsNoFactFields},
-		"one byte short of the field-less":    {envelope(fieldless) - 1, v1.ContextFabricVocabularyLabelsStatusOnly},
+		"one byte short":                      {envelope(labeled) - 1, v1.ContextFabricVocabularyLabelsStatusOnly},
 		"one byte short of the status words":  {envelope(statusOnly) - 1, v1.ContextFabricVocabularyLabelsNone},
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -1049,9 +970,9 @@ func bareBytes(t *testing.T, answer cf.InvestigationResult) int {
 	return int(size)
 }
 
-// (a) One byte short of every word above the status tier, on a real cut and
-// corrected answer: the status word, the note and the limitation are all in the
-// body, and the document stays canonical.
+// (a) One byte short of the full map, on a real cut and corrected answer: the
+// status word, the note and the limitation are all in the body, and the document
+// stays canonical.
 func TestACutAnswerKeepsItsStatusWordsNoteAndLimitation(t *testing.T) {
 	rig := newCutAnswerRig(t, true, true)
 	whole, answer := rig.whole(t)
@@ -1060,7 +981,7 @@ func TestACutAnswerKeepsItsStatusWordsNoteAndLimitation(t *testing.T) {
 	}
 	keep := statusWordsOf(t, answer.VocabularyLabels)
 
-	bound := rig.post(t, whole.Body.Len()-1).Body.Len() - 1
+	bound := whole.Body.Len() - 1
 	recorder := rig.post(t, bound)
 	if recorder.Code != http.StatusOK || recorder.Body.Len() > bound {
 		t.Fatalf("one byte short: %d, %d bytes of %d", recorder.Code, recorder.Body.Len(), bound)
@@ -1092,7 +1013,7 @@ func TestATrimmedAnswersPillReadsThePartialWord(t *testing.T) {
 		t.Fatalf("status %q correction %+v: the trim itself must be what lowered it", answer.Status, answer.StatusCorrection)
 	}
 	statusWordsOf(t, answer.VocabularyLabels)
-	recorder := rig.post(t, rig.post(t, whole.Body.Len()-1).Body.Len()-1)
+	recorder := rig.post(t, whole.Body.Len()-1)
 	if recorder.Code != http.StatusOK {
 		t.Fatalf("one byte short: %d", recorder.Code)
 	}
@@ -1102,8 +1023,8 @@ func TestATrimmedAnswersPillReadsThePartialWord(t *testing.T) {
 }
 
 // (c) Over the caller's bound the document is the projection, with its full
-// result left out, and at one byte short of every word above the status tier it
-// keeps the same words, each read against its own completeness.
+// result left out, and at one byte short of its full map it keeps the same
+// words, each read against its own completeness.
 func TestACutProjectionKeepsItsStatusWordsNoteAndLimitation(t *testing.T) {
 	rig := newCutAnswerRig(t, true, true)
 	_, answer := rig.whole(t)
@@ -1119,8 +1040,7 @@ func TestACutProjectionKeepsItsStatusWordsNoteAndLimitation(t *testing.T) {
 	assertProjectionStatusWord(t, full)
 	keep := statusWordsOf(t, full.VocabularyLabels)
 
-	fieldless, _ := door(first.Body.Len() - 1)
-	bound := fieldless.Body.Len() - 1
+	bound := first.Body.Len() - 1
 	recorder, logs := door(bound)
 	if recorder.Code != http.StatusOK || recorder.Body.Len() > bound {
 		t.Fatalf("one byte short: %d, %d bytes of %d", recorder.Code, recorder.Body.Len(), bound)
@@ -1321,8 +1241,6 @@ func TestACutProjectionByIDKeepsItsStatusWordsNoteAndLimitation(t *testing.T) {
 		t.Fatalf("no note on the projection, so this proves nothing: %v", keep)
 	}
 	rig.app.config.MaxSerializedBytes = first.Body.Len() - 1
-	fieldless := readByID(t, rig.app, rig.token, answer.ResultID, "view=projection")
-	rig.app.config.MaxSerializedBytes = fieldless.Body.Len() - 1
 	recorder := readByID(t, rig.app, rig.token, answer.ResultID, "view=projection")
 	if recorder.Code != http.StatusOK || recorder.Body.Len() > rig.app.config.MaxSerializedBytes {
 		t.Fatalf("one byte short: %d, %d bytes", recorder.Code, recorder.Body.Len())

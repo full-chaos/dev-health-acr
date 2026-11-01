@@ -287,7 +287,8 @@ declares and what the table labels are one set.
 vocabulary: it is a composite coordinate, `obligation/role/subject`, so it takes
 the generic path. `obligation`, the cause and refinement fields, plan narrowing,
 and driver category, epistemic status and derivation stay in the fold. A derived
-claim's `field` is free text, not a declared name, so it takes the generic path.
+claim's `field` is free text, even when it matches a declared name, so it takes
+the generic path.
 `completeness.state` and `data_completeness` are never shown, and `outcomes[].impact` goes to the fold (CHAOS-12245,
 CHAOS-12413): their tables are removed.
 
@@ -340,8 +341,9 @@ most 8,192 entries, the bound of `evidence_ref_labels`. That is not the working
 limit. The map holds only the values in one result, so the whole registry is its
 ceiling: 114 entries and 5,374 bytes, 8.2% of the 65,536-byte answer budget, plus
 the one note. The fact field table has one row per declared name, so it stands
-apart: 357 entries and 20,924 bytes, 31.9% of the budget. One result holds only
-its own fields, and these words shed first, so the table costs no other word.
+apart: 357 entries and 20,924 bytes, 31.9% of the budget, which no answer carries.
+One result holds only its own fields: a claim adds its field and the columns of
+its tables, and every name of the widest kind is 77 entries and 4,577 bytes, 7.0%.
 
 **Where it is composed.** `contextfabric.ServeVocabularyLabels` is the only writer
 (`TestOnlyTheServeFunctionSetsTheMap`). Two doors call it, after the document's last
@@ -360,14 +362,11 @@ bounds, less the synthesis input on a client turn. The shed is tiered, so the se
 document is the richest one within the bound:
 
 1. The full map.
-2. Every word but `fact_field:*` (`no_fact_fields`).
-3. Only `answer_status:*` and `status_correction:note` (`status_only`).
-4. No map (`none`).
-5. No stamped source words.
+2. Only `answer_status:*` and `status_correction:note` (`status_only`).
+3. No map (`none`).
+4. No stamped source words.
 
-The fact field words go first because they are the largest table, and the raw name
-in the fold stands in for them, so a field word never costs a chip its word. The
-status words go last because they say the most for the fewest bytes. With no map
+The status words go last because they say the most for the fewest bytes. With no map
 a partial answer reads a neutral pill and loses its note, so the pill says less than
 the limitation below it. The input document stands if nothing fits, and the door
 refuses or projects it as before. A document over the caller's bound goes to the

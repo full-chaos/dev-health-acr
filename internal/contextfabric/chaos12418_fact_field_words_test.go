@@ -50,42 +50,45 @@ func TestAFieldWithNoDeclarationTakesTheGenericPath(t *testing.T) {
 	}
 }
 
-// The fact field words go first, so a field word never costs a chip its word,
-// and the tier states it.
-func TestABoundShedsTheFactFieldWordsBeforeAnyOtherWord(t *testing.T) {
+// The map holds only the fields in this result, never the table: one field of
+// the table is one key, so a claim costs what it names.
+func TestTheMapHoldsOnlyTheFieldsOfThisResult(t *testing.T) {
+	words := serveWords(t, InvestigationResult{ClaimedFacts: []contractsv1.ContextFabricClaimedFact{{Field: "completion_ratio"}}})
+	if len(words) != 1 {
+		t.Fatalf("one field served %d words: %v", len(words), words)
+	}
+}
+
+// Near the bound a field word sheds with every word that is not a status word,
+// so the status tier is what it was before these words.
+func TestTheStatusTierHoldsNoFactFieldWord(t *testing.T) {
 	bare := correctedFixture()
 	bare.ClaimedFacts = []contractsv1.ContextFabricClaimedFact{claimedFactWithTables()}
 	labeled, tier := ServeVocabularyLabels(bare, true, 0)
 	if tier != contractsv1.ContextFabricVocabularyLabelsFull {
 		t.Fatalf("no bound: tier %q", tier)
 	}
-	without := contractsv1.ContextFabricVocabularyLabelsWithoutFactFields(labeled.VocabularyLabels)
-	if len(without) == 0 || len(without) >= len(labeled.VocabularyLabels) {
-		t.Fatalf("the fixture must hold field words and other words: %v", labeled.VocabularyLabels)
-	}
-
 	served, tier := ServeVocabularyLabels(bare, true, encodedSize(t, labeled)-1)
-	if tier != contractsv1.ContextFabricVocabularyLabelsNoFactFields || !maps.Equal(served.VocabularyLabels, without) {
-		t.Fatalf("one byte short of the full map: tier %q map %v", tier, served.VocabularyLabels)
+	if tier != contractsv1.ContextFabricVocabularyLabelsStatusOnly {
+		t.Fatalf("one byte short of the full map: tier %q", tier)
 	}
-
-	served, tier = ServeVocabularyLabels(bare, true, encodedSize(t, served)-1)
-	status := contractsv1.ContextFabricStatusVocabularyLabels(labeled.VocabularyLabels)
-	if tier != contractsv1.ContextFabricVocabularyLabelsStatusOnly || !maps.Equal(served.VocabularyLabels, status) {
-		t.Fatalf("one byte short of the other words: tier %q map %v", tier, served.VocabularyLabels)
+	for key := range served.VocabularyLabels {
+		if strings.HasPrefix(key, "fact_field:") {
+			t.Errorf("the status tier holds %q", key)
+		}
 	}
 }
 
-// A map of field words only has no word left to keep, so an empty map does not
-// stand for the tier: the shed reports none.
-func TestAMapOfFieldWordsOnlyHasNoFactFieldsTier(t *testing.T) {
-	bare := InvestigationResult{ClaimedFacts: []contractsv1.ContextFabricClaimedFact{{Field: "completion_ratio"}}}
-	labeled, _ := ServeVocabularyLabels(bare, true, 0)
-	if len(labeled.VocabularyLabels) != 1 {
-		t.Fatalf("the fixture must hold one field word: %v", labeled.VocabularyLabels)
-	}
-	served, tier := ServeVocabularyLabels(bare, true, encodedSize(t, labeled)-1)
-	if tier != contractsv1.ContextFabricVocabularyLabelsNone || served.VocabularyLabels != nil {
-		t.Fatalf("tier %q map %v, want none and no map", tier, served.VocabularyLabels)
+// A derivation's field names what the value measures, in free text, and is not
+// looked up on a fact (ContextFabricClaimedFact.DerivedFrom). A name that happens
+// to match a declaration is still not that declaration, so it takes the generic
+// path.
+func TestADerivedClaimTakesTheGenericPathEvenWhenItsFieldIsADeclaredName(t *testing.T) {
+	result := InvestigationResult{ClaimedFacts: []contractsv1.ContextFabricClaimedFact{{
+		Field:       "completion_ratio",
+		DerivedFrom: []contractsv1.ContextFabricDerivationInput{{FactID: "fact_one", Field: "completed_count"}},
+	}}}
+	if got := serveWords(t, result); len(got) != 0 {
+		t.Fatalf("a derived field served %v", got)
 	}
 }

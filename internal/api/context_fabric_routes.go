@@ -446,14 +446,14 @@ func fitProjectionWords(projection contractsv1.ContextFabricAnswerProjection, bo
 		tier = contractsv1.ContextFabricVocabularyLabelsOff
 	}
 	encoded, measured, err = marshalContextFabricResponse(projection)
-	for _, next := range [...]contractsv1.ContextFabricVocabularyLabelsTier{contractsv1.ContextFabricVocabularyLabelsNoFactFields, contractsv1.ContextFabricVocabularyLabelsStatusOnly, contractsv1.ContextFabricVocabularyLabelsNone} {
+	for _, next := range [...]contractsv1.ContextFabricVocabularyLabelsTier{contractsv1.ContextFabricVocabularyLabelsStatusOnly, contractsv1.ContextFabricVocabularyLabelsNone} {
 		if err != nil || measured <= bound || projection.VocabularyLabels == nil {
 			break
 		}
 		projection, tier = answerprojection.ShedVocabularyLabels(projection, next), next
 		encoded, measured, err = marshalContextFabricResponse(projection)
 	}
-	if tier.Shed() && projection.VocabularyLabels == nil {
+	if tier == contractsv1.ContextFabricVocabularyLabelsStatusOnly && projection.VocabularyLabels == nil {
 		tier = contractsv1.ContextFabricVocabularyLabelsNone
 	}
 	return projection, encoded, measured, tier, err

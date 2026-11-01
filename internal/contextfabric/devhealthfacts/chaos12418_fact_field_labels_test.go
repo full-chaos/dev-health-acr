@@ -1,6 +1,7 @@
 package devhealthfacts_test
 
 import (
+	"encoding/json"
 	"regexp"
 	"slices"
 	"strings"
@@ -178,4 +179,38 @@ func TestCHAOS12418EveryLabelReadsAsAHeading(t *testing.T) {
 			t.Errorf("field %q: label %q is too long for a column", name, label)
 		}
 	}
+}
+
+// An answer holds only the fields it claims, so the measure that matters is a
+// kind's names, not the table's: every name of the widest kind stays a small share
+// of the budget. Kinds in one answer add up, to the table's size at most.
+func TestCHAOS12418OneKindsWordsAreASmallShareOfTheAnswerBudget(t *testing.T) {
+	const budget = 65536
+	labels := contractsv1.ContextFabricFactFieldLabels()
+	byKind := map[string]map[string]string{}
+	for name, field := range factFieldCensus(t) {
+		for _, kind := range field.kinds {
+			if byKind[kind] == nil {
+				byKind[kind] = map[string]string{}
+			}
+			byKind[kind][contractsv1.ContextFabricVocabularyLabelKey(contractsv1.ContextFabricVocabularyFactField, name)] = labels[name]
+		}
+	}
+	widest, widestKind := 0, ""
+	for kind, words := range byKind {
+		encoded, err := json.Marshal(words)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(encoded) > widest {
+			widest, widestKind = len(encoded), kind
+		}
+	}
+	if widest == 0 {
+		t.Fatal("no kind has a word: this measured nothing")
+	}
+	if widest > budget/8 {
+		t.Errorf("kind %q is %d bytes of words, over an eighth of the %d-byte answer budget", widestKind, widest, budget)
+	}
+	t.Logf("widest kind %s: %d bytes, %.1f%% of %d", widestKind, widest, float64(widest)*100/budget, budget)
 }

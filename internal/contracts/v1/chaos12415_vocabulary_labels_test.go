@@ -434,9 +434,9 @@ func TestAnAbsentMapIsNotOnTheWire(t *testing.T) {
 }
 
 // The fact field table has a row per declared name, so it is the one table that
-// is a large share of the budget. One result holds only its own fields, and these
-// words shed first, so the table costs no other word. The bound keeps its growth
-// in view (CHAOS-12418).
+// is a large share of the budget. No answer carries it: one result holds only its
+// own fields, and the bound that matters is per kind, in devhealthfacts. This
+// bound keeps the table's growth in view (CHAOS-12418).
 func TestTheFactFieldTableStaysUnderHalfOfTheAnswerBudget(t *testing.T) {
 	const budget = 65536
 	all := map[string]string{}
