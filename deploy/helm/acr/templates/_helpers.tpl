@@ -365,6 +365,28 @@ runtime-equivalence violation and fails closed here.
 Device-verification URL guard. The hosted runtime requires an absolute browser
 URL whenever backing stores are enabled.
 */}}
+{{- /*
+acr.runLeaseEnabled is the run lease flag. It refuses the render when the lease
+is on and the event stream is not: acr-api would refuse to start
+(internal/config/hosted_runtime.go), and a green render would be a crash loop.
+*/ -}}
+{{- define "acr.runLeaseEnabled" -}}
+{{- $on := .Values.contextFabric.runLeaseEnabled | default false -}}
+{{- if $on -}}
+{{- $stream := false -}}
+{{- /* The spellings of strconv.ParseBool; the last entry of a name wins, as in a pod. */ -}}
+{{- range .Values.deployment.extraEnv -}}
+{{- if eq .name "ACR_CONTEXT_FABRIC_EVENT_STREAM_ENABLED" -}}
+{{- $stream = has (toString .value) (list "1" "t" "T" "TRUE" "true" "True") -}}
+{{- end -}}
+{{- end -}}
+{{- if not $stream -}}
+{{- fail "contextFabric.runLeaseEnabled needs ACR_CONTEXT_FABRIC_EVENT_STREAM_ENABLED=true, a literal value in deployment.extraEnv: acr-api refuses to start without it" -}}
+{{- end -}}
+{{- end -}}
+{{- $on -}}
+{{- end -}}
+
 {{- define "acr.validateDeviceVerificationURL" -}}
 {{- $url := .Values.config.deviceVerificationUrl | default "" -}}
 {{- if and .Values.config.requireBackingStores (not (regexMatch "^https?://[^[:space:]/?#]+(:[0-9]+)?([/?#][^[:space:]]*)?$" $url)) -}}
