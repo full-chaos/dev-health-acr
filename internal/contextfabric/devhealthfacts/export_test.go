@@ -93,10 +93,27 @@ func TeamLinkCandidatesPerVersionStatementForTest() string {
 	return `SELECT groupArray(cp.work_item_id) FROM work_items AS cp WHERE ` + teamLinkCandidatesPredicate(factTimeBound{})
 }
 
+// TeamAmbiguousLinkCandidatesForTest runs the served read of the candidates on
+// several work item rows over the sent ids.
+func TeamAmbiguousLinkCandidatesForTest(ctx context.Context, client contextpacket.ClickHouseQueryClient, orgID string, teamIDs, ids []string) ([]string, error) {
+	table, err := teamLinkCandidatesExternalTable(ids)
+	if err != nil {
+		return nil, err
+	}
+	return readAmbiguousLinkCandidates(clickhousedriver.Context(ctx, clickhousedriver.WithExternalTable(table)), client, orgID, teamIDs)
+}
+
 // TeamLinkCandidatesTableForTest is the external table the team project link
 // rows read their candidates from.
 func TeamLinkCandidatesTableForTest(ids []string) (*ext.Table, error) {
 	return teamLinkCandidatesExternalTable(ids)
+}
+
+// WithTeamLinkCandidatesForTest is the served read every team link statement
+// starts from: ok is false when no candidate is left.
+func WithTeamLinkCandidatesForTest(ctx context.Context, client contextpacket.ClickHouseQueryClient, orgID string, teamIDs []string) (bool, error) {
+	_, ok, err := withTeamLinkCandidates(ctx, client, orgID, teamIDs, factTimeBound{})
+	return ok, err
 }
 
 // TeamLinkCandidatesContextForTest reads the teams' link candidates through

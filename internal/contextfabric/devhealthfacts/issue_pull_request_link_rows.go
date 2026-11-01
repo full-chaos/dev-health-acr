@@ -31,11 +31,16 @@ func workItemIsIssueSQL(alias string) string {
 	return `ifNull(` + alias + `.type, '') NOT IN ('pr', 'merge_request')`
 }
 
-// linkWorkItemsSQL is the work items of the ids (a subquery) as one row per id,
-// the join side of a link read: id_rows counts the id's rows, pull-request-typed
-// ones too, and type means one row only when id_rows is 1.
+// linkWorkItemsSQL is the work items of the ids (a subquery; "" is every work
+// item of the organization) as one row per id, the join side of a link read:
+// id_rows counts the id's rows, pull-request-typed ones too, and type means one
+// row only when id_rows is 1.
 func linkWorkItemsSQL(ids string) string {
-	return `(SELECT org_id, work_item_id, count() AS id_rows, any(type) AS type FROM work_items FINAL WHERE org_id = {org_id:String} AND work_item_id IN ` + ids + ` GROUP BY org_id, work_item_id) AS wi`
+	among := ``
+	if ids != "" {
+		among = ` AND work_item_id IN ` + ids
+	}
+	return `(SELECT org_id, work_item_id, count() AS id_rows, any(type) AS type FROM work_items FINAL WHERE org_id = {org_id:String}` + among + ` GROUP BY org_id, work_item_id) AS wi`
 }
 
 // linkIDOnOneRowSQL holds for a link row that does not name several work item
@@ -56,9 +61,8 @@ var issueLinkRowsSQL = issueLinkRowsAmongSQL("")
 // organization. Every row of a kept id, and every version of a kept pull
 // request, is still read, so the rule over a kept id is unchanged.
 func issueLinkRowsAmongSQL(candidates string) string {
-	workItems, pullRequests, among := linkWorkItemsSQL(linkedWorkItemIDsSQL), `git_pull_requests AS pr FINAL`, ``
+	workItems, pullRequests, among := linkWorkItemsSQL(candidates), `git_pull_requests AS pr FINAL`, ``
 	if candidates != "" {
-		workItems = linkWorkItemsSQL(candidates)
 		pullRequests = `(SELECT org_id, repo_id, number FROM git_pull_requests FINAL WHERE org_id = {org_id:String} AND (repo_id, number) IN (SELECT repo_id, pr_number FROM work_graph_issue_pr WHERE org_id = {org_id:String} AND work_item_id IN ` + candidates + `)) AS pr`
 		among = ` AND l.work_item_id IN ` + candidates
 	}
@@ -93,8 +97,8 @@ const linkedWorkItemIDsSQL = `(SELECT work_item_id FROM work_graph_issue_pr WHER
 // admittedLinkedPullRequestRowsSQL is the admitted link rows (known tier) whose
 // pull request exists, columns work_item_id, pr_repo_id, pr_number, link_rank,
 // without reading work_items: a caller that has already restricted the work
-// items to issues, and to ids on one row (teamLinkCandidatesStatement), joins it
-// on work_item_id, and so reads the work item table once.
+// items to issues, and to ids on one row (teamAmbiguousLinkHashesStatement),
+// joins it on work_item_id, and so reads the work item table once.
 var admittedLinkedPullRequestRowsSQL = admittedLinkedPullRequestRowsAmongSQL("")
 
 // admittedLinkedPullRequestRowsAmongSQL is admittedLinkedPullRequestRowsSQL

@@ -57,7 +57,16 @@ const linkedNativeCoverMarker = "AND provenance = 'native'\n  AND (work_item_id 
 const projectPopulationMarker = "-- project population"
 
 // teamLinkCandidatesMarker is in the team link candidate statement and no other.
-const teamLinkCandidatesMarker = "SELECT c.work_item_id AS work_item_id FROM work_items AS c WHERE"
+const teamLinkCandidatesMarker = "SELECT cp.work_item_id AS work_item_id FROM work_items AS cp WHERE"
+
+// teamAmbiguousLinkCandidatesMarker is in the two statements that find the team
+// link candidates on several work item rows, and in no other. Each is answered
+// only by a table that names its own match.
+const (
+	teamAmbiguousLinkCandidatesMarker = "HAVING min(repo_id) != max(repo_id)"
+	teamAmbiguousLinkHashesMatch      = "AS h FROM work_items WHERE"
+	teamAmbiguousLinkIDsMatch         = "{hashes:Array(String)}"
+)
 
 type fakeClient struct {
 	tables  []fakeTable
@@ -83,6 +92,16 @@ func (c *fakeClient) Query(_ context.Context, statement string, bindings []conte
 	// The team link candidates are answered only by a table that names their
 	// marker; a test that did not seed them gets no row, and the link-row
 	// statements after them are answered by their own tables.
+	if strings.Contains(statement, teamAmbiguousLinkCandidatesMarker) {
+		for _, match := range []string{teamAmbiguousLinkHashesMatch, teamAmbiguousLinkIDsMatch} {
+			for _, table := range c.tables {
+				if table.match == match && strings.Contains(statement, match) {
+					return &fakeScanner{rows: table.rows}, table.err
+				}
+			}
+		}
+		return &fakeScanner{}, nil
+	}
 	if strings.Contains(statement, teamLinkCandidatesMarker) {
 		for _, table := range c.tables {
 			if strings.Contains(table.match, teamLinkCandidatesMarker) {

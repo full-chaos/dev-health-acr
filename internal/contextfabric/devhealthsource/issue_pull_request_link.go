@@ -102,7 +102,7 @@ const issuePullRequestLinkWorkItemJoin = `LEFT JOIN (
   SELECT org_id, work_item_id, count() AS id_rows, any(repo_id) AS repo_id, any(type) AS type,
          any(created_at) AS created_at, any(completed_at) AS completed_at, any(closed_at) AS closed_at
   FROM work_items FINAL
-  WHERE org_id = {org_id:String} AND work_item_id IN (SELECT work_item_id FROM work_graph_issue_pr WHERE org_id = {org_id:String})
+  WHERE org_id = {org_id:String}
   GROUP BY org_id, work_item_id
 ) AS w ON w.org_id = l.org_id AND w.work_item_id = l.work_item_id`
 
