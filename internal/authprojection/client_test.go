@@ -62,7 +62,7 @@ func newServer(t *testing.T, status int, header http.Header, answer string) (*ht
 
 func newClient(t *testing.T, origin string, tokens TokenSource) *Client {
 	t.Helper()
-	client, err := New(origin, tokens, http.DefaultTransport)
+	client, err := New(origin, tokens)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -239,21 +239,29 @@ func TestTheRequestTimeoutIsFiveSeconds(t *testing.T) {
 
 func TestNewRefusesAnythingButAnOrigin(t *testing.T) {
 	for _, origin := range []string{"", "auth-service", "ftp://auth.example.test", "https://", "https://auth.example.test/api", "https://auth.example.test?x=1", "https://auth.example.test#f", "https://user:pw@auth.example.test"} {
-		if _, err := New(origin, &fakeTokens{}, http.DefaultTransport); err == nil {
+		if _, err := New(origin, &fakeTokens{}); err == nil {
 			t.Errorf("origin %q was accepted", origin)
 		} else if strings.Contains(err.Error(), "pw") {
 			t.Errorf("the error echoes the value: %v", err)
 		}
 	}
 	for _, origin := range []string{"https://auth.example.test", "https://auth.example.test/", "http://127.0.0.1:8080"} {
-		if _, err := New(origin, &fakeTokens{}, http.DefaultTransport); err != nil {
+		if _, err := New(origin, &fakeTokens{}); err != nil {
 			t.Errorf("origin %q refused: %v", origin, err)
 		}
 	}
-	if _, err := New("https://auth.example.test", nil, http.DefaultTransport); err == nil {
+	if _, err := New("https://auth.example.test", nil); err == nil {
 		t.Error("a nil token source was accepted")
 	}
-	if _, err := New("https://auth.example.test", &fakeTokens{}, nil); err == nil {
-		t.Error("a nil transport was accepted: it would dial through the environment proxy")
+}
+
+func TestTheClientDialsWithATransportThatNeverUsesTheEnvironmentProxy(t *testing.T) {
+	client, err := New("https://auth.example.test", &fakeTokens{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	transport, ok := client.http.Transport.(*http.Transport)
+	if !ok || transport.Proxy != nil {
+		t.Fatalf("transport = %T, proxy set = %v: the token must reach only the host named", client.http.Transport, ok && transport.Proxy != nil)
 	}
 }

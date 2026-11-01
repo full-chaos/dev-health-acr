@@ -9,7 +9,6 @@ import (
 	"github.com/full-chaos/dev-health-acr/internal/authprojection"
 	"github.com/full-chaos/dev-health-acr/internal/authworkload"
 	"github.com/full-chaos/dev-health-acr/internal/config"
-	"github.com/full-chaos/dev-health-acr/internal/outboundhttp"
 	storagepostgres "github.com/full-chaos/dev-health-acr/internal/storage/postgres"
 )
 
@@ -83,7 +82,7 @@ func buildCredentialOutboxPublisher(cfg config.Config, store authprojection.Stor
 	if tokens == nil {
 		return nil, errors.New("ACR_AUTH_PROJECTION_URL needs the auth workload client (ACR_AUTH_WORKLOAD_*)")
 	}
-	client, err := authprojection.New(cfg.AuthProjection.URL, tokens, outboundhttp.Transport())
+	client, err := authprojection.New(cfg.AuthProjection.URL, tokens)
 	if err != nil {
 		return nil, errors.New("the auth projection configuration is invalid (ACR_AUTH_PROJECTION_URL)")
 	}

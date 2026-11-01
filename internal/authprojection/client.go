@@ -13,6 +13,8 @@ import (
 	"net/url"
 	"strconv"
 	"time"
+
+	"github.com/full-chaos/dev-health-acr/internal/outboundhttp"
 )
 
 const (
@@ -62,22 +64,22 @@ type Client struct {
 	http     *http.Client
 }
 
-// New builds a client for the auth-service origin. transport must be a transport of its own (no environment proxy):
-// the token travels only to the host origin names. The client follows no redirect.
-func New(origin string, tokens TokenSource, transport http.RoundTripper) (*Client, error) {
+// New builds a client for the auth-service origin. It dials with a transport of its own that never uses the
+// environment proxy, so the token travels only to the host origin names. The client follows no redirect.
+func New(origin string, tokens TokenSource) (*Client, error) {
 	u, err := url.Parse(origin)
 	if err != nil || u.Host == "" || (u.Scheme != "https" && u.Scheme != "http") || (u.Path != "" && u.Path != "/") || u.RawQuery != "" || u.Fragment != "" || u.User != nil {
 		return nil, errors.New("authprojection: the origin must be a scheme, a host and a port only")
 	}
-	if tokens == nil || transport == nil {
-		return nil, errors.New("authprojection: a token source and a transport are required")
+	if tokens == nil {
+		return nil, errors.New("authprojection: a token source is required")
 	}
 	u.Path = Path
 	return &Client{
 		endpoint: u.String(),
 		tokens:   tokens,
 		http: &http.Client{
-			Transport:     transport,
+			Transport:     outboundhttp.Transport(),
 			CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
 		},
 	}, nil
