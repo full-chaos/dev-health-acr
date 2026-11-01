@@ -2042,7 +2042,8 @@
           "synthesis_input_bounded",
           "synthesis_model_failed",
           "synthesis_not_run",
-          "fact_score_withheld"
+          "fact_score_withheld",
+          "project_scope_withheld"
         ]
       },
       {
@@ -7188,7 +7189,8 @@
           "synthesis_input_bounded",
           "synthesis_model_failed",
           "synthesis_not_run",
-          "fact_score_withheld"
+          "fact_score_withheld",
+          "project_scope_withheld"
         ],
         "applicability": "written when a cut has a coverage cause"
       },
@@ -9487,7 +9489,8 @@
           "synthesis_input_bounded",
           "synthesis_model_failed",
           "synthesis_not_run",
-          "fact_score_withheld"
+          "fact_score_withheld",
+          "project_scope_withheld"
         ]
       },
       {
@@ -10127,7 +10130,8 @@
           "synthesis_input_bounded",
           "synthesis_model_failed",
           "synthesis_not_run",
-          "fact_score_withheld"
+          "fact_score_withheld",
+          "project_scope_withheld"
         ]
       },
       {
