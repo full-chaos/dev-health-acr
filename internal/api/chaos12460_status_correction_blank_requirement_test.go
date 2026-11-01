@@ -1,7 +1,6 @@
 package api
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -160,7 +159,7 @@ type blankRowApp struct {
 	app   *App
 	token string
 	store *memoryinvestigation.Store
-	logs  *bytes.Buffer
+	logs  *lockedBuffer
 }
 
 func newBlankRowApp(t *testing.T, writer blankRowWriter, draft cf.InvestigationStatus, authority, symmetric bool, store *memoryinvestigation.Store) *blankRowApp {
@@ -193,7 +192,7 @@ func newBlankRowApp(t *testing.T, writer blankRowWriter, draft cf.InvestigationS
 	if store == nil {
 		store = memoryinvestigation.NewStore()
 	}
-	logs := &bytes.Buffer{}
+	logs := &lockedBuffer{}
 	engine, err := cf.NewEngine(cf.EngineDependencies{
 		Interpreter: blankRowInterpreter{shape: writer.shape}, Graph: graph,
 		Facts: liveFactReader{bundle: cf.CanonicalFactBundle{
