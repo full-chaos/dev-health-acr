@@ -1397,6 +1397,12 @@ type ContextFabricSubjectResolution struct {
 	// A terminal states either sentence; an answer states the failed read's. The
 	// sentence is the only form that leaves the process.
 	WorkItemLinkLimitation string `json:"-"`
+	// CensusLimitation (CHAOS-12467) is the sentence a turn owes when a census
+	// counted a subject this result does not list in full, or "". It is set only
+	// when nothing committed. A terminal states it, and with nothing listed it is
+	// what the terminal says in place of "found no candidate". The sentence is the
+	// only form that leaves the process.
+	CensusLimitation string `json:"-"`
 	// CommitDecisionDigests (CHAOS-4087) is a small, closed-vocabulary
 	// summary of WHICH MECHANISM committed each subject in Committed --
 	// persisted so a wrong commit discovered later from a STORED result
