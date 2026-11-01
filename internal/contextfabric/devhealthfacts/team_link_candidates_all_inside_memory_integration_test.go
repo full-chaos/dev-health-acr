@@ -198,14 +198,15 @@ SELECT concat('owned-', repeat('x', 96), '-', toString(number)), ?, ?, 'issue', 
 	if err := direct.Exec(ctx, `SYSTEM FLUSH LOGS`); err != nil {
 		t.Fatalf("flush logs (query_log unavailable, measurement did not happen): %v", err)
 	}
-	var peak, statements uint64
-	if err := direct.QueryRow(ctx, `SELECT max(memory_usage), count() FROM system.query_log
-WHERE `+queryLogSinceMark+` AND type = 'QueryFinish' AND query_kind = 'Select' AND position(query, ?) > 0`, mark, teamAmbiguousLinkCandidatesMarker).Scan(&peak, &statements); err != nil {
+	var peak, statements, unbound uint64
+	if err := direct.QueryRow(ctx, `SELECT max(memory_usage), count(), `+statementthreads.UnboundThreadsCount+` FROM system.query_log
+WHERE `+queryLogSinceMark+` AND type = 'QueryFinish' AND query_kind = 'Select' AND position(query, ?) > 0`, mark, teamAmbiguousLinkCandidatesMarker).Scan(&peak, &statements, &unbound); err != nil {
 		t.Fatalf("read query_log: %v", err)
 	}
 	if statements == 0 {
-		t.Fatalf("the ambiguous candidate statement was not logged (the measurement did not happen)")
+		t.Fatalf("the ambiguous candidate statements were not logged (the measurement did not happen)")
 	}
+	statementthreads.RequireThreadBound(t, ctx, direct, "ambiguous candidate statements", unbound)
 	t.Logf("ALL-INSIDE ambiguous candidate statements over %d ids: peak %d bytes (%.1f%% of the API statement cap; bound %d)",
 		len(served), peak, 100*float64(peak)/float64(contextpacket.APIStatementMaxMemoryUsage), candidateAllInsideAmbiguousBound)
 	if peak > candidateAllInsideAmbiguousBound {
