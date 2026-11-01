@@ -47,10 +47,11 @@ func (a *Adapter) TreeWorkItemMembers(ctx context.Context, principal storage.Pri
 	}
 	// A repository-restricted caller's reads see each project's live
 	// ownership reach in place of its "*" (project_reach.go).
-	ctx, err = a.withProjectReach(ctx, key, principal)
+	ctx, finish, err := a.withProjectReach(ctx, key, principal)
 	if err != nil {
 		return contextfabric.TreeWorkItemWalk{}, err
 	}
+	defer finish()
 	// CHAOS-12319: a requested team narrowing (team_narrowing.go).
 	ctx, narrowing, err := a.withTeamNarrowing(ctx, key, principal.OrgID, scope, anchor)
 	if err != nil {

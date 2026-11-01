@@ -7,6 +7,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/full-chaos/dev-health-acr/internal/auth"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
@@ -58,32 +59,41 @@ func needsProjectReach(principal storage.Principal) bool {
 // call returns a project node carrying the "*" wildcard, and at most once per
 // call. A call that never reads a project node issues no extra query. ctx is
 // returned unchanged for an unrestricted or universal caller.
-func (a *Adapter) withProjectReach(ctx context.Context, key string, principal storage.Principal) (context.Context, error) {
+//
+// finish ends the adapter call: defer it. It writes the call's link reach line
+// (link_reach.go), and it is never nil when err is nil.
+func (a *Adapter) withProjectReach(ctx context.Context, key string, principal storage.Principal) (reached context.Context, finish func(), err error) {
 	// A project-only caller needs no reach: the node rule decides a project
 	// by its canonical id, never by the repositories it reaches (CHAOS-12299).
 	if !needsProjectReach(principal) || auth.ClassifyGrant(principal) == auth.GrantProjectOnly {
-		return ctx, nil
+		return ctx, func() {}, nil
 	}
 	orgID := strings.TrimSpace(principal.OrgID)
 	if orgID == "" {
-		return nil, fmt.Errorf("%w: authenticated organization is required", contextfabric.ErrUnavailable)
+		return nil, nil, fmt.Errorf("%w: authenticated organization is required", contextfabric.ErrUnavailable)
 	}
-	return context.WithValue(ctx, projectReachContextKey{}, &lazyProjectReach{adapter: a, key: key, orgID: orgID}), nil
+	// CHAOS-12456: every site that sees a project's reach sees the links of a
+	// repo-less work item too (link_reach.go).
+	ctx = a.withLinkReach(ctx, key, principal)
+	ctx = context.WithValue(ctx, projectReachContextKey{}, &lazyProjectReach{now: a.now, key: key, orgID: orgID})
+	return ctx, func() { reportLinkReach(ctx) }, nil
 }
 
-// lazyProjectReach loads one call's project reach on first use.
+// lazyProjectReach loads one call's project reach on first use. It lives on a
+// context, so it holds the adapter's clock and never the adapter: an Adapter holds
+// credentials, and a context reaches every line that reads a request id from it.
 type lazyProjectReach struct {
-	adapter *Adapter
-	key     string
-	orgID   string
-	once    sync.Once
-	reach   projectReach
-	err     error
+	now   func() time.Time
+	key   string
+	orgID string
+	once  sync.Once
+	reach projectReach
+	err   error
 }
 
 func (l *lazyProjectReach) load(ctx context.Context, inner conn) (projectReach, error) {
 	l.once.Do(func() {
-		now := l.adapter.now()
+		now := l.now()
 		current := newTemporalFilter(contextfabric.TimeContext{Axis: contextfabric.TemporalValidTime, AsOf: &now})
 		cypher := fmt.Sprintf("MATCH (p:%s {%s:$org, %s:$project})-[r:%s]->(t:%s {%s:$org, %s:$team}) WHERE r.%s = $owned%s%s RETURN p.%s AS id, t.%s AS repos",
 			labelSubject, propOrgID, propKind, labelRelation, labelSubject, propOrgID, propKind,
@@ -146,6 +156,14 @@ func (c projectReachConn) query(ctx context.Context, graphKey, cypher string, pa
 	rows, err := c.conn.query(ctx, graphKey, cypher, params, readOnly)
 	if err != nil || !readOnly {
 		return rows, err
+	}
+	if links, ok := ctx.Value(linkReachContextKey{}).(*linkReach); ok {
+		reached := links.read(ctx, c.conn, rows)
+		for _, r := range rows {
+			for column, value := range r {
+				r[column] = reached.rewrite(value)
+			}
+		}
 	}
 	lazy, ok := ctx.Value(projectReachContextKey{}).(*lazyProjectReach)
 	if !ok || !rowsCarryWildcardProject(rows) {

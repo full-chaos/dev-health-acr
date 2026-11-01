@@ -963,6 +963,7 @@ func IsContextFabricServiceAuthoredLimitation(limitation string) bool {
 		IsContextFabricPullRequestStatusLimitation(limitation) ||
 		IsContextFabricMemberStatusLimitation(limitation) ||
 		IsContextFabricOutsideRequestedRepositoriesLimitation(limitation) ||
+		IsContextFabricWorkItemLinkLimitation(limitation) ||
 		IsContextFabricDegradedWithoutLimitation(limitation) ||
 		IsContextFabricWorkItemRepositoryLimitation(limitation) ||
 		IsContextFabricWorkItemListedLimitation(limitation) ||

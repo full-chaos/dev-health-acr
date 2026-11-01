@@ -34,10 +34,11 @@ func (a *Adapter) AuthorizeStoredSubjects(ctx context.Context, principal storage
 	}
 	// CHAOS-7080: a repository-restricted caller's reads see each project's
 	// live ownership reach in place of its "*" (project_reach.go).
-	ctx, err = a.withProjectReach(ctx, key, principal)
+	ctx, finish, err := a.withProjectReach(ctx, key, principal)
 	if err != nil {
 		return nil, err
 	}
+	defer finish()
 	// A subject with a kind is read by its natural key; a subject named by
 	// canonical id alone is read by the id, and every node carrying it counts.
 	keyed := fmt.Sprintf("UNWIND $targets AS t MATCH (n:%s {%s:$org, %s:t.kind, %s:t.id}) RETURN n",
@@ -84,6 +85,11 @@ func (a *Adapter) AuthorizeStoredSubjects(ctx context.Context, principal storage
 				nodes[subjectKey] = append(nodes[subjectKey], toCandidateNode(n))
 			}
 		}
+	}
+	// CHAOS-12456: a link read that failed is not a denial. A repo-less work item
+	// is unknown here, and the decision fails closed, as any failed read does.
+	if err := linkReachError(ctx); err != nil && repoLessNodesRead(nodes) {
+		return nil, err
 	}
 	return graphrank.AuthorizeStoredSubjectNodes(principal, subjects, nodes), nil
 }

@@ -585,10 +585,33 @@ func TestConfirmedNeedConsumers_ReverifyDropsTheMember(t *testing.T) {
 		if event := soleLedgerEvent(t, three); !reflect.DeepEqual(event.Dropped, wantDrops) || len(event.AppliedMembers) != 0 {
 			t.Fatalf("ledger event = %#v, want subject_handle:reverify_not_confirmed", event)
 		}
-		if got := memberEntries(three.result, contractsv1.ContextFabricStructureNeedSubjectHandle); len(got) != 0 {
-			t.Fatalf("handle disclosure = %#v, want none", got)
+		// CHAOS-12456: the drop used to reach telemetry only, so the handle the
+		// caller confirmed vanished with no word. It is echoed now, never applied.
+		got := memberEntries(three.result, contractsv1.ContextFabricStructureNeedSubjectHandle)
+		if len(got) != 1 || got[0].Disposition != contractsv1.ContextFabricStructureDispositionVetoedUnresolved || got[0].Source != contractsv1.ContextFabricStructureSourceCarried || got[0].PriorResultID != two.result.ResultID {
+			t.Fatalf("handle disclosure = %#v, want one carried vetoed_unresolved entry", got)
 		}
 	})
+}
+
+// CHAOS-12456: a handle supplied this turn supersedes the remembered one, and
+// the member carries one entry: a second would fail the result's validation.
+func TestADroppedHandleGivesWayToOneSuppliedThisTurn(t *testing.T) {
+	t.Parallel()
+	ledger := confirmedNeedLedgerResult{SourceResultID: "result_need_parent", DroppedHandle: &ConfirmedNeedEntry{
+		Member: contractsv1.ContextFabricStructureNeedSubjectHandle, AppliedKind: SubjectPullRequest, AppliedValue: "532",
+	}}
+	if entry := composeDroppedHandleEntry(ledger, InvestigationRequest{}); entry == nil {
+		t.Fatal("control: nothing supplied, want the drop echoed")
+	}
+	for name, request := range map[string]InvestigationRequest{
+		"a receipt":         {PriorHandleReceipts: []BoundSubjectReceipt{{ResultID: "result_a", ReceiptID: "handr_a"}}},
+		"an explicit value": {SubjectHandles: []contractsv1.ContextFabricRequestedHandle{{Kind: SubjectPullRequest, PatternID: "pull_request_number", Value: "7"}}},
+	} {
+		if entry := composeDroppedHandleEntry(ledger, request); entry != nil {
+			t.Fatalf("%s: entry = %+v, want none", name, entry)
+		}
+	}
 }
 
 // ledgerOnlyParent stores a parent turn whose ledger holds entries, for the

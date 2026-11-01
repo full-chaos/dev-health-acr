@@ -402,6 +402,8 @@ func goVarName(e Event) string {
 		return "CohortKindFulltext"
 	case TeamNarrowingGeneralRead.ID:
 		return "TeamNarrowingGeneralRead"
+	case WorkItemLinkReach.ID:
+		return "WorkItemLinkReach"
 	case ProjectDeploymentWalk.ID:
 		return "ProjectDeploymentWalk"
 	case RepositoryWorkItemWalk.ID:

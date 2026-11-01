@@ -609,6 +609,7 @@ func resolveNamedComparison(
 	}
 
 	resolution, bases, digests := publishComparisonResolution(run, request.Options.MaxSubjectCandidates)
+	resolution.WorkItemLinkLimitation = linksUnreadLimitation(principal, deps)
 	recordComparisonDecision(ctx, principal, request, deps, run, resolution)
 	return resolution, bases, digests, nil
 }

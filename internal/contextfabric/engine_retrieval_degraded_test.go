@@ -30,11 +30,24 @@ func engineForDegradationWithLimitations(t *testing.T, degraded bool, limitation
 // (CHAOS-3746 round-17).
 func engineForDegradationOnAxis(t *testing.T, degraded bool, limitations []string, timeContext TimeContext) (*Engine, InvestigationRequest) {
 	t.Helper()
+	return engineForDegradationEdited(t, degraded, limitations, timeContext, func(*SubjectResolution, *GraphContext) {})
+}
+
+// engineForDegradationEdited is the same harness with the graph's answers open to
+// edit, for a statement another read owes a committed answer.
+func engineForDegradationEdited(t *testing.T, degraded bool, limitations []string, timeContext TimeContext, edit func(*SubjectResolution, *GraphContext)) (*Engine, InvestigationRequest) {
+	t.Helper()
 	project := SubjectRef{Kind: SubjectProject, CanonicalID: "project_ask_dev", Label: "Ask Dev"}
 	resolution := SubjectResolution{
 		Candidates: []SubjectCandidate{}, Committed: []SubjectRef{project},
 		RetrievalDegraded: degraded,
 	}
+	discovered := GraphContext{
+		Paths: []RelationshipPath{}, DriverCandidates: []DriverJudgment{},
+		FactRequirements: []FactRequirement{}, EvidenceRefIDs: []string{},
+		Coverage: Coverage{Sources: []SourceObservation{}, DegradedReasons: []string{}},
+	}
+	edit(&resolution, &discovered)
 	interpretation := InterpretedQuestion{
 		Shape: ShapeOpen, RequestedJudgment: "release_readiness_and_drivers",
 		TimeContext: timeContext, FactRequirements: []FactRequirement{},
@@ -52,12 +65,8 @@ func engineForDegradationOnAxis(t *testing.T, degraded bool, limitations []strin
 			// models. Without this the affirmation gate would retract the
 			// commit and add its own disclosure, changing what every
 			// assertion below is counting.
-			bases: provenCommitBases(project),
-			context: GraphContext{
-				Paths: []RelationshipPath{}, DriverCandidates: []DriverJudgment{},
-				FactRequirements: []FactRequirement{}, EvidenceRefIDs: []string{},
-				Coverage: Coverage{Sources: []SourceObservation{}, DegradedReasons: []string{}},
-			},
+			bases:   provenCommitBases(project),
+			context: discovered,
 		},
 		Facts: factReaderFunc(func(context.Context, storage.Principal, CanonicalFactRequest) (CanonicalFactBundle, error) {
 			return CanonicalFactBundle{

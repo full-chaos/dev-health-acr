@@ -13833,6 +13833,64 @@
     ]
   },
   {
+    "id": "contextfabric.work_item_link_reach",
+    "msg": "context_fabric: work item link reach",
+    "level": "info",
+    "multiplicity": "zero_or_many_per_request",
+    "attribution": [
+      "org_id"
+    ],
+    "bounded_aggregation": "",
+    "unbounded_reason": "one line per adapter call of a restricted caller that reads the graph, so the count follows the graph calls a turn makes.",
+    "fields": [
+      {
+        "key": "org_id",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "outcome",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "read",
+          "failed"
+        ]
+      },
+      {
+        "key": "reads",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "ids",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "rows",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "failed",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "elapsed_ms",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "request_id",
+        "type": "string",
+        "presence": "conditional",
+        "applicability": "written when the request context carries a request ID"
+      }
+    ]
+  },
+  {
     "id": "contextfabric.work_item_membership_gate",
     "msg": "context fabric work item membership gate",
     "level": "info",
