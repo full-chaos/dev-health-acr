@@ -281,7 +281,28 @@ declares and what the table labels are one set.
 | `driver_standing` | `drivers[].standing` |
 | `fact_kind` | `remaining_work[].kind`, `readiness_gaps[].kind`, `conflicts[].kind`, `claimed_facts[].kind` (the registry's word) |
 | `fact_field` | `claimed_facts[].field`, the keys of `rows[].fields` and of `time_series_rows[].fields` (one row per declared name, with its unit) |
+| `driver_source_state` | `drivers[].source_state` (the registry's word, as on a coverage row) |
+| `cohort_score_meaning` | `cohort.score_meaning` (what the score measures) |
 | `window_relative_id`, `window_provenance` | `effective_evidence_window.relative_id`, `.provenance` |
+
+**Notes.** A field a reader sees as one line has one word for this result, under
+`<field>:note` (CHAOS-12487). Like the correction note, a note is no table row. It
+is served only when its field says so, so a false flag, a zero and an absent field
+all show nothing and imply nothing. The raw field stays in the fold.
+
+| Key | Served when | Word |
+|---|---|---|
+| `limitations_displaced:note` | `limitations_displaced` above 0, canonical document only | The count, in one sentence |
+| `generated_at:note` | `generated_at` is set | The lead word. The consumer formats the date |
+| `reused:note` | `reused` is true | This is a stored answer |
+| `retrieval_degraded:note` | `subject_resolution.retrieval_degraded` is true | Subject matching ran in a reduced way |
+| `summary_corrected:note` | A driver's `summary_corrected` is true | The service corrected the source state, so the summary may not reflect it. The summary itself is never edited |
+| `judgment_mismatch:note` | `cohort.judgment_mismatch` is true | The ranking does not support the judgment asked for |
+| `population:note` | `cohort.population` above 0 | The size of the list. "At least" when `population_lower_bound` is set, never an exact count from a lower bound |
+
+A projection has no `limitations_displaced` field. Its `limitations_omitted` also
+counts what the projection cut, so `limitations_displaced:note` is dropped there:
+the canonical count would understate what the reader is missing.
 
 **Not served, on purpose.** `completeness.outcomes[].requirement` is not a
 vocabulary: it is a composite coordinate, `obligation/role/subject`, so it takes
@@ -339,8 +360,8 @@ change, and no string is parsed.
 **Bound.** Each label is 1 to 160 characters, a key at most 128, and the map at
 most 8,192 entries, the bound of `evidence_ref_labels`. That is not the working
 limit. The map holds only the values in one result, so the whole registry is its
-ceiling: 114 entries and 5,374 bytes, 8.2% of the 65,536-byte answer budget, plus
-the one note. The fact field table has one row per declared name, so it stands
+ceiling: 125 entries and 5,999 bytes, 9.2% of the 65,536-byte answer budget, plus
+the notes. The fact field table has one row per declared name, so it stands
 apart: 357 entries and 20,924 bytes, 31.9% of the budget, which no answer carries.
 One result holds only its own fields: a claim adds its field and the columns of
 its tables, and every name of the widest kind is 77 entries and 4,577 bytes, 7.0%.
@@ -362,11 +383,14 @@ bounds, less the synthesis input on a client turn. The shed is tiered, so the se
 document is the richest one within the bound:
 
 1. The full map.
-2. Only `answer_status:*` and `status_correction:note` (`status_only`).
+2. Only `answer_status:*`, `status_correction:note` and `judgment_mismatch:note`
+   (`status_only`).
 3. No map (`none`).
 4. No stamped source words.
 
-The status words go last because they say the most for the fewest bytes. With no map
+The status words go last because they say the most for the fewest bytes.
+`judgment_mismatch:note` stays with them because nothing else says it: with no word,
+a ranking reads as if it supports the judgment asked for. With no map
 a partial answer reads a neutral pill and loses its note, so the pill says less than
 the limitation below it. The input document stands if nothing fits, and the door
 refuses or projects it as before. A document over the caller's bound goes to the

@@ -159,9 +159,13 @@ const (
 	// ContextFabricVocabularyFactField serves the words of declared fact fields
 	// and table columns (CHAOS-12418), so a claimed fact reads with no help from
 	// the prose.
-	ContextFabricVocabularyFactField        ContextFabricVocabulary = "fact_field"
-	ContextFabricVocabularyWindowRelativeID ContextFabricVocabulary = "window_relative_id"
-	ContextFabricVocabularyWindowProvenance ContextFabricVocabulary = "window_provenance"
+	ContextFabricVocabularyFactField ContextFabricVocabulary = "fact_field"
+	// ContextFabricVocabularyDriverSourceState reads the registry's word for a
+	// source state, so a driver and a coverage row never disagree.
+	ContextFabricVocabularyDriverSourceState  ContextFabricVocabulary = "driver_source_state"
+	ContextFabricVocabularyCohortScoreMeaning ContextFabricVocabulary = "cohort_score_meaning"
+	ContextFabricVocabularyWindowRelativeID   ContextFabricVocabulary = "window_relative_id"
+	ContextFabricVocabularyWindowProvenance   ContextFabricVocabulary = "window_provenance"
 )
 
 var contextFabricVocabularyNames = [...]ContextFabricVocabulary{
@@ -179,6 +183,8 @@ var contextFabricVocabularyNames = [...]ContextFabricVocabulary{
 	ContextFabricVocabularyDriverStanding,
 	ContextFabricVocabularyFactKind,
 	ContextFabricVocabularyFactField,
+	ContextFabricVocabularyDriverSourceState,
+	ContextFabricVocabularyCohortScoreMeaning,
 	ContextFabricVocabularyWindowRelativeID,
 	ContextFabricVocabularyWindowProvenance,
 }
@@ -208,6 +214,16 @@ func contextFabricVocabularyFactKindLabels() map[string]string {
 	}
 	for kind, label := range contextFabricFactKindLabelsBeyondTheFactVocabulary {
 		labels[kind] = label
+	}
+	return labels
+}
+
+// contextFabricVocabularySourceStateLabels is the source state table a driver
+// reads: the registry's own word.
+func contextFabricVocabularySourceStateLabels() map[string]string {
+	labels := make(map[string]string, len(contextFabricSourceStateLabels))
+	for state, label := range contextFabricSourceStateLabels {
+		labels[string(state)] = label
 	}
 	return labels
 }
@@ -316,8 +332,14 @@ var contextFabricVocabularyLabels = map[ContextFabricVocabulary]map[string]strin
 		string(ContextFabricDriverContext):      "context",
 		string(ContextFabricDriverWithheld):     "withheld",
 	},
-	ContextFabricVocabularyFactKind:  contextFabricVocabularyFactKindLabels(),
-	ContextFabricVocabularyFactField: contextFabricFactFieldLabels,
+	ContextFabricVocabularyFactKind:          contextFabricVocabularyFactKindLabels(),
+	ContextFabricVocabularyFactField:         contextFabricFactFieldLabels,
+	ContextFabricVocabularyDriverSourceState: contextFabricVocabularySourceStateLabels(),
+	// What the score measures, and the one thing a ranking must never be read as
+	// (North Star checks 1 and 8). A higher score ranks first.
+	ContextFabricVocabularyCohortScoreMeaning: {
+		string(ContextFabricCohortScoreMeaningAttention): "Attention score: higher means more pressure. It does not measure performance.",
+	},
 	ContextFabricVocabularyWindowRelativeID: {
 		string(ContextFabricRelativeWindowTrailing30D):  "last 30 days",
 		string(ContextFabricRelativeWindowTrailing90D):  "last 90 days",
@@ -357,7 +379,8 @@ const (
 	ContextFabricVocabularyLabelsOff ContextFabricVocabularyLabelsTier = "off"
 	// ContextFabricVocabularyLabelsFull: the whole map.
 	ContextFabricVocabularyLabelsFull ContextFabricVocabularyLabelsTier = "full"
-	// ContextFabricVocabularyLabelsStatusOnly: answer_status:* and the note.
+	// ContextFabricVocabularyLabelsStatusOnly: answer_status:*, the correction
+	// note and the judgment_mismatch note.
 	ContextFabricVocabularyLabelsStatusOnly ContextFabricVocabularyLabelsTier = "status_only"
 	// ContextFabricVocabularyLabelsNone: no map fits.
 	ContextFabricVocabularyLabelsNone ContextFabricVocabularyLabelsTier = "none"
@@ -377,13 +400,15 @@ func (t ContextFabricVocabularyLabelsTier) Shed() bool {
 }
 
 // ContextFabricStatusVocabularyLabels keeps the words of the status_only tier:
-// answer_status:* and the correction note. It returns nil when neither is held,
-// so an empty map never stands for a tier.
+// answer_status:*, the correction note and the judgment_mismatch note. The last
+// has no other carrier: with no word, a ranking reads as if it supports the
+// judgment asked for (North Star checks 1 and 8). It returns nil when none is
+// held, so an empty map never stands for a tier.
 func ContextFabricStatusVocabularyLabels(labels map[string]string) map[string]string {
 	var kept map[string]string
 	for key, label := range labels {
 		vocabulary, _, _ := strings.Cut(key, ":")
-		if vocabulary != string(ContextFabricVocabularyAnswerStatus) && key != ContextFabricStatusCorrectionNoteKey {
+		if vocabulary != string(ContextFabricVocabularyAnswerStatus) && key != ContextFabricStatusCorrectionNoteKey && key != ContextFabricAnswerNoteJudgmentMismatch.Key() {
 			continue
 		}
 		if kept == nil {
