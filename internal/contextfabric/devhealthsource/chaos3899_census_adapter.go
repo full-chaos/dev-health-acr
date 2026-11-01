@@ -30,6 +30,16 @@ func NewCensusFunc(client contextpacket.ClickHouseQueryClient) graphrank.CensusF
 		if err != nil {
 			return graphrank.CensusOutcome{}, err
 		}
+		// CHAOS-12452: a bound grant is ANDed into every statement of this
+		// read, on every call. A grant that cannot be applied ends the read
+		// here, before any statement: never the organization instead.
+		grant, grantBound := contextfabric.CensusGrantFrom(ctx)
+		if grantBound {
+			var applied bool
+			if predicate, applied = withGrantFilter(kind, predicate, grant); !applied {
+				return graphrank.CensusOutcome{}, graphrank.ErrCensusGrantNotApplied
+			}
+		}
 		filtered := false
 		if slugs := graphrank.CensusRepositoryFilterFrom(ctx); len(slugs) > 0 {
 			predicate, filtered = withRepositoryFilter(kind, predicate, slugs)
@@ -39,8 +49,8 @@ func NewCensusFunc(client contextpacket.ClickHouseQueryClient) graphrank.CensusF
 			return graphrank.CensusOutcome{}, err
 		}
 		outcome := graphrank.CensusOutcome{
-			RepositoryFilterApplied: filtered,
-			Count:                   result.Count, CensusReadAt: result.CensusReadAt, SatisfierNaturalKey: result.SatisfierNaturalKey,
+			RepositoryFilterApplied: filtered, GrantApplied: grantBound,
+			Count: result.Count, CensusReadAt: result.CensusReadAt, SatisfierNaturalKey: result.SatisfierNaturalKey,
 			ClosureMismatch: result.ClosureMismatch, StatementCount: result.StatementCount, RowsRead: result.RowsRead,
 			SatisfierSetClosureMismatch: result.SatisfierSetClosureMismatch,
 		}

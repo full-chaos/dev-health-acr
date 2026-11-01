@@ -3,6 +3,7 @@ package graphrank
 import (
 	"context"
 	"fmt"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -151,16 +152,30 @@ func TestResolveSubjects_CensusReceivesNoFilterWithoutANarrowing(t *testing.T) {
 	}
 }
 
-func TestResolveSubjects_CensusNeverRunsOrFiltersForARestrictedPrincipalNamingAHiddenRepository(t *testing.T) {
+// CHAOS-12452: a restricted principal naming a repository outside its grant
+// gets a census with the grant ANDed beside the request, so the hidden
+// repository's rows are not read. A census that ignores the grant decides nothing.
+func TestResolveSubjects_ACensusForAHiddenRepositoryStaysInsideTheGrant(t *testing.T) {
 	t.Parallel()
+	principal := restrictedCaller(t, filterRepo(0))
 	probe := &filterCensusProbe{}
-	principal := storage.Principal{OrgID: "org_1", RepositoryScopes: []string{filterRepo(0)}}
-	resolution, _ := resolveFiltered(t, principal, []string{filterRepo(5)}, probe.store(true, nil))
-	if probe.calls != 0 {
-		t.Fatalf("census calls = %d (filters %v), want 0 for a restricted principal", probe.calls, probe.filters)
+	resolution, tracer := resolveFiltered(t, principal, []string{filterRepo(5)}, probe.store(true, nil))
+	if ids := scopeAnchorCommittedIDs(resolution); len(ids) != 0 {
+		t.Fatalf("committed = %v, want none", ids)
+	}
+	if rounds := tracer.eventsForStage("evidence_round"); len(rounds) != 1 || rounds[0].ShadowReason != string(ReasonCensusError) {
+		t.Fatalf("evidence_round = %+v, want the census refused", rounds)
+	}
+	spy := &grantCensusSpy{rows: []grantRow{{contextfabric.SubjectPullRequest, "747", "pull_request:r-5:747", filterRepo(5)}}}
+	resolution, tracer = resolveFiltered(t, principal, []string{filterRepo(5)}, spy.census)
+	if len(spy.calls) == 0 || !spy.calls[0].grantBound || !slices.Equal(spy.calls[0].grant, []string{filterRepo(0)}) {
+		t.Fatalf("census calls = %+v, want the grant on them", spy.calls)
 	}
 	if ids := scopeAnchorCommittedIDs(resolution); len(ids) != 0 {
 		t.Fatalf("committed = %v, want none", ids)
+	}
+	if rounds := tracer.eventsForStage("evidence_round"); len(rounds) != 1 || rounds[0].ShadowOutcome == string(ShadowWouldCommit) {
+		t.Fatalf("evidence_round = %+v, want no would_commit", rounds)
 	}
 }
 

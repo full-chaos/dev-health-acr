@@ -7,10 +7,21 @@ import (
 	"github.com/full-chaos/dev-health-acr/internal/auth"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/graphrank"
 	"github.com/full-chaos/dev-health-acr/internal/contextpacket"
+	"github.com/full-chaos/dev-health-acr/internal/reposlug"
 )
 
 // maxCensusRepositoryFilter bounds the bindings one filtered census carries.
 const maxCensusRepositoryFilter = 200
+
+// requestedOwnerClause tests an owner wildcard of a requested filter. The
+// graph-side post-filter still decides on the result, so a prefix is enough.
+const requestedOwnerClause = "startsWith(lower(trimBoth(repo)), {%s:String})"
+
+// grantOwnerClause tests an owner wildcard of a grant, which has no post-filter.
+// It admits what the graph gate admits for that owner, a valid two-part slug,
+// and not only the prefix: acme/* does not cover acme/group/secret, because
+// NormalizeRepositorySlug refuses that slug (codex r2, CHAOS-12455).
+const grantOwnerClause = "(startsWith(lower(trimBoth(repo)), {%s:String}) AND match(lower(trimBoth(repo)), '^[^/]+/" + reposlug.NamePattern + "$'))"
 
 // withRepositoryFilter ANDs a repository restriction onto predicate so the
 // census count and satisfier set are computed inside the caller's narrowing.
@@ -21,6 +32,20 @@ const maxCensusRepositoryFilter = 200
 // that is not a well-formed owner/name or owner/* entry, or too many slugs --
 // so the caller falls back to the post-filter alone.
 func withRepositoryFilter(kind graphrank.CensusKind, predicate CensusPredicate, slugs []string) (CensusPredicate, bool) {
+	return andRepositories(kind, predicate, slugs, "census_repo", requestedOwnerClause)
+}
+
+// withGrantFilter ANDs the caller's repository grant onto predicate, through
+// the same restriction under its own binding names, so a requested narrowing
+// can sit beside it (CHAOS-12452). A false return is the end of the read: a
+// grant has no post-filter to fall back to, so NewCensusFunc refuses the
+// census with no statement. The same conditions make it false, and a reserved
+// value is one of the slugs that is not well-formed.
+func withGrantFilter(kind graphrank.CensusKind, predicate CensusPredicate, grant []string) (CensusPredicate, bool) {
+	return andRepositories(kind, predicate, grant, "census_grant", grantOwnerClause)
+}
+
+func andRepositories(kind graphrank.CensusKind, predicate CensusPredicate, slugs []string, bindingPrefix, ownerClause string) (CensusPredicate, bool) {
 	entry, ok := censusKindRegistryEntries[kind]
 	if !ok {
 		return predicate, false
@@ -33,14 +58,14 @@ func withRepositoryFilter(kind graphrank.CensusKind, predicate CensusPredicate, 
 	var bindings []contextpacket.ClickHouseBinding
 	for i, slug := range slugs {
 		value := strings.ToLower(strings.TrimSpace(slug))
-		name := fmt.Sprintf("census_repo_%d", i)
+		name := fmt.Sprintf("%s_%d", bindingPrefix, i)
 		if owner, wildcard := strings.CutSuffix(value, "/*"); wildcard {
 			normalized, err := auth.NormalizeRepositorySlug(owner + "/x")
 			if err != nil || owner == "" {
 				return predicate, false
 			}
 			owner, _, _ = strings.Cut(normalized, "/")
-			clauses = append(clauses, fmt.Sprintf("startsWith(lower(trimBoth(repo)), {%s:String})", name))
+			clauses = append(clauses, fmt.Sprintf(ownerClause, name))
 			bindings = append(bindings, contextpacket.ClickHouseBinding{Name: name, Value: owner + "/"})
 			continue
 		}

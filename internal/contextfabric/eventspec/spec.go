@@ -3964,6 +3964,7 @@ var EvidenceRound = Event{
 		},
 		{Key: "shadow_precondition_unproven", Type: FieldBool, Presence: PresenceRequired},
 		{Key: "shadow_unscoped_visibility", Type: FieldBool, Presence: PresenceRequired},
+		{Key: "shadow_grant_scoped", Type: FieldBool, Presence: PresenceRequired},
 		{Key: "shadow_non_censused_survivor", Type: FieldBool, Presence: PresenceRequired},
 		{Key: "shadow_handle_grammar_bound", Type: FieldBool, Presence: PresenceRequired},
 		{Key: "shadow_anchor_unique_claimant", Type: FieldBool, Presence: PresenceRequired},

@@ -150,7 +150,7 @@ func handleKindLabel(kind contextfabric.SubjectKind) string {
 }
 
 func explicitHandleSatisfier(ctx context.Context, principal storage.Principal, request contextfabric.InvestigationRequest, deps ResolveDeps, kind contextfabric.SubjectKind, value string, anchor contextfabric.SubjectRef) (contextfabric.SubjectRef, bool) {
-	roundCtx, cancel := context.WithTimeout(ctx, evidenceRoundDeadline)
+	roundCtx, cancel := context.WithTimeout(contextfabric.ScopeCensusToCaller(ctx, principal), evidenceRoundDeadline)
 	defer cancel()
 	var outcome CensusOutcome
 	var err error
@@ -160,7 +160,7 @@ func explicitHandleSatisfier(ctx context.Context, principal storage.Principal, r
 				err = errCensusPanicked
 			}
 		}()
-		outcome, err = deps.CensusFunc(roundCtx, principal.OrgID, kind, value, true, anchor.Kind, anchor.CanonicalID, true)
+		outcome, err = grantEnforced(deps.CensusFunc)(roundCtx, principal.OrgID, kind, value, true, anchor.Kind, anchor.CanonicalID, true)
 	}()
 	if err != nil {
 		if !errors.Is(err, ErrCensusAnchorUnsupported) {

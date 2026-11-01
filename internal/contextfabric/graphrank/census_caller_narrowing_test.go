@@ -152,15 +152,17 @@ func TestResolveSubjects_StalledHandleCensusWithoutANarrowingStaysAClarification
 	}
 }
 
-func TestResolveSubjects_StalledHandleCensusNeverRunsForARestrictedPrincipalWithANarrowing(t *testing.T) {
+// CHAOS-12452: a restricted principal's round now runs, inside its grant. A
+// census that does not apply the grant, as this fake does not, decides nothing.
+func TestResolveSubjects_StalledHandleCensusIsRefusedForARestrictedPrincipalWhenItIgnoresTheGrant(t *testing.T) {
 	t.Parallel()
-	principal := storage.Principal{OrgID: "org_1", RepositoryScopes: []string{narrowingRepos[1]}}
-	resolution, _, calls := resolveNarrowed(t, narrowingBackend(), principal, []string{narrowingRepos[1]}, narrowingQuestion, allNarrowingIDs())
-	if calls != 0 {
-		t.Fatalf("census calls = %d, want 0 for a repository-restricted principal", calls)
-	}
+	principal := restrictedCaller(t, narrowingRepos[1])
+	resolution, tracer, _ := resolveNarrowed(t, narrowingBackend(), principal, []string{narrowingRepos[1]}, narrowingQuestion, allNarrowingIDs())
 	if ids := scopeAnchorCommittedIDs(resolution); len(ids) != 0 {
 		t.Fatalf("committed = %v, want none", ids)
+	}
+	if rounds := narrowingEvents(tracer); len(rounds) != 1 || rounds[0].ShadowReason != string(ReasonCensusError) {
+		t.Fatalf("evidence_round = %+v, want census_error", rounds)
 	}
 }
 

@@ -722,7 +722,7 @@ func (e *Engine) canonicalizeStructure(ctx context.Context, principal storage.Pr
 						// not just a truthy ok, so a misconfigured
 						// HandleVerifier cannot open redemption on an
 						// inconsistent (true, non-valid-reason) result.
-						ok, reason := e.handleVerifier(ctx, principal.OrgID, opt.Kind, opt.PatternID, opt.Value)
+						ok, reason := e.handleVerifier(ScopeCensusToCaller(ctx, principal), principal.OrgID, opt.Kind, opt.PatternID, opt.Value)
 						if !(ok && reason == HandleVerificationValid) {
 							reverifyDetail = structureDetailReverifyRejected
 						}

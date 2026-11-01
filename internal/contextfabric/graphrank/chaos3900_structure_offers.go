@@ -1038,7 +1038,7 @@ func VerifyHandle(ctx context.Context, orgID string, kind CensusKind, patternID,
 	if census == nil {
 		return false, HandleVerificationCensusUnavailable
 	}
-	outcome, err := census(ctx, orgID, kind, value, true, "", "", false)
+	outcome, err := grantEnforced(census)(ctx, orgID, kind, value, true, "", "", false)
 	if err != nil {
 		return false, HandleVerificationCensusUnavailable
 	}

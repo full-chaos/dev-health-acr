@@ -147,12 +147,16 @@ func TestResolveSubjects_StalledHandleCensusUnderATeamNarrowingKeepsTheClarifica
 // TestResolveSubjects_StalledHandleCensusNeverRunsForARestrictedPrincipalWithATeamNarrowing:
 // the census stays off where it is off today: a restricted principal, a team
 // narrowing combined with a repository narrowing, or no team decider wired.
-func TestResolveSubjects_StalledHandleCensusNeverRunsForARestrictedPrincipalWithATeamNarrowing(t *testing.T) {
+// CHAOS-12452: a restricted principal's team narrowing now reaches the census,
+// inside its grant. This census fake does not apply the grant, so its satisfiers
+// never reach the team reader. No team reader wired still means no census.
+func TestResolveSubjects_StalledHandleCensusIsRefusedForARestrictedPrincipalWhenItIgnoresTheGrantUnderATeamNarrowing(t *testing.T) {
 	t.Parallel()
 	narrowerCalls := 0
 	narrowing := censusTeamNarrowing(inTeam(narrowingPRID(1)), nil, &narrowerCalls, nil)
-	if _, _, calls := resolveTeamNarrowed(t, storage.Principal{OrgID: "org_1", RepositoryScopes: []string{narrowingRepos[1]}}, []string{"team-b"}, allNarrowingIDs(), narrowing); calls != 0 {
-		t.Fatalf("restricted principal: census calls = %d, want 0", calls)
+	resolveTeamNarrowed(t, restrictedCaller(t, narrowingRepos[1]), []string{"team-b"}, allNarrowingIDs(), narrowing)
+	if narrowerCalls != 0 {
+		t.Fatalf("team reader calls = %d, want 0: a census that ignored the grant must decide nothing", narrowerCalls)
 	}
 	if _, _, calls := resolveTeamNarrowed(t, storage.Principal{OrgID: "org_1"}, []string{"team-b"}, allNarrowingIDs(), nil); calls != 0 {
 		t.Fatalf("no team decider: census calls = %d, want 0", calls)

@@ -1648,7 +1648,10 @@ type ResolutionTraceEvent struct {
 	ShadowDIdentityHash        string
 	ShadowPreconditionUnproven bool
 	ShadowUnscopedVisibility   bool
-	ShadowNonCensusedSurvivor  bool
+	// ShadowGrantScoped is true when the census ran inside the caller's
+	// repository grant (CHAOS-12452); ShadowUnscopedVisibility is then false.
+	ShadowGrantScoped         bool
+	ShadowNonCensusedSurvivor bool
 	// ShadowSurvivorExcludedReason/ShadowTrigger: see
 	// Attestation.SurvivorExcludedReason and ShadowEvidenceRoundInput.Trigger.
 	ShadowSurvivorExcludedReason string
@@ -3111,7 +3114,7 @@ func resolveSubjects(ctx context.Context, principal storage.Principal, request c
 				}}}
 			}
 			attestation := runShadowEvidenceRoundForResolution(ctx, principal, request, interpreted, exactResolution, hintClaimants, hintClaimants != nil,
-				unscopedVisibilityFor(principal, request) || repositoryNarrowedByUnrestrictedPrincipal(principal, request) || teamNarrowedByUnrestrictedPrincipal(principal, request, deps), deps, confirmedKind, confirmedAnchor, true)
+				unscopedVisibilityFor(principal, request) || repositoryNarrowedByUnrestrictedPrincipal(principal, request) || teamNarrowedByUnrestrictedPrincipal(principal, request, deps) || grantScopedRequest(principal, request, deps), deps, confirmedKind, confirmedAnchor, true)
 			hintGate := deps.CommitGatePolicy
 			if hintGate == (CommitGatePolicy{}) {
 				hintGate = DefaultCommitGatePolicy()
@@ -4065,7 +4068,7 @@ func resolveSubjects(ctx context.Context, principal storage.Principal, request c
 	if !offersOnly && deps.CensusFunc != nil && (stalledForCensus || committedScopeAnchorShadowsHandle(request.Question, resolution.Committed, frame)) {
 		// CHAOS-4300: false -- this is the pre-existing stalled-resolution
 		// call site, not the caller-hint short circuit's own new call above.
-		censusVisibility := unscopedVisibility || repositoryNarrowedByUnrestrictedPrincipal(principal, request) || teamNarrowedByUnrestrictedPrincipal(principal, request, deps)
+		censusVisibility := unscopedVisibility || repositoryNarrowedByUnrestrictedPrincipal(principal, request) || teamNarrowedByUnrestrictedPrincipal(principal, request, deps) || grantScopedRequest(principal, request, deps)
 		attestation := runShadowEvidenceRoundForResolution(ctx, principal, request, interpreted, resolution, aliasClaimantsByTerm, aliasIdentityComplete, censusVisibility, deps, confirmedKind, confirmedAnchor, false)
 		// CHAOS-3896 Slice C (design brief v6 §1.4): the round's Attestation
 		// is now CONSUMED in the commit decision, not merely traced. When it
@@ -4816,7 +4819,9 @@ func runShadowEvidenceRoundForResolution(ctx context.Context, principal storage.
 			attestation = Attestation{}
 		}
 	}()
-	roundCtx, cancel := context.WithTimeout(ctx, evidenceRoundDeadline)
+	// CHAOS-12452: set once, here. Every census of the round reads this
+	// context: the main loop, the kind proof and the handle probe.
+	roundCtx, cancel := context.WithTimeout(contextfabric.ScopeCensusToCaller(ctx, principal), evidenceRoundDeadline)
 	defer cancel()
 	pooledKinds := make([]CensusKind, 0, len(resolution.Candidates))
 	pooledSubjects := make([]contextfabric.SubjectRef, 0, len(resolution.Candidates))
@@ -4894,8 +4899,8 @@ func runShadowEvidenceRoundForResolution(ctx context.Context, principal storage.
 	attestation = RunShadowEvidenceRound(roundCtx, ShadowEvidenceRoundInput{
 		RequestID: request.RequestID, Question: request.Question, OrgID: principal.OrgID,
 		PooledKinds: censusKinds, PooledSubjects: pooledSubjects, Trigger: evidenceRoundTrigger(resolution, callerHintShortCircuit), CurrentAxis: interpreted.TimeContext.Axis == contextfabric.TemporalCurrent,
-		UnscopedVisibility: unscopedVisibility, AliasClaimants: claimantsFromCandidateNodes(aliasClaimantsByTerm),
-		AliasLookupComplete: aliasIdentityComplete, CensusFunc: deps.CensusFunc,
+		UnscopedVisibility: unscopedVisibility, GrantScoped: grantScopedCensus(principal), AliasClaimants: claimantsFromCandidateNodes(aliasClaimantsByTerm),
+		AliasLookupComplete: aliasIdentityComplete, CensusFunc: grantEnforced(deps.CensusFunc),
 		NarrowSatisfiers:          censusSatisfierNarrower(principal, request, deps, workItemScope),
 		CensusRepositories:        callerCensusRepositories(principal, request, deps),
 		workItemScope:             workItemScope,
@@ -5445,10 +5450,40 @@ func repositoryNarrowedByUnrestrictedPrincipal(principal storage.Principal, requ
 		len(request.RequestedScope.TeamIDs) == 0
 }
 
-// callerNarrowingApplies is the one predicate for "narrowed, unrestricted
-// principal": the satisfier narrowing and the in-query census filter both use it.
+// grantScopedCensus is the one widening of who gets a census (CHAOS-12452): a
+// restricted caller's census runs inside its grant, so a row outside the grant
+// cannot be counted, named or offered and the census is no existence oracle.
+// A project-only caller is not restricted by class, and stays refused.
+func grantScopedCensus(principal storage.Principal) bool {
+	return auth.ClassifyGrant(principal) == auth.GrantRestricted
+}
+
+// repositoryNarrowedInsideGrant is a restricted caller's repository narrowing.
+// grantScopedRequest has already refused a request that also narrows otherwise.
+func repositoryNarrowedInsideGrant(principal storage.Principal, request contextfabric.InvestigationRequest) bool {
+	return grantScopedCensus(principal) && len(request.RequestedScope.RepositorySlugs) > 0
+}
+
+// grantScopedRequest is true when a restricted caller's request is one the
+// census can honour: no narrowing, a repository narrowing, or a team narrowing
+// with its reader wired. Any other narrowing gets no census, as it does for an
+// unrestricted principal: a satisfier outside the request must not decide.
+func grantScopedRequest(principal storage.Principal, request contextfabric.InvestigationRequest, deps ResolveDeps) bool {
+	scope := request.RequestedScope
+	if !grantScopedCensus(principal) || len(scope.ProjectIDs) > 0 {
+		return false
+	}
+	if len(scope.TeamIDs) == 0 {
+		return true
+	}
+	return len(scope.RepositorySlugs) == 0 && teamNarrowedInsideGrant(principal, request, deps)
+}
+
+// callerNarrowingApplies is the one predicate for "the caller's own repository
+// narrowing": the satisfier narrowing and the in-query census filter both use
+// it, for an unrestricted principal and, inside its grant, a restricted one.
 func callerNarrowingApplies(principal storage.Principal, request contextfabric.InvestigationRequest, deps ResolveDeps) bool {
-	return repositoryNarrowedByUnrestrictedPrincipal(principal, request) && deps.ExactHint != nil
+	return (repositoryNarrowedByUnrestrictedPrincipal(principal, request) || repositoryNarrowedInsideGrant(principal, request)) && deps.ExactHint != nil
 }
 
 // censusSatisfierNarrower is the census's satisfier narrowing: the caller's
@@ -5464,9 +5499,9 @@ func censusSatisfierNarrower(principal storage.Principal, request contextfabric.
 }
 
 // callerCensusRepositories is the caller's own requested repository slugs when
-// callerNarrowingApplies, nil otherwise. A restricted principal never gets a
-// filter (it gets no census at all), so the filter can only be what the caller
-// asked for within an unrestricted principal's visibility.
+// callerNarrowingApplies, nil otherwise. The filter is what the caller asked
+// for inside what it may see: a restricted caller's census carries the grant
+// as well, as its own filter (CHAOS-12452).
 func callerCensusRepositories(principal storage.Principal, request contextfabric.InvestigationRequest, deps ResolveDeps) []string {
 	if !callerNarrowingApplies(principal, request, deps) {
 		return nil
@@ -5475,9 +5510,8 @@ func callerCensusRepositories(principal storage.Principal, request contextfabric
 }
 
 // callerNarrowingSatisfierFilter returns the satisfier narrowing for a call
-// whose only visibility limit is the caller's own repository narrowing of an
-// unrestricted principal, and nil otherwise. A restricted principal never gets
-// one: its round does not run a census at all.
+// that narrows by repository (callerNarrowingApplies), and nil otherwise.
+// AuthorizedAttributes reads both the principal's grant and the request.
 //
 // A work item is inside the narrowing when the scope's link walk reaches it
 // and its node passes AuthorizedThroughLink; every other kind when its node
