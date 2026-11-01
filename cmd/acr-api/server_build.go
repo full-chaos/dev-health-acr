@@ -172,6 +172,7 @@ func appConfig(cfg config.Config, serviceVersion string) api.AppConfig {
 		CORSAllowedOrigins:                          cfg.CORSAllowedOrigins,
 		ServerCompletenessAuthorityEnabled:          cfg.ServerCompletenessAuthorityEnabled,
 		ServerCompletenessAuthoritySymmetricEnabled: cfg.ServerCompletenessAuthoritySymmetricEnabled,
+		ContextFabricVocabularyLabelsEnabled:        cfg.ContextFabricVocabularyLabelsEnabled,
 		ContextFabricEventStreamEnabled:             cfg.ContextFabricEventStreamEnabled,
 		ContextFabricRunLeaseEnabled:                cfg.ContextFabricRunLeaseEnabled,
 		ThreadListFirstQuestionEnabled:              cfg.ThreadListFirstQuestionEnabled,

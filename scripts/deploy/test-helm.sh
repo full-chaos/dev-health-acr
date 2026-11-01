@@ -969,6 +969,16 @@ extract_container_block() {
   '
 }
 
+# CHAOS-12416: acr-api always declares the vocabulary labels flag: off by
+# default, because a consumer on an old pin fails every answer that holds the
+# map, and on only when the value is set.
+vocabulary_labels_value() {
+  extract_container_block acr-api | grep -A1 'name: ACR_CONTEXT_FABRIC_VOCABULARY_LABELS_ENABLED' | sed -n 's/^ *value: //p'
+}
+[[ "$(vocabulary_labels_value <"$rendered")" == '"false"' ]] || fail_gate "vocabulary-labels: acr-api does not declare the flag off by default"
+[[ "$(render --set contextFabric.vocabularyLabelsEnabled=true | vocabulary_labels_value)" == '"true"' ]] || fail_gate "vocabulary-labels: contextFabric.vocabularyLabelsEnabled=true does not reach acr-api"
+pass "vocabulary-labels: acr-api declares the flag off by default and on only when set"
+
 falkor_no_secret="$(render \
   --set-string contextFabric.falkor.addr=falkordb.internal:6379 \
   --set-string contextFabric.falkor.graphPrefix=acr-cf)"
