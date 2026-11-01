@@ -53,6 +53,8 @@ Usage: test-helm.sh --values <path> [--image <ref>] [--chart <path>] [--scenario
               The acr-api auth workload client scenarios (CHAOS-11195): auth-workload-client-on (positive),
               auth-workload-client-off-render, auth-workload-client-bad-inputs,
               auth-workload-client-presence-only.
+              The lifecycle outbox publisher scenario (CHAOS-11198): auth-projection-url (on renders the URL in the ConfigMap and the
+              runtime ACL job; off renders none; a URL with the client off fails the render).
 
 The harness only renders (helm template/lint) and validates output offline.
 EOF
@@ -636,6 +638,29 @@ case "$scenario" in
     [[ $n -gt 50 ]] || fail_gate "auth-workload presence-only: only $n malformed cells read from the corpus"
     pass "auth-workload-client-presence-only: $n malformed values render (the Go validator refuses them at start)"
     printf 'RESULT: scenario auth-workload-client-presence-only passed\n'
+    exit 0 ;;
+  auth-projection-url)
+    printf 'scenario: auth-projection-url (ACR_AUTH_PROJECTION_URL reaches the ConfigMap and the runtime ACL job only when set; it needs the workload client)\n'
+    auth_workload_render >"$workdir/projection-off.yaml"
+    if grep -q ACR_AUTH_PROJECTION_URL "$workdir/projection-off.yaml"; then fail_gate "auth-projection: the URL is rendered with no projectionURL"; fi
+    auth_workload_render --set-string "authWorkloadClient.projectionURL=http://auth-service.acr-test.svc:8080" >"$workdir/projection-on.yaml"
+    n="$(grep -c 'ACR_AUTH_PROJECTION_URL' "$workdir/projection-on.yaml")"
+    [[ "$n" -eq 2 ]] || fail_gate "auth-projection: ACR_AUTH_PROJECTION_URL rendered $n times, want 2 (the ConfigMap and the runtime ACL job)"
+    negative auth-projection-needs-the-client "authWorkloadClient.projectionURL" --set-string "authWorkloadClient.projectionURL=https://auth-service.acr-test.svc"
+    # Whitespace is unset, as the runtime config reads it: no render error with the client off, no env with it on, and a
+    # padded URL renders trimmed.
+    render --set-string "authWorkloadClient.projectionURL=   " >"$workdir/projection-blank-off.yaml" 2>"$workdir/projection-blank-off.err" \
+      || fail_gate "auth-projection: a whitespace projectionURL with the client off failed to render: $(head -c 300 "$workdir/projection-blank-off.err")"
+    if grep -q ACR_AUTH_PROJECTION_URL "$workdir/projection-blank-off.yaml"; then fail_gate "auth-projection: a whitespace projectionURL rendered the env with the client off"; fi
+    auth_workload_render --set-string "authWorkloadClient.projectionURL=   " >"$workdir/projection-blank-on.yaml"
+    if grep -q ACR_AUTH_PROJECTION_URL "$workdir/projection-blank-on.yaml"; then fail_gate "auth-projection: a whitespace projectionURL rendered the env with the client on"; fi
+    auth_workload_render --set-string "authWorkloadClient.projectionURL=  http://auth-service.acr-test.svc:8080  " >"$workdir/projection-padded.yaml"
+    n="$(grep -c 'ACR_AUTH_PROJECTION_URL: "http://auth-service.acr-test.svc:8080"' "$workdir/projection-padded.yaml" || true)"
+    [[ "$n" -eq 1 ]] || fail_gate "auth-projection: a padded projectionURL rendered untrimmed or not at all in the ConfigMap ($n)"
+    n="$(grep -c 'value: "http://auth-service.acr-test.svc:8080"' "$workdir/projection-padded.yaml" || true)"
+    [[ "$n" -ge 1 ]] || fail_gate "auth-projection: a padded projectionURL rendered untrimmed in the runtime ACL job"
+    pass "auth-projection-url: on renders the URL twice, off never, whitespace is unset, a padded URL renders trimmed, and the client is required"
+    printf 'RESULT: scenario auth-projection-url passed\n'
     exit 0 ;;
   happy) : ;;
   *) printf 'unknown scenario: %s\n' "$scenario" >&2; usage; exit 2 ;;

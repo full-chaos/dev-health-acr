@@ -8,6 +8,7 @@ set -eu
 : "${ACR_RUNTIME_DB_USER:?ACR_RUNTIME_DB_USER is required}"
 : "${ACR_MIGRATION_DB_USER:?ACR_MIGRATION_DB_USER is required}"
 : "${ACR_ENABLE_EPISODE_WRITEBACK:=false}"
+: "${ACR_AUTH_PROJECTION_URL:=}"
 : "${ACR_WORKLOAD_TOKEN_EXCHANGE_AUDIENCE:=}"
 : "${ACR_WORKLOAD_TRUST_DOMAIN:=}"
 : "${ACR_OAUTH_BROWSER_CLIENTS:=}"
@@ -114,6 +115,12 @@ browser_client=false
 if [ -n "$(trim "$ACR_OAUTH_BROWSER_CLIENTS")" ] || [ -n "$(trim "$ACR_OAUTH_DEV_BROWSER_REDIRECT_URIS")" ]; then
   browser_client=true
 fi
+# The lifecycle outbox publisher is configured when ACR_AUTH_PROJECTION_URL holds something other than whitespace, the
+# same rule the hosted runtime and grant-runtime-acl apply: the runtime role then holds UPDATE (published_at) there.
+auth_projection=false
+if [ -n "$(trim "$ACR_AUTH_PROJECTION_URL")" ]; then
+  auth_projection=true
+fi
 # Both purge loops above delete acr.client_credentials rows: the runtime role
 # holds DELETE there when either feature is on (internal/dbacl CredentialPurge).
 credential_purge=false
@@ -177,7 +184,7 @@ if [ "$mode" = runtime-acl ]; then
   psql -v ON_ERROR_STOP=1 -h "$POSTGRES_HOST" -p "$POSTGRES_PORT" -U "$POSTGRES_USER" -d "$ACR_DB_NAME" \
     -v runtime_user="$ACR_RUNTIME_DB_USER" -v migration_user="$ACR_MIGRATION_DB_USER" \
     -v episode_writeback="$ACR_ENABLE_EPISODE_WRITEBACK" -v workload_token_exchange="$workload_token_exchange" \
-    -v browser_client="$browser_client" -v credential_purge="$credential_purge" \
+    -v browser_client="$browser_client" -v credential_purge="$credential_purge" -v auth_projection="$auth_projection" \
     -v purge_enabled="$purge_enabled" -v purge_user="$ACR_PURGE_DB_USER" <<'SQL'
 REVOKE USAGE, CREATE ON SCHEMA acr FROM PUBLIC;
 REVOKE USAGE, CREATE ON SCHEMA acr FROM :"runtime_user";
@@ -222,8 +229,14 @@ REVOKE SELECT, INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER ON TABLE ac
 GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE acr.context_packet_snapshots TO :"runtime_user";
 
 -- INSERT internal/storage/postgres/outbox.go (lifecycleSink.Insert), SELECT the same file (lifecycleSink.MaxRevision); both inside the credential mutation transaction
+-- UPDATE of published_at only, started only when the publisher is configured (ACR_AUTH_PROJECTION_URL): internal/storage/postgres/outbox_publish.go LifecycleOutboxMarkSQL, and the claim's FOR UPDATE OF o (LifecycleOutboxClaimSQL), which Postgres checks as UPDATE on one column; no other column is writable and the publisher never deletes
 REVOKE SELECT, INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER ON TABLE acr.credential_lifecycle_outbox FROM :"runtime_user";
 GRANT SELECT, INSERT ON TABLE acr.credential_lifecycle_outbox TO :"runtime_user";
+\if :auth_projection
+GRANT UPDATE (published_at) ON TABLE acr.credential_lifecycle_outbox TO :"runtime_user";
+\else
+REVOKE UPDATE (published_at) ON TABLE acr.credential_lifecycle_outbox FROM :"runtime_user";
+\endif
 
 -- INSERT internal/storage/postgres/audit.go:69; SELECT credentials_audit.go:50 and :61 (credential rotation conflict checks)
 REVOKE SELECT, INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER ON TABLE acr.audit_events FROM :"runtime_user";

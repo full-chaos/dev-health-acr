@@ -98,6 +98,10 @@ spec:
             # same settings the workloads read (templates/configmap.yaml).
             - name: ACR_ENABLE_EPISODE_WRITEBACK
               value: {{ .Values.config.enableEpisodeWriteback | quote }}
+            {{- with (include "acr.authProjectionURL" .) }}
+            - name: ACR_AUTH_PROJECTION_URL
+              value: {{ . | quote }}
+            {{- end }}
             {{- if .Values.workloadTokenExchange.enabled }}
             - name: ACR_WORKLOAD_TOKEN_EXCHANGE_AUDIENCE
               value: {{ .Values.workloadTokenExchange.audience | quote }}

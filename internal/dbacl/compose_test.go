@@ -51,7 +51,7 @@ func TestEveryDeclaredPrivilegeIsAKnownTablePrivilege(t *testing.T) {
 		if strings.TrimSpace(grant.Why) == "" {
 			t.Errorf("%s: a row must cite the runtime code that needs it", grant.Table)
 		}
-		if len(grant.Privileges) == 0 {
+		if len(grant.Privileges) == 0 && len(grant.SelectColumns) == 0 && len(grant.UpdateColumns) == 0 {
 			t.Errorf("%s: no privileges", grant.Table)
 		}
 		for _, privilege := range grant.Privileges {
