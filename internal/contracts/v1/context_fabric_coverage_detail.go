@@ -601,7 +601,7 @@ const (
 	// ContextFabricVocabularyLabelsMaxEntries bounds the map as
 	// evidence_ref_labels is bounded. It is not the working limit: the map
 	// holds only values in one result, so the whole registry is its ceiling
-	// (125 entries, 5,999 bytes, 9.2% of the 65,536-byte answer budget,
+	// (138 entries, 6,698 bytes, 10.2% of the 65,536-byte answer budget,
 	// measured by TestTheWholeRegistryFitsInASmallShareOfTheAnswerBudget; the
 	// fact field table stands apart, because an answer holds only its own
 	// fields: TestCHAOS12418OneKindsWordsAreASmallShareOfTheAnswerBudget).
