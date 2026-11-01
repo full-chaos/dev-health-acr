@@ -29,6 +29,7 @@ var operationalLogEvents = map[string]string{
 	"devhealthfacts.ownership_note_omitted":                "read failure of the ownership note",
 	"devhealthfacts.rule_basis_unparsed":                   "unparsed rule basis report",
 	"context_fabric: project pull request link tiers":      "debug trace of the project pull request link tier read",
+	"context_fabric: team link candidates dropped":         "count of the team link candidates on several work item rows",
 	"devhealthfacts.read_failed":                           "read failure by action and error type",
 	"investment membership scope prerequisite load failed": "read failure of the membership scope prerequisite",
 	"devhealthfacts.status_since_inconsistent":             "data inconsistency report of a status since value",

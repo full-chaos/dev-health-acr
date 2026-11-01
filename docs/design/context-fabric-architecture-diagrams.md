@@ -527,7 +527,17 @@ same rows; no edge is provider-specific. Producers are in
   `merge_request`), the `pull_request` node exists, the tier is one of the
   three, and the row is not a lower-tier row a native row of the organization
   covers (by its issue or its pull request: the skip
-  `issue_pull_request_link:outranked_by_native`); each skip is counted. The
+  `issue_pull_request_link:outranked_by_native`); each skip is counted. A row
+  names no issue repository and `work_items` is keyed by
+  `(org_id, repo_id, work_item_id)`, so an id with several work item rows, a
+  pull request item among them, cannot be resolved: nothing says which issue the
+  link means. It gives no edge and is counted (the skip
+  `issue_pull_request_link:ambiguous_links`), and so also when one of the rows is
+  the true issue: a missed link is a gap, a wrong edge crosses a grant, because a
+  repository-restricted caller reaches a repository-less issue through its link.
+  An id with one row stays, in any repository. The edge count and the fact reads
+  take the same rule. A native row of such an id still covers its pull request
+  and names no issue. The
   graph keeps the same rule: ops deletes the outranked rows, so no row names an
   outranked edge projected before its native link arrived, and the projection
   of a native edge deletes every `explicit_text` and `heuristic`

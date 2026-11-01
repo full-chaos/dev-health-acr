@@ -23,7 +23,9 @@ func TestIssuePullRequestLinkStatementShape(t *testing.T) {
 	statement := rec.statements[0]
 	for _, fragment := range []string{
 		"FROM work_graph_issue_pr AS l FINAL",
-		"LEFT JOIN work_items AS w FINAL ON w.org_id = l.org_id AND w.work_item_id = l.work_item_id",
+		issuePullRequestLinkWorkItemJoin,
+		"count() AS id_rows",
+		issuePullRequestLinkAmbiguous,
 		"LEFT JOIN git_pull_requests AS p FINAL ON p.org_id = l.org_id AND p.repo_id = l.repo_id AND p.number = l.pr_number",
 		"LEFT JOIN repos AS r FINAL ON r.id = l.repo_id AND r.org_id = l.org_id",
 		"toString(w.repo_id)",

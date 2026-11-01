@@ -30,6 +30,11 @@ const (
 	// plus 2 MiB. The one-thread grouping served measured 48.69 MB unmerged and
 	// 48.33 MB merged; the DISTINCT over work_item_id held 94.02 / 94.45 MB.
 	candidateAllInsideBound = uint64(59 << 20)
+	// candidateAllInsideAmbiguousBound is the bound of the statements that find
+	// the candidates on several work item rows, at these 96k ids of over 100
+	// characters. They hold the ids as a set, the only prune a read by id has:
+	// 80 MB, 30% of the API statement cap.
+	candidateAllInsideAmbiguousBound = uint64(96 << 20)
 )
 
 func candidateAllInsideWithinBound(peak uint64) bool {
@@ -179,5 +184,32 @@ SELECT concat('owned-', repeat('x', 96), '-', toString(number)), ?, ?, 'issue', 
 	}
 	if rows := table.Block().Rows(); rows != candidateAllInsideIssues {
 		t.Fatalf("moved issues: the candidate external table holds %d rows, want the %d distinct issues once each", rows, candidateAllInsideIssues)
+	}
+	// The ids stored under two repositories are the ambiguous ones, read over
+	// every candidate by the served statement, under its own bound.
+	mark := serverNowMicros(t, ctx, direct)
+	ambiguous, err := devhealthfacts.TeamAmbiguousLinkCandidatesForTest(ctx, query, org, []string{teamID}, served)
+	if err != nil {
+		t.Fatalf("ambiguous candidates: %v: %s", err, readFailureCause(err))
+	}
+	if len(ambiguous) != candidateAllInsideMoved {
+		t.Fatalf("the ambiguous statement returned %d ids, want the %d stored under two repositories", len(ambiguous), candidateAllInsideMoved)
+	}
+	if err := direct.Exec(ctx, `SYSTEM FLUSH LOGS`); err != nil {
+		t.Fatalf("flush logs (query_log unavailable, measurement did not happen): %v", err)
+	}
+	var peak, statements, unbound uint64
+	if err := direct.QueryRow(ctx, `SELECT max(memory_usage), count(), `+statementthreads.UnboundThreadsCount+` FROM system.query_log
+WHERE `+queryLogSinceMark+` AND type = 'QueryFinish' AND query_kind = 'Select' AND position(query, ?) > 0`, mark, teamAmbiguousLinkCandidatesMarker).Scan(&peak, &statements, &unbound); err != nil {
+		t.Fatalf("read query_log: %v", err)
+	}
+	if statements == 0 {
+		t.Fatalf("the ambiguous candidate statements were not logged (the measurement did not happen)")
+	}
+	statementthreads.RequireThreadBound(t, ctx, direct, "ambiguous candidate statements", unbound)
+	t.Logf("ALL-INSIDE ambiguous candidate statements over %d ids: peak %d bytes (%.1f%% of the API statement cap; bound %d)",
+		len(served), peak, 100*float64(peak)/float64(contextpacket.APIStatementMaxMemoryUsage), candidateAllInsideAmbiguousBound)
+	if peak > candidateAllInsideAmbiguousBound {
+		t.Errorf("the ambiguous candidate statement peaked at %d bytes where every link is inside the owned projects, want at most %d", peak, candidateAllInsideAmbiguousBound)
 	}
 }

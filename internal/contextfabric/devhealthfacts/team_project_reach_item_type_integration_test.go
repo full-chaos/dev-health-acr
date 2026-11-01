@@ -12,10 +12,10 @@ import (
 
 const projectReachTypeOrg = "e41a7c05-8b2d-4936-b0f1-5d7c2a9e8613"
 
-// A work item reaches repositories as the issue it is in the owned project:
-// the type of its row in that project decides, whatever a row of the same id
-// in another project says.
-func TestTeamProjectReachUsesTheOwnedProjectRowTypeOnRealClickHouse(t *testing.T) {
+// A link row names no issue repository, so an id on two work item rows reaches
+// no repository, whatever the type of its row in the owned project: nothing says
+// which row the link means. An id on one row reaches its link's repository.
+func TestTeamProjectReachFollowsOnlyAnIdOnOneRowOnRealClickHouse(t *testing.T) {
 	ctx := context.Background()
 	query, direct := newCHAOS3780IntegrationClient(t, ctx)
 	for _, statement := range devhealthschema.DDL(
@@ -34,7 +34,7 @@ func TestTeamProjectReachUsesTheOwnedProjectRowTypeOnRealClickHouse(t *testing.T
 		}
 	}
 	const teamID, owned, other = "team-owner", "proj-owned", "proj-other"
-	for _, label := range []string{"repo-issue-here", "repo-pr-here", "repo-x"} {
+	for _, label := range []string{"repo-issue-here", "repo-pr-here", "repo-x", "repo-one-row"} {
 		exec(`INSERT INTO repos (id, org_id, repo, provider, last_synced) VALUES (?,?,?,?,?)`, repoUUID(label), projectReachTypeOrg, "acme/"+label, "github", at)
 	}
 	exec(`INSERT INTO teams (id, name, description, updated_at, org_id, provider, project_keys, is_active) VALUES (?, ?, NULL, ?, ?, ?, [], ?)`,
@@ -55,10 +55,11 @@ func TestTeamProjectReachUsesTheOwnedProjectRowTypeOnRealClickHouse(t *testing.T
 	row("i-issue-here", "repo-pr-here", other, "pr")
 	row("i-pr-here", "repo-x", owned, "pr")
 	row("i-pr-here", "repo-issue-here", other, "issue")
+	row("i-one-row", "repo-x", owned, "issue")
 	for _, link := range []struct {
 		item, repo string
 		number     uint32
-	}{{"i-issue-here", "repo-issue-here", 1}, {"i-pr-here", "repo-pr-here", 2}} {
+	}{{"i-issue-here", "repo-issue-here", 1}, {"i-pr-here", "repo-pr-here", 2}, {"i-one-row", "repo-one-row", 3}} {
 		exec(`INSERT INTO git_pull_requests (repo_id, org_id, number, title, state, last_synced, created_at, merged_at, closed_at, head_branch, body) VALUES (?,?,?,?,?,?,?,NULL,NULL,?,?)`,
 			repoUUID(link.repo), projectReachTypeOrg, link.number, "pr", "open", at, at, "feature", "")
 		exec(`INSERT INTO work_graph_issue_pr (repo_id, work_item_id, pr_number, confidence, provenance, evidence, last_synced, org_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
@@ -75,7 +76,7 @@ func TestTeamProjectReachUsesTheOwnedProjectRowTypeOnRealClickHouse(t *testing.T
 	fields := factFor(t, result, teamSubject(teamID)).Fields
 	wantInt(t, fields, "project_reached_repository_count", 1)
 	rows := wantTableRows(t, fields, "repository_breakdown")
-	if _, ok := rows[repoUUID("repo-issue-here")]; !ok || len(rows) != 1 {
-		t.Fatalf("repository_breakdown = %v, want only the repository of the item that is an issue in the owned project", rows)
+	if _, ok := rows[repoUUID("repo-one-row")]; !ok || len(rows) != 1 {
+		t.Fatalf("repository_breakdown = %v, want only the repository of the id on one row", rows)
 	}
 }

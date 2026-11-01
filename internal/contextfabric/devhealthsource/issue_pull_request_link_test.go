@@ -53,12 +53,20 @@ func issuePullRequestLinkRow(workItemID, rowRepoID string, number uint32, proven
 	}
 	return []any{workItemID, rowRepoID, number, provenance, at,
 		issueResolved, issue.repoID, issue.itemType, issue.created, uint8(0), zeroTime,
-		prExists, pr.slug, pr.created, uint8(0), zeroTime, uint8(0)}
+		prExists, pr.slug, pr.created, uint8(0), zeroTime, uint8(0), uint8(0)}
 }
 
 // outrankedLinkRow is issuePullRequestLinkRow for a row the statement marks as
 // covered by a native row of the organization.
 func outrankedLinkRow(workItemID, rowRepoID string, number uint32, provenance string, at time.Time, issue linkIssue, pr linkPullRequest) []any {
+	row := issuePullRequestLinkRow(workItemID, rowRepoID, number, provenance, at, issue, pr)
+	row[len(row)-2] = uint8(1)
+	return row
+}
+
+// ambiguousLinkRow is issuePullRequestLinkRow for a row whose work item id has
+// several work item rows: the read's one row of that id.
+func ambiguousLinkRow(workItemID, rowRepoID string, number uint32, provenance string, at time.Time, issue linkIssue, pr linkPullRequest) []any {
 	row := issuePullRequestLinkRow(workItemID, rowRepoID, number, provenance, at, issue, pr)
 	row[len(row)-1] = uint8(1)
 	return row

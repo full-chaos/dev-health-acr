@@ -88,7 +88,7 @@ func OrgWideScopeReadsForTest(statement string) []string {
 	var found []string
 	for name, fragment := range map[string]string{
 		"organization link rows":           issueLinkRowsSQL,
-		"organization work items in link":  "work_items AS wi FINAL",
+		"organization work items in link":  linkWorkItemsSQL(""),
 		"organization touches":             membershipTouchesAsOfAmongSQL(""),
 		"organization transition subjects": "subject_kind = 'work_item'\n    )",
 		"work items joined whole":          "JOIN work_items AS w FINAL ON",
