@@ -10,6 +10,7 @@ import (
 	"time"
 
 	storagepostgres "github.com/full-chaos/dev-health-acr/internal/storage/postgres"
+	"github.com/full-chaos/dev-health-acr/internal/telemetryscrub"
 )
 
 type fakeLifecycleTicker struct {
@@ -27,7 +28,7 @@ func (f *fakeLifecycleTicker) Tick(_ context.Context, now time.Time, limit int) 
 
 func tickLogger() (*slog.Logger, *bytes.Buffer) {
 	var buffer bytes.Buffer
-	return slog.New(slog.NewTextHandler(&buffer, &slog.HandlerOptions{Level: slog.LevelInfo})), &buffer
+	return slog.New(telemetryscrub.Handler(slog.NewTextHandler(&buffer, &slog.HandlerOptions{Level: slog.LevelInfo}))), &buffer
 }
 
 func TestTheLifecycleTickReportsCountsInTheAckSweepFormAndAFixedLineOnAFullBatch(t *testing.T) {
@@ -91,7 +92,7 @@ func TestTheLifecycleTickNamesEverySkippedCredentialOnEveryTick(t *testing.T) {
 	}
 	_ = stop()
 	out := buffer.String()
-	for _, want := range []string{credentialLifecycleTickSkippedMessage, "credential_id=cred_bad_one", "credential_id=cred_bad_two", "skipped=2"} {
+	for _, want := range []string{credentialLifecycleTickSkippedMessage, "aggregate_id=cred_bad_one", "aggregate_id=cred_bad_two", "skipped=2"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("log lacks %q: %s", want, out)
 		}
@@ -104,7 +105,7 @@ func TestTheLifecycleTickNamesEverySkippedCredentialOnEveryTick(t *testing.T) {
 		t.Fatal(err)
 	}
 	_ = stop()
-	if !strings.Contains(buffer.String(), "credential_id=cred_bad_one") {
+	if !strings.Contains(buffer.String(), "aggregate_id=cred_bad_one") {
 		t.Errorf("a tick that only skipped still names the credential: %s", buffer.String())
 	}
 }

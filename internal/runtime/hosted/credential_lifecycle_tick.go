@@ -39,7 +39,7 @@ func startCredentialLifecycleTick(ctx context.Context, ticker credentialLifecycl
 				logger.InfoContext(ctx, "credential lifecycle tick", "source", "tick", "expired", result.Expired, "first_touch", result.FirstTouch, "skipped", result.Skipped)
 			}
 			for _, id := range result.SkippedIDs {
-				logger.WarnContext(ctx, credentialLifecycleTickSkippedMessage, "credential_id", id)
+				logger.WarnContext(ctx, credentialLifecycleTickSkippedMessage, "aggregate_id", id)
 			}
 			if result.Full {
 				logger.InfoContext(ctx, credentialLifecycleTickFullMessage)
