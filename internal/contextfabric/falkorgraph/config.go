@@ -33,6 +33,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/full-chaos/dev-health-acr/internal/auth"
 	acrconfig "github.com/full-chaos/dev-health-acr/internal/config"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/embedprovider"
@@ -492,7 +493,7 @@ type GraphTelemetry interface {
 	// collapsed into the same unclassified `continue` -- a relationship
 	// hidden by authorization was indistinguishable from one that never
 	// existed at all.
-	RecordEdgesFilteredByReason(ctx context.Context, orgID string, authz, temporalWindow, selfLoop int)
+	RecordEdgesFilteredByReason(ctx context.Context, orgID string, authz, temporalWindow, selfLoop int, basis EdgeAuthzBasis)
 	// RecordCohortDeniedByAuthorization (CHAOS-4577) reports ONE DiscoverContext
 	// call that served the degrading cohort-denied row: authorization denied
 	// at least one candidate member of the requested kind, all of them or only
@@ -683,8 +684,9 @@ func (NoopTelemetry) RecordVectorFence(context.Context, string, VectorFenceResul
 func (NoopTelemetry) RecordLexiconExpansion(context.Context, string, bool, int, int, bool) {}
 func (NoopTelemetry) RecordSubjectCandidatesAuthzDropped(context.Context, string, int)     {}
 func (NoopTelemetry) RecordCohortMembersAuthzDropped(context.Context, string, int)         {}
-func (NoopTelemetry) RecordEdgesFilteredByReason(context.Context, string, int, int, int)   {}
-func (NoopTelemetry) RecordCohortDeniedByAuthorization(context.Context, string, int)       {}
+func (NoopTelemetry) RecordEdgesFilteredByReason(context.Context, string, int, int, int, EdgeAuthzBasis) {
+}
+func (NoopTelemetry) RecordCohortDeniedByAuthorization(context.Context, string, int) {}
 func (NoopTelemetry) RecordCohortExactNameCensusGate(context.Context, string, bool, CohortExactNameCensusBasis) {
 }
 func (NoopTelemetry) RecordCohortKindBasis(context.Context, string, contextfabric.SubjectKind, graphrank.CohortKindBasis, bool, CohortPoolTruncationBasis, []CohortPoolTruncationArm) {
@@ -926,9 +928,23 @@ func (t SlogTelemetry) RecordCohortMembersAuthzDropped(_ context.Context, orgID 
 // own Info-level, "nothing is wrong" posture -- an authorization exclusion,
 // a historical-window exclusion, and a self-loop exclusion are all ordinary,
 // expected outcomes of a correct read, not degradation.
-func (t SlogTelemetry) RecordEdgesFilteredByReason(_ context.Context, orgID string, authz, temporalWindow, selfLoop int) {
+//
+// For a project-only caller (CHAOS-12300) the line also carries the E1/E2
+// basis of the authz count, so a refusal on a wrong project set reads
+// differently from one on an attribution relation or an endpoint. Every
+// other class keeps the three counts alone.
+func (t SlogTelemetry) RecordEdgesFilteredByReason(_ context.Context, orgID string, authz, temporalWindow, selfLoop int, basis EdgeAuthzBasis) {
+	if !basis.ProjectOnly {
+		t.logger().Info("context_fabric: relationship edges filtered",
+			"org_id", contextfabric.SanitizeLogAttr(orgID), "authz", authz, "temporal_window", temporalWindow, "self_loop", selfLoop)
+		return
+	}
 	t.logger().Info("context_fabric: relationship edges filtered",
-		"org_id", contextfabric.SanitizeLogAttr(orgID), "authz", authz, "temporal_window", temporalWindow, "self_loop", selfLoop)
+		"org_id", contextfabric.SanitizeLogAttr(orgID), "authz", authz, "temporal_window", temporalWindow, "self_loop", selfLoop,
+		"grant_class", string(auth.GrantProjectOnly),
+		"authz_endpoint", basis.Endpoint, "authz_attribution_relation", basis.AttributionRelation,
+		"authz_project_list", basis.ProjectList, "authz_project_narrowing", basis.ProjectNarrowing,
+		"authz_unclassified", max(authz-basis.classified(), 0))
 }
 
 // RecordCohortDeniedByAuthorization logs at WARN, unlike every other
@@ -1143,6 +1159,8 @@ func (t SlogTelemetry) RecordTeamAnchorWalk(ctx context.Context, orgID string, d
 			"members", decision.Members,
 			"denied", decision.Denied,
 			"project_excluded", decision.ProjectExcluded,
+			"walk_crossed_pull_requests_explicit_text", decision.Crossed.ExplicitText,
+			"walk_crossed_pull_requests_heuristic", decision.Crossed.Heuristic,
 			"truncated", decision.Truncated)
 	}
 	if decision.Err != nil {

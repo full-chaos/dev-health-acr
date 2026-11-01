@@ -275,6 +275,9 @@ type treeWalk struct {
 	// hopProjectExcluded: the nodes a cohort member walk's hops left out of
 	// a requested project narrowing (CHAOS-12361), never denied.
 	hopProjectExcluded map[string]bool
+	// crossedLowerTier: the pull requests this walk crossed whose stated
+	// membership stands on a lower link tier, id to tier (CHAOS-12308).
+	crossedLowerTier map[string]string
 	// anchorOutOfScope: the requested project narrowing alone refused the
 	// anchor, so the walk did not run (CHAOS-12361).
 	anchorOutOfScope bool
@@ -413,9 +416,52 @@ func (s treeWalkState) narrowed() bool {
 	return needsProjectReach(s.principal) || len(s.scope.RepositorySlugs) > 0
 }
 
+// deny counts one refusal. For a project-only caller it also marks the
+// basis, so a walk with nothing else to report still writes the project-only
+// line (CHAOS-12300); the site that knows the reason notes it first.
 func (s treeWalkState) deny() {
 	s.out.filters.add(edgeFiltered, edgeFilterReasonAuthz)
 	s.out.denied++
+	if auth.ClassifyGrant(s.principal) == auth.GrantProjectOnly {
+		s.out.filters.Basis.ProjectOnly = true
+	}
+}
+
+// edgeBasisOf is the basis of one tree edge, by the rule that decided it: the
+// edge's attributes count only where the walk read them (ownershipEdges) and
+// the anchor did not refuse the hit first. A refusal on neither is an
+// endpoint's (E1).
+func (s treeWalkState) edgeBasisOf(relation contextfabric.RelationshipType, e *edge) graphrank.EdgeBasis {
+	var attributes map[string]interface{}
+	if s.ownershipEdges && !s.anchorDenied && e != nil {
+		attributes = e.Properties
+	}
+	return graphrank.AuthorizedEdgeBasis(s.principal, s.scope, string(relation), attributes)
+}
+
+// noteHitBasis classifies a hit authorizedHit refused a project-only caller.
+func (s treeWalkState) noteHitBasis(hop treeHop, h walkHit) {
+	if auth.ClassifyGrant(s.principal) == auth.GrantProjectOnly {
+		s.out.filters.Basis.note(s.edgeBasisOf(hop.edge.relation, h.rel))
+	}
+}
+
+// noteLinkBasis classifies a link row linkRowAuthorized refused a project-only
+// caller: the link edge, then the feed edge, then an endpoint. A fused read
+// that returned no feed edge names no reason: it stays unclassified.
+func (s treeWalkState) noteLinkBasis(r row, feed, link treeHop) {
+	if auth.ClassifyGrant(s.principal) != auth.GrantProjectOnly {
+		return
+	}
+	basis := s.edgeBasisOf(link.edge.relation, walkEdge(r["rl"]))
+	if basis == graphrank.EdgeBasisAdmitted && s.ownershipEdges && !s.anchorDenied {
+		feedEdge := walkEdge(r["ra"])
+		if feedEdge == nil {
+			return
+		}
+		basis = s.edgeBasisOf(feed.edge.relation, feedEdge)
+	}
+	s.out.filters.Basis.note(basis)
 }
 
 // denyOwned is deny for a node reached over an ownership edge of the anchor:
@@ -597,6 +643,7 @@ func (s treeWalkState) advance(hop treeHop, hits []walkHit, parents map[string]c
 				s.excludeByScope(h.to)
 				continue
 			}
+			s.noteHitBasis(hop, h)
 			s.deny()
 			continue
 		}
@@ -604,6 +651,7 @@ func (s treeWalkState) advance(hop treeHop, hits []walkHit, parents map[string]c
 		if !ok {
 			continue
 		}
+		s.noteCrossed(h.to)
 		reached[subject.CanonicalID] = h
 		subjects[subject.CanonicalID] = subject
 	}
@@ -633,9 +681,11 @@ func (s treeWalkState) members(hop treeHop, hits []walkHit, parents map[string]c
 				s.excludeByScope(h.to)
 				continue
 			}
+			s.noteHitBasis(hop, h)
 			s.denyOwned(hop, h.to)
 			continue
 		}
+		s.noteCrossed(h.to)
 		id := canonicalIDOf(h.to)
 		if tier, ok := s.out.endTiers[h.from]; ok {
 			if s.out.memberTiers == nil {
@@ -1100,6 +1150,7 @@ func (a *Adapter) linkSegment(ctx context.Context, key, orgID string, state tree
 				continue
 			}
 			if !authorized {
+				state.noteLinkBasis(l.row, feed, link)
 				state.deny()
 				continue
 			}
@@ -1111,6 +1162,8 @@ func (a *Adapter) linkSegment(ctx context.Context, key, orgID string, state tree
 				ends = append(ends, id)
 			}
 			admitted[id] = far
+			state.noteCrossed(l.near)
+			state.noteCrossed(far)
 			// The strongest admitted tier wins; a later, weaker row never
 			// overwrites it.
 			if best, ok := out.endTiers[id]; !ok || tierRank(tier.name) < tierRank(best) {

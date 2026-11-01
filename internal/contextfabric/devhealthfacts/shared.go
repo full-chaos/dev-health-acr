@@ -1343,7 +1343,12 @@ import (
 // project_own_uncategorized_unit_count, and names them in the roll-up reason
 // (CHAOS-12181). An answer saved under v258 says 0 own units for a project
 // whose own units in the window were all gated.
-const QueryVersion = "devhealthfacts.clickhouse.v259"
+// v259 -> v260: a read that is not a cohort read discloses a cut hop walk
+// (graph_hop_walk_truncated) and path edges a team narrowing dropped on missing
+// ownership (graph_team_narrowing_undecided_paths): its coverage is partial, and
+// a complete answer is floored to partial with one sentence per cause. An answer
+// saved under v259 holds no such disclosure and must not be reused.
+const QueryVersion = "devhealthfacts.clickhouse.v260"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each

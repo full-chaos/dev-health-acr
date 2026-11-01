@@ -338,7 +338,9 @@ func NewClickHouseProjectionSource(client contextpacket.ClickHouseQueryClient) (
 // WithWorkItemProjectMembership turns on the work-item project membership
 // (CHAOS-12226): every work-item entity states its current project set
 // (ProjectIdentities), and the work_items_project_membership table re-emits a
-// work item whose membership changed without the work item syncing. It
+// work item whose membership changed without the work item syncing. A pull
+// request states the union of its linked issues' sets the same way
+// (CHAOS-12308, pull_requests_project_membership). It
 // shares the source's one cursor, so turning it on backfills nothing by
 // itself: the backfill is a from-zero rebuild, and any change of the flag
 // goes with one, in a roll chris approves. Off, a work item states nothing
@@ -356,7 +358,7 @@ func (s *ClickHouseProjectionSource) tables() []entityTable {
 	if !s.workItemProjectMembership {
 		return entityTables
 	}
-	return withWorkItemProjectMembership(entityTables)
+	return withPullRequestProjectMembership(withWorkItemProjectMembership(entityTables))
 }
 
 // WithOverlap sets the trailing re-read window once caught up (CHAOS-7263;

@@ -194,8 +194,8 @@ func init() {
 			kind:           vocabAdditive,
 			clientValidate: "none: the sidecar passes data tool responses through as raw JSON and validates no field of them",
 			sites:          []string{"read_facts:coverage.items.outcome"},
-			// schema: "fact_served", "read_no_fact", "measured_zero", "not_applicable", "unavailable", "stale", "truncated", "withheld_response_budget"
-			goSet:      strs(directread.OutcomeFactServed, directread.OutcomeReadNoFact, directread.OutcomeMeasuredZero, directread.OutcomeNotApplicable, directread.OutcomeUnavailable, directread.OutcomeStale, directread.OutcomeTruncated, directread.OutcomeWithheldBudget),
+			// schema: "fact_served", "read_no_fact", "measured_zero", "not_applicable", "unavailable", "stale", "truncated", "withheld_response_budget", "withheld_project_scope"
+			goSet:      strs(directread.OutcomeFactServed, directread.OutcomeReadNoFact, directread.OutcomeMeasuredZero, directread.OutcomeNotApplicable, directread.OutcomeUnavailable, directread.OutcomeStale, directread.OutcomeTruncated, directread.OutcomeWithheldBudget, directread.OutcomeWithheldProjectScope),
 			exhaustive: true,
 		},
 		outputVocabulary{

@@ -142,6 +142,42 @@ func ProjectNarrowingUnproven(requested contextfabric.RequestedScope, attributes
 	return applies && membership != ProjectMembershipMember
 }
 
+// LowerTierMembershipOf names the lower link tier a pull request's stated
+// membership stands on, when a requested project narrowing cannot rest on it
+// (CHAOS-12308): the tier a consumer must name. "" for every other node: a
+// native membership proves, and an unstated one has no tier to name.
+func LowerTierMembershipOf(requested contextfabric.RequestedScope, attributes map[string]interface{}) string {
+	if !lowerTierProjectMembership(attributes) || !ProjectNarrowingUnproven(requested, attributes) {
+		return ""
+	}
+	if _, stated := statedProjectIdentities(attributes[AuthorizationProjectIdentitiesAttr]); !stated {
+		return ""
+	}
+	switch tier := StringAttribute(attributes, ProjectMembershipTierAttr); tier {
+	case contextfabric.TreeLinkTierExplicitText, contextfabric.TreeLinkTierHeuristic:
+		return tier
+	default:
+		return ""
+	}
+}
+
+// LowerTierEndpoints is LowerTierMembershipOf over one edge's endpoints:
+// canonical id to tier, nil when neither has one.
+func LowerTierEndpoints(requested contextfabric.RequestedScope, endpoints ...map[string]interface{}) map[string]string {
+	var tiers map[string]string
+	for _, attributes := range endpoints {
+		tier := LowerTierMembershipOf(requested, attributes)
+		if tier == "" {
+			continue
+		}
+		if tiers == nil {
+			tiers = map[string]string{}
+		}
+		tiers[StringAttribute(attributes, "canonical_id")] = tier
+	}
+	return tiers
+}
+
 // ProjectNarrowingAdmits is the requested-project part of AuthorizedAttributes
 // alone: no project narrowing, or a real project list that holds a requested
 // id, or a "*" list that stated membership does not refuse
@@ -182,10 +218,21 @@ func requestedProjectMembership(requested contextfabric.RequestedScope, attribut
 	if value, isString := attributes[authorizationProjectsAttr].(string); !isString || value != "*" {
 		return ProjectMembershipUnstated, false
 	}
-	if requested.ProjectNarrowing == nil {
+	if requested.ProjectNarrowing == nil || lowerTierProjectMembership(attributes) {
 		return ProjectMembershipUnstated, true
 	}
 	return ProjectMembershipOf(attributes, requested.ProjectNarrowing.Identities), true
+}
+
+// lowerTierProjectMembership reports a pull request whose stated membership
+// does not stand on native links only (CHAOS-12308): a lower tier neither
+// proves nor denies a requested narrowing (the node stays admitted and
+// disclosed as unverified), and it never admits a project-only caller. A pull
+// request's membership with no tier is not proven either. A work item's own
+// project link needs no tier.
+func lowerTierProjectMembership(attributes map[string]interface{}) bool {
+	return contextfabric.SubjectKind(StringAttribute(attributes, "subject_kind")) == contextfabric.SubjectPullRequest &&
+		StringAttribute(attributes, ProjectMembershipTierAttr) != contextfabric.TreeLinkTierNative
 }
 
 // AuthorizationProjectIdentitiesAttr is the work-item node attribute that
@@ -194,6 +241,10 @@ func requestedProjectMembership(requested contextfabric.RequestedScope, attribut
 // absent when no producer stated it. It is never "*" and never read with
 // wildcard meaning. falkorgraph writes it (propAuthzProjectIdentities).
 const AuthorizationProjectIdentitiesAttr = "authorization_project_identities"
+
+// ProjectMembershipTierAttr is the pull request node attribute that names the
+// weakest link tier its stated membership stands on (CHAOS-12308).
+const ProjectMembershipTierAttr = "property_" + contractsv1.ContextFabricProjectMembershipTierProperty
 
 // ProjectMembership is what a node's authorization_project_identities says
 // about a set of projects (CHAOS-12299, shared with CHAOS-12229).
@@ -258,13 +309,16 @@ func statedProjectIdentities(value interface{}) ([]string, bool) {
 // docs/design/context-fabric-project-only-scope.md). The repository grant is
 // never consulted. A node is admitted only when it is
 //   - the caller's own organization node,
-//   - a project node whose canonical id is in the grant, or
+//   - a project node whose canonical id is in the grant,
 //   - a work item whose stated membership (authorization_project_identities,
-//     ProjectMembershipOf) meets the grant;
+//     ProjectMembershipOf) meets the grant, or
+//   - a pull request whose stated membership meets the grant and stands on
+//     native links only (CHAOS-12308);
 //
-// everything else is denied: a work item with no stated membership, a team
-// (CHAOS-12323 adds ownership reach), a pull request (CHAOS-12308), a
-// repository, a deployment, an incident, a document or an episode.
+// everything else is denied: a work item or a pull request with no stated
+// membership, a pull request with a lower-tier membership, a team
+// (CHAOS-12323 adds ownership reach), a repository, a deployment, an incident,
+// a document or an episode.
 //
 // An attribute map with no subject kind is denied: it is a synthetic
 // repository or team decision, or an edge's own attributes, which only
@@ -291,6 +345,10 @@ func projectOnlyAdmits(principal storage.Principal, requested contextfabric.Requ
 		return slices.Contains(principal.ProjectScopes, StringAttribute(attributes, "canonical_id"))
 	case contextfabric.SubjectWorkItem:
 		return ProjectMembershipOf(attributes, principal.ProjectScopes) == ProjectMembershipMember
+	case contextfabric.SubjectPullRequest:
+		// CHAOS-12308: a link's tier grants no authority: only a pull request
+		// whose membership stands on native links is admitted.
+		return !lowerTierProjectMembership(attributes) && ProjectMembershipOf(attributes, principal.ProjectScopes) == ProjectMembershipMember
 	default:
 		return false
 	}
@@ -311,24 +369,67 @@ func projectOnlyAdmits(principal storage.Principal, requested contextfabric.Requ
 //     edge is denied until CHAOS-12229 maps them. "*" or an absent list
 //     defers to the endpoints; any other value denies.
 func AuthorizedEdge(principal storage.Principal, requested contextfabric.RequestedScope, relation string, attributes map[string]interface{}) bool {
+	return AuthorizedEdgeBasis(principal, requested, relation, attributes) == EdgeBasisAdmitted
+}
+
+// EdgeBasis is why AuthorizedEdge decided an edge's own attributes
+// (CHAOS-12300): the E1/E2 decision basis a trace counts per outcome. It is
+// telemetry only; AuthorizedEdgeBasis is the one decision.
+type EdgeBasis string
+
+const (
+	// EdgeBasisAdmitted: the edge's own attributes pass.
+	EdgeBasisAdmitted EdgeBasis = "admitted"
+	// EdgeBasisAttributes: a caller of any class but project_only, whose
+	// edge attributes AuthorizedAttributes refuses.
+	EdgeBasisAttributes EdgeBasis = "attributes"
+	// EdgeBasisProjectNarrowing: a project-only request that names projects
+	// (ruling B, CHAOS-12324).
+	EdgeBasisProjectNarrowing EdgeBasis = "project_narrowing_refused"
+	// EdgeBasisAttributionRelation: E2, a DOCUMENTED_BY or HAS_EPISODE edge
+	// under project_only.
+	EdgeBasisAttributionRelation EdgeBasis = "attribution_relation"
+	// EdgeBasisProjectList: E1, a project-only caller and an edge whose real
+	// project list holds no granted identity, or a list of an unreadable
+	// shape.
+	EdgeBasisProjectList EdgeBasis = "project_list"
+)
+
+// EdgeBasisVocabulary is the closed set of edge bases.
+func EdgeBasisVocabulary() [5]EdgeBasis {
+	return [5]EdgeBasis{EdgeBasisAdmitted, EdgeBasisAttributes, EdgeBasisProjectNarrowing, EdgeBasisAttributionRelation, EdgeBasisProjectList}
+}
+
+// AuthorizedEdgeBasis is AuthorizedEdge with its basis: the one place the
+// edge half of an edge's admission is decided.
+func AuthorizedEdgeBasis(principal storage.Principal, requested contextfabric.RequestedScope, relation string, attributes map[string]interface{}) EdgeBasis {
 	if auth.ClassifyGrant(principal) != auth.GrantProjectOnly {
-		return AuthorizedAttributes(principal, requested, attributes)
+		if AuthorizedAttributes(principal, requested, attributes) {
+			return EdgeBasisAdmitted
+		}
+		return EdgeBasisAttributes
 	}
-	if len(requested.ProjectIDs) > 0 || IsObservationAttributionRelation(NormalizeRelation(relation)) {
-		return false
+	if len(requested.ProjectIDs) > 0 {
+		return EdgeBasisProjectNarrowing
+	}
+	if IsObservationAttributionRelation(NormalizeRelation(relation)) {
+		return EdgeBasisAttributionRelation
 	}
 	raw, present := attributes[authorizationProjectsAttr]
 	if !present {
-		return true
+		return EdgeBasisAdmitted
 	}
+	admitted := false
 	switch projects := raw.(type) {
 	case string:
-		return projects == "*"
+		admitted = projects == "*"
 	case []string:
-		return slices.ContainsFunc(projects, func(project string) bool { return slices.Contains(principal.ProjectScopes, project) })
-	default:
-		return false
+		admitted = slices.ContainsFunc(projects, func(project string) bool { return slices.Contains(principal.ProjectScopes, project) })
 	}
+	if admitted {
+		return EdgeBasisAdmitted
+	}
+	return EdgeBasisProjectList
 }
 
 // AuthorizedThroughLink is the issue side of a link of record under a

@@ -596,7 +596,11 @@ There is no cache across calls; inside one request the read is reused. The
 A granted read writes one Debug line, `principal access read granted`, with
 `client_class`, `decision`, `scope_repositories` (the effective scope's size),
 `inventory_repositories`, `flags_enforced` (false on capabilities) and
-`elapsed_ms`, and no id but the request id.
+`elapsed_ms`, and no id but the request id. A project-only principal's
+granted read writes the same line at Info instead, with three more fields:
+`grant_class` (`project_only`), `project_scope_count` and `grant_digest_class`
+(`project`), never a project id or the digest value (CHAOS-12300; see
+[the project-only design](design/context-fabric-project-only-scope.md#observability)).
 
 **Effective scope.** The credential's repository grant within the
 organization's live inventory: every inventory repository the grant allows
@@ -604,6 +608,11 @@ organization's live inventory: every inventory repository the grant allows
 handler runs with the principal narrowed to that list. An empty list is a typed
 deny-all, refused 409 `no_repository` before any handler: the principal's
 scopes are never set to `[]`, which reads as unrestricted downstream.
+
+The OpenAPI lists this 409 on every route behind the access check (every
+route in `protectedRoutes()`); `TestEveryProtectedRouteListsNoRepositoryInTheOpenAPI`
+fails when one omits it. The credential lifecycle routes and
+`oauth/device_approval` do not pass this check; their 409 is a different code.
 
 **Budget.** On the investigation create the read runs inside the request's
 budget (min of `X-ACR-Wait-Budget-Seconds` and `ACR_REQUEST_TIMEOUT`, counted

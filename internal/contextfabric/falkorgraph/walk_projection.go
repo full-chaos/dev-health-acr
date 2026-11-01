@@ -16,7 +16,7 @@ import (
 // returns thousands of rows, so the walk's reads return a map of these
 // properties in place of the node. The link edge is read the same way: its tier,
 // its rank, its relationship id and the three authorization lists.
-var walkNodeProperties = []string{propKind, propCanonicalID, propLabel, propAuthzRepos, propAuthzProjects, propAuthzTeams, propAuthzProjectIdentities}
+var walkNodeProperties = []string{propKind, propCanonicalID, propLabel, propAuthzRepos, propAuthzProjects, propAuthzTeams, propAuthzProjectIdentities, propProjectMembershipTier}
 
 var walkLinkProperties = []string{propPropertyPrefix + linkTierProperty, propPropertyPrefix + linkRankProperty, propRelationshipID, propAuthzRepos, propAuthzProjects, propAuthzTeams}
 

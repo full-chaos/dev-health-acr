@@ -288,6 +288,9 @@ var MCPInvestigateQuestionUntrustedFields = []string{
 	"structured.coverage_details[].phrasing",
 	"structured.coverage_details[].raw",
 	"structured.evidence_ref_labels{}",
+	// CHAOS-12413: server-composed from the closed registry, classified
+	// conservatively like every other "label" leaf here.
+	"structured.vocabulary_labels{}",
 	"structured.limitations[]",
 	"structured.warnings[]",
 	// CHAOS-3972 P3+W2: the projection now carries the SAME
@@ -413,6 +416,9 @@ var MCPInvestigationResultUntrustedFields = []string{
 	"structured.coverage.details[].phrasing",
 	"structured.coverage.details[].raw",
 	"structured.evidence_ref_labels{}",
+	// CHAOS-12413: server-composed from the closed registry, classified
+	// conservatively like every other "label" leaf here.
+	"structured.vocabulary_labels{}",
 	"structured.limitations[]",
 	"structured.warnings[]",
 	// CHAOS-3900 W1: WindowOption.Label IS server-rendered, closed-vocabulary

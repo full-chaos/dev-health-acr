@@ -43,6 +43,8 @@ func validDetailForCode(code ContextFabricCoverageDetailCode) ContextFabricCover
 		ContextFabricCoverageDetailGraphCohortDeniedByAuthorization,
 		ContextFabricCoverageDetailGraphProjectDeploymentsUnlinked,
 		ContextFabricCoverageDetailWorkItemRepositoryUnlinked,
+		ContextFabricCoverageDetailGraphAnswerPullRequestsOnExplicitTextLinks,
+		ContextFabricCoverageDetailGraphAnswerPullRequestsOnHeuristicLinks,
 		ContextFabricCoverageDetailGraphUnknownRelationshipType:
 		d.Source, d.Count = "context-fabric:graph", intPtr(3)
 	case ContextFabricCoverageDetailGraphExactNameCandidatesTruncated:
@@ -87,10 +89,18 @@ func validDetailForCode(code ContextFabricCoverageDetailCode) ContextFabricCover
 		d.Source, d.Degrading, d.Kind = "context-fabric:graph", true, ContextFabricSubjectDeployment
 	case ContextFabricCoverageDetailGraphNoMemberFound:
 		d.Source, d.Degrading, d.Kind = "context-fabric:graph", true, ContextFabricSubjectProject
+	case ContextFabricCoverageDetailGraphHopWalkTruncated:
+		// Source only: the candidates past the budget were not read, so there
+		// is nothing to count.
+		d.Source, d.Degrading = "context-fabric:graph", true
+	case ContextFabricCoverageDetailGraphTeamNarrowingUndecidedPaths:
+		d.Source, d.Degrading, d.Count = "context-fabric:graph", true, intPtr(3)
 	case ContextFabricCoverageDetailSynthesisInputBounded:
 		d.Source, d.Degrading, d.FactKind, d.Declared, d.Served = "context-fabric:synthesis", false, ContextFabricFactWork, intPtr(200), intPtr(90)
 	case ContextFabricCoverageDetailFactScoreWithheld:
 		d.Source, d.FactKind = "context-fabric:synthesis", ContextFabricFactHealth
+	case ContextFabricCoverageDetailProjectScopeWithheld:
+		d.Source, d.Degrading, d.FactKind, d.SourceState, d.Raw = "canonical_fact:health", true, ContextFabricFactHealth, ContextFabricSourceUnauthorized, "health: withheld"
 	case ContextFabricCoverageDetailSynthesisModelFailed:
 		d.Source, d.FailureClass, d.RetryHint = "context-fabric:synthesis", ContextFabricSynthesisFailureRejected, ContextFabricRetryUnlikelyToHelp
 	case ContextFabricCoverageDetailSynthesisNotRun:

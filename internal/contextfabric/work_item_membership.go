@@ -220,6 +220,8 @@ type WorkItemMembershipResult struct {
 	TeamFloor     TeamNarrowingFloor
 	// ProjectExcluded: TreeWorkItemWalk.ProjectExcluded, for the walk line.
 	ProjectExcluded int
+	// Crossed: TreeWorkItemWalk.Crossed, for the walk line.
+	Crossed CrossedPullRequests
 }
 
 // WorkItemMembershipLease must remain held until the complete future answer

@@ -4172,13 +4172,20 @@
     "EntityProjection": {
       "allOf": [
         {
-          "description": "CHAOS-12226: only a work-item entity may state project_identities.",
+          "description": "CHAOS-12226, CHAOS-12308: only a work-item or a pull-request entity may state project_identities.",
           "if": {
             "properties": {
               "subject": {
                 "properties": {
                   "kind": {
-                    "const": "work_item"
+                    "anyOf": [
+                      {
+                        "const": "work_item"
+                      },
+                      {
+                        "const": "pull_request"
+                      }
+                    ]
                   }
                 }
               }
@@ -4252,7 +4259,7 @@
           "$ref": "#/$defs/EntityAuthorizationScope"
         },
         "project_identities": {
-          "description": "CHAOS-12226: a work item's current project membership, as canonical project.v2 identities from its own project link. Absent: not stated. Empty: stated, in no project. Only a work-item entity may carry it; never a wildcard.",
+          "description": "CHAOS-12226, CHAOS-12308: a work item's current project membership, as canonical project.v2 identities from its own project link; on a pull request, the union of the memberships of the issues linked to it, with the weakest contributing link tier in the project_membership_tier property. Absent: not stated. Empty: stated, in no project. Only a work-item or a pull-request entity may carry it; never a wildcard.",
           "type": "array",
           "items": {
             "type": "string",
@@ -5494,7 +5501,7 @@
         },
         "code": {
           "type": "string",
-          "description": "Open vocabulary; documented values: fact_unconfigured, fact_no_declaring_producer, fact_table_shape_undeclared, fact_scope_unexpanded, fact_read_failed, fact_provider_reported, fact_pruned, fact_narrowed, graph_endpoint_lookup_failed, graph_exact_name_candidates_truncated, graph_project_deployments_unlinked, work_item_repository_unlinked, graph_cohort_denied_by_authorization, graph_unknown_relationship_type, graph_validity_unbounded, reuse_auxiliary_refs_stripped, answer_terminated_before_attempt, population_truncated, requirement_read_not_planned, read_population_unverified, fact_read_origin_state, kind_census_truncated, graph_walk_cut_before_member, computed_population_absent, requirement_not_evaluable, graph_no_member_found, synthesis_input_bounded, synthesis_model_failed, synthesis_not_run, fact_score_withheld. A client must tolerate values it does not know.",
+          "description": "Open vocabulary; documented values: fact_unconfigured, fact_no_declaring_producer, fact_table_shape_undeclared, fact_scope_unexpanded, fact_read_failed, fact_provider_reported, fact_pruned, fact_narrowed, graph_endpoint_lookup_failed, graph_exact_name_candidates_truncated, graph_project_deployments_unlinked, work_item_repository_unlinked, graph_cohort_denied_by_authorization, graph_unknown_relationship_type, graph_validity_unbounded, graph_answer_pull_requests_on_explicit_text_links, graph_answer_pull_requests_on_heuristic_links, reuse_auxiliary_refs_stripped, answer_terminated_before_attempt, population_truncated, requirement_read_not_planned, read_population_unverified, fact_read_origin_state, kind_census_truncated, graph_walk_cut_before_member, computed_population_absent, requirement_not_evaluable, graph_no_member_found, graph_hop_walk_truncated, graph_team_narrowing_undecided_paths, synthesis_input_bounded, synthesis_model_failed, synthesis_not_run, fact_score_withheld, project_scope_withheld. A client must tolerate values it does not know.",
           "x-documented-values": [
             "fact_unconfigured",
             "fact_no_declaring_producer",
@@ -5511,6 +5518,8 @@
             "graph_cohort_denied_by_authorization",
             "graph_unknown_relationship_type",
             "graph_validity_unbounded",
+            "graph_answer_pull_requests_on_explicit_text_links",
+            "graph_answer_pull_requests_on_heuristic_links",
             "reuse_auxiliary_refs_stripped",
             "answer_terminated_before_attempt",
             "population_truncated",
@@ -5522,10 +5531,13 @@
             "computed_population_absent",
             "requirement_not_evaluable",
             "graph_no_member_found",
+            "graph_hop_walk_truncated",
+            "graph_team_narrowing_undecided_paths",
             "synthesis_input_bounded",
             "synthesis_model_failed",
             "synthesis_not_run",
-            "fact_score_withheld"
+            "fact_score_withheld",
+            "project_scope_withheld"
           ]
         },
         "degrading": {

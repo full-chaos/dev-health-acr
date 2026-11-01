@@ -609,6 +609,16 @@ func (e *Engine) terminalResult(
 		limitations, termsDisplaced = appendBoundedLimitations(limitations, []string{contractsv1.ContextFabricSubjectTermsFromFrameLimitation})
 		conflictDisplaced += termsDisplaced
 	}
+	// CHAOS-12360: the requested repository narrowing stands, and the answer
+	// says it refused a real match, so the caller can widen it. The resolution
+	// carries the count for an unrestricted principal only. Both terminals
+	// state it: with no stated window the clarification comes first, and the
+	// no_match follows its confirmation.
+	if resolution.OutsideRequestedRepositories > 0 {
+		var outsideDisplaced int
+		limitations, outsideDisplaced = appendBoundedLimitations(limitations, []string{contractsv1.ContextFabricOutsideRequestedRepositoriesLimitation(resolution.OutsideRequestedRepositories)})
+		conflictDisplaced += outsideDisplaced
+	}
 	answer := statusSentence(status, resolution)
 	if status == InvestigationClarificationRequired && resolution.ClarificationPrompt != "" {
 		answer += " " + resolution.ClarificationPrompt

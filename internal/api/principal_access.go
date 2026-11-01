@@ -155,14 +155,32 @@ func (a *App) requireLiveAccess(enforceFlags bool, next http.Handler) http.Handl
 			return
 		}
 		ctx = context.WithValue(ctx, liveAccessKey{}, liveAccess{access: access})
-		// A granted read's basis, at Debug (one line per user-class call):
-		// a narrowing regression is visible here, not only as a 2xx.
-		a.logger.DebugContext(ctx, "principal access read granted",
-			"request_id", contextfabric.SanitizeLogAttr(RequestID(ctx)), "client_class", string(principal.ClientClass),
-			"decision", "granted", "scope_repositories", len(effective), "inventory_repositories", len(access.Repositories),
-			"flags_enforced", enforceFlags, "elapsed_ms", elapsed.Milliseconds())
+		a.logAccessGranted(ctx, principal, len(effective), len(access.Repositories), enforceFlags, elapsed)
 		next.ServeHTTP(w, r.WithContext(ctx))
 	})
+}
+
+// logAccessGranted writes a granted read's basis, at Debug (one line per
+// user-class call): a narrowing regression is visible here, not only as a
+// 2xx. A project-only admission's basis is at Info (CHAOS-12300, design V5),
+// corpus-safe: the class, the project count and the digest class, never an id
+// or the digest value.
+func (a *App) logAccessGranted(ctx context.Context, principal storage.Principal, scopeRepositories, inventoryRepositories int, enforceFlags bool, elapsed time.Duration) {
+	requestID := contextfabric.SanitizeLogAttr(RequestID(ctx))
+	grantClass := auth.ClassifyGrant(principal)
+	if grantClass != auth.GrantProjectOnly {
+		a.logger.DebugContext(ctx, "principal access read granted",
+			"request_id", requestID, "client_class", string(principal.ClientClass),
+			"decision", "granted", "scope_repositories", scopeRepositories, "inventory_repositories", inventoryRepositories,
+			"flags_enforced", enforceFlags, "elapsed_ms", elapsed.Milliseconds())
+		return
+	}
+	a.logger.InfoContext(ctx, "principal access read granted",
+		"request_id", requestID, "client_class", string(principal.ClientClass),
+		"decision", "granted", "scope_repositories", scopeRepositories, "inventory_repositories", inventoryRepositories,
+		"flags_enforced", enforceFlags, "elapsed_ms", elapsed.Milliseconds(),
+		"grant_class", string(grantClass), "project_scope_count", len(principal.ProjectScopes),
+		"grant_digest_class", string(contextfabric.GrantDigestClassOf(contextfabric.StoredResultGrantDigest(principal))))
 }
 
 // accessDenyReason is why the live answer refuses the principal ("" when it

@@ -17,7 +17,7 @@ import (
 // organization's graph cannot be recreated by a request. A new write site
 // fails this test until it is classified here.
 var graphWriteFunctions = []string{
-	"applyTombstone", "clearNodeVectors", "createFulltextIndex", "createIndex", "createVectorIndexWithOptions", "deleteOutrankedLinks",
+	"applyTombstone", "clearLinkedProjectMembership", "clearNodeVectors", "createFulltextIndex", "createIndex", "createVectorIndexWithOptions", "deleteOutrankedLinks",
 	"dropVectorIndex", "projectContent", "projectEntity", "projectEpisode", "projectRelationship",
 	"retractOpenEdges", "writeNodeVector", "writeWatermark",
 }

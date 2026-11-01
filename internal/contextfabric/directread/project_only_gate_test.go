@@ -58,8 +58,10 @@ func TestTheEdgeGateDeniesAProjectOnlyCallerAnAttributionEdge(t *testing.T) {
 	principal := storage.Principal{OrgID: orgA, ProjectScopes: []string{"project.v2:github:P-1"}}
 	open := map[string]interface{}{"authorization_projects": "*", "authorization_repositories": "*"}
 	for _, relation := range []string{string(contractsv1.ContextFabricRelationshipDocumentedBy), string(contractsv1.ContextFabricRelationshipHasEpisode)} {
-		if got := EdgeGate(principal, relation, open, true, true); got != EdgeWithheldAttributes {
-			t.Errorf("%s: %s, want withheld on its attributes", relation, got)
+		// CHAOS-12300: the basis is named, E2 (attribution_relation), not
+		// lumped into the edge's attributes.
+		if got := EdgeGate(principal, relation, open, true, true); got != EdgeWithheldAttributionRelation {
+			t.Errorf("%s: %s, want withheld as an attribution relation", relation, got)
 		}
 	}
 	if got := EdgeGate(principal, string(contractsv1.ContextFabricRelationshipBelongsToProject), open, true, true); got != EdgeVisible {
@@ -100,5 +102,53 @@ func TestTheRelationshipsReaderWithholdsAnAttributionEdgeFromAProjectOnlyCaller(
 	})
 	if len(ids) != 1 || ids[0] != "rel-belongs" {
 		t.Fatalf("served %v, want only the structural edge", ids)
+	}
+}
+
+// CHAOS-12330: read_facts names a project-only refusal, on a kind read directly
+// and on one reached only through scope expansion. No provider and no expander
+// runs, the read is partial, and the response is valid against the schema.
+func TestReadFactsNamesAProjectOnlyRefusal(t *testing.T) {
+	principal := storage.Principal{OrgID: orgA, Subject: "u", CredentialID: "c", ProjectScopes: []string{projectP.CanonicalID}}
+	graph := graphOfOrgA()
+	graph.nodes[graphrank.SubjectKey(projectP)] = map[string]interface{}{"subject_kind": "project", "canonical_id": projectP.CanonicalID, "authorization_repositories": "*", "authorization_projects": "*", "authorization_teams": "*"}
+	direct := perSubjectProvider(contextfabric.FactHealth, contractsv1.ContextFabricSubjectProject)
+	expanded := perSubjectProvider(contextfabric.FactBlockers, contractsv1.ContextFabricSubjectWorkItem)
+	expander := &scriptedExpander{expand: expandTo(labelled(workA, "WI-A"))}
+	reader := directExpandingReader(t, graph, expander, nil, direct, expanded)
+	response, err := reader.Read(requestContext(), principal, FactsRequest{
+		Kinds: []string{"health", "blockers"}, Subjects: []RequestSubject{{Kind: "project", CanonicalID: projectP.CanonicalID}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(direct.queries) != 0 || len(expanded.queries) != 0 || len(expander.requests) != 0 {
+		t.Fatalf("provider queries %d and %d, expansions %d, want none", len(direct.queries), len(expanded.queries), len(expander.requests))
+	}
+	if response.Status != StatusPartial || len(response.Facts) != 0 {
+		t.Fatalf("status %q, facts %d", response.Status, len(response.Facts))
+	}
+	for _, kind := range []string{"health", "blockers"} {
+		row := coverageOf(t, response, kind, projectP)
+		if row.Outcome != OutcomeWithheldProjectScope || row.KindState != string(contextfabric.SourceUnauthorized) {
+			t.Fatalf("%s row = %+v", kind, row)
+		}
+		if want := contractsv1.ContextFabricProjectScopeWithheldFactLabel(contextfabric.FactKind(kind)); row.Reason != want {
+			t.Fatalf("%s reason = %q, want %q", kind, row.Reason, want)
+		}
+	}
+	validateAgainst(t, "mcp_read_facts_response.v1.schema.json", []byte(mustJSON(t, response)))
+
+	// Another class reads the same kinds: the control that makes the zeros
+	// above mean something.
+	control := perSubjectProvider(contextfabric.FactHealth, contractsv1.ContextFabricSubjectProject)
+	served, err := directExpandingReader(t, graphOfOrgA(), expander, nil, control).Read(requestContext(), unrestrictedA(), FactsRequest{
+		Kinds: []string{"health"}, Subjects: []RequestSubject{{Kind: "project", CanonicalID: projectP.CanonicalID}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(control.queries) != 1 || coverageOf(t, served, "health", projectP).Outcome != OutcomeFactServed {
+		t.Fatalf("control: queries %d, response %s", len(control.queries), mustJSON(t, served))
 	}
 }

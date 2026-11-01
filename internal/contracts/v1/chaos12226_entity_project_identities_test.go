@@ -71,13 +71,18 @@ func TestProjectIdentitiesRejectAnythingButCanonicalProjectIDs(t *testing.T) {
 	}
 }
 
-func TestOnlyAWorkItemMayCarryProjectIdentities(t *testing.T) {
+func TestOnlyAWorkItemOrAPullRequestMayCarryProjectIdentities(t *testing.T) {
 	t.Parallel()
+	pullRequest := chaos12226WorkItem(chaos12226List("project.v2:github:P-1"))
+	pullRequest.Subject = ContextFabricSubjectRef{Kind: ContextFabricSubjectPullRequest, CanonicalID: "pull_request:repo-1:7", Label: "PR 7"}
+	if err := pullRequest.Validate(); err != nil {
+		t.Errorf("pull request entity with project_identities: Validate() = %v, want nil", err)
+	}
 	team := chaos12226WorkItem(chaos12226List())
 	team.Subject = ContextFabricSubjectRef{Kind: ContextFabricSubjectTeam, CanonicalID: "team:platform", Label: "Platform"}
 	team.Authorization = ContextFabricAuthorizationScope{TeamIDs: []string{"platform"}}
 	if err := team.Validate(); err == nil {
-		t.Error("team entity with project_identities accepted; only a work item may carry it")
+		t.Error("team entity with project_identities accepted; only a work item or a pull request may carry it")
 	}
 	team.ProjectIdentities = nil
 	if err := team.Validate(); err != nil {
@@ -120,7 +125,7 @@ func TestProjectIdentitiesKeepNotStatedApartFromEmpty(t *testing.T) {
 // The published schema agrees with the Go validator on every value above
 // (codex r1 P3): the same canonical spellings pass and the same malformed
 // ones fail the items pattern, and the schema, too, admits the property on a
-// work item only.
+// work item or a pull request only.
 func TestTheSchemaAgreesWithGoOnProjectIdentities(t *testing.T) {
 	t.Parallel()
 	raw, err := os.ReadFile("../../../contracts/jsonschema/v1/context_fabric_common.v1.schema.json")
@@ -158,7 +163,7 @@ func TestTheSchemaAgreesWithGoOnProjectIdentities(t *testing.T) {
 			t.Errorf("%q: go err=%v, schema valid=%v; want both to refuse", value, goErr, validate(property, []string{value}))
 		}
 	}
-	for kind, want := range map[string]bool{"work_item": true, "team": false, "project": false} {
+	for kind, want := range map[string]bool{"work_item": true, "pull_request": true, "team": false, "project": false} {
 		instance := map[string]any{"subject": map[string]any{"kind": kind}, "project_identities": []string{}}
 		if got := validate(map[string]any{"allOf": conditional}, instance); got != want {
 			t.Errorf("schema: %s entity with project_identities valid=%v, want %v", kind, got, want)

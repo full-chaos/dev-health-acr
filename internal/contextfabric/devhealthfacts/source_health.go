@@ -75,11 +75,7 @@ func (p *SourceHealthProvider) ReadFacts(ctx context.Context, principal storage.
 	if err != nil {
 		return contextfabric.FactProviderResult{}, err
 	}
-	orgSubjects := subjectsOfKind(query.Subjects, contextfabric.SubjectOrganization)
-	if projectOnlyWithheld(principal) {
-		orgSubjects = nil
-	}
-	orgSubjectIDs, bySubject, rejected := subjectIndex(orgSubjects, organizationPrefix)
+	orgSubjectIDs, bySubject, rejected := subjectIndex(subjectsOfKind(query.Subjects, contextfabric.SubjectOrganization), organizationPrefix)
 	// ONE result variable and a deferred disclosure so no branch can skip the
 	// shape-rejection note (same construction as every provider here).
 	defer func() {
