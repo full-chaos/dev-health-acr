@@ -51,14 +51,21 @@ func (a *Adapter) TreeWorkItemMembers(ctx context.Context, principal storage.Pri
 	if err != nil {
 		return contextfabric.TreeWorkItemWalk{}, err
 	}
+	// CHAOS-12319: a requested team narrowing (team_narrowing.go).
+	ctx, narrowing, err := a.withTeamNarrowing(ctx, key, principal.OrgID, scope, anchor)
+	if err != nil {
+		return contextfabric.TreeWorkItemWalk{}, graphNotProjectedError(err)
+	}
 	walk, err := a.treeMembers(ctx, key, principal.OrgID, principal, scope, anchor, treeIssue, limit, temporalFilter{})
 	if err != nil {
 		return contextfabric.TreeWorkItemWalk{}, graphNotProjectedError(err)
 	}
 	out := contextfabric.TreeWorkItemWalk{
 		PullRequests: walk.linkSources, LinkedIssues: max(walk.linkIssueTargets, 0),
-		Denied: walk.linkDeniedTargets, Truncated: walk.truncated,
+		Denied: walk.linkDeniedTargets, Truncated: walk.truncated || narrowing.Undecided(),
 		ProjectNarrowingUnverified: walk.projectNarrowingUnverified,
+		AnchorOutsideTeamNarrowing: narrowing != nil && !narrowing.anchorOwned,
+		TeamNarrowing:              narrowing.Basis(), TeamExcluded: walk.teamExcluded, TeamFloor: narrowing.Floor(),
 	}
 	for _, subject := range walk.linkSubjects {
 		out.Members = append(out.Members, contextfabric.TreeWorkItemMember{Subject: subject, Tier: walk.memberTiers[subject.CanonicalID]})
@@ -103,11 +110,17 @@ func (a *Adapter) linkScopedIssues(ctx context.Context, key string, principal st
 			break
 		}
 		walked++
-		walk, err := a.treeMembers(ctx, key, principal.OrgID, principal, scope, anchor, treeIssue, limit+1, temporalFilter{})
+		// CHAOS-12319 review r1: each repository of the scope is a walk's
+		// anchor, with the same requested team narrowing.
+		walkCtx, narrowing, err := a.withTeamNarrowing(ctx, key, principal.OrgID, scope, anchor)
 		if err != nil {
 			return nil, false, err
 		}
-		complete = complete && !walk.truncated
+		walk, err := a.treeMembers(walkCtx, key, principal.OrgID, principal, scope, anchor, treeIssue, limit+1, temporalFilter{})
+		if err != nil {
+			return nil, false, err
+		}
+		complete = complete && !walk.truncated && !narrowing.Undecided()
 		for _, subject := range walk.linkSubjects {
 			tier := walk.memberTiers[subject.CanonicalID]
 			if best, seen := members[subject.CanonicalID]; !seen || tierRank(tier) < tierRank(best) {

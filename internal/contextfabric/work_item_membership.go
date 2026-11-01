@@ -158,6 +158,11 @@ type WorkItemMembershipCensus struct {
 	// Zero for a project anchor.
 	RepositoryPullRequests int
 	RepositoryLinkedIssues int
+	// AnchorOutsideTeamNarrowing: the request narrows by team and no
+	// requested team currently owns the anchor (CHAOS-12319). The repository
+	// totals above are then the anchor's, not the team's, so they are never
+	// the reason an answer gives for having no member.
+	AnchorOutsideTeamNarrowing bool
 	// LowerTierCut: a repository read left out a member whose link tier is
 	// weaker than a served member's. False when the cut, if any, fell inside
 	// one tier. Zero for a project anchor.
@@ -208,6 +213,11 @@ type WorkItemMembershipResult struct {
 	// ProjectNarrowingUnverified: a graph walk admitted a member under a
 	// requested project narrowing only on its "*" project list (CHAOS-12229).
 	ProjectNarrowingUnverified bool
+	// TeamNarrowing, TeamExcluded and TeamFloor are the walk's team narrowing
+	// decision basis (TreeWorkItemWalk), for the walk's Info line.
+	TeamNarrowing TeamNarrowingBasis
+	TeamExcluded  int
+	TeamFloor     TeamNarrowingFloor
 }
 
 // WorkItemMembershipLease must remain held until the complete future answer

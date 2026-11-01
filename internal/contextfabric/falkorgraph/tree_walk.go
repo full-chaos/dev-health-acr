@@ -266,6 +266,9 @@ type treeWalk struct {
 	// node admitted through one link is not denied for another. Nodes the
 	// read's grant clause kept out are not read, so not counted.
 	linkDeniedTargets int
+	// teamExcluded counts the distinct far-side issues a requested team
+	// narrowing left out of scope (CHAOS-12319): never in linkDeniedTargets.
+	teamExcluded int
 	// linkIssueTargets is set when the far side of the link is the issue (a
 	// repository's work items): the distinct linked issues before
 	// authorization, for a restricted caller read by a bounded count with no
@@ -976,6 +979,9 @@ func (a *Adapter) linkSegment(ctx context.Context, key, orgID string, state tree
 	cypher := linkSegmentCypherWith(feed, link, temporal, restricted, state.ownershipEdges, status)
 	seen := map[string]bool{}
 	admitted := map[string]*node{}
+	// outOfNarrowing: issues out of a requested team narrowing (CHAOS-12319,
+	// team_narrowing.go). Scope, not authorization: never denied.
+	outOfNarrowing := map[string]bool{}
 	out.endTiers = map[string]string{}
 	// ends are the admitted far-side nodes in the read's order: strongest
 	// link tier first, so a cut keeps the higher tiers.
@@ -1027,9 +1033,25 @@ func (a *Adapter) linkSegment(ctx context.Context, key, orgID string, state tree
 				return nil, nil, err
 			}
 		}
-		for _, l := range links {
+		// Every row is decided by the rest of the request first; a requested
+		// team narrowing then reads only the issues that admits.
+		authorizedRows := make([]bool, len(links))
+		var authorizedIDs []string
+		for i, l := range links {
+			authorizedRows[i] = state.linkRowAuthorized(l.row, feed, link, l.near, l.far, l.tier)
+			if authorizedRows[i] && !(reviewed && !holding[l.id]) {
+				authorizedIDs = append(authorizedIDs, l.id)
+			}
+		}
+		var excluded map[string]bool
+		if link.to == treeIssue {
+			if excluded, err = teamNarrowingFrom(ctx).excluded(ctx, distinctIDs(authorizedIDs)); err != nil {
+				return nil, nil, err
+			}
+		}
+		for i, l := range links {
 			id, far, tier := l.id, l.far, l.tier
-			authorized := state.linkRowAuthorized(l.row, feed, link, l.near, far, tier)
+			authorized := authorizedRows[i]
 			if status.set() && authorized {
 				read[id] = true
 			}
@@ -1039,6 +1061,10 @@ func (a *Adapter) linkSegment(ctx context.Context, key, orgID string, state tree
 			seen[id] = true
 			if !authorized {
 				state.deny()
+				continue
+			}
+			if excluded[id] {
+				outOfNarrowing[id] = true
 				continue
 			}
 			if admitted[id] == nil {
@@ -1057,7 +1083,8 @@ func (a *Adapter) linkSegment(ctx context.Context, key, orgID string, state tree
 		}
 	}
 	out.linkTargets = len(seen)
-	out.linkDeniedTargets = len(seen) - len(admitted)
+	out.linkDeniedTargets = len(seen) - len(admitted) - len(outOfNarrowing)
+	out.teamExcluded = len(outOfNarrowing)
 	if status.set() {
 		out.status.read = len(read)
 		out.status.held = map[string]bool{}
