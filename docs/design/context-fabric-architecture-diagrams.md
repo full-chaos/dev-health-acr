@@ -749,7 +749,9 @@ the cohort candidates). Under `scope.team_ids`:
   what the question names); every other kind has no ownership path to a team
   and is out of scope.
 
-A path is served only when both of its ends are in scope. An exclusion is scope:
+A path is served only when both of its ends are in scope; an edge's own
+attributes are decided by the edge rule the read uses (`AuthorizedEdge`), so a
+project-only caller's paths are narrowed like any other (CHAOS-12396). An exclusion is scope:
 never a denial, never an authorization detail, never a floor. The read is
 floored only where the ownership it needed for a subject the rest of the request
 admits is absent, not current, or cut: the cohort's population floor (the
