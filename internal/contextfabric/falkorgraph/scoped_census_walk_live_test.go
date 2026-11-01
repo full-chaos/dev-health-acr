@@ -601,7 +601,9 @@ func TestTheScopedCensusAndTheDeploymentWalkFollowTheLinkOnRealStores(t *testing
 			wantServed bool
 		}{
 			{"(a) the org-wide caller that computed it", org, org, true},
-			{"(a) a restricted caller that computed it: the gate tests the work item's own node, which has no repository", restricted("acme/svc", "acme/other"), restricted("acme/svc", "acme/other"), false},
+			// CHAOS-12456: the gate reads the item's native link, or the recheck
+			// would remove the root the census just committed.
+			{"(a) a restricted caller that computed it: the gate reads the native link to its repository", restricted("acme/svc", "acme/other"), restricted("acme/svc", "acme/other"), true},
 			{"(b) a narrower grant than the computing caller's", org, restricted("acme/svc"), false},
 			{"(c) a grant that no longer covers the linked pull request's repository", restricted("acme/svc", "acme/other"), restricted("acme/other"), false},
 		} {
