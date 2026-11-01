@@ -42,7 +42,7 @@ func TestTeamProjectLinkRowsHoldOnlyTheOwnedProjectsLinks(t *testing.T) {
 	if got := strings.Count(statement, teamLinkCandidateHashesSent); got != 2 {
 		t.Fatalf("team project link rows read the sent candidate hashes %d times, want 2 (the link rows, their pull requests):\n%s", got, statement)
 	}
-	for _, want := range []string{"cw.work_item_id IN " + teamLinkCandidatesSent, "cityHash64(l.work_item_id) IN " + teamLinkCandidateHashesSent, "cityHash64(lc.work_item_id) IN " + teamLinkCandidateHashesSent, "l.work_item_id = w.work_item_id", "cw.project_id IN (SELECT v FROM", workItemIsIssueSQL("cw")} {
+	for _, want := range []string{"cw.work_item_id IN " + teamLinkCandidatesSent, "cityHash64(l.work_item_id) IN " + teamLinkCandidateHashesSent, "cityHash64(lc.work_item_id) IN " + teamLinkCandidateHashesSent, "l.work_item_id = w.work_item_id", "one.project_id IN (SELECT v FROM", "one.id_rows = 1", "count() AS id_rows", workItemIsIssueSQL("one")} {
 		if !strings.Contains(statement, want) {
 			t.Fatalf("team project link rows lack %q:\n%s", want, statement)
 		}

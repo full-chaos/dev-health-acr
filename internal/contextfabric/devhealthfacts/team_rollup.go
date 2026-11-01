@@ -157,13 +157,18 @@ func teamOwnedProjectsAsOfSQL(bound factTimeBound) string {
 // String ids keep the work item index pruning), and the link rows and the pull
 // requests joined to them for the candidates' link hashes only; the join on
 // the real work item id keeps exactly the candidates' rows. No join side holds
-// the organization's other links.
+// the organization's other links. The link rows read no work item, so the
+// issue read keeps the ids on one work item row: it counts every row of a
+// candidate id before the project filter, which sees only one of them.
 func teamProjectLinkRowsSQL(teamParam string, bound factTimeBound) string {
 	owned := teamOwnedResolvedProjectsSQL(teamParam, bound)
 	keys := teamOwnedProjectKeyCandidatesSQL(teamParam, bound)
-	issues := `(SELECT cw.work_item_id AS work_item_id, cw.provider AS provider, cw.project_id AS project_id FROM work_items AS cw FINAL
-    WHERE cw.org_id = {org_id:String} AND cw.work_item_id IN ` + teamLinkCandidatesSent + `
-      AND cw.project_id IN ` + keys + ` AND ` + workItemIsIssueSQL("cw") + `)`
+	issues := `(SELECT work_item_id, provider, project_id FROM (
+      SELECT cw.work_item_id AS work_item_id, count() AS id_rows, any(cw.provider) AS provider, any(cw.project_id) AS project_id, any(cw.type) AS type
+      FROM work_items AS cw FINAL
+      WHERE cw.org_id = {org_id:String} AND cw.work_item_id IN ` + teamLinkCandidatesSent + `
+      GROUP BY cw.work_item_id) AS one
+    WHERE one.id_rows = 1 AND one.project_id IN ` + keys + ` AND ` + workItemIsIssueSQL("one") + `)`
 	return `(
   SELECT DISTINCT o.team_id AS team_id, w.work_item_id AS work_item_id, l.pr_repo_id AS pr_repo_id, l.pr_number AS pr_number, l.link_rank AS link_rank
   FROM ` + owned + ` AS o

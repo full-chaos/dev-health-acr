@@ -137,6 +137,8 @@ func TestLinksPullRequestEdgeCountDropsALowerTierBesideANativeLink(t *testing.T)
 	statement := linksPullRequestEdgeCountSQL()
 	for _, want := range []string{
 		issuePullRequestLinkOutranked + " = 0",
+		issuePullRequestLinkWorkItemJoin,
+		issuePullRequestLinkAmbiguous + " = 0",
 		"GROUP BY arm",
 		"lower(" + trimSpaceSQL("ifNull(w.type, '')") + ") NOT IN ('merge_request', 'pr')",
 		"ifNull(p.number, 0) > 0 AND " + trimSpaceSQL("ifNull(r.repo, '')") + " != ''",

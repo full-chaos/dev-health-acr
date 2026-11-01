@@ -137,17 +137,19 @@ var linkTierSQL = trimSpaceSQL("l.provenance")
 // edges of queryIssuePullRequestLinks over its own joins. A row of a known tier
 // that a native link outranks (the same issuePullRequestLinkOutranked
 // expression) projects nothing, so a lower tier beside a native link on the
-// issue or on the pull request is not counted. The issue must resolve, must not
-// itself be pull-request typed, and the pull request must exist with a
-// repository slug.
+// issue or on the pull request is not counted. The issue must resolve to one
+// work item row (the same issuePullRequestLinkWorkItemJoin and
+// issuePullRequestLinkAmbiguous), must not itself be pull-request typed, and the
+// pull request must exist with a repository slug.
 func linksPullRequestEdgeCountSQL() string {
 	return `SELECT ` + linkTierSQL + ` AS arm, uniqExact(toString(w.repo_id), l.work_item_id, toString(l.repo_id), l.pr_number) AS edge_count
 FROM work_graph_issue_pr AS l FINAL
-LEFT JOIN work_items AS w FINAL ON w.org_id = l.org_id AND w.work_item_id = l.work_item_id
+` + issuePullRequestLinkWorkItemJoin + `
 LEFT JOIN git_pull_requests AS p FINAL ON p.org_id = l.org_id AND p.repo_id = l.repo_id AND p.number = l.pr_number
 LEFT JOIN repos AS r FINAL ON r.id = l.repo_id AND r.org_id = l.org_id
 WHERE l.org_id = {org_id:String} AND ` + linkTierSQL + ` IN ('` + strings.Join(linkEdgeArms, "', '") + `')
   AND ` + issuePullRequestLinkOutranked + ` = 0
+  AND ` + issuePullRequestLinkAmbiguous + ` = 0
   AND ifNull(w.work_item_id, '') != ''
   AND lower(` + trimSpaceSQL("ifNull(w.type, '')") + `) NOT IN ('` + strings.Join(pullRequestWorkItemTypeNames(), "', '") + `')
   AND ifNull(p.number, 0) > 0 AND ` + trimSpaceSQL("ifNull(r.repo, '')") + ` != ''
