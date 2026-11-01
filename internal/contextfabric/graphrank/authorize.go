@@ -273,13 +273,16 @@ func statedProjectIdentities(value interface{}) ([]string, bool) {
 // docs/design/context-fabric-project-only-scope.md). The repository grant is
 // never consulted. A node is admitted only when it is
 //   - the caller's own organization node,
-//   - a project node whose canonical id is in the grant, or
+//   - a project node whose canonical id is in the grant,
 //   - a work item whose stated membership (authorization_project_identities,
-//     ProjectMembershipOf) meets the grant;
+//     ProjectMembershipOf) meets the grant, or
+//   - a pull request whose stated membership meets the grant and stands on
+//     native links only (CHAOS-12308);
 //
-// everything else is denied: a work item with no stated membership, a team
-// (CHAOS-12323 adds ownership reach), a pull request (CHAOS-12308), a
-// repository, a deployment, an incident, a document or an episode.
+// everything else is denied: a work item or a pull request with no stated
+// membership, a pull request with a lower-tier membership, a team
+// (CHAOS-12323 adds ownership reach), a repository, a deployment, an incident,
+// a document or an episode.
 //
 // An attribute map with no subject kind is denied: it is a synthetic
 // repository or team decision, or an edge's own attributes, which only

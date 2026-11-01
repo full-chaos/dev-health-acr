@@ -194,7 +194,7 @@ func statePullRequestProjectMemberships(ctx context.Context, client contextpacke
 			}
 		}
 	}
-	sets, err := readWorkItemProjectMemberships(ctx, client, orgID, issues)
+	sets, _, err := readWorkItemProjectMemberships(ctx, client, orgID, issues)
 	if err != nil {
 		return err
 	}
