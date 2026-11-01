@@ -359,7 +359,7 @@ func readPullRequestIssueLinkChunk(ctx context.Context, client contextpacket.Cli
 		if _, known := issuePullRequestLinkTierRank[strings.TrimSpace(provenance)]; !known {
 			continue
 		}
-		_, isPullRequest := pullRequestWorkItemTypes[issueType]
+		_, isPullRequest := pullRequestWorkItemTypes[strings.ToLower(strings.TrimSpace(issueType))]
 		key := pullRequestKey{repoID: prRepoID, number: number}
 		links[key] = append(links[key], pullRequestIssueLink{issue: workItemKey{repoID: issueRepoID, workItemID: workItemID}, tier: strings.TrimSpace(provenance), pullRequestTyped: isPullRequest})
 	}

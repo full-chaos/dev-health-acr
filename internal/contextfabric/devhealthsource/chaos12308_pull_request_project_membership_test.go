@@ -64,6 +64,9 @@ func TestAPullRequestStatesTheUnionOfItsLinkedIssues(t *testing.T) {
 	outranked[6] = uint8(1)
 	pullRequestTyped := linkRow("WIDGET-ORPHAN", chaos12226Orphan, "native")
 	pullRequestTyped[5] = "pr"
+	// The type is compared as the link producer compares it.
+	unnormalized := linkRow("WIDGET-ORPHAN", chaos12226Orphan, "native")
+	unnormalized[5] = " PR "
 	for name, tc := range map[string]struct {
 		links    [][]any
 		wantSet  []string
@@ -79,6 +82,7 @@ func TestAPullRequestStatesTheUnionOfItsLinkedIssues(t *testing.T) {
 			[]string{"project.v2:github:P-1", "project.v2:jira:ENG"}, "explicit_text"},
 		"an outranked row contributes nothing":         {[][]any{linkRow("WIDGET-101", "repo-1", "native"), outranked}, []string{"project.v2:github:P-1", "project.v2:jira:ENG"}, "native"},
 		"a pull-request work item contributes nothing": {[][]any{linkRow("WIDGET-101", "repo-1", "native"), pullRequestTyped}, []string{"project.v2:github:P-1", "project.v2:jira:ENG"}, "native"},
+		"a pull-request type in another spelling":      {[][]any{linkRow("WIDGET-101", "repo-1", "native"), unnormalized}, []string{"project.v2:github:P-1", "project.v2:jira:ENG"}, "native"},
 		"an unknown tier contributes nothing":          {[][]any{linkRow("WIDGET-101", "repo-1", "native"), linkRow("WIDGET-ORPHAN", chaos12226Orphan, "inferred")}, []string{"project.v2:github:P-1", "project.v2:jira:ENG"}, "native"},
 		// Unstated, not empty: it stays disclosed, never reads as "no project".
 		"no link":                     {nil, nil, ""},
