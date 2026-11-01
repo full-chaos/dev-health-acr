@@ -107,8 +107,8 @@ const (
 	// a different family.
 	FamilyIncompatibilityStructuralMismatch FamilyIncompatibilityReason = "structural_mismatch"
 	// FamilyIncompatibilityUnreachable: the model picked a family that is
-	// declared but deliberately unreachable in this slice (trend,
-	// investment_allocation) -- see UnreachableQuestionFamilies.
+	// declared and that no precedence row can produce (trend,
+	// investment_allocation) -- see familiesOutsidePrecedenceTable.
 	FamilyIncompatibilityUnreachable FamilyIncompatibilityReason = "declared_unreachable"
 )
 
@@ -201,9 +201,10 @@ type FamilySampleOutcome struct {
 // UnreachableQuestionFamilies are declared in the vocabulary (§3) but
 // deliberately NOT reachable from the precedence table in this slice.
 //
-// trend needs a fact declared time_series to plan against (§5, slice S3)
-// and investment_allocation needs a declared breakdown table plus a
-// producer to render it. Declaring a family with no reachable path is
+// trend needs a fact declared time_series to plan against (§5, slice S3).
+// investment_allocation left this list with CHAOS-12492: the precedence table
+// still does not produce it, and the route serves it from the frame's
+// projection for a named subject. Declaring a family with no reachable path is
 // DELIBERATE and has a precedent in this very repository: CHAOS-4415 slice
 // 1 declared seven ContextFabricRenderKind members without producers, for
 // the same reason -- the alternative is widening a closed enum later,
@@ -213,12 +214,22 @@ type FamilySampleOutcome struct {
 // its own reason (FamilyIncompatibilityUnreachable) rather than being
 // silently ignored, so "the model wanted trend and could not have it" is a
 // countable state that tells S3 whether the demand is real.
+// familiesOutsidePrecedenceTable names the wider set that reason reads.
 func UnreachableQuestionFamilies() []QuestionFamily {
-	return []QuestionFamily{QuestionFamilyTrend, QuestionFamilyInvestmentAllocation}
+	return []QuestionFamily{QuestionFamilyTrend}
+}
+
+// familiesOutsidePrecedenceTable are the families no precedence row produces.
+// It is wider than UnreachableQuestionFamilies: investment_allocation has no
+// row here, and the route serves it from a frame's projection (CHAOS-12492). A
+// model pick is judged against this table, so a pick of either family keeps
+// FamilyIncompatibilityUnreachable.
+func familiesOutsidePrecedenceTable() []QuestionFamily {
+	return append(UnreachableQuestionFamilies(), QuestionFamilyInvestmentAllocation)
 }
 
 func familyIsUnreachable(family QuestionFamily) bool {
-	for _, member := range UnreachableQuestionFamilies() {
+	for _, member := range familiesOutsidePrecedenceTable() {
 		if member == family {
 			return true
 		}
