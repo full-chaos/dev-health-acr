@@ -110,3 +110,31 @@ func TestInvestigationEventsDroppedRecordsTheSuppliedCount(t *testing.T) {
 		}
 	}
 }
+
+func TestEntitlementCredentialBucketsBothLabels(t *testing.T) {
+	ctx := context.Background()
+	instruments, read := hostedmetricstest.New(t, hostedmetrics.Vocabularies{})
+	instruments.EntitlementCredential(ctx, "workload", "sent")
+	instruments.EntitlementCredential(ctx, "workload", "sent")
+	instruments.EntitlementCredential(ctx, "workload", "token_unavailable")
+	instruments.EntitlementCredential(ctx, "service_token", "sent")
+	instruments.EntitlementCredential(ctx, "svc_acr_a1b2", "a free text outcome")
+	name := hostedmetrics.EntitlementCredentialName
+	want := map[string]int64{
+		name + "{class=workload,outcome=sent}":              2,
+		name + "{class=workload,outcome=token_unavailable}": 1,
+		name + "{class=service_token,outcome=sent}":         1,
+		name + "{class=other,outcome=other}":                1,
+	}
+	got := read()
+	for cell, value := range want {
+		if got[cell] != value {
+			t.Errorf("%s = %d, want %d", cell, got[cell], value)
+		}
+	}
+	for cell := range got {
+		if _, ok := want[cell]; !ok {
+			t.Errorf("unexpected cell %s", cell)
+		}
+	}
+}

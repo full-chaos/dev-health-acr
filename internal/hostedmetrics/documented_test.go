@@ -88,6 +88,7 @@ func producedInstruments(t *testing.T) map[string][]string {
 	instruments.ProjectionPairFailure(ctx, "unclassified")
 	instruments.GraphBootstrapWait(ctx, "bootstrapped", time.Second)
 	instruments.InvestigationEventsDropped(ctx, "reading_facts", 1)
+	instruments.EntitlementCredential(ctx, "workload", "sent")
 	produced := map[string][]string{}
 	for cell := range read() {
 		name, rest, _ := strings.Cut(cell, "{")
