@@ -466,6 +466,9 @@ flowchart TB
   PROJ["Project<br/>projects"]
   TEAM["Team<br/>teams"]
   DEP["Deployment<br/>deployments"]
+  CIRUN["CI run<br/>ci_pipeline_runs"]
+  INC["Incident<br/>operational_incidents"]
+  PRREV["Pull request review<br/>git_pull_request_reviews"]
   PRW["pull-request work item<br/>work_item, type pr or merge_request<br/>(not in the tree)"]
 
   PR ==>|"BELONGS_TO_REPOSITORY<br/>git_pull_requests.repo_id<br/>queryPullRequests"| REPO
@@ -474,6 +477,10 @@ flowchart TB
   REPO -.->|"OWNED_BY_TEAM<br/>team_repo_ownership<br/>queryRepositoryTeams"| TEAM
   PROJ -.->|"OWNED_BY_TEAM<br/>team_project_ownership<br/>queryProjectTeams"| TEAM
   DEP -.->|"BELONGS_TO_REPOSITORY<br/>deployments.repo_id<br/>queryDeployments"| REPO
+  CIRUN -.->|"BELONGS_TO_REPOSITORY<br/>ci_pipeline_runs.repo_id<br/>queryCIRuns"| REPO
+  INC -.->|"BELONGS_TO_REPOSITORY, one per mapped repository<br/>the active service repository mappings<br/>queryIncidents"| REPO
+  DEP -.->|"CORRELATED_WITH_INCIDENT, relevance only<br/>work_graph_deployment_incident_edges"| INC
+  PRREV -.->|"BELONGS_TO_PULL_REQUEST<br/>git_pull_request_reviews<br/>queryPullRequestReviews"| PR
   REPO x-.-|"NOT tree: BELONGS_TO_REPOSITORY<br/>of the issue's own repo_id"| ISSUE
   ISSUE -.-x|"NOT ownership: OWNED_BY_TEAM<br/>work_item_team_attributions (attribution)"| TEAM
   PRW -.-x|"NOT a link: RELATES_TO<br/>work_item_dependencies<br/>(issue-to-issue relations only)"| ISSUE
@@ -482,7 +489,7 @@ flowchart TB
   classDef leaf fill:#1e3a5f,stroke:#60a5fa,color:#ffffff
   classDef aside fill:#3f3f46,stroke:#a1a1aa,color:#ffffff
   class REPO,PR,ISSUE,PROJ tree
-  class TEAM,DEP leaf
+  class TEAM,DEP,CIRUN,INC,PRREV leaf
   class PRW aside
 ```
 
@@ -743,6 +750,15 @@ the cohort candidates). Under `scope.team_ids`:
 - a pull request is in scope when its repository (`BELONGS_TO_REPOSITORY`) is;
 - a work item is in scope by (i) an actual `LINKS_PULL_REQUEST` row of an
   admitted tier to a pull request of such a repository, or (ii) its own project;
+- a pull request review is in scope when its pull request
+  (`BELONGS_TO_PULL_REQUEST`) is;
+- a CI run or a deployment is in scope when its repository
+  (`BELONGS_TO_REPOSITORY`) is owned so;
+- an incident is in scope when a repository it belongs to is owned so (one
+  `BELONGS_TO_REPOSITORY` edge for each repository its service maps to). Never
+  through `CORRELATED_WITH_INCIDENT`: that is relevance, not ownership. An
+  incident with no repository edge has missing ownership: it is undecided, not
+  out of scope (CHAOS-12345);
 - the caller's organization node and the committed subjects stay (the subject is
   what the question names); every other kind has no ownership path to a team
   and is out of scope.
@@ -762,9 +778,38 @@ the outside-the-set count (a missing ownership makes it a lower bound, never a
 floor), and the pool cut, whose total is stated only when every committed anchor
 is currently owned by a requested team. Each such read logs one
 `contextfabric.team_narrowing_general_read` line (requested teams, subjects
-decided, subjects excluded, and the floor value; log-only). A non-cohort read is
-not floored, the same as a truncated hop walk today (CHAOS-12348). Kinds that
-hang off an owned entity (reviews, CI runs, deployments) are CHAOS-12345.
+decided, subjects excluded, and the floor value; log-only).
+
+**A cut read that is not a cohort read says so (CHAOS-12348).** A read that is
+not a cohort read is served as paths, so it has no cohort to carry the floor
+above, and its coverage says what it lost. "Not a cohort read" is the reader's
+own test: `CohortMemberKindForFrame` gives no servable member kind, the test
+`DiscoveredCohort` gates a cohort on. A cohort read that found no member stays a
+cohort read and keeps its floor. Two degrading graph rows, each paired with its
+reason:
+
+- `graph_hop_walk_truncated` (raw `hop_walk_truncated`, no count): a committed
+  subject's hop walk spent its edge budget with candidates left.
+- `graph_team_narrowing_undecided_paths` (raw
+  `team_narrowing_undecided_paths:<n>`): under `scope.team_ids`, a path edge was
+  dropped because an endpoint's ownership was absent, not current, or cut. The
+  count is the distinct endpoints whose missing ownership removed an edge. The
+  drop of an endpoint decided out of scope is scope and sets nothing. An edge
+  with one end decided out of scope counts neither end, because that end alone
+  removes the edge.
+
+Both set `coverage.partial` and reach the client as coverage details, and each
+floors a `complete` answer to `partial` (`applyCutGraphReadStatusFloor`, last in
+`ApplyServedStatusFloors`, so fresh, reused and read-by-id answers alike). The
+answer stands: this floor uses `floorKeepingNarrative`, the status-only swap, so
+it states no narrative-withheld sentence and writes no lead prose. Each cause
+adds one limitation sentence. `direct_judgment` and `deterministic_answer` are
+server-composed and state the status, so `restateServedStatusHead` adds the
+partial sentence to a head the server composed, as on any partial answer, and
+leaves any other head as it is. `current_state` and everything the model wrote
+stay verbatim. The floor never promotes and leaves `degraded`, `no_match`, a
+clarification and a refusal as they are. `cohortTerminalCoverageCode` holds
+neither code: they say nothing about a member set.
 
 **Subject resolution under `scope.team_ids`** (CHAOS-12346, lead ruling (i)/(ii);
 `graphrank/team_narrowing_resolution.go`, decided by the same reach rule through
@@ -2265,10 +2310,12 @@ flowchart TD
    **A status floor can put `status` below `completeness.state`**
    (CHAOS-12242). Completeness counts outcome rows only (vol 3 D25). A
    served-status floor that reads a coverage detail or a limitation which no
-   outcome row states lowers the status alone. Two floors do this today:
+   outcome row states lowers the status alone. Three floors do this today:
    `applyUnverifiedProjectNarrowingStatusFloor` (the degrading
-   `read_population_unverified` detail with raw `project_narrowing_unverified`)
-   and `applyStatusPoolCutStatusFloor` (the member-status pool-cut limitation).
+   `read_population_unverified` detail with raw `project_narrowing_unverified`),
+   `applyStatusPoolCutStatusFloor` (the member-status pool-cut limitation) and
+   `applyCutGraphReadStatusFloor` (the two degrading cut graph read details,
+   CHAOS-12348).
    Such an answer reads `status: partial` beside `completeness.state:
    complete`: every requirement was met over the served population, and the
    status plus the detail or limitation carry the disclosure. That is not the
@@ -3306,6 +3353,7 @@ on retries. Save, reuse, by-id and response-owner boundaries remain those in §1
 flowchart TD
   WALK["DiscoverContext walks each committed subject<br/>hopWalk collects a hop in questionEdgesFirst order:<br/>own edges the question names, then gate edges, then the rest"] --> TEXT["full-text arm: matched subjects<br/>RankEdgesByOrigin, no classes"]
   WALK --> ATTR["attributeEdgesByFewestHops<br/>breadth-first over every resolved edge;<br/>tie: the earlier origin; own = one hop"]
+  WALK --> CUT["edge budget spent with candidates left, on a read<br/>that is not a cohort read: degrading<br/>graph_hop_walk_truncated, status floored to partial (§3)"]
   TEXT --> ATTR
   ATTR --> CLASS["committedEdgeClasses (committed subjects only)<br/>0 own + NamedByQuestion (fact kind in the question's<br/>fact_requirements, From kind the table names)<br/>1 gate edge: DriverSubject is the subject<br/>2 other own; 3 further out"]
   CLASS --> RANK["RankEdgesByOrigin<br/>tier 1 committed (resolution order), tier 2 text matches<br/>per tier: runs of equal confidence; origins take turns per run<br/>per origin: class, then id"]
