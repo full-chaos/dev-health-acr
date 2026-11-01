@@ -98,15 +98,14 @@ func TestLivePullRequestMembershipComesFromItsLinkedIssues(t *testing.T) {
 	link(github, "I-LI", 4, "native", t1)
 	// One id held by two work items of the organization: work_items is keyed
 	// by (org_id, repo_id, work_item_id), and a link row names no issue
-	// repository. The row in the pull request's own repository is the issue;
-	// with none, the link is ambiguous and names no project.
+	// repository, so the link is ambiguous and names no project, even with a
+	// row in the pull request's own repository (ruling on CHAOS-12301).
 	workItem("I-DUP", github, "github", "ghprojv2:GH", t1)
 	workItem("I-DUP", zeroRepositoryUUID, "jira", "JI", t1)
 	link(github, "I-DUP", 7, "native", t1)
 	link(gitlab, "I-DUP", 7, "native", t1)
-	// The row in the pull request's own repository is a pull-request work
-	// item, and the other row is an issue of a project: the link names the
-	// first, which contributes nothing, never the second.
+	// One row is a pull-request work item, and the other an issue of a
+	// project: two rows are ambiguous, so the issue never stands in.
 	mustExec(t, ctx, direct, `INSERT INTO work_items (work_item_id, repo_id, org_id, title, status, url, parent_id, type, provider, project_id, updated_at, created_at, last_synced) VALUES ('I-MIX', ?, ?, 'PR item', 'open', '', '', 'pr', 'github', '', ?, ?, ?)`,
 		github, org, t1, t1, t1)
 	workItem("I-MIX", zeroRepositoryUUID, "jira", "JI", t1)
@@ -173,7 +172,7 @@ func TestLivePullRequestMembershipComesFromItsLinkedIssues(t *testing.T) {
 		id(github, 4): {[]string{"project.v2:linear:LI"}, "native"},
 		id(github, 5): {},
 		id(gitlab, 2): {[]string{"project.v2:github:ghprojv2%3AGH"}, "native"},
-		id(github, 7): {[]string{"project.v2:github:ghprojv2%3AGH"}, "native"},
+		id(github, 7): {},
 		id(gitlab, 7): {},
 		id(github, 8): {},
 		id(github, 6): {[]string{"project.v2:gitlab:GL"}, "native"},
