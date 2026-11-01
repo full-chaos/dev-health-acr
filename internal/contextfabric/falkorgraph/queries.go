@@ -8,6 +8,7 @@ import (
 	"strings"
 	"unicode"
 
+	"github.com/full-chaos/dev-health-acr/internal/auth"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/devhealthschema"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/graphrank"
@@ -958,6 +959,9 @@ const (
 type edgeFilterCounts struct {
 	Authz          int
 	TemporalWindow int
+	// Basis splits Authz by its E1/E2 basis for a project-only caller
+	// (CHAOS-12300); see EdgeAuthzBasis.
+	Basis EdgeAuthzBasis
 	// ReachDenied names the subjects an anchor's walk reached only through an
 	// edge or endpoint authorization denied, keyed by subject uuid. A subject
 	// the walk also reached through an admitted edge is not in it.
@@ -971,6 +975,60 @@ func (c *edgeFilterCounts) mergeReachDenied(other map[string]struct{}) {
 			c.ReachDenied = make(map[string]struct{})
 		}
 		c.ReachDenied[uuid] = struct{}{}
+	}
+}
+
+// EdgeAuthzBasis is the E1/E2 basis of the edges the authorization filter
+// refused a project-only caller (CHAOS-12300): counts only, never ids. A
+// refusal whose reason the deciding site does not know (a fused link read
+// that returned no feed edge) is counted in Authz and here only as
+// unclassified (Authz minus the classified bases).
+type EdgeAuthzBasis struct {
+	// ProjectOnly is true when the caller's grant class is project_only;
+	// the counts are meaningful only then.
+	ProjectOnly         bool
+	Endpoint            int // the edge passed; an endpoint did not (E1)
+	AttributionRelation int // E2: DOCUMENTED_BY or HAS_EPISODE
+	ProjectList         int // E1: the edge's project list holds no granted identity
+	ProjectNarrowing    int // a project-only request that names projects
+}
+
+// classified is the number of refusals with a basis.
+func (b EdgeAuthzBasis) classified() int {
+	return b.Endpoint + b.AttributionRelation + b.ProjectList + b.ProjectNarrowing
+}
+
+func (b *EdgeAuthzBasis) merge(other EdgeAuthzBasis) {
+	b.ProjectOnly = b.ProjectOnly || other.ProjectOnly
+	b.Endpoint += other.Endpoint
+	b.AttributionRelation += other.AttributionRelation
+	b.ProjectList += other.ProjectList
+	b.ProjectNarrowing += other.ProjectNarrowing
+}
+
+// noteAuthzBasis classifies one resolveEdge refusal for a project-only caller
+// by the same predicate that decided it (graphrank.AuthorizedEdgeBasis): an
+// edge whose own attributes pass was refused on an endpoint.
+func (c *edgeFilterCounts) noteAuthzBasis(principal storage.Principal, scope contextfabric.RequestedScope, ce graphrank.CandidateEdge, resolution edgeResolution, reason edgeFilterReason) {
+	if resolution != edgeFiltered || reason != edgeFilterReasonAuthz || auth.ClassifyGrant(principal) != auth.GrantProjectOnly {
+		return
+	}
+	c.Basis.note(graphrank.AuthorizedEdgeBasis(principal, scope, ce.Name, ce.Attributes))
+}
+
+// note counts one project-only refusal under the basis of the edge's own
+// attributes: an edge they admit was refused on an endpoint.
+func (b *EdgeAuthzBasis) note(basis graphrank.EdgeBasis) {
+	b.ProjectOnly = true
+	switch basis {
+	case graphrank.EdgeBasisAdmitted:
+		b.Endpoint++
+	case graphrank.EdgeBasisAttributionRelation:
+		b.AttributionRelation++
+	case graphrank.EdgeBasisProjectList:
+		b.ProjectList++
+	case graphrank.EdgeBasisProjectNarrowing:
+		b.ProjectNarrowing++
 	}
 }
 
@@ -1269,6 +1327,7 @@ func (a *Adapter) hopWalk(ctx context.Context, key, orgID string, principal stor
 			}
 			resolved, resolution, reason, resolveErr := a.resolveEdge(ctx, key, orgID, principal, scope, ce, temporal)
 			filterCounts.add(resolution, reason)
+			filterCounts.noteAuthzBasis(principal, scope, ce, resolution, reason)
 			// Only an ownership edge of the anchor itself names a
 			// member the caller was denied; a denied edge elsewhere in the
 			// walk says nothing about the anchor's members.

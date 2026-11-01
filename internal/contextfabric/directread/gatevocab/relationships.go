@@ -45,9 +45,17 @@ const (
 	EdgeWithheldTarget EdgeWithheldReason = "target_not_visible"
 )
 
+// EdgeWithheldAttributionRelation: a project-only caller and a DOCUMENTED_BY
+// or HAS_EPISODE edge (E2, CHAOS-12300).
+const EdgeWithheldAttributionRelation EdgeWithheldReason = "attribution_relation"
+
+// EdgeWithheldProjectList: a project-only caller and an edge whose real
+// project list holds no granted identity (E1, CHAOS-12300).
+const EdgeWithheldProjectList EdgeWithheldReason = "edge_project_list"
+
 // EdgeWithheldReasonVocabulary is the closed set of withheld reasons.
-func EdgeWithheldReasonVocabulary() [3]EdgeWithheldReason {
-	return [3]EdgeWithheldReason{EdgeWithheldAttributes, EdgeWithheldSource, EdgeWithheldTarget}
+func EdgeWithheldReasonVocabulary() [5]EdgeWithheldReason {
+	return [5]EdgeWithheldReason{EdgeWithheldAttributes, EdgeWithheldSource, EdgeWithheldTarget, EdgeWithheldAttributionRelation, EdgeWithheldProjectList}
 }
 
 // CursorOutcome is what a page did with a cursor.

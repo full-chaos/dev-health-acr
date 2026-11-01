@@ -103,7 +103,7 @@ func (f *fakeIdentityTelemetry) RecordLexiconExpansion(context.Context, string, 
 }
 func (f *fakeIdentityTelemetry) RecordSubjectCandidatesAuthzDropped(context.Context, string, int) {}
 func (f *fakeIdentityTelemetry) RecordCohortMembersAuthzDropped(context.Context, string, int)     {}
-func (f *fakeIdentityTelemetry) RecordEdgesFilteredByReason(context.Context, string, int, int, int) {
+func (f *fakeIdentityTelemetry) RecordEdgesFilteredByReason(context.Context, string, int, int, int, falkorgraph.EdgeAuthzBasis) {
 }
 func (f *fakeIdentityTelemetry) RecordCohortDeniedByAuthorization(context.Context, string, int) {}
 func (f *fakeIdentityTelemetry) RecordCohortExactNameCensusGate(context.Context, string, bool, falkorgraph.CohortExactNameCensusBasis) {

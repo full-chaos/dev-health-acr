@@ -219,8 +219,17 @@ type StoredResultAuthorization struct {
 	Surface              StoredResultSurface
 	PrincipalScope       StoredResultPrincipalScope
 	RepositoryScopeCount int
-	Decision             StoredResultDecision
-	Reason               StoredResultAuthorizationReason
+	// StoredDigestRead is true when the decision read a stored result's
+	// grant digest (Authorize), false on a fact-root recheck (decide alone).
+	// StoredGrantDigestClass and GrantDigestEqual are the grant-equality
+	// result (CHAOS-12300): whether the reader's grant digest equals the one
+	// the result was computed under, so a different grant of the same class
+	// and size never reads as the same admission.
+	StoredDigestRead       bool
+	StoredGrantDigestClass GrantDigestClass
+	GrantDigestEqual       bool
+	Decision               StoredResultDecision
+	Reason                 StoredResultAuthorizationReason
 	// SubjectCount is every distinct subject the result names.
 	SubjectCount int
 	// GraphSubjectCount is the subset decided by the graph predicate.
@@ -326,9 +335,8 @@ func NewStoredResultGate(graph GraphReader) *StoredResultGate {
 	return gate
 }
 
-// Authorize decides whether stored may be served to principal on surface.
-// The caller writes the decision to the trace.
-func (g *StoredResultGate) Authorize(ctx context.Context, principal storage.Principal, stored StoredInvestigationResult, surface StoredResultSurface) StoredResultAuthorization {
+// authorize decides whether stored may be served to principal on surface.
+func (g *StoredResultGate) authorize(ctx context.Context, principal storage.Principal, stored StoredInvestigationResult, surface StoredResultSurface) StoredResultAuthorization {
 	reason, refused := storedResultOwnerRefusal(principal, stored)
 	if !refused {
 		reason, refused = storedResultGrantRefusal(principal, stored)
@@ -344,6 +352,68 @@ func (g *StoredResultGate) Authorize(ctx context.Context, principal storage.Prin
 		}
 	}
 	return g.decide(ctx, principal, stored.Result, surface)
+}
+
+// Authorize decides whether stored may be served to principal on surface,
+// and records the grant-equality result on the decision. The caller writes
+// the decision to the trace.
+func (g *StoredResultGate) Authorize(ctx context.Context, principal storage.Principal, stored StoredInvestigationResult, surface StoredResultSurface) StoredResultAuthorization {
+	decision := g.authorize(ctx, principal, stored, surface)
+	decision.StoredDigestRead = true
+	decision.StoredGrantDigestClass = GrantDigestClassOf(stored.GrantDigest)
+	decision.GrantDigestEqual = stored.GrantDigest != "" && stored.GrantDigest == StoredResultGrantDigest(principal)
+	return decision
+}
+
+// GrantDigestClass is the class of a grant digest, never its value
+// (CHAOS-12300): what a corpus-safe trace may say about a grant.
+type GrantDigestClass string
+
+const (
+	// GrantDigestOpen: "open", an unrestricted or universal grant.
+	GrantDigestOpen GrantDigestClass = "open"
+	// GrantDigestRepository: "g:", a repository-restricted grant.
+	GrantDigestRepository GrantDigestClass = "repository"
+	// GrantDigestProject: "p:", a project-only grant (CHAOS-12298).
+	GrantDigestProject GrantDigestClass = "project"
+	// GrantDigestUnrecorded: no digest (a result saved before 0044).
+	GrantDigestUnrecorded GrantDigestClass = "unrecorded"
+	// GrantDigestMalformed: a value of no known form.
+	GrantDigestMalformed GrantDigestClass = "malformed"
+)
+
+// GrantDigestClassVocabulary is the closed set of grant digest classes.
+func GrantDigestClassVocabulary() [5]GrantDigestClass {
+	return [5]GrantDigestClass{GrantDigestOpen, GrantDigestRepository, GrantDigestProject, GrantDigestUnrecorded, GrantDigestMalformed}
+}
+
+// GrantDigestClassOf names the class of a grant digest by its form.
+func GrantDigestClassOf(digest string) GrantDigestClass {
+	switch {
+	case digest == "":
+		return GrantDigestUnrecorded
+	case digest == storedResultOpenGrantDigest:
+		return GrantDigestOpen
+	case strings.HasPrefix(digest, "g:") && isGrantDigestPayload(digest[2:]):
+		return GrantDigestRepository
+	case strings.HasPrefix(digest, "p:") && isGrantDigestPayload(digest[2:]):
+		return GrantDigestProject
+	}
+	return GrantDigestMalformed
+}
+
+// isGrantDigestPayload reports the payload shape of a grant digest: exactly
+// 32 lowercase hex characters, the shape migration 0066's CHECK admits.
+func isGrantDigestPayload(payload string) bool {
+	if len(payload) != 32 {
+		return false
+	}
+	for _, c := range []byte(payload) {
+		if (c < '0' || c > '9') && (c < 'a' || c > 'f') {
+			return false
+		}
+	}
+	return true
 }
 
 // storedResultOpenGrantDigest is the digest a result computed for an
@@ -781,6 +851,9 @@ func StoredResultAuthorizationLogArgs(principal storage.Principal, decision Stor
 		"surface", string(decision.Surface),
 		"principal_scope", string(decision.PrincipalScope),
 		"repository_scope_count", decision.RepositoryScopeCount,
+		"grant_class", string(auth.ClassifyGrant(principal)),
+		"project_scope_count", len(principal.ProjectScopes),
+		"grant_digest_class", string(GrantDigestClassOf(StoredResultGrantDigest(principal))),
 		"decision", string(decision.Decision),
 		"reason", string(decision.Reason),
 		"subject_count", decision.SubjectCount,
@@ -794,6 +867,9 @@ func StoredResultAuthorizationLogArgs(principal storage.Principal, decision Stor
 		"group_count", decision.GroupCount,
 		"group_unproven_count", decision.GroupUnprovenCount,
 		"refused_kinds", SanitizeLogStrings(append([]string{}, decision.RefusedKinds...)),
+	}
+	if decision.StoredDigestRead {
+		args = append(args, "stored_grant_digest_class", string(decision.StoredGrantDigestClass), "grant_digest_equal", decision.GrantDigestEqual)
 	}
 	if decision.Err != nil {
 		args = append(args, "error_class", SanitizeLogAttr(storedResultErrorClass(decision.Err)))
