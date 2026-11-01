@@ -93,8 +93,8 @@ const linkedWorkItemIDsSQL = `(SELECT work_item_id FROM work_graph_issue_pr WHER
 // admittedLinkedPullRequestRowsSQL is the admitted link rows (known tier) whose
 // pull request exists, columns work_item_id, pr_repo_id, pr_number, link_rank,
 // without reading work_items: a caller that has already restricted the work
-// items to issues and to ids on one row joins it on work_item_id, and so reads
-// the work item table once.
+// items to issues, and to ids on one row (teamLinkCandidatesStatement), joins it
+// on work_item_id, and so reads the work item table once.
 var admittedLinkedPullRequestRowsSQL = admittedLinkedPullRequestRowsAmongSQL("")
 
 // admittedLinkedPullRequestRowsAmongSQL is admittedLinkedPullRequestRowsSQL

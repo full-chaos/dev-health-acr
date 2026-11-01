@@ -41,15 +41,20 @@ func teamLinkCandidatesPredicate(bound factTimeBound) string {
 }
 
 // teamLinkCandidatesStatement returns the distinct candidates as one array
-// row: one entry per issue however many unmerged versions or repositories it
-// has, and one row stays within the client's result row cap. The ids are
+// row: one entry per issue however many unmerged versions it has, and one row
+// stays within the client's result row cap. A link row names no issue
+// repository, so an id on several work item rows, in any project, is no
+// candidate: nothing says which row its link means (issueLinkRowsAmongSQL states
+// the rule). The rows of an id differ by repo_id and the versions of one row do
+// not, so this needs no FINAL and a fixed state per id, and every team read of
+// the link rows takes the rule here. The ids are
 // grouped on one thread: a DISTINCT keeps a set per stream and a final set
 // (94 MB at 96k all-inside links, at 1 thread as at 4), a DISTINCT on the sort
 // key opens every overlapping part at once (117 MB at 20 versions of 24k), and
 // four aggregating threads each hold every id when every part holds them all;
 // one grouping thread holds 48 MB and 16 MB there.
 func teamLinkCandidatesStatement(bound factTimeBound) string {
-	return readers.WithSettings(`SELECT groupArray(work_item_id) FROM (SELECT cp.work_item_id AS work_item_id FROM work_items AS cp WHERE `+teamLinkCandidatesPredicate(bound)+` GROUP BY cp.work_item_id)`, readers.Settings{MaxThreads: teamLinkCandidatesMaxThreads})
+	return readers.WithSettings(`SELECT groupArray(work_item_id) FROM (SELECT c.work_item_id AS work_item_id FROM work_items AS c WHERE c.org_id = {org_id:String} AND c.work_item_id IN (SELECT cp.work_item_id FROM work_items AS cp WHERE `+teamLinkCandidatesPredicate(bound)+`) GROUP BY c.work_item_id HAVING min(c.repo_id) = max(c.repo_id))`, readers.Settings{MaxThreads: teamLinkCandidatesMaxThreads})
 }
 
 // teamLinkCandidatesMaxThreads is the candidate statement's thread count.

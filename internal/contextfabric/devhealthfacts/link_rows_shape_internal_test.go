@@ -42,7 +42,7 @@ func TestTeamProjectLinkRowsHoldOnlyTheOwnedProjectsLinks(t *testing.T) {
 	if got := strings.Count(statement, teamLinkCandidateHashesSent); got != 2 {
 		t.Fatalf("team project link rows read the sent candidate hashes %d times, want 2 (the link rows, their pull requests):\n%s", got, statement)
 	}
-	for _, want := range []string{"cw.work_item_id IN " + teamLinkCandidatesSent, "cityHash64(l.work_item_id) IN " + teamLinkCandidateHashesSent, "cityHash64(lc.work_item_id) IN " + teamLinkCandidateHashesSent, "l.work_item_id = w.work_item_id", "one.project_id IN (SELECT v FROM", "one.id_rows = 1", "count() AS id_rows", workItemIsIssueSQL("one")} {
+	for _, want := range []string{"cw.work_item_id IN " + teamLinkCandidatesSent, "cityHash64(l.work_item_id) IN " + teamLinkCandidateHashesSent, "cityHash64(lc.work_item_id) IN " + teamLinkCandidateHashesSent, "l.work_item_id = w.work_item_id", "cw.project_id IN (SELECT v FROM", workItemIsIssueSQL("cw")} {
 		if !strings.Contains(statement, want) {
 			t.Fatalf("team project link rows lack %q:\n%s", want, statement)
 		}
@@ -51,7 +51,7 @@ func TestTeamProjectLinkRowsHoldOnlyTheOwnedProjectsLinks(t *testing.T) {
 
 func TestTeamLinkCandidatesReadTheLinkedIdsOfTheOwnedProjectsOnce(t *testing.T) {
 	statement := teamLinkCandidatesStatement(factTimeBound{})
-	for _, want := range []string{"SELECT groupArray(work_item_id) FROM (SELECT cp.work_item_id AS work_item_id FROM work_items AS cp WHERE cp.org_id = {org_id:String}", "GROUP BY cp.work_item_id)\nSETTINGS max_threads = 1", "cityHash64(cp.work_item_id) IN " + linkedWorkItemIDHashesSQL, "cp.project_id IN (SELECT v FROM", "team_id IN {ids:Array(String)}"} {
+	for _, want := range []string{"SELECT groupArray(work_item_id) FROM (SELECT c.work_item_id AS work_item_id FROM work_items AS c WHERE c.org_id = {org_id:String}", "(SELECT cp.work_item_id FROM work_items AS cp WHERE cp.org_id = {org_id:String}", "GROUP BY c.work_item_id HAVING min(c.repo_id) = max(c.repo_id))\nSETTINGS max_threads = 1", "cityHash64(cp.work_item_id) IN " + linkedWorkItemIDHashesSQL, "cp.project_id IN (SELECT v FROM", "team_id IN {ids:Array(String)}"} {
 		if !strings.Contains(statement, want) {
 			t.Fatalf("team link candidates lack %q:\n%s", want, statement)
 		}
