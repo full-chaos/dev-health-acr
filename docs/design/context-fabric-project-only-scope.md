@@ -1,8 +1,10 @@
 # Context Fabric: the project-only grant scope
 
-Status: c1 (CHAOS-12297), c2 (CHAOS-12298), c3 (CHAOS-12299) and the typed
-refusals (CHAOS-12330) are built; c4 and c5 are planned. Design of record:
-CHAOS-12107 (v3 and its r3 addendum; Linear). Parent ticket: CHAOS-12228.
+Status: c1 (CHAOS-12297), c2 (CHAOS-12298), c3 (CHAOS-12299), c4 (CHAOS-12300),
+the typed refusals (CHAOS-12330) and c5 (CHAOS-12301) are built. Nothing is
+`project_only` in production until c5 is live and ops turns on
+`ACR_ACCESS_PROJECT_SCOPE`. Design of record: CHAOS-12107 (v3 and its r3
+addendum; Linear). Parent ticket: CHAOS-12228.
 
 ## Why
 
@@ -31,8 +33,8 @@ a grant:
 explicitly takes the restricted path. `auth.ClassifyGrant` returns
 `project_only` iff `storage.Principal.ProjectScopes` (canonical `project.v2`
 identities) is non-empty, whatever the repository list holds; otherwise it
-keeps today's rule. Only the access-read decoder (c5, CHAOS-12301) sets
-`ProjectScopes`, so nothing is `project_only` before c5.
+keeps today's rule. Only the access gate (c5, CHAOS-12301) sets
+`ProjectScopes`; see [Admission](#admission).
 
 The three gate vocabularies derive from the grant class with no `default`.
 `project_only` maps to their restricted member, so no wire value changes:
@@ -130,6 +132,53 @@ A project identity is `project.v2:<EncodeSegment(provider)>:<EncodeSegment(id)>`
 - **Where it is used.** The canonical form is the only one used for
   authorization, in the principal, the node attribute, the fact selectors and
   the digests.
+
+## Admission
+
+c5, CHAOS-12301. This is the only change that admits `project_only`. The order
+is unchanged: auth, access read, scope check, budget, admission. The grant comes
+from the live read on every protected call and is never cached
+(`internal/api/principal_access.go`).
+
+- **The wire.** Ops sends `project_scope` only with `ACR_ACCESS_PROJECT_SCOPE`
+  on and only for an organization with no repository inventory:
+  `{"kind":"projects","projects":[{"provider":...,"id":...}]}`, at most 100
+  pairs, or `{"kind":"none"}` with no `projects` key.
+- **The decoder** (`internal/entitlements/principal_access.go`). It derives each
+  identity once, sorts them, and keeps them as an inventory
+  (`PrincipalAccess.Projects`), not a grant. It is all or nothing: an empty list,
+  more than 100 pairs, an empty or blank provider or id, an oversized identity,
+  a `|` (the membership projection can never state such a project) and a
+  duplicate each reject the whole read. A pair is never dropped. Unknown fields
+  stay refused. A rejected read is the plain 503, never a class change.
+- **D2** (`auth.NarrowToProjectScopes`, called by `narrowLiveScope`):
+
+  | Consent grant | Live repositories | Live projects | Result |
+  |---|---|---|---|
+  | `*` | none | some | `project_only` |
+  | `*` | some | any | today's repository scope |
+  | `*` | none | none, or no `project_scope` | 409 `no_repository` |
+  | a repository, an owner wildcard, or no list | none | some | 409 `no_repository` |
+  | a repository or an owner wildcard | some | any | today's repository scope |
+
+  Widening an explicit repository grant to every project would go beyond what
+  the user consented to. A credential with no user is never read, so it is never
+  `project_only`.
+- **The principal.** `ProjectScopes` holds the projects and `RepositoryScopes`
+  holds only the reserved value, set after normalization, because
+  `NormalizeRepositoryScopes` refuses its prefix. Nothing on the protected chain
+  normalizes a principal's list again: the self-lifecycle and device routes do,
+  and they read the stored grant, outside the access read.
+- **Over the limit.** A 503 with `acr_access_project_scope_over_limit` or
+  `acr_access_repository_scope_over_limit` is a typed limitation, not an outage:
+  rejection reason `project_scope_over_limit` or `repository_scope_over_limit`,
+  an Info line and an audit event with that reason, nothing admitted. The answer
+  stays 503 `upstream_unavailable` (the error code vocabulary is closed) with
+  `retryable: false`, because a retry cannot clear it. Every other 503, a body
+  that does not decode included, stays reason `status`, retryable.
+- **A `*` investigation assertion stays refused.** A web assertion may name
+  every repository only on the two credential approvals, so `project_only` never
+  reopens a `*` investigation.
 
 ## Graph admission
 
@@ -375,7 +424,5 @@ The roll order is fixed: acr with c5 live in production BEFORE ops turns on
 (`internal/entitlements/principal_access.go`), so the reverse order fails
 closed.
 
-The ops access read answers an inventory above 100 with a 503 and a code:
-`acr_access_project_scope_over_limit` or
-`acr_access_repository_scope_over_limit`. c5 maps each code to a typed
-limitation of access; every other 503 stays a plain unavailable.
+The ops access read answers an inventory above 100 with a 503 and a code; see
+[Admission](#admission).

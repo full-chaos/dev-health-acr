@@ -75,9 +75,12 @@ func (a *App) principalAccess() PrincipalAccessReader {
 // cache, and refuses the call before the handler when the user is not a
 // member, is impersonating, the browser credential's session is not live
 // (403 access_denied), a required flag is off (403 feature_not_enabled), or
-// the effective repository scope -- the grant within the live inventory -- is
-// empty (409 no_repository). A read that fails is 503, never 401. Otherwise
-// the handler runs with the principal narrowed to the effective scope and the
+// the effective scope is empty (409 no_repository). The effective scope is the
+// grant within the live repository inventory, or, for a "*" grant with no
+// repository inventory and live projects, those projects (narrowLiveScope,
+// CHAOS-12301). A read that fails is 503, never 401, and an inventory above its
+// limit is a 503 that is not retryable (refuseOverLimitAccess). Otherwise the
+// handler runs with the principal narrowed to the effective scope and the
 // read kept in the context for the rest of the request. With enforceFlags
 // false (the capabilities route, which is how a client learns what is
 // enabled) a flag that is off is not refused: the handler reports it from the
@@ -122,6 +125,9 @@ func (a *App) requireLiveAccess(enforceFlags bool, next http.Handler) http.Handl
 		case errors.Is(err, entitlements.ErrSessionInvalid):
 			a.refuseLiveAccess(w, r, principal, accessDenySessionNotLive, elapsed)
 			return
+		case entitlements.AccessScopeOverLimit(err):
+			a.refuseOverLimitAccess(w, r, principal, entitlements.RejectionReason(err), elapsed)
+			return
 		case err != nil:
 			a.logger.ErrorContext(r.Context(), "principal access read failed",
 				"request_id", contextfabric.SanitizeLogAttr(RequestID(r.Context())), "failure_class", "principal_access",
@@ -145,7 +151,7 @@ func (a *App) requireLiveAccess(enforceFlags bool, next http.Handler) http.Handl
 			}
 		}
 		effective := effectiveRepositoryScope(principal.RepositoryScopes, access.Repositories)
-		ctx, err := auth.NarrowRepositoryScopes(r.Context(), effective)
+		ctx, err := narrowLiveScope(r.Context(), effective, access)
 		if err != nil {
 			a.recordReadAudit(r.Context(), principal, "access_denied", "acr_access", contractsv1.ErrorCodeNoRepository, "denied", nil)
 			a.logger.InfoContext(r.Context(), "principal access read refused",
@@ -155,9 +161,23 @@ func (a *App) requireLiveAccess(enforceFlags bool, next http.Handler) http.Handl
 			return
 		}
 		ctx = context.WithValue(ctx, liveAccessKey{}, liveAccess{access: access})
-		a.logAccessGranted(ctx, principal, len(effective), len(access.Repositories), enforceFlags, elapsed)
+		// The narrowed principal: the class of the grant the handler runs with.
+		narrowed, _ := auth.PrincipalFromContext(ctx)
+		a.logAccessGranted(ctx, narrowed, len(effective), len(access.Repositories), enforceFlags, elapsed)
 		next.ServeHTTP(w, r.WithContext(ctx))
 	})
+}
+
+// narrowLiveScope narrows the principal to the live answer. With no repository
+// inventory and live projects the answer is a project grant, which only a "*"
+// consent grant may take (auth.NarrowToProjectScopes, CHAOS-12107 D2): any other
+// grant is refused like an empty scope. Every other answer is the repository
+// path, unchanged, so an organization with repositories never reads projects.
+func narrowLiveScope(ctx context.Context, effective []string, access entitlements.PrincipalAccess) (context.Context, error) {
+	if len(access.Repositories) == 0 && len(access.Projects) > 0 {
+		return auth.NarrowToProjectScopes(ctx, access.Projects)
+	}
+	return auth.NarrowRepositoryScopes(ctx, effective)
 }
 
 // logAccessGranted writes a granted read's basis, at Debug (one line per
@@ -248,6 +268,18 @@ func (a *App) refuseLiveAccess(w http.ResponseWriter, r *http.Request, principal
 		"request_id", contextfabric.SanitizeLogAttr(RequestID(r.Context())), "reason", reason,
 		"client_class", string(principal.ClientClass), "elapsed_ms", elapsed.Milliseconds())
 	writeError(w, r, http.StatusForbidden, contractsv1.ErrorCodeAccessDenied, contractsv1.ContextFabricAccessDeniedMessage, false, nil)
+}
+
+// refuseOverLimitAccess answers an inventory above its limit (ops CHAOS-12224,
+// CHAOS-12267): a typed limitation of the organization's access, not an outage.
+// Nothing is admitted. Its reason is logged and audited, never served: the
+// status and the code stay those of a failed read, and a retry cannot clear it.
+func (a *App) refuseOverLimitAccess(w http.ResponseWriter, r *http.Request, principal storage.Principal, reason string, elapsed time.Duration) {
+	a.recordReadAudit(r.Context(), principal, "access_denied", "acr_access", reason, "denied", nil)
+	a.logger.InfoContext(r.Context(), "principal access read refused",
+		"request_id", contextfabric.SanitizeLogAttr(RequestID(r.Context())), "reason", reason,
+		"client_class", string(principal.ClientClass), "elapsed_ms", elapsed.Milliseconds())
+	writeError(w, r, http.StatusServiceUnavailable, "upstream_unavailable", contractsv1.ContextFabricAccessInventoryOverLimitMessage, false, nil)
 }
 
 // agentContextRuntimeEntitled answers agent_context_runtime for principal:
