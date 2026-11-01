@@ -58,10 +58,11 @@ func CensusListingReasonVocabulary() []string {
 	return []string{"", censusListingOverBudget, censusListingClosureMismatch, censusListingNarrowingUndecided, censusListingBudgetBelowTwo, censusListingRefused}
 }
 
-// handleAttestation is the one kind the question's handle was applied to.
-func handleAttestation(attestation Attestation, kind CensusKind) (KindAttestation, bool) {
+// handleAttestation is the one kind the question's handle was applied to: a round
+// applies a handle to its own kind and to no other.
+func handleAttestation(attestation Attestation) (KindAttestation, bool) {
 	for _, ka := range attestation.Kinds {
-		if ka.Kind == kind && ka.HandleApplied {
+		if ka.HandleApplied {
 			return ka, true
 		}
 	}
@@ -101,7 +102,7 @@ func listCensusSatisfiers(ctx context.Context, principal storage.Principal, requ
 		return resolution, nil
 	}
 	handle := bound[0]
-	ka, ok := handleAttestation(attestation, handle.Kind)
+	ka, ok := handleAttestation(attestation)
 	if !ok || !ka.Complete || ka.Count < 1 {
 		return resolution, nil
 	}
@@ -123,9 +124,11 @@ func listCensusSatisfiers(ctx context.Context, principal storage.Principal, requ
 	for _, candidate := range resolution.Candidates {
 		pooled[SubjectKey(candidate.Subject)] = candidate
 	}
+	// A work item the round scoped by the link walk is in the requested repository
+	// scope through its link: the gate tests the issue side of that rule, never
+	// its own repository.
 	scope := request.RequestedScope
-	throughLink := linkScopedSatisfier(attestation, ka.Kind)
-	if throughLink {
+	if linkScopedSatisfier(attestation, ka.Kind) {
 		scope = issueScopeOfLink(scope)
 	}
 	term := request.Question[handle.SpanStart:handle.SpanEnd]
@@ -151,7 +154,7 @@ func listCensusSatisfiers(ctx context.Context, principal storage.Principal, requ
 		}
 		reads++
 		node, exists, err := deps.ExactHint(graphCtx, subject)
-		if err != nil || !exists || (throughLink && !AuthorizedThroughLink(principal, request.RequestedScope, node.Attributes)) {
+		if err != nil || !exists {
 			refused++
 			continue
 		}

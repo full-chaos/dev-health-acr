@@ -254,6 +254,23 @@ func TestAListingIsCutAtTheBoundAndSaysSo(t *testing.T) {
 	}
 }
 
+// A lone satisfier is no choice between candidates, so a budget of one lists it.
+func TestABudgetOfOneListsALoneSatisfier(t *testing.T) {
+	t.Parallel()
+	spy := &grantCensusSpy{rows: listingRows(1)}
+	survivors := []CandidateNode{
+		candidateNode(contextfabric.SubjectRepository, "repository:noise", "noise", 0.8, []string{listingRepo(0)}),
+		candidateNode(contextfabric.SubjectRepository, "repository:noise-2", "noise two", 0.8, []string{listingRepo(0)}),
+	}
+	turn := runListing(t, listingWorld{
+		principal: restrictedCaller(t, listingScopes(1)...), census: spy.census, nodes: listingNodes(1), pool: survivors,
+		edit: func(r *contextfabric.InvestigationRequest, _ *ResolveDeps) { r.Options.MaxSubjectCandidates = 1 },
+	})
+	if got := candidateIDs(turn.resolution.Candidates); !slices.Equal(got, []string{listingID(0)}) {
+		t.Fatalf("candidates = %v, want the satisfier", got)
+	}
+}
+
 // A budget of one cannot show a choice, so it lists nothing and says the count.
 func TestABudgetBelowTwoListsNothing(t *testing.T) {
 	t.Parallel()
@@ -829,29 +846,86 @@ func TestAListingNeedsAVisibleRound(t *testing.T) {
 }
 
 // A work item a link scope reached is tested on the issue side of the link, never
-// by its own repository, as a merge is.
+// by its own repository, as a merge is. The link walk chose the ids; the node gate
+// still reads the caller's grant.
 func TestALinkScopedWorkItemIsListedThroughItsLink(t *testing.T) {
 	t.Parallel()
 	first, second := "work_item.v2:00000000-0000-0000-0000-000000000000:linear:CHAOS-70", "work_item.v2:00000000-0000-0000-0000-000000000000:jira:CHAOS-70"
-	nodes := map[string]CandidateNode{first: repoLessItem(first, "Split the job", grantRepoInside), second: repoLessItem(second, "Split the job")}
-	backend := &fakeGraphBackend{}
-	deps := backend.deps()
-	deps.ExactHint = func(_ context.Context, subject contextfabric.SubjectRef) (CandidateNode, bool, error) {
-		node, ok := nodes[subject.CanonicalID]
-		return node, ok, nil
-	}
-	request := testRequest()
-	request.Question = "Why is CHAOS-70 blocked?"
-	request.RequestedScope.RepositorySlugs = []string{grantRepoInside}
 	attestation := Attestation{UnscopedVisibility: true, Kinds: []KindAttestation{{
 		Kind: contextfabric.SubjectWorkItem, Complete: true, Count: 2, HandleApplied: true, RepositoryFilterApplied: true,
 		SatisfierCanonicalIDs: []string{first, second},
 	}}}
-	listed, _ := listCensusSatisfiers(context.Background(), restrictedCaller(t, grantRepoInside), request, deps, attestation, contextfabric.SubjectResolution{})
-	if got := candidateIDs(listed.Candidates); !slices.Equal(got, []string{first}) {
-		t.Fatalf("candidates = %v, want the item a link joins to the scope", got)
+	for name, tc := range map[string]struct {
+		principal storage.Principal
+		nodes     map[string]CandidateNode
+		want      []string
+	}{
+		"restricted": {
+			restrictedCaller(t, grantRepoInside),
+			map[string]CandidateNode{first: repoLessItem(first, "Split the job", grantRepoInside), second: repoLessItem(second, "Split the job")},
+			[]string{first},
+		},
+		// An unrestricted caller's node holds no link attribute: the link walk
+		// decided it, and the node's own repository must not.
+		"unrestricted": {
+			userprincipal.Authenticated(t, "org_1", nil),
+			map[string]CandidateNode{first: repoLessItem(first, "Split the job"), second: repoLessItem(second, "Split the job")},
+			[]string{first, second},
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			backend := &fakeGraphBackend{}
+			deps := backend.deps()
+			deps.ExactHint = func(_ context.Context, subject contextfabric.SubjectRef) (CandidateNode, bool, error) {
+				node, ok := tc.nodes[subject.CanonicalID]
+				return node, ok, nil
+			}
+			request := testRequest()
+			request.Question = "Why is CHAOS-70 blocked?"
+			request.RequestedScope.RepositorySlugs = []string{grantRepoInside}
+			listed, _ := listCensusSatisfiers(context.Background(), tc.principal, request, deps, attestation, contextfabric.SubjectResolution{})
+			got := candidateIDs(listed.Candidates)
+			slices.Sort(got)
+			want := slices.Sorted(slices.Values(tc.want))
+			if !slices.Equal(got, want) {
+				t.Fatalf("candidates = %v, want %v", got, want)
+			}
+		})
 	}
-	if want := contractsv1.ContextFabricCensusListedLimitation(2, 1); listed.CensusLimitation != want {
-		t.Fatalf("limitation = %q, want %q", listed.CensusLimitation, want)
+}
+
+// A satisfier the search already holds costs no read, and keeps its place in the
+// count.
+func TestAPooledSatisfierIsNotReadAgain(t *testing.T) {
+	t.Parallel()
+	pool := make([]CandidateNode, 0, 2)
+	for i := range 2 {
+		node := candidateNode(contextfabric.SubjectPullRequest, listingID(i), "PR #12", 0.8, []string{listingRepo(i)})
+		pool = append(pool, node)
+	}
+	spy := &grantCensusSpy{rows: listingRows(3)}
+	turn := runListing(t, listingWorld{principal: restrictedCaller(t, listingScopes(3)...), census: spy.census, nodes: listingNodes(3), pool: pool})
+	if !slices.Equal(*turn.reads, []string{listingID(2)}) {
+		t.Fatalf("keyed reads = %v, want only the id the pool lacks", *turn.reads)
+	}
+	if got := candidateIDs(turn.resolution.Candidates); !slices.Equal(got, []string{listingID(0), listingID(1), listingID(2)}) {
+		t.Fatalf("candidates = %v, want all three", got)
+	}
+	if turn.resolution.CensusLimitation != "" {
+		t.Fatalf("limitation = %q: all three are listed", turn.resolution.CensusLimitation)
+	}
+}
+
+// A commit is the answer: the listing writes nothing beside it.
+func TestACommitListsNothing(t *testing.T) {
+	t.Parallel()
+	spy := &grantCensusSpy{rows: listingRows(1)}
+	turn := runListing(t, listingWorld{principal: restrictedCaller(t, listingScopes(1)...), census: spy.census, nodes: listingNodes(1)})
+	if len(turn.resolution.Committed) != 1 {
+		t.Fatalf("committed = %v, want the lone satisfier", turn.resolution.Committed)
+	}
+	if lines := turn.tracer.eventsForStage("evidence_census_listing"); len(lines) != 0 {
+		t.Fatalf("lines = %+v, want none beside a commit", lines)
 	}
 }

@@ -120,8 +120,8 @@ func TestACensusCountIsListedOnRealStores(t *testing.T) {
 	addPR("other/secret", 12, "Hidden change")
 	addPR("acme/r00", 77, "Lone change")
 	addPR("other/secret", 78, "Lone change outside")
-	addPR("acme/r00", 79, "The link's own pull request")
-	addPR("acme/r01", 79, "The link's own second pull request")
+	addPR("acme/r00", 79, "The first linked change")
+	addPR("acme/r01", 79, "The second linked change")
 	for i := range 3 {
 		exec("ci run", `INSERT INTO ci_pipeline_runs (repo_id, run_id, status, started_at, last_synced, org_id) VALUES (?, ?, ?, ?, ?, ?)`, repo[inside[i]], "4242", "success", created, now, org)
 	}
