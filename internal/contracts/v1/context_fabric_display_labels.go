@@ -120,6 +120,242 @@ var contextFabricEvidenceEntityLabels = map[ContextFabricEvidenceEntityType]stri
 	ContextFabricEvidenceEntityReviewV2:             "Review",
 }
 
+// ContextFabricVocabulary names one served vocabulary: the prefix of a
+// vocabulary_labels key (CHAOS-12413). The list is the shortest set a reader
+// actually sees outside the Details fold; a raw token that stays in the fold
+// gets no entry, so its label cannot drift from a word nobody reads.
+//
+// Not served, on purpose:
+//   - completeness.outcomes[].requirement is not a vocabulary. It is a
+//     composite coordinate, obligation/role/subject, so it takes the generic
+//     path.
+//   - obligation, the cause and refinement fields, plan narrowing, driver
+//     category, epistemic status and derivation stay in the fold.
+//   - claimed_facts[].field and the keys of rows[].fields are free strings
+//     declared per kind (CHAOS-12418).
+type ContextFabricVocabulary string
+
+const (
+	ContextFabricVocabularyAnswerStatus            ContextFabricVocabulary = "answer_status"
+	ContextFabricVocabularyCompletenessState       ContextFabricVocabulary = "completeness_state"
+	ContextFabricVocabularyRequirementOutcome      ContextFabricVocabulary = "requirement_outcome"
+	ContextFabricVocabularyAnswerImpact            ContextFabricVocabulary = "answer_impact"
+	ContextFabricVocabularyCandidateState          ContextFabricVocabulary = "candidate_state"
+	ContextFabricVocabularyPriorReceiptDisposition ContextFabricVocabulary = "prior_receipt_disposition"
+	ContextFabricVocabularyStructureDisposition    ContextFabricVocabulary = "structure_disposition"
+	ContextFabricVocabularySubjectKind             ContextFabricVocabulary = "subject_kind"
+	// ContextFabricVocabularySubjectKindPlural serves the plural beside the
+	// singular, so a consumer writes "Ranked repositories" without a
+	// pluralizer of its own.
+	ContextFabricVocabularySubjectKindPlural      ContextFabricVocabulary = "subject_kind_plural"
+	ContextFabricVocabularyMemberOutcome          ContextFabricVocabulary = "member_outcome"
+	ContextFabricVocabularyMemberDataCompleteness ContextFabricVocabulary = "member_data_completeness"
+	ContextFabricVocabularyRankingSignal          ContextFabricVocabulary = "ranking_signal"
+	ContextFabricVocabularyThresholdLabel         ContextFabricVocabulary = "threshold_label"
+	ContextFabricVocabularyDriverWindow           ContextFabricVocabulary = "driver_window"
+	ContextFabricVocabularyDriverStanding         ContextFabricVocabulary = "driver_standing"
+	ContextFabricVocabularyFactKind               ContextFabricVocabulary = "fact_kind"
+	ContextFabricVocabularyWindowRelativeID       ContextFabricVocabulary = "window_relative_id"
+	ContextFabricVocabularyWindowProvenance       ContextFabricVocabulary = "window_provenance"
+)
+
+var contextFabricVocabularyNames = [...]ContextFabricVocabulary{
+	ContextFabricVocabularyAnswerStatus,
+	ContextFabricVocabularyCompletenessState,
+	ContextFabricVocabularyRequirementOutcome,
+	ContextFabricVocabularyAnswerImpact,
+	ContextFabricVocabularyCandidateState,
+	ContextFabricVocabularyPriorReceiptDisposition,
+	ContextFabricVocabularyStructureDisposition,
+	ContextFabricVocabularySubjectKind,
+	ContextFabricVocabularySubjectKindPlural,
+	ContextFabricVocabularyMemberOutcome,
+	ContextFabricVocabularyMemberDataCompleteness,
+	ContextFabricVocabularyRankingSignal,
+	ContextFabricVocabularyThresholdLabel,
+	ContextFabricVocabularyDriverWindow,
+	ContextFabricVocabularyDriverStanding,
+	ContextFabricVocabularyFactKind,
+	ContextFabricVocabularyWindowRelativeID,
+	ContextFabricVocabularyWindowProvenance,
+}
+
+// ContextFabricVocabularyNames returns the served vocabularies in published
+// order.
+func ContextFabricVocabularyNames() [len(contextFabricVocabularyNames)]ContextFabricVocabulary {
+	return contextFabricVocabularyNames
+}
+
+// contextFabricFactKindLabelsBeyondTheFactVocabulary holds the kinds a finding
+// or a claimed fact publishes that are not canonical fact kinds: the count the
+// server computed, and the finding kinds with no fact of their own.
+var contextFabricFactKindLabelsBeyondTheFactVocabulary = map[string]string{
+	string(ContextFabricFactCardinality): "member count",
+	"operational_deficiency":             "operational deficiency",
+	"relationship":                       "relationship",
+	"narrative":                          "narrative",
+}
+
+// contextFabricVocabularyFactKindLabels is the fact kind table a chip reads:
+// the registry's own word, so a chip and a coverage sentence never disagree.
+func contextFabricVocabularyFactKindLabels() map[string]string {
+	labels := make(map[string]string, len(contextFabricFactKindLabels)+len(contextFabricFactKindLabelsBeyondTheFactVocabulary))
+	for kind, label := range contextFabricFactKindLabels {
+		labels[string(kind)] = label
+	}
+	for kind, label := range contextFabricFactKindLabelsBeyondTheFactVocabulary {
+		labels[kind] = label
+	}
+	return labels
+}
+
+// contextFabricVocabularyLabels is the label of every value a reader sees
+// outside the fold. Plain, service-authored words, never model text. Totality
+// runs both ways in chaos12415_vocabulary_labels_test.go: a new value cannot
+// ship unlabeled, and a label cannot outlive its value.
+var contextFabricVocabularyLabels = map[ContextFabricVocabulary]map[string]string{
+	// Each says "answer", so it cannot be read as a project status or as work
+	// completion (North Star check 3).
+	ContextFabricVocabularyAnswerStatus: {
+		string(ContextFabricInvestigationComplete):              "full answer",
+		string(ContextFabricInvestigationPartial):               "partial answer",
+		string(ContextFabricInvestigationDegraded):              "degraded answer",
+		string(ContextFabricInvestigationClarificationRequired): "answer needs your confirmation",
+		string(ContextFabricInvestigationNoMatch):               "no answer",
+	},
+	ContextFabricVocabularyCompletenessState: {
+		string(ContextFabricAnswerCompletenessNotDerived): "not worked out",
+		string(ContextFabricAnswerCompletenessComplete):   "complete",
+		string(ContextFabricAnswerCompletenessPartial):    "partial",
+		string(ContextFabricAnswerCompletenessDegraded):   "degraded",
+	},
+	ContextFabricVocabularyRequirementOutcome: {
+		string(ContextFabricRequirementSatisfied):     "met",
+		string(ContextFabricRequirementNarrowed):      "narrowed",
+		string(ContextFabricRequirementUnavailable):   "unavailable",
+		string(ContextFabricRequirementNotApplicable): "not applicable",
+		string(ContextFabricRequirementNotAttempted):  "not attempted",
+	},
+	ContextFabricVocabularyAnswerImpact: {
+		string(ContextFabricAnswerImpactNone):      "nothing lost",
+		string(ContextFabricAnswerImpactScope):     "fewer subjects",
+		string(ContextFabricAnswerImpactDepth):     "less evidence",
+		string(ContextFabricAnswerImpactDimension): "part of the question is missing",
+	},
+	ContextFabricVocabularyCandidateState: {
+		string(ContextFabricResolutionCommitted):  "selected",
+		string(ContextFabricResolutionProposed):   "suggested",
+		string(ContextFabricResolutionAmbiguous):  "more than one match",
+		string(ContextFabricResolutionUnresolved): "no match",
+	},
+	ContextFabricVocabularyPriorReceiptDisposition: {
+		string(ContextFabricPriorSubjectReceiptApplied):                "used",
+		string(ContextFabricPriorSubjectReceiptSkippedUnloadable):      "could not be loaded",
+		string(ContextFabricPriorSubjectReceiptSkippedNoMatch):         "no longer matches",
+		string(ContextFabricPriorSubjectReceiptSkippedStaleGraphEpoch): "out of date",
+		string(ContextFabricPriorSubjectReceiptSkippedFailedReauth):    "not readable with your access",
+	},
+	ContextFabricVocabularyStructureDisposition: {
+		string(ContextFabricStructureDispositionApplied):            "used",
+		string(ContextFabricStructureDispositionVetoedUnresolved):   "could not be matched",
+		string(ContextFabricStructureDispositionVetoedConflict):     "conflicts with this question",
+		string(ContextFabricStructureDispositionVetoedStale):        "out of date",
+		string(ContextFabricStructureDispositionSupersededByCaller): "replaced by your request",
+		string(ContextFabricStructureDispositionNotEvaluated):       "not checked",
+	},
+	ContextFabricVocabularySubjectKind: {
+		string(ContextFabricSubjectOrganization):      "organization",
+		string(ContextFabricSubjectTeam):              "team",
+		string(ContextFabricSubjectProject):           "project",
+		string(ContextFabricSubjectRepository):        "repository",
+		string(ContextFabricSubjectWorkItem):          "work item",
+		string(ContextFabricSubjectPullRequest):       "pull request",
+		string(ContextFabricSubjectDeployment):        "deployment",
+		string(ContextFabricSubjectIncident):          "incident",
+		string(ContextFabricSubjectDocument):          "document",
+		string(ContextFabricSubjectDecision):          "decision",
+		string(ContextFabricSubjectEpisode):           "episode",
+		string(ContextFabricSubjectMetric):            "metric",
+		string(ContextFabricSubjectPullRequestReview): "pull request review",
+		string(ContextFabricSubjectCIRun):             "CI run",
+		string(ContextFabricSubjectWorkItemRef):       "work item reference",
+	},
+	// devhealthschema:not-a-production-replica display words for a subject kind; they spell table names and read no table
+	ContextFabricVocabularySubjectKindPlural: {
+		string(ContextFabricSubjectOrganization):      "organizations",
+		string(ContextFabricSubjectTeam):              "teams",
+		string(ContextFabricSubjectProject):           "projects",
+		string(ContextFabricSubjectRepository):        "repositories",
+		string(ContextFabricSubjectWorkItem):          "work items",
+		string(ContextFabricSubjectPullRequest):       "pull requests",
+		string(ContextFabricSubjectDeployment):        "deployments",
+		string(ContextFabricSubjectIncident):          "incidents",
+		string(ContextFabricSubjectDocument):          "documents",
+		string(ContextFabricSubjectDecision):          "decisions",
+		string(ContextFabricSubjectEpisode):           "episodes",
+		string(ContextFabricSubjectMetric):            "metrics",
+		string(ContextFabricSubjectPullRequestReview): "pull request reviews",
+		string(ContextFabricSubjectCIRun):             "CI runs",
+		string(ContextFabricSubjectWorkItemRef):       "work item references",
+	},
+	ContextFabricVocabularyMemberOutcome: {
+		string(ContextFabricCohortOutcomeQualified):            "qualified",
+		string(ContextFabricCohortOutcomeProvisional):          "provisional",
+		string(ContextFabricCohortOutcomeInsufficientEvidence): "not enough evidence",
+		string(ContextFabricCohortOutcomeNotApplicable):        "not applicable",
+	},
+	ContextFabricVocabularyMemberDataCompleteness: {
+		string(ContextFabricCohortDataComplete): "all signals",
+		string(ContextFabricCohortDataPartial):  "some signals missing",
+		string(ContextFabricCohortDataDegraded): "two or fewer signals",
+	},
+	ContextFabricVocabularyRankingSignal: contextFabricCohortSignalNouns,
+	ContextFabricVocabularyThresholdLabel: {
+		"investment_mix.reactive_share_high":          "reactive share is high",
+		"investment_mix.deliberate_share_low":         "deliberate share is low",
+		"investment_mix.mix_concentrated":             "work mix is concentrated",
+		"investment_mix.mix_shift_toward_operational": "mix moved toward operational work",
+		"investment_mix.mix_shift_toward_feature":     "mix moved toward feature work",
+		"investment_mix.mix_shift_other":              "mix shifted",
+	},
+	ContextFabricVocabularyDriverWindow: {
+		string(ContextFabricCohortMemberDriverWindowCurrent):        "current period",
+		string(ContextFabricCohortMemberDriverWindowCurrentVsPrior): "current vs prior period",
+	},
+	ContextFabricVocabularyDriverStanding: {
+		string(ContextFabricDriverPrincipal):    "main driver",
+		string(ContextFabricDriverContributing): "contributing",
+		string(ContextFabricDriverSymptom):      "symptom",
+		string(ContextFabricDriverContext):      "context",
+		string(ContextFabricDriverWithheld):     "withheld",
+	},
+	ContextFabricVocabularyFactKind: contextFabricVocabularyFactKindLabels(),
+	ContextFabricVocabularyWindowRelativeID: {
+		string(ContextFabricRelativeWindowTrailing30D):  "last 30 days",
+		string(ContextFabricRelativeWindowTrailing90D):  "last 90 days",
+		string(ContextFabricRelativeWindowTrailing365D): "last 365 days",
+		string(ContextFabricRelativeWindowAllTime):      "all time",
+	},
+	ContextFabricVocabularyWindowProvenance: {
+		string(ContextFabricWindowInferredDefault):        "default window",
+		string(ContextFabricWindowQuestionStated):         "stated in the question",
+		string(ContextFabricWindowClarificationConfirmed): "confirmed by you",
+		string(ContextFabricWindowServerDefault):          "the window the reads used",
+	},
+}
+
+// ContextFabricVocabularyLabelKey is the vocabulary_labels key of one value.
+func ContextFabricVocabularyLabelKey(vocabulary ContextFabricVocabulary, value string) string {
+	return string(vocabulary) + ":" + value
+}
+
+// ContextFabricVocabularyLabel returns the served label of one value; ok is
+// false for a value with no row, which a consumer renders by its generic path.
+func ContextFabricVocabularyLabel(vocabulary ContextFabricVocabulary, value string) (string, bool) {
+	label, ok := contextFabricVocabularyLabels[vocabulary][value]
+	return label, ok
+}
+
 // humanizeVocabularyToken is the deterministic transform for a token from
 // one of acr's OWN vocabularies whose display needs no bespoke label
 // (underscores to spaces). Never applied to free text.

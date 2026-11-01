@@ -150,6 +150,7 @@
       "structured.coverage.details[].phrasing",
       "structured.coverage.details[].raw",
       "structured.evidence_ref_labels{}",
+      "structured.vocabulary_labels{}",
       "structured.limitations[]",
       "structured.warnings[]",
       "structured.window_clarification.options[].label",
