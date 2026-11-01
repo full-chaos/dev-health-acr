@@ -23,7 +23,9 @@ func projectOnlyWalkNode(kind contextfabric.SubjectKind, id string, extra map[st
 
 // CHAOS-12299: inside a link read, a project-only caller's issue is decided by
 // the node rule. A native link grants it no authority, a repository-less issue
-// is not admitted for want of a repository list, and a pull request is denied.
+// is not admitted for want of a repository list, and a pull request is
+// admitted only on a stated membership that stands on native links
+// (CHAOS-12308).
 func TestAProjectOnlyLinkPositionIsDecidedByTheNodeRule(t *testing.T) {
 	t.Parallel()
 	state := treeWalkState{principal: projectOnlyWalkPrincipal()}
@@ -32,6 +34,8 @@ func TestAProjectOnlyLinkPositionIsDecidedByTheNodeRule(t *testing.T) {
 	member := projectOnlyWalkNode(contextfabric.SubjectWorkItem, "work_item.v2:r:W-2", map[string]interface{}{propAuthzRepos: []string{"acme/api"}, propAuthzProjectIdentities: []string{"project.v2:github:P-1"}})
 	repositoryLessMember := projectOnlyWalkNode(contextfabric.SubjectWorkItem, "work_item.v2:r:W-3", map[string]interface{}{propAuthzRepos: []string{noRepositoryScope}, propAuthzProjectIdentities: []string{"project.v2:github:P-1"}})
 	pullRequest := projectOnlyWalkNode(contextfabric.SubjectPullRequest, "pull_request:acme/api:1", map[string]interface{}{propAuthzRepos: []string{"acme/api"}})
+	nativeMember := projectOnlyWalkNode(contextfabric.SubjectPullRequest, "pull_request:acme/api:2", map[string]interface{}{propAuthzRepos: []string{"acme/api"}, propAuthzProjectIdentities: []string{"project.v2:github:P-1"}, propProjectMembershipTier: "native"})
+	lowerTierMember := projectOnlyWalkNode(contextfabric.SubjectPullRequest, "pull_request:acme/api:3", map[string]interface{}{propAuthzRepos: []string{"acme/api"}, propAuthzProjectIdentities: []string{"project.v2:github:P-1"}, propProjectMembershipTier: "explicit_text"})
 	for _, tc := range []struct {
 		name     string
 		position treePosition
@@ -41,7 +45,9 @@ func TestAProjectOnlyLinkPositionIsDecidedByTheNodeRule(t *testing.T) {
 		{name: "a repository-less issue with no stated membership, on a native link", position: treeIssue, node: repositoryLessIssue, want: false},
 		{name: "a member issue", position: treeIssue, node: member, want: true},
 		{name: "a repository-less member issue", position: treeIssue, node: repositoryLessMember, want: true},
-		{name: "a pull request", position: treePullRequest, node: pullRequest, want: false},
+		{name: "a pull request with no stated membership", position: treePullRequest, node: pullRequest, want: false},
+		{name: "a pull request with a native membership", position: treePullRequest, node: nativeMember, want: true},
+		{name: "a pull request with a lower-tier membership", position: treePullRequest, node: lowerTierMember, want: false},
 	} {
 		if got := state.admitted(tc.position, tc.node, native); got != tc.want {
 			t.Errorf("%s: admitted = %v, want %v", tc.name, got, tc.want)

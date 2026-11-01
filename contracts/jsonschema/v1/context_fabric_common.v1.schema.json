@@ -4172,13 +4172,20 @@
     "EntityProjection": {
       "allOf": [
         {
-          "description": "CHAOS-12226: only a work-item entity may state project_identities.",
+          "description": "CHAOS-12226, CHAOS-12308: only a work-item or a pull-request entity may state project_identities.",
           "if": {
             "properties": {
               "subject": {
                 "properties": {
                   "kind": {
-                    "const": "work_item"
+                    "anyOf": [
+                      {
+                        "const": "work_item"
+                      },
+                      {
+                        "const": "pull_request"
+                      }
+                    ]
                   }
                 }
               }
@@ -4252,7 +4259,7 @@
           "$ref": "#/$defs/EntityAuthorizationScope"
         },
         "project_identities": {
-          "description": "CHAOS-12226: a work item's current project membership, as canonical project.v2 identities from its own project link. Absent: not stated. Empty: stated, in no project. Only a work-item entity may carry it; never a wildcard.",
+          "description": "CHAOS-12226, CHAOS-12308: a work item's current project membership, as canonical project.v2 identities from its own project link; on a pull request, the union of the memberships of the issues linked to it, with the weakest contributing link tier in the project_membership_tier property. Absent: not stated. Empty: stated, in no project. Only a work-item or a pull-request entity may carry it; never a wildcard.",
           "type": "array",
           "items": {
             "type": "string",

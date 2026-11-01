@@ -182,10 +182,21 @@ func requestedProjectMembership(requested contextfabric.RequestedScope, attribut
 	if value, isString := attributes[authorizationProjectsAttr].(string); !isString || value != "*" {
 		return ProjectMembershipUnstated, false
 	}
-	if requested.ProjectNarrowing == nil {
+	if requested.ProjectNarrowing == nil || lowerTierProjectMembership(attributes) {
 		return ProjectMembershipUnstated, true
 	}
 	return ProjectMembershipOf(attributes, requested.ProjectNarrowing.Identities), true
+}
+
+// lowerTierProjectMembership reports a pull request whose stated membership
+// does not stand on native links only (CHAOS-12308): a lower tier neither
+// proves nor denies a requested narrowing (the node stays admitted and
+// disclosed as unverified), and it never admits a project-only caller. A pull
+// request's membership with no tier is not proven either. A work item's own
+// project link needs no tier.
+func lowerTierProjectMembership(attributes map[string]interface{}) bool {
+	return contextfabric.SubjectKind(StringAttribute(attributes, "subject_kind")) == contextfabric.SubjectPullRequest &&
+		StringAttribute(attributes, ProjectMembershipTierAttr) != contextfabric.TreeLinkTierNative
 }
 
 // AuthorizationProjectIdentitiesAttr is the work-item node attribute that
@@ -194,6 +205,10 @@ func requestedProjectMembership(requested contextfabric.RequestedScope, attribut
 // absent when no producer stated it. It is never "*" and never read with
 // wildcard meaning. falkorgraph writes it (propAuthzProjectIdentities).
 const AuthorizationProjectIdentitiesAttr = "authorization_project_identities"
+
+// ProjectMembershipTierAttr is the pull request node attribute that names the
+// weakest link tier its stated membership stands on (CHAOS-12308).
+const ProjectMembershipTierAttr = "property_" + contractsv1.ContextFabricProjectMembershipTierProperty
 
 // ProjectMembership is what a node's authorization_project_identities says
 // about a set of projects (CHAOS-12299, shared with CHAOS-12229).
@@ -291,6 +306,10 @@ func projectOnlyAdmits(principal storage.Principal, requested contextfabric.Requ
 		return slices.Contains(principal.ProjectScopes, StringAttribute(attributes, "canonical_id"))
 	case contextfabric.SubjectWorkItem:
 		return ProjectMembershipOf(attributes, principal.ProjectScopes) == ProjectMembershipMember
+	case contextfabric.SubjectPullRequest:
+		// CHAOS-12308: a link's tier grants no authority: only a pull request
+		// whose membership stands on native links is admitted.
+		return !lowerTierProjectMembership(attributes) && ProjectMembershipOf(attributes, principal.ProjectScopes) == ProjectMembershipMember
 	default:
 		return false
 	}
