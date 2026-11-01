@@ -1,16 +1,19 @@
 package hosted
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"log/slog"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/full-chaos/dev-health-acr/internal/authprojection"
 	"github.com/full-chaos/dev-health-acr/internal/config"
+	"github.com/full-chaos/dev-health-acr/internal/telemetryscrub"
 )
 
 type fakeOutboxTicker struct {
@@ -80,8 +83,27 @@ func TestAFailingPublisherTickIsReportedWithTheFixedMessageAndNeverStops(t *test
 	}
 }
 
+// syncBuffer is a log sink the publisher goroutine writes while the test polls it.
+type syncBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (b *syncBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+func (b *syncBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
+}
+
 func TestThePublisherLogsCountsWithFixedTextAndNoIdentifierOrSecret(t *testing.T) {
-	logger, buffer := tickLogger()
+	buffer := &syncBuffer{}
+	logger := slog.New(telemetryscrub.Handler(slog.NewTextHandler(buffer, &slog.HandlerOptions{Level: slog.LevelInfo})))
 	ticker := &fakeOutboxTicker{limits: make(chan int, 8), report: authprojection.Report{Applied: 4, Retry: 1, Schema: 2, Conflict: 5, FinalRefused: 6, Held: 3, Stopped: authprojection.OutcomeBusy, Full: true}}
 	stop := startCredentialOutboxPublisher(context.Background(), ticker, logger, nil, 10*time.Millisecond)
 	<-ticker.limits
