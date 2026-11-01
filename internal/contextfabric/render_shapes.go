@@ -486,7 +486,7 @@ func cohortDriverContributionShape(kind contractsv1.ContextFabricSubjectKind, ra
 		}
 		series = append(series, contractsv1.ContextFabricRenderSeries{
 			Key:    signal,
-			Label:  humanizeRenderTerm(signal),
+			Label:  cohortDriverSeriesLabel(signal),
 			Points: points,
 		})
 	}
@@ -505,9 +505,21 @@ func cohortDriverContributionShape(kind contractsv1.ContextFabricSubjectKind, ra
 	}, ""
 }
 
+// cohortDriverSeriesLabel is a driver series' legend: the ranking_signal word the
+// same result serves for that signal (CHAOS-12473), so a legend and a chip never
+// name one signal twice. A signal with no word stays readable, with no dotted
+// token.
+func cohortDriverSeriesLabel(signal string) string {
+	if noun, ok := contractsv1.ContextFabricCohortSignalNoun(signal); ok {
+		return humanizeRenderTerm(noun)
+	}
+	return humanizeRenderTerm(strings.ReplaceAll(signal, ".", " "))
+}
+
 // humanizeRenderTerm turns a closed-vocabulary signal name into a display
-// label ("investment_mix" -> "Investment mix"). Cosmetic only: Key carries
-// the machine identity, and no consumer should read Label.
+// label ("investment_mix" -> "Investment mix"). Key carries the machine
+// identity; Label is what ask-dev draws, so the word is this service's to get
+// right (CHAOS-4690).
 func humanizeRenderTerm(term string) string {
 	spaced := strings.ReplaceAll(term, "_", " ")
 	if spaced == "" {

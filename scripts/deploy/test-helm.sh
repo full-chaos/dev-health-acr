@@ -979,6 +979,29 @@ vocabulary_labels_value() {
 [[ "$(render --set contextFabric.vocabularyLabelsEnabled=true | vocabulary_labels_value)" == '"true"' ]] || fail_gate "vocabulary-labels: contextFabric.vocabularyLabelsEnabled=true does not reach acr-api"
 pass "vocabulary-labels: acr-api declares the flag off by default and on only when set"
 
+# CHAOS-12472: Ask Dev's Stop needs the run lease. acr-api declares it off by
+# default, on only when set, and acr-api refuses to start with the lease on and
+# the event stream off, so the render refuses that first.
+run_lease_value() {
+  extract_container_block acr-api | grep -A1 'name: ACR_CONTEXT_FABRIC_RUN_LEASE_ENABLED' | sed -n 's/^ *value: //p'
+}
+[[ "$(run_lease_value <"$rendered")" == '"false"' ]] || fail_gate "run-lease: acr-api does not declare the flag off by default"
+run_lease_on=(--set contextFabric.runLeaseEnabled=true --set-string 'deployment.extraEnv[0].name=ACR_CONTEXT_FABRIC_EVENT_STREAM_ENABLED')
+for stream_on in true TRUE True t T 1; do
+  [[ "$(render "${run_lease_on[@]}" --set-string "deployment.extraEnv[0].value=${stream_on}" | run_lease_value)" == '"true"' ]] || fail_gate "run-lease: contextFabric.runLeaseEnabled=true with the event stream ${stream_on} did not reach acr-api"
+done
+for run_lease_refused in "--set contextFabric.runLeaseEnabled=true" "${run_lease_on[*]} --set-string deployment.extraEnv[0].value=false" \
+  "--set contextFabric.runLeaseEnabled=true --set-string deployment.extraEnv[0].name=ACR_OTHER_FLAG --set-string deployment.extraEnv[0].value=true" \
+  "${run_lease_on[*]} --set-string deployment.extraEnv[0].value=true --set-string deployment.extraEnv[1].name=ACR_CONTEXT_FABRIC_EVENT_STREAM_ENABLED --set-string deployment.extraEnv[1].value=false"; do
+  set +e
+  # shellcheck disable=SC2086  # each case is a list of helm flags
+  run_lease_out="$(render $run_lease_refused 2>&1)"; run_lease_status=$?
+  set -e
+  [[ $run_lease_status -ne 0 ]] || fail_gate "run-lease: rendered with the event stream off: ${run_lease_refused}"
+  grep -qF 'needs ACR_CONTEXT_FABRIC_EVENT_STREAM_ENABLED' <<<"$run_lease_out" || fail_gate "run-lease: refused without naming the event stream: ${run_lease_refused}"
+done
+pass "run-lease: acr-api declares the flag off by default, on when set, and the render refuses it with the event stream off"
+
 falkor_no_secret="$(render \
   --set-string contextFabric.falkor.addr=falkordb.internal:6379 \
   --set-string contextFabric.falkor.graphPrefix=acr-cf)"
