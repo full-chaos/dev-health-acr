@@ -241,3 +241,71 @@ See also: [`context-fabric-regime-a-offers.md`](context-fabric-regime-a-offers.m
 (CHAOS-4234) for what a turn-1 result carries when the class-default window
 gate fires -- kind/handle/candidate offers beside the window offer, with no
 committed material.
+
+## 5. Served words: the vocabulary label map
+
+Rule (CHAOS-4690 item 4, ruled for this surface on CHAOS-12413): a closed
+vocabulary gets a contract-carried label, and raw tokens stay in the Details
+fold. Consumer phrasing tables are ruled out, so a new value needs no change in
+ask-dev or web.
+
+**The field.** `vocabulary_labels` is an optional root map on the result and on
+the answer projection: `"<vocabulary>:<value>" -> label`, shaped like
+`evidence_ref_labels`, holding only the values in that result. A consumer looks
+a word up, and a value with no entry takes its generic path. A lookup is not a
+table. The plural of a subject kind is served under `subject_kind_plural:<value>`,
+so no consumer pluralizes.
+
+**The tables** are in `internal/contracts/v1/context_fabric_display_labels.go`,
+beside the vocabularies. Totality runs both ways
+(`chaos12415_vocabulary_labels_test.go`), sourced from the production vocabulary
+or the published schema: a new value cannot ship unlabeled, and a label cannot
+outlive its value.
+
+| Vocabulary | Field |
+|---|---|
+| `answer_status` | `completeness.terminal_status` |
+| `completeness_state` | `completeness.state` |
+| `requirement_outcome` | `completeness.outcomes[].outcome` |
+| `answer_impact` | `completeness.outcomes[].impact` |
+| `candidate_state` | `subject_resolution.candidates[].state` |
+| `prior_receipt_disposition` | `prior_subject_receipt_dispositions[].disposition` |
+| `structure_disposition` | `confirmed_structure[].disposition` |
+| `subject_kind`, `subject_kind_plural` | `cohort.kind`, `coverage.details[].kind` |
+| `member_outcome`, `member_data_completeness` | `cohort.members[].outcome`, `.data_completeness` |
+| `ranking_signal` | `drivers[].signal`, `missing_signals[]` (the prose noun) |
+| `threshold_label` | `drivers[].threshold_labels[]` |
+| `driver_window`, `driver_standing` | `drivers[].window`, `drivers[].standing` |
+| `fact_kind` | `findings[].kind`, `claimed_facts[].kind` (the registry's word) |
+| `window_relative_id`, `window_provenance` | `effective_evidence_window.relative_id`, `.provenance` |
+
+**Not served, on purpose.** `completeness.outcomes[].requirement` is not a
+vocabulary: it is a composite coordinate, `obligation/role/subject`, so it takes
+the generic path. `obligation`, the cause and refinement fields, plan narrowing,
+and driver category, epistemic status and derivation stay in the fold.
+`claimed_facts[].field` and the keys of `rows[].fields` are free strings declared
+per kind (CHAOS-12418).
+
+**Source state words.** Each state keeps its own word, because unknown, stale,
+no data, not applicable and zero are different statements (North Star check 12).
+`no_data` stays "no data": "zero rows" is true of only one of its three paths.
+
+**Bound.** Each label is 1 to 160 characters, a key at most 128, and the map at
+most 8,192 entries, the bound of `evidence_ref_labels`. That is not the working
+limit. The map holds only the values in one result, so the whole registry is its
+ceiling: 125 entries and 5,885 bytes, 9% of the 65,536-byte answer budget.
+
+**Rollout.** The result root is `additionalProperties:false`, and ask-dev treats
+a validation failure as an upstream failure. So the field is additive and
+optional but NOT safe on an old pin: emitting it early fails every answer. It
+ships in two acr steps around a pin train. CHAOS-12415 adds the type, schemas,
+tables and tests, and nothing sets the map (`TestNoProductionCodeSetsVocabularyLabels`).
+CHAOS-12416 composes it at serve, on a served copy, after the train.
+
+**MCP.** The map is carried on MCP too. The API serves the same
+`answerprojection.Project` output when an answer is over a caller's byte option
+(`projectToCallerOption`, `internal/api/context_fabric_routes.go:420`), and web
+accepts that projection, so the projection must carry the map. The MCP tool
+calls the same function (`internal/mcp/investigate_question.go:141`), so leaving
+it out would take a second code path. Both untrusted-content lists name
+`structured.vocabulary_labels{}`.

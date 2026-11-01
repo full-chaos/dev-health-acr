@@ -866,6 +866,9 @@ func TestSchemaAndGoBoundsAgree(t *testing.T) {
 		"result#allOf.1.then.properties.deterministic_answer.minLength":        1,
 		"result#properties.evidence_ref_labels.additionalProperties.maxLength": 160,
 		"result#properties.evidence_ref_labels.additionalProperties.minLength": 1,
+		"result#properties.vocabulary_labels.additionalProperties.maxLength":   ContextFabricCoverageDetailLabelMaxLength,
+		"result#properties.vocabulary_labels.additionalProperties.minLength":   1,
+		"result#properties.vocabulary_labels.maxProperties":                    ContextFabricVocabularyLabelsMaxEntries,
 		"result#properties.render_shapes.maxItems":                             8,
 	}
 

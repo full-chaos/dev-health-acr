@@ -118,6 +118,7 @@ func TestEveryDeclaredUntrustedStringIsMarkedInTheRendering(t *testing.T) {
 		"structured.coverage_details[].phrasing":                "not rendered by this plain-text markdown view; Ask Dev reads Structured directly and renders the structured coverage details",
 		"structured.coverage_details[].raw":                     "not rendered by this plain-text markdown view; Ask Dev reads Structured directly and renders the structured coverage details (raw stays behind its Details fold there)",
 		"structured.evidence_ref_labels{}":                      "not rendered by this plain-text markdown view; Ask Dev reads Structured directly and renders the evidence chips with these labels",
+		"structured.vocabulary_labels{}":                        "not rendered by this plain-text markdown view; Ask Dev reads Structured directly",
 		"structured.question":                                   "the caller already holds the question it asked; echoing it adds nothing to a bounded answer",
 		"structured.clarification.candidates[].match_reasons[]": "the candidate line carries the subject and receipt an agent needs to choose; match reasoning is inspection detail, available through the full result",
 		// CHAOS-4118 (team-lead ruling 2026-08-22): windowConfirmationRequiredResult
@@ -536,6 +537,7 @@ func baseProjection() contractsv1.ContextFabricAnswerProjection {
 			Label:       "a detail label", Phrasing: "a detail phrasing", Raw: "blockers: a raw reason",
 		}},
 		EvidenceRefLabels: map[string]string{"evidence_inject01": "Evidence: inject01"},
+		VocabularyLabels:  map[string]string{"answer_status:partial": "partial answer"},
 		Limitations:       []string{"a limitation"},
 		Warnings:          []string{"a warning"},
 		EvidenceRefIDs:    []string{"evidence_inject01"},
