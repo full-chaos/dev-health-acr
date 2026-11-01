@@ -81,3 +81,18 @@ func TestTheReapTimeoutBoundsOneStatement(t *testing.T) {
 		t.Fatalf("statement timeout %d ms must be set and bounded", outboxReapStatementTimeoutMS)
 	}
 }
+
+// The delete matches the aggregate and nothing else: a row predicate (a revision, an age) would delete part of an
+// aggregate and break the writer's revision and terminal reads.
+func TestTheReapDeleteMatchesOnlyTheAggregateKey(t *testing.T) {
+	_, deletePart, found := strings.Cut(LifecycleOutboxReapSQL, "DELETE FROM")
+	if !found {
+		t.Fatal("no DELETE in the reap statement")
+	}
+	deletePart, _, _ = strings.Cut(deletePart, "RETURNING")
+	for _, banned := range []string{"revision", "published_at", "created_at", "d.outbox_id", " AND "} {
+		if strings.Contains(deletePart, banned) {
+			t.Errorf("the DELETE names %q: it may match the aggregate key only:\n%s", banned, deletePart)
+		}
+	}
+}
