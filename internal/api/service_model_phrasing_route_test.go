@@ -278,7 +278,11 @@ func newWindowGatePhrasingRigWith(t *testing.T, grants *serviceModelGrants, hasB
 			Candidates: surfacePool(ciRun, ciRun), Committed: []contextfabric.SubjectRef{},
 			ClarificationPrompt: "Which subject did you mean: Candidate A, Candidate B?",
 		}, material: material},
-		Facts: surfaceFacts{t: t}, Synthesizer: surfaceSynthesizer{t: t},
+		Facts: surfaceFacts{t: t},
+		Synthesizer: contextfabric.RuntimeAnswerSynthesizer{
+			Runtime: rig.model, ClientSynthesis: synthesisprompt.ClientAssembly(),
+			Options: contextfabric.RuntimeAnswerSynthesizerOptions{ServiceVersion: "window-gate-phrasing-route", Backend: "test", ProjectionVersion: "test"},
+		},
 		Results:      store,
 		Telemetry:    contextfabric.NewSlogEngineTelemetry(logger),
 		OfferPhraser: contextfabric.RuntimeOfferPhraser{Runtime: phrasingResolver(rig.phrasing, rig.byo, hasBYO, absentDeployment, logger), Sink: acceptingSink{}, Logger: logger},

@@ -100,6 +100,38 @@ func TestACallerModelWriteBackNeverPhrasesItsOffers(t *testing.T) {
 	if rig.phrasing.count() != 0 || rig.byo.count() != 0 {
 		t.Fatalf("phrasing calls = deployment %d byo %d, want 0 and 0", rig.phrasing.count(), rig.byo.count())
 	}
+	if got := phrasingOutcomes(rig.logs); !slices.Equal(got, []string{string(contextfabric.OfferPhrasingWithheld)}) {
+		t.Fatalf("phrasing outcomes = %v, want [%s]", got, contextfabric.OfferPhrasingWithheld)
+	}
+}
+
+// The window gate is the second site that phrases offers: the same turn with no
+// evidence window, on the caller's own synthesis, reaches it.
+func TestACallerModelTurnAtTheWindowGateNeverPhrasesItsOffers(t *testing.T) {
+	rig := newWindowGatePhrasingRig(t, &serviceModelGrants{feature: true, fallback: true}, false)
+	rig.asNarrowedUser(t)
+	body := investigationRequestBody()
+	body.SynthesisMode = contractsv1.ContextFabricSynthesisModeClient
+	encoded, err := json.Marshal(body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := httptest.NewRequest(http.MethodPost, ContextFabricInvestigationsPath, bytes.NewReader(encoded))
+	request.Header.Set("Authorization", "Bearer "+rig.token)
+	request.Header.Set("X-ACR-Client-Version", "1.0.0")
+	request.Header.Set("Content-Type", "application/json")
+	recorder := httptest.NewRecorder()
+	rig.app.Handler().ServeHTTP(recorder, request)
+	options := windowGateCandidateOptions(t, decodeEnvelope(t, recorder))
+	if options[0].Phrasing != "" {
+		t.Fatalf("candidate option = %+v, want no phrasing", options[0])
+	}
+	if rig.phrasing.count() != 0 || rig.byo.count() != 0 {
+		t.Fatalf("phrasing calls = deployment %d byo %d, want 0 and 0", rig.phrasing.count(), rig.byo.count())
+	}
+	if got := phrasingOutcomes(rig.logs); !slices.Equal(got, []string{string(contextfabric.OfferPhrasingWithheld)}) {
+		t.Fatalf("phrasing outcomes = %v, want [%s]", got, contextfabric.OfferPhrasingWithheld)
+	}
 }
 
 // The control: web's service-synthesis turn, by the same narrowed user, is
