@@ -68,6 +68,12 @@ const (
 	// Carrying "we could not classify it" forward would spread a
 	// non-classification rather than a classification.
 	PlanCarryMissNoPlan PlanCarryOutcome = "miss_no_plan"
+	// PlanCarryMissStaleFamilyTable (CHAOS-12507): a carrier held a plan
+	// made under another family table. QuestionFamilyTableVersion is a fence:
+	// reuse and window continuation refuse such a plan, and a carry that took
+	// its family would stamp the current version on a choice the current table
+	// did not make.
+	PlanCarryMissStaleFamilyTable PlanCarryOutcome = "miss_stale_family_table"
 	// PlanCarryMissConflictingPlans: two directly-referenced prior results
 	// carried genuinely DIFFERENT families. The receipt fields validate
 	// independently of one another, so one request can legitimately name two
@@ -178,7 +184,7 @@ func (e *Engine) walkCarriedPlan(ctx context.Context, principal storage.Principa
 		return planCarryResult{Outcome: PlanCarryMissNoReference}
 	}
 	visited := make(map[string]struct{}, len(referenced))
-	var sawUnloadable, sawStaleEpoch, sawResult bool
+	var sawUnloadable, sawStaleEpoch, sawStaleTable, sawResult bool
 	var hits []planCarryResult
 	for _, resultID := range referenced {
 		if ctx.Err() != nil {
@@ -212,6 +218,10 @@ func (e *Engine) walkCarriedPlan(ctx context.Context, principal storage.Principa
 		if carried == nil {
 			continue
 		}
+		if carried.FamilyVersion != QuestionFamilyTableVersion {
+			sawStaleTable = true
+			continue
+		}
 		hits = append(hits, planCarryResult{
 			Family:         carried.Family,
 			GroupKind:      carried.GroupKind,
@@ -234,6 +244,8 @@ func (e *Engine) walkCarriedPlan(ctx context.Context, principal storage.Principa
 			}
 		}
 		return first
+	case sawStaleTable:
+		return planCarryResult{Outcome: PlanCarryMissStaleFamilyTable}
 	case sawResult:
 		return planCarryResult{Outcome: PlanCarryMissNoPlan}
 	case sawStaleEpoch:

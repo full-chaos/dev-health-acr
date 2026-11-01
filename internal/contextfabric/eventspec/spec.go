@@ -1401,6 +1401,7 @@ var PlanCarryOutcome = Event{
 			string(contextfabric.PlanCarryMissUnloadable),
 			string(contextfabric.PlanCarryMissStaleGraphEpoch),
 			string(contextfabric.PlanCarryMissNoPlan),
+			string(contextfabric.PlanCarryMissStaleFamilyTable),
 			string(contextfabric.PlanCarryMissConflictingPlans),
 			string(contextfabric.PlanCarryMissQuestionDrift),
 			string(contextfabric.PlanCarryMissQuestionIndeterminate),
