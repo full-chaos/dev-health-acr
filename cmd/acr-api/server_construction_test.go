@@ -232,3 +232,13 @@ func validServeConfig(t *testing.T) config.Config {
 	}
 	return cfg
 }
+
+// CHAOS-12416: the switch reaches the app both doors read it from.
+func TestAppConfigThreadsTheVocabularyLabelsSwitch(t *testing.T) {
+	for _, enabled := range []bool{true, false} {
+		got := appConfig(config.Config{ContextFabricVocabularyLabelsEnabled: enabled}, "test-version")
+		if got.ContextFabricVocabularyLabelsEnabled != enabled {
+			t.Fatalf("appConfig(...).ContextFabricVocabularyLabelsEnabled = %v, want %v", got.ContextFabricVocabularyLabelsEnabled, enabled)
+		}
+	}
+}

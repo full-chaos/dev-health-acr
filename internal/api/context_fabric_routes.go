@@ -251,13 +251,15 @@ func (a *App) deliverInvestigationOutcome(w http.ResponseWriter, r *http.Request
 // audit line and the write. It returns the status the latency metric records:
 // the result's status when the answer was written, "error" when a gate
 // refused it.
-func (a *App) serveContextFabricInvestigationResult(w http.ResponseWriter, r *http.Request, principal storage.Principal, request contextfabric.InvestigationRequest, result contextfabric.InvestigationResult, collectedSynthesisInput func() *contractsv1.ContextFabricSynthesisInput) string {
+func (a *App) serveContextFabricInvestigationResult(w http.ResponseWriter, r *http.Request, principal storage.Principal, request contextfabric.InvestigationRequest, answer contextfabric.InvestigationResult, collectedSynthesisInput func() *contractsv1.ContextFabricSynthesisInput) string {
 	// The service ceiling is the only line past which an answer is
 	// refused. The caller's own max_serialized_bytes bounds what is
 	// SERVED: an answer that measures over it is delivered as the
 	// bounded projection below, never refused and never oversize.
 	maximumBytes := int64(a.config.MaxSerializedBytes)
 	callerBytes := int64(request.Options.MaxSerializedBytes)
+	wordsBound := a.investigationWordsBound(answer, callerBytes, collectedSynthesisInput())
+	result, wordsTier := contextfabric.ServeVocabularyLabels(answer, a.config.ContextFabricVocabularyLabelsEnabled, wordsBound)
 	itemCounts := contextFabricResultItemCounts(result)
 	encoded, measuredBytes, sizeErr := marshalContextFabricResponse(result)
 	if sizeErr != nil {
@@ -330,7 +332,11 @@ func (a *App) serveContextFabricInvestigationResult(w http.ResponseWriter, r *ht
 			})
 			return "error"
 		}
-		projection, projectionEncoded, projectionBytes, budget, fits := a.projectToCallerOption(result, request.Options)
+		// The canonical document stands over the caller's bound, so the words
+		// are measured on the projection, which sheds them if it must.
+		labeled, _ := contextfabric.ServeVocabularyLabels(answer, a.config.ContextFabricVocabularyLabelsEnabled, 0)
+		projection, projectionEncoded, projectionBytes, budget, projectedTier, fits := a.projectToCallerOption(labeled, answer, request.Options)
+		wordsTier = projectedTier
 		if !fits {
 			a.logContextFabricResponseBudgetExceeded(r, contractsv1.ContextFabricPlannedItemCeiling(result, a.config.MaxItems), "projection_bytes", projectionBytes, callerBytes, estimatedTokens, itemCounts)
 			writeError(w, r, http.StatusRequestEntityTooLarge, "budget_refusal", "Context Fabric investigation response exceeded service limits", false, map[string]any{
@@ -386,10 +392,87 @@ func (a *App) serveContextFabricInvestigationResult(w http.ResponseWriter, r *ht
 		}
 		synthesisInputBytes = int(envelopeBytes - measuredBytes)
 	}
+	a.logVocabularyLabelsShed(r, wordsTier, "investigation_create", wordsBound)
 	a.logContextFabricResponseBudgetMeasured(r, contractsv1.ContextFabricPlannedItemCeiling(result, a.config.MaxItems), measuredBytes, maximumBytes, estimatedTokens, itemCounts, "synthesis_input_bytes", synthesisInputBytes, "projected", projected != nil, "served_bytes", servedBytes, "caller_max_serialized_bytes", callerBytes)
 	a.recordReadAudit(r.Context(), principal, "context_fabric_investigation_completed", "context_fabric_investigation", result.ResultID, "success", map[string]any{"investigation_status": result.Status})
 	writeEncodedJSON(w, http.StatusOK, encoded)
 	return string(result.Status)
+}
+
+// investigationWordsBound is the most the canonical answer may measure with its
+// served words: the tighter of the service and caller bounds, less what the
+// synthesis-input envelope adds to the body, because that body is held to the
+// same bound. The envelope's cost does not depend on the words, so it is
+// measured once on the answer as the engine returned it. A cost that cannot be
+// measured leaves the bound as it is, and the envelope check still stands.
+func (a *App) investigationWordsBound(answer contextfabric.InvestigationResult, callerBytes int64, synthesisInput *contractsv1.ContextFabricSynthesisInput) int64 {
+	bound := int64(a.config.MaxSerializedBytes)
+	if callerBytes > 0 && callerBytes < bound {
+		bound = callerBytes
+	}
+	if synthesisInput == nil {
+		return bound
+	}
+	_, bare, err := marshalContextFabricResponse(answer)
+	if err != nil {
+		return bound
+	}
+	_, enveloped, err := marshalContextFabricResponse(contractsv1.ContextFabricInvestigationResponse{ContextFabricInvestigationResult: answer, SynthesisInput: synthesisInput})
+	if err != nil {
+		return bound
+	}
+	// Never zero or below: a non-positive bound measures nothing.
+	return max(1, bound-(enveloped-bare))
+}
+
+// logVocabularyLabelsShed says which tier a served document reached when it left
+// words out to stay within bound. The fallback is the generic path, so an
+// operator reads it here and not from a reader's report.
+func (a *App) logVocabularyLabelsShed(r *http.Request, tier contractsv1.ContextFabricVocabularyLabelsTier, surface string, bound int64) {
+	if !tier.Shed() {
+		return
+	}
+	a.logger.InfoContext(r.Context(), "context fabric vocabulary labels shed",
+		"request_id", contextfabric.SanitizeLogAttr(RequestID(r.Context())), "surface", surface, "tier", string(tier), "bound_bytes", contextfabric.SanitizeLogInt(bound))
+}
+
+// fitProjectionWords encodes a projection at the richest tier of its words within
+// bound: the same tiers as the canonical document, so a word never costs a row
+// or an answer. With no tier within bound the projection has no map, and the
+// caller cuts its rows or refuses it as it would with no words.
+func fitProjectionWords(projection contractsv1.ContextFabricAnswerProjection, bound int64) (fitted contractsv1.ContextFabricAnswerProjection, encoded []byte, measured int64, tier contractsv1.ContextFabricVocabularyLabelsTier, err error) {
+	tier = contractsv1.ContextFabricVocabularyLabelsFull
+	if projection.VocabularyLabels == nil {
+		tier = contractsv1.ContextFabricVocabularyLabelsOff
+	}
+	encoded, measured, err = marshalContextFabricResponse(projection)
+	for _, next := range [...]contractsv1.ContextFabricVocabularyLabelsTier{contractsv1.ContextFabricVocabularyLabelsStatusOnly, contractsv1.ContextFabricVocabularyLabelsNone} {
+		if err != nil || measured <= bound || projection.VocabularyLabels == nil {
+			break
+		}
+		projection, tier = answerprojection.ShedVocabularyLabels(projection, next), next
+		encoded, measured, err = marshalContextFabricResponse(projection)
+	}
+	if tier == contractsv1.ContextFabricVocabularyLabelsStatusOnly && projection.VocabularyLabels == nil {
+		tier = contractsv1.ContextFabricVocabularyLabelsNone
+	}
+	return projection, encoded, measured, tier, err
+}
+
+// unstampedProjection is a projection's last tier: the answer as the engine or
+// the store gave it, with none of this serve's words, so the stamped source words
+// cost no row and refuse no answer. It is a new projection, because Project copied
+// them into the coverage summary, and ok is false when it cannot be served.
+func unstampedProjection(answer contractsv1.ContextFabricInvestigationResult, budget answerprojection.Budget, fullResultOmitted bool) (projection contractsv1.ContextFabricAnswerProjection, encoded []byte, measured int64, ok bool) {
+	projection = answerprojection.ShedVocabularyLabels(answerprojection.Project(answer, budget), contractsv1.ContextFabricVocabularyLabelsNone)
+	if fullResultOmitted {
+		answerprojection.MarkFullResultOmitted(&projection)
+	}
+	if projection.Validate() != nil {
+		return projection, nil, 0, false
+	}
+	encoded, measured, err := marshalContextFabricResponse(projection)
+	return projection, encoded, measured, err == nil
 }
 
 // maxProjectionShrinkSteps bounds how often projectToCallerOption halves the
@@ -417,7 +500,7 @@ func halvedCount(bound, fallback int) int {
 // other arrays at their count bounds, so a very small option can still be
 // overrun; the count bounds are then halved, deterministically, until the
 // encoded projection fits. fits is false only when even the floor does not.
-func (a *App) projectToCallerOption(result contractsv1.ContextFabricInvestigationResult, options contractsv1.ContextFabricInvestigationOptions) (projection contractsv1.ContextFabricAnswerProjection, encoded []byte, bytes int64, budget answerprojection.Budget, fits bool) {
+func (a *App) projectToCallerOption(result, answer contractsv1.ContextFabricInvestigationResult, options contractsv1.ContextFabricInvestigationOptions) (projection contractsv1.ContextFabricAnswerProjection, encoded []byte, bytes int64, budget answerprojection.Budget, tier contractsv1.ContextFabricVocabularyLabelsTier, fits bool) {
 	budget = answerprojection.Budget{
 		MaxDrivers:         options.MaxDrivers,
 		MaxCohortMembers:   options.MaxCohortMembers,
@@ -428,18 +511,24 @@ func (a *App) projectToCallerOption(result contractsv1.ContextFabricInvestigatio
 		projection = answerprojection.Project(result, budget)
 		answerprojection.MarkFullResultOmitted(&projection)
 		if projection.Validate() != nil {
-			return projection, nil, 0, budget, false
+			return projection, nil, 0, budget, tier, false
 		}
+		// A word never costs a row: the words shed before the counts do.
 		var err error
-		encoded, bytes, err = marshalContextFabricResponse(projection)
+		projection, encoded, bytes, tier, err = fitProjectionWords(projection, int64(options.MaxSerializedBytes))
 		if err != nil {
-			return projection, nil, 0, budget, false
+			return projection, nil, 0, budget, tier, false
+		}
+		if bytes > int64(options.MaxSerializedBytes) {
+			if unstamped, unstampedEncoded, unstampedBytes, ok := unstampedProjection(answer, budget, true); ok && unstampedBytes <= int64(options.MaxSerializedBytes) {
+				return unstamped, unstampedEncoded, unstampedBytes, budget, tier, true
+			}
 		}
 		if bytes <= int64(options.MaxSerializedBytes) {
-			return projection, encoded, bytes, budget, true
+			return projection, encoded, bytes, budget, tier, true
 		}
 		if step >= maxProjectionShrinkSteps {
-			return projection, encoded, bytes, budget, false
+			return projection, encoded, bytes, budget, tier, false
 		}
 		budget.MaxDrivers = halvedCount(budget.MaxDrivers, answerprojection.DefaultBudget.MaxDrivers)
 		budget.MaxCohortMembers = halvedCount(budget.MaxCohortMembers, answerprojection.DefaultBudget.MaxCohortMembers)

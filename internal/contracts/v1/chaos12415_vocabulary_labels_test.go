@@ -109,8 +109,6 @@ func vocabularySources(t *testing.T) map[ContextFabricVocabulary][][]string {
 	kinds := ContextFabricSubjectKindVocabulary()
 	facts := ContextFabricFactKindVocabulary()
 	outcomes := ContextFabricPlanRequirementOutcomeVocabulary()
-	impacts := ContextFabricAnswerImpactKindVocabulary()
-	states := ContextFabricAnswerCompletenessStateVocabulary()
 	dispositions := ContextFabricStructureDispositionVocabulary()
 	windows := ContextFabricRelativeWindowIDVocabulary()
 	basis := make([]string, 0, len(contextFabricCohortRankingBasisLabels))
@@ -124,21 +122,18 @@ func vocabularySources(t *testing.T) map[ContextFabricVocabulary][][]string {
 		signals = append(signals, signal)
 	}
 	return map[ContextFabricVocabulary][][]string{
-		ContextFabricVocabularyAnswerStatus:      {schema("AnswerCompleteness", "terminal_status")},
-		ContextFabricVocabularyCompletenessState: {closedVocabularyStrings(states[:]), schema("AnswerCompleteness", "state")},
+		ContextFabricVocabularyAnswerStatus: {schema("AnswerCompleteness", "terminal_status")},
 		ContextFabricVocabularyRequirementOutcome: {
 			closedVocabularyStrings(outcomes[:]), schema("PlanRequirementOutcomeRow", "outcome"),
 		},
-		ContextFabricVocabularyAnswerImpact:            {closedVocabularyStrings(impacts[:]), schema("PlanRequirementOutcomeRow", "impact")},
 		ContextFabricVocabularyCandidateState:          {schema("SubjectCandidate", "state")},
 		ContextFabricVocabularyPriorReceiptDisposition: {schema("PriorSubjectReceiptDispositionEntry", "disposition")},
 		ContextFabricVocabularyStructureDisposition:    {closedVocabularyStrings(dispositions[:])},
 		ContextFabricVocabularySubjectKind: {
 			closedVocabularyStrings(kinds[:]), schema("Cohort", "kind"), schema("CoverageDetail", "kind"),
 		},
-		ContextFabricVocabularySubjectKindPlural:      {closedVocabularyStrings(kinds[:])},
-		ContextFabricVocabularyMemberOutcome:          {schema("CohortMember", "outcome")},
-		ContextFabricVocabularyMemberDataCompleteness: {schema("CohortMember", "data_completeness")},
+		ContextFabricVocabularySubjectKindPlural: {closedVocabularyStrings(kinds[:])},
+		ContextFabricVocabularyMemberOutcome:     {schema("CohortMember", "outcome")},
 		ContextFabricVocabularyRankingSignal: {
 			signals, schema("CohortMember", "missing_signals"), schema("CohortMemberDriver", "signal"),
 		},

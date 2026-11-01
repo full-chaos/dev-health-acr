@@ -2,6 +2,7 @@ package orgpurge
 
 import (
 	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -33,6 +34,35 @@ func TestPrivilegesAreDerivedFromTheStatementsRunIssues(t *testing.T) {
 	for _, table := range CascadedTables() {
 		if got[table] == nil {
 			t.Errorf("%s is read by the cascade counts but is not in the derived set", table)
+		}
+	}
+}
+
+func TestTheCredentialsAreTakenByDeleteReturningAndNeverByASeparateSelect(t *testing.T) {
+	var deletes int
+	for _, statement := range Statements() {
+		if strings.Contains(statement, "DELETE FROM acr.client_credentials") {
+			deletes++
+			if !strings.Contains(statement, "RETURNING") {
+				t.Errorf("a client_credentials delete without RETURNING: %s", statement)
+			}
+		}
+	}
+	if deletes != 1 {
+		t.Fatalf("%d client_credentials deletes in the statement set, want exactly the one DELETE ... RETURNING", deletes)
+	}
+}
+
+func TestThePurgeRoleGainsOnlySelectAndInsertOnTheOutbox(t *testing.T) {
+	got := Privileges()["credential_lifecycle_outbox"]
+	if !reflect.DeepEqual(got, []string{"INSERT", "SELECT"}) {
+		t.Fatalf("outbox privileges = %v, want exactly INSERT and SELECT: the purge never updates or deletes an outbox row", got)
+	}
+	for table, privileges := range Privileges() {
+		for _, privilege := range privileges {
+			if table == "credential_lifecycle_outbox" && (privilege == "UPDATE" || privilege == "DELETE") {
+				t.Errorf("%s holds %s", table, privilege)
+			}
 		}
 	}
 }

@@ -131,15 +131,17 @@ var contextFabricEvidenceEntityLabels = map[ContextFabricEvidenceEntityType]stri
 //     path.
 //   - obligation, the cause and refinement fields, plan narrowing, driver
 //     category, epistemic status and derivation stay in the fold.
+//   - completeness.state and data_completeness are never shown, and
+//     outcomes[].impact goes to the fold with its table (CHAOS-12245,
+//     CHAOS-12416). The reader sees the answer status, whose rule reads the
+//     completeness state (ContextFabricAnswerStatusLabel).
 //   - claimed_facts[].field and the keys of rows[].fields are free strings
 //     declared per kind (CHAOS-12418).
 type ContextFabricVocabulary string
 
 const (
 	ContextFabricVocabularyAnswerStatus            ContextFabricVocabulary = "answer_status"
-	ContextFabricVocabularyCompletenessState       ContextFabricVocabulary = "completeness_state"
 	ContextFabricVocabularyRequirementOutcome      ContextFabricVocabulary = "requirement_outcome"
-	ContextFabricVocabularyAnswerImpact            ContextFabricVocabulary = "answer_impact"
 	ContextFabricVocabularyCandidateState          ContextFabricVocabulary = "candidate_state"
 	ContextFabricVocabularyPriorReceiptDisposition ContextFabricVocabulary = "prior_receipt_disposition"
 	ContextFabricVocabularyStructureDisposition    ContextFabricVocabulary = "structure_disposition"
@@ -147,30 +149,26 @@ const (
 	// ContextFabricVocabularySubjectKindPlural serves the plural beside the
 	// singular, so a consumer writes "Ranked repositories" without a
 	// pluralizer of its own.
-	ContextFabricVocabularySubjectKindPlural      ContextFabricVocabulary = "subject_kind_plural"
-	ContextFabricVocabularyMemberOutcome          ContextFabricVocabulary = "member_outcome"
-	ContextFabricVocabularyMemberDataCompleteness ContextFabricVocabulary = "member_data_completeness"
-	ContextFabricVocabularyRankingSignal          ContextFabricVocabulary = "ranking_signal"
-	ContextFabricVocabularyThresholdLabel         ContextFabricVocabulary = "threshold_label"
-	ContextFabricVocabularyDriverWindow           ContextFabricVocabulary = "driver_window"
-	ContextFabricVocabularyDriverStanding         ContextFabricVocabulary = "driver_standing"
-	ContextFabricVocabularyFactKind               ContextFabricVocabulary = "fact_kind"
-	ContextFabricVocabularyWindowRelativeID       ContextFabricVocabulary = "window_relative_id"
-	ContextFabricVocabularyWindowProvenance       ContextFabricVocabulary = "window_provenance"
+	ContextFabricVocabularySubjectKindPlural ContextFabricVocabulary = "subject_kind_plural"
+	ContextFabricVocabularyMemberOutcome     ContextFabricVocabulary = "member_outcome"
+	ContextFabricVocabularyRankingSignal     ContextFabricVocabulary = "ranking_signal"
+	ContextFabricVocabularyThresholdLabel    ContextFabricVocabulary = "threshold_label"
+	ContextFabricVocabularyDriverWindow      ContextFabricVocabulary = "driver_window"
+	ContextFabricVocabularyDriverStanding    ContextFabricVocabulary = "driver_standing"
+	ContextFabricVocabularyFactKind          ContextFabricVocabulary = "fact_kind"
+	ContextFabricVocabularyWindowRelativeID  ContextFabricVocabulary = "window_relative_id"
+	ContextFabricVocabularyWindowProvenance  ContextFabricVocabulary = "window_provenance"
 )
 
 var contextFabricVocabularyNames = [...]ContextFabricVocabulary{
 	ContextFabricVocabularyAnswerStatus,
-	ContextFabricVocabularyCompletenessState,
 	ContextFabricVocabularyRequirementOutcome,
-	ContextFabricVocabularyAnswerImpact,
 	ContextFabricVocabularyCandidateState,
 	ContextFabricVocabularyPriorReceiptDisposition,
 	ContextFabricVocabularyStructureDisposition,
 	ContextFabricVocabularySubjectKind,
 	ContextFabricVocabularySubjectKindPlural,
 	ContextFabricVocabularyMemberOutcome,
-	ContextFabricVocabularyMemberDataCompleteness,
 	ContextFabricVocabularyRankingSignal,
 	ContextFabricVocabularyThresholdLabel,
 	ContextFabricVocabularyDriverWindow,
@@ -215,19 +213,14 @@ func contextFabricVocabularyFactKindLabels() map[string]string {
 // ship unlabeled, and a label cannot outlive its value.
 var contextFabricVocabularyLabels = map[ContextFabricVocabulary]map[string]string{
 	// Each says "answer", so it cannot be read as a project status or as work
-	// completion (North Star check 3).
+	// completion (North Star check 3). A served word for `complete` also reads
+	// the completeness state: ContextFabricAnswerStatusLabel holds that rule.
 	ContextFabricVocabularyAnswerStatus: {
-		string(ContextFabricInvestigationComplete):              "full answer",
-		string(ContextFabricInvestigationPartial):               "partial answer",
-		string(ContextFabricInvestigationDegraded):              "degraded answer",
-		string(ContextFabricInvestigationClarificationRequired): "answer needs your confirmation",
-		string(ContextFabricInvestigationNoMatch):               "no answer",
-	},
-	ContextFabricVocabularyCompletenessState: {
-		string(ContextFabricAnswerCompletenessNotDerived): "not worked out",
-		string(ContextFabricAnswerCompletenessComplete):   "complete",
-		string(ContextFabricAnswerCompletenessPartial):    "partial",
-		string(ContextFabricAnswerCompletenessDegraded):   "degraded",
+		string(ContextFabricInvestigationComplete):              "Full answer",
+		string(ContextFabricInvestigationPartial):               "Partial answer",
+		string(ContextFabricInvestigationDegraded):              "Degraded answer",
+		string(ContextFabricInvestigationClarificationRequired): "Answer needs your confirmation",
+		string(ContextFabricInvestigationNoMatch):               "No answer",
 	},
 	ContextFabricVocabularyRequirementOutcome: {
 		string(ContextFabricRequirementSatisfied):     "met",
@@ -235,12 +228,6 @@ var contextFabricVocabularyLabels = map[ContextFabricVocabulary]map[string]strin
 		string(ContextFabricRequirementUnavailable):   "unavailable",
 		string(ContextFabricRequirementNotApplicable): "not applicable",
 		string(ContextFabricRequirementNotAttempted):  "not attempted",
-	},
-	ContextFabricVocabularyAnswerImpact: {
-		string(ContextFabricAnswerImpactNone):      "nothing lost",
-		string(ContextFabricAnswerImpactScope):     "fewer subjects",
-		string(ContextFabricAnswerImpactDepth):     "less evidence",
-		string(ContextFabricAnswerImpactDimension): "part of the question is missing",
 	},
 	ContextFabricVocabularyCandidateState: {
 		string(ContextFabricResolutionCommitted):  "selected",
@@ -304,11 +291,6 @@ var contextFabricVocabularyLabels = map[ContextFabricVocabulary]map[string]strin
 		string(ContextFabricCohortOutcomeInsufficientEvidence): "not enough evidence",
 		string(ContextFabricCohortOutcomeNotApplicable):        "not applicable",
 	},
-	ContextFabricVocabularyMemberDataCompleteness: {
-		string(ContextFabricCohortDataComplete): "all signals",
-		string(ContextFabricCohortDataPartial):  "some signals missing",
-		string(ContextFabricCohortDataDegraded): "two or fewer signals",
-	},
 	ContextFabricVocabularyRankingSignal: contextFabricCohortSignalNouns,
 	ContextFabricVocabularyThresholdLabel: {
 		"investment_mix.reactive_share_high":          "reactive share is high",
@@ -354,6 +336,159 @@ func ContextFabricVocabularyLabelKey(vocabulary ContextFabricVocabulary, value s
 func ContextFabricVocabularyLabel(vocabulary ContextFabricVocabulary, value string) (string, bool) {
 	label, ok := contextFabricVocabularyLabels[vocabulary][value]
 	return label, ok
+}
+
+// ContextFabricVocabularyLabelsTier names how much of vocabulary_labels a served
+// document carries (CHAOS-12416). Closed: the shed line states it.
+//
+// The tiers rank what a reader loses. The status words go last, because with no
+// map a partial answer reads a neutral pill, and the correction note is gone, so
+// the pill says less than the limitation below it.
+type ContextFabricVocabularyLabelsTier string
+
+const (
+	// ContextFabricVocabularyLabelsOff: the flag is off, so nothing was shed.
+	ContextFabricVocabularyLabelsOff ContextFabricVocabularyLabelsTier = "off"
+	// ContextFabricVocabularyLabelsFull: the whole map.
+	ContextFabricVocabularyLabelsFull ContextFabricVocabularyLabelsTier = "full"
+	// ContextFabricVocabularyLabelsStatusOnly: answer_status:* and the note.
+	ContextFabricVocabularyLabelsStatusOnly ContextFabricVocabularyLabelsTier = "status_only"
+	// ContextFabricVocabularyLabelsNone: no map fits.
+	ContextFabricVocabularyLabelsNone ContextFabricVocabularyLabelsTier = "none"
+)
+
+// ContextFabricVocabularyLabelsTierVocabulary returns the closed set.
+func ContextFabricVocabularyLabelsTierVocabulary() [4]ContextFabricVocabularyLabelsTier {
+	return [4]ContextFabricVocabularyLabelsTier{
+		ContextFabricVocabularyLabelsOff, ContextFabricVocabularyLabelsFull,
+		ContextFabricVocabularyLabelsStatusOnly, ContextFabricVocabularyLabelsNone,
+	}
+}
+
+// Shed reports that a bound left words out of the served document.
+func (t ContextFabricVocabularyLabelsTier) Shed() bool {
+	return t == ContextFabricVocabularyLabelsStatusOnly || t == ContextFabricVocabularyLabelsNone
+}
+
+// ContextFabricStatusVocabularyLabels keeps the words of the status_only tier:
+// answer_status:* and the correction note. It returns nil when neither is held,
+// so an empty map never stands for a tier.
+func ContextFabricStatusVocabularyLabels(labels map[string]string) map[string]string {
+	var kept map[string]string
+	for key, label := range labels {
+		vocabulary, _, _ := strings.Cut(key, ":")
+		if vocabulary != string(ContextFabricVocabularyAnswerStatus) && key != ContextFabricStatusCorrectionNoteKey {
+			continue
+		}
+		if kept == nil {
+			kept = map[string]string{}
+		}
+		kept[key] = label
+	}
+	return kept
+}
+
+// The two answer status words that are not a table row: a `complete` status
+// whose completeness does not back the table's "Full answer" (CHAOS-12245).
+const (
+	contextFabricAnswerNotFullyCoveredLabel = "Answer, not fully covered"
+	contextFabricAnswerPlainLabel           = "Answer"
+)
+
+// ContextFabricAnswerStatusLabel is the served word of an answer status, the
+// ONE function behind answer_status:<status> and both statuses of the
+// correction note, so the pill and the note cannot disagree (CHAOS-12245).
+//
+// "Full answer" needs a complete status AND complete completeness. A complete
+// status beside partial or degraded completeness reads "Answer, not fully
+// covered". With no derived completeness it reads a plain "Answer", which
+// claims neither a full answer nor a gap. Any other status reads its registry
+// word. ok is false for a status with no row, and the raw state is never shown.
+func ContextFabricAnswerStatusLabel(status ContextFabricInvestigationStatus, completeness ContextFabricAnswerCompletenessState) (string, bool) {
+	label, ok := ContextFabricVocabularyLabel(ContextFabricVocabularyAnswerStatus, string(status))
+	if status != ContextFabricInvestigationComplete {
+		return label, ok
+	}
+	switch completeness {
+	case ContextFabricAnswerCompletenessComplete:
+		return label, true
+	case ContextFabricAnswerCompletenessPartial, ContextFabricAnswerCompletenessDegraded:
+		return contextFabricAnswerNotFullyCoveredLabel, true
+	default:
+		return contextFabricAnswerPlainLabel, true
+	}
+}
+
+// ContextFabricStatusCorrectionNoteKey is the vocabulary_labels key of the
+// correction note (CHAOS-12416). It is one sentence the service composes for
+// one result, not a table row, so it is not a member of
+// ContextFabricVocabularyNames.
+const ContextFabricStatusCorrectionNoteKey = "status_correction:note"
+
+// contextFabricStatusCorrectionSpans names what each direction moved. Only
+// degraded_to_partial raises a status. A table, so no direction is parsed.
+var contextFabricStatusCorrectionSpans = map[ContextFabricStatusCorrectionDirection]struct {
+	verb     string
+	from, to ContextFabricInvestigationStatus
+}{
+	ContextFabricStatusCorrectionCompleteToPartial:  {"lowered", ContextFabricInvestigationComplete, ContextFabricInvestigationPartial},
+	ContextFabricStatusCorrectionCompleteToDegraded: {"lowered", ContextFabricInvestigationComplete, ContextFabricInvestigationDegraded},
+	ContextFabricStatusCorrectionPartialToDegraded:  {"lowered", ContextFabricInvestigationPartial, ContextFabricInvestigationDegraded},
+	ContextFabricStatusCorrectionDegradedToPartial:  {"raised", ContextFabricInvestigationDegraded, ContextFabricInvestigationPartial},
+}
+
+// contextFabricCorrectionObligationWords names each answer obligation in the
+// correction note. Each is singular, because the outcome words say "was".
+var contextFabricCorrectionObligationWords = map[string]string{
+	"state":                               "status",
+	"completion":                          "completion",
+	"readiness":                           "readiness",
+	"health":                              "health",
+	"principal_drivers":                   "driver detail",
+	"ranking":                             "ranking",
+	"remaining_work":                      "remaining work",
+	"evidence":                            "evidence",
+	ContextFabricAnswerObligationCoverage: "coverage",
+	ContextFabricAnswerObligationCount:    "the count",
+	"allocation_breakdown":                "the allocation breakdown",
+	"trend_series":                        "the trend",
+	"period_delta":                        "the change between periods",
+}
+
+// contextFabricCorrectionOutcomeWords says what became of the obligation.
+var contextFabricCorrectionOutcomeWords = map[ContextFabricPlanRequirementOutcome]string{
+	ContextFabricRequirementSatisfied:     "was read in full",
+	ContextFabricRequirementNarrowed:      "was read only in part",
+	ContextFabricRequirementUnavailable:   "was not available",
+	ContextFabricRequirementNotApplicable: "does not apply",
+	ContextFabricRequirementNotAttempted:  "was not read",
+}
+
+// ContextFabricStatusCorrectionNote composes the whole correction sentence for
+// one result, in the service's own words (CHAOS-12413 ruling 2). Each status
+// reads ContextFabricAnswerStatusLabel, so the sentence never holds a raw
+// status word. An obligation or outcome with no word drops that clause, and a
+// direction outside the vocabulary reads "changed" between the correction's
+// own two statuses. ok is false when a status has no word, and the consumer
+// then shows no note: a raw token is never the fallback.
+func ContextFabricStatusCorrectionNote(correction ContextFabricStatusCorrection, served ContextFabricInvestigationStatus, completeness ContextFabricAnswerCompletenessState) (string, bool) {
+	span, known := contextFabricStatusCorrectionSpans[correction.Direction]
+	if !known {
+		span.verb, span.from, span.to = "changed", correction.ReplacedStatus, served
+	}
+	from, fromKnown := ContextFabricAnswerStatusLabel(span.from, completeness)
+	to, toKnown := ContextFabricAnswerStatusLabel(span.to, completeness)
+	if !fromKnown || !toKnown {
+		return "", false
+	}
+	note := "The service " + span.verb + " this answer from " + from + " to " + to
+	obligation, _, _ := strings.Cut(correction.DecidingRequirement, "/")
+	what, whatKnown := contextFabricCorrectionObligationWords[obligation]
+	outcome, outcomeKnown := contextFabricCorrectionOutcomeWords[correction.DecidingOutcome]
+	if whatKnown && outcomeKnown {
+		note += ": " + what + " " + outcome
+	}
+	return note + ".", true
 }
 
 // humanizeVocabularyToken is the deterministic transform for a token from

@@ -442,15 +442,22 @@ func TestTheScopedCensusAndTheDeploymentWalkFollowTheLinkOnRealStores(t *testing
 		}
 	})
 
-	t.Run("census: a restricted caller gets no census", func(t *testing.T) {
+	// CHAOS-12455: a restricted caller's census now runs inside its grant, but
+	// a work item has no repository column to scope, so the read ends before
+	// any statement and the round reports census_error, never a count of the
+	// organization. CHAOS-12456 adds the work-item read.
+	t.Run("census: a restricted caller gets no work-item census", func(t *testing.T) {
 		restricted := storage.Principal{OrgID: s.orgID, Subject: "u", CredentialID: "c", RepositoryScopes: []string{"acme/svc"}}
 		committed, rounds := resolve(t, "CHAOS-10", restricted, []string{"acme/svc"})
 		if len(committed) != 0 {
 			t.Fatalf("committed %v for a restricted caller through the census, want none", committed)
 		}
+		if len(rounds) == 0 {
+			t.Fatal("no round ran, so this subtest measured nothing")
+		}
 		for _, r := range rounds {
-			if r.ShadowReason != string(graphrank.ReasonScopedVisibility) {
-				t.Fatalf("round %s/%s, want the scoped-visibility refusal", r.ShadowOutcome, r.ShadowReason)
+			if r.ShadowOutcome != string(graphrank.ShadowWouldClarify) || r.ShadowReason != string(graphrank.ReasonCensusError) {
+				t.Fatalf("round %s/%s, want %s/%s", r.ShadowOutcome, r.ShadowReason, graphrank.ShadowWouldClarify, graphrank.ReasonCensusError)
 			}
 		}
 	})

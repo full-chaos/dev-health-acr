@@ -969,6 +969,44 @@ The previous default of 1Gi did not: one read of the largest node went past it.
 Raising `limits.memory` needs no rebuild, because FalkorDB reloads the graph from
 its dump. Re-measure after the graph grows, or when `THREAD_COUNT` changes.
 
+### Vocabulary labels on an answer (CHAOS-12416)
+
+`ACR_CONTEXT_FABRIC_VOCABULARY_LABELS_ENABLED` (helm
+`contextFabric.vocabularyLabelsEnabled`, default `false`) serves the
+`vocabulary_labels` map on every answer: the service's own word for each closed
+value in that result, and the status correction sentence.
+
+**Why it is a flag.** An existing deploy order cannot protect `main`. The result
+root is `additionalProperties:false`, and acr and web roll separately, so a
+consumer on a pin that does not carry the field fails every answer that holds
+the map. CHAOS-12458 removes the flag once every consumer's pin is
+deployed.
+
+| State | What is served |
+|---|---|
+| Off (default) | No map, and no key on the wire. `coverage.sources[].label` and `.state_label` are stamped from the structured state, so a stored result reads today's words with no migration. |
+| On | The same, plus the map on the result, on the bounded projection and on MCP. |
+
+The stamped source words are not gated, because those fields are on every pin.
+The map is composed on a served copy at both doors that serve a result: the
+create route, for every engine exit and the event stream, and the read by id,
+for the replay of a done submission and the attach terminal. It is never stored, so
+turning the flag on or off needs no migration and no backfill.
+
+**The roll step "vocabulary labels on".** Confirm that the deployed pins of
+ask-dev, web and every MCP client carry `vocabulary_labels`. Then set the flag
+for `acr-api` and roll it. To turn it off, unset the flag and roll: the next read
+of the same result carries no map.
+
+**Budget.** The map counts against the byte budget it is served under. The engine
+fits an answer with no map, so a label never costs a row, and a label never refuses
+an answer. The shed is tiered: the full map; then only `answer_status:*` and
+`status_correction:note`; then no map; then no stamped source words. So a cut answer
+keeps its status word and its note, and its pill says as much as its limitation
+does. A consumer takes its generic path for the words that are gone. The projection
+sheds by the same tiers, before any row. Each shed logs `context fabric vocabulary labels shed`, with
+`surface` and `tier` (`status_only` or `none`).
+
 ### Investigation event stream (CHAOS-11911)
 
 `ACR_CONTEXT_FABRIC_EVENT_STREAM_ENABLED` (default `false`) lets
@@ -2043,7 +2081,7 @@ the stream is drained and verify the projector env has no such variable.
 
 ### Purging a deleted organization
 
-`acr-projector purge --org <uuid>` removes everything ACR holds for an organization that has left Dev Health: every FalkorDB graph of the organization at any epoch (found by scanning the existing graph keys, so an orphan epoch above the recorded one is dropped too) and the org-keyed Postgres rows (the Context Fabric tables, credentials, workload bindings, device authorizations, packet snapshots and episodes). Run it as a one-off Job with the same environment as `rebuild`, plus `ACR_DEV_HEALTH_ENTITLEMENT_URL` and `ACR_DEV_HEALTH_ENTITLEMENT_TOKEN_FILE`, and `ACR_POSTGRES_PURGE_DSN` (or `ACR_POSTGRES_PURGE_DSN_FILE`): the purge connects as its own database role (`acr_purge` by convention), never as the runtime role, and refuses to run without that DSN. The role's privileges are exactly the purge's statements (declared in `internal/dbacl/purge_grants.go`, checked against the SQL the purge runs). On Kubernetes, put the DSN in a Secret, name it in `credentials.purge.existingSecret`, and the grant Job gives the role its privileges; on compose, set `ACR_PURGE_DB_USER` and `ACR_PURGE_DB_PASSWORD` in the environment `docker compose` reads (the `acr-db-init` and `acr-db-acl` services pass them on; the role must differ from the runtime, migration and admin roles, and `acr-db-init` refuses it otherwise), and give the one-off `acr-projector purge` run `ACR_POSTGRES_PURGE_DSN`. The purge role must not be the runtime role.
+`acr-projector purge --org <uuid>` removes everything ACR holds for an organization that has left Dev Health: every FalkorDB graph of the organization at any epoch (found by scanning the existing graph keys, so an orphan epoch above the recorded one is dropped too) and the org-keyed Postgres rows (the Context Fabric tables, credentials, workload bindings, device authorizations, packet snapshots and episodes). Run it as a one-off Job with the same environment as `rebuild`, plus `ACR_DEV_HEALTH_ENTITLEMENT_URL` and `ACR_DEV_HEALTH_ENTITLEMENT_TOKEN_FILE`, and `ACR_POSTGRES_PURGE_DSN` (or `ACR_POSTGRES_PURGE_DSN_FILE`): the purge connects as its own database role (`acr_purge` by convention), never as the runtime role, and refuses to run without that DSN. The role's privileges are exactly the purge's statements (declared in `internal/dbacl/purge_grants.go`, checked against the SQL the purge runs). For each credential it deletes that was live (not revoked, not past its expiry) the purge also writes one `revoked` row (actor `system`, no reference, with the credential's revision 1 first when the stream has none) to `acr.credential_lifecycle_outbox` in the same transaction, so the role also holds SELECT and INSERT on that table and never updates or deletes it. On Kubernetes, put the DSN in a Secret, name it in `credentials.purge.existingSecret`, and the grant Job gives the role its privileges; on compose, set `ACR_PURGE_DB_USER` and `ACR_PURGE_DB_PASSWORD` in the environment `docker compose` reads (the `acr-db-init` and `acr-db-acl` services pass them on; the role must differ from the runtime, migration and admin roles, and `acr-db-init` refuses it otherwise), and give the one-off `acr-projector purge` run `ACR_POSTGRES_PURGE_DSN`. The purge role must not be the runtime role.
 
 1. `purge --org <uuid> --dry-run` prints row counts (cascaded OAuth rows included), the number of graphs it would drop, and the `org_key`. It changes nothing.
 2. `purge --org <uuid> --confirm-hash <org_key>` runs the purge in one Postgres transaction after the graphs are dropped.
