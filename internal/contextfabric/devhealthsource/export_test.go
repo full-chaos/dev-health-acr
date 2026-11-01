@@ -660,3 +660,19 @@ func ReadCIRunsStatementForTest(ctx context.Context, client contextpacket.ClickH
 	}
 	return out, rows.Err()
 }
+
+// ProjectCatalogFullRefreshEvery exposes the daily bound to the live test.
+const ProjectCatalogFullRefreshEvery = projectCatalogFullRefreshEvery
+
+// ReadProjectCatalogDigest exposes the digest read to the live test.
+var ReadProjectCatalogDigest = readProjectCatalogDigest
+
+// AgeProjectCatalogField rewrites a cursor field's stamp, as a day passing does.
+func AgeProjectCatalogField(field string, by time.Duration) string {
+	catalog, ok := decodeProjectCatalog(field)
+	if !ok {
+		panic("the cursor field does not decode")
+	}
+	catalog.refreshAt = catalog.refreshAt.Add(-by)
+	return catalog.encode()
+}

@@ -179,17 +179,19 @@ func TestCallerModelTurnWithTheOwnModelTurnedOff(t *testing.T) {
 	}
 }
 
-func TestCallerModelTurnWithTheOwnModelTurnedOffAndBothFlagsIsServedOnThePlatformModel(t *testing.T) {
+// CHAOS-12453: served on the platform basis, and the turn still makes no model
+// call: its offers keep their structural labels.
+func TestCallerModelTurnWithTheOwnModelTurnedOffAndBothFlagsIsServedWithNoModelCall(t *testing.T) {
 	rig := newPhrasingRouteRig(t, &serviceModelGrants{}, false)
 	client := opsStandInClient(t, opsStandIn{serviceModel: true, fallback: boolRef(true), llmConfig: "turned_off"})
 	rig.app.runtime.Entitlements = client
 	rig.app.runtime.OrgModelConfigs = opsClientConfigs{client: client}
 	options := kindOptionsOf(t, rig.post(t))
-	if got := rig.phrasing.count(); got != 1 || rig.byo.count() != 0 {
-		t.Fatalf("phrasing calls = deployment %d byo %d, want 1 and 0", got, rig.byo.count())
+	if got := rig.phrasing.count(); got != 0 || rig.byo.count() != 0 {
+		t.Fatalf("phrasing calls = deployment %d byo %d, want 0 and 0", got, rig.byo.count())
 	}
-	if options[0].Phrasing != phrasedKindLabel {
-		t.Fatalf("kind option phrasing = %q, want %q", options[0].Phrasing, phrasedKindLabel)
+	if options[0].Phrasing != "" {
+		t.Fatalf("kind option phrasing = %q, want none", options[0].Phrasing)
 	}
 	if got := serviceModelDecisionBasis(t, rig.logs); len(got) != 1 || got[0] != "platform_model_fallback" {
 		t.Fatalf("decision log bases = %v, want [platform_model_fallback]", got)

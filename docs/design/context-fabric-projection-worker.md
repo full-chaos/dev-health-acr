@@ -488,7 +488,7 @@ ClickHouse, `TestPageCutKeepsEveryRowWhenTwoStatementRowsShareStampAndKey`.
 **The cursor bound.** A batch's `Cursor` and `NextCursor` are at most
 `ContextFabricProjectionCursorMaxLength` (512) bytes. The cursor is
 `base64(JSON{since, after, space, ack})` and `after` is the last row's key, so a
-key longer than the limit (296 bytes of plain ASCII with the ingest space; the
+key longer than the limit (268 bytes of plain ASCII with the ingest space; the
 WARN line `devhealthsource row key exceeds the projection cursor bound` prints
 `limit_bytes`, `max_key_bytes` and `key_bytes`) cannot be the cursor. The row is
 never skipped and the batch never fails for it. When the page was read to its
