@@ -135,8 +135,8 @@ var contextFabricEvidenceEntityLabels = map[ContextFabricEvidenceEntityType]stri
 //     outcomes[].impact goes to the fold with its table (CHAOS-12245,
 //     CHAOS-12416). The reader sees the answer status, whose rule reads the
 //     completeness state (ContextFabricAnswerStatusLabel).
-//   - claimed_facts[].field and the keys of rows[].fields are free strings
-//     declared per kind (CHAOS-12418).
+//   - a derived claim's field is free text, not a declared name, so it has no
+//     row and takes the generic path.
 type ContextFabricVocabulary string
 
 const (
@@ -156,8 +156,12 @@ const (
 	ContextFabricVocabularyDriverWindow      ContextFabricVocabulary = "driver_window"
 	ContextFabricVocabularyDriverStanding    ContextFabricVocabulary = "driver_standing"
 	ContextFabricVocabularyFactKind          ContextFabricVocabulary = "fact_kind"
-	ContextFabricVocabularyWindowRelativeID  ContextFabricVocabulary = "window_relative_id"
-	ContextFabricVocabularyWindowProvenance  ContextFabricVocabulary = "window_provenance"
+	// ContextFabricVocabularyFactField serves the words of declared fact fields
+	// and table columns (CHAOS-12418), so a claimed fact reads with no help from
+	// the prose.
+	ContextFabricVocabularyFactField        ContextFabricVocabulary = "fact_field"
+	ContextFabricVocabularyWindowRelativeID ContextFabricVocabulary = "window_relative_id"
+	ContextFabricVocabularyWindowProvenance ContextFabricVocabulary = "window_provenance"
 )
 
 var contextFabricVocabularyNames = [...]ContextFabricVocabulary{
@@ -174,6 +178,7 @@ var contextFabricVocabularyNames = [...]ContextFabricVocabulary{
 	ContextFabricVocabularyDriverWindow,
 	ContextFabricVocabularyDriverStanding,
 	ContextFabricVocabularyFactKind,
+	ContextFabricVocabularyFactField,
 	ContextFabricVocabularyWindowRelativeID,
 	ContextFabricVocabularyWindowProvenance,
 }
@@ -311,7 +316,8 @@ var contextFabricVocabularyLabels = map[ContextFabricVocabulary]map[string]strin
 		string(ContextFabricDriverContext):      "context",
 		string(ContextFabricDriverWithheld):     "withheld",
 	},
-	ContextFabricVocabularyFactKind: contextFabricVocabularyFactKindLabels(),
+	ContextFabricVocabularyFactKind:  contextFabricVocabularyFactKindLabels(),
+	ContextFabricVocabularyFactField: contextFabricFactFieldLabels,
 	ContextFabricVocabularyWindowRelativeID: {
 		string(ContextFabricRelativeWindowTrailing30D):  "last 30 days",
 		string(ContextFabricRelativeWindowTrailing90D):  "last 90 days",
@@ -343,7 +349,9 @@ func ContextFabricVocabularyLabel(vocabulary ContextFabricVocabulary, value stri
 //
 // The tiers rank what a reader loses. The status words go last, because with no
 // map a partial answer reads a neutral pill, and the correction note is gone, so
-// the pill says less than the limitation below it.
+// the pill says less than the limitation below it. The fact field words go
+// first (CHAOS-12418): they are the largest table and the only one a fold can
+// stand in for, so a field word never costs a chip its word.
 type ContextFabricVocabularyLabelsTier string
 
 const (
@@ -351,6 +359,8 @@ const (
 	ContextFabricVocabularyLabelsOff ContextFabricVocabularyLabelsTier = "off"
 	// ContextFabricVocabularyLabelsFull: the whole map.
 	ContextFabricVocabularyLabelsFull ContextFabricVocabularyLabelsTier = "full"
+	// ContextFabricVocabularyLabelsNoFactFields: every word but fact_field:*.
+	ContextFabricVocabularyLabelsNoFactFields ContextFabricVocabularyLabelsTier = "no_fact_fields"
 	// ContextFabricVocabularyLabelsStatusOnly: answer_status:* and the note.
 	ContextFabricVocabularyLabelsStatusOnly ContextFabricVocabularyLabelsTier = "status_only"
 	// ContextFabricVocabularyLabelsNone: no map fits.
@@ -358,16 +368,34 @@ const (
 )
 
 // ContextFabricVocabularyLabelsTierVocabulary returns the closed set.
-func ContextFabricVocabularyLabelsTierVocabulary() [4]ContextFabricVocabularyLabelsTier {
-	return [4]ContextFabricVocabularyLabelsTier{
+func ContextFabricVocabularyLabelsTierVocabulary() [5]ContextFabricVocabularyLabelsTier {
+	return [5]ContextFabricVocabularyLabelsTier{
 		ContextFabricVocabularyLabelsOff, ContextFabricVocabularyLabelsFull,
-		ContextFabricVocabularyLabelsStatusOnly, ContextFabricVocabularyLabelsNone,
+		ContextFabricVocabularyLabelsNoFactFields, ContextFabricVocabularyLabelsStatusOnly,
+		ContextFabricVocabularyLabelsNone,
 	}
 }
 
 // Shed reports that a bound left words out of the served document.
 func (t ContextFabricVocabularyLabelsTier) Shed() bool {
-	return t == ContextFabricVocabularyLabelsStatusOnly || t == ContextFabricVocabularyLabelsNone
+	return t == ContextFabricVocabularyLabelsNoFactFields || t == ContextFabricVocabularyLabelsStatusOnly || t == ContextFabricVocabularyLabelsNone
+}
+
+// ContextFabricVocabularyLabelsWithoutFactFields keeps the words of the
+// no_fact_fields tier. It returns nil when no word is left, so an empty map never
+// stands for a tier.
+func ContextFabricVocabularyLabelsWithoutFactFields(labels map[string]string) map[string]string {
+	var kept map[string]string
+	for key, label := range labels {
+		if vocabulary, _, _ := strings.Cut(key, ":"); vocabulary == string(ContextFabricVocabularyFactField) {
+			continue
+		}
+		if kept == nil {
+			kept = map[string]string{}
+		}
+		kept[key] = label
+	}
+	return kept
 }
 
 // ContextFabricStatusVocabularyLabels keeps the words of the status_only tier:

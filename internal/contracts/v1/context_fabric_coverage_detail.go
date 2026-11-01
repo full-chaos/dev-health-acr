@@ -601,8 +601,10 @@ const (
 	// ContextFabricVocabularyLabelsMaxEntries bounds the map as
 	// evidence_ref_labels is bounded. It is not the working limit: the map
 	// holds only values in one result, so the whole registry is its ceiling
-	// (125 entries, 5,885 bytes, 9% of the 65,536-byte answer budget,
-	// measured by TestTheWholeRegistryFitsInASmallShareOfTheAnswerBudget).
+	// (114 entries, 5,374 bytes, 8.2% of the 65,536-byte answer budget,
+	// measured by TestTheWholeRegistryFitsInASmallShareOfTheAnswerBudget; and
+	// the fact field table apart, whose words shed first, measured by
+	// TestTheFactFieldTableStaysUnderHalfOfTheAnswerBudget).
 	ContextFabricVocabularyLabelsMaxEntries      = 8192
 	ContextFabricCoverageDetailPhrasingMaxLength = 400
 	ContextFabricCoverageDetailRawMaxLength      = ContextFabricCoverageDegradedReasonMaxLength

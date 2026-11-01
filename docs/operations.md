@@ -1010,12 +1010,13 @@ of the same result carries no map.
 
 **Budget.** The map counts against the byte budget it is served under. The engine
 fits an answer with no map, so a label never costs a row, and a label never refuses
-an answer. The shed is tiered: the full map; then only `answer_status:*` and
-`status_correction:note`; then no map; then no stamped source words. So a cut answer
+an answer. The shed is tiered: the full map; then every word but `fact_field:*`;
+then only `answer_status:*` and `status_correction:note`; then no map; then no
+stamped source words. So a cut answer
 keeps its status word and its note, and its pill says as much as its limitation
 does. A consumer takes its generic path for the words that are gone. The projection
 sheds by the same tiers, before any row. Each shed logs `context fabric vocabulary labels shed`, with
-`surface` and `tier` (`status_only` or `none`).
+`surface` and `tier` (`no_fact_fields`, `status_only` or `none`).
 
 ### Investigation event stream (CHAOS-11911)
 

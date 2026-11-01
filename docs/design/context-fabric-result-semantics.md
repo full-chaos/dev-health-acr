@@ -257,10 +257,14 @@ table. The plural of a subject kind is served under `subject_kind_plural:<value>
 so no consumer pluralizes.
 
 **The tables** are in `internal/contracts/v1/context_fabric_display_labels.go`,
-beside the vocabularies. Totality runs both ways
-(`chaos12415_vocabulary_labels_test.go`), sourced from the production vocabulary
-or the published schema: a new value cannot ship unlabeled, and a label cannot
-outlive its value.
+beside the vocabularies, and the fact field table is in
+`internal/contracts/v1/context_fabric_fact_field_labels.go`. Totality runs both
+ways (`chaos12415_vocabulary_labels_test.go`), sourced from the production
+vocabulary or the published schema: a new value cannot ship unlabeled, and a
+label cannot outlive its value. The fact field table is sourced from the
+declarations themselves (`devhealthfacts/chaos12418_fact_field_labels_test.go`),
+under the catalogue-truth test (CHAOS-7073), so what a provider emits, what it
+declares and what the table labels are one set.
 
 | Vocabulary | Field |
 |---|---|
@@ -276,15 +280,15 @@ outlive its value.
 | `driver_window` | `cohort.members[].drivers[].window` |
 | `driver_standing` | `drivers[].standing` |
 | `fact_kind` | `remaining_work[].kind`, `readiness_gaps[].kind`, `conflicts[].kind`, `claimed_facts[].kind` (the registry's word) |
+| `fact_field` | `claimed_facts[].field`, the keys of `rows[].fields` and of `time_series_rows[].fields` (one row per declared name, with its unit) |
 | `window_relative_id`, `window_provenance` | `effective_evidence_window.relative_id`, `.provenance` |
 
 **Not served, on purpose.** `completeness.outcomes[].requirement` is not a
 vocabulary: it is a composite coordinate, `obligation/role/subject`, so it takes
 the generic path. `obligation`, the cause and refinement fields, plan narrowing,
-and driver category, epistemic status and derivation stay in the fold.
-`claimed_facts[].field` and the keys of `rows[].fields` are free strings declared
-per kind (CHAOS-12418). `completeness.state` and `data_completeness`
-are never shown, and `outcomes[].impact` goes to the fold (CHAOS-12245,
+and driver category, epistemic status and derivation stay in the fold. A derived
+claim's `field` is free text, not a declared name, so it takes the generic path.
+`completeness.state` and `data_completeness` are never shown, and `outcomes[].impact` goes to the fold (CHAOS-12245,
 CHAOS-12413): their tables are removed.
 
 **The answer status word.** One function (`ContextFabricAnswerStatusLabel`) gives
@@ -335,7 +339,9 @@ change, and no string is parsed.
 most 8,192 entries, the bound of `evidence_ref_labels`. That is not the working
 limit. The map holds only the values in one result, so the whole registry is its
 ceiling: 114 entries and 5,374 bytes, 8.2% of the 65,536-byte answer budget, plus
-the one note.
+the one note. The fact field table has one row per declared name, so it stands
+apart: 357 entries and 20,924 bytes, 31.9% of the budget. One result holds only
+its own fields, and these words shed first, so the table costs no other word.
 
 **Where it is composed.** `contextfabric.ServeVocabularyLabels` is the only writer
 (`TestOnlyTheServeFunctionSetsTheMap`). Two doors call it, after the document's last
@@ -354,11 +360,14 @@ bounds, less the synthesis input on a client turn. The shed is tiered, so the se
 document is the richest one within the bound:
 
 1. The full map.
-2. Only `answer_status:*` and `status_correction:note` (`status_only`).
-3. No map (`none`).
-4. No stamped source words.
+2. Every word but `fact_field:*` (`no_fact_fields`).
+3. Only `answer_status:*` and `status_correction:note` (`status_only`).
+4. No map (`none`).
+5. No stamped source words.
 
-The status words go last because they say the most for the fewest bytes. With no map
+The fact field words go first because they are the largest table, and the raw name
+in the fold stands in for them, so a field word never costs a chip its word. The
+status words go last because they say the most for the fewest bytes. With no map
 a partial answer reads a neutral pill and loses its note, so the pill says less than
 the limitation below it. The input document stands if nothing fits, and the door
 refuses or projects it as before. A document over the caller's bound goes to the

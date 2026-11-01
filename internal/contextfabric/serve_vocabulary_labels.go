@@ -30,7 +30,8 @@ import (
 // A word never costs an answer, and it never costs a row: the words are added
 // after the engine fits the document. maxBytes is the bound the door enforces,
 // and the shed is tiered, so the result is the richest document within it: the
-// full map; then only answer_status:* and the correction note, because with no
+// full map; then every word but fact_field:*, so a field word never costs a chip
+// its word; then only answer_status:* and the correction note, because with no
 // map a cut answer reads a neutral pill and loses its note; then no map; then no
 // stamped words. When none is within maxBytes the input stands, and the door
 // refuses or projects it exactly as it would with no words. A non-positive
@@ -46,6 +47,10 @@ func ServeVocabularyLabels(result InvestigationResult, enabled bool, maxBytes in
 		labeled.VocabularyLabels = words
 		if withinServedBound(labeled, maxBytes) {
 			return labeled, contractsv1.ContextFabricVocabularyLabelsFull
+		}
+		labeled.VocabularyLabels = contractsv1.ContextFabricVocabularyLabelsWithoutFactFields(words)
+		if labeled.VocabularyLabels != nil && withinServedBound(labeled, maxBytes) {
+			return labeled, contractsv1.ContextFabricVocabularyLabelsNoFactFields
 		}
 		labeled.VocabularyLabels = contractsv1.ContextFabricStatusVocabularyLabels(words)
 		if labeled.VocabularyLabels != nil && withinServedBound(labeled, maxBytes) {
@@ -145,6 +150,9 @@ func composeVocabularyLabels(result InvestigationResult) map[string]string {
 	}
 	for _, fact := range result.ClaimedFacts {
 		words.add(contractsv1.ContextFabricVocabularyFactKind, string(fact.Kind))
+		words.add(contractsv1.ContextFabricVocabularyFactField, fact.Field)
+		words.factRows(fact.Rows)
+		words.factRows(fact.TimeSeriesRows)
 	}
 
 	if window := result.EffectiveEvidenceWindow; window != nil {
@@ -174,6 +182,16 @@ func (w *vocabularyWords) add(vocabulary contractsv1.ContextFabricVocabulary, va
 func (w *vocabularyWords) subjectKind(kind contractsv1.ContextFabricSubjectKind) {
 	w.add(contractsv1.ContextFabricVocabularySubjectKind, string(kind))
 	w.add(contractsv1.ContextFabricVocabularySubjectKindPlural, string(kind))
+}
+
+// factRows words the columns of a claimed fact's table: its rows' keys are the
+// declared column names.
+func (w *vocabularyWords) factRows(rows []contractsv1.ContextFabricClaimedFactRow) {
+	for _, row := range rows {
+		for column := range row.Fields {
+			w.add(contractsv1.ContextFabricVocabularyFactField, column)
+		}
+	}
 }
 
 // answerStatus reads the one status rule with this result's completeness.

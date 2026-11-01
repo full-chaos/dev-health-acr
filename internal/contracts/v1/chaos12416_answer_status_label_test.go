@@ -260,16 +260,22 @@ func TestTheStatusTierKeepsOnlyTheStatusWordsAndTheNote(t *testing.T) {
 func TestOnlyATierThatLeftWordsOutIsAShed(t *testing.T) {
 	want := map[ContextFabricVocabularyLabelsTier]bool{
 		ContextFabricVocabularyLabelsOff: false, ContextFabricVocabularyLabelsFull: false,
-		ContextFabricVocabularyLabelsStatusOnly: true, ContextFabricVocabularyLabelsNone: true,
+		ContextFabricVocabularyLabelsNoFactFields: true, ContextFabricVocabularyLabelsStatusOnly: true,
+		ContextFabricVocabularyLabelsNone: true,
 	}
 	tiers := ContextFabricVocabularyLabelsTierVocabulary()
 	if len(tiers) != len(want) {
 		t.Fatalf("%d tiers, want %d", len(tiers), len(want))
 	}
+	seen := map[ContextFabricVocabularyLabelsTier]bool{}
 	for _, tier := range tiers {
+		seen[tier] = true
 		shed, listed := want[tier]
 		if !listed || tier.Shed() != shed {
 			t.Errorf("tier %q: listed=%v Shed()=%v, want %v", tier, listed, tier.Shed(), shed)
 		}
+	}
+	if len(seen) != len(want) {
+		t.Errorf("the vocabulary names %d distinct tiers, want %d: %v", len(seen), len(want), tiers)
 	}
 }
