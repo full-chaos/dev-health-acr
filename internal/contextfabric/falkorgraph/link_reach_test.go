@@ -878,6 +878,40 @@ func TestTheReachKeepsNoAdapterOnTheContext(t *testing.T) {
 	}
 }
 
+// The reach holds the clock in place of the adapter, and still reads at the
+// adapter's time: a project's ownership is judged at the call's own clock.
+func TestTheProjectReachReadsAtTheAdapterClock(t *testing.T) {
+	t.Parallel()
+	at := time.Date(2020, 6, 1, 12, 0, 0, 0, time.UTC)
+	wildcard := &node{Properties: map[string]interface{}{propKind: string(contractsv1.ContextFabricSubjectProject), propCanonicalID: "project:p-1", propAuthzRepos: "*"}}
+	var bound map[string]interface{}
+	fake := &fakeConn{queryFunc: func(_ context.Context, _, cypher string, params map[string]interface{}, _ bool) ([]row, error) {
+		if strings.Contains(cypher, "$owned") {
+			bound = params
+			return nil, nil
+		}
+		return []row{{"n": wildcard}}, nil
+	}}
+	adapter := newFakeAdapter(t, fake)
+	adapter.now = func() time.Time { return at }
+	ctx, _, err := adapter.withProjectReach(context.Background(), "k", restrictedReachCaller(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := adapter.api.query(ctx, "k", "MATCH (n) RETURN n", nil, true); err != nil {
+		t.Fatal(err)
+	}
+	want := newTemporalFilter(contextfabric.TimeContext{Axis: contextfabric.TemporalValidTime, AsOf: &at}).bind(map[string]interface{}{})
+	for key, value := range want {
+		if bound[key] != value {
+			t.Fatalf("reach param %s = %v, want %v from the adapter clock", key, bound[key], value)
+		}
+	}
+	if len(want) == 0 {
+		t.Fatal("the filter bound nothing: this test measured nothing")
+	}
+}
+
 // A stored-subject decision does not read a failed read as a denial.
 func TestAFailedReachAtTheStoredGateIsNoDenial(t *testing.T) {
 	t.Parallel()
