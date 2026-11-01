@@ -362,6 +362,8 @@ type Config struct {
 	// AuthWorkload (CHAOS-11195) configures acr-api's client of the auth-service workload-token exchange; zero is
 	// off. See auth_workload.go.
 	AuthWorkload AuthWorkloadConfig
+	// AuthProjection (CHAOS-11198) switches on the lifecycle outbox publisher; zero is off. See auth_projection.go.
+	AuthProjection AuthProjectionConfig
 
 	// dataQueryURL / dataQueryTimeout: internal ops query service call
 	// (ACR_DATA_QUERY_URL, ACR_DATA_QUERY_TIMEOUT); read via the
@@ -493,6 +495,10 @@ func load(lookup lookupEnv) (Config, error) {
 	if cfg.AuthWorkload, err = authWorkloadValue(lookup); err != nil {
 		return Config{}, err
 	}
+	cfg.AuthProjection = authProjectionValue(lookup)
+	if err := cfg.AuthProjection.Validate(cfg.AuthWorkload); err != nil {
+		return Config{}, err
+	}
 
 	if cfg.RequestTimeout, err = durationValue(lookup, "ACR_REQUEST_TIMEOUT", defaultRequestTimeout); err != nil {
 		return Config{}, err
@@ -573,6 +579,9 @@ func load(lookup lookupEnv) (Config, error) {
 
 func (c Config) Validate() error {
 	if err := c.AuthWorkload.Validate(); err != nil {
+		return err
+	}
+	if err := c.AuthProjection.Validate(c.AuthWorkload); err != nil {
 		return err
 	}
 	switch c.Environment {
