@@ -137,6 +137,10 @@ query version, never a caller value).
 dimensions use `unknown`; no backend-specific dynamic label may be added.
 Per-organization and per-credential request/resource totals come from the bounded
 `internal/limits.Manager.Usage` interface and are not emitted as metric labels.
+A user's credentials count as one credential here: the user on one surface, so a
+refresh or a new Connect neither starts a new quota nor takes a new tracked
+subject. Workload, org-bearer and operator credentials count one by one, a
+workload by its binding.
 
 ## What leaves a span
 

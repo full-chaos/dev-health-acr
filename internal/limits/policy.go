@@ -37,6 +37,10 @@ const (
 	RequestClassCapabilities
 )
 
+// Subject is what a request counts under. CredentialID is the key of the
+// per-credential limits and the tracked set: for a user's credentials the caller
+// passes the owner, the user on one surface, so it is not always a credential id
+// (api.limitSubjectOf).
 type Subject struct {
 	OrgID        string
 	CredentialID string

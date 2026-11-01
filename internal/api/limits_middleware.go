@@ -7,11 +7,27 @@ import (
 	"time"
 
 	"github.com/full-chaos/dev-health-acr/internal/auth"
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 	"github.com/full-chaos/dev-health-acr/internal/limits"
+	"github.com/full-chaos/dev-health-acr/internal/storage"
 )
 
 type limitClaimContextKey struct{}
+
+// limitSubjectOf is the key principal's requests count under. For a user's
+// credentials it is the owner of contextfabric.SameSubmissionOwner, the user on
+// one surface: a refresh and a new Connect are new credential rows of one owner,
+// so they neither take a new tracked subject nor start a new quota. A browser
+// credential lives 10 minutes, so keying it on its id filled the organization's
+// tracked credentials and refused its new tokens. Every other principal keys on
+// its subject, as the authenticator set it (a workload's binding id).
+func limitSubjectOf(principal storage.Principal) string {
+	if owner, err := contextfabric.SubmissionOwnerOf(principal); err == nil && owner.UserID != "" {
+		return "owner:" + string(owner.Surface) + ":" + owner.UserID
+	}
+	return principal.Subject
+}
 
 func LimitMiddleware(manager *limits.Manager, class limits.RequestClass, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -26,7 +42,7 @@ func LimitMiddleware(manager *limits.Manager, class limits.RequestClass, next ht
 		}
 		claim, decision, err := manager.Claim(r.Context(), limits.Subject{
 			OrgID:        principal.OrgID,
-			CredentialID: principal.Subject,
+			CredentialID: limitSubjectOf(principal),
 		}, class)
 		if err != nil {
 			writeError(w, r, http.StatusServiceUnavailable, "upstream_unavailable", "Request controls are temporarily unavailable", true, nil)
