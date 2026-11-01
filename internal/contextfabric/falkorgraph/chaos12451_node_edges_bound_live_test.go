@@ -327,7 +327,8 @@ func TestLiveACutHopWalkOnACohortReadFloorsThePopulation(t *testing.T) {
 // TestLiveACutWalkBesideATeamAnchorIsDisclosed (CHAOS-12451, table row 4): the
 // anchor's member read is a tree walk, so the population is complete, and a cut
 // of another subject's walk or of the text arm is a cut of the answer's paths.
-// A walk that only spent its budget is routine and files nothing.
+// A walk that only spent its budget is routine and files nothing. The question
+// of the walk cases matches no text, so the text arm cannot stand in for them.
 func TestLiveACutWalkBesideATeamAnchorIsDisclosed(t *testing.T) {
 	ctx := context.Background()
 	adapter, _ := newLiveFalkorAdapter(t, ctx)
@@ -340,7 +341,7 @@ func TestLiveACutWalkBesideATeamAnchorIsDisclosed(t *testing.T) {
 		committed []contextfabric.SubjectRef
 		limit     int
 	}{
-		{"the hop walk of the other subject", "which repositories does the team own?", []contextfabric.SubjectRef{team, repository}, 10},
+		{"the hop walk of the other subject", "how are things?", []contextfabric.SubjectRef{team, repository}, 10},
 		{"the text arm", "what repositories does team-big own?", []contextfabric.SubjectRef{team}, 4},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -359,7 +360,7 @@ func TestLiveACutWalkBesideATeamAnchorIsDisclosed(t *testing.T) {
 	t.Run("a spent budget files nothing", func(t *testing.T) {
 		adapter.config.MaxResults = 2
 		t.Cleanup(func() { adapter.config.MaxResults = 500 })
-		spent := discoverAtLimit(t, ctx, adapter, orgID, 1000, "which repositories does the team own?", frame, []contextfabric.SubjectRef{team, repository}, &team)
+		spent := discoverAtLimit(t, ctx, adapter, orgID, 1000, "how are things?", frame, []contextfabric.SubjectRef{team, repository}, &team)
 		if hasHopWalkCut(spent.Coverage) {
 			t.Fatalf("details %+v: a budget is not a cut of a read", spent.Coverage.Details)
 		}
