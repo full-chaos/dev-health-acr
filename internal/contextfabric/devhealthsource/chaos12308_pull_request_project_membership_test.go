@@ -56,7 +56,9 @@ func TestAPullRequestStatesTheUnionOfItsLinkedIssues(t *testing.T) {
 		membershipRow("repo-1", "WIDGET-101", "github", "P-1", 1),
 		membershipRow("repo-1", "WIDGET-101", "jira", "ENG", 1),
 		membershipRow(chaos12226Linear, "WIDGET-LINEAR", "linear", "L-1", 1),
-		membershipRow(chaos12226Orphan, "WIDGET-ORPHAN", "github", "P-1", 1),
+		// A project no other issue names: a row that wrongly contributes
+		// shows in the set, not only in the tier.
+		membershipRow(chaos12226Orphan, "WIDGET-ORPHAN", "github", "P-9", 1),
 	}
 	outranked := linkRow("WIDGET-ORPHAN", chaos12226Orphan, "heuristic")
 	outranked[6] = uint8(1)
