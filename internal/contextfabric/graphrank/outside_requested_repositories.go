@@ -39,13 +39,11 @@ func recordOutsideRequestedRepository(principal storage.Principal, request conte
 	deps.outsideRequested[SubjectKey(candidate.Subject)] = struct{}{}
 }
 
-// outsideRequestedRepositoriesApplies reports whether the requested repository
-// narrowing is the only requested narrowing, so a refused node is outside the
-// requested repositories and not outside a requested project or team. A
-// project-only caller is never counted.
+// outsideRequestedRepositoriesApplies reports whether a node the grant admits
+// and the request refuses can only be outside the requested repositories, not
+// outside a requested project or team. A project-only caller is never counted.
 func outsideRequestedRepositoriesApplies(principal storage.Principal, request contextfabric.InvestigationRequest) bool {
 	return auth.ClassifyGrant(principal) != auth.GrantProjectOnly &&
-		len(request.RequestedScope.RepositorySlugs) > 0 &&
 		len(request.RequestedScope.ProjectIDs) == 0 &&
 		len(request.RequestedScope.TeamIDs) == 0
 }

@@ -120,6 +120,10 @@ func TestOnlyARequestedRepositoryNarrowingCountsAMatchAsOutside(t *testing.T) {
 	if got := outsideRepositoriesResolve(t, principal, team, worker); got.OutsideRequestedRepositories != 0 {
 		t.Fatalf("a repository and a team narrowing: outside %d, want 0: the team could be what refused it", got.OutsideRequestedRepositories)
 	}
+	project := contextfabric.RequestedScope{RepositorySlugs: []string{"acme/payments-api"}, ProjectIDs: []string{"p-1"}}
+	if got := outsideRepositoriesResolve(t, principal, project, worker); got.OutsideRequestedRepositories != 0 {
+		t.Fatalf("a repository and a project narrowing: outside %d, want 0: the project could be what refused it", got.OutsideRequestedRepositories)
+	}
 }
 
 // TestAKindTheQuestionDoesNotAskForIsNotAMatchOutside: the contest admission
