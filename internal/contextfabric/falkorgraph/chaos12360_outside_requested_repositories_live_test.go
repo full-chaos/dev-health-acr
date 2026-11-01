@@ -75,7 +75,9 @@ func TestLiveANoMatchStatesTheMatchOutsideTheRequestedRepositories(t *testing.T)
 		{"an unrestricted caller is told the count", storage.Principal{OrgID: orgID}, narrowed, true},
 		{"a universal caller is told the count", storage.Principal{OrgID: orgID, RepositoryScopes: []string{"*"}}, narrowed, true},
 		{"a restricted caller is told nothing of a match outside its grant", storage.Principal{OrgID: orgID, RepositoryScopes: narrowed}, narrowed, false},
-		{"a restricted caller is told nothing of a match inside its grant", storage.Principal{OrgID: orgID, RepositoryScopes: []string{"acme/payments-api", "acme/payments-worker"}}, narrowed, false},
+		// CHAOS-12446: the shape a web user has at runtime: a browser credential
+		// issued "*", which the access read replaced with the live inventory.
+		{"a web user is told the count of a match its grant covers", storage.Principal{OrgID: orgID, RepositoryScopes: []string{"acme/payments-api", "acme/payments-worker"}, ClientClass: storage.CredentialClientClassBrowser}, narrowed, true},
 		{"a project-only caller is told nothing", storage.Principal{OrgID: orgID, ProjectScopes: []string{"project.v2:github:P-1"}}, narrowed, false},
 	} {
 		for _, terminal := range []struct {

@@ -47,11 +47,12 @@ func (s *Service) RotateSelf(ctx context.Context, principal storage.Principal) (
 	}
 	expiresAt := s.now().UTC().Add(DeviceCredentialLifetime)
 	issued, err := s.Rotate(ctx, RotateCredentialRequest{
-		OrgID:        principal.OrgID,
-		CredentialID: principal.CredentialID,
-		CreatedBy:    principal.Subject,
-		ExpiresAt:    &expiresAt,
-		Overlap:      storage.MaximumCredentialOverlap,
+		OrgID:          principal.OrgID,
+		CredentialID:   principal.CredentialID,
+		CreatedBy:      principal.Subject,
+		ExpiresAt:      &expiresAt,
+		Overlap:        storage.MaximumCredentialOverlap,
+		SelfCredential: true,
 	})
 	if err != nil {
 		if errors.Is(err, storage.ErrNotFound) {
@@ -126,7 +127,7 @@ func (s *Service) RevokeSelf(ctx context.Context, principal storage.Principal) (
 	if _, err := s.authenticatedCredential(ctx, principal); err != nil {
 		return SelfRevocation{}, err
 	}
-	credential, err := s.Revoke(ctx, principal.OrgID, principal.CredentialID, principal.Subject)
+	credential, err := s.revoke(ctx, principal.OrgID, principal.CredentialID, principal.Subject, true)
 	if err != nil {
 		if errors.Is(err, storage.ErrNotFound) {
 			return SelfRevocation{}, ErrStaleSelfCredential

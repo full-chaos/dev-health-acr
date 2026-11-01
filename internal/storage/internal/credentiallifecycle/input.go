@@ -119,7 +119,11 @@ type RotationInput struct {
 	OrgID              string
 	SourceCredentialID string
 	ActorID            string
-	Replacement        RotationReplacement
+	// SelfCredential marks a rotation the credential asked for itself; it
+	// changes only the actor the lifecycle outbox names (credential), never
+	// the audit row. ActorID must then be the source credential id.
+	SelfCredential bool
+	Replacement    RotationReplacement
 }
 
 type RevocationInput struct {
@@ -130,6 +134,10 @@ type RevocationInput struct {
 	ActorType string
 	// Reason is optional free text recorded in the audit metadata.
 	Reason string
+	// SelfCredential marks a revocation the credential asked for itself; it
+	// changes only the actor the lifecycle outbox names (credential), never
+	// the audit row. ActorID must then be the credential id.
+	SelfCredential bool
 }
 
 // RotationRollbackInput identifies the exact rotation that may be undone. The
