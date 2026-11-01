@@ -326,8 +326,21 @@ carries a reason.
 
 - **Facts.** The registry files the detail beside the source observation, and
   a pruned or unconfigured kind keeps its own state: nothing is refused there.
-  A complete answer is floored to partial with its own limitation
-  (`applyProjectScopeWithheldStatusFloor`).
+- **The floor keeps the narrative.** A complete answer is floored to partial
+  with its own limitation, and its narrative stays
+  (`applyProjectScopeWithheldStatusFloor`, the status-only
+  `floorKeepingNarrative`; CHAOS-12301, ruling (b)). Every fact kind is withheld
+  from this caller, so withholding the narrative too would leave it almost no
+  written answer, even a correct graph-only one. No withheld value can be in the
+  narrative: the registry refuses the read before any provider runs, so synthesis
+  is never given one, and a claim with no fact behind it meets the same check as
+  any other answer. The head is the server's and states partial.
+- **Other floors still withhold.** This floor runs after every floor that
+  withholds the narrative (`ApplyServedStatusFloors`), so it never pre-empts one.
+  A denied cohort, an unverified project narrowing, a status filter over a cut
+  read and an organization survey each withhold the narrative for their own
+  reason, on a project-only answer too. Those answers do not carry the floor's
+  sentence; their `project_scope_withheld` details still name what was refused.
 - **read_facts.** Each row reads outcome `withheld_project_scope` with
   `kind_state: unauthorized`, and the read is partial.
 - **A request that names projects (ruling B).** The engine stops before every

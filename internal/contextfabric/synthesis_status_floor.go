@@ -244,18 +244,19 @@ func applyUnverifiedProjectNarrowingStatusFloor(result *InvestigationResult) {
 // applyProjectScopeWithheldStatusFloor (CHAOS-12330) floors a complete answer
 // whose coverage carries a project_scope_withheld detail: a project-only caller
 // was refused part of what it asked, so the answer is partial, whatever the
-// model called it, and it says so in its own sentence. Never promotes; leaves
-// a refusal, degraded, no_match and clarification as they are.
+// model called it, and it says so in its own sentence. It keeps the narrative
+// (CHAOS-12301, lead ruling (b)): every fact kind is withheld from this caller,
+// so withholding the narrative too would leave it almost no written answer, even
+// a correct graph-only one. No withheld value can be in it: the registry refuses
+// the read before any provider runs, so synthesis is never given one. Never
+// promotes; leaves a refusal, degraded, no_match and clarification as they are.
 func applyProjectScopeWithheldStatusFloor(result *InvestigationResult) {
 	if result == nil || result.Status != InvestigationComplete || result.RefusalBasis != "" {
 		return
 	}
 	for _, detail := range result.Coverage.Details {
 		if detail.Code == contractsv1.ContextFabricCoverageDetailProjectScopeWithheld {
-			floorNoMatchTo(result, InvestigationPartial)
-			composed, displaced := appendBoundedLimitations(result.Limitations, []string{contractsv1.ContextFabricProjectScopeWithheldLimitation})
-			result.Limitations = composed
-			result.LimitationsDisplaced += displaced
+			floorKeepingNarrative(result, InvestigationPartial, contractsv1.ContextFabricProjectScopeWithheldLimitation)
 			return
 		}
 	}
@@ -315,10 +316,12 @@ func ApplyServedStatusFloors(result InvestigationResult) InvestigationResult {
 	applyEmptyMemberSearchStatusFloor(&result)
 	applyDeniedCohortStatusFloor(&result)
 	applyUnverifiedProjectNarrowingStatusFloor(&result)
-	applyProjectScopeWithheldStatusFloor(&result)
 	applyStatusPoolCutStatusFloor(&result)
 	applyOrganizationSubjectStatusFloor(&result)
-	// Last, so a floor that withholds the narrative keeps its own swap.
+	// Last, so a floor that withholds the narrative keeps its own swap. The
+	// project scope comes first of the two: a read cut for this caller is
+	// still disclosed by its coverage row, and the grant is what it cannot clear.
+	applyProjectScopeWithheldStatusFloor(&result)
 	applyCutGraphReadStatusFloor(&result)
 	if result.Status != before || restated {
 		result.Completeness = ComputeAnswerCompleteness(result)
