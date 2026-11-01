@@ -91,28 +91,40 @@ func TestI48PlanRealDelaysMeetTheRules(t *testing.T) {
 	}
 }
 
-// scaleI48 is a test-only transform on the loaded plan: every delay is divided by factor.
-func scaleI48(t *testing.T, raw []byte, factor int) []byte {
+// capI48 is a test-only transform on the loaded plan: every delay is capped at maxDelay ms,
+// except Q5's synthesis, which is set to q5Synthesis ms (over the test model timeout).
+// The REAL delays are proven by TestI48PlanRealDelaysMeetTheRules; this run need not keep
+// their ratio.
+func capI48(t *testing.T, raw []byte, maxDelay, q5Synthesis int) []byte {
 	t.Helper()
 	var plan map[string]any
 	if err := json.Unmarshal(raw, &plan); err != nil {
 		t.Fatal(err)
 	}
 	for _, q := range serviceQuestions(plan) {
-		delay := q.(map[string]any)["delay_ms"].(map[string]any)
+		entry := q.(map[string]any)
+		delay := entry["delay_ms"].(map[string]any)
 		for k, v := range delay {
-			delay[k] = int(v.(float64)) / factor
+			delay[k] = min(int(v.(float64)), maxDelay)
+		}
+		if entry["question"] == i48Q5 {
+			delay["synthesize"] = q5Synthesis
 		}
 	}
 	out, _ := json.Marshal(plan)
 	return out
 }
 
-// Q1 to Q4 reach the ready state with their delays (scaled 1/30); Q5 ends as a model timeout
-// (scaled model timeout 45 s / 30 = 1.5 s, Q5 synthesis 50 s / 30 = 1.67 s).
+// Q1 to Q4 reach the ready state with their delays capped at 200 ms (over 1 s of margin
+// against the 1.5 s test model timeout); Q5's synthesis is held to timeout + 1 s, so the
+// client timeout cancels it.
 func TestI48PlanThroughTheRealEngineWithScaledDelays(t *testing.T) {
-	const factor = 30
-	h := startOracleWithTimeout(t, scaleI48(t, readI48(t), factor), realModelTimeout/factor)
+	const (
+		maxDelay    = 200
+		testTimeout = 1500 * time.Millisecond
+		q5Synthesis = int((testTimeout + time.Second) / time.Millisecond)
+	)
+	h := startOracleWithTimeout(t, capI48(t, readI48(t), maxDelay, q5Synthesis), testTimeout)
 	engine := h.engine(t)
 	for _, q := range []string{i48Q1, i48Q2, i48Q3, i48Q4} {
 		t.Run(q, func(t *testing.T) {
@@ -124,7 +136,7 @@ func TestI48PlanThroughTheRealEngineWithScaledDelays(t *testing.T) {
 			requireReady(t, result)
 			want := time.Duration(0)
 			d := i48Delays(t, readI48(t))[q]
-			want = ms(d.Interpret+d.Synthesize) / factor
+			want = ms(min(d.Interpret, maxDelay) + min(d.Synthesize, maxDelay))
 			if got := time.Since(start); got < want {
 				t.Fatalf("took %v, the scaled delays are %v: the delay did not run", got, want)
 			}
