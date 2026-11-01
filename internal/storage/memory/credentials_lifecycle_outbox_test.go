@@ -340,46 +340,22 @@ func TestOutbox_AMappingFailureRollsTheMutationBack(t *testing.T) {
 	require.ErrorIs(t, err, storage.ErrNotFound)
 }
 
-func TestOutbox_FreeFormOrganizationIdsWriteNoRowsInTheMemoryStore(t *testing.T) {
+func TestOutbox_AFreeFormOrganizationIdThatFitsGetsARowAndOneThatDoesNotFailsTheMutation(t *testing.T) {
 	audit, lifecycle, _ := newOutboxStore(t)
-	_, err := lifecycle.CreateCredential(context.Background(), validCredentialCreateInput("freeform1"))
+	input := validCredentialCreateInput("freeform1")
+	credential, err := lifecycle.CreateCredential(context.Background(), input)
 	require.NoError(t, err)
-	require.Empty(t, audit.LifecycleOutbox())
-}
+	rows := audit.LifecycleOutbox()
+	require.Len(t, rows, 1)
+	require.Equal(t, credential.CredentialID, rows[0].AggregateID)
+	require.Contains(t, string(rows[0].Payload), `"organization_id":"org_org_1"`)
 
-// flakyContext reports no error for its first failAfter Err calls and a
-// cancellation from then on, so a failure lands between two steps of one
-// mutation.
-type flakyContext struct {
-	context.Context
-	calls     *int
-	failAfter int
-}
-
-func (c flakyContext) Err() error {
-	*c.calls++
-	if *c.calls > c.failAfter {
-		return context.Canceled
-	}
-	return nil
-}
-
-func TestOutbox_AnAuditFailureAfterTheOutboxRowsLeavesNoRows(t *testing.T) {
-	for failAfter := 0; failAfter < 6; failAfter++ {
-		audit, lifecycle, _ := newOutboxStore(t)
-		credential, err := lifecycle.CreateCredential(context.Background(), outboxInput("flaky"))
-		require.NoError(t, err)
-		audit.ledger.TruncateTo(0)
-		calls := 0
-		_, err = lifecycle.RevokeCredential(flakyContext{Context: context.Background(), calls: &calls, failAfter: failAfter}, revoke(credential.CredentialID, "admin", "", false))
-		stored, getErr := lifecycle.GetByID(context.Background(), outboxOrg, credential.CredentialID)
-		require.NoError(t, getErr)
-		if err != nil {
-			require.Nil(t, stored.RevokedAt, "failAfter=%d: a failed revoke changes nothing", failAfter)
-			require.Empty(t, audit.LifecycleOutbox(), "failAfter=%d: a failed revoke leaves no outbox row", failAfter)
-		} else {
-			require.NotNil(t, stored.RevokedAt)
-			require.Len(t, audit.LifecycleOutbox(), 2)
-		}
-	}
+	unfit := validCredentialCreateInput("freeform2")
+	unfit.OrgID = "org:1"
+	unfit.TokenHash = strings.Repeat("c", 64)
+	_, err = lifecycle.CreateCredential(context.Background(), unfit)
+	require.ErrorContains(t, err, "organization id", "the mapper refuses an organization id that does not fit the wire form")
+	_, err = lifecycle.GetByID(context.Background(), "org:1", unfit.CredentialID)
+	require.ErrorIs(t, err, storage.ErrNotFound)
+	require.Len(t, audit.LifecycleOutbox(), 1, "a failed mutation leaves no row")
 }

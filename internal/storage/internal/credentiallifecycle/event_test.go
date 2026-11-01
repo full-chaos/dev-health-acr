@@ -113,13 +113,17 @@ func TestOrgWireIDPinsTheLowerCaseUUIDText(t *testing.T) {
 		testOrgUUID:                            testOrgWire,
 		strings.ToUpper(testOrgUUID):           testOrgWire,
 		"00000000-0000-0000-0000-000000000000": "org_00000000-0000-0000-0000-000000000000",
+		"org-a":                                "org_org-a",
+		"org_1":                                "org_org_1",
+		strings.Repeat("a", 64):                "org_" + strings.Repeat("a", 64),
+		"zzzzzzzz-zzzz-zzzz-zzzz-zzzzzzzzzzzz": "org_zzzzzzzz-zzzz-zzzz-zzzz-zzzzzzzzzzzz",
 	} {
 		got, err := OrgWireID(in)
 		if err != nil || got != want {
 			t.Errorf("OrgWireID(%q) = %q, %v; want %q", in, got, err, want)
 		}
 	}
-	for _, bad := range []string{"", "not-a-uuid", testOrgUUID + "0", "org_" + testOrgUUID, "{" + testOrgUUID + "}", strings.ReplaceAll(testOrgUUID, "-", "")} {
+	for _, bad := range []string{"", "a b", "org:1", strings.Repeat("a", 65), "é", " org-a"} {
 		if got, err := OrgWireID(bad); err == nil {
 			t.Errorf("OrgWireID(%q) = %q, want an error", bad, got)
 		}
