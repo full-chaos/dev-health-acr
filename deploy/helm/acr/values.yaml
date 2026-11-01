@@ -122,7 +122,8 @@ config:
   # in every environment, production included.
   oauth:
     enabled: false
-    # acr-api public origin, e.g. https://acr.example.com (no path).
+    # acr-api public origin, e.g. https://acr.example.com (no path). The three
+    # URLs below take http only on a loopback host, for a local stack with no TLS.
     issuer: ""
     # Public URLs of the hosted MCP endpoints a credential may be bound to,
     # e.g. [https://mcp.example.com/mcp].

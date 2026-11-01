@@ -41,6 +41,7 @@ const (
 	KindDeviceRedeemed EventKind = "device_redeemed"
 	KindRotated        EventKind = "rotated"
 	KindRevoked        EventKind = "revoked"
+	KindExpired        EventKind = "expired"
 )
 
 type ActorType string
@@ -90,6 +91,9 @@ type Row struct {
 // the same (aggregate, revision) with ErrRevisionConflict.
 type Sink interface {
 	MaxRevision(ctx context.Context, aggregateID string) (int, error)
+	// LatestEventType is the event type of the aggregate's highest revision, or
+	// the empty string when it has no row.
+	LatestEventType(ctx context.Context, aggregateID string) (string, error)
 	Insert(ctx context.Context, row Row) error
 }
 
@@ -212,6 +216,16 @@ func BuildRow(f Facts) (Row, error) {
 			return Row{}, invalidEvent("revoked revision")
 		}
 		revision = f.Revision
+	case KindExpired:
+		// Only the system expires a credential, and the event carries the
+		// expiry it reports: a credential with none cannot have expired.
+		if f.Revision < 2 {
+			return Row{}, invalidEvent("expired revision")
+		}
+		if f.Actor.Type != ActorSystem || c.ExpiresAt == nil {
+			return Row{}, invalidEvent("expired actor or expiry")
+		}
+		revision = f.Revision
 	default:
 		return Row{}, invalidEvent("event kind")
 	}
@@ -223,7 +237,10 @@ func BuildRow(f Facts) (Row, error) {
 		return Row{}, err
 	}
 	change := wireChange{Status: "revoked"}
-	if kind != KindRevoked {
+	if kind == KindExpired {
+		change = wireChange{Status: "expired", ExpiresAt: wireTime(*c.ExpiresAt)}
+	}
+	if kind != KindRevoked && kind != KindExpired {
 		scopes := slices.Clone(c.Scopes)
 		slices.Sort(scopes)
 		scopes = slices.Compact(scopes)
@@ -304,14 +321,27 @@ func EnsureIssued(ctx context.Context, sink Sink, c contractsv1.ClientCredential
 	return insertFacts(ctx, sink, Facts{Kind: KindIssued, Credential: c, At: c.CreatedAt, Actor: Actor{Type: ActorSystem}})
 }
 
-// Append writes one event in the caller's transaction. A revoked event first
-// writes the credential's revision 1 when the stream has none, then takes the
-// next revision; the kinds that open an aggregate are revision 1. Every error
+// Append writes one event in the caller's transaction. A terminal (revoked or
+// expired) event first writes the credential's revision 1 when the stream has
+// none, then takes the next revision, unless the latest event is already
+// terminal, in which case it writes nothing; the kinds that open an aggregate are revision 1. Every error
 // is returned: the caller's transaction must not commit without the row.
 func Append(ctx context.Context, sink Sink, f Facts) error {
-	if f.Kind == KindRevoked {
+	if f.Kind == KindRevoked || f.Kind == KindExpired {
 		if err := EnsureIssued(ctx, sink, f.Credential); err != nil {
 			return err
+		}
+		// A terminal event on an aggregate whose latest event is already terminal
+		// writes nothing and succeeds: one terminal row per credential, whichever
+		// path (a revoke after the expiry, a second tick, a purge) arrives second.
+		// The read is a new statement, so it sees a commit that landed after the
+		// caller selected the credential.
+		latest, err := sink.LatestEventType(ctx, f.Credential.CredentialID)
+		if err != nil {
+			return err
+		}
+		if isTerminalEventType(latest) {
+			return nil
 		}
 		max, err := sink.MaxRevision(ctx, f.Credential.CredentialID)
 		if err != nil {
@@ -394,4 +424,10 @@ func FamilyMemberActor(initiator Actor) Actor {
 		return Actor{Type: ActorSystem}
 	}
 	return initiator
+}
+
+// isTerminalEventType reports whether an event type ends a credential: revoked
+// and expired are terminal, every other type (and no row) is not.
+func isTerminalEventType(eventType string) bool {
+	return eventType == eventTypePrefix+string(KindRevoked) || eventType == eventTypePrefix+string(KindExpired)
 }

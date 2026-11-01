@@ -549,22 +549,24 @@ consent page /authorize sends the browser to.
 {{- define "acr.validateOAuth" -}}
 {{- $o := .Values.config.oauth -}}
 {{- $w := .Values.config.webAssertion -}}
-{{- if not (regexMatch "^https://[^/?#]+$" ($o.issuer | default "")) -}}
-{{- fail (printf "oauth: config.oauth.issuer %q must be an https origin with no path" ($o.issuer | default "")) -}}
+{{- /* http on a loopback host only: the rule of acr-api (internal/config/oauth.go) and acr-mcp (internal/mcp/http_oauth.go). */ -}}
+{{- $loopback := `http://(localhost|127\.0\.0\.1|\[::1\])(:[0-9]+)?` -}}
+{{- if not (regexMatch (printf "^(https://[^/?#]+|%s)$" $loopback) ($o.issuer | default "")) -}}
+{{- fail (printf "oauth: config.oauth.issuer %q must be an https origin with no path, or http on a loopback host" ($o.issuer | default "")) -}}
 {{- end -}}
 {{- if not $o.resources -}}
 {{- fail "oauth: config.oauth.resources must list at least one hosted MCP URL" -}}
 {{- end -}}
 {{- range $o.resources -}}
-{{- if not (regexMatch "^https://[^?#]+$" .) -}}
-{{- fail (printf "oauth: config.oauth.resources entry %q must be an https URL without query or fragment" .) -}}
+{{- if not (regexMatch (printf "^(https://[^?#]+|%s(/[^?#]*)?)$" $loopback) .) -}}
+{{- fail (printf "oauth: config.oauth.resources entry %q must be an https URL without query or fragment, or http on a loopback host" .) -}}
 {{- end -}}
 {{- end -}}
 {{- if not (and $w.issuer $w.audience $w.existingSecret) -}}
 {{- fail "oauth: config.oauth.enabled requires config.webAssertion.issuer, audience and existingSecret (consent is approved on the web approval page)" -}}
 {{- end -}}
-{{- if not (regexMatch "^https://[^/?#@]+/[^?#]+$" ($o.consentUrl | default "")) -}}
-{{- fail (printf "oauth: config.oauth.consentUrl %q must be the web consent page, an https URL with a path and no query or fragment" ($o.consentUrl | default "")) -}}
+{{- if not (regexMatch (printf "^(https://[^/?#@]+|%s)/[^?#]+$" $loopback) ($o.consentUrl | default "")) -}}
+{{- fail (printf "oauth: config.oauth.consentUrl %q must be the web consent page, an https URL with a path and no query or fragment, or http on a loopback host" ($o.consentUrl | default "")) -}}
 {{- end -}}
 {{- end -}}
 

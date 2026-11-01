@@ -1453,6 +1453,36 @@ for bad_consent in "" "https://www.example.test" "https://www.example.test/" "ht
   oauth_must_fail "consent url '${bad_consent}'" "config.oauth.consentUrl" "${oauth_args[@]}" --set-string "config.oauth.consentUrl=${bad_consent}"
 done
 
+# CHAOS-12476: http is for a loopback host only, the rule of acr-api and acr-mcp
+# (internal/config/oauth.go, internal/mcp/http_oauth.go). A local stack with no
+# TLS renders; a named host never does, whatever it starts with.
+for loopback in localhost 127.0.0.1 '[::1]'; do
+  if ! loopback_render="$(render "${oauth_args[@]}" --set-string "config.oauth.issuer=http://${loopback}:8088" \
+    --set-string "config.oauth.resources[0]=http://${loopback}:8089/mcp" --set-string "config.oauth.consentUrl=http://${loopback}:3000/acr/authorize" \
+    --set-string "acrMcp.oauth.resourceUrl=http://${loopback}:8089/mcp" --set-string "acrMcp.oauth.authorizationServer=http://${loopback}:8088" 2>&1)"; then
+    fail_gate "oauth: an http origin on ${loopback} must render: $(tail -1 <<<"$loopback_render")"
+  fi
+  grep -qF "http://${loopback}:8088" <<<"$loopback_render" || fail_gate "oauth: the render lost the http issuer on ${loopback}"
+  grep -qF "http://${loopback}:3000/acr/authorize" <<<"$loopback_render" || fail_gate "oauth: the render lost the http consent url on ${loopback}"
+done
+if ! loopback_render="$(render "${oauth_args[@]}" --set-string config.oauth.issuer=http://localhost --set-string 'config.oauth.resources[0]=http://localhost' \
+  --set-string config.oauth.consentUrl=http://localhost/acr/authorize 2>&1)"; then
+  fail_gate "oauth: an http origin with no port must render: $(tail -1 <<<"$loopback_render")"
+fi
+pass "oauth: an http issuer, resource and consent url render on each loopback host"
+for bad_issuer in "http://acr.localhost:8088" "http://localhost.example.test" "http://127.0.0.1.example.test" "http://127a0b0c1" "http://example.test:8088" \
+  "http://localhost:8088/x" "http://user@localhost:8088" "http://localhost:port"; do
+  oauth_must_fail "http issuer '${bad_issuer}'" "must be an https origin" "${oauth_args[@]}" --set-string "config.oauth.issuer=${bad_issuer}"
+done
+for bad_resource in "http://acr.localhost/mcp" "http://localhost.example.test/mcp" "http://localhost:8089/mcp?x=1" "http://localhost:8089/mcp#f" \
+  "http://user@localhost/mcp"; do
+  oauth_must_fail "http resource '${bad_resource}'" "config.oauth.resources entry" "${oauth_args[@]}" --set-string "config.oauth.resources[0]=${bad_resource}"
+done
+for bad_consent in "http://acr.localhost:3000/acr/authorize" "http://localhost.example.test/acr/authorize" "http://localhost:3000" "http://localhost:3000/" \
+  "http://localhost:3000/acr/authorize?x=1" "http://user@localhost:3000/acr/authorize"; do
+  oauth_must_fail "http consent url '${bad_consent}'" "config.oauth.consentUrl" "${oauth_args[@]}" --set-string "config.oauth.consentUrl=${bad_consent}"
+done
+
 # CHAOS-11952: Ask Dev retention is one switch, default off. CHAOS-12244: the
 # job runs as acr-api's runtime role, so the chart renders the switch and
 # nothing else: no retention credential, DSN or grant-Job input exists, and
