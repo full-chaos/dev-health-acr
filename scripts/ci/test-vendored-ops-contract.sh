@@ -62,4 +62,33 @@ assert_fails 'ops tree has no schema' "$root"
 
 assert_fails 'ops root does not exist' "$tmpdir/absent"
 
+# Vendored-side drift, against an independent expected tree: the ops side is a
+# pristine copy and each mutation edits only the copy standing in for the
+# vendored directory, passed as the checker's second argument.
+new_vendored() {
+  local dir="$tmpdir/$1"
+  mkdir -p "$dir/jsonschema" "$dir/examples"
+  cp "$vendored/$schema_rel" "$dir/$schema_rel"
+  cp -R "$vendored/$examples_rel" "$dir/$examples_rel"
+  printf '%s' "$dir"
+}
+assert_vendored_fails() {
+  if "$check" "$ops" "$2" >/dev/null 2>&1; then fail "$1: expected the check to fail"; fi
+}
+ops="$(new_ops_root pristine-ops)"
+assert_passes 'pristine vendored copy' "$ops"
+"$check" "$ops" "$(new_vendored v-same)" >/dev/null 2>&1 || fail "an identical vendored copy: expected the check to pass"
+v="$(new_vendored v-schema-edited)"; printf ' ' >> "$v/$schema_rel"
+assert_vendored_fails 'vendored schema edited' "$v"
+v="$(new_vendored v-schema-missing)"; rm "$v/$schema_rel"
+assert_vendored_fails 'vendored schema missing' "$v"
+v="$(new_vendored v-example-edited)"; printf ' ' >> "$v/$examples_rel/valid-issued.json"
+assert_vendored_fails 'vendored example edited' "$v"
+v="$(new_vendored v-example-added)"; printf '{}\n' > "$v/$examples_rel/valid-extra-only-here.json"
+assert_vendored_fails 'vendored example added' "$v"
+v="$(new_vendored v-example-removed)"; rm "$v/$examples_rel/valid-issued.json"
+assert_vendored_fails 'vendored example removed' "$v"
+v="$(new_vendored v-examples-dir-missing)"; rm -r "$v/$examples_rel"
+assert_vendored_fails 'vendored examples directory missing' "$v"
+
 printf 'OK: vendored ops contract check\n'

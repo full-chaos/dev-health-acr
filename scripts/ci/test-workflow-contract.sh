@@ -3253,6 +3253,42 @@ grep -vF 'scripts/ci/test-vendored-ops-contract.sh' "$workflow" > "$vendored_tes
 assert_check_fails 'dropped the vendored contract check test from the scripts job' \
   check_vendored_lifecycle_contract_wiring "$vendored_test_removed"
 
+# (n4) each named step is validated by its name, job and exact command: no
+# suffix that swallows its exit status, no condition, no wrapper, no extra key.
+cmp_name='Verify the vendored lifecycle contract against the pinned ops contract'
+cmp_run='        run: scripts/ci/check-vendored-ops-contract.sh .ops-contract'
+neg_name='Verify the vendored ops contract check'
+neg_run='        run: scripts/ci/test-vendored-ops-contract.sh'
+mutate_line() { # in out exact-line replacement
+  awk -v want="$3" -v repl="$4" '$0 == want { print repl; next } { print }' "$1" > "$2"
+}
+after_name_line() { # in out step-name inserted-line
+  awk -v name="      - name: $3" -v add="$4" '{ print } $0 == name { print add }' "$1" > "$2"
+}
+vm="$tmpdir/vm-compare-true.yml"; mutate_line "$workflow" "$vm" "$cmp_run" "$cmp_run || true"
+assert_check_fails 'comparison step swallows its status with || true' check_vendored_lifecycle_contract_wiring "$vm"
+vm="$tmpdir/vm-compare-colon.yml"; mutate_line "$workflow" "$vm" "$cmp_run" "$cmp_run || :"
+assert_check_fails 'comparison step swallows its status with || :' check_vendored_lifecycle_contract_wiring "$vm"
+vm="$tmpdir/vm-compare-exit0.yml"; mutate_line "$workflow" "$vm" "$cmp_run" "$cmp_run; exit 0"
+assert_check_fails 'comparison step ends with ; exit 0' check_vendored_lifecycle_contract_wiring "$vm"
+vm="$tmpdir/vm-compare-if.yml"; after_name_line "$workflow" "$vm" "$cmp_name" '        if: false'
+assert_check_fails 'comparison step is disabled by if: false' check_vendored_lifecycle_contract_wiring "$vm"
+vm="$tmpdir/vm-test-colon.yml"; mutate_line "$workflow" "$vm" "$neg_run" "$neg_run || :"
+assert_check_fails 'negative-control step swallows its status with || :' check_vendored_lifecycle_contract_wiring "$vm"
+vm="$tmpdir/vm-test-echo.yml"; mutate_line "$workflow" "$vm" "$neg_run" '        run: echo scripts/ci/test-vendored-ops-contract.sh'
+assert_check_fails 'negative-control step only echoes its script name' check_vendored_lifecycle_contract_wiring "$vm"
+vm="$tmpdir/vm-test-coe.yml"; after_name_line "$workflow" "$vm" "$neg_name" '        continue-on-error: true'
+assert_check_fails 'negative-control step has continue-on-error' check_vendored_lifecycle_contract_wiring "$vm"
+vm="$tmpdir/vm-compare-wrong-job.yml"
+awk -v name="      - name: $cmp_name" -v run="$cmp_run" '
+  $0 == name { skip = 2 } skip > 0 { skip--; next } { print }
+  /^  container-contract-smoke:/ && !done { }
+' "$workflow" > "$vm"
+awk -v name="      - name: $cmp_name" -v run="$cmp_run" '
+  /^  container-contract-smoke:/ && !done { print "  scratch-job-for-the-control:"; print "    steps:"; print name; print run; done=1 } { print }
+' "$vm" > "$vm.2"
+assert_check_fails 'comparison step moved to another job' check_vendored_lifecycle_contract_wiring "$vm.2"
+
 # (o) remove the pin's full-SHA requirement, restoring the floating-ref hole.
 pin_regex_removed="$tmpdir/pin-regex-removed.yml"
 grep -vF '[0-9a-f]{40}' "$workflow" > "$pin_regex_removed"
