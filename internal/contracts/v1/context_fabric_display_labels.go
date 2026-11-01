@@ -135,8 +135,8 @@ var contextFabricEvidenceEntityLabels = map[ContextFabricEvidenceEntityType]stri
 //     outcomes[].impact goes to the fold with its table (CHAOS-12245,
 //     CHAOS-12416). The reader sees the answer status, whose rule reads the
 //     completeness state (ContextFabricAnswerStatusLabel).
-//   - claimed_facts[].field and the keys of rows[].fields are free strings
-//     declared per kind (CHAOS-12418).
+//   - a derived claim's field is free text, even when it matches a declared
+//     name, so it takes the generic path.
 type ContextFabricVocabulary string
 
 const (
@@ -156,8 +156,12 @@ const (
 	ContextFabricVocabularyDriverWindow      ContextFabricVocabulary = "driver_window"
 	ContextFabricVocabularyDriverStanding    ContextFabricVocabulary = "driver_standing"
 	ContextFabricVocabularyFactKind          ContextFabricVocabulary = "fact_kind"
-	ContextFabricVocabularyWindowRelativeID  ContextFabricVocabulary = "window_relative_id"
-	ContextFabricVocabularyWindowProvenance  ContextFabricVocabulary = "window_provenance"
+	// ContextFabricVocabularyFactField serves the words of declared fact fields
+	// and table columns (CHAOS-12418), so a claimed fact reads with no help from
+	// the prose.
+	ContextFabricVocabularyFactField        ContextFabricVocabulary = "fact_field"
+	ContextFabricVocabularyWindowRelativeID ContextFabricVocabulary = "window_relative_id"
+	ContextFabricVocabularyWindowProvenance ContextFabricVocabulary = "window_provenance"
 )
 
 var contextFabricVocabularyNames = [...]ContextFabricVocabulary{
@@ -174,6 +178,7 @@ var contextFabricVocabularyNames = [...]ContextFabricVocabulary{
 	ContextFabricVocabularyDriverWindow,
 	ContextFabricVocabularyDriverStanding,
 	ContextFabricVocabularyFactKind,
+	ContextFabricVocabularyFactField,
 	ContextFabricVocabularyWindowRelativeID,
 	ContextFabricVocabularyWindowProvenance,
 }
@@ -311,7 +316,8 @@ var contextFabricVocabularyLabels = map[ContextFabricVocabulary]map[string]strin
 		string(ContextFabricDriverContext):      "context",
 		string(ContextFabricDriverWithheld):     "withheld",
 	},
-	ContextFabricVocabularyFactKind: contextFabricVocabularyFactKindLabels(),
+	ContextFabricVocabularyFactKind:  contextFabricVocabularyFactKindLabels(),
+	ContextFabricVocabularyFactField: contextFabricFactFieldLabels,
 	ContextFabricVocabularyWindowRelativeID: {
 		string(ContextFabricRelativeWindowTrailing30D):  "last 30 days",
 		string(ContextFabricRelativeWindowTrailing90D):  "last 90 days",
