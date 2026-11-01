@@ -202,7 +202,7 @@ func validateRenderShapes(shapes []ContextFabricRenderShape, sources renderShape
 				}
 			}
 		}
-		if err := validateTreemapShape(shape); err != nil {
+		if err := validateTreemapShape(shape, sources); err != nil {
 			return err
 		}
 		if err := validateRenderValueUnit(shape); err != nil {
@@ -214,13 +214,15 @@ func validateRenderShapes(shapes []ContextFabricRenderShape, sources renderShape
 
 // validateTreemapShape holds a treemap to what a part of a whole means
 // (CHAOS-4610). Every point has already resolved to its source. What is left is
-// that the points are the parts of ONE whole: one claim, each row once, the same
-// measure, and a real split. One part above 0 is no split, and a chart of it says
-// nothing the sentence does not.
+// that the points are ALL the parts of ONE whole: one claim, every row once, the
+// same measure, each labelled with the served word of its own row's theme, and a
+// real split. A row left out makes the chart a different claim, a label that is
+// not its row's theme puts a share on the wrong name, and one part above 0 is no
+// split: a chart of it says nothing the sentence does not.
 //
 // The rule and the kind name each other. A treemap has no other rule, so a
 // consumer that reads the kind can rely on these clauses.
-func validateTreemapShape(shape ContextFabricRenderShape) error {
+func validateTreemapShape(shape ContextFabricRenderShape, sources renderShapeSources) error {
 	if (shape.Kind == ContextFabricRenderKindTreemap) != (shape.SelectedBy == ContextFabricRenderRuleInvestmentThemeShare) {
 		return fmt.Errorf("render shape %q: selected_by %q cannot yield kind %q", shape.ShapeID, shape.SelectedBy, shape.Kind)
 	}
@@ -238,11 +240,17 @@ func validateTreemapShape(shape ContextFabricRenderShape) error {
 	}
 	points := shape.Series[0].Points
 	claim := points[0].Source.ClaimID
+	table := sources.factRows[claim]
+	if len(points) != len(table) {
+		return fmt.Errorf("render shape %q: a treemap plots every row of its table, and has %d of %d", shape.ShapeID, len(points), len(table))
+	}
 	rows := make(map[int]struct{}, len(points))
 	above := 0
 	for _, point := range points {
 		source := point.Source
-		if source.Kind != ContextFabricRenderSourceClaimedFactRow || source.RowIndex == nil || source.Field != ContextFabricRenderThemeShareField {
+		// The kind is what makes RowIndex safe to read below: the resolver
+		// has already refused a claimed_fact_row source with no row index.
+		if source.Kind != ContextFabricRenderSourceClaimedFactRow || source.Field != ContextFabricRenderThemeShareField {
 			return fmt.Errorf("render shape %q point %q: a treemap point must cite the %q field of a claimed fact row", shape.ShapeID, point.Label, ContextFabricRenderThemeShareField)
 		}
 		if source.ClaimID != claim {
@@ -252,6 +260,13 @@ func validateTreemapShape(shape ContextFabricRenderShape) error {
 			return fmt.Errorf("render shape %q point %q: a treemap plots each row once", shape.ShapeID, point.Label)
 		}
 		rows[*source.RowIndex] = struct{}{}
+		theme := table[*source.RowIndex].Fields[ContextFabricRenderThemeField].String
+		if theme == nil {
+			return fmt.Errorf("render shape %q point %q: its row carries no %q", shape.ShapeID, point.Label, ContextFabricRenderThemeField)
+		}
+		if word, _ := ContextFabricInvestmentThemeLabel(*theme); word != point.Label {
+			return fmt.Errorf("render shape %q point %q: a treemap label must be the served word of its row's theme %q", shape.ShapeID, point.Label, *theme)
+		}
 		if point.Value < 0 {
 			return fmt.Errorf("render shape %q point %q: a treemap value is below 0", shape.ShapeID, point.Label)
 		}

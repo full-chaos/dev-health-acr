@@ -177,8 +177,30 @@ const (
 )
 
 // ContextFabricRenderThemeShareField is the row field an
-// investment_theme_share point cites.
-const ContextFabricRenderThemeShareField = "share"
+// investment_theme_share point cites, and ContextFabricRenderThemeField is the
+// row field its label comes from.
+const (
+	ContextFabricRenderThemeShareField = "share"
+	ContextFabricRenderThemeField      = "theme"
+)
+
+// contextFabricInvestmentThemeLabels is the closed map from a canonical theme
+// token to its served word. The themes are fixed by the product model, so the
+// words are too, and a consumer never maps a token itself (CHAOS-4690).
+var contextFabricInvestmentThemeLabels = map[string]string{
+	"feature_delivery": "Feature Delivery",
+	"operational":      "Operational / Support",
+	"maintenance":      "Maintenance / Tech Debt",
+	"quality":          "Quality / Reliability",
+	"risk":             "Risk / Security",
+}
+
+// ContextFabricInvestmentThemeLabel returns the served word of a canonical
+// theme token. A token outside the closed set has no word.
+func ContextFabricInvestmentThemeLabel(theme string) (string, bool) {
+	word, known := contextFabricInvestmentThemeLabels[theme]
+	return word, known
+}
 
 // ContextFabricRenderValueUnit is the CLOSED vocabulary of units a shape may
 // declare for its values. It exists so a consumer formats a number without

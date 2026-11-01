@@ -11,10 +11,13 @@ import (
 
 const themeShareClaim = "claim_theme_share_fixture"
 
+var themeShareTokens = []string{"feature_delivery", "operational", "maintenance", "quality", "risk"}
+
 func themeShareResult(shares ...float64) ContextFabricInvestigationResult {
 	rows := make([]ContextFabricClaimedFactRow, 0, len(shares))
-	for _, share := range shares {
+	for index, share := range shares {
 		rows = append(rows, ContextFabricClaimedFactRow{Fields: map[string]ContextFabricScalarValue{
+			"theme":           {String: &themeShareTokens[index]},
 			"share":           {Number: float64Ptr(share)},
 			"weighted_effort": {Number: float64Ptr(share)},
 		}})
@@ -77,13 +80,23 @@ func TestATreemapIsRefused(t *testing.T) {
 		}, "each row once"},
 		"a point from outside the table": {func(s *ContextFabricRenderShape) {
 			s.Series[0].Points[1].Source = ContextFabricRenderPointSource{Kind: ContextFabricRenderSourceCohortMemberScore, SubjectCanonicalID: "team:a"}
-		}, ""},
+			s.Series[0].Points[1].Value = 0.25
+		}, "must cite"},
+		"a row left out": {func(s *ContextFabricRenderShape) { s.Series[0].Points = s.Series[0].Points[:2] }, "every row"},
+		"a label on the wrong row": {func(s *ContextFabricRenderShape) {
+			s.Series[0].Points[0].Label, s.Series[0].Points[1].Label = s.Series[0].Points[1].Label, s.Series[0].Points[0].Label
+		}, "served word"},
+		"a raw token as the label": {func(s *ContextFabricRenderShape) { s.Series[0].Points[0].Label = "feature_delivery" }, "served word"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 			shape := themeShareShape(shares...)
 			plant.edit(&shape)
-			err := validateThemeShare(shape, themeShareResult(shares...))
+			result := themeShareResult(shares...)
+			result.Cohort = &ContextFabricCohort{Members: []ContextFabricCohortMember{{
+				Subject: ContextFabricSubjectRef{Kind: ContextFabricSubjectTeam, CanonicalID: "team:a", Label: "a"}, Score: float64Ptr(0.25),
+			}}}
+			err := validateThemeShare(shape, result)
 			if err == nil {
 				t.Fatal("accepted")
 			}
@@ -99,6 +112,48 @@ func TestATreemapIsRefused(t *testing.T) {
 func renderPointField(shape *ContextFabricRenderShape, field string) {
 	for index := range shape.Series[0].Points {
 		shape.Series[0].Points[index].Source.Field = field
+	}
+}
+
+// The row decides the word. A row with no theme, or with a token outside the
+// closed set, has no word to plot under.
+func TestATreemapRowNeedsACanonicalTheme(t *testing.T) {
+	t.Parallel()
+	shares := []float64{0.5, 0.5}
+	for name, cell := range map[string]ContextFabricScalarValue{
+		"no theme":         {},
+		"an unknown one":   {String: stringPtrForTreemap("unassigned")},
+		"a number instead": {Number: float64Ptr(1)},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			result := themeShareResult(shares...)
+			if cell.String == nil && cell.Number == nil {
+				delete(result.ClaimedFacts[0].Rows[0].Fields, "theme")
+			} else {
+				result.ClaimedFacts[0].Rows[0].Fields["theme"] = cell
+			}
+			if err := validateThemeShare(themeShareShape(shares...), result); err == nil || !strings.Contains(err.Error(), "theme") {
+				t.Fatalf("got %v", err)
+			}
+		})
+	}
+}
+
+func stringPtrForTreemap(value string) *string { return &value }
+
+// The agreed shape passes on both paths a shape is checked on.
+func TestATreemapResolvesOnTheProjectionPath(t *testing.T) {
+	t.Parallel()
+	shares := []float64{0.5, 0.25, 0.25, 0, 0}
+	result := themeShareResult(shares...)
+	projection := ContextFabricAnswerProjection{KeyFacts: []ContextFabricProjectedFact{{ClaimID: themeShareClaim, Rows: result.ClaimedFacts[0].Rows}}}
+	if err := validateRenderShapes([]ContextFabricRenderShape{themeShareShape(shares...)}, renderShapeSourcesFromProjection(projection)); err != nil {
+		t.Fatal(err)
+	}
+	projection.KeyFacts[0].Rows = projection.KeyFacts[0].Rows[:3]
+	if err := validateRenderShapes([]ContextFabricRenderShape{themeShareShape(shares[:2]...)}, renderShapeSourcesFromProjection(projection)); err == nil {
+		t.Fatal("a shape of part of the projected rows was accepted")
 	}
 }
 

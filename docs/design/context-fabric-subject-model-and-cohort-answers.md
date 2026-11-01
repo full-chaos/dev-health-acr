@@ -785,7 +785,7 @@ no shape, which is the common case.
 | `cohort_attention_score` | `interpretation.shape ∈ {explicit_cohort, discovered_cohort}` AND ≥1 member has `ranking_computed` with a non-null `score` | `series` / `bars`, one point per ranked member in `attention_rank` order, value = that member's `score` |
 | `cohort_driver_contribution` | the rule above fired AND ≥1 ranked member carries drivers AND the distinct signal count fits one stack | `series` / `stacked_bars`, one series per driver family, value = that member's `weight_contributed` for it |
 | `dated_fact_trend` | the claim's row table is DECLARED `time_series` AND the claim's own `field` is one of its declared `measures` (§10.3c) | `series` / `line` on a `time` axis, one series, axis = `table.key[0]`, value = `rows[i][claim.field]` |
-| `investment_theme_share` | Declared, no producer yet (CHAOS-4610). The served family is `investment_allocation`, the plan authorizes `treemap`, exactly one investment fact on a repository or a team carries `theme_breakdown`, and at least 2 shares are above 0 | `treemap` with a `value_unit` of `ratio`: one series, one point per row, the value is the row's `share` |
+| `investment_theme_share` | Declared, no producer yet (CHAOS-4610). The served family is `investment_allocation`, the plan authorizes `treemap`, exactly one investment fact on a repository or a team carries `theme_breakdown`, and at least 2 shares are above 0 | `treemap` with a `value_unit` of `ratio`: one series, one point for every row, the value is the row's `share`, the label is the served word of the row's `theme` |
 | — anything else — | | no shape |
 
 Two negatives are as load-bearing as the positives:
