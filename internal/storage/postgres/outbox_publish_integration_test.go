@@ -65,7 +65,7 @@ func TestPublishNext_TakesTheOldestEventAndMarksOnlyThatOneOnAnAck(t *testing.T)
 	f.add(t, "cred_pub_new", 1, time.Hour)
 	found, event := f.next(t, nil, ack)
 	require.True(t, found)
-	require.Equal(t, "cred_pub_old", event.AggregateID)
+	require.Equal(t, "cred_pub_old", event.AggregateID, "the oldest event is claimed first")
 	require.Equal(t, 1, event.Revision)
 	require.True(t, f.publishedAt(t, "cred_pub_old", 1).Valid)
 	require.False(t, f.publishedAt(t, "cred_pub_new", 1).Valid, "only the claimed event is marked")
@@ -79,7 +79,7 @@ func TestPublishNext_ANonAckLeavesTheRowUnpublishedAndTheLockReleased(t *testing
 	f.add(t, "cred_pub_nack", 1, time.Hour)
 	found, _ := f.next(t, nil, func(authprojection.Event) bool { return false })
 	require.True(t, found)
-	require.False(t, f.publishedAt(t, "cred_pub_nack", 1).Valid)
+	require.False(t, f.publishedAt(t, "cred_pub_nack", 1).Valid, "a non-ack leaves the row unpublished")
 	again, event := f.next(t, nil, ack)
 	require.True(t, again, "the lock went with the rollback")
 	require.Equal(t, "cred_pub_nack", event.AggregateID)
@@ -100,9 +100,9 @@ func TestPublishNext_ARevisionNeverGoesBeforeTheEarlierUnpublishedOne(t *testing
 	f.add(t, "cred_pub_order", 2, 2*time.Hour) // older created_at than revision 1: order is by revision, not time alone
 	f.add(t, "cred_pub_order", 1, time.Hour)
 	_, first := f.next(t, nil, ack)
-	require.Equal(t, 1, first.Revision)
+	require.Equal(t, 1, first.Revision, "the earlier revision goes first")
 	_, second := f.next(t, nil, ack)
-	require.Equal(t, 2, second.Revision)
+	require.Equal(t, 2, second.Revision, "each revision is marked on its own ack")
 }
 
 func TestPublishNext_ALockedHeadKeepsItsLaterRevisionsIneligible(t *testing.T) {
@@ -119,7 +119,7 @@ func TestPublishNext_ALockedHeadKeepsItsLaterRevisionsIneligible(t *testing.T) {
 		t.Fatal("revision 2 was claimed while revision 1 was held by another pod")
 		return true
 	})
-	require.NoError(t, err)
+	require.NoError(t, err, "claim must skip a locked head, not wait on it")
 	require.False(t, found)
 	f.add(t, "cred_pub_other", 1, time.Hour)
 	foundOther, event := f.next(t, nil, ack)
@@ -136,7 +136,7 @@ func TestPublishNext_AHeldAggregateLeavesTheClaim(t *testing.T) {
 	held := []string{"cred_pub_poison0", "cred_pub_poison1", "cred_pub_poison2"}
 	found, event := f.next(t, held, ack)
 	require.True(t, found)
-	require.Equal(t, "cred_pub_healthy", event.AggregateID)
+	require.Equal(t, "cred_pub_healthy", event.AggregateID, "a held aggregate is never claimed")
 	found, _ = f.next(t, held, ack)
 	require.False(t, found, "held aggregates are never claimed")
 	found, event = f.next(t, held[:2], ack)

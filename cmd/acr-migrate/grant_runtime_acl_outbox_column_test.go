@@ -64,7 +64,7 @@ func TestOutboxColumnGrant_TurningTheFeatureOffRevokesWhatAnEarlierRunGranted(t 
 	_, err := database.Owner.ExecContext(ctx, outboxSeed)
 	require.NoError(t, err)
 	_, err = database.Runtime.ExecContext(ctx, `UPDATE acr.credential_lifecycle_outbox SET published_at = now()`)
-	require.NoError(t, err)
+	require.NoError(t, err, "the mark works while the feature is on")
 	environmentOff := map[string]string{
 		migrationDSNEnvironment: database.DSN,
 		runtimeDSNEnvironment:   "postgres://" + database.Role + ":unused@runtime-dsn-is-never-dialed.invalid:5432/acr",
