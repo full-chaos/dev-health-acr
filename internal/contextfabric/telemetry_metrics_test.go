@@ -33,9 +33,9 @@ func TestSlogEngineTelemetryCountsReuseAndRequirementOutcomes(t *testing.T) {
 	records := captureSlogJSON(t, func(logger *slog.Logger) {
 		telemetry := NewSlogEngineTelemetry(logger).WithMetrics(instruments)
 		principal := storage.Principal{OrgID: "org_metrics_test"}
-		telemetry.RecordAnswerReuse(context.Background(), principal, AnswerReuseHit, "v1")
-		telemetry.RecordAnswerReuse(context.Background(), principal, AnswerReuseMissNoCandidate, "v1")
-		telemetry.RecordAnswerReuse(context.Background(), principal, AnswerReuseOutcome("attacker_chosen_value"), "v1")
+		telemetry.RecordAnswerReuse(context.Background(), principal, AnswerReuseHit, "v1", AnswerReuseRefusal{})
+		telemetry.RecordAnswerReuse(context.Background(), principal, AnswerReuseMissNoCandidate, "v1", AnswerReuseRefusal{})
+		telemetry.RecordAnswerReuse(context.Background(), principal, AnswerReuseOutcome("attacker_chosen_value"), "v1", AnswerReuseRefusal{})
 		var event CompletenessAuthorityObservation
 		satisfied := slices.Index(requirementVocabulary(), string(contractsv1.ContextFabricRequirementSatisfied))
 		unavailable := slices.Index(requirementVocabulary(), string(contractsv1.ContextFabricRequirementUnavailable))

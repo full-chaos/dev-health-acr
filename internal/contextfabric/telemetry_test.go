@@ -15,7 +15,7 @@ func TestSlogEngineTelemetry_RecordAnswerReuseLogsOrgAndOutcome(t *testing.T) {
 	var buf bytes.Buffer
 	telemetry := NewSlogEngineTelemetry(slog.New(slog.NewTextHandler(&buf, nil)))
 
-	telemetry.RecordAnswerReuse(context.Background(), storage.Principal{OrgID: "org_telemetry_1"}, AnswerReuseHit, "ownership-routing.v1")
+	telemetry.RecordAnswerReuse(context.Background(), storage.Principal{OrgID: "org_telemetry_1"}, AnswerReuseHit, "ownership-routing.v1", AnswerReuseRefusal{})
 
 	line := buf.String()
 	for _, want := range []string{"org_id=org_telemetry_1", "outcome=hit", "ownership_routing_version=ownership-routing.v1"} {
@@ -40,7 +40,7 @@ func TestSlogEngineTelemetry_RecordAnswerReuseLogsMissReasons(t *testing.T) {
 		var buf bytes.Buffer
 		telemetry := NewSlogEngineTelemetry(slog.New(slog.NewTextHandler(&buf, nil)))
 
-		telemetry.RecordAnswerReuse(context.Background(), storage.Principal{OrgID: "org_telemetry_2"}, outcome, "ownership-routing.v1")
+		telemetry.RecordAnswerReuse(context.Background(), storage.Principal{OrgID: "org_telemetry_2"}, outcome, "ownership-routing.v1", AnswerReuseRefusal{})
 
 		want := "outcome=" + string(outcome)
 		if !strings.Contains(buf.String(), want) {
@@ -69,7 +69,7 @@ func TestNewSlogEngineTelemetry_NilLoggerFallsBackToDefault(t *testing.T) {
 	t.Parallel()
 	// Must not panic.
 	telemetry := NewSlogEngineTelemetry(nil)
-	telemetry.RecordAnswerReuse(context.Background(), storage.Principal{OrgID: "org_telemetry_4"}, AnswerReuseHit, "ownership-routing.v1")
+	telemetry.RecordAnswerReuse(context.Background(), storage.Principal{OrgID: "org_telemetry_4"}, AnswerReuseHit, "ownership-routing.v1", AnswerReuseRefusal{})
 }
 
 // TestRecordReuseOutcomeCarriesTheDeploymentCurrentOwnershipRoutingVersion

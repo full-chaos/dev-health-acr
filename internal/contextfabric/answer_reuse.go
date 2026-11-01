@@ -214,6 +214,57 @@ func TimeAxisKeyFor(timeContext TimeContext) string {
 // a subset.
 const maxReuseSubjectRecheckCount = 50
 
+// AnswerReuseRefusalReason names which refusal produced a miss_authorization
+// outcome (CHAOS-12511). Several different refusals share that one outcome
+// value, which dashboards already read; this closed set, carried on the log
+// line beside it, says which one fired. A count limit is not an authorization
+// miss, and without this field the two read the same. Content-safe by
+// construction: a fixed token, never a subject id, a label or question text.
+type AnswerReuseRefusalReason string
+
+const (
+	// AnswerReuseRefusalGateDenied: the stored-result gate did not admit the
+	// candidate under the caller's current grant, for any reason but an owner
+	// mismatch. The gate's own decision and reason ride the stored-result
+	// authorization line.
+	AnswerReuseRefusalGateDenied AnswerReuseRefusalReason = "gate_denied"
+	// AnswerReuseRefusalSubmissionOwnerMissing: a submission turn found a
+	// candidate bound to no submission owner.
+	AnswerReuseRefusalSubmissionOwnerMissing AnswerReuseRefusalReason = "submission_owner_missing"
+	// AnswerReuseRefusalSubmissionOwnerMismatch: the candidate is bound to
+	// another principal's submission. The stored-result gate refuses it with
+	// its owner_mismatch reason; the check in tryReuse is a second line.
+	AnswerReuseRefusalSubmissionOwnerMismatch AnswerReuseRefusalReason = "submission_owner_mismatch"
+	// AnswerReuseRefusalSubjectCapExceeded: the candidate names more distinct
+	// subjects than maxReuseSubjectRecheckCount. A count limit, not a grant
+	// decision. The line carries the subject count.
+	AnswerReuseRefusalSubjectCapExceeded AnswerReuseRefusalReason = "subject_cap_exceeded"
+	// AnswerReuseRefusalSubjectRecheckFailed: ResolveSubjects returned an
+	// error, so the subjects could not be rechecked.
+	AnswerReuseRefusalSubjectRecheckFailed AnswerReuseRefusalReason = "subject_recheck_failed"
+	// AnswerReuseRefusalSubjectNotCommitted: a subject the candidate names was
+	// not committed by the recheck under the current grant.
+	AnswerReuseRefusalSubjectNotCommitted AnswerReuseRefusalReason = "subject_not_committed"
+)
+
+// AnswerReuseRefusalReasonVocabulary lists every refusal reason the reuse
+// outcome line records.
+func AnswerReuseRefusalReasonVocabulary() []string {
+	return []string{
+		string(AnswerReuseRefusalGateDenied), string(AnswerReuseRefusalSubmissionOwnerMissing),
+		string(AnswerReuseRefusalSubmissionOwnerMismatch), string(AnswerReuseRefusalSubjectCapExceeded),
+		string(AnswerReuseRefusalSubjectRecheckFailed), string(AnswerReuseRefusalSubjectNotCommitted),
+	}
+}
+
+// AnswerReuseRefusal is the detail of one miss_authorization outcome. The zero
+// value means the outcome carries no refusal detail. SubjectCount is set only
+// for AnswerReuseRefusalSubjectCapExceeded: the number alone, never a subject.
+type AnswerReuseRefusal struct {
+	Reason       AnswerReuseRefusalReason
+	SubjectCount int
+}
+
 // reuseRecheckOptions is the InvestigationOptions the condition-6 recheck
 // uses for ResolveSubjects/DiscoverContext -- the contract's own MAXIMUM
 // bound for every Max* field (ContextFabricInvestigationOptions.Validate,
@@ -711,19 +762,28 @@ func (e *Engine) tryReuseWithReading(ctx context.Context, principal storage.Prin
 	// disclosures, so it is not served: the question is answered afresh.
 	// It is a content rule, not an authorization decision.
 	missOutcome := AnswerReuseMissAuthorization
+	refusal := AnswerReuseRefusal{Reason: AnswerReuseRefusalGateDenied}
 	withheld := !decision.Admitted()
+	// The gate refuses another principal's submission result first, so that
+	// refusal reaches here as the gate's own owner_mismatch decision.
+	if withheld && decision.Reason == StoredResultReasonOwnerMismatch {
+		refusal.Reason = AnswerReuseRefusalSubmissionOwnerMismatch
+	}
 	// CHAOS-11912 (round-2 F1): a submission's turn is served only an answer
 	// bound to its own principal's submission, whatever the store returned:
 	// an unbound answer would leave the record naming a result its owner
 	// does not own. The same rule the OwnedOnly filter applies in the store.
-	if !withheld && submissionTurn && (stored.SubmissionOwner == nil || !stored.SubmissionOwner.Is(principal)) {
-		withheld = true
+	if !withheld && submissionTurn && stored.SubmissionOwner == nil {
+		refusal.Reason, withheld = AnswerReuseRefusalSubmissionOwnerMissing, true
+	}
+	if !withheld && submissionTurn && !stored.SubmissionOwner.Is(principal) {
+		refusal.Reason, withheld = AnswerReuseRefusalSubmissionOwnerMismatch, true
 	}
 	if !withheld && StoredResultFloodWithheld(candidate) {
-		missOutcome, withheld = AnswerReuseMissNoCandidate, true
+		missOutcome, refusal, withheld = AnswerReuseMissNoCandidate, AnswerReuseRefusal{}, true
 	}
 	if withheld {
-		e.recordReuseOutcome(ctx, principal, missOutcome)
+		e.recordReuseOutcome(ctx, principal, missOutcome, refusal)
 		return InvestigationResult{}, false, false, storedCountReading{}, nil
 	}
 	if !requestHintsCommittedBy(request.RequestedScope.SubjectHints, candidate.SubjectResolution.Committed) {
@@ -865,7 +925,7 @@ func (e *Engine) tryReuseWithReading(ctx context.Context, principal storage.Prin
 	}
 	verdict := e.reuseAuthorizationStillHolds(ctx, principal, request, candidate, binding)
 	if verdict.Refused {
-		e.recordReuseOutcome(ctx, principal, verdict.Outcome)
+		e.recordReuseOutcome(ctx, principal, verdict.Outcome, verdict.Refusal)
 		e.recordReuseContainment(ctx, principal, verdict, reuseStripCounts{}, "")
 		return InvestigationResult{}, false, false, storedCountReading{}, nil
 	}
@@ -915,7 +975,10 @@ func (e *Engine) tryReuseWithReading(ctx context.Context, principal storage.Prin
 	return candidate, true, false, reading, nil
 }
 
-func (e *Engine) recordReuseOutcome(ctx context.Context, principal storage.Principal, outcome AnswerReuseOutcome) {
+// recordReuseOutcome records the one outcome of a reuse attempt. refusal is
+// optional and names which refusal produced a miss_authorization outcome; every
+// other outcome passes none.
+func (e *Engine) recordReuseOutcome(ctx context.Context, principal storage.Principal, outcome AnswerReuseOutcome, refusal ...AnswerReuseRefusal) {
 	if e.telemetry == nil {
 		return
 	}
@@ -924,7 +987,11 @@ func (e *Engine) recordReuseOutcome(ctx context.Context, principal storage.Princ
 	// value to thread separately, so the line always names it, hit or miss,
 	// making a stale or never-wired dimension attributable at Info without
 	// correlating against build metadata out of band.
-	e.telemetry.RecordAnswerReuse(ctx, principal, outcome, e.reuseVersionAuthorities.OwnershipRoutingVersion)
+	var detail AnswerReuseRefusal
+	if len(refusal) > 0 {
+		detail = refusal[0]
+	}
+	e.telemetry.RecordAnswerReuse(ctx, principal, outcome, e.reuseVersionAuthorities.OwnershipRoutingVersion, detail)
 }
 
 // reuseAuthorizationStillHolds implements TRD §19.7.3 condition 6 --
@@ -970,7 +1037,7 @@ func (e *Engine) reuseAuthorizationStillHolds(ctx context.Context, principal sto
 	}
 	subjects := reuseSubjectsToRecheck(candidate)
 	if len(subjects) > maxReuseSubjectRecheckCount {
-		return reuseRecheckVerdict{Refused: true, Outcome: AnswerReuseMissAuthorization}
+		return reuseRecheckVerdict{Refused: true, Outcome: AnswerReuseMissAuthorization, Refusal: AnswerReuseRefusal{Reason: AnswerReuseRefusalSubjectCapExceeded, SubjectCount: len(subjects)}}
 	}
 	recheckRequest := request
 	recheckRequest.Options = reuseRecheckOptions
@@ -1036,7 +1103,7 @@ func (e *Engine) reuseAuthorizationStillHolds(ctx context.Context, principal sto
 	// is the pre-seam-7 behaviour of this call unchanged.
 	resolution, _, _, _, err := e.graph.ResolveSubjects(ctx, principal, recheckRequest, candidate.Interpretation, binding, nil, nil, nil, "")
 	if err != nil {
-		return reuseRecheckVerdict{Refused: true, Outcome: AnswerReuseMissAuthorization}
+		return reuseRecheckVerdict{Refused: true, Outcome: AnswerReuseMissAuthorization, Refusal: AnswerReuseRefusal{Reason: AnswerReuseRefusalSubjectRecheckFailed}}
 	}
 	committed := make(map[string]struct{}, len(resolution.Committed))
 	for _, subject := range resolution.Committed {
@@ -1044,7 +1111,7 @@ func (e *Engine) reuseAuthorizationStillHolds(ctx context.Context, principal sto
 	}
 	for _, subject := range subjects {
 		if _, ok := committed[subjectKeyForModel(subject)]; !ok {
-			return reuseRecheckVerdict{Refused: true, Outcome: AnswerReuseMissAuthorization}
+			return reuseRecheckVerdict{Refused: true, Outcome: AnswerReuseMissAuthorization, Refusal: AnswerReuseRefusal{Reason: AnswerReuseRefusalSubjectNotCommitted}}
 		}
 	}
 
@@ -1104,6 +1171,9 @@ type reuseRecheckVerdict struct {
 	Refused bool
 	// Outcome is the telemetry value for this verdict.
 	Outcome AnswerReuseOutcome
+	// Refusal names which refusal produced a miss_authorization Outcome. Zero
+	// for every other outcome.
+	Refusal AnswerReuseRefusal
 	// ContainmentRan reports whether the evidence leg executed. False
 	// means Partition is meaningless (the subject leg refused first, or
 	// there was nothing to recheck) -- not that containment passed.

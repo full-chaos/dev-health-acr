@@ -2975,7 +2975,7 @@ var SynthesisStatusOverride = Event{
 	},
 }
 
-// AnswerReuseOutcome is the Info line of one answer reuse attempt: the closed outcome and the ownership routing version the lookup matched.
+// AnswerReuseOutcome is the Info line of one answer reuse attempt: the closed outcome, the ownership routing version the lookup matched and, on a miss_authorization outcome, the closed reason of the refusal.
 var AnswerReuseOutcome = Event{
 	ID:                       "contextfabric.answer_reuse_outcome",
 	Msg:                      "context fabric answer reuse outcome",
@@ -2989,6 +2989,8 @@ var AnswerReuseOutcome = Event{
 		{Key: "org_id", Type: FieldString, Presence: PresenceRequired},
 		{Key: "outcome", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: contextfabric.AnswerReuseOutcomeVocabulary()},
 		{Key: "ownership_routing_version", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: []string{contextfabric.OwnershipRoutingVersion}},
+		{Key: "reason", Type: FieldString, Presence: PresenceConditional, ClosedVocabulary: contextfabric.AnswerReuseRefusalReasonVocabulary(), Applicability: "written when the outcome is miss_authorization, and names which refusal produced it"},
+		{Key: "subject_count", Type: FieldInt, Presence: PresenceConditional, Applicability: "written when the reason is subject_cap_exceeded: how many distinct subjects the stored answer names"},
 		{Key: "request_id", Type: FieldString, Presence: PresenceConditional, Applicability: requestIDApplicability},
 	},
 }
