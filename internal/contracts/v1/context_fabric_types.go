@@ -369,9 +369,10 @@ const (
 	ContextFabricRelationshipLinksPullRequest ContextFabricRelationshipType = "LINKS_PULL_REQUEST"
 )
 
-// contextFabricRelationshipTypes is the one list of the closed vocabulary: the
-// validator and the display words both read it, so a member cannot be accepted
-// and go unworded.
+// contextFabricRelationshipTypes is the one list of the closed vocabulary. The
+// validator reads it. The display words are a table of their own, and
+// TestTheListTheTableAndTheSchemaNameOneSet holds that table and the published
+// schema to this list, so a member cannot be accepted and go unworded.
 var contextFabricRelationshipTypes = [...]ContextFabricRelationshipType{
 	ContextFabricRelationshipBelongsToRepository,
 	ContextFabricRelationshipBelongsToPullRequest,
