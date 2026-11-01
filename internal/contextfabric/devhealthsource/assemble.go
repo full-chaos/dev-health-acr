@@ -189,7 +189,7 @@ func (p sourcePlan) nextBatch(ctx context.Context, checkpoint contextfabric.Proj
 		// Logged with the batch that commits it, so a call that hands nothing
 		// back says nothing.
 		if refreshReason != "" {
-			slog.InfoContext(ctx, "context fabric: membership refresh of every subject owed", "reason", refreshReason)
+			slog.InfoContext(ctx, "context fabric: membership refresh of every subject owed", "reason", contextfabric.SanitizeLogAttr(refreshReason))
 		}
 	}
 	// One line per type per pass: flushed when the pass ends (caught up) or
