@@ -672,7 +672,14 @@ is out of the requested scope. The repository walk decides each link row
 without the narrowing as well: a row that passes then is counted apart
 (`project_excluded` on the walk's Info line), never in the walk's authorization
 count, so it gives no authorization-gap disclosure and no degraded answer. What
-the grants hide is still denied.
+the grants hide is still denied. A cohort member walk (an anchor's members over
+its tree and ownership hops) applies the same rule on every hop, and to its
+anchor (CHAOS-12361): an anchor the narrowing alone refuses (its own project
+list is outside the requested projects) is out of scope, not hidden, so every
+member under it is out of scope too. Such members are counted apart
+(`project_excluded` on the team anchor walk line) and never reach the walk's
+authorization counts, so no `graph_cohort_denied_by_authorization` detail and no
+denied-cohort floor come from them.
 
 **A requested team narrowing on the repository walk (CHAOS-12319).**
 Repository, project and work-item nodes carry the `"*"` team list, so the node

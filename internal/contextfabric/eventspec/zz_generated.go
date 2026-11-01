@@ -7993,16 +7993,17 @@ func (f SynthesisStatusOverrideFields) SlogArgs() []any {
 // TeamAnchorWalkFields is contextfabric.team_anchor_walk's generated typed construction interface
 // (CHAOS-5516): one Go field per Field TeamAnchorWalk.Fields declares in spec.go.
 type TeamAnchorWalkFields struct {
-	OrgID      string
-	Outcome    string
-	AnchorKind string
-	MemberKind string
-	Committed  int
-	Members    int
-	Denied     int
-	Truncated  bool
-	Error      string
-	RequestID  string
+	OrgID           string
+	Outcome         string
+	AnchorKind      string
+	MemberKind      string
+	Committed       int
+	Members         int
+	Denied          int
+	ProjectExcluded int
+	Truncated       bool
+	Error           string
+	RequestID       string
 	// constructed (CHAOS-5516 r1 fix): an UNEXPORTED marker, generated on
 	// every TeamAnchorWalkFields uniformly, set ONLY by NewTeamAnchorWalkFields below. A caller
 	// outside this package cannot set an unexported field via a composite
@@ -8016,19 +8017,20 @@ type TeamAnchorWalkFields struct {
 
 // NewTeamAnchorWalkFields is the generated constructor for TeamAnchorWalkFields -- every
 // field TeamAnchorWalk.Fields declares is a required parameter.
-func NewTeamAnchorWalkFields(orgID string, outcome string, anchorKind string, memberKind string, committed int, members int, denied int, truncated bool, error string, requestID string) TeamAnchorWalkFields {
+func NewTeamAnchorWalkFields(orgID string, outcome string, anchorKind string, memberKind string, committed int, members int, denied int, projectExcluded int, truncated bool, error string, requestID string) TeamAnchorWalkFields {
 	return TeamAnchorWalkFields{
-		OrgID:       orgID,
-		Outcome:     outcome,
-		AnchorKind:  anchorKind,
-		MemberKind:  memberKind,
-		Committed:   committed,
-		Members:     members,
-		Denied:      denied,
-		Truncated:   truncated,
-		Error:       error,
-		RequestID:   requestID,
-		constructed: true,
+		OrgID:           orgID,
+		Outcome:         outcome,
+		AnchorKind:      anchorKind,
+		MemberKind:      memberKind,
+		Committed:       committed,
+		Members:         members,
+		Denied:          denied,
+		ProjectExcluded: projectExcluded,
+		Truncated:       truncated,
+		Error:           error,
+		RequestID:       requestID,
+		constructed:     true,
 	}
 }
 
@@ -8052,6 +8054,7 @@ func (f TeamAnchorWalkFields) SlogArgs() []any {
 		"committed", f.Committed,
 		"members", f.Members,
 		"denied", f.Denied,
+		"project_excluded", f.ProjectExcluded,
 		"truncated", f.Truncated,
 		"error", contextfabric.SanitizeLogAttr(f.Error),
 		"request_id", contextfabric.SanitizeLogAttr(f.RequestID),

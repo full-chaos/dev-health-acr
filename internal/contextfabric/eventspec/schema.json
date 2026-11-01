@@ -12338,6 +12338,12 @@
         "applicability": "written when the read finished (every outcome but read_failed)"
       },
       {
+        "key": "project_excluded",
+        "type": "int",
+        "presence": "conditional",
+        "applicability": "written when the read finished (every outcome but read_failed)"
+      },
+      {
         "key": "truncated",
         "type": "bool",
         "presence": "conditional",

@@ -1,5 +1,7 @@
 package falkorgraph
 
+import "context"
+
 // CHAOS-12329: a requested project narrowing is SCOPE, not authorization. The
 // walk's admission (treeWalkState.admitted, through graphrank's node rule)
 // refuses a node outside the requested projects together with a node the
@@ -17,10 +19,51 @@ package falkorgraph
 // a requested narrowing (graphrank.ProjectNarrowingUnproven).
 func (s treeWalkState) withoutProjectNarrowing() treeWalkState {
 	s.scope.ProjectIDs, s.scope.ProjectNarrowing = nil, nil
+	// CHAOS-12361: an anchor the narrowing alone refuses is not denied here.
+	s.anchorDenied = s.anchorDeniedUnscoped
 	return s
 }
 
 // narrowsByProject reports whether the request narrows by project at all.
 func (s treeWalkState) narrowsByProject() bool {
 	return len(s.scope.ProjectIDs) > 0
+}
+
+// CHAOS-12361: a cohort member walk (teamAnchorMembers) decides its anchor
+// once, with the request's project narrowing. An anchor the narrowing alone
+// refuses (its own project list is outside the requested projects) is out of
+// scope, not hidden: every member under it is then out of scope too, never
+// denied. teamAnchorMembers carries the anchor's decision without the
+// narrowing to the walk on ctx, so the walk's signature stays as it is.
+type anchorUnscopedDeniedKey struct{}
+
+// withAnchorUnscopedDenied records, for the walk ctx starts, whether the
+// anchor is denied even without the request's project narrowing.
+func withAnchorUnscopedDenied(ctx context.Context, denied bool) context.Context {
+	return context.WithValue(ctx, anchorUnscopedDeniedKey{}, denied)
+}
+
+// anchorUnscopedDenied is the recorded decision, or fallback when none was
+// recorded: then the anchor's decision is taken as is (no scope reading).
+func anchorUnscopedDenied(ctx context.Context, fallback bool) bool {
+	if denied, ok := ctx.Value(anchorUnscopedDeniedKey{}).(bool); ok {
+		return denied
+	}
+	return fallback
+}
+
+// scopeOnly reports whether a hit the walk refuses is refused only by the
+// request's project narrowing: the caller's grants and the rest of the
+// request admit it.
+func (s treeWalkState) scopeOnly(hop treeHop, h walkHit) bool {
+	return s.narrowsByProject() && s.withoutProjectNarrowing().authorizedHit(hop, h)
+}
+
+// excludeByScope records a node the requested project narrowing left out of
+// a cohort member walk: counted apart, never denied.
+func (s treeWalkState) excludeByScope(n *node) {
+	if s.out.hopProjectExcluded == nil {
+		s.out.hopProjectExcluded = map[string]bool{}
+	}
+	s.out.hopProjectExcluded[canonicalIDOf(n)] = true
 }
