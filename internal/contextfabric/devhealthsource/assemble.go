@@ -187,9 +187,9 @@ func (p sourcePlan) nextBatch(ctx context.Context, checkpoint contextfabric.Proj
 	if err == nil && available && p.catalog != nil {
 		batch.NextCursor = p.catalog.carried(ctx, batch.NextCursor)
 		// Logged with the batch that commits it, so a call that hands nothing
-		// back says nothing.
-		if refreshReason != "" {
-			slog.InfoContext(ctx, "context fabric: membership refresh of every subject owed", "reason", contextfabric.SanitizeLogAttr(refreshReason))
+		// back says nothing. A peek has no logger: it commits nothing.
+		if refreshReason != "" && p.logger != nil {
+			p.logger.InfoContext(ctx, "context fabric: membership refresh of every subject owed", "reason", contextfabric.SanitizeLogAttr(refreshReason))
 		}
 	}
 	// One line per type per pass: flushed when the pass ends (caught up) or
