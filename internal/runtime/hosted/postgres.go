@@ -209,11 +209,25 @@ func openPostgres(ctx context.Context, cfg config.Config, logger *slog.Logger) (
 	if err != nil {
 		return fail(errors.Join(fmt.Errorf("sweep unacknowledged device credentials: %w", err), stopPurgeLoop(), stopWorkloadCredentialPurgeLoop(), stopOAuthPurgeLoop(), stopBrowserFamilyPurgeLoop()))
 	}
+	// The credential lifecycle tick: the expired event of every credential that
+	// reached its expiry and the revision 1 of live credentials the stream
+	// predates. Always on (every deployment writes lifecycle events); the
+	// retention deletes of workload and ended browser credentials wait for its
+	// expired event, so a stalled tick is reported by its own counts and a fixed
+	// line on a full batch.
+	lifecycleTick, err := storagepostgres.NewCredentialLifecycleTick(database, audit)
+	if err != nil {
+		return fail(errors.Join(fmt.Errorf("initialize credential lifecycle tick: %w", err), stopPurgeLoop(), stopWorkloadCredentialPurgeLoop(), stopOAuthPurgeLoop(), stopBrowserFamilyPurgeLoop(), stopDeviceSweep()))
+	}
+	stopLifecycleTick, err := startCredentialLifecycleTick(ctx, lifecycleTick, logger, packetPurgeSlogObserver(logger))
+	if err != nil {
+		return fail(errors.Join(fmt.Errorf("tick credential lifecycle events: %w", err), stopPurgeLoop(), stopWorkloadCredentialPurgeLoop(), stopOAuthPurgeLoop(), stopBrowserFamilyPurgeLoop(), stopDeviceSweep()))
+	}
 	// CHAOS-11952: the Ask Dev retention job, behind its switch, on acr-api's
 	// own pool as the runtime role (CHAOS-12244: no role of its own).
 	stopRetentionLoop, err := startConfiguredRetention(ctx, cfg, database, logger)
 	if err != nil {
-		return fail(errors.Join(fmt.Errorf("enforce Ask Dev retention: %w", err), stopPurgeLoop(), stopWorkloadCredentialPurgeLoop(), stopOAuthPurgeLoop(), stopBrowserFamilyPurgeLoop(), stopDeviceSweep()))
+		return fail(errors.Join(fmt.Errorf("enforce Ask Dev retention: %w", err), stopPurgeLoop(), stopWorkloadCredentialPurgeLoop(), stopOAuthPurgeLoop(), stopBrowserFamilyPurgeLoop(), stopDeviceSweep(), stopLifecycleTick()))
 	}
 	readinessTimeout := cfg.PostgresPingTimeout
 	if readinessTimeout <= 0 {
@@ -228,7 +242,7 @@ func openPostgres(ctx context.Context, cfg config.Config, logger *slog.Logger) (
 			return checkPostgresRuntime(checkContext, database, runner, cfg.EnableEpisodeWriteback)
 		},
 		close: func() error {
-			return errors.Join(stopRetentionLoop(), stopPurgeLoop(), stopWorkloadCredentialPurgeLoop(), stopOAuthPurgeLoop(), stopBrowserFamilyPurgeLoop(), stopDeviceSweep(), database.Close())
+			return errors.Join(stopRetentionLoop(), stopPurgeLoop(), stopWorkloadCredentialPurgeLoop(), stopOAuthPurgeLoop(), stopBrowserFamilyPurgeLoop(), stopDeviceSweep(), stopLifecycleTick(), database.Close())
 		},
 	}, nil
 }

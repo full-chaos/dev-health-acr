@@ -57,6 +57,7 @@ const endedBrowserCredentialPredicate = `
       cc.client_class = 'browser'
       AND cc.family_id IS NOT NULL
       AND (cc.revoked_at IS NOT NULL OR cc.expires_at <= $3)
+      AND ` + RetentionDeleteGateSQL + `
       AND (
           cc.family_expires_at < $1
           OR EXISTS (

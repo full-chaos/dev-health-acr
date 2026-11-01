@@ -67,3 +67,16 @@ func (l *Ledger) TruncateTo(n int) {
 		l.rows = l.rows[:n]
 	}
 }
+
+// LatestEventType is the event type of the aggregate's highest revision.
+func (l *Ledger) LatestEventType(_ context.Context, aggregateID string) (string, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	latest, revision := "", 0
+	for _, row := range l.rows {
+		if row.AggregateID == aggregateID && row.Revision > revision {
+			latest, revision = row.EventType, row.Revision
+		}
+	}
+	return latest, nil
+}
