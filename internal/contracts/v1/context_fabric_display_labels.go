@@ -289,6 +289,10 @@ func ComposeCoverageDetailLabel(d ContextFabricCoverageDetail) string {
 		label = "No " + humanizeVocabularyToken(string(d.Kind)) + " was found under the named subject, so none are listed"
 	case ContextFabricCoverageDetailGraphWalkCutBeforeMember:
 		label = "The read was cut before it reached any " + humanizeVocabularyToken(string(d.Kind)) + ", so some may exist that were not read"
+	case ContextFabricCoverageDetailGraphHopWalkTruncated:
+		label = "The read of linked subjects was cut at its limit, so some may exist that were not read"
+	case ContextFabricCoverageDetailGraphTeamNarrowingUndecidedPaths:
+		label = countPhrase(d.Count, "linked subject was left out because its", "linked subjects were left out because their") + " team ownership could not be decided"
 	case ContextFabricCoverageDetailComputedPopulationAbsent:
 		label = "No member set could be produced for this, so it was not computed"
 	case ContextFabricCoverageDetailGraphUnknownRelationshipType:

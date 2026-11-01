@@ -87,6 +87,12 @@ func validDetailForCode(code ContextFabricCoverageDetailCode) ContextFabricCover
 		d.Source, d.Degrading, d.Kind = "context-fabric:graph", true, ContextFabricSubjectDeployment
 	case ContextFabricCoverageDetailGraphNoMemberFound:
 		d.Source, d.Degrading, d.Kind = "context-fabric:graph", true, ContextFabricSubjectProject
+	case ContextFabricCoverageDetailGraphHopWalkTruncated:
+		// Source only: the candidates past the budget were not read, so there
+		// is nothing to count.
+		d.Source, d.Degrading = "context-fabric:graph", true
+	case ContextFabricCoverageDetailGraphTeamNarrowingUndecidedPaths:
+		d.Source, d.Degrading, d.Count = "context-fabric:graph", true, intPtr(3)
 	case ContextFabricCoverageDetailSynthesisInputBounded:
 		d.Source, d.Degrading, d.FactKind, d.Declared, d.Served = "context-fabric:synthesis", false, ContextFabricFactWork, intPtr(200), intPtr(90)
 	case ContextFabricCoverageDetailFactScoreWithheld:
