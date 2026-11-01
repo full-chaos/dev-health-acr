@@ -813,6 +813,7 @@ func (a *Adapter) DiscoverContext(ctx context.Context, principal storage.Princip
 			deploymentAnchorReadCut = walkTruncated
 		}
 		edgeFilters.Authz += filters.Authz
+		edgeFilters.Basis.merge(filters.Basis)
 		edgeFilters.TemporalWindow += filters.TemporalWindow
 		if !teamAnchoredMembers || isTeamAnchor {
 			edgeFilters.mergeReachDenied(filters.ReachDenied)
@@ -1075,6 +1076,7 @@ func (a *Adapter) DiscoverContext(ctx context.Context, principal storage.Princip
 		}
 		resolved, resolution, reason, resolveErr := a.resolveEdge(ctx, key, principal.OrgID, principal, scope, ce, temporal)
 		edgeFilters.add(resolution, reason)
+		edgeFilters.noteAuthzBasis(principal, scope, ce, resolution, reason)
 		switch resolution {
 		case edgeLookupFailed:
 			failedLookups++
@@ -1792,7 +1794,7 @@ func (a *Adapter) DiscoverContext(ctx context.Context, principal storage.Princip
 	cohortCutByAuthz := cohortKindScopedAuthzDropped > 0 && (cohort != nil || cohortKindCensusedExhaustively || anchorReachDenied)
 	if a.config.Telemetry != nil {
 		if edgeFilters.Authz > 0 || edgeFilters.TemporalWindow > 0 || admission.DroppedSelfLoopCount > 0 {
-			a.config.Telemetry.RecordEdgesFilteredByReason(ctx, principal.OrgID, edgeFilters.Authz, edgeFilters.TemporalWindow, admission.DroppedSelfLoopCount)
+			a.config.Telemetry.RecordEdgesFilteredByReason(ctx, principal.OrgID, edgeFilters.Authz, edgeFilters.TemporalWindow, admission.DroppedSelfLoopCount, edgeFilters.Basis)
 		}
 		if cohortCutByAuthz {
 			a.config.Telemetry.RecordCohortDeniedByAuthorization(ctx, principal.OrgID, cohortKindScopedAuthzDropped)

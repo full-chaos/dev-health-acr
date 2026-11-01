@@ -596,7 +596,11 @@ There is no cache across calls; inside one request the read is reused. The
 A granted read writes one Debug line, `principal access read granted`, with
 `client_class`, `decision`, `scope_repositories` (the effective scope's size),
 `inventory_repositories`, `flags_enforced` (false on capabilities) and
-`elapsed_ms`, and no id but the request id.
+`elapsed_ms`, and no id but the request id. A project-only principal's
+granted read writes the same line at Info instead, with three more fields:
+`grant_class` (`project_only`), `project_scope_count` and `grant_digest_class`
+(`project`), never a project id or the digest value (CHAOS-12300; see
+[the project-only design](design/context-fabric-project-only-scope.md#observability)).
 
 **Effective scope.** The credential's repository grant within the
 organization's live inventory: every inventory repository the grant allows

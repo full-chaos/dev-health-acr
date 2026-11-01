@@ -2245,6 +2245,8 @@ type DirectReadAuthorizationFields struct {
 	OrgID                     string
 	PrincipalClass            string
 	RepositoryScopeCount      int
+	GrantClass                string
+	ProjectScopeCount         int
 	Decision                  string
 	Reason                    string
 	SubjectCount              int
@@ -2274,7 +2276,7 @@ type DirectReadAuthorizationFields struct {
 
 // NewDirectReadAuthorizationFields is the generated constructor for DirectReadAuthorizationFields -- every
 // field DirectReadAuthorization.Fields declares is a required parameter.
-func NewDirectReadAuthorizationFields(orgID string, principalClass string, repositoryScopeCount int, decision string, reason string, subjectCount int, admittedCount int, deniedCount int, absentCount int, ownershipUnprovenCount int, organizationMismatchCount int, invalidCount int, inactiveTeamCount int, inactiveLookupFailures int, removedTeamCount int, removedLookupFailures int, refusedKinds []string, errorClass string, requestID string) DirectReadAuthorizationFields {
+func NewDirectReadAuthorizationFields(orgID string, principalClass string, repositoryScopeCount int, grantClass string, projectScopeCount int, decision string, reason string, subjectCount int, admittedCount int, deniedCount int, absentCount int, ownershipUnprovenCount int, organizationMismatchCount int, invalidCount int, inactiveTeamCount int, inactiveLookupFailures int, removedTeamCount int, removedLookupFailures int, refusedKinds []string, errorClass string, requestID string) DirectReadAuthorizationFields {
 	valid := true
 	if refusedKinds == nil {
 		valid = false
@@ -2283,6 +2285,8 @@ func NewDirectReadAuthorizationFields(orgID string, principalClass string, repos
 		OrgID:                     orgID,
 		PrincipalClass:            principalClass,
 		RepositoryScopeCount:      repositoryScopeCount,
+		GrantClass:                grantClass,
+		ProjectScopeCount:         projectScopeCount,
 		Decision:                  decision,
 		Reason:                    reason,
 		SubjectCount:              subjectCount,
@@ -2319,6 +2323,8 @@ func (f DirectReadAuthorizationFields) SlogArgs() []any {
 		"org_id", contextfabric.SanitizeLogAttr(f.OrgID),
 		"principal_class", contextfabric.SanitizeLogAttr(f.PrincipalClass),
 		"repository_scope_count", f.RepositoryScopeCount,
+		"grant_class", contextfabric.SanitizeLogAttr(f.GrantClass),
+		"project_scope_count", f.ProjectScopeCount,
 		"decision", contextfabric.SanitizeLogAttr(f.Decision),
 		"reason", contextfabric.SanitizeLogAttr(f.Reason),
 		"subject_count", f.SubjectCount,
@@ -2341,34 +2347,38 @@ func (f DirectReadAuthorizationFields) SlogArgs() []any {
 // DirectRelationshipsReadFields is contextfabric.direct_relationships_read's generated typed construction interface
 // (CHAOS-5516): one Go field per Field DirectRelationshipsRead.Fields declares in spec.go.
 type DirectRelationshipsReadFields struct {
-	Tool                    string
-	OrgID                   string
-	PrincipalClass          string
-	Status                  string
-	SubjectKind             string
-	Depth                   int
-	Hop                     int
-	TypeCount               int
-	Direction               string
-	WindowMode              string
-	EdgesExamined           int
-	EdgesReturned           int
-	EdgesNotVisible         int
-	EdgesWithheldReasons    []string
-	EdgesWithheldAttributes int
-	EdgesWithheldSource     int
-	EdgesWithheldTarget     int
-	EvidenceRefsWithheld    int
-	EndNodesGated           int
-	EndNodesRefused         int
-	LinkTierUnserved        int
-	EdgesDroppedInactive    int
-	LatencyMs               int
-	TruncatedBy             string
-	CursorIn                string
-	CursorOut               string
-	FailureClass            string
-	RequestID               string
+	Tool                             string
+	OrgID                            string
+	PrincipalClass                   string
+	GrantClass                       string
+	ProjectScopeCount                int
+	Status                           string
+	SubjectKind                      string
+	Depth                            int
+	Hop                              int
+	TypeCount                        int
+	Direction                        string
+	WindowMode                       string
+	EdgesExamined                    int
+	EdgesReturned                    int
+	EdgesNotVisible                  int
+	EdgesWithheldReasons             []string
+	EdgesWithheldAttributes          int
+	EdgesWithheldSource              int
+	EdgesWithheldTarget              int
+	EdgesWithheldAttributionRelation int
+	EdgesWithheldProjectList         int
+	EvidenceRefsWithheld             int
+	EndNodesGated                    int
+	EndNodesRefused                  int
+	LinkTierUnserved                 int
+	EdgesDroppedInactive             int
+	LatencyMs                        int
+	TruncatedBy                      string
+	CursorIn                         string
+	CursorOut                        string
+	FailureClass                     string
+	RequestID                        string
 	// constructed (CHAOS-5516 r1 fix): an UNEXPORTED marker, generated on
 	// every DirectRelationshipsReadFields uniformly, set ONLY by NewDirectRelationshipsReadFields below. A caller
 	// outside this package cannot set an unexported field via a composite
@@ -2382,41 +2392,45 @@ type DirectRelationshipsReadFields struct {
 
 // NewDirectRelationshipsReadFields is the generated constructor for DirectRelationshipsReadFields -- every
 // field DirectRelationshipsRead.Fields declares is a required parameter.
-func NewDirectRelationshipsReadFields(tool string, orgID string, principalClass string, status string, subjectKind string, depth int, hop int, typeCount int, direction string, windowMode string, edgesExamined int, edgesReturned int, edgesNotVisible int, edgesWithheldReasons []string, edgesWithheldAttributes int, edgesWithheldSource int, edgesWithheldTarget int, evidenceRefsWithheld int, endNodesGated int, endNodesRefused int, linkTierUnserved int, edgesDroppedInactive int, latencyMs int, truncatedBy string, cursorIn string, cursorOut string, failureClass string, requestID string) DirectRelationshipsReadFields {
+func NewDirectRelationshipsReadFields(tool string, orgID string, principalClass string, grantClass string, projectScopeCount int, status string, subjectKind string, depth int, hop int, typeCount int, direction string, windowMode string, edgesExamined int, edgesReturned int, edgesNotVisible int, edgesWithheldReasons []string, edgesWithheldAttributes int, edgesWithheldSource int, edgesWithheldTarget int, edgesWithheldAttributionRelation int, edgesWithheldProjectList int, evidenceRefsWithheld int, endNodesGated int, endNodesRefused int, linkTierUnserved int, edgesDroppedInactive int, latencyMs int, truncatedBy string, cursorIn string, cursorOut string, failureClass string, requestID string) DirectRelationshipsReadFields {
 	valid := true
 	if edgesWithheldReasons == nil {
 		valid = false
 	}
 	return DirectRelationshipsReadFields{
-		Tool:                    tool,
-		OrgID:                   orgID,
-		PrincipalClass:          principalClass,
-		Status:                  status,
-		SubjectKind:             subjectKind,
-		Depth:                   depth,
-		Hop:                     hop,
-		TypeCount:               typeCount,
-		Direction:               direction,
-		WindowMode:              windowMode,
-		EdgesExamined:           edgesExamined,
-		EdgesReturned:           edgesReturned,
-		EdgesNotVisible:         edgesNotVisible,
-		EdgesWithheldReasons:    edgesWithheldReasons,
-		EdgesWithheldAttributes: edgesWithheldAttributes,
-		EdgesWithheldSource:     edgesWithheldSource,
-		EdgesWithheldTarget:     edgesWithheldTarget,
-		EvidenceRefsWithheld:    evidenceRefsWithheld,
-		EndNodesGated:           endNodesGated,
-		EndNodesRefused:         endNodesRefused,
-		LinkTierUnserved:        linkTierUnserved,
-		EdgesDroppedInactive:    edgesDroppedInactive,
-		LatencyMs:               latencyMs,
-		TruncatedBy:             truncatedBy,
-		CursorIn:                cursorIn,
-		CursorOut:               cursorOut,
-		FailureClass:            failureClass,
-		RequestID:               requestID,
-		constructed:             valid,
+		Tool:                             tool,
+		OrgID:                            orgID,
+		PrincipalClass:                   principalClass,
+		GrantClass:                       grantClass,
+		ProjectScopeCount:                projectScopeCount,
+		Status:                           status,
+		SubjectKind:                      subjectKind,
+		Depth:                            depth,
+		Hop:                              hop,
+		TypeCount:                        typeCount,
+		Direction:                        direction,
+		WindowMode:                       windowMode,
+		EdgesExamined:                    edgesExamined,
+		EdgesReturned:                    edgesReturned,
+		EdgesNotVisible:                  edgesNotVisible,
+		EdgesWithheldReasons:             edgesWithheldReasons,
+		EdgesWithheldAttributes:          edgesWithheldAttributes,
+		EdgesWithheldSource:              edgesWithheldSource,
+		EdgesWithheldTarget:              edgesWithheldTarget,
+		EdgesWithheldAttributionRelation: edgesWithheldAttributionRelation,
+		EdgesWithheldProjectList:         edgesWithheldProjectList,
+		EvidenceRefsWithheld:             evidenceRefsWithheld,
+		EndNodesGated:                    endNodesGated,
+		EndNodesRefused:                  endNodesRefused,
+		LinkTierUnserved:                 linkTierUnserved,
+		EdgesDroppedInactive:             edgesDroppedInactive,
+		LatencyMs:                        latencyMs,
+		TruncatedBy:                      truncatedBy,
+		CursorIn:                         cursorIn,
+		CursorOut:                        cursorOut,
+		FailureClass:                     failureClass,
+		RequestID:                        requestID,
+		constructed:                      valid,
 	}
 }
 
@@ -2436,6 +2450,8 @@ func (f DirectRelationshipsReadFields) SlogArgs() []any {
 		"tool", contextfabric.SanitizeLogAttr(f.Tool),
 		"org_id", contextfabric.SanitizeLogAttr(f.OrgID),
 		"principal_class", contextfabric.SanitizeLogAttr(f.PrincipalClass),
+		"grant_class", contextfabric.SanitizeLogAttr(f.GrantClass),
+		"project_scope_count", f.ProjectScopeCount,
 		"status", contextfabric.SanitizeLogAttr(f.Status),
 		"subject_kind", contextfabric.SanitizeLogAttr(f.SubjectKind),
 		"depth", f.Depth,
@@ -2450,6 +2466,8 @@ func (f DirectRelationshipsReadFields) SlogArgs() []any {
 		"edges_withheld_attributes", f.EdgesWithheldAttributes,
 		"edges_withheld_source", f.EdgesWithheldSource,
 		"edges_withheld_target", f.EdgesWithheldTarget,
+		"edges_withheld_attribution_relation", f.EdgesWithheldAttributionRelation,
+		"edges_withheld_project_list", f.EdgesWithheldProjectList,
 		"evidence_refs_withheld", f.EvidenceRefsWithheld,
 		"end_nodes_gated", f.EndNodesGated,
 		"end_nodes_refused", f.EndNodesRefused,
@@ -7129,6 +7147,9 @@ type StoredResultAuthorizationFields struct {
 	Surface                   string
 	PrincipalScope            string
 	RepositoryScopeCount      int
+	GrantClass                string
+	ProjectScopeCount         int
+	GrantDigestClass          string
 	Decision                  string
 	Reason                    string
 	SubjectCount              int
@@ -7142,6 +7163,8 @@ type StoredResultAuthorizationFields struct {
 	GroupCount                int
 	GroupUnprovenCount        int
 	RefusedKinds              []string
+	StoredGrantDigestClass    string
+	GrantDigestEqual          bool
 	ErrorClass                string
 	RequestID                 string
 	// constructed (CHAOS-5516 r1 fix): an UNEXPORTED marker, generated on
@@ -7157,7 +7180,7 @@ type StoredResultAuthorizationFields struct {
 
 // NewStoredResultAuthorizationFields is the generated constructor for StoredResultAuthorizationFields -- every
 // field StoredResultAuthorization.Fields declares is a required parameter.
-func NewStoredResultAuthorizationFields(orgID string, surface string, principalScope string, repositoryScopeCount int, decision string, reason string, subjectCount int, graphSubjectCount int, unkindedSubjectCount int, admittedCount int, deniedCount int, absentCount int, organizationSubjectCount int, organizationMismatchCount int, groupCount int, groupUnprovenCount int, refusedKinds []string, errorClass string, requestID string) StoredResultAuthorizationFields {
+func NewStoredResultAuthorizationFields(orgID string, surface string, principalScope string, repositoryScopeCount int, grantClass string, projectScopeCount int, grantDigestClass string, decision string, reason string, subjectCount int, graphSubjectCount int, unkindedSubjectCount int, admittedCount int, deniedCount int, absentCount int, organizationSubjectCount int, organizationMismatchCount int, groupCount int, groupUnprovenCount int, refusedKinds []string, storedGrantDigestClass string, grantDigestEqual bool, errorClass string, requestID string) StoredResultAuthorizationFields {
 	valid := true
 	if refusedKinds == nil {
 		valid = false
@@ -7167,6 +7190,9 @@ func NewStoredResultAuthorizationFields(orgID string, surface string, principalS
 		Surface:                   surface,
 		PrincipalScope:            principalScope,
 		RepositoryScopeCount:      repositoryScopeCount,
+		GrantClass:                grantClass,
+		ProjectScopeCount:         projectScopeCount,
+		GrantDigestClass:          grantDigestClass,
 		Decision:                  decision,
 		Reason:                    reason,
 		SubjectCount:              subjectCount,
@@ -7180,6 +7206,8 @@ func NewStoredResultAuthorizationFields(orgID string, surface string, principalS
 		GroupCount:                groupCount,
 		GroupUnprovenCount:        groupUnprovenCount,
 		RefusedKinds:              refusedKinds,
+		StoredGrantDigestClass:    storedGrantDigestClass,
+		GrantDigestEqual:          grantDigestEqual,
 		ErrorClass:                errorClass,
 		RequestID:                 requestID,
 		constructed:               valid,
@@ -7203,6 +7231,9 @@ func (f StoredResultAuthorizationFields) SlogArgs() []any {
 		"surface", contextfabric.SanitizeLogAttr(f.Surface),
 		"principal_scope", contextfabric.SanitizeLogAttr(f.PrincipalScope),
 		"repository_scope_count", f.RepositoryScopeCount,
+		"grant_class", contextfabric.SanitizeLogAttr(f.GrantClass),
+		"project_scope_count", f.ProjectScopeCount,
+		"grant_digest_class", contextfabric.SanitizeLogAttr(f.GrantDigestClass),
 		"decision", contextfabric.SanitizeLogAttr(f.Decision),
 		"reason", contextfabric.SanitizeLogAttr(f.Reason),
 		"subject_count", f.SubjectCount,
@@ -7216,6 +7247,8 @@ func (f StoredResultAuthorizationFields) SlogArgs() []any {
 		"group_count", f.GroupCount,
 		"group_unproven_count", f.GroupUnprovenCount,
 		"refused_kinds", contextfabric.SanitizeLogStrings(f.RefusedKinds),
+		"stored_grant_digest_class", contextfabric.SanitizeLogAttr(f.StoredGrantDigestClass),
+		"grant_digest_equal", f.GrantDigestEqual,
 		"error_class", contextfabric.SanitizeLogAttr(f.ErrorClass),
 		"request_id", contextfabric.SanitizeLogAttr(f.RequestID),
 	}

@@ -132,3 +132,46 @@ func TestAProjectOnlyCallerSeesTheWithheldEdgeCountsOfTheDisclosureContract(t *t
 		t.Fatalf("edges %d, examined %d, edges_not_visible %d; want 0, 1, 1 (the disclosure contract)", len(response.Edges), response.Page.Examined, response.Withheld.EdgesNotVisible)
 	}
 }
+
+// #1850 r1 P3: each new withheld reason reaches the public total and its own
+// telemetry count. E2 is withheld on the relation, E1 on the edge's project
+// list; both ends are admitted, so only the edge decides.
+func TestEachProjectOnlyWithheldReasonReachesThePublicTotal(t *testing.T) {
+	const grant = "project.v2:github:P-1"
+	granted := subject(contractsv1.ContextFabricSubjectProject, grant)
+	other := subject(contractsv1.ContextFabricSubjectProject, "project.v2:github:P-2")
+	node := func(ref contextfabric.SubjectRef) map[string]interface{} {
+		return map[string]interface{}{"subject_kind": string(ref.Kind), "canonical_id": ref.CanonicalID}
+	}
+	for _, tc := range []struct {
+		name     string
+		relation contractsv1.ContextFabricRelationshipType
+		attrs    map[string]interface{}
+		reason   EdgeWithheldReason
+	}{
+		{"attribution relation", contractsv1.ContextFabricRelationshipDocumentedBy, map[string]interface{}{"authorization_projects": "*"}, EdgeWithheldAttributionRelation},
+		{"project list", contractsv1.ContextFabricRelationshipBlocks, map[string]interface{}{"authorization_projects": []string{"project.v2:github:OTHER"}}, EdgeWithheldProjectList},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			graph := &fakeEdgeGraph{fakeGraph: &fakeGraph{org: orgA, nodes: map[string]map[string]interface{}{
+				graphrank.SubjectKey(granted): node(granted),
+				graphrank.SubjectKey(other):   node(other),
+			}}}
+			graph.edges = []EdgeCandidate{edgeBetween("rel-1", string(tc.relation), granted, other, tc.attrs)}
+			reader, recorder := newRelReader(graph, nil)
+			principal := storage.Principal{OrgID: orgA, Subject: "u", CredentialID: "c", ProjectScopes: []string{grant, other.CanonicalID}}
+			response, err := reader.Read(relCtx("project-only-reasons"), principal, RelationshipsRequest{
+				Subject: RelationshipsSubject{Kind: string(granted.Kind), CanonicalID: granted.CanonicalID}, Direction: "out", Limit: 100,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(response.Edges) != 0 || response.Withheld.EdgesNotVisible != 1 {
+				t.Fatalf("edges %d, edges_not_visible %d; want 0 and 1", len(response.Edges), response.Withheld.EdgesNotVisible)
+			}
+			if len(recorder.reads) != 1 || recorder.reads[0].EdgesWithheld[tc.reason] != 1 {
+				t.Fatalf("reads %+v, want one record counting %q once", recorder.reads, tc.reason)
+			}
+		})
+	}
+}
