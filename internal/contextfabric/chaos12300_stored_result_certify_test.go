@@ -48,3 +48,27 @@ func TestAProjectOnlyStoredResultLineCarriesItsGrantBasis(t *testing.T) {
 		t.Fatalf("certify: %v\n%s", err, buffer.String())
 	}
 }
+
+// #1850 r1 P3: a DENIED read writes the grant-equality result too: a project
+// grant of the same class and size as the one the result was computed under
+// is refused, and the serialized line says so.
+func TestADeniedProjectOnlyStoredResultLineCarriesItsGrantEquality(t *testing.T) {
+	computed := storage.Principal{OrgID: "org_1", ProjectScopes: []string{"project.v2:linear:P-1"}}
+	reader := storage.Principal{OrgID: "org_1", ProjectScopes: []string{"project.v2:linear:P-2"}}
+	decision := contextfabric.NewStoredResultGate(certifyGraph{}).Authorize(context.Background(), reader,
+		contextfabric.StoredInvestigationResult{Result: contextfabric.InvestigationResult{}, GrantDigest: contextfabric.StoredResultGrantDigest(computed)}, contextfabric.StoredResultSurfaceResultByID)
+	var buffer bytes.Buffer
+	ctx := observability.WithRequestID(context.Background(), "req_0123456789abcdef0123456789abcdef")
+	contextfabric.NewSlogEngineTelemetry(slog.New(slog.NewJSONHandler(&buffer, nil))).RecordStoredResultAuthorization(ctx, reader, decision)
+	parsed, err := certify.Parse(buffer.Bytes())
+	if err != nil {
+		t.Fatalf("certify.Parse(): %v", err)
+	}
+	if _, err := certify.Certify(parsed, certify.Assertion{Event: eventspec.StoredResultAuthorization, Want: map[string]any{
+		"org_id": "org_1", "surface": "result_by_id", "decision": "denied", "reason": "grant_mismatch",
+		"grant_class": "project_only", "project_scope_count": 1, "grant_digest_class": "project",
+		"stored_grant_digest_class": "project", "grant_digest_equal": false,
+	}}); err != nil {
+		t.Fatalf("certify: %v\n%s", err, buffer.String())
+	}
+}

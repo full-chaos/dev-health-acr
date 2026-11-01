@@ -46,9 +46,21 @@ func TestEveryStoredResultReadRecordsTheGrantEqualityResult(t *testing.T) {
 }
 
 func TestGrantDigestClassOfNamesEachForm(t *testing.T) {
+	const payload = "0123456789abcdef0123456789abcdef"
 	for digest, want := range map[string]GrantDigestClass{
-		"": GrantDigestUnrecorded, "open": GrantDigestOpen, "g:0123": GrantDigestRepository,
-		"p:0123": GrantDigestProject, "x:1": GrantDigestMalformed, "OPEN": GrantDigestMalformed,
+		"": GrantDigestUnrecorded, "open": GrantDigestOpen, "g:" + payload: GrantDigestRepository,
+		"p:" + payload: GrantDigestProject, "x:1": GrantDigestMalformed, "OPEN": GrantDigestMalformed,
+		// #1850 r1 P3: the payload is exactly 32 lowercase hex, the shape
+		// migration 0066's CHECK admits; a known prefix alone is malformed.
+		"g:short": GrantDigestMalformed, "p:short": GrantDigestMalformed, "g:": GrantDigestMalformed, "p:": GrantDigestMalformed,
+		"g:" + payload + "0":                 GrantDigestMalformed,
+		"p:" + payload + "0":                 GrantDigestMalformed,
+		"g:" + payload[:31]:                  GrantDigestMalformed,
+		"p:0123456789ABCDEF0123456789ABCDEF": GrantDigestMalformed,
+		"g:0123456789ABCDEF0123456789ABCDEF": GrantDigestMalformed,
+		"p:0123456789abcdef0123456789abcdeg": GrantDigestMalformed,
+		"p:0123456789abcdef0123456789abcde/": GrantDigestMalformed,
+		"p:0123456789abcdef0123456789abcde:": GrantDigestMalformed,
 	} {
 		if got := GrantDigestClassOf(digest); got != want {
 			t.Errorf("GrantDigestClassOf(%q) = %q, want %q", digest, got, want)
@@ -56,5 +68,8 @@ func TestGrantDigestClassOfNamesEachForm(t *testing.T) {
 	}
 	if got := GrantDigestClassOf(StoredResultGrantDigest(wideProjectGrant)); got != GrantDigestProject {
 		t.Errorf("a project grant's digest class = %q", got)
+	}
+	if got := GrantDigestClassOf(StoredResultGrantDigest(storage.Principal{OrgID: "o", RepositoryScopes: []string{"acme/a"}})); got != GrantDigestRepository {
+		t.Errorf("a repository grant's digest class = %q", got)
 	}
 }

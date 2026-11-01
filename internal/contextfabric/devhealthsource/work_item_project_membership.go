@@ -147,7 +147,10 @@ func stateWorkItemProjectMemberships(ctx context.Context, client contextpacket.C
 	if err != nil {
 		return err
 	}
-	if len(keys) > 0 {
+	// A refresh pass that re-read nothing still writes its line, with zeros:
+	// a normal empty refresh is visible, and differs from a pass that never
+	// ran. One line per pass, never per work item.
+	if len(keys) > 0 || by == membershipStatedByRefresh {
 		recordMembershipOutcomes(ctx, orgID, by, membershipOutcomesOf(keys, sets, rowed, by))
 	}
 	for key, entities := range targets {

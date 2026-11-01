@@ -394,12 +394,26 @@ func GrantDigestClassOf(digest string) GrantDigestClass {
 		return GrantDigestUnrecorded
 	case digest == storedResultOpenGrantDigest:
 		return GrantDigestOpen
-	case strings.HasPrefix(digest, "g:"):
+	case strings.HasPrefix(digest, "g:") && isGrantDigestPayload(digest[2:]):
 		return GrantDigestRepository
-	case strings.HasPrefix(digest, "p:"):
+	case strings.HasPrefix(digest, "p:") && isGrantDigestPayload(digest[2:]):
 		return GrantDigestProject
 	}
 	return GrantDigestMalformed
+}
+
+// isGrantDigestPayload reports the payload shape of a grant digest: exactly
+// 32 lowercase hex characters, the shape migration 0066's CHECK admits.
+func isGrantDigestPayload(payload string) bool {
+	if len(payload) != 32 {
+		return false
+	}
+	for _, c := range []byte(payload) {
+		if (c < '0' || c > '9') && (c < 'a' || c > 'f') {
+			return false
+		}
+	}
+	return true
 }
 
 // storedResultOpenGrantDigest is the digest a result computed for an

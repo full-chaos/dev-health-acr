@@ -295,13 +295,18 @@ separate `grant_class` field (`auth.GrantClassVocabulary`: `unrestricted`,
   - The walk's `context_fabric: relationship edges filtered` line, for a
     project-only caller only, adds `grant_class`, `authz_endpoint`,
     `authz_attribution_relation`, `authz_project_list`,
-    `authz_project_narrowing` and `authz_unclassified` (the tree walks refuse
-    an edge or a node in one step, so their refusals stay unclassified and the
-    parts add up to `authz`). Every other class keeps its three counts.
+    `authz_project_narrowing` and `authz_unclassified`. The generic walk and
+    the tree walks both classify each refusal, and a denial that only a tree
+    walk reported still takes this line. `authz_unclassified` holds what no
+    site can name (a fused link read that returned no feed edge), so the parts
+    add up to `authz`. Every other class keeps its three counts.
 - **Grant-equality result.** Every read of a stored result (not the
   fact-root recheck) adds `grant_digest_class` (the reader's),
   `stored_grant_digest_class` (the result's: `open`, `repository`, `project`,
-  `unrecorded`, `malformed`) and `grant_digest_equal`. A different project set
+  `unrecorded`, `malformed`) and `grant_digest_equal`, on an admitted and on a
+  denied read alike. `repository` and `project` need exactly 32 lowercase hex
+  after the prefix, the shape migration 0066 admits; any other value is
+  `malformed`. A different project set
   of the same size and class reads as `grant_digest_equal: false`; the R2-4
   read of a `p:` result by an unrestricted reader reads as admitted and
   unequal.
@@ -311,7 +316,9 @@ separate `grant_class` field (`auth.GrantClassVocabulary`: `unrestricted`,
   `work_items`, `member`, `missing` (no membership row), `stale` (rows that
   resolve to no single statable project) and `cleared` (the refresh table
   found no row after a membership change: the last project was left). An empty
-  set is never one "absent" count.
+  set is never one "absent" count. A refresh pass that re-read no work item
+  writes its line too, with zeros, so a normal empty refresh is visible; the
+  line is one per pass, never one per work item.
 - **Node basis.** For project_only the subject kind is the node rule: an
   admitted organization is the caller's own, an admitted project is granted,
   an admitted work item is a member. The gate line's `admitted_count`,

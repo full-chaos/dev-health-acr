@@ -979,9 +979,9 @@ func (c *edgeFilterCounts) mergeReachDenied(other map[string]struct{}) {
 }
 
 // EdgeAuthzBasis is the E1/E2 basis of the edges the authorization filter
-// refused a project-only caller (CHAOS-12300): counts only, never ids. Only
-// resolveEdge's decisions are classified; the tree walks deny an edge or a
-// node in one step, so their refusals are counted in Authz and here only as
+// refused a project-only caller (CHAOS-12300): counts only, never ids. A
+// refusal whose reason the deciding site does not know (a fused link read
+// that returned no feed edge) is counted in Authz and here only as
 // unclassified (Authz minus the classified bases).
 type EdgeAuthzBasis struct {
 	// ProjectOnly is true when the caller's grant class is project_only;
@@ -1013,16 +1013,22 @@ func (c *edgeFilterCounts) noteAuthzBasis(principal storage.Principal, scope con
 	if resolution != edgeFiltered || reason != edgeFilterReasonAuthz || auth.ClassifyGrant(principal) != auth.GrantProjectOnly {
 		return
 	}
-	c.Basis.ProjectOnly = true
-	switch graphrank.AuthorizedEdgeBasis(principal, scope, ce.Name, ce.Attributes) {
+	c.Basis.note(graphrank.AuthorizedEdgeBasis(principal, scope, ce.Name, ce.Attributes))
+}
+
+// note counts one project-only refusal under the basis of the edge's own
+// attributes: an edge they admit was refused on an endpoint.
+func (b *EdgeAuthzBasis) note(basis graphrank.EdgeBasis) {
+	b.ProjectOnly = true
+	switch basis {
 	case graphrank.EdgeBasisAdmitted:
-		c.Basis.Endpoint++
+		b.Endpoint++
 	case graphrank.EdgeBasisAttributionRelation:
-		c.Basis.AttributionRelation++
+		b.AttributionRelation++
 	case graphrank.EdgeBasisProjectList:
-		c.Basis.ProjectList++
+		b.ProjectList++
 	case graphrank.EdgeBasisProjectNarrowing:
-		c.Basis.ProjectNarrowing++
+		b.ProjectNarrowing++
 	}
 }
 

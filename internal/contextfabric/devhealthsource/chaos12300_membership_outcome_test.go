@@ -76,13 +76,31 @@ func TestTheRefreshTableLogsAClearedMembership(t *testing.T) {
 	}
 	tables = append(tables, fakeTable{match: workItemMembershipRefreshMarker, rows: [][]any{
 		{"WIDGET-101", "repo-1", "example-org/widget-service", "Investigate checkout flake", "in_progress", "", at, at, uint8(0), zeroTime, "bug", "CHAOS", "Widget Reliability", []string{"checkout", "flake"}, at.Add(time.Hour)},
+		{"WIDGET-102", "repo-1", "example-org/widget-service", "Second work item", "in_progress", "", at, at, uint8(0), zeroTime, "bug", "CHAOS", "Widget Reliability", []string{}, at.Add(time.Hour)},
 	}})
 	if _, err := chaos12226Batch(t, &fakeClient{tables: tables}, true); err != nil {
 		t.Fatalf("next projection batch: %v", err)
 	}
+	// One line for the pass, not one per work item: membershipOutcomeLines
+	// refuses a second line for a table.
 	lines := membershipOutcomeLines(t, &buffer)
-	assertOutcomes(t, lines["work_items_project_membership"], map[string]float64{"work_items": 1, "member": 0, "stale": 0, "missing": 0, "cleared": 1})
+	assertOutcomes(t, lines["work_items_project_membership"], map[string]float64{"work_items": 2, "member": 0, "stale": 0, "missing": 0, "cleared": 2})
 	if _, ok := lines["work_items"]; ok {
 		t.Fatalf("the entity table read no work item and still logged an outcome:\n%s", buffer.String())
 	}
+}
+
+// #1850 r1 P3: a refresh pass that re-read no work item still writes one
+// line, with zeros, so a normal empty refresh is visible and differs from a
+// refresh that never ran.
+func TestAnEmptyRefreshPassWritesItsLineWithZeros(t *testing.T) {
+	var buffer bytes.Buffer
+	defer devhealthsource.SwapMembershipOutcomeLoggerForTest(slog.New(slog.NewJSONHandler(&buffer, nil)))()
+	at := time.Date(2026, 10, 31, 9, 0, 0, 0, time.UTC)
+	client := &fakeClient{tables: chaos12226Tables(at, nil, nil)}
+	if _, err := chaos12226Batch(t, client, true); err != nil {
+		t.Fatalf("next projection batch: %v", err)
+	}
+	assertOutcomes(t, membershipOutcomeLines(t, &buffer)["work_items_project_membership"],
+		map[string]float64{"work_items": 0, "member": 0, "stale": 0, "missing": 0, "cleared": 0})
 }

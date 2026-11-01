@@ -93,7 +93,13 @@ internal/contextfabric/falkorgraph/tree_walk.go	linkSegmentGrants	classify	1	den
 internal/contextfabric/falkorgraph/tree_walk.go	linkSegmentGrants	compare	1	deny	project_only binds no repository grant to the link read, so "*" matches nothing; the node rule decides each row (tested); c3 CHAOS-12299 r3
 internal/contextfabric/falkorgraph/tree_walk.go	treeWalkState.admitted	classify	1	proj	project_only: every link position is decided by the node rule, a link tier grants no authority; c3 CHAOS-12299
 internal/contextfabric/falkorgraph/tree_walk.go	treeWalkState.admitted	compare	1	proj	project_only: every link position is decided by the node rule; c3 CHAOS-12299
+internal/contextfabric/falkorgraph/tree_walk.go	treeWalkState.deny	classify	1	vocab	telemetry: marks a project-only refusal so a tree-walk-only denial takes the project-only line, never decides (c4 CHAOS-12300)
+internal/contextfabric/falkorgraph/tree_walk.go	treeWalkState.deny	compare	1	vocab	telemetry: only a project-only refusal marks the basis (c4 CHAOS-12300)
 internal/contextfabric/falkorgraph/tree_walk.go	treeWalkState.narrowed	raw-grant	1	r-sub	reads needsProjectReach, which is ClassifyGrant.IsRestricted: project_only restricted whatever its list (tested with empty, "*" and a repository); c3 CHAOS-12299 r3
+internal/contextfabric/falkorgraph/tree_walk.go	treeWalkState.noteHitBasis	classify	1	vocab	telemetry: counts a refused hit by its E1/E2 basis, never decides (c4 CHAOS-12300)
+internal/contextfabric/falkorgraph/tree_walk.go	treeWalkState.noteHitBasis	compare	1	vocab	telemetry: only a project-only refusal is classified (c4 CHAOS-12300)
+internal/contextfabric/falkorgraph/tree_walk.go	treeWalkState.noteLinkBasis	classify	1	vocab	telemetry: counts a refused link row by its E1/E2 basis, never decides (c4 CHAOS-12300)
+internal/contextfabric/falkorgraph/tree_walk.go	treeWalkState.noteLinkBasis	compare	1	vocab	telemetry: only a project-only refusal is classified (c4 CHAOS-12300)
 internal/contextfabric/graphrank/authorize.go	AuthorizedAttributes	classify	1	proj	project_only takes the project-only node rule (projectOnlyAdmits): own organization, granted project, member work item; c3 CHAOS-12299
 internal/contextfabric/graphrank/authorize.go	AuthorizedAttributes	compare	1	proj	project_only takes the project-only node rule (projectOnlyAdmits); c3 CHAOS-12299
 internal/contextfabric/graphrank/authorize.go	AuthorizedAttributes	raw-grant	1	leave	project_only never reaches this read: AuthorizedAttributes returns projectOnlyAdmits first (c3 CHAOS-12299)
