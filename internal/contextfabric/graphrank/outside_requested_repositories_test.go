@@ -47,22 +47,35 @@ func TestACountOfMatchesOutsideTheRequestedRepositoriesIsForAnUnrestrictedCaller
 	}
 }
 
-// TestARestrictedCallerNeverLearnsOfAMatchOutsideItsGrant (CHAOS-12360): for a
-// repository-restricted caller the count would be an existence oracle for a
-// subject it may not see. That holds with the subject outside the grant, and
-// also inside it: a restricted caller is never an unrestricted principal.
+// TestARestrictedCallerNeverLearnsOfAMatchOutsideItsGrant (CHAOS-12360, kept by
+// the CHAOS-12446 ruling): a node the caller's own grant refuses never counts.
+// For it the count would be an existence oracle.
 func TestARestrictedCallerNeverLearnsOfAMatchOutsideItsGrant(t *testing.T) {
 	t.Parallel()
 	narrowed := contextfabric.RequestedScope{RepositorySlugs: []string{"acme/payments-api"}}
 	worker := outsideRepositoryNode("repository:worker", "acme/payments-worker")
-	for name, grant := range map[string][]string{
-		"the match is outside the grant": {"acme/payments-api"},
-		"the match is inside the grant":  {"acme/payments-api", "acme/payments-worker"},
-	} {
-		got := outsideRepositoriesResolve(t, storage.Principal{OrgID: "org_1", RepositoryScopes: grant}, narrowed, worker)
-		if got.OutsideRequestedRepositories != 0 {
-			t.Fatalf("%s: outside %d, want 0: an existence oracle", name, got.OutsideRequestedRepositories)
-		}
+	got := outsideRepositoriesResolve(t, storage.Principal{OrgID: "org_1", RepositoryScopes: []string{"acme/payments-api"}}, narrowed, worker)
+	if got.OutsideRequestedRepositories != 0 {
+		t.Fatalf("outside %d, want 0: an existence oracle", got.OutsideRequestedRepositories)
+	}
+}
+
+// TestARestrictedCallerIsToldOfAMatchItsOwnGrantCovers (CHAOS-12446, lead ruling
+// (a), FINAL): a subject inside the caller's own grant is no oracle, so it
+// counts. A web user is always this caller: the access read turns "*" into the
+// live inventory on every call. The count holds only what the grant admits.
+func TestARestrictedCallerIsToldOfAMatchItsOwnGrantCovers(t *testing.T) {
+	t.Parallel()
+	narrowed := contextfabric.RequestedScope{RepositorySlugs: []string{"acme/payments-api"}}
+	principal := storage.Principal{OrgID: "org_1", RepositoryScopes: []string{"acme/payments-api", "acme/payments-worker"}}
+	worker := outsideRepositoryNode("repository:worker", "acme/payments-worker")
+	hidden := outsideRepositoryNode("repository:hidden", "acme/payments-hidden")
+	got := outsideRepositoriesResolve(t, principal, narrowed, worker, hidden)
+	if got.OutsideRequestedRepositories != 1 {
+		t.Fatalf("outside %d, want 1: the match the grant covers counts, and the other never does", got.OutsideRequestedRepositories)
+	}
+	if len(got.Candidates) != 0 {
+		t.Fatalf("candidates %v, want none: the narrowing stands", got.Candidates)
 	}
 }
 
