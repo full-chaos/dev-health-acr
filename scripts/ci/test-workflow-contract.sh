@@ -618,6 +618,44 @@ check_ops_contract_sparse_list_carries_referenced_schemas() {
   done
 }
 
+# The vendored copy of the ops-owned acr credential lifecycle event contract
+# is only a pin check if the sparse list delivers the pinned files and a step
+# diffs them against the vendored tree; a deleted step or path leaves the copy
+# unchecked with every job green.
+check_vendored_lifecycle_contract_wiring() {
+  local file="$1" block step
+  block="$(awk '
+    /path: \.ops-contract/ { grab=1 }
+    grab && /sparse-checkout: \|/ { inlist=1; next }
+    inlist && /sparse-checkout-cone-mode/ { exit }
+    inlist { print }
+  ' "$file")"
+  local want
+  for want in contracts/auth/v1/jsonschema/acr-credential-lifecycle-event.v1.schema.json contracts/auth/v1/examples/acr-credential-lifecycle-event/; do
+    if ! grep -qxF "            $want" <<<"$block"; then
+      printf 'the ops-contract sparse list does not carry %s -- the vendored lifecycle contract would be compared with nothing\n' "$want" >&2
+      return 1
+    fi
+  done
+  step="$(awk '
+    /Verify the vendored lifecycle contract against the pinned ops contract/ { grab=1 }
+    grab && /^      - / && !/Verify the vendored lifecycle contract/ { grab=0 }
+    grab { print }
+  ' "$file")"
+  if ! grep -qF 'scripts/ci/check-vendored-ops-contract.sh' <<<"$step" || ! grep -qF '.ops-contract' <<<"$step"; then
+    printf 'no step runs check-vendored-ops-contract.sh against .ops-contract in %s\n' "$file" >&2
+    return 1
+  fi
+  if grep -qE 'continue-on-error|\|\| true' <<<"$step"; then
+    printf 'the vendored lifecycle contract step swallows its own failure\n' >&2
+    return 1
+  fi
+  if ! grep -qF 'scripts/ci/test-vendored-ops-contract.sh' "$file"; then
+    printf 'no step runs test-vendored-ops-contract.sh in %s\n' "$file" >&2
+    return 1
+  fi
+}
+
 # A pin that accepts a branch name is not a pin: the sparse checkout would
 # follow ops's moving default branch with no acr commit recording it. The
 # workflow must reject the shape BEFORE resolving the ref.
@@ -1960,6 +1998,7 @@ run_all_checks() {
   check_pin_requires_full_sha "$file"
   check_pin_binds_checkout_ref "$file"
   check_ops_contract_sparse_list_carries_referenced_schemas "$file"
+  check_vendored_lifecycle_contract_wiring "$file"
   check_race_runner_uses_variable "$file"
   check_first_stage_runner_uses_variable "$file"
   check_routed_jobs_fork_guarded "$file"
@@ -3179,6 +3218,40 @@ sparse_transitive_removed="$tmpdir/sparse-transitive-removed.yml"
 grep -vF 'jsonschema/principal.v1.schema.json' "$workflow" > "$sparse_transitive_removed"
 assert_check_fails 'dropped the schema the referenced schema itself references from the ops-contract sparse list' \
   check_ops_contract_sparse_list_carries_referenced_schemas "$sparse_transitive_removed"
+
+# (n3) the vendored lifecycle contract is compared with the pinned ops tree:
+# drop either sparse path, the step, or let the step swallow a failure.
+vendored_schema_path_removed="$tmpdir/vendored-schema-path-removed.yml"
+grep -vF 'jsonschema/acr-credential-lifecycle-event.v1.schema.json' "$workflow" > "$vendored_schema_path_removed"
+assert_check_fails 'dropped the lifecycle schema from the ops-contract sparse list' \
+  check_vendored_lifecycle_contract_wiring "$vendored_schema_path_removed"
+
+vendored_examples_path_removed="$tmpdir/vendored-examples-path-removed.yml"
+grep -vxF '            contracts/auth/v1/examples/acr-credential-lifecycle-event/' "$workflow" > "$vendored_examples_path_removed"
+assert_check_fails 'dropped the lifecycle examples from the ops-contract sparse list' \
+  check_vendored_lifecycle_contract_wiring "$vendored_examples_path_removed"
+
+vendored_step_removed="$tmpdir/vendored-step-removed.yml"
+awk '
+  /Verify the vendored lifecycle contract against the pinned ops contract/ { skip=1 }
+  skip && /^      - / && !/Verify the vendored lifecycle contract/ { skip=0 }
+  !skip { print }
+' "$workflow" > "$vendored_step_removed"
+assert_check_fails 'deleted the vendored lifecycle contract step' \
+  check_vendored_lifecycle_contract_wiring "$vendored_step_removed"
+
+vendored_step_swallowed="$tmpdir/vendored-step-swallowed.yml"
+awk '
+  /scripts\/ci\/check-vendored-ops-contract.sh/ { print $0 " || true"; next }
+  { print }
+' "$workflow" > "$vendored_step_swallowed"
+assert_check_fails 'let the vendored lifecycle contract step swallow its failure' \
+  check_vendored_lifecycle_contract_wiring "$vendored_step_swallowed"
+
+vendored_test_removed="$tmpdir/vendored-test-removed.yml"
+grep -vF 'scripts/ci/test-vendored-ops-contract.sh' "$workflow" > "$vendored_test_removed"
+assert_check_fails 'dropped the vendored contract check test from the scripts job' \
+  check_vendored_lifecycle_contract_wiring "$vendored_test_removed"
 
 # (o) remove the pin's full-SHA requirement, restoring the floating-ref hole.
 pin_regex_removed="$tmpdir/pin-regex-removed.yml"
