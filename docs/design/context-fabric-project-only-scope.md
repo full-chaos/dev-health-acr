@@ -210,11 +210,12 @@ of `project_membership_presence` is not read.
   reach the answer, and neither number stands for the other.
 - **A colliding issue id.** `work_items` is keyed by
   `(org_id, repo_id, work_item_id)` and a link row names no issue repository, so
-  one link id can join two rows. The row in the pull request's own repository is
-  what the link names; with none, the link names no project and is counted
-  (`ambiguous_links`). A pull-request work item takes part in that choice and
-  then contributes nothing, so an issue elsewhere never stands in for it. A
-  wrong project would admit a project-only caller.
+  one link id can join two rows. Nothing then says which issue the link means,
+  so it names no project and is counted (`ambiguous_links`), even with a row in
+  the pull request's own repository: a link to a foreign issue would otherwise
+  take the local issue's project, and this row decides what a project-only
+  caller may read. A pull-request work item counts as a row, so an issue
+  elsewhere never stands in for it.
 - **Unstated, not empty.** With no contributing link the pull request states
   nothing, so it stays on the disclosed path and never reads as "in no project".
   A set over the contract's bound is unstated too: never a partial set.
