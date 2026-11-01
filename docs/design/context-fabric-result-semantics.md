@@ -319,7 +319,9 @@ A direction reads "lowered", or "raised" for `degraded_to_partial`, the only rai
 The clause names the obligation (the first part of `deciding_requirement`) and the
 outcome. An obligation or outcome with no word drops the clause, and a direction
 outside the vocabulary reads "changed". With no word for a status there is no note:
-a raw token is never the fallback.
+a raw token is never the fallback. A correction a budget lever's row decided has no
+deciding pair (CHAOS-12460), so its note has no clause: that row names no
+requirement on purpose, and the correction stands without it.
 
 **Source state words.** Each state keeps its own word, because unknown, stale,
 no data, not applicable and zero are different statements (North Star check 12).

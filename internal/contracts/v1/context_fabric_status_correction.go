@@ -36,9 +36,11 @@ type ContextFabricStatusCorrection struct {
 	Direction ContextFabricStatusCorrectionDirection `json:"direction"`
 	// DecidingRequirement is the identity of the outcome row the derivation
 	// relied on, as it appears in Completeness.Outcomes. Empty when no single
-	// row decided it.
+	// row decided it, or when the row that did names no requirement: a budget
+	// lever's row cuts across requirements (CHAOS-12460).
 	DecidingRequirement string `json:"deciding_requirement,omitempty"`
-	// DecidingOutcome is that row's outcome.
+	// DecidingOutcome is that row's outcome, present exactly when
+	// DecidingRequirement is.
 	DecidingOutcome ContextFabricPlanRequirementOutcome `json:"deciding_outcome,omitempty"`
 }
 
