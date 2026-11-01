@@ -120,13 +120,17 @@ func (s *discoverTeamScope) counts() (requested, decided, excluded int) {
 
 // edges keeps the resolved edges whose two endpoints are in scope. An edge
 // the rest of the request refuses is kept for that check to refuse, as before.
+// An edge's own attributes are decided by the edge rule the read itself uses
+// (authorizedEdgeAttributes, CHAOS-12396): for a project-only caller the node
+// rule refuses every attribute map with no subject kind, which would leave
+// every edge undecided.
 func (s *discoverTeamScope) edges(ctx context.Context, principal storage.Principal, scope contextfabric.RequestedScope, edges []graphrank.ResolvedEdge) ([]graphrank.ResolvedEdge, error) {
 	if s == nil {
 		return edges, nil
 	}
 	var subjects []contextfabric.SubjectRef
 	for _, e := range edges {
-		if graphrank.AuthorizedAttributes(principal, scope, e.Attributes) {
+		if authorizedEdgeAttributes(principal, scope, e.Name, e.Attributes) {
 			subjects = append(subjects, e.From, e.To)
 		}
 	}
@@ -135,7 +139,7 @@ func (s *discoverTeamScope) edges(ctx context.Context, principal storage.Princip
 	}
 	kept := make([]graphrank.ResolvedEdge, 0, len(edges))
 	for _, e := range edges {
-		if !graphrank.AuthorizedAttributes(principal, scope, e.Attributes) || (s.admits(e.From) && s.admits(e.To)) {
+		if !authorizedEdgeAttributes(principal, scope, e.Name, e.Attributes) || (s.admits(e.From) && s.admits(e.To)) {
 			kept = append(kept, e)
 		}
 	}
