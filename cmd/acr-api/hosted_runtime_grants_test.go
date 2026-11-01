@@ -40,7 +40,7 @@ func TestRuntimeFixtureGrantsComeFromDBACL(t *testing.T) {
 }
 
 func TestRuntimeFixtureFeaturesCoverTheFeaturesTheTestsEnable(t *testing.T) {
-	// hostedRealIntegration starts a second process with ACR_ENABLE_EPISODE_WRITEBACK=true
+	// TestHostedRuntime_real_binary_serves_and_fails_readiness_safely starts a second process with ACR_ENABLE_EPISODE_WRITEBACK=true
 	// against the same fixture database.
 	if !fixtureDBACLFeatures().Enabled(dbacl.EpisodeWriteback) {
 		t.Fatal("the fixture features do not enable episode writeback, which the hosted integration test turns on")

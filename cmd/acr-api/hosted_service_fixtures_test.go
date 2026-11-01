@@ -16,6 +16,7 @@ import (
 
 	"github.com/full-chaos/dev-health-acr/internal/auth"
 	"github.com/full-chaos/dev-health-acr/internal/chfixture"
+	"github.com/full-chaos/dev-health-acr/internal/dbacl"
 	runtimepostgres "github.com/full-chaos/dev-health-acr/internal/runtime/postgres"
 	storagepostgres "github.com/full-chaos/dev-health-acr/internal/storage/postgres"
 	postgresmigrations "github.com/full-chaos/dev-health-acr/migrations/postgres"
@@ -109,24 +110,31 @@ func newPostgresFixtureWithAccess(t *testing.T, ctx context.Context, access post
 }
 
 // runtimeFixtureFeatures is the optional-feature set the real-binary fixture
-// grants for.
-var runtimeFixtureFeatures = map[string]bool{}
+// grants for: episode writeback, because TestHostedRuntime_real_binary_serves_and_fails_readiness_safely starts a
+// second process with ACR_ENABLE_EPISODE_WRITEBACK=true on the same database.
+// The workload exchange and browser class are not configured by
+// hostedProcessEnvironment, so their rows are not granted.
+var runtimeFixtureFeatures = map[string]bool{string(dbacl.EpisodeWriteback): true}
 
-// runtimeFixtureGrantStatements is the GRANT list the fixture applies to the
-// runtime role.
+// runtimeFixtureGrantStatements is what the fixture applies to the runtime
+// role: schema USAGE (the init script's job in a deployment) and the grants
+// of internal/dbacl, the one source of record, as cmd/acr-migrate
+// grant-runtime-acl applies them. The missing-packet-insert variant then
+// revokes the write privileges on the packet snapshots so the readiness check
+// refuses it.
 func runtimeFixtureGrantStatements(role string, access postgresRuntimeAccess) []string {
-	grants := []string{
-		`GRANT USAGE ON SCHEMA acr TO ` + role,
-		`GRANT SELECT ON acr.schema_migrations TO ` + role,
-		`GRANT SELECT, UPDATE ON acr.client_credentials TO ` + role,
-		`GRANT SELECT, INSERT ON acr.agent_episodes TO ` + role,
-		`GRANT INSERT ON acr.audit_events TO ` + role,
-		`GRANT SELECT, INSERT, UPDATE ON acr.device_authorizations TO ` + role,
+	features := dbacl.Features{}
+	for name, on := range runtimeFixtureFeatures {
+		features[dbacl.Feature(name)] = on
+	}
+	statements := []string{`GRANT USAGE ON SCHEMA acr TO ` + dbacl.QuoteIdent(role)}
+	for _, statement := range dbacl.GrantStatements(dbacl.QuoteIdent(role), features) {
+		statements = append(statements, statement.SQL)
 	}
 	if access == postgresRuntimeAccessMissingPacketInsert {
-		return append(grants, `GRANT SELECT ON acr.context_packet_snapshots TO `+role)
+		statements = append(statements, `REVOKE INSERT, UPDATE, DELETE ON TABLE acr.context_packet_snapshots FROM `+dbacl.QuoteIdent(role))
 	}
-	return append(grants, `GRANT SELECT, INSERT, DELETE, UPDATE ON acr.context_packet_snapshots TO `+role)
+	return statements
 }
 
 func newUnmigratedPostgresFixture(t *testing.T, ctx context.Context) *postgresFixture {
