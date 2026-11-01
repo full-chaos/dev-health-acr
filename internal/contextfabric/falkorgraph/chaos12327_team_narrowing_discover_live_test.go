@@ -170,18 +170,21 @@ func assertTeamNarrowingInTheGeneralRead(t *testing.T, ctx context.Context, adap
 			t.Fatalf("teams [*]: served %v, want the whole neighbourhood", got.nodes)
 		}
 	})
-	t.Run("a kind with no ownership path is out of scope (lead ruling Q1)", func(t *testing.T) {
+	t.Run("a review follows its pull request (CHAOS-12345)", func(t *testing.T) {
 		org := seedTeamNarrowingFixture(t, ctx, adapter, teamNarrowingFixture{})
 		seedTeamDiscoverReview(t, ctx, adapter, org)
 		if got := discoverUnderTeams(t, ctx, adapter, org, repo, nil, nil); !slices.Equal(got.nodes[contractsv1.ContextFabricSubjectPullRequestReview], []string{teamDiscoverReview}) {
 			t.Fatalf("no narrowing: served reviews %v, want %v (the fixture must reach it)", got.nodes[contractsv1.ContextFabricSubjectPullRequestReview], []string{teamDiscoverReview})
 		}
 		got := discoverUnderTeams(t, ctx, adapter, org, repo, nil, []string{"team-B"})
-		if len(got.nodes[contractsv1.ContextFabricSubjectPullRequestReview]) != 0 || len(got.nodes[contextfabric.SubjectPullRequest]) != len(allPRs) {
-			t.Fatalf("teams [team-B]: served reviews %v, pull requests %v; want no review and R's 5 pull requests", got.nodes[contractsv1.ContextFabricSubjectPullRequestReview], got.nodes[contextfabric.SubjectPullRequest])
+		if !slices.Equal(got.nodes[contractsv1.ContextFabricSubjectPullRequestReview], []string{teamDiscoverReview}) || len(got.nodes[contextfabric.SubjectPullRequest]) != len(allPRs) {
+			t.Fatalf("teams [team-B]: served reviews %v, pull requests %v; want the review of R's pull request and R's 5 pull requests", got.nodes[contractsv1.ContextFabricSubjectPullRequestReview], got.nodes[contextfabric.SubjectPullRequest])
 		}
 		if got.partial {
-			t.Fatalf("teams [team-B]: partial, want complete (an out-of-scope kind is scope, not missing data)")
+			t.Fatalf("teams [team-B]: partial, want complete")
+		}
+		if got := discoverUnderTeams(t, ctx, adapter, org, repo, nil, []string{"team-A"}); len(got.nodes[contractsv1.ContextFabricSubjectPullRequestReview]) != 0 {
+			t.Fatalf("teams [team-A]: served reviews %v, want none", got.nodes[contractsv1.ContextFabricSubjectPullRequestReview])
 		}
 	})
 	t.Run("a granted caller under a team that owns nothing sees no neighbour", func(t *testing.T) {
@@ -321,7 +324,7 @@ func TestLiveATeamNarrowingFloorsACohortOnlyWhereOwnershipIsMissing(t *testing.T
 const teamDiscoverReview = "pull_request_review:github:acme/svc:1:r1"
 
 // seedTeamDiscoverReview adds one pull-request review of R's github pull
-// request: a kind with no ownership path to a team.
+// request: it reaches a team through that pull request.
 func seedTeamDiscoverReview(t *testing.T, ctx context.Context, adapter *Adapter, orgID string) {
 	t.Helper()
 	review := contextfabric.SubjectRef{Kind: contractsv1.ContextFabricSubjectPullRequestReview, CanonicalID: teamDiscoverReview, Label: "review"}
