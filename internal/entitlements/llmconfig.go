@@ -182,7 +182,9 @@ func (c *Client) fetchLLMConfig(ctx context.Context, orgID string) (OrgLLMConfig
 	if err != nil {
 		return OrgLLMConfig{}, false, errUnavailable
 	}
-	request.Header.Set("Authorization", "Bearer "+c.token)
+	if !c.authorize(ctx, request) {
+		return OrgLLMConfig{}, false, errUnavailable
+	}
 	response, err := c.http.Do(request)
 	if err != nil {
 		return OrgLLMConfig{}, false, errUnavailable

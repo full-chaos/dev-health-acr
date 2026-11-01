@@ -109,7 +109,7 @@ func open(ctx context.Context, request buildRequest) (*Runtime, error) {
 		return nil, closeAfterError(runtime, fmt.Errorf("initialize ClickHouse runtime: %w", err))
 	}
 	runtime.closers = []func() error{clickhouse.close}
-	entitlement, err := request.factories.newEntitlement(request.config)
+	entitlement, err := request.factories.newEntitlement(request.config, entitlementDeps{logger: request.options.Logger, metrics: request.options.Metrics})
 	if err != nil {
 		return nil, closeAfterError(runtime, fmt.Errorf("initialize entitlement runtime: %w", err))
 	}

@@ -38,6 +38,8 @@ var (
 type Client struct {
 	baseURL  *url.URL
 	token    string
+	workload TokenSource
+	observe  func(ctx context.Context, credential, outcome string)
 	timeout  time.Duration
 	maxBody  int64
 	http     *http.Client
@@ -58,9 +60,12 @@ func New(config Config) (*Client, error) {
 	}
 	config.BaseURL = cloneURL(config.BaseURL)
 	config.ProxyURL = cloneURL(config.ProxyURL)
-	token, err := readToken(config.TokenFile)
-	if err != nil {
-		return nil, err
+	token := ""
+	if config.Workload == nil {
+		var err error
+		if token, err = readToken(config.TokenFile); err != nil {
+			return nil, err
+		}
 	}
 	transport, err := newTransport(config)
 	if err != nil {
@@ -69,6 +74,8 @@ func New(config Config) (*Client, error) {
 	return &Client{
 		baseURL:    config.BaseURL,
 		token:      token,
+		workload:   config.Workload,
+		observe:    config.Observe,
 		timeout:    config.Timeout,
 		maxBody:    config.MaxResponseBytes,
 		http:       &http.Client{Transport: transport, CheckRedirect: rejectRedirect},
@@ -128,7 +135,9 @@ func (c *Client) Check(ctx context.Context) error {
 	if err != nil {
 		return errUnavailable
 	}
-	request.Header.Set("Authorization", "Bearer "+c.token)
+	if !c.authorize(ctx, request) {
+		return errUnavailable
+	}
 	response, err := c.http.Do(request)
 	if err != nil {
 		return errUnavailable
@@ -159,7 +168,9 @@ func (c *Client) fetch(ctx context.Context, orgID string) (grants, error) {
 	if err != nil {
 		return grants{}, rejected(reasonTransport)
 	}
-	request.Header.Set("Authorization", "Bearer "+c.token)
+	if !c.authorize(ctx, request) {
+		return grants{}, rejected(reasonTransport)
+	}
 	response, err := c.http.Do(request)
 	if err != nil {
 		return grants{}, rejected(reasonTransport)
@@ -200,7 +211,9 @@ func (c *Client) OrganizationUnknown(ctx context.Context, orgID string) (bool, e
 	if err != nil {
 		return false, errUnavailable
 	}
-	request.Header.Set("Authorization", "Bearer "+c.token)
+	if !c.authorize(ctx, request) {
+		return false, errUnavailable
+	}
 	response, err := c.http.Do(request)
 	if err != nil {
 		return false, errUnavailable

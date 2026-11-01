@@ -205,7 +205,7 @@ func testBuildRequest(t *testing.T, events *[]string, failAt string) buildReques
 				}
 				return clickhouse, nil
 			},
-			newEntitlement: func(config.Config) (entitlementChecker, error) {
+			newEntitlement: func(config.Config, entitlementDeps) (entitlementChecker, error) {
 				*events = append(*events, "entitlement.open")
 				if failAt == "entitlement.open" {
 					return nil, errors.New("entitlement failed")
