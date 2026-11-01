@@ -1,0 +1,208 @@
+{
+  "schema_version": "fullstack_model_plan.v1",
+  "task_id": "i48-service-plan",
+  "goal": "I-48 Phase 1 live suite",
+  "repository_slug": "full-chaos/dev-health-web",
+  "min_evidence_expansions": 0,
+  "findings": [],
+  "recommended_checks": [],
+  "service": {
+    "questions": [
+      {
+        "question": "What is the status of full-chaos/dev-health-web?",
+        "delay_ms": {
+          "interpret": 3000,
+          "synthesize": 3500,
+          "phrase": 0
+        },
+        "interpretation": {
+          "shape": "single_subject",
+          "requested_judgment": "status",
+          "subject_terms": [
+            "full-chaos/dev-health-web"
+          ],
+          "time_context": {
+            "axis": "current"
+          },
+          "fact_requirements": [
+            {
+              "kind": "status"
+            }
+          ],
+          "clarification_needed": false
+        },
+        "synthesis": {
+          "status": "complete",
+          "direct_judgment": "The repository appears to be in progress.",
+          "current_state": "The status fact leans in progress.",
+          "strongest_pressures": [],
+          "limitations": [
+            "Only the status fact was read for this answer."
+          ],
+          "driver": {
+            "title": "Status reads in progress",
+            "summary": "The canonical status fact suggests the work is still in progress."
+          },
+          "deterministic_answer": "Placeholder prose. The server composes the served answer.",
+          "min_evidence_refs": 1
+        }
+      },
+      {
+        "question": "Hold: what is the status of full-chaos/dev-health-web?",
+        "delay_ms": {
+          "interpret": 40000,
+          "synthesize": 0,
+          "phrase": 0
+        },
+        "interpretation": {
+          "shape": "single_subject",
+          "requested_judgment": "status",
+          "subject_terms": [
+            "full-chaos/dev-health-web"
+          ],
+          "time_context": {
+            "axis": "current"
+          },
+          "fact_requirements": [
+            {
+              "kind": "status"
+            }
+          ],
+          "clarification_needed": false
+        },
+        "synthesis": {
+          "status": "complete",
+          "direct_judgment": "The repository appears to be in progress.",
+          "current_state": "The status fact leans in progress.",
+          "strongest_pressures": [],
+          "limitations": [
+            "Only the status fact was read for this answer."
+          ],
+          "driver": {
+            "title": "Status reads in progress",
+            "summary": "The canonical status fact suggests the work is still in progress."
+          },
+          "deterministic_answer": "Placeholder prose. The server composes the served answer.",
+          "min_evidence_refs": 1
+        }
+      },
+      {
+        "question": "Long: what is the status of full-chaos/dev-health-web?",
+        "delay_ms": {
+          "interpret": 30000,
+          "synthesize": 35000,
+          "phrase": 0
+        },
+        "interpretation": {
+          "shape": "single_subject",
+          "requested_judgment": "status",
+          "subject_terms": [
+            "full-chaos/dev-health-web"
+          ],
+          "time_context": {
+            "axis": "current"
+          },
+          "fact_requirements": [
+            {
+              "kind": "status"
+            }
+          ],
+          "clarification_needed": false
+        },
+        "synthesis": {
+          "status": "complete",
+          "direct_judgment": "The repository appears to be in progress.",
+          "current_state": "The status fact leans in progress.",
+          "strongest_pressures": [],
+          "limitations": [
+            "Only the status fact was read for this answer."
+          ],
+          "driver": {
+            "title": "Status reads in progress",
+            "summary": "The canonical status fact suggests the work is still in progress."
+          },
+          "deterministic_answer": "Placeholder prose. The server composes the served answer.",
+          "min_evidence_refs": 1
+        }
+      },
+      {
+        "question": "Again: what is the status of full-chaos/dev-health-web?",
+        "delay_ms": {
+          "interpret": 0,
+          "synthesize": 0,
+          "phrase": 0
+        },
+        "interpretation": {
+          "shape": "single_subject",
+          "requested_judgment": "status",
+          "subject_terms": [
+            "full-chaos/dev-health-web"
+          ],
+          "time_context": {
+            "axis": "current"
+          },
+          "fact_requirements": [
+            {
+              "kind": "status"
+            }
+          ],
+          "clarification_needed": false
+        },
+        "synthesis": {
+          "status": "complete",
+          "direct_judgment": "The repository appears to be in progress.",
+          "current_state": "The status fact leans in progress.",
+          "strongest_pressures": [],
+          "limitations": [
+            "Only the status fact was read for this answer."
+          ],
+          "driver": {
+            "title": "Status reads in progress",
+            "summary": "The canonical status fact suggests the work is still in progress."
+          },
+          "deterministic_answer": "Placeholder prose. The server composes the served answer.",
+          "min_evidence_refs": 1
+        }
+      },
+      {
+        "question": "Late: what is the status of full-chaos/dev-health-web?",
+        "delay_ms": {
+          "interpret": 0,
+          "synthesize": 50000,
+          "phrase": 0
+        },
+        "interpretation": {
+          "shape": "single_subject",
+          "requested_judgment": "status",
+          "subject_terms": [
+            "full-chaos/dev-health-web"
+          ],
+          "time_context": {
+            "axis": "current"
+          },
+          "fact_requirements": [
+            {
+              "kind": "status"
+            }
+          ],
+          "clarification_needed": false
+        },
+        "synthesis": {
+          "status": "complete",
+          "direct_judgment": "The repository appears to be in progress.",
+          "current_state": "The status fact leans in progress.",
+          "strongest_pressures": [],
+          "limitations": [
+            "Only the status fact was read for this answer."
+          ],
+          "driver": {
+            "title": "Status reads in progress",
+            "summary": "The canonical status fact suggests the work is still in progress."
+          },
+          "deterministic_answer": "Placeholder prose. The server composes the served answer.",
+          "min_evidence_refs": 1
+        }
+      }
+    ]
+  }
+}

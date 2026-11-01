@@ -111,7 +111,7 @@ type clientRouteRig struct {
 	token  string
 	model  *clientRouteModel
 	store  *memoryinvestigation.Store
-	logs   *bytes.Buffer
+	logs   *lockedBuffer
 	nextID int
 }
 
@@ -136,7 +136,7 @@ func newClientRouteRigWithAssembly(t *testing.T, fixture clientRouteFixture, edi
 	project := suppliedRouteProject()
 	model := &clientRouteModel{interpreted: fixture.interpreted}
 	store := memoryinvestigation.NewStore()
-	rig := &clientRouteRig{model: model, store: store, logs: &bytes.Buffer{}}
+	rig := &clientRouteRig{model: model, store: store, logs: &lockedBuffer{}}
 	var runtime contextfabric.ModelRuntime = model
 	if fixture.runtime != nil {
 		runtime = fixture.runtime(model)

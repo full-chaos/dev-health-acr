@@ -81,6 +81,13 @@ func (s *server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 	s.mu.Lock()
 	s.requests++
 	sequence := s.requests
+	serviceMode := len(request.Tools) == 0 && s.plan.Service != nil
+	if serviceMode {
+		s.mu.Unlock()
+		s.recordRequest(sequence, body, request)
+		s.handleService(w, r, request, sequence)
+		return
+	}
 	if s.toolNames == nil {
 		s.toolNames = map[string]string{}
 	}
