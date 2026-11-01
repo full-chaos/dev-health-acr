@@ -122,6 +122,7 @@ var ByID = map[string]Event{
 	"contextfabric.synthesis_status_override":             SynthesisStatusOverride,
 	"contextfabric.team_anchor_walk":                      TeamAnchorWalk,
 	"contextfabric.team_blockers_drivers":                 TeamBlockersDrivers,
+	"contextfabric.team_narrowing_general_read":           TeamNarrowingGeneralRead,
 	"contextfabric.terminal_save_skipped":                 TerminalSaveSkipped,
 	"contextfabric.window_binder_outcome":                 WindowBinderOutcome,
 	"contextfabric.window_canonicalization_outcome":       WindowCanonicalizationOutcome,
@@ -8132,6 +8133,62 @@ func (f TeamBlockersDriversFields) SlogArgs() []any {
 		"skipped_id_clash", f.SkippedIDClash,
 		"skipped_stale", f.SkippedStale,
 		"skipped_duplicate", f.SkippedDuplicate,
+		"request_id", contextfabric.SanitizeLogAttr(f.RequestID),
+	}
+}
+
+// TeamNarrowingGeneralReadFields is contextfabric.team_narrowing_general_read's generated typed construction interface
+// (CHAOS-5516): one Go field per Field TeamNarrowingGeneralRead.Fields declares in spec.go.
+type TeamNarrowingGeneralReadFields struct {
+	OrgID          string
+	RequestedTeams int
+	Decided        int
+	Excluded       int
+	Floor          string
+	RequestID      string
+	// constructed (CHAOS-5516 r1 fix): an UNEXPORTED marker, generated on
+	// every TeamNarrowingGeneralReadFields uniformly, set ONLY by NewTeamNarrowingGeneralReadFields below. A caller
+	// outside this package cannot set an unexported field via a composite
+	// literal -- not partially (one exported field set, the rest at their
+	// Go zero value) and not even by hand-setting every EXPORTED field --
+	// so this is the class fix for "a caller still assembles that event's
+	// field list": no composite literal built outside eventspec, complete or
+	// partial, can ever read as constructed.
+	constructed bool
+}
+
+// NewTeamNarrowingGeneralReadFields is the generated constructor for TeamNarrowingGeneralReadFields -- every
+// field TeamNarrowingGeneralRead.Fields declares is a required parameter.
+func NewTeamNarrowingGeneralReadFields(orgID string, requestedTeams int, decided int, excluded int, floor string, requestID string) TeamNarrowingGeneralReadFields {
+	return TeamNarrowingGeneralReadFields{
+		OrgID:          orgID,
+		RequestedTeams: requestedTeams,
+		Decided:        decided,
+		Excluded:       excluded,
+		Floor:          floor,
+		RequestID:      requestID,
+		constructed:    true,
+	}
+}
+
+// IsConstructed reports whether f was built by NewTeamNarrowingGeneralReadFields -- the ONE
+// exported way to read the unexported "constructed" marker from outside
+// this package. false for the Go zero value and for ANY composite literal
+// assembled elsewhere, complete or partial.
+func (f TeamNarrowingGeneralReadFields) IsConstructed() bool { return f.constructed }
+
+// SlogArgs returns TeamNarrowingGeneralRead's own declared fields as alternating slog
+// key/value pairs, in the SAME order spec.go declares them. Every
+// free-text string/[]string value is sanitized HERE, at its own
+// construction site inside this function's body -- the shape CHAOS-5544's
+// own instrument (TestNoUnsanitizedLogAttributeInContextFabric) requires.
+func (f TeamNarrowingGeneralReadFields) SlogArgs() []any {
+	return []any{
+		"org_id", contextfabric.SanitizeLogAttr(f.OrgID),
+		"requested_teams", f.RequestedTeams,
+		"decided", f.Decided,
+		"excluded", f.Excluded,
+		"floor", contextfabric.SanitizeLogAttr(f.Floor),
 		"request_id", contextfabric.SanitizeLogAttr(f.RequestID),
 	}
 }

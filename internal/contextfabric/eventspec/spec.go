@@ -5348,6 +5348,32 @@ var CohortKindFulltext = Event{
 	},
 }
 
+// TeamNarrowingGeneralRead (CHAOS-12327) is the Info line of one
+// DiscoverContext call under a requested team narrowing (scope.team_ids): how
+// many requested team ids narrowed, how many served subjects the reach rule
+// decided by ownership (falkorgraph/team_narrowing_discover.go), how many of
+// those it put out of scope (scope, never a denial), and whether the read was
+// floored because an ownership read it needed was absent, not current, or cut
+// (floor=team_narrowing_undecided; the cohort's pool_truncation_arms then name
+// team_narrowing_undecided too). Log-only: no wire value changes. Counts and a
+// closed value only, never an id.
+var TeamNarrowingGeneralRead = Event{
+	ID:                 "contextfabric.team_narrowing_general_read",
+	Msg:                "context_fabric: team narrowing general read",
+	Level:              LevelInfo,
+	Multiplicity:       MultiplicityZeroOrOnePerRequest,
+	Attribution:        []string{"org_id"},
+	BoundedAggregation: "at most one line per DiscoverContext call, and only when the request names a team narrowing.",
+	Fields: []Field{
+		{Key: "org_id", Type: FieldString, Presence: PresenceRequired},
+		{Key: "requested_teams", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "decided", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "excluded", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "floor", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: contextfabric.TeamNarrowingReadFloorVocabulary()},
+		{Key: "request_id", Type: FieldString, Presence: PresenceConditional, Applicability: requestIDApplicability},
+	},
+}
+
 // projectDeploymentWalkOutcome is the closed vocabulary of
 // ProjectDeploymentWalk's "outcome" field -- see
 // falkorgraph.ProjectDeploymentWalkOutcomeVocabulary, the producer's own list
@@ -5714,6 +5740,7 @@ var All = []Event{
 	OwningTeamsTruncated,
 	ConfirmedNeedLedger,
 	CohortKindFulltext,
+	TeamNarrowingGeneralRead,
 	ProjectDeploymentWalk,
 	RepositoryWorkItemWalk,
 	OwnershipRouting,

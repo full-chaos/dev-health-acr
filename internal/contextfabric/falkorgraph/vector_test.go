@@ -1158,6 +1158,8 @@ type recordingTelemetry struct {
 
 	// cohortKindBases records every RecordCohortKindBasis call verbatim.
 	cohortKindBases []cohortKindBasisRecord
+	// teamNarrowingReads records every RecordTeamNarrowingGeneralRead call (CHAOS-12327).
+	teamNarrowingReads []teamNarrowingReadRecord
 
 	// cohortKindCensuses records every RecordCohortKindCensus call verbatim
 	// (CHAOS-5654).
@@ -1351,6 +1353,17 @@ func (r *recordingTelemetry) RecordCohortKindCensus(_ context.Context, orgID str
 		orgID: orgID, decision: decision, memberKind: memberKind, kinds: append([]string(nil), kinds...),
 		poolSize: poolSize, poolBound: poolBound, truncated: truncated, readErr: readErr,
 	})
+}
+
+// teamNarrowingReadRecord is one RecordTeamNarrowingGeneralRead call.
+type teamNarrowingReadRecord struct {
+	orgID                             string
+	requestedTeams, decided, excluded int
+	floor                             contextfabric.TeamNarrowingReadFloor
+}
+
+func (r *recordingTelemetry) RecordTeamNarrowingGeneralRead(_ context.Context, orgID string, requestedTeams, decided, excluded int, floor contextfabric.TeamNarrowingReadFloor) {
+	r.teamNarrowingReads = append(r.teamNarrowingReads, teamNarrowingReadRecord{orgID: orgID, requestedTeams: requestedTeams, decided: decided, excluded: excluded, floor: floor})
 }
 
 func (r *recordingTelemetry) RecordCohortKindFulltext(_ context.Context, orgID string, decision CohortKindFulltextDecision, memberKind contextfabric.SubjectKind, members int, truncated bool, addedByKindArm, duplicatesWithGeneral int, readErr error) {

@@ -1,0 +1,19 @@
+# Test stand-in for the operator root compose: only what acr.compose.yml and the auth-workload overlay name.
+services:
+  postgres:
+    image: postgres:18-alpine@sha256:a1d02e4bd40c94d3bf2bdd3678c137388e76d9efcd23c285e9429d336a834b44
+    networks: [dev-health]
+  clickhouse:
+    image: clickhouse/clickhouse-server@sha256:0000000000000000000000000000000000000000000000000000000000000000
+    networks: [dev-health]
+  auth-service:
+    image: auth-service:test
+    profiles: [auth]
+    networks: [auth_plane]
+  auth-workload-seed:
+    image: auth-migrate:test
+    profiles: [auth]
+    networks: [auth_plane]
+networks:
+  dev-health: {}
+  auth_plane: {}

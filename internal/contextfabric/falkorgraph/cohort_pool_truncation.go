@@ -93,6 +93,12 @@ const (
 	// that the same event is ALSO a lost member, and Partial beside
 	// Complete=true is a contradiction a reader cannot resolve.
 	CohortPoolTruncationArmEndpointLookupFailed CohortPoolTruncationArm = "endpoint_lookup_failed"
+	// CohortPoolTruncationArmTeamNarrowingUndecided (CHAOS-12327): under a
+	// requested team narrowing, the ownership needed to decide a candidate the
+	// rest of the request admits was absent, not current, or cut
+	// (team_narrowing_discover.go). Like a failed lookup, NO census covers it:
+	// a census fetches nodes, not their ownership, so the pool is truncated.
+	CohortPoolTruncationArmTeamNarrowingUndecided CohortPoolTruncationArm = "team_narrowing_undecided"
 )
 
 // CohortPoolTruncationBasisVocabulary returns every declared decision member,
@@ -121,6 +127,7 @@ func CohortPoolTruncationArmVocabulary() []CohortPoolTruncationArm {
 		CohortPoolTruncationArmExactNameCensus,
 		CohortPoolTruncationArmKindCensus,
 		CohortPoolTruncationArmEndpointLookupFailed,
+		CohortPoolTruncationArmTeamNarrowingUndecided,
 	}
 }
 
@@ -158,7 +165,7 @@ func CohortPoolTruncationArmVocabulary() []CohortPoolTruncationArm {
 // census branch. Those combinations are still named below rather than left to
 // a default, because a classification over a closed space is an allow-list and
 // a future caller that reaches one should inherit a stated answer.
-func cohortPoolTruncation(fulltextTruncated, hopWalkTruncated, exactNameTruncated, kindCensusTruncated, endpointLookupFailed, censusCovers bool) (CohortPoolTruncationBasis, []CohortPoolTruncationArm, bool) {
+func cohortPoolTruncation(fulltextTruncated, hopWalkTruncated, exactNameTruncated, kindCensusTruncated, endpointLookupFailed, teamNarrowingUndecided, censusCovers bool) (CohortPoolTruncationBasis, []CohortPoolTruncationArm, bool) {
 	arms := make([]CohortPoolTruncationArm, 0, len(CohortPoolTruncationArmVocabulary()))
 	if fulltextTruncated {
 		arms = append(arms, CohortPoolTruncationArmFulltext)
@@ -175,13 +182,16 @@ func cohortPoolTruncation(fulltextTruncated, hopWalkTruncated, exactNameTruncate
 	if endpointLookupFailed {
 		arms = append(arms, CohortPoolTruncationArmEndpointLookupFailed)
 	}
+	if teamNarrowingUndecided {
+		arms = append(arms, CohortPoolTruncationArmTeamNarrowingUndecided)
+	}
 	switch {
 	case len(arms) == 0:
 		return CohortPoolTruncationNone, arms, false
 	case exactNameTruncated, kindCensusTruncated:
 		// A census is cut, so it covers nothing -- including itself.
 		return CohortPoolTruncationTruncated, arms, true
-	case endpointLookupFailed:
+	case endpointLookupFailed, teamNarrowingUndecided:
 		// NOT coverable by the census. The census covers a BOUNDED arm -- a
 		// subject that exists and was simply not fetched, which a term-free
 		// org-wide fetch will return anyway. A failed read is different: the
