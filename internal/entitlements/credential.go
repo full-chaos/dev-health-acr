@@ -24,7 +24,7 @@ func (c *Client) authorize(ctx context.Context, request *http.Request) bool {
 		c.record(ctx, credentialServiceToken, outcomeSent)
 		return true
 	}
-	token, err := c.workload.Token(ctx, workloadAudience)
+	token, err := c.workload.Token(request.Context(), workloadAudience)
 	if err != nil || token == "" {
 		c.record(ctx, credentialWorkload, outcomeTokenFailed)
 		return false

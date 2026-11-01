@@ -22,13 +22,16 @@ type fakeTokenSource struct {
 	err       error
 	audiences []string
 	scopes    [][]string
+	deadlines []bool
 }
 
-func (f *fakeTokenSource) Token(_ context.Context, audience string, scope ...string) (string, error) {
+func (f *fakeTokenSource) Token(ctx context.Context, audience string, scope ...string) (string, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.audiences = append(f.audiences, audience)
 	f.scopes = append(f.scopes, scope)
+	_, hasDeadline := ctx.Deadline()
+	f.deadlines = append(f.deadlines, hasDeadline)
 	return f.token, f.err
 }
 
@@ -100,6 +103,11 @@ func TestWorkloadCredentialSendsTheMintedTokenOnEveryCall(t *testing.T) {
 	for _, request := range got {
 		if request.authorization != "Bearer "+fakeWorkloadToken {
 			t.Fatalf("%s sent %q, want the workload token", request.path, request.authorization)
+		}
+	}
+	for i, bounded := range source.deadlines {
+		if !bounded {
+			t.Fatalf("token request %d ran without the call's timeout: a slow mint would outlive the entitlement timeout", i)
 		}
 	}
 	for i, audience := range source.audiences {
