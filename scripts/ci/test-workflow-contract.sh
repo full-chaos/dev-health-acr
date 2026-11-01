@@ -3355,6 +3355,12 @@ assert_check_fails 'the contracts job heavy gate is replaced by if: false' check
 vm="$tmpdir/vm-job-scripts-if-added.yml"; after_job_header "$workflow" "$vm" scripts "    if: needs.plan.outputs.heavy == 'true'"
 assert_check_fails 'the scripts job gains the heavy gate' check_vendored_lifecycle_contract_wiring "$vm"
 
+for job in scripts contracts; do
+  vm="$tmpdir/vm-job-$job-renamed.yml"
+  awk -v header="  $job:" -v renamed="  ${job}-renamed:" '$0 == header { print renamed; next } { print }' "$workflow" > "$vm"
+  assert_check_fails "the $job job holding the pinned step is renamed" check_vendored_lifecycle_contract_wiring "$vm"
+done
+
 # (o) remove the pin's full-SHA requirement, restoring the floating-ref hole.
 pin_regex_removed="$tmpdir/pin-regex-removed.yml"
 grep -vF '[0-9a-f]{40}' "$workflow" > "$pin_regex_removed"
