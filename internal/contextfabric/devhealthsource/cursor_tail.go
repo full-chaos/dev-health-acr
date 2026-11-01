@@ -20,6 +20,12 @@ const cursorSentinelKey = "\U0010FFFF\U0010FFFF\U0010FFFF\U0010FFFF"
 // cursor, so one limit holds for every cursor this package encodes.
 const cursorAckHeadroom = 16
 
+// cursorCatalogHeadroom reserves the bytes of the project catalog field
+// (project_catalog.go), whether the source writes it or not: a cursor that lost
+// the field would restart a refresh pass from its first row. Real row keys are
+// far below the bound.
+const cursorCatalogHeadroom = 20
+
 // maxOverlongPages bounds the pages of over-long keys one call walks past.
 const maxOverlongPages = 1000
 
@@ -32,7 +38,7 @@ var errCursorKeyTooLong = fmt.Errorf("devhealthsource: the last row key exceeds 
 // cursorKeyFits reports whether a cursor at (at, key) is within the contract's
 // cursor bound, measured with the encoder that produces it.
 func cursorKeyFits(space string, at time.Time, key string) bool {
-	encoded, err := encodeCursorIn(space, cursorState{Since: at, After: key, Ack: strings.Repeat("0", cursorAckHeadroom)})
+	encoded, err := encodeCursorIn(space, cursorState{Since: at, After: key, Ack: strings.Repeat("0", cursorAckHeadroom), ProjectCatalog: strings.Repeat("0", cursorCatalogHeadroom)})
 	return err == nil && len(encoded) <= contractsv1.ContextFabricProjectionCursorMaxLength
 }
 

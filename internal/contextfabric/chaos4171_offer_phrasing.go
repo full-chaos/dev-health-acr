@@ -101,8 +101,9 @@ const (
 	OfferPhrasingCallFailed OfferPhrasingOutcome = "call_failed"
 	// OfferPhrasingWithheld: no model may or can serve this turn -- the
 	// deployment model is withheld and the organization has no model of its
-	// own, or no usable runtime is configured -- so no call was made.
-	// Structural labels ship unchanged.
+	// own, no usable runtime is configured, or the turn runs on the caller's
+	// own model (CHAOS-12453) -- so no call was made. Structural labels ship
+	// unchanged.
 	OfferPhrasingWithheld OfferPhrasingOutcome = "withheld_platform_model"
 )
 
@@ -348,7 +349,11 @@ func classifyOfferPhrasingDraft(input StructureOfferPhrasingInput, draft Structu
 // Engine dependency's convention that "nothing to do" is not an outcome.
 // e.offerPhraser == nil (no phrasing model configured) degrades
 // identically -- Investigate stays byte-identical to before this ticket.
-func (e *Engine) applyOfferPhrasing(ctx context.Context, principal storage.Principal, requestID string, needs *contractsv1.ContextFabricStructureNeeds) *contractsv1.ContextFabricStructureNeeds {
+//
+// A turn on the caller's own model makes no service model call (CHAOS-12453):
+// its first call and its write-back are withheld here, whoever would have paid,
+// and the caller's model can phrase the structural labels itself.
+func (e *Engine) applyOfferPhrasing(ctx context.Context, principal storage.Principal, request InvestigationRequest, needs *contractsv1.ContextFabricStructureNeeds) *contractsv1.ContextFabricStructureNeeds {
 	if needs == nil || e.offerPhraser == nil {
 		return needs
 	}
@@ -356,7 +361,13 @@ func (e *Engine) applyOfferPhrasing(ctx context.Context, principal storage.Princ
 	if len(options) == 0 {
 		return needs
 	}
-	result := e.offerPhraser.Phrase(ctx, principal, StructureOfferPhrasingInput{Options: options, RequestID: requestID})
+	if clientSynthesisRequested(request) {
+		if e.telemetry != nil {
+			e.telemetry.RecordOfferPhrasing(ctx, principal, OfferPhrasingWithheld)
+		}
+		return needs
+	}
+	result := e.offerPhraser.Phrase(ctx, principal, StructureOfferPhrasingInput{Options: options, RequestID: request.RequestID})
 	if e.telemetry != nil {
 		e.telemetry.RecordOfferPhrasing(ctx, principal, result.Outcome)
 	}

@@ -1,0 +1,244 @@
+package devhealthsource
+
+import (
+	"context"
+	"encoding/base64"
+	"encoding/binary"
+	"fmt"
+	"log/slog"
+	"strconv"
+	"strings"
+	"time"
+
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
+	"github.com/full-chaos/dev-health-acr/internal/contextpacket"
+	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
+)
+
+// CHAOS-12410: what the membership refresh reads of the project catalog.
+//
+// Membership resolution depends only on (provider, id, project_key)
+// (resolvedProjectsSubquery), but projects.last_synced moves on every catalog
+// write, whether or not the row changed. Stamping subjects with it re-emitted
+// nearly every subject on every project sync. That stamp keeps its meaning
+// ("a sync saw this row"), and the ownership cursor keeps reading it, so its
+// self-healing stays. Only the refresh selection changes: a per-organization
+// digest of those tuples, carried on the cursor, says whether the catalog
+// changed at all.
+//
+//   - Digest unchanged: no refresh, and no presence read.
+//   - Digest changed, or absent on a cursor that has a position: every subject
+//     of the organization is stamped at refreshAt, one fixed time just past
+//     the cursor. The digest cannot name the changed project, so this is the
+//     whole set, once.
+//   - From zero: the main tables state every subject, so nothing is owed.
+//   - Once a day, whatever the digest says: the same full refresh. This table
+//     feeds authorization, and a row that lands behind the cursor past the
+//     overlap, a retraction included, moves no digest. It must not wait for an
+//     unrelated write, so repair is scheduled.
+//   - A refresh still ahead of the cursor keeps its stamp, whatever else
+//     happens: none of its rows has been read, so they will read the current
+//     catalog when the cursor reaches them. Renewing it would let a lagging
+//     cursor chase the clock and never finish.
+//
+// The digest and the position are one cursor value, so they commit together.
+// A crash before the write leaves the old cursor: its digest mismatches and the
+// refresh runs again. Everything that loses the digest (a cursor with no room,
+// a cursor from before this field) reads as absent: a full refresh, never a
+// skip. The failure direction is more work, never a missing change.
+
+// projectCatalogMarker names the digest read.
+const projectCatalogMarker = "AS project_catalog_digest"
+
+// projectCatalogStatement is one aggregate row in bounded memory: an XOR of
+// row hashes over the current rows, folded with their count, and the server's
+// time, so refreshAt is on the clock the stamps are on.
+const projectCatalogStatement = `SELECT toString(cityHash64(groupBitXor(sipHash64(provider, id, ifNull(project_key, ''))), count())) ` + projectCatalogMarker + `, now64(3, 'UTC')
+FROM projects FINAL
+WHERE org_id = {org_id:String}`
+
+// projectCatalogFullRefreshEvery is the longest a subject goes without being
+// re-stated. A code constant: the repair is not an option to turn off.
+const projectCatalogFullRefreshEvery = 24 * time.Hour
+
+// projectCatalog is the cursor's record of the catalog the refresh followed.
+// refreshAt is the last full statement of every subject: the fixed stamp of a
+// refresh, or the start of a from-zero walk. owed says refreshAt is a refresh
+// the refresh tables must run, not a walk the main tables ran.
+type projectCatalog struct {
+	digest    uint64
+	refreshAt time.Time
+	owed      bool
+}
+
+// owedAt is the stamp this call's refresh reads run at, zero when none is owed.
+func (c projectCatalog) owedAt() time.Time {
+	if !c.owed {
+		return time.Time{}
+	}
+	return c.refreshAt
+}
+
+// encode is the cursor field: as short as it can be, because a cursor is
+// bounded and its row key needs the room.
+func (c projectCatalog) encode() string {
+	var raw [8]byte
+	binary.BigEndian.PutUint64(raw[:], c.digest)
+	separator := projectCatalogWalked
+	if c.owed {
+		separator = projectCatalogOwed
+	}
+	return base64.RawURLEncoding.EncodeToString(raw[:]) + separator + strconv.FormatInt(c.refreshAt.UnixMilli(), 36)
+}
+
+// The separator of the cursor field says whether the stamp is owed.
+const (
+	projectCatalogOwed   = "."
+	projectCatalogWalked = "~"
+)
+
+// decodeProjectCatalog reports false for a field it cannot read: absent.
+func decodeProjectCatalog(field string) (projectCatalog, bool) {
+	head, tail, owed := strings.Cut(field, projectCatalogOwed)
+	if !owed {
+		var walked bool
+		if head, tail, walked = strings.Cut(field, projectCatalogWalked); !walked {
+			return projectCatalog{}, false
+		}
+	}
+	raw, err := base64.RawURLEncoding.DecodeString(head)
+	if err != nil || len(raw) != 8 {
+		return projectCatalog{}, false
+	}
+	milli, err := strconv.ParseInt(tail, 36, 64)
+	if err != nil {
+		return projectCatalog{}, false
+	}
+	return projectCatalog{digest: binary.BigEndian.Uint64(raw), refreshAt: time.UnixMilli(milli).UTC(), owed: owed}, true
+}
+
+// decideProjectCatalog is the whole rule. position is the cursor's position;
+// fromZero says the main tables are stating every subject in this walk.
+func decideProjectCatalog(field string, position time.Time, fromZero bool, digest uint64, now time.Time) (decided projectCatalog, reason string) {
+	if fromZero {
+		return projectCatalog{digest: digest, refreshAt: now}, ""
+	}
+	stored, ok := decodeProjectCatalog(field)
+	switch {
+	case !ok:
+		reason = "digest_absent"
+	case stored.owed && position.Before(stored.refreshAt):
+		stored.digest = digest
+		return stored, ""
+	case stored.digest != digest:
+		reason = "catalog_changed"
+	case !now.Before(stored.refreshAt.Add(projectCatalogFullRefreshEvery)):
+		reason = "daily"
+	default:
+		return stored, ""
+	}
+	// Strictly past the position, or the keyset would leave the rows behind
+	// the cursor and the refresh would be a skip.
+	if !now.After(position) {
+		now = position.Add(time.Millisecond)
+	}
+	return projectCatalog{digest: digest, refreshAt: now.Truncate(time.Millisecond).Add(time.Millisecond), owed: true}, reason
+}
+
+type projectRefreshKey struct{}
+
+// withProjectRefresh gives this call's refresh reads the refresh stamp, so
+// every read of the call sees it, whichever cursor value it runs from.
+func withProjectRefresh(ctx context.Context, at time.Time) context.Context {
+	return context.WithValue(ctx, projectRefreshKey{}, at)
+}
+
+func projectRefreshFrom(ctx context.Context) time.Time {
+	at, _ := ctx.Value(projectRefreshKey{}).(time.Time)
+	return at
+}
+
+// projectRefreshArm is the arms of the membership change subquery: every
+// subject of the organization at the refresh stamp, which is every subject
+// with a presence row and every subject with transition history. Presence
+// alone is not enough: a final REMOVE takes a subject out of the view, and that
+// is the retraction a late row must not lose. Empty when no refresh is owed, or
+// when the cursor is already past it.
+func projectRefreshArm(cursor cursorState, refreshAt time.Time) string {
+	if refreshAt.IsZero() || cursor.Since.After(refreshAt) {
+		return ""
+	}
+	stamp := refreshAt.UnixMilli()
+	return fmt.Sprintf(`
+    UNION ALL
+    SELECT m.repo_id AS repo_id, m.subject_id AS subject_id, fromUnixTimestamp64Milli(toInt64(%[1]d), 'UTC') AS stamp
+    FROM project_membership_presence AS m
+    WHERE m.org_id = {org_id:String} AND m.subject_kind = 'work_item'
+    UNION ALL
+    SELECT repo_id, subject_id, fromUnixTimestamp64Milli(toInt64(%[1]d), 'UTC') AS stamp
+    FROM project_membership_transitions
+    WHERE org_id = {org_id:String} AND subject_kind = 'work_item'`, stamp)
+}
+
+func readProjectCatalogDigest(ctx context.Context, client contextpacket.ClickHouseQueryClient, orgID string) (uint64, time.Time, error) {
+	rows, err := client.Query(ctx, projectCatalogStatement, []contextpacket.ClickHouseBinding{{Name: "org_id", Value: orgID}})
+	if err != nil {
+		return 0, time.Time{}, err
+	}
+	defer rows.Close()
+	if !rows.Next() {
+		if err := rows.Err(); err != nil {
+			return 0, time.Time{}, err
+		}
+		return 0, time.Time{}, fmt.Errorf("devhealthsource: the project catalog digest read returned no row")
+	}
+	var text string
+	var now time.Time
+	if err := rows.Scan(&text, &now); err != nil {
+		return 0, time.Time{}, err
+	}
+	digest, err := strconv.ParseUint(text, 10, 64)
+	if err != nil {
+		return 0, time.Time{}, fmt.Errorf("devhealthsource: the project catalog digest does not parse: %w", err)
+	}
+	return digest, now.UTC(), rows.Err()
+}
+
+// projectCatalogFor reads the digest and decides this call's catalog. A failed
+// read fails the call: nothing is skipped and nothing moves.
+func (p sourcePlan) projectCatalogFor(ctx context.Context, checkpoint contextfabric.ProjectionCheckpoint) (projectCatalog, string, error) {
+	orgID := strings.TrimSpace(checkpoint.OrgID)
+	digest, now, err := readProjectCatalogDigest(ctx, p.client, orgID)
+	if err != nil {
+		return projectCatalog{}, "", fmt.Errorf("devhealthsource: read the project catalog digest: %w", err)
+	}
+	state, err := decodeCursor(checkpoint.Cursor)
+	if err != nil {
+		return projectCatalog{}, "", err
+	}
+	fromZero := state.Since.IsZero() || state.Dim != nil || state.Space != p.cursorSpace()
+	decided, reason := decideProjectCatalog(state.ProjectCatalog, state.Since, fromZero, digest, now)
+	return decided, reason, nil
+}
+
+// carried writes the catalog on a cursor this call hands back. Every fact
+// cursor reserves the room (cursorCatalogHeadroom), so the field does not drop
+// and restart a pass. Should it ever not fit, the position survives and the
+// field reads as absent: one more full refresh, never a skip. A dimension
+// cursor has no room by design.
+func (c projectCatalog) carried(ctx context.Context, cursor string) string {
+	state, err := decodeCursor(cursor)
+	if err != nil || state.Dim != nil || state.Space == "" {
+		return cursor
+	}
+	state.ProjectCatalog = c.encode()
+	next, err := encodeCursorIn(state.Space, state)
+	if err != nil {
+		return cursor
+	}
+	if len(next) > contractsv1.ContextFabricProjectionCursorMaxLength {
+		slog.WarnContext(ctx, "context fabric: no cursor room for the project catalog digest, a full membership refresh follows")
+		return cursor
+	}
+	return next
+}

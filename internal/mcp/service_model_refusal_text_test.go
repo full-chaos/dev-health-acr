@@ -12,9 +12,8 @@ import (
 // Every 403 feature_not_enabled reason of the service-model gate has a fixed
 // refusal text. The gate refuses the caller-model path (a supplied
 // interpretation with synthesis "client") for every reason except
-// service_model_not_entitled, because acr's own phrasing still binds a model on
-// it. A text must therefore point to the caller-model path only where that
-// path is served.
+// service_model_not_entitled. A text must therefore point to the caller-model
+// path only where that path is served.
 func TestServiceModelRefusalTextsNameTheCallerModelPathOnlyWhereItIsServed(t *testing.T) {
 	for _, tc := range []struct {
 		reason          string
