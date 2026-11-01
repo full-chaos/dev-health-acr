@@ -221,7 +221,7 @@ WHERE org_id = $1 AND credential_id = $2
 	// CHAOS-12124: revoking a browser credential revokes its whole family
 	// (every member credential and its refresh tokens), in this transaction.
 	if credential.Provenance.ClientClass == string(storage.CredentialClientClassBrowser) && credential.Provenance.FamilyID != "" {
-		if _, err := revokeBrowserFamilyTx(ctx, tx, s.audit, input.OrgID, credential.Provenance.FamilyID, "member_revoked", input.ActorID, now); err != nil {
+		if _, err := revokeBrowserFamilyTx(ctx, tx, s.audit, input.OrgID, credential.Provenance.FamilyID, "member_revoked", input.ActorID, credentiallifecycle.RevocationActor(input), now); err != nil {
 			return contractsv1.ClientCredential{}, err
 		}
 	}

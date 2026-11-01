@@ -164,26 +164,42 @@ func (s *credentialStore) revokeCredential(ctx context.Context, input storage.Cr
 		return contractsv1.ClientCredential{}, storage.ErrConflict
 	}
 	now := s.now().UTC()
-	if err := s.recordMutation(ctx, withRevocationDetails(credentialRevokedEvent(record.Metadata, input.ActorID, now), input), nil, credentiallifecycle.Facts{Kind: credentiallifecycle.KindRevoked, Credential: record.Metadata, At: now, Actor: credentiallifecycle.RevocationActor(input)}); err != nil {
-		return contractsv1.ClientCredential{}, err
-	}
-	record.Metadata.RevokedAt = ptrTime(now)
-	s.byID[input.CredentialID] = cloneRecord(record)
-	// CHAOS-12124: revoking a browser credential revokes its whole family.
+	// The actor is mapped once from the input and carried to every member of
+	// the family (CHAOS-12124: revoking a browser credential revokes its whole
+	// family). Every row is written first and the state applied after, so a
+	// failure at any step changes nothing.
+	actor := credentiallifecycle.RevocationActor(input)
+	ids := []string{input.CredentialID}
+	events := map[string]storage.AuditEvent{input.CredentialID: withRevocationDetails(credentialRevokedEvent(record.Metadata, input.ActorID, now), input)}
 	if familyID, ok := browserFamilyOf(record.Metadata); ok {
+		var siblings []string
 		for id, member := range s.byID {
-			if member.Metadata.OrgID != input.OrgID || member.Metadata.Provenance.FamilyID != familyID || member.Metadata.RevokedAt != nil {
+			if id == input.CredentialID || member.Metadata.OrgID != input.OrgID || member.Metadata.Provenance.FamilyID != familyID || member.Metadata.RevokedAt != nil {
 				continue
 			}
 			event := credentialRevokedEvent(member.Metadata, input.ActorID, now)
 			event.Metadata = map[string]any{"family_id": familyID, "family_revoke_reason": "member_revoked"}
-			if err := s.recordMutation(ctx, event, nil, credentiallifecycle.Facts{Kind: credentiallifecycle.KindRevoked, Credential: member.Metadata, At: now, Actor: credentiallifecycle.Actor{Type: credentiallifecycle.ActorUser, Ref: input.ActorID}}); err != nil {
-				return contractsv1.ClientCredential{}, err
-			}
-			member.Metadata.RevokedAt = ptrTime(now)
-			s.byID[id] = cloneRecord(member)
+			events[id] = event
+			siblings = append(siblings, id)
+		}
+		slices.Sort(siblings)
+		ids = append(ids, siblings...)
+	}
+	ledgerMark, eventMark := s.audit.ledger.Len(), s.audit.eventCount()
+	for _, id := range ids {
+		facts := credentiallifecycle.Facts{Kind: credentiallifecycle.KindRevoked, Credential: s.byID[id].Metadata, At: now, Actor: actor}
+		if err := s.recordMutation(ctx, events[id], nil, facts); err != nil {
+			s.audit.ledger.TruncateTo(ledgerMark)
+			s.audit.truncateEvents(eventMark)
+			return contractsv1.ClientCredential{}, err
 		}
 	}
+	for _, id := range ids {
+		member := s.byID[id]
+		member.Metadata.RevokedAt = ptrTime(now)
+		s.byID[id] = cloneRecord(member)
+	}
+	record.Metadata.RevokedAt = ptrTime(now)
 	return cloneCredential(record.Metadata), nil
 }
 

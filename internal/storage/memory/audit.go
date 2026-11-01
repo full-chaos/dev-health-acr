@@ -217,3 +217,19 @@ func (s *AuditStore) LifecycleOutbox() []storage.LifecycleOutboxRow {
 	}
 	return s.ledger.Rows()
 }
+
+func (s *AuditStore) eventCount() int {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return len(s.events)
+}
+
+// truncateEvents drops the audit rows written after the first n, so a failed
+// multi-credential mutation leaves no partial trail.
+func (s *AuditStore) truncateEvents(n int) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if n >= 0 && n < len(s.events) {
+		s.events = s.events[:n]
+	}
+}

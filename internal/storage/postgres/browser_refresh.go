@@ -271,10 +271,14 @@ SELECT credential_id, consumed_at FROM acr.browser_refresh_tokens WHERE token_ha
 // credential still live, writing one credential_revoked audit row each. It
 // returns the number of credentials it revoked.
 func (s *BrowserRefreshStore) revokeBrowserFamilyTx(ctx context.Context, tx *sql.Tx, orgID, familyID, reason, actorID string, now time.Time) (int, error) {
-	return revokeBrowserFamilyTx(ctx, tx, s.audit, orgID, familyID, reason, actorID, now)
+	// The refresh paths (member_revoked, reuse, sign_out) act as the refresh grant:
+	// a user actor named by the grant's actor id, as their audit rows record.
+	return revokeBrowserFamilyTx(ctx, tx, s.audit, orgID, familyID, reason, actorID, credentiallifecycle.Actor{Type: credentiallifecycle.ActorUser, Ref: actorID}, now)
 }
 
-func revokeBrowserFamilyTx(ctx context.Context, tx *sql.Tx, audit *AuditStore, orgID, familyID, reason, actorID string, now time.Time) (int, error) {
+// revokeBrowserFamilyTx writes every sibling event with the one actor the caller
+// mapped: nothing here rebuilds an actor from the actor id.
+func revokeBrowserFamilyTx(ctx context.Context, tx *sql.Tx, audit *AuditStore, orgID, familyID, reason, actorID string, actor credentiallifecycle.Actor, now time.Time) (int, error) {
 	if _, err := tx.ExecContext(ctx, `
 UPDATE acr.browser_token_families SET revoked_at = $2, revoked_reason = $3
 WHERE family_id = $1 AND revoked_at IS NULL`, familyID, now, reason); err != nil {
@@ -320,7 +324,7 @@ WHERE org_id = $1::uuid AND family_id = $2 AND revoked_at IS NULL`, orgID, famil
 		if err := audit.record(ctx, tx, event); err != nil {
 			return 0, err
 		}
-		if err := audit.appendLifecycle(ctx, tx, credentiallifecycle.Facts{Kind: credentiallifecycle.KindRevoked, Credential: member, At: now, Actor: credentiallifecycle.Actor{Type: credentiallifecycle.ActorUser, Ref: actorID}}); err != nil {
+		if err := audit.appendLifecycle(ctx, tx, credentiallifecycle.Facts{Kind: credentiallifecycle.KindRevoked, Credential: member, At: now, Actor: actor}); err != nil {
 			return 0, err
 		}
 	}
