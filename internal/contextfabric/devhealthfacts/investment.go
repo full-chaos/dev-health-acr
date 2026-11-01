@@ -61,6 +61,11 @@ func (p *InvestmentProvider) LoadPrerequisites(ctx context.Context, principal st
 	if err != nil {
 		return ctx, err
 	}
+	if projectOnlyWithheld(principal) {
+		// No project, organization or unit read is served to a project-only
+		// caller, so no membership scope is loaded for one.
+		return ctx, nil
+	}
 	_, unitListing := contextfabric.InvestmentUnitsFrom(ctx)
 	for _, subject := range query.Subjects {
 		// An organization reads the scope only for its unit listing.
@@ -181,7 +186,7 @@ func (p *InvestmentProvider) ReadFacts(ctx context.Context, principal storage.Pr
 		}
 	}
 
-	if projectSubjects := subjectsOfKind(query.Subjects, contextfabric.SubjectProject); len(projectSubjects) > 0 {
+	if projectSubjects := subjectsOfKind(query.Subjects, contextfabric.SubjectProject); len(projectSubjects) > 0 && !projectOnlyWithheld(principal) {
 		// A project's investment is ONLY the canonical theme mix (work_unit_investments,
 		// the Jev categorization; CHAOS-9195, D5932). The legacy per-team
 		// (investment_area, project_stream, day) rows of investment_metrics_daily (the
@@ -224,7 +229,7 @@ func (p *InvestmentProvider) ReadFacts(ctx context.Context, principal storage.Pr
 	}
 
 	orgRestricted, orgUnattributedOnly := false, false
-	if orgSubjects := subjectsOfKind(query.Subjects, contextfabric.SubjectOrganization); len(orgSubjects) > 0 {
+	if orgSubjects := subjectsOfKind(query.Subjects, contextfabric.SubjectOrganization); len(orgSubjects) > 0 && !projectOnlyWithheld(principal) {
 		rejected, restricted, unattributedOnly, scanErr := p.readOrganizationThemeMix(ctx, principal, orgID, orgSubjects, &facts, timeBound)
 		if scanErr != nil {
 			return contextfabric.FactProviderResult{}, readFailure("query organization theme mix", scanErr)
@@ -243,7 +248,7 @@ func (p *InvestmentProvider) ReadFacts(ctx context.Context, principal storage.Pr
 				// Only the caller's own organization, one listing, and never for
 				// a repository-bound grant (the organization fact is withheld
 				// for it too: a partial total is not an organization's).
-				if len(ownOrganization) == 0 || subject.CanonicalID != ownOrganization[0].CanonicalID || sourceHealthRestricted(principal) {
+				if len(ownOrganization) == 0 || subject.CanonicalID != ownOrganization[0].CanonicalID || sourceHealthRestricted(principal) || projectOnlyWithheld(principal) {
 					continue
 				}
 				unitFacts, more, unitErr := p.readInvestmentUnits(ctx, orgID, subject, orgID, unitsRequest, timeBound)

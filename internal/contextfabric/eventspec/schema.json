@@ -2074,6 +2074,11 @@
         "presence": "required"
       },
       {
+        "key": "legacy_source_state_words_served",
+        "type": "bool",
+        "presence": "required"
+      },
+      {
         "key": "outcome_rows_total",
         "type": "int",
         "presence": "required"
@@ -9914,6 +9919,12 @@
         "applicability": "written when the read measured the population (every outcome but read_failed)"
       },
       {
+        "key": "project_excluded",
+        "type": "int",
+        "presence": "conditional",
+        "applicability": "written when the read measured the population (every outcome but read_failed)"
+      },
+      {
         "key": "team_narrowing",
         "type": "string",
         "presence": "conditional",
@@ -17133,6 +17144,122 @@
         "key": "emptied_by_exclusion",
         "type": "bool",
         "presence": "required"
+      }
+    ]
+  },
+  {
+    "id": "graphrank.page_hint_lookup",
+    "msg": "context fabric resolution trace: page hint lookup",
+    "level": "info",
+    "multiplicity": "zero_or_one_per_request",
+    "attribution": [
+      "request_id"
+    ],
+    "bounded_aggregation": "at most one line per request: emitted from one deferred statement once resolveSubjects reached its subject-hint loop, only when the request carries at least one ask_dev_page_context hint, by the one resolution that request runs with those hints (the gated offers-only resolution or the decisive one, never both); CertifyAbsent asserts the request with none.",
+    "fields": [
+      {
+        "key": "request_id",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "stage",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "page_hint_lookup"
+        ]
+      },
+      {
+        "key": "page_hints",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "exact_hit",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "label_fallback",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "unresolved",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "search_fallback",
+        "type": "bool",
+        "presence": "required"
+      },
+      {
+        "key": "exact_hit_by_kind",
+        "type": "count_map",
+        "presence": "required",
+        "closed_vocabulary": [
+          "organization",
+          "team",
+          "project",
+          "repository",
+          "work_item",
+          "pull_request",
+          "deployment",
+          "incident",
+          "document",
+          "decision",
+          "episode",
+          "metric",
+          "pull_request_review",
+          "ci_pipeline_run",
+          "work_item_ref"
+        ]
+      },
+      {
+        "key": "label_fallback_by_kind",
+        "type": "count_map",
+        "presence": "required",
+        "closed_vocabulary": [
+          "organization",
+          "team",
+          "project",
+          "repository",
+          "work_item",
+          "pull_request",
+          "deployment",
+          "incident",
+          "document",
+          "decision",
+          "episode",
+          "metric",
+          "pull_request_review",
+          "ci_pipeline_run",
+          "work_item_ref"
+        ]
+      },
+      {
+        "key": "unresolved_by_kind",
+        "type": "count_map",
+        "presence": "required",
+        "closed_vocabulary": [
+          "organization",
+          "team",
+          "project",
+          "repository",
+          "work_item",
+          "pull_request",
+          "deployment",
+          "incident",
+          "document",
+          "decision",
+          "episode",
+          "metric",
+          "pull_request_review",
+          "ci_pipeline_run",
+          "work_item_ref"
+        ]
       }
     ]
   },

@@ -77,6 +77,9 @@ runs:
         set -euo pipefail
         sha="$(git -C "$OPS_PATH" rev-parse HEAD)"
         if [ "$MODE" = pinned ] && [ "$sha" != "$PIN" ]; then
+          # The step still fails, but it names the commit checked out first, so a
+          # failed-run step reads that commit instead of "not checked out".
+          printf 'sha=%s\n' "$sha" >> "$GITHUB_OUTPUT"
           printf '::error title=ops checkout::checked out %s, not the pinned %s\n' "$sha" "$PIN"
           exit 1
         fi

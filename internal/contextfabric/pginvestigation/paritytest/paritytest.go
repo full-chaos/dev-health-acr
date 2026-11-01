@@ -1213,6 +1213,51 @@ func RunCitedEvidenceSuite(t *testing.T, newStore func(t *testing.T) contextfabr
 	}
 }
 
+// RunProjectGrantDigestReplaySuite (CHAOS-12298) saves a result under a
+// project grant, reads the row back through the adapter, and replays the
+// stored-result gate's grant decision under an identical, a changed, a
+// repository, a universal and an unrestricted grant. The digest crosses the
+// real store column (Postgres: the 0066 CHECK). The gate runs with no graph,
+// so a reader that passes the grant check stops at authorizer_missing (a
+// restricted or universal reader) or is admitted (an unrestricted one): the
+// grant decision itself is what this suite pins.
+func RunProjectGrantDigestReplaySuite(t *testing.T, newStore func(t *testing.T) contextfabric.InvestigationResultStore) {
+	t.Helper()
+	computer := storage.Principal{OrgID: "org-a", RepositoryScopes: []string{contractsv1.ProjectOnlyRepositoryScope}, ProjectScopes: []string{"project.v2:linear:P-1", "project.v2:linear:P-2"}}
+	store := newStore(t)
+	row := result("result-project-grant-replay", "what is open in my projects?")
+	if err := store.Save(context.Background(), computer, row, nil, nil, contextfabric.TimeAxisKeyFor(contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent}), contextfabric.ReuseRetrievalIdentity{}, contextfabric.ReusePromptVersions{}, contextfabric.ReuseVersionAuthorities{}, 0, "", contextfabric.SemanticStateAbsent(contextfabric.SemanticStateAbsenceTurnEndedBeforeInterpretation)); err != nil {
+		t.Fatalf("save under a project grant: %v", err)
+	}
+	gate := contextfabric.NewStoredResultGate(nil)
+	for _, tc := range []struct {
+		name   string
+		reader storage.Principal
+		denied bool
+		reason contextfabric.StoredResultAuthorizationReason
+	}{
+		{"identical project grant", storage.Principal{OrgID: "org-a", ProjectScopes: []string{"project.v2:linear:P-2", "project.v2:linear:P-1"}}, false, contextfabric.StoredResultReasonAuthorizerMissing},
+		{"changed project grant", storage.Principal{OrgID: "org-a", ProjectScopes: []string{"project.v2:linear:P-1"}}, true, contextfabric.StoredResultReasonGrantMismatch},
+		{"repository grant", storage.Principal{OrgID: "org-a", RepositoryScopes: []string{"acme/tools"}}, true, contextfabric.StoredResultReasonGrantMismatch},
+		{"universal grant (R2-4)", storage.Principal{OrgID: "org-a", RepositoryScopes: []string{"*"}}, false, contextfabric.StoredResultReasonAuthorizerMissing},
+		{"unrestricted (R2-4)", storage.Principal{OrgID: "org-a"}, false, contextfabric.StoredResultReasonUnrestrictedPrincipal},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			stored, err := store.Get(context.Background(), tc.reader, row.ResultID)
+			if err != nil {
+				t.Fatalf("get: %v", err)
+			}
+			if stored.GrantDigest != contextfabric.StoredResultGrantDigest(computer) {
+				t.Fatalf("GrantDigest = %q, want the computing project grant's %q", stored.GrantDigest, contextfabric.StoredResultGrantDigest(computer))
+			}
+			decision := gate.Authorize(context.Background(), tc.reader, stored, contextfabric.StoredResultSurfaceResultByID)
+			if (decision.Decision == contextfabric.StoredResultDenied) != tc.denied || decision.Reason != tc.reason {
+				t.Fatalf("decision %s/%s, want denied=%v reason %s", decision.Decision, decision.Reason, tc.denied, tc.reason)
+			}
+		})
+	}
+}
+
 // RunGrantDigestSuite (CHAOS-7145) is the shared proof that Save records the
 // COMPUTING principal's grant digest on the carrier Get returns, per grant
 // class, identically in both adapters.
@@ -1223,6 +1268,12 @@ func RunGrantDigestSuite(t *testing.T, newStore func(t *testing.T) contextfabric
 	restrictedB := storage.Principal{OrgID: "org-a", RepositoryScopes: []string{"acme/tools"}}
 	universal := storage.Principal{OrgID: "org-a", RepositoryScopes: []string{"*"}}
 	unrestricted := storage.Principal{OrgID: "org-a"}
+	// CHAOS-12298: a project-only principal's digest is p: plus the framed
+	// digest of its project set (migration 0066 admits the form), never a
+	// digest of its repository list.
+	projectA := storage.Principal{OrgID: "org-a", RepositoryScopes: []string{contractsv1.ProjectOnlyRepositoryScope}, ProjectScopes: []string{"project.v2:linear:P-1", "project.v2:linear:P-2"}}
+	projectReordered := storage.Principal{OrgID: "org-a", ProjectScopes: []string{"project.v2:linear:P-2", "project.v2:linear:P-1"}}
+	projectB := storage.Principal{OrgID: "org-a", RepositoryScopes: []string{contractsv1.ProjectOnlyRepositoryScope}, ProjectScopes: []string{"project.v2:linear:P-1"}}
 	cases := []struct {
 		name      string
 		principal storage.Principal
@@ -1233,9 +1284,15 @@ func RunGrantDigestSuite(t *testing.T, newStore func(t *testing.T) contextfabric
 		{"other restricted grant", restrictedB, contextfabric.StoredResultGrantDigest(restrictedB)},
 		{"universal", universal, "open"},
 		{"unrestricted", unrestricted, "open"},
+		{"project grant", projectA, contextfabric.StoredResultGrantDigest(projectA)},
+		{"same project grant, other order and repository list", projectReordered, contextfabric.StoredResultGrantDigest(projectA)},
+		{"other project grant", projectB, contextfabric.StoredResultGrantDigest(projectB)},
 	}
 	if cases[0].want == cases[2].want || !strings.HasPrefix(cases[0].want, "g:") {
 		t.Fatalf("restricted digests do not separate grants: %q vs %q", cases[0].want, cases[2].want)
+	}
+	if cases[5].want == cases[7].want || !strings.HasPrefix(cases[5].want, "p:") || len(cases[5].want) != len("p:")+32 {
+		t.Fatalf("project digests do not separate grants or miss the p: form: %q vs %q", cases[5].want, cases[7].want)
 	}
 	for index, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

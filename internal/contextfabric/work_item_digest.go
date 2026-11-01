@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"sort"
 
+	"github.com/full-chaos/dev-health-acr/internal/auth"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
 )
 
@@ -21,8 +22,14 @@ const WorkItemAuthorizationDigestVersion = "work-item-authorization.v1"
 // store boundaries; project and team scope are live anchor checks, not census
 // digest inputs. Selector values remain raw here. The reader adapter owns
 // selector interpretation; this digest only makes the input order-independent.
+//
+// GrantClass and PrincipalProjectGrants are the class tag (CHAOS-12298). They
+// are set only for a project-only principal and are omitted otherwise, so
+// every other class keeps its v1 document, and its digest, byte for byte.
 type workItemAuthorizationDigestDocument struct {
 	Version                   string   `json:"version"`
+	GrantClass                string   `json:"grant_class,omitempty"`
+	PrincipalProjectGrants    []string `json:"principal_project_grants,omitempty"`
 	PrincipalRepositoryGrants []string `json:"principal_repository_grants"`
 	RequestedRepositoryScope  []string `json:"requested_repository_scope"`
 }
@@ -39,11 +46,23 @@ type workItemAuthorizationDigestDocument struct {
 // authorization adapter treats that existing convention as organization-wide.
 // Consequently, changing any raw selector value changes the digest even when
 // the reader would grant the same repositories.
+//
+// A project-only principal's document is class-tagged (CHAOS-12298): it
+// carries grant_class "project_only" and its sorted canonical project set, and
+// an empty repository grant list, never its repository list (which holds only
+// the reserved value). So its digest never equals an unrestricted principal's
+// (whose grant list is also empty) and a census computed under one grant class
+// is not-found to a reader of another (R3-3, ServeStoredWorkItemTuple).
 func WorkItemAuthorizationDigest(principal storage.Principal, requested []string) (string, error) {
 	document := workItemAuthorizationDigestDocument{
 		Version:                   WorkItemAuthorizationDigestVersion,
 		PrincipalRepositoryGrants: canonicalWorkItemDigestValues(principal.RepositoryScopes),
 		RequestedRepositoryScope:  canonicalWorkItemDigestValues(requested),
+	}
+	if auth.ClassifyGrant(principal) == auth.GrantProjectOnly {
+		document.GrantClass = string(auth.GrantProjectOnly)
+		document.PrincipalProjectGrants = canonicalWorkItemDigestValues(principal.ProjectScopes)
+		document.PrincipalRepositoryGrants = []string{}
 	}
 	encoded, err := json.Marshal(document)
 	if err != nil {

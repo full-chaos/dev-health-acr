@@ -776,3 +776,16 @@ workloadTokenExchange:
     - name: panel-read
     - name: mcp-read
     - name: ci-ops
+
+# CHAOS-11195: acr-api as a CLIENT of the auth-service workload-token exchange (RFC 8693). Off by default: off
+# renders nothing. On, acr-api gets a projected ServiceAccount token (audience dev-health-workload-exchange,
+# 600 s, read-only mount) and builds its exchange client at start from these values; it makes no exchange at
+# start and no readiness check depends on it. Calls arrive with later work. Distinct from workloadTokenExchange,
+# where acr is the exchange SERVER for its own consumers.
+authWorkloadClient:
+  enabled: false
+  # auth-service's origin (scheme, host, port): https, or http with allowPlainHTTP for a cluster-internal Service.
+  exchangeURL: ""
+  allowPlainHTTP: false
+  # auth-service's https token issuer URL (AUTH_TOKEN_ISSUER_URL); every workload token must carry it.
+  issuer: ""

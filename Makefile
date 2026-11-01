@@ -405,6 +405,7 @@ canonical-receipts:
 	bash scripts/e2e/test-canonical-receipts.sh
 
 fullstack-contract:
+	bash scripts/deploy/test-compose-auth-workload.sh
 	bash scripts/e2e/test-fullstack-opencode.sh
 	bash scripts/e2e/test-opencode-runtime-fixture.sh
 

@@ -1053,6 +1053,10 @@ func TestStore_grantDigest(t *testing.T) {
 		return store
 	}
 	paritytest.RunGrantDigestSuite(t, newStore)
+	// CHAOS-12298: a p: digest crosses the real column (migration 0066's
+	// CHECK) and replays under identical, changed, repository, universal and
+	// unrestricted grants.
+	paritytest.RunProjectGrantDigestReplaySuite(t, newStore)
 
 	t.Run("legacy NULL digest reads back unrecorded", func(t *testing.T) {
 		store := newStore(t)

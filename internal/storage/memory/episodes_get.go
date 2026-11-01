@@ -13,7 +13,7 @@ func (s *EpisodeStore) GetByClientEpisodeID(_ context.Context, principal storage
 	now := s.now().UTC()
 	var result contractsv1.AgentEpisode
 	for _, record := range s.byID {
-		if record.orgID != principal.OrgID || record.clientID != clientEpisodeID || record.episode.RedactionState == contractsv1.AgentEpisodeRedactionPurgedTombstone || episodeExpired(record.episode, now) || !episodeRepositoryAllowed(principal.RepositoryScopes, record.repoSlug) {
+		if record.orgID != principal.OrgID || record.clientID != clientEpisodeID || record.episode.RedactionState == contractsv1.AgentEpisodeRedactionPurgedTombstone || episodeExpired(record.episode, now) || !principalEpisodeRepositoryAllowed(principal, record.repoSlug) {
 			continue
 		}
 		if result.EpisodeID != "" {
