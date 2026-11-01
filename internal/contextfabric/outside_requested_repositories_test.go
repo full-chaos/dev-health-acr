@@ -47,33 +47,37 @@ func TestANoMatchStatesTheMatchesOutsideTheRequestedRepositories(t *testing.T) {
 	}
 }
 
-// TestAStoredOutsideMatchCountNeverReachesARestrictedOrProjectOnlyReader
-// (CHAOS-12360): the sentence is composed for an unrestricted principal and
-// stored with the result, whose names list nothing for the subject check to
-// refuse. So a stored read would be the oracle the live path refuses, unless
-// the gate's grant check refuses it. Every stored reader takes this one gate.
-func TestAStoredOutsideMatchCountNeverReachesARestrictedOrProjectOnlyReader(t *testing.T) {
+// TestAStoredOutsideMatchCountNeverReachesAReaderOfAnotherGrant (CHAOS-12360,
+// CHAOS-12446): the sentence is stored with the result, whose names list nothing
+// for the subject check to refuse. So a stored read would be the oracle the live
+// path refuses, unless the gate's grant check refuses it. Every stored reader
+// takes this one gate.
+func TestAStoredOutsideMatchCountNeverReachesAReaderOfAnotherGrant(t *testing.T) {
 	t.Parallel()
-	writer := storage.Principal{OrgID: "org_1"}
 	result := gateResult()
 	result.Status = InvestigationNoMatch
 	result.Limitations = []string{contractsv1.ContextFabricOutsideRequestedRepositoriesLimitation(1)}
-	stored := StoredInvestigationResult{Result: result, GrantDigest: StoredResultGrantDigest(writer)}
 	gate := NewStoredResultGate(&gateGraph{capturingGraphReader: &capturingGraphReader{}})
-	for name, tc := range map[string]struct {
-		reader storage.Principal
-		admit  bool
-		reason StoredResultAuthorizationReason
-	}{
-		"an unrestricted reader": {storage.Principal{OrgID: "org_1"}, true, StoredResultReasonNoSubjects},
-		"a universal reader":     {storage.Principal{OrgID: "org_1", RepositoryScopes: []string{"*"}}, true, StoredResultReasonNoSubjects},
-		"a restricted reader":    {storage.Principal{OrgID: "org_1", RepositoryScopes: []string{"acme/tools"}}, false, StoredResultReasonGrantMismatch},
-		"a project-only reader":  {storage.Principal{OrgID: "org_1", ProjectScopes: []string{"project.v2:github:P-1"}}, false, StoredResultReasonGrantMismatch},
-	} {
-		for _, surface := range StoredResultSurfaceVocabulary() {
-			decision := gate.Authorize(context.Background(), tc.reader, stored, surface)
-			if decision.Admitted() != tc.admit || decision.Reason != tc.reason {
-				t.Fatalf("%s on %s: admitted %v reason %q, want %v %q", name, surface, decision.Admitted(), decision.Reason, tc.admit, tc.reason)
+	// CHAOS-12446: a restricted caller can now write this sentence, about a
+	// subject its own grant covers. A reader with another grant must not read it.
+	writerGrant := []string{"acme/tools", "acme/worker"}
+	for _, writer := range []storage.Principal{{OrgID: "org_1"}, {OrgID: "org_1", RepositoryScopes: writerGrant}} {
+		stored := StoredInvestigationResult{Result: result, GrantDigest: StoredResultGrantDigest(writer)}
+		for name, tc := range map[string]struct {
+			reader storage.Principal
+			admit  bool
+			reason StoredResultAuthorizationReason
+		}{
+			"an unrestricted reader":    {storage.Principal{OrgID: "org_1"}, true, StoredResultReasonNoSubjects},
+			"a universal reader":        {storage.Principal{OrgID: "org_1", RepositoryScopes: []string{"*"}}, true, StoredResultReasonNoSubjects},
+			"a reader of another grant": {storage.Principal{OrgID: "org_1", RepositoryScopes: []string{"acme/tools"}}, false, StoredResultReasonGrantMismatch},
+			"a project-only reader":     {storage.Principal{OrgID: "org_1", ProjectScopes: []string{"project.v2:github:P-1"}}, false, StoredResultReasonGrantMismatch},
+		} {
+			for _, surface := range StoredResultSurfaceVocabulary() {
+				decision := gate.Authorize(context.Background(), tc.reader, stored, surface)
+				if decision.Admitted() != tc.admit || decision.Reason != tc.reason {
+					t.Fatalf("%s, writer %q, on %s: admitted %v reason %q, want %v %q", name, writer.RepositoryScopes, surface, decision.Admitted(), decision.Reason, tc.admit, tc.reason)
+				}
 			}
 		}
 	}
