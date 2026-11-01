@@ -40,8 +40,7 @@ func (a *AuditStore) ensureLifecycleIssued(ctx context.Context, tx *sql.Tx, fact
 
 func (s lifecycleSink) MaxRevision(ctx context.Context, aggregateID string) (int, error) {
 	var max int
-	err := s.tx.QueryRowContext(ctx, `
-SELECT COALESCE(MAX(revision), 0) FROM acr.credential_lifecycle_outbox WHERE aggregate_id = $1`, aggregateID).Scan(&max)
+	err := s.tx.QueryRowContext(ctx, LifecycleOutboxMaxRevisionSQL, aggregateID).Scan(&max)
 	if err != nil {
 		return 0, fmt.Errorf("read lifecycle revision: %w", sanitizeDatabaseError(err))
 	}
@@ -53,9 +52,7 @@ func (s lifecycleSink) Insert(ctx context.Context, row credentiallifecycle.Row) 
 	if err != nil {
 		return fmt.Errorf("generate lifecycle outbox id: %w", err)
 	}
-	_, err = s.tx.ExecContext(ctx, `
-INSERT INTO acr.credential_lifecycle_outbox (outbox_id, org_id, aggregate_id, revision, event_type, payload, created_at)
-VALUES ($1::uuid, $2::uuid, $3, $4, $5, $6::jsonb, $7)`,
+	_, err = s.tx.ExecContext(ctx, LifecycleOutboxInsertSQL,
 		id, row.OrgID, row.AggregateID, row.Revision, row.EventType, string(row.Payload), row.CreatedAt)
 	if err != nil {
 		var pgErr *pgconn.PgError

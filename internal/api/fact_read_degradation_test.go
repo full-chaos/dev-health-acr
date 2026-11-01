@@ -103,7 +103,7 @@ func (teamQuestionModel) SynthesizeAnswer(_ context.Context, _ storage.Principal
 	return draft, receipt, nil
 }
 
-func teamQuestionApp(t *testing.T, facts cf.CanonicalFactReader, logs *bytes.Buffer) (*App, string) {
+func teamQuestionApp(t *testing.T, facts cf.CanonicalFactReader, logs *lockedBuffer) (*App, string) {
 	t.Helper()
 	team := cf.SubjectRef{Kind: cf.SubjectTeam, CanonicalID: "team:PLATFORM", Label: "Platform"}
 	store := rankingSurfaceStore{memoryinvestigation.NewStore()}
@@ -149,7 +149,7 @@ func postTeamQuestion(t *testing.T, app *App, token string) *httptest.ResponseRe
 // A team question whose pull request fact read is refused by the registry.
 // The answer is served, partial, with the refused kind named in coverage.
 func TestATeamQuestionWithARefusedFactReadAnswersPartial(t *testing.T) {
-	logs := &bytes.Buffer{}
+	logs := &lockedBuffer{}
 	// Every kind the engine plans for a team status question has a provider
 	// that answers, so the one kind that degrades is the refused one.
 	teamKinds := []cf.FactKind{cf.FactHealth, cf.FactWorkload, cf.FactFlow, cf.FactInvestment, cf.FactLandscape, cf.FactReadiness}
@@ -240,7 +240,7 @@ func TestAFactReadThatEndsTheInvestigationIsNamed(t *testing.T) {
 	}
 	for _, testCase := range cases {
 		t.Run(testCase.name, func(t *testing.T) {
-			logs := &bytes.Buffer{}
+			logs := &lockedBuffer{}
 			app, token := teamQuestionApp(t, testCase.facts, logs)
 
 			response := postTeamQuestion(t, app, token)

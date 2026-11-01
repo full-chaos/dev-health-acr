@@ -375,6 +375,9 @@ GRANT SELECT, DELETE ON TABLE acr.workload_bindings TO :"purge_user";
 -- purge table list: orgpurge purgeTables
 REVOKE SELECT, INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER ON TABLE acr.context_packet_snapshots FROM :"purge_user";
 GRANT SELECT, DELETE ON TABLE acr.context_packet_snapshots TO :"purge_user";
+-- the revoked event of each live credential the purge deletes: the highest revision (SELECT) and the new row (INSERT), internal/storage/postgres/org_purge_credentials.go LifecycleOutboxMaxRevisionSQL and LifecycleOutboxInsertSQL; never updated or deleted
+REVOKE SELECT, INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER ON TABLE acr.credential_lifecycle_outbox FROM :"purge_user";
+GRANT SELECT, INSERT ON TABLE acr.credential_lifecycle_outbox TO :"purge_user";
 -- the kept-events count (auditCountSQL) and the org_purged and org_purge_incomplete events (purgedAuditInsertSQL, incompleteAuditInsertSQL); never deleted
 REVOKE SELECT, INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER ON TABLE acr.audit_events FROM :"purge_user";
 GRANT SELECT, INSERT ON TABLE acr.audit_events TO :"purge_user";

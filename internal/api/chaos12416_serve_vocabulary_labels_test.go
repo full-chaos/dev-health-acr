@@ -344,9 +344,9 @@ func TestOffNoDoorServesTheKey(t *testing.T) {
 	}
 }
 
-func boundedLabelsApp(t *testing.T, results cf.InvestigationResultStore, answer cf.InvestigationResult) (*App, string, *bytes.Buffer) {
+func boundedLabelsApp(t *testing.T, results cf.InvestigationResultStore, answer cf.InvestigationResult) (*App, string, *lockedBuffer) {
 	t.Helper()
-	logs := &bytes.Buffer{}
+	logs := &lockedBuffer{}
 	app, token := newParityHostedAppWithLogs(t, investigatorFunc(func(_ context.Context, _ storage.Principal, request cf.InvestigationRequest) (cf.InvestigationResult, error) {
 		answer.RequestID = request.RequestID
 		return answer, nil
@@ -848,7 +848,7 @@ func (s cutAnswerSynthesizer) Synthesize(context.Context, storage.Principal, cf.
 type cutAnswerRig struct {
 	app   *App
 	token string
-	logs  *bytes.Buffer
+	logs  *lockedBuffer
 	store *memoryinvestigation.Store
 }
 
@@ -892,7 +892,7 @@ func newCutAnswerRig(t *testing.T, enabled, authority bool) *cutAnswerRig {
 	if err != nil {
 		t.Fatal(err)
 	}
-	logs := &bytes.Buffer{}
+	logs := &lockedBuffer{}
 	app, token := newParityHostedAppWithLogs(t, engine, store, limits.ResourceBudget{MaxItems: 500, MaxTokens: 1 << 20, MaxBytes: 1 << 24}, logs)
 	app.config.ContextFabricVocabularyLabelsEnabled = enabled
 	app.config.ServerCompletenessAuthorityEnabled, app.config.ServerCompletenessAuthoritySymmetricEnabled = authority, authority
@@ -907,7 +907,7 @@ func newCutAnswerRig(t *testing.T, enabled, authority bool) *cutAnswerRig {
 // bound, so the door reaches its projection only for a document handed over
 // larger than that bound, and a stub investigator is the one way to hand it over.
 // The document is the engine's; only the hand-over is stubbed.
-func (r *cutAnswerRig) overBoundDoor(t *testing.T, answer cf.InvestigationResult, enabled bool) func(int) (*httptest.ResponseRecorder, *bytes.Buffer) {
+func (r *cutAnswerRig) overBoundDoor(t *testing.T, answer cf.InvestigationResult, enabled bool) func(int) (*httptest.ResponseRecorder, *lockedBuffer) {
 	t.Helper()
 	stored, err := r.store.Get(context.Background(), storage.Principal{OrgID: callerOrgID}, answer.ResultID)
 	if err != nil {
@@ -919,7 +919,7 @@ func (r *cutAnswerRig) overBoundDoor(t *testing.T, answer cf.InvestigationResult
 	app, token, logs := boundedLabelsApp(t, memoryinvestigation.NewStore(), stored.Result)
 	app.config.ContextFabricVocabularyLabelsEnabled = enabled
 	serveAsNarrowedUser(t, app)
-	return func(bound int) (*httptest.ResponseRecorder, *bytes.Buffer) {
+	return func(bound int) (*httptest.ResponseRecorder, *lockedBuffer) {
 		t.Helper()
 		request := surfaceRequest("request_cut_answer")
 		request.Options.MaxSerializedBytes = bound

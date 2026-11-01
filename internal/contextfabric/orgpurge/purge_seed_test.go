@@ -33,8 +33,8 @@ func seedStatements() []string {
 	return []string{
 		`INSERT INTO acr.workload_bindings (binding_id, org_id, trust_domain, namespace, service_account_name, service_account_uid, role, created_at, created_by)
 		 VALUES ('wb-' || $2, $1::uuid, 'td-' || $2, 'ns', 'sa', 'uid-' || $2, 'read', now(), 'seed')`,
-		`INSERT INTO acr.client_credentials (credential_id, org_id, name, token_prefix, token_hash, created_at, workload_binding_id)
-		 VALUES ('cred-' || $2, $1::uuid, 'seed', 'fcacr_seed', 'hash-' || $2, now(), 'wb-' || $2)`,
+		`INSERT INTO acr.client_credentials (credential_id, org_id, name, token_prefix, token_hash, scopes, created_at, workload_binding_id)
+		 VALUES ('cred-' || $2, $1::uuid, 'seed', 'fcacr_seed', 'hash-' || $2, '["context:read"]'::jsonb, now(), 'wb-' || $2)`,
 		// CHAOS-12124: a browser token family and its refresh token (no
 		// organization column; it goes with the family by cascade).
 		`INSERT INTO acr.browser_token_families (family_id, org_id, client_id, created_at, expires_at)
