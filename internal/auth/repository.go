@@ -109,3 +109,47 @@ func repositorySlugFault(slug string) string {
 	}
 	return "invalid repository slug"
 }
+
+// repositoryScopeCovers reports whether a parent repository scope grants every
+// repository the requested scope grants: everything covers all, an owner
+// wildcard covers itself and that owner's repositories, a repository covers
+// only itself.
+func repositoryScopeCovers(parent, requested string) bool {
+	switch {
+	case parent == "*", parent == requested:
+		return true
+	case strings.HasSuffix(parent, "/*"):
+		owner, _, found := strings.Cut(requested, "/")
+		return found && owner == strings.TrimSuffix(parent, "/*")
+	default:
+		return false
+	}
+}
+
+// rotationWithinParent reports whether a rotation's normalized successor asks
+// for no scope and no repository its parent lacks. The parent's own lists are
+// the bound, so an empty list grants nothing and never reads as "all".
+func rotationWithinParent(parent contractsv1.ClientCredential, successor CreateCredentialRequest) bool {
+	parentScopes := make(map[string]struct{}, len(parent.Scopes))
+	for _, scope := range parent.Scopes {
+		parentScopes[strings.TrimSpace(scope)] = struct{}{}
+	}
+	for _, scope := range successor.Scopes {
+		if _, ok := parentScopes[scope]; !ok {
+			return false
+		}
+	}
+	for _, requested := range successor.RepositoryScopes {
+		covered := false
+		for _, held := range parent.RepositoryScopes {
+			if repositoryScopeCovers(strings.ToLower(strings.TrimSpace(held)), requested) {
+				covered = true
+				break
+			}
+		}
+		if !covered {
+			return false
+		}
+	}
+	return true
+}
