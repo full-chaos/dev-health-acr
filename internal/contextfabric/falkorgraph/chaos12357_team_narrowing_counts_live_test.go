@@ -128,6 +128,17 @@ func TestLiveATeamNarrowingStatesNoPoolForAProjectsLinkedPullRequests(t *testing
 // never the organization's. 2050 open pull requests of team-c's repository sort
 // first, so the cut census read holds none of team-t's.
 func TestLiveATeamNarrowingStatesTheKindCensusFloorInsideTheNarrowing(t *testing.T) {
+	t.Run("a repository the narrowing refuses", func(t *testing.T) {
+		teamCensusFloorCase(t, contextfabric.AuthorizationScope{RepositorySlugs: []string{"acme/aaa"}})
+	})
+	// The team check keeps a node the requested scope refuses, for the
+	// authorization check to refuse, so it stays in the census's nodes.
+	t.Run("members the requested scope refuses", func(t *testing.T) {
+		teamCensusFloorCase(t, contextfabric.AuthorizationScope{RepositorySlugs: []string{"acme/aaa"}, TeamIDs: []string{"team-c"}})
+	})
+}
+
+func teamCensusFloorCase(t *testing.T, scope contextfabric.AuthorizationScope) {
 	ctx := context.Background()
 	adapter, _ := newLiveFalkorAdapter(t, ctx)
 	orgID := "live-12357-census-" + time.Now().UTC().Format("20060102T150405.000000000")
@@ -146,7 +157,6 @@ func TestLiveATeamNarrowingStatesTheKindCensusFloorInsideTheNarrowing(t *testing
 	}
 	teamC := contextfabric.SubjectRef{Kind: contextfabric.SubjectTeam, CanonicalID: "team:team-c", Label: "team-c"}
 	other := contextfabric.SubjectRef{Kind: contextfabric.SubjectRepository, CanonicalID: "repository-aaa", Label: "repository-aaa"}
-	scope := contextfabric.AuthorizationScope{RepositorySlugs: []string{"acme/aaa"}}
 	e.Entities = append(e.Entities, entity(teamC, contextfabric.AuthorizationScope{TeamIDs: []string{"team-c"}}, nil), entity(other, scope, nil))
 	r.Relationships = append(r.Relationships, relationship("aaa_owner", contractsv1.ContextFabricRelationshipOwnedByTeam, other, teamC, contextfabric.AuthorizationScope{RepositorySlugs: []string{"acme/aaa"}, TeamIDs: []string{"team-c"}}))
 	batches := []contextfabric.ProjectionBatch{e}
