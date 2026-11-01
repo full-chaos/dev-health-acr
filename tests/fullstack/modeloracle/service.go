@@ -404,8 +404,21 @@ func (s *server) handleService(w http.ResponseWriter, r *http.Request, request c
 
 func (s *server) failService(w http.ResponseWriter, request chatRequest, responseID string, call *serviceCall, op, question, reason string) {
 	s.closeServiceCall(call, stateFailed, reason)
-	s.emitText(w, request, responseID, fmt.Sprintf(`{"schema_version":%s,"operation":%s,"question":%s,"reason":%s}`,
-		quote(serviceFailed), quote(op), quote(question), quote(reason)))
+	envelope, err := json.Marshal(serviceFailure{SchemaVersion: serviceFailed, Operation: op, Question: question, Reason: reason})
+	if err != nil {
+		// A string-only struct cannot fail to marshal; if it ever does, say so loudly.
+		http.Error(w, "encode service failure envelope: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	s.emitText(w, request, responseID, string(envelope))
+}
+
+// serviceFailure is the named envelope a refused service call carries in place of a reply.
+type serviceFailure struct {
+	SchemaVersion string `json:"schema_version"`
+	Operation     string `json:"operation"`
+	Question      string `json:"question"`
+	Reason        string `json:"reason"`
 }
 
 func compactJSON(raw json.RawMessage) []byte {

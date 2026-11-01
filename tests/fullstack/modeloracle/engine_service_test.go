@@ -5,7 +5,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -299,14 +298,10 @@ func TestAQuestionWithNoPlanEntryFailsLoudlyWithANamedEnvelope(t *testing.T) {
 	}
 	// The envelope on the wire.
 	body := `{"model":"m","messages":[{"role":"system","content":"x conform to the following schema:\n\n` + "```" + `{\"properties\":{\"fact_requirements\":{}}}` + "```" + `"},{"role":"user","content":"{\"question\":\"nope\"}"}]}`
-	res, err := http.Post(h.url+"/v1/chat/completions", "application/json", strings.NewReader(body))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer res.Body.Close()
-	raw, _ := io.ReadAll(res.Body)
-	if !bytes.Contains(raw, []byte(`fullstack_model_service_failure.v1`)) || !bytes.Contains(raw, []byte(`no service plan entry`)) {
-		t.Fatalf("response %s does not carry the named envelope", raw)
+	content, _ := firstMessage(t, postChat(t, h.url, body))["content"].(string)
+	const want = `{"schema_version":"fullstack_model_service_failure.v1","operation":"interpret","question":"nope","reason":"no service plan entry for this question (operation interpret)"}`
+	if content != want {
+		t.Fatalf("envelope = %s, want exactly %s", content, want)
 	}
 }
 
@@ -475,47 +470,53 @@ func TestACancelledDelayEndsQuietly(t *testing.T) {
 	}
 }
 
-// Stage events: the first stage opens before the interpret call is made, and the interpret
-// hold sits inside the open interpreting stage. The engine code is not changed.
-func TestTheFirstStageOpensBeforeTheInterpretHoldAndTheHoldSitsInsideIt(t *testing.T) {
+// Stage events, by ORDER and not by clock (this test measures no milliseconds): when the
+// oracle holds the interpret call in flight, the interpreting stage is already open (its start
+// is already buffered in the sink) and has not completed. The hold is long and released by
+// cancelling the request context after the assertions, so the test does not sleep through it.
+// The engine code is not changed.
+func TestTheInterpretingStageIsOpenBeforeAndWhileTheOracleHoldsTheInterpretCall(t *testing.T) {
 	plan := mutatePlan(t, func(p map[string]any) {
-		serviceQuestions(p)[0].(map[string]any)["delay_ms"] = map[string]any{"interpret": 800}
+		serviceQuestions(p)[0].(map[string]any)["delay_ms"] = map[string]any{"interpret": 600000}
 	})
 	h := startOracle(t, plan)
 	engine := h.engine(t)
 	sink := contextfabric.NewInvestigationStageSink(contextfabric.InvestigationStageSinkCapacity)
-	ctx := contextfabric.WithInvestigationStageSink(context.Background(), sink)
-	submitted := time.Now()
+	ctx, release := context.WithCancel(contextfabric.WithInvestigationStageSink(context.Background(), sink))
+	defer release()
 	done := make(chan error, 1)
 	go func() {
 		_, err := engine.Investigate(ctx, principal(), investigationRequest(statusQuestion))
 		done <- err
 	}()
-	select {
-	case first := <-sink.Transitions():
-		if first.Stage != contractsv1.ContextFabricStageInterpreting || first.State != contractsv1.ContextFabricStageStarted {
-			t.Fatalf("first transition = %+v, want interpreting started", first)
-		}
-		if since := time.Since(submitted); since > 400*time.Millisecond {
-			t.Fatalf("first stage opened %v after submit, with the interpret hold at 800 ms", since)
-		}
-	case <-time.After(2 * time.Second):
-		t.Fatal("no stage event within 2 s")
-	}
-	deadline := time.Now().Add(2 * time.Second)
+	deadline := time.Now().Add(30 * time.Second)
 	for h.calls(t).InFlight != 1 {
 		if time.Now().After(deadline) {
 			t.Fatal("the interpret call never reached the oracle")
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
+	snap := h.calls(t)
+	if snap.Answered != 0 || snap.Calls[0].Operation != opInterpret {
+		t.Fatalf("snapshot = %+v, want the interpret call held and nothing answered", snap)
+	}
+	// The call is in flight now. The stage start must already be in the sink, no waiting.
+	select {
+	case first := <-sink.Transitions():
+		if first.Stage != contractsv1.ContextFabricStageInterpreting || first.State != contractsv1.ContextFabricStageStarted {
+			t.Fatalf("first transition = %+v, want interpreting started", first)
+		}
+	default:
+		t.Fatal("the model call is in flight but the interpreting stage has not opened")
+	}
 	select {
 	case extra := <-sink.Transitions():
 		t.Fatalf("transition %+v during the hold: the hold is not inside the open interpreting stage", extra)
 	default:
 	}
-	if err := <-done; err != nil {
-		t.Fatal(err)
+	release()
+	if err := <-done; err == nil {
+		t.Fatal("a released hold still produced an answer")
 	}
 }
 
