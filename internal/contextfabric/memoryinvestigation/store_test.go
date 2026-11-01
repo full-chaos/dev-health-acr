@@ -278,6 +278,14 @@ func TestStore_threadParity(t *testing.T) {
 	})
 }
 
+// TestStore_connectOwnerParity runs one user's Connects against the in-memory
+// store.
+func TestStore_connectOwnerParity(t *testing.T) {
+	paritytest.RunConnectOwnerSuite(t, func(_ *testing.T, clock func() time.Time) paritytest.ThreadStore {
+		return memoryinvestigation.NewStoreWithClock(clock)
+	})
+}
+
 // TestStore_retentionReadParity runs the retention read rules (CHAOS-11952)
 // against the in-memory store.
 func TestStore_retentionReadParity(t *testing.T) {
