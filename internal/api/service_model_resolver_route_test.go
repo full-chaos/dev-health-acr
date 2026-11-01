@@ -1,7 +1,6 @@
 package api
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -69,7 +68,7 @@ func newSequencedResolverRig(t *testing.T, grants *serviceModelGrants, gateConfi
 	if err != nil {
 		t.Fatal(err)
 	}
-	rig.logs = &bytes.Buffer{}
+	rig.logs = &lockedBuffer{}
 	rig.app, rig.token = newParityHostedAppWithLogs(t, engine, store, limits.ResourceBudget{MaxItems: 500, MaxTokens: 500_000, MaxBytes: 8 << 20}, rig.logs)
 	rig.app.config.RequestTimeout = time.Minute
 	rig.app.runtime.Entitlements = grants
