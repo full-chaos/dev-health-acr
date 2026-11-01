@@ -3,9 +3,11 @@ package devhealthsource
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"sort"
 	"strings"
 
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/identity"
 	"github.com/full-chaos/dev-health-acr/internal/contextpacket"
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
@@ -47,7 +49,7 @@ func queryWorkItemsWithMembership(ctx context.Context, client contextpacket.Clic
 	if err != nil {
 		return nil, false, err
 	}
-	if err := stateWorkItemProjectMemberships(ctx, client, orgID, items); err != nil {
+	if err := stateWorkItemProjectMemberships(ctx, client, orgID, items, membershipStatedByEntity); err != nil {
 		return nil, false, err
 	}
 	return items, truncated, nil
@@ -74,7 +76,7 @@ WHERE w.org_id = {org_id:String}` + sincePredicate(cursor, "c.membership_changed
 	if err != nil {
 		return nil, false, err
 	}
-	if err := stateWorkItemProjectMemberships(ctx, client, orgID, items); err != nil {
+	if err := stateWorkItemProjectMemberships(ctx, client, orgID, items, membershipStatedByRefresh); err != nil {
 		return nil, false, err
 	}
 	return items, truncated, nil
@@ -118,7 +120,12 @@ func workItemMembershipChangesSubquery(cursor cursorState) string {
 // entity among items: the full current set, an empty list when the work item
 // is in no project. A failed read returns the error, so the page fails and
 // nothing is written: a partial set is never stated as current.
-func stateWorkItemProjectMemberships(ctx context.Context, client contextpacket.ClickHouseQueryClient, orgID string, items []candidate) error {
+//
+// It logs the outcome of the read at Info (CHAOS-12300, the #1821 review
+// F3): how many work items it stated as members, and how many it stated in
+// no project, by why, so a read regression that empties memberships is never
+// silent. Counts only, never ids.
+func stateWorkItemProjectMemberships(ctx context.Context, client contextpacket.ClickHouseQueryClient, orgID string, items []candidate, by membershipStatedBy) error {
 	var keys []workItemKey
 	targets := map[workItemKey][]*contractsv1.ContextFabricEntityProjection{}
 	for i := range items {
@@ -136,9 +143,12 @@ func stateWorkItemProjectMemberships(ctx context.Context, client contextpacket.C
 		}
 		targets[key] = append(targets[key], entity)
 	}
-	sets, err := readWorkItemProjectMemberships(ctx, client, orgID, keys)
+	sets, rowed, err := readWorkItemProjectMemberships(ctx, client, orgID, keys)
 	if err != nil {
 		return err
+	}
+	if len(keys) > 0 {
+		recordMembershipOutcomes(ctx, orgID, by, membershipOutcomesOf(keys, sets, rowed, by))
 	}
 	for key, entities := range targets {
 		for _, entity := range entities {
@@ -155,10 +165,15 @@ func stateWorkItemProjectMemberships(ctx context.Context, client contextpacket.C
 // to no project, or to more than one, names no project and is left out, the
 // rule the BELONGS_TO_PROJECT producer applies (teams_projects_edges.go).
 // A work item no row resolves for is absent from the result: in no project.
-func readWorkItemProjectMemberships(ctx context.Context, client contextpacket.ClickHouseQueryClient, orgID string, keys []workItemKey) (map[workItemKey][]string, error) {
+//
+// rowed holds every work item at least one membership row named, resolved or
+// not: a work item in rowed with no set had memberships that named no single
+// project.
+func readWorkItemProjectMemberships(ctx context.Context, client contextpacket.ClickHouseQueryClient, orgID string, keys []workItemKey) (sets map[workItemKey][]string, rowed map[workItemKey]bool, err error) {
 	// A work item no row resolves for has no entry; its caller states the
 	// empty set for it (stateWorkItemProjectMemberships copies sets[key]).
-	sets := make(map[workItemKey][]string, len(keys))
+	sets = make(map[workItemKey][]string, len(keys))
+	rowed = make(map[workItemKey]bool, len(keys))
 	for start := 0; start < len(keys); start += workItemMembershipReadKeys {
 		chunk := keys[start:min(start+workItemMembershipReadKeys, len(keys))]
 		bindings := []contextpacket.ClickHouseBinding{{Name: "org_id", Value: orgID}}
@@ -173,20 +188,20 @@ func readWorkItemProjectMemberships(ctx context.Context, client contextpacket.Cl
 FROM project_membership_presence AS m
 LEFT JOIN ` + resolvedProjectsSubquery + ` AS p ON p.provider = m.provider AND p.join_key = m.project_id
 WHERE m.org_id = {org_id:String} AND m.subject_kind = 'work_item' AND (` + strings.Join(terms, " OR ") + `)`
-		if err := readWorkItemMembershipChunk(ctx, client, statement, bindings, sets); err != nil {
-			return nil, err
+		if err := readWorkItemMembershipChunk(ctx, client, statement, bindings, sets, rowed); err != nil {
+			return nil, nil, err
 		}
 	}
 	for key, set := range sets {
 		sort.Strings(set)
 		sets[key] = set
 	}
-	return sets, nil
+	return sets, rowed, nil
 }
 
 // readWorkItemMembershipChunk runs one membership statement and adds every
 // row that names exactly one project to sets.
-func readWorkItemMembershipChunk(ctx context.Context, client contextpacket.ClickHouseQueryClient, statement string, bindings []contextpacket.ClickHouseBinding, sets map[workItemKey][]string) error {
+func readWorkItemMembershipChunk(ctx context.Context, client contextpacket.ClickHouseQueryClient, statement string, bindings []contextpacket.ClickHouseBinding, sets map[workItemKey][]string, rowed map[workItemKey]bool) error {
 	rows, err := client.Query(ctx, statement, bindings)
 	if err != nil {
 		return err
@@ -203,6 +218,7 @@ func readWorkItemMembershipChunk(ctx context.Context, client contextpacket.Click
 		// own key, which stateWorkItemProjectMemberships never reads: a set
 		// is attached only to the work item it was asked for.
 		key := workItemKey{repoID: repoID, workItemID: workItemID}
+		rowed[key] = true
 		if keyResolutionCount != 1 || resolvedProjectID == "" || provider == "" {
 			continue
 		}
@@ -251,4 +267,58 @@ func withWorkItemProjectMembership(tables []entityTable) []entityTable {
 		out = append(out, table)
 	}
 	return out
+}
+
+// membershipStatedBy names the producer that stated a work item's membership.
+type membershipStatedBy string
+
+const (
+	// membershipStatedByEntity: the work-item entity table, on the work
+	// item's own sync.
+	membershipStatedByEntity membershipStatedBy = "work_items"
+	// membershipStatedByRefresh: the refresh table (R3-2), on a change to the
+	// work item's membership inputs.
+	membershipStatedByRefresh membershipStatedBy = workItemProjectMembershipTable
+)
+
+// membershipOutcomes counts one read's outcome per distinct work item
+// (CHAOS-12300). An empty set is never one "absent" bucket:
+//   - missing: no membership row names the work item (the entity table);
+//   - stale: rows name it, but none resolves to exactly one statable
+//     project (unresolved, ambiguous, or an id the contract cannot carry);
+//   - cleared: the refresh table re-read it after a membership change and
+//     no row names it any more (the loss of its last project).
+type membershipOutcomes struct {
+	WorkItems, Member, Missing, Stale, Cleared int
+}
+
+func membershipOutcomesOf(keys []workItemKey, sets map[workItemKey][]string, rowed map[workItemKey]bool, by membershipStatedBy) membershipOutcomes {
+	out := membershipOutcomes{WorkItems: len(keys)}
+	for _, key := range keys {
+		switch {
+		case len(sets[key]) > 0:
+			out.Member++
+		case rowed[key]:
+			out.Stale++
+		case by == membershipStatedByRefresh:
+			out.Cleared++
+		default:
+			out.Missing++
+		}
+	}
+	return out
+}
+
+// membershipOutcomeLogger is the logger membership outcomes go to; a test
+// replaces it.
+var membershipOutcomeLogger = slog.Default
+
+// WorkItemMembershipOutcomeLogMessage is the Info line of one membership read.
+const WorkItemMembershipOutcomeLogMessage = "context fabric work item project membership stated"
+
+func recordMembershipOutcomes(ctx context.Context, orgID string, by membershipStatedBy, out membershipOutcomes) {
+	membershipOutcomeLogger().InfoContext(ctx, WorkItemMembershipOutcomeLogMessage,
+		"org_id", contextfabric.SanitizeLogAttr(orgID), "table", string(by),
+		"work_items", out.WorkItems, "member", out.Member,
+		"missing", out.Missing, "stale", out.Stale, "cleared", out.Cleared)
 }

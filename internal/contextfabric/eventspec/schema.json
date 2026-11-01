@@ -3162,6 +3162,22 @@
         "presence": "required"
       },
       {
+        "key": "grant_class",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "unrestricted",
+          "universal",
+          "restricted",
+          "project_only"
+        ]
+      },
+      {
+        "key": "project_scope_count",
+        "type": "int",
+        "presence": "required"
+      },
+      {
         "key": "decision",
         "type": "string",
         "presence": "required",
@@ -3322,6 +3338,22 @@
         ]
       },
       {
+        "key": "grant_class",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "unrestricted",
+          "universal",
+          "restricted",
+          "project_only"
+        ]
+      },
+      {
+        "key": "project_scope_count",
+        "type": "int",
+        "presence": "required"
+      },
+      {
         "key": "status",
         "type": "string",
         "presence": "required",
@@ -3397,7 +3429,9 @@
         "closed_vocabulary": [
           "edge_attributes",
           "source_not_visible",
-          "target_not_visible"
+          "target_not_visible",
+          "attribution_relation",
+          "edge_project_list"
         ]
       },
       {
@@ -3412,6 +3446,16 @@
       },
       {
         "key": "edges_withheld_target",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "edges_withheld_attribution_relation",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "edges_withheld_project_list",
         "type": "int",
         "presence": "required"
       },
@@ -11078,6 +11122,34 @@
         "presence": "required"
       },
       {
+        "key": "grant_class",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "unrestricted",
+          "universal",
+          "restricted",
+          "project_only"
+        ]
+      },
+      {
+        "key": "project_scope_count",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "grant_digest_class",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "open",
+          "repository",
+          "project",
+          "unrecorded",
+          "malformed"
+        ]
+      },
+      {
         "key": "decision",
         "type": "string",
         "presence": "required",
@@ -11178,6 +11250,25 @@
           "ci_pipeline_run",
           "work_item_ref"
         ]
+      },
+      {
+        "key": "stored_grant_digest_class",
+        "type": "string",
+        "presence": "conditional",
+        "closed_vocabulary": [
+          "open",
+          "repository",
+          "project",
+          "unrecorded",
+          "malformed"
+        ],
+        "applicability": "written when the decision read a stored result's grant digest (every read of a stored result; not the fact-root recheck)"
+      },
+      {
+        "key": "grant_digest_equal",
+        "type": "bool",
+        "presence": "conditional",
+        "applicability": "written with stored_grant_digest_class: whether the reader's grant digest equals the stored result's"
       },
       {
         "key": "error_class",

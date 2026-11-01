@@ -58,8 +58,10 @@ func TestTheEdgeGateDeniesAProjectOnlyCallerAnAttributionEdge(t *testing.T) {
 	principal := storage.Principal{OrgID: orgA, ProjectScopes: []string{"project.v2:github:P-1"}}
 	open := map[string]interface{}{"authorization_projects": "*", "authorization_repositories": "*"}
 	for _, relation := range []string{string(contractsv1.ContextFabricRelationshipDocumentedBy), string(contractsv1.ContextFabricRelationshipHasEpisode)} {
-		if got := EdgeGate(principal, relation, open, true, true); got != EdgeWithheldAttributes {
-			t.Errorf("%s: %s, want withheld on its attributes", relation, got)
+		// CHAOS-12300: the basis is named, E2 (attribution_relation), not
+		// lumped into the edge's attributes.
+		if got := EdgeGate(principal, relation, open, true, true); got != EdgeWithheldAttributionRelation {
+			t.Errorf("%s: %s, want withheld as an attribution relation", relation, got)
 		}
 	}
 	if got := EdgeGate(principal, string(contractsv1.ContextFabricRelationshipBelongsToProject), open, true, true); got != EdgeVisible {

@@ -1180,6 +1180,7 @@ type recordingTelemetry struct {
 	subjectCandidatesAuthzDropped int
 	cohortMembersAuthzDropped     int
 	edgesFilteredAuthz            int
+	edgesFilteredBasis            EdgeAuthzBasis
 	edgesFilteredTemporalWindow   int
 	edgesFilteredSelfLoop         int
 
@@ -1323,7 +1324,8 @@ func (r *recordingTelemetry) RecordSubjectCandidatesAuthzDropped(_ context.Conte
 func (r *recordingTelemetry) RecordCohortMembersAuthzDropped(_ context.Context, _ string, count int) {
 	r.cohortMembersAuthzDropped += count
 }
-func (r *recordingTelemetry) RecordEdgesFilteredByReason(_ context.Context, _ string, authz, temporalWindow, selfLoop int) {
+func (r *recordingTelemetry) RecordEdgesFilteredByReason(_ context.Context, _ string, authz, temporalWindow, selfLoop int, basis EdgeAuthzBasis) {
+	r.edgesFilteredBasis.merge(basis)
 	r.edgesFilteredAuthz += authz
 	r.edgesFilteredTemporalWindow += temporalWindow
 	r.edgesFilteredSelfLoop += selfLoop
