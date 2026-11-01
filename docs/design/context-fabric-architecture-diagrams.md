@@ -779,7 +779,10 @@ narrowed the same way before they set the population, and its count-only
 disclosures are read inside the narrowing too (CHAOS-12352): the measured zero,
 the outside-the-set count (a missing ownership makes it a lower bound, never a
 floor), and the pool cut, whose total is stated only when every committed anchor
-is currently owned by a requested team. Each such read logs one
+is a repository currently owned by a requested team, or a requested team. An
+owned project's total is not stated: its pull requests follow their own
+repository's owner (CHAOS-12357). The kind census's declared figure counts the
+candidates inside the narrowing. Each such read logs one
 `contextfabric.team_narrowing_general_read` line (requested teams, subjects
 decided, subjects excluded, and the floor value; log-only).
 
@@ -1015,6 +1018,19 @@ repository's pull requests and filtered by the dev-health-go
 `readers.WorkItemScopeSQL` relation, per principal. Each designed difference
 (project ownership, the anchor gate, requested scope) is a named exception in
 the test, asserted exactly.
+
+**A requested repository scope refuses, and says so (CHAOS-12360).** A subject
+term whose match lies outside the requested repositories is not a candidate and
+is not offered: the narrowing is the caller's. For an unrestricted principal,
+whose grant covers the subject, a terminal result states the count of such
+subjects in a closed limitation, with no names, so the caller can widen the
+scope. A node counts when the offer rule would admit it without the narrowing,
+in any arm that finds a subject term, and a subject the resolution committed is
+not counted. A restricted or project-only caller never gets the count, because for them it is
+an existence oracle; a stored result that carries it is refused to them by the
+grant check every stored read takes. A comparison states the distinct subjects
+of both operands. The window confirmation runs before any search, so it has
+nothing to state.
 
 **A requested repository scope follows the link (CHAOS-8694).** An issue is in
 a requested repository scope when it is linked to a pull request of a named

@@ -132,6 +132,10 @@ func (s operandSlotRun) resolved() bool { return s.state() == operandSlotResolve
 // comparisonResolutionRun owns the ordered operand runs and the aggregate
 // publication decision.
 type comparisonResolutionRun struct {
+	// outsideRequested is the set every slot's merges record into
+	// (recordOutsideRequestedRepository).
+	outsideRequested map[string]struct{}
+
 	// admission is the classifier's verdict, carried so publication can
 	// distinguish a held scoped pair from a pair that simply did not resolve.
 	admission contextfabric.ComparisonAdmission
@@ -218,6 +222,8 @@ func publishComparisonResolution(run comparisonResolutionRun, budget int) (conte
 	resolution := contextfabric.SubjectResolution{
 		Candidates: combineSlotCandidates(run, budget),
 		Committed:  []contextfabric.SubjectRef{},
+
+		OutsideRequestedRepositories: len(run.outsideRequested),
 	}
 	bases := contextfabric.CommitBasisSet{}
 	digests := contextfabric.CommitDecisionDigestSet{}
@@ -474,7 +480,10 @@ func resolveNamedComparison(
 	// to remember it.
 	contest *contestAdmission,
 ) (contextfabric.SubjectResolution, contextfabric.CommitBasisSet, contextfabric.CommitDecisionDigestSet, error) {
-	run := comparisonResolutionRun{admission: comparison.Admission}
+	// Every slot's merges record here, so two operands that match one subject
+	// count it once (CHAOS-12360).
+	deps.outsideRequested = map[string]struct{}{}
+	run := comparisonResolutionRun{admission: comparison.Admission, outsideRequested: deps.outsideRequested}
 
 	// THE POLICY LINE FIRES AT DISPATCH, before every other line and before
 	// anything can fail or return -- the scoped hold included. If it is absent

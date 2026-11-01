@@ -1385,6 +1385,13 @@ type ContextFabricSubjectResolution struct {
 	// Additive-optional in v1, same convention as RetrievalDegraded:
 	// absent means "not reported", never "the graph is projected".
 	GraphNotProjected bool `json:"graph_not_projected,omitempty"`
+	// OutsideRequestedRepositories (CHAOS-12360) counts the distinct subjects
+	// a subject term matched that only the requested repository narrowing
+	// refused, for an unrestricted principal; zero for every other caller. A
+	// terminal result states it through its limitation sentence, which is the
+	// only form that leaves the process: for a restricted or project-only
+	// caller the count would be an existence oracle.
+	OutsideRequestedRepositories int `json:"-"`
 	// CommitDecisionDigests (CHAOS-4087) is a small, closed-vocabulary
 	// summary of WHICH MECHANISM committed each subject in Committed --
 	// persisted so a wrong commit discovered later from a STORED result

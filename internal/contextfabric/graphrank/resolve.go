@@ -231,6 +231,11 @@ type ResolveDeps struct {
 	// backend) reaches SearchKind. A backend with no kind-scoped query path
 	// can safely leave this nil.
 	SearchKind func(ctx context.Context, term string, kind contextfabric.SubjectKind, limit int) (candidates []CandidateNode, truncated bool, degraded bool, err error)
+	// outsideRequested is this resolution's own set of subjects only the
+	// requested repository narrowing refused
+	// (recordOutsideRequestedRepository). The resolver allocates it; a merge
+	// outside a resolution has none and records nothing.
+	outsideRequested map[string]struct{}
 	// ExactNameCandidates (CHAOS-4348) returns EVERY repository/project/team
 	// node (isAliasLookupScopedKind) in this organization's authorized,
 	// temporally-valid scope, ONCE per resolution -- not term-scoped, not
@@ -2748,6 +2753,7 @@ func resolveSubjects(ctx context.Context, principal storage.Principal, request c
 	if err := ctx.Err(); err != nil {
 		return contextfabric.SubjectResolution{}, contextfabric.StructureOfferMaterial{}, err
 	}
+	deps.outsideRequested = map[string]struct{}{}
 	// COMPARISON DISPATCH -- BEFORE SubjectTerms FLATTENS THE QUESTION.
 	//
 	// This position is what binds each operand. One line below, SubjectTerms reduces the
@@ -4497,6 +4503,13 @@ func resolveSubjects(ctx context.Context, principal storage.Principal, request c
 		handleOffer,
 	)
 	offerMaterial.SubjectFloor = subjectFloorOutcome(offerFloorPoolRows, resolution, offerMaterial)
+	// A subject this resolution committed is not outside it: ordinary search
+	// refuses a work item by its own repository, and the census can commit it
+	// through its link to a pull request in the scope.
+	for _, subject := range resolution.Committed {
+		delete(deps.outsideRequested, SubjectKey(subject))
+	}
+	resolution.OutsideRequestedRepositories = len(deps.outsideRequested)
 	return resolution, offerMaterial, nil
 }
 
@@ -5064,6 +5077,7 @@ func mergeSearchResults(ctx context.Context, principal storage.Principal, reques
 		if !ok {
 			if !nodeAuthorized {
 				authzDropped++
+				recordOutsideRequestedRepository(principal, request, deps, term, node, allowExactMatch, admission)
 			}
 			continue
 		}
