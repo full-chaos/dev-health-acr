@@ -28,27 +28,35 @@ import (
 //   - enabled off serves no map (ACR_CONTEXT_FABRIC_VOCABULARY_LABELS_ENABLED).
 //
 // A word never costs an answer, and it never costs a row: the words are added
-// after the engine fits the document. maxBytes is the bound the door enforces.
-// The map is shed first, then the stamped words, so the result is the richest
-// document within maxBytes. When none is within it the input stands, and the
-// door refuses or projects it exactly as it would with no words. A non-positive
-// maxBytes measures nothing: the caller bounds what it builds from the copy.
-// shed reports that enabled composed a map this copy does not carry.
-func ServeVocabularyLabels(result InvestigationResult, enabled bool, maxBytes int64) (served InvestigationResult, shed bool) {
+// after the engine fits the document. maxBytes is the bound the door enforces,
+// and the shed is tiered, so the result is the richest document within it: the
+// full map; then only answer_status:* and the correction note, because with no
+// map a cut answer reads a neutral pill and loses its note; then no map; then no
+// stamped words. When none is within maxBytes the input stands, and the door
+// refuses or projects it exactly as it would with no words. A non-positive
+// maxBytes measures nothing: the caller bounds what it builds from the copy. The
+// tier is the one this copy reached, and off when enabled is off.
+func ServeVocabularyLabels(result InvestigationResult, enabled bool, maxBytes int64) (InvestigationResult, contractsv1.ContextFabricVocabularyLabelsTier) {
 	result.VocabularyLabels = nil
 	stamped := withStampedSourceWords(result)
+	tier := contractsv1.ContextFabricVocabularyLabelsOff
 	if enabled {
+		words := composeVocabularyLabels(stamped)
 		labeled := stamped
-		labeled.VocabularyLabels = composeVocabularyLabels(stamped)
+		labeled.VocabularyLabels = words
 		if withinServedBound(labeled, maxBytes) {
-			return labeled, false
+			return labeled, contractsv1.ContextFabricVocabularyLabelsFull
 		}
-		shed = true
+		labeled.VocabularyLabels = contractsv1.ContextFabricStatusVocabularyLabels(words)
+		if labeled.VocabularyLabels != nil && withinServedBound(labeled, maxBytes) {
+			return labeled, contractsv1.ContextFabricVocabularyLabelsStatusOnly
+		}
+		tier = contractsv1.ContextFabricVocabularyLabelsNone
 	}
 	if withinServedBound(stamped, maxBytes) {
-		return stamped, shed
+		return stamped, tier
 	}
-	return result, shed
+	return result, tier
 }
 
 // withinServedBound measures with the encoder the routes use. A document that

@@ -347,13 +347,30 @@ composes the map again, so a change of the registry reaches old answers.
 
 **Budget.** The map counts against the byte budget it is served under, and a word
 never costs a row or an answer. The engine fits the document with no map. Each door
-then adds the words only if the document stays within its bound, which is the
-tighter of the service and caller bounds, less the synthesis input on a client
-turn. It sheds the map first, then the stamped source words, and the input document
-stands if neither fits. A document over the caller's bound goes to the projection
-as before: the projection carries the map and sheds it before any count is halved.
-A consumer with no map takes its generic path. So an answer cut to the ceiling
-usually carries no map, and the line `context fabric vocabulary labels shed` says so.
+then adds the words within its bound, which is the tighter of the service and caller
+bounds, less the synthesis input on a client turn. The shed is tiered, so the served
+document is the richest one within the bound:
+
+1. The full map.
+2. Only `answer_status:*` and `status_correction:note` (`status_only`).
+3. No map (`none`).
+4. No stamped source words.
+
+The status words go last because they say the most for the fewest bytes. With no map
+a partial answer reads a neutral pill and loses its note, so the pill says less than
+the limitation below it. The input document stands if nothing fits, and the door
+refuses or projects it as before. A document over the caller's bound goes to the
+projection, which sheds by the same tiers before any count is halved, and whose
+last tier projects the answer again with no stamped words. A consumer takes its
+generic path for the words that are gone. The line
+`context fabric vocabulary labels shed` states the `tier` reached.
+
+**The projection's status words.** The projection cuts the document and re-derives
+its completeness state, so the map it copies can overstate it: a `complete` status
+that read "Full answer" on the canonical document reads "Answer, not fully covered"
+on a projection that left the full result out. `Project` and `MarkFullResultOmitted`
+therefore restate each `answer_status:*` word and the note from the projection's own
+state, by the same function. Every other word is copied as served.
 
 **Rollout.** The result root is `additionalProperties:false`, and ask-dev treats a
 validation failure as an upstream failure. So the field is additive and optional

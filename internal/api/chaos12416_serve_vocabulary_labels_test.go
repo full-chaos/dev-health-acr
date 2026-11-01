@@ -19,6 +19,7 @@ import (
 	"time"
 
 	cf "github.com/full-chaos/dev-health-acr/internal/contextfabric"
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric/answerprojection"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/devhealthfacts"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/memoryinvestigation"
 	v1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
@@ -367,33 +368,58 @@ func readByID(t *testing.T, app *App, token, resultID, query string) *httptest.R
 
 const shedLine = "context fabric vocabulary labels shed"
 
-// A stored result fitted near the ceiling still serves within it: the ceiling
-// is a byte exact line, the map goes first, and a label never refuses it.
+// tierLine is the shed line's closed value, as the JSON handler writes it.
+func tierLine(tier v1.ContextFabricVocabularyLabelsTier) string {
+	return `"tier":"` + string(tier) + `"`
+}
+
+func statusWordsOf(t *testing.T, labels map[string]string) map[string]string {
+	t.Helper()
+	kept := v1.ContextFabricStatusVocabularyLabels(labels)
+	if len(kept) == 0 || len(kept) == len(labels) {
+		t.Fatalf("the full map must hold status words and others, or this proves nothing: %v", labels)
+	}
+	return kept
+}
+
+// A stored result fitted near the ceiling still serves within it: the ceiling is
+// a byte exact line, each tier goes in turn, and a label never refuses it.
 func TestAStoredResultNearTheCeilingServesWithinIt(t *testing.T) {
 	store := memoryinvestigation.NewStore()
-	seeded := seedResult(t, store, callerOrgID, "result_labels_bound01")
+	seeded := seedResult3355(t, store, callerOrgID, threeRollupProjectStatusResult("result_labels_bound01"))
 	app, token, logs := boundedLabelsApp(t, store, seeded)
 
 	labeled := readByID(t, app, token, seeded.ResultID, "")
-	if labeled.Code != http.StatusOK || !strings.Contains(labeled.Body.String(), "vocabulary_labels") {
+	if labeled.Code != http.StatusOK {
 		t.Fatalf("unbounded read: %d %s", labeled.Code, labeled.Body.String())
 	}
+	full := decodeLabeled(t, labeled.Body.Bytes()).VocabularyLabels
+	keep := statusWordsOf(t, full)
 
 	app.config.MaxSerializedBytes = labeled.Body.Len()
-	if exact := readByID(t, app, token, seeded.ResultID, ""); exact.Code != http.StatusOK || !strings.Contains(exact.Body.String(), "vocabulary_labels") {
-		t.Fatalf("a document exactly at the ceiling lost its map: %d %s", exact.Code, exact.Body.String())
+	if exact := readByID(t, app, token, seeded.ResultID, ""); exact.Code != http.StatusOK || !maps.Equal(decodeLabeled(t, exact.Body.Bytes()).VocabularyLabels, full) {
+		t.Fatalf("a document exactly at the ceiling lost words: %d %s", exact.Code, exact.Body.String())
 	}
 	if strings.Contains(logs.String(), shedLine) {
 		t.Fatalf("nothing was shed, yet the line fired:\n%s", logs.String())
 	}
 
 	app.config.MaxSerializedBytes = labeled.Body.Len() - 1
+	tiered := readByID(t, app, token, seeded.ResultID, "")
+	if tiered.Code != http.StatusOK || tiered.Body.Len() > app.config.MaxSerializedBytes || !maps.Equal(decodeLabeled(t, tiered.Body.Bytes()).VocabularyLabels, keep) {
+		t.Fatalf("one byte short of the map: %d, %d bytes of %d: %s", tiered.Code, tiered.Body.Len(), app.config.MaxSerializedBytes, tiered.Body.String())
+	}
+	if !strings.Contains(logs.String(), shedLine) || !strings.Contains(logs.String(), tierLine(v1.ContextFabricVocabularyLabelsStatusOnly)) {
+		t.Fatalf("the shed did not name its tier:\n%s", logs.String())
+	}
+
+	app.config.MaxSerializedBytes = tiered.Body.Len() - 1
 	shed := readByID(t, app, token, seeded.ResultID, "")
 	if shed.Code != http.StatusOK || shed.Body.Len() > app.config.MaxSerializedBytes || strings.Contains(shed.Body.String(), "vocabulary_labels") {
-		t.Fatalf("one byte short of the map: %d, %d bytes of %d: %s", shed.Code, shed.Body.Len(), app.config.MaxSerializedBytes, shed.Body.String())
+		t.Fatalf("one byte short of the status words: %d, %d bytes of %d: %s", shed.Code, shed.Body.Len(), app.config.MaxSerializedBytes, shed.Body.String())
 	}
-	if !strings.Contains(logs.String(), shedLine) {
-		t.Fatalf("the shed was silent:\n%s", logs.String())
+	if !strings.Contains(logs.String(), tierLine(v1.ContextFabricVocabularyLabelsNone)) {
+		t.Fatalf("the shed did not name its tier:\n%s", logs.String())
 	}
 
 	// The refusal stands where it always stood, and for the document's own bytes.
@@ -403,8 +429,8 @@ func TestAStoredResultNearTheCeilingServesWithinIt(t *testing.T) {
 	}
 }
 
-// By id, the projection is measured with its words, which are shed before the
-// route refuses it, while the canonical document stands far over the ceiling.
+// By id, the projection is measured with its words, which shed by tier before
+// the route refuses it, while the canonical document stands far over the ceiling.
 func TestAProjectionByIDShedsItsWordsBeforeARefusal(t *testing.T) {
 	store := memoryinvestigation.NewStore()
 	row := threeRollupProjectStatusResult("result_labels_bound02")
@@ -419,6 +445,7 @@ func TestAProjectionByIDShedsItsWordsBeforeARefusal(t *testing.T) {
 	if canonical.Body.Len() <= projected.Body.Len() {
 		t.Fatalf("the canonical document must be the larger one: %d %d", canonical.Body.Len(), projected.Body.Len())
 	}
+	logs.Reset()
 
 	// The canonical document is over this ceiling and the projection is not:
 	// nothing the reader receives lost a word, so nothing says it did.
@@ -431,20 +458,45 @@ func TestAProjectionByIDShedsItsWordsBeforeARefusal(t *testing.T) {
 		t.Fatalf("the projection kept its words, yet the line fired:\n%s", logs.String())
 	}
 
+	full := decodeProjection(t, projected.Body.Bytes()).VocabularyLabels
 	app.config.MaxSerializedBytes = projected.Body.Len() - 1
-	shed := readByID(t, app, token, row.ResultID, "view=projection")
-	if shed.Code != http.StatusOK || shed.Body.Len() > app.config.MaxSerializedBytes || strings.Contains(shed.Body.String(), "vocabulary_labels") {
-		t.Fatalf("projection one byte over: %d, %d bytes of %d", shed.Code, shed.Body.Len(), app.config.MaxSerializedBytes)
+	tiered := readByID(t, app, token, row.ResultID, "view=projection")
+	if tiered.Code != http.StatusOK || tiered.Body.Len() > app.config.MaxSerializedBytes {
+		t.Fatalf("projection one byte over: %d, %d bytes of %d", tiered.Code, tiered.Body.Len(), app.config.MaxSerializedBytes)
 	}
-	if !strings.Contains(logs.String(), shedLine) {
-		t.Fatalf("the shed was silent:\n%s", logs.String())
+	if got := decodeProjection(t, tiered.Body.Bytes()).VocabularyLabels; !maps.Equal(got, statusWordsOf(t, full)) {
+		t.Fatalf("the status tier holds %v", got)
+	}
+	if !strings.Contains(logs.String(), tierLine(v1.ContextFabricVocabularyLabelsStatusOnly)) {
+		t.Fatalf("the shed did not name its tier:\n%s", logs.String())
+	}
+
+	app.config.MaxSerializedBytes = tiered.Body.Len() - 1
+	shed := readByID(t, app, token, row.ResultID, "view=projection")
+	if shed.Code != http.StatusOK || strings.Contains(shed.Body.String(), "vocabulary_labels") {
+		t.Fatalf("one byte short of the status words: %d %s", shed.Code, shed.Body.String())
+	}
+	if !strings.Contains(logs.String(), tierLine(v1.ContextFabricVocabularyLabelsNone)) {
+		t.Fatalf("the shed did not name its tier:\n%s", logs.String())
 	}
 }
 
-// A created answer that fits the caller's bound only with no words stays the
+func decodeProjection(t *testing.T, body []byte) v1.ContextFabricAnswerProjection {
+	t.Helper()
+	var projection v1.ContextFabricAnswerProjection
+	if err := json.Unmarshal(body, &projection); err != nil {
+		t.Fatal(err)
+	}
+	if projection.SchemaVersion != v1.ContextFabricAnswerProjectionSchema {
+		t.Fatalf("schema = %q, want the projection: %s", projection.SchemaVersion, body)
+	}
+	return projection
+}
+
+// A created answer that fits the caller's bound only with fewer words stays the
 // canonical answer. Measuring the map into the disposition would turn it into a
 // projection, and that is a label costing the reader the document.
-func TestACreatedAnswerThatFitsOnlyWithNoWordsStaysCanonical(t *testing.T) {
+func TestACreatedAnswerThatFitsOnlyWithFewerWordsStaysCanonical(t *testing.T) {
 	answer := threeRollupProjectStatusResult("result_labels_bound03")
 	app, token, logs := boundedLabelsApp(t, memoryinvestigation.NewStore(), answer)
 	body := investigationRequestBody()
@@ -454,23 +506,40 @@ func TestACreatedAnswerThatFitsOnlyWithNoWordsStaysCanonical(t *testing.T) {
 	if labeled.Code != http.StatusOK || !strings.Contains(labeled.Body.String(), "vocabulary_labels") {
 		t.Fatalf("unbounded create: %d %s", labeled.Code, labeled.Body.String())
 	}
+	full := decodeLabeled(t, labeled.Body.Bytes()).VocabularyLabels
+
 	body.Options.MaxSerializedBytes = labeled.Body.Len() - 1
-	shed := serveJSON(t, app, token, body)
-	if shed.Code != http.StatusOK || shed.Body.Len() > body.Options.MaxSerializedBytes {
-		t.Fatalf("create one byte short: %d, %d bytes of %d", shed.Code, shed.Body.Len(), body.Options.MaxSerializedBytes)
+	tiered := serveJSON(t, app, token, body)
+	if tiered.Code != http.StatusOK || tiered.Body.Len() > body.Options.MaxSerializedBytes {
+		t.Fatalf("create one byte short: %d, %d bytes of %d", tiered.Code, tiered.Body.Len(), body.Options.MaxSerializedBytes)
 	}
 	var keys map[string]json.RawMessage
+	if err := json.Unmarshal(tiered.Body.Bytes(), &keys); err != nil {
+		t.Fatal(err)
+	}
+	if _, canonical := keys["claimed_facts"]; !canonical {
+		t.Fatalf("the answer became a projection for a label: %s", tiered.Body.String())
+	}
+	if got := decodeLabeled(t, tiered.Body.Bytes()).VocabularyLabels; !maps.Equal(got, statusWordsOf(t, full)) {
+		t.Fatalf("the status tier holds %v", got)
+	}
+	if !strings.Contains(logs.String(), tierLine(v1.ContextFabricVocabularyLabelsStatusOnly)) {
+		t.Fatalf("the shed did not name its tier:\n%s", logs.String())
+	}
+
+	body.Options.MaxSerializedBytes = tiered.Body.Len() - 1
+	shed := serveJSON(t, app, token, body)
+	if shed.Code != http.StatusOK || shed.Body.Len() > body.Options.MaxSerializedBytes || strings.Contains(shed.Body.String(), "vocabulary_labels") {
+		t.Fatalf("create one byte short of the status words: %d, %d bytes of %d", shed.Code, shed.Body.Len(), body.Options.MaxSerializedBytes)
+	}
 	if err := json.Unmarshal(shed.Body.Bytes(), &keys); err != nil {
 		t.Fatal(err)
 	}
 	if _, canonical := keys["claimed_facts"]; !canonical {
 		t.Fatalf("the answer became a projection for a label: %s", shed.Body.String())
 	}
-	if _, held := keys["vocabulary_labels"]; held {
-		t.Fatal("the document over its bound still holds the map")
-	}
-	if !strings.Contains(logs.String(), shedLine) {
-		t.Fatalf("the shed was silent:\n%s", logs.String())
+	if !strings.Contains(logs.String(), tierLine(v1.ContextFabricVocabularyLabelsNone)) {
+		t.Fatalf("the shed did not name its tier:\n%s", logs.String())
 	}
 }
 
@@ -479,7 +548,7 @@ func TestAProjectionOverTheCallerBoundCarriesTheWords(t *testing.T) {
 	answer := threeRollupProjectStatusResult("result_labels_bound04")
 	app, token, logs := boundedLabelsApp(t, memoryinvestigation.NewStore(), answer)
 	labeled, _ := cf.ServeVocabularyLabels(answer, true, 0)
-	bounded, _, projectedBytes, _, fits := app.projectToCallerOption(labeled, v1.ContextFabricInvestigationOptions{MaxDrivers: 10, MaxCohortMembers: 50, MaxEvidenceRefs: 100, MaxSerializedBytes: 1 << 20})
+	bounded, _, projectedBytes, _, _, fits := app.projectToCallerOption(labeled, answer, v1.ContextFabricInvestigationOptions{MaxDrivers: 10, MaxCohortMembers: 50, MaxEvidenceRefs: 100, MaxSerializedBytes: 1 << 20})
 	_, canonicalBytes, err := marshalContextFabricResponse(labeled)
 	if err != nil {
 		t.Fatal(err)
@@ -493,48 +562,85 @@ func TestAProjectionOverTheCallerBoundCarriesTheWords(t *testing.T) {
 	if recorder.Code != http.StatusOK || recorder.Body.Len() > body.Options.MaxSerializedBytes {
 		t.Fatalf("create: %d, %d bytes: %s", recorder.Code, recorder.Body.Len(), recorder.Body.String())
 	}
-	var projection v1.ContextFabricAnswerProjection
-	if err := json.Unmarshal(recorder.Body.Bytes(), &projection); err != nil {
-		t.Fatal(err)
+	projection := decodeProjection(t, recorder.Body.Bytes())
+	if len(projection.VocabularyLabels) != len(labeled.VocabularyLabels) {
+		t.Fatalf("the projection carries %v, want the keys of %v", projection.VocabularyLabels, labeled.VocabularyLabels)
 	}
-	if projection.SchemaVersion != v1.ContextFabricAnswerProjectionSchema {
-		t.Fatalf("schema = %q, want the projection", projection.SchemaVersion)
+	for key := range labeled.VocabularyLabels {
+		if _, held := projection.VocabularyLabels[key]; !held {
+			t.Fatalf("the projection lost %q", key)
+		}
 	}
-	if !maps.Equal(projection.VocabularyLabels, labeled.VocabularyLabels) {
-		t.Fatalf("the projection carries %v, want %v", projection.VocabularyLabels, labeled.VocabularyLabels)
-	}
+	assertProjectionStatusWord(t, projection)
 	if strings.Contains(logs.String(), shedLine) {
 		t.Fatalf("the words were served, yet the line fired:\n%s", logs.String())
 	}
 }
 
-// The projection's words go before its rows: at one byte short of the projected
-// map the counts are the ones the map had.
+// assertProjectionStatusWord: the pill of a projected answer reads THIS
+// document's completeness, which a cut lowers.
+func assertProjectionStatusWord(t *testing.T, projection v1.ContextFabricAnswerProjection) {
+	t.Helper()
+	want, ok := v1.ContextFabricAnswerStatusLabel(projection.Status, projection.Completeness.State)
+	if !ok {
+		t.Fatalf("status %q has no word", projection.Status)
+	}
+	if got := projection.VocabularyLabels["answer_status:"+string(projection.Status)]; got != want {
+		t.Fatalf("status %q at completeness %q reads %q, want %q", projection.Status, projection.Completeness.State, got, want)
+	}
+}
+
+// The projection's words go before its rows: at each tier's byte the counts are
+// the ones the full map had.
 func TestAProjectionShedsItsWordsBeforeItsRows(t *testing.T) {
 	answer := threeRollupProjectStatusResult("result_labels_bound05")
-	labeled, shed := cf.ServeVocabularyLabels(answer, true, 0)
-	if shed || labeled.VocabularyLabels == nil {
+	labeled, tier := cf.ServeVocabularyLabels(answer, true, 0)
+	if tier != v1.ContextFabricVocabularyLabelsFull || labeled.VocabularyLabels == nil {
 		t.Fatalf("the fixture has no words: %v", labeled.VocabularyLabels)
 	}
 	app := &App{}
 	options := v1.ContextFabricInvestigationOptions{MaxDrivers: 10, MaxCohortMembers: 50, MaxEvidenceRefs: 100, MaxSerializedBytes: 1 << 20}
-	whole, _, wholeBytes, _, fits := app.projectToCallerOption(labeled, options)
-	if !fits || whole.VocabularyLabels == nil {
-		t.Fatalf("the projection must fit with its words first: fits=%v map=%v", fits, whole.VocabularyLabels)
+	whole, _, wholeBytes, _, wholeTier, fits := app.projectToCallerOption(labeled, answer, options)
+	if !fits || whole.VocabularyLabels == nil || wholeTier != v1.ContextFabricVocabularyLabelsFull {
+		t.Fatalf("the projection must fit with its words first: fits=%v tier=%q map=%v", fits, wholeTier, whole.VocabularyLabels)
 	}
+	rowsIntact := func(t *testing.T, got v1.ContextFabricAnswerProjection, budget answerprojection.Budget) {
+		t.Helper()
+		if budget.MaxDrivers != options.MaxDrivers || budget.MaxEvidenceRefs != options.MaxEvidenceRefs || budget.MaxCohortMembers != options.MaxCohortMembers {
+			t.Fatalf("the rows were cut for a label: %+v", budget)
+		}
+		if len(got.PrincipalDrivers) != len(whole.PrincipalDrivers) || len(got.KeyFacts) != len(whole.KeyFacts) {
+			t.Fatalf("rows changed: drivers %d/%d facts %d/%d", len(got.PrincipalDrivers), len(whole.PrincipalDrivers), len(got.KeyFacts), len(whole.KeyFacts))
+		}
+	}
+
 	options.MaxSerializedBytes = int(wholeBytes) - 1
-	cut, _, cutBytes, budget, fits := app.projectToCallerOption(labeled, options)
-	if !fits || cutBytes > wholeBytes-1 {
-		t.Fatalf("one byte short: fits=%v %d bytes", fits, cutBytes)
+	status, _, statusBytes, budget, statusTier, fits := app.projectToCallerOption(labeled, answer, options)
+	if !fits || statusBytes > wholeBytes-1 || statusTier != v1.ContextFabricVocabularyLabelsStatusOnly {
+		t.Fatalf("one byte short: fits=%v %d bytes tier %q", fits, statusBytes, statusTier)
 	}
-	if cut.VocabularyLabels != nil {
-		t.Fatalf("the map survived: %v", cut.VocabularyLabels)
+	if !maps.Equal(status.VocabularyLabels, statusWordsOf(t, whole.VocabularyLabels)) {
+		t.Fatalf("the status tier holds %v", status.VocabularyLabels)
 	}
-	if budget.MaxDrivers != options.MaxDrivers || budget.MaxEvidenceRefs != options.MaxEvidenceRefs || budget.MaxCohortMembers != options.MaxCohortMembers {
-		t.Fatalf("the rows were cut for a label: %+v", budget)
+	rowsIntact(t, status, budget)
+
+	options.MaxSerializedBytes = int(statusBytes) - 1
+	none, _, noneBytes, budget, noneTier, fits := app.projectToCallerOption(labeled, answer, options)
+	if !fits || noneBytes > statusBytes-1 || noneTier != v1.ContextFabricVocabularyLabelsNone || none.VocabularyLabels != nil {
+		t.Fatalf("one byte short of the status words: fits=%v %d bytes tier %q map %v", fits, noneBytes, noneTier, none.VocabularyLabels)
 	}
-	if len(cut.PrincipalDrivers) != len(whole.PrincipalDrivers) || len(cut.KeyFacts) != len(whole.KeyFacts) {
-		t.Fatalf("rows changed: drivers %d/%d facts %d/%d", len(cut.PrincipalDrivers), len(whole.PrincipalDrivers), len(cut.KeyFacts), len(whole.KeyFacts))
+	rowsIntact(t, none, budget)
+}
+
+// A projection with no status word has no status tier, and one with no map at
+// all reports no shed.
+func TestAProjectionsTierNamesWhatItHolds(t *testing.T) {
+	noStatus := v1.ContextFabricAnswerProjection{VocabularyLabels: map[string]string{"subject_kind:team": "team"}}
+	if _, _, _, tier, err := fitProjectionWords(noStatus, 1); err != nil || tier != v1.ContextFabricVocabularyLabelsNone {
+		t.Fatalf("no status word: tier %q (%v), want none", tier, err)
+	}
+	if _, _, _, tier, err := fitProjectionWords(v1.ContextFabricAnswerProjection{}, 1); err != nil || tier != v1.ContextFabricVocabularyLabelsOff {
+		t.Fatalf("no map: tier %q (%v), want off", tier, err)
 	}
 }
 
@@ -600,17 +706,20 @@ func TestTheWordsBoundLeavesRoomForTheSynthesisInput(t *testing.T) {
 	}
 	labeled, _ := cf.ServeVocabularyLabels(answer, true, 0)
 	app := &App{config: AppConfig{MaxSerializedBytes: v1.ContextFabricSerializedBytesMax}}
+	statusOnly, _ := cf.ServeVocabularyLabels(answer, true, 0)
+	statusOnly.VocabularyLabels = v1.ContextFabricStatusVocabularyLabels(labeled.VocabularyLabels)
 	for name, row := range map[string]struct {
-		caller  int64
-		carries bool
+		caller int64
+		tier   v1.ContextFabricVocabularyLabelsTier
 	}{
-		"exactly the envelope with its words": {envelope(labeled), true},
-		"one byte short":                      {envelope(labeled) - 1, false},
+		"exactly the envelope with its words": {envelope(labeled), v1.ContextFabricVocabularyLabelsFull},
+		"one byte short":                      {envelope(labeled) - 1, v1.ContextFabricVocabularyLabelsStatusOnly},
+		"one byte short of the status words":  {envelope(statusOnly) - 1, v1.ContextFabricVocabularyLabelsNone},
 	} {
 		t.Run(name, func(t *testing.T) {
-			served, shed := cf.ServeVocabularyLabels(answer, true, app.investigationWordsBound(answer, row.caller, input))
-			if (served.VocabularyLabels != nil) != row.carries || shed == row.carries {
-				t.Fatalf("map=%v shed=%v, want carries=%v", served.VocabularyLabels != nil, shed, row.carries)
+			served, tier := cf.ServeVocabularyLabels(answer, true, app.investigationWordsBound(answer, row.caller, input))
+			if tier != row.tier {
+				t.Fatalf("tier %q, want %q", tier, row.tier)
 			}
 			if got := envelope(served); got > row.caller {
 				t.Fatalf("envelope %d over the caller's %d", got, row.caller)
@@ -638,7 +747,7 @@ func TestEveryDoorThatEncodesAnAnswerComposesItsWords(t *testing.T) {
 	doors := []string{"serveContextFabricInvestigationResult", "serveStoredInvestigationResultOn"}
 	encoders := map[string]bool{
 		"serveContextFabricInvestigationResult": true, "serveStoredInvestigationResultOn": true,
-		"projectToCallerOption": true, "investigationWordsBound": true, "MarshalContextFabricResponse": true,
+		"fitProjectionWords": true, "unstampedProjection": true, "investigationWordsBound": true, "MarshalContextFabricResponse": true,
 	}
 	files, err := filepath.Glob(filepath.Join(repopath.Path(t, "internal", "api"), "*.go"))
 	if err != nil {
@@ -702,4 +811,489 @@ func TestEveryDoorThatEncodesAnAnswerComposesItsWords(t *testing.T) {
 	}
 	slices.Sort(names)
 	t.Logf("encoders: %v", names)
+}
+
+// A cut answer on the real engine: a ranked team cohort with no facts and more
+// claimed facts than the item ceiling, trimmed and disclosed by
+// budgetTrimDisclose, then served by the real routes to the narrowed user. What a
+// reader has left once the map is shed is the point of the tiers: the status
+// words and limitations[].
+
+const (
+	cutAnswerMaxItems = 30
+	cutAnswerClaims   = 120
+)
+
+type cutAnswerSynthesizer struct{ members []cf.SubjectRef }
+
+func (s cutAnswerSynthesizer) Synthesize(context.Context, storage.Principal, cf.SynthesisInput) (cf.InvestigationResult, error) {
+	// The prose is what a projection keeps, and a caller's bound has a floor, so
+	// it is long enough to put the projection above that floor.
+	prose := strings.TrimSpace(strings.Repeat("Pressure appears moderate. ", 120))
+	green := "green"
+	claims := make([]cf.ClaimedFact, 0, cutAnswerClaims)
+	for index := range cutAnswerClaims {
+		claims = append(claims, cf.ClaimedFact{ClaimID: fmt.Sprintf("claim_%02d", index), Kind: cf.FactHealth, Subject: s.members[index%len(s.members)], Field: "severity", Value: cf.ScalarValue{String: &green}})
+	}
+	return cf.InvestigationResult{
+		Status: cf.InvestigationComplete, DirectJudgment: prose, CurrentState: prose,
+		StrongestPressures: []string{}, Drivers: []cf.DriverJudgment{}, RemainingWork: []cf.Finding{}, ReadinessGaps: []cf.Finding{},
+		Paths: []cf.RelationshipPath{}, Conflicts: []cf.Finding{}, Limitations: []string{}, EvidenceRefIDs: []string{}, ClaimedFacts: claims,
+		Coverage:            cf.Coverage{Sources: []cf.SourceObservation{}, DegradedReasons: []string{}},
+		DeterministicAnswer: prose, Warnings: []string{},
+		Versions: cf.VersionSet{Backend: "test", ProjectionVersion: "projection-v1", QueryVersion: "query-v1", InterpretationVersion: "interpret-v1", SynthesisVersion: "synthesis-v1"},
+	}, nil
+}
+
+type cutAnswerRig struct {
+	app   *App
+	token string
+	logs  *bytes.Buffer
+	store *memoryinvestigation.Store
+}
+
+// newCutAnswerRig serves the cut answer. The trim lowers it to partial. With no
+// facts its ranking row is unavailable, so authority corrects it to degraded,
+// and that is what puts a correction note on the answer.
+func newCutAnswerRig(t *testing.T, enabled, authority bool) *cutAnswerRig {
+	t.Helper()
+	members := []cf.CohortMember{}
+	subjects := []cf.SubjectRef{}
+	for i := 1; i <= 2; i++ {
+		subject := cf.SubjectRef{Kind: cf.SubjectTeam, CanonicalID: fmt.Sprintf("team:cut%d", i), Label: fmt.Sprintf("Team %d", i)}
+		members = append(members, cf.CohortMember{Subject: subject, Rank: i, InclusionReasons: []string{"bounded cohort"}})
+		subjects = append(subjects, subject)
+	}
+	store := memoryinvestigation.NewStore()
+	registry, err := cf.NewFactCapabilityRegistry(devhealthfacts.NewProviders(nil), cf.FactRegistryOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	next := 0
+	engine, err := cf.NewEngine(cf.EngineDependencies{
+		Interpreter: rankingSurfaceInterpreter{},
+		Graph: rankingSurfaceGraph{
+			surfaceGraph: surfaceGraph{resolution: cf.SubjectResolution{Candidates: []cf.SubjectCandidate{}, Committed: []cf.SubjectRef{subjects[0]}}},
+			cohort:       &cf.Cohort{Kind: cf.SubjectTeam, Members: members, Rationale: "bounded team cohort", Complete: true},
+		},
+		Facts: liveFactReader{bundle: cf.CanonicalFactBundle{
+			Facts: []cf.CanonicalFact{}, Coverage: cf.Coverage{Sources: []cf.SourceObservation{}, DegradedReasons: []string{}},
+			Version: "ops-v1", Versions: map[cf.FactKind]string{}, Watermarks: map[cf.FactKind]string{},
+		}},
+		Synthesizer: cutAnswerSynthesizer{members: subjects}, Results: store, Requirements: registry,
+	}, cf.EngineOptions{
+		ServiceVersion: "acr-test", MaxItems: cutAnswerMaxItems, MaxSerializedBytes: 65536, SynthesisDeadlineReserve: time.Second,
+		ServerCompletenessAuthorityEnabled: authority, ServerCompletenessAuthoritySymmetricEnabled: authority,
+		Now: func() time.Time { return time.Unix(700, 0).UTC() }, NewResultID: func() string {
+			next++
+			return fmt.Sprintf("result_cut_answer_%04d", next)
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	logs := &bytes.Buffer{}
+	app, token := newParityHostedAppWithLogs(t, engine, store, limits.ResourceBudget{MaxItems: 500, MaxTokens: 1 << 20, MaxBytes: 1 << 24}, logs)
+	app.config.ContextFabricVocabularyLabelsEnabled = enabled
+	app.config.ServerCompletenessAuthorityEnabled, app.config.ServerCompletenessAuthoritySymmetricEnabled = authority, authority
+	app.config.MaxSerializedBytes = v1.ContextFabricSerializedBytesMax
+	app.config.MaxItems = 500
+	serveAsNarrowedUser(t, app)
+	return &cutAnswerRig{app: app, token: token, logs: logs, store: store}
+}
+
+// overBoundDoor serves the real cut answer as the engine stored it, at a create
+// door with a bound below it. The engine fits a fresh answer under the caller's
+// bound, so the door reaches its projection only for a document handed over
+// larger than that bound, and a stub investigator is the one way to hand it over.
+// The document is the engine's; only the hand-over is stubbed.
+func (r *cutAnswerRig) overBoundDoor(t *testing.T, answer cf.InvestigationResult, enabled bool) func(int) (*httptest.ResponseRecorder, *bytes.Buffer) {
+	t.Helper()
+	stored, err := r.store.Get(context.Background(), storage.Principal{OrgID: callerOrgID}, answer.ResultID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stored.Result.VocabularyLabels != nil {
+		t.Fatalf("the stored document carries the map: %v", stored.Result.VocabularyLabels)
+	}
+	app, token, logs := boundedLabelsApp(t, memoryinvestigation.NewStore(), stored.Result)
+	app.config.ContextFabricVocabularyLabelsEnabled = enabled
+	serveAsNarrowedUser(t, app)
+	return func(bound int) (*httptest.ResponseRecorder, *bytes.Buffer) {
+		t.Helper()
+		request := surfaceRequest("request_cut_answer")
+		request.Options.MaxSerializedBytes = bound
+		return serveJSON(t, app, token, request), logs
+	}
+}
+
+func (r *cutAnswerRig) post(t *testing.T, bound int) *httptest.ResponseRecorder {
+	t.Helper()
+	request := surfaceRequest("request_cut_answer")
+	request.Options.MaxSerializedBytes = bound
+	return serveJSON(t, r.app, r.token, request)
+}
+
+// whole is the cut answer with nothing bounding the door. It proves the fixture:
+// a real trim, disclosed, and a map holding words beyond the status tier.
+func (r *cutAnswerRig) whole(t *testing.T) (*httptest.ResponseRecorder, cf.InvestigationResult) {
+	t.Helper()
+	recorder := r.post(t, v1.ContextFabricSerializedBytesMax)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("the cut answer: %d %s\n%s", recorder.Code, recorder.Body.String(), r.logs.String())
+	}
+	answer := decodeLabeled(t, recorder.Body.Bytes())
+	if cutSentence(t, answer.Limitations) == "" || len(answer.ClaimedFacts) >= cutAnswerClaims {
+		t.Fatalf("no real trim: %d claims, limitations %q", len(answer.ClaimedFacts), answer.Limitations)
+	}
+	return recorder, answer
+}
+
+// cutSentence is the limitation that tells the reader this answer was cut.
+func cutSentence(t *testing.T, limitations []string) string {
+	t.Helper()
+	index := slices.IndexFunc(limitations, func(limitation string) bool { return strings.HasPrefix(limitation, "This answer shows ") })
+	if index < 0 {
+		t.Fatalf("limitations %q do not say the answer was cut", limitations)
+	}
+	return limitations[index]
+}
+
+// bareBytes is what the answer measures with no map.
+func bareBytes(t *testing.T, answer cf.InvestigationResult) int {
+	t.Helper()
+	answer.VocabularyLabels = nil
+	_, size, err := marshalContextFabricResponse(answer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return int(size)
+}
+
+// (a) One byte short of the full map, on a real cut and corrected answer: the
+// status word, the note and the limitation are all in the body, and the document
+// stays canonical.
+func TestACutAnswerKeepsItsStatusWordsNoteAndLimitation(t *testing.T) {
+	rig := newCutAnswerRig(t, true, true)
+	whole, answer := rig.whole(t)
+	if answer.StatusCorrection == nil || answer.VocabularyLabels[v1.ContextFabricStatusCorrectionNoteKey] == "" {
+		t.Fatalf("no correction note on this answer, so this proves nothing: status %q %+v", answer.Status, answer.StatusCorrection)
+	}
+	keep := statusWordsOf(t, answer.VocabularyLabels)
+
+	bound := whole.Body.Len() - 1
+	recorder := rig.post(t, bound)
+	if recorder.Code != http.StatusOK || recorder.Body.Len() > bound {
+		t.Fatalf("one byte short: %d, %d bytes of %d", recorder.Code, recorder.Body.Len(), bound)
+	}
+	served := decodeLabeled(t, recorder.Body.Bytes())
+	if !maps.Equal(served.VocabularyLabels, keep) {
+		t.Fatalf("the served map is %v, want %v", served.VocabularyLabels, keep)
+	}
+	if got := cutSentence(t, served.Limitations); got != cutSentence(t, answer.Limitations) {
+		t.Fatalf("the body says %q", got)
+	}
+	if served.VocabularyLabels[v1.ContextFabricStatusCorrectionNoteKey] == "" {
+		t.Fatal("the note is gone")
+	}
+	if len(served.ClaimedFacts) == 0 {
+		t.Fatal("the document stopped being canonical")
+	}
+	if !strings.Contains(rig.logs.String(), tierLine(v1.ContextFabricVocabularyLabelsStatusOnly)) {
+		t.Fatalf("the shed did not name its tier:\n%s", rig.logs.String())
+	}
+}
+
+// (b) A trimmed answer's status is partial, and with no map its pill reads the
+// neutral word. The status tier keeps the partial word.
+func TestATrimmedAnswersPillReadsThePartialWord(t *testing.T) {
+	rig := newCutAnswerRig(t, true, false)
+	whole, answer := rig.whole(t)
+	if answer.Status != v1.ContextFabricInvestigationPartial || answer.StatusCorrection != nil {
+		t.Fatalf("status %q correction %+v: the trim itself must be what lowered it", answer.Status, answer.StatusCorrection)
+	}
+	statusWordsOf(t, answer.VocabularyLabels)
+	recorder := rig.post(t, whole.Body.Len()-1)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("one byte short: %d", recorder.Code)
+	}
+	if got := decodeLabeled(t, recorder.Body.Bytes()).VocabularyLabels["answer_status:partial"]; got != "Partial answer" {
+		t.Fatalf("the pill reads %q, want the partial word", got)
+	}
+}
+
+// (c) Over the caller's bound the document is the projection, with its full
+// result left out, and at one byte short of its full map it keeps the same
+// words, each read against its own completeness.
+func TestACutProjectionKeepsItsStatusWordsNoteAndLimitation(t *testing.T) {
+	rig := newCutAnswerRig(t, true, true)
+	_, answer := rig.whole(t)
+	door := rig.overBoundDoor(t, answer, true)
+	first, _ := door(bareBytes(t, answer) - 1)
+	if first.Code != http.StatusOK {
+		t.Fatalf("over the caller's bound: %d %s", first.Code, first.Body.String())
+	}
+	full := decodeProjection(t, first.Body.Bytes())
+	if !full.ProjectionBudget.FullResultOmitted || full.VocabularyLabels[v1.ContextFabricStatusCorrectionNoteKey] == "" {
+		t.Fatalf("omitted=%v map=%v: this was not the path under test", full.ProjectionBudget.FullResultOmitted, full.VocabularyLabels)
+	}
+	assertProjectionStatusWord(t, full)
+	keep := statusWordsOf(t, full.VocabularyLabels)
+
+	bound := first.Body.Len() - 1
+	recorder, logs := door(bound)
+	if recorder.Code != http.StatusOK || recorder.Body.Len() > bound {
+		t.Fatalf("one byte short: %d, %d bytes of %d", recorder.Code, recorder.Body.Len(), bound)
+	}
+	projected := decodeProjection(t, recorder.Body.Bytes())
+	if !projected.ProjectionBudget.FullResultOmitted {
+		t.Fatal("the full result is not declared left out")
+	}
+	if !maps.Equal(projected.VocabularyLabels, keep) {
+		t.Fatalf("the served map is %v, want %v", projected.VocabularyLabels, keep)
+	}
+	assertProjectionStatusWord(t, projected)
+	if got := cutSentence(t, projected.Limitations); got != cutSentence(t, answer.Limitations) {
+		t.Fatalf("the projection says %q", got)
+	}
+	if !strings.Contains(logs.String(), tierLine(v1.ContextFabricVocabularyLabelsStatusOnly)) {
+		t.Fatalf("the shed did not name its tier:\n%s", logs.String())
+	}
+}
+
+// A complete status over complete completeness reads "Full answer" on the
+// canonical document, but the create door's projection leaves the full result
+// out and lowers its state, so its pill must not say so. The new word is longer,
+// so at the projection's exact size the body still fits: the bytes are measured
+// after the word is set.
+func TestAProjectionThatLeftTheFullResultOutNeverReadsFullAnswer(t *testing.T) {
+	answer := threeRollupProjectStatusResult("result_labels_bound07")
+	answer.Status = v1.ContextFabricInvestigationComplete
+	answer.Completeness.State = v1.ContextFabricAnswerCompletenessComplete
+	answer.Completeness.TerminalStatus = v1.ContextFabricInvestigationComplete
+	labeled, _ := cf.ServeVocabularyLabels(answer, true, 0)
+	if labeled.VocabularyLabels["answer_status:complete"] != "Full answer" {
+		t.Fatalf("the canonical word is %q: this proves nothing", labeled.VocabularyLabels["answer_status:complete"])
+	}
+	app, token, _ := boundedLabelsApp(t, memoryinvestigation.NewStore(), answer)
+	_, canonicalBytes, err := marshalContextFabricResponse(answer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := investigationRequestBody()
+	body.Options.MaxSerializedBytes = int(canonicalBytes) - 1
+	first := serveJSON(t, app, token, body)
+	if first.Code != http.StatusOK {
+		t.Fatalf("over the caller's bound: %d %s", first.Code, first.Body.String())
+	}
+	body.Options.MaxSerializedBytes = first.Body.Len()
+	recorder := serveJSON(t, app, token, body)
+	if recorder.Code != http.StatusOK || recorder.Body.Len() > body.Options.MaxSerializedBytes {
+		t.Fatalf("at its own size: %d, %d bytes of %d", recorder.Code, recorder.Body.Len(), body.Options.MaxSerializedBytes)
+	}
+	projection := decodeProjection(t, recorder.Body.Bytes())
+	if !projection.ProjectionBudget.FullResultOmitted || projection.Completeness.State == v1.ContextFabricAnswerCompletenessComplete {
+		t.Fatalf("omitted=%v state=%q: this proves nothing", projection.ProjectionBudget.FullResultOmitted, projection.Completeness.State)
+	}
+	if got := projection.VocabularyLabels["answer_status:complete"]; got != "Answer, not fully covered" {
+		t.Fatalf("the pill reads %q", got)
+	}
+}
+
+// A stored row whose sources hold no words of today: the stamps are what the
+// serve adds, and they are the last words to go.
+func withUnstampedSources(row cf.InvestigationResult) cf.InvestigationResult {
+	row.Coverage.Sources = nil
+	for index := range 12 {
+		row.Coverage.Sources = append(row.Coverage.Sources, v1.ContextFabricSourceObservation{
+			Source: fmt.Sprintf("canonical_fact:source_%02d", index), State: v1.ContextFabricSourceTruncated, Reason: "the read was cut", StateLabel: "limited",
+		})
+	}
+	return row
+}
+
+// Only the stamps cross the ceiling. By id, each tier goes in turn, and the last
+// one projects the stored row again, so a stamp never refuses the answer. Both
+// sizes matter: a large row's canonical document is over the ceiling and stood
+// unstamped already, and a small row's fits it stamped, because its projection is
+// the larger document.
+func TestAStampedProjectionByIDIsNotRefusedForItsStamps(t *testing.T) {
+	const stampedWord, storedWord = `"state_label":"partly included"`, `"state_label":"limited"`
+	small := validContextFabricInvestigationResult()
+	small.ResultID = "result_labels_bound11"
+	for name, row := range map[string]cf.InvestigationResult{
+		"canonical over the ceiling": withUnstampedSources(threeRollupProjectStatusResult("result_labels_bound08")),
+		"canonical within it":        withUnstampedSources(small),
+	} {
+		t.Run(name, func(t *testing.T) {
+			store := memoryinvestigation.NewStore()
+			seedResult3355(t, store, callerOrgID, row)
+			app, token, logs := boundedLabelsApp(t, store, row)
+			read := func(ceiling int, query string) *httptest.ResponseRecorder {
+				t.Helper()
+				app.config.MaxSerializedBytes = ceiling
+				return readByID(t, app, token, row.ResultID, query)
+			}
+
+			stamped := read(labelsCallerBytes, "view=projection")
+			if stamped.Code != http.StatusOK || !strings.Contains(stamped.Body.String(), stampedWord) {
+				t.Fatalf("unbounded: %d %.400s", stamped.Code, stamped.Body.String())
+			}
+			for strings.Contains(stamped.Body.String(), "vocabulary_labels") {
+				stamped = read(stamped.Body.Len()-1, "view=projection")
+			}
+			if stamped.Code != http.StatusOK || !strings.Contains(stamped.Body.String(), stampedWord) {
+				t.Fatalf("no map keeps the stamps: %d %.400s", stamped.Code, stamped.Body.String())
+			}
+			logs.Reset()
+
+			// The exact size of the stamped document: nothing more goes.
+			if exact := read(stamped.Body.Len(), "view=projection"); exact.Code != http.StatusOK || !strings.Contains(exact.Body.String(), stampedWord) {
+				t.Fatalf("a stamped projection exactly at the ceiling lost its stamps: %d", exact.Code)
+			}
+
+			ceiling := stamped.Body.Len() - 1
+			canonical := read(labelsCallerBytes, "")
+			if within := canonical.Body.Len() <= ceiling; within != (name == "canonical within it") {
+				t.Fatalf("canonical %d bytes against a %d ceiling: this is not the row under test", canonical.Body.Len(), ceiling)
+			}
+			unstamped := read(ceiling, "view=projection")
+			if unstamped.Code != http.StatusOK || unstamped.Body.Len() > ceiling {
+				t.Fatalf("one byte short of the stamps: %d, %d bytes of %d: %.300s", unstamped.Code, unstamped.Body.Len(), ceiling, unstamped.Body.String())
+			}
+			if strings.Contains(unstamped.Body.String(), stampedWord) || !strings.Contains(unstamped.Body.String(), storedWord) || strings.Contains(unstamped.Body.String(), "vocabulary_labels") {
+				t.Fatalf("this is not the stored row's own projection: %.600s", unstamped.Body.String())
+			}
+			if decodeProjection(t, unstamped.Body.Bytes()).ProjectionBudget.FullResultOmitted {
+				t.Fatal("a read by id left no full result out")
+			}
+
+			// The refusal stands where it always stood, for the row's own bytes.
+			if refused := read(unstamped.Body.Len()-1, "view=projection"); refused.Code != http.StatusRequestEntityTooLarge {
+				t.Fatalf("over the ceiling with no words: %d", refused.Code)
+			}
+		})
+	}
+}
+
+// The create door's projection: the stamps go before a row does, and the document
+// still declares the full result left out.
+func TestAStampedProjectionCutsNoRowForItsStamps(t *testing.T) {
+	answer := withUnstampedSources(threeRollupProjectStatusResult("result_labels_bound09"))
+	labeled, _ := cf.ServeVocabularyLabels(answer, true, 0)
+	app := &App{}
+	options := v1.ContextFabricInvestigationOptions{MaxDrivers: 10, MaxCohortMembers: 50, MaxEvidenceRefs: 100, MaxSerializedBytes: 1 << 20}
+	whole, _, _, _, _, fits := app.projectToCallerOption(labeled, answer, options)
+	if !fits || whole.VocabularyLabels == nil {
+		t.Fatalf("the projection must fit with its words first: %v", fits)
+	}
+	noMap := answerprojection.ShedVocabularyLabels(whole, v1.ContextFabricVocabularyLabelsNone)
+	_, noMapBytes, err := marshalContextFabricResponse(noMap)
+	if err != nil {
+		t.Fatal(err)
+	}
+	options.MaxSerializedBytes = int(noMapBytes) - 1
+	cut, encoded, cutBytes, budget, tier, fits := app.projectToCallerOption(labeled, answer, options)
+	if !fits || cutBytes > noMapBytes-1 || tier != v1.ContextFabricVocabularyLabelsNone {
+		t.Fatalf("one byte short of the stamps: fits=%v %d bytes tier %q", fits, cutBytes, tier)
+	}
+	if budget.MaxDrivers != options.MaxDrivers || budget.MaxEvidenceRefs != options.MaxEvidenceRefs || budget.MaxCohortMembers != options.MaxCohortMembers {
+		t.Fatalf("the rows were cut for a stamp: %+v", budget)
+	}
+	if !cut.ProjectionBudget.FullResultOmitted || !strings.Contains(string(encoded), `"state_label":"limited"`) {
+		t.Fatalf("omitted=%v: this is not the answer's own projection", cut.ProjectionBudget.FullResultOmitted)
+	}
+
+	// Below the answer's own projection the rows do go, as they always did, and
+	// nothing is served over the bound.
+	options.MaxSerializedBytes = int(cutBytes) - 1
+	_, _, smallerBytes, cutBudget, _, fits := app.projectToCallerOption(labeled, answer, options)
+	if fits && smallerBytes > int64(options.MaxSerializedBytes) {
+		t.Fatalf("served %d bytes over a %d bound", smallerBytes, options.MaxSerializedBytes)
+	}
+	if cutBudget.MaxEvidenceRefs == options.MaxEvidenceRefs {
+		t.Fatalf("no row went below the answer's own projection: %+v", cutBudget)
+	}
+}
+
+// The last tier carries no map, whatever the answer held.
+func TestTheUnstampedProjectionCarriesNoMap(t *testing.T) {
+	answer := threeRollupProjectStatusResult("result_labels_bound10")
+	answer.VocabularyLabels = map[string]string{"answer_status:complete": "a word from elsewhere"}
+	projection, _, _, ok := unstampedProjection(answer, answerprojection.Budget{}, false)
+	if !ok || projection.VocabularyLabels != nil {
+		t.Fatalf("ok=%v map=%v", ok, projection.VocabularyLabels)
+	}
+}
+
+// The same on the read by id: no full result is left out there, and the tier is
+// the projection's own.
+func TestACutProjectionByIDKeepsItsStatusWordsNoteAndLimitation(t *testing.T) {
+	rig := newCutAnswerRig(t, true, true)
+	_, answer := rig.whole(t)
+	first := readByID(t, rig.app, rig.token, answer.ResultID, "view=projection")
+	if first.Code != http.StatusOK {
+		t.Fatalf("projection by id: %d %s", first.Code, first.Body.String())
+	}
+	full := decodeProjection(t, first.Body.Bytes())
+	keep := statusWordsOf(t, full.VocabularyLabels)
+	if keep[v1.ContextFabricStatusCorrectionNoteKey] == "" {
+		t.Fatalf("no note on the projection, so this proves nothing: %v", keep)
+	}
+	rig.app.config.MaxSerializedBytes = first.Body.Len() - 1
+	recorder := readByID(t, rig.app, rig.token, answer.ResultID, "view=projection")
+	if recorder.Code != http.StatusOK || recorder.Body.Len() > rig.app.config.MaxSerializedBytes {
+		t.Fatalf("one byte short: %d, %d bytes", recorder.Code, recorder.Body.Len())
+	}
+	projected := decodeProjection(t, recorder.Body.Bytes())
+	if !maps.Equal(projected.VocabularyLabels, keep) {
+		t.Fatalf("the served map is %v, want %v", projected.VocabularyLabels, keep)
+	}
+	if got := cutSentence(t, projected.Limitations); got != cutSentence(t, answer.Limitations) {
+		t.Fatalf("the projection says %q", got)
+	}
+}
+
+// (d) A bound too small for the status tier serves no map, and the answer is the
+// one a reader gets with no words at all, on both documents.
+func TestABoundTooSmallForTheStatusWordsLeavesTheAnswerUnharmed(t *testing.T) {
+	plain := newCutAnswerRig(t, false, true)
+	plainWhole, plainAnswer := plain.whole(t)
+	if plainAnswer.VocabularyLabels != nil {
+		t.Fatalf("off served a map: %v", plainAnswer.VocabularyLabels)
+	}
+	plainSentence := cutSentence(t, plainAnswer.Limitations)
+	assertUnharmed := func(t *testing.T, label string, recorder *httptest.ResponseRecorder, wantBytes int) {
+		t.Helper()
+		if recorder.Code != http.StatusOK || strings.Contains(recorder.Body.String(), "vocabulary_labels") || recorder.Body.Len() != wantBytes {
+			t.Fatalf("%s: %d, %d bytes, want the %d of the same answer with no words: %s", label, recorder.Code, recorder.Body.Len(), wantBytes, recorder.Body.String())
+		}
+		if !strings.Contains(recorder.Body.String(), plainSentence) {
+			t.Fatalf("%s: the body lost its limitation", label)
+		}
+	}
+
+	rig := newCutAnswerRig(t, true, true)
+	canonical := rig.post(t, plainWhole.Body.Len())
+	assertUnharmed(t, "canonical", canonical, plainWhole.Body.Len())
+	served := decodeLabeled(t, canonical.Body.Bytes())
+	if served.Status != plainAnswer.Status || len(served.ClaimedFacts) != len(plainAnswer.ClaimedFacts) || served.DirectJudgment != plainAnswer.DirectJudgment {
+		t.Fatalf("the answer changed: status %q/%q claims %d/%d", served.Status, plainAnswer.Status, len(served.ClaimedFacts), len(plainAnswer.ClaimedFacts))
+	}
+	if !strings.Contains(rig.logs.String(), tierLine(v1.ContextFabricVocabularyLabelsNone)) {
+		t.Fatalf("the shed did not name its tier:\n%s", rig.logs.String())
+	}
+
+	plainProjection, _ := plain.overBoundDoor(t, plainAnswer, false)(plainWhole.Body.Len() - 1)
+	if plainProjection.Code != http.StatusOK || decodeProjection(t, plainProjection.Body.Bytes()).VocabularyLabels != nil {
+		t.Fatalf("plain projection: %d %s", plainProjection.Code, plainProjection.Body.String())
+	}
+	projected, logs := rig.overBoundDoor(t, plainAnswer, true)(plainProjection.Body.Len())
+	assertUnharmed(t, "projection", projected, plainProjection.Body.Len())
+	if !decodeProjection(t, projected.Body.Bytes()).ProjectionBudget.FullResultOmitted {
+		t.Fatal("the full result is not declared left out")
+	}
+	if !strings.Contains(logs.String(), tierLine(v1.ContextFabricVocabularyLabelsNone)) {
+		t.Fatalf("the shed did not name its tier:\n%s", logs.String())
+	}
 }

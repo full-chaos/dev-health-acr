@@ -338,6 +338,56 @@ func ContextFabricVocabularyLabel(vocabulary ContextFabricVocabulary, value stri
 	return label, ok
 }
 
+// ContextFabricVocabularyLabelsTier names how much of vocabulary_labels a served
+// document carries (CHAOS-12416). Closed: the shed line states it.
+//
+// The tiers rank what a reader loses. The status words go last, because with no
+// map a partial answer reads a neutral pill, and the correction note is gone, so
+// the pill says less than the limitation below it.
+type ContextFabricVocabularyLabelsTier string
+
+const (
+	// ContextFabricVocabularyLabelsOff: the flag is off, so nothing was shed.
+	ContextFabricVocabularyLabelsOff ContextFabricVocabularyLabelsTier = "off"
+	// ContextFabricVocabularyLabelsFull: the whole map.
+	ContextFabricVocabularyLabelsFull ContextFabricVocabularyLabelsTier = "full"
+	// ContextFabricVocabularyLabelsStatusOnly: answer_status:* and the note.
+	ContextFabricVocabularyLabelsStatusOnly ContextFabricVocabularyLabelsTier = "status_only"
+	// ContextFabricVocabularyLabelsNone: no map fits.
+	ContextFabricVocabularyLabelsNone ContextFabricVocabularyLabelsTier = "none"
+)
+
+// ContextFabricVocabularyLabelsTierVocabulary returns the closed set.
+func ContextFabricVocabularyLabelsTierVocabulary() [4]ContextFabricVocabularyLabelsTier {
+	return [4]ContextFabricVocabularyLabelsTier{
+		ContextFabricVocabularyLabelsOff, ContextFabricVocabularyLabelsFull,
+		ContextFabricVocabularyLabelsStatusOnly, ContextFabricVocabularyLabelsNone,
+	}
+}
+
+// Shed reports that a bound left words out of the served document.
+func (t ContextFabricVocabularyLabelsTier) Shed() bool {
+	return t == ContextFabricVocabularyLabelsStatusOnly || t == ContextFabricVocabularyLabelsNone
+}
+
+// ContextFabricStatusVocabularyLabels keeps the words of the status_only tier:
+// answer_status:* and the correction note. It returns nil when neither is held,
+// so an empty map never stands for a tier.
+func ContextFabricStatusVocabularyLabels(labels map[string]string) map[string]string {
+	var kept map[string]string
+	for key, label := range labels {
+		vocabulary, _, _ := strings.Cut(key, ":")
+		if vocabulary != string(ContextFabricVocabularyAnswerStatus) && key != ContextFabricStatusCorrectionNoteKey {
+			continue
+		}
+		if kept == nil {
+			kept = map[string]string{}
+		}
+		kept[key] = label
+	}
+	return kept
+}
+
 // The two answer status words that are not a table row: a `complete` status
 // whose completeness does not back the table's "Full answer" (CHAOS-12245).
 const (

@@ -1,6 +1,7 @@
 package v1
 
 import (
+	"maps"
 	"regexp"
 	"slices"
 	"strings"
@@ -234,5 +235,41 @@ func TestTheNoteKeyIsServedAndIsNotATable(t *testing.T) {
 	names := ContextFabricVocabularyNames()
 	if slices.Contains(names[:], ContextFabricVocabulary(vocabulary)) {
 		t.Errorf("%q is a vocabulary name, but the note is no table row", vocabulary)
+	}
+}
+
+func TestTheStatusTierKeepsOnlyTheStatusWordsAndTheNote(t *testing.T) {
+	got := ContextFabricStatusVocabularyLabels(map[string]string{
+		"answer_status:partial": "Partial answer", "answer_status:complete": "Answer",
+		ContextFabricStatusCorrectionNoteKey: "A sentence.", "subject_kind:team": "team",
+		"requirement_outcome:narrowed": "narrowed", "answer_statuses:partial": "another vocabulary",
+	})
+	want := map[string]string{"answer_status:partial": "Partial answer", "answer_status:complete": "Answer", ContextFabricStatusCorrectionNoteKey: "A sentence."}
+	if !maps.Equal(got, want) {
+		t.Fatalf("kept %v, want %v", got, want)
+	}
+	if got := ContextFabricStatusVocabularyLabels(map[string]string{"subject_kind:team": "team"}); got != nil {
+		t.Fatalf("no status word kept %v, want nil", got)
+	}
+	if got := ContextFabricStatusVocabularyLabels(nil); got != nil {
+		t.Fatalf("an absent map kept %v, want nil", got)
+	}
+}
+
+// The shed line states one closed value, and only a tier that left words out.
+func TestOnlyATierThatLeftWordsOutIsAShed(t *testing.T) {
+	want := map[ContextFabricVocabularyLabelsTier]bool{
+		ContextFabricVocabularyLabelsOff: false, ContextFabricVocabularyLabelsFull: false,
+		ContextFabricVocabularyLabelsStatusOnly: true, ContextFabricVocabularyLabelsNone: true,
+	}
+	tiers := ContextFabricVocabularyLabelsTierVocabulary()
+	if len(tiers) != len(want) {
+		t.Fatalf("%d tiers, want %d", len(tiers), len(want))
+	}
+	for _, tier := range tiers {
+		shed, listed := want[tier]
+		if !listed || tier.Shed() != shed {
+			t.Errorf("tier %q: listed=%v Shed()=%v, want %v", tier, listed, tier.Shed(), shed)
+		}
 	}
 }

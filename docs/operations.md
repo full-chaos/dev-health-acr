@@ -976,11 +976,13 @@ for `acr-api` and roll it. To turn it off, unset the flag and roll: the next rea
 of the same result carries no map.
 
 **Budget.** The map counts against the byte budget it is served under. The engine
-fits an answer with no map, so a label never costs a row. A document with no room
-for the map is served without it, then without the stamped words if needed. A
-label never refuses an answer, and a consumer then takes its generic path. An
-answer cut to the ceiling therefore usually carries no map. Each shed logs
-`context fabric vocabulary labels shed`, with its `surface`.
+fits an answer with no map, so a label never costs a row, and a label never refuses
+an answer. The shed is tiered: the full map; then only `answer_status:*` and
+`status_correction:note`; then no map; then no stamped source words. So a cut answer
+keeps its status word and its note, and its pill says as much as its limitation
+does. A consumer takes its generic path for the words that are gone. The projection
+sheds by the same tiers, before any row. Each shed logs `context fabric vocabulary labels shed`, with
+`surface` and `tier` (`status_only` or `none`).
 
 ### Investigation event stream (CHAOS-11911)
 

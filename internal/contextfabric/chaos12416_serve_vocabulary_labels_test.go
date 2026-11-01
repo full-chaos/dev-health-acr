@@ -125,9 +125,9 @@ func wordRows() []wordRow {
 
 func serveWords(t *testing.T, result InvestigationResult) map[string]string {
 	t.Helper()
-	served, shed := ServeVocabularyLabels(result, true, 0)
-	if shed {
-		t.Fatal("nothing bounded this document, yet a word was shed")
+	served, tier := ServeVocabularyLabels(result, true, 0)
+	if tier != contractsv1.ContextFabricVocabularyLabelsFull {
+		t.Fatalf("nothing bounded this document, yet it reached tier %q", tier)
 	}
 	return served.VocabularyLabels
 }
@@ -246,9 +246,9 @@ func TestTheInputDocumentIsNotRewritten(t *testing.T) {
 // not gate it: the fields are on every pin.
 func TestSourceWordsAreStampedInBothFlagStates(t *testing.T) {
 	for _, enabled := range []bool{true, false} {
-		served, shed := ServeVocabularyLabels(servedFixture(), enabled, 0)
-		if shed {
-			t.Fatalf("enabled=%v: shed with no bound", enabled)
+		served, tier := ServeVocabularyLabels(servedFixture(), enabled, 0)
+		if tier.Shed() {
+			t.Fatalf("enabled=%v: tier %q with no bound", enabled, tier)
 		}
 		first, second := served.Coverage.Sources[0], served.Coverage.Sources[1]
 		if first.Label != "Canonical facts — blockers" || first.StateLabel != "partly included" {
@@ -274,9 +274,9 @@ func TestAnEmptySourceListStaysAnEmptyList(t *testing.T) {
 func TestOffServesNoMap(t *testing.T) {
 	result := servedFixture()
 	result.VocabularyLabels = map[string]string{"answer_status:complete": "a word from elsewhere"}
-	served, shed := ServeVocabularyLabels(result, false, 0)
-	if served.VocabularyLabels != nil || shed {
-		t.Fatalf("off served %v (shed=%v)", served.VocabularyLabels, shed)
+	served, tier := ServeVocabularyLabels(result, false, 0)
+	if served.VocabularyLabels != nil || tier != contractsv1.ContextFabricVocabularyLabelsOff {
+		t.Fatalf("off served %v (tier %q)", served.VocabularyLabels, tier)
 	}
 	on, _ := ServeVocabularyLabels(result, true, 0)
 	if on.VocabularyLabels["answer_status:complete"] != "Full answer" {
@@ -293,50 +293,96 @@ func encodedSize(t *testing.T, result InvestigationResult) int64 {
 	return int64(len(encoded))
 }
 
-// The ladder, each step at its own byte: the richest document within the bound.
-func TestABoundShedsTheMapThenTheStampedWords(t *testing.T) {
-	bare := servedFixture()
+func correctedFixture() InvestigationResult {
+	result := servedFixture()
+	result.Status = contractsv1.ContextFabricInvestigationPartial
+	result.Completeness.State = contractsv1.ContextFabricAnswerCompletenessPartial
+	result.StatusCorrection = &contractsv1.ContextFabricStatusCorrection{
+		ReplacedStatus: contractsv1.ContextFabricInvestigationComplete, Direction: contractsv1.ContextFabricStatusCorrectionCompleteToPartial,
+		DecidingRequirement: "health/subject/team", DecidingOutcome: contractsv1.ContextFabricRequirementNarrowed,
+	}
+	return result
+}
+
+// The ladder, each tier at its own byte: the richest document within the bound.
+func TestABoundShedsTheMapByTierThenTheStampedWords(t *testing.T) {
+	const (
+		full   = contractsv1.ContextFabricVocabularyLabelsFull
+		status = contractsv1.ContextFabricVocabularyLabelsStatusOnly
+		none   = contractsv1.ContextFabricVocabularyLabelsNone
+		off    = contractsv1.ContextFabricVocabularyLabelsOff
+	)
+	bare := correctedFixture()
 	stamped, _ := ServeVocabularyLabels(bare, false, 0)
 	labeled, _ := ServeVocabularyLabels(bare, true, 0)
-	bareBytes, stampedBytes, labeledBytes := encodedSize(t, bare), encodedSize(t, stamped), encodedSize(t, labeled)
-	if bareBytes >= stampedBytes || stampedBytes >= labeledBytes {
-		t.Fatalf("the fixture must grow at each step: %d %d %d", bareBytes, stampedBytes, labeledBytes)
+	statusOnly := stamped
+	statusOnly.VocabularyLabels = contractsv1.ContextFabricStatusVocabularyLabels(labeled.VocabularyLabels)
+	bareBytes, stampedBytes, statusBytes, labeledBytes := encodedSize(t, bare), encodedSize(t, stamped), encodedSize(t, statusOnly), encodedSize(t, labeled)
+	if bareBytes >= stampedBytes || stampedBytes >= statusBytes || statusBytes >= labeledBytes {
+		t.Fatalf("the fixture must grow at each step: %d %d %d %d", bareBytes, stampedBytes, statusBytes, labeledBytes)
 	}
 	for name, row := range map[string]struct {
 		enabled bool
 		bound   int64
 		want    int64
-		shed    bool
+		tier    contractsv1.ContextFabricVocabularyLabelsTier
 	}{
-		"exactly the labeled document":   {true, labeledBytes, labeledBytes, false},
-		"one byte short of the map":      {true, labeledBytes - 1, stampedBytes, true},
-		"exactly the stamped document":   {true, stampedBytes, stampedBytes, true},
-		"one byte short of the stamps":   {true, stampedBytes - 1, bareBytes, true},
-		"nothing fits: the input stands": {true, bareBytes - 1, bareBytes, true},
-		"no bound":                       {true, 0, labeledBytes, false},
-		"off, the stamps fit":            {false, stampedBytes, stampedBytes, false},
-		"off, the stamps do not fit":     {false, stampedBytes - 1, bareBytes, false},
+		"exactly the full map":           {true, labeledBytes, labeledBytes, full},
+		"one byte short of the full map": {true, labeledBytes - 1, statusBytes, status},
+		"exactly the status words":       {true, statusBytes, statusBytes, status},
+		"one byte short of them":         {true, statusBytes - 1, stampedBytes, none},
+		"exactly the stamped document":   {true, stampedBytes, stampedBytes, none},
+		"one byte short of the stamps":   {true, stampedBytes - 1, bareBytes, none},
+		"nothing fits: the input stands": {true, bareBytes - 1, bareBytes, none},
+		"no bound":                       {true, 0, labeledBytes, full},
+		"off, the stamps fit":            {false, stampedBytes, stampedBytes, off},
+		"off, the stamps do not fit":     {false, stampedBytes - 1, bareBytes, off},
 	} {
 		t.Run(name, func(t *testing.T) {
-			served, shed := ServeVocabularyLabels(bare, row.enabled, row.bound)
-			if got := encodedSize(t, served); got != row.want || shed != row.shed {
-				t.Fatalf("served %d bytes (shed=%v), want %d (shed=%v)", got, shed, row.want, row.shed)
+			served, tier := ServeVocabularyLabels(bare, row.enabled, row.bound)
+			if got := encodedSize(t, served); got != row.want || tier != row.tier {
+				t.Fatalf("served %d bytes at tier %q, want %d at %q", got, tier, row.want, row.tier)
 			}
-			if row.want < labeledBytes && served.VocabularyLabels != nil {
-				t.Fatalf("a document under the labeled size holds a map: %v", served.VocabularyLabels)
+			switch row.tier {
+			case status:
+				if !maps.Equal(served.VocabularyLabels, map[string]string{
+					"answer_status:partial": "Partial answer", "answer_status:complete": "Answer, not fully covered",
+					"status_correction:note": "The service lowered this answer from Answer, not fully covered to Partial answer: health was read only in part.",
+				}) {
+					t.Fatalf("the status tier holds %v", served.VocabularyLabels)
+				}
+			case none, off:
+				if served.VocabularyLabels != nil {
+					t.Fatalf("tier %q holds a map: %v", row.tier, served.VocabularyLabels)
+				}
 			}
 		})
 	}
 }
 
+// A document with no status word has no status tier: an empty map must not
+// stand for one, or the shed line would claim words the reader never got.
+func TestNoStatusWordMeansNoStatusTier(t *testing.T) {
+	result := servedFixture()
+	result.Status = "a_future_status"
+	labeled, _ := ServeVocabularyLabels(result, true, 0)
+	if labeled.VocabularyLabels == nil {
+		t.Fatal("the fixture needs another word, or this proves nothing")
+	}
+	served, tier := ServeVocabularyLabels(result, true, encodedSize(t, labeled)-1)
+	if tier != contractsv1.ContextFabricVocabularyLabelsNone || served.VocabularyLabels != nil {
+		t.Fatalf("tier %q map %v, want none", tier, served.VocabularyLabels)
+	}
+}
+
 // CHAOS-12416 lifts CHAOS-12415's ban and keeps its reach: the map is set by the
-// serve function, copied by Project and shed by WithoutVocabularyLabels, and by
-// no other production code. A second writer could emit it past the flag or the
+// serve function, copied by Project, narrowed by ShedVocabularyLabels and
+// restated by restateStatusWords, and by no other production code. A second writer could emit it past the flag or the
 // bound, or put it on a stored document.
 func TestOnlyTheServeFunctionSetsTheMap(t *testing.T) {
 	root := repopath.Root(t)
 	const declaringFields = 2 // the result and the projection
-	want := map[string]bool{"ServeVocabularyLabels": true, "Project": true, "WithoutVocabularyLabels": true}
+	want := map[string]bool{"ServeVocabularyLabels": true, "Project": true, "ShedVocabularyLabels": true, "restateStatusWords": true}
 	files, declared := 0, 0
 	writers := map[string]bool{}
 	var strays []string
