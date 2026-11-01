@@ -83,7 +83,7 @@ func TestTheLifecycleTickInitialFailureFailsStartup(t *testing.T) {
 	}
 }
 
-func TestTheLifecycleTickNamesEverySkippedCredentialOnEveryTick(t *testing.T) {
+func TestTheLifecycleTickWarnsWithTheSkipCountAndNeverNamesACredentialOnEveryTick(t *testing.T) {
 	logger, buffer := tickLogger()
 	ticker := &fakeLifecycleTicker{result: storagepostgres.LifecycleTickResult{Expired: 1, Skipped: 2, SkippedIDs: []string{"cred_bad_one", "cred_bad_two"}}}
 	stop, err := startCredentialLifecycleTick(context.Background(), ticker, logger, nil)
@@ -92,10 +92,16 @@ func TestTheLifecycleTickNamesEverySkippedCredentialOnEveryTick(t *testing.T) {
 	}
 	_ = stop()
 	out := buffer.String()
-	for _, want := range []string{credentialLifecycleTickSkippedMessage, "aggregate_id=cred_bad_one", "aggregate_id=cred_bad_two", "skipped=2"} {
+	for _, want := range []string{credentialLifecycleTickSkippedMessage, "level=WARN", "skipped=2"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("log lacks %q: %s", want, out)
 		}
+	}
+	if strings.Contains(out, "cred_bad") || strings.Contains(out, "aggregate_id") || strings.Contains(out, "credential_id") {
+		t.Errorf("the warning names no credential: %s", out)
+	}
+	if got := strings.Count(out, credentialLifecycleTickSkippedMessage); got != 1 {
+		t.Errorf("one warning per tick, got %d: %s", got, out)
 	}
 
 	logger, buffer = tickLogger()
@@ -105,7 +111,7 @@ func TestTheLifecycleTickNamesEverySkippedCredentialOnEveryTick(t *testing.T) {
 		t.Fatal(err)
 	}
 	_ = stop()
-	if !strings.Contains(buffer.String(), "aggregate_id=cred_bad_one") {
-		t.Errorf("a tick that only skipped still names the credential: %s", buffer.String())
+	if !strings.Contains(buffer.String(), credentialLifecycleTickSkippedMessage) || !strings.Contains(buffer.String(), "skipped=1") {
+		t.Errorf("a tick that only skipped still warns with the count: %s", buffer.String())
 	}
 }

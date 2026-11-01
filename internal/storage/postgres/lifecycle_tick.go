@@ -60,7 +60,7 @@ type LifecycleTickResult struct {
 	Full       bool
 	// Skipped counts the credentials the event mapper refuses (an empty scope
 	// list, written by hand): no event describes them, so the tick leaves them
-	// and names them every run; SkippedIDs are their ids.
+	// and counts them every run; SkippedIDs are their ids (no emitter logs them).
 	Skipped    int
 	SkippedIDs []string
 }

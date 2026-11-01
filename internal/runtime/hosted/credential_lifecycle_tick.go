@@ -15,10 +15,11 @@ const (
 	// credentialLifecycleTickFullMessage is the fixed line of a batch that
 	// reached its limit: the retention deletes wait for the expired events.
 	credentialLifecycleTickFullMessage = "credential lifecycle tick batch full; more rows wait for the next tick"
-	// credentialLifecycleTickSkippedMessage is the fixed line of a credential no
-	// event can describe (an empty scope list): it names the credential every
-	// tick until someone revokes it, and the retention gate keeps it undeleted.
-	credentialLifecycleTickSkippedMessage = "credential lifecycle tick skipped a credential no event can describe; revoke it"
+	// credentialLifecycleTickSkippedMessage is the fixed line of credentials no
+	// event can describe (an empty scope list): one warning with the count every
+	// tick until each is revoked, and the retention gate keeps them undeleted.
+	// It names no credential; docs/operations.md gives the query that finds them.
+	credentialLifecycleTickSkippedMessage = "credential lifecycle tick skipped credentials no event can describe (empty scope list); revoke them, see the operations guide"
 )
 
 // credentialLifecycleTicker is *storagepostgres.LifecycleTick's tick.
@@ -38,8 +39,8 @@ func startCredentialLifecycleTick(ctx context.Context, ticker credentialLifecycl
 			if result.Expired > 0 || result.FirstTouch > 0 || result.Skipped > 0 {
 				logger.InfoContext(ctx, "credential lifecycle tick", "source", "tick", "expired", result.Expired, "first_touch", result.FirstTouch, "skipped", result.Skipped)
 			}
-			for _, id := range result.SkippedIDs {
-				logger.WarnContext(ctx, credentialLifecycleTickSkippedMessage, "aggregate_id", id)
+			if result.Skipped > 0 {
+				logger.WarnContext(ctx, credentialLifecycleTickSkippedMessage, "skipped", result.Skipped)
 			}
 			if result.Full {
 				logger.InfoContext(ctx, credentialLifecycleTickFullMessage)
