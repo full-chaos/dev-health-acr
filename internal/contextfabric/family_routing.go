@@ -34,6 +34,14 @@ package contextfabric
 // question set, NOT a claim they are unreachable, and it is exactly why an
 // unobserved class does not get switched: there is nothing to have shown it
 // safe.
+//
+// CHAOS-12492 is the one later observation. goal_row_unreachable_in_precedence
+// was seen live on every subject of one organization (the lead's ruling on the
+// rich views plan): a named subject's allocate_investment frame projected to
+// investment_allocation and was served subject_investigation, so nothing keyed
+// on the family could fire. namedInvestmentGoalRow switches that case alone. The
+// class's other cases have no such observation: a trend frame, and an
+// organization frame, stay declined.
 
 // FamilyRouteSource names which table produced the SERVED family.
 //
@@ -277,6 +285,19 @@ var familyRouteTable = [...]familyRouteRule{
 	{FamilyAgreementUnexplained, FamilyRoutePrecedence, FamilyRouteDeclinedUnexplained},
 }
 
+// namedInvestmentGoalRoute is the part of goal_row_unreachable_in_precedence
+// that serves the projection (CHAOS-12492). It is apart from familyRouteTable
+// because that table holds one row per class, and this is one case of a class.
+var namedInvestmentGoalRoute = familyRouteRule{FamilyAgreementGoalRowUnreachable, FamilyRouteProjected, FamilyRouteIntendedChange}
+
+// namedInvestmentGoalRow reports the case that route serves: a named subject
+// whose frame asks where its effort goes.
+func namedInvestmentGoalRow(agreement FamilyAgreement) bool {
+	return agreement.Class == FamilyAgreementGoalRowUnreachable &&
+		agreement.ProjectedRow == FamilyProjectionRowInvestment &&
+		agreement.ProjectedTopology == SubjectExpressionNamed
+}
+
 // RouteQuestionFamily decides which family is SERVED for one comparison.
 //
 // TOTAL AND PURE. Every FamilyAgreementClass member has a row; an agreement
@@ -288,6 +309,9 @@ func RouteQuestionFamily(agreement FamilyAgreement) FamilyRouteDecision {
 	for _, rule := range familyRouteTable {
 		if rule.class != agreement.Class {
 			continue
+		}
+		if namedInvestmentGoalRow(agreement) {
+			rule = namedInvestmentGoalRoute
 		}
 		decision := FamilyRouteDecision{
 			Source: rule.source, Class: rule.class, Disposition: rule.disposition,

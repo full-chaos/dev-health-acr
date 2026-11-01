@@ -554,18 +554,32 @@ var questionFamilyDefinitions = []QuestionFamilyDefinition{
 		Family:      QuestionFamilyInvestmentAllocation,
 		Dimension:   HealthDimensionInvestmentBalance,
 		SubjectAxis: SubjectAxisOne,
+		// CHAOS-12492: these questions were served as subject_investigation
+		// until this family became reachable, so they keep its axes and its
+		// ask order. An ambiguous subject must still be asked about.
 		ApplicableAxes: []StructureNeedKind{
+			contractsv1.ContextFabricStructureNeedExpectedKind,
+			contractsv1.ContextFabricStructureNeedSubjectHandle,
+			contractsv1.ContextFabricStructureNeedSubjectCandidate,
 			contractsv1.ContextFabricStructureNeedSubjectAnchor,
 			contractsv1.ContextFabricStructureNeedWindow,
 		},
-		AskOrder:       []StructureNeedKind{contractsv1.ContextFabricStructureNeedWindow},
+		AskOrder: []StructureNeedKind{
+			contractsv1.ContextFabricStructureNeedExpectedKind,
+			contractsv1.ContextFabricStructureNeedSubjectHandle,
+			contractsv1.ContextFabricStructureNeedSubjectCandidate,
+			contractsv1.ContextFabricStructureNeedWindow,
+		},
 		FactRoles:      []FactRole{FactRoleSubject},
 		RequireDrivers: false,
 		RequireRanking: false,
 		// treemap and sunburst have NO producer today -- both are listed
 		// in DeclaredUnproducedRenderKinds, which is what makes this
-		// declaration honest rather than a promise.
+		// declaration honest rather than a promise. table and series are
+		// what these questions already allowed, as above.
 		RenderKinds: []contractsv1.ContextFabricRenderKind{
+			contractsv1.ContextFabricRenderKindTable,
+			contractsv1.ContextFabricRenderKindSeries,
 			contractsv1.ContextFabricRenderKindTreemap,
 			contractsv1.ContextFabricRenderKindSunburst,
 		},

@@ -99,8 +99,9 @@ const (
 	// deliberate property with a precedent rather than dead code.
 	QuestionFamilyTrend = contractsv1.ContextFabricQuestionFamilyTrend // "trend"
 	// QuestionFamilyInvestmentAllocation is "where did our effort go?" --
-	// investment facts with a declared breakdown table. Declared and
-	// deliberately unreachable in this slice, same as trend.
+	// investment facts with a declared breakdown table. The precedence
+	// table does not produce it; the route serves it from the frame's
+	// projection for a named subject (CHAOS-12492).
 	QuestionFamilyInvestmentAllocation = contractsv1.ContextFabricQuestionFamilyInvestmentAllocation // "investment_allocation"
 	// QuestionFamilyUnclassified is the REFUSE-TO-GUESS member and the
 	// vocabulary's own fallback. It is never a failure and never an
