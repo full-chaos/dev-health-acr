@@ -146,9 +146,21 @@ func TestBrowserFamilyPurge_postgresDeletesEndedFamiliesAndKeepsTheRest(t *testi
 	// nothing in it is live: the members and the families go, in batches of
 	// one, with the backlog in the remaining counts.
 	late := now.Add(auth.BrowserFamilyLifetime + grace + time.Minute)
+	// The retention gate: an unrevoked member waits for its expired event. Before
+	// the lifecycle tick runs only the two members revoked by a sign-out or on
+	// their own are eligible; the planted and the untouched member (unrevoked,
+	// expired) are kept, whatever the family end.
 	remaining, err = fixture.refresh.CountEndedFamiliesRemaining(ctx, late, grace, 2)
 	require.NoError(t, err)
-	require.Equal(t, BrowserFamilyPurgeRemaining{Credentials: 3, Families: 0}, remaining, "4 members are eligible, capped at limit+1; no family is eligible while its members remain")
+	require.Equal(t, BrowserFamilyPurgeRemaining{Credentials: 2, Families: 0}, remaining, "only the 2 revoked members are eligible before the tick wrote the expired events")
+	for _, family := range []purgeFamily{planted, untouched} {
+		require.True(t, credentialExists(t, ctx, fixture.db, family.members[0]), "an unrevoked expired member without its expired event is not eligible, so it is still there")
+	}
+	_, err = newTickOn(t, fixture.db).Tick(ctx, late, 500)
+	require.NoError(t, err)
+	remaining, err = fixture.refresh.CountEndedFamiliesRemaining(ctx, late, grace, 2)
+	require.NoError(t, err)
+	require.Equal(t, BrowserFamilyPurgeRemaining{Credentials: 3, Families: 0}, remaining, "after the tick 4 members are eligible, capped at limit+1; no family is eligible while its members remain")
 	total := BrowserFamilyPurgeResult{}
 	for range 10 {
 		result, err = fixture.refresh.PurgeEndedFamilies(ctx, late, grace, 1)

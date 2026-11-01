@@ -143,7 +143,15 @@ VALUES ('wlb_test_3', $1, 'cluster.local', 'ns', 'sa', 'uid', 'read', '["*"]'::j
 	require.NoError(t, err)
 
 	purge := NewWorkloadCredentialPurger(db)
+	// The retention gate: an expired workload row with no expired event is kept.
 	purged, err := purge(ctx, now, 500)
+	require.NoError(t, err)
+	require.Zero(t, purged, "an unevented expired workload row waits for the lifecycle tick")
+	_, err = credentials.GetByID(ctx, workloadBindingTestOrgID, expiredWorkload.Credential.CredentialID)
+	require.NoError(t, err, "and is still there")
+	_, err = newTickOn(t, db).Tick(ctx, now, 500)
+	require.NoError(t, err)
+	purged, err = purge(ctx, now, 500)
 	require.NoError(t, err)
 	require.Equal(t, 1, purged)
 
