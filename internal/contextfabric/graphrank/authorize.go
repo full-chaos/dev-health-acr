@@ -311,24 +311,67 @@ func projectOnlyAdmits(principal storage.Principal, requested contextfabric.Requ
 //     edge is denied until CHAOS-12229 maps them. "*" or an absent list
 //     defers to the endpoints; any other value denies.
 func AuthorizedEdge(principal storage.Principal, requested contextfabric.RequestedScope, relation string, attributes map[string]interface{}) bool {
+	return AuthorizedEdgeBasis(principal, requested, relation, attributes) == EdgeBasisAdmitted
+}
+
+// EdgeBasis is why AuthorizedEdge decided an edge's own attributes
+// (CHAOS-12300): the E1/E2 decision basis a trace counts per outcome. It is
+// telemetry only; AuthorizedEdgeBasis is the one decision.
+type EdgeBasis string
+
+const (
+	// EdgeBasisAdmitted: the edge's own attributes pass.
+	EdgeBasisAdmitted EdgeBasis = "admitted"
+	// EdgeBasisAttributes: a caller of any class but project_only, whose
+	// edge attributes AuthorizedAttributes refuses.
+	EdgeBasisAttributes EdgeBasis = "attributes"
+	// EdgeBasisProjectNarrowing: a project-only request that names projects
+	// (ruling B, CHAOS-12324).
+	EdgeBasisProjectNarrowing EdgeBasis = "project_narrowing_refused"
+	// EdgeBasisAttributionRelation: E2, a DOCUMENTED_BY or HAS_EPISODE edge
+	// under project_only.
+	EdgeBasisAttributionRelation EdgeBasis = "attribution_relation"
+	// EdgeBasisProjectList: E1, a project-only caller and an edge whose real
+	// project list holds no granted identity, or a list of an unreadable
+	// shape.
+	EdgeBasisProjectList EdgeBasis = "project_list"
+)
+
+// EdgeBasisVocabulary is the closed set of edge bases.
+func EdgeBasisVocabulary() [5]EdgeBasis {
+	return [5]EdgeBasis{EdgeBasisAdmitted, EdgeBasisAttributes, EdgeBasisProjectNarrowing, EdgeBasisAttributionRelation, EdgeBasisProjectList}
+}
+
+// AuthorizedEdgeBasis is AuthorizedEdge with its basis: the one place the
+// edge half of an edge's admission is decided.
+func AuthorizedEdgeBasis(principal storage.Principal, requested contextfabric.RequestedScope, relation string, attributes map[string]interface{}) EdgeBasis {
 	if auth.ClassifyGrant(principal) != auth.GrantProjectOnly {
-		return AuthorizedAttributes(principal, requested, attributes)
+		if AuthorizedAttributes(principal, requested, attributes) {
+			return EdgeBasisAdmitted
+		}
+		return EdgeBasisAttributes
 	}
-	if len(requested.ProjectIDs) > 0 || IsObservationAttributionRelation(NormalizeRelation(relation)) {
-		return false
+	if len(requested.ProjectIDs) > 0 {
+		return EdgeBasisProjectNarrowing
+	}
+	if IsObservationAttributionRelation(NormalizeRelation(relation)) {
+		return EdgeBasisAttributionRelation
 	}
 	raw, present := attributes[authorizationProjectsAttr]
 	if !present {
-		return true
+		return EdgeBasisAdmitted
 	}
+	admitted := false
 	switch projects := raw.(type) {
 	case string:
-		return projects == "*"
+		admitted = projects == "*"
 	case []string:
-		return slices.ContainsFunc(projects, func(project string) bool { return slices.Contains(principal.ProjectScopes, project) })
-	default:
-		return false
+		admitted = slices.ContainsFunc(projects, func(project string) bool { return slices.Contains(principal.ProjectScopes, project) })
 	}
+	if admitted {
+		return EdgeBasisAdmitted
+	}
+	return EdgeBasisProjectList
 }
 
 // AuthorizedThroughLink is the issue side of a link of record under a

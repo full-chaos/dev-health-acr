@@ -18,6 +18,10 @@ const (
 	EdgeWithheldAttributes = gatevocab.EdgeWithheldAttributes
 	EdgeWithheldSource     = gatevocab.EdgeWithheldSource
 	EdgeWithheldTarget     = gatevocab.EdgeWithheldTarget
+	// EdgeWithheldAttributionRelation and EdgeWithheldProjectList are the
+	// project-only E2 and E1 bases (CHAOS-12300).
+	EdgeWithheldAttributionRelation = gatevocab.EdgeWithheldAttributionRelation
+	EdgeWithheldProjectList         = gatevocab.EdgeWithheldProjectList
 )
 
 // EdgeDirection is the direction of an edge read, relative to the origin
@@ -134,7 +138,13 @@ const (
 // absent, ownership unproven) withholds every edge that touches it, so an
 // edge never shows a node the caller could not read by id.
 func EdgeGate(principal storage.Principal, relation string, edgeAttributes map[string]interface{}, sourceAdmitted, targetAdmitted bool) EdgeWithheldReason {
-	if !graphrank.AuthorizedEdge(principal, contextfabric.RequestedScope{}, relation, edgeAttributes) {
+	switch graphrank.AuthorizedEdgeBasis(principal, contextfabric.RequestedScope{}, relation, edgeAttributes) {
+	case graphrank.EdgeBasisAdmitted:
+	case graphrank.EdgeBasisAttributionRelation:
+		return EdgeWithheldAttributionRelation
+	case graphrank.EdgeBasisProjectList:
+		return EdgeWithheldProjectList
+	default:
 		return EdgeWithheldAttributes
 	}
 	if !sourceAdmitted {

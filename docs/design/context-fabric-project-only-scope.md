@@ -300,13 +300,64 @@ subjects, which the graph denies this caller.
 
 ## Observability
 
-c4, CHAOS-12300. At Info, corpus-safe (never ids):
+c4, CHAOS-12300. At Info, corpus-safe: counts, closed vocabularies and
+classes only, never an id, a label or a digest value. The decision
+vocabularies (`principal_class`, `principal_scope`, `caller_class`) keep
+project_only as a restricted subtype, so the gates' decisions do not move; a
+separate `grant_class` field (`auth.GrantClassVocabulary`: `unrestricted`,
+`universal`, `restricted`, `project_only`) tells it apart.
 
-- the admission basis: class, project count and digest class;
-- the E1/E2 decision basis;
-- a grant-equality result;
-- membership outcomes `missing`, `stale` and `cleared`, never folded into
-  "absent".
+- **Admission basis** (`internal/api/principal_access.go`
+  `logAccessGranted`). For a project-only principal, `principal access read
+  granted` is written at Info with `grant_class`, `project_scope_count` and
+  `grant_digest_class`. Every other class keeps its Debug line unchanged.
+- **Grant class on every authorization line.** `grant_class` and
+  `project_scope_count` are required fields of
+  `contextfabric.direct_read_authorization`,
+  `contextfabric.direct_relationships_read` and
+  `contextfabric.stored_result_authorization` (eventspec).
+- **E1/E2 decision basis.** `graphrank.AuthorizedEdgeBasis` is the one
+  decision; `AuthorizedEdge` is "the basis is `admitted`". Its bases:
+  `admitted`, `attributes` (any other class), `project_narrowing_refused`,
+  `attribution_relation` (E2) and `project_list` (E1: a real project list with
+  no granted identity).
+  - The direct relationships line counts `edges_withheld_attribution_relation`
+    and `edges_withheld_project_list` apart from `edges_withheld_attributes`,
+    `edges_withheld_source` and `edges_withheld_target` (E1 endpoints). The
+    public `edges_not_visible` total is unchanged.
+  - The walk's `context_fabric: relationship edges filtered` line, for a
+    project-only caller only, adds `grant_class`, `authz_endpoint`,
+    `authz_attribution_relation`, `authz_project_list`,
+    `authz_project_narrowing` and `authz_unclassified`. The generic walk and
+    the tree walks both classify each refusal, and a denial that only a tree
+    walk reported still takes this line. `authz_unclassified` holds what no
+    site can name (a fused link read that returned no feed edge), so the parts
+    add up to `authz`. Every other class keeps its three counts.
+- **Grant-equality result.** Every read of a stored result (not the
+  fact-root recheck) adds `grant_digest_class` (the reader's),
+  `stored_grant_digest_class` (the result's: `open`, `repository`, `project`,
+  `unrecorded`, `malformed`) and `grant_digest_equal`, on an admitted and on a
+  denied read alike. `repository` and `project` need exactly 32 lowercase hex
+  after the prefix, the shape migration 0066 admits; any other value is
+  `malformed`. A different project set
+  of the same size and class reads as `grant_digest_equal: false`; the R2-4
+  read of a `p:` result by an unrestricted reader reads as admitted and
+  unequal.
+- **Membership outcomes** (`devhealthsource`, the #1821 review F3). Each
+  membership read writes `context fabric work item project membership stated`
+  with `table` (`work_items` or `work_items_project_membership`),
+  `work_items`, `member`, `missing` (no membership row), `stale` (rows that
+  resolve to no single statable project) and `cleared` (the refresh table
+  found no row after a membership change: the last project was left). An empty
+  set is never one "absent" count. A refresh pass that re-read no work item
+  writes its line too, with zeros, so a normal empty refresh is visible; the
+  line is one per pass, never one per work item.
+- **Node basis.** For project_only the subject kind is the node rule: an
+  admitted organization is the caller's own, an admitted project is granted,
+  an admitted work item is a member. The gate line's `admitted_count`,
+  `denied_count` and `refused_kinds` carry it. It does not tell an unstated
+  work item from a stated non-member: the graph authorizer returns an outcome,
+  not the attributes.
 
 ## The split and the roll order
 

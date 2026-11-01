@@ -1,4 +1,4 @@
-.PHONY: content-check install-pre-push-hook fmt fmt-check test test-split test-race test-race-shared test-race-isolated test-race-split test-shuffle-random test-coverage coverage-cobertura isolated-timeout print-gotest-timeout crosscompile hosted-integration clients-real vet contract-write contract-test codegraph-contract shard-plan trial-data-checks canonical-receipts build verify release-local release-verify container-contract container-pins container-test container-reproducible container-oci container-scan fullstack-opencode-e2e fullstack-contract o4-oracle-live o4-oracle-capture o4-oracle-repin
+.PHONY: content-check install-pre-push-hook fmt fmt-check test test-split test-race test-race-shared test-race-isolated test-race-split test-shuffle-random test-coverage coverage-cobertura isolated-timeout print-gotest-timeout crosscompile hosted-integration web-assertion-integration clients-real vet contract-write contract-test codegraph-contract shard-plan trial-data-checks canonical-receipts build verify release-local release-verify container-contract container-pins container-test container-reproducible container-oci container-scan fullstack-opencode-e2e fullstack-contract o4-oracle-live o4-oracle-capture o4-oracle-repin
 
 RELEASE_OUTPUT ?= .tmp/release
 RELEASE_VERSION ?=
@@ -312,6 +312,15 @@ crosscompile:
 
 hosted-integration:
 	ACR_CONTAINER_TESTS=1 ACR_HOSTED_INTEGRATION=1 go test ./cmd/acr-api -run '^TestHostedRuntime_real_binary_serves_and_fails_readiness_safely$$' -count=1 -v
+
+# The web assertion on the real acr-api binary with disposable dependencies:
+# the accept path (happy, retiring-key) and the refusals that need no other
+# input (retired-key, removed-key). The other scenarios of
+# scripts/e2e/web-assertion.sh stay a manual run: each starts the whole fixture.
+web-assertion-integration:
+	@for scenario in happy retiring-key retired-key removed-key; do \
+		ACR_CONTAINER_TESTS=1 bash scripts/e2e/web-assertion.sh --scenario "$$scenario" || exit 1; \
+	done
 
 clients-real:
 	bash scripts/clients/test-conformance.sh --clients opencode,claude-code,codex,cursor
