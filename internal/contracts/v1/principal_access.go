@@ -23,4 +23,9 @@ const (
 	ContextFabricAccessDeniedMessage    = "Access to this organization is not available for this credential"
 	ContextFabricNoRepositoryMessage    = "No repository is in scope for this credential"
 	ContextFabricBudgetExhaustedMessage = "The request budget left is below the minimum for an investigation"
+	// ContextFabricAccessInventoryOverLimitMessage is the 503 of an inventory
+	// above its limit (CHAOS-12301): upstream_unavailable, not retryable. Dev
+	// Health refuses such an inventory rather than truncate it, and the reason
+	// is in the log line and the audit event, never on the wire.
+	ContextFabricAccessInventoryOverLimitMessage = "This organization's inventory is above the supported access limit"
 )

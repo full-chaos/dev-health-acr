@@ -358,6 +358,40 @@ func NarrowRepositoryScopes(ctx context.Context, scopes []string) (context.Conte
 	return context.WithValue(ctx, principalKey{}, principal), nil
 }
 
+// ErrEmptyProjectScope refuses narrowing a principal to no project: a project
+// grant can never become the empty grant, which reads as unrestricted.
+var ErrEmptyProjectScope = errors.New("effective project scope is empty")
+
+// ErrProjectScopeNeedsStarGrant refuses a project grant for any consent grant
+// but "*" (CHAOS-12107 D2): widening an explicit repository grant to every
+// project of an organization goes beyond what the user consented to.
+var ErrProjectScopeNeedsStarGrant = errors.New("a project scope needs a \"*\" consent grant")
+
+// NarrowToProjectScopes returns ctx with its authenticated principal made
+// project_only (CHAOS-12301): projects, the canonical identities of the live
+// project inventory, become its grant, and its repository list becomes the one
+// reserved value, so a site that still reads the raw list sees a restricted
+// list that matches no repository, never "*" and never the empty list. Only a
+// "*" consent grant may take this path; the caller has already seen that the
+// live repository inventory is empty. The reserved value is set here, after
+// normalization, because NormalizeRepositoryScopes refuses its prefix: nothing
+// on the protected chain normalizes a principal's list again.
+func NarrowToProjectScopes(ctx context.Context, projects []string) (context.Context, error) {
+	principal, ok := PrincipalFromContext(ctx)
+	if !ok {
+		return ctx, errors.New("no authenticated principal to narrow")
+	}
+	if len(projects) == 0 {
+		return ctx, ErrEmptyProjectScope
+	}
+	if ClassifyGrant(principal) != GrantUniversal {
+		return ctx, ErrProjectScopeNeedsStarGrant
+	}
+	principal.RepositoryScopes = []string{contractsv1.ProjectOnlyRepositoryScope}
+	principal.ProjectScopes = append([]string(nil), projects...)
+	return context.WithValue(ctx, principalKey{}, principal), nil
+}
+
 // recordUnknownFailure sanitizes `ip` at the log site so the invariant
 // holds for any ClientIPResolver a caller configures, not only the two
 // this repo ships.

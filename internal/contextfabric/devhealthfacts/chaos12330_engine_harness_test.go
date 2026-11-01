@@ -106,6 +106,10 @@ type projectOnlyEngineModel struct {
 	input       bool
 	interpreted int
 	synthesized int
+	// draft, when set, writes the answer from what synthesis was given.
+	draft func(contextfabric.SynthesisInput, contextfabric.SynthesisDraft) contextfabric.SynthesisDraft
+	// providers, when set, replaces the production provider set.
+	providers func([]contextfabric.FactProvider) []contextfabric.FactProvider
 }
 
 func (m *projectOnlyEngineModel) InterpretQuestion(context.Context, storage.Principal, contextfabric.InvestigationRequest) (contextfabric.InterpretedQuestion, contextfabric.ModelExecutionReceipt, error) {
@@ -138,6 +142,9 @@ func (m *projectOnlyEngineModel) SynthesizeAnswer(_ context.Context, _ storage.P
 	m.facts = input.Facts
 	m.input = true
 	draft := contextfabric.SynthesisDraft{Status: contextfabric.InvestigationComplete, DirectJudgment: "No facts were available.", CurrentState: "No facts were available.", DeterministicAnswer: "No facts were available.", StrongestPressures: []string{}, RemainingWork: []contextfabric.Finding{}, ReadinessGaps: []contextfabric.Finding{}, Conflicts: []contextfabric.Finding{}, Limitations: []string{}, EvidenceRefIDs: []string{}, Warnings: []string{}, Drivers: []contextfabric.DriverJudgment{}, ClaimedFacts: []contextfabric.ClaimedFact{}}
+	if m.draft != nil {
+		draft = m.draft(input, draft)
+	}
 	return draft, freshLiveReceipt(contextfabric.ModelOperationSynthesize), nil
 }
 
@@ -173,7 +180,11 @@ func runProjectOnlyEngineWith(t *testing.T, principal storage.Principal, subject
 	t.Helper()
 	client := &fakeClient{}
 	caller := &fakeOperationCaller{outcome: devhealthfacts.OperationOutcome{Served: true, Complete: true, Data: sourceHealthData(`{"provider":"github","scope":"git","lastSyncAt":"2026-10-08T01:00:00Z","lastFailure":null}`)}}
-	registry, err := contextfabric.NewFactCapabilityRegistry(devhealthfacts.NewProvidersWithOperations(client, sourceHealthHolder(caller)), contextfabric.FactRegistryOptions{Logger: slog.New(slog.DiscardHandler)})
+	providers := devhealthfacts.NewProvidersWithOperations(client, sourceHealthHolder(caller))
+	if model.providers != nil {
+		providers = model.providers(providers)
+	}
+	registry, err := contextfabric.NewFactCapabilityRegistry(providers, contextfabric.FactRegistryOptions{Logger: slog.New(slog.DiscardHandler)})
 	if err != nil {
 		t.Fatal(err)
 	}
