@@ -910,6 +910,42 @@ single-flight/failure-isolation/backoff behavior are proved against real
 PostgreSQL (`testcontainers`) and fakes standing in for the graph backend
 and canonical source, following the same pattern.
 
+### Sizing FalkorDB (CHAOS-12447)
+
+Size the memory limit from the graph. A limit below what the graph needs does
+not degrade: the kernel kills FalkorDB, and the reload plus the index build can
+go past the limit again, so the pod crash-loops and does not recover alone. Every
+graph read then answers 503 `upstream_unavailable`.
+
+```text
+limit >= idle + (THREAD_COUNT x 110 MB) + (edges of the largest node x 1 KB)
+```
+
+- **idle** is `memory.current` of the container once the graph has loaded and
+  nothing reads it.
+- **THREAD_COUNT** defaults to the CPUs the container can see. A CPU limit does
+  not lower it. Read it with `GRAPH.CONFIG GET THREAD_COUNT`.
+- **The largest node** is usually a repository, and CI runs add edges to it with
+  no bound. A read of one node's edges has no limit (CHAOS-12451).
+
+The two rates come from one graph, measured on 2026-11-01, so they are a starting
+point and not constants:
+
+| Measure | Value |
+| --- | --- |
+| Graph | 280k subjects, 346k edges |
+| Idle | 835 MB |
+| `THREAD_COUNT` | 7 |
+| Largest node | 196,413 edges |
+| One read of that node | +194 MB at peak, in 367 ms; 109 MB stays |
+| After repeated reads | levels off at 1.35 to 1.45 GB |
+| RDB dump on disk | 97 MB |
+
+That graph gives 835 + 770 + 194 = 1.8 GB, so the chart default of 3Gi holds it.
+The previous default of 1Gi did not: one read of the largest node went past it.
+Raising `limits.memory` needs no rebuild, because FalkorDB reloads the graph from
+its dump. Re-measure after the graph grows, or when `THREAD_COUNT` changes.
+
 ### Investigation event stream (CHAOS-11911)
 
 `ACR_CONTEXT_FABRIC_EVENT_STREAM_ENABLED` (default `false`) lets

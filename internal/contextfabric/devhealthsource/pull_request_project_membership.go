@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
-	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -26,9 +25,9 @@ import (
 // project_membership_tier names the weakest tier among the links that
 // contributed, so a lower tier is never presented as native. work_items is
 // keyed by (org_id, repo_id, work_item_id) and a link row names no issue
-// repository, so one link id can join several rows: the row in the pull
-// request's own repository is the issue, and with none the link is ambiguous
-// and names no project (resolveLinkedIssues). When no linked
+// repository, so one link id can join several rows. Nothing then says which
+// issue the link means, so it names no project (resolveLinkedIssues). When no
+// linked
 // issue contributes, the pull request states nothing (unstated, not empty):
 // it stays on the disclosed path and is never read as "in no project". A set
 // over the contract's bound is unstated too: a partial set is never stated.
@@ -303,21 +302,21 @@ WHERE l.org_id = {org_id:String} AND (` + strings.Join(terms, " OR ") + `)`
 	}
 	ambiguous := 0
 	for key, rows := range links {
-		resolved, dropped := resolveLinkedIssues(key, rows)
+		resolved, dropped := resolveLinkedIssues(rows)
 		links[key] = resolved
 		ambiguous += dropped
 	}
 	return links, ambiguous, nil
 }
 
-// resolveLinkedIssues keeps one issue per link id of a pull request. A link
-// id that joined one row is that row. One that joined several is the row in
-// the pull request's own repository; with none, it cannot be told which issue
-// the link names, so it contributes nothing and is counted: a wrong project
-// would admit a project-only caller, and unstated is the disclosed path. A
-// pull-request work item contributes nothing, but it takes part in the
-// choice, because it can be what the link names.
-func resolveLinkedIssues(key pullRequestKey, rows []pullRequestIssueLink) ([]pullRequestIssueLink, int) {
+// resolveLinkedIssues keeps the links that name one work item. A link id that
+// joined one row is that row. One that joined several cannot be resolved: the
+// link row names no issue repository, so a link to a foreign issue would take
+// the local issue's project. This row decides what a project-only caller may
+// read, so it fails closed: the link contributes nothing and is counted, and
+// unstated is the disclosed path. A pull-request work item contributes
+// nothing, but it counts as a row here, because it can be what the link names.
+func resolveLinkedIssues(rows []pullRequestIssueLink) ([]pullRequestIssueLink, int) {
 	byID := map[string][]pullRequestIssueLink{}
 	for _, row := range rows {
 		byID[row.issue.workItemID] = append(byID[row.issue.workItemID], row)
@@ -325,16 +324,12 @@ func resolveLinkedIssues(key pullRequestKey, rows []pullRequestIssueLink) ([]pul
 	resolved := make([]pullRequestIssueLink, 0, len(byID))
 	ambiguous := 0
 	for _, candidates := range byID {
-		chosen := 0
 		if len(candidates) > 1 {
-			chosen = slices.IndexFunc(candidates, func(row pullRequestIssueLink) bool { return row.issue.repoID == key.repoID })
-		}
-		if chosen < 0 {
 			ambiguous++
 			continue
 		}
-		if !candidates[chosen].pullRequestTyped {
-			resolved = append(resolved, candidates[chosen])
+		if !candidates[0].pullRequestTyped {
+			resolved = append(resolved, candidates[0])
 		}
 	}
 	return resolved, ambiguous
