@@ -45,6 +45,10 @@ func RenderCompose() string {
 			for _, sequence := range grant.Sequences {
 				fmt.Fprintf(&out, "GRANT USAGE ON SEQUENCE acr.%s TO :\"runtime_user\";\n", sequence)
 			}
+			if grant.Feature != AlwaysOn && len(grant.UpdateColumns) > 0 {
+				// A table-level REVOKE does not remove a column privilege: the feature-off branch revokes it itself.
+				fmt.Fprintf(&out, "\\else\nREVOKE UPDATE (%s) ON TABLE acr.%s FROM :\"runtime_user\";\n", strings.Join(grant.UpdateColumns, ", "), table)
+			}
 			if grant.Feature != AlwaysOn {
 				out.WriteString("\\endif\n")
 			}

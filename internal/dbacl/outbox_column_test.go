@@ -70,7 +70,7 @@ func TestTheColumnGrantAndRevokeStatementsFollowTheFeature(t *testing.T) {
 
 func TestTheComposeBlockGatesTheColumnGrantOnThePublisher(t *testing.T) {
 	block := RenderCompose()
-	want := "\\if :auth_projection\nGRANT UPDATE (published_at) ON TABLE acr.credential_lifecycle_outbox TO :\"runtime_user\";\n\\endif"
+	want := "\\if :auth_projection\nGRANT UPDATE (published_at) ON TABLE acr.credential_lifecycle_outbox TO :\"runtime_user\";\n\\else\n"
 	if !strings.Contains(block, want) {
 		t.Errorf("the compose block lacks the gated column grant:\n%s", block)
 	}

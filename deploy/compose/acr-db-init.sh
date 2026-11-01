@@ -234,6 +234,8 @@ REVOKE SELECT, INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER ON TABLE ac
 GRANT SELECT, INSERT ON TABLE acr.credential_lifecycle_outbox TO :"runtime_user";
 \if :auth_projection
 GRANT UPDATE (published_at) ON TABLE acr.credential_lifecycle_outbox TO :"runtime_user";
+\else
+REVOKE UPDATE (published_at) ON TABLE acr.credential_lifecycle_outbox FROM :"runtime_user";
 \endif
 
 -- INSERT internal/storage/postgres/audit.go:69; SELECT credentials_audit.go:50 and :61 (credential rotation conflict checks)
