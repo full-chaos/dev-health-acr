@@ -18,12 +18,13 @@ import (
 // (repositoryNarrowedByUnrestrictedPrincipal), so it is never taken, not even
 // for a subject inside its grant.
 //
-// A node counts exactly when it would have been offered without the narrowing:
+// A node counts when the offer rule would admit it without the narrowing:
 // NodeCandidate without the requested scope refuses an invalid or bookkeeping
 // node, ClassifyOffer a weak or vector-only hit, and the contest admission a
-// kind the question does not ask for. A subject counts once, however many arms
-// and terms find it. A truncated search makes the count a floor, which the
-// sentence states truthfully.
+// kind the question does not ask for. A kind-scoped semantic offer is not
+// counted: a similarity hit is not a match of the name. A subject counts once,
+// however many arms and terms find it. A truncated search makes the count a
+// floor, which the sentence states truthfully.
 func recordOutsideRequestedRepository(principal storage.Principal, request contextfabric.InvestigationRequest, deps ResolveDeps, term string, node CandidateNode, allowExactMatch bool, admission *contestAdmission) {
 	if deps.outsideRequested == nil || !repositoryNarrowedByUnrestrictedPrincipal(principal, request) {
 		return

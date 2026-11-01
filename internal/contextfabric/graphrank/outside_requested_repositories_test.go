@@ -186,3 +186,18 @@ func TestEveryTermArmCountsAMatchOutsideTheRequestedRepositories(t *testing.T) {
 		}
 	}
 }
+
+// TestACommittedSubjectIsNotCountedAsOutside (CHAOS-12360, codex r2): ordinary
+// search refuses a work item by its own repository, and the census can then
+// commit it through its link to a pull request in the scope. A subject the
+// resolution committed is not outside it.
+func TestACommittedSubjectIsNotCountedAsOutside(t *testing.T) {
+	t.Parallel()
+	resolution, _, _ := resolveLinkScoped(t, storage.Principal{OrgID: "org_1"}, walkedPopulation([]string{linkScopeItem(1)}, true, nil))
+	if len(resolution.Committed) != 1 || resolution.Committed[0].CanonicalID != linkScopeItem(1) {
+		t.Fatalf("committed %v, want the linked satisfier: the fixture must reach the census merge", resolution.Committed)
+	}
+	if want := linkScopeItems - 1; resolution.OutsideRequestedRepositories != want {
+		t.Fatalf("outside %d, want %d: the committed subject is not outside", resolution.OutsideRequestedRepositories, want)
+	}
+}

@@ -4503,6 +4503,12 @@ func resolveSubjects(ctx context.Context, principal storage.Principal, request c
 		handleOffer,
 	)
 	offerMaterial.SubjectFloor = subjectFloorOutcome(offerFloorPoolRows, resolution, offerMaterial)
+	// A subject this resolution committed is not outside it: ordinary search
+	// refuses a work item by its own repository, and the census can commit it
+	// through its link to a pull request in the scope.
+	for _, subject := range resolution.Committed {
+		delete(deps.outsideRequested, SubjectKey(subject))
+	}
 	resolution.OutsideRequestedRepositories = len(deps.outsideRequested)
 	return resolution, offerMaterial, nil
 }
