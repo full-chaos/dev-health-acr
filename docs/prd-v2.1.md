@@ -96,7 +96,6 @@ GET  /healthz
 GET  /readyz
 GET  /api/v1/agent-context/capabilities
 POST /api/v1/agent-context/context-packets
-GET  /api/v1/agent-context/context-packets/{context_packet_id}
 GET  /api/v1/agent-context/evidence/{evidence_ref_id}
 POST /api/v1/agent-context/episodes
 ```
