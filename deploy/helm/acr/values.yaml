@@ -309,6 +309,12 @@ contextFabric:
   # false until every consumer's pin is deployed. A follow-up ticket removes
   # the flag then. See docs/operations.md.
   vocabularyLabelsEnabled: false
+  # CHAOS-12472: runs a streamed Ask Dev question under an ACR-owned lease, so
+  # Stop cancels it and a reload reattaches. Turn it on wherever Ask Dev runs.
+  # acr-api refuses to start without ACR_CONTEXT_FABRIC_EVENT_STREAM_ENABLED=true
+  # in deployment.extraEnv, and the render refuses that first. See
+  # docs/operations.md, "Ask Dev run lease".
+  runLeaseEnabled: false
   # FalkorDB graph backend (ADR 0009), consumed by acr-projector's
   # ProjectionBackend (contextFabric.projector below wires these values
   # into that Deployment). Empty addr leaves Context Fabric unconfigured --

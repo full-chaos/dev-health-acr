@@ -1122,10 +1122,16 @@ match acr's, or that the subject is not in the graph yet.
 
 ### Ask Dev run lease (CHAOS-11949)
 
-`ACR_CONTEXT_FABRIC_RUN_LEASE_ENABLED` (default `false`; refused at start
-without `ACR_CONTEXT_FABRIC_EVENT_STREAM_ENABLED`) runs a streamed create
-request that names `X-ACR-Submission-ID` under an ACR-owned lease. Design and
-diagram: `docs/design/context-fabric-architecture-diagrams.md` §19.
+`ACR_CONTEXT_FABRIC_RUN_LEASE_ENABLED` (helm `contextFabric.runLeaseEnabled`,
+default `false`; refused at start, and by the render, without
+`ACR_CONTEXT_FABRIC_EVENT_STREAM_ENABLED`) runs a streamed create request that
+names `X-ACR-Submission-ID` under an ACR-owned lease. Design and diagram:
+`docs/design/context-fabric-architecture-diagrams.md` §19.
+
+Turn it on wherever Ask Dev runs. With it off, Stop has nothing to cancel: `POST
+.../cancel` answers 404 `run_lease_disabled`, the run goes on, and the answer
+appears after the user pressed Stop (CHAOS-12472). A production enable needs the
+production event stream flag first (CHAOS-11967).
 
 - A disconnect does not cancel the run. The run writes every event to
   `acr.context_fabric_investigation_run_events` first; the client attaches
