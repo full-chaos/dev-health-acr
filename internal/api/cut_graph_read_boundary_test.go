@@ -23,11 +23,10 @@ import (
 // (falkorgraph chaos12348_noncohort_read_disclosure_test.go asserts the reader's
 // own rows); this test reads what an MCP client receives from the real engine,
 // hosted route and MCP server for them. The same fixture with a whole read is
-// the control for the rows. It is no control for coverage_partial: this
-// fixture's fact read is partial on its own, so
-// contextfabric.TestACutNonCohortReadServesPartialCoverageAndKeepsItsDraftStatus
-// holds that the rows alone set it. Status does not move: no served-status floor
-// reads these codes, so a complete draft stays complete beside coverage_partial.
+// the control for the status, the rows and the prose. It is no control for
+// coverage_partial: this fixture's fact read is partial on its own, so
+// contextfabric.TestACutNonCohortReadIsPartialAndKeepsTheAnswer holds that the
+// rows alone set it.
 
 type cutGraphReadGraph struct {
 	cutDeploymentsGraph
@@ -82,9 +81,14 @@ func namedProjectFrameModel(base freshTupleModel) freshTupleModel {
 }
 
 type cutGraphReadAnswer struct {
-	Status          string `json:"status"`
-	CoveragePartial bool   `json:"coverage_partial"`
-	Details         []struct {
+	Status              string   `json:"status"`
+	CoveragePartial     bool     `json:"coverage_partial"`
+	DirectJudgment      string   `json:"direct_judgment"`
+	CurrentState        string   `json:"current_state"`
+	DeterministicAnswer string   `json:"deterministic_answer"`
+	StrongestPressures  []string `json:"strongest_pressures"`
+	Limitations         []string `json:"limitations"`
+	Details             []struct {
 		Code  string `json:"code"`
 		Count *int   `json:"count"`
 		Label string `json:"label"`
@@ -173,7 +177,58 @@ func TestACutNonCohortReadReachesTheClientAsPartialCoverage(t *testing.T) {
 			t.Fatalf("served coverage codes = %v, want %s", codes, want)
 		}
 	}
-	if answer.Status != "complete" {
-		t.Fatalf("status = %q: no floor reads these codes, so the draft's complete stands; a floor is a deliberate edit here", answer.Status)
+	if answer.Status != "partial" {
+		t.Fatalf("status = %q, want partial over a cut read", answer.Status)
+	}
+	for _, want := range []string{contractsv1.ContextFabricGraphHopWalkTruncatedLimitation, contractsv1.ContextFabricGraphTeamNarrowingUndecidedPathsLimitation} {
+		if !slices.Contains(answer.Limitations, want) {
+			t.Fatalf("limitations = %v, want %q", answer.Limitations, want)
+		}
+	}
+	if slices.Contains(answer.Limitations, contractsv1.ContextFabricSynthesisNarrativeWithheldLimitation) {
+		t.Fatalf("limitations = %v, want no narrative-withheld sentence", answer.Limitations)
+	}
+	if answer.CurrentState != whole.CurrentState || !slices.Equal(answer.StrongestPressures, whole.StrongestPressures) {
+		t.Fatalf("current_state %q, pressures %v, want the whole read's %q, %v", answer.CurrentState, answer.StrongestPressures, whole.CurrentState, whole.StrongestPressures)
+	}
+	// This fixture's draft has no principal driver, so a lead field holds no
+	// quick answer: complete leads with current_state, and partial states its
+	// status sentence.
+	const sentence = "Some canonical or graph coverage was unavailable."
+	if answer.DirectJudgment != sentence || answer.DeterministicAnswer != sentence {
+		t.Fatalf("lead fields = %q / %q, want %q", answer.DirectJudgment, answer.DeterministicAnswer, sentence)
+	}
+}
+
+// The by-id route a stored result is read through, which the MCP
+// investigation_result tool forwards: floored on read, beside a complete
+// completeness, because no outcome row states a cut read.
+func TestByIDACutNonCohortReadServesPartialBesideCompleteCompleteness(t *testing.T) {
+	two := 2
+	for name, tc := range map[string]struct {
+		code       contractsv1.ContextFabricCoverageDetailCode
+		raw        string
+		count      *int
+		limitation string
+	}{
+		"a cut hop walk":           {contractsv1.ContextFabricCoverageDetailGraphHopWalkTruncated, "hop_walk_truncated", nil, contractsv1.ContextFabricGraphHopWalkTruncatedLimitation},
+		"undecided path endpoints": {contractsv1.ContextFabricCoverageDetailGraphTeamNarrowingUndecidedPaths, "team_narrowing_undecided_paths:2", &two, contractsv1.ContextFabricGraphTeamNarrowingUndecidedPathsLimitation},
+	} {
+		t.Run(name, func(t *testing.T) {
+			stored := storedSatisfiedAnswer(t, "result_route_cut_read_floor")
+			detail := contractsv1.ContextFabricCoverageDetail{DetailID: "cov-graph-01", Source: "context-fabric:graph", Code: tc.code, Degrading: true, Count: tc.count, Raw: tc.raw}
+			detail.Label = contractsv1.ComposeCoverageDetailLabel(detail)
+			stored.Coverage.Details = []contractsv1.ContextFabricCoverageDetail{detail}
+			stored.Coverage.DegradedReasons = []string{tc.raw}
+			stored.Coverage.Partial = true
+			got := servedByID(t, stored)
+			requirePartialBelowComplete(t, got)
+			if !slices.Contains(got.Limitations, tc.limitation) || slices.Contains(got.Limitations, contractsv1.ContextFabricSynthesisNarrativeWithheldLimitation) {
+				t.Fatalf("limitations = %v, want %q and no narrative-withheld sentence", got.Limitations, tc.limitation)
+			}
+			if got.CurrentState != stored.CurrentState {
+				t.Fatalf("current_state = %q, want %q", got.CurrentState, stored.CurrentState)
+			}
+		})
 	}
 }

@@ -63,3 +63,19 @@ func TestTheCutGraphReadLabelsStateTheLoss(t *testing.T) {
 		t.Errorf("label = %q, want %q", got, want)
 	}
 }
+
+// Each sentence is a service disclosure, so a model limitation gives way to it,
+// never the reverse, and states the loss without ACR's own status word.
+func TestTheCutGraphReadSentencesAreServiceDisclosures(t *testing.T) {
+	for _, sentence := range []string{ContextFabricGraphHopWalkTruncatedLimitation, ContextFabricGraphTeamNarrowingUndecidedPathsLimitation} {
+		if !IsContextFabricServiceAuthoredLimitation(sentence) {
+			t.Errorf("%q is not a service-authored limitation", sentence)
+		}
+		lower := strings.ToLower(sentence)
+		for _, word := range []string{"partial", "complete", "degraded"} {
+			if strings.Contains(lower, word) {
+				t.Errorf("%q states the status word %q", sentence, word)
+			}
+		}
+	}
+}
