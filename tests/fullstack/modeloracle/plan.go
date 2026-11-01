@@ -91,6 +91,9 @@ type Plan struct {
 	Findings              []PlannedFinding `json:"findings"`
 	RecommendedChecks     []PlannedCheck   `json:"recommended_checks"`
 	Fault                 Fault            `json:"fault,omitempty"`
+	// Service, when present, makes the oracle answer the engine's own no-tools model calls
+	// from a per-question plan. Absent, those calls behave exactly as they always did.
+	Service *ServicePlan `json:"service,omitempty"`
 }
 
 func loadPlan(path string) (Plan, error) {
@@ -132,6 +135,11 @@ func loadPlan(path string) (Plan, error) {
 		}
 		if finding.ClaimKind == "observed" && finding.EvidenceSelector == "" {
 			return Plan{}, fmt.Errorf("observed finding %q requires an evidence_selector", finding.ClaimID)
+		}
+	}
+	if plan.Service != nil {
+		if err := plan.Service.validate(); err != nil {
+			return Plan{}, err
 		}
 	}
 	return plan, nil
