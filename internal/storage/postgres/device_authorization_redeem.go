@@ -107,6 +107,9 @@ FROM acr.device_authorizations WHERE device_code_hash = $1 FOR UPDATE`, hash.Str
 	if err := insertCredential(ctx, tx, credentialRecord); err != nil {
 		return contractsv1.ClientCredential{}, err
 	}
+	if err := markOAuthClientGranted(ctx, tx, input.ClientID, now); err != nil {
+		return contractsv1.ClientCredential{}, err
+	}
 	if err := s.audit.record(ctx, tx, credentialCreatedEvent(credentialRecord)); err != nil {
 		return contractsv1.ClientCredential{}, err
 	}
@@ -134,4 +137,19 @@ WHERE device_code_hash = $1 AND authorized_org_id = $7::uuid
 		return contractsv1.ClientCredential{}, fmt.Errorf("commit device authorization redemption: %w", sanitizeDatabaseError(err))
 	}
 	return credential, nil
+}
+
+// markOAuthClientGranted records a completed token exchange on a dynamic
+// client (CHAOS-12320): the idle-client purge never deletes a client that has
+// one. Any other client id (a metadata document URL, or none) has no row.
+func markOAuthClientGranted(ctx context.Context, tx *sql.Tx, clientID string, now time.Time) error {
+	if !storage.IsDynamicOAuthClientID(clientID) {
+		return nil
+	}
+	if _, err := tx.ExecContext(ctx, `
+UPDATE acr.oauth_clients SET last_granted_at = $2
+WHERE client_id = $1 AND (last_granted_at IS NULL OR last_granted_at < $2)`, clientID, now); err != nil {
+		return fmt.Errorf("mark oauth client granted: %w", sanitizeDatabaseError(err))
+	}
+	return nil
 }

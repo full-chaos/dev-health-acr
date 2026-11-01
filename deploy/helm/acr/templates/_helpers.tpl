@@ -650,6 +650,27 @@ credentials) is on.
 {{- end -}}
 
 {{/*
+CHAOS-11195: acr-api's workload-token exchange client. The subject token is a projected ServiceAccount token
+mounted here (read-only, no subPath). The exchange URL is auth-service's origin and the issuer is auth-service's https token issuer URL, which
+every workload token must carry; acr-api checks both at start. The exchange audience is not a value: ops reviews against one audience.
+*/}}
+{{- define "acr.authWorkloadMountPath" -}}/var/run/secrets/dev-health/auth-workload{{- end -}}
+
+{{- define "acr.validateAuthWorkloadClient" -}}
+{{- /*
+Presence only. The URL rules (scheme, host labels, port range, no userinfo, query or fragment) live in one place, the Go
+validator that acr-api runs at start (internal/config/auth_workload_url.go): a chart pattern drifts from it and refuses
+values the client accepts (a trailing slash, an IPv6 literal). A malformed value renders and stops the start.
+*/ -}}
+{{- if not .Values.authWorkloadClient.exchangeURL -}}
+{{- fail "auth-workload-client: authWorkloadClient.exchangeURL is required when authWorkloadClient.enabled" -}}
+{{- end -}}
+{{- if not .Values.authWorkloadClient.issuer -}}
+{{- fail "auth-workload-client: authWorkloadClient.issuer is required when authWorkloadClient.enabled" -}}
+{{- end -}}
+{{- end -}}
+
+{{/*
 acr.validateEnvValueSources: a variable the chart renders from a value into the
 acr-api ConfigMap has ONE source. deployment.extraEnv is an env entry, and an
 env entry beats the ConfigMap (envFrom) silently, so the two together would

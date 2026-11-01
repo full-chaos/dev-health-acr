@@ -572,6 +572,16 @@
         "egressPort": { "type": "integer", "minimum": 1, "maximum": 65535 }
       }
     },
+    "authWorkloadClient": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "exchangeURL": { "type": "string" },
+        "allowPlainHTTP": { "type": "boolean" },
+        "issuer": { "type": "string" }
+      }
+    },
     "workloadTokenExchange": {
       "type": "object",
       "additionalProperties": false,

@@ -9,6 +9,7 @@ import (
 	"strings"
 	"unicode"
 
+	"github.com/full-chaos/dev-health-acr/internal/auth"
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
 
@@ -508,6 +509,14 @@ func (e *Engine) tryReuse(ctx context.Context, principal storage.Principal, requ
 // a hit, for the count scope decision on the reuse backfill.
 func (e *Engine) tryReuseWithReading(ctx context.Context, principal storage.Principal, request InvestigationRequest, effectiveTimeContext TimeContext, windowKey string, windowKeyEnc windowKeyEncoding, binding ResolvedGraphBinding) (InvestigationResult, bool, bool, storedCountReading, error) {
 	if e.reuseGate == nil {
+		return InvestigationResult{}, false, false, storedCountReading{}, nil
+	}
+	if auth.ClassifyGrant(principal) == auth.GrantProjectOnly {
+		// A project-only caller never reuses an answer (CHAOS-12299): the
+		// reuse key hashes only the repository list, so two different
+		// project grants share it until c2 class-tags it (CHAOS-12298). No
+		// lookup is made.
+		e.recordReuseOutcome(ctx, principal, AnswerReuseMissAuthorization)
 		return InvestigationResult{}, false, false, storedCountReading{}, nil
 	}
 	if CanonicalizeQuestion(request.Question) == "" {
@@ -1050,6 +1059,14 @@ func (e *Engine) reuseAuthorizationStillHolds(ctx context.Context, principal sto
 
 	evidenceRefs := reuseEvidenceRefsToRecheck(candidate)
 	if len(evidenceRefs) == 0 {
+		// CHAOS-12325: this branch reads no graph context, so the guard
+		// below, which reads that coverage, cannot see an unverified project
+		// narrowing here. It decides from the request's own resolution: a
+		// requested narrowing it did not prove is not served from a stored
+		// answer that does not disclose it.
+		if requestedProjectNarrowingUnproven(request.RequestedScope) && !coverageDisclosesUnverifiedProjectNarrowing(candidate.Coverage) {
+			return reuseRecheckVerdict{Refused: true, Outcome: AnswerReuseMissProjectNarrowingUnverified}
+		}
 		return e.reuseRemovedTeamRecheck(ctx, principal, binding, subjects)
 	}
 	graphContext, err := e.graph.DiscoverContext(ctx, principal, GraphDiscoveryRequest{

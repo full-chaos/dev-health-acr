@@ -110,6 +110,11 @@ var exampleSchemaPairs = map[string]string{
 	// see context_fabric_investigation_result.v2.schema.json's own
 	// description.
 	"context_fabric_investigation_result.v2.json": "context_fabric_investigation_result.v2.schema.json",
+	// CHAOS-12334: both MCP answer tools hand a stored v2 result over
+	// unchanged. These two are the real handlers' output for the v2 result
+	// above; internal/mcp holds them equal to it.
+	"mcp_investigate_question_response_full_result_v2.v1.json": "mcp_investigate_question_response.v1.schema.json",
+	"mcp_investigation_result_response_result_v2.v1.json":      "mcp_investigation_result_response.v1.schema.json",
 	// CHAOS-11909: the investigation event stream. One golden per event
 	// type, one per result body shape and one per error class a stream can
 	// end on. Each file is the data line of one frame, encoded by
@@ -164,6 +169,11 @@ var exampleSchemaPairs = map[string]string{
 	"context_fabric_result_feedback.v1.json":         "context_fabric_result_feedback.v1.schema.json",
 	"context_fabric_result_feedback_unset.v1.json":   "context_fabric_result_feedback.v1.schema.json",
 	"context_fabric_result_feedback_request.v1.json": "context_fabric_result_feedback_request.v1.schema.json",
+	// CHAOS-12230: canonical-id test vectors, the output of the projector's
+	// own id builders (internal/contextfabric/devhealthsource/
+	// canonical_id_vectors_test.go holds the file equal to that output;
+	// ACR_WRITE_CANONICAL_ID_VECTORS=1 rewrites it).
+	"context_fabric_canonical_id_vectors.v1.json": "context_fabric_canonical_id_vectors.v1.schema.json",
 }
 
 // Options configures repository contract validation.

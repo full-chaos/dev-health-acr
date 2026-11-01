@@ -1,0 +1,136 @@
+{
+  "schema_version": "context_fabric_canonical_id_vectors.v1",
+  "vectors": [
+    {
+      "kind": "organization",
+      "natural_key": {
+        "org_id": "6f1e3a2b-9c4d-4e8f-a1b2-c3d4e5f60718"
+      },
+      "canonical_id": "organization:6f1e3a2b-9c4d-4e8f-a1b2-c3d4e5f60718"
+    },
+    {
+      "kind": "repository",
+      "natural_key": {
+        "repo_id": "cd620f84-2602-8dea-7809-8d1f11825cf4"
+      },
+      "canonical_id": "repository:cd620f84-2602-8dea-7809-8d1f11825cf4"
+    },
+    {
+      "kind": "repository",
+      "natural_key": {
+        "repo_id": "00000000-0000-0000-0000-000000000000"
+      },
+      "canonical_id": "repository:00000000-0000-0000-0000-000000000000"
+    },
+    {
+      "kind": "team",
+      "natural_key": {
+        "team_id": "CHAOS"
+      },
+      "canonical_id": "team:CHAOS"
+    },
+    {
+      "kind": "team",
+      "natural_key": {
+        "team_id": "gl:full.chaos"
+      },
+      "canonical_id": "team:gl:full.chaos"
+    },
+    {
+      "kind": "pull_request",
+      "natural_key": {
+        "number": 1,
+        "repo_id": "cd620f84-2602-8dea-7809-8d1f11825cf4"
+      },
+      "canonical_id": "pull_request:cd620f84-2602-8dea-7809-8d1f11825cf4:1"
+    },
+    {
+      "kind": "pull_request",
+      "natural_key": {
+        "number": 4294967295,
+        "repo_id": "1b0e2a53-0e5d-4a53-9d3b-3e1c2b1f9a10"
+      },
+      "canonical_id": "pull_request:1b0e2a53-0e5d-4a53-9d3b-3e1c2b1f9a10:4294967295"
+    },
+    {
+      "kind": "work_item",
+      "natural_key": {
+        "repo_id": "cd620f84-2602-8dea-7809-8d1f11825cf4",
+        "work_item_id": "gh:full-chaos/dev-health-acr#1823"
+      },
+      "canonical_id": "work_item.v2:cd620f84-2602-8dea-7809-8d1f11825cf4:gh%3Afull-chaos/dev-health-acr#1823"
+    },
+    {
+      "kind": "work_item",
+      "natural_key": {
+        "repo_id": "00000000-0000-0000-0000-000000000000",
+        "work_item_id": "linear:CHAOS-12230"
+      },
+      "canonical_id": "work_item.v2:00000000-0000-0000-0000-000000000000:linear%3ACHAOS-12230"
+    },
+    {
+      "kind": "work_item",
+      "natural_key": {
+        "repo_id": "cd620f84-2602-8dea-7809-8d1f11825cf4",
+        "work_item_id": "jira:OPS-7%done"
+      },
+      "canonical_id": "work_item.v2:cd620f84-2602-8dea-7809-8d1f11825cf4:jira%3AOPS-7%25done"
+    },
+    {
+      "kind": "work_item",
+      "natural_key": {
+        "repo_id": "cd620f84-2602-8dea-7809-8d1f11825cf4",
+        "work_item_id": "gitlab:group/proj#7%3A"
+      },
+      "canonical_id": "work_item.v2:cd620f84-2602-8dea-7809-8d1f11825cf4:gitlab%3Agroup/proj#7%253A"
+    },
+    {
+      "kind": "work_item",
+      "natural_key": {
+        "repo_id": "cd620f84-2602-8dea-7809-8d1f11825cf4",
+        "work_item_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      },
+      "canonical_id": "work_item.v2:cd620f84-2602-8dea-7809-8d1f11825cf4:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    },
+    {
+      "kind": "work_item",
+      "natural_key": {
+        "repo_id": "cd620f84-2602-8dea-7809-8d1f11825cf4",
+        "work_item_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      },
+      "omitted": true
+    },
+    {
+      "kind": "project",
+      "natural_key": {
+        "project_id": "a1b2c3d4-0000-4000-8000-00000000c0de",
+        "provider": "linear"
+      },
+      "canonical_id": "project.v2:linear:a1b2c3d4-0000-4000-8000-00000000c0de"
+    },
+    {
+      "kind": "project",
+      "natural_key": {
+        "project_id": "full-chaos:gitlab:71133891",
+        "provider": "gitlab"
+      },
+      "canonical_id": "project.v2:gitlab:full-chaos%3Agitlab%3A71133891"
+    },
+    {
+      "kind": "project",
+      "natural_key": {
+        "project_id": "acme:jira:OPS%20board",
+        "provider": "jira"
+      },
+      "canonical_id": "project.v2:jira:acme%3Ajira%3AOPS%2520board"
+    },
+    {
+      "kind": "project",
+      "natural_key": {
+        "project_id": "pppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppp",
+        "provider": "jira"
+      },
+      "omitted": true
+    }
+  ]
+}

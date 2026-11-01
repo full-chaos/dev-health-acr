@@ -896,7 +896,7 @@ func (a *App) handleOAuthRevoke(w http.ResponseWriter, r *http.Request) {
 // oauthClientRefusalReasons names each client refusal in plain words for the
 // error page. No value from the request or the client's document is shown.
 var oauthClientRefusalReasons = map[string]string{
-	oauthvocab.ClientRefusalUnknownClient:         "The application is not registered with this server. Remove the connection and add it again.",
+	oauthvocab.ClientRefusalUnknownClient:         "This application's registration with this server has ended. Disconnect it in the application, then connect again.",
 	oauthvocab.ClientRefusalNotHTTPS:              "The application's client ID is not an https address.",
 	oauthvocab.ClientRefusalUnsupportedClientID:   "The application's client ID is not a form this server accepts.",
 	oauthvocab.ClientRefusalFetchFailed:           "The application's client information document could not be retrieved.",

@@ -34,7 +34,7 @@ func NewEpisodeStore(db *sql.DB) (*EpisodeStore, error) {
 }
 
 func (s *EpisodeStore) CreateIdempotent(ctx context.Context, principal storage.Principal, create contractsv1.AgentEpisodeCreate, expiresAt *time.Time) (contractsv1.AgentEpisode, bool, error) {
-	if !episodeRepositoryAllowed(principal.RepositoryScopes, create.Repository.Slug) {
+	if !principalEpisodeRepositoryAllowed(principal, create.Repository.Slug) {
 		return contractsv1.AgentEpisode{}, false, storage.ErrNotFound
 	}
 	repositoryID, err := authorizedRepositoryStorageID(principal, create.Repository.Slug)
@@ -185,7 +185,7 @@ func (s *EpisodeStore) PurgeExpiredForOrg(ctx context.Context, principal storage
 }
 
 func (s *EpisodeStore) PurgeExpiredForPrincipal(ctx context.Context, principal storage.Principal, before time.Time, limit int) (int, error) {
-	if strings.TrimSpace(principal.OrgID) == "" || len(principal.RepositoryScopes) == 0 {
+	if strings.TrimSpace(principal.OrgID) == "" || len(principal.RepositoryScopes) == 0 || principal.HoldsProjectGrant() {
 		return 0, storage.ErrNotFound
 	}
 	return s.purgeExpired(ctx, principal.OrgID, principal.RepositoryScopes, before, limit)
@@ -273,7 +273,7 @@ func scanAuthorizedEpisode(row episodeScanner, principal storage.Principal) (con
 	if err := row.Scan(&episodeID, &repoSlug, &payload, &createdAt, &state); err != nil {
 		return contractsv1.AgentEpisode{}, err
 	}
-	if !episodeRepositoryAllowed(principal.RepositoryScopes, repoSlug) {
+	if !principalEpisodeRepositoryAllowed(principal, repoSlug) {
 		return contractsv1.AgentEpisode{}, storage.ErrNotFound
 	}
 	return decodeEpisode(episodeID, payload, createdAt, state)

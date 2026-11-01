@@ -5,10 +5,10 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
-	"slices"
 	"sort"
 	"strings"
 
+	"github.com/full-chaos/dev-health-acr/internal/auth"
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
 	"github.com/full-chaos/dev-health-acr/internal/telemetryscrub"
@@ -189,15 +189,26 @@ func StoredResultPrincipalScopeVocabulary() [3]StoredResultPrincipalScope {
 	return [3]StoredResultPrincipalScope{StoredResultScopeUnrestricted, StoredResultScopeUniversal, StoredResultScopeRestricted}
 }
 
+// classifyStoredResultPrincipalScope is the stored-result gate's view of the
+// caller's grant: auth.ClassifyGrant through storedResultScopeForGrant.
 func classifyStoredResultPrincipalScope(principal storage.Principal) StoredResultPrincipalScope {
-	switch {
-	case len(principal.RepositoryScopes) == 0:
+	return storedResultScopeForGrant(auth.ClassifyGrant(principal))
+}
+
+// storedResultScopeForGrant maps a grant class onto the stored-result
+// principal scope (CHAOS-12297). project_only is a restricted subtype and
+// reads as StoredResultScopeRestricted, so its results meet the grant-digest
+// check, never the unrestricted bypass. An unknown class is restricted.
+func storedResultScopeForGrant(class auth.GrantClass) StoredResultPrincipalScope {
+	switch class {
+	case auth.GrantUnrestricted:
 		return StoredResultScopeUnrestricted
-	case slices.ContainsFunc(principal.RepositoryScopes, func(scope string) bool { return strings.TrimSpace(scope) == "*" }):
+	case auth.GrantUniversal:
 		return StoredResultScopeUniversal
-	default:
+	case auth.GrantRestricted, auth.GrantProjectOnly:
 		return StoredResultScopeRestricted
 	}
+	return StoredResultScopeRestricted
 }
 
 // StoredResultAuthorization is one decision and everything the trace needs to
@@ -376,6 +387,12 @@ func storedResultOwnerRefusal(principal storage.Principal, stored StoredInvestig
 // result with no recorded digest (a pre-migration row) is refused to a
 // restricted reader: its computing grant cannot be proven.
 func storedResultGrantRefusal(principal storage.Principal, stored StoredInvestigationResult) (StoredResultAuthorizationReason, bool) {
+	// A project-only reader is refused every stored result (CHAOS-12299): the
+	// grant digest hashes only the repository list, so two different project
+	// grants share it until c2 gives them a p: digest (CHAOS-12298).
+	if auth.ClassifyGrant(principal) == auth.GrantProjectOnly {
+		return StoredResultReasonGrantMismatch, true
+	}
 	if classifyStoredResultPrincipalScope(principal) != StoredResultScopeRestricted {
 		return "", false
 	}

@@ -666,6 +666,22 @@ item's stated membership decides too. Pull requests carry no membership yet
 line, `context fabric project narrowing resolution` (outcome, requested ids,
 resolved identities; never an id).
 
+**Reuse never hides an unverified project narrowing.** The resolution is not in
+the reuse key, so a stored answer made while the narrowing was proven can meet
+a request whose narrowing is not. A stored answer that does not disclose
+`project_narrowing_unverified` is then not served, and the request takes the
+fresh path:
+
+- the general recheck, when its graph read discloses an unverified narrowing
+  (reuse outcome `miss_project_narrowing_unverified`, CHAOS-12229);
+- the work-item tuple reuse, when its re-walk admitted a member only on `"*"`
+  (decision `project_narrowing_unverified`, CHAOS-12229);
+- a stored answer with no evidence references, rechecked without a graph
+  context read, when the request narrows by project and its resolution is
+  none or incomplete (the same outcome, CHAOS-12325).
+
+A stored answer that already discloses it is still reused.
+
 **A project-narrowing exclusion is scope, not authorization (CHAOS-12329).**
 A node the caller's grants admit that a requested project narrowing leaves out
 is out of the requested scope. The repository walk decides each link row
@@ -704,6 +720,7 @@ the request narrows by team: `team_narrowing` (`anchor_owned` or
 `team_floor_reason` (empty, `anchor_ownership_unknown`, `project_owner_absent`
 or `ownership_read_cut`). Counts and closed values only; no id.
 
+||||||| e5e5aa13
 **A count of a repository's owning teams.** For a question about now, a read
 that found no owner, was not cut, and found ownership projected for the org
 (the active census holds a team, or the repository's own ownership edges name
@@ -1297,6 +1314,22 @@ producing path composes that case. current_state's clause for drivers whose
 source read was cut or is out of date reads "Limited read: …" (it was "Not
 complete: …"); a stored clause is restated on the served copy. The stored
 document is never rewritten.
+
+**A cut source read is labelled in plain words (CHAOS-12289).** A driver whose
+source read was cut is qualified "(truncated: the source read was cut)" (it was
+"(partial: the source read was truncated)", ACR's own state word), in the lead
+driver sentence, the principal driver list, current_state's limited-read
+clause and a project status summary; its server note reads "The service marks
+this driver as truncated: the source read was cut.". A stale read keeps "(stale:
+the source read is out of date)". Every served copy restates the stored words,
+and only where the server wrote them: anchored on a driver whose source read
+was cut, by its own title or category, or as the exact note or summary. The
+quick answer and the details list are rebuilt from the drivers in answer order
+and replaced only where they stand as whole sentences; current_state's closing
+clause is replaced only when it is exactly the clause the composer writes for
+this answer's own qualified drivers. A
+title or provider value that carries the same words is left as it is. A status
+floor reads a stored head in the current words before it recomposes.
 
 **Live data gap disclosed, not hidden (CH readback, 2026-08-27, org
 `70d529e0-3c06-4597-8480-794fd02328b6`):** investment (6 rows), workload (12
@@ -3960,3 +3993,5 @@ flowchart TD
   (diagram-style precedent reused here).
 
 **Updated 2026-10-10: a caller hint that names an inactive team is answered as that team.** In `resolveSubjects` (`graphrank/resolve.go`), a caller-sourced team hint whose exact read finds nothing asks `ResolveDeps.ExactHintInactive` (falkorgraph: the `InactiveTeams` authority, which applies the caller's read predicate and names the one same-name active team as a pointer). A hint reported inactive is terminal for that hint: it is recorded in `SubjectResolution.inactive_hints` (`answer: team_inactive`, optional `active_canonical_id`), no hybrid search runs for it, and the same-named active team is never committed. The engine serves a no_match with a service-authored limitation and the terminal reason `team_inactive`; the projection mirrors `inactive_hints` verbatim. Receipt-sourced hints keep the search they had. Results that carry inactive hints are never stored as answer-reuse sources.
+
+**Updated 2026-10-31: the outcome of each Ask Dev page-context hint is counted (CHAOS-12230).** In `resolveSubjects` (`graphrank/resolve.go`), a hint whose source is `ask_dev_page_context` (`hintsource.AskDevPageContext`, caller authored, not in the engine-minted registry) takes one outcome: `exact_hit` when `ExactHint` finds its node, else `label_fallback` when it has a label and the call's term search completes without error (the labels are searched after the interpreted terms, and the pass stops at its first failing term), else `unresolved`. `pageHintLookupTally` (`graphrank/page_hint_lookup.go`) is built at the hint loop and emitted by one deferred call, so the short circuit, the inactive-team answer, the identity-question exit and every error return all write the one INFO line `context fabric resolution trace: page hint lookup` (eventspec `PageHintLookup`; one per request, because a request runs either the gated offers-only resolution or the decisive one with its page hints, never both): counts per outcome and per subject kind, never an id, label or question. Resolution behaviour is unchanged. The ids web builds are pinned by the generated `contracts/examples/v1/context_fabric_canonical_id_vectors.v1.json`.

@@ -76,7 +76,7 @@ func (p *PullRequestsProvider) ReadFacts(ctx context.Context, principal storage.
 		rejected += teamOutcome.rejected
 	}
 	var projectLinksUnwindowed []contextfabric.SubjectRef
-	if projectSubjects := subjectsOfKind(query.Subjects, contextfabric.SubjectProject); len(projectSubjects) > 0 {
+	if projectSubjects := subjectsOfKind(query.Subjects, contextfabric.SubjectProject); len(projectSubjects) > 0 && !projectOnlyWithheld(principal) {
 		projectRejected, unwindowed, projectErr := p.readProjectRollup(ctx, orgID, projectSubjects, &facts, timeBound, query.Time.EvidenceWindow)
 		if projectErr != nil {
 			return contextfabric.FactProviderResult{}, readFailure("query project pull requests", projectErr)

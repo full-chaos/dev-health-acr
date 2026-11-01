@@ -76,7 +76,7 @@ func (s *PacketStore) GetSnapshot(ctx context.Context, principal storage.Princip
 	s.mu.RLock()
 	snapshot, ok := s.data[contextPacketID]
 	s.mu.RUnlock()
-	if !ok || snapshot.orgID != principal.OrgID || !snapshot.expiresAt.After(s.now().UTC()) || !repositoryAllowed(principal.RepositoryScopes, snapshot.repoSlug) {
+	if !ok || snapshot.orgID != principal.OrgID || !snapshot.expiresAt.After(s.now().UTC()) || !principalPacketRepositoryAllowed(principal, snapshot.repoSlug) {
 		return contractsv1.ContextPacket{}, storage.ErrNotFound
 	}
 	var packet contractsv1.ContextPacket
@@ -137,7 +137,7 @@ func validatePacket(principal storage.Principal, packet contractsv1.ContextPacke
 			return errors.New("invalid packet snapshot")
 		}
 	}
-	if !repositoryAllowed(principal.RepositoryScopes, packet.Repository.Slug) {
+	if !principalPacketRepositoryAllowed(principal, packet.Repository.Slug) {
 		return storage.ErrNotFound
 	}
 	return nil
@@ -176,6 +176,13 @@ func expiredSnapshotIDs(values map[string]packetSnapshot, before time.Time, limi
 		return ids[:limit]
 	}
 	return ids
+}
+
+// principalPacketRepositoryAllowed is the principal's context-packet
+// repository decision: a project-only principal is refused every repository,
+// whatever its list holds (CHAOS-12299 r3).
+func principalPacketRepositoryAllowed(principal storage.Principal, slug string) bool {
+	return !principal.HoldsProjectGrant() && repositoryAllowed(principal.RepositoryScopes, slug)
 }
 
 func repositoryAllowed(scopes []string, slug string) bool {

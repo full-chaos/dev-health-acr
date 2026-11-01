@@ -20,7 +20,7 @@ func init() {
 			name:  "AnswerCompleteness.terminal_status",
 			kind:  vocabFrozen,
 			why:   "state-machine",
-			sites: []string{"AnswerCompleteness.terminal_status", "context_fabric_answer_projection.v1.status", "context_fabric_investigation_result.v1.status"},
+			sites: []string{"AnswerCompleteness.terminal_status", "context_fabric_answer_projection.v1.status", "context_fabric_investigation_result.v1.status", "context_fabric_investigation_result.v2.status"},
 			// schema: "complete", "partial", "degraded", "clarification_required", "no_match"
 			goSet:      []string{string(contractsv1.ContextFabricInvestigationComplete), string(contractsv1.ContextFabricInvestigationPartial), string(contractsv1.ContextFabricInvestigationDegraded), string(contractsv1.ContextFabricInvestigationClarificationRequired), string(contractsv1.ContextFabricInvestigationNoMatch)},
 			exhaustive: true,
@@ -38,7 +38,7 @@ func init() {
 			name:           "AnswerCompleteness.refusal_basis",
 			kind:           vocabAdditive,
 			clientValidate: "contractsv1.ValidateStoredResult",
-			sites:          []string{"AnswerCompleteness.refusal_basis", "context_fabric_investigation_result.v1.refusal_basis"},
+			sites:          []string{"AnswerCompleteness.refusal_basis", "context_fabric_investigation_result.v1.refusal_basis", "context_fabric_investigation_result.v2.refusal_basis"},
 			// schema: "member_kind_unservable", "frame_invariant_violated", "unspecified", "continuation_context_unverifiable", "declared_kind_unmatched", "organization_scope_unsupported", "subject_identity_unconfirmed"
 			goSet:      []string{string(contractsv1.ContextFabricRefusalBasisMemberKindUnservable), string(contractsv1.ContextFabricRefusalBasisFrameInvariantViolated), string(contractsv1.ContextFabricRefusalBasisUnspecified), string(contractsv1.ContextFabricRefusalBasisContinuationContextUnverifiable), string(contractsv1.ContextFabricRefusalBasisDeclaredKindUnmatched), string(contractsv1.ContextFabricRefusalBasisOrganizationScopeUnsupported), string(contractsv1.ContextFabricRefusalBasisSubjectIdentityUnconfirmed)},
 			exhaustive: true,
@@ -48,7 +48,7 @@ func init() {
 			kind: vocabFrozen,
 			why:  "state-machine",
 			// Go: context_fabric_status_correction.go:34 typed as the frozen ContextFabricInvestigationStatus
-			sites: []string{"AnswerCompleteness.status_correction.replaced_status", "context_fabric_investigation_result.v1.status_correction.replaced_status"},
+			sites: []string{"AnswerCompleteness.status_correction.replaced_status", "context_fabric_investigation_result.v1.status_correction.replaced_status", "context_fabric_investigation_result.v2.status_correction.replaced_status"},
 			// schema: "complete", "partial", "degraded"
 			goSet:      []string{string(contractsv1.ContextFabricCohortDataComplete), string(contractsv1.ContextFabricCohortDataPartial), string(contractsv1.ContextFabricCohortDataDegraded)},
 			exhaustive: true,
@@ -58,7 +58,7 @@ func init() {
 			kind: vocabFrozen,
 			why:  "state-machine",
 			// Go: context_fabric_status_correction.go:5 "The vocabulary is exactly the pairs the authority is ever allowed to serve"
-			sites: []string{"AnswerCompleteness.status_correction.direction", "context_fabric_investigation_result.v1.status_correction.direction"},
+			sites: []string{"AnswerCompleteness.status_correction.direction", "context_fabric_investigation_result.v1.status_correction.direction", "context_fabric_investigation_result.v2.status_correction.direction"},
 			// schema: "complete_to_partial", "complete_to_degraded", "partial_to_degraded", "degraded_to_partial"
 			goSet:      []string{string(contractsv1.ContextFabricStatusCorrectionCompleteToPartial), string(contractsv1.ContextFabricStatusCorrectionCompleteToDegraded), string(contractsv1.ContextFabricStatusCorrectionPartialToDegraded), string(contractsv1.ContextFabricStatusCorrectionDegradedToPartial)},
 			exhaustive: true,
@@ -68,7 +68,7 @@ func init() {
 			kind: vocabFrozen,
 			why:  "state-machine",
 			// Go: context_fabric_requirement_outcome.go:36 "CLOSED, five members."
-			sites: []string{"AnswerCompleteness.status_correction.deciding_outcome", "PlanRequirementOutcomeRow.outcome", "context_fabric_investigation_result.v1.status_correction.deciding_outcome"},
+			sites: []string{"AnswerCompleteness.status_correction.deciding_outcome", "PlanRequirementOutcomeRow.outcome", "context_fabric_investigation_result.v1.status_correction.deciding_outcome", "context_fabric_investigation_result.v2.status_correction.deciding_outcome"},
 			// schema: "satisfied", "narrowed", "unavailable", "not_applicable", "not_attempted"
 			goSet:      []string{string(contractsv1.ContextFabricRequirementSatisfied), string(contractsv1.ContextFabricRequirementNarrowed), string(contractsv1.ContextFabricRequirementUnavailable), string(contractsv1.ContextFabricRequirementNotApplicable), string(contractsv1.ContextFabricRequirementNotAttempted)},
 			exhaustive: true,
@@ -468,7 +468,7 @@ func init() {
 			kind: vocabFrozen,
 			why:  "state-machine",
 			// Go: context_fabric_semantic_reading.go:22 "One member: a present field only ever says the reading was unavailable."
-			sites: []string{"context_fabric_answer_projection.v1.semantic_reading.status", "context_fabric_investigation_result.v1.semantic_reading.status"},
+			sites: []string{"context_fabric_answer_projection.v1.semantic_reading.status", "context_fabric_investigation_result.v1.semantic_reading.status", "context_fabric_investigation_result.v2.semantic_reading.status"},
 			// schema: "unavailable"
 			goSet:      []string{string(contractsv1.ContextFabricSemanticReadingUnavailable)},
 			exhaustive: true,
@@ -477,7 +477,7 @@ func init() {
 			name:           "semantic_reading.reason",
 			kind:           vocabAdditive,
 			clientValidate: "contractsv1.ValidateStoredResult",
-			sites:          []string{"context_fabric_answer_projection.v1.semantic_reading.reason", "context_fabric_investigation_result.v1.semantic_reading.reason"},
+			sites:          []string{"context_fabric_answer_projection.v1.semantic_reading.reason", "context_fabric_investigation_result.v1.semantic_reading.reason", "context_fabric_investigation_result.v2.semantic_reading.reason"},
 			// schema: "semantic_state_absent", "semantic_state_unreadable"
 			goSet:      []string{string(contractsv1.ContextFabricSemanticReadingStateAbsent), string(contractsv1.ContextFabricSemanticReadingStateUnreadable)},
 			exhaustive: true,
