@@ -90,20 +90,7 @@ func newPostgresFixtureWithAccess(t *testing.T, ctx context.Context, access post
 	if _, err := database.ExecContext(ctx, fmt.Sprintf(`CREATE ROLE acr_runtime LOGIN PASSWORD '%s'`, runtimePassword)); err != nil {
 		t.Fatal(err)
 	}
-	grants := []string{
-		`GRANT USAGE ON SCHEMA acr TO acr_runtime`,
-		`GRANT SELECT ON acr.schema_migrations TO acr_runtime`,
-		`GRANT SELECT, UPDATE ON acr.client_credentials TO acr_runtime`,
-		`GRANT SELECT, INSERT ON acr.agent_episodes TO acr_runtime`,
-		`GRANT INSERT ON acr.audit_events TO acr_runtime`,
-		`GRANT SELECT, INSERT, UPDATE ON acr.device_authorizations TO acr_runtime`,
-	}
-	if access == postgresRuntimeAccessMissingPacketInsert {
-		grants = append(grants, `GRANT SELECT ON acr.context_packet_snapshots TO acr_runtime`)
-	} else {
-		grants = append(grants, `GRANT SELECT, INSERT, DELETE, UPDATE ON acr.context_packet_snapshots TO acr_runtime`)
-	}
-	for _, grant := range grants {
+	for _, grant := range runtimeFixtureGrantStatements("acr_runtime", access) {
 		if _, err := database.ExecContext(ctx, grant); err != nil {
 			t.Fatal(err)
 		}
@@ -119,6 +106,27 @@ func newPostgresFixtureWithAccess(t *testing.T, ctx context.Context, access post
 	fixture.token = issued.Token
 	fixture.dsn = runtimeDSN.String()
 	return fixture
+}
+
+// runtimeFixtureFeatures is the optional-feature set the real-binary fixture
+// grants for.
+var runtimeFixtureFeatures = map[string]bool{}
+
+// runtimeFixtureGrantStatements is the GRANT list the fixture applies to the
+// runtime role.
+func runtimeFixtureGrantStatements(role string, access postgresRuntimeAccess) []string {
+	grants := []string{
+		`GRANT USAGE ON SCHEMA acr TO ` + role,
+		`GRANT SELECT ON acr.schema_migrations TO ` + role,
+		`GRANT SELECT, UPDATE ON acr.client_credentials TO ` + role,
+		`GRANT SELECT, INSERT ON acr.agent_episodes TO ` + role,
+		`GRANT INSERT ON acr.audit_events TO ` + role,
+		`GRANT SELECT, INSERT, UPDATE ON acr.device_authorizations TO ` + role,
+	}
+	if access == postgresRuntimeAccessMissingPacketInsert {
+		return append(grants, `GRANT SELECT ON acr.context_packet_snapshots TO `+role)
+	}
+	return append(grants, `GRANT SELECT, INSERT, DELETE, UPDATE ON acr.context_packet_snapshots TO `+role)
 }
 
 func newUnmigratedPostgresFixture(t *testing.T, ctx context.Context) *postgresFixture {
