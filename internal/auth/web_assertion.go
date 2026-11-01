@@ -22,8 +22,13 @@ const (
 	WebAssertionAuthenticationMethod = storage.AuthenticationMethodWebAssertion
 	maxWebAssertionLifetime          = 30 * time.Second
 	webAssertionClockSkew            = 5 * time.Second
-	defaultReplayCapacity            = 10_000
-	defaultWebAssertionBodyBytes     = 1 << 20
+	// webAssertionOverlapCeiling bounds how far ahead a key's retire_after may
+	// be: a key retiring later than now + this is not a bounded overlap and is
+	// refused. It equals ops internal/auth/workload AssertionOverlapCeiling
+	// (acr cannot import ops; a cell pins the value).
+	webAssertionOverlapCeiling   = 24 * time.Hour
+	defaultReplayCapacity        = 10_000
+	defaultWebAssertionBodyBytes = 1 << 20
 )
 
 var (
@@ -136,7 +141,10 @@ func (v *WebAssertionVerifier) Verify(r *http.Request) (storage.Principal, error
 	}
 	key, found := keys[header.KeyID]
 	signature, signatureErr := base64.RawURLEncoding.DecodeString(parts[2])
-	if !found || signatureErr != nil || !ed25519.Verify(key, []byte(parts[0]+"."+parts[1]), signature) {
+	if !found || signatureErr != nil || !ed25519.Verify(key.Public, []byte(parts[0]+"."+parts[1]), signature) {
+		return storage.Principal{}, ErrInvalidWebAssertion
+	}
+	if !v.keyInTimeBound(r, header.KeyID, key) {
 		return storage.Principal{}, ErrInvalidWebAssertion
 	}
 	claims, err := decodeWebAssertion[parsedWebAssertionClaims](parts[1])
@@ -171,6 +179,27 @@ func (v *WebAssertionVerifier) Verify(r *http.Request) (storage.Principal, error
 		SessionID:            strings.TrimSpace(claims.SessionID),
 		Impersonating:        claims.Impersonating,
 	}, nil
+}
+
+// keyInTimeBound applies the per-key retire_after: a key verifies only while
+// now < retire_after (no clock skew: it fails closed at the instant), and a
+// retire_after more than webAssertionOverlapCeiling ahead is refused. A key
+// without the member has no time bound. A refused kid fails like an unknown
+// kid; the log line carries the kid and retire_after only.
+func (v *WebAssertionVerifier) keyInTimeBound(r *http.Request, kid string, key authverify.JWKSKey) bool {
+	if key.RetireAfter == nil {
+		return true
+	}
+	now := v.now().UTC()
+	retireAfter := key.RetireAfter.UTC()
+	if now.Before(retireAfter) && !retireAfter.After(now.Add(webAssertionOverlapCeiling)) {
+		return true
+	}
+	if v.logger != nil {
+		v.logger.WarnContext(r.Context(), "web assertion refused: signing key outside its time bound", "class", "web_assertion_key_retired",
+			"kid", truncateLogValue(kid, 128), "retire_after", retireAfter.Format(time.RFC3339Nano))
+	}
+	return false
 }
 
 func IsWebAssertionReplay(err error) bool {

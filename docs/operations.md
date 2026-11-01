@@ -108,10 +108,29 @@ ACR_WEB_ASSERTION_AUDIENCE
 ACR_WEB_ASSERTION_JWKS_FILE
 ```
 
-The JWKS is local public key material. Rotate by publishing the new key in the
-JWKS, issuing assertions with its `kid`, observing successful verification,
-then removing the retired key. Removing a key takes effect on the next
-assertion because the file is reread. Used assertion ids live in PostgreSQL
+The JWKS is local public key material. Each key may carry an optional
+`retire_after` member: an RFC 3339 UTC string such as
+`"2026-01-02T03:04:05Z"` (zero offset, no leap second; a `:60` second is
+refused), the same value as the ops registry row's `retire_after`. A key
+without it has no time bound. A key with it verifies only while now is before
+`retire_after`; at that instant and after, an assertion signed with it is
+refused like an unknown `kid` (bare 401) and one Warn line of class
+`web_assertion_key_retired` names the `kid` and `retire_after` (never key
+material). A `retire_after` more than 24 hours after now is refused the same
+way: it is not a bounded overlap (the ceiling equals the ops
+`AssertionOverlapCeiling`). There is no clock skew on `retire_after`. A
+malformed member refuses the whole document, as a bad key does. The file is
+reread on every assertion, so a change takes effect on the next one.
+
+Rotate in this order:
+
+1. Add the new public key (no `retire_after`) to the acr JWKS.
+2. Record the row with the ops verb.
+3. Move web's `kid` and key together, so web signs with the new key.
+4. Set `retire_after` on the old key, at most 24 hours ahead.
+5. Remove the old key after `retire_after`.
+
+Used assertion ids live in PostgreSQL
 (`acr.web_assertion_replays`), so every acr-api pod refuses a replay; the
 runtime role needs SELECT, INSERT and DELETE on it (`grant-runtime-acl`).
 

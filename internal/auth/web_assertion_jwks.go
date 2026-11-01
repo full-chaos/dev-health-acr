@@ -2,7 +2,6 @@ package auth
 
 import (
 	"bytes"
-	"crypto/ed25519"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -18,9 +17,10 @@ import (
 // (and its tests) are unchanged. A file-read failure passes through
 // unwrapped, exactly as before -- every caller of keys() already treats
 // any non-nil error as ErrInvalidWebAssertion (see NewWebAssertionVerifier
-// and Verify).
-func (v *WebAssertionVerifier) keys() (map[string]ed25519.PublicKey, error) {
-	keys, err := v.jwks.Keys()
+// and Verify). Each key carries its optional retire_after (the ops registry
+// row's retire_after); the time rule lives in Verify, not in authverify.
+func (v *WebAssertionVerifier) keys() (map[string]authverify.JWKSKey, error) {
+	keys, err := v.jwks.KeySet()
 	if err != nil {
 		if errors.Is(err, authverify.ErrInvalidJWKS) {
 			return nil, ErrInvalidWebAssertion

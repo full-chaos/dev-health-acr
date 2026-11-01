@@ -272,6 +272,12 @@ type treeWalk struct {
 	// projectExcluded counts the distinct far-side nodes a requested project
 	// narrowing left out of scope (CHAOS-12329): never in linkDeniedTargets.
 	projectExcluded int
+	// hopProjectExcluded: the nodes a cohort member walk's hops left out of
+	// a requested project narrowing (CHAOS-12361), never denied.
+	hopProjectExcluded map[string]bool
+	// anchorOutOfScope: the requested project narrowing alone refused the
+	// anchor, so the walk did not run (CHAOS-12361).
+	anchorOutOfScope bool
 	// linkIssueTargets is set when the far side of the link is the issue (a
 	// repository's work items): the distinct linked issues before
 	// authorization, for a restricted caller read by a bounded count with no
@@ -331,6 +337,9 @@ type treeWalkState struct {
 	// status filters the members inside the member read, before the budget
 	// cuts it.
 	status memberStatusPredicate
+	// anchorDeniedUnscoped: the anchor's decision without the request's
+	// project narrowing (CHAOS-12361, project_narrowing_scope.go).
+	anchorDeniedUnscoped bool
 }
 
 // authorizedHit is the decision on one hit of a step read: the node, and for
@@ -465,6 +474,9 @@ func (a *Adapter) teamAnchorMembers(ctx context.Context, key, orgID string, prin
 		return treeWalk{anchorKind: anchor.Kind}, nil
 	}
 	denied := !authorizedNodeAttributes(principal, scope, toCandidateNode(team).Attributes)
+	unscoped := scope
+	unscoped.ProjectIDs, unscoped.ProjectNarrowing = nil, nil
+	ctx = withAnchorUnscopedDenied(ctx, !authorizedNodeAttributes(principal, unscoped, toCandidateNode(team).Attributes))
 	walk, err := a.treeMembersOf(ctx, key, orgID, principal, scope, anchor, member, collectLimit, temporal, true, denied, status)
 	if err == nil && len(walk.linkNodes) > 0 {
 		walk.nodes = append(walk.nodes, walk.linkNodes...)
@@ -474,7 +486,9 @@ func (a *Adapter) teamAnchorMembers(ctx context.Context, key, orgID string, prin
 }
 
 func (a *Adapter) treeMembersOf(ctx context.Context, key, orgID string, principal storage.Principal, scope contextfabric.RequestedScope, anchor contextfabric.SubjectRef, member treePosition, collectLimit int, temporal temporalFilter, ownershipEdges, anchorDenied bool, status memberStatusPredicate) (treeWalk, error) {
-	out := treeWalk{anchorKind: anchor.Kind, anchorDenied: anchorDenied}
+	// An anchor the project narrowing alone refuses is out of scope, not
+	// hidden (CHAOS-12361): out.anchorDenied is the caller's own denial.
+	out := treeWalk{anchorKind: anchor.Kind, anchorDenied: anchorUnscopedDenied(ctx, anchorDenied)}
 	if !status.appliesTo(treeNodes[member].kind) {
 		status = memberStatusPredicate{}
 	}
@@ -489,7 +503,8 @@ func (a *Adapter) treeMembersOf(ctx context.Context, key, orgID string, principa
 	if !ok {
 		return out, nil
 	}
-	state := treeWalkState{out: &out, principal: principal, scope: scope, collectLimit: collectLimit, frontierLimit: collectLimit, ownershipEdges: ownershipEdges, anchorDenied: anchorDenied, status: status}
+	state := treeWalkState{out: &out, principal: principal, scope: scope, collectLimit: collectLimit, frontierLimit: collectLimit, ownershipEdges: ownershipEdges, anchorDenied: anchorDenied, status: status,
+		anchorDeniedUnscoped: anchorUnscopedDenied(ctx, anchorDenied)}
 	if status.set() {
 		state.frontierLimit = max(collectLimit, exactNameCandidateQueryLimit)
 	}
@@ -578,6 +593,10 @@ func (s treeWalkState) advance(hop treeHop, hits []walkHit, parents map[string]c
 	subjects := map[string]contextfabric.SubjectRef{}
 	for _, h := range hits {
 		if !s.authorizedHit(hop, h) {
+			if s.scopeOnly(hop, h) {
+				s.excludeByScope(h.to)
+				continue
+			}
 			s.deny()
 			continue
 		}
@@ -610,6 +629,10 @@ func (s treeWalkState) members(hop treeHop, hits []walkHit, parents map[string]c
 	seen := map[string]bool{}
 	for _, h := range hits {
 		if !s.authorizedHit(hop, h) {
+			if s.scopeOnly(hop, h) {
+				s.excludeByScope(h.to)
+				continue
+			}
 			s.denyOwned(hop, h.to)
 			continue
 		}
@@ -1121,5 +1144,18 @@ func (a *Adapter) linkSegment(ctx context.Context, key, orgID string, state tree
 // the tree: a project through its issues' linked pull requests' repositories,
 // a team through the repositories it owns, a repository directly.
 func (a *Adapter) anchorDeploymentMembers(ctx context.Context, key, orgID string, principal storage.Principal, scope contextfabric.RequestedScope, anchor contextfabric.SubjectRef, collectLimit int, temporal temporalFilter) (treeWalk, error) {
+	// CHAOS-12361 review r2: the deployment route decides its anchor as the
+	// team anchor route does. An anchor the requested project narrowing alone
+	// refuses is out of scope: none of its deployments is a member, and none
+	// is denied (project_narrowing_scope.go).
+	if len(scope.ProjectIDs) > 0 {
+		n, err := a.nodeByKindID(ctx, key, orgID, string(anchor.Kind), anchor.CanonicalID, temporal)
+		if err != nil {
+			return treeWalk{anchorKind: anchor.Kind}, err
+		}
+		if n != nil && anchorOutOfProjectScope(principal, scope, toCandidateNode(n).Attributes) {
+			return treeWalk{anchorKind: anchor.Kind, anchorOutOfScope: true}, nil
+		}
+	}
 	return a.treeMembers(ctx, key, orgID, principal, scope, anchor, treeDeployment, collectLimit, temporal)
 }

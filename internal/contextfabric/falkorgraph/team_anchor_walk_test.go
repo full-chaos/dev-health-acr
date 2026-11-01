@@ -109,7 +109,7 @@ func TestTeamAnchorWalkWritesOneCertifiedLinePerOutcome(t *testing.T) {
 				t.Fatalf("%d lines, want one", len(lines))
 			}
 			finished := outcome != TeamAnchorWalkReadFailed
-			for _, key := range []string{"members", "denied", "truncated"} {
+			for _, key := range []string{"members", "denied", "project_excluded", "truncated"} {
 				if _, present := lines[0][key]; present != finished {
 					t.Errorf("line %v: %s present = %v", lines[0], key, present)
 				}
