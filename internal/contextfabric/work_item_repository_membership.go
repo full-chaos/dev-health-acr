@@ -127,7 +127,8 @@ func (m *TreeWorkItemMembership) read(ctx context.Context, principal storage.Pri
 	served := workItemTupleSelectionCap(request.PlanMaxMembers, request.RequestMaxMembers)
 	authorized := 0
 	servedTierRank, cutTierRank := -1, -1
-	out := WorkItemMembershipResult{Members: make([]WorkItemMembershipMember, 0, min(len(members), served)), ProjectNarrowingUnverified: walk.ProjectNarrowingUnverified}
+	out := WorkItemMembershipResult{Members: make([]WorkItemMembershipMember, 0, min(len(members), served)), ProjectNarrowingUnverified: walk.ProjectNarrowingUnverified,
+		TeamNarrowing: walk.TeamNarrowing, TeamExcluded: walk.TeamExcluded, TeamFloor: walk.TeamFloor}
 	for _, member := range members {
 		segments, ok := identity.Segments(identity.KindWorkItem, member.Subject.CanonicalID)
 		if !ok || len(segments) != 2 {
@@ -155,7 +156,8 @@ func (m *TreeWorkItemMembership) read(ctx context.Context, principal storage.Pri
 		State: WorkItemMembershipCensusExact, PopulationMeasured: true, PopulationComplete: !incomplete && !overLimit, PopulationIncomplete: incomplete || overLimit,
 		AuthorizedPopulation: authorized, ServedMembers: len(out.Members), CensusLimit: WorkItemMembershipCensusLimit,
 		RepositoryPullRequests: walk.PullRequests, RepositoryLinkedIssues: walk.LinkedIssues,
-		LowerTierCut: cutTierRank > servedTierRank && servedTierRank >= 0,
+		AnchorOutsideTeamNarrowing: walk.AnchorOutsideTeamNarrowing,
+		LowerTierCut:               cutTierRank > servedTierRank && servedTierRank >= 0,
 	}
 	if overLimit {
 		census.State = WorkItemMembershipCensusFloor
