@@ -12517,6 +12517,53 @@
     ]
   },
   {
+    "id": "contextfabric.team_narrowing_general_read",
+    "msg": "context_fabric: team narrowing general read",
+    "level": "info",
+    "multiplicity": "zero_or_one_per_request",
+    "attribution": [
+      "org_id"
+    ],
+    "bounded_aggregation": "at most one line per DiscoverContext call, and only when the request names a team narrowing.",
+    "fields": [
+      {
+        "key": "org_id",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "requested_teams",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "decided",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "excluded",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "floor",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "none",
+          "team_narrowing_undecided"
+        ]
+      },
+      {
+        "key": "request_id",
+        "type": "string",
+        "presence": "conditional",
+        "applicability": "written when the request context carries a request ID"
+      }
+    ]
+  },
+  {
     "id": "contextfabric.terminal_save_skipped",
     "msg": "context fabric terminal save skipped",
     "level": "error",
