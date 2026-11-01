@@ -25,6 +25,8 @@ SELECT
     AND has_table_privilege(current_user, 'acr.context_packet_snapshots', 'DELETE')
     AND has_table_privilege(current_user, 'acr.context_packet_snapshots', 'UPDATE')
     AND has_table_privilege(current_user, 'acr.audit_events', 'INSERT')
+    AND has_table_privilege(current_user, 'acr.credential_lifecycle_outbox', 'SELECT')
+    AND has_table_privilege(current_user, 'acr.credential_lifecycle_outbox', 'INSERT')
     AND (NOT $1
       OR (has_table_privilege(current_user, 'acr.agent_episodes', 'SELECT')
         AND has_table_privilege(current_user, 'acr.agent_episodes', 'INSERT')))`
