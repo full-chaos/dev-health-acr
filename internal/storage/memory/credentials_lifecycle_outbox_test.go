@@ -396,3 +396,37 @@ func TestOutbox_AnAuditFailureAfterTheOutboxRowsLeavesNoRows(t *testing.T) {
 		}
 	}
 }
+
+// recordMutation is the one writer of every single-credential mutation: an
+// audit failure after its outbox rows leaves none of them, whatever the
+// mutation (the family revoke has its own all-or-nothing wrapper).
+func TestOutbox_AnAuditFailureAfterTheOutboxRowsLeavesNoRowsForCreateAndRotate(t *testing.T) {
+	sawFailure := map[string]bool{}
+	for failAfter := 0; failAfter < 12; failAfter++ {
+		audit, lifecycle, _ := newOutboxStore(t)
+		calls := 0
+		ctx := flakyContext{Context: context.Background(), calls: &calls, failAfter: failAfter}
+		_, err := lifecycle.CreateCredential(ctx, outboxInput("flakycreate"))
+		if err != nil {
+			sawFailure["create"] = true
+			require.Empty(t, audit.LifecycleOutbox(), "failAfter=%d: a failed create leaves no outbox row", failAfter)
+			_, getErr := lifecycle.GetByID(context.Background(), outboxOrg, "cred_flakycreate")
+			require.ErrorIs(t, getErr, storage.ErrNotFound, "failAfter=%d", failAfter)
+		}
+
+		audit, lifecycle, _ = newOutboxStore(t)
+		parent, createErr := lifecycle.CreateCredential(context.Background(), outboxInput("flakyparent"))
+		require.NoError(t, createErr)
+		audit.ledger.TruncateTo(0)
+		calls = 0
+		_, err = lifecycle.RotateCredential(ctx, validRotation(parent, "flakychild", "a", true))
+		if err != nil {
+			sawFailure["rotate"] = true
+			require.Empty(t, audit.LifecycleOutbox(), "failAfter=%d: a failed rotate leaves no outbox row", failAfter)
+			stored, getErr := lifecycle.GetByID(context.Background(), outboxOrg, parent.CredentialID)
+			require.NoError(t, getErr)
+			require.Nil(t, stored.RevokedAt, "failAfter=%d: the parent stays live", failAfter)
+		}
+	}
+	require.True(t, sawFailure["create"] && sawFailure["rotate"], "the sweep must reach a failing step of each mutation: %v", sawFailure)
+}
