@@ -13,6 +13,7 @@ import (
 // count it per scope, so the declaration states why instead of a number.
 // Adding an event here is a reviewed exemption.
 var unboundedEvents = []string{
+	"contextfabric.work_item_link_reach",
 	"devhealthfacts.fact_bytes_bound_exceeded",
 	"devhealthfacts.health_daily_health_cap_cut",
 	"devhealthfacts.owning_teams_truncated",

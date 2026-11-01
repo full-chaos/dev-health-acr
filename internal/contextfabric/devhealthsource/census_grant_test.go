@@ -228,6 +228,13 @@ func TestAGrantedWorkItemCensusCarriesTheLinkArmOnEveryStatement(t *testing.T) {
 					if !strings.Contains(statement, "wia_link.work_item_id IN (SELECT w.work_item_id FROM work_items AS w WHERE") {
 						t.Fatalf("statement %d does not narrow the link aggregate to the handle's candidates", i)
 					}
+					// The library's link aggregate tests the two-part grammar before
+					// the owner, and that is the one thing keeping acme/group/secret
+					// out for an acme/* grant. RepositoryAllowed refuses that slug too:
+					// a library that dropped the guard would be an existence signal.
+					if !strings.Contains(statement, "'"+linkSlugGrammar+"'") {
+						t.Fatalf("statement %d lost the library's slug grammar", i)
+					}
 					if !strings.Contains(statement, "max_rows_to_read = 3000000") {
 						t.Fatalf("statement %d carries no row bound", i)
 					}

@@ -132,6 +132,7 @@ var ByID = map[string]Event{
 	"contextfabric.window_gate_offer_disclosure":          WindowGateOfferDisclosure,
 	"contextfabric.window_gated_for_confirmation":         WindowGatedForConfirmation,
 	"contextfabric.work_item_authorization_gap":           WorkItemAuthorizationGap,
+	"contextfabric.work_item_link_reach":                  WorkItemLinkReach,
 	"contextfabric.work_item_membership_gate":             WorkItemMembershipGate,
 	"contextfabric.work_item_membership_s1":               WorkItemMembershipS1,
 	"contextfabric.work_item_reuse":                       WorkItemReuse,
@@ -8795,6 +8796,59 @@ func (f WorkItemAuthorizationGapFields) SlogArgs() []any {
 		"served_status", contextfabric.SanitizeLogAttr(f.ServedStatus),
 		"served_members", f.ServedMembers,
 		"limitation_disclosed", f.LimitationDisclosed,
+		"request_id", contextfabric.SanitizeLogAttr(f.RequestID),
+	}
+}
+
+// WorkItemLinkReachFields is contextfabric.work_item_link_reach's generated typed construction interface
+// (CHAOS-5516): one Go field per Field WorkItemLinkReach.Fields declares in spec.go.
+type WorkItemLinkReachFields struct {
+	OrgID     string
+	Outcome   string
+	Rows      int
+	ElapsedMs int
+	RequestID string
+	// constructed (CHAOS-5516 r1 fix): an UNEXPORTED marker, generated on
+	// every WorkItemLinkReachFields uniformly, set ONLY by NewWorkItemLinkReachFields below. A caller
+	// outside this package cannot set an unexported field via a composite
+	// literal -- not partially (one exported field set, the rest at their
+	// Go zero value) and not even by hand-setting every EXPORTED field --
+	// so this is the class fix for "a caller still assembles that event's
+	// field list": no composite literal built outside eventspec, complete or
+	// partial, can ever read as constructed.
+	constructed bool
+}
+
+// NewWorkItemLinkReachFields is the generated constructor for WorkItemLinkReachFields -- every
+// field WorkItemLinkReach.Fields declares is a required parameter.
+func NewWorkItemLinkReachFields(orgID string, outcome string, rows int, elapsedMs int, requestID string) WorkItemLinkReachFields {
+	return WorkItemLinkReachFields{
+		OrgID:       orgID,
+		Outcome:     outcome,
+		Rows:        rows,
+		ElapsedMs:   elapsedMs,
+		RequestID:   requestID,
+		constructed: true,
+	}
+}
+
+// IsConstructed reports whether f was built by NewWorkItemLinkReachFields -- the ONE
+// exported way to read the unexported "constructed" marker from outside
+// this package. false for the Go zero value and for ANY composite literal
+// assembled elsewhere, complete or partial.
+func (f WorkItemLinkReachFields) IsConstructed() bool { return f.constructed }
+
+// SlogArgs returns WorkItemLinkReach's own declared fields as alternating slog
+// key/value pairs, in the SAME order spec.go declares them. Every
+// free-text string/[]string value is sanitized HERE, at its own
+// construction site inside this function's body -- the shape CHAOS-5544's
+// own instrument (TestNoUnsanitizedLogAttributeInContextFabric) requires.
+func (f WorkItemLinkReachFields) SlogArgs() []any {
+	return []any{
+		"org_id", contextfabric.SanitizeLogAttr(f.OrgID),
+		"outcome", contextfabric.SanitizeLogAttr(f.Outcome),
+		"rows", f.Rows,
+		"elapsed_ms", f.ElapsedMs,
 		"request_id", contextfabric.SanitizeLogAttr(f.RequestID),
 	}
 }

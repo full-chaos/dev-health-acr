@@ -1158,6 +1158,8 @@ type recordingTelemetry struct {
 
 	// cohortKindBases records every RecordCohortKindBasis call verbatim.
 	cohortKindBases []cohortKindBasisRecord
+	// linkReaches records every RecordWorkItemLinkReach call (CHAOS-12456).
+	linkReaches []linkReachRecord
 	// teamNarrowingReads records every RecordTeamNarrowingGeneralRead call (CHAOS-12327).
 	teamNarrowingReads []teamNarrowingReadRecord
 
@@ -1355,6 +1357,18 @@ func (r *recordingTelemetry) RecordCohortKindCensus(_ context.Context, orgID str
 		orgID: orgID, decision: decision, memberKind: memberKind, kinds: append([]string(nil), kinds...),
 		poolSize: poolSize, poolBound: poolBound, truncated: truncated, readErr: readErr,
 	})
+}
+
+// RecordWorkItemLinkReach records one reach read.
+func (r *recordingTelemetry) RecordWorkItemLinkReach(_ context.Context, orgID string, outcome WorkItemLinkReachOutcome, rows int, _ time.Duration) {
+	r.linkReaches = append(r.linkReaches, linkReachRecord{orgID: orgID, outcome: outcome, rows: rows})
+}
+
+// linkReachRecord is one RecordWorkItemLinkReach call.
+type linkReachRecord struct {
+	orgID   string
+	outcome WorkItemLinkReachOutcome
+	rows    int
 }
 
 // teamNarrowingReadRecord is one RecordTeamNarrowingGeneralRead call.

@@ -4,17 +4,20 @@ import (
 	"context"
 	"fmt"
 	"reflect"
+	"regexp"
 	"slices"
 	"sort"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/full-chaos/dev-health-acr/internal/auth"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/devhealthsource"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/graphrank"
 	"github.com/full-chaos/dev-health-acr/internal/contextpacket"
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
+	"github.com/full-chaos/dev-health-acr/internal/storage"
 	"github.com/full-chaos/dev-health-acr/internal/testsupport/userprincipal"
 )
 
@@ -22,6 +25,9 @@ import (
 // real adapter and a real principal, over a census source and a fake graph. The
 // body runs on a statement model that evaluates what a statement carries, and on
 // real ClickHouse (ACR_CONTAINER_TESTS=1).
+
+// linkSlugGrammar is the two-part grammar the library's link aggregate tests.
+const linkSlugGrammar = `^[a-z0-9]([a-z0-9._-]{0,98}[a-z0-9])?/[a-z0-9]([a-z0-9._-]{0,98}[a-z0-9])?$`
 
 const (
 	linkKey        = "CHAOS-204"
@@ -50,6 +56,25 @@ type grantedItemWorld struct {
 	addLink func(t *testing.T, link issueLink)
 	links   *[]issueLink
 	items   *[]linkItem
+	// key is the handle a turn asks about; "" is linkKey.
+	key string
+	// principal, when set, replaces the default caller.
+	principal *storage.Principal
+}
+
+func (w grantedItemWorld) handle() string {
+	if w.key != "" {
+		return w.key
+	}
+	return linkKey
+}
+
+func (w grantedItemWorld) caller(t *testing.T) storage.Principal {
+	t.Helper()
+	if w.principal != nil {
+		return *w.principal
+	}
+	return userprincipal.Narrowed(t, w.org, []string{"acme/*", "group/*"}, []string{w.insideGitHub.slug, w.insideGitLab.slug})
 }
 
 func (w grantedItemWorld) naturalKey(item linkItem) string {
@@ -69,13 +94,9 @@ func (w grantedItemWorld) canonicalID(t *testing.T, item linkItem) string {
 	return id
 }
 
-func (w grantedItemWorld) granted() []grantRepository {
-	return []grantRepository{w.insideGitHub, w.insideGitLab}
-}
-
 // node is what a read returns for a restricted caller: the sentinel, and the
 // attribute the link reach adds for a native link to a granted repository.
-func (w grantedItemWorld) node(t *testing.T, item linkItem) graphrank.CandidateNode {
+func (w grantedItemWorld) node(t *testing.T, principal storage.Principal, item linkItem) graphrank.CandidateNode {
 	t.Helper()
 	id := w.canonicalID(t, item)
 	repositories := []string{contractsv1.ContextFabricNoRepositorySentinel}
@@ -88,7 +109,7 @@ func (w grantedItemWorld) node(t *testing.T, item linkItem) graphrank.CandidateN
 	}
 	var linked []string
 	for _, link := range *w.links {
-		if link.item == item.id && link.tier == "native" && slices.Contains(w.granted(), link.repository) {
+		if link.item == item.id && link.tier == "native" && auth.RepositoryAllowed(principal.RepositoryScopes, link.repository.slug) {
 			linked = append(linked, link.repository.slug)
 		}
 	}
@@ -103,9 +124,10 @@ func (w grantedItemWorld) node(t *testing.T, item linkItem) graphrank.CandidateN
 // difference between two turns can only come from what the census read.
 func observeLinkTurn(t *testing.T, world grantedItemWorld) grantObservation {
 	t.Helper()
+	principal := world.caller(t)
 	nodes := map[string]graphrank.CandidateNode{}
 	for _, item := range *world.items {
-		nodes[world.canonicalID(t, item)] = world.node(t, item)
+		nodes[world.canonicalID(t, item)] = world.node(t, principal, item)
 	}
 	log := &grantStatementLog{inner: world.client}
 	tracer := &grantTracer{}
@@ -131,7 +153,7 @@ func observeLinkTurn(t *testing.T, world grantedItemWorld) grantObservation {
 		},
 	}
 	request := contextfabric.InvestigationRequest{
-		SchemaVersion: contextfabric.InvestigationRequestSchemaV1, RequestID: "request_12345678", Question: linkQuestion,
+		SchemaVersion: contextfabric.InvestigationRequestSchemaV1, RequestID: "request_12345678", Question: "why is " + world.handle() + " blocked?",
 		TimeContext: contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent},
 		Options: contextfabric.InvestigationOptions{
 			MaxSubjectCandidates: 10, MaxCohortMembers: 50, MaxRelationshipPaths: 50,
@@ -140,10 +162,9 @@ func observeLinkTurn(t *testing.T, world grantedItemWorld) grantObservation {
 		Consumer: contextfabric.ConsumerInfo{Name: "test", Version: "v1", Surface: "test"},
 	}
 	interpreted := contextfabric.InterpretedQuestion{
-		Shape: contextfabric.ShapeOpen, RequestedJudgment: "status", SubjectTerms: []string{linkKey},
+		Shape: contextfabric.ShapeOpen, RequestedJudgment: "status", SubjectTerms: []string{world.handle()},
 		TimeContext: contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent}, FactRequirements: []contextfabric.FactRequirement{{Kind: contextfabric.FactStatus}},
 	}
-	principal := userprincipal.Narrowed(t, world.org, []string{"acme/*", "group/*"}, []string{world.insideGitHub.slug, world.insideGitLab.slug})
 	resolution, offers, bases, digests, err := graphrank.ResolveSubjectsWithCommitBasis(context.Background(), principal, request, interpreted, deps, nil, nil, nil, "")
 	if err != nil {
 		t.Fatalf("ResolveSubjectsWithCommitBasis: %v", err)
@@ -295,6 +316,50 @@ func aNativeLinkBesideAnOutsideOneAdmits(t *testing.T, build grantedItemWorldBui
 	}
 }
 
+// aWorkItemOwnerGrantAdmitsWhatTheGateAdmits: a raw owner wildcard held by a
+// non-user credential. If the census counted a link the node gate refuses, the
+// count would say one, the gate would refuse, and the sentence would change: an
+// existence signal for an item outside the grant. One organization, one key per
+// case, so this reads one world.
+func aWorkItemOwnerGrantAdmitsWhatTheGateAdmits(t *testing.T, build grantedItemWorldBuilder) {
+	world := build(t, "owner grant")
+	principal := userprincipal.Authenticated(t, world.org, []string{"acme/*"})
+	world.principal = &principal
+	for key, repository := range map[string]grantRepository{"CHAOS-301": world.nestedGitLab, "CHAOS-302": world.malformed} {
+		world.key = key
+		without := observeLinkTurn(t, world)
+		item := linkItem{id: "linear:" + key, provider: "linear"}
+		world.addItem(t, item)
+		world.addLink(t, issueLink{item.id, "native", repository})
+		with := observeLinkTurn(t, world)
+		if !reflect.DeepEqual(without.resolution, with.resolution) {
+			t.Fatalf("%s: the item changed the resolution:\nwithout %+v\nwith    %+v", repository.slug, without.resolution, with.resolution)
+		}
+		if !reflect.DeepEqual(without.offers, with.offers) || !reflect.DeepEqual(without.trace, with.trace) {
+			t.Fatalf("%s: the item changed the turn:\nwithout %+v\nwith    %+v", repository.slug, without.trace, with.trace)
+		}
+		if with.resolution.WorkItemLinkLimitation != contractsv1.ContextFabricWorkItemNoGrantedLinkLimitation {
+			t.Fatalf("%s: limitation = %q", repository.slug, with.resolution.WorkItemLinkLimitation)
+		}
+	}
+	world.key = "CHAOS-303"
+	control := linkItem{id: "linear:CHAOS-303", provider: "linear"}
+	world.addItem(t, control)
+	world.addLink(t, issueLink{control.id, "native", world.insideGitHub})
+	if turn := observeLinkTurn(t, world); len(turn.resolution.Committed) != 1 || turn.resolution.Committed[0].CanonicalID != world.canonicalID(t, control) {
+		t.Fatalf("control: committed = %+v, want the item linked to %s", turn.resolution.Committed, world.insideGitHub.slug)
+	}
+	// A valid link keeps the item in, beside a nested one.
+	world.key = "CHAOS-304"
+	both := linkItem{id: "linear:CHAOS-304", provider: "linear"}
+	world.addItem(t, both)
+	world.addLink(t, issueLink{both.id, "native", world.nestedGitLab})
+	world.addLink(t, issueLink{both.id, "native", world.insideGitHub})
+	if turn := observeLinkTurn(t, world); len(turn.resolution.Committed) != 1 || turn.resolution.Committed[0].CanonicalID != world.canonicalID(t, both) {
+		t.Fatalf("both: committed = %+v, want the item through its valid link", turn.resolution.Committed)
+	}
+}
+
 // linkStatementModel answers a work-item census from rows, evaluating what the
 // statement and its bindings carry: the arm in its HAVING, the aggregate over an
 // id's rows, and the grant arrays. A statement with no HAVING reads every row.
@@ -307,7 +372,13 @@ func (m *linkStatementModel) Query(ctx context.Context, statement string, bindin
 	values := bindingValues(bindings)
 	slugs, _ := values["authorized_repo_slugs"].([]string)
 	owners, _ := values["authorized_repo_owners"].([]string)
+	// The link aggregate tests the slug grammar before the selector. The model
+	// reads that from the statement, so a library that drops it turns this red.
+	grammar := strings.Contains(statement, "'"+linkSlugGrammar+"'")
 	granted := func(repository grantRepository) bool {
+		if grammar && !regexp.MustCompile(linkSlugGrammar).MatchString(repository.slug) {
+			return false
+		}
 		owner, _, _ := strings.Cut(repository.slug, "/")
 		return values["authorized_repo_all"] == uint8(1) || slices.Contains(slugs, repository.slug) || slices.Contains(owners, owner)
 	}
@@ -384,6 +455,11 @@ func TestOutsideLinksChangeNothingOnTheStatementModel(t *testing.T) {
 func TestAnIdWithARowOutsideTheArmIsNotCounted(t *testing.T) {
 	t.Parallel()
 	anIdWithARowOutsideTheArmIsNotCounted(t, grantedItemModelWorld)
+}
+
+func TestAWorkItemOwnerGrantAdmitsWhatTheGateAdmits(t *testing.T) {
+	t.Parallel()
+	aWorkItemOwnerGrantAdmitsWhatTheGateAdmits(t, grantedItemModelWorld)
 }
 
 func TestALowerTierLinkNeverGrants(t *testing.T) {

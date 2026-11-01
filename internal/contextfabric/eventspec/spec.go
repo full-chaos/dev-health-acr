@@ -5393,6 +5393,32 @@ var TeamNarrowingGeneralRead = Event{
 	},
 }
 
+// workItemLinkReachOutcome is the closed vocabulary of WorkItemLinkReach's
+// "outcome" field -- see falkorgraph.WorkItemLinkReachOutcomeVocabulary, the
+// producer's own list this one must never drift from.
+var workItemLinkReachOutcome = []string{"read", "cut", "failed"}
+
+// WorkItemLinkReach (CHAOS-12456) is the Info line of one read of a restricted
+// caller's native-link reach: how it ended, the rows it read, and how long it
+// took. A failed or cut reach serves a different sentence, and this is the line
+// that says why, so a failed read also writes a Warn line beside it. Counts and
+// a closed value only, never an id or a slug.
+var WorkItemLinkReach = Event{
+	ID:              "contextfabric.work_item_link_reach",
+	Msg:             "context_fabric: work item link reach",
+	Level:           LevelInfo,
+	Multiplicity:    MultiplicityZeroOrManyPerRequest,
+	Attribution:     []string{"org_id"},
+	UnboundedReason: "one line per adapter call of a restricted caller that reads the graph, so the count follows the graph calls a turn makes.",
+	Fields: []Field{
+		{Key: "org_id", Type: FieldString, Presence: PresenceRequired},
+		{Key: "outcome", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: workItemLinkReachOutcome},
+		{Key: "rows", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "elapsed_ms", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "request_id", Type: FieldString, Presence: PresenceConditional, Applicability: requestIDApplicability},
+	},
+}
+
 // projectDeploymentWalkOutcome is the closed vocabulary of
 // ProjectDeploymentWalk's "outcome" field -- see
 // falkorgraph.ProjectDeploymentWalkOutcomeVocabulary, the producer's own list
@@ -5768,6 +5794,7 @@ var All = []Event{
 	ConfirmedNeedLedger,
 	CohortKindFulltext,
 	TeamNarrowingGeneralRead,
+	WorkItemLinkReach,
 	ProjectDeploymentWalk,
 	RepositoryWorkItemWalk,
 	OwnershipRouting,

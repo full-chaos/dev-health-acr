@@ -110,3 +110,7 @@ func TestAProjectOwnedItemWithNoNativeLinkStaysDeniedOnClickHouse(t *testing.T) 
 func TestANativeLinkBesideAnOutsideOneAdmitsOnClickHouse(t *testing.T) {
 	aNativeLinkBesideAnOutsideOneAdmits(t, grantedItemClickHouseWorld)
 }
+
+func TestAWorkItemOwnerGrantAdmitsWhatTheGateAdmitsOnClickHouse(t *testing.T) {
+	aWorkItemOwnerGrantAdmitsWhatTheGateAdmits(t, grantedItemClickHouseWorld)
+}

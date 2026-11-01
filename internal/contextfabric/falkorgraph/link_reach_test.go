@@ -1,15 +1,20 @@
 package falkorgraph
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/full-chaos/dev-health-acr/internal/auth"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric/eventspec"
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric/eventspec/certify"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/graphrank"
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
@@ -128,7 +133,7 @@ func TestTheLinkReachStatementIsAnchoredOnTheGrant(t *testing.T) {
 		return nil, nil
 	}}
 	readNode(t, fake, restrictedReachCaller(t), repoLessNode(repoLessItemID))
-	for _, want := range []string{"r.relation_type = $links", "r.property_link_provenance = $native", "$noRepository IN w.authorization_repositories", "$grantRaw", "LIMIT 20001"} {
+	for _, want := range []string{"(w:Subject {org_id:$org,", "(p:Subject {org_id:$org,", "r.relation_type = $links", "r.property_link_provenance = $native", "$noRepository IN w.authorization_repositories", "$grantRaw", "LIMIT 20001"} {
 		if !strings.Contains(statement, want) {
 			t.Fatalf("statement %q lacks %q", statement, want)
 		}
@@ -254,8 +259,9 @@ func TestOnlyARestrictedCallerReadsTheReach(t *testing.T) {
 // The class check itself, apart from the project-reach gate in front of it.
 func TestWithLinkReachBindsOnlyARestrictedCaller(t *testing.T) {
 	t.Parallel()
+	adapter := newFakeAdapter(t, &fakeConn{})
 	bound := func(principal storage.Principal) bool {
-		_, ok := withLinkReach(context.Background(), "k", principal).Value(linkReachContextKey{}).(*lazyLinkReach)
+		_, ok := adapter.withLinkReach(context.Background(), "k", principal).Value(linkReachContextKey{}).(*lazyLinkReach)
 		return ok
 	}
 	if !bound(restrictedReachCaller(t)) {
@@ -271,10 +277,134 @@ func TestWithLinkReachBindsOnlyARestrictedCaller(t *testing.T) {
 		}
 	}
 	// A call inside a call reads the reach once.
-	first := withLinkReach(context.Background(), "k", restrictedReachCaller(t))
-	second := withLinkReach(first, "k", restrictedReachCaller(t))
+	first := adapter.withLinkReach(context.Background(), "k", restrictedReachCaller(t))
+	second := adapter.withLinkReach(first, "k", restrictedReachCaller(t))
 	if first.Value(linkReachContextKey{}) != second.Value(linkReachContextKey{}) {
 		t.Fatal("a nested call bound a second reach")
+	}
+}
+
+// A reach is one caller's grant. A context that passes to another caller must
+// not lend it: another scope, another organization or another graph reads again.
+func TestAHeldReachIsReusedOnlyByTheSameCaller(t *testing.T) {
+	t.Parallel()
+	adapter := newFakeAdapter(t, &fakeConn{})
+	alpha := userprincipal.Narrowed(t, "org_1", []string{reachInsideRepo}, []string{reachInsideRepo})
+	held := adapter.withLinkReach(context.Background(), "k", alpha)
+	for name, tc := range map[string]struct {
+		key       string
+		principal storage.Principal
+	}{
+		"another scope":        {"k", userprincipal.Narrowed(t, "org_1", []string{"acme/beta"}, []string{"acme/beta"})},
+		"a wider scope":        {"k", userprincipal.Narrowed(t, "org_1", []string{reachInsideRepo, "acme/beta"}, []string{reachInsideRepo, "acme/beta"})},
+		"another organization": {"k", userprincipal.Narrowed(t, "org_2", []string{reachInsideRepo}, []string{reachInsideRepo})},
+		"another graph":        {"other", alpha},
+	} {
+		if adapter.withLinkReach(held, tc.key, tc.principal).Value(linkReachContextKey{}) == held.Value(linkReachContextKey{}) {
+			t.Fatalf("%s: the held reach was lent", name)
+		}
+	}
+}
+
+// One line per read, whatever else the call reads, and none for a caller with no
+// reach. The line carries counts and a closed value only.
+func TestTheReachReportsOneLinePerRead(t *testing.T) {
+	t.Parallel()
+	principal := restrictedReachCaller(t)
+	full := make([]linkEdgeRow, 0, linkReachMaxRows+1)
+	for i := range linkReachMaxRows + 1 {
+		full = append(full, linkEdgeRow{fmt.Sprintf("work_item.v2:z:linear:KEY-%06d", i), "native", reachInsideRepo})
+	}
+	cases := []struct {
+		name    string
+		reach   func(context.Context, string, map[string]interface{}) ([]row, error)
+		outcome WorkItemLinkReachOutcome
+		rows    int
+	}{
+		{"read", func(_ context.Context, cypher string, params map[string]interface{}) ([]row, error) {
+			return reachRows(t, []linkEdgeRow{{repoLessItemID, "native", reachInsideRepo}, {"work_item.v2:z:linear:OTHER-1", "native", reachInsideRepo}}, cypher, params), nil
+		}, WorkItemLinkReachRead, 2},
+		{"empty", func(context.Context, string, map[string]interface{}) ([]row, error) { return nil, nil }, WorkItemLinkReachRead, 0},
+		{"cut", func(_ context.Context, cypher string, params map[string]interface{}) ([]row, error) {
+			return reachRows(t, full, cypher, params), nil
+		}, WorkItemLinkReachCut, linkReachMaxRows},
+		{"failed", func(context.Context, string, map[string]interface{}) ([]row, error) {
+			return nil, errors.New("timeout")
+		}, WorkItemLinkReachFailed, 0},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			telemetry := &recordingTelemetry{}
+			fake := &fakeConn{linkReachFunc: tc.reach, queryFunc: func(context.Context, string, string, map[string]interface{}, bool) ([]row, error) { return nil, nil }}
+			adapter := newFakeAdapterWithTelemetry(t, fake, telemetry)
+			ctx, err := adapter.withProjectReach(context.Background(), "k", principal)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for range 2 {
+				if _, err := adapter.api.query(ctx, "k", "MATCH (n) RETURN n", nil, true); err != nil {
+					t.Fatal(err)
+				}
+			}
+			want := []linkReachRecord{{orgID: "org_1", outcome: tc.outcome, rows: tc.rows}}
+			if !slices.Equal(telemetry.linkReaches, want) {
+				t.Fatalf("lines = %+v, want %+v", telemetry.linkReaches, want)
+			}
+		})
+	}
+	telemetry := &recordingTelemetry{}
+	fake := &fakeConn{queryFunc: func(context.Context, string, string, map[string]interface{}, bool) ([]row, error) { return nil, nil }}
+	adapter := newFakeAdapterWithTelemetry(t, fake, telemetry)
+	ctx, err := adapter.withProjectReach(context.Background(), "k", userprincipal.Authenticated(t, "org_1", nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := adapter.api.query(ctx, "k", "MATCH (n) RETURN n", nil, true); err != nil {
+		t.Fatal(err)
+	}
+	if len(telemetry.linkReaches) != 0 {
+		t.Fatalf("unrestricted: lines = %+v, want none", telemetry.linkReaches)
+	}
+}
+
+// The real producer into a real slog.JSONHandler, against the spec. A failed
+// read is loud: it writes a Warn line as well. No id and no slug on any line.
+func TestTheReachLineCertifiesFromTheRealProducer(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		outcome WorkItemLinkReachOutcome
+		rows    int
+		warn    bool
+	}{{WorkItemLinkReachRead, 3, false}, {WorkItemLinkReachCut, linkReachMaxRows, false}, {WorkItemLinkReachFailed, 0, true}} {
+		t.Run(string(tc.outcome), func(t *testing.T) {
+			t.Parallel()
+			var buf bytes.Buffer
+			telemetry := SlogTelemetry{Logger: slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelInfo}))}
+			telemetry.RecordWorkItemLinkReach(context.Background(), "org_1", tc.outcome, tc.rows, 1500*time.Millisecond)
+			log, err := certify.Parse(buf.Bytes())
+			if err != nil {
+				t.Fatalf("certify.Parse() error = %v", err)
+			}
+			if _, err := certify.Certify(log, certify.Assertion{
+				Event: eventspec.WorkItemLinkReach,
+				Want:  map[string]any{"org_id": "org_1", "outcome": string(tc.outcome), "rows": tc.rows, "elapsed_ms": 1500},
+			}); err != nil {
+				t.Fatalf("certify.Certify() error = %v", err)
+			}
+			if got := strings.Contains(buf.String(), `"level":"WARN"`); got != tc.warn {
+				t.Fatalf("warn line = %v, want %v: %s", got, tc.warn, buf.String())
+			}
+		})
+	}
+}
+
+func TestTheReachOutcomeVocabularyIsTheProducers(t *testing.T) {
+	t.Parallel()
+	for _, field := range eventspec.WorkItemLinkReach.Fields {
+		if field.Key == "outcome" && !slices.Equal(field.ClosedVocabulary, WorkItemLinkReachOutcomeVocabulary()) {
+			t.Fatalf("spec %v, producer %v", field.ClosedVocabulary, WorkItemLinkReachOutcomeVocabulary())
+		}
 	}
 }
 

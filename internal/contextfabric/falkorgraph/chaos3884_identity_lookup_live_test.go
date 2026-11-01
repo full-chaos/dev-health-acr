@@ -119,6 +119,8 @@ func (f *fakeIdentityTelemetry) RecordCohortKindFulltext(context.Context, string
 }
 func (f *fakeIdentityTelemetry) RecordProjectDeploymentWalk(context.Context, string, falkorgraph.ProjectDeploymentWalkDecision) {
 }
+func (f *fakeIdentityTelemetry) RecordWorkItemLinkReach(context.Context, string, falkorgraph.WorkItemLinkReachOutcome, int, time.Duration) {
+}
 func (f *fakeIdentityTelemetry) RecordTeamNarrowingGeneralRead(context.Context, string, int, int, int, contextfabric.TeamNarrowingReadFloor) {
 }
 func (f *fakeIdentityTelemetry) RecordTeamAnchorWalk(context.Context, string, falkorgraph.TeamAnchorWalkDecision) {

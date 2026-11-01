@@ -70,7 +70,7 @@ func (a *Adapter) withProjectReach(ctx context.Context, key string, principal st
 	}
 	// CHAOS-12456: every site that sees a project's reach sees the links of a
 	// repo-less work item too (link_reach.go).
-	ctx = withLinkReach(ctx, key, principal)
+	ctx = a.withLinkReach(ctx, key, principal)
 	return context.WithValue(ctx, projectReachContextKey{}, &lazyProjectReach{adapter: a, key: key, orgID: orgID}), nil
 }
 

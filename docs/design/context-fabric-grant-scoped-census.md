@@ -82,6 +82,12 @@ with a bound handle and nothing committed, the round now runs whatever
 `evidence_round` adds `shadow_grant_scoped`. On a grant-scoped round it is true
 and `shadow_unscoped_visibility` is false. On every other line it is false.
 
+`contextfabric.work_item_link_reach` (Info, `context_fabric: work item link reach`)
+is one line per reach read of a restricted caller: `outcome` (`read`, `cut`,
+`failed`), `rows`, `elapsed_ms`, and `request_id` when the context has one. Counts
+and a closed value only, never an id or a slug. A failed read also writes a Warn
+line. This is where the live run reads the cost of the reach.
+
 ## Work items
 
 The entity tree relates an issue to a repository only through its linked pull
@@ -98,6 +104,11 @@ repositories are never the relation.
   statement keeps an id by `Provenance[pr_link].Expr`, never by `AuthorizationExpr`,
   which ORs the project path, and never by the item's own repository.
 - `HAVING min(...)`: an id is in only when every row carrying it passes.
+- An owner grant admits what the gate admits. The library's owner match reads the
+  first path part only, but its link aggregate tests the two-part slug grammar
+  first, so `acme/*` does not reach `acme/group/secret` or `acme/trailing-`. Real
+  ClickHouse pins it (`TestAWorkItemOwnerGrantAdmitsWhatTheGateAdmitsOnClickHouse`),
+  and a unit test pins the grammar in the statement, for a library bump.
 - A census with no handle stays refused: a count inside the link arm would miss the
   GitHub and GitLab items the node gate admits.
 - A requested repository stays on `linkScoped` and `withinLinkScope`: the library's
@@ -161,6 +172,9 @@ the gate through search.
   widens it.
 - **A stale native link.** Ops never removes a native row, so a link removed at the
   provider keeps granting until ops can retract it (CHAOS-12456 ruling 2).
+- **A name that starts with a dot.** The library's grammar refuses `acme/.github`
+  and the gate admits it. So an item linked only there counts 0: the census misses
+  it inside the grant, and search can still reach it. No signal leaves the grant.
 - **The fact readers.** `workItemRepositoryAuthorization` and
   `RepoLessWorkItemAdmitter` still admit by project ownership. Nothing commits by
   that path (ruling 3).

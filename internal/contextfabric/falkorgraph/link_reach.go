@@ -7,6 +7,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/full-chaos/dev-health-acr/internal/auth"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
@@ -44,10 +45,29 @@ const linkReachMaxRows = 20000
 
 type linkReachContextKey struct{}
 
+// WorkItemLinkReachOutcome is how one reach read ended
+// (eventspec.WorkItemLinkReach).
+type WorkItemLinkReachOutcome string
+
+const (
+	// WorkItemLinkReachRead: the read finished, inside the bound.
+	WorkItemLinkReachRead WorkItemLinkReachOutcome = "read"
+	// WorkItemLinkReachCut: the read stopped at linkReachMaxRows.
+	WorkItemLinkReachCut WorkItemLinkReachOutcome = "cut"
+	// WorkItemLinkReachFailed: the read returned an error.
+	WorkItemLinkReachFailed WorkItemLinkReachOutcome = "failed"
+)
+
+// WorkItemLinkReachOutcomeVocabulary is the closed list of outcomes.
+func WorkItemLinkReachOutcomeVocabulary() []string {
+	return []string{string(WorkItemLinkReachRead), string(WorkItemLinkReachCut), string(WorkItemLinkReachFailed)}
+}
+
 // lazyLinkReach is one call's reach, read at its first read.
 type lazyLinkReach struct {
 	key       string
 	principal storage.Principal
+	telemetry GraphTelemetry
 	once      sync.Once
 	reach     map[string][]string
 	err       error
@@ -56,19 +76,28 @@ type lazyLinkReach struct {
 
 // withLinkReach adds a reach to ctx for a restricted caller. A project-only
 // caller holds no repository list to anchor on, and an unrestricted or universal
-// caller needs no link: both read nothing.
-func withLinkReach(ctx context.Context, key string, principal storage.Principal) context.Context {
+// caller needs no link: both read nothing. A reach held on ctx is reused only by
+// the same graph, organization and repository scopes: it is one caller's grant.
+func (a *Adapter) withLinkReach(ctx context.Context, key string, principal storage.Principal) context.Context {
 	if auth.ClassifyGrant(principal) != auth.GrantRestricted {
 		return ctx
 	}
-	if held, ok := ctx.Value(linkReachContextKey{}).(*lazyLinkReach); ok && held.key == key {
+	if held, ok := ctx.Value(linkReachContextKey{}).(*lazyLinkReach); ok && held.key == key && held.principal.OrgID == principal.OrgID &&
+		slices.Equal(held.principal.RepositoryScopes, principal.RepositoryScopes) {
 		return ctx
 	}
-	return context.WithValue(ctx, linkReachContextKey{}, &lazyLinkReach{key: key, principal: principal})
+	return context.WithValue(ctx, linkReachContextKey{}, &lazyLinkReach{key: key, principal: principal, telemetry: a.config.Telemetry})
 }
 
 func (l *lazyLinkReach) load(ctx context.Context, inner conn) {
 	l.once.Do(func() {
+		started := time.Now()
+		outcome, read := WorkItemLinkReachFailed, 0
+		defer func() {
+			if l.telemetry != nil {
+				l.telemetry.RecordWorkItemLinkReach(ctx, l.principal.OrgID, outcome, read, time.Since(started))
+			}
+		}()
 		pullRequest := treeNodeVar{name: "p"}
 		cypher := fmt.Sprintf("MATCH (w:%s {%s:$org, %s:$workItem})-[r:%s]->(p:%s {%s:$org, %s:$pullRequest}) "+
 			"WHERE r.%s = $links AND r.%s = $native AND $noRepository IN w.%s AND %s "+
@@ -88,10 +117,13 @@ func (l *lazyLinkReach) load(ctx context.Context, inner conn) {
 			l.err = graphNotProjectedError(safeDependencyError("read work item link reach", err))
 			return
 		}
+		outcome = WorkItemLinkReachRead
 		if len(rows) > linkReachMaxRows {
 			l.cut = true
+			outcome = WorkItemLinkReachCut
 			rows = rows[:linkReachMaxRows]
 		}
+		read = len(rows)
 		sets := map[string]map[string]struct{}{}
 		for _, row := range rows {
 			id, _ := row["id"].(string)
