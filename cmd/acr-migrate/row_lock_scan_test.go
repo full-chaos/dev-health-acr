@@ -84,3 +84,36 @@ func lockedTables(statement string) []string {
 	}
 	return tables
 }
+
+// A table the OF clause names only by its alias still needs UPDATE declared:
+// the scanner resolves the alias to the table before it checks the grants.
+func TestAnAliasNamedInTheOfClauseResolvesToItsTableAndNeedsUpdate(t *testing.T) {
+	updatable := map[string]bool{"client_credentials": true}
+	for name, tc := range map[string]struct {
+		statement string
+		want      []string
+	}{
+		"a locked table without UPDATE named by its alias": {
+			"SELECT 1 FROM acr.schema_migrations m WHERE true FOR UPDATE OF m",
+			[]string{"schema_migrations"},
+		},
+		"the same through AS": {
+			"SELECT 1 FROM acr.schema_migrations AS m FOR SHARE OF m",
+			[]string{"schema_migrations"},
+		},
+		"a locked table with UPDATE": {
+			"SELECT 1 FROM acr.client_credentials cc FOR UPDATE OF cc SKIP LOCKED",
+			nil,
+		},
+		"an unlocked table read beside a locked one": {
+			"SELECT 1 FROM acr.client_credentials cc WHERE EXISTS (SELECT 1 FROM acr.schema_migrations m) FOR UPDATE OF cc",
+			nil,
+		},
+	} {
+		got := tablesMissingUpdate(tc.statement, updatable)
+		sort.Strings(got)
+		if !reflect.DeepEqual(got, tc.want) {
+			t.Errorf("%s: tablesMissingUpdate = %v, want %v", name, got, tc.want)
+		}
+	}
+}
