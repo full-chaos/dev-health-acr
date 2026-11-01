@@ -1111,7 +1111,7 @@
       "request_id"
     ],
     "bounded_aggregation": "one line per exit through the served document finalizer, over the passes of a request.",
-    "max_lines_per_scope": 20,
+    "max_lines_per_scope": 22,
     "fields": [
       {
         "key": "org_id",
@@ -2044,7 +2044,8 @@
           "synthesis_input_bounded",
           "synthesis_model_failed",
           "synthesis_not_run",
-          "fact_score_withheld"
+          "fact_score_withheld",
+          "project_scope_withheld"
         ]
       },
       {
@@ -4256,6 +4257,7 @@
           "unconfigured",
           "scope_gap",
           "pruned",
+          "withheld",
           "failed",
           "completed",
           "rejected",
@@ -7236,7 +7238,8 @@
           "synthesis_input_bounded",
           "synthesis_model_failed",
           "synthesis_not_run",
-          "fact_score_withheld"
+          "fact_score_withheld",
+          "project_scope_withheld"
         ],
         "applicability": "written when a cut has a coverage cause"
       },
@@ -9543,7 +9546,8 @@
           "synthesis_input_bounded",
           "synthesis_model_failed",
           "synthesis_not_run",
-          "fact_score_withheld"
+          "fact_score_withheld",
+          "project_scope_withheld"
         ]
       },
       {
@@ -10185,7 +10189,8 @@
           "synthesis_input_bounded",
           "synthesis_model_failed",
           "synthesis_not_run",
-          "fact_score_withheld"
+          "fact_score_withheld",
+          "project_scope_withheld"
         ]
       },
       {
