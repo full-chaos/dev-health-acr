@@ -52,18 +52,20 @@ var contextFabricFactKindLabels = map[ContextFabricFactKind]string{
 }
 
 // contextFabricSourceStateLabels labels every member of the closed source
-// state vocabulary.
+// state vocabulary. The words are ruled per row (CHAOS-12413): "no data" stays,
+// because an empty read is only one of its three paths, so it must not read
+// as zero.
 var contextFabricSourceStateLabels = map[ContextFabricSourceState]string{
 	ContextFabricSourceAvailable:     "available",
 	ContextFabricSourceStale:         "may be out of date",
 	ContextFabricSourceUnavailable:   "unavailable",
-	ContextFabricSourceUnconfigured:  "not configured",
-	ContextFabricSourceUnauthorized:  "not authorized",
+	ContextFabricSourceUnconfigured:  "not set up",
+	ContextFabricSourceUnauthorized:  "not readable with your access",
 	ContextFabricSourceNoData:        "no data",
-	ContextFabricSourceTruncated:     "partially included",
-	ContextFabricSourceConflicted:    "conflicting data",
+	ContextFabricSourceTruncated:     "partly included",
+	ContextFabricSourceConflicted:    "sources disagree",
 	ContextFabricSourceNotApplicable: "not applicable",
-	ContextFabricSourcePruned:        "not needed",
+	ContextFabricSourcePruned:        "not needed for this question",
 }
 
 // contextFabricEvidenceEntityLabels labels every member of the closed
@@ -118,6 +120,242 @@ var contextFabricEvidenceEntityLabels = map[ContextFabricEvidenceEntityType]stri
 	ContextFabricEvidenceEntityReviewV2:             "Review",
 }
 
+// ContextFabricVocabulary names one served vocabulary: the prefix of a
+// vocabulary_labels key (CHAOS-12413). The list is the shortest set a reader
+// actually sees outside the Details fold; a raw token that stays in the fold
+// gets no entry, so its label cannot drift from a word nobody reads.
+//
+// Not served, on purpose:
+//   - completeness.outcomes[].requirement is not a vocabulary. It is a
+//     composite coordinate, obligation/role/subject, so it takes the generic
+//     path.
+//   - obligation, the cause and refinement fields, plan narrowing, driver
+//     category, epistemic status and derivation stay in the fold.
+//   - claimed_facts[].field and the keys of rows[].fields are free strings
+//     declared per kind (CHAOS-12418).
+type ContextFabricVocabulary string
+
+const (
+	ContextFabricVocabularyAnswerStatus            ContextFabricVocabulary = "answer_status"
+	ContextFabricVocabularyCompletenessState       ContextFabricVocabulary = "completeness_state"
+	ContextFabricVocabularyRequirementOutcome      ContextFabricVocabulary = "requirement_outcome"
+	ContextFabricVocabularyAnswerImpact            ContextFabricVocabulary = "answer_impact"
+	ContextFabricVocabularyCandidateState          ContextFabricVocabulary = "candidate_state"
+	ContextFabricVocabularyPriorReceiptDisposition ContextFabricVocabulary = "prior_receipt_disposition"
+	ContextFabricVocabularyStructureDisposition    ContextFabricVocabulary = "structure_disposition"
+	ContextFabricVocabularySubjectKind             ContextFabricVocabulary = "subject_kind"
+	// ContextFabricVocabularySubjectKindPlural serves the plural beside the
+	// singular, so a consumer writes "Ranked repositories" without a
+	// pluralizer of its own.
+	ContextFabricVocabularySubjectKindPlural      ContextFabricVocabulary = "subject_kind_plural"
+	ContextFabricVocabularyMemberOutcome          ContextFabricVocabulary = "member_outcome"
+	ContextFabricVocabularyMemberDataCompleteness ContextFabricVocabulary = "member_data_completeness"
+	ContextFabricVocabularyRankingSignal          ContextFabricVocabulary = "ranking_signal"
+	ContextFabricVocabularyThresholdLabel         ContextFabricVocabulary = "threshold_label"
+	ContextFabricVocabularyDriverWindow           ContextFabricVocabulary = "driver_window"
+	ContextFabricVocabularyDriverStanding         ContextFabricVocabulary = "driver_standing"
+	ContextFabricVocabularyFactKind               ContextFabricVocabulary = "fact_kind"
+	ContextFabricVocabularyWindowRelativeID       ContextFabricVocabulary = "window_relative_id"
+	ContextFabricVocabularyWindowProvenance       ContextFabricVocabulary = "window_provenance"
+)
+
+var contextFabricVocabularyNames = [...]ContextFabricVocabulary{
+	ContextFabricVocabularyAnswerStatus,
+	ContextFabricVocabularyCompletenessState,
+	ContextFabricVocabularyRequirementOutcome,
+	ContextFabricVocabularyAnswerImpact,
+	ContextFabricVocabularyCandidateState,
+	ContextFabricVocabularyPriorReceiptDisposition,
+	ContextFabricVocabularyStructureDisposition,
+	ContextFabricVocabularySubjectKind,
+	ContextFabricVocabularySubjectKindPlural,
+	ContextFabricVocabularyMemberOutcome,
+	ContextFabricVocabularyMemberDataCompleteness,
+	ContextFabricVocabularyRankingSignal,
+	ContextFabricVocabularyThresholdLabel,
+	ContextFabricVocabularyDriverWindow,
+	ContextFabricVocabularyDriverStanding,
+	ContextFabricVocabularyFactKind,
+	ContextFabricVocabularyWindowRelativeID,
+	ContextFabricVocabularyWindowProvenance,
+}
+
+// ContextFabricVocabularyNames returns the served vocabularies in published
+// order.
+func ContextFabricVocabularyNames() [len(contextFabricVocabularyNames)]ContextFabricVocabulary {
+	return contextFabricVocabularyNames
+}
+
+// contextFabricFactKindLabelsBeyondTheFactVocabulary holds the kinds a finding
+// or a claimed fact publishes that are not canonical fact kinds: the count the
+// server computed, and the finding kinds with no fact of their own.
+var contextFabricFactKindLabelsBeyondTheFactVocabulary = map[string]string{
+	string(ContextFabricFactCardinality): "member count",
+	"operational_deficiency":             "operational deficiency",
+	"relationship":                       "relationship",
+	"narrative":                          "narrative",
+}
+
+// contextFabricVocabularyFactKindLabels is the fact kind table a chip reads:
+// the registry's own word, so a chip and a coverage sentence never disagree.
+func contextFabricVocabularyFactKindLabels() map[string]string {
+	labels := make(map[string]string, len(contextFabricFactKindLabels)+len(contextFabricFactKindLabelsBeyondTheFactVocabulary))
+	for kind, label := range contextFabricFactKindLabels {
+		labels[string(kind)] = label
+	}
+	for kind, label := range contextFabricFactKindLabelsBeyondTheFactVocabulary {
+		labels[kind] = label
+	}
+	return labels
+}
+
+// contextFabricVocabularyLabels is the label of every value a reader sees
+// outside the fold. Plain, service-authored words, never model text. Totality
+// runs both ways in chaos12415_vocabulary_labels_test.go: a new value cannot
+// ship unlabeled, and a label cannot outlive its value.
+var contextFabricVocabularyLabels = map[ContextFabricVocabulary]map[string]string{
+	// Each says "answer", so it cannot be read as a project status or as work
+	// completion (North Star check 3).
+	ContextFabricVocabularyAnswerStatus: {
+		string(ContextFabricInvestigationComplete):              "full answer",
+		string(ContextFabricInvestigationPartial):               "partial answer",
+		string(ContextFabricInvestigationDegraded):              "degraded answer",
+		string(ContextFabricInvestigationClarificationRequired): "answer needs your confirmation",
+		string(ContextFabricInvestigationNoMatch):               "no answer",
+	},
+	ContextFabricVocabularyCompletenessState: {
+		string(ContextFabricAnswerCompletenessNotDerived): "not worked out",
+		string(ContextFabricAnswerCompletenessComplete):   "complete",
+		string(ContextFabricAnswerCompletenessPartial):    "partial",
+		string(ContextFabricAnswerCompletenessDegraded):   "degraded",
+	},
+	ContextFabricVocabularyRequirementOutcome: {
+		string(ContextFabricRequirementSatisfied):     "met",
+		string(ContextFabricRequirementNarrowed):      "narrowed",
+		string(ContextFabricRequirementUnavailable):   "unavailable",
+		string(ContextFabricRequirementNotApplicable): "not applicable",
+		string(ContextFabricRequirementNotAttempted):  "not attempted",
+	},
+	ContextFabricVocabularyAnswerImpact: {
+		string(ContextFabricAnswerImpactNone):      "nothing lost",
+		string(ContextFabricAnswerImpactScope):     "fewer subjects",
+		string(ContextFabricAnswerImpactDepth):     "less evidence",
+		string(ContextFabricAnswerImpactDimension): "part of the question is missing",
+	},
+	ContextFabricVocabularyCandidateState: {
+		string(ContextFabricResolutionCommitted):  "selected",
+		string(ContextFabricResolutionProposed):   "suggested",
+		string(ContextFabricResolutionAmbiguous):  "more than one match",
+		string(ContextFabricResolutionUnresolved): "no match",
+	},
+	ContextFabricVocabularyPriorReceiptDisposition: {
+		string(ContextFabricPriorSubjectReceiptApplied):                "used",
+		string(ContextFabricPriorSubjectReceiptSkippedUnloadable):      "could not be loaded",
+		string(ContextFabricPriorSubjectReceiptSkippedNoMatch):         "no longer matches",
+		string(ContextFabricPriorSubjectReceiptSkippedStaleGraphEpoch): "out of date",
+		string(ContextFabricPriorSubjectReceiptSkippedFailedReauth):    "not readable with your access",
+	},
+	ContextFabricVocabularyStructureDisposition: {
+		string(ContextFabricStructureDispositionApplied):            "used",
+		string(ContextFabricStructureDispositionVetoedUnresolved):   "could not be matched",
+		string(ContextFabricStructureDispositionVetoedConflict):     "conflicts with this question",
+		string(ContextFabricStructureDispositionVetoedStale):        "out of date",
+		string(ContextFabricStructureDispositionSupersededByCaller): "replaced by your request",
+		string(ContextFabricStructureDispositionNotEvaluated):       "not checked",
+	},
+	ContextFabricVocabularySubjectKind: {
+		string(ContextFabricSubjectOrganization):      "organization",
+		string(ContextFabricSubjectTeam):              "team",
+		string(ContextFabricSubjectProject):           "project",
+		string(ContextFabricSubjectRepository):        "repository",
+		string(ContextFabricSubjectWorkItem):          "work item",
+		string(ContextFabricSubjectPullRequest):       "pull request",
+		string(ContextFabricSubjectDeployment):        "deployment",
+		string(ContextFabricSubjectIncident):          "incident",
+		string(ContextFabricSubjectDocument):          "document",
+		string(ContextFabricSubjectDecision):          "decision",
+		string(ContextFabricSubjectEpisode):           "episode",
+		string(ContextFabricSubjectMetric):            "metric",
+		string(ContextFabricSubjectPullRequestReview): "pull request review",
+		string(ContextFabricSubjectCIRun):             "CI run",
+		string(ContextFabricSubjectWorkItemRef):       "work item reference",
+	},
+	// devhealthschema:not-a-production-replica display words for a subject kind; they spell table names and read no table
+	ContextFabricVocabularySubjectKindPlural: {
+		string(ContextFabricSubjectOrganization):      "organizations",
+		string(ContextFabricSubjectTeam):              "teams",
+		string(ContextFabricSubjectProject):           "projects",
+		string(ContextFabricSubjectRepository):        "repositories",
+		string(ContextFabricSubjectWorkItem):          "work items",
+		string(ContextFabricSubjectPullRequest):       "pull requests",
+		string(ContextFabricSubjectDeployment):        "deployments",
+		string(ContextFabricSubjectIncident):          "incidents",
+		string(ContextFabricSubjectDocument):          "documents",
+		string(ContextFabricSubjectDecision):          "decisions",
+		string(ContextFabricSubjectEpisode):           "episodes",
+		string(ContextFabricSubjectMetric):            "metrics",
+		string(ContextFabricSubjectPullRequestReview): "pull request reviews",
+		string(ContextFabricSubjectCIRun):             "CI runs",
+		string(ContextFabricSubjectWorkItemRef):       "work item references",
+	},
+	ContextFabricVocabularyMemberOutcome: {
+		string(ContextFabricCohortOutcomeQualified):            "qualified",
+		string(ContextFabricCohortOutcomeProvisional):          "provisional",
+		string(ContextFabricCohortOutcomeInsufficientEvidence): "not enough evidence",
+		string(ContextFabricCohortOutcomeNotApplicable):        "not applicable",
+	},
+	ContextFabricVocabularyMemberDataCompleteness: {
+		string(ContextFabricCohortDataComplete): "all signals",
+		string(ContextFabricCohortDataPartial):  "some signals missing",
+		string(ContextFabricCohortDataDegraded): "two or fewer signals",
+	},
+	ContextFabricVocabularyRankingSignal: contextFabricCohortSignalNouns,
+	ContextFabricVocabularyThresholdLabel: {
+		"investment_mix.reactive_share_high":          "reactive share is high",
+		"investment_mix.deliberate_share_low":         "deliberate share is low",
+		"investment_mix.mix_concentrated":             "work mix is concentrated",
+		"investment_mix.mix_shift_toward_operational": "mix moved toward operational work",
+		"investment_mix.mix_shift_toward_feature":     "mix moved toward feature work",
+		"investment_mix.mix_shift_other":              "mix shifted",
+	},
+	ContextFabricVocabularyDriverWindow: {
+		string(ContextFabricCohortMemberDriverWindowCurrent):        "current period",
+		string(ContextFabricCohortMemberDriverWindowCurrentVsPrior): "current vs prior period",
+	},
+	ContextFabricVocabularyDriverStanding: {
+		string(ContextFabricDriverPrincipal):    "main driver",
+		string(ContextFabricDriverContributing): "contributing",
+		string(ContextFabricDriverSymptom):      "symptom",
+		string(ContextFabricDriverContext):      "context",
+		string(ContextFabricDriverWithheld):     "withheld",
+	},
+	ContextFabricVocabularyFactKind: contextFabricVocabularyFactKindLabels(),
+	ContextFabricVocabularyWindowRelativeID: {
+		string(ContextFabricRelativeWindowTrailing30D):  "last 30 days",
+		string(ContextFabricRelativeWindowTrailing90D):  "last 90 days",
+		string(ContextFabricRelativeWindowTrailing365D): "last 365 days",
+		string(ContextFabricRelativeWindowAllTime):      "all time",
+	},
+	ContextFabricVocabularyWindowProvenance: {
+		string(ContextFabricWindowInferredDefault):        "default window",
+		string(ContextFabricWindowQuestionStated):         "stated in the question",
+		string(ContextFabricWindowClarificationConfirmed): "confirmed by you",
+		string(ContextFabricWindowServerDefault):          "the window the reads used",
+	},
+}
+
+// ContextFabricVocabularyLabelKey is the vocabulary_labels key of one value.
+func ContextFabricVocabularyLabelKey(vocabulary ContextFabricVocabulary, value string) string {
+	return string(vocabulary) + ":" + value
+}
+
+// ContextFabricVocabularyLabel returns the served label of one value; ok is
+// false for a value with no row, which a consumer renders by its generic path.
+func ContextFabricVocabularyLabel(vocabulary ContextFabricVocabulary, value string) (string, bool) {
+	label, ok := contextFabricVocabularyLabels[vocabulary][value]
+	return label, ok
+}
+
 // humanizeVocabularyToken is the deterministic transform for a token from
 // one of acr's OWN vocabularies whose display needs no bespoke label
 // (underscores to spaces). Never applied to free text.
@@ -134,6 +372,89 @@ func ContextFabricFactKindLabel(kind ContextFabricFactKind) string {
 		return label
 	}
 	return humanizeVocabularyToken(string(kind))
+}
+
+// The reasons a fact kind is withheld from a project-only caller
+// (CHAOS-12330). Each is a template over the kind's label: the one place the
+// sentence is written.
+const (
+	projectScopeWithheldTeamRollup   = "%s facts are built from owning teams, which a project grant does not cover"
+	projectScopeWithheldMixedPlacing = "%s facts are placed by repository or span the organization, which a project grant does not cover"
+	projectScopeWithheldOrganization = "%s facts are organization-wide figures, which a project grant does not cover"
+	projectScopeWithheldPullRequests = "%s facts need pull requests, which are not in a project grant yet"
+	projectScopeWithheldMembership   = "%s facts need exact project membership, which is not proven yet"
+	projectScopeWithheldRepositories = "%s facts belong to repositories, which a project grant does not cover"
+)
+
+// contextFabricProjectScopeWithheldFactReasons names why each fact kind is
+// withheld from a project-only caller. A kind served to that caller one day
+// loses its row here and its branch in the registry together.
+var contextFabricProjectScopeWithheldFactReasons = map[ContextFabricFactKind]string{
+	ContextFabricFactHealth:                  projectScopeWithheldTeamRollup,
+	ContextFabricFactFlow:                    projectScopeWithheldTeamRollup,
+	ContextFabricFactLandscape:               projectScopeWithheldTeamRollup,
+	ContextFabricFactMetrics:                 projectScopeWithheldTeamRollup,
+	ContextFabricFactReadiness:               projectScopeWithheldTeamRollup,
+	ContextFabricFactWorkload:                projectScopeWithheldTeamRollup,
+	ContextFabricFactOperationalDeficiencies: projectScopeWithheldTeamRollup,
+	ContextFabricFactInvestment:              projectScopeWithheldMixedPlacing,
+	ContextFabricFactSourceHealth:            projectScopeWithheldOrganization,
+	ContextFabricFactPullRequests:            projectScopeWithheldPullRequests,
+	ContextFabricFactReviews:                 projectScopeWithheldPullRequests,
+	ContextFabricFactIdentity:                projectScopeWithheldMembership,
+	ContextFabricFactStatus:                  projectScopeWithheldMembership,
+	ContextFabricFactWork:                    projectScopeWithheldMembership,
+	ContextFabricFactActualCompletion:        projectScopeWithheldMembership,
+	ContextFabricFactBlockers:                projectScopeWithheldMembership,
+	ContextFabricFactRequiredChildren:        projectScopeWithheldMembership,
+	ContextFabricFactCommitment:              projectScopeWithheldMembership,
+	ContextFabricFactMembership:              projectScopeWithheldRepositories,
+	ContextFabricFactContinuousIntegration:   projectScopeWithheldRepositories,
+	ContextFabricFactDeployments:             projectScopeWithheldRepositories,
+	ContextFabricFactIncidents:               projectScopeWithheldRepositories,
+	ContextFabricFactSecurityAlerts:          projectScopeWithheldRepositories,
+	ContextFabricFactFileHotspots:            projectScopeWithheldRepositories,
+	ContextFabricFactEvidence:                projectScopeWithheldRepositories,
+}
+
+// ContextFabricRequestedProjectNarrowingUnavailableLimitation is the sentence
+// of a project-only request that names projects: the engine stops before any
+// read, and no answer is written over the whole grant (CHAOS-12324 narrows).
+const ContextFabricRequestedProjectNarrowingUnavailableLimitation = "Requested project narrowing not available yet"
+
+// ContextFabricProjectScopeWithheldLimitation is the sentence of an answer a
+// project grant could only partly cover: the details beside it say what was
+// left out and why.
+const ContextFabricProjectScopeWithheldLimitation = "A project grant does not cover part of what was asked, so this answer leaves it out"
+
+// ContextFabricProjectScopeWithheldFactLabel is the label, and the reason, of
+// a fact kind withheld from a project-only caller. A kind with no row reads
+// the sentence that assumes least.
+func ContextFabricProjectScopeWithheldFactLabel(kind ContextFabricFactKind) string {
+	reason, ok := contextFabricProjectScopeWithheldFactReasons[kind]
+	if !ok {
+		reason = projectScopeWithheldRepositories
+	}
+	return fmt.Sprintf(reason, kindClause(ContextFabricFactKindLabel(kind)))
+}
+
+// ContextFabricProjectScopeWithheldKindLabel is the label of a subject kind a
+// project grant does not reach. It states the grant class and never that a
+// subject of the kind exists. A project detail is the refused narrowing: a
+// project node of the grant is admitted, so nothing else names that kind.
+func ContextFabricProjectScopeWithheldKindLabel(kind ContextFabricSubjectKind) string {
+	switch kind {
+	case ContextFabricSubjectProject:
+		return ContextFabricRequestedProjectNarrowingUnavailableLimitation
+	case ContextFabricSubjectTeam:
+		return "Teams are not in a project grant yet"
+	case ContextFabricSubjectPullRequest:
+		return "Pull requests are not in a project grant yet"
+	case ContextFabricSubjectRepository:
+		return "Repositories are not in a project grant"
+	default:
+		return kindClause(humanizeVocabularyToken(string(kind))) + " subjects are not in a project grant"
+	}
 }
 
 // ContextFabricSourceStateLabel returns the display label for a source
@@ -289,6 +610,10 @@ func ComposeCoverageDetailLabel(d ContextFabricCoverageDetail) string {
 		label = "No " + humanizeVocabularyToken(string(d.Kind)) + " was found under the named subject, so none are listed"
 	case ContextFabricCoverageDetailGraphWalkCutBeforeMember:
 		label = "The read was cut before it reached any " + humanizeVocabularyToken(string(d.Kind)) + ", so some may exist that were not read"
+	case ContextFabricCoverageDetailGraphHopWalkTruncated:
+		label = "The read of linked subjects was cut at its limit, so some may exist that were not read"
+	case ContextFabricCoverageDetailGraphTeamNarrowingUndecidedPaths:
+		label = countPhrase(d.Count, "linked subject was left out because its", "linked subjects were left out because their") + " team ownership could not be decided"
 	case ContextFabricCoverageDetailComputedPopulationAbsent:
 		label = "No member set could be produced for this, so it was not computed"
 	case ContextFabricCoverageDetailGraphUnknownRelationshipType:
@@ -355,6 +680,15 @@ func ComposeCoverageDetailLabel(d ContextFabricCoverageDetail) string {
 		label = fmt.Sprintf("%d of %d %s facts read were given to answer synthesis", coverageDetailIntOrZero(d.Served), coverageDetailIntOrZero(d.Declared), kind)
 	case ContextFabricCoverageDetailFactScoreWithheld:
 		label = fmt.Sprintf(ContextFabricFactScoreWithheldLabel, kindClause(kind))
+	case ContextFabricCoverageDetailProjectScopeWithheld:
+		// Says the caller's GRANT stops here, not that a source failed and
+		// not that nothing exists: nothing was read, so there is nothing to
+		// check and no zero to report.
+		if d.Kind != "" {
+			label = ContextFabricProjectScopeWithheldKindLabel(d.Kind)
+		} else {
+			label = ContextFabricProjectScopeWithheldFactLabel(d.FactKind)
+		}
 	case ContextFabricCoverageDetailSynthesisModelFailed:
 		label = "The model call that writes the answer failed (" + humanizeVocabularyToken(string(d.FailureClass)) + "); " + humanizeVocabularyToken(string(d.RetryHint))
 	case ContextFabricCoverageDetailSynthesisNotRun:

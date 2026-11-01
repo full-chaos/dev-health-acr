@@ -2,6 +2,7 @@ package v1
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"reflect"
 	"sort"
@@ -288,6 +289,14 @@ func answerBoundTable() []answerBound {
 				}
 				r.EvidenceRefLabels["cf_not_on_this_result"] = "x"
 			}},
+		{Field: "VocabularyLabels", Why: "an optional map, bounded in entries; the schema bound matches evidence_ref_labels, and the working ceiling is the whole registry, which TestTheWholeRegistryFitsInASmallShareOfTheAnswerBudget measures.",
+			Min: func(r *ContextFabricInvestigationResult) { r.VocabularyLabels = nil },
+			Max: func(r *ContextFabricInvestigationResult) {
+				r.VocabularyLabels = maximalVocabularyLabels(ContextFabricVocabularyLabelsMaxEntries)
+			},
+			PastMax: func(r *ContextFabricInvestigationResult) {
+				r.VocabularyLabels = maximalVocabularyLabels(ContextFabricVocabularyLabelsMaxEntries + 1)
+			}},
 		{Field: "Temporal", Why: "MUTUALLY EXCLUSIVE with EffectiveEvidenceWindow, which is the real finding here: a temporal label is legal ONLY on a non-current axis, and an effective evidence window is legal ONLY on the current axis, so no valid document can carry both. The maximal interprets on the current axis and therefore cannot carry a temporal label at all -- structurally unreachable, not merely omitted. The PastMax proof is the coupling itself: attaching a label on the current axis rejects",
 			Min:     func(r *ContextFabricInvestigationResult) { r.Temporal = nil },
 			Max:     func(r *ContextFabricInvestigationResult) { r.Temporal = nil },
@@ -514,7 +523,9 @@ const irreducibleAnswerBytes = 1023
 // 521657911 -> 521729440 (+71529, CI-measured): the vocabulary gained commitment (+71189) and the census one record for team_project_ownership_commitment_v1 (+340).
 // 521729440 -> 521759242 (+29802): the coverage entry bound 100 -> 101, so the maximal coverage arrays each gain one entry.
 // 521759242 -> 521950245 (+191003, measured locally): the vocabulary gained file_hotspots and the coverage entry bound moved 101 -> 105, so the maximal coverage arrays each gain four entries.
-const maximalAnswerBytes = 521950245
+// 521950245 -> 530912315 (+8962070, measured locally): CHAOS-12415's
+// vocabulary_labels at its entry bound, each key and label at their own bound.
+const maximalAnswerBytes = 530912315
 
 func TestIrreducibleAndMaximalFixturesAreValid(t *testing.T) {
 	for _, tc := range []struct {
@@ -623,6 +634,18 @@ func TestEveryBoundIsBreachable(t *testing.T) {
 			}
 		})
 	}
+}
+
+// maximalVocabularyLabels builds a map of count entries, each key and label at
+// its own bound.
+func maximalVocabularyLabels(count int) map[string]string {
+	labels := make(map[string]string, count)
+	label := escaped(ContextFabricCoverageDetailLabelMaxLength)
+	for index := range count {
+		key := fmt.Sprintf("fact_kind:%d_", index)
+		labels[key+strings.Repeat("v", ContextFabricVocabularyLabelKeyMaxLength-len(key))] = label
+	}
+	return labels
 }
 
 // Two fields are DERIVED rather than bounded: each is a function of the rest
@@ -793,6 +816,7 @@ var expectedRejection = map[string]string{
 	"Cohort":                  "cohort violates v1 bounds",
 	"Completeness":            "outcomes exceeds v1 bounds",
 	"EvidenceRefLabels":       "names no evidence ref on the result",
+	"VocabularyLabels":        "vocabulary_labels: label map has",
 	"Temporal":                "temporal label is only meaningful",
 	"EffectiveEvidenceWindow": "all_time must not carry explicit bounds",
 	"WindowClarification":     "window clarification options violate v1 bounds",
@@ -1208,6 +1232,7 @@ var unsaturatedByDesign = map[string]string{
 	"result.ClaimedFacts[0].Subject.Label":                              "subject-ref width, same shared builder",
 	"result.SubjectResolution.Committed[0].CanonicalID":                 "subject-ref width, same shared builder",
 	"result.SubjectResolution.Committed[0].Label":                       "subject-ref width, same shared builder",
+	"result.SubjectResolution.OutsideRequestedRepositories":             "json:\"-\": never serialized, so it cannot grow the document; its one wire form is a limitation sentence, which the limitation bounds cover",
 	"result.Versions.ContractVersion":                                   "must stay the real schema identifier to mean anything; the validator bounds only its length, so a padded value would validate while making the document nonsense",
 }
 

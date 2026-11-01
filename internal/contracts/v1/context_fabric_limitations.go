@@ -791,6 +791,17 @@ const ContextFabricSubjectTermsFrameOverBoundLimitation = "The supplied interpre
 // subject_resolution.inactive_hints.
 const ContextFabricInactiveTeamHintLimitation = "The team named in this request is inactive, so no canonical facts were read for it. The server did not search for a team of the same name. When a single readable active team of the same name exists, its id is in subject_resolution.inactive_hints and you can ask again naming that id; otherwise no id is given."
 
+// ContextFabricGraphHopWalkTruncatedLimitation is the sentence of an answer
+// that is not a cohort answer whose graph read spent its edge budget with
+// candidates left (the graph_hop_walk_truncated coverage detail).
+const ContextFabricGraphHopWalkTruncatedLimitation = "The read of this subject's links stopped at its limit, so this answer may leave out links that were not read."
+
+// ContextFabricGraphTeamNarrowingUndecidedPathsLimitation is the sentence of an
+// answer that is not a cohort answer whose team narrowing left out linked
+// subjects on missing ownership (the graph_team_narrowing_undecided_paths
+// coverage detail).
+const ContextFabricGraphTeamNarrowingUndecidedPathsLimitation = "Team ownership could not be decided for some linked subjects, so this answer leaves them out."
+
 // ContextFabricServiceAuthoredLimitations returns every disclosure this
 // service composes for itself, in no significant order.
 //
@@ -818,6 +829,8 @@ func ContextFabricServiceAuthoredLimitations() []string {
 		ContextFabricClientSynthesisCommitNotAffirmedLimitation,
 		ContextFabricSynthesisClarificationUnavailableLimitation,
 		ContextFabricSynthesisNarrativeWithheldLimitation,
+		ContextFabricGraphHopWalkTruncatedLimitation,
+		ContextFabricGraphTeamNarrowingUndecidedPathsLimitation,
 		ContextFabricTruncatedPopulationNoMemberLimitation,
 		ContextFabricFactScopeUnexpandedLimitation,
 		ContextFabricFactScopeActivityProxyLimitation,
@@ -946,6 +959,7 @@ func IsContextFabricServiceAuthoredLimitation(limitation string) bool {
 		IsContextFabricWorkItemMemberFilterLimitation(limitation) ||
 		IsContextFabricPullRequestStatusLimitation(limitation) ||
 		IsContextFabricMemberStatusLimitation(limitation) ||
+		IsContextFabricOutsideRequestedRepositoriesLimitation(limitation) ||
 		IsContextFabricDegradedWithoutLimitation(limitation) ||
 		IsContextFabricWorkItemRepositoryLimitation(limitation) ||
 		IsContextFabricWorkItemListedLimitation(limitation) ||

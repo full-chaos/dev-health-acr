@@ -3,6 +3,7 @@ package v1
 import (
 	"fmt"
 	"strings"
+	"unicode"
 )
 
 // This file is CHAOS-4690's structured-coverage wire surface: one
@@ -336,6 +337,31 @@ const (
 	// and the answer says so rather than reading as complete.
 	ContextFabricCoverageDetailGraphNoMemberFound ContextFabricCoverageDetailCode = "graph_no_member_found"
 
+	// ContextFabricCoverageDetailGraphHopWalkTruncated: a read that is not a
+	// cohort read (its answer is served as relationship paths) walked out
+	// from a committed subject and spent its edge budget with candidates
+	// left, so the neighbourhood it served is part of what it reached.
+	// Nothing was counted: the candidates past the budget were not read.
+	//
+	// A cohort read never carries it: its loss is its cohort's Truncated and
+	// its population floor. It is not `graph_walk_cut_before_member`, which
+	// says a member read found nothing before its cut; here the read served
+	// what it reached.
+	ContextFabricCoverageDetailGraphHopWalkTruncated ContextFabricCoverageDetailCode = "graph_hop_walk_truncated"
+
+	// ContextFabricCoverageDetailGraphTeamNarrowingUndecidedPaths: under a
+	// requested team narrowing, on a read that is not a cohort read, a path
+	// edge was dropped because the ownership that decides an endpoint was
+	// absent, not current, or cut. Count is the distinct endpoints whose
+	// missing ownership removed an edge.
+	//
+	// A drop of an endpoint decided out of the narrowing is correct scope and
+	// files nothing, and an edge with one such end counts no end: that end
+	// alone removes it. An absent ownership row is missing data, not "not
+	// owned". A cohort read never carries it: its loss is its population
+	// floor.
+	ContextFabricCoverageDetailGraphTeamNarrowingUndecidedPaths ContextFabricCoverageDetailCode = "graph_team_narrowing_undecided_paths"
+
 	// ContextFabricCoverageDetailSynthesisInputBounded: the facts read of one
 	// fact kind were reduced to fit the model input bound, so answer
 	// synthesis was given Served of the Declared facts read of that kind.
@@ -364,6 +390,16 @@ const (
 	// because it serves no drivers table beside them (decision K7: never a
 	// bare score). One detail per fact kind. A disclosure, never a degradation.
 	ContextFabricCoverageDetailFactScoreWithheld ContextFabricCoverageDetailCode = "fact_score_withheld"
+	// ContextFabricCoverageDetailProjectScopeWithheld: a project-only caller
+	// (CHAOS-12330) was refused this: nothing was read and nothing is
+	// implied about what exists. It always degrades and its state is always
+	// unauthorized, so a refusal never reads as an empty read, as zero or as
+	// a complete answer. Exactly one of FactKind and Kind says what was
+	// refused, and that pair fixes the reason: the Label is composed from it
+	// (ContextFabricProjectScopeWithheldFactLabel) and no token or model text
+	// carries it. A Kind detail states the grant class, never that a subject
+	// of that kind exists.
+	ContextFabricCoverageDetailProjectScopeWithheld ContextFabricCoverageDetailCode = "project_scope_withheld"
 )
 
 // contextFabricCoverageDetailCodes is the closed vocabulary in published
@@ -395,10 +431,13 @@ var contextFabricCoverageDetailCodes = [...]ContextFabricCoverageDetailCode{
 	ContextFabricCoverageDetailComputedPopulationAbsent,
 	ContextFabricCoverageDetailRequirementNotEvaluable,
 	ContextFabricCoverageDetailGraphNoMemberFound,
+	ContextFabricCoverageDetailGraphHopWalkTruncated,
+	ContextFabricCoverageDetailGraphTeamNarrowingUndecidedPaths,
 	ContextFabricCoverageDetailSynthesisInputBounded,
 	ContextFabricCoverageDetailSynthesisModelFailed,
 	ContextFabricCoverageDetailSynthesisNotRun,
 	ContextFabricCoverageDetailFactScoreWithheld,
+	ContextFabricCoverageDetailProjectScopeWithheld,
 }
 
 // ContextFabricCoverageDetailCodeCount is the vocabulary size as a
@@ -533,8 +572,17 @@ func stringInVocabulary(value string, vocabulary []string) bool {
 // whole-set discard); Raw restates the legacy composed string and shares
 // its bound.
 const (
-	ContextFabricCoverageDetailIDMaxLength       = 64
-	ContextFabricCoverageDetailLabelMaxLength    = 160
+	ContextFabricCoverageDetailIDMaxLength    = 64
+	ContextFabricCoverageDetailLabelMaxLength = 160
+	// ContextFabricVocabularyLabelKeyMaxLength bounds a vocabulary_labels key,
+	// "<vocabulary>:<value>" (CHAOS-12415).
+	ContextFabricVocabularyLabelKeyMaxLength = 128
+	// ContextFabricVocabularyLabelsMaxEntries bounds the map as
+	// evidence_ref_labels is bounded. It is not the working limit: the map
+	// holds only values in one result, so the whole registry is its ceiling
+	// (125 entries, 5,885 bytes, 9% of the 65,536-byte answer budget,
+	// measured by TestTheWholeRegistryFitsInASmallShareOfTheAnswerBudget).
+	ContextFabricVocabularyLabelsMaxEntries      = 8192
 	ContextFabricCoverageDetailPhrasingMaxLength = 400
 	ContextFabricCoverageDetailRawMaxLength      = ContextFabricCoverageDegradedReasonMaxLength
 	// contextFabricCoverageDetailKindsMaxCount bounds the two subject-kind
@@ -639,6 +687,9 @@ type coverageDetailFieldRule struct {
 	// requireFailure: FailureClass and RetryHint are required TOGETHER; only
 	// ContextFabricCoverageDetailSynthesisModelFailed uses either.
 	requireFailure bool
+	// requireWithheld: exactly one of FactKind and Kind, state unauthorized,
+	// degrading. Only ContextFabricCoverageDetailProjectScopeWithheld sets it.
+	requireWithheld bool
 }
 
 var coverageDetailFieldRules = map[ContextFabricCoverageDetailCode]coverageDetailFieldRule{
@@ -717,6 +768,12 @@ var coverageDetailFieldRules = map[ContextFabricCoverageDetailCode]coverageDetai
 	ContextFabricCoverageDetailRequirementNotEvaluable: {},
 	// Kind alone: no count (nothing was counted), no Declared/Served.
 	ContextFabricCoverageDetailGraphNoMemberFound: {requireKind: true},
+	// No count and no kind: the candidates past the budget were not read, so
+	// there is nothing to count.
+	ContextFabricCoverageDetailGraphHopWalkTruncated: {},
+	// Count required: the distinct endpoints whose missing ownership removed
+	// an edge.
+	ContextFabricCoverageDetailGraphTeamNarrowingUndecidedPaths: {requireCount: true, allowCount: true},
 	// Fact kind, Declared and Served, all three REQUIRED, and nothing else:
 	// "this fact kind: Declared were read, Served were given to synthesis".
 	ContextFabricCoverageDetailSynthesisInputBounded: {
@@ -730,6 +787,11 @@ var coverageDetailFieldRules = map[ContextFabricCoverageDetailCode]coverageDetai
 	ContextFabricCoverageDetailSynthesisNotRun: {requireFailure: true},
 	// The fact kind alone: its scores were withheld.
 	ContextFabricCoverageDetailFactScoreWithheld: {requireFactKind: true, allowFactKind: true},
+	// What was refused, the state and nothing else: no count (nothing was
+	// counted, and a number would say something exists).
+	ContextFabricCoverageDetailProjectScopeWithheld: {
+		allowFactKind: true, allowSourceState: true, requireWithheld: true,
+	},
 	// Kind, state and origin, all three REQUIRED, and nothing else: the row
 	// says "this kind, read for this population, came back in this state".
 	// No count (the row is per read, not per subject), no scope fields (the
@@ -973,8 +1035,19 @@ func (d ContextFabricCoverageDetail) Validate() error {
 	if rule.requireKind && d.Kind == "" {
 		return fmt.Errorf("coverage detail code %q requires kind", d.Code)
 	}
-	if !rule.requireKind && d.Kind != "" {
+	if !rule.requireKind && !rule.requireWithheld && d.Kind != "" {
 		return fmt.Errorf("coverage detail code %q forbids kind", d.Code)
+	}
+	if rule.requireWithheld {
+		if (d.FactKind == "") == (d.Kind == "") {
+			return fmt.Errorf("coverage detail code %q requires exactly one of fact_kind and kind", d.Code)
+		}
+		if d.SourceState != ContextFabricSourceUnauthorized {
+			return fmt.Errorf("coverage detail code %q requires source_state unauthorized", d.Code)
+		}
+		if !d.Degrading {
+			return fmt.Errorf("coverage detail code %q must degrade", d.Code)
+		}
 	}
 	if rule.requireDeclaredServed && (d.Declared == nil || d.Served == nil) {
 		return fmt.Errorf("coverage detail code %q requires declared and served together", d.Code)
@@ -1174,6 +1247,53 @@ func ContextFabricEvidenceRefClosure(r ContextFabricInvestigationResult) map[str
 		add(candidate.EvidenceRefIDs)
 	}
 	return closure
+}
+
+// validateVocabularyLabels checks the shape of a vocabulary_labels map: each
+// key is "<vocabulary>:<value>" and each label is a bounded, trimmed string.
+// The vocabulary is NOT checked against the names published here: a stored row
+// written by a newer build must still read.
+func validateVocabularyLabels(labels map[string]string) error {
+	if len(labels) > ContextFabricVocabularyLabelsMaxEntries {
+		return fmt.Errorf("label map has %d entries, over the bound of %d", len(labels), ContextFabricVocabularyLabelsMaxEntries)
+	}
+	for key, label := range labels {
+		if !validVocabularyLabelKey(key) {
+			return fmt.Errorf("key %q is not <vocabulary>:<value>", key)
+		}
+		if strings.TrimSpace(label) != label || !stringLengthBetween(label, 1, ContextFabricCoverageDetailLabelMaxLength) {
+			return fmt.Errorf("label of %q violates its bounds", key)
+		}
+	}
+	return nil
+}
+
+func validVocabularyLabelKey(key string) bool {
+	if !stringLengthBetween(key, 3, ContextFabricVocabularyLabelKeyMaxLength) {
+		return false
+	}
+	vocabulary, value, _ := strings.Cut(key, ":")
+	if value == "" || strings.ContainsFunc(value, func(r rune) bool { return r == ':' || unicode.IsSpace(r) }) {
+		return false
+	}
+	if vocabulary == "" || vocabulary[0] < 'a' || vocabulary[0] > 'z' {
+		return false
+	}
+	return !strings.ContainsFunc(vocabulary, func(r rune) bool { return r != '_' && (r < 'a' || r > 'z') })
+}
+
+func (r ContextFabricInvestigationResult) validateVocabularyLabelsField() error {
+	if err := validateVocabularyLabels(r.VocabularyLabels); err != nil {
+		return fmt.Errorf("vocabulary_labels: %w", err)
+	}
+	return nil
+}
+
+func (p ContextFabricAnswerProjection) validateVocabularyLabelsField() error {
+	if err := validateVocabularyLabels(p.VocabularyLabels); err != nil {
+		return fmt.Errorf("vocabulary_labels: %w", err)
+	}
+	return nil
 }
 
 // validateEvidenceRefLabels enforces exact key equality between a non-nil

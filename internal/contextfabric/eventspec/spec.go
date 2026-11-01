@@ -14,6 +14,7 @@
 package eventspec
 
 import (
+	"github.com/full-chaos/dev-health-acr/internal/auth"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/directread/gatevocab"
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
@@ -1995,8 +1996,8 @@ const (
 	observationCoverMaxLines = contractsv1.ContextFabricPlanRequirementOutcomeMaxCount * coverPassesPerRequest
 	// membership cardinality: 2 call sites (fresh and reused result).
 	membershipCardinalityMaxLines = 2 * passesPerRequest
-	// budget assertion: 10 finalizeServed call sites (one per exit).
-	budgetAssertionMaxLines = 10 * passesPerRequest
+	// budget assertion: 11 finalizeServed call sites (one per exit).
+	budgetAssertionMaxLines = 11 * passesPerRequest
 	// item accounting disagreement: 3 call sites.
 	itemAccountingMaxLines = 3 * passesPerRequest
 )
@@ -4595,6 +4596,12 @@ var (
 	factRootRefusedReasonArr      = contextfabric.FactRootRefusedReasonVocabulary()
 	storedResultPrincipalScopeArr = contextfabric.StoredResultPrincipalScopeVocabulary()
 	storedResultSubjectKindArr    = contractsv1.ContextFabricSubjectKindVocabulary()
+	// grantClassArr (CHAOS-12300) is the grant class every authorization
+	// decision line carries beside its decision class: project_only is a
+	// restricted subtype in the decision vocabularies (principal_class,
+	// principal_scope), so only this field tells it apart.
+	grantClassArr       = auth.GrantClassVocabulary()
+	grantDigestClassArr = contextfabric.GrantDigestClassVocabulary()
 )
 
 // StoredResultAuthorization records the live authorization decision taken on
@@ -4610,6 +4617,9 @@ var StoredResultAuthorization = Event{
 		{Key: "surface", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: arrayTokens(storedResultSurfaceArr[:])},
 		{Key: "principal_scope", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: arrayTokens(storedResultPrincipalScopeArr[:])},
 		{Key: "repository_scope_count", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "grant_class", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: arrayTokens(grantClassArr[:])},
+		{Key: "project_scope_count", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "grant_digest_class", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: arrayTokens(grantDigestClassArr[:])},
 		{Key: "decision", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: arrayTokens(storedResultDecisionArr[:])},
 		{Key: "reason", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: arrayTokens(storedResultReasonArr[:])},
 		{Key: "subject_count", Type: FieldInt, Presence: PresenceRequired},
@@ -4623,6 +4633,8 @@ var StoredResultAuthorization = Event{
 		{Key: "group_count", Type: FieldInt, Presence: PresenceRequired},
 		{Key: "group_unproven_count", Type: FieldInt, Presence: PresenceRequired},
 		{Key: "refused_kinds", Type: FieldStringSlice, Presence: PresenceRequired, ClosedVocabulary: arrayTokens(storedResultSubjectKindArr[:])},
+		{Key: "stored_grant_digest_class", Type: FieldString, Presence: PresenceConditional, Applicability: "written when the decision read a stored result's grant digest (every read of a stored result; not the fact-root recheck)", ClosedVocabulary: arrayTokens(grantDigestClassArr[:])},
+		{Key: "grant_digest_equal", Type: FieldBool, Presence: PresenceConditional, Applicability: "written with stored_grant_digest_class: whether the reader's grant digest equals the stored result's"},
 		{Key: "error_class", Type: FieldString, Presence: PresenceConditional, Applicability: "written when the decision is unavailable because a graph read failed", ClosedVocabulary: []string{"deadline_exceeded", "canceled", "dependency_unavailable", "graph_error"}},
 		{Key: "request_id", Type: FieldString, Presence: PresenceConditional, Applicability: "written when the request context carries a request ID"},
 	},
@@ -4650,6 +4662,8 @@ var DirectReadAuthorization = Event{
 		{Key: "org_id", Type: FieldString, Presence: PresenceRequired},
 		{Key: "principal_class", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: arrayTokens(directReadPrincipalClassArr[:])},
 		{Key: "repository_scope_count", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "grant_class", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: arrayTokens(grantClassArr[:])},
+		{Key: "project_scope_count", Type: FieldInt, Presence: PresenceRequired},
 		{Key: "decision", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: arrayTokens(directReadDecisionArr[:])},
 		{Key: "reason", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: arrayTokens(directReadReasonArr[:])},
 		{Key: "subject_count", Type: FieldInt, Presence: PresenceRequired},
@@ -4848,6 +4862,8 @@ var DirectRelationshipsRead = Event{
 		{Key: "tool", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: []string{"read_relationships"}},
 		{Key: "org_id", Type: FieldString, Presence: PresenceRequired},
 		{Key: "principal_class", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: arrayTokens(directReadPrincipalClassArr[:])},
+		{Key: "grant_class", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: arrayTokens(grantClassArr[:])},
+		{Key: "project_scope_count", Type: FieldInt, Presence: PresenceRequired},
 		{Key: "status", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: arrayTokens(directRelationshipsStatusArr[:])},
 		{Key: "subject_kind", Type: FieldString, Presence: PresenceRequired, Applicability: "empty when the request was refused before its subject was read"},
 		{Key: "depth", Type: FieldInt, Presence: PresenceRequired},
@@ -4862,6 +4878,8 @@ var DirectRelationshipsRead = Event{
 		{Key: "edges_withheld_attributes", Type: FieldInt, Presence: PresenceRequired},
 		{Key: "edges_withheld_source", Type: FieldInt, Presence: PresenceRequired},
 		{Key: "edges_withheld_target", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "edges_withheld_attribution_relation", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "edges_withheld_project_list", Type: FieldInt, Presence: PresenceRequired},
 		{Key: "evidence_refs_withheld", Type: FieldInt, Presence: PresenceRequired},
 		{Key: "end_nodes_gated", Type: FieldInt, Presence: PresenceRequired},
 		{Key: "end_nodes_refused", Type: FieldInt, Presence: PresenceRequired},

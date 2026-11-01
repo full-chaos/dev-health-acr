@@ -1,0 +1,281 @@
+package graphrank
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"strings"
+	"testing"
+
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
+	"github.com/full-chaos/dev-health-acr/internal/storage"
+)
+
+// censusTeamNarrowing decides only the census satisfiers (repositoriesOnly),
+// so these tests isolate the census narrower from the pool re-decision: the
+// pool is never decided here. in/out name the satisfiers inside and outside
+// the requested teams; any other id has missing ownership. calls counts the
+// census narrower's reads.
+func censusTeamNarrowing(in, out map[string]bool, calls *int, failWith error) TeamNarrowingFunc {
+	return func(_ context.Context, subjects []contextfabric.SubjectRef, repositoriesOnly bool) (TeamNarrowingDecision, error) {
+		decision := TeamNarrowingDecision{In: map[string]bool{}, Out: map[string]bool{}}
+		if !repositoriesOnly {
+			return decision, nil
+		}
+		*calls++
+		if failWith != nil {
+			return TeamNarrowingDecision{}, failWith
+		}
+		for _, s := range subjects {
+			switch {
+			case in[s.CanonicalID]:
+				decision.In[s.CanonicalID] = true
+			case out[s.CanonicalID]:
+				decision.Out[s.CanonicalID] = true
+			}
+		}
+		return decision, nil
+	}
+}
+
+func resolveTeamNarrowed(t *testing.T, principal storage.Principal, teams []string, ids []string, narrowing TeamNarrowingFunc) (contextfabric.SubjectResolution, *captureResolutionTracer, int) {
+	t.Helper()
+	backend := narrowingBackend()
+	// As the graph projects them: a node with no team list carries "*".
+	for _, nodes := range backend.searchResults {
+		for _, node := range nodes {
+			node.Attributes["authorization_teams"] = "*"
+		}
+	}
+	for _, node := range backend.exactHints {
+		node.Attributes["authorization_teams"] = "*"
+	}
+	deps := backend.deps()
+	tracer := &captureResolutionTracer{}
+	deps.ResolutionTracer = tracer
+	calls := 0
+	deps.CensusFunc = narrowingCensus(&calls, ids)
+	deps.TeamNarrowing = narrowing
+	request := testRequest()
+	request.Question = narrowingQuestion
+	request.RequestedScope.TeamIDs = teams
+	resolution, _, _, _, err := ResolveSubjectsWithCommitBasis(context.Background(), principal, request, testInterpreted("pull request 747"), deps, nil, nil, namedScopeAnchorFrame(nil), "")
+	if err != nil {
+		t.Fatalf("ResolveSubjectsWithCommitBasis() error = %v", err)
+	}
+	return resolution, tracer, calls
+}
+
+func inTeam(ids ...string) map[string]bool {
+	out := map[string]bool{}
+	for _, id := range ids {
+		out[id] = true
+	}
+	return out
+}
+
+// TestResolveSubjects_StalledHandleCensusCommitsInsideATeamNarrowing
+// (CHAOS-12346 (ii)): an unrestricted principal's team narrowing runs the
+// census, as a repository narrowing does, and its narrower keeps the one
+// satisfier inside the requested teams' repositories; the trace line names the
+// narrowing.
+func TestResolveSubjects_StalledHandleCensusCommitsInsideATeamNarrowing(t *testing.T) {
+	t.Parallel()
+	narrowerCalls := 0
+	narrowing := censusTeamNarrowing(inTeam(narrowingPRID(1)), inTeam(narrowingPRID(0), narrowingPRID(2)), &narrowerCalls, nil)
+	resolution, tracer, calls := resolveTeamNarrowed(t, storage.Principal{OrgID: "org_1"}, []string{"team-b"}, allNarrowingIDs(), narrowing)
+	if calls == 0 || narrowerCalls == 0 {
+		t.Fatalf("census calls = %d, narrower calls = %d: want the census to run, narrowed by the team", calls, narrowerCalls)
+	}
+	if ids := scopeAnchorCommittedIDs(resolution); len(ids) != 1 || ids[0] != narrowingPRID(1) {
+		t.Fatalf("committed = %v, want only the pull request inside the team's repositories", ids)
+	}
+	rounds := narrowingEvents(tracer)
+	if len(rounds) != 1 || rounds[0].ShadowCallerNarrowing != "narrowed_to_one" || rounds[0].ShadowNarrowedFrom != 3 || rounds[0].ShadowNarrowedTo != 1 {
+		t.Fatalf("evidence_round = %#v, want one event narrowed_to_one 3->1", rounds)
+	}
+}
+
+// TestResolveSubjects_StalledHandleCensusUnderATeamNarrowingKeepsANamedSubject:
+// a single satisfier outside the team still commits (Anchor B): a team
+// narrowing has no in-query census filter, unlike a repository narrowing.
+func TestResolveSubjects_StalledHandleCensusUnderATeamNarrowingKeepsANamedSubject(t *testing.T) {
+	t.Parallel()
+	narrowerCalls := 0
+	narrowing := censusTeamNarrowing(nil, inTeam(narrowingPRID(2)), &narrowerCalls, nil)
+	resolution, _, calls := resolveTeamNarrowed(t, storage.Principal{OrgID: "org_1"}, []string{"team-b"}, []string{narrowingPRID(2)}, narrowing)
+	if calls == 0 {
+		t.Fatal("census calls = 0, want the census to run")
+	}
+	if ids := scopeAnchorCommittedIDs(resolution); len(ids) != 1 || ids[0] != narrowingPRID(2) {
+		t.Fatalf("committed = %v, want the one satisfier, though outside the team: the subject is what the question names", ids)
+	}
+}
+
+// TestResolveSubjects_StalledHandleCensusUnderATeamNarrowingKeepsTheClarification:
+// no satisfier inside, several inside, a satisfier with missing ownership, or
+// a failed ownership read: nothing commits, and the trace line names why.
+func TestResolveSubjects_StalledHandleCensusUnderATeamNarrowingKeepsTheClarification(t *testing.T) {
+	t.Parallel()
+	all := inTeam(allNarrowingIDs()...)
+	cases := []struct {
+		name    string
+		in, out map[string]bool
+		fail    error
+		narrow  string
+	}{
+		{"none inside", nil, all, nil, "narrowed_to_none"},
+		{"two inside", inTeam(narrowingPRID(0), narrowingPRID(1)), inTeam(narrowingPRID(2)), nil, "narrowed_to_many"},
+		{"one inside, one with missing ownership", inTeam(narrowingPRID(1)), inTeam(narrowingPRID(0)), nil, "satisfier_read_failed"},
+		{"the ownership read fails", nil, nil, errors.New("graph unavailable"), "satisfier_read_failed"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			narrowerCalls := 0
+			resolution, tracer, _ := resolveTeamNarrowed(t, storage.Principal{OrgID: "org_1"}, []string{"team-b"}, allNarrowingIDs(), censusTeamNarrowing(tc.in, tc.out, &narrowerCalls, tc.fail))
+			if ids := scopeAnchorCommittedIDs(resolution); len(ids) != 0 {
+				t.Fatalf("committed = %v, want none", ids)
+			}
+			if rounds := narrowingEvents(tracer); len(rounds) != 1 || rounds[0].ShadowCallerNarrowing != tc.narrow {
+				t.Fatalf("evidence_round = %#v, want one event with narrowing %q", rounds, tc.narrow)
+			}
+		})
+	}
+}
+
+// TestResolveSubjects_StalledHandleCensusNeverRunsForARestrictedPrincipalWithATeamNarrowing:
+// the census stays off where it is off today: a restricted principal, a team
+// narrowing combined with a repository narrowing, or no team decider wired.
+func TestResolveSubjects_StalledHandleCensusNeverRunsForARestrictedPrincipalWithATeamNarrowing(t *testing.T) {
+	t.Parallel()
+	narrowerCalls := 0
+	narrowing := censusTeamNarrowing(inTeam(narrowingPRID(1)), nil, &narrowerCalls, nil)
+	if _, _, calls := resolveTeamNarrowed(t, storage.Principal{OrgID: "org_1", RepositoryScopes: []string{narrowingRepos[1]}}, []string{"team-b"}, allNarrowingIDs(), narrowing); calls != 0 {
+		t.Fatalf("restricted principal: census calls = %d, want 0", calls)
+	}
+	if _, _, calls := resolveTeamNarrowed(t, storage.Principal{OrgID: "org_1"}, []string{"team-b"}, allNarrowingIDs(), nil); calls != 0 {
+		t.Fatalf("no team decider: census calls = %d, want 0", calls)
+	}
+}
+
+// TestResolveSubjects_CallerHintRoundUsesTheTeamNarrowingVisibility: the
+// caller-hint round passes the scoped-visibility gate for an unrestricted
+// principal's team narrowing, as it does for a repository narrowing.
+func TestResolveSubjects_CallerHintRoundUsesTheTeamNarrowingVisibility(t *testing.T) {
+	t.Parallel()
+	subject := contextfabric.SubjectRef{Kind: contextfabric.SubjectProject, CanonicalID: "project_explicit", Label: "Explicit"}
+	node := candidateNode(subject.Kind, subject.CanonicalID, subject.Label, 0.2, []string{"acme/repo-01"})
+	node.Attributes["authorization_teams"] = "*"
+	backend := &fakeGraphBackend{exactHints: map[string]CandidateNode{SubjectKey(subject): node}}
+	request := callerHintRequest(subject, "workbench")
+	request.RequestedScope.TeamIDs = []string{"team-b"}
+	tracer := &recordingTracer{}
+	deps := backend.deps()
+	deps.ResolutionTracer = tracer
+	deps.CensusFunc = func(context.Context, string, CensusKind, string, bool, contextfabric.SubjectKind, string, bool) (CensusOutcome, error) {
+		return CensusOutcome{}, nil
+	}
+	calls := 0
+	deps.TeamNarrowing = censusTeamNarrowing(nil, nil, &calls, nil)
+	if _, _, err := ResolveSubjects(context.Background(), storage.Principal{OrgID: "org_1"}, request, testInterpreted(), deps, nil, nil); err != nil {
+		t.Fatalf("ResolveSubjects error = %v", err)
+	}
+	events := tracer.evidenceRoundEvents()
+	if len(events) != 1 || events[0].ShadowReason == string(ReasonScopedVisibility) {
+		t.Fatalf("evidence_round = %+v, want the round past the scoped-visibility gate for a team-narrowed unrestricted principal", events)
+	}
+}
+
+// poolTeamNarrowing decides the resolution pool (not the census): in/out name
+// the candidates inside and outside the requested teams.
+func poolTeamNarrowing(in, out map[string]bool) TeamNarrowingFunc {
+	return func(_ context.Context, subjects []contextfabric.SubjectRef, repositoriesOnly bool) (TeamNarrowingDecision, error) {
+		decision := TeamNarrowingDecision{In: map[string]bool{}, Out: map[string]bool{}}
+		if repositoriesOnly {
+			return decision, nil
+		}
+		for _, s := range subjects {
+			switch {
+			case in[s.CanonicalID]:
+				decision.In[s.CanonicalID] = true
+			case out[s.CanonicalID]:
+				decision.Out[s.CanonicalID] = true
+			}
+		}
+		return decision, nil
+	}
+}
+
+// TestResolveSubjects_ATeamNarrowingKeepsAnOutOfTeamCoverageFindOutOfTheOffers
+// (CHAOS-12346 review r1): a kind-coverage find reaches the offer builders
+// outside the pool. Once the narrowing settles the pool toward the team, an
+// out-of-team coverage find must not come back through the offers.
+func TestResolveSubjects_ATeamNarrowingKeepsAnOutOfTeamCoverageFindOutOfTheOffers(t *testing.T) {
+	t.Parallel()
+	node := func(kind contextfabric.SubjectKind, id, label string, relevance float64) CandidateNode {
+		n := candidateNode(kind, id, label, relevance, "*")
+		n.Attributes["authorization_teams"] = "*"
+		return n
+	}
+	backend := &fakeGraphBackend{
+		enableSearchKind: true,
+		searchResults: map[string][]CandidateNode{"outage": {
+			node(contextfabric.SubjectWorkItem, "wi_in_1", "Outage work item one", 0.8),
+			node(contextfabric.SubjectWorkItem, "wi_in_2", "Outage work item two", 0.8),
+			node(contextfabric.SubjectWorkItem, "wi_out", "Outage work item three", 0.8),
+		}},
+		searchKindResults: map[string]map[contextfabric.SubjectKind][]CandidateNode{
+			"outage": {contextfabric.SubjectPullRequest: {node(contextfabric.SubjectPullRequest, "pr_out", "Outage PR", 0.68)}},
+		},
+	}
+	deps := backend.deps()
+	deps.TeamNarrowing = poolTeamNarrowing(inTeam("wi_in_1", "wi_in_2"), inTeam("wi_out", "pr_out"))
+	request := testRequest()
+	request.RequestedScope.TeamIDs = []string{"team-b"}
+	resolution, offer, err := ResolveSubjects(context.Background(), storage.Principal{OrgID: "org_1"}, request, testInterpreted("outage"), deps, nil, nil)
+	if err != nil {
+		t.Fatalf("ResolveSubjects() error = %v", err)
+	}
+	for _, c := range resolution.Candidates {
+		if c.Subject.CanonicalID == "wi_out" || c.Subject.CanonicalID == "pr_out" {
+			t.Fatalf("resolution.Candidates = %#v, want the out-of-team candidates left out", resolution.Candidates)
+		}
+	}
+	if rendered := fmt.Sprintf("%+v", offer); strings.Contains(rendered, "pr_out") || strings.Contains(rendered, "wi_out") {
+		t.Fatalf("structure offers %s, want no out-of-team candidate: the pool was settled toward the team", rendered)
+	}
+	for _, option := range offer.KindOptions {
+		if option.Kind == contextfabric.SubjectPullRequest {
+			t.Fatalf("offer.KindOptions = %#v, want no pull_request kind: its only find is outside the team", offer.KindOptions)
+		}
+	}
+}
+
+// TestAProjectOnlyCallerIsNeverAnUnrestrictedPrincipalNarrowingByTeam
+// (CHAOS-12299 r3 applied to the team path): a project-only caller with an
+// empty or "*" repository list is never an unrestricted principal, so an
+// organization-wide census never runs for its team narrowing.
+func TestAProjectOnlyCallerIsNeverAnUnrestrictedPrincipalNarrowingByTeam(t *testing.T) {
+	t.Parallel()
+	narrowing := censusTeamNarrowing(nil, nil, new(int), nil)
+	deps := ResolveDeps{TeamNarrowing: narrowing}
+	request := contextfabric.InvestigationRequest{RequestedScope: contextfabric.RequestedScope{TeamIDs: []string{"team-b"}}}
+	for _, scopes := range [][]string{nil, {}, {"*"}} {
+		principal := storage.Principal{OrgID: "org_1", RepositoryScopes: scopes, ProjectScopes: []string{"project.v2:github:P-1"}}
+		if teamNarrowedByUnrestrictedPrincipal(principal, request, deps) {
+			t.Errorf("%q: a project-only caller counts as an unrestricted principal narrowing by team", scopes)
+		}
+		if teamNarrowingSatisfierFilter(principal, request, deps) != nil {
+			t.Errorf("%q: a project-only caller gets the team satisfier narrower", scopes)
+		}
+	}
+	for _, tc := range []struct {
+		scopes []string
+		want   bool
+	}{{nil, true}, {[]string{"*"}, true}, {[]string{"acme/api"}, false}} {
+		if got := teamNarrowedByUnrestrictedPrincipal(storage.Principal{OrgID: "org_1", RepositoryScopes: tc.scopes}, request, deps); got != tc.want {
+			t.Errorf("%q: teamNarrowedByUnrestrictedPrincipal = %v, want %v", tc.scopes, got, tc.want)
+		}
+	}
+}

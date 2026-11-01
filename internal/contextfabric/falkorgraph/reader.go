@@ -100,6 +100,9 @@ func (a *Adapter) ResolveSubjects(ctx context.Context, principal storage.Princip
 	// subject outside the window simply stops resolving here).
 	temporal := newTemporalFilter(interpreted.TimeContext)
 	deps := graphrank.ResolveDeps{
+		// CHAOS-12346: the general read's reach rule for resolution candidates
+		// and census satisfiers; nil when the request narrows by no team.
+		TeamNarrowing: a.resolutionTeamNarrowing(key, principal.OrgID, request.RequestedScope, temporal),
 		ExactHint: func(ctx context.Context, subject contextfabric.SubjectRef) (graphrank.CandidateNode, bool, error) {
 			cypher := fmt.Sprintf("MATCH (n:%s {%s:$org, %s:$kind, %s:$id}) WHERE true%s RETURN n",
 				labelSubject, propOrgID, propKind, propCanonicalID, temporal.predicate("n"))
@@ -810,6 +813,7 @@ func (a *Adapter) DiscoverContext(ctx context.Context, principal storage.Princip
 			deploymentAnchorReadCut = walkTruncated
 		}
 		edgeFilters.Authz += filters.Authz
+		edgeFilters.Basis.merge(filters.Basis)
 		edgeFilters.TemporalWindow += filters.TemporalWindow
 		if !teamAnchoredMembers || isTeamAnchor {
 			edgeFilters.mergeReachDenied(filters.ReachDenied)
@@ -1072,6 +1076,7 @@ func (a *Adapter) DiscoverContext(ctx context.Context, principal storage.Princip
 		}
 		resolved, resolution, reason, resolveErr := a.resolveEdge(ctx, key, principal.OrgID, principal, scope, ce, temporal)
 		edgeFilters.add(resolution, reason)
+		edgeFilters.noteAuthzBasis(principal, scope, ce, resolution, reason)
 		switch resolution {
 		case edgeLookupFailed:
 			failedLookups++
@@ -1789,7 +1794,7 @@ func (a *Adapter) DiscoverContext(ctx context.Context, principal storage.Princip
 	cohortCutByAuthz := cohortKindScopedAuthzDropped > 0 && (cohort != nil || cohortKindCensusedExhaustively || anchorReachDenied)
 	if a.config.Telemetry != nil {
 		if edgeFilters.Authz > 0 || edgeFilters.TemporalWindow > 0 || admission.DroppedSelfLoopCount > 0 {
-			a.config.Telemetry.RecordEdgesFilteredByReason(ctx, principal.OrgID, edgeFilters.Authz, edgeFilters.TemporalWindow, admission.DroppedSelfLoopCount)
+			a.config.Telemetry.RecordEdgesFilteredByReason(ctx, principal.OrgID, edgeFilters.Authz, edgeFilters.TemporalWindow, admission.DroppedSelfLoopCount, edgeFilters.Basis)
 		}
 		if cohortCutByAuthz {
 			a.config.Telemetry.RecordCohortDeniedByAuthorization(ctx, principal.OrgID, cohortKindScopedAuthzDropped)
@@ -1856,7 +1861,18 @@ func (a *Adapter) DiscoverContext(ctx context.Context, principal storage.Princip
 	// before authorization.
 	anchoredCutEmpty := cohort == nil && deploymentAnchorReadCut && projectDeploymentsDenied < 0
 	projectNarrowingUnverified := projectNarrowingRestsOnWildcard(principal, request.Request.RequestedScope, cohortNodes, orderedResolved)
-	partial := failedLookups > 0 || admission.DroppedUnknownRelationshipTypeCount > 0 || exactNameTruncated || cohortCutByAuthz || kindCensusTruncated || projectDeploymentsUnlinked >= 0 || projectDeploymentsDenied >= 0 || anchoredCutEmpty || projectNarrowingUnverified
+	// CHAOS-12348: a read that is not a cohort read has no cohort to carry a
+	// population floor, so what its candidate set lost is its coverage's to say.
+	// A frame with no servable member kind is the test DiscoveredCohort gates a
+	// cohort on (the same predicate, CohortMemberKindForFrame), never whether a
+	// cohort came back: a cohort read that found no member keeps its floor.
+	nonCohortRead := declaredCohortKindForRouting == ""
+	nonCohortHopWalkCut := nonCohortRead && hopWalkTruncated
+	nonCohortUndecidedPaths := 0
+	if nonCohortRead {
+		nonCohortUndecidedPaths = teamScope.UndecidedPathEndpoints()
+	}
+	partial := failedLookups > 0 || admission.DroppedUnknownRelationshipTypeCount > 0 || exactNameTruncated || cohortCutByAuthz || kindCensusTruncated || projectDeploymentsUnlinked >= 0 || projectDeploymentsDenied >= 0 || anchoredCutEmpty || projectNarrowingUnverified || nonCohortHopWalkCut || nonCohortUndecidedPaths > 0
 	var degradedReasons []string
 	var coverageDetails []contextfabric.CoverageDetail
 	// CHAOS-4690: every degraded reason this reader composes gets a paired
@@ -1901,7 +1917,19 @@ func (a *Adapter) DiscoverContext(ctx context.Context, principal storage.Princip
 		// for; guarded on cohort.Kind matching declaredCohortKind so a
 		// future cohort-kind divergence reports zero rather than another
 		// kind's count.
+		//
+		// CHAOS-12357: under a team narrowing the figure counts the candidates
+		// inside the narrowing, so it stays a floor of the requested team's
+		// members, never the organization's.
 		declaredCensus := kindCensusMembers
+		if teamScope != nil {
+			declaredCensus = 0
+			for _, n := range cohortNodes {
+				if subject, ok := graphrank.NodeSubject(n); ok && subject.Kind == declaredCohortKind {
+					declaredCensus++
+				}
+			}
+		}
 		served := 0
 		if cohort != nil && cohort.Kind == declaredCohortKind {
 			served = len(cohort.Members)
@@ -1971,6 +1999,17 @@ func (a *Adapter) DiscoverContext(ctx context.Context, principal storage.Princip
 		slog.Default().Warn("context_fabric: dropped relationship edge(s) with a type outside the closed vocabulary",
 			"count", admission.DroppedUnknownRelationshipTypeCount, "types", contextfabric.SanitizeLogStrings(admission.DroppedUnknownRelationshipTypeNames))
 	}
+	if nonCohortHopWalkCut {
+		// No count: the candidates past the edge budget were not read.
+		degradedReasons = append(degradedReasons, hopWalkTruncatedReason)
+		appendGraphDetail(contractsv1.ContextFabricCoverageDetailGraphHopWalkTruncated, true, nil, hopWalkTruncatedReason, "context-fabric:graph")
+	}
+	if nonCohortUndecidedPaths > 0 {
+		undecidedReason := fmt.Sprintf("team_narrowing_undecided_paths:%d", nonCohortUndecidedPaths)
+		degradedReasons = append(degradedReasons, undecidedReason)
+		undecidedCount := nonCohortUndecidedPaths
+		appendGraphDetail(contractsv1.ContextFabricCoverageDetailGraphTeamNarrowingUndecidedPaths, true, &undecidedCount, undecidedReason, "context-fabric:graph")
+	}
 	if projectNarrowingUnverified {
 		// CHAOS-12231: the request asked for a project narrowing, and
 		// something this call admitted passed it only on the "*" project
@@ -2017,6 +2056,10 @@ func (a *Adapter) DiscoverContext(ctx context.Context, principal storage.Princip
 		},
 	}, nil
 }
+
+// hopWalkTruncatedReason is the degraded reason, and the paired detail's Raw,
+// for a read that is not a cohort read whose hop walk spent its edge budget.
+const hopWalkTruncatedReason = "hop_walk_truncated"
 
 // projectNarrowingUnverifiedReason is the degraded reason, and the paired
 // detail's Raw, for a project narrowing this call could not verify.

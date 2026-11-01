@@ -1688,6 +1688,13 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 		// conflating the two populations is exactly what this split fixes.
 		return InvestigationResult{}, stageError(StageGraphBinding, fmt.Errorf("resolve graph binding: %w", err))
 	}
+	// CHAOS-12330 (ruling B): a project-only request that names projects stops
+	// here, before every read, the narrowing resolver's included. Nothing is
+	// answered over the whole grant. The binding above reads no subject.
+	if requestedProjectNarrowingRefused(principal, request.RequestedScope) {
+		continuation = continuation.withReason(ContinuationReasonRequestInvalid)
+		return e.projectNarrowingRefusalResult(ctx, principal, request, binding)
+	}
 	// CHAOS-12229: a requested project narrowing is resolved to canonical
 	// identities once, here, so every graph read of this investigation lets
 	// stated project membership decide. Unresolved, it stays unverified.
@@ -3710,7 +3717,9 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 			// that collapsed -- and this refused turn serves no cohort for it
 			// to describe. Both kinds are on the Info line above.
 			plan.MemberKind = ""
-			collapsedResolution := SubjectResolution{Candidates: []SubjectCandidate{}, Committed: []SubjectRef{}}
+			// The count is not what the refusal empties: the narrowing refused a
+			// real match all the same (CHAOS-12360).
+			collapsedResolution := SubjectResolution{Candidates: []SubjectCandidate{}, Committed: []SubjectRef{}, OutsideRequestedRepositories: resolution.OutsideRequestedRepositories}
 			terminal, terminalErr := e.terminalResult(ctx, principal, request, interpretation, familyOutcome, collapsedResolution, substitutionForTelemetry.Outcome, GraphContext{}, reuseWatermarkSnapshot, reuseEpoch, 0, binding, windowCanon, structureCanon, structureMaterial, effectiveWindow, windowCarried, carriedStructureEntriesForServed, &plan, ancestryRoot(request, receiptsValidated(priorValidatedReceipts), driftRefusedParent), e.captureAcceptedReading(request, continuation, familyOutcome, acceptedShape, &plan, derivedRequirements, postVetoLedgerBase).withAnchorShadow(anchorShadow))
 			return terminal, terminalErr
 		}

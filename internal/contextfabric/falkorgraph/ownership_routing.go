@@ -43,8 +43,10 @@ type OwnershipRoutingDecision struct {
 	// Committed is how many subjects the resolution committed.
 	Committed int
 	// Census is how many teams the ownership read returned and Owners how
-	// many of them own the repository, before the caller's authorization;
-	// Truncated reports a cut read. They describe a read that ran.
+	// many of them own the repository, before the caller's authorization and
+	// before a requested team narrowing (CHAOS-12357: log-only counts of the
+	// ownership read, not of the served cohort, which is narrowed); Truncated
+	// reports a cut read. They describe a read that ran.
 	Census, Owners int
 	Truncated      bool
 	// Err is the failed read.

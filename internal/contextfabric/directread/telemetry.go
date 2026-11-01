@@ -4,6 +4,7 @@ import (
 	"context"
 	"log/slog"
 
+	"github.com/full-chaos/dev-health-acr/internal/auth"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	"github.com/full-chaos/dev-health-acr/internal/observability"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
@@ -17,6 +18,8 @@ func AuthorizationLogArgs(principal storage.Principal, decision Authorization) [
 		"org_id", contextfabric.SanitizeLogAttr(principal.OrgID),
 		"principal_class", string(decision.PrincipalClass),
 		"repository_scope_count", decision.RepositoryScopeCount,
+		"grant_class", string(auth.ClassifyGrant(principal)),
+		"project_scope_count", len(principal.ProjectScopes),
 		"decision", string(decision.Decision),
 		"reason", string(decision.Reason),
 		"subject_count", decision.SubjectCount,

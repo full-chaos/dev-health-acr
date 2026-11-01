@@ -98,6 +98,9 @@ type factPlanEntry struct {
 	// Both being expressible as `Pruned: true` with a different reason
 	// string is how the distinction would erode.
 	ScopeGap *FactScopeGap
+	// Withheld (CHAOS-12330): the caller is refused this kind, so no provider
+	// runs and the read files a typed degrading detail.
+	Withheld bool
 	// UnsupportedKinds and NarrowedDropped (CHAOS-4690) carry, structurally,
 	// what prunedReason/narrowedReason already put into the composed reason
 	// string: the distinct subject kinds this capability could not be asked

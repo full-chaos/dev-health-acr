@@ -142,7 +142,7 @@ func (p *BlockersProvider) ReadFacts(ctx context.Context, principal storage.Prin
 				return failed("query team blockers", teamErr)
 			}
 		}
-		if projectSubjects := subjectsOfKind(query.Subjects, contextfabric.SubjectProject); len(projectSubjects) > 0 && !projectOnlyWithheld(principal) {
+		if projectSubjects := subjectsOfKind(query.Subjects, contextfabric.SubjectProject); len(projectSubjects) > 0 {
 			var projectErr error
 			projectRejected, projectErr = p.readProjectRollup(groupCtx, principal, orgID, query.RequestedRepositoryScope, projectSubjects, &facts)
 			if projectErr != nil {

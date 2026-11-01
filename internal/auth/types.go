@@ -46,6 +46,11 @@ var (
 	// ErrBrowserCredentialRotation refuses rotating a browser-class
 	// credential (CHAOS-12123); it is an ErrInvalidCredential.
 	ErrBrowserCredentialRotation = fmt.Errorf("%w: a browser credential renews only by its refresh grant", ErrInvalidCredential)
+
+	// ErrRotationWiderThanParent is the fixed refusal of a rotation whose scopes or
+	// repository scopes are not within its parent's: a wider credential is a new
+	// issue. Expiry is not compared, renewal is what rotation is for.
+	ErrRotationWiderThanParent = fmt.Errorf("%w: a rotation never widens its parent; issue a new credential", ErrInvalidCredential)
 )
 
 var knownScopes = map[string]struct{}{

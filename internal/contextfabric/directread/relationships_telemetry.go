@@ -5,6 +5,7 @@ import (
 	"log/slog"
 	"sort"
 
+	"github.com/full-chaos/dev-health-acr/internal/auth"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/directread/gatevocab"
 	"github.com/full-chaos/dev-health-acr/internal/observability"
@@ -34,6 +35,8 @@ func RelationshipsReadLogArgs(principal storage.Principal, record RelationshipsR
 		"tool", RelationshipsTool,
 		"org_id", contextfabric.SanitizeLogAttr(principal.OrgID),
 		"principal_class", string(ClassifyPrincipal(principal)),
+		"grant_class", string(auth.ClassifyGrant(principal)),
+		"project_scope_count", len(principal.ProjectScopes),
 		"status", contextfabric.SanitizeLogAttr(string(record.Status)),
 		"subject_kind", contextfabric.SanitizeLogAttr(record.SubjectKind),
 		"depth", record.Depth,
@@ -48,6 +51,8 @@ func RelationshipsReadLogArgs(principal storage.Principal, record RelationshipsR
 		"edges_withheld_attributes", record.EdgesWithheld[gatevocab.EdgeWithheldAttributes],
 		"edges_withheld_source", record.EdgesWithheld[gatevocab.EdgeWithheldSource],
 		"edges_withheld_target", record.EdgesWithheld[gatevocab.EdgeWithheldTarget],
+		"edges_withheld_attribution_relation", record.EdgesWithheld[gatevocab.EdgeWithheldAttributionRelation],
+		"edges_withheld_project_list", record.EdgesWithheld[gatevocab.EdgeWithheldProjectList],
 		"evidence_refs_withheld", record.EvidenceRefs,
 		"end_nodes_gated", record.EndNodesGated,
 		"end_nodes_refused", record.EndNodesRefused,

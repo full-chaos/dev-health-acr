@@ -1921,7 +1921,8 @@ jobs:
       # CHAOS-4855: `make hosted-integration` below sets ACR_HOSTED_INTEGRATION=1,
       # which starts real postgres/clickhouse testcontainers fixtures
       # (cmd/acr-api/hosted_real_integration_test.go) -- same mirror redirect
-      # as the unit/race jobs.
+      # as the unit/race jobs. `make web-assertion-integration` starts the same
+      # fixtures per scenario (cmd/acr-api/web_assertion_real_integration_test.go).
       # CHAOS-4855 R1: see the unit job's env above for why this is
       # ghcr.io/<owner>/<repo>, not the flat ghcr.io/<owner>.
       TESTCONTAINERS_HUB_IMAGE_NAME_PREFIX: ghcr.io/${{ github.repository }}
@@ -1959,6 +1960,8 @@ jobs:
         run: make clients-real
       - name: Test hosted runtime with disposable dependencies
         run: make hosted-integration
+      - name: Test the web assertion on the real binary with disposable dependencies
+        run: make web-assertion-integration
       - name: Remove this job's testcontainers by session id
         if: always()
         run: scripts/ci/reap-testcontainers-session.sh

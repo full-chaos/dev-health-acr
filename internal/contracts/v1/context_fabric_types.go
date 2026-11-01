@@ -1385,6 +1385,13 @@ type ContextFabricSubjectResolution struct {
 	// Additive-optional in v1, same convention as RetrievalDegraded:
 	// absent means "not reported", never "the graph is projected".
 	GraphNotProjected bool `json:"graph_not_projected,omitempty"`
+	// OutsideRequestedRepositories (CHAOS-12360) counts the distinct subjects
+	// a subject term matched that only the requested repository narrowing
+	// refused, for an unrestricted principal; zero for every other caller. A
+	// terminal result states it through its limitation sentence, which is the
+	// only form that leaves the process: for a restricted or project-only
+	// caller the count would be an existence oracle.
+	OutsideRequestedRepositories int `json:"-"`
 	// CommitDecisionDigests (CHAOS-4087) is a small, closed-vocabulary
 	// summary of WHICH MECHANISM committed each subject in Committed --
 	// persisted so a wrong commit discovered later from a STORED result
@@ -2207,9 +2214,17 @@ type ContextFabricInvestigationResult struct {
 	// Optional-first, additive: absent on every result written before this
 	// field existed. The only cause is the byte budget, so there is no reason
 	// code to carry.
-	FactScopeCensusOmitted int                     `json:"fact_scope_census_omitted,omitempty"`
-	EvidenceRefLabels      map[string]string       `json:"evidence_ref_labels,omitempty"`
-	Versions               ContextFabricVersionSet `json:"versions"`
+	FactScopeCensusOmitted int               `json:"fact_scope_census_omitted,omitempty"`
+	EvidenceRefLabels      map[string]string `json:"evidence_ref_labels,omitempty"`
+	// VocabularyLabels (CHAOS-12413) maps "<vocabulary>:<value>" to the
+	// served display label (ContextFabricVocabularyLabel), for the values in
+	// this result, so a consumer looks a word up and needs no table: a new
+	// value needs no consumer change. A value with no entry takes the
+	// consumer's generic path. Additive and optional, but the result root is
+	// additionalProperties:false, so an old pin REFUSES it: nothing emits it
+	// until the pin train that carries this field has landed (CHAOS-12416).
+	VocabularyLabels map[string]string       `json:"vocabulary_labels,omitempty"`
+	Versions         ContextFabricVersionSet `json:"versions"`
 	// DeterministicAnswer is the service's own answer sentence. Required on
 	// every SUPPORTED result (ContextFabricResultSupported: a claimed fact
 	// AND a citable evidence ref) and on every complete/partial one; may be
