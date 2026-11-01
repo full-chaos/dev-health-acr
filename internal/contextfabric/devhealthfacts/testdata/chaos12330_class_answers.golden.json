@@ -1,0 +1,443 @@
+{
+  "restricted": {
+    "schema_version": "context_fabric_investigation_result.v1",
+    "result_id": "result_chaos12330",
+    "request_id": "request_chaos12330",
+    "generated_at": "2026-10-31T12:00:00Z",
+    "status": "complete",
+    "question": "How is Payments doing?",
+    "interpretation": {
+      "shape": "single_subject",
+      "requested_judgment": "status",
+      "subject_terms": [
+        "Payments"
+      ],
+      "time_context": {
+        "axis": "current"
+      },
+      "fact_requirements": [
+        {
+          "kind": "health"
+        }
+      ],
+      "clarification_needed": false
+    },
+    "subject_resolution": {
+      "candidates": [
+        {
+          "receipt_id": "receipt_chaos12330",
+          "subject": {
+            "kind": "project",
+            "canonical_id": "project.v2:linear:proj-1",
+            "label": "Payments"
+          },
+          "state": "proposed",
+          "matched_terms": [
+            "Payments"
+          ],
+          "match_reasons": [
+            "Exact canonical subject label match."
+          ],
+          "confidence": 1,
+          "match_mechanisms": [
+            "exact"
+          ]
+        }
+      ],
+      "committed": []
+    },
+    "answer_plan": {
+      "family": "subject_investigation",
+      "family_source": "model",
+      "family_version": "question-family.v4",
+      "require_drivers": false,
+      "require_ranking": false,
+      "render_kinds": [
+        "table",
+        "series"
+      ],
+      "fact_kinds": [
+        "health"
+      ],
+      "axes": [
+        "expected_kind",
+        "subject_handle",
+        "subject_candidate",
+        "subject_anchor",
+        "window"
+      ],
+      "budget": {
+        "max_items": 0,
+        "max_serialized_bytes": 1048576,
+        "max_members": 50,
+        "synthesis_headroom": 12,
+        "narrowing_basis": "canonical_id_lexical"
+      }
+    },
+    "direct_judgment": "No canonical facts were observed to describe the current state.",
+    "current_state": "No canonical facts were observed to describe the current state.",
+    "strongest_pressures": [],
+    "drivers": [],
+    "remaining_work": [],
+    "readiness_gaps": [],
+    "paths": [],
+    "conflicts": [],
+    "limitations": [
+      "A candidate subject was identified but not committed: the evidence assembled for it does not support naming it as the answer to this question."
+    ],
+    "evidence_ref_ids": [],
+    "claimed_facts": [],
+    "coverage": {
+      "sources": [
+        {
+          "source": "canonical_fact:health",
+          "state": "no_data",
+          "reason": "this source is team-scoped and carries no project dimension; a project reaches it only through team ownership",
+          "label": "Canonical facts — health",
+          "state_label": "no data"
+        }
+      ],
+      "partial": true,
+      "details": [
+        {
+          "detail_id": "cov-01",
+          "source": "canonical_fact:health",
+          "code": "fact_provider_reported",
+          "degrading": false,
+          "fact_kind": "health",
+          "source_state": "no_data",
+          "supported_kinds": [
+            "repository",
+            "team",
+            "project"
+          ],
+          "label": "No health facts were found",
+          "raw": "this source is team-scoped and carries no project dimension; a project reaches it only through team ownership"
+        }
+      ]
+    },
+    "versions": {
+      "service_version": "chaos12330",
+      "contract_version": "context_fabric_investigation_result.v1",
+      "backend": "graph",
+      "projection_version": "unwired",
+      "query_version": "unwired",
+      "interpretation_version": "v1",
+      "synthesis_version": "v1+v1",
+      "canonical_service_version": "context-fabric-facts.v2",
+      "model_identity": "test-provider/test-model",
+      "interpretation_source": "server",
+      "interpretation_model_identity": "test-provider/test-model",
+      "synthesis_source": "server"
+    },
+    "deterministic_answer": "No canonical facts were observed to describe the current state.",
+    "warnings": [],
+    "reused": false,
+    "effective_evidence_window": {
+      "start": "2026-08-02T00:00:00Z",
+      "end": "2026-10-31T00:00:00Z",
+      "relative_id": "trailing_90d",
+      "provenance": "question_stated"
+    },
+    "completeness": {
+      "terminal_status": "complete",
+      "claimed_facts_count": 0,
+      "rows_count": 0,
+      "state": "not_derived"
+    }
+  },
+  "universal": {
+    "schema_version": "context_fabric_investigation_result.v1",
+    "result_id": "result_chaos12330",
+    "request_id": "request_chaos12330",
+    "generated_at": "2026-10-31T12:00:00Z",
+    "status": "complete",
+    "question": "How is Payments doing?",
+    "interpretation": {
+      "shape": "single_subject",
+      "requested_judgment": "status",
+      "subject_terms": [
+        "Payments"
+      ],
+      "time_context": {
+        "axis": "current"
+      },
+      "fact_requirements": [
+        {
+          "kind": "health"
+        }
+      ],
+      "clarification_needed": false
+    },
+    "subject_resolution": {
+      "candidates": [
+        {
+          "receipt_id": "receipt_chaos12330",
+          "subject": {
+            "kind": "project",
+            "canonical_id": "project.v2:linear:proj-1",
+            "label": "Payments"
+          },
+          "state": "proposed",
+          "matched_terms": [
+            "Payments"
+          ],
+          "match_reasons": [
+            "Exact canonical subject label match."
+          ],
+          "confidence": 1,
+          "match_mechanisms": [
+            "exact"
+          ]
+        }
+      ],
+      "committed": []
+    },
+    "answer_plan": {
+      "family": "subject_investigation",
+      "family_source": "model",
+      "family_version": "question-family.v4",
+      "require_drivers": false,
+      "require_ranking": false,
+      "render_kinds": [
+        "table",
+        "series"
+      ],
+      "fact_kinds": [
+        "health"
+      ],
+      "axes": [
+        "expected_kind",
+        "subject_handle",
+        "subject_candidate",
+        "subject_anchor",
+        "window"
+      ],
+      "budget": {
+        "max_items": 0,
+        "max_serialized_bytes": 1048576,
+        "max_members": 50,
+        "synthesis_headroom": 12,
+        "narrowing_basis": "canonical_id_lexical"
+      }
+    },
+    "direct_judgment": "No canonical facts were observed to describe the current state.",
+    "current_state": "No canonical facts were observed to describe the current state.",
+    "strongest_pressures": [],
+    "drivers": [],
+    "remaining_work": [],
+    "readiness_gaps": [],
+    "paths": [],
+    "conflicts": [],
+    "limitations": [
+      "A candidate subject was identified but not committed: the evidence assembled for it does not support naming it as the answer to this question."
+    ],
+    "evidence_ref_ids": [],
+    "claimed_facts": [],
+    "coverage": {
+      "sources": [
+        {
+          "source": "canonical_fact:health",
+          "state": "no_data",
+          "reason": "this source is team-scoped and carries no project dimension; a project reaches it only through team ownership",
+          "label": "Canonical facts — health",
+          "state_label": "no data"
+        }
+      ],
+      "partial": true,
+      "details": [
+        {
+          "detail_id": "cov-01",
+          "source": "canonical_fact:health",
+          "code": "fact_provider_reported",
+          "degrading": false,
+          "fact_kind": "health",
+          "source_state": "no_data",
+          "supported_kinds": [
+            "repository",
+            "team",
+            "project"
+          ],
+          "label": "No health facts were found",
+          "raw": "this source is team-scoped and carries no project dimension; a project reaches it only through team ownership"
+        }
+      ]
+    },
+    "versions": {
+      "service_version": "chaos12330",
+      "contract_version": "context_fabric_investigation_result.v1",
+      "backend": "graph",
+      "projection_version": "unwired",
+      "query_version": "unwired",
+      "interpretation_version": "v1",
+      "synthesis_version": "v1+v1",
+      "canonical_service_version": "context-fabric-facts.v2",
+      "model_identity": "test-provider/test-model",
+      "interpretation_source": "server",
+      "interpretation_model_identity": "test-provider/test-model",
+      "synthesis_source": "server"
+    },
+    "deterministic_answer": "No canonical facts were observed to describe the current state.",
+    "warnings": [],
+    "reused": false,
+    "effective_evidence_window": {
+      "start": "2026-08-02T00:00:00Z",
+      "end": "2026-10-31T00:00:00Z",
+      "relative_id": "trailing_90d",
+      "provenance": "question_stated"
+    },
+    "completeness": {
+      "terminal_status": "complete",
+      "claimed_facts_count": 0,
+      "rows_count": 0,
+      "state": "not_derived"
+    }
+  },
+  "unrestricted": {
+    "schema_version": "context_fabric_investigation_result.v1",
+    "result_id": "result_chaos12330",
+    "request_id": "request_chaos12330",
+    "generated_at": "2026-10-31T12:00:00Z",
+    "status": "complete",
+    "question": "How is Payments doing?",
+    "interpretation": {
+      "shape": "single_subject",
+      "requested_judgment": "status",
+      "subject_terms": [
+        "Payments"
+      ],
+      "time_context": {
+        "axis": "current"
+      },
+      "fact_requirements": [
+        {
+          "kind": "health"
+        }
+      ],
+      "clarification_needed": false
+    },
+    "subject_resolution": {
+      "candidates": [
+        {
+          "receipt_id": "receipt_chaos12330",
+          "subject": {
+            "kind": "project",
+            "canonical_id": "project.v2:linear:proj-1",
+            "label": "Payments"
+          },
+          "state": "proposed",
+          "matched_terms": [
+            "Payments"
+          ],
+          "match_reasons": [
+            "Exact canonical subject label match."
+          ],
+          "confidence": 1,
+          "match_mechanisms": [
+            "exact"
+          ]
+        }
+      ],
+      "committed": []
+    },
+    "answer_plan": {
+      "family": "subject_investigation",
+      "family_source": "model",
+      "family_version": "question-family.v4",
+      "require_drivers": false,
+      "require_ranking": false,
+      "render_kinds": [
+        "table",
+        "series"
+      ],
+      "fact_kinds": [
+        "health"
+      ],
+      "axes": [
+        "expected_kind",
+        "subject_handle",
+        "subject_candidate",
+        "subject_anchor",
+        "window"
+      ],
+      "budget": {
+        "max_items": 0,
+        "max_serialized_bytes": 1048576,
+        "max_members": 50,
+        "synthesis_headroom": 12,
+        "narrowing_basis": "canonical_id_lexical"
+      }
+    },
+    "direct_judgment": "No canonical facts were observed to describe the current state.",
+    "current_state": "No canonical facts were observed to describe the current state.",
+    "strongest_pressures": [],
+    "drivers": [],
+    "remaining_work": [],
+    "readiness_gaps": [],
+    "paths": [],
+    "conflicts": [],
+    "limitations": [
+      "A candidate subject was identified but not committed: the evidence assembled for it does not support naming it as the answer to this question."
+    ],
+    "evidence_ref_ids": [],
+    "claimed_facts": [],
+    "coverage": {
+      "sources": [
+        {
+          "source": "canonical_fact:health",
+          "state": "no_data",
+          "reason": "this source is team-scoped and carries no project dimension; a project reaches it only through team ownership",
+          "label": "Canonical facts — health",
+          "state_label": "no data"
+        }
+      ],
+      "partial": true,
+      "details": [
+        {
+          "detail_id": "cov-01",
+          "source": "canonical_fact:health",
+          "code": "fact_provider_reported",
+          "degrading": false,
+          "fact_kind": "health",
+          "source_state": "no_data",
+          "supported_kinds": [
+            "repository",
+            "team",
+            "project"
+          ],
+          "label": "No health facts were found",
+          "raw": "this source is team-scoped and carries no project dimension; a project reaches it only through team ownership"
+        }
+      ]
+    },
+    "versions": {
+      "service_version": "chaos12330",
+      "contract_version": "context_fabric_investigation_result.v1",
+      "backend": "graph",
+      "projection_version": "unwired",
+      "query_version": "unwired",
+      "interpretation_version": "v1",
+      "synthesis_version": "v1+v1",
+      "canonical_service_version": "context-fabric-facts.v2",
+      "model_identity": "test-provider/test-model",
+      "interpretation_source": "server",
+      "interpretation_model_identity": "test-provider/test-model",
+      "synthesis_source": "server"
+    },
+    "deterministic_answer": "No canonical facts were observed to describe the current state.",
+    "warnings": [],
+    "reused": false,
+    "effective_evidence_window": {
+      "start": "2026-08-02T00:00:00Z",
+      "end": "2026-10-31T00:00:00Z",
+      "relative_id": "trailing_90d",
+      "provenance": "question_stated"
+    },
+    "completeness": {
+      "terminal_status": "complete",
+      "claimed_facts_count": 0,
+      "rows_count": 0,
+      "state": "not_derived"
+    }
+  }
+}

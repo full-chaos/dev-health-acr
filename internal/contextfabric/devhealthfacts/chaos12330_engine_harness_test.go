@@ -10,6 +10,7 @@ package devhealthfacts_test
 import (
 	"context"
 	"log/slog"
+	"sync"
 	"testing"
 	"time"
 
@@ -25,6 +26,10 @@ type projectOnlyEngineGraph struct {
 	t            *testing.T
 	subject      contextfabric.SubjectRef
 	subjectAttrs map[string]interface{}
+	// commitDenied commits the subject even though the node rule denies it to
+	// this caller. No production read gets a team to the registry for a
+	// project-only caller; this proves the refusal holds without that.
+	commitDenied bool
 	resolved     int
 	discovered   int
 	narrowings   int
@@ -44,7 +49,11 @@ func (g *projectOnlyEngineGraph) AuthorizeStoredSubjects(_ context.Context, _ st
 
 func (g *projectOnlyEngineGraph) ResolveSubjects(_ context.Context, p storage.Principal, r contextfabric.InvestigationRequest, _ contextfabric.InterpretedQuestion, _ contextfabric.ResolvedGraphBinding, _ *contextfabric.ConfirmedExpectedKind, _ *contextfabric.ConfirmedAnchorSelection, _ *contextfabric.QuestionFrame, _ contextfabric.SubjectKind) (contextfabric.SubjectResolution, contextfabric.StructureOfferMaterial, contextfabric.CommitBasisSet, contextfabric.CommitDecisionDigestSet, error) {
 	g.resolved++
-	candidate, ok := graphrank.NodeCandidate(p, r.RequestedScope, "Payments", graphrank.CandidateNode{UUID: "subject-node", Name: "Payments", Attributes: g.subjectAttrs}, func(contextfabric.SubjectRef) bool { return false }, true, nil, r.RequestID)
+	decider := p
+	if g.commitDenied {
+		decider = storage.Principal{OrgID: p.OrgID}
+	}
+	candidate, ok := graphrank.NodeCandidate(decider, r.RequestedScope, "Payments", graphrank.CandidateNode{UUID: "subject-node", Name: "Payments", Attributes: g.subjectAttrs}, func(contextfabric.SubjectRef) bool { return false }, true, nil, r.RequestID)
 	if !ok {
 		return contextfabric.SubjectResolution{Candidates: []contextfabric.SubjectCandidate{}, Committed: []contextfabric.SubjectRef{}}, contextfabric.StructureOfferMaterial{}, nil, nil, nil
 	}
@@ -67,8 +76,29 @@ func (g *projectOnlyEngineGraph) ResolveProjectNarrowing(_ context.Context, _ st
 	return &contractsv1.ContextFabricProjectNarrowing{Identities: projectIDs, Complete: true}, nil
 }
 
+// reuseLookupSpy counts the reuse lookups a turn makes and always misses.
+type reuseLookupSpy struct {
+	mu      sync.Mutex
+	lookups int
+}
+
+func (s *reuseLookupSpy) FindReusable(context.Context, storage.Principal, contextfabric.ReuseKey) (contextfabric.StoredInvestigationResult, bool, contextfabric.ReuseMissReason, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.lookups++
+	return contextfabric.StoredInvestigationResult{}, false, contextfabric.ReuseMissNoCandidate, nil
+}
+
+func (s *reuseLookupSpy) count() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.lookups
+}
+
 type projectOnlyEngineModel struct {
 	kinds []contextfabric.FactKind
+	// commitDenied is passed to the graph (projectOnlyEngineGraph).
+	commitDenied bool
 	// memberKind, when set, makes the question ask for the members of that
 	// kind under the named subject, so the answer plan names the kind.
 	memberKind  contextfabric.SubjectKind
@@ -119,7 +149,12 @@ type projectOnlyEngineRun struct {
 	client     *fakeClient
 	operations *fakeOperationCaller
 	results    contextfabric.InvestigationResultStore
+	reuse      *reuseLookupSpy
 }
+
+// projectOnlyEngineClock is fixed so a served document is the same bytes on
+// every run: the golden of another class compares them.
+var projectOnlyEngineClock = time.Date(2026, 10, 31, 12, 0, 0, 0, time.UTC)
 
 const projectOnlyEngineOrg = "org-1"
 
@@ -142,9 +177,10 @@ func runProjectOnlyEngineWith(t *testing.T, principal storage.Principal, subject
 	if err != nil {
 		t.Fatal(err)
 	}
-	graph := &projectOnlyEngineGraph{t: t, subject: subject, subjectAttrs: attrs}
-	at := time.Now().UTC()
+	graph := &projectOnlyEngineGraph{t: t, subject: subject, subjectAttrs: attrs, commitDenied: model.commitDenied}
+	at := projectOnlyEngineClock
 	results := memoryinvestigation.NewStore()
+	reuse := &reuseLookupSpy{}
 	engine, err := contextfabric.NewEngine(contextfabric.EngineDependencies{
 		Interpreter:  contextfabric.RuntimeQuestionInterpreter{Runtime: model, Requirements: registry},
 		Graph:        graph,
@@ -153,6 +189,7 @@ func runProjectOnlyEngineWith(t *testing.T, principal storage.Principal, subject
 		Telemetry:    contextfabric.NewSlogEngineTelemetry(slog.New(slog.DiscardHandler)),
 		Synthesizer:  contextfabric.RuntimeAnswerSynthesizer{Runtime: model, Options: contextfabric.RuntimeAnswerSynthesizerOptions{ServiceVersion: "chaos12330", Backend: "graph"}},
 		Results:      results,
+		ReuseGate:    reuse,
 		CandidateVerifier: func(context.Context, storage.Principal, contextfabric.RequestedScope, contextfabric.ResolvedGraphBinding, contextfabric.SubjectKind, string) (bool, contextfabric.CandidateVerificationReason) {
 			return true, contextfabric.CandidateVerificationValid
 		},
@@ -162,5 +199,5 @@ func runProjectOnlyEngineWith(t *testing.T, principal storage.Principal, subject
 	}
 	request := contextfabric.InvestigationRequest{SchemaVersion: contractsv1.ContextFabricInvestigationRequestSchema, RequestID: "request_chaos12330", Question: "How is Payments doing?", TimeContext: contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent, EvidenceWindow: &contextfabric.RequestedEvidenceWindow{RelativeID: contextfabric.RelativeWindowTrailing90D}}, RequestedScope: scope, Options: contractsv1.ContextFabricInvestigationOptions{MaxSubjectCandidates: 10, MaxCohortMembers: 50, MaxRelationshipPaths: 50, MaxDrivers: 10, MaxEvidenceRefs: 100, MaxSerializedBytes: 1048576, AllowClarification: true}, Consumer: contractsv1.ContextFabricConsumerInfo{Name: "chaos12330", Version: "1.0.0", Surface: "workbench"}}
 	result, investigateErr := engine.Investigate(context.Background(), principal, request)
-	return projectOnlyEngineRun{result: result, err: investigateErr, graph: graph, model: model, client: client, operations: caller, results: results}
+	return projectOnlyEngineRun{result: result, err: investigateErr, graph: graph, model: model, client: client, operations: caller, results: results, reuse: reuse}
 }
