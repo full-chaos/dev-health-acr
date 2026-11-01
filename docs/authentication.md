@@ -609,6 +609,11 @@ handler runs with the principal narrowed to that list. An empty list is a typed
 deny-all, refused 409 `no_repository` before any handler: the principal's
 scopes are never set to `[]`, which reads as unrestricted downstream.
 
+The OpenAPI lists this 409 on every route behind the access check (every
+route in `protectedRoutes()`); `TestEveryProtectedRouteListsNoRepositoryInTheOpenAPI`
+fails when one omits it. The credential lifecycle routes and
+`oauth/device_approval` do not pass this check; their 409 is a different code.
+
 **Budget.** On the investigation create the read runs inside the request's
 budget (min of `X-ACR-Wait-Budget-Seconds` and `ACR_REQUEST_TIMEOUT`, counted
 from arrival). When what is left after the read is below the 10-second minimum

@@ -1,5 +1,5 @@
 # Generated from acr-v1.json by `go run ./cmd/contractcheck -write`. DO NOT EDIT.
-# canonical-content-sha256: 415e0c05af37bf45c5549387924b9dfa15d9ca68adc3a72a4c4cd054e96b65f5
+# canonical-content-sha256: fd07b988b81d49981c973f9032a9f2a6d50d96fefba0dc0d9442209b9153b3bc
 openapi: "3.1.0"
 info:
   description: "Private hosted API for evidence-backed agent context packets, authorized provenance expansion, replay snapshots, and opt-in episode writeback. External Push is a separate API plane."
@@ -30,6 +30,8 @@ paths:
         "401":
           "$ref": "#/components/responses/Error"
         "403":
+          "$ref": "#/components/responses/Error"
+        "409":
           "$ref": "#/components/responses/Error"
         "426":
           "$ref": "#/components/responses/Error"
@@ -71,6 +73,8 @@ paths:
         "401":
           "$ref": "#/components/responses/Error"
         "403":
+          "$ref": "#/components/responses/Error"
+        "409":
           "$ref": "#/components/responses/Error"
         "413":
           "$ref": "#/components/responses/Error"
@@ -231,6 +235,8 @@ paths:
           "$ref": "#/components/responses/Error"
         "404":
           "$ref": "#/components/responses/Error"
+        "409":
+          "$ref": "#/components/responses/Error"
         "413":
           "$ref": "#/components/responses/Error"
         "426":
@@ -373,6 +379,8 @@ paths:
           "$ref": "#/components/responses/Error"
         "403":
           "$ref": "#/components/responses/Error"
+        "409":
+          "$ref": "#/components/responses/Error"
         "426":
           "$ref": "#/components/responses/Error"
         "429":
@@ -416,6 +424,8 @@ paths:
           "$ref": "#/components/responses/Error"
         "403":
           "$ref": "#/components/responses/Error"
+        "409":
+          "$ref": "#/components/responses/Error"
         "426":
           "$ref": "#/components/responses/Error"
         "429":
@@ -454,6 +464,8 @@ paths:
         "401":
           "$ref": "#/components/responses/Error"
         "403":
+          "$ref": "#/components/responses/Error"
+        "409":
           "$ref": "#/components/responses/Error"
         "413":
           "$ref": "#/components/responses/Error"
@@ -500,6 +512,8 @@ paths:
           "$ref": "#/components/responses/Error"
         "403":
           "$ref": "#/components/responses/Error"
+        "409":
+          "$ref": "#/components/responses/Error"
         "413":
           "$ref": "#/components/responses/Error"
         "426":
@@ -545,6 +559,8 @@ paths:
           "$ref": "#/components/responses/Error"
         "403":
           "$ref": "#/components/responses/Error"
+        "409":
+          "$ref": "#/components/responses/Error"
         "426":
           "$ref": "#/components/responses/Error"
         "429":
@@ -585,6 +601,8 @@ paths:
         "401":
           "$ref": "#/components/responses/Error"
         "403":
+          "$ref": "#/components/responses/Error"
+        "409":
           "$ref": "#/components/responses/Error"
         "413":
           "$ref": "#/components/responses/Error"
@@ -707,6 +725,8 @@ paths:
           "$ref": "#/components/responses/Error"
         "404":
           "$ref": "#/components/responses/Error"
+        "409":
+          "$ref": "#/components/responses/Error"
         "426":
           "$ref": "#/components/responses/Error"
         "429":
@@ -762,6 +782,8 @@ paths:
           "$ref": "#/components/responses/Error"
         "404":
           "$ref": "#/components/responses/Error"
+        "409":
+          "$ref": "#/components/responses/Error"
         "426":
           "$ref": "#/components/responses/Error"
         "429":
@@ -810,6 +832,8 @@ paths:
         "403":
           "$ref": "#/components/responses/Error"
         "404":
+          "$ref": "#/components/responses/Error"
+        "409":
           "$ref": "#/components/responses/Error"
         "426":
           "$ref": "#/components/responses/Error"
@@ -919,6 +943,8 @@ paths:
           "$ref": "#/components/responses/Error"
         "404":
           "$ref": "#/components/responses/Error"
+        "409":
+          "$ref": "#/components/responses/Error"
         "410":
           content:
             application/json:
@@ -1018,6 +1044,8 @@ paths:
           "$ref": "#/components/responses/Error"
         "404":
           "$ref": "#/components/responses/Error"
+        "409":
+          "$ref": "#/components/responses/Error"
         "413":
           "$ref": "#/components/responses/Error"
         "426":
@@ -1080,6 +1108,8 @@ paths:
           "$ref": "#/components/responses/Error"
         "403":
           "$ref": "#/components/responses/Error"
+        "409":
+          "$ref": "#/components/responses/Error"
         "426":
           "$ref": "#/components/responses/Error"
         "429":
@@ -1124,6 +1154,8 @@ paths:
         "403":
           "$ref": "#/components/responses/Error"
         "404":
+          "$ref": "#/components/responses/Error"
+        "409":
           "$ref": "#/components/responses/Error"
         "426":
           "$ref": "#/components/responses/Error"
@@ -1184,6 +1216,8 @@ paths:
         "403":
           "$ref": "#/components/responses/Error"
         "404":
+          "$ref": "#/components/responses/Error"
+        "409":
           "$ref": "#/components/responses/Error"
         "426":
           "$ref": "#/components/responses/Error"
@@ -1490,7 +1524,7 @@ components:
                         type: "object"
                     type: "object"
                 type: "object"
-      description: "Structured safe error. A supplied interpretation or supplied synthesis that was made under a contract this service does not run carries details.interpretation_contract or details.synthesis_contract. A supplied synthesis written from an input that is no longer the turn's input carries details.reason input_changed and details.synthesis_input, the new synthesis input. A repeat of an admitted X-ACR-Submission-ID (CHAOS-11912) is a 409 with code submission_mismatch (a different request used the id; not retryable), submission_in_progress (its run is still live; retryable, with Retry-After), submission_unsaved (answered, not stored; not retryable) or submission_abandoned (ended without an answer, or ran past its budget plus 30 seconds; not retryable). None of them runs the request. A turn whose X-ACR-Thread-ID, or X-ACR-Submission-ID, belongs to a conversation of the caller that was deleted, has expired or is full (1000000 turns) is a 409 with code thread_closed (not retryable; start a new conversation). It runs nothing. A create by a browser-class credential that names no single well-formed X-ACR-Submission-ID is a 400 with code submission_required (not retryable as sent; CHAOS-12093). It runs nothing."
+      description: "Structured safe error. A supplied interpretation or supplied synthesis that was made under a contract this service does not run carries details.interpretation_contract or details.synthesis_contract. A supplied synthesis written from an input that is no longer the turn's input carries details.reason input_changed and details.synthesis_input, the new synthesis input. A repeat of an admitted X-ACR-Submission-ID (CHAOS-11912) is a 409 with code submission_mismatch (a different request used the id; not retryable), submission_in_progress (its run is still live; retryable, with Retry-After), submission_unsaved (answered, not stored; not retryable) or submission_abandoned (ended without an answer, or ran past its budget plus 30 seconds; not retryable). None of them runs the request. A turn whose X-ACR-Thread-ID, or X-ACR-Submission-ID, belongs to a conversation of the caller that was deleted, has expired or is full (1000000 turns) is a 409 with code thread_closed (not retryable; start a new conversation). It runs nothing. A user-class credential whose grant within the organization's live repository inventory is empty gets a 409 with code no_repository (not retryable; CHAOS-12092). It runs nothing. A create by a browser-class credential that names no single well-formed X-ACR-Submission-ID is a 400 with code submission_required (not retryable as sent; CHAOS-12093). It runs nothing."
       headers:
         Retry-After:
           description: "Seconds to wait before retrying the same submission id. Sent with submission_in_progress only."
