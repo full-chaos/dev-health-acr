@@ -6,6 +6,7 @@ import (
 
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
+	"github.com/full-chaos/dev-health-acr/internal/storage/internal/credentiallifecycle"
 )
 
 func (s *credentialStore) createCredential(ctx context.Context, input storage.CredentialCreateInput) (contractsv1.ClientCredential, error) {
@@ -33,7 +34,7 @@ func (s *credentialStore) createCredential(ctx context.Context, input storage.Cr
 		Metadata: credential, TokenHash: input.TokenHash, CreatedBy: input.ActorID,
 		IssuanceProvenance: input.IssuanceProvenance,
 	}
-	if err := s.recordAudit(ctx, credentialCreatedEvent(record)); err != nil {
+	if err := s.recordMutation(ctx, credentialCreatedEvent(record), nil, credentiallifecycle.Facts{Kind: credentiallifecycle.CreateKind(input), Credential: credential, At: now, Actor: credentiallifecycle.CreateActor(input)}); err != nil {
 		return contractsv1.ClientCredential{}, err
 	}
 	record = cloneRecord(record)
@@ -65,7 +66,7 @@ func (s *credentialStore) rollbackCredentialRotation(ctx context.Context, input 
 		!s.rotationRelates(source.Metadata.CredentialID, successor.Metadata.CredentialID) {
 		return contractsv1.ClientCredential{}, storage.ErrConflict
 	}
-	if err := s.recordAudit(ctx, credentialRevokedEvent(successor.Metadata, input.ActorID, now)); err != nil {
+	if err := s.recordMutation(ctx, credentialRevokedEvent(successor.Metadata, input.ActorID, now), nil, credentiallifecycle.Facts{Kind: credentiallifecycle.KindRevoked, Credential: successor.Metadata, At: now, Actor: credentiallifecycle.RollbackActor(input)}); err != nil {
 		return contractsv1.ClientCredential{}, err
 	}
 	successor.Metadata.RevokedAt = ptrTime(now)
@@ -123,7 +124,13 @@ func (s *credentialStore) rotateCredential(ctx context.Context, input storage.Cr
 	}
 	replacement := credentialFromRotation(replacementInput, old.Metadata.OrgID, now, old.Metadata.Resource, old.Metadata.Provenance)
 	previousValidUntil := overlapExpiry(now, replacementInput.Overlap)
-	if err := s.recordAudit(ctx, credentialRotatedEvent(old.Metadata, replacement, input.ActorID, replacementInput.Overlap, now)); err != nil {
+	parent := old.Metadata
+	actor := credentiallifecycle.RotationActor(input)
+	steps := []credentiallifecycle.Facts{{Kind: credentiallifecycle.KindRotated, Credential: replacement, ParentID: old.Metadata.CredentialID, At: now, Actor: actor}}
+	if previousValidUntil == nil || !previousValidUntil.After(now) {
+		steps = append(steps, credentiallifecycle.Facts{Kind: credentiallifecycle.KindRevoked, Credential: old.Metadata, At: now, Actor: actor})
+	}
+	if err := s.recordMutation(ctx, credentialRotatedEvent(old.Metadata, replacement, input.ActorID, replacementInput.Overlap, now), &parent, steps...); err != nil {
 		return contractsv1.ClientCredential{}, err
 	}
 	if previousValidUntil == nil || !previousValidUntil.After(now) {
@@ -157,7 +164,7 @@ func (s *credentialStore) revokeCredential(ctx context.Context, input storage.Cr
 		return contractsv1.ClientCredential{}, storage.ErrConflict
 	}
 	now := s.now().UTC()
-	if err := s.recordAudit(ctx, withRevocationDetails(credentialRevokedEvent(record.Metadata, input.ActorID, now), input)); err != nil {
+	if err := s.recordMutation(ctx, withRevocationDetails(credentialRevokedEvent(record.Metadata, input.ActorID, now), input), nil, credentiallifecycle.Facts{Kind: credentiallifecycle.KindRevoked, Credential: record.Metadata, At: now, Actor: credentiallifecycle.RevocationActor(input)}); err != nil {
 		return contractsv1.ClientCredential{}, err
 	}
 	record.Metadata.RevokedAt = ptrTime(now)
@@ -170,7 +177,7 @@ func (s *credentialStore) revokeCredential(ctx context.Context, input storage.Cr
 			}
 			event := credentialRevokedEvent(member.Metadata, input.ActorID, now)
 			event.Metadata = map[string]any{"family_id": familyID, "family_revoke_reason": "member_revoked"}
-			if err := s.recordAudit(ctx, event); err != nil {
+			if err := s.recordMutation(ctx, event, nil, credentiallifecycle.Facts{Kind: credentiallifecycle.KindRevoked, Credential: member.Metadata, At: now, Actor: credentiallifecycle.Actor{Type: credentiallifecycle.ActorUser, Ref: input.ActorID}}); err != nil {
 				return contractsv1.ClientCredential{}, err
 			}
 			member.Metadata.RevokedAt = ptrTime(now)
@@ -203,4 +210,55 @@ func withRevocationDetails(event storage.AuditEvent, input storage.CredentialRev
 		event.Metadata = map[string]any{"reason": input.Reason}
 	}
 	return event
+}
+
+// appendLifecycle writes the credential lifecycle outbox rows of one mutation,
+// all or none. A non-nil parent is the credential a rotation replaces: its
+// revision 1 is written before the events that name it. A revocation writes
+// that revision 1 itself.
+func (s *credentialStore) appendLifecycle(ctx context.Context, parent *contractsv1.ClientCredential, steps ...credentiallifecycle.Facts) error {
+	if s.audit == nil {
+		return storage.ErrInvalidCredentialLifecycle
+	}
+	// The memory store accepts any organization id string (test data); the
+	// stream is defined over acr organization UUIDs, which PostgreSQL alone
+	// enforces, so a free-form id writes no rows here.
+	if len(steps) > 0 {
+		if _, err := credentiallifecycle.OrgWireID(steps[0].Credential.OrgID); err != nil {
+			return nil
+		}
+	}
+	ledger := &s.audit.ledger
+	mark := ledger.Len()
+	if parent != nil {
+		if err := credentiallifecycle.EnsureIssued(ctx, ledger, *parent); err != nil {
+			ledger.TruncateTo(mark)
+			return err
+		}
+	}
+	for _, step := range steps {
+		if err := credentiallifecycle.Append(ctx, ledger, step); err != nil {
+			ledger.TruncateTo(mark)
+			return err
+		}
+	}
+	return nil
+}
+
+// recordMutation writes a mutation's lifecycle outbox rows and its audit row
+// together: when either fails nothing of the mutation is left behind, as the
+// PostgreSQL transaction guarantees.
+func (s *credentialStore) recordMutation(ctx context.Context, event storage.AuditEvent, parent *contractsv1.ClientCredential, steps ...credentiallifecycle.Facts) error {
+	if s.audit == nil {
+		return storage.ErrInvalidCredentialLifecycle
+	}
+	mark := s.audit.ledger.Len()
+	if err := s.appendLifecycle(ctx, parent, steps...); err != nil {
+		return err
+	}
+	if err := s.recordAudit(ctx, event); err != nil {
+		s.audit.ledger.TruncateTo(mark)
+		return err
+	}
+	return nil
 }

@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/full-chaos/dev-health-acr/internal/storage"
+	"github.com/full-chaos/dev-health-acr/internal/storage/internal/credentiallifecycle"
 )
 
 type AuditStore struct {
@@ -16,6 +17,7 @@ type AuditStore struct {
 	lifecycleMu *sync.RWMutex
 	lifecycle   *credentialStore
 	events      []storage.AuditEvent
+	ledger      credentiallifecycle.Ledger
 }
 
 func NewAuditStore() *AuditStore { return &AuditStore{} }
@@ -205,4 +207,13 @@ func cloneMetadataValue(value reflect.Value, stack map[visit]bool) (reflect.Valu
 	default:
 		return reflect.Value{}, fmt.Errorf("%w: unsupported %s", storage.ErrInvalidAuditMetadata, value.Type())
 	}
+}
+
+// LifecycleOutbox returns every credential lifecycle outbox row written so
+// far, in write order.
+func (s *AuditStore) LifecycleOutbox() []storage.LifecycleOutboxRow {
+	if s == nil {
+		return nil
+	}
+	return s.ledger.Rows()
 }

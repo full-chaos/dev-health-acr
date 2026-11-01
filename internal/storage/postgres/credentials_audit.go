@@ -10,6 +10,7 @@ import (
 
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
+	"github.com/full-chaos/dev-health-acr/internal/storage/internal/credentiallifecycle"
 )
 
 func (s *credentialStore) rollbackCredentialRotation(ctx context.Context, input storage.CredentialRotationRollbackInput) (contractsv1.ClientCredential, error) {
@@ -86,6 +87,9 @@ WHERE org_id = $1 AND credential_id = $2 AND revoked_at IS NULL`, input.OrgID, i
 	if err := s.audit.record(ctx, tx, credentialRevokedEvent(successor, input.ActorID, now)); err != nil {
 		return contractsv1.ClientCredential{}, fmt.Errorf("record credential rotation rollback audit: %w", sanitizeDatabaseError(err))
 	}
+	if err := s.audit.appendLifecycle(ctx, tx, credentiallifecycle.Facts{Kind: credentiallifecycle.KindRevoked, Credential: successor, At: now, Actor: credentiallifecycle.RollbackActor(input)}); err != nil {
+		return contractsv1.ClientCredential{}, err
+	}
 	if err := tx.Commit(); err != nil {
 		return contractsv1.ClientCredential{}, fmt.Errorf("commit credential rotation rollback: %w", sanitizeDatabaseError(err))
 	}
@@ -124,6 +128,9 @@ func (s *credentialStore) createCredential(ctx context.Context, input storage.Cr
 	if err := s.audit.record(ctx, tx, credentialCreatedEvent(record)); err != nil {
 		return contractsv1.ClientCredential{}, err
 	}
+	if err := s.audit.appendLifecycle(ctx, tx, credentiallifecycle.Facts{Kind: credentiallifecycle.CreateKind(input), Credential: credential, At: credential.CreatedAt, Actor: credentiallifecycle.CreateActor(input)}); err != nil {
+		return contractsv1.ClientCredential{}, err
+	}
 	if err := tx.Commit(); err != nil {
 		return contractsv1.ClientCredential{}, fmt.Errorf("commit credential create: %w", sanitizeDatabaseError(err))
 	}
@@ -158,6 +165,9 @@ func (s *credentialStore) rotateCredential(ctx context.Context, input storage.Cr
 		return contractsv1.ClientCredential{}, err
 	}
 	if err := s.audit.record(ctx, tx, credentialRotatedEvent(source, replacement, input.ActorID, input.Replacement.Overlap, now)); err != nil {
+		return contractsv1.ClientCredential{}, err
+	}
+	if err := s.appendRotationLifecycle(ctx, tx, input, source, replacement, now); err != nil {
 		return contractsv1.ClientCredential{}, err
 	}
 	if err := tx.Commit(); err != nil {
@@ -203,6 +213,9 @@ WHERE org_id = $1 AND credential_id = $2
 	}
 	credential.RevokedAt = cloneTime(&now)
 	if err := s.audit.record(ctx, tx, withRevocationDetails(credentialRevokedEvent(credential, input.ActorID, now), input)); err != nil {
+		return contractsv1.ClientCredential{}, err
+	}
+	if err := s.audit.appendLifecycle(ctx, tx, credentiallifecycle.Facts{Kind: credentiallifecycle.KindRevoked, Credential: credential, At: now, Actor: credentiallifecycle.RevocationActor(input)}); err != nil {
 		return contractsv1.ClientCredential{}, err
 	}
 	// CHAOS-12124: revoking a browser credential revokes its whole family
@@ -406,4 +419,23 @@ func withRevocationDetails(event storage.AuditEvent, input storage.CredentialRev
 		event.Metadata = map[string]any{"reason": input.Reason}
 	}
 	return event
+}
+
+// appendRotationLifecycle writes the rotation's events in its transaction:
+// the replaced credential's revision 1 when the stream has none (before the
+// rotated event names it), the successor's rotated event, and, when the
+// replaced credential was revoked by this rotation (no overlap), its revoked
+// event. source is the credential as it stood before the rotation.
+func (s *credentialStore) appendRotationLifecycle(ctx context.Context, tx *sql.Tx, input storage.CredentialRotationInput, source, replacement contractsv1.ClientCredential, now time.Time) error {
+	actor := credentiallifecycle.RotationActor(input)
+	if err := s.audit.ensureLifecycleIssued(ctx, tx, credentiallifecycle.Facts{Credential: source}); err != nil {
+		return err
+	}
+	if err := s.audit.appendLifecycle(ctx, tx, credentiallifecycle.Facts{Kind: credentiallifecycle.KindRotated, Credential: replacement, ParentID: source.CredentialID, At: now, Actor: actor}); err != nil {
+		return err
+	}
+	if until := overlapExpiry(now, input.Replacement.Overlap); until == nil || !until.After(now) {
+		return s.audit.appendLifecycle(ctx, tx, credentiallifecycle.Facts{Kind: credentiallifecycle.KindRevoked, Credential: source, At: now, Actor: actor})
+	}
+	return nil
 }

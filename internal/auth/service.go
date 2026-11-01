@@ -192,7 +192,7 @@ func (s *Service) Rotate(ctx context.Context, request RotateCredentialRequest) (
 		return IssuedCredential{}, err
 	}
 	credential, err := s.store.RotateCredential(ctx, storage.CredentialRotationInput{
-		OrgID: request.OrgID, SourceCredentialID: request.CredentialID, ActorID: request.CreatedBy, Replacement: input,
+		OrgID: request.OrgID, SourceCredentialID: request.CredentialID, ActorID: request.CreatedBy, SelfCredential: request.SelfCredential, Replacement: input,
 	})
 	if err != nil {
 		return IssuedCredential{}, fmt.Errorf("rotate credential: %w", err)
@@ -201,13 +201,17 @@ func (s *Service) Rotate(ctx context.Context, request RotateCredentialRequest) (
 }
 
 func (s *Service) Revoke(ctx context.Context, orgID, credentialID, actorID string) (contractsv1.ClientCredential, error) {
+	return s.revoke(ctx, orgID, credentialID, actorID, false)
+}
+
+func (s *Service) revoke(ctx context.Context, orgID, credentialID, actorID string, self bool) (contractsv1.ClientCredential, error) {
 	orgID = strings.TrimSpace(orgID)
 	credentialID = strings.TrimSpace(credentialID)
 	actorID = strings.TrimSpace(actorID)
 	if orgID == "" || credentialID == "" || actorID == "" {
 		return contractsv1.ClientCredential{}, fmt.Errorf("%w: org_id, credential_id, and actor are required", ErrInvalidCredential)
 	}
-	credential, err := s.store.RevokeCredential(ctx, storage.CredentialRevocationInput{OrgID: orgID, CredentialID: credentialID, ActorID: actorID})
+	credential, err := s.store.RevokeCredential(ctx, storage.CredentialRevocationInput{OrgID: orgID, CredentialID: credentialID, ActorID: actorID, SelfCredential: self})
 	if err != nil {
 		return contractsv1.ClientCredential{}, fmt.Errorf("revoke credential: %w", err)
 	}

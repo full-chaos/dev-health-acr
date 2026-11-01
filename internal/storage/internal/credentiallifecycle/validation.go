@@ -249,6 +249,9 @@ func normalizeRotation(input RotationInput) (RotationInput, error) {
 	if err != nil {
 		return RotationInput{}, err
 	}
+	if input.SelfCredential && input.ActorID != input.SourceCredentialID {
+		return RotationInput{}, invalid("self rotation actor")
+	}
 	create, err := normalizeCreate(CreateInput{
 		CredentialID:     input.Replacement.CredentialID,
 		OrgID:            input.OrgID,
@@ -296,6 +299,9 @@ func normalizeRevocation(input RevocationInput) (RevocationInput, error) {
 	input.ActorID, err = normalizeText("actor", input.ActorID, 200)
 	if err != nil {
 		return RevocationInput{}, err
+	}
+	if input.SelfCredential && input.ActorID != input.CredentialID {
+		return RevocationInput{}, invalid("self revocation actor")
 	}
 	// A blank reason is "no reason": normalize it to empty so adapters never
 	// persist whitespace as an audit reason.

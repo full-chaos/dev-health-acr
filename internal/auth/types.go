@@ -96,6 +96,10 @@ type RotateCredentialRequest struct {
 	CreatedBy        string
 	ExpiresAt        *time.Time
 	Overlap          time.Duration
+	// SelfCredential marks a rotation the credential asked for itself: the
+	// lifecycle outbox then names the credential as the actor. CreatedBy must
+	// be its own id.
+	SelfCredential bool
 }
 
 type IssuedCredential struct {

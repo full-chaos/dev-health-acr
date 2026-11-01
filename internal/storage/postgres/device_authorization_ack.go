@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/full-chaos/dev-health-acr/internal/storage"
+	"github.com/full-chaos/dev-health-acr/internal/storage/internal/credentiallifecycle"
 )
 
 const deviceAckRevokeActor = "device-credential-ack"
@@ -168,6 +169,9 @@ WHERE org_id = $1 AND credential_id = $2 AND revoked_at IS NULL`, orgID, credent
 		ActorType: "system", Reason: "device credential not acknowledged",
 	}
 	if err := s.audit.record(ctx, tx, withRevocationDetails(credentialRevokedEvent(credential, deviceAckRevokeActor, now), input)); err != nil {
+		return false, err
+	}
+	if err := s.audit.appendLifecycle(ctx, tx, credentiallifecycle.Facts{Kind: credentiallifecycle.KindRevoked, Credential: credential, At: now, Actor: credentiallifecycle.RevocationActor(input)}); err != nil {
 		return false, err
 	}
 	return true, nil

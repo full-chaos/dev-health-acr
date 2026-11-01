@@ -342,3 +342,6 @@ func IsCredentialLifecycleAuditAction(action string) bool {
 		return false
 	}
 }
+
+// LifecycleOutboxRow is one credential lifecycle outbox row.
+type LifecycleOutboxRow = credentiallifecycle.Row

@@ -325,3 +325,59 @@ func insertFacts(ctx context.Context, sink Sink, f Facts) error {
 	}
 	return sink.Insert(ctx, row)
 }
+
+// CreateKind is the event kind of a credential issue: a redeemed device
+// authorization is device_redeemed (the mapper writes issued for the browser
+// class), every other path is issued.
+func CreateKind(in CreateInput) EventKind {
+	if in.IssuanceProvenance == IssuanceProvenanceDeviceAuthorization {
+		return KindDeviceRedeemed
+	}
+	return KindIssued
+}
+
+// CreateActor is the actor of a credential issue: the system when acr mints
+// it itself (a workload exchange, or a refresh grant, whose actor is not the
+// approving user), otherwise the user named by the request.
+func CreateActor(in CreateInput) Actor {
+	switch {
+	case in.IssuanceProvenance == IssuanceProvenanceWorkloadExchange:
+		return Actor{Type: ActorSystem}
+	case in.IssuanceProvenance == IssuanceProvenanceDeviceAuthorization && in.ApprovingUserID != "" && in.ActorID != in.ApprovingUserID:
+		return Actor{Type: ActorSystem}
+	}
+	return Actor{Type: ActorUser, Ref: in.ActorID}
+}
+
+// RotationActor is the actor of a rotation: the credential itself for a self
+// rotation, otherwise the user named by the request.
+func RotationActor(in RotationInput) Actor {
+	if in.SelfCredential {
+		return Actor{Type: ActorCredential}
+	}
+	return Actor{Type: ActorUser, Ref: in.ActorID}
+}
+
+// RevocationActor is the actor of a revocation, from the same input the audit
+// row reads: self, the operator, the system, or a user.
+func RevocationActor(in RevocationInput) Actor {
+	switch {
+	case in.SelfCredential:
+		return Actor{Type: ActorCredential}
+	case in.ActorType == string(ActorSystem):
+		return Actor{Type: ActorSystem}
+	case in.ActorType == string(ActorOperator):
+		return Actor{Type: ActorOperator, Ref: in.ActorID}
+	default:
+		return Actor{Type: ActorUser, Ref: in.ActorID}
+	}
+}
+
+// RollbackActor is the actor of a rotation rollback: the successor itself when
+// it asked (the self-service path), otherwise the user named by the request.
+func RollbackActor(in RotationRollbackInput) Actor {
+	if in.ActorID == in.SuccessorCredentialID {
+		return Actor{Type: ActorCredential}
+	}
+	return Actor{Type: ActorUser, Ref: in.ActorID}
+}

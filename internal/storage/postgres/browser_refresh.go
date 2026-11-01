@@ -9,6 +9,7 @@ import (
 
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
+	"github.com/full-chaos/dev-health-acr/internal/storage/internal/credentiallifecycle"
 )
 
 // BrowserRefreshStore keeps browser token families and refresh tokens
@@ -209,6 +210,9 @@ func (s *BrowserRefreshStore) rotateBrowserRefreshTx(ctx context.Context, tx *sq
 	if err := s.audit.record(ctx, tx, event); err != nil {
 		return contractsv1.ClientCredential{}, err
 	}
+	if err := s.audit.appendLifecycle(ctx, tx, credentiallifecycle.Facts{Kind: credentiallifecycle.CreateKind(input), Credential: successor, At: now, Actor: credentiallifecycle.CreateActor(input)}); err != nil {
+		return contractsv1.ClientCredential{}, err
+	}
 	if _, err := tx.ExecContext(ctx, `
 INSERT INTO acr.browser_refresh_tokens (token_hash, family_id, credential_id, created_at)
 VALUES ($1, $2, $3, $4)`, rotation.SuccessorRefresh, token.familyID, rotation.SuccessorCredential, now); err != nil {
@@ -277,20 +281,24 @@ WHERE family_id = $1 AND revoked_at IS NULL`, familyID, now, reason); err != nil
 		return 0, fmt.Errorf("revoke browser family: %w", sanitizeDatabaseError(err))
 	}
 	rows, err := tx.QueryContext(ctx, `
-UPDATE acr.client_credentials SET revoked_at = $3
+SELECT credential_id, name, token_prefix, org_id, repository_scopes, scopes,
+       created_at, expires_at, revoked_at, last_used_at, workload_binding_id, resource,
+       client_class, approving_user_id, client_id, session_id, family_id, family_expires_at
+FROM acr.client_credentials
 WHERE org_id = $1::uuid AND family_id = $2 AND revoked_at IS NULL
-RETURNING credential_id`, orgID, familyID, now)
+ORDER BY credential_id
+FOR UPDATE`, orgID, familyID)
 	if err != nil {
-		return 0, fmt.Errorf("revoke browser family credentials: %w", sanitizeDatabaseError(err))
+		return 0, fmt.Errorf("lock browser family credentials: %w", sanitizeDatabaseError(err))
 	}
-	var revoked []string
+	var revoked []contractsv1.ClientCredential
 	for rows.Next() {
-		var credentialID string
-		if err := rows.Scan(&credentialID); err != nil {
+		member, err := scanCredential(rows)
+		if err != nil {
 			_ = rows.Close()
 			return 0, fmt.Errorf("scan revoked family credential: %w", sanitizeDatabaseError(err))
 		}
-		revoked = append(revoked, credentialID)
+		revoked = append(revoked, member)
 	}
 	if err := rows.Close(); err != nil {
 		return 0, fmt.Errorf("close revoked family credentials: %w", sanitizeDatabaseError(err))
@@ -298,13 +306,21 @@ RETURNING credential_id`, orgID, familyID, now)
 	if err := rows.Err(); err != nil {
 		return 0, fmt.Errorf("revoked family credentials: %w", sanitizeDatabaseError(err))
 	}
-	for _, credentialID := range revoked {
+	if _, err := tx.ExecContext(ctx, `
+UPDATE acr.client_credentials SET revoked_at = $3
+WHERE org_id = $1::uuid AND family_id = $2 AND revoked_at IS NULL`, orgID, familyID, now); err != nil {
+		return 0, fmt.Errorf("revoke browser family credentials: %w", sanitizeDatabaseError(err))
+	}
+	for _, member := range revoked {
 		event := storage.AuditEvent{
 			OrgID: orgID, ActorType: "user", ActorID: actorID,
-			Action: storage.AuditActionCredentialRevoked, ResourceType: "acr_credential", ResourceID: credentialID,
+			Action: storage.AuditActionCredentialRevoked, ResourceType: "acr_credential", ResourceID: member.CredentialID,
 			Status: "success", CreatedAt: now, Metadata: map[string]any{"family_id": familyID, "family_revoke_reason": reason},
 		}
 		if err := audit.record(ctx, tx, event); err != nil {
+			return 0, err
+		}
+		if err := audit.appendLifecycle(ctx, tx, credentiallifecycle.Facts{Kind: credentiallifecycle.KindRevoked, Credential: member, At: now, Actor: credentiallifecycle.Actor{Type: credentiallifecycle.ActorUser, Ref: actorID}}); err != nil {
 			return 0, err
 		}
 	}

@@ -50,3 +50,20 @@ func (l *Ledger) Rows() []Row {
 	}
 	return out
 }
+
+// Len is the number of rows written so far.
+func (l *Ledger) Len() int {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return len(l.rows)
+}
+
+// TruncateTo drops every row written after the first n, so a failed
+// multi-row append leaves no partial stream.
+func (l *Ledger) TruncateTo(n int) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if n >= 0 && n < len(l.rows) {
+		l.rows = l.rows[:n]
+	}
+}

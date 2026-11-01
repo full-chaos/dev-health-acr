@@ -482,3 +482,44 @@ func TestTheSchemaOracleIsNotVacuous(t *testing.T) {
 		}
 	}
 }
+
+func TestActorsFollowTheInputThatTheAuditRowReads(t *testing.T) {
+	for name, tc := range map[string]struct {
+		got  Actor
+		want Actor
+	}{
+		"cli issue":             {CreateActor(CreateInput{ActorID: "ops"}), Actor{ActorUser, "ops"}},
+		"workload issue":        {CreateActor(CreateInput{ActorID: "binding", IssuanceProvenance: IssuanceProvenanceWorkloadExchange}), Actor{Type: ActorSystem}},
+		"device redeem":         {CreateActor(CreateInput{ActorID: "u1", ApprovingUserID: "u1", IssuanceProvenance: IssuanceProvenanceDeviceAuthorization}), Actor{ActorUser, "u1"}},
+		"refresh grant":         {CreateActor(CreateInput{ActorID: "oauth_refresh_grant", ApprovingUserID: "u1", IssuanceProvenance: IssuanceProvenanceDeviceAuthorization}), Actor{Type: ActorSystem}},
+		"admin rotate":          {RotationActor(RotationInput{ActorID: "admin"}), Actor{ActorUser, "admin"}},
+		"self rotate":           {RotationActor(RotationInput{ActorID: "cred_a", SelfCredential: true}), Actor{Type: ActorCredential}},
+		"admin revoke":          {RevocationActor(RevocationInput{ActorID: "admin"}), Actor{ActorUser, "admin"}},
+		"operator revoke":       {RevocationActor(RevocationInput{ActorID: "op", ActorType: "operator"}), Actor{ActorOperator, "op"}},
+		"system revoke":         {RevocationActor(RevocationInput{ActorID: "device-credential-ack", ActorType: "system"}), Actor{Type: ActorSystem}},
+		"self revoke":           {RevocationActor(RevocationInput{ActorID: "cred_a", SelfCredential: true}), Actor{Type: ActorCredential}},
+		"unknown type is user":  {RevocationActor(RevocationInput{ActorID: "x", ActorType: "weird"}), Actor{ActorUser, "x"}},
+		"rollback by successor": {RollbackActor(RotationRollbackInput{ActorID: "cred_s", SuccessorCredentialID: "cred_s"}), Actor{Type: ActorCredential}},
+		"rollback by a user":    {RollbackActor(RotationRollbackInput{ActorID: "admin", SuccessorCredentialID: "cred_s"}), Actor{ActorUser, "admin"}},
+	} {
+		if tc.got != tc.want {
+			t.Errorf("%s: %+v, want %+v", name, tc.got, tc.want)
+		}
+	}
+	if CreateKind(CreateInput{IssuanceProvenance: IssuanceProvenanceDeviceAuthorization}) != KindDeviceRedeemed ||
+		CreateKind(CreateInput{}) != KindIssued || CreateKind(CreateInput{IssuanceProvenance: IssuanceProvenanceWorkloadExchange}) != KindIssued {
+		t.Error("CreateKind")
+	}
+}
+
+func TestSelfMarkerNeedsTheCredentialsOwnId(t *testing.T) {
+	if _, err := normalizeRevocation(RevocationInput{OrgID: testOrgUUID, CredentialID: "cred_aaaaaaaaaaaaaaaaaaaaa", ActorID: "someone", SelfCredential: true}); err == nil {
+		t.Error("a self revocation naming another actor must be refused")
+	}
+	if _, err := normalizeRevocation(RevocationInput{OrgID: testOrgUUID, CredentialID: "cred_aaaaaaaaaaaaaaaaaaaaa", ActorID: "cred_aaaaaaaaaaaaaaaaaaaaa", SelfCredential: true}); err != nil {
+		t.Errorf("a self revocation by the credential itself: %v", err)
+	}
+	if _, err := normalizeRevocation(RevocationInput{OrgID: testOrgUUID, CredentialID: "cred_aaaaaaaaaaaaaaaaaaaaa", ActorID: "someone"}); err != nil {
+		t.Errorf("an admin revocation: %v", err)
+	}
+}
