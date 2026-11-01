@@ -799,7 +799,8 @@ reason:
   node's edges stopped at its limit of 5,000 rows (CHAOS-12451), in the hop walk
   or in the text arm. The read sorts structural kinds first and CI runs last, and
   edges past the cut do not compete for the budget. On the observation traversal
-  a cut read is a failed traversal, counted as degraded retrieval.
+  a cut read is a failed traversal: the observation cannot commit, its parent is
+  not proposed, and the count goes to telemetry, not to coverage.
 - `graph_team_narrowing_undecided_paths` (raw
   `team_narrowing_undecided_paths:<n>`): under `scope.team_ids`, a path edge was
   dropped because an endpoint's ownership was absent, not current, or cut. The

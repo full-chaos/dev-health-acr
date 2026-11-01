@@ -864,12 +864,14 @@ const nodeEdgeTierCypher = "CASE WHEN otherKind IN ['" + string(contractsv1.Cont
 	string(contractsv1.ContextFabricSubjectCIRun) + "' THEN 2 ELSE 1 END"
 
 // errNodeEdgesCut reports a node read cut at its limit on a path with no other
-// way to say so: the observation traversal treats it as a failed traversal,
-// which is counted and disclosed as degraded retrieval.
+// way to say so: the observation traversal treats it as a failed traversal. The
+// observation stays blocked, and the count goes to telemetry, not to the
+// coverage of the answer.
 var errNodeEdgesCut = errors.New("node edge read cut at its limit")
 
 // observationEdges is the edge read of the observation-to-entity traversal. A
-// parent past the cut would be lost in silence, so a cut read is an error.
+// parent past the cut would read as no parent, which leaves the observation
+// eligible to commit, so a cut read is an error and blocks it.
 func (a *Adapter) observationEdges(ctx context.Context, key, orgID, uuid string, temporal temporalFilter) ([]graphrank.CandidateEdge, error) {
 	edges, cut, err := a.edgesOfNode(ctx, key, orgID, uuid, temporal)
 	if err != nil {
