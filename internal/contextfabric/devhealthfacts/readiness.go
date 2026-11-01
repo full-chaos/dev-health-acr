@@ -92,7 +92,7 @@ func (p *ReadinessProvider) ReadFacts(ctx context.Context, principal storage.Pri
 		rejectedCount += rejected
 	}
 
-	if projectSubjects := subjectsOfKind(query.Subjects, contextfabric.SubjectProject); len(projectSubjects) > 0 && !projectOnlyWithheld(principal) {
+	if projectSubjects := subjectsOfKind(query.Subjects, contextfabric.SubjectProject); len(projectSubjects) > 0 {
 		rowCount, rejected, breakdownTruncated, scanErr := p.readProjectReadiness(ctx, orgID, projectSubjects, &facts, timeBound)
 		if scanErr != nil {
 			return contextfabric.FactProviderResult{}, readFailure("query project readiness", scanErr)

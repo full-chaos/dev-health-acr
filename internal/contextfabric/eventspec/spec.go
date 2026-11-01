@@ -1996,8 +1996,8 @@ const (
 	observationCoverMaxLines = contractsv1.ContextFabricPlanRequirementOutcomeMaxCount * coverPassesPerRequest
 	// membership cardinality: 2 call sites (fresh and reused result).
 	membershipCardinalityMaxLines = 2 * passesPerRequest
-	// budget assertion: 10 finalizeServed call sites (one per exit).
-	budgetAssertionMaxLines = 10 * passesPerRequest
+	// budget assertion: 11 finalizeServed call sites (one per exit).
+	budgetAssertionMaxLines = 11 * passesPerRequest
 	// item accounting disagreement: 3 call sites.
 	itemAccountingMaxLines = 3 * passesPerRequest
 )

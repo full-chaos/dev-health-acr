@@ -181,6 +181,27 @@ func TestLiveATeamNarrowingKeepsWhatHangsOffAnOwnedRepository(t *testing.T) {
 	}
 }
 
+// TestLiveAnIncidentWithNoRepositoryEdgeIsDisclosedAsUndecided (CHAOS-12345,
+// lead ruling): deployment-r is owned, and it correlates with two incidents the
+// read drops. incident-unmapped has no repository edge, so its ownership is
+// missing and CHAOS-12348's undecided count takes it. incident-s belongs to a
+// repository of another team, so it is decided out of scope and sets nothing.
+func TestLiveAnIncidentWithNoRepositoryEdgeIsDisclosedAsUndecided(t *testing.T) {
+	ctx := context.Background()
+	adapter, _ := newLiveFalkorAdapter(t, ctx)
+	orgID := seedTeamNarrowingHangingKinds(t, ctx, adapter)
+	deployment := contextfabric.SubjectRef{Kind: contextfabric.SubjectDeployment, CanonicalID: "deployment-r", Label: "deployment-r"}
+	got := discoverUnderTeams(t, ctx, adapter, orgID, deployment, nil, []string{"team-b"})
+	if !got.partial || !slices.Contains(got.details, contractsv1.ContextFabricCoverageDetailCode(undecidedPathsCode)) || got.undecidedPaths != 1 {
+		t.Fatalf("partial=%v details=%v count=%d, want partial and %s with count 1", got.partial, got.details, got.undecidedPaths, undecidedPathsCode)
+	}
+	for _, id := range got.nodes[contextfabric.SubjectIncident] {
+		if id == "incident-unmapped" || id == "incident-s" {
+			t.Fatalf("served %s: the narrowing cannot place it", id)
+		}
+	}
+}
+
 // TestLiveATeamNarrowingDecidesTheMembersThatHangOffARepository (CHAOS-12345):
 // deployments and incidents as a cohort (CI runs and reviews build no cohort,
 // with or without a narrowing; the paths test pins them). An exclusion is scope;

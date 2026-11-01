@@ -41,6 +41,8 @@ type teamDiscoverRead struct {
 	nodes   map[contextfabric.SubjectKind][]string
 	partial bool
 	details []contractsv1.ContextFabricCoverageDetailCode
+	// undecidedPaths: the count of the undecided path endpoints row (CHAOS-12348).
+	undecidedPaths int
 }
 
 func discoverUnderTeams(t *testing.T, ctx context.Context, adapter *Adapter, orgID string, subject contextfabric.SubjectRef, grants, teams []string) teamDiscoverRead {
@@ -90,6 +92,9 @@ func discoverUnderTeams(t *testing.T, ctx context.Context, adapter *Adapter, org
 	}
 	for _, d := range gc.Coverage.Details {
 		read.details = append(read.details, d.Code)
+		if string(d.Code) == undecidedPathsCode && d.Count != nil {
+			read.undecidedPaths = *d.Count
+		}
 	}
 	return read
 }

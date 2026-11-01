@@ -47,7 +47,9 @@ import (
 // request otherwise admits are decided here. The read is floored only where
 // the ownership it needed to decide an admitted subject is absent, not
 // current, or cut -- an absent ownership row is missing data, not "not owned"
-// (team-attribution.md R74).
+// (team-attribution.md R74). A read that is not a cohort read has no floor: a
+// path edge lost to missing ownership is its coverage's to disclose
+// (UndecidedPathEndpoints, CHAOS-12348).
 
 // issuePullRequestStep reads an issue's linked pull requests: the
 // issue -> pull request link of record, with its tier.
@@ -99,6 +101,10 @@ type discoverTeamScope struct {
 	// match was left out on missing ownership. Path endpoints never floor
 	// (lead ruling Q2 (a)), and a candidate of another kind loses no member.
 	undecided bool
+	// undecidedPaths: the distinct endpoints whose missing ownership removed a
+	// path edge (edges). It never floors a cohort; DiscoverContext discloses it
+	// on a read that is not a cohort read (CHAOS-12348).
+	undecidedPaths map[string]bool
 }
 
 // newDiscoverTeamScope returns the read's team narrowing, or nil when the
@@ -111,6 +117,7 @@ func (a *Adapter) newDiscoverTeamScope(key, orgID string, scope contextfabric.Re
 	s := &discoverTeamScope{
 		narrowing: &teamNarrowing{adapter: a, key: key, orgID: orgID, requested: requested},
 		temporal:  temporal, keep: map[string]bool{}, inScope: map[string]bool{}, decided: map[string]bool{}, missing: map[string]bool{},
+		undecidedPaths: map[string]bool{},
 	}
 	for _, subject := range committed {
 		s.keep[subject.CanonicalID] = true
@@ -121,6 +128,15 @@ func (a *Adapter) newDiscoverTeamScope(key, orgID string, scope contextfabric.Re
 // Undecided reports whether the read must be floored: an ownership read the
 // narrowing needed was absent, not current, or cut.
 func (s *discoverTeamScope) Undecided() bool { return s != nil && s.undecided }
+
+// UndecidedPathEndpoints is how many distinct endpoints left a path edge out
+// on missing ownership.
+func (s *discoverTeamScope) UndecidedPathEndpoints() int {
+	if s == nil {
+		return 0
+	}
+	return len(s.undecidedPaths)
+}
 
 // floor is the read's floor value for the team-narrowing log line.
 func (s *discoverTeamScope) floor() contextfabric.TeamNarrowingReadFloor {
@@ -165,9 +181,30 @@ func (s *discoverTeamScope) edges(ctx context.Context, principal storage.Princip
 	for _, e := range edges {
 		if !authorizedEdgeAttributes(principal, scope, e.Name, e.Attributes) || (s.admits(e.From) && s.admits(e.To)) {
 			kept = append(kept, e)
+			continue
 		}
+		s.noteUndecidedDrop(e)
 	}
 	return kept, nil
+}
+
+// noteUndecidedDrop records the endpoints of a dropped edge whose ownership was
+// missing. An end decided out of scope removes the edge by itself, so nothing
+// was lost to indecision and the edge records no end.
+func (s *discoverTeamScope) noteUndecidedDrop(e graphrank.ResolvedEdge) {
+	var undecided []string
+	for _, end := range []contextfabric.SubjectRef{e.From, e.To} {
+		if s.admits(end) {
+			continue
+		}
+		if !s.missing[end.CanonicalID] {
+			return
+		}
+		undecided = append(undecided, end.CanonicalID)
+	}
+	for _, id := range undecided {
+		s.undecidedPaths[id] = true
+	}
 }
 
 // nodes keeps the cohort candidate nodes that are in scope. A node the rest of
