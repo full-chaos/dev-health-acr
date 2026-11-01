@@ -12,6 +12,8 @@ internal/api/principal_access.go	App.logAccessGranted	compare	1	vocab	telemetry:
 internal/api/principal_access.go	App.logAccessGranted	transport	1	vocab	telemetry: the grant class written to the log (c4 CHAOS-12300)
 internal/auth/grant_class.go	GrantClass.IsRestricted	switch	1	vocab	the restricted-subtype rule of the grant class itself (restricted and project_only)
 internal/auth/grant_class.go	GrantClassVocabulary	collection	1	vocab	the closed grant-class vocabulary
+internal/auth/middleware.go	NarrowToProjectScopes	classify	1	consent	reads the original consent grant: only a "*" grant may become project_only (CHAOS-12107 D2, CHAOS-12301)
+internal/auth/middleware.go	NarrowToProjectScopes	compare	1	consent	reads the original consent grant: only a "*" grant may become project_only (CHAOS-12107 D2, CHAOS-12301)
 internal/auth/repository.go	AuthorizeRepository	classify	1	deny	a project grant names no repository: project_only is refused every repository, whatever its list; c3 CHAOS-12299 r1 F1
 internal/auth/repository.go	AuthorizeRepository	compare	1	deny	a project grant names no repository: project_only is refused every repository, whatever its list; c3 CHAOS-12299 r1 F1
 internal/auth/work_item_grant.go	WorkItemGrantSelectorSet	classify	1	deny	project_only gets the zero (deny) selector set, never All; every work-item read reads nothing for it; c3 CHAOS-12299 r1 F2

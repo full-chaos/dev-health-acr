@@ -29,11 +29,10 @@ type openAPIOperation struct {
 // through the live access check, so they need not list 409 no_repository.
 // Each carries its reason. A stale entry (no such operation) fails the test.
 var noRepositoryExceptions = map[string]string{
-	"GET /api/v1/agent-context/context-packets/{context_packet_id}": "documented but not registered in app.go: no handler, so no access check; move it into protectedRoutes() when a handler is added",
-	"POST /api/v1/oauth/device_approval":                            "not behind protectedRuntimeChain; its 409 is a different code (device authorization state)",
-	"POST /api/v1/auth/credentials/self/rotate":                     "credential lifecycle line, not behind requireLiveAccess; its 409 is credential_lifecycle_conflict",
-	"POST /api/v1/auth/credentials/self/revoke":                     "credential lifecycle line, not behind requireLiveAccess; its 409 is credential_lifecycle_conflict",
-	"POST /api/v1/auth/credentials/self/ack":                        "credential lifecycle line, not behind requireLiveAccess; its 409 is credential_lifecycle_conflict",
+	"POST /api/v1/oauth/device_approval":        "not behind protectedRuntimeChain; its 409 is a different code (device authorization state)",
+	"POST /api/v1/auth/credentials/self/rotate": "credential lifecycle line, not behind requireLiveAccess; its 409 is credential_lifecycle_conflict",
+	"POST /api/v1/auth/credentials/self/revoke": "credential lifecycle line, not behind requireLiveAccess; its 409 is credential_lifecycle_conflict",
+	"POST /api/v1/auth/credentials/self/ack":    "credential lifecycle line, not behind requireLiveAccess; its 409 is credential_lifecycle_conflict",
 }
 
 func loadOpenAPIOperations(t *testing.T) []openAPIOperation {
@@ -221,13 +220,6 @@ func TestExecutedNoRepositoryStatusAgreesWithTheOpenAPI(t *testing.T) {
 	if executed == 0 {
 		t.Fatal("no route was executed")
 	}
-	// The unserved packet read answers no 409 no_repository: that is why it is
-	// an exception, not a protected route.
-	recorder, code := serveProtected(app, harness.tokenA, protectedRoute{http.MethodGet, "/api/v1/agent-context/context-packets/pkt_access_test", ""}, nil)
-	if code == contractsv1.ErrorCodeNoRepository || recorder.Code == http.StatusConflict {
-		t.Errorf("GET context-packets/{id} answered %d %s: it is now served; move it from noRepositoryExceptions into protectedRoutes()", recorder.Code, code)
-	}
-	t.Logf("GET context-packets/{id} with an empty scope: %d %q", recorder.Code, code)
 }
 
 // outsideAccessCheck are routes registerRoutes gives the mux that are not
@@ -246,12 +238,6 @@ var outsideAccessCheck = map[string]string{
 	"POST /device_authorization":                  "OAuth device authorization, unauthenticated",
 	"POST /register":                              "OAuth client registration, unauthenticated",
 	"POST /token":                                 "OAuth token, unauthenticated",
-}
-
-// unservedInTheMux are exception entries that are OpenAPI-only: no handler is
-// registered for them.
-var unservedInTheMux = map[string]bool{
-	"GET /api/v1/agent-context/context-packets/{context_packet_id}": true,
 }
 
 // Every pattern registerRoutes really gives the mux is covered: a protected
@@ -292,11 +278,8 @@ func TestEveryRegisteredRouteIsClassifiedForNoRepository(t *testing.T) {
 			if reason == "" {
 				t.Errorf("%s has no reason", key)
 			}
-			if !covered[key] && !unservedInTheMux[key] {
+			if !covered[key] {
 				t.Errorf("list entry %q is not a registered route", key)
-			}
-			if covered[key] && unservedInTheMux[key] {
-				t.Errorf("list entry %q is registered: drop it from unservedInTheMux", key)
 			}
 		}
 	}

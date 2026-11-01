@@ -109,6 +109,12 @@ func newPhrasingRouteRigWith(t *testing.T, grants *serviceModelGrants, hasBYO, a
 	if err != nil {
 		t.Fatal(err)
 	}
+	suppliedSynthesizer, err := genkitruntime.NewSuppliedSynthesizer(genkitruntime.SuppliedSynthesizerConfig{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	assembly := synthesisprompt.ClientAssembly()
+	assembly.ParseDraft = suppliedSynthesizer.Parse
 	material := contextfabric.StructureOfferMaterial{
 		Missing: []contractsv1.ContextFabricStructureNeedKind{contractsv1.ContextFabricStructureNeedExpectedKind},
 		KindOptions: []contractsv1.ContextFabricKindOption{
@@ -126,7 +132,7 @@ func newPhrasingRouteRigWith(t *testing.T, grants *serviceModelGrants, hasBYO, a
 		}, material: material},
 		Facts: surfaceFacts{t: t},
 		Synthesizer: contextfabric.RuntimeAnswerSynthesizer{
-			Runtime: rig.model, ClientSynthesis: synthesisprompt.ClientAssembly(),
+			Runtime: rig.model, ClientSynthesis: assembly,
 			Options: contextfabric.RuntimeAnswerSynthesizerOptions{ServiceVersion: "phrasing-route", Backend: "test", ProjectionVersion: "projection-v1", QueryVersion: "query-v1"},
 		},
 		Results:      store,
@@ -238,30 +244,15 @@ func TestClarificationOnTheClientPathWithoutTheFeatureIsNeverPhrasedOnTheDeploym
 	}
 }
 
-// The mirror: the same turn for an organization with the feature is phrased
-// once on the deployment model.
-func TestClarificationOnTheClientPathWithTheFeatureIsPhrasedOnTheDeploymentModel(t *testing.T) {
-	rig := newPhrasingRouteRig(t, &serviceModelGrants{feature: true, fallback: true}, false)
-	options := kindOptionsOf(t, rig.post(t))
-	if got := rig.phrasing.count(); got != 1 {
-		t.Fatalf("deployment phrasing calls = %d, want 1", got)
-	}
-	if options[0].Phrasing != phrasedKindLabel {
-		t.Fatalf("kind option phrasing = %q, want %q", options[0].Phrasing, phrasedKindLabel)
-	}
-	if got := serviceModelDecisionBasis(t, rig.logs); len(got) != 1 || got[0] != "platform_model_fallback" {
-		t.Fatalf("decision log bases = %v, want [platform_model_fallback]", got)
-	}
-	if got := phrasingOutcomes(rig.logs); len(got) != 1 || got[0] != string(contextfabric.OfferPhrasingGenerated) {
-		t.Fatalf("phrasing outcomes = %v, want [%s]", got, contextfabric.OfferPhrasingGenerated)
-	}
-}
-
 // newWindowGatePhrasingRig composes the same API and engine for a turn that
 // meets the window gate with subject offers. The interpretation is the
 // organization's own model (a fixed reading here, no model call), so the
 // caller is served on its own model configuration.
 func newWindowGatePhrasingRig(t *testing.T, grants *serviceModelGrants, hasBYO bool) *phrasingRouteRig {
+	return newWindowGatePhrasingRigWith(t, grants, hasBYO, false)
+}
+
+func newWindowGatePhrasingRigWith(t *testing.T, grants *serviceModelGrants, hasBYO, absentDeployment bool) *phrasingRouteRig {
 	t.Helper()
 	logs := &bytes.Buffer{}
 	logger := slog.New(slog.NewJSONHandler(logs, &slog.HandlerOptions{Level: slog.LevelDebug}))
@@ -287,10 +278,14 @@ func newWindowGatePhrasingRig(t *testing.T, grants *serviceModelGrants, hasBYO b
 			Candidates: surfacePool(ciRun, ciRun), Committed: []contextfabric.SubjectRef{},
 			ClarificationPrompt: "Which subject did you mean: Candidate A, Candidate B?",
 		}, material: material},
-		Facts: surfaceFacts{t: t}, Synthesizer: surfaceSynthesizer{t: t},
+		Facts: surfaceFacts{t: t},
+		Synthesizer: contextfabric.RuntimeAnswerSynthesizer{
+			Runtime: rig.model, ClientSynthesis: synthesisprompt.ClientAssembly(),
+			Options: contextfabric.RuntimeAnswerSynthesizerOptions{ServiceVersion: "window-gate-phrasing-route", Backend: "test", ProjectionVersion: "test"},
+		},
 		Results:      store,
 		Telemetry:    contextfabric.NewSlogEngineTelemetry(logger),
-		OfferPhraser: contextfabric.RuntimeOfferPhraser{Runtime: phrasingResolver(rig.phrasing, rig.byo, hasBYO, false, logger), Sink: acceptingSink{}, Logger: logger},
+		OfferPhraser: contextfabric.RuntimeOfferPhraser{Runtime: phrasingResolver(rig.phrasing, rig.byo, hasBYO, absentDeployment, logger), Sink: acceptingSink{}, Logger: logger},
 	}, contextfabric.EngineOptions{
 		ServiceVersion: "window-gate-phrasing-route",
 		Now:            func() time.Time { return time.Date(2026, 8, 13, 12, 0, 0, 0, time.UTC) },
@@ -376,31 +371,17 @@ func TestWindowGateClarificationWithTheFeatureAndAnOwnModelIsPhrasedOnTheOwnMode
 	}
 }
 
-// A caller-model turn for an organization with its own model and the feature
-// on is phrased on the organization's own model, never the deployment's, even
-// with the fallback grant.
-func TestClarificationOnTheClientPathWithAnOwnModelIsPhrasedOnTheOwnModel(t *testing.T) {
-	rig := newPhrasingRouteRig(t, &serviceModelGrants{feature: true, fallback: true}, true)
-	options := kindOptionsOf(t, rig.post(t))
-	if rig.phrasing.count() != 0 || rig.byo.count() != 1 {
-		t.Fatalf("phrasing calls = deployment %d byo %d, want 0 and 1", rig.phrasing.count(), rig.byo.count())
-	}
-	if options[0].Phrasing != phrasedKindLabel {
-		t.Fatalf("kind option phrasing = %q, want %q", options[0].Phrasing, phrasedKindLabel)
-	}
-}
-
 // A deployment with no model runtime and an organization with no model of its
 // own: the offer is served with its structural labels, the outcome is the
 // withheld class (not a failed call), and nothing is refused.
 func TestClarificationWithNoModelConfiguredIsServedWithStructuralLabelsAsWithheld(t *testing.T) {
-	rig := newPhrasingRouteRigWith(t, &serviceModelGrants{feature: true, fallback: true}, false, true)
-	options := kindOptionsOf(t, rig.post(t))
+	rig := newWindowGatePhrasingRigWith(t, &serviceModelGrants{feature: true, fallback: true}, false, true)
+	options := windowGateCandidateOptions(t, rig.postWithoutWindow(t))
 	if rig.phrasing.count() != 0 || rig.byo.count() != 0 {
 		t.Fatalf("phrasing calls = deployment %d byo %d, want 0 and 0", rig.phrasing.count(), rig.byo.count())
 	}
-	if options[0].Label != "a pull request" || options[0].Phrasing != "" {
-		t.Fatalf("kind option = %+v, want the structural label and no phrasing", options[0])
+	if options[0].Phrasing != "" {
+		t.Fatalf("candidate option = %+v, want no phrasing", options[0])
 	}
 	if got := phrasingOutcomes(rig.logs); len(got) != 1 || got[0] != string(contextfabric.OfferPhrasingWithheld) {
 		t.Fatalf("phrasing outcomes = %v, want [%s]", got, contextfabric.OfferPhrasingWithheld)

@@ -24,7 +24,7 @@ func TestApplyOfferPhrasing_WithheldPlatformModelKeepsStructuralLabelsAndReports
 		Missing:     []contractsv1.ContextFabricStructureNeedKind{contractsv1.ContextFabricStructureNeedExpectedKind},
 		KindOptions: []contractsv1.ContextFabricKindOption{{OptionID: "opt_pr", Label: "a pull request", Kind: contractsv1.ContextFabricSubjectPullRequest, OfferSource: contractsv1.ContextFabricStructureOfferEngine, ReceiptID: "kindr_x"}},
 	}
-	got := e.applyOfferPhrasing(context.Background(), storage.Principal{OrgID: "org_1"}, "request_00000001", needs)
+	got := e.applyOfferPhrasing(context.Background(), storage.Principal{OrgID: "org_1"}, InvestigationRequest{RequestID: "request_00000001"}, needs)
 	if got.KindOptions[0].Phrasing != "" || got.KindOptions[0].Label != "a pull request" {
 		t.Fatalf("KindOptions[0] = %+v, want the structural label and no phrasing", got.KindOptions[0])
 	}

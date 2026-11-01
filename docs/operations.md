@@ -492,6 +492,19 @@ sets of the issues linked to it by `work_graph_issue_pr` rows (CHAOS-12308),
 with the weakest contributing link tier in `property_project_membership_tier`,
 and adds `pull_requests_project_membership`, which re-emits a pull request when
 a link row of it, a linked issue or a linked issue's membership input moves.
+The refresh follows the project catalog by content, not by its stamp
+(CHAOS-12410): a project sync that changes no `(provider, id, project_key)`
+re-emits no subject, and one that does re-states every subject of the
+organization once, because the digest on the cursor cannot name the project
+that changed. `projects.last_synced` keeps its meaning, and the ownership cursor
+keeps reading it. A cursor from before this digest reads as absent, so the
+first tick after the deploy with the flag on owes one full refresh; that is
+within the rebuild of the roll step. Once a day the same full refresh runs
+whatever the digest says, so a row that lands behind the cursor past the 15
+minutes of overlap, a retraction included, is repaired on a schedule: it is a
+code constant, not a setting. Each refresh logs `context fabric: membership
+refresh of every subject owed`, with its reason (`catalog_changed`,
+`digest_absent` or `daily`).
 The Info line `context fabric: pull request project membership stated` counts
 them by tier, and a pull request that lost a link and went back to unstated is
 counted by `context fabric: pull requests returned to unstated project
@@ -502,6 +515,16 @@ no project (fail closed). **Any later change of the flag goes with a rebuild in
 the same roll:** while the flag is off, membership changes are not followed,
 and every later work-item write removes the value, so a value written while it
 was on can be stale for a work item not written since.
+
+**The project-only scope has a fixed roll order (CHAOS-12301).** acr with the
+`project_scope` decoder goes live in production first; only then does ops turn on
+`ACR_ACCESS_PROJECT_SCOPE`. The reverse order fails closed: an older acr refuses
+the unknown field, so every user-class call in an organization with no repository
+inventory is a 503 until acr catches up. With the flag off, nothing changes. An
+organization then needs the work-item project membership roll step above: without
+it a project-only caller reads its projects and no work item. A `503` with reason
+`project_scope_over_limit` or `repository_scope_over_limit` in `principal access
+read refused` is an inventory above 100, not an outage.
 
 **A rebuild is likewise REQUIRED after deploying CHAOS-3835**
 (embed composition tag `t2` → `t3`, the T5 id-only skip decision —

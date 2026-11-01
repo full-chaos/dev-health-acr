@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/identity"
@@ -61,15 +62,15 @@ func queryWorkItemsWithMembership(ctx context.Context, client contextpacket.Clic
 // work item itself syncing:
 //   - a transition ingested for it (an add, a move, a REMOVE, the loss of its
 //     last project);
-//   - a change to a project its membership names, by id or by any key the
-//     project carries in an unmerged version (resolution, ambiguity, rename).
+//   - a change to the project catalog (resolution, ambiguity, rename), which
+//     re-states every subject once (project_catalog.go).
 //
 // A change to the work item's own project_id column moves w.last_synced and
 // is already re-read by queryWorkItems.
 func queryWorkItemMembershipChanges(ctx context.Context, client contextpacket.ClickHouseQueryClient, orgID string, cursor cursorState, limit int) ([]candidate, bool, error) {
 	statement := workItemColumns + `, c.membership_changed_at
 FROM work_items AS w FINAL
-INNER JOIN ` + workItemMembershipChangesSubquery(cursor) + ` AS c ON c.repo_id = w.repo_id AND c.subject_id = w.work_item_id
+INNER JOIN ` + workItemMembershipChangesSubquery(cursor, projectRefreshFrom(ctx)) + ` AS c ON c.repo_id = w.repo_id AND c.subject_id = w.work_item_id
 LEFT JOIN repos AS r FINAL ON r.id = w.repo_id AND r.org_id = w.org_id
 WHERE w.org_id = {org_id:String}` + sincePredicate(cursor, "c.membership_changed_at", workItemRowKey) + orderBy("c.membership_changed_at", workItemRowKey)
 	items, truncated, err := fetchIngest(ctx, client, statement, rowLimitBindings(orgID, cursor, limit), limit, scanWorkItemRow)
@@ -86,31 +87,17 @@ WHERE w.org_id = {org_id:String}` + sincePredicate(cursor, "c.membership_changed
 // membership-input stamp. With a cursor, each arm keeps only stamps at or
 // after it, so a work item none of them stamped since yields no row; the
 // latest kept stamp is then the latest overall for every work item kept.
-func workItemMembershipChangesSubquery(cursor cursorState) string {
-	transitionsSince, projectsSince := "", ""
+func workItemMembershipChangesSubquery(cursor cursorState, refreshAt time.Time) string {
+	transitionsSince := ""
 	if !cursor.Since.IsZero() {
 		transitionsSince = " AND ingested_at >= " + sinceBoundSQL
-		projectsSince = " HAVING changed_at >= " + sinceBoundSQL
 	}
 	return `(
   SELECT repo_id, subject_id, max(stamp) ` + workItemMembershipRefreshMarker + `
   FROM (
     SELECT repo_id, subject_id, ingested_at AS stamp
     FROM project_membership_transitions
-    WHERE org_id = {org_id:String} AND subject_kind = 'work_item'` + transitionsSince + `
-    UNION ALL
-    SELECT m.repo_id AS repo_id, m.subject_id AS subject_id, pc.changed_at AS stamp
-    FROM project_membership_presence AS m
-    INNER JOIN (
-      SELECT provider, arrayJoin(keys) AS join_key, changed_at
-      FROM (
-        SELECT provider, arrayDistinct(arrayConcat([id], groupArrayIf(ifNull(project_key, ''), ifNull(project_key, '') != ''))) AS keys, max(last_synced) AS changed_at
-        FROM projects
-        WHERE org_id = {org_id:String}
-        GROUP BY provider, id` + projectsSince + `
-      )
-    ) AS pc ON pc.provider = m.provider AND pc.join_key = m.project_id
-    WHERE m.org_id = {org_id:String} AND m.subject_kind = 'work_item'
+    WHERE org_id = {org_id:String} AND subject_kind = 'work_item'` + transitionsSince + projectRefreshArm(cursor, refreshAt) + `
   )
   GROUP BY repo_id, subject_id
 )`

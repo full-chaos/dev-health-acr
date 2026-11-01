@@ -591,6 +591,7 @@ There is no cache across calls; inside one request the read is reused. The
 | not a member; impersonating (`impersonating` or `session.impersonating`); browser session not live; Dev Health 404 `acr_organization_unknown` (a user Dev Health does not know is `member: false`) or 400 `acr_access_invalid_sid`; a user-class row without an approving user, or a browser row without a session | 403 `access_denied`. One code for every reason, so the answer says nothing about which exists; the reason is on the Info line `principal access read refused` and on the `access_denied` audit row |
 | `agent_context_runtime` off, or `ask_dev` off for the browser class | 403 `feature_not_enabled` (audit `entitlement_denied`, `source=principal_access`), on every route but capabilities: `GET /api/v1/agent-context/capabilities` is how a client learns what is enabled, so it answers 200 with `entitlements.agent_context_runtime` from this read (false, no tool enabled) and still refuses the rows above |
 | effective scope empty | 409 `no_repository` |
+| an inventory above its limit: a 503 with `acr_access_project_scope_over_limit` or `acr_access_repository_scope_over_limit` | 503 `upstream_unavailable`, `retryable: false`, audit `access_denied` and an Info `principal access read refused` line with reason `project_scope_over_limit` or `repository_scope_over_limit`. Nothing is admitted, and a retry cannot clear it |
 | read failed: transport, timeout, a 404 without `acr_organization_unknown` (a route this Dev Health does not serve), any other status, a body that is not exactly `acr_principal_access.v1` for this org, user and session | 503 `upstream_unavailable` (Error line `principal access read failed` with the rejection reason); never 401, never a stale answer |
 
 A granted read writes one Debug line, `principal access read granted`, with
@@ -607,7 +608,11 @@ organization's live inventory: every inventory repository the grant allows
 (`*` allows all of them, `owner/*` that owner's), normalized and sorted. The
 handler runs with the principal narrowed to that list. An empty list is a typed
 deny-all, refused 409 `no_repository` before any handler: the principal's
-scopes are never set to `[]`, which reads as unrestricted downstream.
+scopes are never set to `[]`, which reads as unrestricted downstream. The one
+exception is an organization with no repository inventory whose read carries
+`project_scope`: a `*` grant becomes `project_only` on those projects, and every
+other grant stays 409 `no_repository` (CHAOS-12301; see
+[the project-only design](design/context-fabric-project-only-scope.md#admission)).
 
 The OpenAPI lists this 409 on every route behind the access check (every
 route in `protectedRoutes()`); `TestEveryProtectedRouteListsNoRepositoryInTheOpenAPI`

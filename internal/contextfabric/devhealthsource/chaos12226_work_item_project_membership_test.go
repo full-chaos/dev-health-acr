@@ -1,8 +1,10 @@
 package devhealthsource_test
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"log/slog"
 	"reflect"
 	"strings"
 	"testing"
@@ -240,5 +242,45 @@ func TestAProjectWhoseIdentityHoldsASeparatorIsLeftOut(t *testing.T) {
 	}
 	if !reflect.DeepEqual(*entity.ProjectIdentities, []string{"project.v2:github:P-3"}) {
 		t.Fatalf("ProjectIdentities = %v, want only [project.v2:github:P-3]", *entity.ProjectIdentities)
+	}
+}
+
+// CHAOS-12410: a refresh is logged by the batch that commits it. A peek commits
+// nothing, so it logs nothing, and the call after it does.
+func TestAPeekLogsNoRefreshAndTheCommittingCallDoes(t *testing.T) {
+	t.Parallel()
+	const line = "context fabric: membership refresh of every subject owed"
+	at := time.Date(2026, 10, 31, 9, 0, 0, 0, time.UTC)
+	tables := append(chaos12226Tables(at, nil, nil), fakeTable{match: workItemMembershipRefreshMarker, rows: [][]any{
+		{"WIDGET-101", "repo-1", "example-org/widget-service", "Investigate checkout flake", "in_progress", "", at, at, uint8(0), zeroTime, "bug", "CHAOS", "Widget Reliability", []string{"checkout", "flake"}, at.Add(time.Hour)},
+	}})
+	var logged bytes.Buffer
+	source, err := devhealthsource.NewClickHouseProjectionSource(&fakeClient{tables: tables})
+	if err != nil {
+		t.Fatalf("new source: %v", err)
+	}
+	source.WithWorkItemProjectMembership(true)
+	source.WithLogger(slog.New(slog.NewJSONHandler(&logged, nil)))
+	ctx := context.Background()
+	first, available, err := source.NextProjectionBatch(ctx, contextfabric.ProjectionCheckpoint{OrgID: "org-1", Source: devhealthsource.SourceName})
+	if err != nil || !available {
+		t.Fatalf("first batch: %v, %v", available, err)
+	}
+	if strings.Contains(logged.String(), line) {
+		t.Fatalf("a from-zero read owes no refresh: %s", logged.String())
+	}
+	checkpoint := contextfabric.ProjectionCheckpoint{OrgID: "org-1", Source: devhealthsource.SourceName, Cursor: chaos12410WithField(t, first.NextCursor, "")}
+	peeked, err := source.PeekProjectionBatch(ctx, checkpoint)
+	if err != nil || !peeked {
+		t.Fatalf("premise: the peek found a batch: %v, %v", peeked, err)
+	}
+	if strings.Contains(logged.String(), line) {
+		t.Fatalf("a peek logged a refresh it did not commit: %s", logged.String())
+	}
+	if _, available, err := source.NextProjectionBatch(ctx, checkpoint); err != nil || !available {
+		t.Fatalf("second batch: %v, %v", available, err)
+	}
+	if !strings.Contains(logged.String(), line) {
+		t.Fatalf("the committing call logged no refresh: %s", logged.String())
 	}
 }
