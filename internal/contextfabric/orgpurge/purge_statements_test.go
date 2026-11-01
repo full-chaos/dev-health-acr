@@ -1,6 +1,7 @@
 package orgpurge
 
 import (
+	storagepostgres "github.com/full-chaos/dev-health-acr/internal/storage/postgres"
 	"reflect"
 	"strings"
 	"testing"
@@ -63,6 +64,20 @@ func TestThePurgeRoleGainsOnlySelectAndInsertOnTheOutbox(t *testing.T) {
 			if table == "credential_lifecycle_outbox" && (privilege == "UPDATE" || privilege == "DELETE") {
 				t.Errorf("%s holds %s", table, privilege)
 			}
+		}
+	}
+}
+
+func TestTheStatementSetListsEveryOutboxStatementTheWriterIssues(t *testing.T) {
+	listed := map[string]bool{}
+	for _, statement := range Statements() {
+		listed[statement] = true
+	}
+	for name, statement := range map[string]string{
+		"max revision": storagepostgres.LifecycleOutboxMaxRevisionSQL, "latest event": storagepostgres.LifecycleOutboxLatestEventSQL, "insert": storagepostgres.LifecycleOutboxInsertSQL,
+	} {
+		if !listed[statement] {
+			t.Errorf("the %s statement the lifecycle writer issues is not in Statements(): the purge role's privileges would not be derived from it", name)
 		}
 	}
 }

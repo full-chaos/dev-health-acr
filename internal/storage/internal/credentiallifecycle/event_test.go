@@ -291,6 +291,20 @@ type fakeSink struct {
 	failInsert int
 	inserts    int
 	maxErr     error
+	latestErr  error
+}
+
+func (s *fakeSink) LatestEventType(_ context.Context, id string) (string, error) {
+	if s.latestErr != nil {
+		return "", s.latestErr
+	}
+	latest, revision := "", 0
+	for _, r := range s.rows {
+		if r.AggregateID == id && r.Revision > revision {
+			latest, revision = r.EventType, r.Revision
+		}
+	}
+	return latest, nil
 }
 
 func (s *fakeSink) MaxRevision(_ context.Context, id string) (int, error) {
@@ -367,8 +381,8 @@ func TestRevokeOfALegacyCredentialWritesFirstTouchThenTheEvent(t *testing.T) {
 	if err := Append(context.Background(), sink, Facts{Kind: KindRevoked, Credential: cred, At: at, Actor: Actor{ActorUser, "admin"}}); err != nil {
 		t.Fatal(err)
 	}
-	if got := revisions(sink, cred.CredentialID); len(got) != 3 || got[2] != 3 {
-		t.Fatalf("a later event after first touch must be rev 3, got %v", got)
+	if got := revisions(sink, cred.CredentialID); len(got) != 2 {
+		t.Fatalf("a second revoked on a revoked aggregate writes nothing (one terminal row per credential), got %v", got)
 	}
 }
 
@@ -538,5 +552,133 @@ func TestFamilyMemberActorKeepsEveryActorButTheCredentialItself(t *testing.T) {
 		if got := FamilyMemberActor(tc.in); got != tc.want {
 			t.Errorf("%s: %+v, want %+v", name, got, tc.want)
 		}
+	}
+}
+
+func expiringCredential(id string) contractsv1.ClientCredential {
+	c := legacyCredential(id)
+	expires := time.Date(2026, 11, 1, 9, 0, 0, 0, time.UTC)
+	c.ExpiresAt = &expires
+	return c
+}
+
+func TestExpiredEventsAreValidAgainstTheVendoredContractAndCarryTheCredentialsExpiry(t *testing.T) {
+	resolved := vendoredSchema(t)
+	at := time.Date(2026, 11, 1, 9, 0, 30, 0, time.UTC)
+	for name, c := range map[string]contractsv1.ClientCredential{
+		"native device": expiringCredential("cred_exp0000000001"),
+		"workload": func() contractsv1.ClientCredential {
+			c := expiringCredential("cred_exp0000000002")
+			binding := "binding-1"
+			c.WorkloadBindingID, c.Provenance = &binding, contractsv1.CredentialProvenance{ClientClass: "workload"}
+			return c
+		}(),
+		"rotated parent (expiry cut at the overlap end)": expiringCredential("cred_exp0000000003"),
+	} {
+		row, err := BuildRow(Facts{Kind: KindExpired, Revision: 2, Credential: c, At: at, Actor: Actor{Type: ActorSystem}})
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		assertContractValid(t, resolved, row)
+		var wire struct {
+			EventType string `json:"event_type"`
+			CreatedAt string `json:"created_at"`
+			Payload   struct {
+				ActorType string `json:"actor_type"`
+				ActorRef  string `json:"actor_ref"`
+				Change    struct {
+					Status    string   `json:"status"`
+					ExpiresAt string   `json:"expires_at"`
+					Class     string   `json:"acr_class"`
+					Scopes    []string `json:"scopes"`
+				} `json:"change"`
+			} `json:"payload"`
+		}
+		if err := json.Unmarshal(row.Payload, &wire); err != nil {
+			t.Fatal(err)
+		}
+		if wire.EventType != "acr_credential.expired" || wire.CreatedAt != "2026-11-01T09:00:30Z" || wire.Payload.ActorType != "system" || wire.Payload.ActorRef != "" ||
+			wire.Payload.Change.Status != "expired" || wire.Payload.Change.ExpiresAt != "2026-11-01T09:00:00Z" || wire.Payload.Change.Class != "" || len(wire.Payload.Change.Scopes) != 0 {
+			t.Errorf("%s: expired event = %s (created_at is the tick time, change.expires_at the credential's expiry, no class or scopes)", name, row.Payload)
+		}
+	}
+}
+
+func TestTheMapperRefusesWhatTheContractRefusesForExpired(t *testing.T) {
+	at := time.Now()
+	noExpiry := legacyCredential("cred_exp0000000004")
+	noExpiry.ExpiresAt = nil
+	for name, f := range map[string]Facts{
+		"a user actor":                {Kind: KindExpired, Revision: 2, Credential: expiringCredential("cred_exp0000000005"), At: at, Actor: Actor{ActorUser, "admin"}},
+		"an operator actor":           {Kind: KindExpired, Revision: 2, Credential: expiringCredential("cred_exp0000000005"), At: at, Actor: Actor{ActorOperator, "op"}},
+		"a credential actor":          {Kind: KindExpired, Revision: 2, Credential: expiringCredential("cred_exp0000000005"), At: at, Actor: Actor{Type: ActorCredential}},
+		"a system actor ref":          {Kind: KindExpired, Revision: 2, Credential: expiringCredential("cred_exp0000000005"), At: at, Actor: Actor{ActorSystem, "x"}},
+		"revision 1":                  {Kind: KindExpired, Revision: 1, Credential: expiringCredential("cred_exp0000000005"), At: at, Actor: Actor{Type: ActorSystem}},
+		"no revision":                 {Kind: KindExpired, Credential: expiringCredential("cred_exp0000000005"), At: at, Actor: Actor{Type: ActorSystem}},
+		"a credential with no expiry": {Kind: KindExpired, Revision: 2, Credential: noExpiry, At: at, Actor: Actor{Type: ActorSystem}},
+	} {
+		if row, err := BuildRow(f); err == nil {
+			t.Errorf("%s: built %s, want an error", name, row.Payload)
+		}
+	}
+}
+
+func TestAppendExpiredWritesTheFirstTouchThenTheEventAndNothingTheSecondTime(t *testing.T) {
+	sink := &fakeSink{}
+	c := expiringCredential("cred_exp0000000006")
+	facts := Facts{Kind: KindExpired, Credential: c, At: time.Date(2026, 11, 1, 9, 0, 30, 0, time.UTC), Actor: Actor{Type: ActorSystem}}
+	for i := 0; i < 3; i++ {
+		if err := Append(context.Background(), sink, facts); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if got := revisions(sink, c.CredentialID); len(got) != 2 || got[0] != 1 || got[1] != 2 {
+		t.Fatalf("revisions = %v, want [1 2]: the first touch, then ONE expired however many times Append runs", got)
+	}
+	if sink.rows[1].EventType != "acr_credential.expired" {
+		t.Fatalf("row 2 = %s", sink.rows[1].EventType)
+	}
+}
+
+func TestAppendOfATerminalKindOnATerminalAggregateWritesNothingAndSucceeds(t *testing.T) {
+	for name, tc := range map[string]struct {
+		first, second EventKind
+	}{
+		"revoked after expired": {KindExpired, KindRevoked},
+		"expired after revoked": {KindRevoked, KindExpired},
+		"revoked after revoked": {KindRevoked, KindRevoked},
+		"expired after expired": {KindExpired, KindExpired},
+	} {
+		sink := &fakeSink{}
+		c := expiringCredential("cred_exp0000000007")
+		at := time.Date(2026, 11, 1, 9, 0, 30, 0, time.UTC)
+		if err := Append(context.Background(), sink, Facts{Kind: tc.first, Credential: c, At: at, Actor: Actor{Type: ActorSystem}}); err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		before := len(sink.rows)
+		if err := Append(context.Background(), sink, Facts{Kind: tc.second, Credential: c, At: at, Actor: Actor{Type: ActorSystem}}); err != nil {
+			t.Errorf("%s: the second terminal must succeed silently, got %v", name, err)
+		}
+		if len(sink.rows) != before {
+			t.Errorf("%s: wrote a second terminal row: %d rows, want %d", name, len(sink.rows), before)
+		}
+	}
+}
+
+func TestANewAggregateAndANonTerminalLatestEventStillTakeATerminal(t *testing.T) {
+	sink := &fakeSink{}
+	c := expiringCredential("cred_exp0000000008")
+	if err := Append(context.Background(), sink, Facts{Kind: KindRevoked, Credential: c, At: time.Now(), Actor: Actor{ActorUser, "admin"}}); err != nil {
+		t.Fatal(err)
+	}
+	if got := revisions(sink, c.CredentialID); len(got) != 2 {
+		t.Fatalf("revisions = %v, want the first touch and the revoked row", got)
+	}
+}
+
+func TestAppendSurfacesAFailureToReadTheLatestEvent(t *testing.T) {
+	sink := &fakeSink{latestErr: errors.New("read failed")}
+	if err := Append(context.Background(), sink, Facts{Kind: KindExpired, Credential: expiringCredential("cred_exp0000000009"), At: time.Now(), Actor: Actor{Type: ActorSystem}}); err == nil {
+		t.Fatal("a failed latest-event read must fail the append, never write blind")
 	}
 }

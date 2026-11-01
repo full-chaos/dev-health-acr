@@ -365,6 +365,28 @@ runtime-equivalence violation and fails closed here.
 Device-verification URL guard. The hosted runtime requires an absolute browser
 URL whenever backing stores are enabled.
 */}}
+{{- /*
+acr.runLeaseEnabled is the run lease flag. It refuses the render when the lease
+is on and the event stream is not: acr-api would refuse to start
+(internal/config/hosted_runtime.go), and a green render would be a crash loop.
+*/ -}}
+{{- define "acr.runLeaseEnabled" -}}
+{{- $on := .Values.contextFabric.runLeaseEnabled | default false -}}
+{{- if $on -}}
+{{- $stream := false -}}
+{{- /* The spellings of strconv.ParseBool; the last entry of a name wins, as in a pod. */ -}}
+{{- range .Values.deployment.extraEnv -}}
+{{- if eq .name "ACR_CONTEXT_FABRIC_EVENT_STREAM_ENABLED" -}}
+{{- $stream = has (toString .value) (list "1" "t" "T" "TRUE" "true" "True") -}}
+{{- end -}}
+{{- end -}}
+{{- if not $stream -}}
+{{- fail "contextFabric.runLeaseEnabled needs ACR_CONTEXT_FABRIC_EVENT_STREAM_ENABLED=true, a literal value in deployment.extraEnv: acr-api refuses to start without it" -}}
+{{- end -}}
+{{- end -}}
+{{- $on -}}
+{{- end -}}
+
 {{- define "acr.validateDeviceVerificationURL" -}}
 {{- $url := .Values.config.deviceVerificationUrl | default "" -}}
 {{- if and .Values.config.requireBackingStores (not (regexMatch "^https?://[^[:space:]/?#]+(:[0-9]+)?([/?#][^[:space:]]*)?$" $url)) -}}
@@ -528,22 +550,24 @@ consent page /authorize sends the browser to.
 {{- define "acr.validateOAuth" -}}
 {{- $o := .Values.config.oauth -}}
 {{- $w := .Values.config.webAssertion -}}
-{{- if not (regexMatch "^https://[^/?#]+$" ($o.issuer | default "")) -}}
-{{- fail (printf "oauth: config.oauth.issuer %q must be an https origin with no path" ($o.issuer | default "")) -}}
+{{- /* http on a loopback host only: the rule of acr-api (internal/config/oauth.go) and acr-mcp (internal/mcp/http_oauth.go). */ -}}
+{{- $loopback := `http://(localhost|127\.0\.0\.1|\[::1\])(:[0-9]+)?` -}}
+{{- if not (regexMatch (printf "^(https://[^/?#]+|%s)$" $loopback) ($o.issuer | default "")) -}}
+{{- fail (printf "oauth: config.oauth.issuer %q must be an https origin with no path, or http on a loopback host" ($o.issuer | default "")) -}}
 {{- end -}}
 {{- if not $o.resources -}}
 {{- fail "oauth: config.oauth.resources must list at least one hosted MCP URL" -}}
 {{- end -}}
 {{- range $o.resources -}}
-{{- if not (regexMatch "^https://[^?#]+$" .) -}}
-{{- fail (printf "oauth: config.oauth.resources entry %q must be an https URL without query or fragment" .) -}}
+{{- if not (regexMatch (printf "^(https://[^?#]+|%s(/[^?#]*)?)$" $loopback) .) -}}
+{{- fail (printf "oauth: config.oauth.resources entry %q must be an https URL without query or fragment, or http on a loopback host" .) -}}
 {{- end -}}
 {{- end -}}
 {{- if not (and $w.issuer $w.audience $w.existingSecret) -}}
 {{- fail "oauth: config.oauth.enabled requires config.webAssertion.issuer, audience and existingSecret (consent is approved on the web approval page)" -}}
 {{- end -}}
-{{- if not (regexMatch "^https://[^/?#@]+/[^?#]+$" ($o.consentUrl | default "")) -}}
-{{- fail (printf "oauth: config.oauth.consentUrl %q must be the web consent page, an https URL with a path and no query or fragment" ($o.consentUrl | default "")) -}}
+{{- if not (regexMatch (printf "^(https://[^/?#@]+|%s)/[^?#]+$" $loopback) ($o.consentUrl | default "")) -}}
+{{- fail (printf "oauth: config.oauth.consentUrl %q must be the web consent page, an https URL with a path and no query or fragment, or http on a loopback host" ($o.consentUrl | default "")) -}}
 {{- end -}}
 {{- end -}}
 
