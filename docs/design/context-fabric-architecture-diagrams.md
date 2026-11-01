@@ -776,7 +776,10 @@ narrowed the same way before they set the population, and its count-only
 disclosures are read inside the narrowing too (CHAOS-12352): the measured zero,
 the outside-the-set count (a missing ownership makes it a lower bound, never a
 floor), and the pool cut, whose total is stated only when every committed anchor
-is currently owned by a requested team. Each such read logs one
+is a repository currently owned by a requested team, or a requested team. An
+owned project's total is not stated: its pull requests follow their own
+repository's owner (CHAOS-12357). The kind census's declared figure counts the
+candidates inside the narrowing. Each such read logs one
 `contextfabric.team_narrowing_general_read` line (requested teams, subjects
 decided, subjects excluded, and the floor value; log-only).
 
