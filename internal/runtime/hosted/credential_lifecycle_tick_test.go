@@ -100,6 +100,10 @@ func TestTheLifecycleTickWarnsWithTheSkipCountAndNeverNamesACredentialOnEveryTic
 	if strings.Contains(out, "cred_bad") || strings.Contains(out, "aggregate_id") || strings.Contains(out, "credential_id") {
 		t.Errorf("the warning names no credential: %s", out)
 	}
+	wantLine := `level=WARN msg="` + credentialLifecycleTickSkippedMessage + `" reason=empty_scope skipped=2`
+	if !strings.Contains(out, wantLine+"\n") {
+		t.Errorf("the warning is the closed reason and the count, exactly %q: %s", wantLine, out)
+	}
 	if got := strings.Count(out, credentialLifecycleTickSkippedMessage); got != 1 {
 		t.Errorf("one warning per tick, got %d: %s", got, out)
 	}
