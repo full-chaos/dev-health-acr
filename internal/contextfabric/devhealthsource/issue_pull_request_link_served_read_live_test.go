@@ -34,10 +34,10 @@ import (
 // DirectEdgePage as a seed guard, so the test cannot pass on an empty store.
 //
 // A repository-less issue (zero UUID repo_id) is stored with the authorization
-// sentinel "acr-context-fabric:no-repository". read_relationships has NO
-// "admitted by its link to a granted pull request" rule (that rule lives only
-// in falkorgraph/tree_walk.go admitted()), so a restricted caller never sees
-// that issue or its edge through this tool, from either side.
+// sentinel "acr-context-fabric:no-repository". CHAOS-12456 ruling (a) admits it
+// by a native link of record to a pull request of a granted repository, so a
+// caller granted acme/svc sees that issue and its edge from either side, and a
+// caller granted only acme/other sees neither.
 //
 // Needs Docker (ClickHouse and FalkorDB containers). Written to be run by CI
 // or by the lane owner; not run in the authoring sandbox.
@@ -289,13 +289,11 @@ func TestIssuePullRequestLinkServedReadAuthorizationOnRealStores(t *testing.T) {
 				}
 			})
 			run(t, principal, []readCase{
-				// svc edge visible, with its tier; the repo-less issue's edge is dropped.
-				with(pr(idPRSvc, "in"), "pr svc side", func(c *readCase) {
-					c.want, c.hidden, c.withheld = []edgeWant{edgeOwn}, []string{idLess}, 1
-				}),
+				// both svc edges visible, with their tier: the repo-less issue's
+				// native link to a granted repository admits it.
+				with(pr(idPRSvc, "in"), "pr svc side", func(c *readCase) { c.want = []edgeWant{edgeOwn, edgeLess} }),
 				with(iss(idOwn), "issue own side", func(c *readCase) { c.want = []edgeWant{edgeOwn} }),
-				// the repo-less issue is refused as a root: no rule of read_relationships admits it.
-				with(iss(idLess), "issue repo-less side", func(c *readCase) { c.denied = true }),
+				with(iss(idLess), "issue repo-less side", func(c *readCase) { c.want = []edgeWant{edgeLess} }),
 				cross, prOther,
 			})
 		})

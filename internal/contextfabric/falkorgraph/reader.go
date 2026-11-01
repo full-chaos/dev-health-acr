@@ -85,10 +85,11 @@ func (a *Adapter) ResolveSubjects(ctx context.Context, principal storage.Princip
 	}
 	// CHAOS-7080: a repository-restricted caller's reads see each project's
 	// live ownership reach in place of its "*" (project_reach.go).
-	ctx, err = a.withProjectReach(ctx, key, principal)
+	ctx, finish, err := a.withProjectReach(ctx, key, principal)
 	if err != nil {
 		return contextfabric.SubjectResolution{}, contextfabric.StructureOfferMaterial{}, nil, nil, err
 	}
+	defer finish()
 	// One fence verification per resolution, not per term (codex round-2
 	// R2-1). Scoped to this call and never shared across requests.
 	fence := &resolutionFence{}
@@ -298,6 +299,9 @@ func (a *Adapter) ResolveSubjects(ctx context.Context, principal storage.Princip
 		// round on "stalled resolution only" and adds the 3s deadline +
 		// panic recovery, so nothing extra is needed here.
 		CensusFunc: a.config.CensusFunc,
+		// CHAOS-12456: a failed link read leaves a repo-less work item unknown,
+		// and the terminal says so.
+		WorkItemLinksUnread: func() bool { return linkReachError(ctx) != nil },
 		// The work items of a requested repository scope: the same
 		// repository-to-issue walk that serves a repository's work items.
 		LinkScopedWorkItems: func(ctx context.Context, scope contextfabric.RequestedScope) (map[string]string, bool, error) {
@@ -529,7 +533,7 @@ func (a *Adapter) ResolveSubjects(ctx context.Context, principal storage.Princip
 	return resolution, offers, bases, digests, graphNotProjectedError(err)
 }
 
-func (a *Adapter) DiscoverContext(ctx context.Context, principal storage.Principal, request contextfabric.GraphDiscoveryRequest) (contextfabric.GraphContext, error) {
+func (a *Adapter) DiscoverContext(ctx context.Context, principal storage.Principal, request contextfabric.GraphDiscoveryRequest) (discovered contextfabric.GraphContext, err error) {
 	if strings.TrimSpace(principal.OrgID) == "" {
 		return contextfabric.GraphContext{}, errors.New("authenticated organization is required")
 	}
@@ -546,10 +550,14 @@ func (a *Adapter) DiscoverContext(ctx context.Context, principal storage.Princip
 	}
 	// CHAOS-7080: a repository-restricted caller's reads see each project's
 	// live ownership reach in place of its "*" (project_reach.go).
-	ctx, err = a.withProjectReach(ctx, key, principal)
+	ctx, finish, err := a.withProjectReach(ctx, key, principal)
 	if err != nil {
 		return contextfabric.GraphContext{}, err
 	}
+	defer finish()
+	// CHAOS-12456: the turn states a failed link read. Most of a turn's reads run
+	// in this call, after the resolution closed.
+	defer func() { discovered.WorkItemLinksUnread = linkReachError(ctx) != nil }()
 	scope := request.Request.RequestedScope
 	temporal := newTemporalFilter(request.Interpretation.TimeContext)
 

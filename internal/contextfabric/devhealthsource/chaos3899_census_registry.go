@@ -18,6 +18,10 @@ import (
 type CensusPredicate struct {
 	SQL      string
 	Bindings []contextpacket.ClickHouseBinding
+	// MaxRowsToRead, when set, bounds every statement of the read. ClickHouse
+	// counts each relation a statement reads, joined or subqueried, so a
+	// predicate that reads more than the base table sets it.
+	MaxRowsToRead uint64
 }
 
 // censusKindRegistryEntry is the closed, BASE-TABLE-ONLY per-kind census

@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric/identity"
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
 	"github.com/full-chaos/dev-health-acr/internal/testsupport/userprincipal"
@@ -61,7 +62,7 @@ func (s *grantCensusSpy) census(ctx context.Context, _ string, kind CensusKind, 
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.calls = append(s.calls, grantCensusCall{kind, value, handleBound, anchorBound, grant, bound, filter})
-	if bound && kind == contextfabric.SubjectWorkItem {
+	if bound && kind == contextfabric.SubjectWorkItem && !handleBound {
 		return CensusOutcome{}, ErrCensusGrantNotApplied
 	}
 	var ids []string
@@ -559,42 +560,366 @@ func TestUnrestrictedCensusIsByteIdentical(t *testing.T) {
 	}
 }
 
-// PR2 owns the work-item read. Until then a work-item census for a restricted
-// caller is refused, for every provider's handle: the round stays a
-// clarification and nothing reads the organization.
-func TestAWorkItemCensusForARestrictedCallerIsRefusedForEveryProvider(t *testing.T) {
+// repoLessItem is the node of a repo-less work item for a restricted caller: the
+// sentinel, and the attribute the read adds when a native link reaches a granted
+// repository (falkorgraph link_reach.go).
+func repoLessItem(id, label string, linked ...string) CandidateNode {
+	node := candidateNode(contextfabric.SubjectWorkItem, id, label, 0.5, []string{contractsv1.ContextFabricNoRepositorySentinel})
+	if len(linked) > 0 {
+		node.Attributes[AuthorizationLinkRepositoriesAttr] = linked
+	}
+	return node
+}
+
+// resolveWorkItem runs one turn on a question that names key, with the search
+// reaching nothing, so the census is the only way in.
+func resolveWorkItem(t *testing.T, principal storage.Principal, key string, census CensusFunc, nodes ...CandidateNode) (contextfabric.SubjectResolution, contextfabric.StructureOfferMaterial, *captureResolutionTracer) {
+	t.Helper()
+	hints := map[string]CandidateNode{}
+	for _, node := range nodes {
+		id, _ := node.Attributes["canonical_id"].(string)
+		hints[SubjectKey(contextfabric.SubjectRef{Kind: contextfabric.SubjectWorkItem, CanonicalID: id})] = node
+	}
+	backend := &fakeGraphBackend{searchResults: map[string][]CandidateNode{}, searchTruncated: true, exactHints: hints}
+	deps := backend.deps()
+	tracer := &captureResolutionTracer{}
+	deps.ResolutionTracer = tracer
+	deps.CensusFunc = census
+	deps.HandleGrammarChecker = func(kind contextfabric.SubjectKind, patternID, value string) (string, bool) {
+		return "work_items.work_item_id", ValidateHandleGrammar(kind, patternID, value)
+	}
+	request := testRequest()
+	request.Question = "why is " + key + " blocked?"
+	resolution, offers, _, _, err := ResolveSubjectsWithCommitBasis(context.Background(), principal, request, testInterpreted(key), deps, nil, nil, nil, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	return resolution, offers, tracer
+}
+
+// The rescue of a work-item handle, for each provider whose id the handle can
+// reach. A linked item commits through the census.
+func TestTheCensusRescuesAWorkItemHandleForARestrictedCaller(t *testing.T) {
 	t.Parallel()
-	for provider, key := range map[string]string{"linear": "CHAOS-11516", "jira": "CHAOS-204", "github": "CHAOS-77", "gitlab": "CHAOS-78"} {
+	for provider, id := range map[string]string{"linear": "work_item.v2:00000000-0000-0000-0000-000000000000:linear:CHAOS-11516", "jira": "work_item.v2:00000000-0000-0000-0000-000000000000:jira:CHAOS-11516"} {
 		t.Run(provider, func(t *testing.T) {
 			t.Parallel()
-			id := "work_item.v2:" + provider + ":" + key
-			node := candidateNode(contextfabric.SubjectWorkItem, id, key+" login bug", 0.5, []string{grantRepoInside})
-			backend := &fakeGraphBackend{
-				searchResults: map[string][]CandidateNode{key: {node}}, searchTruncated: true,
-				exactHints: map[string]CandidateNode{SubjectKey(contextfabric.SubjectRef{Kind: contextfabric.SubjectWorkItem, CanonicalID: id}): node},
+			spy := &grantCensusSpy{rows: []grantRow{{contextfabric.SubjectWorkItem, "CHAOS-11516", id, grantRepoInside}}}
+			resolution, _, tracer := resolveWorkItem(t, restrictedCaller(t, grantRepoInside), "CHAOS-11516", spy.census, repoLessItem(id, "CHAOS-11516 build legs", grantRepoInside))
+			if round := onlyRound(t, tracer); round.ShadowOutcome != string(ShadowWouldCommit) || !round.ShadowGrantScoped {
+				t.Fatalf("round = %q/%q, want would_commit inside the grant", round.ShadowOutcome, round.ShadowReason)
 			}
-			spy := &grantCensusSpy{rows: []grantRow{{contextfabric.SubjectWorkItem, key, id, grantRepoInside}}}
-			deps := backend.deps()
-			tracer := &captureResolutionTracer{}
-			deps.ResolutionTracer = tracer
-			deps.CensusFunc = spy.census
+			if commits := tracer.eventsForStage("evidence_census_commit"); len(commits) != 1 || commits[0].Outcome != "merged" {
+				t.Fatalf("evidence_census_commit = %+v, want one merged", commits)
+			}
+			if ids := scopeAnchorCommittedIDs(resolution); len(ids) != 1 || ids[0] != id {
+				t.Fatalf("committed = %v, want the linked item", ids)
+			}
+			if resolution.WorkItemLinkLimitation != "" {
+				t.Fatalf("limitation = %q on a resolved item", resolution.WorkItemLinkLimitation)
+			}
+		})
+	}
+}
+
+// One sentence for every cause: true of all four, and so no oracle.
+func TestAnUnresolvedWorkItemReadsTheSameWhateverTheCause(t *testing.T) {
+	t.Parallel()
+	id := "work_item.v2:00000000-0000-0000-0000-000000000000:linear:CHAOS-11516"
+	cases := map[string]struct {
+		rows []grantRow
+		node CandidateNode
+	}{
+		"no such item":                {nil, repoLessItem("work_item.v2:absent", "absent")},
+		"an item outside the grant":   {[]grantRow{{contextfabric.SubjectWorkItem, "CHAOS-11516", id, grantRepoOutside}}, repoLessItem(id, "CHAOS-11516")},
+		"an inside item with no link": {nil, repoLessItem(id, "CHAOS-11516")},
+		"a lower-tier link only":      {nil, repoLessItem(id, "CHAOS-11516")},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			spy := &grantCensusSpy{rows: tc.rows}
+			resolution, offers, _ := resolveWorkItem(t, restrictedCaller(t, grantRepoInside), "CHAOS-11516", spy.census, tc.node)
+			if len(resolution.Committed) != 0 {
+				t.Fatalf("committed = %v, want none", resolution.Committed)
+			}
+			if resolution.WorkItemLinkLimitation != contractsv1.ContextFabricWorkItemNoGrantedLinkLimitation {
+				t.Fatalf("limitation = %q", resolution.WorkItemLinkLimitation)
+			}
+			if len(offers.HandleOptions) != 0 {
+				t.Fatalf("handle options = %+v: an option the caller cannot redeem", offers.HandleOptions)
+			}
+		})
+	}
+	if strings.Contains(strings.ToLower(contractsv1.ContextFabricWorkItemNoGrantedLinkLimitation), "does not exist.") == false ||
+		!strings.Contains(contractsv1.ContextFabricWorkItemNoGrantedLinkLimitation, "does not show that") {
+		t.Fatal("the sentence must deny that it shows absence")
+	}
+}
+
+// The mixed outcome. One item committed and a keyed read failed for another: the
+// commit does not silence the failure, because a work item may be left out.
+func TestAFailedLinkReadDisclosesBesideACommittedWorkItem(t *testing.T) {
+	t.Parallel()
+	id := "work_item.v2:00000000-0000-0000-0000-000000000000:linear:CHAOS-11516"
+	spy := &grantCensusSpy{rows: []grantRow{{contextfabric.SubjectWorkItem, "CHAOS-11516", id, grantRepoInside}}}
+	node := repoLessItem(id, "CHAOS-11516 build legs", grantRepoInside)
+	backend := &fakeGraphBackend{searchResults: map[string][]CandidateNode{}, searchTruncated: true, exactHints: map[string]CandidateNode{
+		SubjectKey(contextfabric.SubjectRef{Kind: contextfabric.SubjectWorkItem, CanonicalID: id}): node,
+	}}
+	deps := backend.deps()
+	deps.WorkItemLinksUnread = func() bool { return true }
+	deps.CensusFunc = spy.census
+	deps.HandleGrammarChecker = func(kind contextfabric.SubjectKind, patternID, value string) (string, bool) {
+		return "work_items.work_item_id", ValidateHandleGrammar(kind, patternID, value)
+	}
+	request := testRequest()
+	request.Question = "why is CHAOS-11516 blocked?"
+	resolution, _, _, _, err := ResolveSubjectsWithCommitBasis(context.Background(), restrictedCaller(t, grantRepoInside), request, testInterpreted("CHAOS-11516"), deps, nil, nil, nil, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ids := scopeAnchorCommittedIDs(resolution); len(ids) != 1 || ids[0] != id {
+		t.Fatalf("committed = %v, want the linked item", ids)
+	}
+	if resolution.WorkItemLinkLimitation != contractsv1.ContextFabricWorkItemLinksUnreadLimitation {
+		t.Fatalf("limitation = %q beside a committed item, want the unread sentence", resolution.WorkItemLinkLimitation)
+	}
+	// An unrestricted caller reads no link, so it owes no sentence.
+	plain, _, _, _, err := ResolveSubjectsWithCommitBasis(context.Background(), storage.Principal{OrgID: "org_1"}, request, testInterpreted("CHAOS-11516"), deps, nil, nil, nil, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if plain.WorkItemLinkLimitation != "" {
+		t.Fatalf("unrestricted caller: limitation %q", plain.WorkItemLinkLimitation)
+	}
+}
+
+// A read that could not decide denies and says so. It never reads as an absent
+// item.
+func TestAFailedWorkItemReadDeniesAndDiscloses(t *testing.T) {
+	t.Parallel()
+	id := "work_item.v2:00000000-0000-0000-0000-000000000000:linear:CHAOS-11516"
+	failed := func(context.Context, string, CensusKind, string, bool, contextfabric.SubjectKind, string, bool) (CensusOutcome, error) {
+		return CensusOutcome{}, errors.New("deadline")
+	}
+	resolution, _, _ := resolveWorkItem(t, restrictedCaller(t, grantRepoInside), "CHAOS-11516", failed, repoLessItem(id, "CHAOS-11516", grantRepoInside))
+	if len(resolution.Committed) != 0 || resolution.WorkItemLinkLimitation != contractsv1.ContextFabricWorkItemLinksUnreadLimitation {
+		t.Fatalf("census error: committed %v limitation %q", resolution.Committed, resolution.WorkItemLinkLimitation)
+	}
+	// The census found the link and the node gate holds none: projection lag.
+	spy := &grantCensusSpy{rows: []grantRow{{contextfabric.SubjectWorkItem, "CHAOS-11516", id, grantRepoInside}}}
+	resolution, _, tracer := resolveWorkItem(t, restrictedCaller(t, grantRepoInside), "CHAOS-11516", spy.census, repoLessItem(id, "CHAOS-11516"))
+	if commits := tracer.eventsForStage("evidence_census_commit"); len(commits) != 1 || commits[0].Outcome != "refused" {
+		t.Fatalf("evidence_census_commit = %+v, want the node gate refusing", commits)
+	}
+	if len(resolution.Committed) != 0 || resolution.WorkItemLinkLimitation != contractsv1.ContextFabricWorkItemLinksUnreadLimitation {
+		t.Fatalf("lag: committed %v limitation %q", resolution.Committed, resolution.WorkItemLinkLimitation)
+	}
+	// The link read itself failed.
+	backend := &fakeGraphBackend{searchResults: map[string][]CandidateNode{}, searchTruncated: true}
+	deps := backend.deps()
+	deps.WorkItemLinksUnread = func() bool { return true }
+	deps.CensusFunc = (&grantCensusSpy{}).census
+	request := testRequest()
+	request.Question = "why is CHAOS-11516 blocked?"
+	resolution, _, _, _, err := ResolveSubjectsWithCommitBasis(context.Background(), restrictedCaller(t, grantRepoInside), request, testInterpreted("CHAOS-11516"), deps, nil, nil, nil, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resolution.WorkItemLinkLimitation != contractsv1.ContextFabricWorkItemLinksUnreadLimitation {
+		t.Fatalf("unread reach: limitation %q, want the unread sentence", resolution.WorkItemLinkLimitation)
+	}
+	// A requested repository narrows the census, so zero proves nothing about
+	// the grant, and an unrestricted caller owes no such sentence.
+	narrowed := testRequest()
+	narrowed.Question = "why is CHAOS-11516 blocked?"
+	narrowed.RequestedScope.RepositorySlugs = []string{grantRepoInside}
+	backend = &fakeGraphBackend{searchResults: map[string][]CandidateNode{}, searchTruncated: true}
+	deps = backend.deps()
+	deps.CensusFunc = (&grantCensusSpy{}).census
+	deps.LinkScopedWorkItems = func(context.Context, contextfabric.RequestedScope) (map[string]string, bool, error) {
+		return map[string]string{}, true, nil
+	}
+	resolution, _, _, _, err = ResolveSubjectsWithCommitBasis(context.Background(), restrictedCaller(t, grantRepoInside, grantRepoBeside), narrowed, testInterpreted("CHAOS-11516"), deps, nil, nil, nil, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resolution.WorkItemLinkLimitation == contractsv1.ContextFabricWorkItemNoGrantedLinkLimitation {
+		t.Fatal("a count inside a requested repository was stated as a count inside the grant")
+	}
+	plain, _, _ := resolveWorkItem(t, userprincipal.Authenticated(t, "org_1", nil), "CHAOS-11516", (&grantCensusSpy{}).census)
+	if plain.WorkItemLinkLimitation != "" {
+		t.Fatalf("unrestricted caller: limitation %q", plain.WorkItemLinkLimitation)
+	}
+}
+
+// An option stands on evidence from inside the grant, so no option dead-ends.
+func TestAWorkItemHandleOptionStandsOnAnInsideCount(t *testing.T) {
+	t.Parallel()
+	id, twin := "work_item.v2:00000000-0000-0000-0000-000000000000:linear:CHAOS-11516", "work_item.v2:00000000-0000-0000-0000-000000000000:jira:CHAOS-11516"
+	options := func(t *testing.T, principal storage.Principal, rows ...grantRow) []string {
+		t.Helper()
+		_, offers, _ := resolveWorkItem(t, principal, "CHAOS-11516", (&grantCensusSpy{rows: rows}).census)
+		var values []string
+		for _, option := range offers.HandleOptions {
+			values = append(values, option.Value)
+		}
+		return values
+	}
+	inside := grantRow{contextfabric.SubjectWorkItem, "CHAOS-11516", id, grantRepoInside}
+	beside := grantRow{contextfabric.SubjectWorkItem, "CHAOS-11516", twin, grantRepoInside}
+	if got := options(t, restrictedCaller(t, grantRepoInside)); len(got) != 0 {
+		t.Fatalf("restricted, count 0: options %v, want none", got)
+	}
+	if got := options(t, restrictedCaller(t, grantRepoInside), inside, beside); len(got) != 1 || got[0] != "CHAOS-11516" {
+		t.Fatalf("restricted, count 2: options %v, want the handle", got)
+	}
+	if got := options(t, userprincipal.Authenticated(t, "org_1", nil)); len(got) != 1 {
+		t.Fatalf("unrestricted: options %v, want the handle as before", got)
+	}
+	if got := options(t, userprincipal.ProjectOnly(t, "org_1", []string{"project.v2:github:P-1"})); len(got) != 0 {
+		t.Fatalf("project-only: options %v, want none: no census can verify one", got)
+	}
+}
+
+// A closure mismatch proves no count, so it mints no option. A candidate the node
+// gate admitted stands on its own: it is inside the grant.
+func TestAWorkItemHandleOptionNeedsProofOrAnAdmittedCandidate(t *testing.T) {
+	t.Parallel()
+	mismatch := func(context.Context, string, CensusKind, string, bool, contextfabric.SubjectKind, string, bool) (CensusOutcome, error) {
+		return CensusOutcome{Count: 1, ClosureMismatch: true, CensusReadAt: time.Now().UTC(), GrantApplied: true}, nil
+	}
+	_, offers, _ := resolveWorkItem(t, restrictedCaller(t, grantRepoInside), "CHAOS-11516", mismatch)
+	if len(offers.HandleOptions) != 0 {
+		t.Fatalf("closure mismatch: options %+v, want none", offers.HandleOptions)
+	}
+	id, omitted, err := identity.Derive(identity.KindWorkItem, []string{"00000000-0000-0000-0000-000000000000", "linear:CHAOS-11516"}, nil)
+	if err != nil || omitted {
+		t.Fatalf("derive: omitted %v err %v", omitted, err)
+	}
+	pool := []contextfabric.SubjectCandidate{{Subject: contextfabric.SubjectRef{Kind: contextfabric.SubjectWorkItem, CanonicalID: id, Label: "CHAOS-11516"}}}
+	offer := contextfabric.StructureOfferMaterial{HandleOptions: []contractsv1.ContextFabricHandleOption{{Kind: contextfabric.SubjectWorkItem, Value: "CHAOS-11516"}}}
+	kept := redeemableHandleOffer(restrictedCaller(t, grantRepoInside), offer, workItemHandleRound{}, pool)
+	if len(kept.HandleOptions) != 1 {
+		t.Fatalf("an admitted candidate's option was dropped: %+v", kept.HandleOptions)
+	}
+}
+
+// A project-only caller holds no handle option of any kind. A pull request
+// handle is unchanged for a restricted caller.
+func TestAHandleOptionForAPullRequestIsUnchangedForARestrictedCaller(t *testing.T) {
+	t.Parallel()
+	offerFor := func(t *testing.T, principal storage.Principal) []contractsv1.ContextFabricHandleOption {
+		t.Helper()
+		backend := grantBackend(grantNode(grantPRInside, grantRepoInside, 0.5), grantNode(grantPRBeside, grantRepoBeside, 0.5))
+		deps := backend.deps()
+		deps.CensusFunc = (&grantCensusSpy{}).census
+		deps.HandleGrammarChecker = func(kind contextfabric.SubjectKind, patternID, value string) (string, bool) {
+			return "git_pull_requests.number", ValidateHandleGrammar(kind, patternID, value)
+		}
+		request := testRequest()
+		request.Question = grantQuestion
+		_, offers, _, _, err := ResolveSubjectsWithCommitBasis(context.Background(), principal, request, testInterpreted("pull request 5063"), deps, nil, nil, nil, "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		return offers.HandleOptions
+	}
+	if got := offerFor(t, restrictedCaller(t, grantRepoInside, grantRepoBeside)); len(got) == 0 {
+		t.Fatal("restricted: the pull request handle was withheld")
+	}
+	if got := offerFor(t, userprincipal.ProjectOnly(t, "org_1", []string{"project.v2:github:P-1"})); len(got) != 0 {
+		t.Fatalf("project-only: options %+v, want none", got)
+	}
+}
+
+// Ordinary search reaches what the handle grammar cannot: a key of any prefix.
+// All four providers: a repo-less item by its native link, an item with a
+// repository of its own by that repository alone.
+func TestAnOrdinarySearchAdmitsALinkedItem(t *testing.T) {
+	t.Parallel()
+	zero := "00000000-0000-0000-0000-000000000000"
+	withRepository := func(id, repo string) CandidateNode {
+		return candidateNode(contextfabric.SubjectWorkItem, id, "OPS-204 login bug", 0.5, []string{repo})
+	}
+	cases := []struct {
+		name  string
+		node  CandidateNode
+		admit bool
+	}{
+		{"linear, native link into the grant", repoLessItem("work_item.v2:"+zero+":linear:OPS-204", "OPS-204 login bug", grantRepoInside), true},
+		{"jira, native link into the grant", repoLessItem("work_item.v2:"+zero+":jira:OPS-204", "OPS-204 login bug", grantRepoInside), true},
+		{"linear, no link", repoLessItem("work_item.v2:"+zero+":linear:OPS-204", "OPS-204 login bug"), false},
+		{"jira, no link", repoLessItem("work_item.v2:"+zero+":jira:OPS-204", "OPS-204 login bug"), false},
+		{"github, own repository in the grant", withRepository("work_item.v2:r-1:gh:acme/alpha#7", grantRepoInside), true},
+		{"gitlab, own repository in the grant", withRepository("work_item.v2:r-1:gitlab:acme/alpha#7", grantRepoInside), true},
+		{"github, own repository outside the grant", withRepository("work_item.v2:r-2:gh:other/secret#7", grantRepoOutside), false},
+		{"gitlab, own repository outside the grant", withRepository("work_item.v2:r-2:gitlab:other/secret#7", grantRepoOutside), false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			node := tc.node
+			node.Mechanism, node.Relevance = contextfabric.MatchLexical, Normalized(0.8)
+			backend := &fakeGraphBackend{searchResults: map[string][]CandidateNode{"OPS-204": {node}}}
 			request := testRequest()
-			request.Question = "why is " + key + " blocked?"
-			resolution, _, _, _, err := ResolveSubjectsWithCommitBasis(context.Background(), restrictedCaller(t, grantRepoInside), request, testInterpreted(key), deps, nil, nil, nil, "")
+			request.Question = "why is OPS-204 blocked?"
+			resolution, _, err := ResolveSubjects(context.Background(), restrictedCaller(t, grantRepoInside), request, testInterpreted("OPS-204"), backend.deps(), nil, nil)
 			if err != nil {
 				t.Fatal(err)
 			}
-			round := onlyRound(t, tracer)
-			if len(spy.calls) == 0 {
-				t.Fatalf("round reason %q: no census call, the refusal was not exercised", round.ShadowReason)
-			}
-			if round.ShadowOutcome != string(ShadowWouldClarify) || round.ShadowReason != string(ReasonCensusError) {
-				t.Fatalf("round = %q/%q, want would_clarify/census_error", round.ShadowOutcome, round.ShadowReason)
-			}
-			if tracerCommittedByCensus(tracer) || len(tracer.eventsForStage("evidence_census_commit")) != 0 {
-				t.Fatalf("committed = %v by the census, want nothing", resolution.Committed)
+			if got := len(resolution.Candidates)+len(resolution.Committed) > 0; got != tc.admit {
+				t.Fatalf("pooled = %v, want %v: %+v", got, tc.admit, resolution)
 			}
 		})
+	}
+}
+
+// The gate, clause by clause.
+func TestALinkAdmitsOnlyARepoLessItemThroughTheGrant(t *testing.T) {
+	t.Parallel()
+	sentinel := []string{contractsv1.ContextFabricNoRepositorySentinel}
+	attributes := func(repositories interface{}, linked interface{}) map[string]interface{} {
+		out := map[string]interface{}{"authorization_repositories": repositories}
+		if linked != nil {
+			out[AuthorizationLinkRepositoriesAttr] = linked
+		}
+		return out
+	}
+	restricted := restrictedCaller(t, grantRepoInside)
+	owner := userprincipal.Authenticated(t, "org_1", []string{"acme/*"})
+	cases := []struct {
+		name      string
+		principal storage.Principal
+		scope     contextfabric.RequestedScope
+		attrs     map[string]interface{}
+		want      bool
+	}{
+		{"link into the grant", restricted, contextfabric.RequestedScope{}, attributes(sentinel, []string{grantRepoInside}), true},
+		{"the attribute is a repository name, so case folds", restricted, contextfabric.RequestedScope{}, attributes(sentinel, []string{"ACME/Alpha"}), true},
+		{"an owner grant covers a linked repository", owner, contextfabric.RequestedScope{}, attributes(sentinel, []string{grantRepoInside}), true},
+		{"no link", restricted, contextfabric.RequestedScope{}, attributes(sentinel, nil), false},
+		{"link outside the grant", restricted, contextfabric.RequestedScope{}, attributes(sentinel, []string{grantRepoOutside}), false},
+		{"an empty link list", restricted, contextfabric.RequestedScope{}, attributes(sentinel, []string{}), false},
+		{"a string is never a link list", restricted, contextfabric.RequestedScope{}, attributes(sentinel, "*"), false},
+		{"ruling 4: a link never widens an item with a repository", restricted, contextfabric.RequestedScope{}, attributes([]string{grantRepoOutside}, []string{grantRepoInside}), false},
+		{"an orphaned item is not repo-less", restricted, contextfabric.RequestedScope{}, attributes([]string{contractsv1.ContextFabricOrphanedRepositorySentinel}, []string{grantRepoInside}), false},
+		{"the sentinel beside a repository", restricted, contextfabric.RequestedScope{}, attributes([]string{contractsv1.ContextFabricNoRepositorySentinel, grantRepoOutside}, []string{grantRepoInside}), false},
+		{"a requested repository follows the link", restricted, contextfabric.RequestedScope{RepositorySlugs: []string{grantRepoInside}}, attributes(sentinel, []string{grantRepoInside}), true},
+		{"a requested repository elsewhere refuses", restrictedCaller(t, grantRepoInside, grantRepoBeside), contextfabric.RequestedScope{RepositorySlugs: []string{grantRepoBeside}}, attributes(sentinel, []string{grantRepoInside}), false},
+		{"a project-only caller never takes the link", userprincipal.ProjectOnly(t, "org_1", []string{"project.v2:github:P-1"}), contextfabric.RequestedScope{}, attributes(sentinel, []string{grantRepoInside}), false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			if got := AuthorizedAttributes(tc.principal, tc.scope, tc.attrs); got != tc.want {
+				t.Fatalf("AuthorizedAttributes = %v, want %v", got, tc.want)
+			}
+		})
+	}
+	if scopeValueKindForAttr(AuthorizationLinkRepositoriesAttr) != ScopeValueRepositoryName {
+		t.Fatal("the link attribute must compare as a repository name: the default is case-sensitive")
 	}
 }
 
@@ -670,37 +995,6 @@ func TestTheCensusAndTheOutsideCountAgreeForARestrictedCaller(t *testing.T) {
 	})
 }
 
-// A handle option is minted from the question alone, so a restricted and a
-// project-only caller both hold a handr_ receipt to redeem: the redemption's
-// census was reachable for both before CHAOS-12452 bound the grant on it.
-func TestAHandleOfferReachesTheCallersARedemptionRefuses(t *testing.T) {
-	t.Parallel()
-	for name, principal := range map[string]storage.Principal{
-		"restricted":   restrictedCaller(t, grantRepoInside),
-		"project only": userprincipal.ProjectOnly(t, "org_1", []string{"project.v2:github:P-1"}),
-	} {
-		t.Run(name, func(t *testing.T) {
-			t.Parallel()
-			backend := &fakeGraphBackend{searchTruncated: true}
-			deps := backend.deps()
-			deps.HandleGrammarChecker = func(kind contextfabric.SubjectKind, patternID, value string) (string, bool) {
-				return "work_items.work_item_id", ValidateHandleGrammar(kind, patternID, value)
-			}
-			spy := &grantCensusSpy{}
-			deps.CensusFunc = spy.census
-			request := testRequest()
-			request.Question = "why is CHAOS-11516 blocked?"
-			_, offers, _, _, err := ResolveSubjectsWithCommitBasis(context.Background(), principal, request, testInterpreted("CHAOS-11516"), deps, nil, nil, nil, "")
-			if err != nil {
-				t.Fatal(err)
-			}
-			if len(offers.HandleOptions) != 1 || offers.HandleOptions[0].Kind != contextfabric.SubjectWorkItem || offers.HandleOptions[0].Value != "CHAOS-11516" {
-				t.Fatalf("handle options = %+v, want the work item the question names", offers.HandleOptions)
-			}
-		})
-	}
-}
-
 func TestErrCensusGrantNotAppliedIsACensusError(t *testing.T) {
 	t.Parallel()
 	refused := func(context.Context, string, CensusKind, string, bool, contextfabric.SubjectKind, string, bool) (CensusOutcome, error) {
@@ -713,5 +1007,41 @@ func TestErrCensusGrantNotAppliedIsACensusError(t *testing.T) {
 	}
 	if !errors.Is(ErrCensusGrantNotApplied, ErrCensusGrantNotApplied) || strings.Contains(ErrCensusGrantNotApplied.Error(), "/") {
 		t.Fatalf("error text %q must name no repository", ErrCensusGrantNotApplied)
+	}
+}
+
+// Only the sentinel alone qualifies. A list that holds the sentinel beside a real
+// repository is decided by that repository, and a link never widens it. A list
+// held in another type, or a link attribute held in another type, proves nothing.
+func TestALinkMatchesOnlyTheSentinelAlone(t *testing.T) {
+	t.Parallel()
+	sentinel := contractsv1.ContextFabricNoRepositorySentinel
+	for name, tc := range map[string]struct {
+		own    interface{}
+		linked interface{}
+		want   bool
+	}{
+		"the sentinel alone":               {[]string{sentinel}, []string{grantRepoInside}, true},
+		"the sentinel before a repository": {[]string{sentinel, "other/secret"}, []string{grantRepoInside}, false},
+		"the sentinel after a repository":  {[]string{"other/secret", sentinel}, []string{grantRepoInside}, false},
+		"the sentinel twice":               {[]string{sentinel, sentinel}, []string{grantRepoInside}, false},
+		"a repository alone":               {[]string{"other/secret"}, []string{grantRepoInside}, false},
+		"an empty list":                    {[]string{}, []string{grantRepoInside}, false},
+		"the sentinel as a bare string":    {sentinel, []string{grantRepoInside}, false},
+		"no link":                          {[]string{sentinel}, nil, false},
+		"a link to another repository":     {[]string{sentinel}, []string{"other/secret"}, false},
+		"a link held as a bare string":     {[]string{sentinel}, grantRepoInside, false},
+		"a mixed link list":                {[]string{sentinel}, []string{"other/secret", grantRepoInside}, true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			attributes := map[string]interface{}{authorizationRepositoriesAttr: tc.own}
+			if tc.linked != nil {
+				attributes[AuthorizationLinkRepositoriesAttr] = tc.linked
+			}
+			if got := linkedRepositoryMatches(attributes, grantRepoInside); got != tc.want {
+				t.Fatalf("linkedRepositoryMatches(%v, %v) = %v, want %v", tc.own, tc.linked, got, tc.want)
+			}
+		})
 	}
 }

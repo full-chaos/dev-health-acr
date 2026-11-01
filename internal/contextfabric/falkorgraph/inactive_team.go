@@ -35,10 +35,11 @@ func (a *Adapter) InactiveTeams(ctx context.Context, principal storage.Principal
 	if err != nil {
 		return nil, err
 	}
-	ctx, err = a.withProjectReach(ctx, key, principal)
+	ctx, finish, err := a.withProjectReach(ctx, key, principal)
 	if err != nil {
 		return nil, err
 	}
+	defer finish()
 	keyed := fmt.Sprintf("UNWIND $targets AS t MATCH (n:%s {%s:$org, %s:t.kind, %s:t.id}) RETURN n",
 		labelSubject, propOrgID, propKind, propCanonicalID)
 	now := a.now()

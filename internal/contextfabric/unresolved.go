@@ -619,6 +619,13 @@ func (e *Engine) terminalResult(
 		limitations, outsideDisplaced = appendBoundedLimitations(limitations, []string{contractsv1.ContextFabricOutsideRequestedRepositoriesLimitation(resolution.OutsideRequestedRepositories)})
 		conflictDisplaced += outsideDisplaced
 	}
+	// CHAOS-12456: a restricted caller's work item that stayed unresolved. The
+	// sentence never reads as "does not exist".
+	if resolution.WorkItemLinkLimitation != "" {
+		var linkDisplaced int
+		limitations, linkDisplaced = appendBoundedLimitations(limitations, []string{resolution.WorkItemLinkLimitation})
+		conflictDisplaced += linkDisplaced
+	}
 	answer := statusSentence(status, resolution)
 	if status == InvestigationClarificationRequired && resolution.ClarificationPrompt != "" {
 		answer += " " + resolution.ClarificationPrompt

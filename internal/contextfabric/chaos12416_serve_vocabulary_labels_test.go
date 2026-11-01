@@ -114,6 +114,9 @@ func wordRows() []wordRow {
 		{"claimed fact kind", func(r *InvestigationResult) {
 			r.ClaimedFacts = []contractsv1.ContextFabricClaimedFact{{Kind: contractsv1.ContextFabricFactBlockers}}
 		}, map[string]string{"fact_kind:blockers": "blockers"}},
+		{"claimed fact field", func(r *InvestigationResult) {
+			r.ClaimedFacts = []contractsv1.ContextFabricClaimedFact{{Field: "completion_ratio"}}
+		}, map[string]string{"fact_field:completion_ratio": "Completion ratio"}},
 		{"window relative id", func(r *InvestigationResult) {
 			r.EffectiveEvidenceWindow = &contractsv1.ContextFabricEffectiveEvidenceWindow{RelativeID: contractsv1.ContextFabricRelativeWindowAllTime}
 		}, map[string]string{"window_relative_id:all_time": "all time"}},

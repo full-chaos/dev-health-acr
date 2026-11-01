@@ -505,6 +505,10 @@ type ResolveDeps struct {
 	// RunShadowEvidenceRound's own doc comment for what runs when it is
 	// set, and why the round can never influence `resolution` regardless.
 	CensusFunc CensusFunc
+	// WorkItemLinksUnread reports that a work-item link read of the call failed,
+	// so an item it did not prove is unknown, not unlinked, whatever committed.
+	// Nil means no such read.
+	WorkItemLinksUnread func() bool
 	// LinkScopedWorkItems returns the work items in a requested repository
 	// scope: the issues the repository-to-issue walk of the entity tree
 	// reaches from each repository the scope names. complete is false when
@@ -4068,12 +4072,18 @@ func resolveSubjects(ctx context.Context, principal storage.Principal, request c
 	// "stalled" (§0's own definition: nothing committed and searchTruncated)
 	// -- the brief's own cost note ("per stalled resolution... committed
 	// resolutions pay nothing").
-	stalledForCensus := len(resolution.Committed) == 0 && searchTruncated
+	//
+	// CHAOS-12456 ruling 1: searchTruncated is set before authorization, so
+	// rows a restricted caller cannot see fill the page and would decide
+	// whether its round runs. With a bound handle the round runs either way.
+	stalledForCensus := len(resolution.Committed) == 0 && (searchTruncated || grantScopedHandleBound(principal, request))
+	var handleRound workItemHandleRound
 	if !offersOnly && deps.CensusFunc != nil && (stalledForCensus || committedScopeAnchorShadowsHandle(request.Question, resolution.Committed, frame)) {
 		// CHAOS-4300: false -- this is the pre-existing stalled-resolution
 		// call site, not the caller-hint short circuit's own new call above.
 		censusVisibility := unscopedVisibility || repositoryNarrowedByUnrestrictedPrincipal(principal, request) || teamNarrowedByUnrestrictedPrincipal(principal, request, deps) || grantScopedRequest(principal, request, deps)
 		attestation := runShadowEvidenceRoundForResolution(ctx, principal, request, interpreted, resolution, aliasClaimantsByTerm, aliasIdentityComplete, censusVisibility, deps, confirmedKind, confirmedAnchor, false)
+		handleRound = workItemHandleRoundOf(request.Question, attestation)
 		// CHAOS-3896 Slice C (design brief v6 §1.4): the round's Attestation
 		// is now CONSUMED in the commit decision, not merely traced. When it
 		// named exactly one satisfier (attestedSatisfier), prove that
@@ -4360,6 +4370,7 @@ func resolveSubjects(ctx context.Context, principal storage.Principal, request c
 	// tracer block below, so its own diagnostics can ride the SAME
 	// unconditional kind_offer event candidateOfferDiag already does.
 	handleOffer, handleOfferDiag := handleOfferMaterial(request.Question, request.SubjectHandles, deps.HandleGrammarChecker, kindOfferCandidates)
+	handleOffer = redeemableHandleOffer(principal, handleOffer, handleRound, kindOfferCandidates)
 	// CHAOS-4012 v22: offerKind/candidateOfferCount ride the SAME
 	// unconditional "kind_offer" stage kind_offer's own fields already use
 	// (team-lead ruling: same-change telemetry) -- offerKind is "kind",
@@ -4517,6 +4528,7 @@ func resolveSubjects(ctx context.Context, principal storage.Principal, request c
 		delete(deps.outsideRequested, SubjectKey(subject))
 	}
 	resolution.OutsideRequestedRepositories = len(deps.outsideRequested)
+	resolution.WorkItemLinkLimitation = workItemLinkLimitation(principal, request, deps, handleRound, resolution)
 	return resolution, offerMaterial, nil
 }
 
@@ -5460,6 +5472,12 @@ func repositoryNarrowedByUnrestrictedPrincipal(principal storage.Principal, requ
 // A project-only caller is not restricted by class, and stays refused.
 func grantScopedCensus(principal storage.Principal) bool {
 	return auth.ClassifyGrant(principal) == auth.GrantRestricted
+}
+
+// grantScopedHandleBound reports a restricted caller's question that binds a
+// handle: its census round does not depend on the search page.
+func grantScopedHandleBound(principal storage.Principal, request contextfabric.InvestigationRequest) bool {
+	return grantScopedCensus(principal) && len(BindHandles(request.Question)) > 0
 }
 
 // repositoryNarrowedInsideGrant is a restricted caller's repository narrowing.

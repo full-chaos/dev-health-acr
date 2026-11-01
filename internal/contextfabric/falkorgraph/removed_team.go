@@ -113,10 +113,11 @@ func (a *Adapter) RemovedTeams(ctx context.Context, principal storage.Principal,
 	if err != nil {
 		return nil, err
 	}
-	ctx, err = a.withProjectReach(ctx, key, principal)
+	ctx, finish, err := a.withProjectReach(ctx, key, principal)
 	if err != nil {
 		return nil, err
 	}
+	defer finish()
 	removed, failed := a.removedCommittedTeams(ctx, key, principal, subjects)
 	if failed {
 		return nil, graphNotProjectedError(fmt.Errorf("removed team lookup failed"))
