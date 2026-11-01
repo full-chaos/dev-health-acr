@@ -82,7 +82,7 @@ func TestAFailingPublisherTickIsReportedWithTheFixedMessageAndNeverStops(t *test
 
 func TestThePublisherLogsCountsWithFixedTextAndNoIdentifierOrSecret(t *testing.T) {
 	logger, buffer := tickLogger()
-	ticker := &fakeOutboxTicker{limits: make(chan int, 8), report: authprojection.Report{Applied: 4, Gap: 1, Refused: 2, Held: 3, Stopped: authprojection.OutcomeBusy, Full: true}}
+	ticker := &fakeOutboxTicker{limits: make(chan int, 8), report: authprojection.Report{Applied: 4, Retry: 1, Schema: 2, Conflict: 5, FinalRefused: 6, Held: 3, Stopped: authprojection.OutcomeBusy, Full: true}}
 	stop := startCredentialOutboxPublisher(context.Background(), ticker, logger, nil, 10*time.Millisecond)
 	<-ticker.limits
 	deadline := time.After(5 * time.Second)
@@ -97,7 +97,7 @@ func TestThePublisherLogsCountsWithFixedTextAndNoIdentifierOrSecret(t *testing.T
 		t.Fatal(err)
 	}
 	out := buffer.String()
-	for _, want := range []string{"credential outbox publish", "applied=4", "gap=1", "refused=2", credentialOutboxPublishHeldMessage, "held=3", credentialOutboxPublishStoppedMessage, "stopped_by=busy", "source=publisher"} {
+	for _, want := range []string{"credential outbox publish", "applied=4", "projection_retry=1", "schema=2", "projection_conflict=5", "projection_refused=6", credentialOutboxPublishHeldMessage, "held=3", credentialOutboxPublishStoppedMessage, "stopped_by=busy", "source=publisher"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("log lacks %q: %s", want, out)
 		}

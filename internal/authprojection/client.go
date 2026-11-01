@@ -20,9 +20,9 @@ import (
 const (
 	// Path is the route of the projection endpoint; one event is one POST.
 	Path = "/internal/v1/acr/credential-events"
-	// Audience and Scope are the workload token's audience and the one scope acr-api holds on this route.
+	// Audience is the workload token audience. The token carries no scope or action claim: the action the route
+	// checks (credentials.project) is registry data on the acr-api workload, so the token request names the audience only.
 	Audience = "auth-service"
-	Scope    = "credential_events.publish"
 	// RequestTimeout bounds one publish: the token and the POST together.
 	RequestTimeout = 5 * time.Second
 	// MaxRetryAfter caps a Retry-After the endpoint names.
@@ -35,16 +35,27 @@ const (
 type Outcome string
 
 const (
-	OutcomeApplied        Outcome = "applied"         // 204: applied, or a duplicate
-	OutcomeGap            Outcome = "gap"             // 409 gap: hold the aggregate
-	OutcomeDigestMismatch Outcome = "digest_mismatch" // 409 digest_mismatch: hold, counted apart
-	OutcomeRefused        Outcome = "refused"         // 400: schema refusal, hold the aggregate
-	OutcomeAuthRefused    Outcome = "auth_refused"    // 401, 403: stop the tick
-	OutcomeBusy           Outcome = "busy"            // 429, 503: stop the tick, honour Retry-After
-	OutcomeOther          Outcome = "other"           // any other answer: hold, no mark
-	OutcomeNoAnswer       Outcome = "no_answer"       // transport failure or timeout: hold, stop the tick
-	OutcomeNoToken        Outcome = "no_token"        // no usable workload token: stop the tick, no request sent
+	OutcomeApplied      Outcome = "applied"             // 204: applied, duplicate or stale
+	OutcomeRetry        Outcome = "projection_retry"    // 409 projection_retry: hold the aggregate, backoff
+	OutcomeConflict     Outcome = "projection_conflict" // 409 projection_conflict: final, mark, counted apart
+	OutcomeFinalRefused Outcome = "projection_refused"  // 409 projection_refused: final, mark, counted apart
+	OutcomeSchema       Outcome = "schema"              // 400: schema refusal, hold the aggregate
+	OutcomeAuthRefused  Outcome = "auth_refused"        // 401, 403: stop the tick
+	OutcomeBusy         Outcome = "busy"                // 429, 503: stop the tick, honour Retry-After
+	OutcomeOther        Outcome = "other"               // any other answer: hold, no mark
+	OutcomeNoAnswer     Outcome = "no_answer"           // transport failure or timeout: hold, stop the tick
+	OutcomeNoToken      Outcome = "no_token"            // no usable workload token: stop the tick, no request sent
 )
+
+// Acked reports whether the endpoint closed the event, so the row is marked published: applied (a duplicate or a stale
+// one included) and the two final 409 answers, which a retry cannot change and which a hold would only stall behind.
+func (r Result) Acked() bool {
+	switch r.Outcome {
+	case OutcomeApplied, OutcomeConflict, OutcomeFinalRefused:
+		return true
+	}
+	return false
+}
 
 // Result is one publish's outcome. RetryAfter is set for OutcomeBusy only, capped at MaxRetryAfter.
 type Result struct {
@@ -89,7 +100,7 @@ func New(origin string, tokens TokenSource) (*Client, error) {
 func (c *Client) Post(ctx context.Context, body []byte) Result {
 	ctx, cancel := context.WithTimeout(ctx, RequestTimeout)
 	defer cancel()
-	token, err := c.tokens.Token(ctx, Audience, Scope)
+	token, err := c.tokens.Token(ctx, Audience)
 	if err != nil || token == "" {
 		return Result{Outcome: OutcomeNoToken}
 	}
@@ -118,17 +129,19 @@ func classify(status int, retryAfterHeader string, answer []byte) Result {
 	case http.StatusNoContent:
 		return Result{Outcome: OutcomeApplied}
 	case http.StatusBadRequest:
-		return Result{Outcome: OutcomeRefused}
+		return Result{Outcome: OutcomeSchema}
 	case http.StatusUnauthorized, http.StatusForbidden:
 		return Result{Outcome: OutcomeAuthRefused}
 	case http.StatusConflict:
 		var body answerBody
 		_ = json.Unmarshal(answer, &body)
 		switch body.ReasonCode {
-		case "gap":
-			return Result{Outcome: OutcomeGap}
-		case "digest_mismatch":
-			return Result{Outcome: OutcomeDigestMismatch}
+		case "projection_retry":
+			return Result{Outcome: OutcomeRetry}
+		case "projection_conflict":
+			return Result{Outcome: OutcomeConflict}
+		case "projection_refused":
+			return Result{Outcome: OutcomeFinalRefused}
 		}
 		return Result{Outcome: OutcomeOther}
 	case http.StatusTooManyRequests, http.StatusServiceUnavailable:

@@ -37,10 +37,10 @@ func startCredentialOutboxPublisher(ctx context.Context, ticker credentialOutbox
 	purge := func(ctx context.Context, _ time.Time, limit int) (int, error) {
 		report, err := ticker.Tick(ctx, limit)
 		if logger != nil {
-			if report.Applied+report.Gap+report.DigestMismatch+report.Refused+report.Other+report.NoAnswer > 0 {
+			if report.Applied+report.Retry+report.Conflict+report.FinalRefused+report.Schema+report.Other+report.NoAnswer > 0 {
 				logger.InfoContext(ctx, "credential outbox publish", "source", "publisher",
-					"applied", report.Applied, "gap", report.Gap, "digest_mismatch", report.DigestMismatch,
-					"refused", report.Refused, "other", report.Other, "no_answer", report.NoAnswer)
+					"applied", report.Applied, "projection_retry", report.Retry, "projection_conflict", report.Conflict,
+					"projection_refused", report.FinalRefused, "schema", report.Schema, "other", report.Other, "no_answer", report.NoAnswer)
 			}
 			if report.Held > 0 {
 				logger.WarnContext(ctx, credentialOutboxPublishHeldMessage, "held", report.Held)

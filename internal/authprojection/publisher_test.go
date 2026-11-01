@@ -121,7 +121,7 @@ func TestANextRevisionNeverGoesBeforeAnUnacknowledgedOne(t *testing.T) {
 	store := &fakeStore{}
 	store.add("a", 1)
 	store.add("a", 2)
-	poster := &scriptedPoster{answers: map[string]Result{"a:1": {Outcome: OutcomeGap}}}
+	poster := &scriptedPoster{answers: map[string]Result{"a:1": {Outcome: OutcomeRetry}}}
 	publisher, _ := newTestPublisher(store, poster)
 	if _, err := publisher.Tick(context.Background(), 100); err != nil {
 		t.Fatal(err)
@@ -135,7 +135,7 @@ func TestANextRevisionNeverGoesBeforeAnUnacknowledgedOne(t *testing.T) {
 }
 
 func TestEveryNonAckAnswerLeavesTheEventUnmarked(t *testing.T) {
-	for _, outcome := range []Outcome{OutcomeGap, OutcomeDigestMismatch, OutcomeRefused, OutcomeAuthRefused, OutcomeBusy, OutcomeOther, OutcomeNoAnswer, OutcomeNoToken} {
+	for _, outcome := range []Outcome{OutcomeRetry, OutcomeSchema, OutcomeAuthRefused, OutcomeBusy, OutcomeOther, OutcomeNoAnswer, OutcomeNoToken} {
 		store := &fakeStore{}
 		store.add("a", 1)
 		publisher, _ := newTestPublisher(store, &scriptedPoster{answers: map[string]Result{"a:1": {Outcome: outcome}}})
@@ -155,7 +155,7 @@ func TestAHeldAggregateLeavesTheClaimSoPoisonedHeadsDoNotStarveOthers(t *testing
 	for i := 0; i < poisoned; i++ {
 		id := fmt.Sprintf("poison%03d", i)
 		store.add(id, 1)
-		answers[id+":1"] = Result{Outcome: OutcomeRefused}
+		answers[id+":1"] = Result{Outcome: OutcomeSchema}
 	}
 	store.add("healthy", 1)
 	poster := &scriptedPoster{answers: answers}
@@ -166,14 +166,14 @@ func TestAHeldAggregateLeavesTheClaimSoPoisonedHeadsDoNotStarveOthers(t *testing
 	if err != nil {
 		t.Fatal(err)
 	}
-	if first.Refused != 100 || first.Held != 100 || !first.Full {
+	if first.Schema != 100 || first.Held != 100 || !first.Full {
 		t.Fatalf("first tick = %+v", first)
 	}
 	second, err := publisher.Tick(context.Background(), 100)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if second.Applied != 1 || second.Refused != 30 {
+	if second.Applied != 1 || second.Schema != 30 {
 		t.Fatalf("second tick = %+v", second)
 	}
 	for i, held := range store.helds {
@@ -191,7 +191,7 @@ func TestAHoldPassesTheHeldSetSortedAndTheRetryComesAfterTheBackoff(t *testing.T
 	store := &fakeStore{}
 	store.add("b", 1)
 	store.add("a", 1)
-	poster := &scriptedPoster{answers: map[string]Result{"a:1": {Outcome: OutcomeGap}, "b:1": {Outcome: OutcomeGap}}}
+	poster := &scriptedPoster{answers: map[string]Result{"a:1": {Outcome: OutcomeRetry}, "b:1": {Outcome: OutcomeRetry}}}
 	publisher, clk := newTestPublisher(store, poster)
 	if _, err := publisher.Tick(context.Background(), 100); err != nil {
 		t.Fatal(err)
@@ -219,7 +219,7 @@ func TestAHoldPassesTheHeldSetSortedAndTheRetryComesAfterTheBackoff(t *testing.T
 func TestTheBackoffDoublesAndStopsAtFiveMinutes(t *testing.T) {
 	store := &fakeStore{}
 	store.add("a", 1)
-	poster := &scriptedPoster{answers: map[string]Result{"a:1": {Outcome: OutcomeGap}}}
+	poster := &scriptedPoster{answers: map[string]Result{"a:1": {Outcome: OutcomeRetry}}}
 	publisher, clk := newTestPublisher(store, poster)
 	want := []time.Duration{30 * time.Second, time.Minute, 2 * time.Minute, 4 * time.Minute, 5 * time.Minute, 5 * time.Minute}
 	for i, wait := range want {
@@ -236,7 +236,7 @@ func TestTheBackoffDoublesAndStopsAtFiveMinutes(t *testing.T) {
 func TestAnAckClearsTheHoldAndTheFailureCount(t *testing.T) {
 	store := &fakeStore{}
 	store.add("a", 1)
-	poster := &scriptedPoster{answers: map[string]Result{"a:1": {Outcome: OutcomeGap}}}
+	poster := &scriptedPoster{answers: map[string]Result{"a:1": {Outcome: OutcomeRetry}}}
 	publisher, clk := newTestPublisher(store, poster)
 	if _, err := publisher.Tick(context.Background(), 100); err != nil {
 		t.Fatal(err)
@@ -255,7 +255,7 @@ func TestAnAckClearsTheHoldAndTheFailureCount(t *testing.T) {
 func TestEachOutcomeIsCountedApart(t *testing.T) {
 	store := &fakeStore{}
 	answers := map[string]Result{}
-	for id, outcome := range map[string]Outcome{"g": OutcomeGap, "d": OutcomeDigestMismatch, "r": OutcomeRefused, "o": OutcomeOther} {
+	for id, outcome := range map[string]Outcome{"r": OutcomeRetry, "s": OutcomeSchema, "o": OutcomeOther, "c": OutcomeConflict, "f": OutcomeFinalRefused} {
 		store.add(id, 1)
 		answers[id+":1"] = Result{Outcome: outcome}
 	}
@@ -265,8 +265,41 @@ func TestEachOutcomeIsCountedApart(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if report.Gap != 1 || report.DigestMismatch != 1 || report.Refused != 1 || report.Other != 1 || report.Applied != 1 || report.Held != 4 || report.Stopped != "" {
+	if report.Retry != 1 || report.Schema != 1 || report.Other != 1 || report.Conflict != 1 || report.FinalRefused != 1 || report.Applied != 1 || report.Held != 3 || report.Stopped != "" {
 		t.Fatalf("report = %+v", report)
+	}
+}
+
+func TestAFinalAnswerMarksTheEventAndLetsTheNextRevisionFlow(t *testing.T) {
+	for _, outcome := range []Outcome{OutcomeConflict, OutcomeFinalRefused} {
+		store := &fakeStore{}
+		store.add("a", 1)
+		store.add("a", 2)
+		poster := &scriptedPoster{answers: map[string]Result{"a:1": {Outcome: outcome}}}
+		publisher, _ := newTestPublisher(store, poster)
+		report, err := publisher.Tick(context.Background(), 100)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if store.unpublished() != 0 || report.Held != 0 || !slices.Equal(poster.posts, []string{"a:1", "a:2"}) {
+			t.Errorf("%s: unpublished = %d, report = %+v, posts = %v", outcome, store.unpublished(), report, poster.posts)
+		}
+	}
+}
+
+func TestAFinalAnswerClearsAnEarlierHold(t *testing.T) {
+	store := &fakeStore{}
+	store.add("a", 1)
+	poster := &scriptedPoster{answers: map[string]Result{"a:1": {Outcome: OutcomeRetry}}}
+	publisher, clk := newTestPublisher(store, poster)
+	_, _ = publisher.Tick(context.Background(), 100)
+	poster.answers["a:1"] = Result{Outcome: OutcomeConflict}
+	clk.now = clk.now.Add(DefaultBackoff)
+	if _, err := publisher.Tick(context.Background(), 100); err != nil {
+		t.Fatal(err)
+	}
+	if _, held := publisher.held["a"]; held || store.unpublished() != 0 {
+		t.Fatalf("held = %v, unpublished = %d", held, store.unpublished())
 	}
 }
 
@@ -375,7 +408,7 @@ func TestTheHeldSetIsBounded(t *testing.T) {
 	for i := 0; i < 5; i++ {
 		id := fmt.Sprintf("p%d", i)
 		store.add(id, 1)
-		answers[id+":1"] = Result{Outcome: OutcomeRefused}
+		answers[id+":1"] = Result{Outcome: OutcomeSchema}
 	}
 	publisher, _ := newTestPublisher(store, &scriptedPoster{answers: answers})
 	publisher.maxHeld = 3

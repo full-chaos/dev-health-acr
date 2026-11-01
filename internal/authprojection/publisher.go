@@ -15,7 +15,7 @@ type Event struct {
 
 // Store claims one event at a time. PublishNext claims the oldest event whose aggregate is not in held and has no
 // earlier unpublished revision, calls send inside the claim and marks the event published only when send returns
-// true. found is false when nothing is eligible. An error is a store failure.
+// true (the endpoint closed the event: Result.Acked). found is false when nothing is eligible. An error is a store failure.
 type Store interface {
 	PublishNext(ctx context.Context, held []string, send func(context.Context, Event) bool) (found bool, event Event, err error)
 }
@@ -37,8 +37,8 @@ const (
 
 // Report counts one tick. Stopped is the outcome that ended it early, empty when the batch ran out or filled.
 type Report struct {
-	Applied, Gap, DigestMismatch, Refused, Other, NoAnswer int
-	Stopped                                                Outcome
+	Applied, Retry, Conflict, FinalRefused, Schema, Other, NoAnswer int
+	Stopped                                                         Outcome
 	// Paused is a tick skipped inside a Retry-After.
 	Paused bool
 	// Full is a batch that reached its limit: more events wait for the next tick.
@@ -93,7 +93,7 @@ func (p *Publisher) Tick(ctx context.Context, limit int) (Report, error) {
 		var result Result
 		found, event, err := p.store.PublishNext(ctx, p.heldIDs(), func(ctx context.Context, event Event) bool {
 			result = p.poster.Post(ctx, event.Body)
-			return result.Outcome == OutcomeApplied
+			return result.Acked()
 		})
 		if err != nil {
 			report.Held = p.heldCount()
@@ -121,14 +121,17 @@ func (p *Publisher) apply(report *Report, aggregateID string, result Result) boo
 	case OutcomeApplied:
 		report.Applied++
 		delete(p.held, aggregateID)
-	case OutcomeGap:
-		report.Gap++
+	case OutcomeConflict:
+		report.Conflict++
+		delete(p.held, aggregateID)
+	case OutcomeFinalRefused:
+		report.FinalRefused++
+		delete(p.held, aggregateID)
+	case OutcomeRetry:
+		report.Retry++
 		return p.hold(report, aggregateID)
-	case OutcomeDigestMismatch:
-		report.DigestMismatch++
-		return p.hold(report, aggregateID)
-	case OutcomeRefused:
-		report.Refused++
+	case OutcomeSchema:
+		report.Schema++
 		return p.hold(report, aggregateID)
 	case OutcomeNoAnswer:
 		report.NoAnswer++

@@ -90,15 +90,18 @@ func TestPostSendsTheStoredBytesToTheFixedRouteWithTheWorkloadToken(t *testing.T
 	if got.body != body {
 		t.Errorf("body is not the stored bytes: %q", got.body)
 	}
-	if len(tokens.audiences) != 1 || tokens.audiences[0] != "auth-service" || len(tokens.scopes[0]) != 1 || tokens.scopes[0][0] != "credential_events.publish" {
-		t.Errorf("token asked for audience %v scope %v", tokens.audiences, tokens.scopes)
+	if len(tokens.audiences) != 1 || tokens.audiences[0] != "auth-service" || len(tokens.scopes[0]) != 0 {
+		t.Errorf("token asked for audience %v scope %v (the audience alone: the token has no scope claim)", tokens.audiences, tokens.scopes)
 	}
 }
 
 func TestPostClassifiesEveryAnswer(t *testing.T) {
-	gap := `{"schema_version":"error.v1","status":409,"reason_code":"gap","request_id":"req_AAAAAAAAAAAAAAAAAAAAAAAAAA","occurred_at":"2026-11-01T00:00:00Z"}`
-	digest := strings.ReplaceAll(gap, `"gap"`, `"digest_mismatch"`)
-	unknown := strings.ReplaceAll(gap, `"gap"`, `"something_else"`)
+	retry := `{"schema_version":"error.v1","status":409,"reason_code":"projection_retry","request_id":"req_AAAAAAAAAAAAAAAAAAAAAAAAAA","occurred_at":"2026-11-01T00:00:00Z"}`
+	conflict := strings.ReplaceAll(retry, `"projection_retry"`, `"projection_conflict"`)
+	finalRefused := strings.ReplaceAll(retry, `"projection_retry"`, `"projection_refused"`)
+	oldGap := strings.ReplaceAll(retry, `"projection_retry"`, `"gap"`)
+	oldDigest := strings.ReplaceAll(retry, `"projection_retry"`, `"digest_mismatch"`)
+	unknown := strings.ReplaceAll(retry, `"projection_retry"`, `"something_else"`)
 	cases := []struct {
 		name   string
 		status int
@@ -106,14 +109,17 @@ func TestPostClassifiesEveryAnswer(t *testing.T) {
 		want   Outcome
 	}{
 		{"204 applied or duplicate", 204, "", OutcomeApplied},
-		{"400 schema refusal", 400, "", OutcomeRefused},
+		{"400 schema refusal", 400, "", OutcomeSchema},
 		{"401", 401, "", OutcomeAuthRefused},
 		{"403", 403, "", OutcomeAuthRefused},
-		{"409 gap", 409, gap, OutcomeGap},
-		{"409 digest_mismatch", 409, digest, OutcomeDigestMismatch},
+		{"409 projection_retry", 409, retry, OutcomeRetry},
+		{"409 projection_conflict is final", 409, conflict, OutcomeConflict},
+		{"409 projection_refused is final", 409, finalRefused, OutcomeFinalRefused},
+		{"409 the retired gap reason is not read", 409, oldGap, OutcomeOther},
+		{"409 the retired digest_mismatch reason is not read", 409, oldDigest, OutcomeOther},
 		{"409 unknown reason", 409, unknown, OutcomeOther},
 		{"409 no body", 409, "", OutcomeOther},
-		{"409 not json", 409, "gap", OutcomeOther},
+		{"409 not json", 409, "projection_retry", OutcomeOther},
 		{"429", 429, "", OutcomeBusy},
 		{"503", 503, "", OutcomeBusy},
 		{"200 is not the contract", 200, "", OutcomeOther},
