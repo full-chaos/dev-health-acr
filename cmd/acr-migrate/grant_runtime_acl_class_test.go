@@ -205,10 +205,8 @@ func TestRuntimeGrantDeclaration_rowLockedTablesDeclareUpdate(t *testing.T) {
 				continue
 			}
 			scanned++
-			for _, name := range lockedTables(match[1]) {
-				if !updatable[name] {
-					missing = append(missing, name+" in "+path)
-				}
+			for _, name := range tablesMissingUpdate(match[1], updatable) {
+				missing = append(missing, name+" in "+path)
 			}
 		}
 		return nil

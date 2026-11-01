@@ -117,3 +117,15 @@ func TestAnAliasNamedInTheOfClauseResolvesToItsTableAndNeedsUpdate(t *testing.T)
 		}
 	}
 }
+
+// tablesMissingUpdate names the tables a statement row-locks that the runtime
+// grant declaration does not give UPDATE.
+func tablesMissingUpdate(statement string, updatable map[string]bool) []string {
+	var missing []string
+	for _, table := range lockedTables(statement) {
+		if !updatable[table] {
+			missing = append(missing, table)
+		}
+	}
+	return missing
+}
