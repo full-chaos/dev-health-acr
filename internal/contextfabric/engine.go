@@ -3516,6 +3516,11 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 		if err != nil {
 			return InvestigationResult{}, stageError(StageGraph, fmt.Errorf("discover graph context: %w", err))
 		}
+		// CHAOS-12456: most link reads of a turn run here, after the resolution
+		// closed, and a failed one is owed the same sentence.
+		if graphContext.WorkItemLinksUnread {
+			resolution.WorkItemLinkLimitation = contractsv1.ContextFabricWorkItemLinksUnreadLimitation
+		}
 	}
 	graphContext.Resolution = resolution
 

@@ -533,7 +533,7 @@ func (a *Adapter) ResolveSubjects(ctx context.Context, principal storage.Princip
 	return resolution, offers, bases, digests, graphNotProjectedError(err)
 }
 
-func (a *Adapter) DiscoverContext(ctx context.Context, principal storage.Principal, request contextfabric.GraphDiscoveryRequest) (contextfabric.GraphContext, error) {
+func (a *Adapter) DiscoverContext(ctx context.Context, principal storage.Principal, request contextfabric.GraphDiscoveryRequest) (discovered contextfabric.GraphContext, err error) {
 	if strings.TrimSpace(principal.OrgID) == "" {
 		return contextfabric.GraphContext{}, errors.New("authenticated organization is required")
 	}
@@ -555,6 +555,9 @@ func (a *Adapter) DiscoverContext(ctx context.Context, principal storage.Princip
 		return contextfabric.GraphContext{}, err
 	}
 	defer finish()
+	// CHAOS-12456: the turn states a failed link read. Most of a turn's reads run
+	// in this call, after the resolution closed.
+	defer func() { discovered.WorkItemLinksUnread = linkReachError(ctx) != nil }()
 	scope := request.Request.RequestedScope
 	temporal := newTemporalFilter(request.Interpretation.TimeContext)
 

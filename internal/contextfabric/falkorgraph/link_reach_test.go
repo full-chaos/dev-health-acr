@@ -3,6 +3,7 @@ package falkorgraph
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -19,6 +20,7 @@ import (
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/eventspec/certify"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/graphrank"
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
+	"github.com/full-chaos/dev-health-acr/internal/observability"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
 	"github.com/full-chaos/dev-health-acr/internal/testsupport/userprincipal"
 )
@@ -143,13 +145,16 @@ func TestTheLinkReachStatementIsKeyedOnThePage(t *testing.T) {
 		return nil, nil
 	}}
 	readNode(t, fake, restrictedReachCaller(t), repoLessNode(repoLessItemID))
-	for _, want := range []string{"(w:Subject {org_id:$org,", "(p:Subject {org_id:$org,", "w.canonical_id IN $ids", "r.relation_type = $links", "r.property_link_provenance = $native", "$noRepository IN w.authorization_repositories", "$grantRaw"} {
+	for _, want := range []string{"(w:Subject {org_id:$org, subject_kind:$workItem})", "(p:Subject {org_id:$org, subject_kind:$pullRequest})", "w.canonical_id IN $ids", "r.relation_type = $links", "r.property_link_provenance = $native", "$noRepository IN w.authorization_repositories", "$grantRaw"} {
 		if !strings.Contains(statement, want) {
 			t.Fatalf("statement %q lacks %q", statement, want)
 		}
 	}
 	if params["native"] != "native" || params["links"] != string(contractsv1.ContextFabricRelationshipLinksPullRequest) || params["noRepository"] != contractsv1.ContextFabricNoRepositorySentinel {
 		t.Fatalf("params = %v", params)
+	}
+	if params["workItem"] != string(contractsv1.ContextFabricSubjectWorkItem) || params["pullRequest"] != string(contractsv1.ContextFabricSubjectPullRequest) {
+		t.Fatalf("endpoint kinds = %v, %v", params["workItem"], params["pullRequest"])
 	}
 	if !slices.Equal(params["ids"].([]interface{}), []interface{}{repoLessItemID}) {
 		t.Fatalf("ids = %v", params["ids"])
@@ -555,6 +560,41 @@ func TestTheReachLineCertifiesFromTheRealProducer(t *testing.T) {
 	}
 }
 
+// request_id rides on both lines when the context has one, and is omitted, never
+// written empty, when it has none.
+func TestTheReachLinesCarryTheRequestID(t *testing.T) {
+	t.Parallel()
+	const requestID = "req_0123456789abcdef0123456789abcdef"
+	tally := WorkItemLinkReachTally{Reads: 2, Failed: 1}
+	lines := func(ctx context.Context) []map[string]any {
+		var buf bytes.Buffer
+		telemetry := SlogTelemetry{Logger: slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelInfo}))}
+		telemetry.RecordWorkItemLinkReach(ctx, "org_1", tally)
+		var parsed []map[string]any
+		for _, line := range strings.Split(strings.TrimSpace(buf.String()), "\n") {
+			var fields map[string]any
+			if err := json.Unmarshal([]byte(line), &fields); err != nil {
+				t.Fatal(err)
+			}
+			parsed = append(parsed, fields)
+		}
+		if len(parsed) != 2 {
+			t.Fatalf("lines = %v, want the Info and the Warn line", parsed)
+		}
+		return parsed
+	}
+	for _, line := range lines(observability.WithRequestID(context.Background(), requestID)) {
+		if line["request_id"] != requestID {
+			t.Fatalf("line %v, want request_id %s", line, requestID)
+		}
+	}
+	for _, line := range lines(context.Background()) {
+		if _, held := line["request_id"]; held {
+			t.Fatalf("line %v, want no request_id", line)
+		}
+	}
+}
+
 func TestTheReachOutcomeVocabularyIsTheProducers(t *testing.T) {
 	t.Parallel()
 	for _, field := range eventspec.WorkItemLinkReach.Fields {
@@ -789,6 +829,49 @@ func TestATurnDisclosesAFailedLinkRead(t *testing.T) {
 	}
 	if sentence, _, _ := resolve(nil); sentence == contractsv1.ContextFabricWorkItemLinksUnreadLimitation {
 		t.Fatal("reads that worked gave the failed-read sentence")
+	}
+}
+
+// Most link reads of a turn run in the discovery, so a failed one there reaches
+// the turn as well, on every way out of the call.
+func TestADiscoveryReportsAFailedLinkRead(t *testing.T) {
+	t.Parallel()
+	discover := func(failure error) contextfabric.GraphContext {
+		fake := &fakeConn{linkReachFunc: func(context.Context, string, map[string]interface{}) ([]row, error) { return nil, failure }}
+		discovered, err := newFakeAdapter(t, fake).DiscoverContext(context.Background(), restrictedReachCaller(t), contextfabric.GraphDiscoveryRequest{
+			Request: contextfabric.InvestigationRequest{
+				SchemaVersion: contextfabric.InvestigationRequestSchemaV1, RequestID: "request_12456003", Question: "why is CHAOS-11516 blocked?",
+				TimeContext: contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent},
+				Options:     contextfabric.InvestigationOptions{MaxSubjectCandidates: 10, MaxCohortMembers: 50, MaxRelationshipPaths: 50, MaxDrivers: 10, MaxEvidenceRefs: 100, MaxSerializedBytes: 262144, AllowClarification: true},
+			},
+			Interpretation: contextfabric.InterpretedQuestion{Shape: contextfabric.ShapeOpen, RequestedJudgment: "status", SubjectTerms: []string{"CHAOS-11516"}, TimeContext: contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent}},
+			Resolution:     contextfabric.SubjectResolution{Committed: []contextfabric.SubjectRef{{Kind: contextfabric.SubjectRepository, CanonicalID: "repository:github:acme/alpha", Label: reachInsideRepo}}},
+			Binding:        contextfabric.ResolvedGraphBinding{GraphKey: "acr-cf-fake-key", Epoch: 1},
+		})
+		if err != nil {
+			t.Fatalf("DiscoverContext() error = %v", err)
+		}
+		return discovered
+	}
+	if !discover(errors.New("timeout")).WorkItemLinksUnread {
+		t.Fatal("a failed link read did not reach the discovery's result")
+	}
+	if discover(nil).WorkItemLinksUnread {
+		t.Fatal("reads that worked were reported as failed")
+	}
+}
+
+// A context reaches every line that reads a request id from it, so what the reach
+// puts on one holds no adapter: an Adapter holds credentials.
+func TestTheReachKeepsNoAdapterOnTheContext(t *testing.T) {
+	t.Parallel()
+	for _, value := range []interface{}{lazyProjectReach{}, linkReach{}} {
+		kind := reflect.TypeOf(value)
+		for index := range kind.NumField() {
+			if field := kind.Field(index); field.Type == reflect.TypeFor[*Adapter]() {
+				t.Fatalf("%s.%s holds the adapter", kind.Name(), field.Name)
+			}
+		}
 	}
 }
 

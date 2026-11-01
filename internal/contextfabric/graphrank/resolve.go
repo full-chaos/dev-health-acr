@@ -506,8 +506,8 @@ type ResolveDeps struct {
 	// set, and why the round can never influence `resolution` regardless.
 	CensusFunc CensusFunc
 	// WorkItemLinksUnread reports that a work-item link read of the call failed,
-	// so an item it did not prove is unknown, not unlinked. Nil means no such
-	// read.
+	// so an item it did not prove is unknown, not unlinked, whatever committed.
+	// Nil means no such read.
 	WorkItemLinksUnread func() bool
 	// LinkScopedWorkItems returns the work items in a requested repository
 	// scope: the issues the repository-to-issue walk of the entity tree

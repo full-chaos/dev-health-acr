@@ -30,18 +30,30 @@ func workItemHandleRoundOf(question string, attestation Attestation) workItemHan
 	return round
 }
 
-// workItemLinkLimitation is the sentence a turn that resolved no work item owes
-// a restricted caller, or "". Everything it reads sits inside the grant, so a
-// subject outside the grant cannot change it. A requested repository narrows the
-// census, so a count of zero there proves nothing about the grant, and the
-// narrowing's own sentence speaks for it.
+// linksUnreadLimitation is the sentence a failed link read owes a restricted
+// caller, or "". A read failed whatever committed, so it comes before any rule
+// about the outcome: one item admitted does not show that no other was left out.
+func linksUnreadLimitation(principal storage.Principal, deps ResolveDeps) string {
+	if grantScopedCensus(principal) && deps.WorkItemLinksUnread != nil && deps.WorkItemLinksUnread() {
+		return contractsv1.ContextFabricWorkItemLinksUnreadLimitation
+	}
+	return ""
+}
+
+// workItemLinkLimitation is the sentence a turn owes a restricted caller about
+// work items, or "": a failed link read's, or else the one a turn that resolved no
+// work item owes. Everything it reads sits inside the grant, so a subject outside
+// the grant cannot change it. A requested repository narrows the census, so a
+// count of zero there proves nothing about the grant, and the narrowing's own
+// sentence speaks for it.
 func workItemLinkLimitation(principal storage.Principal, request contextfabric.InvestigationRequest, deps ResolveDeps, round workItemHandleRound, resolution contextfabric.SubjectResolution) string {
+	if sentence := linksUnreadLimitation(principal, deps); sentence != "" {
+		return sentence
+	}
 	if !grantScopedCensus(principal) || committedWorkItem(resolution) {
 		return ""
 	}
 	switch {
-	case deps.WorkItemLinksUnread != nil && deps.WorkItemLinksUnread():
-		return contractsv1.ContextFabricWorkItemLinksUnreadLimitation
 	case !round.censused:
 		return ""
 	case !round.complete:

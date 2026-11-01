@@ -657,6 +657,44 @@ func TestAnUnresolvedWorkItemReadsTheSameWhateverTheCause(t *testing.T) {
 	}
 }
 
+// The mixed outcome. One item committed and a keyed read failed for another: the
+// commit does not silence the failure, because a work item may be left out.
+func TestAFailedLinkReadDisclosesBesideACommittedWorkItem(t *testing.T) {
+	t.Parallel()
+	id := "work_item.v2:00000000-0000-0000-0000-000000000000:linear:CHAOS-11516"
+	spy := &grantCensusSpy{rows: []grantRow{{contextfabric.SubjectWorkItem, "CHAOS-11516", id, grantRepoInside}}}
+	node := repoLessItem(id, "CHAOS-11516 build legs", grantRepoInside)
+	backend := &fakeGraphBackend{searchResults: map[string][]CandidateNode{}, searchTruncated: true, exactHints: map[string]CandidateNode{
+		SubjectKey(contextfabric.SubjectRef{Kind: contextfabric.SubjectWorkItem, CanonicalID: id}): node,
+	}}
+	deps := backend.deps()
+	deps.WorkItemLinksUnread = func() bool { return true }
+	deps.CensusFunc = spy.census
+	deps.HandleGrammarChecker = func(kind contextfabric.SubjectKind, patternID, value string) (string, bool) {
+		return "work_items.work_item_id", ValidateHandleGrammar(kind, patternID, value)
+	}
+	request := testRequest()
+	request.Question = "why is CHAOS-11516 blocked?"
+	resolution, _, _, _, err := ResolveSubjectsWithCommitBasis(context.Background(), restrictedCaller(t, grantRepoInside), request, testInterpreted("CHAOS-11516"), deps, nil, nil, nil, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ids := scopeAnchorCommittedIDs(resolution); len(ids) != 1 || ids[0] != id {
+		t.Fatalf("committed = %v, want the linked item", ids)
+	}
+	if resolution.WorkItemLinkLimitation != contractsv1.ContextFabricWorkItemLinksUnreadLimitation {
+		t.Fatalf("limitation = %q beside a committed item, want the unread sentence", resolution.WorkItemLinkLimitation)
+	}
+	// An unrestricted caller reads no link, so it owes no sentence.
+	plain, _, _, _, err := ResolveSubjectsWithCommitBasis(context.Background(), storage.Principal{OrgID: "org_1"}, request, testInterpreted("CHAOS-11516"), deps, nil, nil, nil, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if plain.WorkItemLinkLimitation != "" {
+		t.Fatalf("unrestricted caller: limitation %q", plain.WorkItemLinkLimitation)
+	}
+}
+
 // A read that could not decide denies and says so. It never reads as an absent
 // item.
 func TestAFailedWorkItemReadDeniesAndDiscloses(t *testing.T) {
@@ -678,7 +716,7 @@ func TestAFailedWorkItemReadDeniesAndDiscloses(t *testing.T) {
 	if len(resolution.Committed) != 0 || resolution.WorkItemLinkLimitation != contractsv1.ContextFabricWorkItemLinksUnreadLimitation {
 		t.Fatalf("lag: committed %v limitation %q", resolution.Committed, resolution.WorkItemLinkLimitation)
 	}
-	// The link read itself failed or was cut.
+	// The link read itself failed.
 	backend := &fakeGraphBackend{searchResults: map[string][]CandidateNode{}, searchTruncated: true}
 	deps := backend.deps()
 	deps.WorkItemLinksUnread = func() bool { return true }
@@ -969,5 +1007,41 @@ func TestErrCensusGrantNotAppliedIsACensusError(t *testing.T) {
 	}
 	if !errors.Is(ErrCensusGrantNotApplied, ErrCensusGrantNotApplied) || strings.Contains(ErrCensusGrantNotApplied.Error(), "/") {
 		t.Fatalf("error text %q must name no repository", ErrCensusGrantNotApplied)
+	}
+}
+
+// Only the sentinel alone qualifies. A list that holds the sentinel beside a real
+// repository is decided by that repository, and a link never widens it. A list
+// held in another type, or a link attribute held in another type, proves nothing.
+func TestALinkMatchesOnlyTheSentinelAlone(t *testing.T) {
+	t.Parallel()
+	sentinel := contractsv1.ContextFabricNoRepositorySentinel
+	for name, tc := range map[string]struct {
+		own    interface{}
+		linked interface{}
+		want   bool
+	}{
+		"the sentinel alone":               {[]string{sentinel}, []string{grantRepoInside}, true},
+		"the sentinel before a repository": {[]string{sentinel, "other/secret"}, []string{grantRepoInside}, false},
+		"the sentinel after a repository":  {[]string{"other/secret", sentinel}, []string{grantRepoInside}, false},
+		"the sentinel twice":               {[]string{sentinel, sentinel}, []string{grantRepoInside}, false},
+		"a repository alone":               {[]string{"other/secret"}, []string{grantRepoInside}, false},
+		"an empty list":                    {[]string{}, []string{grantRepoInside}, false},
+		"the sentinel as a bare string":    {sentinel, []string{grantRepoInside}, false},
+		"no link":                          {[]string{sentinel}, nil, false},
+		"a link to another repository":     {[]string{sentinel}, []string{"other/secret"}, false},
+		"a link held as a bare string":     {[]string{sentinel}, grantRepoInside, false},
+		"a mixed link list":                {[]string{sentinel}, []string{"other/secret", grantRepoInside}, true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			attributes := map[string]interface{}{authorizationRepositoriesAttr: tc.own}
+			if tc.linked != nil {
+				attributes[AuthorizationLinkRepositoriesAttr] = tc.linked
+			}
+			if got := linkedRepositoryMatches(attributes, grantRepoInside); got != tc.want {
+				t.Fatalf("linkedRepositoryMatches(%v, %v) = %v, want %v", tc.own, tc.linked, got, tc.want)
+			}
+		})
 	}
 }

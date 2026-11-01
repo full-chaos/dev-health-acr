@@ -143,7 +143,7 @@ with one keyed read: for the repo-less work items that page returned, the native
 
 | Failure | Subject | Caller reads |
 | --- | --- | --- |
-| Keyed read fails in a turn | stays denied, the turn goes on | `ContextFabricWorkItemLinksUnreadLimitation` |
+| Keyed read fails in a turn, in resolution or discovery | stays denied, the turn goes on, an answer is marked partial | `ContextFabricWorkItemLinksUnreadLimitation`, on a terminal or an answer, whatever committed |
 | Keyed read fails at the stored gate or the recheck | `ErrUnavailable` | 503, never `no_match` |
 | Census error, deadline or row bound | `census_error` | the same sentence |
 | Census names an item, node gate refuses (projection lag) | `refused` | the same sentence |

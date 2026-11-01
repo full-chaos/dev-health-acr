@@ -10,6 +10,59 @@ import (
 	"github.com/full-chaos/dev-health-acr/internal/storage"
 )
 
+// A failed link read is stated on an answer too, whichever adapter call it failed
+// in: a committed subject does not mean nothing was left out. The answer is partial.
+func TestAFailedLinkReadIsStatedOnACommittedAnswer(t *testing.T) {
+	t.Parallel()
+	for name, fail := range map[string]func(*SubjectResolution, *GraphContext){
+		"in the resolution": func(resolution *SubjectResolution, _ *GraphContext) {
+			resolution.WorkItemLinkLimitation = contractsv1.ContextFabricWorkItemLinksUnreadLimitation
+		},
+		"in the discovery": func(_ *SubjectResolution, discovered *GraphContext) { discovered.WorkItemLinksUnread = true },
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			engine, request := engineForDegradationEdited(t, false, []string{}, TimeContext{Axis: TemporalCurrent}, fail)
+			result, err := engine.Investigate(context.Background(), storage.Principal{OrgID: "org_1", RepositoryScopes: []string{"acme/alpha"}}, request)
+			if err != nil {
+				t.Fatalf("Investigate() error = %v", err)
+			}
+			if !slices.Contains(result.Limitations, contractsv1.ContextFabricWorkItemLinksUnreadLimitation) {
+				t.Fatalf("limitations %q, want the unread sentence", result.Limitations)
+			}
+			if !result.Coverage.Partial {
+				t.Fatal("an answer that may leave a work item out must mark its coverage partial")
+			}
+		})
+	}
+}
+
+// The other sentence is about a turn that resolved no work item. A committed
+// answer does not carry it, and a read that worked adds nothing.
+func TestACommittedAnswerCarriesNoOtherLinkSentence(t *testing.T) {
+	t.Parallel()
+	for name, sentence := range map[string]string{"no link": contractsv1.ContextFabricWorkItemNoGrantedLinkLimitation, "reads worked": ""} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			engine, request := engineForDegradationEdited(t, false, []string{}, TimeContext{Axis: TemporalCurrent}, func(resolution *SubjectResolution, _ *GraphContext) {
+				resolution.WorkItemLinkLimitation = sentence
+			})
+			result, err := engine.Investigate(context.Background(), storage.Principal{OrgID: "org_1", RepositoryScopes: []string{"acme/alpha"}}, request)
+			if err != nil {
+				t.Fatalf("Investigate() error = %v", err)
+			}
+			for _, limitation := range result.Limitations {
+				if contractsv1.IsContextFabricWorkItemLinkLimitation(limitation) {
+					t.Fatalf("limitations %q", result.Limitations)
+				}
+			}
+			if result.Coverage.Partial {
+				t.Fatal("coverage partial with no failed read")
+			}
+		})
+	}
+}
+
 // CHAOS-12456: a work item a restricted caller could not reach stays unresolved,
 // and the terminal says so. It never reads as "does not exist".
 func TestAnUnresolvedWorkItemIsStatedOnTheTerminal(t *testing.T) {

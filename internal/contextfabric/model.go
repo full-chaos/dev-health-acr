@@ -372,6 +372,10 @@ type ProjectionCheckpoint = contractsv1.ContextFabricProjectionCheckpoint
 type GraphContext struct {
 	Resolution SubjectResolution `json:"resolution"`
 	Cohort     *Cohort           `json:"cohort,omitempty"`
+	// WorkItemLinksUnread (CHAOS-12456): a link read of this discovery failed, so
+	// a repo-less work item may be left out of it. The turn states it through its
+	// limitation sentence, which is the only form that leaves the process.
+	WorkItemLinksUnread bool `json:"-"`
 	// CohortPopulation is how many distinct, authorized members of the
 	// cohort's kind the retrieval pool held, counted BEFORE the response
 	// item budget clamped how many the answer could carry. Zero when no
