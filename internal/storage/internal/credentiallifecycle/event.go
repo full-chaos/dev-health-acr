@@ -30,6 +30,7 @@ var (
 	ErrRevisionConflict = errors.New("credential lifecycle revision already written")
 
 	wireRefPattern = regexp.MustCompile(`^[A-Za-z0-9_-]{1,128}$`)
+	orgIDPattern   = regexp.MustCompile(`^[A-Za-z0-9_-]{1,64}$`)
 	scopePattern   = regexp.MustCompile(`^[a-z][a-z0-9_]*(:[a-z][a-z0-9_]*)+$`)
 )
 
@@ -94,16 +95,19 @@ type Sink interface {
 
 // OrgWireID is the Auth Control Plane's form of an acr organization id: org_
 // and the canonical lower-case UUID text, the form every provisioning event
-// carries.
+// carries. PostgreSQL holds only UUIDs; the memory store holds free-form test
+// ids, which map as org_ and the id when it fits the wire pattern and are
+// refused when it does not.
 func OrgWireID(orgID string) (string, error) {
-	if len(orgID) != 36 {
+	if len(orgID) == 36 {
+		if parsed, err := uuid.Parse(orgID); err == nil {
+			return "org_" + parsed.String(), nil
+		}
+	}
+	if !orgIDPattern.MatchString(orgID) {
 		return "", fmt.Errorf("%w: organization id", ErrInvalidEvent)
 	}
-	parsed, err := uuid.Parse(orgID)
-	if err != nil {
-		return "", fmt.Errorf("%w: organization id", ErrInvalidEvent)
-	}
-	return "org_" + parsed.String(), nil
+	return "org_" + orgID, nil
 }
 
 // WireRef is the wire form of an acr-side owner or actor string: a value that

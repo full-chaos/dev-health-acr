@@ -220,14 +220,6 @@ func (s *credentialStore) appendLifecycle(ctx context.Context, parent *contracts
 	if s.audit == nil {
 		return storage.ErrInvalidCredentialLifecycle
 	}
-	// The memory store accepts any organization id string (test data); the
-	// stream is defined over acr organization UUIDs, which PostgreSQL alone
-	// enforces, so a free-form id writes no rows here.
-	if len(steps) > 0 {
-		if _, err := credentiallifecycle.OrgWireID(steps[0].Credential.OrgID); err != nil {
-			return nil
-		}
-	}
 	ledger := &s.audit.ledger
 	mark := ledger.Len()
 	if parent != nil {

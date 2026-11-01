@@ -262,7 +262,7 @@ func TestMapperRefusesWhatTheContractRefuses(t *testing.T) {
 		"issued with no scopes":       {Kind: KindIssued, Credential: noScopes, At: at, Actor: Actor{ActorUser, "a"}},
 		"unknown kind":                {Kind: "expired", Credential: native, At: at, Actor: Actor{Type: ActorSystem}},
 		"unknown actor type":          {Kind: KindIssued, Credential: native, At: at, Actor: Actor{"robot", "a"}},
-		"bad org":                     {Kind: KindIssued, Credential: func() contractsv1.ClientCredential { c := native; c.OrgID = "x"; return c }(), At: at, Actor: Actor{ActorUser, "a"}},
+		"bad org":                     {Kind: KindIssued, Credential: func() contractsv1.ClientCredential { c := native; c.OrgID = "a b"; return c }(), At: at, Actor: Actor{ActorUser, "a"}},
 		"aggregate id out of pattern": {Kind: KindIssued, Credential: func() contractsv1.ClientCredential { c := native; c.CredentialID = "a b"; return c }(), At: at, Actor: Actor{ActorUser, "a"}},
 		"zero time":                   {Kind: KindIssued, Credential: native, Actor: Actor{ActorUser, "a"}},
 	} {
