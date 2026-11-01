@@ -381,7 +381,11 @@ deploy order cannot protect `main`, because acr and web roll separately. So
 `ACR_CONTEXT_FABRIC_VOCABULARY_LABELS_ENABLED` (default off) gates the map, and a
 follow-up ticket removes the flag once every consumer's pin is deployed. Off serves
 no map. The stamped source words are served in both states, because those fields
-are on every pin. See `docs/operations.md`.
+are on every pin. So is the legend of a driver series (CHAOS-12473): `render_shapes`
+is saved with the result, so a stored row's `series.label` would keep the signal
+token, and `ServeVocabularyLabels` restates it from the `ranking_signal` word at
+every door. A fresh result carries the same word from `SelectRenderShapes`. The
+saved document stays as it was. See `docs/operations.md`.
 
 **MCP.** The map is carried on MCP too. The API serves the same
 `answerprojection.Project` output when an answer is over a caller's byte option
