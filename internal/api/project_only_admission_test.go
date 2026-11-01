@@ -223,13 +223,23 @@ func TestEveryProtectedRouteTakesAProjectOnlyPrincipalPastTheRead(t *testing.T) 
 	app.runtime.PrincipalAccess = reader
 	authenticateAsCredential(t, app, storage.CredentialClientClassNativeDevice, []string{"*"})
 	for _, route := range protectedRoutes() {
+		// The harness wires no data source behind some routes, so a status
+		// alone proves nothing: the same call by a repository grant is the
+		// control, under its own submission id: a replay across grants is
+		// refused, which is not what this measures.
+		reader.set(grantedAccess(), nil)
+		control, controlCode := serveProtected(app, harness.tokenA, route, map[string]string{contractsv1.ContextFabricSubmissionIDHeader: "submission-control-01"})
+		reader.reset()
 		reader.set(projectAccess(nil, liveProjects), nil)
 		recorder, code := serveProtected(app, harness.tokenA, route, nil)
 		if calls := reader.reset(); len(calls) != 1 {
 			t.Errorf("%s %s: %d access reads, want one", route.method, route.path, len(calls))
 		}
-		if slices.Contains(accessCodes, code) || recorder.Code == http.StatusInternalServerError || code == "internal_error" {
+		if slices.Contains(accessCodes, code) {
 			t.Errorf("%s %s: refused %d %s: %s", route.method, route.path, recorder.Code, code, recorder.Body.String())
+		}
+		if recorder.Code != control.Code || code != controlCode {
+			t.Errorf("%s %s: %d %s, a repository grant gets %d %s: %s", route.method, route.path, recorder.Code, code, control.Code, controlCode, recorder.Body.String())
 		}
 	}
 }
