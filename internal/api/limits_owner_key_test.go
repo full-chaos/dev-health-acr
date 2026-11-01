@@ -51,7 +51,7 @@ func limitKeyCall(t *testing.T, manager *limits.Manager, row contractsv1.ClientC
 // refused until the organization's window was swept.
 func TestAUsersRotatedCredentialsTakeOneTrackedSubject(t *testing.T) {
 	t.Parallel()
-	manager, err := limits.NewManager(limits.Options{MaxCredentialsPerOrganization: 2, Policies: limits.PolicySet{Context: limits.ContextPolicy{Window: time.Hour, PerOrgLimit: 1 << 20}}})
+	manager, err := limits.NewManager(limits.Options{MaxCredentialsPerOrganization: 1, Policies: limits.PolicySet{Context: limits.ContextPolicy{Window: time.Hour, PerOrgLimit: 1 << 20}}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -101,6 +101,8 @@ func TestTheLimitKeySharesAQuotaOnlyInsideOneOwner(t *testing.T) {
 		{"two operators are not", limitKeyCredential("a", storage.CredentialClientClassOperator, ""), limitKeyCredential("b", storage.CredentialClientClassOperator, ""), false},
 		{"two credentials of one workload binding are one", workload("a", "binding-1"), workload("b", "binding-1"), true},
 		{"two workload bindings are not", workload("a", "binding-1"), workload("b", "binding-2"), false},
+		{"a workload binding spelled like a user's id is not that user", limitKeyCredential("a", browser, "user-1"), workload("b", "user-1"), false},
+		{"a workload binding spelled like a user's key is not that user", limitKeyCredential("a", browser, "user-1"), workload("b", "owner:browser:user-1"), false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
@@ -178,10 +180,10 @@ func TestNoRotationRateFillsTheTrackedSubjects(t *testing.T) {
 			for step := range int(48 * time.Hour / rate) {
 				for user := range users {
 					id := fmt.Sprintf("cred_%d_%d", user, step)
-					subject := limits.Subject{OrgID: "org_1", CredentialID: limitSubjectOf(storage.Principal{
+					subject := limitSubjectOf(storage.Principal{
 						AuthenticationMethod: storage.AuthenticationMethodCredential, Subject: id, CredentialID: id, OrgID: "org_1",
 						ClientClass: storage.CredentialClientClassBrowser, ApprovingUserID: fmt.Sprintf("user-%d", user),
-					})}
+					})
 					claim, decision, err := manager.Claim(context.Background(), subject, limits.RequestClassAuth)
 					if err != nil {
 						t.Fatal(err)

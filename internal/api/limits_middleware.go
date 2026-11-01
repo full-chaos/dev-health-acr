@@ -15,18 +15,18 @@ import (
 
 type limitClaimContextKey struct{}
 
-// limitSubjectOf is the key principal's requests count under. For a user's
+// limitSubjectOf is what principal's requests count under. For a user's
 // credentials it is the owner of contextfabric.SameSubmissionOwner, the user on
 // one surface: a refresh and a new Connect are new credential rows of one owner,
 // so they neither take a new tracked subject nor start a new quota. A browser
 // credential lives 10 minutes, so keying it on its id filled the organization's
 // tracked credentials and refused its new tokens. Every other principal keys on
 // its subject, as the authenticator set it (a workload's binding id).
-func limitSubjectOf(principal storage.Principal) string {
+func limitSubjectOf(principal storage.Principal) limits.Subject {
 	if owner, err := contextfabric.SubmissionOwnerOf(principal); err == nil && owner.UserID != "" {
-		return "owner:" + string(owner.Surface) + ":" + owner.UserID
+		return limits.Subject{OrgID: principal.OrgID, CredentialID: owner.UserID, Surface: string(owner.Surface)}
 	}
-	return principal.Subject
+	return limits.Subject{OrgID: principal.OrgID, CredentialID: principal.Subject}
 }
 
 func LimitMiddleware(manager *limits.Manager, class limits.RequestClass, next http.Handler) http.Handler {
@@ -40,10 +40,7 @@ func LimitMiddleware(manager *limits.Manager, class limits.RequestClass, next ht
 			writeError(w, r, http.StatusUnauthorized, "invalid_token", "Missing or invalid ACR credential", false, nil)
 			return
 		}
-		claim, decision, err := manager.Claim(r.Context(), limits.Subject{
-			OrgID:        principal.OrgID,
-			CredentialID: limitSubjectOf(principal),
-		}, class)
+		claim, decision, err := manager.Claim(r.Context(), limitSubjectOf(principal), class)
 		if err != nil {
 			writeError(w, r, http.StatusServiceUnavailable, "upstream_unavailable", "Request controls are temporarily unavailable", true, nil)
 			return

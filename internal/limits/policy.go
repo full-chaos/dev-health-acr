@@ -37,13 +37,24 @@ const (
 	RequestClassCapabilities
 )
 
-// Subject is what a request counts under. CredentialID is the key of the
-// per-credential limits and the tracked set: for a user's credentials the caller
-// passes the owner, the user on one surface, so it is not always a credential id
-// (api.limitSubjectOf).
+// Subject is what a request counts under: the organization, and the key of the
+// per-credential limits and the tracked set. A plain subject is CredentialID. An
+// owner, a user on one surface, sets Surface too, and CredentialID is then the
+// user (api.limitSubjectOf).
 type Subject struct {
 	OrgID        string
 	CredentialID string
+	Surface      string
+}
+
+// key is the subject's key in the manager's maps. Its separator is a NUL, which
+// validate refuses in both parts, so an owner's key never equals a plain
+// subject's, whatever a stored subject spells.
+func (s Subject) key() string {
+	if s.Surface == "" {
+		return s.CredentialID
+	}
+	return "owner\x00" + s.Surface + "\x00" + s.CredentialID
 }
 
 type ResourceBudget struct{ MaxItems, MaxTokens, MaxBytes int64 }
@@ -148,7 +159,7 @@ func (p PolicySet) validate() error {
 }
 
 func (s Subject) validate() error {
-	if !validIdentifier(s.OrgID) || !validIdentifier(s.CredentialID) {
+	if !validIdentifier(s.OrgID) || !validIdentifier(s.CredentialID) || (s.Surface != "" && !validIdentifier(s.Surface)) {
 		return ErrInvalidSubject
 	}
 	return nil
