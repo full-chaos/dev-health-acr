@@ -313,6 +313,15 @@ UPDATE acr.context_fabric_threads SET turn_count = $5
 
 // The canonical-owner table (CHAOS-12091), on PostgreSQL; memoryinvestigation
 // runs the same table.
+func TestConnectOwnerParity(t *testing.T) {
+	ctx := context.Background()
+	paritytest.RunConnectOwnerSuite(t, func(t *testing.T, clock func() time.Time) paritytest.ThreadStore {
+		store, err := pginvestigation.NewStore(newInvestigationTestDatabase(t, ctx), pginvestigation.WithClock(clock))
+		require.NoError(t, err)
+		return store
+	})
+}
+
 func TestSubmissionCanonicalOwnerParity(t *testing.T) {
 	ctx := context.Background()
 	paritytest.RunSubmissionCanonicalOwnerSuite(t, func(t *testing.T) paritytest.SubmissionStore {
