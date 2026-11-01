@@ -1123,23 +1123,30 @@ func (t SlogTelemetry) RecordTeamNarrowingGeneralRead(ctx context.Context, orgID
 }
 
 // RecordWorkItemLinkReach logs at Info, once per adapter call: the live run reads
-// its cost here. A failed read also logs at Warn: it leaves a repo-less work item
-// unknown for this caller, so it must not pass as an ordinary line.
+// its cost here. A call with a failed read also logs at Warn: it leaves a repo-less
+// work item unknown for this caller, so it must not pass as an ordinary line.
+//
+// Every key is a literal at the call, so emitscan reads each one. request_id rides
+// on the logger: it is omitted, never written empty, when the context has none.
 func (t SlogTelemetry) RecordWorkItemLinkReach(ctx context.Context, orgID string, tally WorkItemLinkReachTally) {
+	logger := t.logger()
+	if requestID, ok := observability.RequestIDFromContext(ctx); ok {
+		logger = logger.With("request_id", contextfabric.SanitizeLogAttr(string(requestID)))
+	}
 	outcome := tally.Outcome()
-	args := []any{
+	logger.Info(eventspec.WorkItemLinkReach.Msg,
 		"org_id", contextfabric.SanitizeLogAttr(orgID),
 		"outcome", contextfabric.SanitizeLogAttr(string(outcome)),
 		"reads", tally.Reads,
 		"ids", tally.IDs,
 		"rows", tally.Rows,
 		"failed", tally.Failed,
-		"elapsed_ms", tally.Elapsed.Milliseconds(),
-	}
-	args = append(args, graphRequestIDLogAttrs(ctx)...)
-	t.logger().Info(eventspec.WorkItemLinkReach.Msg, args...)
+		"elapsed_ms", tally.Elapsed.Milliseconds())
 	if outcome == WorkItemLinkReachFailed {
-		t.logger().Warn("context_fabric: work item link reach failed: a repo-less work item stays unknown for this caller", args...)
+		logger.Warn("context_fabric: work item link reach failed: a repo-less work item stays unknown for this caller",
+			"org_id", contextfabric.SanitizeLogAttr(orgID),
+			"reads", tally.Reads,
+			"failed", tally.Failed)
 	}
 }
 
