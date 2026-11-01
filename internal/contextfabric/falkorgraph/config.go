@@ -166,6 +166,13 @@ type Config struct {
 	// field is exactly where that coupling needs to be visible to anyone
 	// who later tunes it down.
 	MaxResults int
+	// NodeEdgeReadLimit bounds one node's edge read (CHAOS-12451), default
+	// defaultNodeEdgeReadLimit. A walk uses at most MaxResults edges, so this
+	// is far above what is admitted and leaves room for edges the caller may
+	// not read. A read past it is cut and disclosed as
+	// graph_hop_walk_truncated. It must stay below FalkorDB's RESULTSET_SIZE:
+	// see defaultNodeEdgeReadLimit.
+	NodeEdgeReadLimit int
 	// PoolSize is the connection pool size of EACH of the two FalkorDB clients (reads and writes, see sdkAPI), so one
 	// process holds at most 2 x PoolSize connections.
 	PoolSize      int

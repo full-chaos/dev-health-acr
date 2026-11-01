@@ -829,20 +829,66 @@ func (a *Adapter) nodeByKindID(ctx context.Context, key, orgID, kind, canonicalI
 // see hopWalk's doc comment for why a real relevance-bearing property does
 // not exist for a graph-walked edge in the first place, and why this
 // property is the correct proxy for it.
-func (a *Adapter) edgesOfNode(ctx context.Context, key, orgID, uuid string, temporal temporalFilter) ([]graphrank.CandidateEdge, error) {
+//
+// CHAOS-12451: the read is bounded, and the second return reports that it was
+// cut, which the caller must disclose. It asks for one row past the limit, so a
+// node with exactly limit edges is not cut, and that one row must reach this
+// code: see defaultNodeEdgeReadLimit.
+func (a *Adapter) edgesOfNode(ctx context.Context, key, orgID, uuid string, temporal temporalFilter) ([]graphrank.CandidateEdge, bool, error) {
 	kind, canonicalID := splitSubjectUUID(uuid)
 	if kind == "" {
-		return nil, nil
+		return nil, false, nil
 	}
-	rows, err := a.api.query(ctx, key, nodeEdgesCypher(temporal), temporal.bind(map[string]interface{}{"org": orgID, "kind": kind, "id": canonicalID}), true)
+	limit := a.config.NodeEdgeReadLimit
+	rows, err := a.api.query(ctx, key, nodeEdgesCypher(temporal), temporal.bind(map[string]interface{}{"org": orgID, "kind": kind, "id": canonicalID, "lim": limit + 1}), true)
 	if err != nil {
-		return nil, safeDependencyError("get node edges", err)
+		return nil, false, safeDependencyError("get node edges", err)
 	}
-	return nodeEdgesFromRows(rows), nil
+	cut := len(rows) > limit
+	if cut {
+		rows = rows[:limit]
+	}
+	return nodeEdgesFromRows(rows), cut, nil
 }
 
-// nodeEdgesCypher reads every edge of one node. CHAOS-3781: the window is
-// applied to the EDGE and to the NEIGHBOR node, in both union arms. Filtering
+// defaultNodeEdgeReadLimit is the default of Config.NodeEdgeReadLimit, with the
+// same margin as oracleFetchBatchSize. FalkorDB drops the rows past its
+// RESULTSET_SIZE (10,000 in the image) with no error, so a read that asks for
+// more than that cap never sees the row past its limit and a cut says nothing.
+// limit+1 must stay at or below the cap of every deployment.
+const defaultNodeEdgeReadLimit = 5000
+
+// nodeEdgeTierCypher is the first sort key of nodeEdgesCypher.
+const nodeEdgeTierCypher = "CASE WHEN otherKind IN ['" + string(contractsv1.ContextFabricSubjectRepository) + "', '" + string(contractsv1.ContextFabricSubjectProject) + "', '" +
+	string(contractsv1.ContextFabricSubjectTeam) + "', '" + string(contractsv1.ContextFabricSubjectOrganization) + "'] THEN 0 WHEN otherKind = '" +
+	string(contractsv1.ContextFabricSubjectCIRun) + "' THEN 2 ELSE 1 END"
+
+// errNodeEdgesCut reports a node read cut at its limit on a path with no other
+// way to say so: the observation traversal treats it as a failed traversal. The
+// observation stays blocked, and the resolution reports RetrievalDegraded, which
+// the answer states as a limitation.
+var errNodeEdgesCut = errors.New("node edge read cut at its limit")
+
+// observationEdges is the edge read of the observation-to-entity traversal. A
+// parent past the cut would read as no parent, which leaves the observation
+// eligible to commit, so a cut read is an error and blocks it.
+func (a *Adapter) observationEdges(ctx context.Context, key, orgID, uuid string, temporal temporalFilter) ([]graphrank.CandidateEdge, error) {
+	edges, cut, err := a.edgesOfNode(ctx, key, orgID, uuid, temporal)
+	if err != nil {
+		return nil, err
+	}
+	if cut {
+		return nil, errNodeEdgesCut
+	}
+	return edges, nil
+}
+
+// nodeEdgesCypher reads the edges of one node, up to $lim. CHAOS-12451: with no
+// limit, FalkorDB sorted every edge of the node, which cost one read of a
+// repository with 196k edges 149 MB, and RESULTSET_SIZE then kept the first
+// 10,000 by id with no error and nothing disclosed.
+//
+// CHAOS-3781: the window is applied to the EDGE and to the NEIGHBOR node, in both union arms. Filtering
 // the edge alone would still walk into a subject that did not exist at the
 // requested time whenever a window-less edge touched it.
 //
@@ -852,17 +898,24 @@ func (a *Adapter) edgesOfNode(ctx context.Context, key, orgID, uuid string, temp
 // the edges into n, which on a real graph runs past the server's query timeout
 // for a node with a handful of edges (same plan as directEdgePageCypher's in
 // arm).
+//
+// The tier decides which edges a cut keeps. Ordering by relationship id alone
+// would keep a random slice: 187,049 of the 196,413 edges of one live repository
+// are CI runs and 5 are its owners, and a team has thousands of work items beside
+// a few repositories and projects. Edges to the tree's structural kinds come
+// first, CI runs last. The limit with ORDER BY also lets FalkorDB keep only the
+// rows it will return, which is what bounds its memory.
 func nodeEdgesCypher(temporal temporalFilter) string {
 	edgeWindow := temporal.predicate("r")
 	neighborWindow := temporal.predicate("other")
 	return fmt.Sprintf(
 		"CALL { "+
-			"MATCH (n:%s {%s:$org, %s:$kind, %s:$id})-[r:%s]->(other:%s {%s:$org}) WHERE true%s%s RETURN r, %s AS srcKind, $id AS srcId, other.%s AS dstKind, other.%s AS dstId "+
+			"MATCH (n:%s {%s:$org, %s:$kind, %s:$id})-[r:%s]->(other:%s {%s:$org}) WHERE true%s%s RETURN r, %s AS srcKind, $id AS srcId, other.%s AS dstKind, other.%s AS dstId, other.%s AS otherKind "+
 			"UNION "+
-			"MATCH (n:%s {%s:$org, %s:$kind, %s:$id}) WITH n MATCH (other:%s {%s:$org})-[r:%s]->(n) WHERE true%s%s RETURN r, other.%s AS srcKind, other.%s AS srcId, %s AS dstKind, $id AS dstId "+
-			"} RETURN r, srcKind, srcId, dstKind, dstId ORDER BY r.%s ASC",
-		labelSubject, propOrgID, propKind, propCanonicalID, labelRelation, labelSubject, propOrgID, edgeWindow, neighborWindow, "$kind", propKind, propCanonicalID,
-		labelSubject, propOrgID, propKind, propCanonicalID, labelSubject, propOrgID, labelRelation, edgeWindow, neighborWindow, propKind, propCanonicalID, "$kind",
+			"MATCH (n:%s {%s:$org, %s:$kind, %s:$id}) WITH n MATCH (other:%s {%s:$org})-[r:%s]->(n) WHERE true%s%s RETURN r, other.%s AS srcKind, other.%s AS srcId, %s AS dstKind, $id AS dstId, other.%s AS otherKind "+
+			"} RETURN r, srcKind, srcId, dstKind, dstId ORDER BY "+nodeEdgeTierCypher+", r.%s ASC LIMIT $lim",
+		labelSubject, propOrgID, propKind, propCanonicalID, labelRelation, labelSubject, propOrgID, edgeWindow, neighborWindow, "$kind", propKind, propCanonicalID, propKind,
+		labelSubject, propOrgID, propKind, propCanonicalID, labelSubject, propOrgID, labelRelation, edgeWindow, neighborWindow, propKind, propCanonicalID, "$kind", propKind,
 		propRelationshipID,
 	)
 }
@@ -1288,7 +1341,10 @@ func questionEdgesFirst(ranked []graphrank.CandidateEdge, originUUID string, req
 // Reported rather than acted on here: this function stays a retrieval
 // primitive, and the caller is the layer that knows whether an exhaustive
 // census also ran and covered the loss.
-func (a *Adapter) hopWalk(ctx context.Context, key, orgID string, principal storage.Principal, scope contextfabric.RequestedScope, origin contextfabric.SubjectRef, maxHops, collectLimit int, temporal temporalFilter, requirements []contextfabric.FactRequirement) ([]graphrank.CandidateNode, []graphrank.ResolvedEdge, int, edgeFilterCounts, bool, error) {
+//
+// The next result, CHAOS-12451, says a read of one node stopped at its limit,
+// apart from the budget, which only ever chooses among edges that were read.
+func (a *Adapter) hopWalk(ctx context.Context, key, orgID string, principal storage.Principal, scope contextfabric.RequestedScope, origin contextfabric.SubjectRef, maxHops, collectLimit int, temporal temporalFilter, requirements []contextfabric.FactRequirement) ([]graphrank.CandidateNode, []graphrank.ResolvedEdge, int, edgeFilterCounts, bool, bool, error) {
 	originUUID := subjectUUID(string(origin.Kind), origin.CanonicalID)
 	visited := make(map[string]graphrank.CandidateNode)
 	var edges []graphrank.ResolvedEdge
@@ -1297,14 +1353,21 @@ func (a *Adapter) hopWalk(ctx context.Context, key, orgID string, principal stor
 	var filterCounts edgeFilterCounts
 	frontier := []string{originUUID}
 	truncated := false
+	// nodeReadCut is the part of truncated that lost edges no budget chose: a
+	// spent budget is routine, a read stopped at its limit never saw the rest.
+	nodeReadCut := false
 	var deniedReach map[string]struct{}
 	for hop := 0; hop < maxHops && len(frontier) > 0 && (collectLimit <= 0 || len(edges) < collectLimit); hop++ {
 		var hopCandidates []graphrank.CandidateEdge
 		for _, uuid := range frontier {
-			candidateEdges, err := a.edgesOfNode(ctx, key, orgID, uuid, temporal)
+			candidateEdges, cut, err := a.edgesOfNode(ctx, key, orgID, uuid, temporal)
 			if err != nil {
-				return nil, nil, failedLookups, filterCounts, false, err
+				return nil, nil, failedLookups, filterCounts, false, false, err
 			}
+			// CHAOS-12451: edges past the cut never compete for the budget, so
+			// the walk is short of what the node holds even with budget left.
+			truncated = truncated || cut
+			nodeReadCut = nodeReadCut || cut
 			for _, ce := range candidateEdges {
 				if seenEdge[ce.UUID] {
 					continue
@@ -1454,5 +1517,5 @@ func (a *Adapter) hopWalk(ctx context.Context, key, orgID string, principal stor
 	}
 	filterCounts.ReachDenied = deniedReach
 	sortCandidateNodesBySubjectKey(nodes)
-	return nodes, edges, failedLookups, filterCounts, truncated, nil
+	return nodes, edges, failedLookups, filterCounts, truncated, nodeReadCut, nil
 }

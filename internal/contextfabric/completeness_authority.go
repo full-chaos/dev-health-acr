@@ -728,6 +728,12 @@ func applyServerCompletenessAuthority(result InvestigationResult, enabled bool, 
 // steps disclose themselves through their own limitation. A second correction
 // (a stored result re-applied under changed knobs) keeps the first record's
 // replaced status, so the record names the earliest status the authority saw.
+//
+// The deciding pair travels whole or not at all, as the contract requires. A
+// budget lever's row can decide the state and names no requirement on purpose
+// (the cut runs across requirements, and naming one would be a wrong
+// attribution), so the correction stands with no pair. The authority line keeps
+// the outcome: it reads the observation, not this record.
 func statusCorrectionFor(result InvestigationResult, mapped InvestigationStatus, observation CompletenessAuthorityObservation) *contractsv1.ContextFabricStatusCorrection {
 	modelStatus := result.Status
 	if result.StatusCorrection != nil {
@@ -737,12 +743,12 @@ func statusCorrectionFor(result InvestigationResult, mapped InvestigationStatus,
 	if !ok {
 		return nil
 	}
-	return &contractsv1.ContextFabricStatusCorrection{
-		ReplacedStatus:      modelStatus,
-		Direction:           direction,
-		DecidingRequirement: observation.DecidingRequirement,
-		DecidingOutcome:     observation.DecidingOutcome,
+	correction := &contractsv1.ContextFabricStatusCorrection{ReplacedStatus: modelStatus, Direction: direction}
+	if observation.DecidingRequirement != "" && observation.DecidingOutcome != "" {
+		correction.DecidingRequirement = observation.DecidingRequirement
+		correction.DecidingOutcome = observation.DecidingOutcome
 	}
+	return correction
 }
 
 // CompletenessAuthorityLogArgs is the ONE construction of the completeness
