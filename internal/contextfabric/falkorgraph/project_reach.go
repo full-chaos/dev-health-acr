@@ -68,6 +68,9 @@ func (a *Adapter) withProjectReach(ctx context.Context, key string, principal st
 	if orgID == "" {
 		return nil, fmt.Errorf("%w: authenticated organization is required", contextfabric.ErrUnavailable)
 	}
+	// CHAOS-12456: every site that sees a project's reach sees the links of a
+	// repo-less work item too (link_reach.go).
+	ctx = withLinkReach(ctx, key, principal)
 	return context.WithValue(ctx, projectReachContextKey{}, &lazyProjectReach{adapter: a, key: key, orgID: orgID}), nil
 }
 
@@ -146,6 +149,14 @@ func (c projectReachConn) query(ctx context.Context, graphKey, cypher string, pa
 	rows, err := c.conn.query(ctx, graphKey, cypher, params, readOnly)
 	if err != nil || !readOnly {
 		return rows, err
+	}
+	if links, ok := ctx.Value(linkReachContextKey{}).(*lazyLinkReach); ok {
+		links.load(ctx, c.conn)
+		for _, r := range rows {
+			for column, value := range r {
+				r[column] = links.rewrite(value)
+			}
+		}
 	}
 	lazy, ok := ctx.Value(projectReachContextKey{}).(*lazyProjectReach)
 	if !ok || !rowsCarryWildcardProject(rows) {

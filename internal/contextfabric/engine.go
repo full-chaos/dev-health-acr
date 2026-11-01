@@ -2928,6 +2928,7 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 		// and for a remembered window applied request-side.
 		composeCarriedNeedEntry(contractsv1.ContextFabricStructureNeedSubjectCandidate, appliedNeeds, confirmedNeedLedger.SourceResultID),
 		composeCarriedNeedEntry(contractsv1.ContextFabricStructureNeedSubjectHandle, appliedNeeds, confirmedNeedLedger.SourceResultID),
+		composeDroppedHandleEntry(confirmedNeedLedger, request),
 		composeLedgerWindowEntry(ledgerWindow),
 	}
 	// Every exit that ends BEFORE this turn's own resolution ever runs
@@ -3719,7 +3720,7 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 			plan.MemberKind = ""
 			// The count is not what the refusal empties: the narrowing refused a
 			// real match all the same (CHAOS-12360).
-			collapsedResolution := SubjectResolution{Candidates: []SubjectCandidate{}, Committed: []SubjectRef{}, OutsideRequestedRepositories: resolution.OutsideRequestedRepositories}
+			collapsedResolution := SubjectResolution{Candidates: []SubjectCandidate{}, Committed: []SubjectRef{}, OutsideRequestedRepositories: resolution.OutsideRequestedRepositories, WorkItemLinkLimitation: resolution.WorkItemLinkLimitation}
 			terminal, terminalErr := e.terminalResult(ctx, principal, request, interpretation, familyOutcome, collapsedResolution, substitutionForTelemetry.Outcome, GraphContext{}, reuseWatermarkSnapshot, reuseEpoch, 0, binding, windowCanon, structureCanon, structureMaterial, effectiveWindow, windowCarried, carriedStructureEntriesForServed, &plan, ancestryRoot(request, receiptsValidated(priorValidatedReceipts), driftRefusedParent), e.captureAcceptedReading(request, continuation, familyOutcome, acceptedShape, &plan, derivedRequirements, postVetoLedgerBase).withAnchorShadow(anchorShadow))
 			return terminal, terminalErr
 		}

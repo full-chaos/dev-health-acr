@@ -54,7 +54,7 @@ func scopeContainsAttr(attributes map[string]interface{}, key string, value stri
 // rather than at each call: a key added later, or misspelled, gets the
 // case-SENSITIVE comparison. An unrecognised key is not a licence to fold.
 func scopeValueKindForAttr(key string) ScopeValueKind {
-	if key == authorizationRepositoriesAttr {
+	if key == authorizationRepositoriesAttr || key == AuthorizationLinkRepositoriesAttr {
 		return ScopeValueRepositoryName
 	}
 	return ScopeValueIdentifier
@@ -67,6 +67,27 @@ const (
 	authorizationProjectsAttr     = "authorization_projects"
 	authorizationTeamsAttr        = "authorization_teams"
 )
+
+// AuthorizationLinkRepositoriesAttr is the in-memory attribute a read adds to a
+// repo-less work item for a restricted caller: the granted repositories its
+// native links of record reach (falkorgraph link_reach.go, CHAOS-12456). It is
+// never projected, stored or served.
+const AuthorizationLinkRepositoriesAttr = "authorization_link_repositories"
+
+// linkedRepositoryMatches reports a repo-less work item whose native links reach
+// repository. Only the no-repository sentinel qualifies: an item with a
+// repository of its own is decided by that repository, and a link never widens
+// it (ruling 4 of CHAOS-12456).
+func linkedRepositoryMatches(attributes map[string]interface{}, repository string) bool {
+	entries, isList := attributes[authorizationRepositoriesAttr].([]string)
+	if !isList || len(entries) != 1 || entries[0] != contractsv1.ContextFabricNoRepositorySentinel {
+		return false
+	}
+	if _, isList := attributes[AuthorizationLinkRepositoriesAttr].([]string); !isList {
+		return false
+	}
+	return scopeContainsAttr(attributes, AuthorizationLinkRepositoriesAttr, repository)
+}
 
 // AuthorizedAttributes reports whether a node/edge's attribute map is
 // visible to principal under the requested scope. Ported unchanged from
@@ -96,7 +117,7 @@ func AuthorizedAttributes(principal storage.Principal, requested contextfabric.R
 	} else if len(principal.RepositoryScopes) > 0 {
 		allowed := false
 		for _, repository := range principal.RepositoryScopes {
-			if scopeContainsAttr(attributes, authorizationRepositoriesAttr, repository) {
+			if scopeContainsAttr(attributes, authorizationRepositoriesAttr, repository) || linkedRepositoryMatches(attributes, repository) {
 				allowed = true
 				break
 			}
@@ -480,7 +501,7 @@ func requestedRepositoriesAdmit(attributes map[string]interface{}, selectors []s
 		if trimmed == "*" && !repositoryPresent(attributes) {
 			continue
 		}
-		if scopeContainsAttr(attributes, authorizationRepositoriesAttr, selector) {
+		if scopeContainsAttr(attributes, authorizationRepositoriesAttr, selector) || linkedRepositoryMatches(attributes, selector) {
 			return true
 		}
 	}

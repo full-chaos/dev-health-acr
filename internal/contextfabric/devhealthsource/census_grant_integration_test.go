@@ -57,3 +57,56 @@ func TestAnInsideSatisfierBesideAnOutsideOneCommitsOnClickHouse(t *testing.T) {
 func TestAnOwnerGrantReadsOnlyWhatTheGateAdmitsOnClickHouse(t *testing.T) {
 	anOwnerGrantReadsOnlyWhatTheGateAdmits(t, grantClickHouseWorld)
 }
+
+// grantedItemClickHouseWorld is grantedItemModelWorld on real ClickHouse. A native link reads
+// from the link table of record; a pull request row is not needed for the census.
+func grantedItemClickHouseWorld(t *testing.T, name string) grantedItemWorld {
+	t.Helper()
+	ctx := context.Background()
+	now := time.Now().UTC().Add(-time.Hour)
+	_, direct := orgIsolationClickHouseFixture(t)
+	base := grantClickHouseWorld(t, name)
+	links, items := &[]issueLink{}, &[]linkItem{}
+	world := grantedItemWorld{grantWorld: base, links: links, items: items}
+	world.addItem = func(t *testing.T, item linkItem) {
+		t.Helper()
+		*items = append(*items, item)
+		repo := repoLessRepoID
+		if item.repository.id != "" {
+			repo = item.repository.id
+		}
+		if err := direct.Exec(ctx, `INSERT INTO work_items (work_item_id, repo_id, org_id, title, status, url, parent_id, provider, project_id, updated_at, last_synced) VALUES (?, toUUID(?), ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			item.id, repo, base.org, "item", "open", "", "", item.provider, "", now, now); err != nil {
+			t.Fatalf("seed work item: %v", err)
+		}
+	}
+	world.addLink = func(t *testing.T, link issueLink) {
+		t.Helper()
+		*links = append(*links, link)
+		if err := direct.Exec(ctx, `INSERT INTO work_graph_issue_pr (repo_id, work_item_id, pr_number, confidence, provenance, evidence, last_synced, org_id) VALUES (toUUID(?), ?, ?, 0.9, ?, '', ?, ?)`,
+			link.repository.id, link.item, grantNumber, link.tier, now, base.org); err != nil {
+			t.Fatalf("seed link: %v", err)
+		}
+	}
+	return world
+}
+
+func TestOutsideLinksChangeNothingForARestrictedCaller(t *testing.T) {
+	outsideLinksChangeNothing(t, grantedItemClickHouseWorld)
+}
+
+func TestAnIdWithARowOutsideTheArmIsNotCountedOnClickHouse(t *testing.T) {
+	anIdWithARowOutsideTheArmIsNotCounted(t, grantedItemClickHouseWorld)
+}
+
+func TestALowerTierLinkNeverGrantsOnClickHouse(t *testing.T) {
+	aLowerTierLinkNeverGrants(t, grantedItemClickHouseWorld)
+}
+
+func TestAProjectOwnedItemWithNoNativeLinkStaysDeniedOnClickHouse(t *testing.T) {
+	aProjectOwnedItemWithNoNativeLinkStaysDenied(t, grantedItemClickHouseWorld)
+}
+
+func TestANativeLinkBesideAnOutsideOneAdmitsOnClickHouse(t *testing.T) {
+	aNativeLinkBesideAnOutsideOneAdmits(t, grantedItemClickHouseWorld)
+}

@@ -442,22 +442,31 @@ func TestTheScopedCensusAndTheDeploymentWalkFollowTheLinkOnRealStores(t *testing
 		}
 	})
 
-	// CHAOS-12455: a restricted caller's census now runs inside its grant, but
-	// a work item has no repository column to scope, so the read ends before
-	// any statement and the round reports census_error, never a count of the
-	// organization. CHAOS-12456 adds the work-item read.
-	t.Run("census: a restricted caller gets no work-item census", func(t *testing.T) {
+	// CHAOS-12456: a restricted caller reaches a repo-less work item through a
+	// native link to a pull request of a granted repository, on the real stores:
+	// the census reads the link table, the node gate reads the link edge.
+	t.Run("census: a restricted caller resolves a key through a native link", func(t *testing.T) {
 		restricted := storage.Principal{OrgID: s.orgID, Subject: "u", CredentialID: "c", RepositoryScopes: []string{"acme/svc"}}
-		committed, rounds := resolve(t, "CHAOS-10", restricted, []string{"acme/svc"})
-		if len(committed) != 0 {
-			t.Fatalf("committed %v for a restricted caller through the census, want none", committed)
-		}
-		if len(rounds) == 0 {
-			t.Fatal("no round ran, so this subtest measured nothing")
-		}
-		for _, r := range rounds {
-			if r.ShadowOutcome != string(graphrank.ShadowWouldClarify) || r.ShadowReason != string(graphrank.ReasonCensusError) {
-				t.Fatalf("round %s/%s, want %s/%s", r.ShadowOutcome, r.ShadowReason, graphrank.ShadowWouldClarify, graphrank.ReasonCensusError)
+		for _, c := range []struct {
+			name, key string
+			scope     []string
+			want      []string
+		}{
+			{"native link into the grant, no narrowing", "CHAOS-10", nil, []string{"linear:CHAOS-10"}},
+			{"native link into the grant, requested repository", "CHAOS-10", []string{"acme/svc"}, []string{"linear:CHAOS-10"}},
+			{"native link outside the grant", "CHAOS-11", nil, nil},
+			{"text link into the grant: only a native link grants", "CHAOS-12", nil, nil},
+		} {
+			committed, rounds := resolve(t, c.key, restricted, c.scope)
+			want := make([]string, 0, len(c.want))
+			for _, id := range c.want {
+				want = append(want, s.workItem(t, id))
+			}
+			if strings.Join(committed, ",") != strings.Join(want, ",") {
+				t.Errorf("%s: %s committed %v, want %v (rounds %s)", c.name, c.key, committed, want, reasons(rounds))
+			}
+			if len(rounds) == 0 {
+				t.Errorf("%s: no round ran, so this case measured nothing", c.name)
 			}
 		}
 	})

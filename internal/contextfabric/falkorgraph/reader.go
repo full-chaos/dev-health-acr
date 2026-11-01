@@ -298,6 +298,9 @@ func (a *Adapter) ResolveSubjects(ctx context.Context, principal storage.Princip
 		// round on "stalled resolution only" and adds the 3s deadline +
 		// panic recovery, so nothing extra is needed here.
 		CensusFunc: a.config.CensusFunc,
+		// CHAOS-12456: a failed or cut link reach leaves a repo-less work item
+		// unknown, and the terminal says so.
+		WorkItemLinksUnread: func() bool { return linkReachIncomplete(ctx) },
 		// The work items of a requested repository scope: the same
 		// repository-to-issue walk that serves a repository's work items.
 		LinkScopedWorkItems: func(ctx context.Context, scope contextfabric.RequestedScope) (map[string]string, bool, error) {

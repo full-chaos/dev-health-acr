@@ -96,6 +96,7 @@ func TestARefusedGroupAxisKeepsTheCountOfMatchesOutside(t *testing.T) {
 	members := []CohortMember{{Subject: SubjectRef{Kind: SubjectTeam, CanonicalID: TeamCanonicalID("team_security"), Label: "Security"}}}
 	engine, request := groupReadEngineFixtureConfigured(t, &recordingTelemetry{}, recorder, members, nil, SubjectTeam, nil, nil, func(config *groupReadFixtureConfig) {
 		config.graph.resolution.OutsideRequestedRepositories = 2
+		config.graph.resolution.WorkItemLinkLimitation = contractsv1.ContextFabricWorkItemNoGrantedLinkLimitation
 	})
 	result, err := engine.Investigate(context.Background(), storage.Principal{OrgID: "org_1"}, request)
 	if err != nil {
@@ -106,5 +107,8 @@ func TestARefusedGroupAxisKeepsTheCountOfMatchesOutside(t *testing.T) {
 	}
 	if !slices.Contains(result.Limitations, contractsv1.ContextFabricOutsideRequestedRepositoriesLimitation(2)) {
 		t.Fatalf("limitations %q: the count is gone", result.Limitations)
+	}
+	if !slices.Contains(result.Limitations, contractsv1.ContextFabricWorkItemNoGrantedLinkLimitation) {
+		t.Fatalf("limitations %q: the work item sentence is gone", result.Limitations)
 	}
 }

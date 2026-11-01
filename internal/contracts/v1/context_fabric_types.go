@@ -1392,6 +1392,10 @@ type ContextFabricSubjectResolution struct {
 	// through its limitation sentence, which is the only form that leaves the
 	// process.
 	OutsideRequestedRepositories int `json:"-"`
+	// WorkItemLinkLimitation (CHAOS-12456) is the fixed sentence a terminal
+	// states for a restricted caller when no work item resolved, or "". The
+	// sentence is the only form that leaves the process.
+	WorkItemLinkLimitation string `json:"-"`
 	// CommitDecisionDigests (CHAOS-4087) is a small, closed-vocabulary
 	// summary of WHICH MECHANISM committed each subject in Committed --
 	// persisted so a wrong commit discovered later from a STORED result

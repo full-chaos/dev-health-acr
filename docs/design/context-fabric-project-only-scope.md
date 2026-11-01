@@ -304,7 +304,8 @@ channel that reads its repository list or hashes only that list:
   repository grant (see `context-fabric-grant-scoped-census.md`). A project-only
   caller's stays refused: `grantScopedCensus` is false by class, so its round
   stops at `scoped_visibility`, and `ScopeCensusToCaller` binds the reserved
-  value, which every census refuses with no statement.
+  value, which every census refuses with no statement. It reads no link reach and
+  is offered no handle option (CHAOS-12456), so no `handr_` can dead-end it.
 - **Counts.** `withheld.edges_not_visible` and `page.examined` are unchanged:
   they are the disclosure contract, the same for a restricted caller.
 

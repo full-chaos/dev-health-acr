@@ -100,6 +100,15 @@ type CensusResult struct {
 	SatisfierSetClosureMismatch bool
 }
 
+// rowBound renders MaxRowsToRead after separator, or nothing when it is unset,
+// so a predicate that does not set it reads byte-identical statements.
+func (p CensusPredicate) rowBound(separator string) string {
+	if p.MaxRowsToRead == 0 {
+		return ""
+	}
+	return fmt.Sprintf("%smax_rows_to_read = %d", separator, p.MaxRowsToRead)
+}
+
 // RunCensus executes design brief v5 §1.3(2)'s aggregate-first, fail-closed
 // two-part protocol for ONE kind, against orgID and an already-built
 // discriminator predicate (BuildCensusDiscriminator). No join, ever (brief
@@ -132,8 +141,8 @@ func RunCensus(ctx context.Context, client contextpacket.ClickHouseQueryClient, 
 	// makes that guarantee actually hold rather than merely being assumed.
 	witnessExpr := fmt.Sprintf("min(%s)", entry.identityColumn)
 	aggregateStatement := fmt.Sprintf(
-		"SELECT count(), now64(), %s FROM %s AS %s FINAL WHERE %s = {census_org_id:String} AND %s SETTINGS empty_result_for_aggregation_by_empty_set = 0",
-		witnessExpr, entry.table, entry.alias, entry.orgColumn, predicate.SQL,
+		"SELECT count(), now64(), %s FROM %s AS %s FINAL WHERE %s = {census_org_id:String} AND %s SETTINGS empty_result_for_aggregation_by_empty_set = 0%s",
+		witnessExpr, entry.table, entry.alias, entry.orgColumn, predicate.SQL, predicate.rowBound(", "),
 	)
 	count, readAt, witness, err := runCensusAggregate(ctx, client, aggregateStatement, bindings)
 	if err != nil {
@@ -147,8 +156,8 @@ func RunCensus(ctx context.Context, client contextpacket.ClickHouseQueryClient, 
 		// gets no enrichment, unchanged from before this slice.
 		if count >= 2 && count <= CensusBudget {
 			setStatement := fmt.Sprintf(
-				"SELECT %s FROM %s AS %s FINAL WHERE %s = {census_org_id:String} AND %s LIMIT %d",
-				entry.identityColumn, entry.table, entry.alias, entry.orgColumn, predicate.SQL, CensusBudget+1,
+				"SELECT %s FROM %s AS %s FINAL WHERE %s = {census_org_id:String} AND %s LIMIT %d%s",
+				entry.identityColumn, entry.table, entry.alias, entry.orgColumn, predicate.SQL, CensusBudget+1, predicate.rowBound(" SETTINGS "),
 			)
 			keys, err := runCensusRow(ctx, client, setStatement, bindings)
 			if err != nil {
@@ -173,8 +182,8 @@ func RunCensus(ctx context.Context, client contextpacket.ClickHouseQueryClient, 
 	}
 
 	rowStatement := fmt.Sprintf(
-		"SELECT %s FROM %s AS %s FINAL WHERE %s = {census_org_id:String} AND %s LIMIT 2",
-		entry.identityColumn, entry.table, entry.alias, entry.orgColumn, predicate.SQL,
+		"SELECT %s FROM %s AS %s FINAL WHERE %s = {census_org_id:String} AND %s LIMIT 2%s",
+		entry.identityColumn, entry.table, entry.alias, entry.orgColumn, predicate.SQL, predicate.rowBound(" SETTINGS "),
 	)
 	keys, err := runCensusRow(ctx, client, rowStatement, bindings)
 	if err != nil {

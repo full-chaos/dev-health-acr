@@ -85,5 +85,10 @@ func (a *Adapter) AuthorizeStoredSubjects(ctx context.Context, principal storage
 			}
 		}
 	}
+	// CHAOS-12456: a link read that failed is not a denial. A repo-less work item
+	// is unknown here, and the decision fails closed, as any failed read does.
+	if err := linkReachError(ctx); err != nil && repoLessNodesRead(nodes) {
+		return nil, err
+	}
 	return graphrank.AuthorizeStoredSubjectNodes(principal, subjects, nodes), nil
 }

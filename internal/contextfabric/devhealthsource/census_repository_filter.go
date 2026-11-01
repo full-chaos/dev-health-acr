@@ -51,8 +51,26 @@ func andRepositories(kind graphrank.CensusKind, predicate CensusPredicate, slugs
 		return predicate, false
 	}
 	column := entry.repositoryColumn
-	if column == "" || len(slugs) == 0 || len(slugs) > maxCensusRepositoryFilter {
+	if column == "" {
 		return predicate, false
+	}
+	clauses, bindings, ok := repositoryClauses(slugs, bindingPrefix, ownerClause)
+	if !ok {
+		return predicate, false
+	}
+	predicate.SQL = fmt.Sprintf("(%s) AND toString(%s) IN (SELECT toString(id) FROM repos FINAL WHERE org_id = {census_org_id:String} AND (%s))",
+		predicate.SQL, column, strings.Join(clauses, " OR "))
+	predicate.Bindings = append(append([]contextpacket.ClickHouseBinding(nil), predicate.Bindings...), bindings...)
+	return predicate, true
+}
+
+// repositoryClauses renders one clause and binding per slug. False means the
+// list cannot be applied exactly: empty, too long, or holding an entry that is
+// not a well-formed owner/name or owner/*, a bare "*" and a reserved value
+// among them.
+func repositoryClauses(slugs []string, bindingPrefix, ownerClause string) ([]string, []contextpacket.ClickHouseBinding, bool) {
+	if len(slugs) == 0 || len(slugs) > maxCensusRepositoryFilter {
+		return nil, nil, false
 	}
 	var clauses []string
 	var bindings []contextpacket.ClickHouseBinding
@@ -62,7 +80,7 @@ func andRepositories(kind graphrank.CensusKind, predicate CensusPredicate, slugs
 		if owner, wildcard := strings.CutSuffix(value, "/*"); wildcard {
 			normalized, err := auth.NormalizeRepositorySlug(owner + "/x")
 			if err != nil || owner == "" {
-				return predicate, false
+				return nil, nil, false
 			}
 			owner, _, _ = strings.Cut(normalized, "/")
 			clauses = append(clauses, fmt.Sprintf(ownerClause, name))
@@ -71,13 +89,18 @@ func andRepositories(kind graphrank.CensusKind, predicate CensusPredicate, slugs
 		}
 		normalized, err := auth.NormalizeRepositorySlug(value)
 		if err != nil {
-			return predicate, false
+			return nil, nil, false
 		}
 		clauses = append(clauses, fmt.Sprintf("lower(trimBoth(repo)) = {%s:String}", name))
 		bindings = append(bindings, contextpacket.ClickHouseBinding{Name: name, Value: normalized})
 	}
-	predicate.SQL = fmt.Sprintf("(%s) AND toString(%s) IN (SELECT toString(id) FROM repos FINAL WHERE org_id = {census_org_id:String} AND (%s))",
-		predicate.SQL, column, strings.Join(clauses, " OR "))
-	predicate.Bindings = append(append([]contextpacket.ClickHouseBinding(nil), predicate.Bindings...), bindings...)
-	return predicate, true
+	return clauses, bindings, true
+}
+
+// grantApplies is the check every grant passes before any read. The work-item
+// census needs it on its own: the library reads an empty list and a "*" as the
+// organization-wide grant.
+func grantApplies(grant []string) bool {
+	_, _, ok := repositoryClauses(grant, "census_grant", grantOwnerClause)
+	return ok
 }

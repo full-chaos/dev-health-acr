@@ -22,12 +22,22 @@ import (
 // server instead.
 
 type fakeConn struct {
-	queryFunc       func(ctx context.Context, graphKey, cypher string, params map[string]interface{}, readOnly bool) ([]row, error)
+	queryFunc func(ctx context.Context, graphKey, cypher string, params map[string]interface{}, readOnly bool) ([]row, error)
+	// linkReachFunc answers a restricted call's link reach (link_reach.go). That
+	// read runs on every such call, so a test that does not set it reads an
+	// empty reach and its queryFunc sees only the statements it is about.
+	linkReachFunc   func(ctx context.Context, cypher string, params map[string]interface{}) ([]row, error)
 	constraintsFunc func(ctx context.Context, graphKey string) ([]constraintStatus, error)
 	indexesFunc     func(ctx context.Context, graphKey string) ([]indexStatus, error)
 }
 
 func (f *fakeConn) query(ctx context.Context, graphKey, cypher string, params map[string]interface{}, readOnly bool) ([]row, error) {
+	if strings.Contains(cypher, "$noRepository IN w.") && strings.Contains(cypher, "AS repos") {
+		if f.linkReachFunc != nil {
+			return f.linkReachFunc(ctx, cypher, params)
+		}
+		return nil, nil
+	}
 	if f.queryFunc != nil {
 		return f.queryFunc(ctx, graphKey, cypher, params, readOnly)
 	}

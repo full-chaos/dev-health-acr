@@ -187,20 +187,80 @@ func TestACensusThatCannotApplyTheGrantReadsNothing(t *testing.T) {
 	}
 }
 
-// A work item has no repository column: its census reads nothing under a grant
-// (PR2 owns that read), for every provider's stored key.
-func TestAWorkItemCensusUnderAGrantReadsNothing(t *testing.T) {
+// A work item is in a repository only through a linked pull request. Its census
+// under a grant is the library's native-link arm over the handle's candidates:
+// never the project arm, never the item's own repository, for every provider.
+func TestAGrantedWorkItemCensusCarriesTheLinkArmOnEveryStatement(t *testing.T) {
 	t.Parallel()
-	for provider, key := range map[string]string{"linear": "CHAOS-11516", "jira": "OPS-204", "github": "CHAOS-77", "gitlab": "CHAOS-78"} {
-		t.Run(provider, func(t *testing.T) {
-			t.Parallel()
-			client := &recordingCensusClient{censusFakeClient: &censusFakeClient{aggregateCount: 1, aggregateReadAt: time.Now().UTC(), rowKeys: []string{"o:r1:" + provider + ":" + key}}}
-			ctx := contextfabric.WithCensusGrant(context.Background(), []string{"acme/alpha"})
-			_, err := devhealthsource.NewCensusFunc(client)(ctx, "org_1", contextfabric.SubjectWorkItem, key, true, "", "", false)
-			if !errors.Is(err, graphrank.ErrCensusGrantNotApplied) || len(client.calls) != 0 {
-				t.Fatalf("err = %v statements = %v, want the refusal and none", err, client.calls)
-			}
-		})
+	for provider, key := range map[string]string{"linear": "CHAOS-11516", "jira": "CHAOS-204", "github": "CHAOS-77", "gitlab": "CHAOS-78"} {
+		for _, shape := range []struct {
+			name  string
+			count uint64
+			keys  []string
+			want  int
+		}{
+			{"count only", 0, nil, 1},
+			{"count and row read", 1, []string{"o:r1:" + provider + ":" + key}, 2},
+			{"count and set read", 2, []string{"o:r1:" + provider + ":" + key, "o:r2:" + provider + ":" + key}, 2},
+		} {
+			t.Run(provider+" "+shape.name, func(t *testing.T) {
+				t.Parallel()
+				client := &recordingCensusClient{censusFakeClient: &censusFakeClient{aggregateCount: shape.count, aggregateReadAt: time.Now().UTC(), rowKeys: shape.keys}}
+				ctx := contextfabric.WithCensusGrant(context.Background(), []string{"ACME/Alpha", "group/*"})
+				outcome, err := devhealthsource.NewCensusFunc(client)(ctx, "org_1", contextfabric.SubjectWorkItem, key, true, "", "", false)
+				if err != nil || !outcome.GrantApplied {
+					t.Fatalf("census = %+v %v, want the grant applied", outcome, err)
+				}
+				if len(client.calls) != shape.want {
+					t.Fatalf("statements = %d, want %d", len(client.calls), shape.want)
+				}
+				for i, statement := range client.calls {
+					arm := statement[strings.Index(statement, "HAVING"):]
+					if !strings.Contains(arm, "HAVING min(toUInt8(") || !strings.Contains(arm, "wia_link_auth.wia_link_repositories") {
+						t.Fatalf("statement %d keeps no id by the link arm: %s", i, arm)
+					}
+					// wia_project_auth is the project arm; authorized_repo_all is the
+					// organization arm; authorized_repo_slugs in the HAVING is the
+					// item's own repository, the direct arm.
+					if strings.Contains(arm, "wia_project_auth.wia_project_repositories") || strings.Contains(arm, "authorized_repo_all") || strings.Contains(arm, "authorized_repo_slugs") {
+						t.Fatalf("statement %d keeps an id by another arm: %s", i, arm)
+					}
+					if !strings.Contains(statement, "max_rows_to_read = 3000000") {
+						t.Fatalf("statement %d carries no row bound", i)
+					}
+					values := bindingValues(client.bindings[i])
+					if len(values) != len(client.bindings[i]) {
+						t.Fatalf("statement %d binds a name twice: %v", i, client.bindings[i])
+					}
+					if values["org_id"] != "org_1" || values["census_org_id"] != "org_1" || values["census_handle_ticket_key"] != key {
+						t.Fatalf("statement %d bindings = %v", i, values)
+					}
+					if slugs, _ := values["authorized_repo_slugs"].([]string); len(slugs) != 1 || slugs[0] != "acme/alpha" {
+						t.Fatalf("statement %d slugs = %v", i, values["authorized_repo_slugs"])
+					}
+					if owners, _ := values["authorized_repo_owners"].([]string); len(owners) != 1 || owners[0] != "group" {
+						t.Fatalf("statement %d owners = %v", i, values["authorized_repo_owners"])
+					}
+					if all := values["authorized_repo_all"]; all != uint8(0) {
+						t.Fatalf("statement %d reads the organization: all = %v", i, all)
+					}
+				}
+			})
+		}
+	}
+}
+
+// A census with no handle has no candidates, so a project anchor alone stays
+// refused: a count inside the link arm would miss items the node gate admits.
+func TestAnAnchorOnlyWorkItemCensusStaysRefused(t *testing.T) {
+	t.Parallel()
+	client := &recordingCensusClient{censusFakeClient: &censusFakeClient{aggregateCount: 1, aggregateReadAt: time.Now().UTC(), rowKeys: []string{"o:r1:linear:CHAOS-1"}}}
+	ctx := contextfabric.WithCensusGrant(context.Background(), []string{"acme/alpha"})
+	for _, value := range []string{"", "CHAOS-1"} {
+		_, err := devhealthsource.NewCensusFunc(client)(ctx, "org_1", contextfabric.SubjectWorkItem, value, false, contextfabric.SubjectProject, "project:linear:p-1", true)
+		if !errors.Is(err, graphrank.ErrCensusGrantNotApplied) || len(client.calls) != 0 {
+			t.Fatalf("value %q: err = %v statements = %v, want the refusal and none", value, err, client.calls)
+		}
 	}
 }
 
@@ -214,8 +274,8 @@ func TestAHandleVerificationThatCannotApplyTheGrantReadsNothing(t *testing.T) {
 		patternID string
 		value     string
 	}{
-		"project-only caller":          {[]string{contractsv1.ProjectOnlyRepositoryScope}, contextfabric.SubjectPullRequest, "pull_request_number", "5063"},
-		"work item, restricted caller": {[]string{"acme/alpha"}, contextfabric.SubjectWorkItem, "work_item_ticket_key", "CHAOS-11516"},
+		"project-only caller":            {[]string{contractsv1.ProjectOnlyRepositoryScope}, contextfabric.SubjectPullRequest, "pull_request_number", "5063"},
+		"project-only caller, work item": {[]string{contractsv1.ProjectOnlyRepositoryScope}, contextfabric.SubjectWorkItem, "work_item_ticket_key", "CHAOS-11516"},
 	}
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -256,5 +316,37 @@ func TestUnrestrictedCensusStatementsAreByteIdentical(t *testing.T) {
 	}
 	if !strings.Contains(filtered.calls[0], "AND (lower(trimBoth(repo)) = {census_repo_0:String}))") {
 		t.Fatalf("statement = %q, want the requested filter as before", filtered.calls[0])
+	}
+}
+
+// The worst defect of the work-item census (CHAOS-12456): the library reads an
+// empty list and a "*" beside slugs as the organization-wide grant. Each of
+// these must end the read before any statement.
+func TestAWorkItemCensusThatCannotApplyTheGrantReadsNothing(t *testing.T) {
+	t.Parallel()
+	tooMany := make([]string, 201)
+	for i := range tooMany {
+		tooMany[i] = fmt.Sprintf("acme/repo-%d", i)
+	}
+	for name, grant := range map[string][]string{
+		"an empty grant":      {},
+		"a star beside slugs": {"acme/alpha", "*"},
+		"a bare star":         {"*"},
+		"an invalid slug":     {"acme/alpha", "not a slug"},
+		"a reserved value":    {contractsv1.ProjectOnlyRepositoryScope},
+		"over the slug limit": tooMany,
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			client := &recordingCensusClient{censusFakeClient: &censusFakeClient{aggregateCount: 1, aggregateReadAt: time.Now().UTC(), rowKeys: []string{"o:r1:linear:CHAOS-1"}}}
+			ctx := contextfabric.WithCensusGrant(context.Background(), grant)
+			_, err := devhealthsource.NewCensusFunc(client)(ctx, "org_1", contextfabric.SubjectWorkItem, "CHAOS-1", true, "", "", false)
+			if !errors.Is(err, graphrank.ErrCensusGrantNotApplied) {
+				t.Fatalf("err = %v, want ErrCensusGrantNotApplied", err)
+			}
+			if len(client.calls) != 0 {
+				t.Fatalf("statements = %d, want none: %v", len(client.calls), client.bindings)
+			}
+		})
 	}
 }
