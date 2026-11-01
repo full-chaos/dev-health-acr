@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
+	storagepostgres "github.com/full-chaos/dev-health-acr/internal/storage/postgres"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgconn"
 )
@@ -86,16 +87,19 @@ const (
 
 // Report counts what a run removed (or, for a dry run, would remove).
 type Report struct {
-	OrgKey            string           `json:"org_key"`
-	Status            string           `json:"status"`
-	DryRun            bool             `json:"dry_run"`
-	Graphs            int              `json:"graphs"`
-	Rows              map[string]int64 `json:"rows"`
-	TotalRows         int64            `json:"total_rows"`
-	KeptAuditEvents   int64            `json:"kept_audit_events"`
-	KeptLegalHold     int64            `json:"kept_legal_hold_episodes"`
-	AuditRowWritten   bool             `json:"audit_row_written"`
-	TableOrderApplied []string         `json:"-"`
+	OrgKey          string           `json:"org_key"`
+	Status          string           `json:"status"`
+	DryRun          bool             `json:"dry_run"`
+	Graphs          int              `json:"graphs"`
+	Rows            map[string]int64 `json:"rows"`
+	TotalRows       int64            `json:"total_rows"`
+	KeptAuditEvents int64            `json:"kept_audit_events"`
+	KeptLegalHold   int64            `json:"kept_legal_hold_episodes"`
+	AuditRowWritten bool             `json:"audit_row_written"`
+	// LifecycleEvents is the number of revoked outbox rows the purge writes (or,
+	// for a dry run, would write) for the live credentials it deletes.
+	LifecycleEvents   int64    `json:"lifecycle_events"`
+	TableOrderApplied []string `json:"-"`
 }
 
 type tableSpec struct {
@@ -155,6 +159,11 @@ var purgeTables = []tableSpec{
 	{Name: "context_fabric_graph_epoch_retirements", Where: matchOrg("org_id")},
 	{Name: "context_fabric_graph_lifecycle", Where: matchOrg("org_id")},
 }
+
+// credentialsTable is the one purged table the purge reads before it forgets:
+// its rows come back from the DELETE that removes them, and each one that was
+// live gets a revoked event in the same transaction.
+const credentialsTable = "client_credentials"
 
 // PurgedTables and KeptTables name every table the purge handles, for the
 // schema guard test.
@@ -279,6 +288,13 @@ func (p *Purger) removeOrganization(ctx context.Context, orgID string, opts Opti
 	}
 	for _, spec := range purgeTables {
 		var n int64
+		if spec.Name == credentialsTable {
+			if err := p.purgeCredentials(ctx, tx, orgID, opts, report); err != nil {
+				return err
+			}
+			report.TableOrderApplied = append(report.TableOrderApplied, spec.Name)
+			continue
+		}
 		for _, child := range spec.CascadedByDeviceCode {
 			var c int64
 			err = tx.QueryRowContext(ctx, cascadeCountSQL(spec, child), orgID).Scan(&c)
@@ -393,12 +409,45 @@ func (p *Purger) writePurgeMarker(ctx context.Context, tx *sql.Tx, orgID string)
 	return nil
 }
 
+// clock returns the purge's one time source (Now, or the wall clock).
+func (p *Purger) clock() time.Time {
+	if p.Now != nil {
+		return p.Now().UTC()
+	}
+	return time.Now().UTC()
+}
+
+// purgeCredentials removes the organization's credentials and records the
+// lifecycle events of the live ones. One `now` serves the live predicate and the
+// events' time. A dry run reads the same rows with a SELECT and writes nothing.
+func (p *Purger) purgeCredentials(ctx context.Context, tx *sql.Tx, orgID string, opts Options, report *Report) error {
+	now := p.clock()
+	if opts.DryRun {
+		credentials, events, err := storagepostgres.CountOrgCredentials(ctx, tx, orgID, now)
+		if err != nil {
+			return fmt.Errorf("count %s: %w", credentialsTable, err)
+		}
+		report.Rows[credentialsTable] = credentials
+		report.TotalRows += credentials
+		report.LifecycleEvents = int64(events)
+		return nil
+	}
+	deleted, events, err := storagepostgres.PurgeOrgCredentials(ctx, tx, orgID, now, func() (string, error) { return uuid.NewString(), nil })
+	if err != nil {
+		return fmt.Errorf("purge %s: %w", credentialsTable, err)
+	}
+	report.Rows[credentialsTable] = deleted
+	report.TotalRows += deleted
+	report.LifecycleEvents = int64(events)
+	return nil
+}
+
 func (p *Purger) writeAudit(ctx context.Context, tx *sql.Tx, orgID string, report Report) error {
 	now := time.Now
 	if p.Now != nil {
 		now = p.Now
 	}
-	metadata, err := json.Marshal(map[string]any{"rows": report.Rows, "graphs": report.Graphs, "kept_legal_hold_episodes": report.KeptLegalHold})
+	metadata, err := json.Marshal(map[string]any{"rows": report.Rows, "graphs": report.Graphs, "kept_legal_hold_episodes": report.KeptLegalHold, "lifecycle_events": report.LifecycleEvents})
 	if err != nil {
 		return fmt.Errorf("encode audit metadata: %w", err)
 	}

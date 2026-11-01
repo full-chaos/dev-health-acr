@@ -1,6 +1,7 @@
 package orgpurge
 
 import (
+	storagepostgres "github.com/full-chaos/dev-health-acr/internal/storage/postgres"
 	"regexp"
 	"sort"
 )
@@ -14,8 +15,13 @@ func Statements() []string {
 		for _, child := range spec.CascadedByDeviceCode {
 			statements = append(statements, cascadeCountSQL(spec, child))
 		}
+		if spec.Name == credentialsTable {
+			statements = append(statements, storagepostgres.OrgPurgeCredentialsDeleteSQL, storagepostgres.OrgPurgeCredentialsSelectSQL)
+			continue
+		}
 		statements = append(statements, countSQL(spec), deleteSQL(spec))
 	}
+	statements = append(statements, storagepostgres.LifecycleOutboxMaxRevisionSQL, storagepostgres.LifecycleOutboxInsertSQL)
 	return append(statements, auditCountSQL, legalHoldCountSQL, markerUpsertSQL, purgedAuditInsertSQL, incompleteAuditInsertSQL)
 }
 
