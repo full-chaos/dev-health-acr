@@ -1,7 +1,6 @@
 package api
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -112,7 +111,7 @@ func TestInvestigationForAnOrganizationPurgedDuringTheModelCallAnswersInvalidTok
 	if err != nil {
 		t.Fatal(err)
 	}
-	rig := &clientRouteRig{model: model, logs: &bytes.Buffer{}}
+	rig := &clientRouteRig{model: model, logs: &lockedBuffer{}}
 	rig.app, rig.token = newParityHostedAppWithLogs(t, engine, store, limits.ResourceBudget{MaxItems: 500, MaxTokens: 500_000, MaxBytes: 8 << 20}, rig.logs)
 	rig.app.config.RequestTimeout = time.Minute
 	rig.app.runtime.Entitlements = &serviceModelGrants{feature: true, fallback: true}
