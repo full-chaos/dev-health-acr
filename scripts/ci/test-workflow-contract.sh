@@ -630,13 +630,10 @@ workflow_step_block() {
 
 # check_job_unconditional refuses a job-level continue-on-error on job $2, and a
 # job-level if other than the single gate $3 (empty: none): either makes the job,
-# and the steps the guard pins, a no-op or a green failure.
+# and the steps the guard pins, a no-op or a green failure. A renamed or
+# removed job is refused by check_named_step, which looks the step up inside it.
 check_job_unconditional() {
   local file="$1" job="$2" allowed="$3" keys
-  if [ -z "$(awk -v header="  $job:" '$0 == header { print "x" }' "$file")" ]; then
-    printf 'no job %s in %s\n' "$job" "$file" >&2
-    return 1
-  fi
   keys="$(awk -v header="  $job:" '
     /^  [A-Za-z0-9_-]+:[[:space:]]*$/ { grab = ($0 == header); next }
     grab && /^    (if|continue-on-error):/ { print }
