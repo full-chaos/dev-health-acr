@@ -2,7 +2,9 @@ package main
 
 import (
 	"reflect"
+	"regexp"
 	"sort"
+	"strings"
 	"testing"
 )
 
@@ -50,4 +52,35 @@ func TestLockedTablesFollowTheOfClause(t *testing.T) {
 			t.Errorf("%s: lockedTables = %v, want %v", name, got, tc.want)
 		}
 	}
+}
+
+var (
+	rowLockClause = regexp.MustCompile(`(?is)\bFOR\s+(?:NO\s+KEY\s+UPDATE|UPDATE|KEY\s+SHARE|SHARE)\b(?:\s+OF\s+([a-z0-9_,\s]+?))?(?:\s+(?:NOWAIT|SKIP\s+LOCKED)\b|\s*$|\s*\))`)
+	tableAlias    = regexp.MustCompile(`(?i)\b(?:FROM|JOIN)\s+acr\.([a-z0-9_]+)(?:\s+(?:AS\s+)?([a-z_][a-z0-9_]*))?`)
+	notAnAlias    = map[string]bool{"where": true, "join": true, "on": true, "inner": true, "left": true, "right": true, "cross": true, "full": true, "using": true, "group": true, "order": true, "limit": true, "for": true, "union": true, "returning": true, "set": true, "natural": true, "lateral": true}
+)
+
+// lockedTables returns the tables whose rows the statement locks: with an OF
+// clause only the tables the named aliases (or names) refer to, without one
+// every table the statement reads. A statement with no row lock locks none.
+func lockedTables(statement string) []string {
+	lock := rowLockClause.FindStringSubmatch(statement)
+	if lock == nil {
+		return nil
+	}
+	named := map[string]bool{}
+	for _, name := range strings.FieldsFunc(strings.ToLower(lock[1]), func(r rune) bool { return r == ',' || r == ' ' || r == '\n' || r == '\t' }) {
+		named[name] = true
+	}
+	var tables []string
+	for _, match := range tableAlias.FindAllStringSubmatch(statement, -1) {
+		table, alias := strings.ToLower(match[1]), strings.ToLower(match[2])
+		if notAnAlias[alias] {
+			alias = ""
+		}
+		if len(named) == 0 || named[table] && alias == "" || alias != "" && named[alias] {
+			tables = append(tables, table)
+		}
+	}
+	return tables
 }
