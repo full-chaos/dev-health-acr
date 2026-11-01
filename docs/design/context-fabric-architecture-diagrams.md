@@ -795,7 +795,11 @@ cohort read and keeps its floor. Two degrading graph rows, each paired with its
 reason:
 
 - `graph_hop_walk_truncated` (raw `hop_walk_truncated`, no count): a committed
-  subject's hop walk spent its edge budget with candidates left.
+  subject's hop walk spent its edge budget with candidates left, or a read of one
+  node's edges stopped at its limit of 5,000 rows (CHAOS-12451), in the hop walk
+  or in the text arm. The read sorts structural kinds first and CI runs last, and
+  edges past the cut do not compete for the budget. On the observation traversal
+  a cut read is a failed traversal, counted as degraded retrieval.
 - `graph_team_narrowing_undecided_paths` (raw
   `team_narrowing_undecided_paths:<n>`): under `scope.team_ids`, a path edge was
   dropped because an endpoint's ownership was absent, not current, or cut. The
@@ -3372,7 +3376,7 @@ on retries. Save, reuse, by-id and response-owner boundaries remain those in §1
 flowchart TD
   WALK["DiscoverContext walks each committed subject<br/>hopWalk collects a hop in questionEdgesFirst order:<br/>own edges the question names, then gate edges, then the rest"] --> TEXT["full-text arm: matched subjects<br/>RankEdgesByOrigin, no classes"]
   WALK --> ATTR["attributeEdgesByFewestHops<br/>breadth-first over every resolved edge;<br/>tie: the earlier origin; own = one hop"]
-  WALK --> CUT["edge budget spent with candidates left, on a read<br/>that is not a cohort read: degrading<br/>graph_hop_walk_truncated, status floored to partial (§3)"]
+  WALK --> CUT["edge budget spent with candidates left, or a node's<br/>edge read cut at its limit, on a read<br/>that is not a cohort read: degrading<br/>graph_hop_walk_truncated, status floored to partial (§3)"]
   TEXT --> ATTR
   ATTR --> CLASS["committedEdgeClasses (committed subjects only)<br/>0 own + NamedByQuestion (fact kind in the question's<br/>fact_requirements, From kind the table names)<br/>1 gate edge: DriverSubject is the subject<br/>2 other own; 3 further out"]
   CLASS --> RANK["RankEdgesByOrigin<br/>tier 1 committed (resolution order), tier 2 text matches<br/>per tier: runs of equal confidence; origins take turns per run<br/>per origin: class, then id"]

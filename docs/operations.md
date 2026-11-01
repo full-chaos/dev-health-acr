@@ -918,18 +918,26 @@ go past the limit again, so the pod crash-loops and does not recover alone. Ever
 graph read then answers 503 `upstream_unavailable`.
 
 ```text
-limit >= idle + (THREAD_COUNT x 110 MB) + (edges of the largest node x 1 KB)
+limit >= idle + (THREAD_COUNT x 25 MB) + 55 MB
 ```
 
 - **idle** is `memory.current` of the container once the graph has loaded and
   nothing reads it.
 - **THREAD_COUNT** defaults to the CPUs the container can see. A CPU limit does
   not lower it. Read it with `GRAPH.CONFIG GET THREAD_COUNT`.
-- **The largest node** is usually a repository, and CI runs add edges to it with
-  no bound. A read of one node's edges has no limit (CHAOS-12451).
+- **One node's edge read** stops at 5,000 rows (CHAOS-12451), so the 55 MB does
+  not grow with the node. The rows are about 11 KB each while FalkorDB holds them.
+- **`RESULTSET_SIZE`** must stay above 5,000. The image sets 10,000. FalkorDB drops
+  the rows past it with no error, so below 5,001 a cut read is not disclosed.
+  Setting `FALKORDB_ARGS` replaces the whole image default, so keep this value in
+  it.
+- **`TIMEOUT`** is 1,000 ms in the image. A read past it answers `Query timed out`.
+  A CPU limit makes this happen under load: with 1 CPU and two reads of the
+  largest node at the same time, both finished; with eight, seven timed out.
 
-The two rates come from one graph, measured on 2026-11-01, so they are a starting
-point and not constants:
+The two rates come from one graph and one read, measured on 2026-11-01 on a
+restarted pod, so they are a starting point and not constants. Other reads add to
+them:
 
 | Measure | Value |
 | --- | --- |
@@ -937,12 +945,14 @@ point and not constants:
 | Idle | 835 MB |
 | `THREAD_COUNT` | 7 |
 | Largest node | 196,413 edges |
-| One read of that node | +194 MB at peak, in 367 ms; 109 MB stays |
-| After repeated reads | levels off at 1.35 to 1.45 GB |
+| One read of that node | +54 MB at peak, in 450 ms; 15 MB stays |
+| After 50 reads | levels off at 1.0 GB |
+| Before the 5,000 row limit | +149 MB, in 667 ms; 1.34 GB after 9 reads |
 | RDB dump on disk | 97 MB |
 
-That graph gives 835 + 770 + 194 = 1.8 GB, so the chart default of 3Gi holds it.
-The previous default of 1Gi did not: one read of the largest node went past it.
+That graph gives 835 + 175 + 55 = 1.07 GB, so the chart default of 3Gi holds it
+with room for the other reads. The previous default of 1Gi did not hold the read
+before its limit: one read of the largest node went past it.
 Raising `limits.memory` needs no rebuild, because FalkorDB reloads the graph from
 its dump. Re-measure after the graph grows, or when `THREAD_COUNT` changes.
 
