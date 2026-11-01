@@ -109,7 +109,7 @@ func TestLiveWrappedReadsOfATurn(t *testing.T) {
 			Synthesizer: synthesizeFunc(func(context.Context, storage.Principal, contextfabric.SynthesisInput) (contextfabric.InvestigationResult, error) {
 				return contextfabric.InvestigationResult{}, errors.New("no model in this count")
 			}),
-			Results:     discardingResultStore{}, Requirements: productionRequirementDeriver{},
+			Results: discardingResultStore{}, Requirements: productionRequirementDeriver{},
 		}, contextfabric.EngineOptions{ServiceVersion: "acr-test", NewResultID: func() string { return "result_12456001" }})
 		if err != nil {
 			t.Fatal(err)
@@ -118,7 +118,7 @@ func TestLiveWrappedReadsOfATurn(t *testing.T) {
 		log.reset()
 		result, err := engine.Investigate(runCtx, principal, contextfabric.InvestigationRequest{
 			SchemaVersion: contextfabric.InvestigationRequestSchemaV1, RequestID: "request_12456001",
-			Question: question,
+			Question:    question,
 			TimeContext: contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent, EvidenceWindow: &contextfabric.RequestedEvidenceWindow{RelativeID: contextfabric.RelativeWindowTrailing90D}},
 			Options:     contextfabric.InvestigationOptions{MaxSubjectCandidates: 10, MaxCohortMembers: 10, MaxRelationshipPaths: 50, MaxDrivers: 10, MaxEvidenceRefs: 100, MaxSerializedBytes: 262144, AllowClarification: true},
 			Consumer:    contextfabric.ConsumerInfo{Name: "test", Version: "v1", Surface: "test"},
