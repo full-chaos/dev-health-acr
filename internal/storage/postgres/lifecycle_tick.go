@@ -12,10 +12,6 @@ import (
 	"github.com/full-chaos/dev-health-acr/internal/storage/internal/credentiallifecycle"
 )
 
-// tickColumnList is the column list scanCredential reads (the same list the
-// credential selects carry).
-const tickColumnList = "credential_id, name, token_prefix, org_id, repository_scopes, scopes, created_at, expires_at, revoked_at, last_used_at, workload_binding_id, resource, client_class, approving_user_id, client_id, session_id, family_id, family_expires_at"
-
 // RetentionDeleteGateSQL gates every retention delete of credentials (the
 // workload credential purge and the ended browser credential purge, alias cc):
 // a revoked row (legacy or not) goes as before; an unrevoked row waits until
@@ -31,7 +27,7 @@ const RetentionDeleteGateSQL = `(cc.revoked_at IS NOT NULL OR EXISTS (
 const (
 	// LifecycleTickExpiredSQL: unrevoked credentials past their expiry whose
 	// aggregate has no terminal row (an expired or revoked one).
-	LifecycleTickExpiredSQL = `SELECT ` + tickColumnList + ` FROM acr.client_credentials cc
+	LifecycleTickExpiredSQL = `SELECT ` + credentialColumnList + ` FROM acr.client_credentials cc
 WHERE cc.revoked_at IS NULL AND cc.expires_at IS NOT NULL AND cc.expires_at <= $1
   AND NOT EXISTS (SELECT 1 FROM acr.credential_lifecycle_outbox o
                   WHERE o.aggregate_id = cc.credential_id
@@ -40,7 +36,7 @@ ORDER BY cc.expires_at, cc.credential_id
 LIMIT $2
 FOR UPDATE OF cc SKIP LOCKED`
 	// LifecycleTickFirstTouchSQL: live credentials the stream has never seen.
-	LifecycleTickFirstTouchSQL = `SELECT ` + tickColumnList + ` FROM acr.client_credentials cc
+	LifecycleTickFirstTouchSQL = `SELECT ` + credentialColumnList + ` FROM acr.client_credentials cc
 WHERE cc.revoked_at IS NULL AND (cc.expires_at IS NULL OR cc.expires_at > $1)
   AND NOT EXISTS (SELECT 1 FROM acr.credential_lifecycle_outbox o WHERE o.aggregate_id = cc.credential_id)
 ORDER BY cc.created_at, cc.credential_id

@@ -21,7 +21,7 @@ func Statements() []string {
 		}
 		statements = append(statements, countSQL(spec), deleteSQL(spec))
 	}
-	statements = append(statements, storagepostgres.LifecycleOutboxMaxRevisionSQL, storagepostgres.LifecycleOutboxInsertSQL)
+	statements = append(statements, storagepostgres.LifecycleOutboxMaxRevisionSQL, storagepostgres.LifecycleOutboxLatestEventSQL, storagepostgres.LifecycleOutboxInsertSQL)
 	return append(statements, auditCountSQL, legalHoldCountSQL, markerUpsertSQL, purgedAuditInsertSQL, incompleteAuditInsertSQL)
 }
 
