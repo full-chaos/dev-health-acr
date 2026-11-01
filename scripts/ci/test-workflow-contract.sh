@@ -628,20 +628,16 @@ workflow_step_block() {
   ' "$1"
 }
 
-# check_named_step requires exactly one step $3 in job $2 whose only keys are
-# its name and a run line equal to $4, so nothing can append a status
-# swallower, a condition, a wrapper or a continue-on-error to it.
+# check_named_step requires the step $3 in job $2 to be one step whose only
+# content, after its name line, is a run line equal to $4: nothing can append a
+# status swallower, a condition, a wrapper or a continue-on-error to it, and a
+# second step of the same name adds its own lines to the body and fails.
 check_named_step() {
-  local file="$1" job="$2" name="$3" run="$4" block heads other
+  local file="$1" job="$2" name="$3" run="$4" block body
   block="$(workflow_step_block "$file" "$job" "$name")"
-  heads="$(grep -c '^      - ' <<<"$block" || true)"
-  if [ "$heads" != 1 ]; then
-    printf 'job %s has %s steps named "%s" in %s, want exactly one\n' "$job" "$heads" "$name" "$file" >&2
-    return 1
-  fi
-  other="$(grep -vE '^[[:space:]]*(#.*)?$' <<<"$block" | tail -n +2 | grep -vxF "        run: $run" || true)"
-  if [ -n "$other" ] || ! grep -qxF "        run: $run" <<<"$block"; then
-    printf 'step "%s" must be exactly "run: %s" with no other key or command (found: %s)\n' "$name" "$run" "$other" >&2
+  body="$(grep -vE '^[[:space:]]*(#.*)?$' <<<"$block" | tail -n +2)"
+  if [ "$body" != "        run: $run" ]; then
+    printf 'step "%s" in job %s must be one step whose only line after its name is "run: %s" (found: %s)\n' "$name" "$job" "$run" "$body" >&2
     return 1
   fi
 }
