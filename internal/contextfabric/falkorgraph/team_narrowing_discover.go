@@ -215,10 +215,13 @@ func (s *discoverTeamScope) inScopeIDsUnfloored(ctx context.Context, kind contex
 }
 
 // committedOwned reports whether rule (i) holds for every committed subject
-// (CHAOS-12352): a repository or project currently OWNED_BY_TEAM a requested
-// team, or a team whose own team list names one ("*" is never evidence). Then
-// an anchor-level total is the requested team's. No committed subject, any
-// other kind, a missing node or a cut read: false.
+// (CHAOS-12352): a repository currently OWNED_BY_TEAM a requested team, or a
+// team whose own team list names one ("*" is never evidence). Then an
+// anchor-level total is the requested team's. No committed subject, any other
+// kind, a missing node or a cut read: false. So is a project (CHAOS-12357): its
+// members with a status are pull requests, reached through its issues, and they
+// follow their own repository's owner, so an owned project's total is not the
+// team's.
 func (s *discoverTeamScope) committedOwned(ctx context.Context, committed []contextfabric.SubjectRef) (bool, error) {
 	if s == nil || len(committed) == 0 {
 		return false, nil
@@ -229,12 +232,8 @@ func (s *discoverTeamScope) committedOwned(ctx context.Context, committed []cont
 	owned := currentOwnership(temporalFilter{}, a.now())
 	for _, subject := range committed {
 		switch subject.Kind {
-		case contextfabric.SubjectRepository, contextfabric.SubjectProject:
-			step := repositoryOwnersStep
-			if subject.Kind == contextfabric.SubjectProject {
-				step = projectOwnersStep
-			}
-			hits, cut, err := a.walkStepHits(ctx, n.key, n.orgID, []string{subject.CanonicalID}, step, owned, exactNameCandidateQueryLimit)
+		case contextfabric.SubjectRepository:
+			hits, cut, err := a.walkStepHits(ctx, n.key, n.orgID, []string{subject.CanonicalID}, repositoryOwnersStep, owned, exactNameCandidateQueryLimit)
 			if err != nil {
 				return false, err
 			}

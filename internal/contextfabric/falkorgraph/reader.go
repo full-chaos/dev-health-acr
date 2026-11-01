@@ -1906,7 +1906,19 @@ func (a *Adapter) DiscoverContext(ctx context.Context, principal storage.Princip
 		// for; guarded on cohort.Kind matching declaredCohortKind so a
 		// future cohort-kind divergence reports zero rather than another
 		// kind's count.
+		//
+		// CHAOS-12357: under a team narrowing the figure counts the candidates
+		// inside the narrowing, so it stays a floor of the requested team's
+		// members, never the organization's.
 		declaredCensus := kindCensusMembers
+		if teamScope != nil {
+			declaredCensus = 0
+			for _, n := range cohortNodes {
+				if subject, ok := graphrank.NodeSubject(n); ok && subject.Kind == declaredCohortKind {
+					declaredCensus++
+				}
+			}
+		}
 		served := 0
 		if cohort != nil && cohort.Kind == declaredCohortKind {
 			served = len(cohort.Members)
