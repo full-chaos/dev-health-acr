@@ -1781,6 +1781,9 @@ func (r ContextFabricInvestigationResult) validateAgainstSchemaVersion(bounds co
 			return fmt.Errorf("evidence_ref_labels: %w", err)
 		}
 	}
+	if err := r.validateVocabularyLabelsField(); err != nil {
+		return err
+	}
 	if err := r.validateCompleteness(bounds); err != nil {
 		return fmt.Errorf("completeness: %w", err)
 	}

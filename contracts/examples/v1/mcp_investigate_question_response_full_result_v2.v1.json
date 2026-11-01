@@ -242,6 +242,7 @@
       "structured.coverage_details[].phrasing",
       "structured.coverage_details[].raw",
       "structured.evidence_ref_labels{}",
+      "structured.vocabulary_labels{}",
       "structured.limitations[]",
       "structured.warnings[]",
       "structured.structure_needs.kind_options[].label",
