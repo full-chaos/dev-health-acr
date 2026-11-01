@@ -237,6 +237,9 @@ type ProjectDeploymentWalkDecision struct {
 	// walk that ran.
 	Issues, LinkedPullRequests, Members, Denied int
 	Truncated                                   bool
+	// AnchorOutOfScope: the requested project narrowing alone refused the
+	// anchor, so no deployment was read (CHAOS-12361).
+	AnchorOutOfScope bool
 	// Err is the failed read of a walk that did not finish.
 	Err error
 }
