@@ -647,7 +647,19 @@ case "$scenario" in
     n="$(grep -c 'ACR_AUTH_PROJECTION_URL' "$workdir/projection-on.yaml")"
     [[ "$n" -eq 2 ]] || fail_gate "auth-projection: ACR_AUTH_PROJECTION_URL rendered $n times, want 2 (the ConfigMap and the runtime ACL job)"
     negative auth-projection-needs-the-client "authWorkloadClient.projectionURL" --set-string "authWorkloadClient.projectionURL=https://auth-service.acr-test.svc"
-    pass "auth-projection-url: on renders the URL twice, off never, and the client is required"
+    # Whitespace is unset, as the runtime config reads it: no render error with the client off, no env with it on, and a
+    # padded URL renders trimmed.
+    render --set-string "authWorkloadClient.projectionURL=   " >"$workdir/projection-blank-off.yaml" 2>"$workdir/projection-blank-off.err" \
+      || fail_gate "auth-projection: a whitespace projectionURL with the client off failed to render: $(head -c 300 "$workdir/projection-blank-off.err")"
+    if grep -q ACR_AUTH_PROJECTION_URL "$workdir/projection-blank-off.yaml"; then fail_gate "auth-projection: a whitespace projectionURL rendered the env with the client off"; fi
+    auth_workload_render --set-string "authWorkloadClient.projectionURL=   " >"$workdir/projection-blank-on.yaml"
+    if grep -q ACR_AUTH_PROJECTION_URL "$workdir/projection-blank-on.yaml"; then fail_gate "auth-projection: a whitespace projectionURL rendered the env with the client on"; fi
+    auth_workload_render --set-string "authWorkloadClient.projectionURL=  http://auth-service.acr-test.svc:8080  " >"$workdir/projection-padded.yaml"
+    n="$(grep -c 'ACR_AUTH_PROJECTION_URL: "http://auth-service.acr-test.svc:8080"' "$workdir/projection-padded.yaml")"
+    [[ "$n" -eq 1 ]] || fail_gate "auth-projection: a padded projectionURL rendered untrimmed or not at all in the ConfigMap ($n)"
+    n="$(grep -c 'value: "http://auth-service.acr-test.svc:8080"' "$workdir/projection-padded.yaml")"
+    [[ "$n" -ge 1 ]] || fail_gate "auth-projection: a padded projectionURL rendered untrimmed in the runtime ACL job"
+    pass "auth-projection-url: on renders the URL twice, off never, whitespace is unset, a padded URL renders trimmed, and the client is required"
     printf 'RESULT: scenario auth-projection-url passed\n'
     exit 0 ;;
   happy) : ;;
