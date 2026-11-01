@@ -173,7 +173,7 @@ func TestBusyHonoursRetryAfterAndCapsItAtFiveMinutes(t *testing.T) {
 		{"none", nil, "", 0},
 		{"zero", http.Header{"Retry-After": {"0"}}, "", 0},
 		{"negative", http.Header{"Retry-After": {"-5"}}, "", 0},
-		{"an HTTP date is not read", http.Header{"Retry-After": {"Wed, 21 Oct 2026 07:28:00 GMT"}}, "", 0},
+		{"a past HTTP date is no wait", http.Header{"Retry-After": {"Wed, 21 Oct 2026 07:28:00 GMT"}}, "", 0},
 	}
 	for _, status := range []int{429, 503} {
 		for _, tc := range cases {

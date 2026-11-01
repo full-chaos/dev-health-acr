@@ -154,12 +154,15 @@ func classify(status int, retryAfterHeader string, answer []byte) Result {
 	return Result{Outcome: OutcomeOther}
 }
 
-// retryAfter reads the Retry-After header (whole seconds), else the envelope's retry_after_seconds; no value is a
-// zero wait the caller replaces with its own backoff. The result is capped at MaxRetryAfter.
+// retryAfter reads the Retry-After header (whole seconds, or an HTTP-date: the wait is the distance to it), else the
+// envelope's retry_after_seconds; no value, a past date or a date that does not parse is a zero wait the caller replaces
+// with its own backoff. The result is capped at MaxRetryAfter.
 func retryAfter(header string, answer []byte) time.Duration {
 	seconds := int64(-1)
 	if n, err := strconv.ParseInt(header, 10, 64); err == nil {
 		seconds = n
+	} else if date, err := http.ParseTime(header); err == nil {
+		seconds = int64(time.Until(date) / time.Second)
 	} else {
 		var body answerBody
 		if json.Unmarshal(answer, &body) == nil && body.RetryAfterSeconds != nil {
