@@ -191,20 +191,19 @@ func TestIssuePullRequestLinkEdgesOnRealStores(t *testing.T) {
 	}
 }
 
-// TestIssuePullRequestLinkFanOutOutsideTheWritersContract pins the link
-// producer's behaviour on a state the ops writers do not produce: one
-// work_item_id under several repo_id rows (a GitHub or GitLab id carries its
-// repository, a Jira or Linear id always the zero repository; a moved issue
-// gets a new id). The work-item node identity is (repo_id, work_item_id), so
-// such an id is several nodes, and the link row, which names its issue by id
-// alone, then gives one edge per node, as the older edge producers
-// (dependencies, parent/child) do. Asserted: exactly one edge per (link row x
-// work-item node), each carrying its link row's tier, and both ends of every
-// edge resolve to a stored node (no dangling end).
+// TestIssuePullRequestLinkOutsideTheWritersContractGivesNoEdge pins the link
+// producer on a state the ops writers do not produce: one work_item_id under
+// several repo_id rows (a GitHub or GitLab id carries its repository, a Jira or
+// Linear id always the zero repository; a moved issue gets a new id). The
+// work-item node identity is (repo_id, work_item_id), so such an id is several
+// nodes, and the link row names its issue by id alone, so nothing says which
+// node it means: it gives no edge, on any node. Asserted: only the control id,
+// on one row, has an edge, with its link row's tier, and both ends of that edge
+// resolve to a stored node (no dangling end).
 //
 // Needs Docker (ClickHouse and FalkorDB containers). Written to be run by CI
 // or by the lane owner; not run in the authoring sandbox.
-func TestIssuePullRequestLinkFanOutOutsideTheWritersContract(t *testing.T) {
+func TestIssuePullRequestLinkOutsideTheWritersContractGivesNoEdge(t *testing.T) {
 	ctx := context.Background()
 	query, direct := newDevHealthClickHouseIntegrationClient(t, ctx)
 	for _, statement := range productionSchemaDDL() {
@@ -220,7 +219,7 @@ func TestIssuePullRequestLinkFanOutOutsideTheWritersContract(t *testing.T) {
 	orgID := "11000000-0000-4000-8000-000000000002"
 	repoA, repoB := o3UUID(orgID+"a"), o3UUID(orgID+"b")
 	const zeroRepo = "00000000-0000-0000-0000-000000000000"
-	const issueID = "jira:DUP-1"
+	const issueID, controlID = "jira:DUP-1", "jira:ONE-1"
 	exec := func(label, statement string, args ...any) {
 		t.Helper()
 		if err := direct.Exec(ctx, statement, args...); err != nil {
@@ -236,6 +235,8 @@ func TestIssuePullRequestLinkFanOutOutsideTheWritersContract(t *testing.T) {
 		exec("work item under "+repo, `INSERT INTO work_items (work_item_id, repo_id, org_id, title, type, status, provider, created_at, updated_at, last_synced) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 			issueID, repo, orgID, issueID, "story", "open", "jira", created, now, now)
 	}
+	exec("control work item", `INSERT INTO work_items (work_item_id, repo_id, org_id, title, type, status, provider, created_at, updated_at, last_synced) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		controlID, zeroRepo, orgID, controlID, "story", "open", "jira", created, now, now)
 	type pull struct {
 		repo   string
 		number uint32
@@ -249,6 +250,8 @@ func TestIssuePullRequestLinkFanOutOutsideTheWritersContract(t *testing.T) {
 		exec(fmt.Sprintf("link to %s#%d", p.repo, p.number), `INSERT INTO work_graph_issue_pr (repo_id, work_item_id, pr_number, confidence, provenance, evidence, last_synced, org_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
 			p.repo, issueID, p.number, float32(0.9), p.tier, "", now, orgID)
 	}
+	exec("control link", `INSERT INTO work_graph_issue_pr (repo_id, work_item_id, pr_number, confidence, provenance, evidence, last_synced, org_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+		repoA, controlID, uint32(1), float32(0.9), "heuristic", "", now, orgID)
 
 	source, err := devhealthsource.NewClickHouseProjectionSource(query)
 	if err != nil {
@@ -266,14 +269,12 @@ func TestIssuePullRequestLinkFanOutOutsideTheWritersContract(t *testing.T) {
 	for _, p := range pulls {
 		pullID := fmt.Sprintf("pull_request:%s:%d", p.repo, p.number)
 		origins = append(origins, contextfabric.SubjectRef{Kind: contextfabric.SubjectPullRequest, CanonicalID: pullID})
-		for _, repo := range issueRepos {
-			node, _, err := identity.Derive(identity.KindWorkItem, []string{repo, issueID}, nil)
-			if err != nil {
-				t.Fatal(err)
-			}
-			want[node+" -> "+pullID] = p.tier
-		}
 	}
+	control, _, err := identity.Derive(identity.KindWorkItem, []string{zeroRepo, controlID}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want[control+" -> "+fmt.Sprintf("pull_request:%s:%d", repoA, 1)] = "heuristic"
 	page, err := adapter.DirectEdgePage(ctx, principal, binding, directread.EdgePageQuery{
 		Origins: origins, Types: []string{"LINKS_PULL_REQUEST"}, Direction: directread.EdgeDirectionIn, Limit: 100, ValidAt: now.Add(time.Minute),
 	})
@@ -294,11 +295,11 @@ func TestIssuePullRequestLinkFanOutOutsideTheWritersContract(t *testing.T) {
 		ends = append(ends, edge.From.Subject, edge.To.Subject)
 	}
 	if len(got) != len(want) {
-		t.Errorf("LINKS_PULL_REQUEST edges = %d, want %d (one per link row x work-item node)\n got  %v\n want %v", len(got), len(want), sortedPairs(got), sortedPairs(want))
+		t.Errorf("LINKS_PULL_REQUEST edges = %d, want %d (the control's alone)\n got  %v\n want %v", len(got), len(want), sortedPairs(got), sortedPairs(want))
 	}
 	for key, tier := range want {
 		if got[key] != tier {
-			t.Errorf("edge %s: tier = %q, want %q (the link row's tier on every node's edge)", key, got[key], tier)
+			t.Errorf("edge %s: tier = %q, want %q (the link row's tier)", key, got[key], tier)
 		}
 	}
 	for key := range got {

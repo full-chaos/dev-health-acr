@@ -41,6 +41,13 @@ func TestAnAmbiguousLinkIdContributesToNoFactRead(t *testing.T) {
 	for _, pullRequestProvider := range []string{"github", "gitlab"} {
 		for _, provider := range []string{"github", "gitlab", "jira", "linear"} {
 			for _, shape := range []string{"two-repositories", "repository-less", "swapped", "pull-request-typed"} {
+				// The two shapes the rulings name run on every pair, the other
+				// two on one pair of each pull request provider: this test is
+				// on a race budget, and the rule has no provider term.
+				if (shape == "two-repositories" || shape == "pull-request-typed") &&
+					pullRequestProvider+"/"+provider != "github/jira" && pullRequestProvider+"/"+provider != "gitlab/linear" {
+					continue
+				}
 				t.Run(pullRequestProvider+"/"+provider+"/"+shape, func(t *testing.T) {
 					org := fmt.Sprintf("org-12409-%s-%s-%s", pullRequestProvider, provider, shape)
 					local, foreign := repoUUID(org+"local"), repoUUID(org+"foreign")

@@ -112,7 +112,7 @@ type ambiguousLinkRun struct {
 	ignored     map[string]int
 	pullRequest map[uint32]string
 	anchor      contextfabric.SubjectRef
-	stated      []string
+	stated      map[uint32][]string
 }
 
 // project runs the real producer from cursor into the real graph.
@@ -125,7 +125,7 @@ func (o *ambiguousLinkOrg) project(query contextpacket.ClickHouseQueryClient, ad
 	}
 	source = source.WithLogger(slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug})))
 	source.WithWorkItemProjectMembership(true)
-	run := ambiguousLinkRun{ignored: map[string]int{}, pullRequest: map[uint32]string{}}
+	run := ambiguousLinkRun{ignored: map[string]int{}, pullRequest: map[uint32]string{}, stated: map[uint32][]string{}}
 	for page := 0; ; page++ {
 		if page == 40 {
 			o.t.Fatal("the producer did not catch up in 40 pages")
@@ -152,7 +152,7 @@ func (o *ambiguousLinkOrg) project(query contextpacket.ClickHouseQueryClient, ad
 				}
 				run.pullRequest[number] = entity.Subject.CanonicalID
 				if entity.ProjectIdentities != nil {
-					run.stated = *entity.ProjectIdentities
+					run.stated[number] = *entity.ProjectIdentities
 				}
 			}
 		}
@@ -220,10 +220,9 @@ func TestLiveAnAmbiguousLinkIdGivesNoEdge(t *testing.T) {
 		}
 		return canonical
 	}
-	calls := 0
-	for _, shape := range []struct {
+	shapes := []struct {
 		name string
-		// rows are the (repository, project, type) rows of X-1.
+		// rows are the (repository, project, type) rows of the shape's id.
 		rows      [][3]string
 		tier      string
 		ambiguous int
@@ -235,114 +234,127 @@ func TestLiveAnAmbiguousLinkIdGivesNoEdge(t *testing.T) {
 		// A pull-request-typed row counts: it can be what the link names.
 		{name: "pull-request-typed", rows: [][3]string{{foreign, "THEIRS", "pr"}, {zeroRepositoryUUID, "OURS", "issue"}}, tier: "native", ambiguous: 1},
 		{name: "one-row", rows: [][3]string{{zeroRepositoryUUID, "OURS", "issue"}}, tier: "native"},
-	} {
-		t.Run(shape.name, func(t *testing.T) {
-			eachAmbiguousLinkPair(t, func(t *testing.T, pullRequestProvider, provider string) {
-				org := &ambiguousLinkOrg{t: t, ctx: ctx, direct: direct, org: strings.Join([]string{"org-12409", shape.name, pullRequestProvider, provider}, "-"), provider: provider, local: local, foreign: foreign}
-				org.repositories(pullRequestProvider, at)
-				for _, row := range shape.rows {
-					org.item("X-1", row[0], row[1], row[2], at)
-				}
-				// A control: one row, so the pull request has a project and a
-				// walk that reads it returns a member.
-				org.issue("Y-1", local, "OURS", at)
-				org.pullRequest(1, at)
-				org.link("X-1", 1, shape.tier, at)
-				org.link("Y-1", 1, shape.tier, at)
-
-				run := org.project(query, adapter, "")
-				if run.anchor.CanonicalID == "" || run.pullRequest[1] == "" {
-					t.Fatalf("the seed did not project: anchor %q, pull request %q", run.anchor.CanonicalID, run.pullRequest[1])
-				}
-				want := []string{workItem(t, local, "Y-1")}
-				if shape.ambiguous == 0 {
-					want = append(want, workItem(t, shape.rows[0][0], "X-1"))
-				}
-				sort.Strings(want)
-				if !slices.Equal(run.edges, want) {
-					t.Errorf("edges = %v, want %v", run.edges, want)
-				}
-				if got := run.ignored[linkSkipAmbiguous]; got != shape.ambiguous {
-					t.Errorf("ambiguous_links = %d, want %d (ignored %v)", got, shape.ambiguous, run.ignored)
-				}
-
-				// The count and the graph hold the same edges.
-				source, err := devhealthsource.NewClickHouseProjectionSource(query)
-				if err != nil {
-					t.Fatal(err)
-				}
-				counts, err := source.ProjectionSourceEdgeCounts(ctx, org.org)
-				if err != nil {
-					t.Fatal(err)
-				}
-				counted, stored := int64(0), int64(0)
-				for key, total := range counts {
-					if key.Relation != contractsv1.ContextFabricRelationshipLinksPullRequest {
-						continue
-					}
-					counted += total
-					inGraph, err := adapter.CountEdges(ctx, org.org, key)
-					if err != nil {
-						t.Fatal(err)
-					}
-					stored += inGraph
-				}
-				if counted != int64(len(want)) || stored != int64(len(want)) {
-					t.Errorf("edge count = %d, graph = %d, want both %d", counted, stored, len(want))
-				}
-
-				// The walk: an unrestricted and a repository-restricted caller.
-				for name, principal := range map[string]storage.Principal{
-					"unrestricted":          {OrgID: org.org},
-					"repository-restricted": {OrgID: org.org, RepositoryScopes: []string{"acme/local"}},
-				} {
-					binding, err := adapter.ResolveInvestigationBinding(ctx, principal)
-					if err != nil {
-						t.Fatal(err)
-					}
-					walk, err := adapter.TreeWorkItemMembers(ctx, principal, binding, contextfabric.RequestedScope{}, run.anchor, 25)
-					if err != nil {
-						t.Fatal(err)
-					}
-					members := make([]string, 0, len(walk.Members))
-					for _, member := range walk.Members {
-						members = append(members, member.Subject.CanonicalID)
-					}
-					sort.Strings(members)
-					if !slices.Equal(members, want) {
-						t.Errorf("%s walk members = %v, want %v", name, members, want)
-					}
-				}
-
-				// A project-only caller reads a link through read_relationships:
-				// its repository walk returns nothing with or without this rule.
-				// A lower tier grants it no authority, so that pull request is denied.
-				if shape.tier != "native" {
-					return
-				}
-				if !slices.Contains(run.stated, org.projectIdentity("OURS")) {
-					t.Fatalf("control: the pull request states %v, not OURS, so this read measures nothing", run.stated)
-				}
-				calls++
-				sum := sha256.Sum256([]byte(fmt.Sprintf("12409-%d", calls)))
-				response, err := reader.Read(observability.WithRequestID(ctx, "req_"+hex.EncodeToString(sum[:16])), storage.Principal{OrgID: org.org, ProjectScopes: []string{org.projectIdentity("OURS")}}, directread.RelationshipsRequest{
-					Subject: directread.RelationshipsSubject{Kind: "pull_request", CanonicalID: run.pullRequest[1]},
-					Types:   []string{"LINKS_PULL_REQUEST"}, Direction: "in", Limit: 100,
-				})
-				if err != nil {
-					t.Fatal(err)
-				}
-				served := make([]string, 0, len(response.Edges))
-				for _, edge := range response.Edges {
-					served = append(served, edge.From.CanonicalID)
-				}
-				sort.Strings(served)
-				if !slices.Equal(served, want) {
-					t.Errorf("project-only read = %v (%s), want %v", served, response.Status, want)
-				}
-			})
-		})
 	}
+	calls := 0
+	eachAmbiguousLinkPair(t, func(t *testing.T, pullRequestProvider, provider string) {
+		// One organization for every shape, each with its own ids and pull
+		// request, so the matrix costs one projection per provider pair.
+		org := &ambiguousLinkOrg{t: t, ctx: ctx, direct: direct, org: strings.Join([]string{"org-12409", pullRequestProvider, provider}, "-"), provider: provider, local: local, foreign: foreign}
+		org.repositories(pullRequestProvider, at)
+		perShape := map[string][]string{}
+		var want []string
+		ambiguous := 0
+		for index, shape := range shapes {
+			number := uint32(index + 1)
+			id, control := shape.name+"-X", shape.name+"-Y"
+			for _, row := range shape.rows {
+				org.item(id, row[0], row[1], row[2], at)
+			}
+			// A control: one row, so the pull request has a project and a
+			// walk that reads it returns a member.
+			org.issue(control, local, "OURS", at)
+			org.pullRequest(number, at)
+			org.link(id, number, shape.tier, at)
+			org.link(control, number, shape.tier, at)
+			perShape[shape.name] = []string{workItem(t, local, control)}
+			if shape.ambiguous == 0 {
+				perShape[shape.name] = append(perShape[shape.name], workItem(t, shape.rows[0][0], id))
+			}
+			sort.Strings(perShape[shape.name])
+			want = append(want, perShape[shape.name]...)
+			ambiguous += shape.ambiguous
+		}
+		sort.Strings(want)
+
+		run := org.project(query, adapter, "")
+		if run.anchor.CanonicalID == "" || len(run.pullRequest) != len(shapes) {
+			t.Fatalf("the seed did not project: anchor %q, pull requests %v", run.anchor.CanonicalID, run.pullRequest)
+		}
+		if !slices.Equal(run.edges, want) {
+			t.Errorf("edges = %v, want %v", run.edges, want)
+		}
+		if got := run.ignored[linkSkipAmbiguous]; got != ambiguous {
+			t.Errorf("ambiguous_links = %d, want %d (ignored %v)", got, ambiguous, run.ignored)
+		}
+
+		// The count and the graph hold the same edges.
+		source, err := devhealthsource.NewClickHouseProjectionSource(query)
+		if err != nil {
+			t.Fatal(err)
+		}
+		counts, err := source.ProjectionSourceEdgeCounts(ctx, org.org)
+		if err != nil {
+			t.Fatal(err)
+		}
+		counted, stored := int64(0), int64(0)
+		for key, total := range counts {
+			if key.Relation != contractsv1.ContextFabricRelationshipLinksPullRequest {
+				continue
+			}
+			counted += total
+			inGraph, err := adapter.CountEdges(ctx, org.org, key)
+			if err != nil {
+				t.Fatal(err)
+			}
+			stored += inGraph
+		}
+		if counted != int64(len(want)) || stored != int64(len(want)) {
+			t.Errorf("edge count = %d, graph = %d, want both %d", counted, stored, len(want))
+		}
+
+		// The walk: an unrestricted and a repository-restricted caller.
+		for name, principal := range map[string]storage.Principal{
+			"unrestricted":          {OrgID: org.org},
+			"repository-restricted": {OrgID: org.org, RepositoryScopes: []string{"acme/local"}},
+		} {
+			binding, err := adapter.ResolveInvestigationBinding(ctx, principal)
+			if err != nil {
+				t.Fatal(err)
+			}
+			walk, err := adapter.TreeWorkItemMembers(ctx, principal, binding, contextfabric.RequestedScope{}, run.anchor, 25)
+			if err != nil {
+				t.Fatal(err)
+			}
+			members := make([]string, 0, len(walk.Members))
+			for _, member := range walk.Members {
+				members = append(members, member.Subject.CanonicalID)
+			}
+			sort.Strings(members)
+			if !slices.Equal(members, want) {
+				t.Errorf("%s walk members = %v, want %v", name, members, want)
+			}
+		}
+
+		// A project-only caller reads a link through read_relationships: its
+		// repository walk returns nothing with or without this rule. A lower
+		// tier grants it no authority, so that pull request is denied.
+		for index, shape := range shapes {
+			if shape.tier != "native" {
+				continue
+			}
+			number := uint32(index + 1)
+			if !slices.Contains(run.stated[number], org.projectIdentity("OURS")) {
+				t.Fatalf("control: pull request %d states %v, not OURS, so this read measures nothing", number, run.stated[number])
+			}
+			calls++
+			sum := sha256.Sum256([]byte(fmt.Sprintf("12409-%d", calls)))
+			response, err := reader.Read(observability.WithRequestID(ctx, "req_"+hex.EncodeToString(sum[:16])), storage.Principal{OrgID: org.org, ProjectScopes: []string{org.projectIdentity("OURS")}}, directread.RelationshipsRequest{
+				Subject: directread.RelationshipsSubject{Kind: "pull_request", CanonicalID: run.pullRequest[number]},
+				Types:   []string{"LINKS_PULL_REQUEST"}, Direction: "in", Limit: 100,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			served := make([]string, 0, len(response.Edges))
+			for _, edge := range response.Edges {
+				served = append(served, edge.From.CanonicalID)
+			}
+			sort.Strings(served)
+			if !slices.Equal(served, perShape[shape.name]) {
+				t.Errorf("%s: project-only read = %v (%s), want %v", shape.name, served, response.Status, perShape[shape.name])
+			}
+		}
+	})
 }
 
 // An ambiguous native row still shows that the provider attached an issue to
@@ -356,67 +368,84 @@ func TestLiveAnAmbiguousNativeLinkRetractsThePullRequestsLowerTierLinksAndNoIssu
 	adapter := chaos7074FalkorAdapter(t, ctx)
 	const local, foreign = "77777777-7777-7777-7777-777777777777", "88888888-8888-8888-8888-888888888888"
 	at := time.Date(2026, 10, 30, 9, 0, 0, 0, time.UTC)
-	eachAmbiguousLinkPair(t, func(t *testing.T, pullRequestProvider, provider string) {
-		org := &ambiguousLinkOrg{t: t, ctx: ctx, direct: direct, org: strings.Join([]string{"org-12409-retract", pullRequestProvider, provider}, "-"), provider: provider, local: local, foreign: foreign}
-		org.repositories(pullRequestProvider, at)
-		org.issue("Y-1", local, "", at)
-		org.issue("X-1", local, "", at)
-		org.pullRequest(1, at)
-		org.pullRequest(2, at)
-		org.pullRequest(3, at)
-		org.link("Y-1", 1, "explicit_text", at)
-		org.link("X-1", 2, "heuristic", at)
-		first := org.project(query, adapter, "")
+	for _, pullRequestProvider := range []string{"github", "gitlab"} {
+		t.Run(pullRequestProvider, func(t *testing.T) {
+			// One organization for every issue provider, so the matrix costs
+			// three projections per pull request provider.
+			org := &ambiguousLinkOrg{t: t, ctx: ctx, direct: direct, org: "org-12409-retract-" + pullRequestProvider, provider: "github", local: local, foreign: foreign}
+			org.repositories(pullRequestProvider, at)
+			providers := []string{"github", "gitlab", "jira", "linear"}
+			base := func(index int) uint32 { return uint32(3*index + 1) }
+			for index, provider := range providers {
+				org.provider = provider
+				org.issue("Y-"+provider, local, "", at)
+				org.issue("X-"+provider, local, "", at)
+				org.pullRequest(base(index), at)
+				org.pullRequest(base(index)+1, at)
+				org.pullRequest(base(index)+2, at)
+				org.link("Y-"+provider, base(index), "explicit_text", at)
+				org.link("X-"+provider, base(index)+1, "heuristic", at)
+			}
+			first := org.project(query, adapter, "")
 
-		// Each row of X-1 holds a lower-tier link, each written while it was
-		// the only row: the read cannot say which row it would name.
-		mid := at.Add(time.Hour)
-		org.exec(`ALTER TABLE work_items DELETE WHERE org_id = ? AND work_item_id = 'X-1' SETTINGS mutations_sync = 2`, org.org)
-		org.issue("X-1", foreign, "", mid)
-		org.link("X-1", 3, "heuristic", mid)
-		second := org.project(query, adapter, first.cursor)
-		if len(first.edges) != 2 || len(second.edges) == 0 {
-			t.Fatalf("premise: %d then %d lower-tier edges, want 2 and the second row's", len(first.edges), len(second.edges))
-		}
+			// Each row of an id holds a lower-tier link, each written while it
+			// was the only row: the read cannot say which row it would name.
+			mid := at.Add(time.Hour)
+			org.exec(`ALTER TABLE work_items DELETE WHERE org_id = ? AND startsWith(work_item_id, 'X-') SETTINGS mutations_sync = 2`, org.org)
+			for index, provider := range providers {
+				org.provider = provider
+				org.issue("X-"+provider, foreign, "", mid)
+				org.link("X-"+provider, base(index)+2, "heuristic", mid)
+			}
+			second := org.project(query, adapter, first.cursor)
+			if len(first.edges) != 2*len(providers) || len(second.edges) == 0 {
+				t.Fatalf("premise: %d then %d lower-tier edges, want %d and the second rows'", len(first.edges), len(second.edges), 2*len(providers))
+			}
 
-		// Both rows now exist, and a native link to pull request 1 arrives.
-		later := mid.Add(time.Hour)
-		org.issue("X-1", local, "", later)
-		org.link("X-1", 1, "native", later)
-		third := org.project(query, adapter, second.cursor)
-		if got := third.ignored[linkSkipAmbiguous]; got != 1 {
-			t.Errorf("ambiguous_links = %d, want 1 (ignored %v)", got, third.ignored)
-		}
+			// Both rows now exist, and a native link arrives on each id.
+			later := mid.Add(time.Hour)
+			for index, provider := range providers {
+				org.provider = provider
+				org.issue("X-"+provider, local, "", later)
+				org.link("X-"+provider, base(index), "native", later)
+			}
+			third := org.project(query, adapter, second.cursor)
+			if got := third.ignored[linkSkipAmbiguous]; got != len(providers) {
+				t.Errorf("ambiguous_links = %d, want %d (ignored %v)", got, len(providers), third.ignored)
+			}
 
-		principal := storage.Principal{OrgID: org.org}
-		binding, err := adapter.ResolveInvestigationBinding(ctx, principal)
-		if err != nil {
-			t.Fatal(err)
-		}
-		linksOf := func(number uint32) []string {
-			t.Helper()
-			page, err := adapter.DirectEdgePage(ctx, principal, binding, directread.EdgePageQuery{
-				Origins: []contextfabric.SubjectRef{{Kind: contextfabric.SubjectPullRequest, CanonicalID: first.pullRequest[number]}},
-				Types:   []string{"LINKS_PULL_REQUEST"}, Direction: directread.EdgeDirectionIn, Limit: 10, ValidAt: time.Now().UTC(),
-			})
+			principal := storage.Principal{OrgID: org.org}
+			binding, err := adapter.ResolveInvestigationBinding(ctx, principal)
 			if err != nil {
 				t.Fatal(err)
 			}
-			out := make([]string, 0, len(page.Edges))
-			for _, edge := range page.Edges {
-				out = append(out, edge.From.Subject.CanonicalID)
+			linksOf := func(number uint32) []string {
+				t.Helper()
+				page, err := adapter.DirectEdgePage(ctx, principal, binding, directread.EdgePageQuery{
+					Origins: []contextfabric.SubjectRef{{Kind: contextfabric.SubjectPullRequest, CanonicalID: first.pullRequest[number]}},
+					Types:   []string{"LINKS_PULL_REQUEST"}, Direction: directread.EdgeDirectionIn, Limit: 10, ValidAt: time.Now().UTC(),
+				})
+				if err != nil {
+					t.Fatal(err)
+				}
+				out := make([]string, 0, len(page.Edges))
+				for _, edge := range page.Edges {
+					out = append(out, edge.From.Subject.CanonicalID)
+				}
+				return out
 			}
-			return out
-		}
-		if got := linksOf(1); len(got) != 0 {
-			t.Errorf("pull request 1 keeps %v: the ambiguous native row must retract its lower-tier link and give no edge", got)
-		}
-		for _, number := range []uint32{2, 3} {
-			if got := linksOf(number); len(got) != 1 {
-				t.Errorf("pull request %d holds %v, want the heuristic link of X-1: an ambiguous row names no issue, so it retracts no link of one", number, got)
+			for index, provider := range providers {
+				if got := linksOf(base(index)); len(got) != 0 {
+					t.Errorf("%s: pull request %d keeps %v: the ambiguous native row must retract its lower-tier link and give no edge", provider, base(index), got)
+				}
+				for _, number := range []uint32{base(index) + 1, base(index) + 2} {
+					if got := linksOf(number); len(got) != 1 {
+						t.Errorf("%s: pull request %d holds %v, want the heuristic link of its id: an ambiguous row names no issue, so it retracts no link of one", provider, number, got)
+					}
+				}
 			}
-		}
-	})
+		})
+	}
 }
 
 // The link read takes a work item through one row per id, so its window columns
