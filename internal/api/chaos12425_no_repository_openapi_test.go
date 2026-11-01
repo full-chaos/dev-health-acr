@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/full-chaos/dev-health-acr/internal/auth"
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
 	"github.com/full-chaos/dev-health-acr/internal/testsupport/repopath"
@@ -227,4 +228,118 @@ func TestExecutedNoRepositoryStatusAgreesWithTheOpenAPI(t *testing.T) {
 		t.Errorf("GET context-packets/{id} answered %d %s: it is now served; move it from noRepositoryExceptions into protectedRoutes()", recorder.Code, code)
 	}
 	t.Logf("GET context-packets/{id} with an empty scope: %d %q", recorder.Code, code)
+}
+
+// outsideAccessCheck are routes registerRoutes gives the mux that are not
+// behind requireLiveAccess (only protectedRuntimeChain installs it), each with
+// its reason. TestOutsideAccessCheckRoutesNeverAnswerNoRepository drives each
+// with an empty-scope user credential: none reads the access or answers
+// 409 no_repository.
+var outsideAccessCheck = map[string]string{
+	"GET /healthz": "unauthenticated probe",
+	"GET /readyz":  "unauthenticated probe",
+	"POST /api/v1/oauth/device_authorization":     "device flow start, unauthenticated",
+	"POST /api/v1/oauth/token":                    "device flow token, unauthenticated",
+	"GET /.well-known/oauth-authorization-server": "OAuth metadata, unauthenticated",
+	"GET /authorize":                              "OAuth authorize, code flow, no bearer",
+	"POST /authorize/consent":                     "OAuth consent, code flow, no bearer",
+	"POST /device_authorization":                  "OAuth device authorization, unauthenticated",
+	"POST /register":                              "OAuth client registration, unauthenticated",
+	"POST /token":                                 "OAuth token, unauthenticated",
+}
+
+// unservedInTheMux are exception entries that are OpenAPI-only: no handler is
+// registered for them.
+var unservedInTheMux = map[string]bool{
+	"GET /api/v1/agent-context/context-packets/{context_packet_id}": true,
+}
+
+// Every pattern registerRoutes really gives the mux is covered: a protected
+// route, a named no-409 exception, or a named route outside the access check.
+// A route added to the mux but to no list fails here.
+func TestEveryRegisteredRouteIsClassifiedForNoRepository(t *testing.T) {
+	patterns := registeredPatterns(t, true)
+	if len(patterns) == 0 {
+		t.Fatal("no registered pattern was recorded")
+	}
+	covered := map[string]bool{}
+	for _, pattern := range patterns {
+		method, template, ok := strings.Cut(pattern, " ")
+		if !ok {
+			t.Fatalf("registered pattern %q has no method", pattern)
+		}
+		inProtected := false
+		for _, route := range protectedRoutes() {
+			path, _, _ := strings.Cut(route.path, "?")
+			if route.method == method && templateMatches(template, path) {
+				inProtected = true
+			}
+		}
+		_, inException := noRepositoryExceptions[pattern]
+		_, inOutside := outsideAccessCheck[pattern]
+		covered[pattern] = true
+		switch {
+		case inProtected && inOutside:
+			t.Errorf("%s is in protectedRoutes() and outsideAccessCheck", pattern)
+		case inProtected && inException:
+			t.Errorf("%s is in protectedRoutes() and noRepositoryExceptions", pattern)
+		case !inProtected && !inException && !inOutside:
+			t.Errorf("registered route %s is in none of protectedRoutes(), noRepositoryExceptions, outsideAccessCheck", pattern)
+		}
+	}
+	for _, list := range []map[string]string{noRepositoryExceptions, outsideAccessCheck} {
+		for key, reason := range list {
+			if reason == "" {
+				t.Errorf("%s has no reason", key)
+			}
+			if !covered[key] && !unservedInTheMux[key] {
+				t.Errorf("list entry %q is not a registered route", key)
+			}
+			if covered[key] && unservedInTheMux[key] {
+				t.Errorf("list entry %q is registered: drop it from unservedInTheMux", key)
+			}
+		}
+	}
+	// Every protected route must map to a registered pattern too.
+	for _, route := range protectedRoutes() {
+		path, _, _ := strings.Cut(route.path, "?")
+		found := false
+		for _, pattern := range patterns {
+			method, template, _ := strings.Cut(pattern, " ")
+			if method == route.method && templateMatches(template, path) {
+				found = true
+			}
+		}
+		if !found {
+			t.Errorf("protectedRoutes() entry %s %s matches no registered route", route.method, route.path)
+		}
+	}
+}
+
+func TestOutsideAccessCheckRoutesNeverAnswerNoRepository(t *testing.T) {
+	// The rig has the OAuth routes on, so every route in the list is served
+	// (a 404 here would be a route that is not there, not a proof).
+	app := newPublicRouteRig(t, true).app
+	token := auth.TokenPrefix + strings.Repeat("A", 43)
+	reader := &fakePrincipalAccess{}
+	app.runtime.PrincipalAccess = reader
+	authenticateAsCredential(t, app, storage.CredentialClientClassOAuthUser, []string{"*"})
+	access := grantedAccess()
+	access.Repositories = nil
+	reader.set(access, nil)
+	for pattern := range outsideAccessCheck {
+		method, path, _ := strings.Cut(pattern, " ")
+		body := ""
+		if method == http.MethodPost {
+			body = "{}"
+		}
+		recorder, code := serveProtected(app, token, protectedRoute{method, path, body}, nil)
+		if calls := reader.reset(); len(calls) != 0 || code == contractsv1.ErrorCodeNoRepository || recorder.Code == http.StatusConflict {
+			t.Errorf("%s: %d %q after %d access reads; want none and no 409 no_repository", pattern, recorder.Code, code, len(calls))
+		}
+		if recorder.Code == http.StatusNotFound && code == "" {
+			t.Errorf("%s answered a bare 404: the route is not served in this rig, so nothing was proved", pattern)
+		}
+		t.Logf("%s -> %d %q", pattern, recorder.Code, code)
+	}
 }
