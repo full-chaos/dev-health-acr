@@ -1110,7 +1110,7 @@
       "series": [
         {
           "key": "health.compounding_risk",
-          "label": "Health.compounding risk",
+          "label": "Health risk",
           "points": [
             {
               "label": "CHAOS",
@@ -1140,7 +1140,7 @@
         },
         {
           "key": "operational_deficiencies.severity",
-          "label": "Operational deficiencies.severity",
+          "label": "Operational deficiencies",
           "points": [
             {
               "label": "CHAOS",
@@ -1155,7 +1155,7 @@
         },
         {
           "key": "readiness.coverage_gap",
-          "label": "Readiness.coverage gap",
+          "label": "Readiness gap",
           "points": [
             {
               "label": "CHAOS",
@@ -1170,7 +1170,7 @@
         },
         {
           "key": "workload.forecast_pressure",
-          "label": "Workload.forecast pressure",
+          "label": "Workload pressure",
           "points": [
             {
               "label": "CHAOS",

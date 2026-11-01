@@ -79,7 +79,27 @@ func withStampedSourceWords(result InvestigationResult) InvestigationResult {
 		source.Label = contractsv1.ContextFabricSourceObservationLabel(source.Source)
 		source.StateLabel = contractsv1.ContextFabricSourceStateLabel(source.State)
 	}
+	result.RenderShapes = withDriverSeriesWords(result.RenderShapes)
 	return result
+}
+
+// withDriverSeriesWords restates a driver series' legend at serve. render_shapes
+// is written before save, so a stored result keeps the label it was made with
+// (CHAOS-12473). Like the source words it needs no flag: series.label is on
+// every pin. The saved document stays as it was.
+func withDriverSeriesWords(shapes []contractsv1.ContextFabricRenderShape) []contractsv1.ContextFabricRenderShape {
+	restated := slices.Clone(shapes)
+	for index := range restated {
+		if restated[index].SelectedBy != contractsv1.ContextFabricRenderRuleCohortDriverContribution {
+			continue
+		}
+		restated[index].Series = slices.Clone(restated[index].Series)
+		for row := range restated[index].Series {
+			series := &restated[index].Series[row]
+			series.Label = cohortDriverSeriesLabel(series.Key)
+		}
+	}
+	return restated
 }
 
 // composeVocabularyLabels walks the served fields of the design's table
