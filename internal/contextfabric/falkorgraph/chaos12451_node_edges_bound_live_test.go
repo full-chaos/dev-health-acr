@@ -53,6 +53,17 @@ func nodeEdgeBoundFixture(t *testing.T, ctx context.Context, adapter *Adapter) (
 	for i := 1; i <= 12; i++ {
 		relate(fmt.Sprintf("rel_b_wi_%03d", i), contractsv1.ContextFabricRelationshipOwnedByTeam, add(subject(contextfabric.SubjectWorkItem, fmt.Sprintf("work_item-%03d", i))), team)
 	}
+	// Apart from the repository and the team above, so their edge counts hold: a
+	// team that holds incidents, an incident for a kind census to find, and a
+	// document with two parents.
+	incidents := add(subject(contextfabric.SubjectTeam, "team-incidents"))
+	for i := 1; i <= 6; i++ {
+		relate(fmt.Sprintf("rel_i_incident_%03d", i), contractsv1.ContextFabricRelationshipOwnedByTeam, add(subject(contextfabric.SubjectIncident, fmt.Sprintf("incident-%03d", i))), incidents)
+	}
+	add(subject(contextfabric.SubjectIncident, "incident-big"))
+	document := add(subject(contextfabric.SubjectDocument, "document-big"))
+	relate("rel_d_doc_one", contractsv1.ContextFabricRelationshipDocumentedBy, add(subject(contextfabric.SubjectTeam, "team-doc-one")), document)
+	relate("rel_d_doc_two", contractsv1.ContextFabricRelationshipDocumentedBy, add(subject(contextfabric.SubjectTeam, "team-doc-two")), document)
 	base := contextfabric.ProjectionBatch{SchemaVersion: contextfabric.ProjectionBatchSchemaV1, OrgID: orgID, Source: "live-test", SourceVersion: "v1", GeneratedAt: now,
 		Entities: []contextfabric.EntityProjection{}, Relationships: []contextfabric.RelationshipProjection{}, Contents: []contextfabric.ContentProjection{},
 		Episodes: []contextfabric.EpisodeProjection{}, Tombstones: []contextfabric.ProjectionTombstone{}}
@@ -165,30 +176,7 @@ func TestLiveACutNodeReadIsDisclosed(t *testing.T) {
 	adapter.config.MaxResults = 500
 	read := func(t *testing.T, limit int, question string, committed []contextfabric.SubjectRef) contextfabric.Coverage {
 		t.Helper()
-		adapter.config.NodeEdgeReadLimit = limit
-		principal := storage.Principal{OrgID: orgID}
-		binding, err := adapter.ResolveInvestigationBinding(ctx, principal)
-		if err != nil {
-			t.Fatalf("ResolveInvestigationBinding() error = %v", err)
-		}
-		current := contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent}
-		gc, err := adapter.DiscoverContext(ctx, principal, contextfabric.GraphDiscoveryRequest{
-			Request: contextfabric.InvestigationRequest{SchemaVersion: contextfabric.InvestigationRequestSchemaV1, RequestID: "request_12451", Question: question, TimeContext: current,
-				Options:  contextfabric.InvestigationOptions{MaxSubjectCandidates: 10, MaxCohortMembers: 50, MaxRelationshipPaths: 100, MaxDrivers: 10, MaxEvidenceRefs: 200, MaxSerializedBytes: 262144},
-				Consumer: contextfabric.ConsumerInfo{Name: "test", Version: "v1", Surface: "test"}},
-			Interpretation: contextfabric.InterpretedQuestion{Shape: contextfabric.ShapeSingleSubject, RequestedJudgment: "status", SubjectTerms: []string{}, TimeContext: current},
-			Resolution:     contextfabric.SubjectResolution{Committed: committed, Candidates: []contextfabric.SubjectCandidate{}},
-			Binding:        binding,
-		})
-		if err != nil {
-			t.Fatalf("DiscoverContext() error = %v", err)
-		}
-		return gc.Coverage
-	}
-	hasCut := func(c contextfabric.Coverage) bool {
-		return slices.ContainsFunc(c.Details, func(d contextfabric.CoverageDetail) bool {
-			return d.Code == contractsv1.ContextFabricCoverageDetailGraphHopWalkTruncated
-		})
+		return discoverAtLimit(t, ctx, adapter, orgID, limit, question, nil, committed, nil).Coverage
 	}
 	for _, tc := range []struct {
 		name      string
@@ -199,10 +187,10 @@ func TestLiveACutNodeReadIsDisclosed(t *testing.T) {
 		{"the text arm alone", "what about repository-big?", []contextfabric.SubjectRef{}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			if c := read(t, 10, tc.question, tc.committed); !hasCut(c) || !c.Partial {
+			if c := read(t, 10, tc.question, tc.committed); !hasHopWalkCut(c) || !c.Partial {
 				t.Fatalf("limit 10: partial %v details %+v, want the cut disclosed", c.Partial, c.Details)
 			}
-			if c := read(t, 1000, tc.question, tc.committed); hasCut(c) {
+			if c := read(t, 1000, tc.question, tc.committed); hasHopWalkCut(c) {
 				t.Fatalf("limit 1000: details %+v, want no cut: every edge was read and admitted", c.Details)
 			}
 		})
@@ -254,5 +242,189 @@ func TestLiveACutPastTheServerResultCapIsDisclosed(t *testing.T) {
 	}
 	if got := countPrefix(ids, "rel_z_owner"); got != 3 {
 		t.Fatalf("owner edges %d, want all 3", got)
+	}
+}
+
+// discoverAtLimit is one DiscoverContext over nodeEdgeBoundFixture at a node read
+// limit. A frame makes it a cohort read; an anchor binds the frame's scope to a
+// team.
+func discoverAtLimit(t *testing.T, ctx context.Context, adapter *Adapter, orgID string, limit int, question string, frame *contextfabric.QuestionFrame, committed []contextfabric.SubjectRef, anchor *contextfabric.SubjectRef) contextfabric.GraphContext {
+	t.Helper()
+	adapter.config.NodeEdgeReadLimit = limit
+	principal := storage.Principal{OrgID: orgID}
+	binding, err := adapter.ResolveInvestigationBinding(ctx, principal)
+	if err != nil {
+		t.Fatalf("ResolveInvestigationBinding() error = %v", err)
+	}
+	current := contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent}
+	request := contextfabric.GraphDiscoveryRequest{
+		Request: contextfabric.InvestigationRequest{SchemaVersion: contextfabric.InvestigationRequestSchemaV1, RequestID: "request_12451", Question: question, TimeContext: current,
+			Options:  contextfabric.InvestigationOptions{MaxSubjectCandidates: 10, MaxCohortMembers: 50, MaxRelationshipPaths: 100, MaxDrivers: 10, MaxEvidenceRefs: 200, MaxSerializedBytes: 262144},
+			Consumer: contextfabric.ConsumerInfo{Name: "test", Version: "v1", Surface: "test"}},
+		Interpretation: contextfabric.InterpretedQuestion{Shape: contextfabric.ShapeSingleSubject, RequestedJudgment: "status", SubjectTerms: []string{}, TimeContext: current},
+		Resolution:     contextfabric.SubjectResolution{Committed: committed, Candidates: []contextfabric.SubjectCandidate{}},
+		Binding:        binding,
+		Frame:          frame,
+		Bases:          contextfabric.CommitBasisSet{},
+	}
+	if frame != nil {
+		request.Interpretation.Shape = contextfabric.ShapeDiscoveredCohort
+	}
+	if anchor != nil {
+		request.ScopeAnchorKind = anchor.Kind
+		request.Resolution.Candidates = []contextfabric.SubjectCandidate{{ReceiptID: "receipt_anchor", Subject: *anchor, State: contextfabric.ResolutionCommitted,
+			MatchedTerms: frame.SubjectExpression.Scoped.AnchorTerms, MatchReasons: []string{"matched"}, Confidence: 1, EvidenceRefIDs: []string{}}}
+		request.Bases.Record(*anchor, contextfabric.CommitBasisAuthoritativeIdentity)
+	}
+	gc, err := adapter.DiscoverContext(ctx, principal, request)
+	if err != nil {
+		t.Fatalf("DiscoverContext() error = %v", err)
+	}
+	return gc
+}
+
+func hasHopWalkCut(c contextfabric.Coverage) bool {
+	return slices.ContainsFunc(c.Details, func(d contextfabric.CoverageDetail) bool {
+		return d.Code == contractsv1.ContextFabricCoverageDetailGraphHopWalkTruncated
+	})
+}
+
+func membersOfScopeFrame(term string, kind contextfabric.SubjectKind) *contextfabric.QuestionFrame {
+	return &contextfabric.QuestionFrame{
+		Goals:             []contextfabric.InvestigationGoal{contextfabric.GoalCountOrAggregate},
+		SubjectExpression: contextfabric.SubjectExpression{Kind: contextfabric.SubjectExpressionChildrenOfScope, Scoped: &contextfabric.ScopedSetExpression{AnchorTerms: []string{term}, MemberKind: kind}},
+		Temporal:          contextfabric.TemporalIntentCurrent,
+		Version:           contextfabric.QuestionFrameVersion,
+	}
+}
+
+// TestLiveACutHopWalkOnACohortReadFloorsThePopulation (CHAOS-12451, table row
+// 3): with no team anchor the members of a cohort come from the hop walk, so a
+// cut of that read is a cut of the pool, and the population floor shows it. The
+// path row stays away: the floor already said so.
+func TestLiveACutHopWalkOnACohortReadFloorsThePopulation(t *testing.T) {
+	ctx := context.Background()
+	adapter, _ := newLiveFalkorAdapter(t, ctx)
+	orgID, _, _ := nodeEdgeBoundFixture(t, ctx, adapter)
+	adapter.config.MaxResults = 500
+	team := contextfabric.SubjectRef{Kind: contextfabric.SubjectTeam, CanonicalID: "team-incidents", Label: "team-incidents"}
+	frame := membersOfScopeFrame("team-incidents", contextfabric.SubjectIncident)
+	committed := []contextfabric.SubjectRef{team}
+
+	cut := discoverAtLimit(t, ctx, adapter, orgID, 3, "how many incidents does the team hold?", frame, committed, &team)
+	if cut.Cohort == nil || !cut.CohortPopulationLowerBound {
+		t.Fatalf("limit 3: cohort %+v lower bound %v, want the population floored", cut.Cohort, cut.CohortPopulationLowerBound)
+	}
+	if hasHopWalkCut(cut.Coverage) {
+		t.Fatalf("limit 3: details %+v, want the floor alone: it shows this cut", cut.Coverage.Details)
+	}
+	whole := discoverAtLimit(t, ctx, adapter, orgID, 1000, "how many incidents does the team hold?", frame, committed, &team)
+	if whole.Cohort == nil || whole.CohortPopulationLowerBound {
+		t.Fatalf("limit 1000: cohort %+v lower bound %v, want a whole population", whole.Cohort, whole.CohortPopulationLowerBound)
+	}
+}
+
+// TestLiveACutWalkBesideATeamAnchorIsDisclosed (CHAOS-12451, table row 4): the
+// anchor's member read is a tree walk, so the population is complete, and a cut
+// of another subject's walk or of the text arm is a cut of the answer's paths.
+// A walk that only spent its budget is routine and files nothing.
+func TestLiveACutWalkBesideATeamAnchorIsDisclosed(t *testing.T) {
+	ctx := context.Background()
+	adapter, _ := newLiveFalkorAdapter(t, ctx)
+	orgID, repository, team := nodeEdgeBoundFixture(t, ctx, adapter)
+	adapter.config.MaxResults = 500
+	frame := membersOfScopeFrame("team-big", contextfabric.SubjectRepository)
+	for _, tc := range []struct {
+		name      string
+		question  string
+		committed []contextfabric.SubjectRef
+		limit     int
+	}{
+		{"the hop walk of the other subject", "which repositories does the team own?", []contextfabric.SubjectRef{team, repository}, 10},
+		{"the text arm", "what repositories does team-big own?", []contextfabric.SubjectRef{team}, 4},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cut := discoverAtLimit(t, ctx, adapter, orgID, tc.limit, tc.question, frame, tc.committed, &team)
+			if !hasHopWalkCut(cut.Coverage) || !cut.Coverage.Partial {
+				t.Fatalf("limit %d: partial %v details %+v, want the cut disclosed", tc.limit, cut.Coverage.Partial, cut.Coverage.Details)
+			}
+			if cut.Cohort == nil || cut.CohortPopulationLowerBound {
+				t.Fatalf("limit %d: cohort %+v lower bound %v: the anchor's members are complete", tc.limit, cut.Cohort, cut.CohortPopulationLowerBound)
+			}
+			if whole := discoverAtLimit(t, ctx, adapter, orgID, 1000, tc.question, frame, tc.committed, &team); hasHopWalkCut(whole.Coverage) {
+				t.Fatalf("limit 1000: details %+v, want no cut", whole.Coverage.Details)
+			}
+		})
+	}
+	t.Run("a spent budget files nothing", func(t *testing.T) {
+		adapter.config.MaxResults = 2
+		t.Cleanup(func() { adapter.config.MaxResults = 500 })
+		spent := discoverAtLimit(t, ctx, adapter, orgID, 1000, "which repositories does the team own?", frame, []contextfabric.SubjectRef{team, repository}, &team)
+		if hasHopWalkCut(spent.Coverage) {
+			t.Fatalf("details %+v: a budget is not a cut of a read", spent.Coverage.Details)
+		}
+	})
+}
+
+// TestLiveACutTextArmACensusCoversIsDisclosed (CHAOS-12451, table row 5): a
+// complete census covers the members a bounded arm dropped, not the path edges of
+// the node the text arm read.
+func TestLiveACutTextArmACensusCoversIsDisclosed(t *testing.T) {
+	ctx := context.Background()
+	adapter, _ := newLiveFalkorAdapter(t, ctx)
+	orgID, _, _ := nodeEdgeBoundFixture(t, ctx, adapter)
+	adapter.config.MaxResults = 500
+	frame := &contextfabric.QuestionFrame{
+		Goals:             []contextfabric.InvestigationGoal{contextfabric.GoalAssessState},
+		SubjectExpression: contextfabric.SubjectExpression{Kind: contextfabric.SubjectExpressionDiscoveredKind, Discovered: &contextfabric.DiscoveredSetExpression{MemberKind: contextfabric.SubjectIncident}},
+		Temporal:          contextfabric.TemporalIntentCurrent,
+		Version:           contextfabric.QuestionFrameVersion,
+	}
+	const question = "which incidents touch repository-big?"
+	committed := []contextfabric.SubjectRef{}
+
+	cut := discoverAtLimit(t, ctx, adapter, orgID, 10, question, frame, committed, nil)
+	if cut.Cohort == nil || cut.CohortPopulationLowerBound {
+		t.Fatalf("limit 10: cohort %+v lower bound %v, want the census to cover the pool", cut.Cohort, cut.CohortPopulationLowerBound)
+	}
+	if !hasHopWalkCut(cut.Coverage) || !cut.Coverage.Partial {
+		t.Fatalf("limit 10: partial %v details %+v, want the cut of the paths disclosed", cut.Coverage.Partial, cut.Coverage.Details)
+	}
+	if whole := discoverAtLimit(t, ctx, adapter, orgID, 1000, question, frame, committed, nil); hasHopWalkCut(whole.Coverage) {
+		t.Fatalf("limit 1000: details %+v, want no cut", whole.Coverage.Details)
+	}
+}
+
+// TestLiveACutObservationReadDegradesRetrieval (CHAOS-12451, table row 6): a
+// document's read cut at its limit cannot prove it has no parent. The resolution
+// says retrieval saw less than it should, which the answer states as a limitation.
+func TestLiveACutObservationReadDegradesRetrieval(t *testing.T) {
+	ctx := context.Background()
+	adapter, _ := newLiveFalkorAdapter(t, ctx)
+	orgID, _, _ := nodeEdgeBoundFixture(t, ctx, adapter)
+	principal := storage.Principal{OrgID: orgID}
+	binding, err := adapter.ResolveInvestigationBinding(ctx, principal)
+	if err != nil {
+		t.Fatalf("ResolveInvestigationBinding() error = %v", err)
+	}
+	current := contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent}
+	request := contextfabric.InvestigationRequest{SchemaVersion: contextfabric.InvestigationRequestSchemaV1, RequestID: "request_12451", Question: "what does document-big say?", TimeContext: current,
+		Options:  contextfabric.InvestigationOptions{MaxSubjectCandidates: 10, MaxCohortMembers: 50, MaxRelationshipPaths: 100, MaxDrivers: 10, MaxEvidenceRefs: 200, MaxSerializedBytes: 262144},
+		Consumer: contextfabric.ConsumerInfo{Name: "test", Version: "v1", Surface: "test"}}
+	interpreted := contextfabric.InterpretedQuestion{Shape: contextfabric.ShapeSingleSubject, RequestedJudgment: "status", SubjectTerms: []string{"document-big"}, TimeContext: current}
+	resolve := func(limit int) contextfabric.SubjectResolution {
+		t.Helper()
+		adapter.config.NodeEdgeReadLimit = limit
+		resolution, _, _, _, err := adapter.ResolveSubjects(ctx, principal, request, interpreted, binding, nil, nil, nil, "")
+		if err != nil {
+			t.Fatalf("ResolveSubjects() error = %v", err)
+		}
+		return resolution
+	}
+	if cut := resolve(1); !cut.RetrievalDegraded {
+		t.Fatalf("limit 1: %+v, want retrieval degraded: the read of the document was cut", cut)
+	}
+	if whole := resolve(1000); whole.RetrievalDegraded {
+		t.Fatalf("limit 1000: %+v, want no degradation", whole)
 	}
 }

@@ -350,13 +350,19 @@ const (
 	// and the answer says so rather than reading as complete.
 	ContextFabricCoverageDetailGraphNoMemberFound ContextFabricCoverageDetailCode = "graph_no_member_found"
 
-	// ContextFabricCoverageDetailGraphHopWalkTruncated: a read that is not a
-	// cohort read (its answer is served as relationship paths) walked out
-	// from a committed subject and spent its edge budget with candidates
-	// left, so the neighbourhood it served is part of what it reached.
-	// Nothing was counted: the candidates past the budget were not read.
+	// ContextFabricCoverageDetailGraphHopWalkTruncated: the neighbourhood the
+	// answer's relationship paths serve is part of what the read reached. One
+	// of two causes. A read that is not a cohort read walked out from a
+	// committed subject and spent its edge budget with candidates left. Or a
+	// read of one node's edges stopped at its limit, on a read of either kind,
+	// in a hop walk or in the text arm. Nothing was counted: the candidates
+	// past the budget or the limit were not read.
 	//
-	// A cohort read never carries it: its loss is its cohort's Truncated and
+	// A cohort read carries it only for that second cause, and only when its
+	// population floor does not show the cut: beside a team anchor, whose tree
+	// walk is the member set, or under a census that covers the pool. Its
+	// population can then be whole with path edges missing (CHAOS-12451, lead
+	// ruling). Every other loss of a cohort read is its cohort's Truncated and
 	// its population floor. It is not `graph_walk_cut_before_member`, which
 	// says a member read found nothing before its cut; here the read served
 	// what it reached.

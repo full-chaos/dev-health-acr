@@ -621,6 +621,11 @@ func (a *Adapter) DiscoverContext(ctx context.Context, principal storage.Princip
 	// see hopWalk's own doc comment for why that costs the COHORT members and
 	// not just edges.
 	hopWalkTruncated := false
+	// nodeReadCut (CHAOS-12451, lead ruling): a read of one node's edges stopped
+	// at its limit, in a hop walk or in the text arm. It is apart from
+	// hopWalkTruncated because that one carries the routine spent budget, and a
+	// cut that the population floor does not show is the answer's to disclose.
+	nodeReadCut := false
 	var edgeFilters edgeFilterCounts
 
 	// ownershipRoutedRepoSlug (CHAOS-5783) is set when this call's committed
@@ -737,7 +742,7 @@ func (a *Adapter) DiscoverContext(ctx context.Context, principal storage.Princip
 		var edges []graphrank.ResolvedEdge
 		var failed int
 		var filters edgeFilterCounts
-		var walkTruncated bool
+		var walkTruncated, walkReadCut bool
 		var err error
 		if deploymentAnchor != nil && subject == *deploymentAnchor {
 			var walk treeWalk
@@ -780,7 +785,7 @@ func (a *Adapter) DiscoverContext(ctx context.Context, principal storage.Princip
 				}
 			}
 		} else {
-			nodes, edges, failed, filters, walkTruncated, err = a.hopWalk(ctx, key, principal.OrgID, principal, scope, subject, 2, collectLimit, temporal, request.Interpretation.FactRequirements)
+			nodes, edges, failed, filters, walkTruncated, walkReadCut, err = a.hopWalk(ctx, key, principal.OrgID, principal, scope, subject, 2, collectLimit, temporal, request.Interpretation.FactRequirements)
 		}
 		if err != nil {
 			// CHAOS-4077: see graphNotProjectedError's own doc comment --
@@ -796,6 +801,7 @@ func (a *Adapter) DiscoverContext(ctx context.Context, principal storage.Princip
 		if !memberSetOwnedByAnchor {
 			poolFailedLookups += failed
 		}
+		nodeReadCut = nodeReadCut || walkReadCut
 		// ANY committed subject's walk hitting its cap clips the shared pool
 		// (CHAOS-5168, r1 finding 1): every walk appends into the same
 		// resolvedNodes that becomes cohortNodes, so this is an OR across
@@ -1046,7 +1052,11 @@ func (a *Adapter) DiscoverContext(ctx context.Context, principal storage.Princip
 			resolvedNodes = append(resolvedNodes, n)
 		}
 		textEdges, edgesCut, err := a.edgesOfNode(ctx, key, principal.OrgID, n.UUID, temporal)
-		hopWalkTruncated = hopWalkTruncated || edgesCut
+		// An anchor's own read is the member set here too, as for a walk below.
+		if !teamAnchoredMembers {
+			hopWalkTruncated = hopWalkTruncated || edgesCut
+		}
+		nodeReadCut = nodeReadCut || edgesCut
 		if err != nil {
 			// CHAOS-4077: see graphNotProjectedError's own doc comment
 			// above -- unreachable for a genuinely never-projected org in
@@ -1867,13 +1877,18 @@ func (a *Adapter) DiscoverContext(ctx context.Context, principal storage.Princip
 	// A frame with no servable member kind is the test DiscoveredCohort gates a
 	// cohort on (the same predicate, CohortMemberKindForFrame), never whether a
 	// cohort came back: a cohort read that found no member keeps its floor.
+	//
+	// CHAOS-12451 (lead ruling): a cohort read keeps its floor for a spent budget,
+	// but a node read cut at its limit that the floor does not show, beside a
+	// team anchor or a census that covers the pool, cost the answer path edges
+	// with a whole population. Partial is the true state, so it files the row too.
 	nonCohortRead := declaredCohortKindForRouting == ""
-	nonCohortHopWalkCut := nonCohortRead && hopWalkTruncated
+	hopWalkCutDisclosed := (nonCohortRead && hopWalkTruncated) || (!nonCohortRead && nodeReadCut && (cohort == nil || !cohortPopulationLowerBound))
 	nonCohortUndecidedPaths := 0
 	if nonCohortRead {
 		nonCohortUndecidedPaths = teamScope.UndecidedPathEndpoints()
 	}
-	partial := failedLookups > 0 || admission.DroppedUnknownRelationshipTypeCount > 0 || exactNameTruncated || cohortCutByAuthz || kindCensusTruncated || projectDeploymentsUnlinked >= 0 || projectDeploymentsDenied >= 0 || anchoredCutEmpty || projectNarrowingUnverified || nonCohortHopWalkCut || nonCohortUndecidedPaths > 0
+	partial := failedLookups > 0 || admission.DroppedUnknownRelationshipTypeCount > 0 || exactNameTruncated || cohortCutByAuthz || kindCensusTruncated || projectDeploymentsUnlinked >= 0 || projectDeploymentsDenied >= 0 || anchoredCutEmpty || projectNarrowingUnverified || hopWalkCutDisclosed || nonCohortUndecidedPaths > 0
 	var degradedReasons []string
 	var coverageDetails []contextfabric.CoverageDetail
 	// CHAOS-4690: every degraded reason this reader composes gets a paired
@@ -2000,8 +2015,9 @@ func (a *Adapter) DiscoverContext(ctx context.Context, principal storage.Princip
 		slog.Default().Warn("context_fabric: dropped relationship edge(s) with a type outside the closed vocabulary",
 			"count", admission.DroppedUnknownRelationshipTypeCount, "types", contextfabric.SanitizeLogStrings(admission.DroppedUnknownRelationshipTypeNames))
 	}
-	if nonCohortHopWalkCut {
-		// No count: the candidates past the edge budget were not read.
+	if hopWalkCutDisclosed {
+		// No count: the candidates past the edge budget or the read limit were
+		// not read.
 		degradedReasons = append(degradedReasons, hopWalkTruncatedReason)
 		appendGraphDetail(contractsv1.ContextFabricCoverageDetailGraphHopWalkTruncated, true, nil, hopWalkTruncatedReason, "context-fabric:graph")
 	}
@@ -2074,7 +2090,9 @@ func (a *Adapter) DiscoverContext(ctx context.Context, principal storage.Princip
 }
 
 // hopWalkTruncatedReason is the degraded reason, and the paired detail's Raw,
-// for a read that is not a cohort read whose hop walk spent its edge budget.
+// for a read that is not a cohort read whose hop walk spent its edge budget or
+// whose node read was cut, and for a cohort read whose node read was cut where
+// its population floor does not show it.
 const hopWalkTruncatedReason = "hop_walk_truncated"
 
 // projectNarrowingUnverifiedReason is the degraded reason, and the paired

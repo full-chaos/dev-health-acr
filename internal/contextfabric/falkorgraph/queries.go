@@ -865,8 +865,8 @@ const nodeEdgeTierCypher = "CASE WHEN otherKind IN ['" + string(contractsv1.Cont
 
 // errNodeEdgesCut reports a node read cut at its limit on a path with no other
 // way to say so: the observation traversal treats it as a failed traversal. The
-// observation stays blocked, and the count goes to telemetry, not to the
-// coverage of the answer.
+// observation stays blocked, and the resolution reports RetrievalDegraded, which
+// the answer states as a limitation.
 var errNodeEdgesCut = errors.New("node edge read cut at its limit")
 
 // observationEdges is the edge read of the observation-to-entity traversal. A
@@ -1341,7 +1341,10 @@ func questionEdgesFirst(ranked []graphrank.CandidateEdge, originUUID string, req
 // Reported rather than acted on here: this function stays a retrieval
 // primitive, and the caller is the layer that knows whether an exhaustive
 // census also ran and covered the loss.
-func (a *Adapter) hopWalk(ctx context.Context, key, orgID string, principal storage.Principal, scope contextfabric.RequestedScope, origin contextfabric.SubjectRef, maxHops, collectLimit int, temporal temporalFilter, requirements []contextfabric.FactRequirement) ([]graphrank.CandidateNode, []graphrank.ResolvedEdge, int, edgeFilterCounts, bool, error) {
+//
+// The next result, CHAOS-12451, says a read of one node stopped at its limit,
+// apart from the budget, which only ever chooses among edges that were read.
+func (a *Adapter) hopWalk(ctx context.Context, key, orgID string, principal storage.Principal, scope contextfabric.RequestedScope, origin contextfabric.SubjectRef, maxHops, collectLimit int, temporal temporalFilter, requirements []contextfabric.FactRequirement) ([]graphrank.CandidateNode, []graphrank.ResolvedEdge, int, edgeFilterCounts, bool, bool, error) {
 	originUUID := subjectUUID(string(origin.Kind), origin.CanonicalID)
 	visited := make(map[string]graphrank.CandidateNode)
 	var edges []graphrank.ResolvedEdge
@@ -1350,17 +1353,21 @@ func (a *Adapter) hopWalk(ctx context.Context, key, orgID string, principal stor
 	var filterCounts edgeFilterCounts
 	frontier := []string{originUUID}
 	truncated := false
+	// nodeReadCut is the part of truncated that lost edges no budget chose: a
+	// spent budget is routine, a read stopped at its limit never saw the rest.
+	nodeReadCut := false
 	var deniedReach map[string]struct{}
 	for hop := 0; hop < maxHops && len(frontier) > 0 && (collectLimit <= 0 || len(edges) < collectLimit); hop++ {
 		var hopCandidates []graphrank.CandidateEdge
 		for _, uuid := range frontier {
 			candidateEdges, cut, err := a.edgesOfNode(ctx, key, orgID, uuid, temporal)
 			if err != nil {
-				return nil, nil, failedLookups, filterCounts, false, err
+				return nil, nil, failedLookups, filterCounts, false, false, err
 			}
 			// CHAOS-12451: edges past the cut never compete for the budget, so
 			// the walk is short of what the node holds even with budget left.
 			truncated = truncated || cut
+			nodeReadCut = nodeReadCut || cut
 			for _, ce := range candidateEdges {
 				if seenEdge[ce.UUID] {
 					continue
@@ -1510,5 +1517,5 @@ func (a *Adapter) hopWalk(ctx context.Context, key, orgID string, principal stor
 	}
 	filterCounts.ReachDenied = deniedReach
 	sortCandidateNodesBySubjectKey(nodes)
-	return nodes, edges, failedLookups, filterCounts, truncated, nil
+	return nodes, edges, failedLookups, filterCounts, truncated, nodeReadCut, nil
 }
