@@ -93,6 +93,12 @@ func TestAStoredDriverSeriesIsRestatedAtServe(t *testing.T) {
 			t.Errorf("flag %v: another shape's label became %q", enabled, got)
 		}
 	}
+	// Past the bound the door falls back to a document with no stamps. The legend
+	// stays the word there too, and that document is what a refusal measures.
+	tooSmall, _ := ServeVocabularyLabels(result, true, 1)
+	if got := shapeByRule(tooSmall.RenderShapes, contractsv1.ContextFabricRenderRuleCohortDriverContribution).Series[0].Label; got != "Health risk" {
+		t.Errorf("past the bound: legend %q, want the word", got)
+	}
 	if !slices.ContainsFunc(result.RenderShapes[0].Series, func(s contractsv1.ContextFabricRenderSeries) bool { return s.Label == raw }) {
 		t.Fatal("serving wrote into the stored result")
 	}

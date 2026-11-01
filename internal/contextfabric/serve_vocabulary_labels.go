@@ -38,6 +38,7 @@ import (
 // tier is the one this copy reached, and off when enabled is off.
 func ServeVocabularyLabels(result InvestigationResult, enabled bool, maxBytes int64) (InvestigationResult, contractsv1.ContextFabricVocabularyLabelsTier) {
 	result.VocabularyLabels = nil
+	result.RenderShapes = withDriverSeriesWords(result.RenderShapes)
 	stamped := withStampedSourceWords(result)
 	tier := contractsv1.ContextFabricVocabularyLabelsOff
 	if enabled {
@@ -79,14 +80,15 @@ func withStampedSourceWords(result InvestigationResult) InvestigationResult {
 		source.Label = contractsv1.ContextFabricSourceObservationLabel(source.Source)
 		source.StateLabel = contractsv1.ContextFabricSourceStateLabel(source.State)
 	}
-	result.RenderShapes = withDriverSeriesWords(result.RenderShapes)
 	return result
 }
 
 // withDriverSeriesWords restates a driver series' legend at serve. render_shapes
 // is written before save, so a stored result keeps the label it was made with
 // (CHAOS-12473). Like the source words it needs no flag: series.label is on
-// every pin. The saved document stays as it was.
+// every pin. It runs before the bound checks, so no fallback brings the token
+// back, and a word is never longer than the token it replaces. The saved
+// document stays as it was.
 func withDriverSeriesWords(shapes []contractsv1.ContextFabricRenderShape) []contractsv1.ContextFabricRenderShape {
 	restated := slices.Clone(shapes)
 	for index := range restated {
