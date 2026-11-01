@@ -7,6 +7,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/full-chaos/dev-health-acr/internal/auth"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
 )
 
@@ -32,15 +33,63 @@ const reuseTimeAxisKeyMaxLength = 128
 // A key that would exceed the stored column's bound returns "", which both
 // sides already treat as never reusable (lookup misses; Save stores it as
 // "unkeyed"): fail closed, never a failed Save.
+//
+// The key is class-tagged (CHAOS-12298): a project-only caller's key carries
+// "+p:" and the framed digest of its canonical project set (projectGrantDigest),
+// never its repository list (which holds only the reserved value), so it can
+// never equal a restricted caller's "+g:" key, an unrestricted or universal
+// caller's bare key, or another project grant's key.
 func GrantScopedTimeAxisKey(principal storage.Principal, axisKey string) string {
-	if axisKey == "" || classifyStoredResultPrincipalScope(principal) != StoredResultScopeRestricted {
+	if axisKey == "" {
 		return axisKey
 	}
-	scoped := axisKey + "+g:" + reuseGrantDigest(principal.RepositoryScopes)
+	var scoped string
+	switch {
+	case auth.ClassifyGrant(principal) == auth.GrantProjectOnly:
+		scoped = axisKey + "+p:" + projectGrantDigest(principal.ProjectScopes)
+	case classifyStoredResultPrincipalScope(principal) == StoredResultScopeRestricted:
+		scoped = axisKey + "+g:" + reuseGrantDigest(principal.RepositoryScopes)
+	default:
+		return axisKey
+	}
 	if len(scoped) > reuseTimeAxisKeyMaxLength {
 		return ""
 	}
 	return scoped
+}
+
+// projectGrantDigestDomain separates a project grant's framed digest from
+// every other framed digest in acr.
+const projectGrantDigestDomain = "acr.project-grant.v1"
+
+// projectGrantDigest is the digest of a project-only grant (CHAOS-12298): its
+// canonical project.v2 identities, compared exactly (never trimmed or
+// case-folded, as graphrank.ProjectMembershipOf compares them), de-duplicated,
+// sorted, and FRAMED -- a domain tag, then each entry with its length prefix --
+// so no byte inside an identity can move a boundary between two entries.
+// 128 bits, lowercase hex. The reuse key ("+p:") and the stored-result grant
+// digest ("p:", migration 0066) both carry it.
+func projectGrantDigest(projects []string) string {
+	seen := make(map[string]struct{}, len(projects))
+	unique := make([]string, 0, len(projects))
+	for _, project := range projects {
+		if _, dup := seen[project]; dup {
+			continue
+		}
+		seen[project] = struct{}{}
+		unique = append(unique, project)
+	}
+	sort.Strings(unique)
+	var framed strings.Builder
+	framed.WriteString(projectGrantDigestDomain)
+	for _, project := range unique {
+		framed.WriteByte('|')
+		framed.WriteString(strconv.Itoa(len(project)))
+		framed.WriteByte(':')
+		framed.WriteString(project)
+	}
+	sum := sha256.Sum256([]byte(framed.String()))
+	return hex.EncodeToString(sum[:16])
 }
 
 // RequestScopeTimeAxisKey widens the reuse key's time-axis dimension with a

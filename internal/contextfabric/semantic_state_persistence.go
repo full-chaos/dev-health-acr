@@ -22,7 +22,6 @@ import (
 
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 
-	"github.com/full-chaos/dev-health-acr/internal/auth"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
 )
 
@@ -127,12 +126,6 @@ func (e *Engine) saveResult(
 	// row would answer a later server-interpreted question. Nil snapshots
 	// are the store's own "never reusable" input.
 	if result.Versions.InterpretationSource == InterpretationSourceClient {
-		watermark, epoch = nil, nil
-	}
-	// A project-only caller's result is never stored as reusable either
-	// (CHAOS-12299): its reuse key does not yet tell two project grants apart
-	// (CHAOS-12298).
-	if auth.ClassifyGrant(principal) == auth.GrantProjectOnly {
 		watermark, epoch = nil, nil
 	}
 	// A result whose answer the caller writes is never stored as reusable

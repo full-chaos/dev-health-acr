@@ -959,7 +959,7 @@
       "request_id"
     ],
     "bounded_aggregation": "one line per answer reuse attempt.",
-    "max_lines_per_scope": 34,
+    "max_lines_per_scope": 32,
     "fields": [
       {
         "key": "org_id",

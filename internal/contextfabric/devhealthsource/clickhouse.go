@@ -957,8 +957,13 @@ const (
 // three work-item producers (queryWorkItems, queryWorkItemDependencies,
 // queryWorkItemHierarchy), whose LEFT JOIN can legitimately find no repos
 // match, route through workItemAuthorization below instead.
+//
+// A slug carrying the reserved repository-scope prefix (CHAOS-12298) is never
+// projected as a repository: it is the unresolved sentinel, which denies every
+// scoped principal, never a value a project-only principal's repository list
+// holds. The projection validator refuses it too.
 func repoAuthorization(repoSlug string) contractsv1.ContextFabricAuthorizationScope {
-	if strings.TrimSpace(repoSlug) == "" {
+	if strings.TrimSpace(repoSlug) == "" || contractsv1.IsReservedRepositoryScope(repoSlug) {
 		return contractsv1.ContextFabricAuthorizationScope{RepositorySlugs: []string{unresolvedRepositorySentinel}}
 	}
 	return contractsv1.ContextFabricAuthorizationScope{RepositorySlugs: []string{repoSlug}}
