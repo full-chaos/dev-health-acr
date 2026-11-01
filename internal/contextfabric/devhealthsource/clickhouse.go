@@ -569,6 +569,7 @@ func (s *ClickHouseProjectionSource) plan(fromCursor string) sourcePlan {
 		dropConsumed:         s.forgetConsumed,
 		readByteLimit:        s.readByteLimit,
 		endedLinksBound:      s.endedLinksBound,
+		followProjectCatalog: s.workItemProjectMembership,
 	}
 }
 

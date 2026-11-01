@@ -92,6 +92,11 @@ const (
 	pullRequestMembershipRefreshMarker = "AS pull_request_membership_changed_at"
 )
 
+// projectCatalogMarker identifies the catalog digest read (project_catalog.go).
+// It keeps its own dispatch because that statement names `projects`. With no
+// table registered it answers one fixed digest: a catalog that never changes.
+const projectCatalogMarker = "AS project_catalog_digest"
+
 // ambiguousProjectKeysMarker identifies the catalog ambiguity count
 // (countAmbiguousProjectKeysInCatalog, teams_projects_edges.go). It keeps its
 // own dispatch because that statement names `projects`, which the substring
@@ -126,6 +131,17 @@ func (c *fakeClient) Query(_ context.Context, statement string, bindings []conte
 			}
 		}
 		return &fakeScanner{}, nil
+	}
+	if strings.Contains(statement, projectCatalogMarker) {
+		for _, table := range c.tables {
+			if table.match == projectCatalogMarker {
+				if table.err != nil {
+					return nil, table.err
+				}
+				return &fakeScanner{rows: table.rows}, nil
+			}
+		}
+		return &fakeScanner{rows: [][]any{{"1", time.Date(2026, 11, 1, 12, 0, 0, 0, time.UTC)}}}, nil
 	}
 	for _, marker := range []string{pullRequestMembershipLinkMarker, pullRequestMembershipRefreshMarker} {
 		if !strings.Contains(statement, marker) {

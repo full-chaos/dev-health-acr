@@ -459,7 +459,7 @@ func TestApplyOfferPhrasing_NilNeedsPassesThrough(t *testing.T) {
 	t.Parallel()
 	phraser := &fakeOfferPhraser{result: StructureOfferPhrasingResult{Outcome: OfferPhrasingGenerated}}
 	e := &Engine{offerPhraser: phraser}
-	if got := e.applyOfferPhrasing(context.Background(), storage.Principal{OrgID: "org_1"}, "request_00000001", nil); got != nil {
+	if got := e.applyOfferPhrasing(context.Background(), storage.Principal{OrgID: "org_1"}, InvestigationRequest{RequestID: "request_00000001"}, nil); got != nil {
 		t.Fatalf("applyOfferPhrasing(nil) = %+v, want nil", got)
 	}
 	if len(phraser.calls) != 0 {
@@ -478,7 +478,7 @@ func TestApplyOfferPhrasing_NoPhraserConfiguredLeavesNeedsUnchanged(t *testing.T
 		Missing:     []contractsv1.ContextFabricStructureNeedKind{contractsv1.ContextFabricStructureNeedExpectedKind},
 		KindOptions: []contractsv1.ContextFabricKindOption{{OptionID: "opt_pr", Label: "a pull request", Kind: contractsv1.ContextFabricSubjectPullRequest, OfferSource: contractsv1.ContextFabricStructureOfferEngine, ReceiptID: "kindr_x"}},
 	}
-	got := e.applyOfferPhrasing(context.Background(), storage.Principal{OrgID: "org_1"}, "request_00000001", needs)
+	got := e.applyOfferPhrasing(context.Background(), storage.Principal{OrgID: "org_1"}, InvestigationRequest{RequestID: "request_00000001"}, needs)
 	if got != needs {
 		t.Fatalf("applyOfferPhrasing() returned a different pointer with no phraser configured")
 	}
@@ -498,7 +498,7 @@ func TestApplyOfferPhrasing_WindowOnlyNeedsSkipsThePhraserEntirely(t *testing.T)
 			{Label: "last 7 days", RelativeID: "last_7_days", ReceiptID: "winr_x", OptionID: "opt_win"},
 		},
 	}
-	e.applyOfferPhrasing(context.Background(), storage.Principal{OrgID: "org_1"}, "request_00000001", needs)
+	e.applyOfferPhrasing(context.Background(), storage.Principal{OrgID: "org_1"}, InvestigationRequest{RequestID: "request_00000001"}, needs)
 	if len(phraser.calls) != 0 {
 		t.Fatalf("phraser called %d times for a window-only disclosure, want 0", len(phraser.calls))
 	}
@@ -539,7 +539,7 @@ func TestApplyOfferPhrasing_GeneratedOutcomeAppliesPhrasingAcrossOptionTypes(t *
 			{Label: "all time", RelativeID: contractsv1.ContextFabricRelativeWindowAllTime, ReceiptID: "winr_confirm0001", OptionID: "opt_win"},
 		},
 	}
-	got := e.applyOfferPhrasing(context.Background(), storage.Principal{OrgID: "org_1"}, "request_00000001", needs)
+	got := e.applyOfferPhrasing(context.Background(), storage.Principal{OrgID: "org_1"}, InvestigationRequest{RequestID: "request_00000001"}, needs)
 	if got.KindOptions[0].Phrasing != "which kind of work?" {
 		t.Errorf("KindOptions[0].Phrasing = %q", got.KindOptions[0].Phrasing)
 	}
@@ -578,7 +578,7 @@ func TestApplyOfferPhrasing_RejectedByGuardLeavesStructuralLabelsUnchanged(t *te
 		Missing:     []contractsv1.ContextFabricStructureNeedKind{contractsv1.ContextFabricStructureNeedExpectedKind},
 		KindOptions: []contractsv1.ContextFabricKindOption{{OptionID: "opt_kind", Label: "a work item", Kind: contractsv1.ContextFabricSubjectWorkItem, OfferSource: contractsv1.ContextFabricStructureOfferEngine, ReceiptID: "kindr_confirm001"}},
 	}
-	got := e.applyOfferPhrasing(context.Background(), storage.Principal{OrgID: "org_1"}, "request_00000001", needs)
+	got := e.applyOfferPhrasing(context.Background(), storage.Principal{OrgID: "org_1"}, InvestigationRequest{RequestID: "request_00000001"}, needs)
 	if got.KindOptions[0].Phrasing != "" {
 		t.Fatalf("KindOptions[0].Phrasing = %q, want empty on guard rejection", got.KindOptions[0].Phrasing)
 	}
