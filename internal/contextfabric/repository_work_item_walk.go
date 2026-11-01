@@ -68,6 +68,9 @@ type RepositoryWorkItemWalkEvent struct {
 	TeamNarrowing TeamNarrowingBasis
 	TeamExcluded  int
 	TeamFloor     TeamNarrowingFloor
+	// ProjectExcluded: the linked issues a requested project narrowing left
+	// out of scope (CHAOS-12329); never counted in Denied.
+	ProjectExcluded int
 }
 
 // repositoryWorkItemReading is what one measured read of a repository's work

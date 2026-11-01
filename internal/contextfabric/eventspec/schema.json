@@ -9919,6 +9919,12 @@
         "applicability": "written when the read measured the population (every outcome but read_failed)"
       },
       {
+        "key": "project_excluded",
+        "type": "int",
+        "presence": "conditional",
+        "applicability": "written when the read measured the population (every outcome but read_failed)"
+      },
+      {
         "key": "team_narrowing",
         "type": "string",
         "presence": "conditional",

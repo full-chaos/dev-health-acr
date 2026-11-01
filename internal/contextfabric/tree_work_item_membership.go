@@ -65,6 +65,10 @@ type TreeWorkItemWalk struct {
 	TeamNarrowing TeamNarrowingBasis
 	TeamExcluded  int
 	TeamFloor     TeamNarrowingFloor
+	// ProjectExcluded counts the distinct linked issues a requested project
+	// narrowing left out of scope (CHAOS-12329). Never in Denied, which is
+	// only what the caller's grants hid.
+	ProjectExcluded int
 }
 
 // TreeWorkItemGraph walks the entity tree in the graph store.

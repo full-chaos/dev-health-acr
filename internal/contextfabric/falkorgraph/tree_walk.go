@@ -269,6 +269,9 @@ type treeWalk struct {
 	// teamExcluded counts the distinct far-side issues a requested team
 	// narrowing left out of scope (CHAOS-12319): never in linkDeniedTargets.
 	teamExcluded int
+	// projectExcluded counts the distinct far-side nodes a requested project
+	// narrowing left out of scope (CHAOS-12329): never in linkDeniedTargets.
+	projectExcluded int
 	// linkIssueTargets is set when the far side of the link is the issue (a
 	// repository's work items): the distinct linked issues before
 	// authorization, for a restricted caller read by a bounded count with no
@@ -982,6 +985,11 @@ func (a *Adapter) linkSegment(ctx context.Context, key, orgID string, state tree
 	// outOfNarrowing: issues out of a requested team narrowing (CHAOS-12319,
 	// team_narrowing.go). Scope, not authorization: never denied.
 	outOfNarrowing := map[string]bool{}
+	// outOfProjectScope: far-side nodes the caller's grants admit that a
+	// requested project narrowing leaves out (CHAOS-12329,
+	// project_narrowing_scope.go). Scope too: never denied.
+	outOfProjectScope := map[string]bool{}
+	unscoped := state.withoutProjectNarrowing()
 	out.endTiers = map[string]string{}
 	// ends are the admitted far-side nodes in the read's order: strongest
 	// link tier first, so a cut keeps the higher tiers.
@@ -1036,9 +1044,14 @@ func (a *Adapter) linkSegment(ctx context.Context, key, orgID string, state tree
 		// Every row is decided by the rest of the request first; a requested
 		// team narrowing then reads only the issues that admits.
 		authorizedRows := make([]bool, len(links))
+		// projectScopedRows: refused only by the requested project narrowing.
+		projectScopedRows := make([]bool, len(links))
 		var authorizedIDs []string
 		for i, l := range links {
 			authorizedRows[i] = state.linkRowAuthorized(l.row, feed, link, l.near, l.far, l.tier)
+			if !authorizedRows[i] && state.narrowsByProject() {
+				projectScopedRows[i] = unscoped.linkRowAuthorized(l.row, feed, link, l.near, l.far, l.tier)
+			}
 			if authorizedRows[i] && !(reviewed && !holding[l.id]) {
 				authorizedIDs = append(authorizedIDs, l.id)
 			}
@@ -1059,6 +1072,10 @@ func (a *Adapter) linkSegment(ctx context.Context, key, orgID string, state tree
 				continue
 			}
 			seen[id] = true
+			if !authorized && projectScopedRows[i] {
+				outOfProjectScope[id] = true
+				continue
+			}
 			if !authorized {
 				state.deny()
 				continue
@@ -1083,8 +1100,9 @@ func (a *Adapter) linkSegment(ctx context.Context, key, orgID string, state tree
 		}
 	}
 	out.linkTargets = len(seen)
-	out.linkDeniedTargets = len(seen) - len(admitted) - len(outOfNarrowing)
+	out.linkDeniedTargets = len(seen) - len(admitted) - len(outOfNarrowing) - len(outOfProjectScope)
 	out.teamExcluded = len(outOfNarrowing)
+	out.projectExcluded = len(outOfProjectScope)
 	if status.set() {
 		out.status.read = len(read)
 		out.status.held = map[string]bool{}

@@ -5561,6 +5561,9 @@ var RepositoryWorkItemWalk = Event{
 		// CHAOS-12319: a requested team narrowing's decision basis -- the
 		// rule that decided, the issues it left out of scope, and why it
 		// floored the walk. Counts and closed values only.
+		// CHAOS-12329: linked issues a requested project narrowing left out
+		// of scope; never counted in denied.
+		{Key: "project_excluded", Type: FieldInt, Presence: PresenceConditional, Applicability: "written when the read measured the population (every outcome but read_failed)"},
 		{Key: "team_narrowing", Type: FieldString, Presence: PresenceConditional, Applicability: "written when the read measured the population and the request narrows by team", ClosedVocabulary: contextfabric.TeamNarrowingBasisVocabulary()},
 		{Key: "team_excluded", Type: FieldInt, Presence: PresenceConditional, Applicability: "written when the read measured the population and the request narrows by team"},
 		{Key: "team_floor_reason", Type: FieldString, Presence: PresenceConditional, Applicability: "written when the read measured the population and the request narrows by team", ClosedVocabulary: contextfabric.TeamNarrowingFloorVocabulary()},

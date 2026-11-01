@@ -6533,6 +6533,7 @@ type RepositoryWorkItemWalkFields struct {
 	Truncated                  bool
 	Denied                     int
 	ProjectNarrowingUnverified bool
+	ProjectExcluded            int
 	TeamNarrowing              string
 	TeamExcluded               int
 	TeamFloorReason            string
@@ -6551,7 +6552,7 @@ type RepositoryWorkItemWalkFields struct {
 
 // NewRepositoryWorkItemWalkFields is the generated constructor for RepositoryWorkItemWalkFields -- every
 // field RepositoryWorkItemWalk.Fields declares is a required parameter.
-func NewRepositoryWorkItemWalkFields(orgID string, outcome string, anchorKind string, filtered bool, restricted bool, pullRequests int, linkedIssues int, members int, truncated bool, denied int, projectNarrowingUnverified bool, teamNarrowing string, teamExcluded int, teamFloorReason string, reason string, requestID string) RepositoryWorkItemWalkFields {
+func NewRepositoryWorkItemWalkFields(orgID string, outcome string, anchorKind string, filtered bool, restricted bool, pullRequests int, linkedIssues int, members int, truncated bool, denied int, projectNarrowingUnverified bool, projectExcluded int, teamNarrowing string, teamExcluded int, teamFloorReason string, reason string, requestID string) RepositoryWorkItemWalkFields {
 	return RepositoryWorkItemWalkFields{
 		OrgID:                      orgID,
 		Outcome:                    outcome,
@@ -6564,6 +6565,7 @@ func NewRepositoryWorkItemWalkFields(orgID string, outcome string, anchorKind st
 		Truncated:                  truncated,
 		Denied:                     denied,
 		ProjectNarrowingUnverified: projectNarrowingUnverified,
+		ProjectExcluded:            projectExcluded,
 		TeamNarrowing:              teamNarrowing,
 		TeamExcluded:               teamExcluded,
 		TeamFloorReason:            teamFloorReason,
@@ -6597,6 +6599,7 @@ func (f RepositoryWorkItemWalkFields) SlogArgs() []any {
 		"truncated", f.Truncated,
 		"denied", f.Denied,
 		"project_narrowing_unverified", f.ProjectNarrowingUnverified,
+		"project_excluded", f.ProjectExcluded,
 		"team_narrowing", contextfabric.SanitizeLogAttr(f.TeamNarrowing),
 		"team_excluded", f.TeamExcluded,
 		"team_floor_reason", contextfabric.SanitizeLogAttr(f.TeamFloorReason),
