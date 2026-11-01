@@ -1010,8 +1010,9 @@ of the same result carries no map.
 
 **Budget.** The map counts against the byte budget it is served under. The engine
 fits an answer with no map, so a label never costs a row, and a label never refuses
-an answer. The shed is tiered: the full map; then only `answer_status:*` and
-`status_correction:note`; then no map; then no stamped source words. So a cut answer
+an answer. The shed is tiered: the full map; then only `answer_status:*`,
+`status_correction:note` and `judgment_mismatch:note`; then no map; then no stamped
+source words. So a cut answer
 keeps its status word and its note, and its pill says as much as its limitation
 does. A consumer takes its generic path for the words that are gone. The projection
 sheds by the same tiers, before any row. Each shed logs `context fabric vocabulary labels shed`, with
@@ -2243,8 +2244,26 @@ are not values: auth-service's exchange reviews against the one audience. Withou
 named by `ACR_AUTH_WORKLOAD_BOOTSTRAP_FILE` (exactly one of the two files). The client (`internal/authworkload`) is built at start from
 these variables with an explicit transport that never uses the environment proxy. A partial or invalid configuration stops the start; no
 exchange runs at start, no readiness check depends on it, and an auth-service outage does not stop acr-api. The subject file is read again
-for every exchange, so a rotated projected token is used without a restart. No call uses the client yet. The chart opens no egress to
-auth-service in this change.
+for every exchange, so a rotated projected token is used without a restart. The chart opens no egress to
+auth-service in this change. CHAOS-11203 is the first caller (next section).
+
+### CHAOS-11203: the entitlement and llm-config client sends a workload token
+
+`ACR_DEV_HEALTH_ENTITLEMENT_CREDENTIAL` picks the credential every call of the Dev Health entitlement client carries (health, entitlement,
+llm-config and principal access, in acr-api and in `acr-projector purge`): `service_token` (the default and the rollback value) reads the
+`svc_acr_` token from `ACR_DEV_HEALTH_ENTITLEMENT_TOKEN_FILE` as before; `workload` asks the auth workload client for a token for the audience
+`dev-health-api` (no scope: go-api's internal acr routes carry no action) and sends it. Any other value stops the start; the error never echoes it.
+
+- `workload` needs `ACR_DEV_HEALTH_ENTITLEMENT_URL` and the `ACR_AUTH_WORKLOAD_*` client. A token file that stays set is not an error and is
+  never opened in this mode, so a rollback only needs the flag back to `service_token` with the file still mounted.
+- There is no runtime fallback. When no token can be minted (auth-service down, subject file unreadable) the call is not sent and fails closed as
+  an unavailable entitlement; `svc_acr_` never goes out in `workload` mode. The auth-service client keeps a token until just before its expiry
+  (at most 300 s), so a short outage does not stop calls.
+- Counter `acr_entitlement_credential_total{class,outcome}` (docs/observability.md): `class=service_token` reaching zero is the signal that `svc_acr_`
+  use by acr has ended (W11-18).
+- Dark by default. go-api accepts the workload token only with `AUTH_ACCESS_TOKEN_ISSUER` and `AUTH_ACR_WORKLOAD_SUBJECT` (the `prn_` id of the
+  acr-api workload) set; until the flip leaf (W9-11) sets those and `authWorkloadClient` for acr, leave the flag unset. The Compose overlay below passes the
+  flag through (default `service_token`) for the dev-stack proof.
 
 ### acr-api workload credential on Compose (overlay)
 

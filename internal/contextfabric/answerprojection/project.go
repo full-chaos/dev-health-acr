@@ -162,6 +162,17 @@ func restateStatusWords(projection *contractsv1.ContextFabricAnswerProjection) {
 	}
 }
 
+// dropDisplacedCountWord removes the count of limitations the canonical document
+// left out. A projection carries no such field: its limitations_omitted also
+// counts what the projection cut, so the sentence would understate what this
+// reader is missing (CHAOS-12487).
+func dropDisplacedCountWord(projection *contractsv1.ContextFabricAnswerProjection) {
+	delete(projection.VocabularyLabels, contractsv1.ContextFabricAnswerNoteLimitationsDisplaced.Key())
+	if len(projection.VocabularyLabels) == 0 {
+		projection.VocabularyLabels = nil
+	}
+}
+
 // Project derives the bounded consumer projection of result.
 //
 // The returned projection is a pure function of (result, budget). It
@@ -322,6 +333,7 @@ func Project(result contractsv1.ContextFabricInvestigationResult, budget Budget)
 	// describe a document that is not the one served.
 	projection = appendProjectionOutcomes(projection)
 	restateStatusWords(&projection)
+	dropDisplacedCountWord(&projection)
 	return projection
 }
 

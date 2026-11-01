@@ -111,3 +111,23 @@ func TestAProjectionRestatesTheNoteWithItsStatusWord(t *testing.T) {
 		t.Fatal("the restatement added a word the map did not hold")
 	}
 }
+
+// CHAOS-12487. A projection has no displaced count of its own, and its
+// limitations_omitted can be larger, so the canonical sentence would understate
+// what this reader is missing.
+func TestAProjectionDropsTheDisplacedCountWord(t *testing.T) {
+	result := contractsv1.ContextFabricInvestigationResult{VocabularyLabels: map[string]string{
+		"limitations_displaced:note": "2 limitations were left out of this answer.", "reused:note": "A sentence.",
+	}}
+	projection := Project(result, DefaultBudget)
+	if want := map[string]string{"reused:note": "A sentence."}; !maps.Equal(projection.VocabularyLabels, want) {
+		t.Fatalf("projection carries %v, want %v", projection.VocabularyLabels, want)
+	}
+	if result.VocabularyLabels["limitations_displaced:note"] == "" {
+		t.Fatal("the canonical map was rewritten")
+	}
+	result.VocabularyLabels = map[string]string{"limitations_displaced:note": "2 limitations were left out of this answer."}
+	if got := Project(result, DefaultBudget).VocabularyLabels; got != nil {
+		t.Fatalf("an emptied map must be no map, got %v", got)
+	}
+}

@@ -296,8 +296,8 @@ func TestCapturedReplicatesMisRouteWithoutTheNewSignals(t *testing.T) {
 
 // TestUnreachableFamiliesAreNeverRoutedTo pins the deliberate declaration
 // gap: trend and investment_allocation are vocabulary members with no path
-// through the table in this slice (§4.2), because neither has a
-// time_series/breakdown declaration to plan against until S3.
+// through the table (§4.2). investment_allocation is served by the route from a
+// frame's projection, never by this table (CHAOS-12492).
 //
 // The property is asserted over EVERY row-triggering shape rather than by
 // reading the table's source, because "no case returns it" is a claim
@@ -306,8 +306,11 @@ func TestCapturedReplicatesMisRouteWithoutTheNewSignals(t *testing.T) {
 func TestUnreachableFamiliesAreNeverRoutedTo(t *testing.T) {
 	t.Parallel()
 	unreachable := map[QuestionFamily]struct{}{}
-	for _, family := range UnreachableQuestionFamilies() {
+	for _, family := range familiesOutsidePrecedenceTable() {
 		unreachable[family] = struct{}{}
+	}
+	if len(unreachable) != 2 {
+		t.Fatalf("families outside the table = %v, want trend and investment_allocation", familiesOutsidePrecedenceTable())
 	}
 	kinds := []SubjectKind{"", contractsv1.ContextFabricSubjectTeam, contractsv1.ContextFabricSubjectProject}
 	for _, shape := range append(allInvestigationShapes(), "") {

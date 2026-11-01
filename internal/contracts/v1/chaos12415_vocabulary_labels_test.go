@@ -147,7 +147,11 @@ func vocabularySources(t *testing.T) map[ContextFabricVocabulary][][]string {
 		// The values are declarations this package cannot import, so the table
 		// is its own source here. The proof over the real declarations, both
 		// ways, is devhealthfacts/chaos12418_fact_field_labels_test.go.
-		ContextFabricVocabularyFactField:        {slices.Sorted(maps.Keys(ContextFabricFactFieldLabels()))},
+		ContextFabricVocabularyFactField:         {slices.Sorted(maps.Keys(ContextFabricFactFieldLabels()))},
+		ContextFabricVocabularyDriverSourceState: {schema("DriverJudgment", "source_state")},
+		ContextFabricVocabularyCohortScoreMeaning: {
+			{string(ContextFabricCohortScoreMeaningAttention)}, schema("Cohort", "score_meaning"),
+		},
 		ContextFabricVocabularyWindowRelativeID: {closedVocabularyStrings(windows[:]), schema("EffectiveEvidenceWindow", "relative_id")},
 		ContextFabricVocabularyWindowProvenance: {schema("EffectiveEvidenceWindow", "provenance")},
 	}

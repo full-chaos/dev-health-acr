@@ -155,10 +155,17 @@ func composeVocabularyLabels(result InvestigationResult) map[string]string {
 				}
 			}
 		}
+		words.add(contractsv1.ContextFabricVocabularyCohortScoreMeaning, string(result.Cohort.ScoreMeaning))
+		words.noteWhen(result.Cohort.JudgmentMismatch, contractsv1.ContextFabricAnswerNoteJudgmentMismatch)
+		if note, ok := contractsv1.ContextFabricCohortPopulationNote(result.Cohort.Population, result.Cohort.PopulationLowerBound); ok {
+			words.set(contractsv1.ContextFabricAnswerNotePopulation.Key(), note)
+		}
 	}
 
 	for _, driver := range result.Drivers {
 		words.add(contractsv1.ContextFabricVocabularyDriverStanding, string(driver.Standing))
+		words.add(contractsv1.ContextFabricVocabularyDriverSourceState, string(driver.SourceState))
+		words.noteWhen(driver.SummaryCorrected, contractsv1.ContextFabricAnswerNoteSummaryCorrected)
 	}
 	for _, findings := range [][]contractsv1.ContextFabricFinding{result.RemainingWork, result.ReadinessGaps, result.Conflicts} {
 		for _, finding := range findings {
@@ -179,6 +186,13 @@ func composeVocabularyLabels(result InvestigationResult) map[string]string {
 		words.add(contractsv1.ContextFabricVocabularyWindowRelativeID, string(window.RelativeID))
 		words.add(contractsv1.ContextFabricVocabularyWindowProvenance, string(window.Provenance))
 	}
+
+	words.noteWhen(!result.GeneratedAt.IsZero(), contractsv1.ContextFabricAnswerNoteGeneratedAt)
+	words.noteWhen(result.Reused, contractsv1.ContextFabricAnswerNoteReused)
+	words.noteWhen(result.SubjectResolution.RetrievalDegraded, contractsv1.ContextFabricAnswerNoteRetrievalDegraded)
+	if note, ok := contractsv1.ContextFabricLimitationsDisplacedNote(result.LimitationsDisplaced); ok {
+		words.set(contractsv1.ContextFabricAnswerNoteLimitationsDisplaced.Key(), note)
+	}
 	return words
 }
 
@@ -196,6 +210,13 @@ func (w *vocabularyWords) set(key, label string) {
 func (w *vocabularyWords) add(vocabulary contractsv1.ContextFabricVocabulary, value string) {
 	if label, ok := contractsv1.ContextFabricVocabularyLabel(vocabulary, value); ok {
 		w.set(contractsv1.ContextFabricVocabularyLabelKey(vocabulary, value), label)
+	}
+}
+
+// noteWhen adds a note's words when its field says so in this result.
+func (w *vocabularyWords) noteWhen(held bool, note contractsv1.ContextFabricAnswerNote) {
+	if word, ok := contractsv1.ContextFabricAnswerNoteWord(note); held && ok {
+		w.set(note.Key(), word)
 	}
 }
 
