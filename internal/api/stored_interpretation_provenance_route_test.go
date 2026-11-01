@@ -59,7 +59,7 @@ func TestAStoredResultReadByIDNamesItsInterpreter(t *testing.T) {
 		Runtime:  countingScriptedRuntime{scriptedInterpretRuntime: scriptedInterpretRuntime{interpreted: interpreted, receipt: receipt}, interprets: &interprets},
 		Supplied: supplied,
 	}, contextfabric.StoredSubjectAdmitted, &synthesized, store)
-	logs := &bytes.Buffer{}
+	logs := &lockedBuffer{}
 	app, token := newParityHostedAppWithLogs(t, engine, store, limits.ResourceBudget{MaxItems: 500, MaxTokens: 500_000, MaxBytes: 8 << 20}, logs)
 	hosted := httptest.NewTLSServer(app.Handler())
 	t.Cleanup(hosted.Close)

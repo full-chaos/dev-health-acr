@@ -43,6 +43,21 @@ func (b *lockedBuffer) String() string {
 	return b.buf.String()
 }
 
+// Len is the bytes written so far, for a test that reads only what a later call
+// logs.
+func (b *lockedBuffer) Len() int {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Len()
+}
+
+// Reset drops what was logged so far.
+func (b *lockedBuffer) Reset() {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.buf.Reset()
+}
+
 // lines are the JSON log lines with msg message.
 func (b *lockedBuffer) lines(message string) []map[string]any {
 	var lines []map[string]any
