@@ -335,12 +335,13 @@ carries a reason.
   narrative: the registry refuses the read before any provider runs, so synthesis
   is never given one, and a claim with no fact behind it meets the same check as
   any other answer. The head is the server's and states partial.
-- **Other floors still withhold.** This floor runs after every floor that
-  withholds the narrative (`ApplyServedStatusFloors`), so it never pre-empts one.
+- **Other floors still withhold.** This floor runs last in
+  `ApplyServedStatusFloors`, so it never pre-empts another.
   A denied cohort, an unverified project narrowing, a status filter over a cut
   read and an organization survey each withhold the narrative for their own
   reason, on a project-only answer too. Such an answer still states the grant:
-  already partial, it gains the project-scope sentence and nothing else.
+  already partial, it gains the project-scope sentence and nothing else. So does
+  a read another floor cut, which keeps its narrative and states both causes.
 - **read_facts.** Each row reads outcome `withheld_project_scope` with
   `kind_state: unauthorized`, and the read is partial.
 - **A request that names projects (ruling B).** The engine stops before every

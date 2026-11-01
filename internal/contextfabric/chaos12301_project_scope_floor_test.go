@@ -189,16 +189,19 @@ func TestTheProjectScopeSentenceLeavesEveryOtherAnswerAlone(t *testing.T) {
 	}
 }
 
-// Beside a cut read the answer states the grant, the cause the caller cannot
-// clear, and keeps its narrative either way.
-func TestAProjectScopeRowBesideACutReadKeepsTheNarrative(t *testing.T) {
+// Beside a cut read the answer states both causes, each once, and keeps its
+// narrative: neither floor withholds it.
+func TestAProjectScopeRowBesideACutReadStatesBothCauses(t *testing.T) {
 	t.Parallel()
-	served := ApplyServedStatusFloors(storedWithRows(t, projectScopeRow(), hopWalkCutCase().detail))
+	cut := hopWalkCutCase()
+	served := ApplyServedStatusFloors(storedWithRows(t, projectScopeRow(), cut.detail))
 	if served.Status != InvestigationPartial || slices.Contains(served.Limitations, synthesisNarrativeWithheldLimitation) {
 		t.Fatalf("served %q, limitations %v, want partial with the narrative kept", served.Status, served.Limitations)
 	}
-	if !slices.Contains(served.Limitations, contractsv1.ContextFabricProjectScopeWithheldLimitation) {
-		t.Fatalf("limitations = %v, want the project-scope sentence", served.Limitations)
+	for _, sentence := range []string{contractsv1.ContextFabricProjectScopeWithheldLimitation, cut.limitation} {
+		if got := countOf(served.Limitations, sentence); got != 1 {
+			t.Fatalf("%d of %q, want one: %v", got, sentence, served.Limitations)
+		}
 	}
 }
 

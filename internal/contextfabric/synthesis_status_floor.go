@@ -333,11 +333,11 @@ func ApplyServedStatusFloors(result InvestigationResult) InvestigationResult {
 	applyUnverifiedProjectNarrowingStatusFloor(&result)
 	applyStatusPoolCutStatusFloor(&result)
 	applyOrganizationSubjectStatusFloor(&result)
-	// Last, so a floor that withholds the narrative keeps its own swap. The
-	// project scope comes first of the two: a read cut for this caller is
-	// still disclosed by its coverage row, and the grant is what it cannot clear.
-	applyProjectScopeWithheldStatusFloor(&result)
+	// Last, so a floor that withholds the narrative keeps its own swap.
 	applyCutGraphReadStatusFloor(&result)
+	// After every other floor: it needs no complete answer to state the grant,
+	// so each of them keeps its swap and its sentence, and this one adds its own.
+	applyProjectScopeWithheldStatusFloor(&result)
 	if result.Status != before || restated {
 		result.Completeness = ComputeAnswerCompleteness(result)
 	}
