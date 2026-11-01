@@ -257,6 +257,11 @@ func TestStore_grantDigest(t *testing.T) {
 	paritytest.RunGrantDigestSuite(t,
 		func(t *testing.T) contextfabric.InvestigationResultStore { return memoryinvestigation.NewStore() },
 	)
+	// CHAOS-12298: the p: replay under identical, changed, repository,
+	// universal and unrestricted grants.
+	paritytest.RunProjectGrantDigestReplaySuite(t,
+		func(t *testing.T) contextfabric.InvestigationResultStore { return memoryinvestigation.NewStore() },
+	)
 }
 
 // TestStore_submissionParity runs the shared submission behavior table

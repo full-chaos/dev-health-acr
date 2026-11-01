@@ -953,6 +953,39 @@ production by more than one owner, so no roll order can be relied on. Turn it
 on only when every consumer's pin (web, ask-dev) accepts the field; then the
 switch is removed. The startup line reports `thread_list_first_question_enabled`.
 
+### Ask Dev page context subject hints (CHAOS-12230)
+
+Web sends the entities of the page an Ask Dev question is asked from as
+`requested_scope.subject_hints[]` with source `ask_dev_page_context`, each id
+built in acr's canonical form from its natural keys. Only an id byte-equal to
+the projected node commits on that identity; any other id falls back to label
+search. `contracts/examples/v1/context_fabric_canonical_id_vectors.v1.json`
+(schema `context_fabric_canonical_id_vectors.v1`) holds test vectors for the
+organization, repository, team, pull request, work item and project ids, each
+the output of the builder the projector itself calls; a work item or project
+key whose id would exceed 256 bytes is `omitted: true`, and the caller then
+sends no id. CI fails when the file differs from the builders' output;
+regenerate it with `ACR_WRITE_CANONICAL_ID_VECTORS=1 go test
+./internal/contextfabric/devhealthsource/ -run
+TestCanonicalIDVectorsMatchTheBuilders`.
+
+Log line (INFO, at most one per request that carries an
+`ask_dev_page_context` hint): `context fabric resolution trace: page hint
+lookup`. A request resolves its hints once: by the offers-only resolution
+when the window gate asks for a window (a question that states none), else by
+the decisive resolution, and both count the same way. Each page hint takes one outcome: `exact_hit` (the exact id lookup
+found the node), `label_fallback` (it did not, the hint has a label, and the
+term search completed, so the label was searched) or `unresolved` (it did not,
+and the term search did not complete or the hint has no label). Fields:
+`request_id`, `stage` (`page_hint_lookup`), `page_hints`, `exact_hit`,
+`label_fallback`, `unresolved`, `search_fallback` (whether the term search
+completed: every term searched without error; a search that fails is
+`false`), and
+`exact_hit_by_kind`, `label_fallback_by_kind`, `unresolved_by_kind` (counts
+keyed by subject kind). The line carries no canonical id, label or question
+text. A rise in `label_fallback` or `unresolved` suggests web's ids no longer
+match acr's, or that the subject is not in the graph yet.
+
 ### Ask Dev run lease (CHAOS-11949)
 
 `ACR_CONTEXT_FABRIC_RUN_LEASE_ENABLED` (default `false`; refused at start
@@ -2058,6 +2091,20 @@ organization never before rebuilt (a first-time cutover, epoch 0 -> 1, no
 prior epoch to roll back to), the only rollback is disabling the lifecycle
 flag application-wide, which reverts read/write to the legacy in-place
 path and leaves the just-built epoch orphaned until a future decision.
+
+### CHAOS-11195: acr-api as a client of the auth-service workload-token exchange
+
+`authWorkloadClient.enabled=true` (default false; off renders byte-equal to before) gives acr-api a projected ServiceAccount token
+(`auth-workload-subject`, audience `dev-health-workload-exchange`, 600 s, mode 0400, read-only, no `subPath`) at
+`/var/run/secrets/dev-health/auth-workload/token`, and the acr-api ConfigMap four variables: `ACR_AUTH_WORKLOAD_EXCHANGE_URL`
+(`authWorkloadClient.exchangeURL`, auth-service's origin), `ACR_AUTH_WORKLOAD_ALLOW_PLAIN_HTTP` (`allowPlainHTTP`),
+`ACR_AUTH_WORKLOAD_ISSUER` (`issuer`, auth-service's https token issuer) and `ACR_AUTH_WORKLOAD_SUBJECT_FILE`. The audience and the 600 s
+are not values: auth-service's exchange reviews against the one audience. Without Kubernetes the subject is a Compose bootstrap credential
+named by `ACR_AUTH_WORKLOAD_BOOTSTRAP_FILE` (exactly one of the two files). The client (`internal/authworkload`) is built at start from
+these variables with an explicit transport that never uses the environment proxy. A partial or invalid configuration stops the start; no
+exchange runs at start, no readiness check depends on it, and an auth-service outage does not stop acr-api. The subject file is read again
+for every exchange, so a rotated projected token is used without a restart. No call uses the client yet. The chart opens no egress to
+auth-service in this change.
 
 ### CHAOS-4076: NetworkPolicy apiserver egress and in-release FalkorDB PodSecurity
 

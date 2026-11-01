@@ -1050,6 +1050,14 @@ func (e *Engine) reuseAuthorizationStillHolds(ctx context.Context, principal sto
 
 	evidenceRefs := reuseEvidenceRefsToRecheck(candidate)
 	if len(evidenceRefs) == 0 {
+		// CHAOS-12325: this branch reads no graph context, so the guard
+		// below, which reads that coverage, cannot see an unverified project
+		// narrowing here. It decides from the request's own resolution: a
+		// requested narrowing it did not prove is not served from a stored
+		// answer that does not disclose it.
+		if requestedProjectNarrowingUnproven(request.RequestedScope) && !coverageDisclosesUnverifiedProjectNarrowing(candidate.Coverage) {
+			return reuseRecheckVerdict{Refused: true, Outcome: AnswerReuseMissProjectNarrowingUnverified}
+		}
 		return e.reuseRemovedTeamRecheck(ctx, principal, binding, subjects)
 	}
 	graphContext, err := e.graph.DiscoverContext(ctx, principal, GraphDiscoveryRequest{

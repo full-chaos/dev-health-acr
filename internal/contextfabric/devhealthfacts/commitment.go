@@ -199,7 +199,11 @@ func (p *CommitmentProvider) ReadFacts(ctx context.Context, principal storage.Pr
 	if err != nil {
 		return contextfabric.FactProviderResult{}, err
 	}
-	ids, bySubject, rejected := v2Index(subjectsOfKind(query.Subjects, contextfabric.SubjectProject), identity.KindProject)
+	projectSubjects := subjectsOfKind(query.Subjects, contextfabric.SubjectProject)
+	if projectOnlyWithheld(principal) {
+		projectSubjects = nil
+	}
+	ids, bySubject, rejected := v2Index(projectSubjects, identity.KindProject)
 	defer func() {
 		if err == nil {
 			applySubjectShapeRejection(&result, "devhealthfacts.commitment", contextfabric.FactCommitment, rejected)

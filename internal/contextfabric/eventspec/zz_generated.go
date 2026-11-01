@@ -181,6 +181,7 @@ var ByID = map[string]Event{
 	"graphrank.low_population_kind_scope_summary":         LowPopulationKindScopeSummary,
 	"graphrank.offer_pool":                                OfferPool,
 	"graphrank.offer_pool_summary":                        OfferPoolSummary,
+	"graphrank.page_hint_lookup":                          PageHintLookup,
 	"graphrank.ranked_cut_summary":                        RankedCutSummary,
 	"graphrank.reserved_kind_admitted":                    ReservedKindAdmitted,
 	"graphrank.search":                                    Search,
@@ -1578,6 +1579,7 @@ type CompletenessAuthorityFields struct {
 	DecidingReadEvaluationGap           bool
 	StatusCorrectionDisclosed           bool
 	LeadProseServedAsStored             bool
+	LegacySourceStateWordsServed        bool
 	OutcomeRowsTotal                    int
 	OutcomeRowsSatisfied                int
 	OutcomeRowsNarrowed                 int
@@ -1623,7 +1625,7 @@ type CompletenessAuthorityFields struct {
 
 // NewCompletenessAuthorityFields is the generated constructor for CompletenessAuthorityFields -- every
 // field CompletenessAuthority.Fields declares is a required parameter.
-func NewCompletenessAuthorityFields(orgID string, modelStatus string, disposition string, basis string, serverState string, derived bool, disagreed bool, wouldFlip bool, direction string, version string, decidingRequirement string, decidingStage string, decidingOutcome string, decidingCauseOverrun string, decidingCauseCoverage string, decidingCauseNarrowing string, decidingReadEvaluationGap bool, statusCorrectionDisclosed bool, leadProseServedAsStored bool, outcomeRowsTotal int, outcomeRowsSatisfied int, outcomeRowsNarrowed int, outcomeRowsUnavailable int, outcomeRowsNotApplicable int, outcomeRowsNotAttempted int, claimedFactsIdentity int, claimedFactsMembership int, claimedFactsStatus int, claimedFactsActualCompletion int, claimedFactsWork int, claimedFactsBlockers int, claimedFactsRequiredChildren int, claimedFactsPullRequests int, claimedFactsReviews int, claimedFactsContinuousIntegration int, claimedFactsDeployments int, claimedFactsIncidents int, claimedFactsMetrics int, claimedFactsHealth int, claimedFactsWorkload int, claimedFactsInvestment int, claimedFactsReadiness int, claimedFactsOperationalDeficiencies int, claimedFactsSourceHealth int, claimedFactsEvidence int, claimedFactsFlow int, claimedFactsLandscape int, claimedFactsSecurityAlerts int, claimedFactsCommitment int, claimedFactsFileHotspots int, requestID string) CompletenessAuthorityFields {
+func NewCompletenessAuthorityFields(orgID string, modelStatus string, disposition string, basis string, serverState string, derived bool, disagreed bool, wouldFlip bool, direction string, version string, decidingRequirement string, decidingStage string, decidingOutcome string, decidingCauseOverrun string, decidingCauseCoverage string, decidingCauseNarrowing string, decidingReadEvaluationGap bool, statusCorrectionDisclosed bool, leadProseServedAsStored bool, legacySourceStateWordsServed bool, outcomeRowsTotal int, outcomeRowsSatisfied int, outcomeRowsNarrowed int, outcomeRowsUnavailable int, outcomeRowsNotApplicable int, outcomeRowsNotAttempted int, claimedFactsIdentity int, claimedFactsMembership int, claimedFactsStatus int, claimedFactsActualCompletion int, claimedFactsWork int, claimedFactsBlockers int, claimedFactsRequiredChildren int, claimedFactsPullRequests int, claimedFactsReviews int, claimedFactsContinuousIntegration int, claimedFactsDeployments int, claimedFactsIncidents int, claimedFactsMetrics int, claimedFactsHealth int, claimedFactsWorkload int, claimedFactsInvestment int, claimedFactsReadiness int, claimedFactsOperationalDeficiencies int, claimedFactsSourceHealth int, claimedFactsEvidence int, claimedFactsFlow int, claimedFactsLandscape int, claimedFactsSecurityAlerts int, claimedFactsCommitment int, claimedFactsFileHotspots int, requestID string) CompletenessAuthorityFields {
 	return CompletenessAuthorityFields{
 		OrgID:                               orgID,
 		ModelStatus:                         modelStatus,
@@ -1644,6 +1646,7 @@ func NewCompletenessAuthorityFields(orgID string, modelStatus string, dispositio
 		DecidingReadEvaluationGap:           decidingReadEvaluationGap,
 		StatusCorrectionDisclosed:           statusCorrectionDisclosed,
 		LeadProseServedAsStored:             leadProseServedAsStored,
+		LegacySourceStateWordsServed:        legacySourceStateWordsServed,
 		OutcomeRowsTotal:                    outcomeRowsTotal,
 		OutcomeRowsSatisfied:                outcomeRowsSatisfied,
 		OutcomeRowsNarrowed:                 outcomeRowsNarrowed,
@@ -1712,6 +1715,7 @@ func (f CompletenessAuthorityFields) SlogArgs() []any {
 		"deciding_read_evaluation_gap", f.DecidingReadEvaluationGap,
 		"status_correction_disclosed", f.StatusCorrectionDisclosed,
 		"lead_prose_served_as_stored", f.LeadProseServedAsStored,
+		"legacy_source_state_words_served", f.LegacySourceStateWordsServed,
 		"outcome_rows_total", f.OutcomeRowsTotal,
 		"outcome_rows_satisfied", f.OutcomeRowsSatisfied,
 		"outcome_rows_narrowed", f.OutcomeRowsNarrowed,
@@ -6530,6 +6534,7 @@ type RepositoryWorkItemWalkFields struct {
 	Truncated                  bool
 	Denied                     int
 	ProjectNarrowingUnverified bool
+	ProjectExcluded            int
 	TeamNarrowing              string
 	TeamExcluded               int
 	TeamFloorReason            string
@@ -6548,7 +6553,7 @@ type RepositoryWorkItemWalkFields struct {
 
 // NewRepositoryWorkItemWalkFields is the generated constructor for RepositoryWorkItemWalkFields -- every
 // field RepositoryWorkItemWalk.Fields declares is a required parameter.
-func NewRepositoryWorkItemWalkFields(orgID string, outcome string, anchorKind string, filtered bool, restricted bool, pullRequests int, linkedIssues int, members int, truncated bool, denied int, projectNarrowingUnverified bool, teamNarrowing string, teamExcluded int, teamFloorReason string, reason string, requestID string) RepositoryWorkItemWalkFields {
+func NewRepositoryWorkItemWalkFields(orgID string, outcome string, anchorKind string, filtered bool, restricted bool, pullRequests int, linkedIssues int, members int, truncated bool, denied int, projectNarrowingUnverified bool, projectExcluded int, teamNarrowing string, teamExcluded int, teamFloorReason string, reason string, requestID string) RepositoryWorkItemWalkFields {
 	return RepositoryWorkItemWalkFields{
 		OrgID:                      orgID,
 		Outcome:                    outcome,
@@ -6561,6 +6566,7 @@ func NewRepositoryWorkItemWalkFields(orgID string, outcome string, anchorKind st
 		Truncated:                  truncated,
 		Denied:                     denied,
 		ProjectNarrowingUnverified: projectNarrowingUnverified,
+		ProjectExcluded:            projectExcluded,
 		TeamNarrowing:              teamNarrowing,
 		TeamExcluded:               teamExcluded,
 		TeamFloorReason:            teamFloorReason,
@@ -6594,6 +6600,7 @@ func (f RepositoryWorkItemWalkFields) SlogArgs() []any {
 		"truncated", f.Truncated,
 		"denied", f.Denied,
 		"project_narrowing_unverified", f.ProjectNarrowingUnverified,
+		"project_excluded", f.ProjectExcluded,
 		"team_narrowing", contextfabric.SanitizeLogAttr(f.TeamNarrowing),
 		"team_excluded", f.TeamExcluded,
 		"team_floor_reason", contextfabric.SanitizeLogAttr(f.TeamFloorReason),
@@ -11952,6 +11959,72 @@ func (f OfferPoolSummaryFields) SlogArgs() []any {
 		"below_floor_excluded", f.BelowFloorExcluded,
 		"similarity_floor", f.SimilarityFloor,
 		"emptied_by_exclusion", f.EmptiedByExclusion,
+	}
+}
+
+// PageHintLookupFields is graphrank.page_hint_lookup's generated typed construction interface
+// (CHAOS-5516): one Go field per Field PageHintLookup.Fields declares in spec.go.
+type PageHintLookupFields struct {
+	RequestID           string
+	PageHints           int
+	ExactHit            int
+	LabelFallback       int
+	Unresolved          int
+	SearchFallback      bool
+	ExactHitByKind      map[string]int
+	LabelFallbackByKind map[string]int
+	UnresolvedByKind    map[string]int
+	// constructed (CHAOS-5516 r1 fix): an UNEXPORTED marker, generated on
+	// every PageHintLookupFields uniformly, set ONLY by NewPageHintLookupFields below. A caller
+	// outside this package cannot set an unexported field via a composite
+	// literal -- not partially (one exported field set, the rest at their
+	// Go zero value) and not even by hand-setting every EXPORTED field --
+	// so this is the class fix for "a caller still assembles that event's
+	// field list": no composite literal built outside eventspec, complete or
+	// partial, can ever read as constructed.
+	constructed bool
+}
+
+// NewPageHintLookupFields is the generated constructor for PageHintLookupFields -- every
+// field PageHintLookup.Fields declares is a required parameter.
+func NewPageHintLookupFields(requestID string, pageHints int, exactHit int, labelFallback int, unresolved int, searchFallback bool, exactHitByKind map[string]int, labelFallbackByKind map[string]int, unresolvedByKind map[string]int) PageHintLookupFields {
+	return PageHintLookupFields{
+		RequestID:           requestID,
+		PageHints:           pageHints,
+		ExactHit:            exactHit,
+		LabelFallback:       labelFallback,
+		Unresolved:          unresolved,
+		SearchFallback:      searchFallback,
+		ExactHitByKind:      exactHitByKind,
+		LabelFallbackByKind: labelFallbackByKind,
+		UnresolvedByKind:    unresolvedByKind,
+		constructed:         true,
+	}
+}
+
+// IsConstructed reports whether f was built by NewPageHintLookupFields -- the ONE
+// exported way to read the unexported "constructed" marker from outside
+// this package. false for the Go zero value and for ANY composite literal
+// assembled elsewhere, complete or partial.
+func (f PageHintLookupFields) IsConstructed() bool { return f.constructed }
+
+// SlogArgs returns PageHintLookup's own declared fields as alternating slog
+// key/value pairs, in the SAME order spec.go declares them. Every
+// free-text string/[]string value is sanitized HERE, at its own
+// construction site inside this function's body -- the shape CHAOS-5544's
+// own instrument (TestNoUnsanitizedLogAttributeInContextFabric) requires.
+func (f PageHintLookupFields) SlogArgs() []any {
+	return []any{
+		"request_id", contextfabric.SanitizeLogAttr(f.RequestID),
+		"stage", "page_hint_lookup",
+		"page_hints", f.PageHints,
+		"exact_hit", f.ExactHit,
+		"label_fallback", f.LabelFallback,
+		"unresolved", f.Unresolved,
+		"search_fallback", f.SearchFallback,
+		"exact_hit_by_kind", f.ExactHitByKind,
+		"label_fallback_by_kind", f.LabelFallbackByKind,
+		"unresolved_by_kind", f.UnresolvedByKind,
 	}
 }
 

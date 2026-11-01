@@ -127,7 +127,7 @@
       "qualification": "This judgment is limited to currently visible project and acceptance evidence.",
       "rank": 1,
       "source_state": "truncated",
-      "source_state_note": "The service marks this driver as partial: the source read was truncated.",
+      "source_state_note": "The service marks this driver as truncated: the source read was cut.",
       "summary_corrected": true,
       "current": true
     },

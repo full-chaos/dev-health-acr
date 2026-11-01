@@ -5,10 +5,10 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
-	"slices"
 	"sort"
 	"strings"
 
+	"github.com/full-chaos/dev-health-acr/internal/auth"
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
 	"github.com/full-chaos/dev-health-acr/internal/telemetryscrub"
@@ -189,15 +189,26 @@ func StoredResultPrincipalScopeVocabulary() [3]StoredResultPrincipalScope {
 	return [3]StoredResultPrincipalScope{StoredResultScopeUnrestricted, StoredResultScopeUniversal, StoredResultScopeRestricted}
 }
 
+// classifyStoredResultPrincipalScope is the stored-result gate's view of the
+// caller's grant: auth.ClassifyGrant through storedResultScopeForGrant.
 func classifyStoredResultPrincipalScope(principal storage.Principal) StoredResultPrincipalScope {
-	switch {
-	case len(principal.RepositoryScopes) == 0:
+	return storedResultScopeForGrant(auth.ClassifyGrant(principal))
+}
+
+// storedResultScopeForGrant maps a grant class onto the stored-result
+// principal scope (CHAOS-12297). project_only is a restricted subtype and
+// reads as StoredResultScopeRestricted, so its results meet the grant-digest
+// check, never the unrestricted bypass. An unknown class is restricted.
+func storedResultScopeForGrant(class auth.GrantClass) StoredResultPrincipalScope {
+	switch class {
+	case auth.GrantUnrestricted:
 		return StoredResultScopeUnrestricted
-	case slices.ContainsFunc(principal.RepositoryScopes, func(scope string) bool { return strings.TrimSpace(scope) == "*" }):
+	case auth.GrantUniversal:
 		return StoredResultScopeUniversal
-	default:
+	case auth.GrantRestricted, auth.GrantProjectOnly:
 		return StoredResultScopeRestricted
 	}
+	return StoredResultScopeRestricted
 }
 
 // StoredResultAuthorization is one decision and everything the trace needs to
@@ -342,8 +353,19 @@ const storedResultOpenGrantDigest = "open"
 
 // StoredResultGrantDigest is the grant digest Save records for the computing
 // principal (CHAOS-7145): the same reuseGrantDigest CHAOS-7127 keys answer
-// reuse with, for a repository-restricted principal; "open" for any other.
+// reuse with, for a repository-restricted principal; "open" for an
+// unrestricted or universal one.
+//
+// For a project-only principal it is "p:" plus the framed digest of its
+// canonical project set (projectGrantDigest; CHAOS-12298, migration 0066
+// admits the form), never a digest of its repository list. The prefix is the
+// class tag: a "p:" digest never equals a restricted reader's "g:" digest, so
+// storedResultGrantRefusal serves a p: result to a restricted reader never,
+// and to a project-only reader only under the identical project set.
 func StoredResultGrantDigest(principal storage.Principal) string {
+	if auth.ClassifyGrant(principal) == auth.GrantProjectOnly {
+		return "p:" + projectGrantDigest(principal.ProjectScopes)
+	}
 	if classifyStoredResultPrincipalScope(principal) != StoredResultScopeRestricted {
 		return storedResultOpenGrantDigest
 	}
@@ -375,6 +397,13 @@ func storedResultOwnerRefusal(principal storage.Principal, stored StoredInvestig
 // filtered) fact set. An unrestricted or universal reader is unchanged. A
 // result with no recorded digest (a pre-migration row) is refused to a
 // restricted reader: its computing grant cannot be proven.
+//
+// A project-only reader is a restricted reader here (CHAOS-12298): its digest
+// is its own p: digest, so it is served only a result computed under the
+// identical project set, never an "open", "g:" or other "p:" result. An
+// unrestricted or universal reader may read a p: result (CHAOS-12107 R2-4);
+// the reuse key, not this gate, keeps a NEW unrestricted investigation from
+// reusing one (GrantScopedTimeAxisKey).
 func storedResultGrantRefusal(principal storage.Principal, stored StoredInvestigationResult) (StoredResultAuthorizationReason, bool) {
 	if classifyStoredResultPrincipalScope(principal) != StoredResultScopeRestricted {
 		return "", false

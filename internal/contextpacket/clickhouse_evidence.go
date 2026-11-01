@@ -15,7 +15,9 @@ func (s *ClickHouseEvidenceStore) ResolveEvidence(ctx context.Context, principal
 	if err := ctx.Err(); err != nil {
 		return contractsv1.ExpandedEvidence{}, err
 	}
-	if s.rows == nil || s.codec == nil || strings.TrimSpace(principal.OrgID) == "" || !validOpaqueEvidenceRefID(evidenceRefID) {
+	// A project-only principal reads no repository evidence at all, not even
+	// the authorized repository listing (CHAOS-12299 r3).
+	if s.rows == nil || s.codec == nil || strings.TrimSpace(principal.OrgID) == "" || auth.ClassifyGrant(principal) == auth.GrantProjectOnly || !validOpaqueEvidenceRefID(evidenceRefID) {
 		return contractsv1.ExpandedEvidence{}, storage.ErrNotFound
 	}
 	rows, ok := s.rows.(EvidenceReferenceRows)
@@ -43,7 +45,7 @@ func (s *ClickHouseEvidenceStore) ResolveEvidence(ctx context.Context, principal
 	if !ok {
 		return contractsv1.ExpandedEvidence{}, storage.ErrNotFound
 	}
-	references, err := rows.ResolveEvidenceReference(WithWorkItemGrant(ctx, auth.WorkItemRepositorySelectorSet(principal.RepositoryScopes, true)), principal.OrgID, routed, handle.QueryID, handle.LocatorHash())
+	references, err := rows.ResolveEvidenceReference(WithWorkItemGrant(ctx, auth.WorkItemGrantSelectorSet(principal)), principal.OrgID, routed, handle.QueryID, handle.LocatorHash())
 	if err != nil && !errors.Is(err, storage.ErrNotFound) {
 		return contractsv1.ExpandedEvidence{}, fmt.Errorf("resolve evidence reference: %w", err)
 	}

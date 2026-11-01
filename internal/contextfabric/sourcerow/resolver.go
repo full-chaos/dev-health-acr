@@ -378,7 +378,7 @@ func (r *Resolver) readTargets(ctx context.Context, principal storage.Principal,
 	var rows []found
 	seen := map[string]bool{}
 	for _, candidate := range targets {
-		references, err := r.rows.ResolveSourceRow(contextpacket.WithWorkItemGrant(ctx, auth.WorkItemRepositorySelectorSet(principal.RepositoryScopes, true)), principal.OrgID, candidate.scope, candidate.read)
+		references, err := r.rows.ResolveSourceRow(contextpacket.WithWorkItemGrant(ctx, auth.WorkItemGrantSelectorSet(principal)), principal.OrgID, candidate.scope, candidate.read)
 		if err != nil && !errors.Is(err, storage.ErrNotFound) {
 			decision.Reason, decision.Err = contextfabric.SourceRowUnavailable, err
 			return contractsv1.ExpandedEvidence{}, decision
@@ -855,7 +855,9 @@ func (r *Resolver) encodedTargets(ctx context.Context, principal storage.Princip
 			return nil, err
 		}
 		if len(found[index]) == 0 {
-			allowed = allowed && end.optional
+			// E1 (CHAOS-12299): an unresolved optional endpoint does not
+			// pass for a project-only caller; both ends must pass.
+			allowed = allowed && end.optional && auth.ClassifyGrant(principal) != auth.GrantProjectOnly
 			continue
 		}
 		allowed = allowed && len(admittedEnds) > 0

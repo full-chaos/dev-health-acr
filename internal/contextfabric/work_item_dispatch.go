@@ -504,6 +504,7 @@ func (e *Engine) recordRepositoryWorkItemWalk(ctx context.Context, principal sto
 		event.LowerTierCut = membership.Census.LowerTierCut
 		event.ProjectNarrowingUnverified = membership.ProjectNarrowingUnverified
 		event.TeamNarrowing, event.TeamExcluded, event.TeamFloor = membership.TeamNarrowing, membership.TeamExcluded, membership.TeamFloor
+		event.ProjectExcluded = membership.ProjectExcluded
 		event.Members, event.Population = members, membership.Census.AuthorizedPopulation
 		event.Truncated = membership.Census.PopulationIncomplete || membership.Census.State == WorkItemMembershipCensusFloor || members < event.Population
 		if !filtered {

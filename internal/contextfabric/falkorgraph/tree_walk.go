@@ -6,6 +6,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/full-chaos/dev-health-acr/internal/auth"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/graphrank"
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
@@ -268,6 +269,9 @@ type treeWalk struct {
 	// teamExcluded counts the distinct far-side issues a requested team
 	// narrowing left out of scope (CHAOS-12319): never in linkDeniedTargets.
 	teamExcluded int
+	// projectExcluded counts the distinct far-side nodes a requested project
+	// narrowing left out of scope (CHAOS-12329): never in linkDeniedTargets.
+	projectExcluded int
 	// linkIssueTargets is set when the far side of the link is the issue (a
 	// repository's work items): the distinct linked issues before
 	// authorization, for a restricted caller read by a bounded count with no
@@ -336,7 +340,7 @@ func (s treeWalkState) authorizedHit(hop treeHop, h walkHit) bool {
 	if s.anchorDenied {
 		return false
 	}
-	if s.ownershipEdges && h.rel != nil && !authorizedEdgeAttributes(s.principal, s.scope, h.rel.Properties) {
+	if s.ownershipEdges && h.rel != nil && !authorizedEdgeAttributes(s.principal, s.scope, string(hop.edge.relation), h.rel.Properties) {
 		return false
 	}
 	return s.authorized(h.to)
@@ -344,9 +348,9 @@ func (s treeWalkState) authorizedHit(hop treeHop, h walkHit) bool {
 
 // feedAuthorized is the decision on the feed edge a fused link read returns
 // beside the link: a read that did not return it is not decided, and is denied.
-func (s treeWalkState) feedAuthorized(value interface{}) bool {
+func (s treeWalkState) feedAuthorized(feed treeHop, value interface{}) bool {
 	e := walkEdge(value)
-	return e != nil && authorizedEdgeAttributes(s.principal, s.scope, e.Properties)
+	return e != nil && authorizedEdgeAttributes(s.principal, s.scope, string(feed.edge.relation), e.Properties)
 }
 
 func (s treeWalkState) authorized(n *node) bool {
@@ -372,6 +376,13 @@ func (s treeWalkState) authorized(n *node) bool {
 // (projectNarrowingUnverified), so the answer discloses it as the general
 // graph read does.
 func (s treeWalkState) admitted(position treePosition, n *node, tier linkTier) bool {
+	if auth.ClassifyGrant(s.principal) == auth.GrantProjectOnly {
+		// CHAOS-12299: a project-only caller is decided by the node rule at
+		// every position. A link's tier grants no authority to it, and a
+		// repository-less issue is not admitted for want of a repository
+		// list (narrowed is false for it): only stated membership admits.
+		return s.authorized(n)
+	}
 	if position != treeIssue {
 		return s.authorized(n)
 	}
@@ -658,9 +669,9 @@ func (s treeWalkState) linkRowAuthorized(r row, feed, link treeHop, near, far *n
 	switch {
 	case s.anchorDenied:
 		return false
-	case s.ownershipEdges && !authorizedEdgeAttributes(s.principal, s.scope, walkEdge(r["rl"]).Properties):
+	case s.ownershipEdges && !authorizedEdgeAttributes(s.principal, s.scope, string(link.edge.relation), walkEdge(r["rl"]).Properties):
 		return false
-	case s.ownershipEdges && !s.feedAuthorized(r["ra"]):
+	case s.ownershipEdges && !s.feedAuthorized(feed, r["ra"]):
 		return false
 	case !s.admitted(feed.to, near, tier):
 		return false
@@ -871,7 +882,13 @@ func linkSegmentParams(orgID string, anchor contextfabric.SubjectRef, feed, link
 
 // linkSegmentGrants binds a restricted caller's grants to the link read.
 func linkSegmentGrants(params map[string]interface{}, principal storage.Principal) map[string]interface{} {
-	bindRepositoryMatch(params, "grant", principal.RepositoryScopes)
+	selectors := principal.RepositoryScopes
+	if auth.ClassifyGrant(principal) == auth.GrantProjectOnly {
+		// A project grant names no repository (CHAOS-12299 r3): "*" must not
+		// match every repository in the read. The node rule decides each row.
+		selectors = nil
+	}
+	bindRepositoryMatch(params, "grant", selectors)
 	params["noRepository"] = noRepositoryScope
 	params["authorityTiers"] = authorityLinkTiers()
 	return params
@@ -968,6 +985,11 @@ func (a *Adapter) linkSegment(ctx context.Context, key, orgID string, state tree
 	// outOfNarrowing: issues out of a requested team narrowing (CHAOS-12319,
 	// team_narrowing.go). Scope, not authorization: never denied.
 	outOfNarrowing := map[string]bool{}
+	// outOfProjectScope: far-side nodes the caller's grants admit that a
+	// requested project narrowing leaves out (CHAOS-12329,
+	// project_narrowing_scope.go). Scope too: never denied.
+	outOfProjectScope := map[string]bool{}
+	unscoped := state.withoutProjectNarrowing()
 	out.endTiers = map[string]string{}
 	// ends are the admitted far-side nodes in the read's order: strongest
 	// link tier first, so a cut keeps the higher tiers.
@@ -1022,9 +1044,14 @@ func (a *Adapter) linkSegment(ctx context.Context, key, orgID string, state tree
 		// Every row is decided by the rest of the request first; a requested
 		// team narrowing then reads only the issues that admits.
 		authorizedRows := make([]bool, len(links))
+		// projectScopedRows: refused only by the requested project narrowing.
+		projectScopedRows := make([]bool, len(links))
 		var authorizedIDs []string
 		for i, l := range links {
 			authorizedRows[i] = state.linkRowAuthorized(l.row, feed, link, l.near, l.far, l.tier)
+			if !authorizedRows[i] && state.narrowsByProject() {
+				projectScopedRows[i] = unscoped.linkRowAuthorized(l.row, feed, link, l.near, l.far, l.tier)
+			}
 			if authorizedRows[i] && !(reviewed && !holding[l.id]) {
 				authorizedIDs = append(authorizedIDs, l.id)
 			}
@@ -1045,6 +1072,10 @@ func (a *Adapter) linkSegment(ctx context.Context, key, orgID string, state tree
 				continue
 			}
 			seen[id] = true
+			if !authorized && projectScopedRows[i] {
+				outOfProjectScope[id] = true
+				continue
+			}
 			if !authorized {
 				state.deny()
 				continue
@@ -1069,8 +1100,9 @@ func (a *Adapter) linkSegment(ctx context.Context, key, orgID string, state tree
 		}
 	}
 	out.linkTargets = len(seen)
-	out.linkDeniedTargets = len(seen) - len(admitted) - len(outOfNarrowing)
+	out.linkDeniedTargets = len(seen) - len(admitted) - len(outOfNarrowing) - len(outOfProjectScope)
 	out.teamExcluded = len(outOfNarrowing)
+	out.projectExcluded = len(outOfProjectScope)
 	if status.set() {
 		out.status.read, out.status.readIDs = len(read), read
 		out.status.held = map[string]bool{}

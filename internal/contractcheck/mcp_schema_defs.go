@@ -19,11 +19,15 @@ type mcpResponseDefsSync struct {
 	defKey        string
 	canonicalFile string
 	refRewrites   map[string]string
-	// structuredRoot marks the entry the response schema's own
-	// "properties.structured.$ref" must point at (via "#/$defs/<defKey>"),
-	// as opposed to a nested $defs entry (e.g. context_packet_item.v1)
-	// that is only ever reached indirectly through the root entry.
-	structuredRoot bool
+	// rootProperty names the response property ("structured", or
+	// investigate_question's "full_result") that must resolve through this
+	// entry by a local "#/$defs/<defKey>" pointer, as opposed to a nested
+	// $defs entry (e.g. context_packet_item.v1) that is only ever reached
+	// indirectly through a root entry. When several rows of one response
+	// name the same property, that property must be an anyOf of exactly
+	// their pointers, in row order: a stored investigation result is v1 or
+	// v2, and both tools hand it to the client unchanged (CHAOS-12334).
+	rootProperty string
 }
 
 // Context Fabric answer surface (CHAOS-3746). The three canonical
@@ -138,7 +142,7 @@ var contextFabricCommonDefsRewrites = map[string]string{
 }
 
 // contextFabricResultDefsRewrites relocates the cross-file pointers
-// context_fabric_investigation_result.v1 makes into
+// context_fabric_investigation_result.v1 and .v2 make into
 // context_fabric_common.v1.
 var contextFabricResultDefsRewrites = map[string]string{
 	"context_fabric_common.v1.schema.json#/$defs/ClaimedFact":    "#/$defs/context_fabric_common.v1/$defs/ClaimedFact",
@@ -172,6 +176,10 @@ var contextFabricResultDefsRewrites = map[string]string{
 	// The result schema's temporal label, relocated like every other common
 	// $def so the offline response schema stays self-contained.
 	"context_fabric_common.v1.schema.json#/$defs/TemporalLabel": "#/$defs/context_fabric_common.v1/$defs/TemporalLabel",
+	// CHAOS-12334: context_fabric_investigation_result.v2 shares this map.
+	// The one cross-file pointer it makes that v1 does not is
+	// structure_needs, which points at StructureNeedsV2.
+	"context_fabric_common.v1.schema.json#/$defs/StructureNeedsV2": "#/$defs/context_fabric_common.v1/$defs/StructureNeedsV2",
 }
 
 // contextFabricProjectionDefsRewrites relocates
@@ -273,11 +281,11 @@ var contextFabricProjectionDefsRewrites = map[string]string{
 
 var mcpResponseDefsSyncs = []mcpResponseDefsSync{
 	{
-		responseFile:   "mcp_context_for_task_response.v1.schema.json",
-		defKey:         "context_packet.v1",
-		canonicalFile:  "context_packet.v1.schema.json",
-		refRewrites:    map[string]string{"context_packet_item.v1.schema.json": "#/$defs/context_packet_item.v1"},
-		structuredRoot: true,
+		responseFile:  "mcp_context_for_task_response.v1.schema.json",
+		defKey:        "context_packet.v1",
+		canonicalFile: "context_packet.v1.schema.json",
+		refRewrites:   map[string]string{"context_packet_item.v1.schema.json": "#/$defs/context_packet_item.v1"},
+		rootProperty:  "structured",
 	},
 	{
 		responseFile:  "mcp_context_for_task_response.v1.schema.json",
@@ -290,11 +298,11 @@ var mcpResponseDefsSyncs = []mcpResponseDefsSync{
 		canonicalFile: "evidence_ref.v1.schema.json",
 	},
 	{
-		responseFile:   "mcp_source_evidence_response.v1.schema.json",
-		defKey:         "expanded_evidence.v1",
-		canonicalFile:  "expanded_evidence.v1.schema.json",
-		refRewrites:    map[string]string{"evidence_ref.v1.schema.json": "#/$defs/evidence_ref.v1"},
-		structuredRoot: true,
+		responseFile:  "mcp_source_evidence_response.v1.schema.json",
+		defKey:        "expanded_evidence.v1",
+		canonicalFile: "expanded_evidence.v1.schema.json",
+		refRewrites:   map[string]string{"evidence_ref.v1.schema.json": "#/$defs/evidence_ref.v1"},
+		rootProperty:  "structured",
 	},
 	{
 		responseFile:  "mcp_source_evidence_response.v1.schema.json",
@@ -302,17 +310,25 @@ var mcpResponseDefsSyncs = []mcpResponseDefsSync{
 		canonicalFile: "evidence_ref.v1.schema.json",
 	},
 	{
-		responseFile:   "mcp_investigate_question_response.v1.schema.json",
-		defKey:         "context_fabric_answer_projection.v1",
-		canonicalFile:  "context_fabric_answer_projection.v1.schema.json",
-		refRewrites:    contextFabricProjectionDefsRewrites,
-		structuredRoot: true,
+		responseFile:  "mcp_investigate_question_response.v1.schema.json",
+		defKey:        "context_fabric_answer_projection.v1",
+		canonicalFile: "context_fabric_answer_projection.v1.schema.json",
+		refRewrites:   contextFabricProjectionDefsRewrites,
+		rootProperty:  "structured",
 	},
 	{
 		responseFile:  "mcp_investigate_question_response.v1.schema.json",
 		defKey:        "context_fabric_investigation_result.v1",
 		canonicalFile: "context_fabric_investigation_result.v1.schema.json",
 		refRewrites:   contextFabricResultDefsRewrites,
+		rootProperty:  "full_result",
+	},
+	{
+		responseFile:  "mcp_investigate_question_response.v1.schema.json",
+		defKey:        "context_fabric_investigation_result.v2",
+		canonicalFile: "context_fabric_investigation_result.v2.schema.json",
+		refRewrites:   contextFabricResultDefsRewrites,
+		rootProperty:  "full_result",
 	},
 	{
 		responseFile:  "mcp_investigate_question_response.v1.schema.json",
@@ -321,11 +337,18 @@ var mcpResponseDefsSyncs = []mcpResponseDefsSync{
 		refRewrites:   contextFabricCommonDefsRewrites,
 	},
 	{
-		responseFile:   "mcp_investigation_result_response.v1.schema.json",
-		defKey:         "context_fabric_investigation_result.v1",
-		canonicalFile:  "context_fabric_investigation_result.v1.schema.json",
-		refRewrites:    contextFabricResultDefsRewrites,
-		structuredRoot: true,
+		responseFile:  "mcp_investigation_result_response.v1.schema.json",
+		defKey:        "context_fabric_investigation_result.v1",
+		canonicalFile: "context_fabric_investigation_result.v1.schema.json",
+		refRewrites:   contextFabricResultDefsRewrites,
+		rootProperty:  "structured",
+	},
+	{
+		responseFile:  "mcp_investigation_result_response.v1.schema.json",
+		defKey:        "context_fabric_investigation_result.v2",
+		canonicalFile: "context_fabric_investigation_result.v2.schema.json",
+		refRewrites:   contextFabricResultDefsRewrites,
+		rootProperty:  "structured",
 	},
 	{
 		responseFile:  "mcp_investigation_result_response.v1.schema.json",
@@ -333,6 +356,14 @@ var mcpResponseDefsSyncs = []mcpResponseDefsSync{
 		canonicalFile: "context_fabric_common.v1.schema.json",
 		refRewrites:   contextFabricCommonDefsRewrites,
 	},
+}
+
+// mcpRootProperty is one response property that must resolve through its
+// embedded $defs entries, with the entries in row order.
+type mcpRootProperty struct {
+	responseFile string
+	property     string
+	defKeys      []string
 }
 
 // validateMCPSchemaDefsSync proves every self-contained MCP response
@@ -346,6 +377,7 @@ var mcpResponseDefsSyncs = []mcpResponseDefsSync{
 // silently drift apart.
 func (c *repositoryCheck) validateMCPSchemaDefsSync() error {
 	directory := filepath.Join(c.root, "contracts", "jsonschema", "v1")
+	var roots []mcpRootProperty
 	for _, sync := range mcpResponseDefsSyncs {
 		response, ok := c.registry.byName[sync.responseFile]
 		if !ok {
@@ -371,38 +403,96 @@ func (c *repositoryCheck) validateMCPSchemaDefsSync() error {
 		if !reflect.DeepEqual(expected, actual) {
 			return fmt.Errorf("%s: $defs.%s has drifted from canonical %s; regenerate the embedded copy", sync.responseFile, sync.defKey, sync.canonicalFile)
 		}
-		if sync.structuredRoot {
-			if err := requireStructuredRefsDefs(response, sync.defKey); err != nil {
-				return fmt.Errorf("%s: %w", sync.responseFile, err)
-			}
+		if sync.rootProperty != "" {
+			roots = appendMCPRootProperty(roots, sync)
+		}
+	}
+	for _, root := range roots {
+		response := c.registry.byName[root.responseFile]
+		if err := requireStructuredRefsDefs(response, root.property, root.defKeys); err != nil {
+			return fmt.Errorf("%s: %w", root.responseFile, err)
 		}
 	}
 	c.ok("MCP response schemas are self-contained (%d embedded $defs in sync)", len(mcpResponseDefsSyncs))
 	return nil
 }
 
-// requireStructuredRefsDefs proves response's "properties.structured" is a
+// appendMCPRootProperty adds sync's def key to the root property it names,
+// keeping the order of first appearance.
+func appendMCPRootProperty(roots []mcpRootProperty, sync mcpResponseDefsSync) []mcpRootProperty {
+	for i := range roots {
+		if roots[i].responseFile == sync.responseFile && roots[i].property == sync.rootProperty {
+			roots[i].defKeys = append(roots[i].defKeys, sync.defKey)
+			return roots
+		}
+	}
+	return append(roots, mcpRootProperty{responseFile: sync.responseFile, property: sync.rootProperty, defKeys: []string{sync.defKey}})
+}
+
+// requireStructuredRefsDefs proves response's "properties.<property>" is a
 // local "#/$defs/<defKey>" pointer rather than an external filename ref:
 // the byte-for-byte $defs sync check above only proves the embedded copy
-// is correct, not that the schema actually resolves "structured" through
+// is correct, not that the schema actually resolves the property through
 // it, so this closes that gap and is what makes the document genuinely
 // offline-resolvable end to end.
-func requireStructuredRefsDefs(response map[string]any, defKey string) error {
+//
+// With more than one def key the property must be exactly an anyOf of the
+// local pointers to those keys, in order, each alternative a bare $ref, with
+// nothing beside the anyOf but a description (CHAOS-12334). Anything else is
+// refused: a missing or extra alternative, an inline alternative (which could
+// be an open object admitting any body), another keyword such as oneOf or
+// allOf, or a sibling $ref or type.
+func requireStructuredRefsDefs(response map[string]any, property string, defKeys []string) error {
 	properties, ok := response["properties"].(map[string]any)
 	if !ok {
 		return fmt.Errorf("missing properties")
 	}
-	structured, ok := properties["structured"].(map[string]any)
+	node, ok := properties[property].(map[string]any)
 	if !ok {
-		return fmt.Errorf("missing properties.structured")
+		return fmt.Errorf("missing properties.%s", property)
 	}
-	ref, _ := structured["$ref"].(string)
-	want := "#/$defs/" + defKey
-	if ref != want {
-		return fmt.Errorf("properties.structured.$ref is %q, want %q", ref, want)
+	if len(defKeys) == 1 {
+		ref, _ := node["$ref"].(string)
+		want := "#/$defs/" + defKeys[0]
+		if ref != want {
+			return fmt.Errorf("properties.%s.$ref is %q, want %q", property, ref, want)
+		}
+		return nil
+	}
+	want := make([]string, len(defKeys))
+	for i, key := range defKeys {
+		want[i] = "#/$defs/" + key
+	}
+	for key := range node {
+		if key != mcpRootUnionKeyword && key != "description" {
+			return fmt.Errorf("properties.%s carries %q beside its %s; want only an %s of %v", property, key, mcpRootUnionKeyword, mcpRootUnionKeyword, want)
+		}
+	}
+	alternatives, ok := node[mcpRootUnionKeyword].([]any)
+	if !ok {
+		return fmt.Errorf("properties.%s is not an %s; want an %s of %v", property, mcpRootUnionKeyword, mcpRootUnionKeyword, want)
+	}
+	if len(alternatives) != len(want) {
+		return fmt.Errorf("properties.%s.%s has %d alternatives, want %v", property, mcpRootUnionKeyword, len(alternatives), want)
+	}
+	for i, raw := range alternatives {
+		alternative, ok := raw.(map[string]any)
+		ref, _ := alternative["$ref"].(string)
+		if !ok || len(alternative) != 1 || ref != want[i] {
+			return fmt.Errorf("properties.%s.%s[%d] is %v, want exactly {\"$ref\": %q}", property, mcpRootUnionKeyword, i, raw, want[i])
+		}
 	}
 	return nil
 }
+
+// mcpRootUnionKeyword is the keyword of a root property that resolves
+// through several embedded entries. It is anyOf, not oneOf: the v1 and v2
+// result alternatives differ in their schema_version const, so a body
+// matches exactly one of them either way, but -required-baseline refuses a
+// oneOf whose alternatives changed since the release tag (it does not weigh
+// a const discriminator), and it passes an anyOf that keeps an alternative
+// no stricter than the baseline schema (CHAOS-12334).
+const mcpRootUnionKeyword = "anyOf"
 
 // stripSchemaIdentity drops the top-level document-identity keywords that
 // only make sense for a standalone schema file, never for a $defs entry
