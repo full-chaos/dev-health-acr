@@ -169,6 +169,13 @@ of `project_membership_presence` is not read.
 - **Unstated, not empty.** With no contributing link the pull request states
   nothing, so it stays on the disclosed path and never reads as "in no project".
   A set over the contract's bound is unstated too: never a partial set.
+- **Following the catalog.** The refresh tables do not read
+  `projects.last_synced`, which moves on every catalog write. A digest of
+  `(provider, id, project_key)` on the cursor says whether the catalog changed
+  (CHAOS-12410, `devhealthsource/project_catalog.go`). It commits with the
+  position because it is the same value, so a crash re-emits and a lost digest
+  is a full refresh. A change re-states every subject once: the digest is per
+  organization and cannot name the project.
 - **A lost link.** Ops deletes a lower-tier row a native link outranks, so no
   stamp finds that pull request again. `retractOutrankedLinks` clears its set
   and tier at projection, last link or not: unstated is the disclosed path,

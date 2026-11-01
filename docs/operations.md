@@ -492,6 +492,17 @@ sets of the issues linked to it by `work_graph_issue_pr` rows (CHAOS-12308),
 with the weakest contributing link tier in `property_project_membership_tier`,
 and adds `pull_requests_project_membership`, which re-emits a pull request when
 a link row of it, a linked issue or a linked issue's membership input moves.
+The refresh follows the project catalog by content, not by its stamp
+(CHAOS-12410): a project sync that changes no `(provider, id, project_key)`
+re-emits no subject, and one that does re-states every subject of the
+organization once, because the digest on the cursor cannot name the project
+that changed. `projects.last_synced` keeps its meaning, and the ownership cursor
+keeps reading it. A cursor from before this digest reads as absent, so the
+first tick after the deploy with the flag on owes one full refresh; that is
+within the rebuild of the roll step. A transition that lands more than the 15
+minutes of overlap behind the cursor is no longer re-stated by the next project
+sync. Each owed refresh logs `context fabric: membership refresh of every subject
+owed`, with its reason.
 The Info line `context fabric: pull request project membership stated` counts
 them by tier, and a pull request that lost a link and went back to unstated is
 counted by `context fabric: pull requests returned to unstated project

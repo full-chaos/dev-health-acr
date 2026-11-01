@@ -85,7 +85,7 @@ func queryPullRequestMembershipChanges(ctx context.Context, client contextpacket
 	statement := `SELECT toString(p.repo_id) AS page_repo_id, r.repo, p.number, p.last_synced, c.changed_at ` + pullRequestMembershipRefreshMarker + `
 FROM git_pull_requests AS p FINAL
 INNER JOIN repos AS r FINAL ON r.id = p.repo_id AND r.org_id = p.org_id
-INNER JOIN ` + pullRequestMembershipChangesSubquery(cursor) + ` AS c ON c.repo_id = p.repo_id AND c.pr_number = p.number
+INNER JOIN ` + pullRequestMembershipChangesSubquery(cursor, projectRefreshFrom(ctx)) + ` AS c ON c.repo_id = p.repo_id AND c.pr_number = p.number
 WHERE p.org_id = {org_id:String}` + sincePredicate(cursor, "c.changed_at", rowKey) + orderBy("c.changed_at", rowKey)
 	keys, stamps, truncated, err := pullRequestMembershipPageKeys(ctx, client, statement, rowLimitBindings(orgID, cursor, limit), limit)
 	if err != nil {
@@ -111,7 +111,7 @@ WHERE p.org_id = {org_id:String}` + sincePredicate(cursor, "c.changed_at", rowKe
 // and each linked issue's membership inputs
 // (workItemMembershipChangesSubquery). With a cursor, each arm keeps only
 // stamps at or after it.
-func pullRequestMembershipChangesSubquery(cursor cursorState) string {
+func pullRequestMembershipChangesSubquery(cursor cursorState, refreshAt time.Time) string {
 	linksSince, issuesSince := "", ""
 	if !cursor.Since.IsZero() {
 		linksSince = " AND last_synced >= " + sinceBoundSQL
@@ -131,7 +131,7 @@ func pullRequestMembershipChangesSubquery(cursor cursorState) string {
     UNION ALL
     SELECT l.repo_id AS repo_id, l.pr_number AS pr_number, m.` + strings.TrimPrefix(workItemMembershipRefreshMarker, "AS ") + ` AS stamp
     FROM work_graph_issue_pr AS l FINAL
-    INNER JOIN ` + workItemMembershipChangesSubquery(cursor) + ` AS m ON m.subject_id = l.work_item_id
+    INNER JOIN ` + workItemMembershipChangesSubquery(cursor, refreshAt) + ` AS m ON m.subject_id = l.work_item_id
     WHERE l.org_id = {org_id:String}
   )
   GROUP BY repo_id, pr_number

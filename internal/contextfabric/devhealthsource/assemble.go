@@ -34,11 +34,15 @@ import (
 // seed (ClickHouseProjectionSource's synthesized Organization entity), and an
 // optional per-batch observer (its orphaned-work-item log line).
 type sourcePlan struct {
-	client  contextpacket.ClickHouseQueryClient
-	source  string
-	version string
-	tables  []entityTable
-	now     func() time.Time
+	// followProjectCatalog (CHAOS-12410): this source's refresh selection reads
+	// the project catalog digest. catalog is this call's decision.
+	followProjectCatalog bool
+	catalog              *projectCatalog
+	client               contextpacket.ClickHouseQueryClient
+	source               string
+	version              string
+	tables               []entityTable
+	now                  func() time.Time
 	// overlongPageBound overrides maxOverlongPages when positive (tests).
 	overlongPageBound int
 
@@ -170,7 +174,18 @@ func (p sourcePlan) nextBatch(ctx context.Context, checkpoint contextfabric.Proj
 	ctx = withEndedLinkMemo(p.endedLinksBound, withStartLogger(withReadByteLimit(ctx, p.readByteLimit), p.logger))
 	yielded := false
 	p.yielded = &yielded
+	if p.followProjectCatalog {
+		catalog, err := p.projectCatalogFor(ctx, checkpoint)
+		if err != nil {
+			return contextfabric.ProjectionBatch{}, false, err
+		}
+		p.catalog = &catalog
+		ctx = withProjectRefresh(ctx, catalog.refreshAt)
+	}
 	batch, available, err := p.nextBatchPage(ctx, checkpoint)
+	if err == nil && available && p.catalog != nil {
+		batch.NextCursor = p.catalog.carried(ctx, batch.NextCursor)
+	}
 	// One line per type per pass: flushed when the pass ends (caught up) or
 	// fails, never at a mid-pass yield or a published batch.
 	if err != nil {
@@ -652,6 +667,9 @@ func (p sourcePlan) noteYield() {
 
 func (p sourcePlan) noteConsumed(orgID, cursor string) {
 	if p.recordConsumed != nil {
+		if p.catalog != nil {
+			cursor = p.catalog.carried(context.Background(), cursor)
+		}
 		p.recordConsumed(orgID, cursor)
 	}
 }
