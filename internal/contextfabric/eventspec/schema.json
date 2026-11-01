@@ -8671,6 +8671,12 @@
         "applicability": "written when the walk finished (every outcome but not_routed and read_failed)"
       },
       {
+        "key": "anchor_out_of_scope",
+        "type": "bool",
+        "presence": "conditional",
+        "applicability": "written when the walk finished (every outcome but not_routed and read_failed)"
+      },
+      {
         "key": "error",
         "type": "string",
         "presence": "conditional",
@@ -12338,6 +12344,12 @@
       },
       {
         "key": "denied",
+        "type": "int",
+        "presence": "conditional",
+        "applicability": "written when the read finished (every outcome but read_failed)"
+      },
+      {
+        "key": "project_excluded",
         "type": "int",
         "presence": "conditional",
         "applicability": "written when the read finished (every outcome but read_failed)"

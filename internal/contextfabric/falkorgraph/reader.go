@@ -754,7 +754,7 @@ func (a *Adapter) DiscoverContext(ctx context.Context, principal storage.Princip
 					Outcome: outcome, AnchorKind: subject.Kind, AnchorBasis: deploymentAnchorBasis,
 					Committed: len(request.Resolution.Committed),
 					Issues:    walk.linkSources, LinkedPullRequests: walk.linkTargets, Members: len(walk.nodes), Denied: walk.denied,
-					Truncated: walk.truncated, Err: err,
+					Truncated: walk.truncated, AnchorOutOfScope: walk.anchorOutOfScope, Err: err,
 				})
 			}
 		} else if orgStatusAnchor != nil && subject == *orgStatusAnchor {

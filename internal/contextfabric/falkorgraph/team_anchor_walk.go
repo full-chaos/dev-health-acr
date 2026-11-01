@@ -36,6 +36,9 @@ type TeamAnchorWalkDecision struct {
 	// Members, Denied and Truncated describe a read that finished, summed
 	// over the committed teams the question anchors on.
 	Members, Denied int
+	// ProjectExcluded: members a requested project narrowing left out of
+	// scope (CHAOS-12361); never counted in Denied.
+	ProjectExcluded int
 	Truncated       bool
 	// Err is the failed read.
 	Err error
@@ -45,6 +48,7 @@ type TeamAnchorWalkDecision struct {
 type teamAnchorWalkTally struct {
 	ran             bool
 	members, denied int
+	projectExcluded int
 	truncated       bool
 	// anchorDenied: a team the caller cannot see was read, so the read is
 	// denied even when it owns nothing.
@@ -55,12 +59,15 @@ func (t *teamAnchorWalkTally) add(walk treeWalk) {
 	t.ran = true
 	t.members += len(walk.nodes)
 	t.denied += walk.denied
+	// Hop exclusions and the fused link read's (review r1): disjoint, since
+	// an excluded node is never walked further.
+	t.projectExcluded += len(walk.hopProjectExcluded) + walk.projectExcluded
 	t.truncated = t.truncated || walk.truncated
 	t.anchorDenied = t.anchorDenied || walk.anchorDenied
 }
 
 func (t teamAnchorWalkTally) decision(anchorKind, memberKind contextfabric.SubjectKind, committed int, err error) TeamAnchorWalkDecision {
-	d := TeamAnchorWalkDecision{AnchorKind: anchorKind, MemberKind: memberKind, Committed: committed, Members: t.members, Denied: t.denied, Truncated: t.truncated, Err: err}
+	d := TeamAnchorWalkDecision{AnchorKind: anchorKind, MemberKind: memberKind, Committed: committed, Members: t.members, Denied: t.denied, ProjectExcluded: t.projectExcluded, Truncated: t.truncated, Err: err}
 	switch {
 	case err != nil:
 		d.Outcome = TeamAnchorWalkReadFailed
