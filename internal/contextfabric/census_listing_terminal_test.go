@@ -3,6 +3,7 @@ package contextfabric
 import (
 	"context"
 	"slices"
+	"strings"
 	"testing"
 
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
@@ -42,6 +43,32 @@ func TestACountNeverReadsAsNothingFound(t *testing.T) {
 					}
 				}
 			})
+		}
+	}
+}
+
+// flooredGraphReader is a reader whose offer floor withheld every candidate.
+type flooredGraphReader struct{ authzDroppingGraphReader }
+
+func (g flooredGraphReader) ResolveSubjects(context.Context, storage.Principal, InvestigationRequest, InterpretedQuestion, ResolvedGraphBinding, *ConfirmedExpectedKind, *ConfirmedAnchorSelection, *QuestionFrame, SubjectKind) (SubjectResolution, StructureOfferMaterial, CommitBasisSet, CommitDecisionDigestSet, error) {
+	return g.resolution, StructureOfferMaterial{SubjectFloor: OfferFloorOutcome{Refused: true}}, nil, nil, nil
+}
+
+// The floor's "no subject matching the name" is false of a counted subject too.
+func TestACountIsStatedAheadOfTheFloor(t *testing.T) {
+	t.Parallel()
+	sentence := contractsv1.ContextFabricCensusUnlistedLimitation(10)
+	engine := mustEngineForTerminalReasonTest(t, flooredGraphReader{authzDroppingGraphReader{resolution: SubjectResolution{Candidates: []SubjectCandidate{}, Committed: []SubjectRef{}, CensusLimitation: sentence}}}, &recordingTelemetry{})
+	result, err := engine.Investigate(context.Background(), storage.Principal{OrgID: "org_1", RepositoryScopes: []string{"acme/alpha"}}, validInvestigationRequest())
+	if err != nil {
+		t.Fatalf("Investigate() error = %v", err)
+	}
+	if result.Status != InvestigationNoMatch || !slices.Contains(result.Limitations, sentence) {
+		t.Fatalf("status %q limitations %q", result.Status, result.Limitations)
+	}
+	for _, limitation := range result.Limitations {
+		if strings.HasPrefix(limitation, "No subject matched") || limitation == noMatchLimitationOfferFloorEmptied {
+			t.Fatalf("limitations %q say nothing matched", result.Limitations)
 		}
 	}
 }

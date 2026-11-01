@@ -363,6 +363,26 @@ func TestALoneRefusedSatisfierSaysTheCount(t *testing.T) {
 	if turn.resolution.WorkItemLinkLimitation != contractsv1.ContextFabricWorkItemLinksUnreadLimitation {
 		t.Fatalf("work item limitation = %q", turn.resolution.WorkItemLinkLimitation)
 	}
+	// An unrestricted caller has no such sentence, so the count is stated.
+	spy = &grantCensusSpy{rows: []grantRow{{contextfabric.SubjectWorkItem, "CHAOS-70", id, grantRepoInside}}}
+	turn = runListing(t, listingWorld{principal: userprincipal.Authenticated(t, "org_1", nil), census: spy.census, question: "Why is CHAOS-70 blocked?", terms: []string{"CHAOS-70"}})
+	if want := contractsv1.ContextFabricCensusUnlistedLimitation(1); turn.resolution.CensusLimitation != want {
+		t.Fatalf("unrestricted: limitation = %q, want %q", turn.resolution.CensusLimitation, want)
+	}
+}
+
+// A caller who will not accept a clarification is not sent a prompt. The
+// candidates stay, so the receipts do.
+func TestAListingAsksNothingWhenClarificationIsNotAllowed(t *testing.T) {
+	t.Parallel()
+	spy := &grantCensusSpy{rows: listingRows(2)}
+	turn := runListing(t, listingWorld{
+		principal: restrictedCaller(t, listingScopes(2)...), census: spy.census, nodes: listingNodes(2),
+		edit: func(r *contextfabric.InvestigationRequest, _ *ResolveDeps) { r.Options.AllowClarification = false },
+	})
+	if len(turn.resolution.Candidates) != 2 || turn.resolution.ClarificationPrompt != "" {
+		t.Fatalf("candidates %v prompt %q, want 2 and no prompt", candidateIDs(turn.resolution.Candidates), turn.resolution.ClarificationPrompt)
+	}
 }
 
 // A lone satisfier beside a hypothesis the census cannot speak to is not
@@ -370,10 +390,16 @@ func TestALoneRefusedSatisfierSaysTheCount(t *testing.T) {
 func TestALoneSatisfierBesideASurvivorIsListed(t *testing.T) {
 	t.Parallel()
 	spy := &grantCensusSpy{rows: listingRows(1)}
-	survivor := candidateNode(contextfabric.SubjectRepository, "repository:noise", "noise", 0.5, []string{listingRepo(0)})
-	turn := runListing(t, listingWorld{principal: restrictedCaller(t, listingScopes(1)...), census: spy.census, nodes: listingNodes(1), pool: []CandidateNode{survivor}})
-	if len(turn.resolution.Committed) == 0 && !slices.Contains(candidateIDs(turn.resolution.Candidates), listingID(0)) {
-		t.Fatalf("candidates = %v, want the satisfier in the list", candidateIDs(turn.resolution.Candidates))
+	survivors := []CandidateNode{
+		candidateNode(contextfabric.SubjectRepository, "repository:noise", "noise", 0.8, []string{listingRepo(0)}),
+		candidateNode(contextfabric.SubjectRepository, "repository:noise-2", "noise two", 0.8, []string{listingRepo(0)}),
+	}
+	turn := runListing(t, listingWorld{principal: restrictedCaller(t, listingScopes(1)...), census: spy.census, nodes: listingNodes(1), pool: survivors})
+	if len(turn.resolution.Committed) != 0 {
+		t.Fatalf("committed = %v, want the survivor to hold the commit", turn.resolution.Committed)
+	}
+	if got := candidateIDs(turn.resolution.Candidates); len(got) < 2 || got[0] != listingID(0) {
+		t.Fatalf("candidates = %v, want the satisfier first, beside the survivor", got)
 	}
 }
 
