@@ -562,7 +562,7 @@ func TestACensusLabelKeepsARealTitle(t *testing.T) {
 func TestALabelNamesOnlyAGrantedRepository(t *testing.T) {
 	t.Parallel()
 	nodes := []CandidateNode{
-		candidateNode(contextfabric.SubjectPullRequest, listingID(0), "Title", 0.5, []string{"other/secret", listingRepo(0)}),
+		candidateNode(contextfabric.SubjectPullRequest, listingID(0), "Title", 0.5, []string{"aaa/secret", listingRepo(0)}),
 		listingNode(1),
 	}
 	spy := &grantCensusSpy{rows: listingRows(2)}
@@ -570,7 +570,7 @@ func TestALabelNamesOnlyAGrantedRepository(t *testing.T) {
 	if len(turn.resolution.Candidates) != 2 {
 		t.Fatalf("candidates = %v", candidateIDs(turn.resolution.Candidates))
 	}
-	if strings.Contains(turn.resolution.Candidates[0].Subject.Label+turn.resolution.ClarificationPrompt, "other/secret") {
+	if strings.Contains(turn.resolution.Candidates[0].Subject.Label+turn.resolution.ClarificationPrompt, "aaa/secret") {
 		t.Fatalf("label %q prompt %q name a repository outside the grant", turn.resolution.Candidates[0].Subject.Label, turn.resolution.ClarificationPrompt)
 	}
 }
