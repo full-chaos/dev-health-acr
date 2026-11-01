@@ -46,7 +46,7 @@ func RenderCompose() string {
 				fmt.Fprintf(&out, "GRANT USAGE ON SEQUENCE acr.%s TO :\"runtime_user\";\n", sequence)
 			}
 			if grant.Feature != AlwaysOn && len(grant.UpdateColumns) > 0 {
-				// A table-level REVOKE does not remove a column privilege: the feature-off branch revokes it itself.
+				// The feature-off branch revokes the column grant explicitly: the table-level REVOKE above already clears it in PostgreSQL, and the explicit form states the intent.
 				fmt.Fprintf(&out, "\\else\nREVOKE UPDATE (%s) ON TABLE acr.%s FROM :\"runtime_user\";\n", strings.Join(grant.UpdateColumns, ", "), table)
 			}
 			if grant.Feature != AlwaysOn {

@@ -76,8 +76,8 @@ func TestTheComposeBlockGatesTheColumnGrantOnThePublisher(t *testing.T) {
 	}
 }
 
-// A table-level REVOKE does not remove a column privilege, so the compose block's feature-off branch must revoke the
-// column grant itself.
+// The compose block's feature-off branch states the column REVOKE explicitly (the table-level REVOKE before the grant
+// already clears the column privilege in PostgreSQL; a real-database cell pins the outcome).
 func TestTheComposeBlockRevokesTheColumnGrantWhenThePublisherIsOff(t *testing.T) {
 	const want = "\\if :auth_projection\nGRANT UPDATE (published_at) ON TABLE acr.credential_lifecycle_outbox TO :\"runtime_user\";\n" +
 		"\\else\nREVOKE UPDATE (published_at) ON TABLE acr.credential_lifecycle_outbox FROM :\"runtime_user\";\n\\endif"
