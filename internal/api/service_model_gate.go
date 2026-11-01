@@ -58,9 +58,9 @@ const (
 // every caller (credential and web assertion alike):
 //   - the caller's own interpretation and synthesis: decided on the same rule
 //     (a saved configuration, a closed gate and the feature switch apply to it
-//     too, because acr's own phrasing still binds a model); with no
-//     configuration and no grant it is served with the deployment model
-//     withheld;
+//     too); with no configuration and no grant it is served with the
+//     deployment model withheld. The turn itself binds no service model: its
+//     offer phrasing is withheld (CHAOS-12453);
 //   - a saved configuration behind a closed byo_llm gate: refused with its own
 //     reason, whatever the flags;
 //   - saved BYO keys for other purposes only (none resolves for
