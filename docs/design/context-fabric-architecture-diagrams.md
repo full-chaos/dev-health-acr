@@ -666,6 +666,22 @@ item's stated membership decides too. Pull requests carry no membership yet
 line, `context fabric project narrowing resolution` (outcome, requested ids,
 resolved identities; never an id).
 
+**Reuse never hides an unverified project narrowing.** The resolution is not in
+the reuse key, so a stored answer made while the narrowing was proven can meet
+a request whose narrowing is not. A stored answer that does not disclose
+`project_narrowing_unverified` is then not served, and the request takes the
+fresh path:
+
+- the general recheck, when its graph read discloses an unverified narrowing
+  (reuse outcome `miss_project_narrowing_unverified`, CHAOS-12229);
+- the work-item tuple reuse, when its re-walk admitted a member only on `"*"`
+  (decision `project_narrowing_unverified`, CHAOS-12229);
+- a stored answer with no evidence references, rechecked without a graph
+  context read, when the request narrows by project and its resolution is
+  none or incomplete (the same outcome, CHAOS-12325).
+
+A stored answer that already discloses it is still reused.
+
 **A requested team narrowing on the repository walk (CHAOS-12319).**
 Repository, project and work-item nodes carry the `"*"` team list, so the node
 rule narrows none of them; `"*"` is never team evidence. Team = ownership only.
@@ -696,6 +712,7 @@ the request narrows by team: `team_narrowing` (`anchor_owned` or
 `team_floor_reason` (empty, `anchor_ownership_unknown`, `project_owner_absent`
 or `ownership_read_cut`). Counts and closed values only; no id.
 
+||||||| e5e5aa13
 **A count of a repository's owning teams.** For a question about now, a read
 that found no owner, was not cut, and found ownership projected for the org
 (the active census holds a team, or the repository's own ownership edges name
