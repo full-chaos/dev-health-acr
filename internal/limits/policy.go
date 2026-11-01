@@ -40,7 +40,7 @@ const (
 // Subject is what a request counts under: the organization, and the key of the
 // per-credential limits and the tracked set. A plain subject is CredentialID. An
 // owner, a user on one surface, sets Surface too, and CredentialID is then the
-// user (api.limitSubjectOf).
+// user's hash (api.limitSubjectOf).
 type Subject struct {
 	OrgID        string
 	CredentialID string

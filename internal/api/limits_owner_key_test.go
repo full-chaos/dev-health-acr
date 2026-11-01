@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -121,6 +122,24 @@ func TestTheLimitKeySharesAQuotaOnlyInsideOneOwner(t *testing.T) {
 				t.Fatalf("second credential: status %d, want %d", code, want)
 			}
 		})
+	}
+}
+
+// A user id is accepted in shapes limits.Subject refuses. Such a user is still
+// served and counted: the key does not depend on how the id is spelled.
+func TestAUserIDInAnyAcceptedShapeIsCounted(t *testing.T) {
+	t.Parallel()
+	for _, user := range []string{"Jane Doe", "tab\tinside", strings.Repeat("u", 300)} {
+		manager, err := limits.NewManager(limits.Options{Policies: limits.PolicySet{Context: limits.ContextPolicy{Window: time.Hour, PerOrgLimit: 1 << 20, PerCredentialLimit: 1}}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if code := limitKeyCall(t, manager, limitKeyCredential("a", storage.CredentialClientClassBrowser, user)); code != http.StatusNoContent {
+			t.Fatalf("user %.20q: status %d, want served", user, code)
+		}
+		if code := limitKeyCall(t, manager, limitKeyCredential("b", storage.CredentialClientClassBrowser, user)); code != http.StatusTooManyRequests {
+			t.Fatalf("user %.20q on a second credential: status %d, want the owner's quota", user, code)
+		}
 	}
 }
 

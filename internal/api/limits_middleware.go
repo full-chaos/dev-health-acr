@@ -2,6 +2,8 @@ package api
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"net/http"
 	"strconv"
 	"time"
@@ -20,11 +22,14 @@ type limitClaimContextKey struct{}
 // one surface: a refresh and a new Connect are new credential rows of one owner,
 // so they neither take a new tracked subject nor start a new quota. A browser
 // credential lives 10 minutes, so keying it on its id filled the organization's
-// tracked credentials and refused its new tokens. Every other principal keys on
+// tracked credentials and refused its new tokens. The user id goes in as a hash:
+// an accepted user id can hold what limits.Subject refuses (a space, or more
+// than its length), and a refused subject is a 503. Every other principal keys on
 // its subject, as the authenticator set it (a workload's binding id).
 func limitSubjectOf(principal storage.Principal) limits.Subject {
 	if owner, err := contextfabric.SubmissionOwnerOf(principal); err == nil && owner.UserID != "" {
-		return limits.Subject{OrgID: principal.OrgID, CredentialID: owner.UserID, Surface: string(owner.Surface)}
+		sum := sha256.Sum256([]byte(owner.UserID))
+		return limits.Subject{OrgID: principal.OrgID, CredentialID: hex.EncodeToString(sum[:]), Surface: string(owner.Surface)}
 	}
 	return limits.Subject{OrgID: principal.OrgID, CredentialID: principal.Subject}
 }
