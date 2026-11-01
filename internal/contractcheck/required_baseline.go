@@ -34,37 +34,52 @@ type RequiredBaselineOptions struct {
 // additionalProperties, or a baseline of true at any depth (CHAOS-12222).
 // With no tag the check passes and says so.
 //
-// Declared means declared where the requirement applies. A field the baseline
-// declared outside every branch may become required anywhere at its
-// location. A field it declared only under a then, else, dependentSchemas
-// entry or one $ref alternative of an anyOf or oneOf was sent only when that
-// branch applied, so it may become required only inside that same branch
-// (CHAOS-12331). A then or else is the same branch when its location, schema
-// position and if (compared through the if's $refs) are the same; a
-// dependentSchemas entry when its location, position and key are; a $ref
-// alternative when its group's location, keyword, schema position and
-// alternative count, its index and its $ref target are. A declaration under
-// an inline alternative counts for nothing: an inline alternative is known
-// only by its position, so a reorder could fake it. A property that some
-// subschema forbids (false) at a location is not declared there under the
-// forbid's branch or any branch inside it, whatever another part declares.
+// Declared means declared where the requirement applies. Every rule below is
+// scoped by branch paths: the then, else, dependentSchemas entries and anyOf
+// or oneOf alternatives a fact sits under, each named by its instance
+// location, keyword, the schema position of its node and its branch (the if,
+// compared through its $refs; the key; the alternative count, index and $ref
+// target). A branch path is a conjunction of conditions on the instance, so a
+// rule that held under a subset of the conditions holds wherever the current
+// path holds (CHAOS-12340).
+//
+// So a baseline declaration meets a requirement whose path holds every
+// condition of the declaration's path: one outside every branch meets any,
+// and one made only under a then, else, dependentSchemas entry or $ref
+// alternative meets only a requirement inside that branch, since the field
+// was sent only when the branch applied (CHAOS-12331). A baseline requirement
+// meets one the same way, and only when it waited on no trigger the current
+// one does not wait on. A declaration under an inline alternative counts for
+// nothing: an inline alternative is known only by its position, so a reorder
+// could fake it. A property is forbidden, so not declared, wherever every
+// condition of the forbid holds: where some subschema's schema for it refuses
+// every value (false, a not of true or {}, an allOf with such a member, an
+// anyOf or oneOf of only such members, or a $ref to one), or where a
+// subschema whose additionalProperties or unevaluatedProperties refuses every
+// value neither declares it nor matches it by a pattern (for
+// unevaluatedProperties, counting what its in-place subschemas declare).
 //
 // An anyOf or oneOf whose alternatives are all $refs pairs with the baseline
 // group at its location with the same keyword, schema position, alternative
-// count, enclosing branch and targets in order. It is covered when each
-// alternative requires every field its baseline alternative required, and
-// besides only fields that alternative declared (pairCovered). A group with
-// an inline alternative keeps the earlier rules. An uncovered group always refuses
-// (groupReport). A paired one names the fields its alternatives gained that
-// their baseline branches never declared, and each field an alternative no
-// longer requires on a line of its own. Another names the fields no
-// baseline alternative there required (with no baseline group there, the
-// fields neither required nor declared outright there). When no field is
-// newly required, the refusal names the group: its alternative counts at
-// the baseline and now, or the group alone when its alternatives require no
-// field. Naming the group closes an existing silent pass: before CHAOS-12331
-// an uncovered oneOf over fields the baseline declared outright, or one
-// whose alternatives require no field, was accepted with nothing reported.
+// count, enclosing branch (exactly) and targets in order. It is covered when
+// each alternative requires every field its baseline alternative required,
+// and besides only fields that alternative declared (pairCovered). Any other
+// coverage by a baseline group (unchanged alternatives, or an anyOf that only
+// widens) counts only a baseline group whose path conditions the current
+// group's path holds, and an alternative needing only fields the baseline
+// required counts only requirements made wherever the group applies: a group
+// under a then never applied to bodies outside it. An uncovered group always
+// refuses (groupReport). A paired one names the fields its alternatives
+// gained that their baseline branches never declared, and each field an
+// alternative no longer requires on a line of its own. Another names the
+// fields no baseline alternative there required (with no baseline group
+// there, the fields neither required nor declared outright there). When no
+// field is newly required, the refusal names the group: its alternative
+// counts at the baseline and now, or the group alone when its alternatives
+// require no field. Naming the group closes an existing silent pass: before
+// CHAOS-12331 an uncovered oneOf over fields the baseline declared outright,
+// or one whose alternatives require no field, was accepted with nothing
+// reported.
 //
 // Assumption: acr is the only producer of these bodies, and it emits only the
 // fields its schema declares. So a property name new since the baseline was
@@ -77,17 +92,22 @@ type RequiredBaselineOptions struct {
 // body breaks: a required under allOf whose sibling branch admits no object,
 // an else the baseline can no longer reach, a oneOf that gains an
 // alternative disjoint by a const, a changed oneOf whose alternatives require
-// no field, a tightening inside an inline alternative, and a tightening in a
-// branch whose then moved or whose if changed, or beside a reordered,
-// retargeted, added or removed alternative. None of these occurs in the
-// release history (prod-rev49 to prod-rev67). A false refusal is loud; widen
-// the rule only with a real schema that hits it.
+// no field, a tightening inside an inline alternative, a requirement moved
+// between two if blocks alike but at different schema positions, a paired
+// group moved into a new branch, and a tightening in a branch whose then
+// moved or whose if changed, or beside a reordered, retargeted, added or
+// removed alternative. None of these occurs in the release history
+// (prod-rev49 to prod-rev68). A false refusal is loud; widen the rule only
+// with a real schema that hits it.
 //
-// Two limits accept, by design. The check does not weigh values: a const,
+// Three limits accept, by design. The check does not weigh values: a const,
 // enum or type edit is not seen, so a $ref alternative whose discriminator
-// changed still pairs by its target. And a declaration in an enclosing
-// branch meets a requirement in a branch inside it, as a declaration outside
-// every branch meets one anywhere at its location.
+// changed still pairs by its target. A declaration in an enclosing branch
+// meets a requirement in a branch inside it, as a declaration outside every
+// branch meets one anywhere at its location. And an inline alternative is
+// known only by its position: a baseline requirement or group nested inside
+// inline alternative i still counts for whatever alternative sits at index i
+// after a reorder (CHAOS-12340 leaves this open).
 func CheckRequiredAgainstTag(options RequiredBaselineOptions) error {
 	root, err := findRoot(options.Root)
 	if err != nil {
@@ -364,11 +384,15 @@ type locationFacts struct {
 	// (noOldBodyTriggers).
 	declaredAlways map[string]map[string]bool
 	// declaredIn is the branch paths each declaration was made under, and
-	// forbidden the branch paths some subschema forbade the field (false)
-	// under. A forbid holds under its own branch and every branch inside it,
-	// so a declaration there counts for nothing (settleDeclarations).
+	// forbidden the branch paths some subschema forbade the field under (its
+	// schema refuses every value). closed holds, per location, each
+	// subschema whose additionalProperties or unevaluatedProperties refuses
+	// every value: it forbids every name it does not admit (CHAOS-12340). A
+	// forbid holds under its own branch and every branch inside it, so a
+	// declaration there counts for nothing (settleDeclarations).
 	declaredIn map[string]map[string]map[string]bool
 	forbidden  map[string]map[string]map[string]bool
+	closed     map[string][]closedForbid
 	shaped     map[string]bool    // some applicable subschema has a properties map
 	seen       map[string]bool    // some subschema other than false applies
 	groups     []alternativeGroup // anyOf and oneOf branches' own requirements
@@ -388,7 +412,8 @@ type alternativeGroup struct {
 	location     string
 	alternatives [][]string
 	// declared is each alternative's own declared fields there
-	// (directDeclared, less what an enclosing branch forbids), targets each
+	// (directDeclared, less what a forbid holding wherever the group applies
+	// forbids there), targets each
 	// alternative's $ref target ("" for an inline alternative,
 	// alternativeTarget), pointer the schema position of the node holding
 	// the group, and branch the branch path the group sits under. They pair
@@ -425,10 +450,14 @@ type requiredOccurrence struct {
 
 // A branch path names the branches a walk is under, outermost first: a then,
 // an else, a dependentSchemas entry, or one alternative of an anyOf or oneOf.
-// "" is unconditional. Each element begins with branchSep and quotes its
-// parts, so no part holds a separator: a run of a path's leading whole
-// elements is a prefix of it ending at a branchSep or at its end
-// (underBranch). The element of an inline alternative begins with
+// "" is unconditional. Each element names its condition by absolute place:
+// the instance location, the keyword, the schema position (file#pointer) of
+// the node holding the if, dependentSchemas, anyOf or oneOf, and the branch.
+// Each begins with branchSep and quotes its parts, so no part holds a
+// separator and a path splits into whole elements (branchWithin). A branch
+// path is a conjunction of conditions on the instance, so a rule that held
+// under a subset of the conditions holds wherever the current path holds
+// (CHAOS-12340). The element of an inline alternative begins with
 // inlineMark, which no quoted part starts with.
 const (
 	branchSep  = "\x1e"
@@ -554,22 +583,35 @@ func alternativeElement(location, keyword, pointer string, count, index int, tar
 	return branchSep + branchParts(location, keyword, pointer, strconv.Itoa(count), strconv.Itoa(index), target)
 }
 
-// underBranch reports whether a path lies under prefix: prefix is the path
-// or a run of its leading whole elements. "" is a prefix of every path.
-func underBranch(path, prefix string) bool {
-	return path == prefix || strings.HasPrefix(path, prefix+branchSep)
+// branchWithin reports whether every element of outer is also an element of
+// path: wherever path holds, outer holds. "" is within every path.
+func branchWithin(path, outer string) bool {
+	if outer == "" {
+		return true
+	}
+	have := map[string]bool{}
+	for _, element := range strings.Split(path, branchSep)[1:] {
+		have[element] = true
+	}
+	for _, element := range strings.Split(outer, branchSep)[1:] {
+		if !have[element] {
+			return false
+		}
+	}
+	return true
 }
 
 // declaredUnder reports whether a field was declared at a location under a
-// branch path that holds wherever path holds: path itself or a prefix of it.
+// branch path that holds wherever path holds: one whose every condition is a
+// condition of path.
 // A declaration under an inline alternative never counts: a reorder could
 // move it to another alternative unseen.
 func (f *locationFacts) declaredUnder(location, field, path string) bool {
-	for prefix := range f.declaredIn[location][field] {
-		if strings.Contains(prefix, inlineMark) {
+	for declared := range f.declaredIn[location][field] {
+		if strings.Contains(declared, inlineMark) {
 			continue
 		}
-		if underBranch(path, prefix) {
+		if branchWithin(path, declared) {
 			return true
 		}
 	}
@@ -577,7 +619,7 @@ func (f *locationFacts) declaredUnder(location, field, path string) bool {
 }
 
 func collectLocationFacts(docs schemaDocs, file string) (*locationFacts, error) {
-	facts := &locationFacts{required: map[string]map[string][]requiredOccurrence{}, declared: map[string]map[string]bool{}, declaredAlways: map[string]map[string]bool{}, declaredIn: map[string]map[string]map[string]bool{}, forbidden: map[string]map[string]map[string]bool{}, shaped: map[string]bool{}, seen: map[string]bool{}, extraKeys: map[string]bool{}, patterns: map[string][]string{}}
+	facts := &locationFacts{required: map[string]map[string][]requiredOccurrence{}, declared: map[string]map[string]bool{}, declaredAlways: map[string]map[string]bool{}, declaredIn: map[string]map[string]map[string]bool{}, forbidden: map[string]map[string]map[string]bool{}, closed: map[string][]closedForbid{}, shaped: map[string]bool{}, seen: map[string]bool{}, extraKeys: map[string]bool{}, patterns: map[string][]string{}}
 	if err := facts.walk(docs, schemaScope{file: file}, docs.byFile[file], file+"#", "", map[string]bool{}, 0, nil, notInAlternative, ""); err != nil {
 		return facts, err
 	}
@@ -586,9 +628,10 @@ func collectLocationFacts(docs schemaDocs, file string) (*locationFacts, error) 
 }
 
 // settleDeclarations drops each declaration a forbid holds over (one at the
-// same location under the declaration's branch or one enclosing it), then
+// same location whose path conditions the declaration's path holds), then
 // fills declared and declaredAlways from what is left, and drops from each
-// group's declared fields what a branch enclosing the group forbids there.
+// group's declared fields what a forbid holding wherever the group applies
+// forbids there.
 // It runs after the walk, because a forbid may sit in a part walked after
 // the declaration it cancels.
 func (f *locationFacts) settleDeclarations() {
@@ -624,10 +667,153 @@ func (f *locationFacts) settleDeclarations() {
 }
 
 // forbiddenOver reports whether some subschema forbids a field at a location
-// under the branch path path or one enclosing it.
+// under a branch path whose every condition is a condition of path: by name,
+// or as a closed subschema that does not admit it.
 func (f *locationFacts) forbiddenOver(location, field, path string) bool {
-	for prefix := range f.forbidden[location][field] {
-		if underBranch(path, prefix) {
+	for forbid := range f.forbidden[location][field] {
+		if branchWithin(path, forbid) {
+			return true
+		}
+	}
+	for _, closed := range f.closed[location] {
+		if branchWithin(path, closed.branch) && !closed.set.admits(field) {
+			return true
+		}
+	}
+	return false
+}
+
+// requiredOver reports whether the baseline required a field at a location
+// wherever a current occurrence of it applies: under a branch path whose
+// every condition is a condition of the occurrence's path, and waiting on no
+// trigger the occurrence does not wait on too (CHAOS-12340).
+func (f *locationFacts) requiredOver(location, field string, occurrence requiredOccurrence) bool {
+	for _, old := range f.required[location][field] {
+		if branchWithin(occurrence.branch, old.branch) && triggersWithin(old.triggers, occurrence.triggers) {
+			return true
+		}
+	}
+	return false
+}
+
+// triggersWithin reports whether every trigger is also one of of.
+func triggersWithin(triggers, of []trigger) bool {
+	set := make(map[trigger]bool, len(of))
+	for _, t := range of {
+		set[t] = true
+	}
+	for _, t := range triggers {
+		if !set[t] {
+			return false
+		}
+	}
+	return true
+}
+
+// closedForbid is a closed subschema met at a location under a branch path.
+type closedForbid struct {
+	branch string
+	set    closedSet
+}
+
+// closedSet is what a subschema whose additionalProperties or
+// unevaluatedProperties refuses every value admits at its location: the
+// names it declares and the names its patterns match, and for
+// unevaluatedProperties also what its in-place subschemas declare and match.
+// It forbids every other name.
+type closedSet struct {
+	names    map[string]bool
+	patterns []string
+}
+
+func (c closedSet) admits(name string) bool {
+	return c.names[name] || matchesAPattern(c.patterns, name)
+}
+
+// closedOf is the closed set a subschema imposes, if it is closed; scope is
+// the subschema's own. An unevaluatedProperties false closes nothing when an
+// in-place additionalProperties, or an inner unevaluatedProperties, admits
+// values: that subschema evaluates every name.
+func closedOf(docs schemaDocs, scope schemaScope, schema map[string]any) (closedSet, bool) {
+	set := closedSet{names: map[string]bool{}}
+	if sub, ok := schema["additionalProperties"]; ok && refusesEveryValue(docs, scope, sub, 0) {
+		set.addOwn(schema)
+		return set, true
+	}
+	if sub, ok := schema["unevaluatedProperties"]; ok && refusesEveryValue(docs, scope, sub, 0) {
+		if set.addInPlace(docs, scope, schema, map[string]bool{}, 0, true) {
+			return closedSet{}, false
+		}
+		return set, true
+	}
+	return closedSet{}, false
+}
+
+// addOwn adds the names a subschema's properties declare and the patterns of
+// its patternProperties.
+func (c *closedSet) addOwn(schema map[string]any) {
+	if properties, ok := schema["properties"].(map[string]any); ok {
+		for name := range properties {
+			c.names[name] = true
+		}
+	}
+	if patterns, ok := schema["patternProperties"].(map[string]any); ok {
+		for pattern := range patterns {
+			c.patterns = append(c.patterns, pattern)
+		}
+	}
+}
+
+// addInPlace adds what a subschema and its in-place subschemas ($ref, allOf,
+// anyOf, oneOf, if, then, else, dependentSchemas) declare and match. It
+// reports true when one of them evaluates every name: an
+// additionalProperties, or an inner unevaluatedProperties, that admits
+// values. top marks the closed subschema itself, whose scope is entered.
+func (c *closedSet) addInPlace(docs schemaDocs, scope schemaScope, node any, refs map[string]bool, depth int, top bool) bool {
+	schema, ok := node.(map[string]any)
+	if !ok || depth > maxLocationDepth {
+		return false
+	}
+	if !top {
+		scope = scope.enter(schema)
+	}
+	c.addOwn(schema)
+	if sub, ok := schema["additionalProperties"]; ok && !refusesEveryValue(docs, scope, sub, 0) {
+		return true
+	}
+	if sub, ok := schema["unevaluatedProperties"]; ok && !top && !refusesEveryValue(docs, scope, sub, 0) {
+		return true
+	}
+	if ref, ok := schema["$ref"].(string); ok {
+		if resolved, target, key, err := docs.resolve(scope, ref); err == nil && !refs[key] {
+			inner := make(map[string]bool, len(refs)+1)
+			for k := range refs {
+				inner[k] = true
+			}
+			inner[key] = true
+			if c.addInPlace(docs, target, resolved, inner, depth+1, false) {
+				return true
+			}
+		}
+	}
+	var subs []any
+	for _, key := range []string{"allOf", "anyOf", "oneOf"} {
+		if members, ok := schema[key].([]any); ok {
+			subs = append(subs, members...)
+		}
+	}
+	for _, key := range []string{"if", "then", "else"} {
+		if sub, ok := schema[key]; ok {
+			subs = append(subs, sub)
+		}
+	}
+	if dependent, ok := schema["dependentSchemas"].(map[string]any); ok {
+		for _, sub := range dependent {
+			subs = append(subs, sub)
+		}
+	}
+	for _, sub := range subs {
+		if c.addInPlace(docs, scope, sub, refs, depth+1, false) {
 			return true
 		}
 	}
@@ -706,6 +892,9 @@ func (f *locationFacts) walk(docs schemaDocs, scope schemaScope, node any, point
 	case map[string]any:
 		f.seen[location] = true
 		scope = scope.enter(schema)
+		if set, ok := closedOf(docs, scope, schema); ok {
+			f.closed[location] = append(f.closed[location], closedForbid{branch: branch, set: set})
+		}
 		if raw, ok := schema["$ref"]; ok {
 			ref, ok := raw.(string)
 			if !ok {
@@ -878,42 +1067,72 @@ func directRequired(docs schemaDocs, scope schemaScope, node any, depth int) []s
 // directDeclared is what a branch itself declares in properties at its own
 // location, through its $ref and allOf members, as directRequired reads its
 // requirements. A property that any of those parts forbids (its schema
-// refuses every value) is not declared, even where another part declares it.
+// refuses every value, or a closed part does not admit it) is not declared,
+// even where another part declares it.
 func directDeclared(docs schemaDocs, scope schemaScope, node any, depth int) []string {
-	declared, forbidden := directProperties(docs, scope, node, depth)
-	return missingFrom(declared, forbidden)
+	own := directProperties(docs, scope, node, depth)
+	var out []string
+	for _, name := range missingFrom(own.declared, own.forbidden) {
+		admitted := true
+		for _, closed := range own.closed {
+			if !closed.admits(name) {
+				admitted = false
+				break
+			}
+		}
+		if admitted {
+			out = append(out, name)
+		}
+	}
+	return out
 }
 
-// directProperties is the properties a branch's own parts declare and forbid
-// at its location, through its $ref and allOf members.
-func directProperties(docs schemaDocs, scope schemaScope, node any, depth int) (declared, forbidden []string) {
+// branchProperties is what a branch's own parts declare, forbid by name, and
+// close at its location.
+type branchProperties struct {
+	declared, forbidden []string
+	closed              []closedSet
+}
+
+// directProperties is what a branch's own parts declare and forbid at its
+// location, through its $ref and allOf members, with the closed sets those
+// parts impose.
+func directProperties(docs schemaDocs, scope schemaScope, node any, depth int) branchProperties {
+	var own branchProperties
 	schema, ok := node.(map[string]any)
 	if !ok || depth > maxLocationDepth {
-		return nil, nil
+		return own
 	}
 	scope = scope.enter(schema)
 	if properties, ok := schema["properties"].(map[string]any); ok {
 		for name, sub := range properties {
 			if refusesEveryValue(docs, scope, sub, 0) {
-				forbidden = append(forbidden, name)
+				own.forbidden = append(own.forbidden, name)
 			} else {
-				declared = append(declared, name)
+				own.declared = append(own.declared, name)
 			}
 		}
 	}
+	if set, ok := closedOf(docs, scope, schema); ok {
+		own.closed = append(own.closed, set)
+	}
+	var parts []branchProperties
 	if ref, ok := schema["$ref"].(string); ok {
 		if resolved, target, _, err := docs.resolve(scope, ref); err == nil {
-			d, f := directProperties(docs, target, resolved, depth+1)
-			declared, forbidden = append(declared, d...), append(forbidden, f...)
+			parts = append(parts, directProperties(docs, target, resolved, depth+1))
 		}
 	}
 	if members, ok := schema["allOf"].([]any); ok {
 		for _, member := range members {
-			d, f := directProperties(docs, scope, member, depth+1)
-			declared, forbidden = append(declared, d...), append(forbidden, f...)
+			parts = append(parts, directProperties(docs, scope, member, depth+1))
 		}
 	}
-	return declared, forbidden
+	for _, part := range parts {
+		own.declared = append(own.declared, part.declared...)
+		own.forbidden = append(own.forbidden, part.forbidden...)
+		own.closed = append(own.closed, part.closed...)
+	}
+	return own
 }
 
 func stringList(raw any) []string {
@@ -950,18 +1169,24 @@ type addedRequired struct {
 // values old producers could already send.
 //
 // A requirement made under a branch (a then, else, dependentSchemas entry or
-// anyOf or oneOf alternative) is met by a baseline declaration made under the
-// same branch or one enclosing it (declaredUnder); one made outside every
-// branch only by a declaration outside every branch (codex #1817 r2).
+// anyOf or oneOf alternative) is met by a baseline declaration made under a
+// path every condition of which the requirement's path holds (declaredUnder);
+// one made outside every branch only by a declaration outside every branch
+// (codex #1817 r2). A
+// baseline requirement meets it the same way, and only when it waited on no
+// trigger the current one does not wait on (requiredOver, CHAOS-12340).
 func newlyRequiredAt(baseline, current *locationFacts) []addedRequired {
 	var found []addedRequired
 	for location, fields := range current.required {
 		for field, occurrences := range fields {
-			if len(baseline.required[location][field]) > 0 || baseline.declaredAlways[location][field] {
+			if baseline.declaredAlways[location][field] {
 				continue
 			}
 			var unmet []requiredOccurrence
 			for _, occurrence := range occurrences {
+				if baseline.requiredOver(location, field, occurrence) {
+					continue
+				}
 				if !baseline.declaredUnder(location, field, occurrence.branch) {
 					unmet = append(unmet, occurrence)
 				}
@@ -1033,7 +1258,7 @@ func groupReport(baseline *locationFacts, group alternativeGroup) []addedRequire
 	atLocation := false
 	var required []string
 	for _, old := range baseline.groups {
-		if old.location != group.location {
+		if old.location != group.location || !branchWithin(group.branch, old.branch) {
 			continue
 		}
 		atLocation = true
@@ -1080,7 +1305,7 @@ func baselineCount(baseline *locationFacts, group alternativeGroup) int {
 	count := 0
 	found := false
 	for _, old := range baseline.groups {
-		if old.location != group.location || old.exclusive != group.exclusive {
+		if old.location != group.location || old.exclusive != group.exclusive || !branchWithin(group.branch, old.branch) {
 			continue
 		}
 		if old.pointer == group.pointer {
@@ -1162,9 +1387,12 @@ func pairCovered(old, group alternativeGroup) bool {
 // trigger no old body carries); when it pairs with the baseline group and
 // each alternative only gained fields its baseline alternative declared
 // (pairCovered); when one alternative needs nothing, or only fields the
-// baseline required unconditionally there; or when a baseline group at the
+// baseline required wherever the group applies (requiredForGroup); or when a
+// baseline group at the
 // same location had alternatives each at least as strict as one of the
-// current group's (adding an alternative widens).
+// current group's (adding an alternative widens). A baseline group counts
+// only when the current group's path holds every condition of its path: one
+// under a then never applied to bodies outside it (CHAOS-12340).
 func groupCovered(baseline *locationFacts, group alternativeGroup) bool {
 	if underNewProperty(baseline, group.location) || (len(group.triggers) > 0 && noOldBodyTriggers(baseline, []requiredOccurrence{{triggers: group.triggers}})) {
 		return true
@@ -1174,7 +1402,7 @@ func groupCovered(baseline *locationFacts, group alternativeGroup) bool {
 	}
 	if group.exclusive {
 		for _, old := range baseline.groups {
-			if old.exclusive && old.location == group.location && sameAlternatives(old.alternatives, group.alternatives) {
+			if old.exclusive && old.location == group.location && branchWithin(group.branch, old.branch) && sameAlternatives(old.alternatives, group.alternatives) {
 				return true
 			}
 		}
@@ -1183,7 +1411,7 @@ func groupCovered(baseline *locationFacts, group alternativeGroup) bool {
 	for _, alternative := range group.alternatives {
 		met := true
 		for _, field := range alternative {
-			if !requiredUnconditionally(baseline, group.location, field) {
+			if !requiredForGroup(baseline, group, field) {
 				met = false
 				break
 			}
@@ -1193,7 +1421,7 @@ func groupCovered(baseline *locationFacts, group alternativeGroup) bool {
 		}
 	}
 	for _, old := range baseline.groups {
-		if old.location != group.location {
+		if old.location != group.location || !branchWithin(group.branch, old.branch) {
 			continue
 		}
 		if old.exclusive {
@@ -1246,26 +1474,74 @@ func admitsObject(schema map[string]any) bool {
 	return true
 }
 
-// refusesEveryValue reports whether a schema is false, directly or through
-// its $ref.
+// refusesEveryValue reports whether no value can meet a schema: false; a not
+// of a schema that accepts every value (true or {}); an allOf one of whose
+// members refuses every value; an anyOf or oneOf all of whose members do;
+// or a $ref to such a schema (CHAOS-12340).
 func refusesEveryValue(docs schemaDocs, scope schemaScope, node any, depth int) bool {
+	if depth > maxLocationDepth {
+		return false
+	}
 	switch schema := node.(type) {
 	case bool:
 		return !schema
 	case map[string]any:
-		ref, ok := schema["$ref"].(string)
-		if !ok || depth > maxLocationDepth {
-			return false
+		scope = scope.enter(schema)
+		if acceptsEveryValue(schema["not"]) {
+			return true
 		}
-		resolved, target, _, err := docs.resolve(scope.enter(schema), ref)
-		return err == nil && refusesEveryValue(docs, target, resolved, depth+1)
+		if members, ok := schema["allOf"].([]any); ok {
+			for _, member := range members {
+				if refusesEveryValue(docs, scope, member, depth+1) {
+					return true
+				}
+			}
+		}
+		for _, key := range []string{"anyOf", "oneOf"} {
+			members, ok := schema[key].([]any)
+			if !ok || len(members) == 0 {
+				continue
+			}
+			every := true
+			for _, member := range members {
+				if !refusesEveryValue(docs, scope, member, depth+1) {
+					every = false
+					break
+				}
+			}
+			if every {
+				return true
+			}
+		}
+		if ref, ok := schema["$ref"].(string); ok {
+			resolved, target, _, err := docs.resolve(scope, ref)
+			if err == nil && refusesEveryValue(docs, target, resolved, depth+1) {
+				return true
+			}
+		}
 	}
 	return false
 }
 
-func requiredUnconditionally(baseline *locationFacts, location, field string) bool {
-	for _, occurrence := range baseline.required[location][field] {
-		if len(occurrence.triggers) == 0 {
+// acceptsEveryValue reports whether a schema is true or {}.
+func acceptsEveryValue(node any) bool {
+	switch schema := node.(type) {
+	case bool:
+		return schema
+	case map[string]any:
+		return len(schema) == 0
+	}
+	return false
+}
+
+// requiredForGroup reports whether the baseline required a field at a
+// group's location of every body the group applies to: under branches all
+// of which the group's path holds, waiting on no trigger the group does not
+// wait on. For a group outside every branch that means unconditionally: no
+// trigger, no branch (CHAOS-12340).
+func requiredForGroup(baseline *locationFacts, group alternativeGroup, field string) bool {
+	for _, occurrence := range baseline.required[group.location][field] {
+		if branchWithin(group.branch, occurrence.branch) && triggersWithin(occurrence.triggers, group.triggers) {
 			return true
 		}
 	}
