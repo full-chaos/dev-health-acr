@@ -88,7 +88,7 @@ v="$(new_vendored v-example-added)"; printf '{}\n' > "$v/$examples_rel/valid-ext
 assert_vendored_fails 'vendored example added' "$v"
 v="$(new_vendored v-example-removed)"; rm "$v/$examples_rel/valid-issued.json"
 assert_vendored_fails 'vendored example removed' "$v"
-v="$(new_vendored v-examples-dir-missing)"; rm -r "$v/$examples_rel"
+v="$(new_vendored v-examples-dir-missing)"; rm -r "${v:?}/$examples_rel"
 assert_vendored_fails 'vendored examples directory missing' "$v"
 
 printf 'OK: vendored ops contract check\n'

@@ -618,12 +618,40 @@ check_ops_contract_sparse_list_carries_referenced_schemas() {
   done
 }
 
+# workflow_step_block prints the lines of the one step named $3 in job $2 of
+# workflow $1 (the step's "- name:" line and everything up to the next step).
+workflow_step_block() {
+  awk -v job="$2" -v name="      - name: $3" '
+    /^  [A-Za-z0-9_-]+:[[:space:]]*$/ { current = $1; sub(/:$/, "", current); grab = 0; next }
+    /^      - / { grab = (current == job && $0 == name) }
+    grab { print }
+  ' "$1"
+}
+
+# check_named_step requires exactly one step $3 in job $2 whose only keys are
+# its name and a run line equal to $4, so nothing can append a status
+# swallower, a condition, a wrapper or a continue-on-error to it.
+check_named_step() {
+  local file="$1" job="$2" name="$3" run="$4" block heads other
+  block="$(workflow_step_block "$file" "$job" "$name")"
+  heads="$(grep -c '^      - ' <<<"$block" || true)"
+  if [ "$heads" != 1 ]; then
+    printf 'job %s has %s steps named "%s" in %s, want exactly one\n' "$job" "$heads" "$name" "$file" >&2
+    return 1
+  fi
+  other="$(grep -vE '^[[:space:]]*(#.*)?$' <<<"$block" | tail -n +2 | grep -vxF "        run: $run" || true)"
+  if [ -n "$other" ] || ! grep -qxF "        run: $run" <<<"$block"; then
+    printf 'step "%s" must be exactly "run: %s" with no other key or command (found: %s)\n' "$name" "$run" "$other" >&2
+    return 1
+  fi
+}
+
 # The vendored copy of the ops-owned acr credential lifecycle event contract
 # is only a pin check if the sparse list delivers the pinned files and a step
 # diffs them against the vendored tree; a deleted step or path leaves the copy
 # unchecked with every job green.
 check_vendored_lifecycle_contract_wiring() {
-  local file="$1" block step
+  local file="$1" block
   block="$(awk '
     /path: \.ops-contract/ { grab=1 }
     grab && /sparse-checkout: \|/ { inlist=1; next }
@@ -637,23 +665,8 @@ check_vendored_lifecycle_contract_wiring() {
       return 1
     fi
   done
-  step="$(awk '
-    /Verify the vendored lifecycle contract against the pinned ops contract/ { grab=1 }
-    grab && /^      - / && !/Verify the vendored lifecycle contract/ { grab=0 }
-    grab { print }
-  ' "$file")"
-  if ! grep -qF 'scripts/ci/check-vendored-ops-contract.sh' <<<"$step" || ! grep -qF '.ops-contract' <<<"$step"; then
-    printf 'no step runs check-vendored-ops-contract.sh against .ops-contract in %s\n' "$file" >&2
-    return 1
-  fi
-  if grep -qE 'continue-on-error|\|\| true' <<<"$step"; then
-    printf 'the vendored lifecycle contract step swallows its own failure\n' >&2
-    return 1
-  fi
-  if ! grep -qF 'scripts/ci/test-vendored-ops-contract.sh' "$file"; then
-    printf 'no step runs test-vendored-ops-contract.sh in %s\n' "$file" >&2
-    return 1
-  fi
+  check_named_step "$file" contracts 'Verify the vendored lifecycle contract against the pinned ops contract' 'scripts/ci/check-vendored-ops-contract.sh .ops-contract' || return 1
+  check_named_step "$file" scripts 'Verify the vendored ops contract check' 'scripts/ci/test-vendored-ops-contract.sh' || return 1
 }
 
 # A pin that accepts a branch name is not a pin: the sparse checkout would
