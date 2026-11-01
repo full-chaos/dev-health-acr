@@ -461,9 +461,12 @@ func TestARestrictedCallerWithANarrowingTheCensusCannotApplyGetsNoCensus(t *test
 			r.RequestedScope.RepositorySlugs = []string{grantRepoInside}
 			r.RequestedScope.ProjectIDs = []string{"project_1"}
 		},
-		"repository and team": func(r *contextfabric.InvestigationRequest, _ *ResolveDeps) {
+		"repository and team": func(r *contextfabric.InvestigationRequest, d *ResolveDeps) {
 			r.RequestedScope.RepositorySlugs = []string{grantRepoInside}
 			r.RequestedScope.TeamIDs = []string{"team_1"}
+			d.TeamNarrowing = func(context.Context, []contextfabric.SubjectRef, bool) (TeamNarrowingDecision, error) {
+				return TeamNarrowingDecision{}, nil
+			}
 		},
 		"team with no team narrowing wired": func(r *contextfabric.InvestigationRequest, _ *ResolveDeps) {
 			r.RequestedScope.TeamIDs = []string{"team_1"}
