@@ -418,3 +418,64 @@ func TestLiveAnAmbiguousNativeLinkRetractsThePullRequestsLowerTierLinksAndNoIssu
 		}
 	})
 }
+
+// The link read takes a work item through one row per id, so its window columns
+// come through any(). A link of an id on one row keeps the window its issue
+// states: its start when the issue is the later end, no end while it is open,
+// and the completed or closed time, completed first, once it ended.
+func TestLiveAOneRowLinkKeepsItsIssuesWindow(t *testing.T) {
+	ctx := context.Background()
+	query, direct := newDevHealthClickHouseIntegrationClient(t, ctx)
+	applyProductionSchema(t, ctx, direct, "")
+	const org, repo = "org-12409-window", "77777777-7777-7777-7777-777777777777"
+	created := time.Date(2026, 10, 1, 9, 0, 0, 0, time.UTC)
+	completed, closed := created.Add(48*time.Hour), created.Add(72*time.Hour)
+	at := created.Add(240 * time.Hour)
+	mustExec(t, ctx, direct, `INSERT INTO repos (id, org_id, repo, provider, last_synced) VALUES (?, ?, 'acme/local', 'github', ?)`, repo, org, at)
+	for number, row := range []struct {
+		id                string
+		completed, closed *time.Time
+	}{
+		{id: "OPEN"},
+		{id: "CLOSED", closed: &closed},
+		{id: "COMPLETED", completed: &completed},
+		{id: "BOTH", completed: &completed, closed: &closed},
+	} {
+		mustExec(t, ctx, direct, `INSERT INTO work_items (work_item_id, repo_id, org_id, title, status, type, url, parent_id, provider, project_id, updated_at, created_at, completed_at, closed_at, last_synced) VALUES (?, ?, ?, 'Item', 'open', 'issue', '', '', 'linear', '', ?, ?, ?, ?, ?)`,
+			row.id, repo, org, at, created, row.completed, row.closed, at)
+		mustExec(t, ctx, direct, `INSERT INTO git_pull_requests (repo_id, org_id, number, title, state, created_at, last_synced) VALUES (?, ?, ?, 'PR', 'open', ?, ?)`, repo, org, uint32(number+1), created.Add(-24*time.Hour), at)
+		mustExec(t, ctx, direct, `INSERT INTO work_graph_issue_pr (repo_id, work_item_id, pr_number, confidence, provenance, evidence, last_synced, org_id) VALUES (toUUID(?), ?, ?, 0.9, 'native', '', ?, ?)`, repo, row.id, uint32(number+1), at, org)
+	}
+	source, err := devhealthsource.NewClickHouseProjectionSource(query)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ends := map[string]string{}
+	cursor := ""
+	for page := 0; page < 40; page++ {
+		batch, available, err := source.NextProjectionBatch(ctx, contextfabric.ProjectionCheckpoint{OrgID: org, Source: devhealthsource.SourceName, Cursor: cursor})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !available {
+			break
+		}
+		for _, relationship := range batch.Relationships {
+			if relationship.Type != contractsv1.ContextFabricRelationshipLinksPullRequest {
+				continue
+			}
+			if relationship.ValidFrom == nil || !relationship.ValidFrom.Equal(created) {
+				t.Errorf("%s starts at %v, want %v", relationship.From.Label, relationship.ValidFrom, created)
+			}
+			ends[relationship.From.Label] = "open"
+			if relationship.ValidTo != nil {
+				ends[relationship.From.Label] = relationship.ValidTo.UTC().Format(time.RFC3339)
+			}
+		}
+		cursor = batch.NextCursor
+	}
+	want := map[string]string{"OPEN": "open", "CLOSED": closed.Format(time.RFC3339), "COMPLETED": completed.Format(time.RFC3339), "BOTH": completed.Format(time.RFC3339)}
+	if fmt.Sprint(ends) != fmt.Sprint(want) {
+		t.Fatalf("edge ends = %v, want %v", ends, want)
+	}
+}
