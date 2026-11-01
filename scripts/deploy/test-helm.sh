@@ -987,9 +987,12 @@ run_lease_value() {
 }
 [[ "$(run_lease_value <"$rendered")" == '"false"' ]] || fail_gate "run-lease: acr-api does not declare the flag off by default"
 run_lease_on=(--set contextFabric.runLeaseEnabled=true --set-string 'deployment.extraEnv[0].name=ACR_CONTEXT_FABRIC_EVENT_STREAM_ENABLED')
-[[ "$(render "${run_lease_on[@]}" --set-string 'deployment.extraEnv[0].value=true' | run_lease_value)" == '"true"' ]] || fail_gate "run-lease: contextFabric.runLeaseEnabled=true did not reach acr-api"
+for stream_on in true TRUE True t T 1; do
+  [[ "$(render "${run_lease_on[@]}" --set-string "deployment.extraEnv[0].value=${stream_on}" | run_lease_value)" == '"true"' ]] || fail_gate "run-lease: contextFabric.runLeaseEnabled=true with the event stream ${stream_on} did not reach acr-api"
+done
 for run_lease_refused in "--set contextFabric.runLeaseEnabled=true" "${run_lease_on[*]} --set-string deployment.extraEnv[0].value=false" \
-  "--set contextFabric.runLeaseEnabled=true --set-string deployment.extraEnv[0].name=ACR_OTHER_FLAG --set-string deployment.extraEnv[0].value=true"; do
+  "--set contextFabric.runLeaseEnabled=true --set-string deployment.extraEnv[0].name=ACR_OTHER_FLAG --set-string deployment.extraEnv[0].value=true" \
+  "${run_lease_on[*]} --set-string deployment.extraEnv[0].value=true --set-string deployment.extraEnv[1].name=ACR_CONTEXT_FABRIC_EVENT_STREAM_ENABLED --set-string deployment.extraEnv[1].value=false"; do
   set +e
   # shellcheck disable=SC2086  # each case is a list of helm flags
   run_lease_out="$(render $run_lease_refused 2>&1)"; run_lease_status=$?
