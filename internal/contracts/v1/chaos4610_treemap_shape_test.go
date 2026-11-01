@@ -23,9 +23,17 @@ func themeShareResult(shares ...float64) ContextFabricInvestigationResult {
 		}})
 	}
 	return ContextFabricInvestigationResult{ClaimedFacts: []ContextFabricClaimedFact{{
-		ClaimID: themeShareClaim, Kind: "investment", Field: "theme_feature_delivery", Rows: rows,
+		ClaimID: themeShareClaim, Kind: "investment", Field: "theme_feature_delivery", Rows: rows, Table: themeShareTable(),
 		Subject: ContextFabricSubjectRef{Kind: ContextFabricSubjectRepository, CanonicalID: "repo:acme/widgets", Label: "acme/widgets"},
 	}}}
+}
+
+// themeShareTable is the declaration the real producer serves.
+func themeShareTable() *ContextFabricClaimedFactTable {
+	return &ContextFabricClaimedFactTable{
+		Field: "theme_breakdown", Shape: ContextFabricFactTableShapeBreakdown, Key: []string{"theme"},
+		Measures: []string{"share", "weighted_effort"}, Observations: []string{"source", "attribution"},
+	}
 }
 
 func themeShareShape(shares ...float64) ContextFabricRenderShape {
@@ -115,6 +123,31 @@ func renderPointField(shape *ContextFabricRenderShape, field string) {
 	}
 }
 
+// A treemap plots the declared table and no other rows of the claim. A claim can
+// carry a time series beside it, and its rows then resolve to the series.
+func TestATreemapPlotsOnlyTheDeclaredShareTable(t *testing.T) {
+	t.Parallel()
+	shares := []float64{0.5, 0.5}
+	for name, plant := range map[string]func(*ContextFabricClaimedFact){
+		"no declared table":  func(fact *ContextFabricClaimedFact) { fact.Table = nil },
+		"another table":      func(fact *ContextFabricClaimedFact) { fact.Table.Field = "daily_investment" },
+		"not a breakdown":    func(fact *ContextFabricClaimedFact) { fact.Table.Shape = ContextFabricFactTableShapeTimeSeries },
+		"share not measured": func(fact *ContextFabricClaimedFact) { fact.Table.Measures = []string{"weighted_effort"} },
+		"a series in front": func(fact *ContextFabricClaimedFact) {
+			fact.TimeSeriesRows = fact.Rows
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			result := themeShareResult(shares...)
+			plant(&result.ClaimedFacts[0])
+			if err := validateThemeShare(themeShareShape(shares...), result); err == nil || !strings.Contains(err.Error(), "declared") {
+				t.Fatalf("got %v", err)
+			}
+		})
+	}
+}
+
 // The row decides the word. A row with no theme, or with a token outside the
 // closed set, has no word to plot under.
 func TestATreemapRowNeedsACanonicalTheme(t *testing.T) {
@@ -147,7 +180,7 @@ func TestATreemapResolvesOnTheProjectionPath(t *testing.T) {
 	t.Parallel()
 	shares := []float64{0.5, 0.25, 0.25, 0, 0}
 	result := themeShareResult(shares...)
-	projection := ContextFabricAnswerProjection{KeyFacts: []ContextFabricProjectedFact{{ClaimID: themeShareClaim, Rows: result.ClaimedFacts[0].Rows}}}
+	projection := ContextFabricAnswerProjection{KeyFacts: []ContextFabricProjectedFact{{ClaimID: themeShareClaim, Rows: result.ClaimedFacts[0].Rows, Table: themeShareTable()}}}
 	if err := validateRenderShapes([]ContextFabricRenderShape{themeShareShape(shares...)}, renderShapeSourcesFromProjection(projection)); err != nil {
 		t.Fatal(err)
 	}

@@ -26,6 +26,28 @@ type renderShapeSources struct {
 	driverWeight map[string]map[string]float64
 	// factRows maps a claim id to that claim's row table.
 	factRows map[string][]ContextFabricClaimedFactRow
+	// themeShareClaims names the claims whose factRows are their declared
+	// theme_breakdown table. A claim can carry a time series beside that table
+	// and factRows then holds the series, so rows alone do not say which table
+	// a treemap would plot.
+	themeShareClaims map[string]struct{}
+}
+
+// holdsThemeShareTable reports that a claim's renderable rows are a declared
+// breakdown table of the theme share field, with share among its measures.
+func holdsThemeShareTable(table *ContextFabricClaimedFactTable, timeSeriesRows []ContextFabricClaimedFactRow) bool {
+	if table == nil || len(timeSeriesRows) > 0 {
+		return false
+	}
+	if table.Field != ContextFabricRenderThemeTableField || table.Shape != ContextFabricFactTableShapeBreakdown {
+		return false
+	}
+	for _, measure := range table.Measures {
+		if measure == ContextFabricRenderThemeShareField {
+			return true
+		}
+	}
+	return false
 }
 
 // validateRenderPointSourceShape checks an address is WELL FORMED before
@@ -214,11 +236,11 @@ func validateRenderShapes(shapes []ContextFabricRenderShape, sources renderShape
 
 // validateTreemapShape holds a treemap to what a part of a whole means
 // (CHAOS-4610). Every point has already resolved to its source. What is left is
-// that the points are ALL the parts of ONE whole: one claim, every row once, the
-// same measure, each labelled with the served word of its own row's theme, and a
-// real split. A row left out makes the chart a different claim, a label that is
-// not its row's theme puts a share on the wrong name, and one part above 0 is no
-// split: a chart of it says nothing the sentence does not.
+// that the points are ALL the parts of ONE whole: one claim's declared table,
+// every row once, the same measure, each labelled with the served word of its own
+// row's theme, and a real split. A row left out makes the chart a different claim,
+// a label that is not its row's theme puts a share on the wrong name, and one part
+// above 0 is no split: a chart of it says nothing the sentence does not.
 //
 // The rule and the kind name each other. A treemap has no other rule, so a
 // consumer that reads the kind can rely on these clauses.
@@ -240,6 +262,9 @@ func validateTreemapShape(shape ContextFabricRenderShape, sources renderShapeSou
 	}
 	points := shape.Series[0].Points
 	claim := points[0].Source.ClaimID
+	if _, declared := sources.themeShareClaims[claim]; !declared {
+		return fmt.Errorf("render shape %q: a treemap plots a declared %q table", shape.ShapeID, ContextFabricRenderThemeTableField)
+	}
 	table := sources.factRows[claim]
 	if len(points) != len(table) {
 		return fmt.Errorf("render shape %q: a treemap plots every row of its table, and has %d of %d", shape.ShapeID, len(points), len(table))
@@ -388,6 +413,8 @@ func renderShapeSourcesFromResult(result ContextFabricInvestigationResult) rende
 		memberScore:  map[string]*float64{},
 		driverWeight: map[string]map[string]float64{},
 		factRows:     map[string][]ContextFabricClaimedFactRow{},
+
+		themeShareClaims: map[string]struct{}{},
 	}
 	if result.Cohort != nil {
 		for _, member := range result.Cohort.Members {
@@ -401,6 +428,9 @@ func renderShapeSourcesFromResult(result ContextFabricInvestigationResult) rende
 	}
 	for _, fact := range result.ClaimedFacts {
 		sources.factRows[fact.ClaimID] = fact.renderableRows()
+		if holdsThemeShareTable(fact.Table, fact.TimeSeriesRows) {
+			sources.themeShareClaims[fact.ClaimID] = struct{}{}
+		}
 	}
 	return sources
 }
@@ -416,6 +446,8 @@ func renderShapeSourcesFromProjection(projection ContextFabricAnswerProjection) 
 		memberScore:  map[string]*float64{},
 		driverWeight: map[string]map[string]float64{},
 		factRows:     map[string][]ContextFabricClaimedFactRow{},
+
+		themeShareClaims: map[string]struct{}{},
 	}
 	if projection.Cohort != nil {
 		for _, member := range projection.Cohort.Members {
@@ -452,6 +484,9 @@ func renderShapeSourcesFromProjection(projection ContextFabricAnswerProjection) 
 	}
 	for _, fact := range projection.KeyFacts {
 		sources.factRows[fact.ClaimID] = fact.renderableRows()
+		if holdsThemeShareTable(fact.Table, fact.TimeSeriesRows) {
+			sources.themeShareClaims[fact.ClaimID] = struct{}{}
+		}
 	}
 	return sources
 }

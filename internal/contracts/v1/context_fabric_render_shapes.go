@@ -176,10 +176,12 @@ const (
 	ContextFabricRenderRuleInvestmentThemeShare ContextFabricRenderShapeRule = "investment_theme_share"
 )
 
-// ContextFabricRenderThemeShareField is the row field an
-// investment_theme_share point cites, and ContextFabricRenderThemeField is the
-// row field its label comes from.
+// ContextFabricRenderThemeTableField is the claimed fact table an
+// investment_theme_share shape plots, ContextFabricRenderThemeShareField is the
+// row field its points cite, and ContextFabricRenderThemeField is the row field
+// its labels come from.
 const (
+	ContextFabricRenderThemeTableField = "theme_breakdown"
 	ContextFabricRenderThemeShareField = "share"
 	ContextFabricRenderThemeField      = "theme"
 )
