@@ -91,6 +91,8 @@ func validDetailForCode(code ContextFabricCoverageDetailCode) ContextFabricCover
 		d.Source, d.Degrading, d.FactKind, d.Declared, d.Served = "context-fabric:synthesis", false, ContextFabricFactWork, intPtr(200), intPtr(90)
 	case ContextFabricCoverageDetailFactScoreWithheld:
 		d.Source, d.FactKind = "context-fabric:synthesis", ContextFabricFactHealth
+	case ContextFabricCoverageDetailProjectScopeWithheld:
+		d.Source, d.Degrading, d.FactKind, d.SourceState, d.Raw = "canonical_fact:health", true, ContextFabricFactHealth, ContextFabricSourceUnauthorized, "health: withheld"
 	case ContextFabricCoverageDetailSynthesisModelFailed:
 		d.Source, d.FailureClass, d.RetryHint = "context-fabric:synthesis", ContextFabricSynthesisFailureRejected, ContextFabricRetryUnlikelyToHelp
 	case ContextFabricCoverageDetailSynthesisNotRun:

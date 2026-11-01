@@ -364,6 +364,16 @@ const (
 	// because it serves no drivers table beside them (decision K7: never a
 	// bare score). One detail per fact kind. A disclosure, never a degradation.
 	ContextFabricCoverageDetailFactScoreWithheld ContextFabricCoverageDetailCode = "fact_score_withheld"
+	// ContextFabricCoverageDetailProjectScopeWithheld: a project-only caller
+	// (CHAOS-12330) was refused this: nothing was read and nothing is
+	// implied about what exists. It always degrades and its state is always
+	// unauthorized, so a refusal never reads as an empty read, as zero or as
+	// a complete answer. Exactly one of FactKind and Kind says what was
+	// refused, and that pair fixes the reason: the Label is composed from it
+	// (ContextFabricProjectScopeWithheldFactLabel) and no token or model text
+	// carries it. A Kind detail states the grant class, never that a subject
+	// of that kind exists.
+	ContextFabricCoverageDetailProjectScopeWithheld ContextFabricCoverageDetailCode = "project_scope_withheld"
 )
 
 // contextFabricCoverageDetailCodes is the closed vocabulary in published
@@ -399,6 +409,7 @@ var contextFabricCoverageDetailCodes = [...]ContextFabricCoverageDetailCode{
 	ContextFabricCoverageDetailSynthesisModelFailed,
 	ContextFabricCoverageDetailSynthesisNotRun,
 	ContextFabricCoverageDetailFactScoreWithheld,
+	ContextFabricCoverageDetailProjectScopeWithheld,
 }
 
 // ContextFabricCoverageDetailCodeCount is the vocabulary size as a
@@ -639,6 +650,9 @@ type coverageDetailFieldRule struct {
 	// requireFailure: FailureClass and RetryHint are required TOGETHER; only
 	// ContextFabricCoverageDetailSynthesisModelFailed uses either.
 	requireFailure bool
+	// requireWithheld: exactly one of FactKind and Kind, state unauthorized,
+	// degrading. Only ContextFabricCoverageDetailProjectScopeWithheld sets it.
+	requireWithheld bool
 }
 
 var coverageDetailFieldRules = map[ContextFabricCoverageDetailCode]coverageDetailFieldRule{
@@ -730,6 +744,11 @@ var coverageDetailFieldRules = map[ContextFabricCoverageDetailCode]coverageDetai
 	ContextFabricCoverageDetailSynthesisNotRun: {requireFailure: true},
 	// The fact kind alone: its scores were withheld.
 	ContextFabricCoverageDetailFactScoreWithheld: {requireFactKind: true, allowFactKind: true},
+	// What was refused, the state and nothing else: no count (nothing was
+	// counted, and a number would say something exists).
+	ContextFabricCoverageDetailProjectScopeWithheld: {
+		allowFactKind: true, allowSourceState: true, requireWithheld: true,
+	},
 	// Kind, state and origin, all three REQUIRED, and nothing else: the row
 	// says "this kind, read for this population, came back in this state".
 	// No count (the row is per read, not per subject), no scope fields (the
@@ -973,8 +992,19 @@ func (d ContextFabricCoverageDetail) Validate() error {
 	if rule.requireKind && d.Kind == "" {
 		return fmt.Errorf("coverage detail code %q requires kind", d.Code)
 	}
-	if !rule.requireKind && d.Kind != "" {
+	if !rule.requireKind && !rule.requireWithheld && d.Kind != "" {
 		return fmt.Errorf("coverage detail code %q forbids kind", d.Code)
+	}
+	if rule.requireWithheld {
+		if (d.FactKind == "") == (d.Kind == "") {
+			return fmt.Errorf("coverage detail code %q requires exactly one of fact_kind and kind", d.Code)
+		}
+		if d.SourceState != ContextFabricSourceUnauthorized {
+			return fmt.Errorf("coverage detail code %q requires source_state unauthorized", d.Code)
+		}
+		if !d.Degrading {
+			return fmt.Errorf("coverage detail code %q must degrade", d.Code)
+		}
 	}
 	if rule.requireDeclaredServed && (d.Declared == nil || d.Served == nil) {
 		return fmt.Errorf("coverage detail code %q requires declared and served together", d.Code)

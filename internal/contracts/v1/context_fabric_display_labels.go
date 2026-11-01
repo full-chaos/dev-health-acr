@@ -136,6 +136,89 @@ func ContextFabricFactKindLabel(kind ContextFabricFactKind) string {
 	return humanizeVocabularyToken(string(kind))
 }
 
+// The reasons a fact kind is withheld from a project-only caller
+// (CHAOS-12330). Each is a template over the kind's label: the one place the
+// sentence is written.
+const (
+	projectScopeWithheldTeamRollup   = "%s facts are built from owning teams, which a project grant does not cover"
+	projectScopeWithheldMixedPlacing = "%s facts are placed by repository or span the organization, which a project grant does not cover"
+	projectScopeWithheldOrganization = "%s facts are organization-wide figures, which a project grant does not cover"
+	projectScopeWithheldPullRequests = "%s facts need pull requests, which are not in a project grant yet"
+	projectScopeWithheldMembership   = "%s facts need exact project membership, which is not proven yet"
+	projectScopeWithheldRepositories = "%s facts belong to repositories, which a project grant does not cover"
+)
+
+// contextFabricProjectScopeWithheldFactReasons names why each fact kind is
+// withheld from a project-only caller. A kind served to that caller one day
+// loses its row here and its branch in the registry together.
+var contextFabricProjectScopeWithheldFactReasons = map[ContextFabricFactKind]string{
+	ContextFabricFactHealth:                  projectScopeWithheldTeamRollup,
+	ContextFabricFactFlow:                    projectScopeWithheldTeamRollup,
+	ContextFabricFactLandscape:               projectScopeWithheldTeamRollup,
+	ContextFabricFactMetrics:                 projectScopeWithheldTeamRollup,
+	ContextFabricFactReadiness:               projectScopeWithheldTeamRollup,
+	ContextFabricFactWorkload:                projectScopeWithheldTeamRollup,
+	ContextFabricFactOperationalDeficiencies: projectScopeWithheldTeamRollup,
+	ContextFabricFactInvestment:              projectScopeWithheldMixedPlacing,
+	ContextFabricFactSourceHealth:            projectScopeWithheldOrganization,
+	ContextFabricFactPullRequests:            projectScopeWithheldPullRequests,
+	ContextFabricFactReviews:                 projectScopeWithheldPullRequests,
+	ContextFabricFactIdentity:                projectScopeWithheldMembership,
+	ContextFabricFactStatus:                  projectScopeWithheldMembership,
+	ContextFabricFactWork:                    projectScopeWithheldMembership,
+	ContextFabricFactActualCompletion:        projectScopeWithheldMembership,
+	ContextFabricFactBlockers:                projectScopeWithheldMembership,
+	ContextFabricFactRequiredChildren:        projectScopeWithheldMembership,
+	ContextFabricFactCommitment:              projectScopeWithheldMembership,
+	ContextFabricFactMembership:              projectScopeWithheldRepositories,
+	ContextFabricFactContinuousIntegration:   projectScopeWithheldRepositories,
+	ContextFabricFactDeployments:             projectScopeWithheldRepositories,
+	ContextFabricFactIncidents:               projectScopeWithheldRepositories,
+	ContextFabricFactSecurityAlerts:          projectScopeWithheldRepositories,
+	ContextFabricFactFileHotspots:            projectScopeWithheldRepositories,
+	ContextFabricFactEvidence:                projectScopeWithheldRepositories,
+}
+
+// ContextFabricRequestedProjectNarrowingUnavailableLimitation is the sentence
+// of a project-only request that names projects: the engine stops before any
+// read, and no answer is written over the whole grant (CHAOS-12324 narrows).
+const ContextFabricRequestedProjectNarrowingUnavailableLimitation = "Requested project narrowing not available yet"
+
+// ContextFabricProjectScopeWithheldLimitation is the sentence of an answer a
+// project grant could only partly cover: the details beside it say what was
+// left out and why.
+const ContextFabricProjectScopeWithheldLimitation = "A project grant does not cover part of what was asked, so this answer leaves it out"
+
+// ContextFabricProjectScopeWithheldFactLabel is the label, and the reason, of
+// a fact kind withheld from a project-only caller. A kind with no row reads
+// the sentence that assumes least.
+func ContextFabricProjectScopeWithheldFactLabel(kind ContextFabricFactKind) string {
+	reason, ok := contextFabricProjectScopeWithheldFactReasons[kind]
+	if !ok {
+		reason = projectScopeWithheldRepositories
+	}
+	return fmt.Sprintf(reason, kindClause(ContextFabricFactKindLabel(kind)))
+}
+
+// ContextFabricProjectScopeWithheldKindLabel is the label of a subject kind a
+// project grant does not reach. It states the grant class and never that a
+// subject of the kind exists. A project detail is the refused narrowing: a
+// project node of the grant is admitted, so nothing else names that kind.
+func ContextFabricProjectScopeWithheldKindLabel(kind ContextFabricSubjectKind) string {
+	switch kind {
+	case ContextFabricSubjectProject:
+		return ContextFabricRequestedProjectNarrowingUnavailableLimitation
+	case ContextFabricSubjectTeam:
+		return "Teams are not in a project grant yet"
+	case ContextFabricSubjectPullRequest:
+		return "Pull requests are not in a project grant yet"
+	case ContextFabricSubjectRepository:
+		return "Repositories are not in a project grant"
+	default:
+		return kindClause(humanizeVocabularyToken(string(kind))) + " subjects are not in a project grant"
+	}
+}
+
 // ContextFabricSourceStateLabel returns the display label for a source
 // state.
 func ContextFabricSourceStateLabel(state ContextFabricSourceState) string {
@@ -355,6 +438,15 @@ func ComposeCoverageDetailLabel(d ContextFabricCoverageDetail) string {
 		label = fmt.Sprintf("%d of %d %s facts read were given to answer synthesis", coverageDetailIntOrZero(d.Served), coverageDetailIntOrZero(d.Declared), kind)
 	case ContextFabricCoverageDetailFactScoreWithheld:
 		label = fmt.Sprintf(ContextFabricFactScoreWithheldLabel, kindClause(kind))
+	case ContextFabricCoverageDetailProjectScopeWithheld:
+		// Says the caller's GRANT stops here, not that a source failed and
+		// not that nothing exists: nothing was read, so there is nothing to
+		// check and no zero to report.
+		if d.Kind != "" {
+			label = ContextFabricProjectScopeWithheldKindLabel(d.Kind)
+		} else {
+			label = ContextFabricProjectScopeWithheldFactLabel(d.FactKind)
+		}
 	case ContextFabricCoverageDetailSynthesisModelFailed:
 		label = "The model call that writes the answer failed (" + humanizeVocabularyToken(string(d.FailureClass)) + "); " + humanizeVocabularyToken(string(d.RetryHint))
 	case ContextFabricCoverageDetailSynthesisNotRun:

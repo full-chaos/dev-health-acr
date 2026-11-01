@@ -80,6 +80,11 @@ func registryRequest(kinds ...contextfabric.FactKind) contextfabric.CanonicalFac
 // is a JSON handler and returns every line it wrote.
 func readThroughRegistry(t *testing.T, ctx context.Context, providers []contextfabric.FactProvider, request contextfabric.CanonicalFactRequest) []byte {
 	t.Helper()
+	return readThroughRegistryAs(t, ctx, storage.Principal{OrgID: "org_1"}, providers, request)
+}
+
+func readThroughRegistryAs(t *testing.T, ctx context.Context, principal storage.Principal, providers []contextfabric.FactProvider, request contextfabric.CanonicalFactRequest) []byte {
+	t.Helper()
 	var buf bytes.Buffer
 	registry, err := contextfabric.NewFactCapabilityRegistry(providers, contextfabric.FactRegistryOptions{
 		Logger: slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelInfo})),
@@ -88,7 +93,7 @@ func readThroughRegistry(t *testing.T, ctx context.Context, providers []contextf
 		t.Fatalf("NewFactCapabilityRegistry: %v", err)
 	}
 	ctx = observability.WithRequestID(ctx, factScopeCertifyRequestID)
-	_, _ = registry.ReadFacts(ctx, storage.Principal{OrgID: "org_1"}, request)
+	_, _ = registry.ReadFacts(ctx, principal, request)
 	return buf.Bytes()
 }
 
@@ -401,6 +406,9 @@ func TestFactRegistryLinesCertifyEveryOutcomeAndCauseTheRegistryProduces(t *test
 	}
 	raw = readThroughRegistry(t, context.Background(), []contextfabric.FactProvider{bad}, registryRequest(status))
 	certifyReadLine(raw, status, map[string]any{"outcome": "rejected_non_numeric_measure"})
+	// A project-only caller is refused the kind.
+	raw = readThroughRegistryAs(t, context.Background(), storage.Principal{OrgID: "org_1", ProjectScopes: []string{"project.v2:linear:proj-1"}}, []contextfabric.FactProvider{bad}, registryRequest(status))
+	certifyReadLine(raw, status, map[string]any{"outcome": "withheld", "state": "unauthorized"})
 
 	assertSameSet(t, "fact read outcomes", seenOutcomes, contextfabric.FactReadOutcomeVocabulary())
 	assertSameSet(t, "rejection causes", seenCauses, contextfabric.FactResultRejectionCauseVocabulary())

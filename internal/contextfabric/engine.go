@@ -1688,6 +1688,13 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 		// conflating the two populations is exactly what this split fixes.
 		return InvestigationResult{}, stageError(StageGraphBinding, fmt.Errorf("resolve graph binding: %w", err))
 	}
+	// CHAOS-12330 (ruling B): a project-only request that names projects stops
+	// here, before every read, the narrowing resolver's included. Nothing is
+	// answered over the whole grant. The binding above reads no subject.
+	if requestedProjectNarrowingRefused(principal, request.RequestedScope) {
+		continuation = continuation.withReason(ContinuationReasonRequestInvalid)
+		return e.projectNarrowingRefusalResult(ctx, principal, request, binding)
+	}
 	// CHAOS-12229: a requested project narrowing is resolved to canonical
 	// identities once, here, so every graph read of this investigation lets
 	// stated project membership decide. Unresolved, it stays unverified.
