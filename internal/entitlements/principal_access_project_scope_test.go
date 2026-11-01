@@ -121,6 +121,7 @@ func TestAMalformedProjectScopeRejectsTheRead(t *testing.T) {
 		{"projects with an empty list", `{"kind":"projects","projects":[]}`, "schema"},
 		{"none with a list", `{"kind":"none","projects":[` + valid + `]}`, "schema"},
 		{"none with an empty list", `{"kind":"none","projects":[]}`, "schema"},
+		{"none with a null list", `{"kind":"none","projects":null}`, "schema"},
 		{"no kind", `{"projects":[` + valid + `]}`, "schema"},
 		{"a null kind", `{"kind":null,"projects":[` + valid + `]}`, "schema"},
 		{"an unknown kind", `{"kind":"folders","projects":[` + valid + `]}`, "schema"},

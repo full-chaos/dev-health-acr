@@ -273,7 +273,7 @@ func decodePrincipalAccess(payload []byte, orgID, userID string, sessionAsked bo
 		}
 		switch *document.ProjectScope.Kind {
 		case "none":
-			if document.ProjectScope.Projects != nil {
+			if projectsKeyPresent(payload) {
 				return PrincipalAccess{}, invalid
 			}
 		case "projects":
@@ -290,6 +290,23 @@ func decodePrincipalAccess(payload []byte, orgID, userID string, sessionAsked bo
 		}
 	}
 	return access, nil
+}
+
+// projectsKeyPresent reports whether project_scope carries a projects key at
+// all. The strict decode reads an absent key and a null one alike, and kind
+// "none" allows neither: the wire contract says it has no projects key. It
+// reads the document the strict decode has already accepted, so a failure here
+// cannot happen and counts as present (refused).
+func projectsKeyPresent(payload []byte) bool {
+	var document struct {
+		ProjectScope struct {
+			Projects json.RawMessage `json:"projects"`
+		} `json:"project_scope"`
+	}
+	if err := json.Unmarshal(payload, &document); err != nil {
+		return true
+	}
+	return document.ProjectScope.Projects != nil
 }
 
 // canonicalProjectScope derives the canonical identity of every pair, once,
