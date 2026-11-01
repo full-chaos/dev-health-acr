@@ -123,8 +123,9 @@ func TestTheLinkReachHoldsOnlyGrantedNativeLinks(t *testing.T) {
 			if got := graphrank.AuthorizedAttributes(principal, contextfabric.RequestedScope{}, candidate.Attributes); got != tc.want {
 				t.Fatalf("admitted = %v, want %v (attributes %v)", got, tc.want, candidate.Attributes)
 			}
-			if linked, _ := candidate.Attributes[graphrank.AuthorizationLinkRepositoriesAttr].([]string); slices.Contains(linked, reachOutsideRepo) {
-				t.Fatalf("attribute %v holds a repository outside the grant", linked)
+			linked, held := candidate.Attributes[graphrank.AuthorizationLinkRepositoriesAttr].([]string)
+			if held != tc.want || slices.Contains(linked, reachOutsideRepo) {
+				t.Fatalf("attribute %v, held %v, want held %v and no repository outside the grant", linked, held, tc.want)
 			}
 		})
 	}
