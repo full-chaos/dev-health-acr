@@ -163,6 +163,10 @@ func loadHostedRuntimeValues(lookup lookupEnv, cfg *Config, defaultRequireStores
 	if cfg.ServerCompletenessAuthoritySymmetricEnabled, err = boolValue(lookup, "ACR_CONTEXT_FABRIC_SERVER_COMPLETENESS_AUTHORITY_SYMMETRIC_ENABLED", false); err != nil {
 		return err
 	}
+	// CHAOS-12416: default OFF -- see Config.ContextFabricVocabularyLabelsEnabled.
+	if cfg.ContextFabricVocabularyLabelsEnabled, err = boolValue(lookup, ContextFabricVocabularyLabelsEnabledEnvVar, false); err != nil {
+		return err
+	}
 	// CHAOS-11911: default OFF -- see Config.ContextFabricEventStreamEnabled.
 	if cfg.ContextFabricEventStreamEnabled, err = boolValue(lookup, ContextFabricEventStreamEnabledEnvVar, false); err != nil {
 		return err
@@ -196,6 +200,9 @@ const AskDevRetentionEnabledEnvVar = "ACR_ASK_DEV_RETENTION_ENABLED"
 // ContextFabricRunLeaseEnabledEnvVar runs streamed submissions under an
 // ACR-owned lease (CHAOS-11949).
 const ContextFabricRunLeaseEnabledEnvVar = "ACR_CONTEXT_FABRIC_RUN_LEASE_ENABLED"
+
+// ContextFabricVocabularyLabelsEnabledEnvVar serves vocabulary_labels (CHAOS-12416).
+const ContextFabricVocabularyLabelsEnabledEnvVar = "ACR_CONTEXT_FABRIC_VOCABULARY_LABELS_ENABLED"
 
 // ContextFabricEventStreamEnabledEnvVar turns the investigation event stream
 // on (CHAOS-11911).
@@ -283,6 +290,7 @@ func (c Config) SafeAttributes() []any {
 		"context_fabric_anchor_binding_carry_enabled", c.AnchorBindingCarryEnabled,
 		"context_fabric_server_completeness_authority_enabled", c.ServerCompletenessAuthorityEnabled,
 		"context_fabric_server_completeness_authority_symmetric_enabled", c.ServerCompletenessAuthoritySymmetricEnabled,
+		"context_fabric_vocabulary_labels_enabled", c.ContextFabricVocabularyLabelsEnabled,
 		"context_fabric_event_stream_enabled", c.ContextFabricEventStreamEnabled,
 		"context_fabric_run_lease_enabled", c.ContextFabricRunLeaseEnabled,
 		"thread_list_first_question_enabled", c.ThreadListFirstQuestionEnabled,

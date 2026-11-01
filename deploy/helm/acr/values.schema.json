@@ -36,6 +36,10 @@
           "type": "boolean",
           "description": "ACR_CONTEXT_FABRIC_GRAPH_READS_ENABLED for acr-api's Investigator. lifecycleEnabled is inert on acr-api without this also being true."
         },
+        "vocabularyLabelsEnabled": {
+          "type": "boolean",
+          "description": "ACR_CONTEXT_FABRIC_VOCABULARY_LABELS_ENABLED for acr-api (CHAOS-12416). Keep false until every consumer's pin carries vocabulary_labels: the result root is additionalProperties:false and acr and web roll separately."
+        },
         "falkor": {
           "type": "object",
           "additionalProperties": false,

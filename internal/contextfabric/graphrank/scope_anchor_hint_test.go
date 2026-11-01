@@ -80,15 +80,14 @@ func TestResolveSubjects_ExactRepositoryHintWithACohortFrameKeepsTheRepositoryAl
 	_ = calls // the observation-only round may still run its census; what matters is that nothing is committed from it
 }
 
-func TestResolveSubjects_ExactRepositoryHintForARestrictedPrincipalNeverRunsTheHandleCensus(t *testing.T) {
+// CHAOS-12452: the hint path's round runs inside the grant. The census below
+// does not apply it, so it decides nothing and the repository stands alone.
+func TestResolveSubjects_ExactRepositoryHintForARestrictedPrincipalIgnoresACensusOutsideTheGrant(t *testing.T) {
 	t.Parallel()
-	principal := storage.Principal{OrgID: "org_1", RepositoryScopes: []string{scopeAnchorRepo}}
-	resolution, _, calls := resolveWithRepositoryHint(t, hintScopeAnchorBackend([]string{scopeAnchorRepo}), principal, scopeAnchorQuestion, namedScopeAnchorFrame(nil))
+	principal := restrictedCaller(t, scopeAnchorRepo)
+	resolution, _, _ := resolveWithRepositoryHint(t, hintScopeAnchorBackend([]string{scopeAnchorRepo}), principal, scopeAnchorQuestion, namedScopeAnchorFrame(nil))
 	if ids := scopeAnchorCommittedIDs(resolution); len(ids) != 1 || ids[0] != scopeAnchorRepoID {
 		t.Fatalf("committed = %v, want the hinted repository alone", ids)
-	}
-	if calls != 0 {
-		t.Fatalf("census calls = %d, want 0 for a repository-restricted principal", calls)
 	}
 }
 

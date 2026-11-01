@@ -105,6 +105,36 @@ type CensusOutcome struct {
 	// query, so Count and the satisfier set are already inside that
 	// narrowing. A CensusFunc that ignores the filter leaves it false.
 	RepositoryFilterApplied bool
+	// GrantApplied is true only when the CensusFunc applied the grant bound by
+	// contextfabric.WithCensusGrant inside every statement of this read. A
+	// census under a grant that leaves it false is refused (grantEnforced).
+	GrantApplied bool
+}
+
+// ErrCensusGrantNotApplied is a census that could not apply the grant bound by
+// contextfabric.WithCensusGrant inside its statements: too many slugs, a bare
+// wildcard, an invalid or reserved slug, or a kind with no repository column.
+// No statement ran. A grant is never dropped to read the organization
+// (CHAOS-12452), so the caller treats this as a census that did not complete.
+var ErrCensusGrantNotApplied = errors.New("census grant could not be applied")
+
+// grantEnforced refuses an outcome a census returned without applying the
+// grant bound on its context. Under no grant it changes nothing. A nil census
+// stays nil: callers test for it.
+func grantEnforced(census CensusFunc) CensusFunc {
+	if census == nil {
+		return nil
+	}
+	return func(ctx context.Context, orgID string, kind CensusKind, handleValue string, handleBound bool, anchorKind contextfabric.SubjectKind, anchorCanonicalID string, anchorBound bool) (CensusOutcome, error) {
+		outcome, err := census(ctx, orgID, kind, handleValue, handleBound, anchorKind, anchorCanonicalID, anchorBound)
+		if err != nil {
+			return outcome, err
+		}
+		if _, bound := contextfabric.CensusGrantFrom(ctx); bound && !outcome.GrantApplied {
+			return CensusOutcome{}, ErrCensusGrantNotApplied
+		}
+		return outcome, nil
+	}
 }
 
 type censusRepositoryFilterKey struct{}
@@ -367,6 +397,10 @@ type ShadowEvidenceRoundInput struct {
 	// reused here unchanged, not re-derived, so this can never drift from
 	// what authorization actually enforces.
 	UnscopedVisibility bool
+	// GrantScoped is true when UnscopedVisibility holds only because this
+	// round's census runs inside the caller's repository grant (CHAOS-12452).
+	// It changes the trace, never the decision.
+	GrantScoped bool
 	// AliasClaimants/AliasLookupComplete are the resolution's OWN
 	// already-computed AliasLookup result (resolve.go's claimantsByTerm/
 	// complete) -- BindAnchor reuses them rather than re-querying.
@@ -534,7 +568,8 @@ func RunShadowEvidenceRound(ctx context.Context, input ShadowEvidenceRoundInput,
 				ShadowOutcome: string(a.Outcome), ShadowReason: string(a.Reason),
 				ShadowDIdentityHash:              a.DIdentity,
 				ShadowPreconditionUnproven:       a.PreconditionUnproven,
-				ShadowUnscopedVisibility:         a.UnscopedVisibility,
+				ShadowUnscopedVisibility:         a.UnscopedVisibility && !input.GrantScoped,
+				ShadowGrantScoped:                a.UnscopedVisibility && input.GrantScoped,
 				ShadowNonCensusedSurvivor:        a.NonCensusedSurvivor,
 				ShadowSurvivorExcludedReason:     a.SurvivorExcludedReason,
 				ShadowTrigger:                    input.Trigger,

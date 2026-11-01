@@ -150,6 +150,10 @@ spec:
               value: {{ .Values.contextFabric.readsEnabled | quote }}
             - name: ACR_CONTEXT_FABRIC_GRAPH_LIFECYCLE_ENABLED
               value: {{ .Values.contextFabric.lifecycleEnabled | quote }}
+            # CHAOS-12416: always rendered, so an unset deployment explicitly
+            # declares itself off. See values.yaml's own comment.
+            - name: ACR_CONTEXT_FABRIC_VOCABULARY_LABELS_ENABLED
+              value: {{ .Values.contextFabric.vocabularyLabelsEnabled | default false | quote }}
             {{- if .Values.contextFabric.falkor.addr }}
             - name: ACR_CONTEXT_FABRIC_FALKOR_ADDR
               value: {{ .Values.contextFabric.falkor.addr | quote }}

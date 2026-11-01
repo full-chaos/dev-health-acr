@@ -22,6 +22,7 @@ package answerprojection
 
 import (
 	"encoding/json"
+	"maps"
 	"sort"
 	"strings"
 
@@ -122,6 +123,45 @@ func standingRank(standing contractsv1.ContextFabricDriverStanding) int {
 	}
 }
 
+// ShedVocabularyLabels narrows a projection's words to tier, the same tiers as
+// the canonical document (CHAOS-12416): the status words go last, because with
+// no map a cut answer reads a neutral pill. A word never costs a row or an
+// answer, and a consumer takes its generic path for what is gone.
+func ShedVocabularyLabels(projection contractsv1.ContextFabricAnswerProjection, tier contractsv1.ContextFabricVocabularyLabelsTier) contractsv1.ContextFabricAnswerProjection {
+	switch tier {
+	case contractsv1.ContextFabricVocabularyLabelsStatusOnly:
+		projection.VocabularyLabels = contractsv1.ContextFabricStatusVocabularyLabels(projection.VocabularyLabels)
+	case contractsv1.ContextFabricVocabularyLabelsNone:
+		projection.VocabularyLabels = nil
+	}
+	return projection
+}
+
+// restateStatusWords words each status by THIS projection's completeness. The
+// projection re-derives its state after every cut, and a complete status beside
+// partial completeness never reads "Full answer" (CHAOS-12245), so the map the
+// canonical document composed would claim what this document contradicts. It is
+// the same restatement as the state itself, by the same function as the pill.
+func restateStatusWords(projection *contractsv1.ContextFabricAnswerProjection) {
+	state := projection.Completeness.State
+	for key := range projection.VocabularyLabels {
+		vocabulary, value, _ := strings.Cut(key, ":")
+		if vocabulary != string(contractsv1.ContextFabricVocabularyAnswerStatus) {
+			continue
+		}
+		if word, ok := contractsv1.ContextFabricAnswerStatusLabel(contractsv1.ContextFabricInvestigationStatus(value), state); ok {
+			projection.VocabularyLabels[key] = word
+		}
+	}
+	correction := projection.Completeness.StatusCorrection
+	if _, held := projection.VocabularyLabels[contractsv1.ContextFabricStatusCorrectionNoteKey]; !held || correction == nil {
+		return
+	}
+	if note, ok := contractsv1.ContextFabricStatusCorrectionNote(*correction, projection.Status, state); ok {
+		projection.VocabularyLabels[contractsv1.ContextFabricStatusCorrectionNoteKey] = note
+	}
+}
+
 // Project derives the bounded consumer projection of result.
 //
 // The returned projection is a pure function of (result, budget). It
@@ -210,6 +250,7 @@ func Project(result contractsv1.ContextFabricInvestigationResult, budget Budget)
 		FactScopeCensus:        result.FactScopeCensus,
 		FactScopeCensusOmitted: result.FactScopeCensusOmitted,
 		EvidenceRefLabels:      evidenceRefLabels,
+		VocabularyLabels:       maps.Clone(result.VocabularyLabels),
 		Temporal:               projectTemporal(result),
 		CoveragePartial:        result.Coverage.Partial,
 		Limitations:            limitations,
@@ -279,7 +320,9 @@ func Project(result contractsv1.ContextFabricInvestigationResult, budget Budget)
 	// AFTER the budget is final, and after every cut this function makes.
 	// Order is the mechanism: a row appended before the last cut would
 	// describe a document that is not the one served.
-	return appendProjectionOutcomes(projection)
+	projection = appendProjectionOutcomes(projection)
+	restateStatusWords(&projection)
+	return projection
 }
 
 // MarkFullResultOmitted records that a caller asked for the full canonical
@@ -305,6 +348,7 @@ func MarkFullResultOmitted(projection *contractsv1.ContextFabricAnswerProjection
 	projection.Completeness.Outcomes = append(projection.Completeness.Outcomes,
 		projectionOutcomeRow(contractsv1.ContextFabricAnswerImpactDepth, 1))
 	projection.Completeness.State = contractsv1.DeriveContextFabricAnswerCompletenessState(projection.Completeness.Outcomes)
+	restateStatusWords(projection)
 }
 
 func declaresDrop(budget contractsv1.ContextFabricProjectionBudget) bool {

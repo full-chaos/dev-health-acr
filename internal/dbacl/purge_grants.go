@@ -13,6 +13,8 @@ var PurgeGrants = []Grant{
 		Why: "DELETE of the organization's credentials (purge table list), SELECT in the device authorization predicate: internal/contextfabric/orgpurge/purge.go purgeTables"},
 	{Table: "workload_bindings", Privileges: []string{"SELECT", "DELETE"}, Why: "purge table list: orgpurge purgeTables"},
 	{Table: "context_packet_snapshots", Privileges: []string{"SELECT", "DELETE"}, Why: "purge table list: orgpurge purgeTables"},
+	{Table: "credential_lifecycle_outbox", Privileges: []string{"SELECT", "INSERT"},
+		Why: "the revoked event of each live credential the purge deletes: the highest revision (SELECT) and the new row (INSERT), internal/storage/postgres/org_purge_credentials.go LifecycleOutboxMaxRevisionSQL and LifecycleOutboxInsertSQL; never updated or deleted"},
 	{Table: "audit_events", Privileges: []string{"SELECT", "INSERT"},
 		Why: "the kept-events count (auditCountSQL) and the org_purged and org_purge_incomplete events (purgedAuditInsertSQL, incompleteAuditInsertSQL); never deleted"},
 	{Table: "agent_episodes", Privileges: []string{"SELECT", "DELETE"},

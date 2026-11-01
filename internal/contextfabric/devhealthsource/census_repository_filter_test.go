@@ -62,6 +62,11 @@ func TestCensusRepositoryFilterOwnerWildcard(t *testing.T) {
 	if !outcome.RepositoryFilterApplied || !strings.Contains(client.calls[0], "startsWith(lower(trimBoth(repo)), {census_repo_0:String})") {
 		t.Fatalf("applied = %v statement = %q, want an owner prefix clause", outcome.RepositoryFilterApplied, client.calls[0])
 	}
+	// A request keeps its prefix: only a grant, which has no post-filter,
+	// carries the slug shape, and an unrestricted statement stays as it was.
+	if strings.Contains(client.calls[0], "match(") {
+		t.Fatalf("statement = %q, want no slug shape on a requested filter", client.calls[0])
+	}
 	for _, b := range client.bindings[0] {
 		if b.Name == "census_repo_0" && b.Value != "acme/" {
 			t.Fatalf("owner binding = %v, want acme/", b.Value)

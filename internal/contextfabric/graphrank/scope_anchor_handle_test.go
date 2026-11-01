@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"log/slog"
+	"slices"
 	"testing"
 	"time"
 
@@ -282,30 +283,47 @@ func TestResolveSubjects_RepositoryNarrowedRequestStillAttestsTheNamedHandle(t *
 	}
 }
 
-func TestResolveSubjects_RestrictedPrincipalNeverRunsTheHandleCensus(t *testing.T) {
+// CHAOS-12452: a repository-restricted caller's handle census runs inside its
+// grant. Applied, the handle commits beside its anchor; a census that does not
+// apply the grant decides nothing and leaves the pull request out.
+func TestResolveSubjects_RestrictedPrincipalReadsTheHandleInsideItsGrant(t *testing.T) {
 	t.Parallel()
-	backend := scopeAnchorBackendFor(true, -1, []string{scopeAnchorRepo})
-	deps := backend.deps()
-	var calls int
-	deps.CensusFunc = scopeAnchorCensus(&calls)
-	request := testRequest()
-	request.Question = scopeAnchorQuestion
-	request.RequestedScope.RepositorySlugs = []string{scopeAnchorRepo}
-	principal := storage.Principal{OrgID: "org_1", RepositoryScopes: []string{scopeAnchorRepo}}
-	resolution, _, _, _, err := ResolveSubjectsWithCommitBasis(context.Background(), principal, request, testInterpreted(scopeAnchorRepo, "pull request 747"), deps, nil, nil, namedScopeAnchorFrame(nil), "")
-	if err != nil {
-		t.Fatalf("ResolveSubjectsWithCommitBasis() error = %v", err)
-	}
-	if ids := scopeAnchorCommittedIDs(resolution); len(ids) != 1 || ids[0] != scopeAnchorRepoID {
-		t.Fatalf("committed = %v, want the repository committed so the trigger is reachable", ids)
-	}
-	if calls != 0 {
-		t.Fatalf("census calls = %d, want 0 for a repository-restricted principal", calls)
-	}
-	for _, id := range scopeAnchorCommittedIDs(resolution) {
-		if id == scopeAnchorPRID {
-			t.Fatalf("committed = %v, want the pull request left out", scopeAnchorCommittedIDs(resolution))
-		}
+	for name, tc := range map[string]struct {
+		applied bool
+		want    []string
+	}{
+		"grant applied": {true, []string{scopeAnchorRepoID, scopeAnchorPRID}},
+		"grant ignored": {false, []string{scopeAnchorRepoID}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			backend := scopeAnchorBackendFor(true, -1, []string{scopeAnchorRepo})
+			deps := backend.deps()
+			var calls int
+			census := scopeAnchorCensus(&calls)
+			deps.CensusFunc = func(ctx context.Context, orgID string, kind CensusKind, value string, handleBound bool, anchorKind contextfabric.SubjectKind, anchorID string, anchorBound bool) (CensusOutcome, error) {
+				outcome, err := census(ctx, orgID, kind, value, handleBound, anchorKind, anchorID, anchorBound)
+				if _, bound := contextfabric.CensusGrantFrom(ctx); !bound {
+					t.Errorf("census call for %s carries no grant", kind)
+				}
+				outcome.GrantApplied = tc.applied
+				return outcome, err
+			}
+			request := testRequest()
+			request.Question = scopeAnchorQuestion
+			request.RequestedScope.RepositorySlugs = []string{scopeAnchorRepo}
+			principal := restrictedCaller(t, scopeAnchorRepo)
+			resolution, _, _, _, err := ResolveSubjectsWithCommitBasis(context.Background(), principal, request, testInterpreted(scopeAnchorRepo, "pull request 747"), deps, nil, nil, namedScopeAnchorFrame(nil), "")
+			if err != nil {
+				t.Fatalf("ResolveSubjectsWithCommitBasis() error = %v", err)
+			}
+			if calls == 0 {
+				t.Fatal("no census ran")
+			}
+			if ids := scopeAnchorCommittedIDs(resolution); !slices.Equal(ids, tc.want) {
+				t.Fatalf("committed = %v, want %v", ids, tc.want)
+			}
+		})
 	}
 }
 
