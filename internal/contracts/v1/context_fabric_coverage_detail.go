@@ -3,6 +3,7 @@ package v1
 import (
 	"fmt"
 	"strings"
+	"unicode"
 )
 
 // This file is CHAOS-4690's structured-coverage wire surface: one
@@ -586,8 +587,17 @@ func stringInVocabulary(value string, vocabulary []string) bool {
 // whole-set discard); Raw restates the legacy composed string and shares
 // its bound.
 const (
-	ContextFabricCoverageDetailIDMaxLength       = 64
-	ContextFabricCoverageDetailLabelMaxLength    = 160
+	ContextFabricCoverageDetailIDMaxLength    = 64
+	ContextFabricCoverageDetailLabelMaxLength = 160
+	// ContextFabricVocabularyLabelKeyMaxLength bounds a vocabulary_labels key,
+	// "<vocabulary>:<value>" (CHAOS-12415).
+	ContextFabricVocabularyLabelKeyMaxLength = 128
+	// ContextFabricVocabularyLabelsMaxEntries bounds the map as
+	// evidence_ref_labels is bounded. It is not the working limit: the map
+	// holds only values in one result, so the whole registry is its ceiling
+	// (125 entries, 5,885 bytes, 9% of the 65,536-byte answer budget,
+	// measured by TestTheWholeRegistryFitsInASmallShareOfTheAnswerBudget).
+	ContextFabricVocabularyLabelsMaxEntries      = 8192
 	ContextFabricCoverageDetailPhrasingMaxLength = 400
 	ContextFabricCoverageDetailRawMaxLength      = ContextFabricCoverageDegradedReasonMaxLength
 	// contextFabricCoverageDetailKindsMaxCount bounds the two subject-kind
@@ -1255,6 +1265,53 @@ func ContextFabricEvidenceRefClosure(r ContextFabricInvestigationResult) map[str
 		add(candidate.EvidenceRefIDs)
 	}
 	return closure
+}
+
+// validateVocabularyLabels checks the shape of a vocabulary_labels map: each
+// key is "<vocabulary>:<value>" and each label is a bounded, trimmed string.
+// The vocabulary is NOT checked against the names published here: a stored row
+// written by a newer build must still read.
+func validateVocabularyLabels(labels map[string]string) error {
+	if len(labels) > ContextFabricVocabularyLabelsMaxEntries {
+		return fmt.Errorf("label map has %d entries, over the bound of %d", len(labels), ContextFabricVocabularyLabelsMaxEntries)
+	}
+	for key, label := range labels {
+		if !validVocabularyLabelKey(key) {
+			return fmt.Errorf("key %q is not <vocabulary>:<value>", key)
+		}
+		if strings.TrimSpace(label) != label || !stringLengthBetween(label, 1, ContextFabricCoverageDetailLabelMaxLength) {
+			return fmt.Errorf("label of %q violates its bounds", key)
+		}
+	}
+	return nil
+}
+
+func validVocabularyLabelKey(key string) bool {
+	if !stringLengthBetween(key, 3, ContextFabricVocabularyLabelKeyMaxLength) {
+		return false
+	}
+	vocabulary, value, _ := strings.Cut(key, ":")
+	if value == "" || strings.ContainsFunc(value, func(r rune) bool { return r == ':' || unicode.IsSpace(r) }) {
+		return false
+	}
+	if vocabulary == "" || vocabulary[0] < 'a' || vocabulary[0] > 'z' {
+		return false
+	}
+	return !strings.ContainsFunc(vocabulary, func(r rune) bool { return r != '_' && (r < 'a' || r > 'z') })
+}
+
+func (r ContextFabricInvestigationResult) validateVocabularyLabelsField() error {
+	if err := validateVocabularyLabels(r.VocabularyLabels); err != nil {
+		return fmt.Errorf("vocabulary_labels: %w", err)
+	}
+	return nil
+}
+
+func (p ContextFabricAnswerProjection) validateVocabularyLabelsField() error {
+	if err := validateVocabularyLabels(p.VocabularyLabels); err != nil {
+		return fmt.Errorf("vocabulary_labels: %w", err)
+	}
+	return nil
 }
 
 // validateEvidenceRefLabels enforces exact key equality between a non-nil

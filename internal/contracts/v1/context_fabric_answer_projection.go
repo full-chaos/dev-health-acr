@@ -135,6 +135,13 @@ type ContextFabricAnswerProjection struct {
 	// retains in EvidenceRefIDs to their display labels — filtered from the
 	// canonical result's own map, 1:1 with already-budgeted refs.
 	EvidenceRefLabels map[string]string `json:"evidence_ref_labels,omitempty"`
+	// VocabularyLabels (CHAOS-12413) is the canonical result's own map. The
+	// API serves this same projection when an answer is over a caller's byte
+	// option, and web reads it, so it must carry the map; and the MCP tool
+	// calls the same answerprojection.Project, so leaving MCP out would take a
+	// second code path. Both untrusted-content lists name it. Project copies
+	// it from CHAOS-12416, with the composition; nothing sets it before that.
+	VocabularyLabels map[string]string `json:"vocabulary_labels,omitempty"`
 	// Temporal is CHAOS-3781's temporal label, copied verbatim, and like
 	// Limitations it is never dropped. Nil means the answer is about
 	// current state.

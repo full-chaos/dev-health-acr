@@ -2207,9 +2207,17 @@ type ContextFabricInvestigationResult struct {
 	// Optional-first, additive: absent on every result written before this
 	// field existed. The only cause is the byte budget, so there is no reason
 	// code to carry.
-	FactScopeCensusOmitted int                     `json:"fact_scope_census_omitted,omitempty"`
-	EvidenceRefLabels      map[string]string       `json:"evidence_ref_labels,omitempty"`
-	Versions               ContextFabricVersionSet `json:"versions"`
+	FactScopeCensusOmitted int               `json:"fact_scope_census_omitted,omitempty"`
+	EvidenceRefLabels      map[string]string `json:"evidence_ref_labels,omitempty"`
+	// VocabularyLabels (CHAOS-12413) maps "<vocabulary>:<value>" to the
+	// served display label (ContextFabricVocabularyLabel), for the values in
+	// this result, so a consumer looks a word up and needs no table: a new
+	// value needs no consumer change. A value with no entry takes the
+	// consumer's generic path. Additive and optional, but the result root is
+	// additionalProperties:false, so an old pin REFUSES it: nothing emits it
+	// until the pin train that carries this field has landed (CHAOS-12416).
+	VocabularyLabels map[string]string       `json:"vocabulary_labels,omitempty"`
+	Versions         ContextFabricVersionSet `json:"versions"`
 	// DeterministicAnswer is the service's own answer sentence. Required on
 	// every SUPPORTED result (ContextFabricResultSupported: a claimed fact
 	// AND a citable evidence ref) and on every complete/partial one; may be

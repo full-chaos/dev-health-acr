@@ -360,7 +360,9 @@ func TestEveryProjectionStringFieldIsClassified(t *testing.T) {
 		// CHAOS-12160: 257 -> 259 -- key_facts[].investment_mix.investment_mix_source
 		// (a closed vocabulary) and .rollup_basis (a provider constant); both
 		// server-set from the grounding fact, never model-authored.
-		{name: "answer_projection", root: "answer", prefix: "structured", untrusted: MCPInvestigateQuestionUntrustedFields, expectedPaths: 259},
+		// CHAOS-12415: 259 -> 260 -- vocabulary_labels{}, classified like
+		// evidence_ref_labels{}.
+		{name: "answer_projection", root: "answer", prefix: "structured", untrusted: MCPInvestigateQuestionUntrustedFields, expectedPaths: 260},
 		// CHAOS-4087: 213 -> 217 -- CommitDecisionDigest contributed four
 		// new string leaves (commit_gate, subject.kind, subject.canonical_id,
 		// subject.label).
@@ -445,7 +447,8 @@ func TestEveryProjectionStringFieldIsClassified(t *testing.T) {
 		// answer_projection above).
 		// CHAOS-12160: 378 -> 380 -- claimed_facts[].investment_mix.investment_mix_source
 		// and .rollup_basis, the same two leaves as the projection.
-		{name: "investigation_result", root: "result", prefix: "structured", untrusted: MCPInvestigationResultUntrustedFields, expectedPaths: 380},
+		// CHAOS-12415: 380 -> 381 -- vocabulary_labels{}, as on the projection.
+		{name: "investigation_result", root: "result", prefix: "structured", untrusted: MCPInvestigationResultUntrustedFields, expectedPaths: 381},
 	} {
 		t.Run(surface.name, func(t *testing.T) {
 			paths := stringPathsIn(t, documents, surface.root, surface.prefix)
