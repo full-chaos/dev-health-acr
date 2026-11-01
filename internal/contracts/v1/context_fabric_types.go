@@ -1387,10 +1387,10 @@ type ContextFabricSubjectResolution struct {
 	GraphNotProjected bool `json:"graph_not_projected,omitempty"`
 	// OutsideRequestedRepositories (CHAOS-12360) counts the distinct subjects
 	// a subject term matched that only the requested repository narrowing
-	// refused, for an unrestricted principal; zero for every other caller. A
-	// terminal result states it through its limitation sentence, which is the
-	// only form that leaves the process: for a restricted or project-only
-	// caller the count would be an existence oracle.
+	// refused. It holds only subjects the caller's own grant admits, and it is
+	// zero for a project-only caller (CHAOS-12446). A terminal result states it
+	// through its limitation sentence, which is the only form that leaves the
+	// process.
 	OutsideRequestedRepositories int `json:"-"`
 	// CommitDecisionDigests (CHAOS-4087) is a small, closed-vocabulary
 	// summary of WHICH MECHANISM committed each subject in Committed --

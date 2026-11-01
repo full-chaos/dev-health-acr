@@ -166,10 +166,11 @@ func PurgedTables() []string {
 	return names
 }
 
-// KeptTables are org-keyed tables the purge never deletes: the audit trail
-// and the purge marker, which is the fence that outlives the purge.
+// KeptTables are org-keyed tables the purge never deletes: the audit trail, the
+// purge marker, which is the fence that outlives the purge, and the credential
+// lifecycle outbox, a delivery log the publisher reaps once a row is published.
 func KeptTables() []string {
-	return []string{"audit_events", "context_fabric_org_purge_markers"}
+	return []string{"audit_events", "context_fabric_org_purge_markers", "credential_lifecycle_outbox"}
 }
 
 // CascadedTables are org-keyed tables whose rows go with their
