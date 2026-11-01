@@ -248,13 +248,15 @@ func TestCohortPoolTruncationProducesOnlyPublishedBases(t *testing.T) {
 			for _, exactName := range []bool{false, true} {
 				for _, kindCensus := range []bool{false, true} {
 					for _, lookupFailed := range []bool{false, true} {
-						for _, censusCovers := range []bool{false, true} {
-							basis, _, _ := cohortPoolTruncation(fulltext, hopWalk, exactName, kindCensus, lookupFailed, censusCovers)
-							if !published[basis] {
-								t.Errorf("cohortPoolTruncation(%v, %v, %v, %v, %v, %v) returned %q, which the vocabulary does not declare",
-									fulltext, hopWalk, exactName, kindCensus, lookupFailed, censusCovers, basis)
+						for _, teamUndecided := range []bool{false, true} {
+							for _, censusCovers := range []bool{false, true} {
+								basis, _, _ := cohortPoolTruncation(fulltext, hopWalk, exactName, kindCensus, lookupFailed, teamUndecided, censusCovers)
+								if !published[basis] {
+									t.Errorf("cohortPoolTruncation(%v, %v, %v, %v, %v, %v, %v) returned %q, which the vocabulary does not declare",
+										fulltext, hopWalk, exactName, kindCensus, lookupFailed, teamUndecided, censusCovers, basis)
+								}
+								seen[basis] = true
 							}
-							seen[basis] = true
 						}
 					}
 				}

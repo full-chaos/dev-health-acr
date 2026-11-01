@@ -577,6 +577,13 @@ type GraphTelemetry interface {
 	// aborts the call the way every OTHER retrieval arm's own failure still
 	// does -- a call this arm exists to rescue must never end up worse off
 	// than the code it replaces.
+	// RecordTeamNarrowingGeneralRead (eventspec.TeamNarrowingGeneralRead,
+	// CHAOS-12327) reports ONE DiscoverContext call under a requested team
+	// narrowing: the requested team ids, the subjects the reach rule decided,
+	// those decided out of scope (scope, never a denial), and whether the read
+	// was floored because ownership it needed was missing. Counts only, never
+	// an id.
+	RecordTeamNarrowingGeneralRead(ctx context.Context, orgID string, requestedTeams, decided, excluded int, floor contextfabric.TeamNarrowingReadFloor)
 	RecordCohortKindFulltext(ctx context.Context, orgID string, decision CohortKindFulltextDecision, memberKind contextfabric.SubjectKind, members int, truncated bool, addedByKindArm, duplicatesWithGeneral int, readErr error)
 	// RecordProjectDeploymentWalk (eventspec.ProjectDeploymentWalk) reports
 	// ONE DiscoverContext call that asks for the deployment members of a named
@@ -683,6 +690,8 @@ func (NoopTelemetry) RecordCohortExactNameCensusGate(context.Context, string, bo
 func (NoopTelemetry) RecordCohortKindBasis(context.Context, string, contextfabric.SubjectKind, graphrank.CohortKindBasis, bool, CohortPoolTruncationBasis, []CohortPoolTruncationArm) {
 }
 func (NoopTelemetry) RecordCohortKindCensus(context.Context, string, CohortKindCensusDecision, contextfabric.SubjectKind, []string, int, int, bool, error) {
+}
+func (NoopTelemetry) RecordTeamNarrowingGeneralRead(context.Context, string, int, int, int, contextfabric.TeamNarrowingReadFloor) {
 }
 func (NoopTelemetry) RecordCohortKindFulltext(context.Context, string, CohortKindFulltextDecision, contextfabric.SubjectKind, int, bool, int, int, error) {
 }
@@ -1069,6 +1078,19 @@ func (t SlogTelemetry) RecordCohortKindFulltext(ctx context.Context, orgID strin
 		}
 	}
 	t.logger().Info(eventspec.CohortKindFulltext.Msg, append(args, graphRequestIDLogAttrs(ctx)...)...)
+}
+
+// RecordTeamNarrowingGeneralRead logs at Info (eventspec.TeamNarrowingGeneralRead):
+// counts and a closed floor value only.
+func (t SlogTelemetry) RecordTeamNarrowingGeneralRead(ctx context.Context, orgID string, requestedTeams, decided, excluded int, floor contextfabric.TeamNarrowingReadFloor) {
+	args := []any{
+		"org_id", contextfabric.SanitizeLogAttr(orgID),
+		"requested_teams", requestedTeams,
+		"decided", decided,
+		"excluded", excluded,
+		"floor", contextfabric.SanitizeLogAttr(string(floor)),
+	}
+	t.logger().Info(eventspec.TeamNarrowingGeneralRead.Msg, append(args, graphRequestIDLogAttrs(ctx)...)...)
 }
 
 // RecordProjectDeploymentWalk logs at Info. The walk counts ride only on an

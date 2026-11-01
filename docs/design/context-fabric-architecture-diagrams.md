@@ -720,7 +720,39 @@ the request narrows by team: `team_narrowing` (`anchor_owned` or
 `team_floor_reason` (empty, `anchor_ownership_unknown`, `project_owner_absent`
 or `ownership_read_cut`). Counts and closed values only; no id.
 
-||||||| e5e5aa13
+**A requested team narrowing on the general graph read (CHAOS-12327).** The
+same reach rule decides every subject `DiscoverContext` serves
+(`falkorgraph/team_narrowing_discover.go`, one call on the path edges and one on
+the cohort candidates). Under `scope.team_ids`:
+
+- a team is decided by its own team list (the node rule, unchanged);
+- a repository or a project is in scope when it is currently `OWNED_BY_TEAM` a
+  requested team (any current edge, co-owners included). "Currently" holds on
+  every time axis: the ownership edge is read at the adapter clock, never at a
+  historical question's instant, as the repository walk's narrowing reads it;
+- a pull request is in scope when its repository (`BELONGS_TO_REPOSITORY`) is;
+- a work item is in scope by (i) an actual `LINKS_PULL_REQUEST` row of an
+  admitted tier to a pull request of such a repository, or (ii) its own project;
+- the caller's organization node and the committed subjects stay (the subject is
+  what the question names); every other kind has no ownership path to a team
+  and is out of scope.
+
+A path is served only when both of its ends are in scope. An exclusion is scope:
+never a denial, never an authorization detail, never a floor. The read is
+floored only where the ownership it needed for a subject the rest of the request
+admits is absent, not current, or cut: the cohort's population floor (the
+cohort is truncated; an empty member set has a population lower bound), on its
+own pool-truncation arm `team_narrowing_undecided`, which no census covers (a
+census fetches nodes, not their ownership). The member status walk's matches are
+narrowed the same way before they set the population; its count-only
+disclosures are CHAOS-12352. Each such read logs one
+`contextfabric.team_narrowing_general_read` line (requested teams, subjects
+decided, subjects excluded, and the floor value; log-only). A non-cohort read is
+not floored, the same as a truncated hop walk today (CHAOS-12348). Subject
+resolution is not narrowed by team. Kinds that hang off an owned entity
+(reviews, CI runs, deployments) are CHAOS-12345, and the resolution census is
+CHAOS-12346.
+
 **A count of a repository's owning teams.** For a question about now, a read
 that found no owner, was not cut, and found ownership projected for the org
 (the active census holds a team, or the repository's own ownership edges name
@@ -3947,7 +3979,6 @@ flowchart TD
   L2 --> E
 ```
 
-||||||| 7d4c5423
 ## Sources
 
 - Live code via `codegraph_explore` / `rg` on `dev-health-acr`: `engine.go`
