@@ -3,13 +3,13 @@ package v1
 import (
 	"encoding/json"
 	"os"
-	"path/filepath"
 	"regexp"
-	"runtime"
 	"slices"
 	"strconv"
 	"strings"
 	"testing"
+
+	"github.com/full-chaos/dev-health-acr/internal/testsupport/repopath"
 )
 
 // CHAOS-12415. The vocabulary label tables are total in BOTH directions: a new
@@ -43,12 +43,7 @@ func closedVocabularyStrings[T ~string, A ~[]T](values A) []string {
 // ones Go declares as bare constants.
 func commonSchemaDefs(t *testing.T) map[string]any {
 	t.Helper()
-	_, file, _, ok := runtime.Caller(0)
-	if !ok {
-		t.Fatal("cannot locate this test file")
-	}
-	path := filepath.Join(filepath.Dir(file), "..", "..", "..", "contracts", "jsonschema", "v1", "context_fabric_common.v1.schema.json")
-	raw, err := os.ReadFile(path)
+	raw, err := os.ReadFile(repopath.Path(t, "contracts", "jsonschema", "v1", "context_fabric_common.v1.schema.json"))
 	if err != nil {
 		t.Fatal(err)
 	}

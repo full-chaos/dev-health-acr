@@ -5,11 +5,11 @@ import (
 	"go/parser"
 	"go/token"
 	"io/fs"
-	"os"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"testing"
+
+	"github.com/full-chaos/dev-health-acr/internal/testsupport/repopath"
 )
 
 // CHAOS-12415: the result root is additionalProperties:false and ask-dev and
@@ -21,14 +21,7 @@ import (
 // anywhere that holds a result: the failure it guards is one assignment. It
 // counts what it read, so a walk that finds nothing fails instead of passing.
 func TestNoProductionCodeSetsVocabularyLabels(t *testing.T) {
-	_, file, _, ok := runtime.Caller(0)
-	if !ok {
-		t.Fatal("cannot locate this test file")
-	}
-	root := filepath.Join(filepath.Dir(file), "..", "..")
-	if _, err := os.Stat(filepath.Join(root, "go.mod")); err != nil {
-		t.Fatalf("module root not found at %s: %v", root, err)
-	}
+	root := repopath.Root(t)
 	const declaringFields = 2 // the result and the projection
 	files, declared := 0, 0
 	var writes []string
