@@ -1,7 +1,7 @@
 # Context Fabric: the project-only grant scope
 
-Status: c1 (CHAOS-12297), c2 (CHAOS-12298) and c3 (CHAOS-12299) are built; c4
-and c5 are planned. Design of record:
+Status: c1 (CHAOS-12297), c2 (CHAOS-12298), c3 (CHAOS-12299) and the typed
+refusals (CHAOS-12330) are built; c4 and c5 are planned. Design of record:
 CHAOS-12107 (v3 and its r3 addendum; Linear). Parent ticket: CHAOS-12228.
 
 ## Why
@@ -246,24 +246,57 @@ byte for byte.
 - **Postgres.** The `p:` replay (identical, changed, repository, universal and
   unrestricted grants) is the shared parity suite
   `paritytest.RunProjectGrantDigestReplaySuite`, run by both adapters (the
-  Postgres one under the `integration` build tag).
+  Postgres one with `ACR_CONTAINER_TESTS=1`).
 
-## Facts and aggregates
+## Facts and refusals
 
-- **Served:** intrinsic project facts, and the facts of member work items.
-- **Withheld in c3** (`devhealthfacts/project_only_withholding.go`,
-  `projectOnlyWithheld`): every project or organization fact this package
-  cannot prove intrinsic. That is the project facts of health, flow,
-  landscape, metrics, readiness and workload (built only from owning teams'
-  and their repositories' rows), the project and organization investment mixes
-  and unit listing, the project pull request and blocker roll-ups, commitment
-  and actual completion (items joined by `project_id`, not by exact
-  membership), and organization source health. The provider reads none of
-  those rows and serves no fact. The subject carries no reason of its own yet;
-  its typed label is CHAOS-12330.
-- **Typed limitation, with a coverage reason:** facts that rest on a team or on
-  a cross-project population (F5).
-- **Org-wide figures:** a typed limitation (D3; CHAOS-12225 widens it later).
+CHAOS-12330. A project-only caller is served no fact: no provider could be
+proven to serve it only what its grant covers. So the fact registry refuses
+every planned read, once, before any provider or scope expander runs
+(`internal/contextfabric/fact_project_scope_withheld.go`), and the refusal is a
+typed answer, not an empty read. An empty read is a false statement about the
+source ("the source was reached and held no rows"), and it does not degrade.
+
+Every refusal is the one coverage code `project_scope_withheld`: degrading,
+with `source_state: unauthorized`, and exactly one of `fact_kind` and `kind`.
+That pair fixes the reason, so the wire gains no field and no reason token, and
+the server composes the label from it
+(`internal/contracts/v1/context_fabric_display_labels.go`). No model text
+carries a reason.
+
+| Refused | Field | Label states |
+|---|---|---|
+| health, flow, landscape, metrics, readiness, workload, operational deficiencies | `fact_kind` | built from owning teams, which a project grant does not cover |
+| investment | `fact_kind` | placed by repository or spanning the organization |
+| source health | `fact_kind` | an organization-wide figure |
+| pull requests, reviews | `fact_kind` | pull requests are not in a project grant yet |
+| identity, status, work, actual completion, blockers, required children, commitment | `fact_kind` | exact project membership is not proven yet |
+| membership, continuous integration, deployments, incidents, security alerts, file hotspots, evidence | `fact_kind` | they belong to repositories |
+| a request that names projects | `kind: project` | requested project narrowing not available yet |
+| teams, pull requests, repositories, when the plan asks for the kind | `kind` | not in a project grant |
+
+- **Facts.** The registry files the detail beside the source observation, and
+  a pruned or unconfigured kind keeps its own state: nothing is refused there.
+  A complete answer is floored to partial with its own limitation
+  (`applyProjectScopeWithheldStatusFloor`).
+- **read_facts.** Each row reads outcome `withheld_project_scope` with
+  `kind_state: unauthorized`, and the read is partial.
+- **A request that names projects (ruling B).** The engine stops before every
+  read, the narrowing resolver's included, and serves a typed `no_match`
+  (`internal/contextfabric/project_scope_refusal.go`). Nothing is answered over
+  the whole grant. CHAOS-12324 narrows once CHAOS-12229 maps raw ids.
+- **Asked kinds.** A detail fires only when the plan asks for the kind, read
+  from its requirement rows because a refused kind never has a cohort. It
+  states the grant class, never that a subject of the kind exists. It replaces
+  a `graph_no_member_found` row of the kind: the search could not see that
+  kind, so "none found" is a claim it never measured.
+- **Unchanged.** `denied_or_not_found`, the cohort denial, `repo_forbidden` and
+  the stored-result refusal hide existence on purpose.
+
+The provider-level guards of c3 are gone: nothing reaches a provider for this
+caller, so they could not be reached and a test could not show otherwise. The
+one provider read outside the registry (`action_findings.go`) reads only team
+subjects, which the graph denies this caller.
 
 ## Observability
 
@@ -334,6 +367,7 @@ separate `grant_class` field (`auth.GrantClassVocabulary`: `unrestricted`,
 | c2 | CHAOS-12298 | the sentinel, digests and reuse keyed by class | none until c5 |
 | c3 | CHAOS-12299 | graph and fact admission, the shared membership predicate | none until c5 |
 | c4 | CHAOS-12300 | Info observability | logging only |
+| typed refusals | CHAOS-12330 | one coverage code, minted by the registry; rides a pin train | none until c5 |
 | c5 | CHAOS-12301 | the access-read decoder: the ONLY change that admits `project_only` | admits `project_only` |
 
 The roll order is fixed: acr with c5 live in production BEFORE ops turns on

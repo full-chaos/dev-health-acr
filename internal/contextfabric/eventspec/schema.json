@@ -1111,7 +1111,7 @@
       "request_id"
     ],
     "bounded_aggregation": "one line per exit through the served document finalizer, over the passes of a request.",
-    "max_lines_per_scope": 20,
+    "max_lines_per_scope": 22,
     "fields": [
       {
         "key": "org_id",
@@ -2039,10 +2039,13 @@
           "computed_population_absent",
           "requirement_not_evaluable",
           "graph_no_member_found",
+          "graph_hop_walk_truncated",
+          "graph_team_narrowing_undecided_paths",
           "synthesis_input_bounded",
           "synthesis_model_failed",
           "synthesis_not_run",
-          "fact_score_withheld"
+          "fact_score_withheld",
+          "project_scope_withheld"
         ]
       },
       {
@@ -4254,6 +4257,7 @@
           "unconfigured",
           "scope_gap",
           "pruned",
+          "withheld",
           "failed",
           "completed",
           "rejected",
@@ -7229,10 +7233,13 @@
           "computed_population_absent",
           "requirement_not_evaluable",
           "graph_no_member_found",
+          "graph_hop_walk_truncated",
+          "graph_team_narrowing_undecided_paths",
           "synthesis_input_bounded",
           "synthesis_model_failed",
           "synthesis_not_run",
-          "fact_score_withheld"
+          "fact_score_withheld",
+          "project_scope_withheld"
         ],
         "applicability": "written when a cut has a coverage cause"
       },
@@ -9534,10 +9541,13 @@
           "computed_population_absent",
           "requirement_not_evaluable",
           "graph_no_member_found",
+          "graph_hop_walk_truncated",
+          "graph_team_narrowing_undecided_paths",
           "synthesis_input_bounded",
           "synthesis_model_failed",
           "synthesis_not_run",
-          "fact_score_withheld"
+          "fact_score_withheld",
+          "project_scope_withheld"
         ]
       },
       {
@@ -10174,10 +10184,13 @@
           "computed_population_absent",
           "requirement_not_evaluable",
           "graph_no_member_found",
+          "graph_hop_walk_truncated",
+          "graph_team_narrowing_undecided_paths",
           "synthesis_input_bounded",
           "synthesis_model_failed",
           "synthesis_not_run",
-          "fact_score_withheld"
+          "fact_score_withheld",
+          "project_scope_withheld"
         ]
       },
       {

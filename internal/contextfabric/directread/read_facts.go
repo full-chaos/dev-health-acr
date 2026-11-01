@@ -80,6 +80,9 @@ const (
 	OutcomeStale          = "stale"
 	OutcomeTruncated      = "truncated"
 	OutcomeWithheldBudget = "withheld_response_budget"
+	// OutcomeWithheldProjectScope: a project-only caller is refused the kind
+	// (CHAOS-12330); kind_state is unauthorized and nothing was read.
+	OutcomeWithheldProjectScope = "withheld_project_scope"
 )
 
 // providerMemberStates are the per-subject states a classifying provider may
@@ -1187,6 +1190,8 @@ func coverageRows(plan readPlan, subjects []contextfabric.SubjectRef, bundle con
 			key := contextfabric.FactSubjectKey(subject)
 			row.Withheld = withheld[string(kind)+"\x00"+subjectKey(subject)]
 			switch {
+			case recorded && outcome.Branch == "withheld":
+				row.Outcome, row.KindState, row.Reason = OutcomeWithheldProjectScope, string(outcome.State), outcome.Reason
 			case !slices.Contains(capability.SupportedSubjectKinds, subject.Kind) && recorded && outcome.Branch == "scope_gap":
 				// The kind could be reached only through scope expansion,
 				// and the expansion delivered nothing readable: disclosed,
@@ -1441,7 +1446,7 @@ func readStatus(response FactsResponse) string {
 	}
 	for _, row := range response.Coverage {
 		switch row.Outcome {
-		case OutcomeUnavailable, OutcomeTruncated:
+		case OutcomeUnavailable, OutcomeTruncated, OutcomeWithheldProjectScope:
 			return StatusPartial
 		}
 		if len(row.Withheld) > 0 {

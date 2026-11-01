@@ -58,7 +58,9 @@ const (
 	// measured before this change, and measured too early.
 	BudgetAssertDecisive BudgetAssertStage = "decisive"
 	// BudgetAssertSubjectlessTerminal is unresolved.go's terminalResult: the
-	// clarification/no-match exit. It charges SubjectResolution.Candidates,
+	// clarification/no-match exit, and project_scope_refusal.go's
+	// projectNarrowingRefusalResult, which is a no-match with no subject too
+	// (CHAOS-12330). It charges SubjectResolution.Candidates,
 	// which the contract permits up to 50 -- above a default 30-item ceiling
 	// on that term alone.
 	BudgetAssertSubjectlessTerminal BudgetAssertStage = "subjectless_terminal"
@@ -315,6 +317,9 @@ func (e *Engine) finalizeServedAs(ctx context.Context, principal storage.Princip
 	if plan != nil {
 		result = stampAnswerPlan(result, *plan)
 	}
+	// CHAOS-12330: a refused kind the plan asked for, on every serving path,
+	// before the status floor below reads the coverage.
+	result = discloseProjectScopeRefusedKinds(principal, result)
 	// The late writers (the census scope limitation, the completeness
 	// re-derivation and the completeness authority) are ONE function, so that
 	// the stage-3 fit measures the document these writers produce and not the

@@ -173,3 +173,17 @@ func TestQueryVersionMovedPastTheTeamProjectOnlyCause(t *testing.T) {
 		t.Fatalf("QueryVersion = %q: an answer saved before the project-only team cause (v255 and before) must not be reused", devhealthfacts.QueryVersion)
 	}
 }
+
+// A read that is not a cohort read discloses a cut hop walk and undecided path
+// endpoints, so an answer stored before it (v259 and before) holds no such
+// disclosure and must not be reused.
+func TestQueryVersionMovedPastTheCutGraphReadDisclosure(t *testing.T) {
+	const prefix = "devhealthfacts.clickhouse.v"
+	version, ok := strings.CutPrefix(devhealthfacts.QueryVersion, prefix)
+	if !ok {
+		t.Fatalf("QueryVersion = %q, want the %q<n> shape", devhealthfacts.QueryVersion, prefix)
+	}
+	if n, err := strconv.Atoi(version); err != nil || n < 260 {
+		t.Fatalf("QueryVersion = %q: an answer saved before the cut graph read disclosure (v259 and before) must not be reused", devhealthfacts.QueryVersion)
+	}
+}
