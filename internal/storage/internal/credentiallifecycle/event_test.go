@@ -527,3 +527,16 @@ func TestSelfMarkerNeedsTheCredentialsOwnId(t *testing.T) {
 		t.Errorf("an admin revocation: %v", err)
 	}
 }
+
+func TestFamilyMemberActorKeepsEveryActorButTheCredentialItself(t *testing.T) {
+	for name, tc := range map[string]struct{ in, want Actor }{
+		"user":       {Actor{ActorUser, "web-user-1"}, Actor{ActorUser, "web-user-1"}},
+		"operator":   {Actor{ActorOperator, "op-1"}, Actor{ActorOperator, "op-1"}},
+		"system":     {Actor{Type: ActorSystem}, Actor{Type: ActorSystem}},
+		"credential": {Actor{Type: ActorCredential}, Actor{Type: ActorSystem}},
+	} {
+		if got := FamilyMemberActor(tc.in); got != tc.want {
+			t.Errorf("%s: %+v, want %+v", name, got, tc.want)
+		}
+	}
+}

@@ -30,15 +30,21 @@ func familyMembers(t *testing.T, lifecycle *storage.CredentialLifecycle, family 
 // once from the revocation input.
 func TestOutbox_FamilyRevokeKeepsTheMappedActorOnEveryMember(t *testing.T) {
 	for name, tc := range map[string]struct {
-		revoke   func(target string) storage.CredentialRevocationInput
-		wantType string
-		wantRef  func(id, target string) string
+		revoke func(target string) storage.CredentialRevocationInput
+		want   func(id, target string) (actorType, actorRef string)
 	}{
-		"user":     {func(id string) storage.CredentialRevocationInput { return revoke(id, "web-user-1", "", false) }, "user", func(_, _ string) string { return "web-user-1" }},
-		"operator": {func(id string) storage.CredentialRevocationInput { return revoke(id, "operator_1", "operator", false) }, "operator", func(_, _ string) string { return "operator_1" }},
-		// A credential actor names the credential the row is about: the
-		// contract fixes that reference to the row's own aggregate.
-		"self": {func(id string) storage.CredentialRevocationInput { return revoke(id, id, "", true) }, "credential", func(id, _ string) string { return id }},
+		"user":     {func(id string) storage.CredentialRevocationInput { return revoke(id, "web-user-1", "", false) }, func(_, _ string) (string, string) { return "user", "web-user-1" }},
+		"operator": {func(id string) storage.CredentialRevocationInput { return revoke(id, "operator_1", "operator", false) }, func(_, _ string) (string, string) { return "operator", "operator_1" }},
+		// The initiating credential keeps the credential actor; its siblings,
+		// which it did not revoke itself, are revoked by the system with no
+		// reference (acp ruling, the family revocation reason stays on the audit
+		// rows).
+		"self": {func(id string) storage.CredentialRevocationInput { return revoke(id, id, "", true) }, func(id, target string) (string, string) {
+			if id == target {
+				return "credential", id
+			}
+			return "system", ""
+		}},
 	} {
 		t.Run(name, func(t *testing.T) {
 			audit, lifecycle, _ := newOutboxStore(t)
@@ -50,8 +56,9 @@ func TestOutbox_FamilyRevokeKeepsTheMappedActorOnEveryMember(t *testing.T) {
 				rows := outboxRows(t, audit, id)
 				require.Len(t, rows, 2, id)
 				require.Equal(t, "acr_credential.revoked", rows[1].EventType, id)
-				require.Equal(t, tc.wantType, rows[1].Payload.ActorType, "%s: every member keeps the mapped actor type", id)
-				require.Equal(t, tc.wantRef(id, ids[0]), rows[1].Payload.ActorRef, id)
+				wantType, wantRef := tc.want(id, ids[0])
+				require.Equal(t, wantType, rows[1].Payload.ActorType, "%s: actor type", id)
+				require.Equal(t, wantRef, rows[1].Payload.ActorRef, "%s: actor ref", id)
 			}
 		})
 	}

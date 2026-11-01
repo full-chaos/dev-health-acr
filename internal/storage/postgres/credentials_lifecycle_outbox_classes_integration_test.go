@@ -309,15 +309,16 @@ func sha256Hex(value string) string {
 	return hex.EncodeToString(sum[:])
 }
 
-func requireFamilyRows(t *testing.T, f outboxFixture, ids []string, wantType string, wantRef func(id string) string) {
+func requireFamilyRows(t *testing.T, f outboxFixture, ids []string, want func(id string) (actorType, actorRef string)) {
 	t.Helper()
 	for _, id := range ids {
 		rows := lifecycleRows(t, f.ctx, f.db, id)
 		require.Len(t, rows, 2, id)
 		require.Equal(t, 2, rows[1].Revision, id)
 		require.Equal(t, "acr_credential.revoked", rows[1].EventType, id)
-		require.Equal(t, wantType, rows[1].ActorType, "%s: every member keeps the mapped actor type", id)
-		require.Equal(t, wantRef(id), rows[1].ActorRef, id)
+		wantType, wantRef := want(id)
+		require.Equal(t, wantType, rows[1].ActorType, "%s: actor type", id)
+		require.Equal(t, wantRef, rows[1].ActorRef, "%s: actor ref", id)
 	}
 }
 
@@ -326,7 +327,7 @@ func TestCredentialOutboxClass_FamilyRevokeByUserKeepsTheActorOnEveryMember(t *t
 	ids := browserFamilyMembers(t, f, "famuser", 3)
 	_, err := f.service.Revoke(f.ctx, credentialTestOrgID, ids[0], "web-user-1")
 	require.NoError(t, err)
-	requireFamilyRows(t, f, ids, "user", func(string) string { return "web-user-1" })
+	requireFamilyRows(t, f, ids, func(string) (string, string) { return "user", "web-user-1" })
 }
 
 func TestCredentialOutboxClass_FamilyRevokeByOperatorKeepsTheActorOnEveryMember(t *testing.T) {
@@ -334,17 +335,22 @@ func TestCredentialOutboxClass_FamilyRevokeByOperatorKeepsTheActorOnEveryMember(
 	ids := browserFamilyMembers(t, f, "famoperator", 3)
 	_, err := f.service.RevokeAsOperator(f.ctx, credentialTestOrgID, ids[0], "operator_1", "")
 	require.NoError(t, err)
-	requireFamilyRows(t, f, ids, "operator", func(string) string { return "operator_1" })
+	requireFamilyRows(t, f, ids, func(string) (string, string) { return "operator", "operator_1" })
 }
 
-func TestCredentialOutboxClass_FamilyRevokeBySelfNamesEachMemberAsItsOwnActor(t *testing.T) {
+func TestCredentialOutboxClass_FamilyRevokeBySelfNamesTheInitiatorAndRevokesSiblingsAsTheSystem(t *testing.T) {
 	f := newOutboxFixture(t)
 	ids := browserFamilyMembers(t, f, "famself", 3)
 	_, err := f.service.RevokeSelf(f.ctx, principalOf(ids[0], []string{"acme/widgets"}, []string{"context:read"}))
 	require.NoError(t, err)
-	// The contract fixes a credential actor's reference to the row's own
-	// aggregate, so each member names itself.
-	requireFamilyRows(t, f, ids, "credential", func(id string) string { return id })
+	// The initiating credential keeps the credential actor; its siblings are
+	// revoked by the system with no reference (acp ruling).
+	requireFamilyRows(t, f, ids, func(id string) (string, string) {
+		if id == ids[0] {
+			return "credential", id
+		}
+		return "system", ""
+	})
 }
 
 func TestCredentialOutboxClass_RefreshReuseAndSignOutRevokeTheFamilyAsTheRefreshGrant(t *testing.T) {
@@ -374,7 +380,7 @@ func TestCredentialOutboxClass_RefreshReuseAndSignOutRevokeTheFamilyAsTheRefresh
 	require.Equal(t, storage.BrowserRefreshReuseRevoked, reuse.Decision)
 	reuseIDs := members(reuseFamily)
 	require.Len(t, reuseIDs, 2)
-	requireFamilyRows(t, f, reuseIDs, "user", func(string) string { return "oauth_refresh_grant" })
+	requireFamilyRows(t, f, reuseIDs, func(string) (string, string) { return "user", "oauth_refresh_grant" })
 
 	*fixture.clock = fixture.now
 	signedFamily, token := fixture.startFamily(t, ctx, "so1")
@@ -383,5 +389,5 @@ func TestCredentialOutboxClass_RefreshReuseAndSignOutRevokeTheFamilyAsTheRefresh
 	require.Equal(t, storage.BrowserFamilyRevokedNow, decision)
 	signedIDs := members(signedFamily)
 	require.Len(t, signedIDs, 1)
-	requireFamilyRows(t, f, signedIDs, "user", func(string) string { return "oauth_refresh_grant" })
+	requireFamilyRows(t, f, signedIDs, func(string) (string, string) { return "user", "oauth_refresh_grant" })
 }
