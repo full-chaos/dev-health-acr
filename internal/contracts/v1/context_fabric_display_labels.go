@@ -184,6 +184,11 @@ var contextFabricProjectScopeWithheldFactReasons = map[ContextFabricFactKind]str
 // read, and no answer is written over the whole grant (CHAOS-12324 narrows).
 const ContextFabricRequestedProjectNarrowingUnavailableLimitation = "Requested project narrowing not available yet"
 
+// ContextFabricProjectScopeWithheldLimitation is the sentence of an answer a
+// project grant could only partly cover: the details beside it say what was
+// left out and why.
+const ContextFabricProjectScopeWithheldLimitation = "A project grant does not cover part of what was asked, so this answer leaves it out"
+
 // ContextFabricProjectScopeWithheldFactLabel is the label, and the reason, of
 // a fact kind withheld from a project-only caller. A kind with no row reads
 // the sentence that assumes least.

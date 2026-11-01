@@ -963,7 +963,16 @@ func (r *FactCapabilityRegistry) ReadFacts(ctx context.Context, principal storag
 	//
 	// Tests reach the same outcomes through a FactScopeExpander, which is
 	// the real port and therefore the honest way to exercise them.
-	resolved := r.scopeResolver.Resolve(ctx, principal, newFactScopeResolveInput(request), capabilities)
+	//
+	// CHAOS-12330: a project-only caller's resolver has no expander. It decides
+	// the same gaps and reads nothing, because no expansion read may run for a
+	// caller every kind is refused to.
+	withheld := projectScopeWithheld(principal)
+	scopeResolver := r.scopeResolver
+	if withheld {
+		scopeResolver = r.withoutScopeExpansionResolver()
+	}
+	resolved := scopeResolver.Resolve(ctx, principal, newFactScopeResolveInput(request), capabilities)
 	request.Scope = &resolved
 	bundle.Scope = &resolved
 	// CHAOS-4257: the ctx.Err() check this function used to run before ANY
@@ -1051,6 +1060,9 @@ func (r *FactCapabilityRegistry) ReadFacts(ctx context.Context, principal storag
 		requirementsByKind[requirement.Kind] = requirement
 	}
 	plannedReads := planFactReads(newFactPlanInput(request), capabilities)
+	if withheld {
+		withholdProjectScopeReads(plannedReads, request.Scope)
+	}
 	prepared := r.prepareFactReads(request, requirementsByKind, plannedReads, allowedSubjects)
 	reads := r.runFactReads(ctx, principal, prepared)
 	for readIndex, planned := range plannedReads {
@@ -1060,6 +1072,12 @@ func (r *FactCapabilityRegistry) ReadFacts(ctx context.Context, principal storag
 				coverageDetailSpec{Code: contractsv1.ContextFabricCoverageDetailFactUnconfigured})
 			bundle.recordOutcome(planned.Kind, factReadUnconfigured, planned.Subjects, nil, nil)
 			r.recordFactRead(ctx, principal, planned.Kind, factReadUnconfigured, SourceUnconfigured, planned.Subjects, 0, false)
+			continue
+		}
+		if planned.Withheld {
+			appendProjectScopeWithheld(&bundle, planned.Kind)
+			bundle.recordOutcome(planned.Kind, factReadWithheld, planned.Subjects, nil, nil)
+			r.recordFactRead(ctx, principal, planned.Kind, factReadWithheld, SourceUnauthorized, planned.Subjects, 0, false)
 			continue
 		}
 		// len(Subjects)==0 distinguishes the two shapes a gap can take. With
@@ -1283,7 +1301,7 @@ func (r *FactCapabilityRegistry) prepareFactReads(request CanonicalFactRequest, 
 	prepared := make([]preparedFactRead, len(plans))
 	for i, planned := range plans {
 		registered, ok := r.providers[planned.Kind]
-		if !ok || (planned.ScopeGap != nil && len(planned.Subjects) == 0) || planned.Pruned {
+		if !ok || planned.Withheld || (planned.ScopeGap != nil && len(planned.Subjects) == 0) || planned.Pruned {
 			continue
 		}
 		query, err := buildFactQuery(request, requirementsByKind[planned.Kind], registered.capability, allowed, planned.Subjects)
@@ -1339,6 +1357,9 @@ const (
 	// factReadPruned: CHAOS-3783 -- no resolved subject kind fits the
 	// capability, so it could not have produced an admissible fact.
 	factReadPruned factReadOutcome = "pruned"
+	// factReadWithheld: CHAOS-12330 -- a project-only caller is refused the
+	// kind, so no provider ran.
+	factReadWithheld factReadOutcome = "withheld"
 	// factReadFailed: the provider ran and returned an error.
 	factReadFailed factReadOutcome = "failed"
 	// factReadCompleted: the provider ran and returned a result. Whether
@@ -1381,7 +1402,7 @@ func latestWindowEndLogValue(value string) string {
 // FactReadOutcomeVocabulary is the closed set of outcomes the fact read line carries.
 func FactReadOutcomeVocabulary() []string {
 	return []string{
-		string(factReadUnconfigured), string(factReadScopeGap), string(factReadPruned), string(factReadFailed),
+		string(factReadUnconfigured), string(factReadScopeGap), string(factReadPruned), string(factReadWithheld), string(factReadFailed),
 		string(factReadCompleted), string(factReadRejected), string(factReadRejectedNonNumericMeasure), string(factReadCancelled),
 	}
 }

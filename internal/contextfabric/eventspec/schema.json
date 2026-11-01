@@ -1111,7 +1111,7 @@
       "request_id"
     ],
     "bounded_aggregation": "one line per exit through the served document finalizer, over the passes of a request.",
-    "max_lines_per_scope": 20,
+    "max_lines_per_scope": 22,
     "fields": [
       {
         "key": "org_id",
@@ -4211,6 +4211,7 @@
           "unconfigured",
           "scope_gap",
           "pruned",
+          "withheld",
           "failed",
           "completed",
           "rejected",

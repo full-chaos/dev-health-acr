@@ -241,6 +241,26 @@ func applyUnverifiedProjectNarrowingStatusFloor(result *InvestigationResult) {
 	}
 }
 
+// applyProjectScopeWithheldStatusFloor (CHAOS-12330) floors a complete answer
+// whose coverage carries a project_scope_withheld detail: a project-only caller
+// was refused part of what it asked, so the answer is partial, whatever the
+// model called it, and it says so in its own sentence. Never promotes; leaves
+// a refusal, degraded, no_match and clarification as they are.
+func applyProjectScopeWithheldStatusFloor(result *InvestigationResult) {
+	if result == nil || result.Status != InvestigationComplete || result.RefusalBasis != "" {
+		return
+	}
+	for _, detail := range result.Coverage.Details {
+		if detail.Code == contractsv1.ContextFabricCoverageDetailProjectScopeWithheld {
+			floorNoMatchTo(result, InvestigationPartial)
+			composed, displaced := appendBoundedLimitations(result.Limitations, []string{contractsv1.ContextFabricProjectScopeWithheldLimitation})
+			result.Limitations = composed
+			result.LimitationsDisplaced += displaced
+			return
+		}
+	}
+}
+
 // applyStatusPoolCutStatusFloor floors a complete answer that states its member
 // status was decided within a cut read: members past the read were not checked,
 // so the answer is partial.
@@ -295,6 +315,7 @@ func ApplyServedStatusFloors(result InvestigationResult) InvestigationResult {
 	applyEmptyMemberSearchStatusFloor(&result)
 	applyDeniedCohortStatusFloor(&result)
 	applyUnverifiedProjectNarrowingStatusFloor(&result)
+	applyProjectScopeWithheldStatusFloor(&result)
 	applyStatusPoolCutStatusFloor(&result)
 	applyOrganizationSubjectStatusFloor(&result)
 	if result.Status != before || restated {
