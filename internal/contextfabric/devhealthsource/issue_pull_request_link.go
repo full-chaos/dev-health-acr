@@ -34,6 +34,13 @@ import (
 //     cannot project covers (an outranked-link tombstone). A lower-tier row a native row
 //     still covers when this producer reads it is skipped and counted, never
 //     projected, so the producer emits only links the tier rule allows.
+//   - work_items is keyed by (org_id, repo_id, work_item_id) and a row names no
+//     issue repository, so an id with several work item rows cannot be
+//     resolved: nothing says which issue the link means, in either direction.
+//     Such a row gives no edge and is counted (ambiguous_links). A wrong edge
+//     crosses a grant: a repository-restricted caller reaches a repository-less
+//     issue through its link (falkorgraph tree_walk.go admitted). A missed link
+//     is a gap. An id with one row stays, in any repository.
 
 // Edge property names. They are persisted on the graph edge by falkorgraph's
 // projectRelationship, which is the only reason the tier survives projection.
@@ -67,6 +74,10 @@ const (
 	// heuristic rows a native row of the organization covers (by the issue
 	// or by the pull request) when they are read.
 	issuePullRequestLinkSkipOutranked = "issue_pull_request_link:outranked_by_native"
+	// issuePullRequestLinkSkipAmbiguous counts the rows whose work item id has
+	// several work item rows (issuePullRequestLinkAmbiguous). The rows of a
+	// pull-request-typed work item count: one can be what the link names.
+	issuePullRequestLinkSkipAmbiguous = "issue_pull_request_link:ambiguous_links"
 )
 
 // issuePullRequestLinkNativeCover is the organization's native rows, read by
@@ -80,6 +91,24 @@ const issuePullRequestLinkNativeCover = "SELECT %s FROM work_graph_issue_pr WHER
 var issuePullRequestLinkOutranked = "toUInt8(l.provenance != 'native' AND (l.work_item_id IN (" +
 	fmt.Sprintf(issuePullRequestLinkNativeCover, "work_item_id") + ") OR (l.repo_id, l.pr_number) IN (" +
 	fmt.Sprintf(issuePullRequestLinkNativeCover, "repo_id, pr_number") + ")))"
+
+// issuePullRequestLinkWorkItemJoin joins a link row to its work item: one row
+// per work item id, so one link row is one row of the read. A pull-request-typed
+// row counts in id_rows. The other columns mean one row only when id_rows is 1,
+// and a reader decides issuePullRequestLinkAmbiguous before it reads them. It is
+// the one join of the link producer and its edge count, so the two cannot
+// differ.
+const issuePullRequestLinkWorkItemJoin = `LEFT JOIN (
+  SELECT org_id, work_item_id, count() AS id_rows, any(repo_id) AS repo_id, any(type) AS type,
+         any(created_at) AS created_at, any(completed_at) AS completed_at, any(closed_at) AS closed_at
+  FROM work_items FINAL
+  WHERE org_id = {org_id:String}
+  GROUP BY org_id, work_item_id
+) AS w ON w.org_id = l.org_id AND w.work_item_id = l.work_item_id`
+
+// issuePullRequestLinkAmbiguous is 1 for a link row whose id has several work
+// item rows.
+const issuePullRequestLinkAmbiguous = "toUInt8(ifNull(w.id_rows, 0) > 1)"
 
 // pullRequestWorkItemTypes are the work_items.type values of a work item that
 // IS a pull request. A link of record targets an issue, so such a row is
@@ -108,6 +137,12 @@ func pullRequestCanonicalID(repoID string, number int64) string {
 // skipped and counted: the fallback-only rule gives it no edge, and the native
 // edge's projection retracts one written before the native link arrived.
 //
+// A row whose id is ambiguous (issuePullRequestLinkAmbiguous) is skipped and
+// counted the same way. A native one still shows the provider attached an issue
+// to that pull request, so it covers the pull request end and that pull
+// request's lower-tier links go. It names no issue end: the issue is unknown,
+// and covering one of the rows could retract a link of an unrelated issue.
+//
 // The edge carries no confidence and no evidence text: no sibling edge carries
 // either, so the tier and its rank are the only properties.
 //
@@ -123,9 +158,9 @@ func queryIssuePullRequestLinks(ctx context.Context, client contextpacket.ClickH
        w.created_at, ` + nullableTimestamp("coalesce(w.completed_at, w.closed_at)") + `,
        toUInt8(ifNull(p.number, 0) > 0), ifNull(r.repo, ''),
        p.created_at, ` + nullableTimestamp("coalesce(p.merged_at, p.closed_at)") + `,
-       ` + issuePullRequestLinkOutranked + `
+       ` + issuePullRequestLinkOutranked + `, ` + issuePullRequestLinkAmbiguous + `
 FROM work_graph_issue_pr AS l FINAL
-LEFT JOIN work_items AS w FINAL ON w.org_id = l.org_id AND w.work_item_id = l.work_item_id
+` + issuePullRequestLinkWorkItemJoin + `
 LEFT JOIN git_pull_requests AS p FINAL ON p.org_id = l.org_id AND p.repo_id = l.repo_id AND p.number = l.pr_number
 LEFT JOIN repos AS r FINAL ON r.id = l.repo_id AND r.org_id = l.org_id
 WHERE l.org_id = {org_id:String}` + sincePredicate(cursor, "l.last_synced", rowKey) + orderBy("l.last_synced", rowKey)
@@ -136,10 +171,10 @@ WHERE l.org_id = {org_id:String}` + sincePredicate(cursor, "l.last_synced", rowK
 		var workItemID, prRepoID, provenance, issueRepoID, issueType, prRepoSlug string
 		var rawNumber uint32
 		var observedAt, issueCreatedAt, issueEndedAt, prCreatedAt, prEndedAt time.Time
-		var issueResolved, issueHasEnded, prExists, prHasEnded, outranked uint8
+		var issueResolved, issueHasEnded, prExists, prHasEnded, outranked, ambiguous uint8
 		if err := r.Scan(&workItemID, &prRepoID, &rawNumber, &provenance, &observedAt,
 			&issueResolved, &issueRepoID, &issueType, &issueCreatedAt, &issueHasEnded, &issueEndedAt,
-			&prExists, &prRepoSlug, &prCreatedAt, &prHasEnded, &prEndedAt, &outranked); err != nil {
+			&prExists, &prRepoSlug, &prCreatedAt, &prHasEnded, &prEndedAt, &outranked, &ambiguous); err != nil {
 			return nil, err
 		}
 		observedAt = observedAt.UTC()
@@ -191,6 +226,9 @@ WHERE l.org_id = {org_id:String}` + sincePredicate(cursor, "l.last_synced", rowK
 		}
 		if outranked == 1 {
 			return skip(issuePullRequestLinkSkipOutranked)
+		}
+		if ambiguous == 1 {
+			return skipNative(issuePullRequestLinkSkipAmbiguous, pullRequestEnd)
 		}
 		if issueResolved == 0 {
 			return skipNative(issuePullRequestLinkSkipUnresolvedIssue, pullRequestEnd)

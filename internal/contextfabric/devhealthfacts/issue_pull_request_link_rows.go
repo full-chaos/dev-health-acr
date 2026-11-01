@@ -8,7 +8,12 @@ package devhealthfacts
 //
 //   - the pull request the row names exists (a stale link is skipped, as the
 //     canonical link projection skips it), and
-//   - the work item is an issue (a work item typed pr or merge_request is not).
+//   - the work item is an issue (a work item typed pr or merge_request is not), and
+//   - the id names one work item row. work_items is keyed by (org_id, repo_id,
+//     work_item_id) and a link row names no issue repository, so nothing says
+//     which of several rows a link means. Such a link counts in no read here,
+//     the rule of the link producer (devhealthsource
+//     issuePullRequestLinkAmbiguous). An id with one row stays, in any repository.
 //
 // repo_id of a link row is the PULL REQUEST's repository, never the issue's
 // own repository column.
@@ -26,6 +31,22 @@ func workItemIsIssueSQL(alias string) string {
 	return `ifNull(` + alias + `.type, '') NOT IN ('pr', 'merge_request')`
 }
 
+// linkWorkItemsSQL is the work items of the ids (a subquery; "" is every work
+// item of the organization) as one row per id, the join side of a link read:
+// id_rows counts the id's rows, pull-request-typed ones too, and type means one
+// row only when id_rows is 1.
+func linkWorkItemsSQL(ids string) string {
+	among := ``
+	if ids != "" {
+		among = ` AND work_item_id IN ` + ids
+	}
+	return `(SELECT org_id, work_item_id, count() AS id_rows, any(type) AS type FROM work_items FINAL WHERE org_id = {org_id:String}` + among + ` GROUP BY org_id, work_item_id) AS wi`
+}
+
+// linkIDOnOneRowSQL holds for a link row that does not name several work item
+// rows; wi is linkWorkItemsSQL. A link row with no work item row holds.
+const linkIDOnOneRowSQL = `ifNull(wi.id_rows, 0) <= 1`
+
 // issueLinkRowsSQL is the organization-scoped link rows whose pull request
 // exists and whose work item is an issue, columns work_item_id, pr_repo_id
 // (the pull request's repository), pr_number, provenance, link_rank (0 for a tier outside
@@ -40,9 +61,8 @@ var issueLinkRowsSQL = issueLinkRowsAmongSQL("")
 // organization. Every row of a kept id, and every version of a kept pull
 // request, is still read, so the rule over a kept id is unchanged.
 func issueLinkRowsAmongSQL(candidates string) string {
-	workItems, pullRequests, among := `work_items AS wi FINAL`, `git_pull_requests AS pr FINAL`, ``
+	workItems, pullRequests, among := linkWorkItemsSQL(candidates), `git_pull_requests AS pr FINAL`, ``
 	if candidates != "" {
-		workItems = `(SELECT org_id, work_item_id, type FROM work_items FINAL WHERE org_id = {org_id:String} AND work_item_id IN ` + candidates + `) AS wi`
 		pullRequests = `(SELECT org_id, repo_id, number FROM git_pull_requests FINAL WHERE org_id = {org_id:String} AND (repo_id, number) IN (SELECT repo_id, pr_number FROM work_graph_issue_pr WHERE org_id = {org_id:String} AND work_item_id IN ` + candidates + `)) AS pr`
 		among = ` AND l.work_item_id IN ` + candidates
 	}
@@ -51,7 +71,7 @@ func issueLinkRowsAmongSQL(candidates string) string {
   FROM work_graph_issue_pr AS l FINAL
   INNER JOIN ` + pullRequests + ` ON ` + linkedPullRequestOnSQL + `
   LEFT JOIN ` + workItems + ` ON wi.org_id = l.org_id AND wi.work_item_id = l.work_item_id
-  WHERE l.org_id = {org_id:String}` + among + ` AND ` + workItemIsIssueSQL("wi") + `
+  WHERE l.org_id = {org_id:String}` + among + ` AND ` + workItemIsIssueSQL("wi") + ` AND ` + linkIDOnOneRowSQL + `
 )`
 }
 
@@ -77,8 +97,8 @@ const linkedWorkItemIDsSQL = `(SELECT work_item_id FROM work_graph_issue_pr WHER
 // admittedLinkedPullRequestRowsSQL is the admitted link rows (known tier) whose
 // pull request exists, columns work_item_id, pr_repo_id, pr_number, link_rank,
 // without reading work_items: a caller that has already restricted the work
-// items to issues joins it on work_item_id, and so reads the work item table
-// once.
+// items to issues, and to ids on one row (teamAmbiguousLinkHashesStatement),
+// joins it on work_item_id, and so reads the work item table once.
 var admittedLinkedPullRequestRowsSQL = admittedLinkedPullRequestRowsAmongSQL("")
 
 // admittedLinkedPullRequestRowsAmongSQL is admittedLinkedPullRequestRowsSQL
@@ -104,17 +124,27 @@ func admittedLinkedPullRequestRowsAmongSQL(candidateHashes string) string {
 )`
 }
 
+// linkCoversPullRequestSQL holds for a link row that counts in its pull
+// request's cover, the link rows of a read that decides the fallback-only rule;
+// wi is linkWorkItemsSQL. A row whose id names several work items counts only
+// when it is native: it gives no link, and it still shows the provider attached
+// an issue to that pull request (the entity-tree rule), as the link producer's
+// outranked-link tombstone does. A lower-tier one says less: it covers nothing.
+var linkCoversPullRequestSQL = `((` + linkIDOnOneRowSQL + ` AND ` + workItemIsIssueSQL("wi") + `) OR (NOT ` + linkIDOnOneRowSQL + ` AND l.provenance = 'native'))`
+
 // strongestLinkTierOfPullRequestsSQL is, for each pull request named by
 // {pull_request_keys} ("<repo id>:<number>"), the strongest admitted link tier
 // across the issues of every project, requested or not: columns cover_repo_id,
 // cover_number, cover_rank. It applies the admission rule of
 // issueLinkRowsAmongSQL (the pull request exists, the work item is an issue,
-// the tier is in the vocabulary) and reads the links of those pull requests only.
+// the tier is in the vocabulary) and reads the links of those pull requests
+// only, with one difference (linkCoversPullRequestSQL): a native row whose id
+// names several work items still covers its pull request.
 var strongestLinkTierOfPullRequestsSQL = `(
   SELECT toString(l.repo_id) AS cover_repo_id, l.pr_number AS cover_number, max(` + linkTierRankSQL + `) AS cover_rank
   FROM work_graph_issue_pr AS l FINAL
   INNER JOIN (SELECT org_id, repo_id, number FROM git_pull_requests FINAL WHERE org_id = {org_id:String} AND concat(toString(repo_id), '` + projectOriginKeySeparator + `', toString(number)) IN {pull_request_keys:Array(String)}) AS pr ON ` + linkedPullRequestOnSQL + `
-  LEFT JOIN (SELECT org_id, work_item_id, type FROM work_items FINAL WHERE org_id = {org_id:String} AND work_item_id IN (SELECT work_item_id FROM work_graph_issue_pr WHERE org_id = {org_id:String} AND concat(toString(repo_id), '` + projectOriginKeySeparator + `', toString(pr_number)) IN {pull_request_keys:Array(String)})) AS wi ON wi.org_id = l.org_id AND wi.work_item_id = l.work_item_id
-  WHERE l.org_id = {org_id:String} AND concat(toString(l.repo_id), '` + projectOriginKeySeparator + `', toString(l.pr_number)) IN {pull_request_keys:Array(String)} AND ` + workItemIsIssueSQL("wi") + ` AND ` + linkTierRankSQL + ` > 0
+  LEFT JOIN ` + linkWorkItemsSQL(`(SELECT work_item_id FROM work_graph_issue_pr WHERE org_id = {org_id:String} AND concat(toString(repo_id), '`+projectOriginKeySeparator+`', toString(pr_number)) IN {pull_request_keys:Array(String)})`) + ` ON wi.org_id = l.org_id AND wi.work_item_id = l.work_item_id
+  WHERE l.org_id = {org_id:String} AND concat(toString(l.repo_id), '` + projectOriginKeySeparator + `', toString(l.pr_number)) IN {pull_request_keys:Array(String)} AND ` + linkCoversPullRequestSQL + ` AND ` + linkTierRankSQL + ` > 0
   GROUP BY cover_repo_id, cover_number
 )`

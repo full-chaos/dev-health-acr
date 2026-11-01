@@ -34,6 +34,14 @@ const (
 	// candidates as one array, so its peak is the scan of the unmerged work
 	// items; a set that grew with the organization would break the bound.
 	teamLinkCandidatesInterleavedBound = uint64(8 << 20)
+	// teamAmbiguousCandidatesInterleavedReadBound is the absolute read bound of
+	// the statement that finds the candidates on several work item rows, at the
+	// large interleaved organization. It reads every row of a candidate id in any
+	// project, so the owned-project prune cannot help it, and it holds no slope:
+	// its read grows with the granules the candidate ids spread over, a real cost.
+	// The candidate statement peaked 3.3 MB at 250k work items and 4.4 MB at 625k
+	// with this read inside it, about 1.7% of the 256 MiB read cap.
+	teamAmbiguousCandidatesInterleavedReadBound = uint64(6 << 20)
 )
 
 // teamLinkCandidatesWithinBound is the candidate statement's absolute row.
@@ -161,10 +169,12 @@ SELECT `+id+`, ?, ?, 'filler', 'open', '', ?, '', 'linear', '', NULL FROM number
 	}
 	small, smallResult, smallErr := read()
 	smallBytes := projectReachedReadBytes(t, ctx, direct, lastMark)
+	smallAmbiguousBytes := teamAmbiguousCandidatesReadBytes(t, ctx, direct, lastMark)
 	smallCandidates := takeTeamLinkCandidatesPeak(t, ctx, direct, lastMark, small)
 	addFiller("more-", blockerMemoryMoreFillerItems)
 	large, largeResult, largeErr := read()
 	largeBytes := projectReachedReadBytes(t, ctx, direct, lastMark)
+	largeAmbiguousBytes := teamAmbiguousCandidatesReadBytes(t, ctx, direct, lastMark)
 	largeCandidates := takeTeamLinkCandidatesPeak(t, ctx, direct, lastMark, large)
 	t.Logf("read_bytes of the project-reached statements: %d at %d filler work items, %d at %d", smallBytes, blockerMemoryFillerItems, largeBytes, blockerMemoryFillerItems+blockerMemoryMoreFillerItems)
 	// The reach read and the linked pull request read run on every read.
@@ -176,6 +186,13 @@ SELECT `+id+`, ?, ?, 'filler', 'open', '', ?, '', 'linear', '', NULL FROM number
 		}
 		if teamLinkCandidatesWithinBound(teamLinkCandidatesInterleavedBound + 1) {
 			t.Errorf("control: a peak 1 byte over the %d-byte bound passed the team link candidate row", teamLinkCandidatesInterleavedBound)
+		}
+		t.Logf("AMBIGUOUS statement read_bytes %d at %d filler work items, %d at %d (bound %d)", smallAmbiguousBytes, blockerMemoryFillerItems, largeAmbiguousBytes, blockerMemoryFillerItems+blockerMemoryMoreFillerItems, teamAmbiguousCandidatesInterleavedReadBound)
+		if !teamAmbiguousCandidatesReadWithinBound(largeAmbiguousBytes) {
+			t.Errorf("the ambiguous candidate statement read %d bytes at the large interleaved organization, want at most %d", largeAmbiguousBytes, teamAmbiguousCandidatesInterleavedReadBound)
+		}
+		if teamAmbiguousCandidatesReadWithinBound(teamAmbiguousCandidatesInterleavedReadBound + 1) {
+			t.Errorf("control: a read 1 byte over the %d-byte bound passed the ambiguous candidate row", teamAmbiguousCandidatesInterleavedReadBound)
 		}
 	}
 	if smallBytes == 0 {
@@ -211,6 +228,26 @@ SELECT `+id+`, ?, ?, 'filler', 'open', '', ?, '', 'linear', '', NULL FROM number
 
 // projectReachedReadBytes is the peak read_bytes of the SELECTs over
 // team_project_ownership and work_graph_issue_pr logged after the mark.
+// teamAmbiguousCandidatesReadWithinBound is that statement's absolute read row.
+func teamAmbiguousCandidatesReadWithinBound(read uint64) bool {
+	return read <= teamAmbiguousCandidatesInterleavedReadBound
+}
+
+// teamAmbiguousCandidatesReadBytes is the highest read of that statement. No
+// statement logged is a measurement that did not happen.
+func teamAmbiguousCandidatesReadBytes(t *testing.T, ctx context.Context, direct clickhousedriver.Conn, markMicros int64) uint64 {
+	t.Helper()
+	var statements, read uint64
+	if err := direct.QueryRow(ctx, `SELECT count(), max(read_bytes) FROM system.query_log
+WHERE `+queryLogSinceMark+` AND type IN ('QueryFinish', 'ExceptionWhileProcessing') AND query_kind = 'Select' AND position(query, ?) > 0`, markMicros, teamAmbiguousLinkCandidatesMarker).Scan(&statements, &read); err != nil {
+		t.Fatalf("read query_log: %v", err)
+	}
+	if statements == 0 {
+		t.Fatalf("the ambiguous candidate read was not measured (the measurement did not happen)")
+	}
+	return read
+}
+
 func projectReachedReadBytes(t *testing.T, ctx context.Context, direct clickhousedriver.Conn, markMicros int64) uint64 {
 	t.Helper()
 	if err := direct.Exec(ctx, `SYSTEM FLUSH LOGS`); err != nil {
