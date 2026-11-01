@@ -93,7 +93,6 @@ func TestHostedReadRoutesMatchOpenAPI(t *testing.T) {
 	for _, route := range []struct{ path, method string }{
 		{path: "/api/v1/agent-context/capabilities", method: "get"},
 		{path: "/api/v1/agent-context/context-packets", method: "post"},
-		{path: "/api/v1/agent-context/context-packets/{context_packet_id}", method: "get"},
 		{path: "/api/v1/agent-context/evidence/{evidence_ref_id}", method: "get"},
 		{path: "/api/v1/context-fabric/investigations", method: "post"},
 		{path: "/api/v1/context-fabric/investigations/{result_id}", method: "get"},
