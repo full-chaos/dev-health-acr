@@ -99,7 +99,7 @@ func grantRuntimeACL(ctx context.Context, db *sql.DB, runtimeDSN string, feature
 	}
 	role := strings.Join(roles, ", ")
 	for _, statement := range dbacl.GrantStatements("", features) {
-		if len(statement.Privileges) == 0 && len(statement.SelectColumns) == 0 {
+		if len(statement.Privileges) == 0 && len(statement.SelectColumns) == 0 && len(statement.UpdateColumns) == 0 {
 			continue
 		}
 		if _, err := fmt.Fprintf(output, "granted %s on acr.%s to %s\n", statement.PrivilegeList(), statement.Table, role); err != nil {

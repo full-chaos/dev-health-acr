@@ -221,9 +221,9 @@ GRANT SELECT ON TABLE acr.workload_bindings TO :"runtime_user";
 REVOKE SELECT, INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER ON TABLE acr.context_packet_snapshots FROM :"runtime_user";
 GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE acr.context_packet_snapshots TO :"runtime_user";
 
--- INSERT internal/storage/postgres/outbox.go (lifecycleSink.Insert), SELECT the same file (lifecycleSink.MaxRevision); both inside the credential mutation transaction
+-- INSERT internal/storage/postgres/outbox.go (lifecycleSink.Insert), SELECT the same file (lifecycleSink.MaxRevision); both inside the credential mutation transaction. UPDATE of published_at only: outbox_publish.go LifecycleOutboxMarkSQL, and the claim's FOR UPDATE OF o (LifecycleOutboxClaimSQL), which Postgres checks as UPDATE on one column; no other column is writable and the publisher never deletes
 REVOKE SELECT, INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER ON TABLE acr.credential_lifecycle_outbox FROM :"runtime_user";
-GRANT SELECT, INSERT ON TABLE acr.credential_lifecycle_outbox TO :"runtime_user";
+GRANT SELECT, INSERT, UPDATE (published_at) ON TABLE acr.credential_lifecycle_outbox TO :"runtime_user";
 
 -- INSERT internal/storage/postgres/audit.go:69; SELECT credentials_audit.go:50 and :61 (credential rotation conflict checks)
 REVOKE SELECT, INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER ON TABLE acr.audit_events FROM :"runtime_user";

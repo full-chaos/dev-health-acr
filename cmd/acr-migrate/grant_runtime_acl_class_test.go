@@ -187,6 +187,9 @@ func TestRuntimeGrantDeclaration_rowLockedTablesDeclareUpdate(t *testing.T) {
 				updatable[grant.Table] = true
 			}
 		}
+		if len(grant.UpdateColumns) > 0 {
+			updatable[grant.Table] = true // UPDATE on one column is what a row lock needs
+		}
 	}
 	rowLock := regexp.MustCompile(`(?i)\bFOR\s+(NO\s+KEY\s+UPDATE|UPDATE|KEY\s+SHARE|SHARE)\b`)
 	literal := regexp.MustCompile("(?s)`([^`]*)`")
