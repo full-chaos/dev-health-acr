@@ -31,6 +31,10 @@ type cursorState struct {
 	// not started), and Space is dimensionSpace of the plan's space. The worker stores a cursor only after the backend applied
 	// its batch, so the stored position is always an applied one.
 	Dim *dimensionPosition `json:"dim,omitempty"`
+	// ProjectCatalog (CHAOS-12410) is the project catalog the membership
+	// refresh followed (project_catalog.go). It commits with the position
+	// because it is the same value. Absent means a full refresh.
+	ProjectCatalog string `json:"pc,omitempty"`
 }
 
 func decodeCursor(raw string) (cursorState, error) {
