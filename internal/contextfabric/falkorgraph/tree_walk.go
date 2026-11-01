@@ -1150,7 +1150,7 @@ func (a *Adapter) linkSegment(ctx context.Context, key, orgID string, state tree
 	out.teamExcluded = len(outOfNarrowing)
 	out.projectExcluded = len(outOfProjectScope)
 	if status.set() {
-		out.status.read = len(read)
+		out.status.read, out.status.readIDs = len(read), read
 		out.status.held = map[string]bool{}
 		for id := range admitted {
 			out.status.held[id] = true
