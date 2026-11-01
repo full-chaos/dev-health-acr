@@ -47,6 +47,22 @@ WHERE trust_domain = $1 AND namespace = $2 AND service_account_name = $3 AND ser
 	return binding, nil
 }
 
+// workloadCredentialPurgeSQL deletes one bounded batch of expired workload
+// credentials, oldest expiry first. An unrevoked row waits until its expired
+// event exists (RetentionDeleteGateSQL): no credential is deleted before its
+// terminal event.
+const workloadCredentialPurgeSQL = `
+DELETE FROM acr.client_credentials
+WHERE credential_id IN (
+    SELECT cc.credential_id FROM acr.client_credentials cc
+    WHERE cc.workload_binding_id IS NOT NULL
+      AND cc.expires_at IS NOT NULL
+      AND cc.expires_at < $1
+      AND ` + RetentionDeleteGateSQL + `
+    ORDER BY cc.expires_at
+    LIMIT $2
+)`
+
 // NewWorkloadCredentialPurger returns a bounded, batched purge function for
 // expired workload-exchanged credential rows (acr.client_credentials rows
 // carrying a non-null workload_binding_id). A workload re-exchanges a
@@ -61,16 +77,7 @@ func NewWorkloadCredentialPurger(db *sql.DB) func(ctx context.Context, before ti
 		if db == nil {
 			return 0, storage.ErrInvalidCredentialLifecycle
 		}
-		result, err := db.ExecContext(ctx, `
-DELETE FROM acr.client_credentials
-WHERE credential_id IN (
-    SELECT credential_id FROM acr.client_credentials
-    WHERE workload_binding_id IS NOT NULL
-      AND expires_at IS NOT NULL
-      AND expires_at < $1
-    ORDER BY expires_at
-    LIMIT $2
-)`, before, limit)
+		result, err := db.ExecContext(ctx, workloadCredentialPurgeSQL, before, limit)
 		if err != nil {
 			return 0, fmt.Errorf("purge expired workload credentials: %w", sanitizeDatabaseError(err))
 		}

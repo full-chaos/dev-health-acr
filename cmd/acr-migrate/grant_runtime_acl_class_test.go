@@ -176,8 +176,9 @@ func TestRuntimeGrantDeclaration_runtimeRoleHoldsExactlyTheDeclaration(t *testin
 
 // TestRuntimeGrantDeclaration_rowLockedTablesDeclareUpdate: Postgres checks
 // SELECT ... FOR UPDATE, FOR SHARE and FOR KEY SHARE as UPDATE, so a table a
-// statement locks needs UPDATE even when no statement updates it. Every table
-// read FROM or JOINed in a Go SQL literal that carries a row lock must declare UPDATE.
+// statement locks needs UPDATE even when no statement updates it. Every table a Go
+// SQL literal row-locks (all its tables, or only those a FOR ... OF clause names;
+// lockedTables) must declare UPDATE.
 func TestRuntimeGrantDeclaration_rowLockedTablesDeclareUpdate(t *testing.T) {
 	updatable := map[string]bool{}
 	for _, grant := range dbacl.RuntimeGrants {
@@ -189,7 +190,6 @@ func TestRuntimeGrantDeclaration_rowLockedTablesDeclareUpdate(t *testing.T) {
 	}
 	rowLock := regexp.MustCompile(`(?i)\bFOR\s+(NO\s+KEY\s+UPDATE|UPDATE|KEY\s+SHARE|SHARE)\b`)
 	literal := regexp.MustCompile("(?s)`([^`]*)`")
-	table := regexp.MustCompile(`(?i)\b(?:FROM|JOIN)\s+acr\.([a-z0-9_]+)`)
 	var missing []string
 	scanned := 0
 	require.NoError(t, filepath.Walk("../../internal", func(path string, info os.FileInfo, err error) error {
@@ -205,10 +205,8 @@ func TestRuntimeGrantDeclaration_rowLockedTablesDeclareUpdate(t *testing.T) {
 				continue
 			}
 			scanned++
-			for _, name := range table.FindAllStringSubmatch(match[1], -1) {
-				if !updatable[name[1]] {
-					missing = append(missing, name[1]+" in "+path)
-				}
+			for _, name := range tablesMissingUpdate(match[1], updatable) {
+				missing = append(missing, name+" in "+path)
 			}
 		}
 		return nil
