@@ -260,7 +260,7 @@ func (p *ActualCompletionProvider) ReadFacts(ctx context.Context, principal stor
 	// never starved by a sibling branch spending the shared budget before
 	// it runs, and a shortfall on either branch's own admissions is
 	// attributed to that branch's own kind rather than left undisclosed.
-	if projectSubjects := subjectsOfKind(query.Subjects, contextfabric.SubjectProject); len(projectSubjects) > 0 {
+	if projectSubjects := subjectsOfKind(query.Subjects, contextfabric.SubjectProject); len(projectSubjects) > 0 && !projectOnlyWithheld(principal) {
 		if timeBound.active {
 			// The roll-up's cancelled/unknown exclusion reads CURRENT
 			// w.status, which has no recorded history -- the same

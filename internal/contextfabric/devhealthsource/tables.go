@@ -279,7 +279,7 @@ WHERE org_id = {org_id:String}` + sincePredicate(cursor, "last_synced", "id") + 
 			return nil, err
 		}
 		observedAt = observedAt.UTC()
-		subject := contractsv1.ContextFabricSubjectRef{Kind: contractsv1.ContextFabricSubjectRepository, CanonicalID: "repository:" + id, Label: slug}
+		subject := contractsv1.ContextFabricSubjectRef{Kind: contractsv1.ContextFabricSubjectRepository, CanonicalID: contextfabric.RepositoryCanonicalID(id), Label: slug}
 		// CHAOS-3833 (embed-text spec §2): the repository template's tags
 		// field -- a JSON-rendered string array in production, parsed,
 		// sorted and joined at the producer so the same row always yields
@@ -633,7 +633,7 @@ func scanPullRequestRow(r contextpacket.ClickHouseRowScanner) ([]candidate, erro
 	// A pull request is valid from creation until it merged or
 	// closed; an open one has no end.
 	validFrom, validTo := requiredTime(createdAt), optionalTime(hasEnded, endedAt)
-	canonicalID := fmt.Sprintf("pull_request:%s:%d", repoID, number)
+	canonicalID := pullRequestCanonicalID(repoID, number)
 	rowSortKey := fmt.Sprintf("%s:%d", repoID, number)
 	// Raw title, trimmed and counted by item_normalization.go -- see
 	// queryWorkItems' note on why the trim does not happen here.
@@ -932,7 +932,7 @@ func incidentRowCandidates(row incidentRow, stats *incidentPageStats) []candidat
 // edge per repository: an incident mapped to two repositories has two edges,
 // and an edge to a repository whose mapping ended is retracted by its own id.
 func incidentRepositoryRelationshipID(incidentCanonicalID, repoID string) string {
-	return identity.DeriveRelationship(identity.RelationshipFamilyIncidentRepository, incidentCanonicalID, "repository:"+repoID, "BELONGS_TO_REPOSITORY")
+	return identity.DeriveRelationship(identity.RelationshipFamilyIncidentRepository, incidentCanonicalID, contextfabric.RepositoryCanonicalID(repoID), "BELONGS_TO_REPOSITORY")
 }
 
 // readIncidentDescriptions reads the description of the page's incidents, a
@@ -1600,7 +1600,7 @@ WHERE r.org_id = {org_id:String}` + sincePredicate(cursor, "r.last_synced", rowK
 			EvidenceRefIDs: []string{evidenceRefID}, ObservedAt: observedAt,
 			ValidFrom: validFrom, ValidTo: validTo, SourceVersion: ClickHouseSourceVersion,
 		}
-		pullRequestID := fmt.Sprintf("pull_request:%s:%d", repoID, number)
+		pullRequestID := pullRequestCanonicalID(repoID, number)
 		// The BELONGS_TO_PULL_REQUEST edge is valid only while BOTH ends
 		// are, so it inherits the pull request's own window as well as
 		// the review's -- a review submitted on a pull request that has

@@ -4,6 +4,7 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/full-chaos/dev-health-acr/internal/auth"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
@@ -73,6 +74,9 @@ const (
 // replaces backend-specific decoding, so every backend can call this
 // directly.
 func AuthorizedAttributes(principal storage.Principal, requested contextfabric.RequestedScope, attributes map[string]interface{}) bool {
+	if auth.ClassifyGrant(principal) == auth.GrantProjectOnly {
+		return projectOnlyAdmits(principal, requested, attributes)
+	}
 	if len(principal.RepositoryScopes) > 0 && !scopesUnrestricted(principal.RepositoryScopes) && repositoryWildcardAttr(attributes) {
 		// CHAOS-7080: a "*" repository list proves NO repository, so it
 		// admits nothing to a repository-restricted caller. Before this, the
@@ -247,6 +251,83 @@ func statedProjectIdentities(value interface{}) ([]string, bool) {
 		return out, true
 	default:
 		return nil, false
+	}
+}
+
+// projectOnlyAdmits is the project-only node rule (CHAOS-12299; design:
+// docs/design/context-fabric-project-only-scope.md). The repository grant is
+// never consulted. A node is admitted only when it is
+//   - the caller's own organization node,
+//   - a project node whose canonical id is in the grant, or
+//   - a work item whose stated membership (authorization_project_identities,
+//     ProjectMembershipOf) meets the grant;
+//
+// everything else is denied: a work item with no stated membership, a team
+// (CHAOS-12323 adds ownership reach), a pull request (CHAOS-12308), a
+// repository, a deployment, an incident, a document or an episode.
+//
+// An attribute map with no subject kind is denied: it is a synthetic
+// repository or team decision, or an edge's own attributes, which only
+// AuthorizedEdge decides for this caller.
+//
+// A requested project narrowing is refused (CHAOS-12324 intersects it with the
+// grant once CHAOS-12229 maps raw ids to canonical ones); the requested
+// repository and team narrowing still narrow.
+func projectOnlyAdmits(principal storage.Principal, requested contextfabric.RequestedScope, attributes map[string]interface{}) bool {
+	if len(requested.ProjectIDs) > 0 {
+		return false
+	}
+	if len(requested.RepositorySlugs) > 0 && !requestedRepositoriesAdmit(attributes, requested.RepositorySlugs) {
+		return false
+	}
+	if len(requested.TeamIDs) > 0 && !anyContainsAttr(attributes, authorizationTeamsAttr, requested.TeamIDs) {
+		return false
+	}
+	switch contextfabric.SubjectKind(StringAttribute(attributes, "subject_kind")) {
+	case contextfabric.SubjectOrganization:
+		return callersOrganizationAttr(principal, attributes)
+	case contextfabric.SubjectProject:
+		// Exact: a canonical id is never trimmed or folded (CHAOS-12107 V3).
+		return slices.Contains(principal.ProjectScopes, StringAttribute(attributes, "canonical_id"))
+	case contextfabric.SubjectWorkItem:
+		return ProjectMembershipOf(attributes, principal.ProjectScopes) == ProjectMembershipMember
+	default:
+		return false
+	}
+}
+
+// AuthorizedEdge is the edge half of an edge's admission: the edge's own
+// attributes. Every edge site also authorizes both endpoints through
+// AuthorizedAttributes. For every class but project_only it is exactly
+// AuthorizedAttributes over the edge's attributes.
+//
+// For a project-only caller (CHAOS-12299):
+//   - E2: an attribution edge (DOCUMENTED_BY, HAS_EPISODE) is denied.
+//   - A requested project narrowing is refused, as for a node.
+//   - E1: the edge's repository and team lists are not consulted; the edge
+//     defers to its endpoints. Its project list, when it is a real list,
+//     must hold a granted canonical identity. The projection writes raw
+//     project ids there, which never equal a canonical identity, so such an
+//     edge is denied until CHAOS-12229 maps them. "*" or an absent list
+//     defers to the endpoints; any other value denies.
+func AuthorizedEdge(principal storage.Principal, requested contextfabric.RequestedScope, relation string, attributes map[string]interface{}) bool {
+	if auth.ClassifyGrant(principal) != auth.GrantProjectOnly {
+		return AuthorizedAttributes(principal, requested, attributes)
+	}
+	if len(requested.ProjectIDs) > 0 || IsObservationAttributionRelation(NormalizeRelation(relation)) {
+		return false
+	}
+	raw, present := attributes[authorizationProjectsAttr]
+	if !present {
+		return true
+	}
+	switch projects := raw.(type) {
+	case string:
+		return projects == "*"
+	case []string:
+		return slices.ContainsFunc(projects, func(project string) bool { return slices.Contains(principal.ProjectScopes, project) })
+	default:
+		return false
 	}
 }
 

@@ -5,6 +5,7 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/full-chaos/dev-health-acr/internal/auth"
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
 )
@@ -112,7 +113,8 @@ func ServeStoredWorkItemTuple(candidate InvestigationResult, state *PersistedSem
 	// An explicit current universal grant proves content authorization after
 	// the caller's org-scoped Get. Restricted grants cannot authorize opaque
 	// repository IDs once the independent census proof is unavailable.
-	if principal.OrgID == "" || !slices.Contains(principal.RepositoryScopes, "*") {
+	// A project-only principal's "*" is not a universal grant (CHAOS-12299 r3).
+	if principal.OrgID == "" || auth.ClassifyGrant(principal) == auth.GrantProjectOnly || !slices.Contains(principal.RepositoryScopes, "*") {
 		decision.Disposition = WorkItemTupleByIDNotFound
 		decision.Event.Basis = "authorization_unverifiable"
 		return decision

@@ -878,7 +878,7 @@ func organizationScopeID(orgID string) string { return organizationScopePrefix +
 
 func organizationCandidate(orgID string, observedAt time.Time) candidate {
 	entity := contractsv1.ContextFabricEntityProjection{
-		Subject: contractsv1.ContextFabricSubjectRef{Kind: contractsv1.ContextFabricSubjectOrganization, CanonicalID: "organization:" + orgID, Label: orgID},
+		Subject: contractsv1.ContextFabricSubjectRef{Kind: contractsv1.ContextFabricSubjectOrganization, CanonicalID: contextfabric.OrganizationCanonicalID(orgID), Label: orgID},
 		// No canonical organization-name table exists in this repository yet
 		// (see docs/design/context-fabric-projection-worker.md); the org ID
 		// is the best available label until Dev Health Ops exposes one.
@@ -999,7 +999,7 @@ func workItemAuthorization(repoID, repoSlug string) contractsv1.ContextFabricAut
 // it. A membership therefore stops being valid exactly when the member
 // does.
 func belongsToRepository(from contractsv1.ContextFabricSubjectRef, repoSlug, repoID string, observedAt time.Time, evidenceRefID, rowKey string, validFrom, validTo *time.Time) candidate {
-	to := contractsv1.ContextFabricSubjectRef{Kind: contractsv1.ContextFabricSubjectRepository, CanonicalID: "repository:" + repoID, Label: repoSlug}
+	to := contractsv1.ContextFabricSubjectRef{Kind: contractsv1.ContextFabricSubjectRepository, CanonicalID: contextfabric.RepositoryCanonicalID(repoID), Label: repoSlug}
 	relationship := contractsv1.ContextFabricRelationshipProjection{
 		RelationshipID: "relationship:belongs_to_repository:" + from.CanonicalID, Type: "BELONGS_TO_REPOSITORY", From: from, To: to,
 		Derivation: contractsv1.ContextFabricDerivationCanonicalStructured, EpistemicStatus: contractsv1.ContextFabricEpistemicObserved,

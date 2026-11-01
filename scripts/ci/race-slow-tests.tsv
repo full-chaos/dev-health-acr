@@ -1,1 +1,2 @@
 package	test	limit_seconds	reason
+github.com/full-chaos/dev-health-acr/internal/contextfabric/devhealthfacts	TestScopeExpanderStatementsFollowTheRequestedScopeOnRealClickHouse	450	CHAOS-12168: the test ClickHouse runs max_untracked_memory = 1 (precise memory accounting, so the memory guards read exact peaks), which tracks every allocation. -race main runs in race (devhealthfacts mid): 97-145s over 13 runs before 03a7ce82, 215s, 219s and 314s after (runs 41218102132, 41219356044, 41219548221). 450s is about 1.4x the slowest; the package budget (85% of 1200s) still applies.
