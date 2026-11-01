@@ -426,13 +426,15 @@ contextFabric:
       port: 6379
     # Single instance, fixed: FalkorDB here is a single-node store; a replica
     # knob would only pretend at an HA topology this chart does not provide.
+    # Size the limit from the graph: docs/operations.md, "Sizing FalkorDB". 1Gi
+    # crash-looped on a graph of 280k subjects, and it could not recover.
     resources:
       requests:
         cpu: 100m
         memory: 256Mi
       limits:
         cpu: "1"
-        memory: 1Gi
+        memory: 3Gi
     persistence:
       enabled: true
       size: 1Gi

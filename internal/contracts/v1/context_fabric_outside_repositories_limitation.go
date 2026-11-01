@@ -10,10 +10,10 @@ import (
 // resolves to nothing, and a silent terminal told the caller nothing could be
 // found. The narrowing stands, and the answer says it refused a real match.
 //
-// A COUNT AND NEVER A NAME. It serves only an unrestricted principal, whose
-// grant covers the subject, because for any other caller it is an existence
-// oracle. The strict parse below is what keeps the digits from widening what a
-// model caveat can impersonate.
+// A COUNT AND NEVER A NAME. It counts only subjects the caller's own grant
+// admits, because for a subject outside the grant it is an existence oracle
+// (CHAOS-12446). The strict parse below is what keeps the digits from widening
+// what a model caveat can impersonate.
 const (
 	contextFabricOutsideRequestedRepositoriesOne   = "1 subject matched outside the requested repositories."
 	contextFabricOutsideRequestedRepositoriesMany  = " subjects matched outside the requested repositories."
