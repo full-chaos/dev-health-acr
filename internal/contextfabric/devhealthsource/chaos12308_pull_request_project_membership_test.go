@@ -1,8 +1,11 @@
 package devhealthsource_test
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
+	"log/slog"
 	"reflect"
 	"strings"
 	"testing"
@@ -245,5 +248,39 @@ func TestTheRefreshTableReemitsAPullRequestWhoseMembershipChanged(t *testing.T) 
 	}
 	if stated < 2 {
 		t.Fatalf("pull request stated %d times, want the table's write and the refresh", stated)
+	}
+}
+
+// The Info line counts a link that named no project, so a real rate of
+// collisions is visible. Not parallel: it reads the default logger.
+func TestTheMembershipLineCountsAnAmbiguousLink(t *testing.T) {
+	at := time.Date(2026, 10, 31, 9, 0, 0, 0, time.UTC)
+	var logged bytes.Buffer
+	previous := slog.Default()
+	slog.SetDefault(slog.New(slog.NewJSONHandler(&logged, nil)))
+	t.Cleanup(func() { slog.SetDefault(previous) })
+	tables := append(chaos12226Tables(at, nil, nil), fakeTable{match: pullRequestMembershipLinkMarker, rows: [][]any{
+		linkRow("WIDGET-101", "repo-1", "native"),
+		linkRow("WIDGET-101", chaos12226Orphan, "native"),
+	}})
+	batch, err := chaos12308Batch(t, tables, true)
+	if err != nil {
+		t.Fatalf("next projection batch: %v", err)
+	}
+	if entity := chaos12308PullRequestEntity(t, batch); entity.ProjectIdentities != nil {
+		t.Fatalf("an ambiguous link stated %v", *entity.ProjectIdentities)
+	}
+	found := false
+	for _, line := range strings.Split(strings.TrimSpace(logged.String()), "\n") {
+		var entry map[string]any
+		if json.Unmarshal([]byte(line), &entry) == nil && entry["msg"] == "context fabric: pull request project membership stated" {
+			found = true
+			if entry["ambiguous_links"] != float64(1) {
+				t.Fatalf("ambiguous_links = %v, want 1", entry["ambiguous_links"])
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("no membership line in %s", logged.String())
 	}
 }

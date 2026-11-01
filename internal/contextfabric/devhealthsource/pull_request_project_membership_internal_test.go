@@ -64,11 +64,10 @@ func TestTheRefreshPageCutsAtItsLimitAndStandsAtTheChangeStamp(t *testing.T) {
 	}
 }
 
-// One link id can join several work items: the row in the pull request's own
-// repository is the issue, and with none the link names no project.
+// One link id can join several work items. The link row names no issue
+// repository, so that link names no project, wherever the rows are.
 func TestALinkIdIsResolvedToOneIssueOrToNone(t *testing.T) {
 	t.Parallel()
-	key := pullRequestKey{repoID: "repo-a", number: 7}
 	link := func(repoID, id string) pullRequestIssueLink {
 		return pullRequestIssueLink{issue: workItemKey{repoID: repoID, workItemID: id}, tier: "native"}
 	}
@@ -82,17 +81,15 @@ func TestALinkIdIsResolvedToOneIssueOrToNone(t *testing.T) {
 		want      []pullRequestIssueLink
 		ambiguous int
 	}{
-		"one row in another repository": {[]pullRequestIssueLink{link("repo-b", "I-1")}, []pullRequestIssueLink{link("repo-b", "I-1")}, 0},
-		"the own repository wins":       {[]pullRequestIssueLink{link("repo-b", "I-1"), link("repo-a", "I-1")}, []pullRequestIssueLink{link("repo-a", "I-1")}, 0},
-		"no row in the own repository":  {[]pullRequestIssueLink{link("repo-b", "I-1"), link("repo-c", "I-1")}, []pullRequestIssueLink{}, 1},
-		// A pull-request work item takes part in the choice, then contributes
-		// nothing: the issue elsewhere never stands in for it.
-		"the own row is a pull request item":  {[]pullRequestIssueLink{typed("repo-a", "I-1"), link("repo-b", "I-1")}, []pullRequestIssueLink{}, 0},
-		"the only row is a pull request item": {[]pullRequestIssueLink{typed("repo-b", "I-1")}, []pullRequestIssueLink{}, 0},
-		"a pull request item elsewhere":       {[]pullRequestIssueLink{link("repo-a", "I-1"), typed("repo-b", "I-1")}, []pullRequestIssueLink{link("repo-a", "I-1")}, 0},
-		"no own row, one a pull request item": {[]pullRequestIssueLink{typed("repo-b", "I-1"), link("repo-c", "I-1")}, []pullRequestIssueLink{}, 1},
+		"one row, in any repository": {[]pullRequestIssueLink{link("repo-b", "I-1")}, []pullRequestIssueLink{link("repo-b", "I-1")}, 0},
+		"two rows":                   {[]pullRequestIssueLink{link("repo-a", "I-1"), link("repo-b", "I-1")}, []pullRequestIssueLink{}, 1},
+		"each id on its own":         {[]pullRequestIssueLink{link("repo-b", "I-1"), link("repo-b", "I-2"), link("repo-c", "I-2")}, []pullRequestIssueLink{link("repo-b", "I-1")}, 1},
+		// A pull-request work item counts as a row, then contributes nothing:
+		// an issue elsewhere never stands in for it.
+		"the only row is a pull request item":    {[]pullRequestIssueLink{typed("repo-b", "I-1")}, []pullRequestIssueLink{}, 0},
+		"one of two rows is a pull request item": {[]pullRequestIssueLink{typed("repo-a", "I-1"), link("repo-b", "I-1")}, []pullRequestIssueLink{}, 1},
 	} {
-		got, ambiguous := resolveLinkedIssues(key, tc.rows)
+		got, ambiguous := resolveLinkedIssues(tc.rows)
 		if !reflect.DeepEqual(got, tc.want) || ambiguous != tc.ambiguous {
 			t.Errorf("%s: resolved %v, %d ambiguous; want %v, %d", name, got, ambiguous, tc.want, tc.ambiguous)
 		}
