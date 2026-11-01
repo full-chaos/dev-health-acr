@@ -96,6 +96,12 @@ func grantRuntimeACL(ctx context.Context, db *sql.DB, runtimeDSN string, feature
 				return fmt.Errorf("grant privileges on acr.%s to %s: %w", statement.Table, role, err)
 			}
 		}
+		// A column privilege whose feature is off is cleared: it is held by no workload, so no pod can see a gap.
+		for _, statement := range dbacl.RevokeStatements(dbacl.QuoteIdent(role), features) {
+			if _, err := db.ExecContext(ctx, statement.SQL); err != nil {
+				return fmt.Errorf("revoke column privileges on acr.%s from %s: %w", statement.Table, role, err)
+			}
+		}
 	}
 	role := strings.Join(roles, ", ")
 	for _, statement := range dbacl.GrantStatements("", features) {
@@ -124,6 +130,9 @@ func runtimeFeatures(lookup lookupEnv) dbacl.Features {
 	// The browser class is on when either browser client setting holds
 	// something other than whitespace: config.Load splits a non-blank value
 	// into at least one client (config.OAuthBrowserClassConfigured).
+	if url, _ := lookup("ACR_AUTH_PROJECTION_URL"); strings.TrimSpace(url) != "" {
+		features[dbacl.AuthProjection] = true
+	}
 	browserClients, _ := lookup("ACR_OAUTH_BROWSER_CLIENTS")
 	devBrowserRedirects, _ := lookup("ACR_OAUTH_DEV_BROWSER_REDIRECT_URIS")
 	if strings.TrimSpace(browserClients) != "" || strings.TrimSpace(devBrowserRedirects) != "" {

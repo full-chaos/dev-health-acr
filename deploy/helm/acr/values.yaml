@@ -799,3 +799,7 @@ authWorkloadClient:
   allowPlainHTTP: false
   # auth-service's https token issuer URL (AUTH_TOKEN_ISSUER_URL); every workload token must carry it.
   issuer: ""
+  # CHAOS-11198: auth-service's origin for the credential lifecycle outbox publisher (ACR_AUTH_PROJECTION_URL), the shape of
+  # exchangeURL. Empty (the default) is off: no publisher, and the grant job gives the runtime role no UPDATE on the outbox.
+  # Needs enabled=true. The chart opens no egress to auth-service.
+  projectionURL: ""

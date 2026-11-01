@@ -687,3 +687,16 @@ leave the value unread. extraEnv alone (no value set) still renders.
 {{- end -}}
 {{- end -}}
 {{- end -}}
+
+{{/*
+acr.authProjectionURL: the lifecycle outbox publisher's origin, empty when off. It needs the workload client: the
+publisher posts with its token, so a URL with the client off is a render error, not a silent no-op.
+*/}}
+{{- define "acr.authProjectionURL" -}}
+{{- if .Values.authWorkloadClient.projectionURL -}}
+{{- if not .Values.authWorkloadClient.enabled -}}
+{{- fail "auth-workload-client: authWorkloadClient.projectionURL needs authWorkloadClient.enabled" -}}
+{{- end -}}
+{{- .Values.authWorkloadClient.projectionURL -}}
+{{- end -}}
+{{- end -}}

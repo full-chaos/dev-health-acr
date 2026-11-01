@@ -37,6 +37,10 @@ const (
 	// loops delete acr.client_credentials rows (one declared row, since a
 	// privilege is declared once per table).
 	CredentialPurge Feature = "credential_purge"
+	// AuthProjection is a configured lifecycle outbox publisher (CHAOS-11198): ACR_AUTH_PROJECTION_URL set to something
+	// other than whitespace. It holds UPDATE (published_at) on the outbox and no other new privilege; with it off the
+	// role holds no UPDATE there, and RevokeStatements clears a grant an earlier run made.
+	AuthProjection Feature = "auth_projection"
 )
 
 // Grant is the privileges the runtime role holds on one table.
@@ -75,8 +79,10 @@ var RuntimeGrants = []Grant{
 		Why: "read only, no write path; the resolver is built only when workload token exchange is configured: internal/storage/postgres/workload_bindings.go:36, internal/runtime/hosted/workload_token_exchange.go:57"},
 	{Table: "context_packet_snapshots", Privileges: []string{"SELECT", "INSERT", "UPDATE", "DELETE"},
 		Why: "SELECT internal/storage/postgres/packet.go:69, INSERT packet.go:49, DELETE packet_retention.go:28; UPDATE because the purge locks rows with FOR UPDATE SKIP LOCKED (packet_retention.go:20), which Postgres checks as UPDATE; the readiness check asserts it"},
-	{Table: "credential_lifecycle_outbox", Privileges: []string{"SELECT", "INSERT"}, UpdateColumns: []string{"published_at"},
-		Why: "INSERT internal/storage/postgres/outbox.go (lifecycleSink.Insert), SELECT the same file (lifecycleSink.MaxRevision); both inside the credential mutation transaction. UPDATE of published_at only: outbox_publish.go LifecycleOutboxMarkSQL, and the claim's FOR UPDATE OF o (LifecycleOutboxClaimSQL), which Postgres checks as UPDATE on one column; no other column is writable and the publisher never deletes"},
+	{Table: "credential_lifecycle_outbox", Privileges: []string{"SELECT", "INSERT"},
+		Why: "INSERT internal/storage/postgres/outbox.go (lifecycleSink.Insert), SELECT the same file (lifecycleSink.MaxRevision); both inside the credential mutation transaction"},
+	{Table: "credential_lifecycle_outbox", UpdateColumns: []string{"published_at"}, Feature: AuthProjection,
+		Why: "UPDATE of published_at only, started only when the publisher is configured (ACR_AUTH_PROJECTION_URL): internal/storage/postgres/outbox_publish.go LifecycleOutboxMarkSQL, and the claim's FOR UPDATE OF o (LifecycleOutboxClaimSQL), which Postgres checks as UPDATE on one column; no other column is writable and the publisher never deletes"},
 	{Table: "audit_events", Privileges: []string{"SELECT", "INSERT"},
 		Why: "INSERT internal/storage/postgres/audit.go:69; SELECT credentials_audit.go:50 and :61 (credential rotation conflict checks)"},
 	{Table: "agent_episodes", Privileges: []string{"SELECT", "INSERT", "UPDATE"}, Feature: EpisodeWriteback,
@@ -236,6 +242,24 @@ func grantStatements(grants []Grant, quotedRole string, features Features) []Sta
 				SQL:   fmt.Sprintf("GRANT USAGE ON SEQUENCE acr.%s TO %s", sequence, quotedRole),
 			})
 		}
+	}
+	return statements
+}
+
+// RevokeStatements returns the idempotent REVOKEs of the column privileges whose feature is off: a grant an earlier
+// run made when the feature was on is cleared, so the role holds exactly the declared set. Only a column privilege is
+// revoked this way; a table-level privilege is never narrowed on a role serving traffic (see grantRuntimeACL).
+func RevokeStatements(quotedRole string, features Features) []Statement {
+	var statements []Statement
+	for _, grant := range RuntimeGrants {
+		if len(grant.UpdateColumns) == 0 || features.Enabled(grant.Feature) {
+			continue
+		}
+		statements = append(statements, Statement{
+			Table:         grant.Table,
+			UpdateColumns: grant.UpdateColumns,
+			SQL:           fmt.Sprintf("REVOKE UPDATE (%s) ON TABLE acr.%s FROM %s", strings.Join(grant.UpdateColumns, ", "), grant.Table, quotedRole),
+		})
 	}
 	return statements
 }

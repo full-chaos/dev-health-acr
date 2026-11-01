@@ -113,9 +113,10 @@ func TestRuntimeGrantDeclaration_includesWhatTheReadinessCheckAsserts(t *testing
 // setting.
 func TestRuntimeGrantDeclaration_runtimeRoleHoldsExactlyTheDeclaration(t *testing.T) {
 	for name, features := range map[string]dbacl.Features{
-		"no optional feature":     {},
-		"every optional feature":  {dbacl.EpisodeWriteback: true, dbacl.WorkloadTokenExchange: true, dbacl.BrowserClient: true},
-		"only the browser client": {dbacl.BrowserClient: true},
+		"no optional feature":      {},
+		"every optional feature":   {dbacl.EpisodeWriteback: true, dbacl.WorkloadTokenExchange: true, dbacl.BrowserClient: true, dbacl.AuthProjection: true},
+		"only the browser client":  {dbacl.BrowserClient: true},
+		"only the auth projection": {dbacl.AuthProjection: true},
 	} {
 		features := features
 		t.Run(name, func(t *testing.T) {
