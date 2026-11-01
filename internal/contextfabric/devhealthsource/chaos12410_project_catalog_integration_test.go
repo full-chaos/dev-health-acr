@@ -12,6 +12,7 @@ import (
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/devhealthschema"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/devhealthsource"
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric/identity"
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 )
 
@@ -178,12 +179,89 @@ func TestLiveTheMembershipRefreshFollowsTheCatalogNotItsStamp(t *testing.T) {
 				cursor = next
 			}
 
+			// A late row: I-2 leaves its project by a transition that lands
+			// behind the cursor, past the overlap. No digest moves, so a quiet
+			// sync leaves it, and the daily pass re-states it and its pull
+			// request. A late retraction must not wait for an unrelated write.
+			late := base.Add(-time.Hour)
+			mustExec(t, ctx, direct, `INSERT INTO project_membership_transitions (org_id, source_id, repo_id, subject_kind, subject_id, provider, from_project_id, to_project_id, from_project_key, to_project_key, actor, occurred_at, last_synced, event_id, ingested_at) VALUES (?, NULL, ?, 'work_item', 'I-2', ?, ?, ?, '', '', '', ?, ?, 'ev-late', ?)`,
+				org, repo, provider, id("LATER"), id("P1"), at(), late, late)
+			sync()
+			beforeDaily, next := drain(cursor)
+			if len(beforeDaily.workItems) != 0 || len(beforeDaily.pullRequests) != 0 {
+				t.Fatalf("a quiet sync before the daily pass re-emitted %+v", beforeDaily)
+			}
+			cursor = next
+			daily, next := drain(chaos12410WithField(t, cursor, devhealthsource.AgeProjectCatalogField(chaos12410CursorField(t, cursor), devhealthsource.ProjectCatalogFullRefreshEvery)))
+			wantProject := chaos12410ProjectIdentity(provider, id("P1"))
+			if got := daily.sets[item]; len(got) != 1 || got[0] != wantProject {
+				t.Fatalf("after the daily pass I-2 states %v, want %s; emitted %+v", got, wantProject, daily)
+			}
+			if got := daily.sets[pullRequest]; len(got) != 1 || got[0] != wantProject {
+				t.Fatalf("after the daily pass the pull request states %v, want %s", got, wantProject)
+			}
+			cursor = next
+			sync()
+			if quiet, next := drain(cursor); len(quiet.workItems) != 0 || len(quiet.pullRequests) != 0 {
+				t.Fatalf("the daily pass ran again: %+v", quiet)
+			} else {
+				cursor = next
+			}
+
 			// A cursor that lost the digest is a full refresh, never a skip.
-			lost, _ := drain(chaos12410WithoutField(t, cursor))
+			lost, _ := drain(chaos12410WithField(t, cursor, ""))
 			if len(lost.workItems) < 2 || len(lost.pullRequests) < 1 {
 				t.Fatalf("a lost digest re-emitted %+v, want every subject", lost)
 			}
 		})
+	}
+}
+
+// The digest holds every part of the tuple on its own, in any order of rows, on
+// any organization: a change to one part alone is a change.
+func TestLiveTheDigestHoldsEachPartOfTheTuple(t *testing.T) {
+	ctx := context.Background()
+	query, direct := newDevHealthClickHouseIntegrationClient(t, ctx)
+	for _, statement := range devhealthschema.DDL(sourceSchemaTables...) {
+		if err := direct.Exec(ctx, statement); err != nil {
+			t.Fatalf("create table: %v\n%s", err, statement)
+		}
+	}
+	at := time.Now().UTC()
+	type row struct{ provider, id, key string }
+	digest := func(org string, rows ...row) uint64 {
+		t.Helper()
+		for _, r := range rows {
+			mustExec(t, ctx, direct, `INSERT INTO projects (id, org_id, name, project_key, provider, state, url, is_active, updated_at, last_synced) VALUES (?, ?, 'p', ?, ?, 'started', '', 1, ?, ?)`,
+				r.id, org, r.key, r.provider, at, at)
+		}
+		got, _, err := devhealthsource.ReadProjectCatalogDigest(ctx, query, org)
+		if err != nil {
+			t.Fatalf("read digest: %v", err)
+		}
+		return got
+	}
+	a, b := row{"jira", "A", "KA"}, row{"jira", "B", "KB"}
+	base := digest("org-base", a, b)
+	if got := digest("org-order", b, a); got != base {
+		t.Fatal("the digest depends on the order of the rows")
+	}
+	for name, rows := range map[string][]row{
+		"a key":         {{"jira", "A", "KZ"}, b},
+		"an id":         {{"jira", "Z", "KA"}, b},
+		"a provider":    {{"linear", "A", "KA"}, b},
+		"swapped keys":  {{"jira", "A", "KB"}, {"jira", "B", "KA"}},
+		"one row fewer": {a},
+		"no key":        {{"jira", "A", ""}, b},
+	} {
+		if got := digest("org-"+name, rows...); got == base {
+			t.Errorf("%s: the digest did not change", name)
+		}
+	}
+	// Not the stamps: a re-stamped row of the same tuple is the same catalog.
+	at = at.Add(time.Hour)
+	if got := digest("org-base", a, b); got != base {
+		t.Fatal("re-stamping a row moved the digest")
 	}
 }
 
@@ -206,10 +284,22 @@ func chaos12410CursorField(t *testing.T, cursor string) string {
 	return field
 }
 
-func chaos12410WithoutField(t *testing.T, cursor string) string {
+func chaos12410ProjectIdentity(provider, id string) string {
+	derived, omitted, err := identity.Derive(identity.KindProject, []string{provider, id}, nil)
+	if err != nil || omitted {
+		panic(fmt.Sprintf("derive %s %s: %v %v", provider, id, omitted, err))
+	}
+	return derived
+}
+
+// chaos12410WithField rewrites the cursor's digest field; "" removes it.
+func chaos12410WithField(t *testing.T, cursor, field string) string {
 	t.Helper()
 	state := chaos12410Decode(t, cursor)
 	delete(state, "pc")
+	if field != "" {
+		state["pc"] = field
+	}
 	raw, err := json.Marshal(state)
 	if err != nil {
 		t.Fatal(err)

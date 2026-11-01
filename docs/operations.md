@@ -499,10 +499,12 @@ organization once, because the digest on the cursor cannot name the project
 that changed. `projects.last_synced` keeps its meaning, and the ownership cursor
 keeps reading it. A cursor from before this digest reads as absent, so the
 first tick after the deploy with the flag on owes one full refresh; that is
-within the rebuild of the roll step. A transition that lands more than the 15
-minutes of overlap behind the cursor is no longer re-stated by the next project
-sync. Each owed refresh logs `context fabric: membership refresh of every subject
-owed`, with its reason.
+within the rebuild of the roll step. Once a day the same full refresh runs
+whatever the digest says, so a row that lands behind the cursor past the 15
+minutes of overlap, a retraction included, is repaired on a schedule: it is a
+code constant, not a setting. Each refresh logs `context fabric: membership
+refresh of every subject owed`, with its reason (`catalog_changed`,
+`digest_absent` or `daily`).
 The Info line `context fabric: pull request project membership stated` counts
 them by tier, and a pull request that lost a link and went back to unstated is
 counted by `context fabric: pull requests returned to unstated project

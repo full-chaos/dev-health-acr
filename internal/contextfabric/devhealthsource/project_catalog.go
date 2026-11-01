@@ -32,6 +32,10 @@ import (
 //     the cursor. The digest cannot name the changed project, so this is the
 //     whole set, once.
 //   - From zero: the main tables state every subject, so nothing is owed.
+//   - Once a day, whatever the digest says: the same full refresh. This table
+//     feeds authorization, and a row that lands behind the cursor past the
+//     overlap, a retraction included, moves no digest. It must not wait for an
+//     unrelated write, so repair is scheduled.
 //
 // The digest and the position are one cursor value, so they commit together.
 // A crash before the write leaves the old cursor: its digest mismatches and the
@@ -49,10 +53,26 @@ const projectCatalogStatement = `SELECT toString(cityHash64(groupBitXor(sipHash6
 FROM projects FINAL
 WHERE org_id = {org_id:String}`
 
+// projectCatalogFullRefreshEvery is the longest a subject goes without being
+// re-stated. A code constant: the repair is not an option to turn off.
+const projectCatalogFullRefreshEvery = 24 * time.Hour
+
 // projectCatalog is the cursor's record of the catalog the refresh followed.
+// refreshAt is the last full statement of every subject: the fixed stamp of a
+// refresh, or the start of a from-zero walk. owed says refreshAt is a refresh
+// the refresh tables must run, not a walk the main tables ran.
 type projectCatalog struct {
 	digest    uint64
 	refreshAt time.Time
+	owed      bool
+}
+
+// owedAt is the stamp this call's refresh reads run at, zero when none is owed.
+func (c projectCatalog) owedAt() time.Time {
+	if !c.owed {
+		return time.Time{}
+	}
+	return c.refreshAt
 }
 
 // encode is the cursor field: as short as it can be, because a cursor is
@@ -60,51 +80,62 @@ type projectCatalog struct {
 func (c projectCatalog) encode() string {
 	var raw [8]byte
 	binary.BigEndian.PutUint64(raw[:], c.digest)
-	encoded := base64.RawURLEncoding.EncodeToString(raw[:])
-	if c.refreshAt.IsZero() {
-		return encoded
+	separator := projectCatalogWalked
+	if c.owed {
+		separator = projectCatalogOwed
 	}
-	return encoded + "." + strconv.FormatInt(c.refreshAt.UnixMilli(), 36)
+	return base64.RawURLEncoding.EncodeToString(raw[:]) + separator + strconv.FormatInt(c.refreshAt.UnixMilli(), 36)
 }
+
+// The separator of the cursor field says whether the stamp is owed.
+const (
+	projectCatalogOwed   = "."
+	projectCatalogWalked = "~"
+)
 
 // decodeProjectCatalog reports false for a field it cannot read: absent.
 func decodeProjectCatalog(field string) (projectCatalog, bool) {
-	head, tail, stamped := strings.Cut(field, ".")
+	head, tail, owed := strings.Cut(field, projectCatalogOwed)
+	if !owed {
+		var walked bool
+		if head, tail, walked = strings.Cut(field, projectCatalogWalked); !walked {
+			return projectCatalog{}, false
+		}
+	}
 	raw, err := base64.RawURLEncoding.DecodeString(head)
 	if err != nil || len(raw) != 8 {
 		return projectCatalog{}, false
 	}
-	decoded := projectCatalog{digest: binary.BigEndian.Uint64(raw)}
-	if stamped {
-		milli, err := strconv.ParseInt(tail, 36, 64)
-		if err != nil {
-			return projectCatalog{}, false
-		}
-		decoded.refreshAt = time.UnixMilli(milli).UTC()
+	milli, err := strconv.ParseInt(tail, 36, 64)
+	if err != nil {
+		return projectCatalog{}, false
 	}
-	return decoded, true
+	return projectCatalog{digest: binary.BigEndian.Uint64(raw), refreshAt: time.UnixMilli(milli).UTC(), owed: owed}, true
 }
 
 // decideProjectCatalog is the whole rule. position is the cursor's position;
 // fromZero says the main tables are stating every subject in this walk.
 func decideProjectCatalog(field string, position time.Time, fromZero bool, digest uint64, now time.Time) (decided projectCatalog, reason string) {
 	if fromZero {
-		return projectCatalog{digest: digest}, ""
+		return projectCatalog{digest: digest, refreshAt: now}, ""
 	}
 	stored, ok := decodeProjectCatalog(field)
-	if ok && stored.digest == digest {
-		return stored, ""
-	}
-	reason = "catalog_changed"
-	if !ok {
+	switch {
+	case !ok:
 		reason = "digest_absent"
+	case stored.digest != digest:
+		reason = "catalog_changed"
+	case !now.Before(stored.refreshAt.Add(projectCatalogFullRefreshEvery)):
+		reason = "daily"
+	default:
+		return stored, ""
 	}
 	// Strictly past the position, or the keyset would leave the rows behind
 	// the cursor and the refresh would be a skip.
 	if !now.After(position) {
 		now = position.Add(time.Millisecond)
 	}
-	return projectCatalog{digest: digest, refreshAt: now.Truncate(time.Millisecond).Add(time.Millisecond)}, reason
+	return projectCatalog{digest: digest, refreshAt: now.Truncate(time.Millisecond).Add(time.Millisecond), owed: true}, reason
 }
 
 type projectRefreshKey struct{}
@@ -160,22 +191,19 @@ func readProjectCatalogDigest(ctx context.Context, client contextpacket.ClickHou
 
 // projectCatalogFor reads the digest and decides this call's catalog. A failed
 // read fails the call: nothing is skipped and nothing moves.
-func (p sourcePlan) projectCatalogFor(ctx context.Context, checkpoint contextfabric.ProjectionCheckpoint) (projectCatalog, error) {
+func (p sourcePlan) projectCatalogFor(ctx context.Context, checkpoint contextfabric.ProjectionCheckpoint) (projectCatalog, string, error) {
 	orgID := strings.TrimSpace(checkpoint.OrgID)
 	digest, now, err := readProjectCatalogDigest(ctx, p.client, orgID)
 	if err != nil {
-		return projectCatalog{}, fmt.Errorf("devhealthsource: read the project catalog digest: %w", err)
+		return projectCatalog{}, "", fmt.Errorf("devhealthsource: read the project catalog digest: %w", err)
 	}
 	state, err := decodeCursor(checkpoint.Cursor)
 	if err != nil {
-		return projectCatalog{}, err
+		return projectCatalog{}, "", err
 	}
 	fromZero := state.Since.IsZero() || state.Dim != nil || state.Space != p.cursorSpace()
 	decided, reason := decideProjectCatalog(state.ProjectCatalog, state.Since, fromZero, digest, now)
-	if reason != "" {
-		slog.InfoContext(ctx, "context fabric: membership refresh of every subject owed", "reason", reason)
-	}
-	return decided, nil
+	return decided, reason, nil
 }
 
 // carried writes the catalog on a cursor this call hands back. A cursor with

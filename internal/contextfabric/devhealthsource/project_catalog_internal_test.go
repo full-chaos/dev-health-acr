@@ -12,13 +12,13 @@ import (
 func TestTheCatalogFieldRoundTrips(t *testing.T) {
 	t.Parallel()
 	at := time.Date(2026, 11, 1, 12, 0, 0, 5_000_000, time.UTC)
-	for _, c := range []projectCatalog{{digest: 0}, {digest: 1<<64 - 1}, {digest: 42, refreshAt: at}} {
+	for _, c := range []projectCatalog{{digest: 0, refreshAt: at}, {digest: 1<<64 - 1, refreshAt: at}, {digest: 42, refreshAt: at, owed: true}} {
 		got, ok := decodeProjectCatalog(c.encode())
-		if !ok || got.digest != c.digest || !got.refreshAt.Equal(c.refreshAt) {
+		if !ok || got.digest != c.digest || !got.refreshAt.Equal(c.refreshAt) || got.owed != c.owed {
 			t.Errorf("%+v came back as %+v, %v", c, got, ok)
 		}
 	}
-	for _, field := range []string{"", "x", "AAAA", "AAAAAAAAAAA.$$", "not base64!"} {
+	for _, field := range []string{"", "x", "AAAA", "AAAA.1", "AAAAAAAAAAA", "AAAAAAAAAAA.$$", "AAAAAAAAAAA~$$", "not base64!"} {
 		if _, ok := decodeProjectCatalog(field); ok {
 			t.Errorf("%q decoded", field)
 		}
@@ -29,26 +29,34 @@ func TestTheCatalogDecision(t *testing.T) {
 	t.Parallel()
 	position := time.Date(2026, 11, 1, 12, 0, 0, 0, time.UTC)
 	now := position.Add(time.Hour)
-	stamped := projectCatalog{digest: 7, refreshAt: position.Add(-time.Minute)}.encode()
-	bare := projectCatalog{digest: 7}.encode()
+	walked := projectCatalog{digest: 7, refreshAt: position.Add(-time.Minute)}.encode()
+	owed := projectCatalog{digest: 7, refreshAt: position.Add(-time.Minute), owed: true}.encode()
+	aDayOld := projectCatalog{digest: 7, refreshAt: now.Add(-projectCatalogFullRefreshEvery)}.encode()
+	nearlyADayOld := projectCatalog{digest: 7, refreshAt: now.Add(-projectCatalogFullRefreshEvery + time.Millisecond)}.encode()
 	for name, tc := range map[string]struct {
-		field       string
-		fromZero    bool
-		digest      uint64
-		wantReason  string
-		wantRefresh bool
+		field      string
+		fromZero   bool
+		digest     uint64
+		wantReason string
+		wantOwed   bool
 	}{
-		"from zero owes nothing":        {"", true, 7, "", false},
-		"from zero ignores a old field": {bare, true, 8, "", false},
-		"same digest":                   {bare, false, 7, "", false},
-		"same digest keeps its stamp":   {stamped, false, 7, "", true},
-		"a changed digest":              {bare, false, 8, "catalog_changed", true},
-		"an absent digest":              {"", false, 7, "digest_absent", true},
-		"an unreadable digest":          {"x", false, 7, "digest_absent", true},
+		"from zero owes nothing":         {"", true, 7, "", false},
+		"from zero ignores an old field": {walked, true, 8, "", false},
+		"same digest":                    {walked, false, 7, "", false},
+		"same digest keeps what is owed": {owed, false, 7, "", true},
+		"a changed digest":               {walked, false, 8, "catalog_changed", true},
+		"an absent digest":               {"", false, 7, "digest_absent", true},
+		"an absent digest of zero":       {"", false, 0, "digest_absent", true},
+		"an unreadable digest":           {"x", false, 7, "digest_absent", true},
+		"a day old":                      {aDayOld, false, 7, "daily", true},
+		"not yet a day old":              {nearlyADayOld, false, 7, "", false},
 	} {
 		got, reason := decideProjectCatalog(tc.field, position, tc.fromZero, tc.digest, now)
-		if reason != tc.wantReason || got.digest != tc.digest || got.refreshAt.IsZero() == tc.wantRefresh {
+		if reason != tc.wantReason || got.digest != tc.digest || got.owed != tc.wantOwed || got.refreshAt.IsZero() {
 			t.Errorf("%s: %+v %q", name, got, reason)
+		}
+		if got.owedAt().IsZero() == tc.wantOwed {
+			t.Errorf("%s: owedAt = %v", name, got.owedAt())
 		}
 	}
 	// A new refresh is strictly past the position, whatever the clock says: at
@@ -64,8 +72,10 @@ func TestTheCatalogDecision(t *testing.T) {
 func TestTheRefreshArmRunsOnlyWhileARefreshIsOwed(t *testing.T) {
 	t.Parallel()
 	at := time.Date(2026, 11, 1, 12, 0, 0, 0, time.UTC)
-	if got := projectRefreshArm(cursorState{Since: at.Add(-time.Hour)}, time.Time{}); got != "" {
-		t.Errorf("no refresh owed: %q", got)
+	for _, since := range []time.Time{{}, at} {
+		if got := projectRefreshArm(cursorState{Since: since}, time.Time{}); got != "" {
+			t.Errorf("no refresh owed, since %v: %q", since, got)
+		}
 	}
 	if got := projectRefreshArm(cursorState{Since: at.Add(time.Millisecond)}, at); got != "" {
 		t.Errorf("the cursor is past it: %q", got)
@@ -85,7 +95,7 @@ func TestACursorCarriesTheCatalogOrDropsItForRoom(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	at := time.Date(2026, 11, 1, 12, 0, 0, 0, time.UTC)
-	catalog := projectCatalog{digest: 9, refreshAt: at}
+	catalog := projectCatalog{digest: 9, refreshAt: at, owed: true}
 	cursor, err := encodeCursorIn(cursorSpaceIngest, cursorState{Since: at, After: "k", Ack: "ack"})
 	if err != nil {
 		t.Fatal(err)

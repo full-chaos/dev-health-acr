@@ -174,17 +174,23 @@ func (p sourcePlan) nextBatch(ctx context.Context, checkpoint contextfabric.Proj
 	ctx = withEndedLinkMemo(p.endedLinksBound, withStartLogger(withReadByteLimit(ctx, p.readByteLimit), p.logger))
 	yielded := false
 	p.yielded = &yielded
+	var refreshReason string
 	if p.followProjectCatalog {
-		catalog, err := p.projectCatalogFor(ctx, checkpoint)
+		catalog, reason, err := p.projectCatalogFor(ctx, checkpoint)
 		if err != nil {
 			return contextfabric.ProjectionBatch{}, false, err
 		}
-		p.catalog = &catalog
-		ctx = withProjectRefresh(ctx, catalog.refreshAt)
+		p.catalog, refreshReason = &catalog, reason
+		ctx = withProjectRefresh(ctx, catalog.owedAt())
 	}
 	batch, available, err := p.nextBatchPage(ctx, checkpoint)
 	if err == nil && available && p.catalog != nil {
 		batch.NextCursor = p.catalog.carried(ctx, batch.NextCursor)
+		// Logged with the batch that commits it, so a call that hands nothing
+		// back says nothing.
+		if refreshReason != "" {
+			slog.InfoContext(ctx, "context fabric: membership refresh of every subject owed", "reason", refreshReason)
+		}
 	}
 	// One line per type per pass: flushed when the pass ends (caught up) or
 	// fails, never at a mid-pass yield or a published batch.
