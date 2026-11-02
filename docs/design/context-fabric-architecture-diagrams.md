@@ -275,6 +275,17 @@ carries' own seed population, so the bypass and the carry can never again name
 different sets; the closed `AnswerReuseBypassReason` counter reports which arm
 fired, a branch that was previously silent.
 
+**The model's window class reaches the engine (CHAOS-12603).** The
+interpretation model's sanitized `window_class` / `window_confidence` pick is
+carried from the interpret receipt onto `InterpretedQuestion`
+(`carryWindowPick`, `genkitruntime/runtime.go`), on the server-model path,
+the supplied-interpretation path and the file-exchange parser
+(`ParseInterpretationOutputSignals`). Before this, CHAOS-3900 W1 read the field in
+`composeEffectiveWindow` but nothing set it, so `ClassifyWindow` always fell
+back by shape. An out-of-vocabulary class stays unset (receipt
+`window_class_unrecognized`). `WindowInferenceVersion` moved to `win_v2`, so
+answers stored under the old inference are not reused.
+
 **Every current-axis answer states its window (CHAOS-11601).** When the
 question names no period and its window class carries no default
 (`state_snapshot`, or no class), `composeEffectiveWindow` returns no window and
