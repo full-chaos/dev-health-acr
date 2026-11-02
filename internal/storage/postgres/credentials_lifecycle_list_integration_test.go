@@ -201,8 +201,10 @@ VALUES ($1, $2, 'cluster.local', 'ns', 'sa-' || $1, 'uid-' || $1, $3, '["*"]'::j
 	require.Error(t, insert("wlb_role_admin", "admin"))
 	store, err := NewWorkloadBindingStore(db)
 	require.NoError(t, err)
-	binding, err := store.Lookup(ctx, storage.WorkloadBindingKey{TrustDomain: "cluster.local", Namespace: "ns", ServiceAccountName: "sa-wlb_role_reconcile", ServiceAccountUID: "uid-wlb_role_reconcile"})
+	bindings, err := store.Lookup(ctx, storage.WorkloadBindingKey{TrustDomain: "cluster.local", Namespace: "ns", ServiceAccountName: "sa-wlb_role_reconcile", ServiceAccountUID: "uid-wlb_role_reconcile"})
 	require.NoError(t, err)
+	require.Len(t, bindings, 1)
+	binding := bindings[0]
 	require.Equal(t, "reconcile", binding.Role)
 	require.Equal(t, []string{auth.ScopeCredentialLifecycleRead}, auth.RoleScopes(binding.Role))
 }
