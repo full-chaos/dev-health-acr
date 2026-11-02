@@ -2356,7 +2356,8 @@ func ResolveSubjectsWithCommitBasis(ctx context.Context, principal storage.Princ
 		// caller ever receives. Return empty sets rather than that debris.
 		return resolution, offerMaterial, make(contextfabric.CommitBasisSet), make(contextfabric.CommitDecisionDigestSet), err
 	}
-	resolution = commitExplicitHandleSubjects(ctx, principal, request, deps, resolution, bases, digests)
+	resolution, absent := commitNamedHandle(ctx, principal, request, frame, deps, resolution, bases, digests)
+	offerMaterial = withoutUndecidingHandle(offerMaterial, absent)
 	return resolution, offerMaterial, bases, digests, nil
 }
 
