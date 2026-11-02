@@ -94,6 +94,13 @@ func TestALandscapeSeriesKeepsTheNewestDaysAndSaysTheRest(t *testing.T) {
 	if got := *rows[0].Fields["day"].String; got != newest {
 		t.Fatalf("first row is %s, want the newest day %s", got, newest)
 	}
+	// One copy of each identity's stats per day, summed: two identities of 100 lines.
+	if got := *rows[0].Fields["churn_loc_30d"].Integer; got != 200 {
+		t.Fatalf("churn_loc_30d = %d, want 200: one copy per identity, not one per map", got)
+	}
+	if got := *rows[0].Fields["identity_count"].Integer; got != 2 {
+		t.Fatalf("identity_count = %d, want 2", got)
+	}
 	if got := result.Facts[0].Fields["daily_landscape_omitted_count"].Integer; got == nil || *got != landscapeSeriesHistoryDays-64 {
 		t.Fatalf("daily_landscape_omitted_count = %v, want %d", got, landscapeSeriesHistoryDays-64)
 	}
@@ -110,6 +117,20 @@ func TestALandscapeSeriesKeepsTheNewestDaysAndSaysTheRest(t *testing.T) {
 	}
 	if windowed.OmittedCount != landscapeSeriesHistoryDays-64 {
 		t.Fatalf("a stated window holds %d days and the series 64, yet OmittedCount = %d", landscapeSeriesHistoryDays, windowed.OmittedCount)
+	}
+
+	// A shorter stated window bounds the series: days 1 to 30 before today.
+	start30 := today.AddDate(0, 0, -30)
+	short := contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent, EvidenceWindow: &contractsv1.ContextFabricRequestedEvidenceWindow{Start: &start30, End: &today, RelativeID: contextfabric.RelativeWindowTrailing30D}}
+	bounded := readLandscapeSeries(t, ctx, provider, orgID, short, "gh:tm-cap")
+	if len(bounded.Facts) != 1 {
+		t.Fatalf("a stated 30-day window: facts %d", len(bounded.Facts))
+	}
+	if got := len(seriesOf(t, bounded.Facts[0])); got != 30 {
+		t.Fatalf("a stated 30-day window holds %d days of series, want 30", got)
+	}
+	if _, cut := bounded.Facts[0].Fields["daily_landscape_omitted_count"]; cut || bounded.OmittedCount != 0 {
+		t.Fatalf("a 30-day series is whole, yet a cut is said: %+v, OmittedCount %d", bounded.Facts[0].Fields["daily_landscape_omitted_count"], bounded.OmittedCount)
 	}
 }
 
