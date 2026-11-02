@@ -326,7 +326,7 @@ func TestExplicitPullRequestHandleDigestCarriesTheResolutionWideFlags(t *testing
 	bases := contextfabric.CommitBasisSet{}
 	digests := contextfabric.CommitDecisionDigestSet{}
 	digests.Record(repo, contextfabric.CommitDecisionDigest{CommitGate: "lone_floor", SearchTruncated: true, AliasLookupComplete: false, IdentityLookup: "graph_lag"})
-	resolution := commitExplicitHandleSubjects(context.Background(), storage.Principal{OrgID: "org_1"}, request, deps, contextfabric.SubjectResolution{Committed: []contextfabric.SubjectRef{repo}}, bases, digests)
+	resolution, _ := commitNamedHandle(context.Background(), storage.Principal{OrgID: "org_1"}, request, nil, deps, contextfabric.SubjectResolution{Committed: []contextfabric.SubjectRef{repo}}, bases, digests)
 	pr := contextfabric.SubjectRef{Kind: contextfabric.SubjectPullRequest, CanonicalID: explicitHandlePRID}
 	if len(resolution.Committed) != 2 {
 		t.Fatalf("Committed = %#v", resolution.Committed)
