@@ -43,6 +43,13 @@ func themeShareResultFor(kind contractsv1.ContextFabricSubjectKind, shares ...fl
 	return result
 }
 
+// themeShareFrame is the validated frame of a question about where one subject's
+// effort went.
+func themeShareFrame() *QuestionFrame {
+	frame := goalFrame(allocationSubject(), GoalAllocateInvestment)
+	return &frame
+}
+
 func treemapsOf(shapes []contractsv1.ContextFabricRenderShape) []contractsv1.ContextFabricRenderShape {
 	var out []contractsv1.ContextFabricRenderShape
 	for _, shape := range shapes {
@@ -69,7 +76,7 @@ func skipOf(t *testing.T, event RenderShapeSelectionEvent) RenderShapeSkipReason
 func TestAnInvestmentAnswerGetsItsTreemap(t *testing.T) {
 	t.Parallel()
 	result := themeShareResultFor(contractsv1.ContextFabricSubjectRepository, 0.5, 0.25, 0.25, 0, 0)
-	shapes, event := selectRenderShapes(result, nil, RenderShapeOptions{InvestmentThemeShare: true})
+	shapes, event := selectRenderShapes(result, themeShareFrame(), RenderShapeOptions{InvestmentThemeShare: true})
 	treemaps := treemapsOf(shapes)
 	if len(treemaps) != 1 {
 		t.Fatalf("shapes %+v, want one treemap", shapes)
@@ -99,7 +106,7 @@ func TestAnInvestmentAnswerGetsItsTreemap(t *testing.T) {
 
 func TestATeamGetsTheTreemapToo(t *testing.T) {
 	t.Parallel()
-	shapes, _ := selectRenderShapes(themeShareResultFor(contractsv1.ContextFabricSubjectTeam, 0.5, 0.5), nil, RenderShapeOptions{InvestmentThemeShare: true})
+	shapes, _ := selectRenderShapes(themeShareResultFor(contractsv1.ContextFabricSubjectTeam, 0.5, 0.5), themeShareFrame(), RenderShapeOptions{InvestmentThemeShare: true})
 	if len(treemapsOf(shapes)) != 1 {
 		t.Fatalf("shapes %+v", shapes)
 	}
@@ -181,7 +188,7 @@ func TestNoTreemapWithoutTheRulesEvidence(t *testing.T) {
 			t.Parallel()
 			result := themeShareResultFor(subject, shares...)
 			plant.edit(&result)
-			shapes, event := selectRenderShapes(result, nil, RenderShapeOptions{InvestmentThemeShare: true})
+			shapes, event := selectRenderShapes(result, themeShareFrame(), RenderShapeOptions{InvestmentThemeShare: true})
 			if len(treemapsOf(shapes)) != 0 {
 				t.Fatalf("shapes %+v", shapes)
 			}
@@ -206,10 +213,21 @@ func TestACarriedFamilyDoesNotChartACohortFrame(t *testing.T) {
 	if skip := skipOf(t, event); skip != RenderShapeSkipCohortAnswer {
 		t.Fatalf("skip %q", skip)
 	}
-	// A follow-up about the same one subject keeps its chart.
-	shapes, _ = selectRenderShapes(result, nil, RenderShapeOptions{InvestmentThemeShare: true})
-	if len(treemapsOf(shapes)) != 1 {
-		t.Fatalf("carried on one subject: %+v", shapes)
+}
+
+// The rule reads this turn's own statement, never a family carried from an earlier
+// turn. A turn with no validated frame states nothing, so it gets no chart, even
+// when it is a real follow-up on the same subject (check 10).
+func TestATurnWithNoFrameGetsNoTreemap(t *testing.T) {
+	t.Parallel()
+	result := themeShareResultFor(contractsv1.ContextFabricSubjectRepository, 0.5, 0.5)
+	result.AnswerPlan.FamilySource = QuestionFamilySourceCarried
+	shapes, event := selectRenderShapes(result, nil, RenderShapeOptions{InvestmentThemeShare: true})
+	if len(treemapsOf(shapes)) != 0 {
+		t.Fatalf("a turn with no frame was charted: %+v", shapes)
+	}
+	if skip := skipOf(t, event); skip != RenderShapeSkipNotInvestmentAllocation {
+		t.Fatalf("skip %q", skip)
 	}
 }
 
@@ -235,7 +253,7 @@ func TestACarriedFamilyDoesNotChartAFreshGoal(t *testing.T) {
 func TestAStoredTreemapIsRemovedWhenTheRuleIsOff(t *testing.T) {
 	t.Parallel()
 	result := themeShareResultFor(contractsv1.ContextFabricSubjectRepository, 0.5, 0.5)
-	result.RenderShapes, _ = selectRenderShapes(result, nil, RenderShapeOptions{InvestmentThemeShare: true})
+	result.RenderShapes, _ = selectRenderShapes(result, themeShareFrame(), RenderShapeOptions{InvestmentThemeShare: true})
 	other := result.RenderShapes[0]
 	other.Kind, other.SelectedBy = contractsv1.ContextFabricRenderKindSeries, contractsv1.ContextFabricRenderRuleDatedFactTrend
 	result.RenderShapes = append(result.RenderShapes, other)
@@ -269,7 +287,7 @@ func TestTheTreemapIsSelectedAheadOfTrends(t *testing.T) {
 		fact.Subject.CanonicalID = fmt.Sprintf("subject:trend:%d", index)
 		result.ClaimedFacts = append(result.ClaimedFacts, fact)
 	}
-	shapes, _ := selectRenderShapes(result, nil, RenderShapeOptions{InvestmentThemeShare: true})
+	shapes, _ := selectRenderShapes(result, themeShareFrame(), RenderShapeOptions{InvestmentThemeShare: true})
 	if len(shapes) != contractsv1.ContextFabricRenderShapesMaxCount {
 		t.Fatalf("%d shapes, want the bound", len(shapes))
 	}

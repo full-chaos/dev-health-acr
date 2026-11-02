@@ -39,13 +39,15 @@ func investmentThemeShareShape(result InvestigationResult, frame *QuestionFrame)
 	if result.AnswerPlan == nil || result.AnswerPlan.Family != QuestionFamilyInvestmentAllocation {
 		return nil, RenderShapeSkipNotInvestmentAllocation
 	}
-	// A carried family reaches here on a turn that classified nothing, so the
-	// family does not by itself say this question is about one subject's split.
 	if result.Cohort != nil || cohortRenderIntent(frame) || !familyTakesShape(result.AnswerPlan.Family, result.Interpretation.Shape) {
 		return nil, RenderShapeSkipCohortAnswer
 	}
-	// A frame states the question's own goal, and that outranks the family.
-	if frame != nil && !frame.HasGoal(GoalAllocateInvestment) {
+	// Positive evidence: the rule fires only on this turn's own validated frame
+	// holding the goal. A carried family says what an earlier turn asked, so a
+	// turn with no frame gets no chart, and that includes a real follow-up on the
+	// same subject (check 10). Excluding bad cases one at a time let three
+	// through.
+	if frame == nil || !frame.HasGoal(GoalAllocateInvestment) {
 		return nil, RenderShapeSkipNotInvestmentAllocation
 	}
 	if !planAuthorizesRenderKind(result.AnswerPlan, contractsv1.ContextFabricRenderKindTreemap) {
