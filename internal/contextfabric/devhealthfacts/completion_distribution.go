@@ -39,9 +39,9 @@ const (
 	// distribution table carries. No table is served; a shorter curve would
 	// be a different forecast. The percentiles stay.
 	completionDistributionOverLimit = "over_limit"
-	// completionDistributionScopeAmbiguous: the team holds a NULL scope and
-	// an empty scope, which the workload read cannot tell apart, so neither
-	// fact is given the other's forecast.
+	// completionDistributionScopeAmbiguous: the fact's scope reads "", which
+	// the workload read gives both a NULL scope and an empty one, so no
+	// forecast can be verified as its own and none is attached.
 	completionDistributionScopeAmbiguous = "scope_ambiguous"
 	// completionDistributionUnmatched: the forecast read held no row for this
 	// fact's scope and computed_at (a newer forecast landed between the two
@@ -212,8 +212,16 @@ func completionForecastsByScope(rows []readers.CompletionForecastRow) map[comple
 // and an empty scope; none, or a different computed_at, is a newer forecast
 // that landed between the two reads. Either way the fact gets no other
 // forecast's detail, and, with the distribution switched on, says why.
-func addTeamCompletionForecastFields(fields map[string]contextfabric.FactValue, candidates []readers.CompletionForecastRow, computedAt string, distribution bool) {
+//
+// A fact whose scope reads "" is never joined (Codex #1940 r3): the workload
+// read folds a NULL scope into "", so its scope could be either, and a
+// forecast of the other would match it. The fact says scope_ambiguous instead
+// of carrying a forecast it cannot verify as its own.
+func addTeamCompletionForecastFields(fields map[string]contextfabric.FactValue, scope string, candidates []readers.CompletionForecastRow, computedAt string, distribution bool) {
 	switch {
+	case scope == "" && !distribution:
+	case scope == "":
+		fields["completion_distribution_state"] = contextfabric.StringFactValue(completionDistributionScopeAmbiguous)
 	case len(candidates) == 1 && candidates[0].ComputedAt == computedAt:
 		addCompletionForecastFields(fields, candidates[0], distribution)
 	case !distribution:

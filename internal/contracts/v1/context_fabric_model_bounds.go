@@ -233,9 +233,10 @@ const (
 	// table keeps ContextFabricClaimedFactMaxRows. A completion forecast
 	// holds one row per distinct day up to the ops 365-day horizon, so 366
 	// rows (days 0 to 365) carry every forecast whole. Measured on askdev-1
-	// on 2026-11-02: the largest latest forecast has 359 rows and encodes to
-	// 33,719 bytes and 1,077 cells, inside the combined cell and byte bounds
-	// below, which still apply to it unchanged.
+	// on 2026-11-02: the largest latest forecast has 359 rows, which the served
+	// table (key completion_days) encodes to 37,457 row bytes and 1,077 cells
+	// (TestTheLargestMeasuredDistributionFitsTheClaimedFactBounds), inside the
+	// combined cell and byte bounds below, which still apply to it unchanged.
 	ContextFabricClaimedFactDistributionMaxRows = 366
 
 	// ContextFabricClaimedFactCombinedCellsMax and

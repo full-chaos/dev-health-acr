@@ -619,3 +619,41 @@ func TestEveryWorkloadTableIsDeclaredOnTheCapability(t *testing.T) {
 		t.Fatalf("emitted table shapes = %v, want the distribution and the daily series", shapes)
 	}
 }
+
+// TestAFactWhoseScopeReadsEmptyGetsNoForecastItCannotVerify (Codex #1940 r3,
+// P2): the workload read folds a NULL scope into "", so a fact whose scope
+// reads "" cannot be joined to a forecast by scope -- a NULL-scope forecast and
+// an empty-scope forecast would both match it. Such a fact gets no forecast
+// detail: with the distribution switched on it says scope_ambiguous, and off
+// it gets nothing.
+func TestAFactWhoseScopeReadsEmptyGetsNoForecastItCannotVerify(t *testing.T) {
+	nullScope := completionForecastRow("CHAOS", "", "2026-07-27 04:00:00", []uint16{5, 12}, []uint32{9000, 1000})
+	nullScope[1] = uint8(0) // HasWorkScope: the forecast's scope is NULL
+	for _, distribution := range []bool{true, false} {
+		client := &fakeClient{tables: []fakeTable{
+			{match: workloadBaseQueryMatch, rows: [][]any{workloadRow("CHAOS", "")}},
+			{match: completionForecastQueryMarker, rows: [][]any{nullScope}},
+		}}
+		provider := findProvider(t, devhealthfacts.NewProvidersWithOptions(client, devhealthfacts.ProviderOptions{CompletionDistributionEnabled: distribution}), contextfabric.FactWorkload)
+		result, err := provider.ReadFacts(context.Background(), storage.Principal{OrgID: "org-1"}, contextfabric.FactQuery{
+			Time: contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent},
+			Kind: contextfabric.FactWorkload, Subjects: []contextfabric.SubjectRef{teamSubject("CHAOS")},
+		})
+		if err != nil || len(result.Facts) != 1 {
+			t.Fatalf("switch %t: facts = %d, err = %v", distribution, len(result.Facts), err)
+		}
+		fields := result.Facts[0].Fields
+		for _, name := range []string{"completion_distribution", "forecast_p85_days", "forecast_p50_date", "simulation_count", "unfinished_runs"} {
+			if _, ok := fields[name]; ok {
+				t.Errorf("switch %t: %s attached to a fact whose scope cannot be verified", distribution, name)
+			}
+		}
+		state, ok := fields["completion_distribution_state"]
+		if distribution && (!ok || *state.String != "scope_ambiguous") {
+			t.Errorf("switch on: state = %v, want scope_ambiguous", state)
+		}
+		if !distribution && ok {
+			t.Errorf("switch off: state %v emitted", state)
+		}
+	}
+}
