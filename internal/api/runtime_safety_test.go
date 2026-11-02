@@ -325,3 +325,7 @@ func (*typedNilDeviceAuthorizationLimiter) AllowOAuthConsentRequest(storage.OAut
 func (*typedNilDeviceAuthorizationLimiter) AllowBrowserAuthorize(string, string) DeviceAuthorizationLimitDecision {
 	return DeviceAuthorizationLimitDecision{}
 }
+
+func (*typedNilDeviceAuthorizationLimiter) AllowBrowserAuthorizeUser(string, string) DeviceAuthorizationLimitDecision {
+	return DeviceAuthorizationLimitDecision{}
+}
