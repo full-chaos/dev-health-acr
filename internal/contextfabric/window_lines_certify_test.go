@@ -9,6 +9,7 @@ import (
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/eventspec"
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric/graphrank"
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 )
 
@@ -280,4 +281,43 @@ func TestInferredWindowGateLineCertifiesEveryProducerValue(t *testing.T) {
 	sink, ctx := answerLineSink(&buf, slog.LevelInfo)
 	sink.RecordInferredWindowGate(ctx, principalOrg1, contextfabric.InferredWindowGateAnswered, "future_basis")
 	certifyRefused(t, buf.Bytes(), eventspec.InferredWindowGate, "an unknown basis")
+}
+
+// TestInterpretationTermsLineCertifiesEveryProducerValue (CHAOS-12632): the
+// line from the real composer, with the graph package's real handle grammar
+// as the probe, certifies for every handle_bound value and both slug values,
+// and an unknown handle_bound is refused.
+func TestInterpretationTermsLineCertifiesEveryProducerValue(t *testing.T) {
+	t.Parallel()
+	keys := []string{"time", "level", "msg", "org_id", "subject_term_count", "stated_kind", "handle_bound", "repository_slug_term", "request_id"}
+	probe := func(q string) bool { return len(graphrank.BindHandles(q)) > 0 }
+	seenBound, seenSlug := map[string]bool{}, map[bool]bool{}
+	for _, tc := range []struct {
+		question string
+		terms    []string
+		kind     contextfabric.SubjectKind
+		probe    contextfabric.QuestionHandleProbe
+	}{
+		{"What is the status of pull request 1557 in full-chaos/dev-health-web?", []string{"1557"}, contextfabric.SubjectPullRequest, probe},
+		{"What is the status of pull request 1557 in full-chaos/dev-health-web?", []string{"full-chaos/dev-health-web"}, contextfabric.SubjectPullRequest, probe},
+		{"How is dev-health-web doing?", []string{"dev-health-web"}, "", probe},
+		{"How is dev-health-web doing?", []string{"dev-health-web"}, "", nil},
+	} {
+		event := contextfabric.InterpretationTermsEventForTest(tc.question, tc.terms, tc.kind, tc.probe)
+		var buf bytes.Buffer
+		sink, ctx := answerLineSink(&buf, slog.LevelInfo)
+		sink.RecordInterpretationTerms(ctx, principalOrg1, event)
+		pinKeys(t, bytes.NewBuffer(buf.Bytes()), keys, 1)
+		line := certifyRequestLine(t, buf.Bytes(), eventspec.InterpretationTerms, map[string]any{"handle_bound": string(event.HandleBound), "repository_slug_term": event.RepositorySlugTerm, "stated_kind": string(tc.kind)})
+		seenBound[line["handle_bound"].(string)] = true
+		seenSlug[event.RepositorySlugTerm] = true
+	}
+	sameMembers(t, "handle_bound values", keysOf(seenBound), contextfabric.InterpretationHandleBoundVocabulary())
+	if !seenSlug[true] || !seenSlug[false] {
+		t.Fatalf("repository_slug_term values seen = %v, want both", seenSlug)
+	}
+	var buf bytes.Buffer
+	sink, ctx := answerLineSink(&buf, slog.LevelInfo)
+	sink.RecordInterpretationTerms(ctx, principalOrg1, contextfabric.InterpretationTermsEvent{HandleBound: "future_value"})
+	certifyRefused(t, buf.Bytes(), eventspec.InterpretationTerms, "an unknown handle_bound")
 }

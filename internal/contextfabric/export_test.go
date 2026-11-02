@@ -187,3 +187,13 @@ func DecideInferredWindowGateForTest(beyondWindow, offersUnavailable, series boo
 	}
 	return decideInferredWindowGate(material, offersUnavailable, frame)
 }
+
+// InterpretationTermsEventForTest is interpretationTermsEvent (CHAOS-12632
+// line certification).
+func InterpretationTermsEventForTest(question string, terms []string, statedKind SubjectKind, probe QuestionHandleProbe) InterpretationTermsEvent {
+	var frame *QuestionFrame
+	if statedKind != "" {
+		frame = handleStateFrame(statedKind, []InvestigationGoal{GoalAssessState}, TemporalIntentCurrent)
+	}
+	return interpretationTermsEvent(question, InterpretedQuestion{SubjectTerms: terms}, frame, probe)
+}

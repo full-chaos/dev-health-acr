@@ -525,6 +525,7 @@ type recordingTelemetry struct {
 	windowGatedForConfirmation     []windowGatedRecord
 	windowClassifications          []recordedWindowClassification
 	inferredWindowGates            []recordedInferredWindowGate
+	interpretationTerms            []InterpretationTermsEvent
 	windowCanonicalizationOutcomes []WindowCanonicalizationOutcome
 	// structureNeedsDisclosed/structureOfferCounts/structureReceipts
 	// (CHAOS-3900 P1.F) mirror the SAME list-not-count discipline.
@@ -815,6 +816,10 @@ func (r *recordingTelemetry) RecordInferredWindowGate(_ context.Context, _ stora
 type recordedInferredWindowGate struct {
 	Decision InferredWindowGateDecision
 	Basis    InferredWindowGateBasis
+}
+
+func (r *recordingTelemetry) RecordInterpretationTerms(_ context.Context, _ storage.Principal, event InterpretationTermsEvent) {
+	r.interpretationTerms = append(r.interpretationTerms, event)
 }
 
 // recordedWindowClassification is one RecordWindowClassification call.
