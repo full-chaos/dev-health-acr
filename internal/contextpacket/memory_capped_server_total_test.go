@@ -77,3 +77,21 @@ func TestAServerTotalRefusalWhileReadingIsNotReportedAsTheStatementsCap(t *testi
 		t.Fatalf("observer saw %+v, want one server-total refusal that does not print the cap as its peak", seen)
 	}
 }
+
+// A server-total refusal keeps the peak the statement had reached, so a nonzero
+// peak is never dropped to the "none observed" zero (codex r1 P3).
+func TestAServerTotalRefusalKeepsAnObservedPeak(t *testing.T) {
+	t.Parallel()
+	for _, serverTotal := range []bool{true, false} {
+		var seen []MemoryNearCap
+		client := memoryCappedQueryClient{capBytes: 64 << 20, observer: func(_ context.Context, near MemoryNearCap) { seen = append(seen, near) }}
+		client.observeRefusal(context.Background(), "SELECT 1 SETTINGS max_memory_usage = 1000000", 12345, serverTotal)
+		want := uint64(12345)
+		if !serverTotal {
+			want = 1000000 // the statement's own cap is a lower bound on its peak
+		}
+		if len(seen) != 1 || seen[0].PeakBytes != want || seen[0].ServerTotal != serverTotal {
+			t.Fatalf("server_total=%v: observer saw %+v, want peak %d", serverTotal, seen, want)
+		}
+	}
+}
