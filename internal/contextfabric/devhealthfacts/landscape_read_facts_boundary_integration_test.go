@@ -101,8 +101,10 @@ func TestLandscapeOneCopyAtTheReadFactsBoundary(t *testing.T) {
 			t.Fatalf("map_coordinates has no %s: %v", want, coordinates.Columns)
 		}
 	}
-	if !slices.Contains(area.Columns, "wip_max_30d") {
-		t.Fatalf("area_breakdown lost wip_max_30d at the direct boundary: %v", area.Columns)
+	for _, held := range []string{"wip_max_30d", "cycle_p50_30d_hours_avg"} {
+		if !slices.Contains(area.Columns, held) {
+			t.Fatalf("area_breakdown lost %s at the direct boundary: %v", held, area.Columns)
+		}
 	}
 	if _, scalar := response.Facts[0].Fields["as_of_day"]; !scalar {
 		t.Fatalf("the served fact has no as_of_day scalar: %s", raw)
