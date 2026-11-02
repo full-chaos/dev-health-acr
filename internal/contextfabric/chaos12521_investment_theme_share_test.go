@@ -23,6 +23,8 @@ func themeShareResultFor(kind contractsv1.ContextFabricSubjectKind, shares ...fl
 		}})
 	}
 	result := validInvestigationResult()
+	result.Cohort = nil
+	result.Interpretation.Shape = ShapeSingleSubject
 	result.AnswerPlan = &contractsv1.ContextFabricAnswerPlan{
 		Family:        QuestionFamilyInvestmentAllocation,
 		FamilyVersion: QuestionFamilyTableVersion,
@@ -127,10 +129,12 @@ func TestNoTreemapWithoutTheRulesEvidence(t *testing.T) {
 		"not authorized": {func(r *InvestigationResult) {
 			r.AnswerPlan.RenderKinds = []contractsv1.ContextFabricRenderKind{contractsv1.ContextFabricRenderKindTable}
 		}, RenderShapeSkipNotPlanAuthorized},
-		"no fact":        {func(r *InvestigationResult) { r.ClaimedFacts = nil }, RenderShapeSkipNoThemeBreakdown},
-		"another kind":   {func(r *InvestigationResult) { r.ClaimedFacts[0].Kind = FactStatus }, RenderShapeSkipNoThemeBreakdown},
-		"no declaration": {func(r *InvestigationResult) { r.ClaimedFacts[0].Table = nil }, RenderShapeSkipNoThemeBreakdown},
-		"another table":  {func(r *InvestigationResult) { r.ClaimedFacts[0].Table.Field = "daily_investment" }, RenderShapeSkipNoThemeBreakdown},
+		"a cohort answer": {func(r *InvestigationResult) { r.Cohort = &Cohort{} }, RenderShapeSkipCohortAnswer},
+		"a cohort shape":  {func(r *InvestigationResult) { r.Interpretation.Shape = ShapeDiscoveredCohort }, RenderShapeSkipCohortAnswer},
+		"no fact":         {func(r *InvestigationResult) { r.ClaimedFacts = nil }, RenderShapeSkipNoThemeBreakdown},
+		"another kind":    {func(r *InvestigationResult) { r.ClaimedFacts[0].Kind = FactStatus }, RenderShapeSkipNoThemeBreakdown},
+		"no declaration":  {func(r *InvestigationResult) { r.ClaimedFacts[0].Table = nil }, RenderShapeSkipNoThemeBreakdown},
+		"another table":   {func(r *InvestigationResult) { r.ClaimedFacts[0].Table.Field = "daily_investment" }, RenderShapeSkipNoThemeBreakdown},
 		"not a breakdown": {func(r *InvestigationResult) {
 			r.ClaimedFacts[0].Table.Shape = contractsv1.ContextFabricFactTableShapeTimeSeries
 		}, RenderShapeSkipNoThemeBreakdown},
@@ -179,6 +183,52 @@ func TestNoTreemapWithoutTheRulesEvidence(t *testing.T) {
 				t.Fatalf("skip %q, want %q", got, plant.want)
 			}
 		})
+	}
+}
+
+// A family carried from an earlier turn does not make this question about one
+// subject's split.
+func TestACarriedFamilyDoesNotChartACohortFrame(t *testing.T) {
+	t.Parallel()
+	result := themeShareResultFor(contractsv1.ContextFabricSubjectRepository, 0.5, 0.5)
+	result.AnswerPlan.FamilySource = QuestionFamilySourceCarried
+	frame := &QuestionFrame{SubjectExpression: SubjectExpression{Kind: SubjectExpressionDiscoveredKind, Discovered: &DiscoveredSetExpression{MemberKind: contractsv1.ContextFabricSubjectTeam}}}
+	shapes, event := selectRenderShapes(result, frame, RenderShapeOptions{InvestmentThemeShare: true})
+	if len(treemapsOf(shapes)) != 0 {
+		t.Fatalf("shapes %+v", shapes)
+	}
+	if skip := skipOf(t, event); skip != RenderShapeSkipCohortAnswer {
+		t.Fatalf("skip %q", skip)
+	}
+	// A follow-up about the same one subject keeps its chart.
+	shapes, _ = selectRenderShapes(result, nil, RenderShapeOptions{InvestmentThemeShare: true})
+	if len(treemapsOf(shapes)) != 1 {
+		t.Fatalf("carried on one subject: %+v", shapes)
+	}
+}
+
+func TestAStoredTreemapIsRemovedWhenTheRuleIsOff(t *testing.T) {
+	t.Parallel()
+	result := themeShareResultFor(contractsv1.ContextFabricSubjectRepository, 0.5, 0.5)
+	result.RenderShapes, _ = selectRenderShapes(result, nil, RenderShapeOptions{InvestmentThemeShare: true})
+	other := result.RenderShapes[0]
+	other.Kind, other.SelectedBy = contractsv1.ContextFabricRenderKindSeries, contractsv1.ContextFabricRenderRuleDatedFactTrend
+	result.RenderShapes = append(result.RenderShapes, other)
+
+	off := WithoutDisabledRenderShapes(result, RenderShapeOptions{})
+	if len(off.RenderShapes) != 1 || off.RenderShapes[0].SelectedBy != contractsv1.ContextFabricRenderRuleDatedFactTrend {
+		t.Fatalf("off kept %+v", off.RenderShapes)
+	}
+	if len(result.RenderShapes) != 2 {
+		t.Fatal("the input was changed")
+	}
+	if on := WithoutDisabledRenderShapes(result, RenderShapeOptions{InvestmentThemeShare: true}); len(on.RenderShapes) != 2 {
+		t.Fatalf("on removed a shape: %+v", on.RenderShapes)
+	}
+	alone := result
+	alone.RenderShapes = result.RenderShapes[:1]
+	if got := WithoutDisabledRenderShapes(alone, RenderShapeOptions{}); got.RenderShapes != nil {
+		t.Fatalf("an answer left with no shape must carry none: %+v", got.RenderShapes)
 	}
 }
 

@@ -9774,6 +9774,7 @@
           "subject_kind_not_charted",
           "theme_row_unusable",
           "fewer_than_two_shares",
+          "cohort_answer",
           "not_cohort_intent",
           "no_ranked_member",
           "no_drivers",

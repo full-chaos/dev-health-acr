@@ -206,6 +206,10 @@ const (
 	// numeric share. The shape is skipped WHOLE: a part of a whole left out
 	// changes what every other part means.
 	RenderShapeSkipThemeRowUnusable RenderShapeSkipReason = "theme_row_unusable"
+	// RenderShapeSkipCohortAnswer -- the answer is about a set of subjects. A
+	// carried family can reach here on a turn that classified nothing, so the
+	// family alone does not say the question is about one subject's split.
+	RenderShapeSkipCohortAnswer RenderShapeSkipReason = "cohort_answer"
 	// RenderShapeSkipFewerThanTwoShares -- fewer than two shares are above 0.
 	// One part is no split.
 	RenderShapeSkipFewerThanTwoShares RenderShapeSkipReason = "fewer_than_two_shares"
@@ -299,7 +303,7 @@ func selectRenderShapes(result InvestigationResult, frame *QuestionFrame, option
 	// shape bound leaves and this rule yields at most one shape.
 	if !options.InvestmentThemeShare {
 		event.skip(contractsv1.ContextFabricRenderRuleInvestmentThemeShare, RenderShapeSkipRuleDisabled)
-	} else if treemap, reason := investmentThemeShareShape(result); treemap != nil {
+	} else if treemap, reason := investmentThemeShareShape(result, frame); treemap != nil {
 		shapes = append(shapes, *treemap)
 	} else {
 		event.skip(contractsv1.ContextFabricRenderRuleInvestmentThemeShare, reason)
@@ -991,7 +995,7 @@ func RenderShapeSkipReasonLineVocabulary() []string {
 	return []string{
 		string(RenderShapeSkipRuleDisabled), string(RenderShapeSkipNotInvestmentAllocation), string(RenderShapeSkipNoThemeBreakdown),
 		string(RenderShapeSkipSeveralThemeBreakdowns), string(RenderShapeSkipSubjectKindNotCharted),
-		string(RenderShapeSkipThemeRowUnusable), string(RenderShapeSkipFewerThanTwoShares),
+		string(RenderShapeSkipThemeRowUnusable), string(RenderShapeSkipFewerThanTwoShares), string(RenderShapeSkipCohortAnswer),
 		string(RenderShapeSkipNotCohortIntent), string(RenderShapeSkipNoRankedMember), string(RenderShapeSkipNoDrivers),
 		string(RenderShapeSkipTooManySignals), string(RenderShapeSkipNoDeclaredTable), string(RenderShapeSkipNoTimeSeriesTable),
 		string(RenderShapeSkipClaimFieldNotAMeasure), string(RenderShapeSkipUnresolvableMeasureRoles),

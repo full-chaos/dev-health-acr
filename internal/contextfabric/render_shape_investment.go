@@ -1,6 +1,8 @@
 package contextfabric
 
 import (
+	"slices"
+
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 )
 
@@ -33,9 +35,14 @@ const (
 // list, so a person never gets this chart: the vocabulary has no such kind today,
 // and a kind added later stays out until someone decides otherwise. Every row is a
 // point, so a measured zero stays a part of the whole.
-func investmentThemeShareShape(result InvestigationResult) (*contractsv1.ContextFabricRenderShape, RenderShapeSkipReason) {
+func investmentThemeShareShape(result InvestigationResult, frame *QuestionFrame) (*contractsv1.ContextFabricRenderShape, RenderShapeSkipReason) {
 	if result.AnswerPlan == nil || result.AnswerPlan.Family != QuestionFamilyInvestmentAllocation {
 		return nil, RenderShapeSkipNotInvestmentAllocation
+	}
+	// A carried family reaches here on a turn that classified nothing, so the
+	// family does not by itself say this question is about one subject's split.
+	if result.Cohort != nil || cohortRenderIntent(frame) || !familyTakesShape(result.AnswerPlan.Family, result.Interpretation.Shape) {
+		return nil, RenderShapeSkipCohortAnswer
 	}
 	if !planAuthorizesRenderKind(result.AnswerPlan, contractsv1.ContextFabricRenderKindTreemap) {
 		return nil, RenderShapeSkipNotPlanAuthorized
@@ -108,6 +115,30 @@ func investmentThemeShareShape(result InvestigationResult) (*contractsv1.Context
 // declaresThemeShareTable is the same reading the contract's validator holds a
 // treemap to: the fact's rows are its declared theme breakdown, and no time
 // series sits in front of them.
+// familyTakesShape reads the registry row's structural gate.
+func familyTakesShape(family QuestionFamily, shape InvestigationShape) bool {
+	definition, found := LookupQuestionFamily(family)
+	return found && slices.Contains(definition.CompatibleShapes, shape)
+}
+
+// WithoutDisabledRenderShapes removes a stored shape the deployment has turned
+// off. A flag that only gated selection would leave every answer stored while it
+// was on still serving the shape, on a by-id read and on a reuse hit, to the very
+// consumer the flag protects. The stored row is not touched.
+func WithoutDisabledRenderShapes(result InvestigationResult, options RenderShapeOptions) InvestigationResult {
+	if options.InvestmentThemeShare {
+		return result
+	}
+	var kept []contractsv1.ContextFabricRenderShape
+	for _, shape := range result.RenderShapes {
+		if shape.SelectedBy != contractsv1.ContextFabricRenderRuleInvestmentThemeShare {
+			kept = append(kept, shape)
+		}
+	}
+	result.RenderShapes = kept
+	return result
+}
+
 func declaresThemeShareTable(fact *ClaimedFact) bool {
 	table := fact.Table
 	return table != nil && len(fact.TimeSeriesRows) == 0 &&
