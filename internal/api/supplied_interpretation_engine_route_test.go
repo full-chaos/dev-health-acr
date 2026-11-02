@@ -209,21 +209,21 @@ func TestSuppliedInterpretationIsServedEndToEndWithNoInterpretCall(t *testing.T)
 		return result
 	}
 
-	// With no evidence window the engine asks for one before it resolves
-	// anything: a result with no synthesis, built from the supplied
-	// interpretation alone.
+	// With no evidence window the window is this turn's only question
+	// (CHAOS-4451): the engine answers on the inferred window, offers the
+	// window beside the answer, and still names the client as the
+	// interpreter.
 	asked := post(suppliedInvestigationHTTPRequest(t, token, interpretation(output)))
 	if asked.Code != http.StatusOK {
 		t.Fatalf("supplied interpretation, no window: status = %d body=%s, want 200", asked.Code, asked.Body.String())
 	}
 	terminal := decode(asked)
-	if terminal.Status != contractsv1.ContextFabricInvestigationClarificationRequired || terminal.WindowClarification == nil || len(synthesized) != 0 {
-		t.Fatalf("no window: status = %q syntheses = %d, want the window clarification with no synthesis", terminal.Status, len(synthesized))
+	if terminal.Status == contractsv1.ContextFabricInvestigationClarificationRequired || terminal.WindowClarification == nil || len(synthesized) != 1 {
+		t.Fatalf("no window: status = %q syntheses = %d, want an answer with the window offer beside it and one synthesis", terminal.Status, len(synthesized))
 	}
 	if got := terminal.Versions; got.InterpretationSource != contractsv1.ContextFabricInterpretationSourceClient ||
-		got.InterpretationModelIdentity != "client-supplied/claude-test" || got.ModelIdentity != "client-supplied/claude-test" ||
-		got.InterpretationVersion != contract.ModelOutputVersion {
-		t.Fatalf("no window: Versions = %#v, want the client named as the interpreter of a result with no synthesis", got)
+		got.InterpretationModelIdentity != "client-supplied/claude-test" || got.ModelIdentity != suppliedRouteSynthesisIdentity {
+		t.Fatalf("no window: Versions = %#v, want the client named as the interpreter and the synthesis identity kept (as on the windowed turn below)", got)
 	}
 
 	served := post(windowed(interpretation(output)))
@@ -234,7 +234,7 @@ func TestSuppliedInterpretationIsServedEndToEndWithNoInterpretCall(t *testing.T)
 	if interprets != 0 {
 		t.Fatalf("interpret calls = %d for two supplied interpretations, want 0", interprets)
 	}
-	if len(synthesized) != 1 || !reflect.DeepEqual(synthesized[0].SubjectTerms, []string{"Ask Dev"}) || synthesized[0].RequestedJudgment != "release readiness" {
+	if len(synthesized) != 2 || !reflect.DeepEqual(synthesized[1].SubjectTerms, []string{"Ask Dev"}) || synthesized[1].RequestedJudgment != "release readiness" {
 		t.Fatalf("synthesis input interpretation = %#v, want the supplied one", synthesized)
 	}
 	versions := result.Versions
@@ -284,8 +284,8 @@ func TestSuppliedInterpretationIsServedEndToEndWithNoInterpretCall(t *testing.T)
 			t.Fatalf("%s: status = %d body=%s, want a 422 interpretation_rejected", name, rejected.Code, rejected.Body.String())
 		}
 	}
-	if interprets != 1 || len(synthesized) != 1 {
-		t.Fatalf("interpret calls = %d syntheses = %d after the refusals, want 1 and 1: a refused supplied interpretation reaches neither", interprets, len(synthesized))
+	if interprets != 1 || len(synthesized) != 2 {
+		t.Fatalf("interpret calls = %d syntheses = %d after the refusals, want 1 and 2: a refused supplied interpretation reaches neither", interprets, len(synthesized))
 	}
 }
 
