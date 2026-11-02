@@ -172,9 +172,12 @@ func WindowClassSourceVocabulary() []string {
 var handleStateKinds = [...]SubjectKind{SubjectPullRequest, SubjectWorkItem, contractsv1.ContextFabricSubjectCIRun, SubjectDeployment, SubjectIncident}
 
 // frameAsksHandleState reports whether the frame asks only for the current
-// state of one named subject whose stated kind is a handle kind: a
+// state of named subjects whose stated kind is a handle kind: a
 // named_subject expression with a stated handle kind, a current temporal
-// intent, and assess_state as its only goal. This is the state_snapshot
+// intent, and assess_state as its only goal. The term count is deliberately
+// not checked: a named_subject may carry several terms (a second handle, the
+// handle's container, a secondary alias), and the current state of named
+// handles needs no evidence window however many are named. This is the state_snapshot
 // signal §2.1 names ("pure current state") that ClassifyWindow's shape-only
 // check does not implement. Every clause is required: a trend, a change or a
 // driver question about the same pull request keeps its window.

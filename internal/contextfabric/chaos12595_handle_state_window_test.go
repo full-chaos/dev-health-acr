@@ -107,11 +107,12 @@ func TestClassifyWindowForKeepsTheClassOutsideHandleState(t *testing.T) {
 	}
 }
 
-func handleStateEngine(t *testing.T, interpreter QuestionInterpreter, telemetry *recordingTelemetry) *Engine {
+func handleStateEngine(t *testing.T, interpreter QuestionInterpreter, telemetry *recordingTelemetry) (*Engine, *acceptanceGraphReader) {
 	t.Helper()
+	graph := &acceptanceGraphReader{resolution: SubjectResolution{Candidates: []SubjectCandidate{}, Committed: []SubjectRef{}}, context: emptyGraphContext()}
 	engine, err := NewEngine(EngineDependencies{
 		Interpreter: interpreter,
-		Graph:       &acceptanceGraphReader{resolution: SubjectResolution{Candidates: []SubjectCandidate{}, Committed: []SubjectRef{}}, context: emptyGraphContext()},
+		Graph:       graph,
 		Facts: factReaderFunc(func(context.Context, storage.Principal, CanonicalFactRequest) (CanonicalFactBundle, error) {
 			return CanonicalFactBundle{}, nil
 		}),
@@ -128,7 +129,7 @@ func handleStateEngine(t *testing.T, interpreter QuestionInterpreter, telemetry 
 	if err != nil {
 		t.Fatalf("NewEngine() error = %v", err)
 	}
-	return engine
+	return engine, graph
 }
 
 // The reach-run turn-3 shape through the real Engine.Investigate: a pull
@@ -146,11 +147,17 @@ func TestHandleStateQuestionIsNotWindowGated(t *testing.T) {
 			}
 			request := validInvestigationRequest()
 			request.Question = "What is the status of pull request 999 in full-chaos/dev-health-web?"
-			result, _ := handleStateEngine(t, interpreter, telemetry).Investigate(context.Background(), acceptancePrincipal(), request)
+			engine, graph := handleStateEngine(t, interpreter, telemetry)
+			result, _ := engine.Investigate(context.Background(), acceptancePrincipal(), request)
 			gated := result.Status == InvestigationClarificationRequired && result.EffectiveEvidenceWindow != nil && result.EffectiveEvidenceWindow.Provenance == WindowInferredDefault
 			wantGated := kind == SubjectRepository && pick.class != WindowClassStateSnapshot
 			if gated != wantGated {
 				t.Errorf("%s/%s: window gated = %v (status %q), want %v", kind, pick.name, gated, result.Status, wantGated)
+			}
+			// Not gated means the turn reached the decisive resolution: one
+			// resolve call that is NOT the gate's offers-only pass.
+			if !wantGated && (graph.resolveCalls != 1 || OffersOnlyResolution(graph.resolveCtxs[0])) {
+				t.Errorf("%s/%s: resolve calls = %d (offers-only %v), want one decisive resolution", kind, pick.name, graph.resolveCalls, graph.resolveCalls > 0 && OffersOnlyResolution(graph.resolveCtxs[0]))
 			}
 			if len(telemetry.windowClassifications) != 1 {
 				t.Fatalf("%s/%s: window classification lines = %d, want 1", kind, pick.name, len(telemetry.windowClassifications))
@@ -163,5 +170,19 @@ func TestHandleStateQuestionIsNotWindowGated(t *testing.T) {
 				t.Errorf("%s/%s: recorded class = %q, want state_snapshot", kind, pick.name, recorded.Outcome.Class)
 			}
 		}
+	}
+}
+
+// A named_subject may carry several terms: a second handle, the handle's
+// container (the CHAOS-12523 reading of "pull request P in R"), or a
+// secondary alias. The current state of named handles needs no window however
+// many terms the frame carries (codex r1 on the CHAOS-12595 PR raised the
+// two-handle case; this pins the decision).
+func TestHandleStateHoldsForSeveralTerms(t *testing.T) {
+	t.Parallel()
+	frame := handleStateFrame(SubjectPullRequest, []InvestigationGoal{GoalAssessState}, TemporalIntentCurrent)
+	frame.SubjectExpression.Named.Terms = []string{"999", "full-chaos/dev-health-web"}
+	if outcome := classifyWindowFor(singleSubjectInterpretation("", ""), frame); outcome.Class != WindowClassStateSnapshot || outcome.Basis != WindowClassBasisHandleState {
+		t.Fatalf("two-term handle frame = %+v, want state_snapshot by handle_state", outcome)
 	}
 }

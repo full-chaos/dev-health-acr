@@ -275,13 +275,24 @@ carries' own seed population, so the bypass and the carry can never again name
 different sets; the closed `AnswerReuseBypassReason` counter reports which arm
 fired, a branch that was previously silent.
 
-**A status question about one handle draws no default window (CHAOS-12595).**
+**The model's window class reaches the engine (CHAOS-12603).** The
+interpretation model's sanitized `window_class` / `window_confidence` pick is
+carried from the interpret receipt onto `InterpretedQuestion`
+(`carryWindowPick`, `genkitruntime/runtime.go`), on the server-model path and
+the supplied-interpretation path. Before this, CHAOS-3900 W1 read the field in
+`composeEffectiveWindow` but nothing set it, so `ClassifyWindow` always fell
+back by shape. An out-of-vocabulary class stays unset (receipt
+`window_class_unrecognized`). `WindowInferenceVersion` moved to `win_v2`, so
+answers stored under the old inference are not reused.
+
+**A status question about a named handle draws no default window (CHAOS-12595).**
 `classifyWindowFor` (`chaos3900_window_class.go`) reads the accepted frame
-before the class table. A frame that asks only for the current state of one
-named handle (goals only `assess_state`, temporal `current`, a `named_subject`
+before the class table. A frame that asks only for the current state of named
+handles (goals only `assess_state`, temporal `current`, a `named_subject`
 whose stated kind is `pull_request`, `work_item`, `ci_pipeline_run`,
-`deployment` or `incident`) classifies as `state_snapshot`, whatever the model
-picked; a model pick of `state_snapshot` stays the model's, any other pick is
+`deployment` or `incident`; one or more terms, because a handle's container
+or a second handle needs no window either) classifies as `state_snapshot`,
+whatever the model picked; a model pick of `state_snapshot` stays the model's, any other pick is
 marked downgraded. So "what is the status of pull request P in R" is no longer
 held at the CHAOS-4040 window gate. A trend, change or driver question about the
 same handle, and any question about a repository, team or project, keeps the
