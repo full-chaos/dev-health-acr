@@ -19,6 +19,8 @@ func allAnswerWords(t *testing.T) map[string]string {
 			word, ok = ContextFabricLimitationsDisplacedNote(2)
 		case ContextFabricAnswerNotePopulation:
 			word, ok = ContextFabricCohortPopulationNote(240, true)
+		case ContextFabricAnswerNoteTemporal:
+			word, ok = ContextFabricTemporalNote(temporalNoteRow{requested: "2026-03-01", effective: "2026-02-28", grain: ContextFabricGrainDay}.label(t))
 		}
 		if !ok {
 			t.Fatalf("note %q has no word", note)
@@ -116,10 +118,10 @@ func TestALowerBoundNeverReadsAsAnExactCount(t *testing.T) {
 	}
 }
 
-func TestTheStatusTierKeepsTheJudgmentMismatchNote(t *testing.T) {
-	key := ContextFabricAnswerNoteJudgmentMismatch.Key()
-	labels := map[string]string{"answer_status:partial": "Partial answer", key: "A sentence.", ContextFabricAnswerNoteReused.Key(): "Another."}
-	want := map[string]string{"answer_status:partial": "Partial answer", key: "A sentence."}
+func TestTheStatusTierKeepsTheJudgmentMismatchAndTemporalNotes(t *testing.T) {
+	mismatch, temporal := ContextFabricAnswerNoteJudgmentMismatch.Key(), ContextFabricAnswerNoteTemporal.Key()
+	labels := map[string]string{"answer_status:partial": "Partial answer", mismatch: "A sentence.", temporal: "A time.", ContextFabricAnswerNoteReused.Key(): "Another."}
+	want := map[string]string{"answer_status:partial": "Partial answer", mismatch: "A sentence.", temporal: "A time."}
 	if got := ContextFabricStatusVocabularyLabels(labels); !maps.Equal(got, want) {
 		t.Fatalf("the status tier holds %v, want %v", got, want)
 	}

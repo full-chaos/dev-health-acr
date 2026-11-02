@@ -1025,6 +1025,21 @@ for run_lease_refused in "--set contextFabric.runLeaseEnabled=true" "${run_lease
   [[ $run_lease_status -ne 0 ]] || fail_gate "run-lease: rendered with the event stream off: ${run_lease_refused}"
   grep -qF 'needs ACR_CONTEXT_FABRIC_EVENT_STREAM_ENABLED' <<<"$run_lease_out" || fail_gate "run-lease: refused without naming the event stream: ${run_lease_refused}"
 done
+# CHAOS-12528: the guard reads the value the pod gets. extraEnv comes after the
+# first-class entry, and the last entry of a name wins.
+lease_env=(--set-string 'deployment.extraEnv[0].name=ACR_CONTEXT_FABRIC_RUN_LEASE_ENABLED' --set-string 'deployment.extraEnv[0].value=true')
+set +e; lease_env_out="$(render "${lease_env[@]}" 2>&1)"; lease_env_status=$?; set -e
+[[ $lease_env_status -ne 0 ]] || fail_gate "run-lease: extraEnv turned the lease on with the event stream off and the render passed"
+grep -qF 'needs ACR_CONTEXT_FABRIC_EVENT_STREAM_ENABLED' <<<"$lease_env_out" || fail_gate "run-lease: the extraEnv refusal did not name the event stream"
+render "${lease_env[@]}" --set-string 'deployment.extraEnv[1].name=ACR_CONTEXT_FABRIC_EVENT_STREAM_ENABLED' --set-string 'deployment.extraEnv[1].value=true' >/dev/null \
+  || fail_gate "run-lease: the lease by extraEnv with the event stream on must render"
+render --set contextFabric.runLeaseEnabled=true --set-string 'deployment.extraEnv[0].name=ACR_CONTEXT_FABRIC_RUN_LEASE_ENABLED' --set-string 'deployment.extraEnv[0].value=false' >/dev/null \
+  || fail_gate "run-lease: extraEnv turning the lease off leaves nothing to guard, and must render"
+set +e; lease_ref_out="$(render --set-json 'deployment.extraEnv=[{"name":"ACR_CONTEXT_FABRIC_RUN_LEASE_ENABLED","valueFrom":{"secretKeyRef":{"name":"flags","key":"run-lease"}}}]' 2>&1)"; lease_ref_status=$?; set -e
+[[ $lease_ref_status -ne 0 ]] || fail_gate "run-lease: a secret-backed lease rendered, and the render cannot prove the event stream"
+grep -qF 'no literal value' <<<"$lease_ref_out" || fail_gate "run-lease: the secret-backed refusal did not say why"
+render --set-json 'deployment.extraEnv=[{"name":"ACR_CONTEXT_FABRIC_RUN_LEASE_ENABLED","valueFrom":{"secretKeyRef":{"name":"flags","key":"run-lease"}}},{"name":"ACR_CONTEXT_FABRIC_RUN_LEASE_ENABLED","value":"false"}]' >/dev/null \
+  || fail_gate "run-lease: a later literal entry wins in the pod, so the render knows the value and must pass"
 pass "run-lease: acr-api declares the flag off by default, on when set, and the render refuses it with the event stream off"
 
 falkor_no_secret="$(render \
@@ -1480,6 +1495,22 @@ for bad_consent in "" "https://www.example.test" "https://www.example.test/" "ht
   "https://www.example.test/acr/authorize#f" "http://www.example.test/acr/authorize"; do
   oauth_must_fail "consent url '${bad_consent}'" "config.oauth.consentUrl" "${oauth_args[@]}" --set-string "config.oauth.consentUrl=${bad_consent}"
 done
+
+# CHAOS-12527: a malformed percent escape renders here and stops the workload there,
+# so the chart refuses what url.Parse refuses, on https and on a loopback host.
+for bad_escape in 'http://localhost:8089/m%cp' 'https://acr.example.test/m%cp' 'https://acr.example.test/mcp%' 'https://acr.example.test/mcp%2' 'https://acr.example.test/m cp' 'https://acr%2Eexample.test/mcp'; do
+  oauth_must_fail "resource '${bad_escape}'" "config.oauth.resources" "${oauth_args[@]}" --set-string "config.oauth.resources[0]=${bad_escape}"
+done
+for bad_escape in 'http://localhost:3000/acr%authorize' 'https://www.example.test/acr%authorize' 'https://www.example.test/acr/authorize%'; do
+  oauth_must_fail "consent url '${bad_escape}'" "config.oauth.consentUrl" "${oauth_args[@]}" --set-string "config.oauth.consentUrl=${bad_escape}"
+done
+for bad_issuer in 'https://acr%example.test' 'https://user@acr.example.test' 'https://acr example.test'; do
+  oauth_must_fail "issuer '${bad_issuer}'" "must be an https origin" "${oauth_args[@]}" --set-string "config.oauth.issuer=${bad_issuer}"
+done
+if ! escape_render="$(render "${oauth_args[@]}" --set-string 'config.oauth.resources[0]=https://acr.example.test/m%2Fcp' \
+  --set-string 'config.oauth.consentUrl=https://www.example.test/acr%2Fauthorize' 2>&1)"; then
+  fail_gate "oauth: a well-formed percent escape must render: $(tail -1 <<<"$escape_render")"
+fi
 
 # CHAOS-12476: http is for a loopback host only, the rule of acr-api and acr-mcp
 # (internal/config/oauth.go, internal/mcp/http_oauth.go). A local stack with no

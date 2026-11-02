@@ -230,12 +230,16 @@ GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE acr.context_packet_snapshots TO :"
 
 -- INSERT internal/storage/postgres/outbox.go (lifecycleSink.Insert), SELECT the same file (lifecycleSink.MaxRevision); both inside the credential mutation transaction
 -- UPDATE of published_at only, started only when the publisher is configured (ACR_AUTH_PROJECTION_URL): internal/storage/postgres/outbox_publish.go LifecycleOutboxMarkSQL, and the claim's FOR UPDATE OF o (LifecycleOutboxClaimSQL), which Postgres checks as UPDATE on one column; no other column is writable and the publisher never deletes
+-- DELETE of fully published aggregates whose credential is gone, whole aggregates only: internal/storage/postgres/outbox_reap.go LifecycleOutboxReapSQL, started only when the publisher is configured (ACR_AUTH_PROJECTION_URL); the reaper reads client_credentials (SELECT) and the outbox (SELECT) and updates nothing
 REVOKE SELECT, INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER ON TABLE acr.credential_lifecycle_outbox FROM :"runtime_user";
 GRANT SELECT, INSERT ON TABLE acr.credential_lifecycle_outbox TO :"runtime_user";
 \if :auth_projection
 GRANT UPDATE (published_at) ON TABLE acr.credential_lifecycle_outbox TO :"runtime_user";
 \else
 REVOKE UPDATE (published_at) ON TABLE acr.credential_lifecycle_outbox FROM :"runtime_user";
+\endif
+\if :auth_projection
+GRANT DELETE ON TABLE acr.credential_lifecycle_outbox TO :"runtime_user";
 \endif
 
 -- INSERT internal/storage/postgres/audit.go:69; SELECT credentials_audit.go:50 and :61 (credential rotation conflict checks)

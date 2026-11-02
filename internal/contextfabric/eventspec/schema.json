@@ -9790,7 +9790,8 @@
         "closed_vocabulary": [
           "cohort_attention_score",
           "cohort_driver_contribution",
-          "dated_fact_trend"
+          "dated_fact_trend",
+          "investment_theme_share"
         ]
       },
       {
@@ -9798,6 +9799,15 @@
         "type": "string",
         "presence": "required",
         "closed_vocabulary": [
+          "rule_disabled",
+          "not_investment_allocation",
+          "no_theme_breakdown",
+          "several_theme_breakdowns",
+          "subject_kind_not_charted",
+          "theme_row_unusable",
+          "fewer_than_two_shares",
+          "cohort_answer",
+          "theme_table_cut",
           "not_cohort_intent",
           "no_ranked_member",
           "no_drivers",
@@ -9912,7 +9922,8 @@
             "closed_vocabulary": [
               "cohort_attention_score",
               "cohort_driver_contribution",
-              "dated_fact_trend"
+              "dated_fact_trend",
+              "investment_theme_share"
             ]
           },
           {

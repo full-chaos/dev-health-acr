@@ -564,7 +564,7 @@ func (e *Engine) finalizeResult(
 ) InvestigationResult {
 	stamped := plan
 	result.AnswerPlan = &stamped
-	renderShapes, _ := SelectRenderShapes(result, frame)
+	renderShapes, _ := selectRenderShapes(result, frame, e.renderShapeOptions)
 	result.RenderShapes = renderShapes
 	// Seed the outcome set from this turn's requirement rows, ONCE.
 	//

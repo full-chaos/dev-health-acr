@@ -656,8 +656,15 @@ trap spawn_late_child TERM
 wait
 EOF
 chmod +x "${timeout_fixture}/docker"
+# These two runs prove process teardown. build.sh copies the context before it calls
+# docker, and the repository's copy takes longer than the wait for the child below
+# (CHAOS-12553), so they build a context of one empty tree.
+timeout_context="${timeout_fixture}/context"
+mkdir -p "${timeout_context}/cmd" "${timeout_context}/internal" "${timeout_context}/migrations"
+cp "${repo_root}/Dockerfile" "${repo_root}/go.mod" "${repo_root}/go.sum" "$timeout_context"
 set +e
 PATH="${timeout_fixture}:$PATH" \
+  CONTAINER_CONTEXT="$timeout_context" \
   CONTAINER_TEST_PARENT_PID="$timeout_parent_pid" \
   CONTAINER_TEST_CHILD_PID="$timeout_child_pid" \
   CONTAINER_TEST_LATE_CHILD_PID="$timeout_late_child_pid" \
@@ -684,6 +691,7 @@ done
 
 rm -f "$timeout_parent_pid" "$timeout_child_pid" "$timeout_late_child_pid"
 PATH="${timeout_fixture}:$PATH" \
+  CONTAINER_CONTEXT="$timeout_context" \
   CONTAINER_TEST_PARENT_PID="$timeout_parent_pid" \
   CONTAINER_TEST_CHILD_PID="$timeout_child_pid" \
   CONTAINER_TEST_LATE_CHILD_PID="$timeout_late_child_pid" \
@@ -691,13 +699,18 @@ PATH="${timeout_fixture}:$PATH" \
   CONTAINER_VERSION=0.1.0-contract \
   CONTAINER_BUILD_TIMEOUT=30 \
   CONTAINER_BUILD_KILL_GRACE=1 \
-  "${repo_root}/scripts/container/build.sh" acr-api >/dev/null 2>&1 &
+  "${repo_root}/scripts/container/build.sh" acr-api >"${timeout_fixture}/signal.log" 2>&1 &
 signaled_build_pid=$!
 for _ in {1..200}; do
   [[ -s "$timeout_child_pid" ]] && break
+  kill -0 "$signaled_build_pid" 2>/dev/null || break
   sleep 0.1
 done
-test -s "$timeout_child_pid" || { printf 'signal fixture did not start its child\n' >&2; exit 1; }
+test -s "$timeout_child_pid" || {
+  printf 'signal fixture did not start its child\n' >&2
+  cat "${timeout_fixture}/signal.log" >&2
+  exit 1
+}
 kill -TERM "$signaled_build_pid"
 set +e
 wait "$signaled_build_pid"
