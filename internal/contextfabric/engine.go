@@ -1378,7 +1378,10 @@ type Engine struct {
 	serviceVersion           string
 	now                      func() time.Time
 	reuseRecheckBudget       time.Duration
-	newResultID              func() string
+	// recheckContext makes the recheck's budget context; context.WithTimeout
+	// unless a test ends the budget at a chosen read (CHAOS-12573).
+	recheckContext func(context.Context, time.Duration) (context.Context, context.CancelFunc)
+	newResultID    func() string
 }
 
 func NewEngine(dependencies EngineDependencies, options EngineOptions) (*Engine, error) {
@@ -1457,7 +1460,7 @@ func NewEngine(dependencies EngineDependencies, options EngineOptions) (*Engine,
 		maxSerializedBytes:       options.MaxSerializedBytes,
 		synthesisDeadlineReserve: options.SynthesisDeadlineReserve,
 		serviceVersion:           options.ServiceVersion, now: options.Now, newResultID: options.NewResultID,
-		reuseRecheckBudget: options.ReuseRecheckBudget,
+		reuseRecheckBudget: options.ReuseRecheckBudget, recheckContext: context.WithTimeout,
 	}, nil
 }
 

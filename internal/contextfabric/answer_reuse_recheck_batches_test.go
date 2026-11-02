@@ -87,6 +87,10 @@ type recheckGraph struct {
 	hangPartial bool
 	// holdFor makes every read take this long and ignore its context.
 	holdFor time.Duration
+	// onHang runs when a hung read starts, and onReturn when a held read is
+	// about to return (CHAOS-12573): a test ends a context there, inside the read
+	// it is about, never on a timer that can fire before the recheck starts.
+	onHang, onReturn func()
 	// readDelay makes every read take this long, unless its context ends first.
 	readDelay time.Duration
 	// finishBefore makes the last discovery return this long before the
@@ -118,6 +122,9 @@ func (g *recheckGraph) read(ctx context.Context) {
 	g.deadlines = append(g.deadlines, deadline)
 	if g.holdFor > 0 {
 		time.Sleep(g.holdFor)
+		if g.onReturn != nil {
+			g.onReturn()
+		}
 	}
 	if g.readDelay > 0 {
 		select {
@@ -129,6 +136,9 @@ func (g *recheckGraph) read(ctx context.Context) {
 
 // hang blocks until ctx ends, and returns what such a read reports.
 func (g *recheckGraph) hang(ctx context.Context) error {
+	if g.onHang != nil {
+		g.onHang()
+	}
 	select {
 	case <-ctx.Done():
 		if g.afterHang != nil {
