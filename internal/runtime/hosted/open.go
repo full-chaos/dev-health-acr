@@ -1082,6 +1082,11 @@ func buildContextFabricInvestigator(ctx context.Context, request buildRequest, p
 		// from request.config so the two can never be configured apart.
 		MaxItems:           request.config.MaxItems,
 		MaxSerializedBytes: int64(request.config.MaxSerializedBytes),
+		// See Config.ContextFabricInvestmentTreemapEnabled.
+		InvestmentTreemapEnabled: request.config.ContextFabricInvestmentTreemapEnabled,
+		// See Config.ContextFabricComparisonTableEnabled.
+		ComparisonTableEnabled: request.config.ContextFabricComparisonTableEnabled,
+		FactCapabilities:       factRegistry.Capabilities(),
 		// See Config.ServerCompletenessAuthorityEnabled's own doc comment.
 		ServerCompletenessAuthorityEnabled: request.config.ServerCompletenessAuthorityEnabled,
 		// See Config.AnchorBindingCountEnabled.

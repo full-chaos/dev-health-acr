@@ -14,9 +14,18 @@ import (
 )
 
 type EngineOptions struct {
-	ServiceVersion string
-	Now            func() time.Time
-	NewResultID    func() string
+	// InvestmentTreemapEnabled turns on the investment_theme_share rule
+	// (CHAOS-12521). See Config.ContextFabricInvestmentTreemapEnabled.
+	InvestmentTreemapEnabled bool
+	// ComparisonTableEnabled turns on the comparison_side_by_side rule
+	// (CHAOS-12513). See Config.ContextFabricComparisonTableEnabled.
+	ComparisonTableEnabled bool
+	// FactCapabilities are the field declarations that rule reads each field's
+	// scope from.
+	FactCapabilities []FactCapability
+	ServiceVersion   string
+	Now              func() time.Time
+	NewResultID      func() string
 	// RegimeAOffersDisabled (CHAOS-4234) turns OFF the offers-only
 	// resolution the class-default window gate runs to compose kind/
 	// handle/candidate offers beside the window offer -- restoring
@@ -139,6 +148,11 @@ type EngineOptions struct {
 	// of reuse participation (rows persist NULL and lookups miss on it),
 	// the same fail-closed convention as every other field here.
 	ReusePromptVersions ReusePromptVersions
+	// ReuseRecheckBudget is the time one answer reuse recheck may spend on the
+	// graph, across all its reads (CHAOS-12511). Zero means
+	// defaultReuseRecheckBudget. An option so a test need not wait that long, as
+	// Now is.
+	ReuseRecheckBudget time.Duration
 	// ReuseVersionAuthorities (CHAOS-3862 round 2) is three MORE
 	// deployment-current version authorities -- composition must wire it
 	// from the SAME constants the corresponding fresh-result composition
@@ -1342,6 +1356,7 @@ type Engine struct {
 	observationKeys                             ObservationKeyDeclarer
 	regimeAOffersDisabled                       bool
 	anchorBindingShadowDisabled                 bool
+	renderShapeOptions                          RenderShapeOptions
 	serverCompletenessAuthorityEnabled          bool
 	serverCompletenessAuthoritySymmetricEnabled bool
 	// servedLateHook is a test seam: a writer that adds bytes to the document
@@ -1358,6 +1373,7 @@ type Engine struct {
 	synthesisDeadlineReserve time.Duration
 	serviceVersion           string
 	now                      func() time.Time
+	reuseRecheckBudget       time.Duration
 	newResultID              func() string
 }
 
@@ -1370,6 +1386,9 @@ func NewEngine(dependencies EngineDependencies, options EngineOptions) (*Engine,
 	}
 	if options.Now == nil {
 		options.Now = time.Now
+	}
+	if options.ReuseRecheckBudget == 0 {
+		options.ReuseRecheckBudget = defaultReuseRecheckBudget
 	}
 	if options.NewResultID == nil {
 		return nil, errors.New("context fabric engine result ID generator is required")
@@ -1416,17 +1435,23 @@ func NewEngine(dependencies EngineDependencies, options EngineOptions) (*Engine,
 		requirements:               dependencies.Requirements,
 		observationKeys:            dependencies.ObservationKeys,
 		reuseProjectionVersion:     options.ReuseProjectionVersion, reuseModelIdentities: options.ReuseModelIdentities,
-		reuseRetrievalIdentity:                      options.ReuseRetrievalIdentity,
-		reusePromptVersions:                         options.ReusePromptVersions,
-		reuseVersionAuthorities:                     options.ReuseVersionAuthorities,
-		regimeAOffersDisabled:                       options.RegimeAOffersDisabled,
-		anchorBindingShadowDisabled:                 options.DisableAnchorBindingShadow,
+		reuseRetrievalIdentity:      options.ReuseRetrievalIdentity,
+		reusePromptVersions:         options.ReusePromptVersions,
+		reuseVersionAuthorities:     options.ReuseVersionAuthorities,
+		regimeAOffersDisabled:       options.RegimeAOffersDisabled,
+		anchorBindingShadowDisabled: options.DisableAnchorBindingShadow,
+		renderShapeOptions: RenderShapeOptions{
+			InvestmentThemeShare: options.InvestmentTreemapEnabled,
+			ComparisonSideBySide: options.ComparisonTableEnabled,
+			FieldScope:           factFieldScopeLookup(options.FactCapabilities),
+		},
 		serverCompletenessAuthorityEnabled:          options.ServerCompletenessAuthorityEnabled,
 		serverCompletenessAuthoritySymmetricEnabled: options.ServerCompletenessAuthoritySymmetricEnabled,
 		maxItems:                 options.MaxItems,
 		maxSerializedBytes:       options.MaxSerializedBytes,
 		synthesisDeadlineReserve: options.SynthesisDeadlineReserve,
 		serviceVersion:           options.ServiceVersion, now: options.Now, newResultID: options.NewResultID,
+		reuseRecheckBudget: options.ReuseRecheckBudget,
 	}, nil
 }
 
@@ -2256,8 +2281,7 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 
 	// CHAOS-3898 P1-1: Interpret sees ONLY the validated receipt subset,
 	// never the raw request.PriorSubjectReceipts -- see the block above.
-	interpretRequest := request
-	interpretRequest.PriorSubjectReceipts = priorValidatedReceipts
+	interpretRequest := interpretRequestFor(request, priorValidatedReceipts, structureCanon)
 	startInvestigationStage(ctx, contractsv1.ContextFabricStageInterpreting)
 	interpretation, familyOutcome, err := e.interpreter.Interpret(ctx, principal, interpretRequest)
 	if err == nil {
@@ -4334,7 +4358,7 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 	// retry would otherwise double-count a decision an operator counts.
 	anchorShadow.observeServedCount(cardinality.Scope)
 	if e.telemetry != nil {
-		_, renderShapeEvent := SelectRenderShapes(result, familyOutcome.Frame)
+		_, renderShapeEvent := selectRenderShapes(result, familyOutcome.Frame, e.renderShapeOptions)
 		e.telemetry.RecordRenderShapeSelection(ctx, principal, renderShapeEvent)
 		// B8's shadow gate, emitted from the SAME once-per-served-result
 		// point and for the same reason: the derivation is pure and could

@@ -69,6 +69,13 @@ type RenderShapeSelectionEvent struct {
 	// -- and a ninth shape is a rejected document, not a smaller answer.
 	// Zero on every selection that lost nothing.
 	TrendsOmitted int
+	// ComparisonMeasuresLeftOut counts claimed measures the comparison rule
+	// could not state: sides on different days, two claims of one cell, or a
+	// word another measure holds. A COUNT and not a skip, as for trends: the
+	// rule can fire on the measures that remain, and a table that drops a row
+	// and says nothing reads as the whole comparison. Zero on every selection
+	// that lost nothing.
+	ComparisonMeasuresLeftOut int
 }
 
 // RenderShapeSkip records one rule that did not produce a shape.
@@ -184,6 +191,58 @@ const (
 	// asked for per-group results -- is not merely wrong here, it was not
 	// requested, and the plan is where that is said.
 	RenderShapeSkipNotPlanAuthorized RenderShapeSkipReason = "not_plan_authorized"
+	// The investment_theme_share rule's reasons (CHAOS-12521). See
+	// render_shape_investment.go.
+	//
+	// RenderShapeSkipRuleDisabled -- the deployment's flag is off.
+	RenderShapeSkipRuleDisabled RenderShapeSkipReason = "rule_disabled"
+	// RenderShapeSkipNotInvestmentAllocation -- the served family is not
+	// investment_allocation. This is the common exit: most answers are not
+	// about where effort went, and they get no treemap (check 10).
+	RenderShapeSkipNotInvestmentAllocation RenderShapeSkipReason = "not_investment_allocation"
+	// RenderShapeSkipNoThemeBreakdown -- no claimed investment fact carries
+	// a declared theme_breakdown table.
+	RenderShapeSkipNoThemeBreakdown RenderShapeSkipReason = "no_theme_breakdown"
+	// RenderShapeSkipSeveralThemeBreakdowns -- more than one does. A treemap
+	// is one whole, and two subjects' splits are a comparison.
+	RenderShapeSkipSeveralThemeBreakdowns RenderShapeSkipReason = "several_theme_breakdowns"
+	// RenderShapeSkipSubjectKindNotCharted -- the subject is not of a kind this
+	// rule charts: a repository or a team for a treemap, and those or a project
+	// for a comparison. A person never gets either chart.
+	RenderShapeSkipSubjectKindNotCharted RenderShapeSkipReason = "subject_kind_not_charted"
+	// RenderShapeSkipThemeTableCut -- the table does not hold every canonical
+	// theme, because the row budget cut it.
+	RenderShapeSkipThemeTableCut RenderShapeSkipReason = "theme_table_cut"
+	// RenderShapeSkipThemeRowUnusable -- a row holds no canonical theme or no
+	// numeric share. The shape is skipped WHOLE: a part of a whole left out
+	// changes what every other part means.
+	RenderShapeSkipThemeRowUnusable RenderShapeSkipReason = "theme_row_unusable"
+	// RenderShapeSkipCohortAnswer -- the answer is about a set of subjects. A
+	// carried family can reach here on a turn that classified nothing, so the
+	// family alone does not say the question is about one subject's split.
+	RenderShapeSkipCohortAnswer RenderShapeSkipReason = "cohort_answer"
+	// RenderShapeSkipFewerThanTwoShares -- fewer than two shares are above 0.
+	// One part is no split.
+	RenderShapeSkipFewerThanTwoShares RenderShapeSkipReason = "fewer_than_two_shares"
+	// The comparison_side_by_side rule's reasons (CHAOS-12513). See
+	// render_shape_comparison.go.
+	//
+	// RenderShapeSkipNotExplicitComparison -- the served family is not
+	// explicit_comparison, or this turn's own frame does not ask for one. This
+	// is the common exit: most answers compare nothing (check 10).
+	RenderShapeSkipNotExplicitComparison RenderShapeSkipReason = "not_explicit_comparison"
+	// RenderShapeSkipFewerThanTwoSides -- fewer than two subjects committed.
+	RenderShapeSkipFewerThanTwoSides RenderShapeSkipReason = "fewer_than_two_sides"
+	// RenderShapeSkipTooManySides -- more sides than a shape holds series. The
+	// table is skipped WHOLE: a comparison missing a side is another comparison.
+	RenderShapeSkipTooManySides RenderShapeSkipReason = "too_many_sides"
+	// RenderShapeSkipMixedSubjectKinds -- the sides are of different kinds.
+	RenderShapeSkipMixedSubjectKinds RenderShapeSkipReason = "mixed_subject_kinds"
+	// RenderShapeSkipNoSharedMeasure -- the answer claims no comparable measure
+	// for every side. The rule never reads a number of its own (option A).
+	RenderShapeSkipNoSharedMeasure RenderShapeSkipReason = "no_shared_measure"
+	// RenderShapeSkipComparisonUnprovable -- the contract refused the table.
+	RenderShapeSkipComparisonUnprovable RenderShapeSkipReason = "comparison_unprovable"
 )
 
 // cohortRenderIntent reports whether a cohort chart is an answer TO this
@@ -221,6 +280,10 @@ func cohortRenderIntent(frame *QuestionFrame) bool {
 // ContextFabricRenderPointSource that
 // ContextFabricInvestigationResult.Validate then resolves and compares.
 func SelectRenderShapes(result InvestigationResult, frame *QuestionFrame) ([]contractsv1.ContextFabricRenderShape, RenderShapeSelectionEvent) {
+	return selectRenderShapes(result, frame, RenderShapeOptions{})
+}
+
+func selectRenderShapes(result InvestigationResult, frame *QuestionFrame, options RenderShapeOptions) ([]contractsv1.ContextFabricRenderShape, RenderShapeSelectionEvent) {
 	// event.Shape stays the INTERPRETED shape. It is a decision-basis
 	// record, and what the model emitted is still worth recording even now
 	// that nothing branches on it -- it is how a Shape/frame divergence
@@ -263,6 +326,29 @@ func SelectRenderShapes(result InvestigationResult, frame *QuestionFrame) ([]con
 			shapes = append(shapes, *contribution)
 		} else {
 			event.skip(contractsv1.ContextFabricRenderRuleCohortDriverContribution, reason)
+		}
+	}
+
+	// CHAOS-12521: ahead of the trends, because they take whatever room the
+	// shape bound leaves and this rule yields at most one shape.
+	if !options.InvestmentThemeShare {
+		event.skip(contractsv1.ContextFabricRenderRuleInvestmentThemeShare, RenderShapeSkipRuleDisabled)
+	} else if treemap, reason := investmentThemeShareShape(result, frame); treemap != nil {
+		shapes = append(shapes, *treemap)
+	} else {
+		event.skip(contractsv1.ContextFabricRenderRuleInvestmentThemeShare, reason)
+	}
+
+	// CHAOS-12513: ahead of the trends, for the same reason.
+	if !options.ComparisonSideBySide {
+		event.skip(contractsv1.ContextFabricRenderRuleComparisonSideBySide, RenderShapeSkipRuleDisabled)
+	} else {
+		table, leftOut, reason := comparisonSideBySideShape(result, frame, options.FieldScope)
+		event.ComparisonMeasuresLeftOut = leftOut
+		if table != nil {
+			shapes = append(shapes, *table)
+		} else {
+			event.skip(contractsv1.ContextFabricRenderRuleComparisonSideBySide, reason)
 		}
 	}
 
@@ -881,6 +967,8 @@ var renderShapeRules = []contractsv1.ContextFabricRenderShapeRule{
 	contractsv1.ContextFabricRenderRuleCohortAttentionScore,
 	contractsv1.ContextFabricRenderRuleCohortDriverContribution,
 	contractsv1.ContextFabricRenderRuleDatedFactTrend,
+	contractsv1.ContextFabricRenderRuleInvestmentThemeShare,
+	contractsv1.ContextFabricRenderRuleComparisonSideBySide,
 }
 
 // Accounted is CHAOS-4621's structural invariant, as code rather than as a
@@ -949,6 +1037,12 @@ func renderKindNoun(kind contractsv1.ContextFabricSubjectKind) string {
 // key of the rule-skipped line can carry: the RenderShapeSkip* constants.
 func RenderShapeSkipReasonLineVocabulary() []string {
 	return []string{
+		string(RenderShapeSkipRuleDisabled), string(RenderShapeSkipNotInvestmentAllocation), string(RenderShapeSkipNoThemeBreakdown),
+		string(RenderShapeSkipSeveralThemeBreakdowns), string(RenderShapeSkipSubjectKindNotCharted),
+		string(RenderShapeSkipThemeRowUnusable), string(RenderShapeSkipFewerThanTwoShares), string(RenderShapeSkipCohortAnswer),
+		string(RenderShapeSkipThemeTableCut),
+		string(RenderShapeSkipNotExplicitComparison), string(RenderShapeSkipFewerThanTwoSides), string(RenderShapeSkipTooManySides),
+		string(RenderShapeSkipMixedSubjectKinds), string(RenderShapeSkipNoSharedMeasure), string(RenderShapeSkipComparisonUnprovable),
 		string(RenderShapeSkipNotCohortIntent), string(RenderShapeSkipNoRankedMember), string(RenderShapeSkipNoDrivers),
 		string(RenderShapeSkipTooManySignals), string(RenderShapeSkipNoDeclaredTable), string(RenderShapeSkipNoTimeSeriesTable),
 		string(RenderShapeSkipClaimFieldNotAMeasure), string(RenderShapeSkipUnresolvableMeasureRoles),

@@ -1003,6 +1003,17 @@ create route, for every engine exit and the event stream, and the read by id,
 for the replay of a done submission and the attach terminal. It is never stored, so
 turning the flag on or off needs no migration and no backfill.
 
+**The investment treemap.** `ACR_CONTEXT_FABRIC_INVESTMENT_TREEMAP_ENABLED`
+(chart: `contextFabric.investmentTreemapEnabled`, default `false`) turns on the
+`investment_theme_share` render rule. `render_shapes.selected_by` is a closed
+enum, so a consumer on a pin that does not hold the rule fails every answer that
+carries the shape. Confirm web's and ask-dev's pins first, then set the flag.
+
+**The comparison table.** `ACR_CONTEXT_FABRIC_COMPARISON_TABLE_ENABLED` (chart:
+`contextFabric.comparisonTableEnabled`, default `false`) turns on the
+`comparison_side_by_side` render rule, with the same order: pins first, then the
+flag. With the flag off, both doors that serve a result remove a stored table.
+
 **The roll step "vocabulary labels on".** Confirm that the deployed pins of
 ask-dev, web and every MCP client carry `vocabulary_labels`. Then set the flag
 for `acr-api` and roll it. To turn it off, unset the flag and roll: the next read
@@ -1298,6 +1309,12 @@ The outcome is one of three, and they are distinguishable in telemetry:
 - **a miss** -- reuse did not happen and the call ran fresh.
   `miss_evidence_containment` now means specifically that one of the
   answer's own CITATIONS is no longer visible;
+  `miss_recheck_deadline` means the recheck spent its own time budget, so
+  nothing was proven either way, and the fresh path runs on the request's
+  deadline. It says nothing about authorization.
+  `miss_recheck_cancelled` means the request itself ended during the recheck,
+  by the caller's cancellation or the request's deadline. It says nothing about
+  authorization or the graph, and it is named when the budget ended too.
   `miss_recheck_unavailable` means the fresh discovery failed, so nothing
   was proved either way; `miss_hint_not_committed` means the request carried a subject hint the stored answer did not commit; `miss_scope_identity` means the request named project or team selectors and only a row keyed without them exists (never served); `miss_degrade_invalid` means a narrowing was
   possible in principle but the stripped payload would not have satisfied

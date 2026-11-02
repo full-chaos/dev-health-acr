@@ -540,8 +540,9 @@ func projectDrivers(result contractsv1.ContextFabricInvestigationResult, bounds 
 	// MaxFacts like everything else, and deduplicated against what the drivers
 	// already brought, so a claim some driver did happen to cite is carried
 	// once.
+	plotted := claimsAChartPlots(result.RenderShapes)
 	for _, claim := range result.ClaimedFacts {
-		if !projectionCarriesUncited(claim.Kind) {
+		if _, charted := plotted[claim.ClaimID]; !charted && !projectionCarriesUncited(claim.Kind) {
 			continue
 		}
 		if _, retained := retainedClaims[claim.ClaimID]; retained {
@@ -1508,6 +1509,27 @@ func retainPastTheCut(kept, dropped []clampedNarrative, retain func(string) bool
 		return append(rescued, entry)
 	}
 	return kept
+}
+
+// claimsAChartPlots names the claims the answer's treemaps and comparison tables
+// plot (CHAOS-12521, CHAOS-12513). An investment answer need not have a driver, and
+// a comparison's drivers need not cite every cell, so no driver brings those facts
+// and the chart would be dropped. The server built the chart from those claims, so
+// the chart is the citation. Only these two kinds: a claim no such chart plots
+// stays out, and a dropped shape stays a counted drop.
+func claimsAChartPlots(shapes []contractsv1.ContextFabricRenderShape) map[string]struct{} {
+	plotted := map[string]struct{}{}
+	for _, shape := range shapes {
+		if shape.Kind != contractsv1.ContextFabricRenderKindTreemap && shape.Kind != contractsv1.ContextFabricRenderKindTable {
+			continue
+		}
+		for _, series := range shape.Series {
+			for _, point := range series.Points {
+				plotted[point.Source.ClaimID] = struct{}{}
+			}
+		}
+	}
+	return plotted
 }
 
 // projectionCarriesUncited is the allow-list: which claim kinds this projection

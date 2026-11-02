@@ -70,7 +70,8 @@ func AnswerReuseOutcomeVocabulary() []string {
 		string(AnswerReuseMissGraphNotProjected), string(AnswerReuseHitDegraded),
 		string(AnswerReuseMissRecheckUnavailable), string(AnswerReuseMissDegradeInvalid),
 		string(AnswerReuseMissCountScope), string(AnswerReuseMissHintNotCommitted), string(AnswerReuseMissScopeIdentity),
-		string(AnswerReuseMissProjectNarrowingUnverified),
+		string(AnswerReuseMissProjectNarrowingUnverified), string(AnswerReuseMissRecheckDeadline),
+		string(AnswerReuseMissRecheckCancelled),
 	}
 }
 
@@ -188,6 +189,11 @@ func (t SlogEngineTelemetry) RecordAnswerReuse(ctx context.Context, principal st
 		if refusal.Reason == AnswerReuseRefusalSubjectCapExceeded {
 			args = append(args, "subject_count", refusal.SubjectCount)
 		}
+	}
+	// CHAOS-12511: log and event fields only, like the reason. A duration is no
+	// metric label.
+	if refusal.Recheck.Ran {
+		args = append(args, "recheck_ms", refusal.Recheck.Milliseconds, "recheck_subjects", refusal.Recheck.Subjects)
 	}
 	args = append(args, requestIDLogAttrs(ctx)...)
 	t.logger.InfoContext(ctx, "context fabric answer reuse outcome", args...)
@@ -1259,6 +1265,7 @@ func (t SlogEngineTelemetry) RecordRenderShapeSelection(ctx context.Context, pri
 			"render_shape_rules_skipped", len(event.Skipped),
 			"render_shape_members_truncated", event.MembersTruncated,
 			"render_shape_trends_omitted", event.TrendsOmitted,
+			"render_shape_comparison_measures_left_out", event.ComparisonMeasuresLeftOut,
 			"render_shape_accounting", SanitizeLogAttr(accounting),
 			"selected_shapes", selected)...)
 	for _, skip := range event.Skipped {

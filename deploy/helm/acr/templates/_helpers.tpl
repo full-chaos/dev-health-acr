@@ -372,14 +372,23 @@ is on and the event stream is not: acr-api would refuse to start
 */ -}}
 {{- define "acr.runLeaseEnabled" -}}
 {{- $on := .Values.contextFabric.runLeaseEnabled | default false -}}
-{{- if $on -}}
+{{- $declared := $on -}}
+{{- $opaque := false -}}
 {{- $stream := false -}}
 {{- /* The spellings of strconv.ParseBool; the last entry of a name wins, as in a pod. */ -}}
 {{- range .Values.deployment.extraEnv -}}
+{{- if eq .name "ACR_CONTEXT_FABRIC_RUN_LEASE_ENABLED" -}}
+{{- $opaque = not (hasKey . "value") -}}
+{{- $declared = has (toString .value) (list "1" "t" "T" "TRUE" "true" "True") -}}
+{{- end -}}
 {{- if eq .name "ACR_CONTEXT_FABRIC_EVENT_STREAM_ENABLED" -}}
 {{- $stream = has (toString .value) (list "1" "t" "T" "TRUE" "true" "True") -}}
 {{- end -}}
 {{- end -}}
+{{- if $opaque -}}
+{{- fail "deployment.extraEnv sets ACR_CONTEXT_FABRIC_RUN_LEASE_ENABLED with no literal value: the render cannot prove the event stream it needs" -}}
+{{- end -}}
+{{- if $declared -}}
 {{- if not $stream -}}
 {{- fail "contextFabric.runLeaseEnabled needs ACR_CONTEXT_FABRIC_EVENT_STREAM_ENABLED=true, a literal value in deployment.extraEnv: acr-api refuses to start without it" -}}
 {{- end -}}
@@ -552,21 +561,24 @@ consent page /authorize sends the browser to.
 {{- $w := .Values.config.webAssertion -}}
 {{- /* http on a loopback host only: the rule of acr-api (internal/config/oauth.go) and acr-mcp (internal/mcp/http_oauth.go). */ -}}
 {{- $loopback := `http://(localhost|127\.0\.0\.1|\[::1\])(:[0-9]+)?` -}}
-{{- if not (regexMatch (printf "^(https://[^/?#]+|%s)$" $loopback) ($o.issuer | default "")) -}}
+{{- /* A % only before two hex digits: both workloads parse these with url.Parse, which refuses anything else. */ -}}
+{{- $pathChar := `([^?#%[:space:]]|%[0-9A-Fa-f]{2})` -}}
+{{- $host := `[^/?#@%[:space:]]+` -}}
+{{- if not (regexMatch (printf "^(https://%s|%s)$" $host $loopback) ($o.issuer | default "")) -}}
 {{- fail (printf "oauth: config.oauth.issuer %q must be an https origin with no path, or http on a loopback host" ($o.issuer | default "")) -}}
 {{- end -}}
 {{- if not $o.resources -}}
 {{- fail "oauth: config.oauth.resources must list at least one hosted MCP URL" -}}
 {{- end -}}
 {{- range $o.resources -}}
-{{- if not (regexMatch (printf "^(https://[^?#]+|%s(/[^?#]*)?)$" $loopback) .) -}}
+{{- if not (regexMatch (printf "^(https://%s|%s)(/%s*)?$" $host $loopback $pathChar) .) -}}
 {{- fail (printf "oauth: config.oauth.resources entry %q must be an https URL without query or fragment, or http on a loopback host" .) -}}
 {{- end -}}
 {{- end -}}
 {{- if not (and $w.issuer $w.audience $w.existingSecret) -}}
 {{- fail "oauth: config.oauth.enabled requires config.webAssertion.issuer, audience and existingSecret (consent is approved on the web approval page)" -}}
 {{- end -}}
-{{- if not (regexMatch (printf "^(https://[^/?#@]+|%s)/[^?#]+$" $loopback) ($o.consentUrl | default "")) -}}
+{{- if not (regexMatch (printf "^(https://%s|%s)/%s+$" $host $loopback $pathChar) ($o.consentUrl | default "")) -}}
 {{- fail (printf "oauth: config.oauth.consentUrl %q must be the web consent page, an https URL with a path and no query or fragment, or http on a loopback host" ($o.consentUrl | default "")) -}}
 {{- end -}}
 {{- end -}}

@@ -249,6 +249,9 @@ type ModelExecutionReceipt struct {
 	// AGENTS.md forbids relying on.
 	ScopeAnchorKind      SubjectKind `json:"scope_anchor_kind,omitempty"`
 	RequestedSubjectKind SubjectKind `json:"requested_subject_kind,omitempty"`
+	// statedKind is the one kind the caller stated on this request (CHAOS-12548).
+	// It is the request's and not the model's, so it is never persisted.
+	statedKind SubjectKind
 	// The matching unrecognized flags. Every out-of-vocabulary emission
 	// must be COUNTABLE, because the gating measurement scores false
 	// emission: without these, a model inventing kind names is recorded
@@ -1465,12 +1468,39 @@ func canonicalFieldRows(fact CanonicalFact) (rows []contractsv1.ContextFabricCla
 	source := fact.Fields[rowsField].Rows
 	rows = make([]contractsv1.ContextFabricClaimedFactRow, 0, len(source))
 	for _, row := range source {
-		rows = append(rows, convertFactValueRow(row))
+		converted := convertFactValueRow(row)
+		for _, column := range directOnlyColumns(fact.Fields[rowsField]) {
+			delete(converted.Fields, column)
+		}
+		rows = append(rows, converted)
 	}
 	if len(rows) > contractsv1.ContextFabricClaimedFactMaxRows {
 		return rows[:contractsv1.ContextFabricClaimedFactMaxRows], true
 	}
 	return rows, false
+}
+
+// attachableRows reports a Rows-shaped field a claim may carry. A table
+// declared DirectOnly is not one: it is out of the choice by its declaration,
+// never by its name, so it cannot make a fact ambiguous.
+func attachableRows(value FactValue) bool {
+	return len(value.Rows) > 0 && (value.Table == nil || !value.Table.DirectOnly)
+}
+
+// answerMeasures are the measures of a table an answer shows.
+func answerMeasures(table *FactTable) []string {
+	return slices.DeleteFunc(append([]string(nil), table.Measures...), func(measure string) bool {
+		return slices.Contains(table.DirectOnlyColumns, measure)
+	})
+}
+
+// directOnlyColumns are the columns a field's declaration keeps out of an
+// answer.
+func directOnlyColumns(value FactValue) []string {
+	if value.Table == nil {
+		return nil
+	}
+	return value.Table.DirectOnlyColumns
 }
 
 // canonicalRowsField is the ONE place a fact's Rows-shaped field is chosen.
@@ -1486,7 +1516,7 @@ func canonicalRowsField(fact CanonicalFact) (field string, ambiguous bool, ok bo
 	var rowsField string
 	rowsFieldCount := 0
 	for key, value := range fact.Fields {
-		if len(value.Rows) > 0 {
+		if attachableRows(value) {
 			rowsFieldCount++
 			rowsField = key
 		}
@@ -1540,7 +1570,7 @@ func canonicalFieldTable(fact CanonicalFact) *contractsv1.ContextFabricClaimedFa
 		Field:        field,
 		Shape:        contractsv1.ContextFabricFactTableShape(declared.Shape),
 		Key:          append([]string(nil), declared.Key...),
-		Measures:     append([]string(nil), declared.Measures...),
+		Measures:     answerMeasures(declared),
 		Observations: append([]string(nil), declared.Observations...),
 		OrderBy:      declared.OrderBy,
 	}
@@ -1557,7 +1587,7 @@ func uniqueNonTimeSeriesRowsField(fact CanonicalFact) (field string, ok bool) {
 	found := ""
 	count := 0
 	for key, value := range fact.Fields {
-		if len(value.Rows) == 0 {
+		if !attachableRows(value) {
 			continue
 		}
 		if value.Table != nil && value.Table.Shape == FactTableTimeSeries {
@@ -1597,7 +1627,7 @@ func canonicalTimeSeriesField(fact CanonicalFact) (field string, ok bool) {
 	found := ""
 	count := 0
 	for key, value := range fact.Fields {
-		if key == legacyField || len(value.Rows) == 0 {
+		if key == legacyField || !attachableRows(value) {
 			continue
 		}
 		if value.Table == nil || value.Table.Shape != FactTableTimeSeries {
@@ -1624,7 +1654,11 @@ func canonicalTimeSeriesFieldRows(fact CanonicalFact) (rows []contractsv1.Contex
 	source := fact.Fields[field].Rows
 	rows = make([]contractsv1.ContextFabricClaimedFactRow, 0, len(source))
 	for _, row := range source {
-		rows = append(rows, convertFactValueRow(row))
+		converted := convertFactValueRow(row)
+		for _, column := range directOnlyColumns(fact.Fields[field]) {
+			delete(converted.Fields, column)
+		}
+		rows = append(rows, converted)
 	}
 	if len(rows) > contractsv1.ContextFabricClaimedFactMaxRows {
 		return rows[:contractsv1.ContextFabricClaimedFactMaxRows], true
@@ -1648,7 +1682,7 @@ func canonicalTimeSeriesFieldTable(fact CanonicalFact) *contractsv1.ContextFabri
 		Field:        field,
 		Shape:        contractsv1.ContextFabricFactTableShape(declared.Shape),
 		Key:          append([]string(nil), declared.Key...),
-		Measures:     append([]string(nil), declared.Measures...),
+		Measures:     answerMeasures(declared),
 		Observations: append([]string(nil), declared.Observations...),
 		OrderBy:      declared.OrderBy,
 	}
@@ -2085,17 +2119,64 @@ func receiptRequestsGroupAxis(receipt ModelExecutionReceipt) bool {
 // backdate the "proposal" telemetry to look like the model emitted this
 // field, which is exactly the receipt/artifact disagreement this
 // package's own doc comments elsewhere forbid.
+//
+// A named pair of an explicit_set takes the same kind (CHAOS-12518). An operand
+// has no model-writable kind either, and the comparison path admits only a pair
+// that states one, so without this no model turn reached it. The field holds one
+// kind, and the prompt has the model omit it when the operands state different
+// kinds, so it speaks for both sides.
+//
+// receipt.statedKind is the one kind the caller stated this turn (CHAOS-12548). On
+// a named pair it comes first, because the caller is speaking now. It reaches no
+// other frame: a pair is what the comparison path needs a kind for.
 func backfillNamedSubjectExpectedKind(frame QuestionFrame, receipt *ModelExecutionReceipt) QuestionFrame {
-	named := frame.SubjectExpression.Named
-	if frame.SubjectExpression.Kind != SubjectExpressionNamed || named == nil || named.ExpectedKind != nil ||
-		receipt.RequestedSubjectKind == "" || receipt.RequestedSubjectKindUnrecognized {
+	if receipt.statedKind != "" && frame.SubjectExpression.Kind == SubjectExpressionExplicitSet {
+		frame.SubjectExpression.Explicit = backfillNamedPairExpectedKind(frame.SubjectExpression.Explicit, receipt.statedKind)
+		return frame
+	}
+	if receipt.RequestedSubjectKind == "" || receipt.RequestedSubjectKindUnrecognized {
 		return frame
 	}
 	kind := receipt.RequestedSubjectKind
-	backfilled := *named
-	backfilled.ExpectedKind = &kind
-	frame.SubjectExpression.Named = &backfilled
+	switch frame.SubjectExpression.Kind {
+	case SubjectExpressionNamed:
+		named := frame.SubjectExpression.Named
+		if named == nil || named.ExpectedKind != nil {
+			return frame
+		}
+		backfilled := *named
+		backfilled.ExpectedKind = &kind
+		frame.SubjectExpression.Named = &backfilled
+	case SubjectExpressionExplicitSet:
+		frame.SubjectExpression.Explicit = backfillNamedPairExpectedKind(frame.SubjectExpression.Explicit, kind)
+	}
 	return frame
+}
+
+// backfillNamedPairExpectedKind states kind on both sides of a named pair, or
+// returns the set unchanged. It takes the pair whole: one stated side would leave
+// the frame out of the cut anyway, and every other set stays as the model emitted
+// it, because the comparison cut leaves the shapes outside it untouched. It copies
+// the set, the operands and each Named for the reason the caller's doc comment
+// gives: all three are still shared with the raw proposal.
+func backfillNamedPairExpectedKind(explicit *ExplicitSetExpression, kind SubjectKind) *ExplicitSetExpression {
+	if explicit == nil || len(explicit.Operands) != comparisonCutOperandCount {
+		return explicit
+	}
+	operands := make([]SubjectOperand, 0, len(explicit.Operands))
+	for _, operand := range explicit.Operands {
+		if operand.Named == nil || operand.Named.ExpectedKind != nil {
+			return explicit
+		}
+		named := *operand.Named
+		stated := kind
+		named.ExpectedKind = &stated
+		operand.Named = &named
+		operands = append(operands, operand)
+	}
+	backfilled := *explicit
+	backfilled.Operands = operands
+	return &backfilled
 }
 
 // THE ENSEMBLE SIZE IS DELIBERATELY NOT A FIELD HERE, and the absence is
@@ -2234,6 +2315,7 @@ func (r RuntimeQuestionInterpreter) interpretOneSample(
 		// already rejected, which would put a phantom row into the
 		// invariant histogram.
 		if err == nil {
+			receipt.statedKind = soleStatedKind(request)
 			r.resolveFrame(ctx, principal, &receipt, question.Shape, question.SubjectTerms, question.TimeContext)
 			// See RequestedJudgmentRepair's own doc comment: this is the one
 			// place both the receipt a repair just wrote to and the SAME
@@ -3368,8 +3450,10 @@ func statusSentence(status InvestigationStatus, resolution SubjectResolution) st
 			return "This question's subjects were resolved, but no canonical data was found to answer it."
 		case len(resolution.InactiveHints) > 0:
 			return "The team named in this question is inactive, so no canonical data was read for it."
-		case len(resolution.Candidates) == 1 && resolution.CensusLimitation != "":
+		case len(resolution.Candidates) > 0 && contractsv1.IsContextFabricCensusAbsenceLimitation(resolution.CensusLimitation),
+			len(resolution.Candidates) == 1 && resolution.CensusLimitation != "":
 			// CHAOS-12467: the limitation says how many match. "One" would not agree.
+			// CHAOS-12498: a complete zero. No candidate here holds the handle.
 			return "No single subject could be confirmed for this question; what could be listed is in this result."
 		case len(resolution.Candidates) == 1:
 			return "One authorized subject matched this question but could not be confirmed as its subject; that candidate is listed in this result."
