@@ -100,6 +100,8 @@ func goVarName(e Event) string {
 		return "KindOfferWithheld"
 	case PageHintLookup.ID:
 		return "PageHintLookup"
+	case WorkItemKeyPrefixUnread.ID:
+		return "WorkItemKeyPrefixUnread"
 	case Corroboration.ID:
 		return "Corroboration"
 	case CorroborationSummary.ID:

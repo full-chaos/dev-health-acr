@@ -160,7 +160,7 @@ func scopedFalkor(t *testing.T, ctx context.Context, query *runtimeclickhouse.Cl
 	adapter, err := New(Config{
 		Addr: host + ":" + port.Port(), GraphPrefix: "acr-cf-scoped-census", RequestTimeout: 15 * time.Second,
 		MaxAttempts: 1, MaxResults: 25, PoolSize: 10, AllowInsecure: true, TLS: false,
-		CensusFunc: devhealthsource.NewCensusFunc(query), ResolutionTracer: tracer,
+		CensusFunc: devhealthsource.NewCensusFunc(query), WorkItemKeyPrefix: devhealthsource.NewWorkItemKeyPrefixFunc(query), ResolutionTracer: tracer,
 	})
 	if err != nil {
 		t.Fatalf("New: %v", err)

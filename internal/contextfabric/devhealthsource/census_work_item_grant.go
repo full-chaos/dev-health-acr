@@ -20,21 +20,27 @@ const censusWorkItemMaxRowsToRead = uint64(3_000_000)
 //
 // False ends the read with no statement, as for any grant that cannot apply.
 func withWorkItemGrantFilter(orgID string, predicate CensusPredicate, grant []string, handleValue string, handleBound bool) (CensusPredicate, bool) {
-	// First, always: past this line the library would read an empty list or a
-	// "*" as the organization-wide grant.
-	if !grantApplies(grant) {
-		return predicate, false
-	}
 	// A census with no handle has no candidates to narrow to, and its count
 	// inside the link arm would miss items the node gate admits.
 	if !handleBound {
 		return predicate, false
 	}
-	selectors := auth.WorkItemRepositorySelectorSet(grant, true)
 	handle, err := workItemTicketKeyPredicate(handleValue)
 	if err != nil {
 		return predicate, false
 	}
+	return withWorkItemGrantAmong(orgID, predicate, grant, handle)
+}
+
+// withWorkItemGrantAmong ANDs the grant onto predicate over the candidates handle
+// names: the same link arm for a key's census and for a key prefix's read.
+func withWorkItemGrantAmong(orgID string, predicate CensusPredicate, grant []string, handle CensusPredicate) (CensusPredicate, bool) {
+	// First, always: past this line the library would read an empty list or a
+	// "*" as the organization-wide grant.
+	if !grantApplies(grant) {
+		return predicate, false
+	}
+	selectors := auth.WorkItemRepositorySelectorSet(grant, true)
 	candidates := make([]readers.Binding, 0, len(handle.Bindings))
 	for _, binding := range handle.Bindings {
 		candidates = append(candidates, readers.Binding{Name: binding.Name, Value: binding.Value})

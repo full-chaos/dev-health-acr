@@ -36,6 +36,10 @@ func TestChaos7159_HandleModeAcceptsAnyPrefixKeyAndTheCensusDecidesExistence(t *
 		{"no digits", "PAY-abc", found, "", "", true},
 		{"digit-first prefix", "9PAY-1", found, "", "", true},
 		{"underscore prefix", "PAY_X-1", found, "", "", true},
+		// CHAOS-12463: a repository reference is a handle when it is the whole
+		// handle, and refused in a sentence, as a ticket key is.
+		{"whole repository reference", "acme/widget#7", graphrank.CensusOutcome{}, FindEmpty, "acme/widget#7", false},
+		{"repository reference in text is not one handle", "please inspect acme/widget#7", found, "", "", true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			var calls []censusCall
