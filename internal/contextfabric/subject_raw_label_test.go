@@ -46,9 +46,23 @@ func TestARawSourceIDReadsAsItsKey(t *testing.T) {
 	if got := contextfabric.SubjectReadableLabel(stub); got != "CHAOS-11405" {
 		t.Errorf("work item ref = %q", got)
 	}
-	project, _, _ := identity.Derive(identity.KindProject, []string{"linear", "c67b1602-31db-4422-8dec-a4a02bbcc513"}, nil)
-	if got := contextfabric.SubjectReadableLabel(contextfabric.SubjectRef{Kind: contextfabric.SubjectProject, CanonicalID: project, Label: "c67b1602-31db-4422-8dec-a4a02bbcc513"}); got != "project" {
-		t.Errorf("project stub = %q, want the kind word", got)
+	// A nameless project reads as its source id with the provider dropped; only a
+	// UUID-shaped id, which names nothing a reader knows, reads as the kind word
+	// (lead ruling, 2026-11-02: a team's project list must not read "project,
+	// project").
+	for _, row := range []struct{ provider, id, want string }{
+		{"linear", "c67b1602-31db-4422-8dec-a4a02bbcc513", "project"},
+		{"gitlab", "acme/live-e2e", "acme/live-e2e"},
+		{"github", "ci-metrics-executed-proof/repo", "ci-metrics-executed-proof/repo"},
+		{"jira", "OPS", "OPS"},
+	} {
+		project, omitted, err := identity.Derive(identity.KindProject, []string{row.provider, row.id}, nil)
+		if err != nil || omitted {
+			t.Fatalf("derive %s:%s: %v %v", row.provider, row.id, omitted, err)
+		}
+		if got := contextfabric.SubjectReadableLabel(contextfabric.SubjectRef{Kind: contextfabric.SubjectProject, CanonicalID: project, Label: row.id}); got != row.want {
+			t.Errorf("project stub %s:%s = %q, want %q", row.provider, row.id, got, row.want)
+		}
 	}
 	team := contextfabric.TeamCanonicalID("linear:CHAOS")
 	if got := contextfabric.SubjectReadableLabel(contextfabric.SubjectRef{Kind: contextfabric.SubjectTeam, CanonicalID: team, Label: "linear:CHAOS"}); got != "CHAOS" {
@@ -86,12 +100,16 @@ func TestARawEdgeFactReadsInReaderWords(t *testing.T) {
 	team := contextfabric.SubjectRef{Kind: contextfabric.SubjectTeam, CanonicalID: contextfabric.TeamCanonicalID("linear:CHAOS"), Label: "Fullchaos"}
 	pr := contextfabric.SubjectRef{Kind: contextfabric.SubjectPullRequest, CanonicalID: "pull_request:920f9442-07df-4217-4dc4-c5833c0b8268:872", Label: "PR #872"}
 	other := workItemRef(t, zeroRepo, "jira:OPS-11")
+	pathProjectID, _, _ := identity.Derive(identity.KindProject, []string{"gitlab", "acme/live-e2e"}, nil)
+	pathProject := contextfabric.SubjectRef{Kind: contextfabric.SubjectProject, CanonicalID: pathProjectID, Label: "acme/live-e2e"}
 	for _, tc := range []struct {
 		fact, relation string
 		from, to       contextfabric.SubjectRef
 		want           string
 	}{
 		{"linear:CHAOS-2320 links pull request PR #872", "LINKS_PULL_REQUEST", item, pr, "CHAOS-2320 links pull request PR #872"},
+		// A nameless project with a path-like id keeps that id as its end.
+		{"linear:CHAOS-2320 belongs to project acme/live-e2e", "BELONGS_TO_PROJECT", item, pathProject, "CHAOS-2320 belongs to project acme/live-e2e"},
 		{"linear:CHAOS-2320 belongs to project c67b1602-31db-4422-8dec-a4a02bbcc513", "BELONGS_TO_PROJECT", item, named, "CHAOS-2320 belongs to project Investment View Documentation"},
 		{"linear:CHAOS-2320 belongs to project c67b1602-31db-4422-8dec-a4a02bbcc513", "BELONGS_TO_PROJECT", item, stub, "CHAOS-2320 belongs to project"},
 		{"linear:CHAOS-2320 owned by team linear:CHAOS", "OWNED_BY_TEAM", item, team, "CHAOS-2320 owned by team Fullchaos"},
