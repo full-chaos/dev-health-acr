@@ -203,3 +203,37 @@ func TestARefusedNewcomerDoesNotScanAgainBeforeASubjectCanLeave(t *testing.T) {
 		t.Fatalf("a newcomer at the first subject's expiry = %+v, want its place", decision)
 	}
 }
+
+// A wall clock that steps back can give a finishing subject an expiry earlier
+// than the moment the last scan counted on. The next refusal scans again.
+func TestAClockStepBackDoesNotDelayAPlaceThatIsFree(t *testing.T) {
+	t.Parallel()
+	start := time.Date(2026, 11, 1, 9, 0, 0, 0, time.UTC)
+	now := start
+	manager := trackedManager(t, &now, Options{MaxCredentialsPerOrganization: 2})
+	subject := Subject{OrgID: "org-a", CredentialID: "running"}
+	claim, decision, err := manager.Claim(context.Background(), subject, RequestClassAuth)
+	if err != nil || !decision.Allowed {
+		t.Fatalf("claim = %+v, %v", decision, err)
+	}
+	now = start.Add(40 * time.Minute)
+	if decision := trackedCall(t, manager, "other", RequestClassAuth); !decision.Allowed {
+		t.Fatalf("the second subject refused: %s", decision.Reason)
+	}
+	if decision := trackedCall(t, manager, "refused", RequestClassAuth); decision.Reason != DenialTrackingCapacity {
+		t.Fatalf("a newcomer at the cap = %+v, want tracking_capacity", decision)
+	}
+	// The clock steps back 30 minutes, and the running claim finishes there.
+	now = start.Add(10 * time.Minute)
+	claim.DoneClaim()
+	// A steady caller keeps the organization's window from being swept.
+	now = start.Add(65 * time.Minute)
+	if decision := trackedCall(t, manager, "other", RequestClassAuth); !decision.Allowed {
+		t.Fatalf("the steady subject refused: %s", decision.Reason)
+	}
+	// The finished subject can leave at 10:10, before the scan's 10:40.
+	now = start.Add(70 * time.Minute)
+	if decision := trackedCall(t, manager, "newcomer", RequestClassAuth); !decision.Allowed {
+		t.Fatalf("a newcomer after the finished subject's expiry = %+v, want its place", decision)
+	}
+}

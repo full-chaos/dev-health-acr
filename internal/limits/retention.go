@@ -42,14 +42,15 @@ func (m *Manager) windowFor(class RequestClass, subject Subject, policy quotaPol
 // It holds the manager's lock, and the cap is configurable, so a full set of
 // live subjects must not cost a scan per refused newcomer: a scan records the
 // first moment a subject can leave, and it does not run again before that. A
-// subject's last-seen time only moves forward, and a running subject sets it to
-// the moment it finishes, a retention before it can leave, so nothing can leave
-// earlier than that moment.
+// subject's last-seen time only moves forward (seen covers a clock that stepped
+// back), and a running subject sets it to the moment it finishes, a retention
+// before it can leave, so nothing can leave earlier than that moment.
 func (m *Manager) forgetIdle(window *usageWindow, policy quotaPolicy, now time.Time) {
 	if now.Before(window.nextForget) {
 		return
 	}
 	window.forgetPasses++
+	window.lastForget = now
 	retention := m.retentionOf(policy)
 	next := now.Add(retention)
 	for key, touched := range window.touched {
@@ -117,5 +118,15 @@ func (window *usageWindow) denied(credentialID string, now time.Time) {
 	credential.Denied++
 	window.credentials[credentialID] = credential
 	window.lastTouched = now
-	window.touched[credentialID] = now
+	window.seen(credentialID, now)
+}
+
+// seen records a subject's last-seen time. nextForget assumes these only move
+// forward. A wall clock that stepped back breaks that: the subject could expire
+// before the moment the last scan counted on, so the next scan is not skipped.
+func (window *usageWindow) seen(key string, now time.Time) {
+	window.touched[key] = now
+	if now.Before(window.lastForget) {
+		window.nextForget = time.Time{}
+	}
 }

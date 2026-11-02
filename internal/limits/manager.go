@@ -83,7 +83,9 @@ type usageWindow struct {
 	touched    map[string]time.Time
 	running    map[string]int
 	nextForget time.Time
-	// forgetPasses counts forgetIdle's scans.
+	// lastForget is when forgetIdle last scanned, and forgetPasses how many
+	// scans it made.
+	lastForget   time.Time
 	forgetPasses int
 }
 
@@ -273,7 +275,7 @@ func (m *Manager) complete(claim *Claim, usage ResourceUsage, accepted bool) {
 	}
 	claim.window.credentials[claim.subject.key()] = credential
 	claim.window.lastTouched = now
-	claim.window.touched[claim.subject.key()] = now
+	claim.window.seen(claim.subject.key(), now)
 	if claim.window.running[claim.subject.key()] <= 1 {
 		delete(claim.window.running, claim.subject.key())
 	} else {
