@@ -1352,6 +1352,10 @@
                   "scope": {
                     "type": "string",
                     "description": "Space-delimited requested scope; may only narrow the resolved binding's grant, never widen it."
+                  },
+                  "resource": {
+                    "type": "string",
+                    "description": "Organization selector, urn:acr:org:<lowercase uuid>. Omit it when the identity is bound in one organization; required when it is bound in several (invalid_request otherwise). An organization with no enabled binding for the identity is refused with invalid_target."
                   }
                 }
               }
