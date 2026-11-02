@@ -566,6 +566,10 @@ func buildReplayGraphReader(logger *slog.Logger, client *runtimeclickhouse.Clien
 	// TestResolveSubjects_ShadowEvidenceRoundNeverChangesResolution,
 	// graphrank package).
 	graphConfig.CensusFunc = censusFunc
+	if censusFunc != nil {
+		// CHAOS-12463: a ticket key binds only through this read, wired beside the census as in open.go.
+		graphConfig.WorkItemKeyPrefix = devhealthsource.NewWorkItemKeyPrefixFunc(client)
+	}
 	// CHAOS-3896 Slice B measurement infrastructure (team-lead-authorized
 	// fix-forward): epochResolver is nil unless the caller explicitly built
 	// one from ACR_CONTEXT_FABRIC_GRAPH_LIFECYCLE_ENABLED -- see

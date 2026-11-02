@@ -103,7 +103,7 @@ func listCensusSatisfiers(ctx context.Context, principal storage.Principal, requ
 	if !attestation.UnscopedVisibility || len(resolution.Committed) != 0 {
 		return resolution, nil
 	}
-	bound := BindHandles(request.Question)
+	bound := deps.questionHandles
 	if len(bound) != 1 {
 		return resolution, nil
 	}

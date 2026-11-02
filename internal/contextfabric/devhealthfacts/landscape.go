@@ -3,6 +3,7 @@ package devhealthfacts
 import (
 	"context"
 	"log/slog"
+	"strconv"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/identity"
@@ -233,6 +234,70 @@ type landscapeCoordinateRow struct {
 	xRawAvg, yRawAvg float64
 }
 
+// landscapeDailyRow is one team's day of the series (CHAOS-12534): one copy of
+// each live identity's stats, summed. Each day's values are the rolling 30 days
+// that end on it, so neighbouring days overlap. heldDays is how many days the
+// read held for the team before the newest landscapeSeriesDays were kept.
+type landscapeDailyRow struct {
+	day                        string
+	identityCount              int64
+	churnLOC30d, deliveryUnits int64
+	heldDays                   int64
+}
+
+// landscapeSeriesDays is the newest days a team's series keeps: the most rows a
+// claim carries and points a trend draws.
+const landscapeSeriesDays = contextfabric.MaxFactValueRows
+
+// landscapeDailySeriesSQL is each requested team's live rows, one copy per
+// identity and day, summed per day, the newest landscapeSeriesDays per team. A
+// retracted day holds no live row and is absent, never a day of zeros (check
+// 17). The limit is per team, and the statement's own row budget is that limit
+// times the teams, so a read of many teams cuts no team's series.
+func landscapeDailySeriesSQL(timeBound factTimeBound, teams int) string {
+	return withRowLimitOf(`SELECT team_key, day, identities, churn, delivery, held_days
+FROM (
+	SELECT toString(team_id) AS team_key, toString(as_of_day) AS day, toInt64(count()) AS identities,
+		toInt64(sum(one_churn)) AS churn, toInt64(sum(one_delivery)) AS delivery,
+		toInt64(count() OVER (PARTITION BY team_id)) AS held_days
+	FROM (
+		SELECT team_id, as_of_day, identity_id, argMin(churn_loc_30d, map_name) AS one_churn, argMin(delivery_units_30d, map_name) AS one_delivery
+		FROM ic_landscape_rolling_30d FINAL
+		WHERE org_id = {org_id:String} AND toString(team_id) IN {ids:Array(String)} AND `+landscapeLiveRowSQL+timeBound.dayPredicate("as_of_day")+`
+		GROUP BY team_id, as_of_day, identity_id
+	)
+	GROUP BY team_id, as_of_day
+)
+ORDER BY team_key, day DESC
+LIMIT `+strconv.Itoa(landscapeSeriesDays)+` BY team_key`, teams*landscapeSeriesDays)
+}
+
+// landscapeDailyTable is the declared time series of one team, newest day
+// first, capped like every other daily series.
+func landscapeDailyTable(rows []landscapeDailyRow, timeBound factTimeBound) (contextfabric.FactValue, bool, int) {
+	if len(rows) == 0 {
+		return contextfabric.FactValue{}, false, 0
+	}
+	valueRows := make([]contextfabric.FactValueRow, 0, len(rows))
+	for _, r := range rows {
+		valueRows = append(valueRows, contextfabric.FactValueRow{Fields: map[string]contextfabric.FactValue{
+			"day":                contextfabric.StringFactValue(r.day),
+			"identity_count":     contextfabric.IntegerFactValue(r.identityCount),
+			"churn_loc_30d":      contextfabric.IntegerFactValue(r.churnLOC30d),
+			"delivery_units_30d": contextfabric.IntegerFactValue(r.deliveryUnits),
+		}})
+	}
+	valueRows, _ = capFactValueRows(valueRows)
+	omitted := int(rows[0].heldDays) - len(valueRows)
+	return contextfabric.TableFactValue(contextfabric.FactTable{
+		Shape:    contextfabric.FactTableTimeSeries,
+		Key:      []string{"day"},
+		Measures: []string{"identity_count", "churn_loc_30d", "delivery_units_30d"},
+		Grain:    timeBound.effectiveGrain(grainDaily),
+		Rows:     valueRows,
+	}), true, omitted
+}
+
 // landscapeAnswerOmits are the columns an answer does not show, because the
 // source reads 0 for missing. A direct reader still gets them.
 //
@@ -332,6 +397,20 @@ ORDER BY team_id, map_name`)
 	if scanErr != nil {
 		return max(rowCount, coordinateRows), 0, rejected, scanErr
 	}
+	seriesOmitted := 0
+	dailyByTeam := make(map[string][]landscapeDailyRow)
+	scanErr = p.facts.query(ctx, landscapeDailySeriesSQL(timeBound, len(ids)), orgID, ids, func(row contextpacket.ClickHouseRowScanner) error {
+		var teamID string
+		var r landscapeDailyRow
+		if err := row.Scan(&teamID, &r.day, &r.identityCount, &r.churnLOC30d, &r.deliveryUnits, &r.heldDays); err != nil {
+			return err
+		}
+		dailyByTeam[teamID] = append(dailyByTeam[teamID], r)
+		return nil
+	}, timeBound.bindings()...)
+	if scanErr != nil {
+		return max(rowCount, coordinateRows), 0, rejected, scanErr
+	}
 	for _, teamID := range teamOrder {
 		row := byTeam[teamID].toFactValueRow()
 		fields := map[string]contextfabric.FactValue{
@@ -353,6 +432,18 @@ ORDER BY team_id, map_name`)
 				Rows:              []contextfabric.FactValueRow{row},
 			}),
 		}
+		if daily, ok, omitted := landscapeDailyTable(dailyByTeam[teamID], timeBound); ok {
+			fields["daily_landscape"] = daily
+			if omitted > 0 {
+				// The fact says the cut. It is a cut in the answer only when the
+				// question stated the span: with no stated window the series is
+				// the newest days by design.
+				fields["daily_landscape_omitted_count"] = contextfabric.IntegerFactValue(int64(omitted))
+				if timeBound.statedWindow {
+					seriesOmitted += omitted
+				}
+			}
+		}
 		if coordinates := coordinatesByTeam[teamID]; len(coordinates) > 0 {
 			fields["map_coordinates"] = landscapeCoordinatesTable(coordinates, []string{"map_name", "as_of_day"}, timeBound)
 		}
@@ -361,7 +452,7 @@ ORDER BY team_id, map_name`)
 			EvidenceRefIDs: []string{evidenceRefID(contractsv1.ContextFabricEvidenceEntityTeam, teamID)},
 		})
 	}
-	return max(rowCount, coordinateRows), 0, rejected, nil
+	return max(rowCount, coordinateRows), seriesOmitted, rejected, nil
 }
 
 // queryProjectLandscapePopulation is the project population of

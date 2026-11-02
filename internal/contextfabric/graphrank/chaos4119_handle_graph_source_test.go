@@ -180,7 +180,7 @@ func TestHandleOfferMaterial_GraphDerivedOffersPoolCandidatesNotInQuestion(t *te
 	pr := pullRequestCandidate("repo_9", 532, "Outage PR")
 	pool := []contextfabric.SubjectCandidate{workItem, pr}
 
-	material, diag := handleOfferMaterial("how is the outage going", nil, nil, pool)
+	material, diag := handleOfferMaterial(BindHandles("how is the outage going"), nil, nil, pool)
 	if len(material.HandleOptions) != 2 {
 		t.Fatalf("material.HandleOptions = %+v, want 2 (one per pool candidate)", material.HandleOptions)
 	}
@@ -230,7 +230,7 @@ func TestHandleOfferMaterial_GraphDerivedRejectsGrammarInvalidValue(t *testing.T
 			Kind: contractsv1.ContextFabricSubjectPullRequest, CanonicalID: "pull_request:repo_1:not-a-number", Label: "Weird PR",
 		},
 	}
-	material, diag := handleOfferMaterial("no handles here", nil, nil, []contextfabric.SubjectCandidate{malformed})
+	material, diag := handleOfferMaterial(BindHandles("no handles here"), nil, nil, []contextfabric.SubjectCandidate{malformed})
 	if len(material.HandleOptions) != 0 {
 		t.Fatalf("material.HandleOptions = %+v, want empty (grammar-invalid value must never be offered)", material.HandleOptions)
 	}
@@ -251,7 +251,7 @@ func TestHandleOfferMaterial_GraphDerivedSkipsKindsOutsideTheClosedSet(t *testin
 	repo := contextfabric.SubjectCandidate{
 		Subject: contractsv1.ContextFabricSubjectRef{Kind: contractsv1.ContextFabricSubjectRepository, CanonicalID: "repository:repo_1", Label: "dev-health-acr"},
 	}
-	material, diag := handleOfferMaterial("no handles here", nil, nil, []contextfabric.SubjectCandidate{repo})
+	material, diag := handleOfferMaterial(BindHandles("no handles here"), nil, nil, []contextfabric.SubjectCandidate{repo})
 	if len(material.HandleOptions) != 0 {
 		t.Fatalf("material.HandleOptions = %+v, want empty (repository has no handle grammar)", material.HandleOptions)
 	}
@@ -268,7 +268,7 @@ func TestHandleOfferMaterial_GraphDerivedSkipsKindsOutsideTheClosedSet(t *testin
 func TestHandleOfferMaterial_GraphDerivedDedupsAgainstBindHandlesMatch(t *testing.T) {
 	t.Parallel()
 	workItem := workItemCandidate(t, "repo_1", "linear:CHAOS-9001", "Outage work item")
-	material, diag := handleOfferMaterial("what is the status of CHAOS-9001?", nil, nil, []contextfabric.SubjectCandidate{workItem})
+	material, diag := handleOfferMaterial(BindHandles("what is the status of CHAOS-9001?"), nil, nil, []contextfabric.SubjectCandidate{workItem})
 	if len(material.HandleOptions) != 1 {
 		t.Fatalf("material.HandleOptions = %+v, want exactly 1 (deduped)", material.HandleOptions)
 	}
@@ -292,7 +292,7 @@ func TestHandleOfferMaterial_GraphDerivedCountReflectsPostCapTruncation(t *testi
 		question += fmt.Sprintf(" PR %d", 1000+i)
 	}
 	pool := []contextfabric.SubjectCandidate{pullRequestCandidate("repo_1", 9999, "Unrelated PR")}
-	material, diag := handleOfferMaterial(question, nil, nil, pool)
+	material, diag := handleOfferMaterial(BindHandles(question), nil, nil, pool)
 	if len(material.HandleOptions) != structureOfferMaxOptions {
 		t.Fatalf("len(material.HandleOptions) = %d, want %d (capped)", len(material.HandleOptions), structureOfferMaxOptions)
 	}

@@ -1384,7 +1384,10 @@ type Engine struct {
 	serviceVersion           string
 	now                      func() time.Time
 	reuseRecheckBudget       time.Duration
-	newResultID              func() string
+	// recheckContext makes the recheck's budget context; context.WithTimeout
+	// unless a test ends the budget at a chosen read (CHAOS-12573).
+	recheckContext func(context.Context, time.Duration) (context.Context, context.CancelFunc)
+	newResultID    func() string
 }
 
 func NewEngine(dependencies EngineDependencies, options EngineOptions) (*Engine, error) {
@@ -1463,7 +1466,7 @@ func NewEngine(dependencies EngineDependencies, options EngineOptions) (*Engine,
 		maxSerializedBytes:       options.MaxSerializedBytes,
 		synthesisDeadlineReserve: options.SynthesisDeadlineReserve,
 		serviceVersion:           options.ServiceVersion, now: options.Now, newResultID: options.NewResultID,
-		reuseRecheckBudget: options.ReuseRecheckBudget,
+		reuseRecheckBudget: options.ReuseRecheckBudget, recheckContext: context.WithTimeout,
 	}, nil
 }
 
@@ -1530,6 +1533,9 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 		}
 	}()
 	ctx = WithWorkItemCensusRepositoryScopeRecorder(ctx)
+	// CHAOS-12463: every resolver call of this turn reads a work item key prefix
+	// from one memo, so the prefix is read once per turn.
+	ctx = WithWorkItemKeyPrefixMemo(ctx)
 	// Only the creator completes the response owner. Hosted requests borrow
 	// the transport's larger lifetime; direct calls end at this return.
 	if _, ok := WorkItemResponseOwnerFromContext(ctx); !ok {

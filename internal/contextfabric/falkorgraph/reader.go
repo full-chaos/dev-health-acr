@@ -298,14 +298,15 @@ func (a *Adapter) ResolveSubjects(ctx context.Context, principal storage.Princip
 		// above; graphrank.ResolveSubjects itself is what gates the shadow
 		// round on "stalled resolution only" and adds the 3s deadline +
 		// panic recovery, so nothing extra is needed here.
-		CensusFunc: a.config.CensusFunc,
+		CensusFunc:        a.config.CensusFunc,
+		WorkItemKeyPrefix: a.config.WorkItemKeyPrefix,
 		// CHAOS-12456: a failed link read leaves a repo-less work item unknown,
 		// and the terminal says so.
 		WorkItemLinksUnread: func() bool { return linkReachError(ctx) != nil },
-		// The work items of a requested repository scope: the same
-		// repository-to-issue walk that serves a repository's work items.
-		LinkScopedWorkItems: func(ctx context.Context, scope contextfabric.RequestedScope) (map[string]string, bool, error) {
-			return a.linkScopedIssues(ctx, key, principal, scope, contextfabric.WorkItemMembershipCensusLimit)
+		// CHAOS-12505: which of the census's work items are in a requested
+		// repository scope, read keyed on them by the repository walk's rule.
+		LinkScopedWorkItemsOf: func(ctx context.Context, scope contextfabric.RequestedScope, ids []string) (map[string]string, bool, error) {
+			return a.linkScopedWorkItemsOf(ctx, key, principal, scope, ids)
 		},
 		// CHAOS-3972 P3: nil unless the composition root sets
 		// Config.HandleGrammarChecker -- see that field's own doc comment.

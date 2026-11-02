@@ -4743,7 +4743,8 @@
         "dated_fact_trend",
         "investment_theme_share",
         "comparison_side_by_side",
-        "investment_subcategory_share"
+        "investment_subcategory_share",
+        "investment_repository_flow"
       ]
     },
     "RenderValueUnit": {
