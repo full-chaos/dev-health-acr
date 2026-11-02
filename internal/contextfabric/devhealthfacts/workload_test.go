@@ -162,6 +162,10 @@ func TestWorkloadProviderNoPersonLevelFields(t *testing.T) {
 		"p50_basis": true, "p50_unavailable_reason": true,
 		"team_breakdown_rows_shown": true, "team_breakdown_rows_total": true,
 		"p50_known_count": true, "p50_excluded_unattributed_count": true, "p50_excluded_null_p50_count": true,
+		// CHAOS-12607: the rest of the same stored forecast row.
+		"forecast_p85_days": true, "forecast_p95_days": true, "forecast_p50_date": true, "forecast_p85_date": true,
+		"forecast_p95_date": true, "simulation_count": true, "horizon_days": true, "unfinished_runs": true,
+		"completion_distribution": true, "completion_distribution_state": true,
 	}
 	for _, fact := range result.Facts {
 		for field := range fact.Fields {
@@ -567,4 +571,14 @@ func TestWorkloadProviderProjectRollupBasisIsFactLevelScalar(t *testing.T) {
 			t.Fatalf("team_breakdown.Observations = %v, want %q declared as an observation", table.Observations, name)
 		}
 	}
+}
+
+// completionForecastRow shapes one readers.ReadTeamCompletionForecasts row
+// (CHAOS-12607): every percentile and date present, the arrays as given, and
+// their stored lengths equal to them.
+func completionForecastRow(teamID, workScopeID, computedAt string, values []uint16, counts []uint32) []any {
+	return []any{teamID, uint8(1), workScopeID, computedAt, uint32(10000), int64(120),
+		uint8(1), int64(14), uint8(1), int64(30), uint8(1), int64(40),
+		"2026-08-10", "2026-08-26", "2026-09-05", uint8(0), uint8(1),
+		uint64(len(values)), uint64(len(counts)), values, counts}
 }

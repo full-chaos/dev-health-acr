@@ -342,6 +342,18 @@ func (p *WorkloadProvider) readTeamWorkload(ctx context.Context, orgID string, s
 	if dailySeriesRowCount > rowCount {
 		rowCount = dailySeriesRowCount
 	}
+	// CHAOS-12607: the same latest rows' completion forecast, read with the
+	// NULL and empty scopes kept apart, and joined back on (team, scope,
+	// computed_at). Its own row bound is the same DefaultRowLimit, so it
+	// joins the truncation count like the daily series does.
+	forecasts, forecastErr := readers.ReadTeamCompletionForecasts(ctx, p.facts.client, orgID, ids, timeBound.neutral())
+	if forecastErr != nil {
+		return 0, rejected, forecastErr
+	}
+	if len(forecasts) > rowCount {
+		rowCount = len(forecasts)
+	}
+	forecastsByScope := completionForecastsByScope(forecasts)
 	for _, r := range rows {
 		subject, ok := bySubject[r.TeamID]
 		if !ok {
@@ -366,6 +378,9 @@ func (p *WorkloadProvider) readTeamWorkload(ctx context.Context, orgID string, s
 		}
 		if r.HasP50Days != 0 {
 			fields["forecast_p50_days"] = contextfabric.IntegerFactValue(r.P50Days)
+		}
+		for name, value := range teamCompletionForecastFields(forecastsByScope[completionForecastScope{team: r.TeamID, scope: r.WorkScopeID}], r.ComputedAt) {
+			fields[name] = value
 		}
 		// codex CHAOS-4645 round-1 P3 (ARGUED, confirmed on read): the scalar
 		// forecast is legitimately "instant" (grainExact, ReadFacts' own

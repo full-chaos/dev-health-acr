@@ -259,6 +259,9 @@ func t4Cases() []t4Case {
 	// ---- workload
 	add(t4Case{name: "workload/team", kind: contextfabric.FactWorkload, subjects: team, tables: []fakeTable{
 		{match: workloadBaseQueryMatch, rows: [][]any{workloadRow("CHAOS", "scope-a")}},
+		// CHAOS-12607: the same row's forecast, with every percentile, date
+		// and a distribution, so every new field is emitted.
+		{match: completionForecastQueryMarker, rows: [][]any{completionForecastRow("CHAOS", "scope-a", "2026-07-27 04:00:00", []uint16{5, 12, 365}, []uint32{100, 9000, 900})}},
 		{match: workloadDailySeriesMatch, rows: t4Rows(66, func(i int, day string) []any {
 			return workloadDailySeriesRow("CHAOS", day, 160, 12.2, 1.28)
 		})},
