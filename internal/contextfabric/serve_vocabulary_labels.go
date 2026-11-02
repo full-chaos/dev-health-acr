@@ -198,6 +198,11 @@ func composeVocabularyLabels(result InvestigationResult) map[string]string {
 	if note, ok := contractsv1.ContextFabricLimitationsDisplacedNote(result.LimitationsDisplaced); ok {
 		words.set(contractsv1.ContextFabricAnswerNoteLimitationsDisplaced.Key(), note)
 	}
+	if result.Temporal != nil {
+		if note, ok := contractsv1.ContextFabricTemporalNote(*result.Temporal); ok {
+			words.set(contractsv1.ContextFabricAnswerNoteTemporal.Key(), note)
+		}
+	}
 	return words
 }
 
