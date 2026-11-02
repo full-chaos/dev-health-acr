@@ -147,6 +147,9 @@ func TestHandleStateQuestionIsNotWindowGated(t *testing.T) {
 			}
 			request := validInvestigationRequest()
 			request.Question = "What is the status of pull request 999 in full-chaos/dev-health-web?"
+			if kind == SubjectRepository {
+				request.Question = "What is the status of full-chaos/dev-health-web?"
+			}
 			engine, graph := handleStateEngine(t, interpreter, telemetry)
 			result, _ := engine.Investigate(context.Background(), acceptancePrincipal(), request)
 			gated := result.Status == InvestigationClarificationRequired && result.EffectiveEvidenceWindow != nil && result.EffectiveEvidenceWindow.Provenance == WindowInferredDefault
