@@ -1,6 +1,8 @@
 package contextfabric
 
 import (
+	"strings"
+
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 )
 
@@ -74,6 +76,9 @@ func comparisonSideBySideShape(result InvestigationResult, frame *QuestionFrame,
 			return nil, 0, RenderShapeSkipMixedSubjectKinds
 		}
 	}
+	if !comparisonSubjectCharted(sides[0].Kind) {
+		return nil, 0, RenderShapeSkipSubjectKindNotCharted
+	}
 	measures, leftOut := comparableMeasures(result.ClaimedFacts, sides, scopeOf)
 	shared := false
 	for _, measure := range measures {
@@ -93,6 +98,18 @@ func comparisonSideBySideShape(result InvestigationResult, frame *QuestionFrame,
 		return nil, leftOut, RenderShapeSkipComparisonUnprovable
 	}
 	return shape, leftOut, ""
+}
+
+// comparisonSubjectCharted is an allow list, as for the treemap. A person never
+// gets this table: no person is compared with another. The vocabulary has no such
+// kind today, and a kind added later stays out until someone decides otherwise.
+func comparisonSubjectCharted(kind SubjectKind) bool {
+	switch kind {
+	case contractsv1.ContextFabricSubjectRepository, contractsv1.ContextFabricSubjectTeam, contractsv1.ContextFabricSubjectProject:
+		return true
+	default:
+		return false
+	}
 }
 
 // comparisonIntent reports that this turn's own validated frame asks for a
@@ -224,7 +241,7 @@ func comparisonShape(sides []SubjectRef, measures []*comparisonMeasure) *contrac
 			})
 		}
 		label := side.Label
-		if label == "" {
+		if strings.TrimSpace(label) == "" {
 			label = side.CanonicalID
 		}
 		series = append(series, contractsv1.ContextFabricRenderSeries{Key: side.CanonicalID, Label: clampRenderLabel(label), Points: points})

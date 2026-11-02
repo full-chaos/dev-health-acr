@@ -355,7 +355,7 @@ func TestATableNamesASideWithNoLabelByItsID(t *testing.T) {
 	t.Parallel()
 	result := tableResult()
 	long := strings.Repeat("a", contractsv1.ContextFabricRenderLabelMaxLength+4)
-	result.SubjectResolution.Committed[0].Label = ""
+	result.SubjectResolution.Committed[0].Label = "   "
 	result.SubjectResolution.Committed[1].Label = long
 	shapes, event := selectRenderShapes(result, tableFrame(), tableOptions())
 	table := tableOf(t, shapes)
@@ -403,6 +403,10 @@ func TestAComparisonSkipsWithItsReason(t *testing.T) {
 		"sides of two kinds": {func(r *InvestigationResult, _ **QuestionFrame, _ *RenderShapeOptions) {
 			r.SubjectResolution.Committed[1].Kind = contractsv1.ContextFabricSubjectTeam
 		}, RenderShapeSkipMixedSubjectKinds, 0},
+		"a kind no table charts": {func(r *InvestigationResult, _ **QuestionFrame, _ *RenderShapeOptions) {
+			r.SubjectResolution.Committed[0].Kind = contractsv1.ContextFabricSubjectWorkItem
+			r.SubjectResolution.Committed[1].Kind = contractsv1.ContextFabricSubjectWorkItem
+		}, RenderShapeSkipSubjectKindNotCharted, 0},
 		"no claim": {func(r *InvestigationResult, _ **QuestionFrame, _ *RenderShapeOptions) { r.ClaimedFacts = nil }, RenderShapeSkipNoSharedMeasure, 0},
 		"claims on one side": {func(r *InvestigationResult, _ **QuestionFrame, _ *RenderShapeOptions) {
 			r.ClaimedFacts = r.ClaimedFacts[:2]
@@ -457,6 +461,26 @@ func TestAComparisonSkipsWithItsReason(t *testing.T) {
 			}
 			if event.ComparisonMeasuresLeftOut != tc.leftOut {
 				t.Fatalf("left out %d, want %d", event.ComparisonMeasuresLeftOut, tc.leftOut)
+			}
+		})
+	}
+}
+
+// A comparison reaches these three kinds and no other.
+func TestATableChartsTeamsAndProjectsToo(t *testing.T) {
+	t.Parallel()
+	for _, kind := range []SubjectKind{contractsv1.ContextFabricSubjectRepository, contractsv1.ContextFabricSubjectTeam, contractsv1.ContextFabricSubjectProject} {
+		t.Run(string(kind), func(t *testing.T) {
+			t.Parallel()
+			result := tableResult()
+			for index := range result.SubjectResolution.Committed {
+				result.SubjectResolution.Committed[index].Kind = kind
+			}
+			for index := range result.ClaimedFacts {
+				result.ClaimedFacts[index].Subject.Kind = kind
+			}
+			if shapes, event := selectRenderShapes(result, tableFrame(), tableOptions()); tableOf(t, shapes) == nil {
+				t.Fatalf("no table; skip = %q", tableSkipOf(t, event))
 			}
 		})
 	}

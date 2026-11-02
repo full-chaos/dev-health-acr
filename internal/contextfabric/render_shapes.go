@@ -206,8 +206,9 @@ const (
 	// RenderShapeSkipSeveralThemeBreakdowns -- more than one does. A treemap
 	// is one whole, and two subjects' splits are a comparison.
 	RenderShapeSkipSeveralThemeBreakdowns RenderShapeSkipReason = "several_theme_breakdowns"
-	// RenderShapeSkipSubjectKindNotCharted -- the fact's subject is not a
-	// repository or a team. A person never gets this chart.
+	// RenderShapeSkipSubjectKindNotCharted -- the subject is not of a kind this
+	// rule charts: a repository or a team for a treemap, and those or a project
+	// for a comparison. A person never gets either chart.
 	RenderShapeSkipSubjectKindNotCharted RenderShapeSkipReason = "subject_kind_not_charted"
 	// RenderShapeSkipThemeTableCut -- the table does not hold every canonical
 	// theme, because the row budget cut it.
