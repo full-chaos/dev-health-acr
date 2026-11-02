@@ -13017,6 +13017,7 @@ type GraphCountCheckFinishedFields struct {
 	Pass              int
 	Outcome           string
 	SourcesChecked    int
+	SourcesUnknown    int
 	KindsCompared     int
 	GapCount          int
 	RelationsCompared int
@@ -13037,13 +13038,14 @@ type GraphCountCheckFinishedFields struct {
 
 // NewGraphCountCheckFinishedFields is the generated constructor for GraphCountCheckFinishedFields -- every
 // field GraphCountCheckFinished.Fields declares is a required parameter.
-func NewGraphCountCheckFinishedFields(orgIDHash string, instance string, pass int, outcome string, sourcesChecked int, kindsCompared int, gapCount int, relationsCompared int, edgeGapCount int, relationsDeferred int, errorCount int, durationMs int) GraphCountCheckFinishedFields {
+func NewGraphCountCheckFinishedFields(orgIDHash string, instance string, pass int, outcome string, sourcesChecked int, sourcesUnknown int, kindsCompared int, gapCount int, relationsCompared int, edgeGapCount int, relationsDeferred int, errorCount int, durationMs int) GraphCountCheckFinishedFields {
 	return GraphCountCheckFinishedFields{
 		OrgIDHash:         orgIDHash,
 		Instance:          instance,
 		Pass:              pass,
 		Outcome:           outcome,
 		SourcesChecked:    sourcesChecked,
+		SourcesUnknown:    sourcesUnknown,
 		KindsCompared:     kindsCompared,
 		GapCount:          gapCount,
 		RelationsCompared: relationsCompared,
@@ -13073,6 +13075,7 @@ func (f GraphCountCheckFinishedFields) SlogArgs() []any {
 		"pass", f.Pass,
 		"outcome", contextfabric.SanitizeLogAttr(f.Outcome),
 		"sources_checked", f.SourcesChecked,
+		"sources_unknown", f.SourcesUnknown,
 		"kinds_compared", f.KindsCompared,
 		"gap_count", f.GapCount,
 		"relations_compared", f.RelationsCompared,

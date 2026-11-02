@@ -18570,11 +18570,17 @@
         "closed_vocabulary": [
           "completed",
           "cancelled",
-          "failed"
+          "failed",
+          "unknown"
         ]
       },
       {
         "key": "sources_checked",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "sources_unknown",
         "type": "int",
         "presence": "required"
       },

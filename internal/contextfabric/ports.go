@@ -1455,9 +1455,13 @@ type ProjectionSourceCounts interface {
 
 // ProjectionGraphCounts is an OPTIONAL capability a ProjectionBackend
 // implements to count the subject nodes of one kind that organization holds in
-// its ACTIVE graph.
+// its ACTIVE graph. CountKind counts the nodes the owned writer wrote, never a
+// stub a relationship created (CHAOS-12649). OwnedCountsKnown reports whether a
+// source's owned counts can be compared at all: false until a walk from zero
+// wrote every owned node with the owned marker.
 type ProjectionGraphCounts interface {
 	CountKind(ctx context.Context, orgID string, kind SubjectKind) (int64, error)
+	OwnedCountsKnown(ctx context.Context, orgID, source string) (bool, error)
 }
 
 // EdgeCountKey names one measured edge population: a relation type and, for a

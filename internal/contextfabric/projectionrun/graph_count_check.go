@@ -46,6 +46,12 @@ const (
 	GraphCountCheckCompleted = "completed"
 	GraphCountCheckCancelled = "cancelled"
 	GraphCountCheckFailed    = "failed"
+	// GraphCountCheckUnknown (CHAOS-12649): every read succeeded, and at least
+	// one source's owned node counts could not be compared, because no walk from
+	// zero has written its owned nodes with the owned marker yet. Never
+	// "completed": a check that could not compare is not a check that found
+	// nothing.
+	GraphCountCheckUnknown = "unknown"
 )
 
 // GraphCountCheck is one completed count check of one organization: what it
@@ -58,9 +64,13 @@ type GraphCountCheck struct {
 	Instance string
 	Pass     int
 	// Outcome is GraphCountCheckCompleted, GraphCountCheckCancelled (the check
-	// timeout or shutdown ended it) or GraphCountCheckFailed (a count read failed).
+	// timeout or shutdown ended it), GraphCountCheckFailed (a count read failed)
+	// or GraphCountCheckUnknown (a source's owned counts cannot be compared yet).
 	Outcome        string
 	SourcesChecked int
+	// SourcesUnknown counts the sources whose node counts this check did not
+	// compare because the graph holds no owned-marked walk of them (CHAOS-12649).
+	SourcesUnknown int
 	KindsCompared  int
 	// Gaps counts the confirmed graph_below_source gaps this check reported.
 	Gaps int
@@ -296,6 +306,8 @@ func (c *Coordinator) checkGraphCounts(ctx context.Context, orgID string) {
 			result.Outcome = GraphCountCheckCancelled
 		case result.Errors > 0:
 			result.Outcome = GraphCountCheckFailed
+		case result.SourcesUnknown > 0:
+			result.Outcome = GraphCountCheckUnknown
 		default:
 			result.Outcome = GraphCountCheckCompleted
 		}
@@ -337,6 +349,20 @@ func (c *Coordinator) checkNodeCounts(ctx context.Context, orgID, hash string, g
 	for _, source := range c.sourceNames {
 		counter, ok := c.sources[source].(contextfabric.ProjectionSourceCounts)
 		if !ok {
+			continue
+		}
+		// CHAOS-12649: the graph counts owned-marked nodes only, so a source no walk
+		// from zero has marked yet would read as one large gap. It reads unknown.
+		known, err := graph.OwnedCountsKnown(ctx, orgID, source)
+		if err != nil {
+			result.SourcesChecked++
+			result.Errors++
+			c.logger.WarnContext(ctx, "context_fabric: projection count check failed", "check", "graph_count", "stage", "owned_marker",
+				"source", contextfabric.SanitizeLogAttr(source), "org_id_hash", contextfabric.SanitizeLogAttr(hash), "failure_class", contextfabric.SanitizeLogAttr(classifyOutcomeError(err)))
+			continue
+		}
+		if !known {
+			result.SourcesUnknown++
 			continue
 		}
 		sourceCounts, err := counter.ProjectionSourceCounts(ctx, orgID)
