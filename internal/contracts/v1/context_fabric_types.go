@@ -1450,6 +1450,11 @@ type ContextFabricSubjectResolution struct {
 	// what the terminal says in place of "found no candidate". The sentence is the
 	// only form that leaves the process.
 	CensusLimitation string `json:"-"`
+	// WorkItemLinkScopeUnread (CHAOS-12505) is set when the census of the
+	// question's work-item handle under a requested repository scope ran and the
+	// keyed link read that scopes it failed or was cut. Nothing then shows that
+	// no work item matched, so a terminal does not say it. In-process only.
+	WorkItemLinkScopeUnread bool `json:"-"`
 	// CommitDecisionDigests (CHAOS-4087) is a small, closed-vocabulary
 	// summary of WHICH MECHANISM committed each subject in Committed --
 	// persisted so a wrong commit discovered later from a STORED result

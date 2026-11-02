@@ -1115,7 +1115,16 @@ func resolveTerminalStatus(request InvestigationRequest, resolution *SubjectReso
 		if resolution.CensusLimitation != "" && !resolution.GraphNotProjected {
 			return InvestigationNoMatch, resolution.CensusLimitation
 		}
+		// CHAOS-12505: the work-item census under a requested repository scope
+		// could not be scoped by its keyed link read, so nothing shows that no
+		// work item matched. The read's own sentence takes the place of "No work
+		// item matched" and of "found no candidate"; a withheld pool keeps its
+		// prose, which is about the search and stays true.
+		linkScopeUnread := resolution.WorkItemLinkScopeUnread && !resolution.GraphNotProjected
 		if subjectFloor.Refused && !resolution.GraphNotProjected {
+			if linkScopeUnread {
+				return InvestigationNoMatch, contractsv1.ContextFabricWorkItemLinksUnreadLimitation
+			}
 			return InvestigationNoMatch, noMatchLimitationOfferFloorEmptied
 		}
 		if strings.TrimSpace(resolution.ClarificationPrompt) != "" && !resolution.GraphNotProjected {
@@ -1123,6 +1132,9 @@ func resolveTerminalStatus(request InvestigationRequest, resolution *SubjectReso
 				return InvestigationClarificationRequired, clarificationRequiredLimitationOne
 			}
 			return InvestigationNoMatch, noMatchLimitationOfferPoolEmptied
+		}
+		if linkScopeUnread && len(resolution.InactiveHints) == 0 {
+			return InvestigationNoMatch, contractsv1.ContextFabricWorkItemLinksUnreadLimitation
 		}
 		return InvestigationNoMatch, noMatchLimitationForEmptyPool(resolution)
 	}
