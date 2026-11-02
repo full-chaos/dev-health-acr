@@ -215,7 +215,10 @@ func SubjectTerms(request contextfabric.InvestigationRequest, interpreted contex
 	result := make([]string, 0, len(values))
 	for _, value := range values {
 		value = strings.TrimSpace(value)
-		if value == "" {
+		// A marker is reserved for the resolver's own provenance (CHAOS-12468): a
+		// term with its text would merge into the marker's entry, and the strip or
+		// the term cap would then remove it as if it were synthetic.
+		if value == "" || isProvenanceMarker(value) {
 			continue
 		}
 		key := strings.ToLower(value)

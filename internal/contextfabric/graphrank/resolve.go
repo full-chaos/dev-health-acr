@@ -54,17 +54,21 @@ const censusProvenanceMarker = "[census witness]"
 // withoutProvenanceMarkers takes both markers off every candidate as it leaves the
 // resolver. They are internal provenance for the merge, and matched_terms is
 // served: a refused re-decision and a lone commit both carried one out. Validation
-// allows a candidate with no term, which a marker-only candidate then is. A term of
-// the question itself that equals a marker merged into the same entry, so it stays.
-func withoutProvenanceMarkers(candidates []contextfabric.SubjectCandidate, terms []string) {
-	marker := func(term string) bool {
-		return (term == censusProvenanceMarker || term == questionProvenanceMarker) && !slices.Contains(terms, term)
-	}
+// allows a candidate with no term, which a marker-only candidate then is. The
+// markers are reserved: SubjectTerms never yields one, so every marker here is
+// synthetic, and the term cap can never drop a real term that only shares its text.
+func withoutProvenanceMarkers(candidates []contextfabric.SubjectCandidate) {
+	marker := func(term string) bool { return isProvenanceMarker(term) }
 	for index, candidate := range candidates {
 		if slices.ContainsFunc(candidate.MatchedTerms, marker) {
 			candidates[index].MatchedTerms = slices.DeleteFunc(slices.Clone(candidate.MatchedTerms), marker)
 		}
 	}
+}
+
+// isProvenanceMarker reports whether term is one of the two reserved markers.
+func isProvenanceMarker(term string) bool {
+	return term == censusProvenanceMarker || term == questionProvenanceMarker
 }
 
 // matchedTermsCap mirrors contractsv1's own unexported MatchedTerms entry
@@ -2297,7 +2301,7 @@ func ResolveSubjectsWithCommitBasis(ctx context.Context, principal storage.Princ
 	admission := newContestAdmission(decideContestScope(frame, confirmedKind,
 		decideAnchorPoolKindScope(frame, scopeAnchorKind, confirmedAnchor, confirmedKind)))
 	resolution, offerMaterial, err := resolveSubjects(ctx, principal, request, interpreted, deps, confirmedKind, confirmedAnchor, bases, digests, frame, scopeAnchorKind, admission)
-	withoutProvenanceMarkers(resolution.Candidates, SubjectTerms(request, interpreted))
+	withoutProvenanceMarkers(resolution.Candidates)
 	// THE DISCLOSURE, emitted on EVERY successful pass through this call,
 	// explicit zero included, so a question that refused nothing and a build
 	// where the refusal stopped happening can never read alike. Deliberately

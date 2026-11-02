@@ -810,14 +810,15 @@ func TestResolveSubjects_SearchQuestionOversizedQuestionStaysContractValid(t *te
 	}
 }
 
-// A question's own term that happens to equal a marker dedupes into the same
-// entry. It stays: count population scope reads it as the anchor term.
-func TestWithoutProvenanceMarkersKeepsARealTerm(t *testing.T) {
+// The markers are reserved: a question term with a marker's text is never a term,
+// so no real term can merge into a marker's entry and be stripped or capped away.
+func TestAMarkerIsNeverASubjectTerm(t *testing.T) {
 	t.Parallel()
-	candidates := []contextfabric.SubjectCandidate{{MatchedTerms: []string{questionProvenanceMarker, censusProvenanceMarker, "alpha"}}}
-	withoutProvenanceMarkers(candidates, []string{questionProvenanceMarker})
-	if got := candidates[0].MatchedTerms; len(got) != 2 || got[0] != questionProvenanceMarker || got[1] != "alpha" {
-		t.Fatalf("MatchedTerms = %v", got)
+	request := testRequest()
+	request.RequestedScope.SubjectHints = []contextfabric.SubjectHint{{Kind: contextfabric.SubjectProject, Label: censusProvenanceMarker}}
+	got := SubjectTerms(request, testInterpreted(questionProvenanceMarker, " "+censusProvenanceMarker+" ", "alpha"))
+	if len(got) != 1 || got[0] != "alpha" {
+		t.Fatalf("SubjectTerms = %v, want only the real term", got)
 	}
 }
 
