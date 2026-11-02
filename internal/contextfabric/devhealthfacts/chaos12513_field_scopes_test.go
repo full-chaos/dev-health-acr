@@ -77,18 +77,33 @@ func TestNoFieldScopeOutlivesItsDeclaration(t *testing.T) {
 }
 
 // A field is window only where its provider computes it over the window. This
-// pins the list, so moving a field to window is a decision and not an edit.
+// pins the names, so moving a field to window is a decision and not an edit.
 func TestOnlyCheckedFieldsReadAsWindow(t *testing.T) {
-	want := map[contextfabric.FactKind]int{contextfabric.FactMetrics: 9, contextfabric.FactPullRequests: 3}
-	for kind, fields := range devhealthfacts.FactFieldScopes() {
-		got := 0
-		for _, scope := range fields {
+	want := map[contextfabric.FactKind][]string{
+		contextfabric.FactMetrics: {
+			"change_failure_deployments_count", "change_failure_failed_deployments_count",
+			"change_failure_incident_linked_failed_deployments_count", "change_failure_rate",
+			"change_failure_status_coverage", "change_failure_status_failed_deployments_count",
+			"change_failure_status_known_deployments_count", "window_pr_count", "window_pr_cycle_hours_median",
+		},
+		contextfabric.FactPullRequests: {
+			"pull_requests_closed_unmerged_window", "pull_requests_merged_window", "pull_requests_opened_window",
+		},
+	}
+	scopes := devhealthfacts.FactFieldScopes()
+	if len(scopes) != len(want) {
+		t.Fatalf("%d kinds hold scopes, want %d", len(scopes), len(want))
+	}
+	for kind, fields := range scopes {
+		var got []string
+		for name, scope := range fields {
 			if scope == contextfabric.FactScopeWindow {
-				got++
+				got = append(got, name)
 			}
 		}
-		if got != want[kind] {
-			t.Errorf("%s holds %d window fields, want %d", kind, got, want[kind])
+		slices.Sort(got)
+		if !slices.Equal(got, want[kind]) {
+			t.Errorf("%s window fields = %v, want %v", kind, got, want[kind])
 		}
 	}
 }
