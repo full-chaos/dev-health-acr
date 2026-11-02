@@ -545,8 +545,11 @@ func TestTheHandlerSeesTheNarrowedScopeAndTheLiveFlag(t *testing.T) {
 		_ = json.Unmarshal(recorder.Body.Bytes(), &envelope)
 		return recorder, envelope.Error.Code
 	}
-	if recorder, code := serve(contextPacketRequest(t, app, harness.tokenA, contextRequestFor("other-org/other-repo"))); recorder.Code != http.StatusForbidden || code != "repo_forbidden" {
-		t.Fatalf("context packet outside the live inventory under a * grant: %d %s, want 403 repo_forbidden", recorder.Code, code)
+	// CHAOS-12592: a "*" grant stays "*", so a repository outside the live
+	// inventory passes the scope gate; the read below it stays scoped to the
+	// caller's organization.
+	if recorder, code := serve(contextPacketRequest(t, app, harness.tokenA, contextRequestFor("other-org/other-repo"))); code == "repo_forbidden" {
+		t.Fatalf("context packet outside the live inventory under a * grant: %d %s, want it past the scope gate", recorder.Code, code)
 	}
 	if recorder, code := serve(contextPacketRequest(t, app, harness.tokenA, contextRequestFor(hostedTestRepository))); code == "repo_forbidden" || code == "feature_not_enabled" {
 		t.Fatalf("context packet inside the live inventory: %d %s, want it past the scope and flag gates", recorder.Code, code)
