@@ -530,8 +530,7 @@ func aKeyWhosePrefixIsOnlyOutsideReadsLikeAWord(t *testing.T, build grantedItemW
 //
 // For a restricted caller a repository-owned row is outside the work item census:
 // the census reads the library's link arm, and that arm takes repository-less rows
-// only (CHAOS-12456's ruling (a) set the arm; the gap is reported, not fixed
-// here). So those two commit here for an organization-wide caller, and for a
+// only (CHAOS-12456's ruling (a) set the arm; the gap is CHAOS-12561). So those two commit here for an organization-wide caller, and for a
 // restricted caller this pins only that their reference binds the handle.
 func everyProviderKeyCommitsThroughTheGate(t *testing.T, build grantedItemWorldBuilder) {
 	cases := []struct {

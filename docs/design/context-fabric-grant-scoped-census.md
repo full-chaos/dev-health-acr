@@ -321,7 +321,7 @@ this change the `CHAOS` prefix alone was accepted in a sentence.
   repository's row. The census reads the library's `pr_link` arm, and that arm
   takes repository-less rows only, so for a restricted caller such an issue counts
   0 even with a native link inside the grant. An organization-wide caller is not
-  affected. Found under CHAOS-12463, not fixed there.
+  affected. Found under CHAOS-12463 and tracked as CHAOS-12561.
 - **Timing of the key prefix read.** It scans the organization's work items of the
   prefix before the grant applies, so its duration follows that count (40 ms for
   none, 50 ms for 22, 130 ms for 12,000 on the local stack). Same class as the
