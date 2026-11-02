@@ -25,6 +25,7 @@ const (
 	ReuseLineUnavailable       ReuseLineScenario = "recheck unavailable"
 	ReuseLineNarrowing         ReuseLineScenario = "project narrowing unverified"
 	ReuseLineDegradeInvalid    ReuseLineScenario = "degrade invalid"
+	ReuseLineRecheckDeadline   ReuseLineScenario = "recheck deadline"
 	ReuseLineGateWithheld      ReuseLineScenario = "gate withheld"
 	ReuseLineCapExceeded       ReuseLineScenario = "subject cap exceeded"
 	ReuseLineGraphNotProjected ReuseLineScenario = "graph not projected"
@@ -44,6 +45,7 @@ func RunReuseLineForTest(ctx context.Context, t *testing.T, telemetry EngineTele
 	t.Helper()
 	subjects := reuseSubjects(54)
 	last := subjects[53]
+	budget := time.Hour
 	graph := &recheckGraph{pathRefs: map[string]string{}}
 	candidate := recheckCandidate(subjects)
 	cite := func() {
@@ -74,6 +76,10 @@ func RunReuseLineForTest(ctx context.Context, t *testing.T, telemetry EngineTele
 	case ReuseLineUnavailable:
 		cite()
 		graph.discoverErrOn = 2
+	case ReuseLineRecheckDeadline:
+		cite()
+		graph.hangDiscoverOn = 2
+		budget = 20 * time.Millisecond
 	case ReuseLineNarrowing:
 		cite()
 		graph.narrowingUnverifiedFor = last.CanonicalID
@@ -100,7 +106,7 @@ func RunReuseLineForTest(ctx context.Context, t *testing.T, telemetry EngineTele
 			return InvestigationResult{}, nil
 		}),
 	}, EngineOptions{
-		ServiceVersion: "acr-test", NewResultID: func() string { return freshTestResultID },
+		ServiceVersion: "acr-test", NewResultID: func() string { return freshTestResultID }, ReuseRecheckBudget: budget,
 		ReuseVersionAuthorities: ReuseVersionAuthorities{OwnershipRoutingVersion: OwnershipRoutingVersion},
 		Now:                     func() time.Time { return base.Add(time.Duration(elapsed.Load())) },
 	})

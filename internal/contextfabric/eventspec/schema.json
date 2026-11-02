@@ -983,7 +983,8 @@
           "miss_count_scope",
           "miss_hint_not_committed",
           "miss_scope_identity",
-          "miss_project_narrowing_unverified"
+          "miss_project_narrowing_unverified",
+          "miss_recheck_deadline"
         ]
       },
       {

@@ -70,7 +70,7 @@ func AnswerReuseOutcomeVocabulary() []string {
 		string(AnswerReuseMissGraphNotProjected), string(AnswerReuseHitDegraded),
 		string(AnswerReuseMissRecheckUnavailable), string(AnswerReuseMissDegradeInvalid),
 		string(AnswerReuseMissCountScope), string(AnswerReuseMissHintNotCommitted), string(AnswerReuseMissScopeIdentity),
-		string(AnswerReuseMissProjectNarrowingUnverified),
+		string(AnswerReuseMissProjectNarrowingUnverified), string(AnswerReuseMissRecheckDeadline),
 	}
 }
 

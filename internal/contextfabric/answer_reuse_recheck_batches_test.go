@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"slices"
 	"testing"
+	"time"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/hintsource"
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
@@ -74,16 +75,68 @@ type recheckGraph struct {
 	// onRead runs at the start of every ResolveSubjects and DiscoverContext
 	// call. A test uses it to advance a clock by what one read costs.
 	onRead func()
+	// hangResolveOn and hangDiscoverOn are the 1-based calls that block until
+	// their context ends; hangRemoved does the same to the removed-team read.
+	hangResolveOn, hangDiscoverOn int
+	hangRemoved                   bool
+	// afterHang is what a hung read returns once its context ended, in place of
+	// the context's own error: a socket read reports its own timeout.
+	afterHang error
+	// hangPartial makes a hung read come back with no error and a partial
+	// result, as a read that swallowed its failed lookups does.
+	hangPartial bool
+	// holdFor makes every read take this long and ignore its context.
+	holdFor time.Duration
+	// readDelay makes every read take this long, unless its context ends first.
+	readDelay time.Duration
+	// finishBefore makes the last discovery return this long before the
+	// deadline of its context.
+	finishBefore time.Duration
+	// removedErr is what the removed-team read returns, at once.
+	removedErr error
+	// deadlines holds the deadline each read's context carried, zero for none.
+	deadlines []time.Time
 
 	resolves   []recheckResolveCall
 	discovers  []recheckDiscoverCall
 	removedFor [][]SubjectRef
 }
 
+// recheckHangGuard ends a hung read whose context never ends, so a recheck with
+// no deadline fails its test rather than hanging the run.
+const recheckHangGuard = 2 * time.Second
+
+// errRecheckHangGuard reports a read that nothing bounded.
+var errRecheckHangGuard = errors.New("read was never bounded by a deadline")
+
 // read is the start of one graph read of the recheck.
-func (g *recheckGraph) read() {
+func (g *recheckGraph) read(ctx context.Context) {
 	if g.onRead != nil {
 		g.onRead()
+	}
+	deadline, _ := ctx.Deadline()
+	g.deadlines = append(g.deadlines, deadline)
+	if g.holdFor > 0 {
+		time.Sleep(g.holdFor)
+	}
+	if g.readDelay > 0 {
+		select {
+		case <-ctx.Done():
+		case <-time.After(g.readDelay):
+		}
+	}
+}
+
+// hang blocks until ctx ends, and returns what such a read reports.
+func (g *recheckGraph) hang(ctx context.Context) error {
+	select {
+	case <-ctx.Done():
+		if g.afterHang != nil {
+			return g.afterHang
+		}
+		return ctx.Err()
+	case <-time.After(recheckHangGuard):
+		return errRecheckHangGuard
 	}
 }
 
@@ -99,8 +152,8 @@ func (g *recheckGraph) AuthorizeStoredSubjects(ctx context.Context, principal st
 	return out, nil
 }
 
-func (g *recheckGraph) ResolveSubjects(_ context.Context, _ storage.Principal, request InvestigationRequest, _ InterpretedQuestion, binding ResolvedGraphBinding, confirmedKind *ConfirmedExpectedKind, confirmedAnchor *ConfirmedAnchorSelection, frame *QuestionFrame, scopeAnchorKind SubjectKind) (SubjectResolution, StructureOfferMaterial, CommitBasisSet, CommitDecisionDigestSet, error) {
-	g.read()
+func (g *recheckGraph) ResolveSubjects(ctx context.Context, _ storage.Principal, request InvestigationRequest, _ InterpretedQuestion, binding ResolvedGraphBinding, confirmedKind *ConfirmedExpectedKind, confirmedAnchor *ConfirmedAnchorSelection, frame *QuestionFrame, scopeAnchorKind SubjectKind) (SubjectResolution, StructureOfferMaterial, CommitBasisSet, CommitDecisionDigestSet, error) {
+	g.read(ctx)
 	g.resolves = append(g.resolves, recheckResolveCall{
 		hints: append([]SubjectHint(nil), request.RequestedScope.SubjectHints...), options: request.Options, binding: binding,
 		confirmedKind: confirmedKind, confirmedAnchor: confirmedAnchor, frame: frame, scopeAnchorKind: scopeAnchorKind,
@@ -108,6 +161,13 @@ func (g *recheckGraph) ResolveSubjects(_ context.Context, _ storage.Principal, r
 	call := len(g.resolves)
 	if call == g.resolveErrOn {
 		return SubjectResolution{}, StructureOfferMaterial{}, nil, nil, errors.New("graph read failed")
+	}
+	if call == g.hangResolveOn {
+		err := g.hang(ctx)
+		if g.hangPartial {
+			return SubjectResolution{Candidates: []SubjectCandidate{}, Committed: []SubjectRef{}}, StructureOfferMaterial{}, nil, nil, nil
+		}
+		return SubjectResolution{}, StructureOfferMaterial{}, nil, nil, err
 	}
 	committed := make([]SubjectRef, 0, len(request.RequestedScope.SubjectHints))
 	for _, hint := range request.RequestedScope.SubjectHints {
@@ -127,14 +187,23 @@ func (g *recheckGraph) ResolveSubjects(_ context.Context, _ storage.Principal, r
 	return SubjectResolution{Candidates: candidates, Committed: committed}, StructureOfferMaterial{}, provenCommitBases(committed...), nil, nil
 }
 
-func (g *recheckGraph) DiscoverContext(_ context.Context, _ storage.Principal, request GraphDiscoveryRequest) (GraphContext, error) {
-	g.read()
+func (g *recheckGraph) DiscoverContext(ctx context.Context, _ storage.Principal, request GraphDiscoveryRequest) (GraphContext, error) {
+	g.read(ctx)
 	g.discovers = append(g.discovers, recheckDiscoverCall{
 		committed: append([]SubjectRef(nil), request.Resolution.Committed...), hints: append([]SubjectHint(nil), request.Request.RequestedScope.SubjectHints...),
 		options: request.Request.Options, binding: request.Binding, frame: request.Frame,
 	})
 	if len(g.discovers) == g.discoverErrOn {
 		return GraphContext{}, errors.New("graph read failed")
+	}
+	if len(g.discovers) == g.hangDiscoverOn {
+		err := g.hang(ctx)
+		if !g.hangPartial {
+			return GraphContext{}, err
+		}
+	}
+	if deadline, ok := ctx.Deadline(); ok && g.finishBefore > 0 && len(g.discovers) == len(g.resolves) {
+		time.Sleep(time.Until(deadline) - g.finishBefore)
 	}
 	discovered := GraphContext{Resolution: request.Resolution, EvidenceRefIDs: []string{}}
 	for index, subject := range request.Resolution.Committed {
@@ -152,8 +221,16 @@ func (g *recheckGraph) DiscoverContext(_ context.Context, _ storage.Principal, r
 }
 
 // RemovedTeams is the bounded read of a stored answer that cites no evidence.
-func (g *recheckGraph) RemovedTeams(_ context.Context, _ storage.Principal, _ ResolvedGraphBinding, subjects []SubjectRef) ([]SubjectRef, error) {
+func (g *recheckGraph) RemovedTeams(ctx context.Context, _ storage.Principal, _ ResolvedGraphBinding, subjects []SubjectRef) ([]SubjectRef, error) {
+	deadline, _ := ctx.Deadline()
+	g.deadlines = append(g.deadlines, deadline)
 	g.removedFor = append(g.removedFor, append([]SubjectRef(nil), subjects...))
+	if g.removedErr != nil {
+		return nil, g.removedErr
+	}
+	if g.hangRemoved {
+		return nil, g.hang(ctx)
+	}
 	var removed []SubjectRef
 	for _, subject := range subjects {
 		if _, gone := g.removed[subject.CanonicalID]; gone {

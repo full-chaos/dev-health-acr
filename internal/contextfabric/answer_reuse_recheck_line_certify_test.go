@@ -35,6 +35,7 @@ func TestTheReuseLineStatesTheRecheckItRan(t *testing.T) {
 		{contextfabric.ReuseLineUnavailable, map[string]any{"outcome": "miss_recheck_unavailable"}, 4, 54},
 		{contextfabric.ReuseLineNarrowing, map[string]any{"outcome": "miss_project_narrowing_unverified"}, 4, 54},
 		{contextfabric.ReuseLineDegradeInvalid, map[string]any{"outcome": "miss_degrade_invalid"}, 4, 54},
+		{contextfabric.ReuseLineRecheckDeadline, map[string]any{"outcome": "miss_recheck_deadline"}, 4, 54},
 	} {
 		t.Run(string(tc.scenario), func(t *testing.T) {
 			t.Parallel()

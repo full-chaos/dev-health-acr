@@ -7,6 +7,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"time"
 	"unicode"
 
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
@@ -204,6 +205,15 @@ func TimeAxisKeyFor(timeContext TimeContext) string {
 		return ""
 	}
 }
+
+// defaultReuseRecheckBudget is the time one recheck may spend on the graph, from
+// its first read to its return, across all its batches (CHAOS-12511). Measured
+// on the P1-5 live run, 54 to 60 subjects took 9.6 to 10.8 s, nearly all of it
+// DiscoverContext hop walks. The stack's largest stored answer names 78 subjects,
+// which is about 14 s by that ratio. 15 s covers both and leaves the fresh path
+// 99 of a 114 s request budget. Nothing depends on this number: reach it through
+// EngineOptions.ReuseRecheckBudget only.
+const defaultReuseRecheckBudget = 15 * time.Second
 
 // AdmittedPathNodes is how many nodes a relationship path this engine writes
 // carries. graphrank.AdmitEdges is the one path builder and each path it mints
@@ -419,6 +429,14 @@ const (
 	// conflating them is exactly the undifferentiated-miss defect the
 	// sibling telemetry ticket exists for.
 	AnswerReuseMissRecheckUnavailable AnswerReuseOutcome = "miss_recheck_unavailable"
+	// AnswerReuseMissRecheckDeadline (CHAOS-12511): the recheck spent its own
+	// budget (defaultReuseRecheckBudget) before it finished, so nothing was
+	// proven either way, and the attempt falls to the fresh path with the
+	// request's deadline untouched. Not miss_recheck_unavailable, which means a
+	// read failed, and never miss_authorization: time says nothing about a
+	// grant, and a read cut short by the budget must not read as a subject the
+	// caller may not see.
+	AnswerReuseMissRecheckDeadline AnswerReuseOutcome = "miss_recheck_deadline"
 	// AnswerReuseMissDegradeInvalid (CHAOS-4831): a partial miss was
 	// degradable in principle, but the stripped payload no longer
 	// satisfies the stored-result contract, so reuse refused rather than
@@ -1153,6 +1171,25 @@ func (e *Engine) reuseAuthorizationStillHolds(ctx context.Context, principal sto
 	defer func() {
 		measured.Refusal.Recheck = AnswerReuseRecheck{Ran: true, Milliseconds: int(e.now().Sub(started).Milliseconds()), Subjects: len(subjects)}
 	}()
+	// ONE BUDGET FOR THE WHOLE RECHECK, not one per batch: every graph read below
+	// runs on recheckCtx, and nothing else does. ctx stays the request's, so a
+	// miss here leaves the fresh path its deadline untouched.
+	//
+	// The budget bounds the reads because the real read client honours a context
+	// deadline on the socket (falkorgraph.TestAReadInFlightStopsAtItsContextDeadline).
+	// The recheck waits for its reads and abandons none, so a read that ignored
+	// its context would hold it past the budget. The server is not told: a query
+	// in flight at the deadline runs to its end there.
+	recheckCtx, cancel := context.WithTimeout(ctx, e.reuseRecheckBudget)
+	defer cancel()
+	// budgetSpent reads which context ended, never the read's error: the socket
+	// reports its own timeout, and a read that swallows failed lookups comes back
+	// partial with no error at all. Time says nothing about a grant, so this runs
+	// before any result is read, and a read that came back after the deadline is
+	// not read at all. ctx ending first is the caller's own end, and keeps the
+	// outcome it always had.
+	budgetSpent := func() bool { return ctx.Err() == nil && recheckCtx.Err() != nil }
+	spent := reuseRecheckVerdict{Refused: true, Outcome: AnswerReuseMissRecheckDeadline}
 
 	// CHAOS-3900 P1.C: this recheck only re-verifies SUBJECT authorization
 	// (the committed set below) -- it discards the structure-offer
@@ -1207,7 +1244,10 @@ func (e *Engine) reuseAuthorizationStillHolds(ctx context.Context, principal sto
 	// re-derivation bar 5 forbids. A nil frame yields no kind hints, which
 	// is the pre-seam-7 behaviour of this call unchanged.
 	for index := range batches {
-		resolution, _, _, _, err := e.graph.ResolveSubjects(ctx, principal, batches[index].request, candidate.Interpretation, binding, nil, nil, nil, "")
+		resolution, _, _, _, err := e.graph.ResolveSubjects(recheckCtx, principal, batches[index].request, candidate.Interpretation, binding, nil, nil, nil, "")
+		if budgetSpent() {
+			return spent
+		}
 		if err != nil {
 			return reuseRecheckVerdict{Refused: true, Outcome: AnswerReuseMissAuthorization, Refusal: AnswerReuseRefusal{Reason: AnswerReuseRefusalSubjectRecheckFailed}}
 		}
@@ -1228,13 +1268,20 @@ func (e *Engine) reuseAuthorizationStillHolds(ctx context.Context, principal sto
 		if requestedProjectNarrowingUnproven(request.RequestedScope) && !coverageDisclosesUnverifiedProjectNarrowing(candidate.Coverage) {
 			return reuseRecheckVerdict{Refused: true, Outcome: AnswerReuseMissProjectNarrowingUnverified}
 		}
-		return e.reuseRemovedTeamRecheck(ctx, principal, binding, subjects)
+		verdict := e.reuseRemovedTeamRecheck(recheckCtx, principal, binding, subjects)
+		if budgetSpent() {
+			return spent
+		}
+		return verdict
 	}
 	graphContexts := make([]GraphContext, 0, len(batches))
 	for _, batch := range batches {
-		graphContext, err := e.graph.DiscoverContext(ctx, principal, GraphDiscoveryRequest{
+		graphContext, err := e.graph.DiscoverContext(recheckCtx, principal, GraphDiscoveryRequest{
 			Request: batch.request, Interpretation: candidate.Interpretation, Resolution: batch.resolution, Binding: binding,
 		})
+		if budgetSpent() {
+			return spent
+		}
 		if err != nil {
 			// Nothing was proven either way -- see
 			// AnswerReuseMissRecheckUnavailable's own doc comment for why
