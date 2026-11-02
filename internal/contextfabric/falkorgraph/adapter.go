@@ -1,6 +1,7 @@
 package falkorgraph
 
 import (
+	"fmt"
 	"strings"
 	"sync"
 	"time"
@@ -223,8 +224,21 @@ func NewWithEmbedder(config Config, options EmbedderOptions) (*Adapter, error) {
 	if err != nil {
 		return nil, err
 	}
+	if err := validateOverFetch(adapter.config.MaxResults, options.OverFetchMultiplier); err != nil {
+		return nil, err
+	}
 	adapter.attachEmbedder(options)
 	return adapter, nil
+}
+
+// validateOverFetch is the same bound as NodeEdgeReadLimit (CHAOS-12526). The
+// vector read asks for multiplier*limit+1 and reads the extra row as "more
+// matched", so that row must fit under the server's result cap.
+func validateOverFetch(maxResults, multiplier int) error {
+	if multiplier > 0 && multiplier*maxResults >= falkorResultSetSize {
+		return fmt.Errorf("falkordb OverFetchMultiplier %d with MaxResults %d asks past the result cap of %d", multiplier, maxResults, falkorResultSetSize)
+	}
+	return nil
 }
 
 func (a *Adapter) attachEmbedder(options EmbedderOptions) {
