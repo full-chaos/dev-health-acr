@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"sync"
 	"testing"
 	"time"
 
@@ -22,6 +23,13 @@ type budgetRun struct {
 
 // runBudgeted runs the real Engine.Investigate -> tryReuse path under budget.
 func runBudgeted(t *testing.T, ctx context.Context, graph GraphReader, candidate InvestigationResult, budget time.Duration) *budgetRun {
+	t.Helper()
+	return runBudgetedWith(t, ctx, graph, candidate, budget, nil)
+}
+
+// runBudgetedWith is runBudgeted with the recheck's budget context made by
+// budgetContext, when it is not nil.
+func runBudgetedWith(t *testing.T, ctx context.Context, graph GraphReader, candidate InvestigationResult, budget time.Duration, budgetContext func(context.Context, time.Duration) (context.Context, context.CancelFunc)) *budgetRun {
 	t.Helper()
 	run := &budgetRun{recheckRun: recheckRun{telemetry: &recordingTelemetry{}}}
 	engine, err := NewEngine(EngineDependencies{
@@ -42,6 +50,9 @@ func runBudgeted(t *testing.T, ctx context.Context, graph GraphReader, candidate
 	})
 	if err != nil {
 		t.Fatalf("NewEngine() error = %v", err)
+	}
+	if budgetContext != nil {
+		engine.recheckContext = budgetContext
 	}
 	run.result, run.err = engine.Investigate(ctx, ownerPrincipal("user_a", "acme/tools"), validInvestigationRequest())
 	return run
@@ -242,60 +253,60 @@ func TestTheCallersOwnEndIsANamedMiss(t *testing.T) {
 	const hold, early, late = 80 * time.Millisecond, 10 * time.Millisecond, 40 * time.Millisecond
 	for _, tc := range []struct {
 		name     string
-		parent   func() (context.Context, context.CancelFunc)
+		parent   func(*recheckGraph) (context.Context, context.CancelFunc)
 		budget   time.Duration
 		subjects int
 		build    func() (InvestigationResult, *recheckGraph)
 	}{
-		{"a cancellation during a resolution", cancelSoon, time.Hour, 54, func() (InvestigationResult, *recheckGraph) {
+		{"a cancellation during a resolution", cancelOnHang, time.Hour, 54, func() (InvestigationResult, *recheckGraph) {
 			candidate, graph := citedCandidate(reuseSubjects(54))
 			graph.hangResolveOn = 1
 			return candidate, graph
 		}},
-		{"a cancellation during a later resolution", cancelSoon, time.Hour, 54, func() (InvestigationResult, *recheckGraph) {
+		{"a cancellation during a later resolution", cancelOnHang, time.Hour, 54, func() (InvestigationResult, *recheckGraph) {
 			candidate, graph := citedCandidate(reuseSubjects(54))
 			graph.hangResolveOn = 2
 			return candidate, graph
 		}},
-		{"a cancellation during a discovery", cancelSoon, time.Hour, 54, func() (InvestigationResult, *recheckGraph) {
+		{"a cancellation during a discovery", cancelOnHang, time.Hour, 54, func() (InvestigationResult, *recheckGraph) {
 			candidate, graph := citedCandidate(reuseSubjects(54))
 			graph.hangDiscoverOn = 1
 			return candidate, graph
 		}},
-		{"a cancellation during the last discovery", cancelSoon, time.Hour, 54, func() (InvestigationResult, *recheckGraph) {
+		{"a cancellation during the last discovery", cancelOnHang, time.Hour, 54, func() (InvestigationResult, *recheckGraph) {
 			candidate, graph := citedCandidate(reuseSubjects(54))
 			graph.hangDiscoverOn = 2
 			return candidate, graph
 		}},
-		{"a cancellation during removed teams", cancelSoon, time.Hour, 54, func() (InvestigationResult, *recheckGraph) {
+		{"a cancellation during removed teams", cancelOnHang, time.Hour, 54, func() (InvestigationResult, *recheckGraph) {
 			return teamCandidate(54), &recheckGraph{hangRemoved: true}
 		}},
-		{"a resolution comes back partial after a cancellation", cancelSoon, time.Hour, 54, func() (InvestigationResult, *recheckGraph) {
+		{"a resolution comes back partial after a cancellation", cancelOnHang, time.Hour, 54, func() (InvestigationResult, *recheckGraph) {
 			candidate, graph := citedCandidate(reuseSubjects(54))
 			graph.hangResolveOn, graph.hangPartial = 2, true
 			return candidate, graph
 		}},
-		{"a discovery comes back partial after a cancellation", cancelSoon, time.Hour, 54, func() (InvestigationResult, *recheckGraph) {
+		{"a discovery comes back partial after a cancellation", cancelOnHang, time.Hour, 54, func() (InvestigationResult, *recheckGraph) {
 			candidate, graph := citedCandidate(reuseSubjects(54))
 			graph.hangDiscoverOn, graph.hangPartial = 2, true
 			return candidate, graph
 		}},
-		{"an error of its own comes back after a cancellation", cancelSoon, time.Hour, 54, func() (InvestigationResult, *recheckGraph) {
+		{"an error of its own comes back after a cancellation", cancelOnHang, time.Hour, 54, func() (InvestigationResult, *recheckGraph) {
 			candidate, graph := citedCandidate(reuseSubjects(54))
 			graph.hangDiscoverOn, graph.afterHang = 1, errors.New("read tcp 10.0.0.1:6379: i/o timeout")
 			return candidate, graph
 		}},
-		{"the request's deadline ends first", deadlineSoon, time.Hour, 54, func() (InvestigationResult, *recheckGraph) {
+		{"the request's deadline ends first", deadlineOnHang, time.Hour, 54, func() (InvestigationResult, *recheckGraph) {
 			candidate, graph := citedCandidate(reuseSubjects(54))
 			graph.hangResolveOn = 1
 			return candidate, graph
 		}},
-		{"both ended, the budget first", cancelAfter(late), early, 54, func() (InvestigationResult, *recheckGraph) {
+		{"both ended, the budget first", cancelOnReturn, early, 54, func() (InvestigationResult, *recheckGraph) {
 			candidate, graph := citedCandidate(reuseSubjects(54))
 			graph.holdFor = hold
 			return candidate, graph
 		}},
-		{"both ended, the request first", cancelAfter(early), late, 54, func() (InvestigationResult, *recheckGraph) {
+		{"both ended, the request first", cancelOnRead, late, 54, func() (InvestigationResult, *recheckGraph) {
 			candidate, graph := citedCandidate(reuseSubjects(54))
 			graph.holdFor = hold
 			return candidate, graph
@@ -303,9 +314,9 @@ func TestTheCallersOwnEndIsANamedMiss(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			parent, cancel := tc.parent()
-			defer cancel()
 			candidate, graph := tc.build()
+			parent, cancel := tc.parent(graph)
+			defer cancel()
 			run := runBudgeted(t, parent, graph, candidate, tc.budget)
 			if run.hit() || run.result.Reused {
 				t.Fatal("a stored answer was served after the request ended")
@@ -327,26 +338,95 @@ func TestTheCallersOwnEndIsANamedMiss(t *testing.T) {
 	}
 }
 
-// deadlineSoon is a request whose own deadline ends during its first read.
-func deadlineSoon() (context.Context, context.CancelFunc) {
-	return context.WithTimeout(context.Background(), 20*time.Millisecond)
+// The request ends inside the read the case is about, never on a timer: a timer
+// can fire before the recheck starts, under CPU pressure (CHAOS-12573).
+
+// cancelOnHang is a request its caller cancels when a read hangs.
+func cancelOnHang(graph *recheckGraph) (context.Context, context.CancelFunc) {
+	ctx, cancel := context.WithCancel(context.Background())
+	graph.onHang = cancel
+	return ctx, cancel
 }
 
-// cancelAfter is a request a caller cancels after wait.
-func cancelAfter(wait time.Duration) func() (context.Context, context.CancelFunc) {
-	return func() (context.Context, context.CancelFunc) {
-		ctx, cancel := context.WithCancel(context.Background())
-		time.AfterFunc(wait, cancel)
-		return ctx, cancel
+// cancelOnRead is a request its caller cancels as a held read starts.
+func cancelOnRead(graph *recheckGraph) (context.Context, context.CancelFunc) {
+	ctx, cancel := context.WithCancel(context.Background())
+	graph.onRead = cancel
+	return ctx, cancel
+}
+
+// cancelOnReturn is a request its caller cancels as a held read returns.
+func cancelOnReturn(graph *recheckGraph) (context.Context, context.CancelFunc) {
+	ctx, cancel := context.WithCancel(context.Background())
+	graph.onReturn = cancel
+	return ctx, cancel
+}
+
+// deadlineOnHang is a request whose own deadline passes when a read hangs.
+func deadlineOnHang(graph *recheckGraph) (context.Context, context.CancelFunc) {
+	ctx := &requestDeadline{done: make(chan struct{})}
+	var once sync.Once
+	graph.onHang = func() { once.Do(func() { close(ctx.done) }) }
+	return ctx, func() {}
+}
+
+// requestDeadline is a request context whose deadline the test passes:
+// DeadlineExceeded once done is closed.
+type requestDeadline struct{ done chan struct{} }
+
+func (*requestDeadline) Deadline() (time.Time, bool) { return time.Time{}, false }
+func (c *requestDeadline) Done() <-chan struct{}     { return c.done }
+func (c *requestDeadline) Err() error {
+	select {
+	case <-c.done:
+		return context.DeadlineExceeded
+	default:
+		return nil
+	}
+}
+func (*requestDeadline) Value(any) any { return nil }
+
+// TestADeadlinePastWhoseTimerHasNotRunIsSpent (CHAOS-12573): a context whose
+// deadline has passed by the clock is ended, even while its Err is still nil
+// because its timer has not run, as on a starved scheduler. The recheck stops
+// after the read it is in, with the named miss, and starts no other read.
+func TestADeadlinePastWhoseTimerHasNotRunIsSpent(t *testing.T) {
+	t.Parallel()
+	candidate, graph := citedCandidate(reuseSubjects(54))
+	run := runBudgetedWith(t, context.Background(), graph, candidate, time.Hour, func(ctx context.Context, _ time.Duration) (context.Context, context.CancelFunc) {
+		inner, cancel := context.WithCancel(ctx)
+		return lateTimer{Context: inner, deadline: time.Now().Add(-time.Millisecond)}, cancel
+	})
+	run.requireMiss(t, AnswerReuseMissRecheckDeadline, AnswerReuseRefusal{})
+	if len(graph.deadlines) != 1 {
+		t.Fatalf("reads = %d, want 1: a read must not start past the deadline, whatever Err says", len(graph.deadlines))
 	}
 }
 
-// cancelSoon is a request a caller cancels while its first read is in flight.
-func cancelSoon() (context.Context, context.CancelFunc) {
-	ctx, cancel := context.WithCancel(context.Background())
-	time.AfterFunc(20*time.Millisecond, cancel)
-	return ctx, cancel
+// TestARequestDeadlinePastWhoseTimerHasNotRunIsTheRequestsEnd (CHAOS-12573):
+// the same for the request's own context. Its deadline has passed by the clock
+// while its Err is still nil, so the recheck names the request's end, not the
+// budget's, though the budget's context has ended with it.
+func TestARequestDeadlinePastWhoseTimerHasNotRunIsTheRequestsEnd(t *testing.T) {
+	t.Parallel()
+	candidate, graph := citedCandidate(reuseSubjects(54))
+	parent := lateTimer{Context: context.Background(), deadline: time.Now().Add(-time.Millisecond)}
+	run := runBudgeted(t, parent, graph, candidate, time.Hour)
+	if run.result.Reused {
+		t.Fatal("a stored answer was served after the request's deadline")
+	}
+	if got := run.telemetry.answerReuseOutcomes; len(got) != 1 || got[0] != AnswerReuseMissRecheckCancelled {
+		t.Fatalf("outcomes = %v, want exactly [%s]", got, AnswerReuseMissRecheckCancelled)
+	}
 }
+
+// lateTimer is a context whose deadline has passed and whose Err is nil.
+type lateTimer struct {
+	context.Context
+	deadline time.Time
+}
+
+func (c lateTimer) Deadline() (time.Time, bool) { return c.deadline, true }
 
 // TestARecheckJustInsideItsBudgetIsStillAHit (CHAOS-12511): the budget ends only
 // what runs past it. A recheck that finishes with little time left is a hit.
