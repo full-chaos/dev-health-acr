@@ -202,6 +202,12 @@ func t4Cases() []t4Case {
 			return landscapeProjectRow("linear", "proj-1", fmt.Sprintf("team-%02d", i), 1, 10, 1, 5.0, 2)
 		})},
 	}})
+	add(t4Case{name: "landscape/team_no_cycle", kind: contextfabric.FactLandscape, subjects: team, tables: []fakeTable{
+		{match: "sumIf(one_churn", rows: [][]any{landscapeTeamRowCycle("CHAOS", 2, nil)}},
+	}})
+	add(t4Case{name: "landscape/project_no_cycle", kind: contextfabric.FactLandscape, subjects: proj, tables: []fakeTable{
+		{match: "sumIf(il.one_churn", rows: [][]any{landscapeProjectRowCycle("team-01", 2, nil)}},
+	}})
 
 	// ---- commitment
 	add(t4Case{name: "commitment/project_stated", kind: contextfabric.FactCommitment, subjects: proj, tables: []fakeTable{
