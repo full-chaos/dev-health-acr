@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"log/slog"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -219,10 +220,72 @@ func TestWithoutUnknownWindowPicksDropsOnlyAgainstADeclaredEnum(t *testing.T) {
 	if strings.Join(dropped, ",") != "window_class,window_confidence" || strings.Contains(got, "window_class") || strings.Contains(got, "window_confidence") {
 		t.Fatalf("dropped %v, copy %s", dropped, got)
 	}
+	// The value is compared decoded: an escaped known value is known.
+	escaped := strings.TrimSuffix(string(windowPickReply(t, "", "", nil)), "}") + `,"window_class":"state\u005fsnapshot"}`
+	if got, dropped := withoutUnknownWindowPicks(escaped, enum); got != escaped || dropped != nil {
+		t.Fatalf("an escaped known value was dropped: %v", dropped)
+	}
 	for _, notObject := range []string{`[1]`, `"x"`, `null`, `{`} {
 		if got, dropped := withoutUnknownWindowPicks(notObject, enum); got != notObject || dropped != nil {
 			t.Fatalf("%s changed to %s (%v)", notObject, got, dropped)
 		}
+	}
+}
+
+// The admission edges Codex r1 on #1950 named (test strength): an escaped
+// known value, duplicate keys in either order, a fenced reply, and trailing
+// data. The gate and the decode read the same JSON, so the pick carried is the
+// one the decode reads, and anything the schema refused for another reason is
+// still refused.
+func TestUnknownWindowPickEdgesAreDecidedOnTheDecodedReply(t *testing.T) {
+	t.Parallel()
+	base := string(windowPickReply(t, "", "", nil))
+	body := strings.TrimSuffix(base, "}")
+	for _, c := range []struct {
+		name             string
+		reply            string
+		paths            []string
+		wantClass        contextfabric.WindowClass
+		wantUnrecognized bool
+	}{
+		{"an escaped known class is known", body + `,"window_class":"state_snapshot"}`, []string{"server (LLM generator)", "supplied"}, contextfabric.WindowClassStateSnapshot, false},
+		{"duplicate keys, the known one last", body + `,"window_class":"quarterly","window_class":"state_snapshot"}`, []string{"server (LLM generator)", "supplied"}, contextfabric.WindowClassStateSnapshot, false},
+		{"duplicate keys, the unknown one last", body + `,"window_class":"state_snapshot","window_class":"quarterly"}`, []string{"server (LLM generator)", "supplied"}, "", true},
+		{"an unknown class in a fenced reply", "```json\n" + body + `,"window_class":"quarterly"}` + "\n```", []string{"server (LLM generator)"}, "", true},
+	} {
+		for _, path := range windowPickPaths {
+			if !slices.Contains(c.paths, path.name) {
+				continue
+			}
+			t.Run(c.name+"/"+path.name, func(t *testing.T) {
+				t.Parallel()
+				var logs strings.Builder
+				interpreted, receipt, err := path.interpret(t, []byte(c.reply), &logs)
+				if err != nil {
+					t.Fatalf("refused: %v", err)
+				}
+				if interpreted.WindowClass != c.wantClass || receipt.WindowClass != c.wantClass || receipt.WindowClassUnrecognized != c.wantUnrecognized {
+					t.Fatalf("interpreted %q receipt %q unrecognized=%v, want %q unrecognized=%v", interpreted.WindowClass, receipt.WindowClass, receipt.WindowClassUnrecognized, c.wantClass, c.wantUnrecognized)
+				}
+				// The gate compares the decoded value: an escaped known value is
+				// not dropped, so no drop is logged for it.
+				if dropped := strings.Contains(logs.String(), unknownWindowPickLogSubstring); dropped == (c.wantClass != "") {
+					t.Fatalf("drop logged = %v for a pick decoded as %q:\n%s", dropped, c.wantClass, logs.String())
+				}
+			})
+		}
+	}
+	trailing := body + `,"window_class":"quarterly"}{"x":1}`
+	for _, path := range windowPickPaths {
+		t.Run("an unknown class with trailing data/"+path.name, func(t *testing.T) {
+			t.Parallel()
+			var logs strings.Builder
+			// The supplied path refuses it before the decode (the request's own
+			// JSON-object check); the server path refuses it at the schema gate.
+			if _, receipt, err := path.interpret(t, []byte(trailing), &logs); err == nil || receipt.Outcome == "success" {
+				t.Fatalf("trailing data admitted: err %v outcome %q", err, receipt.Outcome)
+			}
+		})
 	}
 }
 
