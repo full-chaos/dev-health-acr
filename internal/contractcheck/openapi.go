@@ -99,6 +99,11 @@ func validOpenAPIPath(path string) bool {
 		"/api/v1/auth/credentials/self/rotate",
 		"/api/v1/auth/credentials/self/revoke",
 		"/api/v1/auth/credentials/self/ack",
+		// CHAOS-11200: the read-only credential listing for the Auth Control
+		// Plane reconciliation, served only to a workload-class credential
+		// whose binding role is reconcile. Listed explicitly, like the
+		// routes above; not an /internal/ prefix wildcard.
+		"/internal/v1/credentials/lifecycle",
 		// CHAOS-3755: the Context Fabric investigation endpoint. Not
 		// under the /api/v1/agent-context/ prefix wildcard above because
 		// it is a distinct consumer-neutral surface (ADR 0006), so it is

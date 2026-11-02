@@ -1293,6 +1293,16 @@ func (e *Engine) reuseAuthorizationStillHolds(ctx context.Context, principal sto
 		}
 		return verdict
 	}
+	// CHAOS-12537: prove the served edges directly first. It can only end the
+	// recheck with a hit; anything it cannot prove falls to the walk below,
+	// unchanged, which then decides alone.
+	direct, proven := e.reuseServedEdgeRecheck(recheckCtx, principal, recheckRequest, candidate, binding, batches, subjects)
+	if ended, stop := interrupted(); stop {
+		return ended
+	}
+	if proven {
+		return direct
+	}
 	graphContexts := make([]GraphContext, 0, len(batches))
 	for _, batch := range batches {
 		graphContext, err := e.graph.DiscoverContext(recheckCtx, principal, GraphDiscoveryRequest{
@@ -1610,4 +1620,81 @@ func (e *Engine) reuseRemovedTeamRecheck(ctx context.Context, principal storage.
 	}
 	verdict.RemovedTeams, verdict.RemovedChecked = removed, true
 	return verdict
+}
+
+// reuseServedEdgeRecheck is the direct recheck of a stored answer's evidence
+// (CHAOS-12537). The subjects are already rechecked by the batches. Here the
+// graph's ServedEdgeReader proves the answer's served edges through the walk's
+// own gates and admission, and the containment check runs over what the
+// batches committed and what that read proved. It returns proven only for a
+// hit: every ref the stored payload would serve is proven, and the removed-team
+// read answered. In every other case it returns false and proves nothing, and
+// the caller runs the walk exactly as before this ticket:
+//
+//   - the graph has no ServedEdgeReader, or the answer names a team and the
+//     graph has no RemovedTeamReader (the walk supplies removed teams);
+//   - the request narrows its scope by repository, project or team: the walk
+//     alone discloses an unverified project narrowing;
+//   - the read failed or reached its limit;
+//   - any demanded ref is not proven: a ref with no served edge (a dropped
+//     path keeps its refs elsewhere in the payload), or an edge the gates now
+//     refuse. The walk decides those, so a refusal always comes from the walk;
+//   - the removed-team read failed.
+func (e *Engine) reuseServedEdgeRecheck(ctx context.Context, principal storage.Principal, request InvestigationRequest, candidate InvestigationResult, binding ResolvedGraphBinding, batches []reuseRecheckBatch, subjects []SubjectRef) (reuseRecheckVerdict, bool) {
+	reader, ok := e.graph.(ServedEdgeReader)
+	if !ok {
+		return reuseRecheckVerdict{}, false
+	}
+	if _, removable := e.graph.(RemovedTeamReader); !removable && slices.ContainsFunc(subjects, func(s SubjectRef) bool { return s.Kind == SubjectTeam }) {
+		return reuseRecheckVerdict{}, false
+	}
+	if requestedScopeNarrows(request.RequestedScope) {
+		return reuseRecheckVerdict{}, false
+	}
+	proof, err := reader.ServedEdgeEvidence(ctx, principal, GraphDiscoveryRequest{
+		Request: request, Interpretation: candidate.Interpretation, Binding: binding,
+	}, servedEdgesOf(candidate))
+	if err != nil || proof.Cut {
+		return reuseRecheckVerdict{}, false
+	}
+	contexts := make([]GraphContext, 0, len(batches)+1)
+	for _, batch := range batches {
+		contexts = append(contexts, GraphContext{Resolution: batch.resolution})
+	}
+	contexts = append(contexts, GraphContext{
+		Paths: proof.Context.Paths, DriverCandidates: proof.Context.DriverCandidates, EvidenceRefIDs: proof.Context.EvidenceRefIDs,
+	})
+	partition := partitionMissingRefs(candidate, contexts...)
+	if len(partition.Missing) > 0 {
+		return reuseRecheckVerdict{}, false
+	}
+	verdict := e.reuseRemovedTeamRecheck(ctx, principal, binding, subjects)
+	if verdict.Refused {
+		return reuseRecheckVerdict{}, false
+	}
+	verdict.ContainmentRan, verdict.Partition = true, partition
+	return verdict, true
+}
+
+// servedEdgesOf is every edge the stored answer serves, in its paths.
+func servedEdgesOf(candidate InvestigationResult) []RelationshipEdge {
+	edges := make([]RelationshipEdge, 0, len(candidate.Paths))
+	for _, path := range candidate.Paths {
+		edges = append(edges, path.Edges...)
+	}
+	return edges
+}
+
+// requestedScopeNarrows reports whether the request narrows its scope by
+// repository, project or team. A blank entry narrows nothing, and neither does
+// a requested "*".
+func requestedScopeNarrows(scope RequestedScope) bool {
+	for _, ids := range [][]string{scope.RepositorySlugs, scope.ProjectIDs, scope.TeamIDs} {
+		for _, id := range ids {
+			if trimmed := strings.TrimSpace(id); trimmed != "" && trimmed != "*" {
+				return true
+			}
+		}
+	}
+	return scope.ProjectNarrowing != nil
 }

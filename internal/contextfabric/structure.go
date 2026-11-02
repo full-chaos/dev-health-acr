@@ -182,7 +182,7 @@ type requestStructureCanonicalization struct {
 	// the ordinary resolution pool the way a receipt-confirmed kind does
 	// (see ConfirmedExpectedKind's own doc comment, ports.go). A single
 	// explicit subject_handle is the exception: it is resolved inside the one
-	// committed repository (graphrank.commitExplicitHandleSubjects) and
+	// committed repository (graphrank.commitNamedHandle) and
 	// bypasses answer reuse (AnswerReuseBypassExplicitHandle).
 	Explicit []explicitStructureMember
 	// Veto is non-empty when this request must short-circuit to a

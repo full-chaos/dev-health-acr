@@ -252,7 +252,7 @@ func TestHeldComparisonTerminalOverTheWholeAnswerabilityGrid(t *testing.T) {
 			name:  "not a comparison: the withheld-pool arm still clarifies",
 			frame: nil, resolution: heldResolution(OfferPoolEmptiedClarificationPrompt, 0),
 			allow: true, redeemable: true,
-			wantStatus: InvestigationClarificationRequired, wantLimitation: clarificationRequiredLimitationOne,
+			wantStatus: InvestigationClarificationRequired, wantLimitation: clarificationRequiredLimitationWithheldPool,
 			why: "the arm the held-comparison branch is placed ahead of must be untouched for every shape that is not a held comparison",
 		},
 		{
@@ -302,7 +302,7 @@ func TestEveryHeldComparisonLimitationIsDistinct(t *testing.T) {
 		"held, asked":                     comparisonHeldLimitation,
 		"held, clarification refused":     comparisonHeldNoClarificationLimitation,
 		"held, nothing to redeem":         comparisonHeldUnanswerableLimitation,
-		"withheld pool, asked":            clarificationRequiredLimitationOne,
+		"withheld pool, asked":            clarificationRequiredLimitationWithheldPool,
 		"withheld pool, nothing to offer": noMatchLimitationOfferPoolEmptied,
 	} {
 		if strings.TrimSpace(limitation) == "" {

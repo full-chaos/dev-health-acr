@@ -17558,6 +17558,11 @@
         "presence": "required"
       },
       {
+        "key": "other_kind",
+        "type": "int",
+        "presence": "required"
+      },
+      {
         "key": "search_fallback",
         "type": "bool",
         "presence": "required"
@@ -17608,6 +17613,28 @@
       },
       {
         "key": "unresolved_by_kind",
+        "type": "count_map",
+        "presence": "required",
+        "closed_vocabulary": [
+          "organization",
+          "team",
+          "project",
+          "repository",
+          "work_item",
+          "pull_request",
+          "deployment",
+          "incident",
+          "document",
+          "decision",
+          "episode",
+          "metric",
+          "pull_request_review",
+          "ci_pipeline_run",
+          "work_item_ref"
+        ]
+      },
+      {
+        "key": "other_kind_by_kind",
         "type": "count_map",
         "presence": "required",
         "closed_vocabulary": [
