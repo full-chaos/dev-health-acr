@@ -6290,6 +6290,11 @@ var GraphCountCheckFinished = Event{
 		{Key: "sources_unknown", Type: FieldInt, Presence: PresenceRequired},
 		{Key: "kinds_compared", Type: FieldInt, Presence: PresenceRequired},
 		{Key: "gap_count", Type: FieldInt, Presence: PresenceRequired},
+		// days_compared (CHAOS-12649) is the number of (kind, UTC day of the rows'
+		// sync stamp) buckets whose source and graph counts were both read;
+		// day_gap_count the confirmed graph_below_source_on_day gaps among them.
+		{Key: "days_compared", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "day_gap_count", Type: FieldInt, Presence: PresenceRequired},
 		// relations_compared is the number of edge populations (relation type
 		// and arm) whose source and graph edge counts were both read;
 		// edge_gap_count the confirmed graph_edges_below_source gaps among

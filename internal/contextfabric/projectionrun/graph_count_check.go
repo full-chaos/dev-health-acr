@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -74,6 +75,11 @@ type GraphCountCheck struct {
 	KindsCompared  int
 	// Gaps counts the confirmed graph_below_source gaps this check reported.
 	Gaps int
+	// DaysCompared counts the (kind, UTC day of the sync stamp) buckets whose
+	// source and graph counts were both read; DayGaps the confirmed
+	// graph_below_source_on_day gaps among them (CHAOS-12649).
+	DaysCompared int
+	DayGaps      int
 	// Errors counts the source or graph count reads that failed this check, and
 	// every measurement the check could not make at all (a source or backend with
 	// node counts and no edge counts).
@@ -405,6 +411,71 @@ func (c *Coordinator) checkNodeCounts(ctx context.Context, orgID, hash string, g
 			if obs, ok := c.observer.(GraphCountObserver); ok {
 				obs.ObserveGraphBelowSource(GraphBelowSource{OrgID: orgID, Source: source, Kind: kind, SourceCount: sourceCount, GraphCount: graphCount, Tolerance: tolerance, At: c.now()})
 			}
+		}
+		c.checkDayCounts(ctx, orgID, hash, source, result)
+	}
+}
+
+// checkDayCounts (CHAOS-12649) compares, per stamped kind and per UTC day of the
+// rows' sync stamp, the source's rows with the graph's owned nodes. The walk loses
+// contiguous ranges of that stamp, so a lost range is a short day even when the
+// kind's total is inside its tolerance. The same tolerance and the same two-check
+// confirmation apply per day. A source without day counts is not day-checked; a
+// backend without them, beside a source that has them, is unmeasured.
+func (c *Coordinator) checkDayCounts(ctx context.Context, orgID, hash, source string, result *GraphCountCheck) {
+	counter, ok := c.sources[source].(contextfabric.ProjectionSourceDayCounts)
+	if !ok {
+		return
+	}
+	graph, ok := c.backend.(contextfabric.ProjectionGraphDayCounts)
+	if !ok {
+		result.Errors++
+		c.logger.WarnContext(ctx, "context_fabric: graph_count_unmeasured", "check", "graph_count_unmeasured", "scope", "day", "reason", "backend_no_day_counts",
+			"source", contextfabric.SanitizeLogAttr(source), "org_id_hash", contextfabric.SanitizeLogAttr(hash))
+		return
+	}
+	sourceDays, err := counter.ProjectionSourceDayCounts(ctx, orgID)
+	if err != nil {
+		result.Errors++
+		c.logger.WarnContext(ctx, "context_fabric: projection count check failed", "check", "graph_count", "stage", "source_day_count",
+			"source", contextfabric.SanitizeLogAttr(source), "org_id_hash", contextfabric.SanitizeLogAttr(hash), "failure_class", contextfabric.SanitizeLogAttr(classifyOutcomeError(err)))
+		return
+	}
+	kinds := make([]contextfabric.SubjectKind, 0, len(sourceDays))
+	for kind := range sourceDays {
+		kinds = append(kinds, kind)
+	}
+	sort.Slice(kinds, func(i, j int) bool { return kinds[i] < kinds[j] })
+	for _, kind := range kinds {
+		graphDays, err := graph.CountKindByDay(ctx, orgID, kind)
+		if err != nil {
+			result.Errors++
+			c.logger.WarnContext(ctx, "context_fabric: projection count check failed", "check", "graph_count", "stage", "graph_day_count",
+				"source", contextfabric.SanitizeLogAttr(source), "kind", contextfabric.SanitizeLogAttr(string(kind)), "org_id_hash", contextfabric.SanitizeLogAttr(hash),
+				"failure_class", contextfabric.SanitizeLogAttr(classifyOutcomeError(err)))
+			continue
+		}
+		days := make([]int64, 0, len(sourceDays[kind]))
+		for day := range sourceDays[kind] {
+			days = append(days, day)
+		}
+		sort.Slice(days, func(i, j int) bool { return days[i] < days[j] })
+		for _, day := range days {
+			sourceCount, graphCount := sourceDays[kind][day], graphDays[day]
+			result.DaysCompared++
+			tolerance := graphCountTolerance(sourceCount, graphCount)
+			gapKey := pairKey(orgID, source) + "\x00" + string(kind) + "\x00day\x00" + strconv.FormatInt(day, 10)
+			if sourceCount-graphCount <= tolerance {
+				c.graphCounts.clearGap(gapKey)
+				continue
+			}
+			if !c.graphCounts.confirmGap(gapKey) {
+				continue
+			}
+			c.logger.WarnContext(ctx, "context_fabric: graph_below_source_on_day", "check", "graph_below_source_on_day",
+				"source", contextfabric.SanitizeLogAttr(source), "kind", contextfabric.SanitizeLogAttr(string(kind)), "org_id_hash", contextfabric.SanitizeLogAttr(hash),
+				"day", time.Unix(day*24*60*60, 0).UTC().Format("2006-01-02"), "source_count", sourceCount, "graph_count", graphCount, "tolerance", tolerance)
+			result.DayGaps++
 		}
 	}
 }

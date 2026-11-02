@@ -39,6 +39,12 @@ type entityTable struct {
 	// proof; a producer added with no declaration, or with a stale one,
 	// fails that pin rather than going unasserted.
 	subjectKinds []contractsv1.ContextFabricSubjectKind
+	// stampsSyncedAt (CHAOS-12649) says the table pages on its rows' own
+	// last_synced, so a row's walk position is its sync stamp, and readTable
+	// writes it on each entity of a declared kind
+	// (contextfabric.ProjectionSyncedAtProperty). A pin requires the table's
+	// declared cursor expression to be that column.
+	stampsSyncedAt bool
 }
 
 // devhealthschema:not-a-production-replica this is the PRODUCER REGISTRY -- it pairs each table
@@ -61,10 +67,10 @@ type entityTable struct {
 // ClickHouse table -- it self-joins work_items on parent_id, a column
 // work_item_dependencies never carries, to project the PART_OF edge type.
 var entityTables = []entityTable{
-	{name: "repos", dimension: true, query: queryRepositories, subjectKinds: []contractsv1.ContextFabricSubjectKind{contractsv1.ContextFabricSubjectRepository}},
-	{name: "work_items", query: queryWorkItems, subjectKinds: []contractsv1.ContextFabricSubjectKind{contractsv1.ContextFabricSubjectWorkItem}},
-	{name: "git_pull_requests", query: queryPullRequests, subjectKinds: []contractsv1.ContextFabricSubjectKind{contractsv1.ContextFabricSubjectPullRequest}},
-	{name: "deployments", query: queryDeployments, subjectKinds: []contractsv1.ContextFabricSubjectKind{contractsv1.ContextFabricSubjectDeployment}},
+	{name: "repos", dimension: true, stampsSyncedAt: true, query: queryRepositories, subjectKinds: []contractsv1.ContextFabricSubjectKind{contractsv1.ContextFabricSubjectRepository}},
+	{name: "work_items", stampsSyncedAt: true, query: queryWorkItems, subjectKinds: []contractsv1.ContextFabricSubjectKind{contractsv1.ContextFabricSubjectWorkItem}},
+	{name: "git_pull_requests", stampsSyncedAt: true, query: queryPullRequests, subjectKinds: []contractsv1.ContextFabricSubjectKind{contractsv1.ContextFabricSubjectPullRequest}},
+	{name: "deployments", stampsSyncedAt: true, query: queryDeployments, subjectKinds: []contractsv1.ContextFabricSubjectKind{contractsv1.ContextFabricSubjectDeployment}},
 	{name: "operational_incidents", query: queryIncidents, subjectKinds: []contractsv1.ContextFabricSubjectKind{contractsv1.ContextFabricSubjectIncident}},
 	{name: "work_item_dependencies", query: queryWorkItemDependencies},
 	{name: "work_items_hierarchy", query: queryWorkItemHierarchy},
@@ -75,8 +81,8 @@ var entityTables = []entityTable{
 	// past the reach of the marker on the declaration above. Still a
 	// table-to-query pairing that mirrors no column type, engine or sort key.
 	{name: "work_graph_deployment_incident_edges", query: queryDeploymentIncidentEdges},
-	{name: "git_pull_request_reviews", query: queryPullRequestReviews, subjectKinds: []contractsv1.ContextFabricSubjectKind{contractsv1.ContextFabricSubjectPullRequestReview}},
-	{name: "ci_pipeline_runs", query: queryCIRuns, subjectKinds: []contractsv1.ContextFabricSubjectKind{contractsv1.ContextFabricSubjectCIRun}},
+	{name: "git_pull_request_reviews", stampsSyncedAt: true, query: queryPullRequestReviews, subjectKinds: []contractsv1.ContextFabricSubjectKind{contractsv1.ContextFabricSubjectPullRequestReview}},
+	{name: "ci_pipeline_runs", stampsSyncedAt: true, query: queryCIRuns, subjectKinds: []contractsv1.ContextFabricSubjectKind{contractsv1.ContextFabricSubjectCIRun}},
 }
 
 // ProjectedSubjectKinds returns, sorted, every entity subject kind the

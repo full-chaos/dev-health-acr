@@ -75,6 +75,14 @@ type countingBackend struct {
 	// (CHAOS-12649); markerErr fails that read.
 	unmarked  bool
 	markerErr error
+
+	// days is the graph's owned nodes per kind and UTC day (CHAOS-12649).
+	days    map[contextfabric.SubjectKind]map[int64]int64
+	daysErr error
+}
+
+func (b *countingBackend) CountKindByDay(_ context.Context, _ string, kind contextfabric.SubjectKind) (map[int64]int64, error) {
+	return b.days[kind], b.daysErr
 }
 
 func (b *countingBackend) OwnedCountsKnown(context.Context, string, string) (bool, error) {

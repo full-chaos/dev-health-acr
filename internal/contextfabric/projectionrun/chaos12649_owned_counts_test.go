@@ -1,6 +1,7 @@
 package projectionrun_test
 
 import (
+	"context"
 	"errors"
 	"log/slog"
 	"strings"
@@ -92,4 +93,141 @@ func TestTheFinishedLineSaysUnknown(t *testing.T) {
 	if !strings.Contains(got, `"outcome":"unknown"`) || !strings.Contains(got, `"sources_unknown":1`) {
 		t.Fatalf("finished line = %s, want outcome unknown and sources_unknown 1", got)
 	}
+}
+
+// daySource is a counting source that also counts its rows per UTC day of their
+// sync stamp (CHAOS-12649).
+type daySource struct {
+	*countingSource
+	days map[contextfabric.SubjectKind]map[int64]int64
+	err  error
+}
+
+func (s daySource) ProjectionSourceDayCounts(context.Context, string) (map[contextfabric.SubjectKind]map[int64]int64, error) {
+	return s.days, s.err
+}
+
+const (
+	day20387 int64 = 20387 // 2025-10-26
+	day20388 int64 = 20388 // 2025-10-27
+)
+
+func newDayHarness(t *testing.T, sourceDays, graphDays map[contextfabric.SubjectKind]map[int64]int64, sourceErr, graphErr error) *countHarness {
+	t.Helper()
+	kind := contractsv1.ContextFabricSubjectCIRun
+	h := buildCountHarness(t,
+		map[contextfabric.SubjectKind]int64{kind: 1000},
+		map[contextfabric.SubjectKind]int64{kind: 997},
+		nil, nil, time.Minute,
+		func(s *countingSource) contextfabric.ProjectionSource {
+			return daySource{countingSource: s, days: sourceDays, err: sourceErr}
+		}, nil)
+	h.backend.days, h.backend.daysErr = graphDays, graphErr
+	return h
+}
+
+// The askdev-1 shape: the kind's total is inside its tolerance (997 of 1000),
+// but one day of sync stamps is missing from the graph. Today's check passes; the
+// day check warns, with the day, the kind and both counts, at the second check.
+func TestAShortDayInsideTheKindsToleranceWarnsWithTheDay(t *testing.T) {
+	t.Parallel()
+	kind := contractsv1.ContextFabricSubjectCIRun
+	h := newDayHarness(t,
+		map[contextfabric.SubjectKind]map[int64]int64{kind: {day20387: 997, day20388: 3}},
+		map[contextfabric.SubjectKind]map[int64]int64{kind: {day20387: 997}},
+		nil, nil)
+	h.run(testStart)
+	if strings.Contains(h.log.String(), "graph_below_source_on_day") {
+		t.Fatal("a short day seen once may be rows in flight and must not warn yet")
+	}
+	h.run(testStart.Add(time.Minute))
+	logged := h.log.String()
+	if strings.Contains(logged, `"check":"graph_below_source"`) {
+		t.Fatalf("the kind's total is inside its tolerance, so the total check must stay silent:\n%s", logged)
+	}
+	for _, want := range []string{`"check":"graph_below_source_on_day"`, `"kind":"` + string(kind) + `"`, `"day":"2025-10-27"`, `"source_count":3`, `"graph_count":0`, `"tolerance":0`} {
+		if !strings.Contains(logged, want) {
+			t.Fatalf("missing %s in:\n%s", want, logged)
+		}
+	}
+	check := lastCheck(t, h)
+	if check.DayGaps != 1 || check.DaysCompared != 2 || check.Outcome != projectionrun.GraphCountCheckCompleted {
+		t.Fatalf("check = %+v, want one day gap of two days compared, completed", check)
+	}
+}
+
+func TestDaysInStepDoNotWarn(t *testing.T) {
+	t.Parallel()
+	kind := contractsv1.ContextFabricSubjectCIRun
+	days := map[contextfabric.SubjectKind]map[int64]int64{kind: {day20387: 997, day20388: 3}}
+	h := newDayHarness(t, days, days, nil, nil)
+	h.run(testStart)
+	h.run(testStart.Add(time.Minute))
+	if strings.Contains(h.log.String(), "graph_below_source_on_day") {
+		t.Fatalf("days in step warned:\n%s", h.log.String())
+	}
+	if check := lastCheck(t, h); check.DaysCompared != 2 || check.DayGaps != 0 {
+		t.Fatalf("check = %+v, want two days compared and no gap", check)
+	}
+}
+
+func TestAnUnreadableDayCountFailsTheCheck(t *testing.T) {
+	t.Parallel()
+	kind := contractsv1.ContextFabricSubjectCIRun
+	days := map[contextfabric.SubjectKind]map[int64]int64{kind: {day20387: 1000}}
+	for name, tc := range map[string]struct {
+		sourceErr, graphErr error
+		stage               string
+	}{
+		"source": {sourceErr: errors.New("clickhouse down"), stage: `"stage":"source_day_count"`},
+		"graph":  {graphErr: errors.New("falkor down"), stage: `"stage":"graph_day_count"`},
+	} {
+		h := newDayHarness(t, days, days, tc.sourceErr, tc.graphErr)
+		h.run(testStart)
+		check := lastCheck(t, h)
+		if check.Outcome != projectionrun.GraphCountCheckFailed || check.Errors != 1 || !strings.Contains(h.log.String(), tc.stage) {
+			t.Fatalf("%s: check = %+v, want failed with %s:\n%s", name, check, tc.stage, h.log.String())
+		}
+	}
+}
+
+// A backend that counts nodes and not days, beside a source that counts days,
+// cannot make a measurement the check owes: unmeasured, and the check fails.
+func TestABackendWithoutDayCountsIsUnmeasured(t *testing.T) {
+	t.Parallel()
+	kind := contractsv1.ContextFabricSubjectCIRun
+	days := map[contextfabric.SubjectKind]map[int64]int64{kind: {day20387: 1000}}
+	h := buildCountHarness(t,
+		map[contextfabric.SubjectKind]int64{kind: 1000},
+		map[contextfabric.SubjectKind]int64{kind: 1000},
+		nil, nil, time.Minute,
+		func(s *countingSource) contextfabric.ProjectionSource {
+			return daySource{countingSource: s, days: days}
+		},
+		func(b *countingBackend) contextfabric.ProjectionBackend {
+			return nodeAndEdgeBackend{fakeBackend: b.fakeBackend, inner: b}
+		})
+	h.run(testStart)
+	check := lastCheck(t, h)
+	if check.Outcome != projectionrun.GraphCountCheckFailed || !strings.Contains(h.log.String(), `"reason":"backend_no_day_counts"`) {
+		t.Fatalf("check = %+v, want failed with backend_no_day_counts:\n%s", check, h.log.String())
+	}
+}
+
+// nodeAndEdgeBackend counts nodes and edges, and not days.
+type nodeAndEdgeBackend struct {
+	*fakeBackend
+	inner *countingBackend
+}
+
+func (b nodeAndEdgeBackend) CountKind(ctx context.Context, org string, kind contextfabric.SubjectKind) (int64, error) {
+	return b.inner.CountKind(ctx, org, kind)
+}
+
+func (b nodeAndEdgeBackend) OwnedCountsKnown(ctx context.Context, org, source string) (bool, error) {
+	return b.inner.OwnedCountsKnown(ctx, org, source)
+}
+
+func (b nodeAndEdgeBackend) CountEdges(ctx context.Context, org string, key contextfabric.EdgeCountKey) (int64, error) {
+	return b.inner.CountEdges(ctx, org, key)
 }

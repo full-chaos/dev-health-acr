@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
+	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 )
 
 // CHAOS-12649: the owned writer marks the node it writes; a stub a relationship
@@ -92,5 +93,26 @@ func TestOwnedCountsKnownReadsTheWatermarkMarker(t *testing.T) {
 		if len(captured) != 1 || !strings.Contains(captured[0], labelWatermark) || !strings.Contains(captured[0], "w."+watermarkOwnedMarkedWalk+" = true") {
 			t.Fatalf("OwnedCountsKnown does not read the watermark marker: %v", captured)
 		}
+	}
+}
+
+func TestCountKindByDayCountsMarkedStampedNodesPerDay(t *testing.T) {
+	var captured []string
+	var params map[string]interface{}
+	fake := &fakeConn{queryFunc: func(_ context.Context, _, q string, p map[string]interface{}, _ bool) ([]row, error) {
+		captured, params = append(captured, q), p
+		return []row{{"day": int64(20387), "total": int64(997)}, {"day": float64(20388), "total": int64(3)}}, nil
+	}}
+	adapter := newFakeAdapter(t, fake)
+	days, err := adapter.CountKindByDay(context.Background(), "org-1", contextfabric.SubjectKind(contractsv1.ContextFabricSubjectCIRun))
+	if err != nil || days[20387] != 997 || days[20388] != 3 || len(days) != 2 {
+		t.Fatalf("CountKindByDay = %v, %v; want {20387: 997, 20388: 3}", days, err)
+	}
+	stamp := "n." + propPropertyPrefix + safeName(contextfabric.ProjectionSyncedAtProperty)
+	if len(captured) != 1 || !strings.Contains(captured[0], "n."+propProjectionOwned+" = true") || !strings.Contains(captured[0], stamp+" IS NOT NULL") || !strings.Contains(captured[0], "toInteger("+stamp+" / $day)") {
+		t.Fatalf("CountKindByDay does not count owned, stamped nodes per day of the stamp: %v", captured)
+	}
+	if params["day"] != nanosPerDay {
+		t.Fatalf("day bucket = %v, want %d nanoseconds", params["day"], nanosPerDay)
 	}
 }

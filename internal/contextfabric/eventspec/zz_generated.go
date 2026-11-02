@@ -13020,6 +13020,8 @@ type GraphCountCheckFinishedFields struct {
 	SourcesUnknown    int
 	KindsCompared     int
 	GapCount          int
+	DaysCompared      int
+	DayGapCount       int
 	RelationsCompared int
 	EdgeGapCount      int
 	RelationsDeferred int
@@ -13038,7 +13040,7 @@ type GraphCountCheckFinishedFields struct {
 
 // NewGraphCountCheckFinishedFields is the generated constructor for GraphCountCheckFinishedFields -- every
 // field GraphCountCheckFinished.Fields declares is a required parameter.
-func NewGraphCountCheckFinishedFields(orgIDHash string, instance string, pass int, outcome string, sourcesChecked int, sourcesUnknown int, kindsCompared int, gapCount int, relationsCompared int, edgeGapCount int, relationsDeferred int, errorCount int, durationMs int) GraphCountCheckFinishedFields {
+func NewGraphCountCheckFinishedFields(orgIDHash string, instance string, pass int, outcome string, sourcesChecked int, sourcesUnknown int, kindsCompared int, gapCount int, daysCompared int, dayGapCount int, relationsCompared int, edgeGapCount int, relationsDeferred int, errorCount int, durationMs int) GraphCountCheckFinishedFields {
 	return GraphCountCheckFinishedFields{
 		OrgIDHash:         orgIDHash,
 		Instance:          instance,
@@ -13048,6 +13050,8 @@ func NewGraphCountCheckFinishedFields(orgIDHash string, instance string, pass in
 		SourcesUnknown:    sourcesUnknown,
 		KindsCompared:     kindsCompared,
 		GapCount:          gapCount,
+		DaysCompared:      daysCompared,
+		DayGapCount:       dayGapCount,
 		RelationsCompared: relationsCompared,
 		EdgeGapCount:      edgeGapCount,
 		RelationsDeferred: relationsDeferred,
@@ -13078,6 +13082,8 @@ func (f GraphCountCheckFinishedFields) SlogArgs() []any {
 		"sources_unknown", f.SourcesUnknown,
 		"kinds_compared", f.KindsCompared,
 		"gap_count", f.GapCount,
+		"days_compared", f.DaysCompared,
+		"day_gap_count", f.DayGapCount,
 		"relations_compared", f.RelationsCompared,
 		"edge_gap_count", f.EdgeGapCount,
 		"relations_deferred", f.RelationsDeferred,

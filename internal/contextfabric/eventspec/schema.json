@@ -18595,6 +18595,16 @@
         "presence": "required"
       },
       {
+        "key": "days_compared",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "day_gap_count",
+        "type": "int",
+        "presence": "required"
+      },
+      {
         "key": "relations_compared",
         "type": "int",
         "presence": "required"
