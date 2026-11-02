@@ -38,9 +38,11 @@ func newQuadrantFixture(teams []quadrantTeam) *quadrantFixture {
 	y := ContextFabricRenderSeries{Key: "delivery_units_30d", Label: yWord}
 	for index, team := range teams {
 		day, churn, units := team.day, team.churn, team.units
+		// The row's cells are their own copies, so a case can change a claim's
+		// value without changing the row it carries.
 		row := ContextFabricClaimedFactRow{Fields: map[string]ContextFabricScalarValue{
 			"as_of_day": {String: &day}, "identity_count": {Integer: int64Ptr(3)},
-			"churn_loc_30d": {Integer: &churn}, "delivery_units_30d": {Integer: &units},
+			"churn_loc_30d": {Integer: int64Ptr(churn)}, "delivery_units_30d": {Integer: int64Ptr(units)},
 		}}
 		subject := ContextFabricSubjectRef{Kind: ContextFabricSubjectTeam, CanonicalID: team.id, Label: team.label}
 		for _, measure := range []struct {
@@ -74,6 +76,16 @@ func (f *quadrantFixture) validate() error {
 	return validateRenderShapes([]ContextFabricRenderShape{f.shape}, renderShapeSourcesFromResult(f.result()))
 }
 
+// rowOnDay is a copy of a row that speaks for another day.
+func rowOnDay(row ContextFabricClaimedFactRow, day string) ContextFabricClaimedFactRow {
+	fields := make(map[string]ContextFabricScalarValue, len(row.Fields))
+	for name, cell := range row.Fields {
+		fields[name] = cell
+	}
+	fields["as_of_day"] = ContextFabricScalarValue{String: &day}
+	return ContextFabricClaimedFactRow{Fields: fields}
+}
+
 func quadrantTeams() []quadrantTeam {
 	return []quadrantTeam{
 		{"team:platform", "Platform", "2026-11-02", 2400, 31},
@@ -87,6 +99,18 @@ func TestAQuadrantOfTeamsOnOneDayIsAccepted(t *testing.T) {
 	f := newQuadrantFixture(quadrantTeams())
 	if err := f.validate(); err != nil {
 		t.Fatalf("three teams on one day, raw values, one claim each: %v", err)
+	}
+}
+
+// A team with no label is named by its canonical id, the word the answer has
+// for it.
+func TestAQuadrantNamesATeamWithNoLabelByItsID(t *testing.T) {
+	t.Parallel()
+	f := newQuadrantFixture(quadrantTeams())
+	f.claims[4].Subject.Label, f.claims[5].Subject.Label = "", ""
+	f.shape.Series[0].Points[2].Label, f.shape.Series[1].Points[2].Label = "team:mobile", "team:mobile"
+	if err := f.validate(); err != nil {
+		t.Fatalf("a team with no label is its canonical id: %v", err)
 	}
 }
 
@@ -134,16 +158,20 @@ func TestAQuadrantIsRefused(t *testing.T) {
 		"a project's claims": {func(f *quadrantFixture) {
 			f.claims[0].Subject.Kind, f.claims[1].Subject.Kind = ContextFabricSubjectProject, ContextFabricSubjectProject
 		}, "a quadrant places teams"},
-		"x and y of two teams": {func(f *quadrantFixture) {
+		// Two teams can share a word; the x and y of one point still name one.
+		"x and y of two teams that share a word": {func(f *quadrantFixture) {
+			f.claims[2].Subject.Label, f.claims[3].Subject.Label = "Platform", "Platform"
 			f.shape.Series[1].Points[0].Source.ClaimID = "claim_quadrant_1_delivery_units_30d"
 			f.shape.Series[1].Points[0].Value = 12
 		}, "claims about two teams"},
+		// A label is the team's word and labels are unique within a series, so
+		// one team cannot be two points.
 		"one team twice": {func(f *quadrantFixture) {
-			f.shape.Series[0].Points[1].Source.ClaimID = "claim_quadrant_0_churn_loc_30d"
-			f.shape.Series[0].Points[1].Value = 2400
-			f.shape.Series[1].Points[1].Source.ClaimID = "claim_quadrant_0_delivery_units_30d"
-			f.shape.Series[1].Points[1].Value = 31
-		}, "is already a point"},
+			for series, field := range []string{"churn_loc_30d", "delivery_units_30d"} {
+				f.shape.Series[series].Points[1] = f.shape.Series[series].Points[0]
+				f.shape.Series[series].Points[1].Source.ClaimID = "claim_quadrant_0_" + field
+			}
+		}, "must be unique"},
 		"a negative value": {func(f *quadrantFixture) {
 			*f.claims[2].Value.Integer = -1
 			f.shape.Series[0].Points[1].Value = -1
@@ -160,6 +188,26 @@ func TestAQuadrantIsRefused(t *testing.T) {
 		"two rows": {func(f *quadrantFixture) {
 			f.claims[0].Rows = append(f.claims[0].Rows, f.claims[0].Rows[0])
 		}, "no area_breakdown row"},
+		// Codex r1 on #1953 (executed): the value restated a scalar, and nothing
+		// bound it to the raw cell of the row the claim carries.
+		"a number cell": {func(f *quadrantFixture) {
+			value := 2400.0
+			f.claims[0].Rows[0].Fields["churn_loc_30d"] = ContextFabricScalarValue{Number: &value}
+		}, "the raw cell of its row"},
+		"a value that is not the row's": {func(f *quadrantFixture) {
+			*f.claims[0].Value.Integer = 800
+			f.shape.Series[0].Points[0].Value = 800
+		}, "the raw cell of its row"},
+		"a table that does not measure the field": {func(f *quadrantFixture) {
+			f.claims[0].Table = landscapeAreaTable()
+			f.claims[0].Table.Measures = []string{"identity_count", "delivery_units_30d"}
+		}, "the raw cell of its row"},
+		// Codex r1 on #1953 (executed): the label named someone other than the
+		// team the claims are about.
+		"a label that is not the team's": {func(f *quadrantFixture) {
+			f.shape.Series[0].Points[0].Label = "Alice"
+			f.shape.Series[1].Points[0].Label = "Alice"
+		}, "is the team's word"},
 		"an empty day": {func(f *quadrantFixture) {
 			day := ""
 			f.claims[0].Rows = []ContextFabricClaimedFactRow{{Fields: map[string]ContextFabricScalarValue{"as_of_day": {String: &day}}}}
@@ -168,14 +216,12 @@ func TestAQuadrantIsRefused(t *testing.T) {
 			f.claims[0].Rows = []ContextFabricClaimedFactRow{{Fields: map[string]ContextFabricScalarValue{"identity_count": {Integer: int64Ptr(3)}}}}
 		}, "no area_breakdown row"},
 		"a team on another day": {func(f *quadrantFixture) {
-			day := "2026-10-07"
 			for _, index := range []int{4, 5} {
-				f.claims[index].Rows = []ContextFabricClaimedFactRow{{Fields: map[string]ContextFabricScalarValue{"as_of_day": {String: &day}}}}
+				f.claims[index].Rows = []ContextFabricClaimedFactRow{rowOnDay(f.claims[index].Rows[0], "2026-10-07")}
 			}
 		}, "teams measured on one day"},
 		"x and y of one team on two days": {func(f *quadrantFixture) {
-			day := "2026-10-07"
-			f.claims[1].Rows = []ContextFabricClaimedFactRow{{Fields: map[string]ContextFabricScalarValue{"as_of_day": {String: &day}}}}
+			f.claims[1].Rows = []ContextFabricClaimedFactRow{rowOnDay(f.claims[1].Rows[0], "2026-10-07")}
 		}, "teams measured on one day"},
 	} {
 		t.Run(name, func(t *testing.T) {

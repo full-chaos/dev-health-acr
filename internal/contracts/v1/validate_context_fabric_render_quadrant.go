@@ -15,8 +15,14 @@ import "fmt"
 //   - the same point labels in the same order in both series, at least 2 of them:
 //     a point is one team;
 //   - every point cites a claimed_fact_value of its series' field, on the
-//     landscape kind (the resolver refuses a derived one), about a team; the x and y of one label cite
-//     claims about one team, and no team is two points;
+//     landscape kind (the resolver refuses a derived one), about a team, and its
+//     value is the raw cell of that field in the claim's row, which the table
+//     declares as a measure: a scalar alone could restate any number;
+//   - a point's label is the team's word (its label, or its canonical id when it
+//     has none), so a chart never shows a team's numbers under another name;
+//   - the x and y of one label cite claims about one team, even when two teams
+//     share a word. No team is two points: its label is its word, and labels are
+//     unique within a series;
 //   - every cited claim carries its fact's area_breakdown row, and all of them
 //     name one as_of_day: a quadrant of different days places teams that were
 //     never measured together;
@@ -47,7 +53,6 @@ func validateQuadrantShape(shape ContextFabricRenderShape, sources renderShapeSo
 		return fmt.Errorf("render shape %q: a quadrant places 2 or more teams, each with an x and a y", shape.ShapeID)
 	}
 	day := ""
-	teams := make(map[string]struct{}, len(x.Points))
 	for index := range x.Points {
 		xPoint, yPoint := x.Points[index], y.Points[index]
 		if xPoint.Label != yPoint.Label {
@@ -64,10 +69,6 @@ func validateQuadrantShape(shape ContextFabricRenderShape, sources renderShapeSo
 		if xTeam != yTeam {
 			return fmt.Errorf("render shape %q point %q: its x and y cite claims about two teams", shape.ShapeID, xPoint.Label)
 		}
-		if _, repeated := teams[xTeam]; repeated {
-			return fmt.Errorf("render shape %q point %q: team %q is already a point", shape.ShapeID, xPoint.Label, xTeam)
-		}
-		teams[xTeam] = struct{}{}
 		for _, pointDay := range []string{xDay, yDay} {
 			if day == "" {
 				day = pointDay
@@ -100,26 +101,51 @@ func quadrantPointClaim(shapeID string, point ContextFabricRenderPoint, field st
 	if point.Value < 0 {
 		return "", "", fmt.Errorf("render shape %q point %q: a landscape measure is 0 or more", shapeID, point.Label)
 	}
-	day, dated := sources.landscapeDays[point.Source.ClaimID]
+	row, dated := sources.landscapeRows[point.Source.ClaimID]
 	if !dated {
 		return "", "", fmt.Errorf("render shape %q point %q: its claim carries no %s row to say which day it speaks for", shapeID, point.Label, ContextFabricRenderLandscapeTableField)
 	}
-	return claim.subject.CanonicalID, day, nil
+	if raw, measured := row.measures[field]; !measured || raw != point.Value {
+		return "", "", fmt.Errorf("render shape %q point %q: a quadrant value is the raw cell of its row's declared measure %q", shapeID, point.Label, field)
+	}
+	word := claim.subject.Label
+	if word == "" {
+		word = claim.subject.CanonicalID
+	}
+	if point.Label != word {
+		return "", "", fmt.Errorf("render shape %q point %q: a quadrant point's label is the team's word, %q", shapeID, point.Label, word)
+	}
+	return claim.subject.CanonicalID, row.day, nil
 }
 
-// landscapeRowDay is the as_of_day of a claim's one area_breakdown row, when the
-// claim carries that declared table and exactly one row of it. The point's own
-// check holds the claim to the landscape kind.
-func landscapeRowDay(table *ContextFabricClaimedFactTable, rows []ContextFabricClaimedFactRow) (string, bool) {
+// landscapeRow is one claim's area_breakdown row as a quadrant reads it: the day
+// it speaks for, and the numeric cells of the measures its table declares.
+type landscapeRow struct {
+	day      string
+	measures map[string]float64
+}
+
+// landscapeAreaRow reads a claim's one area_breakdown row, when the claim carries
+// that declared table and exactly one row of it. The point's own check holds the
+// claim to the landscape kind.
+func landscapeAreaRow(table *ContextFabricClaimedFactTable, rows []ContextFabricClaimedFactRow) (landscapeRow, bool) {
 	if table == nil || table.Field != ContextFabricRenderLandscapeTableField || len(rows) != 1 {
-		return "", false
+		return landscapeRow{}, false
 	}
 	if len(table.Key) != 1 || table.Key[0] != ContextFabricRenderLandscapeDayField {
-		return "", false
+		return landscapeRow{}, false
 	}
 	day := rows[0].Fields[ContextFabricRenderLandscapeDayField].String
 	if day == nil || *day == "" {
-		return "", false
+		return landscapeRow{}, false
 	}
-	return *day, true
+	row := landscapeRow{day: *day, measures: map[string]float64{}}
+	// The landscape measures are counts, so a cell is an integer; any other cell
+	// gives no measure, and a point citing it is refused.
+	for _, measure := range table.Measures {
+		if cell := rows[0].Fields[measure].Integer; cell != nil {
+			row.measures[measure] = float64(*cell)
+		}
+	}
+	return row, true
 }
