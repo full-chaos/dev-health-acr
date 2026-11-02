@@ -51,7 +51,7 @@ func withReaderSubjectText(result InvestigationResult) InvestigationResult {
 			continue
 		}
 		summary := RepairRawEdgeFact(driver.Summary, string(edge.Type), edge.From, edge.To)
-		title := readerDriverTitle(driver.Title, edge.To)
+		title := readerDriverTitle(driver.Title, string(edge.Type), edge.To)
 		if summary == driver.Summary && title == driver.Title {
 			continue
 		}
@@ -70,18 +70,31 @@ func withReaderSubjectText(result InvestigationResult) InvestigationResult {
 }
 
 // readerDriverTitle repairs a graph driver's title, which graphrank composes as the
-// relationship's words, ": " and the To label. Only a title that ends with the To
-// endpoint's own raw id, while that is its label, changes.
-func readerDriverTitle(title string, to SubjectRef) string {
+// relationship's words, ": " and the To label (graphrank.relationTitle). Only that
+// whole composition changes: the relationship's own title words, ": " and the To
+// endpoint's raw id while that is its label. Any other title stands (codex r4).
+func readerDriverTitle(title, relation string, to SubjectRef) string {
 	raw, ok := RawSubjectLabel(to.Kind, to.CanonicalID)
 	if !ok || to.Label != raw {
 		return title
 	}
-	head, found := strings.CutSuffix(title, ": "+raw)
-	if !found || head == "" {
+	head := RelationTitleWords(relation)
+	if head == "" || title != head+": "+raw {
 		return title
 	}
 	return head + ": " + SubjectReadableLabel(to)
+}
+
+// RelationTitleWords are a relationship type's words in a graph driver's title:
+// lower case, '_' as a space, each word with a capital first letter. graphrank's
+// relationTitle composes the title with it, so the serve repair reads the same
+// words the writer wrote.
+func RelationTitleWords(relation string) string {
+	words := strings.Fields(strings.ToLower(strings.ReplaceAll(relation, "_", " ")))
+	for index, word := range words {
+		words[index] = strings.ToUpper(word[:1]) + word[1:]
+	}
+	return strings.Join(words, " ")
 }
 
 var subjectRefType = reflect.TypeOf(SubjectRef{})

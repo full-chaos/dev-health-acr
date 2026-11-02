@@ -670,12 +670,5 @@ func NamedByQuestion(relationship string, from contextfabric.SubjectKind, requir
 }
 
 func relationTitle(name, target string) string {
-	words := strings.Fields(strings.ToLower(strings.ReplaceAll(NormalizeRelation(name), "_", " ")))
-	for index, word := range words {
-		if word == "" {
-			continue
-		}
-		words[index] = strings.ToUpper(word[:1]) + word[1:]
-	}
-	return strings.Join(words, " ") + ": " + target
+	return contextfabric.RelationTitleWords(NormalizeRelation(name)) + ": " + target
 }
