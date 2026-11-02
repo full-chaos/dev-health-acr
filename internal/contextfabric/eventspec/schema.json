@@ -9902,6 +9902,11 @@
         "presence": "required"
       },
       {
+        "key": "render_shape_tables_cadence_withheld",
+        "type": "int",
+        "presence": "required"
+      },
+      {
         "key": "render_shape_accounting",
         "type": "string",
         "presence": "required",

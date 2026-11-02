@@ -279,6 +279,17 @@ func init() {
 			exhaustive: true,
 		},
 		outputVocabulary{
+			// CHAOS-11985: the expected spacing of a time_series table's rows.
+			// Closed: a consumer breaks a line only on a cadence it knows.
+			name:  "ClaimedFactTable.cadence",
+			kind:  vocabFrozen,
+			why:   "protocol",
+			sites: []string{"ClaimedFactTable.cadence", "ProjectedFactTable.cadence"},
+			// schema: "day"
+			goSet:      []string{string(contractsv1.ContextFabricFactTableCadenceDay)},
+			exhaustive: true,
+		},
+		outputVocabulary{
 			name: "ProjectionBudget.cohort_member_selection_basis",
 			kind: vocabFrozen,
 			why:  "protocol",
