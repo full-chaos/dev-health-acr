@@ -524,34 +524,30 @@ func aKeyWhosePrefixIsOnlyOutsideReadsLikeAWord(t *testing.T, build grantedItemW
 }
 
 // everyProviderKeyCommitsThroughTheGate: one key of each tracker binds a handle
-// and commits, on the real principal shape. Linear and Jira write KEY-N with no
-// repository and reach a restricted caller through a native pull request link.
-// GitHub and GitLab write their repository reference on a repository-owned row.
-//
-// For a restricted caller a repository-owned row is outside the work item census
-// and the prefix read alike: both read the library's link arm, and that arm takes
-// repository-less rows only (CHAOS-12561). So those two commit here for an
-// organization-wide caller, and for a restricted caller their reference reads like
-// a word: no handle, no round.
+// and commits, on the real principal shape, for a restricted and an
+// organization-wide caller. Linear and Jira write KEY-N with no repository and
+// reach a restricted caller through a native pull request link. GitHub and GitLab
+// write their repository reference on a repository-owned row, which the census
+// and the prefix read admit by its own repository, as the node gate does
+// (CHAOS-12561).
 func everyProviderKeyCommitsThroughTheGate(t *testing.T, build grantedItemWorldBuilder) {
 	cases := []struct {
-		provider      string
-		repositoryRow bool
-		item          func(w grantedItemWorld) (linkItem, issueLink)
+		provider string
+		item     func(w grantedItemWorld) (linkItem, issueLink)
 	}{
-		{"linear", false, func(w grantedItemWorld) (linkItem, issueLink) {
+		{"linear", func(w grantedItemWorld) (linkItem, issueLink) {
 			i := linkItem{id: "linear:ENG-5", provider: "linear"}
 			return i, issueLink{i.id, "native", w.insideGitHub}
 		}},
-		{"jira", false, func(w grantedItemWorld) (linkItem, issueLink) {
+		{"jira", func(w grantedItemWorld) (linkItem, issueLink) {
 			i := linkItem{id: "jira:OPS-7", provider: "jira"}
 			return i, issueLink{i.id, "native", w.insideGitLab}
 		}},
-		{"github", true, func(w grantedItemWorld) (linkItem, issueLink) {
+		{"github", func(w grantedItemWorld) (linkItem, issueLink) {
 			i := linkItem{id: "gh:" + w.insideGitHub.slug + "#7", provider: "github", repository: w.insideGitHub}
 			return i, issueLink{i.id, "native", w.insideGitHub}
 		}},
-		{"gitlab", true, func(w grantedItemWorld) (linkItem, issueLink) {
+		{"gitlab", func(w grantedItemWorld) (linkItem, issueLink) {
 			i := linkItem{id: "gitlab:" + w.insideGitLab.slug + "#9", provider: "gitlab", repository: w.insideGitLab}
 			return i, issueLink{i.id, "native", w.insideGitLab}
 		}},
@@ -571,12 +567,6 @@ func everyProviderKeyCommitsThroughTheGate(t *testing.T, build grantedItemWorldB
 				}
 				turn := observeLinkTurn(t, world)
 				rounds := (&grantTracer{events: turn.trace}).stage("evidence_round")
-				if restricted && tc.repositoryRow {
-					if len(rounds) != 0 && rounds[0].ShadowHandleGrammarBound {
-						t.Fatalf("%s: the reference bound a handle the census cannot count (CHAOS-12561): %+v", key, rounds)
-					}
-					return
-				}
 				if len(rounds) != 1 || !rounds[0].ShadowHandleGrammarBound {
 					t.Fatalf("%s: evidence_round = %+v, want one round on the bound handle", key, rounds)
 				}
@@ -587,6 +577,89 @@ func everyProviderKeyCommitsThroughTheGate(t *testing.T, build grantedItemWorldB
 			})
 		}
 	}
+}
+
+// aRepositoryOwnedItemCountsByItsOwnRepository (CHAOS-12561): a GitHub or GitLab
+// issue sits on its own repository's row. Inside the grant it counts with no link
+// at all, as the node gate admits it by that repository. Outside the grant it never
+// counts, even with a native link to a pull request inside: its own repository
+// decides, and the turn is the same as with no such issue. One world: each case
+// asks about its own key, so the cases do not see each other's rows.
+func aRepositoryOwnedItemCountsByItsOwnRepository(t *testing.T, build grantedItemWorldBuilder) {
+	world := build(t, "owned by repository")
+	owned := func(repository grantRepository, number string) linkItem {
+		return linkItem{id: providerPrefix(repository) + repository.slug + "#" + number, provider: repository.provider, repository: repository}
+	}
+	for _, repository := range []grantRepository{world.insideGitHub, world.insideGitLab} {
+		item := owned(repository, "7")
+		world.addItem(t, item)
+		_, world.key, _ = strings.Cut(item.id, ":")
+		turn := observeLinkTurn(t, world)
+		if got := roundOutcome(t, turn); got != string(graphrank.ShadowWouldCommit) {
+			t.Fatalf("%s inside, no link: round = %q, want would_commit", repository.slug, got)
+		}
+		if len(turn.resolution.Committed) != 1 || turn.resolution.Committed[0].CanonicalID != world.canonicalID(t, item) {
+			t.Fatalf("%s inside, no link: committed = %+v, want %s", repository.slug, turn.resolution.Committed, item.id)
+		}
+	}
+	for outside, link := range map[grantRepository]grantRepository{world.outsideGitHub: world.insideGitHub, world.outsideGitLab: world.insideGitLab} {
+		item := owned(outside, "8")
+		_, world.key, _ = strings.Cut(item.id, ":")
+		before := observeLinkTurn(t, world)
+		world.addItem(t, item)
+		world.addLink(t, issueLink{item.id, "native", link})
+		after := observeLinkTurn(t, world)
+		if !reflect.DeepEqual(before.resolution, after.resolution) || !reflect.DeepEqual(before.offers, after.offers) || !sameTrace(before.trace, after.trace) {
+			t.Fatalf("%s outside, linked inside: the issue changed the turn:\nbefore %+v %+v\nafter  %+v %+v", outside.slug, before.resolution, before.trace, after.resolution, after.trace)
+		}
+		if len(after.resolution.Committed) != 0 {
+			t.Fatalf("%s outside, linked inside: committed = %+v, want none", outside.slug, after.resolution.Committed)
+		}
+	}
+}
+
+// aRepositoryOwnerGrantAdmitsWhatTheGateAdmits: an owner wildcard held by a
+// non-user credential reaches a repository-owned issue by the two-part slug
+// grammar only, as the node gate does. acme/* never reaches acme/group/secret or
+// acme/trailing-, so an issue owned there leaves the turn as it was. One world,
+// one key per case.
+func aRepositoryOwnerGrantAdmitsWhatTheGateAdmits(t *testing.T, build grantedItemWorldBuilder) {
+	world := build(t, "owner grant owned")
+	principal := userprincipal.Authenticated(t, world.org, []string{"acme/*"})
+	world.principal = &principal
+	for _, repository := range []grantRepository{world.nestedGitLab, world.malformed} {
+		item := linkItem{id: providerPrefix(repository) + repository.slug + "#7", provider: repository.provider, repository: repository}
+		_, world.key, _ = strings.Cut(item.id, ":")
+		without := observeLinkTurn(t, world)
+		world.addItem(t, item)
+		with := observeLinkTurn(t, world)
+		if !reflect.DeepEqual(without.resolution, with.resolution) || !reflect.DeepEqual(without.offers, with.offers) || !sameTrace(without.trace, with.trace) {
+			t.Fatalf("%s: the issue changed the turn:\nwithout %+v %+v\nwith    %+v %+v", repository.slug, without.resolution, without.trace, with.resolution, with.trace)
+		}
+	}
+	control := linkItem{id: "gh:" + world.insideGitHub.slug + "#7", provider: "github", repository: world.insideGitHub}
+	world.addItem(t, control)
+	_, world.key, _ = strings.Cut(control.id, ":")
+	if turn := observeLinkTurn(t, world); len(turn.resolution.Committed) != 1 || turn.resolution.Committed[0].CanonicalID != world.canonicalID(t, control) {
+		t.Fatalf("control: committed = %+v, want the issue owned by %s", turn.resolution.Committed, world.insideGitHub.slug)
+	}
+}
+
+func TestARepositoryOwnerGrantAdmitsWhatTheGateAdmits(t *testing.T) {
+	aRepositoryOwnerGrantAdmitsWhatTheGateAdmits(t, grantedItemModelWorld)
+}
+
+// providerPrefix is the work_item_id prefix the ops writers give a repository-owned
+// issue of repository's provider.
+func providerPrefix(repository grantRepository) string {
+	if repository.provider == "gitlab" {
+		return "gitlab:"
+	}
+	return "gh:"
+}
+
+func TestARepositoryOwnedItemCountsByItsOwnRepository(t *testing.T) {
+	aRepositoryOwnedItemCountsByItsOwnRepository(t, grantedItemModelWorld)
 }
 
 func TestAKeyWhosePrefixIsOnlyOutsideReadsLikeAWord(t *testing.T) {
