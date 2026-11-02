@@ -2,6 +2,8 @@ package contextfabric
 
 import (
 	"context"
+	"reflect"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -72,8 +74,9 @@ func TestCalendarWindow_CurrentPeriodBounds(t *testing.T) {
 }
 
 type calendarServedRun struct {
-	result   InvestigationResult
-	factRead bool
+	result    InvestigationResult
+	factRead  bool
+	telemetry *recordingTelemetry
 }
 
 func runServedWindowCase(t *testing.T, now time.Time, question string, allowClarification bool) calendarServedRun {
@@ -84,7 +87,7 @@ func runServedWindowCase(t *testing.T, now time.Time, question string, allowClar
 func runServedWindowCaseWithDraft(t *testing.T, now time.Time, question string, allowClarification bool, mutateDraft func(*SynthesisDraft)) calendarServedRun {
 	t.Helper()
 	project := acceptanceProject()
-	var run calendarServedRun
+	run := calendarServedRun{telemetry: &recordingTelemetry{}}
 	facts := factReaderFunc(func(context.Context, storage.Principal, CanonicalFactRequest) (CanonicalFactBundle, error) {
 		run.factRead = true
 		return bootstrapFactBundle(project), nil
@@ -104,6 +107,7 @@ func runServedWindowCaseWithDraft(t *testing.T, now time.Time, question string, 
 		Facts:       facts,
 		Synthesizer: RuntimeAnswerSynthesizer{Runtime: runtime, Options: RuntimeAnswerSynthesizerOptions{ServiceVersion: "acceptance-test", Backend: "graph"}},
 		Results:     newMapResultStore(),
+		Telemetry:   run.telemetry,
 	}, EngineOptions{
 		ServiceVersion: "acceptance-test",
 		Now:            func() time.Time { return now },
@@ -154,9 +158,11 @@ func TestCalendarWindow_ThisMonthOnTheFirstFallsToTheInferredPath(t *testing.T) 
 	t.Parallel()
 	now := time.Date(2026, 8, 1, 12, 0, 0, 0, time.UTC)
 	question := "Which teams need attention this month?"
+	// CHAOS-4451 (moved): allow=true now answers on the inferred window and
+	// offers the window beside the answer, instead of asking first.
 	gated := runServedWindowCase(t, now, question, true)
-	if gated.result.Status != InvestigationClarificationRequired || gated.result.WindowClarification == nil {
-		t.Fatalf("allow=true: status=%q window_clarification=%v, want the unchanged clarification path", gated.result.Status, gated.result.WindowClarification != nil)
+	if gated.result.Status == InvestigationClarificationRequired || gated.result.WindowClarification == nil || !gated.factRead {
+		t.Fatalf("allow=true: status=%q window_clarification=%v fact_read=%v, want an answer with the window offer beside it", gated.result.Status, gated.result.WindowClarification != nil, gated.factRead)
 	}
 	served := runServedWindowCase(t, now, question, false)
 	window := served.result.EffectiveEvidenceWindow
@@ -199,12 +205,31 @@ func TestWindowGate_AllowClarificationFalseAnswersAgainstTheInferredWindowWithOn
 	}
 }
 
-func TestWindowGate_AllowClarificationTrueStillGates(t *testing.T) {
+// CHAOS-4451 (moved): a caller that allows clarification, on a turn whose
+// only question is the inferred window, gets an answer read on that window
+// with the window offer beside it -- not the confirmation gate.
+func TestWindowGate_AllowClarificationTrueAnswersWithTheOffer(t *testing.T) {
 	t.Parallel()
 	now := time.Date(2026, 8, 12, 12, 0, 0, 0, time.UTC)
 	run := runServedWindowCase(t, now, validInvestigationRequest().Question, true)
-	if run.result.Status != InvestigationClarificationRequired || run.result.WindowClarification == nil || run.factRead {
-		t.Fatalf("status=%q window_clarification=%v fact_read=%v, want the unchanged confirmation gate", run.result.Status, run.result.WindowClarification != nil, run.factRead)
+	if run.result.Status == InvestigationClarificationRequired || run.result.WindowClarification == nil || !run.factRead {
+		t.Fatalf("status=%q window_clarification=%v fact_read=%v, want an answer read on the inferred window with the window offer beside it", run.result.Status, run.result.WindowClarification != nil, run.factRead)
+	}
+	if run.result.EffectiveEvidenceWindow == nil || run.result.EffectiveEvidenceWindow.Provenance != WindowInferredDefault {
+		t.Fatalf("window %#v, want provenance inferred_default kept on the answer", run.result.EffectiveEvidenceWindow)
+	}
+	if !slices.Contains(run.result.Warnings, inferredWindowAnsweredWarning(run.result.EffectiveEvidenceWindow)) {
+		t.Fatalf("warnings %q, want the inferred-window answer sentence", run.result.Warnings)
+	}
+	if run.result.StructureNeeds == nil || len(run.result.StructureNeeds.Missing) != 1 || run.result.StructureNeeds.Missing[0] != contractsv1.ContextFabricStructureNeedWindow ||
+		!reflect.DeepEqual(run.result.StructureNeeds.WindowOptions, run.result.WindowClarification.Options) {
+		t.Fatalf("structure_needs %#v, want a window-only disclosure mirroring window_clarification", run.result.StructureNeeds)
+	}
+	if !reflect.DeepEqual(run.telemetry.structureNeedsDisclosed, []contractsv1.ContextFabricStructureNeedKind{contractsv1.ContextFabricStructureNeedWindow}) {
+		t.Fatalf("structure needs disclosed = %v, want the window member once", run.telemetry.structureNeedsDisclosed)
+	}
+	if !reflect.DeepEqual(run.telemetry.inferredWindowGates, []recordedInferredWindowGate{{InferredWindowGateAnswered, InferredWindowGateBasisWindowOnly}}) {
+		t.Fatalf("gate lines = %+v, want one answered/window_only", run.telemetry.inferredWindowGates)
 	}
 }
 

@@ -1008,13 +1008,15 @@ func TestEveryCountSurfaceOnEveryPathFollowsTheScopeDecision(t *testing.T) {
 				cohort:     kindCohort(SubjectTeam, 3), status: InvestigationComplete}
 			// The request the stored row was keyed under (no explicit window),
 			// so the lookup reaches the stored row. The fresh path it falls to
-			// stops at its own window confirmation and states no count.
+			// answers on the inferred window (CHAOS-4451: the window is the
+			// only question) and decides its own count: unavailable, no claim,
+			// no sentence -- never the stored satisfied row.
 			result, err := newScopeEngine(t, fresh, telemetry, readingReuseGate{stored: stored, frame: countingFrame(SubjectTeam)}).Investigate(context.Background(), reusePrincipal(), validInvestigationRequest())
 			if err != nil {
 				t.Fatalf("Investigate() error = %v", err)
 			}
 			return result
-		}, want{outcome: AnswerReuseMissCountScope}},
+		}, want{outcome: AnswerReuseMissCountScope, row: contractsv1.ContextFabricRequirementUnavailable, lines: 1}},
 	} {
 		cell := cell
 		t.Run(cell.name, func(t *testing.T) {
