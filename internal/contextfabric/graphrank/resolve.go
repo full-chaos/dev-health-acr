@@ -2030,17 +2030,25 @@ type ResolutionTraceEvent struct {
 	// or label.
 	// WorkItemKey* (stage == "work_item_key_gate" ONLY, CHAOS-12463): counts, and
 	// no token, of the ticket-key shapes in one question.
-	WorkItemKeyTokens           int
-	WorkItemKeysHeld            int
-	WorkItemKeysUnread          int
-	PageHintCount               int
-	PageHintExactHit            int
-	PageHintLabelFallback       int
-	PageHintUnresolved          int
-	PageHintSearchFallback      bool
-	PageHintExactHitByKind      map[string]int
-	PageHintLabelFallbackByKind map[string]int
-	PageHintUnresolvedByKind    map[string]int
+	WorkItemKeyTokens  int
+	WorkItemKeysHeld   int
+	WorkItemKeysUnread int
+	// RepositoryReference* (stage == "repository_reference_row" ONLY,
+	// CHAOS-12642): counts, and no reference, of what the stored rows showed
+	// each owner/repo#N reference in one question to name.
+	RepositoryReferences               int
+	RepositoryReferencePullRequestRows int
+	RepositoryReferenceWorkItemRows    int
+	RepositoryReferencesNotFound       int
+	RepositoryReferencesUnread         int
+	PageHintCount                      int
+	PageHintExactHit                   int
+	PageHintLabelFallback              int
+	PageHintUnresolved                 int
+	PageHintSearchFallback             bool
+	PageHintExactHitByKind             map[string]int
+	PageHintLabelFallbackByKind        map[string]int
+	PageHintUnresolvedByKind           map[string]int
 	// PageHintOtherKindByKind counts the page hints dropped because the question
 	// asks for another kind (CHAOS-12555), by the hint's own kind.
 	PageHintOtherKind       int

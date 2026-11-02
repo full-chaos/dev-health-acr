@@ -44,6 +44,12 @@ type WorkItemKeyPrefixFunc func(ctx context.Context, orgID, prefix string) (Work
 // left unread, the turn cannot tell one handle from several: the unread key may
 // name a second subject, which would refuse a decisive outcome as multi_handle.
 // So such a turn binds no handle at all, and answers by search.
+//
+// A repository reference with "#" is first read as a GitHub pull request
+// (CHAOS-12642): GitHub issues and pull requests share one number space, so the
+// text cannot tell which owner/repo#N names. A pull request row with that
+// repository and number makes the handle a pull_request_repo_reference; any
+// other reading leaves the reference to the prefix read below, as before.
 func bindQuestionHandles(ctx context.Context, principal storage.Principal, request contextfabric.InvestigationRequest, deps ResolveDeps) []BoundHandle {
 	bound := BindHandles(request.Question)
 	scoped := contextfabric.ScopeCensusToCaller(ctx, principal)
@@ -54,8 +60,28 @@ func bindQuestionHandles(ctx context.Context, principal storage.Principal, reque
 	)
 	prefixes := map[string]int{}
 	event := ResolutionTraceEvent{RequestID: request.RequestID, Stage: "work_item_key_gate"}
+	rows := ResolutionTraceEvent{RequestID: request.RequestID, Stage: "repository_reference_row"}
+	referencesRead := false
 	kept := make([]BoundHandle, 0, len(bound))
 	for _, handle := range bound {
+		if isPullRequestReferenceShape(handle) {
+			rows.RepositoryReferences++
+			row, fresh := readRepositoryReferenceRow(scoped, principal, handle.Value, deps, rows.RepositoryReferences-1)
+			referencesRead = referencesRead || fresh
+			switch row {
+			case repositoryReferencePullRequestRow:
+				rows.RepositoryReferencePullRequestRows++
+				handle.Kind, handle.Grammar = contextfabric.SubjectPullRequest, pullRequestRepoReferenceGrammar
+				kept = append(kept, handle)
+				continue
+			case repositoryReferenceWorkItemRow:
+				rows.RepositoryReferenceWorkItemRows++
+			case repositoryReferenceNotFound:
+				rows.RepositoryReferencesNotFound++
+			default:
+				rows.RepositoryReferencesUnread++
+			}
+		}
 		prefix, isKey := workItemKeyPrefix(handle)
 		if !isKey {
 			kept = append(kept, handle)
@@ -83,6 +109,9 @@ func bindQuestionHandles(ctx context.Context, principal storage.Principal, reque
 	}
 	if event.WorkItemKeyTokens > 0 && deps.ResolutionTracer != nil {
 		deps.ResolutionTracer.Trace(event)
+	}
+	if referencesRead && deps.ResolutionTracer != nil {
+		deps.ResolutionTracer.Trace(rows)
 	}
 	if event.WorkItemKeysUnread > 0 {
 		return nil
@@ -120,4 +149,80 @@ func readWorkItemKeyPrefix(ctx context.Context, principal storage.Principal, pre
 	}
 	contextfabric.RecordWorkItemKeyPrefixRead(ctx, key, read)
 	return read.Seen, read.Read
+}
+
+// The stored row a repository reference with "#" names (CHAOS-12642).
+const (
+	repositoryReferenceUnread = iota
+	repositoryReferencePullRequestRow
+	repositoryReferenceWorkItemRow
+	repositoryReferenceNotFound
+)
+
+// isPullRequestReferenceShape reports a repository reference that a GitHub pull
+// request can take: GitLab writes "!" for a merge request, so a "!" reference
+// keeps its reading.
+func isPullRequestReferenceShape(handle BoundHandle) bool {
+	return handle.Grammar == workItemRepoReferenceGrammar && strings.Contains(handle.Value, "#")
+}
+
+// readRepositoryReferenceRow decides what owner/repo#N names, by stored rows and
+// in this order (lead ruling, CHAOS-12642): a GitHub pull request row with that
+// repository and number, else a work item with that key, else nothing. On GitHub
+// issues and pull requests share one number space, so at most one of the first
+// two exists, and nothing is guessed. Both reads are the census, under the
+// caller's grant, and the turn's memo keeps each, so a reference is read once per
+// turn. A read that cannot run, or does not close, decides nothing: the reference
+// keeps its work item reading.
+func readRepositoryReferenceRow(ctx context.Context, principal storage.Principal, reference string, deps ResolveDeps, reads int) (row int, fresh bool) {
+	canRead := deps.CensusFunc != nil && reads < maxWorkItemKeyPrefixReads
+	pullRequest, ok, fresh := readReferenceCensus(ctx, principal, contextfabric.SubjectPullRequest, reference, deps, canRead)
+	switch {
+	case !ok:
+		return repositoryReferenceUnread, fresh
+	case pullRequest:
+		return repositoryReferencePullRequestRow, fresh
+	}
+	workItem, ok, workItemFresh := readReferenceCensus(ctx, principal, contextfabric.SubjectWorkItem, reference, deps, canRead)
+	fresh = fresh || workItemFresh
+	switch {
+	case !ok:
+		return repositoryReferenceUnread, fresh
+	case workItem:
+		return repositoryReferenceWorkItemRow, fresh
+	}
+	return repositoryReferenceNotFound, fresh
+}
+
+// readReferenceCensus is one census of the reference as kind. fresh is false
+// when the turn's memo already held the read. A read that cannot run (no census
+// wired, or the turn's read budget spent) is kept as unread too, so the turn
+// reports it once.
+func readReferenceCensus(ctx context.Context, principal storage.Principal, kind CensusKind, reference string, deps ResolveDeps, canRead bool) (seen, ok, fresh bool) {
+	grant, bound := contextfabric.CensusGrantFrom(ctx)
+	key := "repository_reference\x00" + string(kind) + "\x00" + principal.OrgID + "\x00" + strconv.FormatBool(bound) + "\x00" + strings.Join(grant, "\x01") + "\x00" + reference
+	if read, found := contextfabric.WorkItemKeyPrefixReadFrom(ctx, key); found {
+		return read.Seen, read.Read, false
+	}
+	var read contextfabric.WorkItemKeyPrefixRead
+	if canRead {
+		outcome, err := censusOnce(ctx, grantEnforced(deps.CensusFunc), principal.OrgID, kind, reference)
+		read = contextfabric.WorkItemKeyPrefixRead{Seen: outcome.Count > 0, Read: err == nil && !outcome.ClosureMismatch && !outcome.SatisfierSetClosureMismatch}
+	}
+	if !read.Read {
+		read.Seen = false
+	}
+	contextfabric.RecordWorkItemKeyPrefixRead(ctx, key, read)
+	return read.Seen, read.Read, true
+}
+
+// censusOnce runs one handle census with no anchor, and turns a panic into an
+// error like namedHandleCensus does.
+func censusOnce(ctx context.Context, census CensusFunc, orgID string, kind CensusKind, value string) (outcome CensusOutcome, err error) {
+	defer func() {
+		if recover() != nil {
+			outcome, err = CensusOutcome{}, errCensusPanicked
+		}
+	}()
+	return census(ctx, orgID, kind, value, true, "", "", false)
 }
