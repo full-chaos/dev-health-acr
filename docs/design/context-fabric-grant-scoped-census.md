@@ -180,8 +180,14 @@ expected kind, which the model's `requested_subject_kind` fills, or a lone
   be in another one you can read, so the sentence is the scope's.
   A work item's census covers all you can read, so it takes the general sentence, or
   Sentence A for a restricted caller.
-- **A work item commits beside the repository with no claim about a link.** A key names
-  one item. CHAOS-12505 holds the link check.
+- **A work item commits beside the repository, and the answer says whether a link
+  joins them (CHAOS-12505).** A key names one item, so the commit stands either way.
+  The keyed link read is asked with the one named repository as the scope, under the
+  caller's grants, and the engine appends one fixed sentence after synthesis: a native
+  link, a link that names its lower tier (explicit text, heuristic), no link the answer
+  admits, or a link that could not be read (`contractsv1`
+  `ContextFabricNamedRepository*LinkLimitation`). A failed or cut read never reads as
+  "no link". With two named repositories nothing is read and nothing is said.
 - **Not here:** a team beside a handle and two handles are CHAOS-12557.
 
 ## Gates
