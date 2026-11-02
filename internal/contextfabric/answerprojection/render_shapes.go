@@ -131,27 +131,35 @@ func (s projectedRenderSources) carries(source contractsv1.ContextFabricRenderPo
 				return false
 			}
 			cell, ok := rows[*source.RowIndex].Fields[source.Field]
-			if !ok {
-				return false
-			}
-			switch {
-			case cell.Number != nil:
-				return *cell.Number == value
-			case cell.Integer != nil:
-				// Bounded exactly as contractsv1's own resolver bounds it:
-				// past 2^53 a float64 cannot tell adjacent integers apart,
-				// so an equal comparison there would admit a shape
-				// ContextFabricAnswerProjection.Validate then rejects.
-				if *cell.Integer > contractsv1.ContextFabricRenderPointExactIntegerBound ||
-					*cell.Integer < -contractsv1.ContextFabricRenderPointExactIntegerBound {
-					return false
-				}
-				return float64(*cell.Integer) == value
-			default:
-				return false
+			return ok && scalarPlotsAs(cell, value)
+		}
+		return false
+	case contractsv1.ContextFabricRenderSourceClaimedFactValue:
+		for _, fact := range s.facts {
+			if fact.ClaimID == source.ClaimID {
+				return fact.Field == source.Field && scalarPlotsAs(fact.Value, value)
 			}
 		}
 		return false
+	default:
+		return false
+	}
+}
+
+// scalarPlotsAs reports that a scalar is the number value. It is bounded exactly
+// as contractsv1's own resolver bounds it: past 2^53 a float64 cannot tell
+// adjacent integers apart, so an equal comparison there would admit a shape
+// ContextFabricAnswerProjection.Validate then rejects.
+func scalarPlotsAs(scalar contractsv1.ContextFabricScalarValue, value float64) bool {
+	switch {
+	case scalar.Number != nil:
+		return *scalar.Number == value
+	case scalar.Integer != nil:
+		if *scalar.Integer > contractsv1.ContextFabricRenderPointExactIntegerBound ||
+			*scalar.Integer < -contractsv1.ContextFabricRenderPointExactIntegerBound {
+			return false
+		}
+		return float64(*scalar.Integer) == value
 	default:
 		return false
 	}

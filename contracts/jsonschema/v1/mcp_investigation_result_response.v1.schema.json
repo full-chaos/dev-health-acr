@@ -5124,7 +5124,8 @@
               "enum": [
                 "cohort_member_score",
                 "cohort_driver_weight_contributed",
-                "claimed_fact_row"
+                "claimed_fact_row",
+                "claimed_fact_value"
               ],
               "type": "string"
             },
@@ -5251,7 +5252,8 @@
             "cohort_attention_score",
             "cohort_driver_contribution",
             "dated_fact_trend",
-            "investment_theme_share"
+            "investment_theme_share",
+            "comparison_side_by_side"
           ],
           "type": "string"
         },
