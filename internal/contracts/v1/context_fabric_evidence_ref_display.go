@@ -81,9 +81,26 @@ func evidenceIDDisplay(entityType ContextFabricEvidenceEntityType, id string, se
 		}
 		return ""
 	}
+	// A number is scoped by its repository (the leading "<uuid>:"): with the
+	// repository's name in hand it reads "owner/repo#n", so two #869 of two
+	// repositories in one answer differ; without it, "#n" (codex r3).
+	repositoryNumber := func(repositoryID, number string) string {
+		label := evidenceNumber(number)
+		if label == "" || !evidenceUUIDForm.MatchString(repositoryID) {
+			return label
+		}
+		if repository := named(ContextFabricSubjectRepository, repositoryID); repository != "" {
+			return repository + label
+		}
+		return label
+	}
 	switch entityType {
 	case ContextFabricEvidenceEntityPullRequest:
-		return evidenceNumber(withoutLeadingUUID(id))
+		head, rest, _ := strings.Cut(id, ":")
+		if rest == "" {
+			return evidenceNumber(id)
+		}
+		return repositoryNumber(head, withoutLeadingUUID(id))
 	case ContextFabricEvidenceEntityCI, ContextFabricEvidenceEntityDeployment:
 		return evidenceNotUUID(withoutLeadingUUID(id))
 	case ContextFabricEvidenceEntityWorkItem:
@@ -119,7 +136,7 @@ func evidenceIDDisplay(entityType ContextFabricEvidenceEntityType, id string, se
 	case ContextFabricEvidenceEntityProjectTeamV2:
 		return evidenceJoin(evidenceKey(segment(1)), evidenceKey(segment(2)))
 	case ContextFabricEvidenceEntityReviewV2:
-		return evidenceNumber(segment(1))
+		return repositoryNumber(segment(0), segment(1))
 	}
 	// The retired un-encoded joins (a stored row from before their ".v2"
 	// successors) cannot be split back into their parts: the noun alone.
