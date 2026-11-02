@@ -101,11 +101,13 @@ func evidenceIDDisplay(entityType ContextFabricEvidenceEntityType, id string, se
 		return named(ContextFabricSubjectOrganization, id)
 	case ContextFabricEvidenceEntityCommit, ContextFabricEvidenceEntityCommitFile,
 		ContextFabricEvidenceEntityHotspot, ContextFabricEvidenceEntityComplexity,
-		ContextFabricEvidenceEntityIncident, ContextFabricEvidenceEntityEpisode:
+		ContextFabricEvidenceEntityIncident:
 		return evidenceNotUUID(id)
 	case ContextFabricEvidenceEntityGraph, ContextFabricEvidenceEntityAIRun,
-		ContextFabricEvidenceEntityAIArtifact, ContextFabricEvidenceEntityReviewOutcome:
-		// A row id, a relationship id or an internal run id: nothing a reader names.
+		ContextFabricEvidenceEntityAIArtifact, ContextFabricEvidenceEntityReviewOutcome,
+		ContextFabricEvidenceEntityEpisode:
+		// A row id, a relationship id, an internal run id or an episode id
+		// minted inside ACR: nothing a reader names.
 		return ""
 	case ContextFabricEvidenceEntityWorkItemDependencyV2:
 		return evidenceJoin(evidenceKey(segment(0)), evidenceKey(segment(1)))
@@ -123,4 +125,39 @@ func evidenceIDDisplay(entityType ContextFabricEvidenceEntityType, id string, se
 	// The retired un-encoded joins (a stored row from before their ".v2"
 	// successors) cannot be split back into their parts: the noun alone.
 	return ""
+}
+
+// ContextFabricEvidenceRefStoredLabel is a stored evidence label for a reader. A
+// result saved before CHAOS-12620 keeps the "<noun>: <ref id>" label it was made
+// with, and a by-id read serves it with no rebuild; a label that is exactly that
+// old form reads as ContextFabricEvidenceRefLabelNamed. Any other stored label
+// stands, so a label made after the change, with its name, is served as made.
+func ContextFabricEvidenceRefStoredLabel(refID, stored string, name ContextFabricEvidenceSubjectName) string {
+	if before, ok := evidenceRefLabelBefore12620(refID); ok && stored == before {
+		if label, _ := ContextFabricEvidenceRefLabelNamed(refID, name); label != "" {
+			return label
+		}
+	}
+	return stored
+}
+
+// evidenceRefLabelBefore12620 is the label a known entity type's ref got before
+// CHAOS-12620: its noun and the whole ref id, an encoded (".v2") id with its
+// segments unescaped, bounded like every label. ok is false for an unknown type,
+// whose generic fallback did not change.
+func evidenceRefLabelBefore12620(refID string) (string, bool) {
+	parts := strings.Split(refID, ":")
+	if len(parts) < 4 || parts[0] != "acr" || parts[1] != "v1" {
+		return "", false
+	}
+	entityType := ContextFabricEvidenceEntityType(parts[2])
+	noun, known := contextFabricEvidenceEntityLabels[entityType]
+	id := strings.Join(parts[3:], ":")
+	if !known || id == "" {
+		return "", false
+	}
+	if EncodedEvidenceEntityType(entityType) {
+		id = decodedEvidenceID(id)
+	}
+	return clampLabel(noun + ": " + id), true
 }

@@ -2,6 +2,7 @@ package v1
 
 import (
 	"regexp"
+	"strings"
 	"testing"
 )
 
@@ -77,7 +78,15 @@ func TestAnEvidenceLabelNeverShowsARawID(t *testing.T) {
 			if rawInLabel.MatchString(label) {
 				t.Errorf("%s: label %q shows a raw id", ref, label)
 			}
+			// A result saved before CHAOS-12620 holds the old label; a
+			// read restates it to the same label (codex r1).
+			if got := ContextFabricEvidenceRefStoredLabel(ref, labelOnMainBefore12620(ref), nil); got != row.want {
+				t.Errorf("%s: stored old label %q reads %q, want %q", ref, labelOnMainBefore12620(ref), got, row.want)
+			}
 		}
+	}
+	if got := ContextFabricEvidenceRefStoredLabel("acr:v1:repository:"+displayRepoUUID, "Repository: full-chaos/dev-health-ops", nil); got != "Repository: full-chaos/dev-health-ops" {
+		t.Errorf("a label made after the change must stand: %q", got)
 	}
 	if label, known := ContextFabricEvidenceRefLabel("acr:v1:mystery:x"); known || label != "Evidence: x" {
 		t.Errorf("unknown type: label = %q (known %v), want the id-carrying generic fallback", label, known)
@@ -114,4 +123,22 @@ func TestAnEvidenceLabelTakesTheNameTheAnswerHolds(t *testing.T) {
 	if got, _ := ContextFabricEvidenceRefLabel("acr:v1:repository:" + displayRepoUUID); got != "Repository" {
 		t.Errorf("with no names: %q, want the noun", got)
 	}
+}
+
+// labelOnMainBefore12620 is a copy of ContextFabricEvidenceRefLabel as main had
+// it before CHAOS-12620 (the label a stored result holds), kept here as the
+// test's own oracle rather than read from the code under test.
+func labelOnMainBefore12620(refID string) string {
+	parts := strings.Split(refID, ":")
+	label := contextFabricEvidenceEntityLabels[ContextFabricEvidenceEntityType(parts[2])]
+	id := strings.Join(parts[3:], ":")
+	if EncodedEvidenceEntityType(ContextFabricEvidenceEntityType(parts[2])) {
+		segments := strings.Split(id, ":")
+		for index, segment := range segments {
+			segment = strings.ReplaceAll(segment, "%3A", ":")
+			segments[index] = strings.ReplaceAll(segment, "%25", "%")
+		}
+		id = strings.Join(segments, ":")
+	}
+	return clampLabel(label + ": " + id)
 }

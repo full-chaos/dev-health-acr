@@ -69,3 +69,20 @@ func evidenceSubjectNames(result InvestigationResult) contractsv1.ContextFabricE
 		return name, true
 	}
 }
+
+// readerEvidenceRefLabels is a result's evidence labels for a reader: a label
+// saved before CHAOS-12620 is restated from its ref with the names the result
+// holds, and any other label stands (contractsv1.ContextFabricEvidenceRefStoredLabel).
+// The result's own map is not changed; a nil map stays nil, the ruled "this result
+// predates labels" case.
+func readerEvidenceRefLabels(result InvestigationResult) map[string]string {
+	if result.EvidenceRefLabels == nil {
+		return nil
+	}
+	names := evidenceSubjectNames(result)
+	labels := make(map[string]string, len(result.EvidenceRefLabels))
+	for ref, label := range result.EvidenceRefLabels {
+		labels[ref] = contractsv1.ContextFabricEvidenceRefStoredLabel(ref, label, names)
+	}
+	return labels
+}
