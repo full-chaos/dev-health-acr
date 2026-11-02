@@ -1,9 +1,13 @@
 package devhealthfacts
 
 import (
+	"encoding/json"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
+	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 	"github.com/full-chaos/dev-health-go/readers"
 )
 
@@ -196,4 +200,40 @@ func TestTheDeploymentSwitchGatesOnlyTheDistribution(t *testing.T) {
 	if fields := teamForecastFields([]readers.CompletionForecastRow{row, row}, row.ComputedAt, false); len(fields) != 0 {
 		t.Errorf("switch off, ambiguous: %v, want nothing", fields)
 	}
+}
+
+// TestTheLargestMeasuredDistributionFitsTheClaimedFactBounds encodes the
+// askdev-1 359-bin distribution through the served table and the one wire
+// measurement (contractsv1.ClaimedFactRowContentBytes), and holds it to the
+// combined cell and byte bounds a claimed fact carries.
+func TestTheLargestMeasuredDistributionFitsTheClaimedFactBounds(t *testing.T) {
+	var fixture struct {
+		Values []string `json:"values"`
+		Counts []string `json:"counts"`
+	}
+	raw, err := os.ReadFile(filepath.Join("testdata", "forecast_oracle", "askdev1_359_bins.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(raw, &fixture); err != nil {
+		t.Fatal(err)
+	}
+	row := forecastRow(parseOracleUints[uint16](t, fixture.Values, 16), parseOracleUints[uint32](t, fixture.Counts, 32))
+	fields := forecastFields(row)
+	if got := stateOf(t, fields); got != completionDistributionAvailable {
+		t.Fatalf("state = %q", got)
+	}
+	table := fields["completion_distribution"].Table
+	if len(table.Rows) != 359 {
+		t.Fatalf("rows = %d, want 359", len(table.Rows))
+	}
+	bytes, cells := 0, 0
+	for _, factRow := range table.Rows {
+		bytes += factValueRowContentBytes(factRow)
+		cells += len(factRow.Fields)
+	}
+	if bytes > contractsv1.ContextFabricClaimedFactCombinedContentBytesMax || cells > contractsv1.ContextFabricClaimedFactCombinedCellsMax {
+		t.Fatalf("359 rows: %d bytes, %d cells; bounds %d bytes, %d cells", bytes, cells, contractsv1.ContextFabricClaimedFactCombinedContentBytesMax, contractsv1.ContextFabricClaimedFactCombinedCellsMax)
+	}
+	t.Logf("359 rows: %d row bytes, %d cells", bytes, cells)
 }
