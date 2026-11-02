@@ -19,7 +19,7 @@ type temporalNoteRow struct {
 
 func temporalInstant(t *testing.T, value string) *time.Time {
 	t.Helper()
-	for _, layout := range []string{time.DateOnly, "2006-01-02T15:04"} {
+	for _, layout := range []string{time.DateOnly, "2006-01-02T15:04", "2006-01-02T15:04:05"} {
 		if parsed, err := time.Parse(layout, value); err == nil {
 			return &parsed
 		}
@@ -48,13 +48,25 @@ func TestTheTemporalNoteSaysOnlyWhatTheLabelProves(t *testing.T) {
 	}{
 		"the day asked, complete": {temporalNoteRow{"2026-03-01", "2026-03-01", ContextFabricGrainDay, true}, "This answer speaks for 2026-03-01."},
 		"the day asked, not complete": {temporalNoteRow{"2026-03-01", "2026-03-01", ContextFabricGrainDay, false},
-			"This answer speaks for 2026-03-01, and not every source covers that time."},
+			"This answer speaks for 2026-03-01, and not every source covers it."},
 		"an earlier day": {temporalNoteRow{"2026-03-01", "2026-02-28", ContextFabricGrainDay, true}, "This answer speaks for 2026-02-28, not the 2026-03-01 you asked about."},
 		"an instant read at day grain": {temporalNoteRow{"2026-03-01T14:30", "2026-03-01", ContextFabricGrainDay, true},
 			"This answer speaks for 2026-03-01, not the 2026-03-01 14:30 UTC you asked about."},
-		"an exact instant": {temporalNoteRow{"2026-03-01T14:30", "2026-03-01T14:30", ContextFabricGrainInstant, true}, "This answer speaks for 2026-03-01 14:30 UTC."},
-		"no source spoke":  {temporalNoteRow{"2026-03-01", "2026-03-01", ContextFabricGrainNone, false}, "No source could speak for 2026-03-01."},
-		"a range":          {temporalNoteRow{"2026-01-01 to 2026-02-01", "2026-01-01 to 2026-02-01", ContextFabricGrainDay, true}, "This answer speaks for 2026-01-01 to 2026-02-01."},
+		"an exact instant":              {temporalNoteRow{"2026-03-01T14:30", "2026-03-01T14:30", ContextFabricGrainInstant, true}, "This answer speaks for 2026-03-01 14:30 UTC."},
+		"an exact instant with seconds": {temporalNoteRow{"2026-03-01T14:30:05", "2026-03-01T14:30:05", ContextFabricGrainInstant, true}, "This answer speaks for 2026-03-01 14:30:05 UTC."},
+		"an exact midnight":             {temporalNoteRow{"2026-03-01", "2026-03-01", ContextFabricGrainInstant, true}, "This answer speaks for 2026-03-01 00:00 UTC."},
+		"an exact range in one minute": {temporalNoteRow{"2026-03-01T14:30:10 to 2026-03-01T14:30:50", "2026-03-01T14:30:10 to 2026-03-01T14:30:50", ContextFabricGrainInstant, true},
+			"This answer speaks for 2026-03-01 14:30:10 UTC to 2026-03-01 14:30:50 UTC."},
+		"seconds asked at day grain": {temporalNoteRow{"2026-03-01T14:30:05", "2026-03-01", ContextFabricGrainDay, true},
+			"This answer speaks for 2026-03-01, not the 2026-03-01 14:30:05 UTC you asked about."},
+		"no source spoke for a range in one minute": {temporalNoteRow{"2026-03-01T14:30:10 to 2026-03-01T14:30:50", "2026-03-01T14:30:10 to 2026-03-01T14:30:50", ContextFabricGrainNone, false},
+			"No source could speak for 2026-03-01 14:30:10 UTC to 2026-03-01 14:30:50 UTC."},
+		"only the start moved": {temporalNoteRow{"2026-01-01T09:30 to 2026-02-01", "2026-01-02 to 2026-02-01", ContextFabricGrainDay, true},
+			"This answer speaks for 2026-01-02 to 2026-02-01, not the 2026-01-01 09:30 UTC to 2026-02-01 you asked about."},
+		"only the end moved": {temporalNoteRow{"2026-01-01 to 2026-02-01T17:45", "2026-01-01 to 2026-02-01", ContextFabricGrainDay, true},
+			"This answer speaks for 2026-01-01 to 2026-02-01, not the 2026-01-01 to 2026-02-01 17:45 UTC you asked about."},
+		"no source spoke": {temporalNoteRow{"2026-03-01", "2026-03-01", ContextFabricGrainNone, false}, "No source could speak for 2026-03-01."},
+		"a range":         {temporalNoteRow{"2026-01-01 to 2026-02-01", "2026-01-01 to 2026-02-01", ContextFabricGrainDay, true}, "This answer speaks for 2026-01-01 to 2026-02-01."},
 		"a narrowed range": {temporalNoteRow{"2026-01-01T09:30 to 2026-02-01T17:45", "2026-01-02 to 2026-02-01", ContextFabricGrainDay, true},
 			"This answer speaks for 2026-01-02 to 2026-02-01, not the 2026-01-01 09:30 UTC to 2026-02-01 17:45 UTC you asked about."},
 		"one day asked as a zero-width range": {temporalNoteRow{"2026-01-01 to 2026-01-01", "2026-01-01 to 2026-01-01", ContextFabricGrainDay, true}, "This answer speaks for 2026-01-01."},
@@ -136,7 +148,7 @@ func TestAnIncompleteLabelNeverReadsAsComplete(t *testing.T) {
 // The longest sentence a real label can reach stays a valid label: a word over
 // the bound would fail validation for every such answer.
 func TestTheLongestTemporalNoteIsAValidLabel(t *testing.T) {
-	got, ok := ContextFabricTemporalNote(temporalNoteRow{"2026-01-01T09:30 to 2026-12-31T17:45", "2026-01-02 to 2026-12-31", ContextFabricGrainDay, false}.label(t))
+	got, ok := ContextFabricTemporalNote(temporalNoteRow{"2026-01-01T09:30:05 to 2026-12-31T17:45:05", "2026-01-02 to 2026-12-31", ContextFabricGrainDay, false}.label(t))
 	if !ok {
 		t.Fatal("no note")
 	}

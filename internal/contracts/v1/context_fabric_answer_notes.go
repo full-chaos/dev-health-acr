@@ -106,11 +106,12 @@ func ContextFabricCohortPopulationNote(population int, lowerBound bool) (string,
 //   - Any other label states its effective time, says when that is not the time
 //     asked about, and never reads as complete when coverage_complete is false.
 func ContextFabricTemporalNote(label ContextFabricTemporalLabel) (string, bool) {
-	requested, ok := contextFabricTimeContextWords(label.Requested)
+	requested, ok := contextFabricTimeContextWords(label.Requested, false)
 	if !ok {
 		return "", false
 	}
-	effective, ok := contextFabricTimeContextWords(label.Effective)
+	// Only an exact answer reads an exact midnight: at day grain it is the day.
+	effective, ok := contextFabricTimeContextWords(label.Effective, label.Grain == ContextFabricGrainInstant)
 	if !ok {
 		return "", false
 	}
@@ -125,11 +126,11 @@ func ContextFabricTemporalNote(label ContextFabricTemporalLabel) (string, bool) 
 		return "No full day of " + requested + " could be read.", true
 	}
 	note := "This answer speaks for " + effective
-	if effective != requested {
+	if !contextFabricSameTime(label.Requested, label.Effective) {
 		note += ", not the " + requested + " you asked about"
 	}
 	if !label.CoverageComplete {
-		note += ", and not every source covers that time"
+		note += ", and not every source covers it"
 	}
 	return note + ".", true
 }
@@ -146,37 +147,54 @@ func contextFabricRangeCollapsed(label ContextFabricTemporalLabel) bool {
 	return label.Effective.Start.Equal(*label.Effective.End) && !oneDay
 }
 
-// contextFabricTimeContextWords words a past time. ok is false for the current
-// axis, and for a context that lacks the instants its axis requires.
-func contextFabricTimeContextWords(context ContextFabricTimeContext) (string, bool) {
+// contextFabricSameTime compares the instants, never their words: two different
+// times can print alike. It reads only contexts that already have their words.
+func contextFabricSameTime(requested, effective ContextFabricTimeContext) bool {
+	if requested.AsOf != nil && effective.AsOf != nil {
+		return requested.AsOf.Equal(*effective.AsOf)
+	}
+	if requested.Start != nil && effective.Start != nil {
+		return requested.Start.Equal(*effective.Start) && requested.End.Equal(*effective.End)
+	}
+	return false
+}
+
+// contextFabricTimeContextWords words a past time. exact reads an instant at a
+// day boundary with its time. ok is false for the current axis, and for a context
+// that lacks the instants its axis requires.
+func contextFabricTimeContextWords(context ContextFabricTimeContext, exact bool) (string, bool) {
 	switch context.Axis {
 	case ContextFabricTemporalValidTime, ContextFabricTemporalObservedTime:
 		if context.AsOf == nil {
 			return "", false
 		}
-		return contextFabricInstantWords(*context.AsOf), true
+		return contextFabricInstantWords(*context.AsOf, exact), true
 	case ContextFabricTemporalRange:
 		if context.Start == nil || context.End == nil {
 			return "", false
 		}
-		start, end := contextFabricInstantWords(*context.Start), contextFabricInstantWords(*context.End)
-		if start == end {
+		start := contextFabricInstantWords(*context.Start, exact)
+		if context.Start.Equal(*context.End) {
 			return start, true
 		}
-		return start + " to " + end, true
+		return start + " to " + contextFabricInstantWords(*context.End, exact), true
 	default:
 		return "", false
 	}
 }
 
-// contextFabricInstantWords reads a day as a date, and any other instant with its
-// time in UTC, so a day-grain answer never reads as more exact than it is.
-func contextFabricInstantWords(instant time.Time) string {
+// contextFabricInstantWords reads a day as a date, unless exact, and any other
+// instant with its time in UTC, to the second, so a day-grain answer never reads
+// as more exact than it is and an exact one never as less.
+func contextFabricInstantWords(instant time.Time, exact bool) string {
 	utc := instant.UTC()
-	if contextFabricIsDayBoundary(utc) {
+	switch {
+	case !exact && contextFabricIsDayBoundary(utc):
 		return utc.Format(time.DateOnly)
+	case utc.Second() == 0 && utc.Nanosecond() == 0:
+		return utc.Format("2006-01-02 15:04") + " UTC"
 	}
-	return utc.Format("2006-01-02 15:04") + " UTC"
+	return utc.Format(time.DateTime) + " UTC"
 }
 
 func contextFabricIsDayBoundary(instant time.Time) bool {

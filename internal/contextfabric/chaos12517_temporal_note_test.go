@@ -25,7 +25,7 @@ func TestAHistoricalAnswerServesItsEffectiveTime(t *testing.T) {
 		t.Fatalf("the example must carry an incomplete temporal label: %+v", result.Temporal)
 	}
 	served, _ := ServeVocabularyLabels(result, true, 0)
-	want := "This answer speaks for 2026-02-28, not the 2026-03-01 you asked about, and not every source covers that time."
+	want := "This answer speaks for 2026-02-28, not the 2026-03-01 you asked about, and not every source covers it."
 	if got := served.VocabularyLabels["temporal:note"]; got != want {
 		t.Fatalf("temporal:note = %q, want %q", got, want)
 	}
