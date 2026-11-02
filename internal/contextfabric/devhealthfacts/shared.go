@@ -1358,7 +1358,11 @@ import (
 // v262 -> v263: a pull request's label, an edge's fact and the clarification
 // prompt no longer show a raw canonical id (CHAOS-12468). An answer saved under
 // v262 can hold one.
-const QueryVersion = "devhealthfacts.clickhouse.v263"
+//
+// v263 -> v264: a hint of a kind the question does not ask for commits nothing
+// (CHAOS-12555). An answer saved under v263 can speak for the organization on a
+// question about a repository the request lost.
+const QueryVersion = "devhealthfacts.clickhouse.v264"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each

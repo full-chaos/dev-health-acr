@@ -197,7 +197,8 @@ func RepairLegacyUnanswerableClarification(result *InvestigationResult) bool {
 	}
 	result.Status = InvestigationNoMatch
 	for index, limitation := range result.Limitations {
-		if limitation == clarificationRequiredLimitationOne || limitation == clarificationRequiredLimitation {
+		if limitation == clarificationRequiredLimitationOne || limitation == clarificationRequiredLimitation ||
+			limitation == clarificationRequiredLimitationWithheldPool {
 			result.Limitations[index] = noMatchLimitationOfferPoolEmptied
 		}
 	}

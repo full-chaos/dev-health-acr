@@ -2,6 +2,7 @@ package contextfabric
 
 import (
 	"context"
+	"slices"
 
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
@@ -285,6 +286,7 @@ func RepairStoredClarification(result *InvestigationResult, state *PersistedSema
 	if result == nil {
 		return StoredAnswerability{Determination: StoredAnswerabilityNotApplicable, Reading: storedReadingNotRead}
 	}
+	restateWithheldPoolClarification(result)
 	answerability := DecideStoredAnswerability(*result, state, read)
 	if answerability.Determination != StoredAnswerabilityUnanswerable {
 		return answerability
@@ -300,7 +302,8 @@ func RepairStoredClarification(result *InvestigationResult, state *PersistedSema
 	// sentence gains the basis sentence through the bounded appender.
 	replaced := false
 	for index, limitation := range result.Limitations {
-		if limitation == clarificationRequiredLimitationOne || limitation == clarificationRequiredLimitation {
+		if limitation == clarificationRequiredLimitationOne || limitation == clarificationRequiredLimitation ||
+			limitation == clarificationRequiredLimitationWithheldPool {
 			result.Limitations[index] = sentence
 			replaced = true
 		}
@@ -351,5 +354,29 @@ func StoredAnswerabilityLogArgs(surface StoredAnswerabilitySurface, answerabilit
 		"advancing_channel", SanitizeLogAttr(observed.AdvancingChannel),
 		"offers_evaluated", SanitizeLogInt(int64(observed.OffersEvaluated)),
 		"offers_advancing", SanitizeLogInt(int64(observed.OffersAdvancing)),
+	}
+}
+
+// restateWithheldPoolClarification corrects the served copy of a row written
+// before CHAOS-12524: a clarification with no candidate that says one subject
+// matched. A row with an offer to redeem is answerable, so neither repair runs on
+// it, and it would serve the false sentence on every read. The replacement keeps
+// the list's length, so the limitation bound cannot move, and the stored row is
+// never touched: result is the caller's copy. A row with a candidate keeps its
+// sentence, which is true of it.
+func restateWithheldPoolClarification(result *InvestigationResult) {
+	if result.Status != InvestigationClarificationRequired || len(result.SubjectResolution.Candidates) != 0 {
+		return
+	}
+	index := slices.Index(result.Limitations, clarificationRequiredLimitationOne)
+	if index < 0 {
+		return
+	}
+	// Copy first: a store that hands back its own slice must not see the edit.
+	result.Limitations = slices.Clone(result.Limitations)
+	for ; index < len(result.Limitations); index++ {
+		if result.Limitations[index] == clarificationRequiredLimitationOne {
+			result.Limitations[index] = clarificationRequiredLimitationWithheldPool
+		}
 	}
 }
