@@ -145,25 +145,31 @@ func countKindDays(ctx context.Context, client contextpacket.ClickHouseQueryClie
 		if st.day == "" {
 			continue
 		}
-		rows, err := client.Query(ctx, st.day, []contextpacket.ClickHouseBinding{{Name: "org_id", Value: orgID}})
+		days, err := countOneKindDays(ctx, client, orgID, st)
 		if err != nil {
-			return nil, fmt.Errorf("devhealthsource: count %s per day: %w", st.kind, err)
-		}
-		days := map[int64]int64{}
-		for rows.Next() {
-			var day, total uint64
-			if err := rows.Scan(&day, &total); err != nil {
-				_ = rows.Close()
-				return nil, fmt.Errorf("devhealthsource: scan %s day count: %w", st.kind, err)
-			}
-			days[int64(day)] = int64(total)
-		}
-		iterErr := rows.Err()
-		_ = rows.Close()
-		if iterErr != nil {
-			return nil, fmt.Errorf("devhealthsource: count %s per day: %w", st.kind, iterErr)
+			return nil, err
 		}
 		counts[st.kind] = days
 	}
 	return counts, nil
+}
+
+func countOneKindDays(ctx context.Context, client contextpacket.ClickHouseQueryClient, orgID string, st kindCountStatement) (map[int64]int64, error) {
+	rows, err := client.Query(ctx, st.day, []contextpacket.ClickHouseBinding{{Name: "org_id", Value: orgID}})
+	if err != nil {
+		return nil, fmt.Errorf("devhealthsource: count %s per day: %w", st.kind, err)
+	}
+	defer rows.Close()
+	days := map[int64]int64{}
+	for rows.Next() {
+		var day, total uint64
+		if err := rows.Scan(&day, &total); err != nil {
+			return nil, fmt.Errorf("devhealthsource: scan %s day count: %w", st.kind, err)
+		}
+		days[int64(day)] = int64(total)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("devhealthsource: count %s per day: %w", st.kind, err)
+	}
+	return days, nil
 }

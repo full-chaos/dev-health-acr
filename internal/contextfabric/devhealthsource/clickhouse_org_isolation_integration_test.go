@@ -93,22 +93,37 @@ var (
 // terminates the container after the last test.
 func sharedDevHealthClickHouse(t *testing.T) (string, clickhousedriver.Conn) {
 	t.Helper()
-	external := strings.TrimSpace(os.Getenv(clickHouseAddrEnv))
-	if external == "" {
-		chfixture.RequireContainers(t)
+	if external := strings.TrimSpace(os.Getenv(clickHouseAddrEnv)); external != "" {
+		return externalDevHealthClickHouse(t, external)
 	}
+	return containerDevHealthClickHouse(t)
+}
+
+// externalDevHealthClickHouse is the shared fixture on a ClickHouse already
+// running at addr (clickHouseAddrEnv): no container is started.
+func externalDevHealthClickHouse(t *testing.T, addr string) (string, clickhousedriver.Conn) {
+	t.Helper()
 	sharedDevHealthClickHouseOnce.Do(func() {
-		ctx := context.Background()
-		if external != "" {
-			admin, err := openPingedAdmin(ctx, external)
-			if err != nil {
-				sharedDevHealthClickHouseErr = err
-				return
-			}
-			sharedDevHealthClickHouseAddr, sharedDevHealthClickHouseAdmin = external, admin
-			sharedDevHealthClickHouseTerminate = func() { logCleanupErr("close admin connection", admin.Close()) }
+		admin, err := openPingedAdmin(context.Background(), addr)
+		if err != nil {
+			sharedDevHealthClickHouseErr = err
 			return
 		}
+		sharedDevHealthClickHouseAddr, sharedDevHealthClickHouseAdmin = addr, admin
+		sharedDevHealthClickHouseTerminate = func() { logCleanupErr("close admin connection", admin.Close()) }
+	})
+	if sharedDevHealthClickHouseErr != nil {
+		t.Fatalf("external ClickHouse: %v", sharedDevHealthClickHouseErr)
+	}
+	return sharedDevHealthClickHouseAddr, sharedDevHealthClickHouseAdmin
+}
+
+// containerDevHealthClickHouse starts the shared ClickHouse container.
+func containerDevHealthClickHouse(t *testing.T) (string, clickhousedriver.Conn) {
+	t.Helper()
+	chfixture.RequireContainers(t)
+	sharedDevHealthClickHouseOnce.Do(func() {
+		ctx := context.Background()
 		container, err := startterm.Generic(ctx, testcontainers.GenericContainerRequest{
 			ContainerRequest: testcontainers.ContainerRequest{
 				Image: chfixture.Image, ExposedPorts: []string{"9000/tcp"},
