@@ -153,3 +153,20 @@ func TestThePublishedSchemaRefusesAZonelessInstant(t *testing.T) {
 		}
 	}
 }
+
+// CHAOS-12634: the item target is a count: 0 and up, and absent is absent.
+func TestTheSummaryItemTargetIsACount(t *testing.T) {
+	fact := instantSummaryClaim("2026-11-02T04:00:00Z", "")
+	for _, target := range []int64{0, 40} {
+		value := target
+		fact.CompletionForecast.TargetItems = &value
+		if err := fact.Validate(); err != nil {
+			t.Fatalf("target_items %d: Validate() = %v", target, err)
+		}
+	}
+	negative := int64(-1)
+	fact.CompletionForecast.TargetItems = &negative
+	if err := fact.Validate(); err == nil {
+		t.Fatal("target_items -1 validated")
+	}
+}
