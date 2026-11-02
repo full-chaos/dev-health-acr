@@ -457,6 +457,7 @@ func (e *Engine) terminalResult(
 	// inputs not at all. Ordering them AFTER the decision was what let the
 	// status be chosen without reference to the offers it describes.
 	structureMaterial, cohortGateOutcome := GateOffersByFamily(structureMaterial, familyOutcome)
+	resolution, structureMaterial = askComparisonKind(familyOutcome.Frame, resolution, structureMaterial)
 	recordCohortStructureGate(ctx, e.telemetry, principal, cohortGateOutcome, interpretation.Shape)
 	// Hoisted so composeStructureNeeds below can mint deterministic offer
 	// ids from the SAME ResultID this result is actually saved under

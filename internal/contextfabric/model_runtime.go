@@ -249,6 +249,9 @@ type ModelExecutionReceipt struct {
 	// AGENTS.md forbids relying on.
 	ScopeAnchorKind      SubjectKind `json:"scope_anchor_kind,omitempty"`
 	RequestedSubjectKind SubjectKind `json:"requested_subject_kind,omitempty"`
+	// statedKind is the one kind the caller stated on this request (CHAOS-12548).
+	// It is the request's and not the model's, so it is never persisted.
+	statedKind SubjectKind
 	// The matching unrecognized flags. Every out-of-vocabulary emission
 	// must be COUNTABLE, because the gating measurement scores false
 	// emission: without these, a model inventing kind names is recorded
@@ -2122,7 +2125,15 @@ func receiptRequestsGroupAxis(receipt ModelExecutionReceipt) bool {
 // that states one, so without this no model turn reached it. The field holds one
 // kind, and the prompt has the model omit it when the operands state different
 // kinds, so it speaks for both sides.
+//
+// receipt.statedKind is the one kind the caller stated this turn (CHAOS-12548). On
+// a named pair it comes first, because the caller is speaking now. It reaches no
+// other frame: a pair is what the comparison path needs a kind for.
 func backfillNamedSubjectExpectedKind(frame QuestionFrame, receipt *ModelExecutionReceipt) QuestionFrame {
+	if receipt.statedKind != "" && frame.SubjectExpression.Kind == SubjectExpressionExplicitSet {
+		frame.SubjectExpression.Explicit = backfillNamedPairExpectedKind(frame.SubjectExpression.Explicit, receipt.statedKind)
+		return frame
+	}
 	if receipt.RequestedSubjectKind == "" || receipt.RequestedSubjectKindUnrecognized {
 		return frame
 	}
@@ -2304,6 +2315,7 @@ func (r RuntimeQuestionInterpreter) interpretOneSample(
 		// already rejected, which would put a phantom row into the
 		// invariant histogram.
 		if err == nil {
+			receipt.statedKind = soleStatedKind(request)
 			r.resolveFrame(ctx, principal, &receipt, question.Shape, question.SubjectTerms, question.TimeContext)
 			// See RequestedJudgmentRepair's own doc comment: this is the one
 			// place both the receipt a repair just wrote to and the SAME

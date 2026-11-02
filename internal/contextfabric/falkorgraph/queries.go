@@ -858,6 +858,11 @@ func (a *Adapter) edgesOfNode(ctx context.Context, key, orgID, uuid string, temp
 // limit+1 must stay at or below the cap of every deployment.
 const defaultNodeEdgeReadLimit = 5000
 
+// falkorResultSetSize is the RESULTSET_SIZE the image ships with. No deployment
+// here sets another value. Config.validate holds NodeEdgeReadLimit to it, because
+// a limit at or past it reads as complete while edges are missing.
+const falkorResultSetSize = 10000
+
 // nodeEdgeTierCypher is the first sort key of nodeEdgesCypher.
 const nodeEdgeTierCypher = "CASE WHEN otherKind IN ['" + string(contractsv1.ContextFabricSubjectRepository) + "', '" + string(contractsv1.ContextFabricSubjectProject) + "', '" +
 	string(contractsv1.ContextFabricSubjectTeam) + "', '" + string(contractsv1.ContextFabricSubjectOrganization) + "'] THEN 0 WHEN otherKind = '" +
