@@ -2128,6 +2128,24 @@ var WindowCanonicalizationOutcome = Event{
 	},
 }
 
+// PlanOperandReads is the Info line of what a comparison turn's operand read rows added to the plan (CHAOS-12596).
+var PlanOperandReads = Event{
+	ID:                       "contextfabric.plan_operand_reads",
+	Msg:                      "context fabric plan operand reads",
+	Level:                    LevelInfo,
+	Multiplicity:             MultiplicityZeroOrOnePerRequest,
+	RequiredOnlyConstruction: true,
+	Attribution:              []string{"request_id"},
+	BoundedAggregation:       "at most one line per investigation: recorded once, when the plan is built and the turn has an operand read row.",
+	Fields: []Field{
+		{Key: "org_id", Type: FieldString, Presence: PresenceRequired},
+		{Key: "operand_rows", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "kinds_named", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "kinds_added", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "request_id", Type: FieldString, Presence: PresenceConditional, Applicability: requestIDApplicability},
+	},
+}
+
 // WindowClassification is the Info line of the window-class decision a current-axis turn with no request window draws its default from (CHAOS-12595).
 var WindowClassification = Event{
 	ID:                       "contextfabric.window_classification",
@@ -5901,6 +5919,7 @@ var All = []Event{
 	StatedWindowAxisDecision,
 	WindowGatedForConfirmation,
 	WindowCanonicalizationOutcome,
+	PlanOperandReads,
 	WindowClassification,
 	InferredWindowGate,
 	InterpretationTerms,
