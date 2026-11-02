@@ -540,7 +540,7 @@ func projectDrivers(result contractsv1.ContextFabricInvestigationResult, bounds 
 	// MaxFacts like everything else, and deduplicated against what the drivers
 	// already brought, so a claim some driver did happen to cite is carried
 	// once.
-	plotted := claimsATreemapPlots(result.RenderShapes)
+	plotted := claimsAChartPlots(result.RenderShapes)
 	for _, claim := range result.ClaimedFacts {
 		if _, charted := plotted[claim.ClaimID]; !charted && !projectionCarriesUncited(claim.Kind) {
 			continue
@@ -1511,18 +1511,23 @@ func retainPastTheCut(kept, dropped []clampedNarrative, retain func(string) bool
 	return kept
 }
 
-// claimsATreemapPlots names the claims the answer's treemaps plot (CHAOS-12521).
-// An investment answer need not have a driver, so no driver cites its fact, and
-// the chart would lose its rows and be dropped. The server built the chart from
-// that claim, so the chart is the citation. Only a treemap: a claim no chart
-// plots stays out, and a dropped shape stays a counted drop.
-func claimsATreemapPlots(shapes []contractsv1.ContextFabricRenderShape) map[string]struct{} {
+// claimsAChartPlots names the claims the answer's treemaps and comparison tables
+// plot (CHAOS-12521, CHAOS-12513). An investment answer need not have a driver, and
+// a comparison's drivers need not cite every cell, so no driver brings those facts
+// and the chart would be dropped. The server built the chart from those claims, so
+// the chart is the citation. Only these two kinds: a claim no such chart plots
+// stays out, and a dropped shape stays a counted drop.
+func claimsAChartPlots(shapes []contractsv1.ContextFabricRenderShape) map[string]struct{} {
 	plotted := map[string]struct{}{}
 	for _, shape := range shapes {
-		if shape.Kind != contractsv1.ContextFabricRenderKindTreemap || len(shape.Series) == 0 || len(shape.Series[0].Points) == 0 {
+		if shape.Kind != contractsv1.ContextFabricRenderKindTreemap && shape.Kind != contractsv1.ContextFabricRenderKindTable {
 			continue
 		}
-		plotted[shape.Series[0].Points[0].Source.ClaimID] = struct{}{}
+		for _, series := range shape.Series {
+			for _, point := range series.Points {
+				plotted[point.Source.ClaimID] = struct{}{}
+			}
+		}
 	}
 	return plotted
 }

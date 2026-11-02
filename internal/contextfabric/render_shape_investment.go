@@ -12,6 +12,12 @@ type RenderShapeOptions struct {
 	// InvestmentThemeShare turns on the investment_theme_share rule
 	// (CHAOS-12521). See Config.ContextFabricInvestmentTreemapEnabled.
 	InvestmentThemeShare bool
+	// ComparisonSideBySide turns on the comparison_side_by_side rule
+	// (CHAOS-12513). See Config.ContextFabricComparisonTableEnabled.
+	ComparisonSideBySide bool
+	// FieldScope reads the declared scope of a field. The comparison rule
+	// reads it. A nil lookup scopes nothing, so that rule finds no cell.
+	FieldScope FactFieldScopeLookup
 }
 
 // The words of the treemap (CHAOS-12521). They are served, never derived from a
@@ -149,14 +155,22 @@ func familyTakesShape(family QuestionFamily, shape InvestigationShape) bool {
 // was on still serving the shape, on a by-id read and on a reuse hit, to the very
 // consumer the flag protects. The stored row is not touched.
 func WithoutDisabledRenderShapes(result InvestigationResult, options RenderShapeOptions) InvestigationResult {
-	if options.InvestmentThemeShare {
+	if options.InvestmentThemeShare && options.ComparisonSideBySide {
 		return result
 	}
 	var kept []contractsv1.ContextFabricRenderShape
 	for _, shape := range result.RenderShapes {
-		if shape.SelectedBy != contractsv1.ContextFabricRenderRuleInvestmentThemeShare {
-			kept = append(kept, shape)
+		switch shape.SelectedBy {
+		case contractsv1.ContextFabricRenderRuleInvestmentThemeShare:
+			if !options.InvestmentThemeShare {
+				continue
+			}
+		case contractsv1.ContextFabricRenderRuleComparisonSideBySide:
+			if !options.ComparisonSideBySide {
+				continue
+			}
 		}
+		kept = append(kept, shape)
 	}
 	result.RenderShapes = kept
 	return result

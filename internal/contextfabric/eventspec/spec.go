@@ -1847,6 +1847,7 @@ var RenderShapeSelectionSummary = Event{
 		{Key: "render_shape_rules_skipped", Type: FieldInt, Presence: PresenceRequired},
 		{Key: "render_shape_members_truncated", Type: FieldInt, Presence: PresenceRequired},
 		{Key: "render_shape_trends_omitted", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "render_shape_comparison_measures_left_out", Type: FieldInt, Presence: PresenceRequired},
 		{Key: "render_shape_accounting", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: []string{"ok", "violated"}},
 		{Key: "selected_shapes", Type: FieldObjectSlice, Presence: PresenceRequired, MaxItems: contractsv1.ContextFabricRenderShapesMaxCount, Fields: []Field{
 			{Key: "render_shape_kind", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: renderKindLineTokens()},

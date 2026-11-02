@@ -363,7 +363,7 @@ var contextFabricFactFieldLabels = map[string]string{
 	"window_days_with_data":                                   "Window days with data",
 	"window_end":                                              "Window end",
 	"window_mode":                                             "Window mode",
-	"window_pr_count":                                         "Pull requests in the window median",
+	"window_pr_count":                                         "Pull requests with a cycle time in the window",
 	"window_pr_cycle_hours_median":                            "Median pull request cycle time in the window (hours)",
 	"window_start":                                            "Window start",
 	"wip_age_p50_hours":                                       "Median work in progress age (hours)",

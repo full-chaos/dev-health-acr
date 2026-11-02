@@ -69,6 +69,13 @@ type RenderShapeSelectionEvent struct {
 	// -- and a ninth shape is a rejected document, not a smaller answer.
 	// Zero on every selection that lost nothing.
 	TrendsOmitted int
+	// ComparisonMeasuresLeftOut counts claimed measures the comparison rule
+	// could not state: sides on different days, two claims of one cell, or a
+	// word another measure holds. A COUNT and not a skip, as for trends: the
+	// rule can fire on the measures that remain, and a table that drops a row
+	// and says nothing reads as the whole comparison. Zero on every selection
+	// that lost nothing.
+	ComparisonMeasuresLeftOut int
 }
 
 // RenderShapeSkip records one rule that did not produce a shape.
@@ -216,6 +223,25 @@ const (
 	// RenderShapeSkipFewerThanTwoShares -- fewer than two shares are above 0.
 	// One part is no split.
 	RenderShapeSkipFewerThanTwoShares RenderShapeSkipReason = "fewer_than_two_shares"
+	// The comparison_side_by_side rule's reasons (CHAOS-12513). See
+	// render_shape_comparison.go.
+	//
+	// RenderShapeSkipNotExplicitComparison -- the served family is not
+	// explicit_comparison, or this turn's own frame does not ask for one. This
+	// is the common exit: most answers compare nothing (check 10).
+	RenderShapeSkipNotExplicitComparison RenderShapeSkipReason = "not_explicit_comparison"
+	// RenderShapeSkipFewerThanTwoSides -- fewer than two subjects committed.
+	RenderShapeSkipFewerThanTwoSides RenderShapeSkipReason = "fewer_than_two_sides"
+	// RenderShapeSkipTooManySides -- more sides than a shape holds series. The
+	// table is skipped WHOLE: a comparison missing a side is another comparison.
+	RenderShapeSkipTooManySides RenderShapeSkipReason = "too_many_sides"
+	// RenderShapeSkipMixedSubjectKinds -- the sides are of different kinds.
+	RenderShapeSkipMixedSubjectKinds RenderShapeSkipReason = "mixed_subject_kinds"
+	// RenderShapeSkipNoSharedMeasure -- the answer claims no comparable measure
+	// for every side. The rule never reads a number of its own (option A).
+	RenderShapeSkipNoSharedMeasure RenderShapeSkipReason = "no_shared_measure"
+	// RenderShapeSkipComparisonUnprovable -- the contract refused the table.
+	RenderShapeSkipComparisonUnprovable RenderShapeSkipReason = "comparison_unprovable"
 )
 
 // cohortRenderIntent reports whether a cohort chart is an answer TO this
@@ -310,6 +336,19 @@ func selectRenderShapes(result InvestigationResult, frame *QuestionFrame, option
 		shapes = append(shapes, *treemap)
 	} else {
 		event.skip(contractsv1.ContextFabricRenderRuleInvestmentThemeShare, reason)
+	}
+
+	// CHAOS-12513: ahead of the trends, for the same reason.
+	if !options.ComparisonSideBySide {
+		event.skip(contractsv1.ContextFabricRenderRuleComparisonSideBySide, RenderShapeSkipRuleDisabled)
+	} else {
+		table, leftOut, reason := comparisonSideBySideShape(result, frame, options.FieldScope)
+		event.ComparisonMeasuresLeftOut = leftOut
+		if table != nil {
+			shapes = append(shapes, *table)
+		} else {
+			event.skip(contractsv1.ContextFabricRenderRuleComparisonSideBySide, reason)
+		}
 	}
 
 	// CHAOS-4637: the dated_fact_trend rule RETURNS, and it returns
@@ -928,6 +967,7 @@ var renderShapeRules = []contractsv1.ContextFabricRenderShapeRule{
 	contractsv1.ContextFabricRenderRuleCohortDriverContribution,
 	contractsv1.ContextFabricRenderRuleDatedFactTrend,
 	contractsv1.ContextFabricRenderRuleInvestmentThemeShare,
+	contractsv1.ContextFabricRenderRuleComparisonSideBySide,
 }
 
 // Accounted is CHAOS-4621's structural invariant, as code rather than as a
@@ -1000,6 +1040,8 @@ func RenderShapeSkipReasonLineVocabulary() []string {
 		string(RenderShapeSkipSeveralThemeBreakdowns), string(RenderShapeSkipSubjectKindNotCharted),
 		string(RenderShapeSkipThemeRowUnusable), string(RenderShapeSkipFewerThanTwoShares), string(RenderShapeSkipCohortAnswer),
 		string(RenderShapeSkipThemeTableCut),
+		string(RenderShapeSkipNotExplicitComparison), string(RenderShapeSkipFewerThanTwoSides), string(RenderShapeSkipTooManySides),
+		string(RenderShapeSkipMixedSubjectKinds), string(RenderShapeSkipNoSharedMeasure), string(RenderShapeSkipComparisonUnprovable),
 		string(RenderShapeSkipNotCohortIntent), string(RenderShapeSkipNoRankedMember), string(RenderShapeSkipNoDrivers),
 		string(RenderShapeSkipTooManySignals), string(RenderShapeSkipNoDeclaredTable), string(RenderShapeSkipNoTimeSeriesTable),
 		string(RenderShapeSkipClaimFieldNotAMeasure), string(RenderShapeSkipUnresolvableMeasureRoles),

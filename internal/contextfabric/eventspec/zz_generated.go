@@ -6477,15 +6477,16 @@ func (f RenderShapeRuleSkippedFields) SlogArgs() []any {
 // RenderShapeSelectionSummaryFields is contextfabric.render_shape_selection_summary's generated typed construction interface
 // (CHAOS-5516): one Go field per Field RenderShapeSelectionSummary.Fields declares in spec.go.
 type RenderShapeSelectionSummaryFields struct {
-	OrgID                       string
-	QuestionShape               string
-	RenderShapesSelected        int
-	RenderShapeRulesSkipped     int
-	RenderShapeMembersTruncated int
-	RenderShapeTrendsOmitted    int
-	RenderShapeAccounting       string
-	SelectedShapes              []map[string]any
-	RequestID                   string
+	OrgID                                string
+	QuestionShape                        string
+	RenderShapesSelected                 int
+	RenderShapeRulesSkipped              int
+	RenderShapeMembersTruncated          int
+	RenderShapeTrendsOmitted             int
+	RenderShapeComparisonMeasuresLeftOut int
+	RenderShapeAccounting                string
+	SelectedShapes                       []map[string]any
+	RequestID                            string
 	// constructed (CHAOS-5516 r1 fix): an UNEXPORTED marker, generated on
 	// every RenderShapeSelectionSummaryFields uniformly, set ONLY by NewRenderShapeSelectionSummaryFields below. A caller
 	// outside this package cannot set an unexported field via a composite
@@ -6499,22 +6500,23 @@ type RenderShapeSelectionSummaryFields struct {
 
 // NewRenderShapeSelectionSummaryFields is the generated constructor for RenderShapeSelectionSummaryFields -- every
 // field RenderShapeSelectionSummary.Fields declares is a required parameter.
-func NewRenderShapeSelectionSummaryFields(orgID string, questionShape string, renderShapesSelected int, renderShapeRulesSkipped int, renderShapeMembersTruncated int, renderShapeTrendsOmitted int, renderShapeAccounting string, selectedShapes []map[string]any, requestID string) RenderShapeSelectionSummaryFields {
+func NewRenderShapeSelectionSummaryFields(orgID string, questionShape string, renderShapesSelected int, renderShapeRulesSkipped int, renderShapeMembersTruncated int, renderShapeTrendsOmitted int, renderShapeComparisonMeasuresLeftOut int, renderShapeAccounting string, selectedShapes []map[string]any, requestID string) RenderShapeSelectionSummaryFields {
 	valid := true
 	if selectedShapes == nil {
 		valid = false
 	}
 	return RenderShapeSelectionSummaryFields{
-		OrgID:                       orgID,
-		QuestionShape:               questionShape,
-		RenderShapesSelected:        renderShapesSelected,
-		RenderShapeRulesSkipped:     renderShapeRulesSkipped,
-		RenderShapeMembersTruncated: renderShapeMembersTruncated,
-		RenderShapeTrendsOmitted:    renderShapeTrendsOmitted,
-		RenderShapeAccounting:       renderShapeAccounting,
-		SelectedShapes:              selectedShapes,
-		RequestID:                   requestID,
-		constructed:                 valid,
+		OrgID:                                orgID,
+		QuestionShape:                        questionShape,
+		RenderShapesSelected:                 renderShapesSelected,
+		RenderShapeRulesSkipped:              renderShapeRulesSkipped,
+		RenderShapeMembersTruncated:          renderShapeMembersTruncated,
+		RenderShapeTrendsOmitted:             renderShapeTrendsOmitted,
+		RenderShapeComparisonMeasuresLeftOut: renderShapeComparisonMeasuresLeftOut,
+		RenderShapeAccounting:                renderShapeAccounting,
+		SelectedShapes:                       selectedShapes,
+		RequestID:                            requestID,
+		constructed:                          valid,
 	}
 }
 
@@ -6537,6 +6539,7 @@ func (f RenderShapeSelectionSummaryFields) SlogArgs() []any {
 		"render_shape_rules_skipped", f.RenderShapeRulesSkipped,
 		"render_shape_members_truncated", f.RenderShapeMembersTruncated,
 		"render_shape_trends_omitted", f.RenderShapeTrendsOmitted,
+		"render_shape_comparison_measures_left_out", f.RenderShapeComparisonMeasuresLeftOut,
 		"render_shape_accounting", contextfabric.SanitizeLogAttr(f.RenderShapeAccounting),
 		"selected_shapes", f.SelectedShapes,
 		"request_id", contextfabric.SanitizeLogAttr(f.RequestID),

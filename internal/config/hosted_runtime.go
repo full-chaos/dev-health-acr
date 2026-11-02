@@ -167,6 +167,10 @@ func loadHostedRuntimeValues(lookup lookupEnv, cfg *Config, defaultRequireStores
 	if cfg.ContextFabricVocabularyLabelsEnabled, err = boolValue(lookup, ContextFabricVocabularyLabelsEnabledEnvVar, false); err != nil {
 		return err
 	}
+	// CHAOS-12513: default OFF -- see Config.ContextFabricComparisonTableEnabled.
+	if cfg.ContextFabricComparisonTableEnabled, err = boolValue(lookup, ContextFabricComparisonTableEnabledEnvVar, false); err != nil {
+		return err
+	}
 	// CHAOS-12521: default OFF -- see Config.ContextFabricInvestmentTreemapEnabled.
 	if cfg.ContextFabricInvestmentTreemapEnabled, err = boolValue(lookup, ContextFabricInvestmentTreemapEnabledEnvVar, false); err != nil {
 		return err
@@ -208,6 +212,10 @@ const ContextFabricRunLeaseEnabledEnvVar = "ACR_CONTEXT_FABRIC_RUN_LEASE_ENABLED
 // ContextFabricInvestmentTreemapEnabledEnvVar turns on the
 // investment_theme_share render rule (CHAOS-12521).
 const ContextFabricInvestmentTreemapEnabledEnvVar = "ACR_CONTEXT_FABRIC_INVESTMENT_TREEMAP_ENABLED"
+
+// ContextFabricComparisonTableEnabledEnvVar turns on the
+// comparison_side_by_side render rule (CHAOS-12513).
+const ContextFabricComparisonTableEnabledEnvVar = "ACR_CONTEXT_FABRIC_COMPARISON_TABLE_ENABLED"
 
 // ContextFabricVocabularyLabelsEnabledEnvVar serves vocabulary_labels (CHAOS-12416).
 const ContextFabricVocabularyLabelsEnabledEnvVar = "ACR_CONTEXT_FABRIC_VOCABULARY_LABELS_ENABLED"
@@ -300,6 +308,7 @@ func (c Config) SafeAttributes() []any {
 		"context_fabric_server_completeness_authority_symmetric_enabled", c.ServerCompletenessAuthoritySymmetricEnabled,
 		"context_fabric_vocabulary_labels_enabled", c.ContextFabricVocabularyLabelsEnabled,
 		"context_fabric_investment_treemap_enabled", c.ContextFabricInvestmentTreemapEnabled,
+		"context_fabric_comparison_table_enabled", c.ContextFabricComparisonTableEnabled,
 		"context_fabric_event_stream_enabled", c.ContextFabricEventStreamEnabled,
 		"context_fabric_run_lease_enabled", c.ContextFabricRunLeaseEnabled,
 		"thread_list_first_question_enabled", c.ThreadListFirstQuestionEnabled,
