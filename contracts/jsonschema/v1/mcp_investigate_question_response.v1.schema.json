@@ -2247,7 +2247,8 @@
             "comparison_side_by_side",
             "investment_subcategory_share",
             "completion_forecast",
-            "completion_forecast_percentiles"
+            "completion_forecast_percentiles",
+            "investment_repository_flow"
           ],
           "type": "string"
         },
@@ -8903,7 +8904,8 @@
             "comparison_side_by_side",
             "investment_subcategory_share",
             "completion_forecast",
-            "completion_forecast_percentiles"
+            "completion_forecast_percentiles",
+            "investment_repository_flow"
           ],
           "type": "string"
         },

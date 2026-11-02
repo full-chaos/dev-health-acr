@@ -42,7 +42,11 @@ import (
 // (windowDefaultPolicy), or the binder's post-pass rules change in any way
 // that could change what INFERRED window an otherwise-identical question
 // receives.
-const WindowInferenceVersion = "win_v1"
+//
+// win_v1 -> win_v2 (CHAOS-12603): the interpretation model's window_class
+// pick now reaches ClassifyWindow (carryWindowPick); under win_v1 every turn
+// classified with an empty pick and fell back by shape.
+const WindowInferenceVersion = "win_v2"
 
 // windowDefaultPolicy pins the DW0-ruled default-width candidate (design
 // brief §9 decision matrix row DW0, chris: "quarter-to-year... quarter is

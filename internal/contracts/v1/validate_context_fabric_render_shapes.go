@@ -36,6 +36,9 @@ type renderShapeSources struct {
 	// subcategoryShareClaims names the claims whose factRows are their declared
 	// subcategory_breakdown table (CHAOS-12554), for the same reason.
 	subcategoryShareClaims map[string]struct{}
+	// repositoryFlowClaims names the claims whose factRows are their declared
+	// repository_theme_breakdown table (CHAOS-12578), for the same reason.
+	repositoryFlowClaims map[string]struct{}
 	// claimValues maps a claim id to what that claim states.
 	claimValues map[string]renderClaimValue
 	// tableRows maps a claim id to its `rows`, the table its `table`
@@ -344,6 +347,9 @@ func validateRenderShapes(shapes []ContextFabricRenderShape, sources renderShape
 			return err
 		}
 		if err := validateSunburstShape(shape, sources); err != nil {
+			return err
+		}
+		if err := validateSankeyShape(shape, sources); err != nil {
 			return err
 		}
 		if err := validateComparisonShape(shape, sources); err != nil {
@@ -805,11 +811,30 @@ func validContextFabricRenderShapeRule(rule ContextFabricRenderShapeRule) bool {
 	case ContextFabricRenderRuleCohortAttentionScore, ContextFabricRenderRuleCohortDriverContribution,
 		ContextFabricRenderRuleDatedFactTrend, ContextFabricRenderRuleInvestmentThemeShare,
 		ContextFabricRenderRuleComparisonSideBySide, ContextFabricRenderRuleInvestmentSubcategoryShare,
-		ContextFabricRenderRuleCompletionForecast, ContextFabricRenderRuleCompletionForecastPercentiles:
+		ContextFabricRenderRuleCompletionForecast, ContextFabricRenderRuleCompletionForecastPercentiles,
+		ContextFabricRenderRuleInvestmentRepositoryFlow:
 		return true
 	default:
 		return false
 	}
+}
+
+// holdsRepositoryFlowTable reports that a claim's renderable rows are a declared
+// repository_theme_breakdown breakdown table (CHAOS-12578): keyed by repository
+// and theme, with weighted_effort and theme_weighted_effort among its measures and
+// the repository's word among its observations.
+func holdsRepositoryFlowTable(table *ContextFabricClaimedFactTable, timeSeriesRows []ContextFabricClaimedFactRow) bool {
+	if table == nil || len(timeSeriesRows) > 0 {
+		return false
+	}
+	if table.Field != ContextFabricRenderRepositoryFlowTableField || table.Shape != ContextFabricFactTableShapeBreakdown {
+		return false
+	}
+	if len(table.Key) != 2 || table.Key[0] != ContextFabricRenderRepositoryField || table.Key[1] != ContextFabricRenderThemeField {
+		return false
+	}
+	return table.HasMeasure(ContextFabricRenderEffortField) && table.HasMeasure(ContextFabricRenderThemeEffortField) &&
+		table.HasObservation(ContextFabricRenderRepositoryWordField)
 }
 
 // renderShapeSourcesFromResult indexes the CANONICAL result's own cohort
@@ -826,6 +851,7 @@ func renderShapeSourcesFromResult(result ContextFabricInvestigationResult) rende
 		distributionClaims:     map[string]struct{}{},
 		forecastSummaries:      map[string]ContextFabricClaimedCompletionForecast{},
 		forecastScopes:         map[string]string{},
+		repositoryFlowClaims:   map[string]struct{}{},
 		claimValues:            map[string]renderClaimValue{},
 	}
 	if result.Cohort != nil {
@@ -854,6 +880,9 @@ func renderShapeSourcesFromResult(result ContextFabricInvestigationResult) rende
 		if holdsSubcategoryShareTable(fact.Table, fact.TimeSeriesRows) {
 			sources.subcategoryShareClaims[fact.ClaimID] = struct{}{}
 		}
+		if holdsRepositoryFlowTable(fact.Table, fact.TimeSeriesRows) {
+			sources.repositoryFlowClaims[fact.ClaimID] = struct{}{}
+		}
 		sources.claimValues[fact.ClaimID] = renderClaimValue{value: fact.Value, kind: fact.Kind, field: fact.Field, subject: fact.Subject, derived: len(fact.DerivedFrom) > 0}
 	}
 	return sources
@@ -877,6 +906,7 @@ func renderShapeSourcesFromProjection(projection ContextFabricAnswerProjection) 
 		distributionClaims:     map[string]struct{}{},
 		forecastSummaries:      map[string]ContextFabricClaimedCompletionForecast{},
 		forecastScopes:         map[string]string{},
+		repositoryFlowClaims:   map[string]struct{}{},
 		claimValues:            map[string]renderClaimValue{},
 	}
 	if projection.Cohort != nil {
@@ -927,6 +957,9 @@ func renderShapeSourcesFromProjection(projection ContextFabricAnswerProjection) 
 		}
 		if holdsSubcategoryShareTable(fact.Table, fact.TimeSeriesRows) {
 			sources.subcategoryShareClaims[fact.ClaimID] = struct{}{}
+		}
+		if holdsRepositoryFlowTable(fact.Table, fact.TimeSeriesRows) {
+			sources.repositoryFlowClaims[fact.ClaimID] = struct{}{}
 		}
 		sources.claimValues[fact.ClaimID] = renderClaimValue{value: fact.Value, kind: fact.Kind, field: fact.Field, subject: fact.Subject}
 	}
