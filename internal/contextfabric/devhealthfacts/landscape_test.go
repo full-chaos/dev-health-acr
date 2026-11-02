@@ -284,3 +284,19 @@ func TestLandscapeProviderLogsTheRetractionFilterDecision(t *testing.T) {
 		t.Fatalf("decision record = %#v", entry)
 	}
 }
+
+// The day of a landscape row is a freshness value (CHAOS-12533): the numbers are
+// a rolling 30 days that end on it, and each team has its own latest day.
+func TestLandscapeDeclaresTheDayFresh(t *testing.T) {
+	t.Parallel()
+	provider := findProvider(t, devhealthfacts.NewProviders(&fakeClient{}), contextfabric.FactLandscape)
+	for _, field := range provider.Capability().Fields {
+		if field.Name == "as_of_day" {
+			if !field.Freshness {
+				t.Fatal("as_of_day is not declared fresh")
+			}
+			return
+		}
+	}
+	t.Fatal("the landscape capability declares no as_of_day field")
+}

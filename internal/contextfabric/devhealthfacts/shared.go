@@ -1348,7 +1348,10 @@ import (
 // ownership (graph_team_narrowing_undecided_paths): its coverage is partial, and
 // a complete answer is floored to partial with one sentence per cause. An answer
 // saved under v259 holds no such disclosure and must not be reused.
-const QueryVersion = "devhealthfacts.clickhouse.v260"
+// v260 -> v261: a team landscape fact carries its row's values as scalars, and a
+// claim on a landscape fact carries area_breakdown or team_breakdown, with no
+// wip_max_30d (CHAOS-12533). An answer saved under v260 holds no landscape row.
+const QueryVersion = "devhealthfacts.clickhouse.v261"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each

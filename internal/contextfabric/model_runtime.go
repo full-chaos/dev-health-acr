@@ -1465,12 +1465,32 @@ func canonicalFieldRows(fact CanonicalFact) (rows []contractsv1.ContextFabricCla
 	source := fact.Fields[rowsField].Rows
 	rows = make([]contractsv1.ContextFabricClaimedFactRow, 0, len(source))
 	for _, row := range source {
-		rows = append(rows, convertFactValueRow(row))
+		converted := convertFactValueRow(row)
+		for _, column := range directOnlyColumns(fact.Fields[rowsField]) {
+			delete(converted.Fields, column)
+		}
+		rows = append(rows, converted)
 	}
 	if len(rows) > contractsv1.ContextFabricClaimedFactMaxRows {
 		return rows[:contractsv1.ContextFabricClaimedFactMaxRows], true
 	}
 	return rows, false
+}
+
+// attachableRows reports a Rows-shaped field a claim may carry. A table
+// declared DirectOnly is not one: it is out of the choice by its declaration,
+// never by its name, so it cannot make a fact ambiguous.
+func attachableRows(value FactValue) bool {
+	return len(value.Rows) > 0 && (value.Table == nil || !value.Table.DirectOnly)
+}
+
+// directOnlyColumns are the columns a field's declaration keeps out of an
+// answer.
+func directOnlyColumns(value FactValue) []string {
+	if value.Table == nil {
+		return nil
+	}
+	return value.Table.DirectOnlyColumns
 }
 
 // canonicalRowsField is the ONE place a fact's Rows-shaped field is chosen.
@@ -1486,7 +1506,7 @@ func canonicalRowsField(fact CanonicalFact) (field string, ambiguous bool, ok bo
 	var rowsField string
 	rowsFieldCount := 0
 	for key, value := range fact.Fields {
-		if len(value.Rows) > 0 {
+		if attachableRows(value) {
 			rowsFieldCount++
 			rowsField = key
 		}
@@ -1536,11 +1556,14 @@ func canonicalFieldTable(fact CanonicalFact) *contractsv1.ContextFabricClaimedFa
 	if declared == nil {
 		return nil
 	}
+	measures := slices.DeleteFunc(append([]string(nil), declared.Measures...), func(measure string) bool {
+		return slices.Contains(declared.DirectOnlyColumns, measure)
+	})
 	return &contractsv1.ContextFabricClaimedFactTable{
 		Field:        field,
 		Shape:        contractsv1.ContextFabricFactTableShape(declared.Shape),
 		Key:          append([]string(nil), declared.Key...),
-		Measures:     append([]string(nil), declared.Measures...),
+		Measures:     measures,
 		Observations: append([]string(nil), declared.Observations...),
 		OrderBy:      declared.OrderBy,
 	}
@@ -1557,7 +1580,7 @@ func uniqueNonTimeSeriesRowsField(fact CanonicalFact) (field string, ok bool) {
 	found := ""
 	count := 0
 	for key, value := range fact.Fields {
-		if len(value.Rows) == 0 {
+		if !attachableRows(value) {
 			continue
 		}
 		if value.Table != nil && value.Table.Shape == FactTableTimeSeries {

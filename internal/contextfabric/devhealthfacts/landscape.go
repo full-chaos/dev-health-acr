@@ -232,6 +232,11 @@ type landscapeCoordinateRow struct {
 	xRawAvg, yRawAvg float64
 }
 
+// landscapeAnswerOmits is the column an answer does not show: every work-item
+// count lands on rows no team owns (CHAOS-12535), so a team's wip_max_30d reads
+// 0 whether or not it has work in progress. A direct reader still gets it.
+var landscapeAnswerOmits = []string{"wip_max_30d"}
+
 func (r landscapeCoordinateRow) toFactValueRow() contextfabric.FactValueRow {
 	return contextfabric.FactValueRow{Fields: map[string]contextfabric.FactValue{
 		"map_name":   contextfabric.StringFactValue(r.mapName),
@@ -247,7 +252,11 @@ func landscapeCoordinatesTable(rows []contextfabric.FactValueRow, key []string, 
 		Key:      key,
 		Measures: []string{"x_raw_mean", "y_raw_mean"},
 		Grain:    timeBound.effectiveGrain(grainDaily),
-		Rows:     rows,
+		// Deprecated (CHAOS-12533): on two of the three maps x_raw_mean is a mean
+		// of log1p values, not a raw value. read_facts serves it until an
+		// acr-data version bump can drop it.
+		DirectOnly: true,
+		Rows:       rows,
 	})
 }
 
@@ -318,7 +327,15 @@ ORDER BY team_id, map_name`)
 		return max(rowCount, coordinateRows), 0, rejected, scanErr
 	}
 	for _, teamID := range teamOrder {
+		row := byTeam[teamID].toFactValueRow()
 		fields := map[string]contextfabric.FactValue{
+			// A table reaches no model (CHAOS-4355), so these scalars are what a
+			// model can read and claim. The claim then carries the row.
+			"as_of_day":               row.Fields["as_of_day"],
+			"identity_count":          row.Fields["identity_count"],
+			"churn_loc_30d":           row.Fields["churn_loc_30d"],
+			"delivery_units_30d":      row.Fields["delivery_units_30d"],
+			"cycle_p50_30d_hours_avg": row.Fields["cycle_p50_30d_hours_avg"],
 			"area_breakdown": contextfabric.TableFactValue(contextfabric.FactTable{
 				Shape: contextfabric.FactTableBreakdown,
 				Key:   []string{"as_of_day"},
@@ -326,8 +343,9 @@ ORDER BY team_id, map_name`)
 					"identity_count", "churn_loc_30d", "delivery_units_30d",
 					"cycle_p50_30d_hours_avg", "wip_max_30d",
 				},
-				Grain: timeBound.effectiveGrain(grainDaily),
-				Rows:  []contextfabric.FactValueRow{byTeam[teamID].toFactValueRow()},
+				Grain:             timeBound.effectiveGrain(grainDaily),
+				DirectOnlyColumns: landscapeAnswerOmits,
+				Rows:              []contextfabric.FactValueRow{row},
 			}),
 		}
 		if coordinates := coordinatesByTeam[teamID]; len(coordinates) > 0 {
@@ -520,8 +538,9 @@ ORDER BY p.provider, p.id, il.team_id, il.map_name`)
 					"identity_count", "churn_loc_30d", "delivery_units_30d",
 					"cycle_p50_30d_hours_avg", "wip_max_30d",
 				},
-				Grain: timeBound.effectiveGrain(grainDaily),
-				Rows:  teamRows,
+				Grain:             timeBound.effectiveGrain(grainDaily),
+				DirectOnlyColumns: landscapeAnswerOmits,
+				Rows:              teamRows,
 			})
 		}
 		if omitted > 0 {
