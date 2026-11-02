@@ -1461,6 +1461,12 @@ type ContextFabricSubjectResolution struct {
 	// not be read. "" otherwise. The sentence is the only form that leaves the
 	// process.
 	NamedRepositoryLinkLimitation string `json:"-"`
+	// CaseTwinReadingLimitations (CHAOS-12663) holds one sentence per term a
+	// case-exact label match committed over a subject whose label differs from
+	// it only in case: which subject the term was read as, and the other
+	// same-name subjects, so the user can name one of them instead. Empty
+	// otherwise. The sentences are the only form that leaves the process.
+	CaseTwinReadingLimitations []string `json:"-"`
 	// CommitDecisionDigests (CHAOS-4087) is a small, closed-vocabulary
 	// summary of WHICH MECHANISM committed each subject in Committed --
 	// persisted so a wrong commit discovered later from a STORED result
