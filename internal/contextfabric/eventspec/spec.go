@@ -4956,6 +4956,7 @@ var DirectRead = Event{
 		{Key: "latency_ms", Type: FieldInt, Presence: PresenceRequired},
 		{Key: "error_class", Type: FieldString, Presence: PresenceConditional, Applicability: "written when the call ends invalid_request or unavailable", ClosedVocabulary: directReadErrorClass},
 		{Key: "anchor", Type: FieldString, Presence: PresenceConditional, Applicability: "written when a handle-mode anchor was given and a gate decision is available (absent when the gate is unavailable) (CHAOS-7158): the true gate decision, server side only", ClosedVocabulary: []string{"admitted", "refused"}},
+		{Key: "reference_row", Type: FieldString, Presence: PresenceConditional, Applicability: "written when a handle-mode handle is a GitHub owner/repo#N reference, unanchored, of a caller who is not repository-restricted (CHAOS-12642): what the stored rows decided; unread keeps the work item reading", ClosedVocabulary: []string{"pull_request_row", "work_item_reading", "unread"}},
 		{Key: "request_id", Type: FieldString, Presence: PresenceConditional, Applicability: "written when the request context carries a request ID"},
 	},
 }

@@ -2179,6 +2179,7 @@ type DirectReadFields struct {
 	LatencyMs    int
 	ErrorClass   string
 	Anchor       string
+	ReferenceRow string
 	RequestID    string
 	// constructed (CHAOS-5516 r1 fix): an UNEXPORTED marker, generated on
 	// every DirectReadFields uniformly, set ONLY by NewDirectReadFields below. A caller
@@ -2193,7 +2194,7 @@ type DirectReadFields struct {
 
 // NewDirectReadFields is the generated constructor for DirectReadFields -- every
 // field DirectRead.Fields declares is a required parameter.
-func NewDirectReadFields(orgID string, tool string, mode string, kinds []string, subjectKinds []string, count int, status string, latencyMs int, errorClass string, anchor string, requestID string) DirectReadFields {
+func NewDirectReadFields(orgID string, tool string, mode string, kinds []string, subjectKinds []string, count int, status string, latencyMs int, errorClass string, anchor string, referenceRow string, requestID string) DirectReadFields {
 	valid := true
 	if kinds == nil {
 		valid = false
@@ -2212,6 +2213,7 @@ func NewDirectReadFields(orgID string, tool string, mode string, kinds []string,
 		LatencyMs:    latencyMs,
 		ErrorClass:   errorClass,
 		Anchor:       anchor,
+		ReferenceRow: referenceRow,
 		RequestID:    requestID,
 		constructed:  valid,
 	}
@@ -2240,6 +2242,7 @@ func (f DirectReadFields) SlogArgs() []any {
 		"latency_ms", f.LatencyMs,
 		"error_class", contextfabric.SanitizeLogAttr(f.ErrorClass),
 		"anchor", contextfabric.SanitizeLogAttr(f.Anchor),
+		"reference_row", contextfabric.SanitizeLogAttr(f.ReferenceRow),
 		"request_id", contextfabric.SanitizeLogAttr(f.RequestID),
 	}
 }

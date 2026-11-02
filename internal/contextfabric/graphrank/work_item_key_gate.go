@@ -62,17 +62,17 @@ func bindQuestionHandles(ctx context.Context, principal storage.Principal, reque
 	event := ResolutionTraceEvent{RequestID: request.RequestID, Stage: "work_item_key_gate"}
 	rows := ResolutionTraceEvent{RequestID: request.RequestID, Stage: "repository_reference_row"}
 	referencesRead := false
+	referenceReads := 0
 	kept := make([]BoundHandle, 0, len(bound))
 	for _, handle := range bound {
 		if isPullRequestReferenceShape(handle) {
 			rows.RepositoryReferences++
-			row, fresh := readRepositoryReferenceRow(scoped, principal, handle.Value, deps, rows.RepositoryReferences-1)
+			row, fresh := readRepositoryReferenceRow(scoped, principal, handle.Value, deps, &referenceReads)
 			referencesRead = referencesRead || fresh
 			switch row {
 			case repositoryReferencePullRequestRow:
 				rows.RepositoryReferencePullRequestRows++
-				handle.Kind, handle.Grammar = contextfabric.SubjectPullRequest, pullRequestRepoReferenceGrammar
-				kept = append(kept, handle)
+				kept = append(kept, AsPullRequestReference(handle))
 				continue
 			case repositoryReferenceWorkItemRow:
 				rows.RepositoryReferenceWorkItemRows++
@@ -166,6 +166,18 @@ func isPullRequestReferenceShape(handle BoundHandle) bool {
 	return handle.Grammar == workItemRepoReferenceGrammar && strings.Contains(handle.Value, "#")
 }
 
+// IsPullRequestReferenceShape reports a handle the stored rows may show to be a
+// GitHub pull request (CHAOS-12642). find_subjects handle mode reads it the same
+// way a turn does.
+func IsPullRequestReferenceShape(handle BoundHandle) bool { return isPullRequestReferenceShape(handle) }
+
+// AsPullRequestReference is the pull_request_repo_reference handle for a
+// reference the stored rows showed to be a pull request: same value and span.
+func AsPullRequestReference(handle BoundHandle) BoundHandle {
+	handle.Kind, handle.Grammar = contextfabric.SubjectPullRequest, pullRequestRepoReferenceGrammar
+	return handle
+}
+
 // readRepositoryReferenceRow decides what owner/repo#N names, by stored rows and
 // in this order (lead ruling, CHAOS-12642): a GitHub pull request row with that
 // repository and number, else a work item with that key, else nothing. On GitHub
@@ -173,17 +185,17 @@ func isPullRequestReferenceShape(handle BoundHandle) bool {
 // two exists, and nothing is guessed. Both reads are the census, under the
 // caller's grant, and the turn's memo keeps each, so a reference is read once per
 // turn. A read that cannot run, or does not close, decides nothing: the reference
-// keeps its work item reading.
-func readRepositoryReferenceRow(ctx context.Context, principal storage.Principal, reference string, deps ResolveDeps, reads int) (row int, fresh bool) {
-	canRead := deps.CensusFunc != nil && reads < maxWorkItemKeyPrefixReads
-	pullRequest, ok, fresh := readReferenceCensus(ctx, principal, contextfabric.SubjectPullRequest, reference, deps, canRead)
+// keeps its work item reading. reads counts the census reads the call has made:
+// they stay inside maxWorkItemKeyPrefixReads, like the prefix reads.
+func readRepositoryReferenceRow(ctx context.Context, principal storage.Principal, reference string, deps ResolveDeps, reads *int) (row int, fresh bool) {
+	pullRequest, ok, fresh := readReferenceCensus(ctx, principal, contextfabric.SubjectPullRequest, reference, deps, reads)
 	switch {
 	case !ok:
 		return repositoryReferenceUnread, fresh
 	case pullRequest:
 		return repositoryReferencePullRequestRow, fresh
 	}
-	workItem, ok, workItemFresh := readReferenceCensus(ctx, principal, contextfabric.SubjectWorkItem, reference, deps, canRead)
+	workItem, ok, workItemFresh := readReferenceCensus(ctx, principal, contextfabric.SubjectWorkItem, reference, deps, reads)
 	fresh = fresh || workItemFresh
 	switch {
 	case !ok:
@@ -196,16 +208,17 @@ func readRepositoryReferenceRow(ctx context.Context, principal storage.Principal
 
 // readReferenceCensus is one census of the reference as kind. fresh is false
 // when the turn's memo already held the read. A read that cannot run (no census
-// wired, or the turn's read budget spent) is kept as unread too, so the turn
-// reports it once.
-func readReferenceCensus(ctx context.Context, principal storage.Principal, kind CensusKind, reference string, deps ResolveDeps, canRead bool) (seen, ok, fresh bool) {
+// wired, or the read budget spent) is kept as unread too, so the turn reports it
+// once.
+func readReferenceCensus(ctx context.Context, principal storage.Principal, kind CensusKind, reference string, deps ResolveDeps, reads *int) (seen, ok, fresh bool) {
 	grant, bound := contextfabric.CensusGrantFrom(ctx)
 	key := "repository_reference\x00" + string(kind) + "\x00" + principal.OrgID + "\x00" + strconv.FormatBool(bound) + "\x00" + strings.Join(grant, "\x01") + "\x00" + reference
 	if read, found := contextfabric.WorkItemKeyPrefixReadFrom(ctx, key); found {
 		return read.Seen, read.Read, false
 	}
 	var read contextfabric.WorkItemKeyPrefixRead
-	if canRead {
+	if deps.CensusFunc != nil && *reads < maxWorkItemKeyPrefixReads {
+		*reads++
 		outcome, err := censusOnce(ctx, grantEnforced(deps.CensusFunc), principal.OrgID, kind, reference)
 		read = contextfabric.WorkItemKeyPrefixRead{Seen: outcome.Count > 0, Read: err == nil && !outcome.ClosureMismatch && !outcome.SatisfierSetClosureMismatch}
 	}

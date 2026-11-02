@@ -223,3 +223,30 @@ func TestATurnReadsAReferenceOnce(t *testing.T) {
 		t.Fatalf("lines = %d, want 1", n)
 	}
 }
+
+// The turn's census reads for references stay inside the same budget as its
+// prefix reads: a reference whose read does not fit is unread and keeps its work
+// item reading (codex r1 P2: eight references made sixteen census calls).
+func TestReferenceReadsStayInsideTheReadBudget(t *testing.T) {
+	t.Parallel()
+	spy := &grantCensusSpy{}
+	var buf bytes.Buffer
+	tracer := NewSlogResolutionTracer(slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelInfo})))
+	deps := ResolveDeps{CensusFunc: spy.census, WorkItemKeyPrefix: everyKeyPrefixHeld, ResolutionTracer: tracer}
+	request := testRequest()
+	request.Question = "compare acme/w#1 acme/w#2 acme/w#3 acme/w#4 acme/w#5 acme/w#6 acme/w#7 acme/w#8 acme/w#9"
+	bindQuestionHandles(context.Background(), storage.Principal{OrgID: "org_1"}, request, deps)
+	if len(spy.calls) > maxWorkItemKeyPrefixReads {
+		t.Fatalf("census calls = %d, want at most %d", len(spy.calls), maxWorkItemKeyPrefixReads)
+	}
+	log, err := certify.Parse(buf.Bytes())
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Four references read in full (a pull request read and a work item read
+	// each); the other five are unread.
+	want := map[string]any{"request_id": request.RequestID, "stage": "repository_reference_row", "references": 9, "pull_request_row": 0, "work_item_row": 0, "not_found": 4, "unread": 5}
+	if _, err := certify.Certify(log, certify.Assertion{Event: eventspec.RepositoryReferenceRow, Want: want}); err != nil {
+		t.Fatalf("Certify = %v", err)
+	}
+}

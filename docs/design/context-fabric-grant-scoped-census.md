@@ -354,9 +354,19 @@ in this order (lead ruling, CHAOS-12642):
 The repository name compares trimmed and lower-cased. GitLab writes `!` for a merge
 request and `#` for an issue, so a `!` reference is never read as a pull request,
 and a GitLab repository never holds the pull request row. Each reference costs at
-most two census reads, the turn's memo keeps them, and the budget is the prefix
-read's 8. `graphrank.repository_reference_row` logs at Info, once per turn, how
+most two census reads, the turn's memo keeps them, and a call makes at most 8
+census reads for references, the prefix read's budget; a reference past it is
+unread. `graphrank.repository_reference_row` logs at Info, once per turn, how
 many references each rule decided; counts only.
+
+`find_subjects` handle mode reads a whole `owner/repo#N` handle the same way: one
+pull request census first, and a row makes the handle the pull request. The direct
+read line names the decision in `reference_row` (`pull_request_row`,
+`work_item_reading`, `unread`). It reads only an unanchored handle of a caller
+who is not repository-restricted: a restricted caller is refused on the key shape
+before any read (CHAOS-7200), and with an anchor the census of a refused anchor
+must not show through the kind, so an anchored reference keeps the work item
+reading.
 
 `find_subjects` handle mode keeps one whole key of any prefix
 (`BindWorkItemKey`). A key in a sentence is refused there for every prefix; before

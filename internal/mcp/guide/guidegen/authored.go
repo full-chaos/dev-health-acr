@@ -114,7 +114,7 @@ var grammarExamples = map[string]grammarExample{
 	"pull_request_repo_reference": {
 		Question:       "Is acme/widget#8 ready to merge?",
 		Value:          "acme/widget#8",
-		Note:           "A GitHub pull request: GitHub issues and pull requests share one number space, so the text alone cannot tell them apart. In free text (`investigate_question`) the reference binds here only when your organization stores a pull request with that number in that GitHub repository; otherwise it stays `work_item_repo_reference`. GitLab `#` references are issues, so they never bind here.",
+		Note:           "A GitHub pull request: GitHub issues and pull requests share one number space, so the text alone cannot tell them apart. In free text (`investigate_question`) and as a whole `find_subjects` (if listed) handle with no anchor, the reference binds here only when your organization stores a pull request with that number in that GitHub repository; otherwise it stays `work_item_repo_reference`. GitLab `#` references are issues, so they never bind here.",
 		FromStoredRows: "work_item_repo_reference",
 	},
 	"ci_run_id": {

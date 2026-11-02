@@ -3175,6 +3175,17 @@
         "applicability": "written when a handle-mode anchor was given and a gate decision is available (absent when the gate is unavailable) (CHAOS-7158): the true gate decision, server side only"
       },
       {
+        "key": "reference_row",
+        "type": "string",
+        "presence": "conditional",
+        "closed_vocabulary": [
+          "pull_request_row",
+          "work_item_reading",
+          "unread"
+        ],
+        "applicability": "written when a handle-mode handle is a GitHub owner/repo#N reference, unanchored, of a caller who is not repository-restricted (CHAOS-12642): what the stored rows decided; unread keeps the work item reading"
+      },
+      {
         "key": "request_id",
         "type": "string",
         "presence": "conditional",
