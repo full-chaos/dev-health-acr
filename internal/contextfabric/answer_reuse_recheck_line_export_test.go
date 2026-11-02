@@ -47,6 +47,7 @@ func RunReuseLineForTest(ctx context.Context, t *testing.T, telemetry EngineTele
 	subjects := reuseSubjects(54)
 	last := subjects[53]
 	budget := time.Hour
+	expireBudget := false
 	graph := &recheckGraph{pathRefs: map[string]string{}}
 	candidate := recheckCandidate(subjects)
 	cite := func() {
@@ -80,14 +81,16 @@ func RunReuseLineForTest(ctx context.Context, t *testing.T, telemetry EngineTele
 	case ReuseLineRecheckDeadline:
 		cite()
 		graph.hangDiscoverOn = 2
-		budget = 20 * time.Millisecond
+		// The budget ends inside the hung read, never on a timer (CHAOS-12573).
+		expireBudget = true
 	case ReuseLineRecheckCancelled:
 		cite()
 		graph.hangDiscoverOn = 2
 		cancelled, cancel := context.WithCancel(ctx)
 		defer cancel()
 		ctx = cancelled
-		time.AfterFunc(20*time.Millisecond, cancel)
+		// Inside the hung read, never on a timer (CHAOS-12573).
+		graph.onHang = cancel
 	case ReuseLineNarrowing:
 		cite()
 		graph.narrowingUnverifiedFor = last.CanonicalID
@@ -120,6 +123,13 @@ func RunReuseLineForTest(ctx context.Context, t *testing.T, telemetry EngineTele
 	})
 	if err != nil {
 		t.Fatalf("NewEngine() error = %v", err)
+	}
+	if expireBudget {
+		engine.recheckContext = func(ctx context.Context, _ time.Duration) (context.Context, context.CancelFunc) {
+			budgetCtx, cancel := context.WithCancel(ctx)
+			graph.onHang = cancel
+			return budgetCtx, cancel
+		}
 	}
 	_, _ = engine.Investigate(ctx, ownerPrincipal("user_a", "acme/tools"), validInvestigationRequest())
 	return ReuseLineRun{Reads: len(graph.resolves) + len(graph.discovers), Subjects: len(reuseSubjectsToRecheck(candidate))}

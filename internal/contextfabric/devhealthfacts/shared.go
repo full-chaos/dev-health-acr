@@ -1366,7 +1366,14 @@ import (
 // v264 -> v265: a team landscape fact holds its cycle out of an answer: no
 // scalar, and no cycle in a claim's row (CHAOS-12565). An answer saved under
 // v264 can state a cycle that reads missing days as 0.
-const QueryVersion = "devhealthfacts.clickhouse.v265"
+//
+// v265 -> v266: a team landscape fact carries daily_landscape, its newest 64
+// days as a declared time series, and a claim on it draws a trend (CHAOS-12534).
+//
+// v266 -> v267: a ticket key of any tracker binds a handle when the caller holds
+// its prefix (CHAOS-12463). An answer saved under v266 answered such a question by
+// search.
+const QueryVersion = "devhealthfacts.clickhouse.v267"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each
