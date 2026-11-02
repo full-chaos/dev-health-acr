@@ -6818,7 +6818,8 @@
           "offers_unavailable",
           "period_shape",
           "offers_beyond_window",
-          "window_only"
+          "window_only",
+          "window_only_unpickable_asks"
         ]
       },
       {
@@ -8310,7 +8311,7 @@
         "type": "string",
         "presence": "required",
         "closed_vocabulary": [
-          "question-family.v5"
+          "question-family.v6"
         ]
       },
       {
@@ -9333,7 +9334,7 @@
         "presence": "required",
         "closed_vocabulary": [
           "",
-          "question-family.v5"
+          "question-family.v6"
         ]
       },
       {
@@ -12210,7 +12211,7 @@
         "type": "string",
         "presence": "required",
         "closed_vocabulary": [
-          "question-family.v5"
+          "question-family.v6"
         ]
       },
       {

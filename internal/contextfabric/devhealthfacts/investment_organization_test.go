@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"math"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -103,15 +104,31 @@ func TestInvestmentOrganizationOfAnotherOrganizationIsNeverRead(t *testing.T) {
 	}
 }
 
-func TestInvestmentOrganizationForARepositoryBoundCallerIsALimitationNotAPartialTotal(t *testing.T) {
+// CHAOS-12585: this test pinned a limitation for a repository-bound caller ("a
+// partial total is not an organization's"). The fact was never a partial total:
+// it is the organization's over every repository once, the same for every
+// caller. chris ruled that every caller reads it (CHAOS-4415), so a
+// repository-bound and a project-only caller get the full caller's fact, by
+// the same statements.
+func TestInvestmentOrganizationIsTheSameFactForEveryCaller(t *testing.T) {
 	t.Parallel()
-	client := &fakeClient{tables: organizationMixTable()}
-	result := readOrganizationInvestment(t, client, storage.Principal{OrgID: "org-1", RepositoryScopes: []string{"acme/repo-a"}}, organizationSubject("org-1"))
-	if len(result.Facts) != 0 || result.State != contextfabric.SourceNotApplicable || !strings.Contains(result.Reason, "repository-bound") {
-		t.Fatalf("result = %#v, want not_applicable with the repository-bound reason and no fact", result)
+	full := &fakeClient{tables: organizationMixTable()}
+	want := readOrganizationInvestment(t, full, storage.Principal{OrgID: "org-1"}, organizationSubject("org-1"))
+	if len(want.Facts) != 1 {
+		t.Fatalf("the full caller's result = %#v, want one fact", want)
 	}
-	if len(client.queries) != 0 {
-		t.Fatalf("a repository-bound caller must not trigger the org-wide read: %d queries", len(client.queries))
+	for name, principal := range map[string]storage.Principal{
+		"repository-bound": {OrgID: "org-1", RepositoryScopes: []string{"acme/repo-a"}},
+		"project-only":     {OrgID: "org-1", ProjectScopes: []string{"project-a"}},
+	} {
+		client := &fakeClient{tables: organizationMixTable()}
+		got := readOrganizationInvestment(t, client, principal, organizationSubject("org-1"))
+		if !reflect.DeepEqual(got, want) {
+			t.Fatalf("%s: result = %#v, want the full caller's %#v", name, got, want)
+		}
+		if !reflect.DeepEqual(client.queries, full.queries) {
+			t.Fatalf("%s: statements %v, want the full caller's %v", name, client.queries, full.queries)
+		}
 	}
 }
 

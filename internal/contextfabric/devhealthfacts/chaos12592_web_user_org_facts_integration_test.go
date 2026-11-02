@@ -2,9 +2,10 @@ package devhealthfacts_test
 
 // CHAOS-12592, EXECUTED against a real ClickHouse: the organization investment
 // fact is served to the principal every web user reaches the provider with (a
-// "*" grant kept by the access read), refused to a repository-bound credential,
-// never counts a row of another organization, even under the same repository
-// slug, and an unknown repository reads as missing, never as zero.
+// "*" grant kept by the access read) and, the same, to a repository-bound
+// credential (CHAOS-12585), never counts a row of another organization, even
+// under the same repository slug, and an unknown repository reads as missing,
+// never as zero.
 
 import (
 	"context"
@@ -88,8 +89,11 @@ func TestAWebUserIsServedTheOrganizationInvestmentFactAgainstRealClickHouse(t *t
 		}
 		t.Logf("%s: state %q, reason %q", name, result.State, strings.TrimSpace(why))
 	}
-	refused := read(userprincipal.Narrowed(t, orgA, []string{"acme/svc"}, []string{"acme/svc"}))
-	if len(refused.Facts) != 0 || refused.State != contextfabric.SourceNotApplicable || !strings.Contains(refused.Reason, "repository-bound") {
-		t.Fatalf("repository-bound credential: %d facts, state %q, reason %q; want not applicable, repository-bound", len(refused.Facts), refused.State, refused.Reason)
+	// chris's ruling on CHAOS-12585: every caller reads the organization
+	// investment fact, a repository-bound credential included. It is the same
+	// organization total, and it names no repository.
+	bound := read(userprincipal.Narrowed(t, orgA, []string{"acme/svc"}, []string{"acme/svc"}))
+	if len(bound.Facts) != 1 || *bound.Facts[0].Fields["repositories_in_scope"].Integer != 1 || *bound.Facts[0].Fields["work_unit_count"].Integer != 2 {
+		t.Fatalf("repository-bound credential: %d facts, state %q, reason %q; want the same organization fact", len(bound.Facts), bound.State, bound.Reason)
 	}
 }

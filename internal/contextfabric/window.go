@@ -2159,6 +2159,11 @@ const (
 	// InferredWindowGateBasisWindowOnly: the window is the only question; the
 	// turn answers on it and serves the window offer beside the answer.
 	InferredWindowGateBasisWindowOnly InferredWindowGateBasis = "window_only"
+	// InferredWindowGateBasisWindowOnlyUnpickableAsks (CHAOS-12640): the pass
+	// named needs beyond the window but offered nothing to pick for them (the
+	// standing zero-candidates disclosure); the window is the only question
+	// the caller can answer, so the turn answers.
+	InferredWindowGateBasisWindowOnlyUnpickableAsks InferredWindowGateBasis = "window_only_unpickable_asks"
 )
 
 // InferredWindowGateDecisionVocabulary is the closed decision vocabulary, in
@@ -2170,22 +2175,27 @@ func InferredWindowGateDecisionVocabulary() []string {
 // InferredWindowGateBasisVocabulary is the closed basis vocabulary, in
 // published order.
 func InferredWindowGateBasisVocabulary() []string {
-	return []string{string(InferredWindowGateBasisOffersUnavailable), string(InferredWindowGateBasisPeriodShape), string(InferredWindowGateBasisBeyondWindow), string(InferredWindowGateBasisWindowOnly)}
+	return []string{string(InferredWindowGateBasisOffersUnavailable), string(InferredWindowGateBasisPeriodShape), string(InferredWindowGateBasisBeyondWindow), string(InferredWindowGateBasisWindowOnly), string(InferredWindowGateBasisWindowOnlyUnpickableAsks)}
 }
 
 // decideInferredWindowGate is the class-default gate's one decision
 // (CHAOS-4451, lead ruling 2026-11-02, option 1 of chris's options on the
 // ticket: "default window with disclosure, or offer + partial answer"): the
 // turn ends on the window confirmation only when the window is not its only
-// question.
+// question. CHAOS-12640 (lead ruling, FINAL): a question beyond the window
+// counts only when the pass offers something to pick for it
+// (offerMaterialRedeemable). A need named with no option (the standing
+// zero-candidates disclosure) is kept on the result but does not gate.
 func decideInferredWindowGate(material StructureOfferMaterial, offersUnavailable bool, frame *QuestionFrame) (InferredWindowGateDecision, InferredWindowGateBasis) {
 	switch {
 	case offersUnavailable:
 		return InferredWindowGateGated, InferredWindowGateBasisOffersUnavailable
 	case periodShapeOf(frame) != periodShapeCurrent:
 		return InferredWindowGateGated, InferredWindowGateBasisPeriodShape
-	case StructureNeedsWouldDisclose(material):
+	case offerMaterialRedeemable(material):
 		return InferredWindowGateGated, InferredWindowGateBasisBeyondWindow
+	case StructureNeedsWouldDisclose(material):
+		return InferredWindowGateAnswered, InferredWindowGateBasisWindowOnlyUnpickableAsks
 	}
 	return InferredWindowGateAnswered, InferredWindowGateBasisWindowOnly
 }
