@@ -2,6 +2,7 @@ package postgres
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"testing"
@@ -10,6 +11,7 @@ import (
 	"github.com/full-chaos/dev-health-acr/internal/auth"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
 	"github.com/full-chaos/dev-health-go/authverify"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/stretchr/testify/require"
 )
 
@@ -62,10 +64,12 @@ VALUES ('wlb_test_1', $1, 'cluster.local', 'panel-ns', 'panel-read', 'sa-uid-1',
 
 	store, err := NewWorkloadBindingStore(db)
 	require.NoError(t, err)
-	binding, err := store.Lookup(ctx, storage.WorkloadBindingKey{
+	bindings, err := store.Lookup(ctx, storage.WorkloadBindingKey{
 		TrustDomain: "cluster.local", Namespace: "panel-ns", ServiceAccountName: "panel-read", ServiceAccountUID: "sa-uid-1",
 	})
 	require.NoError(t, err)
+	require.Len(t, bindings, 1)
+	binding := bindings[0]
 	require.Equal(t, "wlb_test_1", binding.BindingID)
 	require.Equal(t, workloadBindingTestOrgID, binding.OrgID)
 	require.Equal(t, "read", binding.Role)
@@ -94,9 +98,10 @@ VALUES ('wlb_test_2', $1, 'cluster.local', 'ns', 'sa', 'uid', 'ops', '["*"]'::js
 
 	store, err := NewWorkloadBindingStore(db)
 	require.NoError(t, err)
-	binding, err := store.Lookup(ctx, storage.WorkloadBindingKey{TrustDomain: "cluster.local", Namespace: "ns", ServiceAccountName: "sa", ServiceAccountUID: "uid"})
+	bindings, err := store.Lookup(ctx, storage.WorkloadBindingKey{TrustDomain: "cluster.local", Namespace: "ns", ServiceAccountName: "sa", ServiceAccountUID: "uid"})
 	require.NoError(t, err)
-	require.NotNil(t, binding.DisabledAt)
+	require.Len(t, bindings, 1)
+	require.NotNil(t, bindings[0].DisabledAt)
 }
 
 func TestNewWorkloadCredentialPurger_deletesOnlyExpiredWorkloadRows(t *testing.T) {
@@ -213,4 +218,38 @@ VALUES ('wlb_lifetime_test', $1, 'cluster.local', 'ns', 'sa', 'uid', 'read', '["
 	require.NoError(t, err)
 	require.Greater(t, result.ExpiresIn, 0)
 	require.LessOrEqual(t, result.ExpiresIn, int(authverify.WorkloadTokenLifetimeCeiling/time.Second))
+}
+
+const workloadBindingSecondOrgID = "44444444-4444-4444-4444-444444444444"
+
+func insertWorkloadBindingRow(ctx context.Context, db *sql.DB, bindingID, orgID string) error {
+	_, err := db.ExecContext(ctx, `
+INSERT INTO acr.workload_bindings (binding_id, org_id, trust_domain, namespace, service_account_name, service_account_uid, role, repository_scopes, created_at, created_by)
+VALUES ($1, $2, 'cluster.local', 'ns', 'sa', 'uid', 'reconcile', '[]'::jsonb, now(), 'test_actor')`, bindingID, orgID)
+	return err
+}
+
+func TestWorkloadBindingsKeyIncludesOrg(t *testing.T) {
+	ctx := context.Background()
+	db := newCredentialStoreDatabase(t, ctx)
+	require.NoError(t, insertWorkloadBindingRow(ctx, db, "wlb_org_a", workloadBindingTestOrgID), "first org")
+	require.NoError(t, insertWorkloadBindingRow(ctx, db, "wlb_org_b", workloadBindingSecondOrgID), "one identity bound in a second org must be accepted")
+	err := insertWorkloadBindingRow(ctx, db, "wlb_org_a_dup", workloadBindingTestOrgID)
+	require.Error(t, err, "a duplicate (identity, org) must be refused")
+	var pgErr *pgconn.PgError
+	require.True(t, errors.As(err, &pgErr), "error = %v", err)
+	require.Equal(t, "23505", pgErr.Code)
+}
+
+func TestWorkloadBindingStore_lookupReturnsEveryOrgOfTheIdentity(t *testing.T) {
+	ctx := context.Background()
+	db := newCredentialStoreDatabase(t, ctx)
+	require.NoError(t, insertWorkloadBindingRow(ctx, db, "wlb_org_b", workloadBindingSecondOrgID))
+	require.NoError(t, insertWorkloadBindingRow(ctx, db, "wlb_org_a", workloadBindingTestOrgID))
+	store, err := NewWorkloadBindingStore(db)
+	require.NoError(t, err)
+	bindings, err := store.Lookup(ctx, storage.WorkloadBindingKey{TrustDomain: "cluster.local", Namespace: "ns", ServiceAccountName: "sa", ServiceAccountUID: "uid"})
+	require.NoError(t, err)
+	require.Len(t, bindings, 2)
+	require.Equal(t, []string{workloadBindingTestOrgID, workloadBindingSecondOrgID}, []string{bindings[0].OrgID, bindings[1].OrgID})
 }
