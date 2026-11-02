@@ -145,8 +145,12 @@ func TestAPrefixIsReadOncePerTurnAndWithinTheBound(t *testing.T) {
 		question = append(question, prefix+"-1")
 	}
 	bound := gateHandles(t, storage.Principal{OrgID: "org_1"}, strings.Join(question, " "), many, nil)
-	if len(many.calls) != maxWorkItemKeyPrefixReads || len(bound) != maxWorkItemKeyPrefixReads {
-		t.Fatalf("reads = %d, bound = %d, want %d of each", len(many.calls), len(bound), maxWorkItemKeyPrefixReads)
+	if len(many.calls) != maxWorkItemKeyPrefixReads || len(bound) != 0 {
+		t.Fatalf("reads = %d, bound = %d, want %d reads and no handle: the keys past the bound are unread", len(many.calls), len(bound), maxWorkItemKeyPrefixReads)
+	}
+	within := &prefixReads{held: map[string]bool{"A-": true, "B-": true}}
+	if bound := gateHandles(t, storage.Principal{OrgID: "org_1"}, "is A-1 or B-1 done?", within, nil); len(bound) != 2 {
+		t.Fatalf("within the bound: %d handles, want both", len(bound))
 	}
 }
 
@@ -167,6 +171,30 @@ func TestAFailedPrefixReadIsNotRetriedInTheTurn(t *testing.T) {
 	}
 	if len(reads.calls) != maxWorkItemKeyPrefixReads {
 		t.Fatalf("reads = %v, want %d: one per prefix, failures counted", reads.calls, maxWorkItemKeyPrefixReads)
+	}
+}
+
+// A key past the bound may name a second subject the caller can read, so the
+// question must not decide on the keys that were read: a held OPS-1 beside eight
+// other held prefixes reaches no decisive round.
+func TestAKeyPastTheBoundLeavesNoDecisiveHandle(t *testing.T) {
+	t.Parallel()
+	reads := &prefixReads{held: map[string]bool{"OPS-": true}}
+	question := []string{"OPS-1"}
+	for _, prefix := range []string{"A", "B", "C", "D", "E", "F", "G", "H"} {
+		reads.held[prefix+"-"] = true
+		question = append(question, prefix+"-1")
+	}
+	bound := gateHandles(t, storage.Principal{OrgID: "org_1"}, strings.Join(question, " "), reads, nil)
+	if len(bound) != 0 {
+		t.Fatalf("handles %v, want none: the ninth prefix was never read", bound)
+	}
+	census := func(context.Context, string, CensusKind, string, bool, contextfabric.SubjectKind, string, bool) (CensusOutcome, error) {
+		return CensusOutcome{Count: 1, SatisfierCanonicalID: "work_item.v2:r:jira%3AOPS-1"}, nil
+	}
+	attestation := RunShadowEvidenceRound(context.Background(), ShadowEvidenceRoundInput{Question: strings.Join(question, " "), QuestionHandles: bound, QuestionHandlesBound: true, OrgID: "org_1", CensusFunc: census, UnscopedVisibility: true, CurrentAxis: true}, nil)
+	if attestation.Outcome == ShadowWouldCommit || attestation.Outcome == ShadowWouldNoMatch {
+		t.Fatalf("outcome %s, want no decisive outcome", attestation.Outcome)
 	}
 }
 
@@ -203,8 +231,10 @@ func TestAnUnreadPrefixLeavesTheKeyUnboundAndWarns(t *testing.T) {
 			var buf bytes.Buffer
 			tracer := NewSlogResolutionTracer(slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelInfo})))
 			principal := restrictedCaller(t, "acme/inside")
-			if got := grammarsOf(gateHandles(t, principal, "does PR 5 fix OPS-1?", reads, tracer)); got != "pull_request_number:5" {
-				t.Fatalf("handles %q, want the pull request alone", got)
+			// The unread key may name a second subject, so the turn cannot know
+			// PR 5 is the only one: it binds no handle at all.
+			if got := grammarsOf(gateHandles(t, principal, "does PR 5 fix OPS-1?", reads, tracer)); got != "" {
+				t.Fatalf("handles %q, want none", got)
 			}
 			log, err := certify.Parse(buf.Bytes())
 			if err != nil {

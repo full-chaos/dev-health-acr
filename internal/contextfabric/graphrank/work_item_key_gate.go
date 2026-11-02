@@ -36,9 +36,11 @@ type WorkItemKeyPrefixFunc func(ctx context.Context, orgID, prefix string) (Work
 //
 // The read runs under the same grant as the census, so what it shows a restricted
 // caller is inside its grant: a prefix that exists only outside it reads as a
-// word. A read that cannot run leaves the key unbound and is counted, once per
-// prefix; a turn reads at most maxWorkItemKeyPrefixReads prefixes, failures
-// included.
+// word. A turn reads at most maxWorkItemKeyPrefixReads prefixes, failures
+// included, and a read that cannot run is counted once per prefix. If any key is
+// left unread, the turn cannot tell one handle from several: the unread key may
+// name a second subject, which would refuse a decisive outcome as multi_handle.
+// So such a turn binds no handle at all, and answers by search.
 func bindQuestionHandles(ctx context.Context, principal storage.Principal, request contextfabric.InvestigationRequest, deps ResolveDeps) []BoundHandle {
 	bound := BindHandles(request.Question)
 	scoped := contextfabric.ScopeCensusToCaller(ctx, principal)
@@ -78,6 +80,9 @@ func bindQuestionHandles(ctx context.Context, principal storage.Principal, reque
 	}
 	if event.WorkItemKeyTokens > 0 && deps.ResolutionTracer != nil {
 		deps.ResolutionTracer.Trace(event)
+	}
+	if event.WorkItemKeysUnread > 0 {
+		return nil
 	}
 	return kept
 }
