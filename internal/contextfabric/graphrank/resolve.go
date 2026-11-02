@@ -2815,7 +2815,8 @@ func resolveSubjects(ctx context.Context, principal storage.Principal, request c
 		comparison := contextfabric.ClassifyComparisonOperands(frame)
 		switch comparison.Admission {
 		case contextfabric.ComparisonAdmittedNamedPair, contextfabric.ComparisonHeldScopedOperand:
-			if inactive, inactiveErr := inactiveCallerTeamHints(ctx, deps, comparisonAsksForTeams(comparison, request)); inactiveErr != nil {
+			request := comparisonRequest(ctx, comparison, request)
+			if inactive, inactiveErr := inactiveCallerTeamHints(ctx, deps, request); inactiveErr != nil {
 				return contextfabric.SubjectResolution{}, contextfabric.StructureOfferMaterial{}, inactiveErr
 			} else if len(inactive) > 0 {
 				return contextfabric.SubjectResolution{Candidates: []contextfabric.SubjectCandidate{}, Committed: []contextfabric.SubjectRef{}, InactiveHints: inactive}, contextfabric.StructureOfferMaterial{}, nil

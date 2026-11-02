@@ -51,19 +51,18 @@ func boundedFrameTerms(frame *contextfabric.QuestionFrame) []string {
 	return terms
 }
 
-// comparisonAsksForTeams keeps the request's team hints only when a side of the
-// comparison asks for a team: an inactive team hint is an answer about that team,
-// and on a comparison of other kinds it would answer in place of both sides
-// (CHAOS-12555).
-func comparisonAsksForTeams(comparison contextfabric.ComparisonOperands, request contextfabric.InvestigationRequest) contextfabric.InvestigationRequest {
+// comparisonRequest drops each hint of a kind no side of the comparison asks for.
+// Such a hint answers for neither side: as an inactive team it would answer in
+// place of both, and receipt binding counts it unbound, which holds a comparison
+// whose sides both resolved (CHAOS-12555). The redeemed pick stays, as everywhere.
+func comparisonRequest(ctx context.Context, comparison contextfabric.ComparisonOperands, request contextfabric.InvestigationRequest) contextfabric.InvestigationRequest {
+	asked := map[contextfabric.SubjectKind]bool{}
 	for _, slot := range comparison.Slots {
-		if slot.Kind == contractsv1.ContextFabricSubjectTeam {
-			return request
-		}
+		asked[slot.Kind] = true
 	}
 	kept := make([]contextfabric.SubjectHint, 0, len(request.RequestedScope.SubjectHints))
 	for _, hint := range request.RequestedScope.SubjectHints {
-		if hint.Kind != contractsv1.ContextFabricSubjectTeam {
+		if hint.Kind == "" || asked[hint.Kind] || contextfabric.IsConfirmedCandidatePick(ctx, hint) {
 			kept = append(kept, hint)
 		}
 	}

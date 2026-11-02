@@ -220,6 +220,33 @@ func TestADroppedHintLeavesTheFrameTermsToSearch(t *testing.T) {
 	}
 }
 
+// A page hint of a kind neither side asks for does not hold a comparison whose
+// sides both resolve.
+func TestAnUnrelatedHintDoesNotHoldAComparison(t *testing.T) {
+	t.Parallel()
+	repository, team := contractsv1.ContextFabricSubjectRepository, contractsv1.ContextFabricSubjectTeam
+	backend := hintBackend(team)
+	backend.searchResults["alpha"] = []CandidateNode{candidateNode(repository, "repository:alpha", "alpha", 1, "*")}
+	backend.searchResults["beta"] = []CandidateNode{candidateNode(repository, "repository:beta", "beta", 1, "*")}
+	frame := contextfabric.DeriveFrameObligations(contextfabric.QuestionFrame{
+		Goals: []contextfabric.InvestigationGoal{contextfabric.GoalCompare},
+		SubjectExpression: contextfabric.SubjectExpression{
+			Kind: contextfabric.SubjectExpressionExplicitSet,
+			Explicit: &contextfabric.ExplicitSetExpression{Operands: []contextfabric.SubjectOperand{
+				{Kind: contextfabric.SubjectOperandNamed, Named: &contextfabric.NamedSubjectExpression{Terms: []string{"alpha"}, ExpectedKind: slotGateKindPointer(repository)}},
+				{Kind: contextfabric.SubjectOperandNamed, Named: &contextfabric.NamedSubjectExpression{Terms: []string{"beta"}, ExpectedKind: slotGateKindPointer(repository)}},
+			}},
+		},
+		Temporal: contextfabric.TemporalIntentCurrent,
+		Version:  contextfabric.QuestionFrameVersion,
+	}, nil)
+	without := resolveWithHints(t, backend, "Compare alpha and beta", &frame, nil)
+	with := resolveWithHints(t, backend, "Compare alpha and beta", &frame, nil, askedKindPageHint(team, hintCanonicalID(team)))
+	if len(without.Committed) != 2 || len(with.Committed) != len(without.Committed) {
+		t.Fatalf("committed without the hint %v, with it %v: want both sides either way", without.Committed, with.Committed)
+	}
+}
+
 // An inactive team hint answers for that team. On a comparison of other kinds it
 // must not answer in place of both sides; on a comparison of teams it still does.
 func TestAnInactiveTeamHintAnswersOnlyAComparisonOfTeams(t *testing.T) {
