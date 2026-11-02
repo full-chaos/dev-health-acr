@@ -113,15 +113,11 @@ func TestSeveralClaimsOnOneFactDrawOneTreemap(t *testing.T) {
 	first := result.ClaimedFacts[0].ClaimID
 	factID := MintFactID(FactInvestment, result.ClaimedFacts[0].Subject, 0)
 	result.ClaimedFacts[0].FactID = factID
-	// One claim names no fact, as a model may leave fact_id out; its rows are
-	// still the fact's rows.
 	for index, field := range []string{"theme_feature_delivery", "theme_maintenance", "work_unit_count"} {
 		claim := themeShareResultFor(contractsv1.ContextFabricSubjectRepository, 0.5, 0.25, 0.25).ClaimedFacts[0]
 		claim.ClaimID = fmt.Sprintf("claim_theme_share_more_%d", index)
 		claim.Field = field
-		if index > 0 {
-			claim.FactID = factID
-		}
+		claim.FactID = factID
 		result.ClaimedFacts = append(result.ClaimedFacts, claim)
 	}
 	shapes, event := selectRenderShapes(result, themeShareFrame(), RenderShapeOptions{InvestmentThemeShare: true})
@@ -168,6 +164,20 @@ func TestAnOrganizationGetsItsTreemapWithItsOwnWords(t *testing.T) {
 		if got := treemapsOf(shapes)[0].ValueLabel; got != "Share of effort (ratio)" {
 			t.Fatalf("%s value label %q", kind, got)
 		}
+	}
+}
+
+// A model may leave fact_id out of every claim. Claims that name no fact and
+// carry the same subject, declaration and rows are still one breakdown.
+func TestSeveralClaimsThatNameNoFactDrawOneTreemap(t *testing.T) {
+	t.Parallel()
+	result := themeShareResultFor(contractsv1.ContextFabricSubjectRepository, 0.5, 0.5)
+	second := themeShareResultFor(contractsv1.ContextFabricSubjectRepository, 0.5, 0.5).ClaimedFacts[0]
+	second.ClaimID, second.Field = "claim_theme_share_second", "theme_feature_delivery"
+	result.ClaimedFacts = append(result.ClaimedFacts, second)
+	shapes, event := selectRenderShapes(result, themeShareFrame(), RenderShapeOptions{InvestmentThemeShare: true})
+	if len(treemapsOf(shapes)) != 1 {
+		t.Fatalf("shapes %+v, skip %q: want one treemap", shapes, skipOf(t, event))
 	}
 }
 
@@ -231,6 +241,15 @@ func TestNoTreemapWithoutTheRulesEvidence(t *testing.T) {
 			second := themeShareResultFor(contractsv1.ContextFabricSubjectRepository, 0.5, 0.5).ClaimedFacts[0]
 			second.ClaimID = "claim_theme_share_second"
 			second.FactID = MintFactID(FactInvestment, second.Subject, 1)
+			r.ClaimedFacts = append(r.ClaimedFacts, second)
+		}, RenderShapeSkipSeveralThemeBreakdowns},
+		// Codex r2: a claim with no fact id is grounded over its subject's whole
+		// group, so it can hold another fact's equal rows. Only claims that name
+		// the same fact, or that both name none, are one breakdown.
+		"one fact id, one none": {func(r *InvestigationResult) {
+			r.ClaimedFacts[0].FactID = MintFactID(FactInvestment, r.ClaimedFacts[0].Subject, 0)
+			second := themeShareResultFor(contractsv1.ContextFabricSubjectRepository, 0.5, 0.5).ClaimedFacts[0]
+			second.ClaimID = "claim_theme_share_second"
 			r.ClaimedFacts = append(r.ClaimedFacts, second)
 		}, RenderShapeSkipSeveralThemeBreakdowns},
 		"a second kind under one id": {func(r *InvestigationResult) {
