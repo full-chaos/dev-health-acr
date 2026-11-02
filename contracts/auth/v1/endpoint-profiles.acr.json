@@ -1670,7 +1670,7 @@
         "acr_web_assertion"
       ],
       "primary_validator": {
-        "description": "deviceApprovalHandler (the same wrapper as device_approval) requires X-ACR-Web-Assertion EXACTLY (exactly one header) and rejects if Authorization is also present, then RequireScope(credential:issue): only the web, acting for its signed-in user, can read or decide a request; the browser that holds the handle cannot.",
+        "description": "deviceApprovalHandler (the same wrapper as device_approval and the consent route) requires X-ACR-Web-Assertion EXACTLY (exactly one header) and rejects if Authorization is also present, then RequireScope(credential:issue): only web's server, acting for its signed-in user, can start a first-party authorize, with the request in the form body the assertion signs (CHAOS-12568). The browser never calls this route; it sends {code_challenge, state} to web.",
         "anchor": {
           "path": "internal/api/device_routes.go",
           "line": 246,
