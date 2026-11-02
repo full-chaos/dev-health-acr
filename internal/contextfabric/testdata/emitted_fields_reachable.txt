@@ -421,6 +421,6 @@ FactWorkload
     calls followed            1055
     calls accounted           13
     calls not_a_call          20
-    calls excluded_by_design  215
+    calls excluded_by_design  216
     calls leaked              10
   fields             backlog_size basis completion_days completion_distribution completion_distribution_state computed_at cumulative_share daily_workload daily_workload_omitted_count day forecast_p50_date forecast_p50_days forecast_p85_date forecast_p85_days forecast_p95_date forecast_p95_days high_variance horizon_days insufficient_history latest_run_day p50_basis p50_excluded_null_p50_count p50_excluded_unattributed_count p50_known_count p50_unavailable_reason rollup_basis runs simulation_count team_breakdown team_breakdown_rows_shown team_breakdown_rows_total team_count team_id team_name throughput_mean throughput_stddev unfinished_runs work_scope_id
