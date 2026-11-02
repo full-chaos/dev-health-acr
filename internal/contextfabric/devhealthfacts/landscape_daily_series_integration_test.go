@@ -14,9 +14,11 @@ import (
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/devhealthfacts"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/devhealthschema"
+	"github.com/full-chaos/dev-health-acr/internal/contextpacket"
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
 	"github.com/full-chaos/dev-health-acr/internal/testsupport/statementthreads"
+	runtimeclickhouse "github.com/full-chaos/dev-health-go/clickhouse"
 )
 
 const landscapeSeriesHistoryDays = 70
@@ -175,5 +177,70 @@ func TestARetractedDayIsMissingFromTheSeries(t *testing.T) {
 		if *row.Fields["identity_count"].Integer == 0 {
 			t.Fatalf("a day of zeros is in the series: %+v", row.Fields)
 		}
+	}
+}
+
+// A cohort read of 50 teams, each with 70 days, stays far inside the API's
+// statement memory cap. Measured from system.query_log, never assumed.
+func TestAFiftyTeamSeriesReadStaysInsideTheMemoryCap(t *testing.T) {
+	ctx := context.Background()
+	const orgID = "org-landscape-series-memory"
+	teams := make([]string, 0, 50)
+	for i := 0; i < 50; i++ {
+		teams = append(teams, fmt.Sprintf("gh:tm-mem-%02d", i))
+	}
+	// The production client's result-row cap (internal/runtime/hosted,
+	// clickHouseClientOptions): twice the cohort limit times the per-repository
+	// series cap. The driver default of 1,000 rows is not what production runs.
+	maxResultRows := uint(2 * contractsv1.ContextFabricMaxCohortMembersLimit * devhealthfacts.MetricsSeriesPerRepositoryRowCap)
+	rawQuery, direct := newDedicatedClickHouseIntegrationClientWithOptions(t, ctx, func(options *runtimeclickhouse.Options) {
+		options.MaxResultRows = &maxResultRows
+	})
+	for _, statement := range devhealthschema.DDL("projects", "team_project_ownership", "ic_landscape_rolling_30d") {
+		if err := direct.Exec(ctx, statement); err != nil {
+			t.Fatalf("create table: %v\n%s", err, statement)
+		}
+	}
+	yesterday := time.Now().UTC().Truncate(24*time.Hour).AddDate(0, 0, -1)
+	for _, team := range teams {
+		if err := direct.Exec(ctx, `INSERT INTO ic_landscape_rolling_30d (org_id, repo_id, as_of_day, identity_id, team_id, map_name, x_raw, y_raw, x_norm, y_norm, churn_loc_30d, delivery_units_30d, cycle_p50_30d_hours, wip_max_30d, computed_at)
+SELECT ?, toUUID(?), toDate(?) - intDiv(number, 2), if(number % 2 = 0, 'alice', 'bob'), ?, arrayJoin(['churn_throughput', 'cycle_throughput', 'wip_throughput']), 1.5, 2.5, 0.5, 0.5, toUInt64(100), toUInt32(3), 5.0, toUInt32(3), toDateTime(?)
+FROM numbers(?)`, orgID, repoUUID("repo-mem"), yesterday.Format(time.DateOnly), team, yesterday, uint64(2*landscapeSeriesHistoryDays)); err != nil {
+			t.Fatalf("seed: %v", err)
+		}
+	}
+	provider := findProvider(t, devhealthfacts.NewProviders(statementthreads.API(rawQuery)), contextfabric.FactLandscape)
+	result := readLandscapeSeries(t, ctx, provider, orgID, contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent}, teams...)
+	if len(result.Facts) != len(teams) {
+		t.Fatalf("facts = %d, want %d", len(result.Facts), len(teams))
+	}
+	for _, fact := range result.Facts {
+		if got := len(seriesOf(t, fact)); got != 64 {
+			t.Fatalf("%s: series rows = %d, want 64", fact.Subject.CanonicalID, got)
+		}
+	}
+	if err := direct.Exec(ctx, `SYSTEM FLUSH LOGS`); err != nil {
+		t.Fatalf("flush logs: %v", err)
+	}
+	rows, err := direct.Query(ctx, `SELECT count(), max(memory_usage), `+statementthreads.UnboundThreadsCount+` FROM system.query_log WHERE type = 'QueryFinish' AND query LIKE '%held_days%' AND query NOT LIKE '%system.query_log%'`)
+	if err != nil {
+		t.Fatalf("query_log: %v", err)
+	}
+	defer rows.Close()
+	if !rows.Next() {
+		t.Fatal("query_log returned no row: the series statement's memory was not measured")
+	}
+	var runs, peak, threadless uint64
+	if err := rows.Scan(&runs, &peak, &threadless); err != nil {
+		t.Fatalf("scan: %v", err)
+	}
+	if runs == 0 || peak == 0 {
+		t.Fatalf("runs = %d, peak = %d: the measurement did not happen", runs, peak)
+	}
+	statementthreads.RequireThreadBound(t, ctx, direct, "landscape series statement", threadless)
+	const peakBound = 64 << 20
+	t.Logf("MEMORY-PEAK landscape series, 50 teams x 70 days: %d bytes (%.1f MiB), bound %d MiB, API cap %d MiB", peak, float64(peak)/(1<<20), peakBound>>20, contextpacket.APIStatementMaxMemoryUsage>>20)
+	if peak > peakBound {
+		t.Fatalf("the series statement peaked at %d bytes, over %d", peak, peakBound)
 	}
 }

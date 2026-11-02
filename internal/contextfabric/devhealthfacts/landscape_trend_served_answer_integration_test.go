@@ -75,6 +75,18 @@ func TestALandscapeClaimDrawsTheTeamsMeasureOverTime(t *testing.T) {
 	if got := len(trend.Series[0].Points); got != 9 {
 		t.Fatalf("trend points = %d, want 9", got)
 	}
+	// Oldest first, each the day's two identities summed once: 2 × days ago.
+	today := time.Now().UTC().Truncate(24 * time.Hour)
+	want := []int{10, 9, 8, 7, 6, 4, 3, 2, 1}
+	for i, point := range trend.Series[0].Points {
+		day := today.AddDate(0, 0, -want[i]).Format(time.DateOnly)
+		if point.Label != day || point.Value != float64(2*want[i]) {
+			t.Fatalf("point %d = %s %v, want %s %d", i, point.Label, point.Value, day, 2*want[i])
+		}
+	}
+	if trend.Series[0].Key != "delivery_units_30d" || trend.AxisKind != contractsv1.ContextFabricRenderAxisTime {
+		t.Fatalf("trend series %q on axis %q, want delivery_units_30d over time", trend.Series[0].Key, trend.AxisKind)
+	}
 }
 
 // A claim on a value the series does not hold draws no trend (check 10).
