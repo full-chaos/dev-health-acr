@@ -9,6 +9,12 @@ A restricted caller's census runs inside its grant. The grant is ANDed into
 every statement of every census call. A grant that cannot apply is an error,
 never a read of the organization.
 
+Since CHAOS-12592 a web user is not a restricted caller: its `*` grant stays `*`
+after the access read (chris on CHAOS-4390: "a user can see all the data in an
+org"), so its census reads the organization, as any universal caller's does. A
+restricted caller here is a credential that names repositories or owners, such
+as a repository-bound MCP or CLI credential.
+
 Before this change a restricted caller got no census: an organization-wide count
 would be an existence oracle. A pull request named by number then stalled in a
 truncated search for that caller alone. An unrestricted caller was rescued.
