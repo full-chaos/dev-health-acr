@@ -162,9 +162,16 @@ func familyTakesShape(family QuestionFamily, shape InvestigationShape) bool {
 // off. A flag that only gated selection would leave every answer stored while it
 // was on still serving the shape, on a by-id read and on a reuse hit, to the very
 // consumer the flag protects. The stored row is not touched.
+//
+// The completion forecast switch also gates the forecast summary on a claim
+// (Codex #1949 r1): a result stored while it was on keeps its summaries, and
+// the summary is the same widening the shapes are.
 func WithoutDisabledRenderShapes(result InvestigationResult, options RenderShapeOptions) InvestigationResult {
-	if options.InvestmentThemeShare && options.ComparisonSideBySide {
+	if options.InvestmentThemeShare && options.ComparisonSideBySide && options.CompletionForecast {
 		return result
+	}
+	if !options.CompletionForecast {
+		result.ClaimedFacts = withoutCompletionForecasts(result.ClaimedFacts)
 	}
 	var kept []contractsv1.ContextFabricRenderShape
 	for _, shape := range result.RenderShapes {
@@ -186,6 +193,19 @@ func WithoutDisabledRenderShapes(result InvestigationResult, options RenderShape
 	}
 	result.RenderShapes = kept
 	return result
+}
+
+// withoutCompletionForecasts is claims with no forecast summary, on a copy when
+// any claim carries one: the stored row is not touched.
+func withoutCompletionForecasts(claims []ClaimedFact) []ClaimedFact {
+	if !slices.ContainsFunc(claims, func(claim ClaimedFact) bool { return claim.CompletionForecast != nil }) {
+		return claims
+	}
+	stripped := slices.Clone(claims)
+	for index := range stripped {
+		stripped[index].CompletionForecast = nil
+	}
+	return stripped
 }
 
 func declaresThemeShareTable(fact *ClaimedFact) bool {

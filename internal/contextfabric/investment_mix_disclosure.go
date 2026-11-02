@@ -1,6 +1,8 @@
 package contextfabric
 
 import (
+	"time"
+
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 )
 
@@ -76,13 +78,18 @@ func discloseCompletionForecast(claims []ClaimedFact, facts []CanonicalFact) []C
 }
 
 // completionForecastOf is the summary a team workload fact serves, or nil when
-// it serves no completion_distribution_state.
+// it serves no completion_distribution_state, or a computed_at it cannot read
+// as an instant.
 func completionForecastOf(fact CanonicalFact) *contractsv1.ContextFabricClaimedCompletionForecast {
 	state, ok := stringField(fact, "completion_distribution_state")
 	if !ok || state == "" {
 		return nil
 	}
-	computedAt, _ := stringField(fact, "computed_at")
+	raw, _ := stringField(fact, "computed_at")
+	computedAt, ok := forecastInstant(raw)
+	if !ok {
+		return nil
+	}
 	scope, _ := stringField(fact, "work_scope_id")
 	summary := &contractsv1.ContextFabricClaimedCompletionForecast{
 		WorkScopeID: scope,
@@ -101,8 +108,38 @@ func completionForecastOf(fact CanonicalFact) *contractsv1.ContextFabricClaimedC
 	summary.P50Days = number("forecast_p50_days")
 	summary.P85Days = number("forecast_p85_days")
 	summary.P95Days = number("forecast_p95_days")
-	summary.P50Date, _ = stringField(fact, "forecast_p50_date")
-	summary.P85Date, _ = stringField(fact, "forecast_p85_date")
-	summary.P95Date, _ = stringField(fact, "forecast_p95_date")
+	summary.P50Date = forecastDate(fact, "forecast_p50_date")
+	summary.P85Date = forecastDate(fact, "forecast_p85_date")
+	summary.P95Date = forecastDate(fact, "forecast_p95_date")
 	return summary
+}
+
+// clickHouseInstantLayout is how ClickHouse prints a DateTime64:
+// capacity_forecasts.computed_at is a DateTime64(3, 'UTC'), read with
+// toString, so the text names no zone and is UTC.
+const clickHouseInstantLayout = "2006-01-02 15:04:05.999999999"
+
+// forecastInstant is a fact's computed_at as the summary serves it, an RFC
+// 3339 UTC instant (lead ruling on CHAOS-12608). The text is read as UTC, never
+// in this process's zone: a zone-less instant read as local time moves with
+// the host, and a day counted from it can move by one. A value already in RFC
+// 3339 is put in UTC. Anything else is not an instant this summary can state.
+func forecastInstant(raw string) (string, bool) {
+	for _, layout := range []string{clickHouseInstantLayout, time.RFC3339Nano} {
+		if instant, err := time.ParseInLocation(layout, raw, time.UTC); err == nil {
+			return instant.UTC().Format(time.RFC3339Nano), true
+		}
+	}
+	return "", false
+}
+
+// forecastDate is a fact's date field as the summary serves it: the stored
+// RFC 3339 full-date, or absent when the fact has none or another form. A
+// date it cannot state is absent, as a NULL date is.
+func forecastDate(fact CanonicalFact, field string) string {
+	date, _ := stringField(fact, field)
+	if !contractsv1.ValidContextFabricForecastDate(date) {
+		return ""
+	}
+	return date
 }

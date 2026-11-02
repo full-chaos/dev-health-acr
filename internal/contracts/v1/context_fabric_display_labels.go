@@ -398,8 +398,7 @@ var contextFabricVocabularyLabels = map[ContextFabricVocabulary]map[string]strin
 		string(ContextFabricMeasureUnitDays):   "days",
 		string(ContextFabricMeasureUnitPoints): "story points",
 	},
-	// The words the investment page has shown for these keys. Each is unique
-	// within its theme, which a sunburst ring needs.
+	// CHAOS-12608: the state of a claim's completion forecast summary.
 	ContextFabricVocabularyCompletionDistributionState: {
 		"available":             "Distribution available",
 		"not_stored":            "No distribution stored for this forecast",
@@ -409,6 +408,8 @@ var contextFabricVocabularyLabels = map[ContextFabricVocabulary]map[string]strin
 		"scope_ambiguous":       "Work scope of this forecast cannot be verified",
 		"unmatched":             "Forecast changed while the answer was read",
 	},
+	// The words the investment page has shown for these keys. Each is unique
+	// within its theme, which a sunburst ring needs.
 	ContextFabricVocabularySubcategory: {
 		"feature_delivery.customer":     "Customer",
 		"feature_delivery.enablement":   "Enablement",

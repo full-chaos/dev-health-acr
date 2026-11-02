@@ -46,6 +46,10 @@ func TestTheForecastSummaryIsDisclosedFromTheGroundingFact(t *testing.T) {
 	if got.WorkScopeID != "scope-a" || got.P50Date != "2026-11-13" || *got.HorizonDays != 365 || got.UnfinishedRuns != nil {
 		t.Fatalf("summary = %+v", got)
 	}
+	// The fact's ClickHouse text is served as an RFC 3339 UTC instant.
+	if got.ComputedAt != "2026-11-01T04:00:00Z" {
+		t.Fatalf("computed_at = %q, want the RFC 3339 UTC instant", got.ComputedAt)
+	}
 	// A fact that does not serve the distribution (switch off) gives none.
 	off := summaryFact("scope-a", "", days(12), nil)
 	delete(off.Fields, "completion_distribution_state")

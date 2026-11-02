@@ -566,6 +566,8 @@ func projectDrivers(result contractsv1.ContextFabricInvestigationResult, bounds 
 			TimeSeriesRows:  claim.TimeSeriesRows,
 			TimeSeriesTable: claim.TimeSeriesTable,
 			InvestmentMix:   claim.InvestmentMix,
+			// CHAOS-12608 (Codex #1949 r1): the summary a forecast shape cites.
+			CompletionForecast: claim.CompletionForecast,
 		})
 	}
 	// Eligible omissions are counted after member/fact admission in Project.
@@ -1513,16 +1515,19 @@ func retainPastTheCut(kept, dropped []clampedNarrative, retain func(string) bool
 	return kept
 }
 
-// claimsAChartPlots names the claims the answer's treemaps and comparison tables
-// plot (CHAOS-12521, CHAOS-12513). An investment answer need not have a driver, and
-// a comparison's drivers need not cite every cell, so no driver brings those facts
-// and the chart would be dropped. The server built the chart from those claims, so
-// the chart is the citation. Only these two kinds: a claim no such chart plots
-// stays out, and a dropped shape stays a counted drop.
+// claimsAChartPlots names the claims the answer's treemaps, tables and forecast
+// curves plot (CHAOS-12521, CHAOS-12513, CHAOS-12608). An investment answer need
+// not have a driver, a comparison's drivers need not cite every cell, and a
+// forecast's drivers need not cite its distribution, so no driver brings those
+// facts and the chart would be dropped. The server built the chart from those
+// claims, so the chart is the citation. Only these kinds: a claim no such chart
+// plots stays out, and a dropped shape stays a counted drop.
 func claimsAChartPlots(shapes []contractsv1.ContextFabricRenderShape) map[string]struct{} {
 	plotted := map[string]struct{}{}
 	for _, shape := range shapes {
-		if shape.Kind != contractsv1.ContextFabricRenderKindTreemap && shape.Kind != contractsv1.ContextFabricRenderKindTable {
+		switch shape.Kind {
+		case contractsv1.ContextFabricRenderKindTreemap, contractsv1.ContextFabricRenderKindTable, contractsv1.ContextFabricRenderKindForecast:
+		default:
 			continue
 		}
 		for _, series := range shape.Series {

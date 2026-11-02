@@ -52,7 +52,7 @@ func forecastClaim(claimID string, rows []ClaimedFactRow) ClaimedFact {
 func forecastSummary(state contractsv1.ContextFabricCompletionDistributionState, percentiles ...int64) *contractsv1.ContextFabricClaimedCompletionForecast {
 	horizon, runs, unfinished := int64(365), int64(10000), int64(0)
 	summary := &contractsv1.ContextFabricClaimedCompletionForecast{
-		WorkScopeID: "scope-a", State: state, ComputedAt: "2026-11-01 04:00:00.000",
+		WorkScopeID: "scope-a", State: state, ComputedAt: "2026-11-01T04:00:00Z",
 		SimulationCount: &runs, HorizonDays: &horizon, UnfinishedRuns: &unfinished,
 	}
 	targets := []**int64{&summary.P50Days, &summary.P85Days, &summary.P95Days}
@@ -151,6 +151,9 @@ func TestAForecastQuestionGetsItsCompletionCurve(t *testing.T) {
 func TestNoCurveWithoutTheRulesEvidence(t *testing.T) {
 	rows := forecastDistributionRows([]int64{5, 12}, []float64{0.5, 1})
 	other := forecastClaim("claim_forecast_other", forecastDistributionRows([]int64{3}, []float64{1}))
+	// Another scope of the same team: a scope is the team and the summary's
+	// work scope, never the claim (Codex #1949 r1).
+	other.CompletionForecast.WorkScopeID = "scope-b"
 	other.Subject.CanonicalID = "team:chaos"
 	noDistribution := forecastClaim(forecastTestClaim, rows)
 	noDistribution.Rows, noDistribution.Table = nil, nil

@@ -42,10 +42,16 @@ func completionForecastShape(result InvestigationResult, frame *QuestionFrame) (
 		if candidate.Kind != FactWorkload || candidate.Subject.Kind != contractsv1.ContextFabricSubjectTeam || !declaresCompletionDistribution(candidate) {
 			continue
 		}
-		if fact != nil && fact.ClaimID != candidate.ClaimID {
+		if fact == nil {
+			fact = candidate
+			continue
+		}
+		// Two claims of one fact state one forecast (Codex #1949 r1): only a
+		// second scope withholds the curve. The first claim of a scope is
+		// the one drawn.
+		if forecastScopeOf(*fact) != forecastScopeOf(*candidate) {
 			return nil, RenderShapeSkipMoreThanOneScope
 		}
-		fact = candidate
 	}
 	if fact == nil {
 		return nil, RenderShapeSkipNoCompletionDistribution
@@ -98,6 +104,16 @@ func completionForecastShape(result InvestigationResult, frame *QuestionFrame) (
 	return shape, ""
 }
 
+// forecastScopeOf is the stored forecast a claim states: its team and its
+// summary's work scope (contractsv1.ContextFabricForecastScope).
+func forecastScopeOf(claim ClaimedFact) string {
+	scope := ""
+	if claim.CompletionForecast != nil {
+		scope = claim.CompletionForecast.WorkScopeID
+	}
+	return contractsv1.ContextFabricForecastScope(claim.Subject, scope)
+}
+
 // declaresCompletionDistribution is the reading the contract's validator holds
 // a forecast to: the claim's rows are its declared completion distribution.
 func declaresCompletionDistribution(fact *ClaimedFact) bool {
@@ -141,15 +157,23 @@ func forecastPercentilesShape(result InvestigationResult, frame *QuestionFrame) 
 		return nil, RenderShapeSkipNotPlanAuthorized
 	}
 	var series []contractsv1.ContextFabricRenderSeries
+	drawn := map[string]struct{}{}
 	for _, claim := range result.ClaimedFacts {
 		summary := claim.CompletionForecast
 		if claim.Kind != FactWorkload || claim.Subject.Kind != contractsv1.ContextFabricSubjectTeam || summary == nil {
 			continue
 		}
+		// One row per stored forecast (Codex #1949 r1): a second claim of a
+		// scope already drawn states the same percentiles.
+		if _, repeated := drawn[forecastScopeOf(claim)]; repeated {
+			continue
+		}
 		var points []contractsv1.ContextFabricRenderPoint
 		for _, field := range forecastPercentileFields {
 			days, ok := summary.Number(field)
-			if !ok {
+			// A day count past 2^53 cannot be plotted as the number it is
+			// (Codex #1949 r1); it gets no point, as a cell would not.
+			if !ok || days > contractsv1.ContextFabricRenderPointExactIntegerBound {
 				continue
 			}
 			word, known := contractsv1.ContextFabricForecastPercentileLabel(field)
@@ -169,6 +193,7 @@ func forecastPercentilesShape(result InvestigationResult, frame *QuestionFrame) 
 		if len(points) == 0 {
 			continue
 		}
+		drawn[forecastScopeOf(claim)] = struct{}{}
 		label := summary.WorkScopeID
 		if label == "" {
 			label = claim.Subject.Label
