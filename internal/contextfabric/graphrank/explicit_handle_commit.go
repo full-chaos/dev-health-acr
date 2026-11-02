@@ -176,6 +176,14 @@ func unresolvedNamedHandle(ctx context.Context, principal storage.Principal, req
 		Kind: handle.Kind, Complete: true, Count: census.outcome.Count, HandleApplied: true, AnchorApplied: anchored,
 		SatisfierCanonicalID: census.outcome.SatisfierCanonicalID, SatisfierCanonicalIDs: census.outcome.SatisfierCanonicalIDs,
 	}
+	// A free-text turn whose census could not read, by an error or by not closing,
+	// keeps today's answer (lead ruling on #1920, the same side as CHAOS-12463
+	// ruling 3): a gate that cannot read changes nothing. The refusal is already
+	// traced on evidence_census_commit. A handle the caller sent keeps the explicit
+	// rule's demotion below, as before this change.
+	if !census.complete && len(request.SubjectHandles) == 0 {
+		return resolution, nil
+	}
 	absent := census.complete && census.outcome.Count == 0
 	if claim == handleMentioned {
 		if absent {

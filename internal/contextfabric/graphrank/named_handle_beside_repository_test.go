@@ -449,8 +449,9 @@ func TestTheRequestCanStateTheHandlesKind(t *testing.T) {
 	}
 }
 
-// A census that proved nothing says nothing. The stated turn still does not answer
-// about the repository (the rule at commitNamedHandle), and the unstated turn keeps it.
+// A census that proved nothing says nothing and changes nothing on a free-text turn,
+// stated or not (lead ruling on #1920): the repository's answer stands. A handle the
+// caller sent keeps the explicit rule's demotion, as before.
 func TestACensusThatProvedNothingSaysNothing(t *testing.T) {
 	t.Parallel()
 	failing := func() *besideCensus { return &besideCensus{err: errors.New("census unavailable")} }
@@ -465,11 +466,14 @@ func TestACensusThatProvedNothingSaysNothing(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 			stated := runBeside(t, besideWorld{principal: restricted, question: besideQuestion("pull request 999"), frame: statedFrame(contextfabric.SubjectPullRequest), census: census()})
-			if len(stated.resolution.Committed) != 0 || stated.resolution.CensusLimitation != "" {
-				t.Fatalf("stated: committed %v limitation %q", stated.resolution.Committed, stated.resolution.CensusLimitation)
+			if got := besideCommittedIDs(stated.resolution); !slices.Equal(got, []string{scopeAnchorRepoID}) || stated.resolution.CensusLimitation != "" {
+				t.Fatalf("stated: committed %v limitation %q, want today's answer: a census that could not read changes nothing", got, stated.resolution.CensusLimitation)
 			}
-			if !slices.ContainsFunc(stated.offers.HandleOptions, func(option contractsv1.ContextFabricHandleOption) bool { return option.Value == "999" }) {
-				t.Fatalf("stated: options = %+v, want the handle kept: nothing proved it absent", stated.offers.HandleOptions)
+			explicit := runBeside(t, besideWorld{principal: restricted, question: besideQuestion("pull request 999"), census: census(), edit: func(r *contextfabric.InvestigationRequest) {
+				r.SubjectHandles = []contractsv1.ContextFabricRequestedHandle{{Kind: contextfabric.SubjectPullRequest, PatternID: "pull_request_number", Value: "999"}}
+			}})
+			if len(explicit.resolution.Committed) != 0 || explicit.resolution.CensusLimitation != "" {
+				t.Fatalf("explicit: committed %v limitation %q, want the explicit rule's demotion, as before", explicit.resolution.Committed, explicit.resolution.CensusLimitation)
 			}
 			unstated := runBeside(t, besideWorld{principal: restricted, question: besideQuestion("pull request 999"), frame: namedScopeAnchorFrame(nil), census: census()})
 			if got := besideCommittedIDs(unstated.resolution); !slices.Equal(got, []string{scopeAnchorRepoID}) || unstated.resolution.CensusLimitation != "" {
