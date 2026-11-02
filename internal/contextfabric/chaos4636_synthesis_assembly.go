@@ -468,6 +468,13 @@ func (e *Engine) synthesizeAndAssemble(ctx context.Context, principal storage.Pr
 		result.LimitationsDisplaced += displaced
 		result.Coverage.Partial = true
 	}
+	// CHAOS-12505 (ruling 3): a work item committed beside a named repository; the
+	// answer says whether a pull request link joins them. The engine states it.
+	if resolution.NamedRepositoryLinkLimitation != "" {
+		composed, displaced := appendBoundedLimitations(result.Limitations, []string{resolution.NamedRepositoryLinkLimitation})
+		result.Limitations = composed
+		result.LimitationsDisplaced += displaced
+	}
 	// CHAOS-12523: an answer about a repository says why a handle the question named
 	// beside it is not in the answer. The engine states it, so it stands on no model.
 	if contractsv1.IsContextFabricCensusAbsenceLimitation(resolution.CensusLimitation) {
