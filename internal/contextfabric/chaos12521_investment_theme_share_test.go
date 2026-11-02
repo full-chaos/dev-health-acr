@@ -111,10 +111,17 @@ func TestSeveralClaimsOnOneFactDrawOneTreemap(t *testing.T) {
 	t.Parallel()
 	result := themeShareResultFor(contractsv1.ContextFabricSubjectRepository, 0.5, 0.25, 0.25)
 	first := result.ClaimedFacts[0].ClaimID
+	factID := MintFactID(FactInvestment, result.ClaimedFacts[0].Subject, 0)
+	result.ClaimedFacts[0].FactID = factID
+	// One claim names no fact, as a model may leave fact_id out; its rows are
+	// still the fact's rows.
 	for index, field := range []string{"theme_feature_delivery", "theme_maintenance", "work_unit_count"} {
 		claim := themeShareResultFor(contractsv1.ContextFabricSubjectRepository, 0.5, 0.25, 0.25).ClaimedFacts[0]
 		claim.ClaimID = fmt.Sprintf("claim_theme_share_more_%d", index)
 		claim.Field = field
+		if index > 0 {
+			claim.FactID = factID
+		}
 		result.ClaimedFacts = append(result.ClaimedFacts, claim)
 	}
 	shapes, event := selectRenderShapes(result, themeShareFrame(), RenderShapeOptions{InvestmentThemeShare: true})
@@ -188,6 +195,15 @@ func TestNoTreemapWithoutTheRulesEvidence(t *testing.T) {
 			second := themeShareResultFor(contractsv1.ContextFabricSubjectRepository, 0.5, 0.5).ClaimedFacts[0]
 			second.ClaimID = "claim_theme_share_second"
 			second.Subject.CanonicalID = "subject:two"
+			r.ClaimedFacts = append(r.ClaimedFacts, second)
+		}, RenderShapeSkipSeveralThemeBreakdowns},
+		// Codex r1 on CHAOS-12591: two facts of one subject can hold equal rows.
+		// Their ids still name two facts, so the chart would show one of two.
+		"two fact ids, equal rows": {func(r *InvestigationResult) {
+			r.ClaimedFacts[0].FactID = MintFactID(FactInvestment, r.ClaimedFacts[0].Subject, 0)
+			second := themeShareResultFor(contractsv1.ContextFabricSubjectRepository, 0.5, 0.5).ClaimedFacts[0]
+			second.ClaimID = "claim_theme_share_second"
+			second.FactID = MintFactID(FactInvestment, second.Subject, 1)
 			r.ClaimedFacts = append(r.ClaimedFacts, second)
 		}, RenderShapeSkipSeveralThemeBreakdowns},
 		"a second kind under one id": {func(r *InvestigationResult) {

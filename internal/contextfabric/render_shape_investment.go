@@ -190,7 +190,15 @@ func WithoutDisabledRenderShapes(result InvestigationResult, options RenderShape
 // one declaration and the same rows. That is what two claims on one fact hold,
 // because the rows reach every claim from the fact (attachCanonicalRows). Any
 // difference is a second breakdown, and a chart of either would hide the other.
+//
+// Two facts of one subject can hold equal rows, so equal content is not enough
+// when both claims name their fact: two ids are two facts. A claim may leave
+// its fact id out (the model writes it, and the server does not fill it), and
+// then the content alone decides.
 func sameThemeBreakdown(first, other *ClaimedFact) bool {
+	if first.FactID != "" && other.FactID != "" && first.FactID != other.FactID {
+		return false
+	}
 	return first.Subject.Kind == other.Subject.Kind && first.Subject.CanonicalID == other.Subject.CanonicalID &&
 		reflect.DeepEqual(first.Table, other.Table) && reflect.DeepEqual(first.Rows, other.Rows)
 }
