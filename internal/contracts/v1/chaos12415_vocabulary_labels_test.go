@@ -130,6 +130,7 @@ func vocabularySources(t *testing.T) map[ContextFabricVocabulary][][]string {
 	dispositions := ContextFabricStructureDispositionVocabulary()
 	windows := ContextFabricRelativeWindowIDVocabulary()
 	units := ContextFabricMeasureUnitVocabulary()
+	subcategories := ContextFabricInvestmentSubcategoryVocabulary()
 	basis := make([]string, 0, len(contextFabricCohortRankingBasisLabels))
 	for label := range contextFabricCohortRankingBasisLabels {
 		if strings.HasPrefix(label, "investment_mix.") {
@@ -178,6 +179,7 @@ func vocabularySources(t *testing.T) map[ContextFabricVocabulary][][]string {
 		ContextFabricVocabularyMeasureUnit: {
 			closedVocabularyStrings(units[:]), schemaMeasureUnitValues(t, defs),
 		},
+		ContextFabricVocabularySubcategory: {closedVocabularyStrings(subcategories[:])},
 	}
 }
 

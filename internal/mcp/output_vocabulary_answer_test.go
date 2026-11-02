@@ -350,8 +350,8 @@ func init() {
 			kind:  vocabFrozen,
 			why:   "protocol",
 			sites: []string{"RenderShapeRule"},
-			// schema: "cohort_attention_score", "cohort_driver_contribution", "dated_fact_trend", "investment_theme_share", "comparison_side_by_side"
-			goSet:      []string{string(contractsv1.ContextFabricRenderRuleCohortAttentionScore), string(contractsv1.ContextFabricRenderRuleCohortDriverContribution), string(contractsv1.ContextFabricRenderRuleDatedFactTrend), string(contractsv1.ContextFabricRenderRuleInvestmentThemeShare), string(contractsv1.ContextFabricRenderRuleComparisonSideBySide)},
+			// schema: "cohort_attention_score", "cohort_driver_contribution", "dated_fact_trend", "investment_theme_share", "comparison_side_by_side", "investment_subcategory_share"
+			goSet:      []string{string(contractsv1.ContextFabricRenderRuleCohortAttentionScore), string(contractsv1.ContextFabricRenderRuleCohortDriverContribution), string(contractsv1.ContextFabricRenderRuleDatedFactTrend), string(contractsv1.ContextFabricRenderRuleInvestmentThemeShare), string(contractsv1.ContextFabricRenderRuleComparisonSideBySide), string(contractsv1.ContextFabricRenderRuleInvestmentSubcategoryShare)},
 			exhaustive: true,
 		},
 		outputVocabulary{
