@@ -1,5 +1,7 @@
 package contextfabric
 
+import contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
+
 // OrganizationCanonicalIDPrefix is the prefix an organization subject's
 // CanonicalID carries (CHAOS-12230). The projector mints the one organization
 // node with it, and a caller that names its own organization by canonical id
@@ -9,7 +11,7 @@ const OrganizationCanonicalIDPrefix = "organization:"
 // RepositoryCanonicalIDPrefix is the prefix a repository subject's CanonicalID
 // carries (CHAOS-12230): the repository node and every edge endpoint that must
 // land on it.
-const RepositoryCanonicalIDPrefix = "repository:"
+const RepositoryCanonicalIDPrefix = contractsv1.ContextFabricRepositoryCanonicalIDPrefix
 
 // OrganizationCanonicalID mints the canonical identity of an organization from
 // its org id. It is the one builder the projector's organization node uses, so

@@ -79,6 +79,12 @@ import "strings"
 // point per theme, and every other series is the outer ring of one theme, keyed
 // by that theme's token, one point per subcategory. The series key is what links
 // a ring to its parent (see ContextFabricRenderRuleInvestmentSubcategoryShare).
+//
+// A SANKEY READS THE SAME PAYLOAD (CHAOS-12578). Its flows run from a team's
+// repositories to the themes their effort went to: one series per theme, keyed by
+// the theme's token, and one point per repository with effort in that theme,
+// labelled with the repository's served word. A point is one link and its value
+// the link's weighted effort (see ContextFabricRenderRuleInvestmentRepositoryFlow).
 
 // ContextFabricRenderKind is the CLOSED vocabulary of renderable answer
 // shapes. Every member is defined now; producers land per shape.
@@ -204,7 +210,43 @@ const (
 	// only rule that yields a sunburst, and a sunburst has no other rule.
 	// Declared ahead of its producer: the wire widens first.
 	ContextFabricRenderRuleInvestmentSubcategoryShare ContextFabricRenderShapeRule = "investment_subcategory_share"
+	// ContextFabricRenderRuleInvestmentRepositoryFlow is one team's investment as
+	// flows from its repositories to the themes (CHAOS-12578; the CHAOS-4610
+	// sankey): every link of one claimed fact's repository_theme_breakdown table
+	// with effort above 0. It fires only on a team's allocate_investment frame that
+	// asks by repository (children_of_scope, member kind repository). It is the
+	// only rule that yields a sankey, and a sankey has no other rule. Declared
+	// ahead of its producer: the wire widens first.
+	ContextFabricRenderRuleInvestmentRepositoryFlow ContextFabricRenderShapeRule = "investment_repository_flow"
 )
+
+// The sankey's table (CHAOS-12578). ContextFabricRenderRepositoryFlowTableField
+// has one row per (repository, theme) link of a team's investment, keyed by
+// ContextFabricRenderRepositoryField (the repository's canonical id) and
+// ContextFabricRenderThemeField, with the repository's served word
+// (ContextFabricRenderRepositoryWordField), the link's weighted effort
+// (ContextFabricRenderEffortField) and the team's weighted effort in that theme
+// (ContextFabricRenderThemeEffortField, the value theme_breakdown serves).
+//
+// ContextFabricRenderRepositoryFlowMinRepositories and
+// ContextFabricRenderRepositoryFlowMaxRepositories bound the repositories a
+// sankey draws: below 2 there is no flow to show, and past 64 the shape is
+// refused rather than folded into an "other" node (lead ruling on CHAOS-4610).
+const (
+	ContextFabricRenderRepositoryFlowTableField      = "repository_theme_breakdown"
+	ContextFabricRenderRepositoryField               = "repository"
+	ContextFabricRenderRepositoryWordField           = "repository_label"
+	ContextFabricRenderEffortField                   = "weighted_effort"
+	ContextFabricRenderThemeEffortField              = "theme_weighted_effort"
+	ContextFabricRenderRepositoryFlowMinRepositories = 2
+	ContextFabricRenderRepositoryFlowMaxRepositories = 64
+)
+
+// ContextFabricRepositoryCanonicalIDPrefix starts every repository subject's
+// canonical id. A sankey node of a repository row carries one, so a node is a
+// repository and never a person (CHAOS-12578). The contextfabric minter uses
+// this constant.
+const ContextFabricRepositoryCanonicalIDPrefix = "repository:"
 
 // The sunburst's table (CHAOS-12554). ContextFabricRenderSubcategoryTableField
 // has one row per canonical subcategory, keyed by

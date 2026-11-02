@@ -85,6 +85,8 @@ func ParseInterpretationOutputWindow(raw []byte, defaultTime contextfabric.TimeC
 		return interpreted, InterpretationOutputWindow{}, err
 	}
 	class, confidence, unrecognized := sanitizeWindowOutput(output)
+	// CHAOS-12603: the same carry as ParseInterpretationOutputSignals.
+	interpreted.WindowClass, interpreted.WindowConfidence = class, confidence
 	return interpreted, InterpretationOutputWindow{Class: class, Confidence: confidence, ClassUnrecognized: unrecognized}, nil
 }
 
@@ -261,6 +263,9 @@ func ParseInterpretationOutputSignals(raw []byte, defaultTime contextfabric.Time
 		return interpreted, InterpretationOutputCapture{}, err
 	}
 	class, confidence, unrecognized := sanitizeWindowOutput(output)
+	// CHAOS-12603: the same carry the model and supplied paths apply, so an
+	// alternate transport's interpretation holds the sanitized pick too.
+	interpreted.WindowClass, interpreted.WindowConfidence = class, confidence
 	family := sanitizeFamilyOutput(output)
 	frame := sanitizeFrameOutput(output)
 	return interpreted, InterpretationOutputCapture{
