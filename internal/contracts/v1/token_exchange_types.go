@@ -30,10 +30,11 @@ type TokenExchangeRequest struct {
 	SubjectTokenType   string
 	RequestedTokenType string
 	Scope              string
-	// Resource is the RFC 8693 section 2.1 target-service parameter. It
-	// carries the organization selector, urn:acr:org:<uuid>; empty means
-	// no selector.
-	Resource string
+	// Resources holds every value of the RFC 8693 section 2.1 resource
+	// parameter, in request order. It carries the organization selector,
+	// urn:acr:org:<uuid>. No value means the key was absent: no selector.
+	// A key that is present but empty is a value, and malformed.
+	Resources []string
 }
 
 // TokenExchangeResourceOrgPrefix starts the Resource form that selects an
@@ -43,10 +44,13 @@ const TokenExchangeResourceOrgPrefix = "urn:acr:org:"
 // OrgSelector returns the organization named by Resource. present is false
 // when no selector was sent.
 func (r TokenExchangeRequest) OrgSelector() (orgID string, present bool, err error) {
-	if r.Resource == "" {
+	if len(r.Resources) == 0 {
 		return "", false, nil
 	}
-	orgID, ok := strings.CutPrefix(r.Resource, TokenExchangeResourceOrgPrefix)
+	if len(r.Resources) > 1 {
+		return "", false, errors.New("resource must be sent at most once")
+	}
+	orgID, ok := strings.CutPrefix(r.Resources[0], TokenExchangeResourceOrgPrefix)
 	if !ok || !canonicalLowerUUID(orgID) {
 		return "", false, fmt.Errorf("resource must be %s<lowercase uuid>", TokenExchangeResourceOrgPrefix)
 	}

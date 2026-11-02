@@ -50,11 +50,7 @@ func (a *App) handleTokenExchange(w http.ResponseWriter, r *http.Request) {
 		SubjectTokenType:   r.PostForm.Get("subject_token_type"),
 		RequestedTokenType: r.PostForm.Get("requested_token_type"),
 		Scope:              r.PostForm.Get("scope"),
-		Resource:           r.PostForm.Get("resource"),
-	}
-	if len(r.PostForm["resource"]) > 1 {
-		a.writeTokenExchangeError(w, contractsv1.TokenExchangeErrorInvalidRequest, http.StatusBadRequest)
-		return
+		Resources:          r.PostForm["resource"],
 	}
 	if err := request.Validate(); err != nil {
 		code := contractsv1.TokenExchangeErrorInvalidRequest
