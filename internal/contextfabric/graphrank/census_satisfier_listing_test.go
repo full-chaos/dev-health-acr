@@ -828,7 +828,7 @@ func TestAnAnchorOnlyCensusIsNotListed(t *testing.T) {
 		Kind: contextfabric.SubjectPullRequest, Complete: true, Count: 3, AnchorApplied: true,
 		SatisfierCanonicalIDs: []string{listingID(0), listingID(1), listingID(2)},
 	}}}
-	listed, undeciding := listCensusSatisfiers(context.Background(), restrictedCaller(t, listingRepo(0)), request, deps, attestation, contextfabric.SubjectResolution{})
+	listed, undeciding := listCensusSatisfiers(context.Background(), restrictedCaller(t, listingRepo(0)), request, turnDeps(deps, request), attestation, contextfabric.SubjectResolution{})
 	if len(listed.Candidates) != 0 || listed.CensusLimitation != "" || undeciding != nil || reads != 0 {
 		t.Fatalf("listed %+v undeciding %v reads %d, want nothing", listed, undeciding, reads)
 	}
@@ -846,7 +846,7 @@ func TestAListingNeedsAVisibleRound(t *testing.T) {
 		Kind: contextfabric.SubjectPullRequest, Complete: true, Count: 2, HandleApplied: true,
 		SatisfierCanonicalIDs: []string{listingID(0), listingID(1)},
 	}}}
-	listed, undeciding := listCensusSatisfiers(context.Background(), restrictedCaller(t, listingRepo(0)), request, deps, attestation, contextfabric.SubjectResolution{})
+	listed, undeciding := listCensusSatisfiers(context.Background(), restrictedCaller(t, listingRepo(0)), request, turnDeps(deps, request), attestation, contextfabric.SubjectResolution{})
 	if len(listed.Candidates) != 0 || listed.CensusLimitation != "" || undeciding != nil {
 		t.Fatalf("listed %+v undeciding %v, want nothing", listed, undeciding)
 	}
@@ -891,7 +891,7 @@ func TestALinkScopedWorkItemIsListedThroughItsLink(t *testing.T) {
 			request := testRequest()
 			request.Question = "Why is CHAOS-70 blocked?"
 			request.RequestedScope.RepositorySlugs = []string{grantRepoInside}
-			listed, _ := listCensusSatisfiers(context.Background(), tc.principal, request, deps, attestation, contextfabric.SubjectResolution{})
+			listed, _ := listCensusSatisfiers(context.Background(), tc.principal, request, turnDeps(deps, request), attestation, contextfabric.SubjectResolution{})
 			got := candidateIDs(listed.Candidates)
 			slices.Sort(got)
 			want := slices.Sorted(slices.Values(tc.want))

@@ -1533,6 +1533,9 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 		}
 	}()
 	ctx = WithWorkItemCensusRepositoryScopeRecorder(ctx)
+	// CHAOS-12463: every resolver call of this turn reads a work item key prefix
+	// from one memo, so the prefix is read once per turn.
+	ctx = WithWorkItemKeyPrefixMemo(ctx)
 	// Only the creator completes the response owner. Hosted requests borrow
 	// the transport's larger lifetime; direct calls end at this return.
 	if _, ok := WorkItemResponseOwnerFromContext(ctx); !ok {

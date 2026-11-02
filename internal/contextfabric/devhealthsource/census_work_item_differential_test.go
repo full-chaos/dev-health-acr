@@ -145,9 +145,10 @@ func observeLinkTurn(t *testing.T, world grantedItemWorld) grantObservation {
 		Traverse: func(context.Context, string, graphrank.CandidateNode, bool) (contextfabric.SubjectCandidate, graphrank.ObservationTraversal) {
 			return contextfabric.SubjectCandidate{}, graphrank.ObservationNoParent
 		},
-		IsInternal:       func(contextfabric.SubjectRef) bool { return false },
-		ResolutionTracer: tracer,
-		CensusFunc:       devhealthsource.NewCensusFunc(log),
+		IsInternal:        func(contextfabric.SubjectRef) bool { return false },
+		ResolutionTracer:  tracer,
+		CensusFunc:        devhealthsource.NewCensusFunc(log),
+		WorkItemKeyPrefix: devhealthsource.NewWorkItemKeyPrefixFunc(log),
 		HandleGrammarChecker: func(kind contextfabric.SubjectKind, patternID, value string) (string, bool) {
 			return "work_items.work_item_id", graphrank.ValidateHandleGrammar(kind, patternID, value)
 		},
@@ -406,9 +407,12 @@ func (m *linkStatementModel) Query(ctx context.Context, statement string, bindin
 	}
 	keep := map[string]bool{}
 	byID := map[string][]linkItem{}
+	// A key prefix read (CHAOS-12463) names its candidates by prefix, a census by
+	// the whole key.
+	prefix, prefixRead := values["census_key_prefix"].(string)
 	for _, item := range *m.world.items {
 		_, key, _ := strings.Cut(item.id, ":")
-		if key == values["census_handle_ticket_key"] {
+		if prefixRead && strings.HasPrefix(key, prefix) || !prefixRead && key == values["census_handle_ticket_key"] {
 			byID[item.id] = append(byID[item.id], item)
 		}
 	}
@@ -448,7 +452,18 @@ func grantedItemModelWorld(t *testing.T, name string) grantedItemWorld {
 	world.client = &linkStatementModel{world: &world, readAt: time.Unix(1_800_000_000, 0).UTC()}
 	world.addItem = func(_ *testing.T, item linkItem) { *items = append(*items, item) }
 	world.addLink = func(_ *testing.T, link issueLink) { *links = append(*links, link) }
+	holdLinkKeyPrefix(t, world)
 	return world
+}
+
+// holdLinkKeyPrefix gives the caller a work item of linkKey's prefix, so the key
+// counts as a handle (CHAOS-12463) and these cases read what they always read: a
+// census of the key. It is another key, so no census of linkKey counts it.
+func holdLinkKeyPrefix(t *testing.T, world grantedItemWorld) {
+	t.Helper()
+	sibling := linkItem{id: "linear:CHAOS-1", provider: "linear"}
+	world.addItem(t, sibling)
+	world.addLink(t, issueLink{sibling.id, "native", world.insideGitHub})
 }
 
 func TestOutsideLinksChangeNothingOnTheStatementModel(t *testing.T) {
@@ -479,4 +494,105 @@ func TestAProjectOwnedItemWithNoNativeLinkStaysDenied(t *testing.T) {
 func TestANativeLinkBesideAnOutsideOneAdmits(t *testing.T) {
 	t.Parallel()
 	aNativeLinkBesideAnOutsideOneAdmits(t, grantedItemModelWorld)
+}
+
+// aKeyWhosePrefixIsOnlyOutsideReadsLikeAWord (CHAOS-12463): a key whose prefix
+// the caller holds nowhere inside its grant binds no handle, and the turn is the
+// same whether such items exist outside the grant or not at all. Once one item of
+// the prefix is inside, the key counts and the census answers for it.
+func aKeyWhosePrefixIsOnlyOutsideReadsLikeAWord(t *testing.T, build grantedItemWorldBuilder) {
+	world := build(t, "prefix outside")
+	world.key = "OPS-7"
+	before := observeLinkTurn(t, world)
+	if rounds := (&grantTracer{events: before.trace}).stage("evidence_round"); len(rounds) != 0 && rounds[0].ShadowHandleGrammarBound {
+		t.Fatalf("a key with no prefix inside the grant bound a handle: %+v", rounds)
+	}
+	outside := linkItem{id: "jira:OPS-7", provider: "jira"}
+	world.addItem(t, outside)
+	world.addLink(t, issueLink{outside.id, "native", world.outsideGitHub})
+	after := observeLinkTurn(t, world)
+	if !reflect.DeepEqual(before.resolution, after.resolution) || !reflect.DeepEqual(before.offers, after.offers) || !sameTrace(before.trace, after.trace) || !slices.Equal(before.graphReads, after.graphReads) {
+		t.Fatalf("an item outside the grant changed the turn:\nbefore %+v %+v\nafter  %+v %+v", before.resolution, before.trace, after.resolution, after.trace)
+	}
+	inside := linkItem{id: "jira:OPS-8", provider: "jira"}
+	world.addItem(t, inside)
+	world.addLink(t, issueLink{inside.id, "native", world.insideGitLab})
+	held := observeLinkTurn(t, world)
+	if got := roundOutcome(t, held); got != string(graphrank.ShadowWouldNoMatch) {
+		t.Fatalf("with the prefix held: round = %q, want would_no_match for OPS-7 inside the grant", got)
+	}
+}
+
+// everyProviderKeyCommitsThroughTheGate: one key of each tracker binds a handle
+// and commits, on the real principal shape. Linear and Jira write KEY-N with no
+// repository and reach a restricted caller through a native pull request link.
+// GitHub and GitLab write their repository reference on a repository-owned row.
+//
+// For a restricted caller a repository-owned row is outside the work item census
+// and the prefix read alike: both read the library's link arm, and that arm takes
+// repository-less rows only (CHAOS-12561). So those two commit here for an
+// organization-wide caller, and for a restricted caller their reference reads like
+// a word: no handle, no round.
+func everyProviderKeyCommitsThroughTheGate(t *testing.T, build grantedItemWorldBuilder) {
+	cases := []struct {
+		provider      string
+		repositoryRow bool
+		item          func(w grantedItemWorld) (linkItem, issueLink)
+	}{
+		{"linear", false, func(w grantedItemWorld) (linkItem, issueLink) {
+			i := linkItem{id: "linear:ENG-5", provider: "linear"}
+			return i, issueLink{i.id, "native", w.insideGitHub}
+		}},
+		{"jira", false, func(w grantedItemWorld) (linkItem, issueLink) {
+			i := linkItem{id: "jira:OPS-7", provider: "jira"}
+			return i, issueLink{i.id, "native", w.insideGitLab}
+		}},
+		{"github", true, func(w grantedItemWorld) (linkItem, issueLink) {
+			i := linkItem{id: "gh:" + w.insideGitHub.slug + "#7", provider: "github", repository: w.insideGitHub}
+			return i, issueLink{i.id, "native", w.insideGitHub}
+		}},
+		{"gitlab", true, func(w grantedItemWorld) (linkItem, issueLink) {
+			i := linkItem{id: "gitlab:" + w.insideGitLab.slug + "#9", provider: "gitlab", repository: w.insideGitLab}
+			return i, issueLink{i.id, "native", w.insideGitLab}
+		}},
+	}
+	for _, tc := range cases {
+		for _, restricted := range []bool{true, false} {
+			t.Run(fmt.Sprintf("%s/restricted=%v", tc.provider, restricted), func(t *testing.T) {
+				world := build(t, fmt.Sprintf("provider %s %v", tc.provider, restricted))
+				item, link := tc.item(world)
+				world.addItem(t, item)
+				world.addLink(t, link)
+				_, key, _ := strings.Cut(item.id, ":")
+				world.key = key
+				if !restricted {
+					orgWide := userprincipal.Authenticated(t, world.org, []string{"*"})
+					world.principal = &orgWide
+				}
+				turn := observeLinkTurn(t, world)
+				rounds := (&grantTracer{events: turn.trace}).stage("evidence_round")
+				if restricted && tc.repositoryRow {
+					if len(rounds) != 0 && rounds[0].ShadowHandleGrammarBound {
+						t.Fatalf("%s: the reference bound a handle the census cannot count (CHAOS-12561): %+v", key, rounds)
+					}
+					return
+				}
+				if len(rounds) != 1 || !rounds[0].ShadowHandleGrammarBound {
+					t.Fatalf("%s: evidence_round = %+v, want one round on the bound handle", key, rounds)
+				}
+				want := world.canonicalID(t, item)
+				if len(turn.resolution.Committed) != 1 || turn.resolution.Committed[0].CanonicalID != want {
+					t.Fatalf("%s: committed = %+v, want %s (round %q)", key, turn.resolution.Committed, want, rounds[0].ShadowOutcome)
+				}
+			})
+		}
+	}
+}
+
+func TestAKeyWhosePrefixIsOnlyOutsideReadsLikeAWord(t *testing.T) {
+	aKeyWhosePrefixIsOnlyOutsideReadsLikeAWord(t, grantedItemModelWorld)
+}
+
+func TestEveryProviderKeyCommitsThroughTheGate(t *testing.T) {
+	everyProviderKeyCommitsThroughTheGate(t, grantedItemModelWorld)
 }
