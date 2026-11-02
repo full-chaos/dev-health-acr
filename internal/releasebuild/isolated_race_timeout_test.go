@@ -300,7 +300,9 @@ func TestDevhealthsourceIsolation_ownRaceJobAndBudget(t *testing.T) {
 		"isolated-dedicated devhealthsource",
 		"race-split.sh devhealthsource race-fourth)",
 		"race-split.sh devhealthsource verify",
-		"RACE_BASELINE_ARTIFACT: race-json-race-devhealthsource-fourth",
+		"uses: ./.github/actions/race-baseline",
+		"artifact: race-json-race-devhealthsource-fourth",
+		"RACE_BASELINE_JSON: .tmp/race-baseline/race.json",
 		"name: race-json-race-devhealthsource-fourth",
 	} {
 		if !strings.Contains(fourth, want) {

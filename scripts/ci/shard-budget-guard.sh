@@ -186,35 +186,19 @@ span_rows() { # file -> "P<TAB>pkg<TAB>elapsed" and "T<TAB>pkg<TAB>test<TAB>span
   rm -f "$ev"
 }
 
-fetch_baseline() { # prints the path of a baseline race.json (runs in a subshell); on failure returns 1 with the reason in $tmpd/reason
-  local baseline_reason=""
-  trap '[ -z "$baseline_reason" ] || printf %s "$baseline_reason" >"$tmpd/reason"' RETURN
-  if [ -n "${RACE_BASELINE_JSON:-}" ]; then
-    if [ -r "$RACE_BASELINE_JSON" ] && [ -s "$RACE_BASELINE_JSON" ]; then echo "$RACE_BASELINE_JSON"; return 0; fi
-    baseline_reason="RACE_BASELINE_JSON $RACE_BASELINE_JSON is not a readable file"; return 1
-  fi
-  local art="$RACE_BASELINE_ARTIFACT" dir ids id got
-  command -v gh >/dev/null 2>&1 || { baseline_reason="gh is not installed"; return 1; }
-  [ -n "${GITHUB_REPOSITORY:-}" ] || { baseline_reason="GITHUB_REPOSITORY is not set"; return 1; }
-  ids="$(gh run list -R "$GITHUB_REPOSITORY" --workflow ci.yml --branch main --event push --status success --limit 10 --json databaseId -q '.[].databaseId' 2>/dev/null)" \
-    || { baseline_reason="gh run list failed"; return 1; }
-  [ -n "$ids" ] || { baseline_reason="no successful main run"; return 1; }
-  dir="$tmpd/dl"
-  for id in $ids; do
-    mkdir -p "$dir/$id"
-    if gh run download "$id" -R "$GITHUB_REPOSITORY" -n "$art" -D "$dir/$id" >/dev/null 2>&1; then
-      got="$(find "$dir/$id" -name race.json -type f -size +0c 2>/dev/null | head -n1)"
-      if [ -n "$got" ]; then echo "main run $id" >&2; echo "$got"; return 0; fi
-    fi
-  done
-  baseline_reason="no race.json in artifact $art of the last main runs"; return 1
+fetch_baseline() { # prints the path of the baseline race.json (RACE_BASELINE_JSON); on failure returns 1 with the reason in $tmpd/reason
+  # CHAOS-12667 (Codex #1967 r1): the guard fetches nothing. The job's race-baseline step (.github/actions/race-baseline)
+  # downloads main's artifact with the token before the tests run, so no token reaches this script or the tests.
+  if [ -r "$RACE_BASELINE_JSON" ] && [ -s "$RACE_BASELINE_JSON" ]; then echo "$RACE_BASELINE_JSON"; return 0; fi
+  printf %s "RACE_BASELINE_JSON $RACE_BASELINE_JSON is not a readable file (main's artifact was not fetched)" >"$tmpd/reason"
+  return 1
 }
 
 span_report() {
   local now base="" b_rows="" note="" baseline_reason=""
   now="$(span_rows "$file")" || return 1
   grep -q '^T' <<<"$now" || return 1
-  if [ -n "${RACE_BASELINE_JSON:-}" ] || [ -n "${RACE_BASELINE_ARTIFACT:-}" ]; then
+  if [ -n "${RACE_BASELINE_JSON:-}" ]; then
     local bf
     if bf="$(fetch_baseline 2>"$tmpd/note")"; then
       note="$(cat "$tmpd/note")"
@@ -226,7 +210,7 @@ span_report() {
     fi
     baseline_reason="$(cat "$tmpd/reason" 2>/dev/null || true)"
     if [ -z "$base" ]; then
-      printf '::warning::shard-budget-guard: no main baseline for %s: %s\n' "${RACE_BASELINE_ARTIFACT:-${RACE_BASELINE_JSON:-}}" "$baseline_reason"
+      printf '::warning::shard-budget-guard: no main baseline for %s: %s\n' "$RACE_BASELINE_JSON" "$baseline_reason"
     fi
   fi
   { printf '%s\n' "$now"; printf 'BASE\n'; [ -n "$b_rows" ] && printf '%s\n' "$b_rows"; true; } | awk -F'\t' -v hasbase="$([ -n "$base" ] && echo 1 || echo 0)" -v note="$note" '
@@ -257,14 +241,19 @@ span_report() {
     }'
 }
 
-tmpd="$(mktemp -d)"
-trap 'rm -f "$lines" "${tests:-}"; rm -rf "$tmpd"' EXIT
+# The report's own temp directory is made inside the reporting branch (Codex #1967 r1): a failure here is a warning,
+# never an exit under set -e, so the exit code stays the one the package and per-test checks gave.
+tmpd=""
+trap 'rm -f "$lines" "${tests:-}"; [ -z "$tmpd" ] || rm -rf "$tmpd"' EXIT
 if [ "$json" -eq 1 ]; then
-  if ! span_report; then
+  if ! tmpd="$(mktemp -d 2>/dev/null)" || [ -z "$tmpd" ]; then
+    tmpd=""
+    echo "::warning::shard-budget-guard: no temporary directory for the real span report; the block is skipped"
+  elif ! span_report; then
     echo "::warning::shard-budget-guard: could not compute the real span report from $file; the block is skipped"
   fi
-  if [ -z "${RACE_BASELINE_JSON:-}" ] && [ -z "${RACE_BASELINE_ARTIFACT:-}" ]; then
-    echo "no baseline set (RACE_BASELINE_ARTIFACT / RACE_BASELINE_JSON)"
+  if [ -z "${RACE_BASELINE_JSON:-}" ]; then
+    echo "no baseline set (RACE_BASELINE_JSON)"
   fi
 fi
 

@@ -1247,10 +1247,15 @@ jobs:
         run: scripts/ci/race-split.sh devhealthfacts verify
       - name: Verify every devhealthfacts test runs in exactly one race job
         run: scripts/ci/race-split.sh devhealthfacts race-partition
+      # CHAOS-12667: main's last race-json of this job, for the guard's real span
+      # report. The token is used in this step only; it runs gh and nothing else.
+      - uses: ./.github/actions/race-baseline
+        with:
+          artifact: race-json-race-devhealthfacts
+          token: ${{ github.token }}
       - name: Run isolated devhealthfacts race suite (rest half)
         env:
-          RACE_BASELINE_GH_TOKEN: ${{ github.token }}
-          RACE_BASELINE_ARTIFACT: race-json-race-devhealthfacts
+          RACE_BASELINE_JSON: .tmp/race-baseline/race.json
         run: |
           set -euo pipefail
           packages="$(scripts/ci/test-shard.sh isolated-dedicated devhealthfacts)"
@@ -1318,10 +1323,15 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
       - name: Verify the heavy-test list names real tests
         run: scripts/ci/race-split.sh devhealthfacts verify
+      # CHAOS-12667: main's last race-json of this job, for the guard's real span
+      # report. The token is used in this step only; it runs gh and nothing else.
+      - uses: ./.github/actions/race-baseline
+        with:
+          artifact: race-json-race-devhealthfacts-heavy
+          token: ${{ github.token }}
       - name: Run isolated devhealthfacts race suite (heavy half)
         env:
-          RACE_BASELINE_GH_TOKEN: ${{ github.token }}
-          RACE_BASELINE_ARTIFACT: race-json-race-devhealthfacts-heavy
+          RACE_BASELINE_JSON: .tmp/race-baseline/race.json
         run: |
           set -euo pipefail
           packages="$(scripts/ci/test-shard.sh isolated-dedicated devhealthfacts)"
@@ -1388,10 +1398,15 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
       - name: Verify the heavy-test list names real tests
         run: scripts/ci/race-split.sh devhealthfacts verify
+      # CHAOS-12667: main's last race-json of this job, for the guard's real span
+      # report. The token is used in this step only; it runs gh and nothing else.
+      - uses: ./.github/actions/race-baseline
+        with:
+          artifact: race-json-race-devhealthfacts-mid
+          token: ${{ github.token }}
       - name: Run isolated devhealthfacts race suite (mid third)
         env:
-          RACE_BASELINE_GH_TOKEN: ${{ github.token }}
-          RACE_BASELINE_ARTIFACT: race-json-race-devhealthfacts-mid
+          RACE_BASELINE_JSON: .tmp/race-baseline/race.json
         run: |
           set -euo pipefail
           packages="$(scripts/ci/test-shard.sh isolated-dedicated devhealthfacts)"
@@ -1458,10 +1473,15 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
       - name: Verify the heavy-test list names real tests
         run: scripts/ci/race-split.sh devhealthfacts verify
+      # CHAOS-12667: main's last race-json of this job, for the guard's real span
+      # report. The token is used in this step only; it runs gh and nothing else.
+      - uses: ./.github/actions/race-baseline
+        with:
+          artifact: race-json-race-devhealthfacts-fourth
+          token: ${{ github.token }}
       - name: Run isolated devhealthfacts race suite (fourth quarter)
         env:
-          RACE_BASELINE_GH_TOKEN: ${{ github.token }}
-          RACE_BASELINE_ARTIFACT: race-json-race-devhealthfacts-fourth
+          RACE_BASELINE_JSON: .tmp/race-baseline/race.json
         run: |
           set -euo pipefail
           packages="$(scripts/ci/test-shard.sh isolated-dedicated devhealthfacts)"
@@ -1546,10 +1566,15 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
       - name: Verify the heavy-test list names real tests
         run: scripts/ci/race-split.sh devhealthsource verify
+      # CHAOS-12667: main's last race-json of this job, for the guard's real span
+      # report. The token is used in this step only; it runs gh and nothing else.
+      - uses: ./.github/actions/race-baseline
+        with:
+          artifact: race-json-race-devhealthsource
+          token: ${{ github.token }}
       - name: Run isolated devhealthsource race suite (rest half)
         env:
-          RACE_BASELINE_GH_TOKEN: ${{ github.token }}
-          RACE_BASELINE_ARTIFACT: race-json-race-devhealthsource
+          RACE_BASELINE_JSON: .tmp/race-baseline/race.json
         run: |
           set -euo pipefail
           packages="$(scripts/ci/test-shard.sh isolated-dedicated devhealthsource)"
@@ -1619,10 +1644,15 @@ jobs:
         run: scripts/ci/race-split.sh devhealthsource verify
       - name: Verify every devhealthsource test runs in exactly one race job
         run: scripts/ci/race-split.sh devhealthsource race-partition
+      # CHAOS-12667: main's last race-json of this job, for the guard's real span
+      # report. The token is used in this step only; it runs gh and nothing else.
+      - uses: ./.github/actions/race-baseline
+        with:
+          artifact: race-json-race-devhealthsource-heavy
+          token: ${{ github.token }}
       - name: Run isolated devhealthsource race suite (heavy half)
         env:
-          RACE_BASELINE_GH_TOKEN: ${{ github.token }}
-          RACE_BASELINE_ARTIFACT: race-json-race-devhealthsource-heavy
+          RACE_BASELINE_JSON: .tmp/race-baseline/race.json
         run: |
           set -euo pipefail
           packages="$(scripts/ci/test-shard.sh isolated-dedicated devhealthsource)"
@@ -1689,10 +1719,15 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
       - name: Verify the heavy-test list names real tests
         run: scripts/ci/race-split.sh devhealthsource verify
+      # CHAOS-12667: main's last race-json of this job, for the guard's real span
+      # report. The token is used in this step only; it runs gh and nothing else.
+      - uses: ./.github/actions/race-baseline
+        with:
+          artifact: race-json-race-devhealthsource-mid
+          token: ${{ github.token }}
       - name: Run isolated devhealthsource race suite (mid half)
         env:
-          RACE_BASELINE_GH_TOKEN: ${{ github.token }}
-          RACE_BASELINE_ARTIFACT: race-json-race-devhealthsource-mid
+          RACE_BASELINE_JSON: .tmp/race-baseline/race.json
         run: |
           set -euo pipefail
           packages="$(scripts/ci/test-shard.sh isolated-dedicated devhealthsource)"
@@ -1764,10 +1799,15 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
       - name: Verify the heavy-test list names real tests
         run: scripts/ci/race-split.sh devhealthsource verify
+      # CHAOS-12667: main's last race-json of this job, for the guard's real span
+      # report. The token is used in this step only; it runs gh and nothing else.
+      - uses: ./.github/actions/race-baseline
+        with:
+          artifact: race-json-race-devhealthsource-fourth
+          token: ${{ github.token }}
       - name: Run isolated devhealthsource race suite (fourth job)
         env:
-          RACE_BASELINE_GH_TOKEN: ${{ github.token }}
-          RACE_BASELINE_ARTIFACT: race-json-race-devhealthsource-fourth
+          RACE_BASELINE_JSON: .tmp/race-baseline/race.json
         run: |
           set -euo pipefail
           packages="$(scripts/ci/test-shard.sh isolated-dedicated devhealthsource)"

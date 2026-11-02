@@ -138,6 +138,13 @@ expect_fail_mode 'a rest name that is also in the fourth list' "$dir" verify
 dir="$(fixture source-rest-no-such-test)"
 printf 'TestNoSuchTestExists\n' >>"$dir/$rest"
 expect_fail_mode 'a rest name that is no real test' "$dir" verify
+# Codex #1967 r1: the race selectors' flags. -skip of race-mid keeps the selector
+# text, but the mid job would run every non-mid test.
+dir="$(fixture source-race-mid-skip)"
+sed 's/-run=\(.*devhealthsource race-mid)\)/-skip=\1/' "$dir/.github/workflows/ci.yml" >"$dir/ci.new"
+cmp -s "$dir/ci.new" "$dir/.github/workflows/ci.yml" && { echo "CONTROL SETUP FAILED: source-race-mid-skip" >&2; exit 1; }
+mv "$dir/ci.new" "$dir/.github/workflows/ci.yml"
+expect_fail_mode 'a race-mid selector passed to -skip' "$dir" race-partition
 
 [ "$fails" -eq 0 ] || { printf '%s violation(s)\n' "$fails" >&2; exit 1; }
 echo "PASS: unit split partition and its negative controls"

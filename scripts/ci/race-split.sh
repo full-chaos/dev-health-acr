@@ -205,20 +205,28 @@ case "${2:-}" in
       n="$(grep -cF -- "race-split.sh $want" "$wf" || true)"
       [ "$n" -eq 1 ] || { printf 'ci.yml must use "race-split.sh %s" exactly once, found %s\n' "$want" "$n" >&2; exit 1; }
     done
+    # The flag matters as much as the mode (Codex #1967 r1): -skip of race-mid would run every non-mid test there.
+    flags=('run|race-heavy' 'run|race-mid' 'skip|race-rest')
+    [ -f "$fourth_list" ] && flags+=('run|race-fourth')
+    for want in "${flags[@]}"; do
+      flag="${want%%|*}"; mode="${want#*|}"
+      grep -qE -- "GOFLAGS=\"-trimpath -$flag=\\\$\(scripts/ci/race-split\.sh $name $mode\)\"" "$wf" \
+        || { printf 'ci.yml must pass "%s" to -%s\n' "$mode" "$flag" >&2; exit 1; }
+    done
     if [ ! -f "$fourth_list" ] && grep -qF -- "race-split.sh $name race-fourth)" "$wf"; then
       printf 'ci.yml uses race-fourth for %s but %s does not exist\n' "$name" "$fourth_list" >&2
       exit 1
     fi
-    all="$(go test -list '.' "$pkg" | grep '^Test' | LC_ALL=C sort -u)"
+    all="$(go test -list '.' "$pkg" | grep -E '^(Test|Fuzz|Example)' | LC_ALL=C sort -u)"
     problems="$(rest_list_problems "$all")"
     if [ -n "$problems" ]; then printf '%s\n' "$problems" >&2; exit 1; fi
-    a="$(go test -list "$(race_heavy)" "$pkg" | grep '^Test' | LC_ALL=C sort -u)"
-    b="$(go test -list "$(race_mid)" "$pkg" | grep '^Test' | LC_ALL=C sort -u)"
+    a="$(go test -list "$(race_heavy)" "$pkg" | grep -E '^(Test|Fuzz|Example)' | LC_ALL=C sort -u)"
+    b="$(go test -list "$(race_mid)" "$pkg" | grep -E '^(Test|Fuzz|Example)' | LC_ALL=C sort -u)"
     d=""
     if [ -f "$fourth_list" ]; then
-      d="$(go test -list "$(race_fourth)" "$pkg" | grep '^Test' | LC_ALL=C sort -u)"
+      d="$(go test -list "$(race_fourth)" "$pkg" | grep -E '^(Test|Fuzz|Example)' | LC_ALL=C sort -u)"
     fi
-    skipped="$(go test -list "$(race_rest)" "$pkg" | grep '^Test' | LC_ALL=C sort -u)"
+    skipped="$(go test -list "$(race_rest)" "$pkg" | grep -E '^(Test|Fuzz|Example)' | LC_ALL=C sort -u)"
     c="$(LC_ALL=C comm -23 <(printf '%s\n' "$all") <(printf '%s\n' "$skipped"))"
     counted="$(printf '%s\n%s\n%s\n%s\n' "$a" "$b" "$d" "$c" | grep -v '^$' | LC_ALL=C sort | uniq -c)"
     bad="$(printf '%s\n' "$counted" | awk '$1 != 1 {print $1, $2}')"
@@ -234,7 +242,7 @@ case "${2:-}" in
     ;;
   verify)
     cd "$root"
-    existing="$(go test -list '.' "$pkg" | grep '^Test' | LC_ALL=C sort -u)"
+    existing="$(go test -list '.' "$pkg" | grep -E '^(Test|Fuzz|Example)' | LC_ALL=C sort -u)"
     missing="$(LC_ALL=C comm -23 <({ names; [ -f "$mid_list" ] && mid_names; fourth_names; } | LC_ALL=C sort -u) <(printf '%s\n' "$existing"))"
     if [ -n "$missing" ]; then
       printf 'heavy list names no such test:\n%s\n' "$missing" >&2

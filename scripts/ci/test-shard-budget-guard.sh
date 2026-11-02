@@ -190,29 +190,27 @@ if command -v jq >/dev/null; then
   spexpect baseline-absent-test-is-new 0 'TestNew .*| new' RACE_BASELINE_JSON="$tmp/base.json"
   spexpect baseline-package-delta 0 'package time: now 20\.0s, baseline 11\.0s, delta +9\.0s' RACE_BASELINE_JSON="$tmp/base.json"
   spexpect baseline-unreadable-file-warns 0 '::warning::shard-budget-guard: no main baseline for /nonexistent' RACE_BASELINE_JSON=/nonexistent
-  spexpect no-baseline-says-so 0 'no baseline set (RACE_BASELINE_ARTIFACT / RACE_BASELINE_JSON)'
-  # artifact baseline with a gh that fails: a warning, and the exit code of the guard is untouched (passing and failing input)
-  mkdir -p "$tmp/stubbin"
-  printf '#!/bin/sh\necho "gh: no token" >&2\nexit 1\n' >"$tmp/stubbin/gh"; chmod +x "$tmp/stubbin/gh"
-  rc_gh=0; PATH="$tmp/stubbin:$PATH" GITHUB_REPOSITORY=o/r RACE_SLOW_TESTS="$allow" RACE_BASELINE_ARTIFACT=race-json-x "$guard" --json 6000 "$sp" >"$tmp/gh.out" 2>&1 || rc_gh=$?
-  if [ "$rc_gh" -eq 0 ] && grep -q 'no main baseline for race-json-x: gh run list failed' "$tmp/gh.out"; then echo "ok   failing-gh-passing-input-rc0"
-  else echo "FAIL failing-gh-passing-input-rc0 rc=$rc_gh"; cat "$tmp/gh.out"; fails=$((fails + 1)); fi
+  spexpect no-baseline-says-so 0 'no baseline set (RACE_BASELINE_JSON)'
+  # an unreadable baseline file never changes the exit code: a failing input still fails, with the warning
   { ev 0 run TestGiant; ev 310 pass TestGiant 310; ev 311 pass "" 311; } >"$sp"
-  rc_gh=0; PATH="$tmp/stubbin:$PATH" GITHUB_REPOSITORY=o/r RACE_SLOW_TESTS="$allow" RACE_BASELINE_ARTIFACT=race-json-x "$guard" --json 6000 "$sp" >"$tmp/gh.out" 2>&1 || rc_gh=$?
-  if [ "$rc_gh" -eq 1 ] && grep -q 'no main baseline for race-json-x' "$tmp/gh.out"; then echo "ok   failing-gh-failing-input-rc1"
-  else echo "FAIL failing-gh-failing-input-rc1 rc=$rc_gh"; cat "$tmp/gh.out"; fails=$((fails + 1)); fi
-  # gh that downloads: the run id used is printed and the compare is made
-  cat >"$tmp/stubbin/gh" <<'GH'
+  spexpect baseline-missing-failing-input-rc1 1 '::warning::shard-budget-guard: no main baseline for /nonexistent' RACE_BASELINE_JSON=/nonexistent
+  # Codex #1967 r1: the report's temporary directory failing (mktemp -d) is a warning, never an exit: a passing input
+  # stays 0 and a failing input stays 1. The shim fails only `mktemp -d`; the guard's own plain mktemp calls work.
+  mkdir -p "$tmp/nodir"
+  cat >"$tmp/nodir/mktemp" <<'SHIM'
 #!/bin/sh
-case "$1 $2" in
-  "run list") echo 111; echo 222 ;;
-  "run download") if [ "$3" = 222 ]; then d=""; while [ $# -gt 0 ]; do [ "$1" = -D ] && d="$2"; shift; done; cp "$BASE_FIXTURE" "$d/race.json"; else exit 1; fi ;;
-esac
-GH
+for a in "$@"; do [ "$a" = -d ] && { echo "mktemp: no directory" >&2; exit 1; }; done
+exec /usr/bin/mktemp "$@"
+SHIM
+  chmod +x "$tmp/nodir/mktemp"
   { ev 0 run TestP; ev 14 pass TestP 1; ev 20 pass "" 20; } >"$sp"
-  out="$(PATH="$tmp/stubbin:$PATH" BASE_FIXTURE="$tmp/base.json" GITHUB_REPOSITORY=o/r RACE_SLOW_TESTS="$allow" RACE_BASELINE_ARTIFACT=race-json-x "$guard" --json 6000 "$sp" 2>&1)" || true
-  if grep -q 'baseline: main run 222' <<<"$out" && grep -q 'TestP .*| baseline *10\.0 *delta +4\.0' <<<"$out"; then echo "ok   artifact-baseline-fetched"
-  else echo "FAIL artifact-baseline-fetched"; printf '%s\n' "$out"; fails=$((fails + 1)); fi
+  rc_nd=0; PATH="$tmp/nodir:$PATH" RACE_SLOW_TESTS="$allow" "$guard" --json 6000 "$sp" >"$tmp/nd.out" 2>&1 || rc_nd=$?
+  if [ "$rc_nd" -eq 0 ] && grep -q 'no temporary directory for the real span report' "$tmp/nd.out"; then echo "ok   report-tempdir-failure-passing-input-rc0"
+  else echo "FAIL report-tempdir-failure-passing-input-rc0 rc=$rc_nd"; cat "$tmp/nd.out"; fails=$((fails + 1)); fi
+  { ev 0 run TestGiant; ev 310 pass TestGiant 310; ev 311 pass "" 311; } >"$sp"
+  rc_nd=0; PATH="$tmp/nodir:$PATH" RACE_SLOW_TESTS="$allow" "$guard" --json 6000 "$sp" >"$tmp/nd.out" 2>&1 || rc_nd=$?
+  if [ "$rc_nd" -eq 1 ] && grep -q 'no temporary directory for the real span report' "$tmp/nd.out"; then echo "ok   report-tempdir-failure-failing-input-rc1"
+  else echo "FAIL report-tempdir-failure-failing-input-rc1 rc=$rc_nd"; cat "$tmp/nd.out"; fails=$((fails + 1)); fi
 fi
 
 [ "$fails" -eq 0 ]
