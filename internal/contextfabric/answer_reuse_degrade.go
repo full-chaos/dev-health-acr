@@ -528,7 +528,7 @@ func stripUnverifiedEvidenceRefs(result InvestigationResult, missing map[string]
 			// needs (an under-labelled legacy row). Compose the same
 			// deterministic label a fresh result would have carried
 			// rather than serve a closure the map cannot describe.
-			label, _ := contractsv1.ContextFabricEvidenceRefLabel(ref)
+			label, _ := contractsv1.ContextFabricEvidenceRefLabelNamed(ref, evidenceSubjectNames(result))
 			rebuilt[ref] = label
 		}
 		// Count the keys that were actually REMOVED, never a difference of

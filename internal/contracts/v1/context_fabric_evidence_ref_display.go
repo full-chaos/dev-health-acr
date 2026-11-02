@@ -65,7 +65,16 @@ func evidenceNotUUID(value string) string {
 // evidenceIDDisplay is the part of an evidence label after the noun, or "" for the
 // noun alone. segments are an encoded (".v2") id's decoded segments, nil for any
 // other type.
-func evidenceIDDisplay(entityType ContextFabricEvidenceEntityType, id string, segments []string) string {
+func evidenceIDDisplay(entityType ContextFabricEvidenceEntityType, id string, segments []string, name ContextFabricEvidenceSubjectName) string {
+	named := func(kind ContextFabricSubjectKind, rawID string) string {
+		if name == nil || strings.TrimSpace(rawID) == "" {
+			return ""
+		}
+		if value, ok := name(kind, rawID); ok {
+			return strings.TrimSpace(value)
+		}
+		return ""
+	}
 	segment := func(i int) string {
 		if i < len(segments) {
 			return segments[i]
@@ -79,14 +88,22 @@ func evidenceIDDisplay(entityType ContextFabricEvidenceEntityType, id string, se
 		return evidenceNotUUID(withoutLeadingUUID(id))
 	case ContextFabricEvidenceEntityWorkItem:
 		return evidenceKey(withoutLeadingUUID(id))
-	case ContextFabricEvidenceEntityTeam, ContextFabricEvidenceEntityProject:
+	case ContextFabricEvidenceEntityTeam:
 		return evidenceKey(id)
+	case ContextFabricEvidenceEntityProject:
+		if value := named(ContextFabricSubjectProject, id); value != "" {
+			return value
+		}
+		return evidenceKey(id)
+	case ContextFabricEvidenceEntityRepository:
+		return named(ContextFabricSubjectRepository, id)
+	case ContextFabricEvidenceEntityOrganization:
+		return named(ContextFabricSubjectOrganization, id)
 	case ContextFabricEvidenceEntityCommit, ContextFabricEvidenceEntityCommitFile,
 		ContextFabricEvidenceEntityHotspot, ContextFabricEvidenceEntityComplexity,
 		ContextFabricEvidenceEntityIncident, ContextFabricEvidenceEntityEpisode:
 		return evidenceNotUUID(id)
-	case ContextFabricEvidenceEntityRepository, ContextFabricEvidenceEntityOrganization,
-		ContextFabricEvidenceEntityGraph, ContextFabricEvidenceEntityAIRun,
+	case ContextFabricEvidenceEntityGraph, ContextFabricEvidenceEntityAIRun,
 		ContextFabricEvidenceEntityAIArtifact, ContextFabricEvidenceEntityReviewOutcome:
 		// A row id, a relationship id or an internal run id: nothing a reader names.
 		return ""

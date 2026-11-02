@@ -408,7 +408,7 @@ func servedStoredResult(stored StoredInvestigationResult, principal storage.Prin
 func citedEvidenceExpansion(result InvestigationResult, ref, entityType, entityID string, now time.Time) contractsv1.ExpandedEvidence {
 	label := strings.TrimSpace(result.EvidenceRefLabels[ref])
 	if label == "" {
-		label, _ = contractsv1.ContextFabricEvidenceRefLabel(ref)
+		label, _ = contractsv1.ContextFabricEvidenceRefLabelNamed(ref, evidenceSubjectNames(result))
 	}
 	sites, excerpt := citingSites(result, ref)
 	siteNames := make([]string, 0, len(sites))

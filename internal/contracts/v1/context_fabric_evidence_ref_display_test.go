@@ -82,3 +82,35 @@ func TestAnEvidenceLabelNeverShowsARawID(t *testing.T) {
 		t.Errorf("unknown type: label = %q (known %v), want the generic noun", label, known)
 	}
 }
+
+// A repository, project or organization ref reads as the name the answer holds,
+// and as the noun alone when it holds none (CHAOS-12620).
+func TestAnEvidenceLabelTakesTheNameTheAnswerHolds(t *testing.T) {
+	t.Parallel()
+	names := func(kind ContextFabricSubjectKind, rawID string) (string, bool) {
+		switch {
+		case kind == ContextFabricSubjectRepository && rawID == displayRepoUUID:
+			return "full-chaos/dev-health-ops", true
+		case kind == ContextFabricSubjectProject && rawID == "linear:c67b1602-31db-4422-8dec-a4a02bbcc513":
+			return "Investment View Documentation", true
+		case kind == ContextFabricSubjectOrganization && rawID == "70d529e0-3c06-4597-8480-794fd02328b6":
+			return "Full Chaos", true
+		}
+		return "", false
+	}
+	for ref, want := range map[string]string{
+		"acr:v1:repository:" + displayRepoUUID:                       "Repository: full-chaos/dev-health-ops",
+		"acr:v1:project:linear:c67b1602-31db-4422-8dec-a4a02bbcc513": "Project: Investment View Documentation",
+		"acr:v1:organization:70d529e0-3c06-4597-8480-794fd02328b6":   "Organization: Full Chaos",
+		"acr:v1:repository:7b9583ee-4d24-2be7-4d09-34f815bebdd7":     "Repository",
+		"acr:v1:project:linear:aaaaaaaa-31db-4422-8dec-a4a02bbcc513": "Project",
+		"acr:v1:pull-request:" + displayRepoUUID + ":869":            "Pull request: #869",
+	} {
+		if got, known := ContextFabricEvidenceRefLabelNamed(ref, names); !known || got != want {
+			t.Errorf("%s: label = %q (known %v), want %q", ref, got, known, want)
+		}
+	}
+	if got, _ := ContextFabricEvidenceRefLabel("acr:v1:repository:" + displayRepoUUID); got != "Repository" {
+		t.Errorf("with no names: %q, want the noun", got)
+	}
+}
