@@ -4088,6 +4088,31 @@ var EvidenceCensusCommit = Event{
 	},
 }
 
+// EvidenceCensusListing (CHAOS-12467) is the Info line of one census listing: the
+// count it spoke for, what it listed, the keyed reads it made and their time. The
+// live run reads the listing's cost here. Counts and closed values only: the
+// satisfier ids are not traced (slice B doc §4).
+var EvidenceCensusListing = Event{
+	ID:                 "graphrank.evidence_census_listing",
+	Msg:                "context fabric resolution trace: evidence census listing",
+	Level:              LevelInfo,
+	Multiplicity:       MultiplicityZeroOrOnePerRequest,
+	Attribution:        []string{"request_id"},
+	BoundedAggregation: "at most one line per resolveSubjects call: listCensusSatisfiers has one unlooped call site, reached only when a stalled round counted a satisfier of the question's one handle.",
+	Fields: []Field{
+		{Key: "request_id", Type: FieldString, Presence: PresenceRequired},
+		{Key: "stage", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: []string{"evidence_census_listing"}},
+		{Key: "census_kind", Type: FieldString, Presence: PresenceRequired},
+		{Key: "census_count", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "census_listed", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "census_listing_reads", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "census_listing_refused", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "elapsed_ms", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "outcome", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: []string{"listed", "partly_listed", "unlisted"}},
+		{Key: "census_listing_reason", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: []string{"", "over_budget", "closure_mismatch", "narrowing_undecided", "budget_below_two", "refused"}},
+	},
+}
+
 // EvidenceSourceNative is the Info line (graphrank/tracer.go, case
 // "evidence_source_native", CHAOS-3918/CHAOS-3899 widening measurement)
 // reporting traceSourceNativeBinds' own aggregate bind count -- fires
@@ -5696,7 +5721,7 @@ var All = []Event{
 	KindOffer, ConfirmedKindScope,
 	LowPopulationKindScope, LowPopulationKindScopeSummary,
 	IdentityGate, IdentityGateSummary,
-	EvidenceRound, EvidenceProbe, EvidenceCensusCommit, EvidenceSourceNative, EvidenceSourceNativeProbe,
+	EvidenceRound, EvidenceProbe, EvidenceCensusCommit, EvidenceCensusListing, EvidenceSourceNative, EvidenceSourceNativeProbe,
 	SliceBSurvivorVerdict, SliceBSurvivorVerdictSummary,
 	SemanticStatePersistence,
 	RequirementOutcomeTransition,

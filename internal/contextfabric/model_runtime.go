@@ -3368,6 +3368,9 @@ func statusSentence(status InvestigationStatus, resolution SubjectResolution) st
 			return "This question's subjects were resolved, but no canonical data was found to answer it."
 		case len(resolution.InactiveHints) > 0:
 			return "The team named in this question is inactive, so no canonical data was read for it."
+		case len(resolution.Candidates) == 1 && resolution.CensusLimitation != "":
+			// CHAOS-12467: the limitation says how many match. "One" would not agree.
+			return "No single subject could be confirmed for this question; what could be listed is in this result."
 		case len(resolution.Candidates) == 1:
 			return "One authorized subject matched this question but could not be confirmed as its subject; that candidate is listed in this result."
 		case len(resolution.Candidates) > 1:
