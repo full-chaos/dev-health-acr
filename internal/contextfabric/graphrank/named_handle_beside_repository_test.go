@@ -411,8 +411,9 @@ func TestAQuestionAboutTheRepositoryIsUntouched(t *testing.T) {
 		for caller, principal := range besideCallers(t) {
 			t.Run(name+" "+caller, func(t *testing.T) {
 				t.Parallel()
-				world.principal, world.census = principal, &besideCensus{rows: besideRows()}
-				turn := runBeside(t, world)
+				w := world
+				w.principal, w.census = principal, &besideCensus{rows: besideRows()}
+				turn := runBeside(t, w)
 				if got := besideCommittedIDs(turn.resolution); !slices.Equal(got, []string{scopeAnchorRepoID}) {
 					t.Fatalf("committed = %v, want the repository alone", got)
 				}

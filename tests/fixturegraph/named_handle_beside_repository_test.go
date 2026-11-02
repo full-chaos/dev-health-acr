@@ -37,12 +37,12 @@ func TestANamedHandleBesideARepository(t *testing.T) {
 		d, raw := c.call("investigate_with_interpretation", args)
 		s := structured(d)
 		for _, option := range list(s, "structure_needs", "candidate_options") {
-			if str(option, "subject", "kind") != "repository" && !strings.Contains(str(option, "label"), one) {
+			if str(option, "kind") != "repository" {
 				continue
 			}
 			rid := str(s, "result_id")
 			args["parent_result_id"] = rid
-			args["prior_subject_receipts"] = []doc{{"result_id": rid, "receipt_id": str(option, "receipt_id")}}
+			args["prior_candidate_receipts"] = []doc{{"result_id": rid, "receipt_id": str(option, "receipt_id")}}
 			d, raw = c.call("investigate_with_interpretation", args)
 			return structured(d), raw
 		}
