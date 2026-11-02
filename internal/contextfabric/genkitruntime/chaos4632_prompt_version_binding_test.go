@@ -112,7 +112,8 @@ func TestVersionedModelContractsAreBoundToTheirContent(t *testing.T) {
 			// own doc comment.
 			// v27 -> v28 (CHAOS-11600): every reader-facing sentence that states a
 			// derived number must carry appears, leans or suggests.
-			digest: "317c42bc219a1b882b76e528ba7a93899536457a94ff0e0c38e617f9509159c3",
+			// v28 -> v29: a comparison claims every compared subject (CHAOS-12549).
+			digest: "c033e0f7ae9a6248d4bd669eb331f7443ceaf034d2d919dc864cd0c3c9a14b45",
 		},
 		{
 			name:    "interpretation model-output schema",

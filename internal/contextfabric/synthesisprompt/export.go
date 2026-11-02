@@ -40,7 +40,11 @@ const (
 	//
 	// v27 -> v28 (CHAOS-11600): the prompt names the derived numbers (a compounding risk score, an investment theme share,
 	// a value the model computes) and asks every reader-facing sentence to state one with appears, leans or suggests.
-	PromptVersion = "context-fabric-synthesis.v28"
+	//
+	// v28 -> v29 (CHAOS-12549): the prompt and the client rules ask a comparison to
+	// restate the same measures for every compared subject, because the commit
+	// gate keeps only a subject the answer stands behind.
+	PromptVersion = "context-fabric-synthesis.v29"
 	// OutputVersion names the model-output contract the prompt asks for.
 	OutputVersion = interpretprompt.OutputVersion
 )
