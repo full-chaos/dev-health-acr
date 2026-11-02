@@ -31,6 +31,19 @@ type renderShapeSources struct {
 	// and factRows then holds the series, so rows alone do not say which table
 	// a treemap would plot.
 	themeShareClaims map[string]struct{}
+	// claimValues maps a claim id to what that claim states.
+	claimValues map[string]renderClaimValue
+}
+
+// renderClaimValue is one claim as a claimed_fact_value source reads it. derived
+// is only ever set from the canonical result: a projected fact carries no
+// derivation, and a shape reaches a projection after the result validated.
+type renderClaimValue struct {
+	value   ContextFabricScalarValue
+	kind    ContextFabricFactKind
+	field   string
+	subject ContextFabricSubjectRef
+	derived bool
 }
 
 // holdsThemeShareTable reports that a claim's renderable rows are a declared
@@ -122,6 +135,21 @@ func (s renderShapeSources) resolve(source ContextFabricRenderPointSource) (floa
 			return 0, fmt.Errorf("render point cites field %q of claim %q row %d, which the row does not carry", source.Field, source.ClaimID, index)
 		}
 		return renderCellValue(cell, source, index)
+	case ContextFabricRenderSourceClaimedFactValue:
+		if source.ClaimID == "" || source.Field == "" || source.RowIndex != nil || source.SubjectCanonicalID != "" || source.Signal != "" {
+			return 0, fmt.Errorf("render point source %q carries the wrong address fields", source.Kind)
+		}
+		claim, ok := s.claimValues[source.ClaimID]
+		if !ok {
+			return 0, fmt.Errorf("render point cites claim %q, which this answer does not carry", source.ClaimID)
+		}
+		if claim.field != source.Field {
+			return 0, fmt.Errorf("render point cites field %q of claim %q, whose own field is %q", source.Field, source.ClaimID, claim.field)
+		}
+		if claim.derived {
+			return 0, fmt.Errorf("render point cites claim %q, which is derived and holds no stored value", source.ClaimID)
+		}
+		return renderScalarNumber(claim.value, fmt.Sprintf("field %q of claim %q", source.Field, source.ClaimID))
 	default:
 		return 0, fmt.Errorf("render point source kind is not a member of the closed vocabulary")
 	}
@@ -227,6 +255,9 @@ func validateRenderShapes(shapes []ContextFabricRenderShape, sources renderShape
 		if err := validateTreemapShape(shape, sources); err != nil {
 			return err
 		}
+		if err := validateComparisonShape(shape, sources); err != nil {
+			return err
+		}
 		if err := validateRenderValueUnit(shape); err != nil {
 			return err
 		}
@@ -308,6 +339,70 @@ func validateTreemapShape(shape ContextFabricRenderShape, sources renderShapeSou
 	return nil
 }
 
+// validateComparisonShape holds a table to what a side by side means
+// (CHAOS-12513). Every point has already resolved to its source. What is left is
+// that the sides compare: each series is one subject and holds only that
+// subject's claims, the subjects are of one kind, each label is the served word
+// of its measure and names one fact kind on every side, and at least one measure
+// stands on every side. A measure a side lacks has no point, so the gap stays
+// empty, never zero.
+//
+// A word names one field (the labels test holds that), so a label here is one
+// measure. Table rows mix measures, so the shape declares no value_unit: the
+// word of each measure carries its unit.
+//
+// The rule and the kind name each other, as they do for a treemap.
+func validateComparisonShape(shape ContextFabricRenderShape, sources renderShapeSources) error {
+	if (shape.Kind == ContextFabricRenderKindTable) != (shape.SelectedBy == ContextFabricRenderRuleComparisonSideBySide) {
+		return fmt.Errorf("render shape %q: selected_by %q cannot yield kind %q", shape.ShapeID, shape.SelectedBy, shape.Kind)
+	}
+	if shape.Kind != ContextFabricRenderKindTable {
+		return nil
+	}
+	if shape.AxisKind != ContextFabricRenderAxisCategory {
+		return fmt.Errorf("render shape %q: a comparison needs a category axis", shape.ShapeID)
+	}
+	if len(shape.Series) < 2 {
+		return fmt.Errorf("render shape %q: a comparison holds 2 or more series", shape.ShapeID)
+	}
+	if shape.ValueUnit != "" {
+		return fmt.Errorf("render shape %q: a comparison mixes measures and declares no value_unit", shape.ShapeID)
+	}
+	subjectKind := sources.claimValues[shape.Series[0].Points[0].Source.ClaimID].subject.Kind
+	measureKinds := make(map[string]ContextFabricFactKind)
+	sides := make(map[string]int)
+	for _, series := range shape.Series {
+		for _, point := range series.Points {
+			// The kind is what makes claimValues safe to read: the resolver has
+			// already refused a claimed_fact_value source this answer lacks.
+			if point.Source.Kind != ContextFabricRenderSourceClaimedFactValue {
+				return fmt.Errorf("render shape %q point %q: a comparison point must cite a %q source", shape.ShapeID, point.Label, ContextFabricRenderSourceClaimedFactValue)
+			}
+			claim := sources.claimValues[point.Source.ClaimID]
+			if claim.subject.CanonicalID != series.Key {
+				return fmt.Errorf("render shape %q point %q: a series key must be the canonical id of its claim's subject, and %q is not %q", shape.ShapeID, point.Label, series.Key, claim.subject.CanonicalID)
+			}
+			if claim.subject.Kind != subjectKind {
+				return fmt.Errorf("render shape %q point %q: a comparison holds subjects of one kind", shape.ShapeID, point.Label)
+			}
+			if word, _ := ContextFabricVocabularyLabel(ContextFabricVocabularyFactField, claim.field); word != point.Label {
+				return fmt.Errorf("render shape %q point %q: a comparison label must be the served word of its field %q", shape.ShapeID, point.Label, claim.field)
+			}
+			if kind, seen := measureKinds[point.Label]; seen && kind != claim.kind {
+				return fmt.Errorf("render shape %q point %q: a label names one fact kind on every side", shape.ShapeID, point.Label)
+			}
+			measureKinds[point.Label] = claim.kind
+			sides[point.Label]++
+		}
+	}
+	for _, held := range sides {
+		if held == len(shape.Series) {
+			return nil
+		}
+	}
+	return fmt.Errorf("render shape %q: a comparison needs one measure on every side", shape.ShapeID)
+}
+
 // validateRenderValueUnit holds every value of a shape to the unit it declares.
 // The unit is a claim about the numbers, and a consumer formats by it.
 func validateRenderValueUnit(shape ContextFabricRenderShape) error {
@@ -328,16 +423,22 @@ func validateRenderValueUnit(shape ContextFabricRenderShape) error {
 // refuses it. See ContextFabricRenderPointExactIntegerBound for why a large
 // integer is a refusal rather than a cast.
 func renderCellValue(cell ContextFabricScalarValue, source ContextFabricRenderPointSource, index int) (float64, error) {
+	return renderScalarNumber(cell, fmt.Sprintf("field %q of claim %q row %d", source.Field, source.ClaimID, index))
+}
+
+// renderScalarNumber is the one rule for what a scalar may plot. where names the
+// value in a refusal.
+func renderScalarNumber(value ContextFabricScalarValue, where string) (float64, error) {
 	switch {
-	case cell.Number != nil:
-		return *cell.Number, nil
-	case cell.Integer != nil:
-		if *cell.Integer > ContextFabricRenderPointExactIntegerBound || *cell.Integer < -ContextFabricRenderPointExactIntegerBound {
-			return 0, fmt.Errorf("render point cites field %q of claim %q row %d, whose integer value is too large to plot without losing the distinction between adjacent values", source.Field, source.ClaimID, index)
+	case value.Number != nil:
+		return *value.Number, nil
+	case value.Integer != nil:
+		if *value.Integer > ContextFabricRenderPointExactIntegerBound || *value.Integer < -ContextFabricRenderPointExactIntegerBound {
+			return 0, fmt.Errorf("render point cites %s, whose integer value is too large to plot without losing the distinction between adjacent values", where)
 		}
-		return float64(*cell.Integer), nil
+		return float64(*value.Integer), nil
 	default:
-		return 0, fmt.Errorf("render point cites field %q of claim %q row %d, which is not a number", source.Field, source.ClaimID, index)
+		return 0, fmt.Errorf("render point cites %s, which is not a number", where)
 	}
 }
 
@@ -402,7 +503,8 @@ func validContextFabricRenderAxisKind(kind ContextFabricRenderAxisKind) bool {
 func validContextFabricRenderShapeRule(rule ContextFabricRenderShapeRule) bool {
 	switch rule {
 	case ContextFabricRenderRuleCohortAttentionScore, ContextFabricRenderRuleCohortDriverContribution,
-		ContextFabricRenderRuleDatedFactTrend, ContextFabricRenderRuleInvestmentThemeShare:
+		ContextFabricRenderRuleDatedFactTrend, ContextFabricRenderRuleInvestmentThemeShare,
+		ContextFabricRenderRuleComparisonSideBySide:
 		return true
 	default:
 		return false
@@ -418,6 +520,7 @@ func renderShapeSourcesFromResult(result ContextFabricInvestigationResult) rende
 		factRows:     map[string][]ContextFabricClaimedFactRow{},
 
 		themeShareClaims: map[string]struct{}{},
+		claimValues:      map[string]renderClaimValue{},
 	}
 	if result.Cohort != nil {
 		for _, member := range result.Cohort.Members {
@@ -434,6 +537,7 @@ func renderShapeSourcesFromResult(result ContextFabricInvestigationResult) rende
 		if holdsThemeShareTable(fact.Table, fact.TimeSeriesRows) {
 			sources.themeShareClaims[fact.ClaimID] = struct{}{}
 		}
+		sources.claimValues[fact.ClaimID] = renderClaimValue{value: fact.Value, kind: fact.Kind, field: fact.Field, subject: fact.Subject, derived: len(fact.DerivedFrom) > 0}
 	}
 	return sources
 }
@@ -451,6 +555,7 @@ func renderShapeSourcesFromProjection(projection ContextFabricAnswerProjection) 
 		factRows:     map[string][]ContextFabricClaimedFactRow{},
 
 		themeShareClaims: map[string]struct{}{},
+		claimValues:      map[string]renderClaimValue{},
 	}
 	if projection.Cohort != nil {
 		for _, member := range projection.Cohort.Members {
@@ -490,6 +595,7 @@ func renderShapeSourcesFromProjection(projection ContextFabricAnswerProjection) 
 		if holdsThemeShareTable(fact.Table, fact.TimeSeriesRows) {
 			sources.themeShareClaims[fact.ClaimID] = struct{}{}
 		}
+		sources.claimValues[fact.ClaimID] = renderClaimValue{value: fact.Value, kind: fact.Kind, field: fact.Field, subject: fact.Subject}
 	}
 	return sources
 }

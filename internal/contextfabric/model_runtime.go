@@ -2085,17 +2085,56 @@ func receiptRequestsGroupAxis(receipt ModelExecutionReceipt) bool {
 // backdate the "proposal" telemetry to look like the model emitted this
 // field, which is exactly the receipt/artifact disagreement this
 // package's own doc comments elsewhere forbid.
+//
+// A named pair of an explicit_set takes the same kind (CHAOS-12518). An operand
+// has no model-writable kind either, and the comparison path admits only a pair
+// that states one, so without this no model turn reached it. The field holds one
+// kind, and the prompt has the model omit it when the operands state different
+// kinds, so it speaks for both sides.
 func backfillNamedSubjectExpectedKind(frame QuestionFrame, receipt *ModelExecutionReceipt) QuestionFrame {
-	named := frame.SubjectExpression.Named
-	if frame.SubjectExpression.Kind != SubjectExpressionNamed || named == nil || named.ExpectedKind != nil ||
-		receipt.RequestedSubjectKind == "" || receipt.RequestedSubjectKindUnrecognized {
+	if receipt.RequestedSubjectKind == "" || receipt.RequestedSubjectKindUnrecognized {
 		return frame
 	}
 	kind := receipt.RequestedSubjectKind
-	backfilled := *named
-	backfilled.ExpectedKind = &kind
-	frame.SubjectExpression.Named = &backfilled
+	switch frame.SubjectExpression.Kind {
+	case SubjectExpressionNamed:
+		named := frame.SubjectExpression.Named
+		if named == nil || named.ExpectedKind != nil {
+			return frame
+		}
+		backfilled := *named
+		backfilled.ExpectedKind = &kind
+		frame.SubjectExpression.Named = &backfilled
+	case SubjectExpressionExplicitSet:
+		frame.SubjectExpression.Explicit = backfillNamedPairExpectedKind(frame.SubjectExpression.Explicit, kind)
+	}
 	return frame
+}
+
+// backfillNamedPairExpectedKind states kind on both sides of a named pair, or
+// returns the set unchanged. It takes the pair whole: one stated side would leave
+// the frame out of the cut anyway, and every other set stays as the model emitted
+// it, because the comparison cut leaves the shapes outside it untouched. It copies
+// the set, the operands and each Named for the reason the caller's doc comment
+// gives: all three are still shared with the raw proposal.
+func backfillNamedPairExpectedKind(explicit *ExplicitSetExpression, kind SubjectKind) *ExplicitSetExpression {
+	if explicit == nil || len(explicit.Operands) != comparisonCutOperandCount {
+		return explicit
+	}
+	operands := make([]SubjectOperand, 0, len(explicit.Operands))
+	for _, operand := range explicit.Operands {
+		if operand.Named == nil || operand.Named.ExpectedKind != nil {
+			return explicit
+		}
+		named := *operand.Named
+		stated := kind
+		named.ExpectedKind = &stated
+		operand.Named = &named
+		operands = append(operands, operand)
+	}
+	backfilled := *explicit
+	backfilled.Operands = operands
+	return &backfilled
 }
 
 // THE ENSEMBLE SIZE IS DELIBERATELY NOT A FIELD HERE, and the absence is

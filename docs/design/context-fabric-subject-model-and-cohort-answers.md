@@ -786,6 +786,9 @@ no shape, which is the common case.
 | `cohort_driver_contribution` | the rule above fired AND ≥1 ranked member carries drivers AND the distinct signal count fits one stack | `series` / `stacked_bars`, one series per driver family, value = that member's `weight_contributed` for it |
 | `dated_fact_trend` | the claim's row table is DECLARED `time_series` AND the claim's own `field` is one of its declared `measures` (§10.3c) | `series` / `line` on a `time` axis, one series, axis = `table.key[0]`, value = `rows[i][claim.field]` |
 | `investment_theme_share` | The deployment's flag is on (CHAOS-12521). The served family is `investment_allocation`, the plan authorizes `treemap`, exactly one investment fact on a repository or a team carries a declared `theme_breakdown` table, every row is a canonical theme with a numeric share, and at least 2 shares are above 0 | `treemap` with a `value_unit` of `ratio`: one series, one point for every row, the value is the row's `share`, the label is the served word of the row's `theme` |
+||||||| 8c54dcf3
+| `investment_theme_share` | Declared, no producer yet (CHAOS-4610). The served family is `investment_allocation`, the plan authorizes `treemap`, exactly one investment fact on a repository or a team carries `theme_breakdown`, and at least 2 shares are above 0 | `treemap` with a `value_unit` of `ratio`: one series, one point for every row, the value is the row's `share`, the label is the served word of the row's `theme` |
+| `comparison_side_by_side` | Declared, no producer yet (CHAOS-12513). The served shape is `explicit_comparison` on 2 or more subjects, the plan authorizes `table`, and the model claims one measure for every side. A cell needs a window field, or the same `day` on every side | `table` with no `value_unit`: one series per subject, keyed by its canonical id, one point per measure, the label is the served `fact_field` word of the measure, the value is the claim's own value (`claimed_fact_value`). A measure a side lacks has no point, never a zero |
 | — anything else — | | no shape |
 
 Two negatives are as load-bearing as the positives:
@@ -809,8 +812,9 @@ claims something false.
 
 Every point carries a `ContextFabricRenderPointSource` naming where in the
 SAME document its number came from — `cohort_member_score`,
-`cohort_driver_weight_contributed`, or `claimed_fact_row`
-(`claim_id` + `row_index` + `field`). `validateRenderShapes` resolves each
+`cohort_driver_weight_contributed`, `claimed_fact_row`
+(`claim_id` + `row_index` + `field`), or `claimed_fact_value`
+(`claim_id` + `field`). `validateRenderShapes` resolves each
 source and requires **exact** float equality, on both the canonical result
 and the projection.
 
