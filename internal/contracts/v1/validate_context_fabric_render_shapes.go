@@ -40,6 +40,10 @@ type renderShapeSources struct {
 	repositoryFlowClaims map[string]struct{}
 	// claimValues maps a claim id to what that claim states.
 	claimValues map[string]renderClaimValue
+	// landscapeDays maps a landscape claim's id to the as_of_day of the one
+	// area_breakdown row it carries (CHAOS-12623): the day its value speaks for.
+	// A claim with no such row has no entry, so no quadrant point can cite it.
+	landscapeDays map[string]string
 }
 
 // renderClaimValue is one claim as a claimed_fact_value source reads it. derived
@@ -286,6 +290,9 @@ func validateRenderShapes(shapes []ContextFabricRenderShape, sources renderShape
 			return err
 		}
 		if err := validateComparisonShape(shape, sources); err != nil {
+			return err
+		}
+		if err := validateQuadrantShape(shape, sources); err != nil {
 			return err
 		}
 		if err := validateRenderValueUnit(shape); err != nil {
@@ -734,7 +741,7 @@ func validContextFabricRenderShapeRule(rule ContextFabricRenderShapeRule) bool {
 	case ContextFabricRenderRuleCohortAttentionScore, ContextFabricRenderRuleCohortDriverContribution,
 		ContextFabricRenderRuleDatedFactTrend, ContextFabricRenderRuleInvestmentThemeShare,
 		ContextFabricRenderRuleComparisonSideBySide, ContextFabricRenderRuleInvestmentSubcategoryShare,
-		ContextFabricRenderRuleInvestmentRepositoryFlow:
+		ContextFabricRenderRuleInvestmentRepositoryFlow, ContextFabricRenderRuleLandscapePosition:
 		return true
 	default:
 		return false
@@ -771,6 +778,7 @@ func renderShapeSourcesFromResult(result ContextFabricInvestigationResult) rende
 		subcategoryShareClaims: map[string]struct{}{},
 		repositoryFlowClaims:   map[string]struct{}{},
 		claimValues:            map[string]renderClaimValue{},
+		landscapeDays:          map[string]string{},
 	}
 	if result.Cohort != nil {
 		for _, member := range result.Cohort.Members {
@@ -794,6 +802,9 @@ func renderShapeSourcesFromResult(result ContextFabricInvestigationResult) rende
 			sources.repositoryFlowClaims[fact.ClaimID] = struct{}{}
 		}
 		sources.claimValues[fact.ClaimID] = renderClaimValue{value: fact.Value, kind: fact.Kind, field: fact.Field, subject: fact.Subject, derived: len(fact.DerivedFrom) > 0}
+		if day, ok := landscapeRowDay(fact.Table, fact.Rows); ok {
+			sources.landscapeDays[fact.ClaimID] = day
+		}
 	}
 	return sources
 }
@@ -814,6 +825,7 @@ func renderShapeSourcesFromProjection(projection ContextFabricAnswerProjection) 
 		subcategoryShareClaims: map[string]struct{}{},
 		repositoryFlowClaims:   map[string]struct{}{},
 		claimValues:            map[string]renderClaimValue{},
+		landscapeDays:          map[string]string{},
 	}
 	if projection.Cohort != nil {
 		for _, member := range projection.Cohort.Members {
@@ -860,6 +872,9 @@ func renderShapeSourcesFromProjection(projection ContextFabricAnswerProjection) 
 			sources.repositoryFlowClaims[fact.ClaimID] = struct{}{}
 		}
 		sources.claimValues[fact.ClaimID] = renderClaimValue{value: fact.Value, kind: fact.Kind, field: fact.Field, subject: fact.Subject}
+		if day, ok := landscapeRowDay(fact.Table, fact.Rows); ok {
+			sources.landscapeDays[fact.ClaimID] = day
+		}
 	}
 	return sources
 }
