@@ -1248,6 +1248,30 @@ divergence there would be invisible on the wire and would make the
 declaration a lie rather than a guard. Absent means undeclared, and an
 undeclared table is never charted (§8).
 
+**Updated 2026-11-02 (CHAOS-11984): a measure states its unit.** The table
+declaration gains an optional `measure_units` list, one `{measure, unit}` per
+measure whose producer declares a unit from the closed vocabulary `count`,
+`ratio`, `hours`, `days`, `points`. The unit comes from the producer's own
+column declaration (`FactColumnDeclaration.Unit`), never from the model and
+never from the rows: `finalizeResult` replaces whatever a claimed table carries
+with `DeclaredMeasureUnits` over the engine's fact declarations, on both `table`
+and `time_series_table`, before any render shape reads them. A declared token
+outside the vocabulary (`axis`, `score`, `share`, `loc`, `lines`, or none) is not
+served, so that measure has no unit on the wire, and a consumer adds none. Each
+served token has a word in the label registry under `measure_unit:<unit>`.
+
+```mermaid
+flowchart LR
+    DECL["producer declaration<br/>FactColumnDeclaration.Unit<br/>(devhealthfacts/fact_field_declarations.go)"]
+    FIN["finalizeResult<br/>withDeclaredMeasureUnits<br/>replaces measure_units"]
+    TBL["claimed_facts[].table / .time_series_table<br/>measure_units[] = {measure, unit}<br/>unit ∈ count · ratio · hours · days · points"]
+    VAL["ContextFabricClaimedFactTable.Validate<br/>measure ∈ measures, once<br/>unit ∈ closed vocabulary"]
+    WORD["vocabulary_labels<br/>measure_unit:&lt;unit&gt;"]
+    DECL --> FIN --> TBL --> VAL
+    TBL --> WORD
+    DECL -. "token outside the vocabulary" .-> NONE["no entry: no unit shown"]
+```
+
 **Correction, same day (CHAOS-4355 follow-up):** the paragraph above
 originally claimed "the prompt itself was NOT changed -- the model is never
 told Rows exist." That was never actually true and was never verified

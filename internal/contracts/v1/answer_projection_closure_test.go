@@ -362,7 +362,10 @@ func TestEveryProjectionStringFieldIsClassified(t *testing.T) {
 		// server-set from the grounding fact, never model-authored.
 		// CHAOS-12415: 259 -> 260 -- vocabulary_labels{}, classified like
 		// evidence_ref_labels{}.
-		{name: "answer_projection", root: "answer", prefix: "structured", untrusted: MCPInvestigateQuestionUntrustedFields, expectedPaths: 261},
+		// CHAOS-11984: 261 -> 265 -- measure_units[].measure (untrusted like
+		// measures[]) and measure_units[].unit (a closed vocabulary) on both
+		// table and time_series_table.
+		{name: "answer_projection", root: "answer", prefix: "structured", untrusted: MCPInvestigateQuestionUntrustedFields, expectedPaths: 265},
 		// CHAOS-4087: 213 -> 217 -- CommitDecisionDigest contributed four
 		// new string leaves (commit_gate, subject.kind, subject.canonical_id,
 		// subject.label).
@@ -448,7 +451,9 @@ func TestEveryProjectionStringFieldIsClassified(t *testing.T) {
 		// CHAOS-12160: 378 -> 380 -- claimed_facts[].investment_mix.investment_mix_source
 		// and .rollup_basis, the same two leaves as the projection.
 		// CHAOS-12415: 380 -> 381 -- vocabulary_labels{}, as on the projection.
-		{name: "investigation_result", root: "result", prefix: "structured", untrusted: MCPInvestigationResultUntrustedFields, expectedPaths: 382},
+		// CHAOS-11984: 382 -> 386 -- the same four measure_units leaves as the
+		// projection.
+		{name: "investigation_result", root: "result", prefix: "structured", untrusted: MCPInvestigationResultUntrustedFields, expectedPaths: 386},
 	} {
 		t.Run(surface.name, func(t *testing.T) {
 			paths := stringPathsIn(t, documents, surface.root, surface.prefix)
@@ -518,6 +523,12 @@ func trustedBecauseClosed(path string) bool {
 	// difference, ratio), validated before a result is stored. Matched on
 	// its full suffix, not the bare leaf "operation".
 	if strings.HasSuffix(path, ".claimed_facts[].operation") {
+		return true
+	}
+	// measure_units[].unit is ContextFabricMeasureUnit (CHAOS-11984), a closed
+	// vocabulary the server copies from the producer's declaration. Matched on
+	// its full suffix, not the bare leaf "unit".
+	if strings.HasSuffix(path, ".measure_units[].unit") {
 		return true
 	}
 	leaf := path[strings.LastIndex(path, ".")+1:]

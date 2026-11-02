@@ -564,6 +564,9 @@ func (e *Engine) finalizeResult(
 ) InvestigationResult {
 	stamped := plan
 	result.AnswerPlan = &stamped
+	// The measure units come from the declarations, never from a claim's own
+	// table, and are stated before any shape reads a table (CHAOS-11984).
+	result.ClaimedFacts = withDeclaredMeasureUnits(result.ClaimedFacts, e.measureUnitsOf)
 	renderShapes, _ := selectRenderShapes(result, frame, e.renderShapeOptions)
 	result.RenderShapes = renderShapes
 	// Seed the outcome set from this turn's requirement rows, ONCE.

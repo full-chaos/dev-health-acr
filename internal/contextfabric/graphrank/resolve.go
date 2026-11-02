@@ -51,18 +51,24 @@ const questionProvenanceMarker = "[full question]"
 // census-recovered one.
 const censusProvenanceMarker = "[census witness]"
 
-// withoutCensusMarker takes the marker off every candidate as it leaves the
-// resolver. It is internal provenance for the merge, and matched_terms is served:
-// a refused re-decision and a lone commit both carried it out. Validation allows a
-// candidate with no term, which a census-only candidate then is.
-func withoutCensusMarker(candidates []contextfabric.SubjectCandidate) {
+// withoutProvenanceMarkers takes both markers off every candidate as it leaves the
+// resolver. They are internal provenance for the merge, and matched_terms is
+// served: a refused re-decision and a lone commit both carried one out. Validation
+// allows a candidate with no term, which a marker-only candidate then is. The
+// markers are reserved: SubjectTerms never yields one, so every marker here is
+// synthetic, and the term cap can never drop a real term that only shares its text.
+func withoutProvenanceMarkers(candidates []contextfabric.SubjectCandidate) {
+	marker := func(term string) bool { return isProvenanceMarker(term) }
 	for index, candidate := range candidates {
-		if slices.Contains(candidate.MatchedTerms, censusProvenanceMarker) {
-			candidates[index].MatchedTerms = slices.DeleteFunc(slices.Clone(candidate.MatchedTerms), func(term string) bool {
-				return term == censusProvenanceMarker
-			})
+		if slices.ContainsFunc(candidate.MatchedTerms, marker) {
+			candidates[index].MatchedTerms = slices.DeleteFunc(slices.Clone(candidate.MatchedTerms), marker)
 		}
 	}
+}
+
+// isProvenanceMarker reports whether term is one of the two reserved markers.
+func isProvenanceMarker(term string) bool {
+	return term == censusProvenanceMarker || term == questionProvenanceMarker
 }
 
 // matchedTermsCap mirrors contractsv1's own unexported MatchedTerms entry
@@ -2019,6 +2025,10 @@ type ResolutionTraceEvent struct {
 	PageHintExactHitByKind      map[string]int
 	PageHintLabelFallbackByKind map[string]int
 	PageHintUnresolvedByKind    map[string]int
+	// PageHintOtherKindByKind counts the page hints dropped because the question
+	// asks for another kind (CHAOS-12555), by the hint's own kind.
+	PageHintOtherKind       int
+	PageHintOtherKindByKind map[string]int
 }
 
 // traceTermHash is the ONE place a search term is ever hashed for
@@ -2295,7 +2305,7 @@ func ResolveSubjectsWithCommitBasis(ctx context.Context, principal storage.Princ
 	admission := newContestAdmission(decideContestScope(frame, confirmedKind,
 		decideAnchorPoolKindScope(frame, scopeAnchorKind, confirmedAnchor, confirmedKind)))
 	resolution, offerMaterial, err := resolveSubjects(ctx, principal, request, interpreted, deps, confirmedKind, confirmedAnchor, bases, digests, frame, scopeAnchorKind, admission)
-	withoutCensusMarker(resolution.Candidates)
+	withoutProvenanceMarkers(resolution.Candidates)
 	// THE DISCLOSURE, emitted on EVERY successful pass through this call,
 	// explicit zero included, so a question that refused nothing and a build
 	// where the refusal stopped happening can never read alike. Deliberately
@@ -2356,7 +2366,8 @@ func ResolveSubjectsWithCommitBasis(ctx context.Context, principal storage.Princ
 		// caller ever receives. Return empty sets rather than that debris.
 		return resolution, offerMaterial, make(contextfabric.CommitBasisSet), make(contextfabric.CommitDecisionDigestSet), err
 	}
-	resolution = commitExplicitHandleSubjects(ctx, principal, request, deps, resolution, bases, digests)
+	resolution, absent := commitNamedHandle(ctx, principal, request, frame, deps, resolution, bases, digests)
+	offerMaterial = withoutUndecidingHandle(offerMaterial, absent)
 	return resolution, offerMaterial, bases, digests, nil
 }
 
@@ -2811,6 +2822,7 @@ func resolveSubjects(ctx context.Context, principal storage.Principal, request c
 		comparison := contextfabric.ClassifyComparisonOperands(frame)
 		switch comparison.Admission {
 		case contextfabric.ComparisonAdmittedNamedPair, contextfabric.ComparisonHeldScopedOperand:
+			request := comparisonRequest(ctx, comparison, request)
 			if inactive, inactiveErr := inactiveCallerTeamHints(ctx, deps, request); inactiveErr != nil {
 				return contextfabric.SubjectResolution{}, contextfabric.StructureOfferMaterial{}, inactiveErr
 			} else if len(inactive) > 0 {
@@ -2825,7 +2837,14 @@ func resolveSubjects(ctx context.Context, principal storage.Principal, request c
 			return resolution, contextfabric.StructureOfferMaterial{}, nil
 		}
 	}
+	request, hintsOfAnotherKind := withoutHintsOfAnotherKind(ctx, request, frame, confirmedKind)
 	terms := SubjectTerms(request, interpreted)
+	if len(terms) == 0 && len(hintsOfAnotherKind) > 0 {
+		// CHAOS-12555: a dropped hint may have been all the turn had to search
+		// with (a supplied interpretation takes no frame terms beside a hint).
+		// The frame's own terms say what the question names.
+		terms = boundedFrameTerms(frame)
+	}
 	// offersOnly (CHAOS-4234): the class-default window gate's offers-only
 	// mode -- every commit MECHANISM below that only exists to reach a
 	// commit (shadow evidence round/census, confirmed-kind truncation
@@ -2885,7 +2904,7 @@ func resolveSubjects(ctx context.Context, principal storage.Principal, request c
 	// returns above this point (organization, context, the comparison
 	// dispatch) never reach the loop and write none. The tracer is read now:
 	// the deferred call reports to the tracer this call was given.
-	pageHints := newPageHintLookupTally(request)
+	pageHints := newPageHintLookupTally(request, hintsOfAnotherKind)
 	defer pageHints.emit(deps.ResolutionTracer)
 	for hintIndex, hint := range request.RequestedScope.SubjectHints {
 		if strings.TrimSpace(hint.ID) == "" || hint.Kind == "" {

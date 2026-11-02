@@ -34,10 +34,11 @@ const maxResourceLength = 2048
 const maxClientIDLength = 2048
 
 var knownScopes = map[string]struct{}{
-	"context:read":  {},
-	"evidence:read": {},
-	"episode:write": {},
-	"data:read":     {},
+	"context:read":              {},
+	"evidence:read":             {},
+	"episode:write":             {},
+	"data:read":                 {},
+	"credential_lifecycle:read": {},
 }
 
 func ValidateCreateInput(input CreateInput) error {
