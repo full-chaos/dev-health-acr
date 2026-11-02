@@ -380,3 +380,21 @@ func TestADisabledQuadrantLeavesTheServedAnswer(t *testing.T) {
 		t.Fatalf("flag on: shapes %d, limitations %v", len(on.RenderShapes), on.Limitations)
 	}
 }
+
+// Every reason the rule can skip with is a value its log line may carry.
+func TestEveryQuadrantSkipReasonIsInTheLineVocabulary(t *testing.T) {
+	t.Parallel()
+	vocabulary := RenderShapeSkipReasonLineVocabulary()
+	for _, reason := range []RenderShapeSkipReason{
+		RenderShapeSkipRuleDisabled, RenderShapeSkipNotPlanAuthorized, RenderShapeSkipNoLandscapeRequirement,
+		RenderShapeSkipFewerThanTwoSides, RenderShapeSkipTooManySides, RenderShapeSkipSubjectKindNotCharted,
+		RenderShapeSkipFewerThanTwoPoints, RenderShapeSkipLandscapeDaysDiffer, RenderShapeSkipQuadrantUnprovable,
+	} {
+		if !slices.Contains(vocabulary, string(reason)) {
+			t.Errorf("skip reason %q is not in the line vocabulary", reason)
+		}
+	}
+	if !slices.Contains(RenderShapeRuleLineVocabulary(), string(contractsv1.ContextFabricRenderRuleLandscapePosition)) {
+		t.Error("the rule is not in the line vocabulary")
+	}
+}
