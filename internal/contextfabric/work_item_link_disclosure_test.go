@@ -114,3 +114,38 @@ func TestAWorkItemLinkSentenceIsServiceAuthored(t *testing.T) {
 		}
 	}
 }
+
+// CHAOS-12523: an answer about a repository says why a handle beside it is not in
+// the answer. The engine states it after synthesis, so it stands on no model.
+func TestAnAbsenceIsStatedOnACommittedAnswer(t *testing.T) {
+	t.Parallel()
+	engine, request := engineForDegradationEdited(t, false, []string{}, TimeContext{Axis: TemporalCurrent}, func(resolution *SubjectResolution, _ *GraphContext) {
+		resolution.CensusLimitation = contractsv1.ContextFabricCensusAbsentInScopeLimitation
+	})
+	result, err := engine.Investigate(context.Background(), storage.Principal{OrgID: "org_1", RepositoryScopes: []string{"acme/alpha"}}, request)
+	if err != nil {
+		t.Fatalf("Investigate() error = %v", err)
+	}
+	if !slices.Contains(result.Limitations, contractsv1.ContextFabricCensusAbsentInScopeLimitation) {
+		t.Fatalf("limitations %q, want the sentence", result.Limitations)
+	}
+	if result.Coverage.Partial {
+		t.Fatal("the answer about the repository is whole: the sentence is about another subject")
+	}
+}
+
+// A count sentence belongs to a turn with nothing committed, and adds nothing here.
+func TestACommittedAnswerCarriesNoCountSentence(t *testing.T) {
+	t.Parallel()
+	sentence := contractsv1.ContextFabricCensusUnlistedLimitation(2)
+	engine, request := engineForDegradationEdited(t, false, []string{}, TimeContext{Axis: TemporalCurrent}, func(resolution *SubjectResolution, _ *GraphContext) {
+		resolution.CensusLimitation = sentence
+	})
+	result, err := engine.Investigate(context.Background(), storage.Principal{OrgID: "org_1", RepositoryScopes: []string{"acme/alpha"}}, request)
+	if err != nil {
+		t.Fatalf("Investigate() error = %v", err)
+	}
+	if slices.Contains(result.Limitations, sentence) {
+		t.Fatalf("limitations %q", result.Limitations)
+	}
+}
