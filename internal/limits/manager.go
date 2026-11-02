@@ -76,6 +76,17 @@ type usageWindow struct {
 	quotaCredential       map[string]int64
 	org                   UsageCounters
 	credentials           map[string]UsageCounters
+	// touched is when each subject last finished a claim or was refused, and
+	// running how many of its claims are open. They decide which subjects
+	// forgetIdle may remove. nextForget is the first moment one can leave, so a
+	// run of refusals before it does not scan the set again.
+	touched    map[string]time.Time
+	running    map[string]int
+	nextForget time.Time
+	// lastForget is when forgetIdle last scanned, and forgetPasses how many
+	// scans it made.
+	lastForget   time.Time
+	forgetPasses int
 }
 
 type Claim struct {
@@ -165,6 +176,7 @@ func (m *Manager) Claim(ctx context.Context, subject Subject, class RequestClass
 	credential.Admitted++
 	window.credentials[subject.key()] = credential
 	window.lastTouched = now
+	window.running[subject.key()]++
 	m.inflight[subject.OrgID]++
 	return &Claim{manager: m, class: class, subject: subject, window: window, budget: policy.Resources}, Decision{Allowed: true}, nil
 }
@@ -263,6 +275,12 @@ func (m *Manager) complete(claim *Claim, usage ResourceUsage, accepted bool) {
 	}
 	claim.window.credentials[claim.subject.key()] = credential
 	claim.window.lastTouched = now
+	claim.window.seen(claim.subject.key(), now)
+	if claim.window.running[claim.subject.key()] <= 1 {
+		delete(claim.window.running, claim.subject.key())
+	} else {
+		claim.window.running[claim.subject.key()]--
+	}
 	if m.inflight[claim.subject.OrgID] <= 1 {
 		delete(m.inflight, claim.subject.OrgID)
 		return
