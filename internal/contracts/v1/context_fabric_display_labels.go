@@ -164,8 +164,11 @@ const (
 	// source state, so a driver and a coverage row never disagree.
 	ContextFabricVocabularyDriverSourceState  ContextFabricVocabulary = "driver_source_state"
 	ContextFabricVocabularyCohortScoreMeaning ContextFabricVocabulary = "cohort_score_meaning"
-	ContextFabricVocabularyWindowRelativeID   ContextFabricVocabulary = "window_relative_id"
-	ContextFabricVocabularyWindowProvenance   ContextFabricVocabulary = "window_provenance"
+	// ContextFabricVocabularyRelationshipType words paths[].edges[].type
+	// (CHAOS-12499).
+	ContextFabricVocabularyRelationshipType ContextFabricVocabulary = "relationship_type"
+	ContextFabricVocabularyWindowRelativeID ContextFabricVocabulary = "window_relative_id"
+	ContextFabricVocabularyWindowProvenance ContextFabricVocabulary = "window_provenance"
 )
 
 var contextFabricVocabularyNames = [...]ContextFabricVocabulary{
@@ -185,6 +188,7 @@ var contextFabricVocabularyNames = [...]ContextFabricVocabulary{
 	ContextFabricVocabularyFactField,
 	ContextFabricVocabularyDriverSourceState,
 	ContextFabricVocabularyCohortScoreMeaning,
+	ContextFabricVocabularyRelationshipType,
 	ContextFabricVocabularyWindowRelativeID,
 	ContextFabricVocabularyWindowProvenance,
 }
@@ -339,6 +343,26 @@ var contextFabricVocabularyLabels = map[ContextFabricVocabulary]map[string]strin
 	// (North Star checks 1 and 8). A higher score ranks first.
 	ContextFabricVocabularyCohortScoreMeaning: {
 		string(ContextFabricCohortScoreMeaningAttention): "Attention score: higher means more pressure. It does not measure performance.",
+	},
+	// Each row reads between an edge's two ends, in the edge's direction. An edge
+	// says two things are linked, never that one caused the other (North Star
+	// check 7). RELATED_TO, RELATES_TO and DUPLICATES stay apart: folding them
+	// loses a signal. OWNED_BY_TEAM says "belongs", because on a work item it is a
+	// team attribution, not ownership.
+	ContextFabricVocabularyRelationshipType: {
+		string(ContextFabricRelationshipBelongsToRepository):    "belongs to repository",
+		string(ContextFabricRelationshipBelongsToPullRequest):   "belongs to pull request",
+		string(ContextFabricRelationshipBelongsToProject):       "belongs to project",
+		string(ContextFabricRelationshipOwnedByTeam):            "belongs to team",
+		string(ContextFabricRelationshipCorrelatedWithIncident): "correlated in time with incident",
+		string(ContextFabricRelationshipRelatedTo):              "associated with",
+		string(ContextFabricRelationshipRelatesTo):              "relates to",
+		string(ContextFabricRelationshipDuplicates):             "duplicates",
+		string(ContextFabricRelationshipDocumentedBy):           "documented by",
+		string(ContextFabricRelationshipHasEpisode):             "has episode",
+		string(ContextFabricRelationshipBlocks):                 "blocks",
+		string(ContextFabricRelationshipPartOf):                 "part of",
+		string(ContextFabricRelationshipLinksPullRequest):       "linked to pull request",
 	},
 	ContextFabricVocabularyWindowRelativeID: {
 		string(ContextFabricRelativeWindowTrailing30D):  "last 30 days",

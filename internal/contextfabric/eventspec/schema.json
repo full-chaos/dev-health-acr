@@ -8077,6 +8077,7 @@
           "miss_unloadable",
           "miss_stale_graph_epoch",
           "miss_no_plan",
+          "miss_stale_family_table",
           "miss_conflicting_plans",
           "miss_question_drift",
           "miss_question_indeterminate",

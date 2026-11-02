@@ -37,6 +37,12 @@ func TestANamedSubjectWithTheGoalServesInvestmentAllocation(t *testing.T) {
 			if got.Family != QuestionFamilyInvestmentAllocation || got.Source != FamilyRouteProjected || got.Disposition != FamilyRouteIntendedChange || !got.Switched {
 				t.Fatalf("decision %+v, want investment_allocation from the projection, a switch", got)
 			}
+			// The open sample reaches the family through the shape_divergence
+			// row, which predates this route. Only the single subject samples
+			// prove the named subject exception.
+			if want := FamilyAgreementGoalRowUnreachable; sample.Shape == ShapeSingleSubject && got.Class != want {
+				t.Fatalf("class %q, want %q", got.Class, want)
+			}
 		})
 	}
 	// The trend of an effort split keeps both goals, and it is an allocation.
@@ -66,6 +72,9 @@ func TestAnOrganizationInvestmentQuestionKeepsItsFamily(t *testing.T) {
 	got := routedFamily(frame, sample)
 	if want := ResolveFamilyForSample(sample).Family; got.Family != want || got.Family == QuestionFamilyInvestmentAllocation {
 		t.Fatalf("decision %+v, want the precedence family %q", got, want)
+	}
+	if got.Source != FamilyRoutePrecedence || got.Disposition != FamilyRouteDeclinedNotObserved {
+		t.Fatalf("decision %+v, want the declined route of the table", got)
 	}
 }
 

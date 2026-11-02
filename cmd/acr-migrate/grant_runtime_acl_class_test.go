@@ -113,9 +113,10 @@ func TestRuntimeGrantDeclaration_includesWhatTheReadinessCheckAsserts(t *testing
 // setting.
 func TestRuntimeGrantDeclaration_runtimeRoleHoldsExactlyTheDeclaration(t *testing.T) {
 	for name, features := range map[string]dbacl.Features{
-		"no optional feature":     {},
-		"every optional feature":  {dbacl.EpisodeWriteback: true, dbacl.WorkloadTokenExchange: true, dbacl.BrowserClient: true},
-		"only the browser client": {dbacl.BrowserClient: true},
+		"no optional feature":      {},
+		"every optional feature":   {dbacl.EpisodeWriteback: true, dbacl.WorkloadTokenExchange: true, dbacl.BrowserClient: true, dbacl.AuthProjection: true},
+		"only the browser client":  {dbacl.BrowserClient: true},
+		"only the auth projection": {dbacl.AuthProjection: true},
 	} {
 		features := features
 		t.Run(name, func(t *testing.T) {
@@ -186,6 +187,9 @@ func TestRuntimeGrantDeclaration_rowLockedTablesDeclareUpdate(t *testing.T) {
 			if privilege == "UPDATE" {
 				updatable[grant.Table] = true
 			}
+		}
+		if len(grant.UpdateColumns) > 0 {
+			updatable[grant.Table] = true // UPDATE on one column is what a row lock needs
 		}
 	}
 	rowLock := regexp.MustCompile(`(?i)\bFOR\s+(NO\s+KEY\s+UPDATE|UPDATE|KEY\s+SHARE|SHARE)\b`)

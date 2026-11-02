@@ -57,6 +57,9 @@ data:
   ACR_AUTH_WORKLOAD_ALLOW_PLAIN_HTTP: {{ .Values.authWorkloadClient.allowPlainHTTP | quote }}
   ACR_AUTH_WORKLOAD_ISSUER: {{ .Values.authWorkloadClient.issuer | quote }}
   ACR_AUTH_WORKLOAD_SUBJECT_FILE: {{ printf "%s/token" (include "acr.authWorkloadMountPath" .) | quote }}
+  {{- with (include "acr.authProjectionURL" .) }}
+  ACR_AUTH_PROJECTION_URL: {{ . | quote }}
+  {{- end }}
   {{- end }}
   {{- if .Values.workloadTokenExchange.enabled }}
   ACR_WORKLOAD_TOKEN_EXCHANGE_AUDIENCE: {{ .Values.workloadTokenExchange.audience | quote }}

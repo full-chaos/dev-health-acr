@@ -120,6 +120,9 @@ func wordRows() []wordRow {
 		{"cohort score meaning", func(r *InvestigationResult) {
 			r.Cohort = &contractsv1.ContextFabricCohort{ScoreMeaning: contractsv1.ContextFabricCohortScoreMeaningAttention}
 		}, map[string]string{"cohort_score_meaning:attention": "Attention score: higher means more pressure. It does not measure performance."}},
+		{"relationship type", func(r *InvestigationResult) {
+			r.Paths = []contractsv1.ContextFabricRelationshipPath{{Edges: []contractsv1.ContextFabricRelationshipEdge{{Type: contractsv1.ContextFabricRelationshipPartOf}}}}
+		}, map[string]string{"relationship_type:PART_OF": "part of"}},
 		{"claimed fact field", func(r *InvestigationResult) {
 			r.ClaimedFacts = []contractsv1.ContextFabricClaimedFact{{Field: "completion_ratio"}}
 		}, map[string]string{"fact_field:completion_ratio": "Completion ratio"}},

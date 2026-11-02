@@ -37,6 +37,10 @@ const (
 	// loops delete acr.client_credentials rows (one declared row, since a
 	// privilege is declared once per table).
 	CredentialPurge Feature = "credential_purge"
+	// AuthProjection is a configured lifecycle outbox publisher (CHAOS-11198): ACR_AUTH_PROJECTION_URL set to something
+	// other than whitespace. It holds UPDATE (published_at) on the outbox and no other new privilege; with it off the
+	// role holds no UPDATE there, and RevokeStatements clears a grant an earlier run made.
+	AuthProjection Feature = "auth_projection"
 )
 
 // Grant is the privileges the runtime role holds on one table.
@@ -51,6 +55,10 @@ type Grant struct {
 	// selection back, and the column grant keeps that structural while the
 	// retention job removes them (CHAOS-12244).
 	SelectColumns []string
+	// UpdateColumns, when set, grants UPDATE on these columns only (and so the row locks FOR UPDATE takes, which
+	// Postgres checks as UPDATE on at least one column): the role may change them and no other column. The lifecycle
+	// outbox publisher marks published_at and nothing else.
+	UpdateColumns []string
 	Feature       Feature
 	// Sequences are sequences the table's inserts draw from; the role needs USAGE.
 	Sequences []string
@@ -73,6 +81,8 @@ var RuntimeGrants = []Grant{
 		Why: "SELECT internal/storage/postgres/packet.go:69, INSERT packet.go:49, DELETE packet_retention.go:28; UPDATE because the purge locks rows with FOR UPDATE SKIP LOCKED (packet_retention.go:20), which Postgres checks as UPDATE; the readiness check asserts it"},
 	{Table: "credential_lifecycle_outbox", Privileges: []string{"SELECT", "INSERT"},
 		Why: "INSERT internal/storage/postgres/outbox.go (lifecycleSink.Insert), SELECT the same file (lifecycleSink.MaxRevision); both inside the credential mutation transaction"},
+	{Table: "credential_lifecycle_outbox", UpdateColumns: []string{"published_at"}, Feature: AuthProjection,
+		Why: "UPDATE of published_at only, started only when the publisher is configured (ACR_AUTH_PROJECTION_URL): internal/storage/postgres/outbox_publish.go LifecycleOutboxMarkSQL, and the claim's FOR UPDATE OF o (LifecycleOutboxClaimSQL), which Postgres checks as UPDATE on one column; no other column is writable and the publisher never deletes"},
 	{Table: "audit_events", Privileges: []string{"SELECT", "INSERT"},
 		Why: "INSERT internal/storage/postgres/audit.go:69; SELECT credentials_audit.go:50 and :61 (credential rotation conflict checks)"},
 	{Table: "agent_episodes", Privileges: []string{"SELECT", "INSERT", "UPDATE"}, Feature: EpisodeWriteback,
@@ -181,24 +191,28 @@ type Statement struct {
 	Table         string
 	Privileges    []string
 	SelectColumns []string
+	UpdateColumns []string
 	SQL           string
 }
 
 // PrivilegeList is the privilege clause of a GRANT for grant: its table-level
 // privileges, then SELECT on its columns when it has any.
 func PrivilegeList(grant Grant) string {
-	return privilegeClause(grant.Privileges, grant.SelectColumns)
+	return privilegeClause(grant.Privileges, grant.SelectColumns, grant.UpdateColumns)
 }
 
 // PrivilegeList is the statement's privilege clause, as in its GRANT.
 func (s Statement) PrivilegeList() string {
-	return privilegeClause(s.Privileges, s.SelectColumns)
+	return privilegeClause(s.Privileges, s.SelectColumns, s.UpdateColumns)
 }
 
-func privilegeClause(privileges, selectColumns []string) string {
+func privilegeClause(privileges, selectColumns, updateColumns []string) string {
 	clause := append([]string{}, privileges...)
 	if len(selectColumns) > 0 {
 		clause = append(clause, "SELECT ("+strings.Join(selectColumns, ", ")+")")
+	}
+	if len(updateColumns) > 0 {
+		clause = append(clause, "UPDATE ("+strings.Join(updateColumns, ", ")+")")
 	}
 	return strings.Join(clause, ", ")
 }
@@ -219,6 +233,7 @@ func grantStatements(grants []Grant, quotedRole string, features Features) []Sta
 			Table:         grant.Table,
 			Privileges:    grant.Privileges,
 			SelectColumns: grant.SelectColumns,
+			UpdateColumns: grant.UpdateColumns,
 			SQL:           fmt.Sprintf("GRANT %s ON TABLE acr.%s TO %s", PrivilegeList(grant), grant.Table, quotedRole),
 		})
 		for _, sequence := range grant.Sequences {
@@ -227,6 +242,24 @@ func grantStatements(grants []Grant, quotedRole string, features Features) []Sta
 				SQL:   fmt.Sprintf("GRANT USAGE ON SEQUENCE acr.%s TO %s", sequence, quotedRole),
 			})
 		}
+	}
+	return statements
+}
+
+// RevokeStatements returns the idempotent REVOKEs of the column privileges whose feature is off: a grant an earlier
+// run made when the feature was on is cleared, so the role holds exactly the declared set. Only a column privilege is
+// revoked this way; a table-level privilege is never narrowed on a role serving traffic (see grantRuntimeACL).
+func RevokeStatements(quotedRole string, features Features) []Statement {
+	var statements []Statement
+	for _, grant := range RuntimeGrants {
+		if len(grant.UpdateColumns) == 0 || features.Enabled(grant.Feature) {
+			continue
+		}
+		statements = append(statements, Statement{
+			Table:         grant.Table,
+			UpdateColumns: grant.UpdateColumns,
+			SQL:           fmt.Sprintf("REVOKE UPDATE (%s) ON TABLE acr.%s FROM %s", strings.Join(grant.UpdateColumns, ", "), grant.Table, quotedRole),
+		})
 	}
 	return statements
 }

@@ -103,11 +103,28 @@ func schemaValues(t *testing.T, defs map[string]any, def, property string) []str
 	return nil
 }
 
+// schemaDescribedValues reads an open vocabulary, which the schema lists in a
+// property's description so a client still tolerates a new value.
+func schemaDescribedValues(t *testing.T, defs map[string]any, def, property string) []string {
+	t.Helper()
+	object, _ := defs[def].(map[string]any)
+	properties, _ := object["properties"].(map[string]any)
+	field, _ := properties[property].(map[string]any)
+	description, _ := field["description"].(string)
+	_, listed, found := strings.Cut(description, "documented values: ")
+	listed, _, ended := strings.Cut(listed, ".")
+	if !found || !ended || listed == "" {
+		t.Fatalf("schema $defs/%s.%s lists no documented values: %q", def, property, description)
+	}
+	return strings.Split(listed, ", ")
+}
+
 func vocabularySources(t *testing.T) map[ContextFabricVocabulary][][]string {
 	t.Helper()
 	defs := commonSchemaDefs(t)
 	schema := func(def, property string) []string { return schemaValues(t, defs, def, property) }
 	kinds := ContextFabricSubjectKindVocabulary()
+	relationships := ContextFabricRelationshipTypeVocabulary()
 	facts := ContextFabricFactKindVocabulary()
 	outcomes := ContextFabricPlanRequirementOutcomeVocabulary()
 	dispositions := ContextFabricStructureDispositionVocabulary()
@@ -149,6 +166,9 @@ func vocabularySources(t *testing.T) map[ContextFabricVocabulary][][]string {
 		// ways, is devhealthfacts/chaos12418_fact_field_labels_test.go.
 		ContextFabricVocabularyFactField:         {slices.Sorted(maps.Keys(ContextFabricFactFieldLabels()))},
 		ContextFabricVocabularyDriverSourceState: {schema("DriverJudgment", "source_state")},
+		ContextFabricVocabularyRelationshipType: {
+			closedVocabularyStrings(relationships[:]), schemaDescribedValues(t, defs, "RelationshipEdge", "type"),
+		},
 		ContextFabricVocabularyCohortScoreMeaning: {
 			{string(ContextFabricCohortScoreMeaningAttention)}, schema("Cohort", "score_meaning"),
 		},

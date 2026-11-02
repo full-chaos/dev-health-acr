@@ -94,6 +94,9 @@ func newRuntimeRoleDatabase(t *testing.T, ctx context.Context, options runtimeRo
 		if options.Features[dbacl.BrowserClient] {
 			env["ACR_OAUTH_BROWSER_CLIENTS"] = "https://www.example.test/acr/client-metadata.json"
 		}
+		if options.Features[dbacl.AuthProjection] {
+			env["ACR_AUTH_PROJECTION_URL"] = "https://auth-service.example.test"
+		}
 		require.NoError(t, run(ctx, []string{"grant-runtime-acl"}, environment(env), &bytes.Buffer{}))
 	}
 

@@ -121,3 +121,29 @@ func claimAndDoneForClass(t *testing.T, manager *Manager, subject Subject, class
 }
 
 func nowFunc(now *time.Time) func() time.Time { return func() time.Time { return *now } }
+
+// An owner's key is its own space: a plain subject spelled like an owner, or
+// like its user, does not share the owner's counters.
+func TestAnOwnerNeverSharesAPlainSubjectsKey(t *testing.T) {
+	owner := Subject{OrgID: "org-a", CredentialID: "user-1", Surface: "browser"}
+	for _, plain := range []Subject{
+		{OrgID: "org-a", CredentialID: "user-1"},
+		{OrgID: "org-a", CredentialID: "browser"},
+		{OrgID: "org-a", CredentialID: "owner:browser:user-1"},
+	} {
+		if owner.key() == plain.key() {
+			t.Errorf("%+v shares the owner's key", plain)
+		}
+	}
+	if other := (Subject{OrgID: "org-a", CredentialID: "user-1", Surface: "mcp"}); owner.key() == other.key() {
+		t.Error("two surfaces of one user share a key")
+	}
+	for _, invalid := range []Subject{
+		{OrgID: "org-a", CredentialID: "user\x00browser"},
+		{OrgID: "org-a", CredentialID: "user-1", Surface: "browser\x00mcp"},
+	} {
+		if err := invalid.validate(); err == nil {
+			t.Errorf("%q validated: a NUL in a part breaks the key's separation", invalid.key())
+		}
+	}
+}
