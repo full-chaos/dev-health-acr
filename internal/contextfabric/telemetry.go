@@ -439,6 +439,18 @@ func (t SlogEngineTelemetry) RecordWindowCanonicalization(ctx context.Context, p
 	t.logger.InfoContext(ctx, "context fabric window canonicalization outcome", args...)
 }
 
+// RecordWindowClassification (CHAOS-12595) logs at Info: every field is a
+// closed vocabulary member or a bool, never question text.
+func (t SlogEngineTelemetry) RecordWindowClassification(ctx context.Context, principal storage.Principal, modelClass WindowClass, outcome WindowClassOutcome) {
+	args := append([]any{
+		"org_id", SanitizeLogAttr(principal.OrgID), "model_class", SanitizeLogAttr(string(modelClass)),
+		"window_class", SanitizeLogAttr(string(outcome.Class)), "source", SanitizeLogAttr(string(outcome.Source)),
+		"confidence", SanitizeLogAttr(string(outcome.Confidence)), "basis", SanitizeLogAttr(string(outcome.Basis)),
+		"downgraded", outcome.Downgraded,
+	}, requestIDLogAttrs(ctx)...)
+	t.logger.InfoContext(ctx, "context fabric window classification", args...)
+}
+
 // RecordWindowCarry (CHAOS-4360) logs at Info: outcome/chain_depth are both
 // closed-vocabulary/plain-integer, content-safe by construction -- never a
 // question, subject label, or canonical id. hit vs. every miss reason is
@@ -2832,6 +2844,7 @@ func (t SlogEngineTelemetry) RecordFactRowTruncation(ctx context.Context, princi
 		"tables_source_prefix", event.TablesSourcePrefix,
 		"tables_series_undated", event.TablesSeriesUndated,
 		"tables_ranking_unscored", event.TablesRankingUnscored,
+		"tables_distribution_withheld", event.TablesDistributionWithheld,
 		"served", event.Served,
 		"declined", string(event.Declined),
 		"outcome_rows_evicted", event.OutcomeRowsEvicted,

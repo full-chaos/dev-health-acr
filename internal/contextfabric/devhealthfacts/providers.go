@@ -18,6 +18,25 @@ func NewProviders(client contextpacket.ClickHouseQueryClient) []contextfabric.Fa
 // source_health provider reads the ops sourceHealth root through. A nil
 // holder makes that provider answer a limitation row on every read.
 func NewProvidersWithOperations(client contextpacket.ClickHouseQueryClient, operations *OperationHolder) []contextfabric.FactProvider {
+	return NewProvidersWithOptions(client, ProviderOptions{Operations: operations})
+}
+
+// ProviderOptions are the deployment switches the providers read.
+type ProviderOptions struct {
+	// Operations is the holder the source_health provider reads through; nil
+	// answers a limitation row on every read.
+	Operations *OperationHolder
+	// CompletionDistributionEnabled lets the team workload fact emit its
+	// completion distribution (CHAOS-12607; config
+	// ACR_CONTEXT_FABRIC_COMPLETION_DISTRIBUTION_ENABLED, default off).
+	CompletionDistributionEnabled bool
+}
+
+// NewProvidersWithOptions is NewProviders with the deployment switches.
+func NewProvidersWithOptions(client contextpacket.ClickHouseQueryClient, options ProviderOptions) []contextfabric.FactProvider {
+	operations := options.Operations
+	workload := newWorkloadProvider(client)
+	workload.completionDistribution = options.CompletionDistributionEnabled
 	return []contextfabric.FactProvider{
 		newIdentityProvider(client),
 		newMembershipProvider(client),
@@ -33,7 +52,7 @@ func NewProvidersWithOperations(client contextpacket.ClickHouseQueryClient, oper
 		newIncidentsProvider(client),
 		newMetricsProvider(client),
 		newHealthProvider(client),
-		newWorkloadProvider(client),
+		workload,
 		newInvestmentProvider(client),
 		newReadinessProvider(client),
 		newOperationalDeficienciesProvider(client),

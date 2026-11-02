@@ -1052,13 +1052,13 @@ func (c ContextFabricClaimedFact) validate(bounds contextFabricBounds) error {
 	if err := c.Value.Validate(); err != nil {
 		return fmt.Errorf("value: %w", err)
 	}
-	if err := validateClaimedFactRows(c.Rows); err != nil {
+	if err := validateClaimedFactRows(c.Rows, c.Table); err != nil {
 		return fmt.Errorf("rows: %w", err)
 	}
 	if err := validateClaimedFactTable(c.Table, c.Rows); err != nil {
 		return fmt.Errorf("table: %w", err)
 	}
-	if err := validateClaimedFactRows(c.TimeSeriesRows); err != nil {
+	if err := validateClaimedFactRows(c.TimeSeriesRows, c.TimeSeriesTable); err != nil {
 		return fmt.Errorf("time_series_rows: %w", err)
 	}
 	if err := validateTimeSeriesTable(c.TimeSeriesTable, c.TimeSeriesRows); err != nil {

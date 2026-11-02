@@ -166,18 +166,31 @@ var ProductionColumns = map[string][]Column{
 		{Name: "observed_at", Type: "DateTime64(3, 'UTC')"},
 		{Name: "computed_at", Type: "DateTime64(3, 'UTC') DEFAULT now64()"},
 	},
+	// CHAOS-12607: the completion forecast read (dev-health-go
+	// ReadTeamCompletionForecasts) also SELECTs simulation_count, the P85/P95
+	// days, the three dates and migration 101's two completion_days_*
+	// arrays. Types and order are dev-health-go v0.38.0's schema, which is ops'
+	// baseline at 8dcc0377 plus migration 101.
 	"capacity_forecasts": {
 		{Name: "forecast_id", Type: "String"},
 		{Name: "computed_at", Type: "DateTime64(3, 'UTC')"},
 		{Name: "team_id", Type: "Nullable(String)"},
 		{Name: "work_scope_id", Type: "Nullable(String)"},
 		{Name: "backlog_size", Type: "UInt32"},
+		{Name: "simulation_count", Type: "UInt32"},
 		{Name: "p50_days", Type: "Nullable(UInt16)"},
+		{Name: "p85_days", Type: "Nullable(UInt16)"},
+		{Name: "p95_days", Type: "Nullable(UInt16)"},
+		{Name: "p50_date", Type: "Nullable(Date)"},
+		{Name: "p85_date", Type: "Nullable(Date)"},
+		{Name: "p95_date", Type: "Nullable(Date)"},
 		{Name: "throughput_mean", Type: "Float64"},
 		{Name: "throughput_stddev", Type: "Float64"},
 		{Name: "insufficient_history", Type: "UInt8"},
 		{Name: "high_variance", Type: "UInt8"},
 		{Name: "org_id", Type: "String"},
+		{Name: "completion_days_values", Type: "Array(UInt16)"},
+		{Name: "completion_days_counts", Type: "Array(UInt32)"},
 	},
 	"ci_pipeline_runs": {
 		{Name: "repo_id", Type: "UUID"},

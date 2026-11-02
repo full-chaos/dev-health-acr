@@ -43,6 +43,11 @@ func WindowClassLogVocabulary() []string {
 	return out
 }
 
+// WindowConfidenceLogVocabulary is the closed set of window confidences a window line carries; the empty value is an unset confidence.
+func WindowConfidenceLogVocabulary() []string {
+	return []string{"", string(contractsv1.ContextFabricWindowConfidenceHigh), string(contractsv1.ContextFabricWindowConfidenceLow)}
+}
+
 // WindowProvenanceLogVocabulary is the closed set of window provenances a window line carries.
 func WindowProvenanceLogVocabulary() []string {
 	return []string{
