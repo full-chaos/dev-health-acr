@@ -1363,10 +1363,14 @@ import (
 // (CHAOS-12555). An answer saved under v263 can speak for the organization on a
 // question about a repository the request lost.
 //
-// v264 -> v265: a ticket key of any tracker binds a handle when the caller holds
-// its prefix (CHAOS-12463). An answer saved under v264 answered such a question by
+// v264 -> v265: a team landscape fact holds its cycle out of an answer: no
+// scalar, and no cycle in a claim's row (CHAOS-12565). An answer saved under
+// v264 can state a cycle that reads missing days as 0.
+//
+// v265 -> v266: a ticket key of any tracker binds a handle when the caller holds
+// its prefix (CHAOS-12463). An answer saved under v265 answered such a question by
 // search.
-const QueryVersion = "devhealthfacts.clickhouse.v265"
+const QueryVersion = "devhealthfacts.clickhouse.v266"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each

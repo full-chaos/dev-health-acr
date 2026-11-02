@@ -18,6 +18,10 @@ type RenderShapeOptions struct {
 	// FieldScope reads the declared scope of a field. The comparison rule
 	// reads it. A nil lookup scopes nothing, so that rule finds no cell.
 	FieldScope FactFieldScopeLookup
+	// TableCadence reads the declared cadence of a claimed table (CHAOS-11985).
+	// finalizeResult states the cadence with it, and the selection counts the
+	// tables that could not keep theirs. A nil lookup states none.
+	TableCadence FactTableCadenceLookup
 }
 
 // The words of the treemap (CHAOS-12521). They are served, never derived from a

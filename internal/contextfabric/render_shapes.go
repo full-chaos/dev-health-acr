@@ -76,6 +76,13 @@ type RenderShapeSelectionEvent struct {
 	// and says nothing reads as the whole comparison. Zero on every selection
 	// that lost nothing.
 	ComparisonMeasuresLeftOut int
+	// TablesCadenceWithheld counts the claimed tables whose declaration states
+	// a cadence the table does not carry, because its rows do not keep one row
+	// per calendar day or it is not a time_series (CHAOS-11985). A consumer then
+	// joins the line across a gap, as it does with no cadence, so this count is
+	// the only trace of the loss. Zero on every result whose daily tables keep
+	// their cadence.
+	TablesCadenceWithheld int
 }
 
 // RenderShapeSkip records one rule that did not produce a shape.
@@ -289,6 +296,7 @@ func selectRenderShapes(result InvestigationResult, frame *QuestionFrame, option
 	// that nothing branches on it -- it is how a Shape/frame divergence
 	// stays observable after the branch on Shape is gone.
 	event := RenderShapeSelectionEvent{Shape: result.Interpretation.Shape}
+	event.TablesCadenceWithheld = claimedTablesCadenceWithheld(result.ClaimedFacts, options.TableCadence)
 	shapes := make([]contractsv1.ContextFabricRenderShape, 0, 3)
 
 	cohortIntent := cohortRenderIntent(frame)

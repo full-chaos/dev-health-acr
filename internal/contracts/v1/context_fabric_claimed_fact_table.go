@@ -3,6 +3,7 @@ package v1
 import (
 	"fmt"
 	"strings"
+	"time"
 )
 
 // CHAOS-4637 (S6) / CHAOS-4627: a claimed fact's row table DECLARES what it
@@ -132,6 +133,43 @@ func ValidContextFabricMeasureUnit(unit ContextFabricMeasureUnit) bool {
 	return false
 }
 
+// ContextFabricFactTableCadence is the CLOSED vocabulary of the expected
+// spacing of a time_series table's rows (CHAOS-11985). The producer that owns
+// a table declares it; the server states it only when the served rows keep
+// it, and the model never writes it. Absent means no cadence is stated, and a
+// consumer then joins consecutive served points.
+type ContextFabricFactTableCadence string
+
+const (
+	// ContextFabricFactTableCadenceDay is one row per UTC calendar day: every
+	// key value is a date written YYYY-MM-DD, and no day repeats. A day with
+	// no row between two served rows has no stored row; it is not a zero.
+	ContextFabricFactTableCadenceDay ContextFabricFactTableCadence = "day"
+)
+
+var contextFabricFactTableCadences = [...]ContextFabricFactTableCadence{
+	ContextFabricFactTableCadenceDay,
+}
+
+// ContextFabricFactTableCadenceVocabulary returns the closed cadence
+// vocabulary in published order.
+func ContextFabricFactTableCadenceVocabulary() [len(contextFabricFactTableCadences)]ContextFabricFactTableCadence {
+	return contextFabricFactTableCadences
+}
+
+// ValidContextFabricFactTableCadence reports closed-vocabulary membership.
+func ValidContextFabricFactTableCadence(cadence ContextFabricFactTableCadence) bool {
+	for _, member := range contextFabricFactTableCadences {
+		if cadence == member {
+			return true
+		}
+	}
+	return false
+}
+
+// contextFabricCadenceDayLayout is the only form a `day` key value takes.
+const contextFabricCadenceDayLayout = "2006-01-02"
+
 // ContextFabricMeasureUnitDeclaration states the unit of one declared
 // measure.
 type ContextFabricMeasureUnitDeclaration struct {
@@ -184,6 +222,12 @@ type ContextFabricClaimedFactTable struct {
 	// states it from the declarations (withDeclaredMeasureUnits) and never
 	// offers it to the model to write, as with ClaimedFact.InvestmentMix.
 	MeasureUnits []ContextFabricMeasureUnitDeclaration `json:"measure_units,omitempty" jsonschema:"-"`
+	// Cadence (CHAOS-11985) states the expected spacing of the rows of a
+	// time_series table. It is set only on a time_series table whose rows keep
+	// it (CadenceAligned). jsonschema:"-" keeps it out of the model output
+	// schema, as for MeasureUnits: the server states it from the declarations
+	// (withDeclaredCadence) and never offers it to the model to write.
+	Cadence ContextFabricFactTableCadence `json:"cadence,omitempty" jsonschema:"-"`
 }
 
 // HasMeasure reports whether name is a declared measure of this table.
@@ -269,7 +313,46 @@ func (t ContextFabricClaimedFactTable) Validate() error {
 	} else if t.OrderBy != "" {
 		return fmt.Errorf("order_by is meaningful only for a ranking table, not %q", t.Shape)
 	}
+	if t.Cadence != "" {
+		if !ValidContextFabricFactTableCadence(t.Cadence) {
+			return fmt.Errorf("declared table cadence %q is not a member of the closed vocabulary", t.Cadence)
+		}
+		if t.Shape != ContextFabricFactTableShapeTimeSeries {
+			return fmt.Errorf("a cadence is meaningful only for a time_series table, not %q", t.Shape)
+		}
+	}
 	return t.validateMeasureUnits()
+}
+
+// CadenceAligned reports whether rows keep the table's cadence. For `day`,
+// every row's key value is a calendar date written YYYY-MM-DD, and no day
+// repeats. A table with no cadence holds any rows. The server states a cadence
+// only when this passes, and the validator holds every served table to it.
+func (t ContextFabricClaimedFactTable) CadenceAligned(rows []ContextFabricClaimedFactRow) error {
+	if t.Cadence == "" {
+		return nil
+	}
+	if t.Cadence != ContextFabricFactTableCadenceDay || len(t.Key) == 0 {
+		return fmt.Errorf("declared table cadence %q has no alignment rule for this table", t.Cadence)
+	}
+	seen := make(map[string]struct{}, len(rows))
+	for index, row := range rows {
+		cell := row.Fields[t.Key[0]]
+		if cell.String == nil {
+			return fmt.Errorf("row %d key %q is not a calendar date, so the table does not keep the %q cadence", index, t.Key[0], t.Cadence)
+		}
+		day := *cell.String
+		// The layout is strict: a value with a time, a zone, a missing zero or
+		// a day that does not exist fails to parse.
+		if _, err := time.Parse(contextFabricCadenceDayLayout, day); err != nil {
+			return fmt.Errorf("row %d key %q value %q is not a calendar date written YYYY-MM-DD, so the table does not keep the %q cadence", index, t.Key[0], day, t.Cadence)
+		}
+		if _, twice := seen[day]; twice {
+			return fmt.Errorf("row %d repeats day %s, so the table does not keep the %q cadence", index, day, t.Cadence)
+		}
+		seen[day] = struct{}{}
+	}
+	return nil
 }
 
 // validateMeasureUnits holds each stated unit to a declared measure and to the
@@ -321,7 +404,7 @@ func validateClaimedFactTable(table *ContextFabricClaimedFactTable, rows []Conte
 			}
 		}
 	}
-	return nil
+	return table.CadenceAligned(rows)
 }
 
 // renderableRows (CHAOS-4682, §5.1 P2) picks the SAME row array a

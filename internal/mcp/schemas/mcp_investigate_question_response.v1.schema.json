@@ -1730,6 +1730,13 @@
         "ProjectedFactTable": {
           "description": "CHAOS-4637: the declaration of what a fact's row table is. Carries no rows of its own -- it describes the rows carried beside it, so a declaration can never double a table's bytes against the response budget.",
           "properties": {
+            "cadence": {
+              "description": "CHAOS-11985: the expected spacing of a `time_series` table's rows, stated only on a `time_series` table whose rows keep it. `day` is one row per UTC calendar day: every key value is a date written YYYY-MM-DD, and no day repeats. A day with no row between two served rows has no stored row; it is not a zero. Absent means no cadence is stated. Set by the server from the producer's declaration; never model-authored.",
+              "enum": [
+                "day"
+              ],
+              "type": "string"
+            },
             "field": {
               "description": "The canonical fact field the rows came from. A fact may carry more than one row-shaped field, so a declaration that did not name its own field would describe an unidentified table.",
               "maxLength": 128,
@@ -5269,6 +5276,13 @@
         "ClaimedFactTable": {
           "description": "CHAOS-4637: the declaration of what a fact's row table is. Carries no rows of its own -- it describes the rows carried beside it, so a declaration can never double a table's bytes against the response budget.",
           "properties": {
+            "cadence": {
+              "description": "CHAOS-11985: the expected spacing of a `time_series` table's rows, stated only on a `time_series` table whose rows keep it. `day` is one row per UTC calendar day: every key value is a date written YYYY-MM-DD, and no day repeats. A day with no row between two served rows has no stored row; it is not a zero. Absent means no cadence is stated. Set by the server from the producer's declaration; never model-authored.",
+              "enum": [
+                "day"
+              ],
+              "type": "string"
+            },
             "field": {
               "description": "The canonical fact field the rows came from. A fact may carry more than one row-shaped field, so a declaration that did not name its own field would describe an unidentified table.",
               "maxLength": 128,

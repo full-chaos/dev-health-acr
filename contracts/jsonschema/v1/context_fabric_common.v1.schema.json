@@ -5523,6 +5523,13 @@
               "unit"
             ]
           }
+        },
+        "cadence": {
+          "description": "CHAOS-11985: the expected spacing of a `time_series` table's rows, stated only on a `time_series` table whose rows keep it. `day` is one row per UTC calendar day: every key value is a date written YYYY-MM-DD, and no day repeats. A day with no row between two served rows has no stored row; it is not a zero. Absent means no cadence is stated. Set by the server from the producer's declaration; never model-authored.",
+          "type": "string",
+          "enum": [
+            "day"
+          ]
         }
       },
       "required": [

@@ -233,10 +233,15 @@ type landscapeCoordinateRow struct {
 	xRawAvg, yRawAvg float64
 }
 
-// landscapeAnswerOmits is the column an answer does not show: every work-item
-// count lands on rows no team owns (CHAOS-12535), so a team's wip_max_30d reads
-// 0 whether or not it has work in progress. A direct reader still gets it.
-var landscapeAnswerOmits = []string{"wip_max_30d"}
+// landscapeAnswerOmits are the columns an answer does not show, because the
+// source reads 0 for missing. A direct reader still gets them.
+//
+//   - wip_max_30d: every work-item count lands on rows no team owns
+//     (CHAOS-12535), so a team reads 0 with or without work in progress.
+//   - cycle_p50_30d_hours_avg: a day with no merged pull request is stored as a
+//     0-hour cycle (CHAOS-12562), so a team's mean reads far too low. Held by
+//     CHAOS-12565; lift it when CHAOS-12562 lands.
+var landscapeAnswerOmits = []string{"wip_max_30d", "cycle_p50_30d_hours_avg"}
 
 func (r landscapeCoordinateRow) toFactValueRow() contextfabric.FactValueRow {
 	return contextfabric.FactValueRow{Fields: map[string]contextfabric.FactValue{
@@ -332,11 +337,10 @@ ORDER BY team_id, map_name`)
 		fields := map[string]contextfabric.FactValue{
 			// A table reaches no model (CHAOS-4355), so these scalars are what a
 			// model can read and claim. The claim then carries the row.
-			"as_of_day":               row.Fields["as_of_day"],
-			"identity_count":          row.Fields["identity_count"],
-			"churn_loc_30d":           row.Fields["churn_loc_30d"],
-			"delivery_units_30d":      row.Fields["delivery_units_30d"],
-			"cycle_p50_30d_hours_avg": row.Fields["cycle_p50_30d_hours_avg"],
+			"as_of_day":          row.Fields["as_of_day"],
+			"identity_count":     row.Fields["identity_count"],
+			"churn_loc_30d":      row.Fields["churn_loc_30d"],
+			"delivery_units_30d": row.Fields["delivery_units_30d"],
 			"area_breakdown": contextfabric.TableFactValue(contextfabric.FactTable{
 				Shape: contextfabric.FactTableBreakdown,
 				Key:   []string{"as_of_day"},
