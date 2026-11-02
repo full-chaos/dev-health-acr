@@ -1561,7 +1561,7 @@ type handleGraphExtractor struct {
 // queryPullRequests). A generic identity.Segments-only reader would
 // silently recover ZERO pull_request handles.
 var handleGraphExtractors = map[contractsv1.ContextFabricSubjectKind]handleGraphExtractor{
-	contractsv1.ContextFabricSubjectWorkItem:    {grammar: "work_item_ticket_key", extract: workItemHandleValue},
+	contractsv1.ContextFabricSubjectWorkItem:    {grammar: workItemTicketKeyGrammar, extract: workItemHandleValue},
 	contractsv1.ContextFabricSubjectCIRun:       {grammar: "ci_run_id", extract: ciRunHandleValue},
 	contractsv1.ContextFabricSubjectPullRequest: {grammar: "pull_request_number", extract: pullRequestHandleValue},
 }
@@ -1723,7 +1723,7 @@ type handleOfferDiagnostics struct {
 // exists for a DIFFERENT reason: to guarantee the offer is itself
 // redeemable (VerifyHandle's own redemption-time grammar check would
 // otherwise be able to reject a handle the engine itself offered).
-func handleOfferMaterial(question string, explicitHandles []contractsv1.ContextFabricRequestedHandle, checker contextfabric.HandleGrammarChecker, poolCandidates []contextfabric.SubjectCandidate) (contextfabric.StructureOfferMaterial, handleOfferDiagnostics) {
+func handleOfferMaterial(bound []BoundHandle, explicitHandles []contractsv1.ContextFabricRequestedHandle, checker contextfabric.HandleGrammarChecker, poolCandidates []contextfabric.SubjectCandidate) (contextfabric.StructureOfferMaterial, handleOfferDiagnostics) {
 	var explicitOptions []contractsv1.ContextFabricHandleOption
 	if checker != nil {
 		explicitSeen := make(map[contractsv1.ContextFabricHandleOption]struct{}, len(explicitHandles))
@@ -1744,7 +1744,6 @@ func handleOfferMaterial(question string, explicitHandles []contractsv1.ContextF
 			explicitOptions = append(explicitOptions, opt)
 		}
 	}
-	bound := BindHandles(question)
 	options := make([]contractsv1.ContextFabricHandleOption, 0, len(explicitOptions)+len(bound))
 	options = append(options, explicitOptions...)
 	// Codex xhigh review (chaos-pivot-p1, round 2, finding 1): BindHandles
@@ -1810,7 +1809,11 @@ func handleOfferMaterial(question string, explicitHandles []contractsv1.ContextF
 		if !ok {
 			continue
 		}
-		if !ValidateHandleGrammar(candidate.Subject.Kind, extractor.grammar, value) {
+		grammar := extractor.grammar
+		if candidate.Subject.Kind == contractsv1.ContextFabricSubjectWorkItem && strings.Contains(value, "/") {
+			grammar = workItemRepoReferenceGrammar
+		}
+		if !ValidateHandleGrammar(candidate.Subject.Kind, grammar, value) {
 			// A malformed/legacy canonical id, or (for pull_request) a
 			// same-shaped id from an unrelated source -- the value cannot
 			// round-trip through VerifyHandle's own redemption-time grammar
@@ -1819,7 +1822,7 @@ func handleOfferMaterial(question string, explicitHandles []contractsv1.ContextF
 			diag.GraphDerivedRejectedCount++
 			continue
 		}
-		sourceColumn, ok := HandleSourceColumn(candidate.Subject.Kind, extractor.grammar)
+		sourceColumn, ok := HandleSourceColumn(candidate.Subject.Kind, grammar)
 		if !ok {
 			// Unreachable: handleGraphExtractors' own grammar names are
 			// drawn from handleGrammarRegistry, the SAME registry
@@ -1827,7 +1830,7 @@ func handleOfferMaterial(question string, explicitHandles []contractsv1.ContextF
 			continue
 		}
 		opt := contractsv1.ContextFabricHandleOption{
-			Kind: candidate.Subject.Kind, PatternID: extractor.grammar, Value: value, SourceColumn: sourceColumn,
+			Kind: candidate.Subject.Kind, PatternID: grammar, Value: value, SourceColumn: sourceColumn,
 			Label:       handleOfferLabel(candidate.Subject.Kind, value),
 			OfferSource: contractsv1.ContextFabricStructureOfferEngine,
 		}

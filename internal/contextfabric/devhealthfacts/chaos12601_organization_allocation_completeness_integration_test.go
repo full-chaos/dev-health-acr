@@ -14,6 +14,7 @@ import (
 	"testing"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric/devhealthfacts"
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
 	"github.com/full-chaos/dev-health-acr/internal/testsupport/statementthreads"
@@ -72,5 +73,16 @@ func TestAnEmptyOrganizationWindowIsNotACompleteAllocationAnswer(t *testing.T) {
 	row := organizationAllocationRow(t, result)
 	if row.Stage != contractsv1.ContextFabricOutcomeStageAssembledResult || row.Outcome != contractsv1.ContextFabricRequirementUnavailable || row.Served != 0 {
 		t.Fatalf("row %+v: the producer declares the breakdown, and none was served", row)
+	}
+}
+
+// Codex r1 on #1947 (executed): answer reuse served a stored organization
+// allocation answer whose only row said "not applicable", so it read complete.
+// The query version is a reuse-key dimension; it moves with this declaration, so
+// such an answer is never replayed.
+func TestTheQueryVersionFencesAnswersSavedBeforeTheOrganizationObligation(t *testing.T) {
+	t.Parallel()
+	if devhealthfacts.QueryVersion == "devhealthfacts.clickhouse.v268" {
+		t.Fatal("the organization obligation changed what an answer reads and the query version did not move: reuse would replay a complete answer with no breakdown")
 	}
 }
