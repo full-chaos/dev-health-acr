@@ -1004,15 +1004,28 @@
           "submission_owner_mismatch",
           "subject_cap_exceeded",
           "subject_recheck_failed",
-          "subject_not_committed"
+          "subject_not_committed",
+          "unattributed"
         ],
-        "applicability": "written when the outcome is miss_authorization, and names which refusal produced it"
+        "applicability": "written when the outcome is miss_authorization, and names which refusal produced it",
+        "required_when": {
+          "key": "outcome",
+          "values": [
+            "miss_authorization"
+          ]
+        }
       },
       {
         "key": "subject_count",
         "type": "int",
         "presence": "conditional",
-        "applicability": "written when the reason is subject_cap_exceeded: how many distinct subjects the stored answer names"
+        "applicability": "written when the reason is subject_cap_exceeded: how many distinct subjects the stored answer names",
+        "required_when": {
+          "key": "reason",
+          "values": [
+            "subject_cap_exceeded"
+          ]
+        }
       },
       {
         "key": "request_id",

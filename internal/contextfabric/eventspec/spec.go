@@ -243,6 +243,19 @@ type Field struct {
 	// Nullable (FieldCountMap only) says the field may carry JSON null: the
 	// producer leaves the map nil when nothing was counted.
 	Nullable bool
+	// RequiredWhen (CHAOS-12519), when set, makes a PresenceConditional field
+	// required on every line where the sibling field named by Key carries one
+	// of Values: the certifier then refuses such a line that omits this field.
+	// Nil leaves the field's usual conditional rule, which the certifier does
+	// not check for absence.
+	RequiredWhen *RequiredWhen
+}
+
+// RequiredWhen names the sibling value that makes a conditional field
+// mandatory. Key is a sibling field of the same line (or element).
+type RequiredWhen struct {
+	Key    string
+	Values []string
 }
 
 // semanticStateGroupFields is the MEMBER shape of a persisted-reading group.
@@ -2989,8 +3002,8 @@ var AnswerReuseOutcome = Event{
 		{Key: "org_id", Type: FieldString, Presence: PresenceRequired},
 		{Key: "outcome", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: contextfabric.AnswerReuseOutcomeVocabulary()},
 		{Key: "ownership_routing_version", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: []string{contextfabric.OwnershipRoutingVersion}},
-		{Key: "reason", Type: FieldString, Presence: PresenceConditional, ClosedVocabulary: contextfabric.AnswerReuseRefusalReasonVocabulary(), Applicability: "written when the outcome is miss_authorization, and names which refusal produced it"},
-		{Key: "subject_count", Type: FieldInt, Presence: PresenceConditional, Applicability: "written when the reason is subject_cap_exceeded: how many distinct subjects the stored answer names"},
+		{Key: "reason", Type: FieldString, Presence: PresenceConditional, ClosedVocabulary: contextfabric.AnswerReuseRefusalReasonVocabulary(), Applicability: "written when the outcome is miss_authorization, and names which refusal produced it", RequiredWhen: &RequiredWhen{Key: "outcome", Values: []string{string(contextfabric.AnswerReuseMissAuthorization)}}},
+		{Key: "subject_count", Type: FieldInt, Presence: PresenceConditional, Applicability: "written when the reason is subject_cap_exceeded: how many distinct subjects the stored answer names", RequiredWhen: &RequiredWhen{Key: "reason", Values: []string{string(contextfabric.AnswerReuseRefusalSubjectCapExceeded)}}},
 		{Key: "request_id", Type: FieldString, Presence: PresenceConditional, Applicability: requestIDApplicability},
 	},
 }

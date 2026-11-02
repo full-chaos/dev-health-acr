@@ -40,7 +40,11 @@ func TestSlogEngineTelemetry_RecordAnswerReuseLogsMissReasons(t *testing.T) {
 		var buf bytes.Buffer
 		telemetry := NewSlogEngineTelemetry(slog.New(slog.NewTextHandler(&buf, nil)))
 
-		telemetry.RecordAnswerReuse(context.Background(), storage.Principal{OrgID: "org_telemetry_2"}, outcome, "ownership-routing.v1", AnswerReuseRefusal{})
+		refusal := AnswerReuseRefusal{}
+		if outcome == AnswerReuseMissAuthorization {
+			refusal = AnswerReuseRefusal{Reason: AnswerReuseRefusalGateDenied}
+		}
+		telemetry.RecordAnswerReuse(context.Background(), storage.Principal{OrgID: "org_telemetry_2"}, outcome, "ownership-routing.v1", refusal)
 
 		want := "outcome=" + string(outcome)
 		if !strings.Contains(buf.String(), want) {

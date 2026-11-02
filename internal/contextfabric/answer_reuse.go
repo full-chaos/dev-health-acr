@@ -245,6 +245,11 @@ const (
 	// AnswerReuseRefusalSubjectNotCommitted: a subject the candidate names was
 	// not committed by the recheck under the current grant.
 	AnswerReuseRefusalSubjectNotCommitted AnswerReuseRefusalReason = "subject_not_committed"
+	// AnswerReuseRefusalUnattributed: a miss_authorization was recorded with no
+	// reason named. No refusal site produces it; it exists so a site that
+	// forgets its reason writes a loud, certifiable value instead of a silent
+	// gap. A test requires that no scenario yields it.
+	AnswerReuseRefusalUnattributed AnswerReuseRefusalReason = "unattributed"
 )
 
 // AnswerReuseRefusalReasonVocabulary lists every refusal reason the reuse
@@ -254,6 +259,7 @@ func AnswerReuseRefusalReasonVocabulary() []string {
 		string(AnswerReuseRefusalGateDenied), string(AnswerReuseRefusalSubmissionOwnerMissing),
 		string(AnswerReuseRefusalSubmissionOwnerMismatch), string(AnswerReuseRefusalSubjectCapExceeded),
 		string(AnswerReuseRefusalSubjectRecheckFailed), string(AnswerReuseRefusalSubjectNotCommitted),
+		string(AnswerReuseRefusalUnattributed),
 	}
 }
 
@@ -783,7 +789,11 @@ func (e *Engine) tryReuseWithReading(ctx context.Context, principal storage.Prin
 		missOutcome, refusal, withheld = AnswerReuseMissNoCandidate, AnswerReuseRefusal{}, true
 	}
 	if withheld {
-		e.recordReuseOutcome(ctx, principal, missOutcome, refusal)
+		if missOutcome == AnswerReuseMissAuthorization {
+			e.recordReuseRefusal(ctx, principal, refusal)
+		} else {
+			e.recordReuseOutcome(ctx, principal, missOutcome)
+		}
 		return InvestigationResult{}, false, false, storedCountReading{}, nil
 	}
 	if !requestHintsCommittedBy(request.RequestedScope.SubjectHints, candidate.SubjectResolution.Committed) {
@@ -925,7 +935,11 @@ func (e *Engine) tryReuseWithReading(ctx context.Context, principal storage.Prin
 	}
 	verdict := e.reuseAuthorizationStillHolds(ctx, principal, request, candidate, binding)
 	if verdict.Refused {
-		e.recordReuseOutcome(ctx, principal, verdict.Outcome, verdict.Refusal)
+		if verdict.Outcome == AnswerReuseMissAuthorization {
+			e.recordReuseRefusal(ctx, principal, verdict.Refusal)
+		} else {
+			e.recordReuseOutcome(ctx, principal, verdict.Outcome)
+		}
 		e.recordReuseContainment(ctx, principal, verdict, reuseStripCounts{}, "")
 		return InvestigationResult{}, false, false, storedCountReading{}, nil
 	}
@@ -975,10 +989,28 @@ func (e *Engine) tryReuseWithReading(ctx context.Context, principal storage.Prin
 	return candidate, true, false, reading, nil
 }
 
-// recordReuseOutcome records the one outcome of a reuse attempt. refusal is
-// optional and names which refusal produced a miss_authorization outcome; every
-// other outcome passes none.
-func (e *Engine) recordReuseOutcome(ctx context.Context, principal storage.Principal, outcome AnswerReuseOutcome, refusal ...AnswerReuseRefusal) {
+// recordReuseOutcome records the one outcome of a reuse attempt that needs no
+// refusal reason. A miss_authorization outcome goes through recordReuseRefusal,
+// which requires its reason; one passed here is recorded as unattributed, never
+// as a bare line (CHAOS-12519).
+func (e *Engine) recordReuseOutcome(ctx context.Context, principal storage.Principal, outcome AnswerReuseOutcome) {
+	if outcome == AnswerReuseMissAuthorization {
+		e.recordReuseRefusal(ctx, principal, AnswerReuseRefusal{})
+		return
+	}
+	e.recordReuseLine(ctx, principal, outcome, AnswerReuseRefusal{})
+}
+
+// recordReuseRefusal records a miss_authorization outcome with the reason of
+// the refusal that produced it. An empty reason is recorded as unattributed.
+func (e *Engine) recordReuseRefusal(ctx context.Context, principal storage.Principal, refusal AnswerReuseRefusal) {
+	if refusal.Reason == "" {
+		refusal.Reason = AnswerReuseRefusalUnattributed
+	}
+	e.recordReuseLine(ctx, principal, AnswerReuseMissAuthorization, refusal)
+}
+
+func (e *Engine) recordReuseLine(ctx context.Context, principal storage.Principal, outcome AnswerReuseOutcome, detail AnswerReuseRefusal) {
 	if e.telemetry == nil {
 		return
 	}
@@ -987,10 +1019,6 @@ func (e *Engine) recordReuseOutcome(ctx context.Context, principal storage.Princ
 	// value to thread separately, so the line always names it, hit or miss,
 	// making a stale or never-wired dimension attributable at Info without
 	// correlating against build metadata out of band.
-	var detail AnswerReuseRefusal
-	if len(refusal) > 0 {
-		detail = refusal[0]
-	}
 	e.telemetry.RecordAnswerReuse(ctx, principal, outcome, e.reuseVersionAuthorities.OwnershipRoutingVersion, detail)
 }
 

@@ -187,6 +187,9 @@ func TestSynthesisStatusOverrideLineCertifiesEveryProducerValueAndRefusesAnyOthe
 func TestAnswerReuseLinesCertifyEveryProducerValueAndRefuseAnyOther(t *testing.T) {
 	t.Parallel()
 	for _, outcome := range contextfabric.AnswerReuseOutcomeVocabulary() {
+		if outcome == string(contextfabric.AnswerReuseMissAuthorization) {
+			continue // certified with each reason below; it never certifies without one
+		}
 		var buf bytes.Buffer
 		sink, ctx := answerLineSink(&buf, slog.LevelInfo)
 		sink.RecordAnswerReuse(ctx, principalOrg1, contextfabric.AnswerReuseOutcome(outcome), contextfabric.OwnershipRoutingVersion, contextfabric.AnswerReuseRefusal{})
@@ -434,4 +437,34 @@ func TestAnswerabilityRolePatternsRefuseAKindOutsideTheVocabulary(t *testing.T) 
 		sink.RecordSubjectlessTerminal(ctx, principalOrg1, "ambiguous", "none", "none", "none", none)
 		certifyRequestLine(t, buf.Bytes(), eventspec.SubjectlessTerminal, nil)
 	}
+}
+
+// TestAMissAuthorizationLineWithoutItsReasonIsRefused (CHAOS-12519): the
+// outcome that several refusals share must always say which refusal it was,
+// and the cap reason must always carry its count. A line missing either is
+// refused, so the unnamed miss_authorization of CHAOS-12511 cannot return
+// silently.
+func TestAMissAuthorizationLineWithoutItsReasonIsRefused(t *testing.T) {
+	t.Parallel()
+	var bare bytes.Buffer
+	sink, ctx := answerLineSink(&bare, slog.LevelInfo)
+	sink.RecordAnswerReuse(ctx, principalOrg1, contextfabric.AnswerReuseMissAuthorization, contextfabric.OwnershipRoutingVersion, contextfabric.AnswerReuseRefusal{})
+	certifyRefused(t, bare.Bytes(), eventspec.AnswerReuseOutcome, "a miss_authorization line with no reason")
+
+	var capLine bytes.Buffer
+	sink, ctx = answerLineSink(&capLine, slog.LevelInfo)
+	sink.RecordAnswerReuse(ctx, principalOrg1, contextfabric.AnswerReuseMissAuthorization, contextfabric.OwnershipRoutingVersion,
+		contextfabric.AnswerReuseRefusal{Reason: contextfabric.AnswerReuseRefusalSubjectCapExceeded, SubjectCount: 51})
+	withCount := capLine.String()
+	if !strings.Contains(withCount, `"subject_count":51,`) {
+		t.Fatalf("the cap line does not carry its count: %s", withCount)
+	}
+	certifyRequestLine(t, capLine.Bytes(), eventspec.AnswerReuseOutcome, map[string]any{"subject_count": 51})
+	certifyRefused(t, []byte(strings.Replace(withCount, `"subject_count":51,`, "", 1)), eventspec.AnswerReuseOutcome, "a subject_cap_exceeded line with no subject_count")
+
+	// A hit carries neither field and still certifies.
+	var hit bytes.Buffer
+	sink, ctx = answerLineSink(&hit, slog.LevelInfo)
+	sink.RecordAnswerReuse(ctx, principalOrg1, contextfabric.AnswerReuseHit, contextfabric.OwnershipRoutingVersion, contextfabric.AnswerReuseRefusal{})
+	certifyRequestLine(t, hit.Bytes(), eventspec.AnswerReuseOutcome, nil)
 }
