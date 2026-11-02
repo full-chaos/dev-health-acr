@@ -1507,8 +1507,22 @@ func fieldClaimRows(fact CanonicalFact, field string) (rows []contractsv1.Contex
 		}
 		rows = append(rows, converted)
 	}
-	if len(rows) > contractsv1.ContextFabricClaimedFactMaxRows {
-		return rows[:contractsv1.ContextFabricClaimedFactMaxRows], true
+	// The cap is the table's row bound class (contractsv1's one keyed bound
+	// table, CHAOS-12607): 64 for every table not in a class. A
+	// distribution is never cut -- a shorter completion distribution is a
+	// different forecast -- so one past its cap is not attached at all
+	// (reported, and with no rows the claim carries no declaration either,
+	// Codex #1940 r1). Every other table is cut to its cap.
+	limit := contractsv1.ContextFabricClaimedFactMaxRows
+	table := fact.Fields[rowsField].Table
+	if table != nil {
+		limit = maxFactTableRows(*table)
+	}
+	if len(rows) > limit {
+		if table != nil && table.Shape == FactTableDistribution {
+			return nil, true
+		}
+		return rows[:limit], true
 	}
 	return rows, false
 }
