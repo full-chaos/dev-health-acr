@@ -148,3 +148,140 @@ func TestOneCandidateBesideACountSaysTheCount(t *testing.T) {
 		}
 	}
 }
+
+var provenAbsences = map[string]string{
+	"all you can read":    contractsv1.ContextFabricCensusAbsentLimitation,
+	"the requested scope": contractsv1.ContextFabricCensusAbsentInScopeLimitation,
+	"a restricted item":   contractsv1.ContextFabricWorkItemNoGrantedLinkLimitation,
+}
+
+// CHAOS-12498: a complete zero is the terminal's own sentence on every arm of an
+// empty pool. The ticket's three false statements are named.
+func TestAProvenAbsenceIsTheTerminalSentence(t *testing.T) {
+	t.Parallel()
+	for name, sentence := range provenAbsences {
+		for arm, resolution := range map[string]SubjectResolution{
+			"an empty pool":          {Candidates: []SubjectCandidate{}, Committed: []SubjectRef{}, CensusLimitation: sentence},
+			"the exclusion's prompt": {Candidates: []SubjectCandidate{}, Committed: []SubjectRef{}, CensusLimitation: sentence, ClarificationPrompt: OfferPoolEmptiedClarificationPrompt},
+		} {
+			for _, allowClarification := range []bool{true, false} {
+				t.Run(name+" "+arm, func(t *testing.T) {
+					t.Parallel()
+					request := validInvestigationRequest()
+					request.Options.AllowClarification = allowClarification
+					engine := mustEngineForTerminalReasonTest(t, authzDroppingGraphReader{resolution: resolution}, &recordingTelemetry{})
+					result, err := engine.Investigate(context.Background(), storage.Principal{OrgID: "org_1", RepositoryScopes: []string{"acme/alpha"}}, request)
+					if err != nil {
+						t.Fatalf("Investigate() error = %v", err)
+					}
+					if result.Status != InvestigationNoMatch {
+						t.Fatalf("status = %q, want no_match: nothing holds the handle", result.Status)
+					}
+					if !slices.Equal(result.Limitations, []string{sentence}) {
+						t.Fatalf("limitations = %q, want the sentence alone", result.Limitations)
+					}
+					if strings.Contains(result.DeterministicAnswer, "semantic similarity") || strings.Contains(result.DeterministicAnswer, "authorized subject") {
+						t.Fatalf("answer = %q", result.DeterministicAnswer)
+					}
+				})
+			}
+		}
+	}
+}
+
+func TestAProvenAbsenceGoesAheadOfTheFloor(t *testing.T) {
+	t.Parallel()
+	sentence := contractsv1.ContextFabricCensusAbsentLimitation
+	engine := mustEngineForTerminalReasonTest(t, flooredGraphReader{authzDroppingGraphReader{resolution: SubjectResolution{Candidates: []SubjectCandidate{}, Committed: []SubjectRef{}, CensusLimitation: sentence}}}, &recordingTelemetry{})
+	result, err := engine.Investigate(context.Background(), storage.Principal{OrgID: "org_1", RepositoryScopes: []string{"acme/alpha"}}, validInvestigationRequest())
+	if err != nil {
+		t.Fatalf("Investigate() error = %v", err)
+	}
+	if result.Status != InvestigationNoMatch || !slices.Equal(result.Limitations, []string{sentence}) {
+		t.Fatalf("status %q limitations %q", result.Status, result.Limitations)
+	}
+}
+
+// Near matches stay beside a zero (ruling 1), and "the question matched" stays
+// away from them: the census proved that no subject holds the handle.
+func TestNearMatchesBesideAZeroStateTheZero(t *testing.T) {
+	t.Parallel()
+	near := func(id, label string) SubjectCandidate {
+		return SubjectCandidate{ReceiptID: "receipt_" + id + "_a1", Subject: SubjectRef{Kind: SubjectPullRequest, CanonicalID: "pull_request:r:" + id, Label: label}, State: ResolutionAmbiguous, MatchReasons: []string{"search"}, Confidence: 0.5}
+	}
+	for name, candidates := range map[string][]SubjectCandidate{
+		"one":     {near("5", "Release prep")},
+		"several": {near("5", "Release prep"), near("6", "Release notes")},
+	} {
+		for allowClarification, status := range map[bool]InvestigationStatus{true: InvestigationClarificationRequired, false: InvestigationNoMatch} {
+			t.Run(name, func(t *testing.T) {
+				t.Parallel()
+				sentence := contractsv1.ContextFabricCensusAbsentLimitation
+				request := validInvestigationRequest()
+				request.Options.AllowClarification = allowClarification
+				engine := mustEngineForTerminalReasonTest(t, authzDroppingGraphReader{resolution: SubjectResolution{Candidates: candidates, Committed: []SubjectRef{}, CensusLimitation: sentence}}, &recordingTelemetry{})
+				result, err := engine.Investigate(context.Background(), storage.Principal{OrgID: "org_1", RepositoryScopes: []string{"acme/alpha"}}, request)
+				if err != nil {
+					t.Fatalf("Investigate() error = %v", err)
+				}
+				if result.Status != status || len(result.SubjectResolution.Candidates) != len(candidates) {
+					t.Fatalf("status %q candidates %d, want %q and %d", result.Status, len(result.SubjectResolution.Candidates), status, len(candidates))
+				}
+				if !slices.Equal(result.Limitations, []string{sentence}) {
+					t.Fatalf("limitations = %q, want the sentence alone", result.Limitations)
+				}
+				if strings.Contains(result.DeterministicAnswer, "authorized subject") {
+					t.Fatalf("answer = %q", result.DeterministicAnswer)
+				}
+			})
+		}
+	}
+}
+
+// A count is listed or it is not, so several candidates beside one keep their sentence.
+func TestThePartListingKeepsItsTerminalSentence(t *testing.T) {
+	t.Parallel()
+	first := SubjectCandidate{ReceiptID: "receipt_a_a1", Subject: SubjectRef{Kind: SubjectPullRequest, CanonicalID: "pull_request:r:12", Label: "pull request #12 in acme/alpha"}, State: ResolutionAmbiguous, MatchReasons: []string{"census"}, Confidence: 0.5}
+	second := SubjectCandidate{ReceiptID: "receipt_b_a1", Subject: SubjectRef{Kind: SubjectPullRequest, CanonicalID: "pull_request:s:12", Label: "pull request #12 in acme/beta"}, State: ResolutionAmbiguous, MatchReasons: []string{"census"}, Confidence: 0.5}
+	request := validInvestigationRequest()
+	request.Options.AllowClarification = false
+	engine := mustEngineForTerminalReasonTest(t, authzDroppingGraphReader{resolution: SubjectResolution{Candidates: []SubjectCandidate{first, second}, Committed: []SubjectRef{}, CensusLimitation: contractsv1.ContextFabricCensusListedLimitation(10, 2)}}, &recordingTelemetry{})
+	result, err := engine.Investigate(context.Background(), storage.Principal{OrgID: "org_1", RepositoryScopes: []string{"acme/alpha", "acme/beta"}}, request)
+	if err != nil {
+		t.Fatalf("Investigate() error = %v", err)
+	}
+	if !slices.Contains(result.Limitations, ambiguousNoClarificationLimitation) || !strings.Contains(result.DeterministicAnswer, "more than one authorized subject matched") {
+		t.Fatalf("limitations %q answer %q", result.Limitations, result.DeterministicAnswer)
+	}
+}
+
+// A graph that was never projected is a stronger claim: retrieval did not run.
+func TestAnUnprojectedGraphGoesAheadOfAnAbsence(t *testing.T) {
+	t.Parallel()
+	resolution := SubjectResolution{Candidates: []SubjectCandidate{}, Committed: []SubjectRef{}, GraphNotProjected: true, CensusLimitation: contractsv1.ContextFabricCensusAbsentLimitation}
+	engine := mustEngineForTerminalReasonTest(t, authzDroppingGraphReader{resolution: resolution}, &recordingTelemetry{})
+	result, err := engine.Investigate(context.Background(), storage.Principal{OrgID: "org_1", RepositoryScopes: []string{"acme/alpha"}}, validInvestigationRequest())
+	if err != nil {
+		t.Fatalf("Investigate() error = %v", err)
+	}
+	if !slices.Contains(result.Limitations, noMatchLimitationGraphNotProjected) {
+		t.Fatalf("limitations = %q", result.Limitations)
+	}
+	if got := subjectlessTerminalReason(FrameGate{}, resolution, 0, declaredKindDecision{}); got != "graph_not_projected" {
+		t.Fatalf("reason = %q", got)
+	}
+}
+
+// The logs tell a proven absence from a count nothing could list.
+func TestAnAbsenceHasItsOwnTerminalReason(t *testing.T) {
+	t.Parallel()
+	for name, sentence := range provenAbsences {
+		resolution := SubjectResolution{CensusLimitation: sentence, ClarificationPrompt: OfferPoolEmptiedClarificationPrompt}
+		if got := subjectlessTerminalReason(FrameGate{}, resolution, 0, declaredKindDecision{}); got != censusAbsentTerminalReason {
+			t.Fatalf("%s: reason = %q", name, got)
+		}
+	}
+	if !slices.Contains(SubjectlessTerminalReasonVocabulary(), censusAbsentTerminalReason) {
+		t.Fatalf("%q is outside the vocabulary", censusAbsentTerminalReason)
+	}
+}

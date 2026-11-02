@@ -4392,6 +4392,7 @@ func resolveSubjects(ctx context.Context, principal storage.Principal, request c
 	// check by hand and risking the two readings drifting apart.
 	_, beforeDiag := kindOfferMaterial(beforeKinds, request.ExpectedKinds, declaredKinds, poolHeld)
 	kindOffer, kindOfferDiag := kindOfferMaterial(afterKinds, request.ExpectedKinds, declaredKinds, poolHeld)
+	kindOffer = withoutVetoedKinds(kindOffer, request.ExpectedKinds)
 	// CHAOS-4012: the SAME union kindOfferMaterial read (pre-repair) above
 	// is also the read-only pool candidateOfferMaterial ranks over -- one
 	// candidate pool, two independent offer axes, never two different

@@ -44,8 +44,8 @@ func linksUnreadLimitation(principal storage.Principal, deps ResolveDeps) string
 // work items, or "": a failed link read's, or else the one a turn that resolved no
 // work item owes. Everything it reads sits inside the grant, so a subject outside
 // the grant cannot change it. A requested repository narrows the census, so a
-// count of zero there proves nothing about the grant, and the narrowing's own
-// sentence speaks for it.
+// count of zero there proves nothing about the grant, and the scope's absence
+// sentence speaks for it (censusAbsenceLimitation).
 func workItemLinkLimitation(principal storage.Principal, request contextfabric.InvestigationRequest, deps ResolveDeps, round workItemHandleRound, resolution contextfabric.SubjectResolution) string {
 	if sentence := linksUnreadLimitation(principal, deps); sentence != "" {
 		return sentence

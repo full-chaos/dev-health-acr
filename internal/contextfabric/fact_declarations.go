@@ -173,6 +173,23 @@ type FactColumnDeclaration struct {
 	Additivity FactAdditivity `json:"additivity,omitempty"`
 }
 
+// FactFieldScope says what span one numeric scalar speaks for, so a comparison
+// sets two subjects' values side by side only when they speak for the same span
+// (CHAOS-12513). It is internal: the wire says nothing about it. The catalogue
+// test holds every numeric scalar of a compared kind to a declared scope.
+type FactFieldScope string
+
+const (
+	// FactScopeWindow is a value computed over the read's evidence window.
+	FactScopeWindow FactFieldScope = "window"
+	// FactScopeLatestDay is one subject's newest stored day. That day can differ
+	// between subjects, so a comparison needs the same day on every side.
+	FactScopeLatestDay FactFieldScope = "latest_day"
+	// FactScopeNotCompared is a value a comparison never sets side by side: a
+	// count of what the read left out, or a state of now with no span.
+	FactScopeNotCompared FactFieldScope = "not_compared"
+)
+
 // FactFieldDeclaration declares one field of a fact of this kind.
 type FactFieldDeclaration struct {
 	Name string        `json:"name"`
@@ -208,6 +225,9 @@ type FactFieldDeclaration struct {
 	// from a column the declaration itself calls additive.
 	DailySeries bool                    `json:"daily_series,omitempty"`
 	Columns     []FactColumnDeclaration `json:"columns,omitempty"`
+	// Scope is set on every numeric scalar of a compared kind. See
+	// FactFieldScope.
+	Scope FactFieldScope `json:"-"`
 }
 
 // AppliesTo reports whether the declaration covers facts about kind.

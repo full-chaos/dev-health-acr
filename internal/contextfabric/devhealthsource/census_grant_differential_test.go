@@ -331,6 +331,14 @@ func anOutsideSatisfierIsNeverCountedNamedOrOffered(t *testing.T, build grantWor
 	world.add(t, world.outsideGitLab)
 	outside := observeGrantTurn(t, world)
 	assertSameTurn(t, none, outside)
+	// CHAOS-12498: the same words for no such subject and a subject outside the
+	// grant. An empty sentence on both sides would pass the comparison above.
+	if outside.resolution.CensusLimitation != contractsv1.ContextFabricCensusAbsentLimitation {
+		t.Fatalf("limitation = %q", outside.resolution.CensusLimitation)
+	}
+	if len(outside.offers.HandleOptions) != 0 {
+		t.Fatalf("handle options = %+v, want none", outside.offers.HandleOptions)
+	}
 	tracer := &grantTracer{events: outside.trace}
 	for _, probe := range tracer.stage("evidence_probe") {
 		if probe.CensusCount != 0 {

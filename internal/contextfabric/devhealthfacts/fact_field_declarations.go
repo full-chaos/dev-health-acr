@@ -163,6 +163,10 @@ var (
 // factKindFields returns the field declarations of kind, or nil when the kind
 // is not served by the direct read tools.
 func factKindFields(kind contextfabric.FactKind) []contextfabric.FactFieldDeclaration {
+	return withFieldScopes(kind, declaredKindFields(kind))
+}
+
+func declaredKindFields(kind contextfabric.FactKind) []contextfabric.FactFieldDeclaration {
 	switch kind {
 	case contextfabric.FactInvestment:
 		return investmentFields()
