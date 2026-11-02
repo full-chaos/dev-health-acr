@@ -343,7 +343,9 @@ func llmUsage(usage llm.Usage) contextfabric.ModelUsage {
 }
 
 // check is Genkit's ParseMessage for a schema-bound call: unwrap a fenced
-// reply, require JSON, validate it against the output schema.
+// reply, require JSON, validate it against the output schema. For an
+// interpretation, an unknown window pick is left out of what the schema
+// judges and kept in the reply returned (withoutUnknownWindowPicks).
 func (g llmGenerator) check(ctx context.Context, operation, text string, schema outputSchema) (string, error) {
 	candidate := extractGenkitJSON(text)
 	reason := ""
@@ -367,7 +369,16 @@ func (g llmGenerator) check(ctx context.Context, operation, text string, schema 
 					"reply_bytes", len(text))
 			}
 		}
-		result, err := schema.compiled.Validate(gojsonschema.NewStringLoader(candidate))
+		// An unknown window pick is checked out of the copy the schema reads
+		// only; the reply returned keeps it for the sanitizer (CHAOS-12617).
+		checked := candidate
+		if operation == "interpret" {
+			var dropped []string
+			if checked, dropped = withoutUnknownWindowPicks(candidate, schema.wire); len(dropped) > 0 {
+				logUnknownWindowPicksDropped(ctx, g.logger, operation, dropped)
+			}
+		}
+		result, err := schema.compiled.Validate(gojsonschema.NewStringLoader(checked))
 		if err != nil {
 			reason = "not_json"
 		} else if !result.Valid() {

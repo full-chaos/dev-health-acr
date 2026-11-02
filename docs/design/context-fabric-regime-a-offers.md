@@ -68,9 +68,13 @@ offers-only pass, `decideInferredWindowGate` gates on one of three bases, in
 this order: `offers_unavailable` (the pass did not read: disabled, frame
 refused, failed, graph not projected), `period_shape` (a series or
 period-comparison frame: its period is the question, and one inferred current
-window would drop it), `offers_beyond_window` (the pass found a kind, anchor,
-handle or candidate question). Otherwise (`window_only`) the turn runs the
-decisive path on the inferred window. The answer keeps provenance
+window would drop it), `offers_beyond_window` (the pass offered a kind, anchor,
+handle or candidate option to pick: `offerMaterialRedeemable`). Otherwise the
+turn runs the decisive path on the inferred window: `window_only`, or
+`window_only_unpickable_asks` when the pass named needs beyond the window with
+nothing to pick for them (CHAOS-12640: the standing zero-candidates disclosure
+is kept on the result, and a named subject with zero candidates still ends
+`no_match` on no other subject). The answer keeps provenance
 `inferred_default`, so CHAOS-4040's protections hold: it is never reused or
 carried as a confirmed window, and a later confirmation runs fresh. It serves
 the window offer beside the answer: `window_clarification`, a window-only
@@ -206,7 +210,7 @@ discard is the load-bearing safety layer; the ctx mark
 | --- | --- | --- |
 | `EngineTelemetry.RecordGatedOfferResolution` | `composed` / `empty` / `failed` / `disabled` / `refused` / `not_projected` | once per class-default gated request; `not_projected` (codex round-2 finding #2) distinguishes a never-projected org from a genuinely empty pool, same as `subjectlessTerminalReasons`' `graph_not_projected` does for the decisive path |
 | `EngineTelemetry.RecordCohortStructureGate` | `applied` / `no_op` / `subject_bearing` + the `shape` it fired for | once per `GateOffersByFamily` call (CHAOS-4634), at both call sites; `applied` = at least one inapplicable axis's rows were removed, `no_op` = the family restricts some axis but nothing on it was present to remove, `subject_bearing` = the family places no restriction on any of the five wire axes and the material passed through. The DECISION is family-keyed; the reported `shape` dimension is unchanged (still a meaningful cross-check of what the model reported vs. what the family gate decided). Both outcomes AND the denominator are reported, so "cohort vs subject clarification" is a countable split rather than an inference from a missing log line. **Not** one per composed `StructureNeeds` — see the denominator note below |
-| `EngineTelemetry.RecordInferredWindowGate` (`contextfabric.inferred_window_gate`) | `decision` `gated` / `answered`, `basis` `offers_unavailable` / `period_shape` / `offers_beyond_window` / `window_only` | once per class-default turn (CHAOS-4451): what the gate did with the turn and the one basis that decided it |
+| `EngineTelemetry.RecordInferredWindowGate` (`contextfabric.inferred_window_gate`) | `decision` `gated` / `answered`, `basis` `offers_unavailable` / `period_shape` / `offers_beyond_window` / `window_only` / `window_only_unpickable_asks` | once per class-default turn (CHAOS-4451): what the gate did with the turn and the one basis that decided it |
 | `kind_offer` trace event | `OfferedUnderWindowGate` | this resolution ran in offers-only mode |
 | `ranked_cut` trace stage (`resolution.go`) | `Subject`, `Rank`, `Survived` | one event per candidate, in rank order, before the `MaxSubjectCandidates` cut; `Rank==1` opens a batch, readers keep the last batch |
 | `ranked_cut` companion (`resolve.go`) | `CoverageBypass=true`, `Rank 0` | a coverage-floor find the cut dropped but `unionCandidatesForOffer` still hands to the offer builders |

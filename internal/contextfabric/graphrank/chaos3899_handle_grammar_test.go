@@ -237,3 +237,46 @@ func TestIsCensusKindRegistered(t *testing.T) {
 		t.Fatalf("IsCensusKindRegistered(incident) = true, want false")
 	}
 }
+
+// CHAOS-12633: a GitLab merge request is stored as a pull request
+// (git_pull_requests.number holds its iid), so the GitLab spellings bind the
+// same pull_request_number entry as "PR N" / "pull request N". Executed
+// before this change: every one of these bound nothing.
+func TestBindHandles_MergeRequestSpellings(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		question string
+		want     string
+	}{
+		{"What is the status of merge request !42 in platform/ledger-api?", "42"},
+		{"What is the status of MR !42 in platform/ledger-api?", "42"},
+		{"What is the status of merge request 42 in platform/ledger-api?", "42"},
+		{"Merge Request #42 failed", "42"},
+		{"see MR42", "42"},
+	}
+	for _, tc := range cases {
+		bound := BindHandles(tc.question)
+		if len(bound) != 1 || bound[0].Kind != contextfabric.SubjectPullRequest || bound[0].Grammar != "pull_request_number" || bound[0].Value != tc.want {
+			t.Fatalf("BindHandles(%q) = %#v, want exactly one pull_request_number handle %q", tc.question, bound, tc.want)
+		}
+	}
+}
+
+// The new spellings bind only a keyword followed by digits: ordinary English
+// and the repository reference keep their own readings.
+func TestBindHandles_MergeRequestSpellingsNeverBindOrdinaryText(t *testing.T) {
+	t.Parallel()
+	for _, question := range []string{
+		"Why are merge requests slow?",
+		"Ask Mr Smith about the merge request",
+		"merge request review time last quarter",
+	} {
+		if bound := BindHandles(question); len(bound) != 0 {
+			t.Fatalf("BindHandles(%q) = %#v, want none", question, bound)
+		}
+	}
+	bound := BindHandles("What is the status of full.chaos/dev-health-ops!1?")
+	if len(bound) != 1 || bound[0].Kind != contextfabric.SubjectWorkItem || bound[0].Grammar != workItemRepoReferenceGrammar {
+		t.Fatalf("a repository reference = %#v, want its work_item_repo_reference reading unchanged", bound)
+	}
+}

@@ -39,9 +39,16 @@ package contextfabric
 // was seen live on every subject of one organization (the lead's ruling on the
 // rich views plan): a named subject's allocate_investment frame projected to
 // investment_allocation and was served subject_investigation, so nothing keyed
-// on the family could fire. namedInvestmentGoalRow switches that case alone. The
-// class's other cases have no such observation: a trend frame, and an
-// organization frame, stay declined.
+// on the family could fire. namedInvestmentGoalRow switches that case alone. A
+// trend frame stays declined.
+//
+// CHAOS-12585 is the second: reach t9 on askdev-1 asked where the organization
+// invests, with the frame {allocate_investment} over organization_scope, and was
+// served discovered_cohort_ranking with no fact. RouteFrameFamily serves
+// investment_allocation for an allocation question over a scope anchor
+// (scopeAllocationFrame, the lead's ruling on CHAOS-4610). It reads the frame's
+// whole goal set, which the agreement does not carry, so it sits beside the
+// table and not in it.
 
 // FamilyRouteSource names which table produced the SERVED family.
 //
@@ -296,6 +303,35 @@ func namedInvestmentGoalRow(agreement FamilyAgreement) bool {
 	return agreement.Class == FamilyAgreementGoalRowUnreachable &&
 		agreement.ProjectedRow == FamilyProjectionRowInvestment &&
 		agreement.ProjectedTopology == SubjectExpressionNamed
+}
+
+// scopeAllocationFrame reports an allocation question over a scope anchor: the
+// frame's goal set is exactly {allocate_investment}, and its subject is the
+// organization. The anchor's own investment fact answers it, so the family is
+// investment_allocation (the lead's ruling on CHAOS-4610). A second goal keeps
+// the precedence table, because the question then asks more than where effort
+// went.
+func scopeAllocationFrame(frame *QuestionFrame) bool {
+	if frame == nil || len(frame.Goals) != 1 || frame.Goals[0] != GoalAllocateInvestment {
+		return false
+	}
+	return frame.SubjectExpression.Kind == SubjectExpressionOrganizationScope
+}
+
+// RouteFrameFamily is the route the interpreter applies: RouteQuestionFamily,
+// and then the scope-anchor allocation route. The organization frame projects to
+// investment_allocation (row 5 of the projection), so the served family is the
+// projection's, and Switched is still measured against the precedence family.
+func RouteFrameFamily(agreement FamilyAgreement, frame *QuestionFrame) FamilyRouteDecision {
+	decision := RouteQuestionFamily(agreement)
+	if !scopeAllocationFrame(frame) {
+		return decision
+	}
+	decision.Family = QuestionFamilyInvestmentAllocation
+	decision.Source = FamilyRouteProjected
+	decision.Disposition = FamilyRouteIntendedChange
+	decision.Switched = decision.Family != agreement.PrecedenceFamily
+	return decision
 }
 
 // RouteQuestionFamily decides which family is SERVED for one comparison.
