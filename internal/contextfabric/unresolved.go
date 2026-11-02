@@ -270,6 +270,15 @@ const (
 	// subject, or rephrase -- which is the one thing that was worth saying
 	// on the turn this replaces.
 	noMatchLimitationOfferPoolEmptied = "Retrieval matched one or more subjects only by semantic similarity, which is not enough to identify a subject, so none could be offered and no canonical facts were read. Name the subject you mean, or rephrase the question so it names one."
+	// clarificationRequiredLimitationWithheldPool is the clarification prose for
+	// the same withheld pool when the turn still has another offer to redeem
+	// (CHAOS-12524). This arm used to borrow clarificationRequiredLimitationOne,
+	// which says that one subject matched and could be confirmed: false with no
+	// candidate on the turn, on rows with two handles, an observed-time axis, or
+	// an explicit handle the question does not name. Like its terminal sibling
+	// above it names no subject and no term, and it points at the offers the
+	// clarification exists for.
+	clarificationRequiredLimitationWithheldPool = "Retrieval matched one or more subjects only by semantic similarity, which is not enough to identify a subject, so no canonical facts were read until a subject is chosen from the offered options."
 	// noMatchLimitationOfferFloorEmptied marks the floor-emptied terminal in
 	// resolveTerminalStatus's own return; terminalResult replaces it with
 	// noMatchLimitationSubjectNotFound, which names the subject and the closest kinds.
@@ -1120,7 +1129,7 @@ func resolveTerminalStatus(request InvestigationRequest, resolution *SubjectReso
 		}
 		if strings.TrimSpace(resolution.ClarificationPrompt) != "" && !resolution.GraphNotProjected {
 			if request.Options.AllowClarification && otherOffersRedeemable {
-				return InvestigationClarificationRequired, clarificationRequiredLimitationOne
+				return InvestigationClarificationRequired, clarificationRequiredLimitationWithheldPool
 			}
 			return InvestigationNoMatch, noMatchLimitationOfferPoolEmptied
 		}

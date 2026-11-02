@@ -300,7 +300,8 @@ func RepairStoredClarification(result *InvestigationResult, state *PersistedSema
 	// sentence gains the basis sentence through the bounded appender.
 	replaced := false
 	for index, limitation := range result.Limitations {
-		if limitation == clarificationRequiredLimitationOne || limitation == clarificationRequiredLimitation {
+		if limitation == clarificationRequiredLimitationOne || limitation == clarificationRequiredLimitation ||
+			limitation == clarificationRequiredLimitationWithheldPool {
 			result.Limitations[index] = sentence
 			replaced = true
 		}
