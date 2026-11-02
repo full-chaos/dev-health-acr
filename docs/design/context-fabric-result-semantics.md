@@ -300,6 +300,7 @@ all show nothing and imply nothing. The raw field stays in the fold.
 | `summary_corrected:note` | A driver's `summary_corrected` is true | The service corrected the source state, so the summary may not reflect it. The summary itself is never edited |
 | `judgment_mismatch:note` | `cohort.judgment_mismatch` is true | The ranking does not support the judgment asked for |
 | `population:note` | `cohort.population` above 0 | The size of the list. "At least" when `population_lower_bound` is set, never an exact count from a lower bound |
+| `temporal:note` | `temporal` is set | The time a past answer speaks for, and when that is not the time asked. It says so when no source spoke, and never reads as complete when `coverage_complete` is false. A current answer has no `temporal`, so no line |
 
 A projection has no `limitations_displaced` field. Its `limitations_omitted` also
 counts what the projection cut, so `limitations_displaced:note` is dropped there:
@@ -384,14 +385,15 @@ bounds, less the synthesis input on a client turn. The shed is tiered, so the se
 document is the richest one within the bound:
 
 1. The full map.
-2. Only `answer_status:*`, `status_correction:note` and `judgment_mismatch:note`
-   (`status_only`).
+2. Only `answer_status:*`, `status_correction:note`, `judgment_mismatch:note` and
+   `temporal:note` (`status_only`).
 3. No map (`none`).
 4. No stamped source words.
 
 The status words go last because they say the most for the fewest bytes.
-`judgment_mismatch:note` stays with them because nothing else says it: with no word,
-a ranking reads as if it supports the judgment asked for. With no map
+`judgment_mismatch:note` and `temporal:note` stay with them because nothing else says
+them: with no word, a ranking reads as if it supports the judgment asked for, and a
+past answer reads as a current one. With no map
 a partial answer reads a neutral pill and loses its note, so the pill says less than
 the limitation below it. The input document stands if nothing fits, and the door
 refuses or projects it as before. A document over the caller's bound goes to the
