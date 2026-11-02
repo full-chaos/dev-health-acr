@@ -587,7 +587,8 @@
         "enabled": { "type": "boolean" },
         "exchangeURL": { "type": "string" },
         "allowPlainHTTP": { "type": "boolean" },
-        "issuer": { "type": "string" }
+        "issuer": { "type": "string" },
+        "projectionURL": { "type": "string" }
       }
     },
     "workloadTokenExchange": {

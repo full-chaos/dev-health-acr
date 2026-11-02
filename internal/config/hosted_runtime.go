@@ -311,6 +311,7 @@ func (c Config) SafeAttributes() []any {
 		"oauth_client_metadata_documents", c.OAuthClientMetadataDocuments,
 		"mcp_hop_required", c.MCPHop.Required,
 		"auth_workload_client_configured", c.AuthWorkload.Enabled(),
+		"auth_projection_configured", c.AuthProjection.Enabled(),
 	}
 }
 
