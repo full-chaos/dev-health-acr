@@ -787,13 +787,6 @@ func (t SlogEngineTelemetry) RecordDualTableFacts(ctx context.Context, principal
 	t.logger.InfoContext(ctx, "context fabric dual table facts", args...)
 }
 
-// RecordDetailTablesAttached implements EngineTelemetry (CHAOS-12587).
-// Content-safe: an org id, two counts and declared field names.
-func (t SlogEngineTelemetry) RecordDetailTablesAttached(ctx context.Context, principal storage.Principal, event DetailTablesAttachedEvent) {
-	args := append([]any{"org_id", SanitizeLogAttr(principal.OrgID), "detail_table_claims", event.Claims, "detail_tables", SanitizeLogStrings(nonNilStrings(event.Tables)), "detail_tables_omitted", event.Omitted}, requestIDLogAttrs(ctx)...)
-	t.logger.InfoContext(ctx, "context fabric detail tables attached", args...)
-}
-
 // RecordModelRowsStripped implements EngineTelemetry (CHAOS-4355
 // follow-up). Content-safe: an org id and one closed, non-identifying
 // count -- never the stripped rows themselves.
