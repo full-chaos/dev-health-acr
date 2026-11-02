@@ -300,3 +300,43 @@ func TestLandscapeDeclaresTheDayFresh(t *testing.T) {
 	}
 	t.Fatal("the landscape capability declares no as_of_day field")
 }
+
+// A cut in the deprecated table is said on the fact, and it is no cut in an
+// answer, which never holds that table (CHAOS-12533).
+func TestACutInMapCoordinatesIsNoCutInTheRead(t *testing.T) {
+	t.Parallel()
+	teams := make([][]any, 0, 22)
+	coordinates := make([][]any, 0, 66)
+	for i := 0; i < 22; i++ {
+		team := fmt.Sprintf("team-%02d", i)
+		teams = append(teams, landscapeProjectRow("linear", "proj-1", team, 1, 10, 1, 5.0, 2))
+		for _, mapName := range []string{"churn_throughput", "cycle_throughput", "wip_throughput"} {
+			coordinates = append(coordinates, []any{"linear:proj-1", team, mapName, "2026-02-21", 1.5, 2.5})
+		}
+	}
+	client := &fakeClient{tables: []fakeTable{{match: "sumIf(il.one_churn", rows: teams}, {match: "avg(il.x_raw)", rows: coordinates}}}
+	provider := findProvider(t, devhealthfacts.NewProviders(client), contextfabric.FactLandscape)
+	result, err := provider.ReadFacts(context.Background(), storage.Principal{OrgID: "org-1"}, contextfabric.FactQuery{
+		Time: contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent},
+		Kind: contextfabric.FactLandscape, Subjects: []contextfabric.SubjectRef{projectSubject("linear", "proj-1")},
+	})
+	if err != nil {
+		t.Fatalf("ReadFacts() error = %v", err)
+	}
+	if len(result.Facts) != 1 {
+		t.Fatalf("facts = %#v, want 1", result.Facts)
+	}
+	fact := result.Facts[0]
+	if got := len(fact.Fields["map_coordinates"].Rows); got != 64 {
+		t.Fatalf("map_coordinates rows = %d, want capped to 64", got)
+	}
+	if got := fact.Fields["map_coordinates_omitted_count"].Integer; got == nil || *got != 2 {
+		t.Fatalf("map_coordinates_omitted_count = %#v, want 2: a direct reader must see the cut", got)
+	}
+	if len(fact.Fields["team_breakdown"].Rows) != 22 {
+		t.Fatalf("team_breakdown rows = %d, want 22", len(fact.Fields["team_breakdown"].Rows))
+	}
+	if result.OmittedCount != 0 || result.Truncated {
+		t.Fatalf("OmittedCount = %d, Truncated = %v: the table an answer shows lost nothing", result.OmittedCount, result.Truncated)
+	}
+}

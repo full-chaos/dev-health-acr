@@ -548,8 +548,9 @@ ORDER BY p.provider, p.id, il.team_id, il.map_name`)
 			fields["team_breakdown_omitted_count"] = contextfabric.IntegerFactValue(int64(omitted))
 		}
 		if coordinates := coordinatesByProject[projectKey]; len(coordinates) > 0 {
+			// A cut here is said on the fact. It stays out of the read's omitted
+			// count: this table reaches no answer, so a cut in it is no cut in one.
 			coordinates, coordinatesOmitted := capFactValueRows(coordinates)
-			totalOmitted += coordinatesOmitted
 			fields["map_coordinates"] = landscapeCoordinatesTable(coordinates, []string{"team_id", "map_name", "as_of_day"}, timeBound)
 			if coordinatesOmitted > 0 {
 				fields["map_coordinates_omitted_count"] = contextfabric.IntegerFactValue(int64(coordinatesOmitted))

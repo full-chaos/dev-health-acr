@@ -111,3 +111,37 @@ func TestADirectOnlyTableDoesNotBreakTheDualTableChoice(t *testing.T) {
 		t.Fatalf("field = %q, ambiguous = %v, ok = %v: want the area table beside the series", field, ambiguous, ok)
 	}
 }
+
+// The time-series path takes the same rule as the attached table.
+func TestADirectOnlySeriesStaysOutOfAClaim(t *testing.T) {
+	fact := directOnlyFact()
+	fact.Fields["series"] = TableFactValue(FactTable{
+		Shape: FactTableTimeSeries, Key: []string{"day"}, Measures: []string{"churn"}, DirectOnly: true,
+		Rows: []FactValueRow{directOnlyRow(map[string]FactValue{"day": StringFactValue("2026-11-02"), "churn": IntegerFactValue(3)})},
+	})
+	if rows, _ := canonicalTimeSeriesFieldRows(fact); rows != nil {
+		t.Fatalf("a direct-only series reached a claim: %+v", rows)
+	}
+	if table := canonicalTimeSeriesFieldTable(fact); table != nil {
+		t.Fatalf("a direct-only series was declared: %+v", table)
+	}
+}
+
+func TestADirectOnlyColumnLeavesASeriesToo(t *testing.T) {
+	fact := directOnlyFact()
+	fact.Fields["series"] = TableFactValue(FactTable{
+		Shape: FactTableTimeSeries, Key: []string{"day"}, Measures: []string{"churn", "wip"}, DirectOnlyColumns: []string{"wip"},
+		Rows: []FactValueRow{directOnlyRow(map[string]FactValue{"day": StringFactValue("2026-11-02"), "churn": IntegerFactValue(3), "wip": IntegerFactValue(0)})},
+	})
+	rows, _ := canonicalTimeSeriesFieldRows(fact)
+	if len(rows) != 1 {
+		t.Fatalf("rows = %d, want the series row", len(rows))
+	}
+	if _, shown := rows[0].Fields["wip"]; shown {
+		t.Fatalf("a direct-only column reached the series: %+v", rows[0].Fields)
+	}
+	table := canonicalTimeSeriesFieldTable(fact)
+	if slices.Contains(table.Measures, "wip") || !slices.Contains(table.Measures, "churn") {
+		t.Fatalf("measures = %v, want churn without wip", table.Measures)
+	}
+}
