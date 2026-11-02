@@ -690,6 +690,12 @@ type EngineTelemetry interface {
 	// vocabulary. Called once per call, from Investigate, after
 	// canonicalizeEvidenceWindow/composeEffectiveWindow both run.
 	RecordWindowCanonicalization(ctx context.Context, principal storage.Principal, outcome WindowCanonicalizationOutcome)
+	// RecordOperandReadKinds (CHAOS-12596) reports, for a turn whose derived
+	// rows hold at least one served operand read row (one side of an explicit
+	// comparison), how many such rows there were, how many distinct kinds
+	// they name as serving their sides, and how many of those the plan read
+	// only because of them. Plain counts, no kind names.
+	RecordOperandReadKinds(ctx context.Context, principal storage.Principal, operandRows, kindsNamed, kindsAdded int)
 	// RecordWindowCarry (CHAOS-4360) reports the outcome of ONE
 	// same-conversation window-carry attempt -- see WindowCarryOutcome's
 	// own doc comment for the closed vocabulary (chaos4360_carry.go).
@@ -2752,14 +2758,18 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 	} else {
 		derivedRequirements = deriveTurnRequirements(requirementFrame, e.requirements)
 	}
-	plan := PlanAnswer(PlanAnswerInput{
+	planInput := PlanAnswerInput{
 		Family:           familyOutcome,
 		Interpretation:   interpretation,
 		Budget:           e.effectiveResponseBudget(request),
 		MaxCohortMembers: request.Options.MaxCohortMembers,
 		WorkItemList:     workItemTuple,
 		Requirements:     derivedRequirements,
-	})
+	}
+	plan := PlanAnswer(planInput)
+	if operandRows := OperandReadRowCount(derivedRequirements); operandRows > 0 && e.telemetry != nil {
+		e.telemetry.RecordOperandReadKinds(ctx, principal, operandRows, len(OperandReadRowServingKinds(derivedRequirements)), len(planOperandReadKindsAdded(planInput)))
+	}
 	// The derived requirement rows belong to the PLAN VARIABLE, not to a copy
 	// of it.
 	//

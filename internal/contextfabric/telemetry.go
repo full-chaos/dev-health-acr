@@ -439,6 +439,14 @@ func (t SlogEngineTelemetry) RecordWindowCanonicalization(ctx context.Context, p
 	t.logger.InfoContext(ctx, "context fabric window canonicalization outcome", args...)
 }
 
+// RecordOperandReadKinds (CHAOS-12596) logs at Info: three plain counts.
+func (t SlogEngineTelemetry) RecordOperandReadKinds(ctx context.Context, principal storage.Principal, operandRows, kindsNamed, kindsAdded int) {
+	args := append([]any{
+		"org_id", SanitizeLogAttr(principal.OrgID), "operand_rows", operandRows, "kinds_named", kindsNamed, "kinds_added", kindsAdded,
+	}, requestIDLogAttrs(ctx)...)
+	t.logger.InfoContext(ctx, "context fabric plan operand reads", args...)
+}
+
 // RecordWindowCarry (CHAOS-4360) logs at Info: outcome/chain_depth are both
 // closed-vocabulary/plain-integer, content-safe by construction -- never a
 // question, subject label, or canonical id. hit vs. every miss reason is

@@ -2,6 +2,7 @@ package contextfabric
 
 import (
 	"context"
+	"slices"
 
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
@@ -359,7 +360,55 @@ func planFactKinds(definition QuestionFamilyDefinition, interpretation Interpret
 	for _, kind := range ComputedStepInputReads(requirements) {
 		appendKind(kind)
 	}
+	kinds, _ = appendOperandReadKinds(kinds, requirements)
 	return kinds
+}
+
+// appendOperandReadKinds is planFactKinds' fourth widening (CHAOS-12596):
+// every kind a served OPERAND read row names as serving its side, appended
+// last for the same first-kind-wins reason as the three above it, so a kind
+// the model, the family or a computed step already named keeps that entry.
+// It returns the kinds it actually added, which the operand-read telemetry
+// line counts.
+func appendOperandReadKinds(kinds []FactKind, requirements []DerivedRequirement) ([]FactKind, []FactKind) {
+	var added []FactKind
+	for _, kind := range OperandReadRowServingKinds(requirements) {
+		if slices.Contains(kinds, kind) {
+			continue
+		}
+		kinds = append(kinds, kind)
+		added = append(added, kind)
+	}
+	return kinds, added
+}
+
+// planOperandReadKindsAdded is the kinds the operand widening added to this
+// plan's FactKinds, recomputed from the same inputs PlanAnswer read so the
+// telemetry line cannot report a different decision than the plan holds.
+func planOperandReadKindsAdded(input PlanAnswerInput) []FactKind {
+	family := input.Family.Family
+	if !contractsv1.ValidContextFabricQuestionFamily(family) {
+		family = QuestionFamilyUnclassified
+	}
+	definition, found := LookupQuestionFamily(family)
+	if !found {
+		definition = QuestionFamilyDefinition{Family: family, Budget: PlanBudgetUnbounded}
+	}
+	withoutOperands := planFactKinds(definition, input.Interpretation, withoutOperandReadRows(input.Requirements))
+	_, added := appendOperandReadKinds(withoutOperands, input.Requirements)
+	return added
+}
+
+// withoutOperandReadRows is rows with every operand read row removed.
+func withoutOperandReadRows(rows []DerivedRequirement) []DerivedRequirement {
+	out := make([]DerivedRequirement, 0, len(rows))
+	for _, row := range rows {
+		if row.Kind == ObligationKindRead && row.Role == SubjectRoleOperand {
+			continue
+		}
+		out = append(out, row)
+	}
+	return out
 }
 
 // isCohortSubjectAxis reports whether this family answers about many

@@ -523,6 +523,7 @@ type recordingTelemetry struct {
 	windowBinderOutcomes           []WindowBindReason
 	windowBinderProposals          []WindowBindOutcome
 	windowGatedForConfirmation     []windowGatedRecord
+	operandReadKinds               [][3]int
 	windowCanonicalizationOutcomes []WindowCanonicalizationOutcome
 	// structureNeedsDisclosed/structureOfferCounts/structureReceipts
 	// (CHAOS-3900 P1.F) mirror the SAME list-not-count discipline.
@@ -799,6 +800,10 @@ func (r *recordingTelemetry) RecordWindowGatedForConfirmation(_ context.Context,
 
 func (r *recordingTelemetry) RecordWindowCanonicalization(_ context.Context, _ storage.Principal, outcome WindowCanonicalizationOutcome) {
 	r.windowCanonicalizationOutcomes = append(r.windowCanonicalizationOutcomes, outcome)
+}
+
+func (r *recordingTelemetry) RecordOperandReadKinds(_ context.Context, _ storage.Principal, operandRows, kindsNamed, kindsAdded int) {
+	r.operandReadKinds = append(r.operandReadKinds, [3]int{operandRows, kindsNamed, kindsAdded})
 }
 
 func (r *recordingTelemetry) RecordWindowCarry(_ context.Context, _ storage.Principal, outcome WindowCarryOutcome, chainDepth int, seedSource CarrySeedSource, viaStoredAncestry bool) {

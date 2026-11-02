@@ -588,6 +588,18 @@ current tip `f38bdd95` — **none of this is on `origin/main` yet.** Reading `or
 `ComputedStepInputReads` returns nothing. The decision itself (what gets planned, and why) is ruled;
 the mechanism and the measured result are this open change's own until it merges.
 
+**Fourth widening, operand read rows only (CHAOS-12596, 2026-11-02).** A served READ row also
+names the kinds that serve its cell, and before this nothing planned them: a two-repository
+comparison's `state/operand/repository` row named `[health identity metrics]` and the plan read
+`health` only, so the window-scoped pull request measures in `metrics` never reached the answer
+(`requirement_read_not_planned`). `planFactKinds` now appends `OperandReadRowServingKinds` last,
+first-kind-wins, for rows whose role is `operand` only. By the lead's ruling the all-read-rows
+union is NOT built: measured on the production capability list, it adds flow and landscape to every
+cohort plan and up to eleven kinds to a named-subject plan, so it waits for a bytes and budget
+measure per family (CHAOS-12602), and the cohort zero-growth pin stays true. The Info line
+`context fabric plan operand reads` counts the operand rows, the kinds they name and the kinds the
+plan read only because of them.
+
 **Two guards, and neither follows from the other.** The row must be SERVED — an unavailable cell
 runs nothing, so reading its declared inputs fetches facts for a computation that cannot happen —
 and the step must be SERVER-EXECUTED (`declared_only` is exactly the read nobody needs). Each guard

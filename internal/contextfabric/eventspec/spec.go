@@ -2103,6 +2103,24 @@ var WindowCanonicalizationOutcome = Event{
 	},
 }
 
+// PlanOperandReads is the Info line of what a comparison turn's operand read rows added to the plan (CHAOS-12596).
+var PlanOperandReads = Event{
+	ID:                       "contextfabric.plan_operand_reads",
+	Msg:                      "context fabric plan operand reads",
+	Level:                    LevelInfo,
+	Multiplicity:             MultiplicityZeroOrOnePerRequest,
+	RequiredOnlyConstruction: true,
+	Attribution:              []string{"request_id"},
+	BoundedAggregation:       "at most one line per investigation: recorded once, when the plan is built and the turn has an operand read row.",
+	Fields: []Field{
+		{Key: "org_id", Type: FieldString, Presence: PresenceRequired},
+		{Key: "operand_rows", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "kinds_named", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "kinds_added", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "request_id", Type: FieldString, Presence: PresenceConditional, Applicability: requestIDApplicability},
+	},
+}
+
 // WindowCarry is the Info line of one window carry attempt: the outcome, the depth of the chain, the seed it started from and whether stored ancestry supplied it.
 var WindowCarry = Event{
 	ID:                       "contextfabric.window_carry",
@@ -5800,6 +5818,7 @@ var All = []Event{
 	StatedWindowAxisDecision,
 	WindowGatedForConfirmation,
 	WindowCanonicalizationOutcome,
+	PlanOperandReads,
 	WindowCarry,
 	KindCarry,
 	ConfirmedNeedLedgerWindow,
