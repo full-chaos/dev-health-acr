@@ -182,10 +182,11 @@ func unresolvedNamedHandle(ctx context.Context, principal storage.Principal, req
 	// traced on evidence_census_commit. A handle the caller sent keeps the explicit
 	// rule's demotion below, as before this change. A committed subject of the
 	// handle's kind that is not the handle still goes: the question names another
-	// one, so it is not what the caller asked about (codex r2 on #1920). A kind with
-	// no graph extractor (a work item) cannot be told apart here, so it stays.
+	// one, so it is not what the caller asked about (codex r2 on #1920). Only a kind
+	// with a repository key can be told apart here (committedSubjectRepository); a
+	// work item cannot, so every committed work item stays (codex r3 on #1920).
 	if !census.complete && len(request.SubjectHandles) == 0 {
-		if _, extractable := handleGraphExtractors[handle.Kind]; extractable {
+		if anchored {
 			return dropOtherSubjectsOfKind(resolution, bases, digests, handle.Kind, handle.Value, contextfabric.SubjectRef{}), nil
 		}
 		return resolution, nil

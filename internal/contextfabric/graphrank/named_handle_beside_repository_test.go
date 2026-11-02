@@ -621,3 +621,20 @@ func TestAFailedCensusDropsACommittedSubjectThatIsNotTheHandle(t *testing.T) {
 		}
 	}
 }
+
+// A work item has no repository key, so a failed census cannot tell the named item
+// from another one: every committed work item stays, as today (codex r3 on #1920,
+// executed: the named item was dropped).
+func TestAFailedCensusKeepsCommittedWorkItems(t *testing.T) {
+	t.Parallel()
+	repository := contextfabric.SubjectRef{Kind: contextfabric.SubjectRepository, CanonicalID: "repository:r-1", Label: "acme/r-1"}
+	named := contextfabric.SubjectRef{Kind: contextfabric.SubjectWorkItem, CanonicalID: "work_item.v2:00000000-0000-0000-0000-000000000000:linear%3ACHAOS-71", Label: "CHAOS-71"}
+	other := contextfabric.SubjectRef{Kind: contextfabric.SubjectWorkItem, CanonicalID: "work_item.v2:00000000-0000-0000-0000-000000000000:linear%3ACHAOS-72", Label: "CHAOS-72"}
+	resolution := contextfabric.SubjectResolution{Committed: []contextfabric.SubjectRef{repository, named, other}}
+	handle := contractsv1.ContextFabricRequestedHandle{Kind: contextfabric.SubjectWorkItem, PatternID: "work_item_ticket_key", Value: "CHAOS-71"}
+	request := contextfabric.InvestigationRequest{Question: "What is the state of CHAOS-71 in acme/r-1?"}
+	got, _ := unresolvedNamedHandle(context.Background(), storage.Principal{OrgID: "org_1"}, request, ResolveDeps{}, resolution, contextfabric.CommitBasisSet{}, contextfabric.CommitDecisionDigestSet{}, handle, handleOwed, false, namedCensus{})
+	if ids := besideCommittedIDs(got); !slices.Equal(ids, []string{repository.CanonicalID, named.CanonicalID, other.CanonicalID}) {
+		t.Fatalf("committed %v, want every committed subject kept: a work item cannot be told apart here", ids)
+	}
+}
