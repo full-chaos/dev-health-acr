@@ -90,7 +90,8 @@ func TestVersionedModelContractsAreBoundToTheirContent(t *testing.T) {
 			// v31 -> v32: "system", "service" and "codebase" say repository.
 			// v32 -> v33: the commitment glossary line says the fact lists up to 25 dated issues.
 			// v34 -> v35: the frame, its subject_expression and the kind are required on the Anthropic wire; the prompt says every question carries them.
-			digest: "b060bd7f99bf434d240657755be415d76187d00caa7a4d25d053aaf0d402f574",
+			// v35 -> v36 (CHAOS-12595): the prompt says what each window_class means.
+			digest: "98fe108d1868cd0eb7b5d7e30b2a358a6673b21476f9ee6e4f9952eabe25d87f",
 		},
 		{
 			name:    "synthesis system prompt",

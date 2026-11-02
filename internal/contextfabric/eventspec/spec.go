@@ -2125,6 +2125,27 @@ var WindowCanonicalizationOutcome = Event{
 	},
 }
 
+// WindowClassification is the Info line of the window-class decision a current-axis turn with no request window draws its default from (CHAOS-12595).
+var WindowClassification = Event{
+	ID:                       "contextfabric.window_classification",
+	Msg:                      "context fabric window classification",
+	Level:                    LevelInfo,
+	Multiplicity:             MultiplicityZeroOrOnePerRequest,
+	RequiredOnlyConstruction: true,
+	Attribution:              []string{"request_id"},
+	BoundedAggregation:       "at most one line per investigation: recorded once, before the window gate.",
+	Fields: []Field{
+		{Key: "org_id", Type: FieldString, Presence: PresenceRequired},
+		{Key: "model_class", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: contextfabric.WindowClassLogVocabulary()},
+		{Key: "window_class", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: contextfabric.WindowClassLogVocabulary()},
+		{Key: "source", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: contextfabric.WindowClassSourceVocabulary()},
+		{Key: "confidence", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: contextfabric.WindowConfidenceLogVocabulary()},
+		{Key: "basis", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: contextfabric.WindowClassBasisVocabulary()},
+		{Key: "downgraded", Type: FieldBool, Presence: PresenceRequired},
+		{Key: "request_id", Type: FieldString, Presence: PresenceConditional, Applicability: requestIDApplicability},
+	},
+}
+
 // WindowCarry is the Info line of one window carry attempt: the outcome, the depth of the chain, the seed it started from and whether stored ancestry supplied it.
 var WindowCarry = Event{
 	ID:                       "contextfabric.window_carry",
@@ -5841,6 +5862,7 @@ var All = []Event{
 	StatedWindowAxisDecision,
 	WindowGatedForConfirmation,
 	WindowCanonicalizationOutcome,
+	WindowClassification,
 	WindowCarry,
 	KindCarry,
 	ConfirmedNeedLedgerWindow,

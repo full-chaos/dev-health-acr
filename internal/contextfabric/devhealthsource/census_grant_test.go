@@ -190,7 +190,7 @@ func TestACensusThatCannotApplyTheGrantReadsNothing(t *testing.T) {
 // A work item is in a repository only through a linked pull request. Its census
 // under a grant is the library's native-link arm over the handle's candidates:
 // never the project arm, never the item's own repository, for every provider.
-func TestAGrantedWorkItemCensusCarriesTheLinkArmOnEveryStatement(t *testing.T) {
+func TestAGrantedWorkItemCensusCarriesTheDirectAndLinkArmsOnEveryStatement(t *testing.T) {
 	t.Parallel()
 	for provider, key := range map[string]string{"linear": "CHAOS-11516", "jira": "CHAOS-204", "github": "CHAOS-77", "gitlab": "CHAOS-78"} {
 		for _, shape := range []struct {
@@ -219,10 +219,20 @@ func TestAGrantedWorkItemCensusCarriesTheLinkArmOnEveryStatement(t *testing.T) {
 					if !strings.Contains(arm, "HAVING min(toUInt8(") || !strings.Contains(arm, "wia_link_auth.wia_link_repositories") {
 						t.Fatalf("statement %d keeps no id by the link arm: %s", i, arm)
 					}
+					// authorized_repo_slugs in the HAVING is the item's own
+					// repository, the direct arm (CHAOS-12561).
+					if !strings.Contains(arm, "authorized_repo_slugs") {
+						t.Fatalf("statement %d keeps no id by the direct arm: %s", i, arm)
+					}
+					// The two arms are alternatives: an id passes by either one. The
+					// statement model reads which arms a HAVING names, not how they are
+					// joined, so the joint is pinned here; real ClickHouse reads it too.
+					if !strings.Contains(arm, ") OR ((NOT (") {
+						t.Fatalf("statement %d does not OR the direct arm with the link arm: %s", i, arm)
+					}
 					// wia_project_auth is the project arm; authorized_repo_all is the
-					// organization arm; authorized_repo_slugs in the HAVING is the
-					// item's own repository, the direct arm.
-					if strings.Contains(arm, "wia_project_auth.wia_project_repositories") || strings.Contains(arm, "authorized_repo_all") || strings.Contains(arm, "authorized_repo_slugs") {
+					// organization arm. Neither keeps an id.
+					if strings.Contains(arm, "wia_project_auth.wia_project_repositories") || strings.Contains(arm, "authorized_repo_all") {
 						t.Fatalf("statement %d keeps an id by another arm: %s", i, arm)
 					}
 					if !strings.Contains(statement, "wia_link.work_item_id IN (SELECT w.work_item_id FROM work_items AS w WHERE") {
