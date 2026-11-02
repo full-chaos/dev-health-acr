@@ -17,11 +17,13 @@ import (
 // Two hints stay. The subject this turn's redeemed candidate receipt picked is the
 // caller's own answer, whatever its kind; the engine records it on ctx after the
 // redemption, so a source string, which the wire carries, can never claim it. A hint
-// that anchors the handle the question names stays too, because it says where that
-// handle is (committedScopeAnchorShadowsHandle). Every other hint takes the rule.
+// that anchors the handle the question binds stays too, because it says where that
+// handle is (committedScopeAnchorShadowsHandle). bound is the turn's handles after
+// the work item key gate (bindQuestionHandles), so a key the caller does not hold
+// anchors nothing. Every other hint takes the rule.
 // The engine's own reuse and group rechecks resolve with no frame, which asks for
 // no kind.
-func withoutHintsOfAnotherKind(ctx context.Context, request contextfabric.InvestigationRequest, frame *contextfabric.QuestionFrame, confirmedKind *contextfabric.ConfirmedExpectedKind) (contextfabric.InvestigationRequest, []contextfabric.SubjectHint) {
+func withoutHintsOfAnotherKind(ctx context.Context, request contextfabric.InvestigationRequest, bound []BoundHandle, frame *contextfabric.QuestionFrame, confirmedKind *contextfabric.ConfirmedExpectedKind) (contextfabric.InvestigationRequest, []contextfabric.SubjectHint) {
 	asked := askedKinds(frame, confirmedKind)
 	if asked == nil {
 		return request, nil
@@ -30,7 +32,7 @@ func withoutHintsOfAnotherKind(ctx context.Context, request contextfabric.Invest
 	var dropped []contextfabric.SubjectHint
 	for _, hint := range request.RequestedScope.SubjectHints {
 		if hint.Kind == "" || asked[hint.Kind] || contextfabric.IsConfirmedCandidatePick(ctx, hint) ||
-			committedScopeAnchorShadowsHandle(request.Question, []contextfabric.SubjectRef{{Kind: hint.Kind}}, frame) {
+			committedScopeAnchorShadowsHandle(bound, []contextfabric.SubjectRef{{Kind: hint.Kind}}, frame) {
 			kept = append(kept, hint)
 			continue
 		}

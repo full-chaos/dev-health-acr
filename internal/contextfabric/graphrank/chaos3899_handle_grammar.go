@@ -2,6 +2,7 @@ package graphrank
 
 import (
 	"regexp"
+	"slices"
 	"strings"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
@@ -166,22 +167,21 @@ type handleGrammarEntry struct {
 //     already used, so it carries no new false-positive risk: "pull
 //     request" is not a substring any ordinary English sentence produces
 //     immediately followed by a bare number the way "PR" alone could.
-//   - work_item_ticket_key: "CHAOS-3896" -> work_item, Value is the WHOLE
-//     matched ticket key ("CHAOS-3896") -- pinned as the exact source-form
+//   - work_item_ticket_key: "OPS-3896" -> work_item, Value is the WHOLE
+//     matched ticket key ("OPS-3896") -- pinned as the exact source-form
 //     equivalent of embed_fields.go's ticketKeyAlias inversion; see
 //     devhealthsource's chaos3899_census_registry.go and its cross-test
-//     against ticketKeyAlias directly. CHAOS-4012 investigated widening
-//     this prefix past the literal "CHAOS-" (embed_fields.go's own
-//     ticketKeyAlias doc comment cites "jira:ABC-1" as an equally valid
-//     stored shape, and "the rule never assumes the prefix set") but
-//     DEFERRED it: a real org's own configured ticket-key prefix is
-//     org-specific data this static, compile-time registry has no way to
-//     read, and relaxing the prefix to a generic uppercase-letter class
-//     (e.g. "[A-Z]{2,10}-\d+") would match ordinary capitalized-hyphenated
-//     English no org ever intended as a ticket key (COVID-19, PG-13) --
-//     exactly the false-discriminator class the ci_run_id "running" fix
-//     below exists to prevent. Widening this entry needs org-scoped
-//     registry data, not a broader static regex; left as a follow-up.
+//     against ticketKeyAlias directly. Any upper-case prefix has the shape
+//     (CHAOS-12463), and the shape alone says nothing: COVID-19, UTF-8 and
+//     GPT-5 have it too. So this entry binds text and no more. A turn counts
+//     such a token as a handle only when the caller can read a work item of
+//     that prefix (bindQuestionHandles). Lower case stays unbound in free
+//     text, because a real prefix (API, WEB) would then bind prose (api-1).
+//   - work_item_repo_reference: "owner/repo#12", "group/project!7" -> work_item,
+//     Value is the whole reference. GitHub and GitLab store this form after the
+//     first colon of work_item_id, so a key of the form above can never reach
+//     them. A URL with a path and a fragment has the same shape, so a reference
+//     takes the same prefix read as a ticket key (bindQuestionHandles).
 //   - ci_run_id: "run 18234567", "CI run #18234567", "pipeline 18234567",
 //     "CI pipeline #18234567", "pipeline run 18234567" -> ci_pipeline_run,
 //     Value is the bound digits. The "pipeline"/"CI pipeline"/"pipeline
@@ -219,15 +219,23 @@ const workItemKeyNumber = `-\d+\b`
 // census decides whether such a key exists (CHAOS-7159).
 const workItemKeyPrefixShape = `[A-Za-z][A-Za-z0-9]{0,31}`
 
-var workItemKeyAnyPrefix = regexp.MustCompile(`\b` + workItemKeyPrefixShape + workItemKeyNumber)
+// workItemTicketKeyPrefix is a key's prefix in free text and in a stored value:
+// upper case, as the trackers write it.
+const workItemTicketKeyPrefix = `[A-Z][A-Z0-9]{0,31}`
+
+// workItemRepoReferenceShape is a GitHub or GitLab issue or merge request key:
+// a repository path of two or more parts, then # or ! and the number.
+const workItemRepoReferenceShape = `[A-Za-z0-9][A-Za-z0-9._-]*(?:/[A-Za-z0-9._-]+)+[#!]\d+\b`
+
+var workItemKeyAnyPrefix = regexp.MustCompile(`\b` + workItemKeyPrefixShape + workItemKeyNumber + `|\b` + workItemRepoReferenceShape)
 var workItemKeyExact = regexp.MustCompile(`^` + workItemKeyPrefixShape + workItemKeyNumber + `$`)
 
 // BindWorkItemKey binds text ONLY when the whole text is one shape-valid
 // work-item key of ANY prefix (the bound value is upper-cased) (CHAOS-7159). It serves find_subjects handle
 // mode alone: existence is left to the org's census over
-// work_items.work_item_id, so no per-org prefix list is kept. It is NOT part
-// of handleGrammarRegistry: free-text binding (BindHandles), structure offers
-// and redemption (ValidateHandleGrammar) keep the registered CHAOS grammar.
+// work_items.work_item_id, so no per-org prefix list is kept. It differs from the
+// registered entry in case alone: a caller who hands over one whole key means it,
+// so lower case binds here, and never in free text.
 func BindWorkItemKey(text string) (BoundHandle, bool) {
 	if !workItemKeyExact.MatchString(text) {
 		return BoundHandle{}, false
@@ -238,15 +246,29 @@ func BindWorkItemKey(text string) (BoundHandle, bool) {
 	return BoundHandle{Kind: contextfabric.SubjectWorkItem, Grammar: "work_item_key_any_prefix", Value: strings.ToUpper(text), SpanStart: 0, SpanEnd: len(text)}, true
 }
 
+// IsWorkItemTicketKey reports whether handle is a free-text ticket key shape.
+func IsWorkItemTicketKey(handle BoundHandle) bool { return handle.Grammar == workItemTicketKeyGrammar }
+
+// IsWorkItemRepoReference reports whether handle is a repository reference.
+func IsWorkItemRepoReference(handle BoundHandle) bool {
+	return handle.Grammar == workItemRepoReferenceGrammar
+}
+
 // HasWorkItemKeyToken reports whether text holds a key-shaped token of ANY
-// prefix, using the same boundaries as the registered work_item_ticket_key
-// pattern. It answers on SHAPE alone: whether the prefix is registered is
+// prefix, or a repository reference, using the same boundaries as the registered
+// work item patterns. It answers on SHAPE alone: whether the prefix is registered is
 // existence-derived and must not be observable to a restricted caller.
 func HasWorkItemKeyToken(text string) bool { return workItemKeyAnyPrefix.MatchString(text) }
 
+const (
+	workItemTicketKeyGrammar     = "work_item_ticket_key"
+	workItemRepoReferenceGrammar = "work_item_repo_reference"
+)
+
 var handleGrammarRegistry = []handleGrammarEntry{
 	{name: "pull_request_number", kind: contextfabric.SubjectPullRequest, pattern: regexp.MustCompile(`(?i)\b(?:PR|pull\s+request)\s*#?\s*(\d+)\b`), valueGroup: 1, valuePattern: regexp.MustCompile(`^\d+$`), sourceColumn: "git_pull_requests.number"},
-	{name: "work_item_ticket_key", kind: contextfabric.SubjectWorkItem, pattern: regexp.MustCompile(`\bCHAOS` + workItemKeyNumber), valueGroup: 0, valuePattern: regexp.MustCompile(`^CHAOS-\d+$`), sourceColumn: "work_items.work_item_id"},
+	{name: workItemTicketKeyGrammar, kind: contextfabric.SubjectWorkItem, pattern: regexp.MustCompile(`\b` + workItemTicketKeyPrefix + workItemKeyNumber), valueGroup: 0, valuePattern: regexp.MustCompile(`^` + workItemTicketKeyPrefix + workItemKeyNumber + `$`), sourceColumn: "work_items.work_item_id"},
+	{name: workItemRepoReferenceGrammar, kind: contextfabric.SubjectWorkItem, pattern: regexp.MustCompile(`\b` + workItemRepoReferenceShape), valueGroup: 0, valuePattern: regexp.MustCompile(`^` + workItemRepoReferenceShape + `$`), sourceColumn: "work_items.work_item_id"},
 	{name: "ci_run_id", kind: contractsv1.ContextFabricSubjectCIRun, pattern: regexp.MustCompile(`(?i)\b(?:CI\s+pipeline|CI\s+run|pipeline\s+run|pipeline|run)\b\s*#?\s*(\d{4,})\b`), valueGroup: 1, valuePattern: regexp.MustCompile(`^\d{4,}$`), sourceColumn: "ci_pipeline_runs.run_id"},
 }
 
@@ -292,28 +314,18 @@ func HandleSourceColumn(kind CensusKind, patternID string) (string, bool) {
 
 // BindHandles applies the closed handle grammar to question (verbatim
 // request.Question -- brief §1.2) and returns every bound handle, each
-// carrying its exact source span. Overlap between two DIFFERENT registry
-// patterns is not deduplicated (the registry's three patterns target
-// disjoint token shapes by construction: a PR-number match requires a "PR"
-// literal, a ticket key requires "CHAOS-", a run id requires "run" --
-// none can occur inside another), and a single pattern's own matches
+// carrying its exact source span. The registry's patterns target disjoint token
+// shapes (a PR-number match requires a "PR" literal with no hyphen, a run id
+// requires a keyword with no hyphen, so neither can occur inside a key), with one
+// exception: a repository reference can hold a key shape ("acme/OPS-2#7"), and a
+// key shape inside a reference is dropped so one token is one handle. A single
+// pattern's own matches
 // within one question are already necessarily non-overlapping (Go's
 // regexp.FindAllStringSubmatchIndex never returns overlapping matches for
 // one pattern).
 //
-// RESIDUAL (Slice A's minimal shadow-side interpretation, noted per the
-// brief's own "build the minimal shadow-side version and note it"
-// discipline): this function only ever reports handles the closed registry
-// recognizes; it does not attempt to detect a "handle-shaped but
-// unregistered" term (e.g. a "TICKET-123" shape that looks like it wants to
-// be a ticket key but isn't the CHAOS- prefix) and tag it
-// ReasonHandleGrammarUnbound. That distinction needs a second, broader
-// "looks like a handle" heuristic the brief does not pin a grammar for;
-// building one is reach, not required for this slice's shadow measurement,
-// and a broader heuristic risks false positives worse than simply reporting
-// "zero handles bound" (which already correctly refuses handle-based
-// decisive outcomes). ReasonHandleGrammarUnbound stays in the closed
-// vocabulary for future use.
+// This is text only. A turn reads bindQuestionHandles, which decides which key
+// shapes count; an unrecognized shape contributes nothing here.
 func BindHandles(question string) []BoundHandle {
 	var bound []BoundHandle
 	for _, entry := range handleGrammarRegistry {
@@ -333,7 +345,24 @@ func BindHandles(question string) []BoundHandle {
 			})
 		}
 	}
-	return bound
+	return withoutKeysInsideReferences(bound)
+}
+
+func withoutKeysInsideReferences(bound []BoundHandle) []BoundHandle {
+	var references []BoundHandle
+	for _, handle := range bound {
+		if handle.Grammar == workItemRepoReferenceGrammar {
+			references = append(references, handle)
+		}
+	}
+	if len(references) == 0 {
+		return bound
+	}
+	return slices.DeleteFunc(bound, func(handle BoundHandle) bool {
+		return handle.Grammar == workItemTicketKeyGrammar && slices.ContainsFunc(references, func(reference BoundHandle) bool {
+			return handle.SpanStart >= reference.SpanStart && handle.SpanEnd <= reference.SpanEnd
+		})
+	})
 }
 
 // IsMultiHandle reports whether bound names a multi-subject shape (brief
