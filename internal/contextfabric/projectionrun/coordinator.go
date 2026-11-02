@@ -2518,6 +2518,12 @@ func (c *Coordinator) runOrgLegacy(scope *orgScope, orgID string) {
 		c.recoverFromDivergence(scope, orgID)
 		return
 	}
+	// CHAOS-12630: a graph that reloaded an older copy of itself resumes from its
+	// own watermark, before any source reads from the checkpoint.
+	_ = scope.run(func(ctx context.Context) error {
+		c.realignToGraphWatermarks(ctx, orgID, c.checkpoints)
+		return nil
+	})
 
 	evaluated, stale, sourceFailed := false, false, false
 	pairBrokeAny := false
@@ -2627,6 +2633,11 @@ func (c *Coordinator) runOrgLifecycle(scope *orgScope, orgID string) {
 		c.recoverFromDivergenceLifecycle(scope, orgID)
 		return
 	}
+	// CHAOS-12630: as in the path without a lifecycle row, on the active epoch.
+	_ = scope.run(func(ctx context.Context) error {
+		c.realignToGraphWatermarks(ctx, orgID, checkpoints)
+		return nil
+	})
 
 	evaluated, stale, sourceFailed := false, false, false
 	pairBrokeAny := false
@@ -3245,6 +3256,53 @@ func (c *Coordinator) checkpointStoreDiverged(ctx context.Context, orgID string,
 		return true
 	}
 	return false
+}
+
+// realignToGraphWatermarks (CHAOS-12630) moves a source's checkpoint back to the
+// graph's own watermark when the two name different batches. The graph writes its
+// watermark node in the same batch apply as the batch's rows (falkorgraph
+// writeWatermark), so the node says what the graph holds. The checkpoint lives in
+// another store (Postgres) and is advanced after the apply. A graph that reloads an
+// older copy of itself (FalkorDB restarted from a snapshot older than its last
+// writes) keeps a watermark node, with the older batch's cursor, while the
+// checkpoint keeps the newer one. checkpointStoreDiverged sees only a missing
+// watermark, so before this the projector resumed from the checkpoint and the
+// batches the graph lost were never walked again: on askdev-1, every row of 33
+// hours of source stamps (CHAOS-12630).
+//
+// The cursor follows the graph; nothing else changes. Re-walking from the graph's
+// cursor is safe both ways: if the graph is behind, the lost batches are walked
+// again (every write is an idempotent merge); if the graph is ahead (its apply
+// landed and the checkpoint's advance did not), nothing it holds is skipped. The
+// source version stays the checkpoint's, so the version guard of the batch path
+// decides as before. A watermark that cannot be read, or that the graph never
+// wrote, decides nothing here: a missing one is checkpointStoreDiverged's case.
+func (c *Coordinator) realignToGraphWatermarks(ctx context.Context, orgID string, checkpoints contextfabric.ProjectionCheckpointStore) {
+	for _, source := range c.sourceNames {
+		checkpoint, err := checkpoints.LoadProjectionCheckpoint(ctx, orgID, source)
+		if err != nil || strings.TrimSpace(checkpoint.BackendWatermark) == "" {
+			continue
+		}
+		watermark, err := c.backend.ProjectionWatermark(ctx, orgID, source)
+		if err != nil || strings.TrimSpace(watermark.BackendWatermark) == "" || watermark.BackendWatermark == checkpoint.BackendWatermark {
+			continue
+		}
+		realigned := checkpoint
+		realigned.Cursor = watermark.Cursor
+		realigned.BackendWatermark = watermark.BackendWatermark
+		realigned.UpdatedAt = c.now().UTC()
+		fields := []any{
+			"org_id_hash", contextfabric.SanitizeLogAttr(orgIDHash(orgID)), "source", contextfabric.SanitizeLogAttr(source),
+			"checkpoint_backend_watermark", contextfabric.SanitizeLogAttr(checkpoint.BackendWatermark),
+			"graph_backend_watermark", contextfabric.SanitizeLogAttr(watermark.BackendWatermark),
+		}
+		if err := checkpoints.CompareAndSwapProjectionCheckpoint(ctx, checkpoint, realigned); err != nil {
+			c.logger.WarnContext(ctx, "context_fabric: the graph's watermark differs from its projection checkpoint, and the checkpoint could not be moved to it; the next tick tries again",
+				append(fields, "failure_class", contextfabric.SanitizeLogAttr(classifyOutcomeError(err)))...)
+			continue
+		}
+		c.logger.WarnContext(ctx, "context_fabric: the graph's watermark differs from its projection checkpoint; the projection resumes from the graph's own watermark", fields...)
+	}
 }
 
 // LivenessCheck is the CHAOS-3882 readiness-path leg of the same liveness

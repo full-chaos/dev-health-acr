@@ -91,6 +91,28 @@ NOTHING` for the first-ever checkpoint) — same shape as
 to `contextfabric.ErrProjectionConflict`, matching `ProjectionWorker`'s
 existing contract.
 
+**The checkpoint and the graph are two stores (CHAOS-3882, CHAOS-12630).** A
+batch apply writes the graph's own watermark node (`_AcrWatermark`: the batch's
+`cursor` and `backend_watermark`) with the batch's rows. The checkpoint is
+advanced in Postgres after the apply. So the watermark node says what the graph
+holds, and the checkpoint says what was applied. Each tick, before any source
+reads, the coordinator checks the two:
+
+- **A missing watermark** (the graph was lost or purged) while the checkpoint
+  names a batch is a divergence. The organization is rebuilt
+  (`checkpointStoreDiverged`, CHAOS-3882).
+- **A watermark that names another batch** than the checkpoint means the graph
+  reloaded an older copy of itself, or its apply landed and the checkpoint's
+  advance did not. The checkpoint's cursor and `backend_watermark` move to the
+  graph's (`realignToGraphWatermarks`, CHAOS-12630), and one WARN names the
+  move. The lost batches are walked again; every write is an idempotent merge.
+  A watermark that cannot be read, or names no batch, and a checkpoint that
+  names no batch, change nothing.
+
+FalkorDB that persists by RDB snapshots only reloads its last snapshot after a
+non-graceful restart. On askdev-1 that lost about 45 batches of a walk, while
+the checkpoint kept the later cursor, before this check existed.
+
 ## 3. Worker / binary shape
 
 New `cmd/acr-projector` binary (`serve`/`version`, same flag/signal/logging
