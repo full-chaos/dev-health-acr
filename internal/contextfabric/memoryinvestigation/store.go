@@ -289,6 +289,9 @@ type structureSupersessionClaim struct {
 }
 
 func structureSupersessionClaims(result contextfabric.InvestigationResult) []structureSupersessionClaim {
+	if !contextfabric.RedeemsStructureOffers(result) {
+		return nil
+	}
 	var claims []structureSupersessionClaim
 	for _, e := range result.ConfirmedStructure {
 		if e.Disposition != contractsv1.ContextFabricStructureDispositionApplied {
