@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"reflect"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -581,4 +582,40 @@ func completionForecastRow(teamID, workScopeID, computedAt string, values []uint
 		uint8(1), int64(14), uint8(1), int64(30), uint8(1), int64(40),
 		"2026-08-10", "2026-08-26", "2026-09-05", uint8(0), uint8(1),
 		uint64(len(values)), uint64(len(counts)), values, counts}
+}
+
+// TestEveryWorkloadTableIsDeclaredOnTheCapability (Codex #1940 r2): each
+// table a team workload fact emits, with the completion distribution switched
+// on, has its shape in the provider's declared Tables for teams, so the
+// capability does not under-report what the provider serves.
+func TestEveryWorkloadTableIsDeclaredOnTheCapability(t *testing.T) {
+	client := &fakeClient{tables: []fakeTable{
+		{match: workloadBaseQueryMatch, rows: [][]any{workloadRow("CHAOS", "scope-a")}},
+		{match: workloadDailySeriesMatch, rows: [][]any{workloadDailySeriesRow("CHAOS", "2026-07-26", 160, 12.2, 1.28), workloadDailySeriesRow("CHAOS", "2026-07-27", 161, 12.3, 1.29)}},
+		{match: completionForecastQueryMarker, rows: [][]any{completionForecastRow("CHAOS", "scope-a", "2026-07-27 04:00:00", []uint16{5, 12, 365}, []uint32{100, 9000, 900})}},
+	}}
+	provider := findProvider(t, devhealthfacts.NewProvidersWithOptions(client, devhealthfacts.ProviderOptions{CompletionDistributionEnabled: true}), contextfabric.FactWorkload)
+	result, err := provider.ReadFacts(context.Background(), storage.Principal{OrgID: "org-1"}, contextfabric.FactQuery{
+		Time: contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent},
+		Kind: contextfabric.FactWorkload, Subjects: []contextfabric.SubjectRef{teamSubject("CHAOS")},
+	})
+	if err != nil {
+		t.Fatalf("ReadFacts() error = %v", err)
+	}
+	declared := provider.Capability().Tables[contextfabric.SubjectTeam]
+	shapes := map[contextfabric.FactTableShape]bool{}
+	for _, fact := range result.Facts {
+		for name, value := range fact.Fields {
+			if value.Table == nil {
+				continue
+			}
+			shapes[value.Table.Shape] = true
+			if !slices.Contains(declared, value.Table.Shape) {
+				t.Errorf("field %s emits a %s table the team capability does not declare (%v)", name, value.Table.Shape, declared)
+			}
+		}
+	}
+	if !shapes[contextfabric.FactTableDistribution] || !shapes[contextfabric.FactTableTimeSeries] {
+		t.Fatalf("emitted table shapes = %v, want the distribution and the daily series", shapes)
+	}
 }

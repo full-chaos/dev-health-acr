@@ -3,6 +3,7 @@ package contextfabric
 import (
 	"strings"
 	"testing"
+	"time"
 
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 )
@@ -133,10 +134,18 @@ func claimedTableFact(claimID string, shape contractsv1.ContextFabricFactTableSh
 // attached whole, beside the fact's daily series; one past its own cap is not
 // attached at all.
 func TestAClaimCarriesAWholeDistribution(t *testing.T) {
-	daily := FactTable{Shape: FactTableTimeSeries, Key: []string{"day"}, Measures: []string{"backlog_size"}, Rows: []FactValueRow{
-		{Fields: map[string]FactValue{"day": StringFactValue("2026-11-01"), "backlog_size": IntegerFactValue(4)}},
-		{Fields: map[string]FactValue{"day": StringFactValue("2026-11-02"), "backlog_size": IntegerFactValue(5)}},
-	}}
+	// The daily series at its full 64 rows and four columns, as the provider
+	// serves it, so the claim's combined cell and byte bounds (which apply
+	// only when both tables are present, Codex #1940 r2) are exercised.
+	daily := FactTable{Shape: FactTableTimeSeries, Key: []string{"day"}, Measures: []string{"backlog_size", "throughput_mean", "throughput_stddev"}}
+	for day := 0; day < maxFactValueRows; day++ {
+		daily.Rows = append(daily.Rows, FactValueRow{Fields: map[string]FactValue{
+			"day":               StringFactValue(time.Date(2026, 8, 30, 0, 0, 0, 0, time.UTC).AddDate(0, 0, day).Format("2006-01-02")),
+			"backlog_size":      IntegerFactValue(int64(100 + day)),
+			"throughput_mean":   NumberFactValue(12.345678901234567),
+			"throughput_stddev": NumberFactValue(1.2345678901234567),
+		}})
+	}
 	fact := func(distribution FactTable) CanonicalFact {
 		return CanonicalFact{
 			Kind:    FactWorkload,
@@ -162,7 +171,7 @@ func TestAClaimCarriesAWholeDistribution(t *testing.T) {
 	if truncated || len(claims[0].Rows) != 359 || claims[0].Table == nil || claims[0].Table.Shape != contractsv1.ContextFabricFactTableShapeDistribution {
 		t.Fatalf("359-row distribution: rows = %d, table = %+v, truncated = %t; want it whole", len(claims[0].Rows), claims[0].Table, truncated)
 	}
-	if len(claims[0].TimeSeriesRows) != 2 || claims[0].TimeSeriesTable == nil {
+	if len(claims[0].TimeSeriesRows) != maxFactValueRows || claims[0].TimeSeriesTable == nil {
 		t.Fatalf("the daily series beside it: %d rows, table %+v", len(claims[0].TimeSeriesRows), claims[0].TimeSeriesTable)
 	}
 	if err := claims[0].Validate(); err != nil {

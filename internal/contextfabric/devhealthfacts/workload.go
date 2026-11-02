@@ -71,7 +71,9 @@ func (p *WorkloadProvider) Capability() contextfabric.FactCapability {
 	// CHAOS-4645, design doc §5.2: team and project also gain a
 	// time_series (daily_workload) alongside their existing scalars/breakdown.
 	capability.Tables = map[contextfabric.SubjectKind][]contextfabric.FactTableShape{
-		contextfabric.SubjectTeam:    {contextfabric.FactTableTimeSeries},
+		// CHAOS-12607: completion_distribution, emitted when the deployment
+		// switch is on (ProviderOptions.CompletionDistributionEnabled).
+		contextfabric.SubjectTeam:    {contextfabric.FactTableTimeSeries, contextfabric.FactTableDistribution},
 		contextfabric.SubjectProject: {contextfabric.FactTableBreakdown, contextfabric.FactTableTimeSeries},
 	}
 	capability.EstimatedItems = 12
