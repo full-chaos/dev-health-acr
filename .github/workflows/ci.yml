@@ -2159,6 +2159,53 @@ jobs:
       # pinned ops commit's files: a pin bump and a re-vendor are one change.
       - name: Verify the vendored lifecycle contract against the pinned ops contract
         run: scripts/ci/check-vendored-ops-contract.sh .ops-contract
+  # CHAOS-12607: the completion distribution's differential oracle. ACR's
+  # completionBins is a copy of ops' read-time binsToModel, so the two are
+  # compared by EXECUTING the ops function at the commit
+  # ci/forecast-oracle-ops.pin names, on edge, real and seeded cases, float
+  # bits included; the same run proves the comparison still finds a gate of
+  # planted horizon-rule defects. ACR_FORECAST_ORACLE_REQUIRED turns a missing
+  # checkout into a failure: elsewhere the test skips with its reason.
+  forecast-oracle:
+    needs:
+      - gomodcache
+      - plan
+    if: needs.plan.outputs.heavy == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        with: {persist-credentials: false}
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16
+        with:
+          go-version: '1.27.3'
+          cache: true
+      - uses: ./.github/actions/go-modcache
+        if: ${{ runner.environment == 'github-hosted' }}
+        with: {mode: restore}
+      - name: Read the ops commit the oracle runs against
+        id: oracle-pin
+        run: |
+          set -euo pipefail
+          pin="$(tr -d '[:space:]' < ci/forecast-oracle-ops.pin)"
+          # A pin that is not a full commit floats, which is what a pin
+          # exists to stop.
+          if ! printf '%s' "$pin" | grep -Eq '^[0-9a-f]{40}$'; then
+            printf '::error title=ci/forecast-oracle-ops.pin::must name a full 40-character lowercase commit SHA; it holds: %s\n' "$pin"
+            exit 1
+          fi
+          printf 'sha=%s\n' "$pin" >> "$GITHUB_OUTPUT"
+      # actions/checkout v7.0.0 -- public repo, no token needed.
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        with:
+          repository: full-chaos/dev-health-ops
+          ref: ${{ steps.oracle-pin.outputs.sha }}
+          path: .ops-forecast-oracle
+          persist-credentials: false
+      - name: Compare the completion distribution with ops binsToModel
+        env:
+          ACR_FORECAST_ORACLE_OPS_DIR: ${{ github.workspace }}/.ops-forecast-oracle
+          ACR_FORECAST_ORACLE_REQUIRED: "1"
+        run: go test -count=1 -v -run '^TestCompletionBinsOracleAgainstOps$' ./internal/contextfabric/devhealthfacts/
   container-contract-smoke:
     runs-on: ubuntu-24.04
     # See `unit`'s identical comment: mirror-preflight is now a v1.6 pair,
@@ -2500,6 +2547,7 @@ jobs:
       - race-contracts-v1
       - build
       - contracts
+      - forecast-oracle
       - container-contract-smoke
       - container-reproducible
       - container-oci-scan

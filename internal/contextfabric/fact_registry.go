@@ -1427,7 +1427,7 @@ func FactResultRejectionCauseVocabulary() []string {
 
 // FactTableShapeVocabulary is the closed set of declared table shapes.
 func FactTableShapeVocabulary() []string {
-	return []string{string(FactTableTimeSeries), string(FactTableBreakdown), string(FactTableRanking)}
+	return []string{string(FactTableTimeSeries), string(FactTableBreakdown), string(FactTableRanking), string(FactTableDistribution)}
 }
 
 // recordFactRead emits one decision-basis record per PLANNED capability

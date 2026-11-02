@@ -277,3 +277,141 @@ func assertTokenExchangeError(t *testing.T, response *httptest.ResponseRecorder,
 		t.Fatalf("error = %q, want %q", decoded.Error, wantCode)
 	}
 }
+
+type selectorRecordingExchanger struct {
+	err      error
+	called   bool
+	selector string
+	present  bool
+}
+
+func (f *selectorRecordingExchanger) Exchange(ctx context.Context, _ string, _ []string) (authverify.WorkloadTokenExchangeResult, error) {
+	f.called = true
+	f.selector, f.present = auth.WorkloadOrgSelectorFrom(ctx)
+	if f.err != nil {
+		return authverify.WorkloadTokenExchangeResult{}, f.err
+	}
+	return authverify.WorkloadTokenExchangeResult{AccessToken: "fcacr_x", ExpiresIn: 60}, nil
+}
+
+func selectorExchangeForm(resources ...string) url.Values {
+	form := url.Values{}
+	form.Set("grant_type", contractsv1.TokenExchangeGrantType)
+	form.Set("subject_token", "jwt")
+	form.Set("subject_token_type", contractsv1.TokenExchangeSubjectTokenTypeJWT)
+	for _, resource := range resources {
+		form.Add("resource", resource)
+	}
+	return form
+}
+
+func exchangeErrorCode(t *testing.T, response *httptest.ResponseRecorder) (int, contractsv1.OAuthTokenExchangeErrorCode) {
+	t.Helper()
+	var decoded contractsv1.OAuthTokenExchangeErrorResponse
+	if err := json.Unmarshal(response.Body.Bytes(), &decoded); err != nil {
+		t.Fatalf("body = %s: %v", response.Body.String(), err)
+	}
+	return response.Code, decoded.Error
+}
+
+func TestTokenExchange_resourceSelectorIsForwardedToTheResolverContext(t *testing.T) {
+	exchanger := &selectorRecordingExchanger{}
+	app := newTokenExchangeTestApp(t, exchanger)
+	response := httptest.NewRecorder()
+	app.Handler().ServeHTTP(response, tokenExchangeFormRequest(selectorExchangeForm("urn:acr:org:aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa")))
+	if response.Code != http.StatusOK || !exchanger.present || exchanger.selector != "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa" {
+		t.Fatalf("status = %d present = %v selector = %q body=%s", response.Code, exchanger.present, exchanger.selector, response.Body.String())
+	}
+}
+
+func TestTokenExchange_noResourceSetsNoSelector(t *testing.T) {
+	exchanger := &selectorRecordingExchanger{}
+	app := newTokenExchangeTestApp(t, exchanger)
+	response := httptest.NewRecorder()
+	app.Handler().ServeHTTP(response, tokenExchangeFormRequest(selectorExchangeForm()))
+	if response.Code != http.StatusOK || exchanger.present {
+		t.Fatalf("status = %d present = %v selector = %q", response.Code, exchanger.present, exchanger.selector)
+	}
+}
+
+func TestTokenExchange_malformedResourceSelectorIsInvalidRequest(t *testing.T) {
+	const uuid = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+	cases := map[string][]string{
+		"raw uuid":           {uuid},
+		"upper case uuid":    {"urn:acr:org:AAAAAAAA-AAAA-4AAA-8AAA-AAAAAAAAAAAA"},
+		"wrong prefix":       {"urn:acr:team:" + uuid},
+		"https uri":          {"https://acr.example.test/" + uuid},
+		"empty after prefix": {"urn:acr:org:"},
+		"not a uuid":         {"urn:acr:org:not-a-uuid"},
+		"two resources":      {"urn:acr:org:" + uuid, "urn:acr:org:bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"},
+		"blank resource":     {" "},
+	}
+	for name, resources := range cases {
+		exchanger := &selectorRecordingExchanger{}
+		app := newTokenExchangeTestApp(t, exchanger)
+		response := httptest.NewRecorder()
+		app.Handler().ServeHTTP(response, tokenExchangeFormRequest(selectorExchangeForm(resources...)))
+		status, code := exchangeErrorCode(t, response)
+		if status != http.StatusBadRequest || code != contractsv1.TokenExchangeErrorInvalidRequest || exchanger.called {
+			t.Fatalf("%s: status = %d code = %q exchange called = %v, want 400 invalid_request and no exchange", name, status, code, exchanger.called)
+		}
+	}
+}
+
+func TestTokenExchange_selectorErrorsMapToTheirOwnCodes(t *testing.T) {
+	cases := map[string]struct {
+		err  error
+		want contractsv1.OAuthTokenExchangeErrorCode
+	}{
+		"selector required": {auth.ErrWorkloadOrgSelectorRequired, contractsv1.TokenExchangeErrorInvalidRequest},
+		"org not bound":     {auth.ErrWorkloadOrgNotBound, contractsv1.TokenExchangeErrorInvalidTarget},
+		"binding not found": {authverify.ErrWorkloadBindingNotFound, contractsv1.TokenExchangeErrorInvalidGrant},
+	}
+	for name, tc := range cases {
+		app := newTokenExchangeTestApp(t, &selectorRecordingExchanger{err: tc.err})
+		response := httptest.NewRecorder()
+		app.Handler().ServeHTTP(response, tokenExchangeFormRequest(selectorExchangeForm()))
+		status, code := exchangeErrorCode(t, response)
+		if status != http.StatusBadRequest || code != tc.want {
+			t.Fatalf("%s: status = %d code = %q, want 400 %q", name, status, code, tc.want)
+		}
+	}
+}
+
+func rawExchangeFormRequest(body string) *http.Request {
+	request := httptest.NewRequest(http.MethodPost, "/api/v1/oauth/token", strings.NewReader(body))
+	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	return request
+}
+
+func TestTokenExchange_presentButEmptyResourceIsInvalidRequest(t *testing.T) {
+	base := "grant_type=" + url.QueryEscape(contractsv1.TokenExchangeGrantType) +
+		"&subject_token=jwt&subject_token_type=" + url.QueryEscape(contractsv1.TokenExchangeSubjectTokenTypeJWT)
+	for name, suffix := range map[string]string{
+		"empty value": "&resource=",
+		"bare key":    "&resource",
+		"empty first": "&resource=&resource=urn:acr:org:aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+		"empty last":  "&resource=urn:acr:org:aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa&resource=",
+	} {
+		exchanger := &selectorRecordingExchanger{}
+		app := newTokenExchangeTestApp(t, exchanger)
+		response := httptest.NewRecorder()
+		app.Handler().ServeHTTP(response, rawExchangeFormRequest(base+suffix))
+		status, code := exchangeErrorCode(t, response)
+		if status != http.StatusBadRequest || code != contractsv1.TokenExchangeErrorInvalidRequest || exchanger.called {
+			t.Fatalf("%s: status = %d code = %q exchange called = %v, want 400 invalid_request and no exchange (a present empty resource is a malformed selector, not an absent one)", name, status, code, exchanger.called)
+		}
+	}
+}
+
+func TestTokenExchange_repeatedResourceIsInvalidRequestEvenWhenIdentical(t *testing.T) {
+	const same = "urn:acr:org:aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+	exchanger := &selectorRecordingExchanger{}
+	app := newTokenExchangeTestApp(t, exchanger)
+	response := httptest.NewRecorder()
+	app.Handler().ServeHTTP(response, tokenExchangeFormRequest(selectorExchangeForm(same, same)))
+	status, code := exchangeErrorCode(t, response)
+	if status != http.StatusBadRequest || code != contractsv1.TokenExchangeErrorInvalidRequest || exchanger.called {
+		t.Fatalf("status = %d code = %q exchange called = %v, want 400 invalid_request and no exchange for a repeated resource", status, code, exchanger.called)
+	}
+}

@@ -883,6 +883,70 @@
       "description": "A claimed fact a retained driver cites, carried at value level so a consumer can show the canonical observation behind a judgment rather than only prose about it.",
       "type": "object",
       "additionalProperties": false,
+      "allOf": [
+        {
+          "description": "CHAOS-12607 row bound, default clause: rows of a table in no row bound class, and rows with no declaration, keep 64.",
+          "$comment": "row-bound-class: default",
+          "if": {
+            "not": {
+              "anyOf": [
+                {
+                  "properties": {
+                    "table": {
+                      "properties": {
+                        "shape": {
+                          "const": "distribution"
+                        }
+                      },
+                      "required": [
+                        "shape"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "table"
+                  ]
+                }
+              ]
+            }
+          },
+          "then": {
+            "properties": {
+              "rows": {
+                "maxItems": 64
+              }
+            }
+          }
+        },
+        {
+          "description": "CHAOS-12607 row bound, class distribution: a `distribution` table holds every distinct completion day to the 365-day horizon, whole.",
+          "$comment": "row-bound-class: distribution",
+          "if": {
+            "properties": {
+              "table": {
+                "properties": {
+                  "shape": {
+                    "const": "distribution"
+                  }
+                },
+                "required": [
+                  "shape"
+                ]
+              }
+            },
+            "required": [
+              "table"
+            ]
+          },
+          "then": {
+            "properties": {
+              "rows": {
+                "maxItems": 366
+              }
+            }
+          }
+        }
+      ],
       "properties": {
         "claim_id": {
           "type": "string",
@@ -935,7 +999,7 @@
         "rows": {
           "description": "CHAOS-4347, additive: a renderable table for a fact whose evidence is genuinely a set of rows (e.g. a project's per-team metrics rollup) rather than one scalar. Optional; a claim carries `field`/`value` as its primary scalar either way.",
           "type": "array",
-          "maxItems": 64,
+          "maxItems": 366,
           "items": {
             "$ref": "#/$defs/ProjectedFactRow"
           }
@@ -2724,12 +2788,13 @@
           "maxLength": 128
         },
         "shape": {
-          "description": "What the table IS. `time_series` is one entity indexed by an instant (exactly one key column, parsing as an instant on every row); `breakdown` is many entities with one observation each; `ranking` is many entities ordered by the measure `order_by` names.",
+          "description": "What the table IS. `time_series` is one entity indexed by an instant (exactly one key column, parsing as an instant on every row); `breakdown` is many entities with one observation each; `ranking` is many entities ordered by the measure `order_by` names. `distribution` (CHAOS-12607) is one entity's outcomes over an ordered numeric axis: exactly one integer key column, strictly ascending, never cut, up to 366 rows.",
           "type": "string",
           "enum": [
             "time_series",
             "breakdown",
-            "ranking"
+            "ranking",
+            "distribution"
           ]
         },
         "key": {
