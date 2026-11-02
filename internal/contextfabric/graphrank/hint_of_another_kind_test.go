@@ -247,6 +247,48 @@ func TestAnUnrelatedHintDoesNotHoldAComparison(t *testing.T) {
 	}
 }
 
+// An explicit set the comparison cut does not take falls through to the ordinary
+// resolver. It still asks for its own operands' kinds, so a hint of another kind
+// commits nothing there, in the decisive pass and in the offers-only pass.
+func TestAnOutOfCutComparisonKeepsItsOperandsKinds(t *testing.T) {
+	t.Parallel()
+	repository, organization := contractsv1.ContextFabricSubjectRepository, contractsv1.ContextFabricSubjectOrganization
+	operand := func(term string, kind *contextfabric.SubjectKind) contextfabric.SubjectOperand {
+		return contextfabric.SubjectOperand{Kind: contextfabric.SubjectOperandNamed, Named: &contextfabric.NamedSubjectExpression{Terms: []string{term}, ExpectedKind: kind}}
+	}
+	frame := func(kind *contextfabric.SubjectKind) *contextfabric.QuestionFrame {
+		derived := contextfabric.DeriveFrameObligations(contextfabric.QuestionFrame{
+			Goals: []contextfabric.InvestigationGoal{contextfabric.GoalCompare},
+			SubjectExpression: contextfabric.SubjectExpression{
+				Kind:     contextfabric.SubjectExpressionExplicitSet,
+				Explicit: &contextfabric.ExplicitSetExpression{Operands: []contextfabric.SubjectOperand{operand("alpha", kind), operand("beta", kind), operand("gamma", kind)}},
+			},
+			Temporal: contextfabric.TemporalIntentCurrent,
+			Version:  contextfabric.QuestionFrameVersion,
+		}, nil)
+		return &derived
+	}
+	if got := contextfabric.ClassifyComparisonOperands(frame(&repository)).Admission; got != contextfabric.ComparisonOutOfCutOperandCount {
+		t.Fatalf("fixture: admission %s, want out_of_cut_operand_count", got)
+	}
+	hint := askedKindPageHint(organization, hintCanonicalID(organization))
+	for name, ctx := range map[string]context.Context{"decisive": context.Background(), "offers only": contextfabric.WithOffersOnlyResolution(context.Background())} {
+		resolution := resolveWithHintsIn(t, ctx, hintBackend(organization), "Compare alpha, beta and gamma", frame(&repository), nil, hint)
+		if len(resolution.Committed) != 0 {
+			t.Errorf("%s: committed %v, want nothing", name, resolution.Committed)
+		}
+		for _, candidate := range resolution.Candidates {
+			if candidate.Subject.Kind == organization {
+				t.Errorf("%s: the organization hint reached the pool: %v", name, resolution.Candidates)
+			}
+		}
+	}
+	// An operand with no stated kind leaves the set asking for no kind, as today.
+	if resolution := resolveWithHints(t, hintBackend(organization), "Compare alpha, beta and gamma", frame(nil), nil, hint); len(resolution.Committed) != 1 {
+		t.Fatalf("unstated kinds: committed %v, want today's behaviour", resolution.Committed)
+	}
+}
+
 // An inactive team hint answers for that team. On a comparison of other kinds it
 // must not answer in place of both sides; on a comparison of teams it still does.
 func TestAnInactiveTeamHintAnswersOnlyAComparisonOfTeams(t *testing.T) {

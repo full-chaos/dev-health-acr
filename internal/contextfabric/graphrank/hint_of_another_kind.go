@@ -22,14 +22,14 @@ import (
 // The engine's own reuse and group rechecks resolve with no frame, which asks for
 // no kind.
 func withoutHintsOfAnotherKind(ctx context.Context, request contextfabric.InvestigationRequest, frame *contextfabric.QuestionFrame, confirmedKind *contextfabric.ConfirmedExpectedKind) (contextfabric.InvestigationRequest, []contextfabric.SubjectHint) {
-	asked := contextfabric.AskedSubjectKind(frame, confirmedKind)
-	if asked == "" {
+	asked := askedKinds(frame, confirmedKind)
+	if asked == nil {
 		return request, nil
 	}
 	kept := make([]contextfabric.SubjectHint, 0, len(request.RequestedScope.SubjectHints))
 	var dropped []contextfabric.SubjectHint
 	for _, hint := range request.RequestedScope.SubjectHints {
-		if hint.Kind == "" || hint.Kind == asked || contextfabric.IsConfirmedCandidatePick(ctx, hint) ||
+		if hint.Kind == "" || asked[hint.Kind] || contextfabric.IsConfirmedCandidatePick(ctx, hint) ||
 			committedScopeAnchorShadowsHandle(request.Question, []contextfabric.SubjectRef{{Kind: hint.Kind}}, frame) {
 			kept = append(kept, hint)
 			continue
@@ -40,6 +40,32 @@ func withoutHintsOfAnotherKind(ctx context.Context, request contextfabric.Invest
 		request.RequestedScope.SubjectHints = kept
 	}
 	return request, dropped
+}
+
+// askedKinds is the kinds a question asks for, or nil when it states none. A named
+// subject asks for its one kind (contextfabric.AskedSubjectKind). An explicit set
+// asks for its own operands' kinds, and it reaches this path when the comparison
+// cut does not take it; one operand with no stated kind leaves the set asking for
+// none, as before.
+func askedKinds(frame *contextfabric.QuestionFrame, confirmedKind *contextfabric.ConfirmedExpectedKind) map[contextfabric.SubjectKind]bool {
+	if kind := contextfabric.AskedSubjectKind(frame, confirmedKind); kind != "" {
+		return map[contextfabric.SubjectKind]bool{kind: true}
+	}
+	if frame == nil || frame.SubjectExpression.Kind != contextfabric.SubjectExpressionExplicitSet {
+		return nil
+	}
+	slots := contextfabric.ClassifyComparisonOperands(frame).Slots
+	if len(slots) == 0 {
+		return nil
+	}
+	kinds := make(map[contextfabric.SubjectKind]bool, len(slots))
+	for _, slot := range slots {
+		if slot.Kind == "" {
+			return nil
+		}
+		kinds[slot.Kind] = true
+	}
+	return kinds
 }
 
 // boundedFrameTerms is the frame's own terms, cut to the bound a term list keeps.
