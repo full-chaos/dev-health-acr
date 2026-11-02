@@ -172,6 +172,10 @@ const (
 	// ContextFabricVocabularyMeasureUnit words the unit a claimed table states
 	// for a measure (CHAOS-11984), so a consumer draws ACR's word for it.
 	ContextFabricVocabularyMeasureUnit ContextFabricVocabulary = "measure_unit"
+	// ContextFabricVocabularySubcategory words a canonical investment
+	// subcategory (CHAOS-12554): the subcategory column of a claimed
+	// subcategory_breakdown table, and the outer ring of a sunburst.
+	ContextFabricVocabularySubcategory ContextFabricVocabulary = "subcategory"
 )
 
 var contextFabricVocabularyNames = [...]ContextFabricVocabulary{
@@ -195,6 +199,7 @@ var contextFabricVocabularyNames = [...]ContextFabricVocabulary{
 	ContextFabricVocabularyWindowRelativeID,
 	ContextFabricVocabularyWindowProvenance,
 	ContextFabricVocabularyMeasureUnit,
+	ContextFabricVocabularySubcategory,
 }
 
 // ContextFabricVocabularyNames returns the served vocabularies in published
@@ -386,6 +391,25 @@ var contextFabricVocabularyLabels = map[ContextFabricVocabulary]map[string]strin
 		string(ContextFabricMeasureUnitHours):  "hours",
 		string(ContextFabricMeasureUnitDays):   "days",
 		string(ContextFabricMeasureUnitPoints): "story points",
+	},
+	// The words the investment page has shown for these keys. Each is unique
+	// within its theme, which a sunburst ring needs.
+	ContextFabricVocabularySubcategory: {
+		"feature_delivery.customer":     "Customer",
+		"feature_delivery.enablement":   "Enablement",
+		"feature_delivery.roadmap":      "Roadmap",
+		"maintenance.debt":              "Debt",
+		"maintenance.refactor":          "Refactor",
+		"maintenance.upgrade":           "Upgrade",
+		"operational.incident_response": "Incident Response",
+		"operational.on_call":           "On Call",
+		"operational.support":           "Support",
+		"quality.bugfix":                "Bugfix",
+		"quality.reliability":           "Reliability",
+		"quality.testing":               "Testing",
+		"risk.compliance":               "Compliance",
+		"risk.security":                 "Security",
+		"risk.vulnerability":            "Vulnerability",
 	},
 }
 
