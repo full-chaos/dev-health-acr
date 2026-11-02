@@ -1374,10 +1374,14 @@ import (
 // its prefix (CHAOS-12463). An answer saved under v266 answered such a question by
 // search.
 //
-// v267 -> v268: an edge's fact and a stub node's label name a work item, project
+// v267 -> v268: a restricted caller's work item census admits a GitHub or GitLab
+// issue by its own repository (CHAOS-12561). An answer saved under v267 can say
+// such an issue is not in what the caller can read.
+//
+// v268 -> v269: an edge's fact and a stub node's label name a work item, project
 // or team in reader words, not by its raw source id (CHAOS-12619). An answer saved
-// under v267 can show a raw id in a path's why_relevant.
-const QueryVersion = "devhealthfacts.clickhouse.v268"
+// under v268 can show a raw id in a path's why_relevant.
+const QueryVersion = "devhealthfacts.clickhouse.v269"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each
