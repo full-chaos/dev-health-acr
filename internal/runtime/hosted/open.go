@@ -633,6 +633,9 @@ func buildContextFabricGraphReader(request buildRequest, postgres postgresCompon
 		// "arm A" baseline a clean, fully pre-CHAOS-3884/3896/3899 comparison,
 		// exactly as this function's own doc comment describes that arm.
 		graphConfig.CensusFunc = devhealthsource.NewCensusFunc(clickhouse.queryClient)
+		// CHAOS-12463: a ticket key binds only through this read, so it goes
+		// wherever the census goes.
+		graphConfig.WorkItemKeyPrefix = devhealthsource.NewWorkItemKeyPrefixFunc(clickhouse.queryClient)
 	}
 	// CHAOS-3778: vector retrieval is optional. An unconfigured embedder
 	// leaves the lexical retrieval path exactly as it was.

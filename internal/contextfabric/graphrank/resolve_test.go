@@ -154,6 +154,9 @@ func (f *fakeGraphBackend) deps() ResolveDeps {
 		}
 	}
 	deps := ResolveDeps{
+		// Every prefix is held, under any grant: these tests fix what a key does,
+		// not whether a caller holds one (work_item_key_gate_test.go does).
+		WorkItemKeyPrefix: everyKeyPrefixHeld,
 		ExactHint: func(ctx context.Context, subject contextfabric.SubjectRef) (CandidateNode, bool, error) {
 			node, ok := f.exactHints[SubjectKey(subject)]
 			return node, ok, nil
@@ -984,4 +987,15 @@ func TestResolveSubjects_TermPathStillExactMatchesLiteralEquality(t *testing.T) 
 	if len(resolution.Committed) != 1 || resolution.Committed[0] != subject {
 		t.Fatalf("resolution.Committed = %#v, want the term-path exact match auto-committed normally", resolution.Committed)
 	}
+}
+
+func everyKeyPrefixHeld(context.Context, string, string) (WorkItemKeyPrefixOutcome, error) {
+	return WorkItemKeyPrefixOutcome{Seen: true, GrantApplied: true}, nil
+}
+
+// turnDeps is deps as resolveSubjects hands them on: with the turn's handles bound,
+// for a test that calls a step of the turn directly.
+func turnDeps(deps ResolveDeps, request contextfabric.InvestigationRequest) ResolveDeps {
+	deps.questionHandles = BindHandles(request.Question)
+	return deps
 }
