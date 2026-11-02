@@ -79,8 +79,11 @@ flowchart TD
   WGATE -->|"regime A: inferred_default"| GATED["gatedOfferMaterial<br/>chaos4234_offers_only.go"]
   GATED --> OFFRES["graph.ResolveSubjects(WithOffersOnlyResolution)<br/>same pool mechanism as regime B,<br/>commit-bearing output DISCARDED"]
   OFFRES --> CLSGATE{"GateOffersByFamily<br/>family ApplicableAxes gate, CHAOS-4634<br/>(subsumes CHAOS-4579/4531)<br/>chaos4579_cohort_structure_gate.go"}
-  CLSGATE -->|"family=discovered_cohort_ranking:<br/>only window applicable -> drop kind/anchor/handle/candidate<br/>rows AND their options together"| WOFFER
-  CLSGATE -->|"family=subject_investigation / explicit_comparison / unclassified:<br/>no axis restricted -> pass through,<br/>standing zero-candidates ruling unchanged"| WOFFER
+  CLSGATE -->|"family=discovered_cohort_ranking:<br/>only window applicable -> drop kind/anchor/handle/candidate<br/>rows AND their options together"| WDEC
+  CLSGATE -->|"family=subject_investigation / explicit_comparison / unclassified:<br/>no axis restricted -> pass through,<br/>standing zero-candidates ruling unchanged"| WDEC
+  WDEC{"decideInferredWindowGate (window.go, CHAOS-4451)<br/>line contextfabric.inferred_window_gate"}
+  WDEC -->|"gated: offers_unavailable /<br/>period_shape / offers_beyond_window"| WOFFER
+  WDEC -->|"answered: window_only -- decisive path on the<br/>inferred window (provenance kept inferred_default),<br/>window offer + window-only structure_needs beside the answer"| RESOLVE
   WOFFER["windowConfirmationRequiredResult<br/>status=clarification_required, SubjectResolution EMPTY<br/>kind/handle/candidate offers minted BESIDE window offer"]
   WGATE -->|"regime B: explicit / confirmed window"| RESOLVE["graphrank.ResolveSubjects<br/>ResolveDeps: Search / SearchQuestion / SearchKind /<br/>AliasLookup + CHAOS-4038 coverage floor<br/>(see diagram 2)"]
   RESOLVE --> POOL["candidate pool split:<br/>pool (commit-eligible) vs offerOnlyPool (CHAOS-4271)<br/>-- see diagram 2 for why this matters"]
@@ -3446,7 +3449,7 @@ uses `ServeStoredWorkItemTuple`; `response_owner_middleware.go` encloses recover
 ```mermaid
 flowchart TD
   REUSE["Try reuse first"] -->|"miss: release discarded lease"| INTERPRET["Validate and interpret frame + TimeContext"]
-  INTERPRET --> POLICY["LookupQuestionFamily: private tuple policy<br/>true only for scoped_cohort_status; unknown denies<br/>question-family.v5 reuse/carry fence"]
+  INTERPRET --> POLICY["LookupQuestionFamily: private tuple policy<br/>true only for scoped_cohort_status; unknown denies<br/>question-family.v6 reuse/carry fence"]
   POLICY --> INITIAL{"Initial tuple admission:<br/>children_of_scope + work_item<br/>assess_state/count_or_aggregate only<br/>current intent AND current axis<br/>qualifier absent, or a status qualifier<br/>whose value is in the closed status set<br/>(assignee and unrecognized stay refused).<br/>A bounded_window frame is admitted only with a<br/>server-committed window and exactly one time<br/>field bound from the question verb"}
   INITIAL -->|"refused / invalid"| REFUSE["existing refusal; no ResolveSubjects or S1"]
   INITIAL -->|"prospective"| FINAL["Final family routing + accepted continuation + plan carry<br/>lookup final family policy; tighten gate using policy and effective time"]

@@ -153,9 +153,11 @@ func TestCHAOS6557_ExplicitPhraseCommits_ProdShape(t *testing.T) {
 	}
 }
 
-// The other direction: no supplied period, so the window IS inferred and the
-// confirmation turn (winr_ receipts) stays. An ambiguous phrase (two spans)
-// names no single window and stays inferred too.
+// The other direction: no supplied period, so the window IS inferred. An
+// ambiguous phrase (two spans) names no single window and stays inferred too.
+// CHAOS-4451 (moved): with the window as the only question, the turn answers
+// on the inferred window and keeps the winr_ offer beside the answer; it no
+// longer ends to ask first.
 func TestCHAOS6557_InferredWindowStillClarifies(t *testing.T) {
 	t.Parallel()
 	cases := map[string]string{
@@ -168,8 +170,8 @@ func TestCHAOS6557_InferredWindowStillClarifies(t *testing.T) {
 			t.Parallel()
 			run := runExplicitWindowCase(t, "mcp", question, nil)
 			result := run.result
-			if result.Status != InvestigationClarificationRequired {
-				t.Fatalf("Status = %q, want clarification_required for an inferred window", result.Status)
+			if result.Status == InvestigationClarificationRequired {
+				t.Fatalf("Status = %q, want an answer on the inferred window (the window is the only question)", result.Status)
 			}
 			if result.WindowClarification == nil || len(result.WindowClarification.Options) == 0 {
 				t.Fatal("WindowClarification is nil or empty, want winr_ receipt-bound options")
@@ -177,8 +179,8 @@ func TestCHAOS6557_InferredWindowStillClarifies(t *testing.T) {
 			if result.EffectiveEvidenceWindow == nil || result.EffectiveEvidenceWindow.Provenance != WindowInferredDefault {
 				t.Fatalf("EffectiveEvidenceWindow = %#v, want a disclosed inferred_default window", result.EffectiveEvidenceWindow)
 			}
-			if run.factRead {
-				t.Fatal("canonical fact read ran for an unconfirmed inferred window")
+			if !run.factRead {
+				t.Fatal("canonical fact read did not run, want the answer read on the inferred window")
 			}
 		})
 	}

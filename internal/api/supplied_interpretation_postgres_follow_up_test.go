@@ -128,7 +128,7 @@ func suppliedFollowUpLegs(t *testing.T, store func(t *testing.T) contextfabric.I
 			Runtime:  countingScriptedRuntime{scriptedInterpretRuntime: scriptedInterpretRuntime{interpreted: interpreted, receipt: modelReceipt}, interprets: &interprets},
 			Supplied: supplied,
 		}
-		send := func(engine *contextfabric.Engine, body contractsv1.ContextFabricInvestigationRequest, suppliedTurn bool) contractsv1.ContextFabricInvestigationResult {
+		send := func(engine *contextfabric.Engine, body contractsv1.ContextFabricInvestigationRequest, suppliedTurn, interpreted bool) contractsv1.ContextFabricInvestigationResult {
 			t.Helper()
 			app, token := newLiveContextFabricTestApp(t, engine)
 			if suppliedTurn {
@@ -158,17 +158,23 @@ func suppliedFollowUpLegs(t *testing.T, store func(t *testing.T) contextfabric.I
 			if suppliedTurn {
 				wantSource, wantIdentity = contractsv1.ContextFabricInterpretationSourceClient, clientIdentity
 			}
+			if !interpreted {
+				// A turn that ends before interpretation names no interpreter.
+				wantSource, wantIdentity = "", ""
+			}
 			if got := result.Versions; got.InterpretationSource != wantSource || got.InterpretationModelIdentity != wantIdentity {
-				t.Fatalf("interpretation_source = %q interpretation_model_identity = %q, want %q and %q", got.InterpretationSource, got.InterpretationModelIdentity, wantSource, wantIdentity)
+				t.Fatalf("interpretation_source = %q interpretation_model_identity = %q, want %q and %q (status %q, refusal %q, reused %v, shape %q, limitations %q)", got.InterpretationSource, got.InterpretationModelIdentity, wantSource, wantIdentity, result.Status, result.RefusalBasis, result.Reused, result.Interpretation.Shape, result.Limitations)
 			}
 			return result
 		}
 
 		firstReuse, secondReuse := reusing(shared), reusing(shared)
 		first := newFollowUpEngine(t, interpreter, contextfabric.StoredSubjectAdmitted, &synthesized, shared, firstReuse)
-		asked := send(first, investigationRequestBody(), firstSupplied)
-		if asked.Status != contractsv1.ContextFabricInvestigationClarificationRequired || asked.WindowClarification == nil || len(asked.WindowClarification.Options) == 0 || len(synthesized) != 0 {
-			t.Fatalf("first turn: status = %q syntheses = %d, want a window clarification with an option and no synthesis", asked.Status, len(synthesized))
+		asked := send(first, investigationRequestBody(), firstSupplied, true)
+		// CHAOS-4451: the window is the first turn's only question, so it
+		// answers on the inferred window with the offer beside it.
+		if asked.Status == contractsv1.ContextFabricInvestigationClarificationRequired || asked.WindowClarification == nil || len(asked.WindowClarification.Options) == 0 || len(synthesized) != 1 {
+			t.Fatalf("first turn: status = %q syntheses = %d, want an answer with the window offer beside it and one synthesis", asked.Status, len(synthesized))
 		}
 		interpretsAfterFirst := interprets
 
@@ -176,7 +182,12 @@ func suppliedFollowUpLegs(t *testing.T, store func(t *testing.T) contextfabric.I
 		followUp := investigationRequestBody()
 		followUp.ParentResultID = asked.ResultID
 		followUp.PriorWindowReceipts = []contractsv1.ContextFabricBoundSubjectReceipt{{ResultID: asked.ResultID, ReceiptID: asked.WindowClarification.Options[0].ReceiptID}}
-		served := send(second, followUp, secondSupplied)
+		// CHAOS-4451: the first turn answered on the project, so with the root
+		// no longer readable the parent is no longer readable either: its
+		// window receipt cannot be resolved, and the follow-up ends before
+		// interpretation (authorization is re-checked every turn).
+		secondInterpreted := secondOutcome == contextfabric.StoredSubjectAdmitted
+		served := send(second, followUp, secondSupplied, secondInterpreted)
 
 		for name, turn := range map[string]struct {
 			supplied bool
@@ -190,8 +201,8 @@ func suppliedFollowUpLegs(t *testing.T, store func(t *testing.T) contextfabric.I
 			}
 		}
 		wantInterprets := 0
-		for _, suppliedTurn := range []bool{firstSupplied, secondSupplied} {
-			if !suppliedTurn {
+		for _, turn := range []struct{ supplied, interpreted bool }{{firstSupplied, true}, {secondSupplied, secondInterpreted}} {
+			if !turn.supplied && turn.interpreted {
 				wantInterprets++
 			}
 		}

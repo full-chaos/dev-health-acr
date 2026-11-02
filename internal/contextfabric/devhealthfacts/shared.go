@@ -1377,7 +1377,12 @@ import (
 // v267 -> v268: a restricted caller's work item census admits a GitHub or GitLab
 // issue by its own repository (CHAOS-12561). An answer saved under v267 can say
 // such an issue is not in what the caller can read.
-const QueryVersion = "devhealthfacts.clickhouse.v268"
+//
+// v268 -> v269: an organization investment fact is served to every caller, a
+// repository-bound or project-only grant included, and an organization
+// allocation question is answered from it (CHAOS-12585). An answer saved under
+// v268 for such a caller says the fact was refused.
+const QueryVersion = "devhealthfacts.clickhouse.v269"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each

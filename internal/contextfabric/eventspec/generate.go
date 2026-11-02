@@ -444,6 +444,8 @@ func goVarName(e Event) string {
 		return "GraphCountCheckFinished"
 	case WindowClassification.ID:
 		return "WindowClassification"
+	case InferredWindowGate.ID:
+		return "InferredWindowGate"
 	case InterpretationTerms.ID:
 		return "InterpretationTerms"
 	default:

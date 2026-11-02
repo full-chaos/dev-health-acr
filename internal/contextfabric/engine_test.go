@@ -524,6 +524,7 @@ type recordingTelemetry struct {
 	windowBinderProposals          []WindowBindOutcome
 	windowGatedForConfirmation     []windowGatedRecord
 	windowClassifications          []recordedWindowClassification
+	inferredWindowGates            []recordedInferredWindowGate
 	interpretationTerms            []InterpretationTermsEvent
 	windowCanonicalizationOutcomes []WindowCanonicalizationOutcome
 	// structureNeedsDisclosed/structureOfferCounts/structureReceipts
@@ -807,6 +808,16 @@ func (r *recordingTelemetry) RecordWindowCanonicalization(_ context.Context, _ s
 
 func (r *recordingTelemetry) RecordWindowClassification(_ context.Context, _ storage.Principal, modelClass WindowClass, outcome WindowClassOutcome) {
 	r.windowClassifications = append(r.windowClassifications, recordedWindowClassification{ModelClass: modelClass, Outcome: outcome})
+}
+
+func (r *recordingTelemetry) RecordInferredWindowGate(_ context.Context, _ storage.Principal, decision InferredWindowGateDecision, basis InferredWindowGateBasis) {
+	r.inferredWindowGates = append(r.inferredWindowGates, recordedInferredWindowGate{Decision: decision, Basis: basis})
+}
+
+// recordedInferredWindowGate is one RecordInferredWindowGate call.
+type recordedInferredWindowGate struct {
+	Decision InferredWindowGateDecision
+	Basis    InferredWindowGateBasis
 }
 
 func (r *recordingTelemetry) RecordInterpretationTerms(_ context.Context, _ storage.Principal, event InterpretationTermsEvent) {
