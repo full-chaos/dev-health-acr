@@ -10,6 +10,9 @@ import (
 // resolved to its source and equals it exactly. What is left:
 //
 //   - the rule and the kind name each other;
+//   - the claim's subject is a team: the table splits that team's effort (codex
+//     r1 on #1939). Which question asks for it is the producer's rule
+//     (CHAOS-12582), not this check's;
 //   - the points are ALL the links of ONE claim's declared
 //     repository_theme_breakdown table that carry effort, each once: a link left
 //     out makes the chart a different claim, and a zero link draws nothing (it
@@ -40,6 +43,9 @@ func validateSankeyShape(shape ContextFabricRenderShape, sources renderShapeSour
 	claim := shape.Series[0].Points[0].Source.ClaimID
 	if _, declared := sources.repositoryFlowClaims[claim]; !declared {
 		return fmt.Errorf("render shape %q: a sankey plots a declared %q table", shape.ShapeID, ContextFabricRenderRepositoryFlowTableField)
+	}
+	if subject := sources.claimValues[claim].subject.Kind; subject != ContextFabricSubjectTeam {
+		return fmt.Errorf("render shape %q: a sankey plots one team's effort, and its claim's subject is a %q", shape.ShapeID, subject)
 	}
 	table := sources.factRows[claim]
 	flows, err := sankeyFlowsOf(shape.ShapeID, table)

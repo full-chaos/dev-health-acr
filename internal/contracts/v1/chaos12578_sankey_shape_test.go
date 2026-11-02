@@ -29,6 +29,8 @@ type sankeyFixture struct {
 	// reads; field defaults to the table's name.
 	field string
 	value ContextFabricScalarValue
+	// subjectKind is the claim's subject kind: a team, unless a case plants another.
+	subjectKind ContextFabricSubjectKind
 }
 
 func newSankeyFixture(links []sankeyLinkSpec) *sankeyFixture {
@@ -79,8 +81,15 @@ func newSankeyFixture(links []sankeyLinkSpec) *sankeyFixture {
 func (f *sankeyFixture) result() ContextFabricInvestigationResult {
 	return ContextFabricInvestigationResult{ClaimedFacts: []ContextFabricClaimedFact{{
 		ClaimID: repositoryFlowClaim, Kind: "investment", Field: f.claimField(), Value: f.value, Rows: f.rows, Table: f.table,
-		Subject: ContextFabricSubjectRef{Kind: ContextFabricSubjectTeam, CanonicalID: "team_platform", Label: "Platform"},
+		Subject: ContextFabricSubjectRef{Kind: f.claimSubjectKind(), CanonicalID: "team_platform", Label: "Platform"},
 	}}}
+}
+
+func (f *sankeyFixture) claimSubjectKind() ContextFabricSubjectKind {
+	if f.subjectKind == "" {
+		return ContextFabricSubjectTeam
+	}
+	return f.subjectKind
 }
 
 func (f *sankeyFixture) claimField() string {
@@ -150,9 +159,12 @@ func TestASankeyIsRefused(t *testing.T) {
 		"the rule on another kind": {func(f *sankeyFixture) {
 			f.shape.Kind, f.shape.Presentation = ContextFabricRenderKindSeries, ContextFabricRenderPresentationBars
 		}, "selected_by"},
-		"a time axis":              {func(f *sankeyFixture) { f.shape.AxisKind = ContextFabricRenderAxisTime }, "a sankey needs a category axis"},
-		"a ratio unit":             {func(f *sankeyFixture) { f.shape.ValueUnit = ContextFabricRenderValueUnitRatio }, "which has no value_unit"},
-		"an undeclared table":      {func(f *sankeyFixture) { f.table.Field = "theme_breakdown" }, "a sankey plots a declared"},
+		"a time axis":         {func(f *sankeyFixture) { f.shape.AxisKind = ContextFabricRenderAxisTime }, "a sankey needs a category axis"},
+		"a ratio unit":        {func(f *sankeyFixture) { f.shape.ValueUnit = ContextFabricRenderValueUnitRatio }, "which has no value_unit"},
+		"an undeclared table": {func(f *sankeyFixture) { f.table.Field = "theme_breakdown" }, "a sankey plots a declared"},
+		// codex r1 on #1939: the same table on a project's claim is not one team's effort.
+		"a project's claim":        {func(f *sankeyFixture) { f.subjectKind = ContextFabricSubjectProject }, "a sankey plots one team's effort"},
+		"a repository's claim":     {func(f *sankeyFixture) { f.subjectKind = ContextFabricSubjectRepository }, "a sankey plots one team's effort"},
 		"a row with no word":       {func(f *sankeyFixture) { delete(f.rows[0].Fields, "repository_label") }, "lacks a repository, its word"},
 		"a row with no repository": {func(f *sankeyFixture) { delete(f.rows[3].Fields, "repository") }, "lacks a repository, its word"},
 		"a point citing the claim's value, not a row": {func(f *sankeyFixture) {
@@ -288,7 +300,8 @@ func TestASankeyOverTwoClaimsIsRefused(t *testing.T) {
 func TestASankeyResolvesOnTheProjectionPath(t *testing.T) {
 	t.Parallel()
 	f := newSankeyFixture(sankeyLinks())
-	projection := ContextFabricAnswerProjection{KeyFacts: []ContextFabricProjectedFact{{ClaimID: repositoryFlowClaim, Rows: f.rows, Table: f.table}}}
+	team := ContextFabricSubjectRef{Kind: ContextFabricSubjectTeam, CanonicalID: "team_platform", Label: "Platform"}
+	projection := ContextFabricAnswerProjection{KeyFacts: []ContextFabricProjectedFact{{ClaimID: repositoryFlowClaim, Subject: team, Rows: f.rows, Table: f.table}}}
 	if err := validateRenderShapes([]ContextFabricRenderShape{f.shape}, renderShapeSourcesFromProjection(projection)); err != nil {
 		t.Fatalf("the projection carries the table, so the shape resolves: %v", err)
 	}
