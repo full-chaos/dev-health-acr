@@ -4107,7 +4107,7 @@ sequenceDiagram
     else grant ∩ live inventory is empty
       A-->>C: 409 no_repository (never an [] scope)
     else granted
-      A->>H: a "*" grant kept "*" (CHAOS-12592), any other grant narrowed to grant ∩ inventory; read kept for the request
+      A->>H: a star grant kept whole (CHAOS-12592), any other grant narrowed to grant ∩ inventory, read kept for the request
       opt POST investigations
         H->>H: budget left < 10 s? → 503 budget_exhausted (before admission)
       end
