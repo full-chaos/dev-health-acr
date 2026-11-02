@@ -104,6 +104,39 @@ func TestAnInvestmentAnswerGetsItsTreemap(t *testing.T) {
 	}
 }
 
+// CHAOS-12591: a model claims several fields of one investment fact, and each of
+// those claims carries that fact's one breakdown. They are one breakdown, so the
+// answer gets one treemap, of the first claim's rows.
+func TestSeveralClaimsOnOneFactDrawOneTreemap(t *testing.T) {
+	t.Parallel()
+	result := themeShareResultFor(contractsv1.ContextFabricSubjectRepository, 0.5, 0.25, 0.25)
+	first := result.ClaimedFacts[0].ClaimID
+	for index, field := range []string{"theme_feature_delivery", "theme_maintenance", "work_unit_count"} {
+		claim := themeShareResultFor(contractsv1.ContextFabricSubjectRepository, 0.5, 0.25, 0.25).ClaimedFacts[0]
+		claim.ClaimID = fmt.Sprintf("claim_theme_share_more_%d", index)
+		claim.Field = field
+		result.ClaimedFacts = append(result.ClaimedFacts, claim)
+	}
+	shapes, event := selectRenderShapes(result, themeShareFrame(), RenderShapeOptions{InvestmentThemeShare: true})
+	treemaps := treemapsOf(shapes)
+	if len(treemaps) != 1 {
+		t.Fatalf("shapes %+v, skip %q: want one treemap", shapes, skipOf(t, event))
+	}
+	points := treemaps[0].Series[0].Points
+	if len(points) != 5 || points[0].Value != 0.5 || points[1].Value != 0.25 {
+		t.Fatalf("points %+v", points)
+	}
+	for _, point := range points {
+		if point.Source.ClaimID != first {
+			t.Fatalf("point %+v cites %q, want the first claim %q", point, point.Source.ClaimID, first)
+		}
+	}
+	result.RenderShapes = shapes
+	if err := contractsv1.ValidateRenderShapesForResult(result); err != nil {
+		t.Fatalf("the contract refused the shape: %v", err)
+	}
+}
+
 func TestATeamGetsTheTreemapToo(t *testing.T) {
 	t.Parallel()
 	shapes, _ := selectRenderShapes(themeShareResultFor(contractsv1.ContextFabricSubjectTeam, 0.5, 0.5), themeShareFrame(), RenderShapeOptions{InvestmentThemeShare: true})
@@ -149,9 +182,28 @@ func TestNoTreemapWithoutTheRulesEvidence(t *testing.T) {
 		}, RenderShapeSkipNoThemeBreakdown},
 		"share unmeasured":  {func(r *InvestigationResult) { r.ClaimedFacts[0].Table.Measures = []string{"weighted_effort"} }, RenderShapeSkipNoThemeBreakdown},
 		"a series in front": {func(r *InvestigationResult) { r.ClaimedFacts[0].TimeSeriesRows = r.ClaimedFacts[0].Rows }, RenderShapeSkipNoThemeBreakdown},
+		// CHAOS-12591: a second breakdown is a second subject, or a second fact
+		// of one subject. A second claim on the same fact is neither.
 		"two subjects": {func(r *InvestigationResult) {
-			second := r.ClaimedFacts[0]
+			second := themeShareResultFor(contractsv1.ContextFabricSubjectRepository, 0.5, 0.5).ClaimedFacts[0]
 			second.ClaimID = "claim_theme_share_second"
+			second.Subject.CanonicalID = "subject:two"
+			r.ClaimedFacts = append(r.ClaimedFacts, second)
+		}, RenderShapeSkipSeveralThemeBreakdowns},
+		"a second kind under one id": {func(r *InvestigationResult) {
+			second := themeShareResultFor(contractsv1.ContextFabricSubjectTeam, 0.5, 0.5).ClaimedFacts[0]
+			second.ClaimID = "claim_theme_share_second"
+			r.ClaimedFacts = append(r.ClaimedFacts, second)
+		}, RenderShapeSkipSeveralThemeBreakdowns},
+		"two facts of one subject": {func(r *InvestigationResult) {
+			second := themeShareResultFor(contractsv1.ContextFabricSubjectRepository, 0.25, 0.75).ClaimedFacts[0]
+			second.ClaimID = "claim_theme_share_second"
+			r.ClaimedFacts = append(r.ClaimedFacts, second)
+		}, RenderShapeSkipSeveralThemeBreakdowns},
+		"two facts of one subject, two declarations": {func(r *InvestigationResult) {
+			second := themeShareResultFor(contractsv1.ContextFabricSubjectRepository, 0.5, 0.5).ClaimedFacts[0]
+			second.ClaimID = "claim_theme_share_second"
+			second.Table.Observations = []string{"source"}
 			r.ClaimedFacts = append(r.ClaimedFacts, second)
 		}, RenderShapeSkipSeveralThemeBreakdowns},
 		"a person": {func(r *InvestigationResult) {
