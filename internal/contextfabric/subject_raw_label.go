@@ -2,6 +2,7 @@ package contextfabric
 
 import (
 	"regexp"
+	"slices"
 	"strings"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/identity"
@@ -103,36 +104,63 @@ func SubjectReadableLabel(subject SubjectRef) string {
 
 // RepairRawEdgeFact gives a stored edge fact's raw ends their reader form. The
 // writer composes a fact as its From label, the relationship's words and its To
-// label (falkorgraph.relationshipFact), so an end is repaired only where that
-// composition stands: the endpoint's own raw id, read back from its canonical id,
-// next to the relationship's words. A custom fact, a title, or text that merely
-// looks like an id is never touched. relation is the relationship type the edge
-// carries. A work item end reads as its key; a project or a team end reads as the
-// endpoint's own label when the graph carries one, and else as ReadableSourceID.
+// label (falkorgraph.relationshipFact), so a fact is repaired only when it is that
+// whole composition: an end the writer can have used for each endpoint (its own
+// raw id, read back from its canonical id, that id's reader form, or its label),
+// the relationship's words between them, and nothing else. Only an end that is the
+// endpoint's raw id changes. A custom fact, even one that starts or ends like the
+// composition, a title, or text that merely looks like an id is never touched.
+// relation is the relationship type the edge carries. A work item end reads as its
+// key; a project or a team end reads as the endpoint's own label when the graph
+// carries one, and else as ReadableSourceID.
 func RepairRawEdgeFact(fact, relation string, from, to SubjectRef) string {
 	words := strings.ToLower(strings.ReplaceAll(strings.TrimSpace(relation), "_", " "))
 	if words == "" {
 		return fact
 	}
-	if raw, ok := RawSubjectLabel(from.Kind, from.CanonicalID); ok {
-		if rest, found := strings.CutPrefix(fact, raw+" "+words+" "); found {
-			fact = factEnd(from, raw) + " " + words + " " + rest
-		}
+	fromRaw, fromOK := RawSubjectLabel(from.Kind, from.CanonicalID)
+	toRaw, toOK := RawSubjectLabel(to.Kind, to.CanonicalID)
+	if !fromOK && !toOK {
+		return fact
 	}
-	if raw, ok := RawSubjectLabel(to.Kind, to.CanonicalID); ok {
-		if head, found := strings.CutSuffix(fact, " "+words+" "+raw); found {
-			rest := head + " " + words
-			// A To end with no reader name is the kind's word, and the
-			// relationship's words already end with it ("belongs to project"),
-			// so the end is left out rather than said twice.
-			if end := factEnd(to, raw); end != kindWord(to.Kind, "") {
-				fact = rest + " " + end
-			} else {
-				fact = rest
-			}
+	for _, head := range factEndForms(from, fromRaw, fromOK) {
+		tail, found := strings.CutPrefix(fact, head+" "+words+" ")
+		if !found || !slices.Contains(factEndForms(to, toRaw, toOK), tail) {
+			continue
 		}
+		fromRepair, toRepair := fromOK && head == fromRaw, toOK && tail == toRaw
+		if !fromRepair && !toRepair {
+			return fact
+		}
+		if fromRepair {
+			head = factEnd(from, fromRaw)
+		}
+		if !toRepair {
+			return head + " " + words + " " + tail
+		}
+		// A To end with no reader name is the kind's word, and the
+		// relationship's words already end with it ("belongs to project"), so
+		// the end is left out rather than said twice.
+		if end := factEnd(to, toRaw); end != kindWord(to.Kind, "") {
+			return head + " " + words + " " + end
+		}
+		return head + " " + words
 	}
 	return fact
+}
+
+// factEndForms are the texts a writer can have named an endpoint by in a fact:
+// its raw id, that id's reader form (the writer after CHAOS-12619), and its label.
+// The raw id comes first, so a fact whose end is the raw id is read as such.
+func factEndForms(end SubjectRef, raw string, ok bool) []string {
+	forms := make([]string, 0, 3)
+	if ok {
+		forms = append(forms, raw, ReadableSourceID(end.Kind, raw))
+	}
+	if end.Label != "" {
+		forms = append(forms, end.Label)
+	}
+	return forms
 }
 
 func factEnd(end SubjectRef, raw string) string {
