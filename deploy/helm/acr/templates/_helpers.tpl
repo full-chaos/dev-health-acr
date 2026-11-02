@@ -562,7 +562,7 @@ consent page /authorize sends the browser to.
 {{- fail "oauth: config.oauth.resources must list at least one hosted MCP URL" -}}
 {{- end -}}
 {{- range $o.resources -}}
-{{- if not (regexMatch (printf "^(https://%s+|%s(/%s*)?)$" $pathChar $loopback $pathChar) .) -}}
+{{- if not (regexMatch (printf "^(https://%s|%s)(/%s*)?$" $host $loopback $pathChar) .) -}}
 {{- fail (printf "oauth: config.oauth.resources entry %q must be an https URL without query or fragment, or http on a loopback host" .) -}}
 {{- end -}}
 {{- end -}}

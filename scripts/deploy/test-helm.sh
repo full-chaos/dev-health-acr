@@ -1483,7 +1483,7 @@ done
 
 # CHAOS-12527: a malformed percent escape renders here and stops the workload there,
 # so the chart refuses what url.Parse refuses, on https and on a loopback host.
-for bad_escape in 'http://localhost:8089/m%cp' 'https://acr.example.test/m%cp' 'https://acr.example.test/mcp%' 'https://acr.example.test/mcp%2' 'https://acr.example.test/m cp'; do
+for bad_escape in 'http://localhost:8089/m%cp' 'https://acr.example.test/m%cp' 'https://acr.example.test/mcp%' 'https://acr.example.test/mcp%2' 'https://acr.example.test/m cp' 'https://acr%2Eexample.test/mcp'; do
   oauth_must_fail "resource '${bad_escape}'" "config.oauth.resources" "${oauth_args[@]}" --set-string "config.oauth.resources[0]=${bad_escape}"
 done
 for bad_escape in 'http://localhost:3000/acr%authorize' 'https://www.example.test/acr%authorize' 'https://www.example.test/acr/authorize%'; do
