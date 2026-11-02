@@ -115,7 +115,12 @@ func TestAnEvidenceLabelTakesTheNameTheAnswerHolds(t *testing.T) {
 		"acr:v1:organization:70d529e0-3c06-4597-8480-794fd02328b6":   "Organization: Full Chaos",
 		"acr:v1:repository:7b9583ee-4d24-2be7-4d09-34f815bebdd7":     "Repository",
 		"acr:v1:project:linear:aaaaaaaa-31db-4422-8dec-a4a02bbcc513": "Project",
-		"acr:v1:pull-request:" + displayRepoUUID + ":869":            "Pull request: #869",
+		// A number is scoped by its repository: with the repository's name in
+		// hand, the label names it, so two #869 in two repositories differ (codex r3).
+		"acr:v1:pull-request:" + displayRepoUUID + ":869":              "Pull request: full-chaos/dev-health-ops#869",
+		"acr:v1:pull-request:7b9583ee-4d24-2be7-4d09-34f815bebdd7:869": "Pull request: #869",
+		"acr:v1:pull-request:869":                                      "Pull request: #869",
+		"acr:v1:review.v2:" + displayRepoUUID + ":1042:approval-42":    "Review: full-chaos/dev-health-ops#1042",
 	} {
 		if got, known := ContextFabricEvidenceRefLabelNamed(ref, names); !known || got != want {
 			t.Errorf("%s: label = %q (known %v), want %q", ref, got, known, want)
