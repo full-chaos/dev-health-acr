@@ -89,7 +89,13 @@ func NewInstrumentedProviders(client contextpacket.ClickHouseQueryClient, instr 
 // NewInstrumentedProvidersWithOperations is NewInstrumentedProviders with the
 // operation holder of NewProvidersWithOperations.
 func NewInstrumentedProvidersWithOperations(client contextpacket.ClickHouseQueryClient, instr readers.Instrumentation, operations *OperationHolder) []contextfabric.FactProvider {
-	providers := NewProvidersWithOperations(client, operations)
+	return NewInstrumentedProvidersWithOptions(client, instr, ProviderOptions{Operations: operations})
+}
+
+// NewInstrumentedProvidersWithOptions is NewInstrumentedProviders with the
+// deployment switches of NewProvidersWithOptions.
+func NewInstrumentedProvidersWithOptions(client contextpacket.ClickHouseQueryClient, instr readers.Instrumentation, options ProviderOptions) []contextfabric.FactProvider {
+	providers := NewProvidersWithOptions(client, options)
 	if instr == nil {
 		return providers
 	}
