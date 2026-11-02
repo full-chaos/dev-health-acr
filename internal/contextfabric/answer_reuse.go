@@ -208,12 +208,12 @@ func TimeAxisKeyFor(timeContext TimeContext) string {
 
 // defaultReuseRecheckBudget is the time one recheck may spend on the graph, from
 // its first read to its return, across all its batches (CHAOS-12511). Measured
-// on the P1-5 live run, 54 to 60 subjects took 9.6 to 10.8 s, nearly all of it
-// DiscoverContext hop walks. The stack's largest stored answer names 78 subjects,
-// which is about 14 s by that ratio. 15 s covers both and leaves the fresh path
-// 99 of a 114 s request budget. Nothing depends on this number: reach it through
+// live, 54 to 60 subjects took 9.6 to 10.8 s on one run and 14 to over 15 s on the
+// next, on the same paths, nearly all of it DiscoverContext hop walks. 30 s is
+// twice that highest sample and leaves the fresh path 84 of a 114 s request
+// budget. Nothing depends on this number: reach it through
 // EngineOptions.ReuseRecheckBudget only.
-const defaultReuseRecheckBudget = 15 * time.Second
+const defaultReuseRecheckBudget = 30 * time.Second
 
 // AdmittedPathNodes is how many nodes a relationship path this engine writes
 // carries. graphrank.AdmitEdges is the one path builder and each path it mints
