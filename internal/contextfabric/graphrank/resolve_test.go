@@ -803,8 +803,10 @@ func TestResolveSubjects_SearchQuestionOversizedQuestionStaysContractValid(t *te
 			t.Fatalf("MatchedTerms entry %q is %d chars, want <= 512 (contractsv1's matchedTermLength bound)", term, len(term))
 		}
 	}
-	if !containsString(candidate.MatchedTerms, questionProvenanceMarker) {
-		t.Fatalf("MatchedTerms = %v, want the bounded provenance marker %q present", candidate.MatchedTerms, questionProvenanceMarker)
+	// The marker works inside the resolver and matched_terms is served, so it
+	// stays behind (CHAOS-12468), and the question-only candidate has no term.
+	if containsString(candidate.MatchedTerms, questionProvenanceMarker) {
+		t.Fatalf("MatchedTerms = %v, the internal marker %q left the resolver", candidate.MatchedTerms, questionProvenanceMarker)
 	}
 }
 

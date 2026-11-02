@@ -23,6 +23,9 @@ var rawPullRequestID = regexp.MustCompile(`\bpull_request:[^\s:]+:(\d+)\b`)
 // writers are fixed and changing the source version would stop projection for
 // a rebuild, so the graph keeps such nodes and the read gives them the label a
 // pull request has when no title is known.
+//
+// The next ClickHouseSourceVersion bump rebuilds every graph, and with it no
+// such node or fact is left: that bump deletes this file and its two callers.
 func nodeProperties(properties map[string]interface{}) map[string]interface{} {
 	out := normalizeProperties(properties)
 	label, _ := out[propLabel].(string)
