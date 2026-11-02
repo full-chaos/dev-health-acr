@@ -1,7 +1,9 @@
 package answerprojection
 
 import (
+	"fmt"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
@@ -91,5 +93,106 @@ func TestProjectionDropsAQuadrantWithItsLine(t *testing.T) {
 	}
 	if err := projection.Validate(); err != nil {
 		t.Fatalf("the projection must stay valid after the drop: %v", err)
+	}
+}
+
+// Codex r1 on #1963 (executed): the projection bounds limitations before it
+// knows which shapes it carries, and kept only the retrieval disclosure past a
+// cut, so a carried quadrant could lose its line at the count or byte cap. Both
+// required disclosures now survive either cap, and the line still goes when the
+// quadrant does.
+func TestTheQuadrantLineSurvivesTheLimitationCaps(t *testing.T) {
+	t.Parallel()
+	line := contractsv1.ContextFabricLandscapePositionLimitation
+	// count caveats of size bytes each, then both required lines last, where a
+	// prefix cut drops them first.
+	withCaveats := func(t *testing.T, count, size int) contractsv1.ContextFabricInvestigationResult {
+		result := canonicalWithQuadrant(t)
+		caveats := make([]string, 0, count+2)
+		for index := range count {
+			caveat := fmt.Sprintf("Model caveat %03d about this answer.", index)
+			for len(caveat) < size {
+				caveat += " More words of the same caveat."
+			}
+			caveats = append(caveats, caveat)
+		}
+		result.Limitations = append(caveats, contractsv1.ContextFabricRetrievalDegradedLimitation, line)
+		return result
+	}
+	for name, tc := range map[string]struct {
+		count, size int
+		budget      Budget
+	}{
+		// More entries than the projection holds.
+		"the count cap": {contractsv1.ContextFabricProjectedNarrativeMaxCount, 40, Budget{}},
+		// Fewer entries, more bytes than the limitations' share of the budget.
+		"the byte cap": {60, 400, Budget{MaxSerializedBytes: 64 * 1024}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			projection := Project(withCaveats(t, tc.count, tc.size), tc.budget)
+			if len(projection.RenderShapes) != 1 {
+				t.Fatalf("shapes = %d (omitted %d), want the quadrant carried", len(projection.RenderShapes), projection.ProjectionBudget.RenderShapesOmitted)
+			}
+			if !slices.Contains(projection.Limitations, line) || !slices.Contains(projection.Limitations, contractsv1.ContextFabricRetrievalDegradedLimitation) {
+				t.Fatalf("a carried quadrant lost a required line: %d limitations, quadrant line %v, retrieval line %v",
+					len(projection.Limitations), slices.Contains(projection.Limitations, line), slices.Contains(projection.Limitations, contractsv1.ContextFabricRetrievalDegradedLimitation))
+			}
+			if projection.ProjectionBudget.LimitationsOmitted == 0 {
+				t.Fatal("the cut dropped caveats and counted none")
+			}
+		})
+	}
+	// A quadrant the budget drops takes its line along, and the line takes no
+	// caveat's place.
+	projection := Project(withCaveats(t, contractsv1.ContextFabricProjectedNarrativeMaxCount, 40), Budget{MaxFacts: 2})
+	if len(projection.RenderShapes) != 0 || slices.Contains(projection.Limitations, line) {
+		t.Fatalf("dropped quadrant: shapes %d, line %v", len(projection.RenderShapes), slices.Contains(projection.Limitations, line))
+	}
+}
+
+// The byte fitter places every required entry before any other, so a second
+// required entry is not lost to the greedy fill.
+func TestTheByteFitKeepsEveryRequiredEntry(t *testing.T) {
+	t.Parallel()
+	entry := func(text string) clampedNarrative { return clampedNarrative{value: text} }
+	big, other := strings.Repeat("a", 97), strings.Repeat("b", 97)
+	first, second := strings.Repeat("r", 47), strings.Repeat("s", 47)
+	entries := []clampedNarrative{entry(big), entry(other), entry(first), entry(second)}
+	budget := 1 + encodedNarrativeCost(first) + encodedNarrativeCost(big) + encodedNarrativeCost(second) - 1
+	required := func(value string) bool { return value == first || value == second }
+	kept, _ := fitNarrativeBytes(entries, budget, required)
+	var values []string
+	for _, each := range kept {
+		values = append(values, each.value)
+	}
+	if !slices.Contains(values, first) || !slices.Contains(values, second) {
+		t.Fatalf("kept %d entries: first %v, second %v; want both required entries", len(values), slices.Contains(values, first), slices.Contains(values, second))
+	}
+}
+
+// Past the count cap, every required entry is rescued, each displacing the last
+// entry that is not required.
+func TestTheCountCutRescuesEveryRequiredEntry(t *testing.T) {
+	t.Parallel()
+	entry := func(text string) clampedNarrative { return clampedNarrative{value: text} }
+	// One backing array, as the caller cuts it: the rescue must not write into
+	// the dropped entries it is still reading.
+	all := []clampedNarrative{entry("a"), entry("first"), entry("b"), entry("c"), entry("d"), entry("second"), entry("third")}
+	kept, dropped := all[:4], all[4:]
+	required := func(value string) bool { return value == "first" || value == "second" || value == "third" }
+	var got []string
+	for _, each := range retainPastTheCut(kept, dropped, required) {
+		got = append(got, each.value)
+	}
+	if want := []string{"a", "first", "second", "third"}; !slices.Equal(got, want) {
+		t.Fatalf("kept %v, want %v", got, want)
+	}
+	var still []string
+	for _, each := range all {
+		still = append(still, each.value)
+	}
+	if want := []string{"a", "first", "b", "c", "d", "second", "third"}; !slices.Equal(still, want) {
+		t.Fatalf("the cut list was rewritten: %v", still)
 	}
 }
