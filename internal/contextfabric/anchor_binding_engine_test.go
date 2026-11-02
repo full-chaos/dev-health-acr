@@ -377,7 +377,7 @@ func TestShadowBindingNeverBindsAnAliasThatWinsOnAFollowUp(t *testing.T) {
 // confirmation turn binds it.
 func TestShadowBindingKeepsWindowGatedProofAsPending(t *testing.T) {
 	turns := runAnchorProbe(t, []anchorProbeStep{
-		{request: firstTurnRequest("request_probe_gate_one", false), windowed: true, response: identityProvenResponse(probeAlpha)},
+		{request: firstTurnRequest("request_probe_gate_one", false), windowed: true, response: gatedBeyondWindow(identityProvenResponse(probeAlpha))},
 		{request: followUp("request_probe_gate_two", "", func(r *InvestigationRequest) {
 			r.ExpectedKinds = []contractsv1.ContextFabricSubjectKind{contractsv1.ContextFabricSubjectTeam}
 		}), verified: true, response: emptyProbeResponse()},
@@ -667,7 +667,7 @@ func anchorSiteScenarios() []anchorSiteScenario {
 				}
 			}},
 		{name: "window_confirmation_required_class_default", site: BudgetAssertWindowConfirmationRequired, reach: AnchorBindingEvaluationWindowGated, zero: heldZero,
-			run: anchorProbeScenario(anchorProbeStep{request: firstTurnRequest("request_site_gate", false), windowed: true, response: identityProvenResponse(probeAlpha)})},
+			run: anchorProbeScenario(anchorProbeStep{request: firstTurnRequest("request_site_gate", false), windowed: true, response: gatedBeyondWindow(identityProvenResponse(probeAlpha))})},
 		{name: "interpreted_time_bound", site: BudgetAssertInterpretedTimeBound, reach: AnchorBindingEvaluationNotResolved, zero: unboundZero,
 			run: func(t *testing.T, sink EngineTelemetry, _ *recordingTelemetry, off bool) InvestigationResult {
 				ancient := time.Date(2026, 8, 21, 12, 0, 0, 0, time.UTC).Add(-3000 * 24 * time.Hour)

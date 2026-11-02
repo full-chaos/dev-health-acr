@@ -240,7 +240,9 @@ enforce.
 See also: [`context-fabric-regime-a-offers.md`](context-fabric-regime-a-offers.md)
 (CHAOS-4234) for what a turn-1 result carries when the class-default window
 gate fires -- kind/handle/candidate offers beside the window offer, with no
-committed material.
+committed material -- and (CHAOS-4451) when it does not: a turn whose window
+is its only question answers on the inferred window, which keeps provenance
+`inferred_default`, and carries the window offer beside the answer.
 
 ## 5. Served words: the vocabulary label map
 

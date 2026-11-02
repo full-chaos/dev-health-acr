@@ -682,7 +682,8 @@ func TestSubstitutionGuardIsNotEvaluatedOnATurnThatEndsFirst(t *testing.T) {
 	one := h.turn(needTurnRequest("request_5917_gated_one", true), substitutionResponse(substitutionRepoOne, "receipt_5917_gated_one"))
 	two := continuingNeedTurn(needTurnRequest("request_5917_gated_two", false), one.result.ResultID)
 	two.Question = "And how does the second one compare over the same period?"
-	outcome := h.turn(two, substitutionResponse(substitutionRepoTwo, "receipt_5917_gated_two"))
+	// CHAOS-4451: the gate ends the turn only on a question beyond the window.
+	outcome := h.turn(two, gatedBeyondWindow(substitutionResponse(substitutionRepoTwo, "receipt_5917_gated_two")))
 	assertGuard(t, lastSubstitution(t, outcome), SubjectSubstitutionNotEvaluated, SubjectSubstitutionOriginNotApplicable, SubjectRef{}, SubjectRef{})
 }
 
@@ -1350,11 +1351,11 @@ func RunSubjectSubstitutionRealProducerScenarioForTest(t *testing.T, scenario st
 	switch SubjectSubstitutionOutcome(scenario) {
 	case SubjectSubstitutionNotEvaluated:
 		// The class-default window gate ends the turn above the guard's own
-		// decision point.
+		// decision point (CHAOS-4451: on a question beyond the window).
 		h := newNeedTurnHarness(t, nil)
 		one := h.turn(needTurnRequest("request_5917_sc_gated_one", true), parent)
 		buf := swapToJSONLedgerTelemetry(h)
-		return substitutionJSONTurn(t, h, buf, substitutionFollowUp("request_5917_sc_gated_two", one.result.ResultID, false), child), orgID
+		return substitutionJSONTurn(t, h, buf, substitutionFollowUp("request_5917_sc_gated_two", one.result.ResultID, false), gatedBeyondWindow(child)), orgID
 
 	case SubjectSubstitutionNoParentReference:
 		h := newNeedTurnHarness(t, nil)
