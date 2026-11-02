@@ -377,3 +377,41 @@ func TestTokenExchange_selectorErrorsMapToTheirOwnCodes(t *testing.T) {
 		}
 	}
 }
+
+func rawExchangeFormRequest(body string) *http.Request {
+	request := httptest.NewRequest(http.MethodPost, "/api/v1/oauth/token", strings.NewReader(body))
+	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	return request
+}
+
+func TestTokenExchange_presentButEmptyResourceIsInvalidRequest(t *testing.T) {
+	base := "grant_type=" + url.QueryEscape(contractsv1.TokenExchangeGrantType) +
+		"&subject_token=jwt&subject_token_type=" + url.QueryEscape(contractsv1.TokenExchangeSubjectTokenTypeJWT)
+	for name, suffix := range map[string]string{
+		"empty value": "&resource=",
+		"bare key":    "&resource",
+		"empty first": "&resource=&resource=urn:acr:org:aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+		"empty last":  "&resource=urn:acr:org:aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa&resource=",
+	} {
+		exchanger := &selectorRecordingExchanger{}
+		app := newTokenExchangeTestApp(t, exchanger)
+		response := httptest.NewRecorder()
+		app.Handler().ServeHTTP(response, rawExchangeFormRequest(base+suffix))
+		status, code := exchangeErrorCode(t, response)
+		if status != http.StatusBadRequest || code != contractsv1.TokenExchangeErrorInvalidRequest || exchanger.called {
+			t.Fatalf("%s: status = %d code = %q exchange called = %v, want 400 invalid_request and no exchange (a present empty resource is a malformed selector, not an absent one)", name, status, code, exchanger.called)
+		}
+	}
+}
+
+func TestTokenExchange_repeatedResourceIsInvalidRequestEvenWhenIdentical(t *testing.T) {
+	const same = "urn:acr:org:aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+	exchanger := &selectorRecordingExchanger{}
+	app := newTokenExchangeTestApp(t, exchanger)
+	response := httptest.NewRecorder()
+	app.Handler().ServeHTTP(response, tokenExchangeFormRequest(selectorExchangeForm(same, same)))
+	status, code := exchangeErrorCode(t, response)
+	if status != http.StatusBadRequest || code != contractsv1.TokenExchangeErrorInvalidRequest || exchanger.called {
+		t.Fatalf("status = %d code = %q exchange called = %v, want 400 invalid_request and no exchange for a repeated resource", status, code, exchanger.called)
+	}
+}
