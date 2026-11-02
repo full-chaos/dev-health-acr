@@ -51,6 +51,11 @@ type DeviceAuthorizationLimiter interface {
 	// and browserAuthorizeClientLimit for the client, counted only when both
 	// allow it (CHAOS-12156).
 	AllowBrowserAuthorize(client, source string) DeviceAuthorizationLimitDecision
+	// AllowBrowserAuthorizeUser admits one first-party authorize of the
+	// browser client for user (CHAOS-12568): deviceCreationLimit per user and
+	// the same browserAuthorizeClientLimit ceiling for the client as
+	// AllowBrowserAuthorize, counted only when both allow it.
+	AllowBrowserAuthorizeUser(client, user string) DeviceAuthorizationLimitDecision
 }
 
 type DeviceAuthorizationLimiterOptions struct {
@@ -103,6 +108,13 @@ func (l *deviceAuthorizationLimiter) AllowOAuthConsentRequest(handle storage.OAu
 func (l *deviceAuthorizationLimiter) AllowBrowserAuthorize(client, source string) DeviceAuthorizationLimitDecision {
 	return l.allowAll(
 		keyLimit{key: "oauth:browser-authorize:source\x00" + client + "\x00" + source, limit: deviceCreationLimit},
+		keyLimit{key: "oauth:browser-authorize:client\x00" + client, limit: browserAuthorizeClientLimit},
+	)
+}
+
+func (l *deviceAuthorizationLimiter) AllowBrowserAuthorizeUser(client, user string) DeviceAuthorizationLimitDecision {
+	return l.allowAll(
+		keyLimit{key: "oauth:browser-authorize:user\x00" + client + "\x00" + user, limit: deviceCreationLimit},
 		keyLimit{key: "oauth:browser-authorize:client\x00" + client, limit: browserAuthorizeClientLimit},
 	)
 }

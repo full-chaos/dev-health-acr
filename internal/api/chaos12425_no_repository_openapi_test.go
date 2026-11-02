@@ -236,6 +236,7 @@ var outsideAccessCheck = map[string]string{
 	"GET /.well-known/oauth-authorization-server": "OAuth metadata, unauthenticated",
 	"GET /authorize":                              "OAuth authorize, code flow, no bearer",
 	"POST /authorize/consent":                     "OAuth consent, code flow, no bearer",
+	"POST /authorize/first-party":                 "first-party authorize, code flow, web assertion, no bearer (CHAOS-12568)",
 	"POST /device_authorization":                  "OAuth device authorization, unauthenticated",
 	"POST /register":                              "OAuth client registration, unauthenticated",
 	"POST /token":                                 "OAuth token, unauthenticated",
