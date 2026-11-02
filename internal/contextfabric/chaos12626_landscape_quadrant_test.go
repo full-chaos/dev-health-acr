@@ -1,6 +1,7 @@
 package contextfabric
 
 import (
+	"fmt"
 	"slices"
 	"strings"
 	"testing"
@@ -193,6 +194,13 @@ func TestTheQuadrantIsSkipped(t *testing.T) {
 		"two teams of one word": {func(r *InvestigationResult) {
 			*r = quadrantResult(teams()[0], quadrantTeamFixture{"gh:ops-team", "Chaos", "2026-11-02", 3, 900, 12})
 		}, RenderShapeSkipQuadrantUnprovable, 0},
+		"more teams than a series holds": {func(r *InvestigationResult) {
+			var many []quadrantTeamFixture
+			for index := range contractsv1.ContextFabricRenderPointsMaxCount + 1 {
+				many = append(many, quadrantTeamFixture{fmt.Sprintf("gh:team-%d", index), fmt.Sprintf("Team %d", index), "2026-11-02", 2, 10, 1})
+			}
+			*r = quadrantResult(many...)
+		}, RenderShapeSkipTooManySides, 0},
 		"a team label past the render bound": {func(r *InvestigationResult) {
 			long := strings.Repeat("x", contractsv1.ContextFabricRenderLabelMaxLength+1)
 			*r = quadrantResult(teams()[0], quadrantTeamFixture{"gh:ops-team", long, "2026-11-02", 3, 900, 12})
@@ -228,7 +236,15 @@ func TestASideWithNoPointIsLeftOut(t *testing.T) {
 			second.ClaimID += "_again"
 			r.ClaimedFacts = append(r.ClaimedFacts, second)
 		},
+		"two y claims": func(r *InvestigationResult) {
+			second := r.ClaimedFacts[5]
+			second.ClaimID += "_again"
+			r.ClaimedFacts = append(r.ClaimedFacts, second)
+		},
 		"x and y of two facts": func(r *InvestigationResult) { r.ClaimedFacts[5].FactID = "fact_landscape_other" },
+		"an x value that is not the row's": func(r *InvestigationResult) {
+			r.ClaimedFacts[4].Value = tableInteger(7)
+		},
 		"a value that is not the row's": func(r *InvestigationResult) {
 			r.ClaimedFacts[5].Value = tableInteger(5)
 		},
@@ -248,6 +264,31 @@ func TestASideWithNoPointIsLeftOut(t *testing.T) {
 				table.Field = "map_coordinates"
 				r.ClaimedFacts[index].Table = &table
 			}
+		},
+		"a table keyed otherwise": func(r *InvestigationResult) {
+			for _, index := range []int{4, 5} {
+				table := *r.ClaimedFacts[index].Table
+				table.Key = []string{"team_id"}
+				r.ClaimedFacts[index].Table = &table
+			}
+		},
+		"a table keyed by two columns": func(r *InvestigationResult) {
+			for _, index := range []int{4, 5} {
+				table := *r.ClaimedFacts[index].Table
+				table.Key = []string{"as_of_day", "team_id"}
+				r.ClaimedFacts[index].Table = &table
+			}
+		},
+		"two rows": func(r *InvestigationResult) {
+			rows := append(slices.Clone(r.ClaimedFacts[4].Rows), r.ClaimedFacts[4].Rows[0])
+			r.ClaimedFacts[4].Rows, r.ClaimedFacts[5].Rows = rows, rows
+		},
+		"a row with an empty day": func(r *InvestigationResult) {
+			empty := ""
+			r.ClaimedFacts[4].Rows[0].Fields["as_of_day"] = ScalarValue{String: &empty}
+		},
+		"a number cell in the row": func(r *InvestigationResult) {
+			r.ClaimedFacts[4].Rows[0].Fields["churn_loc_30d"] = tableNumber(0)
 		},
 		"a row with no identity count": func(r *InvestigationResult) {
 			fields := map[string]ScalarValue{}
@@ -285,6 +326,16 @@ func TestASideWithNoPointIsLeftOut(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// A day that is not a date is stated as stored.
+func TestTheQuadrantTitleStatesTheDay(t *testing.T) {
+	t.Parallel()
+	for day, want := range map[string]string{"2026-11-02": "Nov 2, 2026", "2026-07-12": "Jul 12, 2026", "not-a-date": "not-a-date"} {
+		if got := landscapeDayWords(day); got != want {
+			t.Errorf("landscapeDayWords(%q) = %q, want %q", day, got, want)
+		}
 	}
 }
 

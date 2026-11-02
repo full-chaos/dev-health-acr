@@ -81,10 +81,7 @@ func landscapePositionShape(result InvestigationResult) (*contractsv1.ContextFab
 			return nil, leftOut, RenderShapeSkipLandscapeDaysDiffer
 		}
 	}
-	shape, worded := landscapeShape(placed)
-	if !worded {
-		return nil, leftOut, RenderShapeSkipQuadrantUnprovable
-	}
+	shape := landscapeShape(placed)
 	// The class rule, as for the treemap and the table: a chart never costs an
 	// answer. A shape the contract would refuse is no chart.
 	proved := *shape
@@ -181,14 +178,12 @@ func claimHolds(claim ClaimedFact, cell float64) bool {
 }
 
 // landscapeShape draws the x series then the y series, one point per side in
-// committed order, which is the order of the question's own operands. It reports
-// false when a field has no served word.
-func landscapeShape(sides []landscapeSide) (*contractsv1.ContextFabricRenderShape, bool) {
-	xWord, xWorded := contractsv1.ContextFabricVocabularyLabel(contractsv1.ContextFabricVocabularyFactField, contractsv1.ContextFabricRenderLandscapeXField)
-	yWord, yWorded := contractsv1.ContextFabricVocabularyLabel(contractsv1.ContextFabricVocabularyFactField, contractsv1.ContextFabricRenderLandscapeYField)
-	if !xWorded || !yWorded {
-		return nil, false
-	}
+// committed order, which is the order of the question's own operands. The words
+// are the fields' served words; a field with none gives an empty word, which the
+// contract refuses, so the shape is never served.
+func landscapeShape(sides []landscapeSide) *contractsv1.ContextFabricRenderShape {
+	xWord, _ := contractsv1.ContextFabricVocabularyLabel(contractsv1.ContextFabricVocabularyFactField, contractsv1.ContextFabricRenderLandscapeXField)
+	yWord, _ := contractsv1.ContextFabricVocabularyLabel(contractsv1.ContextFabricVocabularyFactField, contractsv1.ContextFabricRenderLandscapeYField)
 	x := contractsv1.ContextFabricRenderSeries{Key: contractsv1.ContextFabricRenderLandscapeXField, Label: xWord}
 	y := contractsv1.ContextFabricRenderSeries{Key: contractsv1.ContextFabricRenderLandscapeYField, Label: yWord}
 	for _, side := range sides {
@@ -203,7 +198,7 @@ func landscapeShape(sides []landscapeSide) (*contractsv1.ContextFabricRenderShap
 		AxisLabel:  xWord,
 		ValueLabel: yWord,
 		Series:     []contractsv1.ContextFabricRenderSeries{x, y},
-	}, true
+	}
 }
 
 func landscapePoint(label string, claim ClaimedFact, value float64) contractsv1.ContextFabricRenderPoint {
