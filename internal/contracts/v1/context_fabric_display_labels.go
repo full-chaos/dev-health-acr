@@ -169,6 +169,9 @@ const (
 	ContextFabricVocabularyRelationshipType ContextFabricVocabulary = "relationship_type"
 	ContextFabricVocabularyWindowRelativeID ContextFabricVocabulary = "window_relative_id"
 	ContextFabricVocabularyWindowProvenance ContextFabricVocabulary = "window_provenance"
+	// ContextFabricVocabularyMeasureUnit words the unit a claimed table states
+	// for a measure (CHAOS-11984), so a consumer draws ACR's word for it.
+	ContextFabricVocabularyMeasureUnit ContextFabricVocabulary = "measure_unit"
 )
 
 var contextFabricVocabularyNames = [...]ContextFabricVocabulary{
@@ -191,6 +194,7 @@ var contextFabricVocabularyNames = [...]ContextFabricVocabulary{
 	ContextFabricVocabularyRelationshipType,
 	ContextFabricVocabularyWindowRelativeID,
 	ContextFabricVocabularyWindowProvenance,
+	ContextFabricVocabularyMeasureUnit,
 }
 
 // ContextFabricVocabularyNames returns the served vocabularies in published
@@ -375,6 +379,13 @@ var contextFabricVocabularyLabels = map[ContextFabricVocabulary]map[string]strin
 		string(ContextFabricWindowQuestionStated):         "stated in the question",
 		string(ContextFabricWindowClarificationConfirmed): "confirmed by you",
 		string(ContextFabricWindowServerDefault):          "the window the reads used",
+	},
+	ContextFabricVocabularyMeasureUnit: {
+		string(ContextFabricMeasureUnitCount):  "count",
+		string(ContextFabricMeasureUnitRatio):  "ratio",
+		string(ContextFabricMeasureUnitHours):  "hours",
+		string(ContextFabricMeasureUnitDays):   "days",
+		string(ContextFabricMeasureUnitPoints): "story points",
 	},
 }
 

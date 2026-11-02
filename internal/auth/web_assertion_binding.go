@@ -14,9 +14,11 @@ const WebAssertionPermissionCredentialIssue = "credential:issue"
 
 // webAssertionOrganizationWidePaths are the only routes a web assertion may
 // name every repository ("*") on: the two credential approvals, the typed-code
-// device approval and the OAuth consent decision (api.OAuthConsentPath, pinned
-// by a test in internal/api).
-var webAssertionOrganizationWidePaths = []string{"/api/v1/oauth/device_approval", "/authorize/consent"}
+// device approval, the OAuth consent decision (api.OAuthConsentPath) and the
+// first-party authorize that starts it (api.OAuthFirstPartyAuthorizePath,
+// CHAOS-12568), both pinned by a test in internal/api. T20 (CHAOS-12109)
+// narrows web assertions on data routes only; these routes stay outside it.
+var webAssertionOrganizationWidePaths = []string{"/api/v1/oauth/device_approval", "/authorize/consent", "/authorize/first-party"}
 
 // WebAssertionOrganizationWidePaths returns the routes an organization-wide
 // web assertion may name.

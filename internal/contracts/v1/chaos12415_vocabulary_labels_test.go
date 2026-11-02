@@ -129,6 +129,7 @@ func vocabularySources(t *testing.T) map[ContextFabricVocabulary][][]string {
 	outcomes := ContextFabricPlanRequirementOutcomeVocabulary()
 	dispositions := ContextFabricStructureDispositionVocabulary()
 	windows := ContextFabricRelativeWindowIDVocabulary()
+	units := ContextFabricMeasureUnitVocabulary()
 	basis := make([]string, 0, len(contextFabricCohortRankingBasisLabels))
 	for label := range contextFabricCohortRankingBasisLabels {
 		if strings.HasPrefix(label, "investment_mix.") {
@@ -174,7 +175,37 @@ func vocabularySources(t *testing.T) map[ContextFabricVocabulary][][]string {
 		},
 		ContextFabricVocabularyWindowRelativeID: {closedVocabularyStrings(windows[:]), schema("EffectiveEvidenceWindow", "relative_id")},
 		ContextFabricVocabularyWindowProvenance: {schema("EffectiveEvidenceWindow", "provenance")},
+		ContextFabricVocabularyMeasureUnit: {
+			closedVocabularyStrings(units[:]), schemaMeasureUnitValues(t, defs),
+		},
 	}
+}
+
+// schemaMeasureUnitValues reads the unit enum a claimed table's measure_units
+// item declares (CHAOS-11984). It is nested in an inline item, which
+// schemaValues does not walk into.
+func schemaMeasureUnitValues(t *testing.T, defs map[string]any) []string {
+	t.Helper()
+	node := any(defs["ClaimedFactTable"])
+	for _, step := range []string{"properties", "measure_units", "items", "properties", "unit"} {
+		object, ok := node.(map[string]any)
+		if !ok {
+			t.Fatalf("schema $defs/ClaimedFactTable has no %q on the measure_units unit path", step)
+		}
+		node = object[step]
+	}
+	unit, _ := node.(map[string]any)
+	values, _ := unit["enum"].([]any)
+	out := make([]string, 0, len(values))
+	for _, value := range values {
+		if text, ok := value.(string); ok {
+			out = append(out, text)
+		}
+	}
+	if len(out) == 0 {
+		t.Fatal("schema $defs/ClaimedFactTable.measure_units[].unit lists no values")
+	}
+	return out
 }
 
 func TestEveryVocabularyNameHasATableAndASource(t *testing.T) {

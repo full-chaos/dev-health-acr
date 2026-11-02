@@ -15,7 +15,7 @@ import (
 var (
 	renderShapeSummaryLegacyKeys = []string{
 		"time", "level", "msg", "org_id", "question_shape", "render_shapes_selected", "render_shape_rules_skipped",
-		"render_shape_members_truncated", "render_shape_trends_omitted", "render_shape_comparison_measures_left_out", "render_shape_accounting", "selected_shapes", "request_id",
+		"render_shape_members_truncated", "render_shape_trends_omitted", "render_shape_comparison_measures_left_out", "render_shape_tables_cadence_withheld", "render_shape_accounting", "selected_shapes", "request_id",
 	}
 	renderShapeSkippedLegacyKeys = []string{
 		"time", "level", "msg", "org_id", "question_shape", "render_shape_rule", "render_shape_skip_reason", "request_id",
@@ -47,7 +47,7 @@ func TestRenderShapeSummaryAndSkippedLinesCertify(t *testing.T) {
 		contractsv1.ContextFabricRenderRuleComparisonSideBySide,
 	}
 	reasons := contextfabric.RenderShapeSkipReasonLineVocabulary()
-	ok := contextfabric.RenderShapeSelectionEvent{Shape: contractsv1.ContextFabricShapeOpen, MembersTruncated: 2, TrendsOmitted: 3, ComparisonMeasuresLeftOut: 4}
+	ok := contextfabric.RenderShapeSelectionEvent{Shape: contractsv1.ContextFabricShapeOpen, MembersTruncated: 2, TrendsOmitted: 3, ComparisonMeasuresLeftOut: 4, TablesCadenceWithheld: 6}
 	for i, rule := range rules {
 		ok.Skipped = append(ok.Skipped, contextfabric.RenderShapeSkip{Rule: rule, Reason: contextfabric.RenderShapeSkipReason(reasons[i])})
 	}
@@ -67,7 +67,7 @@ func TestRenderShapeSummaryAndSkippedLinesCertify(t *testing.T) {
 	certifyRequestLine(t, buf.Bytes(), eventspec.RenderShapeSelectionSummary, map[string]any{
 		"org_id": "org_1", "question_shape": string(contractsv1.ContextFabricShapeOpen), "render_shapes_selected": 0,
 		"render_shape_rules_skipped": 5, "render_shape_members_truncated": 2, "render_shape_trends_omitted": 3,
-		"render_shape_comparison_measures_left_out": 4, "render_shape_accounting": "ok",
+		"render_shape_comparison_measures_left_out": 4, "render_shape_tables_cadence_withheld": 6, "render_shape_accounting": "ok",
 	})
 	for i, rule := range rules {
 		certifyRequestLine(t, buf.Bytes(), eventspec.RenderShapeRuleSkipped, map[string]any{

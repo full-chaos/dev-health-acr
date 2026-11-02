@@ -645,7 +645,6 @@ func landscapeFields() []fieldDecl {
 			fInt("identity_count", "count"),
 			fInt("churn_loc_30d", "loc"),
 			fInt("delivery_units_30d", "count"),
-			fNum("cycle_p50_30d_hours_avg", "hours"),
 			fTable("area_breakdown", areaCols...),
 			fTable("map_coordinates", coordCols...),
 		),

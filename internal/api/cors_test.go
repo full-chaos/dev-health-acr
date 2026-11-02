@@ -250,7 +250,7 @@ func TestCORSIsAnsweredForTheListedOriginOnTheBrowserRoutesOnly(t *testing.T) {
 	harness.apps[0].Handler().ServeHTTP(recorder, twice)
 	expectNoCORS(t, "two origins", recorder)
 	// Not a browser route.
-	for _, path := range []string{OAuthAuthorizePath, OAuthConsentPath, ContextFabricDataCatalogPath, "/api/v1/agent-context/capabilities", "/healthz"} {
+	for _, path := range []string{OAuthAuthorizePath, OAuthConsentPath, OAuthFirstPartyAuthorizePath, ContextFabricDataCatalogPath, "/api/v1/agent-context/capabilities", "/healthz"} {
 		got := harness.cors(0, corsCall{method: http.MethodOptions, path: path, origin: corsTestOrigin, headers: preflight})
 		expectNoCORS(t, path+" preflight", got)
 		if containsValue(got.Header().Values("Vary"), "Origin") {

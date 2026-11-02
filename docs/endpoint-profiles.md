@@ -29,15 +29,16 @@ only mentions the field name does not count.
 
 ## Coverage
 
-21 route registrations in `internal/api/app.go`. Two are unauthenticated
+22 route registrations in `internal/api/app.go`. Two are unauthenticated
 probes (`/healthz`, `/readyz`); two are unauthenticated-by-design device-flow
 entry points (`device_authorization`, `token`); four are the
 unauthenticated-by-design OAuth authorization-server routes hosted MCP clients
 log in through (`/.well-known/oauth-authorization-server`, `/authorize`,
 `/token`, `/register`, registered only when OAuth is configured; see
-`authentication.md`); the remaining 13 are behind
+`authentication.md`); the remaining 14 are behind
 `Authenticator.MiddlewareFor` in one of its two shapes (including the OAuth
-consent route `/authorize/consent`, web assertion only, like
+consent route `/authorize/consent` and the first-party authorize
+`/authorize/first-party` (CHAOS-12568), web assertion only, like
 `device_approval`), or the bearer-only `selfLifecycleHandler`.
 
 ## The single-dispatch guarantee (the CHAOS-3271-class answer for acr)

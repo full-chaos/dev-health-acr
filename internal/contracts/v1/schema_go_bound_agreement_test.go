@@ -299,8 +299,13 @@ func TestSchemaAndGoBoundsAgree(t *testing.T) {
 		"common#$defs.ClaimedFactTable.properties.observations.items.maxLength": ContextFabricFactTableColumnMaxLength,
 		"common#$defs.ClaimedFactTable.properties.order_by.minLength":           1,
 		"common#$defs.ClaimedFactTable.properties.order_by.maxLength":           ContextFabricFactTableColumnMaxLength,
-		"common#$defs.InterpretedQuestion.properties.subject_terms.maxItems":    contextFabricWriteBounds.interpretationTerms,
-		"common#$defs.InterpretedQuestion.properties.comparison_terms.maxItems": contextFabricWriteBounds.interpretationTerms,
+		// CHAOS-11984: the stated measure units, mapped declaratively for the
+		// identical reason: a unit is checked against the table's own measures.
+		"common#$defs.ClaimedFactTable.properties.measure_units.maxItems":                           ContextFabricFactTableMeasuresMaxCount,
+		"common#$defs.ClaimedFactTable.properties.measure_units.items.properties.measure.minLength": 1,
+		"common#$defs.ClaimedFactTable.properties.measure_units.items.properties.measure.maxLength": ContextFabricFactTableColumnMaxLength,
+		"common#$defs.InterpretedQuestion.properties.subject_terms.maxItems":                        contextFabricWriteBounds.interpretationTerms,
+		"common#$defs.InterpretedQuestion.properties.comparison_terms.maxItems":                     contextFabricWriteBounds.interpretationTerms,
 		// CHAOS-4398 PR2: CohortMemberDriver lives one level under
 		// CohortMember.Drivers (a slice of a $defs-nested struct) AND its
 		// own Validate() entangles Value/Weight/WeightContributed with the
