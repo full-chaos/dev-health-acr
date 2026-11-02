@@ -6912,6 +6912,72 @@
     ]
   },
   {
+    "id": "contextfabric.interpretation_terms",
+    "msg": "context fabric interpretation terms",
+    "level": "info",
+    "multiplicity": "zero_or_one_per_request",
+    "attribution": [
+      "request_id"
+    ],
+    "bounded_aggregation": "at most one line per investigation: written once, after the question is interpreted.",
+    "fields": [
+      {
+        "key": "org_id",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "subject_term_count",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "stated_kind",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "",
+          "organization",
+          "team",
+          "project",
+          "repository",
+          "work_item",
+          "pull_request",
+          "deployment",
+          "incident",
+          "document",
+          "decision",
+          "episode",
+          "metric",
+          "pull_request_review",
+          "ci_pipeline_run",
+          "work_item_ref"
+        ]
+      },
+      {
+        "key": "handle_bound",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "bound",
+          "unbound",
+          "unwired"
+        ]
+      },
+      {
+        "key": "repository_slug_term",
+        "type": "bool",
+        "presence": "required"
+      },
+      {
+        "key": "request_id",
+        "type": "string",
+        "presence": "conditional",
+        "applicability": "written when the request context carries a request ID"
+      }
+    ]
+  },
+  {
     "id": "contextfabric.interpreted_time_bound",
     "msg": "context fabric interpreted time bound",
     "level": "info",
