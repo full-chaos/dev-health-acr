@@ -111,7 +111,8 @@ func asksForLandscape(requirements []FactRequirement) bool {
 func landscapeSideOf(claims []ClaimedFact, side SubjectRef) (landscapeSide, bool) {
 	var x, y []ClaimedFact
 	for _, claim := range claims {
-		if claim.Kind != FactLandscape || claim.Subject.Kind != side.Kind || claim.Subject.CanonicalID != side.CanonicalID || len(claim.DerivedFrom) > 0 {
+		// A canonical id carries its kind ("team:..."), so one id is one subject.
+		if claim.Kind != FactLandscape || claim.Subject.CanonicalID != side.CanonicalID || len(claim.DerivedFrom) > 0 {
 			continue
 		}
 		switch claim.Field {
@@ -150,9 +151,10 @@ func landscapeRowOf(claim ClaimedFact) (string, int64, map[string]float64, bool)
 		return "", 0, nil, false
 	}
 	fields := claim.Rows[0].Fields
-	day, dated := renderStringCell(fields[contractsv1.ContextFabricRenderLandscapeDayField])
+	// A cell that is not a string reads as "".
+	day, _ := renderStringCell(fields[contractsv1.ContextFabricRenderLandscapeDayField])
 	identities := fields[landscapeIdentityField].Integer
-	if !dated || day == "" || identities == nil {
+	if day == "" || identities == nil {
 		return "", 0, nil, false
 	}
 	cells := map[string]float64{}

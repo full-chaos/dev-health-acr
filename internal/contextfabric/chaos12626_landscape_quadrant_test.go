@@ -255,6 +255,20 @@ func TestASideWithNoPointIsLeftOut(t *testing.T) {
 		"a claim on another kind": func(r *InvestigationResult) {
 			r.ClaimedFacts[4].Kind = FactFlow
 		},
+		"no table": func(r *InvestigationResult) {
+			r.ClaimedFacts[4].Table, r.ClaimedFacts[5].Table = nil, nil
+		},
+		"a row cell past the exact bound": func(r *InvestigationResult) {
+			past := contractsv1.ContextFabricRenderPointExactIntegerBound + 1
+			r.ClaimedFacts[4].Rows[0].Fields["churn_loc_30d"] = tableInteger(past)
+		},
+		"a table that does not measure churn": func(r *InvestigationResult) {
+			for _, index := range []int{4, 5} {
+				table := *r.ClaimedFacts[index].Table
+				table.Measures = []string{"identity_count", "delivery_units_30d"}
+				r.ClaimedFacts[index].Table = &table
+			}
+		},
 		"no row": func(r *InvestigationResult) {
 			r.ClaimedFacts[4].Rows, r.ClaimedFacts[5].Rows = nil, nil
 		},
