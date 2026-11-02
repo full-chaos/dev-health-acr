@@ -10,14 +10,15 @@ import (
 //
 // A COUNT AND NEVER A NAME. It counts what the census read, which for a
 // restricted caller holds only subjects its grant admits, so no subject outside
-// the grant can change it. It is one text for every cause: over the set budget, a
+// the grant can change it. The sentences say "you": a web user has no credential
+// in view, and "you" reads true for an MCP caller too. It is one text for every cause: over the set budget, a
 // set that did not close, a narrowing that could not decide, an id the graph or
 // the gate refused. The strict parse below is what keeps the digits from widening
 // what a model caveat can impersonate.
 const (
-	contextFabricCensusUnlistedOne     = "1 subject matches this question in what this credential can read, and it could not be listed, so no subject was confirmed and no canonical facts were read. Name the repository to narrow it."
-	contextFabricCensusUnlistedMany    = " subjects match this question in what this credential can read, and they could not be listed, so no subject was confirmed and no canonical facts were read. Name the repository to narrow them."
-	contextFabricCensusListedManyHead  = " subjects match this question in what this credential can read. Only "
+	contextFabricCensusUnlistedOne     = "1 subject matches this question in what you can read, and it could not be listed, so no subject was confirmed and no canonical facts were read. Name the repository to narrow it."
+	contextFabricCensusUnlistedMany    = " subjects match this question in what you can read, and they could not be listed, so no subject was confirmed and no canonical facts were read. Name the repository to narrow them."
+	contextFabricCensusListedManyHead  = " subjects match this question in what you can read. Only "
 	contextFabricCensusListedTailOne   = " of them is listed. Name the repository to narrow them."
 	contextFabricCensusListedTailMany  = " of them are listed. Name the repository to narrow them."
 	contextFabricCensusLimitationMaxOf = 999999999

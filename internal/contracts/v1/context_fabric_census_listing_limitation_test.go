@@ -73,3 +73,25 @@ func TestAForgedCensusListingLimitationIsNotRecognised(t *testing.T) {
 		}
 	}
 }
+
+// A web user has no credential in view, and "you" reads true for an MCP caller too.
+func TestTheSentencesSayYouNotTheCredential(t *testing.T) {
+	t.Parallel()
+	for _, sentence := range []string{
+		ContextFabricCensusUnlistedLimitation(1),
+		ContextFabricCensusUnlistedLimitation(10),
+		ContextFabricCensusListedLimitation(10, 1),
+		ContextFabricCensusListedLimitation(10, 5),
+		ContextFabricWorkItemNoGrantedLinkLimitation,
+	} {
+		if !strings.Contains(sentence, "you can read") {
+			t.Fatalf("%q does not say what you can read", sentence)
+		}
+		if strings.Contains(strings.ToLower(sentence), "credential") {
+			t.Fatalf("%q names a credential", sentence)
+		}
+	}
+	if strings.Contains(strings.ToLower(ContextFabricWorkItemLinksUnreadLimitation), "credential") {
+		t.Fatalf("%q names a credential", ContextFabricWorkItemLinksUnreadLimitation)
+	}
+}
