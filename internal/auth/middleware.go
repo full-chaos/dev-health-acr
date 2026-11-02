@@ -359,6 +359,28 @@ func NarrowRepositoryScopes(ctx context.Context, scopes []string) (context.Conte
 	return context.WithValue(ctx, principalKey{}, principal), nil
 }
 
+// ErrGrantNotUniversal is KeepUniversalGrant's answer for a grant that does not
+// hold "*": it is left as it is, for the caller to narrow.
+var ErrGrantNotUniversal = errors.New("the repository grant is not universal")
+
+// KeepUniversalGrant returns ctx with its authenticated principal's repository
+// grant made exactly "*" (CHAOS-12592). A "*" consent grant is the whole
+// organization whatever else it lists beside the "*" (ClassifyGrant, and the
+// project-only admission, already read it so), so the redundant entries are
+// dropped, never kept as if they narrowed it. A grant that does not hold "*"
+// is refused with ErrGrantNotUniversal and ctx is returned unchanged.
+func KeepUniversalGrant(ctx context.Context) (context.Context, error) {
+	principal, ok := PrincipalFromContext(ctx)
+	if !ok {
+		return ctx, errors.New("no authenticated principal to keep")
+	}
+	if ClassifyGrant(principal) != GrantUniversal {
+		return ctx, ErrGrantNotUniversal
+	}
+	principal.RepositoryScopes = []string{"*"}
+	return context.WithValue(ctx, principalKey{}, principal), nil
+}
+
 // ErrEmptyProjectScope refuses narrowing a principal to no project: a project
 // grant can never become the empty grant, which reads as unrestricted.
 var ErrEmptyProjectScope = errors.New("effective project scope is empty")
