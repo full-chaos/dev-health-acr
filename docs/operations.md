@@ -2298,6 +2298,19 @@ holds `UPDATE (published_at)` on the outbox (a column grant from `internal/dbacl
 publisher is configured: `grant-runtime-acl` and the compose bootstrap give it when `ACR_AUTH_PROJECTION_URL` is set and take it away (a column
 REVOKE) when it is not. The egress to auth-service comes with the roll of the endpoint; nothing publishes before then.
 
+The outbox reaper runs in the same pods while the publisher is configured (`ACR_AUTH_PROJECTION_URL` set). Every hour it deletes up to 100 whole
+aggregates of `acr.credential_lifecycle_outbox` in one statement: every row of the aggregate is published, the newest was published more than seven
+days ago, and no `acr.client_credentials` row with that credential id exists, oldest first. A terminal row therefore stays while its credential row
+exists (the retention delete of an expired credential reads the `expired` row), and no row is required to be terminal: an unrevoked credential an
+organization purge deleted gets no terminal event, and its aggregate is reaped on the same three conditions. An aggregate goes whole, never by row,
+because the writer reads the outbox for the next revision and for its terminal rule. The runtime role holds `DELETE` on the outbox only while the
+publisher is configured (a table-level grant from `internal/dbacl`, no other new privilege); `grant-runtime-acl` and the compose bootstrap give it
+when `ACR_AUTH_PROJECTION_URL` is set, and the grant job revokes it (`REVOKE DELETE`) when it is not. A run makes no call at start, sets a 60 s statement
+timeout, logs counts only (`aggregates`, `rows`) and one fixed line when a batch was full; a failed run (a missing grant shows as
+`insufficient_privilege` on the table) is logged and retried an hour later, and never stops acr-api. The statement reads the whole outbox once per run;
+if that read becomes slow, an index on the published rows is a migration and needs its own change. To see what would go:
+`SELECT aggregate_id FROM acr.credential_lifecycle_outbox o GROUP BY 1 HAVING bool_and(published_at IS NOT NULL) AND max(published_at) < now() - interval '7 days' AND NOT EXISTS (SELECT 1 FROM acr.client_credentials c WHERE c.credential_id = o.aggregate_id) LIMIT 20;`.
+
 ### acr-api workload credential on Compose (overlay)
 
 `deploy/compose/acr-auth-workload.compose.yml` is an overlay for the ops Compose stack (profile `auth`); the default render is byte-equal
