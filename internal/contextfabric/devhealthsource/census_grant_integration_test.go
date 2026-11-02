@@ -124,6 +124,14 @@ func TestAKeyWhosePrefixIsOnlyOutsideReadsLikeAWordOnClickHouse(t *testing.T) {
 	aKeyWhosePrefixIsOnlyOutsideReadsLikeAWord(t, grantedItemClickHouseWorld)
 }
 
+func TestARepositoryOwnedItemCountsByItsOwnRepositoryOnClickHouse(t *testing.T) {
+	aRepositoryOwnedItemCountsByItsOwnRepository(t, grantedItemClickHouseWorld)
+}
+
+func TestARepositoryOwnerGrantAdmitsWhatTheGateAdmitsOnClickHouse(t *testing.T) {
+	aRepositoryOwnerGrantAdmitsWhatTheGateAdmits(t, grantedItemClickHouseWorld)
+}
+
 func TestEveryProviderKeyCommitsThroughTheGateOnClickHouse(t *testing.T) {
 	everyProviderKeyCommitsThroughTheGate(t, grantedItemClickHouseWorld)
 }
