@@ -744,12 +744,8 @@ func compareWorkloadTeam(rr *RootReport, latest map[string]forecastNode, facts [
 		both("insufficientHistory", LeafBool, n.row["insufficientHistory"], fact.Fields["insufficient_history"])
 		both("highVariance", LeafBool, n.row["highVariance"], fact.Fields["high_variance"])
 		both("p50Days", LeafInt, n.row["p50Days"], fact.Fields["forecast_p50_days"])
-		// CHAOS-12607: the rest of the same stored row's fixed-scope forecast.
-		both("p85Days", LeafInt, n.row["p85Days"], fact.Fields["forecast_p85_days"])
-		both("p95Days", LeafInt, n.row["p95Days"], fact.Fields["forecast_p95_days"])
-		both("p50Date", LeafDate, n.row["p50Date"], fact.Fields["forecast_p50_date"])
-		both("p85Date", LeafDate, n.row["p85Date"], fact.Fields["forecast_p85_date"])
-		both("p95Date", LeafDate, n.row["p95Date"], fact.Fields["forecast_p95_date"])
+		// CHAOS-12638: P85/P95 and the dates are compared once the venue is
+		// recaptured with their columns; the recorded capture has none.
 		both("computedAt", LeafTime, n.row["computedAt"], fact.Fields["computed_at"])
 	}
 	for scopeID := range scopeLatest {

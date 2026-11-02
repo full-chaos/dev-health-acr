@@ -1,6 +1,7 @@
 package contextfabric
 
 import (
+	"reflect"
 	"slices"
 	"strings"
 
@@ -73,7 +74,9 @@ const (
 // rows are the parts. There is no geometry to infer, and no fallback: a question
 // this rule does not fire for gets no treemap (check 10).
 //
-// Exactly one fact, on a repository or a team. A second fact is a comparison, and
+// Exactly one breakdown, on a repository or a team. Each claim on a fact carries
+// that fact's rows, so several claims on one fact are one breakdown (CHAOS-12591),
+// and the chart cites the first of them. A second breakdown is a comparison, and
 // an organization frame does not reach this family. The subject check is an allow
 // list, so a person never gets this chart: the vocabulary has no such kind today,
 // and a kind added later stays out until someone decides otherwise. Every row is a
@@ -102,10 +105,13 @@ func investmentThemeShareShape(result InvestigationResult, frame *QuestionFrame)
 		if candidate.Kind != FactInvestment || !declaresThemeShareTable(candidate) {
 			continue
 		}
-		if fact != nil {
+		if fact == nil {
+			fact = candidate
+			continue
+		}
+		if !sameThemeBreakdown(fact, candidate) {
 			return nil, RenderShapeSkipSeveralThemeBreakdowns
 		}
-		fact = candidate
 	}
 	if fact == nil {
 		return nil, RenderShapeSkipNoThemeBreakdown
@@ -235,6 +241,26 @@ func withoutCompletionForecasts(claims []ClaimedFact) []ClaimedFact {
 		stripped[index].CompletionForecast = nil
 	}
 	return stripped
+}
+
+// sameThemeBreakdown reports that two claims carry one breakdown: one subject,
+// one declaration and the same rows. That is what two claims on one fact hold,
+// because the rows reach every claim from the fact (attachCanonicalRows). Any
+// difference is a second breakdown, and a chart of either would hide the other.
+//
+// Two facts of one subject can hold equal rows, so equal content is not enough:
+// the fact ids must be equal too. Two ids are two facts. A claim with no id is
+// grounded over its subject's whole group (groundClaim), so beside a claim that
+// names a fact it may hold another fact's rows, and the pair is two breakdowns.
+// Claims that both name no fact are compared by content alone: the model writes
+// fact_id, the server does not fill it, and a model may leave it out of every
+// claim.
+func sameThemeBreakdown(first, other *ClaimedFact) bool {
+	if first.FactID != other.FactID {
+		return false
+	}
+	return first.Subject.Kind == other.Subject.Kind && first.Subject.CanonicalID == other.Subject.CanonicalID &&
+		reflect.DeepEqual(first.Table, other.Table) && reflect.DeepEqual(first.Rows, other.Rows)
 }
 
 func declaresThemeShareTable(fact *ClaimedFact) bool {
