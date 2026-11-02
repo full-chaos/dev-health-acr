@@ -65,6 +65,7 @@ type listingWorld struct {
 	edit      func(*contextfabric.InvestigationRequest, *ResolveDeps)
 	question  string
 	terms     []string
+	timeAxis  *contextfabric.TimeContext
 }
 
 type listingTurn struct {
@@ -111,7 +112,11 @@ func runListing(t *testing.T, w listingWorld) listingTurn {
 	if w.edit != nil {
 		w.edit(&request, &deps)
 	}
-	resolution, offers, _, _, err := ResolveSubjectsWithCommitBasis(context.Background(), w.principal, request, testInterpreted(terms...), deps, nil, nil, nil, "")
+	interpreted := testInterpreted(terms...)
+	if w.timeAxis != nil {
+		interpreted.TimeContext = *w.timeAxis
+	}
+	resolution, offers, _, _, err := ResolveSubjectsWithCommitBasis(context.Background(), w.principal, request, interpreted, deps, nil, nil, nil, "")
 	if err != nil {
 		t.Fatalf("ResolveSubjectsWithCommitBasis: %v", err)
 	}
@@ -500,9 +505,10 @@ func TestAnUndecidedNarrowingListsNothing(t *testing.T) {
 	}
 }
 
-// A repository narrowing that refuses every satisfier keeps its own sentence: the
-// count of a census read inside the request is zero, and nothing is listed.
-func TestARepositoryNarrowingThatRefusesEverySatisfierStaysAsItIs(t *testing.T) {
+// A repository narrowing that refuses every satisfier says so: the count of a
+// census read inside the request is zero, nothing is listed, and the subject may
+// be elsewhere in what the caller can read.
+func TestARepositoryNarrowingThatRefusesEverySatisfierStatesTheScope(t *testing.T) {
 	t.Parallel()
 	spy := &grantCensusSpy{rows: listingRows(4)}
 	turn := runListing(t, listingWorld{
@@ -511,8 +517,8 @@ func TestARepositoryNarrowingThatRefusesEverySatisfierStaysAsItIs(t *testing.T) 
 			r.RequestedScope.RepositorySlugs = []string{listingRepo(4)}
 		},
 	})
-	if len(turn.resolution.Candidates) != 0 || turn.resolution.CensusLimitation != "" {
-		t.Fatalf("candidates %v limitation %q, want neither", candidateIDs(turn.resolution.Candidates), turn.resolution.CensusLimitation)
+	if len(turn.resolution.Candidates) != 0 || turn.resolution.CensusLimitation != contractsv1.ContextFabricCensusAbsentInScopeLimitation {
+		t.Fatalf("candidates %v limitation %q, want none and the scope's sentence", candidateIDs(turn.resolution.Candidates), turn.resolution.CensusLimitation)
 	}
 }
 
@@ -657,8 +663,8 @@ func TestARequestedRepositoryStillDecidesForAnUnrestrictedCaller(t *testing.T) {
 	// The only satisfier is outside the request: it neither commits nor lists.
 	spy := &grantCensusSpy{rows: listingRows(1)}
 	turn := runListing(t, listingWorld{principal: unrestricted, census: spy.census, nodes: listingNodes(1), edit: narrow("acme/elsewhere")})
-	if len(turn.resolution.Committed) != 0 || len(turn.resolution.Candidates) != 0 || turn.resolution.CensusLimitation != "" {
-		t.Fatalf("committed %v candidates %v limitation %q, want none: the request decides", turn.resolution.Committed, candidateIDs(turn.resolution.Candidates), turn.resolution.CensusLimitation)
+	if len(turn.resolution.Committed) != 0 || len(turn.resolution.Candidates) != 0 || turn.resolution.CensusLimitation != contractsv1.ContextFabricCensusAbsentInScopeLimitation {
+		t.Fatalf("committed %v candidates %v limitation %q, want none and the scope's sentence: the request decides", turn.resolution.Committed, candidateIDs(turn.resolution.Candidates), turn.resolution.CensusLimitation)
 	}
 	// Two satisfiers, one inside the request: that one commits.
 	spy = &grantCensusSpy{rows: listingRows(2)}
@@ -683,10 +689,10 @@ func TestAHandleOptionThatCannotDecideIsDropped(t *testing.T) {
 	if len(over.offers.HandleOptions) != 0 {
 		t.Fatalf("over the budget: handle options = %+v", over.offers.HandleOptions)
 	}
-	// With nothing counted the handle may still name a real subject.
+	// CHAOS-12498: a complete zero proves no subject holds the handle.
 	none := runListing(t, listingWorld{principal: restrictedCaller(t, listingScopes(3)...), census: (&grantCensusSpy{}).census})
-	if len(none.offers.HandleOptions) != 1 {
-		t.Fatalf("count 0: handle options = %+v, want it kept", none.offers.HandleOptions)
+	if len(none.offers.HandleOptions) != 0 {
+		t.Fatalf("count 0: handle options = %+v, want none", none.offers.HandleOptions)
 	}
 }
 
@@ -1149,8 +1155,11 @@ func TestTheSameValueInAnotherKindIsNotAgreement(t *testing.T) {
 		}
 		return got
 	}
+	satisfier := grantRow{contextfabric.SubjectPullRequest, "4242", "pull_request:repo-00:4242", listingRepo(0)}
+	node := candidateNode(contextfabric.SubjectPullRequest, satisfier.id, "A lone change", 0.5, []string{listingRepo(0)})
+	node.Attributes[authorizationTeamsAttr] = "*"
 	world := listingWorld{
-		principal: restrictedCaller(t, listingScopes(1)...), census: (&grantCensusSpy{}).census, pool: []CandidateNode{nearRun}, truncated: true,
+		principal: restrictedCaller(t, listingScopes(1)...), census: (&grantCensusSpy{rows: []grantRow{satisfier}}).census, nodes: []CandidateNode{node}, pool: []CandidateNode{nearRun}, truncated: true,
 		question: "What is the state of pull request 4242?", terms: []string{"pull request 4242"},
 	}
 	if got := kinds(runListing(t, world)); !slices.Contains(got, string(contractsv1.ContextFabricSubjectCIRun)+"=4242") {
@@ -1177,5 +1186,40 @@ func TestAnOptionThatAgreesWithTheRequestStays(t *testing.T) {
 	})
 	if len(turn.offers.HandleOptions) != 1 || turn.offers.HandleOptions[0].Value != "12" {
 		t.Fatalf("options = %+v, want the caller's own", turn.offers.HandleOptions)
+	}
+}
+
+// The same rule for a kind: a receipt must agree with the request's own
+// expected_kinds, so an option for another kind ends the follow-up in a conflict.
+// The fixture's every-option follow-up found this one.
+func TestAKindOptionTheRequestItselfWouldVetoIsNotOffered(t *testing.T) {
+	t.Parallel()
+	repository := candidateNode(contextfabric.SubjectRepository, "repository:noise", "noise", 0.8, []string{listingRepo(0)})
+	pullRequest := candidateNode(contextfabric.SubjectPullRequest, "pull_request:repo-00:5", "Release 12 prep", 0.8, []string{listingRepo(0)})
+	pullRequest.Attributes[authorizationTeamsAttr] = "*"
+	roomy := func(r *contextfabric.InvestigationRequest, _ *ResolveDeps) { r.Options.MaxSubjectCandidates = 10 }
+	kinds := func(turn listingTurn) []string {
+		got := []string{}
+		for _, option := range turn.offers.KindOptions {
+			got = append(got, string(option.Kind))
+		}
+		return got
+	}
+	for name, principal := range listingCallers(t, 2) {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			spy := &grantCensusSpy{rows: listingRows(2)}
+			world := listingWorld{principal: principal, census: spy.census, nodes: listingNodes(2), pool: []CandidateNode{repository, pullRequest}, truncated: true, edit: roomy}
+			if got := kinds(runListing(t, world)); !slices.Contains(got, string(contextfabric.SubjectRepository)) {
+				t.Fatalf("no explicit kind: options = %v, want the pool's: the guard needs a request to compare", got)
+			}
+			world.edit = func(r *contextfabric.InvestigationRequest, deps *ResolveDeps) {
+				roomy(r, deps)
+				r.ExpectedKinds = []contractsv1.ContextFabricSubjectKind{contextfabric.SubjectPullRequest}
+			}
+			if got := kinds(runListing(t, world)); !slices.Equal(got, []string{string(contextfabric.SubjectPullRequest)}) {
+				t.Fatalf("options = %v, want only the caller's own", got)
+			}
+		})
 	}
 }

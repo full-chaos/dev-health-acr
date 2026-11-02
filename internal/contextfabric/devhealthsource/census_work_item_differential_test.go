@@ -284,6 +284,10 @@ func aLowerTierLinkNeverGrants(t *testing.T, build grantedItemWorldBuilder) {
 			if len(turn.resolution.Committed) != 0 || turn.resolution.WorkItemLinkLimitation != contractsv1.ContextFabricWorkItemNoGrantedLinkLimitation {
 				t.Fatalf("resolution = %+v", turn.resolution)
 			}
+			// CHAOS-12498: the same sentence decides the terminal.
+			if turn.resolution.CensusLimitation != contractsv1.ContextFabricWorkItemNoGrantedLinkLimitation {
+				t.Fatalf("limitation = %q", turn.resolution.CensusLimitation)
+			}
 		})
 	}
 }
