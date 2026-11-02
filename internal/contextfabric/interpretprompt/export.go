@@ -47,7 +47,10 @@ const (
 	// v34 -> v35: question_frame, its subject_expression and the expression
 	// kind are required on the Anthropic wire, and the prompt says so, so a
 	// follow-up frame never arrives without a kind.
-	PromptVersion = "context-fabric-interpretation.v35"
+	//
+	// v35 -> v36 (CHAOS-12595): the prompt says what each window_class
+	// means, so a status question about one handle can name state_snapshot.
+	PromptVersion = "context-fabric-interpretation.v36"
 	// OutputVersion names the model-output contract the prompt asks for.
 	//
 	// v10 -> v11: the fact_requirements kind enum names commitment.
