@@ -5,6 +5,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/identity"
 )
@@ -40,7 +41,7 @@ func storedRawTextResult(t *testing.T) InvestigationResult {
 		{PathID: "path-custom", Nodes: []SubjectRef{item, pr}, Edges: []RelationshipEdge{{Type: "LINKS_PULL_REQUEST", From: item, To: pr}}, WhyRelevant: "linear:CHAOS-2320 links pull request PR #5063; escalation note"},
 	}
 	result.Drivers = []DriverJudgment{
-		{DriverID: "driver-project", Title: "Belongs To Project: c67b1602-31db-4422-8dec-a4a02bbcc513", Summary: "linear:CHAOS-2320 belongs to project c67b1602-31db-4422-8dec-a4a02bbcc513", AffectedSubjects: []SubjectRef{titled}, PathIDs: []string{"path-project"}},
+		{DriverID: "driver-project", Title: "Belongs To Project: c67b1602-31db-4422-8dec-a4a02bbcc513", Summary: "linear:CHAOS-2320 belongs to project c67b1602-31db-4422-8dec-a4a02bbcc513", AffectedSubjects: []SubjectRef{titled}, PathIDs: []string{"path-project"}, EvidenceRefIDs: []string{"acr:v1:graph:rel-project"}},
 		{DriverID: "driver-team", Title: "Owned By Team: linear:CHAOS", Summary: "A human-written summary that names linear:CHAOS", AffectedSubjects: []SubjectRef{team}},
 	}
 	result.ClaimedFacts = []ClaimedFact{{ClaimID: "claim-item", Subject: item}}
@@ -102,5 +103,15 @@ func TestAResultWithNoRawTextServesUnchanged(t *testing.T) {
 	}
 	if &again.Paths[0] != &served.Paths[0] {
 		t.Fatalf("a result with nothing to restate was copied")
+	}
+}
+
+// The cited evidence expansion quotes the drivers that cite a ref; a stored
+// driver's raw title reads in reader words there too.
+func TestACitedExpansionQuotesAStoredDriverInReaderWords(t *testing.T) {
+	t.Parallel()
+	expanded := citedEvidenceExpansion(storedRawTextResult(t), "acr:v1:graph:rel-project", "graph", "rel-project", time.Unix(0, 0))
+	if !strings.Contains(expanded.Excerpt, "Driver: Belongs To Project: project") || strings.Contains(expanded.Excerpt, "c67b1602") {
+		t.Fatalf("expansion excerpt %q, want the driver title in reader words", expanded.Excerpt)
 	}
 }
