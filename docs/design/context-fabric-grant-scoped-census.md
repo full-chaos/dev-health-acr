@@ -1,7 +1,7 @@
 # Grant-scoped evidence census
 
-CHAOS-12452 (PR1), CHAOS-12456 (PR2) and CHAOS-12467 (the listing). Plans and
-rulings: the tickets. This records what shipped.
+CHAOS-12452 (PR1), CHAOS-12456 (PR2), CHAOS-12467 (the listing) and CHAOS-12498 (a
+complete zero). Plans and rulings: the tickets. This records what shipped.
 
 ## The rule
 
@@ -89,10 +89,12 @@ counts a population and is never listed.
 | `narrowed_to_many` | the kept ids only | a receipt |
 | `narrowed_to_one` | commits, unchanged | |
 | `narrowed_to_none`, team | all listed: with no in-team offer, today's offers stand (Anchor B) | a receipt |
-| `narrowed_to_none`, repository | unchanged: the narrowing's own sentence | widen |
+| `narrowed_to_none`, repository | `no_match`, the scope's absence sentence | widen |
 | `census_truncated`, `satisfier_read_failed` | `no_match`, the count sentence: a narrowing the caller asked for is never dropped in silence | `repos=` |
 | `census_error`, deadline, historical axis, no census | unchanged: nothing was counted | |
 | Clarification not allowed | `no_match`, candidates attached, the existing sentence | a receipt |
+| 0, complete, nothing committed | `no_match`, the absence sentence, no handle option. See below | check the identifier |
+| 0, complete, near matches in the pool | `clarification_required`, near matches listed, the absence sentence | a receipt |
 
 - **K** is `min(MaxSubjectCandidates, 25)`, the bound on a narrowing's keyed reads.
   Below 2 nothing new is listed, and the count is stated. A satisfier the search
@@ -104,7 +106,7 @@ counts a population and is never listed.
   cannot fill the budget.
 - **The sentences** are `ContextFabricCensusUnlistedLimitation` and
   `ContextFabricCensusListedLimitation`. One text for every cause, a count and never
-  a name. With nothing listed the sentence is checked ahead of the floor and the
+  a name. They say "what you can read": a web user has no credential in view. With nothing listed the sentence is checked ahead of the floor and the
   exclusion prompt: both would be false in that state, and a clarification with
   nothing to redeem is refused (CHAOS-5637).
 - **A handle two subjects satisfy is not offered.** A redeemed handle never reaches a
@@ -124,6 +126,32 @@ counts a population and is never listed.
   clock of the run: the reads it measures are compared id by id, so that one field is
   left out of the comparison and no other (`sameTrace`). Project-only never reaches the census,
   so it gets none of this.
+
+## A complete zero (CHAOS-12498)
+
+A complete count of 0 on the question's one handle is a proven absence inside what
+the caller can read, and nothing more. No sentence reads as "does not exist": a
+subject outside the grant gives the same count, so each text is true of both and is
+no oracle.
+
+| Case | Sentence |
+| --- | --- |
+| Pull request or CI run, any caller; work item, unrestricted | `ContextFabricCensusAbsentLimitation` |
+| A requested repository, or an anchor applied to the census: the subject may be elsewhere | `ContextFabricCensusAbsentInScopeLimitation` |
+| Work item, restricted, no narrowing | `ContextFabricWorkItemNoGrantedLinkLimitation` |
+
+- **A team narrowing** takes the first: that census is grant-wide.
+- **The carrier** is `CensusLimitation`, so the sentence goes ahead of the floor and the
+  exclusion prompt. The terminal reason is `census_absent`, not `census_unlisted`.
+- **Near matches stay.** They are real subjects the caller may mean, so the turn stays a
+  clarification. The sentence replaces "the question matched".
+- **No handle option, for any caller.** It would fail `VerifyHandle` as `not_found`, or
+  under a narrowing verify and repeat the turn. A near match's option stays.
+- **What keeps today's behaviour:** a census that was not complete, a closure mismatch,
+  an undecided narrowing, two handles, a non-current axis, project-only, and a handle
+  the question does not bind. None of them proved anything.
+- **A committed turn** takes no sentence here: a zero beside a committed repository is
+  CHAOS-12523.
 
 ## Gates
 
@@ -217,12 +245,13 @@ with one keyed read: for the repo-less work items that page returned, the native
 `ContextFabricWorkItemNoGrantedLinkLimitation`. It is one text for no such item, an
 item outside the grant, an inside item with no link, and a lower-tier link only: it
 is true of all four, so it is no oracle. Neither sentence reads as "does not exist".
-A requested repository narrows the census, so a zero there gives neither sentence.
+A requested repository narrows the census, so a zero there gives neither sentence: it
+takes the scope's absence sentence (see "A complete zero").
 
-**Offers.** The request's own `subject_handles` bound the handle options. A receipt
-must agree with them, so an option for any other value would end the follow-up in a
-conflict. Such an option is not offered, for any caller, and the candidate receipts
-still carry that subject.
+**Offers.** The request's own `subject_handles` bound the handle options, and its
+`expected_kinds` bound the kind options. A receipt must agree with them, so an option
+for any other value would end the follow-up in a conflict. Such an option is not
+offered, for any caller, and the candidate receipts still carry that subject.
 
 **Handles.** A linked item passes `VerifyHandle`, fresh and remembered. A work-item
 handle option mints for a restricted caller only from evidence inside the grant: an

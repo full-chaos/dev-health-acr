@@ -810,6 +810,17 @@ func TestResolveSubjects_SearchQuestionOversizedQuestionStaysContractValid(t *te
 	}
 }
 
+// A question's own term that happens to equal a marker dedupes into the same
+// entry. It stays: count population scope reads it as the anchor term.
+func TestWithoutProvenanceMarkersKeepsARealTerm(t *testing.T) {
+	t.Parallel()
+	candidates := []contextfabric.SubjectCandidate{{MatchedTerms: []string{questionProvenanceMarker, censusProvenanceMarker, "alpha"}}}
+	withoutProvenanceMarkers(candidates, []string{questionProvenanceMarker})
+	if got := candidates[0].MatchedTerms; len(got) != 2 || got[0] != questionProvenanceMarker || got[1] != "alpha" {
+		t.Fatalf("MatchedTerms = %v", got)
+	}
+}
+
 // TestResolveSubjects_SearchQuestionDropsMarkerRatherThanRealTermsAtCap is
 // the codex round-1 P1 fix's second half: a candidate already carrying
 // matchedTermsCap (32) real, user-meaningful extracted terms must not

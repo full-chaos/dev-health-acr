@@ -14,8 +14,10 @@ const (
 	propFact                   = "fact"
 )
 
-// rawPullRequestID is a pull request's canonical id inside an edge's fact.
-var rawPullRequestID = regexp.MustCompile(`\bpull_request:[^\s:]+:(\d+)\b`)
+// rawPullRequestEnd is the end of a fact whose last words are the pull request
+// end's label. Only that end: the fact's first label is a title, and a title may
+// hold anything.
+var rawPullRequestEnd = regexp.MustCompile(` pull request pull_request:[^\s:]+:(\d+)$`)
 
 // nodeProperties is the read of a node's properties. Until CHAOS-12468 two
 // edges labelled their pull request end with its canonical id, so a node that
@@ -39,20 +41,18 @@ func nodeProperties(properties map[string]interface{}) map[string]interface{} {
 }
 
 // edgeProperties is the read of an edge's properties. An edge's fact was
-// composed from its end labels, so one written before CHAOS-12468 names a pull
-// request by its canonical id.
+// composed from its end labels, so one written before CHAOS-12468 ends with a
+// pull request's canonical id.
 func edgeProperties(properties map[string]interface{}) map[string]interface{} {
 	out := normalizeProperties(properties)
 	fact, _ := out[propFact].(string)
-	if !strings.Contains(fact, pullRequestCanonicalPrefix) {
+	match := rawPullRequestEnd.FindStringSubmatchIndex(fact)
+	if match == nil {
 		return out
 	}
-	out[propFact] = rawPullRequestID.ReplaceAllStringFunc(fact, func(id string) string {
-		if number, ok := pullRequestNumber(id); ok {
-			return identity.PullRequestLabel(number)
-		}
-		return id
-	})
+	if number, err := strconv.ParseInt(fact[match[2]:match[3]], 10, 64); err == nil {
+		out[propFact] = fact[:match[0]] + " pull request " + identity.PullRequestLabel(number)
+	}
 	return out
 }
 

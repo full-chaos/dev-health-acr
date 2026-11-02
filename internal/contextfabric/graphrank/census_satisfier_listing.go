@@ -76,7 +76,7 @@ func handleAttestation(attestation Attestation) (KindAttestation, bool) {
 
 // listableSatisfiers is what a round's kind can list and the count it speaks for.
 // A reason says why it holds no ids it may trust. A repository narrowing that
-// refused every satisfier keeps its own sentence, so it speaks for nothing.
+// refused every satisfier counts 0: the zero of the scope the caller named.
 func listableSatisfiers(ka KindAttestation, request contextfabric.InvestigationRequest) (ids []string, count int, reason string) {
 	switch {
 	case ka.ClosureMismatch || ka.SatisfierSetClosureMismatch:
@@ -95,9 +95,10 @@ func listableSatisfiers(ka KindAttestation, request contextfabric.InvestigationR
 	return ka.SatisfierCanonicalIDs, ka.Count, ""
 }
 
-// listCensusSatisfiers lists the satisfiers of the question's handle. The pointer
-// it returns is the handle when several subjects satisfy it: it cannot decide, so
-// it is not offered (withoutUndecidingHandle).
+// listCensusSatisfiers lists the satisfiers of the question's handle, or states
+// that a complete census found none. The pointer it returns is the handle when
+// several subjects satisfy it, or none does: it cannot decide, so it is not offered
+// (withoutUndecidingHandle).
 func listCensusSatisfiers(ctx context.Context, principal storage.Principal, request contextfabric.InvestigationRequest, deps ResolveDeps, attestation Attestation, resolution contextfabric.SubjectResolution) (contextfabric.SubjectResolution, *BoundHandle) {
 	if !attestation.UnscopedVisibility || len(resolution.Committed) != 0 {
 		return resolution, nil
@@ -108,7 +109,7 @@ func listCensusSatisfiers(ctx context.Context, principal storage.Principal, requ
 	}
 	handle := bound[0]
 	ka, ok := handleAttestation(attestation)
-	if !ok || !ka.Complete || ka.Count < 1 {
+	if !ok || !ka.Complete {
 		return resolution, nil
 	}
 	var undeciding *BoundHandle
@@ -117,7 +118,13 @@ func listCensusSatisfiers(ctx context.Context, principal storage.Principal, requ
 	}
 	ids, count, reason := listableSatisfiers(ka, request)
 	if count < 1 {
-		return resolution, undeciding
+		if reason != "" {
+			return resolution, undeciding
+		}
+		// A proven absence, in the census's own scope. No read, no line of its own:
+		// evidence_probe carries the count and census_absent the terminal.
+		resolution.CensusLimitation = censusAbsenceLimitation(principal, request, ka)
+		return resolution, &handle
 	}
 	ids = slices.Compact(slices.Sorted(slices.Values(ids)))
 	// What the census named, whether or not the budget lets it be read: a
@@ -217,6 +224,20 @@ func listCensusSatisfiers(ctx context.Context, principal storage.Principal, requ
 	return resolution, undeciding
 }
 
+// censusAbsenceLimitation is the sentence a complete zero owes. A requested
+// repository or an anchor narrows the census, so a zero there says nothing of the
+// rest of what the caller can read. A restricted caller's work item keeps the link
+// sentence, which already says why it was not resolved.
+func censusAbsenceLimitation(principal storage.Principal, request contextfabric.InvestigationRequest, ka KindAttestation) string {
+	switch {
+	case len(request.RequestedScope.RepositorySlugs) > 0 || ka.AnchorApplied:
+		return contractsv1.ContextFabricCensusAbsentInScopeLimitation
+	case ka.Kind == contextfabric.SubjectWorkItem && grantScopedCensus(principal):
+		return contractsv1.ContextFabricWorkItemNoGrantedLinkLimitation
+	}
+	return contractsv1.ContextFabricCensusAbsentLimitation
+}
+
 // satisfiersFirst puts what the census proved ahead of the pool, so a noisy pool
 // cannot fill the budget, and cuts at the request's budget.
 func satisfiersFirst(listed, pool []contextfabric.SubjectCandidate, satisfier map[string]struct{}, budget int) []contextfabric.SubjectCandidate {
@@ -233,8 +254,9 @@ func satisfiersFirst(listed, pool []contextfabric.SubjectCandidate, satisfier ma
 	return merged[:min(len(merged), budget)]
 }
 
-// withoutUndecidingHandle drops the option of a handle several subjects satisfy.
-// A redeemed handle never reaches a commit, so the option would loop.
+// withoutUndecidingHandle drops the option of a handle several subjects satisfy, or
+// none does. A redeemed handle never reaches a commit, so the option would loop; on
+// a complete zero it fails its verification, or loops under a narrowing.
 func withoutUndecidingHandle(offer contextfabric.StructureOfferMaterial, undeciding *BoundHandle) contextfabric.StructureOfferMaterial {
 	if undeciding == nil {
 		return offer
@@ -256,6 +278,17 @@ func withoutVetoedHandles(offer contextfabric.StructureOfferMaterial, explicit [
 		return !slices.ContainsFunc(explicit, func(handle contractsv1.ContextFabricRequestedHandle) bool {
 			return handle.Kind == option.Kind && handle.Value == option.Value
 		})
+	})
+	return offer
+}
+
+// withoutVetoedKinds is the same rule for the request's own expected_kinds.
+func withoutVetoedKinds(offer contextfabric.StructureOfferMaterial, explicit []contractsv1.ContextFabricSubjectKind) contextfabric.StructureOfferMaterial {
+	if len(explicit) == 0 {
+		return offer
+	}
+	offer.KindOptions = slices.DeleteFunc(slices.Clone(offer.KindOptions), func(option contractsv1.ContextFabricKindOption) bool {
+		return !slices.Contains(explicit, option.Kind)
 	})
 	return offer
 }

@@ -21,11 +21,14 @@ func TestAReadNeverServesARawPullRequestID(t *testing.T) {
 		t.Errorf("the read changed its input: %v", got)
 	}
 	for fact, want := range map[string]string{
-		"linear:CHAOS-9999 links pull request " + id:   "linear:CHAOS-9999 links pull request PR #5063",
-		"PR #999 review belongs to pull request " + id: "PR #999 review belongs to pull request PR #5063",
-		"gh:acme/w#7 links pull request PR #5063":      "gh:acme/w#7 links pull request PR #5063",
-		"see pull_request:notanumber":                  "see pull_request:notanumber",
-		"see pull_request:r:12abc":                     "see pull_request:r:12abc",
+		"linear:CHAOS-9999 links pull request " + id:                 "linear:CHAOS-9999 links pull request PR #5063",
+		"PR #999 review belongs to pull request " + id:               "PR #999 review belongs to pull request PR #5063",
+		"gh:acme/w#7 links pull request PR #5063":                    "gh:acme/w#7 links pull request PR #5063",
+		"see pull_request:notanumber":                                "see pull_request:notanumber",
+		"see pull_request:r:12abc":                                   "see pull_request:r:12abc",
+		"notes on pull_request:r:1 links pull request " + id:         "notes on pull_request:r:1 links pull request PR #5063",
+		"pull request pull_request:r:1 belongs to repository acme/a": "pull request pull_request:r:1 belongs to repository acme/a",
+		"x links pull request pull_request:r:12abc":                  "x links pull request pull_request:r:12abc",
 	} {
 		edge := map[string]interface{}{propFact: fact}
 		if got := edgeProperties(edge)[propFact]; got != want {

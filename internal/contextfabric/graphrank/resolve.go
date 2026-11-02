@@ -54,9 +54,12 @@ const censusProvenanceMarker = "[census witness]"
 // withoutProvenanceMarkers takes both markers off every candidate as it leaves the
 // resolver. They are internal provenance for the merge, and matched_terms is
 // served: a refused re-decision and a lone commit both carried one out. Validation
-// allows a candidate with no term, which a marker-only candidate then is.
-func withoutProvenanceMarkers(candidates []contextfabric.SubjectCandidate) {
-	marker := func(term string) bool { return term == censusProvenanceMarker || term == questionProvenanceMarker }
+// allows a candidate with no term, which a marker-only candidate then is. A term of
+// the question itself that equals a marker merged into the same entry, so it stays.
+func withoutProvenanceMarkers(candidates []contextfabric.SubjectCandidate, terms []string) {
+	marker := func(term string) bool {
+		return (term == censusProvenanceMarker || term == questionProvenanceMarker) && !slices.Contains(terms, term)
+	}
 	for index, candidate := range candidates {
 		if slices.ContainsFunc(candidate.MatchedTerms, marker) {
 			candidates[index].MatchedTerms = slices.DeleteFunc(slices.Clone(candidate.MatchedTerms), marker)
@@ -2294,7 +2297,7 @@ func ResolveSubjectsWithCommitBasis(ctx context.Context, principal storage.Princ
 	admission := newContestAdmission(decideContestScope(frame, confirmedKind,
 		decideAnchorPoolKindScope(frame, scopeAnchorKind, confirmedAnchor, confirmedKind)))
 	resolution, offerMaterial, err := resolveSubjects(ctx, principal, request, interpreted, deps, confirmedKind, confirmedAnchor, bases, digests, frame, scopeAnchorKind, admission)
-	withoutProvenanceMarkers(resolution.Candidates)
+	withoutProvenanceMarkers(resolution.Candidates, SubjectTerms(request, interpreted))
 	// THE DISCLOSURE, emitted on EVERY successful pass through this call,
 	// explicit zero included, so a question that refused nothing and a build
 	// where the refusal stopped happening can never read alike. Deliberately
@@ -4386,6 +4389,7 @@ func resolveSubjects(ctx context.Context, principal storage.Principal, request c
 	// check by hand and risking the two readings drifting apart.
 	_, beforeDiag := kindOfferMaterial(beforeKinds, request.ExpectedKinds, declaredKinds, poolHeld)
 	kindOffer, kindOfferDiag := kindOfferMaterial(afterKinds, request.ExpectedKinds, declaredKinds, poolHeld)
+	kindOffer = withoutVetoedKinds(kindOffer, request.ExpectedKinds)
 	// CHAOS-4012: the SAME union kindOfferMaterial read (pre-repair) above
 	// is also the read-only pool candidateOfferMaterial ranks over -- one
 	// candidate pool, two independent offer axes, never two different
