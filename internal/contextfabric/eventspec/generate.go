@@ -663,17 +663,23 @@ func writeTypedConstruction(b *bytes.Buffer, e Event) {
 // jsonField mirrors Field for schema.json, so the schema's own shape is
 // generated rather than hand-typed a second time.
 type jsonField struct {
-	Key              string      `json:"key"`
-	Type             string      `json:"type"`
-	Presence         string      `json:"presence"`
-	ClosedVocabulary []string    `json:"closed_vocabulary,omitempty"`
-	Applicability    string      `json:"applicability,omitempty"`
-	Nullable         bool        `json:"nullable,omitempty"`
-	MaxItems         int         `json:"max_items,omitempty"`
-	MaxInt           *int        `json:"max_int,omitempty"`
-	JoinedMembers    []string    `json:"joined_members,omitempty"`
-	Pattern          string      `json:"pattern,omitempty"`
-	Fields           []jsonField `json:"fields,omitempty"`
+	Key              string            `json:"key"`
+	Type             string            `json:"type"`
+	Presence         string            `json:"presence"`
+	ClosedVocabulary []string          `json:"closed_vocabulary,omitempty"`
+	Applicability    string            `json:"applicability,omitempty"`
+	Nullable         bool              `json:"nullable,omitempty"`
+	MaxItems         int               `json:"max_items,omitempty"`
+	MaxInt           *int              `json:"max_int,omitempty"`
+	JoinedMembers    []string          `json:"joined_members,omitempty"`
+	Pattern          string            `json:"pattern,omitempty"`
+	RequiredWhen     *jsonRequiredWhen `json:"required_when,omitempty"`
+	Fields           []jsonField       `json:"fields,omitempty"`
+}
+
+type jsonRequiredWhen struct {
+	Key    string   `json:"key"`
+	Values []string `json:"values"`
 }
 
 type jsonEvent struct {
@@ -691,6 +697,10 @@ type jsonEvent struct {
 func toJSONFields(fs []Field) []jsonField {
 	out := make([]jsonField, 0, len(fs))
 	for _, f := range fs {
+		var requiredWhen *jsonRequiredWhen
+		if f.RequiredWhen != nil {
+			requiredWhen = &jsonRequiredWhen{Key: f.RequiredWhen.Key, Values: f.RequiredWhen.Values}
+		}
 		out = append(out, jsonField{
 			Key:              f.Key,
 			Type:             string(f.Type),
@@ -702,6 +712,7 @@ func toJSONFields(fs []Field) []jsonField {
 			MaxInt:           f.MaxInt,
 			JoinedMembers:    f.JoinedMembers,
 			Pattern:          f.Pattern,
+			RequiredWhen:     requiredWhen,
 			Fields:           toJSONFields(f.Fields),
 		})
 	}

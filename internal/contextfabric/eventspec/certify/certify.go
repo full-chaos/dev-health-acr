@@ -1014,6 +1014,14 @@ func validateFields(fields []eventspec.Field, obj map[string]any, eventID string
 				return fmt.Errorf("certify: %s: line has no %q key (declared presence=%s) -- a required field must never be omitted, and missing is never equivalent to a measured zero",
 					eventID, field.Key, field.Presence)
 			}
+			// CHAOS-12519: a conditional field that declares the sibling value
+			// which makes it mandatory is refused when that value is on the line.
+			if rw := field.RequiredWhen; rw != nil {
+				if sibling, ok := obj[rw.Key].(string); ok && contains(rw.Values, sibling) {
+					return fmt.Errorf("certify: %s: line has %s=%q but no %q key -- the declaration requires %q whenever %q is one of %v",
+						eventID, rw.Key, sibling, field.Key, field.Key, rw.Key, rw.Values)
+				}
+			}
 			continue
 		}
 		switch field.Type {
