@@ -139,6 +139,21 @@ func wordRows() []wordRow {
 				TimeSeriesTable: &contractsv1.ContextFabricClaimedFactTable{MeasureUnits: []contractsv1.ContextFabricMeasureUnitDeclaration{{Measure: "median_pr_cycle_hours", Unit: contractsv1.ContextFabricMeasureUnitHours}}},
 			}}
 		}, map[string]string{"measure_unit:points": "story points", "measure_unit:hours": "hours"}},
+		// CHAOS-12554: the subcategory of each row of a claimed subcategory table,
+		// and of no other table.
+		{"claimed subcategory row", func(r *InvestigationResult) {
+			bugfix, other := "quality.bugfix", "risk.security"
+			r.ClaimedFacts = []contractsv1.ContextFabricClaimedFact{
+				{
+					Table: &contractsv1.ContextFabricClaimedFactTable{Field: contractsv1.ContextFabricRenderSubcategoryTableField},
+					Rows:  []contractsv1.ContextFabricClaimedFactRow{{Fields: map[string]contractsv1.ContextFabricScalarValue{"subcategory": {String: &bugfix}}}},
+				},
+				{
+					Table: &contractsv1.ContextFabricClaimedFactTable{Field: "theme_breakdown"},
+					Rows:  []contractsv1.ContextFabricClaimedFactRow{{Fields: map[string]contractsv1.ContextFabricScalarValue{"subcategory": {String: &other}}}},
+				},
+			}
+		}, map[string]string{"subcategory:quality.bugfix": "Bugfix"}},
 	}
 }
 
