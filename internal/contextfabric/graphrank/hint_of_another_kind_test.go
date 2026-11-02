@@ -38,10 +38,15 @@ func askedKindPageHint(kind contextfabric.SubjectKind, id string) contextfabric.
 
 func resolveWithHints(t *testing.T, backend *fakeGraphBackend, question string, frame *contextfabric.QuestionFrame, confirmed *contextfabric.ConfirmedExpectedKind, hints ...contextfabric.SubjectHint) contextfabric.SubjectResolution {
 	t.Helper()
+	return resolveWithHintsIn(t, context.Background(), backend, question, frame, confirmed, hints...)
+}
+
+func resolveWithHintsIn(t *testing.T, ctx context.Context, backend *fakeGraphBackend, question string, frame *contextfabric.QuestionFrame, confirmed *contextfabric.ConfirmedExpectedKind, hints ...contextfabric.SubjectHint) contextfabric.SubjectResolution {
+	t.Helper()
 	request := testRequest()
 	request.Question = question
 	request.RequestedScope.SubjectHints = hints
-	resolution, _, _, _, err := ResolveSubjectsWithCommitBasis(context.Background(), storage.Principal{OrgID: "org_1"}, request, testInterpreted("this subject"), backend.deps(), confirmed, nil, frame, "")
+	resolution, _, _, _, err := ResolveSubjectsWithCommitBasis(ctx, storage.Principal{OrgID: "org_1"}, request, testInterpreted("this subject"), backend.deps(), confirmed, nil, frame, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -168,25 +173,81 @@ func TestAConfirmedKindDecidesWhichHintCommits(t *testing.T) {
 	}
 }
 
-// The caller's pick from an offer stays, whatever its kind. Any other source takes
-// the rule, an engine source string included: the wire carries it, so a caller
-// can send it.
-func TestOnlyACallersPickEscapesTheKindRule(t *testing.T) {
+// The caller's pick from an offer stays, whatever its kind: the engine records it
+// on ctx after redeeming the receipt. No source string escapes the rule, the
+// pick's own included, because the wire carries the source.
+func TestOnlyTheRedeemedPickEscapesTheKindRule(t *testing.T) {
 	t.Parallel()
 	repository, organization := contractsv1.ContextFabricSubjectRepository, contractsv1.ContextFabricSubjectOrganization
 	frame := namedFrameAsking(&repository, "this repository")
-	for source, commits := range map[hintsource.Source]bool{
-		hintsource.ConfirmedCandidateReceipt:       true,
-		hintsource.AnswerReuseAuthorizationRecheck: false,
-		hintsource.CohortGroupAuthorization:        false,
-		hintsource.EngineCommittedAnchorCarry:      false,
-		hintsource.PriorSubjectReceipt:             false,
-	} {
+	for _, source := range append(hintsource.All(), hintsource.Source(hintsource.AskDevPageContext), "") {
 		hint := askedKindPageHint(organization, hintCanonicalID(organization))
 		hint.Source = string(source)
-		resolution := resolveWithHints(t, hintBackend(organization), "How is this going?", frame, nil, hint)
-		if got := len(resolution.Committed) == 1; got != commits {
-			t.Errorf("%s: committed %v, want commit %v", source, resolution.Committed, commits)
+		if resolution := resolveWithHints(t, hintBackend(organization), "How is this going?", frame, nil, hint); len(resolution.Committed) != 0 {
+			t.Errorf("source %q: committed %v, want nothing", source, resolution.Committed)
+		}
+	}
+	hint := askedKindPageHint(organization, hintCanonicalID(organization))
+	hint.Source = string(hintsource.ConfirmedCandidateReceipt)
+	picked := contextfabric.WithConfirmedCandidatePick(context.Background(), contextfabric.SubjectRef{Kind: organization, CanonicalID: hintCanonicalID(organization)})
+	if resolution := resolveWithHintsIn(t, picked, hintBackend(organization), "How is this going?", frame, nil, hint); len(resolution.Committed) != 1 {
+		t.Fatalf("the redeemed pick: committed %v, want it", resolution.Committed)
+	}
+	other := contextfabric.WithConfirmedCandidatePick(context.Background(), contextfabric.SubjectRef{Kind: organization, CanonicalID: "organization:other"})
+	if resolution := resolveWithHintsIn(t, other, hintBackend(organization), "How is this going?", frame, nil, hint); len(resolution.Committed) != 0 {
+		t.Fatalf("a pick of another subject: committed %v, want nothing", resolution.Committed)
+	}
+}
+
+// A dropped hint may have been all the turn had to search with: the frame's own
+// terms then say what the question names.
+func TestADroppedHintLeavesTheFrameTermsToSearch(t *testing.T) {
+	t.Parallel()
+	repository, organization := contractsv1.ContextFabricSubjectRepository, contractsv1.ContextFabricSubjectOrganization
+	backend := hintBackend(organization)
+	backend.searchResults["repo-marker"] = []CandidateNode{candidateNode(repository, "repository:target", "repo-marker", 1, "*")}
+	request := testRequest()
+	request.Question = "Where is effort going in repo-marker?"
+	request.RequestedScope.SubjectHints = []contextfabric.SubjectHint{askedKindPageHint(organization, hintCanonicalID(organization))}
+	interpreted := testInterpreted()
+	interpreted.SubjectTerms = nil
+	resolution, _, _, _, err := ResolveSubjectsWithCommitBasis(context.Background(), storage.Principal{OrgID: "org_1"}, request, interpreted, backend.deps(), nil, nil, namedFrameAsking(&repository, "repo-marker"), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(resolution.Committed) != 1 || resolution.Committed[0].CanonicalID != "repository:target" {
+		t.Fatalf("committed %v, searched %v, want the repository the frame names", resolution.Committed, backend.searchCalls)
+	}
+}
+
+// An inactive team hint answers for that team. On a comparison of other kinds it
+// must not answer in place of both sides; on a comparison of teams it still does.
+func TestAnInactiveTeamHintAnswersOnlyAComparisonOfTeams(t *testing.T) {
+	t.Parallel()
+	team := contractsv1.ContextFabricSubjectTeam
+	hint := askedKindPageHint(team, "team:platform")
+	inactive := map[string]string{SubjectKey(contextfabric.SubjectRef{Kind: team, CanonicalID: "team:platform"}): ""}
+	frame := func(kind contextfabric.SubjectKind) *contextfabric.QuestionFrame {
+		derived := contextfabric.DeriveFrameObligations(contextfabric.QuestionFrame{
+			Goals: []contextfabric.InvestigationGoal{contextfabric.GoalCompare},
+			SubjectExpression: contextfabric.SubjectExpression{
+				Kind: contextfabric.SubjectExpressionExplicitSet,
+				Explicit: &contextfabric.ExplicitSetExpression{Operands: []contextfabric.SubjectOperand{
+					{Kind: contextfabric.SubjectOperandNamed, Named: &contextfabric.NamedSubjectExpression{Terms: []string{"alpha"}, ExpectedKind: slotGateKindPointer(kind)}},
+					{Kind: contextfabric.SubjectOperandNamed, Named: &contextfabric.NamedSubjectExpression{Terms: []string{"beta"}, ExpectedKind: slotGateKindPointer(kind)}},
+				}},
+			},
+			Temporal: contextfabric.TemporalIntentCurrent,
+			Version:  contextfabric.QuestionFrameVersion,
+		}, nil)
+		return &derived
+	}
+	for kind, wantInactive := range map[contextfabric.SubjectKind]bool{contractsv1.ContextFabricSubjectRepository: false, team: true} {
+		backend := hintBackend()
+		backend.exactInactive = inactive
+		resolution := resolveWithHints(t, backend, "Compare alpha and beta", frame(kind), nil, hint)
+		if got := len(resolution.InactiveHints) > 0; got != wantInactive {
+			t.Errorf("comparison of %s: inactive answers %v, want answered %v", kind, resolution.InactiveHints, wantInactive)
 		}
 	}
 }
@@ -212,11 +273,11 @@ func TestARepositoryHintStaysOnlyToAnchorANamedHandle(t *testing.T) {
 	request := testRequest()
 	request.Question = "Is PR 532 ready?"
 	request.RequestedScope.SubjectHints = []contextfabric.SubjectHint{askedKindPageHint(repository, hintCanonicalID(repository))}
-	if _, dropped := withoutHintsOfAnotherKind(request, frame, nil); len(dropped) != 0 {
+	if _, dropped := withoutHintsOfAnotherKind(context.Background(), request, frame, nil); len(dropped) != 0 {
 		t.Fatalf("dropped %v, want the anchor kept", dropped)
 	}
 	request.Question = "Is this pull request ready?"
-	if _, dropped := withoutHintsOfAnotherKind(request, frame, nil); len(dropped) != 1 {
+	if _, dropped := withoutHintsOfAnotherKind(context.Background(), request, frame, nil); len(dropped) != 1 {
 		t.Fatalf("dropped %v, want the repository dropped: no handle to anchor", dropped)
 	}
 }

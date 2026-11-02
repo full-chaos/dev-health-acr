@@ -2815,7 +2815,7 @@ func resolveSubjects(ctx context.Context, principal storage.Principal, request c
 		comparison := contextfabric.ClassifyComparisonOperands(frame)
 		switch comparison.Admission {
 		case contextfabric.ComparisonAdmittedNamedPair, contextfabric.ComparisonHeldScopedOperand:
-			if inactive, inactiveErr := inactiveCallerTeamHints(ctx, deps, request); inactiveErr != nil {
+			if inactive, inactiveErr := inactiveCallerTeamHints(ctx, deps, comparisonAsksForTeams(comparison, request)); inactiveErr != nil {
 				return contextfabric.SubjectResolution{}, contextfabric.StructureOfferMaterial{}, inactiveErr
 			} else if len(inactive) > 0 {
 				return contextfabric.SubjectResolution{Candidates: []contextfabric.SubjectCandidate{}, Committed: []contextfabric.SubjectRef{}, InactiveHints: inactive}, contextfabric.StructureOfferMaterial{}, nil
@@ -2829,8 +2829,14 @@ func resolveSubjects(ctx context.Context, principal storage.Principal, request c
 			return resolution, contextfabric.StructureOfferMaterial{}, nil
 		}
 	}
-	request, hintsOfAnotherKind := withoutHintsOfAnotherKind(request, frame, confirmedKind)
+	request, hintsOfAnotherKind := withoutHintsOfAnotherKind(ctx, request, frame, confirmedKind)
 	terms := SubjectTerms(request, interpreted)
+	if len(terms) == 0 && len(hintsOfAnotherKind) > 0 {
+		// CHAOS-12555: a dropped hint may have been all the turn had to search
+		// with (a supplied interpretation takes no frame terms beside a hint).
+		// The frame's own terms say what the question names.
+		terms = boundedFrameTerms(frame)
+	}
 	// offersOnly (CHAOS-4234): the class-default window gate's offers-only
 	// mode -- every commit MECHANISM below that only exists to reach a
 	// commit (shadow evidence round/census, confirmed-kind truncation

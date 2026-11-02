@@ -28,6 +28,9 @@ func TestConfirmedCandidateReceiptReachesResolutionAsExactSubjectHint(t *testing
 				got = append(got, hint)
 			}
 		}
+		if len(got) == 1 && !IsConfirmedCandidatePick(call.ctx, got[0]) {
+			t.Fatalf("allow_clarification=%v: the resolver's context does not carry the redeemed pick %s, so the kind rule would drop it (CHAOS-12555)", allow, offer.CanonicalID)
+		}
 		if len(got) != 1 || got[0].Source != string(hintsource.ConfirmedCandidateReceipt) {
 			t.Fatalf("allow_clarification=%v: ResolveSubjects hints = %#v, want exactly one exact hint for the redeemed candidate %s from the confirmed candidate source", allow, call.request.RequestedScope.SubjectHints, offer.CanonicalID)
 		}
