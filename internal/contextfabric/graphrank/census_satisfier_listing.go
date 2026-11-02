@@ -260,9 +260,9 @@ func withoutVetoedHandles(offer contextfabric.StructureOfferMaterial, explicit [
 	return offer
 }
 
-// censusCandidateLabel is the server's label for a candidate the census named. The
-// node's own label is not trusted: some nodes carry their raw canonical id as a
-// label (CHAOS-12468), and a shared title leaves the prompt to its id suffix cue.
+// censusCandidateLabel is the server's label for a candidate the census named. It
+// names what the census matched, so two candidates with one title stay apart by
+// more than the prompt's ordinal.
 func censusCandidateLabel(principal storage.Principal, handle BoundHandle, subject contextfabric.SubjectRef, attributes map[string]interface{}) string {
 	label := handleOfferLabel(handle.Kind, handle.Value)
 	if subject.Kind == contextfabric.SubjectWorkItem {

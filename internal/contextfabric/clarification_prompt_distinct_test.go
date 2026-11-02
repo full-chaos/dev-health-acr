@@ -21,7 +21,7 @@ func TestClarificationPromptSeparatesSameKindSameProviderSameLabel(t *testing.T)
 		promptCandidate(contractsv1.ContextFabricSubjectProject, "id-b", "payments", "jira"),
 		promptCandidate(contractsv1.ContextFabricSubjectProject, "id-c", "platform", "jira"),
 	})
-	want := "Which subject did you mean: payments (jira, id-a), payments (jira, id-b), platform?"
+	want := "Which subject did you mean: payments (jira, #1), payments (jira, #2), platform?"
 	if got != want {
 		t.Fatalf("prompt = %q, want %q", got, want)
 	}
@@ -58,27 +58,42 @@ func TestClarificationPromptProviderCueStillSeparatesWithoutID(t *testing.T) {
 	}
 }
 
-func TestClarificationPromptShowsShortestUniqueIDSuffix(t *testing.T) {
-	got := ClarificationPrompt([]SubjectCandidate{
-		promptCandidate(contractsv1.ContextFabricSubjectProject, "jira:project:0000000012345678", "payments", "jira"),
-		promptCandidate(contractsv1.ContextFabricSubjectProject, "jira:project:0000000099995678", "payments", "jira"),
-	})
-	want := "Which subject did you mean: payments (jira, 12345678), payments (jira, 99995678)?"
-	if got != want {
-		t.Fatalf("prompt = %q, want %q", got, want)
+// A canonical id means nothing to a reader, and a fragment of one less
+// (CHAOS-12468): two subjects with one label take an ordinal.
+func TestClarificationPromptNeverShowsAnIDFragment(t *testing.T) {
+	cases := []struct {
+		name, a, b, label, provider, want string
+	}{
+		{"ci run", "ci_pipeline_run.v2:abc:de5%3A4242", "ci_pipeline_run.v2:abd:ff1%3A4242", "CI 4242", "", "CI 4242 (#1), CI 4242 (#2)"},
+		{"work item", "work_item.v2:0000:a%3ACHAOS-70", "work_item.v2:0000:b%3ACHAOS-70", "Split the job", "", "Split the job (#1), Split the job (#2)"},
+		{"project", "jira:project:0000000012345678", "jira:project:0000000099995678", "payments", "jira", "payments (jira, #1), payments (jira, #2)"},
 	}
-	if strings.Contains(got, "jira:project") {
-		t.Fatalf("full id shown: %q", got)
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := ClarificationPrompt([]SubjectCandidate{
+				promptCandidate(contractsv1.ContextFabricSubjectProject, tc.a, tc.label, tc.provider),
+				promptCandidate(contractsv1.ContextFabricSubjectProject, tc.b, tc.label, tc.provider),
+			})
+			if want := "Which subject did you mean: " + tc.want + "?"; got != want {
+				t.Fatalf("prompt = %q, want %q", got, want)
+			}
+			for _, id := range []string{tc.a, tc.b} {
+				if tail := id[len(id)-6:]; strings.Contains(got, tail) {
+					t.Fatalf("id fragment %q shown: %q", tail, got)
+				}
+			}
+		})
 	}
 }
 
-func TestClarificationPromptSuffixesExtendUntilUnique(t *testing.T) {
+// The same subject twice is one subject, so it keeps one ordinal.
+func TestClarificationPromptOrdinalFollowsTheSubject(t *testing.T) {
 	got := ClarificationPrompt([]SubjectCandidate{
-		promptCandidate(contractsv1.ContextFabricSubjectProject, "AAAA-0000000000", "payments", "jira"),
-		promptCandidate(contractsv1.ContextFabricSubjectProject, "BBBB-0000000000", "payments", "jira"),
+		promptCandidate(contractsv1.ContextFabricSubjectProject, "id-a", "payments", ""),
+		promptCandidate(contractsv1.ContextFabricSubjectProject, "id-b", "payments", ""),
+		promptCandidate(contractsv1.ContextFabricSubjectProject, "id-a", "payments", ""),
 	})
-	want := "Which subject did you mean: payments (jira, A-0000000000), payments (jira, B-0000000000)?"
-	if got != want {
+	if want := "Which subject did you mean: payments (#1), payments (#2), payments (#1)?"; got != want {
 		t.Fatalf("prompt = %q, want %q", got, want)
 	}
 }
@@ -93,34 +108,8 @@ func TestClarificationPromptStaysWithinPublishedBoundAtMaxLengths(t *testing.T) 
 	if n := utf8.RuneCountInString(got); n > contractsv1.ContextFabricProjectedClarificationPromptMaxLength {
 		t.Fatalf("prompt is %d runes, bound %d", n, contractsv1.ContextFabricProjectedClarificationPromptMaxLength)
 	}
-	if !strings.Contains(got, "aaaaaaaa") || !strings.Contains(got, "bbbbbbbb") || strings.Contains(got, "#") {
-		t.Fatalf("suffix cues expected: %q", got[len(got)-60:])
-	}
-}
-
-func TestClarificationPromptFallsBackToOrdinalsWhenSuffixesStillOverflow(t *testing.T) {
-	label := strings.Repeat("l", 512)
-	cands := []SubjectCandidate{}
-	for _, c := range []string{"a", "b", "c"} {
-		cands = append(cands, promptCandidate(contractsv1.ContextFabricSubjectProject, strings.Repeat(c, 8)+strings.Repeat("x", 248), label, "jira"))
-	}
-	got := ClarificationPrompt(cands)
-	if n := utf8.RuneCountInString(got); n > contractsv1.ContextFabricProjectedClarificationPromptMaxLength {
-		t.Fatalf("prompt is %d runes, bound %d", n, contractsv1.ContextFabricProjectedClarificationPromptMaxLength)
-	}
 	if !strings.Contains(got, "#1") || !strings.Contains(got, "#2") || !strings.Contains(got, "#3") {
 		t.Fatalf("identical choices not told apart: %q", got[len(got)-60:])
-	}
-}
-
-func TestClarificationPromptKeepsIDCueWhenWithinBound(t *testing.T) {
-	label := strings.Repeat("l", 100)
-	got := ClarificationPrompt([]SubjectCandidate{
-		promptCandidate(contractsv1.ContextFabricSubjectProject, "id-a", label, "jira"),
-		promptCandidate(contractsv1.ContextFabricSubjectProject, "id-b", label, "jira"),
-	})
-	if !strings.Contains(got, "id-a") || strings.Contains(got, "#") {
-		t.Fatalf("id cue lost: %q", got)
 	}
 }
 

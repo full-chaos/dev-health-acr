@@ -1351,7 +1351,11 @@ import (
 // v260 -> v261: a stated window bounds every dated read on the current axis
 // (CHAOS-12536). An answer saved under v260 can hold a row from before the window
 // it states.
-const QueryVersion = "devhealthfacts.clickhouse.v261"
+//
+// v261 -> v262: a pull request's label, an edge's fact and the clarification
+// prompt no longer show a raw canonical id (CHAOS-12468). An answer saved under
+// v261 can hold one.
+const QueryVersion = "devhealthfacts.clickhouse.v262"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each
