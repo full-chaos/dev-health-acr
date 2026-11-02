@@ -169,6 +169,15 @@ func teamRepositoryThemeLinks(ctx context.Context, teamID string, owned []string
 	var links []repositoryThemeRow
 	wordOwner := map[string]string{}
 	add := func(repoID string, themes map[string]float64) bool {
+		// A repository with no effort in any theme draws no row, so its name
+		// and its word decide nothing (Codex r3 on #1962).
+		positive := false
+		for _, theme := range canonicalInvestmentThemes {
+			positive = positive || themes[theme] > 0
+		}
+		if !positive {
+			return true
+		}
 		word := names[repoID]
 		// Two repositories under one handle (repos is keyed by id) could not be
 		// told apart by a reader, and a sankey refuses two nodes with one word.
