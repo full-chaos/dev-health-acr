@@ -108,9 +108,13 @@ func evidenceIDDisplay(entityType ContextFabricEvidenceEntityType, id string, se
 	case ContextFabricEvidenceEntityTeam:
 		return evidenceKey(id)
 	case ContextFabricEvidenceEntityProject:
-		// A project's source id is no name a reader knows, UUID or not: without
-		// a name the answer holds, the noun alone.
-		return named(ContextFabricSubjectProject, id)
+		// The name the answer holds; else the source id with the provider
+		// dropped (acme/live-e2e, OPS); a UUID-shaped id reads as the noun alone
+		// (lead ruling, 2026-11-02).
+		if value := named(ContextFabricSubjectProject, id); value != "" {
+			return value
+		}
+		return evidenceKey(id)
 	case ContextFabricEvidenceEntityRepository:
 		return named(ContextFabricSubjectRepository, id)
 	case ContextFabricEvidenceEntityOrganization:
