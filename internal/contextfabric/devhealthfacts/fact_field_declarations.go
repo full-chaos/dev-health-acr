@@ -629,7 +629,7 @@ func landscapeAreaColumns() []columnDecl {
 		cInt("identity_count", "count"),
 		cInt("churn_loc_30d", "loc"),
 		cInt("delivery_units_30d", "count"),
-		cNum("cycle_p50_30d_hours_avg", "hours"),
+		cNullable(cNum("cycle_p50_30d_hours_avg", "hours")),
 		cInt("wip_max_30d", "count"),
 	}
 }

@@ -118,8 +118,17 @@ type landscapeAreaRow struct {
 	asOfDay                       string
 	identityCount                 int64
 	churnLOC30d, deliveryUnits30d int64
-	cycleP50Avg30dHours           float64
-	wipMax30d                     int64
+	// cycleP50Avg30dHours is nil when no live identity of the group holds a
+	// cycle: Ops stores NULL for an identity with no merged pull request.
+	cycleP50Avg30dHours *float64
+	wipMax30d           int64
+}
+
+func optionalNumber(value *float64) contextfabric.FactValue {
+	if value == nil {
+		return contextfabric.NullFactValue()
+	}
+	return contextfabric.NumberFactValue(*value)
 }
 
 func (r landscapeAreaRow) toFactValueRow() contextfabric.FactValueRow {
@@ -128,7 +137,7 @@ func (r landscapeAreaRow) toFactValueRow() contextfabric.FactValueRow {
 		"identity_count":          contextfabric.IntegerFactValue(r.identityCount),
 		"churn_loc_30d":           contextfabric.IntegerFactValue(r.churnLOC30d),
 		"delivery_units_30d":      contextfabric.IntegerFactValue(r.deliveryUnits30d),
-		"cycle_p50_30d_hours_avg": contextfabric.NumberFactValue(r.cycleP50Avg30dHours),
+		"cycle_p50_30d_hours_avg": optionalNumber(r.cycleP50Avg30dHours),
 		"wip_max_30d":             contextfabric.IntegerFactValue(r.wipMax30d),
 	}}
 }
@@ -145,8 +154,10 @@ const landscapeOneCopyColumns = `argMinIf(churn_loc_30d, map_name, is_live AND a
 // landscapeLiveRowSQL keeps a row the compute produced and drops the row of
 // zeros Ops writes to retract a key (teamkeytables.ICLandscapeRolling30d's
 // LiveRow). x_norm and y_norm are the markers: a computed row never holds 0
-// in them, and a retraction row holds the column default 0 in every measure.
-const landscapeLiveRowSQL = `(x_raw != 0 OR y_raw != 0 OR x_norm != 0 OR y_norm != 0 OR churn_loc_30d != 0 OR delivery_units_30d != 0 OR cycle_p50_30d_hours != 0 OR wip_max_30d != 0)`
+// in them, and a retraction row holds the column default in every measure:
+// 0, or NULL in a Nullable cycle. ifNull keeps is_live 0 or 1, so a
+// retraction row with a NULL cycle is still counted as retracted.
+const landscapeLiveRowSQL = `(x_raw != 0 OR y_raw != 0 OR x_norm != 0 OR y_norm != 0 OR churn_loc_30d != 0 OR delivery_units_30d != 0 OR ifNull(cycle_p50_30d_hours, 0) != 0 OR wip_max_30d != 0)`
 
 // landscapeRowsSQL reads the rows of the requested teams with three flags
 // per row: is_live (the row is not a retraction), latest_day (the team's own
@@ -190,6 +201,8 @@ GROUP BY team_id, identity_id`
 
 // landscapeStatsColumns are the shared stats of the live identities of one
 // group of landscapeOneCopySQL rows, then the group's retraction count.
+// avgIf skips a NULL cycle, so an identity with no cycle is no sample of the
+// mean, and a group with none averages to NULL.
 func landscapeStatsColumns(alias string) string {
 	return `toInt64(sum(` + alias + `live_identity)), toInt64(sumIf(` + alias + `one_churn, ` + alias + `live_identity = 1)), toInt64(sumIf(` + alias + `one_delivery, ` + alias + `live_identity = 1)), avgIf(` + alias + `one_cycle, ` + alias + `live_identity = 1), toInt64(maxIf(` + alias + `one_wip, ` + alias + `live_identity = 1)), toInt64(max(` + alias + `team_retracted))`
 }

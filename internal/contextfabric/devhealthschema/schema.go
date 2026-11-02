@@ -293,7 +293,7 @@ var ProductionColumns = map[string][]Column{
 		{Name: "y_norm", Type: "Float64"},
 		{Name: "churn_loc_30d", Type: "UInt64"},
 		{Name: "delivery_units_30d", Type: "UInt32"},
-		{Name: "cycle_p50_30d_hours", Type: "Float64"},
+		{Name: "cycle_p50_30d_hours", Type: "Float64", AlsoAccepts: []string{"Nullable(Float64)"}},
 		{Name: "wip_max_30d", Type: "UInt32"},
 		{Name: "computed_at", Type: "DateTime"},
 		{Name: "org_id", Type: "String"},
