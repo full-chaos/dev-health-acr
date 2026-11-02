@@ -218,7 +218,7 @@ func TestAnAgedProofIsRefusedAtTheBoundAndAdmittedWithinIt(t *testing.T) {
 // hold bindings whose witnesses say so.
 func TestAProvenBindingCarriesItsPolicyProofTimeAndWitness(t *testing.T) {
 	for _, subject := range []SubjectRef{probeAlpha, probeBeta} {
-		turns := runAnchorProbe(t, []anchorProbeStep{{request: firstTurnRequest("request_witness_one", false), windowed: true, response: identityProvenResponse(subject)}})
+		turns := runAnchorProbe(t, []anchorProbeStep{{request: firstTurnRequest("request_witness_one", false), windowed: true, response: gatedBeyondWindow(identityProvenResponse(subject))}})
 		binding := *bindingMember(turns[0].saved)
 		want := []string{string(subject.Kind) + ":" + subject.CanonicalID}
 		if binding.State != AnchorBindingPendingWindowConfirmation || binding.PolicyVersion != AnchorBindingPolicyVersion ||
