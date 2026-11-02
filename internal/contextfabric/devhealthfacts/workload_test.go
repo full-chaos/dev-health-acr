@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"reflect"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -162,6 +163,10 @@ func TestWorkloadProviderNoPersonLevelFields(t *testing.T) {
 		"p50_basis": true, "p50_unavailable_reason": true,
 		"team_breakdown_rows_shown": true, "team_breakdown_rows_total": true,
 		"p50_known_count": true, "p50_excluded_unattributed_count": true, "p50_excluded_null_p50_count": true,
+		// CHAOS-12607: the rest of the same stored forecast row.
+		"forecast_p85_days": true, "forecast_p95_days": true, "forecast_p50_date": true, "forecast_p85_date": true,
+		"forecast_p95_date": true, "simulation_count": true, "horizon_days": true, "unfinished_runs": true,
+		"completion_distribution": true, "completion_distribution_state": true,
 	}
 	for _, fact := range result.Facts {
 		for field := range fact.Fields {
@@ -565,6 +570,90 @@ func TestWorkloadProviderProjectRollupBasisIsFactLevelScalar(t *testing.T) {
 	for name, found := range wantObservations {
 		if !found {
 			t.Fatalf("team_breakdown.Observations = %v, want %q declared as an observation", table.Observations, name)
+		}
+	}
+}
+
+// completionForecastRow shapes one readers.ReadTeamCompletionForecasts row
+// (CHAOS-12607): every percentile and date present, the arrays as given, and
+// their stored lengths equal to them.
+func completionForecastRow(teamID, workScopeID, computedAt string, values []uint16, counts []uint32) []any {
+	return []any{teamID, uint8(1), workScopeID, computedAt, uint32(10000), int64(120),
+		uint8(1), int64(14), uint8(1), int64(30), uint8(1), int64(40),
+		"2026-08-10", "2026-08-26", "2026-09-05", uint8(0), uint8(1),
+		uint64(len(values)), uint64(len(counts)), values, counts}
+}
+
+// TestEveryWorkloadTableIsDeclaredOnTheCapability (Codex #1940 r2): each
+// table a team workload fact emits, with the completion distribution switched
+// on, has its shape in the provider's declared Tables for teams, so the
+// capability does not under-report what the provider serves.
+func TestEveryWorkloadTableIsDeclaredOnTheCapability(t *testing.T) {
+	client := &fakeClient{tables: []fakeTable{
+		{match: workloadBaseQueryMatch, rows: [][]any{workloadRow("CHAOS", "scope-a")}},
+		{match: workloadDailySeriesMatch, rows: [][]any{workloadDailySeriesRow("CHAOS", "2026-07-26", 160, 12.2, 1.28), workloadDailySeriesRow("CHAOS", "2026-07-27", 161, 12.3, 1.29)}},
+		{match: completionForecastQueryMarker, rows: [][]any{completionForecastRow("CHAOS", "scope-a", "2026-07-27 04:00:00", []uint16{5, 12, 365}, []uint32{100, 9000, 900})}},
+	}}
+	provider := findProvider(t, devhealthfacts.NewProvidersWithOptions(client, devhealthfacts.ProviderOptions{CompletionDistributionEnabled: true}), contextfabric.FactWorkload)
+	result, err := provider.ReadFacts(context.Background(), storage.Principal{OrgID: "org-1"}, contextfabric.FactQuery{
+		Time: contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent},
+		Kind: contextfabric.FactWorkload, Subjects: []contextfabric.SubjectRef{teamSubject("CHAOS")},
+	})
+	if err != nil {
+		t.Fatalf("ReadFacts() error = %v", err)
+	}
+	declared := provider.Capability().Tables[contextfabric.SubjectTeam]
+	shapes := map[contextfabric.FactTableShape]bool{}
+	for _, fact := range result.Facts {
+		for name, value := range fact.Fields {
+			if value.Table == nil {
+				continue
+			}
+			shapes[value.Table.Shape] = true
+			if !slices.Contains(declared, value.Table.Shape) {
+				t.Errorf("field %s emits a %s table the team capability does not declare (%v)", name, value.Table.Shape, declared)
+			}
+		}
+	}
+	if !shapes[contextfabric.FactTableDistribution] || !shapes[contextfabric.FactTableTimeSeries] {
+		t.Fatalf("emitted table shapes = %v, want the distribution and the daily series", shapes)
+	}
+}
+
+// TestAFactWhoseScopeReadsEmptyGetsNoForecastItCannotVerify (Codex #1940 r3,
+// P2): the workload read folds a NULL scope into "", so a fact whose scope
+// reads "" cannot be joined to a forecast by scope -- a NULL-scope forecast and
+// an empty-scope forecast would both match it. Such a fact gets no forecast
+// detail: with the distribution switched on it says scope_ambiguous, and off
+// it gets nothing.
+func TestAFactWhoseScopeReadsEmptyGetsNoForecastItCannotVerify(t *testing.T) {
+	nullScope := completionForecastRow("CHAOS", "", "2026-07-27 04:00:00", []uint16{5, 12}, []uint32{9000, 1000})
+	nullScope[1] = uint8(0) // HasWorkScope: the forecast's scope is NULL
+	for _, distribution := range []bool{true, false} {
+		client := &fakeClient{tables: []fakeTable{
+			{match: workloadBaseQueryMatch, rows: [][]any{workloadRow("CHAOS", "")}},
+			{match: completionForecastQueryMarker, rows: [][]any{nullScope}},
+		}}
+		provider := findProvider(t, devhealthfacts.NewProvidersWithOptions(client, devhealthfacts.ProviderOptions{CompletionDistributionEnabled: distribution}), contextfabric.FactWorkload)
+		result, err := provider.ReadFacts(context.Background(), storage.Principal{OrgID: "org-1"}, contextfabric.FactQuery{
+			Time: contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent},
+			Kind: contextfabric.FactWorkload, Subjects: []contextfabric.SubjectRef{teamSubject("CHAOS")},
+		})
+		if err != nil || len(result.Facts) != 1 {
+			t.Fatalf("switch %t: facts = %d, err = %v", distribution, len(result.Facts), err)
+		}
+		fields := result.Facts[0].Fields
+		for _, name := range []string{"completion_distribution", "forecast_p85_days", "forecast_p50_date", "simulation_count", "unfinished_runs"} {
+			if _, ok := fields[name]; ok {
+				t.Errorf("switch %t: %s attached to a fact whose scope cannot be verified", distribution, name)
+			}
+		}
+		state, ok := fields["completion_distribution_state"]
+		if distribution && (!ok || *state.String != "scope_ambiguous") {
+			t.Errorf("switch on: state = %v, want scope_ambiguous", state)
+		}
+		if !distribution && ok {
+			t.Errorf("switch off: state %v emitted", state)
 		}
 	}
 }

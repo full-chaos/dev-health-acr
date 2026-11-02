@@ -791,8 +791,12 @@ func buildContextFabricInvestigator(ctx context.Context, request buildRequest, p
 		// CHAOS-7257: the slog instrumentation is wrapped so a ClickHouse
 		// read-budget exception (Code 307/158) on a fact statement is also a
 		// Warn with the closed reason read_budget_exceeded and the statement id.
-		devhealthfacts.NewInstrumentedProvidersWithOperations(clickhouse.queryClient, devhealthfacts.NewBudgetWarningInstrumentation(
-			devhealthfacts.NewReadStatsInstrumentation(readers.NewSlogInstrumentation(request.options.Logger, slog.LevelInfo), request.options.Logger, request.options.Now), request.options.Logger), request.sourceHealthOperations),
+		//
+		// CHAOS-12607: the completion distribution is emitted only when the
+		// deployment turns it on (Config.CompletionDistributionEnabled).
+		devhealthfacts.NewInstrumentedProvidersWithOptions(clickhouse.queryClient, devhealthfacts.NewBudgetWarningInstrumentation(
+			devhealthfacts.NewReadStatsInstrumentation(readers.NewSlogInstrumentation(request.options.Logger, slog.LevelInfo), request.options.Logger, request.options.Now), request.options.Logger),
+			devhealthfacts.ProviderOptions{Operations: request.sourceHealthOperations, CompletionDistributionEnabled: request.config.CompletionDistributionEnabled}),
 		// CHAOS-4099 stage 2: the real ScopeExpander over the SAME
 		// ClickHouse client every FactProvider above shares -- activating
 		// the 3 ratified project-origin policies (fact_scope.go's own

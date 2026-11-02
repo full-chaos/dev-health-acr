@@ -146,6 +146,15 @@ func claimedFactRowBytes(claims []ClaimedFact) (int64, error) {
 func truncateClaimedFactRows(claims []ClaimedFact, perTable int) (truncated []ClaimedFact, served int, rules factRowCutRules) {
 	truncated = copySlicePreservingEmpty(claims)
 	for index := range truncated {
+		// A distribution is served whole or not at all (CHAOS-12607): a
+		// shorter completion distribution is a different forecast, so the
+		// cap withholds the table and its declaration instead of cutting
+		// it. The scalar percentiles stay on the fact.
+		if len(truncated[index].Rows) > perTable && truncated[index].Table != nil &&
+			truncated[index].Table.Shape == contractsv1.ContextFabricFactTableShapeDistribution {
+			truncated[index].Rows, truncated[index].Table = nil, nil
+			rules.add(factRowCutDistributionWithheld)
+		}
 		if len(truncated[index].Rows) > perTable {
 			var rule factRowCutRule
 			truncated[index].Rows, rule = keepFactTableRows(truncated[index].Rows, truncated[index].Table, perTable)
@@ -178,10 +187,13 @@ const (
 	// because a fallback is the regression signal and a breakdown is not.
 	factRowCutSeriesUndated
 	factRowCutRankingUnscored
+	// factRowCutDistributionWithheld: a distribution over the cap, withheld
+	// whole rather than cut (CHAOS-12607).
+	factRowCutDistributionWithheld
 )
 
 // factRowCutRules counts the truncated tables by the rule that cut them.
-// Total is every truncated table; the five rule counts sum to it.
+// Total is every truncated table; the rule counts sum to it.
 type factRowCutRules struct {
 	Total           int
 	NewestDays      int
@@ -189,6 +201,8 @@ type factRowCutRules struct {
 	SourcePrefix    int
 	SeriesUndated   int
 	RankingUnscored int
+	// DistributionWithheld counts distributions withheld whole.
+	DistributionWithheld int
 }
 
 func (r *factRowCutRules) add(rule factRowCutRule) {
@@ -202,6 +216,8 @@ func (r *factRowCutRules) add(rule factRowCutRule) {
 		r.SeriesUndated++
 	case factRowCutRankingUnscored:
 		r.RankingUnscored++
+	case factRowCutDistributionWithheld:
+		r.DistributionWithheld++
 	default:
 		r.SourcePrefix++
 	}
@@ -553,8 +569,11 @@ type FactRowTruncationEvent struct {
 	TablesSourcePrefix    int
 	TablesSeriesUndated   int
 	TablesRankingUnscored int
-	Served                bool
-	Declined              FactRowTruncationDeclined
+	// TablesDistributionWithheld counts distributions the cap withheld
+	// whole (CHAOS-12607).
+	TablesDistributionWithheld int
+	Served                     bool
+	Declined                   FactRowTruncationDeclined
 }
 
 // recordFactRowTruncation emits one lever application. A lever that never ran
@@ -564,26 +583,27 @@ func (e *Engine) recordFactRowTruncation(ctx context.Context, principal storage.
 		return
 	}
 	e.telemetry.RecordFactRowTruncation(ctx, principal, FactRowTruncationEvent{
-		Family:                plan.Family,
-		Stage:                 contractsv1.ContextFabricPlanNarrowingAssembledResult,
-		Pass:                  pass,
-		Overrun:               before.Overrun,
-		MaxSerializedBytes:    budget.MaxSerializedBytes,
-		BytesBefore:           before.Measurement.Bytes,
-		BytesAfter:            attempt.Measured.Measurement.Bytes,
-		RowBytes:              attempt.RowBytes,
-		RowsDominate:          attempt.RowsDominate,
-		RowsBefore:            attempt.RowsDeclared,
-		RowsAfter:             attempt.RowsServed,
-		PerTable:              attempt.PerTable,
-		TablesTruncated:       attempt.Tables.Total,
-		TablesNewestDays:      attempt.Tables.NewestDays,
-		TablesHighestRank:     attempt.Tables.HighestRank,
-		TablesSourcePrefix:    attempt.Tables.SourcePrefix,
-		TablesSeriesUndated:   attempt.Tables.SeriesUndated,
-		TablesRankingUnscored: attempt.Tables.RankingUnscored,
-		OutcomeRowsEvicted:    outcomeRowsEvicted(attempt.Result.Limitations),
-		Served:                attempt.Served,
-		Declined:              attempt.Declined,
+		Family:                     plan.Family,
+		Stage:                      contractsv1.ContextFabricPlanNarrowingAssembledResult,
+		Pass:                       pass,
+		Overrun:                    before.Overrun,
+		MaxSerializedBytes:         budget.MaxSerializedBytes,
+		BytesBefore:                before.Measurement.Bytes,
+		BytesAfter:                 attempt.Measured.Measurement.Bytes,
+		RowBytes:                   attempt.RowBytes,
+		RowsDominate:               attempt.RowsDominate,
+		RowsBefore:                 attempt.RowsDeclared,
+		RowsAfter:                  attempt.RowsServed,
+		PerTable:                   attempt.PerTable,
+		TablesTruncated:            attempt.Tables.Total,
+		TablesNewestDays:           attempt.Tables.NewestDays,
+		TablesHighestRank:          attempt.Tables.HighestRank,
+		TablesSourcePrefix:         attempt.Tables.SourcePrefix,
+		TablesSeriesUndated:        attempt.Tables.SeriesUndated,
+		TablesRankingUnscored:      attempt.Tables.RankingUnscored,
+		TablesDistributionWithheld: attempt.Tables.DistributionWithheld,
+		OutcomeRowsEvicted:         outcomeRowsEvicted(attempt.Result.Limitations),
+		Served:                     attempt.Served,
+		Declined:                   attempt.Declined,
 	})
 }
