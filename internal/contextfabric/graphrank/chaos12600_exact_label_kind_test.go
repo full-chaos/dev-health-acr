@@ -211,3 +211,51 @@ func TestBareNamePairCensusFailureWritesItsPolicyLine(t *testing.T) {
 		t.Errorf("policy line kind_basis=%q kind_refusal=%q, want none/%q", event.KindBasis, event.KindRefusal, ExactLabelKindRefusalCensusFailed)
 	}
 }
+
+// Codex r3 on the CHAOS-12600 PR: an operand with several terms is not a bare
+// name. The rule reads one term per side, so a side with more terms keeps
+// today's path (the kind question), with no refusal reason: not this rule's
+// case.
+func TestASideWithSeveralTermsIsNotABareName(t *testing.T) {
+	t.Parallel()
+	frame := bareNamePairFrame(labelAskDev, labelWeb)
+	frame.SubjectExpression.Explicit.Operands[1].Named.Terms = []string{labelWeb, "web app"}
+	comparison := contextfabric.ClassifyComparisonOperands(frame)
+	census := []CandidateNode{repoNode("repository:askdev", labelAskDev), repoNode("repository:web", labelWeb)}
+	deps := ResolveDeps{ExactNameCandidates: func(context.Context) ([]CandidateNode, bool, error) { return census, false, nil }}
+	_, matched, refusal, ok, err := exactLabelPairKind(context.Background(), deps, comparison)
+	if err != nil || ok || refusal != "" || matched != nil {
+		t.Fatalf("ok=%v refusal=%q matched=%v err=%v, want not this rule's case", ok, refusal, matched, err)
+	}
+}
+
+// Codex r3 on the CHAOS-12600 PR: a resolved exact-label pair whose turn ends
+// on an inactive caller team hint still writes its policy line, with
+// kind_basis exact_label.
+func TestAnExactLabelPairEndingOnAnInactiveHintWritesItsPolicyLine(t *testing.T) {
+	t.Parallel()
+	const teamA, teamB = "Platform Core", "Delivery Ops"
+	retired := contextfabric.SubjectRef{Kind: contextfabric.SubjectTeam, CanonicalID: "team:retired", Label: "Retired"}
+	backend := &fakeGraphBackend{
+		searchResults:             map[string][]CandidateNode{},
+		enableExactNameCandidates: true,
+		exactNameCandidates:       []CandidateNode{exactMatchNode(contextfabric.SubjectTeam, "team:core", teamA), exactMatchNode(contextfabric.SubjectTeam, "team:ops", teamB)},
+		exactInactive:             map[string]string{SubjectKey(retired): "team:core"},
+	}
+	sink := &recordingPolicySink{}
+	deps := backend.deps()
+	deps.OperandResolutionSink = sink
+	request := slotGateRequest()
+	request.RequestedScope.SubjectHints = []contextfabric.SubjectHint{{Kind: retired.Kind, ID: retired.CanonicalID, Label: retired.Label, Source: "workbench"}}
+	resolution, _, _, _, err := ResolveSubjectsWithCommitBasis(context.Background(), storage.Principal{OrgID: "org-1"},
+		request, testInterpreted(teamA, teamB), deps, nil, nil, bareNamePairFrame(teamA, teamB), "")
+	if err != nil {
+		t.Fatalf("ResolveSubjectsWithCommitBasis() error = %v", err)
+	}
+	if len(resolution.InactiveHints) == 0 {
+		t.Fatalf("premise: inactive hints = %v, want the turn to end on the inactive team hint", resolution.InactiveHints)
+	}
+	if len(sink.events) != 1 || sink.events[0].KindBasis != ComparisonKindBasisExactLabel {
+		t.Fatalf("policy lines = %+v, want one with kind_basis exact_label", sink.events)
+	}
+}

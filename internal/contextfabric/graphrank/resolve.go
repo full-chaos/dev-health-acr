@@ -2867,9 +2867,16 @@ func resolveSubjects(ctx context.Context, principal storage.Principal, request c
 		switch comparison.Admission {
 		case contextfabric.ComparisonAdmittedNamedPair, contextfabric.ComparisonHeldScopedOperand:
 			request := comparisonRequest(ctx, comparison, request)
-			if inactive, inactiveErr := inactiveCallerTeamHints(ctx, deps, request); inactiveErr != nil {
-				return contextfabric.SubjectResolution{}, contextfabric.StructureOfferMaterial{}, inactiveErr
-			} else if len(inactive) > 0 {
+			if inactive, inactiveErr := inactiveCallerTeamHints(ctx, deps, request); inactiveErr != nil || len(inactive) > 0 {
+				// Codex r3: a pair whose kind the exact-label rule resolved
+				// writes its policy line on these exits too, so the decision
+				// is in the run's own log.
+				if basis == ComparisonKindBasisExactLabel {
+					recordComparisonPolicy(ctx, principal, request, deps, comparison, basis, "")
+				}
+				if inactiveErr != nil {
+					return contextfabric.SubjectResolution{}, contextfabric.StructureOfferMaterial{}, inactiveErr
+				}
 				return contextfabric.SubjectResolution{Candidates: []contextfabric.SubjectCandidate{}, Committed: []contextfabric.SubjectRef{}, InactiveHints: inactive}, contextfabric.StructureOfferMaterial{}, nil
 			}
 			resolution, bases, digests, err := resolveNamedComparisonWithBasis(ctx, principal, request, deps, comparison, admission, basis)

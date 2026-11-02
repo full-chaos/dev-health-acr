@@ -46,7 +46,7 @@ const (
 
 // exactLabelPairKind decides the CHAOS-12600 rule for one comparison. It acts
 // only on a bare-name pair (out_of_cut_unstated_kind, exactly two NAMED
-// operands, each with a term). On success it returns the classification with
+// operands, each with exactly one term). On success it returns the classification with
 // every slot's kind set and the admission moved to the admitted pair, so the
 // pair resolves through resolveNamedComparison exactly as a stated kind does,
 // and the subjects the sides matched, one per side in slot order (both sides
@@ -65,7 +65,9 @@ func exactLabelPairKind(ctx context.Context, deps ResolveDeps, comparison contex
 		return comparison, nil, "", false, nil
 	}
 	for _, slot := range comparison.Slots {
-		if slot.Variant != contextfabric.ComparisonOperandNamed || len(slot.Terms) == 0 || strings.TrimSpace(slot.Terms[0]) == "" {
+		// A bare name is ONE term per side (codex r3): a side with several
+		// terms is not this rule's case and keeps the kind question.
+		if slot.Variant != contextfabric.ComparisonOperandNamed || len(slot.Terms) != 1 || strings.TrimSpace(slot.Terms[0]) == "" {
 			return comparison, nil, "", false, nil
 		}
 	}
