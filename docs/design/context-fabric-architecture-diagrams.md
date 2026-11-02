@@ -278,8 +278,9 @@ fired, a branch that was previously silent.
 **The model's window class reaches the engine (CHAOS-12603).** The
 interpretation model's sanitized `window_class` / `window_confidence` pick is
 carried from the interpret receipt onto `InterpretedQuestion`
-(`carryWindowPick`, `genkitruntime/runtime.go`), on the server-model path and
-the supplied-interpretation path. Before this, CHAOS-3900 W1 read the field in
+(`carryWindowPick`, `genkitruntime/runtime.go`), on the server-model path,
+the supplied-interpretation path and the file-exchange parser
+(`ParseInterpretationOutputSignals`). Before this, CHAOS-3900 W1 read the field in
 `composeEffectiveWindow` but nothing set it, so `ClassifyWindow` always fell
 back by shape. An out-of-vocabulary class stays unset (receipt
 `window_class_unrecognized`). `WindowInferenceVersion` moved to `win_v2`, so
