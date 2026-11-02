@@ -396,6 +396,26 @@ func operandReadFactRequirements(rows []DerivedRequirement, workItemTuple bool) 
 	return requirements
 }
 
+// operandKindsAbsentFrom counts the operand requirements whose kind no
+// earlier group already requests: what the fact request gained only because
+// of the operand rows. A count, not a second merge, so the fact request keeps
+// its one merge sink (TestMergeSinkArityPinsTheAuthorityRoster).
+func operandKindsAbsentFrom(operand []FactRequirement, earlier ...[]FactRequirement) int {
+	present := make(map[FactKind]struct{})
+	for _, group := range earlier {
+		for _, requirement := range group {
+			present[requirement.Kind] = struct{}{}
+		}
+	}
+	added := 0
+	for _, requirement := range operand {
+		if _, ok := present[requirement.Kind]; !ok {
+			added++
+		}
+	}
+	return added
+}
+
 // isCohortSubjectAxis reports whether this family answers about many
 // subjects. It replaces engine.go's `if graphContext.Cohort != nil` pointer
 // test as the reason the ranking kinds are read: a declared property of the

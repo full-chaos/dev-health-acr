@@ -3781,7 +3781,7 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 	operandReadRequirements := operandReadFactRequirements(derivedRequirements, workItemTuple)
 	mergedFactRequirements := mergeFactRequirements(statusComposedRequirements, graphContext.FactRequirements, cohortRankingRequirements, operandReadRequirements)
 	if operandRows := OperandReadRowCount(derivedRequirements); operandRows > 0 && !workItemTuple && e.telemetry != nil {
-		e.telemetry.RecordOperandReadKinds(ctx, principal, operandRows, len(operandReadRequirements), len(mergedFactRequirements)-len(mergeFactRequirements(statusComposedRequirements, graphContext.FactRequirements, cohortRankingRequirements)))
+		e.telemetry.RecordOperandReadKinds(ctx, principal, operandRows, len(operandReadRequirements), operandKindsAbsentFrom(operandReadRequirements, statusComposedRequirements, graphContext.FactRequirements, cohortRankingRequirements))
 	}
 	factRequest := CanonicalFactRequest{
 		workItemTuple:            workItemTuple,
