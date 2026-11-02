@@ -662,8 +662,18 @@ type FactTable struct {
 	// already reports at the whole-result level, now recorded per table
 	// too, since a producer can emit more than one table shape at
 	// different grains.
-	Grain TemporalGrain  `json:"grain,omitempty"`
-	Rows  []FactValueRow `json:"rows"`
+	Grain TemporalGrain `json:"grain,omitempty"`
+	// DirectOnly keeps the whole table out of an answer: read_facts still serves
+	// it, and a claim never attaches it. A fact may hold one attachable table
+	// beside any number of these, so a table can leave the answer path by its
+	// declaration while a direct reader keeps it until a contract version drops
+	// it (CHAOS-12533).
+	DirectOnly bool `json:"direct_only,omitempty"`
+	// DirectOnlyColumns are the measures of an attached table that an answer
+	// does not show, because the source cannot yet tell their zero from
+	// missing. Each one must be a declared measure.
+	DirectOnlyColumns []string       `json:"direct_only_columns,omitempty"`
+	Rows              []FactValueRow `json:"rows"`
 }
 
 // factTableInstantLayouts are the layouts a time_series Key column is
@@ -746,6 +756,11 @@ func (t FactTable) Validate() error {
 			return fmt.Errorf("fact table column %q is declared in more than one of key, measures, or observations", name)
 		}
 		columns[name] = true
+	}
+	for _, name := range t.DirectOnlyColumns {
+		if !measureColumns[name] {
+			return fmt.Errorf("fact table direct-only column %q is not a declared measure", name)
+		}
 	}
 	if t.Shape == FactTableRanking {
 		if t.OrderBy == "" || !containsString(t.Measures, t.OrderBy) {
