@@ -300,7 +300,47 @@ func TestAStatedWorkItemBesideARepository(t *testing.T) {
 				t.Fatalf("count 2: prompt = %q, want the listing's own", prompt)
 			}
 			noHandleOption(t, listingTurn{offers: both.offers}, "CHAOS-71")
+			// The search may already hold both: the choice is still theirs, ahead of
+			// the repository it demoted.
+			held := runBeside(t, besideWorld{principal: principal, question: "Why is CHAOS-71 blocked in " + scopeAnchorRepo + "?", frame: frame, census: &besideCensus{rows: []besideRow{row(linear), row(jira)}}, nodes: nodes, pool: pooledItems(linear, jira)})
+			if got := candidateIDs(held.resolution.Candidates); len(got) < 2 || !slices.Contains(got[:2], linear) || !slices.Contains(got[:2], jira) {
+				t.Fatalf("held by the search: candidates = %v, want both items first", got)
+			}
+			if got := candidateIDs(held.resolution.Candidates); !slices.Contains(got, scopeAnchorRepoID) {
+				t.Fatalf("held by the search: candidates = %v, want the repository kept", got)
+			}
+			if prompt := held.resolution.ClarificationPrompt; strings.Contains(prompt, "could not be matched") {
+				t.Fatalf("held by the search: prompt = %q, want the listing's own", prompt)
+			}
 		})
+	}
+}
+
+func pooledItems(ids ...string) []CandidateNode {
+	nodes := make([]CandidateNode, 0, len(ids))
+	for _, id := range ids {
+		node := repoLessItem(id, scopeAnchorRepo+" split the job", scopeAnchorRepo)
+		node.Relevance = Normalized(0.8)
+		nodes = append(nodes, node)
+	}
+	return nodes
+}
+
+// A subject already committed is not counted again, and nothing else moves.
+func TestAHandleAlreadyCommittedIsNotCountedAgain(t *testing.T) {
+	t.Parallel()
+	deps := (&fakeGraphBackend{}).deps()
+	census := &besideCensus{rows: besideRows()}
+	deps.CensusFunc = census.census
+	deps.HandleGrammarChecker = func(kind contextfabric.SubjectKind, patternID, value string) (string, bool) {
+		return "git_pull_requests.number", ValidateHandleGrammar(kind, patternID, value)
+	}
+	committed := []contextfabric.SubjectRef{{Kind: contextfabric.SubjectRepository, CanonicalID: scopeAnchorRepoID, Label: scopeAnchorRepo}, {Kind: contextfabric.SubjectPullRequest, CanonicalID: "pull_request:r-1:747"}}
+	request := testRequest()
+	request.Question = besideQuestion("pull request 747")
+	after, _ := commitNamedHandle(context.Background(), storage.Principal{OrgID: "org_1"}, request, statedFrame(contextfabric.SubjectPullRequest), deps, contextfabric.SubjectResolution{Committed: slices.Clone(committed)}, contextfabric.CommitBasisSet{}, contextfabric.CommitDecisionDigestSet{})
+	if !slices.Equal(after.Committed, committed) || census.calls != 0 {
+		t.Fatalf("committed %v census calls %d, want the turn as it was and no census", after.Committed, census.calls)
 	}
 }
 
@@ -526,5 +566,26 @@ func TestTheCommitLineSaysWhoNamedTheHandle(t *testing.T) {
 				t.Fatalf("lines = %+v, want explicit %t", lines, want)
 			}
 		})
+	}
+}
+
+// The listing speaks for the question's handle. A handle the caller sent that the
+// question does not name is not listed under the question's words.
+func TestAnotherHandleThanTheQuestionsIsNotListed(t *testing.T) {
+	t.Parallel()
+	linear, jira := besideWorkItem(t, "linear", "CHAOS-71"), besideWorkItem(t, "jira", "CHAOS-71")
+	rows := []besideRow{{contextfabric.SubjectWorkItem, "CHAOS-71", linear, "", scopeAnchorRepo}, {contextfabric.SubjectWorkItem, "CHAOS-71", jira, "", scopeAnchorRepo}}
+	turn := runBeside(t, besideWorld{
+		principal: restrictedCaller(t, scopeAnchorRepo, besideOtherRepo), question: "Why is CHAOS-99 blocked in " + scopeAnchorRepo + "?", census: &besideCensus{rows: rows},
+		nodes: []CandidateNode{repoLessItem(linear, "Split the job", scopeAnchorRepo), repoLessItem(jira, "Split the job", scopeAnchorRepo)},
+		edit: func(r *contextfabric.InvestigationRequest) {
+			r.SubjectHandles = []contractsv1.ContextFabricRequestedHandle{{Kind: contextfabric.SubjectWorkItem, PatternID: "work_item_ticket_key", Value: "CHAOS-71"}}
+		},
+	})
+	if len(turn.resolution.Committed) != 0 {
+		t.Fatalf("committed = %v", turn.resolution.Committed)
+	}
+	if got := candidateIDs(turn.resolution.Candidates); slices.Contains(got, linear) || slices.Contains(got, jira) {
+		t.Fatalf("candidates = %v, want neither listed under CHAOS-99", got)
 	}
 }

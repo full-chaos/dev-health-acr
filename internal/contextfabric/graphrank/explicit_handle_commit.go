@@ -193,11 +193,15 @@ func unresolvedNamedHandle(ctx context.Context, principal storage.Principal, req
 	}
 	attestation := Attestation{UnscopedVisibility: true, Kinds: []KindAttestation{ka}}
 	resolution, undeciding := listCensusSatisfiers(ctx, principal, request, deps, attestation, resolution)
-	// Several satisfiers on show are the choice to offer, so the prompt is theirs.
-	if slices.ContainsFunc(resolution.Candidates, func(candidate contextfabric.SubjectCandidate) bool {
+	// Several satisfiers on show are the choice to offer, ahead of the repository the
+	// turn just demoted, so the prompt is theirs. The search may already hold them, and
+	// the listing then reorders nothing.
+	satisfies := func(candidate contextfabric.SubjectCandidate) bool {
 		return slices.Contains(census.outcome.SatisfierCanonicalIDs, candidate.Subject.CanonicalID)
-	}) {
-		resolution.Candidates = SurvivorsFirstOrder(resolution.Candidates, attestation, deps.ResolutionTracer, request.RequestID)
+	}
+	if slices.ContainsFunc(resolution.Candidates, satisfies) {
+		first := slices.DeleteFunc(slices.Clone(resolution.Candidates), func(c contextfabric.SubjectCandidate) bool { return !satisfies(c) })
+		resolution.Candidates = append(first, slices.DeleteFunc(slices.Clone(resolution.Candidates), satisfies)...)
 		if request.Options.AllowClarification {
 			resolution.ClarificationPrompt = ClarificationPrompt(resolution.Candidates)
 		}
