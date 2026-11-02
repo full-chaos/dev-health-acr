@@ -27,8 +27,11 @@ func validateScalarMap(values map[string]ContextFabricScalarValue) error {
 // drift on what "rows" is allowed to contain. Bounds mirror the published
 // schema's ClaimedFactRow/ProjectedFactRow $defs exactly (maxItems 64 on
 // the schema's "rows" array, maxProperties 32 on each row's "fields").
-func validateClaimedFactRows(rows []ContextFabricClaimedFactRow) error {
-	if len(rows) > ContextFabricClaimedFactMaxRows {
+//
+// table is the declaration the rows travel with (nil when none): its row
+// bound class decides the cap (ContextFabricClaimedFactRowsMax, CHAOS-12607).
+func validateClaimedFactRows(rows []ContextFabricClaimedFactRow, table *ContextFabricClaimedFactTable) error {
+	if len(rows) > ContextFabricClaimedFactRowsMax(table) {
 		return fmt.Errorf("claimed fact rows exceed v1 bounds")
 	}
 	for _, row := range rows {
@@ -40,6 +43,62 @@ func validateClaimedFactRows(rows []ContextFabricClaimedFactRow) error {
 		}
 	}
 	return nil
+}
+
+// ContextFabricClaimedFactRowBoundClass names a class of claimed-fact table
+// whose rows have their own cap above ContextFabricClaimedFactMaxRows. The
+// empty class is every other table, and rows with no declaration: 64.
+//
+// The classes and their caps are ONE table (contextFabricClaimedFactRowBounds)
+// and ONE classifier (ContextFabricClaimedFactRowBoundClassOf), so a further
+// class (CHAOS-12580's detail breakdown) is one constant, one entry and one
+// classifier case, never a second bound path. Every validator reads the cap
+// through ContextFabricClaimedFactRowsMax only. The published schemas carry
+// the same table as one allOf clause per class plus one default clause, and
+// TestEveryRowBoundClassHasItsSchemaClause holds them to this map.
+type ContextFabricClaimedFactRowBoundClass string
+
+const (
+	// ContextFabricClaimedFactRowBoundDistribution: a `distribution` table
+	// (CHAOS-12607), every distinct completion day to the 365-day horizon.
+	ContextFabricClaimedFactRowBoundDistribution ContextFabricClaimedFactRowBoundClass = "distribution"
+)
+
+// contextFabricClaimedFactRowBounds is the cap of every class above the
+// default.
+var contextFabricClaimedFactRowBounds = map[ContextFabricClaimedFactRowBoundClass]int{
+	ContextFabricClaimedFactRowBoundDistribution: ContextFabricClaimedFactDistributionMaxRows,
+}
+
+// ContextFabricClaimedFactRowBoundClasses returns every class with its own
+// cap, and the cap, for the schema agreement test and for producers.
+func ContextFabricClaimedFactRowBoundClasses() map[ContextFabricClaimedFactRowBoundClass]int {
+	out := make(map[ContextFabricClaimedFactRowBoundClass]int, len(contextFabricClaimedFactRowBounds))
+	for class, rows := range contextFabricClaimedFactRowBounds {
+		out[class] = rows
+	}
+	return out
+}
+
+// ContextFabricClaimedFactRowBoundClassOf classifies the declaration rows
+// travel with; "" for a table in no class and for no declaration.
+func ContextFabricClaimedFactRowBoundClassOf(table *ContextFabricClaimedFactTable) ContextFabricClaimedFactRowBoundClass {
+	if table == nil {
+		return ""
+	}
+	if table.Shape == ContextFabricFactTableShapeDistribution {
+		return ContextFabricClaimedFactRowBoundDistribution
+	}
+	return ""
+}
+
+// ContextFabricClaimedFactRowsMax is the row cap of the rows table
+// describes: its class's cap, or ContextFabricClaimedFactMaxRows.
+func ContextFabricClaimedFactRowsMax(table *ContextFabricClaimedFactTable) int {
+	if rows, ok := contextFabricClaimedFactRowBounds[ContextFabricClaimedFactRowBoundClassOf(table)]; ok {
+		return rows
+	}
+	return ContextFabricClaimedFactMaxRows
 }
 
 // ClaimedFactRowContentBytes is one claimed/projected fact row's ACTUAL

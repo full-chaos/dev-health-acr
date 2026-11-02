@@ -415,13 +415,13 @@ func (p ContextFabricAnswerProjection) validateFacts(bounds contextFabricBounds)
 		if err := fact.Value.Validate(); err != nil {
 			return nil, fmt.Errorf("key fact value: %w", err)
 		}
-		if err := validateClaimedFactRows(fact.Rows); err != nil {
+		if err := validateClaimedFactRows(fact.Rows, fact.Table); err != nil {
 			return nil, fmt.Errorf("key fact rows: %w", err)
 		}
 		if err := validateClaimedFactTable(fact.Table, fact.Rows); err != nil {
 			return nil, fmt.Errorf("key fact table: %w", err)
 		}
-		if err := validateClaimedFactRows(fact.TimeSeriesRows); err != nil {
+		if err := validateClaimedFactRows(fact.TimeSeriesRows, fact.TimeSeriesTable); err != nil {
 			return nil, fmt.Errorf("key fact time_series_rows: %w", err)
 		}
 		if err := validateTimeSeriesTable(fact.TimeSeriesTable, fact.TimeSeriesRows); err != nil {
