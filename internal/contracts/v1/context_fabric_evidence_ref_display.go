@@ -86,7 +86,7 @@ func evidenceIDDisplay(entityType ContextFabricEvidenceEntityType, id string, se
 	// repositories in one answer differ; without it, "#n" (codex r3).
 	repositoryNumber := func(repositoryID, number string) string {
 		label := evidenceNumber(number)
-		if label == "" || !evidenceUUIDForm.MatchString(repositoryID) {
+		if label == "" {
 			return label
 		}
 		if repository := named(ContextFabricSubjectRepository, repositoryID); repository != "" {
