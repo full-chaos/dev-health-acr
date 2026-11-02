@@ -60,8 +60,10 @@ type sourceHealthData struct {
 
 // sourceHealthRestricted reports whether the caller sees only some
 // repositories: a repository-restricted caller, and a project-only caller,
-// whatever its repository list holds (CHAOS-12299 r3). The organization
-// figures it guards are then withheld.
+// whatever its repository list holds (CHAOS-12299 r3). What it guards is then
+// withheld: source health, and the organization's investment unit listing. The
+// organization investment fact is not guarded: every caller reads it
+// (CHAOS-12585).
 func sourceHealthRestricted(principal storage.Principal) bool {
 	return auth.ClassifyGrant(principal).IsRestricted()
 }

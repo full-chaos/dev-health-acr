@@ -144,6 +144,33 @@ func TestSeveralClaimsOnOneFactDrawOneTreemap(t *testing.T) {
 	}
 }
 
+// CHAOS-12585: an organization frame reaches the family now, and the
+// organization's fact is one breakdown over every repository. This was the case
+// "an organization" of TestNoTreemapWithoutTheRulesEvidence, which pinned the
+// skip while no organization frame could reach the rule.
+func TestAnOrganizationGetsItsTreemapWithItsOwnWords(t *testing.T) {
+	t.Parallel()
+	result := themeShareResultFor(contractsv1.ContextFabricSubjectOrganization, 0.5, 0.5)
+	shapes, event := selectRenderShapes(result, themeShareFrame(), RenderShapeOptions{InvestmentThemeShare: true})
+	treemaps := treemapsOf(shapes)
+	if len(treemaps) != 1 {
+		t.Fatalf("shapes %+v, skip %q: want one treemap", shapes, skipOf(t, event))
+	}
+	if got := treemaps[0].ValueLabel; got != "Share of effort linked to a repository (ratio)" {
+		t.Fatalf("value label %q: the organization's shares divide the effort that reaches a repository", got)
+	}
+	result.RenderShapes = shapes
+	if err := contractsv1.ValidateRenderShapesForResult(result); err != nil {
+		t.Fatalf("the contract refused the shape: %v", err)
+	}
+	for _, kind := range []contractsv1.ContextFabricSubjectKind{contractsv1.ContextFabricSubjectRepository, contractsv1.ContextFabricSubjectTeam} {
+		shapes, _ := selectRenderShapes(themeShareResultFor(kind, 0.5, 0.5), themeShareFrame(), RenderShapeOptions{InvestmentThemeShare: true})
+		if got := treemapsOf(shapes)[0].ValueLabel; got != "Share of effort (ratio)" {
+			t.Fatalf("%s value label %q", kind, got)
+		}
+	}
+}
+
 func TestATeamGetsTheTreemapToo(t *testing.T) {
 	t.Parallel()
 	shapes, _ := selectRenderShapes(themeShareResultFor(contractsv1.ContextFabricSubjectTeam, 0.5, 0.5), themeShareFrame(), RenderShapeOptions{InvestmentThemeShare: true})
@@ -226,10 +253,7 @@ func TestNoTreemapWithoutTheRulesEvidence(t *testing.T) {
 			r.ClaimedFacts[0].Subject.Kind = contractsv1.ContextFabricSubjectKind("person")
 		}, RenderShapeSkipSubjectKindNotCharted},
 		"a project": {func(r *InvestigationResult) { r.ClaimedFacts[0].Subject.Kind = contractsv1.ContextFabricSubjectProject }, RenderShapeSkipSubjectKindNotCharted},
-		"an organization": {func(r *InvestigationResult) {
-			r.ClaimedFacts[0].Subject.Kind = contractsv1.ContextFabricSubjectOrganization
-		}, RenderShapeSkipSubjectKindNotCharted},
-		"no theme": {func(r *InvestigationResult) { delete(r.ClaimedFacts[0].Rows[1].Fields, "theme") }, RenderShapeSkipThemeRowUnusable},
+		"no theme":  {func(r *InvestigationResult) { delete(r.ClaimedFacts[0].Rows[1].Fields, "theme") }, RenderShapeSkipThemeRowUnusable},
 		"unknown theme": {func(r *InvestigationResult) {
 			token := "unassigned"
 			r.ClaimedFacts[0].Rows[1].Fields["theme"] = ScalarValue{String: &token}
