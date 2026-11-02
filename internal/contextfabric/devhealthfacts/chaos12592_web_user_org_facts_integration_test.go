@@ -83,8 +83,8 @@ func TestAWebUserIsServedTheOrganizationInvestmentFactAgainstRealClickHouse(t *t
 		for _, reason := range result.SubjectReasons {
 			why += " " + reason
 		}
-		if strings.TrimSpace(why) == "" {
-			t.Fatalf("%s: state %q with no reason: a missing repository must say why it holds no fact", name, result.State)
+		if result.State != contextfabric.SourceNoData || strings.TrimSpace(why) == "" {
+			t.Fatalf("%s: state %q, reason %q: want no_data with its reason, never an available read of zero", name, result.State, strings.TrimSpace(why))
 		}
 		t.Logf("%s: state %q, reason %q", name, result.State, strings.TrimSpace(why))
 	}
