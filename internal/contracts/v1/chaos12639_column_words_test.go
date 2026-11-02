@@ -12,15 +12,11 @@ import (
 func columnWordsTable() ContextFabricClaimedFactTable {
 	return ContextFabricClaimedFactTable{
 		Field: "repository_theme_breakdown", Shape: ContextFabricFactTableShapeBreakdown,
-		Key:          []string{"repository", "theme"},
-		Measures:     []string{"weighted_effort"},
-		Observations: []string{"repository_label", "source"},
-		ColumnVocabularies: []ContextFabricColumnVocabularyDeclaration{
-			{Column: "theme", Vocabulary: ContextFabricVocabularyInvestmentTheme},
-		},
-		WordColumns: []ContextFabricWordColumnDeclaration{
-			{Column: "repository", WordColumn: "repository_label"},
-		},
+		Key:                []string{"repository", "theme"},
+		Measures:           []string{"weighted_effort"},
+		Observations:       []string{"repository_label", "source"},
+		ColumnVocabularies: map[string]ContextFabricVocabulary{"theme": ContextFabricVocabularyInvestmentTheme},
+		WordColumns:        map[string]string{"repository": "repository_label"},
 	}
 }
 
@@ -50,38 +46,30 @@ func TestCHAOS12639AColumnWordDeclarationOutsideTheTableIsRefused(t *testing.T) 
 		want   string
 	}{
 		"vocabulary on an undeclared column": {func(t *ContextFabricClaimedFactTable) {
-			t.ColumnVocabularies[0].Column = "missing"
+			t.ColumnVocabularies = map[string]ContextFabricVocabulary{"missing": ContextFabricVocabularyInvestmentTheme}
 		}, "not one of its key or observation columns"},
 		"vocabulary on a measure": {func(t *ContextFabricClaimedFactTable) {
-			t.ColumnVocabularies[0].Column = "weighted_effort"
+			t.ColumnVocabularies = map[string]ContextFabricVocabulary{"weighted_effort": ContextFabricVocabularyInvestmentTheme}
 		}, "not one of its key or observation columns"},
-		"vocabulary stated twice": {func(t *ContextFabricClaimedFactTable) {
-			t.ColumnVocabularies = append(t.ColumnVocabularies, ContextFabricColumnVocabularyDeclaration{Column: "theme", Vocabulary: ContextFabricVocabularySubcategory})
-		}, "more than once"},
 		"vocabulary no column may hold": {func(t *ContextFabricClaimedFactTable) {
-			t.ColumnVocabularies[0].Vocabulary = ContextFabricVocabularyFactField
+			t.ColumnVocabularies = map[string]ContextFabricVocabulary{"theme": ContextFabricVocabularyFactField}
 		}, "not one a column may be declared in"},
 		"word column for an undeclared column": {func(t *ContextFabricClaimedFactTable) {
-			t.WordColumns[0].Column = "missing"
+			t.WordColumns = map[string]string{"missing": "repository_label"}
 		}, "not one of its key or observation columns"},
 		"word column that is no observation": {func(t *ContextFabricClaimedFactTable) {
-			t.WordColumns[0].WordColumn = "theme"
+			t.WordColumns = map[string]string{"repository": "theme"}
 		}, "is not another of its observations"},
 		"word column that is the column itself": {func(t *ContextFabricClaimedFactTable) {
-			t.WordColumns[0] = ContextFabricWordColumnDeclaration{Column: "repository_label", WordColumn: "repository_label"}
+			t.WordColumns = map[string]string{"repository_label": "repository_label"}
 		}, "is not another of its observations"},
-		"word column stated twice": {func(t *ContextFabricClaimedFactTable) {
-			t.WordColumns = append(t.WordColumns, ContextFabricWordColumnDeclaration{Column: "repository", WordColumn: "source"})
-		}, "more than once"},
 		"word column that has a word column": {func(t *ContextFabricClaimedFactTable) {
-			t.WordColumns = append(t.WordColumns, ContextFabricWordColumnDeclaration{Column: "repository_label", WordColumn: "source"})
+			t.WordColumns = map[string]string{"repository": "repository_label", "repository_label": "source"}
 		}, "is itself an id column"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 			table := columnWordsTable()
-			table.ColumnVocabularies = append([]ContextFabricColumnVocabularyDeclaration(nil), table.ColumnVocabularies...)
-			table.WordColumns = append([]ContextFabricWordColumnDeclaration(nil), table.WordColumns...)
 			tc.change(&table)
 			err := table.Validate()
 			if err == nil || !strings.Contains(err.Error(), tc.want) {

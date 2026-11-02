@@ -260,10 +260,10 @@ func (w *vocabularyWords) columnVocabularyRows(table *contractsv1.ContextFabricC
 	if table == nil {
 		return
 	}
-	for _, declaration := range table.ColumnVocabularies {
+	for column, vocabulary := range table.ColumnVocabularies {
 		for _, row := range rows {
-			if value := row.Fields[declaration.Column].String; value != nil {
-				w.add(declaration.Vocabulary, *value)
+			if value := row.Fields[column].String; value != nil {
+				w.add(vocabulary, *value)
 			}
 		}
 	}

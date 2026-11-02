@@ -2,6 +2,7 @@ package contextfabric
 
 import (
 	"context"
+	"maps"
 	"slices"
 	"strings"
 	"testing"
@@ -29,7 +30,7 @@ func columnWordsCapability() FactCapability {
 	}}}
 }
 
-func columnWordsClaimTable(vocabularies []contractsv1.ContextFabricColumnVocabularyDeclaration, words []contractsv1.ContextFabricWordColumnDeclaration) *contractsv1.ContextFabricClaimedFactTable {
+func columnWordsClaimTable(vocabularies map[string]contractsv1.ContextFabricVocabulary, words map[string]string) *contractsv1.ContextFabricClaimedFactTable {
 	return &contractsv1.ContextFabricClaimedFactTable{
 		Field: "repository_theme_breakdown", Shape: contractsv1.ContextFabricFactTableShapeBreakdown,
 		Key: []string{"repository", "theme"}, Measures: []string{"weighted_effort"}, Observations: []string{"repository_label"},
@@ -46,8 +47,8 @@ func columnWordsClaim(subject SubjectKind, table *contractsv1.ContextFabricClaim
 }
 
 var (
-	declaredVocabularies = []contractsv1.ContextFabricColumnVocabularyDeclaration{{Column: "theme", Vocabulary: contractsv1.ContextFabricVocabularyInvestmentTheme}}
-	declaredWords        = []contractsv1.ContextFabricWordColumnDeclaration{{Column: "repository", WordColumn: "repository_label"}}
+	declaredVocabularies = map[string]contractsv1.ContextFabricVocabulary{"theme": contractsv1.ContextFabricVocabularyInvestmentTheme}
+	declaredWords        = map[string]string{"repository": "repository_label"}
 )
 
 // Only the columns the claimed table carries are named: the direct-only pair is
@@ -55,7 +56,7 @@ var (
 func TestCHAOS12639AColumnGetsTheWordsItsDeclarationNames(t *testing.T) {
 	t.Parallel()
 	vocabularies, words := DeclaredColumnWords(columnWordsCapability(), contractsv1.ContextFabricSubjectTeam, *columnWordsClaimTable(nil, nil))
-	if !slices.Equal(vocabularies, declaredVocabularies) || !slices.Equal(words, declaredWords) {
+	if !maps.Equal(vocabularies, declaredVocabularies) || !maps.Equal(words, declaredWords) {
 		t.Fatalf("DeclaredColumnWords = %+v, %+v; want %+v, %+v", vocabularies, words, declaredVocabularies, declaredWords)
 	}
 	// A word column the table does not carry names nothing: the reader would be
@@ -75,20 +76,20 @@ func TestCHAOS12639AColumnGetsTheWordsItsDeclarationNames(t *testing.T) {
 // the claim pointed at is not rewritten.
 func TestCHAOS12639TheDeclarationReplacesAnyWordsATableCarried(t *testing.T) {
 	t.Parallel()
-	forgedVocabularies := []contractsv1.ContextFabricColumnVocabularyDeclaration{{Column: "repository", Vocabulary: contractsv1.ContextFabricVocabularySubcategory}}
-	forgedWords := []contractsv1.ContextFabricWordColumnDeclaration{{Column: "theme", WordColumn: "repository_label"}}
+	forgedVocabularies := map[string]contractsv1.ContextFabricVocabulary{"repository": contractsv1.ContextFabricVocabularySubcategory}
+	forgedWords := map[string]string{"theme": "repository_label"}
 	claim := columnWordsClaim(contractsv1.ContextFabricSubjectTeam, columnWordsClaimTable(forgedVocabularies, forgedWords))
 	wordsOf := declaredColumnWordsOf([]FactCapability{columnWordsCapability()})
 	stated := withDeclaredColumnWords([]ClaimedFact{claim}, wordsOf)
 	for name, table := range map[string]*contractsv1.ContextFabricClaimedFactTable{"table": stated[0].Table, "time_series_table": stated[0].TimeSeriesTable} {
-		if !slices.Equal(table.ColumnVocabularies, declaredVocabularies) || !slices.Equal(table.WordColumns, declaredWords) {
+		if !maps.Equal(table.ColumnVocabularies, declaredVocabularies) || !maps.Equal(table.WordColumns, declaredWords) {
 			t.Errorf("%s = %+v, %+v; want the declared %+v, %+v", name, table.ColumnVocabularies, table.WordColumns, declaredVocabularies, declaredWords)
 		}
 		if err := table.Validate(); err != nil {
 			t.Errorf("%s: the stated table does not validate: %v", name, err)
 		}
 	}
-	if !slices.Equal(claim.Table.ColumnVocabularies, forgedVocabularies) || !slices.Equal(claim.Table.WordColumns, forgedWords) {
+	if !maps.Equal(claim.Table.ColumnVocabularies, forgedVocabularies) || !maps.Equal(claim.Table.WordColumns, forgedWords) {
 		t.Fatal("the source table was rewritten")
 	}
 	cleared := withDeclaredColumnWords([]ClaimedFact{claim}, declaredColumnWordsOf(nil))
@@ -116,7 +117,7 @@ func TestCHAOS12639TheEngineStatesTheColumnWordsWhenItFinalizes(t *testing.T) {
 	plan := AnswerPlan{Family: QuestionFamilyScopedCohortStatus, FamilyVersion: QuestionFamilyTableVersion}
 	finalized := engine.finalizeResult(context.Background(), storage.Principal{}, result, plan, tableFrame(), CanonicalFactBundle{}, &assemblyTelemetry{}, answerPassFirst, MembershipCardinality{})
 	table := finalized.ClaimedFacts[0].Table
-	if !slices.Equal(table.ColumnVocabularies, declaredVocabularies) || !slices.Equal(table.WordColumns, declaredWords) {
+	if !maps.Equal(table.ColumnVocabularies, declaredVocabularies) || !maps.Equal(table.WordColumns, declaredWords) {
 		t.Fatalf("finalized = %+v, %+v; want %+v, %+v", table.ColumnVocabularies, table.WordColumns, declaredVocabularies, declaredWords)
 	}
 }

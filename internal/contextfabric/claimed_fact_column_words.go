@@ -1,6 +1,7 @@
 package contextfabric
 
 import (
+	"maps"
 	"slices"
 
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
@@ -13,25 +14,31 @@ import (
 // declaration is the only source of a stated one. Only columns the claimed table
 // carries are named (a direct-only column a declaration names is not in the
 // answer), a word column only when the table carries it as an observation, and a
-// vocabulary only from the closed column set. The results are in table column
-// order (key, then observations) and nil when the table states none.
-func DeclaredColumnWords(capability FactCapability, subject SubjectKind, table contractsv1.ContextFabricClaimedFactTable) ([]contractsv1.ContextFabricColumnVocabularyDeclaration, []contractsv1.ContextFabricWordColumnDeclaration) {
+// vocabulary only from the closed column set. Each map is nil when the table
+// states none.
+func DeclaredColumnWords(capability FactCapability, subject SubjectKind, table contractsv1.ContextFabricClaimedFactTable) (map[string]contractsv1.ContextFabricVocabulary, map[string]string) {
 	declaration, ok := capability.FieldDeclaration(table.Field, subject)
 	if !ok {
 		return nil, nil
 	}
-	var vocabularies []contractsv1.ContextFabricColumnVocabularyDeclaration
-	var words []contractsv1.ContextFabricWordColumnDeclaration
+	var vocabularies map[string]contractsv1.ContextFabricVocabulary
+	var words map[string]string
 	for _, name := range slices.Concat(table.Key, table.Observations) {
 		column, ok := declaration.Column(name)
 		if !ok {
 			continue
 		}
 		if column.Vocabulary != "" && contractsv1.ValidContextFabricColumnVocabulary(column.Vocabulary) {
-			vocabularies = append(vocabularies, contractsv1.ContextFabricColumnVocabularyDeclaration{Column: name, Vocabulary: column.Vocabulary})
+			if vocabularies == nil {
+				vocabularies = map[string]contractsv1.ContextFabricVocabulary{}
+			}
+			vocabularies[name] = column.Vocabulary
 		}
 		if column.WordColumn != "" && column.WordColumn != name && table.HasObservation(column.WordColumn) {
-			words = append(words, contractsv1.ContextFabricWordColumnDeclaration{Column: name, WordColumn: column.WordColumn})
+			if words == nil {
+				words = map[string]string{}
+			}
+			words[name] = column.WordColumn
 		}
 	}
 	return vocabularies, words
@@ -39,7 +46,7 @@ func DeclaredColumnWords(capability FactCapability, subject SubjectKind, table c
 
 // factColumnWords states the column words of one claimed table. See
 // DeclaredColumnWords.
-type factColumnWords func(kind FactKind, subject SubjectKind, table contractsv1.ContextFabricClaimedFactTable) ([]contractsv1.ContextFabricColumnVocabularyDeclaration, []contractsv1.ContextFabricWordColumnDeclaration)
+type factColumnWords func(kind FactKind, subject SubjectKind, table contractsv1.ContextFabricClaimedFactTable) (map[string]contractsv1.ContextFabricVocabulary, map[string]string)
 
 // declaredColumnWordsOf reads column words off the fact declarations of every
 // kind. With no declarations no table states any.
@@ -48,7 +55,7 @@ func declaredColumnWordsOf(capabilities []FactCapability) factColumnWords {
 	for _, capability := range capabilities {
 		byKind[capability.Kind] = capability
 	}
-	return func(kind FactKind, subject SubjectKind, table contractsv1.ContextFabricClaimedFactTable) ([]contractsv1.ContextFabricColumnVocabularyDeclaration, []contractsv1.ContextFabricWordColumnDeclaration) {
+	return func(kind FactKind, subject SubjectKind, table contractsv1.ContextFabricClaimedFactTable) (map[string]contractsv1.ContextFabricVocabulary, map[string]string) {
 		return DeclaredColumnWords(byKind[kind], subject, table)
 	}
 }
@@ -78,12 +85,13 @@ func tableWithDeclaredColumnWords(table *contractsv1.ContextFabricClaimedFactTab
 	if table == nil {
 		return nil
 	}
-	var vocabularies []contractsv1.ContextFabricColumnVocabularyDeclaration
-	var words []contractsv1.ContextFabricWordColumnDeclaration
+	var vocabularies map[string]contractsv1.ContextFabricVocabulary
+	var words map[string]string
 	if wordsOf != nil {
 		vocabularies, words = wordsOf(claim.Kind, claim.Subject.Kind, *table)
 	}
-	if slices.Equal(vocabularies, table.ColumnVocabularies) && slices.Equal(words, table.WordColumns) {
+	if maps.Equal(vocabularies, table.ColumnVocabularies) && maps.Equal(words, table.WordColumns) &&
+		(vocabularies == nil) == (table.ColumnVocabularies == nil) && (words == nil) == (table.WordColumns == nil) {
 		return table
 	}
 	stated := *table

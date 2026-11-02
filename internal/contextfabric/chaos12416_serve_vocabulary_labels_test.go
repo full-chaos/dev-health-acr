@@ -158,7 +158,7 @@ func wordRows() []wordRow {
 		// on either table, and no cell of a column no table declares.
 		{"claimed column vocabulary cell", func(r *InvestigationResult) {
 			quality, risk, undeclared := "quality", "risk", "maintenance"
-			themed := []contractsv1.ContextFabricColumnVocabularyDeclaration{{Column: "theme", Vocabulary: contractsv1.ContextFabricVocabularyInvestmentTheme}}
+			themed := map[string]contractsv1.ContextFabricVocabulary{"theme": contractsv1.ContextFabricVocabularyInvestmentTheme}
 			r.ClaimedFacts = []contractsv1.ContextFabricClaimedFact{
 				{
 					Table:           &contractsv1.ContextFabricClaimedFactTable{Field: "theme_breakdown", ColumnVocabularies: themed},
