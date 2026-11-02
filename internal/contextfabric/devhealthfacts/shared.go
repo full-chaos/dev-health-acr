@@ -1351,11 +1351,14 @@ import (
 // v260 -> v261: a stated window bounds every dated read on the current axis
 // (CHAOS-12536). An answer saved under v260 can hold a row from before the window
 // it states.
+// v261 -> v262: a team landscape fact carries its row's values as scalars, and a
+// claim on a landscape fact carries area_breakdown or team_breakdown, with no
+// wip_max_30d (CHAOS-12533). An answer saved under v261 holds no landscape row.
 //
-// v261 -> v262: a ticket key of any tracker binds a handle when the caller holds
-// its prefix (CHAOS-12463). An answer saved under v261 answered such a question by
+// v262 -> v263: a ticket key of any tracker binds a handle when the caller holds
+// its prefix (CHAOS-12463). An answer saved under v262 answered such a question by
 // search.
-const QueryVersion = "devhealthfacts.clickhouse.v262"
+const QueryVersion = "devhealthfacts.clickhouse.v263"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each

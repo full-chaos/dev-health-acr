@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"slices"
 	"testing"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
@@ -92,5 +93,18 @@ func TestLandscapeOneCopyAtTheReadFactsBoundary(t *testing.T) {
 	coordinates := tables["map_coordinates"]
 	if coordinates.RowsReturned != 3 {
 		t.Fatalf("map_coordinates rows = %d, want 3 (one per map): %s", coordinates.RowsReturned, raw)
+	}
+	// A direct reader keeps what an answer does not show (CHAOS-12533): the
+	// deprecated table with its raw columns, and wip_max_30d.
+	for _, want := range []string{"x_raw_mean", "y_raw_mean"} {
+		if !slices.Contains(coordinates.Columns, want) {
+			t.Fatalf("map_coordinates has no %s: %v", want, coordinates.Columns)
+		}
+	}
+	if !slices.Contains(area.Columns, "wip_max_30d") {
+		t.Fatalf("area_breakdown lost wip_max_30d at the direct boundary: %v", area.Columns)
+	}
+	if _, scalar := response.Facts[0].Fields["as_of_day"]; !scalar {
+		t.Fatalf("the served fact has no as_of_day scalar: %s", raw)
 	}
 }
