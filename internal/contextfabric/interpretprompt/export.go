@@ -51,8 +51,8 @@ const (
 	// v35 -> v36 (CHAOS-12595): the prompt says what each window_class
 	// means, so a status question about one handle can name state_snapshot.
 	//
-	// v36 -> v37 (CHAOS-12632): one handle named inside its container keeps
-	// the container's name as the subject term, never the number alone.
+	// v36 -> v37 (CHAOS-12632): one pull request named inside its repository
+	// keeps the repository's name as the subject term, never the number alone.
 	PromptVersion = "context-fabric-interpretation.v37"
 	// OutputVersion names the model-output contract the prompt asks for.
 	//

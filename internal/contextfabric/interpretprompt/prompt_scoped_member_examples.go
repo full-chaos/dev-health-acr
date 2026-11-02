@@ -114,7 +114,7 @@ var interpretationScopedMemberExamples = []scopedMemberExample{
 	{
 		Question:   "What is the status of pull request 5063 in the ledger-api repository?",
 		Expression: `{"kind":"named_subject","terms":["ledger-api"]}`,
-		Note:       "one handle inside its container: the terms hold the container, never the number alone; requested_subject_kind pull_request",
+		Note:       "one pull request inside its repository: the terms hold the repository, never the number alone; requested_subject_kind pull_request",
 	},
 	{
 		Question:   "Which pull requests in the ledger-api repository are open?",
