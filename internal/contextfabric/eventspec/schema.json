@@ -5256,7 +5256,8 @@
         "closed_vocabulary": [
           "time_series",
           "breakdown",
-          "ranking"
+          "ranking",
+          "distribution"
         ]
       },
       {

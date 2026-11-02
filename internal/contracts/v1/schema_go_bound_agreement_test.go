@@ -617,9 +617,15 @@ func TestSchemaAndGoBoundsAgree(t *testing.T) {
 		"common#$defs.CandidateOption.properties.receipt_id.minLength":                       8,
 		"common#$defs.ClaimedFact.properties.claim_id.maxLength":                             256,
 		"common#$defs.ClaimedFact.properties.claim_id.minLength":                             8,
-		"common#$defs.ClaimedFact.properties.rows.maxItems":                                  64,
-		"common#$defs.ClaimedFact.properties.time_series_rows.maxItems":                      64,
-		"common#$defs.ClaimedFactRow.properties.fields.maxProperties":                        32,
+		// CHAOS-12607: `rows` admits the largest row bound class cap; allOf.3
+		// is the default clause (64) and allOf.4 the distribution class
+		// (ContextFabricClaimedFactRowsMax). TestEveryRowBoundClassHasItsSchemaClause
+		// holds every class of the Go table to its clause.
+		"common#$defs.ClaimedFact.properties.rows.maxItems":              ContextFabricClaimedFactDistributionMaxRows,
+		"common#$defs.ClaimedFact.allOf.3.then.properties.rows.maxItems": ContextFabricClaimedFactMaxRows,
+		"common#$defs.ClaimedFact.allOf.4.then.properties.rows.maxItems": ContextFabricClaimedFactDistributionMaxRows,
+		"common#$defs.ClaimedFact.properties.time_series_rows.maxItems":  64,
+		"common#$defs.ClaimedFactRow.properties.fields.maxProperties":    32,
 		// CHAOS-4867 round-2 finding (codex, EXECUTED): boundKeywords was
 		// missing "minProperties" entirely -- this bound was invisible to
 		// the walk, not merely misclassified. See boundKeywords' own

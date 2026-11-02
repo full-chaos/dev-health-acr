@@ -1624,6 +1624,70 @@
         },
         "ProjectedFact": {
           "description": "A claimed fact a retained driver cites, carried at value level so a consumer can show the canonical observation behind a judgment rather than only prose about it.",
+          "allOf": [
+            {
+              "description": "CHAOS-12607 row bound, default clause: rows of a table in no row bound class, and rows with no declaration, keep 64.",
+              "$comment": "row-bound-class: default",
+              "if": {
+                "not": {
+                  "anyOf": [
+                    {
+                      "properties": {
+                        "table": {
+                          "properties": {
+                            "shape": {
+                              "const": "distribution"
+                            }
+                          },
+                          "required": [
+                            "shape"
+                          ]
+                        }
+                      },
+                      "required": [
+                        "table"
+                      ]
+                    }
+                  ]
+                }
+              },
+              "then": {
+                "properties": {
+                  "rows": {
+                    "maxItems": 64
+                  }
+                }
+              }
+            },
+            {
+              "description": "CHAOS-12607 row bound, class distribution: a `distribution` table holds every distinct completion day to the 365-day horizon, whole.",
+              "$comment": "row-bound-class: distribution",
+              "if": {
+                "properties": {
+                  "table": {
+                    "properties": {
+                      "shape": {
+                        "const": "distribution"
+                      }
+                    },
+                    "required": [
+                      "shape"
+                    ]
+                  }
+                },
+                "required": [
+                  "table"
+                ]
+              },
+              "then": {
+                "properties": {
+                  "rows": {
+                    "maxItems": 366
+                  }
+                }
+              }
+            }
+          ],
           "properties": {
             "claim_id": {
               "maxLength": 256,
@@ -1672,7 +1736,7 @@
               "items": {
                 "$ref": "#/$defs/context_fabric_answer_projection.v1/$defs/ProjectedFactRow"
               },
-              "maxItems": 64,
+              "maxItems": 366,
               "type": "array"
             },
             "subject": {
@@ -1813,11 +1877,12 @@
               "type": "string"
             },
             "shape": {
-              "description": "What the table IS. `time_series` is one entity indexed by an instant (exactly one key column, parsing as an instant on every row); `breakdown` is many entities with one observation each; `ranking` is many entities ordered by the measure `order_by` names.",
+              "description": "What the table IS. `time_series` is one entity indexed by an instant (exactly one key column, parsing as an instant on every row); `breakdown` is many entities with one observation each; `ranking` is many entities ordered by the measure `order_by` names. `distribution` (CHAOS-12607) is one entity's outcomes over an ordered numeric axis: exactly one integer key column, strictly ascending, never cut, up to 366 rows.",
               "enum": [
                 "time_series",
                 "breakdown",
-                "ranking"
+                "ranking",
+                "distribution"
               ],
               "type": "string"
             }
@@ -5133,6 +5198,68 @@
                   }
                 }
               }
+            },
+            {
+              "description": "CHAOS-12607 row bound, default clause: rows of a table in no row bound class, and rows with no declaration, keep 64.",
+              "$comment": "row-bound-class: default",
+              "if": {
+                "not": {
+                  "anyOf": [
+                    {
+                      "properties": {
+                        "table": {
+                          "properties": {
+                            "shape": {
+                              "const": "distribution"
+                            }
+                          },
+                          "required": [
+                            "shape"
+                          ]
+                        }
+                      },
+                      "required": [
+                        "table"
+                      ]
+                    }
+                  ]
+                }
+              },
+              "then": {
+                "properties": {
+                  "rows": {
+                    "maxItems": 64
+                  }
+                }
+              }
+            },
+            {
+              "description": "CHAOS-12607 row bound, class distribution: a `distribution` table holds every distinct completion day to the 365-day horizon, whole.",
+              "$comment": "row-bound-class: distribution",
+              "if": {
+                "properties": {
+                  "table": {
+                    "properties": {
+                      "shape": {
+                        "const": "distribution"
+                      }
+                    },
+                    "required": [
+                      "shape"
+                    ]
+                  }
+                },
+                "required": [
+                  "table"
+                ]
+              },
+              "then": {
+                "properties": {
+                  "rows": {
+                    "maxItems": 366
+                  }
+                }
+              }
             }
           ],
           "properties": {
@@ -5183,7 +5310,7 @@
               "items": {
                 "$ref": "#/$defs/context_fabric_common.v1/$defs/ClaimedFactRow"
               },
-              "maxItems": 64,
+              "maxItems": 366,
               "type": "array"
             },
             "subject": {
@@ -5361,11 +5488,12 @@
               "type": "string"
             },
             "shape": {
-              "description": "What the table IS. `time_series` is one entity indexed by an instant (exactly one key column, parsing as an instant on every row); `breakdown` is many entities with one observation each; `ranking` is many entities ordered by the measure `order_by` names.",
+              "description": "What the table IS. `time_series` is one entity indexed by an instant (exactly one key column, parsing as an instant on every row); `breakdown` is many entities with one observation each; `ranking` is many entities ordered by the measure `order_by` names. `distribution` (CHAOS-12607) is one entity's outcomes over an ordered numeric axis: exactly one integer key column, strictly ascending, never cut, up to 366 rows.",
               "enum": [
                 "time_series",
                 "breakdown",
-                "ranking"
+                "ranking",
+                "distribution"
               ],
               "type": "string"
             }
