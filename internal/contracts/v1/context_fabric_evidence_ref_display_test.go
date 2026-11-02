@@ -12,7 +12,7 @@ const (
 
 // rawInLabel is what a reader must never see in an evidence label (CHAOS-12620):
 // a UUID, or a provider token before a raw source id.
-var rawInLabel = regexp.MustCompile(`[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}|(^|[\s,:])(linear|jira|gh|ghpr|gitlab|gl|extkey):|%3A|relates_to|:fwd|:rev`)
+var rawInLabel = regexp.MustCompile(`[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}|(^|[\s,:])(linear|jira|gh|ghpr|gitlab|gl|extkey):|%3A|relates_to|:fwd|:rev|ep_[0-9a-f]{32}`)
 
 // Every evidence entity type, from the id forms its producers mint (graph
 // producers scope an id by its repository's UUID; context packet reads mint the
@@ -30,15 +30,16 @@ func TestAnEvidenceLabelNeverShowsARawID(t *testing.T) {
 			{"jira:OPS-11", "Work item: OPS-11"},
 			{displayRepoUUID + ":gitlab:group/project!12", "Work item: group/project!12"},
 		},
-		ContextFabricEvidenceEntityTeam:          {{"linear:CHAOS", "Team: CHAOS"}, {"gl:full.chaos", "Team: full.chaos"}},
-		ContextFabricEvidenceEntityProject:       {{"linear:c67b1602-31db-4422-8dec-a4a02bbcc513", "Project"}},
-		ContextFabricEvidenceEntityOrganization:  {{"70d529e0-3c06-4597-8480-794fd02328b6", "Organization"}},
-		ContextFabricEvidenceEntityCommit:        {{"3f9c2ab", "Commit: 3f9c2ab"}},
-		ContextFabricEvidenceEntityCommitFile:    {{"3f9c2ab:cmd/main.go", "Commit file: 3f9c2ab:cmd/main.go"}},
-		ContextFabricEvidenceEntityHotspot:       {{"cmd/main.go", "File hotspot: cmd/main.go"}},
-		ContextFabricEvidenceEntityComplexity:    {{"cmd/main.go", "File complexity: cmd/main.go"}},
-		ContextFabricEvidenceEntityIncident:      {{"INC-42", "Incident: INC-42"}},
-		ContextFabricEvidenceEntityEpisode:       {{"episode-7", "Episode: episode-7"}},
+		ContextFabricEvidenceEntityTeam:         {{"linear:CHAOS", "Team: CHAOS"}, {"gl:full.chaos", "Team: full.chaos"}},
+		ContextFabricEvidenceEntityProject:      {{"linear:c67b1602-31db-4422-8dec-a4a02bbcc513", "Project"}},
+		ContextFabricEvidenceEntityOrganization: {{"70d529e0-3c06-4597-8480-794fd02328b6", "Organization"}},
+		ContextFabricEvidenceEntityCommit:       {{"3f9c2ab", "Commit: 3f9c2ab"}},
+		ContextFabricEvidenceEntityCommitFile:   {{"3f9c2ab:cmd/main.go", "Commit file: 3f9c2ab:cmd/main.go"}},
+		ContextFabricEvidenceEntityHotspot:      {{"cmd/main.go", "File hotspot: cmd/main.go"}},
+		ContextFabricEvidenceEntityComplexity:   {{"cmd/main.go", "File complexity: cmd/main.go"}},
+		ContextFabricEvidenceEntityIncident:     {{"INC-42", "Incident: INC-42"}},
+		// An episode id is minted inside ACR (ep_ and 32 hex): no reader names it.
+		ContextFabricEvidenceEntityEpisode:       {{"episode-7", "Episode"}, {"ep_0501bca3e78a45b86930192bc8c50444", "Episode"}},
 		ContextFabricEvidenceEntityGraph:         {{"relationship.v2:work_item_team:8dce29ed83b79174cd7aaf8a149a035a", "Relationship"}},
 		ContextFabricEvidenceEntityAIRun:         {{"6f1d2c3b-1111-4222-8333-944455556666", "AI workflow run"}},
 		ContextFabricEvidenceEntityAIArtifact:    {{"edge-1", "AI artifact"}},
