@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -63,11 +64,19 @@ const suppliedRouteSynthesisIdentity = "test-provider/synthesis-model"
 type authorizingGraph struct {
 	liveGraphReader
 	outcome contextfabric.StoredSubjectOutcome
+	// offersUnreadable makes the window gate's offers-only pass fail. The gate
+	// answers a turn whose window is its only question (CHAOS-4451); a pass
+	// that cannot show that keeps the gate, so a turn with no window of its
+	// own stops at the window prompt, before synthesis.
+	offersUnreadable bool
 }
 
 // ResolveSubjects commits the project on a proven basis, so the commit stands
 // on its own and the answer is not asked to affirm it.
-func (g authorizingGraph) ResolveSubjects(context.Context, storage.Principal, contextfabric.InvestigationRequest, contextfabric.InterpretedQuestion, contextfabric.ResolvedGraphBinding, *contextfabric.ConfirmedExpectedKind, *contextfabric.ConfirmedAnchorSelection, *contextfabric.QuestionFrame, contextfabric.SubjectKind) (contextfabric.SubjectResolution, contextfabric.StructureOfferMaterial, contextfabric.CommitBasisSet, contextfabric.CommitDecisionDigestSet, error) {
+func (g authorizingGraph) ResolveSubjects(ctx context.Context, _ storage.Principal, _ contextfabric.InvestigationRequest, _ contextfabric.InterpretedQuestion, _ contextfabric.ResolvedGraphBinding, _ *contextfabric.ConfirmedExpectedKind, _ *contextfabric.ConfirmedAnchorSelection, _ *contextfabric.QuestionFrame, _ contextfabric.SubjectKind) (contextfabric.SubjectResolution, contextfabric.StructureOfferMaterial, contextfabric.CommitBasisSet, contextfabric.CommitDecisionDigestSet, error) {
+	if g.offersUnreadable && contextfabric.OffersOnlyResolution(ctx) {
+		return contextfabric.SubjectResolution{}, contextfabric.StructureOfferMaterial{}, nil, nil, errors.New("offers-only pass unreadable")
+	}
 	bases := contextfabric.CommitBasisSet{}
 	bases.Record(g.project, contextfabric.CommitBasisCallerCanonicalID)
 	return contextfabric.SubjectResolution{Candidates: []contextfabric.SubjectCandidate{}, Committed: []contextfabric.SubjectRef{g.project}},
@@ -122,10 +131,15 @@ func newSuppliedRouteAppWithStore(t *testing.T, interpreter contextfabric.Runtim
 // behind the route.
 func newSuppliedRouteEngine(t *testing.T, interpreter contextfabric.RuntimeQuestionInterpreter, outcome contextfabric.StoredSubjectOutcome, synthesized *[]contextfabric.InterpretedQuestion, store contextfabric.InvestigationResultStore) *contextfabric.Engine {
 	t.Helper()
+	return newSuppliedRouteEngineOver(t, interpreter, authorizingGraph{liveGraphReader: liveGraphReader{project: suppliedRouteProject()}, outcome: outcome}, synthesized, store)
+}
+
+func newSuppliedRouteEngineOver(t *testing.T, interpreter contextfabric.RuntimeQuestionInterpreter, graph authorizingGraph, synthesized *[]contextfabric.InterpretedQuestion, store contextfabric.InvestigationResultStore) *contextfabric.Engine {
+	t.Helper()
 	project := suppliedRouteProject()
 	engine, err := contextfabric.NewEngine(contextfabric.EngineDependencies{
 		Interpreter: interpreter,
-		Graph:       authorizingGraph{liveGraphReader: liveGraphReader{project: project}, outcome: outcome},
+		Graph:       graph,
 		Facts:       liveFactReader{bundle: liveCanonicalFacts(project)},
 		Synthesizer: fixedAnswerSynthesizer{interpretations: synthesized},
 		Results:     store,
@@ -209,21 +223,21 @@ func TestSuppliedInterpretationIsServedEndToEndWithNoInterpretCall(t *testing.T)
 		return result
 	}
 
-	// With no evidence window the engine asks for one before it resolves
-	// anything: a result with no synthesis, built from the supplied
-	// interpretation alone.
+	// With no evidence window the window is this turn's only question
+	// (CHAOS-4451): the engine answers on the inferred window, offers the
+	// window beside the answer, and still names the client as the
+	// interpreter.
 	asked := post(suppliedInvestigationHTTPRequest(t, token, interpretation(output)))
 	if asked.Code != http.StatusOK {
 		t.Fatalf("supplied interpretation, no window: status = %d body=%s, want 200", asked.Code, asked.Body.String())
 	}
 	terminal := decode(asked)
-	if terminal.Status != contractsv1.ContextFabricInvestigationClarificationRequired || terminal.WindowClarification == nil || len(synthesized) != 0 {
-		t.Fatalf("no window: status = %q syntheses = %d, want the window clarification with no synthesis", terminal.Status, len(synthesized))
+	if terminal.Status == contractsv1.ContextFabricInvestigationClarificationRequired || terminal.WindowClarification == nil || len(synthesized) != 1 {
+		t.Fatalf("no window: status = %q syntheses = %d, want an answer with the window offer beside it and one synthesis", terminal.Status, len(synthesized))
 	}
 	if got := terminal.Versions; got.InterpretationSource != contractsv1.ContextFabricInterpretationSourceClient ||
-		got.InterpretationModelIdentity != "client-supplied/claude-test" || got.ModelIdentity != "client-supplied/claude-test" ||
-		got.InterpretationVersion != contract.ModelOutputVersion {
-		t.Fatalf("no window: Versions = %#v, want the client named as the interpreter of a result with no synthesis", got)
+		got.InterpretationModelIdentity != "client-supplied/claude-test" || got.ModelIdentity != suppliedRouteSynthesisIdentity {
+		t.Fatalf("no window: Versions = %#v, want the client named as the interpreter and the synthesis identity kept (as on the windowed turn below)", got)
 	}
 
 	served := post(windowed(interpretation(output)))
@@ -234,7 +248,7 @@ func TestSuppliedInterpretationIsServedEndToEndWithNoInterpretCall(t *testing.T)
 	if interprets != 0 {
 		t.Fatalf("interpret calls = %d for two supplied interpretations, want 0", interprets)
 	}
-	if len(synthesized) != 1 || !reflect.DeepEqual(synthesized[0].SubjectTerms, []string{"Ask Dev"}) || synthesized[0].RequestedJudgment != "release readiness" {
+	if len(synthesized) != 2 || !reflect.DeepEqual(synthesized[1].SubjectTerms, []string{"Ask Dev"}) || synthesized[1].RequestedJudgment != "release readiness" {
 		t.Fatalf("synthesis input interpretation = %#v, want the supplied one", synthesized)
 	}
 	versions := result.Versions
@@ -284,8 +298,8 @@ func TestSuppliedInterpretationIsServedEndToEndWithNoInterpretCall(t *testing.T)
 			t.Fatalf("%s: status = %d body=%s, want a 422 interpretation_rejected", name, rejected.Code, rejected.Body.String())
 		}
 	}
-	if interprets != 1 || len(synthesized) != 1 {
-		t.Fatalf("interpret calls = %d syntheses = %d after the refusals, want 1 and 1: a refused supplied interpretation reaches neither", interprets, len(synthesized))
+	if interprets != 1 || len(synthesized) != 2 {
+		t.Fatalf("interpret calls = %d syntheses = %d after the refusals, want 1 and 2: a refused supplied interpretation reaches neither", interprets, len(synthesized))
 	}
 }
 
@@ -651,22 +665,25 @@ func TestSuppliedInterpretationFollowUpTurnIsServedLikeTheModelPath(t *testing.T
 			return result
 		}
 
+		// CHAOS-4451: the window is the first turn's only question, so it
+		// answers on the inferred window and offers the window beside the
+		// answer; the follow-up redeems that offer.
 		asked := send(investigationRequestBody(), firstSupplied)
-		if asked.Status != contractsv1.ContextFabricInvestigationClarificationRequired || asked.WindowClarification == nil || len(asked.WindowClarification.Options) == 0 || len(synthesized) != 0 {
-			t.Fatalf("first turn: status = %q syntheses = %d, want a window clarification with an option and no synthesis", asked.Status, len(synthesized))
+		if asked.Status == contractsv1.ContextFabricInvestigationClarificationRequired || asked.WindowClarification == nil || len(asked.WindowClarification.Options) == 0 || len(synthesized) != 1 {
+			t.Fatalf("first turn: status = %q syntheses = %d, want an answer with the window offer beside it and one synthesis", asked.Status, len(synthesized))
 		}
 		followUp := investigationRequestBody()
 		followUp.PriorWindowReceipts = []contractsv1.ContextFabricBoundSubjectReceipt{{ResultID: asked.ResultID, ReceiptID: asked.WindowClarification.Options[0].ReceiptID}}
 		served := send(followUp, secondSupplied)
-		if served.Status != contractsv1.ContextFabricInvestigationComplete || served.EffectiveEvidenceWindow == nil || len(synthesized) != 1 {
-			t.Fatalf("second turn: status = %q refusal = %q window = %v syntheses = %d limitations = %v, want the answer served under the confirmed window with one synthesis",
+		if served.Status != contractsv1.ContextFabricInvestigationComplete || served.EffectiveEvidenceWindow == nil || len(synthesized) != 2 {
+			t.Fatalf("second turn: status = %q refusal = %q window = %v syntheses = %d limitations = %v, want the answer served under the confirmed window with a second synthesis",
 				served.Status, served.RefusalBasis, served.EffectiveEvidenceWindow, len(synthesized), served.Limitations)
 		}
 		if served.EffectiveEvidenceWindow.Provenance != contractsv1.ContextFabricWindowClarificationConfirmed {
 			t.Fatalf("second turn: window provenance = %q, want the window the receipt confirmed", served.EffectiveEvidenceWindow.Provenance)
 		}
-		if !reflect.DeepEqual(synthesized[0].SubjectTerms, []string{"Ask Dev"}) {
-			t.Fatalf("synthesis input interpretation = %#v, want the interpretation of the follow-up turn", synthesized[0])
+		if !reflect.DeepEqual(synthesized[1].SubjectTerms, []string{"Ask Dev"}) {
+			t.Fatalf("synthesis input interpretation = %#v, want the interpretation of the follow-up turn", synthesized[1])
 		}
 		wantInterprets := 0
 		for _, suppliedTurn := range []bool{firstSupplied, secondSupplied} {

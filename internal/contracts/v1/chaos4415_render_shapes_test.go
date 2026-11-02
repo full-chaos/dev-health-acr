@@ -176,15 +176,15 @@ func TestRenderShapeRejectsAPointCitingAbsentContent(t *testing.T) {
 }
 
 // TestRenderShapeRejectsAPresentationOnANonSeriesKind keeps a consumer's
-// switch total: there is no such thing as a "stacked_bars" quadrant, and a
+// switch total: there is no such thing as a "stacked_bars" burndown, and a
 // document asserting one has to be rejected rather than interpreted. (A sankey
-// was the example until CHAOS-12578 bound it to its own rule; a quadrant has no
-// rule yet.)
+// was the example until CHAOS-12578 bound it to its own rule, and a quadrant
+// until CHAOS-12623 bound it to landscape_position; a burndown has no rule yet.)
 func TestRenderShapeRejectsAPresentationOnANonSeriesKind(t *testing.T) {
 	t.Parallel()
 	result := renderShapeResultFixture(t)
 	shape := scoreShape(46.7)
-	shape.Kind = ContextFabricRenderKindQuadrant
+	shape.Kind = ContextFabricRenderKindBurndown
 	if err := validateRenderShapes([]ContextFabricRenderShape{shape}, renderShapeSourcesFromResult(result)); err == nil {
 		t.Fatal("validateRenderShapes() accepted a presentation on a kind that carries no series payload")
 	}

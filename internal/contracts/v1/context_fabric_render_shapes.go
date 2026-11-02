@@ -234,6 +234,28 @@ const (
 	// only rule that yields a sankey, and a sankey has no other rule. Declared
 	// ahead of its producer: the wire widens first.
 	ContextFabricRenderRuleInvestmentRepositoryFlow ContextFabricRenderShapeRule = "investment_repository_flow"
+	// ContextFabricRenderRuleLandscapePosition is where teams stand on two
+	// landscape measures on one day (CHAOS-12623; the CHAOS-4611 quadrant): x is
+	// a team's lines of churn and y its delivery units, both over the 30 days to
+	// that day, each a raw value one claim states. It shows position, not cause
+	// and not movement (the daily series serves movement). It is the only rule
+	// that yields a quadrant, and a quadrant has no other rule. Declared ahead of
+	// its producer: the wire widens first.
+	ContextFabricRenderRuleLandscapePosition ContextFabricRenderShapeRule = "landscape_position"
+)
+
+// The quadrant's fields (CHAOS-12623). A point's x cites a claim of
+// ContextFabricRenderLandscapeXField and its y a claim of
+// ContextFabricRenderLandscapeYField, both of one team's landscape fact. The day
+// they speak for is the ContextFabricRenderLandscapeDayField of the one row of
+// that fact's ContextFabricRenderLandscapeTableField, which every claim on the
+// fact carries. Only this pair is allowed: raw values, never a normalized
+// coordinate, percentile or score (the platform guardrail for quadrants).
+const (
+	ContextFabricRenderLandscapeTableField = "area_breakdown"
+	ContextFabricRenderLandscapeDayField   = "as_of_day"
+	ContextFabricRenderLandscapeXField     = "churn_loc_30d"
+	ContextFabricRenderLandscapeYField     = "delivery_units_30d"
 )
 
 // The forecast's table (CHAOS-12608): the `distribution` table of the team

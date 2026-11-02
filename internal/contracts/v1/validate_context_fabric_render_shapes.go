@@ -54,6 +54,11 @@ type renderShapeSources struct {
 	// its team and work scope. Two claims of one fact state one forecast
 	// (Codex #1949 r1), so a forecast shape counts scopes, never claims.
 	forecastScopes map[string]ContextFabricForecastScope
+	// landscapeRows maps a claim's id to the one area_breakdown row it carries
+	// (CHAOS-12623): the day its value speaks for, and the raw cells of the
+	// measures the table declares. A claim with no such row has no entry, so no
+	// quadrant point can cite it.
+	landscapeRows map[string]landscapeRow
 }
 
 // ContextFabricForecastScope is the identity of one stored team forecast: the
@@ -366,6 +371,9 @@ func validateRenderShapes(shapes []ContextFabricRenderShape, sources renderShape
 			return err
 		}
 		if err := validateForecastPercentilesShape(shape, sources); err != nil {
+			return err
+		}
+		if err := validateQuadrantShape(shape, sources); err != nil {
 			return err
 		}
 		if err := validateRenderValueUnit(shape); err != nil {
@@ -819,7 +827,7 @@ func validContextFabricRenderShapeRule(rule ContextFabricRenderShapeRule) bool {
 		ContextFabricRenderRuleDatedFactTrend, ContextFabricRenderRuleInvestmentThemeShare,
 		ContextFabricRenderRuleComparisonSideBySide, ContextFabricRenderRuleInvestmentSubcategoryShare,
 		ContextFabricRenderRuleCompletionForecast, ContextFabricRenderRuleCompletionForecastPercentiles,
-		ContextFabricRenderRuleInvestmentRepositoryFlow:
+		ContextFabricRenderRuleInvestmentRepositoryFlow, ContextFabricRenderRuleLandscapePosition:
 		return true
 	default:
 		return false
@@ -860,6 +868,7 @@ func renderShapeSourcesFromResult(result ContextFabricInvestigationResult) rende
 		forecastScopes:         map[string]ContextFabricForecastScope{},
 		repositoryFlowClaims:   map[string]struct{}{},
 		claimValues:            map[string]renderClaimValue{},
+		landscapeRows:          map[string]landscapeRow{},
 	}
 	if result.Cohort != nil {
 		for _, member := range result.Cohort.Members {
@@ -891,6 +900,9 @@ func renderShapeSourcesFromResult(result ContextFabricInvestigationResult) rende
 			sources.repositoryFlowClaims[fact.ClaimID] = struct{}{}
 		}
 		sources.claimValues[fact.ClaimID] = renderClaimValue{value: fact.Value, kind: fact.Kind, field: fact.Field, subject: fact.Subject, derived: len(fact.DerivedFrom) > 0}
+		if row, ok := landscapeAreaRow(fact.Table, fact.Rows); ok {
+			sources.landscapeRows[fact.ClaimID] = row
+		}
 	}
 	return sources
 }
@@ -915,6 +927,7 @@ func renderShapeSourcesFromProjection(projection ContextFabricAnswerProjection) 
 		forecastScopes:         map[string]ContextFabricForecastScope{},
 		repositoryFlowClaims:   map[string]struct{}{},
 		claimValues:            map[string]renderClaimValue{},
+		landscapeRows:          map[string]landscapeRow{},
 	}
 	if projection.Cohort != nil {
 		for _, member := range projection.Cohort.Members {
@@ -969,6 +982,9 @@ func renderShapeSourcesFromProjection(projection ContextFabricAnswerProjection) 
 			sources.repositoryFlowClaims[fact.ClaimID] = struct{}{}
 		}
 		sources.claimValues[fact.ClaimID] = renderClaimValue{value: fact.Value, kind: fact.Kind, field: fact.Field, subject: fact.Subject}
+		if row, ok := landscapeAreaRow(fact.Table, fact.Rows); ok {
+			sources.landscapeRows[fact.ClaimID] = row
+		}
 	}
 	return sources
 }
