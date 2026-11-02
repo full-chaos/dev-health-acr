@@ -246,7 +246,7 @@ func outsideLinksChangeNothing(t *testing.T, build grantedItemWorldBuilder) {
 			if !reflect.DeepEqual(before.offers, after.offers) {
 				t.Fatalf("offers changed:\nbefore %+v\nafter  %+v", before.offers, after.offers)
 			}
-			if !reflect.DeepEqual(before.trace, after.trace) {
+			if !sameTrace(before.trace, after.trace) {
 				t.Fatalf("trace changed:\nbefore %+v\nafter  %+v", before.trace, after.trace)
 			}
 			if !slices.Equal(before.statements, after.statements) || !slices.Equal(before.graphReads, after.graphReads) {

@@ -114,7 +114,8 @@ already decided.
 
 `CensusOutcome`/`KindAttestation` gained `SatisfierCanonicalID`,
 `SatisfierCanonicalIDs`, `SatisfierSetClosureMismatch`. These are
-in-process only, consumed solely by `SurvivorsFirstOrder` --
+in-process only, consumed by `SurvivorsFirstOrder` and, since CHAOS-12467, by
+`listCensusSatisfiers`, whose line carries counts only --
 `RunShadowEvidenceRound`'s own `emit` closure (the only place anything
 reaches `ResolutionTracer`) does not reference them, and
 `TestResolutionTraceEventNeverCarriesSurvivorData` pins this structurally:

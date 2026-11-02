@@ -772,8 +772,13 @@ func TestAWorkItemHandleOptionStandsOnAnInsideCount(t *testing.T) {
 	if got := options(t, restrictedCaller(t, grantRepoInside)); len(got) != 0 {
 		t.Fatalf("restricted, count 0: options %v, want none", got)
 	}
-	if got := options(t, restrictedCaller(t, grantRepoInside), inside, beside); len(got) != 1 || got[0] != "CHAOS-11516" {
-		t.Fatalf("restricted, count 2: options %v, want the handle", got)
+	if got := options(t, restrictedCaller(t, grantRepoInside), inside); len(got) != 1 || got[0] != "CHAOS-11516" {
+		t.Fatalf("restricted, count 1: options %v, want the handle", got)
+	}
+	// CHAOS-12467: two subjects satisfy the key, and a redeemed handle cannot pick
+	// one. The caller is given what the census listed, or the count.
+	if got := options(t, restrictedCaller(t, grantRepoInside), inside, beside); len(got) != 0 {
+		t.Fatalf("restricted, count 2: options %v, want none", got)
 	}
 	if got := options(t, userprincipal.Authenticated(t, "org_1", nil)); len(got) != 1 {
 		t.Fatalf("unrestricted: options %v, want the handle as before", got)

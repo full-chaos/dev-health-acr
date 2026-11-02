@@ -15,6 +15,7 @@ import (
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/devhealthsource"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/graphrank"
 	"github.com/full-chaos/dev-health-acr/internal/contextpacket"
+	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
 	"github.com/full-chaos/dev-health-acr/internal/testsupport/userprincipal"
 )
@@ -119,6 +120,12 @@ func observeGrantTurn(t *testing.T, world grantWorld) grantObservation {
 // observeTurnAs is observeGrantTurn for one principal, with extra graph nodes.
 func observeTurnAs(t *testing.T, world grantWorld, principal storage.Principal, extra map[string]graphrank.CandidateNode) grantObservation {
 	t.Helper()
+	return observeTurnWith(t, world, principal, extra, 10)
+}
+
+// observeTurnWith is observeTurnAs with the request's candidate budget.
+func observeTurnWith(t *testing.T, world grantWorld, principal storage.Principal, extra map[string]graphrank.CandidateNode, budget int) grantObservation {
+	t.Helper()
 	nodes := map[string]graphrank.CandidateNode{}
 	for _, repository := range []grantRepository{world.insideGitHub, world.insideGitLab, world.outsideGitHub, world.outsideGitLab} {
 		nodes[grantCanonicalID(world, repository)] = grantCandidateNode(world, repository)
@@ -150,7 +157,7 @@ func observeTurnAs(t *testing.T, world grantWorld, principal storage.Principal, 
 		SchemaVersion: contextfabric.InvestigationRequestSchemaV1, RequestID: "request_12345678", Question: grantQuestion,
 		TimeContext: contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent},
 		Options: contextfabric.InvestigationOptions{
-			MaxSubjectCandidates: 10, MaxCohortMembers: 50, MaxRelationshipPaths: 50,
+			MaxSubjectCandidates: budget, MaxCohortMembers: 50, MaxRelationshipPaths: 50,
 			MaxDrivers: 10, MaxEvidenceRefs: 100, MaxSerializedBytes: 262144, AllowClarification: true,
 		},
 		Consumer: contextfabric.ConsumerInfo{Name: "test", Version: "v1", Surface: "test"},
@@ -177,7 +184,7 @@ func assertSameTurn(t *testing.T, before, after grantObservation) {
 	if !reflect.DeepEqual(before.bases, after.bases) || !reflect.DeepEqual(before.digests, after.digests) {
 		t.Fatalf("commit decision changed: %+v %+v / %+v %+v", before.bases, before.digests, after.bases, after.digests)
 	}
-	if !reflect.DeepEqual(before.trace, after.trace) {
+	if !sameTrace(before.trace, after.trace) {
 		t.Fatalf("trace changed:\nbefore %+v\nafter  %+v", before.trace, after.trace)
 	}
 	if !slices.Equal(before.statements, after.statements) {
@@ -185,6 +192,51 @@ func assertSameTurn(t *testing.T, before, after grantObservation) {
 	}
 	if !slices.Equal(before.graphReads, after.graphReads) {
 		t.Fatalf("graph reads changed:\nbefore %q\nafter  %q", before.graphReads, after.graphReads)
+	}
+}
+
+// sameTrace compares two traces field by field, but for one: the listing's elapsed
+// time is the clock of this run, and no row decides it. The keyed reads that take
+// that time are compared here (CensusListingReads) and in graphReads, id by id, so
+// rows outside the grant that changed the work would fail on those. Any other
+// field that differs fails, a new timing field too: name it here only with that
+// same argument.
+func sameTrace(before, after []graphrank.ResolutionTraceEvent) bool {
+	withoutClock := func(trace []graphrank.ResolutionTraceEvent) []graphrank.ResolutionTraceEvent {
+		events := slices.Clone(trace)
+		for index := range events {
+			events[index].CensusListingElapsedMs = 0
+		}
+		return events
+	}
+	return reflect.DeepEqual(withoutClock(before), withoutClock(after))
+}
+
+// The comparison leaves out the clock and nothing else: a change in the work a
+// listing did still fails it.
+func TestTheTraceComparisonLeavesOutOnlyTheClock(t *testing.T) {
+	t.Parallel()
+	line := graphrank.ResolutionTraceEvent{Stage: "evidence_census_listing", CensusCount: 3, CensusListed: 3, CensusListingReads: 3, CensusListingElapsedMs: 2}
+	slower := line
+	slower.CensusListingElapsedMs = 90
+	if !sameTrace([]graphrank.ResolutionTraceEvent{line}, []graphrank.ResolutionTraceEvent{slower}) {
+		t.Fatal("two runs of one turn differ by the clock alone, and the comparison failed them")
+	}
+	for name, edit := range map[string]func(*graphrank.ResolutionTraceEvent){
+		"reads":   func(e *graphrank.ResolutionTraceEvent) { e.CensusListingReads = 4 },
+		"count":   func(e *graphrank.ResolutionTraceEvent) { e.CensusCount = 4 },
+		"listed":  func(e *graphrank.ResolutionTraceEvent) { e.CensusListed = 2 },
+		"refused": func(e *graphrank.ResolutionTraceEvent) { e.CensusListingRefused = 1 },
+		"outcome": func(e *graphrank.ResolutionTraceEvent) { e.CensusListingOutcome = "partly_listed" },
+	} {
+		changed := line
+		edit(&changed)
+		if sameTrace([]graphrank.ResolutionTraceEvent{line}, []graphrank.ResolutionTraceEvent{changed}) {
+			t.Fatalf("%s changed and the comparison passed", name)
+		}
+	}
+	if sameTrace([]graphrank.ResolutionTraceEvent{line}, nil) {
+		t.Fatal("a line went missing and the comparison passed")
 	}
 }
 
@@ -219,6 +271,56 @@ func outsideRowsChangeNothing(t *testing.T, build grantWorldBuilder) {
 			world.add(t, world.outsideGitLab)
 			assertSameTurn(t, before, observeGrantTurn(t, world))
 		})
+	}
+}
+
+// aListingChangesNothingOutsideTheGrant is outsideRowsChangeNothing for each way a
+// census listing can end, in one world: outside rows change no candidate, label,
+// offer, sentence, trace, statement or graph read. CHAOS-12467.
+func aListingChangesNothingOutsideTheGrant(t *testing.T, build grantWorldBuilder) {
+	world := build(t, "census listing")
+	world.add(t, world.insideGitHub)
+	world.add(t, world.insideGitLab)
+	principal := userprincipal.Narrowed(t, world.org, []string{"acme/*", "group/*"}, []string{world.insideGitHub.slug, world.insideGitLab.slug})
+	refused := map[string]graphrank.CandidateNode{}
+	for _, repository := range []grantRepository{world.insideGitHub, world.insideGitLab} {
+		node := grantCandidateNode(world, repository)
+		node.Attributes["authorization_repositories"] = []string{"other/secret"}
+		refused[grantCanonicalID(world, repository)] = node
+	}
+	besideOutside := grantCandidateNode(world, world.insideGitHub)
+	besideOutside.Attributes["authorization_repositories"] = []string{world.outsideGitHub.slug, world.insideGitHub.slug}
+	turns := []struct {
+		name   string
+		budget int
+		extra  map[string]graphrank.CandidateNode
+		want   int
+		says   string
+	}{
+		{"all listed", 10, nil, 2, ""},
+		{"a budget below two", 1, nil, 0, contractsv1.ContextFabricCensusUnlistedLimitation(2)},
+		{"every id refused", 10, refused, 0, contractsv1.ContextFabricCensusUnlistedLimitation(2)},
+		{"a node beside an outside slug", 10, map[string]graphrank.CandidateNode{grantCanonicalID(world, world.insideGitHub): besideOutside}, 2, ""},
+	}
+	before := make([]grantObservation, 0, len(turns))
+	for _, turn := range turns {
+		observed := observeTurnWith(t, world, principal, turn.extra, turn.budget)
+		if got := len(observed.resolution.Candidates); got != turn.want || observed.resolution.CensusLimitation != turn.says {
+			t.Fatalf("%s: candidates %d limitation %q, want %d and %q", turn.name, got, observed.resolution.CensusLimitation, turn.want, turn.says)
+		}
+		before = append(before, observed)
+	}
+	world.add(t, world.outsideGitHub)
+	world.add(t, world.outsideGitLab)
+	for index, turn := range turns {
+		after := observeTurnWith(t, world, principal, turn.extra, turn.budget)
+		assertSameTurn(t, before[index], after)
+		rendered := fmt.Sprintf("%+v %+v", after.resolution, after.offers)
+		for _, slug := range []string{world.outsideGitHub.slug, world.outsideGitLab.slug} {
+			if strings.Contains(rendered, slug) {
+				t.Fatalf("%s: %s is in what the turn shows: %s", turn.name, slug, rendered)
+			}
+		}
 	}
 }
 
@@ -381,6 +483,46 @@ func grantModelWorld(_ *testing.T, _ string) grantWorld {
 func TestOutsideRowsChangeNothingOnTheStatementModel(t *testing.T) {
 	t.Parallel()
 	outsideRowsChangeNothing(t, grantModelWorld)
+}
+
+func TestAListingChangesNothingOutsideTheGrant(t *testing.T) {
+	t.Parallel()
+	aListingChangesNothingOutsideTheGrant(t, grantModelWorld)
+}
+
+// Over the set budget no id is held. The model counts rows, so the rows of one
+// repository stand for many. Outside rows change nothing here either.
+func TestOverTheBudgetChangesNothingOutsideTheGrant(t *testing.T) {
+	t.Parallel()
+	world := grantModelWorld(t, "over the budget")
+	for range graphrank.CensusSatisfierSetBudget + 2 {
+		world.add(t, world.insideGitHub)
+	}
+	before := observeGrantTurn(t, world)
+	if want := contractsv1.ContextFabricCensusUnlistedLimitation(graphrank.CensusSatisfierSetBudget + 2); before.resolution.CensusLimitation != want {
+		t.Fatalf("limitation = %q, want %q", before.resolution.CensusLimitation, want)
+	}
+	if len(before.resolution.Candidates) != 0 || len(before.graphReads) != 1 {
+		t.Fatalf("candidates %v graph reads %q, want none past the search", before.resolution.Candidates, before.graphReads)
+	}
+	world.add(t, world.outsideGitHub)
+	world.add(t, world.outsideGitLab)
+	assertSameTurn(t, before, observeGrantTurn(t, world))
+}
+
+// A project-only caller reads no statement, whatever the organization holds.
+func TestAProjectOnlyTurnDoesNotFollowTheRows(t *testing.T) {
+	t.Parallel()
+	world := grantModelWorld(t, "project only")
+	principal := userprincipal.ProjectOnly(t, world.org, []string{"project.v2:github:P-1"})
+	before := observeTurnAs(t, world, principal, nil)
+	if len(before.statements) != 0 || before.resolution.CensusLimitation != "" {
+		t.Fatalf("statements %q limitation %q, want neither", before.statements, before.resolution.CensusLimitation)
+	}
+	world.add(t, world.insideGitHub)
+	world.add(t, world.insideGitLab)
+	world.add(t, world.outsideGitHub)
+	assertSameTurn(t, before, observeTurnAs(t, world, principal, nil))
 }
 
 func TestAnOutsideSatisfierIsNeverCountedNamedOrOffered(t *testing.T) {

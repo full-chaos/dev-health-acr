@@ -235,7 +235,17 @@ func openPostgres(ctx context.Context, cfg config.Config, logger *slog.Logger) (
 	}
 	stopOutboxPublisher := func() error { return nil }
 	if outboxPublisher != nil {
-		stopOutboxPublisher = startCredentialOutboxPublisher(ctx, outboxPublisher, logger, packetPurgeSlogObserver(logger), 0)
+		stopPublisher := startCredentialOutboxPublisher(ctx, outboxPublisher, logger, packetPurgeSlogObserver(logger), 0)
+		stopOutboxPublisher = stopPublisher
+		// CHAOS-11198: the reaper of published aggregates, on the same gate (the DELETE grant is held only with it).
+		outboxReaper, err := storagepostgres.NewOutboxReaper(database)
+		if err != nil {
+			return fail(errors.Join(fmt.Errorf("initialize credential outbox reaper: %w", err), stopPublisher(), stopPurgeLoop(), stopWorkloadCredentialPurgeLoop(), stopOAuthPurgeLoop(), stopBrowserFamilyPurgeLoop(), stopDeviceSweep(), stopLifecycleTick()))
+		}
+		if reaper := buildCredentialOutboxReaper(cfg, outboxReaper); reaper != nil {
+			stopReaper := startCredentialOutboxReaper(ctx, reaper, logger, packetPurgeSlogObserver(logger), 0)
+			stopOutboxPublisher = func() error { return errors.Join(stopReaper(), stopPublisher()) }
+		}
 	}
 	// CHAOS-11952: the Ask Dev retention job, behind its switch, on acr-api's
 	// own pool as the runtime role (CHAOS-12244: no role of its own).

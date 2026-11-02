@@ -9790,7 +9790,8 @@
         "closed_vocabulary": [
           "cohort_attention_score",
           "cohort_driver_contribution",
-          "dated_fact_trend"
+          "dated_fact_trend",
+          "investment_theme_share"
         ]
       },
       {
@@ -9798,6 +9799,15 @@
         "type": "string",
         "presence": "required",
         "closed_vocabulary": [
+          "rule_disabled",
+          "not_investment_allocation",
+          "no_theme_breakdown",
+          "several_theme_breakdowns",
+          "subject_kind_not_charted",
+          "theme_row_unusable",
+          "fewer_than_two_shares",
+          "cohort_answer",
+          "theme_table_cut",
           "not_cohort_intent",
           "no_ranked_member",
           "no_drivers",
@@ -9912,7 +9922,8 @@
             "closed_vocabulary": [
               "cohort_attention_score",
               "cohort_driver_contribution",
-              "dated_fact_trend"
+              "dated_fact_trend",
+              "investment_theme_share"
             ]
           },
           {
@@ -11611,6 +11622,7 @@
           "frame_gate_refused",
           "no_candidate_of_declared_kind",
           "ambiguous",
+          "census_unlisted",
           "offer_pool_emptied_by_exclusion",
           "graph_not_projected",
           "team_inactive",
@@ -16267,6 +16279,84 @@
         "key": "census_commit_handle_explicit",
         "type": "bool",
         "presence": "required"
+      }
+    ]
+  },
+  {
+    "id": "graphrank.evidence_census_listing",
+    "msg": "context fabric resolution trace: evidence census listing",
+    "level": "info",
+    "multiplicity": "zero_or_one_per_request",
+    "attribution": [
+      "request_id"
+    ],
+    "bounded_aggregation": "at most one line per resolveSubjects call: listCensusSatisfiers has one unlooped call site, reached only when a stalled round counted a satisfier of the question's one handle.",
+    "fields": [
+      {
+        "key": "request_id",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "stage",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "evidence_census_listing"
+        ]
+      },
+      {
+        "key": "census_kind",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "census_count",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "census_listed",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "census_listing_reads",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "census_listing_refused",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "elapsed_ms",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "outcome",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "listed",
+          "partly_listed",
+          "unlisted"
+        ]
+      },
+      {
+        "key": "census_listing_reason",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "",
+          "over_budget",
+          "closure_mismatch",
+          "narrowing_undecided",
+          "budget_below_two",
+          "refused"
+        ]
       }
     ]
   },

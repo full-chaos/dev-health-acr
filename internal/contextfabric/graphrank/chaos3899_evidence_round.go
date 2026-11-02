@@ -196,6 +196,10 @@ type KindAttestation struct {
 	SatisfierCanonicalID        string
 	SatisfierCanonicalIDs       []string
 	SatisfierSetClosureMismatch bool
+	// Narrowing is the caller narrowing's decision over this kind's satisfiers
+	// (CHAOS-12467). Its kept ids are what the census listing may show; it is
+	// in-process, as the satisfier fields above are.
+	Narrowing censusNarrowing
 }
 
 // Attestation is the shadow round's own per-resolution artifact (brief
@@ -797,6 +801,7 @@ func RunShadowEvidenceRound(ctx context.Context, input ShadowEvidenceRoundInput,
 					}
 				} else if outcome.Count > 1 {
 					narrowed := narrowCensusSatisfiers(ctx, input.NarrowSatisfiers, kind, outcome)
+					ka.Narrowing = narrowed
 					if narrowingRank(narrowed.outcome) > narrowingRank(base.CallerNarrowing) {
 						base.CallerNarrowing, base.NarrowedFrom, base.NarrowedTo = narrowed.outcome, outcome.Count, len(narrowed.kept)
 					}

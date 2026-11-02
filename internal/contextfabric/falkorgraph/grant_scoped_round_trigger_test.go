@@ -148,18 +148,24 @@ func TestHiddenRowsInAFullPageDoNotDecideARestrictedRound(t *testing.T) {
 	}
 }
 
-// Ruling 1 widens nothing else: an unrestricted caller's round stays on the
-// truncation, and a restricted question that binds no handle has no round to run.
-func TestOnlyARestrictedBoundHandleLeavesTheTruncationRule(t *testing.T) {
+// CHAOS-12467 ruling 1: a bound handle leaves the truncation rule for every caller
+// but project-only. A question that binds no handle has no round to run.
+func TestOnlyABoundHandleLeavesTheTruncationRule(t *testing.T) {
 	t.Parallel()
 	inside := triggerRow{id: "pull_request:r-inside:5063", repo: "acme/alpha", number: 5063}
-	unrestricted := runTriggerTurnFor(t, inside, []triggerRow{inside}, userprincipal.Authenticated(t, "org_1", nil), "is pull request 5063 ready to merge?")
-	if unrestricted.census != 0 || len(unrestricted.rounds) != 0 {
-		t.Fatalf("unrestricted, no truncation: %+v, want no round", unrestricted)
+	unrestricted := userprincipal.Authenticated(t, "org_1", nil)
+	if turn := runTriggerTurnFor(t, inside, []triggerRow{inside}, unrestricted, "is pull request 5063 ready to merge?"); turn.census != 1 || len(turn.rounds) != 1 {
+		t.Fatalf("unrestricted, a bound handle, no truncation: %+v, want the round", turn)
+	}
+	if turn := runTriggerTurnFor(t, inside, []triggerRow{inside}, unrestricted, "what is ready to merge?"); turn.census != 0 || len(turn.rounds) != 0 {
+		t.Fatalf("unrestricted, no handle: %+v, want no round", turn)
 	}
 	principal := userprincipal.Narrowed(t, "org_1", []string{inside.repo}, []string{inside.repo})
-	noHandle := runTriggerTurnFor(t, inside, []triggerRow{inside}, principal, "what is ready to merge?")
-	if noHandle.census != 0 || len(noHandle.rounds) != 0 {
-		t.Fatalf("restricted, no handle: %+v, want no round", noHandle)
+	if turn := runTriggerTurnFor(t, inside, []triggerRow{inside}, principal, "what is ready to merge?"); turn.census != 0 || len(turn.rounds) != 0 {
+		t.Fatalf("restricted, no handle: %+v, want no round", turn)
+	}
+	projectOnly := userprincipal.ProjectOnly(t, "org_1", []string{"project.v2:github:P-1"})
+	if turn := runTriggerTurnFor(t, inside, []triggerRow{inside}, projectOnly, "is pull request 5063 ready to merge?"); turn.census != 0 || len(turn.rounds) != 0 {
+		t.Fatalf("project-only, a bound handle: %+v, want no round", turn)
 	}
 }

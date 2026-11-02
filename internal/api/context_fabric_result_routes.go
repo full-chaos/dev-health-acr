@@ -320,7 +320,7 @@ func (a *App) serveStoredInvestigationResultOn(w http.ResponseWriter, r *http.Re
 	// The served words, composed on a copy after the document's last writer.
 	// The stored row is not touched, so it gets them with no migration.
 	maximumBytes := int64(a.config.MaxSerializedBytes)
-	answer := result
+	answer := a.withoutDisabledRenderShapes(result)
 	result, wordsTier := contextfabric.ServeVocabularyLabels(answer, a.config.ContextFabricVocabularyLabelsEnabled, maximumBytes)
 	// The consumer projection is served from THIS route, through the
 	// same answerprojection.Project the MCP tool calls (CHAOS-3746

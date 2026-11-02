@@ -46,6 +46,10 @@ func TestOutsideRowsChangeNothingForARestrictedCaller(t *testing.T) {
 	outsideRowsChangeNothing(t, grantClickHouseWorld)
 }
 
+func TestAListingChangesNothingOutsideTheGrantOnClickHouse(t *testing.T) {
+	aListingChangesNothingOutsideTheGrant(t, grantClickHouseWorld)
+}
+
 func TestAnOutsideSatisfierIsNeverCountedNamedOrOfferedOnClickHouse(t *testing.T) {
 	anOutsideSatisfierIsNeverCountedNamedOrOffered(t, grantClickHouseWorld)
 }

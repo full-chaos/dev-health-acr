@@ -404,7 +404,7 @@ const (
 	// ContextFabricVocabularyLabelsFull: the whole map.
 	ContextFabricVocabularyLabelsFull ContextFabricVocabularyLabelsTier = "full"
 	// ContextFabricVocabularyLabelsStatusOnly: answer_status:*, the correction
-	// note and the judgment_mismatch note.
+	// note, and the judgment_mismatch and temporal notes.
 	ContextFabricVocabularyLabelsStatusOnly ContextFabricVocabularyLabelsTier = "status_only"
 	// ContextFabricVocabularyLabelsNone: no map fits.
 	ContextFabricVocabularyLabelsNone ContextFabricVocabularyLabelsTier = "none"
@@ -424,15 +424,17 @@ func (t ContextFabricVocabularyLabelsTier) Shed() bool {
 }
 
 // ContextFabricStatusVocabularyLabels keeps the words of the status_only tier:
-// answer_status:*, the correction note and the judgment_mismatch note. The last
-// has no other carrier: with no word, a ranking reads as if it supports the
-// judgment asked for (North Star checks 1 and 8). It returns nil when none is
-// held, so an empty map never stands for a tier.
+// answer_status:*, the correction note, and the judgment_mismatch and temporal
+// notes. Those two have no other carrier: with no word, a ranking reads as if it
+// supports the judgment asked for (North Star checks 1 and 8), and a past answer
+// reads as a current one (check 12). It returns nil when none is held, so an
+// empty map never stands for a tier.
 func ContextFabricStatusVocabularyLabels(labels map[string]string) map[string]string {
 	var kept map[string]string
 	for key, label := range labels {
 		vocabulary, _, _ := strings.Cut(key, ":")
-		if vocabulary != string(ContextFabricVocabularyAnswerStatus) && key != ContextFabricStatusCorrectionNoteKey && key != ContextFabricAnswerNoteJudgmentMismatch.Key() {
+		if vocabulary != string(ContextFabricVocabularyAnswerStatus) && key != ContextFabricStatusCorrectionNoteKey &&
+			key != ContextFabricAnswerNoteJudgmentMismatch.Key() && key != ContextFabricAnswerNoteTemporal.Key() {
 			continue
 		}
 		if kept == nil {

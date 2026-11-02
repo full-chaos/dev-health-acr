@@ -297,6 +297,9 @@ const (
 const (
 	fallbackClarificationPromptOne = "One authorized subject matched this question but could not be confirmed. Confirm it, using the candidate receipt in this result."
 	fallbackClarificationPrompt    = "Several authorized subjects matched this question. Confirm which one you mean, using the candidate receipts in this result."
+	// fallbackClarificationPromptCounted stands beside a census sentence, which
+	// says how many subjects match, so it claims no number of its own.
+	fallbackClarificationPromptCounted = "Confirm the subject you mean, using the candidate receipt in this result."
 	// OfferPoolEmptiedClarificationPrompt is what a caller is told when
 	// retrieval found candidates and could offer NONE of them, because
 	// every one was matched by semantic similarity alone.
@@ -351,6 +354,10 @@ func noMatchLimitationSubjectNotFound(subjectTerms []string, requestedKind Subje
 	}
 	return head + ". Nothing was offered and no canonical facts were read. Candidates that matched only part of the name were not offered. Name the subject you mean, or rephrase the question so it names one."
 }
+
+// censusUnlistedTerminalReason (CHAOS-12467): a census counted a subject and the
+// turn could not list any. It is not an empty pool.
+const censusUnlistedTerminalReason = "census_unlisted"
 
 // noMatchRequestedKind is the kind the question asked about, when one is
 // determinable: the winning reading's requested kind, else the caller's
@@ -626,6 +633,13 @@ func (e *Engine) terminalResult(
 		limitations, linkDisplaced = appendBoundedLimitations(limitations, []string{resolution.WorkItemLinkLimitation})
 		conflictDisplaced += linkDisplaced
 	}
+	// CHAOS-12467: a count this result does not list in full. With nothing listed
+	// it is already the terminal's own sentence, and the append dedupes it.
+	if resolution.CensusLimitation != "" {
+		var censusDisplaced int
+		limitations, censusDisplaced = appendBoundedLimitations(limitations, []string{resolution.CensusLimitation})
+		conflictDisplaced += censusDisplaced
+	}
 	answer := statusSentence(status, resolution)
 	if status == InvestigationClarificationRequired && resolution.ClarificationPrompt != "" {
 		answer += " " + resolution.ClarificationPrompt
@@ -898,6 +912,11 @@ func subjectlessTerminalReason(gate FrameGate, resolution SubjectResolution, sub
 	if len(resolution.Candidates) > 0 {
 		return "ambiguous"
 	}
+	// CHAOS-12467: ahead of the exclusion arm, as the terminal is: a census
+	// counted a subject, so this pool is neither withheld nor empty.
+	if resolution.CensusLimitation != "" && !resolution.GraphNotProjected {
+		return censusUnlistedTerminalReason
+	}
 	// Checked BEFORE graph_not_projected and the authz/empty arms, because
 	// it is the most specific claim available about WHY this pool is empty:
 	// the other three all describe what retrieval found, and this one
@@ -1082,6 +1101,12 @@ func resolveTerminalStatus(request InvestigationRequest, resolution *SubjectReso
 		// by this ticket's own test rather than by inspection. The two
 		// arms differ in STATUS for two different reasons; they never
 		// differed in what actually happened to the pool.
+		// CHAOS-12467: ahead of the floor and the exclusion prompt. A census counted
+		// a subject, so "nothing matched" and "only by semantic similarity" are
+		// both false here, and with nothing listed there is nothing to confirm.
+		if resolution.CensusLimitation != "" && !resolution.GraphNotProjected {
+			return InvestigationNoMatch, resolution.CensusLimitation
+		}
 		if subjectFloor.Refused && !resolution.GraphNotProjected {
 			return InvestigationNoMatch, noMatchLimitationOfferFloorEmptied
 		}
@@ -1099,18 +1124,30 @@ func resolveTerminalStatus(request InvestigationRequest, resolution *SubjectReso
 	// than one" beside a single listed candidate contradicts the payload it
 	// travels with (codex round-2 F1).
 	single := len(resolution.Candidates) == 1
+	// CHAOS-12467: one candidate beside a census count. "One authorized subject
+	// matched" contradicts the count, so the count is the sentence, on both arms.
+	counted := single && resolution.CensusLimitation != ""
 	if !request.Options.AllowClarification {
+		if counted {
+			return InvestigationNoMatch, resolution.CensusLimitation
+		}
 		if single {
 			return InvestigationNoMatch, ambiguousNoClarificationLimitationOne
 		}
 		return InvestigationNoMatch, ambiguousNoClarificationLimitation
 	}
 	if strings.TrimSpace(resolution.ClarificationPrompt) == "" {
-		if single {
+		switch {
+		case counted:
+			resolution.ClarificationPrompt = fallbackClarificationPromptCounted
+		case single:
 			resolution.ClarificationPrompt = fallbackClarificationPromptOne
-		} else {
+		default:
 			resolution.ClarificationPrompt = fallbackClarificationPrompt
 		}
+	}
+	if counted {
+		return InvestigationClarificationRequired, resolution.CensusLimitation
 	}
 	if single {
 		return InvestigationClarificationRequired, clarificationRequiredLimitationOne

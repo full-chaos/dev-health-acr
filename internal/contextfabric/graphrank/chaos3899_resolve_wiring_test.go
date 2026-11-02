@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
+	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
 )
 
@@ -71,6 +72,12 @@ func TestResolveSubjects_ShadowEvidenceRoundNeverChangesResolution(t *testing.T)
 	if len(withoutShadow.Committed) != 0 {
 		t.Fatalf("baseline resolution.Committed = %#v, want nothing committed (this scenario must actually be stalled for the proof to mean anything)", withoutShadow.Committed)
 	}
+	// CHAOS-12467: the one thing a round may add. A count the turn cannot list is
+	// stated, and the decision stays what it was.
+	if want := contractsv1.ContextFabricCensusUnlistedLimitation(1); withShadow.CensusLimitation != want {
+		t.Fatalf("limitation = %q, want %q", withShadow.CensusLimitation, want)
+	}
+	withShadow.CensusLimitation = ""
 	if !reflect.DeepEqual(withoutShadow, withShadow) {
 		t.Fatalf("resolution differs when deps.CensusFunc is wired:\n  without shadow: %#v\n  with shadow:    %#v", withoutShadow, withShadow)
 	}
