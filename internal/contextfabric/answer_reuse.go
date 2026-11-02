@@ -205,14 +205,52 @@ func TimeAxisKeyFor(timeContext TimeContext) string {
 	}
 }
 
+// AdmittedPathNodes is how many nodes a relationship path this engine writes
+// carries. graphrank.AdmitEdges is the one path builder and each path it mints
+// is one edge, so this is 2, against the contract's ceiling of 51. A path
+// builder that mints longer paths must raise it; a graphrank test pins the two
+// together.
+const AdmittedPathNodes = 2
+
 // maxReuseSubjectRecheckCount bounds how many distinct subjects tryReuse
-// will re-authorize for one candidate. It matches the existing
-// RequestedScope.SubjectHints wire bound (see Investigate's
-// maxSubjectHints) -- a candidate naming more distinct subjects than a
-// single request could ever legally hint at is treated as impossible to
-// fully recheck, and answer reuse fails closed rather than checking only
-// a subset.
-const maxReuseSubjectRecheckCount = 50
+// rechecks for one candidate: the largest union reuseSubjectsToRecheck can
+// return for an answer this engine wrote.
+//
+//	 250  committed subjects
+//	  50  subject candidates
+//	 250  cohort members
+//	 250  cohort exclusions
+//	 250  cohort groups (a driver or finding may cite one)
+//	 250  claimed facts
+//	 500  path nodes: 250 paths of AdmittedPathNodes nodes
+//	----
+//	1800
+//
+// Drivers and findings have larger list bounds and add nothing to this sum:
+// SynthesisDraft.ValidateAgainst admits only subjects from synthesisSubjects, so
+// they cite the subjects of the lists above. The one exception is the subject of
+// a fact that no claim names. Nothing bounds those, so they are not counted.
+//
+// It is not the contract's own product (about 213,800 with 51-node paths and
+// every driver and finding full of distinct subjects), and it is not the 1 MiB
+// serving limit divided by the smallest subject (about 22,300). No stored answer
+// reaches either, and each would price a recheck by what no answer holds.
+//
+// IT IS NOT THE LIMIT OF ONE CALL. That limit is
+// ContextFabricMaxSubjectCandidatesLimit, and reuseRecheckBatches stays inside
+// it. This cap bounds the reads of one reuse attempt: at most
+// maxReuseSubjectRecheckCount / that limit batches, each one ResolveSubjects
+// call and, for an answer that cites evidence, one DiscoverContext call.
+//
+// A candidate over it fails closed as subject_cap_exceeded: reuse never checks a
+// subset, because a hit serves the stored payload exactly (North Star check 18).
+const maxReuseSubjectRecheckCount = contractsv1.ContextFabricResolutionCommittedMaxCount +
+	contractsv1.ContextFabricResolutionCandidatesMaxCount +
+	contractsv1.ContextFabricCohortMembersMaxCount +
+	contractsv1.ContextFabricCohortExclusionsMaxCount +
+	contractsv1.ContextFabricCohortGroupsMaxCount +
+	contractsv1.ContextFabricClaimedFactsMaxCount +
+	contractsv1.ContextFabricRelationshipPathsMaxCount*AdmittedPathNodes
 
 // AnswerReuseRefusalReason names which refusal produced a miss_authorization
 // outcome (CHAOS-12511). Several different refusals share that one outcome
@@ -240,10 +278,12 @@ const (
 	// decision. The line carries the subject count.
 	AnswerReuseRefusalSubjectCapExceeded AnswerReuseRefusalReason = "subject_cap_exceeded"
 	// AnswerReuseRefusalSubjectRecheckFailed: ResolveSubjects returned an
-	// error, so the subjects could not be rechecked.
+	// error for a batch, so its subjects could not be rechecked. One batch is
+	// enough: a subject that could not be asked about is not one that was
+	// allowed.
 	AnswerReuseRefusalSubjectRecheckFailed AnswerReuseRefusalReason = "subject_recheck_failed"
 	// AnswerReuseRefusalSubjectNotCommitted: a subject the candidate names was
-	// not committed by the recheck under the current grant.
+	// not committed, under the current grant, by the batch that asked about it.
 	AnswerReuseRefusalSubjectNotCommitted AnswerReuseRefusalReason = "subject_not_committed"
 )
 
@@ -287,7 +327,7 @@ type AnswerReuseRefusal struct {
 // original investigation could have produced, so it stops truncation
 // itself from ever being the reason a recheck fails.
 var reuseRecheckOptions = InvestigationOptions{
-	MaxSubjectCandidates: 50, MaxCohortMembers: 250, MaxRelationshipPaths: 250,
+	MaxSubjectCandidates: contractsv1.ContextFabricMaxSubjectCandidatesLimit, MaxCohortMembers: 250, MaxRelationshipPaths: 250,
 	MaxDrivers: 50, MaxEvidenceRefs: 500, MaxSerializedBytes: 1 << 20,
 	AllowClarification: true,
 }
@@ -1012,15 +1052,28 @@ func (e *Engine) recordReuseOutcome(ctx context.Context, principal storage.Princ
 // through ResolveSubjects with an exact SubjectHint, the same mechanism
 // resolvePriorSubjectHints already relies on to re-authorize a prior
 // turn's committed subject -- a subject that no longer resolves (deleted,
-// or the caller's authorization narrowed) fails the recheck.
+// or the caller's authorization narrowed) fails the recheck. It runs in
+// batches (reuseRecheckBatches): every batch must answer, the first refusal
+// ends the recheck, and a subject counts only when the batch that asked about
+// it committed it.
 //
 // Evidence-ref leg: DiscoverContext is re-run for the now-reauthorized
-// subjects, using the candidate's OWN stored Interpretation (already
-// computed -- no model call). If every condition-3 watermark is truly
+// subjects, once per batch, using the candidate's OWN stored Interpretation
+// (already computed -- no model call). If every condition-3 watermark is truly
 // unchanged, the freshly discovered evidence set must contain everything
 // the candidate cites; if authorization narrowed since the candidate was
 // generated, DiscoverContext silently omits what is no longer visible,
 // and the containment check below correctly fails closed.
+//
+// ONE DISCOVERY PER BATCH, NOT ONE FOR THEM ALL. DiscoverContext walks every
+// committed subject and drops none, but its origins share one
+// Options.MaxRelationshipPaths budget. Measured on the real ranker and
+// graphrank.AdmitEdges, with eight edges per origin: 54 origins in one call keep
+// as few as 4 paths each and 300 leave 50 origins with no path at all, while
+// batches of the commit limit keep every origin at 5 or more, the share of a
+// 50-subject answer. An origin with no path reads as evidence no longer visible,
+// which would say something false about authorization, as a subject past the
+// commit limit does.
 // binding is the CHAOS-3898 §2.1 ResolvedGraphBinding tryReuse resolved
 // once, before FindReusable. Both graph calls below MUST run against this
 // SAME binding, never a freshly re-resolved one -- the serving decision
@@ -1041,13 +1094,7 @@ func (e *Engine) reuseAuthorizationStillHolds(ctx context.Context, principal sto
 	}
 	recheckRequest := request
 	recheckRequest.Options = reuseRecheckOptions
-	if len(subjects) > 0 {
-		hints := make([]SubjectHint, 0, len(subjects))
-		for _, subject := range subjects {
-			hints = append(hints, SubjectHint{Kind: subject.Kind, ID: subject.CanonicalID, Label: subject.Label, Source: string(hintsource.AnswerReuseAuthorizationRecheck)})
-		}
-		recheckRequest.RequestedScope.SubjectHints = hints
-	}
+	batches := reuseRecheckBatches(recheckRequest, subjects)
 
 	// CHAOS-3900 P1.C: this recheck only re-verifies SUBJECT authorization
 	// (the committed set below) -- it discards the structure-offer
@@ -1101,18 +1148,16 @@ func (e *Engine) reuseAuthorizationStillHolds(ctx context.Context, principal sto
 	// answer was never about; supplying a reconstructed one would be the
 	// re-derivation bar 5 forbids. A nil frame yields no kind hints, which
 	// is the pre-seam-7 behaviour of this call unchanged.
-	resolution, _, _, _, err := e.graph.ResolveSubjects(ctx, principal, recheckRequest, candidate.Interpretation, binding, nil, nil, nil, "")
-	if err != nil {
-		return reuseRecheckVerdict{Refused: true, Outcome: AnswerReuseMissAuthorization, Refusal: AnswerReuseRefusal{Reason: AnswerReuseRefusalSubjectRecheckFailed}}
-	}
-	committed := make(map[string]struct{}, len(resolution.Committed))
-	for _, subject := range resolution.Committed {
-		committed[subjectKeyForModel(subject)] = struct{}{}
-	}
-	for _, subject := range subjects {
-		if _, ok := committed[subjectKeyForModel(subject)]; !ok {
+	for index := range batches {
+		resolution, _, _, _, err := e.graph.ResolveSubjects(ctx, principal, batches[index].request, candidate.Interpretation, binding, nil, nil, nil, "")
+		if err != nil {
+			return reuseRecheckVerdict{Refused: true, Outcome: AnswerReuseMissAuthorization, Refusal: AnswerReuseRefusal{Reason: AnswerReuseRefusalSubjectRecheckFailed}}
+		}
+		answered, ok := batches[index].answeredBy(resolution)
+		if !ok {
 			return reuseRecheckVerdict{Refused: true, Outcome: AnswerReuseMissAuthorization, Refusal: AnswerReuseRefusal{Reason: AnswerReuseRefusalSubjectNotCommitted}}
 		}
+		batches[index].resolution = answered
 	}
 
 	evidenceRefs := reuseEvidenceRefsToRecheck(candidate)
@@ -1127,14 +1172,18 @@ func (e *Engine) reuseAuthorizationStillHolds(ctx context.Context, principal sto
 		}
 		return e.reuseRemovedTeamRecheck(ctx, principal, binding, subjects)
 	}
-	graphContext, err := e.graph.DiscoverContext(ctx, principal, GraphDiscoveryRequest{
-		Request: recheckRequest, Interpretation: candidate.Interpretation, Resolution: resolution, Binding: binding,
-	})
-	if err != nil {
-		// Nothing was proven either way -- see
-		// AnswerReuseMissRecheckUnavailable's own doc comment for why
-		// this is no longer folded into the containment refusal.
-		return reuseRecheckVerdict{Refused: true, Outcome: AnswerReuseMissRecheckUnavailable}
+	graphContexts := make([]GraphContext, 0, len(batches))
+	for _, batch := range batches {
+		graphContext, err := e.graph.DiscoverContext(ctx, principal, GraphDiscoveryRequest{
+			Request: batch.request, Interpretation: candidate.Interpretation, Resolution: batch.resolution, Binding: binding,
+		})
+		if err != nil {
+			// Nothing was proven either way -- see
+			// AnswerReuseMissRecheckUnavailable's own doc comment for why
+			// this is no longer folded into the containment refusal.
+			return reuseRecheckVerdict{Refused: true, Outcome: AnswerReuseMissRecheckUnavailable}
+		}
+		graphContexts = append(graphContexts, graphContext)
 	}
 	// CHAOS-4831: the visible set is collected from the fresh discovery
 	// with the SAME traversal that collected the demanded set. It used to
@@ -1142,8 +1191,8 @@ func (e *Engine) reuseAuthorizationStillHolds(ctx context.Context, principal sto
 	// closure -- so a subject candidate's NODE-attribute refs could never
 	// be contained in it and containment failed with certainty for any
 	// stored answer carrying candidates. See graphContextEvidenceSurface.
-	partition := partitionMissingRefs(candidate, graphContext)
-	verdict := reuseRecheckVerdict{ContainmentRan: true, Partition: partition, Outcome: AnswerReuseHit, RemovedTeams: graphContext.RemovedTeams}
+	partition := partitionMissingRefs(candidate, graphContexts...)
+	verdict := reuseRecheckVerdict{ContainmentRan: true, Partition: partition, Outcome: AnswerReuseHit, RemovedTeams: removedTeamsOf(graphContexts)}
 	if partition.MissingCitation {
 		// A missing TOP-LEVEL citation is not a narrowing to disclose --
 		// the answer's own cited evidence is gone, which makes it a
@@ -1154,11 +1203,108 @@ func (e *Engine) reuseAuthorizationStillHolds(ctx context.Context, principal sto
 	// CHAOS-12229 review r3: the recheck admitted a node under the request's
 	// project narrowing only on its "*" project list; a stored answer that
 	// does not say so is not served.
-	if !verdict.Refused && coverageDisclosesUnverifiedProjectNarrowing(graphContext.Coverage) && !coverageDisclosesUnverifiedProjectNarrowing(candidate.Coverage) {
+	unverified := slices.ContainsFunc(graphContexts, func(graphContext GraphContext) bool {
+		return coverageDisclosesUnverifiedProjectNarrowing(graphContext.Coverage)
+	})
+	if !verdict.Refused && unverified && !coverageDisclosesUnverifiedProjectNarrowing(candidate.Coverage) {
 		verdict.Refused = true
 		verdict.Outcome = AnswerReuseMissProjectNarrowingUnverified
 	}
 	return verdict
+}
+
+// reuseRecheckBatch is one call of the condition-6 recheck: the request it
+// sends, the subjects that call answers for, and, once it has answered, its
+// resolution.
+type reuseRecheckBatch struct {
+	request    InvestigationRequest
+	subjects   []SubjectRef
+	resolution SubjectResolution
+}
+
+// reuseRecheckBatches splits the candidate's subjects into the calls that
+// recheck them, in order, none larger than one call can commit: the resolver's
+// caller-hint exit finalizes at MaxSubjectCandidates and drops every hint past
+// it as it drops an unauthorized one, so one call over more would report the
+// rest as not committed, a false statement about authorization. It is the shape
+// of authorizeCohortGroups, which has the same limit. Each batch carries its own
+// hints on its own copy of the request, so its discovery runs on the request its
+// resolution ran on.
+//
+// A candidate naming no subject still gets its one call, under the request as it
+// came: its evidence leg reads what that call resolves.
+func reuseRecheckBatches(request InvestigationRequest, subjects []SubjectRef) []reuseRecheckBatch {
+	if len(subjects) == 0 {
+		return []reuseRecheckBatch{{request: request}}
+	}
+	batchSize := groupAuthorizationBatchSize()
+	batches := make([]reuseRecheckBatch, 0, (len(subjects)+batchSize-1)/batchSize)
+	for start := 0; start < len(subjects); start += batchSize {
+		end := min(start+batchSize, len(subjects))
+		hints := make([]SubjectHint, 0, end-start)
+		for _, subject := range subjects[start:end] {
+			hints = append(hints, SubjectHint{Kind: subject.Kind, ID: subject.CanonicalID, Label: subject.Label, Source: string(hintsource.AnswerReuseAuthorizationRecheck)})
+		}
+		batchRequest := request
+		batchRequest.RequestedScope.SubjectHints = hints
+		batches = append(batches, reuseRecheckBatch{request: batchRequest, subjects: subjects[start:end]})
+	}
+	return batches
+}
+
+// answeredBy reports whether resolution committed every subject this batch asked
+// about, and returns it narrowed to those subjects.
+//
+// Decided per batch, by identity. A call can commit a subject it was not asked
+// about: with no frame the caller-hint exit can still commit a census-attested
+// subject beside a scope anchor (commitCensusAttestedBesideScopeAnchor). That
+// commit answers no question of this recheck, so it never covers a subject of
+// another batch, and the narrowing keeps it out of discovery: as an origin it
+// would widen the walk, and as a candidate row its refs would prove evidence
+// visible.
+//
+// A batch that asked about nothing has nothing to narrow to: see
+// reuseRecheckBatches.
+func (b reuseRecheckBatch) answeredBy(resolution SubjectResolution) (SubjectResolution, bool) {
+	if len(b.subjects) == 0 {
+		return resolution, true
+	}
+	asked := make(map[string]struct{}, len(b.subjects))
+	for _, subject := range b.subjects {
+		asked[subjectKeyForModel(subject)] = struct{}{}
+	}
+	notAsked := func(subject SubjectRef) bool {
+		_, ok := asked[subjectKeyForModel(subject)]
+		return !ok
+	}
+	resolution.Committed = slices.DeleteFunc(slices.Clone(resolution.Committed), notAsked)
+	resolution.Candidates = slices.DeleteFunc(slices.Clone(resolution.Candidates), func(candidate SubjectCandidate) bool {
+		return notAsked(candidate.Subject)
+	})
+	committed := make(map[string]struct{}, len(resolution.Committed))
+	for _, subject := range resolution.Committed {
+		committed[subjectKeyForModel(subject)] = struct{}{}
+	}
+	for _, subject := range b.subjects {
+		if _, ok := committed[subjectKeyForModel(subject)]; !ok {
+			return SubjectResolution{}, false
+		}
+	}
+	return resolution, true
+}
+
+// removedTeamsOf is every team the batches' discoveries prove removed, once
+// each, in the order they were found.
+func removedTeamsOf(graphContexts []GraphContext) []SubjectRef {
+	var removed []SubjectRef
+	for _, graphContext := range graphContexts {
+		for _, subject := range graphContext.RemovedTeams {
+			if !slices.Contains(removed, subject) {
+				removed = append(removed, subject)
+			}
+		}
+	}
+	return removed
 }
 
 // reuseRecheckVerdict is what the condition-6 recheck reports. It states

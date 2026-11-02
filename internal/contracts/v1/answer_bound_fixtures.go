@@ -556,8 +556,8 @@ func distinctSubject(i int) ContextFabricSubjectRef {
 const (
 	// Literal bounds the validators spell inline rather than via a named
 	// constant, mirrored here so the fixture tracks what is ENFORCED.
-	subjectCandidatesMaxCount = 50  // validate_context_fabric_result.go:54
-	committedSubjectsMaxCount = 250 // same predicate
+	subjectCandidatesMaxCount = ContextFabricResolutionCandidatesMaxCount
+	committedSubjectsMaxCount = ContextFabricResolutionCommittedMaxCount
 	coverageEntriesMaxCount   = ContextFabricCoverageEntriesMaxCount
 	sourceNameMaxRunes        = 128 // validate_context_fabric_result.go:970
 	watermarkMaxRunes         = 512 // same predicate
@@ -633,11 +633,11 @@ func pastMaxPlan() *ContextFabricAnswerPlan {
 // --- the ten optional composites ---
 
 const (
-	pathsMaxCount              = 250 // validate_context_fabric_result.go:1381
+	pathsMaxCount              = ContextFabricRelationshipPathsMaxCount
 	pathNodesMaxCount          = contextFabricRelationshipPathMaxNodes
 	pathWhyRelevantMaxRunes    = 2000 // contextFabricWriteBounds.pathWhyRelevantLength
 	pathEvidenceRefsMaxCount   = 200  // contextFabricWriteBounds.pathEvidenceRefs
-	cohortMembersMaxCount      = 250  // validate_context_fabric_result.go:160
+	cohortMembersMaxCount      = ContextFabricCohortMembersMaxCount
 	cohortRationaleMaxRunes    = 4000
 	inclusionReasonsMaxCount   = 32   // contextFabricWriteBounds.cohortInclusionReasons
 	inclusionReasonMaxRunes    = 1000 // contextFabricWriteBounds.cohortInclusionReasonLength

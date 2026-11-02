@@ -50,8 +50,10 @@ func TestEveryAnswerReuseRefusalNamesItself(t *testing.T) {
 	}
 	scenarios := []scenario{
 		{name: "50 subjects are rechecked and served", subjects: 50, committed: 50, graph: admitted, hit: true},
-		{name: "51 subjects exceed the recheck cap", subjects: 51, committed: 51, graph: admitted, want: AnswerReuseRefusal{Reason: AnswerReuseRefusalSubjectCapExceeded, SubjectCount: 51}},
-		{name: "54 subjects exceed the recheck cap", subjects: 54, committed: 54, graph: admitted, want: AnswerReuseRefusal{Reason: AnswerReuseRefusalSubjectCapExceeded, SubjectCount: 54}},
+		{name: "51 subjects are rechecked and served", subjects: 51, committed: 51, graph: admitted, hit: true},
+		{name: "54 subjects are rechecked and served", subjects: 54, committed: 54, graph: admitted, hit: true},
+		{name: "the recheck cap is rechecked and served", subjects: maxReuseSubjectRecheckCount, committed: maxReuseSubjectRecheckCount, graph: admitted, hit: true},
+		{name: "one past the recheck cap is refused", subjects: maxReuseSubjectRecheckCount + 1, committed: maxReuseSubjectRecheckCount + 1, graph: admitted, want: AnswerReuseRefusal{Reason: AnswerReuseRefusalSubjectCapExceeded, SubjectCount: maxReuseSubjectRecheckCount + 1}},
 		{name: "gate denies the candidate", subjects: 1, committed: 1, want: AnswerReuseRefusal{Reason: AnswerReuseRefusalGateDenied},
 			graph: func(g graphReaderStub) GraphReader {
 				return reuseSubjectGraph{graphReaderStub: g, outcome: StoredSubjectDenied}

@@ -234,7 +234,8 @@ func (e *Engine) authorizeCohortGroups(ctx context.Context, principal storage.Pr
 // groupAuthorizationBatchSize is how many groups one authorization call may
 // carry: exactly as many as that call can commit. It is read off the options
 // the call runs under rather than restated, so the batch and the cap cannot
-// drift apart.
+// drift apart. The answer reuse recheck runs under the same options and batches
+// by the same number (reuseRecheckBatches).
 func groupAuthorizationBatchSize() int {
 	if size := reuseRecheckOptions.MaxSubjectCandidates; size > 0 {
 		return size
