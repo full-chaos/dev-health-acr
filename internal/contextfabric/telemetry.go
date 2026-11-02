@@ -451,6 +451,18 @@ func (t SlogEngineTelemetry) RecordWindowClassification(ctx context.Context, pri
 	t.logger.InfoContext(ctx, "context fabric window classification", args...)
 }
 
+// RecordInterpretationTerms (CHAOS-12632) logs at Info: a count, a closed
+// subject kind, a closed handle_bound value and a bool; never a term or the
+// question.
+func (t SlogEngineTelemetry) RecordInterpretationTerms(ctx context.Context, principal storage.Principal, event InterpretationTermsEvent) {
+	args := append([]any{
+		"org_id", SanitizeLogAttr(principal.OrgID), "subject_term_count", event.SubjectTermCount,
+		"stated_kind", SanitizeLogAttr(string(event.StatedKind)), "handle_bound", SanitizeLogAttr(string(event.HandleBound)),
+		"repository_slug_term", event.RepositorySlugTerm,
+	}, requestIDLogAttrs(ctx)...)
+	t.logger.InfoContext(ctx, "context fabric interpretation terms", args...)
+}
+
 // RecordWindowCarry (CHAOS-4360) logs at Info: outcome/chain_depth are both
 // closed-vocabulary/plain-integer, content-safe by construction -- never a
 // question, subject label, or canonical id. hit vs. every miss reason is
