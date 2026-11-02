@@ -726,6 +726,28 @@ var PageHintLookup = Event{
 	},
 }
 
+// WorkItemKeyPrefixUnread is the Warn line (graphrank/tracer.go, case
+// "work_item_key_gate", CHAOS-12463) for a question holding a ticket-key shape
+// whose prefix read could not run: no read wired, a failed read, a grant the read
+// could not apply, or more prefixes than one turn reads. Such a token stays
+// unbound, so the turn answers as if the question named no ticket; this line is
+// how that shows. COUNTS ONLY: no token, prefix or question.
+var WorkItemKeyPrefixUnread = Event{
+	ID:                 "graphrank.work_item_key_prefix_unread",
+	Msg:                "context fabric resolution trace: work item key prefix unread",
+	Level:              LevelWarn,
+	Multiplicity:       MultiplicityZeroOrOnePerRequest,
+	Attribution:        []string{"request_id"},
+	BoundedAggregation: "at most one line per resolveSubjects call: emitted once from bindQuestionHandles, only when a prefix read did not run",
+	Fields: []Field{
+		{Key: "request_id", Type: FieldString, Presence: PresenceRequired},
+		{Key: "stage", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: []string{"work_item_key_gate"}},
+		{Key: "key_shapes", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "held", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "unread", Type: FieldInt, Presence: PresenceRequired},
+	},
+}
+
 // Corroboration is the Debug per-candidate line (graphrank/tracer.go, case
 // "corroboration", event.CorroborationSummary==false) emitted once per
 // candidate every corroboration pass processes, unconditionally (retrieval-
@@ -5757,7 +5779,7 @@ var All = []Event{
 	RetainedRankingAccounting,
 	WorkItemTupleAdmission,
 	WorkItemAuthorizationGap,
-	RankedCutSummary, AnchorSlotDisplaced, DecisionSummary, Search, KindOfferWithheld, PageHintLookup,
+	RankedCutSummary, AnchorSlotDisplaced, DecisionSummary, Search, KindOfferWithheld, PageHintLookup, WorkItemKeyPrefixUnread,
 	Corroboration, CorroborationSummary, ReservedKindAdmitted, OfferPool, OfferPoolSummary,
 	Decision, SearchQuestion, AliasLookup, AnchorPool, KindCoverageFloor, ConfirmedKindRescue, KindScopedSemantic,
 	IdentityUniverse, KindHintSearch, ExactNameSearch, AnchorOffer,

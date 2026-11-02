@@ -1090,12 +1090,23 @@ grants and the rest of the request (`graphrank.AuthorizedThroughLink`, the one
 predicate). It holds in every walk that crosses the link (the repository
 work-item walk and the project deployment walk) and in the work-item census
 under a requested repository scope: that census reads the handle's satisfiers
-over the whole organization and keeps those the repository -> issue walk
-reaches from each repository of the scope (`falkorgraph` `linkScopedIssues`,
-the same walk), and its cross-check and its commit test the issue with the same
-predicate. The census never filters a work item on its own repository column.
-A walk cut at its bound (more than 25 repositories in the scope, or more than
-the census bound of issues) is no census: the round reports it incomplete. A
+over the whole organization and keeps those that link into the scope. Since
+CHAOS-12505 that is one graph read keyed on the census's own satisfier ids
+(`falkorgraph` `linkScopedWorkItemsOf`): from those work items, their
+LINKS_PULL_REQUEST rows to pull requests of a scoped repository, each row
+decided by the repository walk's own rule (the repository and the pull request
+by the node rule, the issue by `admitted`, a requested team narrowing per
+repository, the strongest tier). Its cost is bounded by the ids and their
+links, never by a repository's size. The repository walk of the scope
+(`linkScopedIssues`) is kept as its test oracle only: on a real store, wherever
+the walk is not cut, the keyed read's answer for any ids is the walk's members
+intersected with them. The cross-check and the commit test the issue with the
+same predicate. The census never filters a work item on its own repository
+column. A keyed read that fails, or is cut at its bound (more than 5000 link
+rows, kept below FalkorDB's result cap of 10,000, which drops rows past it with
+no error; or a team narrowing it cannot decide), is no
+census: the round reports it incomplete, and a terminal states that the pull
+request links could not be read, never "No work item matched". A
 repository-less issue still needs a native link under a requested scope. The
 work items this request's link predicate admitted (every member of a repository
 walk, a resolved work item the scoped census admitted on this call) are passed
