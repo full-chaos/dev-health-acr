@@ -132,6 +132,13 @@ func wordRows() []wordRow {
 		{"window provenance", func(r *InvestigationResult) {
 			r.EffectiveEvidenceWindow = &contractsv1.ContextFabricEffectiveEvidenceWindow{Provenance: contractsv1.ContextFabricWindowServerDefault}
 		}, map[string]string{"window_provenance:server_default": "the window the reads used"}},
+		// CHAOS-11984: the units a claimed table states, on either table.
+		{"claimed table measure unit", func(r *InvestigationResult) {
+			r.ClaimedFacts = []contractsv1.ContextFabricClaimedFact{{
+				Table:           &contractsv1.ContextFabricClaimedFactTable{MeasureUnits: []contractsv1.ContextFabricMeasureUnitDeclaration{{Measure: "story_points_completed", Unit: contractsv1.ContextFabricMeasureUnitPoints}}},
+				TimeSeriesTable: &contractsv1.ContextFabricClaimedFactTable{MeasureUnits: []contractsv1.ContextFabricMeasureUnitDeclaration{{Measure: "median_pr_cycle_hours", Unit: contractsv1.ContextFabricMeasureUnitHours}}},
+			}}
+		}, map[string]string{"measure_unit:points": "story points", "measure_unit:hours": "hours"}},
 	}
 }
 
