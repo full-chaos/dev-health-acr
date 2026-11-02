@@ -14834,6 +14834,7 @@
         "presence": "required",
         "closed_vocabulary": [
           "repository_without_name",
+          "repository_name_shared",
           "linked_repositories_over_bound",
           "rows_over_bound"
         ]
@@ -14847,7 +14848,7 @@
         "key": "repository",
         "type": "string",
         "presence": "conditional",
-        "applicability": "written when reason=repository_without_name"
+        "applicability": "written when reason=repository_without_name or reason=repository_name_shared"
       },
       {
         "key": "bound",

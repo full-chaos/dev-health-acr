@@ -167,8 +167,18 @@ func repositoryThemeBreakdownTable(links []repositoryThemeRow, themeEffort map[s
 // and the answer keeps theme_breakdown.
 func teamRepositoryThemeLinks(ctx context.Context, teamID string, owned []string, ownedMix map[string]*repoThemeTotals, linked map[string]map[string]float64, names map[string]string) ([]repositoryThemeRow, bool) {
 	var links []repositoryThemeRow
+	wordOwner := map[string]string{}
 	add := func(repoID string, themes map[string]float64) bool {
 		word := names[repoID]
+		// Two repositories under one handle (repos is keyed by id) could not be
+		// told apart by a reader, and a sankey refuses two nodes with one word.
+		if owner, shared := wordOwner[word]; shared && owner != repoID && word != "" {
+			slog.InfoContext(ctx, "devhealthfacts.repository_theme_breakdown_withheld", append([]any{
+				"reason", "repository_name_shared", "team", contextfabric.SanitizeLogAttr(teamID), "repository", contextfabric.SanitizeLogAttr(repoID),
+			}, requestIDLogAttrs(ctx)...)...)
+			return false
+		}
+		wordOwner[word] = repoID
 		if word == "" {
 			slog.InfoContext(ctx, "devhealthfacts.repository_theme_breakdown_withheld", append([]any{
 				"reason", "repository_without_name", "team", contextfabric.SanitizeLogAttr(teamID), "repository", contextfabric.SanitizeLogAttr(repoID),

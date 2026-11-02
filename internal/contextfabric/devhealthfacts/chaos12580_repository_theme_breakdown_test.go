@@ -204,3 +204,22 @@ func TestCHAOS12580ATeamPastTheRowBoundKeepsAValidFactWithoutTheTable(t *testing
 		t.Fatalf("no withheld line for the row bound: %s", line)
 	}
 }
+
+// Codex r2 on #1962: two repositories may share a handle (repos is keyed by id).
+// Two rows under one word could not form a sankey, and a reader could not tell
+// them apart, so the table is withheld and logged; theme_breakdown stays.
+func TestCHAOS12580TwoRepositoriesSharingAHandleWithholdTheTable(t *testing.T) {
+	logs := captureSlog(t)
+	tables := twoRepositoryTeamTables()
+	tables[2] = fakeTable{match: "any(repo) AS name", rows: [][]any{{"repo-A", "acme/shared"}, {"repo-B", "acme/shared"}}}
+	facts := readTeamInvestment(t, &fakeClient{tables: tables}, "T")
+	if _, ok := facts[0].Fields[contractsv1.ContextFabricRenderRepositoryFlowTableField]; ok {
+		t.Fatal("the table was served with two repositories under one word")
+	}
+	if _, ok := facts[0].Fields["theme_breakdown"]; !ok {
+		t.Fatal("theme_breakdown left with the withheld table")
+	}
+	if line := logs.String(); !strings.Contains(line, "reason=repository_name_shared ") {
+		t.Fatalf("no withheld line for the shared handle: %s", line)
+	}
+}
