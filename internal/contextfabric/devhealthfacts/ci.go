@@ -85,8 +85,11 @@ func (p *ContinuousIntegrationProvider) ReadFacts(ctx context.Context, principal
 		rejectedCount += rejected
 	}
 
+	// A run's status has no latest row to pick; a repository's aggregate does.
+	readBound := timeBound
 	if repoSubjects := subjectsOfKind(query.Subjects, contextfabric.SubjectRepository); len(repoSubjects) > 0 {
-		rowCount, rejected, scanErr := p.readRepositoryAggregate(ctx, orgID, repoSubjects, &facts, timeBound)
+		readBound = statedWindowBound(query, timeBound)
+		rowCount, rejected, scanErr := p.readRepositoryAggregate(ctx, orgID, repoSubjects, &facts, readBound)
 		if scanErr != nil {
 			return contextfabric.FactProviderResult{}, readFailure("query ci metrics", scanErr)
 		}
@@ -97,7 +100,7 @@ func (p *ContinuousIntegrationProvider) ReadFacts(ctx context.Context, principal
 		}
 	}
 
-	state, retentionReason := timeBound.retentionState(len(facts))
+	state, retentionReason := readBound.retentionState(len(facts))
 	result = contextfabric.FactProviderResult{Facts: facts, State: state, Reason: retentionReason, Version: QueryVersion, Grain: timeBound.effectiveGrain(grain), Truncated: truncated}
 	return result, nil
 }

@@ -214,7 +214,7 @@ func (p *MetricsProvider) ReadFacts(ctx context.Context, principal storage.Princ
 	}
 
 	if teamSubjects := subjectsOfKind(query.Subjects, contextfabric.SubjectTeam); len(teamSubjects) > 0 {
-		rowCount, rejected, withoutRepos, reachedTeams, scanErr := p.readTeamMetrics(ctx, orgID, teamSubjects, &facts, timeBound, query.Time.EvidenceWindow)
+		rowCount, rejected, withoutRepos, reachedTeams, scanErr := p.readTeamMetrics(ctx, orgID, teamSubjects, &facts, timeBound, statedWindowBound(query, timeBound), query.Time.EvidenceWindow)
 		if scanErr != nil {
 			return contextfabric.FactProviderResult{}, readFailure("query team metrics", scanErr)
 		}
@@ -226,7 +226,7 @@ func (p *MetricsProvider) ReadFacts(ctx context.Context, principal storage.Princ
 	}
 
 	if projectSubjects := subjectsOfKind(query.Subjects, contextfabric.SubjectProject); len(projectSubjects) > 0 {
-		rowCount, rejected, scanErr := p.readProjectMetrics(ctx, orgID, projectSubjects, &facts, timeBound)
+		rowCount, rejected, scanErr := p.readProjectMetrics(ctx, orgID, projectSubjects, &facts, statedWindowBound(query, timeBound))
 		if scanErr != nil {
 			return contextfabric.FactProviderResult{}, readFailure("query project metrics", scanErr)
 		}
@@ -234,7 +234,7 @@ func (p *MetricsProvider) ReadFacts(ctx context.Context, principal storage.Princ
 		rejectedCount += rejected
 	}
 
-	state, retentionReason := timeBound.retentionState(len(facts))
+	state, retentionReason := statedWindowBound(query, timeBound).retentionState(len(facts))
 	result = contextfabric.FactProviderResult{Facts: facts, State: state, Reason: retentionReason, Version: QueryVersion, Grain: timeBound.effectiveGrain(grainDaily), Truncated: truncated}
 	applyTeamsOwningNothing(&result, query.Subjects, teamsRequested, teamsWithoutRepos)
 	applyTeamsOwningProjectsOnly(ctx, p.facts.client, orgID, &result, query.Subjects, teamsRequested, timeBound)
@@ -592,12 +592,12 @@ LIMIT ` + strconv.Itoa(MetricsSeriesPerRepositoryRowCap) + ` BY repo_id`
 // readTeamMetrics reads team_metrics_daily directly -- a genuinely
 // team-scoped rollup, not a proxy through any repository the team touches.
 // The SQL/scan half now lives in readers.ReadTeamMetrics (CHAOS-4377).
-func (p *MetricsProvider) readTeamMetrics(ctx context.Context, orgID string, subjects []contextfabric.SubjectRef, facts *[]contextfabric.CanonicalFact, timeBound factTimeBound, evidenceWindow *contractsv1.ContextFabricRequestedEvidenceWindow) (int, int, []contextfabric.SubjectRef, []projectReachedTeam, error) {
+func (p *MetricsProvider) readTeamMetrics(ctx context.Context, orgID string, subjects []contextfabric.SubjectRef, facts *[]contextfabric.CanonicalFact, timeBound, latestRowBound factTimeBound, evidenceWindow *contractsv1.ContextFabricRequestedEvidenceWindow) (int, int, []contextfabric.SubjectRef, []projectReachedTeam, error) {
 	ids, bySubject, rejected := subjectIndex(subjects, teamPrefix)
 	if len(ids) == 0 {
 		return 0, rejected, nil, nil, nil
 	}
-	rows, err := readers.ReadTeamMetrics(ctx, p.facts.client, orgID, ids, timeBound.neutral())
+	rows, err := readers.ReadTeamMetrics(ctx, p.facts.client, orgID, ids, latestRowBound.neutral())
 	if err != nil {
 		return 0, rejected, nil, nil, err
 	}
