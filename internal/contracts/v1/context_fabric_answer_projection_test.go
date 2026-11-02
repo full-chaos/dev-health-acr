@@ -487,7 +487,7 @@ func TestAnswerProjectionReusedShapesMatchTheCanonicalOnes(t *testing.T) {
 		// second variant would create a second place for the selection
 		// vocabulary to drift).
 		"RenderAxisKind", "RenderKind", "RenderPoint", "RenderPointSource",
-		"RenderPresentation", "RenderSeries", "RenderShape", "RenderShapeRule",
+		"RenderPresentation", "RenderSeries", "RenderShape", "RenderShapeRule", "RenderValueUnit",
 		// RequirementRefinement joined the reused set with the plan-requirement
 		// layer: the projection embeds PlanRequirementOutcomeRow, and that row now
 		// carries a refinement chain, so the shape it points at is reused here too.
