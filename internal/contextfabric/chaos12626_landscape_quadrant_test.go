@@ -1,12 +1,14 @@
 package contextfabric
 
 import (
+	"context"
 	"fmt"
 	"slices"
 	"strings"
 	"testing"
 
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
+	"github.com/full-chaos/dev-health-acr/internal/storage"
 )
 
 // CHAOS-12626: the rule that yields the landscape_position quadrant. The result
@@ -410,5 +412,28 @@ func TestEveryQuadrantSkipReasonIsInTheLineVocabulary(t *testing.T) {
 	}
 	if !slices.Contains(RenderShapeRuleLineVocabulary(), string(contractsv1.ContextFabricRenderRuleLandscapePosition)) {
 		t.Error("the rule is not in the line vocabulary")
+	}
+}
+
+// The engine holds the deployment's switch, and finalization draws the quadrant
+// and serves its line with it, on the result the route serves.
+func TestTheEngineDrawsTheQuadrantWithItsLine(t *testing.T) {
+	t.Parallel()
+	for _, enabled := range []bool{true, false} {
+		engine, err := NewEngine(tableEngineDependencies(), EngineOptions{ServiceVersion: "quadrant", NewResultID: resultIDSequence(), LandscapeQuadrantEnabled: enabled})
+		if err != nil {
+			t.Fatalf("NewEngine: %v", err)
+		}
+		if engine.renderShapeOptions.LandscapePosition != enabled {
+			t.Fatalf("enabled=%v: options %+v", enabled, engine.renderShapeOptions)
+		}
+		result := quadrantResult(quadrantTeamFixtures()...)
+		plan := *result.AnswerPlan
+		finalized := engine.finalizeResult(context.Background(), storage.Principal{}, result, plan, nil, CanonicalFactBundle{}, &assemblyTelemetry{}, answerPassFirst, MembershipCardinality{})
+		drawn := quadrantOf(t, finalized.RenderShapes) != nil
+		lined := slices.Contains(finalized.Limitations, contractsv1.ContextFabricLandscapePositionLimitation)
+		if drawn != enabled || lined != enabled {
+			t.Fatalf("enabled=%v: drawn=%v, line=%v", enabled, drawn, lined)
+		}
 	}
 }
