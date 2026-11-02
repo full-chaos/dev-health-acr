@@ -26,7 +26,11 @@ var windowPickCases = []windowPickCase{
 	{"trend low", "trend_assessment", "low", contextfabric.WindowClassTrendAssessment, contextfabric.WindowConfidenceLow, false},
 	{"class without confidence", "recent_activity_lookup", "", contextfabric.WindowClassRecentActivityLookup, "", false},
 	{"omitted", "", "", "", "", false},
-	{"out of vocabulary stays unset", "quarterly", "high", "", contextfabric.WindowConfidenceHigh, true},
+	// Reachable only where no output schema gates the reply first: the
+	// generator stub here and the file-exchange parser. The LLM generator
+	// and the supplied path validate against the schema, whose window_class
+	// enum refuses this value before sanitization (unchanged by CHAOS-12603).
+	{"out of vocabulary, no schema gate: stays unset", "quarterly", "high", "", contextfabric.WindowConfidenceHigh, true},
 }
 
 func TestInterpretedQuestionCarriesTheModelWindowClass(t *testing.T) {
@@ -56,7 +60,8 @@ func TestSuppliedInterpretationCarriesTheWindowClass(t *testing.T) {
 	for _, c := range windowPickCases {
 		if c.wantUnrecognizedOnReceipt {
 			// The supplied path validates the output against the schema
-			// first, whose window_class enum refuses an unknown class.
+			// first, whose window_class enum refuses an unknown class; that
+			// refusal predates CHAOS-12603 and is pinned below.
 			continue
 		}
 		output := validInterpretationOutput()
@@ -94,5 +99,18 @@ func TestExchangeParserCarriesTheWindowClass(t *testing.T) {
 		if capture.Window.ClassUnrecognized != c.wantUnrecognizedOnReceipt {
 			t.Errorf("%s: exchange capture unrecognized = %v, want %v", c.name, capture.Window.ClassUnrecognized, c.wantUnrecognizedOnReceipt)
 		}
+	}
+}
+
+// The supplied path's schema refuses an out-of-vocabulary window class before
+// sanitization, as it did before CHAOS-12603: the carry never sees a raw
+// model string, and this change does not alter what the schema admits.
+func TestSuppliedSchemaStillRefusesAnUnknownWindowClass(t *testing.T) {
+	t.Parallel()
+	output := validInterpretationOutput()
+	output.WindowClass = "quarterly"
+	supplied := mustSuppliedInterpreter(t, nil)
+	if _, _, err := supplied.InterpretSuppliedQuestion(context.Background(), storage.Principal{OrgID: "org_1"}, suppliedRequestFor(supplied, mustMarshalOutput(t, output))); err == nil {
+		t.Fatal("an out-of-vocabulary window_class was admitted; the schema enum is the gate in front of the carry")
 	}
 }
