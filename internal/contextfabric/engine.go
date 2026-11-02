@@ -3548,7 +3548,7 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 			Bases: commitBases,
 			// CHAOS-12606: the scope-anchor allocation route answers from the
 			// anchor's own fact, so no member set is read.
-			AnchorFactOnly: familyOutcome.Route.Source == FamilyRouteScopeAllocation,
+			AnchorFactOnly: scopeAllocationRead(familyOutcome),
 		})
 		if err != nil {
 			return InvestigationResult{}, stageError(StageGraph, fmt.Errorf("discover graph context: %w", err))
@@ -3589,7 +3589,7 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 	// a comparison the question did not ask for. With no anchor team committed
 	// nothing is read (Codex r1, executed): the members' facts are not the
 	// team's split, so the turn ends in the subjectless terminal below.
-	if familyOutcome.Route.Source == FamilyRouteScopeAllocation {
+	if scopeAllocationRead(familyOutcome) {
 		subjects = scopeAllocationAnchors(familyOutcome, resolution)
 	}
 	graphContext.StatusMeasuredZero = statusMeasuredZero(familyOutcome.Frame, graphContext.Cohort)
@@ -3839,7 +3839,7 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 		// CHAOS-12606: under the scope-anchor allocation route no member set
 		// was asked of discovery, so "the search found no member" would state
 		// a search that never ran.
-		if err == nil && familyOutcome.Route.Source != FamilyRouteScopeAllocation {
+		if err == nil && !scopeAllocationRead(familyOutcome) {
 			recordEmptyMemberSearch(&facts, familyOutcome.Frame, graphContext.Coverage, graphContext.Cohort, graphContext.CohortPopulation)
 		}
 		if err == nil && graphContext.OrganizationSubjectRead {
@@ -5052,6 +5052,18 @@ func scopeAnchorResolved(outcome QuestionFamilyOutcome) bool {
 	// from the carried snapshot, so its presence is the carried reading's.
 	winner := outcome.WinningSampleIndex >= 0 || outcome.Source == QuestionFamilySourceCarried
 	return winner && outcome.WinningSample.ScopeAnchorTerm != ""
+}
+
+// scopeAllocationRead reports a turn that answers an allocation question over a
+// team's children from the team's own fact (CHAOS-12606): the served family is
+// investment_allocation and the frame is that question (scopeAllocationFrame).
+// It reads the served family, never the recorded route (Codex r2, executed): a
+// rejected plurality records the route and serves no family, and a carried turn
+// serves the family under the source "carried".
+func scopeAllocationRead(outcome QuestionFamilyOutcome) bool {
+	return outcome.Family == QuestionFamilyInvestmentAllocation && outcome.Frame != nil &&
+		outcome.Frame.SubjectExpression.Kind == SubjectExpressionChildrenOfScope &&
+		scopeAllocationFrame(outcome.Frame, outcome.WinningSample.ScopeAnchorKind)
 }
 
 // scopeAllocationAnchors is the anchor team a scope_allocation turn reads:

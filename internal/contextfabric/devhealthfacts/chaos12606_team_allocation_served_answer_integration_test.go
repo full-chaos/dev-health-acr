@@ -149,6 +149,26 @@ func serveTeamChildrenQuestion(t *testing.T, ctx context.Context, query contextp
 
 func serveTeamChildrenQuestionWith(t *testing.T, ctx context.Context, query contextpacket.ClickHouseQueryClient, orgID string, model *teamChildrenModel, withMembers, withAnchor bool) (contextfabric.InvestigationResult, *teamChildrenGraph) {
 	t.Helper()
+	return serveTeamChildrenQuestionEdited(t, ctx, query, orgID, model, withMembers, withAnchor, nil)
+}
+
+// editedOutcomeInterpreter is the production interpreter with one edit to the
+// family outcome it returns: the state a plurality rejection or a carry leaves.
+type editedOutcomeInterpreter struct {
+	inner contextfabric.RuntimeQuestionInterpreter
+	edit  func(*contextfabric.QuestionFamilyOutcome)
+}
+
+func (i editedOutcomeInterpreter) Interpret(ctx context.Context, p storage.Principal, r contextfabric.InvestigationRequest) (contextfabric.InterpretedQuestion, contextfabric.QuestionFamilyOutcome, error) {
+	interpreted, outcome, err := i.inner.Interpret(ctx, p, r)
+	if err == nil && i.edit != nil {
+		i.edit(&outcome)
+	}
+	return interpreted, outcome, err
+}
+
+func serveTeamChildrenQuestionEdited(t *testing.T, ctx context.Context, query contextpacket.ClickHouseQueryClient, orgID string, model *teamChildrenModel, withMembers, withAnchor bool, edit func(*contextfabric.QuestionFamilyOutcome)) (contextfabric.InvestigationResult, *teamChildrenGraph) {
+	t.Helper()
 	registry, err := contextfabric.NewFactCapabilityRegistry(devhealthfacts.NewProviders(query), contextfabric.FactRegistryOptions{})
 	if err != nil {
 		t.Fatal(err)
@@ -166,7 +186,7 @@ func serveTeamChildrenQuestionWith(t *testing.T, ctx context.Context, query cont
 	graph := &teamChildrenGraph{servedLandscapeGraph: servedLandscapeGraph{t: t}, subjects: subjects}
 	now := time.Now().UTC()
 	engine, err := contextfabric.NewEngine(contextfabric.EngineDependencies{
-		Interpreter: contextfabric.RuntimeQuestionInterpreter{Runtime: model, Requirements: registry},
+		Interpreter: editedOutcomeInterpreter{inner: contextfabric.RuntimeQuestionInterpreter{Runtime: model, Requirements: registry}, edit: edit},
 		Graph:       graph, Facts: registry, Requirements: registry,
 		Synthesizer: contextfabric.RuntimeAnswerSynthesizer{Runtime: model, Options: contextfabric.RuntimeAnswerSynthesizerOptions{ServiceVersion: "team-children", Backend: "graph", ProjectionVersion: "v1", QueryVersion: "v1"}},
 		Results:     memoryinvestigation.NewStore(),
@@ -279,4 +299,44 @@ func TestATeamsChildrenAllocationQuestionWithNoCommittedAnchorReadsNoMember(t *t
 		t.Fatalf("status %q: an allocation question whose anchor was not committed is not answered", result.Status)
 	}
 	t.Logf("status=%s limitations=%v", result.Status, result.Limitations)
+}
+
+// Codex r2 (executed): the anchor-only read keyed on the recorded route source.
+// A rejected plurality records the route but serves no family, and a carried
+// turn serves the family under the source "carried". The read follows the served
+// family and the frame.
+func TestTheAnchorOnlyReadFollowsTheServedFamilyNotTheRouteRecord(t *testing.T) {
+	ctx := context.Background()
+	const orgID = "org-team-children-served-family"
+	query := teamChildrenStore(t, ctx, orgID)
+	team := "team:" + teamAllocationTeam
+
+	rejected := &teamChildrenModel{goals: []contextfabric.InvestigationGoal{contextfabric.GoalAllocateInvestment}, shape: contextfabric.ShapeOpen}
+	_, graph := serveTeamChildrenQuestionEdited(t, ctx, query, orgID, rejected, true, true, func(o *contextfabric.QuestionFamilyOutcome) {
+		// The plurality was rejected: the route is still recorded, but the
+		// served family is unclassified.
+		o.Family, o.Source = contextfabric.QuestionFamilyUnclassified, contextfabric.QuestionFamilySourcePluralityRejected
+	})
+	if len(graph.discovery) == 1 && graph.discovery[0].AnchorFactOnly {
+		t.Fatal("a rejected plurality served no allocation family, yet discovery was told to read no member set")
+	}
+	sort.Strings(rejected.offered)
+	if len(rejected.offered) == 1 && rejected.offered[0] == team {
+		t.Fatalf("a rejected plurality read the anchor alone: %v", rejected.offered)
+	}
+
+	carried := &teamChildrenModel{goals: []contextfabric.InvestigationGoal{contextfabric.GoalAllocateInvestment}, shape: contextfabric.ShapeOpen}
+	result, graph := serveTeamChildrenQuestionEdited(t, ctx, query, orgID, carried, true, true, func(o *contextfabric.QuestionFamilyOutcome) {
+		// A carried plan serves the family under the carried route source.
+		o.Route.Source = contextfabric.FamilyRouteSourceCarried
+	})
+	if result.AnswerPlan == nil || result.AnswerPlan.Family != contextfabric.QuestionFamilyInvestmentAllocation {
+		t.Fatalf("carried: plan %+v, want investment_allocation", result.AnswerPlan)
+	}
+	if len(graph.discovery) != 1 || !graph.discovery[0].AnchorFactOnly {
+		t.Fatal("carried: the served allocation family read a member set")
+	}
+	if len(carried.offered) != 1 || carried.offered[0] != team {
+		t.Fatalf("carried: investment facts offered for %v, want the team's alone", carried.offered)
+	}
 }
