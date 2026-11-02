@@ -40,3 +40,24 @@ func TestRuntimeFeatures_browserClientFollowsTheRuntimeRule(t *testing.T) {
 		require.Equal(t, tc.browser, familyDelete, "%s: DELETE on browser_token_families", name)
 	}
 }
+
+func TestRuntimeFeatures_authProjectionFollowsTheRuntimeRule(t *testing.T) {
+	for name, tc := range map[string]struct {
+		env  map[string]string
+		want bool
+	}{
+		"unset":    {env: map[string]string{}},
+		"blank":    {env: map[string]string{"ACR_AUTH_PROJECTION_URL": " \t"}},
+		"a URL":    {env: map[string]string{"ACR_AUTH_PROJECTION_URL": " https://auth-service.example.test "}, want: true},
+		"workload": {env: map[string]string{"ACR_AUTH_WORKLOAD_EXCHANGE_URL": "https://auth-service.example.test"}},
+	} {
+		lookup := func(key string) (string, bool) { value, ok := tc.env[key]; return value, ok }
+		features := runtimeFeatures(lookup)
+		require.Equal(t, tc.want, features[dbacl.AuthProjection], "%s: auth_projection", name)
+		var column bool
+		for _, statement := range dbacl.GrantStatements(`"role"`, features) {
+			column = column || (statement.Table == "credential_lifecycle_outbox" && len(statement.UpdateColumns) > 0)
+		}
+		require.Equal(t, tc.want, column, "%s: UPDATE (published_at)", name)
+	}
+}

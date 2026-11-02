@@ -72,8 +72,9 @@ func carriablePlanResult(resultID, question string) InvestigationResult {
 	prior.Question = question
 	prior.ConfirmedStructure = nil
 	prior.AnswerPlan = &contractsv1.ContextFabricAnswerPlan{
-		Family:    QuestionFamilyGroupedCohortStatus,
-		GroupKind: contractsv1.ContextFabricSubjectTeam,
+		Family:        QuestionFamilyGroupedCohortStatus,
+		FamilyVersion: QuestionFamilyTableVersion,
+		GroupKind:     contractsv1.ContextFabricSubjectTeam,
 	}
 	return prior
 }

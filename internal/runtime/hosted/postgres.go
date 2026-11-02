@@ -223,11 +223,25 @@ func openPostgres(ctx context.Context, cfg config.Config, logger *slog.Logger) (
 	if err != nil {
 		return fail(errors.Join(fmt.Errorf("tick credential lifecycle events: %w", err), stopPurgeLoop(), stopWorkloadCredentialPurgeLoop(), stopOAuthPurgeLoop(), stopBrowserFamilyPurgeLoop(), stopDeviceSweep()))
 	}
+	// CHAOS-11198: the lifecycle outbox publisher, off unless ACR_AUTH_PROJECTION_URL is set. It makes no call at
+	// start and its failures never reach a mutation or the startup.
+	outboxStore, err := storagepostgres.NewOutboxPublisher(database)
+	if err != nil {
+		return fail(errors.Join(fmt.Errorf("initialize credential outbox publisher: %w", err), stopPurgeLoop(), stopWorkloadCredentialPurgeLoop(), stopOAuthPurgeLoop(), stopBrowserFamilyPurgeLoop(), stopDeviceSweep(), stopLifecycleTick()))
+	}
+	outboxPublisher, err := buildCredentialOutboxPublisher(cfg, outboxStore, logger)
+	if err != nil {
+		return fail(errors.Join(fmt.Errorf("build credential outbox publisher: %w", err), stopPurgeLoop(), stopWorkloadCredentialPurgeLoop(), stopOAuthPurgeLoop(), stopBrowserFamilyPurgeLoop(), stopDeviceSweep(), stopLifecycleTick()))
+	}
+	stopOutboxPublisher := func() error { return nil }
+	if outboxPublisher != nil {
+		stopOutboxPublisher = startCredentialOutboxPublisher(ctx, outboxPublisher, logger, packetPurgeSlogObserver(logger), 0)
+	}
 	// CHAOS-11952: the Ask Dev retention job, behind its switch, on acr-api's
 	// own pool as the runtime role (CHAOS-12244: no role of its own).
 	stopRetentionLoop, err := startConfiguredRetention(ctx, cfg, database, logger)
 	if err != nil {
-		return fail(errors.Join(fmt.Errorf("enforce Ask Dev retention: %w", err), stopPurgeLoop(), stopWorkloadCredentialPurgeLoop(), stopOAuthPurgeLoop(), stopBrowserFamilyPurgeLoop(), stopDeviceSweep(), stopLifecycleTick()))
+		return fail(errors.Join(fmt.Errorf("enforce Ask Dev retention: %w", err), stopPurgeLoop(), stopWorkloadCredentialPurgeLoop(), stopOAuthPurgeLoop(), stopBrowserFamilyPurgeLoop(), stopDeviceSweep(), stopLifecycleTick(), stopOutboxPublisher()))
 	}
 	readinessTimeout := cfg.PostgresPingTimeout
 	if readinessTimeout <= 0 {
@@ -242,7 +256,7 @@ func openPostgres(ctx context.Context, cfg config.Config, logger *slog.Logger) (
 			return checkPostgresRuntime(checkContext, database, runner, cfg.EnableEpisodeWriteback)
 		},
 		close: func() error {
-			return errors.Join(stopRetentionLoop(), stopPurgeLoop(), stopWorkloadCredentialPurgeLoop(), stopOAuthPurgeLoop(), stopBrowserFamilyPurgeLoop(), stopDeviceSweep(), stopLifecycleTick(), database.Close())
+			return errors.Join(stopOutboxPublisher(), stopRetentionLoop(), stopPurgeLoop(), stopWorkloadCredentialPurgeLoop(), stopOAuthPurgeLoop(), stopBrowserFamilyPurgeLoop(), stopDeviceSweep(), stopLifecycleTick(), database.Close())
 		},
 	}, nil
 }

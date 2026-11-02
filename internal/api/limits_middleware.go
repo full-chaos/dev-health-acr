@@ -2,16 +2,37 @@ package api
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"net/http"
 	"strconv"
 	"time"
 
 	"github.com/full-chaos/dev-health-acr/internal/auth"
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 	"github.com/full-chaos/dev-health-acr/internal/limits"
+	"github.com/full-chaos/dev-health-acr/internal/storage"
 )
 
 type limitClaimContextKey struct{}
+
+// limitSubjectOf is what principal's requests count under. For a user's
+// credentials it is the owner of contextfabric.SameSubmissionOwner, the user on
+// one surface: a refresh and a new Connect are new credential rows of one owner,
+// so they neither take a new tracked subject nor start a new quota. A browser
+// credential lives 10 minutes, so keying it on its id filled the organization's
+// tracked credentials and refused its new tokens. The user id goes in as a hash:
+// an accepted user id can hold what limits.Subject refuses (a space, or more
+// than its length), and a refused subject is a 503. Every other principal keys on
+// its subject, as the authenticator set it (a workload's binding id).
+func limitSubjectOf(principal storage.Principal) limits.Subject {
+	if owner, err := contextfabric.SubmissionOwnerOf(principal); err == nil && owner.UserID != "" {
+		sum := sha256.Sum256([]byte(owner.UserID))
+		return limits.Subject{OrgID: principal.OrgID, CredentialID: hex.EncodeToString(sum[:]), Surface: string(owner.Surface)}
+	}
+	return limits.Subject{OrgID: principal.OrgID, CredentialID: principal.Subject}
+}
 
 func LimitMiddleware(manager *limits.Manager, class limits.RequestClass, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -24,10 +45,7 @@ func LimitMiddleware(manager *limits.Manager, class limits.RequestClass, next ht
 			writeError(w, r, http.StatusUnauthorized, "invalid_token", "Missing or invalid ACR credential", false, nil)
 			return
 		}
-		claim, decision, err := manager.Claim(r.Context(), limits.Subject{
-			OrgID:        principal.OrgID,
-			CredentialID: principal.Subject,
-		}, class)
+		claim, decision, err := manager.Claim(r.Context(), limitSubjectOf(principal), class)
 		if err != nil {
 			writeError(w, r, http.StatusServiceUnavailable, "upstream_unavailable", "Request controls are temporarily unavailable", true, nil)
 			return

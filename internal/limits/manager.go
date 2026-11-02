@@ -147,23 +147,23 @@ func (m *Manager) Claim(ctx context.Context, subject Subject, class RequestClass
 		return nil, decision, nil
 	}
 	if m.concurrency > 0 && m.inflight[subject.OrgID] >= m.concurrency {
-		window.denied(subject.CredentialID, now)
+		window.denied(subject.key(), now)
 		return nil, Decision{Reason: DenialConcurrency, RetryAfter: m.concurrencyRetry}, nil
 	}
 	if policy.PerOrgLimit > 0 && window.quotaOrg >= int64(policy.PerOrgLimit) {
-		window.denied(subject.CredentialID, now)
+		window.denied(subject.key(), now)
 		return nil, m.denied(DenialOrgQuota, window.quotaStarted, policy.Window, now), nil
 	}
-	credential := window.credentials[subject.CredentialID]
-	if policy.PerCredentialLimit > 0 && window.quotaCredential[subject.CredentialID] >= int64(policy.PerCredentialLimit) {
-		window.denied(subject.CredentialID, now)
+	credential := window.credentials[subject.key()]
+	if policy.PerCredentialLimit > 0 && window.quotaCredential[subject.key()] >= int64(policy.PerCredentialLimit) {
+		window.denied(subject.key(), now)
 		return nil, m.denied(DenialCredentialQuota, window.quotaStarted, policy.Window, now), nil
 	}
 	window.quotaOrg++
-	window.quotaCredential[subject.CredentialID]++
+	window.quotaCredential[subject.key()]++
 	window.org.Admitted++
 	credential.Admitted++
-	window.credentials[subject.CredentialID] = credential
+	window.credentials[subject.key()] = credential
 	window.lastTouched = now
 	m.inflight[subject.OrgID]++
 	return &Claim{manager: m, class: class, subject: subject, window: window, budget: policy.Resources}, Decision{Allowed: true}, nil
@@ -184,7 +184,7 @@ func (m *Manager) Usage(subject Subject, class RequestClass) (UsageTotals, error
 	if window == nil {
 		return UsageTotals{}, nil
 	}
-	return UsageTotals{WindowStarted: window.started, Org: window.org, Credential: window.credentials[subject.CredentialID]}, nil
+	return UsageTotals{WindowStarted: window.started, Org: window.org, Credential: window.credentials[subject.key()]}, nil
 }
 
 func (c *Claim) Complete(usage ResourceUsage) error {
@@ -248,7 +248,7 @@ func (m *Manager) complete(claim *Claim, usage ResourceUsage, accepted bool) {
 	defer m.mu.Unlock()
 	now := m.now().UTC()
 	claim.window.org.Completed++
-	credential := claim.window.credentials[claim.subject.CredentialID]
+	credential := claim.window.credentials[claim.subject.key()]
 	credential.Completed++
 	if accepted {
 		claim.window.org.Items += usage.Items
@@ -261,7 +261,7 @@ func (m *Manager) complete(claim *Claim, usage ResourceUsage, accepted bool) {
 		claim.window.org.Denied++
 		credential.Denied++
 	}
-	claim.window.credentials[claim.subject.CredentialID] = credential
+	claim.window.credentials[claim.subject.key()] = credential
 	claim.window.lastTouched = now
 	if m.inflight[claim.subject.OrgID] <= 1 {
 		delete(m.inflight, claim.subject.OrgID)

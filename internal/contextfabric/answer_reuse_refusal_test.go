@@ -4,6 +4,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"testing"
 
 	"github.com/full-chaos/dev-health-acr/internal/storage"
@@ -110,9 +113,71 @@ func TestEveryAnswerReuseRefusalNamesItself(t *testing.T) {
 	// added to the vocabulary without a test that tells it from the rest.
 	t.Cleanup(func() {
 		for _, reason := range AnswerReuseRefusalReasonVocabulary() {
+			if AnswerReuseRefusalReason(reason) == AnswerReuseRefusalUnattributed {
+				if _, ok := seen[AnswerReuseRefusalUnattributed]; ok {
+					t.Errorf("a real refusal site produced %q", reason)
+				}
+				continue
+			}
 			if _, ok := seen[AnswerReuseRefusalReason(reason)]; !ok {
 				t.Errorf("refusal reason %q has no scenario on the real path", reason)
 			}
 		}
 	})
+}
+
+// TestNoSiteRecordsMissAuthorizationWithoutAReason (CHAOS-12519): a
+// miss_authorization outcome goes through recordReuseRefusal, which carries a
+// reason. The outcome path takes no reason, so a call that names the outcome
+// there is the unnamed refusal CHAOS-12511 removed.
+func TestNoSiteRecordsMissAuthorizationWithoutAReason(t *testing.T) {
+	t.Parallel()
+	fset := token.NewFileSet()
+	file, err := parser.ParseFile(fset, "answer_reuse.go", nil, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	refusalCalls := 0
+	ast.Inspect(file, func(n ast.Node) bool {
+		call, ok := n.(*ast.CallExpr)
+		if !ok {
+			return true
+		}
+		sel, ok := call.Fun.(*ast.SelectorExpr)
+		if !ok {
+			return true
+		}
+		switch sel.Sel.Name {
+		case "recordReuseRefusal":
+			refusalCalls++
+		case "recordReuseOutcome":
+			for _, arg := range call.Args {
+				if id, ok := arg.(*ast.Ident); ok && id.Name == "AnswerReuseMissAuthorization" {
+					t.Errorf("%s: recordReuseOutcome is called with AnswerReuseMissAuthorization; use recordReuseRefusal", fset.Position(call.Pos()))
+				}
+			}
+		}
+		return true
+	})
+	if refusalCalls < 2 {
+		t.Errorf("found %d recordReuseRefusal calls, want the gate site and the recheck site", refusalCalls)
+	}
+}
+
+// A refusal recorded with no reason is written as unattributed, whichever path
+// it takes, and is never a bare miss_authorization.
+func TestAnUnnamedRefusalIsRecordedAsUnattributed(t *testing.T) {
+	t.Parallel()
+	telemetry := &recordingTelemetry{}
+	engine := mustReuseTestEngine(t, EngineDependencies{Telemetry: telemetry})
+	engine.recordReuseOutcome(context.Background(), storage.Principal{OrgID: "org_1"}, AnswerReuseMissAuthorization)
+	engine.recordReuseRefusal(context.Background(), storage.Principal{OrgID: "org_1"}, AnswerReuseRefusal{})
+	if len(telemetry.answerReuseRefusals) != 2 {
+		t.Fatalf("refusals = %+v, want 2", telemetry.answerReuseRefusals)
+	}
+	for _, refusal := range telemetry.answerReuseRefusals {
+		if refusal.Reason != AnswerReuseRefusalUnattributed {
+			t.Errorf("refusal = %+v, want reason unattributed", refusal)
+		}
+	}
 }
