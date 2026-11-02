@@ -624,6 +624,8 @@ func TestSchemaAndGoBoundsAgree(t *testing.T) {
 		"common#$defs.ClaimedFact.properties.rows.maxItems":              ContextFabricClaimedFactDistributionMaxRows,
 		"common#$defs.ClaimedFact.allOf.3.then.properties.rows.maxItems": ContextFabricClaimedFactMaxRows,
 		"common#$defs.ClaimedFact.allOf.4.then.properties.rows.maxItems": ContextFabricClaimedFactDistributionMaxRows,
+		// CHAOS-12580: the repository_flow class clause.
+		"common#$defs.ClaimedFact.allOf.5.then.properties.rows.maxItems": ContextFabricClaimedFactRepositoryFlowMaxRows,
 		"common#$defs.ClaimedFact.properties.time_series_rows.maxItems":  64,
 		"common#$defs.ClaimedFactRow.properties.fields.maxProperties":    32,
 		// CHAOS-4867 round-2 finding (codex, EXECUTED): boundKeywords was
