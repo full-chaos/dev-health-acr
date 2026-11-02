@@ -58,8 +58,8 @@ func TestAnIdleSubjectLeavesTheSetWhileTheOrganizationStaysActive(t *testing.T) 
 	}
 	// The state stays bounded, in every map of a subject.
 	window := manager.windows[RequestClassAuth]["org-a"]
-	if len(window.credentials) > 128 || len(window.touched) != len(window.credentials) || len(window.running) != 0 {
-		t.Fatalf("tracked state after 14 days: %d subjects, %d last-seen times, %d running", len(window.credentials), len(window.touched), len(window.running))
+	if len(window.credentials) > 128 || len(window.touched) != len(window.credentials) || len(window.quotaCredential) != len(window.credentials) || len(window.running) != 0 {
+		t.Fatalf("tracked state after 14 days: %d subjects, %d last-seen times, %d quota keys, %d running", len(window.credentials), len(window.touched), len(window.quotaCredential), len(window.running))
 	}
 }
 
@@ -167,5 +167,39 @@ func TestASubjectRefusedByAQuotaLeavesTheSetToo(t *testing.T) {
 	now = now.Add(time.Minute)
 	if decision := trackedCall(t, manager, "newcomer", RequestClassContext); !decision.Allowed {
 		t.Fatalf("a newcomer = %+v, want the refused subject's place", decision)
+	}
+}
+
+// A full set of live subjects costs one scan, not one per refused newcomer: the
+// scan holds the manager's lock and the cap is configurable. It runs again at
+// the moment a subject can leave, not later.
+func TestARefusedNewcomerDoesNotScanAgainBeforeASubjectCanLeave(t *testing.T) {
+	t.Parallel()
+	start := time.Date(2026, 11, 1, 9, 0, 0, 0, time.UTC)
+	now := start
+	manager := trackedManager(t, &now, Options{MaxCredentialsPerOrganization: 2})
+	if decision := trackedCall(t, manager, "first", RequestClassAuth); !decision.Allowed {
+		t.Fatalf("first subject refused: %s", decision.Reason)
+	}
+	now = start.Add(30 * time.Minute)
+	if decision := trackedCall(t, manager, "second", RequestClassAuth); !decision.Allowed {
+		t.Fatalf("second subject refused: %s", decision.Reason)
+	}
+	now = start.Add(40 * time.Minute)
+	for attempt := range 100 {
+		if decision := trackedCall(t, manager, fmt.Sprintf("refused-%d", attempt), RequestClassAuth); decision.Reason != DenialTrackingCapacity {
+			t.Fatalf("attempt %d = %+v, want tracking_capacity", attempt, decision)
+		}
+	}
+	window := manager.windows[RequestClassAuth]["org-a"]
+	if window.forgetPasses != 1 {
+		t.Fatalf("%d scans for 100 refused newcomers, want 1", window.forgetPasses)
+	}
+	if want := start.Add(time.Hour); !window.nextForget.Equal(want) {
+		t.Fatalf("the next scan is at %s, want the first subject's expiry %s", window.nextForget, want)
+	}
+	now = start.Add(time.Hour)
+	if decision := trackedCall(t, manager, "newcomer", RequestClassAuth); !decision.Allowed {
+		t.Fatalf("a newcomer at the first subject's expiry = %+v, want its place", decision)
 	}
 }

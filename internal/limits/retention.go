@@ -37,16 +37,37 @@ func (m *Manager) windowFor(class RequestClass, subject Subject, policy quotaPol
 // stops that sweep. A subject goes when no claim of it is running and it has not
 // been seen for a retention. A retention is at least the quota window, so a
 // removed subject's quota count has already expired: waiting is no way around a
-// quota. It runs only when a new subject finds the set full, so it costs a pass
-// over the cap at most. A removed subject's Usage totals go with it.
+// quota. A removed subject's Usage totals go with it.
+//
+// It holds the manager's lock, and the cap is configurable, so a full set of
+// live subjects must not cost a scan per refused newcomer: a scan records the
+// first moment a subject can leave, and it does not run again before that. A
+// subject's last-seen time only moves forward, and a running subject sets it to
+// the moment it finishes, a retention before it can leave, so nothing can leave
+// earlier than that moment.
 func (m *Manager) forgetIdle(window *usageWindow, policy quotaPolicy, now time.Time) {
+	if now.Before(window.nextForget) {
+		return
+	}
+	window.forgetPasses++
 	retention := m.retentionOf(policy)
+	next := now.Add(retention)
 	for key, touched := range window.touched {
-		if window.running[key] == 0 && !now.Before(touched.Add(retention)) {
+		if window.running[key] > 0 {
+			continue
+		}
+		expires := touched.Add(retention)
+		if !now.Before(expires) {
 			delete(window.credentials, key)
+			delete(window.quotaCredential, key)
 			delete(window.touched, key)
+			continue
+		}
+		if expires.Before(next) {
+			next = expires
 		}
 	}
+	window.nextForget = next
 }
 
 // retentionOf is how long state of a class is kept with no activity.

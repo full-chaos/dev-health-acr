@@ -78,9 +78,13 @@ type usageWindow struct {
 	credentials           map[string]UsageCounters
 	// touched is when each subject last finished a claim or was refused, and
 	// running how many of its claims are open. They decide which subjects
-	// forgetIdle may remove.
-	touched map[string]time.Time
-	running map[string]int
+	// forgetIdle may remove. nextForget is the first moment one can leave, so a
+	// run of refusals before it does not scan the set again.
+	touched    map[string]time.Time
+	running    map[string]int
+	nextForget time.Time
+	// forgetPasses counts forgetIdle's scans.
+	forgetPasses int
 }
 
 type Claim struct {
