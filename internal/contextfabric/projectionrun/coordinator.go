@@ -2510,14 +2510,22 @@ func (c *Coordinator) runOrgLegacy(scope *orgScope, orgID string) {
 	// outcome and drive recovery through the SAME performRebuild sequence,
 	// under the SAME org lock this method already holds.
 	diverged := false
+	var realigns []graphRealign
 	_ = scope.run(func(ctx context.Context) error {
-		diverged = c.checkpointStoreDiverged(ctx, orgID, c.checkpoints)
+		diverged, realigns = c.checkpointStoreDiverged(ctx, orgID, c.checkpoints)
 		return nil
 	})
 	if diverged {
 		c.recoverFromDivergence(scope, orgID)
 		return
 	}
+	// CHAOS-12630: a graph that reloaded an older copy of itself resumes from its
+	// own watermark, before any source reads from the checkpoint. The same read
+	// as the divergence check found it: no read of its own.
+	_ = scope.run(func(ctx context.Context) error {
+		c.realignToGraphWatermarks(ctx, orgID, c.checkpoints, realigns)
+		return nil
+	})
 
 	evaluated, stale, sourceFailed := false, false, false
 	pairBrokeAny := false
@@ -2619,14 +2627,20 @@ func (c *Coordinator) runOrgLifecycle(scope *orgScope, orgID string) {
 	}
 
 	diverged := false
+	var realigns []graphRealign
 	_ = scope.run(func(ctx context.Context) error {
-		diverged = c.checkpointStoreDiverged(ctx, orgID, checkpoints)
+		diverged, realigns = c.checkpointStoreDiverged(ctx, orgID, checkpoints)
 		return nil
 	})
 	if diverged {
 		c.recoverFromDivergenceLifecycle(scope, orgID)
 		return
 	}
+	// CHAOS-12630: as in the path without a lifecycle row, on the active epoch.
+	_ = scope.run(func(ctx context.Context) error {
+		c.realignToGraphWatermarks(ctx, orgID, checkpoints, realigns)
+		return nil
+	})
 
 	evaluated, stale, sourceFailed := false, false, false
 	pairBrokeAny := false
@@ -3226,7 +3240,13 @@ const divergenceBackoffKey = "\x00chaos3882-projection-liveness-divergence"
 // TestCHAOS3887_NeverProjectedOrgReportsUnknownNotStale's exact fixture: a
 // backend watermark read failure alone, with no corroborating durable
 // checkpoint claim, is not evidence of anything.
-func (c *Coordinator) checkpointStoreDiverged(ctx context.Context, orgID string, checkpoints contextfabric.ProjectionCheckpointStore) bool {
+//
+// The same reads also return the sources whose graph watermark names another
+// batch than their checkpoint (CHAOS-12630), for realignToGraphWatermarks: no
+// tick reads a checkpoint or a watermark twice for it. A diverged organization
+// returns none; the rebuild resets every checkpoint.
+func (c *Coordinator) checkpointStoreDiverged(ctx context.Context, orgID string, checkpoints contextfabric.ProjectionCheckpointStore) (bool, []graphRealign) {
+	var realigns []graphRealign
 	for _, source := range c.sourceNames {
 		checkpoint, err := checkpoints.LoadProjectionCheckpoint(ctx, orgID, source)
 		if err != nil {
@@ -3237,14 +3257,84 @@ func (c *Coordinator) checkpointStoreDiverged(ctx context.Context, orgID string,
 		}
 		watermark, err := c.backend.ProjectionWatermark(ctx, orgID, source)
 		if err == nil && strings.TrimSpace(watermark.SourceVersion) != "" {
-			continue // the backend still has its sentinel; healthy
+			// The backend still has its sentinel; healthy. It may name another
+			// batch than the checkpoint (CHAOS-12630).
+			if strings.TrimSpace(watermark.BackendWatermark) != "" && watermark.BackendWatermark != checkpoint.BackendWatermark {
+				realigns = append(realigns, graphRealign{source: source, checkpoint: checkpoint, watermark: watermark})
+			}
+			continue
 		}
 		if err != nil && !errors.Is(err, contextfabric.ErrProjectionWatermarkNotFound) {
 			continue // unknown (dependency error), not a confirmed divergence
 		}
-		return true
+		return true, nil
 	}
-	return false
+	return false, realigns
+}
+
+// graphRealign is one source whose graph watermark names another batch than its
+// checkpoint, as checkpointStoreDiverged read the two (CHAOS-12630).
+type graphRealign struct {
+	source     string
+	checkpoint contextfabric.ProjectionCheckpoint
+	watermark  contextfabric.ProjectionWatermark
+}
+
+// realignToGraphWatermarks (CHAOS-12630) moves a source's checkpoint back to the
+// graph's own watermark when the two name different batches. The graph writes its
+// watermark node in the same batch apply as the batch's rows (falkorgraph
+// writeWatermark), so the node says what the graph holds. The checkpoint lives in
+// another store (Postgres) and is advanced after the apply. A graph that reloads an
+// older copy of itself (FalkorDB restarted from a snapshot older than its last
+// writes) keeps a watermark node, with the older batch's cursor, while the
+// checkpoint keeps the newer one. checkpointStoreDiverged sees only a missing
+// watermark, so before this the projector resumed from the checkpoint and the
+// batches the graph lost were never walked again: on askdev-1, every row of 33
+// hours of source stamps (CHAOS-12630).
+//
+// The cursor follows the graph; nothing else changes. Re-walking from the graph's
+// cursor is safe both ways: if the graph is behind, the lost batches are walked
+// again (every write is an idempotent merge); if the graph is ahead (its apply
+// landed and the checkpoint's advance did not), nothing it holds is skipped. The
+// source version stays the checkpoint's, so the version guard of the batch path
+// decides as before. A graph watermark of another source version than the
+// checkpoint's is not followed: the graph holds rows under another identity, and
+// a re-walk under the checkpoint's would merge new rows beside them, which the
+// version guard exists to stop. That is one WARN each tick and no move; the
+// recovery is a rebuild. A watermark that cannot be read, or that the graph never
+// wrote, decides nothing here: a missing one is checkpointStoreDiverged's case.
+// It reads nothing: checkpointStoreDiverged read both stores in the same tick,
+// under the same organization lock, and the move is a compare-and-swap on the
+// checkpoint it read.
+func (c *Coordinator) realignToGraphWatermarks(ctx context.Context, orgID string, checkpoints contextfabric.ProjectionCheckpointStore, realigns []graphRealign) {
+	hash := orgIDHash(orgID)
+	for _, r := range realigns {
+		// Every key, and every value's sanitizer, is written out at each call:
+		// the emit scan reads the keys (internal/cigates/emitscan R9) and the
+		// sanitizer pin reads each value's own construction site.
+		if r.checkpoint.SourceVersion != "" && r.watermark.SourceVersion != r.checkpoint.SourceVersion {
+			c.logger.WarnContext(ctx, "context_fabric: the graph's watermark names a batch of another source version than its projection checkpoint; the checkpoint is not moved, and the organization needs a rebuild",
+				"org_id_hash", contextfabric.SanitizeLogAttr(hash), "source", contextfabric.SanitizeLogAttr(r.source),
+				"checkpoint_backend_watermark", contextfabric.SanitizeLogAttr(r.checkpoint.BackendWatermark), "graph_backend_watermark", contextfabric.SanitizeLogAttr(r.watermark.BackendWatermark),
+				"checkpoint_source_version", contextfabric.SanitizeLogAttr(r.checkpoint.SourceVersion),
+				"graph_source_version", contextfabric.SanitizeLogAttr(r.watermark.SourceVersion))
+			continue
+		}
+		realigned := r.checkpoint
+		realigned.Cursor = r.watermark.Cursor
+		realigned.BackendWatermark = r.watermark.BackendWatermark
+		realigned.UpdatedAt = c.now().UTC()
+		if err := checkpoints.CompareAndSwapProjectionCheckpoint(ctx, r.checkpoint, realigned); err != nil {
+			c.logger.WarnContext(ctx, "context_fabric: the graph's watermark differs from its projection checkpoint, and the checkpoint could not be moved to it; the next tick tries again",
+				"org_id_hash", contextfabric.SanitizeLogAttr(hash), "source", contextfabric.SanitizeLogAttr(r.source),
+				"checkpoint_backend_watermark", contextfabric.SanitizeLogAttr(r.checkpoint.BackendWatermark), "graph_backend_watermark", contextfabric.SanitizeLogAttr(r.watermark.BackendWatermark),
+				"failure_class", contextfabric.SanitizeLogAttr(classifyOutcomeError(err)))
+			continue
+		}
+		c.logger.WarnContext(ctx, "context_fabric: the graph's watermark differs from its projection checkpoint; the projection resumes from the graph's own watermark",
+			"org_id_hash", contextfabric.SanitizeLogAttr(hash), "source", contextfabric.SanitizeLogAttr(r.source),
+			"checkpoint_backend_watermark", contextfabric.SanitizeLogAttr(r.checkpoint.BackendWatermark), "graph_backend_watermark", contextfabric.SanitizeLogAttr(r.watermark.BackendWatermark))
+	}
 }
 
 // LivenessCheck is the CHAOS-3882 readiness-path leg of the same liveness
@@ -3272,7 +3362,7 @@ func (c *Coordinator) LivenessCheck(ctx context.Context) error {
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
-		if c.checkpointStoreDiverged(ctx, orgID, c.resolveOrgCheckpoints(ctx, orgID)) {
+		if orgDiverged, _ := c.checkpointStoreDiverged(ctx, orgID, c.resolveOrgCheckpoints(ctx, orgID)); orgDiverged {
 			diverged = append(diverged, orgIDHash(orgID))
 		}
 	}
