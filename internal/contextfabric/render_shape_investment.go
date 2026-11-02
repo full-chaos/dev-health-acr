@@ -105,7 +105,7 @@ func investmentThemeShareShape(result InvestigationResult, frame *QuestionFrame)
 	if above < 2 {
 		return nil, RenderShapeSkipFewerThanTwoShares
 	}
-	return &contractsv1.ContextFabricRenderShape{
+	shape := &contractsv1.ContextFabricRenderShape{
 		Kind:       contractsv1.ContextFabricRenderKindTreemap,
 		SelectedBy: contractsv1.ContextFabricRenderRuleInvestmentThemeShare,
 		Title:      themeShareTitle,
@@ -118,7 +118,19 @@ func investmentThemeShareShape(result InvestigationResult, frame *QuestionFrame)
 			Label:  themeShareSeriesLabel,
 			Points: points,
 		}},
-	}, ""
+	}
+	// The class rule: a chart never costs an answer. The contract is what a
+	// result is held to, so the rule proves its shape against the contract here
+	// and does not restate each clause. A shape that would refuse the whole
+	// document is no chart, whatever the reason.
+	proved := *shape
+	proved.ShapeID = "rs_proof"
+	probe := result
+	probe.RenderShapes = []contractsv1.ContextFabricRenderShape{proved}
+	if err := contractsv1.ValidateRenderShapesForResult(probe); err != nil {
+		return nil, RenderShapeSkipThemeRowUnusable
+	}
+	return shape, ""
 }
 
 // declaresThemeShareTable is the same reading the contract's validator holds a

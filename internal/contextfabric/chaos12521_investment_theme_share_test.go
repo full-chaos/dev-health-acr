@@ -169,6 +169,9 @@ func TestNoTreemapWithoutTheRulesEvidence(t *testing.T) {
 			r.ClaimedFacts[0].Rows[1].Fields["share"] = ScalarValue{Number: &value}
 		}, RenderShapeSkipThemeRowUnusable},
 		"a table the row budget cut": {func(r *InvestigationResult) { r.ClaimedFacts[0].Rows = r.ClaimedFacts[0].Rows[:2] }, RenderShapeSkipThemeTableCut},
+		"a repeated theme": {func(r *InvestigationResult) {
+			r.ClaimedFacts[0].Rows[1].Fields["theme"] = r.ClaimedFacts[0].Rows[0].Fields["theme"]
+		}, RenderShapeSkipThemeRowUnusable},
 		"one part": {func(r *InvestigationResult) {
 			value := 0.0
 			r.ClaimedFacts[0].Rows[1].Fields["share"] = ScalarValue{Number: &value}
