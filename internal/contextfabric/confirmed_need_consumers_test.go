@@ -41,6 +41,9 @@ type needTurnCall struct {
 	request InvestigationRequest
 	kind    *ConfirmedExpectedKind
 	anchor  *ConfirmedAnchorSelection
+	// ctx is the context the engine resolved under (CHAOS-12555: it carries the
+	// redeemed candidate pick).
+	ctx context.Context
 }
 
 // needTurnGraph returns the scripted response for the current turn and
@@ -56,8 +59,8 @@ func (g *needTurnGraph) ResolveInvestigationBinding(context.Context, storage.Pri
 	return ResolvedGraphBinding{GraphKey: "need-turn-key", Epoch: 0}, nil
 }
 
-func (g *needTurnGraph) ResolveSubjects(_ context.Context, _ storage.Principal, request InvestigationRequest, _ InterpretedQuestion, _ ResolvedGraphBinding, kind *ConfirmedExpectedKind, anchor *ConfirmedAnchorSelection, _ *QuestionFrame, _ SubjectKind) (SubjectResolution, StructureOfferMaterial, CommitBasisSet, CommitDecisionDigestSet, error) {
-	g.calls = append(g.calls, needTurnCall{request: request, kind: kind, anchor: anchor})
+func (g *needTurnGraph) ResolveSubjects(ctx context.Context, _ storage.Principal, request InvestigationRequest, _ InterpretedQuestion, _ ResolvedGraphBinding, kind *ConfirmedExpectedKind, anchor *ConfirmedAnchorSelection, _ *QuestionFrame, _ SubjectKind) (SubjectResolution, StructureOfferMaterial, CommitBasisSet, CommitDecisionDigestSet, error) {
+	g.calls = append(g.calls, needTurnCall{request: request, kind: kind, anchor: anchor, ctx: ctx})
 	return g.response.resolution, g.response.material, g.response.bases, nil, g.response.err
 }
 

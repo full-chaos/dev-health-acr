@@ -270,6 +270,18 @@ const (
 	// subject, or rephrase -- which is the one thing that was worth saying
 	// on the turn this replaces.
 	noMatchLimitationOfferPoolEmptied = "Retrieval matched one or more subjects only by semantic similarity, which is not enough to identify a subject, so none could be offered and no canonical facts were read. Name the subject you mean, or rephrase the question so it names one."
+	// clarificationRequiredLimitationWithheldPool is the clarification prose for
+	// the same withheld pool when the turn still has another offer to redeem
+	// (CHAOS-12524). This arm used to borrow clarificationRequiredLimitationOne,
+	// which says that one subject matched and could be confirmed: false with no
+	// candidate on the turn, on rows with two handles, an observed-time axis, or
+	// an explicit handle the question does not name. It names no subject and no
+	// term, and no match mechanism: the offer floor withholds a lexical candidate
+	// too. It points at the offers without promising that they name a subject,
+	// because a window option can be the only one (codex r1 on #1922). It is not
+	// longer than the sentence it replaces, so restating a stored row on read
+	// cannot push a near-limit result over the byte cap (codex r2 on #1922).
+	clarificationRequiredLimitationWithheldPool = "No subject could be identified from the question, so no canonical facts were read. Use an offered option, or name the subject you mean."
 	// noMatchLimitationOfferFloorEmptied marks the floor-emptied terminal in
 	// resolveTerminalStatus's own return; terminalResult replaces it with
 	// noMatchLimitationSubjectNotFound, which names the subject and the closest kinds.
@@ -1129,7 +1141,7 @@ func resolveTerminalStatus(request InvestigationRequest, resolution *SubjectReso
 		}
 		if strings.TrimSpace(resolution.ClarificationPrompt) != "" && !resolution.GraphNotProjected {
 			if request.Options.AllowClarification && otherOffersRedeemable {
-				return InvestigationClarificationRequired, clarificationRequiredLimitationOne
+				return InvestigationClarificationRequired, clarificationRequiredLimitationWithheldPool
 			}
 			return InvestigationNoMatch, noMatchLimitationOfferPoolEmptied
 		}
