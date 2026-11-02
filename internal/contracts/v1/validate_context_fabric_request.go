@@ -284,7 +284,7 @@ func (t ContextFabricTimeContext) Validate() error {
 }
 
 func (o ContextFabricInvestigationOptions) Validate() error {
-	if o.MaxSubjectCandidates < 1 || o.MaxSubjectCandidates > 50 ||
+	if o.MaxSubjectCandidates < 1 || o.MaxSubjectCandidates > ContextFabricMaxSubjectCandidatesLimit ||
 		o.MaxCohortMembers < 1 || o.MaxCohortMembers > ContextFabricMaxCohortMembersLimit ||
 		o.MaxRelationshipPaths < 1 || o.MaxRelationshipPaths > 250 ||
 		o.MaxDrivers < 1 || o.MaxDrivers > 50 ||
