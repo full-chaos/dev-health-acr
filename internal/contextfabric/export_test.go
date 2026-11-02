@@ -172,3 +172,18 @@ func ClassifyWindowForFrameForTest(interpreted InterpretedQuestion, handleState 
 	}
 	return classifyWindowFor(interpreted, handleStateFrame(SubjectPullRequest, []InvestigationGoal{GoalAssessState}, TemporalIntentCurrent))
 }
+
+// DecideInferredWindowGateForTest is decideInferredWindowGate over offer
+// material that asks beyond the window when beyondWindow is true, and over a
+// series frame when series is true (CHAOS-4451 line certification).
+func DecideInferredWindowGateForTest(beyondWindow, offersUnavailable, series bool) (InferredWindowGateDecision, InferredWindowGateBasis) {
+	var material StructureOfferMaterial
+	if beyondWindow {
+		material = chaos4234GatedMaterial()
+	}
+	var frame *QuestionFrame
+	if series {
+		frame = &QuestionFrame{Temporal: TemporalIntentTimeSeries}
+	}
+	return decideInferredWindowGate(material, offersUnavailable, frame)
+}

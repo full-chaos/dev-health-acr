@@ -451,6 +451,15 @@ func (t SlogEngineTelemetry) RecordWindowClassification(ctx context.Context, pri
 	t.logger.InfoContext(ctx, "context fabric window classification", args...)
 }
 
+// RecordInferredWindowGate (CHAOS-4451) logs at Info: both fields are closed
+// vocabulary members, never question text.
+func (t SlogEngineTelemetry) RecordInferredWindowGate(ctx context.Context, principal storage.Principal, decision InferredWindowGateDecision, basis InferredWindowGateBasis) {
+	args := append([]any{
+		"org_id", SanitizeLogAttr(principal.OrgID), "decision", SanitizeLogAttr(string(decision)), "basis", SanitizeLogAttr(string(basis)),
+	}, requestIDLogAttrs(ctx)...)
+	t.logger.InfoContext(ctx, "context fabric inferred window gate", args...)
+}
+
 // RecordWindowCarry (CHAOS-4360) logs at Info: outcome/chain_depth are both
 // closed-vocabulary/plain-integer, content-safe by construction -- never a
 // question, subject label, or canonical id. hit vs. every miss reason is

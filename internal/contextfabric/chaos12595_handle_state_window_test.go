@@ -135,7 +135,9 @@ func handleStateEngine(t *testing.T, interpreter QuestionInterpreter, telemetry 
 // The reach-run turn-3 shape through the real Engine.Investigate: a pull
 // request status question with no stated window reaches resolution with no
 // window question, whatever the model's class pick; the same question about a
-// repository still gets the CHAOS-4040 window gate.
+// repository reads an inferred window and still offers it (CHAOS-4451: the
+// window is its only question, so the turn answers with the offer instead of
+// ending on the CHAOS-4040 gate).
 func TestHandleStateQuestionIsNotWindowGated(t *testing.T) {
 	t.Parallel()
 	for _, pick := range handleStateTestPicks {
@@ -152,15 +154,22 @@ func TestHandleStateQuestionIsNotWindowGated(t *testing.T) {
 			}
 			engine, graph := handleStateEngine(t, interpreter, telemetry)
 			result, _ := engine.Investigate(context.Background(), acceptancePrincipal(), request)
-			gated := result.Status == InvestigationClarificationRequired && result.EffectiveEvidenceWindow != nil && result.EffectiveEvidenceWindow.Provenance == WindowInferredDefault
-			wantGated := kind == SubjectRepository && pick.class != WindowClassStateSnapshot
-			if gated != wantGated {
-				t.Errorf("%s/%s: window gated = %v (status %q), want %v", kind, pick.name, gated, result.Status, wantGated)
+			if result.Status == InvestigationClarificationRequired {
+				t.Errorf("%s/%s: status %q, want no window gate: the window is not a question beyond itself", kind, pick.name, result.Status)
 			}
-			// Not gated means the turn reached the decisive resolution: one
-			// resolve call that is NOT the gate's offers-only pass.
-			if !wantGated && (graph.resolveCalls != 1 || OffersOnlyResolution(graph.resolveCtxs[0])) {
-				t.Errorf("%s/%s: resolve calls = %d (offers-only %v), want one decisive resolution", kind, pick.name, graph.resolveCalls, graph.resolveCalls > 0 && OffersOnlyResolution(graph.resolveCtxs[0]))
+			offered := result.WindowClarification != nil && result.EffectiveEvidenceWindow != nil && result.EffectiveEvidenceWindow.Provenance == WindowInferredDefault
+			wantOffered := kind == SubjectRepository && pick.class != WindowClassStateSnapshot
+			if offered != wantOffered {
+				t.Errorf("%s/%s: inferred window offered = %v (status %q), want %v", kind, pick.name, offered, result.Status, wantOffered)
+			}
+			// No offer means the turn went straight to the decisive resolution:
+			// one resolve call that is NOT the gate's offers-only pass. An
+			// offer means the gate's pass ran first, then the decisive one.
+			if !wantOffered && (graph.resolveCalls != 1 || OffersOnlyResolution(graph.resolveCtxs[0])) {
+				t.Errorf("%s/%s: resolve calls = %d (offers-only %v), want one decisive resolution", kind, pick.name, graph.resolveCalls, offersOnlyMarks(graph.resolveCtxs))
+			}
+			if wantOffered && (graph.resolveCalls != 2 || !OffersOnlyResolution(graph.resolveCtxs[0]) || OffersOnlyResolution(graph.resolveCtxs[1])) {
+				t.Errorf("%s/%s: resolve calls = %d (offers-only %v), want the offers-only pass then the decisive resolution", kind, pick.name, graph.resolveCalls, offersOnlyMarks(graph.resolveCtxs))
 			}
 			if len(telemetry.windowClassifications) != 1 {
 				t.Fatalf("%s/%s: window classification lines = %d, want 1", kind, pick.name, len(telemetry.windowClassifications))

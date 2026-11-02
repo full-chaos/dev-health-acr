@@ -555,6 +555,17 @@ func (e *Engine) synthesizeAndAssemble(ctx context.Context, principal storage.Pr
 		result.WindowClarification = nil
 		result.Warnings = appendRequiredWarning(result.Warnings, windowConfirmationSkippedWarning(result.EffectiveEvidenceWindow))
 	}
+	// CHAOS-4451: an answer on an inferred window the caller may still confirm
+	// serves the offer beside the answer and says which window it read.
+	if result.WindowClarification != nil {
+		result.Warnings = appendRequiredWarning(result.Warnings, inferredWindowAnsweredWarning(result.EffectiveEvidenceWindow))
+		if result.StructureNeeds == nil {
+			result.StructureNeeds = answeredWindowStructureNeeds(result.WindowClarification)
+			if result.StructureNeeds != nil && e.telemetry != nil {
+				e.telemetry.RecordStructureNeedsDisclosed(ctx, principal, contractsv1.ContextFabricStructureNeedWindow)
+			}
+		}
+	}
 	if result.WindowClarification != nil && request.Options.WindowConfirmationMode == contractsv1.ContextFabricWindowConfirmationNudge {
 		result.Warnings = appendUniqueWarning(result.Warnings, windowConfirmationNudgeSentence)
 	}

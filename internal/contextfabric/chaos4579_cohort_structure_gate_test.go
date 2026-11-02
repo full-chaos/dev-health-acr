@@ -2,6 +2,7 @@ package contextfabric
 
 import (
 	"context"
+	"errors"
 	"reflect"
 	"testing"
 	"time"
@@ -264,36 +265,26 @@ func TestCHAOS4579_ClassDefaultGate_CohortQuestionAsksOnlyForTheWindow(t *testin
 	graph.material = chaos4579CohortMaterial()
 	store := &staticResultStore{results: map[string]InvestigationResult{}}
 	telemetry := &recordingTelemetry{}
-	engine := buildWindowGateEngineWithTelemetry(t, interpreter, graph, store, telemetry)
+	engine, reads := buildWindowOnlyAnsweringEngine(t, interpreter, graph, store, telemetry)
 
-	result, err := engine.Investigate(context.Background(), acceptancePrincipal(), validInvestigationRequest())
-	if err != nil {
-		t.Fatalf("Investigate() error = %v", err)
+	// CHAOS-4451 (moved): the cohort gate still strips the anchor, handle and
+	// kind rows in the offers-only pass, which leaves the window as the only
+	// question -- so the turn no longer ends to ask it: it reads facts on the
+	// inferred window (the answer-side disclosure is window-only, pinned by
+	// TestWindowGate_AllowClarificationTrueAnswersWithTheOffer).
+	if _, err := engine.Investigate(context.Background(), acceptancePrincipal(), validInvestigationRequest()); err == nil {
+		t.Fatal("Investigate() error = nil, want the stub synthesizer's error: the turn must reach synthesis")
 	}
-	if result.StructureNeeds == nil {
-		t.Fatal("StructureNeeds is nil, want the window disclosure")
+	if *reads != 1 {
+		t.Fatalf("fact reads = %d, want 1: a cohort question whose only question is the window answers on it", *reads)
 	}
-	wantMissing := []StructureNeedKind{contractsv1.ContextFabricStructureNeedWindow}
-	if !reflect.DeepEqual(result.StructureNeeds.Missing, wantMissing) {
-		t.Fatalf("StructureNeeds.Missing = %#v, want %#v -- CHAOS-4579/CHAOS-4634: a plural cohort question must never be asked for a single anchor, handle, or kind it has no subject axis for", result.StructureNeeds.Missing, wantMissing)
-	}
-	if len(result.StructureNeeds.AnchorOptions) != 0 || len(result.StructureNeeds.HandleOptions) != 0 || len(result.StructureNeeds.KindOptions) != 0 {
-		t.Fatalf("AnchorOptions/HandleOptions/KindOptions = %#v/%#v/%#v, want all empty", result.StructureNeeds.AnchorOptions, result.StructureNeeds.HandleOptions, result.StructureNeeds.KindOptions)
-	}
-	if result.SchemaVersion != InvestigationResultSchemaV1 {
-		t.Fatalf("SchemaVersion = %q, want v1", result.SchemaVersion)
-	}
-	if err := result.Validate(); err != nil {
-		t.Fatalf("result fails Validate(): %v", err)
-	}
-	// Decision-basis telemetry: the gate that changed the disclosure says
-	// so, and names the shape it fired for.
+	// Decision-basis telemetry: the cohort gate still ran and says so.
 	wantGates := []cohortStructureGateRecord{{CohortStructureGateApplied, ShapeDiscoveredCohort}}
 	if !reflect.DeepEqual(telemetry.cohortStructureGates, wantGates) {
 		t.Fatalf("cohortStructureGates = %#v, want %#v", telemetry.cohortStructureGates, wantGates)
 	}
-	if !reflect.DeepEqual(telemetry.structureNeedsDisclosed, wantMissing) {
-		t.Fatalf("structureNeedsDisclosed = %#v, want %#v -- the disclosed-member telemetry must agree with what was actually disclosed", telemetry.structureNeedsDisclosed, wantMissing)
+	if want := []GatedOfferResolutionOutcome{GatedOfferResolutionEmpty}; !reflect.DeepEqual(telemetry.gatedOfferResolutions, want) {
+		t.Fatalf("gatedOfferResolutions = %#v, want %#v", telemetry.gatedOfferResolutions, want)
 	}
 }
 
@@ -359,18 +350,15 @@ func TestCHAOS4579_ClassDefaultGate_CohortWithOnlySubjectAxisMaterialDegradesToW
 	}
 	store := &staticResultStore{results: map[string]InvestigationResult{}}
 	telemetry := &recordingTelemetry{}
-	engine := buildWindowGateEngineWithTelemetry(t, interpreter, graph, store, telemetry)
+	engine, reads := buildWindowOnlyAnsweringEngine(t, interpreter, graph, store, telemetry)
 
-	result, err := engine.Investigate(context.Background(), acceptancePrincipal(), validInvestigationRequest())
-	if err != nil {
-		t.Fatalf("Investigate() error = %v", err)
+	// CHAOS-4451 (moved): the cohort gate empties the material, the window is
+	// the only question, and the turn answers on it instead of asking.
+	if _, err := engine.Investigate(context.Background(), acceptancePrincipal(), validInvestigationRequest()); err == nil {
+		t.Fatal("Investigate() error = nil, want the stub synthesizer's error: the turn must reach synthesis")
 	}
-	if result.StructureNeeds == nil {
-		t.Fatal("StructureNeeds is nil, want the window-only disclosure")
-	}
-	wantMissing := []StructureNeedKind{contractsv1.ContextFabricStructureNeedWindow}
-	if !reflect.DeepEqual(result.StructureNeeds.Missing, wantMissing) {
-		t.Fatalf("StructureNeeds.Missing = %#v, want %#v: turn 1 asks ONE question, the window", result.StructureNeeds.Missing, wantMissing)
+	if *reads != 1 {
+		t.Fatalf("fact reads = %d, want 1", *reads)
 	}
 	wantGates := []cohortStructureGateRecord{{CohortStructureGateApplied, ShapeDiscoveredCohort}}
 	if !reflect.DeepEqual(telemetry.cohortStructureGates, wantGates) {
@@ -501,4 +489,34 @@ func TestCHAOS4579_SubjectlessTerminal_SingleSubjectStillAsksForAnchorAndHandle(
 	if !reflect.DeepEqual(telemetry.cohortStructureGates, wantGates) {
 		t.Fatalf("cohortStructureGates = %#v, want %#v", telemetry.cohortStructureGates, wantGates)
 	}
+}
+
+// buildWindowOnlyAnsweringEngine (CHAOS-4451) is buildWindowGateEngineWithTelemetry
+// for a turn whose only question is the window: it now passes the gate, so the
+// fact read is counted rather than fatal, and synthesis stops the turn (it is
+// not what these tests pin).
+func buildWindowOnlyAnsweringEngine(t *testing.T, interpreter QuestionInterpreter, graph *acceptanceGraphReader, results InvestigationResultStore, telemetry EngineTelemetry) (*Engine, *int) {
+	t.Helper()
+	reads := 0
+	engine, err := NewEngine(EngineDependencies{
+		Interpreter: interpreter,
+		Graph:       graph,
+		Facts: factReaderFunc(func(context.Context, storage.Principal, CanonicalFactRequest) (CanonicalFactBundle, error) {
+			reads++
+			return emptyFactBundle(), nil
+		}),
+		Synthesizer: synthesizerFunc(func(context.Context, storage.Principal, SynthesisInput) (InvestigationResult, error) {
+			return InvestigationResult{}, errors.New("synthesis is not under test")
+		}),
+		Results:   results,
+		Telemetry: telemetry,
+	}, EngineOptions{
+		ServiceVersion: "chaos-4451-test",
+		Now:            func() time.Time { return time.Date(2026, 8, 24, 12, 0, 0, 0, time.UTC) },
+		NewResultID:    func() string { return "result_chaos4451_answer01" },
+	})
+	if err != nil {
+		t.Fatalf("NewEngine() error = %v", err)
+	}
+	return engine, &reads
 }

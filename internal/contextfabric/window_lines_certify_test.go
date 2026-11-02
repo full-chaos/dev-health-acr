@@ -252,3 +252,32 @@ func TestWindowClassificationLineCertifiesEveryProducerValue(t *testing.T) {
 	sink.RecordWindowClassification(ctx, principalOrg1, "", contextfabric.WindowClassOutcome{Basis: "future_basis"})
 	certifyRefused(t, buf.Bytes(), eventspec.WindowClassification, "an unknown basis")
 }
+
+// TestInferredWindowGateLineCertifiesEveryProducerValue (CHAOS-4451): every
+// decision and basis the real decision produces certifies against the
+// declaration, and together they cover both vocabularies.
+func TestInferredWindowGateLineCertifiesEveryProducerValue(t *testing.T) {
+	t.Parallel()
+	keys := []string{"time", "level", "msg", "org_id", "decision", "basis", "request_id"}
+	seenDecision, seenBasis := map[string]bool{}, map[string]bool{}
+	for _, beyond := range []bool{false, true} {
+		for _, unavailable := range []bool{false, true} {
+			for _, series := range []bool{false, true} {
+				decision, basis := contextfabric.DecideInferredWindowGateForTest(beyond, unavailable, series)
+				var buf bytes.Buffer
+				sink, ctx := answerLineSink(&buf, slog.LevelInfo)
+				sink.RecordInferredWindowGate(ctx, principalOrg1, decision, basis)
+				pinKeys(t, bytes.NewBuffer(buf.Bytes()), keys, 1)
+				line := certifyRequestLine(t, buf.Bytes(), eventspec.InferredWindowGate, map[string]any{"decision": string(decision), "basis": string(basis)})
+				seenDecision[line["decision"].(string)] = true
+				seenBasis[line["basis"].(string)] = true
+			}
+		}
+	}
+	sameMembers(t, "gate decisions", keysOf(seenDecision), contextfabric.InferredWindowGateDecisionVocabulary())
+	sameMembers(t, "gate bases", keysOf(seenBasis), contextfabric.InferredWindowGateBasisVocabulary())
+	var buf bytes.Buffer
+	sink, ctx := answerLineSink(&buf, slog.LevelInfo)
+	sink.RecordInferredWindowGate(ctx, principalOrg1, contextfabric.InferredWindowGateAnswered, "future_basis")
+	certifyRefused(t, buf.Bytes(), eventspec.InferredWindowGate, "an unknown basis")
+}
