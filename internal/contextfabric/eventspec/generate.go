@@ -440,6 +440,8 @@ func goVarName(e Event) string {
 		return "SuppliedSynthesisDecision"
 	case GraphCountCheckFinished.ID:
 		return "GraphCountCheckFinished"
+	case WindowClassification.ID:
+		return "WindowClassification"
 	default:
 		panic("eventspec: goVarName has no mapping for " + e.ID + " -- add one before regenerating")
 	}

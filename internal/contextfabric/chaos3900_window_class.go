@@ -1,5 +1,12 @@
 package contextfabric
 
+import (
+	"context"
+
+	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
+	"github.com/full-chaos/dev-health-acr/internal/storage"
+)
+
 // CHAOS-3900 window classification post-pass (design brief v5.2, §2/§2.1).
 //
 // W0 shipped this as a SHADOW-ONLY file in package graphrank (not
@@ -43,6 +50,8 @@ type WindowClassOutcome struct {
 	// structurally compatible fallback class (§2's "divergence is a
 	// counted telemetry event").
 	Downgraded bool
+	// Basis is the rule that decided Class (CHAOS-12595).
+	Basis WindowClassBasis
 }
 
 // classStructurallyCompatible reports whether class's own structural
@@ -130,15 +139,105 @@ func ClassifyWindow(interpreted InterpretedQuestion, modelClass WindowClass, mod
 	if confidence == "" {
 		confidence = WindowConfidenceLow
 	}
-	return WindowClassOutcome{Class: modelClass, Confidence: confidence, Source: WindowClassSourceModel}
+	return WindowClassOutcome{Class: modelClass, Confidence: confidence, Source: WindowClassSourceModel, Basis: WindowClassBasisModel}
+}
+
+// WindowClassBasis names which rule decided a WindowClassOutcome: the model's
+// own pick, the shape fallback table, the handle-state rule, or none. Closed
+// vocabulary; it is the decision basis the classification telemetry line
+// carries (CHAOS-12595).
+type WindowClassBasis string
+
+const (
+	WindowClassBasisModel         WindowClassBasis = "model"
+	WindowClassBasisShapeFallback WindowClassBasis = "shape_fallback"
+	WindowClassBasisHandleState   WindowClassBasis = "handle_state"
+	WindowClassBasisNone          WindowClassBasis = "none"
+)
+
+// WindowClassBasisVocabulary is the closed basis vocabulary, in published
+// order.
+func WindowClassBasisVocabulary() []string {
+	return []string{string(WindowClassBasisModel), string(WindowClassBasisShapeFallback), string(WindowClassBasisHandleState), string(WindowClassBasisNone)}
+}
+
+// WindowClassSourceVocabulary is the closed source vocabulary, in published
+// order.
+func WindowClassSourceVocabulary() []string {
+	return []string{string(WindowClassSourceModel), string(WindowClassSourceFallback), string(WindowClassSourceNone)}
+}
+
+// handleStateKinds are the subject kinds one handle names: a question about
+// the current state of one of them needs no evidence window (CHAOS-12595).
+var handleStateKinds = [...]SubjectKind{SubjectPullRequest, SubjectWorkItem, contractsv1.ContextFabricSubjectCIRun, SubjectDeployment, SubjectIncident}
+
+// frameAsksHandleState reports whether the frame asks only for the current
+// state of named subjects whose stated kind is a handle kind: a
+// named_subject expression with a stated handle kind, a current temporal
+// intent, and assess_state as its only goal. The term count is deliberately
+// not checked: a named_subject may carry several terms (a second handle, the
+// handle's container, a secondary alias), and the current state of named
+// handles needs no evidence window however many are named. This is the state_snapshot
+// signal §2.1 names ("pure current state") that ClassifyWindow's shape-only
+// check does not implement. Every clause is required: a trend, a change or a
+// driver question about the same pull request keeps its window.
+func frameAsksHandleState(frame *QuestionFrame) bool {
+	if frame == nil || frame.Temporal != TemporalIntentCurrent || len(frame.Goals) == 0 {
+		return false
+	}
+	for _, goal := range frame.Goals {
+		if goal != GoalAssessState {
+			return false
+		}
+	}
+	expression := frame.SubjectExpression
+	if expression.Kind != SubjectExpressionNamed || expression.Named == nil || expression.Named.ExpectedKind == nil {
+		return false
+	}
+	for _, kind := range handleStateKinds {
+		if *expression.Named.ExpectedKind == kind {
+			return true
+		}
+	}
+	return false
+}
+
+// classifyWindowFor is ClassifyWindow with the accepted frame in hand. A
+// frame that asks only for the current state of one handle (frameAsksHandleState)
+// classifies as state_snapshot, whatever the model picked: a model pick of
+// state_snapshot is kept as the model's, any other pick (or none) is
+// replaced and marked Downgraded when there was a pick. Every other frame,
+// and a nil one, gets exactly ClassifyWindow's outcome.
+func classifyWindowFor(interpreted InterpretedQuestion, frame *QuestionFrame) WindowClassOutcome {
+	modelClass, modelConfidence := interpreted.WindowClass, interpreted.WindowConfidence
+	if !frameAsksHandleState(frame) {
+		return ClassifyWindow(interpreted, modelClass, modelConfidence)
+	}
+	if modelClass == WindowClassStateSnapshot {
+		outcome := ClassifyWindow(interpreted, modelClass, modelConfidence)
+		outcome.Basis = WindowClassBasisModel
+		return outcome
+	}
+	return WindowClassOutcome{
+		Class: WindowClassStateSnapshot, Confidence: WindowConfidenceHigh,
+		Source: WindowClassSourceFallback, Downgraded: modelClass != "", Basis: WindowClassBasisHandleState,
+	}
+}
+
+// recordWindowClassification reports one class decision; nil-safe.
+func (e *Engine) recordWindowClassification(ctx context.Context, principal storage.Principal, interpreted InterpretedQuestion, outcome WindowClassOutcome) {
+	if e.telemetry == nil {
+		return
+	}
+	e.telemetry.RecordWindowClassification(ctx, principal, interpreted.WindowClass, outcome)
 }
 
 func classifyFallback(interpreted InterpretedQuestion, downgraded bool) WindowClassOutcome {
 	class, ok := fallbackClass(interpreted)
 	if !ok {
-		return WindowClassOutcome{Source: WindowClassSourceNone, Confidence: WindowConfidenceLow, Downgraded: downgraded}
+		return WindowClassOutcome{Source: WindowClassSourceNone, Confidence: WindowConfidenceLow, Downgraded: downgraded, Basis: WindowClassBasisNone}
 	}
-	return WindowClassOutcome{Class: class, Confidence: WindowConfidenceLow, Source: WindowClassSourceFallback, Downgraded: downgraded}
+	return WindowClassOutcome{Class: class, Confidence: WindowConfidenceLow, Source: WindowClassSourceFallback, Downgraded: downgraded, Basis: WindowClassBasisShapeFallback}
 }
 
 // WindowDefaultPolicy names ONE of the two DW0 candidate default widths

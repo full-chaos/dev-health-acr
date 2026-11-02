@@ -9,6 +9,12 @@ A restricted caller's census runs inside its grant. The grant is ANDed into
 every statement of every census call. A grant that cannot apply is an error,
 never a read of the organization.
 
+Since CHAOS-12592 a web user is not a restricted caller: its `*` grant stays `*`
+after the access read (chris on CHAOS-4390: "a user can see all the data in an
+org"), so its census reads the organization, as any universal caller's does. A
+restricted caller here is a credential that names repositories or owners, such
+as a repository-bound MCP or CLI credential.
+
 Before this change a restricted caller got no census: an organization-wide count
 would be an existence oracle. A pull request named by number then stalled in a
 truncated search for that caller alone. An unrestricted caller was rescued.
@@ -225,15 +231,20 @@ The entity tree relates an issue to a repository only through its linked pull
 requests. So a restricted caller reaches a repo-less work item by one rule: **a
 native link of record to a pull request of a granted repository.** `explicit_text`
 and `heuristic` links never grant. Project, owning team and the team's
-repositories are never the relation.
+repositories are never the relation. A GitHub or GitLab issue sits on its own
+repository's row, and that repository decides for it (CHAOS-12561): the node
+gate admits it by that repository, and so does the census.
 
 **The census.** `withWorkItemGrantFilter`, in `devhealthsource`:
 
 - The grant passes `grantApplies` first. Past that line the library reads an empty
   list or a `*` as the organization-wide grant.
 - `readers.WorkItemScopeSQLAmong` is narrowed to the handle's candidates. The
-  statement keeps an id by `Provenance[pr_link].Expr`, never by `AuthorizationExpr`,
-  which ORs the project path, and never by the item's own repository.
+  statement keeps an id by `Provenance[direct_repo].Expr OR Provenance[pr_link].Expr`
+  (CHAOS-12561), never by `AuthorizationExpr`, which ORs the project path. The
+  direct arm takes a row with a real repository, by that repository; the link arm
+  takes a repository-less row, through a native link. Both test the two-part slug
+  grammar before the owner. The key prefix read takes the same pair.
 - `HAVING min(...)`: an id is in only when every row carrying it passes.
 - An owner grant admits what the gate admits. The library's owner match reads the
   first path part only, but its link aggregate tests the two-part slug grammar
@@ -359,11 +370,11 @@ this change the `CHAOS` prefix alone was accepted in a sentence.
 - **A name that starts with a dot.** The library's grammar refuses `acme/.github`
   and the gate admits it. So an item linked only there counts 0: the census misses
   it inside the grant, and search can still reach it. No signal leaves the grant.
-- **A repository-owned work item.** GitHub and GitLab issues sit on their own
-  repository's row. The census reads the library's `pr_link` arm, and that arm
-  takes repository-less rows only, so for a restricted caller such an issue counts
-  0 even with a native link inside the grant. An organization-wide caller is not
-  affected. Found under CHAOS-12463 and tracked as CHAOS-12561.
+- **A repository-owned work item outside the grant.** A GitHub or GitLab issue
+  whose own repository is outside the grant counts 0 even with a native link to a
+  pull request inside: its own repository decides, as at the node gate
+  (CHAOS-12561). Before CHAOS-12561 the census read the link arm only, so such an
+  issue counted 0 inside the grant too.
 - **Timing of the key prefix read.** It scans the organization's work items of the
   prefix before the grant applies, so its duration follows that count (40 ms for
   none, 50 ms for 22, 130 ms for 12,000 on the local stack). Same class as the

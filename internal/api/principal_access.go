@@ -172,11 +172,32 @@ func (a *App) requireLiveAccess(enforceFlags bool, next http.Handler) http.Handl
 // inventory the only scope left is a project grant, which only a "*" consent
 // grant with live projects may take (auth.NarrowToProjectScopes, CHAOS-12107
 // D2): anything else there is refused, as an empty scope always was. Every other
-// answer is the repository path, unchanged, so an organization with repositories
-// never reads projects.
+// answer is the repository path, so an organization with repositories never
+// reads projects.
+//
+// CHAOS-12592 (chris on CHAOS-4390: "a user can see all the data in an org"): a
+// "*" consent grant stays "*" once the live read has passed, made exactly "*"
+// (auth.KeepUniversalGrant: a "*" beside other entries is already the whole
+// organization, so nothing widens). The inventory is
+// the organization's, not the user's, so turning "*" into it narrowed no user's
+// access; it only made every web user a restricted caller, refused every
+// organization-level read. The live read still runs on every request, and an
+// inventory with no repository in it is still refused. Every store read stays
+// scoped to the caller's organization. A grant that names repositories or owners
+// is still narrowed to the inventory and keeps every restricted rule.
 func narrowLiveScope(ctx context.Context, effective []string, access entitlements.PrincipalAccess) (context.Context, error) {
 	if len(access.Repositories) == 0 {
 		return auth.NarrowToProjectScopes(ctx, access.Projects)
+	}
+	kept, err := auth.KeepUniversalGrant(ctx)
+	switch {
+	case err == nil:
+		if len(effective) == 0 {
+			return ctx, auth.ErrEmptyRepositoryScope
+		}
+		return kept, nil
+	case !errors.Is(err, auth.ErrGrantNotUniversal):
+		return ctx, err
 	}
 	return auth.NarrowRepositoryScopes(ctx, effective)
 }

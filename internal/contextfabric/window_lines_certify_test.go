@@ -220,3 +220,35 @@ func TestStatedWindowAxisLinesCertifyAsTwoInOneRequestAndRefuseAThird(t *testing
 	sink.RecordStatedWindowAxis(ctx, principalOrg1, "mcp", contextfabric.StatedWindowOriginQuestionPhrase, "current", "range", contextfabric.StatedWindowAxisStatedRange)
 	certifyRefused(t, buf.Bytes(), eventspec.StatedWindowAxisDecision, "a third stated window axis line in one request", map[string]any{"outcome": "stated_range"})
 }
+
+// TestWindowClassificationLineCertifiesEveryProducerValue (CHAOS-12595): the
+// line carries the model's own pick and the classifier's outcome, every value
+// of each closed field from the producer's own vocabulary.
+func TestWindowClassificationLineCertifiesEveryProducerValue(t *testing.T) {
+	t.Parallel()
+	keys := []string{"time", "level", "msg", "org_id", "model_class", "window_class", "source", "confidence", "basis", "downgraded", "request_id"}
+	seenBasis, seenSource := map[string]bool{}, map[string]bool{}
+	for _, class := range contextfabric.WindowClassLogVocabulary() {
+		for _, confidence := range contextfabric.WindowConfidenceLogVocabulary() {
+			for _, shape := range []contextfabric.InvestigationShape{contextfabric.ShapeSingleSubject, contextfabric.ShapeDiscoveredCohort, contextfabric.ShapeOpen} {
+				for _, handle := range []bool{false, true} {
+					interpreted := contextfabric.InterpretedQuestion{Shape: shape, WindowClass: contextfabric.WindowClass(class), WindowConfidence: contextfabric.WindowConfidence(confidence)}
+					outcome := contextfabric.ClassifyWindowForFrameForTest(interpreted, handle)
+					var buf bytes.Buffer
+					sink, ctx := answerLineSink(&buf, slog.LevelInfo)
+					sink.RecordWindowClassification(ctx, principalOrg1, interpreted.WindowClass, outcome)
+					pinKeys(t, bytes.NewBuffer(buf.Bytes()), keys, 1)
+					line := certifyRequestLine(t, buf.Bytes(), eventspec.WindowClassification, map[string]any{"model_class": class, "downgraded": outcome.Downgraded})
+					seenBasis[line["basis"].(string)] = true
+					seenSource[line["source"].(string)] = true
+				}
+			}
+		}
+	}
+	sameMembers(t, "classification bases", keysOf(seenBasis), contextfabric.WindowClassBasisVocabulary())
+	sameMembers(t, "classification sources", keysOf(seenSource), contextfabric.WindowClassSourceVocabulary())
+	var buf bytes.Buffer
+	sink, ctx := answerLineSink(&buf, slog.LevelInfo)
+	sink.RecordWindowClassification(ctx, principalOrg1, "", contextfabric.WindowClassOutcome{Basis: "future_basis"})
+	certifyRefused(t, buf.Bytes(), eventspec.WindowClassification, "an unknown basis")
+}
