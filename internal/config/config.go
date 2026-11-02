@@ -196,6 +196,11 @@ type Config struct {
 	// a pin that does not hold the rule fails every answer that carries the
 	// shape. Turn it on after web's and ask-dev's pins are deployed.
 	ContextFabricInvestmentTreemapEnabled bool
+	// ContextFabricComparisonTableEnabled (CHAOS-12513,
+	// ACR_CONTEXT_FABRIC_COMPARISON_TABLE_ENABLED) turns on the
+	// comparison_side_by_side render rule. Default OFF, for the same reason as
+	// the treemap. Turn it on after web's and ask-dev's pins are deployed.
+	ContextFabricComparisonTableEnabled bool
 	// ServerCompletenessAuthorityEnabled (CHAOS-5640,
 	// ACR_CONTEXT_FABRIC_SERVER_COMPLETENESS_AUTHORITY_ENABLED) is the
 	// gated FLIP's master switch -- default OFF, same "ships dark"

@@ -139,3 +139,21 @@ func TestProjectionDropsAComparisonCellItCannotCheck(t *testing.T) {
 		})
 	}
 }
+
+// The server built the table from these claims, so the table is their citation:
+// a comparison's drivers need not cite every cell.
+func TestProjectionCarriesTheClaimsATablePlots(t *testing.T) {
+	t.Parallel()
+	result := canonicalWithComparison(t)
+	result.Drivers = nil
+	result.Completeness = contextfabric.ComputeAnswerCompleteness(result)
+	projection := Project(result, Budget{})
+	if len(projection.RenderShapes) != 1 || len(projection.KeyFacts) != 4 {
+		t.Fatalf("shapes = %d, key facts = %d, want the table and its 4 claims", len(projection.RenderShapes), len(projection.KeyFacts))
+	}
+	// A claim no table plots stays out.
+	result.RenderShapes[0].Series[0].Points = result.RenderShapes[0].Series[0].Points[:1]
+	if got := len(Project(result, Budget{}).KeyFacts); got != 3 {
+		t.Fatalf("key facts = %d, want the 3 claims the table plots", got)
+	}
+}
