@@ -76,6 +76,22 @@ func (f *quadrantFixture) validate() error {
 	return validateRenderShapes([]ContextFabricRenderShape{f.shape}, renderShapeSourcesFromResult(f.result()))
 }
 
+// projection is the answer projection of the fixture: its key facts carry the
+// same claims and rows.
+func (f *quadrantFixture) projection() ContextFabricAnswerProjection {
+	var projection ContextFabricAnswerProjection
+	for _, claim := range f.claims {
+		projection.KeyFacts = append(projection.KeyFacts, ContextFabricProjectedFact{
+			ClaimID: claim.ClaimID, Kind: claim.Kind, Field: claim.Field, Subject: claim.Subject, Value: claim.Value, Rows: claim.Rows, Table: claim.Table,
+		})
+	}
+	return projection
+}
+
+func (f *quadrantFixture) validateProjection() error {
+	return validateRenderShapes([]ContextFabricRenderShape{f.shape}, renderShapeSourcesFromProjection(f.projection()))
+}
+
 // rowOnDay is a copy of a row that speaks for another day.
 func rowOnDay(row ContextFabricClaimedFactRow, day string) ContextFabricClaimedFactRow {
 	fields := make(map[string]ContextFabricScalarValue, len(row.Fields))
@@ -99,18 +115,6 @@ func TestAQuadrantOfTeamsOnOneDayIsAccepted(t *testing.T) {
 	f := newQuadrantFixture(quadrantTeams())
 	if err := f.validate(); err != nil {
 		t.Fatalf("three teams on one day, raw values, one claim each: %v", err)
-	}
-}
-
-// A team with no label is named by its canonical id, the word the answer has
-// for it.
-func TestAQuadrantNamesATeamWithNoLabelByItsID(t *testing.T) {
-	t.Parallel()
-	f := newQuadrantFixture(quadrantTeams())
-	f.claims[4].Subject.Label, f.claims[5].Subject.Label = "", ""
-	f.shape.Series[0].Points[2].Label, f.shape.Series[1].Points[2].Label = "team:mobile", "team:mobile"
-	if err := f.validate(); err != nil {
-		t.Fatalf("a team with no label is its canonical id: %v", err)
 	}
 }
 
@@ -241,13 +245,32 @@ func TestAQuadrantIsRefused(t *testing.T) {
 func TestAQuadrantResolvesOnTheProjectionPath(t *testing.T) {
 	t.Parallel()
 	f := newQuadrantFixture(quadrantTeams())
-	var projection ContextFabricAnswerProjection
-	for _, claim := range f.claims {
-		projection.KeyFacts = append(projection.KeyFacts, ContextFabricProjectedFact{
-			ClaimID: claim.ClaimID, Kind: claim.Kind, Field: claim.Field, Subject: claim.Subject, Value: claim.Value, Rows: claim.Rows, Table: claim.Table,
-		})
-	}
-	if err := validateRenderShapes([]ContextFabricRenderShape{f.shape}, renderShapeSourcesFromProjection(projection)); err != nil {
+	if err := f.validateProjection(); err != nil {
 		t.Fatalf("the projection refused the quadrant: %v", err)
+	}
+}
+
+// Codex r2 on #1953 (executed): a row cell above the exact integer bound was
+// converted to the float a point carries, so a point of 2^53 passed for a cell
+// of 2^53+1 on both paths. Such a cell cannot be plotted exactly, so a point
+// citing it is refused, as every other render point is.
+func TestAQuadrantCellTooLargeToPlotExactlyIsRefused(t *testing.T) {
+	t.Parallel()
+	for name, validate := range map[string]func(*quadrantFixture) error{
+		"result":     (*quadrantFixture).validate,
+		"projection": (*quadrantFixture).validateProjection,
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			f := newQuadrantFixture(quadrantTeams())
+			plotted := int64(ContextFabricRenderPointExactIntegerBound)
+			f.claims[0].Rows[0].Fields["churn_loc_30d"] = ContextFabricScalarValue{Integer: int64Ptr(plotted + 1)}
+			*f.claims[0].Value.Integer = plotted
+			f.shape.Series[0].Points[0].Value = float64(plotted)
+			err := validate(f)
+			if err == nil || !strings.Contains(err.Error(), "too large to plot") {
+				t.Fatalf("validate() = %v, want the cell refused as too large to plot exactly", err)
+			}
+		})
 	}
 }

@@ -16,10 +16,11 @@ import "fmt"
 //     a point is one team;
 //   - every point cites a claimed_fact_value of its series' field, on the
 //     landscape kind (the resolver refuses a derived one), about a team, and its
-//     value is the raw cell of that field in the claim's row, which the table
-//     declares as a measure: a scalar alone could restate any number;
-//   - a point's label is the team's word (its label, or its canonical id when it
-//     has none), so a chart never shows a team's numbers under another name;
+//     value is the raw integer cell of that field in the claim's row, which the
+//     table declares as a measure: a scalar alone could restate any number. A
+//     cell a point cannot carry exactly is refused, as for every render point;
+//   - a point's label is the team's label, so a chart never shows a team's
+//     numbers under another name;
 //   - the x and y of one label cite claims about one team, even when two teams
 //     share a word. No team is two points: its label is its word, and labels are
 //     unique within a series;
@@ -105,24 +106,30 @@ func quadrantPointClaim(shapeID string, point ContextFabricRenderPoint, field st
 	if !dated {
 		return "", "", fmt.Errorf("render shape %q point %q: its claim carries no %s row to say which day it speaks for", shapeID, point.Label, ContextFabricRenderLandscapeTableField)
 	}
-	if raw, measured := row.measures[field]; !measured || raw != point.Value {
+	// A field the table does not declare has no cell, and so no integer.
+	cell := row.measures[field]
+	if cell.Integer == nil {
 		return "", "", fmt.Errorf("render shape %q point %q: a quadrant value is the raw cell of its row's declared measure %q", shapeID, point.Label, field)
 	}
-	word := claim.subject.Label
-	if word == "" {
-		word = claim.subject.CanonicalID
+	raw, err := renderScalarNumber(cell, fmt.Sprintf("field %q of claim %q's %s row", field, point.Source.ClaimID, ContextFabricRenderLandscapeTableField))
+	if err != nil {
+		return "", "", fmt.Errorf("render shape %q point %q: %w", shapeID, point.Label, err)
 	}
-	if point.Label != word {
-		return "", "", fmt.Errorf("render shape %q point %q: a quadrant point's label is the team's word, %q", shapeID, point.Label, word)
+	if raw != point.Value {
+		return "", "", fmt.Errorf("render shape %q point %q: a quadrant value is the raw cell of its row's declared measure %q", shapeID, point.Label, field)
+	}
+	// The wire requires a subject label, so the team's label is its word.
+	if point.Label != claim.subject.Label {
+		return "", "", fmt.Errorf("render shape %q point %q: a quadrant point's label is the team's word, %q", shapeID, point.Label, claim.subject.Label)
 	}
 	return claim.subject.CanonicalID, row.day, nil
 }
 
 // landscapeRow is one claim's area_breakdown row as a quadrant reads it: the day
-// it speaks for, and the numeric cells of the measures its table declares.
+// it speaks for, and the raw cells of the measures its table declares.
 type landscapeRow struct {
 	day      string
-	measures map[string]float64
+	measures map[string]ContextFabricScalarValue
 }
 
 // landscapeAreaRow reads a claim's one area_breakdown row, when the claim carries
@@ -139,12 +146,13 @@ func landscapeAreaRow(table *ContextFabricClaimedFactTable, rows []ContextFabric
 	if day == nil || *day == "" {
 		return landscapeRow{}, false
 	}
-	row := landscapeRow{day: *day, measures: map[string]float64{}}
-	// The landscape measures are counts, so a cell is an integer; any other cell
-	// gives no measure, and a point citing it is refused.
+	row := landscapeRow{day: *day, measures: map[string]ContextFabricScalarValue{}}
+	// The cells stay raw: the point's own check refuses one that is not an
+	// integer (the landscape measures are counts) or that it cannot carry
+	// exactly.
 	for _, measure := range table.Measures {
-		if cell := rows[0].Fields[measure].Integer; cell != nil {
-			row.measures[measure] = float64(*cell)
+		if cell, present := rows[0].Fields[measure]; present {
+			row.measures[measure] = cell
 		}
 	}
 	return row, true
