@@ -178,6 +178,11 @@ func (t SlogEngineTelemetry) RecordAnswerReuse(ctx context.Context, principal st
 	}
 	// CHAOS-12511: the refusal reason is a log and event field only. The
 	// metric below keeps the outcome as its sole label.
+	// A miss_authorization with no reason is written as unattributed, never
+	// as a bare line, whoever calls this (CHAOS-12519). The certifier refuses it.
+	if outcome == AnswerReuseMissAuthorization && refusal.Reason == "" {
+		refusal.Reason = AnswerReuseRefusalUnattributed
+	}
 	if refusal.Reason != "" {
 		args = append(args, "reason", SanitizeLogAttr(string(refusal.Reason)))
 		if refusal.Reason == AnswerReuseRefusalSubjectCapExceeded {
