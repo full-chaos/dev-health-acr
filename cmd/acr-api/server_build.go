@@ -173,6 +173,7 @@ func appConfig(cfg config.Config, serviceVersion string) api.AppConfig {
 		ServerCompletenessAuthorityEnabled:          cfg.ServerCompletenessAuthorityEnabled,
 		ServerCompletenessAuthoritySymmetricEnabled: cfg.ServerCompletenessAuthoritySymmetricEnabled,
 		ContextFabricVocabularyLabelsEnabled:        cfg.ContextFabricVocabularyLabelsEnabled,
+		ContextFabricInvestmentTreemapEnabled:       cfg.ContextFabricInvestmentTreemapEnabled,
 		ContextFabricEventStreamEnabled:             cfg.ContextFabricEventStreamEnabled,
 		ContextFabricRunLeaseEnabled:                cfg.ContextFabricRunLeaseEnabled,
 		ThreadListFirstQuestionEnabled:              cfg.ThreadListFirstQuestionEnabled,

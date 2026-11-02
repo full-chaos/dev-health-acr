@@ -40,6 +40,10 @@ type AppConfig struct {
 	// config.Config.ContextFabricVocabularyLabelsEnabled: both doors that
 	// serve a result read it (contextfabric.ServeVocabularyLabels).
 	ContextFabricVocabularyLabelsEnabled bool
+	// ContextFabricInvestmentTreemapEnabled mirrors
+	// config.Config.ContextFabricInvestmentTreemapEnabled: both doors that
+	// serve a result read it (contextfabric.WithoutDisabledRenderShapes).
+	ContextFabricInvestmentTreemapEnabled bool
 	// ContextFabricEventStreamEnabled mirrors
 	// config.Config.ContextFabricEventStreamEnabled: the create-investigation
 	// route serves `Accept: text/event-stream` only when it is on.

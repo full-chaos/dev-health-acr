@@ -213,7 +213,7 @@ func TestAnswerWithNoChartableContentSelectsNothing(t *testing.T) {
 	if shapes != nil {
 		t.Fatalf("SelectRenderShapes() drew %d shapes for an answer with nothing to plot", len(shapes))
 	}
-	if len(event.Skipped) != 3 {
+	if len(event.Skipped) != len(renderShapeRules) {
 		t.Fatalf("every rule must record why it declined (including the withdrawn trend rule); skipped=%+v", event.Skipped)
 	}
 }

@@ -219,6 +219,13 @@ func ContextFabricInvestmentThemeLabel(theme string) (string, bool) {
 	return word, known
 }
 
+// ContextFabricInvestmentThemeCount is how many rows a whole theme table holds.
+// The themes are fixed, and the producer emits every one, so a table with fewer
+// was cut by a budget and is not the whole.
+func ContextFabricInvestmentThemeCount() int {
+	return len(contextFabricInvestmentThemeLabels)
+}
+
 // ContextFabricRenderValueUnit is the CLOSED vocabulary of units a shape may
 // declare for its values. It exists so a consumer formats a number without
 // parsing ValueLabel, which is a served word and no format: reading a unit out of

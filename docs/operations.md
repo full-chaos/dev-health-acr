@@ -1003,6 +1003,12 @@ create route, for every engine exit and the event stream, and the read by id,
 for the replay of a done submission and the attach terminal. It is never stored, so
 turning the flag on or off needs no migration and no backfill.
 
+**The investment treemap.** `ACR_CONTEXT_FABRIC_INVESTMENT_TREEMAP_ENABLED`
+(chart: `contextFabric.investmentTreemapEnabled`, default `false`) turns on the
+`investment_theme_share` render rule. `render_shapes.selected_by` is a closed
+enum, so a consumer on a pin that does not hold the rule fails every answer that
+carries the shape. Confirm web's and ask-dev's pins first, then set the flag.
+
 **The roll step "vocabulary labels on".** Confirm that the deployed pins of
 ask-dev, web and every MCP client carry `vocabulary_labels`. Then set the flag
 for `acr-api` and roll it. To turn it off, unset the flag and roll: the next read

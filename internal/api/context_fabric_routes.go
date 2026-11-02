@@ -258,6 +258,7 @@ func (a *App) serveContextFabricInvestigationResult(w http.ResponseWriter, r *ht
 	// bounded projection below, never refused and never oversize.
 	maximumBytes := int64(a.config.MaxSerializedBytes)
 	callerBytes := int64(request.Options.MaxSerializedBytes)
+	answer = a.withoutDisabledRenderShapes(answer)
 	wordsBound := a.investigationWordsBound(answer, callerBytes, collectedSynthesisInput())
 	result, wordsTier := contextfabric.ServeVocabularyLabels(answer, a.config.ContextFabricVocabularyLabelsEnabled, wordsBound)
 	itemCounts := contextFabricResultItemCounts(result)
@@ -1442,4 +1443,10 @@ func contextFabricBudgetRefusalFields(refusal contextfabric.AnswerBudgetRefusal)
 		"budget_question_family", contextfabric.SanitizeLogAttr(string(refusal.Family)),
 		"budget_sections", strings.Join(sections, ","),
 	}
+}
+
+// withoutDisabledRenderShapes is the one reading of the deployment's render
+// switches at both doors that serve a result.
+func (a *App) withoutDisabledRenderShapes(answer contractsv1.ContextFabricInvestigationResult) contractsv1.ContextFabricInvestigationResult {
+	return contextfabric.WithoutDisabledRenderShapes(answer, contextfabric.RenderShapeOptions{InvestmentThemeShare: a.config.ContextFabricInvestmentTreemapEnabled})
 }
