@@ -147,6 +147,7 @@ func (p *HealthProvider) ReadFacts(ctx context.Context, principal storage.Princi
 	if unsupported {
 		return unsupportedResult, nil
 	}
+	timeBound = statedWindowBound(query, timeBound)
 	orgID, err := requireOrgID(principal.OrgID)
 	if err != nil {
 		return contextfabric.FactProviderResult{}, err

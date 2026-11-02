@@ -78,6 +78,7 @@ func (p *WorkloadProvider) ReadFacts(ctx context.Context, principal storage.Prin
 	if unsupported {
 		return unsupportedResult, nil
 	}
+	timeBound = statedWindowBound(query, timeBound)
 	orgID, err := requireOrgID(principal.OrgID)
 	if err != nil {
 		return contextfabric.FactProviderResult{}, err

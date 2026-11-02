@@ -92,7 +92,7 @@
         {
           "source": "canonical_fact:health",
           "state": "no_data",
-          "reason": "this source is team-scoped and carries no project dimension; a project reaches it only through team ownership",
+          "reason": "the source held no rows in the stated window",
           "label": "Canonical facts — health",
           "state_label": "no data"
         }
@@ -112,7 +112,7 @@
             "project"
           ],
           "label": "No health facts were found",
-          "raw": "this source is team-scoped and carries no project dimension; a project reaches it only through team ownership"
+          "raw": "the source held no rows in the stated window"
         }
       ]
     },
@@ -239,7 +239,7 @@
         {
           "source": "canonical_fact:health",
           "state": "no_data",
-          "reason": "this source is team-scoped and carries no project dimension; a project reaches it only through team ownership",
+          "reason": "the source held no rows in the stated window",
           "label": "Canonical facts — health",
           "state_label": "no data"
         }
@@ -259,7 +259,7 @@
             "project"
           ],
           "label": "No health facts were found",
-          "raw": "this source is team-scoped and carries no project dimension; a project reaches it only through team ownership"
+          "raw": "the source held no rows in the stated window"
         }
       ]
     },
@@ -386,7 +386,7 @@
         {
           "source": "canonical_fact:health",
           "state": "no_data",
-          "reason": "this source is team-scoped and carries no project dimension; a project reaches it only through team ownership",
+          "reason": "the source held no rows in the stated window",
           "label": "Canonical facts — health",
           "state_label": "no data"
         }
@@ -406,7 +406,7 @@
             "project"
           ],
           "label": "No health facts were found",
-          "raw": "this source is team-scoped and carries no project dimension; a project reaches it only through team ownership"
+          "raw": "the source held no rows in the stated window"
         }
       ]
     },

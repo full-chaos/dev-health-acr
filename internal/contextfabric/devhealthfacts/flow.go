@@ -80,6 +80,7 @@ func (p *FlowProvider) ReadFacts(ctx context.Context, principal storage.Principa
 	if unsupported {
 		return unsupportedResult, nil
 	}
+	timeBound = statedWindowBound(query, timeBound)
 	orgID, err := requireOrgID(principal.OrgID)
 	if err != nil {
 		return contextfabric.FactProviderResult{}, err
@@ -1002,11 +1003,17 @@ var flowWindowTotalsDedupe = `SELECT team_id, provider, work_scope_id, day, item
 func addFlowWindowFields(fields map[string]contextfabric.FactValue, b factTimeBound, w flowWindowTotals) {
 	switch {
 	case b.active && b.hasStart:
+		// window_end and window_days name the days the window holds, so an
+		// exclusive end is the instant before it.
+		lastDay := b.end.UTC()
+		if b.endExclusive {
+			lastDay = lastDay.Add(-time.Microsecond)
+		}
 		fields["window_mode"] = contextfabric.StringFactValue("range")
 		fields["window_start"] = contextfabric.StringFactValue(b.start.UTC().Format(time.DateOnly))
-		fields["window_end"] = contextfabric.StringFactValue(b.end.UTC().Format(time.DateOnly))
+		fields["window_end"] = contextfabric.StringFactValue(lastDay.Format(time.DateOnly))
 		startDay := b.start.UTC().Truncate(24 * time.Hour)
-		endDay := b.end.UTC().Truncate(24 * time.Hour)
+		endDay := lastDay.Truncate(24 * time.Hour)
 		fields["window_days"] = contextfabric.IntegerFactValue(int64(endDay.Sub(startDay)/(24*time.Hour)) + 1)
 		if w.present {
 			fields["items_started_window"] = contextfabric.IntegerFactValue(w.itemsStarted)
