@@ -101,20 +101,27 @@ func SubjectReadableLabel(subject SubjectRef) string {
 	return subject.Label
 }
 
-// RepairRawEdgeFact gives a stored edge fact's raw ends their reader form. A fact
-// is the writer's From label, the relationship's words and its To label, so an end
-// the writer labelled with its raw source id is matched by that id, read back from
-// the endpoint's canonical id: never guessed from the text. A work item end reads
-// as its key; a project or a team end reads as the endpoint's own label when the
-// graph carries one, and else as ReadableSourceID.
-func RepairRawEdgeFact(fact string, from, to SubjectRef) string {
+// RepairRawEdgeFact gives a stored edge fact's raw ends their reader form. The
+// writer composes a fact as its From label, the relationship's words and its To
+// label (falkorgraph.relationshipFact), so an end is repaired only where that
+// composition stands: the endpoint's own raw id, read back from its canonical id,
+// next to the relationship's words. A custom fact, a title, or text that merely
+// looks like an id is never touched. relation is the relationship type the edge
+// carries. A work item end reads as its key; a project or a team end reads as the
+// endpoint's own label when the graph carries one, and else as ReadableSourceID.
+func RepairRawEdgeFact(fact, relation string, from, to SubjectRef) string {
+	words := strings.ToLower(strings.ReplaceAll(strings.TrimSpace(relation), "_", " "))
+	if words == "" {
+		return fact
+	}
 	if raw, ok := RawSubjectLabel(from.Kind, from.CanonicalID); ok {
-		if rest, found := strings.CutPrefix(fact, raw+" "); found {
-			fact = factEnd(from, raw) + " " + rest
+		if rest, found := strings.CutPrefix(fact, raw+" "+words+" "); found {
+			fact = factEnd(from, raw) + " " + words + " " + rest
 		}
 	}
 	if raw, ok := RawSubjectLabel(to.Kind, to.CanonicalID); ok {
-		if rest, found := strings.CutSuffix(fact, " "+raw); found {
+		if head, found := strings.CutSuffix(fact, " "+words+" "+raw); found {
+			rest := head + " " + words
 			// A To end with no reader name is the kind's word, and the
 			// relationship's words already end with it ("belongs to project"),
 			// so the end is left out rather than said twice.

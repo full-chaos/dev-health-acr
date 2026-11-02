@@ -398,7 +398,10 @@ func scanWorkItemRow(r contextpacket.ClickHouseRowScanner) ([]candidate, error) 
 		// value, so a whitespace-only title falls back exactly as before.
 		label := title
 		if strings.TrimSpace(label) == "" {
-			label = contextfabric.ReadableSourceID(contextfabric.SubjectWorkItem, workItemID)
+			// The raw id stays the stored label: it feeds the search text, whose
+			// composition tag would otherwise have to move. The read gives it its
+			// reader form (CHAOS-12619).
+			label = workItemID
 		}
 		subject := contractsv1.ContextFabricSubjectRef{Kind: contractsv1.ContextFabricSubjectWorkItem, CanonicalID: canonicalID, Label: label}
 		properties := map[string]contractsv1.ContextFabricScalarValue{}

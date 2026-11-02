@@ -87,22 +87,26 @@ func TestARawEdgeFactReadsInReaderWords(t *testing.T) {
 	pr := contextfabric.SubjectRef{Kind: contextfabric.SubjectPullRequest, CanonicalID: "pull_request:920f9442-07df-4217-4dc4-c5833c0b8268:872", Label: "PR #872"}
 	other := workItemRef(t, zeroRepo, "jira:OPS-11")
 	for _, tc := range []struct {
-		fact     string
-		from, to contextfabric.SubjectRef
-		want     string
+		fact, relation string
+		from, to       contextfabric.SubjectRef
+		want           string
 	}{
-		{"linear:CHAOS-2320 links pull request PR #872", item, pr, "CHAOS-2320 links pull request PR #872"},
-		{"linear:CHAOS-2320 belongs to project c67b1602-31db-4422-8dec-a4a02bbcc513", item, named, "CHAOS-2320 belongs to project Investment View Documentation"},
-		{"linear:CHAOS-2320 belongs to project c67b1602-31db-4422-8dec-a4a02bbcc513", item, stub, "CHAOS-2320 belongs to project"},
-		{"linear:CHAOS-2320 owned by team linear:CHAOS", item, team, "CHAOS-2320 owned by team Fullchaos"},
-		{"jira:OPS-11 blocks linear:CHAOS-2320", other, item, "OPS-11 blocks CHAOS-2320"},
+		{"linear:CHAOS-2320 links pull request PR #872", "LINKS_PULL_REQUEST", item, pr, "CHAOS-2320 links pull request PR #872"},
+		{"linear:CHAOS-2320 belongs to project c67b1602-31db-4422-8dec-a4a02bbcc513", "BELONGS_TO_PROJECT", item, named, "CHAOS-2320 belongs to project Investment View Documentation"},
+		{"linear:CHAOS-2320 belongs to project c67b1602-31db-4422-8dec-a4a02bbcc513", "BELONGS_TO_PROJECT", item, stub, "CHAOS-2320 belongs to project"},
+		{"linear:CHAOS-2320 owned by team linear:CHAOS", "OWNED_BY_TEAM", item, team, "CHAOS-2320 owned by team Fullchaos"},
+		{"jira:OPS-11 blocks linear:CHAOS-2320", "BLOCKS", other, item, "OPS-11 blocks CHAOS-2320"},
 		// Already reader words: the writer after CHAOS-12619.
-		{"CHAOS-2320 links pull request PR #872", item, pr, "CHAOS-2320 links pull request PR #872"},
+		{"CHAOS-2320 links pull request PR #872", "LINKS_PULL_REQUEST", item, pr, "CHAOS-2320 links pull request PR #872"},
 		// Text shaped like an id that is not this endpoint's stays.
-		{"linear:CHAOS-9999 links pull request PR #872", item, pr, "linear:CHAOS-9999 links pull request PR #872"},
-		{"a title that says linear:CHAOS-2320", pr, item, "a title that says CHAOS-2320"},
+		{"linear:CHAOS-9999 links pull request PR #872", "LINKS_PULL_REQUEST", item, pr, "linear:CHAOS-9999 links pull request PR #872"},
+		// Not the writer's composition: a custom fact, and an end with other
+		// words beside it, stay as they are (codex r1).
+		{"linear:CHAOS-2320 is a human-authored escalation note", "LINKS_PULL_REQUEST", item, pr, "linear:CHAOS-2320 is a human-authored escalation note"},
+		{"a title that says linear:CHAOS-2320", "BLOCKS", pr, item, "a title that says linear:CHAOS-2320"},
+		{"linear:CHAOS-2320 links pull request PR #872", "", item, pr, "linear:CHAOS-2320 links pull request PR #872"},
 	} {
-		if got := contextfabric.RepairRawEdgeFact(tc.fact, tc.from, tc.to); got != tc.want {
+		if got := contextfabric.RepairRawEdgeFact(tc.fact, tc.relation, tc.from, tc.to); got != tc.want {
 			t.Errorf("%q = %q, want %q", tc.fact, got, tc.want)
 		}
 	}

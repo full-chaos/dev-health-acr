@@ -794,7 +794,7 @@ func (r *RelationshipsReader) gateEdges(ctx context.Context, principal storage.P
 			From:           fromEnd,
 			To:             toEnd,
 			Active:         active,
-			Fact:           contextfabric.RepairRawEdgeFact(graphrank.StringAttribute(candidate.Attributes, "fact"), candidate.From.Subject, candidate.To.Subject),
+			Fact:           contextfabric.RepairRawEdgeFact(graphrank.StringAttribute(candidate.Attributes, "fact"), candidate.RelationType, candidate.From.Subject, candidate.To.Subject),
 			Provenance: RelationshipSource{
 				Source:          "acr_graph",
 				SourceVersion:   graphrank.StringAttribute(candidate.Attributes, "source_version"),
