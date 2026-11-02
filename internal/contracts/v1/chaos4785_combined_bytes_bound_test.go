@@ -59,10 +59,10 @@ func TestContextFabricClaimedFactValidateRejectsMaxLegalDualTableCombination(t *
 
 	// Each collection alone is legal -- isolating that the COMBINATION,
 	// not either table by itself, is what triggers the rejection.
-	if err := validateClaimedFactRows(fact.Rows); err != nil {
+	if err := validateClaimedFactRows(fact.Rows, fact.Table); err != nil {
 		t.Fatalf("Rows alone: validateClaimedFactRows() error = %v, want nil (Rows alone must stay legal)", err)
 	}
-	if err := validateClaimedFactRows(fact.TimeSeriesRows); err != nil {
+	if err := validateClaimedFactRows(fact.TimeSeriesRows, fact.TimeSeriesTable); err != nil {
 		t.Fatalf("TimeSeriesRows alone: validateClaimedFactRows() error = %v, want nil (TimeSeriesRows alone must stay legal)", err)
 	}
 
