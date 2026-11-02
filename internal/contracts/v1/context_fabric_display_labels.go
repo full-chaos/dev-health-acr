@@ -176,6 +176,11 @@ const (
 	// subcategory (CHAOS-12554): the subcategory column of a claimed
 	// subcategory_breakdown table, and the outer ring of a sunburst.
 	ContextFabricVocabularySubcategory ContextFabricVocabulary = "subcategory"
+	// ContextFabricVocabularyCompletionDistributionState words the state of a
+	// team forecast's completion distribution (CHAOS-12608): the state of a
+	// claim's completion forecast summary, so a reader is told why no curve
+	// is drawn in served words rather than a word table of its own.
+	ContextFabricVocabularyCompletionDistributionState ContextFabricVocabulary = "completion_distribution_state"
 )
 
 var contextFabricVocabularyNames = [...]ContextFabricVocabulary{
@@ -200,6 +205,7 @@ var contextFabricVocabularyNames = [...]ContextFabricVocabulary{
 	ContextFabricVocabularyWindowProvenance,
 	ContextFabricVocabularyMeasureUnit,
 	ContextFabricVocabularySubcategory,
+	ContextFabricVocabularyCompletionDistributionState,
 }
 
 // ContextFabricVocabularyNames returns the served vocabularies in published
@@ -394,6 +400,15 @@ var contextFabricVocabularyLabels = map[ContextFabricVocabulary]map[string]strin
 	},
 	// The words the investment page has shown for these keys. Each is unique
 	// within its theme, which a sunburst ring needs.
+	ContextFabricVocabularyCompletionDistributionState: {
+		"available":             "Distribution available",
+		"not_stored":            "No distribution stored for this forecast",
+		"no_run_within_horizon": "No simulated run finished within the forecast horizon",
+		"over_limit":            "Distribution too large to show whole",
+		"malformed":             "Stored distribution not usable",
+		"scope_ambiguous":       "Work scope of this forecast cannot be verified",
+		"unmatched":             "Forecast changed while the answer was read",
+	},
 	ContextFabricVocabularySubcategory: {
 		"feature_delivery.customer":     "Customer",
 		"feature_delivery.enablement":   "Enablement",

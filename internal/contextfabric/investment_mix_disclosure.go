@@ -53,3 +53,56 @@ func investmentMixOf(fact CanonicalFact) *contractsv1.ContextFabricClaimedInvest
 		ProjectOwnWorkUnitCount: own,
 	}
 }
+
+// discloseCompletionForecast (CHAOS-12608) stamps every team workload claim
+// with the forecast its grounding fact serves: the summary the curve and the
+// percentiles table cite. Like discloseInvestmentMix it runs once, after every
+// claim is minted, and overwrites what a claim carried: a draft never authors
+// it. A fact that does not serve the forecast's distribution (the deployment
+// switch is off, so it carries no completion_distribution_state) gives none.
+func discloseCompletionForecast(claims []ClaimedFact, facts []CanonicalFact) []ClaimedFact {
+	for i := range claims {
+		claims[i].CompletionForecast = nil
+		if claims[i].Kind != FactWorkload || claims[i].Subject.Kind != contractsv1.ContextFabricSubjectTeam || len(claims[i].DerivedFrom) > 0 {
+			continue
+		}
+		fact, ok := claimSourceFact(facts, claims[i])
+		if !ok {
+			continue
+		}
+		claims[i].CompletionForecast = completionForecastOf(fact)
+	}
+	return claims
+}
+
+// completionForecastOf is the summary a team workload fact serves, or nil when
+// it serves no completion_distribution_state.
+func completionForecastOf(fact CanonicalFact) *contractsv1.ContextFabricClaimedCompletionForecast {
+	state, ok := stringField(fact, "completion_distribution_state")
+	if !ok || state == "" {
+		return nil
+	}
+	computedAt, _ := stringField(fact, "computed_at")
+	scope, _ := stringField(fact, "work_scope_id")
+	summary := &contractsv1.ContextFabricClaimedCompletionForecast{
+		WorkScopeID: scope,
+		State:       contractsv1.ContextFabricCompletionDistributionState(state),
+		ComputedAt:  computedAt,
+	}
+	number := func(name string) *int64 {
+		if value, ok := integerField(fact, name); ok {
+			return &value
+		}
+		return nil
+	}
+	summary.SimulationCount = number("simulation_count")
+	summary.HorizonDays = number("horizon_days")
+	summary.UnfinishedRuns = number("unfinished_runs")
+	summary.P50Days = number("forecast_p50_days")
+	summary.P85Days = number("forecast_p85_days")
+	summary.P95Days = number("forecast_p95_days")
+	summary.P50Date, _ = stringField(fact, "forecast_p50_date")
+	summary.P85Date, _ = stringField(fact, "forecast_p85_date")
+	summary.P95Date, _ = stringField(fact, "forecast_p95_date")
+	return summary
+}

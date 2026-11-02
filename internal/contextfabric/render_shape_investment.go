@@ -177,7 +177,7 @@ func WithoutDisabledRenderShapes(result InvestigationResult, options RenderShape
 			if !options.ComparisonSideBySide {
 				continue
 			}
-		case contractsv1.ContextFabricRenderRuleCompletionForecast:
+		case contractsv1.ContextFabricRenderRuleCompletionForecast, contractsv1.ContextFabricRenderRuleCompletionForecastPercentiles:
 			if !options.CompletionForecast {
 				continue
 			}

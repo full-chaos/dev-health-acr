@@ -1763,6 +1763,9 @@
             },
             "investment_mix": {
               "$ref": "#/$defs/context_fabric_answer_projection.v1/$defs/ProjectedInvestmentMix"
+            },
+            "completion_forecast": {
+              "$ref": "#/$defs/context_fabric_answer_projection.v1/$defs/ProjectedCompletionForecast"
             }
           },
           "required": [
@@ -2050,7 +2053,8 @@
                 "cohort_driver_weight_contributed",
                 "claimed_fact_row",
                 "claimed_fact_value",
-                "claimed_fact_table_row"
+                "claimed_fact_table_row",
+                "claimed_fact_forecast_summary"
               ],
               "type": "string"
             },
@@ -2242,7 +2246,8 @@
             "investment_theme_share",
             "comparison_side_by_side",
             "investment_subcategory_share",
-            "completion_forecast"
+            "completion_forecast",
+            "completion_forecast_percentiles"
           ],
           "type": "string"
         },
@@ -3197,6 +3202,73 @@
             "project_own_work_unit_count"
           ],
           "type": "object"
+        },
+        "ProjectedCompletionForecast": {
+          "type": "object",
+          "description": "Additive (CHAOS-12608): the completion forecast of a team workload claim's grounding fact, the same stored forecast row the claim is grounded on. Set by the server from the claim's grounding fact, never model-authored, only on a team workload claim, and only when the deployment serves the forecast's distribution. A completion forecast or forecast percentiles shape cites its numbers (claimed_fact_forecast_summary). An absent percentile, date or count is not 0.",
+          "required": [
+            "state",
+            "computed_at"
+          ],
+          "properties": {
+            "work_scope_id": {
+              "type": "string",
+              "maxLength": 128
+            },
+            "state": {
+              "type": "string",
+              "enum": [
+                "available",
+                "not_stored",
+                "no_run_within_horizon",
+                "over_limit",
+                "malformed",
+                "scope_ambiguous",
+                "unmatched"
+              ]
+            },
+            "computed_at": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            },
+            "simulation_count": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "horizon_days": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "unfinished_runs": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "forecast_p50_days": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "forecast_p85_days": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "forecast_p95_days": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "forecast_p50_date": {
+              "type": "string",
+              "maxLength": 128
+            },
+            "forecast_p85_date": {
+              "type": "string",
+              "maxLength": 128
+            },
+            "forecast_p95_date": {
+              "type": "string",
+              "maxLength": 128
+            }
+          }
         }
       },
       "description": "Bounded consumer projection of a context_fabric_investigation_result.v1 (CHAOS-3746). Produced by exactly one function so that the hosted API and the MCP sidecar cannot diverge. The projection SELECTS and DROPS: it never rewrites, re-ranks, re-judges, or re-words. direct_judgment, current_state, and every retained driver standing and category are copied verbatim, so consumer-specific truncation can never change the underlying judgment. Every drop is declared in projection_budget. result_id identifies the canonical result: a consumer that needs anything dropped fetches that result rather than asking for a fatter answer. Every identifier is opaque and must not be parsed.",
@@ -5437,6 +5509,9 @@
             },
             "investment_mix": {
               "$ref": "#/$defs/context_fabric_common.v1/$defs/ClaimedInvestmentMix"
+            },
+            "completion_forecast": {
+              "$ref": "#/$defs/context_fabric_common.v1/$defs/ClaimedCompletionForecast"
             }
           },
           "required": [
@@ -8629,7 +8704,8 @@
                 "cohort_driver_weight_contributed",
                 "claimed_fact_row",
                 "claimed_fact_value",
-                "claimed_fact_table_row"
+                "claimed_fact_table_row",
+                "claimed_fact_forecast_summary"
               ],
               "type": "string"
             },
@@ -8821,7 +8897,8 @@
             "investment_theme_share",
             "comparison_side_by_side",
             "investment_subcategory_share",
-            "completion_forecast"
+            "completion_forecast",
+            "completion_forecast_percentiles"
           ],
           "type": "string"
         },
@@ -10170,6 +10247,73 @@
             "project_own_work_unit_count"
           ],
           "type": "object"
+        },
+        "ClaimedCompletionForecast": {
+          "type": "object",
+          "description": "Additive (CHAOS-12608): the completion forecast of a team workload claim's grounding fact, the same stored forecast row the claim is grounded on. Set by the server from the claim's grounding fact, never model-authored, only on a team workload claim, and only when the deployment serves the forecast's distribution. A completion forecast or forecast percentiles shape cites its numbers (claimed_fact_forecast_summary). An absent percentile, date or count is not 0.",
+          "required": [
+            "state",
+            "computed_at"
+          ],
+          "properties": {
+            "work_scope_id": {
+              "type": "string",
+              "maxLength": 128
+            },
+            "state": {
+              "type": "string",
+              "enum": [
+                "available",
+                "not_stored",
+                "no_run_within_horizon",
+                "over_limit",
+                "malformed",
+                "scope_ambiguous",
+                "unmatched"
+              ]
+            },
+            "computed_at": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            },
+            "simulation_count": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "horizon_days": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "unfinished_runs": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "forecast_p50_days": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "forecast_p85_days": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "forecast_p95_days": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "forecast_p50_date": {
+              "type": "string",
+              "maxLength": 128
+            },
+            "forecast_p85_date": {
+              "type": "string",
+              "maxLength": 128
+            },
+            "forecast_p95_date": {
+              "type": "string",
+              "maxLength": 128
+            }
+          }
         }
       },
       "title": "ACR Context Fabric Common Shapes v1"

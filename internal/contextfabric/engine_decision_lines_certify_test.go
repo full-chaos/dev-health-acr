@@ -45,6 +45,7 @@ func TestRenderShapeSummaryAndSkippedLinesCertify(t *testing.T) {
 		contractsv1.ContextFabricRenderRuleCohortAttentionScore, contractsv1.ContextFabricRenderRuleCohortDriverContribution,
 		contractsv1.ContextFabricRenderRuleDatedFactTrend, contractsv1.ContextFabricRenderRuleInvestmentThemeShare,
 		contractsv1.ContextFabricRenderRuleComparisonSideBySide, contractsv1.ContextFabricRenderRuleCompletionForecast,
+		contractsv1.ContextFabricRenderRuleCompletionForecastPercentiles,
 	}
 	reasons := contextfabric.RenderShapeSkipReasonLineVocabulary()
 	ok := contextfabric.RenderShapeSelectionEvent{Shape: contractsv1.ContextFabricShapeOpen, MembersTruncated: 2, TrendsOmitted: 3, ComparisonMeasuresLeftOut: 4, TablesCadenceWithheld: 6}
@@ -55,8 +56,8 @@ func TestRenderShapeSummaryAndSkippedLinesCertify(t *testing.T) {
 	telemetry, ctx := cohortTelemetry(&buf)
 	telemetry.RecordRenderShapeSelection(ctx, storage.Principal{OrgID: "org_1"}, ok)
 	lines := bytes.Split(bytes.TrimSpace(buf.Bytes()), []byte("\n"))
-	if len(lines) != 7 {
-		t.Fatalf("a selection of six skipped rules writes the summary and six skip lines, got %d: %s", len(lines), buf.String())
+	if len(lines) != 8 {
+		t.Fatalf("a selection of seven skipped rules writes the summary and seven skip lines, got %d: %s", len(lines), buf.String())
 	}
 	if got := jsonKeys(t, lines[0]); !reflect.DeepEqual(got, renderShapeSummaryLegacyKeys) {
 		t.Fatalf("summary key sequence = %v, want %v", got, renderShapeSummaryLegacyKeys)
@@ -66,7 +67,7 @@ func TestRenderShapeSummaryAndSkippedLinesCertify(t *testing.T) {
 	}
 	certifyRequestLine(t, buf.Bytes(), eventspec.RenderShapeSelectionSummary, map[string]any{
 		"org_id": "org_1", "question_shape": string(contractsv1.ContextFabricShapeOpen), "render_shapes_selected": 0,
-		"render_shape_rules_skipped": 6, "render_shape_members_truncated": 2, "render_shape_trends_omitted": 3,
+		"render_shape_rules_skipped": 7, "render_shape_members_truncated": 2, "render_shape_trends_omitted": 3,
 		"render_shape_comparison_measures_left_out": 4, "render_shape_tables_cadence_withheld": 6, "render_shape_accounting": "ok",
 	})
 	for i, rule := range rules {

@@ -45,6 +45,8 @@ type renderShapeSources struct {
 	// distributionClaims names the claims whose `rows` are their declared
 	// completion distribution table (ContextFabricRenderForecastTableField).
 	distributionClaims map[string]struct{}
+	// forecastSummaries maps a claim id to its completion forecast summary.
+	forecastSummaries map[string]ContextFabricClaimedCompletionForecast
 }
 
 // holdsCompletionDistribution reports that a claim's `rows` are its declared
@@ -194,6 +196,19 @@ func (s renderShapeSources) resolve(source ContextFabricRenderPointSource) (floa
 			return 0, fmt.Errorf("render point cites field %q of claim %q table row %d, which the row does not carry", source.Field, source.ClaimID, index)
 		}
 		return renderCellValue(cell, source, index)
+	case ContextFabricRenderSourceClaimedFactForecastSummary:
+		if source.ClaimID == "" || source.Field == "" || source.RowIndex != nil || source.SubjectCanonicalID != "" || source.Signal != "" {
+			return 0, fmt.Errorf("render point source %q carries the wrong address fields", source.Kind)
+		}
+		summary, ok := s.forecastSummaries[source.ClaimID]
+		if !ok {
+			return 0, fmt.Errorf("render point cites the forecast summary of claim %q, which this answer does not carry", source.ClaimID)
+		}
+		value, ok := summary.Number(source.Field)
+		if !ok {
+			return 0, fmt.Errorf("render point cites forecast summary field %q of claim %q, which the summary does not carry", source.Field, source.ClaimID)
+		}
+		return float64(value), nil
 	case ContextFabricRenderSourceClaimedFactValue:
 		if source.ClaimID == "" || source.Field == "" || source.RowIndex != nil || source.SubjectCanonicalID != "" || source.Signal != "" {
 			return 0, fmt.Errorf("render point source %q carries the wrong address fields", source.Kind)
@@ -321,6 +336,9 @@ func validateRenderShapes(shapes []ContextFabricRenderShape, sources renderShape
 			return err
 		}
 		if err := validateForecastShape(shape, sources); err != nil {
+			return err
+		}
+		if err := validateForecastPercentilesShape(shape, sources); err != nil {
 			return err
 		}
 		if err := validateRenderValueUnit(shape); err != nil {
@@ -617,10 +635,14 @@ func sunburstPointRow(shapeID string, point ContextFabricRenderPoint, claim, fie
 //
 // The rule and the kind name each other, as they do for a treemap.
 func validateComparisonShape(shape ContextFabricRenderShape, sources renderShapeSources) error {
-	if (shape.Kind == ContextFabricRenderKindTable) != (shape.SelectedBy == ContextFabricRenderRuleComparisonSideBySide) {
+	// A table has two rules (CHAOS-12608): the comparison and the forecast
+	// percentiles. Each rule yields only a table, and this validator holds
+	// the comparison's.
+	tableRule := shape.SelectedBy == ContextFabricRenderRuleComparisonSideBySide || shape.SelectedBy == ContextFabricRenderRuleCompletionForecastPercentiles
+	if (shape.Kind == ContextFabricRenderKindTable) != tableRule {
 		return fmt.Errorf("render shape %q: selected_by %q cannot yield kind %q", shape.ShapeID, shape.SelectedBy, shape.Kind)
 	}
-	if shape.Kind != ContextFabricRenderKindTable {
+	if shape.SelectedBy != ContextFabricRenderRuleComparisonSideBySide {
 		return nil
 	}
 	if shape.AxisKind != ContextFabricRenderAxisCategory {
@@ -769,7 +791,7 @@ func validContextFabricRenderShapeRule(rule ContextFabricRenderShapeRule) bool {
 	case ContextFabricRenderRuleCohortAttentionScore, ContextFabricRenderRuleCohortDriverContribution,
 		ContextFabricRenderRuleDatedFactTrend, ContextFabricRenderRuleInvestmentThemeShare,
 		ContextFabricRenderRuleComparisonSideBySide, ContextFabricRenderRuleInvestmentSubcategoryShare,
-		ContextFabricRenderRuleCompletionForecast:
+		ContextFabricRenderRuleCompletionForecast, ContextFabricRenderRuleCompletionForecastPercentiles:
 		return true
 	default:
 		return false
@@ -788,6 +810,7 @@ func renderShapeSourcesFromResult(result ContextFabricInvestigationResult) rende
 		subcategoryShareClaims: map[string]struct{}{},
 		tableRows:              map[string][]ContextFabricClaimedFactRow{},
 		distributionClaims:     map[string]struct{}{},
+		forecastSummaries:      map[string]ContextFabricClaimedCompletionForecast{},
 		claimValues:            map[string]renderClaimValue{},
 	}
 	if result.Cohort != nil {
@@ -805,6 +828,9 @@ func renderShapeSourcesFromResult(result ContextFabricInvestigationResult) rende
 		sources.tableRows[fact.ClaimID] = fact.Rows
 		if holdsCompletionDistribution(fact.Table) {
 			sources.distributionClaims[fact.ClaimID] = struct{}{}
+		}
+		if fact.CompletionForecast != nil {
+			sources.forecastSummaries[fact.ClaimID] = *fact.CompletionForecast
 		}
 		if holdsThemeShareTable(fact.Table, fact.TimeSeriesRows) {
 			sources.themeShareClaims[fact.ClaimID] = struct{}{}
@@ -833,6 +859,7 @@ func renderShapeSourcesFromProjection(projection ContextFabricAnswerProjection) 
 		subcategoryShareClaims: map[string]struct{}{},
 		tableRows:              map[string][]ContextFabricClaimedFactRow{},
 		distributionClaims:     map[string]struct{}{},
+		forecastSummaries:      map[string]ContextFabricClaimedCompletionForecast{},
 		claimValues:            map[string]renderClaimValue{},
 	}
 	if projection.Cohort != nil {
@@ -873,6 +900,9 @@ func renderShapeSourcesFromProjection(projection ContextFabricAnswerProjection) 
 		sources.tableRows[fact.ClaimID] = fact.Rows
 		if holdsCompletionDistribution(fact.Table) {
 			sources.distributionClaims[fact.ClaimID] = struct{}{}
+		}
+		if fact.CompletionForecast != nil {
+			sources.forecastSummaries[fact.ClaimID] = *fact.CompletionForecast
 		}
 		if holdsThemeShareTable(fact.Table, fact.TimeSeriesRows) {
 			sources.themeShareClaims[fact.ClaimID] = struct{}{}
@@ -929,6 +959,26 @@ func validateForecastShape(shape ContextFabricRenderShape, sources renderShapeSo
 	if _, declared := sources.distributionClaims[claim]; !declared {
 		return fmt.Errorf("render shape %q: claim %q carries no declared completion distribution", shape.ShapeID, claim)
 	}
+	// The curve's claim states its forecast (CHAOS-12608): its summary says
+	// the distribution is available, and gives the horizon a point is read
+	// against. ask-dev's verifier holds the same three clauses.
+	summary, summarized := sources.forecastSummaries[claim]
+	if !summarized || summary.State != ContextFabricCompletionDistributionAvailable {
+		return fmt.Errorf("render shape %q: claim %q does not state an available completion distribution", shape.ShapeID, claim)
+	}
+	horizon, hasHorizon := summary.Number(ContextFabricForecastSummaryHorizonDays)
+	if !hasHorizon {
+		return fmt.Errorf("render shape %q: claim %q states no forecast horizon", shape.ShapeID, claim)
+	}
+	anyFinished := false
+	for _, point := range points {
+		if point.Value != 0 {
+			anyFinished = true
+		}
+	}
+	if !anyFinished {
+		return fmt.Errorf("render shape %q: every share is 0 -- no run finished, and that is no curve", shape.ShapeID)
+	}
 	rows := sources.tableRows[claim]
 	if len(points) != len(rows) {
 		return fmt.Errorf("render shape %q: %d points for a distribution of %d rows -- a forecast plots every row", shape.ShapeID, len(points), len(rows))
@@ -942,6 +992,58 @@ func validateForecastShape(shape ContextFabricRenderShape, sources renderShapeSo
 		if day.Integer == nil || point.Label != strconv.FormatInt(*day.Integer, 10) {
 			return fmt.Errorf("render shape %q point %d: label %q is not its row's completion day", shape.ShapeID, index, point.Label)
 		}
+		if *day.Integer >= horizon && index != len(points)-1 {
+			return fmt.Errorf("render shape %q point %d: day %d is at or past the horizon and is not the last point", shape.ShapeID, index, *day.Integer)
+		}
 	}
 	return nil
+}
+
+// validateForecastPercentilesShape holds the forecast percentiles table to
+// what it states (CHAOS-12608): one series per claimed team scope, each point
+// one of that claim's P50/P85/P95 days, cited to its completion forecast
+// summary and labelled with the served word of that percentile. A series
+// restates one claim; a percentile the summary does not carry is no point.
+func validateForecastPercentilesShape(shape ContextFabricRenderShape, sources renderShapeSources) error {
+	if shape.SelectedBy != ContextFabricRenderRuleCompletionForecastPercentiles {
+		return nil
+	}
+	if shape.AxisKind != ContextFabricRenderAxisCategory {
+		return fmt.Errorf("render shape %q: a forecast percentiles table needs a category axis", shape.ShapeID)
+	}
+	claims := map[string]struct{}{}
+	for _, series := range shape.Series {
+		claim := ""
+		for _, point := range series.Points {
+			source := point.Source
+			if source.Kind != ContextFabricRenderSourceClaimedFactForecastSummary {
+				return fmt.Errorf("render shape %q: a forecast percentile cites a completion forecast summary", shape.ShapeID)
+			}
+			if claim == "" {
+				claim = source.ClaimID
+			}
+			if source.ClaimID != claim {
+				return fmt.Errorf("render shape %q series %q: a series restates one claim", shape.ShapeID, series.Key)
+			}
+			word, ok := ContextFabricForecastPercentileLabel(source.Field)
+			if !ok || point.Label != word {
+				return fmt.Errorf("render shape %q series %q: point %q is not the served word of a percentile", shape.ShapeID, series.Key, point.Label)
+			}
+		}
+		if _, repeated := claims[claim]; repeated {
+			return fmt.Errorf("render shape %q: claim %q has two series", shape.ShapeID, claim)
+		}
+		claims[claim] = struct{}{}
+	}
+	return nil
+}
+
+// ContextFabricForecastPercentileLabel is the served word of a forecast
+// percentile field, the label of its point in a percentiles table.
+func ContextFabricForecastPercentileLabel(field string) (string, bool) {
+	switch field {
+	case ContextFabricForecastSummaryP50Days, ContextFabricForecastSummaryP85Days, ContextFabricForecastSummaryP95Days:
+		return ContextFabricVocabularyLabel(ContextFabricVocabularyFactField, field)
+	}
+	return "", false
 }

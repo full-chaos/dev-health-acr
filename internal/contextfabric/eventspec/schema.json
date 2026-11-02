@@ -9808,7 +9808,8 @@
           "dated_fact_trend",
           "investment_theme_share",
           "comparison_side_by_side",
-          "completion_forecast"
+          "completion_forecast",
+          "completion_forecast_percentiles"
         ]
       },
       {
@@ -9845,7 +9846,11 @@
           "not_forecast_intent",
           "no_completion_distribution",
           "more_than_one_scope",
-          "distribution_unusable"
+          "distribution_unusable",
+          "forecast_curve_drawn",
+          "no_forecast_percentiles",
+          "too_many_scopes",
+          "forecast_percentiles_unprovable"
         ]
       },
       {
@@ -9962,7 +9967,8 @@
               "dated_fact_trend",
               "investment_theme_share",
               "comparison_side_by_side",
-              "completion_forecast"
+              "completion_forecast",
+              "completion_forecast_percentiles"
             ]
           },
           {

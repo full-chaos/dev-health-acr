@@ -44,7 +44,23 @@ func forecastClaim(claimID string, rows []ClaimedFactRow) ClaimedFact {
 		TimeSeriesTable: &contractsv1.ContextFabricClaimedFactTable{
 			Field: "daily_workload", Shape: contractsv1.ContextFabricFactTableShapeTimeSeries, Key: []string{"day"}, Measures: []string{"backlog_size"},
 		},
+		CompletionForecast: forecastSummary(contractsv1.ContextFabricCompletionDistributionAvailable, 12, 30, 40),
 	}
+}
+
+// forecastSummary is the server-attached summary a served forecast carries.
+func forecastSummary(state contractsv1.ContextFabricCompletionDistributionState, percentiles ...int64) *contractsv1.ContextFabricClaimedCompletionForecast {
+	horizon, runs, unfinished := int64(365), int64(10000), int64(0)
+	summary := &contractsv1.ContextFabricClaimedCompletionForecast{
+		WorkScopeID: "scope-a", State: state, ComputedAt: "2026-11-01 04:00:00.000",
+		SimulationCount: &runs, HorizonDays: &horizon, UnfinishedRuns: &unfinished,
+	}
+	targets := []**int64{&summary.P50Days, &summary.P85Days, &summary.P95Days}
+	for index, days := range percentiles {
+		value := days
+		*targets[index] = &value
+	}
+	return summary
 }
 
 func forecastResult(claims ...ClaimedFact) InvestigationResult {

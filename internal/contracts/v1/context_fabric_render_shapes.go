@@ -212,6 +212,14 @@ const (
 	// is the only rule that yields a forecast, and a forecast has no other
 	// rule.
 	ContextFabricRenderRuleCompletionForecast ContextFabricRenderShapeRule = "completion_forecast"
+	// ContextFabricRenderRuleCompletionForecastPercentiles is the
+	// P50/P85/P95 table of the claimed team scopes whose forecast serves
+	// percentiles, drawn when no completion curve is (CHAOS-12608, CHAOS-4613
+	// ruling 3): one series per claimed scope, one point per percentile, each
+	// cited to the claim's completion forecast summary. It needs percentiles,
+	// not a distribution. It and comparison_side_by_side are the two rules
+	// that yield a table.
+	ContextFabricRenderRuleCompletionForecastPercentiles ContextFabricRenderShapeRule = "completion_forecast_percentiles"
 )
 
 // The forecast's table (CHAOS-12608): the `distribution` table of the team
@@ -371,6 +379,10 @@ const (
 	// address the declared table of a claim that has both; this kind can.
 	// Requires ClaimID, RowIndex and Field.
 	ContextFabricRenderSourceClaimedFactTableRow ContextFabricRenderPointSourceKind = "claimed_fact_table_row"
+	// ContextFabricRenderSourceClaimedFactForecastSummary resolves to the
+	// numeric field Field of ClaimedFacts[ClaimID].CompletionForecast
+	// (CHAOS-12608). Requires ClaimID and Field.
+	ContextFabricRenderSourceClaimedFactForecastSummary ContextFabricRenderPointSourceKind = "claimed_fact_forecast_summary"
 )
 
 // Render shape bounds. Deliberately small: this contract exists to carry a

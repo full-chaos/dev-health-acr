@@ -1022,6 +1022,9 @@
         },
         "investment_mix": {
           "$ref": "#/$defs/ProjectedInvestmentMix"
+        },
+        "completion_forecast": {
+          "$ref": "#/$defs/ProjectedCompletionForecast"
         }
       },
       "required": [
@@ -2415,7 +2418,8 @@
         "investment_theme_share",
         "comparison_side_by_side",
         "investment_subcategory_share",
-        "completion_forecast"
+        "completion_forecast",
+        "completion_forecast_percentiles"
       ]
     },
     "RenderValueUnit": {
@@ -2437,7 +2441,8 @@
             "cohort_driver_weight_contributed",
             "claimed_fact_row",
             "claimed_fact_value",
-            "claimed_fact_table_row"
+            "claimed_fact_table_row",
+            "claimed_fact_forecast_summary"
           ]
         },
         "subject_canonical_id": {
@@ -3380,6 +3385,74 @@
         "project_own_work_unit_count": {
           "type": "integer",
           "minimum": 0
+        }
+      }
+    },
+    "ProjectedCompletionForecast": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Additive (CHAOS-12608): the completion forecast of a team workload claim's grounding fact, the same stored forecast row the claim is grounded on. Set by the server from the claim's grounding fact, never model-authored, only on a team workload claim, and only when the deployment serves the forecast's distribution. A completion forecast or forecast percentiles shape cites its numbers (claimed_fact_forecast_summary). An absent percentile, date or count is not 0.",
+      "required": [
+        "state",
+        "computed_at"
+      ],
+      "properties": {
+        "work_scope_id": {
+          "type": "string",
+          "maxLength": 128
+        },
+        "state": {
+          "type": "string",
+          "enum": [
+            "available",
+            "not_stored",
+            "no_run_within_horizon",
+            "over_limit",
+            "malformed",
+            "scope_ambiguous",
+            "unmatched"
+          ]
+        },
+        "computed_at": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "simulation_count": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "horizon_days": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "unfinished_runs": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "forecast_p50_days": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "forecast_p85_days": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "forecast_p95_days": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "forecast_p50_date": {
+          "type": "string",
+          "maxLength": 128
+        },
+        "forecast_p85_date": {
+          "type": "string",
+          "maxLength": 128
+        },
+        "forecast_p95_date": {
+          "type": "string",
+          "maxLength": 128
         }
       }
     }

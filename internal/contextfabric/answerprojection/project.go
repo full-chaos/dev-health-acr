@@ -496,6 +496,8 @@ func projectDrivers(result contractsv1.ContextFabricInvestigationResult, bounds 
 				// copied evidence too; a projection without it would serve a
 				// team roll-up as the project's own investment.
 				InvestmentMix: fact.InvestmentMix,
+				// CHAOS-12608: the forecast summary the shapes cite.
+				CompletionForecast: fact.CompletionForecast,
 			})
 		}
 		drivers = append(drivers, contractsv1.ContextFabricProjectedDriver{
