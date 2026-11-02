@@ -68,13 +68,39 @@ type recheckGraph struct {
 	// narrowingUnverifiedFor makes discovery disclose an unverified project
 	// narrowing when it walks this canonical id.
 	narrowingUnverifiedFor string
+	// gateDenied makes the stored-result gate withhold the answer, so the
+	// recheck never runs.
+	gateDenied bool
+	// onRead runs at the start of every ResolveSubjects and DiscoverContext
+	// call. A test uses it to advance a clock by what one read costs.
+	onRead func()
 
 	resolves   []recheckResolveCall
 	discovers  []recheckDiscoverCall
 	removedFor [][]SubjectRef
 }
 
+// read is the start of one graph read of the recheck.
+func (g *recheckGraph) read() {
+	if g.onRead != nil {
+		g.onRead()
+	}
+}
+
+// AuthorizeStoredSubjects is the stored-result gate, ahead of the recheck.
+func (g *recheckGraph) AuthorizeStoredSubjects(ctx context.Context, principal storage.Principal, binding ResolvedGraphBinding, subjects []SubjectRef) ([]StoredSubjectOutcome, error) {
+	if !g.gateDenied {
+		return g.graphReaderStub.AuthorizeStoredSubjects(ctx, principal, binding, subjects)
+	}
+	out := make([]StoredSubjectOutcome, len(subjects))
+	for index := range out {
+		out[index] = StoredSubjectDenied
+	}
+	return out, nil
+}
+
 func (g *recheckGraph) ResolveSubjects(_ context.Context, _ storage.Principal, request InvestigationRequest, _ InterpretedQuestion, binding ResolvedGraphBinding, confirmedKind *ConfirmedExpectedKind, confirmedAnchor *ConfirmedAnchorSelection, frame *QuestionFrame, scopeAnchorKind SubjectKind) (SubjectResolution, StructureOfferMaterial, CommitBasisSet, CommitDecisionDigestSet, error) {
+	g.read()
 	g.resolves = append(g.resolves, recheckResolveCall{
 		hints: append([]SubjectHint(nil), request.RequestedScope.SubjectHints...), options: request.Options, binding: binding,
 		confirmedKind: confirmedKind, confirmedAnchor: confirmedAnchor, frame: frame, scopeAnchorKind: scopeAnchorKind,
@@ -102,6 +128,7 @@ func (g *recheckGraph) ResolveSubjects(_ context.Context, _ storage.Principal, r
 }
 
 func (g *recheckGraph) DiscoverContext(_ context.Context, _ storage.Principal, request GraphDiscoveryRequest) (GraphContext, error) {
+	g.read()
 	g.discovers = append(g.discovers, recheckDiscoverCall{
 		committed: append([]SubjectRef(nil), request.Resolution.Committed...), hints: append([]SubjectHint(nil), request.Request.RequestedScope.SubjectHints...),
 		options: request.Request.Options, binding: request.Binding, frame: request.Frame,

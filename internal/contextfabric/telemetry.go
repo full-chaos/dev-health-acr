@@ -189,6 +189,11 @@ func (t SlogEngineTelemetry) RecordAnswerReuse(ctx context.Context, principal st
 			args = append(args, "subject_count", refusal.SubjectCount)
 		}
 	}
+	// CHAOS-12511: log and event fields only, like the reason. A duration is no
+	// metric label.
+	if refusal.Recheck.Ran {
+		args = append(args, "recheck_ms", refusal.Recheck.Milliseconds, "recheck_subjects", refusal.Recheck.Subjects)
+	}
 	args = append(args, requestIDLogAttrs(ctx)...)
 	t.logger.InfoContext(ctx, "context fabric answer reuse outcome", args...)
 	t.metrics.AnswerReuse(ctx, string(outcome))

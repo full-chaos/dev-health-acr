@@ -303,12 +303,27 @@ func AnswerReuseRefusalReasonVocabulary() []string {
 	}
 }
 
-// AnswerReuseRefusal is the detail of one miss_authorization outcome. The zero
-// value means the outcome carries no refusal detail. SubjectCount is set only
-// for AnswerReuseRefusalSubjectCapExceeded: the number alone, never a subject.
+// AnswerReuseRefusal is the detail of one outcome line. The zero value means
+// the line carries no detail. Reason and SubjectCount are the detail of a
+// miss_authorization outcome, and SubjectCount is set only for
+// AnswerReuseRefusalSubjectCapExceeded: the number alone, never a subject.
+// Recheck rides here on any outcome, so one sink call writes the whole line.
 type AnswerReuseRefusal struct {
 	Reason       AnswerReuseRefusalReason
 	SubjectCount int
+	Recheck      AnswerReuseRecheck
+}
+
+// AnswerReuseRecheck measures one condition-6 recheck (CHAOS-12511): whether it
+// reached its first graph read, the time from that read to its return, and the
+// distinct subjects it covered. Counts only, never a subject. Ran tells a
+// measured zero from no recheck at all: a sub-millisecond recheck over no
+// subject is a real zero. The time is a log and event field only, never a
+// metric label.
+type AnswerReuseRecheck struct {
+	Ran          bool
+	Milliseconds int
+	Subjects     int
 }
 
 // reuseRecheckOptions is the InvestigationOptions the condition-6 recheck
@@ -978,7 +993,7 @@ func (e *Engine) tryReuseWithReading(ctx context.Context, principal storage.Prin
 		if verdict.Outcome == AnswerReuseMissAuthorization {
 			e.recordReuseRefusal(ctx, principal, verdict.Refusal)
 		} else {
-			e.recordReuseOutcome(ctx, principal, verdict.Outcome)
+			e.recordRecheckedOutcome(ctx, principal, verdict.Outcome, verdict.Refusal.Recheck)
 		}
 		e.recordReuseContainment(ctx, principal, verdict, reuseStripCounts{}, "")
 		return InvestigationResult{}, false, false, storedCountReading{}, nil
@@ -997,7 +1012,7 @@ func (e *Engine) tryReuseWithReading(ctx context.Context, principal storage.Prin
 	if len(verdict.Partition.Missing) > 0 {
 		degraded, counts, degradeDisclosure, ok := degradeReusedResult(candidate, verdict.Partition.Missing)
 		if !ok {
-			e.recordReuseOutcome(ctx, principal, AnswerReuseMissDegradeInvalid)
+			e.recordRecheckedOutcome(ctx, principal, AnswerReuseMissDegradeInvalid, verdict.Refusal.Recheck)
 			e.recordReuseContainment(ctx, principal, verdict, counts, degradeDisclosure)
 			return InvestigationResult{}, false, false, storedCountReading{}, nil
 		}
@@ -1016,7 +1031,7 @@ func (e *Engine) tryReuseWithReading(ctx context.Context, principal storage.Prin
 		candidate = withReusedRemovedTeamState(candidate, verdict.RemovedTeams)
 	}
 	candidate.Reused = true
-	e.recordReuseOutcome(ctx, principal, reuseOutcome)
+	e.recordRecheckedOutcome(ctx, principal, reuseOutcome, verdict.Refusal.Recheck)
 	// CHAOS-3888: telemetry-only -- candidate.RequestID (served to the
 	// caller, unchanged, per AC-3782-2 above) is deliberately NOT touched
 	// here; this only reports whether it differs from request.RequestID,
@@ -1039,6 +1054,13 @@ func (e *Engine) recordReuseOutcome(ctx context.Context, principal storage.Princ
 		return
 	}
 	e.recordReuseLine(ctx, principal, outcome, AnswerReuseRefusal{})
+}
+
+// recordRecheckedOutcome records the outcome of an attempt that reached the
+// recheck, with its measurement. Never miss_authorization: recordReuseRefusal
+// carries the measurement on that line.
+func (e *Engine) recordRecheckedOutcome(ctx context.Context, principal storage.Principal, outcome AnswerReuseOutcome, recheck AnswerReuseRecheck) {
+	e.recordReuseLine(ctx, principal, outcome, AnswerReuseRefusal{Recheck: recheck})
 }
 
 // recordReuseRefusal records a miss_authorization outcome with the reason of
@@ -1108,7 +1130,7 @@ func (e *Engine) recordReuseLine(ctx context.Context, principal storage.Principa
 // (would this candidate be served) and the graph these calls read from must
 // agree, or a recheck could pass against an epoch the candidate itself was
 // never generated under.
-func (e *Engine) reuseAuthorizationStillHolds(ctx context.Context, principal storage.Principal, request InvestigationRequest, candidate InvestigationResult, binding ResolvedGraphBinding) reuseRecheckVerdict {
+func (e *Engine) reuseAuthorizationStillHolds(ctx context.Context, principal storage.Principal, request InvestigationRequest, candidate InvestigationResult, binding ResolvedGraphBinding) (measured reuseRecheckVerdict) {
 	// CHAOS-4077: checked FIRST, before subjects/evidenceRefs are even
 	// collected -- see AnswerReuseMissGraphNotProjected's own doc comment
 	// for why the zero-subjects/zero-evidence shortcut below is unsafe
@@ -1123,6 +1145,14 @@ func (e *Engine) reuseAuthorizationStillHolds(ctx context.Context, principal sto
 	recheckRequest := request
 	recheckRequest.Options = reuseRecheckOptions
 	batches := reuseRecheckBatches(recheckRequest, subjects)
+	// The measurement starts here, at the first graph call. A refusal above read
+	// no graph, so it has nothing to measure and its line omits both fields. The
+	// engine's clock is time.Now in production, whose readings carry the
+	// monotonic clock, so a wall clock step does not reach this difference.
+	started := e.now()
+	defer func() {
+		measured.Refusal.Recheck = AnswerReuseRecheck{Ran: true, Milliseconds: int(e.now().Sub(started).Milliseconds()), Subjects: len(subjects)}
+	}()
 
 	// CHAOS-3900 P1.C: this recheck only re-verifies SUBJECT authorization
 	// (the committed set below) -- it discards the structure-offer

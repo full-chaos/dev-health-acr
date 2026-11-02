@@ -90,7 +90,7 @@ func TestEventLineBoundsAreTheEngineCallSitesTimesThePasses(t *testing.T) {
 		{eventspec.PriorSubjectReceiptSkipReason, largestGroup(callsNamed(t, "RecordPriorSubjectReceiptSkipReason"), 2) * passes, "call sites per reason x passes"},
 		{eventspec.CommitAffirmationRetraction, len(callsNamed(t, "RecordCommitAffirmationRetraction")) * contractsv1.ContextFabricProjectedSubjectsMaxCount, "one call in a loop over the committed subjects"},
 		{eventspec.CommitKeptByNoMemberFound, len(callsNamed(t, "RecordCommitKeptByNoMemberFound")) * contractsv1.ContextFabricProjectedSubjectsMaxCount, "one call in a loop over the committed subjects"},
-		{eventspec.AnswerReuseOutcome, len(callsNamed(t, "recordReuseOutcome")) * passes, "recordReuseOutcome call sites x passes"},
+		{eventspec.AnswerReuseOutcome, (len(callsNamed(t, "recordReuseOutcome")) + len(callsNamed(t, "recordRecheckedOutcome"))) * passes, "recordReuseOutcome and recordRecheckedOutcome call sites x passes"},
 		{eventspec.AnswerReuseContainment, len(callsNamed(t, "recordReuseContainment")) * passes, "recordReuseContainment call sites x passes"},
 		{eventspec.StoredAnswerability, largestGroup(callsNamed(t, "RecordStoredAnswerability"), 2) * passes, "RecordStoredAnswerability call sites per surface x passes"},
 		{eventspec.AnswerReuseServedRequestID, len(callsNamed(t, "RecordAnswerReuseServedRequestID")) * passes, "RecordAnswerReuseServedRequestID call sites x passes"},
