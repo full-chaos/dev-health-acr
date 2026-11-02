@@ -17,9 +17,10 @@ import (
 // ruling (a), FINAL). A node outside the grant never counts: for it the count
 // would be an existence oracle. A node inside the grant is no oracle, because
 // the caller may read that subject, so the narrowing is the one thing that
-// refused it. This is what reaches a web user: a user-class credential is never
-// unrestricted at runtime, because the access read turns "*" into the live
-// inventory on every call (auth.NarrowRepositoryScopes).
+// refused it. A credential that names repositories or owners reaches this
+// restricted: the access read narrows it to the live inventory
+// (auth.NarrowRepositoryScopes). A web user's "*" grant stays "*" (CHAOS-12592),
+// so it counts as any universal caller does.
 //
 // A node counts when the offer rule would admit it without the narrowing:
 // NodeCandidate without the requested scope applies the caller's grant and

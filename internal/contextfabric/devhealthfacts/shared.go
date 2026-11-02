@@ -1374,10 +1374,14 @@ import (
 // its prefix (CHAOS-12463). An answer saved under v266 answered such a question by
 // search.
 //
-// v267 -> v268: an evidence ref's label names its subject in reader words, or by
+// v267 -> v268: a restricted caller's work item census admits a GitHub or GitLab
+// issue by its own repository (CHAOS-12561). An answer saved under v267 can say
+// such an issue is not in what the caller can read.
+//
+// v268 -> v269: an evidence ref's label names its subject in reader words, or by
 // the name the answer holds, never by a UUID or a raw provider id (CHAOS-12620).
-// An answer saved under v267 can carry such a label.
-const QueryVersion = "devhealthfacts.clickhouse.v268"
+// An answer saved under v268 can carry such a label.
+const QueryVersion = "devhealthfacts.clickhouse.v269"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each

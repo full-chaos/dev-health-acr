@@ -67,13 +67,16 @@ func projectAccess(repositories, projects []string) entitlements.PrincipalAccess
 }
 
 // The D2 table: only a "*" consent grant with an empty live repository
-// inventory and live projects becomes project_only.
+// inventory and live projects becomes project_only. CHAOS-12592: with a
+// repository inventory a "*" grant stays "*" (the whole organization); a grant
+// that names repositories or owners is narrowed to the inventory.
 func TestOnlyAStarGrantWithNoRepositoryInventoryBecomesProjectOnly(t *testing.T) {
 	owner, _, _ := strings.Cut(hostedTestRepository, "/")
 	const (
 		projectOnly = "project_only"
 		repository  = "repository scope"
 		refused     = "no_repository"
+		orgWide     = "organization"
 	)
 	for _, test := range []struct {
 		name         string
@@ -84,8 +87,11 @@ func TestOnlyAStarGrantWithNoRepositoryInventoryBecomesProjectOnly(t *testing.T)
 	}{
 		{"a star grant, no repositories, projects", []string{"*"}, nil, liveProjects, projectOnly},
 		{"a star among other scopes, no repositories, projects", []string{"*", hostedTestRepository}, nil, liveProjects, projectOnly},
-		{"a star grant, repositories and projects", []string{"*"}, []string{hostedTestRepository}, liveProjects, repository},
-		{"a star grant, repositories, no projects", []string{"*"}, []string{hostedTestRepository}, nil, repository},
+		{"a star grant, repositories and projects", []string{"*"}, []string{hostedTestRepository}, liveProjects, orgWide},
+		{"a star grant, repositories, no projects", []string{"*"}, []string{hostedTestRepository}, nil, orgWide},
+		{"a star among other scopes, repositories", []string{"*", hostedTestRepository}, []string{hostedTestRepository}, nil, orgWide},
+		{"an explicit repository grant, repositories", []string{hostedTestRepository, "zeta/x"}, []string{hostedTestRepository}, liveProjects, repository},
+		{"an owner wildcard, repositories", []string{owner + "/*"}, []string{hostedTestRepository}, nil, repository},
 		{"a star grant, no repositories, no projects", []string{"*"}, nil, nil, refused},
 		{"a star grant, an inventory of no valid slug, projects", []string{"*"}, []string{"not a slug"}, liveProjects, refused},
 		{"an explicit repository grant, no repositories, projects", []string{hostedTestRepository}, nil, liveProjects, refused},
@@ -125,6 +131,19 @@ func TestOnlyAStarGrantWithNoRepositoryInventoryBecomesProjectOnly(t *testing.T)
 					}
 					if !slices.Equal(seen.RepositoryScopes, test.repositories) {
 						t.Fatalf("RepositoryScopes = %q, want the effective scope %q", seen.RepositoryScopes, test.repositories)
+					}
+				case orgWide:
+					if recorder.Code != http.StatusNoContent || seen == nil {
+						t.Fatalf("%d %s, want the handler reached", recorder.Code, code)
+					}
+					if got := auth.ClassifyGrant(*seen); got != auth.GrantUniversal || len(seen.ProjectScopes) != 0 {
+						t.Fatalf("principal = %+v (class %q), want the star grant kept, universal", seen, got)
+					}
+					// Exactly "*": a "*" beside other entries is already the whole
+					// organization, so they are dropped, never kept as a narrowing
+					// (codex r1 on #1941, lead ruling (a)).
+					if !slices.Equal(seen.RepositoryScopes, []string{"*"}) {
+						t.Fatalf("RepositoryScopes = %q, want exactly [\"*\"]", seen.RepositoryScopes)
 					}
 				case refused:
 					if recorder.Code != http.StatusConflict || code != contractsv1.ErrorCodeNoRepository || seen != nil {

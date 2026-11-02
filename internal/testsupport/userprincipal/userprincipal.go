@@ -46,8 +46,20 @@ func Authenticated(tb testing.TB, orgID string, grant []string) storage.Principa
 	return through(tb, orgID, grant, nil)
 }
 
+// WebUser is the principal every web user reaches the resolver with
+// (CHAOS-12592): a user-class credential issued "*", which the access read
+// leaves "*" once it passes. It is universal, and reads the whole organization.
+// TestTheWebUserHelperIsWhatTheAccessReadProduces (internal/api) ties it to
+// requireLiveAccess.
+func WebUser(tb testing.TB, orgID string) storage.Principal {
+	tb.Helper()
+	return through(tb, orgID, []string{"*"}, nil)
+}
+
 // Narrowed is the principal of an oauth-user credential holding grant, after
 // the access read narrowed it to effective, the grant inside the live inventory.
+// A grant that names repositories or owners reaches the resolver in this shape:
+// a repository-bound credential.
 func Narrowed(tb testing.TB, orgID string, grant, effective []string) storage.Principal {
 	tb.Helper()
 	if len(effective) == 0 {
