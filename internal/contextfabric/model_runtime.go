@@ -1024,6 +1024,21 @@ func requireBoundLabel(name string, subject SubjectRef, labels map[string]string
 	return nil
 }
 
+// namesDetailTable reports a claim that asks for a declared detail table by
+// naming its field with value null (CHAOS-12554, lead ruling B). It is the only
+// way a claim on a table field grounds; every other claim grounds by restating
+// a scalar (factValueEqualsScalar).
+func namesDetailTable(observed FactValue, value ScalarValue) bool {
+	return detailTableValue(observed) && value.Null &&
+		value.String == nil && value.Integer == nil && value.Number == nil && value.Boolean == nil
+}
+
+// detailTableValue reports a field value that is a declared detail table with
+// rows.
+func detailTableValue(value FactValue) bool {
+	return len(value.Rows) > 0 && value.Table != nil && value.Table.Detail
+}
+
 func factValueEqualsScalar(fv FactValue, sv ScalarValue) bool {
 	switch {
 	case fv.String != nil:
@@ -1209,7 +1224,7 @@ func groundClaimAt(facts []CanonicalFact, claim ClaimedFact) (CanonicalFact, cla
 				outcome = claimValueContradicts
 				fieldMatch = fact
 			}
-			if factValueEqualsScalar(observed, claim.Value) {
+			if factValueEqualsScalar(observed, claim.Value) || namesDetailTable(observed, claim.Value) {
 				return fact, claimGrounded, position
 			}
 		}
@@ -1235,7 +1250,7 @@ func groundClaimByFactID(facts []CanonicalFact, claim ClaimedFact, key string) (
 		switch {
 		case !present:
 			return fact, claimFieldUnobserved, -1
-		case !factValueEqualsScalar(observed, claim.Value):
+		case !factValueEqualsScalar(observed, claim.Value) && !namesDetailTable(observed, claim.Value):
 			return fact, claimValueContradicts, -1
 		}
 		return fact, claimGrounded, position
@@ -1401,6 +1416,15 @@ func attachCanonicalRowsWithDualTableTelemetry(claims []ClaimedFact, facts []Can
 		if !ok {
 			continue
 		}
+		// CHAOS-12554: a claim whose own field names a detail table of its
+		// fact carries that table, and only it.
+		if attached, detailTruncated, named := attachDetailTable(claims[i], canonical, claims[i].Field); named {
+			claims[i] = attached
+			truncated = truncated || detailTruncated
+			rowsCount += len(attached.Rows)
+			byKind[claims[i].Kind] += len(attached.Rows)
+			continue
+		}
 		rows, wasTruncated := canonicalFieldRows(canonical)
 		// Union BEFORE the empty-rows early exit (codex CHAOS-4355 R3 P2
 		// finding): canonicalFieldRows returns (nil, true) for its
@@ -1465,11 +1489,19 @@ func canonicalFieldRows(fact CanonicalFact) (rows []contractsv1.ContextFabricCla
 	if !ok {
 		return nil, ambiguous
 	}
-	source := fact.Fields[rowsField].Rows
+	rows, truncated = fieldClaimRows(fact, rowsField)
+	return rows, truncated
+}
+
+// fieldClaimRows converts one Rows-shaped field of a fact to the rows a claim
+// carries: verbatim, without the columns its declaration keeps out of an
+// answer, and cut to ContextFabricClaimedFactMaxRows, which it reports.
+func fieldClaimRows(fact CanonicalFact, field string) (rows []contractsv1.ContextFabricClaimedFactRow, truncated bool) {
+	source := fact.Fields[field].Rows
 	rows = make([]contractsv1.ContextFabricClaimedFactRow, 0, len(source))
 	for _, row := range source {
 		converted := convertFactValueRow(row)
-		for _, column := range directOnlyColumns(fact.Fields[rowsField]) {
+		for _, column := range directOnlyColumns(fact.Fields[field]) {
 			delete(converted.Fields, column)
 		}
 		rows = append(rows, converted)
@@ -1480,11 +1512,38 @@ func canonicalFieldRows(fact CanonicalFact) (rows []contractsv1.ContextFabricCla
 	return rows, false
 }
 
-// attachableRows reports a Rows-shaped field a claim may carry. A table
-// declared DirectOnly is not one: it is out of the choice by its declaration,
-// never by its name, so it cannot make a fact ambiguous.
+// attachableRows reports a Rows-shaped field the single-table pick may choose.
+// A table declared DirectOnly or Detail is not one: it is out of the choice by
+// its declaration, never by its name, so it cannot make a fact ambiguous.
 func attachableRows(value FactValue) bool {
-	return len(value.Rows) > 0 && (value.Table == nil || !value.Table.DirectOnly)
+	return len(value.Rows) > 0 && (value.Table == nil || (!value.Table.DirectOnly && !value.Table.Detail))
+}
+
+// detailTableField reports that field of fact is a declared detail table with
+// rows (CHAOS-12554).
+func detailTableField(fact CanonicalFact, field string) bool {
+	value, ok := fact.Fields[field]
+	return ok && detailTableValue(value)
+}
+
+// attachDetailTable gives a claim the detail table named field of fact: its
+// rows and its declaration, in place of the table the single-table pick would
+// give, and no time_series table beside it. A claim holds one table, so a
+// claim that carries a detail table carries no other. It reports false, and
+// leaves the claim as it was, when field is no detail table of fact. The
+// truncated return reports a cut to ContextFabricClaimedFactMaxRows.
+//
+// It is the one way a detail table reaches a claim, whatever asked for it.
+func attachDetailTable(claim ClaimedFact, fact CanonicalFact, field string) (attached ClaimedFact, truncated bool, ok bool) {
+	if !detailTableField(fact, field) {
+		return claim, false, false
+	}
+	rows, truncated := fieldClaimRows(fact, field)
+	claim.Rows = rows
+	claim.Table = fieldClaimTable(fact, field)
+	claim.TimeSeriesRows = nil
+	claim.TimeSeriesTable = nil
+	return claim, truncated, true
 }
 
 // answerMeasures are the measures of a table an answer shows.
@@ -1562,6 +1621,12 @@ func canonicalFieldTable(fact CanonicalFact) *contractsv1.ContextFabricClaimedFa
 	if !ok {
 		return nil
 	}
+	return fieldClaimTable(fact, field)
+}
+
+// fieldClaimTable is the wire declaration of one field of a fact, or nil when
+// the field carries none.
+func fieldClaimTable(fact CanonicalFact, field string) *contractsv1.ContextFabricClaimedFactTable {
 	declared := fact.Fields[field].Table
 	if declared == nil {
 		return nil
