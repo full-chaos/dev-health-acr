@@ -84,15 +84,21 @@ func FrameSubjectTerms(frame *QuestionFrame) []string {
 
 // deriveSuppliedSubjectTerms fills the flat subject terms of a supplied
 // interpretation from its frame when it has none and the request carries no
-// subject hint. It returns the interpretation to resolve with and which input
-// the subjects came from.
+// subject hint of the kind the frame asks for. A hint of another kind does not
+// count: the resolver drops it (CHAOS-12555), and the turn would then have no
+// term at all. It returns the interpretation to resolve with and which input the
+// subjects came from.
 func deriveSuppliedSubjectTerms(request InvestigationRequest, interpreted InterpretedQuestion, frame *QuestionFrame) (InterpretedQuestion, SubjectTermsInput) {
 	for _, term := range interpreted.SubjectTerms {
 		if strings.TrimSpace(term) != "" {
 			return interpreted, SubjectTermsFlat
 		}
 	}
+	asked := AskedSubjectKind(frame, nil)
 	for _, hint := range request.RequestedScope.SubjectHints {
+		if asked != "" && hint.Kind != asked {
+			continue
+		}
 		if strings.TrimSpace(hint.Label) != "" || strings.TrimSpace(hint.ID) != "" {
 			return interpreted, SubjectTermsFlat
 		}

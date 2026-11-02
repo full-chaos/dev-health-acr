@@ -168,15 +168,37 @@ func TestAConfirmedKindDecidesWhichHintCommits(t *testing.T) {
 	}
 }
 
-// An engine-minted hint has its own rules: a repeat answer's recheck reads the ids
-// the answer holds, whatever the frame.
-func TestAnEngineMintedHintIsNotDropped(t *testing.T) {
+// The caller's pick from an offer stays, whatever its kind. Any other source takes
+// the rule, an engine source string included: the wire carries it, so a caller
+// can send it.
+func TestOnlyACallersPickEscapesTheKindRule(t *testing.T) {
 	t.Parallel()
 	repository, organization := contractsv1.ContextFabricSubjectRepository, contractsv1.ContextFabricSubjectOrganization
+	frame := namedFrameAsking(&repository, "this repository")
+	for source, commits := range map[hintsource.Source]bool{
+		hintsource.ConfirmedCandidateReceipt:       true,
+		hintsource.AnswerReuseAuthorizationRecheck: false,
+		hintsource.CohortGroupAuthorization:        false,
+		hintsource.EngineCommittedAnchorCarry:      false,
+		hintsource.PriorSubjectReceipt:             false,
+	} {
+		hint := askedKindPageHint(organization, hintCanonicalID(organization))
+		hint.Source = string(source)
+		resolution := resolveWithHints(t, hintBackend(organization), "How is this going?", frame, nil, hint)
+		if got := len(resolution.Committed) == 1; got != commits {
+			t.Errorf("%s: committed %v, want commit %v", source, resolution.Committed, commits)
+		}
+	}
+}
+
+// The reuse and group rechecks resolve with no frame, so they keep every id they
+// hold.
+func TestARecheckWithNoFrameKeepsItsHints(t *testing.T) {
+	t.Parallel()
+	organization := contractsv1.ContextFabricSubjectOrganization
 	hint := askedKindPageHint(organization, hintCanonicalID(organization))
 	hint.Source = string(hintsource.AnswerReuseAuthorizationRecheck)
-	resolution := resolveWithHints(t, hintBackend(organization), "How is this going?", namedFrameAsking(&repository, "this repository"), nil, hint)
-	if len(resolution.Committed) != 1 {
+	if resolution := resolveWithHints(t, hintBackend(organization), "How is this going?", nil, nil, hint); len(resolution.Committed) != 1 {
 		t.Fatalf("committed %v, want the rechecked subject", resolution.Committed)
 	}
 }

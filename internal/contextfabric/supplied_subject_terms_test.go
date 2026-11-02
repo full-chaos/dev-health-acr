@@ -77,3 +77,21 @@ func TestDeriveSuppliedSubjectTermsRefusesMoreThanTheTermBound(t *testing.T) {
 		t.Fatalf("50 terms: input = %q terms = %d, want all 50 derived", input, len(got.SubjectTerms))
 	}
 }
+
+// A hint of a kind the frame does not ask for is dropped by the resolver
+// (CHAOS-12555), so it must not stand in for the frame's terms: the turn would be
+// left with no term at all. A hint of the asked kind still does.
+func TestDeriveSuppliedSubjectTermsCountsOnlyAHintOfTheAskedKind(t *testing.T) {
+	repository := SubjectRepository
+	frame := &QuestionFrame{SubjectExpression: SubjectExpression{Kind: SubjectExpressionNamed, Named: &NamedSubjectExpression{Terms: []string{"repo-marker"}, ExpectedKind: &repository}}}
+	other := InvestigationRequest{}
+	other.RequestedScope.SubjectHints = []SubjectHint{{Kind: SubjectOrganization, ID: "organization:a", Label: "Org"}}
+	if got, input := deriveSuppliedSubjectTerms(other, InterpretedQuestion{}, frame); input != SubjectTermsFromFrame || !reflect.DeepEqual(got.SubjectTerms, []string{"repo-marker"}) {
+		t.Fatalf("other kind: input = %q terms = %#v, want the frame's terms", input, got.SubjectTerms)
+	}
+	asked := InvestigationRequest{}
+	asked.RequestedScope.SubjectHints = []SubjectHint{{Kind: SubjectRepository, ID: "repository:a"}}
+	if got, input := deriveSuppliedSubjectTerms(asked, InterpretedQuestion{}, frame); input != SubjectTermsFlat || len(got.SubjectTerms) != 0 {
+		t.Fatalf("asked kind: input = %q terms = %#v, want nothing derived beside the hint", input, got.SubjectTerms)
+	}
+}
