@@ -26,7 +26,9 @@ import (
 //     source and state, so a stored row reads today's words. They are existing
 //     fields that every pin accepts, so enabled does not gate them.
 //   - evidence_ref_labels saved before CHAOS-12620 ("<noun>: <ref id>") are
-//     restated in reader words the same way (readerEvidenceRefLabels).
+//     restated in reader words (ReaderEvidenceLabels). Like the series words
+//     this is not a shed word: every tier carries it, the input's fallback and
+//     the routes' unstamped projection included, so no tier serves a raw id.
 //   - enabled off serves no map (ACR_CONTEXT_FABRIC_VOCABULARY_LABELS_ENABLED).
 //
 // A word never costs an answer, and it never costs a row: the words are added
@@ -41,8 +43,8 @@ import (
 func ServeVocabularyLabels(result InvestigationResult, enabled bool, maxBytes int64) (InvestigationResult, contractsv1.ContextFabricVocabularyLabelsTier) {
 	result.VocabularyLabels = nil
 	result.RenderShapes = withDriverSeriesWords(result.RenderShapes)
+	result = ReaderEvidenceLabels(result)
 	stamped := withStampedSourceWords(result)
-	stamped.EvidenceRefLabels = readerEvidenceRefLabels(stamped)
 	tier := contractsv1.ContextFabricVocabularyLabelsOff
 	if enabled {
 		words := composeVocabularyLabels(stamped)

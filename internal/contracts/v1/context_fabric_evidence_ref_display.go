@@ -91,10 +91,9 @@ func evidenceIDDisplay(entityType ContextFabricEvidenceEntityType, id string, se
 	case ContextFabricEvidenceEntityTeam:
 		return evidenceKey(id)
 	case ContextFabricEvidenceEntityProject:
-		if value := named(ContextFabricSubjectProject, id); value != "" {
-			return value
-		}
-		return evidenceKey(id)
+		// A project's source id is no name a reader knows, UUID or not: without
+		// a name the answer holds, the noun alone.
+		return named(ContextFabricSubjectProject, id)
 	case ContextFabricEvidenceEntityRepository:
 		return named(ContextFabricSubjectRepository, id)
 	case ContextFabricEvidenceEntityOrganization:

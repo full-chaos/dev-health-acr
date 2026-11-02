@@ -3,6 +3,8 @@ package contextfabric
 import (
 	"strings"
 
+	"github.com/google/uuid"
+
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/identity"
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 )
@@ -43,7 +45,7 @@ func evidenceSubjectNames(result InvestigationResult) contractsv1.ContextFabricE
 		keep(fact.Subject)
 	}
 	return func(kind contractsv1.ContextFabricSubjectKind, rawID string) (string, bool) {
-		var canonicalID string
+		var canonicalID, sourceID string
 		switch kind {
 		case SubjectRepository:
 			canonicalID = RepositoryCanonicalID(rawID)
@@ -58,16 +60,24 @@ func evidenceSubjectNames(result InvestigationResult) contractsv1.ContextFabricE
 			if err != nil || omitted {
 				return "", false
 			}
-			canonicalID = derived
+			canonicalID, sourceID = derived, id
 		default:
 			return "", false
 		}
 		name, ok := names[canonicalID]
-		if !ok || name == rawID {
+		// A label that is the subject's own id is no name: the raw id, a
+		// project's id without its provider (the source labels a project with
+		// no name that way), or a UUID (codex r2).
+		if !ok || name == rawID || name == sourceID || isUUIDLabel(name) {
 			return "", false
 		}
 		return name, true
 	}
+}
+
+func isUUIDLabel(label string) bool {
+	_, err := uuid.Parse(label)
+	return err == nil && len(label) == 36
 }
 
 // readerEvidenceRefLabels is a result's evidence labels for a reader: a label
@@ -85,4 +95,13 @@ func readerEvidenceRefLabels(result InvestigationResult) map[string]string {
 		labels[ref] = contractsv1.ContextFabricEvidenceRefStoredLabel(ref, label, names)
 	}
 	return labels
+}
+
+// ReaderEvidenceLabels is result with its evidence labels for a reader
+// (readerEvidenceRefLabels). Every serve tier applies it: ServeVocabularyLabels
+// and the routes' unstamped projection, which starts from the answer as the
+// engine or the store gave it.
+func ReaderEvidenceLabels(result InvestigationResult) InvestigationResult {
+	result.EvidenceRefLabels = readerEvidenceRefLabels(result)
+	return result
 }
