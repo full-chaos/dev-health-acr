@@ -76,6 +76,28 @@ func OffersOnlyResolution(ctx context.Context) bool {
 	return marked
 }
 
+type pageHintLookupReportedKey struct{}
+
+// WithPageHintLookupReported marks ctx so graphrank.ResolveSubjects writes no
+// page_hint_lookup line (CHAOS-4451). The engine sets it on the decisive
+// resolution of a turn whose class-default gate ran the offers-only
+// resolution and then answered: that resolution already wrote the request's
+// one line, over the same request and the same hints, so the line stays one
+// per request.
+func WithPageHintLookupReported(ctx context.Context) context.Context {
+	return context.WithValue(ctx, pageHintLookupReportedKey{}, true)
+}
+
+// PageHintLookupReported reports whether ctx carries
+// WithPageHintLookupReported's mark. False for a nil or unmarked ctx.
+func PageHintLookupReported(ctx context.Context) bool {
+	if ctx == nil {
+		return false
+	}
+	marked, _ := ctx.Value(pageHintLookupReportedKey{}).(bool)
+	return marked
+}
+
 // GatedOfferResolutionOutcome is the closed vocabulary
 // EngineTelemetry.RecordGatedOfferResolution reports for every class-default
 // gated request -- the engine-side twin of the harness's own

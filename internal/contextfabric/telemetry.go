@@ -459,6 +459,15 @@ func (t SlogEngineTelemetry) RecordWindowClassification(ctx context.Context, pri
 	t.logger.InfoContext(ctx, "context fabric window classification", args...)
 }
 
+// RecordInferredWindowGate (CHAOS-4451) logs at Info: both fields are closed
+// vocabulary members, never question text.
+func (t SlogEngineTelemetry) RecordInferredWindowGate(ctx context.Context, principal storage.Principal, decision InferredWindowGateDecision, basis InferredWindowGateBasis) {
+	args := append([]any{
+		"org_id", SanitizeLogAttr(principal.OrgID), "decision", SanitizeLogAttr(string(decision)), "basis", SanitizeLogAttr(string(basis)),
+	}, requestIDLogAttrs(ctx)...)
+	t.logger.InfoContext(ctx, "context fabric inferred window gate", args...)
+}
+
 // RecordInterpretationTerms (CHAOS-12632) logs at Info: a count, a closed
 // subject kind, a closed handle_bound value and a bool; never a term or the
 // question.

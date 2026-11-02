@@ -26,8 +26,8 @@ func TestAWindowGatedTurnStampsItsPendingProofWithTheOwnershipItStoodOn(t *testi
 	for _, rig := range []*anchorProbeRig{on, off} {
 		rig.interpreter.read("", true)
 	}
-	gated := on.turn(t, needTurnRequest("request_fresh_gated", false), identityProvenResponse(probeAlpha))
-	offGated := off.turn(t, needTurnRequest("request_fresh_gated", false), identityProvenResponse(probeAlpha))
+	gated := on.turn(t, needTurnRequest("request_fresh_gated", false), gatedBeyondWindow(identityProvenResponse(probeAlpha)))
+	offGated := off.turn(t, needTurnRequest("request_fresh_gated", false), gatedBeyondWindow(identityProvenResponse(probeAlpha)))
 	if string(gated.served) != string(offGated.served) {
 		t.Fatalf("served bytes differ with the shadow on:\n on=%s\noff=%s", gated.served, offGated.served)
 	}

@@ -177,7 +177,8 @@ func TestCalendarWindow_TrailingPhraseStaysTrailingOnEverySample(t *testing.T) {
 }
 
 // Control (pinned): no period in the question commits nothing. The current-axis
-// sample keeps the inferred-window clarification; a sampled range is the
+// sample answers on the inferred window and serves the window offer beside the
+// answer (CHAOS-4451: the window is the only question); a sampled range is the
 // interpreter's own historical axis, resolved as before with no window reported.
 func TestCalendarWindow_NoPeriodCommitsNothingOnEverySample(t *testing.T) {
 	t.Parallel()
@@ -185,8 +186,9 @@ func TestCalendarWindow_NoPeriodCommitsNothingOnEverySample(t *testing.T) {
 		if w := result.EffectiveEvidenceWindow; w != nil && w.Provenance == WindowQuestionStated {
 			t.Fatalf("call %d: window = %#v, want nothing committed without a period", i, w)
 		}
-		if i%2 == 1 && (result.Status != InvestigationClarificationRequired || result.WindowClarification == nil) {
-			t.Fatalf("call %d (current axis): status=%q window_clarification=%v, want the inferred-window clarification", i, result.Status, result.WindowClarification != nil)
+		if i%2 == 1 && (result.Status == InvestigationClarificationRequired || result.WindowClarification == nil ||
+			result.EffectiveEvidenceWindow == nil || result.EffectiveEvidenceWindow.Provenance != WindowInferredDefault) {
+			t.Fatalf("call %d (current axis): status=%q window_clarification=%v window=%#v, want an answer on the inferred window with the window offer", i, result.Status, result.WindowClarification != nil, result.EffectiveEvidenceWindow)
 		}
 	}
 }
