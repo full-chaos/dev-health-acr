@@ -85,6 +85,8 @@ func ParseInterpretationOutputWindow(raw []byte, defaultTime contextfabric.TimeC
 		return interpreted, InterpretationOutputWindow{}, err
 	}
 	class, confidence, unrecognized := sanitizeWindowOutput(output)
+	// CHAOS-12603: the same carry as ParseInterpretationOutputSignals.
+	interpreted.WindowClass, interpreted.WindowConfidence = class, confidence
 	return interpreted, InterpretationOutputWindow{Class: class, Confidence: confidence, ClassUnrecognized: unrecognized}, nil
 }
 

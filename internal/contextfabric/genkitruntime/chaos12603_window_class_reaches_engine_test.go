@@ -114,3 +114,17 @@ func TestSuppliedSchemaStillRefusesAnUnknownWindowClass(t *testing.T) {
 		t.Fatal("an out-of-vocabulary window_class was admitted; the schema enum is the gate in front of the carry")
 	}
 }
+
+// The older window-only parser carries the pick the same way (codex r3 P3).
+func TestWindowOnlyParserCarriesTheWindowClass(t *testing.T) {
+	t.Parallel()
+	output := validInterpretationOutput()
+	output.WindowClass, output.WindowConfidence = "state_snapshot", "high"
+	interpreted, capture, err := ParseInterpretationOutputWindow(mustMarshalOutput(t, output), validRequest().TimeContext)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if interpreted.WindowClass != capture.Class || interpreted.WindowConfidence != capture.Confidence || interpreted.WindowClass != contextfabric.WindowClassStateSnapshot {
+		t.Fatalf("window-only parser interpretation %q/%q, capture %q/%q: want both state_snapshot/high", interpreted.WindowClass, interpreted.WindowConfidence, capture.Class, capture.Confidence)
+	}
+}
