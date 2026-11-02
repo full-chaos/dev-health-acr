@@ -185,6 +185,8 @@ func composeVocabularyLabels(result InvestigationResult) map[string]string {
 		}
 		words.factRows(fact.Rows)
 		words.factRows(fact.TimeSeriesRows)
+		words.measureUnits(fact.Table)
+		words.measureUnits(fact.TimeSeriesTable)
 	}
 
 	if window := result.EffectiveEvidenceWindow; window != nil {
@@ -233,6 +235,16 @@ func (w *vocabularyWords) noteWhen(held bool, note contractsv1.ContextFabricAnsw
 func (w *vocabularyWords) subjectKind(kind contractsv1.ContextFabricSubjectKind) {
 	w.add(contractsv1.ContextFabricVocabularySubjectKind, string(kind))
 	w.add(contractsv1.ContextFabricVocabularySubjectKindPlural, string(kind))
+}
+
+// measureUnits words the units a claimed table states for its measures.
+func (w *vocabularyWords) measureUnits(table *contractsv1.ContextFabricClaimedFactTable) {
+	if table == nil {
+		return
+	}
+	for _, declaration := range table.MeasureUnits {
+		w.add(contractsv1.ContextFabricVocabularyMeasureUnit, string(declaration.Unit))
+	}
 }
 
 // factRows words the columns of a claimed fact's table: its rows' keys are the

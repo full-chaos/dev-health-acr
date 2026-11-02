@@ -2022,6 +2022,38 @@
               "minItems": 1,
               "type": "array"
             },
+            "measure_units": {
+              "description": "CHAOS-11984: the unit of each measure whose producer declares one from the closed vocabulary, in `measures` order. Each entry names one declared measure, once. A measure with no entry has no stated unit, and a consumer adds none. Set by the server from the producer's declaration; never model-authored.",
+              "items": {
+                "description": "The unit of one declared measure.",
+                "properties": {
+                  "measure": {
+                    "description": "A name in `measures`.",
+                    "maxLength": 128,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "unit": {
+                    "description": "`count` is a number of things; `ratio` is a part over its whole; `hours` and `days` are durations; `points` is an estimate in story points.",
+                    "enum": [
+                      "count",
+                      "ratio",
+                      "hours",
+                      "days",
+                      "points"
+                    ],
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "measure",
+                  "unit"
+                ],
+                "type": "object"
+              },
+              "maxItems": 32,
+              "type": "array"
+            },
             "measures": {
               "description": "The columns that MEASURE something. A measure may legitimately be absent from an individual row; a key column may not.",
               "items": {

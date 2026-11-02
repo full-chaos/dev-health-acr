@@ -85,6 +85,60 @@ const (
 	ContextFabricFactTableColumnMaxLength      = 128
 )
 
+// ContextFabricMeasureUnit is the CLOSED vocabulary of the unit a declared
+// measure is counted in (CHAOS-11984). The producer that owns a column
+// declares its unit; the server copies that declaration to the wire, and the
+// model never writes it. A measure whose declared unit is not a member of this
+// vocabulary carries no unit on the wire: absent means undeclared, and a
+// consumer shows a unit only where the wire states one.
+type ContextFabricMeasureUnit string
+
+const (
+	// ContextFabricMeasureUnitCount is a number of things: commits, pull
+	// requests, work items.
+	ContextFabricMeasureUnitCount ContextFabricMeasureUnit = "count"
+	// ContextFabricMeasureUnitRatio is a fraction of a whole: one part over
+	// its whole.
+	ContextFabricMeasureUnitRatio ContextFabricMeasureUnit = "ratio"
+	// ContextFabricMeasureUnitHours is a duration in hours.
+	ContextFabricMeasureUnitHours ContextFabricMeasureUnit = "hours"
+	// ContextFabricMeasureUnitDays is a duration in days.
+	ContextFabricMeasureUnitDays ContextFabricMeasureUnit = "days"
+	// ContextFabricMeasureUnitPoints is an estimate in story points.
+	ContextFabricMeasureUnitPoints ContextFabricMeasureUnit = "points"
+)
+
+var contextFabricMeasureUnits = [...]ContextFabricMeasureUnit{
+	ContextFabricMeasureUnitCount,
+	ContextFabricMeasureUnitRatio,
+	ContextFabricMeasureUnitHours,
+	ContextFabricMeasureUnitDays,
+	ContextFabricMeasureUnitPoints,
+}
+
+// ContextFabricMeasureUnitVocabulary returns the closed unit vocabulary in
+// published order.
+func ContextFabricMeasureUnitVocabulary() [len(contextFabricMeasureUnits)]ContextFabricMeasureUnit {
+	return contextFabricMeasureUnits
+}
+
+// ValidContextFabricMeasureUnit reports closed-vocabulary membership.
+func ValidContextFabricMeasureUnit(unit ContextFabricMeasureUnit) bool {
+	for _, member := range contextFabricMeasureUnits {
+		if unit == member {
+			return true
+		}
+	}
+	return false
+}
+
+// ContextFabricMeasureUnitDeclaration states the unit of one declared
+// measure.
+type ContextFabricMeasureUnitDeclaration struct {
+	Measure string                   `json:"measure"`
+	Unit    ContextFabricMeasureUnit `json:"unit"`
+}
+
 // ContextFabricClaimedFactTable declares what ContextFabricClaimedFact.Rows
 // IS. See this file's header for why it carries no rows of its own.
 type ContextFabricClaimedFactTable struct {
@@ -120,6 +174,16 @@ type ContextFabricClaimedFactTable struct {
 	// OrderBy names the Measure a ranking's row order is by. Required for
 	// ranking, empty for every other shape.
 	OrderBy string `json:"order_by,omitempty"`
+	// MeasureUnits (CHAOS-11984) states the unit of each measure whose
+	// producer declares one from the closed ContextFabricMeasureUnit
+	// vocabulary, in Measures order. Each names a declared measure once. A
+	// measure with no entry has no stated unit, and a consumer adds none.
+	//
+	// jsonschema:"-" keeps it out of the model output schema, which is
+	// inferred from this type (genkitruntime inferSchemaMap): the server
+	// states it from the declarations (withDeclaredMeasureUnits) and never
+	// offers it to the model to write, as with ClaimedFact.InvestmentMix.
+	MeasureUnits []ContextFabricMeasureUnitDeclaration `json:"measure_units,omitempty" jsonschema:"-"`
 }
 
 // HasMeasure reports whether name is a declared measure of this table.
@@ -130,6 +194,17 @@ func (t ContextFabricClaimedFactTable) HasMeasure(name string) bool {
 		}
 	}
 	return false
+}
+
+// MeasureUnit returns the stated unit of one declared measure, or false when
+// the table states none.
+func (t ContextFabricClaimedFactTable) MeasureUnit(measure string) (ContextFabricMeasureUnit, bool) {
+	for _, declaration := range t.MeasureUnits {
+		if declaration.Measure == measure {
+			return declaration.Unit, true
+		}
+	}
+	return "", false
 }
 
 // HasObservation reports whether name is a declared observation of this
@@ -193,6 +268,30 @@ func (t ContextFabricClaimedFactTable) Validate() error {
 		}
 	} else if t.OrderBy != "" {
 		return fmt.Errorf("order_by is meaningful only for a ranking table, not %q", t.Shape)
+	}
+	return t.validateMeasureUnits()
+}
+
+// validateMeasureUnits holds each stated unit to a declared measure and to the
+// closed vocabulary. A unit on a key or observation column, a unit stated
+// twice for one measure, or a token outside the vocabulary is refused: each
+// would tell a consumer a unit the producer never declared.
+//
+// No count bound of its own is needed: each entry names a different declared
+// measure, so there are never more entries than measures.
+func (t ContextFabricClaimedFactTable) validateMeasureUnits() error {
+	stated := make(map[string]struct{}, len(t.MeasureUnits))
+	for _, declaration := range t.MeasureUnits {
+		if !t.HasMeasure(declaration.Measure) {
+			return fmt.Errorf("declared table states a unit for %q, which is not one of its measures", declaration.Measure)
+		}
+		if _, twice := stated[declaration.Measure]; twice {
+			return fmt.Errorf("declared table states the unit of measure %q more than once", declaration.Measure)
+		}
+		stated[declaration.Measure] = struct{}{}
+		if !ValidContextFabricMeasureUnit(declaration.Unit) {
+			return fmt.Errorf("declared table unit %q of measure %q is not a member of the closed vocabulary", declaration.Unit, declaration.Measure)
+		}
 	}
 	return nil
 }
