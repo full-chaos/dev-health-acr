@@ -310,6 +310,39 @@ func TestBuildContextFabricInvestigator_wiresEveryReuseKeyVersionAuthority(t *te
 	}
 }
 
+// Codex #1949 r2: the reuse family dimension carries the render switches that
+// are on, read from the same config fields as the engine's selection, so an
+// answer stored while a switch was off is not reused once it is on.
+func TestBuildContextFabricInvestigator_keysReuseByTheRenderSwitches(t *testing.T) {
+	configureGraph(t)
+	versions := map[bool]string{}
+	for _, on := range []bool{false, true} {
+		request, postgres, clickhouse := investigatorBuildRequest(t)
+		request.config.AnswerReuseMaxAge = time.Hour
+		request.config.CompletionDistributionEnabled = on
+		request.config.ContextFabricInvestmentTreemapEnabled = on
+		request.config.ContextFabricComparisonTableEnabled = on
+		investigator, _, _, _, err := buildContextFabricInvestigator(context.Background(), request, postgres, clickhouse, nil)
+		if err != nil {
+			t.Fatalf("buildContextFabricInvestigator() = %v", err)
+		}
+		engine, ok := investigator.(*contextfabric.Engine)
+		if !ok {
+			t.Fatalf("investigator is a %T, want *contextfabric.Engine", investigator)
+		}
+		authorities := mustField(t, reflect.ValueOf(engine).Elem(), "reuseVersionAuthorities")
+		got := mustField(t, authorities, "QuestionFamilyVersion").String()
+		want := contextfabric.ReuseQuestionFamilyVersion(contextfabric.RenderShapeOptions{InvestmentThemeShare: on, ComparisonSideBySide: on, CompletionForecast: on})
+		if got != want {
+			t.Errorf("switches on=%v: QuestionFamilyVersion = %q, want %q", on, got, want)
+		}
+		versions[on] = got
+	}
+	if versions[false] == versions[true] {
+		t.Fatalf("the switches do not reach the reuse key: %q either way", versions[false])
+	}
+}
+
 // TestBuildContextFabricInvestigator_wiresTheClarificationSelectionSink is
 // CHAOS-3859's own inverse-mutation guard, the same shape as
 // TestBuildContextFabricInvestigator_wiresEveryReuseKeyVersionAuthority

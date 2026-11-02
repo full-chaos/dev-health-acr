@@ -2,6 +2,7 @@ package contextfabric
 
 import (
 	"slices"
+	"strings"
 
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 )
@@ -26,6 +27,34 @@ type RenderShapeOptions struct {
 	// finalizeResult states the cadence with it, and the selection counts the
 	// tables that could not keep theirs. A nil lookup states none.
 	TableCadence FactTableCadenceLookup
+}
+
+// ReuseQuestionFamilyVersion (Codex #1949 r2) is the question family
+// dimension a deployment keys stored answers by (ReuseKey.QuestionFamilyVersion):
+// the family table's version, and every render switch that is on. Reuse serves
+// a stored answer without running selection again, and a switch decides which
+// shapes an answer is assembled with and, for the completion forecast, the
+// summary its team workload claims carry. So an answer stored while a switch
+// was off must not be served once it is on: it would lack what the switch
+// adds. WithoutDisabledRenderShapes covers the other direction at the serving
+// doors. With every switch off this is the table version itself, so a
+// deployment that turns nothing on keeps every stored answer. The longest form
+// is 92 characters, inside the column's 128.
+func ReuseQuestionFamilyVersion(options RenderShapeOptions) string {
+	var on []string
+	if options.ComparisonSideBySide {
+		on = append(on, string(contractsv1.ContextFabricRenderRuleComparisonSideBySide))
+	}
+	if options.CompletionForecast {
+		on = append(on, string(contractsv1.ContextFabricRenderRuleCompletionForecast))
+	}
+	if options.InvestmentThemeShare {
+		on = append(on, string(contractsv1.ContextFabricRenderRuleInvestmentThemeShare))
+	}
+	if len(on) == 0 {
+		return QuestionFamilyTableVersion
+	}
+	return QuestionFamilyTableVersion + "+render:" + strings.Join(on, ",")
 }
 
 // The words of the treemap (CHAOS-12521). They are served, never derived from a

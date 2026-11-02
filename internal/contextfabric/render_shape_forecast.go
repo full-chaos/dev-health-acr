@@ -106,12 +106,12 @@ func completionForecastShape(result InvestigationResult, frame *QuestionFrame) (
 
 // forecastScopeOf is the stored forecast a claim states: its team and its
 // summary's work scope (contractsv1.ContextFabricForecastScope).
-func forecastScopeOf(claim ClaimedFact) string {
+func forecastScopeOf(claim ClaimedFact) contractsv1.ContextFabricForecastScope {
 	scope := ""
 	if claim.CompletionForecast != nil {
 		scope = claim.CompletionForecast.WorkScopeID
 	}
-	return contractsv1.ContextFabricForecastScope(claim.Subject, scope)
+	return contractsv1.ContextFabricForecastScopeOf(claim.Subject, scope)
 }
 
 // declaresCompletionDistribution is the reading the contract's validator holds
@@ -157,7 +157,7 @@ func forecastPercentilesShape(result InvestigationResult, frame *QuestionFrame) 
 		return nil, RenderShapeSkipNotPlanAuthorized
 	}
 	var series []contractsv1.ContextFabricRenderSeries
-	drawn := map[string]struct{}{}
+	drawn := map[contractsv1.ContextFabricForecastScope]struct{}{}
 	for _, claim := range result.ClaimedFacts {
 		summary := claim.CompletionForecast
 		if claim.Kind != FactWorkload || claim.Subject.Kind != contractsv1.ContextFabricSubjectTeam || summary == nil {

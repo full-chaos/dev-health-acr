@@ -53,14 +53,21 @@ type renderShapeSources struct {
 	// forecastScopes maps a claim id with a summary to the forecast it states:
 	// its team and work scope. Two claims of one fact state one forecast
 	// (Codex #1949 r1), so a forecast shape counts scopes, never claims.
-	forecastScopes map[string]string
+	forecastScopes map[string]ContextFabricForecastScope
 }
 
 // ContextFabricForecastScope is the identity of one stored team forecast: the
-// claim's team and its summary's work scope. The producer counts scopes with
-// it, as the validator does.
-func ContextFabricForecastScope(subject ContextFabricSubjectRef, workScopeID string) string {
-	return subject.CanonicalID + "\x00" + workScopeID
+// claim's team and its summary's work scope, as two fields, so no pair of
+// texts can read as another pair (Codex #1949 r2). The producer counts scopes
+// with it, as the validator does.
+type ContextFabricForecastScope struct {
+	TeamCanonicalID string
+	WorkScopeID     string
+}
+
+// ContextFabricForecastScopeOf is a claim's forecast scope.
+func ContextFabricForecastScopeOf(subject ContextFabricSubjectRef, workScopeID string) ContextFabricForecastScope {
+	return ContextFabricForecastScope{TeamCanonicalID: subject.CanonicalID, WorkScopeID: workScopeID}
 }
 
 // holdsCompletionDistribution reports that a claim's `rows` are its declared
@@ -850,7 +857,7 @@ func renderShapeSourcesFromResult(result ContextFabricInvestigationResult) rende
 		tableRows:              map[string][]ContextFabricClaimedFactRow{},
 		distributionClaims:     map[string]struct{}{},
 		forecastSummaries:      map[string]ContextFabricClaimedCompletionForecast{},
-		forecastScopes:         map[string]string{},
+		forecastScopes:         map[string]ContextFabricForecastScope{},
 		repositoryFlowClaims:   map[string]struct{}{},
 		claimValues:            map[string]renderClaimValue{},
 	}
@@ -872,7 +879,7 @@ func renderShapeSourcesFromResult(result ContextFabricInvestigationResult) rende
 		}
 		if fact.CompletionForecast != nil {
 			sources.forecastSummaries[fact.ClaimID] = *fact.CompletionForecast
-			sources.forecastScopes[fact.ClaimID] = ContextFabricForecastScope(fact.Subject, fact.CompletionForecast.WorkScopeID)
+			sources.forecastScopes[fact.ClaimID] = ContextFabricForecastScopeOf(fact.Subject, fact.CompletionForecast.WorkScopeID)
 		}
 		if holdsThemeShareTable(fact.Table, fact.TimeSeriesRows) {
 			sources.themeShareClaims[fact.ClaimID] = struct{}{}
@@ -905,7 +912,7 @@ func renderShapeSourcesFromProjection(projection ContextFabricAnswerProjection) 
 		tableRows:              map[string][]ContextFabricClaimedFactRow{},
 		distributionClaims:     map[string]struct{}{},
 		forecastSummaries:      map[string]ContextFabricClaimedCompletionForecast{},
-		forecastScopes:         map[string]string{},
+		forecastScopes:         map[string]ContextFabricForecastScope{},
 		repositoryFlowClaims:   map[string]struct{}{},
 		claimValues:            map[string]renderClaimValue{},
 	}
@@ -950,7 +957,7 @@ func renderShapeSourcesFromProjection(projection ContextFabricAnswerProjection) 
 		}
 		if fact.CompletionForecast != nil {
 			sources.forecastSummaries[fact.ClaimID] = *fact.CompletionForecast
-			sources.forecastScopes[fact.ClaimID] = ContextFabricForecastScope(fact.Subject, fact.CompletionForecast.WorkScopeID)
+			sources.forecastScopes[fact.ClaimID] = ContextFabricForecastScopeOf(fact.Subject, fact.CompletionForecast.WorkScopeID)
 		}
 		if holdsThemeShareTable(fact.Table, fact.TimeSeriesRows) {
 			sources.themeShareClaims[fact.ClaimID] = struct{}{}
@@ -1062,7 +1069,7 @@ func validateForecastPercentilesShape(shape ContextFabricRenderShape, sources re
 	if shape.AxisKind != ContextFabricRenderAxisCategory {
 		return fmt.Errorf("render shape %q: a forecast percentiles table needs a category axis", shape.ShapeID)
 	}
-	scopes := map[string]struct{}{}
+	scopes := map[ContextFabricForecastScope]struct{}{}
 	for _, series := range shape.Series {
 		claim := ""
 		for _, point := range series.Points {
