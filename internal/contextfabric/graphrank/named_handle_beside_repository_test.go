@@ -621,7 +621,7 @@ func TestAFailedCensusDropsACommittedSubjectThatIsNotTheHandle(t *testing.T) {
 	digests := contextfabric.CommitDecisionDigestSet{}
 	handle := contractsv1.ContextFabricRequestedHandle{Kind: contextfabric.SubjectPullRequest, PatternID: "pull_request_number", Value: "747"}
 	request := contextfabric.InvestigationRequest{Question: "Is pull request 747 ready in acme/r-1?"}
-	got, _ := unresolvedNamedHandle(context.Background(), storage.Principal{OrgID: "org_1"}, request, ResolveDeps{}, resolution, bases, digests, handle, handleOwed, true, namedCensus{})
+	got, _ := unresolvedNamedHandle(context.Background(), storage.Principal{OrgID: "org_1"}, request, ResolveDeps{}, resolution, bases, digests, handle, handleOwed, true, namedCensus{}, contextfabric.SubjectRepository)
 	if ids := besideCommittedIDs(got); !slices.Equal(ids, []string{repository.CanonicalID}) || got.CensusLimitation != "" {
 		t.Fatalf("committed %v limitation %q, want the repository alone and no sentence", ids, got.CensusLimitation)
 	}
@@ -643,7 +643,7 @@ func TestAFailedCensusKeepsCommittedWorkItems(t *testing.T) {
 	resolution := contextfabric.SubjectResolution{Committed: []contextfabric.SubjectRef{repository, named, other}}
 	handle := contractsv1.ContextFabricRequestedHandle{Kind: contextfabric.SubjectWorkItem, PatternID: "work_item_ticket_key", Value: "CHAOS-71"}
 	request := contextfabric.InvestigationRequest{Question: "What is the state of CHAOS-71 in acme/r-1?"}
-	got, _ := unresolvedNamedHandle(context.Background(), storage.Principal{OrgID: "org_1"}, request, ResolveDeps{}, resolution, contextfabric.CommitBasisSet{}, contextfabric.CommitDecisionDigestSet{}, handle, handleOwed, false, namedCensus{})
+	got, _ := unresolvedNamedHandle(context.Background(), storage.Principal{OrgID: "org_1"}, request, ResolveDeps{}, resolution, contextfabric.CommitBasisSet{}, contextfabric.CommitDecisionDigestSet{}, handle, handleOwed, false, namedCensus{}, contextfabric.SubjectRepository)
 	if ids := besideCommittedIDs(got); !slices.Equal(ids, []string{repository.CanonicalID, named.CanonicalID, other.CanonicalID}) {
 		t.Fatalf("committed %v, want every committed subject kept: a work item cannot be told apart here", ids)
 	}

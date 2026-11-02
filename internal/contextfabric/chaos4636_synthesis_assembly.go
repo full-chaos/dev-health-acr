@@ -468,6 +468,13 @@ func (e *Engine) synthesizeAndAssemble(ctx context.Context, principal storage.Pr
 		result.LimitationsDisplaced += displaced
 		result.Coverage.Partial = true
 	}
+	// CHAOS-12557 (ruling (c)): several identifiers named beside a repository, no
+	// kind stated; the answer says it does not answer for them.
+	if resolution.UnansweredHandlesLimitation != "" {
+		composed, displaced := appendBoundedLimitations(result.Limitations, []string{resolution.UnansweredHandlesLimitation})
+		result.Limitations = composed
+		result.LimitationsDisplaced += displaced
+	}
 	// CHAOS-12505 (ruling 3): a work item committed beside a named repository; the
 	// answer says whether a pull request link joins them. The engine states it.
 	if resolution.NamedRepositoryLinkLimitation != "" {
