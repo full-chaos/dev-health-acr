@@ -191,12 +191,15 @@ func WithoutDisabledRenderShapes(result InvestigationResult, options RenderShape
 // because the rows reach every claim from the fact (attachCanonicalRows). Any
 // difference is a second breakdown, and a chart of either would hide the other.
 //
-// Two facts of one subject can hold equal rows, so equal content is not enough
-// when both claims name their fact: two ids are two facts. A claim may leave
-// its fact id out (the model writes it, and the server does not fill it), and
-// then the content alone decides.
+// Two facts of one subject can hold equal rows, so equal content is not enough:
+// the fact ids must be equal too. Two ids are two facts. A claim with no id is
+// grounded over its subject's whole group (groundClaim), so beside a claim that
+// names a fact it may hold another fact's rows, and the pair is two breakdowns.
+// Claims that both name no fact are compared by content alone: the model writes
+// fact_id, the server does not fill it, and a model may leave it out of every
+// claim.
 func sameThemeBreakdown(first, other *ClaimedFact) bool {
-	if first.FactID != "" && other.FactID != "" && first.FactID != other.FactID {
+	if first.FactID != other.FactID {
 		return false
 	}
 	return first.Subject.Kind == other.Subject.Kind && first.Subject.CanonicalID == other.Subject.CanonicalID &&
