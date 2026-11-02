@@ -47,6 +47,9 @@ func storedRawTextResult(t *testing.T) InvestigationResult {
 		{DriverID: "driver-team", Title: "Owned By Team: linear:CHAOS", Summary: "A human-written summary that names linear:CHAOS", AffectedSubjects: []SubjectRef{team}},
 		// The path's To end has its name, so graphrank did not compose this title
 		// from a raw id: it stands.
+		// Codex r4: the path's To end is the raw id, but this title is not the
+		// relationship's words: it is not graphrank's composition and stands.
+		{DriverID: "driver-custom", Title: "Escalated by hand: c67b1602-31db-4422-8dec-a4a02bbcc513", Summary: "Human-written driver summary stays exact", AffectedSubjects: []SubjectRef{titled}, PathIDs: []string{"path-project"}},
 		{DriverID: "driver-named", Title: "Escalated by hand: c67b1602-31db-4422-8dec-a4a02bbcc513", Summary: "Generate taxonomy table belongs to project Investment View Documentation", AffectedSubjects: []SubjectRef{titled}, PathIDs: []string{"path-named"}},
 	}
 	result.ClaimedFacts = []ClaimedFact{{ClaimID: "claim-item", Subject: item}}
@@ -77,7 +80,9 @@ func TestAStoredResultServesItsGraphTextInReaderWords(t *testing.T) {
 		"driver summary":         {served.Drivers[0].Summary, "CHAOS-2320 belongs to project"},
 		"driver affected":        {served.Drivers[1].AffectedSubjects[0].Label, "CHAOS"},
 		"driver no path title":   {served.Drivers[1].Title, "Owned By Team: linear:CHAOS"},
-		"title not composed":     {served.Drivers[2].Title, "Escalated by hand: c67b1602-31db-4422-8dec-a4a02bbcc513"},
+		"custom title raw end":   {served.Drivers[2].Title, "Escalated by hand: c67b1602-31db-4422-8dec-a4a02bbcc513"},
+		"custom summary raw end": {served.Drivers[2].Summary, "Human-written driver summary stays exact"},
+		"title not composed":     {served.Drivers[3].Title, "Escalated by hand: c67b1602-31db-4422-8dec-a4a02bbcc513"},
 		"named why_relevant":     {served.Paths[3].WhyRelevant, "Generate taxonomy table belongs to project Investment View Documentation"},
 		"human summary":          {served.Drivers[1].Summary, "A human-written summary that names linear:CHAOS"},
 		"claimed fact subject":   {served.ClaimedFacts[0].Subject.Label, "CHAOS-2320"},
