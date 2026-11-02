@@ -94,6 +94,8 @@ type besideWorld struct {
 	nodes     []CandidateNode
 	pool      []CandidateNode
 	edit      func(*contextfabric.InvestigationRequest)
+	// link sets the keyed link read (CHAOS-12505); nil leaves none wired.
+	link func(*ResolveDeps)
 }
 
 type besideTurn struct {
@@ -122,6 +124,9 @@ func runBeside(t *testing.T, w besideWorld) besideTurn {
 	tracer := &captureResolutionTracer{}
 	deps.ResolutionTracer = tracer
 	deps.CensusFunc = w.census.census
+	if w.link != nil {
+		w.link(&deps)
+	}
 	deps.HandleGrammarChecker = func(kind contextfabric.SubjectKind, patternID, value string) (string, bool) {
 		if !ValidateHandleGrammar(kind, patternID, value) {
 			return "", false
