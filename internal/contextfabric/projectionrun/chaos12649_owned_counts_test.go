@@ -156,11 +156,15 @@ func TestAShortDayInsideTheKindsToleranceWarnsWithTheDay(t *testing.T) {
 	}
 }
 
+// Days in step, and a day short by exactly its tolerance (103 against 100: the
+// floor of 3), do not warn.
 func TestDaysInStepDoNotWarn(t *testing.T) {
 	t.Parallel()
 	kind := contractsv1.ContextFabricSubjectCIRun
-	days := map[contextfabric.SubjectKind]map[int64]int64{kind: {day20387: 997, day20388: 3}}
-	h := newDayHarness(t, days, days, nil, nil)
+	h := newDayHarness(t,
+		map[contextfabric.SubjectKind]map[int64]int64{kind: {day20387: 997, day20388: 103}},
+		map[contextfabric.SubjectKind]map[int64]int64{kind: {day20387: 997, day20388: 100}},
+		nil, nil)
 	h.run(testStart)
 	h.run(testStart.Add(time.Minute))
 	if strings.Contains(h.log.String(), "graph_below_source_on_day") {
