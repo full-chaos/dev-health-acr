@@ -1514,7 +1514,7 @@ func fieldClaimRows(fact CanonicalFact, field string) (rows []contractsv1.Contex
 	// (reported, and with no rows the claim carries no declaration either,
 	// Codex #1940 r1). Every other table is cut to its cap.
 	limit := contractsv1.ContextFabricClaimedFactMaxRows
-	table := fact.Fields[rowsField].Table
+	table := fact.Fields[field].Table
 	if table != nil {
 		limit = maxFactTableRows(*table)
 	}
