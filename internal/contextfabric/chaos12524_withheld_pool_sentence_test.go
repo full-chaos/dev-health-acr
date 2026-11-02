@@ -3,6 +3,8 @@ package contextfabric
 import (
 	"strings"
 	"testing"
+
+	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 )
 
 // CHAOS-12524: a clarification over a withheld pool has no candidate on the
@@ -38,13 +40,17 @@ func TestAWithheldPoolClarificationClaimsNoMatchedSubject(t *testing.T) {
 	}
 }
 
-// The clarification sentence a withheld pool now carries says what happened to
-// the pool, as its terminal sibling does, and points at the offers. It names no
-// subject and no term: every candidate was withheld.
+// The clarification sentence a withheld pool carries must be true of every pool
+// that reaches the arm (codex r1 on #1922, executed): the offer floor withholds a
+// lexical candidate too, so the sentence names no match mechanism, and a window
+// option can be the only offer, so it does not promise that a subject is chosen
+// from the options. It names no subject and no term: every candidate was withheld.
 func TestTheWithheldPoolClarificationSentenceSaysWhatHappened(t *testing.T) {
 	t.Parallel()
-	if !strings.HasPrefix(clarificationRequiredLimitationWithheldPool, "Retrieval matched one or more subjects only by semantic similarity") {
-		t.Fatalf("sentence %q does not say the pool was withheld", clarificationRequiredLimitationWithheldPool)
+	for _, claim := range []string{"semantic", "similarity", "One authorized subject", "matched", "chosen from the offered options"} {
+		if strings.Contains(clarificationRequiredLimitationWithheldPool, claim) {
+			t.Fatalf("sentence %q claims %q, which is false for a lexical pool or a window-only offer", clarificationRequiredLimitationWithheldPool, claim)
+		}
 	}
 	if !strings.Contains(clarificationRequiredLimitationWithheldPool, "offered options") {
 		t.Fatalf("sentence %q does not point at the offers the clarification exists for", clarificationRequiredLimitationWithheldPool)
@@ -91,5 +97,56 @@ func TestTheDeclaredKindRepairReplacesTheWithheldPoolClarification(t *testing.T)
 	}
 	if len(served.Limitations) != 2 || served.Limitations[1] != declaredKindTerminalLimitation {
 		t.Fatalf("served limitations = %#v, want the withheld-pool sentence replaced in place", served.Limitations)
+	}
+}
+
+// A row stored before this change carries the old sentence on a clarification
+// with no candidate, and a row with an offer to redeem is answerable, so neither
+// repair runs on it (codex r1 on #1922, executed: served unchanged). The served
+// copy is restated in place; a row with a candidate keeps its sentence.
+func TestAStoredWithheldPoolClarificationIsRestatedOnRead(t *testing.T) {
+	t.Parallel()
+	stored := InvestigationResult{
+		Status:              InvestigationClarificationRequired,
+		SubjectResolution:   SubjectResolution{Candidates: []SubjectCandidate{}, Committed: []SubjectRef{}, ClarificationPrompt: OfferPoolEmptiedClarificationPrompt},
+		Limitations:         []string{"A retrieval mechanism was unavailable.", clarificationRequiredLimitationOne},
+		DeterministicAnswer: "Clarification is required before this question can be answered.",
+		StructureNeeds:      &contractsv1.ContextFabricStructureNeeds{WindowOptions: []contractsv1.ContextFabricWindowOption{{}}},
+	}
+	if !resultOffersRedeemable(stored) {
+		t.Fatal("fixture: the row must carry an offer to redeem, or the offer-less repair answers for it")
+	}
+	RepairStoredClarification(&stored, nil, SemanticStateReadAvailable)
+	if len(stored.Limitations) != 2 || stored.Limitations[1] != clarificationRequiredLimitationWithheldPool {
+		t.Fatalf("limitations = %#v, want the old sentence restated in place", stored.Limitations)
+	}
+	withCandidate := InvestigationResult{
+		Status:            InvestigationClarificationRequired,
+		SubjectResolution: SubjectResolution{Candidates: []SubjectCandidate{{Subject: SubjectRef{Kind: SubjectTeam, CanonicalID: "team_a", Label: "A"}}}, Committed: []SubjectRef{}},
+		Limitations:       []string{clarificationRequiredLimitationOne},
+	}
+	RepairStoredClarification(&withCandidate, nil, SemanticStateReadAvailable)
+	if withCandidate.Limitations[0] != clarificationRequiredLimitationOne {
+		t.Fatalf("limitations = %#v: a row with a candidate keeps the one-subject sentence", withCandidate.Limitations)
+	}
+}
+
+// The restatement edits the served copy only: a store that hands back its own
+// slice must keep the row it stored.
+func TestTheRestatementLeavesTheStoredSliceAlone(t *testing.T) {
+	t.Parallel()
+	limitations := []string{clarificationRequiredLimitationOne}
+	served := InvestigationResult{
+		Status:            InvestigationClarificationRequired,
+		SubjectResolution: SubjectResolution{Candidates: []SubjectCandidate{}, Committed: []SubjectRef{}},
+		Limitations:       limitations,
+		StructureNeeds:    &contractsv1.ContextFabricStructureNeeds{WindowOptions: []contractsv1.ContextFabricWindowOption{{}}},
+	}
+	RepairStoredClarification(&served, nil, SemanticStateReadAvailable)
+	if served.Limitations[0] != clarificationRequiredLimitationWithheldPool {
+		t.Fatalf("served = %#v, want the restated sentence", served.Limitations)
+	}
+	if limitations[0] != clarificationRequiredLimitationOne {
+		t.Fatalf("the stored slice was edited: %#v", limitations)
 	}
 }
