@@ -323,3 +323,25 @@ func TestInterpretationTermsLineCertifiesEveryProducerValue(t *testing.T) {
 	sink.RecordInterpretationTerms(ctx, principalOrg1, contextfabric.InterpretationTermsEvent{HandleBound: "future_value"})
 	certifyRefused(t, buf.Bytes(), eventspec.InterpretationTerms, "an unknown handle_bound")
 }
+
+// TestGatedOfferFailureLineCertifiesEveryClass (CHAOS-12681): every error class
+// the failure line can write certifies against the declaration, the line holds
+// exactly its declared keys, and an unknown class is refused.
+func TestGatedOfferFailureLineCertifiesEveryClass(t *testing.T) {
+	t.Parallel()
+	keys := []string{"time", "level", "msg", "org_id", "error_class", "request_id"}
+	seen := map[string]bool{}
+	for _, class := range contextfabric.GatedOfferErrorClassVocabulary() {
+		var buf bytes.Buffer
+		sink, ctx := answerLineSink(&buf, slog.LevelInfo)
+		sink.RecordGatedOfferResolutionFailure(ctx, principalOrg1, contextfabric.GatedOfferErrorClass(class))
+		pinKeys(t, bytes.NewBuffer(buf.Bytes()), keys, 1)
+		line := certifyRequestLine(t, buf.Bytes(), eventspec.GatedOfferResolutionFailure, map[string]any{"error_class": class})
+		seen[line["error_class"].(string)] = true
+	}
+	sameMembers(t, "error classes", keysOf(seen), contextfabric.GatedOfferErrorClassVocabulary())
+	var buf bytes.Buffer
+	sink, ctx := answerLineSink(&buf, slog.LevelInfo)
+	sink.RecordGatedOfferResolutionFailure(ctx, principalOrg1, "future_class")
+	certifyRefused(t, buf.Bytes(), eventspec.GatedOfferResolutionFailure, "an unknown error class")
+}
