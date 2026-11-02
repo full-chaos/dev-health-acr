@@ -3,6 +3,7 @@ package contextfabric
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"testing"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/hintsource"
@@ -42,7 +43,7 @@ func pendingTurns(t *testing.T, carryOn bool, window *RequestedEvidenceWindow) (
 	rig.engine.graph = hintCommittingGraph{rig.graph}
 	rig.engine.anchorBindingCarryEnabled = carryOn
 	rig.interpreter.read(SubjectRepository, true)
-	one := rig.turn(t, needTurnRequest("request_pending_one", false), identityProvenResponse(probeAlpha))
+	one := rig.turn(t, needTurnRequest("request_pending_one", false), gatedBeyondWindow(identityProvenResponse(probeAlpha)))
 	if held := bindingMember(one.saved); held == nil || held.State != AnchorBindingPendingWindowConfirmation || held.CanonicalID != probeAlpha.CanonicalID {
 		t.Fatalf("premise: the gated turn's binding = %+v, want alpha pending", held)
 	}
@@ -117,7 +118,7 @@ func TestAnExpiredPendingProofDoesNotCarry(t *testing.T) {
 	rig.engine.graph = hintCommittingGraph{rig.graph}
 	rig.engine.anchorBindingCarryEnabled = true
 	rig.interpreter.read(SubjectRepository, true)
-	one := rig.turn(t, needTurnRequest("request_pending_one", false), identityProvenResponse(probeAlpha))
+	one := rig.turn(t, needTurnRequest("request_pending_one", false), gatedBeyondWindow(identityProvenResponse(probeAlpha)))
 	expiredBinding(rig.store)
 	rig.verify()
 	rig.interpreter.read(SubjectRepository, false)
@@ -137,7 +138,7 @@ func TestAGatedTurnThatProvesNothingStillReadsDiscard(t *testing.T) {
 	rig := newAnchorProbeRig(t, false)
 	rig.engine.anchorBindingCarryEnabled = true
 	rig.interpreter.read(SubjectRepository, true)
-	one := rig.turn(t, needTurnRequest("request_pending_none", false), emptyProbeResponse())
+	one := rig.turn(t, needTurnRequest("request_pending_none", false), gatedBeyondWindow(emptyProbeResponse()))
 	if held := bindingMember(one.saved); held != nil && held.State == AnchorBindingPendingWindowConfirmation {
 		t.Fatalf("premise: the gated turn holds %+v pending; it proved nothing", held)
 	}
@@ -187,4 +188,64 @@ func TestAPendingParentYieldsToTheCallerAndTheReceipt(t *testing.T) {
 			t.Fatalf("carried hints = %+v, want none", hints)
 		}
 	})
+}
+
+// TestAWindowOnlyTurnThatAnswersIsNotRecordedAsGated (CHAOS-4451): a windowed
+// turn whose offers-only pass finds nothing beyond the window answers. Its
+// ledger line does not read as a gated discard or a gated pending proof, and
+// its binding is decided by the answering resolution, not held pending.
+func TestAWindowOnlyTurnThatAnswersIsNotRecordedAsGated(t *testing.T) {
+	rig := newAnchorProbeRig(t, false)
+	rig.engine.anchorBindingCarryEnabled = true
+	rig.interpreter.read(SubjectRepository, true)
+	one := rig.turn(t, needTurnRequest("request_window_only_answer", false), identityProvenResponse(probeAlpha))
+	if one.result.Status == InvestigationClarificationRequired {
+		t.Fatalf("premise: status %q; the window is the only question, so the turn answers", one.result.Status)
+	}
+	ledgers := rig.telemetry.confirmedNeedLedgers
+	if len(ledgers) != 1 {
+		t.Fatalf("ledger lines = %d, want 1", len(ledgers))
+	}
+	if reason := ledgers[0].CaptureSkipReason; reason == CaptureSkipReasonWindowConfirmationGatedDiscard || reason == CaptureSkipReasonWindowConfirmationGatedPending {
+		t.Fatalf("capture skip reason = %q on an answered turn, want no gated reason", reason)
+	}
+	if len(one.transitions) != 1 || one.transitions[0].Evaluation == AnchorBindingEvaluationWindowGated {
+		t.Fatalf("transitions = %+v, want one line not evaluated as window_gated", one.transitions)
+	}
+	if held := bindingMember(one.saved); held == nil || held.State == AnchorBindingPendingWindowConfirmation {
+		t.Fatalf("binding = %+v, want one decided by the answering resolution, not pending", held)
+	}
+}
+
+// decisiveCallNotProjected answers the offers-only resolution from the inner
+// graph and reports the decisive one as not projected.
+type decisiveCallNotProjected struct{ *needTurnGraph }
+
+func (g decisiveCallNotProjected) ResolveSubjects(ctx context.Context, principal storage.Principal, request InvestigationRequest, interpreted InterpretedQuestion, binding ResolvedGraphBinding, kind *ConfirmedExpectedKind, anchor *ConfirmedAnchorSelection, frame *QuestionFrame, anchorKind SubjectKind) (SubjectResolution, StructureOfferMaterial, CommitBasisSet, CommitDecisionDigestSet, error) {
+	if !OffersOnlyResolution(ctx) {
+		return SubjectResolution{}, StructureOfferMaterial{}, nil, nil, fmt.Errorf("query context graph: %w", ErrGraphNotProjected)
+	}
+	return g.needTurnGraph.ResolveSubjects(ctx, principal, request, interpreted, binding, kind, anchor, frame, anchorKind)
+}
+
+// TestAnAnsweringTurnThatEndsBeforeItsResolutionHoldsNoGatedProof
+// (CHAOS-4451): the offers-only pass proved alpha, the turn went on to answer,
+// and the decisive resolution then ended the turn. The proof belonged to a
+// gate that did not fire, so the binding line reads not_resolved, never
+// window_gated, and nothing is held pending.
+func TestAnAnsweringTurnThatEndsBeforeItsResolutionHoldsNoGatedProof(t *testing.T) {
+	rig := newAnchorProbeRig(t, false)
+	rig.engine.anchorBindingCarryEnabled = true
+	rig.engine.graph = decisiveCallNotProjected{rig.graph}
+	rig.interpreter.read(SubjectRepository, true)
+	one := rig.turn(t, needTurnRequest("request_window_only_not_projected", false), identityProvenResponse(probeAlpha))
+	if len(rig.graph.calls) != 1 {
+		t.Fatalf("premise: inner graph calls = %d, want the offers-only pass only", len(rig.graph.calls))
+	}
+	if len(one.transitions) != 1 || one.transitions[0].Evaluation != AnchorBindingEvaluationNotResolved {
+		t.Fatalf("transitions = %+v, want one line evaluated not_resolved", one.transitions)
+	}
+	if held := bindingMember(one.saved); held != nil && held.State == AnchorBindingPendingWindowConfirmation {
+		t.Fatalf("binding = %+v, want nothing pending: no gate fired", held)
+	}
 }

@@ -14,6 +14,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -34,7 +35,14 @@ func (extGraph) ResolveInvestigationBinding(context.Context, storage.Principal) 
 	return contextfabric.ResolvedGraphBinding{GraphKey: "ext-key", Epoch: 0}, nil
 }
 
-func (extGraph) ResolveSubjects(context.Context, storage.Principal, contextfabric.InvestigationRequest, contextfabric.InterpretedQuestion, contextfabric.ResolvedGraphBinding, *contextfabric.ConfirmedExpectedKind, *contextfabric.ConfirmedAnchorSelection, *contextfabric.QuestionFrame, contextfabric.SubjectKind) (contextfabric.SubjectResolution, contextfabric.StructureOfferMaterial, contextfabric.CommitBasisSet, contextfabric.CommitDecisionDigestSet, error) {
+// ResolveSubjects resolves nothing, and its offers-only pass cannot read. The
+// window gate answers a turn whose window is its only question (CHAOS-4451); a
+// pass that cannot show that keeps the gate, so turn one stops to offer the
+// window turn two redeems.
+func (extGraph) ResolveSubjects(ctx context.Context, _ storage.Principal, _ contextfabric.InvestigationRequest, _ contextfabric.InterpretedQuestion, _ contextfabric.ResolvedGraphBinding, _ *contextfabric.ConfirmedExpectedKind, _ *contextfabric.ConfirmedAnchorSelection, _ *contextfabric.QuestionFrame, _ contextfabric.SubjectKind) (contextfabric.SubjectResolution, contextfabric.StructureOfferMaterial, contextfabric.CommitBasisSet, contextfabric.CommitDecisionDigestSet, error) {
+	if contextfabric.OffersOnlyResolution(ctx) {
+		return contextfabric.SubjectResolution{}, contextfabric.StructureOfferMaterial{}, nil, nil, errors.New("offers-only pass unreadable")
+	}
 	return contextfabric.SubjectResolution{Candidates: []contextfabric.SubjectCandidate{}, Committed: []contextfabric.SubjectRef{}}, contextfabric.StructureOfferMaterial{}, nil, nil, nil
 }
 
@@ -186,8 +194,9 @@ func TestSemanticContinuation_TheCarriedReadingSurvivesFreshEnginesAndARegistryC
 	}}
 	laterDeriver := extDeriver{calls: laterCalls, derive: func(contextfabric.QuestionFrame) []contextfabric.DerivedRequirement { return nil }}
 
-	// TURN ONE: no window on the request, so the class-default gate stops it
-	// to offer one -- and it SAVES its accepted reading.
+	// TURN ONE: no window on the request and no offers-only read, so the
+	// class-default gate stops it to offer one -- and it SAVES its accepted
+	// reading.
 	var sink1 bytes.Buffer
 	turnOne, err := extEngine(t, store, extInterpreter{family: contractsv1.ContextFabricQuestionFamilyGroupedCohortStatus, frame: carriedFrame}, turnOneDeriver, "result_semantic_ext_turn1", &sink1).
 		Investigate(context.Background(), principal, extRequest())

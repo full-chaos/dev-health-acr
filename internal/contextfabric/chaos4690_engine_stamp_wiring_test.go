@@ -264,7 +264,8 @@ func TestChaos4690_StructureVetoResult_StampsEvidenceRefLabels(t *testing.T) {
 func TestChaos4690_WindowConfirmationRequiredResult_StampsEvidenceRefLabels(t *testing.T) {
 	t.Parallel()
 	interpreter := &countingInterpreter{interpretation: bootstrapInterpretation()}
-	graph := &acceptanceGraphReader{resolution: SubjectResolution{Candidates: []SubjectCandidate{}, Committed: []SubjectRef{}}, context: emptyGraphContext()}
+	// CHAOS-4451: the gate fires only with a question beyond the window.
+	graph := &acceptanceGraphReader{resolution: SubjectResolution{Candidates: []SubjectCandidate{}, Committed: []SubjectRef{}}, context: emptyGraphContext(), material: chaos4234GatedMaterial()}
 	results := newMapResultStore()
 	engine := buildWindowGateEngine(t, interpreter, graph, results)
 
