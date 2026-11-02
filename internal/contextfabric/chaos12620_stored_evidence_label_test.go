@@ -3,6 +3,9 @@ package contextfabric
 import (
 	"testing"
 	"time"
+
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric/identity"
+	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 )
 
 // CHAOS-12620 (codex r1): a result stored before the reader-form labels keeps the
@@ -58,6 +61,43 @@ func TestACitedEvidenceExpansionReadsAStoredLabelInReaderWords(t *testing.T) {
 		expanded := citedEvidenceExpansion(result, ref, "", "", time.Unix(0, 0))
 		if got := expanded.Evidence.Source.DisplayLabel; got != label {
 			t.Errorf("%s expanded %q, want %q", ref, got, label)
+		}
+	}
+}
+
+// A project the source names by its own id (an empty source name) holds no name,
+// and neither does a UUID label: the label is the noun alone (codex r2).
+func TestASubjectLabelThatIsItsIDIsNoName(t *testing.T) {
+	t.Parallel()
+	project, _, err := identity.Derive(identity.KindProject, []string{"linear", "c67b1602-31db-4422-8dec-a4a02bbcc513"}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var result InvestigationResult
+	result.SubjectResolution.Committed = []SubjectRef{
+		{Kind: SubjectProject, CanonicalID: project, Label: "c67b1602-31db-4422-8dec-a4a02bbcc513"},
+		{Kind: SubjectRepository, CanonicalID: RepositoryCanonicalID(storedRepoID), Label: storedRepoID},
+	}
+	names := evidenceSubjectNames(result)
+	for ref, want := range map[string]string{
+		"acr:v1:project:linear:c67b1602-31db-4422-8dec-a4a02bbcc513": "Project",
+		"acr:v1:repository:" + storedRepoID:                          "Repository",
+	} {
+		if got, _ := contractsv1.ContextFabricEvidenceRefLabelNamed(ref, names); got != want {
+			t.Errorf("%s: label %q, want %q", ref, got, want)
+		}
+	}
+}
+
+// Every serve tier carries the restated labels: the copy that falls back to the
+// input when the words do not fit carries them too (codex r2).
+func TestAStoredEvidenceLabelIsRestatedInTheByteBoundFallback(t *testing.T) {
+	t.Parallel()
+	result, want := storedLabelResult()
+	served, _ := ServeVocabularyLabels(result, true, 1)
+	for ref, label := range want {
+		if got := served.EvidenceRefLabels[ref]; got != label {
+			t.Errorf("%s served %q in the fallback, want %q", ref, got, label)
 		}
 	}
 }
