@@ -91,7 +91,7 @@ func TestAZeroInARequestedRepositoryStatesTheScope(t *testing.T) {
 	request.RequestedScope.RepositorySlugs = []string{listingRepo(1)}
 	attestation := Attestation{UnscopedVisibility: true, Kinds: []KindAttestation{{Kind: contextfabric.SubjectWorkItem, Complete: true, HandleApplied: true, RepositoryFilterApplied: true}}}
 	for caller, principal := range listingCallers(t, 2) {
-		listed, handle := listCensusSatisfiers(context.Background(), principal, request, (&fakeGraphBackend{}).deps(), attestation, contextfabric.SubjectResolution{})
+		listed, handle := listCensusSatisfiers(context.Background(), principal, request, turnDeps((&fakeGraphBackend{}).deps(), request), attestation, contextfabric.SubjectResolution{})
 		if listed.CensusLimitation != contractsv1.ContextFabricCensusAbsentInScopeLimitation || handle == nil {
 			t.Fatalf("work item, %s: limitation %q handle %+v", caller, listed.CensusLimitation, handle)
 		}
@@ -107,7 +107,7 @@ func TestAZeroUnderAnAnchorStatesTheScope(t *testing.T) {
 	for caller, principal := range listingCallers(t, 2) {
 		t.Run(caller, func(t *testing.T) {
 			t.Parallel()
-			listed, handle := listCensusSatisfiers(context.Background(), principal, request, (&fakeGraphBackend{}).deps(), attestation, contextfabric.SubjectResolution{})
+			listed, handle := listCensusSatisfiers(context.Background(), principal, request, turnDeps((&fakeGraphBackend{}).deps(), request), attestation, contextfabric.SubjectResolution{})
 			if listed.CensusLimitation != contractsv1.ContextFabricCensusAbsentInScopeLimitation {
 				t.Fatalf("limitation = %q", listed.CensusLimitation)
 			}
@@ -121,7 +121,7 @@ func TestAZeroUnderAnAnchorStatesTheScope(t *testing.T) {
 	item := request
 	item.Question = "Why is CHAOS-999 blocked?"
 	anchored := Attestation{UnscopedVisibility: true, Kinds: []KindAttestation{{Kind: contextfabric.SubjectWorkItem, Complete: true, HandleApplied: true, AnchorApplied: true}}}
-	listed, _ := listCensusSatisfiers(context.Background(), restrictedCaller(t, listingRepo(0)), item, (&fakeGraphBackend{}).deps(), anchored, contextfabric.SubjectResolution{})
+	listed, _ := listCensusSatisfiers(context.Background(), restrictedCaller(t, listingRepo(0)), item, turnDeps((&fakeGraphBackend{}).deps(), item), anchored, contextfabric.SubjectResolution{})
 	if listed.CensusLimitation != contractsv1.ContextFabricCensusAbsentInScopeLimitation {
 		t.Fatalf("work item: limitation = %q", listed.CensusLimitation)
 	}
@@ -219,7 +219,7 @@ func TestACommitTakesNoAbsenceSentence(t *testing.T) {
 	request.Question = "What is the state of pull request 999?"
 	attestation := Attestation{UnscopedVisibility: true, Kinds: []KindAttestation{{Kind: contextfabric.SubjectPullRequest, Complete: true, HandleApplied: true}}}
 	resolution := contextfabric.SubjectResolution{Committed: []contextfabric.SubjectRef{{Kind: contextfabric.SubjectRepository, CanonicalID: "repository:acme/r00"}}}
-	listed, handle := listCensusSatisfiers(context.Background(), storage.Principal{OrgID: "org_1"}, request, (&fakeGraphBackend{}).deps(), attestation, resolution)
+	listed, handle := listCensusSatisfiers(context.Background(), storage.Principal{OrgID: "org_1"}, request, turnDeps((&fakeGraphBackend{}).deps(), request), attestation, resolution)
 	if listed.CensusLimitation != "" || handle != nil {
 		t.Fatalf("limitation %q handle %+v", listed.CensusLimitation, handle)
 	}

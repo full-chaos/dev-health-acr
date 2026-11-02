@@ -216,14 +216,32 @@ func TestTheScopedCensusCostAtProductionSize(t *testing.T) {
 		}
 	})
 
-	t.Run("a repository past the census bound is no census, never a smaller count", func(t *testing.T) {
-		committed, rounds, took, _ := resolve(t, "CHAOS-78", []string{"big/huge"})
-		t.Logf("resolution past the bound: %s, rounds %s", took, reasons(rounds))
-		if len(committed) != 0 {
-			t.Fatalf("committed %v from a cut walk", committed)
+	// CHAOS-12505, the ticket's repro at size: big/huge holds 2500 linked
+	// issues, past the census bound of 2000. The population walk of it is cut
+	// (asserted below, so the row measures the case it names); the keyed read
+	// is bounded by the census's own satisfiers, so the key commits. Before the
+	// change this row ended in census_error with nothing committed.
+	t.Run("a repository past the census bound is read keyed on the satisfiers", func(t *testing.T) {
+		if _, walkComplete, err := adapter.linkScopedIssues(ctx, key, org, contextfabric.RequestedScope{RepositorySlugs: []string{"big/huge"}}, contextfabric.WorkItemMembershipCensusLimit); err != nil || walkComplete {
+			t.Fatalf("the population walk of big/huge: complete %t err %v, want a cut walk: the row does not measure a repository past the bound", walkComplete, err)
 		}
-		if got := reasons(rounds); !strings.Contains(got, string(graphrank.ReasonCensusError)) {
-			t.Fatalf("rounds %s, want the census reported incomplete", got)
+		committed, rounds, took, allocated := resolve(t, "CHAOS-78", []string{"big/huge"})
+		t.Logf("resolution past the bound: %s, allocated %d MiB, rounds %s", took, allocated>>20, reasons(rounds))
+		want, _, _ := identity.Derive(identity.KindWorkItem, []string{scopedZeroRepo, "linear:CHAOS-78"}, nil)
+		if len(committed) != 1 || committed[0] != want {
+			t.Fatalf("committed %v (rounds %s), want the linked issue", committed, reasons(rounds))
+		}
+		if got := reasons(rounds); strings.Contains(got, string(graphrank.ReasonCensusError)) {
+			t.Fatalf("rounds %s, want no census error", got)
+		}
+		if allocated > walkMemoryBound {
+			t.Fatalf("the resolution allocated %d MiB, want at most %d MiB", allocated>>20, walkMemoryBound>>20)
+		}
+		began := time.Now()
+		tiers, complete, err := adapter.linkScopedWorkItemsOf(ctx, key, org, contextfabric.RequestedScope{RepositorySlugs: []string{"big/huge"}}, []string{want})
+		t.Logf("keyed link read of one id in big/huge: %s", time.Since(began))
+		if err != nil || !complete || tiers[want] != "native" {
+			t.Fatalf("keyed read %v complete %t err %v, want the item at the native tier", tiers, complete, err)
 		}
 	})
 }

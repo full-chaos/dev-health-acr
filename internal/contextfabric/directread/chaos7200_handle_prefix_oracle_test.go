@@ -73,7 +73,10 @@ func TestChaos7200_RestrictedHandleAnswerDoesNotRevealKeyPrefixSet(t *testing.T)
 		{"exact known prefix, key missing", "CHAOS-999999", scope, ok, ok},
 		{"exact unknown prefix", "ZZZ-99999", scope, ok, ok},
 		{"exact unknown prefix, short", "ABC-123", scope, ok, ok},
-		{"embedded known prefix", "please inspect CHAOS-4322", scope, ok, ok},
+		// A key in a sentence is not one exact key, whatever its prefix: the
+		// CHAOS prefix no longer binds in a sentence where no other does
+		// (CHAOS-12463).
+		{"embedded known prefix", "please inspect CHAOS-4322", scope, invalid, invalid},
 		{"embedded unknown prefix", "please inspect ZZZ-4322", scope, invalid, invalid},
 		{"two known keys", "CHAOS-1 CHAOS-2", scope, invalid, invalid},
 		{"two unknown keys", "ZZZ-1 ZZZ-2", scope, invalid, invalid},

@@ -9,12 +9,13 @@ import (
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/hintsource"
+	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
 )
 
 // The work-item census under a requested repository scope counts the handle's
-// satisfiers the scope's link walk reaches, never the satisfiers whose own
-// repository is in the scope.
+// satisfiers that link into the scope (the keyed link read, CHAOS-12505), never
+// the satisfiers whose own repository is in the scope.
 
 const (
 	linkScopeQuestion = "What is the state of CHAOS-77?"
@@ -73,13 +74,19 @@ func (p *linkScopeCensusProbe) census(ctx context.Context, _ string, kind Census
 
 func walkedPopulation(ids []string, complete bool, err error) func(*ResolveDeps) {
 	return func(deps *ResolveDeps) {
-		deps.LinkScopedWorkItems = func(_ context.Context, scope contextfabric.RequestedScope) (map[string]string, bool, error) {
+		deps.LinkScopedWorkItemsOf = func(_ context.Context, scope contextfabric.RequestedScope, keyed []string) (map[string]string, bool, error) {
 			if len(scope.RepositorySlugs) != 1 || scope.RepositorySlugs[0] != linkScopeSlug {
-				return nil, false, fmt.Errorf("walked scope %v, want the request's", scope.RepositorySlugs)
+				return nil, false, fmt.Errorf("read scope %v, want the request's", scope.RepositorySlugs)
+			}
+			linked := map[string]bool{}
+			for _, id := range ids {
+				linked[id] = true
 			}
 			tiers := map[string]string{}
-			for _, id := range ids {
-				tiers[id] = "native"
+			for _, id := range keyed {
+				if linked[id] {
+					tiers[id] = "native"
+				}
 			}
 			return tiers, complete, err
 		}
@@ -120,9 +127,9 @@ func TestAWorkItemCensusUnderARequestedScopeCountsTheLinkedSatisfiers(t *testing
 		{"an item of another repository linked into the scope", walkedPopulation([]string{linkScopeItem(1)}, true, nil), linkScopeItem(1), ShadowWouldCommit, ""},
 		{"a walked issue that does not carry the key", walkedPopulation([]string{"work_item.v2:r-99:linear:CHAOS-78"}, true, nil), "", ShadowWouldClarify, ""},
 		{"two linked items share the key", walkedPopulation([]string{linkScopeItem(0), linkScopeItem(1)}, true, nil), "", ShadowWouldClarify, ""},
-		{"a cut walk", walkedPopulation([]string{linkScopeItem(0)}, false, nil), "", ShadowWouldClarify, ReasonCensusError},
-		{"a failed walk", walkedPopulation(nil, false, errors.New("graph down")), "", ShadowWouldClarify, ReasonCensusError},
-		{"no walk wired", func(*ResolveDeps) {}, "", ShadowWouldClarify, ReasonCensusError},
+		{"a cut keyed read", walkedPopulation([]string{linkScopeItem(0)}, false, nil), "", ShadowWouldClarify, ReasonCensusError},
+		{"a failed keyed read", walkedPopulation(nil, false, errors.New("graph down")), "", ShadowWouldClarify, ReasonCensusError},
+		{"no keyed read wired", func(*ResolveDeps) {}, "", ShadowWouldClarify, ReasonCensusError},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			t.Parallel()
@@ -144,7 +151,40 @@ func TestAWorkItemCensusUnderARequestedScopeCountsTheLinkedSatisfiers(t *testing
 					t.Fatalf("census filter %v: a work item census is never filtered on its own repository", f)
 				}
 			}
+			// CHAOS-12505 ruling 2: a census the keyed read could not scope owes
+			// the read's sentence to every caller class, and its terminal says
+			// no "No work item matched".
+			unread := c.reason == ReasonCensusError
+			if resolution.WorkItemLinkScopeUnread != unread {
+				t.Fatalf("WorkItemLinkScopeUnread = %t, want %t", resolution.WorkItemLinkScopeUnread, unread)
+			}
+			if got := resolution.WorkItemLinkLimitation == contractsv1.ContextFabricWorkItemLinksUnreadLimitation; got != unread {
+				t.Fatalf("WorkItemLinkLimitation = %q, want the unread sentence %t", resolution.WorkItemLinkLimitation, unread)
+			}
 		})
+	}
+}
+
+// TestTheKeyedLinkReadIsAskedOncePerRound: the census and its cross-check
+// share what the keyed read decided, so the cross-check of the census's own
+// ids reads nothing new, and the read is asked for exactly the census's ids.
+func TestTheKeyedLinkReadIsAskedOncePerRound(t *testing.T) {
+	t.Parallel()
+	var asked [][]string
+	counting := func(deps *ResolveDeps) {
+		walkedPopulation([]string{linkScopeItem(0)}, true, nil)(deps)
+		inner := deps.LinkScopedWorkItemsOf
+		deps.LinkScopedWorkItemsOf = func(ctx context.Context, scope contextfabric.RequestedScope, ids []string) (map[string]string, bool, error) {
+			asked = append(asked, append([]string(nil), ids...))
+			return inner(ctx, scope, ids)
+		}
+	}
+	resolution, _, _ := resolveLinkScoped(t, storage.Principal{OrgID: "org_1"}, counting)
+	if len(resolution.Committed) != 1 || resolution.Committed[0].CanonicalID != linkScopeItem(0) {
+		t.Fatalf("committed %v, want the linked item", resolution.Committed)
+	}
+	if len(asked) != 1 || len(asked[0]) != linkScopeItems {
+		t.Fatalf("keyed read asked %d times (%v), want once, for the census's %d satisfiers", len(asked), asked, linkScopeItems)
 	}
 }
 
@@ -177,8 +217,15 @@ func TestALinkScopedSatisfierStillMeetsTheCallersGrants(t *testing.T) {
 // context, and nowhere else.
 func TestTheScopedCensusRecordsItsAdmittedSatisfiersForThisCallOnly(t *testing.T) {
 	t.Parallel()
-	scope := &linkScope{read: func(context.Context) (map[string]string, bool, error) {
-		return map[string]string{"a": "explicit_text", "b": "native"}, true, nil
+	scope := &linkScope{decided: map[string]string{}, read: func(_ context.Context, ids []string) (map[string]string, bool, error) {
+		linked := map[string]string{"a": "explicit_text", "b": "native"}
+		tiers := map[string]string{}
+		for _, id := range ids {
+			if tier, ok := linked[id]; ok {
+				tiers[id] = tier
+			}
+		}
+		return tiers, true, nil
 	}}
 	ctx := contextfabric.WithWorkItemCensusRepositoryScopeRecorder(context.Background())
 	outcome, err := withinLinkScope(ctx, scope, CensusOutcome{Count: 2, SatisfierCanonicalIDs: []string{"a", "c"}})
@@ -233,7 +280,7 @@ func TestALinkWalkThatOutlastsTheRoundBudgetIsNoCensus(t *testing.T) {
 		cutBy       error
 	}
 	walkOutlastsTheBudget := func(deps *ResolveDeps) {
-		deps.LinkScopedWorkItems = func(ctx context.Context, _ contextfabric.RequestedScope) (map[string]string, bool, error) {
+		deps.LinkScopedWorkItemsOf = func(ctx context.Context, _ contextfabric.RequestedScope, _ []string) (map[string]string, bool, error) {
 			deadline, ok := ctx.Deadline()
 			if !ok {
 				return nil, false, errors.New("the link walk ran without the round's deadline")
