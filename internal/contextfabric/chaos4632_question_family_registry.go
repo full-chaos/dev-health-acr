@@ -401,6 +401,9 @@ var questionFamilyDefinitions = []QuestionFamilyDefinition{
 		RenderKinds: []contractsv1.ContextFabricRenderKind{
 			contractsv1.ContextFabricRenderKindTable,
 			contractsv1.ContextFabricRenderKindSeries,
+			// CHAOS-12608: one team's completion curve, drawn only on
+			// positive evidence (completionForecastShape).
+			contractsv1.ContextFabricRenderKindForecast,
 		},
 		Budget:           PlanBudgetSingleSubject,
 		CompatibleShapes: []InvestigationShape{ShapeSingleSubject},
@@ -629,7 +632,6 @@ func DeclaredUnproducedRenderKinds() []contractsv1.ContextFabricRenderKind {
 		contractsv1.ContextFabricRenderKindSunburst,
 		contractsv1.ContextFabricRenderKindSankey,
 		contractsv1.ContextFabricRenderKindBurndown,
-		contractsv1.ContextFabricRenderKindForecast,
 	}
 }
 

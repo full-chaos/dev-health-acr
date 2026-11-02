@@ -1093,7 +1093,9 @@ func buildContextFabricInvestigator(ctx context.Context, request buildRequest, p
 		InvestmentTreemapEnabled: request.config.ContextFabricInvestmentTreemapEnabled,
 		// See Config.ContextFabricComparisonTableEnabled.
 		ComparisonTableEnabled: request.config.ContextFabricComparisonTableEnabled,
-		FactCapabilities:       factRegistry.Capabilities(),
+		// CHAOS-12608: the forecast draws the distribution the same switch serves.
+		CompletionForecastEnabled: request.config.CompletionDistributionEnabled,
+		FactCapabilities:          factRegistry.Capabilities(),
 		// See Config.ServerCompletenessAuthorityEnabled's own doc comment.
 		ServerCompletenessAuthorityEnabled: request.config.ServerCompletenessAuthorityEnabled,
 		// See Config.AnchorBindingCountEnabled.

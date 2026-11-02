@@ -15,6 +15,10 @@ type RenderShapeOptions struct {
 	// ComparisonSideBySide turns on the comparison_side_by_side rule
 	// (CHAOS-12513). See Config.ContextFabricComparisonTableEnabled.
 	ComparisonSideBySide bool
+	// CompletionForecast turns on the completion_forecast rule (CHAOS-12608).
+	// See Config.CompletionDistributionEnabled: the rule draws the table that
+	// switch serves, so one switch gates both.
+	CompletionForecast bool
 	// FieldScope reads the declared scope of a field. The comparison rule
 	// reads it. A nil lookup scopes nothing, so that rule finds no cell.
 	FieldScope FactFieldScopeLookup
@@ -171,6 +175,10 @@ func WithoutDisabledRenderShapes(result InvestigationResult, options RenderShape
 			}
 		case contractsv1.ContextFabricRenderRuleComparisonSideBySide:
 			if !options.ComparisonSideBySide {
+				continue
+			}
+		case contractsv1.ContextFabricRenderRuleCompletionForecast:
+			if !options.CompletionForecast {
 				continue
 			}
 		}

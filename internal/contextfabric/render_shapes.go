@@ -250,6 +250,19 @@ const (
 	RenderShapeSkipNoSharedMeasure RenderShapeSkipReason = "no_shared_measure"
 	// RenderShapeSkipComparisonUnprovable -- the contract refused the table.
 	RenderShapeSkipComparisonUnprovable RenderShapeSkipReason = "comparison_unprovable"
+	// The completion_forecast rule's reasons (CHAOS-12608).
+	// RenderShapeSkipNotForecastIntent -- this turn's frame asks for neither
+	// completion nor remaining work.
+	RenderShapeSkipNotForecastIntent RenderShapeSkipReason = "not_forecast_intent"
+	// RenderShapeSkipNoCompletionDistribution -- no claimed team workload fact
+	// carries a served completion distribution.
+	RenderShapeSkipNoCompletionDistribution RenderShapeSkipReason = "no_completion_distribution"
+	// RenderShapeSkipMoreThanOneScope -- several claimed scopes carry one; the
+	// answer does not choose a scope for the reader.
+	RenderShapeSkipMoreThanOneScope RenderShapeSkipReason = "more_than_one_scope"
+	// RenderShapeSkipDistributionUnusable -- a row is not a day and a share,
+	// or the contract refused the shape.
+	RenderShapeSkipDistributionUnusable RenderShapeSkipReason = "distribution_unusable"
 )
 
 // cohortRenderIntent reports whether a cohort chart is an answer TO this
@@ -348,6 +361,14 @@ func selectRenderShapes(result InvestigationResult, frame *QuestionFrame, option
 	}
 
 	// CHAOS-12513: ahead of the trends, for the same reason.
+	if !options.CompletionForecast {
+		event.skip(contractsv1.ContextFabricRenderRuleCompletionForecast, RenderShapeSkipRuleDisabled)
+	} else if forecast, reason := completionForecastShape(result, frame); forecast != nil {
+		shapes = append(shapes, *forecast)
+	} else {
+		event.skip(contractsv1.ContextFabricRenderRuleCompletionForecast, reason)
+	}
+
 	if !options.ComparisonSideBySide {
 		event.skip(contractsv1.ContextFabricRenderRuleComparisonSideBySide, RenderShapeSkipRuleDisabled)
 	} else {
@@ -977,6 +998,7 @@ var renderShapeRules = []contractsv1.ContextFabricRenderShapeRule{
 	contractsv1.ContextFabricRenderRuleDatedFactTrend,
 	contractsv1.ContextFabricRenderRuleInvestmentThemeShare,
 	contractsv1.ContextFabricRenderRuleComparisonSideBySide,
+	contractsv1.ContextFabricRenderRuleCompletionForecast,
 }
 
 // Accounted is CHAOS-4621's structural invariant, as code rather than as a
@@ -1055,6 +1077,8 @@ func RenderShapeSkipReasonLineVocabulary() []string {
 		string(RenderShapeSkipTooManySignals), string(RenderShapeSkipNoDeclaredTable), string(RenderShapeSkipNoTimeSeriesTable),
 		string(RenderShapeSkipClaimFieldNotAMeasure), string(RenderShapeSkipUnresolvableMeasureRoles),
 		string(RenderShapeSkipNoPlottableMeasure), string(RenderShapeSkipShapeBudgetSpent), string(RenderShapeSkipNotPlanAuthorized),
+		string(RenderShapeSkipNotForecastIntent), string(RenderShapeSkipNoCompletionDistribution),
+		string(RenderShapeSkipMoreThanOneScope), string(RenderShapeSkipDistributionUnusable),
 	}
 }
 
