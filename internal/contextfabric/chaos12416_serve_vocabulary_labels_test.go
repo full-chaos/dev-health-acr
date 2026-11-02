@@ -157,12 +157,14 @@ func wordRows() []wordRow {
 		// CHAOS-12639: each cell of a column its table declares in a vocabulary,
 		// on either table, and no cell of a column no table declares.
 		{"claimed column vocabulary cell", func(r *InvestigationResult) {
-			quality, risk, undeclared := "quality", "risk", "maintenance"
+			quality, risk, undeclared, operational := "quality", "risk", "maintenance", "operational"
 			themed := map[string]contractsv1.ContextFabricVocabulary{"theme": contractsv1.ContextFabricVocabularyInvestmentTheme}
 			r.ClaimedFacts = []contractsv1.ContextFabricClaimedFact{
 				{
-					Table:           &contractsv1.ContextFabricClaimedFactTable{Field: "theme_breakdown", ColumnVocabularies: themed},
-					Rows:            []contractsv1.ContextFabricClaimedFactRow{{Fields: map[string]contractsv1.ContextFabricScalarValue{"theme": {String: &quality}}}},
+					Table: &contractsv1.ContextFabricClaimedFactTable{Field: "theme_breakdown", ColumnVocabularies: themed},
+					// A cell of an undeclared column that holds a theme token gets no
+					// word: only the declared column is the vocabulary's.
+					Rows:            []contractsv1.ContextFabricClaimedFactRow{{Fields: map[string]contractsv1.ContextFabricScalarValue{"theme": {String: &quality}, "attribution": {String: &operational}}}},
 					TimeSeriesTable: &contractsv1.ContextFabricClaimedFactTable{Field: "theme_daily", ColumnVocabularies: themed},
 					TimeSeriesRows:  []contractsv1.ContextFabricClaimedFactRow{{Fields: map[string]contractsv1.ContextFabricScalarValue{"theme": {String: &risk}}}},
 				},
@@ -173,8 +175,10 @@ func wordRows() []wordRow {
 			}
 		}, func() map[string]string {
 			want := map[string]string{"investment_theme:quality": "Quality / Reliability", "investment_theme:risk": "Risk / Security"}
-			if word, ok := contractsv1.ContextFabricVocabularyLabel(contractsv1.ContextFabricVocabularyFactField, "theme"); ok {
-				want["fact_field:theme"] = word
+			for _, column := range []string{"theme", "attribution"} {
+				if word, ok := contractsv1.ContextFabricVocabularyLabel(contractsv1.ContextFabricVocabularyFactField, column); ok {
+					want["fact_field:"+column] = word
+				}
 			}
 			return want
 		}()},
