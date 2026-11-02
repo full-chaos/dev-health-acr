@@ -1,5 +1,5 @@
 # Generated from acr-v1.json by `go run ./cmd/contractcheck -write`. DO NOT EDIT.
-# canonical-content-sha256: 89c7b5afdf07503d358fe495a8bea1707ebabb2fbc2cbe6e32ca5085233ffe97
+# canonical-content-sha256: c8fc6e2d1fc6b383e9d281ca9edf00a3d865a0858793f2ba2772ffe7f092df1d
 openapi: "3.1.0"
 info:
   description: "Private hosted API for evidence-backed agent context packets, authorized provenance expansion, replay snapshots, and opt-in episode writeback. External Push is a separate API plane."
@@ -1283,6 +1283,9 @@ paths:
                   const: "urn:ietf:params:oauth:grant-type:token-exchange"
                 requested_token_type:
                   const: "urn:ietf:params:oauth:token-type:access_token"
+                resource:
+                  description: "Organization selector, urn:acr:org:\u003clowercase uuid\u003e. Omit it when the identity is bound in one organization; required when it is bound in several (invalid_request otherwise). An organization with no enabled binding for the identity is refused with invalid_target."
+                  type: "string"
                 scope:
                   description: "Space-delimited requested scope; may only narrow the resolved binding's grant, never widen it."
                   type: "string"

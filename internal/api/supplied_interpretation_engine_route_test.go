@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -63,11 +64,19 @@ const suppliedRouteSynthesisIdentity = "test-provider/synthesis-model"
 type authorizingGraph struct {
 	liveGraphReader
 	outcome contextfabric.StoredSubjectOutcome
+	// offersUnreadable makes the window gate's offers-only pass fail. The gate
+	// answers a turn whose window is its only question (CHAOS-4451); a pass
+	// that cannot show that keeps the gate, so a turn with no window of its
+	// own stops at the window prompt, before synthesis.
+	offersUnreadable bool
 }
 
 // ResolveSubjects commits the project on a proven basis, so the commit stands
 // on its own and the answer is not asked to affirm it.
-func (g authorizingGraph) ResolveSubjects(context.Context, storage.Principal, contextfabric.InvestigationRequest, contextfabric.InterpretedQuestion, contextfabric.ResolvedGraphBinding, *contextfabric.ConfirmedExpectedKind, *contextfabric.ConfirmedAnchorSelection, *contextfabric.QuestionFrame, contextfabric.SubjectKind) (contextfabric.SubjectResolution, contextfabric.StructureOfferMaterial, contextfabric.CommitBasisSet, contextfabric.CommitDecisionDigestSet, error) {
+func (g authorizingGraph) ResolveSubjects(ctx context.Context, _ storage.Principal, _ contextfabric.InvestigationRequest, _ contextfabric.InterpretedQuestion, _ contextfabric.ResolvedGraphBinding, _ *contextfabric.ConfirmedExpectedKind, _ *contextfabric.ConfirmedAnchorSelection, _ *contextfabric.QuestionFrame, _ contextfabric.SubjectKind) (contextfabric.SubjectResolution, contextfabric.StructureOfferMaterial, contextfabric.CommitBasisSet, contextfabric.CommitDecisionDigestSet, error) {
+	if g.offersUnreadable && contextfabric.OffersOnlyResolution(ctx) {
+		return contextfabric.SubjectResolution{}, contextfabric.StructureOfferMaterial{}, nil, nil, errors.New("offers-only pass unreadable")
+	}
 	bases := contextfabric.CommitBasisSet{}
 	bases.Record(g.project, contextfabric.CommitBasisCallerCanonicalID)
 	return contextfabric.SubjectResolution{Candidates: []contextfabric.SubjectCandidate{}, Committed: []contextfabric.SubjectRef{g.project}},
@@ -122,10 +131,15 @@ func newSuppliedRouteAppWithStore(t *testing.T, interpreter contextfabric.Runtim
 // behind the route.
 func newSuppliedRouteEngine(t *testing.T, interpreter contextfabric.RuntimeQuestionInterpreter, outcome contextfabric.StoredSubjectOutcome, synthesized *[]contextfabric.InterpretedQuestion, store contextfabric.InvestigationResultStore) *contextfabric.Engine {
 	t.Helper()
+	return newSuppliedRouteEngineOver(t, interpreter, authorizingGraph{liveGraphReader: liveGraphReader{project: suppliedRouteProject()}, outcome: outcome}, synthesized, store)
+}
+
+func newSuppliedRouteEngineOver(t *testing.T, interpreter contextfabric.RuntimeQuestionInterpreter, graph authorizingGraph, synthesized *[]contextfabric.InterpretedQuestion, store contextfabric.InvestigationResultStore) *contextfabric.Engine {
+	t.Helper()
 	project := suppliedRouteProject()
 	engine, err := contextfabric.NewEngine(contextfabric.EngineDependencies{
 		Interpreter: interpreter,
-		Graph:       authorizingGraph{liveGraphReader: liveGraphReader{project: project}, outcome: outcome},
+		Graph:       graph,
 		Facts:       liveFactReader{bundle: liveCanonicalFacts(project)},
 		Synthesizer: fixedAnswerSynthesizer{interpretations: synthesized},
 		Results:     store,
