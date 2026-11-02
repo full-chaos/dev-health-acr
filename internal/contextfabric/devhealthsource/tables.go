@@ -398,7 +398,7 @@ func scanWorkItemRow(r contextpacket.ClickHouseRowScanner) ([]candidate, error) 
 		// value, so a whitespace-only title falls back exactly as before.
 		label := title
 		if strings.TrimSpace(label) == "" {
-			label = workItemID
+			label = contextfabric.ReadableSourceID(contextfabric.SubjectWorkItem, workItemID)
 		}
 		subject := contractsv1.ContextFabricSubjectRef{Kind: contractsv1.ContextFabricSubjectWorkItem, CanonicalID: canonicalID, Label: label}
 		properties := map[string]contractsv1.ContextFabricScalarValue{}
@@ -1130,7 +1130,7 @@ func queryWorkItemDependencies(ctx context.Context, client contextpacket.ClickHo
 			return []candidate{progressCandidate(observedAt, rowSortKey)}, nil
 		}
 		sourceValidFrom, sourceValidTo := requiredTime(sourceCreatedAt), optionalTime(sourceHasEnded, sourceEndedAt)
-		sourceSubject := contractsv1.ContextFabricSubjectRef{Kind: contractsv1.ContextFabricSubjectWorkItem, CanonicalID: sourceCanonicalID, Label: sourceID}
+		sourceSubject := contractsv1.ContextFabricSubjectRef{Kind: contractsv1.ContextFabricSubjectWorkItem, CanonicalID: sourceCanonicalID, Label: contextfabric.ReadableSourceID(contextfabric.SubjectWorkItem, sourceID)}
 		if linkEnded != 0 {
 			return endedDependencyCandidates(relationshipType, sourceSubject, targetID, targetHasCreated != 0, targetRepoID, endedAt.UTC(), observedAt, rowSortKey, seenNodeTombstones)
 		}
@@ -1154,7 +1154,7 @@ func queryWorkItemDependencies(ctx context.Context, client contextpacket.ClickHo
 			if refOmitted {
 				return []candidate{progressCandidate(observedAt, rowSortKey)}, nil
 			}
-			refSubject := contractsv1.ContextFabricSubjectRef{Kind: contractsv1.ContextFabricSubjectWorkItemRef, CanonicalID: refID, Label: targetID}
+			refSubject := contractsv1.ContextFabricSubjectRef{Kind: contractsv1.ContextFabricSubjectWorkItemRef, CanonicalID: refID, Label: contextfabric.ReadableSourceID(contextfabric.SubjectWorkItemRef, targetID)}
 			// The stub's own window is the SOURCE row's window alone
 			// (edgeValidity with nil target bounds reduces to exactly
 			// that, laterTime/earlierTime's own nil-is-unbounded
@@ -1216,7 +1216,7 @@ func queryWorkItemDependencies(ctx context.Context, client contextpacket.ClickHo
 		// CHAOS-4874: see the ref-form branch above for why the source
 		// spelling is translated here rather than cast straight through.
 		edgeType, edgeSwap, edgeSpelling := dependencyRelationshipType(relationshipType)
-		targetSubject := contractsv1.ContextFabricSubjectRef{Kind: contractsv1.ContextFabricSubjectWorkItem, CanonicalID: targetCanonicalID, Label: targetID}
+		targetSubject := contractsv1.ContextFabricSubjectRef{Kind: contractsv1.ContextFabricSubjectWorkItem, CanonicalID: targetCanonicalID, Label: contextfabric.ReadableSourceID(contextfabric.SubjectWorkItem, targetID)}
 		edgeFrom, edgeTo := orientDependencyEndpoints(sourceSubject, targetSubject, edgeSwap)
 		relationshipID := identity.DeriveRelationship(identity.RelationshipFamilyWorkItemDependency, edgeFrom.CanonicalID, edgeTo.CanonicalID, edgeSpelling)
 		relationship := contractsv1.ContextFabricRelationshipProjection{
@@ -1416,8 +1416,8 @@ func queryWorkItemHierarchy(ctx context.Context, client contextpacket.ClickHouse
 		hierarchyRef, _ := evidenceref.Mint(contractsv1.ContextFabricEvidenceEntityWorkItemHierarchyV2, repoID, childID, parentID)
 		relationship := contractsv1.ContextFabricRelationshipProjection{
 			RelationshipID: relationshipID, Type: contractsv1.ContextFabricRelationshipPartOf,
-			From:       contractsv1.ContextFabricSubjectRef{Kind: contractsv1.ContextFabricSubjectWorkItem, CanonicalID: childCanonicalID, Label: childID},
-			To:         contractsv1.ContextFabricSubjectRef{Kind: contractsv1.ContextFabricSubjectWorkItem, CanonicalID: parentCanonicalID, Label: parentID},
+			From:       contractsv1.ContextFabricSubjectRef{Kind: contractsv1.ContextFabricSubjectWorkItem, CanonicalID: childCanonicalID, Label: contextfabric.ReadableSourceID(contextfabric.SubjectWorkItem, childID)},
+			To:         contractsv1.ContextFabricSubjectRef{Kind: contractsv1.ContextFabricSubjectWorkItem, CanonicalID: parentCanonicalID, Label: contextfabric.ReadableSourceID(contextfabric.SubjectWorkItem, parentID)},
 			Derivation: contractsv1.ContextFabricDerivationCanonicalStructured, EpistemicStatus: contractsv1.ContextFabricEpistemicObserved,
 			Authorization: workItemAuthorization(repoID, repoSlug), EvidenceRefIDs: []string{hierarchyRef},
 			ObservedAt: observedAt, ValidFrom: validFrom, ValidTo: validTo, SourceVersion: ClickHouseSourceVersion,

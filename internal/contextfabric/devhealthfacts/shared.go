@@ -1373,7 +1373,11 @@ import (
 // v266 -> v267: a ticket key of any tracker binds a handle when the caller holds
 // its prefix (CHAOS-12463). An answer saved under v266 answered such a question by
 // search.
-const QueryVersion = "devhealthfacts.clickhouse.v267"
+//
+// v267 -> v268: an edge's fact and a stub node's label name a work item, project
+// or team in reader words, not by its raw source id (CHAOS-12619). An answer saved
+// under v267 can show a raw id in a path's why_relevant.
+const QueryVersion = "devhealthfacts.clickhouse.v268"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each
