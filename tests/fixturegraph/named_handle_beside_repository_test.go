@@ -3,6 +3,7 @@
 package fixturegraph
 
 import (
+	"encoding/json"
 	"fmt"
 	"slices"
 	"strings"
@@ -23,7 +24,7 @@ func TestANamedHandleBesideARepository(t *testing.T) {
 	if lone == "" || elsewhere == "" {
 		t.Fatalf("the worlds hold no such numbers: %q %q", lone, elsewhere)
 	}
-	ask := func(t *testing.T, question, kind string) (any, string) {
+	ask := func(t *testing.T, question, kind string) (doc, string) {
 		t.Helper()
 		interpretation := doc{
 			"shape": "single_subject", "requested_judgment": "state of the subject",
@@ -48,9 +49,9 @@ func TestANamedHandleBesideARepository(t *testing.T) {
 			args["parent_result_id"] = rid
 			args["prior_candidate_receipts"] = []doc{{"result_id": rid, "receipt_id": str(option, "receipt_id")}}
 			d, raw = c.call("investigate_with_interpretation", args)
-			return structured(d), raw
+			return d, raw
 		}
-		return s, raw
+		return d, raw
 	}
 	committed := func(s any) []string {
 		kinds := []string{}
@@ -60,35 +61,36 @@ func TestANamedHandleBesideARepository(t *testing.T) {
 		return kinds
 	}
 	// On a client synthesis turn a statistical commit waits for the answer to affirm
-	// it, so the subject the service committed is read from the synthesis input.
-	toSynthesis := func(s any) string {
-		in, _ := s.(map[string]any)["synthesis_input"].(map[string]any)
-		return fmt.Sprint(get(in, "graph", "resolution", "committed"))
+	// it, so the subjects the service committed are read from the synthesis input.
+	toSynthesis := func(d doc) string {
+		encoded, _ := json.Marshal(synthesisInputOf(d))
+		return string(encoded)
 	}
 	limitations := func(s any) string { return fmt.Sprint(get(s, "limitations")) }
 	question := func(number string) string {
 		return fmt.Sprintf("What is the state of pull request %s in %s?", number, one)
 	}
 	t.Run("a lone subject commits beside the repository", func(t *testing.T) {
-		s, raw := ask(t, question(lone), "pull_request")
-		if got := toSynthesis(s); !strings.Contains(got, "pull_request:") || !strings.Contains(got, "repository:") {
-			t.Fatalf("committed to synthesis = %s, want the pull request and the repository: %.3000s", got, raw)
+		d, raw := ask(t, question(lone), "pull_request")
+		if got := toSynthesis(d); !strings.Contains(got, "pull_request:") || !strings.Contains(got, "repository:") {
+			t.Fatalf("synthesis input holds %d bytes and not both subjects: %.3000s", len(got), raw)
 		}
 	})
-	for name, number := range map[string]string{"no such number": "987654", "a number only the other repository holds": elsewhere} {
-		t.Run(name, func(t *testing.T) {
-			s, raw := ask(t, question(number), "pull_request")
-			if got := committed(s); len(got) != 0 {
-				t.Fatalf("committed = %v, want nothing: %.3000s", got, raw)
-			}
-			if !strings.Contains(limitations(s), "of the requested scope") {
-				t.Fatalf("limitations = %s, want the repository's sentence: %.3000s", limitations(s), raw)
-			}
-		})
-	}
+	// Both worlds hold every number of the second, so no number lives in the second
+	// alone: the real-store test pins a number another repository holds.
+	t.Run("no such number", func(t *testing.T) {
+		d, raw := ask(t, question("987654"), "pull_request")
+		s := structured(d)
+		if got := committed(s); len(got) != 0 {
+			t.Fatalf("committed = %v, want nothing: %.3000s", got, raw)
+		}
+		if !strings.Contains(limitations(s), "of the requested scope") {
+			t.Fatalf("limitations = %s, want the repository's sentence: %.3000s", limitations(s), raw)
+		}
+	})
 	t.Run("a question about the repository keeps its answer", func(t *testing.T) {
-		s, raw := ask(t, fmt.Sprintf("How is %s doing since pull request 987654 merged?", one), "repository")
-		if got := committed(s); !slices.Equal(got, []string{"repository"}) {
+		d, raw := ask(t, fmt.Sprintf("How is %s doing since pull request 987654 merged?", one), "repository")
+		if got := committed(structured(d)); !slices.Equal(got, []string{"repository"}) {
 			t.Fatalf("committed = %v, want the repository alone: %.3000s", got, raw)
 		}
 	})
