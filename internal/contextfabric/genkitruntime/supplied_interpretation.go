@@ -189,6 +189,7 @@ func (s *SuppliedInterpreter) InterpretSuppliedQuestion(ctx context.Context, pri
 	}
 	receipt.Outcome = "success"
 	applyInterpretationCaptures(&receipt, output)
+	carryWindowPick(&interpreted, receipt)
 	return interpreted, receipt, nil
 }
 
