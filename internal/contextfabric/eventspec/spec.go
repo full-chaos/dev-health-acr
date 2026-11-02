@@ -2146,6 +2146,25 @@ var WindowClassification = Event{
 	},
 }
 
+// InterpretationTerms is the Info line of what one interpretation kept of the question: the subject-term count, the stated kind, whether the question text binds a handle, and whether a term has a repository slug's shape (CHAOS-12632). No question text.
+var InterpretationTerms = Event{
+	ID:                       "contextfabric.interpretation_terms",
+	Msg:                      "context fabric interpretation terms",
+	Level:                    LevelInfo,
+	Multiplicity:             MultiplicityZeroOrOnePerRequest,
+	RequiredOnlyConstruction: true,
+	Attribution:              []string{"request_id"},
+	BoundedAggregation:       "at most one line per investigation: written once, after the question is interpreted.",
+	Fields: []Field{
+		{Key: "org_id", Type: FieldString, Presence: PresenceRequired},
+		{Key: "subject_term_count", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "stated_kind", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: contextfabric.SubjectKindLogVocabulary()},
+		{Key: "handle_bound", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: contextfabric.InterpretationHandleBoundVocabulary()},
+		{Key: "repository_slug_term", Type: FieldBool, Presence: PresenceRequired},
+		{Key: "request_id", Type: FieldString, Presence: PresenceConditional, Applicability: requestIDApplicability},
+	},
+}
+
 // WindowCarry is the Info line of one window carry attempt: the outcome, the depth of the chain, the seed it started from and whether stored ancestry supplied it.
 var WindowCarry = Event{
 	ID:                       "contextfabric.window_carry",
@@ -5844,6 +5863,7 @@ var All = []Event{
 	WindowGatedForConfirmation,
 	WindowCanonicalizationOutcome,
 	WindowClassification,
+	InterpretationTerms,
 	WindowCarry,
 	KindCarry,
 	ConfirmedNeedLedgerWindow,
