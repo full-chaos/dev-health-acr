@@ -745,18 +745,22 @@ func ContextFabricEvidenceRefLabel(refID string) (string, bool) {
 	id := strings.Join(parts[3:], ":")
 	label, known := contextFabricEvidenceEntityLabels[ContextFabricEvidenceEntityType(entityType)]
 	if !known {
-		if id == "" {
-			return "Evidence", false
-		}
-		return clampLabel("Evidence: " + id), false
+		// An id of a type this build does not know cannot be read for a reader
+		// (CHAOS-12620): the generic noun alone, and the ref stays in Details.
+		return "Evidence", false
 	}
 	if id == "" {
 		return label, true
 	}
+	var segments []string
 	if EncodedEvidenceEntityType(ContextFabricEvidenceEntityType(entityType)) {
-		id = decodedEvidenceID(id)
+		segments = decodedEvidenceSegments(id)
 	}
-	return clampLabel(label + ": " + id), true
+	display := evidenceIDDisplay(ContextFabricEvidenceEntityType(entityType), id, segments)
+	if display == "" {
+		return label, true
+	}
+	return clampLabel(label + ": " + display), true
 }
 
 // decodedEvidenceID renders an encoded (".v2") id for display: each
@@ -766,12 +770,17 @@ func ContextFabricEvidenceRefLabel(refID string) (string, bool) {
 // then "%25" -> '%'); TestDecodedEvidenceIDMatchesTheIdentityCodec pins the
 // two against each other, since contracts/v1 imports nothing internal.
 func decodedEvidenceID(id string) string {
+	return strings.Join(decodedEvidenceSegments(id), ":")
+}
+
+// decodedEvidenceSegments is an encoded (".v2") id's segments, each unescaped.
+func decodedEvidenceSegments(id string) []string {
 	segments := strings.Split(id, ":")
 	for index, segment := range segments {
 		segment = strings.ReplaceAll(segment, "%3A", ":")
 		segments[index] = strings.ReplaceAll(segment, "%25", "%")
 	}
-	return strings.Join(segments, ":")
+	return segments
 }
 
 // countPhrase renders a detail's structured Count for a label — the ONLY
