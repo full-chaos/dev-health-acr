@@ -23,7 +23,7 @@ var (
 	commitRetractionKeys       = []string{"time", "level", "msg", "org_id", "commit_basis", "subject_kind", "winning_mechanism", "provisional_committed", "final_committed", "request_id"}
 	commitKeptKeys             = []string{"time", "level", "msg", "org_id", "subject_kind", "request_id"}
 	synthesisOverrideKeys      = []string{"time", "level", "msg", "org_id", "from_status", "to_status", "reason", "committed_count", "unasked_fact_kinds", "request_id"}
-	reuseOutcomeKeys           = []string{"time", "level", "msg", "org_id", "outcome", "ownership_routing_version", "request_id"}
+	reuseOutcomeKeys           = []string{"time", "level", "msg", "org_id", "outcome", "ownership_routing_version", "reason", "subject_count", "request_id"}
 	reuseBypassKeys            = []string{"time", "level", "msg", "org_id", "reason", "request_id"}
 	reuseContainmentKeys       = []string{
 		"time", "level", "msg", "org_id", "demanded_refs", "visible_refs", "missing_refs", "missing_citation", "stripped_refs", "stripped_labels",
@@ -187,12 +187,35 @@ func TestSynthesisStatusOverrideLineCertifiesEveryProducerValueAndRefusesAnyOthe
 func TestAnswerReuseLinesCertifyEveryProducerValueAndRefuseAnyOther(t *testing.T) {
 	t.Parallel()
 	for _, outcome := range contextfabric.AnswerReuseOutcomeVocabulary() {
+		if outcome == string(contextfabric.AnswerReuseMissAuthorization) {
+			continue // certified with each reason below; it never certifies without one
+		}
 		var buf bytes.Buffer
 		sink, ctx := answerLineSink(&buf, slog.LevelInfo)
-		sink.RecordAnswerReuse(ctx, principalOrg1, contextfabric.AnswerReuseOutcome(outcome), contextfabric.OwnershipRoutingVersion)
-		pinKeys(t, bytes.NewBuffer(buf.Bytes()), reuseOutcomeKeys, 1)
+		sink.RecordAnswerReuse(ctx, principalOrg1, contextfabric.AnswerReuseOutcome(outcome), contextfabric.OwnershipRoutingVersion, contextfabric.AnswerReuseRefusal{})
+		pinKeys(t, bytes.NewBuffer(buf.Bytes()), without(reuseOutcomeKeys, "reason", "subject_count"), 1)
 		certifyRequestLine(t, buf.Bytes(), eventspec.AnswerReuseOutcome, map[string]any{"org_id": "org_1", "outcome": outcome, "ownership_routing_version": contextfabric.OwnershipRoutingVersion})
 	}
+	// CHAOS-12511: every refusal reason certifies on a miss_authorization line,
+	// and the subject count rides only the cap reason.
+	for _, reason := range contextfabric.AnswerReuseRefusalReasonVocabulary() {
+		var buf bytes.Buffer
+		sink, ctx := answerLineSink(&buf, slog.LevelInfo)
+		refusal := contextfabric.AnswerReuseRefusal{Reason: contextfabric.AnswerReuseRefusalReason(reason), SubjectCount: 51}
+		sink.RecordAnswerReuse(ctx, principalOrg1, contextfabric.AnswerReuseMissAuthorization, contextfabric.OwnershipRoutingVersion, refusal)
+		want := map[string]any{"org_id": "org_1", "outcome": "miss_authorization", "reason": reason}
+		keys := without(reuseOutcomeKeys, "subject_count")
+		if reason == string(contextfabric.AnswerReuseRefusalSubjectCapExceeded) {
+			want["subject_count"] = 51
+			keys = reuseOutcomeKeys
+		}
+		pinKeys(t, bytes.NewBuffer(buf.Bytes()), keys, 1)
+		certifyRequestLine(t, buf.Bytes(), eventspec.AnswerReuseOutcome, want)
+	}
+	var refused bytes.Buffer
+	refusedSink, refusedCtx := answerLineSink(&refused, slog.LevelInfo)
+	refusedSink.RecordAnswerReuse(refusedCtx, principalOrg1, contextfabric.AnswerReuseMissAuthorization, contextfabric.OwnershipRoutingVersion, contextfabric.AnswerReuseRefusal{Reason: "future_reason"})
+	certifyRefused(t, refused.Bytes(), eventspec.AnswerReuseOutcome, "an unknown refusal reason")
 	for _, reason := range contextfabric.AnswerReuseBypassReasonVocabulary() {
 		var buf bytes.Buffer
 		sink, ctx := answerLineSink(&buf, slog.LevelInfo)
@@ -202,10 +225,10 @@ func TestAnswerReuseLinesCertifyEveryProducerValueAndRefuseAnyOther(t *testing.T
 	}
 	var buf bytes.Buffer
 	sink, ctx := answerLineSink(&buf, slog.LevelInfo)
-	sink.RecordAnswerReuse(ctx, principalOrg1, "future_outcome", contextfabric.OwnershipRoutingVersion)
+	sink.RecordAnswerReuse(ctx, principalOrg1, "future_outcome", contextfabric.OwnershipRoutingVersion, contextfabric.AnswerReuseRefusal{})
 	certifyRefused(t, buf.Bytes(), eventspec.AnswerReuseOutcome, "an unknown reuse outcome")
 	buf.Reset()
-	sink.RecordAnswerReuse(ctx, principalOrg1, contextfabric.AnswerReuseHit, "ownership-routing.v0")
+	sink.RecordAnswerReuse(ctx, principalOrg1, contextfabric.AnswerReuseHit, "ownership-routing.v0", contextfabric.AnswerReuseRefusal{})
 	certifyRefused(t, buf.Bytes(), eventspec.AnswerReuseOutcome, "an unknown ownership routing version")
 	buf.Reset()
 	sink.RecordAnswerReuseBypass(ctx, principalOrg1, "future_reason")
@@ -414,4 +437,46 @@ func TestAnswerabilityRolePatternsRefuseAKindOutsideTheVocabulary(t *testing.T) 
 		sink.RecordSubjectlessTerminal(ctx, principalOrg1, "ambiguous", "none", "none", "none", none)
 		certifyRequestLine(t, buf.Bytes(), eventspec.SubjectlessTerminal, nil)
 	}
+}
+
+// TestAMissAuthorizationLineWithoutItsReasonIsRefused (CHAOS-12519): the
+// outcome that several refusals share must always say which refusal it was,
+// and the cap reason must always carry its count. A line missing either is
+// refused, so the unnamed miss_authorization of CHAOS-12511 cannot return
+// silently.
+func TestAMissAuthorizationLineWithoutItsReasonIsRefused(t *testing.T) {
+	t.Parallel()
+	var bare bytes.Buffer
+	sink, ctx := answerLineSink(&bare, slog.LevelInfo)
+	sink.RecordAnswerReuse(ctx, principalOrg1, contextfabric.AnswerReuseMissAuthorization, contextfabric.OwnershipRoutingVersion, contextfabric.AnswerReuseRefusal{})
+	// A direct sink call with no reason writes the loud fallback, never a bare
+	// line, and the certifier refuses that fallback too.
+	if !strings.Contains(bare.String(), `"reason":"unattributed"`) {
+		t.Errorf("a direct miss_authorization call with an empty refusal did not write reason=unattributed: %s", bare.String())
+	}
+	certifyRefused(t, bare.Bytes(), eventspec.AnswerReuseOutcome, "a miss_authorization line with reason unattributed")
+	var named bytes.Buffer
+	namedSink, namedCtx := answerLineSink(&named, slog.LevelInfo)
+	namedSink.RecordAnswerReuse(namedCtx, principalOrg1, contextfabric.AnswerReuseMissAuthorization, contextfabric.OwnershipRoutingVersion,
+		contextfabric.AnswerReuseRefusal{Reason: contextfabric.AnswerReuseRefusalUnattributed})
+	certifyRefused(t, named.Bytes(), eventspec.AnswerReuseOutcome, "a line naming reason unattributed")
+	// A line that lost its reason key entirely is refused as well.
+	certifyRefused(t, []byte(strings.Replace(bare.String(), `"reason":"unattributed",`, "", 1)), eventspec.AnswerReuseOutcome, "a miss_authorization line with no reason")
+
+	var capLine bytes.Buffer
+	sink, ctx = answerLineSink(&capLine, slog.LevelInfo)
+	sink.RecordAnswerReuse(ctx, principalOrg1, contextfabric.AnswerReuseMissAuthorization, contextfabric.OwnershipRoutingVersion,
+		contextfabric.AnswerReuseRefusal{Reason: contextfabric.AnswerReuseRefusalSubjectCapExceeded, SubjectCount: 51})
+	withCount := capLine.String()
+	if !strings.Contains(withCount, `"subject_count":51,`) {
+		t.Fatalf("the cap line does not carry its count: %s", withCount)
+	}
+	certifyRequestLine(t, capLine.Bytes(), eventspec.AnswerReuseOutcome, map[string]any{"subject_count": 51})
+	certifyRefused(t, []byte(strings.Replace(withCount, `"subject_count":51,`, "", 1)), eventspec.AnswerReuseOutcome, "a subject_cap_exceeded line with no subject_count")
+
+	// A hit carries neither field and still certifies.
+	var hit bytes.Buffer
+	sink, ctx = answerLineSink(&hit, slog.LevelInfo)
+	sink.RecordAnswerReuse(ctx, principalOrg1, contextfabric.AnswerReuseHit, contextfabric.OwnershipRoutingVersion, contextfabric.AnswerReuseRefusal{})
+	certifyRequestLine(t, hit.Bytes(), eventspec.AnswerReuseOutcome, nil)
 }
