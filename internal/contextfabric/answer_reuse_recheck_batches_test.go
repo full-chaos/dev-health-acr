@@ -87,6 +87,10 @@ type recheckGraph struct {
 	hangPartial bool
 	// holdFor makes every read take this long and ignore its context.
 	holdFor time.Duration
+	// onHang runs when a hung read starts, and onReturn when a held read is
+	// about to return (CHAOS-12573): a test ends a context there, inside the read
+	// it is about, never on a timer that can fire before the recheck starts.
+	onHang, onReturn func()
 	// readDelay makes every read take this long, unless its context ends first.
 	readDelay time.Duration
 	// finishBefore makes the last discovery return this long before the
@@ -97,9 +101,11 @@ type recheckGraph struct {
 	// deadlines holds the deadline each read's context carried, zero for none.
 	deadlines []time.Time
 
-	resolves   []recheckResolveCall
-	discovers  []recheckDiscoverCall
-	removedFor [][]SubjectRef
+	resolves []recheckResolveCall
+	// prefixMemos is the work item key prefix memo each ResolveSubjects call saw.
+	prefixMemos []any
+	discovers   []recheckDiscoverCall
+	removedFor  [][]SubjectRef
 }
 
 // recheckHangGuard ends a hung read whose context never ends, so a recheck with
@@ -118,6 +124,9 @@ func (g *recheckGraph) read(ctx context.Context) {
 	g.deadlines = append(g.deadlines, deadline)
 	if g.holdFor > 0 {
 		time.Sleep(g.holdFor)
+		if g.onReturn != nil {
+			g.onReturn()
+		}
 	}
 	if g.readDelay > 0 {
 		select {
@@ -129,6 +138,9 @@ func (g *recheckGraph) read(ctx context.Context) {
 
 // hang blocks until ctx ends, and returns what such a read reports.
 func (g *recheckGraph) hang(ctx context.Context) error {
+	if g.onHang != nil {
+		g.onHang()
+	}
 	select {
 	case <-ctx.Done():
 		if g.afterHang != nil {
@@ -154,6 +166,7 @@ func (g *recheckGraph) AuthorizeStoredSubjects(ctx context.Context, principal st
 
 func (g *recheckGraph) ResolveSubjects(ctx context.Context, _ storage.Principal, request InvestigationRequest, _ InterpretedQuestion, binding ResolvedGraphBinding, confirmedKind *ConfirmedExpectedKind, confirmedAnchor *ConfirmedAnchorSelection, frame *QuestionFrame, scopeAnchorKind SubjectKind) (SubjectResolution, StructureOfferMaterial, CommitBasisSet, CommitDecisionDigestSet, error) {
 	g.read(ctx)
+	g.prefixMemos = append(g.prefixMemos, ctx.Value(workItemKeyPrefixMemoKey{}))
 	g.resolves = append(g.resolves, recheckResolveCall{
 		hints: append([]SubjectHint(nil), request.RequestedScope.SubjectHints...), options: request.Options, binding: binding,
 		confirmedKind: confirmedKind, confirmedAnchor: confirmedAnchor, frame: frame, scopeAnchorKind: scopeAnchorKind,

@@ -8189,7 +8189,7 @@
         "type": "string",
         "presence": "required",
         "closed_vocabulary": [
-          "question-family.v5"
+          "question-family.v6"
         ]
       },
       {
@@ -9212,7 +9212,7 @@
         "presence": "required",
         "closed_vocabulary": [
           "",
-          "question-family.v5"
+          "question-family.v6"
         ]
       },
       {
@@ -12090,7 +12090,7 @@
         "type": "string",
         "presence": "required",
         "closed_vocabulary": [
-          "question-family.v5"
+          "question-family.v6"
         ]
       },
       {
@@ -18017,6 +18017,46 @@
       {
         "key": "eliminated_ids",
         "type": "string_slice",
+        "presence": "required"
+      }
+    ]
+  },
+  {
+    "id": "graphrank.work_item_key_prefix_unread",
+    "msg": "context fabric resolution trace: work item key prefix unread",
+    "level": "warn",
+    "multiplicity": "zero_or_one_per_request",
+    "attribution": [
+      "request_id"
+    ],
+    "bounded_aggregation": "at most one line per resolveSubjects call: emitted once from bindQuestionHandles, only when a prefix read did not run",
+    "fields": [
+      {
+        "key": "request_id",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "stage",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "work_item_key_gate"
+        ]
+      },
+      {
+        "key": "key_shapes",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "held",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "unread",
+        "type": "int",
         "presence": "required"
       }
     ]

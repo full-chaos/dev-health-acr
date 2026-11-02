@@ -179,7 +179,7 @@ func TestAModelPickOfTheFamilyStaysOutsideThePrecedenceTable(t *testing.T) {
 // questions, because the reuse lookup runs before interpretation.
 func TestTheTableVersionFencesAnswersPlannedBeforeThisChange(t *testing.T) {
 	t.Parallel()
-	if QuestionFamilyTableVersion == "question-family.v4" {
+	if QuestionFamilyTableVersion == "question-family.v4" || QuestionFamilyTableVersion == "question-family.v5" {
 		t.Fatal("the family table changed and its version did not: reuse would replay the old plan")
 	}
 }

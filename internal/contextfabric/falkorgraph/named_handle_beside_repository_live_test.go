@@ -57,6 +57,9 @@ type besideLiveTurn struct {
 	synthesized bool
 	committed   []string
 	factKinds   []string
+	// link is the named-repository link sentence the resolution handed to
+	// synthesis (CHAOS-12505 ruling 3).
+	link string
 }
 
 func (b besideLiveTurn) hasCommitted(kind contextfabric.SubjectKind) bool {
@@ -159,6 +162,7 @@ func TestANamedSubjectBesideARepositoryOnRealStores(t *testing.T) {
 			Graph: adapter, Facts: facts,
 			Synthesizer: synthesizeFunc(func(_ context.Context, _ storage.Principal, input contextfabric.SynthesisInput) (contextfabric.InvestigationResult, error) {
 				got.synthesized = true
+				got.link = input.Graph.Resolution.NamedRepositoryLinkLimitation
 				for _, subject := range input.Graph.Resolution.Committed {
 					got.committed = append(got.committed, string(subject.Kind))
 				}
@@ -295,10 +299,22 @@ func TestANamedSubjectBesideARepositoryOnRealStores(t *testing.T) {
 			})
 			t.Run("a work item, on each tracker", func(t *testing.T) {
 				frame := stated(contextfabric.SubjectWorkItem, github)
-				both(t, turn(t, principal, item("CHAOS-71", github), github, frame, nil), contextfabric.SubjectWorkItem)
-				both(t, turn(t, principal, item("CHAOS-74", github), github, frame, nil), contextfabric.SubjectWorkItem)
-				// No claim about the link (ruling 3): it lives in acme/r01.
-				both(t, turn(t, principal, item("CHAOS-73", github), github, frame, nil), contextfabric.SubjectWorkItem)
+				// CHAOS-12505 ruling 3: each commit says whether a pull request link
+				// joins the item to the named repository, read keyed on the item.
+				linked := func(t *testing.T, got besideLiveTurn, want string) {
+					t.Helper()
+					both(t, got, contextfabric.SubjectWorkItem)
+					if got.link != want {
+						t.Fatalf("link sentence %q, want %q", got.link, want)
+					}
+				}
+				linked(t, turn(t, principal, item("CHAOS-71", github), github, frame, nil), contractsv1.ContextFabricNamedRepositoryNativeLinkLimitation)
+				linked(t, turn(t, principal, item("CHAOS-74", github), github, frame, nil), contractsv1.ContextFabricNamedRepositoryNativeLinkLimitation)
+				// CHAOS-73 is linked into acme/r01, not acme/r00: both commit, and the
+				// answer says no link joins them.
+				linked(t, turn(t, principal, item("CHAOS-73", github), github, frame, nil), contractsv1.ContextFabricNamedRepositoryNoLinkLimitation)
+				// The GitLab repository holds no pull request either item links to.
+				linked(t, turn(t, principal, item("CHAOS-71", gitlab), gitlab, stated(contextfabric.SubjectWorkItem, gitlab), nil), contractsv1.ContextFabricNamedRepositoryNoLinkLimitation)
 				twice := turn(t, principal, item("CHAOS-70", github), github, frame, nil)
 				if twice.synthesized || twice.result.Status != contextfabric.InvestigationClarificationRequired {
 					t.Fatalf("count 2: synthesis %t status %q", twice.synthesized, twice.result.Status)

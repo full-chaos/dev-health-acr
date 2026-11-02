@@ -292,7 +292,7 @@ func TestResolveSubjects_CensusProbeTraceNamesWhetherTheRepositoryFilterWasAppli
 func TestRunShadowEvidenceRound_RecordsTheWorkItemCensusRepositoryScopeOnlyWhenItWasApplied(t *testing.T) {
 	t.Parallel()
 	walked := func(complete bool) *linkScope {
-		return &linkScope{read: func(context.Context) (map[string]string, bool, error) { return nil, complete, nil }}
+		return &linkScope{decided: map[string]string{}, read: func(context.Context, []string) (map[string]string, bool, error) { return nil, complete, nil }}
 	}
 	for _, tc := range []struct {
 		name     string
@@ -301,9 +301,9 @@ func TestRunShadowEvidenceRound_RecordsTheWorkItemCensusRepositoryScopeOnlyWhenI
 		applied  bool
 		want     bool
 	}{
-		{"work item, link walk read", "What is the state of CHAOS-77?", walked(true), false, true},
-		{"work item, link walk cut", "What is the state of CHAOS-77?", walked(false), false, false},
-		{"work item, no link walk", "What is the state of CHAOS-77?", nil, true, false},
+		{"work item, keyed link read", "What is the state of CHAOS-77?", walked(true), false, true},
+		{"work item, keyed link read cut", "What is the state of CHAOS-77?", walked(false), false, false},
+		{"work item, no keyed link read", "What is the state of CHAOS-77?", nil, true, false},
 		{"pull request, filter applied", "What is the state of pull request 747?", nil, true, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -314,7 +314,9 @@ func TestRunShadowEvidenceRound_RecordsTheWorkItemCensusRepositoryScopeOnlyWhenI
 			input.workItemScope = tc.scope
 			input.NarrowSatisfiers = func(_ context.Context, _ CensusKind, ids []string) ([]string, bool) { return ids, true }
 			input.CensusFunc = func(_ context.Context, _ string, _ CensusKind, _ string, _ bool, _ contextfabric.SubjectKind, _ string, _ bool) (CensusOutcome, error) {
-				return CensusOutcome{Count: 0, CensusReadAt: time.Now().UTC(), RepositoryFilterApplied: tc.applied}, nil
+				// One listed satisfier, so the keyed link read runs: a count of 0
+				// needs no read (CHAOS-12505).
+				return CensusOutcome{Count: 1, SatisfierCanonicalID: "work_item.v2:r-1:linear:CHAOS-77", CensusReadAt: time.Now().UTC(), RepositoryFilterApplied: tc.applied}, nil
 			}
 			ctx := contextfabric.WithWorkItemCensusRepositoryScopeRecorder(context.Background())
 			RunShadowEvidenceRound(ctx, input, nil)

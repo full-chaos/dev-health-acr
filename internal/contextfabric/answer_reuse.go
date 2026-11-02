@@ -1187,7 +1187,11 @@ func (e *Engine) reuseAuthorizationStillHolds(ctx context.Context, principal sto
 	// The recheck waits for its reads and abandons none, so a read that ignored
 	// its context would hold it past the budget. The server is not told: a query
 	// in flight at the deadline runs to its end there.
-	recheckCtx, cancel := context.WithTimeout(ctx, e.reuseRecheckBudget)
+	budgetContext := e.recheckContext
+	if budgetContext == nil {
+		budgetContext = context.WithTimeout
+	}
+	recheckCtx, cancel := budgetContext(ctx, e.reuseRecheckBudget)
 	defer cancel()
 	// interrupted reads which context ended, never the read's error: the socket
 	// reports its own timeout, and a read that swallows failed lookups comes back
@@ -1200,11 +1204,24 @@ func (e *Engine) reuseAuthorizationStillHolds(ctx context.Context, principal sto
 	// is the live case for a cancel: it does not interrupt a socket read, so the
 	// read returns at the budget's deadline with both ended, and the caller is
 	// what stopped it.
+	//
+	// A context's deadline counts as ended when it has passed by the clock, not
+	// only when Err says so (CHAOS-12573): Err changes when the context's timer
+	// runs, and a starved scheduler runs it late, so a read could come back past
+	// the deadline with Err still nil and the next read would start. Deadlines
+	// are wall-clock times, so the check is time.Now, not the engine's clock.
+	contextEnded := func(c context.Context) bool {
+		if c.Err() != nil {
+			return true
+		}
+		deadline, ok := c.Deadline()
+		return ok && !time.Now().Before(deadline)
+	}
 	interrupted := func() (reuseRecheckVerdict, bool) {
 		switch {
-		case ctx.Err() != nil:
+		case contextEnded(ctx):
 			return reuseRecheckVerdict{Refused: true, Outcome: AnswerReuseMissRecheckCancelled}, true
-		case recheckCtx.Err() != nil:
+		case contextEnded(recheckCtx):
 			return reuseRecheckVerdict{Refused: true, Outcome: AnswerReuseMissRecheckDeadline}, true
 		}
 		return reuseRecheckVerdict{}, false

@@ -29,6 +29,7 @@ func TestExplicitPullRequestHandleOnRealProducers(t *testing.T) {
 	createProjectMembershipPresenceView(t, ctx, direct)
 	adapter := chaos7074FalkorAdapterWith(t, ctx, func(c *falkorgraph.Config) {
 		c.CensusFunc = devhealthsource.NewCensusFunc(query)
+		c.WorkItemKeyPrefix = devhealthsource.NewWorkItemKeyPrefixFunc(query)
 		c.HandleGrammarChecker = func(kind contractsv1.ContextFabricSubjectKind, patternID, value string) (string, bool) {
 			return graphrank.HandleSourceColumn(kind, patternID)
 		}
