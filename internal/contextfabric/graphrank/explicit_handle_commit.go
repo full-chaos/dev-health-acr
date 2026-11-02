@@ -35,12 +35,13 @@ const (
 
 // namedHandles is what the turn names beside what it committed. Only a named or an
 // absent frame can claim a handle: in a cohort or a grouped question a handle is an
-// example, and committing it would change what the answer is about.
-func namedHandles(request contextfabric.InvestigationRequest, committed []contextfabric.SubjectRef, frame *contextfabric.QuestionFrame) ([]contractsv1.ContextFabricRequestedHandle, handleClaim) {
+// example, and committing it would change what the answer is about. bound is the
+// turn's handles after the work item key gate (CHAOS-12463): a key the caller does
+// not hold names nothing.
+func namedHandles(request contextfabric.InvestigationRequest, bound []BoundHandle, committed []contextfabric.SubjectRef, frame *contextfabric.QuestionFrame) ([]contractsv1.ContextFabricRequestedHandle, handleClaim) {
 	if len(request.SubjectHandles) > 0 {
 		return request.SubjectHandles, handleOwed
 	}
-	bound := BindHandles(request.Question)
 	if len(bound) != 1 {
 		return nil, handleNotNamed
 	}
@@ -48,7 +49,7 @@ func namedHandles(request contextfabric.InvestigationRequest, committed []contex
 	if turnStatesKind(request, frame, bound[0].Kind) {
 		return handle, handleOwed
 	}
-	if committedScopeAnchorShadowsHandle(request.Question, committed, frame) {
+	if committedScopeAnchorShadowsHandle(bound, committed, frame) {
 		return handle, handleMentioned
 	}
 	return nil, handleNotNamed
@@ -93,7 +94,7 @@ func commitNamedHandle(ctx context.Context, principal storage.Principal, request
 	if contextfabric.OffersOnlyResolution(ctx) || deps.CensusFunc == nil || deps.HandleGrammarChecker == nil || deps.ExactHint == nil {
 		return resolution, nil
 	}
-	handles, claim := namedHandles(request, resolution.Committed, frame)
+	handles, claim := namedHandles(request, turnHandles(request, deps), resolution.Committed, frame)
 	if claim == handleNotNamed {
 		return resolution, nil
 	}
@@ -203,7 +204,7 @@ func unresolvedNamedHandle(ctx context.Context, principal storage.Principal, req
 		resolution.CensusLimitation = censusAbsenceLimitation(principal, request, ka)
 		return resolution, &BoundHandle{Kind: handle.Kind, Value: handle.Value}
 	}
-	if !census.complete || !questionBindsHandle(request.Question, handle) {
+	if !census.complete || !questionBindsHandle(turnHandles(request, deps), handle) {
 		return resolution, nil
 	}
 	attestation := Attestation{UnscopedVisibility: true, Kinds: []KindAttestation{ka}}
@@ -224,8 +225,17 @@ func unresolvedNamedHandle(ctx context.Context, principal storage.Principal, req
 	return resolution, undeciding
 }
 
-func questionBindsHandle(question string, handle contractsv1.ContextFabricRequestedHandle) bool {
-	bound := BindHandles(question)
+// turnHandles is the turn's handles after the work item key gate, read once in
+// ResolveSubjectsWithCommitBasis (CHAOS-12463). A direct call has no turn, so
+// nothing read the gate, and the grammar alone answers.
+func turnHandles(request contextfabric.InvestigationRequest, deps ResolveDeps) []BoundHandle {
+	if deps.questionHandlesBound {
+		return deps.questionHandles
+	}
+	return BindHandles(request.Question)
+}
+
+func questionBindsHandle(bound []BoundHandle, handle contractsv1.ContextFabricRequestedHandle) bool {
 	return len(bound) == 1 && bound[0].Kind == handle.Kind && bound[0].Value == handle.Value
 }
 

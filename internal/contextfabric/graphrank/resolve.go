@@ -132,9 +132,13 @@ type ResolveDeps struct {
 	// WorkItemKeyPrefix is the read behind bindQuestionHandles. nil leaves every
 	// ticket key unbound, as does a read that fails.
 	WorkItemKeyPrefix WorkItemKeyPrefixFunc
-	// questionHandles is bindQuestionHandles' answer for this resolveSubjects
-	// call. ResolveDeps is a per-call copy, as outsideRequested is.
-	questionHandles []BoundHandle
+	// questionHandles is bindQuestionHandles' answer for this turn, read once in
+	// ResolveSubjectsWithCommitBasis so resolveSubjects and commitNamedHandle see
+	// the same set. ResolveDeps is a per-call copy, as outsideRequested is.
+	// questionHandlesBound tells an empty set from a set never read: a test that
+	// calls commitNamedHandle directly has no turn.
+	questionHandles      []BoundHandle
+	questionHandlesBound bool
 	// ExactHint looks up a subject by exact canonical identity, scoped to
 	// the calling organization. ok=false with a nil error means "not
 	// found" -- a safe non-match, not an error.
@@ -2315,6 +2319,11 @@ func ResolveSubjectsWithCommitBasis(ctx context.Context, principal storage.Princ
 	// call, after every pass has finished, rather than once per pass.
 	admission := newContestAdmission(decideContestScope(frame, confirmedKind,
 		decideAnchorPoolKindScope(frame, scopeAnchorKind, confirmedAnchor, confirmedKind)))
+	if strings.TrimSpace(principal.OrgID) != "" && ctx.Err() == nil {
+		// One read per turn (CHAOS-12463), for resolveSubjects and for the handle a
+		// turn names beside a committed repository (commitNamedHandle).
+		deps.questionHandles, deps.questionHandlesBound = bindQuestionHandles(ctx, principal, request, deps), true
+	}
 	resolution, offerMaterial, err := resolveSubjects(ctx, principal, request, interpreted, deps, confirmedKind, confirmedAnchor, bases, digests, frame, scopeAnchorKind, admission)
 	withoutProvenanceMarkers(resolution.Candidates)
 	// THE DISCLOSURE, emitted on EVERY successful pass through this call,
@@ -2848,7 +2857,9 @@ func resolveSubjects(ctx context.Context, principal storage.Principal, request c
 			return resolution, contextfabric.StructureOfferMaterial{}, nil
 		}
 	}
-	deps.questionHandles = bindQuestionHandles(ctx, principal, request, deps)
+	if !deps.questionHandlesBound {
+		deps.questionHandles, deps.questionHandlesBound = bindQuestionHandles(ctx, principal, request, deps), true
+	}
 	request, hintsOfAnotherKind := withoutHintsOfAnotherKind(ctx, request, deps.questionHandles, frame, confirmedKind)
 	terms := SubjectTerms(request, interpreted)
 	if len(terms) == 0 && len(hintsOfAnotherKind) > 0 {
