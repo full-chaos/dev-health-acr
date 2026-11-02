@@ -30,6 +30,7 @@ import (
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/identity"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/memoryinvestigation"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
+	"github.com/full-chaos/dev-health-acr/internal/testsupport/userprincipal"
 	runtimeclickhouse "github.com/full-chaos/dev-health-go/clickhouse"
 )
 
@@ -478,6 +479,40 @@ func TestTheScopedCensusAndTheDeploymentWalkFollowTheLinkOnRealStores(t *testing
 	// CHAOS-12456: a restricted caller reaches a repo-less work item through a
 	// native link to a pull request of a granted repository, on the real stores:
 	// the census reads the link table, the node gate reads the link edge.
+	// CHAOS-12592: every web user reaches the resolver with a "*" grant the
+	// access read kept (userprincipal.WebUser), and reads the whole
+	// organization. A credential that names a repository keeps the restricted
+	// rules: a repository-less item needs a native link into its grant.
+	t.Run("census: a web user reads the whole organization, a repository-bound credential does not", func(t *testing.T) {
+		web := userprincipal.WebUser(t, s.orgID)
+		bound := userprincipal.Narrowed(t, s.orgID, []string{"acme/svc"}, []string{"acme/svc"})
+		for _, c := range []struct {
+			name, key  string
+			web, bound []string
+		}{
+			{"native link into the bound grant", "CHAOS-10", []string{"linear:CHAOS-10"}, []string{"linear:CHAOS-10"}},
+			{"native link outside the bound grant", "CHAOS-13", []string{"jira:CHAOS-13"}, nil},
+			{"text link only", "CHAOS-12", []string{"linear:CHAOS-12"}, nil},
+		} {
+			for who, run := range map[string]struct {
+				principal storage.Principal
+				want      []string
+			}{"web user": {web, c.web}, "repository-bound": {bound, c.bound}} {
+				committed, rounds := resolve(t, c.key, run.principal, nil)
+				want := make([]string, 0, len(run.want))
+				for _, id := range run.want {
+					want = append(want, s.workItem(t, id))
+				}
+				if strings.Join(committed, ",") != strings.Join(want, ",") {
+					t.Errorf("%s, %s: %s committed %v, want %v (rounds %s)", c.name, who, c.key, committed, want, reasons(rounds))
+				}
+				if len(rounds) == 0 {
+					t.Errorf("%s, %s: no round ran, so this case measured nothing", c.name, who)
+				}
+			}
+		}
+	})
+
 	t.Run("census: a restricted caller resolves a key through a native link", func(t *testing.T) {
 		restricted := storage.Principal{OrgID: s.orgID, Subject: "u", CredentialID: "c", RepositoryScopes: []string{"acme/svc"}}
 		for _, c := range []struct {

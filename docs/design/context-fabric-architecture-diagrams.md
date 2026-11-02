@@ -1046,9 +1046,11 @@ is not offered: the narrowing is the caller's. A terminal result states the
 count of such subjects in a closed limitation, with no names, so the caller can
 widen the scope. The count holds only subjects the caller's own grant admits
 (CHAOS-12446): a subject outside the grant never counts, because for it the
-count is an existence oracle, and a subject inside the grant is no oracle. A web
-user gets it: a user-class credential is restricted at runtime, because the
-access read turns `*` into the live inventory on every call. A project-only
+count is an existence oracle, and a subject inside the grant is no oracle. A
+credential that names repositories or owners gets it: the access read narrows it
+to the live inventory, so it is restricted at runtime. A web user's `*` grant
+stays `*` (CHAOS-12592), so it reads the whole organization and counts every
+match outside the requested repositories. A project-only
 caller never gets the count. A stored result that carries it is refused to a
 reader of another grant by the grant check every stored read takes. A node
 counts when the offer rule would admit it without the narrowing, in any arm that
@@ -4105,7 +4107,7 @@ sequenceDiagram
     else grant ∩ live inventory is empty
       A-->>C: 409 no_repository (never an [] scope)
     else granted
-      A->>H: principal narrowed to grant ∩ inventory, read kept for the request
+      A->>H: a "*" grant kept "*" (CHAOS-12592), any other grant narrowed to grant ∩ inventory; read kept for the request
       opt POST investigations
         H->>H: budget left < 10 s? → 503 budget_exhausted (before admission)
       end
