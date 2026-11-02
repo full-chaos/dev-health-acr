@@ -26,6 +26,7 @@ const (
 	ReuseLineNarrowing         ReuseLineScenario = "project narrowing unverified"
 	ReuseLineDegradeInvalid    ReuseLineScenario = "degrade invalid"
 	ReuseLineRecheckDeadline   ReuseLineScenario = "recheck deadline"
+	ReuseLineRecheckCancelled  ReuseLineScenario = "recheck cancelled"
 	ReuseLineGateWithheld      ReuseLineScenario = "gate withheld"
 	ReuseLineCapExceeded       ReuseLineScenario = "subject cap exceeded"
 	ReuseLineGraphNotProjected ReuseLineScenario = "graph not projected"
@@ -80,6 +81,13 @@ func RunReuseLineForTest(ctx context.Context, t *testing.T, telemetry EngineTele
 		cite()
 		graph.hangDiscoverOn = 2
 		budget = 20 * time.Millisecond
+	case ReuseLineRecheckCancelled:
+		cite()
+		graph.hangDiscoverOn = 2
+		cancelled, cancel := context.WithCancel(ctx)
+		defer cancel()
+		ctx = cancelled
+		time.AfterFunc(20*time.Millisecond, cancel)
 	case ReuseLineNarrowing:
 		cite()
 		graph.narrowingUnverifiedFor = last.CanonicalID

@@ -143,6 +143,36 @@ func TestAReadInFlightStopsAtItsContextDeadline(t *testing.T) {
 	}
 }
 
+// TestACancelDoesNotStopAReadInFlight (CHAOS-12511) is why the recheck names the
+// request's end when both contexts have ended. On the real client a deadline
+// bounds the socket and a cancel does not: a read cancelled in flight returns at
+// its deadline. So by the time such a read comes back, the budget has ended too,
+// and what stopped the attempt was the caller.
+func TestACancelDoesNotStopAReadInFlight(t *testing.T) {
+	t.Parallel()
+	const cancelAt, deadline, requestTimeout = 30 * time.Millisecond, 200 * time.Millisecond, 3 * time.Second
+	server := newSilentFalkor(t)
+	client, err := newSDKAPI(Config{Addr: server.listener.Addr().String(), GraphPrefix: "acr-cf-deadline", RequestTimeout: requestTimeout, MaxAttempts: 1, MaxResults: 25, PoolSize: 2, AllowInsecure: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	parent, cancelParent := context.WithCancel(context.Background())
+	defer cancelParent()
+	ctx, cancel := context.WithTimeout(parent, deadline)
+	defer cancel()
+	time.AfterFunc(cancelAt, cancelParent)
+	started := time.Now()
+	_, err = client.query(ctx, "graph", "RETURN 1", nil, true)
+	elapsed := time.Since(started)
+	t.Logf("cancelled at %s, deadline %s, returned after %s err=%v", cancelAt, deadline, elapsed.Round(time.Millisecond), err)
+	if err == nil {
+		t.Fatal("a query with no reply returned no error")
+	}
+	if elapsed < deadline || elapsed > requestTimeout/2 {
+		t.Fatalf("returned after %s, want at the %s deadline, past the cancel at %s", elapsed, deadline, cancelAt)
+	}
+}
+
 // reuseGateStore offers one stored answer for reuse.
 type reuseGateStore struct {
 	contextfabric.InvestigationResultStore

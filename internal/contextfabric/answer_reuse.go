@@ -437,6 +437,13 @@ const (
 	// grant, and a read cut short by the budget must not read as a subject the
 	// caller may not see.
 	AnswerReuseMissRecheckDeadline AnswerReuseOutcome = "miss_recheck_deadline"
+	// AnswerReuseMissRecheckCancelled (CHAOS-12511): the request's own context
+	// ended during the recheck, by the caller's cancellation or by the request's
+	// deadline, so nothing was proven either way. It says nothing about a grant
+	// or about the graph, so it is neither miss_authorization nor
+	// miss_recheck_unavailable. When both this and the recheck's budget have
+	// ended, this one is named: the request's end is what stopped the attempt.
+	AnswerReuseMissRecheckCancelled AnswerReuseOutcome = "miss_recheck_cancelled"
 	// AnswerReuseMissDegradeInvalid (CHAOS-4831): a partial miss was
 	// degradable in principle, but the stripped payload no longer
 	// satisfies the stored-result contract, so reuse refused rather than
@@ -1182,14 +1189,26 @@ func (e *Engine) reuseAuthorizationStillHolds(ctx context.Context, principal sto
 	// in flight at the deadline runs to its end there.
 	recheckCtx, cancel := context.WithTimeout(ctx, e.reuseRecheckBudget)
 	defer cancel()
-	// budgetSpent reads which context ended, never the read's error: the socket
+	// interrupted reads which context ended, never the read's error: the socket
 	// reports its own timeout, and a read that swallows failed lookups comes back
-	// partial with no error at all. Time says nothing about a grant, so this runs
-	// before any result is read, and a read that came back after the deadline is
-	// not read at all. ctx ending first is the caller's own end, and keeps the
-	// outcome it always had.
-	budgetSpent := func() bool { return ctx.Err() == nil && recheckCtx.Err() != nil }
-	spent := reuseRecheckVerdict{Refused: true, Outcome: AnswerReuseMissRecheckDeadline}
+	// partial with no error at all. Neither the clock nor a caller's cancel says
+	// anything about a grant or the graph, so this runs before any result is
+	// read, and a read that came back after either end is not read at all. A
+	// real error, with both contexts alive, keeps its own outcome.
+	//
+	// ctx is asked first, so the request's end wins when both have ended. That
+	// is the live case for a cancel: it does not interrupt a socket read, so the
+	// read returns at the budget's deadline with both ended, and the caller is
+	// what stopped it.
+	interrupted := func() (reuseRecheckVerdict, bool) {
+		switch {
+		case ctx.Err() != nil:
+			return reuseRecheckVerdict{Refused: true, Outcome: AnswerReuseMissRecheckCancelled}, true
+		case recheckCtx.Err() != nil:
+			return reuseRecheckVerdict{Refused: true, Outcome: AnswerReuseMissRecheckDeadline}, true
+		}
+		return reuseRecheckVerdict{}, false
+	}
 
 	// CHAOS-3900 P1.C: this recheck only re-verifies SUBJECT authorization
 	// (the committed set below) -- it discards the structure-offer
@@ -1245,8 +1264,8 @@ func (e *Engine) reuseAuthorizationStillHolds(ctx context.Context, principal sto
 	// is the pre-seam-7 behaviour of this call unchanged.
 	for index := range batches {
 		resolution, _, _, _, err := e.graph.ResolveSubjects(recheckCtx, principal, batches[index].request, candidate.Interpretation, binding, nil, nil, nil, "")
-		if budgetSpent() {
-			return spent
+		if ended, stop := interrupted(); stop {
+			return ended
 		}
 		if err != nil {
 			return reuseRecheckVerdict{Refused: true, Outcome: AnswerReuseMissAuthorization, Refusal: AnswerReuseRefusal{Reason: AnswerReuseRefusalSubjectRecheckFailed}}
@@ -1269,8 +1288,8 @@ func (e *Engine) reuseAuthorizationStillHolds(ctx context.Context, principal sto
 			return reuseRecheckVerdict{Refused: true, Outcome: AnswerReuseMissProjectNarrowingUnverified}
 		}
 		verdict := e.reuseRemovedTeamRecheck(recheckCtx, principal, binding, subjects)
-		if budgetSpent() {
-			return spent
+		if ended, stop := interrupted(); stop {
+			return ended
 		}
 		return verdict
 	}
@@ -1279,8 +1298,8 @@ func (e *Engine) reuseAuthorizationStillHolds(ctx context.Context, principal sto
 		graphContext, err := e.graph.DiscoverContext(recheckCtx, principal, GraphDiscoveryRequest{
 			Request: batch.request, Interpretation: candidate.Interpretation, Resolution: batch.resolution, Binding: binding,
 		})
-		if budgetSpent() {
-			return spent
+		if ended, stop := interrupted(); stop {
+			return ended
 		}
 		if err != nil {
 			// Nothing was proven either way -- see

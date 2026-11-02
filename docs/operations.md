@@ -1307,6 +1307,9 @@ The outcome is one of three, and they are distinguishable in telemetry:
   `miss_recheck_deadline` means the recheck spent its own time budget, so
   nothing was proven either way, and the fresh path runs on the request's
   deadline. It says nothing about authorization.
+  `miss_recheck_cancelled` means the request itself ended during the recheck,
+  by the caller's cancellation or the request's deadline. It says nothing about
+  authorization or the graph, and it is named when the budget ended too.
   `miss_recheck_unavailable` means the fresh discovery failed, so nothing
   was proved either way; `miss_hint_not_committed` means the request carried a subject hint the stored answer did not commit; `miss_scope_identity` means the request named project or team selectors and only a row keyed without them exists (never served); `miss_degrade_invalid` means a narrowing was
   possible in principle but the stripped payload would not have satisfied

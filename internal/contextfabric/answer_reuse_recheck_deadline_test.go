@@ -189,9 +189,10 @@ func TestARecheckHasOneBudgetAcrossItsBatches(t *testing.T) {
 	})
 }
 
-// TestARealErrorBeforeExpiryKeepsItsOutcome (CHAOS-12511): a read that fails on
-// its own, inside the budget, is the failure it always was.
-func TestARealErrorBeforeExpiryKeepsItsOutcome(t *testing.T) {
+// TestARealErrorWithBothContextsAliveKeepsItsOutcome (CHAOS-12511): a read that
+// fails on its own, with the budget and the request both running, is the failure
+// it always was.
+func TestARealErrorWithBothContextsAliveKeepsItsOutcome(t *testing.T) {
 	t.Parallel()
 	failed := errors.New("graph read failed")
 	for _, tc := range []struct {
@@ -228,53 +229,115 @@ func TestARealErrorBeforeExpiryKeepsItsOutcome(t *testing.T) {
 	}
 }
 
-// TestTheCallersOwnEndKeepsTodaysBehaviour (CHAOS-12511): the budget names its
-// own expiry only. A read cut off by the caller's cancellation, or by the
-// request's deadline ending first, is what it always was.
-func TestTheCallersOwnEndKeepsTodaysBehaviour(t *testing.T) {
+// TestTheCallersOwnEndIsANamedMiss (CHAOS-12511): the request's own context
+// ending during the recheck says nothing about a grant or about the graph, so it
+// is its own outcome at every read, whatever that read reported: its context's
+// error, or a partial result with no error at all. When the budget has ended too,
+// the request's end is named: on the real client a cancel does not interrupt a
+// read in flight, so a read cancelled by the caller returns at the budget's
+// deadline, and both have ended by then
+// (falkorgraph.TestACancelDoesNotStopAReadInFlight).
+func TestTheCallersOwnEndIsANamedMiss(t *testing.T) {
 	t.Parallel()
+	const hold, early, late = 80 * time.Millisecond, 10 * time.Millisecond, 40 * time.Millisecond
 	for _, tc := range []struct {
-		name    string
-		parent  func() (context.Context, context.CancelFunc)
-		build   func() (InvestigationResult, *recheckGraph)
-		outcome AnswerReuseOutcome
-		refusal AnswerReuseRefusal
+		name     string
+		parent   func() (context.Context, context.CancelFunc)
+		budget   time.Duration
+		subjects int
+		build    func() (InvestigationResult, *recheckGraph)
 	}{
-		{"a cancellation during a resolution", cancelSoon, func() (InvestigationResult, *recheckGraph) {
+		{"a cancellation during a resolution", cancelSoon, time.Hour, 54, func() (InvestigationResult, *recheckGraph) {
 			candidate, graph := citedCandidate(reuseSubjects(54))
 			graph.hangResolveOn = 1
 			return candidate, graph
-		}, AnswerReuseMissAuthorization, AnswerReuseRefusal{Reason: AnswerReuseRefusalSubjectRecheckFailed}},
-		{"a cancellation during a discovery", cancelSoon, func() (InvestigationResult, *recheckGraph) {
+		}},
+		{"a cancellation during a later resolution", cancelSoon, time.Hour, 54, func() (InvestigationResult, *recheckGraph) {
+			candidate, graph := citedCandidate(reuseSubjects(54))
+			graph.hangResolveOn = 2
+			return candidate, graph
+		}},
+		{"a cancellation during a discovery", cancelSoon, time.Hour, 54, func() (InvestigationResult, *recheckGraph) {
 			candidate, graph := citedCandidate(reuseSubjects(54))
 			graph.hangDiscoverOn = 1
 			return candidate, graph
-		}, AnswerReuseMissRecheckUnavailable, AnswerReuseRefusal{}},
-		{"the request's deadline ends first", func() (context.Context, context.CancelFunc) {
-			return context.WithTimeout(context.Background(), 20*time.Millisecond)
-		}, func() (InvestigationResult, *recheckGraph) {
+		}},
+		{"a cancellation during the last discovery", cancelSoon, time.Hour, 54, func() (InvestigationResult, *recheckGraph) {
+			candidate, graph := citedCandidate(reuseSubjects(54))
+			graph.hangDiscoverOn = 2
+			return candidate, graph
+		}},
+		{"a cancellation during removed teams", cancelSoon, time.Hour, 54, func() (InvestigationResult, *recheckGraph) {
+			return teamCandidate(54), &recheckGraph{hangRemoved: true}
+		}},
+		{"a resolution comes back partial after a cancellation", cancelSoon, time.Hour, 54, func() (InvestigationResult, *recheckGraph) {
+			candidate, graph := citedCandidate(reuseSubjects(54))
+			graph.hangResolveOn, graph.hangPartial = 2, true
+			return candidate, graph
+		}},
+		{"a discovery comes back partial after a cancellation", cancelSoon, time.Hour, 54, func() (InvestigationResult, *recheckGraph) {
+			candidate, graph := citedCandidate(reuseSubjects(54))
+			graph.hangDiscoverOn, graph.hangPartial = 2, true
+			return candidate, graph
+		}},
+		{"an error of its own comes back after a cancellation", cancelSoon, time.Hour, 54, func() (InvestigationResult, *recheckGraph) {
+			candidate, graph := citedCandidate(reuseSubjects(54))
+			graph.hangDiscoverOn, graph.afterHang = 1, errors.New("read tcp 10.0.0.1:6379: i/o timeout")
+			return candidate, graph
+		}},
+		{"the request's deadline ends first", deadlineSoon, time.Hour, 54, func() (InvestigationResult, *recheckGraph) {
 			candidate, graph := citedCandidate(reuseSubjects(54))
 			graph.hangResolveOn = 1
 			return candidate, graph
-		}, AnswerReuseMissAuthorization, AnswerReuseRefusal{Reason: AnswerReuseRefusalSubjectRecheckFailed}},
+		}},
+		{"both ended, the budget first", cancelAfter(late), early, 54, func() (InvestigationResult, *recheckGraph) {
+			candidate, graph := citedCandidate(reuseSubjects(54))
+			graph.holdFor = hold
+			return candidate, graph
+		}},
+		{"both ended, the request first", cancelAfter(early), late, 54, func() (InvestigationResult, *recheckGraph) {
+			candidate, graph := citedCandidate(reuseSubjects(54))
+			graph.holdFor = hold
+			return candidate, graph
+		}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			parent, cancel := tc.parent()
 			defer cancel()
 			candidate, graph := tc.build()
-			run := runBudgeted(t, parent, graph, candidate, time.Hour)
-			if run.hit() {
-				t.Fatal("a stored answer was served")
+			run := runBudgeted(t, parent, graph, candidate, tc.budget)
+			if run.hit() || run.result.Reused {
+				t.Fatal("a stored answer was served after the request ended")
 			}
 			telemetry := run.telemetry
-			if len(telemetry.answerReuseOutcomes) != 1 || telemetry.answerReuseOutcomes[0] != tc.outcome {
-				t.Fatalf("outcomes = %v, want exactly [%s]", telemetry.answerReuseOutcomes, tc.outcome)
+			if len(telemetry.answerReuseOutcomes) != 1 || telemetry.answerReuseOutcomes[0] != AnswerReuseMissRecheckCancelled {
+				t.Fatalf("outcomes = %v, want exactly [%s]", telemetry.answerReuseOutcomes, AnswerReuseMissRecheckCancelled)
 			}
-			if telemetry.answerReuseRefusals[0] != tc.refusal {
-				t.Fatalf("refusals = %+v, want %+v", telemetry.answerReuseRefusals[0], tc.refusal)
+			if telemetry.answerReuseRefusals[0] != (AnswerReuseRefusal{}) {
+				t.Fatalf("refusal = %+v, want none: a request's end says nothing about a grant", telemetry.answerReuseRefusals[0])
+			}
+			if got := telemetry.answerReuseRechecks[0]; !got.Ran || got.Subjects != tc.subjects {
+				t.Fatalf("recheck = %+v, the line must keep its measurement", got)
+			}
+			if len(telemetry.answerReuseContainment) != 0 {
+				t.Fatalf("containment = %+v: a recheck the request ended proves nothing", telemetry.answerReuseContainment)
 			}
 		})
+	}
+}
+
+// deadlineSoon is a request whose own deadline ends during its first read.
+func deadlineSoon() (context.Context, context.CancelFunc) {
+	return context.WithTimeout(context.Background(), 20*time.Millisecond)
+}
+
+// cancelAfter is a request a caller cancels after wait.
+func cancelAfter(wait time.Duration) func() (context.Context, context.CancelFunc) {
+	return func() (context.Context, context.CancelFunc) {
+		ctx, cancel := context.WithCancel(context.Background())
+		time.AfterFunc(wait, cancel)
+		return ctx, cancel
 	}
 }
 

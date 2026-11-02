@@ -71,6 +71,7 @@ func AnswerReuseOutcomeVocabulary() []string {
 		string(AnswerReuseMissRecheckUnavailable), string(AnswerReuseMissDegradeInvalid),
 		string(AnswerReuseMissCountScope), string(AnswerReuseMissHintNotCommitted), string(AnswerReuseMissScopeIdentity),
 		string(AnswerReuseMissProjectNarrowingUnverified), string(AnswerReuseMissRecheckDeadline),
+		string(AnswerReuseMissRecheckCancelled),
 	}
 }
 
