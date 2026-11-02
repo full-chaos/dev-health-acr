@@ -1455,6 +1455,12 @@ type ContextFabricSubjectResolution struct {
 	// keyed link read that scopes it failed or was cut. Nothing then shows that
 	// no work item matched, so a terminal does not say it. In-process only.
 	WorkItemLinkScopeUnread bool `json:"-"`
+	// NamedRepositoryLinkLimitation (CHAOS-12505, ruling 3) is the fixed sentence
+	// an answer owes when a work item committed beside one named repository: a
+	// pull request link joins them (with its tier), none does, or the link could
+	// not be read. "" otherwise. The sentence is the only form that leaves the
+	// process.
+	NamedRepositoryLinkLimitation string `json:"-"`
 	// CommitDecisionDigests (CHAOS-4087) is a small, closed-vocabulary
 	// summary of WHICH MECHANISM committed each subject in Committed --
 	// persisted so a wrong commit discovered later from a STORED result

@@ -85,3 +85,38 @@ func TestTheFloorAndTheWithheldPoolKeepTheirSentencesOtherwise(t *testing.T) {
 		t.Fatalf("limitations %q, want the withheld pool's prose and the read's sentence", result.Limitations)
 	}
 }
+
+// CHAOS-12505 ruling 3: a work item committed beside a named repository; the
+// answer says whether a pull request link joins them. The engine states it after
+// synthesis, so it stands on no model, and it is a service sentence.
+func TestTheNamedRepositoryLinkIsStatedOnTheAnswer(t *testing.T) {
+	t.Parallel()
+	for _, sentence := range []string{
+		contractsv1.ContextFabricNamedRepositoryNativeLinkLimitation,
+		contractsv1.ContextFabricNamedRepositoryTextLinkLimitation,
+		contractsv1.ContextFabricNamedRepositoryHeuristicLinkLimitation,
+		contractsv1.ContextFabricNamedRepositoryNoLinkLimitation,
+		contractsv1.ContextFabricNamedRepositoryLinkUnreadLimitation,
+	} {
+		engine, request := engineForDegradationEdited(t, false, []string{}, TimeContext{Axis: TemporalCurrent}, func(resolution *SubjectResolution, _ *GraphContext) {
+			resolution.NamedRepositoryLinkLimitation = sentence
+		})
+		result, err := engine.Investigate(context.Background(), storage.Principal{OrgID: "org_1", RepositoryScopes: []string{"acme/alpha"}}, request)
+		if err != nil {
+			t.Fatalf("Investigate() error = %v", err)
+		}
+		if !slices.Contains(result.Limitations, sentence) {
+			t.Fatalf("limitations %q, want %q", result.Limitations, sentence)
+		}
+		if !contractsv1.IsContextFabricServiceAuthoredLimitation(sentence) || serviceLimitationRecogniserID(sentence) != "named_repository_link" {
+			t.Fatalf("%q is not recognised as the engine's own named-repository link sentence", sentence)
+		}
+		// A model draft that copies it is dropped: only the engine states it.
+		if kept, dropped, _ := stripServiceAuthoredLookalikes([]string{sentence}); dropped != 1 || len(kept) != 0 {
+			t.Fatalf("a draft copy of %q was kept: %q", sentence, kept)
+		}
+	}
+	if contractsv1.ContextFabricNamedRepositoryLinkedLimitation("") != contractsv1.ContextFabricNamedRepositoryLinkUnreadLimitation {
+		t.Fatal("a tier the read did not name must read as unread, never as native")
+	}
+}
