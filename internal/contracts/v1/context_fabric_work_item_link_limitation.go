@@ -12,7 +12,7 @@ package v1
 const (
 	// ContextFabricWorkItemNoGrantedLinkLimitation is served when the census
 	// inside the grant completed and found no linked item.
-	ContextFabricWorkItemNoGrantedLinkLimitation = "No pull request link of record connects this work item to a repository this credential can read, so it was not resolved. This does not show that the work item does not exist."
+	ContextFabricWorkItemNoGrantedLinkLimitation = "No pull request link of record connects this work item to a repository you can read, so it was not resolved. This does not show that the work item does not exist."
 	// ContextFabricWorkItemLinksUnreadLimitation is served when a read that
 	// decides such an item failed, was cut, or could not be confirmed.
 	ContextFabricWorkItemLinksUnreadLimitation = "The pull request links of work items could not be read or confirmed, so a work item may be left out of this answer. This does not show that it does not exist."

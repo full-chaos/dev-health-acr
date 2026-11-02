@@ -17,9 +17,15 @@ type EngineOptions struct {
 	// InvestmentTreemapEnabled turns on the investment_theme_share rule
 	// (CHAOS-12521). See Config.ContextFabricInvestmentTreemapEnabled.
 	InvestmentTreemapEnabled bool
-	ServiceVersion           string
-	Now                      func() time.Time
-	NewResultID              func() string
+	// ComparisonTableEnabled turns on the comparison_side_by_side rule
+	// (CHAOS-12513). See Config.ContextFabricComparisonTableEnabled.
+	ComparisonTableEnabled bool
+	// FactCapabilities are the field declarations that rule reads each field's
+	// scope from.
+	FactCapabilities []FactCapability
+	ServiceVersion   string
+	Now              func() time.Time
+	NewResultID      func() string
 	// RegimeAOffersDisabled (CHAOS-4234) turns OFF the offers-only
 	// resolution the class-default window gate runs to compose kind/
 	// handle/candidate offers beside the window offer -- restoring
@@ -1420,12 +1426,16 @@ func NewEngine(dependencies EngineDependencies, options EngineOptions) (*Engine,
 		requirements:               dependencies.Requirements,
 		observationKeys:            dependencies.ObservationKeys,
 		reuseProjectionVersion:     options.ReuseProjectionVersion, reuseModelIdentities: options.ReuseModelIdentities,
-		reuseRetrievalIdentity:                      options.ReuseRetrievalIdentity,
-		reusePromptVersions:                         options.ReusePromptVersions,
-		reuseVersionAuthorities:                     options.ReuseVersionAuthorities,
-		regimeAOffersDisabled:                       options.RegimeAOffersDisabled,
-		anchorBindingShadowDisabled:                 options.DisableAnchorBindingShadow,
-		renderShapeOptions:                          RenderShapeOptions{InvestmentThemeShare: options.InvestmentTreemapEnabled},
+		reuseRetrievalIdentity:      options.ReuseRetrievalIdentity,
+		reusePromptVersions:         options.ReusePromptVersions,
+		reuseVersionAuthorities:     options.ReuseVersionAuthorities,
+		regimeAOffersDisabled:       options.RegimeAOffersDisabled,
+		anchorBindingShadowDisabled: options.DisableAnchorBindingShadow,
+		renderShapeOptions: RenderShapeOptions{
+			InvestmentThemeShare: options.InvestmentTreemapEnabled,
+			ComparisonSideBySide: options.ComparisonTableEnabled,
+			FieldScope:           factFieldScopeLookup(options.FactCapabilities),
+		},
 		serverCompletenessAuthorityEnabled:          options.ServerCompletenessAuthorityEnabled,
 		serverCompletenessAuthoritySymmetricEnabled: options.ServerCompletenessAuthoritySymmetricEnabled,
 		maxItems:                 options.MaxItems,
