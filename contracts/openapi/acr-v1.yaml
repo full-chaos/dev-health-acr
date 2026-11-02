@@ -1,5 +1,5 @@
 # Generated from acr-v1.json by `go run ./cmd/contractcheck -write`. DO NOT EDIT.
-# canonical-content-sha256: fc124b08f6efeb7fe6a87d29b6f204554083dadb767cb71dee72712c370e2a9d
+# canonical-content-sha256: 89c7b5afdf07503d358fe495a8bea1707ebabb2fbc2cbe6e32ca5085233ffe97
 openapi: "3.1.0"
 info:
   description: "Private hosted API for evidence-backed agent context packets, authorized provenance expansion, replay snapshots, and opt-in episode writeback. External Push is a separate API plane."
@@ -1336,6 +1336,50 @@ paths:
                 "$ref": "#/components/schemas/HealthResponse"
           description: "Liveness status"
       security: []
+  "/internal/v1/credentials/lifecycle":
+    get:
+      operationId: "listCredentialLifecycle"
+      parameters:
+        -
+          description: "Page size, 1 to 500; default 100."
+          in: "query"
+          name: "limit"
+          required: false
+          schema:
+            maximum: 500
+            minimum: 1
+            type: "integer"
+        -
+          description: "The next_after of the previous page."
+          in: "query"
+          name: "after"
+          required: false
+          schema:
+            pattern: "^[A-Za-z0-9_-]{1,128}$"
+            type: "string"
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                "$ref": "../jsonschema/v1/credential_lifecycle_list.v1.schema.json"
+          description: "One page of credential id, revision and status for the caller's organization. Only a workload-class credential whose binding role is reconcile is served."
+        "400":
+          "$ref": "#/components/responses/Error"
+        "401":
+          "$ref": "#/components/responses/Error"
+        "403":
+          "$ref": "#/components/responses/Error"
+        "429":
+          "$ref": "#/components/responses/Error"
+        "500":
+          "$ref": "#/components/responses/Error"
+        "503":
+          "$ref": "#/components/responses/Error"
+      security:
+        -
+          bearerAuth: []
+      x-required-scope: "credential_lifecycle:read"
   "/readyz":
     get:
       operationId: "getReadiness"
