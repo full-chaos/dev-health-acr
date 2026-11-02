@@ -1374,10 +1374,14 @@ import (
 // its prefix (CHAOS-12463). An answer saved under v266 answered such a question by
 // search.
 //
-// v267 -> v269 (v268 is taken by CHAOS-12585, which lands first): a claimed
-// table states where each cell's word comes from: the theme column's vocabulary
-// and each id column's word column (CHAOS-12639). An answer saved under v267
-// serves raw theme tokens and ids with no word to show in their place.
+// v267 -> v268: a restricted caller's work item census admits a GitHub or GitLab
+// issue by its own repository (CHAOS-12561). An answer saved under v267 can say
+// such an issue is not in what the caller can read.
+//
+// v268 -> v269: a claimed table states where each cell's word comes from: the
+// theme column's vocabulary and each id column's word column (CHAOS-12639). An
+// answer saved under v268 serves raw theme tokens and ids with no word to show
+// in their place.
 const QueryVersion = "devhealthfacts.clickhouse.v269"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
