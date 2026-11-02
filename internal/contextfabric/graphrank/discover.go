@@ -450,6 +450,9 @@ func InterleaveByOrigin(ranked []CandidateEdge, originOf map[string]string, orig
 // the organization".
 func DiscoveredCohort(principal storage.Principal, discovery contextfabric.GraphDiscoveryRequest, nodes []CandidateNode, poolTruncated bool, isInternal func(contextfabric.SubjectRef) bool) (*contextfabric.Cohort, int, int, contextfabric.SubjectKind, CohortKindBasis, int) {
 	kind, declaredKind, basis := cohortKindFromFrame(discovery.Frame)
+	if discovery.AnchorFactOnly {
+		return nil, 0, 0, declaredKind, CohortKindAnchorFactOnly, 0
+	}
 	if basis != CohortKindFromFrameMemberKind {
 		return nil, 0, 0, declaredKind, basis, 0
 	}

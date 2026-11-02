@@ -3546,6 +3546,9 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 			// (commitBases), never re-derived, so a graph reader's own
 			// anchor-bound recognition can agree with anchorBound's.
 			Bases: commitBases,
+			// CHAOS-12606: the scope-anchor allocation route answers from the
+			// anchor's own fact, so no member set is read.
+			AnchorFactOnly: familyOutcome.Route.Source == FamilyRouteScopeAllocation,
 		})
 		if err != nil {
 			return InvestigationResult{}, stageError(StageGraph, fmt.Errorf("discover graph context: %w", err))
@@ -3578,6 +3581,15 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 	subjects := investigationSubjects(resolution, graphContext.Cohort)
 	if workItemTuple {
 		subjects = workItemTupleSubjects(graphContext.Cohort)
+	}
+	// CHAOS-12606: an allocation question over a team's children is answered by
+	// the team's own investment fact (the lead's ruling on CHAOS-4610), so the
+	// read takes the anchor alone. The members stay committed; reading their
+	// facts too would put a breakdown per repository beside the team's, which is
+	// a comparison the question did not ask for. With no anchor committed the
+	// subjects are left as they are.
+	if anchors := scopeAllocationAnchors(familyOutcome, resolution); len(anchors) > 0 {
+		subjects = anchors
 	}
 	graphContext.StatusMeasuredZero = statusMeasuredZero(familyOutcome.Frame, graphContext.Cohort)
 	if len(subjects) == 0 && !workItemTuple && graphContext.StatusMeasuredZero {
@@ -3823,7 +3835,10 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 			err = nil
 			facts = emptyFactReadBundle(familyOutcome.Frame, graphContext.Coverage, graphContext.CohortPopulation)
 		}
-		if err == nil {
+		// CHAOS-12606: under the scope-anchor allocation route no member set
+		// was asked of discovery, so "the search found no member" would state
+		// a search that never ran.
+		if err == nil && familyOutcome.Route.Source != FamilyRouteScopeAllocation {
 			recordEmptyMemberSearch(&facts, familyOutcome.Frame, graphContext.Coverage, graphContext.Cohort, graphContext.CohortPopulation)
 		}
 		if err == nil && graphContext.OrganizationSubjectRead {
@@ -5036,6 +5051,17 @@ func scopeAnchorResolved(outcome QuestionFamilyOutcome) bool {
 	// from the carried snapshot, so its presence is the carried reading's.
 	winner := outcome.WinningSampleIndex >= 0 || outcome.Source == QuestionFamilySourceCarried
 	return winner && outcome.WinningSample.ScopeAnchorTerm != ""
+}
+
+// scopeAllocationAnchors is the anchor team the scope-anchor allocation route
+// reads, or nothing when the route did not decide the family or no anchor team
+// was committed. The organization case needs none: its subject is the caller's
+// organization, read when nothing is committed (organizationSubjectAnswers).
+func scopeAllocationAnchors(outcome QuestionFamilyOutcome, resolution SubjectResolution) []SubjectRef {
+	if outcome.Route.Source != FamilyRouteScopeAllocation {
+		return nil
+	}
+	return ScopeAnchorTeams(outcome.Frame, outcome.WinningSample.ScopeAnchorKind, resolution)
 }
 
 func investigationSubjects(resolution SubjectResolution, cohort *Cohort) []SubjectRef {

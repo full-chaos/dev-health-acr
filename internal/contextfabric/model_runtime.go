@@ -2465,7 +2465,7 @@ func (r RuntimeQuestionInterpreter) finishFamilyResolution(
 	// comparison is a measurement and suppressing it would blind the flip
 	// decision this shadow exists to inform. Only the overwrite is withheld.
 	if shadow.FrameObserved {
-		route = RouteFrameFamily(shadow.Agreement, outcome.Frame)
+		route = RouteFrameFamily(shadow.Agreement, outcome.Frame, receipt.ScopeAnchorKind)
 		if outcome.Source != QuestionFamilySourcePluralityRejected {
 			outcome.Family = route.Family
 		}

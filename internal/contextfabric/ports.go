@@ -494,6 +494,13 @@ type GraphDiscoveryRequest struct {
 	// discovery for the member set actually served under that certified
 	// line.
 	Bases CommitBasisSet `json:"-"`
+	// AnchorFactOnly says the served family answers from the scope anchor's own
+	// fact, so discovery reads no member set (CHAOS-12606; the lead's ruling on
+	// CHAOS-4610, option a). The engine sets it when the scope-anchor
+	// allocation route decided the family: "how is team X investing across its
+	// repositories" is the team's investment fact, and its repository split is
+	// the fact's own table, never a cohort of member facts.
+	AnchorFactOnly bool `json:"-"`
 }
 
 // CanonicalFactReader is the typed, read-only boundary back to canonical Dev
