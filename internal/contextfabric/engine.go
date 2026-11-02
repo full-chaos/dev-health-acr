@@ -2758,18 +2758,14 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 	} else {
 		derivedRequirements = deriveTurnRequirements(requirementFrame, e.requirements)
 	}
-	planInput := PlanAnswerInput{
+	plan := PlanAnswer(PlanAnswerInput{
 		Family:           familyOutcome,
 		Interpretation:   interpretation,
 		Budget:           e.effectiveResponseBudget(request),
 		MaxCohortMembers: request.Options.MaxCohortMembers,
 		WorkItemList:     workItemTuple,
 		Requirements:     derivedRequirements,
-	}
-	plan := PlanAnswer(planInput)
-	if operandRows := OperandReadRowCount(derivedRequirements); operandRows > 0 && e.telemetry != nil {
-		e.telemetry.RecordOperandReadKinds(ctx, principal, operandRows, len(OperandReadRowServingKinds(derivedRequirements)), len(planOperandReadKindsAdded(planInput)))
-	}
+	})
 	// The derived requirement rows belong to the PLAN VARIABLE, not to a copy
 	// of it.
 	//
@@ -3774,7 +3770,19 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 			return terminal, terminalErr
 		}
 	}
-	mergedFactRequirements := mergeFactRequirements(statusComposedRequirements, graphContext.FactRequirements, cohortRankingRequirements)
+	// CHAOS-12596: the kinds a served OPERAND read row names as serving its
+	// side are READ, not only planned. plan.FactKinds reaches the fact request
+	// above only through a cohort, and an explicit comparison of named
+	// subjects has none, so without this group the plan said metrics and the
+	// read never asked for it (codex r1 on the PR, executed). Appended LAST,
+	// so every more specific requirement for the same kind wins and this only
+	// fills a kind that is otherwise absent. A work-item tuple reads its own
+	// fixed set and gains nothing here.
+	operandReadRequirements := operandReadFactRequirements(derivedRequirements, workItemTuple)
+	mergedFactRequirements := mergeFactRequirements(statusComposedRequirements, graphContext.FactRequirements, cohortRankingRequirements, operandReadRequirements)
+	if operandRows := OperandReadRowCount(derivedRequirements); operandRows > 0 && !workItemTuple && e.telemetry != nil {
+		e.telemetry.RecordOperandReadKinds(ctx, principal, operandRows, len(operandReadRequirements), len(mergedFactRequirements)-len(mergeFactRequirements(statusComposedRequirements, graphContext.FactRequirements, cohortRankingRequirements)))
+	}
 	factRequest := CanonicalFactRequest{
 		workItemTuple:            workItemTuple,
 		LinkScopedSubjects:       linkScopedFactSubjects(ctx, request, subjects, tupleCensus),

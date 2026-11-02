@@ -382,33 +382,18 @@ func appendOperandReadKinds(kinds []FactKind, requirements []DerivedRequirement)
 	return kinds, added
 }
 
-// planOperandReadKindsAdded is the kinds the operand widening added to this
-// plan's FactKinds, recomputed from the same inputs PlanAnswer read so the
-// telemetry line cannot report a different decision than the plan holds.
-func planOperandReadKindsAdded(input PlanAnswerInput) []FactKind {
-	family := input.Family.Family
-	if !contractsv1.ValidContextFabricQuestionFamily(family) {
-		family = QuestionFamilyUnclassified
+// operandReadFactRequirements is the fact request group for the kinds served
+// operand read rows name (CHAOS-12596): one requirement per kind, in
+// vocabulary order, nil for a work-item tuple or when there is none.
+func operandReadFactRequirements(rows []DerivedRequirement, workItemTuple bool) []FactRequirement {
+	if workItemTuple {
+		return nil
 	}
-	definition, found := LookupQuestionFamily(family)
-	if !found {
-		definition = QuestionFamilyDefinition{Family: family, Budget: PlanBudgetUnbounded}
+	var requirements []FactRequirement
+	for _, kind := range OperandReadRowServingKinds(rows) {
+		requirements = append(requirements, FactRequirement{Kind: kind})
 	}
-	withoutOperands := planFactKinds(definition, input.Interpretation, withoutOperandReadRows(input.Requirements))
-	_, added := appendOperandReadKinds(withoutOperands, input.Requirements)
-	return added
-}
-
-// withoutOperandReadRows is rows with every operand read row removed.
-func withoutOperandReadRows(rows []DerivedRequirement) []DerivedRequirement {
-	out := make([]DerivedRequirement, 0, len(rows))
-	for _, row := range rows {
-		if row.Kind == ObligationKindRead && row.Role == SubjectRoleOperand {
-			continue
-		}
-		out = append(out, row)
-	}
-	return out
+	return requirements
 }
 
 // isCohortSubjectAxis reports whether this family answers about many

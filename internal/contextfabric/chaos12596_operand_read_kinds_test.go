@@ -41,8 +41,11 @@ func TestOperandReadRowKindsJoinThePlan(t *testing.T) {
 	if got[0] != FactPullRequests || got[1] != FactFlow {
 		t.Fatalf("plan = %v, want the model's kinds first (first-kind-wins)", got)
 	}
-	if added := planOperandReadKindsAdded(PlanAnswerInput{Family: QuestionFamilyOutcome{Family: QuestionFamilyExplicitComparison}, Interpretation: model, Requirements: rows}); !slices.Equal(added, []FactKind{FactIdentity, FactMetrics}) {
-		t.Fatalf("added = %v, want [identity metrics] (health is already a cohort ranking kind)", added)
+	if requirements := operandReadFactRequirements(rows, false); len(requirements) != 3 || !slices.ContainsFunc(requirements, func(r FactRequirement) bool { return r.Kind == FactMetrics }) {
+		t.Fatalf("operand read requirements = %v, want health, identity, metrics", requirements)
+	}
+	if requirements := operandReadFactRequirements(rows, true); requirements != nil {
+		t.Fatalf("work-item tuple operand read requirements = %v, want none", requirements)
 	}
 }
 
@@ -87,10 +90,20 @@ func TestComparisonTurnRecordsOperandReads(t *testing.T) {
 		interpretation: InterpretedQuestion{Shape: ShapeExplicitCohort, RequestedJudgment: "compare", SubjectTerms: []string{"a", "b"}, ComparisonTerms: []string{"a", "b"}, TimeContext: TimeContext{Axis: TemporalCurrent}, FactRequirements: []FactRequirement{}},
 		family:         QuestionFamilyOutcome{Family: QuestionFamilyExplicitComparison, Source: QuestionFamilySourceModel, Frame: &frame},
 	}
+	acr := SubjectRef{Kind: SubjectRepository, CanonicalID: "repository:acr", Label: "full-chaos/dev-health-acr"}
+	ops := SubjectRef{Kind: SubjectRepository, CanonicalID: "repository:ops", Label: "full-chaos/dev-health-ops"}
+	var read []CanonicalFactRequest
 	engine, err := NewEngine(EngineDependencies{
 		Interpreter: interpreter,
-		Graph:       &acceptanceGraphReader{resolution: SubjectResolution{Candidates: []SubjectCandidate{}, Committed: []SubjectRef{}}, context: emptyGraphContext()},
-		Facts: factReaderFunc(func(context.Context, storage.Principal, CanonicalFactRequest) (CanonicalFactBundle, error) {
+		Graph: &acceptanceGraphReader{resolution: SubjectResolution{
+			Committed: []SubjectRef{acr, ops},
+			Candidates: []SubjectCandidate{
+				{Subject: acr, State: ResolutionCommitted, Confidence: 1, MatchReasons: []string{"exact"}, MatchedTerms: []string{"a"}},
+				{Subject: ops, State: ResolutionCommitted, Confidence: 1, MatchReasons: []string{"exact"}, MatchedTerms: []string{"b"}},
+			},
+		}, context: emptyGraphContext()},
+		Facts: factReaderFunc(func(_ context.Context, _ storage.Principal, request CanonicalFactRequest) (CanonicalFactBundle, error) {
+			read = append(read, request)
 			return CanonicalFactBundle{}, nil
 		}),
 		Synthesizer: synthesizerFunc(func(context.Context, storage.Principal, SynthesisInput) (InvestigationResult, error) {
@@ -103,10 +116,22 @@ func TestComparisonTurnRecordsOperandReads(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// The turn stops at synthesis (the stub refuses); the plan, and the line,
-	// are built before that. The served plan is pinned by the planner tests.
+	// The turn stops at synthesis (the stub refuses). The fact read, and the
+	// line, run before that.
 	_, _ = engine.Investigate(context.Background(), acceptancePrincipal(), validInvestigationRequestWithConfirmedWindow())
-	if len(telemetry.operandReadKinds) != 1 || telemetry.operandReadKinds[0] != [3]int{1, 3, 2} {
-		t.Fatalf("operand read lines = %v, want one line {rows 1, named 3, added 2}", telemetry.operandReadKinds)
+	if len(read) != 1 {
+		t.Fatalf("fact reads = %d, want 1 (the turn must reach the canonical fact read)", len(read))
+	}
+	var kinds []FactKind
+	for _, requirement := range read[0].Requirements {
+		kinds = append(kinds, requirement.Kind)
+	}
+	for _, want := range []FactKind{FactHealth, FactIdentity, FactMetrics} {
+		if !slices.Contains(kinds, want) {
+			t.Errorf("fact request kinds = %v, want %s from the operand read row", kinds, want)
+		}
+	}
+	if len(telemetry.operandReadKinds) != 1 || telemetry.operandReadKinds[0] != [3]int{1, 3, 3} {
+		t.Fatalf("operand read lines = %v, want one line {rows 1, named 3, added 3}", telemetry.operandReadKinds)
 	}
 }
