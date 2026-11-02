@@ -298,7 +298,8 @@ func (a *Adapter) ResolveSubjects(ctx context.Context, principal storage.Princip
 		// above; graphrank.ResolveSubjects itself is what gates the shadow
 		// round on "stalled resolution only" and adds the 3s deadline +
 		// panic recovery, so nothing extra is needed here.
-		CensusFunc: a.config.CensusFunc,
+		CensusFunc:        a.config.CensusFunc,
+		WorkItemKeyPrefix: a.config.WorkItemKeyPrefix,
 		// CHAOS-12456: a failed link read leaves a repo-less work item unknown,
 		// and the terminal says so.
 		WorkItemLinksUnread: func() bool { return linkReachError(ctx) != nil },

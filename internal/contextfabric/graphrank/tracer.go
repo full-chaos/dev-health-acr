@@ -519,6 +519,15 @@ func (t SlogResolutionTracer) Trace(event ResolutionTraceEvent) {
 			"distinct_kind_count", event.KindOfferDistinctKindCount,
 			"suppressed_by_cardinality", event.KindOfferSuppressedByCardinality,
 			"suppressed_by_unservable_declared_kind", event.KindOfferSuppressedByUnservableDeclaredKind)
+	case "work_item_key_gate":
+		// CHAOS-12463: a ticket-key shape whose prefix could not be read stays
+		// unbound, and that must not pass in silence. Counts only, no token.
+		if event.WorkItemKeysUnread == 0 {
+			return
+		}
+		t.logger.WarnContext(ctx, "context fabric resolution trace: work item key prefix unread",
+			"request_id", contextfabric.SanitizeLogAttr(event.RequestID), "stage", contextfabric.SanitizeLogAttr(event.Stage),
+			"key_shapes", event.WorkItemKeyTokens, "held", event.WorkItemKeysHeld, "unread", event.WorkItemKeysUnread)
 	case "page_hint_lookup":
 		// CHAOS-12230: at most one line per resolveSubjects call, Info like
 		// kind_offer_withheld above: a page hint that misses the exact lookup

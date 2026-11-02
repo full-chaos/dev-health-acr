@@ -16,8 +16,7 @@ type workItemHandleRound struct {
 	count    int
 }
 
-func workItemHandleRoundOf(question string, attestation Attestation) workItemHandleRound {
-	bound := BindHandles(question)
+func workItemHandleRoundOf(bound []BoundHandle, attestation Attestation) workItemHandleRound {
 	if len(bound) != 1 || bound[0].Kind != contextfabric.SubjectWorkItem {
 		return workItemHandleRound{}
 	}

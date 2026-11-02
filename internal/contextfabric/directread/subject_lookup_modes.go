@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -112,10 +113,11 @@ func planHandle(plan findPlan, handle string) (findPlan, error) {
 	if len([]rune(handle)) > MaxFindQueryRunes {
 		return plan, fmt.Errorf("%w: handle is too long", ErrFindInvalidRequest)
 	}
-	bound := graphrank.BindHandles(handle)
+	// A ticket key binds here only as the whole handle (BindWorkItemKey): free
+	// text binds any key shape (CHAOS-12463), and a key in a sentence is not one
+	// exact key. The census decides existence (CHAOS-7159).
+	bound := slices.DeleteFunc(graphrank.BindHandles(handle), graphrank.IsWorkItemTicketKey)
 	if len(bound) == 0 {
-		// CHAOS-7159: one whole-text key of any prefix; the org census
-		// decides existence (registry and free-text grammar unchanged).
 		if key, ok := graphrank.BindWorkItemKey(handle); ok {
 			bound = []graphrank.BoundHandle{key}
 		}

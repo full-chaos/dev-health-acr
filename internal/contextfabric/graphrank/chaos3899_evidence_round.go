@@ -410,7 +410,12 @@ type ShadowEvidenceRoundInput struct {
 	// complete) -- BindAnchor reuses them rather than re-querying.
 	AliasClaimants      map[string][]IdentityMatch
 	AliasLookupComplete bool
-	CensusFunc          CensusFunc
+	// QuestionHandles is the turn's bindQuestionHandles answer, when
+	// QuestionHandlesBound. A harness that calls the round directly has no turn,
+	// and its question's text is bound as it stands.
+	QuestionHandles      []BoundHandle
+	QuestionHandlesBound bool
+	CensusFunc           CensusFunc
 	// PreNarrowingExplicitKinds (CHAOS-3972 P3, design brief §2.0) is the
 	// PRE-narrowing hypothesis kind-set the caller captured BEFORE
 	// applying an EXPLICIT (non-receipt) kind narrowing to PooledKinds --
@@ -652,7 +657,10 @@ func RunShadowEvidenceRound(ctx context.Context, input ShadowEvidenceRoundInput,
 	// function was ever called (ShadowEvidenceRoundInput.AliasClaimants).
 	traceSourceNativeBinds(tracer, input.RequestID, BindSourceNativeHandles(input.Question, input.AliasClaimants, input.AliasLookupComplete))
 
-	bound := BindHandles(input.Question)
+	bound := input.QuestionHandles
+	if !input.QuestionHandlesBound {
+		bound = BindHandles(input.Question)
+	}
 	if IsMultiHandle(bound) {
 		return emit(Attestation{Outcome: ShadowWouldClarify, Reason: ReasonMultiHandle, UnscopedVisibility: true})
 	}
