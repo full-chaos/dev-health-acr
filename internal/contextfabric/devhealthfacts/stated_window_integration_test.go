@@ -91,6 +91,8 @@ func statedWindowFixture(t *testing.T, ctx context.Context, org string) []contex
 			org, "repo", side.repo, day, "low", 0.1, at)
 		exec(`INSERT INTO compounding_risk_daily (org_id, scope, scope_id, day, severity, compounding_risk, computed_at) VALUES (?,?,?,?,?,?,?)`,
 			org, "team", side.team, day, "low", 0.1, at)
+		exec(`INSERT INTO repo_metrics_daily (repo_id, org_id, day, commits_count, prs_merged, median_pr_cycle_hours, change_failure_rate, mttr_hours, bus_factor, code_ownership_gini, computed_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)`,
+			side.repo, org, day, uint32(10), uint32(1), 5.0, 0.05, nil, uint32(2), 0.1, at)
 		exec(`INSERT INTO work_item_metrics_daily (day, provider, work_scope_id, team_id, items_started, items_completed, wip_count_end_of_day, cycle_time_p50_hours, lead_time_p50_hours, bug_completed_ratio, story_points_completed, computed_at, org_id) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 			day, "github", side.scope, side.team, uint32(3), uint32(2), uint32(1), float64(4), float64(8), float64(0.1), float64(2), at, org)
 	}
@@ -126,8 +128,10 @@ func TestAStatedWindowBoundsEveryDatedRead(t *testing.T) {
 		{"metrics project", contextfabric.FactMetrics, project(statedWindowStaleScope), project(statedWindowFreshScope)},
 		{"health repository", contextfabric.FactHealth, repo(statedWindowStaleRepo), repo(statedWindowFreshRepo)},
 		{"health team", contextfabric.FactHealth, team(statedWindowStaleTeam), team(statedWindowFreshTeam)},
+		{"health project", contextfabric.FactHealth, project(statedWindowStaleScope), project(statedWindowFreshScope)},
 		{"flow team", contextfabric.FactFlow, team(statedWindowStaleTeam), team(statedWindowFreshTeam)},
 		{"flow project", contextfabric.FactFlow, project(statedWindowStaleScope), project(statedWindowFreshScope)},
+		{"flow repository", contextfabric.FactFlow, repo(statedWindowStaleRepo), repo(statedWindowFreshRepo)},
 	} {
 		t.Run(read.name, func(t *testing.T) {
 			provider := findProvider(t, providers, read.kind)
