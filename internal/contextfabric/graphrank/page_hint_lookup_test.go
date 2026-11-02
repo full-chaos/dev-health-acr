@@ -312,6 +312,30 @@ func TestPageHintLookupIsWrittenByTheOffersOnlyResolution(t *testing.T) {
 	}
 }
 
+// CHAOS-4451: a resolution whose ctx carries the engine's
+// WithPageHintLookupReported mark writes no line; the offers-only resolution
+// before it on the same request wrote it. The same call unmarked writes one,
+// so the mark is what suppresses it.
+func TestPageHintLookupIsNotWrittenTwiceOnARequestThatAnswersAfterTheOffersOnlyPass(t *testing.T) {
+	t.Parallel()
+	lines := func(ctx context.Context) int {
+		request, backend, principal := threeOutcomeRequest()
+		tracer := &captureResolutionTracer{}
+		deps := backend.deps()
+		deps.ResolutionTracer = tracer
+		if _, _, _, _, err := ResolveSubjectsWithCommitBasis(ctx, principal, request, testInterpreted(), deps, nil, nil, nil, ""); err != nil {
+			t.Fatalf("ResolveSubjectsWithCommitBasis() error = %v", err)
+		}
+		return len(pageHintEvents(t, tracer))
+	}
+	if got := lines(context.Background()); got != 1 {
+		t.Fatalf("premise: an unmarked decisive resolution wrote %d page_hint_lookup lines, want 1", got)
+	}
+	if got := lines(contextfabric.WithPageHintLookupReported(context.Background())); got != 0 {
+		t.Fatalf("a marked decisive resolution wrote %d page_hint_lookup lines, want 0", got)
+	}
+}
+
 // A labelled miss is a label_fallback only when the term search actually
 // searched its label. The term pass returns at its first failing term, and
 // the interpreted terms come before the hint labels (SubjectTerms), so a

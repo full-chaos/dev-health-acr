@@ -103,7 +103,9 @@ func buildWindowGateEngine(t *testing.T, interpreter QuestionInterpreter, graph 
 func TestWindowGate_ClassDefault_InterceptsAfterInterpretBeforeResolution(t *testing.T) {
 	t.Parallel()
 	interpreter := &countingInterpreter{interpretation: bootstrapInterpretation()}
-	graph := &acceptanceGraphReader{resolution: SubjectResolution{Candidates: []SubjectCandidate{}, Committed: []SubjectRef{}}, context: emptyGraphContext()}
+	// CHAOS-4451: the gate now ends a turn only when it has a question beyond
+	// the window, so this fixture's offers-only pass carries one.
+	graph := &acceptanceGraphReader{resolution: SubjectResolution{Candidates: []SubjectCandidate{}, Committed: []SubjectRef{}}, context: emptyGraphContext(), material: chaos4234GatedMaterial()}
 	results := newMapResultStore()
 	engine := buildWindowGateEngine(t, interpreter, graph, results)
 
@@ -144,11 +146,15 @@ func TestWindowGate_ClassDefault_InterceptsAfterInterpretBeforeResolution(t *tes
 	if result.StructureNeeds == nil {
 		t.Fatal("StructureNeeds is nil, want a window-only disclosure: CHAOS-4118 composes it from the effective window, which needs no resolution")
 	}
-	if len(result.StructureNeeds.Missing) != 1 || result.StructureNeeds.Missing[0] != contractsv1.ContextFabricStructureNeedWindow {
-		t.Fatalf("StructureNeeds.Missing = %#v, want exactly [window]", result.StructureNeeds.Missing)
+	// CHAOS-4451 (moved): the gate fires only with a question beyond the
+	// window, so the disclosure leads with window and carries that question
+	// too (window first, CHAOS-4234 order); a window-only turn answers instead
+	// (TestWindowGate_AllowClarificationTrueAnswersWithTheOffer).
+	if len(result.StructureNeeds.Missing) == 0 || result.StructureNeeds.Missing[0] != contractsv1.ContextFabricStructureNeedWindow || len(result.StructureNeeds.Missing) != 3 {
+		t.Fatalf("StructureNeeds.Missing = %#v, want [window expected_kind subject_handle]", result.StructureNeeds.Missing)
 	}
-	if len(result.StructureNeeds.KindOptions) != 0 || len(result.StructureNeeds.AnchorOptions) != 0 || len(result.StructureNeeds.HandleOptions) != 0 {
-		t.Fatalf("StructureNeeds kind/anchor/handle options = %#v/%#v/%#v, want all empty: this fake's offers-only resolve returned empty material, so the gate reduces to CHAOS-4118's window-only disclosure", result.StructureNeeds.KindOptions, result.StructureNeeds.AnchorOptions, result.StructureNeeds.HandleOptions)
+	if len(result.StructureNeeds.KindOptions) == 0 || len(result.StructureNeeds.HandleOptions) == 0 {
+		t.Fatalf("StructureNeeds kind/handle options = %#v/%#v, want the offers-only material beside the window offer", result.StructureNeeds.KindOptions, result.StructureNeeds.HandleOptions)
 	}
 	if !reflect.DeepEqual(result.StructureNeeds.WindowOptions, result.WindowClarification.Options) {
 		t.Fatalf("StructureNeeds.WindowOptions = %#v, want the identical option set as WindowClarification.Options = %#v", result.StructureNeeds.WindowOptions, result.WindowClarification.Options)
@@ -166,7 +172,9 @@ func TestWindowGate_ClassDefault_InterceptsAfterInterpretBeforeResolution(t *tes
 func TestWindowGate_ClassDefault_NudgeModeAppendsWarning(t *testing.T) {
 	t.Parallel()
 	interpreter := &countingInterpreter{interpretation: bootstrapInterpretation()}
-	graph := &acceptanceGraphReader{resolution: SubjectResolution{Candidates: []SubjectCandidate{}, Committed: []SubjectRef{}}, context: emptyGraphContext()}
+	// CHAOS-4451: the gate now ends a turn only when it has a question beyond
+	// the window, so this fixture's offers-only pass carries one.
+	graph := &acceptanceGraphReader{resolution: SubjectResolution{Candidates: []SubjectCandidate{}, Committed: []SubjectRef{}}, context: emptyGraphContext(), material: chaos4234GatedMaterial()}
 	engine := buildWindowGateEngine(t, interpreter, graph, newMapResultStore())
 
 	request := validInvestigationRequest() // no EvidenceWindow -- class-default gate applies
@@ -278,7 +286,9 @@ func TestWindowGate_ReuseRejectsOldDecisiveInferredWindowCandidate(t *testing.T)
 	interpreter := &countingInterpreter{interpretation: bootstrapInterpretation()}
 	// CHAOS-4234: gate 2 now runs one offers-only resolve, so the graph
 	// double must tolerate exactly that call and nothing past it.
-	graph := &acceptanceGraphReader{resolution: SubjectResolution{Candidates: []SubjectCandidate{}, Committed: []SubjectRef{}}, context: emptyGraphContext()}
+	// CHAOS-4451: the gate now ends a turn only when it has a question beyond
+	// the window, so this fixture's offers-only pass carries one.
+	graph := &acceptanceGraphReader{resolution: SubjectResolution{Candidates: []SubjectCandidate{}, Committed: []SubjectRef{}}, context: emptyGraphContext(), material: chaos4234GatedMaterial()}
 	engine := mustReuseTestEngine(t, EngineDependencies{
 		Interpreter: interpreter,
 		Graph:       graph,
@@ -327,7 +337,9 @@ func TestWindowGate_ClassDefault_WithConfirmedStructure_EchoesAndPersists(t *tes
 	store := &staticResultStore{results: map[string]InvestigationResult{priorResult.ResultID: priorResult}}
 
 	interpreter := &countingInterpreter{interpretation: bootstrapInterpretation()}
-	graph := &acceptanceGraphReader{resolution: SubjectResolution{Candidates: []SubjectCandidate{}, Committed: []SubjectRef{}}, context: emptyGraphContext()}
+	// CHAOS-4451: the gate now ends a turn only when it has a question beyond
+	// the window, so this fixture's offers-only pass carries one.
+	graph := &acceptanceGraphReader{resolution: SubjectResolution{Candidates: []SubjectCandidate{}, Committed: []SubjectRef{}}, context: emptyGraphContext(), material: chaos4234GatedMaterial()}
 	engine := buildWindowGateEngine(t, interpreter, graph, store)
 
 	request := validInvestigationRequest() // no EvidenceWindow -- class-default gate applies
@@ -382,7 +394,9 @@ func TestWindowGate_ClassDefault_WithConfirmedStructure_EchoesAndPersists(t *tes
 func TestWindowGate_ClassDefault_RecordsStructureNeedsTelemetry(t *testing.T) {
 	t.Parallel()
 	interpreter := &countingInterpreter{interpretation: bootstrapInterpretation()}
-	graph := &acceptanceGraphReader{resolution: SubjectResolution{Candidates: []SubjectCandidate{}, Committed: []SubjectRef{}}, context: emptyGraphContext()}
+	// CHAOS-4451: the gate now ends a turn only when it has a question beyond
+	// the window, so this fixture's offers-only pass carries one.
+	graph := &acceptanceGraphReader{resolution: SubjectResolution{Candidates: []SubjectCandidate{}, Committed: []SubjectRef{}}, context: emptyGraphContext(), material: chaos4234GatedMaterial()}
 	telemetry := &recordingTelemetry{}
 	engine, err := NewEngine(EngineDependencies{
 		Interpreter: interpreter,
@@ -415,15 +429,19 @@ func TestWindowGate_ClassDefault_RecordsStructureNeedsTelemetry(t *testing.T) {
 	if result.StructureNeeds == nil || len(result.StructureNeeds.WindowOptions) == 0 {
 		t.Fatalf("result.StructureNeeds = %#v, want a non-nil window-only disclosure with options", result.StructureNeeds)
 	}
-	if len(telemetry.structureNeedsDisclosed) != 1 || telemetry.structureNeedsDisclosed[0] != contractsv1.ContextFabricStructureNeedWindow {
-		t.Fatalf("structureNeedsDisclosed = %#v, want exactly one cf_structure_needs_disclosed{member=window} call", telemetry.structureNeedsDisclosed)
+	// CHAOS-4451 (moved): the gated turn now carries a question beyond the
+	// window, so the line fires once per disclosed member, window first.
+	if want := []contractsv1.ContextFabricStructureNeedKind{contractsv1.ContextFabricStructureNeedWindow, contractsv1.ContextFabricStructureNeedExpectedKind, contractsv1.ContextFabricStructureNeedSubjectHandle}; !reflect.DeepEqual(telemetry.structureNeedsDisclosed, want) {
+		t.Fatalf("structureNeedsDisclosed = %#v, want %#v", telemetry.structureNeedsDisclosed, want)
 	}
 	// codex xhigh review round 1 (low, addressed): assert the EXACT record
 	// set, not merely "at least one match" -- a duplicate or spurious extra
 	// record for another member/source would pass the weaker check.
 	wantCount := len(result.StructureNeeds.WindowOptions)
 	want := structureOfferCountRecord{member: contractsv1.ContextFabricStructureNeedWindow, source: contractsv1.ContextFabricStructureOfferEngine, count: wantCount}
-	if len(telemetry.structureOfferCounts) != 1 || telemetry.structureOfferCounts[0] != want {
-		t.Fatalf("structureOfferCounts = %#v, want exactly [%#v]", telemetry.structureOfferCounts, want)
+	// CHAOS-4451 (moved): one record per disclosed member; the window's
+	// record leads and is exact.
+	if len(telemetry.structureOfferCounts) != 3 || telemetry.structureOfferCounts[0] != want {
+		t.Fatalf("structureOfferCounts = %#v, want the window record %#v first, then expected_kind and subject_handle", telemetry.structureOfferCounts, want)
 	}
 }

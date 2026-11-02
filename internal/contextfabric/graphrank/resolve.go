@@ -2964,8 +2964,13 @@ func resolveSubjects(ctx context.Context, principal storage.Principal, request c
 	// returns above this point (organization, context, the comparison
 	// dispatch) never reach the loop and write none. The tracer is read now:
 	// the deferred call reports to the tracer this call was given.
+	// CHAOS-4451: a decisive resolution after the class-default gate's
+	// offers-only one answered carries the engine's mark; that first
+	// resolution wrote the request's line.
 	pageHints := newPageHintLookupTally(request, hintsOfAnotherKind)
-	defer pageHints.emit(deps.ResolutionTracer)
+	if !contextfabric.PageHintLookupReported(ctx) {
+		defer pageHints.emit(deps.ResolutionTracer)
+	}
 	for hintIndex, hint := range request.RequestedScope.SubjectHints {
 		if strings.TrimSpace(hint.ID) == "" || hint.Kind == "" {
 			continue

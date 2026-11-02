@@ -473,7 +473,8 @@ func TestEveryFreshResultExitAssertsTheBudget(t *testing.T) {
 			Frame: state.Frame, WinningSampleIndex: 0,
 			WinningSample: FamilySample{ModelFamily: QuestionFamilyScopedCohortStatus, ScopeAnchorKind: SubjectProject, ScopeAnchorTerm: "Project Alpha"},
 		}}
-		graph := &acceptanceGraphReader{resolution: SubjectResolution{Candidates: []SubjectCandidate{}, Committed: []SubjectRef{}}, context: emptyGraphContext()}
+		// CHAOS-4451: the gate fires only on a question beyond the window.
+		graph := &acceptanceGraphReader{resolution: SubjectResolution{Candidates: []SubjectCandidate{}, Committed: []SubjectRef{}}, context: emptyGraphContext(), material: chaos4234GatedMaterial()}
 		engine := buildWindowGateEngineWithBudget(t, interpreter, graph, newMapResultStore(), maxItems, telemetry)
 		request := validInvestigationRequest() // no window stated: the class-default gate
 		request.Question = "What is the status of the work items in Project Alpha?"
