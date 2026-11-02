@@ -2,6 +2,7 @@ package graphrank
 
 import (
 	"context"
+	"strconv"
 	"strings"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
@@ -37,7 +38,9 @@ type WorkItemKeyPrefixFunc func(ctx context.Context, orgID, prefix string) (Work
 // The read runs under the same grant as the census, so what it shows a restricted
 // caller is inside its grant: a prefix that exists only outside it reads as a
 // word. A turn reads at most maxWorkItemKeyPrefixReads prefixes, failures
-// included, and a read that cannot run is counted once per prefix. If any key is
+// included, and a read that cannot run is counted once per prefix. Every resolver
+// call of a turn reads the turn's memo (contextfabric.WithWorkItemKeyPrefixMemo),
+// so a prefix is read once per turn, however often the turn resolves. If any key is
 // left unread, the turn cannot tell one handle from several: the unread key may
 // name a second subject, which would refuse a decisive outcome as multi_handle.
 // So such a turn binds no handle at all, and answers by search.
@@ -100,15 +103,21 @@ func workItemKeyPrefix(handle BoundHandle) (string, bool) {
 }
 
 func readWorkItemKeyPrefix(ctx context.Context, principal storage.Principal, prefix string, deps ResolveDeps, reads int) (seen, ok bool) {
+	// One turn resolves subjects more than once; the turn's memo keeps each read,
+	// a failed one included, so a prefix is read once per turn (CHAOS-12463).
+	grant, bound := contextfabric.CensusGrantFrom(ctx)
+	key := principal.OrgID + "\x00" + strconv.FormatBool(bound) + "\x00" + strings.Join(grant, "\x01") + "\x00" + prefix
+	if read, found := contextfabric.WorkItemKeyPrefixReadFrom(ctx, key); found {
+		return read.Seen, read.Read
+	}
 	if deps.WorkItemKeyPrefix == nil || reads >= maxWorkItemKeyPrefixReads {
 		return false, false
 	}
 	outcome, err := deps.WorkItemKeyPrefix(ctx, principal.OrgID, prefix)
-	if err != nil {
-		return false, false
+	read := contextfabric.WorkItemKeyPrefixRead{Seen: outcome.Seen, Read: err == nil && (!bound || outcome.GrantApplied)}
+	if !read.Read {
+		read.Seen = false
 	}
-	if _, bound := contextfabric.CensusGrantFrom(ctx); bound && !outcome.GrantApplied {
-		return false, false
-	}
-	return outcome.Seen, true
+	contextfabric.RecordWorkItemKeyPrefixRead(ctx, key, read)
+	return read.Seen, read.Read
 }

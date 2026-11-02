@@ -322,7 +322,10 @@ prefix: a URL with a path and a fragment has a reference's shape. A read that
 cannot run (none wired, an error, a grant it cannot apply, more than 8 prefixes in
 one question) is read once per prefix, and leaves the turn with no handle at all,
 since an unread key may name a second subject; it logs
-`graphrank.work_item_key_prefix_unread` at Warn, counts only. Measured on the
+`graphrank.work_item_key_prefix_unread` at Warn, counts only. A turn resolves
+subjects more than once (the main pass, the offers-only pass, each answer reuse
+recheck batch, the group read), and every call reads one memo that `Investigate`
+attaches, so each prefix is read once per turn, a failed read included. Measured on the
 local stack: 40 to 130 ms under a one- to five-repository grant, 4 to 8 ms with no
 grant.
 

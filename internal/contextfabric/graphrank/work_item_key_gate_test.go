@@ -282,3 +282,37 @@ func TestAPoolWorkItemOfAnyTrackerIsOfferedAsAHandle(t *testing.T) {
 		}
 	}
 }
+
+// One turn resolves subjects more than once, and each resolver call binds the
+// question's handles (CHAOS-12463). Under the turn's memo a prefix is read once,
+// a failed read included; without one, each call reads.
+func TestAPrefixIsReadOncePerTurnAcrossResolverCalls(t *testing.T) {
+	t.Parallel()
+	for name, reads := range map[string]*prefixReads{
+		"held":   {held: map[string]bool{"OPS-": true}},
+		"failed": {err: errors.New("prefix read failed")},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			resolveTwice := func(ctx context.Context) {
+				for range 2 {
+					deps := (&fakeGraphBackend{searchResults: map[string][]CandidateNode{}, exactHints: map[string]CandidateNode{}}).deps()
+					deps.WorkItemKeyPrefix = reads.read
+					request := testRequest()
+					request.Question = "what is the status of OPS-204?"
+					if _, _, _, _, err := ResolveSubjectsWithCommitBasis(ctx, storage.Principal{OrgID: "org_1"}, request, testInterpreted("OPS-204"), deps, nil, nil, nil, ""); err != nil {
+						t.Fatal(err)
+					}
+				}
+			}
+			resolveTwice(contextfabric.WithWorkItemKeyPrefixMemo(context.Background()))
+			if len(reads.calls) != 1 {
+				t.Fatalf("one turn, two resolver calls: prefix reads = %v, want one", reads.calls)
+			}
+			resolveTwice(context.Background())
+			if len(reads.calls) != 3 {
+				t.Fatalf("no memo: prefix reads = %v, want one per call", reads.calls)
+			}
+		})
+	}
+}
