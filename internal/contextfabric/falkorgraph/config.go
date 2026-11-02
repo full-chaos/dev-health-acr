@@ -293,6 +293,10 @@ type Config struct {
 	// (chaos3884_replay_harness_test.go) also wires this, independently,
 	// through its own separate composition (buildReplayGraphReader).
 	CensusFunc graphrank.CensusFunc
+	// WorkItemKeyPrefix (CHAOS-12463) is the read that lets a ticket key in a
+	// question count as a handle. nil leaves every key unbound, so it is wired
+	// beside CensusFunc. Threaded to graphrank.ResolveDeps.WorkItemKeyPrefix.
+	WorkItemKeyPrefix graphrank.WorkItemKeyPrefixFunc
 	// HandleGrammarChecker (CHAOS-3972 P3) is optional (nil-safe), same
 	// convention as CensusFunc above: a nil value means an explicit
 	// subject_handle can never become a receipt-bound offer (see that

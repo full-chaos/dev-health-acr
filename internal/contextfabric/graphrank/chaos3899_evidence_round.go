@@ -188,6 +188,10 @@ type KindAttestation struct {
 	AnchorApplied   bool
 	// RepositoryFilterApplied mirrors CensusOutcome.RepositoryFilterApplied.
 	RepositoryFilterApplied bool
+	// LinkScopeUnread (CHAOS-12505): this work-item census ran, and the keyed
+	// link read that scopes it to a requested repository scope failed or was
+	// cut, so the kind is incomplete for a reason no count shows.
+	LinkScopeUnread bool
 	// SatisfierCanonicalID/SatisfierCanonicalIDs/SatisfierSetClosureMismatch
 	// (CHAOS-3896 Slice B) mirror CensusOutcome's own fields of the same
 	// name -- see that type's doc comment. In-process only, deliberately
@@ -384,11 +388,11 @@ type ShadowEvidenceRoundInput struct {
 	NarrowSatisfiers SatisfierNarrower
 	// CensusRepositories, set together with NarrowSatisfiers, is the slug list
 	// the census applies inside its query. A work item is not scoped by it:
-	// its census reads the organization and keeps the satisfiers the scope's
-	// link walk reaches (workItemScope, withinLinkScope).
+	// its census reads the organization and keeps the satisfiers that link
+	// into the scope (workItemScope, withinLinkScope).
 	CensusRepositories []string
-	// workItemScope is the requested repository scope's work-item population,
-	// shared with NarrowSatisfiers; nil when no link walk is wired.
+	// workItemScope is the requested repository scope's keyed link read,
+	// shared with NarrowSatisfiers; nil when no read is wired.
 	workItemScope *linkScope
 	// Trigger names why the round ran ("stalled", "committed_scope_anchor");
 	// a pure trace tag.
@@ -410,7 +414,12 @@ type ShadowEvidenceRoundInput struct {
 	// complete) -- BindAnchor reuses them rather than re-querying.
 	AliasClaimants      map[string][]IdentityMatch
 	AliasLookupComplete bool
-	CensusFunc          CensusFunc
+	// QuestionHandles is the turn's bindQuestionHandles answer, when
+	// QuestionHandlesBound. A harness that calls the round directly has no turn,
+	// and its question's text is bound as it stands.
+	QuestionHandles      []BoundHandle
+	QuestionHandlesBound bool
+	CensusFunc           CensusFunc
 	// PreNarrowingExplicitKinds (CHAOS-3972 P3, design brief §2.0) is the
 	// PRE-narrowing hypothesis kind-set the caller captured BEFORE
 	// applying an EXPLICIT (non-receipt) kind narrowing to PooledKinds --
@@ -652,7 +661,10 @@ func RunShadowEvidenceRound(ctx context.Context, input ShadowEvidenceRoundInput,
 	// function was ever called (ShadowEvidenceRoundInput.AliasClaimants).
 	traceSourceNativeBinds(tracer, input.RequestID, BindSourceNativeHandles(input.Question, input.AliasClaimants, input.AliasLookupComplete))
 
-	bound := BindHandles(input.Question)
+	bound := input.QuestionHandles
+	if !input.QuestionHandlesBound {
+		bound = BindHandles(input.Question)
+	}
 	if IsMultiHandle(bound) {
 		return emit(Attestation{Outcome: ShadowWouldClarify, Reason: ReasonMultiHandle, UnscopedVisibility: true})
 	}
@@ -747,7 +759,7 @@ func RunShadowEvidenceRound(ctx context.Context, input ShadowEvidenceRoundInput,
 		}
 		// A work item is in a requested repository scope through its linked
 		// pull requests, never by its own repository: its census reads the
-		// organization and keeps the satisfiers the scope's link walk reaches.
+		// organization and keeps the satisfiers that link into the scope.
 		linkScoped := kind == contextfabric.SubjectWorkItem && len(input.CensusRepositories) > 0
 		censusCtx := WithCensusRepositoryFilter(ctx, input.CensusRepositories)
 		if linkScoped {
@@ -755,13 +767,16 @@ func RunShadowEvidenceRound(ctx context.Context, input ShadowEvidenceRoundInput,
 		}
 		outcome, err := input.CensusFunc(censusCtx, input.OrgID, kind,
 			valueOr(handleApplies, handle), handleApplies, anchor.Kind, anchor.CanonicalID, anchorApplies)
+		linkScopeUnread := false
 		if err == nil && linkScoped {
 			if outcome, err = withinLinkScope(ctx, input.workItemScope, outcome); err != nil {
-				slog.WarnContext(ctx, "context fabric census: the work item census was not scoped by the link walk of the requested repository scope",
+				linkScopeUnread = true
+				slog.WarnContext(ctx, "context fabric census: the work item census was not scoped by the keyed link read of the requested repository scope",
 					"request_id", contextfabric.SanitizeLogAttr(input.RequestID), "reason", contextfabric.SanitizeLogAttr(linkScopeFailure(err)))
 			}
 		}
 		ka := KindAttestation{Kind: kind, Protocol: "aggregate_first", HandleApplied: handleApplies, AnchorApplied: anchorApplies}
+		ka.LinkScopeUnread = linkScopeUnread
 		narrowedEmpty := false
 		if err != nil {
 			ka.Complete = false

@@ -94,6 +94,10 @@ type besideWorld struct {
 	nodes     []CandidateNode
 	pool      []CandidateNode
 	edit      func(*contextfabric.InvestigationRequest)
+	// keyPrefix replaces the prefix read that holds every ticket key.
+	keyPrefix WorkItemKeyPrefixFunc
+	// link sets the keyed link read (CHAOS-12505); nil leaves none wired.
+	link func(*ResolveDeps)
 }
 
 type besideTurn struct {
@@ -122,6 +126,12 @@ func runBeside(t *testing.T, w besideWorld) besideTurn {
 	tracer := &captureResolutionTracer{}
 	deps.ResolutionTracer = tracer
 	deps.CensusFunc = w.census.census
+	if w.keyPrefix != nil {
+		deps.WorkItemKeyPrefix = w.keyPrefix
+	}
+	if w.link != nil {
+		w.link(&deps)
+	}
 	deps.HandleGrammarChecker = func(kind contextfabric.SubjectKind, patternID, value string) (string, bool) {
 		if !ValidateHandleGrammar(kind, patternID, value) {
 			return "", false
@@ -636,5 +646,31 @@ func TestAFailedCensusKeepsCommittedWorkItems(t *testing.T) {
 	got, _ := unresolvedNamedHandle(context.Background(), storage.Principal{OrgID: "org_1"}, request, ResolveDeps{}, resolution, contextfabric.CommitBasisSet{}, contextfabric.CommitDecisionDigestSet{}, handle, handleOwed, false, namedCensus{})
 	if ids := besideCommittedIDs(got); !slices.Equal(ids, []string{repository.CanonicalID, named.CanonicalID, other.CanonicalID}) {
 		t.Fatalf("committed %v, want every committed subject kept: a work item cannot be told apart here", ids)
+	}
+}
+
+// A key whose prefix the caller does not hold is a word (CHAOS-12463), so it names
+// no handle beside the repository either: no work item commits on it. The handle
+// path reads the turn's gated handles, not the raw question.
+func TestAKeyWhosePrefixIsNotHeldNamesNoHandleBesideARepository(t *testing.T) {
+	t.Parallel()
+	linear := besideWorkItem(t, "linear", "CHAOS-71")
+	nodes := []CandidateNode{repoLessItem(linear, "Split the job", scopeAnchorRepo)}
+	frame := statedFrame(contextfabric.SubjectWorkItem)
+	for caller, principal := range besideCallers(t) {
+		t.Run(caller, func(t *testing.T) {
+			t.Parallel()
+			for held, wantItem := range map[bool]bool{true: true, false: false} {
+				reads := &prefixReads{held: map[string]bool{"CHAOS-": held}}
+				census := &besideCensus{rows: []besideRow{{contextfabric.SubjectWorkItem, "CHAOS-71", linear, "", scopeAnchorRepo}}}
+				turn := runBeside(t, besideWorld{principal: principal, question: "Why is CHAOS-71 blocked in " + scopeAnchorRepo + "?", frame: frame, census: census, nodes: nodes, keyPrefix: reads.read})
+				if got := slices.Contains(besideCommittedIDs(turn.resolution), linear); got != wantItem {
+					t.Fatalf("prefix held %v: committed %v, want the item committed %v", held, besideCommittedIDs(turn.resolution), wantItem)
+				}
+				if !held && len(reads.calls) != 1 {
+					t.Fatalf("prefix reads = %v, want one per turn", reads.calls)
+				}
+			}
+		})
 	}
 }

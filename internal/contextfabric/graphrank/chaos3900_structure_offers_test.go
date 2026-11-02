@@ -1938,7 +1938,7 @@ func TestAnchorOfferMaterial_DecisiveCandidateIgnoredWhenAmbiguousTermExists(t *
 // the wire Validate() rejects as a duplicate).
 func TestHandleOfferMaterial_DuplicateOccurrencesAreDeduped(t *testing.T) {
 	t.Parallel()
-	material, _ := handleOfferMaterial("PR 532 relates to PR 532 which also mentions PR 532", nil, nil, nil)
+	material, _ := handleOfferMaterial(BindHandles("PR 532 relates to PR 532 which also mentions PR 532"), nil, nil, nil)
 	if len(material.HandleOptions) != 1 {
 		t.Fatalf("len(material.HandleOptions) = %d, want 1 (three identical occurrences deduped)", len(material.HandleOptions))
 	}
@@ -1957,7 +1957,7 @@ func TestHandleOfferMaterial_MoreThanMaxDistinctMatchesIsCapped(t *testing.T) {
 	for i := 0; i < structureOfferMaxOptions+5; i++ {
 		question += fmt.Sprintf(" PR %d", 1000+i)
 	}
-	material, _ := handleOfferMaterial(question, nil, nil, nil)
+	material, _ := handleOfferMaterial(BindHandles(question), nil, nil, nil)
 	if len(material.HandleOptions) != structureOfferMaxOptions {
 		t.Fatalf("len(material.HandleOptions) = %d, want %d (capped)", len(material.HandleOptions), structureOfferMaxOptions)
 	}
@@ -1965,7 +1965,7 @@ func TestHandleOfferMaterial_MoreThanMaxDistinctMatchesIsCapped(t *testing.T) {
 
 func TestHandleOfferMaterial_NoGrammarMatchStillMissingWithEmptyOptions(t *testing.T) {
 	t.Parallel()
-	material, _ := handleOfferMaterial("how healthy is the payments team", nil, nil, nil)
+	material, _ := handleOfferMaterial(BindHandles("how healthy is the payments team"), nil, nil, nil)
 	if len(material.Missing) != 1 || material.Missing[0] != contractsv1.ContextFabricStructureNeedSubjectHandle {
 		t.Fatalf("material.Missing = %v, want [subject_handle]", material.Missing)
 	}
@@ -1976,7 +1976,7 @@ func TestHandleOfferMaterial_NoGrammarMatchStillMissingWithEmptyOptions(t *testi
 
 func TestHandleOfferMaterial_GrammarMatchOffersHandle(t *testing.T) {
 	t.Parallel()
-	material, _ := handleOfferMaterial("what is the status of PR 532?", nil, nil, nil)
+	material, _ := handleOfferMaterial(BindHandles("what is the status of PR 532?"), nil, nil, nil)
 	if len(material.Missing) != 1 || material.Missing[0] != contractsv1.ContextFabricStructureNeedSubjectHandle {
 		t.Fatalf("material.Missing = %v, want [subject_handle]", material.Missing)
 	}
@@ -1997,7 +1997,7 @@ func TestHandleOfferMaterial_GrammarMatchOffersHandle(t *testing.T) {
 
 func TestHandleOfferMaterial_MultipleGrammarMatchesOfferAll(t *testing.T) {
 	t.Parallel()
-	material, _ := handleOfferMaterial("does PR 532 relate to CHAOS-3896?", nil, nil, nil)
+	material, _ := handleOfferMaterial(BindHandles("does PR 532 relate to CHAOS-3896?"), nil, nil, nil)
 	if len(material.HandleOptions) != 2 {
 		t.Fatalf("len(material.HandleOptions) = %d, want 2", len(material.HandleOptions))
 	}
@@ -2219,7 +2219,7 @@ func TestKindOfferMaterial_ExplicitKindAlwaysOfferedEvenAloneInThePool(t *testin
 func TestHandleOfferMaterial_ExplicitHandleRequiresAWiredChecker(t *testing.T) {
 	t.Parallel()
 	explicit := []contractsv1.ContextFabricRequestedHandle{{Kind: contractsv1.ContextFabricSubjectPullRequest, PatternID: "pull_request_number", Value: "532"}}
-	material, _ := handleOfferMaterial("no handles in this question text", explicit, nil, nil)
+	material, _ := handleOfferMaterial(BindHandles("no handles in this question text"), explicit, nil, nil)
 	if len(material.HandleOptions) != 0 {
 		t.Fatalf("material.HandleOptions = %+v, want empty (nil checker degrades safely)", material.HandleOptions)
 	}
@@ -2230,7 +2230,7 @@ func TestHandleOfferMaterial_ExplicitHandleRequiresAWiredChecker(t *testing.T) {
 		}
 		return "", false
 	}
-	material, _ = handleOfferMaterial("no handles in this question text", explicit, checker, nil)
+	material, _ = handleOfferMaterial(BindHandles("no handles in this question text"), explicit, checker, nil)
 	if len(material.HandleOptions) != 1 || material.HandleOptions[0].Value != "532" || material.HandleOptions[0].SourceColumn != "git_pull_requests.number" {
 		t.Fatalf("material.HandleOptions = %+v, want the one explicit handle validated and offered", material.HandleOptions)
 	}
@@ -2238,7 +2238,7 @@ func TestHandleOfferMaterial_ExplicitHandleRequiresAWiredChecker(t *testing.T) {
 	// An invalid explicit value (checker returns ok=false) is silently
 	// omitted, never offered.
 	invalid := []contractsv1.ContextFabricRequestedHandle{{Kind: contractsv1.ContextFabricSubjectWorkItem, PatternID: "bogus_pattern", Value: "x"}}
-	material, _ = handleOfferMaterial("", invalid, checker, nil)
+	material, _ = handleOfferMaterial(BindHandles(""), invalid, checker, nil)
 	if len(material.HandleOptions) != 0 {
 		t.Fatalf("material.HandleOptions = %+v, want empty (checker rejected the explicit value)", material.HandleOptions)
 	}

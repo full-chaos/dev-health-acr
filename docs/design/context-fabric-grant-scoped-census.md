@@ -180,8 +180,14 @@ expected kind, which the model's `requested_subject_kind` fills, or a lone
   be in another one you can read, so the sentence is the scope's.
   A work item's census covers all you can read, so it takes the general sentence, or
   Sentence A for a restricted caller.
-- **A work item commits beside the repository with no claim about a link.** A key names
-  one item. CHAOS-12505 holds the link check.
+- **A work item commits beside the repository, and the answer says whether a link
+  joins them (CHAOS-12505).** A key names one item, so the commit stands either way.
+  The keyed link read is asked with the one named repository as the scope, under the
+  caller's grants, and the engine appends one fixed sentence after synthesis: a native
+  link, a link that names its lower tier (explicit text, heuristic), no link the answer
+  admits, or a link that could not be read (`contractsv1`
+  `ContextFabricNamedRepository*LinkLimitation`). A failed or cut read never reads as
+  "no link". With two named repositories nothing is read and nothing is said.
 - **Not here:** a team beside a handle and two handles are CHAOS-12557.
 
 ## Gates
@@ -301,6 +307,38 @@ link only under `fetch_dev_status`; without it every Jira item stays unresolved,
 with the disclosure. A free-text handle binds `CHAOS-n` only, so another key reaches
 the gate through search.
 
+## A key in a question (CHAOS-12463)
+
+The free-text grammar binds a ticket key of any upper-case prefix, and a GitHub or
+GitLab reference (`owner/repo#7`, `group/project!7`). The shape alone proves
+nothing: `UTF-8`, `GPT-5` and `CVE-2026` have it. So a turn counts a key as a
+handle only when the caller can read one work item of that prefix
+(`bindQuestionHandles`, `devhealthsource.NewWorkItemKeyPrefixFunc`). The read runs
+under the same grant and the same link arm as the census, and reads one row.
+
+| Key | Prefix inside the grant | Turn |
+| --- | --- | --- |
+| `OPS-204`, exists | yes | handle; the census decides |
+| `OPS-99999` | yes | handle; the census proves the absence |
+| `UTF-8` | no | no handle, as if the question named no ticket |
+| `OPS-1` outside the grant only | no | the same as `UTF-8` |
+
+A reference takes the same read, with its repository path and `#` or `!` as the
+prefix: a URL with a path and a fragment has a reference's shape. A read that
+cannot run (none wired, an error, a grant it cannot apply, more than 8 prefixes in
+one question) is read once per prefix, and leaves the turn with no handle at all,
+since an unread key may name a second subject; it logs
+`graphrank.work_item_key_prefix_unread` at Warn, counts only. A turn resolves
+subjects more than once (the main pass, the offers-only pass, each answer reuse
+recheck batch, the group read), and every call reads one memo that `Investigate`
+attaches, so each prefix is read once per turn, a failed read included. Measured on the
+local stack: 40 to 130 ms under a one- to five-repository grant, 4 to 8 ms with no
+grant.
+
+`find_subjects` handle mode keeps one whole key of any prefix
+(`BindWorkItemKey`). A key in a sentence is refused there for every prefix; before
+this change the `CHAOS` prefix alone was accepted in a sentence.
+
 ## Residuals
 
 - **Timing.** The filter runs in the scan, so a statement reads the organization
@@ -321,6 +359,15 @@ the gate through search.
 - **A name that starts with a dot.** The library's grammar refuses `acme/.github`
   and the gate admits it. So an item linked only there counts 0: the census misses
   it inside the grant, and search can still reach it. No signal leaves the grant.
+- **A repository-owned work item.** GitHub and GitLab issues sit on their own
+  repository's row. The census reads the library's `pr_link` arm, and that arm
+  takes repository-less rows only, so for a restricted caller such an issue counts
+  0 even with a native link inside the grant. An organization-wide caller is not
+  affected. Found under CHAOS-12463 and tracked as CHAOS-12561.
+- **Timing of the key prefix read.** It scans the organization's work items of the
+  prefix before the grant applies, so its duration follows that count (40 ms for
+  none, 50 ms for 22, 130 ms for 12,000 on the local stack). Same class as the
+  timing residual above.
 - **The fact readers.** `workItemRepositoryAuthorization` and
   `RepoLessWorkItemAdmitter` still admit by project ownership. Nothing commits by
   that path (ruling 3).

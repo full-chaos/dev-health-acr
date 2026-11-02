@@ -99,9 +99,14 @@ var grammarExamples = map[string]grammarExample{
 		Note:     "Also matches `pull request #532`.",
 	},
 	"work_item_ticket_key": {
-		Question: "What is blocking CHAOS-123?",
-		Value:    "CHAOS-123",
-		Note:     "In free text (`investigate_question`) the registry knows only the `CHAOS-` key prefix; an organization's own ticket-key prefix does not bind through this pattern. `find_subjects` (if listed) `handle` mode is wider: it takes one whole key of any prefix (a letter, then up to 31 letters or digits, `-`, digits) and the organization's own work items decide whether it exists.",
+		Question: "What is blocking OPS-123?",
+		Value:    "OPS-123",
+		Note:     "Any upper-case key prefix has the shape (a letter, then up to 31 letters or digits, `-`, digits). In free text (`investigate_question`) it counts as a ticket only when your organization has work items of that prefix that you can read, so `UTF-8` or `GPT-5` is not a ticket. Lower case does not bind in free text. `find_subjects` (if listed) `handle` mode takes one whole key of any prefix and case, and the organization's own work items decide whether it exists.",
+	},
+	"work_item_repo_reference": {
+		Question: "What is blocking acme/widget#7?",
+		Value:    "acme/widget#7",
+		Note:     "A GitHub or GitLab issue or merge request: the repository path, then `#` or `!` and the number, as the tracker writes it.",
 	},
 	"ci_run_id": {
 		Question: "Why did run 18234567 fail?",

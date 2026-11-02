@@ -178,9 +178,10 @@ func observeShapedTurn(t *testing.T, world grantWorld, principal storage.Princip
 		Traverse: func(context.Context, string, graphrank.CandidateNode, bool) (contextfabric.SubjectCandidate, graphrank.ObservationTraversal) {
 			return contextfabric.SubjectCandidate{}, graphrank.ObservationNoParent
 		},
-		IsInternal:       func(contextfabric.SubjectRef) bool { return false },
-		ResolutionTracer: tracer,
-		CensusFunc:       devhealthsource.NewCensusFunc(log),
+		IsInternal:        func(contextfabric.SubjectRef) bool { return false },
+		ResolutionTracer:  tracer,
+		CensusFunc:        devhealthsource.NewCensusFunc(log),
+		WorkItemKeyPrefix: devhealthsource.NewWorkItemKeyPrefixFunc(log),
 	}
 	request := contextfabric.InvestigationRequest{
 		SchemaVersion: contextfabric.InvestigationRequestSchemaV1, RequestID: "request_12345678", Question: grantQuestion,

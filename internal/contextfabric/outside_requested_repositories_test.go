@@ -3,6 +3,7 @@ package contextfabric
 import (
 	"context"
 	"slices"
+	"strings"
 	"testing"
 
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
@@ -114,5 +115,42 @@ func TestARefusedGroupAxisKeepsTheCountOfMatchesOutside(t *testing.T) {
 	}
 	if !slices.Contains(result.Limitations, contractsv1.ContextFabricWorkItemNoGrantedLinkLimitation) {
 		t.Fatalf("limitations %q: the work item sentence is gone", result.Limitations)
+	}
+}
+
+// CHAOS-12505 (codex r1 on #1929): on the collapsed-axis refusal the refusal's
+// own sentence is the terminal's (a refused gate sets it whatever the
+// resolution holds), so the unread link-scope flag is not carried there: it
+// could change nothing. The read's sentence is carried, and no sentence says
+// "No ... matched".
+func TestARefusedGroupAxisKeepsTheUnreadLinkScope(t *testing.T) {
+	t.Parallel()
+	recorder := &groupReadRecorder{facts: func(CanonicalFactRequest) CanonicalFactBundle {
+		bundle := emptyFactBundle()
+		bundle.Coverage.Sources = []SourceObservation{{Source: "canonical_fact:metrics", State: SourceAvailable}}
+		return bundle
+	}}
+	members := []CohortMember{{Subject: SubjectRef{Kind: SubjectTeam, CanonicalID: TeamCanonicalID("team_security"), Label: "Security"}}}
+	engine, request := groupReadEngineFixtureConfigured(t, &recordingTelemetry{}, recorder, members, nil, SubjectTeam, nil, nil, func(config *groupReadFixtureConfig) {
+		config.graph.resolution.WorkItemLinkLimitation = contractsv1.ContextFabricWorkItemLinksUnreadLimitation
+		config.graph.resolution.WorkItemLinkScopeUnread = true
+	})
+	result, err := engine.Investigate(context.Background(), storage.Principal{OrgID: "org_1"}, request)
+	if err != nil {
+		t.Fatalf("Investigate() error = %v", err)
+	}
+	if result.RefusalBasis != contractsv1.ContextFabricRefusalBasisFrameInvariantViolated {
+		t.Fatalf("refusal basis %q: the fixture must reach the collapsed-axis refusal", result.RefusalBasis)
+	}
+	if !slices.Contains(result.Limitations, contractsv1.ContextFabricWorkItemLinksUnreadLimitation) {
+		t.Fatalf("limitations %q: the read's sentence is gone", result.Limitations)
+	}
+	for _, limitation := range result.Limitations {
+		if strings.HasPrefix(limitation, "No subject matched") || strings.HasPrefix(limitation, "No work item matched") {
+			t.Fatalf("limitations %q say nothing matched beside a read that decided nothing", result.Limitations)
+		}
+	}
+	if result.Limitations[0] != refusalLimitation(DecideFrameGate(FrameValidationResult{Outcome: FrameValidationOutcomeRefusedInvalid, Failure: FrameValidationFailure{Invariant: FrameInvariantI6, Phase: FrameValidationPhaseA1, Detail: FrameFailureGroupEqualsMember}}, true), result.RefusalBasis) {
+		t.Fatalf("limitations %q: the refusal's own sentence must lead", result.Limitations)
 	}
 }
