@@ -1611,6 +1611,63 @@
       ]
     },
     {
+      "id": "POST /authorize/first-party [dev-health-acr-api]",
+      "surface_kind": "rest",
+      "method": "POST",
+      "route": "/authorize/first-party",
+      "graphql_field_name": null,
+      "service": "dev-health-acr-api",
+      "source": {
+        "file": "internal/api/app.go",
+        "line": 133
+      },
+      "classification": "protected",
+      "public_rationale": null,
+      "accepted_credential_classes": [
+        "acr_web_assertion"
+      ],
+      "primary_validator": {
+        "description": "deviceApprovalHandler (the same wrapper as device_approval) requires X-ACR-Web-Assertion EXACTLY (exactly one header) and rejects if Authorization is also present, then RequireScope(credential:issue): only the web, acting for its signed-in user, can read or decide a request; the browser that holds the handle cannot.",
+        "anchor": {
+          "path": "internal/api/device_routes.go",
+          "line": 246,
+          "line_end": 246,
+          "note": "func (a *App) deviceApprovalHandler(next http.Handler) http.Handler {"
+        }
+      },
+      "token_shape": {
+        "token_type": "X-ACR-Web-Assertion (EdDSA JWT, permissions includes credential:issue, path /authorize/first-party)",
+        "issuer": null,
+        "audience": null,
+        "algorithm": "EdDSA"
+      },
+      "reachable_validators": [
+        {
+          "description": "OAuthService.Authorize, the same as GET /authorize (serveOAuthAuthorize): the client must be the first-party browser client (handleOAuthFirstPartyAuthorize refuses any other with 400), the request is the signed form body only (unknown or repeated parameters: 400), an impersonating session is refused (403), and the limit is per user (AllowBrowserAuthorizeUser: deviceCreationLimit per user under the browser client's browserAuthorizeClientLimit ceiling, shared with GET /authorize) (CHAOS-12568).",
+          "anchor": {
+            "path": "internal/auth/oauth.go",
+            "line": 437,
+            "line_end": 437,
+            "note": "func (s *OAuthService) Authorize("
+          },
+          "is_intended_validator": true,
+          "reachable_but_not_owner": false
+        }
+      ],
+      "action": "oauth.authorize.start",
+      "resource_resolver": "None yet -- starts a device authorization with no hints (its raw device and user codes are discarded); org and repositories are chosen on the web consent page.",
+      "tenant_requirement": "org_scoped",
+      "current_state_cache_behavior": null,
+      "impersonation_policy": "not_applicable_non_main_app",
+      "entitlement_requirement": null,
+      "disclosure_behavior": "302 to ACR_OAUTH_CONSENT_URL?handle=<handle> (no-store, Referrer-Policy no-referrer), or a 303 to the verified redirect URI with a closed OAuth error code; an unverified client/redirect gets a fixed HTML problem page (CSP default-src 'none', form-action 'none', frame-ancestors 'none') and is never redirected; error redirects go to the registered redirect URI, never the request value.",
+      "gaps": [
+        "current_state_cache_behavior: searched internal for Cache-Control writes (shared writers set no-store at internal/api/response.go:81 and internal/api/read_decode.go:46); which of them the handler registered at internal/api/app.go:133 reaches was not traced; not determined.",
+        "entitlement_requirement: searched internal for entitlement code (internal/entitlements, internal/config/entitlement.go); whether the handler registered at internal/api/app.go:133 is gated by it was not traced; not determined."
+      ],
+      "issued_credential": []
+    },
+    {
       "surface_kind": "rest",
       "graphql_field_name": null,
       "service": "dev-health-acr-api",

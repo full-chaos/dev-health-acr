@@ -221,8 +221,8 @@ refused: it writes one Info line `oauth client assertion ignored` with
 never the assertion.
 
 Routes: `GET /.well-known/oauth-authorization-server`, `GET /authorize`,
-`POST /authorize/consent`, `POST /token`, `POST /register`,
-`POST /device_authorization`.
+`POST /authorize/first-party`, `POST /authorize/consent`, `POST /token`,
+`POST /register`, `POST /device_authorization`.
 
 - The authorization-code grant with PKCE `S256`, and RFC 8628's device-code
   grant for headless/remote clients (`POST /device_authorization` starts it;
@@ -243,6 +243,20 @@ Routes: `GET /.well-known/oauth-authorization-server`, `GET /authorize`,
   anything else the OAuth error redirect. The error page names why the client
   was refused in plain words (the `client_refusal` classes below) and never
   repeats a value from the request or the client's document.
+- `POST /authorize/first-party` (CHAOS-12568) is the same authorize for the
+  first-party browser client only, sent by web's server for its signed-in
+  user. The parameters are an `application/x-www-form-urlencoded` body of
+  authorization parameters only; a web assertion over that exact body
+  (`credential:issue`, `repository_scopes` `["*"]`, exactly one
+  `X-ACR-Web-Assertion`, no `Authorization`, no query string) names the user.
+  It is limited per user (`deviceCreationLimit` a minute, keyed by the user on
+  one surface in one organization, never the raw user id) under the browser
+  client's ceiling, which it shares with `GET /authorize`. `GET /authorize`
+  is limited per source address, and every request of web's server comes from
+  web's address, so through `GET` every user would share one budget. Any
+  other client gets `400`, an impersonating session `403`, and a missing or
+  invalid assertion `401`; each writes its one `step=authorize` line. It
+  answers exactly as `GET /authorize` does.
 - The web signs the user in (and returns to the same consent URL), then calls
   `POST /authorize/consent` for the signed-in user with a web assertion
   (`credential:issue`, exactly one `X-ACR-Web-Assertion`, no `Authorization`;

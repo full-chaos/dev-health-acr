@@ -127,6 +127,13 @@
     },
     {
       "method": "POST",
+      "pattern": "/authorize/first-party",
+      "path": "/authorize/first-party",
+      "scope": "credential:issue",
+      "web_assertion": true
+    },
+    {
+      "method": "POST",
       "pattern": "/api/v1/agent-context/episodes",
       "path": "/api/v1/agent-context/episodes",
       "scope": "episode:write",

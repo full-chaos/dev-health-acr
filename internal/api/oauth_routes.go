@@ -14,6 +14,7 @@ import (
 	"mime"
 	"net/http"
 	"net/url"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -39,6 +40,11 @@ const OAuthAuthorizePath = "/authorize"
 // OAuthConsentPath is where the web consent page (acting for the signed-in
 // user, authenticated by a web assertion) reads and decides a request.
 const OAuthConsentPath = "/authorize/consent"
+
+// OAuthFirstPartyAuthorizePath is the first-party browser client's authorize,
+// sent by web's server for its signed-in user (CHAOS-12568): the request in a
+// form body the web assertion signs, limited per user.
+const OAuthFirstPartyAuthorizePath = "/authorize/first-party"
 
 // OAuthTokenPath is the token endpoint.
 const OAuthTokenPath = "/token"
@@ -160,6 +166,13 @@ type oauthLineMarker struct{ emitted bool }
 // request the handler never reached still writes a consent line, with the
 // outcome its status means.
 func (a *App) oauthConsentLine(next http.Handler) http.Handler {
+	return a.oauthStepLine(oauthvocab.StepConsent, next)
+}
+
+// oauthStepLine is oauthConsentLine's contract for any web-assertion route of
+// the OAuth surface: a request its wrapper answered still writes the step's
+// one line, with the outcome its status means.
+func (a *App) oauthStepLine(step string, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		marker := &oauthLineMarker{}
 		r = r.WithContext(context.WithValue(r.Context(), oauthLineMarkerKey{}, marker))
@@ -177,7 +190,7 @@ func (a *App) oauthConsentLine(next http.Handler) http.Handler {
 		case recorder.status >= http.StatusInternalServerError:
 			outcome = oauthvocab.OutcomeUnavailable
 		}
-		a.emitOAuthStep(r, oauthvocab.StepConsent, outcome, "", recorder.status)
+		a.emitOAuthStep(r, step, outcome, "", recorder.status)
 	})
 }
 
@@ -545,19 +558,121 @@ func (a *App) handleOAuthAuthorize(w http.ResponseWriter, r *http.Request) {
 	if a.oauthAuthorizeRateLimited(w, r) {
 		return
 	}
-	query := r.URL.Query()
-	for _, key := range []string{"response_type", "client_id", "redirect_uri", "code_challenge", "code_challenge_method", "resource", "scope", "state"} {
-		if len(query[key]) > 1 {
-			a.renderOAuthProblem(w, r, http.StatusBadRequest, "The authorization request repeats a parameter.")
-			a.emitOAuthStep(r, oauthvocab.StepAuthorize, oauthvocab.OutcomeInvalidRequest, "", http.StatusBadRequest)
-			return
+	request, ok := oauthAuthorizeRequestFrom(r.URL.Query())
+	if !ok {
+		a.renderOAuthProblem(w, r, http.StatusBadRequest, "The authorization request repeats a parameter.")
+		a.emitOAuthStep(r, oauthvocab.StepAuthorize, oauthvocab.OutcomeInvalidRequest, "", http.StatusBadRequest)
+		return
+	}
+	a.serveOAuthAuthorize(w, r, request)
+}
+
+// oauthAuthorizeParameters are the parameters of an authorization request.
+var oauthAuthorizeParameters = []string{"response_type", "client_id", "redirect_uri", "code_challenge", "code_challenge_method", "resource", "scope", "state"}
+
+// oauthAuthorizeRequestFrom reads an authorization request from a query or a
+// form. ok is false when it repeats a parameter.
+func oauthAuthorizeRequestFrom(values url.Values) (auth.OAuthAuthorizeRequest, bool) {
+	for _, key := range oauthAuthorizeParameters {
+		if len(values[key]) > 1 {
+			return auth.OAuthAuthorizeRequest{}, false
 		}
 	}
-	request := auth.OAuthAuthorizeRequest{
-		ResponseType: query.Get("response_type"), ClientID: query.Get("client_id"), RedirectURI: query.Get("redirect_uri"),
-		CodeChallenge: query.Get("code_challenge"), CodeChallengeMethod: query.Get("code_challenge_method"),
-		Resource: query.Get("resource"), Scope: query.Get("scope"), State: query.Get("state"),
+	return auth.OAuthAuthorizeRequest{
+		ResponseType: values.Get("response_type"), ClientID: values.Get("client_id"), RedirectURI: values.Get("redirect_uri"),
+		CodeChallenge: values.Get("code_challenge"), CodeChallengeMethod: values.Get("code_challenge_method"),
+		Resource: values.Get("resource"), Scope: values.Get("scope"), State: values.Get("state"),
+	}, true
+}
+
+// handleOAuthFirstPartyAuthorize is the first-party browser client's
+// authorize (CHAOS-12568). Web's server sends it for its signed-in user, so
+// every user reaches ACR from web's address: GET /authorize, limited per
+// source, would put them all in one budget. Here the request is a form body
+// the web assertion signs (its wrapper verified the signature over the exact
+// body), the caller is that assertion's user, and the limit is per user, under
+// the browser client's ceiling. It serves the first-party browser client only,
+// never an impersonating session, and then runs the same authorize as
+// GET /authorize.
+func (a *App) handleOAuthFirstPartyAuthorize(w http.ResponseWriter, r *http.Request) {
+	// The wrapper verified the assertion, whose subject (the user) is always a
+	// valid id (WebAssertionVerifier.validClaims).
+	principal, found := auth.PrincipalFromContext(r.Context())
+	if !found {
+		writeError(w, r, http.StatusUnauthorized, "invalid_token", "Missing or invalid ACR credential", false, nil)
+		a.emitOAuthStep(r, oauthvocab.StepAuthorize, oauthvocab.OutcomeUnauthenticated, "", http.StatusUnauthorized)
+		return
 	}
+	if principal.Impersonating {
+		a.logger.InfoContext(r.Context(), "first-party authorize refused",
+			"reason", oauthvocab.OutcomeImpersonating, "request_id", RequestID(r.Context()))
+		writeError(w, r, http.StatusForbidden, "forbidden", "An impersonating session cannot authorize", false, nil)
+		a.emitOAuthStep(r, oauthvocab.StepAuthorize, oauthvocab.OutcomeImpersonating, "", http.StatusForbidden)
+		return
+	}
+	values, ok := firstPartyAuthorizeForm(r)
+	if !ok {
+		a.renderOAuthProblem(w, r, http.StatusBadRequest, "The authorization request is not a form of known parameters.")
+		a.emitOAuthStep(r, oauthvocab.StepAuthorize, oauthvocab.OutcomeInvalidRequest, "", http.StatusBadRequest)
+		return
+	}
+	request, ok := oauthAuthorizeRequestFrom(values)
+	if !ok {
+		a.renderOAuthProblem(w, r, http.StatusBadRequest, "The authorization request repeats a parameter.")
+		a.emitOAuthStep(r, oauthvocab.StepAuthorize, oauthvocab.OutcomeInvalidRequest, "", http.StatusBadRequest)
+		return
+	}
+	if !a.oauth.IsBrowserClient(request.ClientID) {
+		a.renderOAuthProblem(w, r, http.StatusBadRequest, "This authorization route serves the first-party browser client only.")
+		a.emitOAuthStep(r, oauthvocab.StepAuthorize, oauthvocab.OutcomeInvalidRequest, "", http.StatusBadRequest)
+		return
+	}
+	user := firstPartyAuthorizeUserKey(principal)
+	limiter := a.runtime.DeviceAuthorizationLimiter
+	if a.oauthRateLimited(w, r, oauthvocab.StepAuthorize, a.oauthLimitKey(r, request.ClientID), func(client string) DeviceAuthorizationLimitDecision {
+		return limiter.AllowBrowserAuthorizeUser(client, user)
+	}) {
+		return
+	}
+	a.serveOAuthAuthorize(w, r, request)
+}
+
+// firstPartyAuthorizeForm reads the form body of a first-party authorize: an
+// application/x-www-form-urlencoded body of authorization parameters only.
+// The web assertion's wrapper has already read the body to check its digest
+// and put it back.
+func firstPartyAuthorizeForm(r *http.Request) (url.Values, bool) {
+	if mediaType, _, err := mime.ParseMediaType(r.Header.Get("Content-Type")); err != nil || mediaType != "application/x-www-form-urlencoded" {
+		return nil, false
+	}
+	body, err := io.ReadAll(io.LimitReader(r.Body, oauthFormMaxBytes+1))
+	if err != nil || len(body) > oauthFormMaxBytes {
+		return nil, false
+	}
+	values, err := url.ParseQuery(string(body))
+	if err != nil {
+		return nil, false
+	}
+	for key := range values {
+		if !slices.Contains(oauthAuthorizeParameters, key) {
+			return nil, false
+		}
+	}
+	return values, true
+}
+
+// firstPartyAuthorizeUserKey is the per-user key of the first-party authorize
+// limit: the user on one surface in one organization, as the request limits
+// key a user (limitSubjectOf), so a user's id is never a raw limiter key.
+func firstPartyAuthorizeUserKey(principal storage.Principal) string {
+	subject := limitSubjectOf(principal)
+	return subject.OrgID + "\x00" + subject.Surface + "\x00" + subject.CredentialID
+}
+
+// serveOAuthAuthorize runs one authorization request and answers it: the
+// consent redirect, a redirectable refusal, or a problem page. GET /authorize
+// and the first-party POST share it, so the two cannot answer differently.
+func (a *App) serveOAuthAuthorize(w http.ResponseWriter, r *http.Request, request auth.OAuthAuthorizeRequest) {
 	authorization, err := a.oauth.Authorize(r.Context(), request)
 	if err != nil {
 		if refusal, ok := oauthOutcome(err); ok {

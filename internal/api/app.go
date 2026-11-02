@@ -130,6 +130,7 @@ func (a *App) registerRoutes(mux routeMux) {
 		mux.HandleFunc("GET "+OAuthAuthorizationServerMetadataPath, a.handleOAuthMetadata)
 		mux.HandleFunc("GET "+OAuthAuthorizePath, a.handleOAuthAuthorize)
 		mux.Handle("POST "+OAuthConsentPath, a.oauthConsentLine(a.deviceRuntimeHandler(a.deviceApprovalHandler(http.HandlerFunc(a.handleOAuthConsent)))))
+		mux.Handle("POST "+OAuthFirstPartyAuthorizePath, a.oauthStepLine(oauthvocab.StepAuthorize, a.deviceRuntimeHandler(a.deviceApprovalHandler(http.HandlerFunc(a.handleOAuthFirstPartyAuthorize)))))
 		mux.HandleFunc("POST "+OAuthTokenPath, a.handleOAuthToken)
 		mux.HandleFunc("POST "+OAuthRegisterPath, a.handleOAuthRegister)
 		mux.HandleFunc("POST "+OAuthDeviceAuthorizationPath, a.handleOAuthDeviceAuthorization)
