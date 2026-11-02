@@ -111,6 +111,17 @@ var interpretationScopedMemberExamples = []scopedMemberExample{
 		AnchorKind: "team",
 		Note:       "no value of the six fits: member_qualifier_value is omitted",
 	},
+	{
+		Question:   "What is the status of pull request 5063 in the ledger-api repository?",
+		Expression: `{"kind":"named_subject","terms":["ledger-api"]}`,
+		Note:       "one handle inside its container: the terms hold the container, never the number alone; requested_subject_kind pull_request",
+	},
+	{
+		Question:   "Which pull requests in the ledger-api repository are open?",
+		Expression: `{"kind":"children_of_scope","anchor_terms":["ledger-api"],"member_kind":"pull_request","member_qualifier":"status","member_qualifier_value":"open"}`,
+		AnchorKind: "repository",
+		Note:       "the members are filtered by a state",
+	},
 }
 
 var interpretationScopedMemberExampleLines = func() string {

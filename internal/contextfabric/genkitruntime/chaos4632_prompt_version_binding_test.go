@@ -91,7 +91,8 @@ func TestVersionedModelContractsAreBoundToTheirContent(t *testing.T) {
 			// v32 -> v33: the commitment glossary line says the fact lists up to 25 dated issues.
 			// v34 -> v35: the frame, its subject_expression and the kind are required on the Anthropic wire; the prompt says every question carries them.
 			// v35 -> v36 (CHAOS-12595): the prompt says what each window_class means.
-			digest: "98fe108d1868cd0eb7b5d7e30b2a358a6673b21476f9ee6e4f9952eabe25d87f",
+			// v36 -> v37 (CHAOS-12632): one handle named inside its container keeps the container as the subject term; two worked examples.
+			digest: "18e44a79ec35fc970f97e7266b5280d3646c024fa1d9a0b43797c259d430235d",
 		},
 		{
 			name:    "synthesis system prompt",

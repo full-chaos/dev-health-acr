@@ -50,7 +50,10 @@ const (
 	//
 	// v35 -> v36 (CHAOS-12595): the prompt says what each window_class
 	// means, so a status question about one handle can name state_snapshot.
-	PromptVersion = "context-fabric-interpretation.v36"
+	//
+	// v36 -> v37 (CHAOS-12632): one handle named inside its container keeps
+	// the container's name as the subject term, never the number alone.
+	PromptVersion = "context-fabric-interpretation.v37"
 	// OutputVersion names the model-output contract the prompt asks for.
 	//
 	// v10 -> v11: the fact_requirements kind enum names commitment.
