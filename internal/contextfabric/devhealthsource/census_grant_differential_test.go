@@ -184,7 +184,7 @@ func assertSameTurn(t *testing.T, before, after grantObservation) {
 	if !reflect.DeepEqual(before.bases, after.bases) || !reflect.DeepEqual(before.digests, after.digests) {
 		t.Fatalf("commit decision changed: %+v %+v / %+v %+v", before.bases, before.digests, after.bases, after.digests)
 	}
-	if !reflect.DeepEqual(before.trace, after.trace) {
+	if !sameTrace(before.trace, after.trace) {
 		t.Fatalf("trace changed:\nbefore %+v\nafter  %+v", before.trace, after.trace)
 	}
 	if !slices.Equal(before.statements, after.statements) {
@@ -192,6 +192,51 @@ func assertSameTurn(t *testing.T, before, after grantObservation) {
 	}
 	if !slices.Equal(before.graphReads, after.graphReads) {
 		t.Fatalf("graph reads changed:\nbefore %q\nafter  %q", before.graphReads, after.graphReads)
+	}
+}
+
+// sameTrace compares two traces field by field, but for one: the listing's elapsed
+// time is the clock of this run, and no row decides it. The keyed reads that take
+// that time are compared here (CensusListingReads) and in graphReads, id by id, so
+// rows outside the grant that changed the work would fail on those. Any other
+// field that differs fails, a new timing field too: name it here only with that
+// same argument.
+func sameTrace(before, after []graphrank.ResolutionTraceEvent) bool {
+	withoutClock := func(trace []graphrank.ResolutionTraceEvent) []graphrank.ResolutionTraceEvent {
+		events := slices.Clone(trace)
+		for index := range events {
+			events[index].CensusListingElapsedMs = 0
+		}
+		return events
+	}
+	return reflect.DeepEqual(withoutClock(before), withoutClock(after))
+}
+
+// The comparison leaves out the clock and nothing else: a change in the work a
+// listing did still fails it.
+func TestTheTraceComparisonLeavesOutOnlyTheClock(t *testing.T) {
+	t.Parallel()
+	line := graphrank.ResolutionTraceEvent{Stage: "evidence_census_listing", CensusCount: 3, CensusListed: 3, CensusListingReads: 3, CensusListingElapsedMs: 2}
+	slower := line
+	slower.CensusListingElapsedMs = 90
+	if !sameTrace([]graphrank.ResolutionTraceEvent{line}, []graphrank.ResolutionTraceEvent{slower}) {
+		t.Fatal("two runs of one turn differ by the clock alone, and the comparison failed them")
+	}
+	for name, edit := range map[string]func(*graphrank.ResolutionTraceEvent){
+		"reads":   func(e *graphrank.ResolutionTraceEvent) { e.CensusListingReads = 4 },
+		"count":   func(e *graphrank.ResolutionTraceEvent) { e.CensusCount = 4 },
+		"listed":  func(e *graphrank.ResolutionTraceEvent) { e.CensusListed = 2 },
+		"refused": func(e *graphrank.ResolutionTraceEvent) { e.CensusListingRefused = 1 },
+		"outcome": func(e *graphrank.ResolutionTraceEvent) { e.CensusListingOutcome = "partly_listed" },
+	} {
+		changed := line
+		edit(&changed)
+		if sameTrace([]graphrank.ResolutionTraceEvent{line}, []graphrank.ResolutionTraceEvent{changed}) {
+			t.Fatalf("%s changed and the comparison passed", name)
+		}
+	}
+	if sameTrace([]graphrank.ResolutionTraceEvent{line}, nil) {
+		t.Fatal("a line went missing and the comparison passed")
 	}
 }
 

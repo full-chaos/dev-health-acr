@@ -297,6 +297,9 @@ const (
 const (
 	fallbackClarificationPromptOne = "One authorized subject matched this question but could not be confirmed. Confirm it, using the candidate receipt in this result."
 	fallbackClarificationPrompt    = "Several authorized subjects matched this question. Confirm which one you mean, using the candidate receipts in this result."
+	// fallbackClarificationPromptCounted stands beside a census sentence, which
+	// says how many subjects match, so it claims no number of its own.
+	fallbackClarificationPromptCounted = "Confirm the subject you mean, using the candidate receipt in this result."
 	// OfferPoolEmptiedClarificationPrompt is what a caller is told when
 	// retrieval found candidates and could offer NONE of them, because
 	// every one was matched by semantic similarity alone.
@@ -1121,18 +1124,30 @@ func resolveTerminalStatus(request InvestigationRequest, resolution *SubjectReso
 	// than one" beside a single listed candidate contradicts the payload it
 	// travels with (codex round-2 F1).
 	single := len(resolution.Candidates) == 1
+	// CHAOS-12467: one candidate beside a census count. "One authorized subject
+	// matched" contradicts the count, so the count is the sentence, on both arms.
+	counted := single && resolution.CensusLimitation != ""
 	if !request.Options.AllowClarification {
+		if counted {
+			return InvestigationNoMatch, resolution.CensusLimitation
+		}
 		if single {
 			return InvestigationNoMatch, ambiguousNoClarificationLimitationOne
 		}
 		return InvestigationNoMatch, ambiguousNoClarificationLimitation
 	}
 	if strings.TrimSpace(resolution.ClarificationPrompt) == "" {
-		if single {
+		switch {
+		case counted:
+			resolution.ClarificationPrompt = fallbackClarificationPromptCounted
+		case single:
 			resolution.ClarificationPrompt = fallbackClarificationPromptOne
-		} else {
+		default:
 			resolution.ClarificationPrompt = fallbackClarificationPrompt
 		}
+	}
+	if counted {
+		return InvestigationClarificationRequired, resolution.CensusLimitation
 	}
 	if single {
 		return InvestigationClarificationRequired, clarificationRequiredLimitationOne

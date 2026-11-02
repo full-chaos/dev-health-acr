@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net/url"
 	"slices"
 	"strings"
 	"sync"
@@ -927,5 +928,254 @@ func TestACommitListsNothing(t *testing.T) {
 	}
 	if lines := turn.tracer.eventsForStage("evidence_census_listing"); len(lines) != 0 {
 		t.Fatalf("lines = %+v, want none beside a commit", lines)
+	}
+}
+
+// A title that is an identifier in any dress is not a title: the id, whole or
+// escaped, in the title or around it, and a bare UUID. An identifier never reaches
+// a caller, whatever the source wrote in the title.
+func TestATitleThatIsAnIdentifierIsNotShown(t *testing.T) {
+	t.Parallel()
+	const key = "00000000-0000-0000-0000-000000000000"
+	ids := make([]string, 0, 2)
+	for _, provider := range []string{"linear", "jira"} {
+		id, omitted, err := identity.Derive(identity.KindWorkItem, []string{key, provider + ":CHAOS-70"}, nil)
+		if err != nil || omitted {
+			t.Fatalf("derive: omitted=%t err=%v", omitted, err)
+		}
+		ids = append(ids, id)
+	}
+	titles := func(id string) map[string]string {
+		return map[string]string{
+			"the id":                 id,
+			"the id in a sentence":   "see " + id + " for details",
+			"query escaped":          url.QueryEscape(id),
+			"path escaped":           url.PathEscape(id),
+			"escaped in lower case":  strings.ToLower(url.QueryEscape(id)),
+			"escaped in a sentence":  "see " + url.QueryEscape(id),
+			"escaped twice":          url.QueryEscape(url.QueryEscape(id)),
+			"the id in another case": strings.ToUpper(id),
+			"the uuid of the id":     key,
+			"a bare uuid":            "3f2b8c1e-9a4d-4e6f-8b7a-1c2d3e4f5a6b",
+			"a bare uuid in caps":    "3F2B8C1E-9A4D-4E6F-8B7A-1C2D3E4F5A6B",
+		}
+	}
+	for name, title := range titles(ids[0]) {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			nodes := []CandidateNode{repoLessItem(ids[0], title, grantRepoInside), repoLessItem(ids[1], title, grantRepoInside)}
+			spy := &grantCensusSpy{rows: []grantRow{{contextfabric.SubjectWorkItem, "CHAOS-70", ids[0], grantRepoInside}, {contextfabric.SubjectWorkItem, "CHAOS-70", ids[1], grantRepoInside}}}
+			turn := runListing(t, listingWorld{principal: restrictedCaller(t, grantRepoInside), census: spy.census, nodes: nodes, question: "Why is CHAOS-70 blocked?", terms: []string{"CHAOS-70"}})
+			got := []string{}
+			for _, candidate := range turn.resolution.Candidates {
+				got = append(got, candidate.Subject.Label)
+			}
+			if want := []string{"work item CHAOS-70 (jira)", "work item CHAOS-70 (linear)"}; !slices.Equal(slices.Sorted(slices.Values(got)), want) {
+				t.Fatalf("labels = %q, want %q", got, want)
+			}
+		})
+	}
+	// A pull request's id has no UUID in it, and takes the same rule.
+	for name, title := range map[string]string{"the id": listingID(0), "escaped": url.QueryEscape(listingID(0)), "in a sentence": "about " + listingID(0)} {
+		t.Run("pull request "+name, func(t *testing.T) {
+			t.Parallel()
+			nodes := []CandidateNode{listingNode(0), listingNode(1)}
+			nodes[0].Attributes["label"] = title
+			spy := &grantCensusSpy{rows: listingRows(2)}
+			turn := runListing(t, listingWorld{principal: restrictedCaller(t, listingScopes(2)...), census: spy.census, nodes: nodes})
+			if want := "pull request #12 in acme/r00"; turn.resolution.Candidates[0].Subject.Label != want {
+				t.Fatalf("label = %q, want %q", turn.resolution.Candidates[0].Subject.Label, want)
+			}
+		})
+	}
+}
+
+// A real title stays, numbers, percent signs and all.
+func TestARealTitleThatMentionsANumberStays(t *testing.T) {
+	t.Parallel()
+	for _, title := range []string{"Bump pull request 12 to 13", "Fix #12 and CI run 4242", "Reduce load by 50% on 3A", "Rename repo-00 to repo-01", "Tracked in 3f2b8c1e-9a4d-4e6f-8b7a-1c2d3e4f5a6b", "Run on pull_request: opened", "Trigger on pull_request:"} {
+		t.Run(title, func(t *testing.T) {
+			t.Parallel()
+			nodes := []CandidateNode{listingNode(0), listingNode(1)}
+			nodes[0].Attributes["label"] = title
+			spy := &grantCensusSpy{rows: listingRows(2)}
+			turn := runListing(t, listingWorld{principal: restrictedCaller(t, listingScopes(2)...), census: spy.census, nodes: nodes})
+			if want := "pull request #12 in acme/r00: " + title; turn.resolution.Candidates[0].Subject.Label != want {
+				t.Fatalf("label = %q, want %q", turn.resolution.Candidates[0].Subject.Label, want)
+			}
+		})
+	}
+}
+
+// The marker keeps its work inside the resolver, and no path carries it out: not
+// a candidate a refused re-decision left in the pool, and not the lone satisfier
+// that committed.
+func TestTheCensusMarkerNeverLeavesTheResolver(t *testing.T) {
+	t.Parallel()
+	const id = "pull_request:repo-1:532"
+	subject := contextfabric.SubjectRef{Kind: contextfabric.SubjectPullRequest, CanonicalID: id}
+	run := func(t *testing.T, principal storage.Principal, pool []CandidateNode, wantCommitted int) {
+		t.Helper()
+		target := candidateNode(contextfabric.SubjectPullRequest, id, "PR 532", 0.50, "*")
+		backend := &fakeGraphBackend{searchResults: map[string][]CandidateNode{"PR 532": pool}, exactHints: map[string]CandidateNode{SubjectKey(subject): target}}
+		deps := backend.deps()
+		deps.CensusFunc = countOnlyCensus(CensusOutcome{Count: 1, SatisfierCanonicalID: id})
+		request := testRequest()
+		request.Question = "why did PR 532 fail?"
+		resolution, _, _, _, err := ResolveSubjectsWithCommitBasis(context.Background(), principal, request, testInterpreted("PR 532"), deps, nil, nil, nil, "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(resolution.Committed) != wantCommitted {
+			t.Fatalf("committed = %v, want %d", resolution.Committed, wantCommitted)
+		}
+		held := false
+		for _, candidate := range resolution.Candidates {
+			held = held || candidate.Subject.CanonicalID == id
+			if slices.Contains(candidate.MatchedTerms, censusProvenanceMarker) {
+				t.Fatalf("candidate %s carries the marker: %v", candidate.Subject.CanonicalID, candidate.MatchedTerms)
+			}
+		}
+		if !held {
+			t.Fatalf("candidates = %v, want the merged satisfier: the marker was never reached", candidateIDs(resolution.Candidates))
+		}
+	}
+	rival := candidateNode(contextfabric.SubjectPullRequest, "pull_request:repo-2:533", "PR 532", 0.90, "*")
+	target := candidateNode(contextfabric.SubjectPullRequest, id, "PR 532", 0.50, "*")
+	t.Run("a refused re-decision", func(t *testing.T) {
+		t.Parallel()
+		run(t, storage.Principal{OrgID: "org_1"}, []CandidateNode{target, rival}, 0)
+	})
+	t.Run("the lone merged path", func(t *testing.T) {
+		t.Parallel()
+		run(t, storage.Principal{OrgID: "org_1"}, nil, 1)
+	})
+}
+
+// A budget below two lists nothing new, and a satisfier the search already holds
+// is still shown: the sentence counts it, and "could not be listed" stays away.
+func TestABudgetBelowTwoCountsAPooledSatisfier(t *testing.T) {
+	t.Parallel()
+	pooled := candidateNode(contextfabric.SubjectPullRequest, listingID(0), "Refactor the widget cache", 0.8, []string{listingRepo(0)})
+	pooled.Attributes[authorizationTeamsAttr] = "*"
+	spy := &grantCensusSpy{rows: listingRows(2)}
+	turn := runListing(t, listingWorld{
+		principal: restrictedCaller(t, listingScopes(2)...), census: spy.census, nodes: listingNodes(2), pool: []CandidateNode{pooled}, truncated: true,
+		edit: func(r *contextfabric.InvestigationRequest, _ *ResolveDeps) { r.Options.MaxSubjectCandidates = 1 },
+	})
+	if got := candidateIDs(turn.resolution.Candidates); !slices.Equal(got, []string{listingID(0)}) {
+		t.Fatalf("candidates = %v, want the pooled satisfier", got)
+	}
+	if want := contractsv1.ContextFabricCensusListedLimitation(2, 1); turn.resolution.CensusLimitation != want {
+		t.Fatalf("limitation = %q, want %q", turn.resolution.CensusLimitation, want)
+	}
+	if len(*turn.reads) != 0 {
+		t.Fatalf("keyed reads = %v, want none", *turn.reads)
+	}
+	lines := turn.tracer.eventsForStage("evidence_census_listing")
+	if len(lines) != 1 || lines[0].CensusListed != 1 || lines[0].CensusListingOutcome != censusListingPartlyListed || lines[0].CensusListingReason != censusListingBudgetBelowTwo {
+		t.Fatalf("listing line = %+v", lines)
+	}
+}
+
+// A candidate the census did not name is not a listed satisfier.
+func TestABudgetBelowTwoCountsNoOtherCandidate(t *testing.T) {
+	t.Parallel()
+	noise := candidateNode(contextfabric.SubjectRepository, "repository:noise", "noise", 0.8, []string{listingRepo(0)})
+	spy := &grantCensusSpy{rows: listingRows(2)}
+	turn := runListing(t, listingWorld{
+		principal: restrictedCaller(t, listingScopes(2)...), census: spy.census, nodes: listingNodes(2), pool: []CandidateNode{noise}, truncated: true,
+		edit: func(r *contextfabric.InvestigationRequest, _ *ResolveDeps) { r.Options.MaxSubjectCandidates = 1 },
+	})
+	if want := contractsv1.ContextFabricCensusUnlistedLimitation(2); turn.resolution.CensusLimitation != want {
+		t.Fatalf("limitation = %q, want %q", turn.resolution.CensusLimitation, want)
+	}
+}
+
+// A receipt must agree with the request's own subject_handles, so an option for
+// another value ends the follow-up in a conflict. It is not offered. The fixture
+// "offered receipts resolve" found this: the caller names 12, and the pool offers
+// 5 and 6.
+func TestAnOptionTheRequestItselfWouldVetoIsNotOffered(t *testing.T) {
+	t.Parallel()
+	nearMiss := candidateNode(contextfabric.SubjectPullRequest, "pull_request:repo-00:5", "Release 12 prep", 0.8, []string{listingRepo(0)})
+	nearMiss.Attributes[authorizationTeamsAttr] = "*"
+	roomy := func(r *contextfabric.InvestigationRequest, _ *ResolveDeps) { r.Options.MaxSubjectCandidates = 10 }
+	explicit := func(r *contextfabric.InvestigationRequest, deps *ResolveDeps) {
+		roomy(r, deps)
+		r.SubjectHandles = []contractsv1.ContextFabricRequestedHandle{{Kind: contextfabric.SubjectPullRequest, PatternID: "pull_request_number", Value: "12"}}
+	}
+	values := func(turn listingTurn) []string {
+		got := []string{}
+		for _, option := range turn.offers.HandleOptions {
+			got = append(got, option.Value)
+		}
+		return got
+	}
+	for name, principal := range listingCallers(t, 2) {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			spy := &grantCensusSpy{rows: listingRows(2)}
+			world := listingWorld{principal: principal, census: spy.census, nodes: listingNodes(2), pool: []CandidateNode{nearMiss}, truncated: true, edit: roomy}
+			if got := values(runListing(t, world)); !slices.Contains(got, "5") {
+				t.Fatalf("no explicit handle: options = %v, want the pool's: the guard needs a request to compare", got)
+			}
+			world.edit = explicit
+			turn := runListing(t, world)
+			if got := values(turn); len(got) != 0 {
+				t.Fatalf("options = %v, want none: 5 conflicts with the request and 12 cannot decide", got)
+			}
+			if len(turn.offers.CandidateOptions) == 0 {
+				t.Fatal("the clarification holds nothing to redeem")
+			}
+		})
+	}
+}
+
+// One value in two kinds names two subjects (CHAOS-3972 round 1), so a receipt for
+// the other kind conflicts as well.
+func TestTheSameValueInAnotherKindIsNotAgreement(t *testing.T) {
+	t.Parallel()
+	run, omitted, err := identity.Derive(identity.KindCIPipelineRun, []string{"00000000-0000-0000-0000-000000000000", "4242"}, nil)
+	if err != nil || omitted {
+		t.Fatalf("derive: omitted=%t err=%v", omitted, err)
+	}
+	nearRun := candidateNode(contractsv1.ContextFabricSubjectCIRun, run, "CI 4242", 0.8, []string{listingRepo(0)})
+	nearRun.Attributes[authorizationTeamsAttr] = "*"
+	kinds := func(turn listingTurn) []string {
+		got := []string{}
+		for _, option := range turn.offers.HandleOptions {
+			got = append(got, string(option.Kind)+"="+option.Value)
+		}
+		return got
+	}
+	world := listingWorld{
+		principal: restrictedCaller(t, listingScopes(1)...), census: (&grantCensusSpy{}).census, pool: []CandidateNode{nearRun}, truncated: true,
+		question: "What is the state of pull request 4242?", terms: []string{"pull request 4242"},
+	}
+	if got := kinds(runListing(t, world)); !slices.Contains(got, string(contractsv1.ContextFabricSubjectCIRun)+"=4242") {
+		t.Fatalf("no explicit handle: options = %v, want the pool's run", got)
+	}
+	world.edit = func(r *contextfabric.InvestigationRequest, _ *ResolveDeps) {
+		r.SubjectHandles = []contractsv1.ContextFabricRequestedHandle{{Kind: contextfabric.SubjectPullRequest, PatternID: "pull_request_number", Value: "4242"}}
+	}
+	if got := kinds(runListing(t, world)); !slices.Equal(got, []string{string(contextfabric.SubjectPullRequest) + "=4242"}) {
+		t.Fatalf("options = %v, want only the caller's own", got)
+	}
+}
+
+// An explicit handle the census cannot decide against stays offered, and so does
+// the value the caller sent when its census did not run.
+func TestAnOptionThatAgreesWithTheRequestStays(t *testing.T) {
+	t.Parallel()
+	spy := &grantCensusSpy{rows: listingRows(1)}
+	turn := runListing(t, listingWorld{
+		principal: restrictedCaller(t, listingScopes(2)...), census: spy.census, nodes: nil, question: "What is the state of that change?", terms: []string{"that change"},
+		edit: func(r *contextfabric.InvestigationRequest, _ *ResolveDeps) {
+			r.SubjectHandles = []contractsv1.ContextFabricRequestedHandle{{Kind: contextfabric.SubjectPullRequest, PatternID: "pull_request_number", Value: "12"}}
+		},
+	})
+	if len(turn.offers.HandleOptions) != 1 || turn.offers.HandleOptions[0].Value != "12" {
+		t.Fatalf("options = %+v, want the caller's own", turn.offers.HandleOptions)
 	}
 }

@@ -3,6 +3,8 @@ package graphrank
 import (
 	"context"
 	"maps"
+	"net/url"
+	"regexp"
 	"slices"
 	"strings"
 	"time"
@@ -29,6 +31,9 @@ import (
 // docs/design/context-fabric-grant-scoped-census.md.
 //
 // The ids stay out of every trace (slice B doc §4): the line carries counts.
+
+// bareUUID is lower-case text that is a UUID and nothing else.
+var bareUUID = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
 
 // censusListingMaxReads bounds the keyed graph reads of one listing, as
 // censusNarrowingMaxSatisfiers bounds a narrowing's.
@@ -115,6 +120,12 @@ func listCensusSatisfiers(ctx context.Context, principal storage.Principal, requ
 		return resolution, undeciding
 	}
 	ids = slices.Compact(slices.Sorted(slices.Values(ids)))
+	// What the census named, whether or not the budget lets it be read: a
+	// satisfier the search already holds is shown, and the sentence must count it.
+	named := make(map[string]struct{}, len(ids))
+	for _, id := range ids {
+		named[SubjectKey(contextfabric.SubjectRef{Kind: ka.Kind, CanonicalID: id})] = struct{}{}
+	}
 	limit := min(request.Options.MaxSubjectCandidates, censusListingMaxReads)
 	if reason == "" && count >= 2 && limit < 2 {
 		ids, reason = nil, censusListingBudgetBelowTwo
@@ -177,7 +188,7 @@ func listCensusSatisfiers(ctx context.Context, principal storage.Principal, requ
 	}
 	shown := 0
 	for _, candidate := range resolution.Candidates {
-		if _, held := satisfier[SubjectKey(candidate.Subject)]; held {
+		if _, held := named[SubjectKey(candidate.Subject)]; held {
 			shown++
 		}
 	}
@@ -234,6 +245,21 @@ func withoutUndecidingHandle(offer contextfabric.StructureOfferMaterial, undecid
 	return offer
 }
 
+// withoutVetoedHandles drops an option the request's own subject_handles would
+// veto. A receipt must agree with them (resolveExplicitStructure), so redeeming
+// any other value ends the follow-up in a conflict.
+func withoutVetoedHandles(offer contextfabric.StructureOfferMaterial, explicit []contractsv1.ContextFabricRequestedHandle) contextfabric.StructureOfferMaterial {
+	if len(explicit) == 0 {
+		return offer
+	}
+	offer.HandleOptions = slices.DeleteFunc(slices.Clone(offer.HandleOptions), func(option contractsv1.ContextFabricHandleOption) bool {
+		return !slices.ContainsFunc(explicit, func(handle contractsv1.ContextFabricRequestedHandle) bool {
+			return handle.Kind == option.Kind && handle.Value == option.Value
+		})
+	})
+	return offer
+}
+
 // censusCandidateLabel is the server's label for a candidate the census named. The
 // node's own label is not trusted: some nodes carry their raw canonical id as a
 // label (CHAOS-12468), and a shared title leaves the prompt to its id suffix cue.
@@ -253,8 +279,37 @@ func censusCandidateLabel(principal storage.Principal, handle BoundHandle, subje
 	return bounded
 }
 
+// rawSubjectLabel reports a title that is an identifier: one that holds a canonical
+// id of its kind, escaped or not, or that is a bare UUID. A real title that mentions
+// a number, the kind's name, or a UUID among its words, stays.
 func rawSubjectLabel(subject contextfabric.SubjectRef, title string) bool {
-	return title == subject.CanonicalID || strings.HasPrefix(title, string(subject.Kind)+":") || strings.HasPrefix(title, string(subject.Kind)+".v2:")
+	plain := plainIdentifierText(title)
+	return bareUUID.MatchString(plain) || holdsIDOfKind(plain, string(subject.Kind))
+}
+
+// holdsIDOfKind reports text with a canonical id in it, the subject's own or
+// another's: the kind's prefix, and no space or end after it.
+func holdsIDOfKind(plain, kind string) bool {
+	for _, prefix := range []string{kind + ":", kind + ".v2:"} {
+		if _, rest, found := strings.Cut(plain, prefix); found && rest != "" && !strings.HasPrefix(rest, " ") {
+			return true
+		}
+	}
+	return false
+}
+
+// plainIdentifierText is text with its percent escapes undone, in lower case: two
+// rounds, so an id escaped twice still shows its prefix. A title with a bare percent
+// sign stops at once, as it was written.
+func plainIdentifierText(text string) string {
+	for range 2 {
+		decoded, err := url.PathUnescape(text)
+		if err != nil || decoded == text {
+			break
+		}
+		text = decoded
+	}
+	return strings.ToLower(text)
 }
 
 // grantedRepositorySlug is a repository of the node the caller may read. A node

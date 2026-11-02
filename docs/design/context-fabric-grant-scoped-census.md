@@ -95,8 +95,11 @@ counts a population and is never listed.
 | Clarification not allowed | `no_match`, candidates attached, the existing sentence | a receipt |
 
 - **K** is `min(MaxSubjectCandidates, 25)`, the bound on a narrowing's keyed reads.
-  Below 2 nothing is listed, and the count is stated. Reads are bounded by K too, on
-  one deadline. Over the set budget (999) no statement is added.
+  Below 2 nothing new is listed, and the count is stated. A satisfier the search
+  already holds is still shown, and the sentence counts it. Reads are bounded by K
+  too, on one deadline. Over the set budget (999) no statement is added.
+- **One candidate beside a count** takes the count's sentence, on both terminals:
+  "One authorized subject matched" would contradict it.
 - **Order** is sorted canonical id. Satisfiers go ahead of the pool, so a noisy pool
   cannot fill the budget.
 - **The sentences** are `ContextFabricCensusUnlistedLimitation` and
@@ -107,15 +110,19 @@ counts a population and is never listed.
 - **A handle two subjects satisfy is not offered.** A redeemed handle never reaches a
   commit, so the option would loop. Candidates carry receipts instead.
 - **Labels are the server's.** A label is the handle, the caller's granted slug or the
-  tracker, and the title unless the title is a raw id (CHAOS-12468). `matched_terms`
-  holds the handle as the question wrote it, never the census marker. The slug comes
+  tracker, and the title unless the title is an identifier: it holds a canonical id,
+  escaped or not, or it is a bare UUID (CHAOS-12468). `matched_terms` holds the handle
+  as the question wrote it. The census marker is internal: it comes off every candidate
+  as the candidate leaves the resolver, on every path. The slug comes
   from `auth.RepositoryAllowed`, never from its position in the node's list: a node can
   list an old slug. A pool-built candidate keeps its label, so the prompt's id suffix
   cue can still reach one (CHAOS-12468).
 - **Side channels.** The ids are inside the grant, each passes the node gate, and the
   trace carries counts only (`evidence_census_listing`). Outside rows change no
   candidate, label, offer, sentence, trace, statement or graph read
-  (`TestAListingChangesNothingOutsideTheGrant`). Project-only never reaches the census,
+  (`TestAListingChangesNothingOutsideTheGrant`). The listing line's `elapsed_ms` is the
+  clock of the run: the reads it measures are compared id by id, so that one field is
+  left out of the comparison and no other (`sameTrace`). Project-only never reaches the census,
   so it gets none of this.
 
 ## Gates
@@ -211,6 +218,11 @@ with one keyed read: for the repo-less work items that page returned, the native
 item outside the grant, an inside item with no link, and a lower-tier link only: it
 is true of all four, so it is no oracle. Neither sentence reads as "does not exist".
 A requested repository narrows the census, so a zero there gives neither sentence.
+
+**Offers.** The request's own `subject_handles` bound the handle options. A receipt
+must agree with them, so an option for any other value would end the follow-up in a
+conflict. Such an option is not offered, for any caller, and the candidate receipts
+still carry that subject.
 
 **Handles.** A linked item passes `VerifyHandle`, fresh and remembered. A work-item
 handle option mints for a restricted caller only from evidence inside the grant: an

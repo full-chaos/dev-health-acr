@@ -66,6 +66,7 @@ func (s listingStore) Get(ctx context.Context, principal storage.Principal, id s
 type listingLiveTurn struct {
 	result    contextfabric.InvestigationResult
 	committed []string
+	terms     []string
 	trace     []graphrank.ResolutionTraceEvent
 }
 
@@ -122,6 +123,8 @@ func TestACensusCountIsListedOnRealStores(t *testing.T) {
 	addPR("other/secret", 78, "Lone change outside")
 	addPR("acme/r00", 79, "The first linked change")
 	addPR("acme/r01", 79, "The second linked change")
+	addPR("acme/r00", 5, "Quarterly release notes")
+	addPR("acme/r01", 6, "Quarterly release notes")
 	for i := range 3 {
 		exec("ci run", `INSERT INTO ci_pipeline_runs (repo_id, run_id, status, started_at, last_synced, org_id) VALUES (?, ?, ?, ?, ?, ?)`, repo[inside[i]], "4242", "success", created, now, org)
 	}
@@ -190,7 +193,7 @@ func TestACensusCountIsListedOnRealStores(t *testing.T) {
 	results := 0
 	turn := func(t *testing.T, principal storage.Principal, question string, terms []string, edit func(*contextfabric.InvestigationRequest)) listingLiveTurn {
 		t.Helper()
-		var committed []string
+		var committed, matchedTerms []string
 		engine, err := contextfabric.NewEngine(contextfabric.EngineDependencies{
 			Interpreter: fixedInterpreter{interpretation: contextfabric.InterpretedQuestion{
 				Shape: contextfabric.ShapeOpen, RequestedJudgment: "status", SubjectTerms: terms,
@@ -201,9 +204,16 @@ func TestACensusCountIsListedOnRealStores(t *testing.T) {
 				for _, subject := range input.Graph.Resolution.Committed {
 					committed = append(committed, subject.CanonicalID)
 				}
+				for _, candidate := range input.Graph.Resolution.Candidates {
+					matchedTerms = append(matchedTerms, candidate.MatchedTerms...)
+				}
 				return contextfabric.InvestigationResult{}, errors.New("no model in this test")
 			}),
 			Results: store, Requirements: productionRequirementDeriver{},
+			HandleVerifier: func(ctx context.Context, orgID string, kind contractsv1.ContextFabricSubjectKind, patternID, value string) (bool, contextfabric.HandleVerificationReason) {
+				ok, reason := graphrank.VerifyHandle(ctx, orgID, kind, patternID, value, adapter.config.CensusFunc)
+				return ok, contextfabric.HandleVerificationReason(reason)
+			},
 		}, contextfabric.EngineOptions{ServiceVersion: "acr-test", NewResultID: func() string {
 			results++
 			return fmt.Sprintf("result_12467%03d", results)
@@ -226,7 +236,7 @@ func TestACensusCountIsListedOnRealStores(t *testing.T) {
 		if err != nil && len(committed) == 0 {
 			t.Fatalf("Investigate: %v", err)
 		}
-		return listingLiveTurn{result, committed, tracer.take()}
+		return listingLiveTurn{result, committed, matchedTerms, tracer.take()}
 	}
 	false1 := "Retrieval found no candidate"
 	saysNothingFound := func(t *testing.T, result contextfabric.InvestigationResult) {
@@ -354,6 +364,55 @@ func TestACensusCountIsListedOnRealStores(t *testing.T) {
 			t.Fatalf("status %q limitations %q, want no_match and %q", got.result.Status, got.result.Limitations, want)
 		}
 		saysNothingFound(t, got.result)
+	})
+	t.Run("the marker leaves with no candidate that committed alone", func(t *testing.T) {
+		got := turn(t, restricted, "What is the state of pull request 77?", []string{"pull request 77"}, nil)
+		if len(got.committed) != 1 {
+			t.Fatalf("committed = %v, want the lone satisfier", got.committed)
+		}
+		if slices.ContainsFunc(got.terms, func(term string) bool { return strings.HasPrefix(term, "[census") }) {
+			t.Fatalf("matched terms = %q", got.terms)
+		}
+	})
+	// The fixture graph's "offered receipts resolve": the caller sends the handle
+	// and every other field again on the follow-up. A handle several subjects
+	// satisfy cannot decide, and a near match of another number conflicts with the
+	// request, so neither is an offer.
+	t.Run("no offered handle ends the follow-up in a conflict", func(t *testing.T) {
+		roomy := func(r *contextfabric.InvestigationRequest) {
+			r.ExpectedKinds = []contractsv1.ContextFabricSubjectKind{contractsv1.ContextFabricSubjectPullRequest}
+			r.Options.MaxSubjectCandidates = 12
+		}
+		explicit := func(r *contextfabric.InvestigationRequest) {
+			roomy(r)
+			r.SubjectHandles = []contractsv1.ContextFabricRequestedHandle{{Kind: contractsv1.ContextFabricSubjectPullRequest, PatternID: "pull_request_number", Value: "12"}}
+		}
+		terms := []string{"pull request 12", "Quarterly"}
+		for name, principal := range map[string]storage.Principal{"restricted": restricted, "unrestricted": unrestricted} {
+			bare := turn(t, principal, pr12, terms, roomy)
+			if bare.result.StructureNeeds == nil || len(bare.result.StructureNeeds.HandleOptions) == 0 {
+				t.Fatalf("%s: no near match is offered, so this row proves nothing", name)
+			}
+			got := turn(t, principal, pr12, terms, explicit)
+			if got.result.StructureNeeds == nil {
+				t.Fatalf("%s: status %q, want an offer", name, got.result.Status)
+			}
+			for _, option := range got.result.StructureNeeds.HandleOptions {
+				next := turn(t, principal, pr12, terms, func(r *contextfabric.InvestigationRequest) {
+					explicit(r)
+					r.PriorHandleReceipts = []contractsv1.ContextFabricBoundSubjectReceipt{{ResultID: got.result.ResultID, ReceiptID: option.ReceiptID}}
+				})
+				if next.result.Status == contextfabric.InvestigationNoMatch {
+					t.Fatalf("%s: option %q did not resolve: %q", name, option.Label, next.result.Limitations)
+				}
+			}
+			if len(got.result.StructureNeeds.HandleOptions) != 0 {
+				t.Fatalf("%s: handle options = %+v, want none: 12 cannot decide and the rest conflict", name, got.result.StructureNeeds.HandleOptions)
+			}
+			if len(got.result.StructureNeeds.CandidateOptions) == 0 {
+				t.Fatalf("%s: the clarification holds nothing to redeem", name)
+			}
+		}
 	})
 	t.Run("project-only stays as it is", func(t *testing.T) {
 		got := turn(t, userprincipal.ProjectOnly(t, org, []string{"project.v2:github:P-1"}), pr12, []string{}, nil)

@@ -94,6 +94,9 @@ func TestAPartListingIsStatedOnTheClarification(t *testing.T) {
 	if !slices.Contains(result.Limitations, sentence) {
 		t.Fatalf("limitations %q lack the partial count", result.Limitations)
 	}
+	if !slices.Contains(result.Limitations, clarificationRequiredLimitation) {
+		t.Fatalf("limitations %q lack the terminal's own sentence: several candidates are listed", result.Limitations)
+	}
 }
 
 // The terminal reason names the state, so a count is not an empty pool in the
@@ -106,5 +109,42 @@ func TestACountIsNotAnEmptyPoolInTheTerminalReason(t *testing.T) {
 	}
 	if !slices.Contains(SubjectlessTerminalReasonVocabulary(), censusUnlistedTerminalReason) {
 		t.Fatalf("%q is outside the vocabulary", censusUnlistedTerminalReason)
+	}
+}
+
+// One candidate beside a census count of more: "one subject matched" is false of
+// it, on both terminals, in the limitation, the prompt and the answer.
+func TestOneCandidateBesideACountSaysTheCount(t *testing.T) {
+	t.Parallel()
+	subject := SubjectRef{Kind: SubjectPullRequest, CanonicalID: "pull_request:r:12", Label: "pull request #12 in acme/alpha"}
+	candidate := SubjectCandidate{ReceiptID: "receipt_census_a1", Subject: subject, State: ResolutionAmbiguous, MatchReasons: []string{"census"}, Confidence: 0.5}
+	for name, sentence := range map[string]string{
+		"it is one of them":     contractsv1.ContextFabricCensusListedLimitation(2, 1),
+		"it is none of them":    contractsv1.ContextFabricCensusUnlistedLimitation(2),
+		"it is beside a lone 1": contractsv1.ContextFabricCensusUnlistedLimitation(1),
+	} {
+		for allowClarification, status := range map[bool]InvestigationStatus{true: InvestigationClarificationRequired, false: InvestigationNoMatch} {
+			t.Run(name, func(t *testing.T) {
+				t.Parallel()
+				request := validInvestigationRequest()
+				request.Options.AllowClarification = allowClarification
+				engine := mustEngineForTerminalReasonTest(t, authzDroppingGraphReader{resolution: SubjectResolution{Candidates: []SubjectCandidate{candidate}, Committed: []SubjectRef{}, CensusLimitation: sentence}}, &recordingTelemetry{})
+				result, err := engine.Investigate(context.Background(), storage.Principal{OrgID: "org_1", RepositoryScopes: []string{"acme/alpha", "acme/beta"}}, request)
+				if err != nil {
+					t.Fatalf("Investigate() error = %v", err)
+				}
+				if result.Status != status {
+					t.Fatalf("status = %q, want %q", result.Status, status)
+				}
+				if !slices.Contains(result.Limitations, sentence) {
+					t.Fatalf("limitations %q lack the count", result.Limitations)
+				}
+				for _, text := range append(slices.Clone(result.Limitations), result.DeterministicAnswer) {
+					if strings.Contains(text, "One authorized subject") || strings.Contains(text, "more than one authorized subject") {
+						t.Fatalf("%q contradicts the count: %q", text, result.Limitations)
+					}
+				}
+			})
+		}
 	}
 }
