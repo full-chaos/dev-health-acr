@@ -163,12 +163,17 @@ func TestACancelDoesNotStopAReadInFlight(t *testing.T) {
 	time.AfterFunc(cancelAt, cancelParent)
 	started := time.Now()
 	_, err = client.query(ctx, "graph", "RETURN 1", nil, true)
-	elapsed := time.Since(started)
+	returned := time.Now()
+	elapsed := returned.Sub(started)
+	// Measured against the context's own deadline, not from a start taken
+	// after the context was made (CHAOS-12573: 199.15 ms of 200 on a busy
+	// runner was that gap, not an early return).
+	at, _ := ctx.Deadline()
 	t.Logf("cancelled at %s, deadline %s, returned after %s err=%v", cancelAt, deadline, elapsed.Round(time.Millisecond), err)
 	if err == nil {
 		t.Fatal("a query with no reply returned no error")
 	}
-	if elapsed < deadline || elapsed > requestTimeout/2 {
+	if returned.Before(at) || elapsed > requestTimeout/2 {
 		t.Fatalf("returned after %s, want at the %s deadline, past the cancel at %s", elapsed, deadline, cancelAt)
 	}
 }
