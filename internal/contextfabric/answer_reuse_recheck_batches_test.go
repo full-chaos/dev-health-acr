@@ -101,9 +101,11 @@ type recheckGraph struct {
 	// deadlines holds the deadline each read's context carried, zero for none.
 	deadlines []time.Time
 
-	resolves   []recheckResolveCall
-	discovers  []recheckDiscoverCall
-	removedFor [][]SubjectRef
+	resolves []recheckResolveCall
+	// prefixMemos is the work item key prefix memo each ResolveSubjects call saw.
+	prefixMemos []any
+	discovers   []recheckDiscoverCall
+	removedFor  [][]SubjectRef
 }
 
 // recheckHangGuard ends a hung read whose context never ends, so a recheck with
@@ -164,6 +166,7 @@ func (g *recheckGraph) AuthorizeStoredSubjects(ctx context.Context, principal st
 
 func (g *recheckGraph) ResolveSubjects(ctx context.Context, _ storage.Principal, request InvestigationRequest, _ InterpretedQuestion, binding ResolvedGraphBinding, confirmedKind *ConfirmedExpectedKind, confirmedAnchor *ConfirmedAnchorSelection, frame *QuestionFrame, scopeAnchorKind SubjectKind) (SubjectResolution, StructureOfferMaterial, CommitBasisSet, CommitDecisionDigestSet, error) {
 	g.read(ctx)
+	g.prefixMemos = append(g.prefixMemos, ctx.Value(workItemKeyPrefixMemoKey{}))
 	g.resolves = append(g.resolves, recheckResolveCall{
 		hints: append([]SubjectHint(nil), request.RequestedScope.SubjectHints...), options: request.Options, binding: binding,
 		confirmedKind: confirmedKind, confirmedAnchor: confirmedAnchor, frame: frame, scopeAnchorKind: scopeAnchorKind,

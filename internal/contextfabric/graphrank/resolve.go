@@ -129,6 +129,16 @@ func capMatchedTermsAfterMerge(candidatesBySubject map[string]contextfabric.Subj
 // ResolveDeps carries the backend I/O ResolveSubjects needs. Every function
 // field is required.
 type ResolveDeps struct {
+	// WorkItemKeyPrefix is the read behind bindQuestionHandles. nil leaves every
+	// ticket key unbound, as does a read that fails.
+	WorkItemKeyPrefix WorkItemKeyPrefixFunc
+	// questionHandles is bindQuestionHandles' answer for this turn, read once in
+	// ResolveSubjectsWithCommitBasis so resolveSubjects and commitNamedHandle see
+	// the same set. ResolveDeps is a per-call copy, as outsideRequested is.
+	// questionHandlesBound tells an empty set from a set never read: a test that
+	// calls commitNamedHandle directly has no turn.
+	questionHandles      []BoundHandle
+	questionHandlesBound bool
 	// ExactHint looks up a subject by exact canonical identity, scoped to
 	// the calling organization. ok=false with a nil error means "not
 	// found" -- a safe non-match, not an error.
@@ -2018,6 +2028,11 @@ type ResolutionTraceEvent struct {
 	// pageHintLookupTally (page_hint_lookup.go) for the one-outcome-per-hint
 	// rule. Counts, one bool and subject-kind keys only: never the hint's id
 	// or label.
+	// WorkItemKey* (stage == "work_item_key_gate" ONLY, CHAOS-12463): counts, and
+	// no token, of the ticket-key shapes in one question.
+	WorkItemKeyTokens           int
+	WorkItemKeysHeld            int
+	WorkItemKeysUnread          int
 	PageHintCount               int
 	PageHintExactHit            int
 	PageHintLabelFallback       int
@@ -2305,6 +2320,11 @@ func ResolveSubjectsWithCommitBasis(ctx context.Context, principal storage.Princ
 	// call, after every pass has finished, rather than once per pass.
 	admission := newContestAdmission(decideContestScope(frame, confirmedKind,
 		decideAnchorPoolKindScope(frame, scopeAnchorKind, confirmedAnchor, confirmedKind)))
+	if strings.TrimSpace(principal.OrgID) != "" && ctx.Err() == nil {
+		// One read per turn (CHAOS-12463), for resolveSubjects and for the handle a
+		// turn names beside a committed repository (commitNamedHandle).
+		deps.questionHandles, deps.questionHandlesBound = bindQuestionHandles(ctx, principal, request, deps), true
+	}
 	resolution, offerMaterial, err := resolveSubjects(ctx, principal, request, interpreted, deps, confirmedKind, confirmedAnchor, bases, digests, frame, scopeAnchorKind, admission)
 	withoutProvenanceMarkers(resolution.Candidates)
 	// THE DISCLOSURE, emitted on EVERY successful pass through this call,
@@ -2838,7 +2858,10 @@ func resolveSubjects(ctx context.Context, principal storage.Principal, request c
 			return resolution, contextfabric.StructureOfferMaterial{}, nil
 		}
 	}
-	request, hintsOfAnotherKind := withoutHintsOfAnotherKind(ctx, request, frame, confirmedKind)
+	if !deps.questionHandlesBound {
+		deps.questionHandles, deps.questionHandlesBound = bindQuestionHandles(ctx, principal, request, deps), true
+	}
+	request, hintsOfAnotherKind := withoutHintsOfAnotherKind(ctx, request, deps.questionHandles, frame, confirmedKind)
 	terms := SubjectTerms(request, interpreted)
 	if len(terms) == 0 && len(hintsOfAnotherKind) > 0 {
 		// CHAOS-12555: a dropped hint may have been all the turn had to search
@@ -3151,7 +3174,7 @@ func resolveSubjects(ctx context.Context, principal storage.Principal, request c
 			// its anchor have not run here), and the attestation is
 			// consumed exactly as the ordinary path consumes it: same
 			// predicate, same census, same commit.
-			shadowsHandle := len(request.SubjectHandles) == 0 && committedScopeAnchorShadowsHandle(request.Question, exactResolution.Committed, frame)
+			shadowsHandle := len(request.SubjectHandles) == 0 && committedScopeAnchorShadowsHandle(deps.questionHandles, exactResolution.Committed, frame)
 			// The hinted anchor reaches the round as the sole claimant of its
 			// own label, the same shape the alias lookup gives the ordinary
 			// path, so the trace reports a unique claimant and never a
@@ -4125,15 +4148,15 @@ func resolveSubjects(ctx context.Context, principal storage.Principal, request c
 	// whether its round runs. With a bound handle the round runs either way.
 	// CHAOS-12467 ruling 1: the same for every caller but project-only. An
 	// unrestricted caller was told "found no candidate" with no census asked.
-	stalledForCensus := len(resolution.Committed) == 0 && (searchTruncated || handleBoundRound(principal, request))
+	stalledForCensus := len(resolution.Committed) == 0 && (searchTruncated || handleBoundRound(principal, deps.questionHandles))
 	var handleRound workItemHandleRound
 	var undecidingHandle *BoundHandle
-	if !offersOnly && deps.CensusFunc != nil && (stalledForCensus || committedScopeAnchorShadowsHandle(request.Question, resolution.Committed, frame)) {
+	if !offersOnly && deps.CensusFunc != nil && (stalledForCensus || committedScopeAnchorShadowsHandle(deps.questionHandles, resolution.Committed, frame)) {
 		// CHAOS-4300: false -- this is the pre-existing stalled-resolution
 		// call site, not the caller-hint short circuit's own new call above.
 		censusVisibility := unscopedVisibility || repositoryNarrowedByUnrestrictedPrincipal(principal, request) || teamNarrowedByUnrestrictedPrincipal(principal, request, deps) || grantScopedRequest(principal, request, deps)
 		attestation := runShadowEvidenceRoundForResolution(ctx, principal, request, interpreted, resolution, aliasClaimantsByTerm, aliasIdentityComplete, censusVisibility, deps, confirmedKind, confirmedAnchor, false)
-		handleRound = workItemHandleRoundOf(request.Question, attestation)
+		handleRound = workItemHandleRoundOf(deps.questionHandles, attestation)
 		// CHAOS-3896 Slice C (design brief v6 §1.4): the round's Attestation
 		// is now CONSUMED in the commit decision, not merely traced. When it
 		// named exactly one satisfier (attestedSatisfier), prove that
@@ -4425,7 +4448,7 @@ func resolveSubjects(ctx context.Context, principal storage.Principal, request c
 	// never literally typed in the question. Computed here, before the
 	// tracer block below, so its own diagnostics can ride the SAME
 	// unconditional kind_offer event candidateOfferDiag already does.
-	handleOffer, handleOfferDiag := handleOfferMaterial(request.Question, request.SubjectHandles, deps.HandleGrammarChecker, kindOfferCandidates)
+	handleOffer, handleOfferDiag := handleOfferMaterial(deps.questionHandles, request.SubjectHandles, deps.HandleGrammarChecker, kindOfferCandidates)
 	handleOffer = redeemableHandleOffer(principal, handleOffer, handleRound, kindOfferCandidates)
 	handleOffer = withoutUndecidingHandle(handleOffer, undecidingHandle)
 	handleOffer = withoutVetoedHandles(handleOffer, request.SubjectHandles)
@@ -4601,11 +4624,10 @@ func resolveSubjects(ctx context.Context, principal storage.Principal, request c
 // expected kind must state the handle's kind: in a cohort, grouped or count
 // question, or one about the repository itself, a handle is an example or an
 // operand, and committing it would change what the answer is about.
-func committedScopeAnchorShadowsHandle(question string, committed []contextfabric.SubjectRef, frame *contextfabric.QuestionFrame) bool {
+func committedScopeAnchorShadowsHandle(bound []BoundHandle, committed []contextfabric.SubjectRef, frame *contextfabric.QuestionFrame) bool {
 	if len(committed) == 0 {
 		return false
 	}
-	bound := BindHandles(question)
 	if len(bound) != 1 || !IsCensusKindRegistered(bound[0].Kind) {
 		return false
 	}
@@ -4972,7 +4994,7 @@ func runShadowEvidenceRoundForResolution(ctx context.Context, principal storage.
 		workItemScope = newLinkScope(deps, request.RequestedScope)
 	}
 	attestation = RunShadowEvidenceRound(roundCtx, ShadowEvidenceRoundInput{
-		RequestID: request.RequestID, Question: request.Question, OrgID: principal.OrgID,
+		RequestID: request.RequestID, Question: request.Question, QuestionHandles: deps.questionHandles, QuestionHandlesBound: true, OrgID: principal.OrgID,
 		PooledKinds: censusKinds, PooledSubjects: pooledSubjects, Trigger: evidenceRoundTrigger(resolution, callerHintShortCircuit), CurrentAxis: interpreted.TimeContext.Axis == contextfabric.TemporalCurrent,
 		UnscopedVisibility: unscopedVisibility, GrantScoped: grantScopedCensus(principal), AliasClaimants: claimantsFromCandidateNodes(aliasClaimantsByTerm),
 		AliasLookupComplete: aliasIdentityComplete, CensusFunc: grantEnforced(deps.CensusFunc),
@@ -5538,8 +5560,8 @@ func grantScopedCensus(principal storage.Principal) bool {
 // (CHAOS-12456). Neither does an unrestricted caller's with one handle
 // (CHAOS-12467): for it two handles stay a truncated search's question. A
 // project-only caller holds neither shape of grant, so it never does.
-func handleBoundRound(principal storage.Principal, request contextfabric.InvestigationRequest) bool {
-	handles := len(BindHandles(request.Question))
+func handleBoundRound(principal storage.Principal, bound []BoundHandle) bool {
+	handles := len(bound)
 	if grantScopedCensus(principal) {
 		return handles > 0
 	}

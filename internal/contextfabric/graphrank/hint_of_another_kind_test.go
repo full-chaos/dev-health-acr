@@ -342,11 +342,11 @@ func TestARepositoryHintStaysOnlyToAnchorANamedHandle(t *testing.T) {
 	request := testRequest()
 	request.Question = "Is PR 532 ready?"
 	request.RequestedScope.SubjectHints = []contextfabric.SubjectHint{askedKindPageHint(repository, hintCanonicalID(repository))}
-	if _, dropped := withoutHintsOfAnotherKind(context.Background(), request, frame, nil); len(dropped) != 0 {
+	if _, dropped := withoutHintsOfAnotherKind(context.Background(), request, BindHandles(request.Question), frame, nil); len(dropped) != 0 {
 		t.Fatalf("dropped %v, want the anchor kept", dropped)
 	}
 	request.Question = "Is this pull request ready?"
-	if _, dropped := withoutHintsOfAnotherKind(context.Background(), request, frame, nil); len(dropped) != 1 {
+	if _, dropped := withoutHintsOfAnotherKind(context.Background(), request, BindHandles(request.Question), frame, nil); len(dropped) != 1 {
 		t.Fatalf("dropped %v, want the repository dropped: no handle to anchor", dropped)
 	}
 }
@@ -358,5 +358,35 @@ func TestADroppedPageHintIsCounted(t *testing.T) {
 	event, ok := tally.event()
 	if !ok || event.PageHintCount != 1 || event.PageHintOtherKind != 1 || event.PageHintOtherKindByKind["organization"] != 1 {
 		t.Fatalf("event = %+v, ok = %v", event, ok)
+	}
+}
+
+// A project on a page says where the ticket a question names is, but only a key
+// the caller holds is a handle (CHAOS-12463). A key whose prefix the caller does
+// not hold binds nothing, so the project anchors nothing and is dropped. The
+// filter reads the handles after the key gate, not the raw question.
+func TestAProjectHintAnchorsOnlyAKeyTheCallerHolds(t *testing.T) {
+	t.Parallel()
+	workItem, project := contractsv1.ContextFabricSubjectWorkItem, contractsv1.ContextFabricSubjectProject
+	for held, wantDropped := range map[bool]int{true: 0, false: 1} {
+		deps := hintBackend(project).deps()
+		tracer := &recordingTracer{}
+		deps.ResolutionTracer = tracer
+		deps.WorkItemKeyPrefix = (&prefixReads{held: map[string]bool{"OPS-": held}}).read
+		request := testRequest()
+		request.Question = "what blocks OPS-1?"
+		request.RequestedScope.SubjectHints = []contextfabric.SubjectHint{askedKindPageHint(project, hintCanonicalID(project))}
+		if _, _, _, _, err := ResolveSubjectsWithCommitBasis(context.Background(), storage.Principal{OrgID: "org_1"}, request, testInterpreted("OPS-1"), deps, nil, nil, namedFrameAsking(&workItem, "OPS-1"), ""); err != nil {
+			t.Fatal(err)
+		}
+		var event ResolutionTraceEvent
+		for _, traced := range tracer.events {
+			if traced.Stage == "page_hint_lookup" {
+				event = traced
+			}
+		}
+		if event.Stage == "" || event.PageHintOtherKind != wantDropped {
+			t.Errorf("prefix held %v: page hint event %+v, want %d dropped", held, event, wantDropped)
+		}
 	}
 }
