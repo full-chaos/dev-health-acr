@@ -82,8 +82,12 @@ func (p *DeploymentsProvider) ReadFacts(ctx context.Context, principal storage.P
 		rejectedCount += rejected
 	}
 
+	// A deployment's status has no latest row to pick; a repository's aggregate
+	// does. The team rollup reads the window on its own.
+	readBound := timeBound
 	if repoSubjects := subjectsOfKind(query.Subjects, contextfabric.SubjectRepository); len(repoSubjects) > 0 {
-		rowCount, rejected, scanErr := p.readRepositoryAggregate(ctx, orgID, repoSubjects, &facts, timeBound)
+		readBound = statedWindowBound(query, timeBound)
+		rowCount, rejected, scanErr := p.readRepositoryAggregate(ctx, orgID, repoSubjects, &facts, readBound)
 		if scanErr != nil {
 			return contextfabric.FactProviderResult{}, readFailure("query deployment metrics", scanErr)
 		}
@@ -112,7 +116,7 @@ func (p *DeploymentsProvider) ReadFacts(ctx context.Context, principal storage.P
 		}
 	}
 
-	state, retentionReason := timeBound.retentionState(len(facts))
+	state, retentionReason := readBound.retentionState(len(facts))
 	result = contextfabric.FactProviderResult{Facts: facts, State: state, Reason: retentionReason, Version: QueryVersion, Grain: timeBound.effectiveGrain(grain), Truncated: truncated}
 	applyTeamsOwningNothing(&result, query.Subjects, teamsRequested, teamsWithoutRepos)
 	applyTeamsOwningProjectsOnly(ctx, p.facts.client, orgID, &result, query.Subjects, teamsRequested, timeBound)

@@ -1481,6 +1481,22 @@ for bad_consent in "" "https://www.example.test" "https://www.example.test/" "ht
   oauth_must_fail "consent url '${bad_consent}'" "config.oauth.consentUrl" "${oauth_args[@]}" --set-string "config.oauth.consentUrl=${bad_consent}"
 done
 
+# CHAOS-12527: a malformed percent escape renders here and stops the workload there,
+# so the chart refuses what url.Parse refuses, on https and on a loopback host.
+for bad_escape in 'http://localhost:8089/m%cp' 'https://acr.example.test/m%cp' 'https://acr.example.test/mcp%' 'https://acr.example.test/mcp%2' 'https://acr.example.test/m cp' 'https://acr%2Eexample.test/mcp'; do
+  oauth_must_fail "resource '${bad_escape}'" "config.oauth.resources" "${oauth_args[@]}" --set-string "config.oauth.resources[0]=${bad_escape}"
+done
+for bad_escape in 'http://localhost:3000/acr%authorize' 'https://www.example.test/acr%authorize' 'https://www.example.test/acr/authorize%'; do
+  oauth_must_fail "consent url '${bad_escape}'" "config.oauth.consentUrl" "${oauth_args[@]}" --set-string "config.oauth.consentUrl=${bad_escape}"
+done
+for bad_issuer in 'https://acr%example.test' 'https://user@acr.example.test' 'https://acr example.test'; do
+  oauth_must_fail "issuer '${bad_issuer}'" "must be an https origin" "${oauth_args[@]}" --set-string "config.oauth.issuer=${bad_issuer}"
+done
+if ! escape_render="$(render "${oauth_args[@]}" --set-string 'config.oauth.resources[0]=https://acr.example.test/m%2Fcp' \
+  --set-string 'config.oauth.consentUrl=https://www.example.test/acr%2Fauthorize' 2>&1)"; then
+  fail_gate "oauth: a well-formed percent escape must render: $(tail -1 <<<"$escape_render")"
+fi
+
 # CHAOS-12476: http is for a loopback host only, the rule of acr-api and acr-mcp
 # (internal/config/oauth.go, internal/mcp/http_oauth.go). A local stack with no
 # TLS renders; a named host never does, whatever it starts with.

@@ -2271,8 +2271,7 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 
 	// CHAOS-3898 P1-1: Interpret sees ONLY the validated receipt subset,
 	// never the raw request.PriorSubjectReceipts -- see the block above.
-	interpretRequest := request
-	interpretRequest.PriorSubjectReceipts = priorValidatedReceipts
+	interpretRequest := interpretRequestFor(request, priorValidatedReceipts, structureCanon)
 	startInvestigationStage(ctx, contractsv1.ContextFabricStageInterpreting)
 	interpretation, familyOutcome, err := e.interpreter.Interpret(ctx, principal, interpretRequest)
 	if err == nil {
