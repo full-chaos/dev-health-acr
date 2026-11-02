@@ -85,10 +85,18 @@ func newReloadRig(t *testing.T, lifecycle ...bool) reloadRig {
 		DrainBatchBudget: -1,
 	}
 	// lifecycle: a lifecycle row serving its epoch (servingLifecycleStore), so the
-	// coordinator takes the lifecycle path.
+	// coordinator takes the lifecycle path. The epoch's store is the rig's; the
+	// store without an epoch is another, empty one, so a realign on the wrong store
+	// is seen.
 	if len(lifecycle) > 0 && lifecycle[0] {
-		config.Lifecycle = servingLifecycleStore{}
-		config.EpochCheckpoints = func(int64) contextfabric.ProjectionCheckpointStore { return store }
+		config.Lifecycle = epochServingLifecycle{}
+		config.Checkpoints = newFakeCheckpointStore()
+		config.EpochCheckpoints = func(epoch int64) contextfabric.ProjectionCheckpointStore {
+			if epoch != reloadEpoch {
+				t.Errorf("epoch store asked for epoch %d, want %d", epoch, reloadEpoch)
+			}
+			return store
+		}
 	}
 	coordinator, err := projectionrun.NewCoordinator(config)
 	if err != nil {
@@ -96,6 +104,19 @@ func newReloadRig(t *testing.T, lifecycle ...bool) reloadRig {
 	}
 	rig.coordinator = coordinator
 	return rig
+}
+
+// reloadEpoch is the epoch epochServingLifecycle serves.
+const reloadEpoch int64 = 7
+
+// epochServingLifecycle is a lifecycle row serving reloadEpoch, so the lifecycle
+// path reads the epoch's checkpoint store, not the store without an epoch.
+type epochServingLifecycle struct {
+	contextfabric.GraphLifecycleStore
+}
+
+func (epochServingLifecycle) Get(context.Context, string) (contextfabric.OrgGraphLifecycle, bool, error) {
+	return contextfabric.OrgGraphLifecycle{Status: contextfabric.LifecycleStatusServing, ActiveEpoch: reloadEpoch}, true, nil
 }
 
 // project ticks until the source has no more batches, so the checkpoint and the
