@@ -630,15 +630,20 @@ func (a *App) handleOAuthFirstPartyAuthorize(w http.ResponseWriter, r *http.Requ
 		a.emitOAuthStep(r, oauthvocab.StepAuthorize, oauthvocab.OutcomeInvalidRequest, "", http.StatusBadRequest)
 		return
 	}
-	request.ClientID = clientID
 	user := firstPartyAuthorizeUserKey(principal)
 	limiter := a.runtime.DeviceAuthorizationLimiter
-	if a.oauthRateLimited(w, r, oauthvocab.StepAuthorize, a.oauthLimitKey(r, request.ClientID), func(client string) DeviceAuthorizationLimitDecision {
+	if a.oauthRateLimited(w, r, oauthvocab.StepAuthorize, a.oauthLimitKey(r, clientID), func(client string) DeviceAuthorizationLimitDecision {
 		return limiter.AllowBrowserAuthorizeUser(client, user)
 	}) {
 		return
 	}
-	a.serveOAuthAuthorize(w, r, request)
+	// A new request, not the body's with its client id overwritten: its client
+	// is the configured one, and no field of it names a client the caller sent.
+	a.serveOAuthAuthorize(w, r, auth.OAuthAuthorizeRequest{
+		ResponseType: request.ResponseType, ClientID: clientID, RedirectURI: request.RedirectURI,
+		CodeChallenge: request.CodeChallenge, CodeChallengeMethod: request.CodeChallengeMethod,
+		Resource: request.Resource, Scope: request.Scope, State: request.State,
+	})
 }
 
 // firstPartyAuthorizeForm reads the form body of a first-party authorize: an

@@ -11,6 +11,7 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -263,5 +264,44 @@ func assertNoAuthorizeSecretLogged(t *testing.T, logs string, call firstPartyCal
 		if secret != "" && strings.Contains(logs, secret) {
 			t.Fatalf("a log line carries %q:\n%s", secret, logs)
 		}
+	}
+}
+
+// TestAFirstPartyAuthorizeNeverFetchesAClientTheBodyNames: a body that names a
+// client by a metadata document URL is refused before any authorize runs, so
+// that URL is never fetched. The document server counts every request; the
+// same client through GET /authorize is fetched, so the count can rise.
+func TestAFirstPartyAuthorizeNeverFetchesAClientTheBodyNames(t *testing.T) {
+	documents := newCIMDDocumentServer(t)
+	clientID := documents.URL + "/oauth/client.json"
+	var fetched atomic.Int64
+	document := chatGPTShapedDocument(clientID, nil)
+	documents.serve(func(w http.ResponseWriter, _ *http.Request) {
+		fetched.Add(1)
+		w.Header().Set("Content-Type", "application/json; charset=utf-8")
+		_, _ = w.Write([]byte(document))
+	})
+	app, _, err := newOAuthTestApp(t, &OAuthRuntime{
+		Issuer: oauthTestIssuer, Resources: []string{oauthTestResource, oauthTestIssuer}, DevBrowserRedirectURIs: []string{oauthTestRedirect},
+		ClientMetadata: auth.NewClientMetadataFetcher(documents.Client()),
+	}, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	form := firstPartyForm("state_case_cimd")
+	form.Set("client_id", clientID)
+	form.Set("redirect_uri", cimdTestRedirect)
+	if code := (firstPartyCall{subject: "user_cimd", form: form}).serve(t, app).Code; code != http.StatusBadRequest {
+		t.Fatalf("a POST naming a metadata document client: status %d, want 400", code)
+	}
+	if n := fetched.Load(); n != 0 {
+		t.Fatalf("the metadata document the body named was fetched %d times, want 0", n)
+	}
+	query := oauthTestAuthorizeQuery(clientID)
+	query.Set("redirect_uri", cimdTestRedirect)
+	recorder := httptest.NewRecorder()
+	app.Handler().ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, OAuthAuthorizePath+"?"+query.Encode(), nil))
+	if fetched.Load() == 0 {
+		t.Fatalf("GET /authorize for the same client fetched nothing (status %d): the counter would prove nothing", recorder.Code)
 	}
 }
