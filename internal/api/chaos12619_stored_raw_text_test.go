@@ -42,8 +42,13 @@ func TestAStoredResultReadByIDServesNoRawWorkItemID(t *testing.T) {
 			t.Fatalf("%q: read by id: %d %s", query, read.Code, read.Body.String())
 		}
 		body := read.Body.String()
-		if strings.Contains(body, `"linear:CHAOS-2320`) || !strings.Contains(body, "CHAOS-2320 links pull request PR #5063") {
-			t.Errorf("%q: the read serves a raw work item id or loses the reader-form fact:\n%s", query, body)
+		if strings.Contains(body, "linear:CHAOS-2320") {
+			t.Errorf("%q: the read serves a raw work item id:\n%s", query, body)
+		}
+		// The canonical document carries the path; the projection may leave
+		// paths out, and then it has nothing to show.
+		if query == "" && !strings.Contains(body, `"why_relevant":"CHAOS-2320 links pull request PR #5063"`) {
+			t.Errorf("the canonical read lost the reader-form fact:\n%s", body)
 		}
 	}
 	stored, err := store.Get(t.Context(), seedPrincipal(callerOrgID), seeded.ResultID)

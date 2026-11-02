@@ -25,6 +25,9 @@ import (
 //   - coverage.sources[].label and .state_label are stamped from the structured
 //     source and state, so a stored row reads today's words. They are existing
 //     fields that every pin accepts, so enabled does not gate them.
+//   - a stored row's raw source ids in subject labels, why_relevant and graph
+//     driver text read in reader words (withReaderSubjectText, CHAOS-12619);
+//     like the series words they need no flag and shed with nothing.
 //   - enabled off serves no map (ACR_CONTEXT_FABRIC_VOCABULARY_LABELS_ENABLED).
 //
 // A word never costs an answer, and it never costs a row: the words are added
@@ -39,6 +42,7 @@ import (
 func ServeVocabularyLabels(result InvestigationResult, enabled bool, maxBytes int64) (InvestigationResult, contractsv1.ContextFabricVocabularyLabelsTier) {
 	result.VocabularyLabels = nil
 	result.RenderShapes = withDriverSeriesWords(result.RenderShapes)
+	result = withReaderSubjectText(result)
 	stamped := withStampedSourceWords(result)
 	tier := contractsv1.ContextFabricVocabularyLabelsOff
 	if enabled {
