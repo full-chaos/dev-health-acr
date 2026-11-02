@@ -132,6 +132,7 @@ var contextFabricCommonDefsRewrites = map[string]string{
 	"#/$defs/QuestionFamily":       "#/$defs/context_fabric_common.v1/$defs/QuestionFamily",
 	"#/$defs/QuestionFamilySource": "#/$defs/context_fabric_common.v1/$defs/QuestionFamilySource",
 	"#/$defs/RenderShapeRule":      "#/$defs/context_fabric_common.v1/$defs/RenderShapeRule",
+	"#/$defs/RenderValueUnit":      "#/$defs/context_fabric_common.v1/$defs/RenderValueUnit",
 	// CHAOS-4690: Coverage.details' own new common $defs entry.
 	"#/$defs/CoverageDetail": "#/$defs/context_fabric_common.v1/$defs/CoverageDetail",
 	// The plan-requirement layer's two new common $defs entries: the
@@ -253,6 +254,7 @@ var contextFabricProjectionDefsRewrites = map[string]string{
 	"#/$defs/RenderPresentation": "#/$defs/context_fabric_answer_projection.v1/$defs/RenderPresentation",
 	"#/$defs/RenderAxisKind":     "#/$defs/context_fabric_answer_projection.v1/$defs/RenderAxisKind",
 	"#/$defs/RenderShapeRule":    "#/$defs/context_fabric_answer_projection.v1/$defs/RenderShapeRule",
+	"#/$defs/RenderValueUnit":    "#/$defs/context_fabric_answer_projection.v1/$defs/RenderValueUnit",
 	// CHAOS-4413: completeness' own new projection-local $defs entry.
 	"#/$defs/AnswerCompleteness": "#/$defs/context_fabric_answer_projection.v1/$defs/AnswerCompleteness",
 	// S7c: the row AnswerCompleteness.outcomes[] points at, relocated the

@@ -54,11 +54,16 @@ package v1
 // force every consumer to implement three identical payload readers. Kind
 // therefore names the data shape and Presentation names the encoding, so a
 // consumer switches once on Kind to learn how to read the payload and once
-// on Presentation to learn how to draw it. Quadrant/treemap/sunburst/
-// sankey/burndown/forecast are separate Kinds because each genuinely needs
-// a payload "series" cannot carry (x/y pairs, a hierarchy, flows,
-// scope-vs-time, distribution bands); those payloads land with their
-// producers, not now.
+// on Presentation to learn how to draw it.
+//
+// WHY A TREEMAP CARRIES THE SERIES PAYLOAD (CHAOS-4610). Kind still names what
+// a consumer draws, and the rich views plan settled that treemap, table,
+// quadrant and a two-level sunburst or sankey reuse "series" and resolve by the
+// same source discipline. Only forecast needs a payload of its own (distribution
+// bands). So this file declares no second payload: a Kind other than "series"
+// reads the same Series field, and validateRenderShapes holds what each one
+// requires. A treemap is one series of part-of-whole points of one table (see
+// ContextFabricRenderRuleInvestmentThemeShare).
 
 // ContextFabricRenderKind is the CLOSED vocabulary of renderable answer
 // shapes. Every member is defined now; producers land per shape.
@@ -162,6 +167,54 @@ const (
 	// CHAOS-4627 put the declaration on the wire and CHAOS-4637 made the rule
 	// read it, so there is no geometry left to infer from.
 	ContextFabricRenderRuleDatedFactTrend ContextFabricRenderShapeRule = "dated_fact_trend"
+	// ContextFabricRenderRuleInvestmentThemeShare is the part-of-whole of one
+	// subject's investment (CHAOS-4610): one point per row of the claimed
+	// fact's theme_breakdown table, with the row's share as the value. It is
+	// the only rule that yields a treemap, and a treemap has no other rule.
+	// Declared here ahead of its producer, as the vocabulary always is: the
+	// wire widens first, so consumers can pin it before a shape is emitted.
+	ContextFabricRenderRuleInvestmentThemeShare ContextFabricRenderShapeRule = "investment_theme_share"
+)
+
+// ContextFabricRenderThemeTableField is the claimed fact table an
+// investment_theme_share shape plots, ContextFabricRenderThemeShareField is the
+// row field its points cite, and ContextFabricRenderThemeField is the row field
+// its labels come from.
+const (
+	ContextFabricRenderThemeTableField = "theme_breakdown"
+	ContextFabricRenderThemeShareField = "share"
+	ContextFabricRenderThemeField      = "theme"
+)
+
+// contextFabricInvestmentThemeLabels is the closed map from a canonical theme
+// token to its served word. The themes are fixed by the product model, so the
+// words are too, and a consumer never maps a token itself (CHAOS-4690).
+var contextFabricInvestmentThemeLabels = map[string]string{
+	"feature_delivery": "Feature Delivery",
+	"operational":      "Operational / Support",
+	"maintenance":      "Maintenance / Tech Debt",
+	"quality":          "Quality / Reliability",
+	"risk":             "Risk / Security",
+}
+
+// ContextFabricInvestmentThemeLabel returns the served word of a canonical
+// theme token. A token outside the closed set has no word.
+func ContextFabricInvestmentThemeLabel(theme string) (string, bool) {
+	word, known := contextFabricInvestmentThemeLabels[theme]
+	return word, known
+}
+
+// ContextFabricRenderValueUnit is the CLOSED vocabulary of units a shape may
+// declare for its values. It exists so a consumer formats a number without
+// parsing ValueLabel, which is a served word and no format: reading a unit out of
+// display text is a guess. An empty unit claims nothing, and the value is shown
+// as served.
+type ContextFabricRenderValueUnit string
+
+const (
+	// ContextFabricRenderValueUnitRatio is a share from 0 to 1. Validation
+	// holds every value of the shape to that range.
+	ContextFabricRenderValueUnitRatio ContextFabricRenderValueUnit = "ratio"
 )
 
 // ContextFabricRenderPointSourceKind is the CLOSED vocabulary of places a
@@ -236,7 +289,9 @@ type ContextFabricRenderShape struct {
 	AxisKind   ContextFabricRenderAxisKind `json:"axis_kind"`
 	AxisLabel  string                      `json:"axis_label"`
 	ValueLabel string                      `json:"value_label"`
-	Series     []ContextFabricRenderSeries `json:"series"`
+	// ValueUnit is optional. See ContextFabricRenderValueUnit.
+	ValueUnit ContextFabricRenderValueUnit `json:"value_unit,omitempty"`
+	Series    []ContextFabricRenderSeries  `json:"series"`
 }
 
 // ContextFabricRenderSeries is one named line/bar family within a shape.
