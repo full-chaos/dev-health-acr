@@ -121,7 +121,7 @@ defer_both='[{"shard":6},{"shard":7}]'
 both='drop=[{"shard":6},{"shard":7}]'
 none='drop=[]'
 
-# a covering job renamed away from `isolated-dedicated devhealthsource`: 2 of 3 left.
+# a covering job renamed away from `isolated-dedicated devhealthsource`: 3 of 4 left.
 sed '/^  race-devhealthsource-mid:/,/^  [a-z0-9-]*:/ s/isolated-dedicated devhealthsource/isolated-dedicated devhealthsourcX/' "$workflow" >"$tmp/ci-fewer-covering.yml"
 cmp -s "$workflow" "$tmp/ci-fewer-covering.yml" && { echo 'SETUP FAILED: ci-fewer-covering.yml equals ci.yml' >&2; exit 1; }
 

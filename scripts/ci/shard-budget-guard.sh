@@ -159,4 +159,113 @@ if [ "$json" -eq 1 ]; then
     }
   ' "$tests" || test_rc=$?
 fi
+# CHAOS-12667: real span report, JSON mode only. Reporting only: nothing below changes the exit code. A top-level test
+# that starts parallel subtests reports only its own function time as Elapsed, while the subtests keep it running, so
+# the span is (last event of T or of any T/...) - (T's last run/cont event). A paused parallel test starts at its cont.
+# It never prints a number it did not measure: a parse failure prints ::warning:: and skips the block.
+span_rows() { # file -> "P<TAB>pkg<TAB>elapsed" and "T<TAB>pkg<TAB>test<TAB>span<TAB>elapsed" rows, slowest span first
+  local f="$1" ev
+  ev="$(mktemp)"
+  jq -Rr 'fromjson? | select(type == "object" and .Package != null and .Time != null and (.Action | type) == "string")
+    | (.Time as $t
+       | ($t | sub("\\.[0-9]+Z$"; "Z") | fromdateiso8601) as $s
+       | ((($t | capture("\\.(?<f>[0-9]+)Z$").f) // "0") | ("0." + .) | tonumber) as $f
+       | ($s + $f)) as $ts
+    | if .Test == null then (select(.Action == "pass" or .Action == "fail") | "P\t\(.Package)\t\(.Elapsed // 0)")
+      else "E\t\(.Package)\t\(.Test)\t\(.Action)\t\($ts)\t\(.Elapsed // 0)" end' "$f" >"$ev" || { rm -f "$ev"; return 1; }
+  awk -F'\t' '
+    $1 == "P" { print; next }
+    $1 == "E" {
+      split($3, parts, "/"); top = parts[1]; key = $2 "\t" top; ts = $5 + 0
+      if ($3 == top && ($4 == "run" || $4 == "cont")) { start[key] = ts; has[key] = 1 }
+      if (!(key in last) || ts > last[key]) last[key] = ts
+      if ($3 == top && ($4 == "pass" || $4 == "fail" || $4 == "skip")) el[key] = $6 + 0
+    }
+    END { for (key in has) printf "T\t%s\t%.3f\t%.3f\n", key, last[key] - start[key], el[key] + 0 }
+  ' "$ev" | sort -t "$(printf '\t')" -k1,1 -k4,4gr
+  rm -f "$ev"
+}
+
+fetch_baseline() { # prints the path of a baseline race.json (runs in a subshell); on failure returns 1 with the reason in $tmpd/reason
+  local baseline_reason=""
+  trap '[ -z "$baseline_reason" ] || printf %s "$baseline_reason" >"$tmpd/reason"' RETURN
+  if [ -n "${RACE_BASELINE_JSON:-}" ]; then
+    if [ -r "$RACE_BASELINE_JSON" ] && [ -s "$RACE_BASELINE_JSON" ]; then echo "$RACE_BASELINE_JSON"; return 0; fi
+    baseline_reason="RACE_BASELINE_JSON $RACE_BASELINE_JSON is not a readable file"; return 1
+  fi
+  local art="$RACE_BASELINE_ARTIFACT" dir ids id got
+  command -v gh >/dev/null 2>&1 || { baseline_reason="gh is not installed"; return 1; }
+  [ -n "${GITHUB_REPOSITORY:-}" ] || { baseline_reason="GITHUB_REPOSITORY is not set"; return 1; }
+  ids="$(gh run list -R "$GITHUB_REPOSITORY" --workflow ci.yml --branch main --event push --status success --limit 10 --json databaseId -q '.[].databaseId' 2>/dev/null)" \
+    || { baseline_reason="gh run list failed"; return 1; }
+  [ -n "$ids" ] || { baseline_reason="no successful main run"; return 1; }
+  dir="$tmpd/dl"
+  for id in $ids; do
+    mkdir -p "$dir/$id"
+    if gh run download "$id" -R "$GITHUB_REPOSITORY" -n "$art" -D "$dir/$id" >/dev/null 2>&1; then
+      got="$(find "$dir/$id" -name race.json -type f -size +0c 2>/dev/null | head -n1)"
+      if [ -n "$got" ]; then echo "main run $id" >&2; echo "$got"; return 0; fi
+    fi
+  done
+  baseline_reason="no race.json in artifact $art of the last main runs"; return 1
+}
+
+span_report() {
+  local now base="" b_rows="" note="" baseline_reason=""
+  now="$(span_rows "$file")" || return 1
+  grep -q '^T' <<<"$now" || return 1
+  if [ -n "${RACE_BASELINE_JSON:-}" ] || [ -n "${RACE_BASELINE_ARTIFACT:-}" ]; then
+    local bf
+    if bf="$(fetch_baseline 2>"$tmpd/note")"; then
+      note="$(cat "$tmpd/note")"
+      if ! b_rows="$(span_rows "$bf")" || ! grep -q '^T' <<<"$b_rows"; then
+        b_rows=""
+        printf %s "baseline $bf has no test timing" >"$tmpd/reason"
+      fi
+      [ -n "$b_rows" ] && base="$bf"
+    fi
+    baseline_reason="$(cat "$tmpd/reason" 2>/dev/null || true)"
+    if [ -z "$base" ]; then
+      printf '::warning::shard-budget-guard: no main baseline for %s: %s\n' "${RACE_BASELINE_ARTIFACT:-${RACE_BASELINE_JSON:-}}" "$baseline_reason"
+    fi
+  fi
+  { printf '%s\n' "$now"; printf 'BASE\n'; [ -n "$b_rows" ] && printf '%s\n' "$b_rows"; true; } | awk -F'\t' -v hasbase="$([ -n "$base" ] && echo 1 || echo 0)" -v note="$note" '
+    /^BASE$/ { inbase = 1; next }
+    $1 == "P" { if (inbase) bp[$2] += $3; else np[$2] += $3; next }
+    $1 == "T" {
+      k = $2 "\t" $3
+      if (inbase) { bspan[k] = $4 + 0 } else { n++; key[n] = k; pk[n] = $2; nm[n] = $3; sp[n] = $4 + 0; el[n] = $5 + 0 }
+    }
+    END {
+      npk = 0; for (p in np) { npk++; onlypkg = p }
+      printf "slowest top-level tests by real span (s), reported Elapsed beside it%s:\n", (npk == 1 ? " [" onlypkg "]" : "")
+      for (i = 1; i <= n && i <= 10; i++) {
+        label = (npk == 1 ? nm[i] : pk[i] " " nm[i])
+        line = sprintf("  span %7.1f  elapsed %7.1f  %s", sp[i], el[i], label)
+        if (hasbase) {
+          if (key[i] in bspan) line = line sprintf("  | baseline %7.1f  delta %+.1f", bspan[key[i]], sp[i] - bspan[key[i]])
+          else line = line "  | new (not in baseline)"
+        }
+        print line
+      }
+      if (hasbase) {
+        if (note != "") print "baseline: " note
+        tn = 0; tb = 0; for (p in np) { tn += np[p]; if (p in bp) tb += bp[p]; else missing = 1 }
+        if (missing) print "package time: baseline lacks a package here; no package delta"
+        else printf "package time: now %.1fs, baseline %.1fs, delta %+.1fs\n", tn, tb, tn - tb
+      }
+    }'
+}
+
+tmpd="$(mktemp -d)"
+trap 'rm -f "$lines" "${tests:-}"; rm -rf "$tmpd"' EXIT
+if [ "$json" -eq 1 ]; then
+  if ! span_report; then
+    echo "::warning::shard-budget-guard: could not compute the real span report from $file; the block is skipped"
+  fi
+  if [ -z "${RACE_BASELINE_JSON:-}" ] && [ -z "${RACE_BASELINE_ARTIFACT:-}" ]; then
+    echo "no baseline set (RACE_BASELINE_ARTIFACT / RACE_BASELINE_JSON)"
+  fi
+fi
+
 if [ "$pkg_rc" -ne 0 ] || [ "$test_rc" -ne 0 ]; then exit 1; fi

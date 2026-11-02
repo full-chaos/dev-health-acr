@@ -689,7 +689,7 @@ jobs:
         run: scripts/ci/reap-testcontainers-session.sh
 
   # Observed race dedup, step two. Runs after the race jobs of devhealthfacts
-  # and devhealthsource (it needs all seven, whatever their result) and decides
+  # and devhealthsource (it needs all eight, whatever their result) and decides
   # which of the deferred unit legs 6-10 `unit-dedicated` may leave out. A leg is
   # dropped only when every test it would run shows a PASS, not a SKIP, in the
   # test2json output of the race jobs that cover it, and every covering job ran
@@ -711,6 +711,7 @@ jobs:
       - race-devhealthsource
       - race-devhealthsource-heavy
       - race-devhealthsource-mid
+      - race-devhealthsource-fourth
     if: ${{ !cancelled() && needs.plan.outputs.unit_defer != '[]' }}
     runs-on: ubuntu-latest
     outputs:
@@ -1210,6 +1211,12 @@ jobs:
     if: needs.plan.outputs.heavy == 'true' && !contains(fromJSON(needs.plan.outputs.skip_jobs), 'race-devhealthfacts')
     # Hosted only: this leg exceeds its budget on the self-hosted pool (6 x 8 CPUs).
     runs-on: ubuntu-latest
+    # CHAOS-12667: actions: read lets the budget guard fetch main's last race-json
+    # artifact of this job, so a trip prints each test's change against main.
+    permissions:
+      contents: read
+      packages: read
+      actions: read
     env:
       TESTCONTAINERS_HUB_IMAGE_NAME_PREFIX: ghcr.io/${{ github.repository }}
       TESTCONTAINERS_RYUK_DISABLED: 'true'
@@ -1241,6 +1248,9 @@ jobs:
       - name: Verify every devhealthfacts test runs in exactly one race job
         run: scripts/ci/race-split.sh devhealthfacts race-partition
       - name: Run isolated devhealthfacts race suite (rest half)
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RACE_BASELINE_ARTIFACT: race-json-race-devhealthfacts
         run: |
           set -euo pipefail
           packages="$(scripts/ci/test-shard.sh isolated-dedicated devhealthfacts)"
@@ -1274,6 +1284,12 @@ jobs:
     if: needs.plan.outputs.heavy == 'true' && !contains(fromJSON(needs.plan.outputs.skip_jobs), 'race-devhealthfacts-heavy')
     # Hosted only: this leg exceeds its budget on the self-hosted pool (6 x 8 CPUs).
     runs-on: ubuntu-latest
+    # CHAOS-12667: actions: read lets the budget guard fetch main's last race-json
+    # artifact of this job, so a trip prints each test's change against main.
+    permissions:
+      contents: read
+      packages: read
+      actions: read
     env:
       TESTCONTAINERS_HUB_IMAGE_NAME_PREFIX: ghcr.io/${{ github.repository }}
       TESTCONTAINERS_RYUK_DISABLED: 'true'
@@ -1303,6 +1319,9 @@ jobs:
       - name: Verify the heavy-test list names real tests
         run: scripts/ci/race-split.sh devhealthfacts verify
       - name: Run isolated devhealthfacts race suite (heavy half)
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RACE_BASELINE_ARTIFACT: race-json-race-devhealthfacts-heavy
         run: |
           set -euo pipefail
           packages="$(scripts/ci/test-shard.sh isolated-dedicated devhealthfacts)"
@@ -1335,6 +1354,12 @@ jobs:
       - plan
     if: needs.plan.outputs.heavy == 'true' && !contains(fromJSON(needs.plan.outputs.skip_jobs), 'race-devhealthfacts-mid')
     runs-on: ${{ (github.event_name == 'push' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository)) && vars.CI_RACE_RUNNER || 'ubuntu-latest' }}
+    # CHAOS-12667: actions: read lets the budget guard fetch main's last race-json
+    # artifact of this job, so a trip prints each test's change against main.
+    permissions:
+      contents: read
+      packages: read
+      actions: read
     env:
       TESTCONTAINERS_HUB_IMAGE_NAME_PREFIX: ghcr.io/${{ github.repository }}
       TESTCONTAINERS_RYUK_DISABLED: 'true'
@@ -1364,6 +1389,9 @@ jobs:
       - name: Verify the heavy-test list names real tests
         run: scripts/ci/race-split.sh devhealthfacts verify
       - name: Run isolated devhealthfacts race suite (mid third)
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RACE_BASELINE_ARTIFACT: race-json-race-devhealthfacts-mid
         run: |
           set -euo pipefail
           packages="$(scripts/ci/test-shard.sh isolated-dedicated devhealthfacts)"
@@ -1396,6 +1424,12 @@ jobs:
       - plan
     if: needs.plan.outputs.heavy == 'true' && !contains(fromJSON(needs.plan.outputs.skip_jobs), 'race-devhealthfacts-fourth')
     runs-on: ${{ (github.event_name == 'push' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository)) && vars.CI_RACE_RUNNER || 'ubuntu-latest' }}
+    # CHAOS-12667: actions: read lets the budget guard fetch main's last race-json
+    # artifact of this job, so a trip prints each test's change against main.
+    permissions:
+      contents: read
+      packages: read
+      actions: read
     env:
       TESTCONTAINERS_HUB_IMAGE_NAME_PREFIX: ghcr.io/${{ github.repository }}
       TESTCONTAINERS_RYUK_DISABLED: 'true'
@@ -1425,6 +1459,9 @@ jobs:
       - name: Verify the heavy-test list names real tests
         run: scripts/ci/race-split.sh devhealthfacts verify
       - name: Run isolated devhealthfacts race suite (fourth quarter)
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RACE_BASELINE_ARTIFACT: race-json-race-devhealthfacts-fourth
         run: |
           set -euo pipefail
           packages="$(scripts/ci/test-shard.sh isolated-dedicated devhealthfacts)"
@@ -1475,6 +1512,12 @@ jobs:
       - plan
     if: needs.plan.outputs.heavy == 'true' && !contains(fromJSON(needs.plan.outputs.skip_jobs), 'race-devhealthsource')
     runs-on: ${{ (github.event_name == 'push' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository)) && vars.CI_RACE_RUNNER || 'ubuntu-latest' }}
+    # CHAOS-12667: actions: read lets the budget guard fetch main's last race-json
+    # artifact of this job, so a trip prints each test's change against main.
+    permissions:
+      contents: read
+      packages: read
+      actions: read
     env:
       TESTCONTAINERS_HUB_IMAGE_NAME_PREFIX: ghcr.io/${{ github.repository }}
       TESTCONTAINERS_RYUK_DISABLED: 'true'
@@ -1504,6 +1547,9 @@ jobs:
       - name: Verify the heavy-test list names real tests
         run: scripts/ci/race-split.sh devhealthsource verify
       - name: Run isolated devhealthsource race suite (rest half)
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RACE_BASELINE_ARTIFACT: race-json-race-devhealthsource
         run: |
           set -euo pipefail
           packages="$(scripts/ci/test-shard.sh isolated-dedicated devhealthsource)"
@@ -1537,6 +1583,12 @@ jobs:
     if: needs.plan.outputs.heavy == 'true' && !contains(fromJSON(needs.plan.outputs.skip_jobs), 'race-devhealthsource-heavy')
     # Hosted only: this leg exceeds its budget on the self-hosted pool (6 x 8 CPUs).
     runs-on: ubuntu-latest
+    # CHAOS-12667: actions: read lets the budget guard fetch main's last race-json
+    # artifact of this job, so a trip prints each test's change against main.
+    permissions:
+      contents: read
+      packages: read
+      actions: read
     env:
       TESTCONTAINERS_HUB_IMAGE_NAME_PREFIX: ghcr.io/${{ github.repository }}
       TESTCONTAINERS_RYUK_DISABLED: 'true'
@@ -1568,6 +1620,9 @@ jobs:
       - name: Verify every devhealthsource test runs in exactly one race job
         run: scripts/ci/race-split.sh devhealthsource race-partition
       - name: Run isolated devhealthsource race suite (heavy half)
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RACE_BASELINE_ARTIFACT: race-json-race-devhealthsource-heavy
         run: |
           set -euo pipefail
           packages="$(scripts/ci/test-shard.sh isolated-dedicated devhealthsource)"
@@ -1600,6 +1655,12 @@ jobs:
       - plan
     if: needs.plan.outputs.heavy == 'true' && !contains(fromJSON(needs.plan.outputs.skip_jobs), 'race-devhealthsource-mid')
     runs-on: ${{ (github.event_name == 'push' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository)) && vars.CI_RACE_RUNNER || 'ubuntu-latest' }}
+    # CHAOS-12667: actions: read lets the budget guard fetch main's last race-json
+    # artifact of this job, so a trip prints each test's change against main.
+    permissions:
+      contents: read
+      packages: read
+      actions: read
     env:
       TESTCONTAINERS_HUB_IMAGE_NAME_PREFIX: ghcr.io/${{ github.repository }}
       TESTCONTAINERS_RYUK_DISABLED: 'true'
@@ -1629,6 +1690,9 @@ jobs:
       - name: Verify the heavy-test list names real tests
         run: scripts/ci/race-split.sh devhealthsource verify
       - name: Run isolated devhealthsource race suite (mid half)
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RACE_BASELINE_ARTIFACT: race-json-race-devhealthsource-mid
         run: |
           set -euo pipefail
           packages="$(scripts/ci/test-shard.sh isolated-dedicated devhealthsource)"
@@ -1644,6 +1708,81 @@ jobs:
         if: always()
         with:
           name: race-json-race-devhealthsource-mid
+          path: .tmp/race-json/race.json
+          include-hidden-files: true
+          if-no-files-found: warn
+          retention-days: 7
+      - name: Remove this job's testcontainers by session id
+        if: always()
+        run: scripts/ci/reap-testcontainers-session.sh
+
+  race-devhealthsource-fourth:
+    # CHAOS-12667: the fourth devhealthsource race job. It runs the tests of
+    # scripts/ci/devhealthsource-race-fourth-tests.txt (about 315s of the 1332s the
+    # package took under -race on main 5cb92237), so no devhealthsource race job is
+    # within 1.4x runner speed of its 85% guard.
+    name: race (devhealthsource fourth, isolated scope)
+    # Pulls a mirrored image via TESTCONTAINERS_HUB_IMAGE_NAME_PREFIX below,
+    # same as race-devhealthfacts -- needs mirror-preflight.
+    needs:
+      - gomodcache
+      - mirror-preflight
+      - plan
+    if: needs.plan.outputs.heavy == 'true' && !contains(fromJSON(needs.plan.outputs.skip_jobs), 'race-devhealthsource-fourth')
+    runs-on: ${{ (github.event_name == 'push' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository)) && vars.CI_RACE_RUNNER || 'ubuntu-latest' }}
+    # CHAOS-12667: actions: read lets the budget guard fetch main's last race-json
+    # artifact of this job, so a trip prints each test's change against main.
+    permissions:
+      contents: read
+      packages: read
+      actions: read
+    env:
+      TESTCONTAINERS_HUB_IMAGE_NAME_PREFIX: ghcr.io/${{ github.repository }}
+      TESTCONTAINERS_RYUK_DISABLED: 'true'
+      TESTCONTAINERS_SESSION_ID: ci-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.job }}-${{ strategy.job-index }}
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        with: {persist-credentials: false}
+      # actions/setup-go v6.5.0
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16
+        with:
+          go-version: '1.27.3'
+          cache: ${{ runner.environment == 'github-hosted' }}
+      # Module cache: one gomodcache job fills it, every consumer restores it
+      # and fails on a miss (hosted runners only; the self-hosted pool keeps its
+      # own disk). Restored after setup-go so its smaller cache is overlaid.
+      - uses: ./.github/actions/go-modcache
+        if: ${{ runner.environment == 'github-hosted' }}
+        with: {mode: restore}
+      # docker/login-action v4.5.1. Same GHCR-mirror-only auth as the `race`
+      # job above.
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@abd2ef45e78c5afb21d64d4ca52ee8550d9572c7
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Verify the heavy-test list names real tests
+        run: scripts/ci/race-split.sh devhealthsource verify
+      - name: Run isolated devhealthsource race suite (fourth job)
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RACE_BASELINE_ARTIFACT: race-json-race-devhealthsource-fourth
+        run: |
+          set -euo pipefail
+          packages="$(scripts/ci/test-shard.sh isolated-dedicated devhealthsource)"
+          printf 'isolated (dedicated) packages:\n%s\n' "$packages"
+          timeout="$(make -s isolated-timeout PKG="$packages")"
+          export GOFLAGS="-trimpath -run=$(scripts/ci/race-split.sh devhealthsource race-fourth)"
+          RACE_JSON_OUT=.tmp/race-json/race.json GOTEST_TIMEOUT="$timeout" scripts/ci/run-isolated-budget.sh 'devhealthsource (fourth job)' "$packages"
+      # Keeps this job's test2json events for unit-dedup-plan and verify
+      # (scripts/ci/observed-race-dedup.sh). if: always() so a failing job still
+      # leaves its events; a missing or unreadable file keeps the unit legs.
+      # actions/upload-artifact v7.0.1
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        if: always()
+        with:
+          name: race-json-race-devhealthsource-fourth
           path: .tmp/race-json/race.json
           include-hidden-files: true
           if-no-files-found: warn
@@ -2541,6 +2680,7 @@ jobs:
       - race-devhealthsource
       - race-devhealthsource-heavy
       - race-devhealthsource-mid
+      - race-devhealthsource-fourth
       - race-factoracle
       - race-factoracle-heavy
       - race-mcp

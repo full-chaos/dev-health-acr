@@ -16,9 +16,13 @@
 # factoracle splits two ways (heavy/rest/verify/partition only): its race jobs
 # run the heavy list with -run and everything else with -skip.
 #
-# devhealthfacts splits four ways, devhealthsource three ways (no fourth list; its plain unit legs run the same three parts: unit-heavy, unit-mid, unit-rest, checked by `partition`): the race jobs split by these lists. race-mid-tests.txt and
+# devhealthfacts and devhealthsource split four ways (CHAOS-12667 added devhealthsource's fourth job; its plain unit legs still run three parts: unit-heavy, unit-mid, unit-rest, checked by `partition`): the race jobs split by these lists. race-mid-tests.txt and
 # race-fourth-tests.txt name tests moved out of the heavy and rest halves into
 # a third and a fourth job. Lines starting with # are comments in every list.
+# <package>-race-rest-tests.txt (devhealthsource, CHAOS-12667) names every test
+# the rest job runs. The rest job still runs by -skip, so it selects nothing;
+# with the list present, verify and race-partition fail for a test that is in
+# no race list, so a new test is placed by its author, not silently in rest.
 #   race-heavy  anchored regex of heavy-tests.txt minus the mid and fourth lists (-run)
 #   race-mid    anchored regex of race-mid-tests.txt (-run)
 #   race-fourth anchored regex of race-fourth-tests.txt (-run)
@@ -71,6 +75,26 @@ race_fourth() { fourth_names | join_regex; }
 race_mid_fourth() { { mid_names; fourth_names; } | LC_ALL=C sort -u | join_regex; }
 race_rest() { { names; mid_names; fourth_names; } | LC_ALL=C sort -u | join_regex; }
 both_lists() { LC_ALL=C comm -12 <(mid_names) <(fourth_names); }
+
+# CHAOS-12667: the optional rest list. With it, every test of the package is in
+# exactly one race list (heavy, mid, fourth or rest). rest_list_problems takes the
+# package's real top-level tests and prints each problem; it prints nothing when
+# the package has no rest list.
+rest_list="$root/scripts/ci/$name-race-rest-tests.txt"
+rest_names() { if [ -f "$rest_list" ]; then grep -v '^[[:space:]]*\(#\|$\)' "$rest_list" | LC_ALL=C sort -u; fi; }
+rest_list_problems() {
+  local all="$1" dup unlisted stray
+  [ -f "$rest_list" ] || return 0
+  dup="$(LC_ALL=C comm -12 <(rest_names) <({ names; mid_names; fourth_names; } | LC_ALL=C sort -u))"
+  stray="$(LC_ALL=C comm -23 <(rest_names) <(printf '%s\n' "$all"))"
+  unlisted="$(LC_ALL=C comm -23 <(printf '%s\n' "$all") <({ names; mid_names; fourth_names; rest_names; } | LC_ALL=C sort -u))"
+  [ -z "$dup" ] || printf 'named in %s and also in the heavy, mid or fourth list:\n%s\n' "${rest_list##*/}" "$dup"
+  [ -z "$stray" ] || printf '%s names no such test:\n%s\n' "${rest_list##*/}" "$stray"
+  if [ -n "$unlisted" ]; then
+    printf 'a test of %s is in no race list. Add it to scripts/ci/%s, or, if it is slow under -race, to the heavy, mid or fourth list (the race job prints each test'"'"'s real span):\n%s\n' \
+      "$name" "${rest_list##*/}" "$unlisted"
+  fi
+}
 
 # Unit legs only: names of the mid/fourth lists that leg 7 (unit-heavy) runs
 # instead of leg 10 (unit-mid). The race jobs ignore this list.
@@ -186,6 +210,8 @@ case "${2:-}" in
       exit 1
     fi
     all="$(go test -list '.' "$pkg" | grep '^Test' | LC_ALL=C sort -u)"
+    problems="$(rest_list_problems "$all")"
+    if [ -n "$problems" ]; then printf '%s\n' "$problems" >&2; exit 1; fi
     a="$(go test -list "$(race_heavy)" "$pkg" | grep '^Test' | LC_ALL=C sort -u)"
     b="$(go test -list "$(race_mid)" "$pkg" | grep '^Test' | LC_ALL=C sort -u)"
     d=""
@@ -215,6 +241,8 @@ case "${2:-}" in
       exit 1
     fi
     problems="$(extra_problems)"
+    if [ -n "$problems" ]; then printf '%s\n' "$problems" >&2; exit 1; fi
+    problems="$(rest_list_problems "$existing")"
     if [ -n "$problems" ]; then printf '%s\n' "$problems" >&2; exit 1; fi
     missing="$(LC_ALL=C comm -23 <(extra_names) <(printf '%s\n' "$existing"))"
     if [ -n "$missing" ]; then

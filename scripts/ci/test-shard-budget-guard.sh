@@ -146,4 +146,73 @@ if command -v jq >/dev/null; then
   if [ "$rc" -eq 2 ]; then echo "ok   empty-allowlist-rc2"; else echo "FAIL empty-allowlist-rc2 rc=$rc"; fails=$((fails + 1)); fi
 fi
 
+# CHAOS-12667: real span report. A parent whose parallel subtests outlive its own function reports a small Elapsed, so the
+# guard names the slowest tests by (last event of T or T/...) - (T's last run/cont). Reporting only: the exit code is the
+# one the package and per-test checks give.
+if command -v jq >/dev/null; then
+  ev() { # time action test [elapsed]; time is seconds after 19:25:00 with a fraction, e.g. 57.5848234
+    local t test_field=""
+    t="$(printf '2026-11-02T19:%02d:%09.7fZ' $(( ${1%.*} / 60 )) "$(awk -v x="$1" 'BEGIN { printf "%.7f", x - 60 * int(x / 60) }')")"
+    [ -n "${3:-}" ] && test_field=",\"Test\":\"$3\""
+    printf '{"Time":"%s","Action":"%s","Package":"example/a"%s%s}\n' "$t" "$2" "$test_field" "${4:+,\"Elapsed\":$4}"
+  }
+  sp="$tmp/span.json"
+  spexpect() { # name want_rc want_pattern [env assignment]
+    local name="$1" want="$2" pat="$3" rc=0 out
+    out="$(env RACE_SLOW_TESTS="$allow" ${4:+"$4"} "$guard" --json 6000 "$sp" 2>&1)" || rc=$?
+    if [ "$rc" -ne "$want" ] || ! grep -q -- "$pat" <<<"$out"; then
+      echo "FAIL $name: rc=$rc want=$want pattern='$pat'"; printf '    %s\n' "${out//$'\n'/$'\n    '}"
+      fails=$((fails + 1))
+    else
+      echo "ok   $name"
+    fi
+  }
+  # parent passes at 1.0s (Elapsed 1) while its two parallel subtests run until 11.5s after the parent started
+  { ev 0.5 run TestP; ev 0.6 run TestP/a; ev 0.7 pause TestP/a; ev 0.8 run TestP/b; ev 0.9 pause TestP/b
+    ev 1.0 pass TestP 1; ev 1.1 cont TestP/a; ev 1.2 cont TestP/b; ev 11.4 pass TestP/a 10.3; ev 11.5 pass TestP/b 10.3
+    ev 11.6 pass "" 11.6; } >"$sp"
+  spexpect span-counts-parallel-subtests 0 'span *11\.0 *elapsed *1\.0 *TestP$'
+  spexpect span-header-names-the-package 0 'by real span (s), reported Elapsed beside it \[example/a\]'
+  # a paused top-level parallel test starts at its cont: run at 0, pause, cont at 20, pass at 25 -> span 5
+  { ev 0 run TestPaused; ev 0.1 pause TestPaused; ev 20 cont TestPaused; ev 25 pass TestPaused 5; ev 26 pass "" 26; } >"$sp"
+  spexpect paused-test-starts-at-cont 0 'span *5\.0 *elapsed *5\.0 *TestPaused$'
+  # sub-second precision is kept
+  { ev 0.0000001 run TestFine; ev 0.5848234 pass TestFine 0.58; ev 1 pass "" 1; } >"$sp"
+  spexpect sub-second-precision 0 'span *0\.6 *elapsed *0\.6 *TestFine$'
+  # the report never changes the exit code: a failing per-test limit still fails, with the report printed
+  { ev 0 run TestGiant; ev 310 pass TestGiant 310; ev 311 pass "" 311; } >"$sp"
+  spexpect report-printed-when-guard-fails 1 'span *310\.0 *elapsed *310\.0 *TestGiant$'
+  # baseline: package and per-test deltas, and a test absent in the baseline is new
+  { ev 0 run TestP; ev 10 pass TestP 1; ev 0 run TestOld; ev 3 pass TestOld 3; ev 11 pass "" 11; } >"$tmp/base.json"
+  { ev 0 run TestP; ev 14 pass TestP 1; ev 0 run TestNew; ev 2 pass TestNew 2; ev 0 run TestOld; ev 3 pass TestOld 3; ev 20 pass "" 20; } >"$sp"
+  spexpect baseline-delta-per-test 0 'span *14\.0 *elapsed *1\.0 *TestP *| baseline *10\.0 *delta +4\.0' RACE_BASELINE_JSON="$tmp/base.json"
+  spexpect baseline-unchanged-test-delta-zero 0 'TestOld *| baseline *3\.0 *delta +0\.0' RACE_BASELINE_JSON="$tmp/base.json"
+  spexpect baseline-absent-test-is-new 0 'TestNew .*| new' RACE_BASELINE_JSON="$tmp/base.json"
+  spexpect baseline-package-delta 0 'package time: now 20\.0s, baseline 11\.0s, delta +9\.0s' RACE_BASELINE_JSON="$tmp/base.json"
+  spexpect baseline-unreadable-file-warns 0 '::warning::shard-budget-guard: no main baseline for /nonexistent' RACE_BASELINE_JSON=/nonexistent
+  spexpect no-baseline-says-so 0 'no baseline set (RACE_BASELINE_ARTIFACT / RACE_BASELINE_JSON)'
+  # artifact baseline with a gh that fails: a warning, and the exit code of the guard is untouched (passing and failing input)
+  mkdir -p "$tmp/stubbin"
+  printf '#!/bin/sh\necho "gh: no token" >&2\nexit 1\n' >"$tmp/stubbin/gh"; chmod +x "$tmp/stubbin/gh"
+  rc_gh=0; PATH="$tmp/stubbin:$PATH" GITHUB_REPOSITORY=o/r RACE_SLOW_TESTS="$allow" RACE_BASELINE_ARTIFACT=race-json-x "$guard" --json 6000 "$sp" >"$tmp/gh.out" 2>&1 || rc_gh=$?
+  if [ "$rc_gh" -eq 0 ] && grep -q 'no main baseline for race-json-x: gh run list failed' "$tmp/gh.out"; then echo "ok   failing-gh-passing-input-rc0"
+  else echo "FAIL failing-gh-passing-input-rc0 rc=$rc_gh"; cat "$tmp/gh.out"; fails=$((fails + 1)); fi
+  { ev 0 run TestGiant; ev 310 pass TestGiant 310; ev 311 pass "" 311; } >"$sp"
+  rc_gh=0; PATH="$tmp/stubbin:$PATH" GITHUB_REPOSITORY=o/r RACE_SLOW_TESTS="$allow" RACE_BASELINE_ARTIFACT=race-json-x "$guard" --json 6000 "$sp" >"$tmp/gh.out" 2>&1 || rc_gh=$?
+  if [ "$rc_gh" -eq 1 ] && grep -q 'no main baseline for race-json-x' "$tmp/gh.out"; then echo "ok   failing-gh-failing-input-rc1"
+  else echo "FAIL failing-gh-failing-input-rc1 rc=$rc_gh"; cat "$tmp/gh.out"; fails=$((fails + 1)); fi
+  # gh that downloads: the run id used is printed and the compare is made
+  cat >"$tmp/stubbin/gh" <<'GH'
+#!/bin/sh
+case "$1 $2" in
+  "run list") echo 111; echo 222 ;;
+  "run download") if [ "$3" = 222 ]; then d=""; while [ $# -gt 0 ]; do [ "$1" = -D ] && d="$2"; shift; done; cp "$BASE_FIXTURE" "$d/race.json"; else exit 1; fi ;;
+esac
+GH
+  { ev 0 run TestP; ev 14 pass TestP 1; ev 20 pass "" 20; } >"$sp"
+  out="$(PATH="$tmp/stubbin:$PATH" BASE_FIXTURE="$tmp/base.json" GITHUB_REPOSITORY=o/r RACE_SLOW_TESTS="$allow" RACE_BASELINE_ARTIFACT=race-json-x "$guard" --json 6000 "$sp" 2>&1)" || true
+  if grep -q 'baseline: main run 222' <<<"$out" && grep -q 'TestP .*| baseline *10\.0 *delta +4\.0' <<<"$out"; then echo "ok   artifact-baseline-fetched"
+  else echo "FAIL artifact-baseline-fetched"; printf '%s\n' "$out"; fails=$((fails + 1)); fi
+fi
+
 [ "$fails" -eq 0 ]

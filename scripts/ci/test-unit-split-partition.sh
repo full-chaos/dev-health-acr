@@ -110,5 +110,34 @@ printf 'TestNoSuchTestExists\n' >>"$dir/scripts/ci/devhealthfacts-race-mid-tests
 printf 'TestNoSuchTestExists\n' >>"$dir/scripts/ci/devhealthfacts-unit-heavy-extra-tests.txt"
 expect_fail 'an extra name that is in the mid list but is no real test' "$dir" devhealthfacts
 
+# CHAOS-12667: devhealthsource's rest list. With it, every test is in exactly one
+# race list, so a new test is placed by its author and never lands in the rest
+# job unseen. verify and race-partition both enforce it.
+expect_fail_mode() {
+  local label="$1" dir="$2" mode="$3"
+  if "$dir/scripts/ci/race-split.sh" devhealthsource "$mode" >"$tmp/out" 2>&1; then
+    bad "NEGATIVE CONTROL: $mode accepted: $label"
+    return 0
+  fi
+  printf 'CONTROL OK: %s rejects %s\n' "$mode" "$label"
+}
+echo "positive: real tree, devhealthsource rest list"
+"$root/scripts/ci/race-split.sh" devhealthsource verify
+"$root/scripts/ci/race-split.sh" devhealthsource race-partition
+rest="scripts/ci/devhealthsource-race-rest-tests.txt"
+dir="$(fixture source-rest-missing-a-test)"
+first="$(awk '!/^[[:space:]]*(#|$)/ { print; exit }' "$dir/$rest")"
+grep -vxF -- "$first" "$dir/$rest" >"$dir/rest.new"
+cmp -s "$dir/rest.new" "$dir/$rest" && { echo "CONTROL SETUP FAILED: source-rest-missing-a-test" >&2; exit 1; }
+mv "$dir/rest.new" "$dir/$rest"
+expect_fail_mode 'a test in no race list' "$dir" verify
+expect_fail_mode 'a test in no race list' "$dir" race-partition
+dir="$(fixture source-rest-and-fourth)"
+awk '!/^[[:space:]]*(#|$)/ { print; exit }' "$dir/scripts/ci/devhealthsource-race-fourth-tests.txt" >>"$dir/$rest"
+expect_fail_mode 'a rest name that is also in the fourth list' "$dir" verify
+dir="$(fixture source-rest-no-such-test)"
+printf 'TestNoSuchTestExists\n' >>"$dir/$rest"
+expect_fail_mode 'a rest name that is no real test' "$dir" verify
+
 [ "$fails" -eq 0 ] || { printf '%s violation(s)\n' "$fails" >&2; exit 1; }
 echo "PASS: unit split partition and its negative controls"
