@@ -82,7 +82,7 @@ func TestALandscapeClaimOffTheSeriesDrawsNoTrend(t *testing.T) {
 	ctx := context.Background()
 	const orgID = "org-landscape-trend-off"
 	query := landscapeTrendStore(t, ctx, orgID)
-	result, model := serveLandscapeQuestion(t, ctx, query, orgID, teamSubject(landscapeTrendTeam), "cycle_p50_30d_hours_avg")
+	result, model := serveLandscapeQuestion(t, ctx, query, orgID, teamSubject(landscapeTrendTeam), "as_of_day")
 	servedLandscapeClaim(t, result, model)
 	for _, shape := range result.RenderShapes {
 		if shape.SelectedBy == contractsv1.ContextFabricRenderRuleDatedFactTrend {

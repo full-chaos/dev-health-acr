@@ -53,7 +53,7 @@ func (p *LandscapeProvider) Capability() contextfabric.FactCapability {
 		contextfabric.SubjectTeam, contextfabric.SubjectProject,
 	})
 	capability.Tables = map[contextfabric.SubjectKind][]contextfabric.FactTableShape{
-		contextfabric.SubjectTeam:    {contextfabric.FactTableBreakdown, contextfabric.FactTableTimeSeries},
+		contextfabric.SubjectTeam:    {contextfabric.FactTableBreakdown},
 		contextfabric.SubjectProject: {contextfabric.FactTableBreakdown},
 	}
 	capability.EstimatedItems = 3
