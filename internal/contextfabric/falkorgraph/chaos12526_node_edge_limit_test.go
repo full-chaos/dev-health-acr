@@ -38,3 +38,23 @@ func TestANodeEdgeReadLimitThatCannotShowACutIsRefused(t *testing.T) {
 		})
 	}
 }
+
+// The vector read has the same shape: it asks for multiplier*limit+1, and a cap that
+// hides the extra row reads a cut as complete.
+func TestAnOverFetchThatCannotShowACutIsRefused(t *testing.T) {
+	t.Parallel()
+	for _, plant := range []struct {
+		maxResults, multiplier int
+		ok                     bool
+	}{
+		{50, 0, true},
+		{50, 199, true},
+		{50, 200, false},
+		{25, 400, false},
+	} {
+		err := validateOverFetch(plant.maxResults, plant.multiplier)
+		if plant.ok != (err == nil) {
+			t.Fatalf("%+v: got %v", plant, err)
+		}
+	}
+}
