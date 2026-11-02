@@ -238,6 +238,10 @@ type EngineDependencies struct {
 	// reuse (anchor_freshness.go). Nil reads nothing, and the transition
 	// line says unwired.
 	AnchorFreshness AnchorFreshnessReader
+	// QuestionHandleProbe is optional (CHAOS-12632): the graph package's
+	// free-text handle grammar, for the interpretation terms line. Unset,
+	// the line reports handle_bound=unwired.
+	QuestionHandleProbe QuestionHandleProbe
 	// ReuseModelIdentityResolver is optional (CHAOS-3782, Codex round-2
 	// finding #3; CHAOS-3786). When set, tryReuse resolves the CURRENT
 	// org-effective model CHAIN through it, per call, instead of using
@@ -699,6 +703,11 @@ type EngineTelemetry interface {
 	// confidence and basis (model, shape fallback, handle state, none), and
 	// whether a model pick was overridden. Closed vocabularies only.
 	RecordWindowClassification(ctx context.Context, principal storage.Principal, modelClass WindowClass, outcome WindowClassOutcome)
+	// RecordInterpretationTerms (CHAOS-12632) reports, once per interpreted
+	// turn, how many subject terms the interpretation kept, its stated kind,
+	// whether the question text binds a handle, and whether a term has a
+	// repository slug's shape. No question text.
+	RecordInterpretationTerms(ctx context.Context, principal storage.Principal, event InterpretationTermsEvent)
 	// RecordWindowCarry (CHAOS-4360) reports the outcome of ONE
 	// same-conversation window-carry attempt -- see WindowCarryOutcome's
 	// own doc comment for the closed vocabulary (chaos4360_carry.go).
@@ -1323,9 +1332,10 @@ type CohortRankedEvent struct {
 // Engine coordinates one open-ended investigation. It deliberately composes
 // capabilities rather than matching the question against a route/plan table.
 type Engine struct {
-	interpreter QuestionInterpreter
-	graph       GraphReader
-	facts       CanonicalFactReader
+	interpreter         QuestionInterpreter
+	graph               GraphReader
+	questionHandleProbe QuestionHandleProbe
+	facts               CanonicalFactReader
 	// directFacts is the ungated registry the direct read tools build their
 	// own gate over (DirectReadSources); facts is the same reader wrapped in
 	// the engine's embedded-subject gate (engine_fact_gate.go, CHAOS-7127).
@@ -1433,6 +1443,7 @@ func NewEngine(dependencies EngineDependencies, options EngineOptions) (*Engine,
 		reuseGate:        dependencies.ReuseGate, reuseSnapshotter: dependencies.ReuseSnapshotter,
 		reuseEpochSnapshotter:      dependencies.ReuseEpochSnapshotter,
 		anchorFreshness:            dependencies.AnchorFreshness,
+		questionHandleProbe:        dependencies.QuestionHandleProbe,
 		anchorBindingMaxAgeSetting: options.AnchorBindingMaxAge,
 		anchorBindingCountEnabled:  options.AnchorBindingCountEnabled,
 		anchorBindingCarryEnabled:  options.AnchorBindingCarryEnabled,
@@ -2331,6 +2342,8 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 		interpretation, termsInput = deriveSuppliedSubjectTerms(request, interpretation, familyOutcome.Frame)
 		ctx = withSubjectTermsInput(ctx, termsInput)
 	}
+	// CHAOS-12632: what the interpretation kept of the question, counts only.
+	e.recordInterpretationTerms(ctx, principal, request.Question, interpretation, familyOutcome.Frame)
 	// Bound the INTERPRETED question too, not just the wire request
 	// (CHAOS-3755 codex delta review, P2).
 	//
