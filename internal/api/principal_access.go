@@ -176,7 +176,9 @@ func (a *App) requireLiveAccess(enforceFlags bool, next http.Handler) http.Handl
 // reads projects.
 //
 // CHAOS-12592 (chris on CHAOS-4390: "a user can see all the data in an org"): a
-// "*" consent grant stays "*" once the live read has passed. The inventory is
+// "*" consent grant stays "*" once the live read has passed, made exactly "*"
+// (auth.KeepUniversalGrant: a "*" beside other entries is already the whole
+// organization, so nothing widens). The inventory is
 // the organization's, not the user's, so turning "*" into it narrowed no user's
 // access; it only made every web user a restricted caller, refused every
 // organization-level read. The live read still runs on every request, and an
@@ -187,11 +189,15 @@ func narrowLiveScope(ctx context.Context, effective []string, access entitlement
 	if len(access.Repositories) == 0 {
 		return auth.NarrowToProjectScopes(ctx, access.Projects)
 	}
-	if principal, ok := auth.PrincipalFromContext(ctx); ok && auth.ClassifyGrant(principal) == auth.GrantUniversal {
+	kept, err := auth.KeepUniversalGrant(ctx)
+	switch {
+	case err == nil:
 		if len(effective) == 0 {
 			return ctx, auth.ErrEmptyRepositoryScope
 		}
-		return ctx, nil
+		return kept, nil
+	case !errors.Is(err, auth.ErrGrantNotUniversal):
+		return ctx, err
 	}
 	return auth.NarrowRepositoryScopes(ctx, effective)
 }

@@ -139,8 +139,11 @@ func TestOnlyAStarGrantWithNoRepositoryInventoryBecomesProjectOnly(t *testing.T)
 					if got := auth.ClassifyGrant(*seen); got != auth.GrantUniversal || len(seen.ProjectScopes) != 0 {
 						t.Fatalf("principal = %+v (class %q), want the star grant kept, universal", seen, got)
 					}
-					if !slices.Equal(seen.RepositoryScopes, test.grant) {
-						t.Fatalf("RepositoryScopes = %q, want the grant %q unchanged", seen.RepositoryScopes, test.grant)
+					// Exactly "*": a "*" beside other entries is already the whole
+					// organization, so they are dropped, never kept as a narrowing
+					// (codex r1 on #1941, lead ruling (a)).
+					if !slices.Equal(seen.RepositoryScopes, []string{"*"}) {
+						t.Fatalf("RepositoryScopes = %q, want exactly [\"*\"]", seen.RepositoryScopes)
 					}
 				case refused:
 					if recorder.Code != http.StatusConflict || code != contractsv1.ErrorCodeNoRepository || seen != nil {

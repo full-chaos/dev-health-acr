@@ -10,10 +10,10 @@ internal/api/context_fabric_data_catalog_route.go	App.contextFabricDataCatalogHa
 internal/api/principal_access.go	App.logAccessGranted	classify	1	vocab	telemetry: a project-only admission basis at Info (class, project count, digest class); other classes keep the Debug line (c4 CHAOS-12300)
 internal/api/principal_access.go	App.logAccessGranted	compare	1	vocab	telemetry: picks the Info line for project_only (c4 CHAOS-12300)
 internal/api/principal_access.go	App.logAccessGranted	transport	1	vocab	telemetry: the grant class written to the log (c4 CHAOS-12300)
-internal/api/principal_access.go	narrowLiveScope	classify	1	consent	reads the original consent grant: only a "*" grant stays "*" after the live read; a list or owner wildcard is narrowed to the inventory; project_only is never a consent grant here (CHAOS-12592)
-internal/api/principal_access.go	narrowLiveScope	compare	1	consent	reads the original consent grant: only a "*" grant stays "*" after the live read; a list or owner wildcard is narrowed to the inventory; project_only is never a consent grant here (CHAOS-12592)
 internal/auth/grant_class.go	GrantClass.IsRestricted	switch	1	vocab	the restricted-subtype rule of the grant class itself (restricted and project_only)
 internal/auth/grant_class.go	GrantClassVocabulary	collection	1	vocab	the closed grant-class vocabulary
+internal/auth/middleware.go	KeepUniversalGrant	classify	1	consent	reads the original consent grant: only a grant that holds "*" is kept, made exactly "*"; a list or owner wildcard is refused for the caller to narrow; project_only is refused (CHAOS-12592)
+internal/auth/middleware.go	KeepUniversalGrant	compare	1	consent	reads the original consent grant: only a grant that holds "*" is kept, made exactly "*"; a list or owner wildcard is refused for the caller to narrow; project_only is refused (CHAOS-12592)
 internal/auth/middleware.go	NarrowToProjectScopes	classify	1	consent	reads the original consent grant: only a "*" grant may become project_only (CHAOS-12107 D2, CHAOS-12301)
 internal/auth/middleware.go	NarrowToProjectScopes	compare	1	consent	reads the original consent grant: only a "*" grant may become project_only (CHAOS-12107 D2, CHAOS-12301)
 internal/auth/repository.go	AuthorizeRepository	classify	1	deny	a project grant names no repository: project_only is refused every repository, whatever its list; c3 CHAOS-12299 r1 F1
