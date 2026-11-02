@@ -374,12 +374,18 @@ func TestANamedSubjectBesideARepositoryOnRealStores(t *testing.T) {
 			// Pull request 78 is in acme/r01, which the team does not own, and 999
 			// is nowhere: a stated 0 takes the team out, with the in-scope absence.
 			for _, handle := range []string{"pull request 78", "pull request 999"} {
+				// The team leaves the answer. A turn that states a pull request
+				// cannot redeem a team option (the declared-kind gate), so it ends
+				// in no_match, with the in-scope absence beside it; nothing reaches
+				// synthesis and nothing says a subject matched.
 				out := turn(t, principal, teamQ(handle), teamName, kindPR, nil)
-				if out.synthesized || out.result.Status != contextfabric.InvestigationClarificationRequired || !slices.Contains(out.result.Limitations, scope) {
-					t.Fatalf("%s, stated %s: synthesis %t status %q limitations %q, want the clarification with the in-scope absence", name, handle, out.synthesized, out.result.Status, out.result.Limitations)
+				if out.synthesized || out.result.Status != contextfabric.InvestigationNoMatch || !slices.Contains(out.result.Limitations, scope) {
+					t.Fatalf("%s, stated %s: synthesis %t status %q limitations %q, want no_match with the in-scope absence", name, handle, out.synthesized, out.result.Status, out.result.Limitations)
 				}
-				if !slices.ContainsFunc(out.result.SubjectResolution.Candidates, func(c contextfabric.SubjectCandidate) bool { return c.Subject.Kind == contextfabric.SubjectTeam }) {
-					t.Fatalf("%s, stated %s: candidates %+v, want the team offered", name, handle, out.result.SubjectResolution.Candidates)
+				for _, limitation := range out.result.Limitations {
+					if strings.Contains(limitation, "authorized subject matched") {
+						t.Fatalf("%s, stated %s: limitations %q say a subject matched", name, handle, out.result.Limitations)
+					}
 				}
 				kept := turn(t, principal, teamQ(handle), teamName, unstatedTeam, nil)
 				if !kept.synthesized || !hasTeam(kept) || kept.hasCommitted(contextfabric.SubjectPullRequest) || kept.census != scope {
