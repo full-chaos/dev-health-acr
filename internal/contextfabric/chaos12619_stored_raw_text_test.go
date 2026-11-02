@@ -31,6 +31,7 @@ func storedRawTextResult(t *testing.T) InvestigationResult {
 	team := SubjectRef{Kind: SubjectTeam, CanonicalID: TeamCanonicalID("linear:CHAOS"), Label: "linear:CHAOS"}
 	pr := SubjectRef{Kind: SubjectPullRequest, CanonicalID: "pull_request:920f9442-07df-4217-4dc4-c5833c0b8268:5063", Label: "PR #5063"}
 	titled := SubjectRef{Kind: SubjectWorkItem, CanonicalID: itemID, Label: "Generate taxonomy table"}
+	named := SubjectRef{Kind: SubjectProject, CanonicalID: projectID, Label: "Investment View Documentation"}
 	var result InvestigationResult
 	result.SubjectResolution.Committed = []SubjectRef{item, pr}
 	result.SubjectResolution.Candidates = []SubjectCandidate{{Subject: team}}
@@ -39,10 +40,14 @@ func storedRawTextResult(t *testing.T) InvestigationResult {
 		{PathID: "path-links", Nodes: []SubjectRef{item, pr}, Edges: []RelationshipEdge{{Type: "LINKS_PULL_REQUEST", From: item, To: pr}}, WhyRelevant: "linear:CHAOS-2320 links pull request PR #5063"},
 		{PathID: "path-project", Nodes: []SubjectRef{titled, project}, Edges: []RelationshipEdge{{Type: "BELONGS_TO_PROJECT", From: titled, To: project}}, WhyRelevant: "linear:CHAOS-2320 belongs to project c67b1602-31db-4422-8dec-a4a02bbcc513"},
 		{PathID: "path-custom", Nodes: []SubjectRef{item, pr}, Edges: []RelationshipEdge{{Type: "LINKS_PULL_REQUEST", From: item, To: pr}}, WhyRelevant: "linear:CHAOS-2320 links pull request PR #5063; escalation note"},
+		{PathID: "path-named", Nodes: []SubjectRef{titled, named}, Edges: []RelationshipEdge{{Type: "BELONGS_TO_PROJECT", From: titled, To: named}}, WhyRelevant: "Generate taxonomy table belongs to project Investment View Documentation"},
 	}
 	result.Drivers = []DriverJudgment{
 		{DriverID: "driver-project", Title: "Belongs To Project: c67b1602-31db-4422-8dec-a4a02bbcc513", Summary: "linear:CHAOS-2320 belongs to project c67b1602-31db-4422-8dec-a4a02bbcc513", AffectedSubjects: []SubjectRef{titled}, PathIDs: []string{"path-project"}, EvidenceRefIDs: []string{"acr:v1:graph:rel-project"}},
 		{DriverID: "driver-team", Title: "Owned By Team: linear:CHAOS", Summary: "A human-written summary that names linear:CHAOS", AffectedSubjects: []SubjectRef{team}},
+		// The path's To end has its name, so graphrank did not compose this title
+		// from a raw id: it stands.
+		{DriverID: "driver-named", Title: "Escalated by hand: c67b1602-31db-4422-8dec-a4a02bbcc513", Summary: "Generate taxonomy table belongs to project Investment View Documentation", AffectedSubjects: []SubjectRef{titled}, PathIDs: []string{"path-named"}},
 	}
 	result.ClaimedFacts = []ClaimedFact{{ClaimID: "claim-item", Subject: item}}
 	return result
@@ -72,6 +77,8 @@ func TestAStoredResultServesItsGraphTextInReaderWords(t *testing.T) {
 		"driver summary":         {served.Drivers[0].Summary, "CHAOS-2320 belongs to project"},
 		"driver affected":        {served.Drivers[1].AffectedSubjects[0].Label, "CHAOS"},
 		"driver no path title":   {served.Drivers[1].Title, "Owned By Team: linear:CHAOS"},
+		"title not composed":     {served.Drivers[2].Title, "Escalated by hand: c67b1602-31db-4422-8dec-a4a02bbcc513"},
+		"named why_relevant":     {served.Paths[3].WhyRelevant, "Generate taxonomy table belongs to project Investment View Documentation"},
 		"human summary":          {served.Drivers[1].Summary, "A human-written summary that names linear:CHAOS"},
 		"claimed fact subject":   {served.ClaimedFacts[0].Subject.Label, "CHAOS-2320"},
 	} {
