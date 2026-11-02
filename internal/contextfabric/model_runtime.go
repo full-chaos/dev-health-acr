@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"maps"
 	"math"
 	"slices"
 	"sort"
@@ -1526,6 +1527,48 @@ func detailTableField(fact CanonicalFact, field string) bool {
 	return ok && detailTableValue(value)
 }
 
+// MaxLoggedDetailTables bounds the table names one detail-tables line carries.
+const MaxLoggedDetailTables = 8
+
+// DetailTablesAttachedEvent is what one synthesis call attached as detail
+// tables (CHAOS-12587): how many claims carry one, the names of the tables
+// they carry (sorted, unique, at most MaxLoggedDetailTables) and how many
+// names the cap left out. A name is a declared field name, never a value.
+type DetailTablesAttachedEvent struct {
+	Claims  int
+	Tables  []string
+	Omitted int
+}
+
+// attachedDetailTables reads the detail tables the claims actually carry: a
+// claim whose table is a declared detail table of the fact it restates. It
+// reads the attached table, not the claim's request, so a claim that got the
+// wrong table is logged under the table it got.
+func attachedDetailTables(claims []ClaimedFact, facts []CanonicalFact) DetailTablesAttachedEvent {
+	var event DetailTablesAttachedEvent
+	seen := map[string]struct{}{}
+	for _, claim := range claims {
+		if claim.Table == nil {
+			continue
+		}
+		fact, ok := claimSourceFact(facts, claim)
+		if !ok || !detailTableField(fact, claim.Table.Field) {
+			continue
+		}
+		event.Claims++
+		seen[claim.Table.Field] = struct{}{}
+	}
+	names := slices.Sorted(maps.Keys(seen))
+	if len(names) > MaxLoggedDetailTables {
+		event.Omitted = len(names) - MaxLoggedDetailTables
+		names = names[:MaxLoggedDetailTables]
+	}
+	if len(names) > 0 {
+		event.Tables = names
+	}
+	return event
+}
+
 // attachDetailTable gives a claim the detail table named field of fact: its
 // rows and its declaration, in place of the table the single-table pick would
 // give, and no time_series table beside it. A claim holds one table, so a
@@ -2790,6 +2833,10 @@ func (r RuntimeAnswerSynthesizer) composeSynthesisResult(ctx context.Context, pr
 		// response budget's 256KB ceiling is watched at scale rather than
 		// assumed safe from this session's own one-off measurement.
 		r.Telemetry.RecordDualTableFacts(ctx, principal, dualTableClaims, secondaryRowsBytes)
+		// CHAOS-12587: which detail tables the claims carry, by name.
+		if event := attachedDetailTables(claimedFacts, input.Facts.Facts); event.Claims > 0 {
+			r.Telemetry.RecordDetailTablesAttached(ctx, principal, event)
+		}
 	}
 	result := InvestigationResult{
 		Status: draft.Status,

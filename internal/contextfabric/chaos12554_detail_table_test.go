@@ -1,10 +1,14 @@
 package contextfabric
 
 import (
+	"context"
+	"fmt"
+	"slices"
 	"strings"
 	"testing"
 
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
+	"github.com/full-chaos/dev-health-acr/internal/storage"
 )
 
 // chaos12554_detail_table_test.go pins the declared detail table
@@ -203,5 +207,86 @@ func TestCHAOS12554AGroundedNullClaimCarriesTheDetailTable(t *testing.T) {
 	attached, _, _, _ := attachCanonicalRows([]ClaimedFact{claim}, []CanonicalFact{fact})
 	if attached[0].Table == nil || attached[0].Table.Field != "subcategory_breakdown" {
 		t.Fatalf("table = %+v, want the detail table", attached[0].Table)
+	}
+}
+
+// CHAOS-12587 (codex r1 P3, lead ruling): the detail-tables line names the
+// table each claim carries, read off the attached table, so a pick of the
+// wrong one of two equal-size tables shows.
+func TestCHAOS12587TheLineNamesTheTableAClaimCarries(t *testing.T) {
+	t.Parallel()
+	fact := detailFact(true)
+	second := fact.Fields["subcategory_breakdown"]
+	fact.Fields["repository_breakdown"] = second
+	alpha := ClaimedFact{ClaimID: "claim_alpha", Kind: FactInvestment, Subject: fact.Subject, Field: "subcategory_breakdown", Value: ScalarValue{Null: true}}
+	beta := ClaimedFact{ClaimID: "claim_beta", Kind: FactInvestment, Subject: fact.Subject, Field: "repository_breakdown", Value: ScalarValue{Null: true}}
+	share := 0.5
+	plain := ClaimedFact{ClaimID: "claim_plain", Kind: FactInvestment, Subject: fact.Subject, Field: "theme_quality", Value: ScalarValue{Number: &share}}
+	attached, _, _, _ := attachCanonicalRows([]ClaimedFact{alpha, beta, plain}, []CanonicalFact{fact})
+	event := attachedDetailTables(attached, []CanonicalFact{fact})
+	if event.Claims != 2 || !slices.Equal(event.Tables, []string{"repository_breakdown", "subcategory_breakdown"}) || event.Omitted != 0 {
+		t.Fatalf("event = %+v, want 2 claims over both tables", event)
+	}
+	// The wrong table on a claim is logged as the table it carries.
+	wrong := attached[0]
+	wrong.Table = attached[1].Table
+	if got := attachedDetailTables([]ClaimedFact{wrong}, []CanonicalFact{fact}); !slices.Equal(got.Tables, []string{"repository_breakdown"}) {
+		t.Fatalf("wrong pick: tables = %v, want the table the claim carries", got.Tables)
+	}
+	// A pick table is no detail table, and no claim with one makes no line.
+	if got := attachedDetailTables(attached[2:], []CanonicalFact{fact}); got.Claims != 0 || got.Tables != nil {
+		t.Fatalf("pick table: event = %+v, want none", got)
+	}
+}
+
+func TestCHAOS12587TheLineCapsItsNames(t *testing.T) {
+	t.Parallel()
+	fact := detailFact(true)
+	table := fact.Fields["subcategory_breakdown"]
+	claims := make([]ClaimedFact, 0, MaxLoggedDetailTables+3)
+	for index := range MaxLoggedDetailTables + 3 {
+		name := fmt.Sprintf("detail_%02d", index)
+		fact.Fields[name] = table
+		claims = append(claims, ClaimedFact{ClaimID: "claim_" + name, Kind: FactInvestment, Subject: fact.Subject, Field: name, Value: ScalarValue{Null: true}})
+	}
+	attached, _, _, _ := attachCanonicalRows(claims, []CanonicalFact{fact})
+	event := attachedDetailTables(attached, []CanonicalFact{fact})
+	if event.Claims != MaxLoggedDetailTables+3 || len(event.Tables) != MaxLoggedDetailTables || event.Omitted != 3 {
+		t.Fatalf("event = %d claims, %d names, %d omitted; want %d, %d, 3", event.Claims, len(event.Tables), event.Omitted, MaxLoggedDetailTables+3, MaxLoggedDetailTables)
+	}
+	if event.Tables[0] != "detail_00" || !slices.IsSorted(event.Tables) {
+		t.Fatalf("names = %v, want the first %d in order", event.Tables, MaxLoggedDetailTables)
+	}
+}
+
+// Synthesize writes the line once when a claim carries a detail table, and
+// not at all when none does.
+func TestCHAOS12587SynthesizeWritesTheLineOnlyForADetailTable(t *testing.T) {
+	t.Parallel()
+	for _, named := range []bool{true, false} {
+		input, draft := closureFixture()
+		source := detailFact(true)
+		input.Facts.Facts[0].Fields["subcategory_breakdown"] = source.Fields["subcategory_breakdown"]
+		if named {
+			draft.ClaimedFacts = append(draft.ClaimedFacts, ClaimedFact{
+				ClaimID: "claim_detail_table", Kind: input.Facts.Facts[0].Kind, Subject: input.Facts.Facts[0].Subject,
+				Field: "subcategory_breakdown", Value: ScalarValue{Null: true},
+			})
+		}
+		telemetry := &recordingTelemetry{}
+		synthesizer := RuntimeAnswerSynthesizer{
+			Runtime:   fakeModelRuntime{draft: draft, receipt: validModelReceiptFixture(ModelOperationSynthesize)},
+			Sink:      &fakeReceiptSink{},
+			Telemetry: telemetry,
+		}
+		if _, err := synthesizer.Synthesize(context.Background(), storage.Principal{OrgID: "org_1"}, input); err != nil {
+			t.Fatalf("named %v: Synthesize() error = %v", named, err)
+		}
+		switch {
+		case named && (len(telemetry.detailTablesAttached) != 1 || !slices.Equal(telemetry.detailTablesAttached[0].Tables, []string{"subcategory_breakdown"})):
+			t.Fatalf("named: lines = %+v, want one naming subcategory_breakdown", telemetry.detailTablesAttached)
+		case !named && len(telemetry.detailTablesAttached) != 0:
+			t.Fatalf("not named: lines = %+v, want none", telemetry.detailTablesAttached)
+		}
 	}
 }
