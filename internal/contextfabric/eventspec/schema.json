@@ -6787,6 +6787,49 @@
     ]
   },
   {
+    "id": "contextfabric.inferred_window_gate",
+    "msg": "context fabric inferred window gate",
+    "level": "info",
+    "multiplicity": "zero_or_one_per_request",
+    "attribution": [
+      "request_id"
+    ],
+    "bounded_aggregation": "at most one line per investigation: written once, when the class-default gate decides a turn whose window was inferred and clarification is allowed.",
+    "fields": [
+      {
+        "key": "org_id",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "decision",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "gated",
+          "answered"
+        ]
+      },
+      {
+        "key": "basis",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "offers_unavailable",
+          "period_shape",
+          "offers_beyond_window",
+          "window_only"
+        ]
+      },
+      {
+        "key": "request_id",
+        "type": "string",
+        "presence": "conditional",
+        "applicability": "written when the request context carries a request ID"
+      }
+    ]
+  },
+  {
     "id": "contextfabric.interpretation_ensemble_gap",
     "msg": "context fabric interpretation ensemble did not reach quorum",
     "level": "warn",
@@ -17683,7 +17726,7 @@
     "attribution": [
       "request_id"
     ],
-    "bounded_aggregation": "at most one line per request: emitted from one deferred statement once resolveSubjects reached its subject-hint loop, only when the request carries at least one ask_dev_page_context hint, by the one resolution that request runs with those hints (the gated offers-only resolution or the decisive one, never both); CertifyAbsent asserts the request with none.",
+    "bounded_aggregation": "at most one line per request: emitted from one deferred statement once resolveSubjects reached its subject-hint loop, only when the request carries at least one ask_dev_page_context hint, by the first resolution that request runs with those hints (the gated offers-only resolution, or else the decisive one; a decisive resolution after the offers-only one carries contextfabric.WithPageHintLookupReported and writes none); CertifyAbsent asserts the request with none.",
     "fields": [
       {
         "key": "request_id",
