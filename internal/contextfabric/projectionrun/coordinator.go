@@ -3307,16 +3307,15 @@ type graphRealign struct {
 // under the same organization lock, and the move is a compare-and-swap on the
 // checkpoint it read.
 func (c *Coordinator) realignToGraphWatermarks(ctx context.Context, orgID string, checkpoints contextfabric.ProjectionCheckpointStore, realigns []graphRealign) {
-	hash := contextfabric.SanitizeLogAttr(orgIDHash(orgID))
+	hash := orgIDHash(orgID)
 	for _, r := range realigns {
-		// Every key is written out at each call, so the emit scan can read it
-		// (internal/cigates/emitscan R9).
-		source := contextfabric.SanitizeLogAttr(r.source)
-		checkpointWatermark := contextfabric.SanitizeLogAttr(r.checkpoint.BackendWatermark)
-		graphWatermark := contextfabric.SanitizeLogAttr(r.watermark.BackendWatermark)
+		// Every key, and every value's sanitizer, is written out at each call:
+		// the emit scan reads the keys (internal/cigates/emitscan R9) and the
+		// sanitizer pin reads each value's own construction site.
 		if r.checkpoint.SourceVersion != "" && r.watermark.SourceVersion != r.checkpoint.SourceVersion {
 			c.logger.WarnContext(ctx, "context_fabric: the graph's watermark names a batch of another source version than its projection checkpoint; the checkpoint is not moved, and the organization needs a rebuild",
-				"org_id_hash", hash, "source", source, "checkpoint_backend_watermark", checkpointWatermark, "graph_backend_watermark", graphWatermark,
+				"org_id_hash", contextfabric.SanitizeLogAttr(hash), "source", contextfabric.SanitizeLogAttr(r.source),
+				"checkpoint_backend_watermark", contextfabric.SanitizeLogAttr(r.checkpoint.BackendWatermark), "graph_backend_watermark", contextfabric.SanitizeLogAttr(r.watermark.BackendWatermark),
 				"checkpoint_source_version", contextfabric.SanitizeLogAttr(r.checkpoint.SourceVersion),
 				"graph_source_version", contextfabric.SanitizeLogAttr(r.watermark.SourceVersion))
 			continue
@@ -3327,12 +3326,14 @@ func (c *Coordinator) realignToGraphWatermarks(ctx context.Context, orgID string
 		realigned.UpdatedAt = c.now().UTC()
 		if err := checkpoints.CompareAndSwapProjectionCheckpoint(ctx, r.checkpoint, realigned); err != nil {
 			c.logger.WarnContext(ctx, "context_fabric: the graph's watermark differs from its projection checkpoint, and the checkpoint could not be moved to it; the next tick tries again",
-				"org_id_hash", hash, "source", source, "checkpoint_backend_watermark", checkpointWatermark, "graph_backend_watermark", graphWatermark,
+				"org_id_hash", contextfabric.SanitizeLogAttr(hash), "source", contextfabric.SanitizeLogAttr(r.source),
+				"checkpoint_backend_watermark", contextfabric.SanitizeLogAttr(r.checkpoint.BackendWatermark), "graph_backend_watermark", contextfabric.SanitizeLogAttr(r.watermark.BackendWatermark),
 				"failure_class", contextfabric.SanitizeLogAttr(classifyOutcomeError(err)))
 			continue
 		}
 		c.logger.WarnContext(ctx, "context_fabric: the graph's watermark differs from its projection checkpoint; the projection resumes from the graph's own watermark",
-			"org_id_hash", hash, "source", source, "checkpoint_backend_watermark", checkpointWatermark, "graph_backend_watermark", graphWatermark)
+			"org_id_hash", contextfabric.SanitizeLogAttr(hash), "source", contextfabric.SanitizeLogAttr(r.source),
+			"checkpoint_backend_watermark", contextfabric.SanitizeLogAttr(r.checkpoint.BackendWatermark), "graph_backend_watermark", contextfabric.SanitizeLogAttr(r.watermark.BackendWatermark))
 	}
 }
 
