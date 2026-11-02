@@ -1025,6 +1025,16 @@ for run_lease_refused in "--set contextFabric.runLeaseEnabled=true" "${run_lease
   [[ $run_lease_status -ne 0 ]] || fail_gate "run-lease: rendered with the event stream off: ${run_lease_refused}"
   grep -qF 'needs ACR_CONTEXT_FABRIC_EVENT_STREAM_ENABLED' <<<"$run_lease_out" || fail_gate "run-lease: refused without naming the event stream: ${run_lease_refused}"
 done
+# CHAOS-12528: the guard reads the value the pod gets. extraEnv comes after the
+# first-class entry, and the last entry of a name wins.
+lease_env=(--set-string 'deployment.extraEnv[0].name=ACR_CONTEXT_FABRIC_RUN_LEASE_ENABLED' --set-string 'deployment.extraEnv[0].value=true')
+set +e; lease_env_out="$(render "${lease_env[@]}" 2>&1)"; lease_env_status=$?; set -e
+[[ $lease_env_status -ne 0 ]] || fail_gate "run-lease: extraEnv turned the lease on with the event stream off and the render passed"
+grep -qF 'needs ACR_CONTEXT_FABRIC_EVENT_STREAM_ENABLED' <<<"$lease_env_out" || fail_gate "run-lease: the extraEnv refusal did not name the event stream"
+render "${lease_env[@]}" --set-string 'deployment.extraEnv[1].name=ACR_CONTEXT_FABRIC_EVENT_STREAM_ENABLED' --set-string 'deployment.extraEnv[1].value=true' >/dev/null \
+  || fail_gate "run-lease: the lease by extraEnv with the event stream on must render"
+render --set contextFabric.runLeaseEnabled=true --set-string 'deployment.extraEnv[0].name=ACR_CONTEXT_FABRIC_RUN_LEASE_ENABLED' --set-string 'deployment.extraEnv[0].value=false' >/dev/null \
+  || fail_gate "run-lease: extraEnv turning the lease off leaves nothing to guard, and must render"
 pass "run-lease: acr-api declares the flag off by default, on when set, and the render refuses it with the event stream off"
 
 falkor_no_secret="$(render \

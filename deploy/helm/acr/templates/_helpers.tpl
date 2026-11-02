@@ -372,14 +372,18 @@ is on and the event stream is not: acr-api would refuse to start
 */ -}}
 {{- define "acr.runLeaseEnabled" -}}
 {{- $on := .Values.contextFabric.runLeaseEnabled | default false -}}
-{{- if $on -}}
+{{- $declared := $on -}}
 {{- $stream := false -}}
 {{- /* The spellings of strconv.ParseBool; the last entry of a name wins, as in a pod. */ -}}
 {{- range .Values.deployment.extraEnv -}}
+{{- if eq .name "ACR_CONTEXT_FABRIC_RUN_LEASE_ENABLED" -}}
+{{- $declared = has (toString .value) (list "1" "t" "T" "TRUE" "true" "True") -}}
+{{- end -}}
 {{- if eq .name "ACR_CONTEXT_FABRIC_EVENT_STREAM_ENABLED" -}}
 {{- $stream = has (toString .value) (list "1" "t" "T" "TRUE" "true" "True") -}}
 {{- end -}}
 {{- end -}}
+{{- if $declared -}}
 {{- if not $stream -}}
 {{- fail "contextFabric.runLeaseEnabled needs ACR_CONTEXT_FABRIC_EVENT_STREAM_ENABLED=true, a literal value in deployment.extraEnv: acr-api refuses to start without it" -}}
 {{- end -}}
