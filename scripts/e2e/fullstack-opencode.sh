@@ -1334,18 +1334,24 @@ run_device_login_read_acceptance() {
 
   future_count="$(clickhouse_query "SELECT count() FROM ${db}.repos FINAL WHERE org_id = '${org_id}' AND repo = '${FULLSTACK_FUTURE_SLUG}'")"
   [[ "$future_count" == 0 ]] || fs_die 'the future-repository acceptance fixture unexpectedly exists in the analytics catalog'
-  # CHAOS-12092: a user-class credential's effective scope is its grant within the
-  # organization's LIVE repository inventory ("*" is the inventory, re-read on every call).
-  # A same-organization repository the catalog does not hold yet is outside it: refused at
-  # authorization (repo_forbidden), with no data read.
+  # CHAOS-12592 (chris on CHAOS-4390: "a user can see all the data in an org"): a
+  # user-class "*" grant stays "*" after the live access read, which still runs on every
+  # call. A same-organization repository outside the live inventory is not refused at
+  # authorization; every read stays bound to the principal's OrgID. A repository the
+  # catalog does not hold yet reads as not found (an unresolved scope, or no_data), never
+  # as data and never as zero (North Star check 12).
   device_login_mcp_roundtrip "$FULLSTACK_FUTURE_SLUG" "$ARTIFACTS/device-login-future-context.json"
   jq -e '
-    .id == 2 and .result != null and (.result.isError // false)
-    and ([.result.content[]? | select(.type == "text") | .text]
-         | any(startswith("repo_forbidden: acr api error: code=repo_forbidden status=403 ")))
+    .id == 2 and .result != null
+    and ((.result | tostring) | test("repo_forbidden|credential scope|category: auth"; "i") | not)
     and ((.result | tostring) | test("future-service-canary"; "i") | not)
+    and (if (.result.isError // false) then (.result.content | tostring | test("no_data"; "i"))
+         else .result.structuredContent.structured.resolved_scope.resolution == "unresolved"
+           and (.result.structuredContent.structured.resolved_scope.fallback_reasons | index("authorized_repository_not_found")) != null
+           and ([.result.structuredContent.structured.items[]?.evidence_ref_ids[]?] | length) == 0
+         end)
   ' "$ARTIFACTS/device-login-future-context.json" >/dev/null \
-    || fs_die 'the organization-wide device credential was not refused for a repository outside the live inventory'
+    || fs_die 'the organization-wide device credential did not read a repository outside the live inventory as not found'
   # The same credential (the same device-login token, no new consent) reaches that
   # repository as soon as the inventory holds it: the grant is re-read live, never frozen
   # at consent (#64's intent: an organization-wide credential covers repositories added later).

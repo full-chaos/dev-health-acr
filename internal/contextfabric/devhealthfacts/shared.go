@@ -1373,7 +1373,11 @@ import (
 // v266 -> v267: a ticket key of any tracker binds a handle when the caller holds
 // its prefix (CHAOS-12463). An answer saved under v266 answered such a question by
 // search.
-const QueryVersion = "devhealthfacts.clickhouse.v267"
+//
+// v267 -> v268: a restricted caller's work item census admits a GitHub or GitLab
+// issue by its own repository (CHAOS-12561). An answer saved under v267 can say
+// such an issue is not in what the caller can read.
+const QueryVersion = "devhealthfacts.clickhouse.v268"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each
