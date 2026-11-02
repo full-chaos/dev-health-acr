@@ -48,7 +48,9 @@ const (
 // only on a bare-name pair (out_of_cut_unstated_kind, exactly two NAMED
 // operands, each with a term). On success it returns the classification with
 // every slot's kind set and the admission moved to the admitted pair, so the
-// pair resolves through resolveNamedComparison exactly as a stated kind does.
+// pair resolves through resolveNamedComparison exactly as a stated kind does,
+// and the subjects the sides matched, one per side in slot order (both sides
+// may match the same subject).
 //
 // The census is the shared exact-name population (deps.ExactNameCandidates,
 // every repository, project and team node). A side counts only nodes whose
@@ -58,39 +60,41 @@ const (
 // Authorization is not decided here: resolveNamedComparison's own gates run
 // on the resolved pair, and an unauthorized node of another kind only makes
 // this refuse (the kind question), never commit.
-func exactLabelPairKind(ctx context.Context, deps ResolveDeps, comparison contextfabric.ComparisonOperands) (contextfabric.ComparisonOperands, ExactLabelKindRefusal, bool, error) {
+func exactLabelPairKind(ctx context.Context, deps ResolveDeps, comparison contextfabric.ComparisonOperands) (contextfabric.ComparisonOperands, []contextfabric.SubjectRef, ExactLabelKindRefusal, bool, error) {
 	if comparison.Admission != contextfabric.ComparisonOutOfCutUnstatedKind || len(comparison.Slots) != 2 {
-		return comparison, "", false, nil
+		return comparison, nil, "", false, nil
 	}
 	for _, slot := range comparison.Slots {
 		if slot.Variant != contextfabric.ComparisonOperandNamed || len(slot.Terms) == 0 || strings.TrimSpace(slot.Terms[0]) == "" {
-			return comparison, "", false, nil
+			return comparison, nil, "", false, nil
 		}
 	}
 	if deps.ExactNameCandidates == nil {
-		return comparison, ExactLabelKindRefusalNoCensus, false, nil
+		return comparison, nil, ExactLabelKindRefusalNoCensus, false, nil
 	}
 	nodes, truncated, err := deps.ExactNameCandidates(ctx)
 	if err != nil {
-		return comparison, ExactLabelKindRefusalCensusFailed, false, err
+		return comparison, nil, ExactLabelKindRefusalCensusFailed, false, err
 	}
 	if truncated {
-		return comparison, ExactLabelKindRefusalTruncated, false, nil
+		return comparison, nil, ExactLabelKindRefusalTruncated, false, nil
 	}
 	var kind contextfabric.SubjectKind
+	matched := make([]contextfabric.SubjectRef, 0, len(comparison.Slots))
 	for _, slot := range comparison.Slots {
 		matches := fullLabelMatches(slot.Terms[0], nodes)
 		switch {
 		case len(matches) == 0:
-			return comparison, ExactLabelKindRefusalSideNoMatch, false, nil
+			return comparison, nil, ExactLabelKindRefusalSideNoMatch, false, nil
 		case len(matches) > 1:
-			return comparison, ExactLabelKindRefusalSideSeveral, false, nil
+			return comparison, nil, ExactLabelKindRefusalSideSeveral, false, nil
 		}
 		if kind == "" {
 			kind = matches[0].Kind
 		} else if matches[0].Kind != kind {
-			return comparison, ExactLabelKindRefusalMixedKinds, false, nil
+			return comparison, nil, ExactLabelKindRefusalMixedKinds, false, nil
 		}
+		matched = append(matched, matches[0])
 	}
 	resolved := contextfabric.ComparisonOperands{Admission: contextfabric.ComparisonAdmittedNamedPair, Slots: make([]contextfabric.ComparisonOperandSlot, len(comparison.Slots))}
 	for index, slot := range comparison.Slots {
@@ -98,7 +102,23 @@ func exactLabelPairKind(ctx context.Context, deps ResolveDeps, comparison contex
 		slot.Terms = append([]string(nil), slot.Terms...)
 		resolved.Slots[index] = slot
 	}
-	return resolved, "", true, nil
+	return resolved, matched, "", true, nil
+}
+
+// committedEvery reports whether every subject in want is among committed.
+// The exact-label disclosure is owed only when each side committed the subject
+// its name matched; both sides may match one subject, which commits once.
+func committedEvery(committed, want []contextfabric.SubjectRef) bool {
+	held := make(map[string]bool, len(committed))
+	for _, subject := range committed {
+		held[SubjectKey(subject)] = true
+	}
+	for _, subject := range want {
+		if !held[SubjectKey(subject)] {
+			return false
+		}
+	}
+	return len(want) > 0
 }
 
 // fullLabelMatches is the subjects whose name or canonical label equals term,

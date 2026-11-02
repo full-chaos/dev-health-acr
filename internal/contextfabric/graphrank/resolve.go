@@ -2852,9 +2852,14 @@ func resolveSubjects(ctx context.Context, principal storage.Principal, request c
 		// One exact-name read serves this check and the comparison it
 		// enables: the same once-per-comparison wrapper the comparison uses.
 		deps = withSharedExactNameCandidates(deps)
-		if resolved, refusal, ok, exactErr := exactLabelPairKind(ctx, deps, comparison); exactErr != nil {
+		resolved, exactMatched, refusal, ok, exactErr := exactLabelPairKind(ctx, deps, comparison)
+		if exactErr != nil {
+			// The refusal line is written before the error returns, so a
+			// failed census is diagnosable from its own artifacts.
+			recordComparisonPolicy(ctx, principal, request, deps, comparison, ComparisonKindBasisNone, refusal)
 			return contextfabric.SubjectResolution{}, contextfabric.StructureOfferMaterial{}, exactErr
-		} else if ok {
+		}
+		if ok {
 			comparison, basis = resolved, ComparisonKindBasisExactLabel
 		} else if refusal != "" {
 			recordComparisonPolicy(ctx, principal, request, deps, comparison, ComparisonKindBasisNone, refusal)
@@ -2871,9 +2876,10 @@ func resolveSubjects(ctx context.Context, principal storage.Principal, request c
 			if err != nil {
 				return contextfabric.SubjectResolution{}, contextfabric.StructureOfferMaterial{}, err
 			}
-			if basis == ComparisonKindBasisExactLabel && len(resolution.Committed) == len(comparison.Slots) {
-				// Disclosed only when both sides committed under the kind: a
-				// side that still asks is a question, not a reading.
+			if basis == ComparisonKindBasisExactLabel && committedEvery(resolution.Committed, exactMatched) {
+				// Disclosed only when each side committed the subject its name
+				// matched: a side that still asks is a question, not a
+				// reading. Both sides may name one subject, which commits once.
 				resolution.ExactLabelKind = comparison.Slots[0].Kind
 			}
 			commitBases.ResetTo(bases)

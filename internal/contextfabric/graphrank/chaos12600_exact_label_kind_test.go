@@ -78,7 +78,7 @@ func TestExactLabelPairKindDecides(t *testing.T) {
 	for _, cell := range exactLabelCells() {
 		census, truncated := cell.census, cell.truncated
 		deps := ResolveDeps{ExactNameCandidates: func(context.Context) ([]CandidateNode, bool, error) { return census, truncated, nil }}
-		resolved, refusal, ok, err := exactLabelPairKind(context.Background(), deps, comparison)
+		resolved, matched, refusal, ok, err := exactLabelPairKind(context.Background(), deps, comparison)
 		if err != nil {
 			t.Fatalf("%s: error = %v", cell.name, err)
 		}
@@ -88,18 +88,21 @@ func TestExactLabelPairKindDecides(t *testing.T) {
 		if ok && (resolved.Admission != contextfabric.ComparisonAdmittedNamedPair || resolved.Slots[0].Kind != contextfabric.SubjectRepository || resolved.Slots[1].Kind != contextfabric.SubjectRepository) {
 			t.Errorf("%s: resolved = %+v, want an admitted pair of repositories", cell.name, resolved)
 		}
+		if ok != (len(matched) == 2) {
+			t.Errorf("%s: matched = %v, want one subject per side exactly when resolved", cell.name, matched)
+		}
 	}
 	// A stated pair and a pair without a census are not this rule's cases.
 	stated := comparison
 	stated.Admission = contextfabric.ComparisonAdmittedNamedPair
-	if _, refusal, ok, _ := exactLabelPairKind(context.Background(), ResolveDeps{}, stated); ok || refusal != "" {
+	if _, _, refusal, ok, _ := exactLabelPairKind(context.Background(), ResolveDeps{}, stated); ok || refusal != "" {
 		t.Errorf("stated pair: ok=%v refusal=%q, want not applicable", ok, refusal)
 	}
-	if _, refusal, ok, _ := exactLabelPairKind(context.Background(), ResolveDeps{}, comparison); ok || refusal != ExactLabelKindRefusalNoCensus {
+	if _, _, refusal, ok, _ := exactLabelPairKind(context.Background(), ResolveDeps{}, comparison); ok || refusal != ExactLabelKindRefusalNoCensus {
 		t.Errorf("no census: ok=%v refusal=%q, want %q", ok, refusal, ExactLabelKindRefusalNoCensus)
 	}
 	failing := ResolveDeps{ExactNameCandidates: func(context.Context) ([]CandidateNode, bool, error) { return nil, false, errors.New("census down") }}
-	if _, refusal, ok, err := exactLabelPairKind(context.Background(), failing, comparison); ok || err == nil || refusal != ExactLabelKindRefusalCensusFailed {
+	if _, _, refusal, ok, err := exactLabelPairKind(context.Background(), failing, comparison); ok || err == nil || refusal != ExactLabelKindRefusalCensusFailed {
 		t.Errorf("failed census: ok=%v err=%v refusal=%q, want the error and %q", ok, err, refusal, ExactLabelKindRefusalCensusFailed)
 	}
 }
@@ -150,5 +153,61 @@ func TestBareNamePairResolvesThroughTheResolver(t *testing.T) {
 				t.Fatalf("refused cell committed %v with exact-label kind %q, want the kind question unchanged", resolution.Committed, resolution.ExactLabelKind)
 			}
 		})
+	}
+}
+
+// Codex r1 on the CHAOS-12600 PR: both sides may name one subject. The rule
+// resolves the kind, then the comparison refuses a pair whose sides are one
+// subject and asks again: nothing commits, so there is no answer and no kind
+// disclosure is owed. This pins that the stamp is absent because the turn
+// asks, not because a committed answer lost it.
+func TestBareNamePairNamingOneSubjectTwiceAsksAgainWithoutTheStamp(t *testing.T) {
+	t.Parallel()
+	backend := &fakeGraphBackend{
+		searchResults:             map[string][]CandidateNode{},
+		enableExactNameCandidates: true,
+		exactNameCandidates:       []CandidateNode{repoNode("repository:askdev", labelAskDev)},
+	}
+	sink := &recordingPolicySink{}
+	deps := backend.deps()
+	deps.OperandResolutionSink = sink
+	resolution, _, _, _, err := ResolveSubjectsWithCommitBasis(context.Background(), storage.Principal{OrgID: "org-1"},
+		slotGateRequest(), testInterpreted(labelAskDev, labelAskDev), deps, nil, nil, bareNamePairFrame(labelAskDev, labelAskDev), "")
+	if err != nil {
+		t.Fatalf("ResolveSubjectsWithCommitBasis() error = %v", err)
+	}
+	if len(sink.events) != 1 || sink.events[0].KindBasis != ComparisonKindBasisExactLabel {
+		t.Fatalf("policy lines = %+v, want one with kind_basis exact_label", sink.events)
+	}
+	if len(resolution.Committed) != 0 || resolution.ClarificationPrompt == "" {
+		t.Fatalf("committed = %v prompt = %q, want nothing committed and the pair asked again", resolution.Committed, resolution.ClarificationPrompt)
+	}
+	if resolution.ExactLabelKind != "" {
+		t.Fatalf("exact-label kind = %q, want none: no answer reads the sides", resolution.ExactLabelKind)
+	}
+}
+
+// Codex r1 on the CHAOS-12600 PR: a census that fails ends the resolution with
+// its error, and the policy line naming census_failed is written first, so the
+// refusal is in the run's own artifacts.
+func TestBareNamePairCensusFailureWritesItsPolicyLine(t *testing.T) {
+	t.Parallel()
+	backend := &fakeGraphBackend{
+		searchResults:             map[string][]CandidateNode{},
+		enableExactNameCandidates: true,
+		exactNameCandidatesErr:    errors.New("census down"),
+	}
+	sink := &recordingPolicySink{}
+	deps := backend.deps()
+	deps.OperandResolutionSink = sink
+	if _, _, _, _, err := ResolveSubjectsWithCommitBasis(context.Background(), storage.Principal{OrgID: "org-1"},
+		slotGateRequest(), testInterpreted(labelAskDev, labelWeb), deps, nil, nil, bareNamePairFrame(labelAskDev, labelWeb), ""); err == nil {
+		t.Fatal("ResolveSubjectsWithCommitBasis() error = nil, want the census error")
+	}
+	if len(sink.events) != 1 {
+		t.Fatalf("policy lines = %d, want 1", len(sink.events))
+	}
+	if event := sink.events[0]; event.KindBasis != ComparisonKindBasisNone || event.KindRefusal != ExactLabelKindRefusalCensusFailed {
+		t.Errorf("policy line kind_basis=%q kind_refusal=%q, want none/%q", event.KindBasis, event.KindRefusal, ExactLabelKindRefusalCensusFailed)
 	}
 }
