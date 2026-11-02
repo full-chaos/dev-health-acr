@@ -1249,7 +1249,7 @@ jobs:
         run: scripts/ci/race-split.sh devhealthfacts race-partition
       - name: Run isolated devhealthfacts race suite (rest half)
         env:
-          GH_TOKEN: ${{ github.token }}
+          RACE_BASELINE_GH_TOKEN: ${{ github.token }}
           RACE_BASELINE_ARTIFACT: race-json-race-devhealthfacts
         run: |
           set -euo pipefail
@@ -1320,7 +1320,7 @@ jobs:
         run: scripts/ci/race-split.sh devhealthfacts verify
       - name: Run isolated devhealthfacts race suite (heavy half)
         env:
-          GH_TOKEN: ${{ github.token }}
+          RACE_BASELINE_GH_TOKEN: ${{ github.token }}
           RACE_BASELINE_ARTIFACT: race-json-race-devhealthfacts-heavy
         run: |
           set -euo pipefail
@@ -1390,7 +1390,7 @@ jobs:
         run: scripts/ci/race-split.sh devhealthfacts verify
       - name: Run isolated devhealthfacts race suite (mid third)
         env:
-          GH_TOKEN: ${{ github.token }}
+          RACE_BASELINE_GH_TOKEN: ${{ github.token }}
           RACE_BASELINE_ARTIFACT: race-json-race-devhealthfacts-mid
         run: |
           set -euo pipefail
@@ -1460,7 +1460,7 @@ jobs:
         run: scripts/ci/race-split.sh devhealthfacts verify
       - name: Run isolated devhealthfacts race suite (fourth quarter)
         env:
-          GH_TOKEN: ${{ github.token }}
+          RACE_BASELINE_GH_TOKEN: ${{ github.token }}
           RACE_BASELINE_ARTIFACT: race-json-race-devhealthfacts-fourth
         run: |
           set -euo pipefail
@@ -1548,7 +1548,7 @@ jobs:
         run: scripts/ci/race-split.sh devhealthsource verify
       - name: Run isolated devhealthsource race suite (rest half)
         env:
-          GH_TOKEN: ${{ github.token }}
+          RACE_BASELINE_GH_TOKEN: ${{ github.token }}
           RACE_BASELINE_ARTIFACT: race-json-race-devhealthsource
         run: |
           set -euo pipefail
@@ -1621,7 +1621,7 @@ jobs:
         run: scripts/ci/race-split.sh devhealthsource race-partition
       - name: Run isolated devhealthsource race suite (heavy half)
         env:
-          GH_TOKEN: ${{ github.token }}
+          RACE_BASELINE_GH_TOKEN: ${{ github.token }}
           RACE_BASELINE_ARTIFACT: race-json-race-devhealthsource-heavy
         run: |
           set -euo pipefail
@@ -1691,7 +1691,7 @@ jobs:
         run: scripts/ci/race-split.sh devhealthsource verify
       - name: Run isolated devhealthsource race suite (mid half)
         env:
-          GH_TOKEN: ${{ github.token }}
+          RACE_BASELINE_GH_TOKEN: ${{ github.token }}
           RACE_BASELINE_ARTIFACT: race-json-race-devhealthsource-mid
         run: |
           set -euo pipefail
@@ -1766,7 +1766,7 @@ jobs:
         run: scripts/ci/race-split.sh devhealthsource verify
       - name: Run isolated devhealthsource race suite (fourth job)
         env:
-          GH_TOKEN: ${{ github.token }}
+          RACE_BASELINE_GH_TOKEN: ${{ github.token }}
           RACE_BASELINE_ARTIFACT: race-json-race-devhealthsource-fourth
         run: |
           set -euo pipefail

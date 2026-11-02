@@ -29,6 +29,12 @@ case "${GOTEST_TIMEOUT:-}" in
 esac
 here="$(cd "$(dirname "$0")" && pwd)"
 guard="${GUARD:-$here/shard-budget-guard.sh}"
+# CHAOS-12667: RACE_BASELINE_GH_TOKEN lets the guard fetch main's race-json
+# artifact of this job (RACE_BASELINE_ARTIFACT). It is taken out of the
+# environment here, before the tests run, so test code never sees it, and it
+# reaches the guard alone, as GH_TOKEN.
+baseline_token="${RACE_BASELINE_GH_TOKEN:-}"
+unset RACE_BASELINE_GH_TOKEN
 runner="${RUNNER:-make test-race}"
 
 # RACE_JSON_OUT (optional): keep this run's test2json events in that file, the
@@ -67,7 +73,11 @@ printf '%s race wall time (build + tests, informational): %ss; budget %ss\n' "$l
 guard_rc=0
 guard_args=("$budget" "$out")
 if [ -n "$json_out" ]; then guard_args=(--json "$budget" "$out"); fi
-"$guard" "${guard_args[@]}" || guard_rc=$?
+if [ -n "$baseline_token" ]; then
+  GH_TOKEN="$baseline_token" "$guard" "${guard_args[@]}" || guard_rc=$?
+else
+  "$guard" "${guard_args[@]}" || guard_rc=$?
+fi
 if [ "$guard_rc" -ne 0 ]; then
   printf '::error::%s: the budget guard failed (a package over 85%% of its %ss budget, or a test over the per-test limit); see the lines above\n' "$label" "$budget"
 fi

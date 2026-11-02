@@ -104,4 +104,25 @@ else
   echo "FAIL per-test-wrapper rc=$rc"; cat "$tmp/j4.out"; fails=$((fails + 1))
 fi
 
+# CHAOS-12667: the baseline token reaches the guard alone, as GH_TOKEN; the
+# tests the runner starts never see it under either name.
+cat >"$tmp/envrunner.sh" <<'STUB'
+#!/usr/bin/env bash
+printf 'runner RACE_BASELINE_GH_TOKEN=[%s] GH_TOKEN=[%s]\n' "${RACE_BASELINE_GH_TOKEN:-}" "${GH_TOKEN:-}"
+STUB
+cat >"$tmp/envguard.sh" <<'STUB'
+#!/usr/bin/env bash
+printf 'guard GH_TOKEN=[%s] RACE_BASELINE_GH_TOKEN=[%s]\n' "${GH_TOKEN:-}" "${RACE_BASELINE_GH_TOKEN:-}"
+STUB
+chmod +x "$tmp/envrunner.sh" "$tmp/envguard.sh"
+rc=0
+env -u GH_TOKEN RACE_BASELINE_GH_TOKEN=tok-123 GOTEST_TIMEOUT=600s RUNNER="$tmp/envrunner.sh" GUARD="$tmp/envguard.sh" \
+  "$here/run-isolated-budget.sh" t example/pkg >"$tmp/tok.out" 2>&1 || rc=$?
+if [ "$rc" -eq 0 ] && grep -qxF 'runner RACE_BASELINE_GH_TOKEN=[] GH_TOKEN=[]' "$tmp/tok.out" \
+  && grep -qxF 'guard GH_TOKEN=[tok-123] RACE_BASELINE_GH_TOKEN=[]' "$tmp/tok.out"; then
+  echo "ok   baseline-token-reaches-the-guard-only"
+else
+  echo "FAIL baseline-token rc=$rc"; cat "$tmp/tok.out"; fails=$((fails + 1))
+fi
+
 [ "$fails" -eq 0 ]
