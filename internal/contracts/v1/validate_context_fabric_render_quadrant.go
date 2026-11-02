@@ -22,8 +22,7 @@ import "fmt"
 //   - a point's label is the team's label, so a chart never shows a team's
 //     numbers under another name;
 //   - the x and y of one label cite claims about one team, even when two teams
-//     share a word. No team is two points: its label is its word, and labels are
-//     unique within a series;
+//     share a word, and no team is two points, whatever labels its claims carry;
 //   - every cited claim carries its fact's area_breakdown row, and all of them
 //     name one as_of_day: a quadrant of different days places teams that were
 //     never measured together;
@@ -54,6 +53,7 @@ func validateQuadrantShape(shape ContextFabricRenderShape, sources renderShapeSo
 		return fmt.Errorf("render shape %q: a quadrant places 2 or more teams, each with an x and a y", shape.ShapeID)
 	}
 	day := ""
+	placed := make(map[string]struct{}, len(x.Points))
 	for index := range x.Points {
 		xPoint, yPoint := x.Points[index], y.Points[index]
 		if xPoint.Label != yPoint.Label {
@@ -70,6 +70,10 @@ func validateQuadrantShape(shape ContextFabricRenderShape, sources renderShapeSo
 		if xTeam != yTeam {
 			return fmt.Errorf("render shape %q point %q: its x and y cite claims about two teams", shape.ShapeID, xPoint.Label)
 		}
+		if _, twice := placed[xTeam]; twice {
+			return fmt.Errorf("render shape %q point %q: its team has another point; one team is one point", shape.ShapeID, xPoint.Label)
+		}
+		placed[xTeam] = struct{}{}
 		for _, pointDay := range []string{xDay, yDay} {
 			if day == "" {
 				day = pointDay

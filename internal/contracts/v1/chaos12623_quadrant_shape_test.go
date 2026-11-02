@@ -176,6 +176,14 @@ func TestAQuadrantIsRefused(t *testing.T) {
 				f.shape.Series[series].Points[1].Source.ClaimID = "claim_quadrant_0_" + field
 			}
 		}, "must be unique"},
+		// Codex r3 on #1953 (P3, read): a point's label is its claim's subject
+		// label, so one team under two labels passed as two points.
+		"one team under two labels": {func(f *quadrantFixture) {
+			for _, index := range []int{2, 3} {
+				f.claims[index].Subject = ContextFabricSubjectRef{Kind: ContextFabricSubjectTeam, CanonicalID: "team:platform", Label: "Platform again"}
+			}
+			f.shape.Series[0].Points[1].Label, f.shape.Series[1].Points[1].Label = "Platform again", "Platform again"
+		}, "one team is one point"},
 		"a negative value": {func(f *quadrantFixture) {
 			*f.claims[2].Value.Integer = -1
 			f.shape.Series[0].Points[1].Value = -1
