@@ -165,3 +165,12 @@ func TestTheKeyedLinkReadIsCutPastItsBoundAndSilentWithNoIDs(t *testing.T) {
 		t.Fatalf("no ids: tiers %v complete %t err %v reads %d, want an empty, complete answer with no read", tiers, complete, err, len(*seen))
 	}
 }
+
+// FalkorDB drops the rows past its RESULTSET_SIZE with no error, so a bound at
+// or past it would read a capped result as complete (codex r1 on #1929).
+func TestTheKeyedLinkReadBoundStaysUnderTheServerCap(t *testing.T) {
+	t.Parallel()
+	if keyedLinkRowLimit+1 >= falkorResultSetSize {
+		t.Fatalf("keyedLinkRowLimit %d asks for %d rows, at or past FalkorDB's result cap of %d: a capped read would read as complete", keyedLinkRowLimit, keyedLinkRowLimit+1, falkorResultSetSize)
+	}
+}

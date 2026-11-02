@@ -1076,8 +1076,9 @@ links, never by a repository's size. The repository walk of the scope
 the walk is not cut, the keyed read's answer for any ids is the walk's members
 intersected with them. The cross-check and the commit test the issue with the
 same predicate. The census never filters a work item on its own repository
-column. A keyed read that fails, or is cut at its bound (more link rows than
-the walk reads of one repository, or a team narrowing it cannot decide), is no
+column. A keyed read that fails, or is cut at its bound (more than 5000 link
+rows, kept below FalkorDB's result cap of 10,000, which drops rows past it with
+no error; or a team narrowing it cannot decide), is no
 census: the round reports it incomplete, and a terminal states that the pull
 request links could not be read, never "No work item matched". A
 repository-less issue still needs a native link under a requested scope. The

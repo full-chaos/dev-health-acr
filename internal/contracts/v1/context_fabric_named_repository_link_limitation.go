@@ -12,10 +12,11 @@ const (
 	// ContextFabricNamedRepositoryNativeLinkLimitation: a native link joins them.
 	ContextFabricNamedRepositoryNativeLinkLimitation = "The work item is joined to a pull request of the named repository by a native link."
 	// ContextFabricNamedRepositoryTextLinkLimitation: the strongest link is an
-	// explicit text reference.
-	ContextFabricNamedRepositoryTextLinkLimitation = "The work item is joined to a pull request of the named repository only by an explicit text reference, not by a native link."
+	// explicit text reference. A heuristic link may stand beside it, so the
+	// sentence names the strongest, not the only one (codex r1 on #1929).
+	ContextFabricNamedRepositoryTextLinkLimitation = "The strongest link that joins the work item to a pull request of the named repository is an explicit text reference, not a native link."
 	// ContextFabricNamedRepositoryHeuristicLinkLimitation: the strongest link is a
-	// heuristic match.
+	// heuristic match, the weakest tier, so every link is one.
 	ContextFabricNamedRepositoryHeuristicLinkLimitation = "The work item is joined to a pull request of the named repository only by a heuristic match, not by a native link."
 	// ContextFabricNamedRepositoryNoLinkLimitation: the read completed and found no
 	// link it admits.

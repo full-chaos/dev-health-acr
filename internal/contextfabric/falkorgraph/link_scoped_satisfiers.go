@@ -35,10 +35,13 @@ import (
 // a scope under the census bound, the tiers this read returns for any ids are
 // the walk's members intersected with those ids.
 
-// keyedLinkRowLimit bounds the link rows one keyed read returns: the rows the
-// walk may read of one repository. A read past it is cut, and a cut read is no
-// answer: the census then reports itself incomplete.
-const keyedLinkRowLimit = linkSegmentPageCap * (contextfabric.WorkItemMembershipCensusLimit + 1)
+// keyedLinkRowLimit bounds the link rows one keyed read returns. A read past it
+// is cut, and a cut read is no answer: the census then reports itself
+// incomplete. FalkorDB drops the rows past its RESULTSET_SIZE with no error
+// (falkorResultSetSize), so limit+1 must stay below it, or a read at the cap
+// would read as complete while rows are missing (codex r1 on #1929). The margin
+// is defaultNodeEdgeReadLimit's.
+const keyedLinkRowLimit = defaultNodeEdgeReadLimit
 
 // keyedLinkScopeCypher is the keyed read. Its text depends only on the caller
 // class and on whether the scope names "*": the ids, the scope and the grants are
@@ -119,7 +122,7 @@ func (a *Adapter) linkScopedWorkItemsOf(ctx context.Context, key string, princip
 		return nil, false, safeDependencyError("read the links of work items in a requested repository scope", err)
 	}
 	if len(rows) > keyedLinkRowLimit {
-		slog.DebugContext(ctx, "context fabric: keyed link read of a requested repository scope was cut", "ids", len(ids), "rows", len(rows))
+		slog.DebugContext(ctx, "context fabric: keyed link read of a requested repository scope was cut", "ids", len(ids))
 		return nil, false, nil
 	}
 	state := treeWalkState{out: &treeWalk{}, principal: principal, scope: scope}
@@ -191,7 +194,9 @@ func (a *Adapter) linkScopedWorkItemsOf(ctx context.Context, key string, princip
 			}
 		}
 	}
+	// Counts of what was admitted only: a raw row the scope or the grants refuse
+	// in process must not move a logged value (codex r1 on #1929).
 	slog.DebugContext(ctx, "context fabric: keyed link read of a requested repository scope",
-		"ids", len(ids), "rows", len(rows), "repositories", len(anchors), "linked", len(tiers))
+		"ids", len(ids), "repositories", len(anchors), "linked", len(tiers))
 	return tiers, true, nil
 }
