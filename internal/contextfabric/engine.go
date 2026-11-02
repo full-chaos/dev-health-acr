@@ -3586,10 +3586,11 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 	// the team's own investment fact (the lead's ruling on CHAOS-4610), so the
 	// read takes the anchor alone. The members stay committed; reading their
 	// facts too would put a breakdown per repository beside the team's, which is
-	// a comparison the question did not ask for. With no anchor committed the
-	// subjects are left as they are.
-	if anchors := scopeAllocationAnchors(familyOutcome, resolution); len(anchors) > 0 {
-		subjects = anchors
+	// a comparison the question did not ask for. With no anchor team committed
+	// nothing is read (Codex r1, executed): the members' facts are not the
+	// team's split, so the turn ends in the subjectless terminal below.
+	if familyOutcome.Route.Source == FamilyRouteScopeAllocation {
+		subjects = scopeAllocationAnchors(familyOutcome, resolution)
 	}
 	graphContext.StatusMeasuredZero = statusMeasuredZero(familyOutcome.Frame, graphContext.Cohort)
 	if len(subjects) == 0 && !workItemTuple && graphContext.StatusMeasuredZero {
@@ -5053,14 +5054,11 @@ func scopeAnchorResolved(outcome QuestionFamilyOutcome) bool {
 	return winner && outcome.WinningSample.ScopeAnchorTerm != ""
 }
 
-// scopeAllocationAnchors is the anchor team the scope-anchor allocation route
-// reads, or nothing when the route did not decide the family or no anchor team
-// was committed. The organization case needs none: its subject is the caller's
-// organization, read when nothing is committed (organizationSubjectAnswers).
+// scopeAllocationAnchors is the anchor team a scope_allocation turn reads:
+// nothing when no anchor team was committed. The organization route needs none:
+// its source is the projection, and its subject is the caller's organization,
+// read when nothing is committed (organizationSubjectAnswers).
 func scopeAllocationAnchors(outcome QuestionFamilyOutcome, resolution SubjectResolution) []SubjectRef {
-	if outcome.Route.Source != FamilyRouteScopeAllocation {
-		return nil
-	}
 	return ScopeAnchorTeams(outcome.Frame, outcome.WinningSample.ScopeAnchorKind, resolution)
 }
 

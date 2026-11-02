@@ -144,11 +144,19 @@ func teamChildrenStore(t *testing.T, ctx context.Context, orgID string) contextp
 
 func serveTeamChildrenQuestion(t *testing.T, ctx context.Context, query contextpacket.ClickHouseQueryClient, orgID string, model *teamChildrenModel, withMembers bool) (contextfabric.InvestigationResult, *teamChildrenGraph) {
 	t.Helper()
+	return serveTeamChildrenQuestionWith(t, ctx, query, orgID, model, withMembers, true)
+}
+
+func serveTeamChildrenQuestionWith(t *testing.T, ctx context.Context, query contextpacket.ClickHouseQueryClient, orgID string, model *teamChildrenModel, withMembers, withAnchor bool) (contextfabric.InvestigationResult, *teamChildrenGraph) {
+	t.Helper()
 	registry, err := contextfabric.NewFactCapabilityRegistry(devhealthfacts.NewProviders(query), contextfabric.FactRegistryOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	subjects := []contextfabric.SubjectRef{{Kind: contextfabric.SubjectTeam, CanonicalID: "team:" + teamAllocationTeam, Label: "Platform"}}
+	subjects := []contextfabric.SubjectRef{}
+	if withAnchor {
+		subjects = append(subjects, contextfabric.SubjectRef{Kind: contextfabric.SubjectTeam, CanonicalID: "team:" + teamAllocationTeam, Label: "Platform"})
+	}
 	if withMembers {
 		// A hint or a carry can commit the members beside the anchor.
 		subjects = append(subjects,
@@ -247,4 +255,28 @@ func TestATeamsChildrenFrameWithASecondGoalKeepsItsFamilyInTheServedAnswer(t *te
 			t.Fatal("a second goal's discovery was told to read no member set")
 		}
 	}
+}
+
+// Codex r1 (executed): with the anchor team not committed, the route read the
+// repositories committed beside it. The anchor's own fact is the only basis of
+// this route, so with no anchor nothing is read: no repository's investment is
+// offered, and the answer is not an allocation answer about them.
+func TestATeamsChildrenAllocationQuestionWithNoCommittedAnchorReadsNoMember(t *testing.T) {
+	ctx := context.Background()
+	const orgID = "org-team-children-no-anchor"
+	query := teamChildrenStore(t, ctx, orgID)
+	model := &teamChildrenModel{goals: []contextfabric.InvestigationGoal{contextfabric.GoalAllocateInvestment}, shape: contextfabric.ShapeOpen}
+	result, _ := serveTeamChildrenQuestionWith(t, ctx, query, orgID, model, true, false)
+	if len(model.offered) != 0 {
+		t.Fatalf("investment facts offered for %v, want none: no anchor team was committed", model.offered)
+	}
+	for _, claim := range result.ClaimedFacts {
+		if claim.Kind == contextfabric.FactInvestment {
+			t.Fatalf("an investment claim was served without the anchor: %+v", claim)
+		}
+	}
+	if result.Status == contextfabric.InvestigationComplete {
+		t.Fatalf("status %q: an allocation question whose anchor was not committed is not answered", result.Status)
+	}
+	t.Logf("status=%s limitations=%v", result.Status, result.Limitations)
 }
