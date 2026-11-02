@@ -601,7 +601,7 @@ func TestTheScopedCensusAndTheDeploymentWalkFollowTheLinkOnRealStores(t *testing
 			sort.Strings(out)
 			return strings.Join(out, ",")
 		}
-		compared, teamCompared, teamExcluding, nonEmpty := 0, 0, 0, 0
+		compared, teamCompared, teamExcluding, nonEmpty, bothCut := 0, 0, 0, 0, 0
 		for _, principal := range principals {
 			for _, slugs := range scopes {
 				for _, teamIDs := range teams {
@@ -620,6 +620,14 @@ func TestTheScopedCensusAndTheDeploymentWalkFollowTheLinkOnRealStores(t *testing
 						t.Fatalf("%s: keyed read: %v", label, err)
 					}
 					if !walkComplete {
+						// Every scope here is under the walk's bounds, so only a team
+						// narrowing it could not decide cuts it, and the ids are every
+						// seeded item: the keyed read meets the same undecided item and
+						// must be cut too, never a smaller answer.
+						if keyedComplete {
+							t.Errorf("%s: the walk is cut and the keyed read answered %q as complete", label, render(keyed))
+						}
+						bothCut++
 						finish()
 						continue
 					}
@@ -660,10 +668,10 @@ func TestTheScopedCensusAndTheDeploymentWalkFollowTheLinkOnRealStores(t *testing
 				}
 			}
 		}
-		t.Logf("differential: %d cases compared (%d team-narrowed, %d where the team narrowing excluded an item, %d non-empty)", compared, teamCompared, teamExcluding, nonEmpty)
+		t.Logf("differential: %d cases compared (%d team-narrowed, %d where the team narrowing excluded an item, %d non-empty), %d cut by both", compared, teamCompared, teamExcluding, nonEmpty, bothCut)
 		// A differential that compared nothing proves nothing.
-		if compared < 60 || teamCompared < 30 || teamExcluding == 0 || nonEmpty < 20 {
-			t.Fatalf("differential compared %d cases (%d team-narrowed, %d excluding, %d non-empty): too few to stand for the rule", compared, teamCompared, teamExcluding, nonEmpty)
+		if compared < 60 || teamCompared < 30 || teamExcluding == 0 || nonEmpty < 20 || bothCut == 0 {
+			t.Fatalf("differential compared %d cases (%d team-narrowed, %d excluding, %d non-empty, %d cut by both): too few to stand for the rule", compared, teamCompared, teamExcluding, nonEmpty, bothCut)
 		}
 	})
 
