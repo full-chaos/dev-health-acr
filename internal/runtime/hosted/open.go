@@ -302,7 +302,7 @@ func open(ctx context.Context, request buildRequest) (*Runtime, error) {
 		EvidenceStoreFactory: clickhouse.factory, ClientIP: clientIP, UsageTelemetry: usageTelemetry,
 		WebAssertionReplays: webAssertionReplays, MCPHop: mcpHop,
 		Runtime: &api.RuntimeDependencies{
-			Credentials: postgres.credentials, Audit: postgres.audit, Entitlements: entitlement, PrincipalAccess: principalAccessReader(entitlement),
+			Credentials: postgres.credentials, CredentialLifecycle: postgres.lifecycleList, Audit: postgres.audit, Entitlements: entitlement, PrincipalAccess: principalAccessReader(entitlement),
 			Assembler: assembler,
 			Evidence:  clickhouse.evidence, Episodes: episodeCreator, ReadinessChecks: livenessChecks, DataStoreChecks: dataStoreChecks,
 			DeviceAuthorizations: postgres.devices, DeviceVerificationURL: request.config.DeviceVerificationURL,

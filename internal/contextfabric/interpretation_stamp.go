@@ -78,6 +78,18 @@ func BackfillStoredSynthesisSource(versions *VersionSet) bool {
 	return true
 }
 
+// RedeemsStructureOffers reports whether a stored result redeems the structure
+// offers its confirmed entries name, so a store writes their supersession claims
+// (CHAOS-12558). The input turn of a client synthesis holds no answer: it serves
+// the facts the caller's model writes from, and the call that carries the draft
+// replays the same receipts to write the answer. A claim from the input turn
+// vetoed that call as stale, so a caller that writes its own answer could not
+// redeem any offer. That turn is the one with a client source and no synthesis.
+// The answer turn claims, and a second, different redemption is still refused.
+func RedeemsStructureOffers(result InvestigationResult) bool {
+	return result.Versions.SynthesisSource != SynthesisSourceClient || result.Versions.SynthesisVersion != SynthesisVersionNotSynthesized
+}
+
 type interpretationStampKey struct{}
 
 // withInterpretationStamp always writes, so a zero stamp clears one a reused

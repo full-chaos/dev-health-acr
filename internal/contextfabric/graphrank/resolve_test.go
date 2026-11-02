@@ -806,8 +806,22 @@ func TestResolveSubjects_SearchQuestionOversizedQuestionStaysContractValid(t *te
 			t.Fatalf("MatchedTerms entry %q is %d chars, want <= 512 (contractsv1's matchedTermLength bound)", term, len(term))
 		}
 	}
-	if !containsString(candidate.MatchedTerms, questionProvenanceMarker) {
-		t.Fatalf("MatchedTerms = %v, want the bounded provenance marker %q present", candidate.MatchedTerms, questionProvenanceMarker)
+	// The marker works inside the resolver and matched_terms is served, so it
+	// stays behind (CHAOS-12468), and the question-only candidate has no term.
+	if containsString(candidate.MatchedTerms, questionProvenanceMarker) {
+		t.Fatalf("MatchedTerms = %v, the internal marker %q left the resolver", candidate.MatchedTerms, questionProvenanceMarker)
+	}
+}
+
+// The markers are reserved: a question term with a marker's text is never a term,
+// so no real term can merge into a marker's entry and be stripped or capped away.
+func TestAMarkerIsNeverASubjectTerm(t *testing.T) {
+	t.Parallel()
+	request := testRequest()
+	request.RequestedScope.SubjectHints = []contextfabric.SubjectHint{{Kind: contextfabric.SubjectProject, Label: censusProvenanceMarker}}
+	got := SubjectTerms(request, testInterpreted(questionProvenanceMarker, " "+censusProvenanceMarker+" ", "alpha"))
+	if len(got) != 1 || got[0] != "alpha" {
+		t.Fatalf("SubjectTerms = %v, want only the real term", got)
 	}
 }
 

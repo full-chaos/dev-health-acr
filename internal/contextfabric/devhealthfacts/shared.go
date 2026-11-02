@@ -1355,10 +1355,18 @@ import (
 // claim on a landscape fact carries area_breakdown or team_breakdown, with no
 // wip_max_30d (CHAOS-12533). An answer saved under v261 holds no landscape row.
 //
-// v262 -> v263: a ticket key of any tracker binds a handle when the caller holds
-// its prefix (CHAOS-12463). An answer saved under v262 answered such a question by
+// v262 -> v263: a pull request's label, an edge's fact and the clarification
+// prompt no longer show a raw canonical id (CHAOS-12468). An answer saved under
+// v262 can hold one.
+//
+// v263 -> v264: a hint of a kind the question does not ask for commits nothing
+// (CHAOS-12555). An answer saved under v263 can speak for the organization on a
+// question about a repository the request lost.
+//
+// v264 -> v265: a ticket key of any tracker binds a handle when the caller holds
+// its prefix (CHAOS-12463). An answer saved under v264 answered such a question by
 // search.
-const QueryVersion = "devhealthfacts.clickhouse.v263"
+const QueryVersion = "devhealthfacts.clickhouse.v265"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each

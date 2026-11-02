@@ -48,7 +48,7 @@ func walkNode(value interface{}) *node {
 	case *node:
 		return v
 	case map[string]interface{}:
-		return &node{Properties: normalizeProperties(v)}
+		return &node{Properties: nodeProperties(v)}
 	}
 	return nil
 }
@@ -60,7 +60,7 @@ func walkEdge(value interface{}) *edge {
 	case *edge:
 		return v
 	case map[string]interface{}:
-		return &edge{Properties: normalizeProperties(v)}
+		return &edge{Properties: edgeProperties(v)}
 	}
 	return nil
 }

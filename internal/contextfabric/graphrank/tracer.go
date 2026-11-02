@@ -541,10 +541,12 @@ func (t SlogResolutionTracer) Trace(event ResolutionTraceEvent) {
 			"exact_hit", event.PageHintExactHit,
 			"label_fallback", event.PageHintLabelFallback,
 			"unresolved", event.PageHintUnresolved,
+			"other_kind", event.PageHintOtherKind,
 			"search_fallback", event.PageHintSearchFallback,
 			"exact_hit_by_kind", event.PageHintExactHitByKind,
 			"label_fallback_by_kind", event.PageHintLabelFallbackByKind,
-			"unresolved_by_kind", event.PageHintUnresolvedByKind)
+			"unresolved_by_kind", event.PageHintUnresolvedByKind,
+			"other_kind_by_kind", event.PageHintOtherKindByKind)
 	case "anchor_offer":
 		// CHAOS-4210: unconditional, mirroring kind_offer's own "fires on
 		// EVERY resolution" discipline -- see

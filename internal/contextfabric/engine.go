@@ -2277,6 +2277,7 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 			confirmedNeedLedger.CandidateHintEvicted = true
 		}
 		graphRequest.RequestedScope.SubjectHints = append(hints, pick)
+		ctx = WithConfirmedCandidatePick(ctx, SubjectRef{Kind: pick.Kind, CanonicalID: pick.ID})
 	}
 
 	// CHAOS-3898 P1-1: Interpret sees ONLY the validated receipt subset,

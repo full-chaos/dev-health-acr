@@ -194,6 +194,13 @@
       "path": "/api/v1/auth/credentials/self/ack",
       "scope": "",
       "web_assertion": false
+    },
+    {
+      "method": "GET",
+      "pattern": "/internal/v1/credentials/lifecycle",
+      "path": "/internal/v1/credentials/lifecycle",
+      "scope": "",
+      "web_assertion": false
     }
   ]
 }
