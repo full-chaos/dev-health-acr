@@ -92,7 +92,8 @@ func TestVersionedModelContractsAreBoundToTheirContent(t *testing.T) {
 			// v34 -> v35: the frame, its subject_expression and the kind are required on the Anthropic wire; the prompt says every question carries them.
 			// v35 -> v36 (CHAOS-12595): the prompt says what each window_class means.
 			// v36 -> v37 (CHAOS-12632): one pull request named inside its repository keeps the repository as the subject term; two worked examples.
-			digest: "76c3826239ff1a884d7ca66fc2baaf4f8202cec1319b32e1cca404a3bb4fd47c",
+			// v37 -> v38 (CHAOS-12632): the same rule names GitLab merge requests; two more worked examples.
+			digest: "9844dd8bd46708ff3dc680e0381c9baa658461c1c943a0e669f7d6f7fde216c5",
 		},
 		{
 			name:    "synthesis system prompt",
