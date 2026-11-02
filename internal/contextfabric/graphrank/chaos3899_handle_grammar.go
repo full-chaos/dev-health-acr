@@ -180,8 +180,8 @@ type handleGrammarEntry struct {
 //   - work_item_repo_reference: "owner/repo#12", "group/project!7" -> work_item,
 //     Value is the whole reference. GitHub and GitLab store this form after the
 //     first colon of work_item_id, so a key of the form above can never reach
-//     them. The path and the marker do not occur in prose, so it needs no
-//     prefix read.
+//     them. A URL with a path and a fragment has the same shape, so a reference
+//     takes the same prefix read as a ticket key (bindQuestionHandles).
 //   - ci_run_id: "run 18234567", "CI run #18234567", "pipeline 18234567",
 //     "CI pipeline #18234567", "pipeline run 18234567" -> ci_pipeline_run,
 //     Value is the bound digits. The "pipeline"/"CI pipeline"/"pipeline

@@ -528,10 +528,11 @@ func aKeyWhosePrefixIsOnlyOutsideReadsLikeAWord(t *testing.T, build grantedItemW
 // repository and reach a restricted caller through a native pull request link.
 // GitHub and GitLab write their repository reference on a repository-owned row.
 //
-// For a restricted caller a repository-owned row is outside the work item census:
-// the census reads the library's link arm, and that arm takes repository-less rows
-// only (CHAOS-12456's ruling (a) set the arm; the gap is CHAOS-12561). So those two commit here for an organization-wide caller, and for a
-// restricted caller this pins only that their reference binds the handle.
+// For a restricted caller a repository-owned row is outside the work item census
+// and the prefix read alike: both read the library's link arm, and that arm takes
+// repository-less rows only (CHAOS-12561). So those two commit here for an
+// organization-wide caller, and for a restricted caller their reference reads like
+// a word: no handle, no round.
 func everyProviderKeyCommitsThroughTheGate(t *testing.T, build grantedItemWorldBuilder) {
 	cases := []struct {
 		provider      string
@@ -570,11 +571,14 @@ func everyProviderKeyCommitsThroughTheGate(t *testing.T, build grantedItemWorldB
 				}
 				turn := observeLinkTurn(t, world)
 				rounds := (&grantTracer{events: turn.trace}).stage("evidence_round")
+				if restricted && tc.repositoryRow {
+					if len(rounds) != 0 && rounds[0].ShadowHandleGrammarBound {
+						t.Fatalf("%s: the reference bound a handle the census cannot count (CHAOS-12561): %+v", key, rounds)
+					}
+					return
+				}
 				if len(rounds) != 1 || !rounds[0].ShadowHandleGrammarBound {
 					t.Fatalf("%s: evidence_round = %+v, want one round on the bound handle", key, rounds)
-				}
-				if restricted && tc.repositoryRow {
-					return
 				}
 				want := world.canonicalID(t, item)
 				if len(turn.resolution.Committed) != 1 || turn.resolution.Committed[0].CanonicalID != want {

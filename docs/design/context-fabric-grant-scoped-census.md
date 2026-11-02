@@ -286,9 +286,10 @@ under the same grant and the same link arm as the census, and reads one row.
 | `UTF-8` | no | no handle, as if the question named no ticket |
 | `OPS-1` outside the grant only | no | the same as `UTF-8` |
 
-A reference needs no read: its path and marker do not occur in prose. A read that
+A reference takes the same read, with its repository path and `#` or `!` as the
+prefix: a URL with a path and a fragment has a reference's shape. A read that
 cannot run (none wired, an error, a grant it cannot apply, more than 8 prefixes in
-one question) leaves the key unbound and logs
+one question) leaves the key unbound, is read once per prefix, and logs
 `graphrank.work_item_key_prefix_unread` at Warn, counts only. Measured on the
 local stack: 40 to 130 ms under a one- to five-repository grant, 4 to 8 ms with no
 grant.

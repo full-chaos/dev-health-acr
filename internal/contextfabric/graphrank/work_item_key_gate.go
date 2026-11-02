@@ -24,48 +24,74 @@ type WorkItemKeyPrefixOutcome struct {
 // starts with prefix (which ends in "-"), under the grant bound on ctx.
 type WorkItemKeyPrefixFunc func(ctx context.Context, orgID, prefix string) (WorkItemKeyPrefixOutcome, error)
 
-// bindQuestionHandles is the handles a turn reads. A pull request, a CI run and a
-// repository reference bind on their text. A ticket key's shape proves nothing:
-// UTF-8, GPT-5 and CVE-2026 have it. So a key counts only when the caller can
-// read a work item of that prefix (CHAOS-12463). Then OPS-99999 is a named ticket
-// the census can prove absent, and UTF-8 is a word, and neither takes the decisive
-// outcome from a pull request the same question names.
+// bindQuestionHandles is the handles a turn reads. A pull request and a CI run
+// bind on their text. A work item key's shape proves nothing: UTF-8, GPT-5 and
+// CVE-2026 have a ticket key's shape, and any URL with a path and a fragment has a
+// repository reference's. So a key counts only when the caller can read a work
+// item whose key starts with the same prefix: the ticket key's prefix with its
+// "-", or the reference's repository path with its "#" or "!" (CHAOS-12463). Then
+// OPS-99999 is a named ticket the census can prove absent, and UTF-8 is a word,
+// and neither takes the decisive outcome from a pull request the same question
+// names.
 //
 // The read runs under the same grant as the census, so what it shows a restricted
 // caller is inside its grant: a prefix that exists only outside it reads as a
-// word. A read that cannot run leaves the token unbound and is counted.
+// word. A read that cannot run leaves the key unbound and is counted, once per
+// prefix; a turn reads at most maxWorkItemKeyPrefixReads prefixes, failures
+// included.
 func bindQuestionHandles(ctx context.Context, principal storage.Principal, request contextfabric.InvestigationRequest, deps ResolveDeps) []BoundHandle {
 	bound := BindHandles(request.Question)
 	scoped := contextfabric.ScopeCensusToCaller(ctx, principal)
-	prefixes := map[string]bool{}
+	const (
+		prefixHeld = iota + 1
+		prefixNotHeld
+		prefixUnread
+	)
+	prefixes := map[string]int{}
 	event := ResolutionTraceEvent{RequestID: request.RequestID, Stage: "work_item_key_gate"}
 	kept := make([]BoundHandle, 0, len(bound))
 	for _, handle := range bound {
-		if handle.Grammar != workItemTicketKeyGrammar {
+		prefix, isKey := workItemKeyPrefix(handle)
+		if !isKey {
 			kept = append(kept, handle)
 			continue
 		}
 		event.WorkItemKeyTokens++
-		prefix := handle.Value[:strings.LastIndexByte(handle.Value, '-')+1]
-		seen, read := prefixes[prefix]
+		state, read := prefixes[prefix]
 		if !read {
-			var ok bool
-			seen, ok = readWorkItemKeyPrefix(scoped, principal, prefix, deps, len(prefixes))
-			if !ok {
-				event.WorkItemKeysUnread++
-				continue
+			state = prefixNotHeld
+			switch seen, ok := readWorkItemKeyPrefix(scoped, principal, prefix, deps, len(prefixes)); {
+			case !ok:
+				state = prefixUnread
+			case seen:
+				state = prefixHeld
 			}
-			prefixes[prefix] = seen
+			prefixes[prefix] = state
 		}
-		if seen {
+		switch state {
+		case prefixHeld:
 			event.WorkItemKeysHeld++
 			kept = append(kept, handle)
+		case prefixUnread:
+			event.WorkItemKeysUnread++
 		}
 	}
 	if event.WorkItemKeyTokens > 0 && deps.ResolutionTracer != nil {
 		deps.ResolutionTracer.Trace(event)
 	}
 	return kept
+}
+
+// workItemKeyPrefix is the prefix a work item key shares with its tracker's other
+// keys, or false for a handle of another grammar.
+func workItemKeyPrefix(handle BoundHandle) (string, bool) {
+	switch handle.Grammar {
+	case workItemTicketKeyGrammar:
+		return handle.Value[:strings.LastIndexByte(handle.Value, '-')+1], true
+	case workItemRepoReferenceGrammar:
+		return handle.Value[:strings.LastIndexAny(handle.Value, "#!")+1], true
+	}
+	return "", false
 }
 
 func readWorkItemKeyPrefix(ctx context.Context, principal storage.Principal, prefix string, deps ResolveDeps, reads int) (seen, ok bool) {

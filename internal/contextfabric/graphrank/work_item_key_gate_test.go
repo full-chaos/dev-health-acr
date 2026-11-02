@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -106,7 +107,7 @@ func grammarsOf(bound []BoundHandle) string {
 // of the same shape does not, and does not take the outcome from a pull request.
 func TestAKeyCountsOnlyWhenTheCallerHoldsItsPrefix(t *testing.T) {
 	t.Parallel()
-	reads := &prefixReads{held: map[string]bool{"OPS-": true, "CHAOS-": true}}
+	reads := &prefixReads{held: map[string]bool{"OPS-": true, "CHAOS-": true, "acme/widget#": true}}
 	for question, want := range map[string]string{
 		"what is the status of OPS-204?":     "work_item_ticket_key:OPS-204",
 		"what is the status of OPS-99999?":   "work_item_ticket_key:OPS-99999",
@@ -118,6 +119,9 @@ func TestAKeyCountsOnlyWhenTheCallerHoldsItsPrefix(t *testing.T) {
 		"What did CVE-2026 cost us?":         "",
 		"Does PR 532 fix the UTF-8 bug?":     "pull_request_number:532",
 		"what blocks acme/widget#7?":         "work_item_repo_reference:acme/widget#7",
+		"what blocks acme/other#7?":          "",
+		"see docs.example.com/acme/widget#7": "",
+		"see https://docs.example.com/a/b#7": "",
 		"Does OPS-1 block CHAOS-2 or UTF-8?": "work_item_ticket_key:OPS-1 work_item_ticket_key:CHAOS-2",
 	} {
 		if got := grammarsOf(gateHandles(t, storage.Principal{OrgID: "org_1"}, question, reads, nil)); got != want {
@@ -143,6 +147,26 @@ func TestAPrefixIsReadOncePerTurnAndWithinTheBound(t *testing.T) {
 	bound := gateHandles(t, storage.Principal{OrgID: "org_1"}, strings.Join(question, " "), many, nil)
 	if len(many.calls) != maxWorkItemKeyPrefixReads || len(bound) != maxWorkItemKeyPrefixReads {
 		t.Fatalf("reads = %d, bound = %d, want %d of each", len(many.calls), len(bound), maxWorkItemKeyPrefixReads)
+	}
+}
+
+// A failed read is read once per prefix like any other, and counts toward the
+// bound, so an outage cannot multiply the reads one question makes.
+func TestAFailedPrefixReadIsNotRetriedInTheTurn(t *testing.T) {
+	t.Parallel()
+	reads := &prefixReads{err: errors.New("down")}
+	var question []string
+	for i := 1; i <= 9; i++ {
+		question = append(question, "OPS-"+strconv.Itoa(i))
+	}
+	for i := 0; i < 12; i++ {
+		question = append(question, string(rune('A'+i))+"-1")
+	}
+	if bound := gateHandles(t, storage.Principal{OrgID: "org_1"}, strings.Join(question, " "), reads, nil); len(bound) != 0 {
+		t.Fatalf("bound %v, want nothing", bound)
+	}
+	if len(reads.calls) != maxWorkItemKeyPrefixReads {
+		t.Fatalf("reads = %v, want %d: one per prefix, failures counted", reads.calls, maxWorkItemKeyPrefixReads)
 	}
 }
 
