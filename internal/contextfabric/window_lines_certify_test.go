@@ -254,6 +254,35 @@ func TestWindowClassificationLineCertifiesEveryProducerValue(t *testing.T) {
 	certifyRefused(t, buf.Bytes(), eventspec.WindowClassification, "an unknown basis")
 }
 
+// TestInferredWindowGateLineCertifiesEveryProducerValue (CHAOS-4451): every
+// decision and basis the real decision produces certifies against the
+// declaration, and together they cover both vocabularies.
+func TestInferredWindowGateLineCertifiesEveryProducerValue(t *testing.T) {
+	t.Parallel()
+	keys := []string{"time", "level", "msg", "org_id", "decision", "basis", "request_id"}
+	seenDecision, seenBasis := map[string]bool{}, map[string]bool{}
+	for _, beyond := range []bool{false, true} {
+		for _, unavailable := range []bool{false, true} {
+			for _, series := range []bool{false, true} {
+				decision, basis := contextfabric.DecideInferredWindowGateForTest(beyond, unavailable, series)
+				var buf bytes.Buffer
+				sink, ctx := answerLineSink(&buf, slog.LevelInfo)
+				sink.RecordInferredWindowGate(ctx, principalOrg1, decision, basis)
+				pinKeys(t, bytes.NewBuffer(buf.Bytes()), keys, 1)
+				line := certifyRequestLine(t, buf.Bytes(), eventspec.InferredWindowGate, map[string]any{"decision": string(decision), "basis": string(basis)})
+				seenDecision[line["decision"].(string)] = true
+				seenBasis[line["basis"].(string)] = true
+			}
+		}
+	}
+	sameMembers(t, "gate decisions", keysOf(seenDecision), contextfabric.InferredWindowGateDecisionVocabulary())
+	sameMembers(t, "gate bases", keysOf(seenBasis), contextfabric.InferredWindowGateBasisVocabulary())
+	var buf bytes.Buffer
+	sink, ctx := answerLineSink(&buf, slog.LevelInfo)
+	sink.RecordInferredWindowGate(ctx, principalOrg1, contextfabric.InferredWindowGateAnswered, "future_basis")
+	certifyRefused(t, buf.Bytes(), eventspec.InferredWindowGate, "an unknown basis")
+}
+
 // TestInterpretationTermsLineCertifiesEveryProducerValue (CHAOS-12632): the
 // line from the real composer, with the graph package's real handle grammar
 // as the probe, certifies for every handle_bound value and both slug values,
