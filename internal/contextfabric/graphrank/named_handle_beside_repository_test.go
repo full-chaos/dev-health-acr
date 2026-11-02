@@ -96,6 +96,8 @@ type besideWorld struct {
 	edit      func(*contextfabric.InvestigationRequest)
 	// keyPrefix replaces the prefix read that holds every ticket key.
 	keyPrefix WorkItemKeyPrefixFunc
+	// link sets the keyed link read (CHAOS-12505); nil leaves none wired.
+	link func(*ResolveDeps)
 }
 
 type besideTurn struct {
@@ -126,6 +128,9 @@ func runBeside(t *testing.T, w besideWorld) besideTurn {
 	deps.CensusFunc = w.census.census
 	if w.keyPrefix != nil {
 		deps.WorkItemKeyPrefix = w.keyPrefix
+	}
+	if w.link != nil {
+		w.link(&deps)
 	}
 	deps.HandleGrammarChecker = func(kind contextfabric.SubjectKind, patternID, value string) (string, bool) {
 		if !ValidateHandleGrammar(kind, patternID, value) {

@@ -254,6 +254,17 @@ func seedScopedOrganization(t *testing.T, ctx context.Context, direct clickhouse
 	}
 	// A GitHub project holding one issue of acme/other.
 	exec("project", `INSERT INTO projects (id, org_id, provider, project_key, name, is_active, state, url, updated_at) VALUES (?, ?, 'github', NULL, 'Checkout', 1, 'open', '', ?)`, "ghprojv2:PVT_checkout", s.orgID, now)
+	// CHAOS-12505: three teams for the requested team narrowing. TSVC owns
+	// acme/svc, TPROJ owns the project, TNONE owns nothing; acme/other and
+	// acme/gl have no owner.
+	for _, team := range []string{"TSVC", "TPROJ", "TNONE"} {
+		exec("team "+team, `INSERT INTO teams (id, name, description, updated_at, last_synced, org_id, provider, native_team_key, project_keys, is_active) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			team, "team "+team, "", created, created, s.orgID, "linear", team, []string{}, uint8(1))
+	}
+	exec("ownership acme/svc", `INSERT INTO team_repo_ownership (org_id, provider, team_id, repo_id, repo_full_name, match_type, source, is_primary, specificity, priority, valid_from, valid_to, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		s.orgID, "github", "TSVC", s.repoIDs["acme/svc"], "acme/svc", "exact", "native", uint8(1), uint16(1), int32(1), created, nil, created)
+	exec("ownership project", `INSERT INTO team_project_ownership (org_id, provider, team_id, project_id, project_key, source, valid_from, valid_to, updated_at) VALUES (?,?,?,?,?,?,?,?,?)`,
+		s.orgID, "github", "TPROJ", "ghprojv2:PVT_checkout", nil, "native", created, nil, created)
 
 	type item struct{ id, slug, provider, itemType, project, title string }
 	items := []item{
@@ -265,6 +276,7 @@ func seedScopedOrganization(t *testing.T, ctx context.Context, direct clickhouse
 		{"jira:CHAOS-14", "", "jira", "story", "", "Split the job again"},                         //
 		{"gh:acme/other#5", "acme/other", "github", "issue", "ghprojv2:PVT_checkout", "Checkout"}, // own repository acme/other, in the project, native to acme/svc
 		{"gh:acme/svc#6", "acme/svc", "github", "issue", "", "Heuristic neighbour"},               // own repository acme/svc, heuristic to acme/svc
+		{"gitlab:acme/gl#7", "acme/gl", "gitlab", "issue", "", "Bump the runner"},                 // own repository acme/gl, native to acme/svc
 	}
 	// Fillers: work items the search for any of the keys finds, so the
 	// resolution stalls (more hits than the search returns) and the census
@@ -295,6 +307,7 @@ func seedScopedOrganization(t *testing.T, ctx context.Context, direct clickhouse
 		{"jira:CHAOS-14", "acme/svc", 2, "native"},
 		{"gh:acme/other#5", "acme/svc", 1, "native"},
 		{"gh:acme/svc#6", "acme/svc", 3, "heuristic"},
+		{"gitlab:acme/gl#7", "acme/svc", 2, "native"},
 	}
 	for i, l := range links {
 		exec(fmt.Sprintf("link %d", i), `INSERT INTO work_graph_issue_pr (repo_id, work_item_id, pr_number, confidence, provenance, evidence, last_synced, org_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
@@ -431,14 +444,34 @@ func TestTheScopedCensusAndTheDeploymentWalkFollowTheLinkOnRealStores(t *testing
 		}
 	})
 
-	t.Run("census: a cut link walk is not a census", func(t *testing.T) {
-		// acme/* names more repositories than one scope walks.
-		committed, rounds := resolve(t, "CHAOS-10", org, []string{"acme/*"})
-		if len(committed) != 0 {
-			t.Fatalf("committed %v under a cut walk, want none", committed)
-		}
-		if got := reasons(rounds); !strings.Contains(got, string(graphrank.ReasonCensusError)) {
-			t.Fatalf("rounds %s, want the census reported incomplete (%s)", got, graphrank.ReasonCensusError)
+	// CHAOS-12505: the census is scoped by a read keyed on its satisfiers, so a
+	// scope the population walk would cut is read whole. acme/* names more
+	// repositories than one walk takes (maxLinkScopedRepositories); before the
+	// change this row ended in census_error with nothing committed.
+	t.Run("census: a scope past the walk's bound is read keyed on the satisfiers", func(t *testing.T) {
+		for _, c := range []struct {
+			name      string
+			principal storage.Principal
+			want      []string
+		}{
+			{"organization-wide", org, []string{"linear:CHAOS-10"}},
+			{"restricted, granted the pull request's repository", storage.Principal{OrgID: s.orgID, Subject: "u", CredentialID: "c", RepositoryScopes: []string{"acme/svc"}}, []string{"linear:CHAOS-10"}},
+			{"restricted, granted another repository only", storage.Principal{OrgID: s.orgID, Subject: "u", CredentialID: "c", RepositoryScopes: []string{"acme/other"}}, nil},
+		} {
+			committed, rounds := resolve(t, "CHAOS-10", c.principal, []string{"acme/*"})
+			want := make([]string, 0, len(c.want))
+			for _, id := range c.want {
+				want = append(want, s.workItem(t, id))
+			}
+			if strings.Join(committed, ",") != strings.Join(want, ",") {
+				t.Errorf("%s: committed %v under acme/*, want %v (rounds %s)", c.name, committed, want, reasons(rounds))
+			}
+			if len(rounds) == 0 {
+				t.Errorf("%s: no evidence round ran: the census was not measured", c.name)
+			}
+			if c.want != nil && strings.Contains(reasons(rounds), string(graphrank.ReasonCensusError)) {
+				t.Errorf("%s: rounds %s, want no census error", c.name, reasons(rounds))
+			}
 		}
 	})
 
@@ -529,6 +562,116 @@ func TestTheScopedCensusAndTheDeploymentWalkFollowTheLinkOnRealStores(t *testing
 			if read.Census.AuthorizedPopulation != len(members) || !read.Census.PopulationComplete {
 				t.Errorf("grants %v: census %d (complete %t), walk members %d: want the census to be the count of the members", principal.RepositoryScopes, read.Census.AuthorizedPopulation, read.Census.PopulationComplete, len(members))
 			}
+		}
+	})
+
+	// CHAOS-12505, the differential oracle: the keyed link read and the
+	// repository walk are two readers of one rule, so wherever the walk is not
+	// cut, the keyed read's answer for any ids is the walk's members intersected
+	// with those ids, tiers included: every tier, every provider (Linear, Jira,
+	// GitHub and GitLab issues; GitHub pull requests and GitLab merge requests),
+	// every team narrowing, organization-wide, repository-restricted and
+	// project-only callers.
+	t.Run("the keyed link read is the repository walk's members intersected with the ids", func(t *testing.T) {
+		names := make([]string, 0, len(s.items))
+		for id := range s.items {
+			names = append(names, id)
+		}
+		sort.Strings(names)
+		var all []string
+		for _, id := range names {
+			all = append(all, s.workItem(t, id))
+		}
+		all = append(all, "work_item.v2:"+scopedZeroRepo+":linear:CHAOS-99999")
+		principals := []storage.Principal{
+			org,
+			{OrgID: s.orgID, Subject: "u", CredentialID: "c", RepositoryScopes: []string{"acme/svc"}},
+			{OrgID: s.orgID, Subject: "u", CredentialID: "c", RepositoryScopes: []string{"acme/svc", "acme/other"}},
+			{OrgID: s.orgID, Subject: "u", CredentialID: "c", RepositoryScopes: []string{"acme/gl"}},
+			{OrgID: s.orgID, Subject: "u", CredentialID: "c", RepositoryScopes: []string{"acme/other"}},
+			{OrgID: s.orgID, Subject: "u", CredentialID: "c", ProjectScopes: []string{s.project.CanonicalID}},
+		}
+		scopes := [][]string{{"acme/svc"}, {"acme/other"}, {"acme/gl"}, {"acme/svc", "acme/gl"}, {"ACME/Svc"}}
+		teams := [][]string{nil, {"TSVC"}, {"TPROJ"}, {"TNONE"}}
+		render := func(tiers map[string]string) string {
+			out := make([]string, 0, len(tiers))
+			for id, tier := range tiers {
+				out = append(out, id+"="+tier)
+			}
+			sort.Strings(out)
+			return strings.Join(out, ",")
+		}
+		compared, teamCompared, teamExcluding, nonEmpty, bothCut := 0, 0, 0, 0, 0
+		for _, principal := range principals {
+			for _, slugs := range scopes {
+				for _, teamIDs := range teams {
+					scope := contextfabric.RequestedScope{RepositorySlugs: slugs, TeamIDs: teamIDs}
+					label := fmt.Sprintf("grants %v projects %v scope %v teams %v", principal.RepositoryScopes, principal.ProjectScopes, slugs, teamIDs)
+					reachCtx, finish, err := adapter.withProjectReach(ctx, key, principal)
+					if err != nil {
+						t.Fatal(err)
+					}
+					walked, walkComplete, err := adapter.linkScopedIssues(reachCtx, key, principal, scope, contextfabric.WorkItemMembershipCensusLimit)
+					if err != nil {
+						t.Fatalf("%s: walk: %v", label, err)
+					}
+					keyed, keyedComplete, err := adapter.linkScopedWorkItemsOf(reachCtx, key, principal, scope, all)
+					if err != nil {
+						t.Fatalf("%s: keyed read: %v", label, err)
+					}
+					if !walkComplete {
+						// Every scope here is under the walk's bounds, so only a team
+						// narrowing it could not decide cuts it, and the ids are every
+						// seeded item: the keyed read meets the same undecided item and
+						// must be cut too, never a smaller answer.
+						if keyedComplete {
+							t.Errorf("%s: the walk is cut and the keyed read answered %q as complete", label, render(keyed))
+						}
+						bothCut++
+						finish()
+						continue
+					}
+					want := map[string]string{}
+					for _, id := range all {
+						if tier, ok := walked[id]; ok {
+							want[id] = tier
+						}
+					}
+					if !keyedComplete || render(keyed) != render(want) {
+						t.Errorf("%s: keyed read %q (complete %t), want the walk's members intersected with the ids %q", label, render(keyed), keyedComplete, render(want))
+					}
+					// Each id alone: the answer for one id does not depend on the others.
+					for _, id := range all {
+						one, oneComplete, err := adapter.linkScopedWorkItemsOf(reachCtx, key, principal, scope, []string{id})
+						if err != nil || !oneComplete {
+							t.Fatalf("%s: keyed read of %s: complete %t err %v", label, id, oneComplete, err)
+						}
+						if one[id] != want[id] || len(one) > 1 {
+							t.Errorf("%s: keyed read of %s alone %v, want %q", label, id, one, want[id])
+						}
+					}
+					finish()
+					compared++
+					if len(want) > 0 {
+						nonEmpty++
+					}
+					if teamIDs != nil {
+						teamCompared++
+						unnarrowed, _, err := adapter.linkScopedWorkItemsOf(reachCtx, key, principal, contextfabric.RequestedScope{RepositorySlugs: slugs}, all)
+						if err != nil {
+							t.Fatal(err)
+						}
+						if len(unnarrowed) > len(keyed) {
+							teamExcluding++
+						}
+					}
+				}
+			}
+		}
+		t.Logf("differential: %d cases compared (%d team-narrowed, %d where the team narrowing excluded an item, %d non-empty), %d cut by both", compared, teamCompared, teamExcluding, nonEmpty, bothCut)
+		// A differential that compared nothing proves nothing.
+		if compared < 60 || teamCompared < 30 || teamExcluding == 0 || nonEmpty < 20 || bothCut == 0 {
+			t.Fatalf("differential compared %d cases (%d team-narrowed, %d excluding, %d non-empty, %d cut by both): too few to stand for the rule", compared, teamCompared, teamExcluding, nonEmpty, bothCut)
 		}
 	})
 

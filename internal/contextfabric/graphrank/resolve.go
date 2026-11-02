@@ -539,12 +539,13 @@ type ResolveDeps struct {
 	// so an item it did not prove is unknown, not unlinked, whatever committed.
 	// Nil means no such read.
 	WorkItemLinksUnread func() bool
-	// LinkScopedWorkItems returns the work items in a requested repository
-	// scope: the issues the repository-to-issue walk of the entity tree
-	// reaches from each repository the scope names. complete is false when
-	// the walk was cut. nil: a work-item census under a requested repository
-	// scope cannot be read, and the round says so (census incomplete).
-	LinkScopedWorkItems func(ctx context.Context, scope contextfabric.RequestedScope) (tiers map[string]string, complete bool, err error)
+	// LinkScopedWorkItemsOf returns, of ids, the work items in a requested
+	// repository scope, each with the strongest tier of its admitted links: a
+	// read keyed on the ids (CHAOS-12505), decided by the repository walk's own
+	// rule. complete is false when the read was cut. nil: a work-item census
+	// under a requested repository scope cannot be read, and the round says so
+	// (census incomplete).
+	LinkScopedWorkItemsOf func(ctx context.Context, scope contextfabric.RequestedScope, ids []string) (tiers map[string]string, complete bool, err error)
 	// TeamNarrowing decides subjects under the request's team narrowing by the
 	// ownership reach rule (CHAOS-12346; team_narrowing_resolution.go). nil
 	// when the request narrows by no team, or the backend does not wire it:
@@ -4609,6 +4610,7 @@ func resolveSubjects(ctx context.Context, principal storage.Principal, request c
 	}
 	resolution.OutsideRequestedRepositories = len(deps.outsideRequested)
 	resolution.WorkItemLinkLimitation = workItemLinkLimitation(principal, request, deps, handleRound, resolution)
+	resolution.WorkItemLinkScopeUnread = handleRound.linkScopeUnread && !committedWorkItem(resolution)
 	return resolution, offerMaterial, nil
 }
 
@@ -4985,8 +4987,8 @@ func runShadowEvidenceRoundForResolution(ctx context.Context, principal storage.
 			}
 		}
 	}
-	// One link walk per round: the work-item census under a requested
-	// repository scope and its cross-check read the same population.
+	// One keyed link read per round and satisfier: the work-item census under a
+	// requested repository scope and its cross-check share what it decided.
 	var workItemScope *linkScope
 	if callerNarrowingApplies(principal, request, deps) {
 		workItemScope = newLinkScope(deps, request.RequestedScope)
@@ -5621,9 +5623,9 @@ func callerCensusRepositories(principal storage.Principal, request contextfabric
 // that narrows by repository (callerNarrowingApplies), and nil otherwise.
 // AuthorizedAttributes reads both the principal's grant and the request.
 //
-// A work item is inside the narrowing when the scope's link walk reaches it
-// and its node passes AuthorizedThroughLink; every other kind when its node
-// passes AuthorizedAttributes. A work item with no walk to read is undecided.
+// A work item is inside the narrowing when the scope's keyed link read admits
+// it and its node passes AuthorizedThroughLink; every other kind when its node
+// passes AuthorizedAttributes. A work item with no read is undecided.
 func callerNarrowingSatisfierFilter(principal storage.Principal, request contextfabric.InvestigationRequest, deps ResolveDeps, workItemScope *linkScope) SatisfierNarrower {
 	if !callerNarrowingApplies(principal, request, deps) {
 		return nil
@@ -5631,7 +5633,7 @@ func callerNarrowingSatisfierFilter(principal storage.Principal, request context
 	return func(ctx context.Context, kind CensusKind, canonicalIDs []string) ([]string, bool) {
 		var linked map[string]string
 		if kind == contextfabric.SubjectWorkItem {
-			members, err := workItemScope.population(ctx)
+			members, err := workItemScope.linked(ctx, canonicalIDs)
 			if err != nil {
 				return nil, false
 			}
