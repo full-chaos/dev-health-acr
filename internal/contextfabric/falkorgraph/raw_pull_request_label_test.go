@@ -25,6 +25,7 @@ func TestAReadNeverServesARawPullRequestID(t *testing.T) {
 		"PR #999 review belongs to pull request " + id: "PR #999 review belongs to pull request PR #5063",
 		"gh:acme/w#7 links pull request PR #5063":      "gh:acme/w#7 links pull request PR #5063",
 		"see pull_request:notanumber":                  "see pull_request:notanumber",
+		"see pull_request:r:12abc":                     "see pull_request:r:12abc",
 	} {
 		edge := map[string]interface{}{propFact: fact}
 		if got := edgeProperties(edge)[propFact]; got != want {
@@ -44,6 +45,7 @@ func TestAReadLeavesEveryOtherLabelAlone(t *testing.T) {
 		"title":      {propKind: string(contractsv1.ContextFabricSubjectPullRequest), propCanonicalID: id, propLabel: "ci: one canary leg"},
 		"short form": {propKind: string(contractsv1.ContextFabricSubjectPullRequest), propCanonicalID: id, propLabel: "PR #5063"},
 		"other kind": {propKind: string(contractsv1.ContextFabricSubjectWorkItem), propCanonicalID: id, propLabel: id},
+		"other id":   {propKind: string(contractsv1.ContextFabricSubjectPullRequest), propCanonicalID: id, propLabel: "pull_request:r:9"},
 		"no number":  {propKind: string(contractsv1.ContextFabricSubjectPullRequest), propCanonicalID: "pull_request:r:x", propLabel: "pull_request:r:x"},
 		"no label":   {propKind: string(contractsv1.ContextFabricSubjectPullRequest), propCanonicalID: id},
 	} {
