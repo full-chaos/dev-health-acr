@@ -2019,6 +2019,10 @@ type ResolutionTraceEvent struct {
 	PageHintExactHitByKind      map[string]int
 	PageHintLabelFallbackByKind map[string]int
 	PageHintUnresolvedByKind    map[string]int
+	// PageHintOtherKindByKind counts the page hints dropped because the question
+	// asks for another kind (CHAOS-12555), by the hint's own kind.
+	PageHintOtherKind       int
+	PageHintOtherKindByKind map[string]int
 }
 
 // traceTermHash is the ONE place a search term is ever hashed for
@@ -2825,6 +2829,7 @@ func resolveSubjects(ctx context.Context, principal storage.Principal, request c
 			return resolution, contextfabric.StructureOfferMaterial{}, nil
 		}
 	}
+	request, hintsOfAnotherKind := withoutHintsOfAnotherKind(request, frame, confirmedKind)
 	terms := SubjectTerms(request, interpreted)
 	// offersOnly (CHAOS-4234): the class-default window gate's offers-only
 	// mode -- every commit MECHANISM below that only exists to reach a
@@ -2885,7 +2890,7 @@ func resolveSubjects(ctx context.Context, principal storage.Principal, request c
 	// returns above this point (organization, context, the comparison
 	// dispatch) never reach the loop and write none. The tracer is read now:
 	// the deferred call reports to the tracer this call was given.
-	pageHints := newPageHintLookupTally(request)
+	pageHints := newPageHintLookupTally(request, hintsOfAnotherKind)
 	defer pageHints.emit(deps.ResolutionTracer)
 	for hintIndex, hint := range request.RequestedScope.SubjectHints {
 		if strings.TrimSpace(hint.ID) == "" || hint.Kind == "" {

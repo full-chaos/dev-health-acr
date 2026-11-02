@@ -23,7 +23,9 @@ import (
 //   - unresolved: it was not found, and either the term search did not
 //     complete (the caller-hint short circuit, an inactive-team answer, the
 //     identity-question exit, an error before or during the search) or it has
-//     no label.
+//     no label;
+//   - other_kind: the question asks for another kind, so the hint was dropped
+//     before the loop (CHAOS-12555).
 //
 // A hint the loop never looked up (no id: web sends none for a key whose id
 // would exceed the producer's byte bound) is not an exact hit, so it takes one
@@ -33,6 +35,7 @@ type pageHintLookupTally struct {
 	hints          []pageHintOutcome
 	byIndex        map[int]int
 	searchFallback bool
+	otherKind      map[string]int
 }
 
 type pageHintOutcome struct {
@@ -43,8 +46,13 @@ type pageHintOutcome struct {
 
 // newPageHintLookupTally records the request's page hints by their position in
 // RequestedScope.SubjectHints, so the hint loop can mark each one it finds.
-func newPageHintLookupTally(request contextfabric.InvestigationRequest) *pageHintLookupTally {
-	tally := &pageHintLookupTally{requestID: request.RequestID, byIndex: map[int]int{}}
+func newPageHintLookupTally(request contextfabric.InvestigationRequest, dropped []contextfabric.SubjectHint) *pageHintLookupTally {
+	tally := &pageHintLookupTally{requestID: request.RequestID, byIndex: map[int]int{}, otherKind: map[string]int{}}
+	for _, hint := range dropped {
+		if hint.Source == hintsource.AskDevPageContext {
+			tally.otherKind[string(hint.Kind)]++
+		}
+	}
 	for index, hint := range request.RequestedScope.SubjectHints {
 		if hint.Source != hintsource.AskDevPageContext {
 			continue
@@ -70,13 +78,18 @@ func (t *pageHintLookupTally) searchFallbackRan() { t.searchFallback = true }
 // event folds the tally into the one page_hint_lookup event, or reports false
 // when the request carries no page hint.
 func (t *pageHintLookupTally) event() (ResolutionTraceEvent, bool) {
-	if len(t.hints) == 0 {
+	if len(t.hints) == 0 && len(t.otherKind) == 0 {
 		return ResolutionTraceEvent{}, false
 	}
 	event := ResolutionTraceEvent{
 		RequestID: t.requestID, Stage: "page_hint_lookup",
 		PageHintCount: len(t.hints), PageHintSearchFallback: t.searchFallback,
 		PageHintExactHitByKind: map[string]int{}, PageHintLabelFallbackByKind: map[string]int{}, PageHintUnresolvedByKind: map[string]int{},
+		PageHintOtherKindByKind: t.otherKind,
+	}
+	for _, count := range t.otherKind {
+		event.PageHintCount += count
+		event.PageHintOtherKind += count
 	}
 	for _, hint := range t.hints {
 		switch {

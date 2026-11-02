@@ -12154,10 +12154,12 @@ type PageHintLookupFields struct {
 	ExactHit            int
 	LabelFallback       int
 	Unresolved          int
+	OtherKind           int
 	SearchFallback      bool
 	ExactHitByKind      map[string]int
 	LabelFallbackByKind map[string]int
 	UnresolvedByKind    map[string]int
+	OtherKindByKind     map[string]int
 	// constructed (CHAOS-5516 r1 fix): an UNEXPORTED marker, generated on
 	// every PageHintLookupFields uniformly, set ONLY by NewPageHintLookupFields below. A caller
 	// outside this package cannot set an unexported field via a composite
@@ -12171,17 +12173,19 @@ type PageHintLookupFields struct {
 
 // NewPageHintLookupFields is the generated constructor for PageHintLookupFields -- every
 // field PageHintLookup.Fields declares is a required parameter.
-func NewPageHintLookupFields(requestID string, pageHints int, exactHit int, labelFallback int, unresolved int, searchFallback bool, exactHitByKind map[string]int, labelFallbackByKind map[string]int, unresolvedByKind map[string]int) PageHintLookupFields {
+func NewPageHintLookupFields(requestID string, pageHints int, exactHit int, labelFallback int, unresolved int, otherKind int, searchFallback bool, exactHitByKind map[string]int, labelFallbackByKind map[string]int, unresolvedByKind map[string]int, otherKindByKind map[string]int) PageHintLookupFields {
 	return PageHintLookupFields{
 		RequestID:           requestID,
 		PageHints:           pageHints,
 		ExactHit:            exactHit,
 		LabelFallback:       labelFallback,
 		Unresolved:          unresolved,
+		OtherKind:           otherKind,
 		SearchFallback:      searchFallback,
 		ExactHitByKind:      exactHitByKind,
 		LabelFallbackByKind: labelFallbackByKind,
 		UnresolvedByKind:    unresolvedByKind,
+		OtherKindByKind:     otherKindByKind,
 		constructed:         true,
 	}
 }
@@ -12205,10 +12209,12 @@ func (f PageHintLookupFields) SlogArgs() []any {
 		"exact_hit", f.ExactHit,
 		"label_fallback", f.LabelFallback,
 		"unresolved", f.Unresolved,
+		"other_kind", f.OtherKind,
 		"search_fallback", f.SearchFallback,
 		"exact_hit_by_kind", f.ExactHitByKind,
 		"label_fallback_by_kind", f.LabelFallbackByKind,
 		"unresolved_by_kind", f.UnresolvedByKind,
+		"other_kind_by_kind", f.OtherKindByKind,
 	}
 }
 
