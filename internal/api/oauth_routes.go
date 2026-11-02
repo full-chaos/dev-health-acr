@@ -622,11 +622,15 @@ func (a *App) handleOAuthFirstPartyAuthorize(w http.ResponseWriter, r *http.Requ
 		a.emitOAuthStep(r, oauthvocab.StepAuthorize, oauthvocab.OutcomeInvalidRequest, "", http.StatusBadRequest)
 		return
 	}
-	if !a.oauth.IsBrowserClient(request.ClientID) {
+	// The configured browser client's own id replaces the body's, so nothing
+	// the caller sent can name another client to the authorize below.
+	clientID, browser := a.oauth.BrowserClientID(request.ClientID)
+	if !browser {
 		a.renderOAuthProblem(w, r, http.StatusBadRequest, "This authorization route serves the first-party browser client only.")
 		a.emitOAuthStep(r, oauthvocab.StepAuthorize, oauthvocab.OutcomeInvalidRequest, "", http.StatusBadRequest)
 		return
 	}
+	request.ClientID = clientID
 	user := firstPartyAuthorizeUserKey(principal)
 	limiter := a.runtime.DeviceAuthorizationLimiter
 	if a.oauthRateLimited(w, r, oauthvocab.StepAuthorize, a.oauthLimitKey(r, request.ClientID), func(client string) DeviceAuthorizationLimitDecision {
