@@ -69,6 +69,12 @@ func withReaderSubjectText(result InvestigationResult) InvestigationResult {
 	return result
 }
 
+// ReaderSubjectText is withReaderSubjectText for a route that projects the answer
+// itself (the unstamped projection tier), so no serve tier shows a raw id.
+func ReaderSubjectText(result InvestigationResult) InvestigationResult {
+	return withReaderSubjectText(result)
+}
+
 // readerDriverTitle repairs a graph driver's title, which graphrank composes as the
 // relationship's words, ": " and the To label (graphrank.relationTitle). Only that
 // whole composition changes: the relationship's own title words, ": " and the To
