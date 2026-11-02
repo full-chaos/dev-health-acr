@@ -145,8 +145,13 @@ func TestAStatedWindowBoundsEveryDatedRead(t *testing.T) {
 				}
 				return result
 			}
-			if fresh := run(read.fresh); len(fresh.Facts) == 0 {
+			fresh := run(read.fresh)
+			if len(fresh.Facts) == 0 {
 				t.Errorf("a subject with a row inside the window lost its fact: state %s, reason %q", fresh.State, fresh.Reason)
+			}
+			// A hotspot fact exists with no run at all, so only its run proves the read.
+			if read.kind == contextfabric.FactFileHotspots && len(fresh.Facts) > 0 && fresh.Facts[0].Fields["latest_run_day"].String == nil {
+				t.Errorf("the fresh repository's hotspot run was not read: %+v", fresh.Facts[0].Fields)
 			}
 			stale := run(read.stale)
 			// A repository's hotspot fact always states its basis, and with no
@@ -228,6 +233,33 @@ func TestAStatedWindowKeepsTodayAndReadsThePast(t *testing.T) {
 	}
 	if got := day(statedWindowStaleTeam, contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent}); got != stamp(statedWindowDay(statedWindowStaleDays)) {
 		t.Fatalf("no stated window reads day %q, want the latest row", got)
+	}
+	// One fact never mixes a run inside a past window with a snapshot after it.
+	const hotspotRepo = "repo-past-hotspot"
+	for _, daysAgo := range []int{40, 5} {
+		at := today.AddDate(0, 0, -daysAgo)
+		if err := direct.Exec(ctx, `INSERT INTO file_hotspot_daily (org_id, repo_id, day, file_path, churn_loc_30d, churn_commits_30d, cyclomatic_total, cyclomatic_avg, blame_concentration, risk_score, computed_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)`,
+			org, repoUUID(hotspotRepo), at, "src/a.go", uint64(10), uint32(2), uint32(3), 1.5, 0.3, 0.9, at); err != nil {
+			t.Fatalf("seed hotspot: %v", err)
+		}
+		if err := direct.Exec(ctx, `INSERT INTO file_complexity_snapshots (org_id, repo_id, as_of_day, file_path, computed_at) VALUES (?,?,?,?,?)`, org, repoUUID(hotspotRepo), at, "src/a.go", at); err != nil {
+			t.Fatalf("seed snapshot: %v", err)
+		}
+	}
+	hotspots, err := findProvider(t, providers, contextfabric.FactFileHotspots).ReadFacts(ctx, storage.Principal{OrgID: org}, contextfabric.FactQuery{
+		Time: window(today.AddDate(0, 0, -60), today.AddDate(0, 0, -30), ""), Kind: contextfabric.FactFileHotspots, Subjects: []contextfabric.SubjectRef{repoSubject(repoUUID(hotspotRepo))},
+	})
+	if err != nil {
+		t.Fatalf("ReadFacts: %v", err)
+	}
+	if len(hotspots.Facts) != 1 {
+		t.Fatalf("hotspot facts = %d, want 1", len(hotspots.Facts))
+	}
+	for _, field := range []string{"latest_run_day", "complexity_snapshot_day"} {
+		cell := hotspots.Facts[0].Fields[field].String
+		if cell == nil || *cell != stamp(today.AddDate(0, 0, -40)) {
+			t.Fatalf("%s = %v, want the day inside the past window: %+v", field, cell, hotspots.Facts[0].Fields)
+		}
 	}
 	allTime := contextfabric.RelativeWindowAllTime
 	if got := day(statedWindowStaleTeam, window(today.AddDate(0, 0, -90), today, allTime)); got != stamp(statedWindowDay(statedWindowStaleDays)) {

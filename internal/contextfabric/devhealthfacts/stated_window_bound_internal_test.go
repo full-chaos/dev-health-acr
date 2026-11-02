@@ -43,6 +43,31 @@ func TestStatedWindowBoundTakesOnlyAStatedCurrentWindow(t *testing.T) {
 	}
 }
 
+// window_end and window_days name the days a window holds: an exclusive end is
+// not one of them.
+func TestFlowNamesTheDaysItsWindowHolds(t *testing.T) {
+	start := time.Date(2026, 2, 1, 0, 0, 0, 0, time.UTC)
+	for _, c := range []struct {
+		name     string
+		end      time.Time
+		excl     bool
+		wantEnd  string
+		wantDays int64
+	}{
+		{"exclusive", time.Date(2026, 2, 22, 0, 0, 0, 0, time.UTC), true, "2026-02-21", 21},
+		{"inclusive", time.Date(2026, 2, 22, 0, 0, 0, 0, time.UTC), false, "2026-02-22", 22},
+	} {
+		fields := map[string]contextfabric.FactValue{}
+		addFlowWindowFields(fields, factTimeBound{active: true, hasStart: true, start: start, end: c.end, endExclusive: c.excl}, flowWindowTotals{})
+		if got := *fields["window_end"].String; got != c.wantEnd {
+			t.Errorf("%s: window_end = %s, want %s", c.name, got, c.wantEnd)
+		}
+		if got := *fields["window_days"].Integer; got != c.wantDays {
+			t.Errorf("%s: window_days = %d, want %d", c.name, got, c.wantDays)
+		}
+	}
+}
+
 func TestAStatedWindowLeavesOwnershipOnTheCurrentRule(t *testing.T) {
 	today := clock().UTC()
 	start := today.AddDate(0, 0, -90)

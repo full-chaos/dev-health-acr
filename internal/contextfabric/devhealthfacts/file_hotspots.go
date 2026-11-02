@@ -91,7 +91,7 @@ func (p *FileHotspotsProvider) ReadFacts(ctx context.Context, principal storage.
 		if readErr != nil {
 			return contextfabric.FactProviderResult{}, readFailure("query file hotspots", readErr)
 		}
-		snapshots, readErr := p.readComplexitySnapshots(ctx, orgID, ids)
+		snapshots, readErr := p.readComplexitySnapshots(ctx, orgID, ids, timeBound)
 		if readErr != nil {
 			return contextfabric.FactProviderResult{}, readFailure("query file complexity snapshots", readErr)
 		}
@@ -175,11 +175,11 @@ ORDER BY repo_id, tupleElement(entry, 1), tupleElement(entry, 2)`, fileHotspotTo
 
 // readComplexitySnapshots returns, per repository, the newest stored
 // complexity snapshot day. It answers existence only.
-func (p *FileHotspotsProvider) readComplexitySnapshots(ctx context.Context, orgID string, repoIDs []string) (map[string]time.Time, error) {
+func (p *FileHotspotsProvider) readComplexitySnapshots(ctx context.Context, orgID string, repoIDs []string, timeBound factTimeBound) (map[string]time.Time, error) {
 	out := map[string]time.Time{}
 	statement := withRowLimitOf(`SELECT toString(repo_id), max(as_of_day)
 FROM file_complexity_snapshots
-WHERE org_id = {org_id:String} AND toString(repo_id) IN {ids:Array(String)}
+WHERE org_id = {org_id:String} AND toString(repo_id) IN {ids:Array(String)}`+timeBound.dayPredicate("as_of_day")+`
 GROUP BY repo_id
 ORDER BY repo_id`, maxFactRowsProbe) + fileHotspotSettings
 	err := p.facts.query(ctx, statement, orgID, repoIDs, func(row contextpacket.ClickHouseRowScanner) error {
@@ -190,7 +190,7 @@ ORDER BY repo_id`, maxFactRowsProbe) + fileHotspotSettings
 		}
 		out[repoID] = day
 		return nil
-	})
+	}, timeBound.bindings()...)
 	return out, err
 }
 
