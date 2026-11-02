@@ -526,6 +526,20 @@ const (
 // helper for the disclosure pattern.
 const MaxFactValueRows = maxFactValueRows
 
+// MaxFactDistributionRows is the row bound of a FactTableDistribution table
+// only (CHAOS-12607): contractsv1.ContextFabricClaimedFactDistributionMaxRows,
+// 366, so a completion forecast's every distinct day to the 365-day horizon
+// is carried whole. Every other table keeps MaxFactValueRows.
+const MaxFactDistributionRows = 366
+
+// maxFactTableRows is the row bound of a table of this shape.
+func maxFactTableRows(shape FactTableShape) int {
+	if shape == FactTableDistribution {
+		return MaxFactDistributionRows
+	}
+	return maxFactValueRows
+}
+
 type FactValue struct {
 	String  *string  `json:"string,omitempty"`
 	Integer *int64   `json:"integer,omitempty"`
@@ -601,11 +615,18 @@ const (
 	// FactTableRanking: many entities, ordered by a measure named in
 	// OrderBy.
 	FactTableRanking FactTableShape = "ranking"
+	// FactTableDistribution (CHAOS-12607, CHAOS-4613 ruling 4): one entity's
+	// outcomes over an ordered numeric axis, one row per distinct value. Key
+	// is exactly one column, an integer on every row, strictly ascending.
+	// Its own row bound is MaxFactDistributionRows, and it is never cut: a
+	// shorter distribution is a different forecast, so a table over its
+	// bound is not served at all.
+	FactTableDistribution FactTableShape = "distribution"
 )
 
 func validFactTableShape(shape FactTableShape) bool {
 	switch shape {
-	case FactTableTimeSeries, FactTableBreakdown, FactTableRanking:
+	case FactTableTimeSeries, FactTableBreakdown, FactTableRanking, FactTableDistribution:
 		return true
 	default:
 		return false
@@ -772,14 +793,18 @@ func (t FactTable) Validate() error {
 	if t.Shape == FactTableTimeSeries && len(t.Key) != 1 {
 		return fmt.Errorf("fact table time_series key must be exactly one column; a second identity column makes this a breakdown, not a time_series")
 	}
+	if t.Shape == FactTableDistribution && len(t.Key) != 1 {
+		return fmt.Errorf("fact table distribution key must be exactly one column, its ordered axis")
+	}
 	if len(t.Rows) == 0 {
 		return fmt.Errorf("fact table must declare at least one row")
 	}
-	if len(t.Rows) > maxFactValueRows {
+	if len(t.Rows) > maxFactTableRows(t.Shape) {
 		return fmt.Errorf("fact table rows exceed bounds")
 	}
 	seenKeys := make(map[string]bool, len(t.Rows))
 	var previousOrderValue float64
+	var previousAxisValue int64
 	for rowIndex, row := range t.Rows {
 		keyParts := make([]string, 0, len(t.Key))
 		for _, name := range t.Key {
@@ -806,6 +831,16 @@ func (t FactTable) Validate() error {
 			if !ok || instantCell.String == nil || !parsesAsFactTableInstant(*instantCell.String) {
 				return fmt.Errorf("fact table row %d time_series key %q does not parse as an instant", rowIndex, t.Key[0])
 			}
+		}
+		if t.Shape == FactTableDistribution {
+			axisCell := row.Fields[t.Key[0]]
+			if axisCell.Integer == nil {
+				return fmt.Errorf("fact table row %d distribution key %q is not an integer", rowIndex, t.Key[0])
+			}
+			if rowIndex > 0 && *axisCell.Integer <= previousAxisValue {
+				return fmt.Errorf("fact table row %d distribution key %q is not above the row before it", rowIndex, t.Key[0])
+			}
+			previousAxisValue = *axisCell.Integer
 		}
 		// CHAOS-4680: a Measures column, on any row that carries a cell for
 		// it, must be numeric. A per-row categorical observation (a
@@ -912,7 +947,11 @@ func (v FactValue) validate(allowRows bool) error {
 			return fmt.Errorf("fact value rows must not nest")
 		}
 		set++
-		if len(v.Rows) > maxFactValueRows {
+		rowBound := maxFactValueRows
+		if v.Table != nil {
+			rowBound = maxFactTableRows(v.Table.Shape)
+		}
+		if len(v.Rows) > rowBound {
 			return fmt.Errorf("fact value rows exceed bounds")
 		}
 		for _, row := range v.Rows {

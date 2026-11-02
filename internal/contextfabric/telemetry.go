@@ -2832,6 +2832,7 @@ func (t SlogEngineTelemetry) RecordFactRowTruncation(ctx context.Context, princi
 		"tables_source_prefix", event.TablesSourcePrefix,
 		"tables_series_undated", event.TablesSeriesUndated,
 		"tables_ranking_unscored", event.TablesRankingUnscored,
+		"tables_distribution_withheld", event.TablesDistributionWithheld,
 		"served", event.Served,
 		"declined", string(event.Declined),
 		"outcome_rows_evicted", event.OutcomeRowsEvicted,

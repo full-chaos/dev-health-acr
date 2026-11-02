@@ -27,8 +27,13 @@ func validateScalarMap(values map[string]ContextFabricScalarValue) error {
 // drift on what "rows" is allowed to contain. Bounds mirror the published
 // schema's ClaimedFactRow/ProjectedFactRow $defs exactly (maxItems 64 on
 // the schema's "rows" array, maxProperties 32 on each row's "fields").
-func validateClaimedFactRows(rows []ContextFabricClaimedFactRow) error {
-	if len(rows) > ContextFabricClaimedFactMaxRows {
+//
+// table is the declaration the rows travel with (nil when none): a
+// `distribution` table's rows are held to
+// ContextFabricClaimedFactDistributionMaxRows, every other table's to
+// ContextFabricClaimedFactMaxRows (CHAOS-12607).
+func validateClaimedFactRows(rows []ContextFabricClaimedFactRow, table *ContextFabricClaimedFactTable) error {
+	if len(rows) > ContextFabricClaimedFactRowsMax(table) {
 		return fmt.Errorf("claimed fact rows exceed v1 bounds")
 	}
 	for _, row := range rows {
@@ -40,6 +45,17 @@ func validateClaimedFactRows(rows []ContextFabricClaimedFactRow) error {
 		}
 	}
 	return nil
+}
+
+// ContextFabricClaimedFactRowsMax is the row cap of the rows table
+// describes: ContextFabricClaimedFactDistributionMaxRows for a
+// `distribution`, ContextFabricClaimedFactMaxRows for any other table or for
+// rows with no declaration.
+func ContextFabricClaimedFactRowsMax(table *ContextFabricClaimedFactTable) int {
+	if table != nil && table.Shape == ContextFabricFactTableShapeDistribution {
+		return ContextFabricClaimedFactDistributionMaxRows
+	}
+	return ContextFabricClaimedFactMaxRows
 }
 
 // ClaimedFactRowContentBytes is one claimed/projected fact row's ACTUAL
