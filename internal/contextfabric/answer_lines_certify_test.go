@@ -449,7 +449,19 @@ func TestAMissAuthorizationLineWithoutItsReasonIsRefused(t *testing.T) {
 	var bare bytes.Buffer
 	sink, ctx := answerLineSink(&bare, slog.LevelInfo)
 	sink.RecordAnswerReuse(ctx, principalOrg1, contextfabric.AnswerReuseMissAuthorization, contextfabric.OwnershipRoutingVersion, contextfabric.AnswerReuseRefusal{})
-	certifyRefused(t, bare.Bytes(), eventspec.AnswerReuseOutcome, "a miss_authorization line with no reason")
+	// A direct sink call with no reason writes the loud fallback, never a bare
+	// line, and the certifier refuses that fallback too.
+	if !strings.Contains(bare.String(), `"reason":"unattributed"`) {
+		t.Errorf("a direct miss_authorization call with an empty refusal did not write reason=unattributed: %s", bare.String())
+	}
+	certifyRefused(t, bare.Bytes(), eventspec.AnswerReuseOutcome, "a miss_authorization line with reason unattributed")
+	var named bytes.Buffer
+	namedSink, namedCtx := answerLineSink(&named, slog.LevelInfo)
+	namedSink.RecordAnswerReuse(namedCtx, principalOrg1, contextfabric.AnswerReuseMissAuthorization, contextfabric.OwnershipRoutingVersion,
+		contextfabric.AnswerReuseRefusal{Reason: contextfabric.AnswerReuseRefusalUnattributed})
+	certifyRefused(t, named.Bytes(), eventspec.AnswerReuseOutcome, "a line naming reason unattributed")
+	// A line that lost its reason key entirely is refused as well.
+	certifyRefused(t, []byte(strings.Replace(bare.String(), `"reason":"unattributed",`, "", 1)), eventspec.AnswerReuseOutcome, "a miss_authorization line with no reason")
 
 	var capLine bytes.Buffer
 	sink, ctx = answerLineSink(&capLine, slog.LevelInfo)

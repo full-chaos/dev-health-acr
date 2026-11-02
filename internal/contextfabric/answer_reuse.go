@@ -288,7 +288,8 @@ const (
 	// AnswerReuseRefusalUnattributed: a miss_authorization was recorded with no
 	// reason named. No refusal site produces it; it exists so a site that
 	// forgets its reason writes a loud, certifiable value instead of a silent
-	// gap. A test requires that no scenario yields it.
+	// gap. It is NOT in the closed vocabulary, so the certifier refuses a line
+	// that carries it: the log is loud, certification fails.
 	AnswerReuseRefusalUnattributed AnswerReuseRefusalReason = "unattributed"
 )
 
@@ -299,7 +300,6 @@ func AnswerReuseRefusalReasonVocabulary() []string {
 		string(AnswerReuseRefusalGateDenied), string(AnswerReuseRefusalSubmissionOwnerMissing),
 		string(AnswerReuseRefusalSubmissionOwnerMismatch), string(AnswerReuseRefusalSubjectCapExceeded),
 		string(AnswerReuseRefusalSubjectRecheckFailed), string(AnswerReuseRefusalSubjectNotCommitted),
-		string(AnswerReuseRefusalUnattributed),
 	}
 }
 
@@ -1035,7 +1035,7 @@ func (e *Engine) tryReuseWithReading(ctx context.Context, principal storage.Prin
 // as a bare line (CHAOS-12519).
 func (e *Engine) recordReuseOutcome(ctx context.Context, principal storage.Principal, outcome AnswerReuseOutcome) {
 	if outcome == AnswerReuseMissAuthorization {
-		e.recordReuseRefusal(ctx, principal, AnswerReuseRefusal{})
+		e.recordReuseLine(ctx, principal, AnswerReuseMissAuthorization, AnswerReuseRefusal{Reason: AnswerReuseRefusalUnattributed})
 		return
 	}
 	e.recordReuseLine(ctx, principal, outcome, AnswerReuseRefusal{})

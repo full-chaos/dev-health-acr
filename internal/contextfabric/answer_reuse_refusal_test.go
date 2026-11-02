@@ -113,12 +113,6 @@ func TestEveryAnswerReuseRefusalNamesItself(t *testing.T) {
 	// added to the vocabulary without a test that tells it from the rest.
 	t.Cleanup(func() {
 		for _, reason := range AnswerReuseRefusalReasonVocabulary() {
-			if AnswerReuseRefusalReason(reason) == AnswerReuseRefusalUnattributed {
-				if _, ok := seen[AnswerReuseRefusalUnattributed]; ok {
-					t.Errorf("a real refusal site produced %q", reason)
-				}
-				continue
-			}
 			if _, ok := seen[AnswerReuseRefusalReason(reason)]; !ok {
 				t.Errorf("refusal reason %q has no scenario on the real path", reason)
 			}
@@ -150,6 +144,14 @@ func TestNoSiteRecordsMissAuthorizationWithoutAReason(t *testing.T) {
 		switch sel.Sel.Name {
 		case "recordReuseRefusal":
 			refusalCalls++
+			// An argument written as a literal is judged here: an empty
+			// AnswerReuseRefusal{} names no check. A variable argument cannot
+			// be judged by AST; the scenario test covers those.
+			for _, arg := range call.Args {
+				if lit, ok := arg.(*ast.CompositeLit); ok && len(lit.Elts) == 0 {
+					t.Errorf("%s: recordReuseRefusal is called with an empty AnswerReuseRefusal{}; name the check", fset.Position(call.Pos()))
+				}
+			}
 		case "recordReuseOutcome":
 			for _, arg := range call.Args {
 				if id, ok := arg.(*ast.Ident); ok && id.Name == "AnswerReuseMissAuthorization" {

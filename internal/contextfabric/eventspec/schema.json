@@ -1004,8 +1004,7 @@
           "submission_owner_mismatch",
           "subject_cap_exceeded",
           "subject_recheck_failed",
-          "subject_not_committed",
-          "unattributed"
+          "subject_not_committed"
         ],
         "applicability": "written when the outcome is miss_authorization, and names which refusal produced it",
         "required_when": {
