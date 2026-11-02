@@ -781,6 +781,10 @@ type EngineTelemetry interface {
 	// composed offers beside the window offer -- closed vocabulary
 	// GatedOfferResolutionOutcome (chaos4234_offers_only.go).
 	RecordGatedOfferResolution(ctx context.Context, principal storage.Principal, outcome GatedOfferResolutionOutcome)
+	// RecordGatedOfferResolutionFailure (CHAOS-12681) reports, beside a
+	// "failed" RecordGatedOfferResolution, why the offers-only pass failed: a
+	// closed class, never the error's text.
+	RecordGatedOfferResolutionFailure(ctx context.Context, principal storage.Principal, class GatedOfferErrorClass)
 	// RecordCohortStructureGate (CHAOS-4579/CHAOS-4531) reports which side
 	// of §1.3's class-conditional gate one StructureOfferMaterial landed
 	// on: the question had no subject axis and the subject_anchor/
