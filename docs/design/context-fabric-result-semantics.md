@@ -288,6 +288,22 @@ declares and what the table labels are one set.
 | `measure_unit` | `claimed_facts[].table.measure_units[].unit`, `claimed_facts[].time_series_table.measure_units[].unit` (CHAOS-11984: the unit the producer declares for a measure) |
 | `subcategory` | `claimed_facts[].rows[].fields.subcategory` of a `subcategory_breakdown` table (CHAOS-12554: the canonical investment subcategory; a sunburst's outer ring uses the same word) |
 | `repository_label` | `claimed_facts[].rows[].fields.repository_label` of a `repository_theme_breakdown` table (CHAOS-12578: the repository's served word, its handle; a sankey's repository node uses it) |
+| `investment_theme` | every cell of a column that `claimed_facts[].table.column_vocabularies[]` or `.time_series_table.column_vocabularies[]` declares in `investment_theme` (CHAOS-12639: the canonical investment theme; the same words the render shapes use, from one map) |
+
+**Where a cell's word comes from (CHAOS-12639).** A claimed table states it, from
+the producer's column declaration, and never from the model:
+
+- `column_vocabularies[]`: `{column, vocabulary}`. Each cell of that key or
+  observation column is a token of the vocabulary, and its word is served under
+  `<vocabulary>:<value>` above. Only `investment_theme` and `subcategory` may be
+  declared for a column.
+- `word_columns[]`: `{column, word_column}`. The id column's word is the
+  `word_column` cell of the same row (`repository_name` beside `repository_id`,
+  `repository_label` beside `repository`). A consumer shows the word and keeps the
+  id in its raw fold.
+
+A consumer keeps no word table of its own (CHAOS-4690). A cell of a declared
+vocabulary with no served word, and every id, belong in the raw fold.
 
 **Notes.** A field a reader sees as one line has one word for this result, under
 `<field>:note` (CHAOS-12487). Like the correction note, a note is no table row. It

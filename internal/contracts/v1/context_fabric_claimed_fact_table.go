@@ -228,6 +228,90 @@ type ContextFabricClaimedFactTable struct {
 	// schema, as for MeasureUnits: the server states it from the declarations
 	// (withDeclaredCadence) and never offers it to the model to write.
 	Cadence ContextFabricFactTableCadence `json:"cadence,omitempty" jsonschema:"-"`
+	// ColumnVocabularies (CHAOS-12639) names, per key or observation column
+	// whose values are tokens of a closed vocabulary, that vocabulary, so a
+	// consumer reads each cell's served word from vocabulary_labels under
+	// `<vocabulary>:<value>` and never keeps a word table of its own
+	// (CHAOS-4690). jsonschema:"-": stated by the server from the producer's
+	// declaration (withDeclaredColumnWords), never model-authored.
+	ColumnVocabularies []ContextFabricColumnVocabularyDeclaration `json:"column_vocabularies,omitempty" jsonschema:"-"`
+	// WordColumns (CHAOS-12639) names, per id column, the observation column
+	// of the same row that carries its served word (a repository's handle
+	// beside its canonical id), so a consumer shows the word and keeps the id
+	// out of sight. jsonschema:"-", as for ColumnVocabularies.
+	WordColumns []ContextFabricWordColumnDeclaration `json:"word_columns,omitempty" jsonschema:"-"`
+}
+
+// ContextFabricColumnVocabularyDeclaration states the closed vocabulary of one
+// column's values (CHAOS-12639).
+type ContextFabricColumnVocabularyDeclaration struct {
+	Column     string                  `json:"column"`
+	Vocabulary ContextFabricVocabulary `json:"vocabulary"`
+}
+
+// ContextFabricWordColumnDeclaration states the column that carries the served
+// word of one id column (CHAOS-12639).
+type ContextFabricWordColumnDeclaration struct {
+	Column     string `json:"column"`
+	WordColumn string `json:"word_column"`
+}
+
+// contextFabricColumnVocabularies is the CLOSED set of vocabularies a column's
+// values may be declared in: the ones whose values are cell tokens of a claimed
+// table, each served in vocabulary_labels. Any other vocabulary names a field,
+// a status or a unit, never a cell.
+var contextFabricColumnVocabularies = [...]ContextFabricVocabulary{
+	ContextFabricVocabularyInvestmentTheme,
+	ContextFabricVocabularySubcategory,
+}
+
+// ValidContextFabricColumnVocabulary reports whether vocabulary may be declared
+// for a column's values.
+func ValidContextFabricColumnVocabulary(vocabulary ContextFabricVocabulary) bool {
+	for _, member := range contextFabricColumnVocabularies {
+		if vocabulary == member {
+			return true
+		}
+	}
+	return false
+}
+
+// ContextFabricColumnVocabularyNames returns the vocabularies a column may be
+// declared in, in published order.
+func ContextFabricColumnVocabularyNames() [len(contextFabricColumnVocabularies)]ContextFabricVocabulary {
+	return contextFabricColumnVocabularies
+}
+
+// HasKey reports whether name is a declared key column of this table.
+func (t ContextFabricClaimedFactTable) HasKey(name string) bool {
+	for _, key := range t.Key {
+		if key == name {
+			return true
+		}
+	}
+	return false
+}
+
+// ColumnVocabulary returns the declared vocabulary of one column's values, or
+// false when the table declares none.
+func (t ContextFabricClaimedFactTable) ColumnVocabulary(column string) (ContextFabricVocabulary, bool) {
+	for _, declaration := range t.ColumnVocabularies {
+		if declaration.Column == column {
+			return declaration.Vocabulary, true
+		}
+	}
+	return "", false
+}
+
+// WordColumn returns the column that carries the served word of an id column,
+// or false when the table declares none.
+func (t ContextFabricClaimedFactTable) WordColumn(column string) (string, bool) {
+	for _, declaration := range t.WordColumns {
+		if declaration.Column == column {
+			return declaration.WordColumn, true
+		}
+	}
+	return "", false
 }
 
 // HasMeasure reports whether name is a declared measure of this table.
@@ -321,7 +405,55 @@ func (t ContextFabricClaimedFactTable) Validate() error {
 			return fmt.Errorf("a cadence is meaningful only for a time_series table, not %q", t.Shape)
 		}
 	}
-	return t.validateMeasureUnits()
+	if err := t.validateMeasureUnits(); err != nil {
+		return err
+	}
+	return t.validateColumnWords()
+}
+
+// validateColumnWords holds the word declarations to the table's own columns
+// (CHAOS-12639). A vocabulary is declared only for a key or observation column,
+// once, from the closed column set: a measure holds numbers, never tokens. A
+// word column is an observation of the same table, beside a key or observation
+// column that is not itself a word column, once each. Each refusal would point
+// a consumer at a word the producer never declared.
+//
+// No count bound of its own is needed: each entry names a different declared
+// column, so there are never more entries than columns.
+func (t ContextFabricClaimedFactTable) validateColumnWords() error {
+	tokenColumn := func(name string) bool { return t.HasKey(name) || t.HasObservation(name) }
+	stated := make(map[string]struct{}, len(t.ColumnVocabularies))
+	for _, declaration := range t.ColumnVocabularies {
+		if !tokenColumn(declaration.Column) {
+			return fmt.Errorf("declared table states a vocabulary for %q, which is not one of its key or observation columns", declaration.Column)
+		}
+		if _, twice := stated[declaration.Column]; twice {
+			return fmt.Errorf("declared table states the vocabulary of column %q more than once", declaration.Column)
+		}
+		stated[declaration.Column] = struct{}{}
+		if !ValidContextFabricColumnVocabulary(declaration.Vocabulary) {
+			return fmt.Errorf("declared table vocabulary %q of column %q is not one a column may be declared in", declaration.Vocabulary, declaration.Column)
+		}
+	}
+	words := make(map[string]struct{}, len(t.WordColumns))
+	for _, declaration := range t.WordColumns {
+		if !tokenColumn(declaration.Column) {
+			return fmt.Errorf("declared table states a word column for %q, which is not one of its key or observation columns", declaration.Column)
+		}
+		if !t.HasObservation(declaration.WordColumn) || declaration.WordColumn == declaration.Column {
+			return fmt.Errorf("declared table word column %q of column %q is not another of its observations", declaration.WordColumn, declaration.Column)
+		}
+		if _, twice := words[declaration.Column]; twice {
+			return fmt.Errorf("declared table states the word column of %q more than once", declaration.Column)
+		}
+		words[declaration.Column] = struct{}{}
+	}
+	for _, declaration := range t.WordColumns {
+		if _, isID := words[declaration.WordColumn]; isID {
+			return fmt.Errorf("declared table word column %q is itself an id column with a word column", declaration.WordColumn)
+		}
+	}
+	return nil
 }
 
 // CadenceAligned reports whether rows keep the table's cadence. For `day`,

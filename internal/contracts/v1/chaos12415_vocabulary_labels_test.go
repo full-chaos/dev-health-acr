@@ -180,7 +180,23 @@ func vocabularySources(t *testing.T) map[ContextFabricVocabulary][][]string {
 			closedVocabularyStrings(units[:]), schemaMeasureUnitValues(t, defs),
 		},
 		ContextFabricVocabularySubcategory: {closedVocabularyStrings(subcategories[:])},
+		// CHAOS-12639: the canonical themes are the parents of the canonical
+		// subcategories, a source apart from the theme word map itself.
+		ContextFabricVocabularyInvestmentTheme: {subcategoryThemes(subcategories[:])},
 	}
+}
+
+// subcategoryThemes is the set of themes the canonical subcategories belong to
+// ("<theme>.<subcategory>"), in first-seen order.
+func subcategoryThemes(subcategories []string) []string {
+	var themes []string
+	for _, subcategory := range subcategories {
+		theme, _, _ := strings.Cut(subcategory, ".")
+		if !slices.Contains(themes, theme) {
+			themes = append(themes, theme)
+		}
+	}
+	return themes
 }
 
 // schemaMeasureUnitValues reads the unit enum a claimed table's measure_units

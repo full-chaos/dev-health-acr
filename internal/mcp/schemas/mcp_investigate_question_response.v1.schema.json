@@ -1820,6 +1820,64 @@
                 "ranking"
               ],
               "type": "string"
+            },
+            "column_vocabularies": {
+              "description": "CHAOS-12639: the closed vocabulary of a key or observation column's values. A consumer reads each cell's served word from `vocabulary_labels` under `<vocabulary>:<value>` and keeps no word table of its own. Each entry names one column, once. Set by the server from the producer's declaration; never model-authored.",
+              "type": "array",
+              "maxItems": 40,
+              "items": {
+                "description": "The vocabulary of one column's values.",
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "column": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 128,
+                    "description": "A name in `key` or `observations`."
+                  },
+                  "vocabulary": {
+                    "description": "`investment_theme` is a canonical investment theme; `subcategory` is a canonical investment subcategory.",
+                    "type": "string",
+                    "enum": [
+                      "investment_theme",
+                      "subcategory"
+                    ]
+                  }
+                },
+                "required": [
+                  "column",
+                  "vocabulary"
+                ]
+              }
+            },
+            "word_columns": {
+              "description": "CHAOS-12639: per id column, the observation column of the same row that carries its served word (a repository's handle beside its canonical id). A consumer shows the word and keeps the id out of sight. Each entry names one column, once. Set by the server from the producer's declaration; never model-authored.",
+              "type": "array",
+              "maxItems": 40,
+              "items": {
+                "description": "The word column of one id column.",
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "column": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 128,
+                    "description": "A name in `key` or `observations`: the id column."
+                  },
+                  "word_column": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 128,
+                    "description": "Another name in `observations`: the column that carries the id's served word."
+                  }
+                },
+                "required": [
+                  "column",
+                  "word_column"
+                ]
+              }
             }
           },
           "required": [
@@ -5368,6 +5426,64 @@
                 "ranking"
               ],
               "type": "string"
+            },
+            "column_vocabularies": {
+              "description": "CHAOS-12639: the closed vocabulary of a key or observation column's values. A consumer reads each cell's served word from `vocabulary_labels` under `<vocabulary>:<value>` and keeps no word table of its own. Each entry names one column, once. Set by the server from the producer's declaration; never model-authored.",
+              "type": "array",
+              "maxItems": 40,
+              "items": {
+                "description": "The vocabulary of one column's values.",
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "column": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 128,
+                    "description": "A name in `key` or `observations`."
+                  },
+                  "vocabulary": {
+                    "description": "`investment_theme` is a canonical investment theme; `subcategory` is a canonical investment subcategory.",
+                    "type": "string",
+                    "enum": [
+                      "investment_theme",
+                      "subcategory"
+                    ]
+                  }
+                },
+                "required": [
+                  "column",
+                  "vocabulary"
+                ]
+              }
+            },
+            "word_columns": {
+              "description": "CHAOS-12639: per id column, the observation column of the same row that carries its served word (a repository's handle beside its canonical id). A consumer shows the word and keeps the id out of sight. Each entry names one column, once. Set by the server from the producer's declaration; never model-authored.",
+              "type": "array",
+              "maxItems": 40,
+              "items": {
+                "description": "The word column of one id column.",
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "column": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 128,
+                    "description": "A name in `key` or `observations`: the id column."
+                  },
+                  "word_column": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 128,
+                    "description": "Another name in `observations`: the column that carries the id's served word."
+                  }
+                },
+                "required": [
+                  "column",
+                  "word_column"
+                ]
+              }
             }
           },
           "required": [

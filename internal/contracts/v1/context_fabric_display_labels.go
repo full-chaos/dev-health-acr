@@ -176,6 +176,11 @@ const (
 	// subcategory (CHAOS-12554): the subcategory column of a claimed
 	// subcategory_breakdown table, and the outer ring of a sunburst.
 	ContextFabricVocabularySubcategory ContextFabricVocabulary = "subcategory"
+	// ContextFabricVocabularyInvestmentTheme words a canonical investment theme
+	// (CHAOS-12639): a theme column a claimed table declares in this
+	// vocabulary. Its words are the theme words the render shapes already use
+	// (contextFabricInvestmentThemeLabels), from the one map.
+	ContextFabricVocabularyInvestmentTheme ContextFabricVocabulary = "investment_theme"
 )
 
 var contextFabricVocabularyNames = [...]ContextFabricVocabulary{
@@ -200,6 +205,7 @@ var contextFabricVocabularyNames = [...]ContextFabricVocabulary{
 	ContextFabricVocabularyWindowProvenance,
 	ContextFabricVocabularyMeasureUnit,
 	ContextFabricVocabularySubcategory,
+	ContextFabricVocabularyInvestmentTheme,
 }
 
 // ContextFabricVocabularyNames returns the served vocabularies in published
@@ -394,6 +400,9 @@ var contextFabricVocabularyLabels = map[ContextFabricVocabulary]map[string]strin
 	},
 	// The words the investment page has shown for these keys. Each is unique
 	// within its theme, which a sunburst ring needs.
+	// One source with ContextFabricInvestmentThemeLabel: the same map, never a
+	// second copy of the five words (CHAOS-12639).
+	ContextFabricVocabularyInvestmentTheme: contextFabricInvestmentThemeLabels,
 	ContextFabricVocabularySubcategory: {
 		"feature_delivery.customer":     "Customer",
 		"feature_delivery.enablement":   "Enablement",

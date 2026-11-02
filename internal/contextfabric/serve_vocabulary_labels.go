@@ -188,6 +188,8 @@ func composeVocabularyLabels(result InvestigationResult) map[string]string {
 		words.measureUnits(fact.Table)
 		words.measureUnits(fact.TimeSeriesTable)
 		words.subcategoryRows(fact)
+		words.columnVocabularyRows(fact.Table, fact.Rows)
+		words.columnVocabularyRows(fact.TimeSeriesTable, fact.TimeSeriesRows)
 	}
 
 	if window := result.EffectiveEvidenceWindow; window != nil {
@@ -247,6 +249,22 @@ func (w *vocabularyWords) subcategoryRows(fact contractsv1.ContextFabricClaimedF
 	for _, row := range fact.Rows {
 		if subcategory := row.Fields[contractsv1.ContextFabricRenderSubcategoryField].String; subcategory != nil {
 			w.add(contractsv1.ContextFabricVocabularySubcategory, *subcategory)
+		}
+	}
+}
+
+// columnVocabularyRows words every cell of a column the claimed table declares
+// in a vocabulary (CHAOS-12639): the reader sees the served word of each token,
+// from the registry, and a consumer keeps no word table of its own.
+func (w *vocabularyWords) columnVocabularyRows(table *contractsv1.ContextFabricClaimedFactTable, rows []contractsv1.ContextFabricClaimedFactRow) {
+	if table == nil {
+		return
+	}
+	for _, declaration := range table.ColumnVocabularies {
+		for _, row := range rows {
+			if value := row.Fields[declaration.Column].String; value != nil {
+				w.add(declaration.Vocabulary, *value)
+			}
 		}
 	}
 }

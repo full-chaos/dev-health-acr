@@ -154,6 +154,30 @@ func wordRows() []wordRow {
 				},
 			}
 		}, map[string]string{"subcategory:quality.bugfix": "Bugfix"}},
+		// CHAOS-12639: each cell of a column its table declares in a vocabulary,
+		// on either table, and no cell of a column no table declares.
+		{"claimed column vocabulary cell", func(r *InvestigationResult) {
+			quality, risk, undeclared := "quality", "risk", "maintenance"
+			themed := []contractsv1.ContextFabricColumnVocabularyDeclaration{{Column: "theme", Vocabulary: contractsv1.ContextFabricVocabularyInvestmentTheme}}
+			r.ClaimedFacts = []contractsv1.ContextFabricClaimedFact{
+				{
+					Table:           &contractsv1.ContextFabricClaimedFactTable{Field: "theme_breakdown", ColumnVocabularies: themed},
+					Rows:            []contractsv1.ContextFabricClaimedFactRow{{Fields: map[string]contractsv1.ContextFabricScalarValue{"theme": {String: &quality}}}},
+					TimeSeriesTable: &contractsv1.ContextFabricClaimedFactTable{Field: "theme_daily", ColumnVocabularies: themed},
+					TimeSeriesRows:  []contractsv1.ContextFabricClaimedFactRow{{Fields: map[string]contractsv1.ContextFabricScalarValue{"theme": {String: &risk}}}},
+				},
+				{
+					Table: &contractsv1.ContextFabricClaimedFactTable{Field: "theme_breakdown"},
+					Rows:  []contractsv1.ContextFabricClaimedFactRow{{Fields: map[string]contractsv1.ContextFabricScalarValue{"theme": {String: &undeclared}}}},
+				},
+			}
+		}, func() map[string]string {
+			want := map[string]string{"investment_theme:quality": "Quality / Reliability", "investment_theme:risk": "Risk / Security"}
+			if word, ok := contractsv1.ContextFabricVocabularyLabel(contractsv1.ContextFabricVocabularyFactField, "theme"); ok {
+				want["fact_field:theme"] = word
+			}
+			return want
+		}()},
 	}
 }
 

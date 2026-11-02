@@ -115,6 +115,17 @@ func cBool(name string) columnDecl {
 	return columnDecl{Name: name, Type: contextfabric.FactFieldBoolean}
 }
 func cNullable(c columnDecl) columnDecl { c.Nullable = true; return c }
+
+// cWord names the string column of the same row that carries this id column's
+// served word (CHAOS-12639): a reader sees the word, never the id.
+func cWord(word string, c columnDecl) columnDecl { c.WordColumn = word; return c }
+
+// cVocab names the closed vocabulary this string column's values are tokens of
+// (CHAOS-12639): an answer serves each value's word.
+func cVocab(vocabulary contractsv1.ContextFabricVocabulary, c columnDecl) columnDecl {
+	c.Vocabulary = vocabulary
+	return c
+}
 func cRef(ref *contextfabric.FactSubjectRefDeclaration, c columnDecl) columnDecl {
 	c.SubjectRef = ref
 	return c
@@ -242,7 +253,7 @@ func identityFields() []fieldDecl {
 		// (team_repo_ownership), one row per team. Absent, never empty, when
 		// no team owns it.
 		declOn(declRepositoryOnly,
-			fTable("owning_teams", cRef(declTeamRef, cStr("team_id")), cNullable(cStr("team_name"))),
+			fTable("owning_teams", cWord("team_name", cRef(declTeamRef, cStr("team_id"))), cNullable(cStr("team_name"))),
 			fInt("owning_teams_omitted_count", "count"),
 		),
 		// id is the subject's own bare work_item_id (the provider matches the
@@ -358,7 +369,7 @@ func blockersFields() []fieldDecl {
 			// below lists owned repositories only.
 			fStr("repository_breakdown_limitation"),
 			fTable("repository_breakdown",
-				cRef(declRepositoryRef, cStr("repository_id")),
+				cWord("repository_name", cRef(declRepositoryRef, cStr("repository_id"))),
 				cNullable(cStr("repository_name")),
 				cInt("blocked_work_items_current", "count"),
 				cInt("blocker_dependencies_current", "count"),
@@ -396,7 +407,7 @@ func teamRollupCommonFields(windowed bool) []fieldDecl {
 		// The pointer: each row is a repository subject reference the gate
 		// checks, so a client can continue per repository.
 		fTable("owned_repositories",
-			cRef(declRepositoryRef, cStr("repository_id")),
+			cWord("repository_name", cRef(declRepositoryRef, cStr("repository_id"))),
 			cNullable(cStr("repository_name")),
 		),
 		fInt("owned_repositories_omitted_count", "count"),
@@ -432,7 +443,7 @@ func pullRequestFields() []fieldDecl {
 		declOn(declPullRequestOnly,
 			fTable("project_breakdown",
 				cStr("scope"),
-				cRef(declProjectCanonicalRef, cStr("scope_id")),
+				cWord("scope_name", cRef(declProjectCanonicalRef, cStr("scope_id"))),
 				cNullable(cStr("scope_name")),
 				cStr("link_tier"),
 			),
@@ -449,7 +460,7 @@ func pullRequestFields() []fieldDecl {
 			// requests, never the repository's whole activity.
 			fStr("repository_link_basis"),
 			fTable("repository_breakdown",
-				cRef(declRepositoryRef, cStr("repository_id")),
+				cWord("repository_name", cRef(declRepositoryRef, cStr("repository_id"))),
 				cNullable(cStr("repository_name")),
 				cInt("pull_requests_opened_window", "count"),
 				cInt("pull_requests_merged_window", "count"),
@@ -471,7 +482,7 @@ func pullRequestFields() []fieldDecl {
 			// row of the table.
 			declAggregate(fInt("pull_requests_without_state_count", "count")),
 			fTable("pull_requests_by_state",
-				cNullable(cRef(declRepositoryRef, cStr("repository_id"))),
+				cNullable(cWord("repository_name", cRef(declRepositoryRef, cStr("repository_id")))),
 				cNullable(cStr("repository_name")),
 				cStr("state"),
 				cInt("pull_request_count", "count"),
@@ -543,7 +554,7 @@ func deploymentFields() []fieldDecl {
 			declAggregate(fInt("failed_deployments_count_window", "count")),
 			fStr("failed_deployments_basis"),
 			fTable("repository_breakdown",
-				cRef(declRepositoryRef, cStr("repository_id")),
+				cWord("repository_name", cRef(declRepositoryRef, cStr("repository_id"))),
 				cNullable(cStr("repository_name")),
 				cInt("deployments_count_window", "count"),
 				cInt("failed_deployments_count_window", "count"),
@@ -575,7 +586,7 @@ func incidentFields() []fieldDecl {
 			// restriction.
 			declAggregate(fInt("org_incidents_not_attributable_count_window", "count")),
 			fTable("repository_breakdown",
-				cRef(declRepositoryRef, cStr("repository_id")),
+				cWord("repository_name", cRef(declRepositoryRef, cStr("repository_id"))),
 				cNullable(cStr("repository_name")),
 				cInt("incidents_count_window", "count"),
 				cInt("resolved_incidents_count_window", "count"),
@@ -717,7 +728,7 @@ func commitmentFieldDecls() []fieldDecl {
 func readinessFields() []fieldDecl {
 	daily := fDaily("daily_readiness", append([]columnDecl{cStr("day")}, readinessDailyColumns()...)...)
 	teamBreakdown := fTable("team_breakdown", append([]columnDecl{
-		cNullable(cRef(declTeamRef, cStr("team_id"))),
+		cNullable(cWord("team_name", cRef(declTeamRef, cStr("team_id")))),
 		cNullable(cStr("team_name")),
 		cNullable(cRef(declWorkScopeRef, cStr("work_scope_id"))),
 		cNullable(cStr("provider")),
@@ -751,7 +762,7 @@ func workloadFields() []fieldDecl {
 		cStr("day"), cNon(cInt("backlog_size", "count")), cNon(cNum("throughput_mean", "")), cNon(cNum("throughput_stddev", "")))
 	daily.Aggregate = true
 	teamBreakdown := fTable("team_breakdown",
-		cNullable(cRef(declTeamRef, cStr("team_id"))),
+		cNullable(cWord("team_name", cRef(declTeamRef, cStr("team_id")))),
 		cNullable(cStr("team_name")),
 		cNum("throughput_mean", ""),
 		cNum("throughput_stddev", ""),
@@ -898,7 +909,7 @@ func metricsFields() []fieldDecl {
 		cNon(cNum("mttr_hours", "hours")),
 	)
 	teamBreakdown := fTable("team_breakdown",
-		cRef(declTeamRef, cStr("team_id")),
+		cWord("team_name", cRef(declTeamRef, cStr("team_id"))),
 		cStr("team_name"),
 		cStr("day"),
 		cNum("commits_count", "count"),
@@ -990,7 +1001,7 @@ func healthFields() []fieldDecl {
 	)
 	riskBreakdown := fTable("risk_breakdown",
 		cStr("scope"),
-		cRef(declHealthScopeRef, cStr("scope_id")),
+		cWord("scope_name", cRef(declHealthScopeRef, cStr("scope_id"))),
 		cNullable(cStr("scope_name")),
 		cStr("computed_at"),
 		cNum("compounding_risk", ""),
@@ -1069,7 +1080,7 @@ func investmentSizingDeclarations(aggregate bool) []fieldDecl {
 
 func investmentFields() []fieldDecl {
 	themeBreakdown := fTable("theme_breakdown",
-		cStr("theme"), cNum("share", "ratio"), cNum("weighted_effort", ""), cStr("source"), cStr("attribution"))
+		cVocab(contractsv1.ContextFabricVocabularyInvestmentTheme, cStr("theme")), cNum("share", "ratio"), cNum("weighted_effort", ""), cStr("source"), cStr("attribution"))
 	var prior []fieldDecl
 	for _, name := range []string{"prior_theme_feature_delivery", "prior_theme_operational", "prior_theme_maintenance", "prior_theme_quality", "prior_theme_risk"} {
 		prior = append(prior, declAggregate(fNum(name, "ratio")))
@@ -1089,7 +1100,7 @@ func investmentFields() []fieldDecl {
 		declOn(declTeamOnly, declAggregate(fInt("owned_repository_count", "count"))),
 		declOn(declTeamOnly, declAggregate(fInt("project_reached_repository_count", "count")), fStr("repository_link_basis"),
 			fTable("project_reached_repositories",
-				cRef(declRepositoryRef, cStr("repository_id")),
+				cWord("repository_name", cRef(declRepositoryRef, cStr("repository_id"))),
 				cNullable(cStr("repository_name")),
 				cStr("link_tier"),
 			),
