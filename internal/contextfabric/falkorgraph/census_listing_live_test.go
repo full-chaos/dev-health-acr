@@ -491,11 +491,14 @@ func TestACensusCountIsListedOnRealStores(t *testing.T) {
 			if bare.result.StructureNeeds == nil || len(bare.result.StructureNeeds.HandleOptions) == 0 {
 				t.Fatalf("%s: no near match is offered, so this row proves nothing", name)
 			}
-			// With no handle in the request, a near match's option is redeemable.
-			for _, option := range bare.result.StructureNeeds.HandleOptions {
+			// With no handle in the request, a near match's option is redeemable. A
+			// redemption supersedes the other offers of its result, so each gets a turn.
+			for index := range bare.result.StructureNeeds.HandleOptions {
+				fresh := turn(t, principal, pr12, terms, roomy)
+				option := fresh.result.StructureNeeds.HandleOptions[index]
 				next := turn(t, principal, pr12, terms, func(r *contextfabric.InvestigationRequest) {
 					roomy(r)
-					r.PriorHandleReceipts = []contractsv1.ContextFabricBoundSubjectReceipt{{ResultID: bare.result.ResultID, ReceiptID: option.ReceiptID}}
+					r.PriorHandleReceipts = []contractsv1.ContextFabricBoundSubjectReceipt{{ResultID: fresh.result.ResultID, ReceiptID: option.ReceiptID}}
 				})
 				if next.result.Status == contextfabric.InvestigationNoMatch {
 					t.Fatalf("%s: option %q did not resolve: %q", name, option.Label, next.result.Limitations)
@@ -519,6 +522,16 @@ func TestACensusCountIsListedOnRealStores(t *testing.T) {
 			}
 			if len(got.result.StructureNeeds.CandidateOptions) == 0 {
 				t.Fatalf("%s: the clarification holds nothing to redeem", name)
+			}
+			for index, option := range got.result.StructureNeeds.KindOptions {
+				fresh := turn(t, principal, pr12, terms, explicit)
+				next := turn(t, principal, pr12, terms, func(r *contextfabric.InvestigationRequest) {
+					explicit(r)
+					r.PriorKindReceipts = []contractsv1.ContextFabricBoundSubjectReceipt{{ResultID: fresh.result.ResultID, ReceiptID: fresh.result.StructureNeeds.KindOptions[index].ReceiptID}}
+				})
+				if next.result.Status == contextfabric.InvestigationNoMatch {
+					t.Fatalf("%s: kind option %q did not resolve: %q", name, option.Label, next.result.Limitations)
+				}
 			}
 		}
 	})

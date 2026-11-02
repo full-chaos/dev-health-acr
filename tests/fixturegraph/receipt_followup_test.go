@@ -9,8 +9,9 @@ import (
 
 // A receipt the server offered on a clarification must resolve on the follow-up turn.
 // Every option is redeemed, not the first: a dead option behind a live one hid
-// CHAOS-12467's conflict. Each question names the options it must offer and the ones
-// it must not, so a subtest cannot vanish because an offer did.
+// CHAOS-12467's conflict. A redemption supersedes the other offers of its result, so
+// each option gets a turn of its own. Each question names the options it must offer
+// and the ones it must not, so a subtest cannot vanish because an offer did.
 func TestOfferedReceiptsResolveOnTheFollowUpTurn(t *testing.T) {
 	c := connect(t, "FG_ORG_TOKEN_FILE")
 	c.requireTools("investigate_with_interpretation")
@@ -56,34 +57,43 @@ func TestOfferedReceiptsResolveOnTheFollowUpTurn(t *testing.T) {
 			if tc.handles != nil {
 				args["subject_handles"] = tc.handles
 			}
-			d1, raw1 := c.call("investigate_with_interpretation", args)
-			s1 := structured(d1)
-			status := str(s1, "status")
-			t.Logf("turn 1 status=%s", status)
-			if status != "clarification_required" {
-				t.Fatalf("fixture defect: turn 1 must offer a clarification (status=%s): %.3000s", status, raw1)
+			turn := func(t *testing.T) (any, string) {
+				t.Helper()
+				d1, raw1 := c.call("investigate_with_interpretation", args)
+				s1 := structured(d1)
+				status := str(s1, "status")
+				t.Logf("turn 1 status=%s", status)
+				if status != "clarification_required" {
+					t.Fatalf("fixture defect: turn 1 must offer a clarification (status=%s): %.3000s", status, raw1)
+				}
+				return s1, raw1
 			}
+			first, raw1 := turn(t)
 			for _, option := range tc.must {
-				if len(list(s1, "structure_needs", option)) == 0 {
+				if len(list(first, "structure_needs", option)) == 0 {
 					t.Fatalf("turn 1 offers no %s, so its receipt is not tested: %.3000s", option, raw1)
 				}
 			}
 			for _, option := range tc.mustNever {
-				if offers := list(s1, "structure_needs", option); len(offers) != 0 {
+				if offers := list(first, "structure_needs", option); len(offers) != 0 {
 					t.Fatalf("turn 1 offers %s, which cannot resolve here: %v", option, offers)
 				}
 			}
-			resultID := str(s1, "result_id")
 			for option, field := range fields {
-				for i, offer := range list(s1, "structure_needs", option) {
+				for i := range list(first, "structure_needs", option) {
 					t.Run(fmt.Sprintf("%s/%d", option, i), func(t *testing.T) {
-						rid := str(offer, "receipt_id")
+						fresh, _ := turn(t)
+						offers := list(fresh, "structure_needs", option)
+						if i >= len(offers) {
+							t.Fatalf("turn 1 now offers %d of %s, want more than %d", len(offers), option, i)
+						}
+						resultID := str(fresh, "result_id")
 						args2 := doc{}
 						for k, v := range args {
 							args2[k] = v
 						}
 						args2["parent_result_id"] = resultID
-						args2[field] = []doc{{"result_id": resultID, "receipt_id": rid}}
+						args2[field] = []doc{{"result_id": resultID, "receipt_id": str(offers[i], "receipt_id")}}
 						d2, raw2 := c.call("investigate_with_interpretation", args2)
 						s2 := structured(d2)
 						if str(s2, "status") == "no_match" {
