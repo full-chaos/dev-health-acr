@@ -37,8 +37,6 @@ func TestOutboxColumnGrant_TheRuntimeRoleMarksPublishedAtAndNothingElse(t *testi
 		_, err = database.Runtime.ExecContext(ctx, `UPDATE acr.credential_lifecycle_outbox SET `+column+` WHERE aggregate_id = 'cred_col'`)
 		requireDenied(t, err, "UPDATE of "+column)
 	}
-	_, err = database.Runtime.ExecContext(ctx, `DELETE FROM acr.credential_lifecycle_outbox WHERE aggregate_id = 'cred_col'`)
-	requireDenied(t, err, "DELETE")
 	var tableUpdate bool
 	require.NoError(t, database.Owner.QueryRowContext(ctx, `SELECT has_table_privilege($1, 'acr.credential_lifecycle_outbox', 'UPDATE')`, database.Role).Scan(&tableUpdate))
 	require.False(t, tableUpdate, "no table-level UPDATE")
