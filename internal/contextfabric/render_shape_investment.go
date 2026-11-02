@@ -65,6 +65,10 @@ const (
 	themeShareAxisLabel   = "Theme"
 	themeShareValueLabel  = "Share of effort (ratio)"
 	themeShareSeriesLabel = "Share of effort"
+	// An organization's shares are of the effort that reaches a repository. The
+	// rest is the fact's unattributed_effort_share, outside the mix, so the
+	// words say which effort the parts divide (CHAOS-12585).
+	themeShareOrganizationValueLabel = "Share of effort linked to a repository (ratio)"
 )
 
 // investmentThemeShareShape is the part of a whole of one subject's investment.
@@ -74,10 +78,11 @@ const (
 // rows are the parts. There is no geometry to infer, and no fallback: a question
 // this rule does not fire for gets no treemap (check 10).
 //
-// Exactly one breakdown, on a repository or a team. Each claim on a fact carries
-// that fact's rows, so several claims on one fact are one breakdown (CHAOS-12591),
-// and the chart cites the first of them. A second breakdown is a comparison, and
-// an organization frame does not reach this family. The subject check is an allow
+// Exactly one breakdown, on a repository, a team or the organization. Each claim
+// on a fact carries that fact's rows, so several claims on one fact are one
+// breakdown (CHAOS-12591), and the chart cites the first of them. A second
+// breakdown is a comparison. An organization frame reaches this family through
+// RouteFrameFamily (CHAOS-12585). The subject check is an allow
 // list, so a person never gets this chart: the vocabulary has no such kind today,
 // and a kind added later stays out until someone decides otherwise. Every row is a
 // point, so a measured zero stays a part of the whole.
@@ -117,7 +122,7 @@ func investmentThemeShareShape(result InvestigationResult, frame *QuestionFrame)
 		return nil, RenderShapeSkipNoThemeBreakdown
 	}
 	switch fact.Subject.Kind {
-	case contractsv1.ContextFabricSubjectRepository, contractsv1.ContextFabricSubjectTeam:
+	case contractsv1.ContextFabricSubjectRepository, contractsv1.ContextFabricSubjectTeam, contractsv1.ContextFabricSubjectOrganization:
 	default:
 		return nil, RenderShapeSkipSubjectKindNotCharted
 	}
@@ -162,7 +167,7 @@ func investmentThemeShareShape(result InvestigationResult, frame *QuestionFrame)
 		Title:      themeShareTitle,
 		AxisKind:   contractsv1.ContextFabricRenderAxisCategory,
 		AxisLabel:  themeShareAxisLabel,
-		ValueLabel: themeShareValueLabel,
+		ValueLabel: themeShareValueLabelFor(fact.Subject.Kind),
 		ValueUnit:  contractsv1.ContextFabricRenderValueUnitRatio,
 		Series: []contractsv1.ContextFabricRenderSeries{{
 			Key:    contractsv1.ContextFabricRenderThemeShareField,
@@ -241,6 +246,14 @@ func withoutCompletionForecasts(claims []ClaimedFact) []ClaimedFact {
 		stripped[index].CompletionForecast = nil
 	}
 	return stripped
+}
+
+// themeShareValueLabelFor names what the shares divide for the subject's kind.
+func themeShareValueLabelFor(kind contractsv1.ContextFabricSubjectKind) string {
+	if kind == contractsv1.ContextFabricSubjectOrganization {
+		return themeShareOrganizationValueLabel
+	}
+	return themeShareValueLabel
 }
 
 // sameThemeBreakdown reports that two claims carry one breakdown: one subject,

@@ -377,14 +377,14 @@ func TestSuppliedDecodeRefusesUnknownFieldsAndTrailingDataWithoutTheSchema(t *te
 	}
 	supplied := &SuppliedInterpreter{schema: permissive}
 	valid := string(mustMarshalOutput(t, validInterpretationOutput()))
-	if _, _, err := supplied.decode([]byte(valid)); err != nil {
+	if _, _, err := supplied.decode(context.Background(), []byte(valid)); err != nil {
 		t.Fatalf("decode of a valid output error = %v", err)
 	}
 	unknown := strings.Replace(valid, `{`, `{"not_a_field":1,`, 1)
-	if _, _, err := supplied.decode([]byte(unknown)); err == nil {
+	if _, _, err := supplied.decode(context.Background(), []byte(unknown)); err == nil {
 		t.Fatal("an unknown field decoded, want it refused")
 	}
-	if _, _, err := supplied.decode([]byte(valid + valid)); err == nil {
+	if _, _, err := supplied.decode(context.Background(), []byte(valid+valid)); err == nil {
 		t.Fatal("two documents decoded, want the trailing one refused")
 	}
 }
