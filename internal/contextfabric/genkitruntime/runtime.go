@@ -1415,12 +1415,9 @@ func (r *Runtime) interpretQuestionWithSample(ctx context.Context, principal sto
 // the engine classifies the window from. CHAOS-3900 W1 added these fields to
 // InterpretedQuestion and composeEffectiveWindow reads them, but nothing set
 // them, so ClassifyWindow saw an empty pick on every turn and fell back by
-// shape. The receipt values are the sanitized ones. An unknown class is left
-// unset by the sanitizer (window_class_unrecognized) and stays unset here, on
-// every path: where an output schema gates the reply (the LLM generator, the
-// supplied path), the gate leaves the unknown pick out of what it validates
-// and the decode keeps it (CHAOS-12617). Validate never sees a raw model
-// string.
+// shape. The receipt values are the sanitized ones: an out-of-vocabulary class
+// is already unset there (with window_class_unrecognized), so it stays unset
+// here, and Validate never sees a raw model string.
 func carryWindowPick(interpreted *contextfabric.InterpretedQuestion, receipt contextfabric.ModelExecutionReceipt) {
 	interpreted.WindowClass = receipt.WindowClass
 	interpreted.WindowConfidence = receipt.WindowConfidence

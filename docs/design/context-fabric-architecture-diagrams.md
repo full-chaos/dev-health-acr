@@ -286,6 +286,21 @@ back by shape. An out-of-vocabulary class stays unset (receipt
 `window_class_unrecognized`). `WindowInferenceVersion` moved to `win_v2`, so
 answers stored under the old inference are not reused.
 
+**A status question about a named handle draws no default window (CHAOS-12595).**
+`classifyWindowFor` (`chaos3900_window_class.go`) reads the accepted frame
+before the class table. A frame that asks only for the current state of named
+handles (goals only `assess_state`, temporal `current`, a `named_subject`
+whose stated kind is `pull_request`, `work_item`, `ci_pipeline_run`,
+`deployment` or `incident`; one or more terms, because a handle's container
+or a second handle needs no window either) classifies as `state_snapshot`,
+whatever the model picked; a model pick of `state_snapshot` stays the model's, any other pick is
+marked downgraded. So "what is the status of pull request P in R" is no longer
+held at the CHAOS-4040 window gate. A trend, change or driver question about the
+same handle, and any question about a repository, team or project, keeps the
+shape fallback. The decision and its basis (`model`, `shape_fallback`,
+`handle_state`, `none`) are the Info line `context fabric window
+classification`, which also carries the model's own sanitized pick.
+
 **An unknown window pick is dropped, not refused (CHAOS-12617).** The output
 schema keeps the `window_class` and `window_confidence` enums, as providers
 read them. But the schema gate of the LLM generator (`llmGenerator.check`) and
@@ -1070,9 +1085,11 @@ is not offered: the narrowing is the caller's. A terminal result states the
 count of such subjects in a closed limitation, with no names, so the caller can
 widen the scope. The count holds only subjects the caller's own grant admits
 (CHAOS-12446): a subject outside the grant never counts, because for it the
-count is an existence oracle, and a subject inside the grant is no oracle. A web
-user gets it: a user-class credential is restricted at runtime, because the
-access read turns `*` into the live inventory on every call. A project-only
+count is an existence oracle, and a subject inside the grant is no oracle. A
+credential that names repositories or owners gets it: the access read narrows it
+to the live inventory, so it is restricted at runtime. A web user's `*` grant
+stays `*` (CHAOS-12592), so it reads the whole organization and counts every
+match outside the requested repositories. A project-only
 caller never gets the count. A stored result that carries it is refused to a
 reader of another grant by the grant check every stored read takes. A node
 counts when the offer rule would admit it without the narrowing, in any arm that
@@ -4129,7 +4146,7 @@ sequenceDiagram
     else grant ∩ live inventory is empty
       A-->>C: 409 no_repository (never an [] scope)
     else granted
-      A->>H: principal narrowed to grant ∩ inventory, read kept for the request
+      A->>H: a star grant kept whole (CHAOS-12592), any other grant narrowed to grant ∩ inventory, read kept for the request
       opt POST investigations
         H->>H: budget left < 10 s? → 503 budget_exhausted (before admission)
       end

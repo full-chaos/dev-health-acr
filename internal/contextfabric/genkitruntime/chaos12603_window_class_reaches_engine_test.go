@@ -30,7 +30,7 @@ var windowPickCases = []windowPickCase{
 	// schema gate of the LLM generator and the supplied path drops it before
 	// it validates (CHAOS-12617), and the stub and the file-exchange parser
 	// have no gate.
-	{"out of vocabulary: stays unset", "quarterly", "high", "", contextfabric.WindowConfidenceHigh, true},
+	{"out of vocabulary stays unset", "quarterly", "high", "", contextfabric.WindowConfidenceHigh, true},
 }
 
 func TestInterpretedQuestionCarriesTheModelWindowClass(t *testing.T) {
