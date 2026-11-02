@@ -30,6 +30,48 @@ type TokenExchangeRequest struct {
 	SubjectTokenType   string
 	RequestedTokenType string
 	Scope              string
+	// Resources holds every value of the RFC 8693 section 2.1 resource
+	// parameter, in request order. It carries the organization selector,
+	// urn:acr:org:<uuid>. No value means the key was absent: no selector.
+	// A key that is present but empty is a value, and malformed.
+	Resources []string
+}
+
+// TokenExchangeResourceOrgPrefix starts the Resource form that selects an
+// organization.
+const TokenExchangeResourceOrgPrefix = "urn:acr:org:"
+
+// OrgSelector returns the organization named by Resource. present is false
+// when no selector was sent.
+func (r TokenExchangeRequest) OrgSelector() (orgID string, present bool, err error) {
+	if len(r.Resources) == 0 {
+		return "", false, nil
+	}
+	if len(r.Resources) > 1 {
+		return "", false, errors.New("resource must be sent at most once")
+	}
+	orgID, ok := strings.CutPrefix(r.Resources[0], TokenExchangeResourceOrgPrefix)
+	if !ok || !canonicalLowerUUID(orgID) {
+		return "", false, fmt.Errorf("resource must be %s<lowercase uuid>", TokenExchangeResourceOrgPrefix)
+	}
+	return orgID, true, nil
+}
+
+func canonicalLowerUUID(value string) bool {
+	if len(value) != 36 {
+		return false
+	}
+	for i, c := range value {
+		switch {
+		case i == 8 || i == 13 || i == 18 || i == 23:
+			if c != '-' {
+				return false
+			}
+		case (c < '0' || c > '9') && (c < 'a' || c > 'f'):
+			return false
+		}
+	}
+	return true
 }
 
 // Validate checks the RFC 8693 structural shape only. It does not (and
@@ -49,6 +91,9 @@ func (r TokenExchangeRequest) Validate() error {
 	}
 	if r.RequestedTokenType != "" && r.RequestedTokenType != TokenExchangeAccessTokenType {
 		return fmt.Errorf("requested_token_type must be %q when set", TokenExchangeAccessTokenType)
+	}
+	if _, _, err := r.OrgSelector(); err != nil {
+		return err
 	}
 	return nil
 }
@@ -82,6 +127,7 @@ const (
 	TokenExchangeErrorInvalidRequest       OAuthTokenExchangeErrorCode = "invalid_request"
 	TokenExchangeErrorInvalidGrant         OAuthTokenExchangeErrorCode = "invalid_grant"
 	TokenExchangeErrorInvalidScope         OAuthTokenExchangeErrorCode = "invalid_scope"
+	TokenExchangeErrorInvalidTarget        OAuthTokenExchangeErrorCode = "invalid_target"
 	TokenExchangeErrorUnauthorizedClient   OAuthTokenExchangeErrorCode = "unauthorized_client"
 	TokenExchangeErrorUnsupportedGrantType OAuthTokenExchangeErrorCode = "unsupported_grant_type"
 )

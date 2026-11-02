@@ -525,6 +525,7 @@ type recordingTelemetry struct {
 	windowGatedForConfirmation     []windowGatedRecord
 	operandReadKinds               [][3]int
 	windowClassifications          []recordedWindowClassification
+	interpretationTerms            []InterpretationTermsEvent
 	windowCanonicalizationOutcomes []WindowCanonicalizationOutcome
 	// structureNeedsDisclosed/structureOfferCounts/structureReceipts
 	// (CHAOS-3900 P1.F) mirror the SAME list-not-count discipline.
@@ -809,6 +810,10 @@ func (r *recordingTelemetry) RecordOperandReadKinds(_ context.Context, _ storage
 
 func (r *recordingTelemetry) RecordWindowClassification(_ context.Context, _ storage.Principal, modelClass WindowClass, outcome WindowClassOutcome) {
 	r.windowClassifications = append(r.windowClassifications, recordedWindowClassification{ModelClass: modelClass, Outcome: outcome})
+}
+
+func (r *recordingTelemetry) RecordInterpretationTerms(_ context.Context, _ storage.Principal, event InterpretationTermsEvent) {
+	r.interpretationTerms = append(r.interpretationTerms, event)
 }
 
 // recordedWindowClassification is one RecordWindowClassification call.

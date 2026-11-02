@@ -329,9 +329,12 @@ type WorkloadBinding struct {
 
 // WorkloadBindingStore is a read-only lookup by the exact validated
 // identity tuple. Implementations must never resolve from anything else
-// (see WorkloadBindingKey's doc comment).
+// (see WorkloadBindingKey's doc comment). One identity may be bound in
+// several organizations, so Lookup returns every row for the identity
+// (disabled rows included, ordered by org_id) and ErrNotFound when there
+// is none; choosing among them is the resolver's job.
 type WorkloadBindingStore interface {
-	Lookup(ctx context.Context, key WorkloadBindingKey) (WorkloadBinding, error)
+	Lookup(ctx context.Context, key WorkloadBindingKey) ([]WorkloadBinding, error)
 }
 
 func IsCredentialLifecycleAuditAction(action string) bool {
