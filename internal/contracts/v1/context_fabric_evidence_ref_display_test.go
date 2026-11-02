@@ -1,0 +1,84 @@
+package v1
+
+import (
+	"regexp"
+	"testing"
+)
+
+const (
+	displayRepoUUID = "920f9442-07df-4217-4dc4-c5833c0b8268"
+	displayZeroUUID = "00000000-0000-0000-0000-000000000000"
+)
+
+// rawInLabel is what a reader must never see in an evidence label (CHAOS-12620):
+// a UUID, or a provider token before a raw source id.
+var rawInLabel = regexp.MustCompile(`[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}|(^|[\s,:])(linear|jira|gh|ghpr|gitlab|gl|extkey):|%3A|relates_to|:fwd|:rev`)
+
+// Every evidence entity type, from the id forms its producers mint (graph
+// producers scope an id by its repository's UUID; context packet reads mint the
+// bare id). The label names the subject as a reader does, or is the noun alone.
+func TestAnEvidenceLabelNeverShowsARawID(t *testing.T) {
+	t.Parallel()
+	cases := map[ContextFabricEvidenceEntityType][]struct{ id, want string }{
+		ContextFabricEvidenceEntityPullRequest: {{displayRepoUUID + ":869", "Pull request: #869"}, {"869", "Pull request: #869"}},
+		ContextFabricEvidenceEntityCI:          {{displayRepoUUID + ":29103196850", "CI run: 29103196850"}, {"29103196850", "CI run: 29103196850"}},
+		ContextFabricEvidenceEntityDeployment:  {{displayRepoUUID + ":3530993037", "Deployment: 3530993037"}},
+		ContextFabricEvidenceEntityRepository:  {{displayRepoUUID, "Repository"}},
+		ContextFabricEvidenceEntityWorkItem: {
+			{displayZeroUUID + ":linear:CHAOS-2311", "Work item: CHAOS-2311"},
+			{displayRepoUUID + ":gh:full-chaos/dev-health-ops#5035", "Work item: full-chaos/dev-health-ops#5035"},
+			{"jira:OPS-11", "Work item: OPS-11"},
+			{displayRepoUUID + ":gitlab:group/project!12", "Work item: group/project!12"},
+		},
+		ContextFabricEvidenceEntityTeam:          {{"linear:CHAOS", "Team: CHAOS"}, {"gl:full.chaos", "Team: full.chaos"}},
+		ContextFabricEvidenceEntityProject:       {{"linear:c67b1602-31db-4422-8dec-a4a02bbcc513", "Project"}},
+		ContextFabricEvidenceEntityOrganization:  {{"70d529e0-3c06-4597-8480-794fd02328b6", "Organization"}},
+		ContextFabricEvidenceEntityCommit:        {{"3f9c2ab", "Commit: 3f9c2ab"}},
+		ContextFabricEvidenceEntityCommitFile:    {{"3f9c2ab:cmd/main.go", "Commit file: 3f9c2ab:cmd/main.go"}},
+		ContextFabricEvidenceEntityHotspot:       {{"cmd/main.go", "File hotspot: cmd/main.go"}},
+		ContextFabricEvidenceEntityComplexity:    {{"cmd/main.go", "File complexity: cmd/main.go"}},
+		ContextFabricEvidenceEntityIncident:      {{"INC-42", "Incident: INC-42"}},
+		ContextFabricEvidenceEntityEpisode:       {{"episode-7", "Episode: episode-7"}},
+		ContextFabricEvidenceEntityGraph:         {{"relationship.v2:work_item_team:8dce29ed83b79174cd7aaf8a149a035a", "Relationship"}},
+		ContextFabricEvidenceEntityAIRun:         {{"6f1d2c3b-1111-4222-8333-944455556666", "AI workflow run"}},
+		ContextFabricEvidenceEntityAIArtifact:    {{"edge-1", "AI artifact"}},
+		ContextFabricEvidenceEntityReviewOutcome: {{"edge-2", "Review outcome"}},
+		ContextFabricEvidenceEntityWorkItemDependencyV2: {
+			{"ghpr%3Afull-chaos/ask-dev#90:linear%3ACHAOS-9616:relates_to%3Afwd", "Work item dependency: full-chaos/ask-dev#90, CHAOS-9616"},
+		},
+		ContextFabricEvidenceEntityWorkItemHierarchyV2: {{displayZeroUUID + ":linear%3ACHAOS-2:linear%3ACHAOS-1", "Work item hierarchy: CHAOS-2, CHAOS-1"}},
+		ContextFabricEvidenceEntityWorkItemTeamV2:      {{displayZeroUUID + ":linear%3ACHAOS-2:linear%3ACHAOS:native", "Work item/team link: CHAOS-2, CHAOS"}},
+		ContextFabricEvidenceEntityDeploymentIncidentV2: {
+			{displayRepoUUID + ":3530993037:INC-42:native", "Deployment/incident link: 3530993037, INC-42"},
+		},
+		ContextFabricEvidenceEntityProjectTeamV2: {{"linear:c67b1602-31db-4422-8dec-a4a02bbcc513:linear%3ACHAOS:native", "Project/team link: CHAOS"}},
+		ContextFabricEvidenceEntityReviewV2:      {{displayRepoUUID + ":1042:approval-42", "Review: #1042"}},
+		// The retired un-encoded joins cannot be split back: the noun alone.
+		ContextFabricEvidenceEntityWorkItemDependency: {{"jira:A:jira:B:blocks", "Work item dependency"}},
+		ContextFabricEvidenceEntityWorkItemHierarchy:  {{displayRepoUUID + ":linear:CHAOS-2:linear:CHAOS-1", "Work item hierarchy"}},
+		ContextFabricEvidenceEntityWorkItemTeam:       {{displayRepoUUID + ":linear:CHAOS-2:linear:CHAOS", "Work item/team link"}},
+		ContextFabricEvidenceEntityDeploymentIncident: {{displayRepoUUID + ":1:2", "Deployment/incident link"}},
+		ContextFabricEvidenceEntityProjectTeam:        {{"linear:p:linear:t", "Project/team link"}},
+		ContextFabricEvidenceEntityReview:             {{displayRepoUUID + ":1042:approval-42", "Review"}},
+	}
+	for _, entityType := range ContextFabricEvidenceEntityTypeVocabulary() {
+		rows, ok := cases[entityType]
+		if !ok {
+			t.Errorf("%s: no case; every entity type needs one", entityType)
+			continue
+		}
+		for _, row := range rows {
+			ref := "acr:v1:" + string(entityType) + ":" + row.id
+			label, known := ContextFabricEvidenceRefLabel(ref)
+			if !known || label != row.want {
+				t.Errorf("%s: label = %q (known %v), want %q", ref, label, known, row.want)
+			}
+			if rawInLabel.MatchString(label) {
+				t.Errorf("%s: label %q shows a raw id", ref, label)
+			}
+		}
+	}
+	if label, known := ContextFabricEvidenceRefLabel("acr:v1:mystery:" + displayRepoUUID); known || label != "Evidence" {
+		t.Errorf("unknown type: label = %q (known %v), want the generic noun", label, known)
+	}
+}

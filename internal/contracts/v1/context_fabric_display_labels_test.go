@@ -95,7 +95,7 @@ func TestEvidenceRefIDIsTypedAndTotal(t *testing.T) {
 			// (TestEvidenceRefIDRefusesRetiredKinds) and labeled from the
 			// stored refs that still carry them.
 			ref := ContextFabricEvidenceRefPrefix + string(entityType) + ":x"
-			if label, known := ContextFabricEvidenceRefLabel(ref); !known || label != contextFabricEvidenceEntityLabels[entityType]+": x" {
+			if label, known := ContextFabricEvidenceRefLabel(ref); !known || !ownNounLabel(label, contextFabricEvidenceEntityLabels[entityType]) {
 				t.Errorf("retired %q labels as (%q, %v)", entityType, label, known)
 			}
 			continue
@@ -106,9 +106,9 @@ func TestEvidenceRefIDIsTypedAndTotal(t *testing.T) {
 			t.Errorf("EvidenceRefID(%q, ...) produced a ref that ContextFabricEvidenceRefLabel does not recognize: %q", entityType, ref)
 			continue
 		}
-		wantLabel := contextFabricEvidenceEntityLabels[entityType] + ": x"
-		if label != wantLabel {
-			t.Errorf("EvidenceRefID(%q, ...) round-tripped to label %q, want %q -- the segment does not match the entity type that constructed it", entityType, label, wantLabel)
+		wantNoun := contextFabricEvidenceEntityLabels[entityType]
+		if !ownNounLabel(label, wantNoun) {
+			t.Errorf("EvidenceRefID(%q, ...) round-tripped to label %q, want the noun %q -- the segment does not match the entity type that constructed it", entityType, label, wantNoun)
 		}
 	}
 }
@@ -167,8 +167,9 @@ func TestEvidenceRefLabels(t *testing.T) {
 		want  string
 		known bool
 	}{
-		{"acr:v1:team:gh:ops-team", "Team: gh:ops-team", true},
-		{"acr:v1:pull-request:42", "Pull request: 42", true},
+		// CHAOS-12620: the label names the subject as a reader does.
+		{"acr:v1:team:gh:ops-team", "Team: ops-team", true},
+		{"acr:v1:pull-request:42", "Pull request: #42", true},
 		{"acr:v1:commit:deadbeef", "Commit: deadbeef", true},
 		{"acr:v1:ci:123", "CI run: 123", true},
 		// Unknown segment: the generic floor, and the caller counts it.
@@ -176,7 +177,7 @@ func TestEvidenceRefLabels(t *testing.T) {
 		// takes the closed enum, see TestEvidenceRefIDIsTypedAndTotal) --
 		// this read-time path stays open on purpose, for a ref that
 		// predates the enum or was minted by another system.
-		{"acr:v1:service:api", "Evidence: api", false},
+		{"acr:v1:service:api", "Evidence", false},
 		{"not-an-acr-ref", "Evidence", false},
 		{"acr:v1:team", "Evidence", false},
 	}
@@ -292,10 +293,16 @@ func TestDecodedEvidenceIDMatchesTheIdentityCodec(t *testing.T) {
 		}
 	}
 	label, known := ContextFabricEvidenceRefLabel("acr:v1:work-item-dependency.v2:jira%3AA%3AB:jira%3AC:blocks%3Afwd")
-	if !known || label != "Work item dependency: jira:A:B:jira:C:blocks:fwd" {
+	if !known || label != "Work item dependency: A:B, C" {
 		t.Errorf("encoded label = (%q, %v)", label, known)
 	}
-	if label, _ := ContextFabricEvidenceRefLabel("acr:v1:work-item:repo:jira%3AA"); label != "Work item: repo:jira%3AA" {
+	if label, _ := ContextFabricEvidenceRefLabel("acr:v1:work-item:repo:jira%3AA"); label != "Work item: jira%3AA" {
 		t.Errorf("a non-encoded kind's id was decoded: %q", label)
 	}
+}
+
+// ownNounLabel: an evidence label is the entity's own noun, alone or before the
+// id's reader form (CHAOS-12620).
+func ownNounLabel(label, noun string) bool {
+	return label == noun || strings.HasPrefix(label, noun+": ")
 }
