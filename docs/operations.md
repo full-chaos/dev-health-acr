@@ -1302,6 +1302,17 @@ serve a reference the caller can no longer see*, and it covers the whole
 payload, not only the answer's own citations -- a reused result is served
 whole.
 
+The evidence half first tries a direct read (CHAOS-12537): one keyed read of
+the relationships between the endpoints of the edges the answer serves, sent
+through the walk's own edge and endpoint gates and its admission. When that
+read and the re-resolved subjects prove every reference, the answer is served
+without a discovery walk. Anything it cannot prove -- a reference with no
+served edge, an edge the gates now refuse, a failed or cut read, a request
+narrowed by repository, project or team -- goes to the full discovery walk,
+which then decides exactly as before. The direct read never refuses by
+itself. It may prove an edge that the walk's own edge budget would have cut;
+that is the one difference, and it is not a weaker gate.
+
 The outcome is one of three, and they are distinguishable in telemetry:
 
 - **`hit`** -- everything the stored payload would serve is still visible.
