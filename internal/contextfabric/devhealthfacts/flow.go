@@ -80,6 +80,7 @@ func (p *FlowProvider) ReadFacts(ctx context.Context, principal storage.Principa
 	if unsupported {
 		return unsupportedResult, nil
 	}
+	timeBound = statedWindowBound(query, timeBound)
 	orgID, err := requireOrgID(principal.OrgID)
 	if err != nil {
 		return contextfabric.FactProviderResult{}, err

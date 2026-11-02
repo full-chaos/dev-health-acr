@@ -1348,7 +1348,10 @@ import (
 // ownership (graph_team_narrowing_undecided_paths): its coverage is partial, and
 // a complete answer is floored to partial with one sentence per cause. An answer
 // saved under v259 holds no such disclosure and must not be reused.
-const QueryVersion = "devhealthfacts.clickhouse.v260"
+// v260 -> v261: a stated window bounds every dated read on the current axis
+// (CHAOS-12536). An answer saved under v260 can hold a row from before the window
+// it states.
+const QueryVersion = "devhealthfacts.clickhouse.v261"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each
@@ -2735,8 +2738,9 @@ func explainTeamScopedProjectAbsence(bound factTimeBound, state contextfabric.So
 	// corpus, which is a statement about TIME, not routing (codex P2).
 	// Overwriting it would erase the distinction §19.8.3 exists to draw and
 	// replace a true reason with a less true one. A current-axis window is not
-	// a historical read.
-	if bound.active && !bound.currentAxis {
+	// a historical read, but a stated window's empty read is a statement about
+	// time too.
+	if bound.active && (!bound.currentAxis || bound.statedWindow) {
 		return reason
 	}
 	for _, subject := range subjects {

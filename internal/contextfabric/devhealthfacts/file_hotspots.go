@@ -70,6 +70,7 @@ func (p *FileHotspotsProvider) ReadFacts(ctx context.Context, principal storage.
 	if degraded {
 		return unsupported, nil
 	}
+	timeBound = statedWindowBound(query, timeBound)
 	orgID, err := requireOrgID(principal.OrgID)
 	if err != nil {
 		return contextfabric.FactProviderResult{}, err

@@ -64,6 +64,7 @@ func (p *LandscapeProvider) ReadFacts(ctx context.Context, principal storage.Pri
 	if unsupported {
 		return unsupportedResult, nil
 	}
+	timeBound = statedWindowBound(query, timeBound)
 	orgID, err := requireOrgID(principal.OrgID)
 	if err != nil {
 		return contextfabric.FactProviderResult{}, err
