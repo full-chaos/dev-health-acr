@@ -189,6 +189,13 @@ type Config struct {
 	// then. Off serves no map; coverage.sources[] words are stamped either way,
 	// because those fields are on every pin.
 	ContextFabricVocabularyLabelsEnabled bool
+	// ContextFabricInvestmentTreemapEnabled (CHAOS-12521,
+	// ACR_CONTEXT_FABRIC_INVESTMENT_TREEMAP_ENABLED) turns on the
+	// investment_theme_share render rule. Default OFF, for the same reason as
+	// the labels: render_shapes.selected_by is a closed enum, so a consumer on
+	// a pin that does not hold the rule fails every answer that carries the
+	// shape. Turn it on after web's and ask-dev's pins are deployed.
+	ContextFabricInvestmentTreemapEnabled bool
 	// ServerCompletenessAuthorityEnabled (CHAOS-5640,
 	// ACR_CONTEXT_FABRIC_SERVER_COMPLETENESS_AUTHORITY_ENABLED) is the
 	// gated FLIP's master switch -- default OFF, same "ships dark"

@@ -14,9 +14,12 @@ import (
 )
 
 type EngineOptions struct {
-	ServiceVersion string
-	Now            func() time.Time
-	NewResultID    func() string
+	// InvestmentTreemapEnabled turns on the investment_theme_share rule
+	// (CHAOS-12521). See Config.ContextFabricInvestmentTreemapEnabled.
+	InvestmentTreemapEnabled bool
+	ServiceVersion           string
+	Now                      func() time.Time
+	NewResultID              func() string
 	// RegimeAOffersDisabled (CHAOS-4234) turns OFF the offers-only
 	// resolution the class-default window gate runs to compose kind/
 	// handle/candidate offers beside the window offer -- restoring
@@ -1339,6 +1342,7 @@ type Engine struct {
 	observationKeys                             ObservationKeyDeclarer
 	regimeAOffersDisabled                       bool
 	anchorBindingShadowDisabled                 bool
+	renderShapeOptions                          RenderShapeOptions
 	serverCompletenessAuthorityEnabled          bool
 	serverCompletenessAuthoritySymmetricEnabled bool
 	// servedLateHook is a test seam: a writer that adds bytes to the document
@@ -1418,6 +1422,7 @@ func NewEngine(dependencies EngineDependencies, options EngineOptions) (*Engine,
 		reuseVersionAuthorities:                     options.ReuseVersionAuthorities,
 		regimeAOffersDisabled:                       options.RegimeAOffersDisabled,
 		anchorBindingShadowDisabled:                 options.DisableAnchorBindingShadow,
+		renderShapeOptions:                          RenderShapeOptions{InvestmentThemeShare: options.InvestmentTreemapEnabled},
 		serverCompletenessAuthorityEnabled:          options.ServerCompletenessAuthorityEnabled,
 		serverCompletenessAuthoritySymmetricEnabled: options.ServerCompletenessAuthoritySymmetricEnabled,
 		maxItems:                 options.MaxItems,
@@ -4331,7 +4336,7 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 	// retry would otherwise double-count a decision an operator counts.
 	anchorShadow.observeServedCount(cardinality.Scope)
 	if e.telemetry != nil {
-		_, renderShapeEvent := SelectRenderShapes(result, familyOutcome.Frame)
+		_, renderShapeEvent := selectRenderShapes(result, familyOutcome.Frame, e.renderShapeOptions)
 		e.telemetry.RecordRenderShapeSelection(ctx, principal, renderShapeEvent)
 		// B8's shadow gate, emitted from the SAME once-per-served-result
 		// point and for the same reason: the derivation is pure and could

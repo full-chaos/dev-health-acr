@@ -40,6 +40,10 @@
           "type": "boolean",
           "description": "ACR_CONTEXT_FABRIC_VOCABULARY_LABELS_ENABLED for acr-api (CHAOS-12416). Keep false until every consumer's pin carries vocabulary_labels: the result root is additionalProperties:false and acr and web roll separately."
         },
+        "investmentTreemapEnabled": {
+          "type": "boolean",
+          "description": "ACR_CONTEXT_FABRIC_INVESTMENT_TREEMAP_ENABLED for acr-api (CHAOS-12521). Keep false until web's and ask-dev's pins hold the investment_theme_share rule."
+        },
         "runLeaseEnabled": {
           "type": "boolean",
           "description": "ACR_CONTEXT_FABRIC_RUN_LEASE_ENABLED for acr-api (CHAOS-12472). Ask Dev's Stop needs it. Requires ACR_CONTEXT_FABRIC_EVENT_STREAM_ENABLED=true in deployment.extraEnv."

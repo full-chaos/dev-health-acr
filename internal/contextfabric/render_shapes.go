@@ -184,6 +184,31 @@ const (
 	// asked for per-group results -- is not merely wrong here, it was not
 	// requested, and the plan is where that is said.
 	RenderShapeSkipNotPlanAuthorized RenderShapeSkipReason = "not_plan_authorized"
+	// The investment_theme_share rule's reasons (CHAOS-12521). See
+	// render_shape_investment.go.
+	//
+	// RenderShapeSkipRuleDisabled -- the deployment's flag is off.
+	RenderShapeSkipRuleDisabled RenderShapeSkipReason = "rule_disabled"
+	// RenderShapeSkipNotInvestmentAllocation -- the served family is not
+	// investment_allocation. This is the common exit: most answers are not
+	// about where effort went, and they get no treemap (check 10).
+	RenderShapeSkipNotInvestmentAllocation RenderShapeSkipReason = "not_investment_allocation"
+	// RenderShapeSkipNoThemeBreakdown -- no claimed investment fact carries
+	// a declared theme_breakdown table.
+	RenderShapeSkipNoThemeBreakdown RenderShapeSkipReason = "no_theme_breakdown"
+	// RenderShapeSkipSeveralThemeBreakdowns -- more than one does. A treemap
+	// is one whole, and two subjects' splits are a comparison.
+	RenderShapeSkipSeveralThemeBreakdowns RenderShapeSkipReason = "several_theme_breakdowns"
+	// RenderShapeSkipSubjectKindNotCharted -- the fact's subject is not a
+	// repository or a team. A person never gets this chart.
+	RenderShapeSkipSubjectKindNotCharted RenderShapeSkipReason = "subject_kind_not_charted"
+	// RenderShapeSkipThemeRowUnusable -- a row holds no canonical theme or no
+	// numeric share. The shape is skipped WHOLE: a part of a whole left out
+	// changes what every other part means.
+	RenderShapeSkipThemeRowUnusable RenderShapeSkipReason = "theme_row_unusable"
+	// RenderShapeSkipFewerThanTwoShares -- fewer than two shares are above 0.
+	// One part is no split.
+	RenderShapeSkipFewerThanTwoShares RenderShapeSkipReason = "fewer_than_two_shares"
 )
 
 // cohortRenderIntent reports whether a cohort chart is an answer TO this
@@ -221,6 +246,10 @@ func cohortRenderIntent(frame *QuestionFrame) bool {
 // ContextFabricRenderPointSource that
 // ContextFabricInvestigationResult.Validate then resolves and compares.
 func SelectRenderShapes(result InvestigationResult, frame *QuestionFrame) ([]contractsv1.ContextFabricRenderShape, RenderShapeSelectionEvent) {
+	return selectRenderShapes(result, frame, RenderShapeOptions{})
+}
+
+func selectRenderShapes(result InvestigationResult, frame *QuestionFrame, options RenderShapeOptions) ([]contractsv1.ContextFabricRenderShape, RenderShapeSelectionEvent) {
 	// event.Shape stays the INTERPRETED shape. It is a decision-basis
 	// record, and what the model emitted is still worth recording even now
 	// that nothing branches on it -- it is how a Shape/frame divergence
@@ -264,6 +293,16 @@ func SelectRenderShapes(result InvestigationResult, frame *QuestionFrame) ([]con
 		} else {
 			event.skip(contractsv1.ContextFabricRenderRuleCohortDriverContribution, reason)
 		}
+	}
+
+	// CHAOS-12521: ahead of the trends, because they take whatever room the
+	// shape bound leaves and this rule yields at most one shape.
+	if !options.InvestmentThemeShare {
+		event.skip(contractsv1.ContextFabricRenderRuleInvestmentThemeShare, RenderShapeSkipRuleDisabled)
+	} else if treemap, reason := investmentThemeShareShape(result); treemap != nil {
+		shapes = append(shapes, *treemap)
+	} else {
+		event.skip(contractsv1.ContextFabricRenderRuleInvestmentThemeShare, reason)
 	}
 
 	// CHAOS-4637: the dated_fact_trend rule RETURNS, and it returns
@@ -881,6 +920,7 @@ var renderShapeRules = []contractsv1.ContextFabricRenderShapeRule{
 	contractsv1.ContextFabricRenderRuleCohortAttentionScore,
 	contractsv1.ContextFabricRenderRuleCohortDriverContribution,
 	contractsv1.ContextFabricRenderRuleDatedFactTrend,
+	contractsv1.ContextFabricRenderRuleInvestmentThemeShare,
 }
 
 // Accounted is CHAOS-4621's structural invariant, as code rather than as a
@@ -949,6 +989,9 @@ func renderKindNoun(kind contractsv1.ContextFabricSubjectKind) string {
 // key of the rule-skipped line can carry: the RenderShapeSkip* constants.
 func RenderShapeSkipReasonLineVocabulary() []string {
 	return []string{
+		string(RenderShapeSkipRuleDisabled), string(RenderShapeSkipNotInvestmentAllocation), string(RenderShapeSkipNoThemeBreakdown),
+		string(RenderShapeSkipSeveralThemeBreakdowns), string(RenderShapeSkipSubjectKindNotCharted),
+		string(RenderShapeSkipThemeRowUnusable), string(RenderShapeSkipFewerThanTwoShares),
 		string(RenderShapeSkipNotCohortIntent), string(RenderShapeSkipNoRankedMember), string(RenderShapeSkipNoDrivers),
 		string(RenderShapeSkipTooManySignals), string(RenderShapeSkipNoDeclaredTable), string(RenderShapeSkipNoTimeSeriesTable),
 		string(RenderShapeSkipClaimFieldNotAMeasure), string(RenderShapeSkipUnresolvableMeasureRoles),

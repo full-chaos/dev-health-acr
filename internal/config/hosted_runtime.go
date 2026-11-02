@@ -167,6 +167,10 @@ func loadHostedRuntimeValues(lookup lookupEnv, cfg *Config, defaultRequireStores
 	if cfg.ContextFabricVocabularyLabelsEnabled, err = boolValue(lookup, ContextFabricVocabularyLabelsEnabledEnvVar, false); err != nil {
 		return err
 	}
+	// CHAOS-12521: default OFF -- see Config.ContextFabricInvestmentTreemapEnabled.
+	if cfg.ContextFabricInvestmentTreemapEnabled, err = boolValue(lookup, ContextFabricInvestmentTreemapEnabledEnvVar, false); err != nil {
+		return err
+	}
 	// CHAOS-11911: default OFF -- see Config.ContextFabricEventStreamEnabled.
 	if cfg.ContextFabricEventStreamEnabled, err = boolValue(lookup, ContextFabricEventStreamEnabledEnvVar, false); err != nil {
 		return err
@@ -200,6 +204,10 @@ const AskDevRetentionEnabledEnvVar = "ACR_ASK_DEV_RETENTION_ENABLED"
 // ContextFabricRunLeaseEnabledEnvVar runs streamed submissions under an
 // ACR-owned lease (CHAOS-11949).
 const ContextFabricRunLeaseEnabledEnvVar = "ACR_CONTEXT_FABRIC_RUN_LEASE_ENABLED"
+
+// ContextFabricInvestmentTreemapEnabledEnvVar turns on the
+// investment_theme_share render rule (CHAOS-12521).
+const ContextFabricInvestmentTreemapEnabledEnvVar = "ACR_CONTEXT_FABRIC_INVESTMENT_TREEMAP_ENABLED"
 
 // ContextFabricVocabularyLabelsEnabledEnvVar serves vocabulary_labels (CHAOS-12416).
 const ContextFabricVocabularyLabelsEnabledEnvVar = "ACR_CONTEXT_FABRIC_VOCABULARY_LABELS_ENABLED"
@@ -291,6 +299,7 @@ func (c Config) SafeAttributes() []any {
 		"context_fabric_server_completeness_authority_enabled", c.ServerCompletenessAuthorityEnabled,
 		"context_fabric_server_completeness_authority_symmetric_enabled", c.ServerCompletenessAuthoritySymmetricEnabled,
 		"context_fabric_vocabulary_labels_enabled", c.ContextFabricVocabularyLabelsEnabled,
+		"context_fabric_investment_treemap_enabled", c.ContextFabricInvestmentTreemapEnabled,
 		"context_fabric_event_stream_enabled", c.ContextFabricEventStreamEnabled,
 		"context_fabric_run_lease_enabled", c.ContextFabricRunLeaseEnabled,
 		"thread_list_first_question_enabled", c.ThreadListFirstQuestionEnabled,
