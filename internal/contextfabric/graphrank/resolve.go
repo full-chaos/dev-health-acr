@@ -3184,7 +3184,7 @@ func resolveSubjects(ctx context.Context, principal storage.Principal, request c
 			// its anchor have not run here), and the attestation is
 			// consumed exactly as the ordinary path consumes it: same
 			// predicate, same census, same commit.
-			shadowsHandle := len(request.SubjectHandles) == 0 && committedScopeAnchorShadowsHandle(deps.questionHandles, exactResolution.Committed, frame)
+			shadowsHandle := len(request.SubjectHandles) == 0 && committedScopeAnchorShadowsHandle(request, deps.questionHandles, exactResolution.Committed, frame)
 			// The hinted anchor reaches the round as the sole claimant of its
 			// own label, the same shape the alias lookup gives the ordinary
 			// path, so the trace reports a unique claimant and never a
@@ -4161,7 +4161,7 @@ func resolveSubjects(ctx context.Context, principal storage.Principal, request c
 	stalledForCensus := len(resolution.Committed) == 0 && (searchTruncated || handleBoundRound(principal, deps.questionHandles))
 	var handleRound workItemHandleRound
 	var undecidingHandle *BoundHandle
-	if !offersOnly && deps.CensusFunc != nil && (stalledForCensus || committedScopeAnchorShadowsHandle(deps.questionHandles, resolution.Committed, frame)) {
+	if !offersOnly && deps.CensusFunc != nil && (stalledForCensus || committedScopeAnchorShadowsHandle(request, deps.questionHandles, resolution.Committed, frame)) {
 		// CHAOS-4300: false -- this is the pre-existing stalled-resolution
 		// call site, not the caller-hint short circuit's own new call above.
 		censusVisibility := unscopedVisibility || repositoryNarrowedByUnrestrictedPrincipal(principal, request) || teamNarrowedByUnrestrictedPrincipal(principal, request, deps) || grantScopedRequest(principal, request, deps)
@@ -4630,24 +4630,24 @@ func resolveSubjects(ctx context.Context, principal storage.Principal, request c
 // none is of the handle's own kind. A committed scope anchor must not shadow
 // a handle the question names: the census runs for that handle regardless.
 //
-// Only a named-subject (or absent) frame qualifies, and one that states an
-// expected kind must state the handle's kind: in a cohort, grouped or count
-// question, or one about the repository itself, a handle is an example or an
-// operand, and committing it would change what the answer is about.
-func committedScopeAnchorShadowsHandle(bound []BoundHandle, committed []contextfabric.SubjectRef, frame *contextfabric.QuestionFrame) bool {
+// Only a named-subject (or absent) frame qualifies, and a turn that states a
+// kind must state the handle's kind: in a cohort, grouped or count question, or
+// one about the repository itself, a handle is an example or an operand, and
+// committing it would change what the answer is about. The stated kind is
+// statedKind's: the frame's expected kind, or else a lone expected_kinds
+// (CHAOS-12631).
+func committedScopeAnchorShadowsHandle(request contextfabric.InvestigationRequest, bound []BoundHandle, committed []contextfabric.SubjectRef, frame *contextfabric.QuestionFrame) bool {
 	if len(committed) == 0 {
 		return false
 	}
 	if len(bound) != 1 || !IsCensusKindRegistered(bound[0].Kind) {
 		return false
 	}
-	if frame != nil {
-		if frame.SubjectExpression.Kind != contextfabric.SubjectExpressionNamed {
-			return false
-		}
-		if named := frame.SubjectExpression.Named; named != nil && named.ExpectedKind != nil && *named.ExpectedKind != bound[0].Kind {
-			return false
-		}
+	if frame != nil && frame.SubjectExpression.Kind != contextfabric.SubjectExpressionNamed {
+		return false
+	}
+	if turnStatesAnotherKind(request, frame, bound[0].Kind) {
+		return false
 	}
 	for _, subject := range committed {
 		if subject.Kind == bound[0].Kind || !KindHasAnchorFK(bound[0].Kind, subject.Kind) {

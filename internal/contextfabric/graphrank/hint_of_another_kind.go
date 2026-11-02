@@ -32,7 +32,7 @@ func withoutHintsOfAnotherKind(ctx context.Context, request contextfabric.Invest
 	var dropped []contextfabric.SubjectHint
 	for _, hint := range request.RequestedScope.SubjectHints {
 		if hint.Kind == "" || asked[hint.Kind] || contextfabric.IsConfirmedCandidatePick(ctx, hint) ||
-			committedScopeAnchorShadowsHandle(bound, []contextfabric.SubjectRef{{Kind: hint.Kind}}, frame) {
+			committedScopeAnchorShadowsHandle(request, bound, []contextfabric.SubjectRef{{Kind: hint.Kind}}, frame) {
 			kept = append(kept, hint)
 			continue
 		}
