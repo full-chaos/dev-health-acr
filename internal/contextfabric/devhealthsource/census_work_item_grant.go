@@ -30,7 +30,7 @@ const censusWorkItemMaxRowsToRead = uint64(3_000_000)
 // False ends the read with no statement, as for any grant that cannot apply.
 func withWorkItemGrantFilter(orgID string, predicate CensusPredicate, grant []string, handleValue string, handleBound bool) (CensusPredicate, bool) {
 	// A census with no handle has no candidates to narrow to, and its count
-	// inside the link arm would miss items the node gate admits.
+	// inside the two arms would miss items the node gate admits.
 	if !handleBound {
 		return predicate, false
 	}
