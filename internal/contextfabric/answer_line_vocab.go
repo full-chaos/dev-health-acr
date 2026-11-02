@@ -62,7 +62,7 @@ func PriorSubjectReceiptSkipReasonVocabulary() []string {
 // SubjectlessTerminalReasonVocabulary is the closed set of reasons a turn reached the subjectless terminal path.
 func SubjectlessTerminalReasonVocabulary() []string {
 	return []string{
-		"frame_gate_refused", declaredKindTerminalReason, "ambiguous", "offer_pool_emptied_by_exclusion", "graph_not_projected",
+		"frame_gate_refused", declaredKindTerminalReason, "ambiguous", censusUnlistedTerminalReason, "offer_pool_emptied_by_exclusion", "graph_not_projected",
 		"team_inactive", "authz_filtered_to_empty", "empty_pool", unboundScopeAnchorTerminalReason,
 	}
 }

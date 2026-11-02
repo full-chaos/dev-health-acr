@@ -45,6 +45,7 @@ func SubjectlessTerminalReasonsForTest() []string {
 		subjectlessTerminalReason(refusing, SubjectResolution{}, 0, declaredKindDecision{}),
 		subjectlessTerminalReason(passed, SubjectResolution{}, 0, declaredKindDecision{Unsatisfiable: true}),
 		subjectlessTerminalReason(passed, pool, 0, declaredKindDecision{}),
+		subjectlessTerminalReason(passed, SubjectResolution{CensusLimitation: "counted"}, 0, declaredKindDecision{}),
 		subjectlessTerminalReason(passed, SubjectResolution{ClarificationPrompt: "pick"}, 0, declaredKindDecision{}),
 		subjectlessTerminalReason(passed, SubjectResolution{GraphNotProjected: true}, 0, declaredKindDecision{}),
 		subjectlessTerminalReason(passed, SubjectResolution{InactiveHints: []contractsv1.ContextFabricInactiveHint{{}}}, 0, declaredKindDecision{}),

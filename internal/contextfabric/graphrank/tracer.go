@@ -847,6 +847,15 @@ func (t SlogResolutionTracer) Trace(event ResolutionTraceEvent) {
 			"subject_kind", contextfabric.SanitizeLogAttr(string(event.Subject.Kind)), "subject_canonical_id", contextfabric.SanitizeLogAttr(event.Subject.CanonicalID),
 			"outcome", contextfabric.SanitizeLogAttr(event.Outcome), "graph_existence_ok", event.GraphExistenceOK,
 			"census_commit_reason", contextfabric.SanitizeLogAttr(event.CensusCommitReason), "census_commit_handle_explicit", event.CensusCommitHandleExplicit)
+	case "evidence_census_listing":
+		// CHAOS-12467: counts and closed values only. The satisfier ids are not
+		// traced (slice B doc §4). The live run reads the listing's cost here.
+		t.logger.InfoContext(ctx, "context fabric resolution trace: evidence census listing",
+			"request_id", contextfabric.SanitizeLogAttr(event.RequestID), "stage", contextfabric.SanitizeLogAttr(event.Stage),
+			"census_kind", contextfabric.SanitizeLogAttr(string(event.CensusKind)), "census_count", event.CensusCount,
+			"census_listed", event.CensusListed, "census_listing_reads", event.CensusListingReads, "census_listing_refused", event.CensusListingRefused,
+			"elapsed_ms", event.CensusListingElapsedMs, "outcome", contextfabric.SanitizeLogAttr(event.CensusListingOutcome),
+			"census_listing_reason", contextfabric.SanitizeLogAttr(event.CensusListingReason))
 	case "evidence_source_native":
 		// CHAOS-3918 (chris-ratified pre-registered shadow measurement,
 		// 2026-08-19; codex xhigh review finding, confirmed and fixed:

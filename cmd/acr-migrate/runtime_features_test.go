@@ -59,5 +59,12 @@ func TestRuntimeFeatures_authProjectionFollowsTheRuntimeRule(t *testing.T) {
 			column = column || (statement.Table == "credential_lifecycle_outbox" && len(statement.UpdateColumns) > 0)
 		}
 		require.Equal(t, tc.want, column, "%s: UPDATE (published_at)", name)
+		var deletes bool
+		for _, statement := range dbacl.GrantStatements(`"role"`, features) {
+			for _, privilege := range statement.Privileges {
+				deletes = deletes || (statement.Table == "credential_lifecycle_outbox" && privilege == "DELETE")
+			}
+		}
+		require.Equal(t, tc.want, deletes, "%s: DELETE on the outbox", name)
 	}
 }

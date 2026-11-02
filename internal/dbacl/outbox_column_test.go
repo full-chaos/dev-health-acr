@@ -13,11 +13,14 @@ func TestTheOutboxHoldsUpdateOnPublishedAtOnlyAndOnlyWithThePublisher(t *testing
 			continue
 		}
 		for _, privilege := range grant.Privileges {
-			if privilege != "SELECT" && privilege != "INSERT" {
-				t.Errorf("the outbox holds table-level %s: the runtime role may only read and append it", privilege)
+			if privilege != "SELECT" && privilege != "INSERT" && privilege != "DELETE" {
+				t.Errorf("the outbox holds table-level %s: the runtime role may read, append and (with the publisher) reap it", privilege)
 			}
 		}
 		if len(grant.UpdateColumns) == 0 {
+			if grant.Feature != AlwaysOn && len(grant.Privileges) == 1 && grant.Privileges[0] == "DELETE" {
+				continue
+			}
 			if grant.Feature != AlwaysOn {
 				t.Errorf("the SELECT, INSERT row is the mutation path's and is always on, not %q", grant.Feature)
 			}
@@ -62,8 +65,8 @@ func TestTheColumnGrantAndRevokeStatementsFollowTheFeature(t *testing.T) {
 		t.Error("a feature that is off revokes the column grant an earlier run made")
 	}
 	for _, s := range RevokeStatements(`"r"`, Features{}) {
-		if strings.Contains(s.SQL, "ALL") || !strings.Contains(s.SQL, "(") {
-			t.Errorf("a revoke narrows more than a column: %s", s.SQL)
+		if strings.Contains(s.SQL, "ALL") || (!strings.Contains(s.SQL, "(") && !strings.HasPrefix(s.SQL, "REVOKE DELETE ON TABLE acr.credential_lifecycle_outbox ")) {
+			t.Errorf("a revoke narrows more than a column or the outbox DELETE: %s", s.SQL)
 		}
 	}
 }
