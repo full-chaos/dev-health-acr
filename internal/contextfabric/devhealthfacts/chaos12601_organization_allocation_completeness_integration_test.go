@@ -82,7 +82,7 @@ func TestAnEmptyOrganizationWindowIsNotACompleteAllocationAnswer(t *testing.T) {
 // such an answer is never replayed.
 func TestTheQueryVersionFencesAnswersSavedBeforeTheOrganizationObligation(t *testing.T) {
 	t.Parallel()
-	if devhealthfacts.QueryVersion == "devhealthfacts.clickhouse.v268" {
+	if devhealthfacts.QueryVersion == "devhealthfacts.clickhouse.v269" {
 		t.Fatal("the organization obligation changed what an answer reads and the query version did not move: reuse would replay a complete answer with no breakdown")
 	}
 }

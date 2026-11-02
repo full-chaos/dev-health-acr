@@ -21,7 +21,7 @@ func workItemKeyPrefixPredicate(prefix string) CensusPredicate {
 
 // NewWorkItemKeyPrefixFunc is graphrank's key prefix read (CHAOS-12463): does
 // one work item the caller can read have a key of this prefix? It reads under the
-// grant bound on ctx, through the same link arm as a work item census, and reads
+// grant bound on ctx, through the same two arms as a work item census, and reads
 // at most one row.
 func NewWorkItemKeyPrefixFunc(client contextpacket.ClickHouseQueryClient) graphrank.WorkItemKeyPrefixFunc {
 	return func(ctx context.Context, orgID, prefix string) (graphrank.WorkItemKeyPrefixOutcome, error) {
