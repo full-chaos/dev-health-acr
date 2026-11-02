@@ -97,23 +97,32 @@ func completionShare(running, total int) float64 {
 	return float64(running) / float64(total)
 }
 
-// completionForecastFields returns the forecast fields one team workload
+// addCompletionForecastFields writes the forecast fields one team workload
 // fact gains from its own forecast row (CHAOS-12607). A NULL percentile or
-// date is absent, never 0 or "".
-func completionForecastFields(row readers.CompletionForecastRow) map[string]contextfabric.FactValue {
-	fields := map[string]contextfabric.FactValue{
-		"simulation_count": contextfabric.IntegerFactValue(int64(row.SimulationCount)),
-	}
+// date is absent, never 0 or "". Every key is written by name, so the
+// emission reachability walk sees each one. distribution is the deployment
+// switch: off, nothing about the distribution is written -- no table, no
+// state, no horizon -- so nothing the fact says depends on a table it does
+// not carry.
+func addCompletionForecastFields(fields map[string]contextfabric.FactValue, row readers.CompletionForecastRow, distribution bool) {
+	fields["simulation_count"] = contextfabric.IntegerFactValue(int64(row.SimulationCount))
 	if row.HasP85Days != 0 {
 		fields["forecast_p85_days"] = contextfabric.IntegerFactValue(row.P85Days)
 	}
 	if row.HasP95Days != 0 {
 		fields["forecast_p95_days"] = contextfabric.IntegerFactValue(row.P95Days)
 	}
-	for name, value := range map[string]string{"forecast_p50_date": row.P50Date, "forecast_p85_date": row.P85Date, "forecast_p95_date": row.P95Date} {
-		if value != "" {
-			fields[name] = contextfabric.StringFactValue(value)
-		}
+	if row.P50Date != "" {
+		fields["forecast_p50_date"] = contextfabric.StringFactValue(row.P50Date)
+	}
+	if row.P85Date != "" {
+		fields["forecast_p85_date"] = contextfabric.StringFactValue(row.P85Date)
+	}
+	if row.P95Date != "" {
+		fields["forecast_p95_date"] = contextfabric.StringFactValue(row.P95Date)
+	}
+	if !distribution {
+		return
 	}
 	state := completionDistributionState(row)
 	fields["completion_distribution_state"] = contextfabric.StringFactValue(state)
@@ -126,7 +135,6 @@ func completionForecastFields(row readers.CompletionForecastRow) map[string]cont
 			fields["completion_distribution"] = completionDistributionTable(bins)
 		}
 	}
-	return fields
 }
 
 // completionDistributionState decides the state from the STORED lengths the
@@ -187,19 +195,24 @@ func completionForecastsByScope(rows []readers.CompletionForecastRow) map[comple
 	return out
 }
 
-// teamCompletionForecastFields attaches a forecast to the workload fact
+// addTeamCompletionForecastFields attaches a forecast to the workload fact
 // only when exactly one forecast row has the fact's scope and the same
 // computed_at, which makes it the same stored row. Two candidates are a NULL
 // and an empty scope; none, or a different computed_at, is a newer forecast
-// that landed between the two reads. Either way the fact says so and gets no
-// other forecast's detail.
-func teamCompletionForecastFields(candidates []readers.CompletionForecastRow, computedAt string) map[string]contextfabric.FactValue {
+// that landed between the two reads. Either way the fact gets no other
+// forecast's detail, and, with the distribution switched on, says why.
+func addTeamCompletionForecastFields(fields map[string]contextfabric.FactValue, candidates []readers.CompletionForecastRow, computedAt string, distribution bool) {
 	switch {
-	case len(candidates) > 1:
-		return map[string]contextfabric.FactValue{"completion_distribution_state": contextfabric.StringFactValue(completionDistributionScopeAmbiguous)}
 	case len(candidates) == 1 && candidates[0].ComputedAt == computedAt:
-		return completionForecastFields(candidates[0])
+		addCompletionForecastFields(fields, candidates[0], distribution)
+	case !distribution:
+	case len(candidates) > 1:
+		fields["completion_distribution_state"] = contextfabric.StringFactValue(completionDistributionScopeAmbiguous)
 	default:
-		return map[string]contextfabric.FactValue{"completion_distribution_state": contextfabric.StringFactValue(completionDistributionUnmatched)}
+		fields["completion_distribution_state"] = contextfabric.StringFactValue(completionDistributionUnmatched)
 	}
 }
+
+// completionDistributionFieldNames are the fields the deployment switch
+// gates: everything about the distribution, none of the row's scalars.
+var completionDistributionFieldNames = []string{"completion_distribution", "completion_distribution_state", "horizon_days", "unfinished_runs"}

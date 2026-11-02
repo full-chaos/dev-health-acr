@@ -1278,7 +1278,13 @@ over its cap whole, table and declaration together
 a distribution past its cap as a state, not a shorter table. Adding a value to
 the frozen `ClaimedFactTable.shape` enum is a contract change: an MCP client
 that cached the previous output schema, and ask-dev on its previous pin,
-refuse an answer that carries the new shape until they move.
+refuse an answer that carries the new shape until they move. So the
+workload provider emits the distribution only when the deployment sets
+`ACR_CONTEXT_FABRIC_COMPLETION_DISTRIBUTION_ENABLED` (default off,
+`ProviderOptions.CompletionDistributionEnabled`), turned on only after the
+ask-dev pin, the web pin and the web deploy hold the shape. Off, the team fact
+still carries the row's scalar percentiles, dates and run count, and nothing
+about the distribution: no table, no state, no horizon.
 
 ```mermaid
 flowchart LR

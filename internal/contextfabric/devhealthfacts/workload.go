@@ -51,7 +51,12 @@ const teamPrefix = contextfabric.TeamCanonicalIDPrefix
 // project-level fact carries every owning team's own latest per-scope
 // forecast verbatim in a renderable team_breakdown table, never a summed or
 // averaged project-native forecast.
-type WorkloadProvider struct{ facts clickhouseFacts }
+type WorkloadProvider struct {
+	facts clickhouseFacts
+	// completionDistribution lets a team fact emit its completion
+	// distribution (CHAOS-12607, ProviderOptions.CompletionDistributionEnabled).
+	completionDistribution bool
+}
 
 func newWorkloadProvider(client contextpacket.ClickHouseQueryClient) *WorkloadProvider {
 	return &WorkloadProvider{facts: clickhouseFacts{client: client}}
@@ -379,9 +384,7 @@ func (p *WorkloadProvider) readTeamWorkload(ctx context.Context, orgID string, s
 		if r.HasP50Days != 0 {
 			fields["forecast_p50_days"] = contextfabric.IntegerFactValue(r.P50Days)
 		}
-		for name, value := range teamCompletionForecastFields(forecastsByScope[completionForecastScope{team: r.TeamID, scope: r.WorkScopeID}], r.ComputedAt) {
-			fields[name] = value
-		}
+		addTeamCompletionForecastFields(fields, forecastsByScope[completionForecastScope{team: r.TeamID, scope: r.WorkScopeID}], r.ComputedAt, p.completionDistribution)
 		// codex CHAOS-4645 round-1 P3 (ARGUED, confirmed on read): the scalar
 		// forecast is legitimately "instant" (grainExact, ReadFacts' own
 		// provider-level Grain above), but daily_workload buckets by

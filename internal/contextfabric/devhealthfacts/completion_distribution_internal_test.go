@@ -20,6 +20,19 @@ func forecastRow(values []uint16, counts []uint32) readers.CompletionForecastRow
 	}
 }
 
+// forecastFields and teamForecastFields run the writers into a fresh map.
+func forecastFields(row readers.CompletionForecastRow) map[string]contextfabric.FactValue {
+	fields := map[string]contextfabric.FactValue{}
+	addCompletionForecastFields(fields, row, true)
+	return fields
+}
+
+func teamForecastFields(candidates []readers.CompletionForecastRow, computedAt string, distribution bool) map[string]contextfabric.FactValue {
+	fields := map[string]contextfabric.FactValue{}
+	addTeamCompletionForecastFields(fields, candidates, computedAt, distribution)
+	return fields
+}
+
 func stateOf(t *testing.T, fields map[string]contextfabric.FactValue) string {
 	t.Helper()
 	state, ok := fields["completion_distribution_state"]
@@ -30,7 +43,7 @@ func stateOf(t *testing.T, fields map[string]contextfabric.FactValue) string {
 }
 
 func TestACompletionDistributionIsServedWithOpsShares(t *testing.T) {
-	fields := completionForecastFields(forecastRow([]uint16{5, 12, 365}, []uint32{100, 8000, 1900}))
+	fields := forecastFields(forecastRow([]uint16{5, 12, 365}, []uint32{100, 8000, 1900}))
 	if got := stateOf(t, fields); got != completionDistributionAvailable {
 		t.Fatalf("state = %q", got)
 	}
@@ -85,7 +98,7 @@ func TestEveryCompletionDistributionStateWithholdsWhatItCannotServe(t *testing.T
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			fields := completionForecastFields(tc.row)
+			fields := forecastFields(tc.row)
 			if got := stateOf(t, fields); got != tc.want {
 				t.Fatalf("state = %q, want %q", got, tc.want)
 			}
@@ -110,7 +123,7 @@ func TestANullPercentileOrDateIsAbsent(t *testing.T) {
 	row := forecastRow(nil, nil)
 	row.HasP85Days, row.P85Days, row.HasP95Days, row.P95Days = 0, 0, 0, 0
 	row.P85Date, row.P95Date = "", ""
-	fields := completionForecastFields(row)
+	fields := forecastFields(row)
 	for _, name := range []string{"forecast_p85_days", "forecast_p95_days", "forecast_p85_date", "forecast_p95_date"} {
 		if value, ok := fields[name]; ok {
 			t.Errorf("%s = %+v, want absent: no percentile is not a percentile of 0", name, value)
@@ -136,7 +149,7 @@ func TestAForecastJoinsOnlyItsOwnStoredRow(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			fields := teamCompletionForecastFields(tc.candidates, tc.computedAt)
+			fields := teamForecastFields(tc.candidates, tc.computedAt, true)
 			if got := stateOf(t, fields); got != tc.want {
 				t.Fatalf("state = %q, want %q", got, tc.want)
 			}
@@ -151,5 +164,36 @@ func TestAForecastJoinsOnlyItsOwnStoredRow(t *testing.T) {
 	byScope := completionForecastsByScope([]readers.CompletionForecastRow{nullScope, emptyScope})
 	if got := len(byScope[completionForecastScope{team: "CHAOS", scope: ""}]); got != 2 {
 		t.Fatalf("a NULL and an empty scope share %d candidates, want 2 (the workload read folds them)", got)
+	}
+}
+
+// TestTheDeploymentSwitchGatesOnlyTheDistribution: switched off (the
+// default), a matched forecast still gives its percentiles, dates and run
+// count, and nothing about the distribution -- no table, no state, no
+// horizon -- and an unmatched or ambiguous one gives nothing.
+func TestTheDeploymentSwitchGatesOnlyTheDistribution(t *testing.T) {
+	row := forecastRow([]uint16{5, 12}, []uint32{9000, 1000})
+	off := teamForecastFields([]readers.CompletionForecastRow{row}, row.ComputedAt, false)
+	for _, name := range completionDistributionFieldNames {
+		if _, ok := off[name]; ok {
+			t.Errorf("switch off: %s emitted", name)
+		}
+	}
+	for _, name := range []string{"forecast_p85_days", "forecast_p95_days", "forecast_p50_date", "forecast_p85_date", "forecast_p95_date", "simulation_count"} {
+		if _, ok := off[name]; !ok {
+			t.Errorf("switch off: %s absent, want the scalar served", name)
+		}
+	}
+	on := teamForecastFields([]readers.CompletionForecastRow{row}, row.ComputedAt, true)
+	for _, name := range completionDistributionFieldNames {
+		if _, ok := on[name]; !ok {
+			t.Errorf("switch on: %s absent", name)
+		}
+	}
+	if fields := teamForecastFields(nil, row.ComputedAt, false); len(fields) != 0 {
+		t.Errorf("switch off, unmatched: %v, want nothing", fields)
+	}
+	if fields := teamForecastFields([]readers.CompletionForecastRow{row, row}, row.ComputedAt, false); len(fields) != 0 {
+		t.Errorf("switch off, ambiguous: %v, want nothing", fields)
 	}
 }

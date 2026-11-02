@@ -109,6 +109,9 @@ type t4Case struct {
 	// operation, when set, is the served-operation answer the source_health
 	// provider reads through its holder.
 	operation *devhealthfacts.OperationOutcome
+	// completionDistribution turns on the CHAOS-12607 deployment switch, so
+	// the workload fact emits its completion distribution.
+	completionDistribution bool
 }
 
 func t4Days(n int) []string {
@@ -257,7 +260,7 @@ func t4Cases() []t4Case {
 		}})
 
 	// ---- workload
-	add(t4Case{name: "workload/team", kind: contextfabric.FactWorkload, subjects: team, tables: []fakeTable{
+	add(t4Case{name: "workload/team", kind: contextfabric.FactWorkload, subjects: team, completionDistribution: true, tables: []fakeTable{
 		{match: workloadBaseQueryMatch, rows: [][]any{workloadRow("CHAOS", "scope-a")}},
 		// CHAOS-12607: the same row's forecast, with every percentile, date
 		// and a distribution, so every new field is emitted.
@@ -636,10 +639,11 @@ func t4Run(t *testing.T, cases []t4Case, capabilityOf func(contextfabric.FactKin
 	observed := t4Observed{seen: map[string]bool{}, subjects: map[string]bool{}, cases: map[contextfabric.FactKind]int{}}
 	for _, c := range cases {
 		client := &fakeClient{tables: c.tables}
-		providers := devhealthfacts.NewProviders(client)
+		options := devhealthfacts.ProviderOptions{CompletionDistributionEnabled: c.completionDistribution}
 		if c.operation != nil {
-			providers = devhealthfacts.NewProvidersWithOperations(client, sourceHealthHolder(&fakeOperationCaller{outcome: *c.operation}))
+			options.Operations = sourceHealthHolder(&fakeOperationCaller{outcome: *c.operation})
 		}
+		providers := devhealthfacts.NewProvidersWithOptions(client, options)
 		provider := findProvider(t, providers, c.kind)
 		timeContext := c.time
 		if timeContext.Axis == "" {
