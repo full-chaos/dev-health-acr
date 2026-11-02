@@ -1354,7 +1354,9 @@ import (
 // v261 -> v262: a team landscape fact carries its row's values as scalars, and a
 // claim on a landscape fact carries area_breakdown or team_breakdown, with no
 // wip_max_30d (CHAOS-12533). An answer saved under v261 holds no landscape row.
-const QueryVersion = "devhealthfacts.clickhouse.v262"
+// v262 -> v263: a team landscape fact carries daily_landscape, its newest 64
+// days as a declared time series, and a claim on it draws a trend (CHAOS-12534).
+const QueryVersion = "devhealthfacts.clickhouse.v263"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each
