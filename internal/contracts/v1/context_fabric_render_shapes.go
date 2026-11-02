@@ -1,5 +1,7 @@
 package v1
 
+import "strings"
+
 // CHAOS-4415 slice 1: the conditional renderable shape a Context Fabric
 // answer may carry.
 //
@@ -71,6 +73,12 @@ package v1
 // value and a source that resolves like any chart number. A measure a side lacks
 // has no point, so its cell is empty and never zero (see
 // ContextFabricRenderRuleComparisonSideBySide).
+//
+// A SUNBURST READS THE SAME PAYLOAD (CHAOS-12554). Its two rings are series: one
+// series keyed ContextFabricRenderSunburstThemeSeriesKey is the inner ring, one
+// point per theme, and every other series is the outer ring of one theme, keyed
+// by that theme's token, one point per subcategory. The series key is what links
+// a ring to its parent (see ContextFabricRenderRuleInvestmentSubcategoryShare).
 
 // ContextFabricRenderKind is the CLOSED vocabulary of renderable answer
 // shapes. Every member is defined now; producers land per shape.
@@ -189,7 +197,83 @@ const (
 	// is the only rule that yields a table, and a table has no other rule.
 	// Declared ahead of its producer: the wire widens first.
 	ContextFabricRenderRuleComparisonSideBySide ContextFabricRenderShapeRule = "comparison_side_by_side"
+	// ContextFabricRenderRuleInvestmentSubcategoryShare is the two-ring
+	// part-of-whole of one subject's investment (CHAOS-12554): the inner ring is
+	// the canonical themes and the outer ring the canonical subcategories of
+	// each, all from one claimed fact's subcategory_breakdown table. It is the
+	// only rule that yields a sunburst, and a sunburst has no other rule.
+	// Declared ahead of its producer: the wire widens first.
+	ContextFabricRenderRuleInvestmentSubcategoryShare ContextFabricRenderShapeRule = "investment_subcategory_share"
 )
+
+// The sunburst's table (CHAOS-12554). ContextFabricRenderSubcategoryTableField
+// has one row per canonical subcategory, keyed by
+// ContextFabricRenderSubcategoryField, with the row's theme
+// (ContextFabricRenderThemeField), the subcategory's share
+// (ContextFabricRenderThemeShareField) and the share of its whole theme
+// (ContextFabricRenderThemeTotalField, the value theme_breakdown serves).
+//
+// ContextFabricRenderSunburstThemeSeriesKey keys the inner ring, whose points
+// cite each theme's ContextFabricRenderThemeTotalField. Every other series of a
+// sunburst is keyed by a canonical theme token, the ring parent of its points,
+// which cite each subcategory's share.
+const (
+	ContextFabricRenderSubcategoryTableField  = "subcategory_breakdown"
+	ContextFabricRenderSubcategoryField       = "subcategory"
+	ContextFabricRenderThemeTotalField        = "theme_share"
+	ContextFabricRenderSunburstThemeSeriesKey = "themes"
+)
+
+// ContextFabricRenderShareSumTolerance is the relative tolerance of a shape's
+// part-sum check: parts read from the same work units as a served whole add up
+// to that whole. A sunburst's subcategory shares add up to their theme's share
+// (CHAOS-12554); on real data the two differ only by float rounding, 2.2e-16
+// relative at most. It applies as |sum - whole| <= tolerance x max(|sum|,
+// |whole|), and to that check alone: every plotted number is an exact copy of
+// its cell (lead ruling on CHAOS-12554). Another shape with the same part-sum
+// check uses this one constant.
+const ContextFabricRenderShareSumTolerance = 1e-12
+
+// contextFabricInvestmentSubcategories is the canonical subcategory list, the
+// one the ops taxonomy registry (internal/jobs/workgraph/units/taxonomy.go)
+// generates. A subcategory belongs to the theme before its first dot. Its
+// words are served from the label registry (ContextFabricVocabularySubcategory),
+// never from a map a consumer keeps (CHAOS-4690).
+var contextFabricInvestmentSubcategories = [...]string{
+	"feature_delivery.customer",
+	"feature_delivery.enablement",
+	"feature_delivery.roadmap",
+	"maintenance.debt",
+	"maintenance.refactor",
+	"maintenance.upgrade",
+	"operational.incident_response",
+	"operational.on_call",
+	"operational.support",
+	"quality.bugfix",
+	"quality.reliability",
+	"quality.testing",
+	"risk.compliance",
+	"risk.security",
+	"risk.vulnerability",
+}
+
+// ContextFabricInvestmentSubcategoryVocabulary returns the canonical
+// subcategories in published order.
+func ContextFabricInvestmentSubcategoryVocabulary() [len(contextFabricInvestmentSubcategories)]string {
+	return contextFabricInvestmentSubcategories
+}
+
+// ContextFabricInvestmentSubcategoryTheme returns the theme of a canonical
+// subcategory. A token outside the canonical list has none.
+func ContextFabricInvestmentSubcategoryTheme(subcategory string) (string, bool) {
+	for _, member := range contextFabricInvestmentSubcategories {
+		if member == subcategory {
+			theme, _, _ := strings.Cut(subcategory, ".")
+			return theme, true
+		}
+	}
+	return "", false
+}
 
 // ContextFabricRenderThemeTableField is the claimed fact table an
 // investment_theme_share shape plots, ContextFabricRenderThemeShareField is the
