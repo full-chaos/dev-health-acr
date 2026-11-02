@@ -5069,7 +5069,21 @@ func scopeAnchorResolved(outcome QuestionFamilyOutcome) bool {
 func scopeAllocationRead(outcome QuestionFamilyOutcome) bool {
 	return outcome.Family == QuestionFamilyInvestmentAllocation && outcome.Frame != nil &&
 		outcome.Frame.SubjectExpression.Kind == SubjectExpressionChildrenOfScope &&
-		scopeAllocationFrame(outcome.Frame, outcome.WinningSample.ScopeAnchorKind)
+		scopeAllocationFrame(outcome.Frame, scopeAllocationAnchorKind(outcome))
+}
+
+// scopeAllocationAnchorKind is the anchor kind the scope allocation read uses.
+// A plan carried after a rejected plurality keeps the family and the frame but
+// no winning sample, so its anchor kind is empty (Codex r3, executed). Only this
+// route serves the family for a children_of_scope frame, and only under a team
+// anchor (a fresh turn routes only with a team anchor kind), so an empty kind
+// reads as a team: the committed team the frame's anchor names, or nothing,
+// never the members.
+func scopeAllocationAnchorKind(outcome QuestionFamilyOutcome) SubjectKind {
+	if kind := outcome.WinningSample.ScopeAnchorKind; kind != "" {
+		return kind
+	}
+	return SubjectTeam
 }
 
 // scopeAllocationAnchors is the anchor team a scope_allocation turn reads:
@@ -5077,7 +5091,7 @@ func scopeAllocationRead(outcome QuestionFamilyOutcome) bool {
 // its source is the projection, and its subject is the caller's organization,
 // read when nothing is committed (organizationSubjectAnswers).
 func scopeAllocationAnchors(outcome QuestionFamilyOutcome, resolution SubjectResolution) []SubjectRef {
-	return ScopeAnchorTeams(outcome.Frame, outcome.WinningSample.ScopeAnchorKind, resolution)
+	return ScopeAnchorTeams(outcome.Frame, scopeAllocationAnchorKind(outcome), resolution)
 }
 
 func investigationSubjects(resolution SubjectResolution, cohort *Cohort) []SubjectRef {

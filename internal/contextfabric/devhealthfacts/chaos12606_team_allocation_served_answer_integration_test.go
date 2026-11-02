@@ -340,3 +340,26 @@ func TestTheAnchorOnlyReadFollowsTheServedFamilyNotTheRouteRecord(t *testing.T) 
 		t.Fatalf("carried: investment facts offered for %v, want the team's alone", carried.offered)
 	}
 }
+
+// Codex r3 (executed): a plan carried after a rejected plurality keeps the family
+// and the frame but no winning sample, so the anchor kind is empty, and the read
+// took the team and its committed repositories. A carried allocation over a
+// team's children still reads the team alone.
+func TestACarryAfterARejectedPluralityStillReadsTheTeamAlone(t *testing.T) {
+	ctx := context.Background()
+	const orgID = "org-team-children-carry-no-sample"
+	query := teamChildrenStore(t, ctx, orgID)
+	team := "team:" + teamAllocationTeam
+	model := &teamChildrenModel{goals: []contextfabric.InvestigationGoal{contextfabric.GoalAllocateInvestment}, shape: contextfabric.ShapeOpen}
+	_, graph := serveTeamChildrenQuestionEdited(t, ctx, query, orgID, model, true, true, func(o *contextfabric.QuestionFamilyOutcome) {
+		o.Source = contextfabric.QuestionFamilySourceCarried
+		o.Route.Source = contextfabric.FamilyRouteSourceCarried
+		o.WinningSample = contextfabric.FamilySample{}
+	})
+	if len(graph.discovery) != 1 || !graph.discovery[0].AnchorFactOnly {
+		t.Fatal("a carried allocation with no winning sample read a member set")
+	}
+	if len(model.offered) != 1 || model.offered[0] != team {
+		t.Fatalf("investment facts offered for %v, want the team's alone", model.offered)
+	}
+}
