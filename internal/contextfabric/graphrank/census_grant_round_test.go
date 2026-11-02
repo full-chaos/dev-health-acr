@@ -780,8 +780,12 @@ func TestAWorkItemHandleOptionStandsOnAnInsideCount(t *testing.T) {
 	if got := options(t, restrictedCaller(t, grantRepoInside), inside, beside); len(got) != 0 {
 		t.Fatalf("restricted, count 2: options %v, want none", got)
 	}
-	if got := options(t, userprincipal.Authenticated(t, "org_1", nil)); len(got) != 1 {
-		t.Fatalf("unrestricted: options %v, want the handle as before", got)
+	// CHAOS-12498: a complete zero offers no handle to any caller.
+	if got := options(t, userprincipal.Authenticated(t, "org_1", nil)); len(got) != 0 {
+		t.Fatalf("unrestricted, count 0: options %v, want none", got)
+	}
+	if got := options(t, userprincipal.Authenticated(t, "org_1", nil), inside); len(got) != 1 {
+		t.Fatalf("unrestricted, count 1: options %v, want the handle", got)
 	}
 	if got := options(t, userprincipal.ProjectOnly(t, "org_1", []string{"project.v2:github:P-1"})); len(got) != 0 {
 		t.Fatalf("project-only: options %v, want none: no census can verify one", got)
@@ -819,7 +823,11 @@ func TestAHandleOptionForAPullRequestIsUnchangedForARestrictedCaller(t *testing.
 		t.Helper()
 		backend := grantBackend(grantNode(grantPRInside, grantRepoInside, 0.5), grantNode(grantPRBeside, grantRepoBeside, 0.5))
 		deps := backend.deps()
-		deps.CensusFunc = (&grantCensusSpy{}).census
+		// A census that did not answer proves nothing, so the option stands on the
+		// grant alone. A complete zero drops it: TestACompleteZeroIsAProvenAbsence.
+		deps.CensusFunc = func(context.Context, string, CensusKind, string, bool, contextfabric.SubjectKind, string, bool) (CensusOutcome, error) {
+			return CensusOutcome{}, errors.New("census unavailable")
+		}
 		deps.HandleGrammarChecker = func(kind contextfabric.SubjectKind, patternID, value string) (string, bool) {
 			return "git_pull_requests.number", ValidateHandleGrammar(kind, patternID, value)
 		}

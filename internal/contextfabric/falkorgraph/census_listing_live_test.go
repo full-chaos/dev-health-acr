@@ -119,6 +119,9 @@ func TestACensusCountIsListedOnRealStores(t *testing.T) {
 	}
 	addRepo("other/secret", "github")
 	addPR("other/secret", 12, "Hidden change")
+	addRepo("other/hidden", "gitlab")
+	addPR("other/hidden", 81, "Hidden change on the other provider")
+	addPR("other/secret", 82, "A change a hidden item links")
 	addPR("acme/r00", 77, "Lone change")
 	addPR("other/secret", 78, "Lone change outside")
 	addPR("acme/r00", 79, "The first linked change")
@@ -128,13 +131,18 @@ func TestACensusCountIsListedOnRealStores(t *testing.T) {
 	for i := range 3 {
 		exec("ci run", `INSERT INTO ci_pipeline_runs (repo_id, run_id, status, started_at, last_synced, org_id) VALUES (?, ?, ?, ?, ?, ?)`, repo[inside[i]], "4242", "success", created, now, org)
 	}
-	for _, item := range [][3]string{{"linear:CHAOS-70", "linear", "issue"}, {"jira:CHAOS-70", "jira", "story"}} {
+	for _, item := range [][3]string{{"linear:CHAOS-70", "linear", "issue"}, {"jira:CHAOS-70", "jira", "story"}, {"linear:CHAOS-71", "linear", "issue"}, {"jira:CHAOS-72", "jira", "story"}} {
 		exec("work item", `INSERT INTO work_items (work_item_id, repo_id, org_id, title, type, status, provider, project_id, created_at, updated_at, last_synced) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 			item[0], scopedZeroRepo, org, "Split the job", item[2], "open", item[1], "", created, now, now)
 	}
 	for i, link := range [][2]string{{"linear:CHAOS-70", "acme/r00"}, {"jira:CHAOS-70", "acme/r01"}} {
 		exec("link", `INSERT INTO work_graph_issue_pr (repo_id, work_item_id, pr_number, confidence, provenance, evidence, last_synced, org_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
 			repo[link[1]], link[0], uint32(79), float32(0.9), "native", "", now.Add(time.Duration(i)*time.Millisecond), org)
+	}
+	// Items linked outside the grant only, one for each tracker.
+	for i, item := range []string{"linear:CHAOS-71", "jira:CHAOS-72"} {
+		exec("link", `INSERT INTO work_graph_issue_pr (repo_id, work_item_id, pr_number, confidence, provenance, evidence, last_synced, org_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+			repo["other/secret"], item, uint32(82), float32(0.9), "native", "", now.Add(time.Duration(i)*time.Millisecond), org)
 	}
 	own := func(team string, slugs ...string) {
 		exec("team", `INSERT INTO teams (id, name, description, updated_at, last_synced, org_id, provider, native_team_key, project_keys, is_active) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
@@ -316,8 +324,11 @@ func TestACensusCountIsListedOnRealStores(t *testing.T) {
 			t.Fatalf("committed = %v, want the lone satisfier", got.committed)
 		}
 		outside := turn(t, unrestricted, "What is the state of pull request 78?", []string{"pull request 78"}, repos("acme/r00"))
-		if len(outside.committed) != 0 || len(outside.result.SubjectResolution.Candidates) != 0 || outside.result.SubjectResolution.CensusLimitation != "" {
+		if len(outside.committed) != 0 || len(outside.result.SubjectResolution.Candidates) != 0 {
 			t.Fatalf("committed %v candidates %+v: a satisfier outside the request decided", outside.committed, outside.result.SubjectResolution.Candidates)
+		}
+		if !slices.Equal(outside.result.Limitations, []string{contractsv1.ContextFabricCensusAbsentInScopeLimitation}) {
+			t.Fatalf("limitations = %q", outside.result.Limitations)
 		}
 		if got := turn(t, unrestricted, pr12, term, repos("acme/r03")); len(got.committed) != 1 {
 			t.Fatalf("committed = %v, want the one inside the request", got.committed)
@@ -374,6 +385,93 @@ func TestACensusCountIsListedOnRealStores(t *testing.T) {
 			t.Fatalf("matched terms = %q", got.terms)
 		}
 	})
+	// CHAOS-12498, the ticket's row N1: a complete zero, with the three false
+	// statements named. It is the same turn for no such subject and a subject outside
+	// the grant, on every provider, so it is no oracle.
+	absent := func(t *testing.T, got listingLiveTurn, sentence string) {
+		t.Helper()
+		if !got.ran() || got.count() != 0 {
+			t.Fatalf("round %t, census count %d, want a count of 0", got.ran(), got.count())
+		}
+		if got.result.Status != contextfabric.InvestigationNoMatch || len(got.result.SubjectResolution.Candidates) != 0 {
+			t.Fatalf("status %q candidates %d, want no_match and none", got.result.Status, len(got.result.SubjectResolution.Candidates))
+		}
+		if !slices.Equal(got.result.Limitations, []string{sentence}) {
+			t.Fatalf("limitations = %q, want the sentence alone", got.result.Limitations)
+		}
+		if strings.Contains(got.result.DeterministicAnswer, "semantic similarity") {
+			t.Fatalf("answer = %q", got.result.DeterministicAnswer)
+		}
+		if got.result.StructureNeeds != nil && len(got.result.StructureNeeds.HandleOptions) != 0 {
+			t.Fatalf("handle options = %+v, want none", got.result.StructureNeeds.HandleOptions)
+		}
+	}
+	allowed := func(allow bool) func(*contextfabric.InvestigationRequest) {
+		return func(r *contextfabric.InvestigationRequest) { r.Options.AllowClarification = allow }
+	}
+	t.Run("a complete zero is a proven absence, whatever the terms", func(t *testing.T) {
+		const absentPR = "What is the state of pull request 999?"
+		owner := userprincipal.Authenticated(t, org, []string{"acme/*"})
+		for name, principal := range map[string]storage.Principal{"restricted": restricted, "owner grant": owner, "unrestricted": unrestricted} {
+			for _, terms := range [][]string{{"pull request 999"}, {"999"}, {}, {"state"}} {
+				for _, allow := range []bool{true, false} {
+					t.Run(name, func(t *testing.T) {
+						absent(t, turn(t, principal, absentPR, terms, allowed(allow)), contractsv1.ContextFabricCensusAbsentLimitation)
+					})
+				}
+			}
+		}
+	})
+	t.Run("a subject outside the grant reads as no such subject, on each provider", func(t *testing.T) {
+		for _, number := range []string{"78", "81"} {
+			question := "What is the state of pull request " + number + "?"
+			absent(t, turn(t, restricted, question, []string{"pull request " + number}, nil), contractsv1.ContextFabricCensusAbsentLimitation)
+			absent(t, turn(t, restricted, question, []string{}, nil), contractsv1.ContextFabricCensusAbsentLimitation)
+		}
+		for _, key := range []string{"CHAOS-71", "CHAOS-72", "CHAOS-999"} {
+			got := turn(t, restricted, "Why is "+key+" blocked?", []string{key}, nil)
+			absent(t, got, contractsv1.ContextFabricWorkItemNoGrantedLinkLimitation)
+		}
+	})
+	t.Run("an unrestricted work item takes the general sentence", func(t *testing.T) {
+		absent(t, turn(t, unrestricted, "Why is CHAOS-999 blocked?", []string{"CHAOS-999"}, nil), contractsv1.ContextFabricCensusAbsentLimitation)
+	})
+	t.Run("a zero in a requested repository states the scope", func(t *testing.T) {
+		const lone = "What is the state of pull request 77?"
+		term77 := []string{"pull request 77"}
+		for name, principal := range map[string]storage.Principal{"restricted": restricted, "unrestricted": unrestricted} {
+			t.Run(name, func(t *testing.T) {
+				absent(t, turn(t, principal, lone, term77, repos("acme/r01")), contractsv1.ContextFabricCensusAbsentInScopeLimitation)
+			})
+		}
+		// A repository outside the grant: one text, whether or not it holds the number.
+		absent(t, turn(t, restricted, "What is the state of pull request 78?", []string{"pull request 78"}, repos("other/secret")), contractsv1.ContextFabricCensusAbsentInScopeLimitation)
+		absent(t, turn(t, restricted, "What is the state of pull request 999?", []string{"pull request 999"}, repos("other/secret")), contractsv1.ContextFabricCensusAbsentInScopeLimitation)
+	})
+	t.Run("near matches stay beside a zero, and the zero is stated", func(t *testing.T) {
+		const absentRun = "What is the state of CI run 9999?"
+		terms := []string{"CI run 9999"}
+		for allow, status := range map[bool]contextfabric.InvestigationStatus{true: contextfabric.InvestigationClarificationRequired, false: contextfabric.InvestigationNoMatch} {
+			got := turn(t, restricted, absentRun, terms, allowed(allow))
+			if got.count() != 0 || got.result.Status != status || len(got.result.SubjectResolution.Candidates) == 0 {
+				t.Fatalf("count %d status %q candidates %d, want 0, %q and near matches", got.count(), got.result.Status, len(got.result.SubjectResolution.Candidates), status)
+			}
+			if !slices.Equal(got.result.Limitations, []string{contractsv1.ContextFabricCensusAbsentLimitation}) {
+				t.Fatalf("limitations = %q, want the sentence alone", got.result.Limitations)
+			}
+			if strings.Contains(got.result.DeterministicAnswer, "authorized subject") {
+				t.Fatalf("answer = %q", got.result.DeterministicAnswer)
+			}
+			if got.result.StructureNeeds == nil {
+				t.Fatal("no offer beside the near matches")
+			}
+			for _, option := range got.result.StructureNeeds.HandleOptions {
+				if option.Value == "9999" {
+					t.Fatalf("handle options = %+v: nothing holds 9999", got.result.StructureNeeds.HandleOptions)
+				}
+			}
+		}
+	})
 	// The fixture graph's "offered receipts resolve": the caller sends the handle
 	// and every other field again on the follow-up. A handle several subjects
 	// satisfy cannot decide, and a near match of another number conflicts with the
@@ -392,6 +490,16 @@ func TestACensusCountIsListedOnRealStores(t *testing.T) {
 			bare := turn(t, principal, pr12, terms, roomy)
 			if bare.result.StructureNeeds == nil || len(bare.result.StructureNeeds.HandleOptions) == 0 {
 				t.Fatalf("%s: no near match is offered, so this row proves nothing", name)
+			}
+			// With no handle in the request, a near match's option is redeemable.
+			for _, option := range bare.result.StructureNeeds.HandleOptions {
+				next := turn(t, principal, pr12, terms, func(r *contextfabric.InvestigationRequest) {
+					roomy(r)
+					r.PriorHandleReceipts = []contractsv1.ContextFabricBoundSubjectReceipt{{ResultID: bare.result.ResultID, ReceiptID: option.ReceiptID}}
+				})
+				if next.result.Status == contextfabric.InvestigationNoMatch {
+					t.Fatalf("%s: option %q did not resolve: %q", name, option.Label, next.result.Limitations)
+				}
 			}
 			got := turn(t, principal, pr12, terms, explicit)
 			if got.result.StructureNeeds == nil {

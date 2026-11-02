@@ -11580,6 +11580,7 @@
           "no_candidate_of_declared_kind",
           "ambiguous",
           "census_unlisted",
+          "census_absent",
           "offer_pool_emptied_by_exclusion",
           "graph_not_projected",
           "team_inactive",
