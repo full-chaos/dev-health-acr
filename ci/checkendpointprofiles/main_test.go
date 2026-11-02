@@ -2202,7 +2202,7 @@ func TestRealTreeSurvivesAPureLineShiftOfEveryAnchoredFile(t *testing.T) {
 		}
 		for _, n := range []int{1, 4, 7} {
 			shiftFixtureSource(t, filepath.Join(root, f), n)
-			errs, err := check(root, inventoryPath, schemaPath, ccPath, ccSchemaPath, realDiscovererPath(t), guardTablePath(root))
+			errs, err := check(root, inventoryPath, schemaPath, ccPath, ccSchemaPath, realDiscovererPath(t), guardTablePath(repoRoot(t)))
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -2230,7 +2230,7 @@ func TestRealTreeStillFailsWhenAnAnchoredSymbolIsRenamed(t *testing.T) {
 	}
 	writeFile(t, p, mutated)
 	inventoryPath := filepath.Join(root, "contracts", "auth", "v1", "endpoint-profiles.acr.json")
-	errs, err := check(root, inventoryPath, schemaPath, ccPath, ccSchemaPath, realDiscovererPath(t), guardTablePath(root))
+	errs, err := check(root, inventoryPath, schemaPath, ccPath, ccSchemaPath, realDiscovererPath(t), guardTablePath(repoRoot(t)))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -2256,7 +2256,7 @@ func TestRealTreeRejectsAWrapperRemovedWithItsMarkerTextLeftInAStringLiteral(t *
 	}
 	writeFile(t, p, mutated)
 	inventoryPath := filepath.Join(root, "contracts", "auth", "v1", "endpoint-profiles.acr.json")
-	errs, err := check(root, inventoryPath, schemaPath, ccPath, ccSchemaPath, realDiscovererPath(t), guardTablePath(root))
+	errs, err := check(root, inventoryPath, schemaPath, ccPath, ccSchemaPath, realDiscovererPath(t), guardTablePath(repoRoot(t)))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -2407,7 +2407,7 @@ func TestRealTreeRejectsAMintCallMovedIntoAnUncalledFuncLiteral(t *testing.T) {
 	}
 	writeFile(t, p, mutated)
 	inventoryPath := filepath.Join(root, "contracts", "auth", "v1", "endpoint-profiles.acr.json")
-	errs, err := check(root, inventoryPath, schemaPath, ccPath, ccSchemaPath, realDiscovererPath(t), guardTablePath(root))
+	errs, err := check(root, inventoryPath, schemaPath, ccPath, ccSchemaPath, realDiscovererPath(t), guardTablePath(repoRoot(t)))
 	if err != nil {
 		t.Fatal(err)
 	}
