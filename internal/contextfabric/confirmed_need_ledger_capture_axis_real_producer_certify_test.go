@@ -268,7 +268,7 @@ func RunCaptureSkipReasonRealProducerScenarioForTest(t *testing.T, scenario stri
 		rig.engine.telemetry = NewSlogEngineTelemetry(jsonSlogLoggerForTest(&buf))
 		rig.engine.anchorBindingCarryEnabled = true
 		rig.interpreter.read(SubjectRepository, true)
-		rig.turn(t, needTurnRequest("request_capture_gated_pending", false), identityProvenResponse(probeAlpha))
+		rig.turn(t, needTurnRequest("request_capture_gated_pending", false), gatedBeyondWindow(identityProvenResponse(probeAlpha)))
 		return buf.Bytes(), orgID
 
 	case CaptureSkipReasonFrameGateRefused:

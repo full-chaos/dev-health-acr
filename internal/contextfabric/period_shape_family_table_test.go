@@ -236,6 +236,13 @@ func TestPeriodShapeFamilyTable(t *testing.T) {
 }
 
 // periodShapeServedOutcome hand-pins every family-table cell.
+//
+// CHAOS-4451: the 9 cells of a current-state frame (unframed, current,
+// bounded_window) on an inferred class-default window moved from
+// clarification_required to complete -- the window was their only question,
+// so the turn now answers on it and offers the window beside. The 9 such
+// cells of a series or period-comparison frame keep the gate: their period
+// is the question (InferredWindowGateBasisPeriodShape).
 var periodShapeServedOutcome = map[string]string{
 	"subject_investigation|none|stated|range 30d":                     "complete current question_stated trailing_30d class recent_activity_lookup",
 	"discovered_cohort_ranking|none|stated|range 30d":                 "complete current question_stated trailing_30d class trend_assessment",
@@ -285,10 +292,10 @@ var periodShapeServedOutcome = map[string]string{
 	"grouped_cohort_status|none|none|range 7d":                        "complete range -7d..0d no window",
 	"explicit_comparison|none|none|range 7d":                          "complete range -7d..0d no window",
 	"unclassified|none|none|range 7d":                                 "complete range -7d..0d no window",
-	"subject_investigation|none|none|current axis":                    "clarification_required current inferred_default trailing_30d class recent_activity_lookup",
-	"discovered_cohort_ranking|none|none|current axis":                "clarification_required current inferred_default trailing_90d class trend_assessment",
+	"subject_investigation|none|none|current axis":                    "complete current inferred_default trailing_30d class recent_activity_lookup",
+	"discovered_cohort_ranking|none|none|current axis":                "complete current inferred_default trailing_90d class trend_assessment",
 	"scoped_cohort_status|none|none|current axis":                     "complete current server_default as_of class state_snapshot",
-	"grouped_cohort_status|none|none|current axis":                    "clarification_required current inferred_default trailing_90d class trend_assessment",
+	"grouped_cohort_status|none|none|current axis":                    "complete current inferred_default trailing_90d class trend_assessment",
 	"explicit_comparison|none|none|current axis":                      "complete current server_default as_of class state_snapshot",
 	"unclassified|none|none|current axis":                             "complete current server_default as_of class state_snapshot",
 	"subject_investigation|current|stated|range 30d":                  "complete current question_stated trailing_30d class recent_activity_lookup",
@@ -331,10 +338,10 @@ var periodShapeServedOutcome = map[string]string{
 	"scoped_cohort_status|current|none|range 7d":                      "no_match range -7d..0d no window",
 	"grouped_cohort_status|current|none|range 7d":                     "complete range -7d..0d no window",
 	"explicit_comparison|current|none|range 7d":                       "complete range -7d..0d no window",
-	"subject_investigation|current|none|current axis":                 "clarification_required current inferred_default trailing_30d class recent_activity_lookup",
-	"discovered_cohort_ranking|current|none|current axis":             "clarification_required current inferred_default trailing_90d class trend_assessment",
+	"subject_investigation|current|none|current axis":                 "complete current inferred_default trailing_30d class recent_activity_lookup",
+	"discovered_cohort_ranking|current|none|current axis":             "complete current inferred_default trailing_90d class trend_assessment",
 	"scoped_cohort_status|current|none|current axis":                  "no_match current server_default as_of class state_snapshot",
-	"grouped_cohort_status|current|none|current axis":                 "clarification_required current inferred_default trailing_90d class trend_assessment",
+	"grouped_cohort_status|current|none|current axis":                 "complete current inferred_default trailing_90d class trend_assessment",
 	"explicit_comparison|current|none|current axis":                   "complete current server_default as_of class state_snapshot",
 	"subject_investigation|bounded_window|stated|range 30d":           "complete current question_stated trailing_30d class recent_activity_lookup",
 	"discovered_cohort_ranking|bounded_window|stated|range 30d":       "complete current question_stated trailing_30d class trend_assessment",
@@ -376,10 +383,10 @@ var periodShapeServedOutcome = map[string]string{
 	"scoped_cohort_status|bounded_window|none|range 7d":               "no_match range -7d..0d no window",
 	"grouped_cohort_status|bounded_window|none|range 7d":              "complete range -7d..0d no window",
 	"explicit_comparison|bounded_window|none|range 7d":                "complete range -7d..0d no window",
-	"subject_investigation|bounded_window|none|current axis":          "clarification_required current inferred_default trailing_30d class recent_activity_lookup",
-	"discovered_cohort_ranking|bounded_window|none|current axis":      "clarification_required current inferred_default trailing_90d class trend_assessment",
+	"subject_investigation|bounded_window|none|current axis":          "complete current inferred_default trailing_30d class recent_activity_lookup",
+	"discovered_cohort_ranking|bounded_window|none|current axis":      "complete current inferred_default trailing_90d class trend_assessment",
 	"scoped_cohort_status|bounded_window|none|current axis":           "no_match current server_default as_of class state_snapshot",
-	"grouped_cohort_status|bounded_window|none|current axis":          "clarification_required current inferred_default trailing_90d class trend_assessment",
+	"grouped_cohort_status|bounded_window|none|current axis":          "complete current inferred_default trailing_90d class trend_assessment",
 	"explicit_comparison|bounded_window|none|current axis":            "complete current server_default as_of class state_snapshot",
 	"subject_investigation|time_series|stated|range 30d":              "complete range -30d..0d no window",
 	"discovered_cohort_ranking|time_series|stated|range 30d":          "complete range -30d..0d no window",
