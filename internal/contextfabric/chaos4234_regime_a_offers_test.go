@@ -276,30 +276,24 @@ func TestCHAOS4336_ClassDefaultGate_EmptyPoolStillOffersWindowExpand(t *testing.
 	graph.material = StructureOfferMaterial{} // resolved successfully, genuinely nothing to offer
 	store := &staticResultStore{results: map[string]InvestigationResult{}}
 	telemetry := &recordingTelemetry{}
-	engine := buildWindowGateEngineWithTelemetry(t, interpreter, graph, store, telemetry)
+	engine, reads := buildWindowOnlyAnsweringEngine(t, interpreter, graph, store, telemetry)
 
-	result, err := engine.Investigate(context.Background(), acceptancePrincipal(), validInvestigationRequest())
-	if err != nil {
-		t.Fatalf("Investigate() error = %v", err)
+	// CHAOS-4451 (moved): a pass that ran and found nothing leaves the window
+	// as the only question, so the turn answers on the inferred window: one
+	// offers-only resolve, then the decisive one, then the fact read. The
+	// window_expand recommendation belonged to the confirmation terminal; the
+	// answer offers every window (window_clarification) beside it instead.
+	if _, err := engine.Investigate(context.Background(), acceptancePrincipal(), validInvestigationRequest()); err == nil {
+		t.Fatal("Investigate() error = nil, want the stub synthesizer's error: the turn must reach synthesis")
 	}
-	if graph.resolveCalls != 1 {
-		t.Fatalf("graph.resolveCalls = %d, want 1", graph.resolveCalls)
+	if graph.resolveCalls != 2 || !OffersOnlyResolution(graph.resolveCtxs[0]) || OffersOnlyResolution(graph.resolveCtxs[1]) {
+		t.Fatalf("graph.resolveCalls = %d, want 2: the offers-only pass, then the decisive resolution", graph.resolveCalls)
+	}
+	if *reads != 1 {
+		t.Fatalf("fact reads = %d, want 1", *reads)
 	}
 	if want := []GatedOfferResolutionOutcome{GatedOfferResolutionEmpty}; !reflect.DeepEqual(telemetry.gatedOfferResolutions, want) {
 		t.Fatalf("gatedOfferResolutions = %#v, want %#v", telemetry.gatedOfferResolutions, want)
-	}
-	if result.StructureNeeds == nil || len(result.StructureNeeds.WindowExpandOptions) != 1 {
-		t.Fatalf("StructureNeeds.WindowExpandOptions = %#v, want exactly one recommendation: the pass ran and found nothing, but that is real information, not an unavailable read", result.StructureNeeds)
-	}
-	if len(result.StructureNeeds.KindOptions) != 0 || len(result.StructureNeeds.HandleOptions) != 0 || len(result.StructureNeeds.CandidateOptions) != 0 {
-		t.Fatalf("kind/handle/candidate options = %#v, want none: the pool is genuinely empty", result.StructureNeeds)
-	}
-	got := result.StructureNeeds.WindowExpandOptions[0]
-	if got.CandidateLabel != "" || got.CandidateKind != "" {
-		t.Fatalf("CandidateLabel/CandidateKind = %q/%q, want both unset: empty material has no candidate to hint at", got.CandidateLabel, got.CandidateKind)
-	}
-	if want := []bool{true}; !reflect.DeepEqual(telemetry.windowGateOfferDisclosures, want) {
-		t.Fatalf("windowGateOfferDisclosures = %#v, want %#v", telemetry.windowGateOfferDisclosures, want)
 	}
 }
 
