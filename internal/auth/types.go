@@ -32,6 +32,10 @@ const (
 	// An OAuth request gets it only when it names it; it is never part of
 	// the default scope set and no workload role carries it.
 	ScopeDataRead = "data:read"
+	// ScopeCredentialLifecycleRead gates the read-only credential listing for
+	// reconciliation (CHAOS-11200). Only the reconcile workload role carries
+	// it; it is never part of the OAuth default scope.
+	ScopeCredentialLifecycleRead = "credential_lifecycle:read"
 )
 
 var (
@@ -54,10 +58,11 @@ var (
 )
 
 var knownScopes = map[string]struct{}{
-	ScopeContextRead:  {},
-	ScopeEvidenceRead: {},
-	ScopeEpisodeWrite: {},
-	ScopeDataRead:     {},
+	ScopeContextRead:             {},
+	ScopeEvidenceRead:            {},
+	ScopeEpisodeWrite:            {},
+	ScopeDataRead:                {},
+	ScopeCredentialLifecycleRead: {},
 }
 
 type CreateCredentialRequest struct {
