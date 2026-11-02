@@ -31,4 +31,13 @@ func TestAServedEdgeFactNeverNamesARawWorkItemID(t *testing.T) {
 	if response.Edges[0].From.CanonicalID != id {
 		t.Fatalf("the raw id left the data: from = %+v", response.Edges[0].From)
 	}
+	// A custom fact is not the writer's composition and stays (codex r1).
+	graph.edges = []EdgeCandidate{edgeBetween("e1", "BELONGS_TO_REPOSITORY", item, repoA, map[string]interface{}{"fact": "linear:CHAOS-7 is a human-authored escalation note"})}
+	response, err = reader.Read(relCtx("custom-fact"), unrestricted, RelationshipsRequest{Subject: RelationshipsSubject{Kind: "repository", CanonicalID: repoA.CanonicalID}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(response.Edges) != 1 || response.Edges[0].Fact != "linear:CHAOS-7 is a human-authored escalation note" {
+		t.Fatalf("edges = %+v, want the custom fact as stored", response.Edges)
+	}
 }
