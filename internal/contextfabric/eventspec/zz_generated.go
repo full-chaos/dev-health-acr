@@ -6484,6 +6484,7 @@ type RenderShapeSelectionSummaryFields struct {
 	RenderShapeMembersTruncated          int
 	RenderShapeTrendsOmitted             int
 	RenderShapeComparisonMeasuresLeftOut int
+	RenderShapeTablesCadenceWithheld     int
 	RenderShapeAccounting                string
 	SelectedShapes                       []map[string]any
 	RequestID                            string
@@ -6500,7 +6501,7 @@ type RenderShapeSelectionSummaryFields struct {
 
 // NewRenderShapeSelectionSummaryFields is the generated constructor for RenderShapeSelectionSummaryFields -- every
 // field RenderShapeSelectionSummary.Fields declares is a required parameter.
-func NewRenderShapeSelectionSummaryFields(orgID string, questionShape string, renderShapesSelected int, renderShapeRulesSkipped int, renderShapeMembersTruncated int, renderShapeTrendsOmitted int, renderShapeComparisonMeasuresLeftOut int, renderShapeAccounting string, selectedShapes []map[string]any, requestID string) RenderShapeSelectionSummaryFields {
+func NewRenderShapeSelectionSummaryFields(orgID string, questionShape string, renderShapesSelected int, renderShapeRulesSkipped int, renderShapeMembersTruncated int, renderShapeTrendsOmitted int, renderShapeComparisonMeasuresLeftOut int, renderShapeTablesCadenceWithheld int, renderShapeAccounting string, selectedShapes []map[string]any, requestID string) RenderShapeSelectionSummaryFields {
 	valid := true
 	if selectedShapes == nil {
 		valid = false
@@ -6513,6 +6514,7 @@ func NewRenderShapeSelectionSummaryFields(orgID string, questionShape string, re
 		RenderShapeMembersTruncated:          renderShapeMembersTruncated,
 		RenderShapeTrendsOmitted:             renderShapeTrendsOmitted,
 		RenderShapeComparisonMeasuresLeftOut: renderShapeComparisonMeasuresLeftOut,
+		RenderShapeTablesCadenceWithheld:     renderShapeTablesCadenceWithheld,
 		RenderShapeAccounting:                renderShapeAccounting,
 		SelectedShapes:                       selectedShapes,
 		RequestID:                            requestID,
@@ -6540,6 +6542,7 @@ func (f RenderShapeSelectionSummaryFields) SlogArgs() []any {
 		"render_shape_members_truncated", f.RenderShapeMembersTruncated,
 		"render_shape_trends_omitted", f.RenderShapeTrendsOmitted,
 		"render_shape_comparison_measures_left_out", f.RenderShapeComparisonMeasuresLeftOut,
+		"render_shape_tables_cadence_withheld", f.RenderShapeTablesCadenceWithheld,
 		"render_shape_accounting", contextfabric.SanitizeLogAttr(f.RenderShapeAccounting),
 		"selected_shapes", f.SelectedShapes,
 		"request_id", contextfabric.SanitizeLogAttr(f.RequestID),
@@ -12157,10 +12160,12 @@ type PageHintLookupFields struct {
 	ExactHit            int
 	LabelFallback       int
 	Unresolved          int
+	OtherKind           int
 	SearchFallback      bool
 	ExactHitByKind      map[string]int
 	LabelFallbackByKind map[string]int
 	UnresolvedByKind    map[string]int
+	OtherKindByKind     map[string]int
 	// constructed (CHAOS-5516 r1 fix): an UNEXPORTED marker, generated on
 	// every PageHintLookupFields uniformly, set ONLY by NewPageHintLookupFields below. A caller
 	// outside this package cannot set an unexported field via a composite
@@ -12174,17 +12179,19 @@ type PageHintLookupFields struct {
 
 // NewPageHintLookupFields is the generated constructor for PageHintLookupFields -- every
 // field PageHintLookup.Fields declares is a required parameter.
-func NewPageHintLookupFields(requestID string, pageHints int, exactHit int, labelFallback int, unresolved int, searchFallback bool, exactHitByKind map[string]int, labelFallbackByKind map[string]int, unresolvedByKind map[string]int) PageHintLookupFields {
+func NewPageHintLookupFields(requestID string, pageHints int, exactHit int, labelFallback int, unresolved int, otherKind int, searchFallback bool, exactHitByKind map[string]int, labelFallbackByKind map[string]int, unresolvedByKind map[string]int, otherKindByKind map[string]int) PageHintLookupFields {
 	return PageHintLookupFields{
 		RequestID:           requestID,
 		PageHints:           pageHints,
 		ExactHit:            exactHit,
 		LabelFallback:       labelFallback,
 		Unresolved:          unresolved,
+		OtherKind:           otherKind,
 		SearchFallback:      searchFallback,
 		ExactHitByKind:      exactHitByKind,
 		LabelFallbackByKind: labelFallbackByKind,
 		UnresolvedByKind:    unresolvedByKind,
+		OtherKindByKind:     otherKindByKind,
 		constructed:         true,
 	}
 }
@@ -12208,10 +12215,12 @@ func (f PageHintLookupFields) SlogArgs() []any {
 		"exact_hit", f.ExactHit,
 		"label_fallback", f.LabelFallback,
 		"unresolved", f.Unresolved,
+		"other_kind", f.OtherKind,
 		"search_fallback", f.SearchFallback,
 		"exact_hit_by_kind", f.ExactHitByKind,
 		"label_fallback_by_kind", f.LabelFallbackByKind,
 		"unresolved_by_kind", f.UnresolvedByKind,
+		"other_kind_by_kind", f.OtherKindByKind,
 	}
 }
 

@@ -250,7 +250,9 @@ func TestAClaimOnATeamLandscapeFieldCarriesTheTeamsRow(t *testing.T) {
 			if got := cellInteger(t, row, "identity_count"); got != 2 {
 				t.Fatalf("identity_count = %d, want 2", got)
 			}
-			for _, absent := range []string{"wip_max_30d", "map_name", "x_raw_mean", "y_raw_mean", "identity_id", "x_norm", "y_norm"} {
+			// A missing cycle is stored as 0 (CHAOS-12562), so cycle is held out
+			// with WIP (CHAOS-12565).
+			for _, absent := range []string{"wip_max_30d", "cycle_p50_30d_hours_avg", "map_name", "x_raw_mean", "y_raw_mean", "identity_id", "x_norm", "y_norm"} {
 				if _, present := row.Fields[absent]; present {
 					t.Fatalf("the answer's row carries %q: %+v", absent, row.Fields)
 				}
@@ -266,7 +268,7 @@ func TestAClaimOnATeamLandscapeFieldCarriesTheTeamsRow(t *testing.T) {
 			if len(facts) != 1 {
 				t.Fatalf("landscape facts at synthesis = %d, want 1", len(facts))
 			}
-			for _, name := range []string{"identity_count", "churn_loc_30d", "delivery_units_30d", "cycle_p50_30d_hours_avg", "as_of_day"} {
+			for _, name := range []string{"identity_count", "churn_loc_30d", "delivery_units_30d", "as_of_day"} {
 				scalar, ok := scalarOfFactValue(facts[0].Fields[name])
 				if !ok {
 					t.Fatalf("the model cannot read %s: offered %v", name, model.offered)
@@ -303,7 +305,7 @@ func TestAClaimOnAProjectLandscapeFieldCarriesItsTeams(t *testing.T) {
 		if got := cellInteger(t, row, "delivery_units_30d"); got != 3 {
 			t.Fatalf("delivery_units_30d = %d, want 3", got)
 		}
-		for _, absent := range []string{"wip_max_30d", "map_name", "x_raw_mean", "identity_id"} {
+		for _, absent := range []string{"wip_max_30d", "cycle_p50_30d_hours_avg", "map_name", "x_raw_mean", "identity_id"} {
 			if _, present := row.Fields[absent]; present {
 				t.Fatalf("the answer's row carries %q: %+v", absent, row.Fields)
 			}

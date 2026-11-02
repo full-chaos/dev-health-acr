@@ -707,6 +707,10 @@ var PageHintLookup = Event{
 		{Key: "exact_hit", Type: FieldInt, Presence: PresenceRequired},
 		{Key: "label_fallback", Type: FieldInt, Presence: PresenceRequired},
 		{Key: "unresolved", Type: FieldInt, Presence: PresenceRequired},
+		// Hints dropped before the lookup because the question asks for
+		// another kind (CHAOS-12555). Counted in page_hints, so the four
+		// outcomes still add up to it.
+		{Key: "other_kind", Type: FieldInt, Presence: PresenceRequired},
 		// Whether the call's term search completed (every term, each hint
 		// label among them, searched without error): the fact that separates
 		// a label_fallback from an unresolved hint that carried a label. A
@@ -715,6 +719,7 @@ var PageHintLookup = Event{
 		{Key: "exact_hit_by_kind", Type: FieldCountMap, Presence: PresenceRequired, ClosedVocabulary: arrayTokens(storedResultSubjectKindArr[:])},
 		{Key: "label_fallback_by_kind", Type: FieldCountMap, Presence: PresenceRequired, ClosedVocabulary: arrayTokens(storedResultSubjectKindArr[:])},
 		{Key: "unresolved_by_kind", Type: FieldCountMap, Presence: PresenceRequired, ClosedVocabulary: arrayTokens(storedResultSubjectKindArr[:])},
+		{Key: "other_kind_by_kind", Type: FieldCountMap, Presence: PresenceRequired, ClosedVocabulary: arrayTokens(storedResultSubjectKindArr[:])},
 	},
 }
 
@@ -1848,6 +1853,7 @@ var RenderShapeSelectionSummary = Event{
 		{Key: "render_shape_members_truncated", Type: FieldInt, Presence: PresenceRequired},
 		{Key: "render_shape_trends_omitted", Type: FieldInt, Presence: PresenceRequired},
 		{Key: "render_shape_comparison_measures_left_out", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "render_shape_tables_cadence_withheld", Type: FieldInt, Presence: PresenceRequired},
 		{Key: "render_shape_accounting", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: []string{"ok", "violated"}},
 		{Key: "selected_shapes", Type: FieldObjectSlice, Presence: PresenceRequired, MaxItems: contractsv1.ContextFabricRenderShapesMaxCount, Fields: []Field{
 			{Key: "render_shape_kind", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: renderKindLineTokens()},

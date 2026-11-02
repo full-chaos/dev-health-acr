@@ -1354,9 +1354,22 @@ import (
 // v261 -> v262: a team landscape fact carries its row's values as scalars, and a
 // claim on a landscape fact carries area_breakdown or team_breakdown, with no
 // wip_max_30d (CHAOS-12533). An answer saved under v261 holds no landscape row.
-// v262 -> v263: a team landscape fact carries daily_landscape, its newest 64
+//
+// v262 -> v263: a pull request's label, an edge's fact and the clarification
+// prompt no longer show a raw canonical id (CHAOS-12468). An answer saved under
+// v262 can hold one.
+//
+// v263 -> v264: a hint of a kind the question does not ask for commits nothing
+// (CHAOS-12555). An answer saved under v263 can speak for the organization on a
+// question about a repository the request lost.
+//
+// v264 -> v265: a team landscape fact holds its cycle out of an answer: no
+// scalar, and no cycle in a claim's row (CHAOS-12565). An answer saved under
+// v264 can state a cycle that reads missing days as 0.
+//
+// v265 -> v266: a team landscape fact carries daily_landscape, its newest 64
 // days as a declared time series, and a claim on it draws a trend (CHAOS-12534).
-const QueryVersion = "devhealthfacts.clickhouse.v263"
+const QueryVersion = "devhealthfacts.clickhouse.v266"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each

@@ -33,6 +33,7 @@ var noRepositoryExceptions = map[string]string{
 	"POST /api/v1/auth/credentials/self/rotate": "credential lifecycle line, not behind requireLiveAccess; its 409 is credential_lifecycle_conflict",
 	"POST /api/v1/auth/credentials/self/revoke": "credential lifecycle line, not behind requireLiveAccess; its 409 is credential_lifecycle_conflict",
 	"POST /api/v1/auth/credentials/self/ack":    "credential lifecycle line, not behind requireLiveAccess; its 409 is credential_lifecycle_conflict",
+	"GET " + CredentialLifecycleListPath:        "workload-class listing (CHAOS-11200), not behind requireLiveAccess: no user, no repository access read",
 }
 
 func loadOpenAPIOperations(t *testing.T) []openAPIOperation {
@@ -235,6 +236,7 @@ var outsideAccessCheck = map[string]string{
 	"GET /.well-known/oauth-authorization-server": "OAuth metadata, unauthenticated",
 	"GET /authorize":                              "OAuth authorize, code flow, no bearer",
 	"POST /authorize/consent":                     "OAuth consent, code flow, no bearer",
+	"POST /authorize/first-party":                 "first-party authorize, code flow, web assertion, no bearer (CHAOS-12568)",
 	"POST /device_authorization":                  "OAuth device authorization, unauthenticated",
 	"POST /register":                              "OAuth client registration, unauthenticated",
 	"POST /token":                                 "OAuth token, unauthenticated",

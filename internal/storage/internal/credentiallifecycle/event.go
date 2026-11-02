@@ -431,3 +431,19 @@ func FamilyMemberActor(initiator Actor) Actor {
 func isTerminalEventType(eventType string) bool {
 	return eventType == eventTypePrefix+string(KindRevoked) || eventType == eventTypePrefix+string(KindExpired)
 }
+
+// StatusOfEventType is the credential status the listing reports for an
+// aggregate whose latest event is eventType: a terminal event names itself, any
+// event that opens an aggregate or keeps it going is active.
+func StatusOfEventType(eventType string) (string, bool) {
+	switch eventType {
+	case eventTypePrefix + string(KindRevoked):
+		return contractsv1.CredentialLifecycleStatusRevoked, true
+	case eventTypePrefix + string(KindExpired):
+		return contractsv1.CredentialLifecycleStatusExpired, true
+	case eventTypePrefix + string(KindIssued), eventTypePrefix + string(KindDeviceRedeemed), eventTypePrefix + string(KindRotated):
+		return contractsv1.CredentialLifecycleStatusActive, true
+	default:
+		return "", false
+	}
+}

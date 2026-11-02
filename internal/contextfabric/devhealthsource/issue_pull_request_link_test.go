@@ -225,6 +225,11 @@ func TestIssuePullRequestLinksProjectEveryTierForEveryIssueProvider(t *testing.T
 		if link.To.Kind != contractsv1.ContextFabricSubjectPullRequest || link.To.CanonicalID != pullRequestID {
 			t.Errorf("%s: to = %+v, want pull_request %s", c.want.issueID, link.To, pullRequestID)
 		}
+		// The edge seeds this label on a pull request node that has no entity
+		// yet, and it is half of the edge's fact: a reader sees it (CHAOS-12468).
+		if want := fmt.Sprintf("PR #%d", c.want.number); link.To.Label != want {
+			t.Errorf("%s: pull request end label = %q, want %q", c.want.issueID, link.To.Label, want)
+		}
 		if tier, rank := tierProperty(t, link); tier != c.want.tier || rank != c.want.rank {
 			t.Errorf("%s -> %s: tier/rank = %s/%d, want %s/%d", c.want.issueID, pullRequestID, tier, rank, c.want.tier, c.want.rank)
 		}

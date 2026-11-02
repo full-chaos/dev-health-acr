@@ -1464,6 +1464,49 @@
       ]
     },
     {
+      "id": "GET /internal/v1/credentials/lifecycle [dev-health-acr-api]",
+      "surface_kind": "rest",
+      "method": "GET",
+      "route": "/internal/v1/credentials/lifecycle",
+      "graphql_field_name": null,
+      "service": "dev-health-acr-api",
+      "source": {
+        "file": "internal/api/app.go",
+        "line": 140
+      },
+      "classification": "protected",
+      "public_rationale": null,
+      "accepted_credential_classes": [
+        "acr_client_credential"
+      ],
+      "primary_validator": {
+        "description": "credentialLifecycleListHandler: Authenticator.MiddlewareFor(allowWebAssertions=FALSE) refuses an absent or malformed bearer and any web assertion before the credential lookup; requireWorkloadClass then refuses every credential whose row class is not workload (403 credential_class_refused); Authenticator.RequireScope(credential_lifecycle:read) admits only the reconcile workload binding role; all three run before the listing is read (CHAOS-11200).",
+        "anchor": {
+          "path": "internal/api/credential_lifecycle_list_route.go",
+          "line": 24,
+          "line_end": 30,
+          "note": "func (a *App) credentialLifecycleListHandler() http.Handler {"
+        }
+      },
+      "token_shape": {
+        "token_type": "fcacr_ bearer only",
+        "issuer": null,
+        "audience": null,
+        "algorithm": null
+      },
+      "reachable_validators": [],
+      "action": "auth.credentials.lifecycle.list",
+      "resource_resolver": "principal.OrgID (the workload binding's organization); the request names no organization.",
+      "tenant_requirement": "org_scoped",
+      "current_state_cache_behavior": "Reads the credential lifecycle outbox of the caller's own organization; writes nothing; response is Cache-Control no-store.",
+      "impersonation_policy": "not_applicable_non_main_app",
+      "entitlement_requirement": null,
+      "disclosure_behavior": "writeError() closed envelope; the body carries credential id, revision and status only, no token, prefix or hash.",
+      "gaps": [
+        "entitlement_requirement: a workload-class listing; no Dev Health licensing feature gates it, and the handler does not read the entitlement provider."
+      ]
+    },
+    {
       "surface_kind": "rest",
       "graphql_field_name": null,
       "service": "dev-health-acr-api",
@@ -1609,6 +1652,63 @@
           "verified_by": "acr:internal/auth/oauth.go:713"
         }
       ]
+    },
+    {
+      "id": "POST /authorize/first-party [dev-health-acr-api]",
+      "surface_kind": "rest",
+      "method": "POST",
+      "route": "/authorize/first-party",
+      "graphql_field_name": null,
+      "service": "dev-health-acr-api",
+      "source": {
+        "file": "internal/api/app.go",
+        "line": 133
+      },
+      "classification": "protected",
+      "public_rationale": null,
+      "accepted_credential_classes": [
+        "acr_web_assertion"
+      ],
+      "primary_validator": {
+        "description": "deviceApprovalHandler (the same wrapper as device_approval and the consent route) requires X-ACR-Web-Assertion EXACTLY (exactly one header) and rejects if Authorization is also present, then RequireScope(credential:issue): only web's server, acting for its signed-in user, can start a first-party authorize, with the request in the form body the assertion signs (CHAOS-12568). The browser never calls this route; it sends {code_challenge, state} to web.",
+        "anchor": {
+          "path": "internal/api/device_routes.go",
+          "line": 246,
+          "line_end": 246,
+          "note": "func (a *App) deviceApprovalHandler(next http.Handler) http.Handler {"
+        }
+      },
+      "token_shape": {
+        "token_type": "X-ACR-Web-Assertion (EdDSA JWT, permissions includes credential:issue, path /authorize/first-party)",
+        "issuer": null,
+        "audience": null,
+        "algorithm": "EdDSA"
+      },
+      "reachable_validators": [
+        {
+          "description": "OAuthService.Authorize, the same as GET /authorize (serveOAuthAuthorize): the client must be the first-party browser client (handleOAuthFirstPartyAuthorize refuses any other with 400), the request is the signed form body only (unknown or repeated parameters: 400), an impersonating session is refused (403), and the limit is per user (AllowBrowserAuthorizeUser: deviceCreationLimit per user under the browser client's browserAuthorizeClientLimit ceiling, shared with GET /authorize) (CHAOS-12568).",
+          "anchor": {
+            "path": "internal/auth/oauth.go",
+            "line": 437,
+            "line_end": 437,
+            "note": "func (s *OAuthService) Authorize("
+          },
+          "is_intended_validator": true,
+          "reachable_but_not_owner": false
+        }
+      ],
+      "action": "oauth.authorize.start",
+      "resource_resolver": "None yet -- starts a device authorization with no hints (its raw device and user codes are discarded); org and repositories are chosen on the web consent page.",
+      "tenant_requirement": "org_scoped",
+      "current_state_cache_behavior": null,
+      "impersonation_policy": "not_applicable_non_main_app",
+      "entitlement_requirement": null,
+      "disclosure_behavior": "302 to ACR_OAUTH_CONSENT_URL?handle=<handle> (no-store, Referrer-Policy no-referrer), or a 303 to the verified redirect URI with a closed OAuth error code; an unverified client/redirect gets a fixed HTML problem page (CSP default-src 'none', form-action 'none', frame-ancestors 'none') and is never redirected; error redirects go to the registered redirect URI, never the request value.",
+      "gaps": [
+        "current_state_cache_behavior: searched internal for Cache-Control writes (shared writers set no-store at internal/api/response.go:81 and internal/api/read_decode.go:46); which of them the handler registered at internal/api/app.go:133 reaches was not traced; not determined.",
+        "entitlement_requirement: searched internal for entitlement code (internal/entitlements, internal/config/entitlement.go); whether the handler registered at internal/api/app.go:133 is gated by it was not traced; not determined."
+      ],
+      "issued_credential": []
     },
     {
       "surface_kind": "rest",

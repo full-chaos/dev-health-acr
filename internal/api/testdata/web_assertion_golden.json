@@ -127,6 +127,13 @@
     },
     {
       "method": "POST",
+      "pattern": "/authorize/first-party",
+      "path": "/authorize/first-party",
+      "scope": "credential:issue",
+      "web_assertion": true
+    },
+    {
+      "method": "POST",
       "pattern": "/api/v1/agent-context/episodes",
       "path": "/api/v1/agent-context/episodes",
       "scope": "episode:write",
@@ -192,6 +199,13 @@
       "method": "POST",
       "pattern": "/api/v1/auth/credentials/self/ack",
       "path": "/api/v1/auth/credentials/self/ack",
+      "scope": "",
+      "web_assertion": false
+    },
+    {
+      "method": "GET",
+      "pattern": "/internal/v1/credentials/lifecycle",
+      "path": "/internal/v1/credentials/lifecycle",
       "scope": "",
       "web_assertion": false
     }

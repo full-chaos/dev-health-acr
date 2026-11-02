@@ -348,6 +348,26 @@ func (s *OAuthService) IsBrowserClient(clientID string) bool {
 	return s != nil && s.isBrowserClient(clientID)
 }
 
+// BrowserClientID returns the configured id of the first-party browser client
+// that clientID names, and false when it names none (CHAOS-12568). The id
+// returned is the configuration's own string, never the caller's, so a request
+// value that reaches an outbound read through it is the configured client, not
+// whatever the caller sent.
+func (s *OAuthService) BrowserClientID(clientID string) (string, bool) {
+	if s == nil {
+		return "", false
+	}
+	if s.devBrowser != nil && clientID == DevBrowserClientID {
+		return DevBrowserClientID, true
+	}
+	for configured := range s.browserClients {
+		if configured == clientID {
+			return configured, true
+		}
+	}
+	return "", false
+}
+
 // isBrowserClient reports whether a client id names a configured
 // first-party browser client.
 func (s *OAuthService) isBrowserClient(clientID string) bool {

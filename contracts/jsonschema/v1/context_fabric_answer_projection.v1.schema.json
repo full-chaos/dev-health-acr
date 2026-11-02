@@ -2765,6 +2765,46 @@
           "type": "string",
           "minLength": 1,
           "maxLength": 128
+        },
+        "measure_units": {
+          "description": "CHAOS-11984: the unit of each measure whose producer declares one from the closed vocabulary, in `measures` order. Each entry names one declared measure, once. A measure with no entry has no stated unit, and a consumer adds none. Set by the server from the producer's declaration; never model-authored.",
+          "type": "array",
+          "maxItems": 32,
+          "items": {
+            "description": "The unit of one declared measure.",
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "measure": {
+                "description": "A name in `measures`.",
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 128
+              },
+              "unit": {
+                "description": "`count` is a number of things; `ratio` is a part over its whole; `hours` and `days` are durations; `points` is an estimate in story points.",
+                "type": "string",
+                "enum": [
+                  "count",
+                  "ratio",
+                  "hours",
+                  "days",
+                  "points"
+                ]
+              }
+            },
+            "required": [
+              "measure",
+              "unit"
+            ]
+          }
+        },
+        "cadence": {
+          "description": "CHAOS-11985: the expected spacing of a `time_series` table's rows, stated only on a `time_series` table whose rows keep it. `day` is one row per UTC calendar day: every key value is a date written YYYY-MM-DD, and no day repeats. A day with no row between two served rows has no stored row; it is not a zero. Absent means no cadence is stated. Set by the server from the producer's declaration; never model-authored.",
+          "type": "string",
+          "enum": [
+            "day"
+          ]
         }
       },
       "required": [

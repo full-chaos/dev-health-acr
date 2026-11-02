@@ -69,10 +69,12 @@ var publicRoutes = []publicRoute{
 	{pattern: "GET " + OAuthAuthorizationServerMetadataPath, method: "GET", path: OAuthAuthorizationServerMetadataPath, oauthOnly: true},
 	{pattern: "GET " + OAuthAuthorizePath, method: "GET", path: OAuthAuthorizePath, oauthOnly: true},
 	{pattern: "POST " + OAuthConsentPath, method: "POST", path: OAuthConsentPath, gated: true, oauthOnly: true},
+	{pattern: "POST " + OAuthFirstPartyAuthorizePath, method: "POST", path: OAuthFirstPartyAuthorizePath, gated: true, oauthOnly: true},
 	{pattern: "POST " + OAuthTokenPath, method: "POST", path: OAuthTokenPath, oauthOnly: true},
 	{pattern: "POST " + OAuthRegisterPath, method: "POST", path: OAuthRegisterPath, oauthOnly: true},
 	{pattern: "POST " + OAuthDeviceAuthorizationPath, method: "POST", path: OAuthDeviceAuthorizationPath, oauthOnly: true},
 	{pattern: "POST /api/v1/auth/credentials/self/ack", method: "POST", path: "/api/v1/auth/credentials/self/ack", gated: true},
+	{pattern: "GET " + CredentialLifecycleListPath, method: "GET", path: CredentialLifecycleListPath, gated: true},
 }
 
 type foreignToken struct {

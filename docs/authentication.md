@@ -79,6 +79,16 @@ The values are written once at issuance. Every rotation (operator rotate and sel
 
 The migration classifies existing rows only where the issuance records prove it: a row with a workload binding is `workload`; a row a device authorization redeemed takes that authorization's approver (and `oauth_user` when it is bound to a resource); a rotation successor inherits through the `credential_rotated` audit edge. Every other legacy row keeps a NULL class.
 
+## Credential listing for reconciliation (CHAOS-11200)
+
+`GET /internal/v1/credentials/lifecycle[?limit=1..500&after=<credential id>]` is the read-only listing the Auth Control Plane reconciliation reads. It answers one page of `{credential_id, revision, status}` (schema `credential_lifecycle_list.v1`) for the caller's own organization, ordered by credential id in byte order; `next_after` is the id to pass as `after`, or `null` on the last page. Nothing else about a credential is on the wire: no token, prefix, hash, scope or name. No other query parameter is accepted (400 `invalid_request`).
+
+Who may call it. Only a workload-class credential (RFC 8693 token exchange) whose workload binding has the role `reconcile`. The role carries the single scope `credential_lifecycle:read` and no other, so a `read` or `ops` binding cannot call the route. The checks run in this order and every one of them before the listing is read: an absent or malformed bearer and any web assertion are refused before the credential lookup (401 `invalid_token`); a credential whose row class is not `workload` is refused after that lookup (403 `credential_class_refused`); a workload without the scope is refused 403 `insufficient_scope`. A binding has one organization, so the listing is per organization: reconciling N organizations takes N `reconcile` bindings, provisioned out of band like every binding. The route has no caller until such a binding exists, and the chart's HTTPRoute matches only `/api/v1/agent-context` by default, so a caller reaches `/internal/v1/` through the in-cluster service.
+
+What it lists. The source is `acr.credential_lifecycle_outbox`: the newest row of each credential. `revision` is its highest revision; `status` is `revoked` or `expired` when the newest event is that terminal event, and `active` otherwise. An unrevoked credential past its expiry reads `active` until the lifecycle tick writes its `expired` event, so the reconciliation must not call that drift inside one tick. A live credential with no outbox row (it predates the outbox) is absent until the first-touch tick writes its revision 1: run the reconciliation only after that drain. A credential row that is gone (retention or the organization purge) stays listed until the outbox reaper removes its rows, and then is absent: for a credential the Auth Control Plane holds, "absent in acr" is expected, not drift.
+
+A page is a keyset read: a credential added during a walk that sorts after the cursor appears, one that sorts before it does not, and a revision may advance between pages. The walk is served by `ix_acr_credential_lifecycle_outbox_org_aggregate` (migration `0069`, which also admits the role `reconcile`).
+
 ## Sidecar loading
 
 The local sidecar resolves a credential with a fixed precedence:
@@ -221,8 +231,8 @@ refused: it writes one Info line `oauth client assertion ignored` with
 never the assertion.
 
 Routes: `GET /.well-known/oauth-authorization-server`, `GET /authorize`,
-`POST /authorize/consent`, `POST /token`, `POST /register`,
-`POST /device_authorization`.
+`POST /authorize/first-party`, `POST /authorize/consent`, `POST /token`,
+`POST /register`, `POST /device_authorization`.
 
 - The authorization-code grant with PKCE `S256`, and RFC 8628's device-code
   grant for headless/remote clients (`POST /device_authorization` starts it;
@@ -243,6 +253,20 @@ Routes: `GET /.well-known/oauth-authorization-server`, `GET /authorize`,
   anything else the OAuth error redirect. The error page names why the client
   was refused in plain words (the `client_refusal` classes below) and never
   repeats a value from the request or the client's document.
+- `POST /authorize/first-party` (CHAOS-12568) is the same authorize for the
+  first-party browser client only, sent by web's server for its signed-in
+  user. The parameters are an `application/x-www-form-urlencoded` body of
+  authorization parameters only; a web assertion over that exact body
+  (`credential:issue`, `repository_scopes` `["*"]`, exactly one
+  `X-ACR-Web-Assertion`, no `Authorization`, no query string) names the user.
+  It is limited per user (`deviceCreationLimit` a minute, keyed by the user on
+  one surface in one organization, never the raw user id) under the browser
+  client's ceiling, which it shares with `GET /authorize`. `GET /authorize`
+  is limited per source address, and every request of web's server comes from
+  web's address, so through `GET` every user would share one budget. Any
+  other client gets `400`, an impersonating session `403`, and a missing or
+  invalid assertion `401`; each writes its one `step=authorize` line. It
+  answers exactly as `GET /authorize` does.
 - The web signs the user in (and returns to the same consent URL), then calls
   `POST /authorize/consent` for the signed-in user with a web assertion
   (`credential:issue`, exactly one `X-ACR-Web-Assertion`, no `Authorization`;

@@ -21,7 +21,8 @@ type EngineOptions struct {
 	// (CHAOS-12513). See Config.ContextFabricComparisonTableEnabled.
 	ComparisonTableEnabled bool
 	// FactCapabilities are the field declarations that rule reads each field's
-	// scope from.
+	// scope from, and that every claimed table reads its measure units from
+	// (CHAOS-11984).
 	FactCapabilities []FactCapability
 	ServiceVersion   string
 	Now              func() time.Time
@@ -1325,38 +1326,41 @@ type Engine struct {
 	// rawResults is the unwrapped store, kept only for optional-capability
 	// assertions (StructureSupersessionChecker). Every payload read goes
 	// through results, whose Get is decided by storedResultGate.
-	rawResults                                  InvestigationResultStore
-	storedResultGate                            *StoredResultGate
-	telemetry                                   EngineTelemetry
-	reuseGate                                   AnswerReuseGate
-	reuseSnapshotter                            SourceWatermarkSnapshotter
-	reuseEpochSnapshotter                       RebuildEpochSnapshotter
-	anchorFreshness                             AnchorFreshnessReader
-	anchorBindingMaxAgeSetting                  time.Duration
-	anchorBindingCountEnabled                   bool
-	anchorBindingCarryEnabled                   bool
-	reuseModelIdentityResolver                  ReuseModelIdentityResolver
-	reuseProjectionVersion                      string
-	reuseModelIdentities                        []string
-	reuseRetrievalIdentity                      ReuseRetrievalIdentity
-	reusePromptVersions                         ReusePromptVersions
-	reuseVersionAuthorities                     ReuseVersionAuthorities
-	clarificationSelectionSink                  ClarificationSelectionSink
-	structureSelectionSink                      StructureSelectionSink
-	handleVerifier                              HandleVerifier
-	anchorVerifier                              AnchorVerifier
-	anchorMembershipVerifier                    AnchorMembershipVerifier
-	candidateVerifier                           CandidateVerifier
-	workItemMembership                          WorkItemMembershipPort
-	treeWorkItemMembership                      *TreeWorkItemMembership
-	priorConsultant                             PriorConsultant
-	priorHandleGrammarChecker                   HandleGrammarChecker
-	offerPhraser                                OfferPhraser
-	requirements                                RequirementDeriver
-	observationKeys                             ObservationKeyDeclarer
-	regimeAOffersDisabled                       bool
-	anchorBindingShadowDisabled                 bool
-	renderShapeOptions                          RenderShapeOptions
+	rawResults                  InvestigationResultStore
+	storedResultGate            *StoredResultGate
+	telemetry                   EngineTelemetry
+	reuseGate                   AnswerReuseGate
+	reuseSnapshotter            SourceWatermarkSnapshotter
+	reuseEpochSnapshotter       RebuildEpochSnapshotter
+	anchorFreshness             AnchorFreshnessReader
+	anchorBindingMaxAgeSetting  time.Duration
+	anchorBindingCountEnabled   bool
+	anchorBindingCarryEnabled   bool
+	reuseModelIdentityResolver  ReuseModelIdentityResolver
+	reuseProjectionVersion      string
+	reuseModelIdentities        []string
+	reuseRetrievalIdentity      ReuseRetrievalIdentity
+	reusePromptVersions         ReusePromptVersions
+	reuseVersionAuthorities     ReuseVersionAuthorities
+	clarificationSelectionSink  ClarificationSelectionSink
+	structureSelectionSink      StructureSelectionSink
+	handleVerifier              HandleVerifier
+	anchorVerifier              AnchorVerifier
+	anchorMembershipVerifier    AnchorMembershipVerifier
+	candidateVerifier           CandidateVerifier
+	workItemMembership          WorkItemMembershipPort
+	treeWorkItemMembership      *TreeWorkItemMembership
+	priorConsultant             PriorConsultant
+	priorHandleGrammarChecker   HandleGrammarChecker
+	offerPhraser                OfferPhraser
+	requirements                RequirementDeriver
+	observationKeys             ObservationKeyDeclarer
+	regimeAOffersDisabled       bool
+	anchorBindingShadowDisabled bool
+	renderShapeOptions          RenderShapeOptions
+	// measureUnitsOf states each claimed table's measure units from the fact
+	// declarations (CHAOS-11984). See withDeclaredMeasureUnits.
+	measureUnitsOf                              factMeasureUnits
 	serverCompletenessAuthorityEnabled          bool
 	serverCompletenessAuthoritySymmetricEnabled bool
 	// servedLateHook is a test seam: a writer that adds bytes to the document
@@ -1444,7 +1448,9 @@ func NewEngine(dependencies EngineDependencies, options EngineOptions) (*Engine,
 			InvestmentThemeShare: options.InvestmentTreemapEnabled,
 			ComparisonSideBySide: options.ComparisonTableEnabled,
 			FieldScope:           factFieldScopeLookup(options.FactCapabilities),
+			TableCadence:         declaredCadenceOf(options.FactCapabilities),
 		},
+		measureUnitsOf:                              declaredMeasureUnitsOf(options.FactCapabilities),
 		serverCompletenessAuthorityEnabled:          options.ServerCompletenessAuthorityEnabled,
 		serverCompletenessAuthoritySymmetricEnabled: options.ServerCompletenessAuthoritySymmetricEnabled,
 		maxItems:                 options.MaxItems,
@@ -2277,6 +2283,7 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 			confirmedNeedLedger.CandidateHintEvicted = true
 		}
 		graphRequest.RequestedScope.SubjectHints = append(hints, pick)
+		ctx = WithConfirmedCandidatePick(ctx, SubjectRef{Kind: pick.Kind, CanonicalID: pick.ID})
 	}
 
 	// CHAOS-3898 P1-1: Interpret sees ONLY the validated receipt subset,

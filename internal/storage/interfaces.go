@@ -345,3 +345,15 @@ func IsCredentialLifecycleAuditAction(action string) bool {
 
 // LifecycleOutboxRow is one credential lifecycle outbox row.
 type LifecycleOutboxRow = credentiallifecycle.Row
+
+// CredentialLifecycleStatusOfEventType maps the latest lifecycle event type of
+// a credential to the status the reconciliation listing reports.
+var CredentialLifecycleStatusOfEventType = credentiallifecycle.StatusOfEventType
+
+// CredentialLifecycleLister is the read-only listing of the lifecycle outbox
+// for reconciliation (CHAOS-11200): one item per credential of orgID whose id
+// sorts (bytewise) after `after`, ascending, at most limit items. It reads
+// credential id, highest revision and the latest event's status, nothing else.
+type CredentialLifecycleLister interface {
+	ListCredentialLifecycle(ctx context.Context, orgID, after string, limit int) ([]contractsv1.CredentialLifecycleItem, error)
+}

@@ -249,7 +249,7 @@ func validCredentialScopes(scopes []string) bool {
 	}
 	for _, scope := range scopes {
 		switch scope {
-		case "context:read", "evidence:read", "episode:write", "context:admin", "data:read":
+		case "context:read", "evidence:read", "episode:write", "context:admin", "data:read", "credential_lifecycle:read":
 		default:
 			return false
 		}
