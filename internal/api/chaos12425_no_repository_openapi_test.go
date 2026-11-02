@@ -33,6 +33,7 @@ var noRepositoryExceptions = map[string]string{
 	"POST /api/v1/auth/credentials/self/rotate": "credential lifecycle line, not behind requireLiveAccess; its 409 is credential_lifecycle_conflict",
 	"POST /api/v1/auth/credentials/self/revoke": "credential lifecycle line, not behind requireLiveAccess; its 409 is credential_lifecycle_conflict",
 	"POST /api/v1/auth/credentials/self/ack":    "credential lifecycle line, not behind requireLiveAccess; its 409 is credential_lifecycle_conflict",
+	"GET " + CredentialLifecycleListPath:        "workload-class listing (CHAOS-11200), not behind requireLiveAccess: no user, no repository access read",
 }
 
 func loadOpenAPIOperations(t *testing.T) []openAPIOperation {
