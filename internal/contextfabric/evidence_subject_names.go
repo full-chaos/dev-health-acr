@@ -3,8 +3,6 @@ package contextfabric
 import (
 	"strings"
 
-	"github.com/google/uuid"
-
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/identity"
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 )
@@ -65,19 +63,14 @@ func evidenceSubjectNames(result InvestigationResult) contractsv1.ContextFabricE
 			return "", false
 		}
 		name, ok := names[canonicalID]
-		// A label that is the subject's own id is no name: the raw id, a
-		// project's id without its provider (the source labels a project with
-		// no name that way), or a UUID (codex r2).
-		if !ok || name == rawID || name == sourceID || isUUIDLabel(name) {
+		// A label that is the subject's own id is no name: the raw id, or a
+		// project's id without its provider, which the source uses as the
+		// label of a project with no name (codex r2).
+		if !ok || name == rawID || name == sourceID {
 			return "", false
 		}
 		return name, true
 	}
-}
-
-func isUUIDLabel(label string) bool {
-	_, err := uuid.Parse(label)
-	return err == nil && len(label) == 36
 }
 
 // readerEvidenceRefLabels is a result's evidence labels for a reader: a label
