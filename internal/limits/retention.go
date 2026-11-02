@@ -13,7 +13,7 @@ func (m *Manager) windowFor(class RequestClass, subject Subject, policy quotaPol
 		if len(byOrg) >= m.maxOrganizations {
 			return nil, m.capacityDenied()
 		}
-		window = &usageWindow{started: now, quotaStarted: now, lastTouched: now, quotaCredential: make(map[string]int64), credentials: make(map[string]UsageCounters)}
+		window = &usageWindow{started: now, quotaStarted: now, lastTouched: now, quotaCredential: make(map[string]int64), credentials: make(map[string]UsageCounters), touched: make(map[string]time.Time), running: make(map[string]int)}
 		byOrg[subject.OrgID] = window
 	}
 	if m.quotaExpired(window, policy, now) {
@@ -24,9 +24,56 @@ func (m *Manager) windowFor(class RequestClass, subject Subject, policy quotaPol
 		}
 	}
 	if _, exists := window.credentials[subject.key()]; !exists && len(window.credentials) >= m.maxCredentials {
-		return nil, m.capacityDenied()
+		m.forgetIdle(window, policy, now)
+		if len(window.credentials) >= m.maxCredentials {
+			return nil, m.capacityDenied()
+		}
 	}
 	return window, Decision{Allowed: true}
+}
+
+// forgetIdle removes the subjects a full set no longer needs, so the cap counts
+// live subjects and not every subject since the last sweep: one steady caller
+// stops that sweep. A subject goes when no claim of it is running and it has not
+// been seen for a retention. A retention is at least the quota window, so a
+// removed subject's quota count has already expired: waiting is no way around a
+// quota. A removed subject's Usage totals go with it.
+//
+// It holds the manager's lock, and the cap is configurable, so a full set of
+// live subjects must not cost a scan per refused newcomer: a scan records the
+// first moment a subject can leave, and it does not run again before that. A
+// subject's last-seen time only moves forward (seen covers a clock that stepped
+// back), and a running subject sets it to the moment it finishes, a retention
+// before it can leave, so nothing can leave earlier than that moment.
+func (m *Manager) forgetIdle(window *usageWindow, policy quotaPolicy, now time.Time) {
+	if now.Before(window.nextForget) {
+		return
+	}
+	window.forgetPasses++
+	window.lastForget = now
+	retention := m.retentionOf(policy)
+	next := now.Add(retention)
+	for key, touched := range window.touched {
+		if window.running[key] > 0 {
+			continue
+		}
+		expires := touched.Add(retention)
+		if !now.Before(expires) {
+			delete(window.credentials, key)
+			delete(window.quotaCredential, key)
+			delete(window.touched, key)
+			continue
+		}
+		if expires.Before(next) {
+			next = expires
+		}
+	}
+	window.nextForget = next
+}
+
+// retentionOf is how long state of a class is kept with no activity.
+func (m *Manager) retentionOf(policy quotaPolicy) time.Duration {
+	return max(m.retention, policy.Window)
 }
 
 func (m *Manager) sweep(now time.Time) {
@@ -44,8 +91,7 @@ func (m *Manager) sweep(now time.Time) {
 }
 
 func (m *Manager) expired(window *usageWindow, policy quotaPolicy, now time.Time) bool {
-	retention := max(m.retention, policy.Window)
-	return !now.Before(window.lastTouched.Add(retention))
+	return !now.Before(window.lastTouched.Add(m.retentionOf(policy)))
 }
 
 func (m *Manager) quotaExpired(window *usageWindow, policy quotaPolicy, now time.Time) bool {
@@ -72,4 +118,15 @@ func (window *usageWindow) denied(credentialID string, now time.Time) {
 	credential.Denied++
 	window.credentials[credentialID] = credential
 	window.lastTouched = now
+	window.seen(credentialID, now)
+}
+
+// seen records a subject's last-seen time. nextForget assumes these only move
+// forward. A wall clock that stepped back breaks that: the subject could expire
+// before the moment the last scan counted on, so the next scan is not skipped.
+func (window *usageWindow) seen(key string, now time.Time) {
+	window.touched[key] = now
+	if now.Before(window.lastForget) {
+		window.nextForget = time.Time{}
+	}
 }
