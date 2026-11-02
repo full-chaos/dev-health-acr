@@ -74,3 +74,25 @@ func TestSuppliedInterpretationCarriesTheWindowClass(t *testing.T) {
 		}
 	}
 }
+
+// The file-exchange transport (the trial and shadow harnesses' interpreter)
+// parses the output through ParseInterpretationOutputSignals; its
+// interpretation carries the same sanitized pick as its capture.
+func TestExchangeParserCarriesTheWindowClass(t *testing.T) {
+	t.Parallel()
+	for _, c := range windowPickCases {
+		output := validInterpretationOutput()
+		output.WindowClass, output.WindowConfidence = c.rawClass, c.rawConfidence
+		raw := mustMarshalOutput(t, output)
+		interpreted, capture, err := ParseInterpretationOutputSignals(raw, validRequest().TimeContext)
+		if err != nil {
+			t.Fatalf("%s: ParseInterpretationOutputSignals() error = %v", c.name, err)
+		}
+		if interpreted.WindowClass != c.wantClass || interpreted.WindowConfidence != c.wantConfidence {
+			t.Errorf("%s: exchange interpreted window = %q/%q, want %q/%q", c.name, interpreted.WindowClass, interpreted.WindowConfidence, c.wantClass, c.wantConfidence)
+		}
+		if capture.Window.ClassUnrecognized != c.wantUnrecognizedOnReceipt {
+			t.Errorf("%s: exchange capture unrecognized = %v, want %v", c.name, capture.Window.ClassUnrecognized, c.wantUnrecognizedOnReceipt)
+		}
+	}
+}
