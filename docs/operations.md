@@ -516,6 +516,15 @@ the same roll:** while the flag is off, membership changes are not followed,
 and every later work-item write removes the value, so a value written while it
 was on can be stale for a work item not written since.
 
+**CHAOS-12468 needs no rebuild and bumps no source version, on purpose.** Two
+edges used to label a pull request's end with its canonical id, so a node they
+created and an edge's `fact` could hold that id. The writers are fixed, and the
+read turns what is already stored into `PR #<number>`: the word comes from the
+canonical id alone, and a real title is left as it is. A bump would stop
+projection in every organization until an operator rebuild, so this is not a
+missed bump. The next bump for any other reason deletes
+`internal/contextfabric/falkorgraph/raw_pull_request_label.go`.
+
 **The project-only scope has a fixed roll order (CHAOS-12301).** acr with the
 `project_scope` decoder goes live in production first; only then does ops turn on
 `ACR_ACCESS_PROJECT_SCOPE`. The reverse order fails closed: an older acr refuses
@@ -1293,6 +1302,17 @@ serve a reference the caller can no longer see*, and it covers the whole
 payload, not only the answer's own citations -- a reused result is served
 whole.
 
+The evidence half first tries a direct read (CHAOS-12537): one keyed read of
+the relationships between the endpoints of the edges the answer serves, sent
+through the walk's own edge and endpoint gates and its admission. When that
+read and the re-resolved subjects prove every reference, the answer is served
+without a discovery walk. Anything it cannot prove -- a reference with no
+served edge, an edge the gates now refuse, a failed or cut read, a request
+narrowed by repository, project or team -- goes to the full discovery walk,
+which then decides exactly as before. The direct read never refuses by
+itself. It may prove an edge that the walk's own edge budget would have cut;
+that is the one difference, and it is not a weaker gate.
+
 The outcome is one of three, and they are distinguishable in telemetry:
 
 - **`hit`** -- everything the stored payload would serve is still visible.
@@ -1309,6 +1329,12 @@ The outcome is one of three, and they are distinguishable in telemetry:
 - **a miss** -- reuse did not happen and the call ran fresh.
   `miss_evidence_containment` now means specifically that one of the
   answer's own CITATIONS is no longer visible;
+  `miss_recheck_deadline` means the recheck spent its own time budget, so
+  nothing was proven either way, and the fresh path runs on the request's
+  deadline. It says nothing about authorization.
+  `miss_recheck_cancelled` means the request itself ended during the recheck,
+  by the caller's cancellation or the request's deadline. It says nothing about
+  authorization or the graph, and it is named when the budget ended too.
   `miss_recheck_unavailable` means the fresh discovery failed, so nothing
   was proved either way; `miss_hint_not_committed` means the request carried a subject hint the stored answer did not commit; `miss_scope_identity` means the request named project or team selectors and only a row keyed without them exists (never served); `miss_degrade_invalid` means a narrowing was
   possible in principle but the stripped payload would not have satisfied

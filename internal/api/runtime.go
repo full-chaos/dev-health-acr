@@ -47,7 +47,10 @@ type StoredResultAuthorizer interface {
 }
 
 type RuntimeDependencies struct {
-	Credentials                *storage.CredentialLifecycle
+	Credentials *storage.CredentialLifecycle
+	// CredentialLifecycle is the read-only credential listing for
+	// reconciliation (CHAOS-11200). Optional: without it the route answers 503.
+	CredentialLifecycle        storage.CredentialLifecycleLister
 	DeviceAuthorizations       storage.DeviceAuthorizationStore
 	DeviceVerificationURL      string
 	DeviceAuthorizationLimiter DeviceAuthorizationLimiter

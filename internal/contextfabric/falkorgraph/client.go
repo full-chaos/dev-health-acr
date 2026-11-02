@@ -274,12 +274,12 @@ func decodeValue(value interface{}) interface{} {
 		if v == nil {
 			return nil
 		}
-		return &node{ID: v.ID, Labels: append([]string(nil), v.Labels...), Properties: normalizeProperties(v.Properties)}
+		return &node{ID: v.ID, Labels: append([]string(nil), v.Labels...), Properties: nodeProperties(v.Properties)}
 	case *falkordb.Edge:
 		if v == nil {
 			return nil
 		}
-		return &edge{ID: v.ID, Relation: v.Relation, SourceID: v.SourceNodeID(), DestID: v.DestNodeID(), Properties: normalizeProperties(v.Properties)}
+		return &edge{ID: v.ID, Relation: v.Relation, SourceID: v.SourceNodeID(), DestID: v.DestNodeID(), Properties: edgeProperties(v.Properties)}
 	case []interface{}:
 		out := make([]interface{}, len(v))
 		for i, item := range v {

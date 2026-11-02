@@ -662,6 +662,9 @@ func TestClickHouseProjectionSourceProjectsPullRequestReviewsAndCIRuns(t *testin
 			if relationship.To.CanonicalID != "pull_request:repo-1:1042" {
 				t.Fatalf("review relationship target = %q", relationship.To.CanonicalID)
 			}
+			if relationship.To.Label != "PR #1042" {
+				t.Fatalf("review relationship target label = %q, want PR #1042", relationship.To.Label)
+			}
 		}
 		if relationship.From.CanonicalID == "ci_pipeline_run.v2:repo-1:run-1" && relationship.Type == "BELONGS_TO_REPOSITORY" {
 			foundRunRelationship = true

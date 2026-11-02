@@ -605,8 +605,12 @@ type structureSupersessionClaim struct {
 // that actually redeemed a stored offer from a NAMED prior result. Entries
 // with any other Disposition (vetoed_unresolved/vetoed_conflict/
 // vetoed_stale) or Source (explicit/explicit_unattributed) never redeemed
-// anything, so there is nothing for them to supersede.
+// anything, so there is nothing for them to supersede. Nor does the input turn
+// of a client synthesis: contextfabric.RedeemsStructureOffers (CHAOS-12558).
 func structureSupersessionClaims(result contextfabric.InvestigationResult) []structureSupersessionClaim {
+	if !contextfabric.RedeemsStructureOffers(result) {
+		return nil
+	}
 	var claims []structureSupersessionClaim
 	for _, entry := range result.ConfirmedStructure {
 		if entry.Disposition != contractsv1.ContextFabricStructureDispositionApplied {

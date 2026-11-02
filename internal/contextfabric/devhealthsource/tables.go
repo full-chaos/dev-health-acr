@@ -1611,7 +1611,7 @@ WHERE r.org_id = {org_id:String}` + sincePredicate(cursor, "r.last_synced", rowK
 		relationship := contractsv1.ContextFabricRelationshipProjection{
 			RelationshipID: "relationship:belongs_to_pull_request:" + canonicalID, Type: "BELONGS_TO_PULL_REQUEST",
 			From:       subject,
-			To:         contractsv1.ContextFabricSubjectRef{Kind: contractsv1.ContextFabricSubjectPullRequest, CanonicalID: pullRequestID, Label: pullRequestID},
+			To:         contractsv1.ContextFabricSubjectRef{Kind: contractsv1.ContextFabricSubjectPullRequest, CanonicalID: pullRequestID, Label: identity.PullRequestLabel(number)},
 			Derivation: contractsv1.ContextFabricDerivationCanonicalStructured, EpistemicStatus: contractsv1.ContextFabricEpistemicObserved,
 			Authorization: repoAuthorization(repoSlug), EvidenceRefIDs: []string{evidenceRefID},
 			ObservedAt: observedAt, ValidFrom: edgeValidFrom, ValidTo: edgeValidTo, SourceVersion: ClickHouseSourceVersion,

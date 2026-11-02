@@ -2,7 +2,8 @@ package auth
 
 // RoleScopes maps a WorkloadBinding's role to its fixed scope set (design
 // brief: "read = context:read + evidence:read; ops = read +
-// episode:write"). An unrecognized role returns nil -- callers building an
+// episode:write"; reconcile = the credential listing scope only, CHAOS-11200).
+// An unrecognized role returns nil -- callers building an
 // authverify.WorkloadBinding treat a nil/empty GrantedScopes as
 // authverify.ErrWorkloadBindingNotFound rather than granting nothing
 // silently (see authverify.ResolveRequestedScope).
@@ -16,6 +17,8 @@ func RoleScopes(role string) []string {
 		return []string{ScopeContextRead, ScopeEvidenceRead}
 	case "ops":
 		return []string{ScopeContextRead, ScopeEvidenceRead, ScopeEpisodeWrite}
+	case "reconcile":
+		return []string{ScopeCredentialLifecycleRead}
 	default:
 		return nil
 	}

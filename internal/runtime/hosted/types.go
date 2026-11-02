@@ -235,8 +235,11 @@ type postgresComponents struct {
 	// (CHAOS-12124).
 	browserRefresh storage.BrowserRefreshStore
 	audit          storage.AuditStore
-	packets        storage.PacketStore
-	episodes       storage.EpisodeStore
+	// lifecycleList is the read-only credential listing (CHAOS-11200): the
+	// same audit store, which owns the lifecycle outbox.
+	lifecycleList storage.CredentialLifecycleLister
+	packets       storage.PacketStore
+	episodes      storage.EpisodeStore
 	// workloadBindings is CHAOS-4013's read-only lookup store; see
 	// storage.WorkloadBindingStore's doc comment for why it has no write
 	// path here.

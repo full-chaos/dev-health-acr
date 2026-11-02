@@ -200,11 +200,17 @@ type reuseContainmentPartition struct {
 // early: the FULL missing set is needed to decide what to strip, and the
 // per-class counts are what let an operator attribute a miss instead of
 // guessing at it.
-func partitionMissingRefs(stored InvestigationResult, graphContext GraphContext) reuseContainmentPartition {
-	visibleRefs := collectEvidenceRefs(graphContextEvidenceSurface(graphContext))
-	visible := make(map[string]struct{}, len(visibleRefs))
-	for _, ref := range visibleRefs {
-		visible[ref] = struct{}{}
+//
+// A stored answer past one call's subject limit is discovered in batches, so
+// graphContexts holds one fresh discovery per batch. A ref is visible when any
+// of them proves it: each one is what DiscoverContext returned for THIS
+// principal moments ago, so the union widens nothing the caller may see.
+func partitionMissingRefs(stored InvestigationResult, graphContexts ...GraphContext) reuseContainmentPartition {
+	visible := make(map[string]struct{})
+	for _, graphContext := range graphContexts {
+		for _, ref := range collectEvidenceRefs(graphContextEvidenceSurface(graphContext)) {
+			visible[ref] = struct{}{}
+		}
 	}
 	citations := make(map[string]struct{}, len(stored.EvidenceRefIDs))
 	for _, ref := range stored.EvidenceRefIDs {
