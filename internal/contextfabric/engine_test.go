@@ -430,6 +430,7 @@ type recordingTelemetry struct {
 	priorSubjectReceiptsSkipped []int
 	answerReuseOutcomes         []AnswerReuseOutcome
 	answerReuseRefusals         []AnswerReuseRefusal
+	answerReuseRechecks         []AnswerReuseRecheck
 	workItemReuses              []WorkItemReuseEvent
 	// answerReuseOwnershipRoutingVersions records, per RecordAnswerReuse
 	// call and in the same order as answerReuseOutcomes, the
@@ -722,6 +723,10 @@ type dualTableFactsRecord struct {
 }
 
 func (r *recordingTelemetry) RecordAnswerReuse(_ context.Context, _ storage.Principal, outcome AnswerReuseOutcome, ownershipRoutingVersion string, refusal AnswerReuseRefusal) {
+	// The measurement is recorded beside the refusal, so a test about a refusal
+	// compares the reason alone.
+	r.answerReuseRechecks = append(r.answerReuseRechecks, refusal.Recheck)
+	refusal.Recheck = AnswerReuseRecheck{}
 	r.answerReuseRefusals = append(r.answerReuseRefusals, refusal)
 	r.answerReuseOutcomes = append(r.answerReuseOutcomes, outcome)
 	r.answerReuseOwnershipRoutingVersions = append(r.answerReuseOwnershipRoutingVersions, ownershipRoutingVersion)

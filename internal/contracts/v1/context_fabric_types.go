@@ -1265,6 +1265,28 @@ const (
 // internal/sidecar's TestSidecarCeilingClearsTheServingBudget).
 const ContextFabricMaxCohortMembersLimit = 250
 
+// ContextFabricMaxSubjectCandidatesLimit is the upper bound
+// ContextFabricInvestigationOptions.Validate() enforces on
+// MaxSubjectCandidates. It is also the most subjects one resolution can commit:
+// the resolver's caller-hint exit finalizes at that option and drops every hint
+// past it as it drops an unauthorized one. A caller that needs a larger set
+// authorized sends more calls, each inside this bound (authorizeCohortGroups,
+// the answer reuse recheck).
+const ContextFabricMaxSubjectCandidatesLimit = 50
+
+// The list bounds of an investigation result that name subjects. Named rather
+// than inline so the answer reuse recheck can add them up: its cap is a
+// relation over these bounds, and it is checkable only over constants (see
+// ContextFabricSerializedBytesMin/Max above). The validators read these same
+// constants, and answer_bound_fixtures proves each one past its limit.
+const (
+	ContextFabricResolutionCandidatesMaxCount = 50
+	ContextFabricResolutionCommittedMaxCount  = 250
+	ContextFabricCohortMembersMaxCount        = 250
+	ContextFabricCohortExclusionsMaxCount     = 250
+	ContextFabricRelationshipPathsMaxCount    = 250
+)
+
 type ContextFabricInvestigationOptions struct {
 	MaxSubjectCandidates int `json:"max_subject_candidates"`
 	MaxCohortMembers     int `json:"max_cohort_members"`

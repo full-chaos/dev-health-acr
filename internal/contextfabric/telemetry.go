@@ -70,7 +70,7 @@ func AnswerReuseOutcomeVocabulary() []string {
 		string(AnswerReuseMissGraphNotProjected), string(AnswerReuseHitDegraded),
 		string(AnswerReuseMissRecheckUnavailable), string(AnswerReuseMissDegradeInvalid),
 		string(AnswerReuseMissCountScope), string(AnswerReuseMissHintNotCommitted), string(AnswerReuseMissScopeIdentity),
-		string(AnswerReuseMissProjectNarrowingUnverified),
+		string(AnswerReuseMissProjectNarrowingUnverified), string(AnswerReuseMissRecheckDeadline),
 	}
 }
 
@@ -188,6 +188,11 @@ func (t SlogEngineTelemetry) RecordAnswerReuse(ctx context.Context, principal st
 		if refusal.Reason == AnswerReuseRefusalSubjectCapExceeded {
 			args = append(args, "subject_count", refusal.SubjectCount)
 		}
+	}
+	// CHAOS-12511: log and event fields only, like the reason. A duration is no
+	// metric label.
+	if refusal.Recheck.Ran {
+		args = append(args, "recheck_ms", refusal.Recheck.Milliseconds, "recheck_subjects", refusal.Recheck.Subjects)
 	}
 	args = append(args, requestIDLogAttrs(ctx)...)
 	t.logger.InfoContext(ctx, "context fabric answer reuse outcome", args...)

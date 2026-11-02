@@ -1993,7 +1993,7 @@ const (
 	// commit affirmation retraction and commit kept: one call in a loop over the committed subjects, published once.
 	commitAffirmationRetractionMaxLines = contractsv1.ContextFabricProjectedSubjectsMaxCount
 	commitKeptByNoMemberFoundMaxLines   = contractsv1.ContextFabricProjectedSubjectsMaxCount
-	// answer reuse outcome: 16 recordReuseOutcome call sites, each at most once per attempt.
+	// answer reuse outcome: 16 call sites of recordReuseOutcome and recordRecheckedOutcome, each at most once per attempt.
 	answerReuseOutcomeMaxLines = 16 * passesPerRequest
 	// answer reuse containment: 3 recordReuseContainment call sites.
 	answerReuseContainmentMaxLines = 3 * passesPerRequest
@@ -2989,7 +2989,7 @@ var SynthesisStatusOverride = Event{
 	},
 }
 
-// AnswerReuseOutcome is the Info line of one answer reuse attempt: the closed outcome, the ownership routing version the lookup matched and, on a miss_authorization outcome, the closed reason of the refusal.
+// AnswerReuseOutcome is the Info line of one answer reuse attempt: the closed outcome, the ownership routing version the lookup matched and, on a miss_authorization outcome, the closed reason of the refusal. An attempt whose recheck reached the graph also states how long it took and how many subjects it covered.
 var AnswerReuseOutcome = Event{
 	ID:                       "contextfabric.answer_reuse_outcome",
 	Msg:                      "context fabric answer reuse outcome",
@@ -3005,6 +3005,8 @@ var AnswerReuseOutcome = Event{
 		{Key: "ownership_routing_version", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: []string{contextfabric.OwnershipRoutingVersion}},
 		{Key: "reason", Type: FieldString, Presence: PresenceConditional, ClosedVocabulary: contextfabric.AnswerReuseRefusalReasonVocabulary(), Applicability: "written when the outcome is miss_authorization, and names which refusal produced it", RequiredWhen: &RequiredWhen{Key: "outcome", Values: []string{string(contextfabric.AnswerReuseMissAuthorization)}}},
 		{Key: "subject_count", Type: FieldInt, Presence: PresenceConditional, Applicability: "written when the reason is subject_cap_exceeded: how many distinct subjects the stored answer names", RequiredWhen: &RequiredWhen{Key: "reason", Values: []string{string(contextfabric.AnswerReuseRefusalSubjectCapExceeded)}}},
+		{Key: "recheck_ms", Type: FieldInt, Presence: PresenceConditional, Applicability: "written on any outcome when the recheck reached its first graph read: milliseconds from that read to the recheck's return"},
+		{Key: "recheck_subjects", Type: FieldInt, Presence: PresenceConditional, Applicability: "written on any outcome when the recheck reached its first graph read: how many distinct subjects the stored answer names"},
 		{Key: "request_id", Type: FieldString, Presence: PresenceConditional, Applicability: requestIDApplicability},
 	},
 }

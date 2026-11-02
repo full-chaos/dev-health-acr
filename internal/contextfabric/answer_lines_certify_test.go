@@ -23,7 +23,7 @@ var (
 	commitRetractionKeys       = []string{"time", "level", "msg", "org_id", "commit_basis", "subject_kind", "winning_mechanism", "provisional_committed", "final_committed", "request_id"}
 	commitKeptKeys             = []string{"time", "level", "msg", "org_id", "subject_kind", "request_id"}
 	synthesisOverrideKeys      = []string{"time", "level", "msg", "org_id", "from_status", "to_status", "reason", "committed_count", "unasked_fact_kinds", "request_id"}
-	reuseOutcomeKeys           = []string{"time", "level", "msg", "org_id", "outcome", "ownership_routing_version", "reason", "subject_count", "request_id"}
+	reuseOutcomeKeys           = []string{"time", "level", "msg", "org_id", "outcome", "ownership_routing_version", "reason", "subject_count", "recheck_ms", "recheck_subjects", "request_id"}
 	reuseBypassKeys            = []string{"time", "level", "msg", "org_id", "reason", "request_id"}
 	reuseContainmentKeys       = []string{
 		"time", "level", "msg", "org_id", "demanded_refs", "visible_refs", "missing_refs", "missing_citation", "stripped_refs", "stripped_labels",
@@ -193,7 +193,7 @@ func TestAnswerReuseLinesCertifyEveryProducerValueAndRefuseAnyOther(t *testing.T
 		var buf bytes.Buffer
 		sink, ctx := answerLineSink(&buf, slog.LevelInfo)
 		sink.RecordAnswerReuse(ctx, principalOrg1, contextfabric.AnswerReuseOutcome(outcome), contextfabric.OwnershipRoutingVersion, contextfabric.AnswerReuseRefusal{})
-		pinKeys(t, bytes.NewBuffer(buf.Bytes()), without(reuseOutcomeKeys, "reason", "subject_count"), 1)
+		pinKeys(t, bytes.NewBuffer(buf.Bytes()), without(reuseOutcomeKeys, "reason", "subject_count", "recheck_ms", "recheck_subjects"), 1)
 		certifyRequestLine(t, buf.Bytes(), eventspec.AnswerReuseOutcome, map[string]any{"org_id": "org_1", "outcome": outcome, "ownership_routing_version": contextfabric.OwnershipRoutingVersion})
 	}
 	// CHAOS-12511: every refusal reason certifies on a miss_authorization line,
@@ -204,10 +204,10 @@ func TestAnswerReuseLinesCertifyEveryProducerValueAndRefuseAnyOther(t *testing.T
 		refusal := contextfabric.AnswerReuseRefusal{Reason: contextfabric.AnswerReuseRefusalReason(reason), SubjectCount: 51}
 		sink.RecordAnswerReuse(ctx, principalOrg1, contextfabric.AnswerReuseMissAuthorization, contextfabric.OwnershipRoutingVersion, refusal)
 		want := map[string]any{"org_id": "org_1", "outcome": "miss_authorization", "reason": reason}
-		keys := without(reuseOutcomeKeys, "subject_count")
+		keys := without(reuseOutcomeKeys, "subject_count", "recheck_ms", "recheck_subjects")
 		if reason == string(contextfabric.AnswerReuseRefusalSubjectCapExceeded) {
 			want["subject_count"] = 51
-			keys = reuseOutcomeKeys
+			keys = without(reuseOutcomeKeys, "recheck_ms", "recheck_subjects")
 		}
 		pinKeys(t, bytes.NewBuffer(buf.Bytes()), keys, 1)
 		certifyRequestLine(t, buf.Bytes(), eventspec.AnswerReuseOutcome, want)
