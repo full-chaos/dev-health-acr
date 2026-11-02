@@ -60,6 +60,8 @@ type Grant struct {
 	// outbox publisher marks published_at and nothing else.
 	UpdateColumns []string
 	Feature       Feature
+	// RevokeWhenOff makes the grant job revoke this table-level privilege when the feature is off.
+	RevokeWhenOff bool
 	// Sequences are sequences the table's inserts draw from; the role needs USAGE.
 	Sequences []string
 	// Why cites the runtime code that needs each privilege.
@@ -83,6 +85,8 @@ var RuntimeGrants = []Grant{
 		Why: "INSERT internal/storage/postgres/outbox.go (lifecycleSink.Insert), SELECT the same file (lifecycleSink.MaxRevision); both inside the credential mutation transaction"},
 	{Table: "credential_lifecycle_outbox", UpdateColumns: []string{"published_at"}, Feature: AuthProjection,
 		Why: "UPDATE of published_at only, started only when the publisher is configured (ACR_AUTH_PROJECTION_URL): internal/storage/postgres/outbox_publish.go LifecycleOutboxMarkSQL, and the claim's FOR UPDATE OF o (LifecycleOutboxClaimSQL), which Postgres checks as UPDATE on one column; no other column is writable and the publisher never deletes"},
+	{Table: "credential_lifecycle_outbox", Privileges: []string{"DELETE"}, Feature: AuthProjection, RevokeWhenOff: true,
+		Why: "DELETE of fully published aggregates whose credential is gone, whole aggregates only: internal/storage/postgres/outbox_reap.go LifecycleOutboxReapSQL, started only when the publisher is configured (ACR_AUTH_PROJECTION_URL); the reaper reads client_credentials (SELECT) and the outbox (SELECT) and updates nothing"},
 	{Table: "audit_events", Privileges: []string{"SELECT", "INSERT"},
 		Why: "INSERT internal/storage/postgres/audit.go:69; SELECT credentials_audit.go:50 and :61 (credential rotation conflict checks)"},
 	{Table: "agent_episodes", Privileges: []string{"SELECT", "INSERT", "UPDATE"}, Feature: EpisodeWriteback,
@@ -246,20 +250,30 @@ func grantStatements(grants []Grant, quotedRole string, features Features) []Sta
 	return statements
 }
 
-// RevokeStatements returns the idempotent REVOKEs of the column privileges whose feature is off: a grant an earlier
-// run made when the feature was on is cleared, so the role holds exactly the declared set. Only a column privilege is
-// revoked this way; a table-level privilege is never narrowed on a role serving traffic (see grantRuntimeACL).
+// RevokeStatements returns the idempotent REVOKEs of what a feature that is off no longer grants: a column privilege, and
+// a table-level privilege of a row that asks for it (RevokeWhenOff, for a privilege no running workload uses when the
+// feature is off). A grant an earlier run made when the feature was on is cleared, so the role holds exactly the declared
+// set. Any other table-level privilege is never narrowed on a role serving traffic (see grantRuntimeACL).
 func RevokeStatements(quotedRole string, features Features) []Statement {
 	var statements []Statement
 	for _, grant := range RuntimeGrants {
-		if len(grant.UpdateColumns) == 0 || features.Enabled(grant.Feature) {
+		if features.Enabled(grant.Feature) {
 			continue
 		}
-		statements = append(statements, Statement{
-			Table:         grant.Table,
-			UpdateColumns: grant.UpdateColumns,
-			SQL:           fmt.Sprintf("REVOKE UPDATE (%s) ON TABLE acr.%s FROM %s", strings.Join(grant.UpdateColumns, ", "), grant.Table, quotedRole),
-		})
+		if len(grant.UpdateColumns) > 0 {
+			statements = append(statements, Statement{
+				Table:         grant.Table,
+				UpdateColumns: grant.UpdateColumns,
+				SQL:           fmt.Sprintf("REVOKE UPDATE (%s) ON TABLE acr.%s FROM %s", strings.Join(grant.UpdateColumns, ", "), grant.Table, quotedRole),
+			})
+		}
+		if grant.RevokeWhenOff && len(grant.Privileges) > 0 {
+			statements = append(statements, Statement{
+				Table:      grant.Table,
+				Privileges: grant.Privileges,
+				SQL:        fmt.Sprintf("REVOKE %s ON TABLE acr.%s FROM %s", strings.Join(grant.Privileges, ", "), grant.Table, quotedRole),
+			})
+		}
 	}
 	return statements
 }

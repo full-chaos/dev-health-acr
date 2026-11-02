@@ -11622,6 +11622,7 @@
           "frame_gate_refused",
           "no_candidate_of_declared_kind",
           "ambiguous",
+          "census_unlisted",
           "offer_pool_emptied_by_exclusion",
           "graph_not_projected",
           "team_inactive",
@@ -16278,6 +16279,84 @@
         "key": "census_commit_handle_explicit",
         "type": "bool",
         "presence": "required"
+      }
+    ]
+  },
+  {
+    "id": "graphrank.evidence_census_listing",
+    "msg": "context fabric resolution trace: evidence census listing",
+    "level": "info",
+    "multiplicity": "zero_or_one_per_request",
+    "attribution": [
+      "request_id"
+    ],
+    "bounded_aggregation": "at most one line per resolveSubjects call: listCensusSatisfiers has one unlooped call site, reached only when a stalled round counted a satisfier of the question's one handle.",
+    "fields": [
+      {
+        "key": "request_id",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "stage",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "evidence_census_listing"
+        ]
+      },
+      {
+        "key": "census_kind",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "census_count",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "census_listed",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "census_listing_reads",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "census_listing_refused",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "elapsed_ms",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "outcome",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "listed",
+          "partly_listed",
+          "unlisted"
+        ]
+      },
+      {
+        "key": "census_listing_reason",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "",
+          "over_budget",
+          "closure_mismatch",
+          "narrowing_undecided",
+          "budget_below_two",
+          "refused"
+        ]
       }
     ]
   },

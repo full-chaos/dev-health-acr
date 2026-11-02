@@ -165,6 +165,7 @@ var ByID = map[string]Event{
 	"graphrank.decision":                                  Decision,
 	"graphrank.decision_summary":                          DecisionSummary,
 	"graphrank.evidence_census_commit":                    EvidenceCensusCommit,
+	"graphrank.evidence_census_listing":                   EvidenceCensusListing,
 	"graphrank.evidence_probe":                            EvidenceProbe,
 	"graphrank.evidence_round":                            EvidenceRound,
 	"graphrank.evidence_source_native":                    EvidenceSourceNative,
@@ -10968,6 +10969,72 @@ func (f EvidenceCensusCommitFields) SlogArgs() []any {
 		"graph_existence_ok", f.GraphExistenceOk,
 		"census_commit_reason", contextfabric.SanitizeLogAttr(f.CensusCommitReason),
 		"census_commit_handle_explicit", f.CensusCommitHandleExplicit,
+	}
+}
+
+// EvidenceCensusListingFields is graphrank.evidence_census_listing's generated typed construction interface
+// (CHAOS-5516): one Go field per Field EvidenceCensusListing.Fields declares in spec.go.
+type EvidenceCensusListingFields struct {
+	RequestID            string
+	CensusKind           string
+	CensusCount          int
+	CensusListed         int
+	CensusListingReads   int
+	CensusListingRefused int
+	ElapsedMs            int
+	Outcome              string
+	CensusListingReason  string
+	// constructed (CHAOS-5516 r1 fix): an UNEXPORTED marker, generated on
+	// every EvidenceCensusListingFields uniformly, set ONLY by NewEvidenceCensusListingFields below. A caller
+	// outside this package cannot set an unexported field via a composite
+	// literal -- not partially (one exported field set, the rest at their
+	// Go zero value) and not even by hand-setting every EXPORTED field --
+	// so this is the class fix for "a caller still assembles that event's
+	// field list": no composite literal built outside eventspec, complete or
+	// partial, can ever read as constructed.
+	constructed bool
+}
+
+// NewEvidenceCensusListingFields is the generated constructor for EvidenceCensusListingFields -- every
+// field EvidenceCensusListing.Fields declares is a required parameter.
+func NewEvidenceCensusListingFields(requestID string, censusKind string, censusCount int, censusListed int, censusListingReads int, censusListingRefused int, elapsedMs int, outcome string, censusListingReason string) EvidenceCensusListingFields {
+	return EvidenceCensusListingFields{
+		RequestID:            requestID,
+		CensusKind:           censusKind,
+		CensusCount:          censusCount,
+		CensusListed:         censusListed,
+		CensusListingReads:   censusListingReads,
+		CensusListingRefused: censusListingRefused,
+		ElapsedMs:            elapsedMs,
+		Outcome:              outcome,
+		CensusListingReason:  censusListingReason,
+		constructed:          true,
+	}
+}
+
+// IsConstructed reports whether f was built by NewEvidenceCensusListingFields -- the ONE
+// exported way to read the unexported "constructed" marker from outside
+// this package. false for the Go zero value and for ANY composite literal
+// assembled elsewhere, complete or partial.
+func (f EvidenceCensusListingFields) IsConstructed() bool { return f.constructed }
+
+// SlogArgs returns EvidenceCensusListing's own declared fields as alternating slog
+// key/value pairs, in the SAME order spec.go declares them. Every
+// free-text string/[]string value is sanitized HERE, at its own
+// construction site inside this function's body -- the shape CHAOS-5544's
+// own instrument (TestNoUnsanitizedLogAttributeInContextFabric) requires.
+func (f EvidenceCensusListingFields) SlogArgs() []any {
+	return []any{
+		"request_id", contextfabric.SanitizeLogAttr(f.RequestID),
+		"stage", "evidence_census_listing",
+		"census_kind", contextfabric.SanitizeLogAttr(f.CensusKind),
+		"census_count", f.CensusCount,
+		"census_listed", f.CensusListed,
+		"census_listing_reads", f.CensusListingReads,
+		"census_listing_refused", f.CensusListingRefused,
+		"elapsed_ms", f.ElapsedMs,
+		"outcome", contextfabric.SanitizeLogAttr(f.Outcome),
+		"census_listing_reason", contextfabric.SanitizeLogAttr(f.CensusListingReason),
 	}
 }
 
