@@ -262,8 +262,10 @@ func init() {
 			kind:  vocabFrozen,
 			why:   "protocol",
 			sites: []string{"ClaimedFactTable.shape", "ProjectedFactTable.shape"},
-			// schema: "time_series", "breakdown", "ranking"
-			goSet:      []string{string(contractsv1.ContextFabricFactTableShapeTimeSeries), string(contractsv1.ContextFabricFactTableShapeBreakdown), string(contractsv1.ContextFabricFactTableShapeRanking)},
+			// schema: "time_series", "breakdown", "ranking", "distribution"
+			// (CHAOS-12607 added distribution, a contract change by ruling 4
+			// on CHAOS-4613).
+			goSet:      []string{string(contractsv1.ContextFabricFactTableShapeTimeSeries), string(contractsv1.ContextFabricFactTableShapeBreakdown), string(contractsv1.ContextFabricFactTableShapeRanking), string(contractsv1.ContextFabricFactTableShapeDistribution)},
 			exhaustive: true,
 		},
 		outputVocabulary{

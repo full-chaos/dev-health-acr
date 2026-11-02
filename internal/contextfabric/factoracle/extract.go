@@ -142,6 +142,10 @@ var extractTables = []tableSpec{
 		"forecast_id": ruleUUID, "computed_at": ruleKeep, "team_id": ruleTeam, "work_scope_id": ruleWorkScope, "backlog_size": ruleKeep,
 		"p50_days": ruleKeep, "throughput_mean": ruleKeep, "throughput_stddev": ruleKeep, "insufficient_history": ruleKeep,
 		"high_variance": ruleKeep, "org_id": ruleOrg,
+		// CHAOS-12607: the completion forecast's columns, numbers and dates
+		// only, so the next capture carries them (CHAOS-12638).
+		"simulation_count": ruleKeep, "p85_days": ruleKeep, "p95_days": ruleKeep, "p50_date": ruleKeep, "p85_date": ruleKeep,
+		"p95_date": ruleKeep, "completion_days_values": ruleKeep, "completion_days_counts": ruleKeep,
 	}},
 	{Table: tableCompoundingRiskDaily, Where: "day >= toDate({start:String}) AND day < toDate({end:String})", Rules: map[string]columnRule{
 		"org_id": ruleOrg, "day": ruleKeep, "scope": ruleKeep, "scope_id": ruleScopeID, "compounding_risk": ruleKeep, "severity": ruleKeep,

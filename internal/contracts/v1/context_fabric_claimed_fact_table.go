@@ -64,12 +64,22 @@ const (
 	// ContextFabricFactTableShapeRanking: many entities, ordered by the
 	// measure OrderBy names.
 	ContextFabricFactTableShapeRanking ContextFabricFactTableShape = "ranking"
+	// ContextFabricFactTableShapeDistribution (CHAOS-12607, CHAOS-4613
+	// ruling 4): ONE entity's outcomes over an ordered numeric axis -- the
+	// Monte Carlo completion days of one forecast, one row per distinct
+	// value. Key is EXACTLY one column, an integer on every row, strictly
+	// ascending. It is its own shape, not a breakdown, because its rows are
+	// one distribution and are never cut: a breakdown shares the 64-row
+	// claimed-fact cap, and a shorter curve is a different forecast. Its own
+	// row cap is ContextFabricClaimedFactDistributionMaxRows.
+	ContextFabricFactTableShapeDistribution ContextFabricFactTableShape = "distribution"
 )
 
 // ValidContextFabricFactTableShape reports closed-vocabulary membership.
 func ValidContextFabricFactTableShape(shape ContextFabricFactTableShape) bool {
 	switch shape {
-	case ContextFabricFactTableShapeTimeSeries, ContextFabricFactTableShapeBreakdown, ContextFabricFactTableShapeRanking:
+	case ContextFabricFactTableShapeTimeSeries, ContextFabricFactTableShapeBreakdown, ContextFabricFactTableShapeRanking,
+		ContextFabricFactTableShapeDistribution:
 		return true
 	}
 	return false
@@ -375,6 +385,11 @@ func (t ContextFabricClaimedFactTable) Validate() error {
 	if t.Shape == ContextFabricFactTableShapeTimeSeries && len(t.Key) != 1 {
 		return fmt.Errorf("a time_series table declares exactly one key column, not %d", len(t.Key))
 	}
+	// A distribution has one axis: two key columns would be two
+	// distributions in one table.
+	if t.Shape == ContextFabricFactTableShapeDistribution && len(t.Key) != 1 {
+		return fmt.Errorf("a distribution table declares exactly one key column, not %d", len(t.Key))
+	}
 	if t.Shape == ContextFabricFactTableShapeRanking {
 		if t.OrderBy == "" || !t.HasMeasure(t.OrderBy) {
 			return fmt.Errorf("a ranking table's order_by must name one of its declared measures")
@@ -512,7 +527,31 @@ func validateClaimedFactTable(table *ContextFabricClaimedFactTable, rows []Conte
 			}
 		}
 	}
+	if err := table.distributionAxisAscending(rows); err != nil {
+		return err
+	}
 	return table.CadenceAligned(rows)
+}
+
+// distributionAxisAscending holds a distribution's rows to its axis: the key
+// is an integer on every row and strictly ascending, so a consumer can draw
+// the rows in order and no value appears twice. Any other shape passes.
+func (t ContextFabricClaimedFactTable) distributionAxisAscending(rows []ContextFabricClaimedFactRow) error {
+	if t.Shape != ContextFabricFactTableShapeDistribution || len(t.Key) != 1 {
+		return nil
+	}
+	var previous int64
+	for index, row := range rows {
+		cell := row.Fields[t.Key[0]]
+		if cell.Integer == nil {
+			return fmt.Errorf("distribution key %q of row %d is not an integer", t.Key[0], index)
+		}
+		if index > 0 && *cell.Integer <= previous {
+			return fmt.Errorf("distribution key %q of row %d is not above the row before it", t.Key[0], index)
+		}
+		previous = *cell.Integer
+	}
+	return nil
 }
 
 // renderableRows (CHAOS-4682, §5.1 P2) picks the SAME row array a

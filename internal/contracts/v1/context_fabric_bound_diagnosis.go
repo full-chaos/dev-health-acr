@@ -522,13 +522,13 @@ func DiagnoseContextFabricClaimedFactClause(c ContextFabricClaimedFact) (clause 
 	// Table, then TimeSeriesRows, then TimeSeriesTable, then the combined
 	// rule, and a caller that stopped before them would misname a rejection
 	// from one of them as ContextFabricClauseNone.
-	if err := validateClaimedFactRows(c.Rows); err != nil {
+	if err := validateClaimedFactRows(c.Rows, c.Table); err != nil {
 		return ContextFabricClauseClaimRowsShape, "", false
 	}
 	if err := validateClaimedFactTable(c.Table, c.Rows); err != nil {
 		return ContextFabricClauseClaimTableShape, "", false
 	}
-	if err := validateClaimedFactRows(c.TimeSeriesRows); err != nil {
+	if err := validateClaimedFactRows(c.TimeSeriesRows, c.TimeSeriesTable); err != nil {
 		return ContextFabricClauseClaimTimeSeriesRowsShape, "", false
 	}
 	if err := validateTimeSeriesTable(c.TimeSeriesTable, c.TimeSeriesRows); err != nil {
