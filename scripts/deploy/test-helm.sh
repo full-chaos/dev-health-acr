@@ -1035,6 +1035,9 @@ render "${lease_env[@]}" --set-string 'deployment.extraEnv[1].name=ACR_CONTEXT_F
   || fail_gate "run-lease: the lease by extraEnv with the event stream on must render"
 render --set contextFabric.runLeaseEnabled=true --set-string 'deployment.extraEnv[0].name=ACR_CONTEXT_FABRIC_RUN_LEASE_ENABLED' --set-string 'deployment.extraEnv[0].value=false' >/dev/null \
   || fail_gate "run-lease: extraEnv turning the lease off leaves nothing to guard, and must render"
+set +e; lease_ref_out="$(render --set-json 'deployment.extraEnv=[{"name":"ACR_CONTEXT_FABRIC_RUN_LEASE_ENABLED","valueFrom":{"secretKeyRef":{"name":"flags","key":"run-lease"}}}]' 2>&1)"; lease_ref_status=$?; set -e
+[[ $lease_ref_status -ne 0 ]] || fail_gate "run-lease: a secret-backed lease rendered, and the render cannot prove the event stream"
+grep -qF 'no literal value' <<<"$lease_ref_out" || fail_gate "run-lease: the secret-backed refusal did not say why"
 pass "run-lease: acr-api declares the flag off by default, on when set, and the render refuses it with the event stream off"
 
 falkor_no_secret="$(render \

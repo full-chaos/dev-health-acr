@@ -377,6 +377,9 @@ is on and the event stream is not: acr-api would refuse to start
 {{- /* The spellings of strconv.ParseBool; the last entry of a name wins, as in a pod. */ -}}
 {{- range .Values.deployment.extraEnv -}}
 {{- if eq .name "ACR_CONTEXT_FABRIC_RUN_LEASE_ENABLED" -}}
+{{- if not (hasKey . "value") -}}
+{{- fail "deployment.extraEnv sets ACR_CONTEXT_FABRIC_RUN_LEASE_ENABLED with no literal value: the render cannot prove the event stream it needs" -}}
+{{- end -}}
 {{- $declared = has (toString .value) (list "1" "t" "T" "TRUE" "true" "True") -}}
 {{- end -}}
 {{- if eq .name "ACR_CONTEXT_FABRIC_EVENT_STREAM_ENABLED" -}}
