@@ -447,6 +447,18 @@ func (t SlogEngineTelemetry) RecordOperandReadKinds(ctx context.Context, princip
 	t.logger.InfoContext(ctx, "context fabric plan operand reads", args...)
 }
 
+// RecordWindowClassification (CHAOS-12595) logs at Info: every field is a
+// closed vocabulary member or a bool, never question text.
+func (t SlogEngineTelemetry) RecordWindowClassification(ctx context.Context, principal storage.Principal, modelClass WindowClass, outcome WindowClassOutcome) {
+	args := append([]any{
+		"org_id", SanitizeLogAttr(principal.OrgID), "model_class", SanitizeLogAttr(string(modelClass)),
+		"window_class", SanitizeLogAttr(string(outcome.Class)), "source", SanitizeLogAttr(string(outcome.Source)),
+		"confidence", SanitizeLogAttr(string(outcome.Confidence)), "basis", SanitizeLogAttr(string(outcome.Basis)),
+		"downgraded", outcome.Downgraded,
+	}, requestIDLogAttrs(ctx)...)
+	t.logger.InfoContext(ctx, "context fabric window classification", args...)
+}
+
 // RecordWindowCarry (CHAOS-4360) logs at Info: outcome/chain_depth are both
 // closed-vocabulary/plain-integer, content-safe by construction -- never a
 // question, subject label, or canonical id. hit vs. every miss reason is
