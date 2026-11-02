@@ -375,9 +375,15 @@ func TestChainIdentity_EverySaveBearingReturnRecordsAncestry(t *testing.T) {
 				interpretation = bootstrapInterpretation()
 			}
 			fresh := validInvestigationResult()
+			// CHAOS-4451: the gate arm needs a question beyond the window, or
+			// the turn answers.
+			var material StructureOfferMaterial
+			if tc.gated {
+				material = chaos4234GatedMaterial()
+			}
 
 			engine := mustReuseTestEngine(t, EngineDependencies{
-				Graph: graphReaderStub{resolution: resolution},
+				Graph: graphReaderStub{resolution: resolution, material: material},
 				Facts: factReaderFunc(func(context.Context, storage.Principal, CanonicalFactRequest) (CanonicalFactBundle, error) {
 					return CanonicalFactBundle{}, nil
 				}),
@@ -1175,9 +1181,15 @@ func TestChainIdentity_AValidatedReceiptIsRecordedAsAncestryOnEveryTerminal(t *t
 				interpretation = bootstrapInterpretation()
 			}
 			fresh := validInvestigationResult()
+			// CHAOS-4451: the gate arm needs a question beyond the window, or
+			// the turn answers.
+			var material StructureOfferMaterial
+			if tc.gated {
+				material = chaos4234GatedMaterial()
+			}
 
 			engine := mustReuseTestEngine(t, EngineDependencies{
-				Graph: graphReaderStub{resolution: SubjectResolution{Candidates: []SubjectCandidate{}, Committed: committed}},
+				Graph: graphReaderStub{resolution: SubjectResolution{Candidates: []SubjectCandidate{}, Committed: committed}, material: material},
 				Facts: factReaderFunc(func(context.Context, storage.Principal, CanonicalFactRequest) (CanonicalFactBundle, error) {
 					return CanonicalFactBundle{}, nil
 				}),
