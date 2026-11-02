@@ -264,6 +264,17 @@ func TestASideWithNoPointIsLeftOut(t *testing.T) {
 			past := contractsv1.ContextFabricRenderPointExactIntegerBound + 1
 			r.ClaimedFacts[4].Rows[0].Fields["churn_loc_30d"] = tableInteger(past)
 		},
+		// A missing cell is no 0: a team at 0 delivery units under a table that
+		// does not measure them gives no point.
+		"a table that does not measure delivery units, at 0 units": func(r *InvestigationResult) {
+			r.ClaimedFacts[5].Value = tableInteger(0)
+			r.ClaimedFacts[5].Rows[0].Fields["delivery_units_30d"] = tableInteger(0)
+			for _, index := range []int{4, 5} {
+				table := *r.ClaimedFacts[index].Table
+				table.Measures = []string{"identity_count", "churn_loc_30d"}
+				r.ClaimedFacts[index].Table = &table
+			}
+		},
 		"a table that does not measure churn": func(r *InvestigationResult) {
 			for _, index := range []int{4, 5} {
 				table := *r.ClaimedFacts[index].Table
