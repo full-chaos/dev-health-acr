@@ -6486,6 +6486,7 @@ type RenderShapeSelectionSummaryFields struct {
 	RenderShapeMembersTruncated          int
 	RenderShapeTrendsOmitted             int
 	RenderShapeComparisonMeasuresLeftOut int
+	RenderShapeLandscapeSidesLeftOut     int
 	RenderShapeTablesCadenceWithheld     int
 	RenderShapeAccounting                string
 	SelectedShapes                       []map[string]any
@@ -6503,7 +6504,7 @@ type RenderShapeSelectionSummaryFields struct {
 
 // NewRenderShapeSelectionSummaryFields is the generated constructor for RenderShapeSelectionSummaryFields -- every
 // field RenderShapeSelectionSummary.Fields declares is a required parameter.
-func NewRenderShapeSelectionSummaryFields(orgID string, questionShape string, renderShapesSelected int, renderShapeRulesSkipped int, renderShapeMembersTruncated int, renderShapeTrendsOmitted int, renderShapeComparisonMeasuresLeftOut int, renderShapeTablesCadenceWithheld int, renderShapeAccounting string, selectedShapes []map[string]any, requestID string) RenderShapeSelectionSummaryFields {
+func NewRenderShapeSelectionSummaryFields(orgID string, questionShape string, renderShapesSelected int, renderShapeRulesSkipped int, renderShapeMembersTruncated int, renderShapeTrendsOmitted int, renderShapeComparisonMeasuresLeftOut int, renderShapeLandscapeSidesLeftOut int, renderShapeTablesCadenceWithheld int, renderShapeAccounting string, selectedShapes []map[string]any, requestID string) RenderShapeSelectionSummaryFields {
 	valid := true
 	if selectedShapes == nil {
 		valid = false
@@ -6516,6 +6517,7 @@ func NewRenderShapeSelectionSummaryFields(orgID string, questionShape string, re
 		RenderShapeMembersTruncated:          renderShapeMembersTruncated,
 		RenderShapeTrendsOmitted:             renderShapeTrendsOmitted,
 		RenderShapeComparisonMeasuresLeftOut: renderShapeComparisonMeasuresLeftOut,
+		RenderShapeLandscapeSidesLeftOut:     renderShapeLandscapeSidesLeftOut,
 		RenderShapeTablesCadenceWithheld:     renderShapeTablesCadenceWithheld,
 		RenderShapeAccounting:                renderShapeAccounting,
 		SelectedShapes:                       selectedShapes,
@@ -6544,6 +6546,7 @@ func (f RenderShapeSelectionSummaryFields) SlogArgs() []any {
 		"render_shape_members_truncated", f.RenderShapeMembersTruncated,
 		"render_shape_trends_omitted", f.RenderShapeTrendsOmitted,
 		"render_shape_comparison_measures_left_out", f.RenderShapeComparisonMeasuresLeftOut,
+		"render_shape_landscape_sides_left_out", f.RenderShapeLandscapeSidesLeftOut,
 		"render_shape_tables_cadence_withheld", f.RenderShapeTablesCadenceWithheld,
 		"render_shape_accounting", contextfabric.SanitizeLogAttr(f.RenderShapeAccounting),
 		"selected_shapes", f.SelectedShapes,

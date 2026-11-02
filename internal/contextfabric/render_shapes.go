@@ -76,6 +76,13 @@ type RenderShapeSelectionEvent struct {
 	// and says nothing reads as the whole comparison. Zero on every selection
 	// that lost nothing.
 	ComparisonMeasuresLeftOut int
+	// LandscapeSidesLeftOut counts committed teams the quadrant rule gave no
+	// point (CHAOS-12626): no claim of both measures from one fact, no row that
+	// holds them, or fewer than 2 identities. A COUNT and not a skip, as for the
+	// table: the rule can fire on the teams that remain, and a chart that drops
+	// a team and says nothing reads as the whole comparison. Zero on every
+	// selection that lost nothing.
+	LandscapeSidesLeftOut int
 	// TablesCadenceWithheld counts the claimed tables whose declaration states
 	// a cadence the table does not carry, because its rows do not keep one row
 	// per calendar day or it is not a time_series (CHAOS-11985). A consumer then
@@ -250,6 +257,23 @@ const (
 	RenderShapeSkipNoSharedMeasure RenderShapeSkipReason = "no_shared_measure"
 	// RenderShapeSkipComparisonUnprovable -- the contract refused the table.
 	RenderShapeSkipComparisonUnprovable RenderShapeSkipReason = "comparison_unprovable"
+	// The landscape_position rule's reasons (CHAOS-12626). See
+	// render_shape_landscape.go. It shares rule_disabled, not_plan_authorized,
+	// fewer_than_two_sides, too_many_sides and subject_kind_not_charted.
+	//
+	// RenderShapeSkipNoLandscapeRequirement -- the interpretation does not ask
+	// for landscape facts. This is the common exit for a comparison: most ask
+	// for other measures (check 10).
+	RenderShapeSkipNoLandscapeRequirement RenderShapeSkipReason = "no_landscape_requirement"
+	// RenderShapeSkipFewerThanTwoPoints -- fewer than two teams give a point:
+	// each needs both measures claimed from one fact, its one area_breakdown row
+	// holding them, and 2 or more identities in that row.
+	RenderShapeSkipFewerThanTwoPoints RenderShapeSkipReason = "fewer_than_two_points"
+	// RenderShapeSkipLandscapeDaysDiffer -- the teams' rows speak for different
+	// days. The quadrant is refused WHOLE: no common-day read (lead ruling 3).
+	RenderShapeSkipLandscapeDaysDiffer RenderShapeSkipReason = "landscape_days_differ"
+	// RenderShapeSkipQuadrantUnprovable -- the contract refused the quadrant.
+	RenderShapeSkipQuadrantUnprovable RenderShapeSkipReason = "quadrant_unprovable"
 )
 
 // cohortRenderIntent reports whether a cohort chart is an answer TO this
@@ -357,6 +381,19 @@ func selectRenderShapes(result InvestigationResult, frame *QuestionFrame, option
 			shapes = append(shapes, *table)
 		} else {
 			event.skip(contractsv1.ContextFabricRenderRuleComparisonSideBySide, reason)
+		}
+	}
+
+	// CHAOS-12626: ahead of the trends, for the same reason.
+	if !options.LandscapePosition {
+		event.skip(contractsv1.ContextFabricRenderRuleLandscapePosition, RenderShapeSkipRuleDisabled)
+	} else {
+		quadrant, leftOut, reason := landscapePositionShape(result)
+		event.LandscapeSidesLeftOut = leftOut
+		if quadrant != nil {
+			shapes = append(shapes, *quadrant)
+		} else {
+			event.skip(contractsv1.ContextFabricRenderRuleLandscapePosition, reason)
 		}
 	}
 
@@ -977,6 +1014,7 @@ var renderShapeRules = []contractsv1.ContextFabricRenderShapeRule{
 	contractsv1.ContextFabricRenderRuleDatedFactTrend,
 	contractsv1.ContextFabricRenderRuleInvestmentThemeShare,
 	contractsv1.ContextFabricRenderRuleComparisonSideBySide,
+	contractsv1.ContextFabricRenderRuleLandscapePosition,
 }
 
 // Accounted is CHAOS-4621's structural invariant, as code rather than as a
@@ -1055,6 +1093,8 @@ func RenderShapeSkipReasonLineVocabulary() []string {
 		string(RenderShapeSkipTooManySignals), string(RenderShapeSkipNoDeclaredTable), string(RenderShapeSkipNoTimeSeriesTable),
 		string(RenderShapeSkipClaimFieldNotAMeasure), string(RenderShapeSkipUnresolvableMeasureRoles),
 		string(RenderShapeSkipNoPlottableMeasure), string(RenderShapeSkipShapeBudgetSpent), string(RenderShapeSkipNotPlanAuthorized),
+		string(RenderShapeSkipNoLandscapeRequirement), string(RenderShapeSkipFewerThanTwoPoints),
+		string(RenderShapeSkipLandscapeDaysDiffer), string(RenderShapeSkipQuadrantUnprovable),
 	}
 }
 

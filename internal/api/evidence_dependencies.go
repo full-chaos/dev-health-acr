@@ -47,6 +47,9 @@ type AppConfig struct {
 	// ContextFabricComparisonTableEnabled mirrors
 	// config.Config.ContextFabricComparisonTableEnabled, for the same two doors.
 	ContextFabricComparisonTableEnabled bool
+	// ContextFabricLandscapeQuadrantEnabled mirrors
+	// config.Config.ContextFabricLandscapeQuadrantEnabled, for the same two doors.
+	ContextFabricLandscapeQuadrantEnabled bool
 	// ContextFabricEventStreamEnabled mirrors
 	// config.Config.ContextFabricEventStreamEnabled: the create-investigation
 	// route serves `Accept: text/event-stream` only when it is on.

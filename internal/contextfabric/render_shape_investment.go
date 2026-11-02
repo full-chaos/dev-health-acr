@@ -16,6 +16,9 @@ type RenderShapeOptions struct {
 	// ComparisonSideBySide turns on the comparison_side_by_side rule
 	// (CHAOS-12513). See Config.ContextFabricComparisonTableEnabled.
 	ComparisonSideBySide bool
+	// LandscapePosition turns on the landscape_position rule (CHAOS-12626). See
+	// Config.ContextFabricLandscapeQuadrantEnabled.
+	LandscapePosition bool
 	// FieldScope reads the declared scope of a field. The comparison rule
 	// reads it. A nil lookup scopes nothing, so that rule finds no cell.
 	FieldScope FactFieldScopeLookup
@@ -165,7 +168,7 @@ func familyTakesShape(family QuestionFamily, shape InvestigationShape) bool {
 // was on still serving the shape, on a by-id read and on a reuse hit, to the very
 // consumer the flag protects. The stored row is not touched.
 func WithoutDisabledRenderShapes(result InvestigationResult, options RenderShapeOptions) InvestigationResult {
-	if options.InvestmentThemeShare && options.ComparisonSideBySide {
+	if options.InvestmentThemeShare && options.ComparisonSideBySide && options.LandscapePosition {
 		return result
 	}
 	var kept []contractsv1.ContextFabricRenderShape
@@ -179,10 +182,18 @@ func WithoutDisabledRenderShapes(result InvestigationResult, options RenderShape
 			if !options.ComparisonSideBySide {
 				continue
 			}
+		case contractsv1.ContextFabricRenderRuleLandscapePosition:
+			if !options.LandscapePosition {
+				continue
+			}
 		}
 		kept = append(kept, shape)
 	}
 	result.RenderShapes = kept
+	// The quadrant's served line goes with it (CHAOS-12626).
+	if !hasLandscapePosition(kept) {
+		result.Limitations = withoutLimitation(result.Limitations, contractsv1.ContextFabricLandscapePositionLimitation)
+	}
 	return result
 }
 

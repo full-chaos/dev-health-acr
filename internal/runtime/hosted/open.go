@@ -1089,7 +1089,9 @@ func buildContextFabricInvestigator(ctx context.Context, request buildRequest, p
 		InvestmentTreemapEnabled: request.config.ContextFabricInvestmentTreemapEnabled,
 		// See Config.ContextFabricComparisonTableEnabled.
 		ComparisonTableEnabled: request.config.ContextFabricComparisonTableEnabled,
-		FactCapabilities:       factRegistry.Capabilities(),
+		// See Config.ContextFabricLandscapeQuadrantEnabled.
+		LandscapeQuadrantEnabled: request.config.ContextFabricLandscapeQuadrantEnabled,
+		FactCapabilities:         factRegistry.Capabilities(),
 		// See Config.ServerCompletenessAuthorityEnabled's own doc comment.
 		ServerCompletenessAuthorityEnabled: request.config.ServerCompletenessAuthorityEnabled,
 		// See Config.AnchorBindingCountEnabled.

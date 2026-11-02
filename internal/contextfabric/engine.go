@@ -20,6 +20,9 @@ type EngineOptions struct {
 	// ComparisonTableEnabled turns on the comparison_side_by_side rule
 	// (CHAOS-12513). See Config.ContextFabricComparisonTableEnabled.
 	ComparisonTableEnabled bool
+	// LandscapeQuadrantEnabled turns on the landscape_position rule
+	// (CHAOS-12626). See Config.ContextFabricLandscapeQuadrantEnabled.
+	LandscapeQuadrantEnabled bool
 	// FactCapabilities are the field declarations that rule reads each field's
 	// scope from, and that every claimed table reads its measure units from
 	// (CHAOS-11984).
@@ -1456,6 +1459,7 @@ func NewEngine(dependencies EngineDependencies, options EngineOptions) (*Engine,
 		renderShapeOptions: RenderShapeOptions{
 			InvestmentThemeShare: options.InvestmentTreemapEnabled,
 			ComparisonSideBySide: options.ComparisonTableEnabled,
+			LandscapePosition:    options.LandscapeQuadrantEnabled,
 			FieldScope:           factFieldScopeLookup(options.FactCapabilities),
 			TableCadence:         declaredCadenceOf(options.FactCapabilities),
 		},

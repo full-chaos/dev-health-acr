@@ -1278,6 +1278,7 @@ func (t SlogEngineTelemetry) RecordRenderShapeSelection(ctx context.Context, pri
 			"render_shape_members_truncated", event.MembersTruncated,
 			"render_shape_trends_omitted", event.TrendsOmitted,
 			"render_shape_comparison_measures_left_out", event.ComparisonMeasuresLeftOut,
+			"render_shape_landscape_sides_left_out", event.LandscapeSidesLeftOut,
 			"render_shape_tables_cadence_withheld", event.TablesCadenceWithheld,
 			"render_shape_accounting", SanitizeLogAttr(accounting),
 			"selected_shapes", selected)...)

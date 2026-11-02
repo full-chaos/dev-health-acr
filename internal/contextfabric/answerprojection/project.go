@@ -221,6 +221,12 @@ func Project(result contractsv1.ContextFabricInvestigationResult, budget Budget)
 	// cite have been cut, never before -- a shape is admitted only when
 	// this projection still lets its reader check every number it plots.
 	renderShapes, renderShapesOmitted := projectRenderShapes(result, cohort, facts)
+	// CHAOS-12626: the quadrant's served line speaks of the quadrant, so it
+	// leaves the projection with it. It is not counted as omitted: the
+	// dropped shape is, and the line says nothing without it.
+	if !carriesQuadrant(renderShapes) {
+		limitations = withoutSentence(limitations, contractsv1.ContextFabricLandscapePositionLimitation)
+	}
 	evidence := index.ids()
 	evidenceOmitted := countUnindexedEvidence(result, index)
 	// CHAOS-4690: EvidenceRefLabels is filtered to EXACTLY the refs this
@@ -1511,16 +1517,17 @@ func retainPastTheCut(kept, dropped []clampedNarrative, retain func(string) bool
 	return kept
 }
 
-// claimsAChartPlots names the claims the answer's treemaps and comparison tables
-// plot (CHAOS-12521, CHAOS-12513). An investment answer need not have a driver, and
-// a comparison's drivers need not cite every cell, so no driver brings those facts
-// and the chart would be dropped. The server built the chart from those claims, so
-// the chart is the citation. Only these two kinds: a claim no such chart plots
-// stays out, and a dropped shape stays a counted drop.
+// claimsAChartPlots names the claims the answer's treemaps, comparison tables and
+// quadrants plot (CHAOS-12521, CHAOS-12513, CHAOS-12626). An investment answer need
+// not have a driver, and a comparison's drivers need not cite every cell, so no
+// driver brings those facts and the chart would be dropped. The server built the
+// chart from those claims, so the chart is the citation. Only these kinds: a claim
+// no such chart plots stays out, and a dropped shape stays a counted drop.
 func claimsAChartPlots(shapes []contractsv1.ContextFabricRenderShape) map[string]struct{} {
 	plotted := map[string]struct{}{}
 	for _, shape := range shapes {
-		if shape.Kind != contractsv1.ContextFabricRenderKindTreemap && shape.Kind != contractsv1.ContextFabricRenderKindTable {
+		if shape.Kind != contractsv1.ContextFabricRenderKindTreemap && shape.Kind != contractsv1.ContextFabricRenderKindTable &&
+			shape.Kind != contractsv1.ContextFabricRenderKindQuadrant {
 			continue
 		}
 		for _, series := range shape.Series {
@@ -1530,6 +1537,27 @@ func claimsAChartPlots(shapes []contractsv1.ContextFabricRenderShape) map[string
 		}
 	}
 	return plotted
+}
+
+// carriesQuadrant reports that the projected shapes hold the quadrant.
+func carriesQuadrant(shapes []contractsv1.ContextFabricRenderShape) bool {
+	for _, shape := range shapes {
+		if shape.SelectedBy == contractsv1.ContextFabricRenderRuleLandscapePosition {
+			return true
+		}
+	}
+	return false
+}
+
+// withoutSentence removes every copy of one sentence.
+func withoutSentence(sentences []string, sentence string) []string {
+	kept := sentences[:0:0]
+	for _, each := range sentences {
+		if each != sentence {
+			kept = append(kept, each)
+		}
+	}
+	return kept
 }
 
 // projectionCarriesUncited is the allow-list: which claim kinds this projection
