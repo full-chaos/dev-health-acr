@@ -389,6 +389,9 @@ func (p *InvestmentProvider) readTeamThemeMix(ctx context.Context, orgID string,
 	if len(ids) == 0 {
 		return shapeRejected, 0, nil, nil, nil, nil, nil, false, nil
 	}
+	// One linked set per (teams, window) for the whole read: the team linked
+	// mix and repository_theme_breakdown share it (CHAOS-12580).
+	ctx = withLinkedSetMemo(ctx)
 	// CHAOS-6559 (chris ruling 2026-09-24): a team's mix is the SUM of the
 	// mixes of the repositories the team OWNS (team_repo_ownership), each
 	// repository's mix being the PR-ref-share partition of persisted work
