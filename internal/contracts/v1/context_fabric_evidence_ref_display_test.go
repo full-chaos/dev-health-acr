@@ -32,8 +32,14 @@ func TestAnEvidenceLabelNeverShowsARawID(t *testing.T) {
 			{displayRepoUUID + ":gitlab:group/project!12", "Work item: group/project!12"},
 		},
 		ContextFabricEvidenceEntityTeam: {{"linear:CHAOS", "Team: CHAOS"}, {"gl:full.chaos", "Team: full.chaos"}},
-		// A project's source id is no name a reader knows, UUID or not (codex r2).
-		ContextFabricEvidenceEntityProject:      {{"linear:c67b1602-31db-4422-8dec-a4a02bbcc513", "Project"}, {"jira:internal-project-key-42", "Project"}},
+		// A nameless project reads as its source id with the provider dropped;
+		// only a UUID-shaped id reads as the noun (lead ruling, 2026-11-02).
+		ContextFabricEvidenceEntityProject: {
+			{"linear:c67b1602-31db-4422-8dec-a4a02bbcc513", "Project"},
+			{"gitlab:acme/live-e2e", "Project: acme/live-e2e"},
+			{"github:ci-metrics-executed-proof/repo", "Project: ci-metrics-executed-proof/repo"},
+			{"jira:OPS", "Project: OPS"},
+		},
 		ContextFabricEvidenceEntityOrganization: {{"70d529e0-3c06-4597-8480-794fd02328b6", "Organization"}},
 		ContextFabricEvidenceEntityCommit:       {{"3f9c2ab", "Commit: 3f9c2ab"}},
 		ContextFabricEvidenceEntityCommitFile:   {{"3f9c2ab:cmd/main.go", "Commit file: 3f9c2ab:cmd/main.go"}},
