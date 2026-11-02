@@ -286,6 +286,8 @@ declares and what the table labels are one set.
 | `relationship_type` | `paths[].edges[].type` (reads between the edge's two ends; an edge says two things are linked, never that one caused the other) |
 | `window_relative_id`, `window_provenance` | `effective_evidence_window.relative_id`, `.provenance` |
 | `measure_unit` | `claimed_facts[].table.measure_units[].unit`, `claimed_facts[].time_series_table.measure_units[].unit` (CHAOS-11984: the unit the producer declares for a measure) |
+| `subcategory` | `claimed_facts[].rows[].fields.subcategory` of a `subcategory_breakdown` table (CHAOS-12554: the canonical investment subcategory; a sunburst's outer ring uses the same word) |
+| `repository_label` | `claimed_facts[].rows[].fields.repository_label` of a `repository_theme_breakdown` table (CHAOS-12578: the repository's served word, its handle; a sankey's repository node uses it) |
 
 **Notes.** A field a reader sees as one line has one word for this result, under
 `<field>:note` (CHAOS-12487). Like the correction note, a note is no table row. It

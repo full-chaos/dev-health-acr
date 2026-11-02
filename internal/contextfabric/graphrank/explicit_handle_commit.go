@@ -35,12 +35,13 @@ const (
 
 // namedHandles is what the turn names beside what it committed. Only a named or an
 // absent frame can claim a handle: in a cohort or a grouped question a handle is an
-// example, and committing it would change what the answer is about.
-func namedHandles(request contextfabric.InvestigationRequest, committed []contextfabric.SubjectRef, frame *contextfabric.QuestionFrame) ([]contractsv1.ContextFabricRequestedHandle, handleClaim) {
+// example, and committing it would change what the answer is about. bound is the
+// turn's handles after the work item key gate (CHAOS-12463): a key the caller does
+// not hold names nothing.
+func namedHandles(request contextfabric.InvestigationRequest, bound []BoundHandle, committed []contextfabric.SubjectRef, frame *contextfabric.QuestionFrame) ([]contractsv1.ContextFabricRequestedHandle, handleClaim) {
 	if len(request.SubjectHandles) > 0 {
 		return request.SubjectHandles, handleOwed
 	}
-	bound := BindHandles(request.Question)
 	if len(bound) != 1 {
 		return nil, handleNotNamed
 	}
@@ -48,7 +49,7 @@ func namedHandles(request contextfabric.InvestigationRequest, committed []contex
 	if turnStatesKind(request, frame, bound[0].Kind) {
 		return handle, handleOwed
 	}
-	if committedScopeAnchorShadowsHandle(request.Question, committed, frame) {
+	if committedScopeAnchorShadowsHandle(bound, committed, frame) {
 		return handle, handleMentioned
 	}
 	return nil, handleNotNamed
@@ -93,7 +94,7 @@ func commitNamedHandle(ctx context.Context, principal storage.Principal, request
 	if contextfabric.OffersOnlyResolution(ctx) || deps.CensusFunc == nil || deps.HandleGrammarChecker == nil || deps.ExactHint == nil {
 		return resolution, nil
 	}
-	handles, claim := namedHandles(request, resolution.Committed, frame)
+	handles, claim := namedHandles(request, turnHandles(request, deps), resolution.Committed, frame)
 	if claim == handleNotNamed {
 		return resolution, nil
 	}
@@ -120,6 +121,8 @@ func commitNamedHandle(ctx context.Context, principal storage.Principal, request
 			anchor = subject
 		}
 	}
+	// The one named repository a work item may be linked to (ruling 3 below).
+	named := anchor
 	switch {
 	case repositories == 0:
 		return resolution, nil
@@ -164,7 +167,52 @@ func commitNamedHandle(ctx context.Context, principal storage.Principal, request
 	resolution.Candidates = append(resolution.Candidates, candidate)
 	bases.Record(candidate.Subject, contextfabric.CommitBasisStatistical)
 	digests.Record(candidate.Subject, digest)
+	if !anchored && repositories == 1 {
+		resolution.NamedRepositoryLinkLimitation = namedRepositoryLinkLimitation(ctx, request, deps, named, candidate.Subject)
+	}
 	return resolution, nil
+}
+
+// namedRepositoryLinkLimitation says whether a pull request link joins a work
+// item committed beside one named repository to that repository (CHAOS-12505,
+// ruling 3 of the CHAOS-12523 rows). It asks the keyed link read, the one the
+// scoped census asks, with the repository as the requested scope: the same rule,
+// under the caller's grants, whatever the repository's size. A read that fails,
+// is cut, or cannot start says so; it never reads as "no link".
+func namedRepositoryLinkLimitation(ctx context.Context, request contextfabric.InvestigationRequest, deps ResolveDeps, repository, item contextfabric.SubjectRef) string {
+	if deps.LinkScopedWorkItemsOf == nil || deps.ExactHint == nil {
+		return contractsv1.ContextFabricNamedRepositoryLinkUnreadLimitation
+	}
+	readCtx, cancel := context.WithTimeout(ctx, evidenceRoundDeadline)
+	defer cancel()
+	node, exists, err := deps.ExactHint(readCtx, repository)
+	if err != nil || !exists {
+		return contractsv1.ContextFabricNamedRepositoryLinkUnreadLimitation
+	}
+	var slugs []string
+	listed, _ := node.Attributes[authorizationRepositoriesAttr].([]string)
+	for _, slug := range listed {
+		if slug = strings.TrimSpace(slug); slug != "" && slug != "*" && !contractsv1.ContextFabricIsRepositoryAbsenceSentinel(slug) {
+			slugs = append(slugs, slug)
+		}
+	}
+	// A repository names one slug. A node that lists another could admit a link
+	// into that one and say it of this repository (codex r1 on #1929), so it is
+	// not read.
+	if len(slugs) != 1 {
+		return contractsv1.ContextFabricNamedRepositoryLinkUnreadLimitation
+	}
+	scope := request.RequestedScope
+	scope.RepositorySlugs = slugs
+	tiers, complete, err := deps.LinkScopedWorkItemsOf(readCtx, scope, []string{item.CanonicalID})
+	if err != nil || !complete {
+		return contractsv1.ContextFabricNamedRepositoryLinkUnreadLimitation
+	}
+	tier, linked := tiers[item.CanonicalID]
+	if !linked {
+		return contractsv1.ContextFabricNamedRepositoryNoLinkLimitation
+	}
+	return contractsv1.ContextFabricNamedRepositoryLinkedLimitation(tier)
 }
 
 // unresolvedNamedHandle ends a turn whose handle did not resolve to one subject. A
@@ -203,7 +251,7 @@ func unresolvedNamedHandle(ctx context.Context, principal storage.Principal, req
 		resolution.CensusLimitation = censusAbsenceLimitation(principal, request, ka)
 		return resolution, &BoundHandle{Kind: handle.Kind, Value: handle.Value}
 	}
-	if !census.complete || !questionBindsHandle(request.Question, handle) {
+	if !census.complete || !questionBindsHandle(turnHandles(request, deps), handle) {
 		return resolution, nil
 	}
 	attestation := Attestation{UnscopedVisibility: true, Kinds: []KindAttestation{ka}}
@@ -224,8 +272,17 @@ func unresolvedNamedHandle(ctx context.Context, principal storage.Principal, req
 	return resolution, undeciding
 }
 
-func questionBindsHandle(question string, handle contractsv1.ContextFabricRequestedHandle) bool {
-	bound := BindHandles(question)
+// turnHandles is the turn's handles after the work item key gate, read once in
+// ResolveSubjectsWithCommitBasis (CHAOS-12463). A direct call has no turn, so
+// nothing read the gate, and the grammar alone answers.
+func turnHandles(request contextfabric.InvestigationRequest, deps ResolveDeps) []BoundHandle {
+	if deps.questionHandlesBound {
+		return deps.questionHandles
+	}
+	return BindHandles(request.Question)
+}
+
+func questionBindsHandle(bound []BoundHandle, handle contractsv1.ContextFabricRequestedHandle) bool {
 	return len(bound) == 1 && bound[0].Kind == handle.Kind && bound[0].Value == handle.Value
 }
 

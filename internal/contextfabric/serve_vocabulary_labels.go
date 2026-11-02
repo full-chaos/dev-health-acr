@@ -187,6 +187,7 @@ func composeVocabularyLabels(result InvestigationResult) map[string]string {
 		words.factRows(fact.TimeSeriesRows)
 		words.measureUnits(fact.Table)
 		words.measureUnits(fact.TimeSeriesTable)
+		words.subcategoryRows(fact)
 	}
 
 	if window := result.EffectiveEvidenceWindow; window != nil {
@@ -235,6 +236,19 @@ func (w *vocabularyWords) noteWhen(held bool, note contractsv1.ContextFabricAnsw
 func (w *vocabularyWords) subjectKind(kind contractsv1.ContextFabricSubjectKind) {
 	w.add(contractsv1.ContextFabricVocabularySubjectKind, string(kind))
 	w.add(contractsv1.ContextFabricVocabularySubjectKindPlural, string(kind))
+}
+
+// subcategoryRows words the subcategory of each row of a claimed
+// subcategory_breakdown table (CHAOS-12554).
+func (w *vocabularyWords) subcategoryRows(fact contractsv1.ContextFabricClaimedFact) {
+	if fact.Table == nil || fact.Table.Field != contractsv1.ContextFabricRenderSubcategoryTableField || len(fact.TimeSeriesRows) > 0 {
+		return
+	}
+	for _, row := range fact.Rows {
+		if subcategory := row.Fields[contractsv1.ContextFabricRenderSubcategoryField].String; subcategory != nil {
+			w.add(contractsv1.ContextFabricVocabularySubcategory, *subcategory)
+		}
+	}
 }
 
 // measureUnits words the units a claimed table states for its measures.

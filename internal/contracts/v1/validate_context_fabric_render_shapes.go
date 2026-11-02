@@ -2,6 +2,7 @@ package v1
 
 import (
 	"fmt"
+	"math"
 	"strings"
 )
 
@@ -31,6 +32,12 @@ type renderShapeSources struct {
 	// and factRows then holds the series, so rows alone do not say which table
 	// a treemap would plot.
 	themeShareClaims map[string]struct{}
+	// subcategoryShareClaims names the claims whose factRows are their declared
+	// subcategory_breakdown table (CHAOS-12554), for the same reason.
+	subcategoryShareClaims map[string]struct{}
+	// repositoryFlowClaims names the claims whose factRows are their declared
+	// repository_theme_breakdown table (CHAOS-12578), for the same reason.
+	repositoryFlowClaims map[string]struct{}
 	// claimValues maps a claim id to what that claim states.
 	claimValues map[string]renderClaimValue
 }
@@ -61,6 +68,23 @@ func holdsThemeShareTable(table *ContextFabricClaimedFactTable, timeSeriesRows [
 		}
 	}
 	return false
+}
+
+// holdsSubcategoryShareTable reports that a claim's renderable rows are a
+// declared subcategory_breakdown breakdown table: keyed by subcategory, with
+// share and theme_share among its measures and theme among its observations.
+func holdsSubcategoryShareTable(table *ContextFabricClaimedFactTable, timeSeriesRows []ContextFabricClaimedFactRow) bool {
+	if table == nil || len(timeSeriesRows) > 0 {
+		return false
+	}
+	if table.Field != ContextFabricRenderSubcategoryTableField || table.Shape != ContextFabricFactTableShapeBreakdown {
+		return false
+	}
+	if len(table.Key) != 1 || table.Key[0] != ContextFabricRenderSubcategoryField {
+		return false
+	}
+	return table.HasMeasure(ContextFabricRenderThemeShareField) && table.HasMeasure(ContextFabricRenderThemeTotalField) &&
+		table.HasObservation(ContextFabricRenderThemeField)
 }
 
 // validateRenderPointSourceShape checks an address is WELL FORMED before
@@ -255,6 +279,12 @@ func validateRenderShapes(shapes []ContextFabricRenderShape, sources renderShape
 		if err := validateTreemapShape(shape, sources); err != nil {
 			return err
 		}
+		if err := validateSunburstShape(shape, sources); err != nil {
+			return err
+		}
+		if err := validateSankeyShape(shape, sources); err != nil {
+			return err
+		}
 		if err := validateComparisonShape(shape, sources); err != nil {
 			return err
 		}
@@ -337,6 +367,205 @@ func validateTreemapShape(shape ContextFabricRenderShape, sources renderShapeSou
 		return fmt.Errorf("render shape %q: a treemap plots every canonical theme, and has %d of %d", shape.ShapeID, len(points), ContextFabricInvestmentThemeCount())
 	}
 	return nil
+}
+
+// validateSunburstShape holds a sunburst to what a nested part of a whole means
+// (CHAOS-12554). Every point has already resolved to its source. What is left:
+//
+//   - The points are one claim's declared subcategory_breakdown table, and that
+//     table holds every canonical subcategory once, each under its own theme. A
+//     table the budget cut lacks a subcategory, so it gets no shape.
+//   - The inner ring, the series keyed ContextFabricRenderSunburstThemeSeriesKey,
+//     plots each theme once, from a theme_share cell of that theme's rows,
+//     labelled with the theme's word.
+//   - One series per theme, keyed by its token and labelled with its word, plots
+//     each subcategory of that theme once, from the row's share, labelled with
+//     the subcategory's registry word. A subcategory never sits under another
+//     theme's ring.
+//   - Every row of a theme carries one theme_share, and the theme's subcategory
+//     shares add up to it within ContextFabricRenderShareSumTolerance,
+//     relative. That sum is the only number not copied from a cell, and it is a
+//     check, never plotted.
+//   - A ratio unit, and a real split: at least 2 subcategories above 0.
+//
+// The rule and the kind name each other. A sunburst has no other rule.
+func validateSunburstShape(shape ContextFabricRenderShape, sources renderShapeSources) error {
+	if (shape.Kind == ContextFabricRenderKindSunburst) != (shape.SelectedBy == ContextFabricRenderRuleInvestmentSubcategoryShare) {
+		return fmt.Errorf("render shape %q: selected_by %q cannot yield kind %q", shape.ShapeID, shape.SelectedBy, shape.Kind)
+	}
+	if shape.Kind != ContextFabricRenderKindSunburst {
+		return nil
+	}
+	if shape.AxisKind != ContextFabricRenderAxisCategory {
+		return fmt.Errorf("render shape %q: a sunburst needs a category axis", shape.ShapeID)
+	}
+	if shape.ValueUnit != ContextFabricRenderValueUnitRatio {
+		return fmt.Errorf("render shape %q: a sunburst needs a value_unit of %q", shape.ShapeID, ContextFabricRenderValueUnitRatio)
+	}
+	claim := shape.Series[0].Points[0].Source.ClaimID
+	if _, declared := sources.subcategoryShareClaims[claim]; !declared {
+		return fmt.Errorf("render shape %q: a sunburst plots a declared %q table", shape.ShapeID, ContextFabricRenderSubcategoryTableField)
+	}
+	table := sources.factRows[claim]
+	themeTotals, err := sunburstThemeTotals(shape.ShapeID, table)
+	if err != nil {
+		return err
+	}
+	if len(shape.Series) != 1+len(themeTotals) {
+		return fmt.Errorf("render shape %q: a sunburst holds the inner ring and one series per theme, %d series, and has %d", shape.ShapeID, 1+len(themeTotals), len(shape.Series))
+	}
+	// Series keys are unique within a shape and every key but the inner ring's
+	// must name a theme, so 1 + themes series hold exactly one inner ring.
+	plotted := make(map[int]struct{}, len(table))
+	above := 0
+	for _, series := range shape.Series {
+		if series.Key == ContextFabricRenderSunburstThemeSeriesKey {
+			if err := validateSunburstInnerRing(shape.ShapeID, series, claim, table, themeTotals); err != nil {
+				return err
+			}
+			continue
+		}
+		total, isTheme := themeTotals[series.Key]
+		if !isTheme {
+			return fmt.Errorf("render shape %q series %q: a sunburst series is the inner ring or a theme", shape.ShapeID, series.Key)
+		}
+		if word, _ := ContextFabricInvestmentThemeLabel(series.Key); series.Label != word {
+			return fmt.Errorf("render shape %q series %q: a ring's label must be the served word of its theme", shape.ShapeID, series.Key)
+		}
+		sum, positive, err := validateSunburstOuterRing(shape.ShapeID, series, claim, table, plotted)
+		if err != nil {
+			return err
+		}
+		above += positive
+		if !partsSumToWhole(sum, total) {
+			return fmt.Errorf("render shape %q series %q: its subcategory shares add up to %v, and the theme's share is %v", shape.ShapeID, series.Key, sum, total)
+		}
+	}
+	if above < 2 {
+		return fmt.Errorf("render shape %q: a sunburst needs at least 2 subcategories above 0, and has %d", shape.ShapeID, above)
+	}
+	return nil
+}
+
+// partsSumToWhole is the one part-sum check of a shape: sum is within
+// ContextFabricRenderShareSumTolerance of whole, relative. Written so a NaN on
+// either side fails the check rather than passes it.
+func partsSumToWhole(sum, whole float64) bool {
+	return math.Abs(sum-whole) <= ContextFabricRenderShareSumTolerance*math.Max(math.Abs(sum), math.Abs(whole))
+}
+
+// sunburstThemeTotals reads a whole subcategory table: every canonical
+// subcategory once, each row under its own theme, and one theme_share per theme.
+// It returns each theme's share.
+func sunburstThemeTotals(shapeID string, table []ContextFabricClaimedFactRow) (map[string]float64, error) {
+	totals := map[string]float64{}
+	seen := make(map[string]struct{}, len(table))
+	for index, row := range table {
+		subcategory, theme := row.Fields[ContextFabricRenderSubcategoryField].String, row.Fields[ContextFabricRenderThemeField].String
+		if subcategory == nil || theme == nil {
+			return nil, fmt.Errorf("render shape %q: row %d of its table carries no %q or %q", shapeID, index, ContextFabricRenderSubcategoryField, ContextFabricRenderThemeField)
+		}
+		own, canonical := ContextFabricInvestmentSubcategoryTheme(*subcategory)
+		if !canonical {
+			return nil, fmt.Errorf("render shape %q: row %d holds subcategory %q, which is not canonical", shapeID, index, *subcategory)
+		}
+		if own != *theme {
+			return nil, fmt.Errorf("render shape %q: row %d puts subcategory %q under theme %q, not its own %q", shapeID, index, *subcategory, *theme, own)
+		}
+		if _, twice := seen[*subcategory]; twice {
+			return nil, fmt.Errorf("render shape %q: row %d repeats subcategory %q", shapeID, index, *subcategory)
+		}
+		seen[*subcategory] = struct{}{}
+		total, err := renderScalarNumber(row.Fields[ContextFabricRenderThemeTotalField], fmt.Sprintf("the %q of row %d", ContextFabricRenderThemeTotalField, index))
+		if err != nil {
+			return nil, fmt.Errorf("render shape %q: %w", shapeID, err)
+		}
+		if previous, known := totals[*theme]; known && previous != total {
+			return nil, fmt.Errorf("render shape %q: the rows of theme %q carry different theme shares, %v and %v", shapeID, *theme, previous, total)
+		}
+		totals[*theme] = total
+	}
+	if len(seen) != len(contextFabricInvestmentSubcategories) {
+		return nil, fmt.Errorf("render shape %q: a sunburst plots every canonical subcategory, and its table has %d of %d", shapeID, len(seen), len(contextFabricInvestmentSubcategories))
+	}
+	return totals, nil
+}
+
+// validateSunburstInnerRing holds the inner ring to one point per theme, each
+// citing a theme_share cell of that theme's rows and labelled with its word.
+func validateSunburstInnerRing(shapeID string, series ContextFabricRenderSeries, claim string, table []ContextFabricClaimedFactRow, totals map[string]float64) error {
+	if len(series.Points) != len(totals) {
+		return fmt.Errorf("render shape %q: its inner ring plots %d themes, and has %d points", shapeID, len(totals), len(series.Points))
+	}
+	themes := make(map[string]struct{}, len(totals))
+	for _, point := range series.Points {
+		theme, err := sunburstPointRow(shapeID, point, claim, ContextFabricRenderThemeTotalField, table, ContextFabricRenderThemeField)
+		if err != nil {
+			return err
+		}
+		if _, twice := themes[theme]; twice {
+			return fmt.Errorf("render shape %q point %q: its inner ring plots theme %q twice", shapeID, point.Label, theme)
+		}
+		themes[theme] = struct{}{}
+		if word, _ := ContextFabricInvestmentThemeLabel(theme); point.Label != word {
+			return fmt.Errorf("render shape %q point %q: an inner ring label must be the served word of its theme %q", shapeID, point.Label, theme)
+		}
+	}
+	return nil
+}
+
+// validateSunburstOuterRing holds one theme's ring to every subcategory of that
+// theme once, each citing its row's share and labelled with its registry word.
+// It returns the ring's sum and how many of its points are above 0.
+func validateSunburstOuterRing(shapeID string, series ContextFabricRenderSeries, claim string, table []ContextFabricClaimedFactRow, plotted map[int]struct{}) (float64, int, error) {
+	want := 0
+	for _, subcategory := range contextFabricInvestmentSubcategories {
+		if theme, _ := ContextFabricInvestmentSubcategoryTheme(subcategory); theme == series.Key {
+			want++
+		}
+	}
+	if len(series.Points) != want {
+		return 0, 0, fmt.Errorf("render shape %q series %q: theme %q has %d subcategories, and its ring has %d points", shapeID, series.Key, series.Key, want, len(series.Points))
+	}
+	sum, above := 0.0, 0
+	for _, point := range series.Points {
+		subcategory, err := sunburstPointRow(shapeID, point, claim, ContextFabricRenderThemeShareField, table, ContextFabricRenderSubcategoryField)
+		if err != nil {
+			return 0, 0, err
+		}
+		if _, twice := plotted[*point.Source.RowIndex]; twice {
+			return 0, 0, fmt.Errorf("render shape %q point %q: a sunburst plots each subcategory once", shapeID, point.Label)
+		}
+		plotted[*point.Source.RowIndex] = struct{}{}
+		if theme, _ := ContextFabricInvestmentSubcategoryTheme(subcategory); theme != series.Key {
+			return 0, 0, fmt.Errorf("render shape %q point %q: subcategory %q sits under theme %q, not %q", shapeID, point.Label, subcategory, theme, series.Key)
+		}
+		if word, _ := ContextFabricVocabularyLabel(ContextFabricVocabularySubcategory, subcategory); point.Label != word {
+			return 0, 0, fmt.Errorf("render shape %q point %q: a ring label must be the served word of its subcategory %q", shapeID, point.Label, subcategory)
+		}
+		if point.Value < 0 {
+			return 0, 0, fmt.Errorf("render shape %q point %q: a sunburst value is below 0", shapeID, point.Label)
+		}
+		if point.Value > 0 {
+			above++
+		}
+		sum += point.Value
+	}
+	return sum, above, nil
+}
+
+// sunburstPointRow checks that a point cites field of a row of the shape's one
+// claim, and returns that row's column. The resolver has already refused a
+// claimed_fact_row source with no row index or a row the table does not hold.
+func sunburstPointRow(shapeID string, point ContextFabricRenderPoint, claim, field string, table []ContextFabricClaimedFactRow, column string) (string, error) {
+	source := point.Source
+	if source.Kind != ContextFabricRenderSourceClaimedFactRow || source.Field != field {
+		return "", fmt.Errorf("render shape %q point %q: it must cite the %q field of a claimed fact row", shapeID, point.Label, field)
+	}
+	if source.ClaimID != claim {
+		return "", fmt.Errorf("render shape %q point %q: a sunburst plots one claim", shapeID, point.Label)
+	}
+	return *table[*source.RowIndex].Fields[column].String, nil
 }
 
 // validateComparisonShape holds a table to what a side by side means
@@ -504,11 +733,30 @@ func validContextFabricRenderShapeRule(rule ContextFabricRenderShapeRule) bool {
 	switch rule {
 	case ContextFabricRenderRuleCohortAttentionScore, ContextFabricRenderRuleCohortDriverContribution,
 		ContextFabricRenderRuleDatedFactTrend, ContextFabricRenderRuleInvestmentThemeShare,
-		ContextFabricRenderRuleComparisonSideBySide:
+		ContextFabricRenderRuleComparisonSideBySide, ContextFabricRenderRuleInvestmentSubcategoryShare,
+		ContextFabricRenderRuleInvestmentRepositoryFlow:
 		return true
 	default:
 		return false
 	}
+}
+
+// holdsRepositoryFlowTable reports that a claim's renderable rows are a declared
+// repository_theme_breakdown breakdown table (CHAOS-12578): keyed by repository
+// and theme, with weighted_effort and theme_weighted_effort among its measures and
+// the repository's word among its observations.
+func holdsRepositoryFlowTable(table *ContextFabricClaimedFactTable, timeSeriesRows []ContextFabricClaimedFactRow) bool {
+	if table == nil || len(timeSeriesRows) > 0 {
+		return false
+	}
+	if table.Field != ContextFabricRenderRepositoryFlowTableField || table.Shape != ContextFabricFactTableShapeBreakdown {
+		return false
+	}
+	if len(table.Key) != 2 || table.Key[0] != ContextFabricRenderRepositoryField || table.Key[1] != ContextFabricRenderThemeField {
+		return false
+	}
+	return table.HasMeasure(ContextFabricRenderEffortField) && table.HasMeasure(ContextFabricRenderThemeEffortField) &&
+		table.HasObservation(ContextFabricRenderRepositoryWordField)
 }
 
 // renderShapeSourcesFromResult indexes the CANONICAL result's own cohort
@@ -519,8 +767,10 @@ func renderShapeSourcesFromResult(result ContextFabricInvestigationResult) rende
 		driverWeight: map[string]map[string]float64{},
 		factRows:     map[string][]ContextFabricClaimedFactRow{},
 
-		themeShareClaims: map[string]struct{}{},
-		claimValues:      map[string]renderClaimValue{},
+		themeShareClaims:       map[string]struct{}{},
+		subcategoryShareClaims: map[string]struct{}{},
+		repositoryFlowClaims:   map[string]struct{}{},
+		claimValues:            map[string]renderClaimValue{},
 	}
 	if result.Cohort != nil {
 		for _, member := range result.Cohort.Members {
@@ -536,6 +786,12 @@ func renderShapeSourcesFromResult(result ContextFabricInvestigationResult) rende
 		sources.factRows[fact.ClaimID] = fact.renderableRows()
 		if holdsThemeShareTable(fact.Table, fact.TimeSeriesRows) {
 			sources.themeShareClaims[fact.ClaimID] = struct{}{}
+		}
+		if holdsSubcategoryShareTable(fact.Table, fact.TimeSeriesRows) {
+			sources.subcategoryShareClaims[fact.ClaimID] = struct{}{}
+		}
+		if holdsRepositoryFlowTable(fact.Table, fact.TimeSeriesRows) {
+			sources.repositoryFlowClaims[fact.ClaimID] = struct{}{}
 		}
 		sources.claimValues[fact.ClaimID] = renderClaimValue{value: fact.Value, kind: fact.Kind, field: fact.Field, subject: fact.Subject, derived: len(fact.DerivedFrom) > 0}
 	}
@@ -554,8 +810,10 @@ func renderShapeSourcesFromProjection(projection ContextFabricAnswerProjection) 
 		driverWeight: map[string]map[string]float64{},
 		factRows:     map[string][]ContextFabricClaimedFactRow{},
 
-		themeShareClaims: map[string]struct{}{},
-		claimValues:      map[string]renderClaimValue{},
+		themeShareClaims:       map[string]struct{}{},
+		subcategoryShareClaims: map[string]struct{}{},
+		repositoryFlowClaims:   map[string]struct{}{},
+		claimValues:            map[string]renderClaimValue{},
 	}
 	if projection.Cohort != nil {
 		for _, member := range projection.Cohort.Members {
@@ -594,6 +852,12 @@ func renderShapeSourcesFromProjection(projection ContextFabricAnswerProjection) 
 		sources.factRows[fact.ClaimID] = fact.renderableRows()
 		if holdsThemeShareTable(fact.Table, fact.TimeSeriesRows) {
 			sources.themeShareClaims[fact.ClaimID] = struct{}{}
+		}
+		if holdsSubcategoryShareTable(fact.Table, fact.TimeSeriesRows) {
+			sources.subcategoryShareClaims[fact.ClaimID] = struct{}{}
+		}
+		if holdsRepositoryFlowTable(fact.Table, fact.TimeSeriesRows) {
+			sources.repositoryFlowClaims[fact.ClaimID] = struct{}{}
 		}
 		sources.claimValues[fact.ClaimID] = renderClaimValue{value: fact.Value, kind: fact.Kind, field: fact.Field, subject: fact.Subject}
 	}

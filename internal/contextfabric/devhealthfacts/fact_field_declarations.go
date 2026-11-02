@@ -646,6 +646,9 @@ func landscapeFields() []fieldDecl {
 			fInt("churn_loc_30d", "loc"),
 			fInt("delivery_units_30d", "count"),
 			fTable("area_breakdown", areaCols...),
+			// Each day holds rolling 30-day values, so no column adds up over days.
+			fDaily("daily_landscape", cStr("day"), cNon(cInt("identity_count", "count")), cNon(cInt("churn_loc_30d", "loc")), cNon(cInt("delivery_units_30d", "count"))),
+			fInt("daily_landscape_omitted_count", "count"),
 			fTable("map_coordinates", coordCols...),
 		),
 		declOn(declProjectOnly,
