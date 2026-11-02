@@ -3,6 +3,7 @@ package devhealthsource
 import (
 	"context"
 	"fmt"
+	"strconv"
 	"strings"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
@@ -28,6 +29,12 @@ type kindCountStatement struct {
 	day string
 }
 
+// maxDayBuckets bounds the per-day statement to the newest days: the projector's
+// ClickHouse client caps a reply at 1,000 rows and throws past it (overlap.go),
+// and a kind synced on more distinct days than that would fail the read. Older
+// days are not day-checked; the kind's total still covers them.
+const maxDayBuckets = 900
+
 // stampedKindCount builds the total and the per-day statement of one kind from
 // one population: ids is the distinct key, syncedAt the producer's cursor
 // column, from the FROM/JOIN/WHERE the producer reads.
@@ -36,7 +43,7 @@ func stampedKindCount(kind contractsv1.ContextFabricSubjectKind, ids, syncedAt, 
 		kind: kind,
 		sql:  "SELECT uniqExact(" + ids + ") " + from,
 		day: "SELECT toUInt64(intDiv(toUnixTimestamp(synced_at), 86400)) AS day, count() FROM (SELECT " + ids + ", max(" + syncedAt + ") AS synced_at " + from +
-			" GROUP BY " + ids + ") GROUP BY day",
+			" GROUP BY " + ids + ") GROUP BY day ORDER BY day DESC LIMIT " + strconv.Itoa(maxDayBuckets),
 	}
 }
 

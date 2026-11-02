@@ -94,6 +94,10 @@ func TestEveryStampedKindCountsItsDaysOverItsTotalsPopulation(t *testing.T) {
 		if st.day == "" || !strings.Contains(st.day, from+" GROUP BY ") {
 			t.Errorf("%s day statement does not count the total's population:\ntotal: %s\nday:   %s", st.kind, st.sql, st.day)
 		}
+		// The projector's client throws past 1,000 rows: the newest days only.
+		if !strings.HasSuffix(st.day, "ORDER BY day DESC LIMIT 900") || maxDayBuckets >= 1000 {
+			t.Errorf("%s day statement is not bounded below the client's 1,000-row reply cap: %s", st.kind, st.day)
+		}
 	}
 	for kind := range stampedKinds {
 		if !seen[kind] {
