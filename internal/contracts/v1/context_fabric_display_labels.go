@@ -759,9 +759,12 @@ func ContextFabricEvidenceRefLabelNamed(refID string, name ContextFabricEvidence
 	id := strings.Join(parts[3:], ":")
 	label, known := contextFabricEvidenceEntityLabels[ContextFabricEvidenceEntityType(entityType)]
 	if !known {
-		// An id of a type this build does not know cannot be read for a reader
-		// (CHAOS-12620): the generic noun alone, and the ref stays in Details.
-		return "Evidence", false
+		// A type outside the closed vocabulary keeps the id-carrying generic
+		// fallback; CHAOS-12620 covers the known types.
+		if id == "" {
+			return "Evidence", false
+		}
+		return clampLabel("Evidence: " + id), false
 	}
 	if id == "" {
 		return label, true

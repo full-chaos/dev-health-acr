@@ -78,8 +78,8 @@ func TestAnEvidenceLabelNeverShowsARawID(t *testing.T) {
 			}
 		}
 	}
-	if label, known := ContextFabricEvidenceRefLabel("acr:v1:mystery:" + displayRepoUUID); known || label != "Evidence" {
-		t.Errorf("unknown type: label = %q (known %v), want the generic noun", label, known)
+	if label, known := ContextFabricEvidenceRefLabel("acr:v1:mystery:x"); known || label != "Evidence: x" {
+		t.Errorf("unknown type: label = %q (known %v), want the id-carrying generic fallback", label, known)
 	}
 }
 

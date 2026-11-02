@@ -177,7 +177,7 @@ func TestEvidenceRefLabels(t *testing.T) {
 		// takes the closed enum, see TestEvidenceRefIDIsTypedAndTotal) --
 		// this read-time path stays open on purpose, for a ref that
 		// predates the enum or was minted by another system.
-		{"acr:v1:service:api", "Evidence", false},
+		{"acr:v1:service:api", "Evidence: api", false},
 		{"not-an-acr-ref", "Evidence", false},
 		{"acr:v1:team", "Evidence", false},
 	}
