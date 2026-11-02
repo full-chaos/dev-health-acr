@@ -234,8 +234,9 @@ type chainResponse struct {
 type chainInterpreter struct{}
 
 func (chainInterpreter) Interpret(context.Context, storage.Principal, contextfabric.InvestigationRequest) (contextfabric.InterpretedQuestion, contextfabric.QuestionFamilyOutcome, error) {
-	// A trend class gives a turn with no window of its own a class default,
-	// which the window gate answers with a window prompt.
+	// A trend class gives a turn with no window of its own a class default.
+	// The window gate prompts for it only beside an ask beyond the window
+	// (windowPromptResponse); a window-only turn is answered (CHAOS-4451).
 	return contextfabric.InterpretedQuestion{Shape: contextfabric.ShapeOpen, RequestedJudgment: "status", TimeContext: contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent}, WindowClass: contextfabric.WindowClassTrendAssessment},
 		contextfabric.QuestionFamilyOutcome{Family: contextfabric.QuestionFamilyUnclassified, Source: contextfabric.QuestionFamilySourceNone}, nil
 }
@@ -326,6 +327,19 @@ func kindOfferResponse() chainResponse {
 	return r
 }
 
+// windowPromptResponse is a turn the window gate prompts: its window is not
+// stated, and it holds an ask beyond the window, a kind choice. A window-only
+// turn is answered on the class default (CHAOS-4451), so the ask is what keeps
+// the gate.
+func windowPromptResponse() chainResponse {
+	r := commitResponse(chainOther)
+	r.material = contextfabric.StructureOfferMaterial{
+		Missing:     []contractsv1.ContextFabricStructureNeedKind{contractsv1.ContextFabricStructureNeedExpectedKind},
+		KindOptions: []contractsv1.ContextFabricKindOption{{Kind: contractsv1.ContextFabricSubjectKind(contextfabric.SubjectProject), Label: "project", OfferSource: contractsv1.ContextFabricStructureOfferEngine}, {Kind: contractsv1.ContextFabricSubjectKind(contextfabric.SubjectTeam), Label: "team", OfferSource: contractsv1.ContextFabricStructureOfferEngine}},
+	}
+	return r
+}
+
 // turn runs one request through the engine and returns the served result.
 func (r *chainRig) turn(parentID string, statedWindow, allowClarification bool, response chainResponse) contextfabric.InvestigationResult {
 	r.t.Helper()
@@ -360,7 +374,7 @@ func (r *chainRig) promptTurn(producer, parentID string) string {
 	var served contextfabric.InvestigationResult
 	switch producer {
 	case "window_prompt":
-		served = r.turn(parentID, false, true, commitResponse(chainOther))
+		served = r.turn(parentID, false, true, windowPromptResponse())
 	case "candidate_prompt":
 		served = r.turn(parentID, true, true, ambiguousResponse())
 	case "kind_prompt":
