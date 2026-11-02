@@ -1056,6 +1056,20 @@ finds a subject term, and a subject the resolution committed is not counted. A
 comparison states the distinct subjects of both operands. The window confirmation runs before any search, so it has
 nothing to state.
 
+**A bare-name comparison of exact full labels resolves its kind (CHAOS-12600).**
+A comparison of two named sides that state no kind (`out_of_cut_unstated_kind`)
+gets one check before the flat path, over the shared exact-name population
+(`ExactNameCandidates`, read once for the check and the comparison it enables).
+Each side counts the subjects whose name or label equals its first term,
+case-folded; an alias match does not count. When every side has exactly one such
+subject and all are one kind, the kind is resolved, not inferred: the pair runs
+through `resolveNamedComparison` with that kind, as a stated kind does, and the
+answer carries the service sentence "Both sides were read as repositories: ..."
+(`ContextFabricExactLabelKindLimitation`). A truncated population, no match or
+two matches on a side, or mixed kinds keep the kind question (CHAOS-12548). The
+comparison policy line carries `kind_basis` (`stated`, `exact_label`, `none`)
+and, for a refused check, `kind_refusal`.
+
 **A requested repository scope follows the link (CHAOS-8694).** An issue is in
 a requested repository scope when it is linked to a pull request of a named
 repository, whatever its own repository: the scope is tested on the pull

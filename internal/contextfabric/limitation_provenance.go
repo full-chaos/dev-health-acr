@@ -48,6 +48,7 @@ var serviceLimitationRecognisers = []limitationRecogniser{
 	{"coverage_entries_dropped", contractsv1.IsContextFabricCoverageEntriesDroppedLimitation},
 	{"project_status_missing", contractsv1.IsContextFabricProjectStatusMissingLimitation},
 	{"work_item_authorization_gap", contractsv1.IsContextFabricWorkItemAuthorizationGapLimitation},
+	{"exact_label_kind", contractsv1.IsContextFabricExactLabelKindLimitation},
 }
 
 const unnamedLimitationRecogniser = "other"

@@ -468,6 +468,13 @@ func (e *Engine) synthesizeAndAssemble(ctx context.Context, principal storage.Pr
 		result.LimitationsDisplaced += displaced
 		result.Coverage.Partial = true
 	}
+	// CHAOS-12600: a bare-name comparison whose kind was resolved from unique
+	// exact full-label matches says how it read the sides. The engine states it.
+	if sentence := contractsv1.ContextFabricExactLabelKindLimitation(resolution.ExactLabelKind); sentence != "" {
+		composed, displaced := appendBoundedLimitations(result.Limitations, []string{sentence})
+		result.Limitations = composed
+		result.LimitationsDisplaced += displaced
+	}
 	// CHAOS-12505 (ruling 3): a work item committed beside a named repository; the
 	// answer says whether a pull request link joins them. The engine states it.
 	if resolution.NamedRepositoryLinkLimitation != "" {
