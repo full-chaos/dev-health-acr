@@ -115,7 +115,7 @@ cmd_legs() {
 go_list_tests() {
   local regex="$1" dir="$2" out
   out="$(cd "$repo_root" && go test -trimpath -list "$regex" "./internal/contextfabric/$dir")" || return 1
-  printf '%s\n' "$out" | grep '^Test' | LC_ALL=C sort -u
+  printf '%s\n' "$out" | grep -E '^(Test|Fuzz|Example)' | LC_ALL=C sort -u
 }
 
 cmd_collect() {

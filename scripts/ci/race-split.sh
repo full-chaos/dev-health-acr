@@ -133,12 +133,12 @@ unit_partition_three_way() {
     grep -qE -- "GOFLAGS=\"-trimpath -$flag=\\\$\(scripts/ci/race-split\.sh $name $mode\)\"" "$wf" \
       || { printf 'ci.yml must pass "%s" to -%s\n' "$mode" "$flag" >&2; return 1; }
   done
-  all="$(go test -list '.' "$pkg" | grep '^Test' | LC_ALL=C sort -u)"
+  all="$(go test -list '.' "$pkg" | grep -E '^(Test|Fuzz|Example)' | LC_ALL=C sort -u)"
   problems="$(LC_ALL=C comm -23 <({ names; mid_names; fourth_names; extra_names; } | LC_ALL=C sort -u) <(printf '%s\n' "$all"))"
   if [ -n "$problems" ]; then printf 'a list names no such test:\n%s\n' "$problems" >&2; return 1; fi
-  a="$(go test -list "$(unit_heavy)" "$pkg" | grep '^Test' | LC_ALL=C sort -u)"
-  b="$(go test -list "$(unit_mid)" "$pkg" | grep '^Test' | LC_ALL=C sort -u)"
-  skipped="$(go test -list "$(race_rest)" "$pkg" | grep '^Test' | LC_ALL=C sort -u)"
+  a="$(go test -list "$(unit_heavy)" "$pkg" | grep -E '^(Test|Fuzz|Example)' | LC_ALL=C sort -u)"
+  b="$(go test -list "$(unit_mid)" "$pkg" | grep -E '^(Test|Fuzz|Example)' | LC_ALL=C sort -u)"
+  skipped="$(go test -list "$(race_rest)" "$pkg" | grep -E '^(Test|Fuzz|Example)' | LC_ALL=C sort -u)"
   c="$(LC_ALL=C comm -23 <(printf '%s\n' "$all") <(printf '%s\n' "$skipped"))"
   counted="$(printf '%s\n%s\n%s\n' "$a" "$b" "$c" | grep -v '^$' | LC_ALL=C sort | uniq -c)"
   bad="$(printf '%s\n' "$counted" | awk '$1 != 1 {print $1, $2}')"
@@ -172,8 +172,8 @@ case "${2:-}" in
       [ "$unit_mode" = unit-heavy ] && [ "$want" = "race-split.sh $name rest)" ] && want="race-split.sh $name unit-heavy)"
       grep -qF -- "$want" "$wf" || { printf 'ci.yml never uses "%s"\n' "$want" >&2; exit 1; }
     done
-    all="$(go test -list '.' "$pkg" | grep '^Test' | LC_ALL=C sort -u)"
-    a="$(go test -list "$unit_regex" "$pkg" | grep '^Test' | LC_ALL=C sort -u)"
+    all="$(go test -list '.' "$pkg" | grep -E '^(Test|Fuzz|Example)' | LC_ALL=C sort -u)"
+    a="$(go test -list "$unit_regex" "$pkg" | grep -E '^(Test|Fuzz|Example)' | LC_ALL=C sort -u)"
     c="$(LC_ALL=C comm -23 <(printf '%s\n' "$all") <(printf '%s\n' "$a"))"
     both="$(LC_ALL=C comm -12 <(printf '%s\n' "$a") <(printf '%s\n' "$c"))"
     lost="$(LC_ALL=C comm -23 <(printf '%s\n' "$all") <(printf '%s\n%s\n' "$a" "$c" | grep -v '^$' | LC_ALL=C sort -u))"

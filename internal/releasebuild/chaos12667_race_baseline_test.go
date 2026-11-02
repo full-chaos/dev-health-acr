@@ -65,9 +65,19 @@ func TestRaceBaselineTokenReachesOnlyTheFetchStep(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, banned := range []string{"scripts/", "make ", "go ", "./"} {
+	for _, banned := range []string{"scripts/", "make ", "go ", "./", "GH_TOKEN: "} {
 		if strings.Contains(string(action), banned) {
-			t.Fatalf("the race-baseline action must run gh only; it names %q", banned)
+			t.Fatalf("the race-baseline action must run gh only, with the token out of its environment; it names %q", banned)
 		}
+	}
+	// Codex #1967 r2: the token leaves the environment before any command
+	// runs, and each gh call gets it alone.
+	text := string(action)
+	unset := strings.Index(text, "unset RACE_BASELINE_TOKEN")
+	if unset < 0 || unset > strings.Index(text, "rm -rf") {
+		t.Fatal("the race-baseline action must unset RACE_BASELINE_TOKEN before its first command")
+	}
+	if calls, scoped := strings.Count(text, " gh run "), strings.Count(text, `GH_TOKEN="$token" gh run `); calls != scoped || calls != 2 {
+		t.Fatalf("every gh call must carry the token alone: %d gh calls, %d with GH_TOKEN=\"$token\"", calls, scoped)
 	}
 }

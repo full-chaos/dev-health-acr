@@ -33,7 +33,15 @@ if [ ! -s "$file" ]; then
 fi
 
 lines="$(mktemp)"
-trap 'rm -f "$lines"' EXIT
+# One cleanup for every exit (Codex #1967 r2): it removes the temporary files and then exits with the status the guard
+# reached, so a failing rm can never change the result.
+cleanup() {
+  local rc=$?
+  rm -f "$lines" "${tests:-}" 2>/dev/null || true
+  if [ -n "${tmpd:-}" ]; then rm -rf "$tmpd" 2>/dev/null || true; fi
+  exit "$rc"
+}
+trap cleanup EXIT
 if [ "$json" -eq 1 ]; then
   jq -Rr 'fromjson? | select((.Action == "pass" or .Action == "fail") and (.Test == null) and (.Package != null)) |
     (if .Action == "pass" then "ok" else "FAIL" end) + "\t" + .Package + "\t" + ((.Elapsed // 0) | tostring) + "s"' \
@@ -104,7 +112,6 @@ if [ "$json" -eq 1 ]; then
     exit 1
   fi
   tests="$(mktemp)"
-  trap 'rm -f "$lines" "$tests"' EXIT
   # A line that starts with "{" is a test2json record and must parse; a top-level test record that ended (pass, fail or skip)
   # must carry a package and a numeric Elapsed. Anything else fails closed. A line that does not start with "{" is
   # the wrapper's own echo (make's recipe line) and is ignored.
@@ -179,9 +186,9 @@ span_rows() { # file -> "P<TAB>pkg<TAB>elapsed" and "T<TAB>pkg<TAB>test<TAB>span
       split($3, parts, "/"); top = parts[1]; key = $2 "\t" top; ts = $5 + 0
       if ($3 == top && ($4 == "run" || $4 == "cont")) { start[key] = ts; has[key] = 1 }
       if (!(key in last) || ts > last[key]) last[key] = ts
-      if ($3 == top && ($4 == "pass" || $4 == "fail" || $4 == "skip")) el[key] = $6 + 0
+      if ($3 == top && ($4 == "pass" || $4 == "fail" || $4 == "skip")) { el[key] = $6 + 0; ended[key] = 1 }
     }
-    END { for (key in has) printf "T\t%s\t%.3f\t%.3f\n", key, last[key] - start[key], el[key] + 0 }
+    END { for (key in has) printf "T\t%s\t%.3f\t%.3f\t%d\n", key, last[key] - start[key], el[key] + 0, (key in ended) }
   ' "$ev" | sort -t "$(printf '\t')" -k1,1 -k4,4gr
   rm -f "$ev"
 }
@@ -218,7 +225,7 @@ span_report() {
     $1 == "P" { if (inbase) bp[$2] += $3; else np[$2] += $3; next }
     $1 == "T" {
       k = $2 "\t" $3
-      if (inbase) { bspan[k] = $4 + 0 } else { n++; key[n] = k; pk[n] = $2; nm[n] = $3; sp[n] = $4 + 0; el[n] = $5 + 0 }
+      if (inbase) { bspan[k] = $4 + 0 } else { n++; key[n] = k; pk[n] = $2; nm[n] = $3; sp[n] = $4 + 0; el[n] = $5 + 0; ended[n] = $6 + 0 }
     }
     END {
       npk = 0; for (p in np) { npk++; onlypkg = p }
@@ -226,6 +233,8 @@ span_report() {
       for (i = 1; i <= n && i <= 10; i++) {
         label = (npk == 1 ? nm[i] : pk[i] " " nm[i])
         line = sprintf("  span %7.1f  elapsed %7.1f  %s", sp[i], el[i], label)
+        # Codex #1967 r2: a test with no end event (a cut-off transcript) has a lower bound, not a span.
+        if (!ended[i]) line = line "  (no end event: ran at least this long)"
         if (hasbase) {
           if (key[i] in bspan) line = line sprintf("  | baseline %7.1f  delta %+.1f", bspan[key[i]], sp[i] - bspan[key[i]])
           else line = line "  | new (not in baseline)"
@@ -244,7 +253,6 @@ span_report() {
 # The report's own temp directory is made inside the reporting branch (Codex #1967 r1): a failure here is a warning,
 # never an exit under set -e, so the exit code stays the one the package and per-test checks gave.
 tmpd=""
-trap 'rm -f "$lines" "${tests:-}"; [ -z "$tmpd" ] || rm -rf "$tmpd"' EXIT
 if [ "$json" -eq 1 ]; then
   if ! tmpd="$(mktemp -d 2>/dev/null)" || [ -z "$tmpd" ]; then
     tmpd=""

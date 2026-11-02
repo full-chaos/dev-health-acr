@@ -19,10 +19,15 @@ runs:
     - name: Fetch main's last race-json of this job
       shell: bash
       env:
-        GH_TOKEN: ${{ inputs.token }}
+        RACE_BASELINE_TOKEN: ${{ inputs.token }}
         ARTIFACT: ${{ inputs.artifact }}
       run: |
         set -uo pipefail
+        # The token leaves the environment at once (Codex #1967 r2): it is a
+        # shell variable from here, handed to each gh call alone, so rm,
+        # mkdir, find and mv never inherit it.
+        token="$RACE_BASELINE_TOKEN"
+        unset RACE_BASELINE_TOKEN
         out=.tmp/race-baseline
         rm -rf "$out"
         mkdir -p "$out"
@@ -30,14 +35,14 @@ runs:
           echo "race-baseline: gh is not installed; no baseline"
           exit 0
         fi
-        if ! ids="$(gh run list -R "$GITHUB_REPOSITORY" --workflow ci.yml --branch main --event push --status success \
+        if ! ids="$(GH_TOKEN="$token" gh run list -R "$GITHUB_REPOSITORY" --workflow ci.yml --branch main --event push --status success \
           --limit 10 --json databaseId -q '.[].databaseId' 2>/dev/null)"; then
-          echo "race-baseline: gh run list failed; no baseline"
+          echo "race-baseline: listing main's runs failed; no baseline"
           exit 0
         fi
         for id in $ids; do
           case "$id" in '' | *[!0-9]*) continue ;; esac
-          if gh run download "$id" -R "$GITHUB_REPOSITORY" -n "$ARTIFACT" -D "$out/$id" >/dev/null 2>&1; then
+          if GH_TOKEN="$token" gh run download "$id" -R "$GITHUB_REPOSITORY" -n "$ARTIFACT" -D "$out/$id" >/dev/null 2>&1; then
             got="$(find "$out/$id" -name race.json -type f -size +0c -print -quit)"
             if [ -n "$got" ]; then
               mv "$got" "$out/race.json"

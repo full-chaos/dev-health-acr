@@ -211,6 +211,21 @@ SHIM
   rc_nd=0; PATH="$tmp/nodir:$PATH" RACE_SLOW_TESTS="$allow" "$guard" --json 6000 "$sp" >"$tmp/nd.out" 2>&1 || rc_nd=$?
   if [ "$rc_nd" -eq 1 ] && grep -q 'no temporary directory for the real span report' "$tmp/nd.out"; then echo "ok   report-tempdir-failure-failing-input-rc1"
   else echo "FAIL report-tempdir-failure-failing-input-rc1 rc=$rc_nd"; cat "$tmp/nd.out"; fails=$((fails + 1)); fi
+  # Codex #1967 r2: a failing cleanup never changes the result. The shim fails every `rm`; the guard still exits with
+  # the status it reached (0 on a passing input, 1 on a failing one).
+  mkdir -p "$tmp/norm"
+  printf '#!/bin/sh\necho "rm: denied" >&2\nexit 1\n' >"$tmp/norm/rm"; chmod +x "$tmp/norm/rm"
+  { ev 0 run TestP; ev 14 pass TestP 1; ev 20 pass "" 20; } >"$sp"
+  rc_rm=0; PATH="$tmp/norm:$PATH" RACE_SLOW_TESTS="$allow" "$guard" --json 6000 "$sp" >"$tmp/rm.out" 2>&1 || rc_rm=$?
+  if [ "$rc_rm" -eq 0 ]; then echo "ok   failing-cleanup-passing-input-rc0"
+  else echo "FAIL failing-cleanup-passing-input-rc0 rc=$rc_rm"; cat "$tmp/rm.out"; fails=$((fails + 1)); fi
+  { ev 0 run TestGiant; ev 310 pass TestGiant 310; ev 311 pass "" 311; } >"$sp"
+  rc_rm=0; PATH="$tmp/norm:$PATH" RACE_SLOW_TESTS="$allow" "$guard" --json 6000 "$sp" >"$tmp/rm.out" 2>&1 || rc_rm=$?
+  if [ "$rc_rm" -eq 1 ]; then echo "ok   failing-cleanup-failing-input-rc1"
+  else echo "FAIL failing-cleanup-failing-input-rc1 rc=$rc_rm"; cat "$tmp/rm.out"; fails=$((fails + 1)); fi
+  # Codex #1967 r2: a test with no end event (a cut-off transcript) is a lower bound, and says so.
+  { ev 0 run TestDone; ev 1 pass TestDone 1; ev 2 run TestHung; ev 10 output TestHung; } >"$sp"
+  spexpect unfinished-test-is-a-lower-bound 1 'TestHung  (no end event: ran at least this long)'
 fi
 
 [ "$fails" -eq 0 ]
