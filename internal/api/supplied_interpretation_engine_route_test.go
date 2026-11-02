@@ -651,22 +651,25 @@ func TestSuppliedInterpretationFollowUpTurnIsServedLikeTheModelPath(t *testing.T
 			return result
 		}
 
+		// CHAOS-4451: the window is the first turn's only question, so it
+		// answers on the inferred window and offers the window beside the
+		// answer; the follow-up redeems that offer.
 		asked := send(investigationRequestBody(), firstSupplied)
-		if asked.Status != contractsv1.ContextFabricInvestigationClarificationRequired || asked.WindowClarification == nil || len(asked.WindowClarification.Options) == 0 || len(synthesized) != 0 {
-			t.Fatalf("first turn: status = %q syntheses = %d, want a window clarification with an option and no synthesis", asked.Status, len(synthesized))
+		if asked.Status == contractsv1.ContextFabricInvestigationClarificationRequired || asked.WindowClarification == nil || len(asked.WindowClarification.Options) == 0 || len(synthesized) != 1 {
+			t.Fatalf("first turn: status = %q syntheses = %d, want an answer with the window offer beside it and one synthesis", asked.Status, len(synthesized))
 		}
 		followUp := investigationRequestBody()
 		followUp.PriorWindowReceipts = []contractsv1.ContextFabricBoundSubjectReceipt{{ResultID: asked.ResultID, ReceiptID: asked.WindowClarification.Options[0].ReceiptID}}
 		served := send(followUp, secondSupplied)
-		if served.Status != contractsv1.ContextFabricInvestigationComplete || served.EffectiveEvidenceWindow == nil || len(synthesized) != 1 {
-			t.Fatalf("second turn: status = %q refusal = %q window = %v syntheses = %d limitations = %v, want the answer served under the confirmed window with one synthesis",
+		if served.Status != contractsv1.ContextFabricInvestigationComplete || served.EffectiveEvidenceWindow == nil || len(synthesized) != 2 {
+			t.Fatalf("second turn: status = %q refusal = %q window = %v syntheses = %d limitations = %v, want the answer served under the confirmed window with a second synthesis",
 				served.Status, served.RefusalBasis, served.EffectiveEvidenceWindow, len(synthesized), served.Limitations)
 		}
 		if served.EffectiveEvidenceWindow.Provenance != contractsv1.ContextFabricWindowClarificationConfirmed {
 			t.Fatalf("second turn: window provenance = %q, want the window the receipt confirmed", served.EffectiveEvidenceWindow.Provenance)
 		}
-		if !reflect.DeepEqual(synthesized[0].SubjectTerms, []string{"Ask Dev"}) {
-			t.Fatalf("synthesis input interpretation = %#v, want the interpretation of the follow-up turn", synthesized[0])
+		if !reflect.DeepEqual(synthesized[1].SubjectTerms, []string{"Ask Dev"}) {
+			t.Fatalf("synthesis input interpretation = %#v, want the interpretation of the follow-up turn", synthesized[1])
 		}
 		wantInterprets := 0
 		for _, suppliedTurn := range []bool{firstSupplied, secondSupplied} {
