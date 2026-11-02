@@ -440,7 +440,10 @@ type EngineTelemetry interface {
 	// contextfabric.OwnershipRoutingVersion this call's lookup matched or
 	// missed on -- carried so a stale or disabled dimension is attributable
 	// at Info without correlating against the binary's own build metadata.
-	RecordAnswerReuse(ctx context.Context, principal storage.Principal, outcome AnswerReuseOutcome, ownershipRoutingVersion string)
+	// refusal (CHAOS-12511) names which refusal produced a miss_authorization
+	// outcome, so a count limit is not read as a grant decision; the zero
+	// value for every other outcome.
+	RecordAnswerReuse(ctx context.Context, principal storage.Principal, outcome AnswerReuseOutcome, ownershipRoutingVersion string, refusal AnswerReuseRefusal)
 	// RecordAnswerReuseBypass (CHAOS-4998) reports that ONE Investigate
 	// call never reached the reuse lookup at all, and which of the closed
 	// AnswerReuseBypassReason arms decided that. Deliberately a SEPARATE

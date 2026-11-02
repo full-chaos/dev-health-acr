@@ -26,6 +26,28 @@ type renderShapeSources struct {
 	driverWeight map[string]map[string]float64
 	// factRows maps a claim id to that claim's row table.
 	factRows map[string][]ContextFabricClaimedFactRow
+	// themeShareClaims names the claims whose factRows are their declared
+	// theme_breakdown table. A claim can carry a time series beside that table
+	// and factRows then holds the series, so rows alone do not say which table
+	// a treemap would plot.
+	themeShareClaims map[string]struct{}
+}
+
+// holdsThemeShareTable reports that a claim's renderable rows are a declared
+// breakdown table of the theme share field, with share among its measures.
+func holdsThemeShareTable(table *ContextFabricClaimedFactTable, timeSeriesRows []ContextFabricClaimedFactRow) bool {
+	if table == nil || len(timeSeriesRows) > 0 {
+		return false
+	}
+	if table.Field != ContextFabricRenderThemeTableField || table.Shape != ContextFabricFactTableShapeBreakdown {
+		return false
+	}
+	for _, measure := range table.Measures {
+		if measure == ContextFabricRenderThemeShareField {
+			return true
+		}
+	}
+	return false
 }
 
 // validateRenderPointSourceShape checks an address is WELL FORMED before
@@ -156,6 +178,9 @@ func validateRenderShapes(shapes []ContextFabricRenderShape, sources renderShape
 		if !validContextFabricRenderAxisKind(shape.AxisKind) {
 			return fmt.Errorf("render shape axis kind is not a member of the closed vocabulary")
 		}
+		if shape.ValueUnit != "" && !validContextFabricRenderValueUnit(shape.ValueUnit) {
+			return fmt.Errorf("render shape value_unit is not a member of the closed vocabulary")
+		}
 		if !stringLengthBetween(shape.Title, 1, ContextFabricRenderLabelMaxLength) ||
 			!stringLengthBetween(shape.AxisLabel, 1, ContextFabricRenderLabelMaxLength) ||
 			!stringLengthBetween(shape.ValueLabel, 1, ContextFabricRenderLabelMaxLength) {
@@ -199,6 +224,99 @@ func validateRenderShapes(shapes []ContextFabricRenderShape, sources renderShape
 				}
 			}
 		}
+		if err := validateTreemapShape(shape, sources); err != nil {
+			return err
+		}
+		if err := validateRenderValueUnit(shape); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// validateTreemapShape holds a treemap to what a part of a whole means
+// (CHAOS-4610). Every point has already resolved to its source. What is left is
+// that the points are ALL the parts of ONE whole: one claim's declared table,
+// every row once, the same measure, each labelled with the served word of its own
+// row's theme, and a real split. A row left out makes the chart a different claim,
+// a label that is not its row's theme puts a share on the wrong name, and one part
+// above 0 is no split: a chart of it says nothing the sentence does not.
+//
+// The rule and the kind name each other. A treemap has no other rule, so a
+// consumer that reads the kind can rely on these clauses.
+func validateTreemapShape(shape ContextFabricRenderShape, sources renderShapeSources) error {
+	if (shape.Kind == ContextFabricRenderKindTreemap) != (shape.SelectedBy == ContextFabricRenderRuleInvestmentThemeShare) {
+		return fmt.Errorf("render shape %q: selected_by %q cannot yield kind %q", shape.ShapeID, shape.SelectedBy, shape.Kind)
+	}
+	if shape.Kind != ContextFabricRenderKindTreemap {
+		return nil
+	}
+	if shape.AxisKind != ContextFabricRenderAxisCategory {
+		return fmt.Errorf("render shape %q: a treemap needs a category axis", shape.ShapeID)
+	}
+	if len(shape.Series) != 1 {
+		return fmt.Errorf("render shape %q: a treemap holds one series", shape.ShapeID)
+	}
+	if shape.ValueUnit != ContextFabricRenderValueUnitRatio {
+		return fmt.Errorf("render shape %q: a treemap needs a value_unit of %q", shape.ShapeID, ContextFabricRenderValueUnitRatio)
+	}
+	points := shape.Series[0].Points
+	claim := points[0].Source.ClaimID
+	if _, declared := sources.themeShareClaims[claim]; !declared {
+		return fmt.Errorf("render shape %q: a treemap plots a declared %q table", shape.ShapeID, ContextFabricRenderThemeTableField)
+	}
+	table := sources.factRows[claim]
+	if len(points) != len(table) {
+		return fmt.Errorf("render shape %q: a treemap plots every row of its table, and has %d of %d", shape.ShapeID, len(points), len(table))
+	}
+	rows := make(map[int]struct{}, len(points))
+	above := 0
+	for _, point := range points {
+		source := point.Source
+		// The kind is what makes RowIndex safe to read below: the resolver
+		// has already refused a claimed_fact_row source with no row index.
+		if source.Kind != ContextFabricRenderSourceClaimedFactRow || source.Field != ContextFabricRenderThemeShareField {
+			return fmt.Errorf("render shape %q point %q: a treemap point must cite the %q field of a claimed fact row", shape.ShapeID, point.Label, ContextFabricRenderThemeShareField)
+		}
+		if source.ClaimID != claim {
+			return fmt.Errorf("render shape %q point %q: a treemap plots one claim", shape.ShapeID, point.Label)
+		}
+		if _, repeated := rows[*source.RowIndex]; repeated {
+			return fmt.Errorf("render shape %q point %q: a treemap plots each row once", shape.ShapeID, point.Label)
+		}
+		rows[*source.RowIndex] = struct{}{}
+		theme := table[*source.RowIndex].Fields[ContextFabricRenderThemeField].String
+		if theme == nil {
+			return fmt.Errorf("render shape %q point %q: its row carries no %q", shape.ShapeID, point.Label, ContextFabricRenderThemeField)
+		}
+		if word, _ := ContextFabricInvestmentThemeLabel(*theme); word != point.Label {
+			return fmt.Errorf("render shape %q point %q: a treemap label must be the served word of its row's theme %q", shape.ShapeID, point.Label, *theme)
+		}
+		if point.Value < 0 {
+			return fmt.Errorf("render shape %q point %q: a treemap value is below 0", shape.ShapeID, point.Label)
+		}
+		if point.Value > 0 {
+			above++
+		}
+	}
+	if above < 2 {
+		return fmt.Errorf("render shape %q: a treemap needs at least 2 values above 0, and has %d", shape.ShapeID, above)
+	}
+	return nil
+}
+
+// validateRenderValueUnit holds every value of a shape to the unit it declares.
+// The unit is a claim about the numbers, and a consumer formats by it.
+func validateRenderValueUnit(shape ContextFabricRenderShape) error {
+	if shape.ValueUnit != ContextFabricRenderValueUnitRatio {
+		return nil
+	}
+	for _, series := range shape.Series {
+		for _, point := range series.Points {
+			if point.Value < 0 || point.Value > 1 {
+				return fmt.Errorf("render shape %q point %q: %v is outside a ratio's range of 0 to 1", shape.ShapeID, point.Label, point.Value)
+			}
+		}
 	}
 	return nil
 }
@@ -237,9 +355,23 @@ func ContextFabricRenderPresentationVocabulary() []ContextFabricRenderPresentati
 	}
 }
 
+// ContextFabricRenderValueUnitVocabulary is the closed unit vocabulary.
+func ContextFabricRenderValueUnitVocabulary() []ContextFabricRenderValueUnit {
+	return []ContextFabricRenderValueUnit{ContextFabricRenderValueUnitRatio}
+}
+
 func validContextFabricRenderKind(kind ContextFabricRenderKind) bool {
 	for _, member := range ContextFabricRenderKindVocabulary() {
 		if member == kind {
+			return true
+		}
+	}
+	return false
+}
+
+func validContextFabricRenderValueUnit(unit ContextFabricRenderValueUnit) bool {
+	for _, member := range ContextFabricRenderValueUnitVocabulary() {
+		if member == unit {
 			return true
 		}
 	}
@@ -267,7 +399,7 @@ func validContextFabricRenderAxisKind(kind ContextFabricRenderAxisKind) bool {
 func validContextFabricRenderShapeRule(rule ContextFabricRenderShapeRule) bool {
 	switch rule {
 	case ContextFabricRenderRuleCohortAttentionScore, ContextFabricRenderRuleCohortDriverContribution,
-		ContextFabricRenderRuleDatedFactTrend:
+		ContextFabricRenderRuleDatedFactTrend, ContextFabricRenderRuleInvestmentThemeShare:
 		return true
 	default:
 		return false
@@ -281,6 +413,8 @@ func renderShapeSourcesFromResult(result ContextFabricInvestigationResult) rende
 		memberScore:  map[string]*float64{},
 		driverWeight: map[string]map[string]float64{},
 		factRows:     map[string][]ContextFabricClaimedFactRow{},
+
+		themeShareClaims: map[string]struct{}{},
 	}
 	if result.Cohort != nil {
 		for _, member := range result.Cohort.Members {
@@ -294,6 +428,9 @@ func renderShapeSourcesFromResult(result ContextFabricInvestigationResult) rende
 	}
 	for _, fact := range result.ClaimedFacts {
 		sources.factRows[fact.ClaimID] = fact.renderableRows()
+		if holdsThemeShareTable(fact.Table, fact.TimeSeriesRows) {
+			sources.themeShareClaims[fact.ClaimID] = struct{}{}
+		}
 	}
 	return sources
 }
@@ -309,6 +446,8 @@ func renderShapeSourcesFromProjection(projection ContextFabricAnswerProjection) 
 		memberScore:  map[string]*float64{},
 		driverWeight: map[string]map[string]float64{},
 		factRows:     map[string][]ContextFabricClaimedFactRow{},
+
+		themeShareClaims: map[string]struct{}{},
 	}
 	if projection.Cohort != nil {
 		for _, member := range projection.Cohort.Members {
@@ -345,6 +484,9 @@ func renderShapeSourcesFromProjection(projection ContextFabricAnswerProjection) 
 	}
 	for _, fact := range projection.KeyFacts {
 		sources.factRows[fact.ClaimID] = fact.renderableRows()
+		if holdsThemeShareTable(fact.Table, fact.TimeSeriesRows) {
+			sources.themeShareClaims[fact.ClaimID] = struct{}{}
+		}
 	}
 	return sources
 }

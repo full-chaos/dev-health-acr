@@ -429,6 +429,7 @@ type recordingTelemetry struct {
 	terminalSaveSkipped         []TerminalSaveSkippedEvent
 	priorSubjectReceiptsSkipped []int
 	answerReuseOutcomes         []AnswerReuseOutcome
+	answerReuseRefusals         []AnswerReuseRefusal
 	workItemReuses              []WorkItemReuseEvent
 	// answerReuseOwnershipRoutingVersions records, per RecordAnswerReuse
 	// call and in the same order as answerReuseOutcomes, the
@@ -720,7 +721,8 @@ type dualTableFactsRecord struct {
 	secondaryRowsBytes int
 }
 
-func (r *recordingTelemetry) RecordAnswerReuse(_ context.Context, _ storage.Principal, outcome AnswerReuseOutcome, ownershipRoutingVersion string) {
+func (r *recordingTelemetry) RecordAnswerReuse(_ context.Context, _ storage.Principal, outcome AnswerReuseOutcome, ownershipRoutingVersion string, refusal AnswerReuseRefusal) {
+	r.answerReuseRefusals = append(r.answerReuseRefusals, refusal)
 	r.answerReuseOutcomes = append(r.answerReuseOutcomes, outcome)
 	r.answerReuseOwnershipRoutingVersions = append(r.answerReuseOwnershipRoutingVersions, ownershipRoutingVersion)
 }

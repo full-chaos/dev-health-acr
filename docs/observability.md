@@ -83,7 +83,7 @@ log line that already certifies the outcome, never on a second path.
 | `acr_mcp_tool_latency_seconds` | histogram | `tool` | acr-mcp request line (`tools/call` only) |
 | `acr_answers_total` | counter | `status`, `tool` | acr-mcp answer display (`investigate_question`, `investigate_with_interpretation`) |
 | `acr_budget_refusals_total` | counter | none | acr-api investigation failure line (class `budget_refusal`) and the response-budget exceed line (`context fabric response exceeded service limits`, 413), on both the investigation and the stored-result route |
-| `acr_answer_reuse_total` | counter | `outcome` | acr-api answer reuse outcome line |
+| `acr_answer_reuse_total` | counter | `outcome` | acr-api answer reuse outcome line. A `miss_authorization` line also carries `reason` (`gate_denied`, `submission_owner_missing`, `submission_owner_mismatch`, `subject_cap_exceeded`, `subject_recheck_failed`, `subject_not_committed`) and, for `subject_cap_exceeded`, `subject_count`. Both are log and event fields only; the counter keeps `outcome` as its one label. `unattributed` can appear in the log only as a fallback when a refusal site named no reason; it is not in the declared vocabulary, so certification refuses such a line |
 | `acr_requirement_outcomes_total` | counter | `outcome` | acr-api completeness authority line (one count per outcome row; an investigation without a plan adds no rows) |
 | `acr_outcome_rows_evicted_total` | counter | `lever` (`claim_depth`, `fact_row`, `path_drop`, `candidate`) | acr-api lever Info lines (`context fabric claim depth narrowing`, `fact row truncation`, `path drop`, plan narrowing): one count per served lever application whose answer carries the outcome-row eviction disclosure (field `outcome_rows_evicted`, the cumulative count) |
 | `acr_limitation_disclosure_skipped_total` | counter | none | acr-api WARN line `context fabric limitation disclosure skipped` (recogniser id and list length only): a service disclosure was left out of a served answer because the limitation list was full of service-looking entries; expected 0 on prod, since the service strips such entries from model drafts |
@@ -141,7 +141,9 @@ Per-organization and per-credential request/resource totals come from the bounde
 A user's credentials count as one credential here: the user on one surface, so a
 refresh or a new Connect neither starts a new quota nor takes a new tracked
 subject. Workload, org-bearer and operator credentials count one by one, a
-workload by its binding.
+workload by its binding. A subject with no running request and no request for
+the retention leaves the tracked set once the set is full, and its totals go with
+it.
 
 ## What leaves a span
 

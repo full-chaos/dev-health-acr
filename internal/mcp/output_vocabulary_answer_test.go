@@ -327,8 +327,17 @@ func init() {
 			kind:  vocabFrozen,
 			why:   "protocol",
 			sites: []string{"RenderShapeRule"},
-			// schema: "cohort_attention_score", "cohort_driver_contribution", "dated_fact_trend"
-			goSet:      []string{string(contractsv1.ContextFabricRenderRuleCohortAttentionScore), string(contractsv1.ContextFabricRenderRuleCohortDriverContribution), string(contractsv1.ContextFabricRenderRuleDatedFactTrend)},
+			// schema: "cohort_attention_score", "cohort_driver_contribution", "dated_fact_trend", "investment_theme_share"
+			goSet:      []string{string(contractsv1.ContextFabricRenderRuleCohortAttentionScore), string(contractsv1.ContextFabricRenderRuleCohortDriverContribution), string(contractsv1.ContextFabricRenderRuleDatedFactTrend), string(contractsv1.ContextFabricRenderRuleInvestmentThemeShare)},
+			exhaustive: true,
+		},
+		outputVocabulary{
+			name:  "RenderValueUnit",
+			kind:  vocabFrozen,
+			why:   "protocol",
+			sites: []string{"RenderValueUnit"},
+			// schema: "ratio"
+			goSet:      []string{string(contractsv1.ContextFabricRenderValueUnitRatio)},
 			exhaustive: true,
 		},
 		outputVocabulary{

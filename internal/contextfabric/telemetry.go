@@ -171,11 +171,25 @@ func (t SlogEngineTelemetry) RecordSynthesisStatusOverride(ctx context.Context, 
 	t.logger.WarnContext(ctx, "context fabric synthesis status override", args...)
 }
 
-func (t SlogEngineTelemetry) RecordAnswerReuse(ctx context.Context, principal storage.Principal, outcome AnswerReuseOutcome, ownershipRoutingVersion string) {
-	args := append([]any{
+func (t SlogEngineTelemetry) RecordAnswerReuse(ctx context.Context, principal storage.Principal, outcome AnswerReuseOutcome, ownershipRoutingVersion string, refusal AnswerReuseRefusal) {
+	args := []any{
 		"org_id", SanitizeLogAttr(principal.OrgID), "outcome", SanitizeLogAttr(string(outcome)),
 		"ownership_routing_version", SanitizeLogAttr(ownershipRoutingVersion),
-	}, requestIDLogAttrs(ctx)...)
+	}
+	// CHAOS-12511: the refusal reason is a log and event field only. The
+	// metric below keeps the outcome as its sole label.
+	// A miss_authorization with no reason is written as unattributed, never
+	// as a bare line, whoever calls this (CHAOS-12519). The certifier refuses it.
+	if outcome == AnswerReuseMissAuthorization && refusal.Reason == "" {
+		refusal.Reason = AnswerReuseRefusalUnattributed
+	}
+	if refusal.Reason != "" {
+		args = append(args, "reason", SanitizeLogAttr(string(refusal.Reason)))
+		if refusal.Reason == AnswerReuseRefusalSubjectCapExceeded {
+			args = append(args, "subject_count", refusal.SubjectCount)
+		}
+	}
+	args = append(args, requestIDLogAttrs(ctx)...)
 	t.logger.InfoContext(ctx, "context fabric answer reuse outcome", args...)
 	t.metrics.AnswerReuse(ctx, string(outcome))
 }

@@ -362,7 +362,7 @@ func TestEveryProjectionStringFieldIsClassified(t *testing.T) {
 		// server-set from the grounding fact, never model-authored.
 		// CHAOS-12415: 259 -> 260 -- vocabulary_labels{}, classified like
 		// evidence_ref_labels{}.
-		{name: "answer_projection", root: "answer", prefix: "structured", untrusted: MCPInvestigateQuestionUntrustedFields, expectedPaths: 260},
+		{name: "answer_projection", root: "answer", prefix: "structured", untrusted: MCPInvestigateQuestionUntrustedFields, expectedPaths: 261},
 		// CHAOS-4087: 213 -> 217 -- CommitDecisionDigest contributed four
 		// new string leaves (commit_gate, subject.kind, subject.canonical_id,
 		// subject.label).
@@ -448,7 +448,7 @@ func TestEveryProjectionStringFieldIsClassified(t *testing.T) {
 		// CHAOS-12160: 378 -> 380 -- claimed_facts[].investment_mix.investment_mix_source
 		// and .rollup_basis, the same two leaves as the projection.
 		// CHAOS-12415: 380 -> 381 -- vocabulary_labels{}, as on the projection.
-		{name: "investigation_result", root: "result", prefix: "structured", untrusted: MCPInvestigationResultUntrustedFields, expectedPaths: 381},
+		{name: "investigation_result", root: "result", prefix: "structured", untrusted: MCPInvestigationResultUntrustedFields, expectedPaths: 382},
 	} {
 		t.Run(surface.name, func(t *testing.T) {
 			paths := stringPathsIn(t, documents, surface.root, surface.prefix)
@@ -657,7 +657,9 @@ func trustedBecauseClosed(path string) bool {
 		// above. The shape's DISPLAY text (title/axis_label/value_label/
 		// series[].label/points[].label) is deliberately NOT here: it
 		// carries canonical subject labels and is declared untrusted.
-		"presentation", "selected_by", "axis_kind",
+		// CHAOS-4610: "value_unit" (ContextFabricRenderValueUnit) is a closed
+		// vocabulary of its own, validated the same way.
+		"presentation", "selected_by", "axis_kind", "value_unit",
 		// CHAOS-4413: "terminal_status" mirrors the sibling "status" leaf
 		// verbatim (ContextFabricInvestigationStatus, already trusted
 		// above) and "terminal_reason" (ContextFabricTerminalReason) is
