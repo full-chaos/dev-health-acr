@@ -2,7 +2,9 @@ package devhealthfacts_test
 
 import (
 	"context"
+	"fmt"
 	"math"
+	"strings"
 	"testing"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
@@ -145,7 +147,7 @@ func TestCHAOS12580AManyTeamReadCarriesNoRepositoryTable(t *testing.T) {
 // A repository with no name gives no table: its word would be an id. The
 // fact keeps theme_breakdown.
 func TestCHAOS12580ARepositoryWithNoNameWithholdsTheTable(t *testing.T) {
-	t.Parallel()
+	logs := captureSlog(t)
 	tables := twoRepositoryTeamTables()
 	tables[2] = fakeTable{match: "any(repo) AS name", rows: [][]any{{"repo-A", "acme/api"}}}
 	facts := readTeamInvestment(t, &fakeClient{tables: tables}, "T")
@@ -154,5 +156,51 @@ func TestCHAOS12580ARepositoryWithNoNameWithholdsTheTable(t *testing.T) {
 	}
 	if _, ok := facts[0].Fields["theme_breakdown"]; !ok {
 		t.Fatal("theme_breakdown left with the withheld table")
+	}
+	if line := logs.String(); !strings.Contains(line, "devhealthfacts.repository_theme_breakdown_withheld") ||
+		!strings.Contains(line, "reason=repository_without_name ") || !strings.Contains(line, "repository=repo-B ") && !strings.HasSuffix(strings.TrimSpace(line), "repository=repo-B") {
+		t.Fatalf("no withheld line naming the reason and the repository: %s", line)
+	}
+}
+
+// Codex r1 on #1962: a team past 64 repositories with effort in every theme
+// holds more links than the table's 320-row bound. The table is withheld and
+// logged; the team fact stays valid and keeps theme_breakdown.
+func TestCHAOS12580ATeamPastTheRowBoundKeepsAValidFactWithoutTheTable(t *testing.T) {
+	logs := captureSlog(t)
+	const repositories = 65
+	themes := map[string]float64{"feature_delivery": 1, "operational": 1, "maintenance": 1, "quality": 1, "risk": 1}
+	var owned, names, mix [][]any
+	for i := 0; i < repositories; i++ {
+		repo := fmt.Sprintf("repo-%02d", i)
+		owned = append(owned, []any{"T", repo})
+		names = append(names, []any{repo, "acme/" + repo})
+		mix = append(mix, []any{uint8(0), repo, themes, 0.0, uint64(1), []uint64{uint64(i + 1)}, []uint64{}, clockSpanStart})
+	}
+	client := &fakeClient{tables: []fakeTable{
+		watermarkTable(),
+		{match: "FROM team_repo_ownership", rows: owned},
+		{match: "any(repo) AS name", rows: names},
+		{match: "FROM work_unit_investments", rows: mix},
+	}}
+	facts := readTeamInvestment(t, client, "T")
+	if len(facts) != 1 {
+		t.Fatalf("facts = %d, want the team fact", len(facts))
+	}
+	// Every field of the fact holds its own bounds (the registry refuses the
+	// whole fact for one field past them).
+	for name, value := range facts[0].Fields {
+		if err := value.Validate(); err != nil {
+			t.Fatalf("field %s does not validate: %v", name, err)
+		}
+	}
+	if _, ok := facts[0].Fields[contractsv1.ContextFabricRenderRepositoryFlowTableField]; ok {
+		t.Fatal("a 325-link table was served past its 320-row bound")
+	}
+	if _, ok := facts[0].Fields["theme_breakdown"]; !ok {
+		t.Fatal("theme_breakdown left with the withheld table")
+	}
+	if line := logs.String(); !strings.Contains(line, "reason=rows_over_bound ") {
+		t.Fatalf("no withheld line for the row bound: %s", line)
 	}
 }

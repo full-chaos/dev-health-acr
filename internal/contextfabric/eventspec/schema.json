@@ -14834,7 +14834,8 @@
         "presence": "required",
         "closed_vocabulary": [
           "repository_without_name",
-          "linked_repositories_over_bound"
+          "linked_repositories_over_bound",
+          "rows_over_bound"
         ]
       },
       {
@@ -14852,7 +14853,7 @@
         "key": "bound",
         "type": "int",
         "presence": "conditional",
-        "applicability": "written when reason=linked_repositories_over_bound"
+        "applicability": "written when reason=linked_repositories_over_bound or reason=rows_over_bound"
       },
       {
         "key": "request_id",

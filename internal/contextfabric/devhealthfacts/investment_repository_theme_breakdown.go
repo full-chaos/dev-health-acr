@@ -270,5 +270,14 @@ func (p *InvestmentProvider) teamRepositoryThemeBreakdown(ctx context.Context, o
 		return contextfabric.FactValue{}, false, nil
 	}
 	table, ok := repositoryThemeBreakdownTable(links, themeEffort, bound.effectiveGrain(grainDaily))
+	// Past the table's row bound (64 repositories × 5 themes) the table is
+	// withheld, never cut: a cut table is not the team's effort, and a table
+	// past its bound would make the whole fact invalid (Codex r1 on #1962).
+	if ok && len(table.Rows) > contractsv1.ContextFabricClaimedFactRepositoryFlowMaxRows {
+		slog.InfoContext(ctx, "devhealthfacts.repository_theme_breakdown_withheld", append([]any{
+			"reason", "rows_over_bound", "team", contextfabric.SanitizeLogAttr(teamID), "bound", contractsv1.ContextFabricClaimedFactRepositoryFlowMaxRows,
+		}, requestIDLogAttrs(ctx)...)...)
+		return contextfabric.FactValue{}, false, nil
+	}
 	return table, ok, nil
 }
