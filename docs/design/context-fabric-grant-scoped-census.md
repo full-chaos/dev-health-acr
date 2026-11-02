@@ -150,8 +150,39 @@ no oracle.
 - **What keeps today's behaviour:** a census that was not complete, a closure mismatch,
   an undecided narrowing, two handles, a non-current axis, project-only, and a handle
   the question does not bind. None of them proved anything.
-- **A committed turn** takes no sentence here: a zero beside a committed repository is
-  CHAOS-12523.
+- **A committed turn:** a zero beside a committed repository is below.
+
+## A handle beside a committed repository (CHAOS-12523)
+
+A question that names a handle is answered about that handle, or says why not. The
+round runs beside a committed repository, but it cannot decide this: an anchor-only
+count of another kind reads as a second satisfier, so the subject used to commit only
+in a repository that held no other census kind. So `commitNamedHandle`, after every
+exit of the resolver, runs a keyed census for the question's handle: anchored on the
+repository for a pull request or a CI run, and across the grant for a work item,
+which has no repository column.
+
+What the rule does turns on what the turn says the answer is about: the frame's
+expected kind, which the model's `requested_subject_kind` fills, or a lone
+`expected_kinds`.
+
+| Turn | Census | Result |
+| --- | --- | --- |
+| Sends the handle, or states its kind | 1 | the subject commits beside the repository |
+| | 0 | the repository is demoted, near matches listed, the absence sentence, no option for the handle. Nothing reaches synthesis |
+| | several, or not complete | the repository is demoted, a complete count is listed |
+| States no kind | 1 | the subject commits beside the repository |
+| | 0 | the repository's answer stands, and the engine appends the absence sentence after synthesis |
+| | not complete | the repository's answer stands, no sentence |
+| States another kind, a cohort, no handle | | untouched |
+
+- **A 0 beside a repository proves an absence in that repository only.** The subject may
+  be in another one you can read, so the sentence is the scope's.
+  A work item's census covers all you can read, so it takes the general sentence, or
+  Sentence A for a restricted caller.
+- **A work item commits beside the repository with no claim about a link.** A key names
+  one item. CHAOS-12505 holds the link check.
+- **Not here:** a team beside a handle and two handles are CHAOS-12557.
 
 ## Gates
 

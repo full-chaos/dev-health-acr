@@ -126,6 +126,35 @@ func observeTurnAs(t *testing.T, world grantWorld, principal storage.Principal, 
 // observeTurnWith is observeTurnAs with the request's candidate budget.
 func observeTurnWith(t *testing.T, world grantWorld, principal storage.Principal, extra map[string]graphrank.CandidateNode, budget int) grantObservation {
 	t.Helper()
+	return observeShapedTurn(t, world, principal, extra, budget, nil, nil)
+}
+
+// observeBesideRepository asks about the handle in the inside repository, which
+// commits by an exact hint, as a confirmed receipt does. frame says what the turn
+// states of the handle's kind.
+func observeBesideRepository(t *testing.T, world grantWorld, frame *contextfabric.QuestionFrame) grantObservation {
+	t.Helper()
+	repository := world.insideGitHub
+	id := "repository:" + repository.id
+	node := graphrank.CandidateNode{UUID: "node-" + id, Name: repository.slug, Relevance: graphrank.Normalized(0.9), Attributes: map[string]interface{}{
+		"canonical_id": id, "subject_kind": string(contextfabric.SubjectRepository), "label": repository.slug,
+		"evidence_refs": []string{"evidence_identity_1234"}, "authorization_repositories": []string{repository.slug},
+	}}
+	principal := userprincipal.Narrowed(t, world.org, []string{"acme/*", "group/*"}, []string{world.insideGitHub.slug, world.insideGitLab.slug})
+	return observeShapedTurn(t, world, principal, map[string]graphrank.CandidateNode{id: node}, 10, frame, func(request *contextfabric.InvestigationRequest, deps *graphrank.ResolveDeps) {
+		request.Question = "is pull request 5063 in " + repository.slug + " ready to merge?"
+		request.RequestedScope.SubjectHints = []contextfabric.SubjectHint{{Kind: contextfabric.SubjectRepository, ID: id, Label: repository.slug, Source: "workbench"}}
+		deps.HandleGrammarChecker = func(kind contextfabric.SubjectKind, patternID, value string) (string, bool) {
+			if !graphrank.ValidateHandleGrammar(kind, patternID, value) {
+				return "", false
+			}
+			return graphrank.HandleSourceColumn(kind, patternID)
+		}
+	})
+}
+
+func observeShapedTurn(t *testing.T, world grantWorld, principal storage.Principal, extra map[string]graphrank.CandidateNode, budget int, frame *contextfabric.QuestionFrame, edit func(*contextfabric.InvestigationRequest, *graphrank.ResolveDeps)) grantObservation {
+	t.Helper()
 	nodes := map[string]graphrank.CandidateNode{}
 	for _, repository := range []grantRepository{world.insideGitHub, world.insideGitLab, world.outsideGitHub, world.outsideGitLab} {
 		nodes[grantCanonicalID(world, repository)] = grantCandidateNode(world, repository)
@@ -167,7 +196,10 @@ func observeTurnWith(t *testing.T, world grantWorld, principal storage.Principal
 		Shape: contextfabric.ShapeOpen, RequestedJudgment: "status", SubjectTerms: []string{grantTerm},
 		TimeContext: contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent}, FactRequirements: []contextfabric.FactRequirement{{Kind: contextfabric.FactStatus}},
 	}
-	resolution, offers, bases, digests, err := graphrank.ResolveSubjectsWithCommitBasis(context.Background(), principal, request, interpreted, deps, nil, nil, nil, "")
+	if edit != nil {
+		edit(&request, &deps)
+	}
+	resolution, offers, bases, digests, err := graphrank.ResolveSubjectsWithCommitBasis(context.Background(), principal, request, interpreted, deps, nil, nil, frame, "")
 	if err != nil {
 		t.Fatalf("ResolveSubjectsWithCommitBasis: %v", err)
 	}
@@ -355,6 +387,35 @@ func anOutsideSatisfierIsNeverCountedNamedOrOffered(t *testing.T, build grantWor
 	if rounds := tracer.stage("evidence_round"); len(rounds) != 1 || rounds[0].ShadowOutcome != string(graphrank.ShadowWouldNoMatch) {
 		t.Fatalf("evidence_round = %+v, want would_no_match", rounds)
 	}
+	aHandleBesideARepositoryFollowsNoRowOutsideIt(t, build)
+}
+
+// CHAOS-12523: a 0 beside a repository is a 0 in that repository. Rows outside the
+// grant change nothing, and neither does the number in another repository of the
+// grant: the sentence reads no wider than the repository.
+func aHandleBesideARepositoryFollowsNoRowOutsideIt(t *testing.T, build grantWorldBuilder) {
+	t.Helper()
+	kind := contextfabric.SubjectPullRequest
+	stated := &contextfabric.QuestionFrame{
+		Goals:             []contextfabric.InvestigationGoal{contextfabric.GoalAssessState},
+		SubjectExpression: contextfabric.SubjectExpression{Kind: contextfabric.SubjectExpressionNamed, Named: &contextfabric.NamedSubjectExpression{Terms: []string{grantTerm}, ExpectedKind: &kind}},
+	}
+	world := build(t, "beside a repository")
+	before := observeBesideRepository(t, world, stated)
+	beforeUnstated := observeBesideRepository(t, world, nil)
+	for _, repository := range []grantRepository{world.outsideGitHub, world.outsideGitLab, world.insideGitLab} {
+		world.add(t, repository)
+	}
+	after := observeBesideRepository(t, world, stated)
+	assertSameTurn(t, before, after)
+	if len(after.resolution.Committed) != 0 || after.resolution.CensusLimitation != contractsv1.ContextFabricCensusAbsentInScopeLimitation {
+		t.Fatalf("stated: committed %v limitation %q, want the repository demoted and the scope's sentence", after.resolution.Committed, after.resolution.CensusLimitation)
+	}
+	unstated := observeBesideRepository(t, world, nil)
+	assertSameTurn(t, beforeUnstated, unstated)
+	if len(unstated.resolution.Committed) != 1 || unstated.resolution.Committed[0].Kind != contextfabric.SubjectRepository || unstated.resolution.CensusLimitation != contractsv1.ContextFabricCensusAbsentInScopeLimitation {
+		t.Fatalf("unstated: committed %v limitation %q, want the repository and the scope's sentence", unstated.resolution.Committed, unstated.resolution.CensusLimitation)
+	}
 }
 
 func anInsideSatisfierBesideAnOutsideOneCommits(t *testing.T, build grantWorldBuilder) {
@@ -459,6 +520,9 @@ func (m *grantStatementModel) Query(ctx context.Context, statement string, bindi
 	var keys []string
 	for _, row := range m.rows {
 		if values["census_org_id"] != row.org || values["census_handle_pr_number"] != grantNumber {
+			continue
+		}
+		if anchor, anchored := values["census_anchor_id"]; anchored && anchor != row.repository.id {
 			continue
 		}
 		if !filterAdmits(statement, values, "census_grant", row.repository.slug) || !filterAdmits(statement, values, "census_repo", row.repository.slug) {

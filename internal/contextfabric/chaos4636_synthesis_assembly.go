@@ -468,6 +468,13 @@ func (e *Engine) synthesizeAndAssemble(ctx context.Context, principal storage.Pr
 		result.LimitationsDisplaced += displaced
 		result.Coverage.Partial = true
 	}
+	// CHAOS-12523: an answer about a repository says why a handle the question named
+	// beside it is not in the answer. The engine states it, so it stands on no model.
+	if contractsv1.IsContextFabricCensusAbsenceLimitation(resolution.CensusLimitation) {
+		composed, displaced := appendBoundedLimitations(result.Limitations, []string{resolution.CensusLimitation})
+		result.Limitations = composed
+		result.LimitationsDisplaced += displaced
+	}
 	result = withMemberStatusOutsideSet(result, graphContext.MemberStatusOutsideSet)
 	result = withMemberStatusPoolCut(result, graphContext.MemberStatusPoolCut)
 	result = withMemberStatusNoneReached(result, graphContext.MemberStatusOutsideSet, graphContext.MemberStatusPoolCut, graphContext.Cohort, params.ScopeAnchorKind)
