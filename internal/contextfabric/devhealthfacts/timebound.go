@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
+	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 	"github.com/full-chaos/dev-health-go/readers"
 )
 
@@ -96,6 +97,10 @@ const outOfRetentionReason = "devhealthfacts: no rows were retained at or before
 //
 // A fixed literal, never interpolating a subject, an id, or a count --
 // this string reaches a public answer's Coverage.
+// statedWindowEmptyReason names a read a stated window left empty: the source may
+// hold older rows, and they are not data for that window. A fixed literal.
+const statedWindowEmptyReason = "devhealthfacts: the source held no rows in the stated window"
+
 const emptyReadReason = "devhealthfacts: the source was reached and held no rows for the requested subjects"
 
 // retentionState classifies a query's row count into the source state its
@@ -132,6 +137,9 @@ func (b factTimeBound) retentionState(rowCount int) (contextfabric.SourceState, 
 	}
 	if b.active && !b.currentAxis {
 		return contextfabric.SourceNoData, outOfRetentionReason
+	}
+	if b.statedWindow {
+		return contextfabric.SourceNoData, statedWindowEmptyReason
 	}
 	return contextfabric.SourceNoData, emptyReadReason
 }
@@ -202,6 +210,40 @@ type factTimeBound struct {
 	// no historical disclosure is added. This is how every window-bound rollup
 	// reads the current axis (resolveRollupWindow beside an inactive bound).
 	currentAxis bool
+	// statedWindow says this current-axis bound is the window the question
+	// stated (statedWindowBound): an empty read is then a statement about that
+	// window, and says so.
+	statedWindow bool
+}
+
+// statedWindowBound is the bound of a dated read on the current axis
+// (CHAOS-12536). A dated read takes a subject's latest row, however old, so
+// with no bound a 113-day-old row read as "available" under a stated 90-day
+// window. A window the question stated bounds the read instead: a subject with
+// no row in it has no data in that window, never an old number under it.
+//
+// bound is what resolveTimeBound gave. With no stated window, or with the
+// all_time window, or on any other axis it stands. An entity read (the status of
+// one run, deployment, incident or pull request) has no latest row to pick and
+// never takes this bound.
+//
+// A window that runs up to today holds today's rows. Its stated end is 00:00
+// today (relativeWindowBounds), and a row dated today is new, not out of date:
+// an exclusive end would read the newest row of a just-synced source as no data
+// (check 12). A window that ended in the past keeps its exclusive end, so the
+// read takes the latest row inside it.
+func statedWindowBound(query contextfabric.FactQuery, bound factTimeBound) factTimeBound {
+	evidence := query.Time.EvidenceWindow
+	if query.Time.Axis != contextfabric.TemporalCurrent || evidence == nil || evidence.Start == nil || evidence.End == nil ||
+		evidence.RelativeID == contractsv1.ContextFabricRelativeWindowAllTime {
+		return bound
+	}
+	window := factTimeBound{active: true, hasStart: true, start: evidence.Start.UTC(), end: evidence.End.UTC(), endExclusive: true, currentAxis: true, statedWindow: true}
+	now := clock().UTC()
+	if !window.end.Before(time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, time.UTC)) {
+		window.end, window.endExclusive = now, false
+	}
+	return window
 }
 
 // ownership is the bound an ownership read takes: a current-axis window leaves
