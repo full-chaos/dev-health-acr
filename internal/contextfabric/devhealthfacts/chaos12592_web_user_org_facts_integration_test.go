@@ -3,8 +3,8 @@ package devhealthfacts_test
 // CHAOS-12592, EXECUTED against a real ClickHouse: the organization investment
 // fact is served to the principal every web user reaches the provider with (a
 // "*" grant kept by the access read), refused to a repository-bound credential,
-// and never counts a row of another organization, even under the same
-// repository slug.
+// never counts a row of another organization, even under the same repository
+// slug, and an unknown repository reads as missing, never as zero.
 
 import (
 	"context"
@@ -64,6 +64,29 @@ func TestAWebUserIsServedTheOrganizationInvestmentFactAgainstRealClickHouse(t *t
 	}
 	if units := *fact.Fields["work_unit_count"].Integer; units != 2 {
 		t.Fatalf("work_unit_count = %d, want org A's 2: a row of org B counted", units)
+	}
+	// An unknown repository reads as missing, never as zero or healthy (North
+	// Star check 12): org B's repository, and a repository no organization has.
+	// The read is scoped to org A, so neither is a fact, and the result says why.
+	for name, unknown := range map[string]string{"org B's repository of the same slug": repoUUID(orgB + "/svc"), "a repository no organization has": repoUUID("acme/never")} {
+		result, err := provider.ReadFacts(ctx, userprincipal.WebUser(t, orgA), contextfabric.FactQuery{
+			Time: investmentAllHistory(), Kind: contextfabric.FactInvestment,
+			Subjects: []contextfabric.SubjectRef{{Kind: contextfabric.SubjectRepository, CanonicalID: "repository:" + unknown}},
+		})
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		if len(result.Facts) != 0 {
+			t.Fatalf("%s: %d facts (%+v), want none: an unknown repository is not a fact, and never a zero", name, len(result.Facts), result.Facts[0].Fields)
+		}
+		why := result.Reason
+		for _, reason := range result.SubjectReasons {
+			why += " " + reason
+		}
+		if strings.TrimSpace(why) == "" {
+			t.Fatalf("%s: state %q with no reason: a missing repository must say why it holds no fact", name, result.State)
+		}
+		t.Logf("%s: state %q, reason %q", name, result.State, strings.TrimSpace(why))
 	}
 	refused := read(userprincipal.Narrowed(t, orgA, []string{"acme/svc"}, []string{"acme/svc"}))
 	if len(refused.Facts) != 0 || refused.State != contextfabric.SourceNotApplicable || !strings.Contains(refused.Reason, "repository-bound") {
