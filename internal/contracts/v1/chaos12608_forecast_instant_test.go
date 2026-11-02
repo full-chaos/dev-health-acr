@@ -143,6 +143,20 @@ func TestThePublishedSchemaRefusesAZonelessInstant(t *testing.T) {
 	if !valid(instantSummaryClaim("2026-11-02T04:00:00Z", "2026-11-20")) {
 		t.Error("a UTC instant and a full-date refused by the schema")
 	}
+	// CHAOS-12634: the item target is a count in the schema too.
+	target := instantSummaryClaim("2026-11-02T04:00:00Z", "")
+	for _, value := range []int64{0, 40} {
+		count := value
+		target.CompletionForecast.TargetItems = &count
+		if !valid(target) {
+			t.Errorf("target_items %d refused by the schema", value)
+		}
+	}
+	negative := int64(-1)
+	target.CompletionForecast.TargetItems = &negative
+	if valid(target) {
+		t.Error("target_items -1 admitted by the schema")
+	}
 	for _, tc := range []struct{ computedAt, p50Date string }{
 		{"2026-11-02 04:00:00.000", ""},
 		{"2026-11-02T04:00:00+02:00", ""},
