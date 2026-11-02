@@ -42,7 +42,15 @@ import (
 // (windowDefaultPolicy), or the binder's post-pass rules change in any way
 // that could change what INFERRED window an otherwise-identical question
 // receives.
-const WindowInferenceVersion = "win_v1"
+//
+// win_v1 -> win_v2 (CHAOS-12603): the interpretation model's window_class
+// pick now reaches ClassifyWindow (carryWindowPick); under win_v1 every turn
+// classified with an empty pick and fell back by shape.
+//
+// win_v2 -> win_v3 (CHAOS-12595): a current-state question about named
+// handles classifies as state_snapshot (classifyWindowFor) and draws no
+// default window.
+const WindowInferenceVersion = "win_v3"
 
 // windowDefaultPolicy pins the DW0-ruled default-width candidate (design
 // brief §9 decision matrix row DW0, chris: "quarter-to-year... quarter is
@@ -843,13 +851,21 @@ func composeEffectiveWindow(interpretation InterpretedQuestion, requestWindow *c
 // window it infers from that period even when the interpreter's window class
 // would otherwise refuse to guess one.
 func composeEffectiveWindowFor(interpretation InterpretedQuestion, requestWindow *contractsv1.ContextFabricEffectiveEvidenceWindow, binderProposal WindowBindOutcome, priorWindow windowPriorProposal, now time.Time, clarificationDeclined bool) *contractsv1.ContextFabricEffectiveEvidenceWindow {
+	return composeEffectiveWindowForFrame(interpretation, nil, requestWindow, binderProposal, priorWindow, now, clarificationDeclined)
+}
+
+// composeEffectiveWindowForFrame is composeEffectiveWindowFor with the
+// accepted frame, so the class decision can read the handle-state signal
+// (classifyWindowFor, CHAOS-12595). A nil frame is exactly
+// composeEffectiveWindowFor.
+func composeEffectiveWindowForFrame(interpretation InterpretedQuestion, frame *QuestionFrame, requestWindow *contractsv1.ContextFabricEffectiveEvidenceWindow, binderProposal WindowBindOutcome, priorWindow windowPriorProposal, now time.Time, clarificationDeclined bool) *contractsv1.ContextFabricEffectiveEvidenceWindow {
 	if interpretation.TimeContext.Axis != TemporalCurrent {
 		return nil
 	}
 	if requestWindow != nil {
 		return requestWindow
 	}
-	outcome := ClassifyWindow(interpretation, interpretation.WindowClass, interpretation.WindowConfidence)
+	outcome := classifyWindowFor(interpretation, frame)
 	relativeID, ok := DefaultRelativeID(outcome, windowDefaultPolicy)
 	// A period the caller STATED in the question (the binder bound exactly one
 	// role-checked span that states a TRAILING window: "in the last month",
@@ -930,7 +946,7 @@ func questionStatesWindow(interpretation InterpretedQuestion, frame *QuestionFra
 	if periodShapeOf(frame) != periodShapeCurrent {
 		return false
 	}
-	outcome := ClassifyWindow(interpretation, interpretation.WindowClass, interpretation.WindowConfidence)
+	outcome := classifyWindowFor(interpretation, frame)
 	if _, ok := DefaultRelativeID(outcome, windowDefaultPolicy); ok {
 		return true
 	}

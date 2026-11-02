@@ -1406,7 +1406,21 @@ func (r *Runtime) interpretQuestionWithSample(ctx context.Context, principal sto
 	// with ParseInterpretationOutputFamily (exchange_support.go) so an
 	// alternate transport's receipt carries an IDENTICAL capture.
 	applyInterpretationCaptures(&receipt, output)
+	carryWindowPick(&interpreted, receipt)
 	return interpreted, receipt, nil
+}
+
+// carryWindowPick (CHAOS-12603) puts the sanitized window_class and
+// window_confidence the captures wrote on the receipt onto the interpretation
+// the engine classifies the window from. CHAOS-3900 W1 added these fields to
+// InterpretedQuestion and composeEffectiveWindow reads them, but nothing set
+// them, so ClassifyWindow saw an empty pick on every turn and fell back by
+// shape. The receipt values are the sanitized ones: an out-of-vocabulary class
+// is already unset there (with window_class_unrecognized), so it stays unset
+// here, and Validate never sees a raw model string.
+func carryWindowPick(interpreted *contextfabric.InterpretedQuestion, receipt contextfabric.ModelExecutionReceipt) {
+	interpreted.WindowClass = receipt.WindowClass
+	interpreted.WindowConfidence = receipt.WindowConfidence
 }
 
 // applyInterpretationCaptures runs the three sanitizers over one validated
@@ -3701,16 +3715,17 @@ type interpretationOutput struct {
 	FactRequirements    []factRequirementOutput `json:"fact_requirements"`
 	ClarificationNeeded bool                    `json:"clarification_needed"`
 	ClarificationReason string                  `json:"clarification_reason,omitempty"`
-	// WindowClass/WindowConfidence (CHAOS-3900 W0, SHADOW ONLY): the
-	// model's one-enum-pick classification of the question's evidence-
-	// window shape (design brief §2.1). Deliberately NOT part of
-	// contextfabric.InterpretedQuestion/toDomain -- sanitized directly in
-	// InterpretQuestion (below toDomain's own call site) onto
-	// ModelExecutionReceipt, so an out-of-vocab pick can never fail
-	// interpreted.Validate() (the F5 control-flow fix: interpreted.Validate()
-	// runs inside toDomain, before any caller-side fallback could run, so
-	// closed-enum enforcement must sit strictly before it, never inside
-	// it). The model never emits a timestamp for this -- only the class
+	// WindowClass/WindowConfidence (CHAOS-3900): the model's one-enum-pick
+	// classification of the question's evidence-window shape (design brief
+	// §2.1). Still NOT read by toDomain -- sanitized after it, in
+	// InterpretQuestion, onto ModelExecutionReceipt, so an out-of-vocab pick
+	// can never fail interpreted.Validate() (the F5 control-flow fix:
+	// interpreted.Validate() runs inside toDomain, before any caller-side
+	// fallback could run, so closed-enum enforcement must sit strictly
+	// before it, never inside it). Since CHAOS-12603 carryWindowPick then
+	// copies the SANITIZED pick from the receipt onto the interpretation,
+	// which is what W1's composeEffectiveWindow reads; before that the W0
+	// shadow-only wiring left the W1 field permanently empty. The model never emits a timestamp for this -- only the class
 	// pick; the engine-side post-pass (graphrank.ClassifyWindow) owns bounds.
 	WindowClass      string `json:"window_class,omitempty" jsonschema:"enum=trend_assessment,enum=recent_activity_lookup,enum=state_snapshot,enum=explicit_window"`
 	WindowConfidence string `json:"window_confidence,omitempty" jsonschema:"enum=high,enum=low"`
