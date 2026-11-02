@@ -105,6 +105,16 @@ func TestARawEdgeFactReadsInReaderWords(t *testing.T) {
 		{"linear:CHAOS-2320 is a human-authored escalation note", "LINKS_PULL_REQUEST", item, pr, "linear:CHAOS-2320 is a human-authored escalation note"},
 		{"a title that says linear:CHAOS-2320", "BLOCKS", pr, item, "a title that says linear:CHAOS-2320"},
 		{"linear:CHAOS-2320 links pull request PR #872", "", item, pr, "linear:CHAOS-2320 links pull request PR #872"},
+		// A custom fact that starts or ends like the writer's composition is
+		// still a custom fact: only the whole composition is repaired (codex r2).
+		{"linear:CHAOS-2320 links pull request PR #872; escalation note", "LINKS_PULL_REQUEST", item, pr, "linear:CHAOS-2320 links pull request PR #872; escalation note"},
+		{"escalation note: belongs to project c67b1602-31db-4422-8dec-a4a02bbcc513", "BELONGS_TO_PROJECT", item, named, "escalation note: belongs to project c67b1602-31db-4422-8dec-a4a02bbcc513"},
+		// The writer after CHAOS-12619 names a work item end by its key, which
+		// is not the endpoint's title: its raw project end is still repaired.
+		{"CHAOS-2320 belongs to project c67b1602-31db-4422-8dec-a4a02bbcc513", "BELONGS_TO_PROJECT", item, named, "CHAOS-2320 belongs to project Investment View Documentation"},
+		// An end the writer named by the endpoint's own label stands beside a
+		// repaired end.
+		{"Generate taxonomy table belongs to project c67b1602-31db-4422-8dec-a4a02bbcc513", "BELONGS_TO_PROJECT", item, stub, "Generate taxonomy table belongs to project"},
 	} {
 		if got := contextfabric.RepairRawEdgeFact(tc.fact, tc.relation, tc.from, tc.to); got != tc.want {
 			t.Errorf("%q = %q, want %q", tc.fact, got, tc.want)
