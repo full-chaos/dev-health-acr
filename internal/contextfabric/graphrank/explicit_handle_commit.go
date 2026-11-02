@@ -180,8 +180,14 @@ func unresolvedNamedHandle(ctx context.Context, principal storage.Principal, req
 	// keeps today's answer (lead ruling on #1920, the same side as CHAOS-12463
 	// ruling 3): a gate that cannot read changes nothing. The refusal is already
 	// traced on evidence_census_commit. A handle the caller sent keeps the explicit
-	// rule's demotion below, as before this change.
+	// rule's demotion below, as before this change. A committed subject of the
+	// handle's kind that is not the handle still goes: the question names another
+	// one, so it is not what the caller asked about (codex r2 on #1920). A kind with
+	// no graph extractor (a work item) cannot be told apart here, so it stays.
 	if !census.complete && len(request.SubjectHandles) == 0 {
+		if _, extractable := handleGraphExtractors[handle.Kind]; extractable {
+			return dropOtherSubjectsOfKind(resolution, bases, digests, handle.Kind, handle.Value, contextfabric.SubjectRef{}), nil
+		}
 		return resolution, nil
 	}
 	absent := census.complete && census.outcome.Count == 0

@@ -594,3 +594,30 @@ func TestAnotherHandleThanTheQuestionsIsNotListed(t *testing.T) {
 		t.Fatalf("candidates = %v, want neither listed under CHAOS-99", got)
 	}
 }
+
+// A census that cannot read keeps the repository's answer, but not a committed
+// subject of the handle's kind that is not the handle: the question names pull
+// request 747, so pull request 5 is not what the caller asked about (codex r2 on
+// #1920, executed).
+func TestAFailedCensusDropsACommittedSubjectThatIsNotTheHandle(t *testing.T) {
+	t.Parallel()
+	repository := contextfabric.SubjectRef{Kind: contextfabric.SubjectRepository, CanonicalID: "repository:r-1", Label: "acme/r-1"}
+	other := contextfabric.SubjectRef{Kind: contextfabric.SubjectPullRequest, CanonicalID: "pull_request:r-1:5", Label: "PR 5"}
+	resolution := contextfabric.SubjectResolution{
+		Committed:  []contextfabric.SubjectRef{repository, other},
+		Candidates: []contextfabric.SubjectCandidate{{Subject: repository, State: contextfabric.ResolutionCommitted}, {Subject: other, State: contextfabric.ResolutionCommitted}},
+	}
+	bases := contextfabric.CommitBasisSet{}
+	digests := contextfabric.CommitDecisionDigestSet{}
+	handle := contractsv1.ContextFabricRequestedHandle{Kind: contextfabric.SubjectPullRequest, PatternID: "pull_request_number", Value: "747"}
+	request := contextfabric.InvestigationRequest{Question: "Is pull request 747 ready in acme/r-1?"}
+	got, _ := unresolvedNamedHandle(context.Background(), storage.Principal{OrgID: "org_1"}, request, ResolveDeps{}, resolution, bases, digests, handle, handleOwed, true, namedCensus{})
+	if ids := besideCommittedIDs(got); !slices.Equal(ids, []string{repository.CanonicalID}) || got.CensusLimitation != "" {
+		t.Fatalf("committed %v limitation %q, want the repository alone and no sentence", ids, got.CensusLimitation)
+	}
+	for _, candidate := range got.Candidates {
+		if candidate.Subject == other && candidate.State == contextfabric.ResolutionCommitted {
+			t.Fatal("pull request 5 is still a committed candidate")
+		}
+	}
+}
