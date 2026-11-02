@@ -125,3 +125,63 @@ func claimedTableFact(claimID string, shape contractsv1.ContextFabricFactTableSh
 		},
 	}
 }
+
+// TestAClaimCarriesAWholeDistribution (Codex #1940 r1, P2): attaching a
+// canonical fact's rows to its claim used the 64-row cap for every table, so a
+// 359-row distribution reached the claim cut to 64 and still declared a
+// distribution, and the answer-size cut never withheld it. A distribution is
+// attached whole, beside the fact's daily series; one past its own cap is not
+// attached at all.
+func TestAClaimCarriesAWholeDistribution(t *testing.T) {
+	daily := FactTable{Shape: FactTableTimeSeries, Key: []string{"day"}, Measures: []string{"backlog_size"}, Rows: []FactValueRow{
+		{Fields: map[string]FactValue{"day": StringFactValue("2026-11-01"), "backlog_size": IntegerFactValue(4)}},
+		{Fields: map[string]FactValue{"day": StringFactValue("2026-11-02"), "backlog_size": IntegerFactValue(5)}},
+	}}
+	fact := func(distribution FactTable) CanonicalFact {
+		return CanonicalFact{
+			Kind:    FactWorkload,
+			Subject: SubjectRef{Kind: SubjectTeam, CanonicalID: "team:chaos", Label: "CHAOS"},
+			Fields: map[string]FactValue{
+				"forecast_p50_days":       IntegerFactValue(12),
+				"daily_workload":          TableFactValue(daily),
+				"completion_distribution": TableFactValue(distribution),
+			},
+		}
+	}
+	claim := func() ClaimedFact {
+		p50 := int64(12)
+		return ClaimedFact{
+			ClaimID: "claim_workload_chaos", Kind: contractsv1.ContextFabricFactKind(FactWorkload),
+			Subject: contractsv1.ContextFabricSubjectRef{Kind: contractsv1.ContextFabricSubjectTeam, CanonicalID: "team:chaos", Label: "CHAOS"},
+			Field:   "forecast_p50_days", Value: contractsv1.ContextFabricScalarValue{Integer: &p50},
+		}
+	}
+
+	whole := fact(distributionFactTable(359))
+	claims, _, _, truncated := attachCanonicalRows([]ClaimedFact{claim()}, []CanonicalFact{whole})
+	if truncated || len(claims[0].Rows) != 359 || claims[0].Table == nil || claims[0].Table.Shape != contractsv1.ContextFabricFactTableShapeDistribution {
+		t.Fatalf("359-row distribution: rows = %d, table = %+v, truncated = %t; want it whole", len(claims[0].Rows), claims[0].Table, truncated)
+	}
+	if len(claims[0].TimeSeriesRows) != 2 || claims[0].TimeSeriesTable == nil {
+		t.Fatalf("the daily series beside it: %d rows, table %+v", len(claims[0].TimeSeriesRows), claims[0].TimeSeriesTable)
+	}
+	if err := claims[0].Validate(); err != nil {
+		t.Fatalf("the claim with a whole distribution: Validate() = %v", err)
+	}
+
+	over := distributionFactTable(MaxFactDistributionRows)
+	over.Rows = append(over.Rows, FactValueRow{Fields: map[string]FactValue{
+		"day": IntegerFactValue(int64(MaxFactDistributionRows)), "runs": IntegerFactValue(1), "cumulative_share": NumberFactValue(1),
+	}})
+	claims, _, _, truncated = attachCanonicalRows([]ClaimedFact{claim()}, []CanonicalFact{fact(over)})
+	if !truncated || claims[0].Rows != nil || claims[0].Table != nil {
+		t.Fatalf("a distribution past its cap: rows = %d, table = %+v, truncated = %t; want it withheld whole and reported", len(claims[0].Rows), claims[0].Table, truncated)
+	}
+
+	breakdown := distributionFactTable(maxFactValueRows + 1)
+	breakdown.Shape = FactTableBreakdown
+	claims, _, _, truncated = attachCanonicalRows([]ClaimedFact{claim()}, []CanonicalFact{fact(breakdown)})
+	if !truncated || len(claims[0].Rows) != maxFactValueRows {
+		t.Fatalf("a breakdown past 64: rows = %d, truncated = %t; want it cut to 64 as before", len(claims[0].Rows), truncated)
+	}
+}

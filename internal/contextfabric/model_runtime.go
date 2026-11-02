@@ -1474,6 +1474,17 @@ func canonicalFieldRows(fact CanonicalFact) (rows []contractsv1.ContextFabricCla
 		}
 		rows = append(rows, converted)
 	}
+	// CHAOS-12607 (Codex #1940 r1): a distribution has its own cap and is
+	// never cut -- a shorter completion distribution is a different
+	// forecast, so one past its cap is not attached at all (reported, and
+	// with no rows the claim carries no declaration either). Every other
+	// table keeps the 64-row cut.
+	if table := fact.Fields[rowsField].Table; table != nil && table.Shape == FactTableDistribution {
+		if len(rows) > contractsv1.ContextFabricClaimedFactDistributionMaxRows {
+			return nil, true
+		}
+		return rows, false
+	}
 	if len(rows) > contractsv1.ContextFabricClaimedFactMaxRows {
 		return rows[:contractsv1.ContextFabricClaimedFactMaxRows], true
 	}

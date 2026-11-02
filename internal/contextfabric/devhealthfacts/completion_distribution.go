@@ -31,8 +31,9 @@ const (
 	// distribution of zeros.
 	completionDistributionNotStored = "not_stored"
 	// completionDistributionNoRunWithinHorizon: every run reached the
-	// horizon. No table is served, because its one row would draw a flat 0%
-	// line; unfinished_runs says how many runs there were.
+	// horizon (bins below it hold no run). No table is served, because it
+	// would draw a flat 0% line; unfinished_runs says how many runs there
+	// were.
 	completionDistributionNoRunWithinHorizon = "no_run_within_horizon"
 	// completionDistributionOverLimit: more distinct days than a
 	// distribution table carries. No table is served; a shorter curve would
@@ -47,8 +48,9 @@ const (
 	// reads). Nothing is attached rather than a different forecast's detail.
 	completionDistributionUnmatched = "unmatched"
 	// completionDistributionMalformed: the stored days are not strictly
-	// ascending. No producer writes that (ops builds the histogram sorted and
-	// distinct); the table is withheld rather than served out of order, and
+	// ascending, or every count is zero. No producer writes either (ops
+	// builds the histogram sorted and distinct, from its runs); the table is
+	// withheld rather than served out of order or as a curve of no runs, and
 	// the fact keeps its percentiles.
 	completionDistributionMalformed = "malformed"
 )
@@ -149,18 +151,27 @@ func completionDistributionState(row readers.CompletionForecastRow) string {
 	if stored > uint64(contextfabric.MaxFactDistributionRows) {
 		return completionDistributionOverLimit
 	}
-	bins, _ := completionBins(row.CompletionDaysValues, row.CompletionDaysCounts, forecastHorizonDays)
+	bins, unfinished := completionBins(row.CompletionDaysValues, row.CompletionDaysCounts, forecastHorizonDays)
 	for index := 1; index < len(bins); index++ {
 		if bins[index].Value <= bins[index-1].Value {
 			return completionDistributionMalformed
 		}
 	}
+	total := 0
 	for _, bin := range bins {
-		if bin.Value < forecastHorizonDays {
-			return completionDistributionAvailable
-		}
+		total += bin.Count
 	}
-	return completionDistributionNoRunWithinHorizon
+	switch {
+	case total == 0:
+		// No run at all: every count zero, which no producer writes.
+		return completionDistributionMalformed
+	case total == unfinished:
+		// Every run is at the horizon. A bin below it that no run reached
+		// is not a run that finished (Codex #1940 r1), and its table would
+		// be a flat 0% line.
+		return completionDistributionNoRunWithinHorizon
+	}
+	return completionDistributionAvailable
 }
 
 // completionDistributionTable is the served `distribution` table: one row

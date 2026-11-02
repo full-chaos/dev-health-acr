@@ -99,6 +99,11 @@ func TestEveryCompletionDistributionStateWithholdsWhatItCannotServe(t *testing.T
 		{"past the table bound", overRow, completionDistributionOverLimit, -1},
 		{"days not ascending", forecastRow([]uint16{12, 5}, []uint32{1, 1}), completionDistributionMalformed, -1},
 		{"a repeated day", forecastRow([]uint16{5, 5}, []uint32{1, 1}), completionDistributionMalformed, -1},
+		// Codex #1940 r1 P2: a bin below the horizon that no run reached is
+		// not a run that finished; every run is at the horizon.
+		{"zero runs below the horizon", forecastRow([]uint16{5, 12, 365}, []uint32{0, 0, 10000}), completionDistributionNoRunWithinHorizon, 10000},
+		// Every count zero: no run at all, which no producer writes.
+		{"every count zero", forecastRow([]uint16{5, 12}, []uint32{0, 0}), completionDistributionMalformed, -1},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
