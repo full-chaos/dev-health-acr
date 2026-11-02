@@ -442,6 +442,10 @@ func goVarName(e Event) string {
 		return "GraphCountCheckFinished"
 	case WindowClassification.ID:
 		return "WindowClassification"
+	case InferredWindowGate.ID:
+		return "InferredWindowGate"
+	case InterpretationTerms.ID:
+		return "InterpretationTerms"
 	default:
 		panic("eventspec: goVarName has no mapping for " + e.ID + " -- add one before regenerating")
 	}

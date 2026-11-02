@@ -390,7 +390,7 @@ func TestAChoiceRedeemedFromTheAnsweredResultPastAPromptIsServed(t *testing.T) {
 			// A different question carries no window, so the window gate asks.
 			second := continuingNeedTurn(needTurnRequest(fmt.Sprintf("request_chain_redeem_%t_two", redeem), false), one.result.ResultID)
 			second.Question = "And how has it trended?"
-			prompt := h.turn(second, substitutionResponse(substitutionRepoOne, "receipt_chain_prompt"))
+			prompt := h.turn(second, gatedBeyondWindow(substitutionResponse(substitutionRepoOne, "receipt_chain_prompt")))
 			if !resultIsPrompt(prompt.result) || prompt.result.WindowClarification == nil {
 				t.Fatalf("premise: turn two served %q, want a window prompt", prompt.result.Status)
 			}

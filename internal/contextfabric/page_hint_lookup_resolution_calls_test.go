@@ -35,7 +35,9 @@ func TestOneRequestHandsItsPageHintsToTheGraphExactlyOnce(t *testing.T) {
 
 	t.Run("gated: the offers-only resolution only", func(t *testing.T) {
 		t.Parallel()
-		graph := &acceptanceGraphReader{resolution: SubjectResolution{Candidates: []SubjectCandidate{}, Committed: []SubjectRef{}}, context: emptyGraphContext()}
+		// CHAOS-4451: the pass must find a question beyond the window, or the
+		// turn answers (TestAWindowOnlyAnswerMarksItsDecisiveResolutionAsReported).
+		graph := &acceptanceGraphReader{resolution: SubjectResolution{Candidates: []SubjectCandidate{}, Committed: []SubjectRef{}}, context: emptyGraphContext(), material: chaos4234GatedMaterial()}
 		engine := buildWindowGateEngine(t, &countingInterpreter{interpretation: bootstrapInterpretation()}, graph, newMapResultStore())
 		request := validInvestigationRequest() // no window: the class-default gate fires
 		request.RequestedScope.SubjectHints = pageContextHints()
@@ -79,6 +81,42 @@ func TestOneRequestHandsItsPageHintsToTheGraphExactlyOnce(t *testing.T) {
 			t.Fatalf("the decisive resolution got hints %#v, want the request's page hints", graph.lastRequest.RequestedScope.SubjectHints)
 		}
 	})
+}
+
+// CHAOS-4451: under the class-default gate, a turn whose offers-only pass
+// finds nothing beyond the window answers. It hands its page hints to the
+// graph twice -- the offers-only resolution, then the decisive one -- and the
+// decisive call carries WithPageHintLookupReported, so graphrank writes the
+// request's page_hint_lookup line once (graphrank/page_hint_lookup_test.go
+// pins that a marked call writes none, and that the two modes count the same).
+func TestAWindowOnlyAnswerMarksItsDecisiveResolutionAsReported(t *testing.T) {
+	t.Parallel()
+	project := acceptanceProject()
+	graph := &acceptanceGraphReader{
+		resolution: SubjectResolution{Candidates: []SubjectCandidate{}, Committed: []SubjectRef{project}},
+		context:    bootstrapGraphContext(project),
+	}
+	facts := factReaderFunc(func(context.Context, storage.Principal, CanonicalFactRequest) (CanonicalFactBundle, error) {
+		return bootstrapFactBundle(project), nil
+	})
+	engine := buildAcceptanceEngine(t, graph, facts, bootstrapInterpretation(), bootstrapDraft(project), newMapResultStore())
+	request := validInvestigationRequest() // no window: the class-default gate's pass runs
+	request.RequestedScope.SubjectHints = pageContextHints()
+
+	result, err := engine.Investigate(context.Background(), acceptancePrincipal(), request)
+	if err != nil {
+		t.Fatalf("Investigate() error = %v", err)
+	}
+	if result.Status == InvestigationClarificationRequired {
+		t.Fatalf("premise: status = %q; the window is the only question, so the turn answers", result.Status)
+	}
+	if graph.resolveCalls != 2 || !OffersOnlyResolution(graph.resolveCtxs[0]) || OffersOnlyResolution(graph.resolveCtxs[1]) {
+		t.Fatalf("ResolveSubjects calls = %d (offers-only: %v), want the offers-only pass then the decisive call", graph.resolveCalls, offersOnlyMarks(graph.resolveCtxs))
+	}
+	if PageHintLookupReported(graph.resolveCtxs[0]) || !PageHintLookupReported(graph.resolveCtxs[1]) {
+		t.Fatalf("reported marks = [%v %v], want [false true]: the offers-only pass writes the line, the decisive call does not",
+			PageHintLookupReported(graph.resolveCtxs[0]), PageHintLookupReported(graph.resolveCtxs[1]))
+	}
 }
 
 func offersOnlyMarks(ctxs []context.Context) []bool {
