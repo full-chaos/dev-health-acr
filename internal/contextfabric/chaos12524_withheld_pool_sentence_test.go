@@ -52,8 +52,11 @@ func TestTheWithheldPoolClarificationSentenceSaysWhatHappened(t *testing.T) {
 			t.Fatalf("sentence %q claims %q, which is false for a lexical pool or a window-only offer", clarificationRequiredLimitationWithheldPool, claim)
 		}
 	}
-	if !strings.Contains(clarificationRequiredLimitationWithheldPool, "offered options") {
+	if !strings.Contains(clarificationRequiredLimitationWithheldPool, "offered option") {
 		t.Fatalf("sentence %q does not point at the offers the clarification exists for", clarificationRequiredLimitationWithheldPool)
+	}
+	if len(clarificationRequiredLimitationWithheldPool) > len(clarificationRequiredLimitationOne) {
+		t.Fatalf("sentence is %d bytes, longer than the %d-byte one it restates on stored rows: a near-limit row could cross the byte cap", len(clarificationRequiredLimitationWithheldPool), len(clarificationRequiredLimitationOne))
 	}
 	if clarificationRequiredLimitationWithheldPool == noMatchLimitationOfferPoolEmptied {
 		t.Fatal("the clarification and the terminal must stay distinct: two arms with one status are told apart by their prose")

@@ -278,8 +278,10 @@ const (
 	// an explicit handle the question does not name. It names no subject and no
 	// term, and no match mechanism: the offer floor withholds a lexical candidate
 	// too. It points at the offers without promising that they name a subject,
-	// because a window option can be the only one (codex r1 on #1922).
-	clarificationRequiredLimitationWithheldPool = "No subject could be identified from the question on this turn, so no canonical facts were read. Use one of the offered options, or name the subject you mean."
+	// because a window option can be the only one (codex r1 on #1922). It is not
+	// longer than the sentence it replaces, so restating a stored row on read
+	// cannot push a near-limit result over the byte cap (codex r2 on #1922).
+	clarificationRequiredLimitationWithheldPool = "No subject could be identified from the question, so no canonical facts were read. Use an offered option, or name the subject you mean."
 	// noMatchLimitationOfferFloorEmptied marks the floor-emptied terminal in
 	// resolveTerminalStatus's own return; terminalResult replaces it with
 	// noMatchLimitationSubjectNotFound, which names the subject and the closest kinds.
