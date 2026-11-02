@@ -14,6 +14,9 @@ type workItemHandleRound struct {
 	censused bool
 	complete bool
 	count    int
+	// linkScopeUnread: the census ran under a requested repository scope and
+	// the keyed link read that scopes it failed or was cut (CHAOS-12505).
+	linkScopeUnread bool
 }
 
 func workItemHandleRoundOf(question string, attestation Attestation) workItemHandleRound {
@@ -25,6 +28,7 @@ func workItemHandleRoundOf(question string, attestation Attestation) workItemHan
 	for _, kind := range attestation.Kinds {
 		if kind.Kind == contextfabric.SubjectWorkItem && kind.HandleApplied {
 			round.censused, round.complete, round.count = true, kind.Complete && !kind.ClosureMismatch, kind.Count
+			round.linkScopeUnread = kind.LinkScopeUnread
 		}
 	}
 	return round
@@ -49,6 +53,12 @@ func linksUnreadLimitation(principal storage.Principal, deps ResolveDeps) string
 func workItemLinkLimitation(principal storage.Principal, request contextfabric.InvestigationRequest, deps ResolveDeps, round workItemHandleRound, resolution contextfabric.SubjectResolution) string {
 	if sentence := linksUnreadLimitation(principal, deps); sentence != "" {
 		return sentence
+	}
+	// CHAOS-12505: the census under a requested repository scope could not be
+	// scoped by its keyed link read. That is owed to every caller class: the
+	// read, not the grant, left the item undecided.
+	if round.linkScopeUnread && !committedWorkItem(resolution) {
+		return contractsv1.ContextFabricWorkItemLinksUnreadLimitation
 	}
 	if !grantScopedCensus(principal) || committedWorkItem(resolution) {
 		return ""
