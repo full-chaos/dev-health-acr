@@ -2159,7 +2159,8 @@ flowchart TD
    one; and a shape can never describe content a later composer removed.
 2. **The arrow from a shape to a value is always a COPY.** Each point
    carries a `render_point_source` — `cohort_member_score`,
-   `cohort_driver_weight_contributed`, or `claimed_fact_row` — and
+   `cohort_driver_weight_contributed`, `claimed_fact_row`, or
+   `claimed_fact_value` — and
    validation resolves it and compares exactly. There is no tolerance,
    because there is no legitimate arithmetic for a shape to do: a derived
    number belongs in a canonical fact, where it gets provenance and coverage

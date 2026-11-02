@@ -19,11 +19,12 @@ package v1
 // So the SELECTION moves to the service, and a chart becomes a claimed
 // fact like any other:
 //
-// STATUS (CHAOS-4616, CHAOS-4637): all three rules this file's vocabulary
+// STATUS (CHAOS-4616, CHAOS-4637): three of the rules this file's vocabulary
 // declares have a producer -- the cohort attention-score bars, the
 // per-driver contribution stack, and `dated_fact_trend`. The trend rule was
 // withdrawn in CHAOS-4616 and has been live again since CHAOS-4637; see
-// ContextFabricRenderRuleDatedFactTrend's own comment.
+// ContextFabricRenderRuleDatedFactTrend's own comment. The others are declared
+// ahead of their producers.
 //
 //  1. Kind is a CLOSED vocabulary, fixed in full here and now
 //     (ContextFabricRenderKind) so a consumer can exhaustively switch on it
@@ -64,6 +65,12 @@ package v1
 // reads the same Series field, and validateRenderShapes holds what each one
 // requires. A treemap is one series of part-of-whole points of one table (see
 // ContextFabricRenderRuleInvestmentThemeShare).
+//
+// A TABLE READS THE SAME PAYLOAD (CHAOS-12513). A side-by-side comparison is one
+// series per subject and one point per measure, so a cell is a point: a label, a
+// value and a source that resolves like any chart number. A measure a side lacks
+// has no point, so its cell is empty and never zero (see
+// ContextFabricRenderRuleComparisonSideBySide).
 
 // ContextFabricRenderKind is the CLOSED vocabulary of renderable answer
 // shapes. Every member is defined now; producers land per shape.
@@ -75,11 +82,11 @@ const (
 	// drawn as bars, stacked bars, or a line per Presentation. The only
 	// kind with a producer in CHAOS-4415 slice 1.
 	ContextFabricRenderKindSeries ContextFabricRenderKind = "series"
-	// ContextFabricRenderKindTable is an explicitly table-shaped
-	// rendering. Declared for vocabulary completeness; today a table
-	// reaches consumers as ContextFabricClaimedFact.Rows or
-	// ContextFabricProjectedCohort.RankingTable, and nothing emits this
-	// kind.
+	// ContextFabricRenderKindTable is an explicitly table-shaped rendering: the
+	// side-by-side of ContextFabricRenderRuleComparisonSideBySide, its only
+	// rule. Nothing emits this kind yet. Other tables reach consumers as
+	// ContextFabricClaimedFact.Rows or
+	// ContextFabricProjectedCohort.RankingTable.
 	ContextFabricRenderKindTable ContextFabricRenderKind = "table"
 	// ContextFabricRenderKindQuadrant is the two-measure landscape
 	// quadrant of the purpose contract §7 ("is X moving with Y").
@@ -174,6 +181,14 @@ const (
 	// Declared here ahead of its producer, as the vocabulary always is: the
 	// wire widens first, so consumers can pin it before a shape is emitted.
 	ContextFabricRenderRuleInvestmentThemeShare ContextFabricRenderShapeRule = "investment_theme_share"
+	// ContextFabricRenderRuleComparisonSideBySide is the side-by-side table of an
+	// explicit comparison (CHAOS-12513): one series per compared subject, keyed
+	// by the subject's canonical id, and one point per measure, labelled with the
+	// served fact_field word of that measure. Each point copies one claim's own
+	// value, so the table restates what the answer claims and adds no number. It
+	// is the only rule that yields a table, and a table has no other rule.
+	// Declared ahead of its producer: the wire widens first.
+	ContextFabricRenderRuleComparisonSideBySide ContextFabricRenderShapeRule = "comparison_side_by_side"
 )
 
 // ContextFabricRenderThemeTableField is the claimed fact table an
@@ -235,6 +250,11 @@ const (
 	// ClaimedFacts[ClaimID].Rows[RowIndex].Fields[Field]. Requires
 	// ClaimID, RowIndex and Field.
 	ContextFabricRenderSourceClaimedFactRow ContextFabricRenderPointSourceKind = "claimed_fact_row"
+	// ContextFabricRenderSourceClaimedFactValue resolves to
+	// ClaimedFacts[ClaimID].Value. Requires ClaimID and Field, and Field must be
+	// the claim's own Field. A derived claim does not resolve: its Field is not
+	// looked up on a fact, so it has no stored value to copy.
+	ContextFabricRenderSourceClaimedFactValue ContextFabricRenderPointSourceKind = "claimed_fact_value"
 )
 
 // Render shape bounds. Deliberately small: this contract exists to carry a
@@ -301,8 +321,8 @@ type ContextFabricRenderShape struct {
 // defect as zero-filling a missing day in an append-only daily table.
 type ContextFabricRenderSeries struct {
 	// Key is a stable, machine-readable series identity (a signal family
-	// name, a row column name, or a metric name). Label is its display
-	// form.
+	// name, a row column name, or a metric name; on a comparison, the
+	// subject's canonical id). Label is its display form.
 	Key    string                     `json:"key"`
 	Label  string                     `json:"label"`
 	Points []ContextFabricRenderPoint `json:"points"`
@@ -334,7 +354,7 @@ type ContextFabricRenderPointSource struct {
 	// row table (claimed_fact_row). RowIndex is a pointer so "row 0" is
 	// distinguishable from "no row index given" -- the exact
 	// zero-value-vs-absent trap that makes a bad source read as a valid
-	// one.
+	// one. claimed_fact_value uses ClaimID and Field alone.
 	ClaimID  string `json:"claim_id,omitempty"`
 	RowIndex *int   `json:"row_index,omitempty"`
 	Field    string `json:"field,omitempty"`
