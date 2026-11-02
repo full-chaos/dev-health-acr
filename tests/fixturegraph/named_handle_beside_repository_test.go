@@ -29,6 +29,10 @@ func TestANamedHandleBesideARepository(t *testing.T) {
 			"shape": "single_subject", "requested_judgment": "state of the subject",
 			"subject_terms": []string{one}, "time_context": doc{"axis": "current"},
 			"fact_requirements": []doc{{"kind": "status"}}, "clarification_needed": false,
+			"question_frame": doc{
+				"goals": []string{"assess_state"}, "temporal": "current",
+				"subject_expression": doc{"kind": "named_subject", "terms": []string{one}},
+			},
 		}
 		if kind != "" {
 			interpretation["requested_subject_kind"] = kind
@@ -55,14 +59,20 @@ func TestANamedHandleBesideARepository(t *testing.T) {
 		}
 		return kinds
 	}
+	// On a client synthesis turn a statistical commit waits for the answer to affirm
+	// it, so the subject the service committed is read from the synthesis input.
+	toSynthesis := func(s any) string {
+		in, _ := s.(map[string]any)["synthesis_input"].(map[string]any)
+		return fmt.Sprint(get(in, "graph", "resolution", "committed"))
+	}
 	limitations := func(s any) string { return fmt.Sprint(get(s, "limitations")) }
 	question := func(number string) string {
 		return fmt.Sprintf("What is the state of pull request %s in %s?", number, one)
 	}
 	t.Run("a lone subject commits beside the repository", func(t *testing.T) {
 		s, raw := ask(t, question(lone), "pull_request")
-		if got := committed(s); !slices.Contains(got, "pull_request") {
-			t.Fatalf("committed = %v, want the pull request: %.3000s", got, raw)
+		if got := toSynthesis(s); !strings.Contains(got, "pull_request:") || !strings.Contains(got, "repository:") {
+			t.Fatalf("committed to synthesis = %s, want the pull request and the repository: %.3000s", got, raw)
 		}
 	})
 	for name, number := range map[string]string{"no such number": "987654", "a number only the other repository holds": elsewhere} {
