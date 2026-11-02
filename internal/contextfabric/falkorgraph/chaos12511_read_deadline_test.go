@@ -26,10 +26,13 @@ type silentFalkor struct {
 	listener net.Listener
 	queries  atomic.Int64
 	seen     chan struct{}
-	once     sync.Once
-	wg       sync.WaitGroup
-	mu       sync.Mutex
-	conns    []net.Conn
+	// seenAt is when the first graph query arrived. It is written before
+	// seen is closed, so a reader that has received from seen may read it.
+	seenAt time.Time
+	once   sync.Once
+	wg     sync.WaitGroup
+	mu     sync.Mutex
+	conns  []net.Conn
 }
 
 func newSilentFalkor(t *testing.T) *silentFalkor {
@@ -80,7 +83,10 @@ func (s *silentFalkor) serve(conn net.Conn) {
 		name := strings.ToUpper(command[0])
 		if strings.HasPrefix(name, "GRAPH.") {
 			s.queries.Add(1)
-			s.once.Do(func() { close(s.seen) })
+			s.once.Do(func() {
+				s.seenAt = time.Now()
+				close(s.seen)
+			})
 			continue
 		}
 		reply := "+OK\r\n"
@@ -162,36 +168,46 @@ func TestACancelDoesNotStopAReadInFlight(t *testing.T) {
 	defer cancel()
 	// The caller cancels once the server holds the query, so the cancel lands
 	// on a read in flight, never on a timer that could fire before it starts
-	// (CHAOS-12573, Codex #1931 r1).
-	seenAt := make(chan time.Time, 1)
+	// (CHAOS-12573, Codex #1931 r1). The times come from the server and from
+	// the cancel itself, and both are waited for, so a goroutine that a busy
+	// host runs late is not read as a query that never arrived (Codex #1931
+	// r2).
+	cancelledAt := make(chan time.Time, 1)
 	go func() {
 		<-server.seen
-		seenAt <- time.Now()
 		cancelParent()
+		cancelledAt <- time.Now()
 	}()
 	started := time.Now()
 	_, err = client.query(ctx, "graph", "RETURN 1", nil, true)
 	returned := time.Now()
-	var inFlight time.Time
+	if err == nil {
+		t.Fatal("a query with no reply returned no error")
+	}
+	var cancelled time.Time
 	select {
-	case inFlight = <-seenAt:
-	default:
+	case cancelled = <-cancelledAt:
+	case <-time.After(10 * time.Second):
 		t.Fatal("the server never received the query: no read was in flight, so this measured nothing")
 	}
+	received := server.seenAt
 	elapsed := returned.Sub(started)
 	// Measured against the context's own deadline, not from a start taken
 	// after the context was made (CHAOS-12573: 199.15 ms of 200 on a busy
 	// runner was that gap, not an early return).
 	at, _ := ctx.Deadline()
-	t.Logf("cancelled at %s, deadline %s, returned after %s err=%v", inFlight.Sub(started).Round(time.Millisecond), deadline, elapsed.Round(time.Millisecond), err)
-	if err == nil {
-		t.Fatal("a query with no reply returned no error")
+	t.Logf("received at %s, cancelled at %s, deadline %s, returned after %s err=%v", received.Sub(started).Round(time.Millisecond), cancelled.Sub(started).Round(time.Millisecond), deadline, elapsed.Round(time.Millisecond), err)
+	if received.Before(started) {
+		t.Fatalf("the server's receipt time %s is before the read started at %s: it was not taken from the query", received, started)
 	}
-	if !inFlight.Before(at) {
-		t.Fatalf("the query reached the server at %s, not before the deadline %s: the cancel did not land on a read in flight", inFlight, at)
+	if cancelled.Before(received) {
+		t.Fatalf("the cancel ran at %s, before the server received the query at %s: it did not land on a read in flight, so this measured nothing", cancelled, received)
+	}
+	if !cancelled.Before(at) {
+		t.Fatalf("the cancel ran at %s, not before the deadline %s (the server received the query at %s): it did not land on a read in flight, so this measured nothing", cancelled, at, received)
 	}
 	if returned.Before(at) || elapsed > requestTimeout/2 {
-		t.Fatalf("returned after %s, want at the %s deadline, past the cancel at %s", elapsed, deadline, inFlight.Sub(started))
+		t.Fatalf("returned after %s, want at the %s deadline, past the cancel at %s", elapsed, deadline, cancelled.Sub(started))
 	}
 }
 
