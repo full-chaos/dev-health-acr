@@ -75,10 +75,26 @@ type fakeClient struct {
 	mu sync.Mutex
 }
 
+// completionForecastQueryMarker occurs only in
+// readers.ReadTeamCompletionForecasts' statement (CHAOS-12607).
+const completionForecastQueryMarker = "arraySlice(completion_days_values"
+
 func (c *fakeClient) Query(_ context.Context, statement string, bindings []contextpacket.ClickHouseBinding) (contextpacket.ClickHouseRowScanner, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.queries = append(c.queries, capturedQuery{statement: statement, bindings: bindings})
+	// CHAOS-12607: the completion forecast read is answered only by a table
+	// that names its marker. It shares its latest-row window text with the
+	// workload base read, so the base read's canned rows (another column
+	// shape) must never answer it; a test that did not seed it gets no row.
+	if strings.Contains(statement, completionForecastQueryMarker) {
+		for _, table := range c.tables {
+			if strings.Contains(table.match, completionForecastQueryMarker) {
+				return &fakeScanner{rows: table.rowsFor(statement)}, table.err
+			}
+		}
+		return &fakeScanner{}, nil
+	}
 	// A project population aggregate is answered only by a table that names
 	// its marker; every other table's match also occurs inside its text.
 	if strings.Contains(statement, projectPopulationMarker) {
@@ -282,6 +298,10 @@ func (s *fakeScanner) Scan(dest ...any) error {
 			*value = row[index].([]string)
 		case *[]int64:
 			*value = row[index].([]int64)
+		case *[]uint16:
+			*value = row[index].([]uint16)
+		case *[]uint32:
+			*value = row[index].([]uint32)
 		case *[]uint64:
 			*value = row[index].([]uint64)
 		case *[][]string:

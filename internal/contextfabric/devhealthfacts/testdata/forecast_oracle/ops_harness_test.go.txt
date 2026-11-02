@@ -1,0 +1,115 @@
+package capacityforecast
+
+// ACR CHAOS-12607 differential oracle harness. acr's
+// TestCompletionBinsAgreeWithOpsBinsToModel copies this file into an ops
+// checkout's internal/queryapi/capacityforecast package, runs it, and removes
+// it. It EXECUTES ops' own binsToModel and histogramFromUint16 on the cases
+// acr wrote, so acr's copy is compared with the production function itself,
+// never with a digest of its source.
+//
+// Every field of every served bin is emitted by reflection over ops'
+// model.CapacityDistributionBin, so a field ops adds reaches acr's comparison
+// and fails it until acr accounts for it. Every leaf is {"t": type, "v":
+// string}: no bare JSON number reaches a decode step.
+
+import (
+	"encoding/json"
+	"fmt"
+	"math"
+	"os"
+	"reflect"
+	"strconv"
+	"testing"
+
+	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/numerical"
+)
+
+type acrOracleCase struct {
+	Name   string   `json:"name"`
+	Values []string `json:"values"`
+	Counts []string `json:"counts"`
+}
+
+type acrOracleLeaf struct {
+	T string `json:"t"`
+	V string `json:"v"`
+}
+
+type acrOracleResult struct {
+	Name       string                     `json:"name"`
+	Nil        bool                       `json:"nil"`
+	Bins       []map[string]acrOracleLeaf `json:"bins"`
+	Unfinished acrOracleLeaf              `json:"unfinished"`
+	Horizon    acrOracleLeaf              `json:"horizon"`
+}
+
+func acrOracleUints[T uint16 | uint32](t *testing.T, raw []string, bits int) []T {
+	t.Helper()
+	if raw == nil {
+		return nil
+	}
+	out := make([]T, 0, len(raw))
+	for _, text := range raw {
+		value, err := strconv.ParseUint(text, 10, bits)
+		if err != nil {
+			t.Fatalf("case value %q: %v", text, err)
+		}
+		out = append(out, T(value))
+	}
+	return out
+}
+
+func acrOracleLeafOf(t *testing.T, value reflect.Value) acrOracleLeaf {
+	t.Helper()
+	switch value.Kind() {
+	case reflect.Int, reflect.Int64, reflect.Int32:
+		return acrOracleLeaf{T: "int", V: strconv.FormatInt(value.Int(), 10)}
+	case reflect.Float64:
+		return acrOracleLeaf{T: "float64_bits", V: strconv.FormatUint(math.Float64bits(value.Float()), 16)}
+	default:
+		t.Fatalf("bin field of kind %s has no oracle encoding: extend the harness and acr's comparison together", value.Kind())
+		return acrOracleLeaf{}
+	}
+}
+
+func TestACRForecastOracle(t *testing.T) {
+	in, out := os.Getenv("ACR_FORECAST_ORACLE_CASES"), os.Getenv("ACR_FORECAST_ORACLE_OUT")
+	if in == "" || out == "" {
+		t.Fatal("ACR_FORECAST_ORACLE_CASES and ACR_FORECAST_ORACLE_OUT are required")
+	}
+	raw, err := os.ReadFile(in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var cases []acrOracleCase
+	if err := json.Unmarshal(raw, &cases); err != nil {
+		t.Fatal(err)
+	}
+	results := make([]acrOracleResult, 0, len(cases))
+	for _, c := range cases {
+		histogram := histogramFromUint16(acrOracleUints[uint16](t, c.Values, 16), acrOracleUints[uint32](t, c.Counts, 32))
+		bins, unfinished := binsToModel(histogram, numerical.ForecastHorizonDays)
+		result := acrOracleResult{
+			Name: c.Name, Nil: bins == nil,
+			Unfinished: acrOracleLeaf{T: "int", V: strconv.Itoa(unfinished)},
+			Horizon:    acrOracleLeaf{T: "int", V: strconv.Itoa(numerical.ForecastHorizonDays)},
+		}
+		for _, bin := range bins {
+			value := reflect.ValueOf(bin)
+			fields := map[string]acrOracleLeaf{}
+			for index := 0; index < value.NumField(); index++ {
+				fields[value.Type().Field(index).Name] = acrOracleLeafOf(t, value.Field(index))
+			}
+			result.Bins = append(result.Bins, fields)
+		}
+		results = append(results, result)
+	}
+	encoded, err := json.Marshal(results)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(out, encoded, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	fmt.Printf("acr forecast oracle: %d cases\n", len(results))
+}
