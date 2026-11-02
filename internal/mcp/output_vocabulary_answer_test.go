@@ -335,7 +335,7 @@ func init() {
 			why:   "protocol",
 			sites: []string{"RenderPointSource.kind"},
 			// schema: "cohort_member_score", "cohort_driver_weight_contributed", "claimed_fact_row", "claimed_fact_value"
-			goSet:      []string{string(contractsv1.ContextFabricRenderSourceCohortMemberScore), string(contractsv1.ContextFabricRenderSourceCohortDriverWeight), string(contractsv1.ContextFabricRenderSourceClaimedFactRow), string(contractsv1.ContextFabricRenderSourceClaimedFactValue)},
+			goSet:      []string{string(contractsv1.ContextFabricRenderSourceCohortMemberScore), string(contractsv1.ContextFabricRenderSourceCohortDriverWeight), string(contractsv1.ContextFabricRenderSourceClaimedFactRow), string(contractsv1.ContextFabricRenderSourceClaimedFactValue), string(contractsv1.ContextFabricRenderSourceClaimedFactTableRow)},
 			exhaustive: true,
 		},
 		outputVocabulary{
@@ -353,7 +353,7 @@ func init() {
 			why:   "protocol",
 			sites: []string{"RenderShapeRule"},
 			// schema: "cohort_attention_score", "cohort_driver_contribution", "dated_fact_trend", "investment_theme_share", "comparison_side_by_side", "investment_subcategory_share"
-			goSet:      []string{string(contractsv1.ContextFabricRenderRuleCohortAttentionScore), string(contractsv1.ContextFabricRenderRuleCohortDriverContribution), string(contractsv1.ContextFabricRenderRuleDatedFactTrend), string(contractsv1.ContextFabricRenderRuleInvestmentThemeShare), string(contractsv1.ContextFabricRenderRuleComparisonSideBySide), string(contractsv1.ContextFabricRenderRuleInvestmentSubcategoryShare)},
+			goSet:      []string{string(contractsv1.ContextFabricRenderRuleCohortAttentionScore), string(contractsv1.ContextFabricRenderRuleCohortDriverContribution), string(contractsv1.ContextFabricRenderRuleDatedFactTrend), string(contractsv1.ContextFabricRenderRuleInvestmentThemeShare), string(contractsv1.ContextFabricRenderRuleComparisonSideBySide), string(contractsv1.ContextFabricRenderRuleInvestmentSubcategoryShare), string(contractsv1.ContextFabricRenderRuleCompletionForecast)},
 			exhaustive: true,
 		},
 		outputVocabulary{

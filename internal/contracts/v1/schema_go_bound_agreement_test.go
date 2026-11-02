@@ -352,17 +352,22 @@ func TestSchemaAndGoBoundsAgree(t *testing.T) {
 		// the resolution rule first, scoring "unreachable" rather than a
 		// proof). Each value is the named constant validateRenderShapes
 		// itself enforces.
-		"common#$defs.RenderShape.properties.series.minItems":         1,
-		"common#$defs.RenderShape.properties.series.maxItems":         ContextFabricRenderSeriesMaxCount,
-		"common#$defs.RenderSeries.properties.points.minItems":        1,
-		"common#$defs.RenderSeries.properties.points.maxItems":        ContextFabricRenderPointsMaxCount,
-		"common#$defs.RenderSeries.properties.key.minLength":          1,
-		"common#$defs.RenderSeries.properties.key.maxLength":          ContextFabricRenderLabelMaxLength,
-		"common#$defs.RenderPointSource.properties.signal.minLength":  1,
-		"common#$defs.RenderPointSource.properties.signal.maxLength":  ContextFabricRenderLabelMaxLength,
-		"common#$defs.RenderPointSource.properties.field.minLength":   1,
-		"common#$defs.RenderPointSource.properties.field.maxLength":   ContextFabricRenderSourceFieldMaxLength,
-		"common#$defs.RenderPointSource.properties.row_index.minimum": 0,
+		"common#$defs.RenderShape.properties.series.minItems":  1,
+		"common#$defs.RenderShape.properties.series.maxItems":  ContextFabricRenderSeriesMaxCount,
+		"common#$defs.RenderSeries.properties.points.minItems": 1,
+		// CHAOS-12608: a series admits the largest per-kind point cap; the
+		// RenderShape allOf holds every kind to its own (allOf.0 the
+		// default, allOf.1 the forecast; ContextFabricRenderPointsMax).
+		"common#$defs.RenderSeries.properties.points.maxItems":                                     ContextFabricRenderPointsMax(ContextFabricRenderKindForecast),
+		"common#$defs.RenderShape.allOf.0.then.properties.series.items.properties.points.maxItems": ContextFabricRenderPointsMaxCount,
+		"common#$defs.RenderShape.allOf.1.then.properties.series.items.properties.points.maxItems": ContextFabricRenderPointsMax(ContextFabricRenderKindForecast),
+		"common#$defs.RenderSeries.properties.key.minLength":                                       1,
+		"common#$defs.RenderSeries.properties.key.maxLength":                                       ContextFabricRenderLabelMaxLength,
+		"common#$defs.RenderPointSource.properties.signal.minLength":                               1,
+		"common#$defs.RenderPointSource.properties.signal.maxLength":                               ContextFabricRenderLabelMaxLength,
+		"common#$defs.RenderPointSource.properties.field.minLength":                                1,
+		"common#$defs.RenderPointSource.properties.field.maxLength":                                ContextFabricRenderSourceFieldMaxLength,
+		"common#$defs.RenderPointSource.properties.row_index.minimum":                              0,
 		// CHAOS-4413: claimed_facts_count/rows_count are not standalone
 		// floor checks the generic probe can isolate -- validateCompleteness
 		// enforces EXACT equality against len(claimed_facts) and the

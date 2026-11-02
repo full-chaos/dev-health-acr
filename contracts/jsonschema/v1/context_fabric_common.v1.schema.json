@@ -4805,7 +4805,8 @@
         "dated_fact_trend",
         "investment_theme_share",
         "comparison_side_by_side",
-        "investment_subcategory_share"
+        "investment_subcategory_share",
+        "completion_forecast"
       ]
     },
     "RenderValueUnit": {
@@ -4826,7 +4827,8 @@
             "cohort_member_score",
             "cohort_driver_weight_contributed",
             "claimed_fact_row",
-            "claimed_fact_value"
+            "claimed_fact_value",
+            "claimed_fact_table_row"
           ]
         },
         "subject_canonical_id": {
@@ -4899,7 +4901,7 @@
         "points": {
           "type": "array",
           "minItems": 1,
-          "maxItems": 64,
+          "maxItems": 366,
           "items": {
             "$ref": "#/$defs/RenderPoint"
           }
@@ -4915,6 +4917,68 @@
       "description": "CHAOS-4415: ONE renderable shape an answer carries, selected by a deterministic rule from the interpreted intent and the facts the answer already holds. Conditional on intent, never default.",
       "type": "object",
       "additionalProperties": false,
+      "allOf": [
+        {
+          "$comment": "render-point-bound-kind: default",
+          "description": "CHAOS-12608 point bound, default clause: a series of a shape of any kind not listed keeps 64 points.",
+          "if": {
+            "not": {
+              "anyOf": [
+                {
+                  "properties": {
+                    "kind": {
+                      "const": "forecast"
+                    }
+                  },
+                  "required": [
+                    "kind"
+                  ]
+                }
+              ]
+            }
+          },
+          "then": {
+            "properties": {
+              "series": {
+                "items": {
+                  "properties": {
+                    "points": {
+                      "maxItems": 64
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        {
+          "$comment": "render-point-bound-kind: forecast",
+          "description": "CHAOS-12608 point bound, kind forecast: a forecast plots every row of its completion distribution, up to 366.",
+          "if": {
+            "properties": {
+              "kind": {
+                "const": "forecast"
+              }
+            },
+            "required": [
+              "kind"
+            ]
+          },
+          "then": {
+            "properties": {
+              "series": {
+                "items": {
+                  "properties": {
+                    "points": {
+                      "maxItems": 366
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      ],
       "properties": {
         "shape_id": {
           "type": "string",
