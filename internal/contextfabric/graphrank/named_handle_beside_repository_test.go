@@ -285,6 +285,9 @@ func TestAStatedWorkItemBesideARepository(t *testing.T) {
 			if len(absent.resolution.Committed) != 0 || absent.resolution.CensusLimitation != want {
 				t.Fatalf("count 0: committed %v limitation %q", absent.resolution.Committed, absent.resolution.CensusLimitation)
 			}
+			if !strings.Contains(absent.resolution.ClarificationPrompt, "work item CHAOS-999") {
+				t.Fatalf("count 0: prompt = %q", absent.resolution.ClarificationPrompt)
+			}
 			both := runBeside(t, besideWorld{principal: principal, question: "Why is CHAOS-71 blocked in " + scopeAnchorRepo + "?", frame: frame, census: &besideCensus{rows: []besideRow{row(linear), row(jira)}}, nodes: nodes})
 			if len(both.resolution.Committed) != 0 {
 				t.Fatalf("count 2: committed = %v", both.resolution.Committed)
@@ -483,5 +486,45 @@ func TestTwoRepositoriesAreAskedAboutOnlyWhenTheKindIsStated(t *testing.T) {
 	unstated, _ := commitNamedHandle(context.Background(), principal, request, namedScopeAnchorFrame(nil), deps, contextfabric.SubjectResolution{Committed: slices.Clone(repos)}, contextfabric.CommitBasisSet{}, contextfabric.CommitDecisionDigestSet{})
 	if !slices.Equal(unstated.Committed, repos) || census.calls != 0 {
 		t.Fatalf("unstated: committed %v census calls %d", unstated.Committed, census.calls)
+	}
+}
+
+// The trace's marker says who named the handle: the caller's field, or the question.
+func TestTheCommitLineSaysWhoNamedTheHandle(t *testing.T) {
+	t.Parallel()
+	explicit := func(r *contextfabric.InvestigationRequest) {
+		r.SubjectHandles = []contractsv1.ContextFabricRequestedHandle{{Kind: contextfabric.SubjectPullRequest, PatternID: "pull_request_number", Value: "747"}}
+	}
+	for name, tc := range map[string]struct {
+		edit func(*contextfabric.InvestigationRequest)
+		want bool
+	}{"the question": {nil, false}, "the caller": {explicit, true}} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			turn := runBeside(t, besideWorld{principal: restrictedCaller(t, scopeAnchorRepo, besideOtherRepo), question: besideQuestion("pull request 747"), frame: statedFrame(contextfabric.SubjectPullRequest), census: &besideCensus{rows: besideRows()}, edit: tc.edit})
+			lines := turn.tracer.eventsForStage("evidence_census_commit")
+			if len(lines) == 0 {
+				t.Fatal("no commit line")
+			}
+			for _, line := range lines {
+				if line.CensusCommitHandleExplicit != tc.want {
+					t.Fatalf("line = %+v, want explicit %t", line, tc.want)
+				}
+			}
+		})
+	}
+	for name, edit := range map[string]func(*contextfabric.InvestigationRequest){"refused, the question": nil, "refused, the caller": func(r *contextfabric.InvestigationRequest) {
+		explicit(r)
+		r.SubjectHandles[0].Value = "999"
+	}} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			want := edit != nil
+			turn := runBeside(t, besideWorld{principal: restrictedCaller(t, scopeAnchorRepo, besideOtherRepo), question: besideQuestion("pull request 999"), frame: statedFrame(contextfabric.SubjectPullRequest), census: &besideCensus{rows: besideRows()}, edit: edit})
+			lines := turn.tracer.eventsForStage("evidence_census_commit")
+			if len(lines) == 0 || lines[len(lines)-1].CensusCommitHandleExplicit != want {
+				t.Fatalf("lines = %+v, want explicit %t", lines, want)
+			}
+		})
 	}
 }
