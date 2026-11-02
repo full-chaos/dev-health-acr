@@ -1259,6 +1259,7 @@ func (t SlogEngineTelemetry) RecordRenderShapeSelection(ctx context.Context, pri
 			"render_shape_rules_skipped", len(event.Skipped),
 			"render_shape_members_truncated", event.MembersTruncated,
 			"render_shape_trends_omitted", event.TrendsOmitted,
+			"render_shape_comparison_measures_left_out", event.ComparisonMeasuresLeftOut,
 			"render_shape_accounting", SanitizeLogAttr(accounting),
 			"selected_shapes", selected)...)
 	for _, skip := range event.Skipped {

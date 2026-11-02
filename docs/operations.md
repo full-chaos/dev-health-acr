@@ -1009,6 +1009,11 @@ turning the flag on or off needs no migration and no backfill.
 enum, so a consumer on a pin that does not hold the rule fails every answer that
 carries the shape. Confirm web's and ask-dev's pins first, then set the flag.
 
+**The comparison table.** `ACR_CONTEXT_FABRIC_COMPARISON_TABLE_ENABLED` (chart:
+`contextFabric.comparisonTableEnabled`, default `false`) turns on the
+`comparison_side_by_side` render rule, with the same order: pins first, then the
+flag. With the flag off, both doors that serve a result remove a stored table.
+
 **The roll step "vocabulary labels on".** Confirm that the deployed pins of
 ask-dev, web and every MCP client carry `vocabulary_labels`. Then set the flag
 for `acr-api` and roll it. To turn it off, unset the flag and roll: the next read

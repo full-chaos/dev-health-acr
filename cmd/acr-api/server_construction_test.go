@@ -233,6 +233,16 @@ func validServeConfig(t *testing.T) config.Config {
 	return cfg
 }
 
+// CHAOS-12513: the switch reaches the app both doors read it from.
+func TestAppConfigThreadsTheComparisonTableSwitch(t *testing.T) {
+	for _, enabled := range []bool{true, false} {
+		got := appConfig(config.Config{ContextFabricComparisonTableEnabled: enabled}, "test-version")
+		if got.ContextFabricComparisonTableEnabled != enabled {
+			t.Fatalf("appConfig(...).ContextFabricComparisonTableEnabled = %v, want %v", got.ContextFabricComparisonTableEnabled, enabled)
+		}
+	}
+}
+
 // CHAOS-12416: the switch reaches the app both doors read it from.
 func TestAppConfigThreadsTheVocabularyLabelsSwitch(t *testing.T) {
 	for _, enabled := range []bool{true, false} {
