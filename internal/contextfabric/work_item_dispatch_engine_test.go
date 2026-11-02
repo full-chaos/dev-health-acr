@@ -255,11 +255,19 @@ func TestWorkItemLateFamilyDisallowReRefusesWithoutLosingObligations(t *testing.
 type dispatchGraphProbe struct {
 	graphReaderStub
 	resolveCalls, discoverCalls int
+	// offersOnlyMaterial, when set, is the material an offers-only
+	// resolution returns in place of graphReaderStub.material (CHAOS-4451: a
+	// class-default gate fires only on a question beyond the window).
+	offersOnlyMaterial *StructureOfferMaterial
 }
 
 func (g *dispatchGraphProbe) ResolveSubjects(ctx context.Context, p storage.Principal, r InvestigationRequest, q InterpretedQuestion, b ResolvedGraphBinding, k *ConfirmedExpectedKind, a *ConfirmedAnchorSelection, f *QuestionFrame, s SubjectKind) (SubjectResolution, StructureOfferMaterial, CommitBasisSet, CommitDecisionDigestSet, error) {
 	g.resolveCalls++
-	return g.graphReaderStub.ResolveSubjects(ctx, p, r, q, b, k, a, f, s)
+	resolution, material, bases, digests, err := g.graphReaderStub.ResolveSubjects(ctx, p, r, q, b, k, a, f, s)
+	if g.offersOnlyMaterial != nil && OffersOnlyResolution(ctx) {
+		material = *g.offersOnlyMaterial
+	}
+	return resolution, material, bases, digests, err
 }
 func (g *dispatchGraphProbe) DiscoverContext(ctx context.Context, p storage.Principal, r GraphDiscoveryRequest) (GraphContext, error) {
 	g.discoverCalls++

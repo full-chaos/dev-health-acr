@@ -391,7 +391,7 @@ func TestAWithheldLedgerAnchorOnAnExitBeforeResolution(t *testing.T) {
 	}{
 		{"frame gate", refuseFrame, emptyProbeResponse(), 0, false, AnchorBindingEvaluationNotResolved},
 		{"graph not projected", nil, notProjected, 1, false, AnchorBindingEvaluationNotResolved},
-		{"window gate", windowed, emptyProbeResponse(), 1, true, AnchorBindingEvaluationWindowGated},
+		{"window gate", windowed, gatedBeyondWindow(emptyProbeResponse()), 1, true, AnchorBindingEvaluationWindowGated},
 	} {
 		for _, tc := range []struct {
 			carryOn     bool

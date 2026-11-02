@@ -29,6 +29,10 @@ func runWorkItemProspectiveTerminal(t *testing.T, mode string) {
 	if mode == "unprojected" {
 		graph.resolution.GraphNotProjected = true
 	}
+	if mode == "window_required" {
+		// CHAOS-4451: the window terminal needs a question beyond the window.
+		graph.material = chaos4234GatedMaterial()
+	}
 	if mode == "ambiguous" {
 		graph.resolution.Candidates = []SubjectCandidate{{ReceiptID: "receipt_project_01", Subject: SubjectRef{Kind: SubjectProject, CanonicalID: "project-one", Label: "Project One"}, State: ResolutionProposed, MatchReasons: []string{"ambiguous"}, Confidence: 0.6}}
 		graph.resolution.ClarificationPrompt = "Which project?"
