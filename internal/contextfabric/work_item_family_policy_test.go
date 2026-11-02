@@ -26,7 +26,7 @@ func TestWorkItemFamilyRegistryPolicyIsClosed(t *testing.T) {
 func TestWorkItemFamilyPolicyVersionFence(t *testing.T) {
 	state := semanticFixture(t)
 	plan := &AnswerPlan{Family: state.Family}
-	if state.FamilyTableVersion != "question-family.v6" {
+	if state.FamilyTableVersion != "question-family.v7" {
 		t.Fatalf("current capture family version=%q want the table in force", state.FamilyTableVersion)
 	}
 	stored := StoredInvestigationResult{SemanticState: state, SemanticStateRead: SemanticStateReadAvailable}
