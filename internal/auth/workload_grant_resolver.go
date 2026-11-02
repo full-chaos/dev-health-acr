@@ -32,13 +32,37 @@ func (r *storageGrantResolver) Resolve(ctx context.Context, identity authverify.
 		}
 		return authverify.WorkloadBinding{}, err
 	}
-	binding := bindings[0]
 	// A disabled binding must read identically to "not found" to the
 	// caller (design brief: "Revocation: disable binding (stops
 	// issuance)") -- disabling must not leak the binding's continued
-	// existence to a still-presenting workload.
-	if binding.DisabledAt != nil {
+	// existence to a still-presenting workload. Disabled rows therefore
+	// leave the candidate set before anything is counted or selected.
+	enabled := make([]storage.WorkloadBinding, 0, len(bindings))
+	for _, candidate := range bindings {
+		if candidate.DisabledAt == nil {
+			enabled = append(enabled, candidate)
+		}
+	}
+	if len(enabled) == 0 {
 		return authverify.WorkloadBinding{}, authverify.ErrWorkloadBindingNotFound
+	}
+	var binding storage.WorkloadBinding
+	if selected, ok := WorkloadOrgSelectorFrom(ctx); ok {
+		found := false
+		for _, candidate := range enabled {
+			if candidate.OrgID == selected {
+				binding, found = candidate, true
+				break
+			}
+		}
+		if !found {
+			return authverify.WorkloadBinding{}, ErrWorkloadOrgNotBound
+		}
+	} else {
+		if len(enabled) > 1 {
+			return authverify.WorkloadBinding{}, ErrWorkloadOrgSelectorRequired
+		}
+		binding = enabled[0]
 	}
 	// Role -> scope policy is ACR's own (see RoleScopes's doc comment);
 	// the shared authverify.WorkloadBinding carries the resolved scopes

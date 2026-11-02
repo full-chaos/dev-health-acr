@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/full-chaos/dev-health-acr/internal/auth"
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
 	"github.com/full-chaos/dev-health-go/authverify"
@@ -49,6 +50,11 @@ func (a *App) handleTokenExchange(w http.ResponseWriter, r *http.Request) {
 		SubjectTokenType:   r.PostForm.Get("subject_token_type"),
 		RequestedTokenType: r.PostForm.Get("requested_token_type"),
 		Scope:              r.PostForm.Get("scope"),
+		Resource:           r.PostForm.Get("resource"),
+	}
+	if len(r.PostForm["resource"]) > 1 {
+		a.writeTokenExchangeError(w, contractsv1.TokenExchangeErrorInvalidRequest, http.StatusBadRequest)
+		return
 	}
 	if err := request.Validate(); err != nil {
 		code := contractsv1.TokenExchangeErrorInvalidRequest
@@ -58,7 +64,11 @@ func (a *App) handleTokenExchange(w http.ResponseWriter, r *http.Request) {
 		a.writeTokenExchangeError(w, code, http.StatusBadRequest)
 		return
 	}
-	result, err := a.runtime.WorkloadTokenExchange.Exchange(r.Context(), request.SubjectToken, request.ScopeList())
+	ctx := r.Context()
+	if orgID, present, _ := request.OrgSelector(); present {
+		ctx = auth.WithWorkloadOrgSelector(ctx, orgID)
+	}
+	result, err := a.runtime.WorkloadTokenExchange.Exchange(ctx, request.SubjectToken, request.ScopeList())
 	if err != nil {
 		switch {
 		case errors.Is(err, authverify.ErrSubjectTokenInvalid), errors.Is(err, authverify.ErrWorkloadBindingNotFound), errors.Is(err, storage.ErrOrgPurged):
@@ -67,6 +77,10 @@ func (a *App) handleTokenExchange(w http.ResponseWriter, r *http.Request) {
 			// binding must not be distinguishable from one that never
 			// existed (see storageGrantResolver.Resolve's doc comment).
 			a.writeTokenExchangeError(w, contractsv1.TokenExchangeErrorInvalidGrant, http.StatusBadRequest)
+		case errors.Is(err, auth.ErrWorkloadOrgSelectorRequired):
+			a.writeTokenExchangeError(w, contractsv1.TokenExchangeErrorInvalidRequest, http.StatusBadRequest)
+		case errors.Is(err, auth.ErrWorkloadOrgNotBound):
+			a.writeTokenExchangeError(w, contractsv1.TokenExchangeErrorInvalidTarget, http.StatusBadRequest)
 		case errors.Is(err, authverify.ErrScopeNotGranted):
 			a.writeTokenExchangeError(w, contractsv1.TokenExchangeErrorInvalidScope, http.StatusBadRequest)
 		default:

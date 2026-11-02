@@ -31,20 +31,35 @@ func (s *WorkloadBindingStore) Lookup(ctx context.Context, key storage.WorkloadB
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	row := s.DB.QueryRowContext(ctx, `
+	rows, err := s.DB.QueryContext(ctx, `
 SELECT binding_id, org_id, role, repository_scopes, disabled_at
 FROM acr.workload_bindings
-WHERE trust_domain = $1 AND namespace = $2 AND service_account_name = $3 AND service_account_uid = $4`,
+WHERE trust_domain = $1 AND namespace = $2 AND service_account_name = $3 AND service_account_uid = $4
+ORDER BY org_id`,
 		key.TrustDomain, key.Namespace, key.ServiceAccountName, key.ServiceAccountUID)
-	var binding storage.WorkloadBinding
-	var repositoryJSON []byte
-	if err := row.Scan(&binding.BindingID, &binding.OrgID, &binding.Role, &repositoryJSON, &binding.DisabledAt); err != nil {
+	if err != nil {
 		return nil, mapNotFound("lookup workload binding", err)
 	}
-	if err := json.Unmarshal(repositoryJSON, &binding.RepositoryScopes); err != nil {
-		return nil, fmt.Errorf("decode workload binding repository scopes: %w", err)
+	defer rows.Close()
+	var bindings []storage.WorkloadBinding
+	for rows.Next() {
+		var binding storage.WorkloadBinding
+		var repositoryJSON []byte
+		if err := rows.Scan(&binding.BindingID, &binding.OrgID, &binding.Role, &repositoryJSON, &binding.DisabledAt); err != nil {
+			return nil, mapNotFound("lookup workload binding", err)
+		}
+		if err := json.Unmarshal(repositoryJSON, &binding.RepositoryScopes); err != nil {
+			return nil, fmt.Errorf("decode workload binding repository scopes: %w", err)
+		}
+		bindings = append(bindings, binding)
 	}
-	return []storage.WorkloadBinding{binding}, nil
+	if err := rows.Err(); err != nil {
+		return nil, mapNotFound("lookup workload binding", err)
+	}
+	if len(bindings) == 0 {
+		return nil, storage.ErrNotFound
+	}
+	return bindings, nil
 }
 
 // workloadCredentialPurgeSQL deletes one bounded batch of expired workload
