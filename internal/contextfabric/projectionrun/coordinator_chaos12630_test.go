@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
@@ -54,18 +55,32 @@ func (s *steppedSource) askedFrom() []string {
 type reloadRig struct {
 	backend     *fakeBackend
 	checkpoints *fakeCheckpointStore
+	loads       *atomic.Int32
 	source      *steppedSource
 	coordinator *projectionrun.Coordinator
 	logs        *bytes.Buffer
 }
 
+// countingCheckpoints counts checkpoint reads, so a test can pin that the realign
+// reads nothing of its own.
+type countingCheckpoints struct {
+	*fakeCheckpointStore
+	loads *atomic.Int32
+}
+
+func (s countingCheckpoints) LoadProjectionCheckpoint(ctx context.Context, org, source string) (contextfabric.ProjectionCheckpoint, error) {
+	s.loads.Add(1)
+	return s.fakeCheckpointStore.LoadProjectionCheckpoint(ctx, org, source)
+}
+
 func newReloadRig(t *testing.T, lifecycle ...bool) reloadRig {
 	t.Helper()
 	logs := &bytes.Buffer{}
-	rig := reloadRig{backend: newFakeBackend(), checkpoints: newFakeCheckpointStore(), source: &steppedSource{name: "source-a", last: 3}, logs: logs}
+	rig := reloadRig{backend: newFakeBackend(), checkpoints: newFakeCheckpointStore(), loads: &atomic.Int32{}, source: &steppedSource{name: "source-a", last: 3}, logs: logs}
+	store := countingCheckpoints{fakeCheckpointStore: rig.checkpoints, loads: rig.loads}
 	config := projectionrun.Config{
 		OrgIDs: []string{"org-1"}, Sources: []projectionrun.SourcePair{{Name: "source-a", Source: rig.source}},
-		Backend: rig.backend, Checkpoints: rig.checkpoints, RebuildMarkers: newFakeRebuildMarker(),
+		Backend: rig.backend, Checkpoints: store, RebuildMarkers: newFakeRebuildMarker(),
 		Logger:           slog.New(slog.NewJSONHandler(logs, &slog.HandlerOptions{Level: slog.LevelDebug})),
 		DrainBatchBudget: -1,
 	}
@@ -73,7 +88,7 @@ func newReloadRig(t *testing.T, lifecycle ...bool) reloadRig {
 	// coordinator takes the lifecycle path.
 	if len(lifecycle) > 0 && lifecycle[0] {
 		config.Lifecycle = servingLifecycleStore{}
-		config.EpochCheckpoints = func(int64) contextfabric.ProjectionCheckpointStore { return rig.checkpoints }
+		config.EpochCheckpoints = func(int64) contextfabric.ProjectionCheckpointStore { return store }
 	}
 	coordinator, err := projectionrun.NewCoordinator(config)
 	if err != nil {
@@ -215,6 +230,81 @@ func TestARealignWithNothingLeftToWalkHappensOnce(t *testing.T) {
 	checkpoint, _ := rig.checkpoints.LoadProjectionCheckpoint(context.Background(), "org-1", "source-a")
 	if checkpoint.Cursor != "c3" || checkpoint.BackendWatermark != "c3" {
 		t.Fatalf("checkpoint %q / %q, want c3 / c3", checkpoint.Cursor, checkpoint.BackendWatermark)
+	}
+}
+
+// A graph watermark of another source version is not followed: the graph holds
+// rows under another identity, and a re-walk under the checkpoint's would merge new
+// rows beside them. The checkpoint stays, and a WARN says the organization needs a
+// rebuild.
+func TestAGraphWatermarkOfAnotherSourceVersionIsNotFollowed(t *testing.T) {
+	t.Parallel()
+	rig := newReloadRig(t)
+	rig.project(t)
+	rig.backend.setWatermark("org-1", "source-a", contextfabric.ProjectionWatermark{
+		OrgID: "org-1", Source: "source-a", Cursor: "c1", SourceVersion: "test.v0", BackendWatermark: "c1",
+	})
+	rig.coordinator.Tick(context.Background())
+	checkpoint, _ := rig.checkpoints.LoadProjectionCheckpoint(context.Background(), "org-1", "source-a")
+	if checkpoint.Cursor != "c3" || checkpoint.BackendWatermark != "c3" {
+		t.Fatalf("checkpoint moved to %q / %q on a graph watermark of another source version", checkpoint.Cursor, checkpoint.BackendWatermark)
+	}
+	logs := rig.logs.String()
+	if strings.Contains(logs, "the projection resumes from the graph's own watermark") {
+		t.Fatal("a graph watermark of another source version was followed")
+	}
+	line := ""
+	for _, l := range strings.Split(logs, "\n") {
+		if strings.Contains(l, "names a batch of another source version") {
+			line = l
+		}
+	}
+	if line == "" || !strings.Contains(line, `"level":"WARN"`) || !strings.Contains(line, `"graph_source_version":"test.v0"`) {
+		t.Fatalf("want one WARN naming the other source version, got %q", line)
+	}
+}
+
+// The realign reads nothing of its own: the divergence check's reads found it, so
+// a tick that realigns reads the checkpoint as often as a tick in step (the
+// CHAOS-5378 structural tests count the reads by position).
+func TestARealignReadsNoCheckpointOfItsOwn(t *testing.T) {
+	t.Parallel()
+	rig := newReloadRig(t)
+	rig.project(t)
+	before := rig.loads.Load()
+	rig.coordinator.Tick(context.Background())
+	inStep := rig.loads.Load() - before
+	rig.setCheckpoint("c3", "stale")
+	before = rig.loads.Load()
+	rig.coordinator.Tick(context.Background())
+	realigning := rig.loads.Load() - before
+	if got := strings.Count(rig.logs.String(), "the projection resumes from the graph's own watermark"); got != 1 {
+		t.Fatalf("realigned %d times, want once: the tick under test did not realign", got)
+	}
+	if realigning != inStep {
+		t.Fatalf("a realigning tick read the checkpoint %d times, a tick in step %d: the realign read on its own", realigning, inStep)
+	}
+}
+
+// A checkpoint that names no source version (one written before the version
+// existed) follows the graph, as the batch path's version guard reads it: an
+// empty version is never a mismatch.
+func TestACheckpointWithNoSourceVersionFollowsTheGraph(t *testing.T) {
+	t.Parallel()
+	rig := newReloadRig(t)
+	rig.project(t)
+	rig.reload()
+	rig.checkpoints.mu.Lock()
+	key := rig.checkpoints.key("org-1", "source-a")
+	checkpoint := rig.checkpoints.data[key]
+	checkpoint.SourceVersion = ""
+	rig.checkpoints.data[key] = checkpoint
+	rig.checkpoints.mu.Unlock()
+	for i := 0; i < 3; i++ {
+		rig.coordinator.Tick(context.Background())
+	}
+	if got := rig.appliedTo(); strings.Join(got, ",") != "c1,c2,c3" {
+		t.Fatalf("graph holds batches to %v after the reload, want c1,c2,c3: a checkpoint with no source version did not follow the graph", got)
 	}
 }
 

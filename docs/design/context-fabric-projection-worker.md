@@ -107,7 +107,12 @@ reads, the coordinator checks the two:
   graph's (`realignToGraphWatermarks`, CHAOS-12630), and one WARN names the
   move. The lost batches are walked again; every write is an idempotent merge.
   A watermark that cannot be read, or names no batch, and a checkpoint that
-  names no batch, change nothing.
+  names no batch, change nothing. A watermark of another source version than
+  the checkpoint's is not followed: a re-walk would merge rows under the
+  checkpoint's identity beside the graph's. One WARN each tick says the
+  organization needs a rebuild.
+- Both checks take the same reads: one checkpoint read and one watermark read
+  per source each tick.
 
 FalkorDB that persists by RDB snapshots only reloads its last snapshot after a
 non-graceful restart. On askdev-1 that lost about 45 batches of a walk, while
