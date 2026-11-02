@@ -69,19 +69,19 @@ func lastDecodedSegment(rest string) (string, bool) {
 // ReadableSourceID is a raw source id as a reader names the subject. A work item
 // or a work item ref reads as its key: the provider token is dropped, so
 // linear:CHAOS-1 reads CHAOS-1, gh:owner/repo#7 reads owner/repo#7 and
-// extkey:CHAOS-9 reads CHAOS-9. A team reads as its key the same way. A project's
-// source id is no name a reader knows, and neither is a UUID, so those read as the
-// kind's word from the label registry. Any other kind keeps the raw id.
+// extkey:CHAOS-9 reads CHAOS-9. A team and a nameless project read as their source
+// id the same way (acme/live-e2e, OPS), so a team's project list never reads
+// "project, project" (lead ruling, 2026-11-02). A UUID names nothing a reader
+// knows, so it reads as the kind's word from the label registry. Any other kind
+// keeps the raw id.
 func ReadableSourceID(kind SubjectKind, raw string) string {
 	switch kind {
-	case SubjectWorkItem, SubjectWorkItemRef, SubjectTeam:
+	case SubjectWorkItem, SubjectWorkItemRef, SubjectTeam, SubjectProject:
 		key := providerToken.ReplaceAllString(raw, "")
 		if key == "" || uuidForm.MatchString(key) {
 			return kindWord(kind, raw)
 		}
 		return key
-	case SubjectProject:
-		return kindWord(kind, raw)
 	}
 	return raw
 }
