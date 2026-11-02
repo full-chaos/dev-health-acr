@@ -215,6 +215,25 @@ type RemovedTeamReader interface {
 	RemovedTeams(ctx context.Context, principal storage.Principal, binding ResolvedGraphBinding, subjects []SubjectRef) ([]SubjectRef, error)
 }
 
+// ServedEdgeReader is the optional direct read behind a reuse hit (CHAOS-12537):
+// it reads the relationships between the endpoints of the edges a stored answer
+// serves, in one keyed read, and admits them through the SAME edge and endpoint
+// gates and the same admission the discovery walk uses. So it proves what the
+// walk would prove for those edges, without the walk's budget, hop two, text arm
+// or ranking. It never decides a refusal: what it cannot prove is left to the
+// walk.
+type ServedEdgeReader interface {
+	ServedEdgeEvidence(ctx context.Context, principal storage.Principal, request GraphDiscoveryRequest, edges []RelationshipEdge) (ServedEdgeProof, error)
+}
+
+// ServedEdgeProof is what ServedEdgeReader proved visible to the caller now.
+// Context carries only the admitted Paths, DriverCandidates and EvidenceRefIDs.
+// Cut is true when the read reached its row limit: then it proves nothing.
+type ServedEdgeProof struct {
+	Context GraphContext
+	Cut     bool
+}
+
 type GraphReader interface {
 	ResolveInvestigationBinding(ctx context.Context, principal storage.Principal) (ResolvedGraphBinding, error)
 	// ResolveSubjects' own request parameter already carries ExpectedKinds/

@@ -179,6 +179,12 @@ const SourceName = "dev_health_clickhouse"
 // again without it ends by the same relation-current rule. Rows of a raw kind
 // whose writer is not known keep their edge. Links that ended before the roll
 // sit behind every checkpoint; the rebuild leaves their edges out.)
+//
+// (No bump for CHAOS-12468, on purpose. Two edges stopped labelling a pull
+// request's end with its canonical id, which changes a display word and no
+// identity, edge or scope. A read rebuilds the word from the canonical id
+// (falkorgraph raw_pull_request_label.go), and a bump stops projection until an
+// operator rebuild. The next bump for any other reason deletes that file.)
 const ClickHouseSourceVersion = "devhealthsource.clickhouse.v19"
 
 // Bounds keep a single batch inside ContextFabricProjectionBatch's v1 caps

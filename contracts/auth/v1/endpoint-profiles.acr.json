@@ -1464,6 +1464,49 @@
       ]
     },
     {
+      "id": "GET /internal/v1/credentials/lifecycle [dev-health-acr-api]",
+      "surface_kind": "rest",
+      "method": "GET",
+      "route": "/internal/v1/credentials/lifecycle",
+      "graphql_field_name": null,
+      "service": "dev-health-acr-api",
+      "source": {
+        "file": "internal/api/app.go",
+        "line": 140
+      },
+      "classification": "protected",
+      "public_rationale": null,
+      "accepted_credential_classes": [
+        "acr_client_credential"
+      ],
+      "primary_validator": {
+        "description": "credentialLifecycleListHandler: Authenticator.MiddlewareFor(allowWebAssertions=FALSE) refuses an absent or malformed bearer and any web assertion before the credential lookup; requireWorkloadClass then refuses every credential whose row class is not workload (403 credential_class_refused); Authenticator.RequireScope(credential_lifecycle:read) admits only the reconcile workload binding role; all three run before the listing is read (CHAOS-11200).",
+        "anchor": {
+          "path": "internal/api/credential_lifecycle_list_route.go",
+          "line": 24,
+          "line_end": 30,
+          "note": "func (a *App) credentialLifecycleListHandler() http.Handler {"
+        }
+      },
+      "token_shape": {
+        "token_type": "fcacr_ bearer only",
+        "issuer": null,
+        "audience": null,
+        "algorithm": null
+      },
+      "reachable_validators": [],
+      "action": "auth.credentials.lifecycle.list",
+      "resource_resolver": "principal.OrgID (the workload binding's organization); the request names no organization.",
+      "tenant_requirement": "org_scoped",
+      "current_state_cache_behavior": "Reads the credential lifecycle outbox of the caller's own organization; writes nothing; response is Cache-Control no-store.",
+      "impersonation_policy": "not_applicable_non_main_app",
+      "entitlement_requirement": null,
+      "disclosure_behavior": "writeError() closed envelope; the body carries credential id, revision and status only, no token, prefix or hash.",
+      "gaps": [
+        "entitlement_requirement: a workload-class listing; no Dev Health licensing feature gates it, and the handler does not read the entitlement provider."
+      ]
+    },
+    {
       "surface_kind": "rest",
       "graphql_field_name": null,
       "service": "dev-health-acr-api",
