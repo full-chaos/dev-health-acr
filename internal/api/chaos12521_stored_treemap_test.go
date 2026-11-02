@@ -22,8 +22,8 @@ func TestAStoredTreemapIsServedOnlyWithTheFlagOn(t *testing.T) {
 			store := memoryinvestigation.NewStore()
 			row := validContextFabricInvestigationResult()
 			row.ResultID = "result_stored_treemap1"
-			themes := []string{"feature_delivery", "operational"}
-			half := 0.5
+			themes := []string{"feature_delivery", "operational", "maintenance", "quality", "risk"}
+			half, none := 0.5, 0.0
 			row.ClaimedFacts = append(row.ClaimedFacts, v1.ContextFabricClaimedFact{
 				ClaimID: "claim_stored_treemap1", Kind: v1.ContextFabricFactInvestment, Field: "attribution_basis",
 				Subject: v1.ContextFabricSubjectRef{Kind: v1.ContextFabricSubjectRepository, CanonicalID: "repo:one", Label: "one"},
@@ -32,23 +32,32 @@ func TestAStoredTreemapIsServedOnlyWithTheFlagOn(t *testing.T) {
 				Rows: []v1.ContextFabricClaimedFactRow{
 					{Fields: map[string]v1.ContextFabricScalarValue{"theme": {String: &themes[0]}, "share": {Number: &half}}},
 					{Fields: map[string]v1.ContextFabricScalarValue{"theme": {String: &themes[1]}, "share": {Number: &half}}},
+					{Fields: map[string]v1.ContextFabricScalarValue{"theme": {String: &themes[2]}, "share": {Number: &none}}},
+					{Fields: map[string]v1.ContextFabricScalarValue{"theme": {String: &themes[3]}, "share": {Number: &none}}},
+					{Fields: map[string]v1.ContextFabricScalarValue{"theme": {String: &themes[4]}, "share": {Number: &none}}},
 				},
 			})
-			first, second := 0, 1
+			first, second, third, fourth, fifth := 0, 1, 2, 3, 4
+			citing := func(index *int) v1.ContextFabricRenderPointSource {
+				return v1.ContextFabricRenderPointSource{Kind: v1.ContextFabricRenderSourceClaimedFactRow, ClaimID: "claim_stored_treemap1", RowIndex: index, Field: "share"}
+			}
 			row.RenderShapes = []v1.ContextFabricRenderShape{{
 				ShapeID: "rs_1", Kind: v1.ContextFabricRenderKindTreemap, SelectedBy: v1.ContextFabricRenderRuleInvestmentThemeShare,
 				Title: "Effort share by theme", AxisKind: v1.ContextFabricRenderAxisCategory, AxisLabel: "Theme", ValueLabel: "Share of effort (ratio)",
 				ValueUnit: v1.ContextFabricRenderValueUnitRatio,
 				Series: []v1.ContextFabricRenderSeries{{Key: "share", Label: "Share of effort", Points: []v1.ContextFabricRenderPoint{
-					{Label: "Feature Delivery", Value: half, Source: v1.ContextFabricRenderPointSource{Kind: v1.ContextFabricRenderSourceClaimedFactRow, ClaimID: "claim_stored_treemap1", RowIndex: &first, Field: "share"}},
-					{Label: "Operational / Support", Value: half, Source: v1.ContextFabricRenderPointSource{Kind: v1.ContextFabricRenderSourceClaimedFactRow, ClaimID: "claim_stored_treemap1", RowIndex: &second, Field: "share"}},
+					{Label: "Feature Delivery", Value: half, Source: citing(&first)},
+					{Label: "Operational / Support", Value: half, Source: citing(&second)},
+					{Label: "Maintenance / Tech Debt", Value: none, Source: citing(&third)},
+					{Label: "Quality / Reliability", Value: none, Source: citing(&fourth)},
+					{Label: "Risk / Security", Value: none, Source: citing(&fifth)},
 				}}},
 			}}
-			row.Completeness.ClaimedFactsCount, row.Completeness.RowsCount = len(row.ClaimedFacts), 2
+			row.Completeness.ClaimedFactsCount, row.Completeness.RowsCount = len(row.ClaimedFacts), 5
 			seedResult3355(t, store, callerOrgID, row)
 			app, token := newParityHostedApp(t, investigatorFunc(func(context.Context, storage.Principal, cf.InvestigationRequest) (cf.InvestigationResult, error) {
-				// The create door serves what the engine returns, and a reuse hit
-				// returns the stored row.
+				// The create door serves what the engine returns, here a stored row
+				// as a reuse hit would. No reuse gate runs in this test.
 				return row, nil
 			}), store)
 			app.config.ContextFabricInvestmentTreemapEnabled = enabled

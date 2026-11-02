@@ -205,6 +205,17 @@ func TestATreemapOverTwoClaimsIsRefused(t *testing.T) {
 	}
 }
 
+// The row budget cuts a claim's rows and the shape together, so the two agree. The
+// fixed list of themes is what still says the table is not the whole.
+func TestATreemapOfACutTableIsRefused(t *testing.T) {
+	t.Parallel()
+	shares := []float64{0.5, 0.5}
+	err := validateThemeShare(themeShareShape(shares...), themeShareResult(shares...))
+	if err == nil || !strings.Contains(err.Error(), "every canonical theme") {
+		t.Fatalf("got %v", err)
+	}
+}
+
 func TestATreemapNeedsTwoPartsAboveZero(t *testing.T) {
 	t.Parallel()
 	shares := []float64{1, 0, 0}
@@ -226,7 +237,7 @@ func TestATreemapRefusesANegativeShare(t *testing.T) {
 // The unit is a claim about the numbers, on any kind that states it.
 func TestARatioAboveOneIsRefused(t *testing.T) {
 	t.Parallel()
-	shares := []float64{1.5, 0.25}
+	shares := []float64{1.5, 0.25, 0, 0, 0}
 	if err := validateThemeShare(themeShareShape(shares...), themeShareResult(shares...)); err == nil || !strings.Contains(err.Error(), "ratio") {
 		t.Fatalf("treemap: %v", err)
 	}

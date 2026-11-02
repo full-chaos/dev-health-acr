@@ -302,6 +302,9 @@ func validateTreemapShape(shape ContextFabricRenderShape, sources renderShapeSou
 	if above < 2 {
 		return fmt.Errorf("render shape %q: a treemap needs at least 2 values above 0, and has %d", shape.ShapeID, above)
 	}
+	if len(points) != ContextFabricInvestmentThemeCount() {
+		return fmt.Errorf("render shape %q: a treemap plots every canonical theme, and has %d of %d", shape.ShapeID, len(points), ContextFabricInvestmentThemeCount())
+	}
 	return nil
 }
 

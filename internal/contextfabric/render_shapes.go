@@ -202,6 +202,9 @@ const (
 	// RenderShapeSkipSubjectKindNotCharted -- the fact's subject is not a
 	// repository or a team. A person never gets this chart.
 	RenderShapeSkipSubjectKindNotCharted RenderShapeSkipReason = "subject_kind_not_charted"
+	// RenderShapeSkipThemeTableCut -- the table does not hold every canonical
+	// theme, because the row budget cut it.
+	RenderShapeSkipThemeTableCut RenderShapeSkipReason = "theme_table_cut"
 	// RenderShapeSkipThemeRowUnusable -- a row holds no canonical theme or no
 	// numeric share. The shape is skipped WHOLE: a part of a whole left out
 	// changes what every other part means.
@@ -996,6 +999,7 @@ func RenderShapeSkipReasonLineVocabulary() []string {
 		string(RenderShapeSkipRuleDisabled), string(RenderShapeSkipNotInvestmentAllocation), string(RenderShapeSkipNoThemeBreakdown),
 		string(RenderShapeSkipSeveralThemeBreakdowns), string(RenderShapeSkipSubjectKindNotCharted),
 		string(RenderShapeSkipThemeRowUnusable), string(RenderShapeSkipFewerThanTwoShares), string(RenderShapeSkipCohortAnswer),
+		string(RenderShapeSkipThemeTableCut),
 		string(RenderShapeSkipNotCohortIntent), string(RenderShapeSkipNoRankedMember), string(RenderShapeSkipNoDrivers),
 		string(RenderShapeSkipTooManySignals), string(RenderShapeSkipNoDeclaredTable), string(RenderShapeSkipNoTimeSeriesTable),
 		string(RenderShapeSkipClaimFieldNotAMeasure), string(RenderShapeSkipUnresolvableMeasureRoles),

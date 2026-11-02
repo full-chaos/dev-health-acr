@@ -15,6 +15,8 @@ const themeShareTestClaim = "claim_theme_share_selection"
 
 func themeShareResultFor(kind contractsv1.ContextFabricSubjectKind, shares ...float64) InvestigationResult {
 	tokens := []string{ThemeFeatureDelivery, ThemeOperational, ThemeMaintenance, ThemeQuality, ThemeRisk}
+	// The provider always emits all five themes, so the fixture does too.
+	shares = append(shares, make([]float64, len(tokens)-len(shares))...)
 	rows := make([]ClaimedFactRow, 0, len(shares))
 	for index, share := range shares {
 		value, theme := share, tokens[index]
@@ -166,6 +168,7 @@ func TestNoTreemapWithoutTheRulesEvidence(t *testing.T) {
 			value := -0.5
 			r.ClaimedFacts[0].Rows[1].Fields["share"] = ScalarValue{Number: &value}
 		}, RenderShapeSkipThemeRowUnusable},
+		"a table the row budget cut": {func(r *InvestigationResult) { r.ClaimedFacts[0].Rows = r.ClaimedFacts[0].Rows[:2] }, RenderShapeSkipThemeTableCut},
 		"one part": {func(r *InvestigationResult) {
 			value := 0.0
 			r.ClaimedFacts[0].Rows[1].Fields["share"] = ScalarValue{Number: &value}
@@ -204,6 +207,25 @@ func TestACarriedFamilyDoesNotChartACohortFrame(t *testing.T) {
 	shapes, _ = selectRenderShapes(result, nil, RenderShapeOptions{InvestmentThemeShare: true})
 	if len(treemapsOf(shapes)) != 1 {
 		t.Fatalf("carried on one subject: %+v", shapes)
+	}
+}
+
+// A carried family says nothing about a fresh question that has its own goal.
+func TestACarriedFamilyDoesNotChartAFreshGoal(t *testing.T) {
+	t.Parallel()
+	result := themeShareResultFor(contractsv1.ContextFabricSubjectRepository, 0.5, 0.5)
+	result.AnswerPlan.FamilySource = QuestionFamilySourceCarried
+	frame := goalFrame(allocationSubject(), GoalAssessState)
+	shapes, event := selectRenderShapes(result, &frame, RenderShapeOptions{InvestmentThemeShare: true})
+	if len(treemapsOf(shapes)) != 0 {
+		t.Fatalf("a status question was charted: %+v", shapes)
+	}
+	if skip := skipOf(t, event); skip != RenderShapeSkipNotInvestmentAllocation {
+		t.Fatalf("skip %q", skip)
+	}
+	frame = goalFrame(allocationSubject(), GoalAllocateInvestment, GoalDescribeTrend)
+	if shapes, _ := selectRenderShapes(result, &frame, RenderShapeOptions{InvestmentThemeShare: true}); len(treemapsOf(shapes)) != 1 {
+		t.Fatalf("the goal holds, so the chart stays: %+v", shapes)
 	}
 }
 

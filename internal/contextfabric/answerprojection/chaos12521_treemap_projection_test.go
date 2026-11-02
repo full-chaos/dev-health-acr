@@ -11,7 +11,7 @@ import (
 func TestAProjectionKeepsTheClaimItsTreemapPlots(t *testing.T) {
 	t.Parallel()
 	share := func(value float64) *float64 { return &value }
-	themes := []string{"feature_delivery", "operational"}
+	themes := []string{"feature_delivery", "operational", "maintenance", "quality", "risk"}
 	result := richResultWithCoverageDetails()
 	result.Drivers = nil
 	result.ClaimedFacts = []contractsv1.ContextFabricClaimedFact{{
@@ -23,10 +23,13 @@ func TestAProjectionKeepsTheClaimItsTreemapPlots(t *testing.T) {
 		Rows: []contractsv1.ContextFabricClaimedFactRow{
 			{Fields: map[string]contractsv1.ContextFabricScalarValue{"theme": {String: &themes[0]}, "share": {Number: share(0.5)}}},
 			{Fields: map[string]contractsv1.ContextFabricScalarValue{"theme": {String: &themes[1]}, "share": {Number: share(0.5)}}},
+			{Fields: map[string]contractsv1.ContextFabricScalarValue{"theme": {String: &themes[2]}, "share": {Number: share(0)}}},
+			{Fields: map[string]contractsv1.ContextFabricScalarValue{"theme": {String: &themes[3]}, "share": {Number: share(0)}}},
+			{Fields: map[string]contractsv1.ContextFabricScalarValue{"theme": {String: &themes[4]}, "share": {Number: share(0)}}},
 		},
 	}}
-	point := func(index int, label string) contractsv1.ContextFabricRenderPoint {
-		return contractsv1.ContextFabricRenderPoint{Label: label, Value: 0.5, Source: contractsv1.ContextFabricRenderPointSource{
+	point := func(index int, label string, value float64) contractsv1.ContextFabricRenderPoint {
+		return contractsv1.ContextFabricRenderPoint{Label: label, Value: value, Source: contractsv1.ContextFabricRenderPointSource{
 			Kind: contractsv1.ContextFabricRenderSourceClaimedFactRow, ClaimID: "claim_theme_share_projection", RowIndex: &index, Field: "share",
 		}}
 	}
@@ -34,7 +37,7 @@ func TestAProjectionKeepsTheClaimItsTreemapPlots(t *testing.T) {
 		ShapeID: "rs_1", Kind: contractsv1.ContextFabricRenderKindTreemap, SelectedBy: contractsv1.ContextFabricRenderRuleInvestmentThemeShare,
 		Title: "Effort share by theme", AxisKind: contractsv1.ContextFabricRenderAxisCategory, AxisLabel: "Theme", ValueLabel: "Share of effort (ratio)",
 		ValueUnit: contractsv1.ContextFabricRenderValueUnitRatio,
-		Series:    []contractsv1.ContextFabricRenderSeries{{Key: "share", Label: "Share of effort", Points: []contractsv1.ContextFabricRenderPoint{point(0, "Feature Delivery"), point(1, "Operational / Support")}}},
+		Series:    []contractsv1.ContextFabricRenderSeries{{Key: "share", Label: "Share of effort", Points: []contractsv1.ContextFabricRenderPoint{point(0, "Feature Delivery", 0.5), point(1, "Operational / Support", 0.5), point(2, "Maintenance / Tech Debt", 0), point(3, "Quality / Reliability", 0), point(4, "Risk / Security", 0)}}},
 	}}
 	projection := Project(result, Budget{})
 	if len(projection.RenderShapes) != 1 || projection.RenderShapes[0].Kind != contractsv1.ContextFabricRenderKindTreemap {

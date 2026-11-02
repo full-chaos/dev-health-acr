@@ -44,6 +44,10 @@ func investmentThemeShareShape(result InvestigationResult, frame *QuestionFrame)
 	if result.Cohort != nil || cohortRenderIntent(frame) || !familyTakesShape(result.AnswerPlan.Family, result.Interpretation.Shape) {
 		return nil, RenderShapeSkipCohortAnswer
 	}
+	// A frame states the question's own goal, and that outranks the family.
+	if frame != nil && !frame.HasGoal(GoalAllocateInvestment) {
+		return nil, RenderShapeSkipNotInvestmentAllocation
+	}
 	if !planAuthorizesRenderKind(result.AnswerPlan, contractsv1.ContextFabricRenderKindTreemap) {
 		return nil, RenderShapeSkipNotPlanAuthorized
 	}
@@ -65,6 +69,11 @@ func investmentThemeShareShape(result InvestigationResult, frame *QuestionFrame)
 	case contractsv1.ContextFabricSubjectRepository, contractsv1.ContextFabricSubjectTeam:
 	default:
 		return nil, RenderShapeSkipSubjectKindNotCharted
+	}
+	// The row budget can cut a table. A cut table is not the whole, and a chart of
+	// what is left would present those shares as all of the effort.
+	if len(fact.Rows) != contractsv1.ContextFabricInvestmentThemeCount() {
+		return nil, RenderShapeSkipThemeTableCut
 	}
 	points := make([]contractsv1.ContextFabricRenderPoint, 0, len(fact.Rows))
 	above := 0
