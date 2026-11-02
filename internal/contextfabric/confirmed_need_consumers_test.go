@@ -48,6 +48,17 @@ type needTurnCall struct {
 
 // needTurnGraph returns the scripted response for the current turn and
 // records every ResolveSubjects call, with what the engine handed the port.
+// gatedBeyondWindow gives a windowed turn's response offers-only material
+// that asks a question beyond the window (a kind and a handle). CHAOS-4451:
+// under the class-default gate a turn ends on the window confirmation only
+// when its offers-only pass finds such a question; when the window is the
+// only question it answers. A fixture that pins the gated turn's own
+// mechanics wraps its windowed response in this.
+func gatedBeyondWindow(response needTurnResponse) needTurnResponse {
+	response.material = chaos4234GatedMaterial()
+	return response
+}
+
 type needTurnGraph struct {
 	response needTurnResponse
 	calls    []needTurnCall
@@ -835,8 +846,11 @@ func TestConfirmedNeedConsumers_WindowThreeTurns(t *testing.T) {
 		if len(three.windows) != 0 {
 			t.Fatalf("ledger window events = %#v, want none: no window was admitted", three.windows)
 		}
-		if three.result.Status != InvestigationClarificationRequired || three.result.WindowClarification == nil {
-			t.Fatalf("turn three status=%s, want the window need re-raised", three.result.Status)
+		// CHAOS-4451: the window is the only question, so the re-raised need
+		// is the window offer beside an answer on the inferred window.
+		if three.result.Status == InvestigationClarificationRequired || three.result.WindowClarification == nil ||
+			three.result.EffectiveEvidenceWindow == nil || three.result.EffectiveEvidenceWindow.Provenance != WindowInferredDefault {
+			t.Fatalf("turn three status=%s window=%#v, want the window need re-raised as an offer beside an answer on the inferred window", three.result.Status, three.result.EffectiveEvidenceWindow)
 		}
 		if got := memberEntries(three.result, contractsv1.ContextFabricStructureNeedWindow); len(got) != 0 {
 			t.Fatalf("window disclosure = %#v, want none", got)

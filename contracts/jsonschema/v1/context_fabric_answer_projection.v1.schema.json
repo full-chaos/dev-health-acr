@@ -2420,7 +2420,8 @@
         "investment_subcategory_share",
         "completion_forecast",
         "completion_forecast_percentiles",
-        "investment_repository_flow"
+        "investment_repository_flow",
+        "landscape_position"
       ]
     },
     "RenderValueUnit": {
