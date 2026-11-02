@@ -11,17 +11,17 @@ import (
 )
 
 type fakeWorkloadBindingStore struct {
-	binding storage.WorkloadBinding
-	err     error
+	bindings []storage.WorkloadBinding
+	err      error
 }
 
-func (f *fakeWorkloadBindingStore) Lookup(context.Context, storage.WorkloadBindingKey) (storage.WorkloadBinding, error) {
-	return f.binding, f.err
+func (f *fakeWorkloadBindingStore) Lookup(context.Context, storage.WorkloadBindingKey) ([]storage.WorkloadBinding, error) {
+	return f.bindings, f.err
 }
 
 func TestNewGrantResolver_disabledBindingReadsAsNotFound(t *testing.T) {
 	disabledAt := time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC)
-	store := &fakeWorkloadBindingStore{binding: storage.WorkloadBinding{BindingID: "wlb_1", DisabledAt: &disabledAt}}
+	store := &fakeWorkloadBindingStore{bindings: []storage.WorkloadBinding{storage.WorkloadBinding{BindingID: "wlb_1", DisabledAt: &disabledAt}}}
 	resolver, err := NewGrantResolver(store)
 	if err != nil {
 		t.Fatal(err)
@@ -43,7 +43,7 @@ func TestNewGrantResolver_missingBindingIsNotFound(t *testing.T) {
 }
 
 func TestNewGrantResolver_resolvesRoleToGrantedScopes(t *testing.T) {
-	store := &fakeWorkloadBindingStore{binding: storage.WorkloadBinding{BindingID: "wlb_2", OrgID: "org1", Role: "ops", RepositoryScopes: []string{"*"}}}
+	store := &fakeWorkloadBindingStore{bindings: []storage.WorkloadBinding{storage.WorkloadBinding{BindingID: "wlb_2", OrgID: "org1", Role: "ops", RepositoryScopes: []string{"*"}}}}
 	resolver, err := NewGrantResolver(store)
 	if err != nil {
 		t.Fatal(err)
