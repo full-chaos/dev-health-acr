@@ -87,6 +87,7 @@ var ByID = map[string]Event{
 	"contextfabric.plan_carry":                            PlanCarry,
 	"contextfabric.plan_carry_outcome":                    PlanCarryOutcome,
 	"contextfabric.plan_narrowing":                        PlanNarrowing,
+	"contextfabric.plan_operand_reads":                    PlanOperandReads,
 	"contextfabric.prior_consulted":                       PriorConsulted,
 	"contextfabric.prior_degradation":                     PriorDegradation,
 	"contextfabric.prior_degradation_pointer_dangling":    PriorDegradationPointerDangling,
@@ -5694,6 +5695,56 @@ func (f PlanNarrowingFields) SlogArgs() []any {
 		"quota_groups_over_allowance", f.QuotaGroupsOverAllowance,
 		"evidence_pinned_members", f.EvidencePinnedMembers,
 		"ceiling_fit", contextfabric.SanitizeLogAttr(f.CeilingFit),
+	}
+}
+
+// PlanOperandReadsFields is contextfabric.plan_operand_reads's generated typed construction interface
+// (CHAOS-5516): one Go field per Field PlanOperandReads.Fields declares in spec.go.
+type PlanOperandReadsFields struct {
+	OrgID       string
+	OperandRows int
+	KindsNamed  int
+	KindsAdded  int
+	// constructed (CHAOS-5516 r1 fix): an UNEXPORTED marker, generated on
+	// every PlanOperandReadsFields uniformly, set ONLY by NewPlanOperandReadsFields below. A caller
+	// outside this package cannot set an unexported field via a composite
+	// literal -- not partially (one exported field set, the rest at their
+	// Go zero value) and not even by hand-setting every EXPORTED field --
+	// so this is the class fix for "a caller still assembles that event's
+	// field list": no composite literal built outside eventspec, complete or
+	// partial, can ever read as constructed.
+	constructed bool
+}
+
+// NewPlanOperandReadsFields is the generated constructor for PlanOperandReadsFields -- every
+// field PlanOperandReads.Fields declares is a required parameter.
+func NewPlanOperandReadsFields(orgID string, operandRows int, kindsNamed int, kindsAdded int) PlanOperandReadsFields {
+	return PlanOperandReadsFields{
+		OrgID:       orgID,
+		OperandRows: operandRows,
+		KindsNamed:  kindsNamed,
+		KindsAdded:  kindsAdded,
+		constructed: true,
+	}
+}
+
+// IsConstructed reports whether f was built by NewPlanOperandReadsFields -- the ONE
+// exported way to read the unexported "constructed" marker from outside
+// this package. false for the Go zero value and for ANY composite literal
+// assembled elsewhere, complete or partial.
+func (f PlanOperandReadsFields) IsConstructed() bool { return f.constructed }
+
+// SlogArgs returns PlanOperandReads's own declared fields as alternating slog
+// key/value pairs, in the SAME order spec.go declares them. Every
+// free-text string/[]string value is sanitized HERE, at its own
+// construction site inside this function's body -- the shape CHAOS-5544's
+// own instrument (TestNoUnsanitizedLogAttributeInContextFabric) requires.
+func (f PlanOperandReadsFields) SlogArgs() []any {
+	return []any{
+		"org_id", contextfabric.SanitizeLogAttr(f.OrgID),
+		"operand_rows", f.OperandRows,
+		"kinds_named", f.KindsNamed,
+		"kinds_added", f.KindsAdded,
 	}
 }
 

@@ -523,6 +523,7 @@ type recordingTelemetry struct {
 	windowBinderOutcomes           []WindowBindReason
 	windowBinderProposals          []WindowBindOutcome
 	windowGatedForConfirmation     []windowGatedRecord
+	operandReadKinds               [][3]int
 	windowClassifications          []recordedWindowClassification
 	inferredWindowGates            []recordedInferredWindowGate
 	interpretationTerms            []InterpretationTermsEvent
@@ -803,6 +804,10 @@ func (r *recordingTelemetry) RecordWindowGatedForConfirmation(_ context.Context,
 
 func (r *recordingTelemetry) RecordWindowCanonicalization(_ context.Context, _ storage.Principal, outcome WindowCanonicalizationOutcome) {
 	r.windowCanonicalizationOutcomes = append(r.windowCanonicalizationOutcomes, outcome)
+}
+
+func (r *recordingTelemetry) RecordOperandReadKinds(_ context.Context, _ storage.Principal, operandRows, kindsNamed, kindsAdded int) {
+	r.operandReadKinds = append(r.operandReadKinds, [3]int{operandRows, kindsNamed, kindsAdded})
 }
 
 func (r *recordingTelemetry) RecordWindowClassification(_ context.Context, _ storage.Principal, modelClass WindowClass, outcome WindowClassOutcome) {
