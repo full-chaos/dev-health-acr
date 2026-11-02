@@ -282,6 +282,17 @@ func withoutVetoedHandles(offer contextfabric.StructureOfferMaterial, explicit [
 	return offer
 }
 
+// withoutVetoedKinds is the same rule for the request's own expected_kinds.
+func withoutVetoedKinds(offer contextfabric.StructureOfferMaterial, explicit []contractsv1.ContextFabricSubjectKind) contextfabric.StructureOfferMaterial {
+	if len(explicit) == 0 {
+		return offer
+	}
+	offer.KindOptions = slices.DeleteFunc(slices.Clone(offer.KindOptions), func(option contractsv1.ContextFabricKindOption) bool {
+		return !slices.Contains(explicit, option.Kind)
+	})
+	return offer
+}
+
 // censusCandidateLabel is the server's label for a candidate the census named. The
 // node's own label is not trusted: some nodes carry their raw canonical id as a
 // label (CHAOS-12468), and a shared title leaves the prompt to its id suffix cue.

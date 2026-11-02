@@ -248,10 +248,10 @@ is true of all four, so it is no oracle. Neither sentence reads as "does not exi
 A requested repository narrows the census, so a zero there gives neither sentence: it
 takes the scope's absence sentence (see "A complete zero").
 
-**Offers.** The request's own `subject_handles` bound the handle options. A receipt
-must agree with them, so an option for any other value would end the follow-up in a
-conflict. Such an option is not offered, for any caller, and the candidate receipts
-still carry that subject.
+**Offers.** The request's own `subject_handles` bound the handle options, and its
+`expected_kinds` bound the kind options. A receipt must agree with them, so an option
+for any other value would end the follow-up in a conflict. Such an option is not
+offered, for any caller, and the candidate receipts still carry that subject.
 
 **Handles.** A linked item passes `VerifyHandle`, fresh and remembered. A work-item
 handle option mints for a restricted caller only from evidence inside the grant: an

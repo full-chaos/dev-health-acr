@@ -1188,3 +1188,38 @@ func TestAnOptionThatAgreesWithTheRequestStays(t *testing.T) {
 		t.Fatalf("options = %+v, want the caller's own", turn.offers.HandleOptions)
 	}
 }
+
+// The same rule for a kind: a receipt must agree with the request's own
+// expected_kinds, so an option for another kind ends the follow-up in a conflict.
+// The fixture's every-option follow-up found this one.
+func TestAKindOptionTheRequestItselfWouldVetoIsNotOffered(t *testing.T) {
+	t.Parallel()
+	repository := candidateNode(contextfabric.SubjectRepository, "repository:noise", "noise", 0.8, []string{listingRepo(0)})
+	pullRequest := candidateNode(contextfabric.SubjectPullRequest, "pull_request:repo-00:5", "Release 12 prep", 0.8, []string{listingRepo(0)})
+	pullRequest.Attributes[authorizationTeamsAttr] = "*"
+	roomy := func(r *contextfabric.InvestigationRequest, _ *ResolveDeps) { r.Options.MaxSubjectCandidates = 10 }
+	kinds := func(turn listingTurn) []string {
+		got := []string{}
+		for _, option := range turn.offers.KindOptions {
+			got = append(got, string(option.Kind))
+		}
+		return got
+	}
+	for name, principal := range listingCallers(t, 2) {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			spy := &grantCensusSpy{rows: listingRows(2)}
+			world := listingWorld{principal: principal, census: spy.census, nodes: listingNodes(2), pool: []CandidateNode{repository, pullRequest}, truncated: true, edit: roomy}
+			if got := kinds(runListing(t, world)); !slices.Contains(got, string(contextfabric.SubjectRepository)) {
+				t.Fatalf("no explicit kind: options = %v, want the pool's: the guard needs a request to compare", got)
+			}
+			world.edit = func(r *contextfabric.InvestigationRequest, deps *ResolveDeps) {
+				roomy(r, deps)
+				r.ExpectedKinds = []contractsv1.ContextFabricSubjectKind{contextfabric.SubjectPullRequest}
+			}
+			if got := kinds(runListing(t, world)); !slices.Equal(got, []string{string(contextfabric.SubjectPullRequest)}) {
+				t.Fatalf("options = %v, want only the caller's own", got)
+			}
+		})
+	}
+}
