@@ -150,7 +150,7 @@ func TestAReadInFlightStopsAtItsContextDeadline(t *testing.T) {
 // and what stopped the attempt was the caller.
 func TestACancelDoesNotStopAReadInFlight(t *testing.T) {
 	t.Parallel()
-	const cancelAt, deadline, requestTimeout = 30 * time.Millisecond, 200 * time.Millisecond, 3 * time.Second
+	const deadline, requestTimeout = 200 * time.Millisecond, 3 * time.Second
 	server := newSilentFalkor(t)
 	client, err := newSDKAPI(Config{Addr: server.listener.Addr().String(), GraphPrefix: "acr-cf-deadline", RequestTimeout: requestTimeout, MaxAttempts: 1, MaxResults: 25, PoolSize: 2, AllowInsecure: true})
 	if err != nil {
@@ -160,21 +160,38 @@ func TestACancelDoesNotStopAReadInFlight(t *testing.T) {
 	defer cancelParent()
 	ctx, cancel := context.WithTimeout(parent, deadline)
 	defer cancel()
-	time.AfterFunc(cancelAt, cancelParent)
+	// The caller cancels once the server holds the query, so the cancel lands
+	// on a read in flight, never on a timer that could fire before it starts
+	// (CHAOS-12573, Codex #1931 r1).
+	seenAt := make(chan time.Time, 1)
+	go func() {
+		<-server.seen
+		seenAt <- time.Now()
+		cancelParent()
+	}()
 	started := time.Now()
 	_, err = client.query(ctx, "graph", "RETURN 1", nil, true)
 	returned := time.Now()
+	var inFlight time.Time
+	select {
+	case inFlight = <-seenAt:
+	default:
+		t.Fatal("the server never received the query: no read was in flight, so this measured nothing")
+	}
 	elapsed := returned.Sub(started)
 	// Measured against the context's own deadline, not from a start taken
 	// after the context was made (CHAOS-12573: 199.15 ms of 200 on a busy
 	// runner was that gap, not an early return).
 	at, _ := ctx.Deadline()
-	t.Logf("cancelled at %s, deadline %s, returned after %s err=%v", cancelAt, deadline, elapsed.Round(time.Millisecond), err)
+	t.Logf("cancelled at %s, deadline %s, returned after %s err=%v", inFlight.Sub(started).Round(time.Millisecond), deadline, elapsed.Round(time.Millisecond), err)
 	if err == nil {
 		t.Fatal("a query with no reply returned no error")
 	}
+	if !inFlight.Before(at) {
+		t.Fatalf("the query reached the server at %s, not before the deadline %s: the cancel did not land on a read in flight", inFlight, at)
+	}
 	if returned.Before(at) || elapsed > requestTimeout/2 {
-		t.Fatalf("returned after %s, want at the %s deadline, past the cancel at %s", elapsed, deadline, cancelAt)
+		t.Fatalf("returned after %s, want at the %s deadline, past the cancel at %s", elapsed, deadline, inFlight.Sub(started))
 	}
 }
 
