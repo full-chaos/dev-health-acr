@@ -190,6 +190,8 @@ func t4Cases() []t4Case {
 	// ---- landscape
 	add(t4Case{name: "landscape/team", kind: contextfabric.FactLandscape, subjects: team, tables: []fakeTable{
 		{match: "avg(x_raw)", rows: [][]any{{"CHAOS", "churn_throughput", "2026-02-21", 6.1, 3.4}}},
+		// The daily series, cut: the read held 70 days and kept the newest.
+		{match: "held_days", rows: [][]any{{"CHAOS", "2026-02-21", int64(2), int64(150), int64(3), int64(70)}, {"CHAOS", "2026-02-20", int64(2), int64(140), int64(2), int64(70)}}},
 		{match: "sumIf(one_churn", rows: t4Rows(1, func(i int, _ string) []any {
 			return landscapeTeamRow("CHAOS", 4, 1200, 30, 18.5, 6)
 		})},
