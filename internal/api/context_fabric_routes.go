@@ -1448,5 +1448,8 @@ func contextFabricBudgetRefusalFields(refusal contextfabric.AnswerBudgetRefusal)
 // withoutDisabledRenderShapes is the one reading of the deployment's render
 // switches at both doors that serve a result.
 func (a *App) withoutDisabledRenderShapes(answer contractsv1.ContextFabricInvestigationResult) contractsv1.ContextFabricInvestigationResult {
-	return contextfabric.WithoutDisabledRenderShapes(answer, contextfabric.RenderShapeOptions{InvestmentThemeShare: a.config.ContextFabricInvestmentTreemapEnabled})
+	return contextfabric.WithoutDisabledRenderShapes(answer, contextfabric.RenderShapeOptions{
+		InvestmentThemeShare: a.config.ContextFabricInvestmentTreemapEnabled,
+		ComparisonSideBySide: a.config.ContextFabricComparisonTableEnabled,
+	})
 }

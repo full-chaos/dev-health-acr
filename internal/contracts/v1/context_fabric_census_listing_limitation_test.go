@@ -73,3 +73,58 @@ func TestAForgedCensusListingLimitationIsNotRecognised(t *testing.T) {
 		}
 	}
 }
+
+func TestAProvenAbsenceIsStatedAndRecognised(t *testing.T) {
+	t.Parallel()
+	for _, sentence := range []string{ContextFabricCensusAbsentLimitation, ContextFabricCensusAbsentInScopeLimitation} {
+		if !IsContextFabricCensusAbsenceLimitation(sentence) || !IsContextFabricCensusListingLimitation(sentence) || !IsContextFabricServiceAuthoredLimitation(sentence) {
+			t.Fatalf("%q is not recognised", sentence)
+		}
+		// Never "does not exist" on its own: that is an oracle, and untrue outside.
+		if !strings.Contains(sentence, "This does not show that it does not exist.") {
+			t.Fatalf("%q may read as a claim about what exists", sentence)
+		}
+		for _, forged := range []string{sentence + " ", " " + sentence, strings.ToUpper(sentence), strings.TrimSuffix(sentence, ".")} {
+			if IsContextFabricCensusAbsenceLimitation(forged) || IsContextFabricCensusListingLimitation(forged) {
+				t.Fatalf("%q was recognised", forged)
+			}
+		}
+	}
+	// The link sentence is the absence sentence of a restricted work item, and the
+	// other census sentences are not absences.
+	if !IsContextFabricCensusAbsenceLimitation(ContextFabricWorkItemNoGrantedLinkLimitation) {
+		t.Fatal("the link sentence is not an absence")
+	}
+	if IsContextFabricCensusListingLimitation(ContextFabricWorkItemNoGrantedLinkLimitation) {
+		t.Fatal("the link sentence keeps its own recogniser")
+	}
+	for _, other := range []string{ContextFabricWorkItemLinksUnreadLimitation, ContextFabricCensusUnlistedLimitation(1), ContextFabricCensusListedLimitation(10, 5), ""} {
+		if IsContextFabricCensusAbsenceLimitation(other) {
+			t.Fatalf("%q is not an absence", other)
+		}
+	}
+}
+
+// A web user has no credential in view, and "you" reads true for an MCP caller too.
+func TestTheSentencesSayYouNotTheCredential(t *testing.T) {
+	t.Parallel()
+	for _, sentence := range []string{
+		ContextFabricCensusAbsentLimitation,
+		ContextFabricCensusAbsentInScopeLimitation,
+		ContextFabricCensusUnlistedLimitation(1),
+		ContextFabricCensusUnlistedLimitation(10),
+		ContextFabricCensusListedLimitation(10, 1),
+		ContextFabricCensusListedLimitation(10, 5),
+		ContextFabricWorkItemNoGrantedLinkLimitation,
+	} {
+		if !strings.Contains(sentence, "you can read") {
+			t.Fatalf("%q does not say what you can read", sentence)
+		}
+		if strings.Contains(strings.ToLower(sentence), "credential") {
+			t.Fatalf("%q names a credential", sentence)
+		}
+	}
+	if strings.Contains(strings.ToLower(ContextFabricWorkItemLinksUnreadLimitation), "credential") {
+		t.Fatalf("%q names a credential", ContextFabricWorkItemLinksUnreadLimitation)
+	}
+}

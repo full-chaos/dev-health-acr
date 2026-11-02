@@ -359,6 +359,10 @@ func noMatchLimitationSubjectNotFound(subjectTerms []string, requestedKind Subje
 // turn could not list any. It is not an empty pool.
 const censusUnlistedTerminalReason = "census_unlisted"
 
+// censusAbsentTerminalReason (CHAOS-12498): a complete census found no subject that
+// holds the handle. It is not an empty pool either.
+const censusAbsentTerminalReason = "census_absent"
+
 // noMatchRequestedKind is the kind the question asked about, when one is
 // determinable: the winning reading's requested kind, else the caller's
 // single explicit expected kind.
@@ -916,6 +920,9 @@ func subjectlessTerminalReason(gate FrameGate, resolution SubjectResolution, sub
 	// CHAOS-12467: ahead of the exclusion arm, as the terminal is: a census
 	// counted a subject, so this pool is neither withheld nor empty.
 	if resolution.CensusLimitation != "" && !resolution.GraphNotProjected {
+		if contractsv1.IsContextFabricCensusAbsenceLimitation(resolution.CensusLimitation) {
+			return censusAbsentTerminalReason
+		}
 		return censusUnlistedTerminalReason
 	}
 	// Checked BEFORE graph_not_projected and the authz/empty arms, because
@@ -1127,7 +1134,9 @@ func resolveTerminalStatus(request InvestigationRequest, resolution *SubjectReso
 	single := len(resolution.Candidates) == 1
 	// CHAOS-12467: one candidate beside a census count. "One authorized subject
 	// matched" contradicts the count, so the count is the sentence, on both arms.
-	counted := single && resolution.CensusLimitation != ""
+	// CHAOS-12498: so does any near match beside a complete zero. It stays listed,
+	// and "the question matched" stays away from it.
+	counted := resolution.CensusLimitation != "" && (single || contractsv1.IsContextFabricCensusAbsenceLimitation(resolution.CensusLimitation))
 	if !request.Options.AllowClarification {
 		if counted {
 			return InvestigationNoMatch, resolution.CensusLimitation

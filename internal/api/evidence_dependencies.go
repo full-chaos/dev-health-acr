@@ -44,6 +44,9 @@ type AppConfig struct {
 	// config.Config.ContextFabricInvestmentTreemapEnabled: both doors that
 	// serve a result read it (contextfabric.WithoutDisabledRenderShapes).
 	ContextFabricInvestmentTreemapEnabled bool
+	// ContextFabricComparisonTableEnabled mirrors
+	// config.Config.ContextFabricComparisonTableEnabled, for the same two doors.
+	ContextFabricComparisonTableEnabled bool
 	// ContextFabricEventStreamEnabled mirrors
 	// config.Config.ContextFabricEventStreamEnabled: the create-investigation
 	// route serves `Accept: text/event-stream` only when it is on.
