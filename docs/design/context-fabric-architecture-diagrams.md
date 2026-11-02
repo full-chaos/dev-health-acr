@@ -1274,8 +1274,8 @@ served token has a word in the label registry under `measure_unit:<unit>`.
 **Updated 2026-11-02 (CHAOS-12607, CHAOS-4613 ruling 4): a fourth shape,
 `distribution`.** A completion forecast is one entity's Monte Carlo outcomes,
 one row per distinct day to the ops 365-day horizon; the largest latest
-forecast on askdev-1 has 359 rows (33,719 bytes, 1,077 cells through the real
-contract types). The claimed-fact row cap is one cap for every table (64), so a
+forecast on askdev-1 has 359 rows (37,457 row bytes and 1,077 cells as the served
+table, keyed by `completion_days`, encodes them). The claimed-fact row cap is one cap for every table (64), so a
 `breakdown` cannot carry it: `TestABreakdownCannotCarryAWholeCompletionDistribution`
 shows the refusal. Raising 64 for every table was ruled out, so the shape has
 its own cap: `ContextFabricClaimedFactDistributionMaxRows` = 366 (days 0 to

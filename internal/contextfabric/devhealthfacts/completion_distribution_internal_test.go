@@ -33,7 +33,11 @@ func forecastFields(row readers.CompletionForecastRow) map[string]contextfabric.
 
 func teamForecastFields(candidates []readers.CompletionForecastRow, computedAt string, distribution bool) map[string]contextfabric.FactValue {
 	fields := map[string]contextfabric.FactValue{}
-	addTeamCompletionForecastFields(fields, candidates, computedAt, distribution)
+	scope := "scope-a"
+	if len(candidates) > 0 {
+		scope = candidates[0].WorkScopeID
+	}
+	addTeamCompletionForecastFields(fields, scope, candidates, computedAt, distribution)
 	return fields
 }
 

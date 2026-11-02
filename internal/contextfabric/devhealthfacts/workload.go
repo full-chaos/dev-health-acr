@@ -386,7 +386,7 @@ func (p *WorkloadProvider) readTeamWorkload(ctx context.Context, orgID string, s
 		if r.HasP50Days != 0 {
 			fields["forecast_p50_days"] = contextfabric.IntegerFactValue(r.P50Days)
 		}
-		addTeamCompletionForecastFields(fields, forecastsByScope[completionForecastScope{team: r.TeamID, scope: r.WorkScopeID}], r.ComputedAt, p.completionDistribution)
+		addTeamCompletionForecastFields(fields, r.WorkScopeID, forecastsByScope[completionForecastScope{team: r.TeamID, scope: r.WorkScopeID}], r.ComputedAt, p.completionDistribution)
 		// codex CHAOS-4645 round-1 P3 (ARGUED, confirmed on read): the scalar
 		// forecast is legitimately "instant" (grainExact, ReadFacts' own
 		// provider-level Grain above), but daily_workload buckets by
