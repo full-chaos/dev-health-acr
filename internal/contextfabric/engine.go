@@ -148,6 +148,11 @@ type EngineOptions struct {
 	// of reuse participation (rows persist NULL and lookups miss on it),
 	// the same fail-closed convention as every other field here.
 	ReusePromptVersions ReusePromptVersions
+	// ReuseRecheckBudget is the time one answer reuse recheck may spend on the
+	// graph, across all its reads (CHAOS-12511). Zero means
+	// defaultReuseRecheckBudget. An option so a test need not wait that long, as
+	// Now is.
+	ReuseRecheckBudget time.Duration
 	// ReuseVersionAuthorities (CHAOS-3862 round 2) is three MORE
 	// deployment-current version authorities -- composition must wire it
 	// from the SAME constants the corresponding fresh-result composition
@@ -1368,6 +1373,7 @@ type Engine struct {
 	synthesisDeadlineReserve time.Duration
 	serviceVersion           string
 	now                      func() time.Time
+	reuseRecheckBudget       time.Duration
 	newResultID              func() string
 }
 
@@ -1380,6 +1386,9 @@ func NewEngine(dependencies EngineDependencies, options EngineOptions) (*Engine,
 	}
 	if options.Now == nil {
 		options.Now = time.Now
+	}
+	if options.ReuseRecheckBudget == 0 {
+		options.ReuseRecheckBudget = defaultReuseRecheckBudget
 	}
 	if options.NewResultID == nil {
 		return nil, errors.New("context fabric engine result ID generator is required")
@@ -1442,6 +1451,7 @@ func NewEngine(dependencies EngineDependencies, options EngineOptions) (*Engine,
 		maxSerializedBytes:       options.MaxSerializedBytes,
 		synthesisDeadlineReserve: options.SynthesisDeadlineReserve,
 		serviceVersion:           options.ServiceVersion, now: options.Now, newResultID: options.NewResultID,
+		reuseRecheckBudget: options.ReuseRecheckBudget,
 	}, nil
 }
 

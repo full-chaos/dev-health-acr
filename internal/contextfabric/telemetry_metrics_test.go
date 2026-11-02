@@ -33,7 +33,8 @@ func TestSlogEngineTelemetryCountsReuseAndRequirementOutcomes(t *testing.T) {
 	records := captureSlogJSON(t, func(logger *slog.Logger) {
 		telemetry := NewSlogEngineTelemetry(logger).WithMetrics(instruments)
 		principal := storage.Principal{OrgID: "org_metrics_test"}
-		telemetry.RecordAnswerReuse(context.Background(), principal, AnswerReuseHit, "v1", AnswerReuseRefusal{})
+		// A measured recheck adds no cell: outcome stays the only label.
+		telemetry.RecordAnswerReuse(context.Background(), principal, AnswerReuseHit, "v1", AnswerReuseRefusal{Recheck: AnswerReuseRecheck{Ran: true, Milliseconds: 1234, Subjects: 54}})
 		telemetry.RecordAnswerReuse(context.Background(), principal, AnswerReuseMissNoCandidate, "v1", AnswerReuseRefusal{})
 		telemetry.RecordAnswerReuse(context.Background(), principal, AnswerReuseOutcome("attacker_chosen_value"), "v1", AnswerReuseRefusal{})
 		var event CompletenessAuthorityObservation

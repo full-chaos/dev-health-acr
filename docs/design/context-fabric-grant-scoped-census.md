@@ -117,8 +117,8 @@ counts a population and is never listed.
   as the question wrote it. The census marker is internal: it comes off every candidate
   as the candidate leaves the resolver, on every path. The slug comes
   from `auth.RepositoryAllowed`, never from its position in the node's list: a node can
-  list an old slug. A pool-built candidate keeps its label, so the prompt's id suffix
-  cue can still reach one (CHAOS-12468).
+  list an old slug. A pool-built candidate keeps its label, and two with one label take
+  the prompt's ordinal (CHAOS-12468).
 - **Side channels.** The ids are inside the grant, each passes the node gate, and the
   trace carries counts only (`evidence_census_listing`). Outside rows change no
   candidate, label, offer, sentence, trace, statement or graph read

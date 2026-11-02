@@ -58,7 +58,7 @@ func (r ContextFabricSubjectResolution) Validate() error {
 }
 
 func (r ContextFabricSubjectResolution) validate(bounds contextFabricBounds) error {
-	if r.Candidates == nil || r.Committed == nil || len(r.Candidates) > 50 || len(r.Committed) > 250 {
+	if r.Candidates == nil || r.Committed == nil || len(r.Candidates) > ContextFabricResolutionCandidatesMaxCount || len(r.Committed) > ContextFabricResolutionCommittedMaxCount {
 		return fmt.Errorf("subject resolution arrays violate v1 bounds")
 	}
 	seenReceipts := make(map[string]struct{}, len(r.Candidates))
@@ -228,7 +228,7 @@ func (c ContextFabricCohort) validate(bounds contextFabricBounds) error {
 	// rest by name rather than constructing a document this validator would
 	// then reject. That seam is deliberately narrower than this bound and is
 	// pinned by its own tests.
-	if !bounds.additiveOK(validContextFabricSubjectKind(c.Kind), string(c.Kind)) || c.Members == nil || len(c.Members) > 250 || len(c.Exclusions) > 250 || !boundedText(c.Rationale, 1, 4000, bounds) || (c.Complete && c.Truncated) {
+	if !bounds.additiveOK(validContextFabricSubjectKind(c.Kind), string(c.Kind)) || c.Members == nil || len(c.Members) > ContextFabricCohortMembersMaxCount || len(c.Exclusions) > ContextFabricCohortExclusionsMaxCount || !boundedText(c.Rationale, 1, 4000, bounds) || (c.Complete && c.Truncated) {
 		return fmt.Errorf("cohort violates v1 bounds")
 	}
 	seen := make(map[string]struct{}, len(c.Members))
@@ -1679,7 +1679,7 @@ func (r ContextFabricInvestigationResult) validateAgainstSchemaVersion(bounds co
 		r.Drivers == nil || len(r.Drivers) > ContextFabricDriversMaxCount ||
 		r.RemainingWork == nil || len(r.RemainingWork) > ContextFabricRemainingWorkMaxCount ||
 		r.ReadinessGaps == nil || len(r.ReadinessGaps) > ContextFabricReadinessGapsMaxCount ||
-		r.Paths == nil || len(r.Paths) > 250 ||
+		r.Paths == nil || len(r.Paths) > ContextFabricRelationshipPathsMaxCount ||
 		r.Conflicts == nil || len(r.Conflicts) > ContextFabricConflictsMaxCount ||
 		r.Limitations == nil || len(r.Limitations) > bounds.narrativeCount || !uniqueTrimmedStrings(r.Limitations, bounds.narrativeLength) ||
 		r.EvidenceRefIDs == nil || !boundedEvidenceRefs(r.EvidenceRefIDs, ContextFabricEvidenceRefIDsMaxCount, true) ||

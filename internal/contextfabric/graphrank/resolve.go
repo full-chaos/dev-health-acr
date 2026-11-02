@@ -51,18 +51,24 @@ const questionProvenanceMarker = "[full question]"
 // census-recovered one.
 const censusProvenanceMarker = "[census witness]"
 
-// withoutCensusMarker takes the marker off every candidate as it leaves the
-// resolver. It is internal provenance for the merge, and matched_terms is served:
-// a refused re-decision and a lone commit both carried it out. Validation allows a
-// candidate with no term, which a census-only candidate then is.
-func withoutCensusMarker(candidates []contextfabric.SubjectCandidate) {
+// withoutProvenanceMarkers takes both markers off every candidate as it leaves the
+// resolver. They are internal provenance for the merge, and matched_terms is
+// served: a refused re-decision and a lone commit both carried one out. Validation
+// allows a candidate with no term, which a marker-only candidate then is. The
+// markers are reserved: SubjectTerms never yields one, so every marker here is
+// synthetic, and the term cap can never drop a real term that only shares its text.
+func withoutProvenanceMarkers(candidates []contextfabric.SubjectCandidate) {
+	marker := func(term string) bool { return isProvenanceMarker(term) }
 	for index, candidate := range candidates {
-		if slices.Contains(candidate.MatchedTerms, censusProvenanceMarker) {
-			candidates[index].MatchedTerms = slices.DeleteFunc(slices.Clone(candidate.MatchedTerms), func(term string) bool {
-				return term == censusProvenanceMarker
-			})
+		if slices.ContainsFunc(candidate.MatchedTerms, marker) {
+			candidates[index].MatchedTerms = slices.DeleteFunc(slices.Clone(candidate.MatchedTerms), marker)
 		}
 	}
+}
+
+// isProvenanceMarker reports whether term is one of the two reserved markers.
+func isProvenanceMarker(term string) bool {
+	return term == censusProvenanceMarker || term == questionProvenanceMarker
 }
 
 // matchedTermsCap mirrors contractsv1's own unexported MatchedTerms entry
@@ -2299,7 +2305,7 @@ func ResolveSubjectsWithCommitBasis(ctx context.Context, principal storage.Princ
 	admission := newContestAdmission(decideContestScope(frame, confirmedKind,
 		decideAnchorPoolKindScope(frame, scopeAnchorKind, confirmedAnchor, confirmedKind)))
 	resolution, offerMaterial, err := resolveSubjects(ctx, principal, request, interpreted, deps, confirmedKind, confirmedAnchor, bases, digests, frame, scopeAnchorKind, admission)
-	withoutCensusMarker(resolution.Candidates)
+	withoutProvenanceMarkers(resolution.Candidates)
 	// THE DISCLOSURE, emitted on EVERY successful pass through this call,
 	// explicit zero included, so a question that refused nothing and a build
 	// where the refusal stopped happening can never read alike. Deliberately

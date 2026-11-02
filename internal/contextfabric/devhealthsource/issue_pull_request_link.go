@@ -260,7 +260,7 @@ WHERE l.org_id = {org_id:String}` + sincePredicate(cursor, "l.last_synced", rowK
 			RelationshipID: identity.DeriveRelationship(identity.RelationshipFamilyIssuePullRequestLink, issueCanonicalID, pullRequestID, string(contractsv1.ContextFabricRelationshipLinksPullRequest)),
 			Type:           contractsv1.ContextFabricRelationshipLinksPullRequest,
 			From:           contractsv1.ContextFabricSubjectRef{Kind: contractsv1.ContextFabricSubjectWorkItem, CanonicalID: issueCanonicalID, Label: workItemID},
-			To:             contractsv1.ContextFabricSubjectRef{Kind: contractsv1.ContextFabricSubjectPullRequest, CanonicalID: pullRequestID, Label: pullRequestID},
+			To:             contractsv1.ContextFabricSubjectRef{Kind: contractsv1.ContextFabricSubjectPullRequest, CanonicalID: pullRequestID, Label: identity.PullRequestLabel(number)},
 			Properties: map[string]contractsv1.ContextFabricScalarValue{
 				IssuePullRequestLinkTierProperty: stringScalar(tier),
 				IssuePullRequestLinkRankProperty: intScalar(rank),

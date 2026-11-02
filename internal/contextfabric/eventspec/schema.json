@@ -983,7 +983,9 @@
           "miss_count_scope",
           "miss_hint_not_committed",
           "miss_scope_identity",
-          "miss_project_narrowing_unverified"
+          "miss_project_narrowing_unverified",
+          "miss_recheck_deadline",
+          "miss_recheck_cancelled"
         ]
       },
       {
@@ -1025,6 +1027,18 @@
             "subject_cap_exceeded"
           ]
         }
+      },
+      {
+        "key": "recheck_ms",
+        "type": "int",
+        "presence": "conditional",
+        "applicability": "written on any outcome when the recheck reached its first graph read: milliseconds from that read to the recheck's return"
+      },
+      {
+        "key": "recheck_subjects",
+        "type": "int",
+        "presence": "conditional",
+        "applicability": "written on any outcome when the recheck reached its first graph read: how many distinct subjects the stored answer names"
       },
       {
         "key": "request_id",
