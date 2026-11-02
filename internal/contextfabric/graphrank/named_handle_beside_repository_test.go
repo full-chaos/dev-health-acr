@@ -98,6 +98,11 @@ type besideWorld struct {
 	keyPrefix WorkItemKeyPrefixFunc
 	// link sets the keyed link read (CHAOS-12505); nil leaves none wired.
 	link func(*ResolveDeps)
+	// terms, when set, replaces the interpretation's subject terms (the
+	// repository's name by default).
+	terms []string
+	// searches adds lexical search results by term.
+	searches map[string][]CandidateNode
 }
 
 type besideTurn struct {
@@ -116,6 +121,9 @@ func runBeside(t *testing.T, w besideWorld) besideTurn {
 	pooledRun.Relevance = Normalized(0.9)
 	pooled := []CandidateNode{repoNode, pooledRun}
 	backend.searchResults[scopeAnchorRepo] = append(pooled, w.pool...)
+	for term, nodes := range w.searches {
+		backend.searchResults[term] = nodes
+	}
 	backend.exactHints[SubjectKey(contextfabric.SubjectRef{Kind: contextfabric.SubjectRepository, CanonicalID: scopeAnchorRepoID})] = repoNode
 	for _, node := range append(slices.Clone(w.nodes), besideNode(contextfabric.SubjectPullRequest, besidePRInRepo, "PR #747"), besideNode(contractsv1.ContextFabricSubjectCIRun, besideRunID, "CI 4343")) {
 		id, _ := node.Attributes["canonical_id"].(string)
@@ -147,7 +155,11 @@ func runBeside(t *testing.T, w besideWorld) besideTurn {
 	if w.edit != nil {
 		w.edit(&request)
 	}
-	resolution, offers, _, _, err := ResolveSubjectsWithCommitBasis(context.Background(), w.principal, request, testInterpreted(scopeAnchorRepo), deps, nil, nil, w.frame, "")
+	interpreted := testInterpreted(scopeAnchorRepo)
+	if w.terms != nil {
+		interpreted = testInterpreted(w.terms...)
+	}
+	resolution, offers, _, _, err := ResolveSubjectsWithCommitBasis(context.Background(), w.principal, request, interpreted, deps, nil, nil, w.frame, "")
 	if err != nil {
 		t.Fatalf("ResolveSubjectsWithCommitBasis: %v", err)
 	}
