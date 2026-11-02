@@ -55,7 +55,8 @@ func TestDefaultSynthesisPromptVersionBumpedForModelFacingFactsChange(t *testing
 	// v21 -> v22: the cohort in the input carries the population a cut list was drawn from.
 	// v25 -> v26: the input carries no declared score whose drivers table is not served.
 	// v27 -> v28: the prompt asks derived numbers to be stated with appears, leans or suggests.
-	const wantVersion = "context-fabric-synthesis.v28"
+	// v28 -> v29: the prompt asks a comparison to claim every compared subject.
+	const wantVersion = "context-fabric-synthesis.v29"
 	if DefaultSynthesisPromptVersion != wantVersion {
 		t.Fatalf("DefaultSynthesisPromptVersion = %q, want %q (moved off the pre-CHAOS-4355-follow-up v12 value now that modelFacingFacts changes the prompt payload)", DefaultSynthesisPromptVersion, wantVersion)
 	}
