@@ -10,10 +10,10 @@ import (
 
 // TestRuntimeCapturesWindowClassOnReceipt is the CHAOS-3900 W0 wiring pin:
 // a valid closed-vocabulary window_class/window_confidence pick from the
-// model reaches ModelExecutionReceipt sanitized and unmodified --
-// InterpretedQuestion itself is untouched (design brief §2/F5: the fields
-// never ride the wire-visible domain type in W0 -- see
-// chaos3900_window_vocab.go's package doc comment in contextfabric).
+// model reaches ModelExecutionReceipt sanitized and unmodified. Since
+// CHAOS-12603 the same sanitized pick is also carried onto
+// InterpretedQuestion (carryWindowPick); that half is pinned by
+// chaos12603_window_class_reaches_engine_test.go.
 func TestRuntimeCapturesWindowClassOnReceipt(t *testing.T) {
 	t.Parallel()
 	output := validInterpretationOutput()
