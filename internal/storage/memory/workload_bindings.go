@@ -29,20 +29,20 @@ func (s *WorkloadBindingStore) Put(key storage.WorkloadBindingKey, binding stora
 	s.rows[key] = binding
 }
 
-func (s *WorkloadBindingStore) Lookup(ctx context.Context, key storage.WorkloadBindingKey) (storage.WorkloadBinding, error) {
+func (s *WorkloadBindingStore) Lookup(ctx context.Context, key storage.WorkloadBindingKey) ([]storage.WorkloadBinding, error) {
 	if err := ctx.Err(); err != nil {
-		return storage.WorkloadBinding{}, err
+		return nil, err
 	}
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	binding, ok := s.rows[key]
 	if !ok {
-		return storage.WorkloadBinding{}, storage.ErrNotFound
+		return nil, storage.ErrNotFound
 	}
 	// Defensive copy on the way out too -- codex round 1 finding: without
 	// it, a caller mutating the returned slice would silently mutate this
 	// store's own row, the same aliasing bug postgres's version can't
 	// have (it decodes a fresh slice from JSON on every read).
 	binding.RepositoryScopes = append([]string(nil), binding.RepositoryScopes...)
-	return binding, nil
+	return []storage.WorkloadBinding{binding}, nil
 }

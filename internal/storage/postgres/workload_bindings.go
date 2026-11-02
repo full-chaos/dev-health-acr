@@ -24,12 +24,12 @@ func NewWorkloadBindingStore(db *sql.DB) (*WorkloadBindingStore, error) {
 	return &WorkloadBindingStore{DB: db}, nil
 }
 
-func (s *WorkloadBindingStore) Lookup(ctx context.Context, key storage.WorkloadBindingKey) (storage.WorkloadBinding, error) {
+func (s *WorkloadBindingStore) Lookup(ctx context.Context, key storage.WorkloadBindingKey) ([]storage.WorkloadBinding, error) {
 	if s == nil || s.DB == nil {
-		return storage.WorkloadBinding{}, storage.ErrInvalidCredentialLifecycle
+		return nil, storage.ErrInvalidCredentialLifecycle
 	}
 	if err := ctx.Err(); err != nil {
-		return storage.WorkloadBinding{}, err
+		return nil, err
 	}
 	row := s.DB.QueryRowContext(ctx, `
 SELECT binding_id, org_id, role, repository_scopes, disabled_at
@@ -39,12 +39,12 @@ WHERE trust_domain = $1 AND namespace = $2 AND service_account_name = $3 AND ser
 	var binding storage.WorkloadBinding
 	var repositoryJSON []byte
 	if err := row.Scan(&binding.BindingID, &binding.OrgID, &binding.Role, &repositoryJSON, &binding.DisabledAt); err != nil {
-		return storage.WorkloadBinding{}, mapNotFound("lookup workload binding", err)
+		return nil, mapNotFound("lookup workload binding", err)
 	}
 	if err := json.Unmarshal(repositoryJSON, &binding.RepositoryScopes); err != nil {
-		return storage.WorkloadBinding{}, fmt.Errorf("decode workload binding repository scopes: %w", err)
+		return nil, fmt.Errorf("decode workload binding repository scopes: %w", err)
 	}
-	return binding, nil
+	return []storage.WorkloadBinding{binding}, nil
 }
 
 // workloadCredentialPurgeSQL deletes one bounded batch of expired workload

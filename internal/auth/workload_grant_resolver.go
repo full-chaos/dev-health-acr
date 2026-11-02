@@ -22,7 +22,7 @@ func NewGrantResolver(store storage.WorkloadBindingStore) (authverify.GrantResol
 }
 
 func (r *storageGrantResolver) Resolve(ctx context.Context, identity authverify.SubjectIdentity) (authverify.WorkloadBinding, error) {
-	binding, err := r.store.Lookup(ctx, storage.WorkloadBindingKey{
+	bindings, err := r.store.Lookup(ctx, storage.WorkloadBindingKey{
 		TrustDomain: identity.TrustDomain, Namespace: identity.Namespace,
 		ServiceAccountName: identity.ServiceAccountName, ServiceAccountUID: identity.ServiceAccountUID,
 	})
@@ -32,6 +32,7 @@ func (r *storageGrantResolver) Resolve(ctx context.Context, identity authverify.
 		}
 		return authverify.WorkloadBinding{}, err
 	}
+	binding := bindings[0]
 	// A disabled binding must read identically to "not found" to the
 	// caller (design brief: "Revocation: disable binding (stops
 	// issuance)") -- disabling must not leak the binding's continued

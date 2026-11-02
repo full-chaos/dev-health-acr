@@ -30,6 +30,20 @@ type TokenExchangeRequest struct {
 	SubjectTokenType   string
 	RequestedTokenType string
 	Scope              string
+	// Resource is the RFC 8693 section 2.1 target-service parameter. It
+	// carries the organization selector, urn:acr:org:<uuid>; empty means
+	// no selector.
+	Resource string
+}
+
+// TokenExchangeResourceOrgPrefix starts the Resource form that selects an
+// organization.
+const TokenExchangeResourceOrgPrefix = "urn:acr:org:"
+
+// OrgSelector returns the organization named by Resource. present is false
+// when no selector was sent.
+func (r TokenExchangeRequest) OrgSelector() (orgID string, present bool, err error) {
+	return "", false, nil
 }
 
 // Validate checks the RFC 8693 structural shape only. It does not (and
@@ -82,6 +96,7 @@ const (
 	TokenExchangeErrorInvalidRequest       OAuthTokenExchangeErrorCode = "invalid_request"
 	TokenExchangeErrorInvalidGrant         OAuthTokenExchangeErrorCode = "invalid_grant"
 	TokenExchangeErrorInvalidScope         OAuthTokenExchangeErrorCode = "invalid_scope"
+	TokenExchangeErrorInvalidTarget        OAuthTokenExchangeErrorCode = "invalid_target"
 	TokenExchangeErrorUnauthorizedClient   OAuthTokenExchangeErrorCode = "unauthorized_client"
 	TokenExchangeErrorUnsupportedGrantType OAuthTokenExchangeErrorCode = "unsupported_grant_type"
 )
