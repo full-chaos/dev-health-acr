@@ -843,13 +843,21 @@ func composeEffectiveWindow(interpretation InterpretedQuestion, requestWindow *c
 // window it infers from that period even when the interpreter's window class
 // would otherwise refuse to guess one.
 func composeEffectiveWindowFor(interpretation InterpretedQuestion, requestWindow *contractsv1.ContextFabricEffectiveEvidenceWindow, binderProposal WindowBindOutcome, priorWindow windowPriorProposal, now time.Time, clarificationDeclined bool) *contractsv1.ContextFabricEffectiveEvidenceWindow {
+	return composeEffectiveWindowForFrame(interpretation, nil, requestWindow, binderProposal, priorWindow, now, clarificationDeclined)
+}
+
+// composeEffectiveWindowForFrame is composeEffectiveWindowFor with the
+// accepted frame, so the class decision can read the handle-state signal
+// (classifyWindowFor, CHAOS-12595). A nil frame is exactly
+// composeEffectiveWindowFor.
+func composeEffectiveWindowForFrame(interpretation InterpretedQuestion, frame *QuestionFrame, requestWindow *contractsv1.ContextFabricEffectiveEvidenceWindow, binderProposal WindowBindOutcome, priorWindow windowPriorProposal, now time.Time, clarificationDeclined bool) *contractsv1.ContextFabricEffectiveEvidenceWindow {
 	if interpretation.TimeContext.Axis != TemporalCurrent {
 		return nil
 	}
 	if requestWindow != nil {
 		return requestWindow
 	}
-	outcome := ClassifyWindow(interpretation, interpretation.WindowClass, interpretation.WindowConfidence)
+	outcome := classifyWindowFor(interpretation, frame)
 	relativeID, ok := DefaultRelativeID(outcome, windowDefaultPolicy)
 	// A period the caller STATED in the question (the binder bound exactly one
 	// role-checked span that states a TRAILING window: "in the last month",
@@ -930,7 +938,7 @@ func questionStatesWindow(interpretation InterpretedQuestion, frame *QuestionFra
 	if periodShapeOf(frame) != periodShapeCurrent {
 		return false
 	}
-	outcome := ClassifyWindow(interpretation, interpretation.WindowClass, interpretation.WindowConfidence)
+	outcome := classifyWindowFor(interpretation, frame)
 	if _, ok := DefaultRelativeID(outcome, windowDefaultPolicy); ok {
 		return true
 	}

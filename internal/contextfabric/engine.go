@@ -690,6 +690,12 @@ type EngineTelemetry interface {
 	// vocabulary. Called once per call, from Investigate, after
 	// canonicalizeEvidenceWindow/composeEffectiveWindow both run.
 	RecordWindowCanonicalization(ctx context.Context, principal storage.Principal, outcome WindowCanonicalizationOutcome)
+	// RecordWindowClassification (CHAOS-12595) reports the window-class
+	// decision a current-axis turn with no request window draws its default
+	// from: the model's own sanitized pick, the class decided, its source,
+	// confidence and basis (model, shape fallback, handle state, none), and
+	// whether a model pick was overridden. Closed vocabularies only.
+	RecordWindowClassification(ctx context.Context, principal storage.Principal, modelClass WindowClass, outcome WindowClassOutcome)
 	// RecordWindowCarry (CHAOS-4360) reports the outcome of ONE
 	// same-conversation window-carry attempt -- see WindowCarryOutcome's
 	// own doc comment for the closed vocabulary (chaos4360_carry.go).
@@ -2881,7 +2887,12 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 	// gated request pays for interpretation only -- CHAOS-4040's own
 	// run-3 acceptance bar ("class-default cases interpretation-only").
 	priorWindow := e.resolveWindowPriorProposal(ctx, principal, priorEntries, windowCanon)
-	effectiveWindow := composeEffectiveWindowFor(interpretation, windowCanon.Effective, windowCanon.BinderProposal, priorWindow, e.now(), !request.Options.AllowClarification)
+	if windowCanon.Effective == nil && interpretation.TimeContext.Axis == TemporalCurrent {
+		// CHAOS-12595: the class decision this turn's default window is
+		// drawn from, with its basis, before the gate below reads it.
+		e.recordWindowClassification(ctx, principal, interpretation, classifyWindowFor(interpretation, familyOutcome.Frame))
+	}
+	effectiveWindow := composeEffectiveWindowForFrame(interpretation, familyOutcome.Frame, windowCanon.Effective, windowCanon.BinderProposal, priorWindow, e.now(), !request.Options.AllowClarification)
 	// CHAOS-4360: same-conversation window carry. Attempted ONLY when this
 	// turn's own canonicalization would otherwise be inferred_default --
 	// windowCanon.Effective is nil by construction at this point (see the
