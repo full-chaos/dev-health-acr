@@ -26,7 +26,8 @@ func keyedRow(repository, pullRequest, item map[string]interface{}, tier string)
 	return row{"a": repository, "m": pullRequest, "b": item, "rl": map[string]interface{}{propPropertyPrefix + linkTierProperty: tier, propRelationshipID: "rel"}}
 }
 
-// keyedFake answers the keyed read with rows and records each statement.
+// keyedFake answers the keyed read with rows, as a store does: at most $limit
+// of them. It records each statement.
 func keyedFake(rows []row) (*fakeConn, *[]string) {
 	var seen []string
 	return &fakeConn{queryFunc: func(_ context.Context, _ string, cypher string, params map[string]interface{}, _ bool) ([]row, error) {
@@ -34,6 +35,9 @@ func keyedFake(rows []row) (*fakeConn, *[]string) {
 			return nil, nil
 		}
 		seen = append(seen, cypher)
+		if limit, ok := params["limit"].(int); ok && limit < len(rows) {
+			return rows[:limit], nil
+		}
 		return rows, nil
 	}}, &seen
 }
@@ -128,6 +132,11 @@ func TestTheKeyedLinkReadStatementNamesNoSubject(t *testing.T) {
 		if restricted := len(principal.RepositoryScopes) > 0; strings.Contains((*seen)[0], "$grantRaw") != restricted {
 			t.Fatalf("grants %v: statement %q, want the grant clause only for a restricted caller", principal.RepositoryScopes, (*seen)[0])
 		}
+	}
+	// A restricted read keeps the repository inside the grants too (codex r1 on
+	// #1929), so a repository the grants cannot admit spends no row.
+	if anchor := (treeNodeVar{name: "a", position: treeRepository}).repositoryMatchClause("grant"); !strings.Contains(keyedLinkScopeCypher(true, false), anchor) || strings.Contains(keyedLinkScopeCypher(false, false), anchor) {
+		t.Fatal("the restricted read must hold the repository to the grants, and only it")
 	}
 	if strings.Contains(keyedLinkScopeCypher(false, true), "$scopeRaw") || !strings.Contains(keyedLinkScopeCypher(false, false), "$scopeRaw") {
 		t.Fatal("a scope that names \"*\" must read without the scope clause, and only it")

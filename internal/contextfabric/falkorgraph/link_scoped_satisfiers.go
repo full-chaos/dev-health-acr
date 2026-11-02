@@ -58,7 +58,11 @@ func keyedLinkScopeCypher(restricted, scopeWildcard bool) string {
 	}
 	grants := ""
 	if restricted {
-		grants = end.grantClause() + mid.grantClause()
+		// The repository too: a row whose repository the grants cannot admit is
+		// refused in process anyway, so it must not spend the row bound or count
+		// in the read's line (codex r1 on #1929). A project-only caller binds no
+		// repository grant, so it reads no row, as the walk admits no repository.
+		grants = " AND " + repository.repositoryMatchClause("grant") + end.grantClause() + mid.grantClause()
 	}
 	return fmt.Sprintf("MATCH (b:%[2]s {%[3]s:$org, %[4]s:$endKind})-[rl:%[1]s]->(m:%[2]s {%[3]s:$org, %[4]s:$midKind})-[ra:%[1]s]->(a:%[2]s {%[3]s:$org, %[4]s:$anchorKind}) ",
 		labelRelation, labelSubject, propOrgID, propKind) +

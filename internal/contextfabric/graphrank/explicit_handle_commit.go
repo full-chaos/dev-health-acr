@@ -195,7 +195,10 @@ func namedRepositoryLinkLimitation(ctx context.Context, request contextfabric.In
 			slugs = append(slugs, slug)
 		}
 	}
-	if len(slugs) == 0 {
+	// A repository names one slug. A node that lists another could admit a link
+	// into that one and say it of this repository (codex r1 on #1929), so it is
+	// not read.
+	if len(slugs) != 1 {
 		return contractsv1.ContextFabricNamedRepositoryLinkUnreadLimitation
 	}
 	scope := request.RequestedScope

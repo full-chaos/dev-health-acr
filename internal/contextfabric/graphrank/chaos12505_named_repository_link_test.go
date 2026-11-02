@@ -3,6 +3,7 @@ package graphrank
 import (
 	"context"
 	"errors"
+	"maps"
 	"slices"
 	"testing"
 
@@ -25,6 +26,7 @@ func TestAWorkItemBesideARepositorySaysWhetherALinkJoinsThem(t *testing.T) {
 	}
 	keyed := func(seen *read, tiers map[string]string, complete bool, err error) func(*ResolveDeps) {
 		return func(deps *ResolveDeps) {
+			repositorySlugs(deps, scopeAnchorRepo)
 			deps.LinkScopedWorkItemsOf = func(_ context.Context, scope contextfabric.RequestedScope, ids []string) (map[string]string, bool, error) {
 				seen.scopes = append(seen.scopes, scope.RepositorySlugs)
 				seen.ids = append(seen.ids, ids)
@@ -66,11 +68,50 @@ func TestAWorkItemBesideARepositorySaysWhetherALinkJoinsThem(t *testing.T) {
 				if c.none {
 					return
 				}
-				if len(seen.ids) != 1 || !slices.Equal(seen.ids[0], []string{id}) || !slices.Contains(seen.scopes[0], scopeAnchorRepo) {
+				if len(seen.ids) != 1 || !slices.Equal(seen.ids[0], []string{id}) || !slices.Equal(seen.scopes[0], []string{scopeAnchorRepo}) {
 					t.Fatalf("keyed read asked %v under %v, want once, for the item under the named repository", seen.ids, seen.scopes)
 				}
 			})
 		}
+	}
+}
+
+// repositorySlugs makes the named repository's node list slugs, as a real
+// repository node lists its own one; the shared fixture lists two.
+func repositorySlugs(deps *ResolveDeps, slugs ...string) {
+	inner := deps.ExactHint
+	deps.ExactHint = func(ctx context.Context, subject contextfabric.SubjectRef) (CandidateNode, bool, error) {
+		node, ok, err := inner(ctx, subject)
+		if err == nil && ok && subject.Kind == contextfabric.SubjectRepository {
+			attributes := maps.Clone(node.Attributes)
+			attributes[authorizationRepositoriesAttr] = slices.Clone(slugs)
+			node.Attributes = attributes
+		}
+		return node, ok, err
+	}
+}
+
+// A repository node that lists another slug could admit a link into that one and
+// say it of the named repository (codex r1 on #1929): it is not read, and the
+// answer says the link could not be read.
+func TestARepositoryThatListsTwoSlugsIsNotRead(t *testing.T) {
+	t.Parallel()
+	id := besideWorkItem(t, "linear", "CHAOS-71")
+	var asked int
+	turn := runBeside(t, besideWorld{
+		principal: besideCallers(t)["unrestricted"], question: "Why is CHAOS-71 blocked in " + scopeAnchorRepo + "?", frame: statedFrame(contextfabric.SubjectWorkItem),
+		census: &besideCensus{rows: []besideRow{{contextfabric.SubjectWorkItem, "CHAOS-71", id, "", scopeAnchorRepo}}},
+		nodes:  []CandidateNode{repoLessItem(id, "Split the job", scopeAnchorRepo)},
+		link: func(deps *ResolveDeps) {
+			repositorySlugs(deps, scopeAnchorRepo, besideOtherRepo)
+			deps.LinkScopedWorkItemsOf = func(context.Context, contextfabric.RequestedScope, []string) (map[string]string, bool, error) {
+				asked++
+				return map[string]string{id: "native"}, true, nil
+			}
+		},
+	})
+	if turn.resolution.NamedRepositoryLinkLimitation != contractsv1.ContextFabricNamedRepositoryLinkUnreadLimitation || asked != 0 {
+		t.Fatalf("link sentence %q, reads %d, want the unread sentence and no read", turn.resolution.NamedRepositoryLinkLimitation, asked)
 	}
 }
 
