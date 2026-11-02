@@ -150,7 +150,7 @@ func TestRealTreePassesTheGateToday(t *testing.T) {
 	}
 	root := repoRoot(t)
 	inventoryPath := filepath.Join(root, "contracts", "auth", "v1", "endpoint-profiles.acr.json")
-	errs, err := check(root, inventoryPath, schemaPath, credentialClassesPath, credentialClassesSchemaPath, realDiscovererPath(t))
+	errs, err := check(root, inventoryPath, schemaPath, credentialClassesPath, credentialClassesSchemaPath, realDiscovererPath(t), guardTablePath(root))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -432,7 +432,26 @@ func seedFixtureSchemaAndCredentialClasses(t *testing.T, root string) (schemaPat
 	writeFile(t, schemaPath, fixtureSchemaJSON)
 	writeJSON(t, credentialClassesPath, credentialClasses)
 	writeFile(t, credentialClassesSchemaPath, fixtureCredentialClassSchemaJSON)
+	writeFile(t, guardTablePath(root), guardTableSource("acr_client_credential",
+		"acr_device_flow_code", "acr_web_assertion", "internal_svc_acr_token"))
 	return schemaPath, credentialClassesPath, credentialClassesSchemaPath
+}
+
+func guardTablePath(root string) string {
+	return filepath.Join(root, "internal", "sidecar", "api_client_credential_class_guard_test.go")
+}
+
+// guardTableSource renders a file shaped like the sidecar guard test table: the
+// accepted class as a constant, each other class as a row(...) argument.
+func guardTableSource(own string, others ...string) string {
+	var b strings.Builder
+	b.WriteString("package sidecar\n\nconst ownCredentialClassID = " + strconv.Quote(own) + "\n\n")
+	b.WriteString("func otherClassRows() []guardRow {\n\trows := []guardRow{\n")
+	for _, id := range others {
+		b.WriteString("\t\trow(" + strconv.Quote(id) + ", \"v\"),\n")
+	}
+	b.WriteString("\t}\n\treturn rows\n}\n")
+	return b.String()
 }
 
 func writeJSON(t *testing.T, path string, v any) {
@@ -579,7 +598,7 @@ func minimalValidFixture(t *testing.T, rows []map[string]any) fixture {
 
 func (f fixture) check(t *testing.T) []string {
 	t.Helper()
-	errs, err := check(f.root, f.inventoryPath, f.schemaPath, f.credentialClassesPath, f.credentialClassesSchemaPath, f.discovererPath)
+	errs, err := check(f.root, f.inventoryPath, f.schemaPath, f.credentialClassesPath, f.credentialClassesSchemaPath, f.discovererPath, guardTablePath(f.root))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -819,7 +838,7 @@ func TestDiscoveryReportsAMultilineRegistrationRatherThanDroppingIt(t *testing.T
 			"func healthzHandler(w http.ResponseWriter, r *http.Request) {}\n")
 	schemaPath, credentialClassesPath, credentialClassesSchemaPath := seedFixtureSchemaAndCredentialClasses(t, root)
 	inventoryPath := writeInventory(t, root, nil)
-	errs, err := check(root, inventoryPath, schemaPath, credentialClassesPath, credentialClassesSchemaPath, realDiscovererPath(t))
+	errs, err := check(root, inventoryPath, schemaPath, credentialClassesPath, credentialClassesSchemaPath, realDiscovererPath(t), guardTablePath(root))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -852,7 +871,7 @@ func TestDiscoveryReportsBothRegistrationsWrittenOnOneLine(t *testing.T) {
 			"func healthzHandler(w http.ResponseWriter, r *http.Request) {}\n")
 	schemaPath, credentialClassesPath, credentialClassesSchemaPath := seedFixtureSchemaAndCredentialClasses(t, root)
 	inventoryPath := writeInventory(t, root, []map[string]any{minimalValidRow(nil)})
-	errs, err := check(root, inventoryPath, schemaPath, credentialClassesPath, credentialClassesSchemaPath, realDiscovererPath(t))
+	errs, err := check(root, inventoryPath, schemaPath, credentialClassesPath, credentialClassesSchemaPath, realDiscovererPath(t), guardTablePath(root))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1173,7 +1192,7 @@ func TestGateReadsIssuedCredentialDirectionAndExposureReachabilityLive(t *testin
 		"gaps":     []any{"wrapper-chain: fixture handler has no guard, protection claimed outside this chain"},
 	})
 	inventoryPath := writeInventory(t, root, []map[string]any{row})
-	errs, err := check(root, inventoryPath, schemaPath, credentialClassesPath, credentialClassesSchemaPath, realDiscovererPath(t))
+	errs, err := check(root, inventoryPath, schemaPath, credentialClassesPath, credentialClassesSchemaPath, realDiscovererPath(t), guardTablePath(root))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1251,7 +1270,7 @@ func TestGateCatchesTheRealCommittedOffByOneAnchorBug(t *testing.T) {
 			"primary_validator": map[string]any{"description": "wraps itself in protectedRuntimeHandler", "anchor": anchor},
 		})
 		inventoryPath := writeInventory(t, root, []map[string]any{row})
-		errs, err := check(root, inventoryPath, schemaPath, credentialClassesPath, credentialClassesSchemaPath, realDiscovererPath(t))
+		errs, err := check(root, inventoryPath, schemaPath, credentialClassesPath, credentialClassesSchemaPath, realDiscovererPath(t), guardTablePath(root))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -1563,7 +1582,7 @@ func TestGateRejectsAMarkerThatSurvivesOnlyAsTextNotAsTheCall(t *testing.T) {
 				},
 			})
 			inventoryPath := writeInventory(t, root, []map[string]any{row})
-			errs, err := check(root, inventoryPath, schemaPath, credentialClassesPath, credentialClassesSchemaPath, realDiscovererPath(t))
+			errs, err := check(root, inventoryPath, schemaPath, credentialClassesPath, credentialClassesSchemaPath, realDiscovererPath(t), guardTablePath(root))
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -1608,7 +1627,7 @@ func TestGateIgnoresALeftoverCopyOfTheMarkerInAStringWhenTheRealCallExists(t *te
 		},
 	})
 	inventoryPath := writeInventory(t, root, []map[string]any{row})
-	errs, err := check(root, inventoryPath, schemaPath, credentialClassesPath, credentialClassesSchemaPath, realDiscovererPath(t))
+	errs, err := check(root, inventoryPath, schemaPath, credentialClassesPath, credentialClassesSchemaPath, realDiscovererPath(t), guardTablePath(root))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1659,7 +1678,7 @@ func TestGateAcceptsTwoRowsThatLegitimatelyShareOnePrimaryValidatorMarker(t *tes
 		},
 	})
 	inventoryPath := writeInventory(t, root, []map[string]any{rowA, rowB})
-	errs, err := check(root, inventoryPath, schemaPath, credentialClassesPath, credentialClassesSchemaPath, realDiscovererPath(t))
+	errs, err := check(root, inventoryPath, schemaPath, credentialClassesPath, credentialClassesSchemaPath, realDiscovererPath(t), guardTablePath(root))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1739,7 +1758,7 @@ func TestGateCatchesAnUnresolvedRegistration(t *testing.T) {
 			"func healthzHandler(w http.ResponseWriter, r *http.Request) {}\n")
 	schemaPath, credentialClassesPath, credentialClassesSchemaPath := seedFixtureSchemaAndCredentialClasses(t, root)
 	inventoryPath := writeInventory(t, root, nil)
-	errs, err := check(root, inventoryPath, schemaPath, credentialClassesPath, credentialClassesSchemaPath, realDiscovererPath(t))
+	errs, err := check(root, inventoryPath, schemaPath, credentialClassesPath, credentialClassesSchemaPath, realDiscovererPath(t), guardTablePath(root))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -2183,7 +2202,7 @@ func TestRealTreeSurvivesAPureLineShiftOfEveryAnchoredFile(t *testing.T) {
 		}
 		for _, n := range []int{1, 4, 7} {
 			shiftFixtureSource(t, filepath.Join(root, f), n)
-			errs, err := check(root, inventoryPath, schemaPath, ccPath, ccSchemaPath, realDiscovererPath(t))
+			errs, err := check(root, inventoryPath, schemaPath, ccPath, ccSchemaPath, realDiscovererPath(t), guardTablePath(repoRoot(t)))
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -2211,7 +2230,7 @@ func TestRealTreeStillFailsWhenAnAnchoredSymbolIsRenamed(t *testing.T) {
 	}
 	writeFile(t, p, mutated)
 	inventoryPath := filepath.Join(root, "contracts", "auth", "v1", "endpoint-profiles.acr.json")
-	errs, err := check(root, inventoryPath, schemaPath, ccPath, ccSchemaPath, realDiscovererPath(t))
+	errs, err := check(root, inventoryPath, schemaPath, ccPath, ccSchemaPath, realDiscovererPath(t), guardTablePath(repoRoot(t)))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -2237,7 +2256,7 @@ func TestRealTreeRejectsAWrapperRemovedWithItsMarkerTextLeftInAStringLiteral(t *
 	}
 	writeFile(t, p, mutated)
 	inventoryPath := filepath.Join(root, "contracts", "auth", "v1", "endpoint-profiles.acr.json")
-	errs, err := check(root, inventoryPath, schemaPath, ccPath, ccSchemaPath, realDiscovererPath(t))
+	errs, err := check(root, inventoryPath, schemaPath, ccPath, ccSchemaPath, realDiscovererPath(t), guardTablePath(repoRoot(t)))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -2388,7 +2407,7 @@ func TestRealTreeRejectsAMintCallMovedIntoAnUncalledFuncLiteral(t *testing.T) {
 	}
 	writeFile(t, p, mutated)
 	inventoryPath := filepath.Join(root, "contracts", "auth", "v1", "endpoint-profiles.acr.json")
-	errs, err := check(root, inventoryPath, schemaPath, ccPath, ccSchemaPath, realDiscovererPath(t))
+	errs, err := check(root, inventoryPath, schemaPath, ccPath, ccSchemaPath, realDiscovererPath(t), guardTablePath(repoRoot(t)))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -3010,4 +3029,102 @@ func TestGateRefusesASiblingPrefixNonStringAndOtherFieldGap(t *testing.T) {
 		errs := minimalValidFixtureCheck(t, map[string]any{"action": nil, "gaps": gaps})
 		mustContain(t, errs, "UNSTATED NULL", "action")
 	}
+}
+
+func TestGateAcceptsAMatchingSidecarGuardTable(t *testing.T) {
+	f := minimalValidFixture(t, []map[string]any{minimalValidRow(nil)})
+	if errs := f.check(t); len(errs) != 0 {
+		t.Fatalf("expected no errors, got:\n%s", strings.Join(errs, "\n"))
+	}
+}
+
+func TestGateCatchesAnOpsClassMissingFromTheSidecarGuardTable(t *testing.T) {
+	f := minimalValidFixture(t, []map[string]any{minimalValidRow(nil)})
+	writeJSON(t, f.credentialClassesPath, map[string]any{"classes": []map[string]any{
+		fixtureCredentialClass("acr_client_credential"),
+		fixtureCredentialClass("acr_device_flow_code"),
+		fixtureCredentialClass("acr_web_assertion"),
+		fixtureCredentialClass("internal_svc_acr_token"),
+		fixtureCredentialClass("planted_new_ops_class"),
+	}})
+	errs := f.check(t)
+	mustContain(t, errs, "CREDENTIAL CLASS MISSING FROM SIDECAR GUARD TABLE", "planted_new_ops_class")
+	if n := countContaining(errs, "SIDECAR GUARD TABLE"); n != 1 {
+		t.Fatalf("want exactly one guard-table error, got %d:\n%s", n, strings.Join(errs, "\n"))
+	}
+}
+
+func TestGateCatchesASidecarGuardTableClassNotInOps(t *testing.T) {
+	f := minimalValidFixture(t, []map[string]any{minimalValidRow(nil)})
+	writeFile(t, guardTablePath(f.root), guardTableSource("acr_client_credential",
+		"acr_device_flow_code", "acr_web_assertion", "internal_svc_acr_token", "planted_stale_class"))
+	errs := f.check(t)
+	mustContain(t, errs, "SIDECAR GUARD TABLE CLASS NOT IN OPS", "planted_stale_class")
+	if n := countContaining(errs, "SIDECAR GUARD TABLE"); n != 1 {
+		t.Fatalf("want exactly one guard-table error, got %d:\n%s", n, strings.Join(errs, "\n"))
+	}
+}
+
+func TestGateCountsTheAcceptedClassConstantAndHexNeedleRowsAsTableClasses(t *testing.T) {
+	f := minimalValidFixture(t, []map[string]any{minimalValidRow(nil)})
+	writeFile(t, guardTablePath(f.root), "package sidecar\n\nconst ownCredentialClassID = \"acr_client_credential\"\n\n"+
+		"func otherClassRows() []guardRow {\n\trows := []guardRow{\n"+
+		"\t\trow(\"acr_device_flow_code\", \"v\"),\n\t\thexNeedle(\"acr_web_assertion\", \"v\"),\n"+
+		"\t\trow(\"internal_svc_acr_token\", \"v\"),\n\t}\n\treturn rows\n}\n")
+	if errs := f.check(t); len(errs) != 0 {
+		t.Fatalf("expected no errors, got:\n%s", strings.Join(errs, "\n"))
+	}
+	writeFile(t, guardTablePath(f.root), guardTableSource("", "acr_device_flow_code", "acr_web_assertion", "internal_svc_acr_token"))
+	mustContain(t, f.check(t), "MISSING FROM SIDECAR GUARD TABLE", "acr_client_credential")
+}
+
+func TestGateIgnoresAClassIdThatIsOnlyInACommentOrANonRowString(t *testing.T) {
+	f := minimalValidFixture(t, []map[string]any{minimalValidRow(nil)})
+	writeFile(t, guardTablePath(f.root), "package sidecar\n\nconst ownCredentialClassID = \"acr_client_credential\"\n\n"+
+		"// acr_device_flow_code is described here only\n"+
+		"func otherClassRows() []guardRow {\n\tnote := \"acr_web_assertion\"\n\t_ = note\n\trows := []guardRow{\n"+
+		"\t\trow(\"internal_svc_acr_token\", \"acr_device_flow_code\"),\n\t}\n\treturn rows\n}\n")
+	errs := f.check(t)
+	mustContain(t, errs, "MISSING FROM SIDECAR GUARD TABLE", "acr_device_flow_code")
+	mustContain(t, errs, "MISSING FROM SIDECAR GUARD TABLE", "acr_web_assertion")
+}
+
+func TestGateReportsADuplicateSidecarGuardTableClass(t *testing.T) {
+	f := minimalValidFixture(t, []map[string]any{minimalValidRow(nil)})
+	writeFile(t, guardTablePath(f.root), guardTableSource("acr_client_credential",
+		"acr_device_flow_code", "acr_web_assertion", "internal_svc_acr_token", "acr_web_assertion"))
+	mustContain(t, f.check(t), "DUPLICATE SIDECAR GUARD TABLE CLASS", "acr_web_assertion")
+}
+
+func TestGateFailsClosedOnAnUnparseableSidecarGuardTable(t *testing.T) {
+	cases := map[string]string{
+		"file missing":       "",
+		"not Go":             "this is not go source",
+		"no own-class const": "package sidecar\n\nfunc otherClassRows() []guardRow {\n\treturn []guardRow{row(\"a\", \"v\")}\n}\n",
+		"no rows function":   "package sidecar\n\nconst ownCredentialClassID = \"acr_client_credential\"\n",
+		"zero row ids":       "package sidecar\n\nconst ownCredentialClassID = \"acr_client_credential\"\n\nfunc otherClassRows() []guardRow {\n\treturn nil\n}\n",
+	}
+	for name, src := range cases {
+		t.Run(name, func(t *testing.T) {
+			f := minimalValidFixture(t, []map[string]any{minimalValidRow(nil)})
+			if name == "file missing" {
+				if err := os.Remove(guardTablePath(f.root)); err != nil {
+					t.Fatal(err)
+				}
+			} else {
+				writeFile(t, guardTablePath(f.root), src)
+			}
+			mustContain(t, f.check(t), "SIDECAR GUARD TABLE UNPARSEABLE")
+		})
+	}
+}
+
+func countContaining(errs []string, sub string) int {
+	n := 0
+	for _, e := range errs {
+		if strings.Contains(e, sub) {
+			n++
+		}
+	}
+	return n
 }

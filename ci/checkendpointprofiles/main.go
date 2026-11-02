@@ -105,7 +105,8 @@
 //	    -inventory contracts/auth/v1/endpoint-profiles.acr.json \
 //	    -schema /path/to/endpoint-profile.schema.json \
 //	    -credential-classes /path/to/credential-classes.json \
-//	    -credential-classes-schema /path/to/credential-classes.schema.json
+//	    -credential-classes-schema /path/to/credential-classes.schema.json \
+//	    [-sidecar-guard internal/sidecar/api_client_credential_class_guard_test.go]
 package main
 
 import (
@@ -124,6 +125,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 
 	// LIBRARY CONSTRAINT (decision-sheet B12, commit 8ced6f749; recorded
@@ -408,6 +410,141 @@ func credentialClassVocabulary(credentialClasses map[string]any) (map[string]boo
 	return out, errs
 }
 
+// Names in the sidecar transport guard test that this gate reads. The test
+// holds a copy of the ops class_ids (acr does not vendor credential-classes.json):
+// the accepted class as a constant, every other class as the first argument of a
+// row(...) or hexNeedle(...) call in otherClassRows.
+const (
+	sidecarGuardOwnClassConst = "ownCredentialClassID"
+	sidecarGuardRowsFunc      = "otherClassRows"
+)
+
+var sidecarGuardRowCalls = map[string]bool{"row": true, "hexNeedle": true}
+
+// sidecarGuardClassIDs reads the class ids the sidecar guard test table
+// covers, from the PARSED test source (an id inside a comment or a string that
+// is not a row's first argument does not count). It fails closed: an unreadable
+// file, a missing constant or function, or an empty table is an error, never an
+// empty set that would read as "nothing to compare".
+func sidecarGuardClassIDs(guardPath string) (map[string]bool, []string, error) {
+	fset := token.NewFileSet()
+	file, err := parser.ParseFile(fset, guardPath, nil, 0)
+	if err != nil {
+		return nil, nil, fmt.Errorf("parsing sidecar guard test table: %w", err)
+	}
+	ids := map[string]bool{}
+	var dups []string
+	add := func(id string) {
+		if ids[id] {
+			dups = append(dups, id)
+		}
+		ids[id] = true
+	}
+	ownFound := false
+	var rowsFunc *ast.FuncDecl
+	for _, decl := range file.Decls {
+		switch d := decl.(type) {
+		case *ast.GenDecl:
+			if d.Tok != token.CONST {
+				continue
+			}
+			for _, spec := range d.Specs {
+				vs, ok := spec.(*ast.ValueSpec)
+				if !ok {
+					continue
+				}
+				for i, name := range vs.Names {
+					if name.Name != sidecarGuardOwnClassConst || i >= len(vs.Values) {
+						continue
+					}
+					if id, ok := stringLiteral(vs.Values[i]); ok {
+						add(id)
+						ownFound = true
+					}
+				}
+			}
+		case *ast.FuncDecl:
+			if d.Recv == nil && d.Name.Name == sidecarGuardRowsFunc {
+				rowsFunc = d
+			}
+		}
+	}
+	if !ownFound {
+		return nil, nil, fmt.Errorf("sidecar guard test table unparseable: no string constant %s in %s", sidecarGuardOwnClassConst, guardPath)
+	}
+	if rowsFunc == nil || rowsFunc.Body == nil {
+		return nil, nil, fmt.Errorf("sidecar guard test table unparseable: no function %s in %s", sidecarGuardRowsFunc, guardPath)
+	}
+	rows := 0
+	ast.Inspect(rowsFunc.Body, func(n ast.Node) bool {
+		call, ok := n.(*ast.CallExpr)
+		if !ok || len(call.Args) == 0 {
+			return true
+		}
+		fn, ok := call.Fun.(*ast.Ident)
+		if !ok || !sidecarGuardRowCalls[fn.Name] {
+			return true
+		}
+		if id, ok := stringLiteral(call.Args[0]); ok {
+			add(id)
+			rows++
+		}
+		return true
+	})
+	if rows == 0 {
+		return nil, nil, fmt.Errorf("sidecar guard test table unparseable: %s in %s holds no row(...) or hexNeedle(...) class id", sidecarGuardRowsFunc, guardPath)
+	}
+	return ids, dups, nil
+}
+
+func stringLiteral(e ast.Expr) (string, bool) {
+	lit, ok := e.(*ast.BasicLit)
+	if !ok || lit.Kind != token.STRING {
+		return "", false
+	}
+	v, err := strconv.Unquote(lit.Value)
+	return v, err == nil
+}
+
+// sidecarGuardTableErrors compares the ops class vocabulary with the sidecar
+// guard test table in BOTH directions: a class ops has and the table lacks is a
+// class the transport guard is never shown (an ops addition the acr test did not
+// follow); a table id ops lacks is a stale copy of a removed or renamed class.
+func sidecarGuardTableErrors(classVocab map[string]bool, guardPath string) []string {
+	table, dups, err := sidecarGuardClassIDs(guardPath)
+	if err != nil {
+		return []string{"SIDECAR GUARD TABLE UNPARSEABLE: " + err.Error()}
+	}
+	var errs []string
+	for _, id := range sortedKeys(classVocab) {
+		if !table[id] {
+			errs = append(errs, fmt.Sprintf(
+				"CREDENTIAL CLASS MISSING FROM SIDECAR GUARD TABLE: ops class_id %q has no row in %s -- the transport guard is never shown a value of that class",
+				id, filepath.Base(guardPath)))
+		}
+	}
+	for _, id := range sortedKeys(table) {
+		if !classVocab[id] {
+			errs = append(errs, fmt.Sprintf(
+				"SIDECAR GUARD TABLE CLASS NOT IN OPS: %q in %s is not a class_id in the pinned ops credential-classes.json (removed or renamed upstream)",
+				id, filepath.Base(guardPath)))
+		}
+	}
+	for _, id := range dups {
+		errs = append(errs, fmt.Sprintf("DUPLICATE SIDECAR GUARD TABLE CLASS: %q is declared more than once in %s", id, filepath.Base(guardPath)))
+	}
+	return errs
+}
+
+func sortedKeys(m map[string]bool) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
+}
+
 var advisoryFields = []string{
 	"action", "resource_resolver", "current_state_cache_behavior",
 	"entitlement_requirement", "disclosure_behavior", "token_shape",
@@ -473,7 +610,7 @@ func indexOf(haystack, needle string) int {
 // exactly the drift Codex found: a schema-declared rule this file never
 // re-derived.
 
-func check(root, inventoryPath, schemaPath, credentialClassesPath, credentialClassesSchemaPath, discovererPath string) ([]string, error) {
+func check(root, inventoryPath, schemaPath, credentialClassesPath, credentialClassesSchemaPath, discovererPath, sidecarGuardPath string) ([]string, error) {
 	var errs []string
 
 	inventory, err := loadJSON(inventoryPath)
@@ -486,6 +623,7 @@ func check(root, inventoryPath, schemaPath, credentialClassesPath, credentialCla
 	}
 	classVocab, vocabErrs := credentialClassVocabulary(credentialClasses)
 	errs = append(errs, vocabErrs...)
+	errs = append(errs, sidecarGuardTableErrors(classVocab, sidecarGuardPath)...)
 
 	// Merge-gate finding (CHAOS-3273, terra round on 896ca76e): the
 	// credential-class document was loaded only to harvest ids, and never
@@ -1331,6 +1469,7 @@ func main() {
 	schema := flag.String("schema", "", "endpoint-profile.schema.json path (owned by ops; must be supplied, see file doc comment)")
 	credentialClasses := flag.String("credential-classes", "", "credential-classes.json path (owned by ops; must be supplied, see file doc comment)")
 	credentialClassesSchema := flag.String("credential-classes-schema", "", "credential-classes.schema.json path (owned by ops; must be supplied, see file doc comment)")
+	sidecarGuard := flag.String("sidecar-guard", "", "sidecar guard test table path (default: <root>/internal/sidecar/api_client_credential_class_guard_test.go)")
 	discoverer := flag.String("discoverer", "", "path to discover_acr_routes.go (default: <root>/ci/discover_acr_routes.go)")
 	flag.Parse()
 
@@ -1353,7 +1492,12 @@ func main() {
 		discovererPath = filepath.Join(rootAbs, "ci", "discover_acr_routes.go")
 	}
 
-	errs, err := check(rootAbs, inventoryPath, *schema, *credentialClasses, *credentialClassesSchema, discovererPath)
+	sidecarGuardPath := *sidecarGuard
+	if sidecarGuardPath == "" {
+		sidecarGuardPath = filepath.Join(rootAbs, "internal", "sidecar", "api_client_credential_class_guard_test.go")
+	}
+
+	errs, err := check(rootAbs, inventoryPath, *schema, *credentialClasses, *credentialClassesSchema, discovererPath, sidecarGuardPath)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "checkendpointprofiles:", err)
 		os.Exit(1)

@@ -38,7 +38,10 @@ func TestWorkItemSurveyTwoTurnShapeComposesAndServesWithoutRanking(t *testing.T)
 		t.Fatalf("fixture failed to produce an admitted survey gate: %+v", outcome.Gate)
 	}
 	payload := workItemTuplePayloadFixture(t)
-	graph := &dispatchGraphProbe{graphReaderStub: graphReaderStub{resolution: payload.SubjectResolution, bases: provenCommitBases(payload.SubjectResolution.Committed...)}}
+	// CHAOS-4451: t1's offers-only pass finds a question beyond the window,
+	// so t1 ends on the window confirmation this two-turn shape starts from.
+	gatedMaterial := chaos4234GatedMaterial()
+	graph := &dispatchGraphProbe{graphReaderStub: graphReaderStub{resolution: payload.SubjectResolution, bases: provenCommitBases(payload.SubjectResolution.Committed...)}, offersOnlyMaterial: &gatedMaterial}
 	gate, err := NewWorkItemMembershipGate(1, 0)
 	if err != nil {
 		t.Fatal(err)
@@ -200,7 +203,10 @@ func TestWorkItemSurveyLegacyPersistedFrameStillComposes(t *testing.T) {
 		t.Fatalf("fixture failed to produce an admitted survey gate: %+v", outcome.Gate)
 	}
 	payload := workItemTuplePayloadFixture(t)
-	graph := &dispatchGraphProbe{graphReaderStub: graphReaderStub{resolution: payload.SubjectResolution, bases: provenCommitBases(payload.SubjectResolution.Committed...)}}
+	// CHAOS-4451: t1's offers-only pass finds a question beyond the window,
+	// so t1 ends on the window confirmation this two-turn shape starts from.
+	gatedMaterial := chaos4234GatedMaterial()
+	graph := &dispatchGraphProbe{graphReaderStub: graphReaderStub{resolution: payload.SubjectResolution, bases: provenCommitBases(payload.SubjectResolution.Committed...)}, offersOnlyMaterial: &gatedMaterial}
 	gate, err := NewWorkItemMembershipGate(1, 0)
 	if err != nil {
 		t.Fatal(err)

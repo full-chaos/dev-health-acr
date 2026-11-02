@@ -23,7 +23,7 @@ func anchorBindingCertifyScenarios() map[string][]anchorProbeStep {
 			{request: firstTurnRequest("request_cert_decisive", true), response: identityProvenResponse(probeAlpha)},
 		},
 		"window gated pending": {
-			{request: firstTurnRequest("request_cert_gated", false), windowed: true, response: identityProvenResponse(probeAlpha)},
+			{request: firstTurnRequest("request_cert_gated", false), windowed: true, response: gatedBeyondWindow(identityProvenResponse(probeAlpha))},
 		},
 		"same question carried silent": {
 			{request: firstTurnRequest("request_cert_silent_one", true), response: identityProvenResponse(probeAlpha)},
@@ -138,7 +138,7 @@ func anchorVocabularyScenarios() []anchorSiteScenario {
 			resolution: SubjectResolution{Candidates: []SubjectCandidate{scopeAnchorMatch(probeTeam)}, Committed: []SubjectRef{probeTeam}}, bases: provenCommitBases(probeTeam)}})},
 		{name: "carried not evaluated", run: anchorProbeScenario(first, anchorProbeStep{request: followUp("request_vocab_refused", "", nil), gate: &refused, verified: true, response: emptyProbeResponse()})},
 		{name: "window confirmed", run: anchorProbeScenario(
-			anchorProbeStep{request: firstTurnRequest("request_vocab_gate_one", false), windowed: true, response: identityProvenResponse(probeAlpha)},
+			anchorProbeStep{request: firstTurnRequest("request_vocab_gate_one", false), windowed: true, response: gatedBeyondWindow(identityProvenResponse(probeAlpha))},
 			anchorProbeStep{request: followUp("request_vocab_gate_two", "", nil), verified: true, response: emptyProbeResponse()})},
 		{name: "carried reconfirmed", run: anchorProbeScenario(first, anchorProbeStep{request: followUp("request_vocab_reconfirm", "", nil), anchorKind: SubjectProject, verified: true, response: needTurnResponse{
 			resolution: SubjectResolution{Candidates: []SubjectCandidate{}, Committed: []SubjectRef{probeAlpha}}, bases: provenCommitBases(probeAlpha)}})},

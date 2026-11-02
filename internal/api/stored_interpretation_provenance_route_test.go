@@ -55,10 +55,12 @@ func TestAStoredResultReadByIDNamesItsInterpreter(t *testing.T) {
 	interprets := 0
 	var synthesized []contextfabric.InterpretedQuestion
 	store := memoryinvestigation.NewStore()
-	engine := newSuppliedRouteEngine(t, contextfabric.RuntimeQuestionInterpreter{
+	// Each turn has no window of its own and stops at the window prompt, so the
+	// stored row is the engine's own, not a synthesized answer's.
+	engine := newSuppliedRouteEngineOver(t, contextfabric.RuntimeQuestionInterpreter{
 		Runtime:  countingScriptedRuntime{scriptedInterpretRuntime: scriptedInterpretRuntime{interpreted: interpreted, receipt: receipt}, interprets: &interprets},
 		Supplied: supplied,
-	}, contextfabric.StoredSubjectAdmitted, &synthesized, store)
+	}, authorizingGraph{liveGraphReader: liveGraphReader{project: suppliedRouteProject()}, outcome: contextfabric.StoredSubjectAdmitted, offersUnreadable: true}, &synthesized, store)
 	logs := &lockedBuffer{}
 	app, token := newParityHostedAppWithLogs(t, engine, store, limits.ResourceBudget{MaxItems: 500, MaxTokens: 500_000, MaxBytes: 8 << 20}, logs)
 	hosted := httptest.NewTLSServer(app.Handler())
