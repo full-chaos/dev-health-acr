@@ -130,7 +130,7 @@ FactFileHotspots
     leak rebound_func_value   0
     leak no_body              0
     leak unresolvable         0
-    calls followed            981
+    calls followed            983
     calls accounted           13
     calls not_a_call          5
     calls excluded_by_design  118
