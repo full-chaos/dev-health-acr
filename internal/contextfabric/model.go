@@ -530,14 +530,21 @@ const MaxFactValueRows = maxFactValueRows
 // only (CHAOS-12607): contractsv1.ContextFabricClaimedFactDistributionMaxRows,
 // 366, so a completion forecast's every distinct day to the 365-day horizon
 // is carried whole. Every other table keeps MaxFactValueRows.
-const MaxFactDistributionRows = 366
+const MaxFactDistributionRows = contractsv1.ContextFabricClaimedFactDistributionMaxRows
 
-// maxFactTableRows is the row bound of a table of this shape.
-func maxFactTableRows(shape FactTableShape) int {
-	if shape == FactTableDistribution {
-		return MaxFactDistributionRows
-	}
-	return maxFactValueRows
+// maxFactTableRows is the row bound of a table: the wire's one keyed bound
+// table (contractsv1.ContextFabricClaimedFactRowsMax) read through the
+// declaration this table will travel as, so the producer and the wire can
+// never hold a table to two different caps.
+func maxFactTableRows(t FactTable) int {
+	return contractsv1.ContextFabricClaimedFactRowsMax(t.rowBoundDeclaration())
+}
+
+// rowBoundDeclaration is the part of this table's wire declaration the row
+// bound classifier reads. A row bound class keyed on more than the shape
+// adds its declaration property here.
+func (t FactTable) rowBoundDeclaration() *contractsv1.ContextFabricClaimedFactTable {
+	return &contractsv1.ContextFabricClaimedFactTable{Shape: contractsv1.ContextFabricFactTableShape(t.Shape)}
 }
 
 type FactValue struct {
@@ -799,7 +806,7 @@ func (t FactTable) Validate() error {
 	if len(t.Rows) == 0 {
 		return fmt.Errorf("fact table must declare at least one row")
 	}
-	if len(t.Rows) > maxFactTableRows(t.Shape) {
+	if len(t.Rows) > maxFactTableRows(t) {
 		return fmt.Errorf("fact table rows exceed bounds")
 	}
 	seenKeys := make(map[string]bool, len(t.Rows))
@@ -949,7 +956,7 @@ func (v FactValue) validate(allowRows bool) error {
 		set++
 		rowBound := maxFactValueRows
 		if v.Table != nil {
-			rowBound = maxFactTableRows(v.Table.Shape)
+			rowBound = maxFactTableRows(*v.Table)
 		}
 		if len(v.Rows) > rowBound {
 			return fmt.Errorf("fact value rows exceed bounds")

@@ -1862,23 +1862,28 @@
               }
             },
             {
-              "description": "CHAOS-12607: rows may exceed 64 only for a `distribution` table (up to 366, its whole completion distribution); every other table, and rows with no declaration, keep 64.",
+              "description": "CHAOS-12607 row bound, default clause: rows of a table in no row bound class, and rows with no declaration, keep 64.",
+              "$comment": "row-bound-class: default",
               "if": {
                 "not": {
-                  "properties": {
-                    "table": {
+                  "anyOf": [
+                    {
                       "properties": {
-                        "shape": {
-                          "const": "distribution"
+                        "table": {
+                          "properties": {
+                            "shape": {
+                              "const": "distribution"
+                            }
+                          },
+                          "required": [
+                            "shape"
+                          ]
                         }
                       },
                       "required": [
-                        "shape"
+                        "table"
                       ]
                     }
-                  },
-                  "required": [
-                    "table"
                   ]
                 }
               },
@@ -1886,6 +1891,34 @@
                 "properties": {
                   "rows": {
                     "maxItems": 64
+                  }
+                }
+              }
+            },
+            {
+              "description": "CHAOS-12607 row bound, class distribution: a `distribution` table holds every distinct completion day to the 365-day horizon, whole.",
+              "$comment": "row-bound-class: distribution",
+              "if": {
+                "properties": {
+                  "table": {
+                    "properties": {
+                      "shape": {
+                        "const": "distribution"
+                      }
+                    },
+                    "required": [
+                      "shape"
+                    ]
+                  }
+                },
+                "required": [
+                  "table"
+                ]
+              },
+              "then": {
+                "properties": {
+                  "rows": {
+                    "maxItems": 366
                   }
                 }
               }
