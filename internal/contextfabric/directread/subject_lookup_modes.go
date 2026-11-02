@@ -113,10 +113,14 @@ func planHandle(plan findPlan, handle string) (findPlan, error) {
 	if len([]rune(handle)) > MaxFindQueryRunes {
 		return plan, fmt.Errorf("%w: handle is too long", ErrFindInvalidRequest)
 	}
-	// A ticket key binds here only as the whole handle (BindWorkItemKey): free
-	// text binds any key shape (CHAOS-12463), and a key in a sentence is not one
-	// exact key. The census decides existence (CHAOS-7159).
-	bound := slices.DeleteFunc(graphrank.BindHandles(handle), graphrank.IsWorkItemTicketKey)
+	// A work item key binds here only as the whole handle: free text binds any
+	// key shape (CHAOS-12463), and a key in a sentence is not one exact key. A
+	// ticket key binds through BindWorkItemKey, which also takes lower case; a
+	// repository reference must span the whole handle. The census decides
+	// existence (CHAOS-7159).
+	bound := slices.DeleteFunc(graphrank.BindHandles(handle), func(h graphrank.BoundHandle) bool {
+		return graphrank.IsWorkItemTicketKey(h) || graphrank.IsWorkItemRepoReference(h) && (h.SpanStart != 0 || h.SpanEnd != len(handle))
+	})
 	if len(bound) == 0 {
 		if key, ok := graphrank.BindWorkItemKey(handle); ok {
 			bound = []graphrank.BoundHandle{key}

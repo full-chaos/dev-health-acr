@@ -249,6 +249,11 @@ func BindWorkItemKey(text string) (BoundHandle, bool) {
 // IsWorkItemTicketKey reports whether handle is a free-text ticket key shape.
 func IsWorkItemTicketKey(handle BoundHandle) bool { return handle.Grammar == workItemTicketKeyGrammar }
 
+// IsWorkItemRepoReference reports whether handle is a repository reference.
+func IsWorkItemRepoReference(handle BoundHandle) bool {
+	return handle.Grammar == workItemRepoReferenceGrammar
+}
+
 // HasWorkItemKeyToken reports whether text holds a key-shaped token of ANY
 // prefix, or a repository reference, using the same boundaries as the registered
 // work item patterns. It answers on SHAPE alone: whether the prefix is registered is
