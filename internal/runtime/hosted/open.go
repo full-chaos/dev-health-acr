@@ -959,10 +959,13 @@ func buildContextFabricInvestigator(ctx context.Context, request buildRequest, p
 	clientSynthesis := synthesisprompt.ClientAssembly()
 	clientSynthesis.ParseDraft = suppliedSynthesizer.Parse
 	engine, err := contextfabric.NewEngine(contextfabric.EngineDependencies{
-		WorkItemMembership: workItemMembership,
-		TreeWorkItemGraph:  graphReader,
-		TreeWorkItemFilter: treeWorkItemFilter,
-		TreeWorkItemGate:   treeWorkItemGate,
+		// CHAOS-12632: the free-text handle grammar, for the interpretation
+		// terms line's handle_bound field.
+		QuestionHandleProbe: func(question string) bool { return len(graphrank.BindHandles(question)) > 0 },
+		WorkItemMembership:  workItemMembership,
+		TreeWorkItemGraph:   graphReader,
+		TreeWorkItemFilter:  treeWorkItemFilter,
+		TreeWorkItemGate:    treeWorkItemGate,
 		// FrameTelemetry is wired here and NOT discovered by a type
 		// assertion, for the reason FamilyTelemetry beside it is: an
 		// optional telemetry interface that nothing implements in

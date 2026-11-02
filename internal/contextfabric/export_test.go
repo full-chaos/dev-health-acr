@@ -172,3 +172,13 @@ func ClassifyWindowForFrameForTest(interpreted InterpretedQuestion, handleState 
 	}
 	return classifyWindowFor(interpreted, handleStateFrame(SubjectPullRequest, []InvestigationGoal{GoalAssessState}, TemporalIntentCurrent))
 }
+
+// InterpretationTermsEventForTest is interpretationTermsEvent (CHAOS-12632
+// line certification).
+func InterpretationTermsEventForTest(question string, terms []string, statedKind SubjectKind, probe QuestionHandleProbe) InterpretationTermsEvent {
+	var frame *QuestionFrame
+	if statedKind != "" {
+		frame = handleStateFrame(statedKind, []InvestigationGoal{GoalAssessState}, TemporalIntentCurrent)
+	}
+	return interpretationTermsEvent(question, InterpretedQuestion{SubjectTerms: terms}, frame, probe)
+}
