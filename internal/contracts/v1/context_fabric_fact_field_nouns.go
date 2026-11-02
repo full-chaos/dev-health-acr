@@ -80,6 +80,7 @@ var contextFabricStringFieldClasses = func() map[string]ContextFabricStringField
 		"status_since", "success_criterion", "team_id", "team_name", "title", "unit_from", "unit_to", "window_end",
 		"window_start", "work_scope_id", "work_unit_id", "sizing_note",
 		"latest_sprint_end", "next_sprint_end", "state_source", "target_date", "target_date_provider", "due_at", "work_item_id",
+		"forecast_p50_date", "forecast_p85_date", "forecast_p95_date",
 	} {
 		classes[name] = StringFieldText
 	}
@@ -94,6 +95,7 @@ var contextFabricStringFieldClasses = func() map[string]ContextFabricStringField
 		"bug_completed_ratio_unavailable_reason", "theme", "unit_attribution_basis", "unit_kind", "unit_mix_source",
 		"window_basis", "window_mode",
 		"commitment_status", "items_unavailable_reason", "items_unreadable_reason", "iteration_basis", "sprint_refs_unresolved_reason", "project_state", "sprint_kind",
+		"completion_distribution_state",
 	} {
 		classes[name] = StringFieldToken
 	}

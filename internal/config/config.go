@@ -178,6 +178,16 @@ type Config struct {
 	// deployment after the corpus gate. The retired
 	// ACR_CONTEXT_FABRIC_ANCHOR_BINDING_FOLLOW_UP_ENABLED is not read.
 	AnchorBindingCarryEnabled bool
+	// CompletionDistributionEnabled
+	// (ACR_CONTEXT_FABRIC_COMPLETION_DISTRIBUTION_ENABLED, CHAOS-12607) lets
+	// the team workload fact emit its completion distribution: the
+	// `completion_distribution` table (shape `distribution`, up to 366 rows)
+	// with its state, horizon and unfinished runs. Default OFF: web and
+	// ask-dev validate answers with their own acr pins and refuse the new
+	// table shape, so it is turned on only after both pins and the web
+	// deploy hold the shape (lead ruling on CHAOS-12607). The forecast's
+	// scalar percentiles and dates do not depend on it.
+	CompletionDistributionEnabled bool
 	// ContextFabricVocabularyLabelsEnabled (CHAOS-12416,
 	// ACR_CONTEXT_FABRIC_VOCABULARY_LABELS_ENABLED) serves the
 	// vocabulary_labels map at both doors that serve a result
