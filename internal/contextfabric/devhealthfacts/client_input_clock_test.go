@@ -217,6 +217,8 @@ func clockTestRules() []stringRule {
 		{match: "SELECT w.work_item_id, toString(w.repo_id), ifNull(r.repo", values: []string{"item1", "r1", "repo-one"}},
 		{match: "SELECT toString(repo_id), toString(day), toInt64(commits_count)", values: []string{"r1", day}},
 		{match: "SELECT scope_id, toString(day), toString(severity)", values: []string{"$id", day, "low"}},
+		// The daily landscape series of a team (CHAOS-12534): one day, held whole.
+		{match: "SELECT team_key, day, identities, churn, delivery, held_days", values: []string{"$id", day}, numbers: []float64{2, 150, 3, 1}},
 		{match: "SELECT scope_id, toString(severity)", values: []string{"$id", "low", day + " 08:30:00", day}},
 		{match: "SELECT project_key, scope, scope_id, scope_name, severity", values: []string{"linear:P1", "team", "t1", "Team One", "low", day + " 08:30:00", day}},
 		{match: "SELECT project_key, toString(day), toUInt8(isNotNull(max(risk)))", values: []string{"linear:P1", day, "low"}},

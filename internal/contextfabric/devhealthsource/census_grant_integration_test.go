@@ -92,6 +92,7 @@ func grantedItemClickHouseWorld(t *testing.T, name string) grantedItemWorld {
 			t.Fatalf("seed link: %v", err)
 		}
 	}
+	holdLinkKeyPrefix(t, world)
 	return world
 }
 
@@ -117,4 +118,12 @@ func TestANativeLinkBesideAnOutsideOneAdmitsOnClickHouse(t *testing.T) {
 
 func TestAWorkItemOwnerGrantAdmitsWhatTheGateAdmitsOnClickHouse(t *testing.T) {
 	aWorkItemOwnerGrantAdmitsWhatTheGateAdmits(t, grantedItemClickHouseWorld)
+}
+
+func TestAKeyWhosePrefixIsOnlyOutsideReadsLikeAWordOnClickHouse(t *testing.T) {
+	aKeyWhosePrefixIsOnlyOutsideReadsLikeAWord(t, grantedItemClickHouseWorld)
+}
+
+func TestEveryProviderKeyCommitsThroughTheGateOnClickHouse(t *testing.T) {
+	everyProviderKeyCommitsThroughTheGate(t, grantedItemClickHouseWorld)
 }
