@@ -18,11 +18,13 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
 	"slices"
 	"testing"
 	"time"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric/answerprojection"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/devhealthfacts"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/devhealthschema"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/graphrank"
@@ -246,12 +248,7 @@ func serveQuadrantQuestion(t *testing.T, ctx context.Context, query contextpacke
 }
 
 func servedQuadrant(result contextfabric.InvestigationResult) *contractsv1.ContextFabricRenderShape {
-	for index := range result.RenderShapes {
-		if result.RenderShapes[index].SelectedBy == contractsv1.ContextFabricRenderRuleLandscapePosition {
-			return &result.RenderShapes[index]
-		}
-	}
-	return nil
+	return servedQuadrantOf(result.RenderShapes)
 }
 
 func landscapeAsked() []contextfabric.FactRequirement {
@@ -301,6 +298,36 @@ func TestAComparisonOfTeamsOnOneDayDrawsTheirQuadrant(t *testing.T) {
 	if !slices.Contains(result.Limitations, contractsv1.ContextFabricLandscapePositionLimitation) {
 		t.Fatalf("the quadrant's line is missing: %v", result.Limitations)
 	}
+	projection := answerprojection.Project(result, answerprojection.Budget{})
+	if err := projection.Validate(); err != nil {
+		t.Fatalf("the projection does not validate: %v", err)
+	}
+	if servedQuadrantOf(projection.RenderShapes) == nil {
+		t.Fatalf("the projection dropped the quadrant (omitted %d)", projection.ProjectionBudget.RenderShapesOmitted)
+	}
+	// The real-encoder fixture for the ask-dev verifier and the web panel
+	// (CHAOS-12624, CHAOS-12625): set ACR_QUADRANT_FIXTURE_DIR to write the
+	// served result and its projection, as the production encoder writes them.
+	if dir := os.Getenv("ACR_QUADRANT_FIXTURE_DIR"); dir != "" {
+		for name, document := range map[string]any{"landscape_quadrant_result.json": result, "landscape_quadrant_projection.json": projection} {
+			encoded, err := json.MarshalIndent(document, "", "  ")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(dir, name), append(encoded, '\n'), 0o644); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+}
+
+func servedQuadrantOf(shapes []contractsv1.ContextFabricRenderShape) *contractsv1.ContextFabricRenderShape {
+	for index := range shapes {
+		if shapes[index].SelectedBy == contractsv1.ContextFabricRenderRuleLandscapePosition {
+			return &shapes[index]
+		}
+	}
+	return nil
 }
 
 // Check 10 and the one-day rule: no quadrant for a team on another day, for a
