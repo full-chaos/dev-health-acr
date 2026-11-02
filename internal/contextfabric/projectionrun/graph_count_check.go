@@ -474,7 +474,7 @@ func (c *Coordinator) checkDayCounts(ctx context.Context, orgID, hash, source st
 			}
 			c.logger.WarnContext(ctx, "context_fabric: graph_below_source_on_day", "check", "graph_below_source_on_day",
 				"source", contextfabric.SanitizeLogAttr(source), "kind", contextfabric.SanitizeLogAttr(string(kind)), "org_id_hash", contextfabric.SanitizeLogAttr(hash),
-				"day", time.Unix(day*24*60*60, 0).UTC().Format("2006-01-02"), "source_count", sourceCount, "graph_count", graphCount, "tolerance", tolerance)
+				"day", contextfabric.SanitizeLogAttr(time.Unix(day*24*60*60, 0).UTC().Format("2006-01-02")), "source_count", sourceCount, "graph_count", graphCount, "tolerance", tolerance)
 			result.DayGaps++
 		}
 	}
