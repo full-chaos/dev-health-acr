@@ -2025,6 +2025,10 @@ type ResolutionTraceEvent struct {
 	PageHintExactHitByKind      map[string]int
 	PageHintLabelFallbackByKind map[string]int
 	PageHintUnresolvedByKind    map[string]int
+	// PageHintOtherKindByKind counts the page hints dropped because the question
+	// asks for another kind (CHAOS-12555), by the hint's own kind.
+	PageHintOtherKind       int
+	PageHintOtherKindByKind map[string]int
 }
 
 // traceTermHash is the ONE place a search term is ever hashed for
@@ -2818,6 +2822,7 @@ func resolveSubjects(ctx context.Context, principal storage.Principal, request c
 		comparison := contextfabric.ClassifyComparisonOperands(frame)
 		switch comparison.Admission {
 		case contextfabric.ComparisonAdmittedNamedPair, contextfabric.ComparisonHeldScopedOperand:
+			request := comparisonRequest(ctx, comparison, request)
 			if inactive, inactiveErr := inactiveCallerTeamHints(ctx, deps, request); inactiveErr != nil {
 				return contextfabric.SubjectResolution{}, contextfabric.StructureOfferMaterial{}, inactiveErr
 			} else if len(inactive) > 0 {
@@ -2832,7 +2837,14 @@ func resolveSubjects(ctx context.Context, principal storage.Principal, request c
 			return resolution, contextfabric.StructureOfferMaterial{}, nil
 		}
 	}
+	request, hintsOfAnotherKind := withoutHintsOfAnotherKind(ctx, request, frame, confirmedKind)
 	terms := SubjectTerms(request, interpreted)
+	if len(terms) == 0 && len(hintsOfAnotherKind) > 0 {
+		// CHAOS-12555: a dropped hint may have been all the turn had to search
+		// with (a supplied interpretation takes no frame terms beside a hint).
+		// The frame's own terms say what the question names.
+		terms = boundedFrameTerms(frame)
+	}
 	// offersOnly (CHAOS-4234): the class-default window gate's offers-only
 	// mode -- every commit MECHANISM below that only exists to reach a
 	// commit (shadow evidence round/census, confirmed-kind truncation
@@ -2892,7 +2904,7 @@ func resolveSubjects(ctx context.Context, principal storage.Principal, request c
 	// returns above this point (organization, context, the comparison
 	// dispatch) never reach the loop and write none. The tracer is read now:
 	// the deferred call reports to the tracer this call was given.
-	pageHints := newPageHintLookupTally(request)
+	pageHints := newPageHintLookupTally(request, hintsOfAnotherKind)
 	defer pageHints.emit(deps.ResolutionTracer)
 	for hintIndex, hint := range request.RequestedScope.SubjectHints {
 		if strings.TrimSpace(hint.ID) == "" || hint.Kind == "" {

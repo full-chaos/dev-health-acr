@@ -52,6 +52,10 @@ type limitationAudit struct {
 }
 
 var auditedLimitationWrites = map[string]limitationAudit{
+	"restateWithheldPoolClarification#Clone#0": {
+		sameShapedTotal: 1,
+		reason:          "a copy of the served list, then a same-length replacement of one sentence by another (CHAOS-12524): nothing is added, so the bound cannot move; the copy keeps a store's own slice unedited",
+	},
 	"appendServedRestatement#withOutcomeEvictionLimitation#0": {
 		sameShapedTotal: 1,
 		reason:          "the eviction disclosure is added by withOutcomeEvictionLimitation, which composes through appendBoundedLimitations (dedup, normalize, displace a model caveat); the call site only assigns its output",
