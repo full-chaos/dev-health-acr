@@ -151,10 +151,11 @@ func TestPageHintLookupLineCarriesCountsAndNoHintIdentity(t *testing.T) {
 		Event: eventspec.PageHintLookup,
 		Want: map[string]any{
 			"request_id": request.RequestID, "page_hints": 3,
-			"exact_hit": 1, "label_fallback": 1, "unresolved": 1, "search_fallback": true,
+			"exact_hit": 1, "label_fallback": 1, "unresolved": 1, "other_kind": 0, "search_fallback": true,
 			"exact_hit_by_kind":      map[string]any{team: 1},
 			"label_fallback_by_kind": map[string]any{repository: 1},
 			"unresolved_by_kind":     map[string]any{repository: 1},
+			"other_kind_by_kind":     map[string]any{},
 		},
 	}); err != nil {
 		t.Fatalf("Certify(PageHintLookup) error = %v", err)
