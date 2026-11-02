@@ -49,16 +49,27 @@ func TestTheKeyedLinkReadDecidesEachRowByTheWalksRule(t *testing.T) {
 	textOnly := keyedNode("work_item", "work_item.v2:0:linear:X-2", noRepositoryScope)
 	ownRepo := keyedNode("work_item", "work_item.v2:own:gh:acme/own#3", "acme/own")
 	outside := keyedNode("work_item", "work_item.v2:0:jira:X-4", noRepositoryScope)
+	// A repository renamed out of the scope whose pull request the projection
+	// has not re-stamped yet: the repository decides, as it does for the walk,
+	// which starts from the scope's repositories.
+	renamed := keyedNode("repository", "repository:renamed", "acme/renamed")
+	prStale := keyedNode("pull_request", "pull_request:renamed:1", "acme/svc")
+	stale := keyedNode("work_item", "work_item.v2:0:linear:X-5", noRepositoryScope)
 	rows := []row{
-		keyedRow(svc, pr2, repoLess, "explicit_text"),
+		// A repository-less item's text link is refused under a scope.
 		keyedRow(svc, pr1, repoLess, "native"),
+		keyedRow(svc, pr2, repoLess, "explicit_text"),
 		keyedRow(svc, pr1, textOnly, "explicit_text"),
+		// An item with its own repository is admitted through a link of any
+		// tier, so its tiers compete: the stronger row comes first.
+		keyedRow(svc, pr1, ownRepo, "native"),
 		keyedRow(svc, pr2, ownRepo, "heuristic"),
 		// A row the scope clause would drop, as a store could return it: the
 		// row is still decided in process, by the scope rule.
 		keyedRow(other, prOther, outside, "native"),
+		keyedRow(renamed, prStale, stale, "native"),
 	}
-	ids := []string{"work_item.v2:0:linear:X-1", "work_item.v2:0:linear:X-2", "work_item.v2:own:gh:acme/own#3", "work_item.v2:0:jira:X-4"}
+	ids := []string{"work_item.v2:0:linear:X-1", "work_item.v2:0:linear:X-2", "work_item.v2:own:gh:acme/own#3", "work_item.v2:0:jira:X-4", "work_item.v2:0:linear:X-5"}
 	scope := contextfabric.RequestedScope{RepositorySlugs: []string{"acme/svc"}}
 	for _, c := range []struct {
 		name      string
@@ -68,10 +79,10 @@ func TestTheKeyedLinkReadDecidesEachRowByTheWalksRule(t *testing.T) {
 		// A repository-less item needs a native link under a requested scope; the
 		// strongest admitted tier wins; an item with its own repository is decided
 		// by that repository, through a link of any tier.
-		{"organization-wide", storage.Principal{OrgID: "org_1"}, "work_item.v2:0:linear:X-1=native,work_item.v2:own:gh:acme/own#3=heuristic"},
+		{"organization-wide", storage.Principal{OrgID: "org_1"}, "work_item.v2:0:linear:X-1=native,work_item.v2:own:gh:acme/own#3=native"},
 		// The item's own repository is outside the grant: refused, link or not.
 		{"restricted to the scope", storage.Principal{OrgID: "org_1", RepositoryScopes: []string{"acme/svc"}}, "work_item.v2:0:linear:X-1=native"},
-		{"restricted to the scope and the item's repository", storage.Principal{OrgID: "org_1", RepositoryScopes: []string{"acme/svc", "acme/own"}}, "work_item.v2:0:linear:X-1=native,work_item.v2:own:gh:acme/own#3=heuristic"},
+		{"restricted to the scope and the item's repository", storage.Principal{OrgID: "org_1", RepositoryScopes: []string{"acme/svc", "acme/own"}}, "work_item.v2:0:linear:X-1=native,work_item.v2:own:gh:acme/own#3=native"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			t.Parallel()
