@@ -1286,6 +1286,11 @@ func (c Config) validate() error {
 	if strings.TrimSpace(c.Addr) == "" {
 		return errors.New("falkordb address is required")
 	}
+	// CHAOS-12526: zero takes the default. The read asks for limit+1, so that
+	// one row must fit under the server's result cap, or a cut reads as complete.
+	if c.NodeEdgeReadLimit < 0 || c.NodeEdgeReadLimit >= falkorResultSetSize {
+		return fmt.Errorf("falkordb NodeEdgeReadLimit must be from 0 to %d", falkorResultSetSize-1)
+	}
 	if _, _, err := net.SplitHostPort(c.Addr); err != nil {
 		return errors.New("falkordb address must be host:port")
 	}
