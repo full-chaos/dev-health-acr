@@ -4740,7 +4740,15 @@
       "enum": [
         "cohort_attention_score",
         "cohort_driver_contribution",
-        "dated_fact_trend"
+        "dated_fact_trend",
+        "investment_theme_share"
+      ]
+    },
+    "RenderValueUnit": {
+      "description": "CHAOS-4610: the CLOSED vocabulary of units a shape may declare for its values, so a consumer formats a number without parsing value_label. ratio is a share from 0 to 1, and validation holds every value of the shape to that range. No unit claims nothing: the value is shown as served.",
+      "type": "string",
+      "enum": [
+        "ratio"
       ]
     },
     "RenderPointSource": {
@@ -4874,6 +4882,9 @@
           "type": "string",
           "minLength": 1,
           "maxLength": 256
+        },
+        "value_unit": {
+          "$ref": "#/$defs/RenderValueUnit"
         },
         "series": {
           "type": "array",
