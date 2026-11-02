@@ -286,6 +286,21 @@ back by shape. An out-of-vocabulary class stays unset (receipt
 `window_class_unrecognized`). `WindowInferenceVersion` moved to `win_v2`, so
 answers stored under the old inference are not reused.
 
+**A status question about a named handle draws no default window (CHAOS-12595).**
+`classifyWindowFor` (`chaos3900_window_class.go`) reads the accepted frame
+before the class table. A frame that asks only for the current state of named
+handles (goals only `assess_state`, temporal `current`, a `named_subject`
+whose stated kind is `pull_request`, `work_item`, `ci_pipeline_run`,
+`deployment` or `incident`; one or more terms, because a handle's container
+or a second handle needs no window either) classifies as `state_snapshot`,
+whatever the model picked; a model pick of `state_snapshot` stays the model's, any other pick is
+marked downgraded. So "what is the status of pull request P in R" is no longer
+held at the CHAOS-4040 window gate. A trend, change or driver question about the
+same handle, and any question about a repository, team or project, keeps the
+shape fallback. The decision and its basis (`model`, `shape_fallback`,
+`handle_state`, `none`) are the Info line `context fabric window
+classification`, which also carries the model's own sanitized pick.
+
 **Every current-axis answer states its window (CHAOS-11601).** When the
 question names no period and its window class carries no default
 (`state_snapshot`, or no class), `composeEffectiveWindow` returns no window and

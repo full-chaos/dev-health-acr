@@ -162,3 +162,13 @@ func InvestigateAcceptanceBootstrapForTest(t *testing.T, synthesis ModelRuntime)
 	request.Question = "What is the actual status of Ask Dev and what is driving it?"
 	return engine.Investigate(context.Background(), acceptancePrincipal(), request)
 }
+
+// ClassifyWindowForFrameForTest is classifyWindowFor over a pull request
+// status frame when handleState is true, and over no frame otherwise
+// (CHAOS-12595 line certification).
+func ClassifyWindowForFrameForTest(interpreted InterpretedQuestion, handleState bool) WindowClassOutcome {
+	if !handleState {
+		return classifyWindowFor(interpreted, nil)
+	}
+	return classifyWindowFor(interpreted, handleStateFrame(SubjectPullRequest, []InvestigationGoal{GoalAssessState}, TemporalIntentCurrent))
+}
