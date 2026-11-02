@@ -22,10 +22,11 @@ func TestWorkloadBindingStore_lookupReturnsAnExactlySeededBinding(t *testing.T) 
 	key := storage.WorkloadBindingKey{TrustDomain: "cluster.local", Namespace: "panel-ns", ServiceAccountName: "panel-read", ServiceAccountUID: "sa-uid-1"}
 	seeded := storage.WorkloadBinding{BindingID: "wlb_1", OrgID: "org_1", Role: "read", RepositoryScopes: []string{"*"}}
 	store.Put(key, seeded)
-	got, err := store.Lookup(context.Background(), key)
-	if err != nil {
-		t.Fatal(err)
+	rows, err := store.Lookup(context.Background(), key)
+	if err != nil || len(rows) != 1 {
+		t.Fatalf("rows = %#v err = %v", rows, err)
 	}
+	got := rows[0]
 	if got.BindingID != "wlb_1" || got.OrgID != "org_1" || got.Role != "read" {
 		t.Fatalf("binding = %#v", got)
 	}
@@ -63,11 +64,23 @@ func TestWorkloadBindingStore_putReplacesAnExistingRow(t *testing.T) {
 	store.Put(key, storage.WorkloadBinding{BindingID: "wlb_1", Role: "read"})
 	disabledAt := time.Now()
 	store.Put(key, storage.WorkloadBinding{BindingID: "wlb_1", Role: "read", DisabledAt: &disabledAt})
-	got, err := store.Lookup(context.Background(), key)
-	if err != nil {
-		t.Fatal(err)
+	rows, err := store.Lookup(context.Background(), key)
+	if err != nil || len(rows) != 1 {
+		t.Fatalf("rows = %#v err = %v", rows, err)
 	}
+	got := rows[0]
 	if got.DisabledAt == nil {
 		t.Fatal("expected the replaced row's DisabledAt to be visible")
+	}
+}
+
+func TestWorkloadBindingStore_oneIdentityKeepsOneRowPerOrg(t *testing.T) {
+	store := NewWorkloadBindingStore()
+	key := storage.WorkloadBindingKey{TrustDomain: "cluster.local", Namespace: "ns", ServiceAccountName: "sa", ServiceAccountUID: "uid"}
+	store.Put(key, storage.WorkloadBinding{BindingID: "wlb_a", OrgID: "org_a", Role: "read"})
+	store.Put(key, storage.WorkloadBinding{BindingID: "wlb_b", OrgID: "org_b", Role: "read"})
+	rows, err := store.Lookup(context.Background(), key)
+	if err != nil || len(rows) != 2 || rows[0].OrgID != "org_a" || rows[1].OrgID != "org_b" {
+		t.Fatalf("rows = %#v err = %v, want both orgs ordered by org id", rows, err)
 	}
 }
