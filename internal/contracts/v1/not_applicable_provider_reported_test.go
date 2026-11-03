@@ -25,6 +25,14 @@ func TestNotApplicableRowMayNameTheObservedProviderReportOnAnAssembledResult(t *
 		{"provider report on a planning row", func(r *ContextFabricPlanRequirementOutcomeRow) {
 			r.Stage = ContextFabricOutcomeStagePlanning
 		}, true},
+		// Projection and reuse run after assembly and perform no read, so neither can
+		// carry a provider's report either (Codex r1, P3: only planning was pinned).
+		{"provider report on a projection row", func(r *ContextFabricPlanRequirementOutcomeRow) {
+			r.Stage = ContextFabricOutcomeStageProjection
+		}, true},
+		{"provider report on a reuse row", func(r *ContextFabricPlanRequirementOutcomeRow) {
+			r.Stage = ContextFabricOutcomeStageReuse
+		}, true},
 		{"provider report with an overrun", func(r *ContextFabricPlanRequirementOutcomeRow) {
 			r.CauseOverrun = ContextFabricBudgetOverrunItems
 		}, true},
