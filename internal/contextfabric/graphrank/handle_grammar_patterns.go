@@ -5,6 +5,9 @@ package graphrank
 type HandleGrammarPattern struct {
 	ID   string
 	Kind CensusKind
+	// FromStoredRows marks an entry no question text binds alone: the turn
+	// reads stored rows to choose it over the text's own reading (CHAOS-12642).
+	FromStoredRows bool
 }
 
 // HandleGrammarPatterns returns the registry's entries in registry order.
@@ -16,7 +19,7 @@ type HandleGrammarPattern struct {
 func HandleGrammarPatterns() []HandleGrammarPattern {
 	patterns := make([]HandleGrammarPattern, 0, len(handleGrammarRegistry))
 	for _, entry := range handleGrammarRegistry {
-		patterns = append(patterns, HandleGrammarPattern{ID: entry.name, Kind: entry.kind})
+		patterns = append(patterns, HandleGrammarPattern{ID: entry.name, Kind: entry.kind, FromStoredRows: entry.pattern == nil})
 	}
 	return patterns
 }

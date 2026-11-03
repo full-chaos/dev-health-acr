@@ -1450,6 +1450,11 @@ type ContextFabricSubjectResolution struct {
 	// what the terminal says in place of "found no candidate". The sentence is the
 	// only form that leaves the process.
 	CensusLimitation string `json:"-"`
+	// ExactLabelKind (CHAOS-12600) is the kind a bare-name comparison was
+	// resolved under because each side matched exactly one subject of that kind
+	// by its full label, or "". The answer states it as a fixed limitation
+	// sentence, which is the only form that leaves the process.
+	ExactLabelKind ContextFabricSubjectKind `json:"-"`
 	// WorkItemLinkScopeUnread (CHAOS-12505) is set when the census of the
 	// question's work-item handle under a requested repository scope ran and the
 	// keyed link read that scopes it failed or was cut. Nothing then shows that
@@ -1461,6 +1466,18 @@ type ContextFabricSubjectResolution struct {
 	// not be read. "" otherwise. The sentence is the only form that leaves the
 	// process.
 	NamedRepositoryLinkLimitation string `json:"-"`
+	// CaseTwinReadingLimitations (CHAOS-12663) holds one sentence per term a
+	// case-exact label match committed over a subject whose label differs from
+	// it only in case: which subject the term was read as, and the other
+	// same-name subjects, so the user can name one of them instead. Empty
+	// otherwise. The sentences are the only form that leaves the process.
+	CaseTwinReadingLimitations []string `json:"-"`
+	// UnansweredHandlesLimitation (CHAOS-12557) is the fixed sentence an answer
+	// owes when the question names several subjects by their identifiers beside
+	// one repository and states no kind: the answer is the repository's, and does
+	// not answer for them. "" otherwise. The sentence is the only form that leaves
+	// the process.
+	UnansweredHandlesLimitation string `json:"-"`
 	// CommitDecisionDigests (CHAOS-4087) is a small, closed-vocabulary
 	// summary of WHICH MECHANISM committed each subject in Committed --
 	// persisted so a wrong commit discovered later from a STORED result

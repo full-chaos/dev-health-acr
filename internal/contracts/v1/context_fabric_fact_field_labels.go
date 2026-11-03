@@ -120,6 +120,7 @@ var contextFabricFactFieldLabels = map[string]string{
 	"forecast_p85_date":                                       "85th percentile forecast date",
 	"forecast_p95_date":                                       "95th percentile forecast date",
 	"simulation_count":                                        "Simulations",
+	"target_items":                                            "Items to complete",
 	"horizon_days":                                            "Forecast horizon (days)",
 	"unfinished_runs":                                         "Runs unfinished at the horizon",
 	"completion_distribution":                                 "Completion distribution",

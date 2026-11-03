@@ -574,7 +574,7 @@ func TestThePolicyLineReportsTheBudgetTheRunEnforces(t *testing.T) {
 			request := slotGateRequest()
 			request.Options.MaxSubjectCandidates = cell.requested
 
-			recordComparisonPolicy(context.Background(), storage.Principal{OrgID: "org-1"}, request, deps, comparison)
+			recordComparisonPolicy(context.Background(), storage.Principal{OrgID: "org-1"}, request, deps, comparison, ComparisonKindBasisStated, "")
 
 			if len(sink.events) != 1 {
 				t.Fatalf("the sink captured %d policy event(s), want exactly 1 -- an arm reading no line proves nothing about its values", len(sink.events))

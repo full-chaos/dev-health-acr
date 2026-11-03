@@ -108,6 +108,10 @@ func completionShare(running, total int) float64 {
 // not carry.
 func addCompletionForecastFields(fields map[string]contextfabric.FactValue, row readers.CompletionForecastRow, distribution bool) {
 	fields["simulation_count"] = contextfabric.IntegerFactValue(int64(row.SimulationCount))
+	// CHAOS-12634: the item target the run forecast, absent when NULL.
+	if row.HasTargetItems != 0 {
+		fields["target_items"] = contextfabric.IntegerFactValue(row.TargetItems)
+	}
 	if row.HasP85Days != 0 {
 		fields["forecast_p85_days"] = contextfabric.IntegerFactValue(row.P85Days)
 	}

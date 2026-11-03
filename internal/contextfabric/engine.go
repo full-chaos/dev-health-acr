@@ -793,6 +793,10 @@ type EngineTelemetry interface {
 	// composed offers beside the window offer -- closed vocabulary
 	// GatedOfferResolutionOutcome (chaos4234_offers_only.go).
 	RecordGatedOfferResolution(ctx context.Context, principal storage.Principal, outcome GatedOfferResolutionOutcome)
+	// RecordGatedOfferResolutionFailure (CHAOS-12681) reports, beside a
+	// "failed" RecordGatedOfferResolution, why the offers-only pass failed: a
+	// closed class, never the error's text.
+	RecordGatedOfferResolutionFailure(ctx context.Context, principal storage.Principal, class GatedOfferErrorClass)
 	// RecordCohortStructureGate (CHAOS-4579/CHAOS-4531) reports which side
 	// of §1.3's class-conditional gate one StructureOfferMaterial landed
 	// on: the question had no subject axis and the subject_anchor/
@@ -1398,7 +1402,10 @@ type Engine struct {
 	renderShapeOptions          RenderShapeOptions
 	// measureUnitsOf states each claimed table's measure units from the fact
 	// declarations (CHAOS-11984). See withDeclaredMeasureUnits.
-	measureUnitsOf                              factMeasureUnits
+	measureUnitsOf factMeasureUnits
+	// columnWordsOf states each claimed table's column words from the fact
+	// declarations (CHAOS-12639). See withDeclaredColumnWords.
+	columnWordsOf                               factColumnWords
 	serverCompletenessAuthorityEnabled          bool
 	serverCompletenessAuthoritySymmetricEnabled bool
 	// servedLateHook is a test seam: a writer that adds bytes to the document
@@ -1495,6 +1502,7 @@ func NewEngine(dependencies EngineDependencies, options EngineOptions) (*Engine,
 			TableCadence:         declaredCadenceOf(options.FactCapabilities),
 		},
 		measureUnitsOf:                              declaredMeasureUnitsOf(options.FactCapabilities),
+		columnWordsOf:                               declaredColumnWordsOf(options.FactCapabilities),
 		serverCompletenessAuthorityEnabled:          options.ServerCompletenessAuthorityEnabled,
 		serverCompletenessAuthoritySymmetricEnabled: options.ServerCompletenessAuthoritySymmetricEnabled,
 		maxItems:                 options.MaxItems,
@@ -3634,6 +3642,9 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 			// (commitBases), never re-derived, so a graph reader's own
 			// anchor-bound recognition can agree with anchorBound's.
 			Bases: commitBases,
+			// CHAOS-12606: the scope-anchor allocation route answers from the
+			// anchor's own fact, so no member set is read.
+			AnchorFactOnly: scopeAllocationRead(familyOutcome),
 		})
 		if err != nil {
 			return InvestigationResult{}, stageError(StageGraph, fmt.Errorf("discover graph context: %w", err))
@@ -3666,6 +3677,16 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 	subjects := investigationSubjects(resolution, graphContext.Cohort)
 	if workItemTuple {
 		subjects = workItemTupleSubjects(graphContext.Cohort)
+	}
+	// CHAOS-12606: an allocation question over a team's children is answered by
+	// the team's own investment fact (the lead's ruling on CHAOS-4610), so the
+	// read takes the anchor alone. The members stay committed; reading their
+	// facts too would put a breakdown per repository beside the team's, which is
+	// a comparison the question did not ask for. With no anchor team committed
+	// nothing is read (Codex r1, executed): the members' facts are not the
+	// team's split, so the turn ends in the subjectless terminal below.
+	if scopeAllocationRead(familyOutcome) {
+		subjects = scopeAllocationAnchors(familyOutcome, resolution)
 	}
 	graphContext.StatusMeasuredZero = statusMeasuredZero(familyOutcome.Frame, graphContext.Cohort)
 	if len(subjects) == 0 && !workItemTuple && graphContext.StatusMeasuredZero {
@@ -3923,7 +3944,10 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 			err = nil
 			facts = emptyFactReadBundle(familyOutcome.Frame, graphContext.Coverage, graphContext.CohortPopulation)
 		}
-		if err == nil {
+		// CHAOS-12606: under the scope-anchor allocation route no member set
+		// was asked of discovery, so "the search found no member" would state
+		// a search that never ran.
+		if err == nil && !scopeAllocationRead(familyOutcome) {
 			recordEmptyMemberSearch(&facts, familyOutcome.Frame, graphContext.Coverage, graphContext.Cohort, graphContext.CohortPopulation)
 		}
 		if err == nil && graphContext.OrganizationSubjectRead {
@@ -5136,6 +5160,40 @@ func scopeAnchorResolved(outcome QuestionFamilyOutcome) bool {
 	// from the carried snapshot, so its presence is the carried reading's.
 	winner := outcome.WinningSampleIndex >= 0 || outcome.Source == QuestionFamilySourceCarried
 	return winner && outcome.WinningSample.ScopeAnchorTerm != ""
+}
+
+// scopeAllocationRead reports a turn that answers an allocation question over a
+// team's children from the team's own fact (CHAOS-12606): the served family is
+// investment_allocation and the frame is that question (scopeAllocationFrame).
+// It reads the served family, never the recorded route (Codex r2, executed): a
+// rejected plurality records the route and serves no family, and a carried turn
+// serves the family under the source "carried".
+func scopeAllocationRead(outcome QuestionFamilyOutcome) bool {
+	return outcome.Family == QuestionFamilyInvestmentAllocation && outcome.Frame != nil &&
+		outcome.Frame.SubjectExpression.Kind == SubjectExpressionChildrenOfScope &&
+		scopeAllocationFrame(outcome.Frame, scopeAllocationAnchorKind(outcome))
+}
+
+// scopeAllocationAnchorKind is the anchor kind the scope allocation read uses.
+// A plan carried after a rejected plurality keeps the family and the frame but
+// no winning sample, so its anchor kind is empty (Codex r3, executed). Only this
+// route serves the family for a children_of_scope frame, and only under a team
+// anchor (a fresh turn routes only with a team anchor kind), so an empty kind
+// reads as a team: the committed team the frame's anchor names, or nothing,
+// never the members.
+func scopeAllocationAnchorKind(outcome QuestionFamilyOutcome) SubjectKind {
+	if kind := outcome.WinningSample.ScopeAnchorKind; kind != "" {
+		return kind
+	}
+	return SubjectTeam
+}
+
+// scopeAllocationAnchors is the anchor team a scope_allocation turn reads:
+// nothing when no anchor team was committed. The organization route needs none:
+// its source is the projection, and its subject is the caller's organization,
+// read when nothing is committed (organizationSubjectAnswers).
+func scopeAllocationAnchors(outcome QuestionFamilyOutcome, resolution SubjectResolution) []SubjectRef {
+	return ScopeAnchorTeams(outcome.Frame, scopeAllocationAnchorKind(outcome), resolution)
 }
 
 func investigationSubjects(resolution SubjectResolution, cohort *Cohort) []SubjectRef {

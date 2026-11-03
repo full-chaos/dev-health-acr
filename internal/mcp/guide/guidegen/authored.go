@@ -90,6 +90,9 @@ type grammarExample struct {
 	Question string
 	Value    string
 	Note     string
+	// FromStoredRows names the pattern the example's text binds when the
+	// registry pattern is chosen by stored rows, not by text (CHAOS-12642).
+	FromStoredRows string
 }
 
 var grammarExamples = map[string]grammarExample{
@@ -106,7 +109,13 @@ var grammarExamples = map[string]grammarExample{
 	"work_item_repo_reference": {
 		Question: "What is blocking acme/widget#7?",
 		Value:    "acme/widget#7",
-		Note:     "A GitHub or GitLab issue or merge request: the repository path, then `#` or `!` and the number, as the tracker writes it.",
+		Note:     "A GitHub or GitLab issue or merge request: the repository path, then `#` or `!` and the number, as the tracker writes it. A GitHub `#` reference that names a pull request binds as `pull_request_repo_reference` instead.",
+	},
+	"pull_request_repo_reference": {
+		Question:       "Is acme/widget#8 ready to merge?",
+		Value:          "acme/widget#8",
+		Note:           "A GitHub pull request: GitHub issues and pull requests share one number space, so the text alone cannot tell them apart. In free text (`investigate_question`) and as a whole `find_subjects` (if listed) handle with no anchor, the reference binds here only when your organization stores a pull request with that number in that GitHub repository; otherwise it stays `work_item_repo_reference`. GitLab `#` references are issues, so they never bind here.",
+		FromStoredRows: "work_item_repo_reference",
 	},
 	"ci_run_id": {
 		Question: "Why did run 18234567 fail?",

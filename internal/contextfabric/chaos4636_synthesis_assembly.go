@@ -468,10 +468,32 @@ func (e *Engine) synthesizeAndAssemble(ctx context.Context, principal storage.Pr
 		result.LimitationsDisplaced += displaced
 		result.Coverage.Partial = true
 	}
+	// CHAOS-12600: a bare-name comparison whose kind was resolved from unique
+	// exact full-label matches says how it read the sides. The engine states it.
+	if sentence := contractsv1.ContextFabricExactLabelKindLimitation(resolution.ExactLabelKind); sentence != "" {
+		composed, displaced := appendBoundedLimitations(result.Limitations, []string{sentence})
+		result.Limitations = composed
+		result.LimitationsDisplaced += displaced
+	}
+	// CHAOS-12557 (ruling (c)): several identifiers named beside a repository, no
+	// kind stated; the answer says it does not answer for them.
+	if resolution.UnansweredHandlesLimitation != "" {
+		composed, displaced := appendBoundedLimitations(result.Limitations, []string{resolution.UnansweredHandlesLimitation})
+		result.Limitations = composed
+		result.LimitationsDisplaced += displaced
+	}
 	// CHAOS-12505 (ruling 3): a work item committed beside a named repository; the
 	// answer says whether a pull request link joins them. The engine states it.
 	if resolution.NamedRepositoryLinkLimitation != "" {
 		composed, displaced := appendBoundedLimitations(result.Limitations, []string{resolution.NamedRepositoryLinkLimitation})
+		result.Limitations = composed
+		result.LimitationsDisplaced += displaced
+	}
+	// CHAOS-12663 (ruling 2): a term read by case over a same-name twin says
+	// which subject it was read as and names each twin, one sentence per term.
+	// The engine states it, so it stands on no model.
+	if len(resolution.CaseTwinReadingLimitations) > 0 {
+		composed, displaced := appendBoundedLimitations(result.Limitations, resolution.CaseTwinReadingLimitations)
 		result.Limitations = composed
 		result.LimitationsDisplaced += displaced
 	}

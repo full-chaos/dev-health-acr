@@ -37,6 +37,8 @@ var serviceLimitationRecognisers = []limitationRecogniser{
 	{"outside_requested_repositories", contractsv1.IsContextFabricOutsideRequestedRepositoriesLimitation},
 	{"work_item_link", contractsv1.IsContextFabricWorkItemLinkLimitation},
 	{"named_repository_link", contractsv1.IsContextFabricNamedRepositoryLinkLimitation},
+	{"case_twin_reading", contractsv1.IsContextFabricCaseTwinReadingLimitation},
+	{"unanswered_handles", contractsv1.IsContextFabricUnansweredHandlesLimitation},
 	{"census_listing", contractsv1.IsContextFabricCensusListingLimitation},
 	{"degraded_without", contractsv1.IsContextFabricDegradedWithoutLimitation},
 	{"work_item_repository", contractsv1.IsContextFabricWorkItemRepositoryLimitation},
@@ -48,6 +50,7 @@ var serviceLimitationRecognisers = []limitationRecogniser{
 	{"coverage_entries_dropped", contractsv1.IsContextFabricCoverageEntriesDroppedLimitation},
 	{"project_status_missing", contractsv1.IsContextFabricProjectStatusMissingLimitation},
 	{"work_item_authorization_gap", contractsv1.IsContextFabricWorkItemAuthorizationGapLimitation},
+	{"exact_label_kind", contractsv1.IsContextFabricExactLabelKindLimitation},
 }
 
 const unnamedLimitationRecogniser = "other"

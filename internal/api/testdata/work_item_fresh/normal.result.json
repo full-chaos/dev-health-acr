@@ -65,7 +65,7 @@
   "answer_plan": {
     "family": "scoped_cohort_status",
     "family_source": "model",
-    "family_version": "question-family.v6",
+    "family_version": "question-family.v7",
     "member_kind": "work_item",
     "require_drivers": false,
     "require_ranking": false,
@@ -219,7 +219,7 @@
     "partial": false
   },
   "evidence_ref_labels": {
-    "acr:v1:work-item:repo-1:work-1": "Work item: repo-1:work-1"
+    "acr:v1:work-item:repo-1:work-1": "Work item: work-1"
   },
   "versions": {
     "service_version": "tuple-test",
