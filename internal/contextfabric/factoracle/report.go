@@ -40,6 +40,9 @@ func (r *Report) Details() string {
 		for _, retired := range rr.Retired {
 			fmt.Fprintf(&b, "RETIRED %s: %s\n", rr.Root, retired)
 		}
+		for _, shape := range rr.NotRecorded {
+			fmt.Fprintf(&b, "NOT-RECORDED %s: %s\n", rr.Root, shape)
+		}
 		if len(rr.Residual) > 0 {
 			fmt.Fprintf(&b, "RESIDUAL %s (ops organization value minus the acr repository sum): %s\n", rr.Root, formatThemes(rr.Residual))
 		}

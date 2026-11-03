@@ -86,6 +86,13 @@ type Oracle struct {
 	// measurement of the ops side. The recorded mode sets it for a root whose
 	// recorded replies the policy no longer lets the oracle ask for.
 	OpsRetired map[string]string
+	// NotRecorded names, per operation, why the recorded mode has no case
+	// for it (an operation registered after the capture). Every generated
+	// shape of a listed operation is left out of the run and stated on its
+	// root (RootReport.NotRecorded); the other candidates of the root run in
+	// full. A listed operation with a case is an error, so the list cannot
+	// outlive the capture that records the operation.
+	NotRecorded map[string]string
 	// RepositoryEffort is, after Run, the acr repository mix per repository
 	// id and theme.
 	RepositoryEffort map[string]map[string]float64
@@ -464,6 +471,13 @@ func (o *Oracle) Run(ctx context.Context) (*Report, error) {
 		}
 		for _, shape := range shapes {
 			if shape.Root != root.Field {
+				continue
+			}
+			if why, listed := o.NotRecorded[shape.Operation]; listed {
+				if len(byShape[shape.ID()]) > 0 {
+					return nil, fmt.Errorf("shape %s has a case, but operation %s is listed as not recorded (%s): remove it from the list", shape.ID(), shape.Operation, why)
+				}
+				rr.NotRecorded = append(rr.NotRecorded, shape.ID()+": "+why)
 				continue
 			}
 			if len(byShape[shape.ID()]) == 0 {

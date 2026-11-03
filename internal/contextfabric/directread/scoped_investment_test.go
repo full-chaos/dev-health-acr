@@ -370,3 +370,71 @@ func TestDataCatalogAdvertisesTheScopedIDRule(t *testing.T) {
 		t.Fatalf("data_catalog does not list %v", want)
 	}
 }
+
+// ISSUE_SIZE is a breakdown measure of the scoped entries only (lead ruling,
+// CHAOS-12691): investmentBreakdownTeam and investmentBreakdownRepository
+// serve it, the ORG entries refuse it, and CHURN_LOC stays refused everywhere.
+// graphql_query maps an ISSUE_SIZE query with one owned team to the team
+// entry and refuses it at ORG scope.
+func TestIssueSizeIsServedByTheScopedEntriesOnly(t *testing.T) {
+	cat := defaultCatalogueOf(t)
+	withMeasure := func(scope map[string]any, measure string) map[string]any {
+		breakdown := scopedBreakdown()
+		breakdown["measure"] = measure
+		return opMerge(scopedBreakdownVars(scope), "batch.breakdowns", []any{breakdown})
+	}
+	for _, c := range []struct {
+		operation, measure string
+		scope              map[string]any
+		want               directread.RefusalCode
+	}{
+		{"investmentBreakdownTeam", "ISSUE_SIZE", map[string]any{"level": "TEAM", "ids": []any{opTeamT}}, ""},
+		{"investmentBreakdownRepository", "ISSUE_SIZE", map[string]any{"level": "REPO", "ids": []any{opRepo(opRepoA)}}, ""},
+		{"investmentBreakdownTeam", "CHURN_LOC", map[string]any{"level": "TEAM", "ids": []any{opTeamT}}, directread.RefusalVariableNotAllowed},
+		{"investmentBreakdownRepository", "CHURN_LOC", map[string]any{"level": "REPO", "ids": []any{opRepo(opRepoA)}}, directread.RefusalVariableNotAllowed},
+		{"investmentBreakdown", "ISSUE_SIZE", nil, directread.RefusalVariableNotAllowed},
+		{"investmentFull", "ISSUE_SIZE", nil, directread.RefusalVariableNotAllowed},
+		{"investmentBreakdown", "COUNT", nil, ""},
+	} {
+		t.Run(c.operation+"/"+c.measure, func(t *testing.T) {
+			op, refusal := cat.Lookup(c.operation)
+			if refusal != nil {
+				t.Fatalf("%s: %v", c.operation, refusal)
+			}
+			h := newOpHarness(t, func(opRecorded) (int, string) { return 200, opNullAnswer(op) }, opHarnessOptions{})
+			resp := h.run(t, opUnrestricted(opOrgA), c.operation, withMeasure(c.scope, c.measure))
+			raw, _ := json.Marshal(resp)
+			if c.want == "" {
+				if resp.Call != directread.CallServed || len(h.upstream.requests()) != 1 {
+					t.Fatalf("want served, got %s", raw)
+				}
+				sent := h.upstream.requests()[0].variables()
+				breakdowns, _ := opLookup(sent, "batch.breakdowns")
+				if !jsonEqual(breakdowns.([]any)[0].(map[string]any)["measure"], c.measure) {
+					t.Fatalf("sent breakdowns %v, want measure %s", breakdowns, c.measure)
+				}
+				return
+			}
+			if resp.Call != directread.CallRefused || resp.Refusal == nil || resp.Refusal.Code != c.want || len(h.upstream.requests()) != 0 {
+				t.Fatalf("want %s with zero upstream, got %s", c.want, raw)
+			}
+		})
+	}
+
+	h := newGQLHarness(t, gqlHarnessOptions{})
+	query := func(scope string) string {
+		batch := `{breakdowns: [{dimension: THEME, measure: ISSUE_SIZE, dateRange: {startDate: "2026-09-01", endDate: "2026-09-28"}}]`
+		if scope != "" {
+			batch += `, filters: {scope: ` + scope + `}`
+		}
+		return `{ analytics(batch: ` + batch + `}) { breakdowns { dimension measure items { key value } } } }`
+	}
+	h.listener.reset()
+	resp := h.run(t, opUnrestricted(opOrgA), query(`{level: TEAM, ids: ["`+opTeamT+`"]}`), nil)
+	h.wantServed(t, resp)
+	if got := resp.RootFields[0].Operation; got != "investmentBreakdownTeam" {
+		t.Fatalf("an ISSUE_SIZE team query mapped to %s", got)
+	}
+	h.listener.reset()
+	h.wantRefused(t, h.run(t, opUnrestricted(opOrgA), query(""), nil), directread.RefusalVariableNotAllowed)
+}

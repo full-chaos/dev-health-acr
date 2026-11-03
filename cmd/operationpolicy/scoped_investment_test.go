@@ -54,8 +54,9 @@ func TestVendoredCatalogueServesTheScopedEntries(t *testing.T) {
 }
 
 // Each scoped entry is the investmentBreakdown entry of the same catalogue
-// except: its name and document, the scope level and ids rules, the scope
-// constraints and the unrestricted basis. The restricted caller keeps the
+// except: its name and document, the scope level and ids rules, the breakdown
+// measures (ISSUE_SIZE, TestIssueSizeIsAMeasureOfTheScopedEntriesOnly), the
+// scope constraints and the unrestricted basis. The restricted caller keeps the
 // K14-A refusal, word for word.
 func TestScopedInvestmentEntriesDifferFromInvestmentBreakdownOnlyInScope(t *testing.T) {
 	in := vendoredInputs(t)
@@ -115,7 +116,7 @@ func TestScopedInvestmentEntriesDifferFromInvestmentBreakdownOnlyInScope(t *test
 			normalized.Constraints = org.Constraints
 			normalized.Variables = slices.Clone(op.Variables)
 			for i, v := range normalized.Variables {
-				if v.Path == "batch.filters.scope.level" || v.Path == "batch.filters.scope.ids" {
+				if v.Path == "batch.filters.scope.level" || v.Path == "batch.filters.scope.ids" || v.Path == "batch.breakdowns[*].measure" {
 					normalized.Variables[i] = ruleAt(t, org, v.Path)
 				}
 				// An unlisted path's reason names the document.
@@ -249,5 +250,31 @@ func TestScopedInvestmentEntriesAgreeWithTheSDL(t *testing.T) {
 				t.Fatalf("no violation for the planted level constraint: %v", got)
 			}
 		})
+	}
+}
+
+// ISSUE_SIZE is a breakdown measure of the scoped entries only: their measure
+// allowlist is the shared measures list plus ISSUE_SIZE, the ORG entries keep
+// the shared list, and CHURN_LOC is on none.
+func TestIssueSizeIsAMeasureOfTheScopedEntriesOnly(t *testing.T) {
+	artifact, err := generate(vendoredInputs(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ops := decodeArtifact(t, artifact)
+	scoped := append(slices.Clone(measures), "ISSUE_SIZE")
+	for name, want := range map[string][]string{
+		"investmentBreakdownTeam":       scoped,
+		"investmentBreakdownRepository": scoped,
+		"investmentBreakdown":           measures,
+		"investmentFull":                measures,
+	} {
+		rule := ruleAt(t, ops[name], "batch.breakdowns[*].measure")
+		if !slices.Equal(rule.AllowedValues, want) || slices.Contains(rule.AllowedValues, "CHURN_LOC") {
+			t.Errorf("%s measures %v, want %v", name, rule.AllowedValues, want)
+		}
+	}
+	if slices.Contains(measures, "ISSUE_SIZE") || slices.Contains(measures, "CHURN_LOC") {
+		t.Fatalf("the shared measures list holds ISSUE_SIZE or CHURN_LOC: %v", measures)
 	}
 }

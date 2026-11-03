@@ -41,7 +41,7 @@ func TestGraphQLTwoOperationRootOverlapIsPinned(t *testing.T) {
 		onlyStrict, onlyOther     []string // outputs admitted by one candidate only
 		strictOnlyVars, otherOnly []string // variable paths only one candidate has
 		// scoped are candidates tried between strict and other: the strict
-		// document under its own name, with its own scope rules only.
+		// document under its own name, with its own scope rules and measures.
 		scoped      []string
 		scopedRules []string // the variable paths whose rules differ from strict's
 	}
@@ -51,7 +51,7 @@ func TestGraphQLTwoOperationRootOverlapIsPinned(t *testing.T) {
 		{
 			root: "analytics", strict: "investmentBreakdown", other: "investmentFull",
 			scoped:      []string{"investmentBreakdownRepository", "investmentBreakdownTeam"},
-			scopedRules: []string{"batch.filters.scope.ids", "batch.filters.scope.level"},
+			scopedRules: []string{"batch.breakdowns[*].measure", "batch.filters.scope.ids", "batch.filters.scope.level"},
 			onlyStrict: []string{
 				"analytics.evidenceQualityDistribution", "analytics.evidenceQualityStats.__typename",
 				"analytics.evidenceQualityStats.bandCounts", "analytics.evidenceQualityStats.mean",
