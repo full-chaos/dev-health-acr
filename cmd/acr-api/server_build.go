@@ -174,6 +174,7 @@ func appConfig(cfg config.Config, serviceVersion string) api.AppConfig {
 		ServerCompletenessAuthoritySymmetricEnabled: cfg.ServerCompletenessAuthoritySymmetricEnabled,
 		ContextFabricVocabularyLabelsEnabled:        cfg.ContextFabricVocabularyLabelsEnabled,
 		ContextFabricInvestmentTreemapEnabled:       cfg.ContextFabricInvestmentTreemapEnabled,
+		ContextFabricInvestmentSunburstEnabled:      cfg.ContextFabricInvestmentSunburstEnabled,
 		ContextFabricInvestmentSankeyEnabled:        cfg.ContextFabricInvestmentSankeyEnabled,
 		ContextFabricComparisonTableEnabled:         cfg.ContextFabricComparisonTableEnabled,
 		ContextFabricLandscapeQuadrantEnabled:       cfg.ContextFabricLandscapeQuadrantEnabled,

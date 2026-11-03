@@ -1108,6 +1108,14 @@ func investmentFields() []fieldDecl {
 		declOn(declTeamProject, investmentThemeFields(true)...),
 		declOn(declOrganizationOnly, investmentThemeFields(false)...),
 		declOn(declRepoTeamOrg, themeBreakdown, fStr("mix_source"), fStr("attribution_basis")),
+		// CHAOS-12554: the sunburst's detail table, served with
+		// ACR_CONTEXT_FABRIC_INVESTMENT_SUNBURST_ENABLED on, on a team or a
+		// repository (the subjects the ops breakdown entries serve). Its token
+		// columns read the registry's words (CHAOS-12639).
+		declOn(declRepoTeam, fTable(subcategoryBreakdownField,
+			cVocab(contractsv1.ContextFabricVocabularySubcategory, cStr(contractsv1.ContextFabricRenderSubcategoryField)),
+			cVocab(contractsv1.ContextFabricVocabularyInvestmentTheme, cStr(contractsv1.ContextFabricRenderThemeField)),
+			cNum(contractsv1.ContextFabricRenderThemeShareField, "ratio"), cNum(contractsv1.ContextFabricRenderThemeTotalField, "ratio"))),
 		declOn([]contextfabric.SubjectKind{contextfabric.SubjectRepository, contextfabric.SubjectOrganization, contextfabric.SubjectProject}, investmentSizingDeclarations(false)...),
 		declOn(declTeamOnly, investmentSizingDeclarations(true)...),
 		declOn(declRepoTeamOrg, investmentUnitFields()...),

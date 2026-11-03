@@ -26,8 +26,12 @@ type OperationOutcome struct {
 // OperationCaller runs one registered operation as the principal. The hosted
 // runtime supplies the direct-read operation runner behind it; this package
 // cannot import that package (it imports this one).
+//
+// variables are the operation's client variables, as JSON, held to the same
+// operation policy as a run_operation call (CHAOS-12554): a nil value sends
+// none, and the principal's org fills orgId either way.
 type OperationCaller interface {
-	CallOperation(ctx context.Context, principal storage.Principal, operation string) (OperationOutcome, error)
+	CallOperation(ctx context.Context, principal storage.Principal, operation string, variables json.RawMessage) (OperationOutcome, error)
 }
 
 // ErrOperationCallerUnset is returned by a holder that has no caller yet.
@@ -65,7 +69,7 @@ func (h *OperationHolder) IsSet() bool {
 }
 
 // CallOperation forwards to the bound caller.
-func (h *OperationHolder) CallOperation(ctx context.Context, principal storage.Principal, operation string) (OperationOutcome, error) {
+func (h *OperationHolder) CallOperation(ctx context.Context, principal storage.Principal, operation string, variables json.RawMessage) (OperationOutcome, error) {
 	if h == nil {
 		return OperationOutcome{}, ErrOperationCallerUnset
 	}
@@ -75,5 +79,5 @@ func (h *OperationHolder) CallOperation(ctx context.Context, principal storage.P
 	if caller == nil {
 		return OperationOutcome{}, ErrOperationCallerUnset
 	}
-	return caller.CallOperation(ctx, principal, operation)
+	return caller.CallOperation(ctx, principal, operation, variables)
 }

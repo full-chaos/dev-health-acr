@@ -14,6 +14,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"net/http/httptrace"
 	"os"
 	"os/exec"
 	"regexp"
@@ -182,6 +183,73 @@ func MustAttemptDial(err error) {
 		}
 	}
 	panic(fmt.Sprintf("the request failed before any network attempt: %v", err))
+}
+
+// callTimeout bounds one call of a child's send. A var only so this package's own tests can shorten it.
+var callTimeout = 5 * time.Second
+
+// Call runs one call of a child's send under a deadline of its own, and returns the call's error. Check's context
+// bounds the whole send; a send that makes several calls, each with its own retries and backoff, runs each one
+// through Call, so one call never spends another's budget (CHAOS-12868: four model clients shared one 5 s budget, each
+// spent a 500 ms backoff and two lookups, and on a slow resolver the deadline won the race, so the test measured the
+// timeout, not the client).
+//
+// When the call's own deadline, not the call, ended it, Call panics with TIMEOUT FALLBACK and the call's timeline (its
+// DNS and connect events, when it made HTTP requests): a deadline is the fallback path, never the transport failure a
+// test asserts, and a fallback that read as a client's error would hide which branch fired.
+func Call(ctx context.Context, call func(context.Context) error) error {
+	callCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), callTimeout)
+	defer cancel()
+	timeline := &callTimeline{start: time.Now()}
+	err := call(httptrace.WithClientTrace(callCtx, timeline.trace()))
+	if errors.Is(callCtx.Err(), context.DeadlineExceeded) {
+		panic(fmt.Sprintf("TIMEOUT FALLBACK: the call's own %v deadline ended it after %v, before it failed on its own (it returned %v); timeline: %s",
+			callTimeout, time.Since(timeline.start).Round(time.Millisecond), err, timeline))
+	}
+	return err
+}
+
+// callTimeline is what one Call saw happen, each event stamped with its offset from the call's start.
+type callTimeline struct {
+	start  time.Time
+	mu     sync.Mutex
+	events []string
+}
+
+func (c *callTimeline) add(event string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.events = append(c.events, fmt.Sprintf("+%v %s", time.Since(c.start).Round(time.Millisecond), event))
+}
+
+func (c *callTimeline) trace() *httptrace.ClientTrace {
+	return &httptrace.ClientTrace{
+		DNSStart: func(info httptrace.DNSStartInfo) { c.add("dns start " + info.Host) },
+		DNSDone: func(info httptrace.DNSDoneInfo) {
+			if info.Err != nil {
+				c.add("dns failed")
+				return
+			}
+			c.add("dns done")
+		},
+		ConnectStart: func(_, address string) { c.add("connect start " + address) },
+		ConnectDone: func(_, address string, err error) {
+			if err != nil {
+				c.add("connect failed " + address)
+				return
+			}
+			c.add("connect done " + address)
+		},
+	}
+}
+
+func (c *callTimeline) String() string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if len(c.events) == 0 {
+		return "no DNS or connect event"
+	}
+	return strings.Join(c.events, ", ")
 }
 
 // MustFailWith is MustAttemptDial for a client that sanitizes its transport errors: the error must be non-nil and

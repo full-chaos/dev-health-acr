@@ -30,6 +30,12 @@ type ProviderOptions struct {
 	// completion distribution (CHAOS-12607; config
 	// ACR_CONTEXT_FABRIC_COMPLETION_DISTRIBUTION_ENABLED, default off).
 	CompletionDistributionEnabled bool
+	// InvestmentSunburstEnabled lets a team or repository investment fact
+	// carry its subcategory_breakdown detail table, read from ops through
+	// Operations (CHAOS-12554; config
+	// ACR_CONTEXT_FABRIC_INVESTMENT_SUNBURST_ENABLED, default off). Off, the
+	// investment read makes no call and its facts are as before.
+	InvestmentSunburstEnabled bool
 }
 
 // NewProvidersWithOptions is NewProviders with the deployment switches.
@@ -37,6 +43,9 @@ func NewProvidersWithOptions(client contextpacket.ClickHouseQueryClient, options
 	operations := options.Operations
 	workload := newWorkloadProvider(client)
 	workload.completionDistribution = options.CompletionDistributionEnabled
+	investment := newInvestmentProvider(client)
+	investment.operations = operations
+	investment.subcategoryBreakdown = options.InvestmentSunburstEnabled
 	return []contextfabric.FactProvider{
 		newIdentityProvider(client),
 		newMembershipProvider(client),
@@ -53,7 +62,7 @@ func NewProvidersWithOptions(client contextpacket.ClickHouseQueryClient, options
 		newMetricsProvider(client),
 		newHealthProvider(client),
 		workload,
-		newInvestmentProvider(client),
+		investment,
 		newReadinessProvider(client),
 		newOperationalDeficienciesProvider(client),
 		newSourceHealthProvider(operations),

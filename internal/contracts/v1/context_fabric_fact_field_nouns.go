@@ -98,6 +98,9 @@ var contextFabricStringFieldClasses = func() map[string]ContextFabricStringField
 		"window_basis", "window_mode",
 		"commitment_status", "items_unavailable_reason", "items_unreadable_reason", "iteration_basis", "sprint_refs_unresolved_reason", "project_state", "sprint_kind",
 		"completion_distribution_state",
+		// subcategory: a canonical investment subcategory token
+		// (subcategory_breakdown, CHAOS-12554), shown as its registry word.
+		"subcategory",
 	} {
 		classes[name] = StringFieldToken
 	}

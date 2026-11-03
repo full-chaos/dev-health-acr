@@ -33,6 +33,12 @@ type InvestmentProvider struct {
 	scopes *membershipScopeCache
 	// scopeLoadTimeout overrides membershipScopeLoadTimeout (tests only).
 	scopeLoadTimeout time.Duration
+	// operations reads the ops investment breakdowns of the
+	// subcategory_breakdown table, and subcategoryBreakdown turns that read on
+	// (CHAOS-12554, ProviderOptions.InvestmentSunburstEnabled). Off, no call is
+	// made and no fact changes.
+	operations           *OperationHolder
+	subcategoryBreakdown bool
 }
 
 func newInvestmentProvider(client contextpacket.ClickHouseQueryClient) *InvestmentProvider {
@@ -224,6 +230,13 @@ func (p *InvestmentProvider) ReadFacts(ctx context.Context, principal storage.Pr
 		rejectedCount += rejected
 	}
 
+	// CHAOS-12554: the sunburst's table, on the read's one team or repository
+	// mix fact, before the organization and unit facts join the list.
+	var subcategoryWithheldSubjects []subcategoryWithheld
+	if p.subcategoryBreakdown {
+		subcategoryWithheldSubjects = p.attachSubcategoryBreakdown(ctx, principal, orgID, query.Subjects, facts, timeBound)
+	}
+
 	orgUnattributedOnly := false
 	if orgSubjects := subjectsOfKind(query.Subjects, contextfabric.SubjectOrganization); len(orgSubjects) > 0 {
 		rejected, unattributedOnly, scanErr := p.readOrganizationThemeMix(ctx, orgID, orgSubjects, &facts, timeBound)
@@ -337,6 +350,10 @@ func (p *InvestmentProvider) ReadFacts(ctx context.Context, principal storage.Pr
 	if len(cutSubjects) > 0 {
 		result.Truncated = true
 		addScopedReason(&result, query.Subjects, cutSubjects, unitFactReasonCut)
+	}
+	// Missing is not zero: a withheld subcategory table is a coverage reason.
+	for _, withheld := range subcategoryWithheldSubjects {
+		addScopedReason(&result, query.Subjects, []contextfabric.SubjectRef{withheld.subject}, withheld.coverageReason())
 	}
 	return result, nil
 }
