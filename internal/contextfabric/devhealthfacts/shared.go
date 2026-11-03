@@ -1387,7 +1387,15 @@ import (
 // assembled answer, because the investment producer declares
 // allocation_breakdown for the organization (CHAOS-12601). An answer saved under
 // v269 can read complete with no breakdown served.
-const QueryVersion = "devhealthfacts.clickhouse.v270"
+//
+// v270 -> v271: an edge's fact and a stub node's label name a work item, project
+// or team in reader words, not by its raw source id (CHAOS-12619). An answer saved
+// earlier can show a raw id in a path's why_relevant.
+//
+// v271 -> v272: an evidence ref's label names its subject in reader words, or by
+// the name the answer holds, never by a UUID or a raw provider id (CHAOS-12620).
+// An answer saved earlier can carry such a label.
+const QueryVersion = "devhealthfacts.clickhouse.v272"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each

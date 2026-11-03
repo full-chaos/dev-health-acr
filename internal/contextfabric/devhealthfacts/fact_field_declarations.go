@@ -780,6 +780,8 @@ func workloadFields() []fieldDecl {
 			fStr("forecast_p85_date"),
 			fStr("forecast_p95_date"),
 			fInt("simulation_count", "count"),
+			// CHAOS-12634: the item target of the fixed-scope run.
+			fInt("target_items", "count"),
 			fInt("horizon_days", "days"),
 			fInt("unfinished_runs", "count"),
 			fStr("completion_distribution_state"),

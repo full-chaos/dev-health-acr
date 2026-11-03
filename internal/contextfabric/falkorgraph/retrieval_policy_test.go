@@ -29,9 +29,13 @@ import (
 //
 // CHAOS-10031 bumped it again to "rp6": the calibrated entry is re-keyed
 // t3 -> t4 when ci_pipeline_run vectors are dropped.
+//
+// CHAOS-12663 bumped it again to "rp7": a unique case-exact label match now
+// commits over its case-folded twins, so a question that clarified under rp6
+// can commit, and a stored rp6 clarification must not be replayed for it.
 func TestRetrievalPolicyVersionBumpedByCHAOS3829(t *testing.T) {
-	if RetrievalPolicyVersion != "rp6" {
-		t.Fatalf("RetrievalPolicyVersion = %q, want rp6 (CHAOS-10031 re-keyed the calibrated retrieval-policy entry t3 -> t4, which must bump the constant)", RetrievalPolicyVersion)
+	if RetrievalPolicyVersion != "rp7" {
+		t.Fatalf("RetrievalPolicyVersion = %q, want rp7 (CHAOS-12663 lets a case-exact label commit where rp6 clarified, which must bump the constant)", RetrievalPolicyVersion)
 	}
 }
 

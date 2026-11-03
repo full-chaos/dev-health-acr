@@ -2882,6 +2882,8 @@ func resolveSubjects(ctx context.Context, principal storage.Principal, request c
 		// The frame's own terms say what the question names.
 		terms = boundedFrameTerms(frame)
 	}
+	// CHAOS-12663: every spelling behind terms, which keeps one per name.
+	typedTerms := append(subjectTermInputs(request, interpreted), terms...)
 	// offersOnly (CHAOS-4234): the class-default window gate's offers-only
 	// mode -- every commit MECHANISM below that only exists to reach a
 	// commit (shadow evidence round/census, confirmed-kind truncation
@@ -3860,7 +3862,7 @@ func resolveSubjects(ctx context.Context, principal storage.Principal, request c
 	// exactRefusal is the exact-label refusal of this resolution, carried into
 	// every later decision over a new pool (exact_label_proof.go).
 	var exactRefusal exactLabelRefusal
-	resolution, firstPassBases, firstPassDigests := resolveFromMergedCandidatesWithAnchorSlot(candidatesBySubject, observationParentKey, observationBlocked, request.Options.MaxSubjectCandidates, request.Options.AllowClarification, searchTruncated, vectorArmSimilarity, deps.VectorMarginCommitThreshold, retrievalDegraded, effectiveSearchLimit, deps.CalibratedTopK, unscopedVisibility, gate, identity, identityTerms, identityLookup, firstPassTracer, request.RequestID, "", false, false, frameReservedKinds(frame, anchorScope.Kind), anchorReservedSlot{Kind: anchorScope.Kind, Source: anchorScope.Source}, &exactRefusal, kindRescue, pass)
+	resolution, firstPassBases, firstPassDigests := resolveFromMergedCandidatesWithAnchorSlot(candidatesBySubject, observationParentKey, observationBlocked, request.Options.MaxSubjectCandidates, request.Options.AllowClarification, searchTruncated, vectorArmSimilarity, deps.VectorMarginCommitThreshold, retrievalDegraded, effectiveSearchLimit, deps.CalibratedTopK, unscopedVisibility, gate, identity, identityTerms, identityLookup, firstPassTracer, request.RequestID, "", false, false, frameReservedKinds(frame, anchorScope.Kind), typedTerms, anchorReservedSlot{Kind: anchorScope.Kind, Source: anchorScope.Source}, &exactRefusal, kindRescue, pass)
 	commitBases.ResetTo(firstPassBases)
 	commitDigests.ResetTo(firstPassDigests)
 	// coverageFloorDegraded (CHAOS-4038, codex review round 2 finding 1) is
@@ -3883,7 +3885,7 @@ func resolveSubjects(ctx context.Context, principal storage.Principal, request c
 	if teamOffers != nil {
 		pass++
 		candidatesBySubject = teamPool
-		resolution, firstPassBases, firstPassDigests = resolveFromMergedCandidatesWithAnchorSlot(candidatesBySubject, observationParentKey, observationBlocked, request.Options.MaxSubjectCandidates, request.Options.AllowClarification, searchTruncated, vectorArmSimilarity, deps.VectorMarginCommitThreshold, retrievalDegraded, effectiveSearchLimit, deps.CalibratedTopK, unscopedVisibility, gate, identity, identityTerms, identityLookup, firstPassTracer, request.RequestID, "", false, false, frameReservedKinds(frame, anchorScope.Kind), anchorReservedSlot{Kind: anchorScope.Kind, Source: anchorScope.Source}, &exactRefusal, kindRescue, pass)
+		resolution, firstPassBases, firstPassDigests = resolveFromMergedCandidatesWithAnchorSlot(candidatesBySubject, observationParentKey, observationBlocked, request.Options.MaxSubjectCandidates, request.Options.AllowClarification, searchTruncated, vectorArmSimilarity, deps.VectorMarginCommitThreshold, retrievalDegraded, effectiveSearchLimit, deps.CalibratedTopK, unscopedVisibility, gate, identity, identityTerms, identityLookup, firstPassTracer, request.RequestID, "", false, false, frameReservedKinds(frame, anchorScope.Kind), typedTerms, anchorReservedSlot{Kind: anchorScope.Kind, Source: anchorScope.Source}, &exactRefusal, kindRescue, pass)
 		commitBases.ResetTo(firstPassBases)
 		commitDigests.ResetTo(firstPassDigests)
 		resolution.RetrievalDegraded = retrievalDegraded || coverageFloorDegraded || traversalDegraded > 0
@@ -4057,7 +4059,7 @@ func resolveSubjects(ctx context.Context, principal storage.Principal, request c
 				scopedPool, scopedObservationParentKey, scopedObservationBlocked, request.Options.MaxSubjectCandidates,
 				request.Options.AllowClarification, false, nil, 0, false, effectiveSearchLimit, 0,
 				unscopedVisibility, gate, scopedIdentity, scopedIdentityTerms, identityLookup,
-				scopedDecisionTracer, request.RequestID, "", true, false, nil, anchorReservedSlot{}, &exactRefusal, kindRescue, pass,
+				scopedDecisionTracer, request.RequestID, "", true, false, nil, typedTerms, anchorReservedSlot{}, &exactRefusal, kindRescue, pass,
 			)
 			if len(scopedResolution.Committed) > 0 {
 				resolution = scopedResolution
@@ -4209,7 +4211,7 @@ func resolveSubjects(ctx context.Context, principal storage.Principal, request c
 					commitCensusAttestedBesideScopeAnchor(&resolution, candidatesBySubject[attestedKey], request, deps, commitBases, commitDigests, searchTruncated, identityLookup, effectiveSearchLimit, pass)
 				} else {
 					pass++
-					resolution, censusBases, censusDigests = resolveFromMergedCandidatesWithAnchorSlot(candidatesBySubject, observationParentKey, observationBlocked, request.Options.MaxSubjectCandidates, request.Options.AllowClarification, searchTruncated, vectorArmSimilarity, deps.VectorMarginCommitThreshold, retrievalDegraded, effectiveSearchLimit, deps.CalibratedTopK, unscopedVisibility, gate, identity, identityTerms, identityLookup, deps.ResolutionTracer, request.RequestID, attestedKey, false, false, nil, anchorReservedSlot{}, &exactRefusal, kindRescue, pass)
+					resolution, censusBases, censusDigests = resolveFromMergedCandidatesWithAnchorSlot(candidatesBySubject, observationParentKey, observationBlocked, request.Options.MaxSubjectCandidates, request.Options.AllowClarification, searchTruncated, vectorArmSimilarity, deps.VectorMarginCommitThreshold, retrievalDegraded, effectiveSearchLimit, deps.CalibratedTopK, unscopedVisibility, gate, identity, identityTerms, identityLookup, deps.ResolutionTracer, request.RequestID, attestedKey, false, false, nil, typedTerms, anchorReservedSlot{}, &exactRefusal, kindRescue, pass)
 					commitBases.ResetTo(censusBases)
 					commitDigests.ResetTo(censusDigests)
 					resolution.RetrievalDegraded = retrievalDegraded || coverageFloorDegraded || traversalDegraded > 0

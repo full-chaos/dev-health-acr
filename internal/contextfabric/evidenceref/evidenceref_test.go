@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/evidenceref"
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric/identity"
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 )
 
@@ -216,10 +217,21 @@ func TestGrammarsAreTheEncodedKindsAndLabelsDecode(t *testing.T) {
 		for _, values := range tuples(t, kind, 6) {
 			ref, _ := evidenceref.Mint(kind, values...)
 			label, known := contractsv1.ContextFabricEvidenceRefLabel(ref)
-			noun, _ := contractsv1.ContextFabricEvidenceRefLabel(contractsv1.ContextFabricEvidenceRefPrefix + string(kind) + ":x")
-			want := strings.TrimSuffix(noun, ": x") + ": " + strings.Join(values, ":")
-			if !known || label != want {
-				t.Fatalf("%s %q: label %q, want %q", kind, values, label, want)
+			nounLabel, _ := contractsv1.ContextFabricEvidenceRefLabel(contractsv1.ContextFabricEvidenceRefPrefix + string(kind) + ":x")
+			noun := strings.TrimSuffix(nounLabel, ": x")
+			// CHAOS-12620: the label is the kind's noun, alone or before the
+			// components in reader form; the escaping never shows.
+			if !known || (label != noun && !strings.HasPrefix(label, noun+": ")) {
+				t.Fatalf("%s %q: label %q, want the noun %q", kind, values, label, noun)
+			}
+			for _, value := range values {
+				encoded := identity.EncodeSegment(value)
+				if encoded == value || strings.Contains(strings.Join(values, ":"), encoded) {
+					continue
+				}
+				if strings.Contains(label, encoded) {
+					t.Fatalf("%s %q: label %q shows the escaped %q", kind, values, label, encoded)
+				}
 			}
 		}
 	}
