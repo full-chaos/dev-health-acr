@@ -459,7 +459,9 @@ func anOwnerGrantReadsOnlyWhatTheGateAdmits(t *testing.T, build grantWorldBuilde
 	wantInside, wantNested := grantCanonicalID(world, world.insideGitHub), grantCanonicalID(world, world.nestedGitLab)
 	ids := append([]string(nil), outcome.SatisfierCanonicalIDs...)
 	sort.Strings(ids)
-	if outcome.Count != 2 || !slices.Equal(ids, []string{wantInside, wantNested}) {
+	want := []string{wantInside, wantNested}
+	sort.Strings(want)
+	if outcome.Count != 2 || !slices.Equal(ids, want) {
 		t.Fatalf("census = %+v, want %s and %s (the owner covers its subgroups; the malformed slug stays out)", outcome, wantInside, wantNested)
 	}
 
