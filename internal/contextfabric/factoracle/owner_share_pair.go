@@ -13,9 +13,11 @@ import (
 // before the run_operation policy may serve the TEAM and REPO scopes of the
 // investment operations (cmd/operationpolicy investmentDecl, K14-A).
 //
-// It is a pure comparator: the ops answers come from a plane this package
-// does not have yet (the policy refuses the TEAM and REPO scopes, and the
-// recorded capture holds no such reply), so the pair is not in rootPairs.
+// It is a pure comparator. The policy refuses the TEAM and REPO scopes, and
+// the recorded capture holds no such reply, so the pair is not in rootPairs:
+// its ops answers come from the ops public GraphQL API through its own live
+// plane (owner_share_live.go, OpsGraphQLPlane), run by the o4venue-tagged
+// TestVenueOwnerShareLive (`make o4-owner-share-live`).
 const pairOwnerShare = "investment_owner_share"
 
 // OwnerShareRule names the rule an owner-share finding failed.

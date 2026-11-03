@@ -1,4 +1,4 @@
-.PHONY: content-check install-pre-push-hook fmt fmt-check test test-split test-race test-race-shared test-race-isolated test-race-split test-shuffle-random test-coverage coverage-cobertura isolated-timeout print-gotest-timeout crosscompile hosted-integration web-assertion-integration clients-real vet contract-write contract-test codegraph-contract shard-plan trial-data-checks canonical-receipts build verify release-local release-verify container-contract container-pins container-test container-reproducible container-oci container-scan fullstack-opencode-e2e fullstack-contract o4-oracle-live o4-oracle-capture o4-oracle-repin
+.PHONY: content-check install-pre-push-hook fmt fmt-check test test-split test-race test-race-shared test-race-isolated test-race-split test-shuffle-random test-coverage coverage-cobertura isolated-timeout print-gotest-timeout crosscompile hosted-integration web-assertion-integration clients-real vet contract-write contract-test codegraph-contract shard-plan trial-data-checks canonical-receipts build verify release-local release-verify container-contract container-pins container-test container-reproducible container-oci container-scan fullstack-opencode-e2e fullstack-contract o4-oracle-live o4-oracle-capture o4-oracle-repin o4-owner-share-live
 
 RELEASE_OUTPUT ?= .tmp/release
 RELEASE_VERSION ?=
@@ -342,6 +342,17 @@ o4-oracle-live:
 
 o4-oracle-capture:
 	go test -tags o4venue -count=1 -timeout 25m -run '^TestVenueCapture$$' -v ./internal/contextfabric/factoracle
+
+# The owner-share pair (CHAOS-12691) on a live venue (never a pull request
+# gate): ops ORG, TEAM and REPO investment through the ops public GraphQL API
+# with a user login, against the owner shares of the venue ClickHouse. Needs
+# ACR_O4_OPS_API_URL, ACR_O4_OPS_EMAIL, ACR_O4_OPS_PASSWORD_FILE (0600),
+# ACR_O4_ORG_ID and ACR_O4_CLICKHOUSE_DSN_FILE; optional ACR_O4_OPS_DIAL_ADDR,
+# ACR_O4_CLICKHOUSE_ADDR, ACR_O4_WINDOW_END, ACR_O4_REPORT_FILE (the verdict
+# goes to its .owner_share sibling). A finding fails the run. It starts no
+# container: it calls the venue.
+o4-owner-share-live:
+	go test -tags o4venue -count=1 -timeout 15m -run '^TestVenueOwnerShareLive$$' -v ./internal/contextfabric/factoracle
 
 # Pins the outcome of the recorded mode again, with this build's fact
 # providers, after a change to them that is meant. Needs Docker, not a venue.
