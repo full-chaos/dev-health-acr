@@ -28,11 +28,17 @@ func withoutHintsOfAnotherKind(ctx context.Context, request contextfabric.Invest
 	if asked == nil {
 		return request, nil
 	}
+	// The anchor clause reads the kind the way asked does: the frame's, else the
+	// confirmed one. A lone expected_kinds never decides a hint here (with no frame
+	// kind and no confirmed kind, asked is nil and nothing is filtered), so it must
+	// not overrule a confirmed kind in that clause either (CHAOS-12631).
+	anchorRequest := request
+	anchorRequest.ExpectedKinds = nil
 	kept := make([]contextfabric.SubjectHint, 0, len(request.RequestedScope.SubjectHints))
 	var dropped []contextfabric.SubjectHint
 	for _, hint := range request.RequestedScope.SubjectHints {
 		if hint.Kind == "" || asked[hint.Kind] || contextfabric.IsConfirmedCandidatePick(ctx, hint) ||
-			committedScopeAnchorShadowsHandle(request, bound, []contextfabric.SubjectRef{{Kind: hint.Kind}}, frame) {
+			committedScopeAnchorShadowsHandle(anchorRequest, bound, []contextfabric.SubjectRef{{Kind: hint.Kind}}, frame) {
 			kept = append(kept, hint)
 			continue
 		}

@@ -1,10 +1,12 @@
 package graphrank
 
 import (
+	"context"
 	"slices"
 	"testing"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
+	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 )
 
 // CHAOS-12631: a turn states its kind by the frame's expected kind, which the
@@ -63,5 +65,49 @@ func TestALoneExpectedKindForTheHandleStillOwesIt(t *testing.T) {
 				t.Fatalf("frame pull_request, expected_kinds [repository]: committed %v, want the pull request", got)
 			}
 		})
+	}
+}
+
+// Several expected_kinds state no kind, in either order: the turn reads as
+// mentioned, as on main, and a count of 1 commits the handle beside the anchor. A
+// reading that takes the first or the last value fails one of the two orders
+// (Codex r1 P3 on #1975).
+func TestSeveralExpectedKindsStateNoKindInEitherOrder(t *testing.T) {
+	t.Parallel()
+	for caller, principal := range besideCallers(t) {
+		t.Run(caller, func(t *testing.T) {
+			t.Parallel()
+			for _, kinds := range [][]contextfabric.SubjectKind{
+				{contextfabric.SubjectRepository, contextfabric.SubjectPullRequest},
+				{contextfabric.SubjectPullRequest, contextfabric.SubjectRepository},
+			} {
+				turn := runBeside(t, besideWorld{principal: principal, question: besideQuestion("pull request 747"), frame: namedScopeAnchorFrame(nil), census: &besideCensus{rows: besideRows()}, hinted: true,
+					edit: expectedKinds(kinds...)})
+				if got := besideCommittedIDs(turn.resolution); !slices.Contains(got, besidePRInRepo) || !slices.Contains(got, scopeAnchorRepoID) {
+					t.Fatalf("expected_kinds %v: committed %v, want the repository and the pull request (mentioned, count 1)", kinds, got)
+				}
+			}
+		})
+	}
+}
+
+// The hint filter asks for askedKinds' kind: the frame's, else the kind a receipt
+// confirmed. With neither it filters nothing, so a lone expected_kinds never decides
+// a hint there; it must not overrule a confirmed kind in the anchor clause either. A
+// repository on the page says where the confirmed pull request the question names
+// is, so it stays (Codex r1 P2 on #1975).
+func TestAConfirmedKindKeepsTheAnchorHintWhateverALoneExpectedKindsSays(t *testing.T) {
+	t.Parallel()
+	pullRequest, repository := contractsv1.ContextFabricSubjectPullRequest, contractsv1.ContextFabricSubjectRepository
+	frame := namedFrameAsking(nil, "PR 532")
+	confirmed := &contextfabric.ConfirmedExpectedKind{Kind: pullRequest}
+	request := testRequest()
+	request.Question = "Is PR 532 ready?"
+	request.RequestedScope.SubjectHints = []contextfabric.SubjectHint{askedKindPageHint(repository, hintCanonicalID(repository))}
+	for _, kinds := range [][]contextfabric.SubjectKind{nil, {repository}, {pullRequest}} {
+		request.ExpectedKinds = kinds
+		if _, dropped := withoutHintsOfAnotherKind(context.Background(), request, BindHandles(request.Question), frame, confirmed); len(dropped) != 0 {
+			t.Fatalf("expected_kinds %v: dropped %v, want the anchor of the confirmed pull request kept", kinds, dropped)
+		}
 	}
 }
