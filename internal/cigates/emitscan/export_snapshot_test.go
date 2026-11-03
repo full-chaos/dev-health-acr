@@ -92,6 +92,37 @@ func TestExportDataIsBuiltFromTheParsedBytesNotTheDisk(t *testing.T) {
 	}
 }
 
+// CHAOS-12749: the same guarantee through a scan root reached by a symlink. The go command reads the module by its physical
+// path, so an overlay keyed by the symlinked path is not applied and go list builds the file on disk. The root here is an
+// explicit symlink, so the case fails on every OS before the fix, not only where the temp directory crosses one (darwin).
+func TestExportDataIsBuiltFromTheParsedBytesThroughASymlinkedRoot(t *testing.T) {
+	real, depFile := exportModule(t)
+	physical, err := filepath.EvalSymlinks(real)
+	if err != nil {
+		t.Fatal(err)
+	}
+	root := filepath.Join(t.TempDir(), "linked-module")
+	if err := os.Symlink(physical, root); err != nil {
+		t.Fatal(err)
+	}
+	control := scanExportModule(t, root)
+	if !strings.Contains(control, "mismatch:pass") {
+		t.Fatalf("control scan through the symlink %q does not carry the mismatch finding", control)
+	}
+	emitscan.ResetGoTool()
+	emitscan.SetHelperBinary("")()
+	ran := filepath.Join(t.TempDir(), "go-list-ran")
+	goBin, _ := exec.LookPath("go")
+	goWrapper(t, "touch '"+ran+"'\ncp '"+depFile+"' '"+depFile+".orig'\nprintf 'package dep\\n\\nvar Value int\\n' > '"+depFile+"'\n'"+goBin+"' \"$@\"; rc=$?\nmv '"+depFile+".orig' '"+depFile+"'\nexit $rc")
+	got := scanExportModule(t, root)
+	if _, err := os.Stat(ran); err != nil {
+		t.Fatalf("go list never ran in the second scan (an export cache served it): %v", err)
+	}
+	if got != control {
+		t.Errorf("scan through a symlinked root with dep.go changed only during go list = %q, want %q", got, control)
+	}
+}
+
 // Two scans of one module directory with different parsed bytes must not share an export set.
 func TestExportCacheIsKeyedByTheParsedBytes(t *testing.T) {
 	root, depFile := exportModule(t)
@@ -182,5 +213,25 @@ func TestExportCacheKeyFollowsFilesInTheModuleOnly(t *testing.T) {
 	}
 	if outA != key(t.TempDir(), "internal/z/z.go", "package z\n") {
 		t.Error("fixtures outside the module do not share the key of an empty snapshot")
+	}
+}
+
+// CHAOS-12749: a module directory or a scan root that does not resolve is an error, never the path as given: an overlay keyed
+// by an unresolved path is ignored without a word, and go list builds the files on disk.
+func TestAnUnresolvableModuleOrRootIsAnErrorNotTheRawPath(t *testing.T) {
+	moduleDir := t.TempDir()
+	missing := filepath.Join(t.TempDir(), "gone")
+	dangling := filepath.Join(t.TempDir(), "dangling")
+	if err := os.Symlink(filepath.Join(t.TempDir(), "never-made"), dangling); err != nil {
+		t.Fatal(err)
+	}
+	for name, c := range map[string]struct{ module, root string }{
+		"a module directory that does not exist": {missing, moduleDir},
+		"a scan root that does not exist":        {moduleDir, missing},
+		"a scan root that is a dangling symlink": {moduleDir, dangling},
+	} {
+		if _, err := emitscan.ModuleExportKey(c.module, c.root, []string{"internal/a/a.go"}, [][]byte{[]byte("package a\n")}); err == nil || !strings.Contains(err.Error(), "resolve the") {
+			t.Errorf("%s: err = %v, want the resolve error", name, err)
+		}
 	}
 }

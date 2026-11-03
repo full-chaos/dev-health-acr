@@ -10117,7 +10117,8 @@
           "comparison_side_by_side",
           "landscape_position",
           "completion_forecast",
-          "completion_forecast_percentiles"
+          "completion_forecast_percentiles",
+          "investment_repository_flow"
         ]
       },
       {
@@ -10134,6 +10135,11 @@
           "fewer_than_two_shares",
           "cohort_answer",
           "theme_table_cut",
+          "not_repository_flow_question",
+          "no_repository_flow_table",
+          "several_repository_flow_tables",
+          "repository_count_outside_bounds",
+          "repository_flow_unprovable",
           "not_explicit_comparison",
           "fewer_than_two_sides",
           "too_many_sides",
@@ -10286,7 +10292,8 @@
               "comparison_side_by_side",
               "landscape_position",
               "completion_forecast",
-              "completion_forecast_percentiles"
+              "completion_forecast_percentiles",
+              "investment_repository_flow"
             ]
           },
           {
@@ -15099,6 +15106,52 @@
         "key": "pull_request_covered_rows",
         "type": "int",
         "presence": "required"
+      },
+      {
+        "key": "request_id",
+        "type": "string",
+        "presence": "conditional",
+        "applicability": "written when the request context carries a request ID"
+      }
+    ]
+  },
+  {
+    "id": "devhealthfacts.repository_theme_breakdown_withheld",
+    "msg": "devhealthfacts.repository_theme_breakdown_withheld",
+    "level": "info",
+    "multiplicity": "zero_or_one_per_request",
+    "attribution": [
+      "request_id"
+    ],
+    "bounded_aggregation": "",
+    "fields": [
+      {
+        "key": "reason",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "repository_without_name",
+          "repository_name_shared",
+          "linked_repositories_over_bound",
+          "rows_over_bound"
+        ]
+      },
+      {
+        "key": "team",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "repository",
+        "type": "string",
+        "presence": "conditional",
+        "applicability": "written when reason=repository_without_name or reason=repository_name_shared"
+      },
+      {
+        "key": "bound",
+        "type": "int",
+        "presence": "conditional",
+        "applicability": "written when reason=linked_repositories_over_bound or reason=rows_over_bound"
       },
       {
         "key": "request_id",

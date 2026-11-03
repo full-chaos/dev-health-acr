@@ -175,7 +175,7 @@ func CompareOwnerShares(in OwnerShareInput) (OwnerShareVerdict, error) {
 				continue
 			}
 			for key, value := range in.Repo[repo] {
-				want[key] += share * value
+				want[key] += float64(share * value) // no fused multiply-add (arm64)
 			}
 		}
 		if !whole {

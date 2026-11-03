@@ -104,16 +104,26 @@ func newSourceSnapshot(root string, byDir map[string][]parsedFile) *sourceSnapsh
 
 // inModule is the part of the snapshot that lies under moduleDir, with its paths relative to moduleDir. Only those files can
 // be read by `go list ./...` of the module, so only they belong in its overlay and in the key of its export set; a scan root
-// outside the module (a fixture) must neither change the key nor add overlay entries. Paths are compared as given (no symlink
-// resolution).
+// outside the module (a fixture) must neither change the key nor add overlay entries. The module directory and the scan
+// root are both resolved (EvalSymlinks) first, so a root or a module reached through a symlink is compared, and keyed in the
+// overlay, by the physical path the go command reads (CHAOS-12749). A path that does not resolve is an error.
 func (snap *sourceSnapshot) inModule(moduleDir string) (*sourceSnapshot, error) {
+	physicalModule, err := filepath.EvalSymlinks(moduleDir)
+	if err != nil {
+		return nil, fmt.Errorf("go list overlay: resolve the module directory: %w", err)
+	}
 	absRoot, err := filepath.Abs(snap.root)
 	if err != nil {
 		return nil, err
 	}
+	physicalRoot, err := filepath.EvalSymlinks(absRoot)
+	if err != nil {
+		return nil, fmt.Errorf("go list overlay: resolve the scan root: %w", err)
+	}
+	moduleDir = physicalModule
 	var inside []parsedFile
 	for _, parsed := range snap.files {
-		rel, err := filepath.Rel(moduleDir, filepath.Join(absRoot, filepath.FromSlash(parsed.rel)))
+		rel, err := filepath.Rel(moduleDir, filepath.Join(physicalRoot, filepath.FromSlash(parsed.rel)))
 		if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
 			continue
 		}

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -128,6 +129,17 @@ type ServiceSynthesis struct {
 	// comparison claims each side's measures). A named field no fact holds as a scalar
 	// fails loudly. The values are copied from the request, never written by the plan.
 	ClaimFields []string `json:"claim_fields,omitempty"`
+	// ClaimFirstOnly, with ClaimFields, claims each named field once: from the first
+	// canonical fact, in request order, that holds it as a scalar (CHAOS-12809: a team's
+	// workload read holds one fact per work scope, and a live proof must claim exactly one
+	// scope). Without ClaimFields it names no field, so the plan is refused at load.
+	ClaimFirstOnly bool `json:"claim_first_only,omitempty"`
+	// ClaimDetailTables claims each named declared detail table, value null, from every
+	// canonical fact in the request whose detail_tables lists it, after the scalar claims
+	// (CHAOS-12857). A detail table reaches a claim only when the claim names it
+	// (CHAOS-12587), so a live proof of a sankey or a sunburst needs it. A named table that no
+	// fact lists fails loudly.
+	ClaimDetailTables []string `json:"claim_detail_tables,omitempty"`
 }
 
 type ServiceDriver struct {
@@ -169,6 +181,14 @@ func (p *ServicePlan) validate() error {
 			}
 			if s.MinEvidenceRefs < 0 || s.MinEvidenceRefs > maxCitedEvidence {
 				return fmt.Errorf("service question %q min_evidence_refs must be 0..%d", q.Question, maxCitedEvidence)
+			}
+			if s.ClaimFirstOnly && len(s.ClaimFields) == 0 {
+				return fmt.Errorf("service question %q sets claim_first_only without claim_fields", q.Question)
+			}
+			for _, table := range s.ClaimDetailTables {
+				if strings.TrimSpace(table) == "" {
+					return fmt.Errorf("service question %q has a blank name in claim_detail_tables", q.Question)
+				}
 			}
 		}
 		for _, ph := range q.OfferPhrasing {
@@ -464,6 +484,7 @@ func buildSynthesisReply(entry *ServiceQuestion, userMessage string) (string, er
 			Kind           string                     `json:"kind"`
 			Subject        json.RawMessage            `json:"subject"`
 			Fields         map[string]json.RawMessage `json:"fields"`
+			DetailTables   []string                   `json:"detail_tables"`
 			EvidenceRefIDs []string                   `json:"evidence_ref_ids"`
 		} `json:"canonical_facts"`
 		DriverCandidates []struct {
@@ -476,9 +497,9 @@ func buildSynthesisReply(entry *ServiceQuestion, userMessage string) (string, er
 	if err := json.Unmarshal([]byte(userMessage), &in); err != nil {
 		return "", fmt.Errorf("the synthesis request is not JSON: %w", err)
 	}
-	if len(in.Resolution.Committed) == 0 {
-		return "", errors.New("the synthesis request holds no committed subject to attribute the driver to")
-	}
+	// A committed subject is needed only to attribute a driver (checked below). A discovered
+	// cohort names no subject, so acr commits none and sends the members in `cohort`; a plan with
+	// no driver answers it (CHAOS-12842).
 	var evidence []string
 	seen := map[string]bool{}
 	for _, f := range in.Facts {
@@ -503,29 +524,52 @@ func buildSynthesisReply(entry *ServiceQuestion, userMessage string) (string, er
 	if category == "" {
 		category = "narrative"
 	}
-	driver := map[string]any{
-		"driver_id": "driver_oracle_01", "standing": "principal", "category": category,
-		"title": plan.Driver.Title, "summary": plan.Driver.Summary,
-		"affected_subjects": []json.RawMessage{in.Resolution.Committed[0]},
-		"evidence_ref_ids":  evidence,
-		"derivation":        "graph_associated", "epistemic_status": "inferred", "confidence": 0.5, "current": true,
-	}
 	drivers := []any{}
 	if plan.Driver.Title != "" || plan.Driver.Summary != "" {
-		drivers = append(drivers, driver)
+		// The oracle never invents the subject a driver is about: with no committed subject a
+		// driver plan fails loudly.
+		if len(in.Resolution.Committed) == 0 {
+			return "", errors.New("the plan asks for a driver and the synthesis request holds no committed subject to attribute it to")
+		}
+		drivers = append(drivers, map[string]any{
+			"driver_id": "driver_oracle_01", "standing": "principal", "category": category,
+			"title": plan.Driver.Title, "summary": plan.Driver.Summary,
+			"affected_subjects": []json.RawMessage{in.Resolution.Committed[0]},
+			"evidence_ref_ids":  evidence,
+			"derivation":        "graph_associated", "epistemic_status": "inferred", "confidence": 0.5, "current": true,
+		})
 	}
 	// A model that read canonical facts restates one it relies on. Without a claim the
 	// engine redraws once (zero-claim redraw), which would double the synthesis call count.
 	// The claim is copied from the request, never written by the plan.
 	claims := []any{}
 	if len(plan.ClaimFields) > 0 {
-		named, err := namedScalarClaims(in.Facts, plan.ClaimFields)
+		named, err := namedScalarClaims(in.Facts, plan.ClaimFields, plan.ClaimFirstOnly)
 		if err != nil {
 			return "", err
 		}
 		claims = append(claims, named...)
 	} else if claim := firstScalarClaim(in.Facts); claim != nil {
 		claims = append(claims, claim)
+	}
+	// CHAOS-12857: each named detail table, null, from every fact that lists it, after the
+	// scalars. The engine attaches the table's rows to a claim that names it.
+	for _, table := range plan.ClaimDetailTables {
+		listed := false
+		for _, fact := range in.Facts {
+			if !slices.Contains(fact.DetailTables, table) {
+				continue
+			}
+			listed = true
+			claim := map[string]any{"claim_id": fmt.Sprintf("claim_oracle_%02d", len(claims)+1), "kind": fact.Kind, "subject": fact.Subject, "field": table, "value": map[string]bool{"null": true}}
+			if fact.ID != "" {
+				claim["fact_id"] = fact.ID
+			}
+			claims = append(claims, claim)
+		}
+		if !listed {
+			return "", fmt.Errorf("the plan claims detail table %q and no canonical fact in the request lists it in detail_tables", table)
+		}
 	}
 	reply := map[string]any{
 		"status": plan.Status, "direct_judgment": plan.DirectJudgment, "current_state": plan.CurrentState,
@@ -577,8 +621,9 @@ func buildPhraseReply(entry *ServiceQuestion, userMessage string) (string, error
 }
 
 // namedScalarClaims restates each named scalar field of every canonical fact that holds it,
-// in fact order then name order, so the same request always gets the same claims.
-func namedScalarClaims[F any](facts []F, fields []string) ([]any, error) {
+// in fact order then name order, so the same request always gets the same claims. With
+// firstOnly, a field is restated only from the first fact that holds it.
+func namedScalarClaims[F any](facts []F, fields []string, firstOnly bool) ([]any, error) {
 	var claims []any
 	held := map[string]bool{}
 	for _, raw := range facts {
@@ -596,7 +641,7 @@ func namedScalarClaims[F any](facts []F, fields []string) ([]any, error) {
 			continue
 		}
 		for _, name := range fields {
-			if !scalarField(f.Fields[name]) {
+			if !scalarField(f.Fields[name]) || (firstOnly && held[name]) {
 				continue
 			}
 			held[name] = true

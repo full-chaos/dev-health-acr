@@ -44,6 +44,10 @@
           "type": "boolean",
           "description": "ACR_CONTEXT_FABRIC_INVESTMENT_TREEMAP_ENABLED for acr-api (CHAOS-12521). Keep false until web's and ask-dev's pins hold the investment_theme_share rule."
         },
+        "investmentSankeyEnabled": {
+          "type": "boolean",
+          "description": "ACR_CONTEXT_FABRIC_INVESTMENT_SANKEY_ENABLED for acr-api (CHAOS-12582). Keep false until web's and ask-dev's pins hold the investment_repository_flow rule."
+        },
         "comparisonTableEnabled": {
           "type": "boolean",
           "description": "ACR_CONTEXT_FABRIC_COMPARISON_TABLE_ENABLED for acr-api (CHAOS-12513). Keep false until web's and ask-dev's pins hold the comparison_side_by_side rule."
@@ -141,7 +145,8 @@
               "properties": {
                 "enabled": { "type": "boolean" },
                 "size": { "type": "string" },
-                "storageClassName": { "type": "string" }
+                "storageClassName": { "type": "string" },
+                "appendOnly": { "type": "boolean" }
               }
             },
             "podAnnotations": { "type": "object", "additionalProperties": true },

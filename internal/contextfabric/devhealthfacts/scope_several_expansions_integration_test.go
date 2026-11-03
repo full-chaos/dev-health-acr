@@ -94,6 +94,12 @@ func TestTurnScopeStatementsOfATeamTurnThatExpandsSeveralKinds(t *testing.T) {
 		}
 	}
 	counted := countTurnStatements(t, query)
+	// CHAOS-12689: the providers read devhealthfacts' own clock (the blocker
+	// age is now minus the oldest start), not the registry's Now, so the two
+	// reads this test compares byte for byte share one instant.
+	turnNow := time.Now().UTC()
+	restoreClock := devhealthfacts.SetClockForTest(func() time.Time { return turnNow })
+	defer restoreClock()
 	fixedNow := func() time.Time { return time.Unix(1_700_000_000, 0).UTC() }
 	registry, err := contextfabric.NewFactCapabilityRegistry(devhealthfacts.NewProviders(counted), contextfabric.FactRegistryOptions{Now: fixedNow, ScopeExpander: recordScopeSpans(counted, devhealthfacts.NewScopeExpander(counted))})
 	if err != nil {

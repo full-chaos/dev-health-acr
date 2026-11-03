@@ -439,10 +439,11 @@ func TestOwnerShareTheExtractCarriesTheShare(t *testing.T) {
 	t.Fatal("the extract has no ownership table")
 }
 
-// The recorded capture was taken before the extract carried the share: every
-// owner reads NULL, every owned repository splits equally, and nothing is a
-// breach.
-func TestOwnerShareTheRecordedCaptureReadsNoShare(t *testing.T) {
+// The capture of CHAOS-12808 carries the share (the extract keeps the column
+// since CHAOS-12691): at the window's end every owner reads its stored share,
+// no owned repository splits equally, and nothing is a breach. On askdev-1
+// each owned repository has one owner.
+func TestOwnerShareTheRecordedCaptureReadsTheStoredShare(t *testing.T) {
 	manifest, _, extract, err := LoadCapture(captureDir)
 	if err != nil {
 		t.Fatal(err)
@@ -460,12 +461,12 @@ func TestOwnerShareTheRecordedCaptureReadsNoShare(t *testing.T) {
 	}
 	for repo, owners := range reading.Owners {
 		for _, owner := range owners {
-			if owner.Stored != nil {
-				t.Fatalf("repository %s: owner %s has a stored share %v in a capture without the column", repo, owner.Team, *owner.Stored)
+			if owner.Stored == nil {
+				t.Fatalf("repository %s: owner %s reads no stored share in a capture that carries the column", repo, owner.Team)
 			}
 		}
 	}
-	if len(reading.EqualSplit) != len(reading.Owners) || len(reading.Breaches) != 0 {
+	if len(reading.EqualSplit) != 0 || len(reading.Breaches) != 0 {
 		t.Fatalf("%d of %d owned repositories split equally, breaches %+v", len(reading.EqualSplit), len(reading.Owners), reading.Breaches)
 	}
 }
