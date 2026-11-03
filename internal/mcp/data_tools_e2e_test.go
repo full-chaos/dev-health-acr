@@ -239,7 +239,7 @@ func newDTStackWithModelConfigs(t *testing.T, entitlements api.EntitlementProvid
 			OrgModelConfigs:      modelConfigs,
 			DeviceAuthorizations: devices, DeviceVerificationURL: "https://verify.example.test/device",
 			DeviceAuthorizationLimiter: api.NewDeviceAuthorizationLimiter(api.ClockFunc(time.Now)),
-			ReadinessChecks:            []api.ReadinessCheck{api.CheckFunc{CheckName: "postgres"}, api.CheckFunc{CheckName: "entitlement"}},
+			ReadinessChecks:            []api.ReadinessCheck{api.CheckFunc{CheckName: "postgres"}},
 			DataStoreChecks:            []api.ReadinessCheck{api.CheckFunc{CheckName: "clickhouse"}},
 			Investigator:               seam,
 			DirectReadGate:             gate, DataCatalogue: catalogue, DataOperations: runner, DataSubjects: lookup,
