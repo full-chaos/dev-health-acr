@@ -1,0 +1,60 @@
+---
+# CHAOS-12747 measurement only, on a draft pull request that is closed unmerged:
+# the red-first pair for the resident-set headroom check, on Linux.
+#   new-planted: the new check with the reading zeroed -> must FAIL
+#   old-planted: main's check with the reading zeroed  -> PASSES (vacuous: what the change closes)
+#   new:         the new check as committed             -> must PASS
+name: chaos12747-rss-plant
+
+"on":
+  pull_request:
+    paths:
+      - .github/workflows/chaos12747-rss-plant.yml
+
+permissions:
+  contents: read
+
+env:
+  GOFLAGS: -trimpath
+  GOPROXY: https://proxy.golang.org|direct
+
+jobs:
+  plant:
+    name: rss headroom (${{ matrix.arm }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        arm: [new-planted, old-planted, new]
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        with: {persist-credentials: false, fetch-depth: 0}
+      # actions/setup-go v6.5.0
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16
+        with:
+          go-version: '1.27.3'
+          cache: true
+      - name: Run the arm
+        run: |
+          set -uo pipefail
+          want=pass
+          case '${{ matrix.arm }}' in
+            new-planted) want=fail ;;
+            old-planted) git show origin/main:internal/cigates/emitscan/key_scope_headroom_test.go > internal/cigates/emitscan/key_scope_headroom_test.go ;;
+          esac
+          if [ '${{ matrix.arm }}' != new ]; then
+            # The plant: the resident-set reading is always zero.
+            sed -i 's|^func residentBytes(pid int) (rss, peak int64) {|func residentBytes(pid int) (rss, peak int64) {\n\treturn 0, 0|' internal/cigates/emitscan/typed_limits_unix.go
+            grep -A1 '^func residentBytes' internal/cigates/emitscan/typed_limits_unix.go
+          fi
+          code=0
+          go test -count=1 -v -run '^TestKeyScopeHelperLimitsKeepHeadroomOverTheRealTree$' ./internal/cigates/emitscan/ > run.log 2>&1 || code=$?
+          grep -E -- '--- (PASS|FAIL|SKIP)|real tree:|resident set' run.log | head -20 || true
+          if ! grep -q -E -- '--- (PASS|FAIL): TestKeyScopeHelperLimitsKeepHeadroomOverTheRealTree ' run.log; then
+            printf 'RESULT arm=%s INVALID (exit %s)\n' '${{ matrix.arm }}' "$code"; tail -30 run.log; exit 1
+          fi
+          got=pass
+          if [ "$code" -ne 0 ]; then got=fail; fi
+          printf 'RESULT arm=%s want=%s got=%s\n' '${{ matrix.arm }}' "$want" "$got"
+          [ "$got" = "$want" ]
