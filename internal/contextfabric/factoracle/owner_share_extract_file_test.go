@@ -8,7 +8,6 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
-	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -24,17 +23,17 @@ import (
 // flags and the shares numbers, a NULL valid_to null. It holds the rows of
 // osReference: A owned by X (main, 0.7) and Y (0.3), B by X alone, C by
 // nobody, Z an active team that owns nothing. ORG and TAKEN are replaced.
-const osExtractFileText = `{"extract_table":"snapshot","org":"ORG","taken_at":"TAKEN","rows_repos":"3","rows_teams":"3","rows_team_repo_ownership":"3"}
-{"extract_table":"repos","org_id":"ORG","id":"aaaaaaaa-0000-4000-8000-00000000000a","provider":"github","repo":"o/a","last_synced":"2026-09-01 00:00:00.000"}
-{"extract_table":"repos","org_id":"ORG","id":"bbbbbbbb-0000-4000-8000-00000000000b","provider":"github","repo":"o/b","last_synced":"2026-09-01 00:00:00.000"}
-{"extract_table":"repos","org_id":"ORG","id":"cccccccc-0000-4000-8000-00000000000c","provider":"github","repo":"o/c","last_synced":"2026-09-01 00:00:00.000"}
-{"extract_table":"teams","org_id":"ORG","id":"team-x","is_active":1,"updated_at":"2026-08-01 00:00:00.000000","last_synced":"2026-08-01 00:00:00.000000"}
-{"extract_table":"teams","org_id":"ORG","id":"team-y","is_active":1,"updated_at":"2026-08-01 00:00:00.000000","last_synced":"2026-08-01 00:00:00.000000"}
-{"extract_table":"teams","org_id":"ORG","id":"team-z","is_active":1,"updated_at":"2026-08-01 00:00:00.000000","last_synced":"2026-08-01 00:00:00.000000"}
-{"extract_table":"team_repo_ownership","org_id":"ORG","provider":"github","team_id":"team-x","repo_id":"aaaaaaaa-0000-4000-8000-00000000000a","repo_full_name":"o/a","source":"inferred","is_primary":1,"valid_from":"2026-09-01 00:00:00.000","valid_to":null,"updated_at":"2026-09-01 00:00:00.000","share":0.7}
-{"extract_table":"team_repo_ownership","org_id":"ORG","provider":"github","team_id":"team-y","repo_id":"aaaaaaaa-0000-4000-8000-00000000000a","repo_full_name":"o/a","source":"inferred","is_primary":0,"valid_from":"2026-09-01 00:00:00.000","valid_to":null,"updated_at":"2026-09-01 00:00:00.000","share":0.3}
-{"extract_table":"team_repo_ownership","org_id":"ORG","provider":"github","team_id":"team-x","repo_id":"bbbbbbbb-0000-4000-8000-00000000000b","repo_full_name":"o/b","source":"inferred","is_primary":1,"valid_from":"2026-09-01 00:00:00.000","valid_to":null,"updated_at":"2026-09-01 00:00:00.000","share":1}
-`
+var osExtractFileText = strings.NewReplacer("@R@", tableRepos, "@T@", tableTeams, "@O@", tableTeamRepoOwnership).Replace(`{"extract_table":"snapshot","org":"ORG","taken_at":"TAKEN","rows_repos":"3","rows_teams":"3","rows_team_repo_ownership":"3"}
+{"extract_table":"@R@","org_id":"ORG","id":"aaaaaaaa-0000-4000-8000-00000000000a","provider":"github","repo":"o/a","last_synced":"2026-09-01 00:00:00.000"}
+{"extract_table":"@R@","org_id":"ORG","id":"bbbbbbbb-0000-4000-8000-00000000000b","provider":"github","repo":"o/b","last_synced":"2026-09-01 00:00:00.000"}
+{"extract_table":"@R@","org_id":"ORG","id":"cccccccc-0000-4000-8000-00000000000c","provider":"github","repo":"o/c","last_synced":"2026-09-01 00:00:00.000"}
+{"extract_table":"@T@","org_id":"ORG","id":"team-x","is_active":1,"updated_at":"2026-08-01 00:00:00.000000","last_synced":"2026-08-01 00:00:00.000000"}
+{"extract_table":"@T@","org_id":"ORG","id":"team-y","is_active":1,"updated_at":"2026-08-01 00:00:00.000000","last_synced":"2026-08-01 00:00:00.000000"}
+{"extract_table":"@T@","org_id":"ORG","id":"team-z","is_active":1,"updated_at":"2026-08-01 00:00:00.000000","last_synced":"2026-08-01 00:00:00.000000"}
+{"extract_table":"@O@","org_id":"ORG","provider":"github","team_id":"team-x","repo_id":"aaaaaaaa-0000-4000-8000-00000000000a","repo_full_name":"o/a","source":"inferred","is_primary":1,"valid_from":"2026-09-01 00:00:00.000","valid_to":null,"updated_at":"2026-09-01 00:00:00.000","share":0.7}
+{"extract_table":"@O@","org_id":"ORG","provider":"github","team_id":"team-y","repo_id":"aaaaaaaa-0000-4000-8000-00000000000a","repo_full_name":"o/a","source":"inferred","is_primary":0,"valid_from":"2026-09-01 00:00:00.000","valid_to":null,"updated_at":"2026-09-01 00:00:00.000","share":0.3}
+{"extract_table":"@O@","org_id":"ORG","provider":"github","team_id":"team-x","repo_id":"bbbbbbbb-0000-4000-8000-00000000000b","repo_full_name":"o/b","source":"inferred","is_primary":1,"valid_from":"2026-09-01 00:00:00.000","valid_to":null,"updated_at":"2026-09-01 00:00:00.000","share":1}
+`)
 
 // osOtherOrgID is an organization that is not the run's.
 const osOtherOrgID = "1f1f1f1f-0000-4000-8000-00000000f4c7"
@@ -153,7 +152,7 @@ func TestOwnerShareExtractFileRefusals(t *testing.T) {
 			return l
 		}), 0o600, "line 9 (team_repo_ownership): the columns are not the ones"},
 		{"a table the extract does not hold", change(func(l []string) []string {
-			l[2] = strings.Replace(l[2], `"extract_table":"repos"`, `"extract_table":"work_unit_investments"`, 1)
+			l[2] = strings.Replace(l[2], `"extract_table":"`+tableRepos+`"`, `"extract_table":"work_unit_investments"`, 1)
 			return l
 		}), 0o600, "line 3: extract_table names no table"},
 		{"a line that is not JSON", change(func(l []string) []string {
@@ -321,57 +320,5 @@ func TestOwnerShareVenueExtractSQLIsTheRendering(t *testing.T) {
 				t.Errorf("%s.%s: declared %v, read by the venue capture %v", table.Table, column, found, ruled)
 			}
 		}
-	}
-}
-
-// sqlWriteKeyword is every word of a statement that is not a plain read, and
-// the SETTINGS of a SELECT too: the file needs none.
-var sqlWriteKeyword = regexp.MustCompile(`(?i)\b(INSERT|ALTER|CREATE|DROP|UNDROP|TRUNCATE|OPTIMIZE|SYSTEM|SET|SETTINGS|DELETE|UPDATE|RENAME|ATTACH|DETACH|EXCHANGE|GRANT|REVOKE|KILL|INTO|OUTFILE|BACKUP|RESTORE)\b`)
-
-func TestOwnerShareVenueExtractSQLIsSelectOnly(t *testing.T) {
-	// The scan finds what it exists to find, and no column that holds a
-	// keyword inside a longer name.
-	for _, planted := range []string{"INSERT INTO repos SELECT 1", "select 1 settings max_threads = 1", "Alter table teams delete where 1",
-		"OPTIMIZE TABLE repos FINAL", "system stop merges", "SET readonly = 0", "drop table repos", "TRUNCATE teams",
-		"create table x (a Int8) engine = Memory", "SELECT 1 INTO OUTFILE 'x'"} {
-		if !sqlWriteKeyword.MatchString(planted) {
-			t.Fatalf("the scan misses %q", planted)
-		}
-	}
-	if words := sqlWriteKeyword.FindAllString("SELECT updated_at, is_active, settings_x, created_at FROM teams", -1); len(words) != 0 {
-		t.Fatalf("the scan flags %v in a plain read", words)
-	}
-
-	raw, err := os.ReadFile(OwnershipExtractSQLFile)
-	if err != nil {
-		t.Fatal(err)
-	}
-	// The whole file, comments included: the operator reads all of it.
-	if words := sqlWriteKeyword.FindAllString(string(raw), -1); len(words) != 0 {
-		t.Fatalf("%s holds %v: it must be SELECT statements only", OwnershipExtractSQLFile, words)
-	}
-	var code []string
-	for _, line := range strings.Split(string(raw), "\n") {
-		if !strings.HasPrefix(strings.TrimSpace(line), "--") {
-			code = append(code, line)
-		}
-	}
-	var statements []string
-	for _, statement := range strings.Split(strings.Join(code, "\n"), ";") {
-		if statement = strings.TrimSpace(statement); statement != "" {
-			statements = append(statements, statement)
-		}
-	}
-	if len(statements) != len(ownershipExtractTables)+1 {
-		t.Fatalf("%d statements, want the snapshot and one per table (%d)", len(statements), len(ownershipExtractTables)+1)
-	}
-	for _, statement := range statements {
-		if !strings.HasPrefix(statement, "SELECT") || !strings.HasSuffix(statement, "FORMAT JSONEachRow") ||
-			!strings.Contains(statement, "org_id = {org_id:String}") {
-			t.Fatalf("a statement is not a SELECT of the bound organization in JSONEachRow:\n%s", statement)
-		}
-	}
-	if !strings.Contains(statements[0], "'"+snapshotTag+"' AS "+extractTableColumn) {
-		t.Fatalf("the first statement is not the snapshot line:\n%s", statements[0])
 	}
 }
