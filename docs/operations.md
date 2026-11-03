@@ -1094,7 +1094,12 @@ ops for the THEME and the SUBCATEGORY breakdown of its one subject
 `subcategory_breakdown` detail table, and the `investment_subcategory_share`
 rule draws it. A refused, failed or incomplete call gives no table and a coverage
 reason, and the Warn line `devhealthfacts.investment_subcategory_breakdown_withheld`
-counts it. The switch joins the answer-reuse key. Same order: pins first, then
+counts it. A read that asks for more than one team or repository makes no call
+and gives the coverage reason `several_subjects`. An ops answer with a key
+outside the canonical theme or subcategory list writes the Warn line
+`devhealthfacts.investment_subcategory_breakdown_noncanonical_key` (counts only),
+even at 0: at 0 the key places nothing and the table is served; above 0 the
+table is withheld too. The switch joins the answer-reuse key. Same order: pins first, then
 the flag. With the flag off, no call is made and both doors that serve a result
 remove a stored sunburst.
 

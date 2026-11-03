@@ -226,7 +226,10 @@ func (p *InvestmentProvider) attachSubcategoryBreakdown(ctx context.Context, pri
 		return several
 	}
 	fact := &facts[targets[0]]
-	table, withheld := p.readSubcategoryBreakdown(ctx, principal, fact.Subject, bound)
+	table, withheld, keys := p.readSubcategoryBreakdown(ctx, principal, fact.Subject, bound)
+	if keys.any() {
+		logSubcategoryBreakdownNoncanonicalKey(ctx, orgID, fact.Subject, keys)
+	}
 	if withheld != nil {
 		logSubcategoryBreakdownWithheld(ctx, orgID, *withheld)
 		return []subcategoryWithheld{*withheld}
@@ -251,49 +254,85 @@ func chartedSubjectCount(subjects []contextfabric.SubjectRef) int {
 	return len(seen)
 }
 
+// noncanonicalKeys counts the keys of the two answers outside the canonical
+// theme and subcategory lists, and how many of them hold a value above 0.
+type noncanonicalKeys struct {
+	theme, subcategory, aboveZero int
+}
+
+func (k noncanonicalKeys) any() bool { return k.theme+k.subcategory > 0 }
+
+// count adds the keys of one parsed answer that are not canonical for its
+// dimension.
+func (k *noncanonicalKeys) count(dimension string, values map[string]float64) {
+	for key, value := range values {
+		canonical := false
+		if dimension == "THEME" {
+			canonical = slices.Contains(canonicalInvestmentThemes[:], key)
+		} else {
+			_, canonical = contractsv1.ContextFabricInvestmentSubcategoryTheme(key)
+		}
+		if canonical {
+			continue
+		}
+		if dimension == "THEME" {
+			k.theme++
+		} else {
+			k.subcategory++
+		}
+		if value > 0 {
+			k.aboveZero++
+		}
+	}
+}
+
 // readSubcategoryBreakdown makes the two calls, THEME then SUBCATEGORY, with
 // the same variables apart from the dimension (the policy caps a call at one
-// breakdown), and builds the table.
-func (p *InvestmentProvider) readSubcategoryBreakdown(ctx context.Context, principal storage.Principal, subject contextfabric.SubjectRef, bound factTimeBound) (contextfabric.FactValue, *subcategoryWithheld) {
+// breakdown), and builds the table. It also returns the non-canonical keys of
+// the answers it parsed, so the caller can log them even when the table is
+// served (a key at 0) or withheld for another reason.
+func (p *InvestmentProvider) readSubcategoryBreakdown(ctx context.Context, principal storage.Principal, subject contextfabric.SubjectRef, bound factTimeBound) (contextfabric.FactValue, *subcategoryWithheld, noncanonicalKeys) {
+	var keys noncanonicalKeys
 	withheld := func(reason string) *subcategoryWithheld {
 		return &subcategoryWithheld{subject: subject, reason: reason}
 	}
 	operation, level, _ := subcategoryBreakdownScopeOf(subject.Kind)
 	startDate, endDate, ok := subcategoryBreakdownDates(bound)
 	if !ok {
-		return contextfabric.FactValue{}, withheld(SubcategoryWithheldWindow)
+		return contextfabric.FactValue{}, withheld(SubcategoryWithheldWindow), keys
 	}
 	if !p.operations.IsSet() {
-		return contextfabric.FactValue{}, withheld(SubcategoryWithheldCallerUnset)
+		return contextfabric.FactValue{}, withheld(SubcategoryWithheldCallerUnset), keys
 	}
 	items := make(map[string]map[string]float64, 2)
 	for _, dimension := range []string{"THEME", "SUBCATEGORY"} {
 		outcome, err := p.operations.CallOperation(ctx, principal, operation, subcategoryBreakdownVariables(dimension, level, subject.CanonicalID, startDate, endDate))
 		switch {
 		case err != nil:
-			return contextfabric.FactValue{}, withheld(SubcategoryWithheldCallFailed)
+			return contextfabric.FactValue{}, withheld(SubcategoryWithheldCallFailed), keys
 		case !outcome.Served:
 			out := withheld(SubcategoryWithheldNotServed)
 			out.call = "unknown"
 			if closedCallStatus.MatchString(outcome.Reason) {
 				out.call = outcome.Reason
 			}
-			return contextfabric.FactValue{}, out
+			return contextfabric.FactValue{}, out, keys
 		case !outcome.Complete:
-			return contextfabric.FactValue{}, withheld(SubcategoryWithheldIncomplete)
+			return contextfabric.FactValue{}, withheld(SubcategoryWithheldIncomplete), keys
 		}
 		values, readable := parseInvestmentBreakdown(outcome.Data, dimension)
 		if !readable {
-			return contextfabric.FactValue{}, withheld(SubcategoryWithheldUnreadable)
+			return contextfabric.FactValue{}, withheld(SubcategoryWithheldUnreadable), keys
 		}
+		keys.count(dimension, values)
 		items[dimension] = values
 	}
 	table, refusal := subcategoryBreakdownTable(items["THEME"], items["SUBCATEGORY"], bound.effectiveGrain(grainDaily))
 	if refusal != nil {
 		refusal.subject = subject
-		return contextfabric.FactValue{}, refusal
+		return contextfabric.FactValue{}, refusal, keys
 	}
-	return table, nil
+	return table, nil, keys
 }
 
 // investmentBreakdownAnswer is the part of an ops analytics answer the table

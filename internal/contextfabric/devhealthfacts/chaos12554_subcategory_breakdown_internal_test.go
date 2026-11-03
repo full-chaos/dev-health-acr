@@ -335,6 +335,59 @@ func TestCHAOS12554AWithheldTableIsAClosedReasonNeverZeros(t *testing.T) {
 	}
 }
 
+// Lead ruling on Codex r1 of #2002: a key outside the canonical lists is a
+// drift the canonical-themes contract says never happens, so it gets its own
+// Warn line even at 0. At 0 it places nothing and the table is served; above 0
+// the table is withheld too. An answer of canonical keys only writes no line.
+func TestCHAOS12554ANoncanonicalKeyIsLoggedEvenAtZero(t *testing.T) {
+	noncanonical := eventspec.InvestmentSubcategoryBreakdownNoncanonicalKey
+	t.Run("at 0 the table is served and the key is logged", func(t *testing.T) {
+		buf := captureLinkLines(t)
+		ctx := observability.WithRequestID(context.Background(), linkLineRequestID)
+		themes := sunburstThemes()
+		themes["unknown"] = 0
+		subcategories := sunburstSubcategories()
+		subcategories["quality.flaky"] = 0
+		subcategories["other"] = 0
+		result := readSunburst(t, ctx, true, &breakdownCaller{theme: breakdownAnswer("THEME", themes), subcategory: breakdownAnswer("SUBCATEGORY", subcategories)}, sunburstWindow())
+		if _, ok := subcategoryTableOf(t, result); !ok {
+			t.Fatalf("keys at 0 refused the table: %q", servedReasons(result, sunburstRepo))
+		}
+		certifyLinkLine(t, buf, noncanonical, map[string]any{
+			"org_id": "org-1", "subject_kind": "repository", "theme_keys": 1, "subcategory_keys": 2, "above_zero_keys": 0,
+		})
+		if bytes.Contains(buf.Bytes(), []byte(eventspec.InvestmentSubcategoryBreakdownWithheld.Msg)) {
+			t.Fatalf("a withheld line beside a served table: %s", buf.String())
+		}
+	})
+	t.Run("above 0 the table is withheld and the key is logged", func(t *testing.T) {
+		buf := captureLinkLines(t)
+		ctx := observability.WithRequestID(context.Background(), linkLineRequestID)
+		subcategories := sunburstSubcategories()
+		subcategories["quality.flaky"] = 0.5
+		result := readSunburst(t, ctx, true, &breakdownCaller{theme: breakdownAnswer("THEME", sunburstThemes()), subcategory: breakdownAnswer("SUBCATEGORY", subcategories)}, sunburstWindow())
+		if _, ok := subcategoryTableOf(t, result); ok {
+			t.Fatal("a key above 0 served a table")
+		}
+		certifyLinkLine(t, buf, noncanonical, map[string]any{
+			"org_id": "org-1", "subject_kind": "repository", "theme_keys": 0, "subcategory_keys": 1, "above_zero_keys": 1,
+		})
+		certifyLinkLine(t, buf, eventspec.InvestmentSubcategoryBreakdownWithheld, map[string]any{
+			"org_id": "org-1", "subject_kind": "repository", "reason": "unknown_key", "theme": "", "relative_gap": 0.0,
+		})
+	})
+	t.Run("canonical keys only write no line", func(t *testing.T) {
+		buf := captureLinkLines(t)
+		result := readSunburst(t, context.Background(), true, servingCaller(), sunburstWindow())
+		if _, ok := subcategoryTableOf(t, result); !ok {
+			t.Fatal("no table on a canonical answer")
+		}
+		if bytes.Contains(buf.Bytes(), []byte(noncanonical.Msg)) {
+			t.Fatalf("a non-canonical line on a canonical answer: %s", buf.String())
+		}
+	})
+}
+
 func TestCHAOS12554AnAnswerWithANullOrRepeatedValueIsUnreadable(t *testing.T) {
 	t.Parallel()
 	for name, body := range map[string]string{

@@ -3705,6 +3705,29 @@ var InvestmentSubcategoryBreakdownWithheld = Event{
 	},
 }
 
+// InvestmentSubcategoryBreakdownNoncanonicalKey is the Warn line of a team or repository investment read, with the investment sunburst switch on, whose ops THEME or SUBCATEGORY answer holds a key outside the canonical theme or subcategory list (CHAOS-12554, lead ruling on Codex r1 of #2002). The canonical-themes contract says ops never serves one, so any such key is a drift signal, even at 0. A key at 0 places nothing and the table is still served; a key above 0 also withholds the table (the withheld line with reason unknown_key). Counts only, never a subject id or an ops key.
+var InvestmentSubcategoryBreakdownNoncanonicalKey = Event{
+	ID:                       "devhealthfacts.investment_subcategory_breakdown_noncanonical_key",
+	Msg:                      "devhealthfacts.investment_subcategory_breakdown_noncanonical_key",
+	Level:                    LevelWarn,
+	Multiplicity:             MultiplicityZeroOrManyPerRequest,
+	UnboundedReason:          "one line per investment read whose ops answer holds a non-canonical key, so the count follows the investment reads a request makes; the line carries the request id when the context has one.",
+	RequiredOnlyConstruction: true,
+	Attribution:              []string{"org_id", "request_id"},
+	BoundedAggregation:       "at most one line per investment read.",
+	Fields: []Field{
+		{Key: "org_id", Type: FieldString, Presence: PresenceRequired},
+		{Key: "subject_kind", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: []string{"repository", "team"}},
+		// Keys of the THEME answer outside the canonical themes.
+		{Key: "theme_keys", Type: FieldInt, Presence: PresenceRequired},
+		// Keys of the SUBCATEGORY answer outside the canonical subcategories.
+		{Key: "subcategory_keys", Type: FieldInt, Presence: PresenceRequired},
+		// Of those, the keys with a value above 0: any one withholds the table.
+		{Key: "above_zero_keys", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "request_id", Type: FieldString, Presence: PresenceConditional, Applicability: "written when the request context carries a request ID"},
+	},
+}
+
 // ProjectStatusDrivers is the Info line of one project status driver decision: how many drivers were emitted or skipped, how many fact rows the status claims carry, how many carry none because another claim already carries the rows of the same fact, and how many had their rows cut at the claimed fact row bound, and which fact kinds were missing or partial and in which state. Counts and closed names only, never a value or a subject.
 var ProjectStatusDrivers = Event{
 	ID:                 "contextfabric.project_status_drivers",
@@ -6006,6 +6029,7 @@ var All = []Event{
 	ProjectOwningTeamRollup,
 	PullRequestProjectNativeFirst,
 	InvestmentSubcategoryBreakdownWithheld,
+	InvestmentSubcategoryBreakdownNoncanonicalKey,
 	ProjectStatusDrivers,
 	TeamBlockersDrivers,
 	PriorSubjectReceiptsSkipped,

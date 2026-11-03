@@ -15010,6 +15010,55 @@
     ]
   },
   {
+    "id": "devhealthfacts.investment_subcategory_breakdown_noncanonical_key",
+    "msg": "devhealthfacts.investment_subcategory_breakdown_noncanonical_key",
+    "level": "warn",
+    "multiplicity": "zero_or_many_per_request",
+    "attribution": [
+      "org_id",
+      "request_id"
+    ],
+    "bounded_aggregation": "at most one line per investment read.",
+    "unbounded_reason": "one line per investment read whose ops answer holds a non-canonical key, so the count follows the investment reads a request makes; the line carries the request id when the context has one.",
+    "fields": [
+      {
+        "key": "org_id",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "subject_kind",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "repository",
+          "team"
+        ]
+      },
+      {
+        "key": "theme_keys",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "subcategory_keys",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "above_zero_keys",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "request_id",
+        "type": "string",
+        "presence": "conditional",
+        "applicability": "written when the request context carries a request ID"
+      }
+    ]
+  },
+  {
     "id": "devhealthfacts.investment_subcategory_breakdown_withheld",
     "msg": "devhealthfacts.investment_subcategory_breakdown_withheld",
     "level": "warn",
