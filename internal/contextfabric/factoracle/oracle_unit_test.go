@@ -130,8 +130,8 @@ func TestShapesAreGeneratedFromThePolicyForEveryRoot(t *testing.T) {
 	if len(roots) != len(policy.Roots()) || len(roots) != 13 {
 		t.Fatalf("shapes cover %d roots, the policy allows %d, want 13", len(roots), len(policy.Roots()))
 	}
-	if len(operations) != 16 {
-		t.Fatalf("shapes cover %d operations, want 16 (one per served operation behind an allowed root)", len(operations))
+	if len(operations) != 18 {
+		t.Fatalf("shapes cover %d operations, want 18 (one per served operation behind an allowed root)", len(operations))
 	}
 	for root := range roots {
 		if _, ok := rootPairs[root]; !ok {
@@ -806,7 +806,7 @@ func TestTheTwoPathsMustAnswerTheSame(t *testing.T) {
 	flow := `{"workGraphFlow":{"__typename":"WorkGraphFlowResult","degradedReason":null,"rows":[{"__typename":"WorkGraphFlowRow","nodeType":"ISSUE","inflow":3,"outflow":4},{"__typename":"WorkGraphFlowRow","nodeType":"PR","inflow":1,"outflow":2}]}}`
 	run := func(root, graphQL, operation string) *RootReport {
 		t.Helper()
-		oracle := &Oracle{Policy: mustPolicy(t), Store: store, Window: manifest.Window, ShapeCases: manifest.ShapeCases, OnlyRoots: []string{root},
+		oracle := &Oracle{Policy: mustPolicy(t), Store: store, Window: manifest.Window, ShapeCases: manifest.ShapeCases, OnlyRoots: []string{root}, NotRecorded: notRecordedOperations,
 			Planes: fakePlanes{
 				graphQL: func(shape Shape, _ map[string]any) (json.RawMessage, error) {
 					if shape.Name != "all" {

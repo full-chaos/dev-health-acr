@@ -28,6 +28,12 @@
 //
 // `make o4-oracle-capture` records the extract and the replies again.
 //
+// The owner-share pair (CHAOS-12691, owner_share_pair.go) has a live mode of
+// its own (`make o4-owner-share-live`, build tag o4venue): the ops TEAM and
+// REPO investment scopes, which the acr policy does not serve yet, are read
+// from the ops public GraphQL API with a user login (OpsGraphQLPlane), the
+// owner shares from the venue ClickHouse. Never a pull request gate.
+//
 // Roots with no acr fact are checked for shape, echo and limits only; the
 // reason is recorded per root in rootPairs.
 //

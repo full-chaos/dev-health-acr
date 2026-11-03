@@ -917,12 +917,20 @@ func (x *gqlRun) planRoot(ctx context.Context, index int, root rootSel, vars map
 			resp := x.refuse(outcome.refusal.Code, outcome.refusal.Reason, outcome.path)
 			return plannedRoot{}, &resp, nil
 		}
-		if best == nil || outcome.stage > best.stage {
+		if best == nil || outcome.stage > best.stage || personWinsTie(outcome, best) {
 			best = outcome
 		}
 	}
 	resp := x.refuse(best.refusal.Code, best.refusal.Reason, best.path)
 	return plannedRoot{}, &resp, nil
+}
+
+// personWinsTie: of two candidates refused at the same stage, a person
+// refusal is the answer (design D.5, T13). A stricter candidate can refuse
+// the query's scope level deeper than the person argument a later candidate
+// refuses (the ORG investment entry and a TEAM or REPO scope, CHAOS-12691).
+func personWinsTie(outcome, best *candidateOutcome) bool {
+	return outcome.stage == best.stage && outcome.refusal.Code == RefusalPersonScopeNotServed && best.refusal.Code != RefusalPersonScopeNotServed
 }
 
 func (x *gqlRun) tryCandidate(cand *rootCandidate, root rootSel, leaves []string, vars map[string]any) (map[string]any, []subjectUse, CallerScope, *candidateOutcome) {

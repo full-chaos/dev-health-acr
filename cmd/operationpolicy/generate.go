@@ -435,7 +435,7 @@ func buildVariables(schema *ast.Schema, opDef *ast.OperationDefinition, decl ope
 			rule.ForcedValue = d.ForcedValue
 			rule.AllowedValues = d.AllowedValues
 			rule.Min, rule.Max = d.Min, d.Max
-			rule.MaxItems, rule.MaxLength = d.MaxItems, d.MaxLength
+			rule.MinItems, rule.MaxItems, rule.MaxLength = d.MinItems, d.MaxItems, d.MaxLength
 			rule.Subject = d.Subject
 			if rule.Source == directread.SourceForced && len(rule.ForcedValue) == 0 {
 				return nil, nil, fmt.Errorf("variable %q forced without a value", n.Path)

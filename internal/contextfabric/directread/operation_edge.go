@@ -18,7 +18,9 @@ package directread
 //   - an enum value answers its RefusedValues code, or variable_not_allowed
 //     when it is in neither list; that refusal is one level deeper than the
 //     path, so a person value inside a refused object still wins;
-//   - Min/Max, MaxItems and MaxLength answer variable_out_of_range;
+//   - Min/Max, MinItems, MaxItems and MaxLength answer
+//     variable_out_of_range; MinItems applies also to an omitted or null
+//     list (the empty SDL default), when the walk found nothing else;
 //   - a value of the wrong JSON shape answers invalid_request.
 //
 // Every refusal found is kept; the DEEPEST one is answered (ties: the
@@ -66,6 +68,9 @@ type variableCheck struct {
 func checkVariables(op *OperationPolicy, vars map[string]any) (map[string]any, []subjectUse, []edgeRefusal) {
 	vc := &variableCheck{op: op}
 	out := vc.object("", vars)
+	if len(vc.refusals) == 0 {
+		vc.omittedLists(vars)
+	}
 	sort.SliceStable(vc.refusals, func(i, j int) bool {
 		if vc.refusals[i].depth != vc.refusals[j].depth {
 			return vc.refusals[i].depth > vc.refusals[j].depth
@@ -81,6 +86,20 @@ func pathDepth(path string) int {
 		return 0
 	}
 	return len(pathSegments(path))
+}
+
+// omittedLists refuses a MinItems list the client omitted or sent as null:
+// ops then reads the SDL default, which the loader holds empty (an empty id
+// list reads as no scope, the whole organization).
+func (vc *variableCheck) omittedLists(vars map[string]any) {
+	for _, rule := range vc.op.Variables {
+		if rule.MinItems <= 0 {
+			continue
+		}
+		if isNullish(lookupOne(vars, rule.Path)) {
+			vc.refuse(rule.Path, 0, RefusalVariableOutOfRange, fmt.Sprintf("list must hold at least %d items; omitted or null it is the SDL default, which holds none", rule.MinItems))
+		}
+	}
 }
 
 func (vc *variableCheck) refuse(path string, extra int, code RefusalCode, reason string) {
@@ -149,6 +168,10 @@ func (vc *variableCheck) value(path string, rule VariableRule, value any) (any, 
 		}
 		if rule.MaxItems > 0 && len(items) > rule.MaxItems {
 			vc.refuse(path, 0, RefusalVariableOutOfRange, fmt.Sprintf("list holds more than %d items", rule.MaxItems))
+			return nil, false
+		}
+		if len(items) < rule.MinItems {
+			vc.refuse(path, 0, RefusalVariableOutOfRange, fmt.Sprintf("list holds fewer than %d items", rule.MinItems))
 			return nil, false
 		}
 		out := make([]any, 0, len(items))

@@ -444,6 +444,8 @@ func TestEveryOperationIsClassifiedForTheBudgetRule(t *testing.T) {
 		"compoundingRisk":                "",
 		"home":                           "home.signals",
 		"investmentBreakdown":            "",
+		"investmentBreakdownTeam":        "",
+		"investmentBreakdownRepository":  "",
 		"investmentFull":                 "",
 		"recommendations":                "",
 		"securityOverview":               "",

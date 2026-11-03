@@ -6,6 +6,7 @@ import (
 	"compress/gzip"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -130,13 +131,20 @@ var extractTables = []tableSpec{
 	// The source writes one more row, equal but for valid_from and
 	// updated_at, at every sync; of such rows the earliest is valid whenever
 	// a later one is, so it alone decides every read.
+	//
+	// share (CHAOS-12691) is in the group: rows that differ in their share
+	// are not one row. A changed share is a new version of the row under the
+	// same sorting key (same valid_from, newer updated_at; ops
+	// team-attribution.md section 1.1), so of one valid_from the NEWEST
+	// version is kept, the one FINAL keeps. A capture taken before share was
+	// captured holds no share key; the store reads it as NULL (not measured).
 	{Table: tableTeamRepoOwnership, Where: "valid_to IS NULL OR valid_to >= toDateTime64({start:String}, 3, 'UTC')",
-		OrderBy: "valid_from ASC, updated_at ASC",
-		LimitBy: "provider, team_id, repo_id, repo_full_name, match_type, source, is_primary, specificity, priority, valid_to",
+		OrderBy: "valid_from ASC, updated_at DESC",
+		LimitBy: "provider, team_id, repo_id, repo_full_name, match_type, source, is_primary, specificity, priority, valid_to, share",
 		Rules: map[string]columnRule{
 			"org_id": ruleOrg, "provider": ruleKeep, "team_id": ruleTeam, "repo_id": ruleUUID, "repo_full_name": ruleSlug, "match_type": ruleKeep,
 			"source": ruleKeep, "is_primary": ruleKeep, "specificity": ruleKeep, "priority": ruleKeep, "valid_from": ruleKeep, "valid_to": ruleKeep,
-			"updated_at": ruleKeep,
+			"updated_at": ruleKeep, "share": ruleKeep,
 		}},
 	{Table: tableCapacityForecasts, Where: "toDate(computed_at) >= toDate({start:String}) AND toDate(computed_at) < toDate({end:String})", Rules: map[string]columnRule{
 		"forecast_id": ruleUUID, "computed_at": ruleKeep, "team_id": ruleTeam, "work_scope_id": ruleWorkScope, "backlog_size": ruleKeep,
@@ -176,6 +184,22 @@ func ExtractTableNames() []string {
 
 // Row is one table row as ClickHouse prints it in JSONEachRow.
 type Row map[string]any
+
+// decodeRow reads one JSONEachRow line, numbers kept as json.Number. Every
+// extract reader uses it: the venue capture (CaptureExtract), the recorded
+// capture (ReadExtract) and the operator's ownership extract
+// (LoadOwnershipExtract).
+func decodeRow(line []byte) (Row, error) {
+	decoded, err := decodeJSON(line)
+	if err != nil {
+		return nil, fmt.Errorf("a row is not JSON: %v", err)
+	}
+	row, ok := decoded.(map[string]any)
+	if !ok {
+		return nil, errors.New("a row is not an object")
+	}
+	return row, nil
+}
 
 // Extract is the rows of the extracted tables.
 type Extract struct {
@@ -249,13 +273,9 @@ func CaptureExtract(ctx context.Context, db RowQuerier, orgID string, window Win
 		}
 		rows := []Row{}
 		err := db.QueryStrings(ctx, statement, params, func(line string) error {
-			decoded, derr := decodeJSON([]byte(line))
+			row, derr := decodeRow([]byte(line))
 			if derr != nil {
-				return fmt.Errorf("table %s: a row is not JSON: %v", spec.Table, derr)
-			}
-			row, ok := decoded.(map[string]any)
-			if !ok {
-				return fmt.Errorf("table %s: a row is not an object", spec.Table)
+				return fmt.Errorf("table %s: %w", spec.Table, derr)
 			}
 			rows = append(rows, row)
 			return nil
@@ -412,15 +432,10 @@ func ReadExtract(dir string) (*Extract, error) {
 		scanner := bufio.NewScanner(zr)
 		scanner.Buffer(make([]byte, 0, 1<<20), 64<<20)
 		for scanner.Scan() {
-			decoded, derr := decodeJSON(scanner.Bytes())
+			row, derr := decodeRow(scanner.Bytes())
 			if derr != nil {
 				_ = file.Close()
 				return nil, fmt.Errorf("table %s: %w", spec.Table, derr)
-			}
-			row, ok := decoded.(map[string]any)
-			if !ok {
-				_ = file.Close()
-				return nil, fmt.Errorf("table %s: a row is not an object", spec.Table)
 			}
 			rows = append(rows, row)
 		}

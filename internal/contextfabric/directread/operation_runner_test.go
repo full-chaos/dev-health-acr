@@ -287,14 +287,14 @@ func TestT13EveryPersonVariableRefusedAtTheEdge(t *testing.T) {
 
 // ---------------------------------------------------------------- T2
 
-// TestT2OrgIsolationEveryOperation: two organizations, all 20 operations.
+// TestT2OrgIsolationEveryOperation: two organizations, all 22 operations.
 // The orgId variable and X-DH-Internal-Org-Id are always the principal's
 // organization; the service never sees the other one.
 func TestT2OrgIsolationEveryOperation(t *testing.T) {
 	cat, _ := directread.DefaultCatalogue()
 	ops := cat.Operations(directread.CallerUnrestricted)
-	if len(ops) != 20 {
-		t.Fatalf("unrestricted catalogue has %d operations, want 20", len(ops))
+	if len(ops) != 22 {
+		t.Fatalf("unrestricted catalogue has %d operations, want 22", len(ops))
 	}
 	for _, op := range ops {
 		var orgPaths []string
@@ -339,12 +339,19 @@ func TestT2OrgIsolationEveryOperation(t *testing.T) {
 	}
 }
 
+// needsTeam reports an operation whose minimal variables name an org A
+// subject: a required subject path or a subject list with MinItems.
 func needsTeam(op *directread.OperationPolicy) bool {
 	for _, con := range op.Constraints {
 		if con.Kind == directread.ConstraintRequired {
 			if rule, ok := op.Variable(con.Path); ok && rule.Subject != nil {
 				return true
 			}
+		}
+	}
+	for _, rule := range op.Variables {
+		if rule.MinItems > 0 && rule.Subject != nil {
+			return true
 		}
 	}
 	return false

@@ -641,7 +641,16 @@ func compareWorkloadTeam(rr *RootReport, latest map[string]forecastNode, facts [
 	}
 	days := map[string]*dayTotal{}
 	scopeLatest := map[string]forecastNode{}
-	for _, n := range latest {
+	// In key order: the day totals are float64 sums, and a sum in Go's random
+	// map order can differ in its last digits from run to run, which a pinned
+	// finding text holds exactly (CHAOS-12808).
+	keys := make([]string, 0, len(latest))
+	for key := range latest {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	for _, key := range keys {
+		n := latest[key]
 		total := days[n.day]
 		if total == nil {
 			total = &dayTotal{}
@@ -658,7 +667,9 @@ func compareWorkloadTeam(rr *RootReport, latest map[string]forecastNode, facts [
 		}
 		if leaf, err := typedLeaf(LeafFloat, n.row["throughputStddev"]); err == nil {
 			v, _ := leafFloat(leaf)
-			total.sq += v * v
+			// float64(): no fused multiply-add on arm64, so the sum is the same
+			// on every architecture (a pinned finding text holds it exactly).
+			total.sq += float64(v * v)
 		}
 		if prior, seen := scopeLatest[n.scope]; !seen || n.computed.V > prior.computed.V || (n.computed.V == prior.computed.V && n.id > prior.id) {
 			scopeLatest[n.scope] = n

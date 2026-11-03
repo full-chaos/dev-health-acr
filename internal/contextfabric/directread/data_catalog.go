@@ -97,6 +97,8 @@ var operationPurposes = map[string]string{
 	"compoundingRisk":                "Compounding delivery risk per repository or team per day, with the trend and the component scores.",
 	"hotspots":                       "Files with high change and complexity (hotspots) in a window, per repository.",
 	"investmentBreakdown":            "Investment (work themes and subcategories) as a time series or an org-level breakdown for a window.",
+	"investmentBreakdownTeam":        "Investment (work themes and subcategories) of one owned team, as a breakdown for a window: the repositories the team owns, by owner share.",
+	"investmentBreakdownRepository":  "Investment (work themes and subcategories) of one repository, as a breakdown for a window.",
 	"investmentFull":                 "Investment over a window: time series, org-level breakdowns and the batch coverage disclosure.",
 	"home":                           "The org-wide home summary: data freshness, metric deltas, tiles, signals, the limiting factor and data confidence.",
 	"recommendations":                "A team's stored recommendations over a lookback window, each with its rationale and evidence rows.",
@@ -214,6 +216,7 @@ type CatalogVariable struct {
 	Default     string   `json:"default,omitempty"`
 	Min         *int64   `json:"min,omitempty"`
 	Max         *int64   `json:"max,omitempty"`
+	MinItems    int      `json:"min_items,omitempty"`
 	MaxItems    int      `json:"max_items,omitempty"`
 	MaxLength   int      `json:"max_length,omitempty"`
 	SubjectKind string   `json:"subject_kind,omitempty"`
@@ -696,7 +699,7 @@ func catalogOperation(op *OperationPolicy, class CallerClass, reason string) Cat
 		}
 		// A restricted caller's forced path stays listed: the caller may
 		// name a subset of its grant there; scope_class says acr bounds it.
-		v := CatalogVariable{Path: rule.Path, Type: rule.Type, Default: rule.EffectiveDefault(), Min: rule.Min, Max: rule.Max, MaxItems: rule.MaxItems, MaxLength: rule.MaxLength}
+		v := CatalogVariable{Path: rule.Path, Type: rule.Type, Default: rule.EffectiveDefault(), Min: rule.Min, Max: rule.Max, MinItems: rule.MinItems, MaxItems: rule.MaxItems, MaxLength: rule.MaxLength}
 		if rule.Kind == VariableKindEnum {
 			v.EnumValues = append([]string{}, rule.AllowedValues...)
 		}

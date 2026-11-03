@@ -158,10 +158,11 @@ var DataExamples = []DataExample{
 	},
 	{
 		Title: "Where does the organization put its effort, by theme?",
-		Note:  "Via `run_operation` (if listed), `investmentBreakdown` serves the organization only, by theme, subcategory or work type; a team or repository shape is refused with `basis_dependent_shape`: use `read_facts` if your `tools/list` offers it (the `facts` section of `data_catalog` lists its kinds). Do not work around the refusal.",
+		Note:  "Via `run_operation` (if listed), `investmentBreakdown` serves the organization only, by theme, subcategory or work type; `investmentBreakdownTeam` serves one owned team and `investmentBreakdownRepository` one repository (`batch.filters.scope` with level TEAM or REPO and exactly one id from `find_subjects` (if listed)); a team or repository dimension is refused with `basis_dependent_shape`: use `read_facts` if your `tools/list` offers it (the `facts` section of `data_catalog` lists its kinds). Do not work around the refusal.",
 		Calls: []DataExampleCall{
 			{Tool: "run_operation", Args: `{"operation":"catalogValues","variables":{"dimension":"THEME"}}`, Comment: "the theme values that exist"},
 			{Tool: "run_operation", Args: `{"operation":"investmentBreakdown","variables":{"batch":{"breakdowns":[{"dimension":"THEME","measure":"COUNT","dateRange":{"startDate":"2026-06-29","endDate":"2026-09-28"},"topN":10}]}}}`, Comment: "the org-wide mix by theme"},
+			{Tool: "run_operation", Args: `{"operation":"investmentBreakdownTeam","variables":{"batch":{"breakdowns":[{"dimension":"THEME","measure":"COUNT","dateRange":{"startDate":"2026-06-29","endDate":"2026-09-28"},"topN":10}],"filters":{"scope":{"level":"TEAM","ids":["` + sampleTeamID + `"]}}}}}`, Comment: "one owned team's mix by theme"},
 			{Tool: "run_operation", Args: `{"operation":"investmentBreakdown","variables":{"batch":{"breakdowns":[{"dimension":"TEAM","measure":"COUNT","dateRange":{"startDate":"2026-06-29","endDate":"2026-09-28"},"topN":10}]}}}`, Refused: "basis_dependent_shape", Comment: "refused: run_operation (if listed) serves no team shape"},
 		},
 	},

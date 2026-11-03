@@ -3,11 +3,11 @@
   "generator": "cmd/operationpolicy",
   "source": {
     "repository": "full-chaos/dev-health-ops",
-    "commit": "51652ba7abd6f036948d87cdca62b3479a7ad30d",
+    "commit": "0b763a859e3e5c0df154d133738b20eb23d78fbb",
     "tool": "go run ./cmd/registrydump -file internal/queryapi/server/query_route.go",
-    "schema_digest": "sha256:70c727ac76a2203a8f5a48378f9d9911bbd1275d52db2a6f625ceed2ee72c821",
-    "registry_sha256": "c5536b7a429238912c69b38e99f728e65c8866d94376e115f94b9864912632de",
-    "registry_rows": 64
+    "schema_digest": "sha256:6d40791c0e2a28c2e0284a3330d1b30ddc3e9b24d397d9ceb237c398d4cd106c",
+    "registry_sha256": "5d0fe785cb0e3786340270929e8d7df830fe0add571faf2e535ff81bb162a68c",
+    "registry_rows": 66
   },
   "person_name_tokens": [
     "actor",
@@ -2822,8 +2822,8 @@
       "name": "investmentBreakdown",
       "document_operation_name": "InvestmentBreakdown",
       "kind": "query",
-      "digest": "964b2e867a1e37c09382552eb0af394758fa10d68081a560ebc0f36c28cc3501",
-      "document_text": "query InvestmentBreakdown($orgId: String!, $batch: AnalyticsRequestInput!) {\n  analytics(orgId: $orgId, batch: $batch) {\n    breakdowns {\n      dimension\n      measure\n      items {\n        key\n        value\n        __typename\n      }\n      __typename\n    }\n    evidenceQualityDistribution\n    evidenceQualityStats {\n      mean\n      stddev\n      total\n      bandCounts\n      __typename\n    }\n    __typename\n  }\n}",
+      "digest": "91d44e116c4830e0c296cc55dc5294ce0741e411f2d9a9269ea44812fcabc211",
+      "document_text": "query InvestmentBreakdown($orgId: String!, $batch: AnalyticsRequestInput!) {\n  analytics(orgId: $orgId, batch: $batch) {\n    breakdowns {\n      dimension\n      measure\n      items {\n        key\n        value\n        __typename\n      }\n      __typename\n    }\n    evidenceQualityDistribution\n    evidenceQualityStats {\n      mean\n      stddev\n      total\n      bandCounts\n      uncategorizedCount\n      __typename\n    }\n    __typename\n  }\n}",
       "cost_class": "analytics_batch",
       "deadline_seconds": 30,
       "variables": [
@@ -3440,12 +3440,12 @@
             {
               "value": "TEAM",
               "code": "basis_dependent_shape",
-              "reason": "team and repository investment comes from read_facts (kind investment) (design table K14-A): needsTeamJoin, [ops] analytics/investment.go:534-539, investmentquality.go:231-245"
+              "reason": "team and repository investment comes from read_facts (kind investment) (design table K14-A): scope level TEAM is served by investmentBreakdownTeam (one owned team id; ops scopes a team by the repositories it owns, team_repo_ownership with D5988 owner shares, CHAOS-12690)"
             },
             {
               "value": "REPO",
               "code": "basis_dependent_shape",
-              "reason": "team and repository investment comes from read_facts (kind investment) (design table K14-A): repository filter translation, [ops] analytics/filtertranslation.go:49-51,213-214"
+              "reason": "team and repository investment comes from read_facts (kind investment) (design table K14-A): scope level REPO is served by investmentBreakdownRepository (one repository id)"
             },
             {
               "value": "SERVICE",
@@ -3745,6 +3745,1905 @@
           "type": "JSON!",
           "leaf": "json",
           "exception": "aggregate evidence-quality band counts, no person field ([ops] analytics/investmentquality.go; RM §8-9)"
+        },
+        {
+          "path": "analytics.evidenceQualityStats.uncategorizedCount",
+          "type": "Int",
+          "leaf": "scalar"
+        },
+        {
+          "path": "analytics.evidenceQualityStats.__typename",
+          "type": "String",
+          "leaf": "typename"
+        },
+        {
+          "path": "analytics.__typename",
+          "type": "String",
+          "leaf": "typename"
+        }
+      ],
+      "withheld_outputs": [],
+      "disclosure": []
+    },
+    {
+      "name": "investmentBreakdownRepository",
+      "document_operation_name": "InvestmentBreakdownRepository",
+      "kind": "query",
+      "digest": "d896c57f2425e5eb54262cbb01fdd7d0bf6c17249b8c0d4c140d4d33b492a3e6",
+      "document_text": "query InvestmentBreakdownRepository($orgId: String!, $batch: AnalyticsRequestInput!) {\n  analytics(orgId: $orgId, batch: $batch) {\n    breakdowns {\n      dimension\n      measure\n      items {\n        key\n        value\n        __typename\n      }\n      __typename\n    }\n    evidenceQualityDistribution\n    evidenceQualityStats {\n      mean\n      stddev\n      total\n      bandCounts\n      uncategorizedCount\n      __typename\n    }\n    __typename\n  }\n}",
+      "cost_class": "analytics_batch",
+      "deadline_seconds": 30,
+      "variables": [
+        {
+          "path": "orgId",
+          "type": "String!",
+          "kind": "scalar",
+          "allowed": true,
+          "source": "acr_principal_org"
+        },
+        {
+          "path": "batch",
+          "type": "AnalyticsRequestInput!",
+          "kind": "object",
+          "allowed": true,
+          "source": "client"
+        },
+        {
+          "path": "batch.timeseries",
+          "type": "[TimeseriesRequestInput!]!",
+          "kind": "object",
+          "default": "[]",
+          "allowed": false,
+          "source": "none",
+          "refusal": {
+            "code": "variable_not_allowed",
+            "reason": "timeseries is not selected by the document; it would cost work that is never returned (RM §8-9)"
+          }
+        },
+        {
+          "path": "batch.timeseries[*].dimension",
+          "type": "DimensionInput!",
+          "kind": "enum",
+          "enum": [
+            "TEAM",
+            "REPO",
+            "AUTHOR",
+            "WORK_TYPE",
+            "THEME",
+            "SUBCATEGORY"
+          ],
+          "allowed": false,
+          "source": "none",
+          "refused_values": [
+            {
+              "value": "AUTHOR",
+              "code": "person_scope_not_served",
+              "reason": "person-scoped input: the MCP surface serves no person scope (design D.5, K1)"
+            }
+          ],
+          "refusal": {
+            "code": "variable_not_allowed",
+            "reason": "timeseries is not selected by the document; it would cost work that is never returned (RM §8-9)"
+          }
+        },
+        {
+          "path": "batch.timeseries[*].measure",
+          "type": "MeasureInput!",
+          "kind": "enum",
+          "enum": [
+            "COUNT",
+            "ISSUE_SIZE",
+            "CHURN_LOC",
+            "PR_REWORK_RATIO",
+            "CYCLE_TIME_HOURS",
+            "THROUGHPUT",
+            "PIPELINE_SUCCESS_RATE",
+            "PIPELINE_FAILURE_RATE",
+            "PIPELINE_DURATION_P95",
+            "PIPELINE_QUEUE_TIME",
+            "PIPELINE_RERUN_RATE",
+            "TEST_PASS_RATE",
+            "TEST_FAILURE_RATE",
+            "TEST_FLAKE_RATE",
+            "TEST_SUITE_DURATION_P95",
+            "COVERAGE_LINE_PCT",
+            "COVERAGE_BRANCH_PCT",
+            "COVERAGE_DELTA_PCT",
+            "FLAG_FRICTION_DELTA",
+            "FLAG_ERROR_RATE_DELTA",
+            "FLAG_COVERAGE_RATIO",
+            "FLAG_ACTIVATION_RATE"
+          ],
+          "allowed": false,
+          "source": "none",
+          "refusal": {
+            "code": "variable_not_allowed",
+            "reason": "timeseries is not selected by the document; it would cost work that is never returned (RM §8-9)"
+          }
+        },
+        {
+          "path": "batch.timeseries[*].interval",
+          "type": "BucketIntervalInput!",
+          "kind": "enum",
+          "enum": [
+            "DAY",
+            "WEEK",
+            "MONTH"
+          ],
+          "allowed": false,
+          "source": "none",
+          "refusal": {
+            "code": "variable_not_allowed",
+            "reason": "timeseries is not selected by the document; it would cost work that is never returned (RM §8-9)"
+          }
+        },
+        {
+          "path": "batch.timeseries[*].dateRange",
+          "type": "DateRangeInput!",
+          "kind": "object",
+          "allowed": false,
+          "source": "none",
+          "refusal": {
+            "code": "variable_not_allowed",
+            "reason": "timeseries is not selected by the document; it would cost work that is never returned (RM §8-9)"
+          }
+        },
+        {
+          "path": "batch.timeseries[*].dateRange.startDate",
+          "type": "Date!",
+          "kind": "scalar",
+          "allowed": false,
+          "source": "none",
+          "refusal": {
+            "code": "variable_not_allowed",
+            "reason": "timeseries is not selected by the document; it would cost work that is never returned (RM §8-9)"
+          }
+        },
+        {
+          "path": "batch.timeseries[*].dateRange.endDate",
+          "type": "Date!",
+          "kind": "scalar",
+          "allowed": false,
+          "source": "none",
+          "refusal": {
+            "code": "variable_not_allowed",
+            "reason": "timeseries is not selected by the document; it would cost work that is never returned (RM §8-9)"
+          }
+        },
+        {
+          "path": "batch.breakdowns",
+          "type": "[BreakdownRequestInput!]!",
+          "kind": "object",
+          "default": "[]",
+          "allowed": true,
+          "source": "client",
+          "max_items": 1
+        },
+        {
+          "path": "batch.breakdowns[*].dimension",
+          "type": "DimensionInput!",
+          "kind": "enum",
+          "enum": [
+            "TEAM",
+            "REPO",
+            "AUTHOR",
+            "WORK_TYPE",
+            "THEME",
+            "SUBCATEGORY"
+          ],
+          "allowed": true,
+          "source": "client",
+          "allowed_values": [
+            "THEME",
+            "SUBCATEGORY",
+            "WORK_TYPE"
+          ],
+          "refused_values": [
+            {
+              "value": "AUTHOR",
+              "code": "person_scope_not_served",
+              "reason": "person-scoped input: the MCP surface serves no person scope (design D.5, K1)"
+            },
+            {
+              "value": "TEAM",
+              "code": "basis_dependent_shape",
+              "reason": "team and repository investment comes from read_facts (kind investment) (design table K14-A): team vote join, [ops] analytics/investment.go:598-605"
+            },
+            {
+              "value": "REPO",
+              "code": "basis_dependent_shape",
+              "reason": "team and repository investment comes from read_facts (kind investment) (design table K14-A): repository allocation source, [ops] analytics/investment.go:574-578; refused until oracle O4"
+            }
+          ]
+        },
+        {
+          "path": "batch.breakdowns[*].measure",
+          "type": "MeasureInput!",
+          "kind": "enum",
+          "enum": [
+            "COUNT",
+            "ISSUE_SIZE",
+            "CHURN_LOC",
+            "PR_REWORK_RATIO",
+            "CYCLE_TIME_HOURS",
+            "THROUGHPUT",
+            "PIPELINE_SUCCESS_RATE",
+            "PIPELINE_FAILURE_RATE",
+            "PIPELINE_DURATION_P95",
+            "PIPELINE_QUEUE_TIME",
+            "PIPELINE_RERUN_RATE",
+            "TEST_PASS_RATE",
+            "TEST_FAILURE_RATE",
+            "TEST_FLAKE_RATE",
+            "TEST_SUITE_DURATION_P95",
+            "COVERAGE_LINE_PCT",
+            "COVERAGE_BRANCH_PCT",
+            "COVERAGE_DELTA_PCT",
+            "FLAG_FRICTION_DELTA",
+            "FLAG_ERROR_RATE_DELTA",
+            "FLAG_COVERAGE_RATIO",
+            "FLAG_ACTIVATION_RATE"
+          ],
+          "allowed": true,
+          "source": "client",
+          "allowed_values": [
+            "COUNT",
+            "PR_REWORK_RATIO",
+            "CYCLE_TIME_HOURS",
+            "THROUGHPUT",
+            "PIPELINE_SUCCESS_RATE",
+            "PIPELINE_FAILURE_RATE",
+            "PIPELINE_DURATION_P95",
+            "PIPELINE_QUEUE_TIME",
+            "PIPELINE_RERUN_RATE",
+            "TEST_PASS_RATE",
+            "TEST_FAILURE_RATE",
+            "TEST_FLAKE_RATE",
+            "TEST_SUITE_DURATION_P95",
+            "COVERAGE_LINE_PCT",
+            "COVERAGE_BRANCH_PCT",
+            "COVERAGE_DELTA_PCT",
+            "FLAG_FRICTION_DELTA",
+            "FLAG_ERROR_RATE_DELTA",
+            "FLAG_COVERAGE_RATIO",
+            "FLAG_ACTIVATION_RATE",
+            "ISSUE_SIZE"
+          ]
+        },
+        {
+          "path": "batch.breakdowns[*].dateRange",
+          "type": "DateRangeInput!",
+          "kind": "object",
+          "allowed": true,
+          "source": "client"
+        },
+        {
+          "path": "batch.breakdowns[*].dateRange.startDate",
+          "type": "Date!",
+          "kind": "scalar",
+          "allowed": true,
+          "source": "client"
+        },
+        {
+          "path": "batch.breakdowns[*].dateRange.endDate",
+          "type": "Date!",
+          "kind": "scalar",
+          "allowed": true,
+          "source": "client"
+        },
+        {
+          "path": "batch.breakdowns[*].topN",
+          "type": "Int!",
+          "kind": "scalar",
+          "default": "10",
+          "allowed": true,
+          "source": "client",
+          "min": 1,
+          "max": 100
+        },
+        {
+          "path": "batch.breakdowns[*].keys",
+          "type": "[String!]",
+          "kind": "scalar",
+          "default": "null",
+          "allowed": false,
+          "source": "none",
+          "refusal": {
+            "code": "variable_not_allowed",
+            "reason": "not on the variable allowlist of InvestmentBreakdownRepository"
+          }
+        },
+        {
+          "path": "batch.sankey",
+          "type": "SankeyRequestInput",
+          "kind": "object",
+          "default": "null",
+          "allowed": false,
+          "source": "none",
+          "refusal": {
+            "code": "basis_dependent_shape",
+            "reason": "team and repository investment comes from read_facts (kind investment) (design table K14-A)"
+          }
+        },
+        {
+          "path": "batch.sankey.path",
+          "type": "[DimensionInput!]!",
+          "kind": "enum",
+          "enum": [
+            "TEAM",
+            "REPO",
+            "AUTHOR",
+            "WORK_TYPE",
+            "THEME",
+            "SUBCATEGORY"
+          ],
+          "allowed": false,
+          "source": "none",
+          "refused_values": [
+            {
+              "value": "AUTHOR",
+              "code": "person_scope_not_served",
+              "reason": "person-scoped input: the MCP surface serves no person scope (design D.5, K1)"
+            }
+          ],
+          "refusal": {
+            "code": "basis_dependent_shape",
+            "reason": "team and repository investment comes from read_facts (kind investment) (design table K14-A)"
+          }
+        },
+        {
+          "path": "batch.sankey.measure",
+          "type": "MeasureInput!",
+          "kind": "enum",
+          "enum": [
+            "COUNT",
+            "ISSUE_SIZE",
+            "CHURN_LOC",
+            "PR_REWORK_RATIO",
+            "CYCLE_TIME_HOURS",
+            "THROUGHPUT",
+            "PIPELINE_SUCCESS_RATE",
+            "PIPELINE_FAILURE_RATE",
+            "PIPELINE_DURATION_P95",
+            "PIPELINE_QUEUE_TIME",
+            "PIPELINE_RERUN_RATE",
+            "TEST_PASS_RATE",
+            "TEST_FAILURE_RATE",
+            "TEST_FLAKE_RATE",
+            "TEST_SUITE_DURATION_P95",
+            "COVERAGE_LINE_PCT",
+            "COVERAGE_BRANCH_PCT",
+            "COVERAGE_DELTA_PCT",
+            "FLAG_FRICTION_DELTA",
+            "FLAG_ERROR_RATE_DELTA",
+            "FLAG_COVERAGE_RATIO",
+            "FLAG_ACTIVATION_RATE"
+          ],
+          "allowed": false,
+          "source": "none",
+          "refusal": {
+            "code": "basis_dependent_shape",
+            "reason": "team and repository investment comes from read_facts (kind investment) (design table K14-A)"
+          }
+        },
+        {
+          "path": "batch.sankey.dateRange",
+          "type": "DateRangeInput!",
+          "kind": "object",
+          "allowed": false,
+          "source": "none",
+          "refusal": {
+            "code": "basis_dependent_shape",
+            "reason": "team and repository investment comes from read_facts (kind investment) (design table K14-A)"
+          }
+        },
+        {
+          "path": "batch.sankey.dateRange.startDate",
+          "type": "Date!",
+          "kind": "scalar",
+          "allowed": false,
+          "source": "none",
+          "refusal": {
+            "code": "basis_dependent_shape",
+            "reason": "team and repository investment comes from read_facts (kind investment) (design table K14-A)"
+          }
+        },
+        {
+          "path": "batch.sankey.dateRange.endDate",
+          "type": "Date!",
+          "kind": "scalar",
+          "allowed": false,
+          "source": "none",
+          "refusal": {
+            "code": "basis_dependent_shape",
+            "reason": "team and repository investment comes from read_facts (kind investment) (design table K14-A)"
+          }
+        },
+        {
+          "path": "batch.sankey.maxNodes",
+          "type": "Int!",
+          "kind": "scalar",
+          "default": "100",
+          "allowed": false,
+          "source": "none",
+          "refusal": {
+            "code": "basis_dependent_shape",
+            "reason": "team and repository investment comes from read_facts (kind investment) (design table K14-A)"
+          }
+        },
+        {
+          "path": "batch.sankey.maxEdges",
+          "type": "Int!",
+          "kind": "scalar",
+          "default": "500",
+          "allowed": false,
+          "source": "none",
+          "refusal": {
+            "code": "basis_dependent_shape",
+            "reason": "team and repository investment comes from read_facts (kind investment) (design table K14-A)"
+          }
+        },
+        {
+          "path": "batch.sankey.useInvestment",
+          "type": "Boolean",
+          "kind": "scalar",
+          "default": "null",
+          "allowed": false,
+          "source": "none",
+          "refusal": {
+            "code": "basis_dependent_shape",
+            "reason": "team and repository investment comes from read_facts (kind investment) (design table K14-A)"
+          }
+        },
+        {
+          "path": "batch.flowMatrix",
+          "type": "FlowMatrixRequestInput",
+          "kind": "object",
+          "default": "null",
+          "allowed": false,
+          "source": "none",
+          "refusal": {
+            "code": "variable_not_allowed",
+            "reason": "flowMatrix is not selected by the document and reads the team vote (RM §8-9, design D.3)"
+          }
+        },
+        {
+          "path": "batch.flowMatrix.dimension",
+          "type": "DimensionInput!",
+          "kind": "enum",
+          "enum": [
+            "TEAM",
+            "REPO",
+            "AUTHOR",
+            "WORK_TYPE",
+            "THEME",
+            "SUBCATEGORY"
+          ],
+          "allowed": false,
+          "source": "none",
+          "refused_values": [
+            {
+              "value": "AUTHOR",
+              "code": "person_scope_not_served",
+              "reason": "person-scoped input: the MCP surface serves no person scope (design D.5, K1)"
+            }
+          ],
+          "refusal": {
+            "code": "variable_not_allowed",
+            "reason": "flowMatrix is not selected by the document and reads the team vote (RM §8-9, design D.3)"
+          }
+        },
+        {
+          "path": "batch.flowMatrix.measure",
+          "type": "MeasureInput!",
+          "kind": "enum",
+          "enum": [
+            "COUNT",
+            "ISSUE_SIZE",
+            "CHURN_LOC",
+            "PR_REWORK_RATIO",
+            "CYCLE_TIME_HOURS",
+            "THROUGHPUT",
+            "PIPELINE_SUCCESS_RATE",
+            "PIPELINE_FAILURE_RATE",
+            "PIPELINE_DURATION_P95",
+            "PIPELINE_QUEUE_TIME",
+            "PIPELINE_RERUN_RATE",
+            "TEST_PASS_RATE",
+            "TEST_FAILURE_RATE",
+            "TEST_FLAKE_RATE",
+            "TEST_SUITE_DURATION_P95",
+            "COVERAGE_LINE_PCT",
+            "COVERAGE_BRANCH_PCT",
+            "COVERAGE_DELTA_PCT",
+            "FLAG_FRICTION_DELTA",
+            "FLAG_ERROR_RATE_DELTA",
+            "FLAG_COVERAGE_RATIO",
+            "FLAG_ACTIVATION_RATE"
+          ],
+          "allowed": false,
+          "source": "none",
+          "refusal": {
+            "code": "variable_not_allowed",
+            "reason": "flowMatrix is not selected by the document and reads the team vote (RM §8-9, design D.3)"
+          }
+        },
+        {
+          "path": "batch.flowMatrix.dateRange",
+          "type": "DateRangeInput!",
+          "kind": "object",
+          "allowed": false,
+          "source": "none",
+          "refusal": {
+            "code": "variable_not_allowed",
+            "reason": "flowMatrix is not selected by the document and reads the team vote (RM §8-9, design D.3)"
+          }
+        },
+        {
+          "path": "batch.flowMatrix.dateRange.startDate",
+          "type": "Date!",
+          "kind": "scalar",
+          "allowed": false,
+          "source": "none",
+          "refusal": {
+            "code": "variable_not_allowed",
+            "reason": "flowMatrix is not selected by the document and reads the team vote (RM §8-9, design D.3)"
+          }
+        },
+        {
+          "path": "batch.flowMatrix.dateRange.endDate",
+          "type": "Date!",
+          "kind": "scalar",
+          "allowed": false,
+          "source": "none",
+          "refusal": {
+            "code": "variable_not_allowed",
+            "reason": "flowMatrix is not selected by the document and reads the team vote (RM §8-9, design D.3)"
+          }
+        },
+        {
+          "path": "batch.flowMatrix.maxNodes",
+          "type": "Int!",
+          "kind": "scalar",
+          "default": "100",
+          "allowed": false,
+          "source": "none",
+          "refusal": {
+            "code": "variable_not_allowed",
+            "reason": "flowMatrix is not selected by the document and reads the team vote (RM §8-9, design D.3)"
+          }
+        },
+        {
+          "path": "batch.flowMatrix.maxEdges",
+          "type": "Int!",
+          "kind": "scalar",
+          "default": "500",
+          "allowed": false,
+          "source": "none",
+          "refusal": {
+            "code": "variable_not_allowed",
+            "reason": "flowMatrix is not selected by the document and reads the team vote (RM §8-9, design D.3)"
+          }
+        },
+        {
+          "path": "batch.flowMatrix.useInvestment",
+          "type": "Boolean",
+          "kind": "scalar",
+          "default": "null",
+          "allowed": false,
+          "source": "none",
+          "refusal": {
+            "code": "variable_not_allowed",
+            "reason": "flowMatrix is not selected by the document and reads the team vote (RM §8-9, design D.3)"
+          }
+        },
+        {
+          "path": "batch.useInvestment",
+          "type": "Boolean",
+          "kind": "scalar",
+          "default": "null",
+          "allowed": true,
+          "source": "acr_forced",
+          "forced_value": true
+        },
+        {
+          "path": "batch.filters",
+          "type": "FilterInput",
+          "kind": "object",
+          "default": "null",
+          "allowed": true,
+          "source": "client"
+        },
+        {
+          "path": "batch.filters.scope",
+          "type": "ScopeFilterInput",
+          "kind": "object",
+          "default": "null",
+          "allowed": true,
+          "source": "client"
+        },
+        {
+          "path": "batch.filters.scope.level",
+          "type": "ScopeLevelInput!",
+          "kind": "enum",
+          "enum": [
+            "ORG",
+            "TEAM",
+            "REPO",
+            "SERVICE",
+            "DEVELOPER"
+          ],
+          "default": "ORG",
+          "allowed": true,
+          "source": "client",
+          "allowed_values": [
+            "REPO"
+          ],
+          "refused_values": [
+            {
+              "value": "DEVELOPER",
+              "code": "person_scope_not_served",
+              "reason": "person-scoped input: the MCP surface serves no person scope (design D.5, K1)"
+            },
+            {
+              "value": "ORG",
+              "code": "variable_not_allowed",
+              "reason": "scope level ORG is served by investmentBreakdown"
+            },
+            {
+              "value": "TEAM",
+              "code": "variable_not_allowed",
+              "reason": "scope level TEAM is served by investmentBreakdownTeam"
+            },
+            {
+              "value": "SERVICE",
+              "code": "variable_not_allowed",
+              "reason": "scope level SERVICE applies no filter at the data layer ([ops] analytics/filtertranslation.go:55-57)"
+            }
+          ]
+        },
+        {
+          "path": "batch.filters.scope.ids",
+          "type": "[String!]!",
+          "kind": "scalar",
+          "default": "[]",
+          "allowed": true,
+          "source": "client",
+          "min_items": 1,
+          "max_items": 1,
+          "subject": {
+            "kind": "repository",
+            "acr_prefix": "repository:",
+            "ops_form": "bare_uuid"
+          }
+        },
+        {
+          "path": "batch.filters.who",
+          "type": "WhoFilterInput",
+          "kind": "object",
+          "default": "null",
+          "allowed": false,
+          "source": "none",
+          "refusal": {
+            "code": "variable_not_allowed",
+            "reason": "not on the variable allowlist of InvestmentBreakdownRepository"
+          }
+        },
+        {
+          "path": "batch.filters.who.developers",
+          "type": "[String!]",
+          "kind": "scalar",
+          "default": "null",
+          "allowed": false,
+          "source": "none",
+          "refusal": {
+            "code": "person_scope_not_served",
+            "reason": "person-scoped input: the MCP surface serves no person scope (design D.5, K1)"
+          }
+        },
+        {
+          "path": "batch.filters.who.roles",
+          "type": "[String!]",
+          "kind": "scalar",
+          "default": "null",
+          "allowed": false,
+          "source": "none",
+          "refusal": {
+            "code": "variable_not_allowed",
+            "reason": "the ops resolver does not apply this variable: [ops] analytics/filters.go:23 only (RM §8-9)"
+          }
+        },
+        {
+          "path": "batch.filters.what",
+          "type": "WhatFilterInput",
+          "kind": "object",
+          "default": "null",
+          "allowed": false,
+          "source": "none",
+          "refusal": {
+            "code": "variable_not_allowed",
+            "reason": "not on the variable allowlist of InvestmentBreakdownRepository"
+          }
+        },
+        {
+          "path": "batch.filters.what.repos",
+          "type": "[String!]",
+          "kind": "scalar",
+          "default": "null",
+          "allowed": false,
+          "source": "none",
+          "refusal": {
+            "code": "basis_dependent_shape",
+            "reason": "team and repository investment comes from read_facts (kind investment) (design table K14-A)"
+          }
+        },
+        {
+          "path": "batch.filters.what.services",
+          "type": "[String!]",
+          "kind": "scalar",
+          "default": "null",
+          "allowed": false,
+          "source": "none",
+          "refusal": {
+            "code": "variable_not_allowed",
+            "reason": "the ops resolver does not apply this variable: [ops] analytics/repofilters.go:158 pass-through only (RM §8-9)"
+          }
+        },
+        {
+          "path": "batch.filters.why",
+          "type": "WhyFilterInput",
+          "kind": "object",
+          "default": "null",
+          "allowed": true,
+          "source": "client"
+        },
+        {
+          "path": "batch.filters.why.workCategory",
+          "type": "[String!]",
+          "kind": "scalar",
+          "default": "null",
+          "allowed": true,
+          "source": "client",
+          "max_items": 20,
+          "max_length": 128
+        },
+        {
+          "path": "batch.filters.why.issueType",
+          "type": "[String!]",
+          "kind": "scalar",
+          "default": "null",
+          "allowed": false,
+          "source": "none",
+          "refusal": {
+            "code": "variable_not_allowed",
+            "reason": "the ops resolver does not apply this variable: RM §8-9"
+          }
+        },
+        {
+          "path": "batch.filters.how",
+          "type": "HowFilterInput",
+          "kind": "object",
+          "default": "null",
+          "allowed": false,
+          "source": "none",
+          "refusal": {
+            "code": "variable_not_allowed",
+            "reason": "the ops resolver does not apply this variable: flowStage, [ops] analytics/filtertranslation.go:151-158 (RM §8-9)"
+          }
+        },
+        {
+          "path": "batch.filters.how.flowStage",
+          "type": "[String!]",
+          "kind": "scalar",
+          "default": "null",
+          "allowed": false,
+          "source": "none",
+          "refusal": {
+            "code": "variable_not_allowed",
+            "reason": "the ops resolver does not apply this variable: flowStage, [ops] analytics/filtertranslation.go:151-158 (RM §8-9)"
+          }
+        },
+        {
+          "path": "batch.evidenceQualityGroupBy",
+          "type": "DimensionInput",
+          "kind": "enum",
+          "enum": [
+            "TEAM",
+            "REPO",
+            "AUTHOR",
+            "WORK_TYPE",
+            "THEME",
+            "SUBCATEGORY"
+          ],
+          "default": "null",
+          "allowed": false,
+          "source": "none",
+          "refused_values": [
+            {
+              "value": "AUTHOR",
+              "code": "person_scope_not_served",
+              "reason": "person-scoped input: the MCP surface serves no person scope (design D.5, K1)"
+            }
+          ],
+          "refusal": {
+            "code": "variable_not_allowed",
+            "reason": "not on the variable allowlist of InvestmentBreakdownRepository"
+          }
+        }
+      ],
+      "person_variables": [
+        {
+          "path": "batch.timeseries[*].dimension",
+          "value": "AUTHOR"
+        },
+        {
+          "path": "batch.breakdowns[*].dimension",
+          "value": "AUTHOR"
+        },
+        {
+          "path": "batch.sankey.path",
+          "value": "AUTHOR"
+        },
+        {
+          "path": "batch.flowMatrix.dimension",
+          "value": "AUTHOR"
+        },
+        {
+          "path": "batch.filters.scope.level",
+          "value": "DEVELOPER"
+        },
+        {
+          "path": "batch.filters.who.developers"
+        },
+        {
+          "path": "batch.evidenceQualityGroupBy",
+          "value": "AUTHOR"
+        }
+      ],
+      "constraints": [
+        {
+          "kind": "requires_value",
+          "other": "batch.filters.scope.level",
+          "values": [
+            "REPO"
+          ],
+          "code": "variable_not_allowed",
+          "reason": "scope level must be REPO on InvestmentBreakdownRepository; an absent level is the SDL default ORG, served by investmentBreakdown"
+        },
+        {
+          "kind": "window_max_days",
+          "path": "batch.breakdowns[*].dateRange.startDate",
+          "other": "batch.breakdowns[*].dateRange.endDate",
+          "max_days": 3650,
+          "code": "variable_out_of_range",
+          "reason": "window longer than the design D.6 clamp"
+        }
+      ],
+      "scopes": [
+        {
+          "caller": "unrestricted",
+          "served": true,
+          "basis": "one repository: [ops] analytics/filtertranslation.go:47-55 (0b763a85) filters the repository column of the investment rows by the id; the repository id passes the subject gate"
+        },
+        {
+          "caller": "restricted",
+          "served": false,
+          "refusal": {
+            "code": "operation_not_served_for_caller",
+            "reason": "K14-A: forced scope inside the nested analytics batch is not proved; team and repository investment comes from read_facts (kind investment)"
+          },
+          "basis": "K14-A: forced scope inside the nested analytics batch is not proved; team and repository investment comes from read_facts (kind investment)"
+        }
+      ],
+      "outputs": [
+        {
+          "path": "analytics.breakdowns[*].dimension",
+          "type": "String!",
+          "leaf": "scalar"
+        },
+        {
+          "path": "analytics.breakdowns[*].measure",
+          "type": "String!",
+          "leaf": "scalar"
+        },
+        {
+          "path": "analytics.breakdowns[*].items[*].key",
+          "type": "String!",
+          "leaf": "scalar"
+        },
+        {
+          "path": "analytics.breakdowns[*].items[*].value",
+          "type": "Float",
+          "leaf": "scalar"
+        },
+        {
+          "path": "analytics.breakdowns[*].items[*].__typename",
+          "type": "String",
+          "leaf": "typename"
+        },
+        {
+          "path": "analytics.breakdowns[*].__typename",
+          "type": "String",
+          "leaf": "typename"
+        },
+        {
+          "path": "analytics.evidenceQualityDistribution",
+          "type": "JSON",
+          "leaf": "json",
+          "exception": "aggregate evidence-quality band counts, no person field ([ops] analytics/investmentquality.go; RM §8-9); computed only with useInvestment=true, which acr forces"
+        },
+        {
+          "path": "analytics.evidenceQualityStats.mean",
+          "type": "Float",
+          "leaf": "scalar"
+        },
+        {
+          "path": "analytics.evidenceQualityStats.stddev",
+          "type": "Float",
+          "leaf": "scalar"
+        },
+        {
+          "path": "analytics.evidenceQualityStats.total",
+          "type": "Int!",
+          "leaf": "scalar"
+        },
+        {
+          "path": "analytics.evidenceQualityStats.bandCounts",
+          "type": "JSON!",
+          "leaf": "json",
+          "exception": "aggregate evidence-quality band counts, no person field ([ops] analytics/investmentquality.go; RM §8-9)"
+        },
+        {
+          "path": "analytics.evidenceQualityStats.uncategorizedCount",
+          "type": "Int",
+          "leaf": "scalar"
+        },
+        {
+          "path": "analytics.evidenceQualityStats.__typename",
+          "type": "String",
+          "leaf": "typename"
+        },
+        {
+          "path": "analytics.__typename",
+          "type": "String",
+          "leaf": "typename"
+        }
+      ],
+      "withheld_outputs": [],
+      "disclosure": []
+    },
+    {
+      "name": "investmentBreakdownTeam",
+      "document_operation_name": "InvestmentBreakdownTeam",
+      "kind": "query",
+      "digest": "41128827a7bb7324a6fe3b4f771830ab39b236b237ab182406c30c5151aaf722",
+      "document_text": "query InvestmentBreakdownTeam($orgId: String!, $batch: AnalyticsRequestInput!) {\n  analytics(orgId: $orgId, batch: $batch) {\n    breakdowns {\n      dimension\n      measure\n      items {\n        key\n        value\n        __typename\n      }\n      __typename\n    }\n    evidenceQualityDistribution\n    evidenceQualityStats {\n      mean\n      stddev\n      total\n      bandCounts\n      uncategorizedCount\n      __typename\n    }\n    __typename\n  }\n}",
+      "cost_class": "analytics_batch",
+      "deadline_seconds": 30,
+      "variables": [
+        {
+          "path": "orgId",
+          "type": "String!",
+          "kind": "scalar",
+          "allowed": true,
+          "source": "acr_principal_org"
+        },
+        {
+          "path": "batch",
+          "type": "AnalyticsRequestInput!",
+          "kind": "object",
+          "allowed": true,
+          "source": "client"
+        },
+        {
+          "path": "batch.timeseries",
+          "type": "[TimeseriesRequestInput!]!",
+          "kind": "object",
+          "default": "[]",
+          "allowed": false,
+          "source": "none",
+          "refusal": {
+            "code": "variable_not_allowed",
+            "reason": "timeseries is not selected by the document; it would cost work that is never returned (RM §8-9)"
+          }
+        },
+        {
+          "path": "batch.timeseries[*].dimension",
+          "type": "DimensionInput!",
+          "kind": "enum",
+          "enum": [
+            "TEAM",
+            "REPO",
+            "AUTHOR",
+            "WORK_TYPE",
+            "THEME",
+            "SUBCATEGORY"
+          ],
+          "allowed": false,
+          "source": "none",
+          "refused_values": [
+            {
+              "value": "AUTHOR",
+              "code": "person_scope_not_served",
+              "reason": "person-scoped input: the MCP surface serves no person scope (design D.5, K1)"
+            }
+          ],
+          "refusal": {
+            "code": "variable_not_allowed",
+            "reason": "timeseries is not selected by the document; it would cost work that is never returned (RM §8-9)"
+          }
+        },
+        {
+          "path": "batch.timeseries[*].measure",
+          "type": "MeasureInput!",
+          "kind": "enum",
+          "enum": [
+            "COUNT",
+            "ISSUE_SIZE",
+            "CHURN_LOC",
+            "PR_REWORK_RATIO",
+            "CYCLE_TIME_HOURS",
+            "THROUGHPUT",
+            "PIPELINE_SUCCESS_RATE",
+            "PIPELINE_FAILURE_RATE",
+            "PIPELINE_DURATION_P95",
+            "PIPELINE_QUEUE_TIME",
+            "PIPELINE_RERUN_RATE",
+            "TEST_PASS_RATE",
+            "TEST_FAILURE_RATE",
+            "TEST_FLAKE_RATE",
+            "TEST_SUITE_DURATION_P95",
+            "COVERAGE_LINE_PCT",
+            "COVERAGE_BRANCH_PCT",
+            "COVERAGE_DELTA_PCT",
+            "FLAG_FRICTION_DELTA",
+            "FLAG_ERROR_RATE_DELTA",
+            "FLAG_COVERAGE_RATIO",
+            "FLAG_ACTIVATION_RATE"
+          ],
+          "allowed": false,
+          "source": "none",
+          "refusal": {
+            "code": "variable_not_allowed",
+            "reason": "timeseries is not selected by the document; it would cost work that is never returned (RM §8-9)"
+          }
+        },
+        {
+          "path": "batch.timeseries[*].interval",
+          "type": "BucketIntervalInput!",
+          "kind": "enum",
+          "enum": [
+            "DAY",
+            "WEEK",
+            "MONTH"
+          ],
+          "allowed": false,
+          "source": "none",
+          "refusal": {
+            "code": "variable_not_allowed",
+            "reason": "timeseries is not selected by the document; it would cost work that is never returned (RM §8-9)"
+          }
+        },
+        {
+          "path": "batch.timeseries[*].dateRange",
+          "type": "DateRangeInput!",
+          "kind": "object",
+          "allowed": false,
+          "source": "none",
+          "refusal": {
+            "code": "variable_not_allowed",
+            "reason": "timeseries is not selected by the document; it would cost work that is never returned (RM §8-9)"
+          }
+        },
+        {
+          "path": "batch.timeseries[*].dateRange.startDate",
+          "type": "Date!",
+          "kind": "scalar",
+          "allowed": false,
+          "source": "none",
+          "refusal": {
+            "code": "variable_not_allowed",
+            "reason": "timeseries is not selected by the document; it would cost work that is never returned (RM §8-9)"
+          }
+        },
+        {
+          "path": "batch.timeseries[*].dateRange.endDate",
+          "type": "Date!",
+          "kind": "scalar",
+          "allowed": false,
+          "source": "none",
+          "refusal": {
+            "code": "variable_not_allowed",
+            "reason": "timeseries is not selected by the document; it would cost work that is never returned (RM §8-9)"
+          }
+        },
+        {
+          "path": "batch.breakdowns",
+          "type": "[BreakdownRequestInput!]!",
+          "kind": "object",
+          "default": "[]",
+          "allowed": true,
+          "source": "client",
+          "max_items": 1
+        },
+        {
+          "path": "batch.breakdowns[*].dimension",
+          "type": "DimensionInput!",
+          "kind": "enum",
+          "enum": [
+            "TEAM",
+            "REPO",
+            "AUTHOR",
+            "WORK_TYPE",
+            "THEME",
+            "SUBCATEGORY"
+          ],
+          "allowed": true,
+          "source": "client",
+          "allowed_values": [
+            "THEME",
+            "SUBCATEGORY",
+            "WORK_TYPE"
+          ],
+          "refused_values": [
+            {
+              "value": "AUTHOR",
+              "code": "person_scope_not_served",
+              "reason": "person-scoped input: the MCP surface serves no person scope (design D.5, K1)"
+            },
+            {
+              "value": "TEAM",
+              "code": "basis_dependent_shape",
+              "reason": "team and repository investment comes from read_facts (kind investment) (design table K14-A): team vote join, [ops] analytics/investment.go:598-605"
+            },
+            {
+              "value": "REPO",
+              "code": "basis_dependent_shape",
+              "reason": "team and repository investment comes from read_facts (kind investment) (design table K14-A): repository allocation source, [ops] analytics/investment.go:574-578; refused until oracle O4"
+            }
+          ]
+        },
+        {
+          "path": "batch.breakdowns[*].measure",
+          "type": "MeasureInput!",
+          "kind": "enum",
+          "enum": [
+            "COUNT",
+            "ISSUE_SIZE",
+            "CHURN_LOC",
+            "PR_REWORK_RATIO",
+            "CYCLE_TIME_HOURS",
+            "THROUGHPUT",
+            "PIPELINE_SUCCESS_RATE",
+            "PIPELINE_FAILURE_RATE",
+            "PIPELINE_DURATION_P95",
+            "PIPELINE_QUEUE_TIME",
+            "PIPELINE_RERUN_RATE",
+            "TEST_PASS_RATE",
+            "TEST_FAILURE_RATE",
+            "TEST_FLAKE_RATE",
+            "TEST_SUITE_DURATION_P95",
+            "COVERAGE_LINE_PCT",
+            "COVERAGE_BRANCH_PCT",
+            "COVERAGE_DELTA_PCT",
+            "FLAG_FRICTION_DELTA",
+            "FLAG_ERROR_RATE_DELTA",
+            "FLAG_COVERAGE_RATIO",
+            "FLAG_ACTIVATION_RATE"
+          ],
+          "allowed": true,
+          "source": "client",
+          "allowed_values": [
+            "COUNT",
+            "PR_REWORK_RATIO",
+            "CYCLE_TIME_HOURS",
+            "THROUGHPUT",
+            "PIPELINE_SUCCESS_RATE",
+            "PIPELINE_FAILURE_RATE",
+            "PIPELINE_DURATION_P95",
+            "PIPELINE_QUEUE_TIME",
+            "PIPELINE_RERUN_RATE",
+            "TEST_PASS_RATE",
+            "TEST_FAILURE_RATE",
+            "TEST_FLAKE_RATE",
+            "TEST_SUITE_DURATION_P95",
+            "COVERAGE_LINE_PCT",
+            "COVERAGE_BRANCH_PCT",
+            "COVERAGE_DELTA_PCT",
+            "FLAG_FRICTION_DELTA",
+            "FLAG_ERROR_RATE_DELTA",
+            "FLAG_COVERAGE_RATIO",
+            "FLAG_ACTIVATION_RATE",
+            "ISSUE_SIZE"
+          ]
+        },
+        {
+          "path": "batch.breakdowns[*].dateRange",
+          "type": "DateRangeInput!",
+          "kind": "object",
+          "allowed": true,
+          "source": "client"
+        },
+        {
+          "path": "batch.breakdowns[*].dateRange.startDate",
+          "type": "Date!",
+          "kind": "scalar",
+          "allowed": true,
+          "source": "client"
+        },
+        {
+          "path": "batch.breakdowns[*].dateRange.endDate",
+          "type": "Date!",
+          "kind": "scalar",
+          "allowed": true,
+          "source": "client"
+        },
+        {
+          "path": "batch.breakdowns[*].topN",
+          "type": "Int!",
+          "kind": "scalar",
+          "default": "10",
+          "allowed": true,
+          "source": "client",
+          "min": 1,
+          "max": 100
+        },
+        {
+          "path": "batch.breakdowns[*].keys",
+          "type": "[String!]",
+          "kind": "scalar",
+          "default": "null",
+          "allowed": false,
+          "source": "none",
+          "refusal": {
+            "code": "variable_not_allowed",
+            "reason": "not on the variable allowlist of InvestmentBreakdownTeam"
+          }
+        },
+        {
+          "path": "batch.sankey",
+          "type": "SankeyRequestInput",
+          "kind": "object",
+          "default": "null",
+          "allowed": false,
+          "source": "none",
+          "refusal": {
+            "code": "basis_dependent_shape",
+            "reason": "team and repository investment comes from read_facts (kind investment) (design table K14-A)"
+          }
+        },
+        {
+          "path": "batch.sankey.path",
+          "type": "[DimensionInput!]!",
+          "kind": "enum",
+          "enum": [
+            "TEAM",
+            "REPO",
+            "AUTHOR",
+            "WORK_TYPE",
+            "THEME",
+            "SUBCATEGORY"
+          ],
+          "allowed": false,
+          "source": "none",
+          "refused_values": [
+            {
+              "value": "AUTHOR",
+              "code": "person_scope_not_served",
+              "reason": "person-scoped input: the MCP surface serves no person scope (design D.5, K1)"
+            }
+          ],
+          "refusal": {
+            "code": "basis_dependent_shape",
+            "reason": "team and repository investment comes from read_facts (kind investment) (design table K14-A)"
+          }
+        },
+        {
+          "path": "batch.sankey.measure",
+          "type": "MeasureInput!",
+          "kind": "enum",
+          "enum": [
+            "COUNT",
+            "ISSUE_SIZE",
+            "CHURN_LOC",
+            "PR_REWORK_RATIO",
+            "CYCLE_TIME_HOURS",
+            "THROUGHPUT",
+            "PIPELINE_SUCCESS_RATE",
+            "PIPELINE_FAILURE_RATE",
+            "PIPELINE_DURATION_P95",
+            "PIPELINE_QUEUE_TIME",
+            "PIPELINE_RERUN_RATE",
+            "TEST_PASS_RATE",
+            "TEST_FAILURE_RATE",
+            "TEST_FLAKE_RATE",
+            "TEST_SUITE_DURATION_P95",
+            "COVERAGE_LINE_PCT",
+            "COVERAGE_BRANCH_PCT",
+            "COVERAGE_DELTA_PCT",
+            "FLAG_FRICTION_DELTA",
+            "FLAG_ERROR_RATE_DELTA",
+            "FLAG_COVERAGE_RATIO",
+            "FLAG_ACTIVATION_RATE"
+          ],
+          "allowed": false,
+          "source": "none",
+          "refusal": {
+            "code": "basis_dependent_shape",
+            "reason": "team and repository investment comes from read_facts (kind investment) (design table K14-A)"
+          }
+        },
+        {
+          "path": "batch.sankey.dateRange",
+          "type": "DateRangeInput!",
+          "kind": "object",
+          "allowed": false,
+          "source": "none",
+          "refusal": {
+            "code": "basis_dependent_shape",
+            "reason": "team and repository investment comes from read_facts (kind investment) (design table K14-A)"
+          }
+        },
+        {
+          "path": "batch.sankey.dateRange.startDate",
+          "type": "Date!",
+          "kind": "scalar",
+          "allowed": false,
+          "source": "none",
+          "refusal": {
+            "code": "basis_dependent_shape",
+            "reason": "team and repository investment comes from read_facts (kind investment) (design table K14-A)"
+          }
+        },
+        {
+          "path": "batch.sankey.dateRange.endDate",
+          "type": "Date!",
+          "kind": "scalar",
+          "allowed": false,
+          "source": "none",
+          "refusal": {
+            "code": "basis_dependent_shape",
+            "reason": "team and repository investment comes from read_facts (kind investment) (design table K14-A)"
+          }
+        },
+        {
+          "path": "batch.sankey.maxNodes",
+          "type": "Int!",
+          "kind": "scalar",
+          "default": "100",
+          "allowed": false,
+          "source": "none",
+          "refusal": {
+            "code": "basis_dependent_shape",
+            "reason": "team and repository investment comes from read_facts (kind investment) (design table K14-A)"
+          }
+        },
+        {
+          "path": "batch.sankey.maxEdges",
+          "type": "Int!",
+          "kind": "scalar",
+          "default": "500",
+          "allowed": false,
+          "source": "none",
+          "refusal": {
+            "code": "basis_dependent_shape",
+            "reason": "team and repository investment comes from read_facts (kind investment) (design table K14-A)"
+          }
+        },
+        {
+          "path": "batch.sankey.useInvestment",
+          "type": "Boolean",
+          "kind": "scalar",
+          "default": "null",
+          "allowed": false,
+          "source": "none",
+          "refusal": {
+            "code": "basis_dependent_shape",
+            "reason": "team and repository investment comes from read_facts (kind investment) (design table K14-A)"
+          }
+        },
+        {
+          "path": "batch.flowMatrix",
+          "type": "FlowMatrixRequestInput",
+          "kind": "object",
+          "default": "null",
+          "allowed": false,
+          "source": "none",
+          "refusal": {
+            "code": "variable_not_allowed",
+            "reason": "flowMatrix is not selected by the document and reads the team vote (RM §8-9, design D.3)"
+          }
+        },
+        {
+          "path": "batch.flowMatrix.dimension",
+          "type": "DimensionInput!",
+          "kind": "enum",
+          "enum": [
+            "TEAM",
+            "REPO",
+            "AUTHOR",
+            "WORK_TYPE",
+            "THEME",
+            "SUBCATEGORY"
+          ],
+          "allowed": false,
+          "source": "none",
+          "refused_values": [
+            {
+              "value": "AUTHOR",
+              "code": "person_scope_not_served",
+              "reason": "person-scoped input: the MCP surface serves no person scope (design D.5, K1)"
+            }
+          ],
+          "refusal": {
+            "code": "variable_not_allowed",
+            "reason": "flowMatrix is not selected by the document and reads the team vote (RM §8-9, design D.3)"
+          }
+        },
+        {
+          "path": "batch.flowMatrix.measure",
+          "type": "MeasureInput!",
+          "kind": "enum",
+          "enum": [
+            "COUNT",
+            "ISSUE_SIZE",
+            "CHURN_LOC",
+            "PR_REWORK_RATIO",
+            "CYCLE_TIME_HOURS",
+            "THROUGHPUT",
+            "PIPELINE_SUCCESS_RATE",
+            "PIPELINE_FAILURE_RATE",
+            "PIPELINE_DURATION_P95",
+            "PIPELINE_QUEUE_TIME",
+            "PIPELINE_RERUN_RATE",
+            "TEST_PASS_RATE",
+            "TEST_FAILURE_RATE",
+            "TEST_FLAKE_RATE",
+            "TEST_SUITE_DURATION_P95",
+            "COVERAGE_LINE_PCT",
+            "COVERAGE_BRANCH_PCT",
+            "COVERAGE_DELTA_PCT",
+            "FLAG_FRICTION_DELTA",
+            "FLAG_ERROR_RATE_DELTA",
+            "FLAG_COVERAGE_RATIO",
+            "FLAG_ACTIVATION_RATE"
+          ],
+          "allowed": false,
+          "source": "none",
+          "refusal": {
+            "code": "variable_not_allowed",
+            "reason": "flowMatrix is not selected by the document and reads the team vote (RM §8-9, design D.3)"
+          }
+        },
+        {
+          "path": "batch.flowMatrix.dateRange",
+          "type": "DateRangeInput!",
+          "kind": "object",
+          "allowed": false,
+          "source": "none",
+          "refusal": {
+            "code": "variable_not_allowed",
+            "reason": "flowMatrix is not selected by the document and reads the team vote (RM §8-9, design D.3)"
+          }
+        },
+        {
+          "path": "batch.flowMatrix.dateRange.startDate",
+          "type": "Date!",
+          "kind": "scalar",
+          "allowed": false,
+          "source": "none",
+          "refusal": {
+            "code": "variable_not_allowed",
+            "reason": "flowMatrix is not selected by the document and reads the team vote (RM §8-9, design D.3)"
+          }
+        },
+        {
+          "path": "batch.flowMatrix.dateRange.endDate",
+          "type": "Date!",
+          "kind": "scalar",
+          "allowed": false,
+          "source": "none",
+          "refusal": {
+            "code": "variable_not_allowed",
+            "reason": "flowMatrix is not selected by the document and reads the team vote (RM §8-9, design D.3)"
+          }
+        },
+        {
+          "path": "batch.flowMatrix.maxNodes",
+          "type": "Int!",
+          "kind": "scalar",
+          "default": "100",
+          "allowed": false,
+          "source": "none",
+          "refusal": {
+            "code": "variable_not_allowed",
+            "reason": "flowMatrix is not selected by the document and reads the team vote (RM §8-9, design D.3)"
+          }
+        },
+        {
+          "path": "batch.flowMatrix.maxEdges",
+          "type": "Int!",
+          "kind": "scalar",
+          "default": "500",
+          "allowed": false,
+          "source": "none",
+          "refusal": {
+            "code": "variable_not_allowed",
+            "reason": "flowMatrix is not selected by the document and reads the team vote (RM §8-9, design D.3)"
+          }
+        },
+        {
+          "path": "batch.flowMatrix.useInvestment",
+          "type": "Boolean",
+          "kind": "scalar",
+          "default": "null",
+          "allowed": false,
+          "source": "none",
+          "refusal": {
+            "code": "variable_not_allowed",
+            "reason": "flowMatrix is not selected by the document and reads the team vote (RM §8-9, design D.3)"
+          }
+        },
+        {
+          "path": "batch.useInvestment",
+          "type": "Boolean",
+          "kind": "scalar",
+          "default": "null",
+          "allowed": true,
+          "source": "acr_forced",
+          "forced_value": true
+        },
+        {
+          "path": "batch.filters",
+          "type": "FilterInput",
+          "kind": "object",
+          "default": "null",
+          "allowed": true,
+          "source": "client"
+        },
+        {
+          "path": "batch.filters.scope",
+          "type": "ScopeFilterInput",
+          "kind": "object",
+          "default": "null",
+          "allowed": true,
+          "source": "client"
+        },
+        {
+          "path": "batch.filters.scope.level",
+          "type": "ScopeLevelInput!",
+          "kind": "enum",
+          "enum": [
+            "ORG",
+            "TEAM",
+            "REPO",
+            "SERVICE",
+            "DEVELOPER"
+          ],
+          "default": "ORG",
+          "allowed": true,
+          "source": "client",
+          "allowed_values": [
+            "TEAM"
+          ],
+          "refused_values": [
+            {
+              "value": "DEVELOPER",
+              "code": "person_scope_not_served",
+              "reason": "person-scoped input: the MCP surface serves no person scope (design D.5, K1)"
+            },
+            {
+              "value": "ORG",
+              "code": "variable_not_allowed",
+              "reason": "scope level ORG is served by investmentBreakdown"
+            },
+            {
+              "value": "REPO",
+              "code": "variable_not_allowed",
+              "reason": "scope level REPO is served by investmentBreakdownRepository"
+            },
+            {
+              "value": "SERVICE",
+              "code": "variable_not_allowed",
+              "reason": "scope level SERVICE applies no filter at the data layer ([ops] analytics/filtertranslation.go:55-57)"
+            }
+          ]
+        },
+        {
+          "path": "batch.filters.scope.ids",
+          "type": "[String!]!",
+          "kind": "scalar",
+          "default": "[]",
+          "allowed": true,
+          "source": "client",
+          "min_items": 1,
+          "max_items": 1,
+          "subject": {
+            "kind": "team",
+            "acr_prefix": "team:",
+            "ops_form": "bare_id"
+          }
+        },
+        {
+          "path": "batch.filters.who",
+          "type": "WhoFilterInput",
+          "kind": "object",
+          "default": "null",
+          "allowed": false,
+          "source": "none",
+          "refusal": {
+            "code": "variable_not_allowed",
+            "reason": "not on the variable allowlist of InvestmentBreakdownTeam"
+          }
+        },
+        {
+          "path": "batch.filters.who.developers",
+          "type": "[String!]",
+          "kind": "scalar",
+          "default": "null",
+          "allowed": false,
+          "source": "none",
+          "refusal": {
+            "code": "person_scope_not_served",
+            "reason": "person-scoped input: the MCP surface serves no person scope (design D.5, K1)"
+          }
+        },
+        {
+          "path": "batch.filters.who.roles",
+          "type": "[String!]",
+          "kind": "scalar",
+          "default": "null",
+          "allowed": false,
+          "source": "none",
+          "refusal": {
+            "code": "variable_not_allowed",
+            "reason": "the ops resolver does not apply this variable: [ops] analytics/filters.go:23 only (RM §8-9)"
+          }
+        },
+        {
+          "path": "batch.filters.what",
+          "type": "WhatFilterInput",
+          "kind": "object",
+          "default": "null",
+          "allowed": false,
+          "source": "none",
+          "refusal": {
+            "code": "variable_not_allowed",
+            "reason": "not on the variable allowlist of InvestmentBreakdownTeam"
+          }
+        },
+        {
+          "path": "batch.filters.what.repos",
+          "type": "[String!]",
+          "kind": "scalar",
+          "default": "null",
+          "allowed": false,
+          "source": "none",
+          "refusal": {
+            "code": "basis_dependent_shape",
+            "reason": "team and repository investment comes from read_facts (kind investment) (design table K14-A)"
+          }
+        },
+        {
+          "path": "batch.filters.what.services",
+          "type": "[String!]",
+          "kind": "scalar",
+          "default": "null",
+          "allowed": false,
+          "source": "none",
+          "refusal": {
+            "code": "variable_not_allowed",
+            "reason": "the ops resolver does not apply this variable: [ops] analytics/repofilters.go:158 pass-through only (RM §8-9)"
+          }
+        },
+        {
+          "path": "batch.filters.why",
+          "type": "WhyFilterInput",
+          "kind": "object",
+          "default": "null",
+          "allowed": true,
+          "source": "client"
+        },
+        {
+          "path": "batch.filters.why.workCategory",
+          "type": "[String!]",
+          "kind": "scalar",
+          "default": "null",
+          "allowed": true,
+          "source": "client",
+          "max_items": 20,
+          "max_length": 128
+        },
+        {
+          "path": "batch.filters.why.issueType",
+          "type": "[String!]",
+          "kind": "scalar",
+          "default": "null",
+          "allowed": false,
+          "source": "none",
+          "refusal": {
+            "code": "variable_not_allowed",
+            "reason": "the ops resolver does not apply this variable: RM §8-9"
+          }
+        },
+        {
+          "path": "batch.filters.how",
+          "type": "HowFilterInput",
+          "kind": "object",
+          "default": "null",
+          "allowed": false,
+          "source": "none",
+          "refusal": {
+            "code": "variable_not_allowed",
+            "reason": "the ops resolver does not apply this variable: flowStage, [ops] analytics/filtertranslation.go:151-158 (RM §8-9)"
+          }
+        },
+        {
+          "path": "batch.filters.how.flowStage",
+          "type": "[String!]",
+          "kind": "scalar",
+          "default": "null",
+          "allowed": false,
+          "source": "none",
+          "refusal": {
+            "code": "variable_not_allowed",
+            "reason": "the ops resolver does not apply this variable: flowStage, [ops] analytics/filtertranslation.go:151-158 (RM §8-9)"
+          }
+        },
+        {
+          "path": "batch.evidenceQualityGroupBy",
+          "type": "DimensionInput",
+          "kind": "enum",
+          "enum": [
+            "TEAM",
+            "REPO",
+            "AUTHOR",
+            "WORK_TYPE",
+            "THEME",
+            "SUBCATEGORY"
+          ],
+          "default": "null",
+          "allowed": false,
+          "source": "none",
+          "refused_values": [
+            {
+              "value": "AUTHOR",
+              "code": "person_scope_not_served",
+              "reason": "person-scoped input: the MCP surface serves no person scope (design D.5, K1)"
+            }
+          ],
+          "refusal": {
+            "code": "variable_not_allowed",
+            "reason": "not on the variable allowlist of InvestmentBreakdownTeam"
+          }
+        }
+      ],
+      "person_variables": [
+        {
+          "path": "batch.timeseries[*].dimension",
+          "value": "AUTHOR"
+        },
+        {
+          "path": "batch.breakdowns[*].dimension",
+          "value": "AUTHOR"
+        },
+        {
+          "path": "batch.sankey.path",
+          "value": "AUTHOR"
+        },
+        {
+          "path": "batch.flowMatrix.dimension",
+          "value": "AUTHOR"
+        },
+        {
+          "path": "batch.filters.scope.level",
+          "value": "DEVELOPER"
+        },
+        {
+          "path": "batch.filters.who.developers"
+        },
+        {
+          "path": "batch.evidenceQualityGroupBy",
+          "value": "AUTHOR"
+        }
+      ],
+      "constraints": [
+        {
+          "kind": "requires_value",
+          "other": "batch.filters.scope.level",
+          "values": [
+            "TEAM"
+          ],
+          "code": "variable_not_allowed",
+          "reason": "scope level must be TEAM on InvestmentBreakdownTeam; an absent level is the SDL default ORG, served by investmentBreakdown"
+        },
+        {
+          "kind": "window_max_days",
+          "path": "batch.breakdowns[*].dateRange.startDate",
+          "other": "batch.breakdowns[*].dateRange.endDate",
+          "max_days": 3650,
+          "code": "variable_out_of_range",
+          "reason": "window longer than the design D.6 clamp"
+        }
+      ],
+      "scopes": [
+        {
+          "caller": "unrestricted",
+          "served": true,
+          "basis": "one owned team: [ops] analytics/filtertranslation.go:186-193 (0b763a85) scopes the investment path to the repositories the team owns (teamscope.RepoCondition over team_repo_ownership, D5988 owner shares; CHAOS-12690), never the work-item vote; the owner-share pair of CHAOS-12691 (internal/contextfabric/factoracle/owner_share_pair.go) is the proof; the team id passes the subject gate"
+        },
+        {
+          "caller": "restricted",
+          "served": false,
+          "refusal": {
+            "code": "operation_not_served_for_caller",
+            "reason": "K14-A: forced scope inside the nested analytics batch is not proved; team and repository investment comes from read_facts (kind investment)"
+          },
+          "basis": "K14-A: forced scope inside the nested analytics batch is not proved; team and repository investment comes from read_facts (kind investment)"
+        }
+      ],
+      "outputs": [
+        {
+          "path": "analytics.breakdowns[*].dimension",
+          "type": "String!",
+          "leaf": "scalar"
+        },
+        {
+          "path": "analytics.breakdowns[*].measure",
+          "type": "String!",
+          "leaf": "scalar"
+        },
+        {
+          "path": "analytics.breakdowns[*].items[*].key",
+          "type": "String!",
+          "leaf": "scalar"
+        },
+        {
+          "path": "analytics.breakdowns[*].items[*].value",
+          "type": "Float",
+          "leaf": "scalar"
+        },
+        {
+          "path": "analytics.breakdowns[*].items[*].__typename",
+          "type": "String",
+          "leaf": "typename"
+        },
+        {
+          "path": "analytics.breakdowns[*].__typename",
+          "type": "String",
+          "leaf": "typename"
+        },
+        {
+          "path": "analytics.evidenceQualityDistribution",
+          "type": "JSON",
+          "leaf": "json",
+          "exception": "aggregate evidence-quality band counts, no person field ([ops] analytics/investmentquality.go; RM §8-9); computed only with useInvestment=true, which acr forces"
+        },
+        {
+          "path": "analytics.evidenceQualityStats.mean",
+          "type": "Float",
+          "leaf": "scalar"
+        },
+        {
+          "path": "analytics.evidenceQualityStats.stddev",
+          "type": "Float",
+          "leaf": "scalar"
+        },
+        {
+          "path": "analytics.evidenceQualityStats.total",
+          "type": "Int!",
+          "leaf": "scalar"
+        },
+        {
+          "path": "analytics.evidenceQualityStats.bandCounts",
+          "type": "JSON!",
+          "leaf": "json",
+          "exception": "aggregate evidence-quality band counts, no person field ([ops] analytics/investmentquality.go; RM §8-9)"
+        },
+        {
+          "path": "analytics.evidenceQualityStats.uncategorizedCount",
+          "type": "Int",
+          "leaf": "scalar"
         },
         {
           "path": "analytics.evidenceQualityStats.__typename",
@@ -4382,12 +6281,12 @@
             {
               "value": "TEAM",
               "code": "basis_dependent_shape",
-              "reason": "team and repository investment comes from read_facts (kind investment) (design table K14-A): needsTeamJoin, [ops] analytics/investment.go:534-539, investmentquality.go:231-245"
+              "reason": "team and repository investment comes from read_facts (kind investment) (design table K14-A): scope level TEAM is served by investmentBreakdownTeam (one owned team id; ops scopes a team by the repositories it owns, team_repo_ownership with D5988 owner shares, CHAOS-12690)"
             },
             {
               "value": "REPO",
               "code": "basis_dependent_shape",
-              "reason": "team and repository investment comes from read_facts (kind investment) (design table K14-A): repository filter translation, [ops] analytics/filtertranslation.go:49-51,213-214"
+              "reason": "team and repository investment comes from read_facts (kind investment) (design table K14-A): scope level REPO is served by investmentBreakdownRepository (one repository id)"
             },
             {
               "value": "SERVICE",
