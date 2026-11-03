@@ -1239,6 +1239,7 @@ var unsaturatedByDesign = map[string]string{
 	"result.SubjectResolution.WorkItemLinkLimitation":                   "json:\"-\": never serialized, so it cannot grow the document; its one wire form is a limitation sentence, which the limitation bounds cover",
 	"result.SubjectResolution.NamedRepositoryLinkLimitation":            "json:\"-\": never serialized, so it cannot grow the document; its one wire form is a limitation sentence, which the limitation bounds cover",
 	"result.SubjectResolution.ExactLabelKind":                           "json:\"-\": never serialized, so it cannot grow the document; its one wire form is a limitation sentence, which the limitation bounds cover",
+	"result.SubjectResolution.CaseTwinReadingLimitations":               "json:\"-\": never serialized, so it cannot grow the document; its one wire form is a limitation sentence per term read by case (CHAOS-12663), which the limitation bounds cover",
 	"result.SubjectResolution.UnansweredHandlesLimitation":              "json:\"-\": never serialized, so it cannot grow the document; its one wire form is a limitation sentence, which the limitation bounds cover",
 	"result.Versions.ContractVersion":                                   "must stay the real schema identifier to mean anything; the validator bounds only its length, so a padded value would validate while making the document nonsense",
 }
