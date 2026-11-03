@@ -221,6 +221,34 @@ for walker in internal/contextfabric/devhealthschema internal/testsupport/repopa
   fi
 done
 
+# A guard whose tree walk sits in a non-test helper of its own package is still a walker (rule 4). The fixture is a tiny
+# module with a copy of the selector under test: `walker` names a root in its test and calls a non-test helper that walks;
+# `nothelper` does the same root read but no package source walks; `leaf` is the package that changes.
+fx="$tmp/fixture"
+mkdir -p "$fx/scripts/ci" "$fx/walker" "$fx/nothelper" "$fx/leaf"
+cp "$reached" "$fx/scripts/ci/reached-shards.sh"
+printf 'module fixture\n\ngo 1.22\n' >"$fx/go.mod"
+printf 'package walker\n\nimport (\n\t"io/fs"\n\t"path/filepath"\n)\n\nfunc Files(root string) (n int) {\n\t_ = filepath.WalkDir(root, func(string, fs.DirEntry, error) error { n++; return nil })\n\treturn n\n}\n' >"$fx/walker/walker.go"
+printf 'package walker\n\nimport "testing"\n\nfunc TestFiles(t *testing.T) {\n\tif Files("../go.mod") < 0 {\n\t\tt.Fatal("x")\n\t}\n}\n' >"$fx/walker/walker_test.go"
+printf 'package nothelper\n\nfunc One() int { return 1 }\n' >"$fx/nothelper/nothelper.go"
+printf 'package nothelper\n\nimport "testing"\n\nfunc TestOne(t *testing.T) {\n\tif len("../go.mod") == 0 || One() != 1 {\n\t\tt.Fatal("x")\n\t}\n}\n' >"$fx/nothelper/nothelper_test.go"
+printf 'package leaf\n\nfunc Two() int { return 2 }\n' >"$fx/leaf/leaf.go"
+printf 'leaf/leaf.go\n' >"$tmp/fixture.changed"
+: >"$tmp/fixture.reached"
+(cd "$fx" && ./scripts/ci/reached-shards.sh --event pull_request --changed "$tmp/fixture.changed" \
+  --reached-out "$tmp/fixture.reached") >"$tmp/fixture.out" 2>"$tmp/fixture.err" || true
+if grep -qxF "fixture/walker" "$tmp/fixture.reached"; then
+  ok "fixture: a package whose non-test helper walks the tree is reached by a change elsewhere"
+else
+  fail "fixture: walker (test names a root, its non-test helper walks the tree) must be reached by a change to leaf/leaf.go"
+  sed 's/^/    /' "$tmp/fixture.err" | tail -n 5
+fi
+if grep -qxF "fixture/nothelper" "$tmp/fixture.reached"; then
+  fail "fixture: nothelper names a root but nothing in its package walks the tree; a change elsewhere must not reach it"
+else
+  ok "fixture: a package that names a root but walks nothing is not reached by a change elsewhere"
+fi
+
 # ---- 6. verify's lane check, run from ci.yml --------------------------------
 
 lane_script="$tmp/lane-check.sh"
