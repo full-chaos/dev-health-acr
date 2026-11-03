@@ -6,9 +6,11 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"net/http/httptrace"
 	"os"
 	"strings"
 	"testing"
+	"time"
 )
 
 func send(ctx context.Context, client *http.Client, target string) {
@@ -97,5 +99,99 @@ func TestMustFailWithNeedsTheNamedText(t *testing.T) {
 			}()
 			MustFailWith(err, "failed in transport")
 		}()
+	}
+}
+
+// panicOf runs f and returns what it panicked with, "" when it did not panic.
+func panicOf(f func()) (message string) {
+	defer func() {
+		if r := recover(); r != nil {
+			message = fmt.Sprint(r)
+		}
+	}()
+	f()
+	return ""
+}
+
+// shortCallTimeout makes Call's own deadline short for one test, and restores it.
+func shortCallTimeout(t *testing.T, d time.Duration) {
+	t.Helper()
+	saved := callTimeout
+	callTimeout = d
+	t.Cleanup(func() { callTimeout = saved })
+}
+
+// CHAOS-12868: a call's own error is returned as it is, and a call the deadline ended fails as the timeout, loudly,
+// never as the client's error.
+func TestCallReturnsTheCallsOwnErrorAndFailsLoudlyOnItsDeadline(t *testing.T) {
+	shortCallTimeout(t, 100*time.Millisecond)
+	want := errors.New("x: failed in transport")
+	if got := Call(context.Background(), func(context.Context) error { return want }); !errors.Is(got, want) {
+		t.Fatalf("Call returned %v, want the call's own error", got)
+	}
+	var remaining time.Duration
+	message := panicOf(func() {
+		_ = Call(context.Background(), func(ctx context.Context) error {
+			// Read at the call's start, so load cannot skew it: the deadline is callTimeout itself.
+			if deadline, ok := ctx.Deadline(); ok {
+				remaining = time.Until(deadline)
+			}
+			<-ctx.Done()
+			return errors.New("Post request timeout")
+		})
+	})
+	if remaining <= 50*time.Millisecond || remaining > 100*time.Millisecond {
+		t.Fatalf("the call's deadline was %v away at its start, want callTimeout (100 ms)", remaining)
+	}
+	if !strings.HasPrefix(message, "TIMEOUT FALLBACK: the call's own 100ms deadline ended it after ") ||
+		!strings.Contains(message, "(it returned Post request timeout)") {
+		t.Fatalf("a call the deadline ended gave %q, want the TIMEOUT FALLBACK failure", message)
+	}
+}
+
+// The budget is per call: calls that each fit their deadline pass however long they take together, and a parent
+// context that has already ended does not end the next call.
+func TestCallGivesEachCallItsOwnBudget(t *testing.T) {
+	shortCallTimeout(t, 200*time.Millisecond)
+	parent, cancel := context.WithTimeout(context.Background(), 150*time.Millisecond)
+	defer cancel()
+	for i := range 3 {
+		message := panicOf(func() {
+			_ = Call(parent, func(ctx context.Context) error {
+				time.Sleep(120 * time.Millisecond)
+				return ctx.Err()
+			})
+		})
+		if message != "" {
+			t.Fatalf("call %d of 3 (each 120 ms, budget 200 ms each, parent 150 ms in all) failed: %s", i+1, message)
+		}
+	}
+	if parent.Err() == nil {
+		t.Fatal("the parent context had not ended: the test proves nothing")
+	}
+}
+
+// The fallback names the branch that was in flight: the HTTP events the call saw, each with its offset.
+func TestCallTellsTheTimelineOfACallItsDeadlineEnded(t *testing.T) {
+	shortCallTimeout(t, 100*time.Millisecond)
+	message := panicOf(func() {
+		_ = Call(context.Background(), func(ctx context.Context) error {
+			trace := httptrace.ContextClientTrace(ctx)
+			trace.DNSStart(httptrace.DNSStartInfo{Host: "upstream.invalid"})
+			trace.DNSDone(httptrace.DNSDoneInfo{Err: errors.New("no such host")})
+			trace.DNSStart(httptrace.DNSStartInfo{Host: "upstream.invalid"})
+			<-ctx.Done()
+			return ctx.Err()
+		})
+	})
+	for _, want := range []string{"timeline: +0s dns start upstream.invalid, +0s dns failed, +0s dns start upstream.invalid"} {
+		if !strings.Contains(message, want) {
+			t.Fatalf("the fallback said %q, want it to contain %q", message, want)
+		}
+	}
+	if got := panicOf(func() {
+		_ = Call(context.Background(), func(ctx context.Context) error { <-ctx.Done(); return nil })
+	}); !strings.Contains(got, "timeline: no DNS or connect event") {
+		t.Fatalf("a call with no HTTP event gave %q", got)
 	}
 }
