@@ -194,7 +194,23 @@ expected kind, which the model's `requested_subject_kind` fills, or a lone
   admits, or a link that could not be read (`contractsv1`
   `ContextFabricNamedRepository*LinkLimitation`). A failed or cut read never reads as
   "no link". With two named repositories nothing is read and nothing is said.
-- **Not here:** a team beside a handle and two handles are CHAOS-12557.
+- **A handle beside a team (CHAOS-12557).** Team = ownership only. A pull request or a
+  CI run is counted in the repositories the team owns now (the tree walk over current
+  OWNED_BY_TEAM edges, then one repository-anchored census each, at most 25; past that
+  nothing is read and the cut is logged at Info). A work item is counted across what you
+  can read. The same gate decides: a count of 1 commits beside the team; a stated 0 takes
+  the team out and ends in `no_match` (the declared-kind gate cannot redeem a team option
+  on a turn that states the handle's kind), with the scope's absence sentence; an
+  unstated 0 keeps the team's answer, with that sentence. A read that fails or is cut
+  changes nothing.
+- **Several handles beside a repository (CHAOS-12557).** A turn that states their kind
+  counts each inside the repository, takes the repository out, offers what was found and
+  asks for one at a time; a complete 0 among them gets the scope's absence sentence. A
+  turn that states no kind keeps the repository's answer, and the engine appends after
+  synthesis that it does not answer for them
+  (`contractsv1.ContextFabricSeveralHandlesUnansweredLimitation`). A turn that states
+  another kind, the repository's included, is untouched.
+- **Not here:** a project beside a handle (a follow-up row first).
 
 ## Gates
 

@@ -620,7 +620,7 @@ func querySubjectProjectMemberships(ctx context.Context, client contextpacket.Cl
 			if omitted {
 				return []candidate{progressCandidate(observedAt, rowSortKey)}, nil
 			}
-			fromSubject = contractsv1.ContextFabricSubjectRef{Kind: contractsv1.ContextFabricSubjectWorkItem, CanonicalID: workItemCanonicalID, Label: subjectID}
+			fromSubject = contractsv1.ContextFabricSubjectRef{Kind: contractsv1.ContextFabricSubjectWorkItem, CanonicalID: workItemCanonicalID, Label: contextfabric.ReadableSourceID(contextfabric.SubjectWorkItem, subjectID)}
 			evidenceRefID = contractsv1.EvidenceRefID(contractsv1.ContextFabricEvidenceEntityWorkItem, repoID+":"+subjectID)
 			// CHAOS-3785 zero-UUID discipline: a Linear-sourced work item's
 			// repo_id is repo-less BY DESIGN and must not read as an orphan.
@@ -901,7 +901,7 @@ func queryWorkItemTeams(ctx context.Context, client contextpacket.ClickHouseQuer
 		relationship := contractsv1.ContextFabricRelationshipProjection{
 			RelationshipID:  workItemTeamRelationshipID(workItemCanonicalID, teamID),
 			Type:            contractsv1.ContextFabricRelationshipOwnedByTeam,
-			From:            contractsv1.ContextFabricSubjectRef{Kind: contractsv1.ContextFabricSubjectWorkItem, CanonicalID: workItemCanonicalID, Label: workItemID},
+			From:            contractsv1.ContextFabricSubjectRef{Kind: contractsv1.ContextFabricSubjectWorkItem, CanonicalID: workItemCanonicalID, Label: contextfabric.ReadableSourceID(contextfabric.SubjectWorkItem, workItemID)},
 			To:              contractsv1.ContextFabricSubjectRef{Kind: contractsv1.ContextFabricSubjectTeam, CanonicalID: teamCanonicalID(teamID), Label: teamID},
 			Properties:      attributionProperties(source, confidence),
 			Derivation:      derivation,

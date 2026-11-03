@@ -227,6 +227,11 @@ func TestIssuePullRequestLinksProjectEveryTierForEveryIssueProvider(t *testing.T
 		}
 		// The edge seeds this label on a pull request node that has no entity
 		// yet, and it is half of the edge's fact: a reader sees it (CHAOS-12468).
+		// CHAOS-12619: the issue end reads as its key; the raw id stays in the
+		// canonical id.
+		if _, key, _ := strings.Cut(c.want.issueID, ":"); link.From.Label != key {
+			t.Errorf("%s: issue end label = %q, want %q", c.want.issueID, link.From.Label, key)
+		}
 		if want := fmt.Sprintf("PR #%d", c.want.number); link.To.Label != want {
 			t.Errorf("%s: pull request end label = %q, want %q", c.want.issueID, link.To.Label, want)
 		}

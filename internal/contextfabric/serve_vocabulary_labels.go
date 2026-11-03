@@ -29,6 +29,9 @@ import (
 //     restated in reader words (ReaderEvidenceLabels). Like the series words
 //     this is not a shed word: every tier carries it, the input's fallback and
 //     the routes' unstamped projection included, so no tier serves a raw id.
+//   - a stored row's raw source ids in subject labels, why_relevant and graph
+//     driver text read in reader words (withReaderSubjectText, CHAOS-12619);
+//     like the series words they need no flag and shed with nothing.
 //   - enabled off serves no map (ACR_CONTEXT_FABRIC_VOCABULARY_LABELS_ENABLED).
 //
 // A word never costs an answer, and it never costs a row: the words are added
@@ -44,6 +47,7 @@ func ServeVocabularyLabels(result InvestigationResult, enabled bool, maxBytes in
 	result.VocabularyLabels = nil
 	result.RenderShapes = withDriverSeriesWords(result.RenderShapes)
 	result = ReaderEvidenceLabels(result)
+	result = withReaderSubjectText(result)
 	stamped := withStampedSourceWords(result)
 	tier := contractsv1.ContextFabricVocabularyLabelsOff
 	if enabled {

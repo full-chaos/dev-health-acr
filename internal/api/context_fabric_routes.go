@@ -464,10 +464,10 @@ func fitProjectionWords(projection contractsv1.ContextFabricAnswerProjection, bo
 // the store gave it, with none of this serve's words, so the stamped source words
 // cost no row and refuse no answer. It is a new projection, because Project copied
 // them into the coverage summary, and ok is false when it cannot be served. A
-// stored label from before the reader form is still restated (CHAOS-12620): no
-// tier serves a raw id.
+// stored result's old evidence labels (CHAOS-12620) and raw subject text
+// (CHAOS-12619) are still restated: no tier serves a raw id.
 func unstampedProjection(answer contractsv1.ContextFabricInvestigationResult, budget answerprojection.Budget, fullResultOmitted bool) (projection contractsv1.ContextFabricAnswerProjection, encoded []byte, measured int64, ok bool) {
-	projection = answerprojection.ShedVocabularyLabels(answerprojection.Project(contextfabric.ReaderEvidenceLabels(answer), budget), contractsv1.ContextFabricVocabularyLabelsNone)
+	projection = answerprojection.ShedVocabularyLabels(answerprojection.Project(contextfabric.ReaderSubjectText(contextfabric.ReaderEvidenceLabels(answer)), budget), contractsv1.ContextFabricVocabularyLabelsNone)
 	if fullResultOmitted {
 		answerprojection.MarkFullResultOmitted(&projection)
 	}
