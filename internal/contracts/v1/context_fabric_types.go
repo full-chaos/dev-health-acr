@@ -1467,6 +1467,12 @@ type ContextFabricSubjectResolution struct {
 	// same-name subjects, so the user can name one of them instead. Empty
 	// otherwise. The sentences are the only form that leaves the process.
 	CaseTwinReadingLimitations []string `json:"-"`
+	// UnansweredHandlesLimitation (CHAOS-12557) is the fixed sentence an answer
+	// owes when the question names several subjects by their identifiers beside
+	// one repository and states no kind: the answer is the repository's, and does
+	// not answer for them. "" otherwise. The sentence is the only form that leaves
+	// the process.
+	UnansweredHandlesLimitation string `json:"-"`
 	// CommitDecisionDigests (CHAOS-4087) is a small, closed-vocabulary
 	// summary of WHICH MECHANISM committed each subject in Committed --
 	// persisted so a wrong commit discovered later from a STORED result

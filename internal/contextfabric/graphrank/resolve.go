@@ -539,6 +539,11 @@ type ResolveDeps struct {
 	// so an item it did not prove is unknown, not unlinked, whatever committed.
 	// Nil means no such read.
 	WorkItemLinksUnread func() bool
+	// TeamOwnedRepositories returns the repositories a team currently owns that
+	// the caller may read, at most limit (CHAOS-12557: a handle named beside a
+	// team is read in them). complete is false when the read was cut or the team
+	// owns more. nil: no handle beside a team is read, and today's answer stands.
+	TeamOwnedRepositories func(ctx context.Context, team contextfabric.SubjectRef, limit int) (repositories []contextfabric.SubjectRef, complete bool, err error)
 	// LinkScopedWorkItemsOf returns, of ids, the work items in a requested
 	// repository scope, each with the strongest tier of its admitted links: a
 	// read keyed on the ids (CHAOS-12505), decided by the repository walk's own
