@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log/slog"
 	"math"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -14,6 +15,7 @@ import (
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	"github.com/full-chaos/dev-health-acr/internal/contextpacket"
+	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 )
 
 // CHAOS-7263: the projection cursor keys on each row's INGEST time. Ingest
@@ -183,7 +185,34 @@ func readTable(ctx context.Context, table entityTable, client contextpacket.Clic
 	for i := range rows {
 		rows[i].table = table.name
 	}
+	stampSyncedAt(table, rows)
 	return rows, truncated, err
+}
+
+// stampSyncedAt (CHAOS-12649) writes each row's sync stamp, its walk position,
+// on the entity it projects, as contextfabric.ProjectionSyncedAtProperty. Only a
+// table that pages on its own last_synced (stampsSyncedAt), and only an entity of
+// a kind the table declares: a stub another kind's producer mints is not that
+// table's row. The entity is copied, never changed in place.
+func stampSyncedAt(table entityTable, rows []candidate) {
+	if !table.stampsSyncedAt {
+		return
+	}
+	for i := range rows {
+		entity := rows[i].entity
+		at := rows[i].position()
+		if entity == nil || at.IsZero() || !slices.Contains(table.subjectKinds, entity.Subject.Kind) {
+			continue
+		}
+		properties := make(map[string]contractsv1.ContextFabricScalarValue, len(entity.Properties)+1)
+		for key, value := range entity.Properties {
+			properties[key] = value
+		}
+		properties[contextfabric.ProjectionSyncedAtProperty] = intScalar(at.UTC().UnixNano())
+		stamped := *entity
+		stamped.Properties = properties
+		rows[i].entity = &stamped
+	}
 }
 
 func (m *windowMemo) scopeLocked(scope string) *windowScope {
