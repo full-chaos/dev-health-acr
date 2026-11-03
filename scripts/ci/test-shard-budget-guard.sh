@@ -226,6 +226,12 @@ SHIM
   # Codex #1967 r2: a test with no end event (a cut-off transcript) is a lower bound, and says so.
   { ev 0 run TestDone; ev 1 pass TestDone 1; ev 2 run TestHung; ev 10 output TestHung; } >"$sp"
   spexpect unfinished-test-is-a-lower-bound 1 'TestHung  (no end event: ran at least this long)'
+  # Codex #1967 r3: a cut-off run has no package time, so the report prints no package delta, whatever the baseline holds.
+  { ev 0 run TestDone; ev 31 pass TestDone 31; ev 31 pass "" 31; } >"$tmp/base31.json"
+  { ev 0 run TestDone; ev 1 pass TestDone 1; ev 2 run TestCutOff; ev 9 output TestCutOff; } >"$sp"
+  spexpect cut-off-run-has-no-package-delta 1 'package time: not measured in this run; no package delta' RACE_BASELINE_JSON="$tmp/base31.json"
+  out_co="$(RACE_SLOW_TESTS="$allow" RACE_BASELINE_JSON="$tmp/base31.json" "$guard" --json 6000 "$sp" 2>&1 || true)"
+  if grep -q 'package time: now' <<<"$out_co"; then echo "FAIL cut-off-run-prints-no-measured-delta"; fails=$((fails + 1)); else echo "ok   cut-off-run-prints-no-measured-delta"; fi
 fi
 
 [ "$fails" -eq 0 ]

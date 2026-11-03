@@ -243,8 +243,10 @@ span_report() {
       }
       if (hasbase) {
         if (note != "") print "baseline: " note
-        tn = 0; tb = 0; for (p in np) { tn += np[p]; if (p in bp) tb += bp[p]; else missing = 1 }
-        if (missing) print "package time: baseline lacks a package here; no package delta"
+        # Codex #1967 r3: a package delta only from two measured package times; a cut-off run has none to compare.
+        tn = 0; tb = 0; nnow = 0; for (p in np) { nnow++; tn += np[p]; if (p in bp) tb += bp[p]; else missing = 1 }
+        if (nnow == 0) print "package time: not measured in this run; no package delta"
+        else if (missing) print "package time: baseline lacks a package here; no package delta"
         else printf "package time: now %.1fs, baseline %.1fs, delta %+.1fs\n", tn, tb, tn - tb
       }
     }'

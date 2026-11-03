@@ -70,6 +70,10 @@ func TestRaceBaselineTokenReachesOnlyTheFetchStep(t *testing.T) {
 			t.Fatalf("the race-baseline action must run gh only, with the token out of its environment; it names %q", banned)
 		}
 	}
+	// Codex #1967 r3: the step never fails the job: -e is off.
+	if !strings.Contains(string(action), "        set +e\n") {
+		t.Fatal("the race-baseline action must run with set +e: a baseline miss never fails the job")
+	}
 	// Codex #1967 r2: the token leaves the environment before any command
 	// runs, and each gh call gets it alone.
 	text := string(action)

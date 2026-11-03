@@ -105,7 +105,7 @@ needs n-absent race-devhealthsource-mid=ABSENT
 
 # lists NAME: the real `go test -list` of the fixture packages as legs 6 (source) and 7 (facts).
 mkdir -p "$tmp/lists"
-list_of() { (cd "$fx" && go test -list . "./internal/contextfabric/$1") | grep '^Test' | LC_ALL=C sort -u; }
+list_of() { (cd "$fx" && go test -list . "./internal/contextfabric/$1") | grep -E '^(Test|Fuzz|Example)' | LC_ALL=C sort -u; }
 write_lists() {
   local dir="$1"
   mkdir -p "$dir"

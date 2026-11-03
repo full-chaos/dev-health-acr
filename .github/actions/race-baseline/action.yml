@@ -22,15 +22,20 @@ runs:
         RACE_BASELINE_TOKEN: ${{ inputs.token }}
         ARTIFACT: ${{ inputs.artifact }}
       run: |
-        set -uo pipefail
+        # Never fails the job (Codex #1967 r3): no -e, and every step that can
+        # fail ends the step with its reason and status 0.
+        set +e
+        set -o pipefail
         # The token leaves the environment at once (Codex #1967 r2): it is a
         # shell variable from here, handed to each gh call alone, so rm,
         # mkdir, find and mv never inherit it.
         token="$RACE_BASELINE_TOKEN"
         unset RACE_BASELINE_TOKEN
         out=.tmp/race-baseline
-        rm -rf "$out"
-        mkdir -p "$out"
+        if ! rm -rf "$out" 2>/dev/null || ! mkdir -p "$out" 2>/dev/null; then
+          echo "race-baseline: cannot create $out; no baseline"
+          exit 0
+        fi
         if ! command -v gh >/dev/null 2>&1; then
           echo "race-baseline: gh is not installed; no baseline"
           exit 0
@@ -45,8 +50,11 @@ runs:
           if GH_TOKEN="$token" gh run download "$id" -R "$GITHUB_REPOSITORY" -n "$ARTIFACT" -D "$out/$id" >/dev/null 2>&1; then
             got="$(find "$out/$id" -name race.json -type f -size +0c -print -quit)"
             if [ -n "$got" ]; then
-              mv "$got" "$out/race.json"
-              echo "race-baseline: main run $id, artifact $ARTIFACT"
+              if mv "$got" "$out/race.json" 2>/dev/null; then
+                echo "race-baseline: main run $id, artifact $ARTIFACT"
+              else
+                echo "race-baseline: cannot keep the artifact of main run $id; no baseline"
+              fi
               exit 0
             fi
           fi

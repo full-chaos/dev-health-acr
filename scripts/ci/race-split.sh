@@ -96,6 +96,23 @@ rest_list_problems() {
   fi
 }
 
+# Codex #1967 r3: every listing here is `go test -list` WITHOUT -race, so a test
+# function in a file built only under -race (`//go:build race`) is invisible to
+# verify and race-partition while the race rest job still runs it. Such a file
+# may hold constants (the raceDetectorEnabled pair) but no test function.
+# RACE_SPLIT_SOURCE_DIR points the scan at another directory (tests only).
+race_only_tests() {
+  local dir="${RACE_SPLIT_SOURCE_DIR:-$root/internal/contextfabric/$name}" f constraint
+  for f in "$dir"/*_test.go; do
+    [ -f "$f" ] || continue
+    constraint="$(grep -m1 '^//go:build' "$f" || true)"
+    [ -n "$constraint" ] || continue
+    # A constraint that still names race once every !race is gone needs -race to build.
+    printf '%s\n' "${constraint//!race/}" | grep -qw race || continue
+    grep -E '^func (Test|Fuzz|Example)[A-Za-z0-9_]*\(' "$f" | sed -E "s|^func ([A-Za-z0-9_]+).*|${f##*/}: \\1|" || true
+  done
+}
+
 # Unit legs only: names of the mid/fourth lists that leg 7 (unit-heavy) runs
 # instead of leg 10 (unit-mid). The race jobs ignore this list.
 extra_list="$root/scripts/ci/$name-unit-heavy-extra-tests.txt"
@@ -242,6 +259,11 @@ case "${2:-}" in
     ;;
   verify)
     cd "$root"
+    problems="$(race_only_tests)"
+    if [ -n "$problems" ]; then
+      printf 'a test function in a file built only under -race is invisible to go test -list, so its race job cannot be checked; move it to a file without the race constraint (read raceDetectorEnabled instead):\n%s\n' "$problems" >&2
+      exit 1
+    fi
     existing="$(go test -list '.' "$pkg" | grep -E '^(Test|Fuzz|Example)' | LC_ALL=C sort -u)"
     missing="$(LC_ALL=C comm -23 <({ names; [ -f "$mid_list" ] && mid_names; fourth_names; } | LC_ALL=C sort -u) <(printf '%s\n' "$existing"))"
     if [ -n "$missing" ]; then

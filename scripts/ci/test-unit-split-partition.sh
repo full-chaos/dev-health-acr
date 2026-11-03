@@ -145,6 +145,26 @@ sed 's/-run=\(.*devhealthsource race-mid)\)/-skip=\1/' "$dir/.github/workflows/c
 cmp -s "$dir/ci.new" "$dir/.github/workflows/ci.yml" && { echo "CONTROL SETUP FAILED: source-race-mid-skip" >&2; exit 1; }
 mv "$dir/ci.new" "$dir/.github/workflows/ci.yml"
 expect_fail_mode 'a race-mid selector passed to -skip' "$dir" race-partition
+# Codex #1967 r3: a test function in a file built only under -race is invisible
+# to `go test -list`. verify refuses one; a file with only constants (the
+# raceDetectorEnabled pair) and a !race file stay allowed.
+src="$tmp/race-only-src"
+mkdir -p "$src"
+printf '//go:build race\n\npackage x\n\nconst raceOn = true\n' >"$src/race_on_test.go"
+printf '//go:build !race\n\npackage x\n\nfunc TestPlainOnly(t *testing.T) {}\n' >"$src/race_off_test.go"
+if RACE_SPLIT_SOURCE_DIR="$src" "$root/scripts/ci/race-split.sh" devhealthsource verify >"$tmp/out" 2>&1; then
+  echo "positive: a race file with constants only and a !race test file pass verify"
+else
+  bad "verify refused a race file with constants only:"; cat "$tmp/out" >&2
+fi
+printf '//go:build race && linux\n\npackage x\n\nfunc TestRaceOnly(t *testing.T) {}\n' >"$src/race_only_test.go"
+if RACE_SPLIT_SOURCE_DIR="$src" "$root/scripts/ci/race-split.sh" devhealthsource verify >"$tmp/out" 2>&1; then
+  bad "NEGATIVE CONTROL: verify accepted a test function in a race-only file"
+elif grep -q 'race_only_test.go: TestRaceOnly' "$tmp/out"; then
+  echo "CONTROL OK: verify rejects a test function in a race-only file"
+else
+  bad "verify failed for another reason:"; cat "$tmp/out" >&2
+fi
 
 [ "$fails" -eq 0 ] || { printf '%s violation(s)\n' "$fails" >&2; exit 1; }
 echo "PASS: unit split partition and its negative controls"
