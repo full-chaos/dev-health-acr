@@ -17,6 +17,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric/directread"
 	"github.com/full-chaos/dev-health-acr/internal/outboundhttp"
 )
 
@@ -29,10 +30,36 @@ import (
 // directly, with a normal user login (lead ruling on CHAOS-12691). Only the
 // o4venue-tagged TestVenueOwnerShareLive uses it: never a pull request gate.
 
-// opsInvestmentBreakdownQuery is the ops registered InvestmentBreakdown
-// document (contracts/mcp/ops-catalogue/registry.v1.json) with the selection
-// the pair reads: the breakdowns, not the evidence quality.
-const opsInvestmentBreakdownQuery = `query InvestmentBreakdown($orgId: String!, $batch: AnalyticsRequestInput!) { analytics(orgId: $orgId, batch: $batch) { breakdowns { dimension measure items { key value } } } }`
+// opsInvestmentBreakdownOperation names, per scope level, the ops
+// registered document the plane sends: the operation acr's run_operation
+// policy serves for that level. Ops resolves a document by the digest of its
+// exact text and refuses any other text as unregistered, so the plane sends
+// the registered text itself, read from the vendored catalogue
+// (contracts/mcp/ops-catalogue/registry.v1.json), never a text of its own
+// (CHAOS-12879). The pair reads only the breakdowns of the answer.
+var opsInvestmentBreakdownOperation = map[string]string{
+	ScopeLevelOrg:  "investmentBreakdown",
+	ScopeLevelTeam: "investmentBreakdownTeam",
+	ScopeLevelRepo: "investmentBreakdownRepository",
+}
+
+// opsInvestmentBreakdownDocument is the registered text of the scope level's
+// document. directread.LoadCatalogue holds every text to its registry digest.
+func opsInvestmentBreakdownDocument(level string) (string, error) {
+	name, ok := opsInvestmentBreakdownOperation[level]
+	if !ok {
+		return "", fmt.Errorf("ops GraphQL: no registered document for scope level %q", level)
+	}
+	catalogue, err := directread.DefaultCatalogue()
+	if err != nil {
+		return "", fmt.Errorf("ops GraphQL: the vendored catalogue: %w", err)
+	}
+	op, refusal := catalogue.Lookup(name)
+	if refusal != nil {
+		return "", fmt.Errorf("ops GraphQL: the vendored catalogue has no %s: %s", name, refusal.Reason)
+	}
+	return op.DocumentText, nil
+}
 
 // The scope levels the pair reads (ops ScopeLevelInput).
 const (
@@ -332,6 +359,10 @@ func graphQLErrorSummary(errs []map[string]any, token string) string {
 // breakdown under the measure. A GraphQL error with partial data is no
 // answer.
 func (p *OpsGraphQLPlane) InvestmentBreakdown(ctx context.Context, measure string, w Window, level, id string) (map[string]float64, error) {
+	document, err := opsInvestmentBreakdownDocument(level)
+	if err != nil {
+		return nil, err
+	}
 	p.mu.Lock()
 	token := p.token
 	p.calls++
@@ -339,7 +370,7 @@ func (p *OpsGraphQLPlane) InvestmentBreakdown(ctx context.Context, measure strin
 	if token == "" {
 		return nil, errors.New("ops GraphQL: not logged in")
 	}
-	body, err := json.Marshal(map[string]any{"query": opsInvestmentBreakdownQuery, "variables": ownerShareVariables(p.OrgID, measure, w, level, id)})
+	body, err := json.Marshal(map[string]any{"query": document, "variables": ownerShareVariables(p.OrgID, measure, w, level, id)})
 	if err != nil {
 		return nil, errors.New("ops GraphQL: the request could not be encoded")
 	}

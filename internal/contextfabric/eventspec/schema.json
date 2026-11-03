@@ -10114,6 +10114,7 @@
           "cohort_driver_contribution",
           "dated_fact_trend",
           "investment_theme_share",
+          "investment_subcategory_share",
           "comparison_side_by_side",
           "landscape_position",
           "completion_forecast",
@@ -10135,6 +10136,12 @@
           "fewer_than_two_shares",
           "cohort_answer",
           "theme_table_cut",
+          "no_subcategory_breakdown",
+          "several_subcategory_breakdowns",
+          "subcategory_table_cut",
+          "subcategory_row_unusable",
+          "subcategory_shape_unprovable",
+          "subcategory_breakdown_drawn",
           "not_repository_flow_question",
           "no_repository_flow_table",
           "several_repository_flow_tables",
@@ -10289,6 +10296,7 @@
               "cohort_driver_contribution",
               "dated_fact_trend",
               "investment_theme_share",
+              "investment_subcategory_share",
               "comparison_side_by_side",
               "landscape_position",
               "completion_forecast",
@@ -14998,6 +15006,123 @@
         "key": "subject_local",
         "type": "bool",
         "presence": "required"
+      }
+    ]
+  },
+  {
+    "id": "devhealthfacts.investment_subcategory_breakdown_noncanonical_key",
+    "msg": "devhealthfacts.investment_subcategory_breakdown_noncanonical_key",
+    "level": "warn",
+    "multiplicity": "zero_or_many_per_request",
+    "attribution": [
+      "org_id",
+      "request_id"
+    ],
+    "bounded_aggregation": "at most one line per investment read.",
+    "unbounded_reason": "one line per investment read whose ops answer holds a non-canonical key, so the count follows the investment reads a request makes; the line carries the request id when the context has one.",
+    "fields": [
+      {
+        "key": "org_id",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "subject_kind",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "repository",
+          "team"
+        ]
+      },
+      {
+        "key": "theme_keys",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "subcategory_keys",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "above_zero_keys",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "request_id",
+        "type": "string",
+        "presence": "conditional",
+        "applicability": "written when the request context carries a request ID"
+      }
+    ]
+  },
+  {
+    "id": "devhealthfacts.investment_subcategory_breakdown_withheld",
+    "msg": "devhealthfacts.investment_subcategory_breakdown_withheld",
+    "level": "warn",
+    "multiplicity": "zero_or_many_per_request",
+    "attribution": [
+      "org_id",
+      "request_id"
+    ],
+    "bounded_aggregation": "at most one line per investment read.",
+    "unbounded_reason": "one line per investment read whose one team or repository fact got no subcategory table, so the count follows the investment reads a request makes; the line carries the request id when the context has one.",
+    "fields": [
+      {
+        "key": "org_id",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "subject_kind",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "repository",
+          "team"
+        ]
+      },
+      {
+        "key": "reason",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "caller_unset",
+          "call_failed",
+          "not_served",
+          "incomplete",
+          "unreadable",
+          "unknown_key",
+          "theme_cross_check",
+          "no_data",
+          "window_not_whole_days"
+        ]
+      },
+      {
+        "key": "theme",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "",
+          "feature_delivery",
+          "maintenance",
+          "operational",
+          "quality",
+          "risk"
+        ]
+      },
+      {
+        "key": "relative_gap",
+        "type": "float",
+        "presence": "required"
+      },
+      {
+        "key": "request_id",
+        "type": "string",
+        "presence": "conditional",
+        "applicability": "written when the request context carries a request ID"
       }
     ]
   },

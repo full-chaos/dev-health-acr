@@ -798,7 +798,12 @@ func buildContextFabricInvestigator(ctx context.Context, request buildRequest, p
 		// deployment turns it on (Config.CompletionDistributionEnabled).
 		devhealthfacts.NewInstrumentedProvidersWithOptions(clickhouse.queryClient, devhealthfacts.NewBudgetWarningInstrumentation(
 			devhealthfacts.NewReadStatsInstrumentation(readers.NewSlogInstrumentation(request.options.Logger, slog.LevelInfo), request.options.Logger, request.options.Now), request.options.Logger),
-			devhealthfacts.ProviderOptions{Operations: request.sourceHealthOperations, CompletionDistributionEnabled: request.config.CompletionDistributionEnabled}),
+			devhealthfacts.ProviderOptions{
+				Operations: request.sourceHealthOperations, CompletionDistributionEnabled: request.config.CompletionDistributionEnabled,
+				// CHAOS-12554: the sunburst's table, read through the same
+				// operation holder (see Config.ContextFabricInvestmentSunburstEnabled).
+				InvestmentSunburstEnabled: request.config.ContextFabricInvestmentSunburstEnabled,
+			}),
 		// CHAOS-4099 stage 2: the real ScopeExpander over the SAME
 		// ClickHouse client every FactProvider above shares -- activating
 		// the 3 ratified project-origin policies (fact_scope.go's own
@@ -1096,6 +1101,8 @@ func buildContextFabricInvestigator(ctx context.Context, request buildRequest, p
 		MaxSerializedBytes: int64(request.config.MaxSerializedBytes),
 		// See Config.ContextFabricInvestmentTreemapEnabled.
 		InvestmentTreemapEnabled: request.config.ContextFabricInvestmentTreemapEnabled,
+		// See Config.ContextFabricInvestmentSunburstEnabled.
+		InvestmentSunburstEnabled: request.config.ContextFabricInvestmentSunburstEnabled,
 		// See Config.ContextFabricInvestmentSankeyEnabled (CHAOS-12582).
 		InvestmentSankeyEnabled: request.config.ContextFabricInvestmentSankeyEnabled,
 		// See Config.ContextFabricComparisonTableEnabled.
@@ -1206,8 +1213,10 @@ func buildContextFabricInvestigator(ctx context.Context, request buildRequest, p
 			// was off is not reused once it is on.
 			QuestionFamilyVersion: contextfabric.ReuseQuestionFamilyVersion(contextfabric.RenderShapeOptions{
 				InvestmentThemeShare: request.config.ContextFabricInvestmentTreemapEnabled,
-				ComparisonSideBySide: request.config.ContextFabricComparisonTableEnabled,
-				CompletionForecast:   request.config.CompletionDistributionEnabled,
+				// CHAOS-12554: the sunburst switch joins the key by its rule name.
+				InvestmentSubcategoryShare: request.config.ContextFabricInvestmentSunburstEnabled,
+				ComparisonSideBySide:       request.config.ContextFabricComparisonTableEnabled,
+				CompletionForecast:         request.config.CompletionDistributionEnabled,
 				// CHAOS-12675: the quadrant switch joins the key.
 				LandscapePosition: request.config.ContextFabricLandscapeQuadrantEnabled,
 				// CHAOS-12582.

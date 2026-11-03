@@ -11,7 +11,7 @@
   "venue_fact_query_versions": [
     "devhealthfacts.clickhouse.v275"
   ],
-  "fact_query_version": "devhealthfacts.clickhouse.v275",
+  "fact_query_version": "devhealthfacts.clickhouse.v276",
   "rows": {
     "capacity_forecasts": 127,
     "compounding_risk_daily": 231,
@@ -2321,8 +2321,8 @@
       "listener": "served",
       "shapes_run": 72,
       "leaves": 1182,
-      "compared": 75,
-      "matches": 70,
+      "compared": 76,
+      "matches": 71,
       "by_class": {
         "attribution_basis": 5
       },

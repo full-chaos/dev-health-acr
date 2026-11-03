@@ -183,6 +183,10 @@ func loadHostedRuntimeValues(lookup lookupEnv, cfg *Config, defaultRequireStores
 	if cfg.ContextFabricInvestmentTreemapEnabled, err = boolValue(lookup, ContextFabricInvestmentTreemapEnabledEnvVar, false); err != nil {
 		return err
 	}
+	// CHAOS-12554: default OFF -- see Config.ContextFabricInvestmentSunburstEnabled.
+	if cfg.ContextFabricInvestmentSunburstEnabled, err = boolValue(lookup, ContextFabricInvestmentSunburstEnabledEnvVar, false); err != nil {
+		return err
+	}
 	// CHAOS-12582: default OFF -- see Config.ContextFabricInvestmentSankeyEnabled.
 	if cfg.ContextFabricInvestmentSankeyEnabled, err = boolValue(lookup, ContextFabricInvestmentSankeyEnabledEnvVar, false); err != nil {
 		return err
@@ -224,6 +228,11 @@ const ContextFabricRunLeaseEnabledEnvVar = "ACR_CONTEXT_FABRIC_RUN_LEASE_ENABLED
 // ContextFabricInvestmentTreemapEnabledEnvVar turns on the
 // investment_theme_share render rule (CHAOS-12521).
 const ContextFabricInvestmentTreemapEnabledEnvVar = "ACR_CONTEXT_FABRIC_INVESTMENT_TREEMAP_ENABLED"
+
+// ContextFabricInvestmentSunburstEnabledEnvVar turns on the investment
+// sunburst: its table and the investment_subcategory_share render rule
+// (CHAOS-12554).
+const ContextFabricInvestmentSunburstEnabledEnvVar = "ACR_CONTEXT_FABRIC_INVESTMENT_SUNBURST_ENABLED"
 
 // ContextFabricInvestmentSankeyEnabledEnvVar turns on the
 // investment_repository_flow render rule (CHAOS-12582).
@@ -329,6 +338,7 @@ func (c Config) SafeAttributes() []any {
 		"context_fabric_server_completeness_authority_symmetric_enabled", c.ServerCompletenessAuthoritySymmetricEnabled,
 		"context_fabric_vocabulary_labels_enabled", c.ContextFabricVocabularyLabelsEnabled,
 		"context_fabric_investment_treemap_enabled", c.ContextFabricInvestmentTreemapEnabled,
+		"context_fabric_investment_sunburst_enabled", c.ContextFabricInvestmentSunburstEnabled,
 		"context_fabric_investment_sankey_enabled", c.ContextFabricInvestmentSankeyEnabled,
 		"context_fabric_comparison_table_enabled", c.ContextFabricComparisonTableEnabled,
 		"context_fabric_landscape_quadrant_enabled", c.ContextFabricLandscapeQuadrantEnabled,

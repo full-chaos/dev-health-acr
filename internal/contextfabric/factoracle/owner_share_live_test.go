@@ -2,6 +2,8 @@ package factoracle
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -34,6 +36,51 @@ type opsFakeCall struct {
 	at                 time.Time
 	measure, level, id string
 	variables          string
+	// operation is the ops registry row the query text resolved to, by its
+	// digest; legacy is that row's legacy mark.
+	operation string
+	legacy    bool
+}
+
+// opsRegisteredRow is one row of the vendored ops registry.
+type opsRegisteredRow struct {
+	operation string
+	legacy    bool
+}
+
+// opsRegistryByDigest reads the vendored ops registry the way ops resolves a
+// document (CHAOS-12879): by the hex sha256 of the trimmed text. It reads
+// the file itself, not directread's catalogue, so the fake does not hold
+// the plane's own lookup against itself.
+var opsRegistryByDigest = sync.OnceValues(func() (map[string]opsRegisteredRow, error) {
+	raw, err := os.ReadFile(filepath.Join("..", "..", "..", "contracts", "mcp", "ops-catalogue", "registry.v1.json"))
+	if err != nil {
+		return nil, err
+	}
+	var file struct {
+		Rows []struct {
+			Operation string `json:"operation"`
+			Document  string `json:"document"`
+			Digest    string `json:"digest"`
+			Legacy    bool   `json:"legacy"`
+		} `json:"rows"`
+	}
+	if err := json.Unmarshal(raw, &file); err != nil {
+		return nil, err
+	}
+	out := map[string]opsRegisteredRow{}
+	for _, row := range file.Rows {
+		if opsDocumentDigest(row.Document) != row.Digest {
+			return nil, fmt.Errorf("registry row %s: the digest is not the text's", row.Operation)
+		}
+		out[row.Digest] = opsRegisteredRow{operation: row.Operation, legacy: row.Legacy}
+	}
+	return out, nil
+})
+
+func opsDocumentDigest(text string) string {
+	sum := sha256.Sum256([]byte(strings.TrimSpace(text)))
+	return hex.EncodeToString(sum[:])
 }
 
 // opsFake is the ops login and GraphQL routes. answer, when set, may
@@ -129,10 +176,22 @@ func (f *opsFake) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			w.WriteHeader(http.StatusBadRequest)
 			return
 		}
-		if body.Query != opsInvestmentBreakdownQuery {
-			f.problem("a GraphQL query is not the InvestmentBreakdown document")
+		// Ops resolves the document by the digest of its text and refuses a
+		// text it does not register (query-api operationForDocument,
+		// refuseGraphQLEdgeUnregistered).
+		registry, err := opsRegistryByDigest()
+		if err != nil {
+			f.problem("the vendored ops registry: %v", err)
+			w.WriteHeader(http.StatusInternalServerError)
+			return
 		}
-		call := opsFakeCall{at: time.Now(), variables: canonicalJSON(body.Variables)}
+		row, registered := registry[opsDocumentDigest(body.Query)]
+		if !registered {
+			f.problem("a GraphQL query is not a registered ops document")
+			http.NotFound(w, r)
+			return
+		}
+		call := opsFakeCall{at: time.Now(), variables: canonicalJSON(body.Variables), operation: row.operation, legacy: row.legacy}
 		if batch, ok := body.Variables["batch"].(map[string]any); ok {
 			if breakdowns, ok := batch["breakdowns"].([]any); ok && len(breakdowns) == 1 {
 				call.measure, _ = breakdowns[0].(map[string]any)["measure"].(string)
@@ -229,6 +288,11 @@ func osExpectedVariables(measure, level, id string) string {
 	}})
 }
 
+// osExpectedOperation is the ops registered document of each scope level:
+// the operation acr's run_operation policy serves for that level
+// (CHAOS-12879).
+var osExpectedOperation = map[string]string{"ORG": "investmentBreakdown", "TEAM": "investmentBreakdownTeam", "REPO": "investmentBreakdownRepository"}
+
 func TestOwnerShareLiveSendsOneCallPerScopeWithTheLoginBearer(t *testing.T) {
 	rig := newOSLiveRig(t, &opsFake{})
 	report, err := osLiveRun(t, rig, osReference())
@@ -261,6 +325,9 @@ func TestOwnerShareLiveSendsOneCallPerScopeWithTheLoginBearer(t *testing.T) {
 			t.Fatalf("scope %s was asked twice", key)
 		}
 		got[key] = true
+		if want := osExpectedOperation[call.level]; call.operation != want || call.legacy {
+			t.Fatalf("scope %s sent the registered document %q (legacy %v), want the current %q", key, call.operation, call.legacy, want)
+		}
 		if call.variables != osExpectedVariables(call.measure, call.level, call.id) {
 			t.Fatalf("scope %s sent %s, want %s", key, call.variables, osExpectedVariables(call.measure, call.level, call.id))
 		}

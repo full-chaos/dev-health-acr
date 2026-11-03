@@ -16,6 +16,10 @@ type RenderShapeOptions struct {
 	// InvestmentThemeShare turns on the investment_theme_share rule
 	// (CHAOS-12521). See Config.ContextFabricInvestmentTreemapEnabled.
 	InvestmentThemeShare bool
+	// InvestmentSubcategoryShare turns on the investment_subcategory_share
+	// rule (CHAOS-12554). See Config.ContextFabricInvestmentSunburstEnabled:
+	// the rule draws the table that switch serves, so one switch gates both.
+	InvestmentSubcategoryShare bool
 	// ComparisonSideBySide turns on the comparison_side_by_side rule
 	// (CHAOS-12513). See Config.ContextFabricComparisonTableEnabled.
 	ComparisonSideBySide bool
@@ -48,13 +52,14 @@ type RenderShapeOptions struct {
 // adds. WithoutDisabledRenderShapes covers the other direction at the serving
 // doors. With every switch off this is the table version itself, so a
 // deployment that turns nothing on keeps every stored answer. The landscape
-// quadrant switch (CHAOS-12675) and the sankey switch (CHAOS-12582) join it.
+// quadrant switch (CHAOS-12675), the sankey switch (CHAOS-12582) and the
+// sunburst switch (CHAOS-12554) join it, each by its rule name.
 //
-// With every switch on, the readable form is 138 characters (question-family.v8),
-// past the column's 128, so a form past 128 is the table version, "+render#" and
-// the first 32 hex digits of the full form's sha256 (lead ruling on CHAOS-12582).
-// Every shorter form stays readable and byte-equal to what it was
-// (TestTheReuseFamilyVersionNamesTheRenderSwitchesOn sweeps all 32 sets).
+// With every switch on, the readable form is past the column's 128, so a form
+// past 128 is the table version, "+render#" and the first 32 hex digits of the
+// full form's sha256 (lead ruling on CHAOS-12582). Every shorter form stays
+// readable and byte-equal to what it was
+// (TestTheReuseFamilyVersionNamesTheRenderSwitchesOn sweeps all 64 sets).
 func ReuseQuestionFamilyVersion(options RenderShapeOptions) string {
 	var on []string
 	if options.ComparisonSideBySide {
@@ -65,6 +70,9 @@ func ReuseQuestionFamilyVersion(options RenderShapeOptions) string {
 	}
 	if options.InvestmentRepositoryFlow {
 		on = append(on, string(contractsv1.ContextFabricRenderRuleInvestmentRepositoryFlow))
+	}
+	if options.InvestmentSubcategoryShare {
+		on = append(on, string(contractsv1.ContextFabricRenderRuleInvestmentSubcategoryShare))
 	}
 	if options.InvestmentThemeShare {
 		on = append(on, string(contractsv1.ContextFabricRenderRuleInvestmentThemeShare))
@@ -237,7 +245,7 @@ func familyTakesShape(family QuestionFamily, shape InvestigationShape) bool {
 // (Codex #1949 r1): a result stored while it was on keeps its summaries, and
 // the summary is the same widening the shapes are.
 func WithoutDisabledRenderShapes(result InvestigationResult, options RenderShapeOptions) InvestigationResult {
-	if options.InvestmentThemeShare && options.ComparisonSideBySide && options.LandscapePosition && options.CompletionForecast && options.InvestmentRepositoryFlow {
+	if options.InvestmentThemeShare && options.InvestmentSubcategoryShare && options.ComparisonSideBySide && options.LandscapePosition && options.CompletionForecast && options.InvestmentRepositoryFlow {
 		return result
 	}
 	if !options.CompletionForecast {
@@ -248,6 +256,10 @@ func WithoutDisabledRenderShapes(result InvestigationResult, options RenderShape
 		switch shape.SelectedBy {
 		case contractsv1.ContextFabricRenderRuleInvestmentThemeShare:
 			if !options.InvestmentThemeShare {
+				continue
+			}
+		case contractsv1.ContextFabricRenderRuleInvestmentSubcategoryShare:
+			if !options.InvestmentSubcategoryShare {
 				continue
 			}
 		case contractsv1.ContextFabricRenderRuleInvestmentRepositoryFlow:

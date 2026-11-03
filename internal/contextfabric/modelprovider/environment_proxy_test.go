@@ -45,7 +45,12 @@ func TestTheLLMClientsNeverDialTheEnvironmentProxy(t *testing.T) {
 				panic(err)
 			}
 			for _, client := range clients {
-				_, err = client.Complete(ctx, llm.Request{Prompt: "ping"})
+				// Each call gets its own deadline (CHAOS-12868): a client's retry and backoff must not spend the next
+				// client's budget, and a deadline that ends a call fails loudly as the timeout, never as the client.
+				err := proxycapture.Call(ctx, func(ctx context.Context) error {
+					_, err := client.Complete(ctx, llm.Request{Prompt: "ping"})
+					return err
+				})
 				proxycapture.MustFailWith(err, "endpoint could not be reached")
 				_ = client.Close()
 			}
