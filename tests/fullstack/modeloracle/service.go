@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -133,6 +134,12 @@ type ServiceSynthesis struct {
 	// workload read holds one fact per work scope, and a live proof must claim exactly one
 	// scope). Without ClaimFields it names no field, so the plan is refused at load.
 	ClaimFirstOnly bool `json:"claim_first_only,omitempty"`
+	// ClaimDetailTables claims each named declared detail table, value null, from every
+	// canonical fact in the request whose detail_tables lists it, after the scalar claims
+	// (CHAOS-12857). A detail table reaches a claim only when the claim names it
+	// (CHAOS-12587), so a live proof of a sankey or a sunburst needs it. A named table that no
+	// fact lists fails loudly.
+	ClaimDetailTables []string `json:"claim_detail_tables,omitempty"`
 }
 
 type ServiceDriver struct {
@@ -177,6 +184,11 @@ func (p *ServicePlan) validate() error {
 			}
 			if s.ClaimFirstOnly && len(s.ClaimFields) == 0 {
 				return fmt.Errorf("service question %q sets claim_first_only without claim_fields", q.Question)
+			}
+			for _, table := range s.ClaimDetailTables {
+				if strings.TrimSpace(table) == "" {
+					return fmt.Errorf("service question %q has a blank name in claim_detail_tables", q.Question)
+				}
 			}
 		}
 		for _, ph := range q.OfferPhrasing {
@@ -472,6 +484,7 @@ func buildSynthesisReply(entry *ServiceQuestion, userMessage string) (string, er
 			Kind           string                     `json:"kind"`
 			Subject        json.RawMessage            `json:"subject"`
 			Fields         map[string]json.RawMessage `json:"fields"`
+			DetailTables   []string                   `json:"detail_tables"`
 			EvidenceRefIDs []string                   `json:"evidence_ref_ids"`
 		} `json:"canonical_facts"`
 		DriverCandidates []struct {
@@ -538,6 +551,25 @@ func buildSynthesisReply(entry *ServiceQuestion, userMessage string) (string, er
 		claims = append(claims, named...)
 	} else if claim := firstScalarClaim(in.Facts); claim != nil {
 		claims = append(claims, claim)
+	}
+	// CHAOS-12857: each named detail table, null, from every fact that lists it, after the
+	// scalars. The engine attaches the table's rows to a claim that names it.
+	for _, table := range plan.ClaimDetailTables {
+		listed := false
+		for _, fact := range in.Facts {
+			if !slices.Contains(fact.DetailTables, table) {
+				continue
+			}
+			listed = true
+			claim := map[string]any{"claim_id": fmt.Sprintf("claim_oracle_%02d", len(claims)+1), "kind": fact.Kind, "subject": fact.Subject, "field": table, "value": map[string]bool{"null": true}}
+			if fact.ID != "" {
+				claim["fact_id"] = fact.ID
+			}
+			claims = append(claims, claim)
+		}
+		if !listed {
+			return "", fmt.Errorf("the plan claims detail table %q and no canonical fact in the request lists it in detail_tables", table)
+		}
 	}
 	reply := map[string]any{
 		"status": plan.Status, "direct_judgment": plan.DirectJudgment, "current_state": plan.CurrentState,
