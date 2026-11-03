@@ -70,6 +70,15 @@ func TestAPlanClaimsEachNamedFieldFromItsFirstFactOnly(t *testing.T) {
 		`claim_oracle_03 fact_w3 backlog_size {"integer":12}`,
 	})
 
+	// First-only still fails loudly on a named field that no fact holds as a scalar.
+	plan, err := loadPlan(writeClaimPlan(t, map[string]any{"claim_fields": []string{"backlog_size", "cycle_p50_30d_hours"}, "claim_first_only": true}))
+	if err != nil {
+		t.Fatalf("loadPlan: %v", err)
+	}
+	if _, err := buildSynthesisReply(&plan.Service.Questions[0], request); err == nil || !strings.Contains(err.Error(), "cycle_p50_30d_hours") {
+		t.Fatalf("first-only with a field no fact holds: err = %v, want a loud failure naming it", err)
+	}
+
 	// claim_first_only names no field of its own: without claim_fields it would silently
 	// fall back to the first-scalar claim, so the plan is refused at load, naming it.
 	if _, err := loadPlan(writeClaimPlan(t, map[string]any{"claim_first_only": true})); err == nil || !strings.Contains(err.Error(), "claim_first_only") {
