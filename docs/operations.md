@@ -1032,10 +1032,25 @@ by default, and a release with it off renders exactly as before.
   `INFO persistence`). Keep it inside the memory limit's headroom above the
   sizing rule.
 - **Turning it off.** Run `redis-cli SAVE` first, so `dump.rdb` holds every
-  write, then roll with `appendOnly: false`. The pod starts from `dump.rdb`. Then
-  delete `appendonlydir` from the data volume before AOF is ever turned on again:
-  the wrapper takes an existing manifest as current, and an old AOF would bring
-  back the graph as it was when AOF was turned off.
+  write, then roll with `appendOnly: false`. The pod starts from `dump.rdb`.
+- **Turning it on again: a stale AOF is moved aside.** While AOF is off, the
+  graph moves on in `dump.rdb` alone, and the old `appendonlydir` stays on the
+  volume. Loading it would bring back the graph as it was when AOF went off
+  (executed: 1,100 nodes written, 1,000 read back). So, before it takes an AOF,
+  the wrapper compares the snapshot time Redis writes into `dump.rdb` (its
+  `ctime` field, read with `redis-check-rdb`) with the newest AOF file's mtime.
+  When the snapshot is more than 2 s newer, every AOF write is in the dump: the
+  wrapper moves `appendonlydir` aside whole to `appendonlydir.stale-<UTC time>`
+  (never deletes it), logs `acr-falkordb: STALE AOF: …`, and starts from
+  `dump.rdb`; the hook then writes a new AOF. A graceful restart with AOF on does
+  not trip it, because Redis rewrites the manifest at shutdown. A SIGKILL after a
+  quiet period longer than a save interval can trip it; that is safe (the dump
+  holds every write) and leaves one more `.stale-` directory. Delete
+  `.stale-` directories by hand once the graph has been read back. If the
+  snapshot time cannot be read, the wrapper says so and takes the AOF.
+- **The check needs the data volume's mtimes on the node's clock.** That holds for
+  a local volume. On a network volume whose server sets mtimes with another
+  clock, the comparison can be off by the skew between the two clocks.
 
 ### Vocabulary labels on an answer (CHAOS-12416)
 

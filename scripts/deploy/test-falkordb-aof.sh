@@ -36,15 +36,68 @@ printf 'REDIS_ARGS=[%s]\n' "${REDIS_ARGS:-}"
 EOF
 chmod +x "$work/bin/run.sh"
 
-run_start() { # $1 data dir -> the wrapper's stdout (its own line and the stub's)
-  env -i PATH="$PATH" FALKORDB_DATA_PATH="$1" FALKORDB_BIN_PATH="$work/bin" REDIS_ARGS="--existing yes" sh "$start"
+# Stubs for the stale-AOF check: redis-check-rdb prints the snapshot time the case
+# sets (RDB_CTIME; empty means unreadable), and stat answers `stat -c %Y <file>`
+# portably (the image has GNU stat; this Mac has BSD stat).
+mkdir -p "$work/startstub"
+cat >"$work/startstub/redis-check-rdb" <<'EOF'
+#!/bin/sh
+echo "[offset 0] Checking RDB file $1"
+[ -n "${RDB_CTIME:-}" ] && echo "[offset 52] AUX FIELD ctime = '$RDB_CTIME'"
+echo "[offset 67] AUX FIELD used-mem = '3424704'"
+EOF
+cat >"$work/startstub/stat" <<'EOF'
+#!/bin/sh
+[ "$1" = "-c" ] && [ "$2" = "%Y" ] || { echo "stub stat: unexpected $*" >&2; exit 2; }
+exec python3 -c 'import os, sys; print(int(os.stat(sys.argv[1]).st_mtime))' "$3"
+EOF
+chmod +x "$work/startstub/redis-check-rdb" "$work/startstub/stat"
+
+run_start() { # $1 data dir, $2 the dump's snapshot time (optional) -> the wrapper's stdout
+  env -i PATH="$work/startstub:$PATH" RDB_CTIME="${2:-}" FALKORDB_DATA_PATH="$1" FALKORDB_BIN_PATH="$work/bin" REDIS_ARGS="--existing yes" sh "$start"
+}
+set_mtime() { # $1 epoch seconds, then files
+  local t="$1"; shift
+  python3 -c 'import os, sys; t = int(sys.argv[1]); [os.utime(f, (t, t)) for f in sys.argv[2:]]' "$t" "$@"
+}
+aof_dir() { # $1 data dir: a manifest, a base and an incr file, all last written at $2
+  mkdir -p "$1/appendonlydir"
+  : >"$1/appendonlydir/appendonly.aof.manifest"; : >"$1/appendonlydir/appendonly.aof.1.base.rdb"; : >"$1/appendonlydir/appendonly.aof.1.incr.aof"
+  set_mtime "$2" "$1/appendonlydir/"*
 }
 
-data="$work/manifest"; mkdir -p "$data/appendonlydir"; : >"$data/dump.rdb"; : >"$data/appendonlydir/appendonly.aof.manifest"
-out="$(run_start "$data")"
+t0=1793700000
+data="$work/manifest"; mkdir -p "$data"; : >"$data/dump.rdb"; aof_dir "$data" "$t0"
+out="$(run_start "$data" "$((t0 - 60))")"
 grep -qF 'REDIS_ARGS=[--existing yes --appendonly yes --appendfsync everysec]' <<<"$out" \
   || fail "start: an AOF manifest must start with AOF on, keeping REDIS_ARGS: $out"
-pass "start: AOF manifest present -> appendonly yes, appendfsync everysec, operator REDIS_ARGS kept"
+pass "start: AOF manifest present, dump snapshotted before the last AOF write -> appendonly yes, appendfsync everysec, operator REDIS_ARGS kept"
+
+# A stale AOF: turned off, the graph moved on in dump.rdb alone, turned on again.
+# Loading the old AOF would bring back the graph as it was when AOF went off.
+data="$work/stale"; mkdir -p "$data"; : >"$data/dump.rdb"; aof_dir "$data" "$t0"
+out="$(run_start "$data" "$((t0 + 600))")"
+grep -qF 'REDIS_ARGS=[--existing yes]' <<<"$out" || fail "start: a dump snapshotted after the last AOF write must start from dump.rdb: $out"
+grep -qF 'acr-falkordb: STALE AOF:' <<<"$out" || fail "start: a stale AOF must be said loudly: $out"
+[[ ! -e "$data/appendonlydir" ]] || fail "start: a stale AOF dir must be moved aside, not loaded"
+aside=("$data"/appendonlydir.stale-*)
+[[ ${#aside[@]} -eq 1 && -f "${aside[0]}/appendonly.aof.manifest" && -f "${aside[0]}/appendonly.aof.1.incr.aof" ]] \
+  || fail "start: the stale AOF must be kept whole under appendonlydir.stale-<time>: $(ls "$data")"
+pass "start: dump snapshotted after the last AOF write -> AOF moved aside whole (never deleted), RDB path, said loudly"
+
+data="$work/within-slack"; mkdir -p "$data"; : >"$data/dump.rdb"; aof_dir "$data" "$t0"
+out="$(run_start "$data" "$((t0 + 2))")"
+grep -qF 'REDIS_ARGS=[--existing yes --appendonly yes --appendfsync everysec]' <<<"$out" \
+  || fail "start: a snapshot within 2 s of the last AOF write must not count as newer (fork and flush can share a second): $out"
+[[ -f "$data/appendonlydir/appendonly.aof.manifest" ]] || fail "start: an AOF within the slack must stay in place"
+pass "start: a snapshot within 2 s of the last AOF write -> AOF kept and loaded"
+
+data="$work/ctime-unreadable"; mkdir -p "$data"; : >"$data/dump.rdb"; aof_dir "$data" "$t0"
+out="$(run_start "$data" "")"
+grep -qF 'REDIS_ARGS=[--existing yes --appendonly yes --appendfsync everysec]' <<<"$out" \
+  || fail "start: an unreadable snapshot time must take the AOF: $out"
+grep -qF 'could not read the snapshot time of dump.rdb' <<<"$out" || fail "start: an unreadable snapshot time must be said: $out"
+pass "start: snapshot time unreadable -> AOF taken, said in the log"
 
 data="$work/rdb-only"; mkdir -p "$data"; : >"$data/dump.rdb"
 out="$(run_start "$data")"
