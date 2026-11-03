@@ -2118,6 +2118,103 @@ func windowConfirmationSkippedWarning(effective *contractsv1.ContextFabricEffect
 	return "Clarification was not permitted, so this answer used the inferred evidence window " + used + confidence + "; window confirmation was skipped."
 }
 
+// inferredWindowAnsweredWarning (CHAOS-4451) names the window an answer read
+// when the engine inferred it and the caller may still confirm another: the
+// offer rides beside the answer (window_clarification and the window member
+// of structure_needs), so the sentence says where to pick.
+func inferredWindowAnsweredWarning(effective *contractsv1.ContextFabricEffectiveEvidenceWindow) string {
+	used := string(effective.RelativeID)
+	if effective.Start != nil && effective.End != nil {
+		used += " (" + effective.Start.UTC().Format("2006-01-02") + " to " + effective.End.UTC().Format("2006-01-02") + ")"
+	}
+	return "This answer read the evidence window " + used + ", which was inferred from the question, not stated; choose another window from the offered options to read again."
+}
+
+// InferredWindowGateDecision (CHAOS-4451) is what the class-default window
+// gate did with a turn whose window the engine inferred: ended it on the
+// window confirmation, or answered on the inferred window with the offer.
+type InferredWindowGateDecision string
+
+const (
+	InferredWindowGateGated    InferredWindowGateDecision = "gated"
+	InferredWindowGateAnswered InferredWindowGateDecision = "answered"
+)
+
+// InferredWindowGateBasis is why. One basis per decision; when several gating
+// reasons hold, the first in this order names it.
+type InferredWindowGateBasis string
+
+const (
+	// InferredWindowGateBasisOffersUnavailable: the offers-only pass did not
+	// read (disabled, frame refused, failed, graph not projected), so it
+	// cannot show the window is the only question.
+	InferredWindowGateBasisOffersUnavailable InferredWindowGateBasis = "offers_unavailable"
+	// InferredWindowGateBasisPeriodShape: the frame asks for a series or a
+	// period comparison. Its period is the question itself, not a default an
+	// answer can stand on, and one inferred current window would drop it.
+	InferredWindowGateBasisPeriodShape InferredWindowGateBasis = "period_shape"
+	// InferredWindowGateBasisBeyondWindow: the pass found a question beyond
+	// the window (a kind, anchor, handle or candidate).
+	InferredWindowGateBasisBeyondWindow InferredWindowGateBasis = "offers_beyond_window"
+	// InferredWindowGateBasisWindowOnly: the window is the only question; the
+	// turn answers on it and serves the window offer beside the answer.
+	InferredWindowGateBasisWindowOnly InferredWindowGateBasis = "window_only"
+	// InferredWindowGateBasisWindowOnlyUnpickableAsks (CHAOS-12640): the pass
+	// named needs beyond the window but offered nothing to pick for them (the
+	// standing zero-candidates disclosure); the window is the only question
+	// the caller can answer, so the turn answers.
+	InferredWindowGateBasisWindowOnlyUnpickableAsks InferredWindowGateBasis = "window_only_unpickable_asks"
+)
+
+// InferredWindowGateDecisionVocabulary is the closed decision vocabulary, in
+// published order.
+func InferredWindowGateDecisionVocabulary() []string {
+	return []string{string(InferredWindowGateGated), string(InferredWindowGateAnswered)}
+}
+
+// InferredWindowGateBasisVocabulary is the closed basis vocabulary, in
+// published order.
+func InferredWindowGateBasisVocabulary() []string {
+	return []string{string(InferredWindowGateBasisOffersUnavailable), string(InferredWindowGateBasisPeriodShape), string(InferredWindowGateBasisBeyondWindow), string(InferredWindowGateBasisWindowOnly), string(InferredWindowGateBasisWindowOnlyUnpickableAsks)}
+}
+
+// decideInferredWindowGate is the class-default gate's one decision
+// (CHAOS-4451, lead ruling 2026-11-02, option 1 of chris's options on the
+// ticket: "default window with disclosure, or offer + partial answer"): the
+// turn ends on the window confirmation only when the window is not its only
+// question. CHAOS-12640 (lead ruling, FINAL): a question beyond the window
+// counts only when the pass offers something to pick for it
+// (offerMaterialRedeemable). A need named with no option (the standing
+// zero-candidates disclosure) is kept on the result but does not gate.
+func decideInferredWindowGate(material StructureOfferMaterial, offersUnavailable bool, frame *QuestionFrame) (InferredWindowGateDecision, InferredWindowGateBasis) {
+	switch {
+	case offersUnavailable:
+		return InferredWindowGateGated, InferredWindowGateBasisOffersUnavailable
+	case periodShapeOf(frame) != periodShapeCurrent:
+		return InferredWindowGateGated, InferredWindowGateBasisPeriodShape
+	case offerMaterialRedeemable(material):
+		return InferredWindowGateGated, InferredWindowGateBasisBeyondWindow
+	case StructureNeedsWouldDisclose(material):
+		return InferredWindowGateAnswered, InferredWindowGateBasisWindowOnlyUnpickableAsks
+	}
+	return InferredWindowGateAnswered, InferredWindowGateBasisWindowOnly
+}
+
+// answeredWindowStructureNeeds (CHAOS-4451) is the window-only disclosure an
+// answer on an inferred window carries, so a consumer that draws offers from
+// structure_needs (ask-dev's popup does, beside the answer) shows the window
+// choice. Missing=[window] and WindowOptions mirror window_clarification
+// exactly, the same shape CHAOS-4118 gave the confirmation terminal.
+func answeredWindowStructureNeeds(clarification *contractsv1.ContextFabricWindowClarification) *contractsv1.ContextFabricStructureNeeds {
+	if clarification == nil || len(clarification.Options) == 0 {
+		return nil
+	}
+	return &contractsv1.ContextFabricStructureNeeds{
+		Missing:       []contractsv1.ContextFabricStructureNeedKind{contractsv1.ContextFabricStructureNeedWindow},
+		WindowOptions: append([]contractsv1.ContextFabricWindowOption(nil), clarification.Options...),
+	}
+}
+
 // appendRequiredWarning adds a warning that must be served even when the list
 // is already at its bound: it takes the place of the last entry then.
 func appendRequiredWarning(warnings []string, sentence string) []string {

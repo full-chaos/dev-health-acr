@@ -281,6 +281,24 @@ func init() {
 			exhaustive: true,
 		},
 		outputVocabulary{
+			// CHAOS-12639: the vocabulary a claimed table declares for a token
+			// column. Closed like measure_units.unit: a consumer looks words up
+			// only in a vocabulary it knows, and a new one is a contract change.
+			name:  "ClaimedFactTable.column_vocabularies",
+			kind:  vocabFrozen,
+			why:   "protocol",
+			sites: []string{"ClaimedFactTable.column_vocabularies.additionalProperties", "ProjectedFactTable.column_vocabularies.additionalProperties"},
+			// schema: "investment_theme", "subcategory"
+			goSet: func() []string {
+				var out []string
+				for _, vocabulary := range contractsv1.ContextFabricColumnVocabularyNames() {
+					out = append(out, string(vocabulary))
+				}
+				return out
+			}(),
+			exhaustive: true,
+		},
+		outputVocabulary{
 			// CHAOS-11985: the expected spacing of a time_series table's rows.
 			// Closed: a consumer breaks a line only on a cadence it knows.
 			name:  "ClaimedFactTable.cadence",

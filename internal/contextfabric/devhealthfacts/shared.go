@@ -1378,11 +1378,20 @@ import (
 // issue by its own repository (CHAOS-12561). An answer saved under v267 can say
 // such an issue is not in what the caller can read.
 //
-// v268 -> v270 (v269 is taken by the column word sources, which land first): a
-// team investment fact on a single-team read carries repository_theme_breakdown,
-// its effort split by repository (CHAOS-12580). An answer saved under v268 has
-// no such table.
-const QueryVersion = "devhealthfacts.clickhouse.v270"
+// v268 -> v269: an organization investment fact is served to every caller, a
+// repository-bound or project-only grant included, and an organization
+// allocation question is answered from it (CHAOS-12585). An answer saved under
+// v268 for such a caller says the fact was refused.
+//
+// v269 -> v270: a claimed table states where each cell's word comes from: the
+// theme column's vocabulary and each id column's word column (CHAOS-12639). An
+// answer saved under v269 serves raw theme tokens and ids with no word to show
+// in their place.
+//
+// v270 -> v271: a team investment fact on a single-team read carries
+// repository_theme_breakdown, its effort split by repository (CHAOS-12580). An
+// answer saved under v270 has no such table.
+const QueryVersion = "devhealthfacts.clickhouse.v271"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each

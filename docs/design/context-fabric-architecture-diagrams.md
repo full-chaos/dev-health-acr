@@ -79,8 +79,11 @@ flowchart TD
   WGATE -->|"regime A: inferred_default"| GATED["gatedOfferMaterial<br/>chaos4234_offers_only.go"]
   GATED --> OFFRES["graph.ResolveSubjects(WithOffersOnlyResolution)<br/>same pool mechanism as regime B,<br/>commit-bearing output DISCARDED"]
   OFFRES --> CLSGATE{"GateOffersByFamily<br/>family ApplicableAxes gate, CHAOS-4634<br/>(subsumes CHAOS-4579/4531)<br/>chaos4579_cohort_structure_gate.go"}
-  CLSGATE -->|"family=discovered_cohort_ranking:<br/>only window applicable -> drop kind/anchor/handle/candidate<br/>rows AND their options together"| WOFFER
-  CLSGATE -->|"family=subject_investigation / explicit_comparison / unclassified:<br/>no axis restricted -> pass through,<br/>standing zero-candidates ruling unchanged"| WOFFER
+  CLSGATE -->|"family=discovered_cohort_ranking:<br/>only window applicable -> drop kind/anchor/handle/candidate<br/>rows AND their options together"| WDEC
+  CLSGATE -->|"family=subject_investigation / explicit_comparison / unclassified:<br/>no axis restricted -> pass through,<br/>standing zero-candidates ruling unchanged"| WDEC
+  WDEC{"decideInferredWindowGate (window.go, CHAOS-4451)<br/>line contextfabric.inferred_window_gate"}
+  WDEC -->|"gated: offers_unavailable /<br/>period_shape / offers_beyond_window"| WOFFER
+  WDEC -->|"answered: window_only -- decisive path on the<br/>inferred window (provenance kept inferred_default),<br/>window offer + window-only structure_needs beside the answer"| RESOLVE
   WOFFER["windowConfirmationRequiredResult<br/>status=clarification_required, SubjectResolution EMPTY<br/>kind/handle/candidate offers minted BESIDE window offer"]
   WGATE -->|"regime B: explicit / confirmed window"| RESOLVE["graphrank.ResolveSubjects<br/>ResolveDeps: Search / SearchQuestion / SearchKind /<br/>AliasLookup + CHAOS-4038 coverage floor<br/>(see diagram 2)"]
   RESOLVE --> POOL["candidate pool split:<br/>pool (commit-eligible) vs offerOnlyPool (CHAOS-4271)<br/>-- see diagram 2 for why this matters"]
@@ -300,6 +303,19 @@ same handle, and any question about a repository, team or project, keeps the
 shape fallback. The decision and its basis (`model`, `shape_fallback`,
 `handle_state`, `none`) are the Info line `context fabric window
 classification`, which also carries the model's own sanitized pick.
+
+**An unknown window pick is dropped, not refused (CHAOS-12617).** The output
+schema keeps the `window_class` and `window_confidence` enums, as providers
+read them. But the schema gate of the LLM generator (`llmGenerator.check`) and
+of the supplied path (`SuppliedInterpreter.decode`) used to refuse a whole
+otherwise-valid interpretation for one string outside its enum. That gate now
+validates a copy of the reply without such a pick
+(`withoutUnknownWindowPicks`, `genkitruntime/unknown_window_pick.go`), and
+writes one Info line that names the fields, never the value. The decode reads
+the reply as written, so the sanitizer leaves the class unset and sets
+`window_class_unrecognized`, as on the file-exchange parser. A pick that is
+not a string, and every other violation, still refuse. There is no wire
+change and no version bump.
 
 **Every current-axis answer states its window (CHAOS-11601).** When the
 question names no period and its window class carries no default
@@ -3446,7 +3462,7 @@ uses `ServeStoredWorkItemTuple`; `response_owner_middleware.go` encloses recover
 ```mermaid
 flowchart TD
   REUSE["Try reuse first"] -->|"miss: release discarded lease"| INTERPRET["Validate and interpret frame + TimeContext"]
-  INTERPRET --> POLICY["LookupQuestionFamily: private tuple policy<br/>true only for scoped_cohort_status; unknown denies<br/>question-family.v5 reuse/carry fence"]
+  INTERPRET --> POLICY["LookupQuestionFamily: private tuple policy<br/>true only for scoped_cohort_status; unknown denies<br/>question-family.v6 reuse/carry fence"]
   POLICY --> INITIAL{"Initial tuple admission:<br/>children_of_scope + work_item<br/>assess_state/count_or_aggregate only<br/>current intent AND current axis<br/>qualifier absent, or a status qualifier<br/>whose value is in the closed status set<br/>(assignee and unrecognized stay refused).<br/>A bounded_window frame is admitted only with a<br/>server-committed window and exactly one time<br/>field bound from the question verb"}
   INITIAL -->|"refused / invalid"| REFUSE["existing refusal; no ResolveSubjects or S1"]
   INITIAL -->|"prospective"| FINAL["Final family routing + accepted continuation + plan carry<br/>lookup final family policy; tighten gate using policy and effective time"]

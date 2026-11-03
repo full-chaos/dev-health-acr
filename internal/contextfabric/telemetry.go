@@ -439,6 +439,14 @@ func (t SlogEngineTelemetry) RecordWindowCanonicalization(ctx context.Context, p
 	t.logger.InfoContext(ctx, "context fabric window canonicalization outcome", args...)
 }
 
+// RecordOperandReadKinds (CHAOS-12596) logs at Info: three plain counts.
+func (t SlogEngineTelemetry) RecordOperandReadKinds(ctx context.Context, principal storage.Principal, operandRows, kindsNamed, kindsAdded int) {
+	args := append([]any{
+		"org_id", SanitizeLogAttr(principal.OrgID), "operand_rows", operandRows, "kinds_named", kindsNamed, "kinds_added", kindsAdded,
+	}, requestIDLogAttrs(ctx)...)
+	t.logger.InfoContext(ctx, "context fabric plan operand reads", args...)
+}
+
 // RecordWindowClassification (CHAOS-12595) logs at Info: every field is a
 // closed vocabulary member or a bool, never question text.
 func (t SlogEngineTelemetry) RecordWindowClassification(ctx context.Context, principal storage.Principal, modelClass WindowClass, outcome WindowClassOutcome) {
@@ -449,6 +457,15 @@ func (t SlogEngineTelemetry) RecordWindowClassification(ctx context.Context, pri
 		"downgraded", outcome.Downgraded,
 	}, requestIDLogAttrs(ctx)...)
 	t.logger.InfoContext(ctx, "context fabric window classification", args...)
+}
+
+// RecordInferredWindowGate (CHAOS-4451) logs at Info: both fields are closed
+// vocabulary members, never question text.
+func (t SlogEngineTelemetry) RecordInferredWindowGate(ctx context.Context, principal storage.Principal, decision InferredWindowGateDecision, basis InferredWindowGateBasis) {
+	args := append([]any{
+		"org_id", SanitizeLogAttr(principal.OrgID), "decision", SanitizeLogAttr(string(decision)), "basis", SanitizeLogAttr(string(basis)),
+	}, requestIDLogAttrs(ctx)...)
+	t.logger.InfoContext(ctx, "context fabric inferred window gate", args...)
 }
 
 // RecordInterpretationTerms (CHAOS-12632) logs at Info: a count, a closed
@@ -776,13 +793,6 @@ func (t SlogEngineTelemetry) RecordProjectedRowsByFactKind(ctx context.Context, 
 func (t SlogEngineTelemetry) RecordDualTableFacts(ctx context.Context, principal storage.Principal, dualTableClaims, secondaryRowsBytes int) {
 	args := append([]any{"org_id", SanitizeLogAttr(principal.OrgID), "dual_table_claims", dualTableClaims, "secondary_rows_bytes", secondaryRowsBytes}, requestIDLogAttrs(ctx)...)
 	t.logger.InfoContext(ctx, "context fabric dual table facts", args...)
-}
-
-// RecordDetailTablesAttached implements EngineTelemetry (CHAOS-12587).
-// Content-safe: an org id, two counts and declared field names.
-func (t SlogEngineTelemetry) RecordDetailTablesAttached(ctx context.Context, principal storage.Principal, event DetailTablesAttachedEvent) {
-	args := append([]any{"org_id", SanitizeLogAttr(principal.OrgID), "detail_table_claims", event.Claims, "detail_tables", SanitizeLogStrings(nonNilStrings(event.Tables)), "detail_tables_omitted", event.Omitted}, requestIDLogAttrs(ctx)...)
-	t.logger.InfoContext(ctx, "context fabric detail tables attached", args...)
 }
 
 // RecordModelRowsStripped implements EngineTelemetry (CHAOS-4355

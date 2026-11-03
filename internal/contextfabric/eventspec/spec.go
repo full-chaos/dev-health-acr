@@ -684,10 +684,13 @@ var KindOfferWithheld = Event{
 //
 // COUNTS ONLY: no canonical id, label, question or term -- the ids are exactly
 // what this line must not carry. Subject kinds are closed-vocabulary values.
-// MultiplicityZeroOrOnePerRequest: ONE PER REQUEST, from whichever single
-// resolution the request runs. A request runs the offers-only resolution under
-// the class-default window gate (the engine returns after it) or the decisive
-// one, never both, and both count the same hints the same way; the engine's
+// MultiplicityZeroOrOnePerRequest: ONE PER REQUEST, from the first resolution
+// the request runs with its hints. Under the class-default window gate that is
+// the offers-only resolution: the engine returns after it, or (CHAOS-4451, the
+// window is the only question) goes on to the decisive one, which it marks
+// with contextfabric.WithPageHintLookupReported so it writes no second line.
+// Any other request runs the decisive one only. Both modes count the same
+// hints the same way; the engine's
 // other resolutions (cohort group read, answer-reuse recheck) carry only
 // engine-minted hint sources (contextfabric/
 // page_hint_lookup_resolution_calls_test.go pins this). A request with no page
@@ -699,7 +702,7 @@ var PageHintLookup = Event{
 	Level:              LevelInfo,
 	Multiplicity:       MultiplicityZeroOrOnePerRequest,
 	Attribution:        []string{"request_id"},
-	BoundedAggregation: "at most one line per request: emitted from one deferred statement once resolveSubjects reached its subject-hint loop, only when the request carries at least one ask_dev_page_context hint, by the one resolution that request runs with those hints (the gated offers-only resolution or the decisive one, never both); CertifyAbsent asserts the request with none.",
+	BoundedAggregation: "at most one line per request: emitted from one deferred statement once resolveSubjects reached its subject-hint loop, only when the request carries at least one ask_dev_page_context hint, by the first resolution that request runs with those hints (the gated offers-only resolution, or else the decisive one; a decisive resolution after the offers-only one carries contextfabric.WithPageHintLookupReported and writes none); CertifyAbsent asserts the request with none.",
 	Fields: []Field{
 		{Key: "request_id", Type: FieldString, Presence: PresenceRequired},
 		{Key: "stage", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: []string{"page_hint_lookup"}},
@@ -2125,6 +2128,24 @@ var WindowCanonicalizationOutcome = Event{
 	},
 }
 
+// PlanOperandReads is the Info line of what a comparison turn's operand read rows added to the plan (CHAOS-12596).
+var PlanOperandReads = Event{
+	ID:                       "contextfabric.plan_operand_reads",
+	Msg:                      "context fabric plan operand reads",
+	Level:                    LevelInfo,
+	Multiplicity:             MultiplicityZeroOrOnePerRequest,
+	RequiredOnlyConstruction: true,
+	Attribution:              []string{"request_id"},
+	BoundedAggregation:       "at most one line per investigation: recorded once, when the plan is built and the turn has an operand read row.",
+	Fields: []Field{
+		{Key: "org_id", Type: FieldString, Presence: PresenceRequired},
+		{Key: "operand_rows", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "kinds_named", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "kinds_added", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "request_id", Type: FieldString, Presence: PresenceConditional, Applicability: requestIDApplicability},
+	},
+}
+
 // WindowClassification is the Info line of the window-class decision a current-axis turn with no request window draws its default from (CHAOS-12595).
 var WindowClassification = Event{
 	ID:                       "contextfabric.window_classification",
@@ -2142,6 +2163,23 @@ var WindowClassification = Event{
 		{Key: "confidence", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: contextfabric.WindowConfidenceLogVocabulary()},
 		{Key: "basis", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: contextfabric.WindowClassBasisVocabulary()},
 		{Key: "downgraded", Type: FieldBool, Presence: PresenceRequired},
+		{Key: "request_id", Type: FieldString, Presence: PresenceConditional, Applicability: requestIDApplicability},
+	},
+}
+
+// InferredWindowGate is the Info line of what the class-default window gate decided for a turn on an inferred window, and why (CHAOS-4451).
+var InferredWindowGate = Event{
+	ID:                       "contextfabric.inferred_window_gate",
+	Msg:                      "context fabric inferred window gate",
+	Level:                    LevelInfo,
+	Multiplicity:             MultiplicityZeroOrOnePerRequest,
+	RequiredOnlyConstruction: true,
+	Attribution:              []string{"request_id"},
+	BoundedAggregation:       "at most one line per investigation: written once, when the class-default gate decides a turn whose window was inferred and clarification is allowed.",
+	Fields: []Field{
+		{Key: "org_id", Type: FieldString, Presence: PresenceRequired},
+		{Key: "decision", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: contextfabric.InferredWindowGateDecisionVocabulary()},
+		{Key: "basis", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: contextfabric.InferredWindowGateBasisVocabulary()},
 		{Key: "request_id", Type: FieldString, Presence: PresenceConditional, Applicability: requestIDApplicability},
 	},
 }
@@ -5899,7 +5937,9 @@ var All = []Event{
 	StatedWindowAxisDecision,
 	WindowGatedForConfirmation,
 	WindowCanonicalizationOutcome,
+	PlanOperandReads,
 	WindowClassification,
+	InferredWindowGate,
 	InterpretationTerms,
 	WindowCarry,
 	KindCarry,

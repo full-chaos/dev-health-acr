@@ -7,10 +7,11 @@ import (
 )
 
 // CHAOS-12592: a web user reads the whole organization, so the organization-
-// level reads that refuse a repository-bound caller serve it: the investment
-// org mix, source health and the unit listing (sourceHealthRestricted), and the
-// incidents and blockers org-wide figures (orgWideFigureAllowed). A credential
-// that names repositories keeps the refusal.
+// level reads that refuse a repository-bound caller serve it: source health and
+// the investment unit listing (sourceHealthRestricted), and the incidents and
+// blockers org-wide figures (orgWideFigureAllowed). A credential that names
+// repositories keeps the refusal. The investment org mix is served to every
+// caller (CHAOS-12585).
 func TestAWebUserReadsOrganizationLevelFacts(t *testing.T) {
 	t.Parallel()
 	web := userprincipal.WebUser(t, "org_1")

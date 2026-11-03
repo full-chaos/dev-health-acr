@@ -224,14 +224,13 @@ func (p *InvestmentProvider) ReadFacts(ctx context.Context, principal storage.Pr
 		rejectedCount += rejected
 	}
 
-	orgRestricted, orgUnattributedOnly := false, false
+	orgUnattributedOnly := false
 	if orgSubjects := subjectsOfKind(query.Subjects, contextfabric.SubjectOrganization); len(orgSubjects) > 0 {
-		rejected, restricted, unattributedOnly, scanErr := p.readOrganizationThemeMix(ctx, principal, orgID, orgSubjects, &facts, timeBound)
+		rejected, unattributedOnly, scanErr := p.readOrganizationThemeMix(ctx, orgID, orgSubjects, &facts, timeBound)
 		if scanErr != nil {
 			return contextfabric.FactProviderResult{}, readFailure("query organization theme mix", scanErr)
 		}
 		rejectedCount += rejected
-		orgRestricted = restricted
 		orgUnattributedOnly = unattributedOnly
 	}
 
@@ -242,8 +241,9 @@ func (p *InvestmentProvider) ReadFacts(ctx context.Context, principal storage.Pr
 			prefix := teamPrefix
 			if subject.Kind == contextfabric.SubjectOrganization {
 				// Only the caller's own organization, one listing, and never for
-				// a repository-bound grant (the organization fact is withheld
-				// for it too: a partial total is not an organization's).
+				// a restricted grant: a unit is an evidence row, and it can name
+				// a repository outside the grant. The organization fact itself
+				// goes to every caller (the lead's ruling on CHAOS-12585).
 				if len(ownOrganization) == 0 || subject.CanonicalID != ownOrganization[0].CanonicalID || sourceHealthRestricted(principal) {
 					continue
 				}
@@ -333,12 +333,6 @@ func (p *InvestmentProvider) ReadFacts(ctx context.Context, principal storage.Pr
 	orgSubjects := subjectsOfKind(query.Subjects, contextfabric.SubjectOrganization)
 	if orgUnattributedOnly {
 		addScopedReason(&result, query.Subjects, orgSubjects, investmentOrgUnattributedOnlyReason)
-	}
-	if orgRestricted {
-		if len(facts) == 0 && coversEveryQueriedSubject(query.Subjects, orgSubjects) {
-			result.State = contextfabric.SourceNotApplicable
-		}
-		addScopedReason(&result, query.Subjects, orgSubjects, investmentOrgRestrictedReason)
 	}
 	if len(cutSubjects) > 0 {
 		result.Truncated = true

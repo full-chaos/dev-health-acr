@@ -2,6 +2,7 @@ package contextfabric
 
 import (
 	"context"
+	"slices"
 
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
@@ -359,7 +360,60 @@ func planFactKinds(definition QuestionFamilyDefinition, interpretation Interpret
 	for _, kind := range ComputedStepInputReads(requirements) {
 		appendKind(kind)
 	}
+	kinds, _ = appendOperandReadKinds(kinds, requirements)
 	return kinds
+}
+
+// appendOperandReadKinds is planFactKinds' fourth widening (CHAOS-12596):
+// every kind a served OPERAND read row names as serving its side, appended
+// last for the same first-kind-wins reason as the three above it, so a kind
+// the model, the family or a computed step already named keeps that entry.
+// It returns the kinds it actually added, which the operand-read telemetry
+// line counts.
+func appendOperandReadKinds(kinds []FactKind, requirements []DerivedRequirement) ([]FactKind, []FactKind) {
+	var added []FactKind
+	for _, kind := range OperandReadRowServingKinds(requirements) {
+		if slices.Contains(kinds, kind) {
+			continue
+		}
+		kinds = append(kinds, kind)
+		added = append(added, kind)
+	}
+	return kinds, added
+}
+
+// operandReadFactRequirements is the fact request group for the kinds served
+// operand read rows name (CHAOS-12596): one requirement per kind, in
+// vocabulary order, nil for a work-item tuple or when there is none.
+func operandReadFactRequirements(rows []DerivedRequirement, workItemTuple bool) []FactRequirement {
+	if workItemTuple {
+		return nil
+	}
+	var requirements []FactRequirement
+	for _, kind := range OperandReadRowServingKinds(rows) {
+		requirements = append(requirements, FactRequirement{Kind: kind})
+	}
+	return requirements
+}
+
+// operandKindsAbsentFrom counts the operand requirements whose kind no
+// earlier group already requests: what the fact request gained only because
+// of the operand rows. A count, not a second merge, so the fact request keeps
+// its one merge sink (TestMergeSinkArityPinsTheAuthorityRoster).
+func operandKindsAbsentFrom(operand []FactRequirement, earlier ...[]FactRequirement) int {
+	present := make(map[FactKind]struct{})
+	for _, group := range earlier {
+		for _, requirement := range group {
+			present[requirement.Kind] = struct{}{}
+		}
+	}
+	added := 0
+	for _, requirement := range operand {
+		if _, ok := present[requirement.Kind]; !ok {
+			added++
+		}
+	}
+	return added
 }
 
 // isCohortSubjectAxis reports whether this family answers about many
@@ -567,6 +621,9 @@ func (e *Engine) finalizeResult(
 	// The measure units come from the declarations, never from a claim's own
 	// table, and are stated before any shape reads a table (CHAOS-11984).
 	result.ClaimedFacts = withDeclaredMeasureUnits(result.ClaimedFacts, e.measureUnitsOf)
+	// Where each cell's word comes from, from the declarations alone
+	// (CHAOS-12639).
+	result.ClaimedFacts = withDeclaredColumnWords(result.ClaimedFacts, e.columnWordsOf)
 	// The cadence too, and only where the rows keep it (CHAOS-11985).
 	result.ClaimedFacts = withDeclaredCadence(result.ClaimedFacts, e.renderShapeOptions.TableCadence)
 	renderShapes, _ := selectRenderShapes(result, frame, e.renderShapeOptions)

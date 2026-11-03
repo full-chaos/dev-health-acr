@@ -60,3 +60,46 @@ func TestCHAOS12580OnlyTheRepositoryFlowTableDeclaresARepositoryAndAThemeColumn(
 		t.Fatal("no producer declares repository_theme_breakdown: the guard measured nothing")
 	}
 }
+
+// The sankey's node words come from the table itself: repository is worded by
+// repository_label (its handle), and theme by the theme vocabulary
+// (CHAOS-12639). Without them an answer shows a canonical id and a raw token.
+func TestCHAOS12580TheRepositoryThemeTableDeclaresItsWords(t *testing.T) {
+	t.Parallel()
+	for _, provider := range devhealthfacts.NewProviders(&fakeClient{}) {
+		raw, err := json.Marshal(provider.Capability())
+		if err != nil {
+			t.Fatal(err)
+		}
+		var capability struct {
+			Fields []struct {
+				Name    string `json:"name"`
+				Columns []struct {
+					Name       string `json:"name"`
+					Vocabulary string `json:"vocabulary"`
+					WordColumn string `json:"word_column"`
+				} `json:"columns"`
+			} `json:"fields"`
+		}
+		if err := json.Unmarshal(raw, &capability); err != nil {
+			t.Fatal(err)
+		}
+		for _, field := range capability.Fields {
+			if field.Name != contractsv1.ContextFabricRenderRepositoryFlowTableField {
+				continue
+			}
+			words := map[string][2]string{}
+			for _, column := range field.Columns {
+				words[column.Name] = [2]string{column.Vocabulary, column.WordColumn}
+			}
+			if got, want := words[contractsv1.ContextFabricRenderRepositoryField], [2]string{"", "repository_label"}; got != want {
+				t.Errorf("repository column words %v, want %v", got, want)
+			}
+			if got, want := words[contractsv1.ContextFabricRenderThemeField], [2]string{string(contractsv1.ContextFabricVocabularyInvestmentTheme), ""}; got != want {
+				t.Errorf("theme column words %v, want %v", got, want)
+			}
+			return
+		}
+	}
+	t.Fatal("no producer declares repository_theme_breakdown: the test measured nothing")
+}

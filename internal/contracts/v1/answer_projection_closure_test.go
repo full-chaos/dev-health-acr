@@ -367,7 +367,10 @@ func TestEveryProjectionStringFieldIsClassified(t *testing.T) {
 		// table and time_series_table.
 		// CHAOS-11985: 265 -> 267 -- table.cadence and time_series_table.cadence,
 		// a closed vocabulary.
-		{name: "answer_projection", root: "answer", prefix: "structured", untrusted: MCPInvestigateQuestionUntrustedFields, expectedPaths: 267},
+		// CHAOS-12639: 267 -> 271 -- column_vocabularies{} (a closed
+		// vocabulary) and word_columns{} (untrusted like key[]), on both table
+		// and time_series_table.
+		{name: "answer_projection", root: "answer", prefix: "structured", untrusted: MCPInvestigateQuestionUntrustedFields, expectedPaths: 271},
 		// CHAOS-4087: 213 -> 217 -- CommitDecisionDigest contributed four
 		// new string leaves (commit_gate, subject.kind, subject.canonical_id,
 		// subject.label).
@@ -457,7 +460,9 @@ func TestEveryProjectionStringFieldIsClassified(t *testing.T) {
 		// projection.
 		// CHAOS-11985: 386 -> 388 -- the same two cadence leaves as the
 		// projection.
-		{name: "investigation_result", root: "result", prefix: "structured", untrusted: MCPInvestigationResultUntrustedFields, expectedPaths: 388},
+		// CHAOS-12639: 388 -> 392 -- the same four column word leaves as the
+		// projection.
+		{name: "investigation_result", root: "result", prefix: "structured", untrusted: MCPInvestigationResultUntrustedFields, expectedPaths: 392},
 	} {
 		t.Run(surface.name, func(t *testing.T) {
 			paths := stringPathsIn(t, documents, surface.root, surface.prefix)
@@ -533,6 +538,11 @@ func trustedBecauseClosed(path string) bool {
 	// vocabulary the server copies from the producer's declaration. Matched on
 	// its full suffix, not the bare leaf "unit".
 	if strings.HasSuffix(path, ".measure_units[].unit") {
+		return true
+	}
+	// column_vocabularies{} values are a closed column vocabulary the server
+	// copies from the producer's declaration (CHAOS-12639).
+	if strings.HasSuffix(path, ".column_vocabularies{}") {
 		return true
 	}
 	// table.cadence and time_series_table.cadence are
