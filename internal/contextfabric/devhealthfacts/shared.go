@@ -1414,7 +1414,14 @@ import (
 // v275 -> v276: a team investment fact on a single-team read carries
 // repository_theme_breakdown, its effort split by repository (CHAOS-12580). An
 // answer saved under v275 has no such table.
-const QueryVersion = "devhealthfacts.clickhouse.v276"
+//
+// v276 -> v277: a team's "split across its repositories" answer on the scope
+// allocation route requires allocation_breakdown/subject/team, the team's own
+// fact, never allocation_breakdown/member/repository (CHAOS-12885; requirement
+// derivation v4). An answer saved under v276 was lowered to degraded by the
+// member requirement, and answer reuse keys on this version, not on the
+// derivation version.
+const QueryVersion = "devhealthfacts.clickhouse.v277"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each
