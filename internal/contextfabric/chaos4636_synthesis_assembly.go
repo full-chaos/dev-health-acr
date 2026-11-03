@@ -468,6 +468,13 @@ func (e *Engine) synthesizeAndAssemble(ctx context.Context, principal storage.Pr
 		result.LimitationsDisplaced += displaced
 		result.Coverage.Partial = true
 	}
+	// CHAOS-12600: a bare-name comparison whose kind was resolved from unique
+	// exact full-label matches says how it read the sides. The engine states it.
+	if sentence := contractsv1.ContextFabricExactLabelKindLimitation(resolution.ExactLabelKind); sentence != "" {
+		composed, displaced := appendBoundedLimitations(result.Limitations, []string{sentence})
+		result.Limitations = composed
+		result.LimitationsDisplaced += displaced
+	}
 	// CHAOS-12557 (ruling (c)): several identifiers named beside a repository, no
 	// kind stated; the answer says it does not answer for them.
 	if resolution.UnansweredHandlesLimitation != "" {

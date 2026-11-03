@@ -77,6 +77,12 @@ GOTEST_MCP_TIMEOUT ?= 480s
 # race-contracts-v1). Hosted shard-4 time was 143-367s over 45 runs (p99 367s);
 # 367s x 1.2 = 440s. Retune from the first isolated main runs' race.json.
 GOTEST_CONTRACTS_V1_TIMEOUT ?= 440s
+# CHAOS-12717: internal/api's own isolated budget (its own ci.yml jobs,
+# race-api and race-api-heavy, split by scripts/ci/api-heavy-tests.txt). In
+# race shard 3 it sat at the 357s guard of the 420s shard budget (357.045s main
+# bc763284, 362.3s #1956, 339.1s main db3d95ab, 214s on a PR run). Each half
+# keeps the SAME 420s: the split, not a larger number, makes the headroom.
+GOTEST_API_TIMEOUT ?= 420s
 # internal/contextfabric/factoracle's own isolated budget (its own ci.yml job,
 # race-factoracle). The package seeds a ClickHouse store from the venue capture
 # and replays 95 cases; it ran 100s in a shared 420s race shard before the
@@ -173,6 +179,7 @@ test-split:
 			*/internal/contextfabric/factoracle) timeout="$(GOTEST_FACTORACLE_TIMEOUT)" ;; \
 			*/internal/mcp) timeout="$(GOTEST_MCP_TIMEOUT)" ;; \
 			*/internal/contracts/v1) timeout="$(GOTEST_CONTRACTS_V1_TIMEOUT)" ;; \
+			*/internal/api) timeout="$(GOTEST_API_TIMEOUT)" ;; \
 			*/internal/contextfabric/devhealthfacts) timeout="$(GOTEST_DEVHEALTHFACTS_TIMEOUT)" ;; \
 			*) timeout="$(GOTEST_ISOLATED_TIMEOUT)" ;; \
 		esac; \
@@ -227,6 +234,7 @@ test-race-isolated:
 			*/internal/contextfabric/factoracle) timeout="$(GOTEST_FACTORACLE_TIMEOUT)" ;; \
 			*/internal/mcp) timeout="$(GOTEST_MCP_TIMEOUT)" ;; \
 			*/internal/contracts/v1) timeout="$(GOTEST_CONTRACTS_V1_TIMEOUT)" ;; \
+			*/internal/api) timeout="$(GOTEST_API_TIMEOUT)" ;; \
 			*) timeout="$(GOTEST_ISOLATED_TIMEOUT)" ;; \
 		esac; \
 		echo "test-race-isolated: $$pkg (GOTEST_TIMEOUT=$$timeout)"; \
@@ -297,6 +305,7 @@ isolated-timeout:
 		*/internal/contextfabric/factoracle) echo "$(GOTEST_FACTORACLE_TIMEOUT)" ;; \
 		*/internal/mcp) echo "$(GOTEST_MCP_TIMEOUT)" ;; \
 		*/internal/contracts/v1) echo "$(GOTEST_CONTRACTS_V1_TIMEOUT)" ;; \
+		*/internal/api) echo "$(GOTEST_API_TIMEOUT)" ;; \
 		*/internal/contextfabric/devhealthfacts) echo "$(GOTEST_DEVHEALTHFACTS_TIMEOUT)" ;; \
 		*) echo "$(GOTEST_ISOLATED_TIMEOUT)" ;; \
 	esac

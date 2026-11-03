@@ -2854,17 +2854,53 @@ func resolveSubjects(ctx context.Context, principal storage.Principal, request c
 	// decision path at worst.
 	if !contextfabric.OffersOnlyResolution(ctx) {
 		comparison := contextfabric.ClassifyComparisonOperands(frame)
+		basis := ComparisonKindBasisStated
+		if comparison.Admission == contextfabric.ComparisonHeldScopedOperand {
+			basis = ComparisonKindBasisNone
+		}
+		// CHAOS-12600: a bare-name pair whose sides each match exactly one
+		// subject by its full label, all of one kind, resolves under that kind.
+		// A refusal keeps today's path (the kind question), and its reason is
+		// on the policy line, which fires for the pair either way.
+		// One exact-name read serves this check and the comparison it
+		// enables: the same once-per-comparison wrapper the comparison uses.
+		deps = withSharedExactNameCandidates(deps)
+		resolved, exactMatched, refusal, ok, exactErr := exactLabelPairKind(ctx, deps, comparison)
+		if exactErr != nil {
+			// The refusal line is written before the error returns, so a
+			// failed census is diagnosable from its own artifacts.
+			recordComparisonPolicy(ctx, principal, request, deps, comparison, ComparisonKindBasisNone, refusal)
+			return contextfabric.SubjectResolution{}, contextfabric.StructureOfferMaterial{}, exactErr
+		}
+		if ok {
+			comparison, basis = resolved, ComparisonKindBasisExactLabel
+		} else if refusal != "" {
+			recordComparisonPolicy(ctx, principal, request, deps, comparison, ComparisonKindBasisNone, refusal)
+		}
 		switch comparison.Admission {
 		case contextfabric.ComparisonAdmittedNamedPair, contextfabric.ComparisonHeldScopedOperand:
 			request := comparisonRequest(ctx, comparison, request)
-			if inactive, inactiveErr := inactiveCallerTeamHints(ctx, deps, request); inactiveErr != nil {
-				return contextfabric.SubjectResolution{}, contextfabric.StructureOfferMaterial{}, inactiveErr
-			} else if len(inactive) > 0 {
+			if inactive, inactiveErr := inactiveCallerTeamHints(ctx, deps, request); inactiveErr != nil || len(inactive) > 0 {
+				// Codex r3: a pair whose kind the exact-label rule resolved
+				// writes its policy line on these exits too, so the decision
+				// is in the run's own log.
+				if basis == ComparisonKindBasisExactLabel {
+					recordComparisonPolicy(ctx, principal, request, deps, comparison, basis, "")
+				}
+				if inactiveErr != nil {
+					return contextfabric.SubjectResolution{}, contextfabric.StructureOfferMaterial{}, inactiveErr
+				}
 				return contextfabric.SubjectResolution{Candidates: []contextfabric.SubjectCandidate{}, Committed: []contextfabric.SubjectRef{}, InactiveHints: inactive}, contextfabric.StructureOfferMaterial{}, nil
 			}
-			resolution, bases, digests, err := resolveNamedComparison(ctx, principal, request, deps, comparison, admission)
+			resolution, bases, digests, err := resolveNamedComparisonWithBasis(ctx, principal, request, deps, comparison, admission, basis)
 			if err != nil {
 				return contextfabric.SubjectResolution{}, contextfabric.StructureOfferMaterial{}, err
+			}
+			if basis == ComparisonKindBasisExactLabel && committedEvery(resolution.Committed, exactMatched) {
+				// Disclosed only when each side committed the subject its name
+				// matched: a side that still asks is a question, not a
+				// reading. Both sides may name one subject, which commits once.
+				resolution.ExactLabelKind = comparison.Slots[0].Kind
 			}
 			commitBases.ResetTo(bases)
 			commitDigests.ResetTo(digests)
