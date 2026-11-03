@@ -8385,7 +8385,7 @@
         "type": "string",
         "presence": "required",
         "closed_vocabulary": [
-          "question-family.v7"
+          "question-family.v8"
         ]
       },
       {
@@ -9517,7 +9517,7 @@
         "presence": "required",
         "closed_vocabulary": [
           "",
-          "question-family.v7"
+          "question-family.v8"
         ]
       },
       {
@@ -12418,7 +12418,7 @@
         "type": "string",
         "presence": "required",
         "closed_vocabulary": [
-          "question-family.v7"
+          "question-family.v8"
         ]
       },
       {
