@@ -5,12 +5,24 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/full-chaos/dev-health-acr/internal/cigates/emitscan"
 )
+
+// skipWhereHelperLimitsAreNotEnforced skips, with the reason, a test of the helper's resource limits on darwin, where
+// neither limit is enforced (CHAOS-12747, executed on darwin): the resident-set limit polls /proc/<pid>/status, which darwin
+// does not have, and RLIMIT_CPU, set without error, does not stop a spinning Go process. Linux, where CI runs these tests,
+// enforces both, and there the tests run and fail when a limit breaks.
+func skipWhereHelperLimitsAreNotEnforced(t *testing.T) {
+	t.Helper()
+	if runtime.GOOS == "darwin" {
+		t.Skip("darwin enforces neither type-check helper limit: the resident-set limit reads /proc/<pid>/status, which darwin lacks, and RLIMIT_CPU does not stop a spinning Go process; Linux CI runs this test (CHAOS-12747)")
+	}
+}
 
 // estimateOnlyShape marks a shape the helper alone would let through (it finishes inside its limits, and the in-process re-run is
 // then slow): only the syntax estimate refuses it.
@@ -76,6 +88,7 @@ func checkerHeavyShapes() []keyCase {
 }
 
 func TestKeyScopeCheckerHeavyShapesAreRefusedByTheHelperLimits(t *testing.T) {
+	skipWhereHelperLimitsAreNotEnforced(t)
 	for _, estimate := range []bool{true, false} {
 		restore := emitscan.SetCostEstimate(estimate)
 		runHeavyShapes(t, estimate)
@@ -146,7 +159,9 @@ func plantHelper(t *testing.T, body string) string {
 }
 
 // ackScript is the start of a planted helper that reads the request and has the acknowledgement line of exactly that request.
-const ackScript = `payload=$(cat); sum=$(printf %s "$payload" | sha256sum | cut -d' ' -f1); ack="emitscan-tcheck-ok $sum"
+// The helper runs with the scan's fixed environment (no PATH), so /bin/sh's default PATH finds the digest tool: sha256sum on
+// Linux, shasum on darwin, which has no sha256sum there (CHAOS-12747).
+const ackScript = `payload=$(cat); sum=$(printf %s "$payload" | if command -v sha256sum >/dev/null 2>&1; then sha256sum; else shasum -a 256; fi | cut -d' ' -f1); ack="emitscan-tcheck-ok $sum"
 `
 
 func TestKeyScopeAnyAbnormalHelperResultIsARefusalNeverAnInProcessCheck(t *testing.T) {
@@ -190,6 +205,7 @@ func TestKeyScopeAnyAbnormalHelperResultIsARefusalNeverAnInProcessCheck(t *testi
 }
 
 func TestKeyScopeHelperMemoryLimitIsARefusal(t *testing.T) {
+	skipWhereHelperLimitsAreNotEnforced(t)
 	restore := emitscan.SetChildLimits(4, 1<<20, 20*time.Second)
 	defer restore()
 	body := "func f(l *slog.Logger, v string) { key := \"api_token\"; l.Info(\"m\", key, v) }"
