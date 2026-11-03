@@ -308,6 +308,10 @@ func (a *Adapter) ResolveSubjects(ctx context.Context, principal storage.Princip
 		LinkScopedWorkItemsOf: func(ctx context.Context, scope contextfabric.RequestedScope, ids []string) (map[string]string, bool, error) {
 			return a.linkScopedWorkItemsOf(ctx, key, principal, scope, ids)
 		},
+		// CHAOS-12557: the repositories a team named beside a handle owns.
+		TeamOwnedRepositories: func(ctx context.Context, team contextfabric.SubjectRef, limit int) ([]contextfabric.SubjectRef, bool, error) {
+			return a.teamOwnedRepositories(ctx, key, principal, request.RequestedScope, team, limit)
+		},
 		// CHAOS-3972 P3: nil unless the composition root sets
 		// Config.HandleGrammarChecker -- see that field's own doc comment.
 		HandleGrammarChecker: a.config.HandleGrammarChecker,
