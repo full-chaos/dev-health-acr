@@ -215,3 +215,23 @@ func TestExportCacheKeyFollowsFilesInTheModuleOnly(t *testing.T) {
 		t.Error("fixtures outside the module do not share the key of an empty snapshot")
 	}
 }
+
+// CHAOS-12749: a module directory or a scan root that does not resolve is an error, never the path as given: an overlay keyed
+// by an unresolved path is ignored without a word, and go list builds the files on disk.
+func TestAnUnresolvableModuleOrRootIsAnErrorNotTheRawPath(t *testing.T) {
+	moduleDir := t.TempDir()
+	missing := filepath.Join(t.TempDir(), "gone")
+	dangling := filepath.Join(t.TempDir(), "dangling")
+	if err := os.Symlink(filepath.Join(t.TempDir(), "never-made"), dangling); err != nil {
+		t.Fatal(err)
+	}
+	for name, c := range map[string]struct{ module, root string }{
+		"a module directory that does not exist": {missing, moduleDir},
+		"a scan root that does not exist":        {moduleDir, missing},
+		"a scan root that is a dangling symlink": {moduleDir, dangling},
+	} {
+		if _, err := emitscan.ModuleExportKey(c.module, c.root, []string{"internal/a/a.go"}, [][]byte{[]byte("package a\n")}); err == nil || !strings.Contains(err.Error(), "resolve the") {
+			t.Errorf("%s: err = %v, want the resolve error", name, err)
+		}
+	}
+}
