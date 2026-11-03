@@ -187,3 +187,59 @@ func TestAScopeAllocationAnswerWithItsSplitWithheldIsPartial(t *testing.T) {
 		t.Fatalf("the withheld answer is not contract-valid: %v", err)
 	}
 }
+
+// The other half of the lead's residual pin, the case this change does NOT
+// close, pinned as it is today so the follow-up flips it red to green. On the
+// scope allocation route an answer whose claims name no
+// repository_theme_breakdown table (here, one scalar investment claim) still
+// reads COMPLETE: the anchor requirement is satisfied because the team's fact
+// was read, and no floor asks whether the split the question named was claimed.
+// An honest floor needs a service-authored limitation sentence or coverage code
+// in contracts/v1, so it is deferred (the follow-up ticket). When the follow-up
+// lands, this test must change to expect partial with that disclosure; until
+// then it fails if the case silently changes either way.
+func TestAScopeAllocationAnswerThatClaimsNoSplitStillReadsComplete(t *testing.T) {
+	t.Parallel()
+	frame := fullchaosChildrenFrame()
+	routed := scopeAllocationRequirementFrame(&frame, scopeAllocationOutcome(&frame, SubjectTeam))
+	deriver := registryDeriver{capabilities: scopeAllocationCapabilities()}
+	engine := &Engine{requirements: deriver, renderShapeOptions: sankeyOn}
+	published := PlanRequirementsFromDerived(deriveTurnRequirements(routed, deriver))
+	team := SubjectRef{Kind: SubjectTeam, CanonicalID: "team:platform", Label: "Platform"}
+	facts := factsFor(team, kindList(FactInvestment))
+
+	base := repositoryFlowResult(repositoryFlowLinks())
+	share := 0.55
+	base.ClaimedFacts = []ClaimedFact{{
+		ClaimID: "claim_scalar", Kind: FactInvestment, Field: "theme_quality", Value: ScalarValue{Number: &share},
+		Subject: contractsv1.ContextFabricSubjectRef{Kind: contractsv1.ContextFabricSubjectTeam, CanonicalID: "team:platform", Label: "Platform"},
+	}}
+	base.Status = InvestigationComplete
+	base.Limitations = []string{}
+	base.Coverage = factCoverage(FactInvestment, SourceAvailable)
+	base.Completeness = contractsv1.ContextFabricAnswerCompleteness{}
+	plan := *base.AnswerPlan
+	plan.Requirements = published
+	plan.FamilySource = QuestionFamilySourceModelConsensus
+
+	served := ApplyServedStatusFloors(engine.finalizeResult(context.Background(), storage.Principal{}, base, plan, routed, facts, &assemblyTelemetry{}, answerPassFirst, MembershipCardinality{}))
+	for _, claim := range served.ClaimedFacts {
+		if claim.Field == contractsv1.ContextFabricRenderRepositoryFlowTableField {
+			t.Fatal("the case is not real: a claim names the repository table")
+		}
+	}
+	if len(sankeysOf(served.RenderShapes)) != 0 {
+		t.Fatal("the case is not real: an unclaimed table drew a sankey")
+	}
+	row, found := scopeAllocationAssembledRow(served, scopeAllocationAnchorRequirement)
+	if !found || row.Outcome != contractsv1.ContextFabricRequirementSatisfied {
+		t.Fatalf("anchor row %+v (found %v), want satisfied: the team's fact was read", row, found)
+	}
+	// TODAY'S RESULT, NOT THE WANTED ONE (see the doc comment).
+	if served.Status != InvestigationComplete || served.Completeness.State != contractsv1.ContextFabricAnswerCompletenessComplete {
+		t.Fatalf("unclaimed split: status %q, state %q; this pin says complete until the follow-up lands -- update it with that change", served.Status, served.Completeness.State)
+	}
+	if err := served.Validate(); err != nil {
+		t.Fatalf("the unclaimed answer is not contract-valid: %v", err)
+	}
+}
