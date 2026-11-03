@@ -50,40 +50,37 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-      - name: Run the test three times, as the failing race job runs it
+      # Round 1 ran the test alone 30 times: 30 passes. Round 2 runs the
+      # heavy half exactly as the failing job does (its -run list, the same
+      # script), so the test shares the job with the tests beside it.
+      - name: Run the devhealthfacts heavy half as the race job runs it
         run: |
           set -uo pipefail
-          mkdir -p .tmp/loop
-          status=0
-          for run in 1 2 3; do
-            printf '=== shard %s run %s\n' '${{ matrix.shard }}' "$run"
-            log=".tmp/loop/run-$run.log"
-            go test -race -count=1 -timeout 20m -v \
-              -run '^TestTeamBlockerStatementsOnTheProductionShapeOnRealClickHouse$' \
-              ./internal/contextfabric/devhealthfacts > "$log" 2>&1
-            code=$?
-            # A run that skipped or never reached the test measured nothing:
-            # it is INVALID, never a pass.
-            if grep -q -- '--- SKIP: TestTeamBlockerStatementsOnTheProductionShapeOnRealClickHouse' "$log" || \
-               ! grep -q -E -- '--- (PASS|FAIL): TestTeamBlockerStatementsOnTheProductionShapeOnRealClickHouse' "$log"; then
-              printf 'RESULT shard=%s run=%s INVALID (exit %s)\n' '${{ matrix.shard }}' "$run" "$code"
-              tail -20 "$log"
-              status=1
-            elif [ "$code" -eq 0 ]; then
-              printf 'RESULT shard=%s run=%s pass\n' '${{ matrix.shard }}' "$run"
-            else
-              printf 'RESULT shard=%s run=%s FAIL\n' '${{ matrix.shard }}' "$run"
-              status=1
-            fi
-            grep -E -- '--- (PASS|FAIL|SKIP)|differs|PRODSHAPE org-wide' ".tmp/loop/run-$run.log" | head -60 || true
-          done
-          exit "$status"
+          mkdir -p .tmp/loop .tmp/race-json
+          packages="$(scripts/ci/test-shard.sh isolated-dedicated devhealthfacts)"
+          heavy="$(scripts/ci/race-split.sh devhealthfacts race-heavy)"
+          export GOFLAGS="-trimpath -run=$heavy"
+          RACE_JSON_OUT=.tmp/race-json/race.json GOTEST_TIMEOUT=20m GUARD=true \
+            scripts/ci/run-isolated-budget.sh 'devhealthfacts (heavy half)' "$packages" > .tmp/loop/heavy.log 2>&1
+          code=$?
+          test=TestTeamBlockerStatementsOnTheProductionShapeOnRealClickHouse
+          result="$(jq -r --arg t "$test" 'select(.Test == $t and (.Action == "pass" or .Action == "fail" or .Action == "skip")) | .Action' .tmp/race-json/race.json | tail -1)"
+          jq -r --arg t "$test" 'select(.Test == $t and .Action == "output") | .Output' .tmp/race-json/race.json > .tmp/loop/test-output.log
+          grep -E 'differs|PRODSHAPE org-wide|--- (PASS|FAIL|SKIP)' .tmp/loop/test-output.log | head -80 || true
+          others="$(jq -r 'select(.Test != null and (.Test | contains("/") | not) and .Action == "fail") | .Test' .tmp/race-json/race.json | sort -u | tr '\n' ' ')"
+          case "$result" in
+            pass) printf 'RESULT shard=%s pass (job exit %s; other failed tests: %s)\n' '${{ matrix.shard }}' "$code" "$others" ;;
+            fail) printf 'RESULT shard=%s FAIL (job exit %s; other failed tests: %s)\n' '${{ matrix.shard }}' "$code" "$others"; exit 1 ;;
+            *) printf 'RESULT shard=%s INVALID (%s, job exit %s)\n' '${{ matrix.shard }}' "${result:-not run}" "$code"; tail -40 .tmp/loop/heavy.log; exit 1 ;;
+          esac
       # actions/upload-artifact v7.0.1
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         if: always()
         with:
           name: chaos12689-loop-shard-${{ matrix.shard }}
-          path: .tmp/loop/
+          path: |
+            .tmp/loop/
+            .tmp/race-json/
           include-hidden-files: true
           if-no-files-found: warn
           retention-days: 7
