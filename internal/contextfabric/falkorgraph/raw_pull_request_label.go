@@ -5,6 +5,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/identity"
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 )
@@ -28,10 +29,26 @@ var rawPullRequestEnd = regexp.MustCompile(` pull request pull_request:[^\s:]+:(
 //
 // The next ClickHouseSourceVersion bump rebuilds every graph, and with it no
 // such node or fact is left: that bump deletes this file and its two callers.
+//
+// CHAOS-12619: a work item, work item ref, project or team node that an edge
+// created holds its raw source id as its label in the same way. The read gives it
+// the reader form (contextfabric.SubjectReadableLabel); any other label stands.
 func nodeProperties(properties map[string]interface{}) map[string]interface{} {
 	out := normalizeProperties(properties)
 	label, _ := out[propLabel].(string)
-	if label == "" || label != out[propCanonicalID] || out[propKind] != string(contractsv1.ContextFabricSubjectPullRequest) {
+	if label == "" {
+		return out
+	}
+	kind, _ := out[propKind].(string)
+	canonicalID, _ := out[propCanonicalID].(string)
+	if kind != string(contractsv1.ContextFabricSubjectPullRequest) {
+		subject := contextfabric.SubjectRef{Kind: contextfabric.SubjectKind(kind), CanonicalID: canonicalID, Label: label}
+		if readable := contextfabric.SubjectReadableLabel(subject); readable != label {
+			out[propLabel] = readable
+		}
+		return out
+	}
+	if label != canonicalID {
 		return out
 	}
 	if number, ok := pullRequestNumber(label); ok {

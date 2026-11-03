@@ -4,6 +4,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 )
 
@@ -15,7 +16,10 @@ func (f *ingestColumnsFixture) attribution(workItem, team, source string, primar
 func workItemTeamEdge(t *testing.T, d drained, workItem, team string) (contractsv1.ContextFabricRelationshipProjection, bool) {
 	t.Helper()
 	for _, r := range d.relationships[contractsv1.ContextFabricRelationshipOwnedByTeam] {
-		if r.From.Kind == contractsv1.ContextFabricSubjectWorkItem && r.From.Label == workItem && r.To.Label == team {
+		// The work item end is named by its raw id, read back from its canonical
+		// id: its label is the reader form (CHAOS-12619).
+		raw, _ := contextfabric.RawSubjectLabel(r.From.Kind, r.From.CanonicalID)
+		if r.From.Kind == contractsv1.ContextFabricSubjectWorkItem && raw == workItem && r.To.Label == team {
 			return r, true
 		}
 	}

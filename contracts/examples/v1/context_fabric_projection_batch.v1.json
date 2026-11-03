@@ -275,7 +275,7 @@
       "from": {
         "canonical_id": "work_item.v2:00000000-0000-0000-0000-000000000000:linear%3ACHAOS-3802",
         "kind": "work_item",
-        "label": "linear:CHAOS-3802"
+        "label": "CHAOS-3802"
       },
       "observed_at": "2026-08-13T19:00:02.504Z",
       "properties": {
@@ -309,7 +309,7 @@
       "from": {
         "canonical_id": "work_item.v2:cd620f84-2602-8dea-7809-8d1f11825cf4:gl%3A42",
         "kind": "work_item",
-        "label": "gl:42"
+        "label": "42"
       },
       "observed_at": "2026-08-13T19:00:02.504Z",
       "properties": {
@@ -451,7 +451,7 @@
       "from": {
         "canonical_id": "work_item.v2:00000000-0000-0000-0000-000000000000:linear%3ACHAOS-3802",
         "kind": "work_item",
-        "label": "linear:CHAOS-3802"
+        "label": "CHAOS-3802"
       },
       "observed_at": "2026-08-13T19:00:02.504Z",
       "relationship_id": "relationship.v2:project_membership:6ceb97ee1204d3ae29db9e8ae223ceb3",

@@ -6422,6 +6422,40 @@
     ]
   },
   {
+    "id": "contextfabric.gated_offer_resolution_failure",
+    "msg": "context fabric gated offer resolution failed",
+    "level": "warn",
+    "multiplicity": "zero_or_one_per_request",
+    "attribution": [
+      "request_id"
+    ],
+    "bounded_aggregation": "at most one line per investigation: written only beside a failed gated offer resolution, and the window gate ends the pass.",
+    "fields": [
+      {
+        "key": "org_id",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "error_class",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "deadline_exceeded",
+          "canceled",
+          "dependency_unavailable",
+          "internal"
+        ]
+      },
+      {
+        "key": "request_id",
+        "type": "string",
+        "presence": "conditional",
+        "applicability": "written when the request context carries a request ID"
+      }
+    ]
+  },
+  {
     "id": "contextfabric.graphql_query",
     "msg": "context fabric graphql query",
     "level": "info",
