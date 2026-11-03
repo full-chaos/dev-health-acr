@@ -2007,6 +2007,10 @@ type ContextFabricClaimedFact struct {
 	// write. The draft strip stays (StripModelAuthoredClaimedFactTableContent)
 	// for a reply or a supplied draft that carries it anyway.
 	InvestmentMix *ContextFabricClaimedInvestmentMix `json:"investment_mix,omitempty" jsonschema:"-"`
+	// CompletionForecast (CHAOS-12608) is the OPTIONAL, additive forecast of a
+	// team workload claim's grounding fact, set by the server and never by a
+	// model; see ContextFabricClaimedCompletionForecast.
+	CompletionForecast *ContextFabricClaimedCompletionForecast `json:"completion_forecast,omitempty" jsonschema:"-"`
 }
 
 // ContextFabricClaimedFactRow is one row of a claimed fact's OPTIONAL
