@@ -65,9 +65,10 @@ func evidenceSubjectNames(result InvestigationResult) contractsv1.ContextFabricE
 		name, ok := names[canonicalID]
 		// A label that is the subject's own id is no name: the raw id, a
 		// project's id without its provider, which the source uses as the
-		// label of a project with no name (codex r2), or the reader form the
-		// graph gives that id, the kind's word for a UUID (CHAOS-12619).
-		if !ok || name == rawID || name == sourceID || name == ReadableSourceID(kind, rawID) {
+		// label of a project with no name (codex r2), the reader form the
+		// graph gives that id, the kind's word for a UUID (CHAOS-12619), or the
+		// reader form an earlier rule gave it (CHAOS-12716, codex r2).
+		if !ok || name == rawID || name == sourceID || name == ReadableSourceID(kind, rawID) || isRawForm(kind, sourceID, name) {
 			return "", false
 		}
 		return name, true

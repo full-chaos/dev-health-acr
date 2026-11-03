@@ -55,6 +55,10 @@ func TestARawSourceIDReadsAsItsKey(t *testing.T) {
 		{"gitlab", "acme/live-e2e", "acme/live-e2e"},
 		{"github", "ci-metrics-executed-proof/repo", "ci-metrics-executed-proof/repo"},
 		{"jira", "OPS", "OPS"},
+		// CHAOS-12716: an org-scoped source id reads as its native id; a bare UUID
+		// under the org scope is still the kind word.
+		{"gitlab", "70d529e0-3c06-4597-8480-794fd02328b6:gitlab:71133891", "71133891"},
+		{"gitlab", "70d529e0-3c06-4597-8480-794fd02328b6:c67b1602-31db-4422-8dec-a4a02bbcc513", "project"},
 	} {
 		project, omitted, err := identity.Derive(identity.KindProject, []string{row.provider, row.id}, nil)
 		if err != nil || omitted {

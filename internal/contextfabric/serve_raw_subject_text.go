@@ -78,14 +78,16 @@ func ReaderSubjectText(result InvestigationResult) InvestigationResult {
 // readerDriverTitle repairs a graph driver's title, which graphrank composes as the
 // relationship's words, ": " and the To label (graphrank.relationTitle). Only that
 // whole composition changes: the relationship's own title words, ": " and the To
-// endpoint's raw id while that is its label. Any other title stands (codex r4).
+// label while that is a raw form of the endpoint's id (isRawForm: its raw id, or
+// the reader form an earlier rule gave it, CHAOS-12716). Any other title stands
+// (codex r4).
 func readerDriverTitle(title, relation string, to SubjectRef) string {
 	raw, ok := RawSubjectLabel(to.Kind, to.CanonicalID)
-	if !ok || to.Label != raw {
+	if !ok || !isRawForm(to.Kind, raw, to.Label) {
 		return title
 	}
 	head := RelationTitleWords(relation)
-	if head == "" || title != head+": "+raw {
+	if head == "" || title != head+": "+to.Label {
 		return title
 	}
 	return head + ": " + SubjectReadableLabel(to)
