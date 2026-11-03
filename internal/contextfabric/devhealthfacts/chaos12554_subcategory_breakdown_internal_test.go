@@ -381,6 +381,52 @@ func TestCHAOS12554AReadOfSeveralSubjectsMakesNoCallAndSaysWhy(t *testing.T) {
 	}
 }
 
+// Codex r1 on #2002 (P1): "several subjects" is the read's REQUESTED subjects,
+// not the facts it found. A second team or repository with no investment fact
+// still makes the read a comparison, so the one fact that has a mix gets no
+// table and the closed reason, and no call is made.
+func TestCHAOS12554ASecondSubjectWithNoFactStillMakesSeveral(t *testing.T) {
+	t.Parallel()
+	for name, second := range map[string]contextfabric.SubjectRef{
+		"a repository with no mix": {Kind: contextfabric.SubjectRepository, CanonicalID: repositoryPrefix + "ad0f8f5c-0b55-4f43-9f7e-3b0f6f0d1a13"},
+		"a team with no mix":       {Kind: contextfabric.SubjectTeam, CanonicalID: "team:team-no-mix", Label: "team-no-mix"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			caller := servingCaller()
+			result := readSunburst(t, context.Background(), true, caller, sunburstWindow(), sunburstRepo, second)
+			if investmentFactOf(result, second) != nil {
+				t.Fatal("the second subject has an investment fact; the case needs one without")
+			}
+			if len(caller.calls) != 0 {
+				t.Fatalf("calls %d, want none", len(caller.calls))
+			}
+			if value, ok := subcategoryTableOf(t, result); ok {
+				t.Fatalf("a subcategory table was served on a read of two subjects: %+v", value)
+			}
+			if reasons := servedReasons(result, sunburstRepo); !strings.Contains(reasons, "(several_subjects)") {
+				t.Fatalf("reasons %q, want the closed reason several_subjects", reasons)
+			}
+		})
+	}
+	// The organization is no sunburst subject (the ops entries serve a team and
+	// a repository), so it does not make a second one.
+	t.Run("the organization beside one repository does not count", func(t *testing.T) {
+		caller := servingCaller()
+		organization := contextfabric.SubjectRef{Kind: contextfabric.SubjectOrganization, CanonicalID: "organization:org-1"}
+		result := readSunburst(t, context.Background(), true, caller, sunburstWindow(), sunburstRepo, organization)
+		if _, ok := subcategoryTableOf(t, result); !ok || len(caller.calls) != 2 {
+			t.Fatalf("table %v, calls %d; want the table and two calls", ok, len(caller.calls))
+		}
+	})
+	t.Run("the same subject named twice is one subject", func(t *testing.T) {
+		caller := servingCaller()
+		result := readSunburst(t, context.Background(), true, caller, sunburstWindow(), sunburstRepo, sunburstRepo)
+		if _, ok := subcategoryTableOf(t, result); !ok || len(caller.calls) != 2 {
+			t.Fatalf("table %v, calls %d; want the table and two calls", ok, len(caller.calls))
+		}
+	})
+}
+
 // The switch off: no call, no field, no reason. The same read with it on
 // changes the facts, so the comparison can fail.
 func TestCHAOS12554OffTheReadIsAsBefore(t *testing.T) {

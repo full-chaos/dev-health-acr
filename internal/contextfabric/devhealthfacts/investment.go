@@ -234,7 +234,7 @@ func (p *InvestmentProvider) ReadFacts(ctx context.Context, principal storage.Pr
 	// mix fact, before the organization and unit facts join the list.
 	var subcategoryWithheldSubjects []subcategoryWithheld
 	if p.subcategoryBreakdown {
-		subcategoryWithheldSubjects = p.attachSubcategoryBreakdown(ctx, principal, orgID, facts, timeBound)
+		subcategoryWithheldSubjects = p.attachSubcategoryBreakdown(ctx, principal, orgID, query.Subjects, facts, timeBound)
 	}
 
 	orgUnattributedOnly := false

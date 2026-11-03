@@ -195,9 +195,12 @@ func subcategoryBreakdownScopeOf(kind contextfabric.SubjectKind) (operation, lev
 // its subcategory_breakdown table, and returns why it could not when it could
 // not. The table is read for one breakdown per read: a sunburst plots one
 // breakdown, and a second subject would be a comparison the rule refuses. So a
-// read of several subjects makes no call, and each of its subjects gets the
-// closed reason several_subjects (never a silent drop).
-func (p *InvestmentProvider) attachSubcategoryBreakdown(ctx context.Context, principal storage.Principal, orgID string, facts []contextfabric.CanonicalFact, bound factTimeBound) []subcategoryWithheld {
+// read that asks for more than one team or repository makes no call, and each
+// of its mix facts gets the closed reason several_subjects (never a silent
+// drop). The count is of the subjects the read asked for, not of the facts it
+// found: a second subject with no mix still makes the question a comparison
+// (Codex r1 on #2002).
+func (p *InvestmentProvider) attachSubcategoryBreakdown(ctx context.Context, principal storage.Principal, orgID string, requested []contextfabric.SubjectRef, facts []contextfabric.CanonicalFact, bound factTimeBound) []subcategoryWithheld {
 	var targets []int
 	for index := range facts {
 		fact := &facts[index]
@@ -215,7 +218,7 @@ func (p *InvestmentProvider) attachSubcategoryBreakdown(ctx context.Context, pri
 	if len(targets) == 0 {
 		return nil
 	}
-	if len(targets) > 1 {
+	if len(targets) > 1 || chartedSubjectCount(requested) > 1 {
 		several := make([]subcategoryWithheld, 0, len(targets))
 		for _, index := range targets {
 			several = append(several, subcategoryWithheld{subject: facts[index].Subject, reason: SubcategoryWithheldSeveralSubjects})
@@ -230,6 +233,22 @@ func (p *InvestmentProvider) attachSubcategoryBreakdown(ctx context.Context, pri
 	}
 	fact.Fields[subcategoryBreakdownField] = table
 	return nil
+}
+
+// chartedSubjectCount is the number of distinct teams and repositories a read
+// asks for: the kinds the sunburst charts. The same subject named twice is one.
+func chartedSubjectCount(subjects []contextfabric.SubjectRef) int {
+	type key struct {
+		kind contextfabric.SubjectKind
+		id   string
+	}
+	seen := make(map[key]struct{}, len(subjects))
+	for _, subject := range subjects {
+		if _, _, charted := subcategoryBreakdownScopeOf(subject.Kind); charted {
+			seen[key{kind: subject.Kind, id: subject.CanonicalID}] = struct{}{}
+		}
+	}
+	return len(seen)
 }
 
 // readSubcategoryBreakdown makes the two calls, THEME then SUBCATEGORY, with
