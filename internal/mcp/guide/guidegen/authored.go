@@ -96,7 +96,7 @@ var grammarExamples = map[string]grammarExample{
 	"pull_request_number": {
 		Question: "How is PR 532 doing?",
 		Value:    "532",
-		Note:     "Also matches `pull request #532`.",
+		Note:     "Also matches `pull request #532`, and GitLab merge requests: `MR !532`, `merge request 532`.",
 	},
 	"work_item_ticket_key": {
 		Question: "What is blocking OPS-123?",

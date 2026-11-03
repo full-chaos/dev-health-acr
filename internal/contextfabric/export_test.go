@@ -177,7 +177,16 @@ func ClassifyWindowForFrameForTest(interpreted InterpretedQuestion, handleState 
 // material that asks beyond the window when beyondWindow is true, and over a
 // series frame when series is true (CHAOS-4451 line certification).
 func DecideInferredWindowGateForTest(beyondWindow, offersUnavailable, series bool) (InferredWindowGateDecision, InferredWindowGateBasis) {
+	return DecideInferredWindowGateWithEmptyAsksForTest(beyondWindow, false, offersUnavailable, series)
+}
+
+// DecideInferredWindowGateWithEmptyAsksForTest adds CHAOS-12640's case: a
+// need named with no option to pick (emptyAsks), when beyondWindow is false.
+func DecideInferredWindowGateWithEmptyAsksForTest(beyondWindow, emptyAsks, offersUnavailable, series bool) (InferredWindowGateDecision, InferredWindowGateBasis) {
 	var material StructureOfferMaterial
+	if emptyAsks {
+		material = StructureOfferMaterial{Missing: []StructureNeedKind{StructureNeedKind("subject_anchor")}}
+	}
 	if beyondWindow {
 		material = chaos4234GatedMaterial()
 	}
