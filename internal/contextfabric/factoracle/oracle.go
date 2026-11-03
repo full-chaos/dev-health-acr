@@ -645,8 +645,12 @@ func (o *Oracle) generatedCases(ctx context.Context) ([]ShapeCase, error) {
 			if serr != nil {
 				return nil, serr
 			}
-			for _, dimension := range []string{"THEME", "SUBCATEGORY", "WORK_TYPE"} {
-				sets = append(sets, scopedInvestmentVariables(o.Window, dimension, level, id))
+			// COUNT and ISSUE_SIZE: the owner-share pair compares both, and the
+			// scoped entries are the only ones that serve ISSUE_SIZE (CHAOS-12691).
+			for _, measure := range []string{"COUNT", "ISSUE_SIZE"} {
+				for _, dimension := range []string{"THEME", "SUBCATEGORY", "WORK_TYPE"} {
+					sets = append(sets, scopedInvestmentVariables(o.Window, dimension, measure, level, id))
+				}
 			}
 		case "capacityForecast", "capacityCompletionDistribution":
 			sets = append(sets, map[string]any{"input": map[string]any{"teamId": team, "historyDays": 90, "simulations": 1000}})
@@ -780,11 +784,12 @@ func (o *Oracle) scopedInvestmentSubject(operation, chosen string) (string, stri
 	return "REPO", "repository:" + repos[0], nil
 }
 
-// scopedInvestmentVariables are investmentVariables with the one-id scope
-// filter of a scoped entry.
-func scopedInvestmentVariables(w Window, dimension, level, id string) map[string]any {
+// scopedInvestmentVariables are investmentVariables with the given measure and
+// the one-id scope filter of a scoped entry.
+func scopedInvestmentVariables(w Window, dimension, measure, level, id string) map[string]any {
 	variables := investmentVariables(w, dimension)
 	batch := variables["batch"].(map[string]any)
+	batch["breakdowns"].([]any)[0].(map[string]any)["measure"] = measure
 	batch["filters"] = map[string]any{"scope": map[string]any{"level": level, "ids": []any{id}}}
 	return variables
 }

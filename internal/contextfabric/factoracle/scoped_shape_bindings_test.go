@@ -3,15 +3,24 @@ package factoracle
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"strings"
 	"testing"
 )
 
+// scopedCase is what one generated case of a scoped investment shape asks.
+type scopedCase struct {
+	level   any
+	ids     any
+	measure any
+	dim     any
+}
+
 // scopedCases runs the shape bindings on store and returns, per shape of a
-// scoped investment operation, the scope level and ids of each generated case. The
+// scoped investment operation, what each generated case asks. The
 // capacity probe answers with a backlog for every team, so the subject team
 // of the capacity shapes is the first team of the store.
-func scopedCases(t *testing.T, store *Store, window Window) (map[string][][2]any, error) {
+func scopedCases(t *testing.T, store *Store, window Window) (map[string][]scopedCase, error) {
 	t.Helper()
 	backlog := servedAnswer(t, "capacityForecast", "capacityForecast", `{"capacityForecast":{"backlogSize":3}}`, 10, 1000)
 	oracle := &Oracle{Policy: mustPolicy(t), Store: store, Window: window, shapes: mustShapes(t),
@@ -20,7 +29,7 @@ func scopedCases(t *testing.T, store *Store, window Window) (map[string][][2]any
 	if err != nil {
 		return nil, err
 	}
-	out := map[string][][2]any{}
+	out := map[string][]scopedCase{}
 	for _, c := range cases {
 		shape, ok := ShapeByID(oracle.shapes, c.ShapeID)
 		if !ok {
@@ -32,7 +41,11 @@ func scopedCases(t *testing.T, store *Store, window Window) (map[string][][2]any
 		batch, _ := c.Variables["batch"].(map[string]any)
 		filters, _ := batch["filters"].(map[string]any)
 		scope, _ := filters["scope"].(map[string]any)
-		out[shape.ID()] = append(out[shape.ID()], [2]any{scope["level"], scope["ids"]})
+		var breakdown map[string]any
+		if list, _ := batch["breakdowns"].([]any); len(list) == 1 {
+			breakdown, _ = list[0].(map[string]any)
+		}
+		out[shape.ID()] = append(out[shape.ID()], scopedCase{scope["level"], scope["ids"], breakdown["measure"], breakdown["dimension"]})
 	}
 	return out, nil
 }
@@ -65,15 +78,19 @@ func TestTheScopedInvestmentShapesAskForOneOwnedSubject(t *testing.T) {
 			level = "REPO"
 		}
 		shapes[level]++
-		if len(cases) != 3 {
-			t.Fatalf("%s has %d cases, want 3 (THEME, SUBCATEGORY, WORK_TYPE)", shapeID, len(cases))
-		}
+		// COUNT and ISSUE_SIZE, each over the three dimensions, once.
+		asked := map[string]bool{}
 		for _, c := range cases {
-			ids, _ := c[1].([]any)
-			if c[0] != level || len(ids) != 1 {
-				t.Fatalf("%s asks scope %v with ids %v, want level %s and exactly one id", shapeID, c[0], c[1], level)
+			ids, _ := c.ids.([]any)
+			if c.level != level || len(ids) != 1 {
+				t.Fatalf("%s asks scope %v with ids %v, want level %s and exactly one id", shapeID, c.level, c.ids, level)
 			}
 			subjects[level][ids[0].(string)] = true
+			asked[fmt.Sprintf("%v/%v", c.measure, c.dim)] = true
+		}
+		want := []string{"COUNT/SUBCATEGORY", "COUNT/THEME", "COUNT/WORK_TYPE", "ISSUE_SIZE/SUBCATEGORY", "ISSUE_SIZE/THEME", "ISSUE_SIZE/WORK_TYPE"}
+		if got := sortedKeys(asked); len(cases) != len(want) || strings.Join(got, ",") != strings.Join(want, ",") {
+			t.Fatalf("%s asks %d cases %v, want each of %v once", shapeID, len(cases), got, want)
 		}
 	}
 	if shapes["TEAM"] == 0 || shapes["REPO"] == 0 || len(subjects["TEAM"]) != 1 || len(subjects["REPO"]) != 1 {
