@@ -98,3 +98,15 @@ func ValidScope(scope string) bool {
 	}
 	return ValidSlug(scope)
 }
+
+// Lower lower-cases ASCII letters only, so a repository key folds the way the
+// schema pattern reads it.
+func Lower(s string) string { return strings.ToLower(s) }
+
+// ValidSlugFolded reports whether a repository key is valid once ASCII case is
+// folded: the form a request carries before it is normalised.
+func ValidSlugFolded(slug string) bool { return ValidSlug(slug) }
+
+// SchemaSlugPattern is the pattern every published schema holds for a
+// repository key, and maxLength is MaxSlugBytes.
+const SchemaSlugPattern = `^[^/\s]+(/[^/\s]+){1,19}$`

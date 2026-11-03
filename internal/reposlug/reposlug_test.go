@@ -4,6 +4,8 @@ import (
 	"regexp"
 	"strings"
 	"testing"
+
+	"github.com/full-chaos/dev-health-acr/internal/reposlug/cells"
 )
 
 func TestValidNameAcceptsGitHubNamesAndRefusesReservedOnes(t *testing.T) {
@@ -153,6 +155,24 @@ func TestSlugPatternAgreesWithValidSlug(t *testing.T) {
 	} {
 		if got, want := pattern.MatchString(slug), ValidSlug(slug); got != want {
 			t.Errorf("SlugPattern(%q) = %v, ValidSlug = %v", slug, got, want)
+		}
+	}
+}
+
+func TestValidSlugFoldedHoldsTheCellTable(t *testing.T) {
+	for _, cell := range cells.Table() {
+		if got := ValidSlugFolded(cell.Slug); got != cell.Valid {
+			t.Errorf("%s: ValidSlugFolded(%q) = %v, want %v", cell.Name, cell.Slug, got, cell.Valid)
+		}
+	}
+}
+
+func TestSchemaSlugPatternHoldsTheCellTable(t *testing.T) {
+	pattern := regexp.MustCompile(SchemaSlugPattern)
+	for _, cell := range cells.Table() {
+		got := pattern.MatchString(cell.Slug) && len(cell.Slug) <= MaxSlugBytes
+		if got != cell.Valid {
+			t.Errorf("%s: schema pattern on %q = %v, want %v", cell.Name, cell.Slug, got, cell.Valid)
 		}
 	}
 }
