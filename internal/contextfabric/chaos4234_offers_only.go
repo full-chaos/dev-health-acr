@@ -98,6 +98,37 @@ func PageHintLookupReported(ctx context.Context) bool {
 	return marked
 }
 
+// GatedOfferErrorClass names why the offers-only pass failed, by kind of
+// fault and never by the error's text, which can carry query content
+// (CHAOS-12681).
+type GatedOfferErrorClass string
+
+const (
+	GatedOfferErrorDeadlineExceeded      GatedOfferErrorClass = "deadline_exceeded"
+	GatedOfferErrorCanceled              GatedOfferErrorClass = "canceled"
+	GatedOfferErrorDependencyUnavailable GatedOfferErrorClass = "dependency_unavailable"
+	GatedOfferErrorInternal              GatedOfferErrorClass = "internal"
+)
+
+// GatedOfferErrorClassVocabulary is the closed error_class vocabulary of the
+// failure line.
+func GatedOfferErrorClassVocabulary() []string {
+	return []string{string(GatedOfferErrorDeadlineExceeded), string(GatedOfferErrorCanceled), string(GatedOfferErrorDependencyUnavailable), string(GatedOfferErrorInternal)}
+}
+
+func gatedOfferErrorClass(err error) GatedOfferErrorClass {
+	switch {
+	case errors.Is(err, context.DeadlineExceeded):
+		return GatedOfferErrorDeadlineExceeded
+	case errors.Is(err, context.Canceled):
+		return GatedOfferErrorCanceled
+	case errors.Is(err, ErrUnavailable):
+		return GatedOfferErrorDependencyUnavailable
+	default:
+		return GatedOfferErrorInternal
+	}
+}
+
 // GatedOfferResolutionOutcome is the closed vocabulary
 // EngineTelemetry.RecordGatedOfferResolution reports for every class-default
 // gated request -- the engine-side twin of the harness's own
@@ -202,6 +233,11 @@ func (e *Engine) gatedOfferMaterial(ctx context.Context, principal storage.Princ
 	gatedResolution, resolved, gatedBases, _, err := e.graph.ResolveSubjects(WithOffersOnlyResolution(ctx), principal, graphRequest, interpretation, binding, effectiveConfirmedKind(structureCanon.Confirmed, kindCarry), confirmedAnchorSelection(structureCanon.Confirmed, appliedNeeds), familyOutcome.Frame, ScopeAnchorRetrievalKind(familyOutcome.Frame, familyOutcome.WinningSample.ScopeAnchorKind))
 	if err != nil && !errors.Is(err, ErrGraphNotProjected) {
 		record(GatedOfferResolutionFailed)
+		// CHAOS-12681: say why. The turn now gates on the window alone, and
+		// "failed" by itself left the run's artifacts unable to name the cause.
+		if e.telemetry != nil {
+			e.telemetry.RecordGatedOfferResolutionFailure(ctx, principal, gatedOfferErrorClass(err))
+		}
 		return StructureOfferMaterial{}, true
 	}
 	if errors.Is(err, ErrGraphNotProjected) {

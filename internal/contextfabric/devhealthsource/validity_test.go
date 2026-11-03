@@ -368,8 +368,10 @@ func TestF5_DependencyEdgeStubsAnUnresolvedTarget(t *testing.T) {
 	if stub.Subject.Kind != contractsv1.ContextFabricSubjectWorkItemRef {
 		t.Fatalf("stub kind = %q, want %q", stub.Subject.Kind, contractsv1.ContextFabricSubjectWorkItemRef)
 	}
-	if stub.Subject.Label != "ghpr:owner/repo#7" {
-		t.Fatalf("stub label = %q, want the raw target id", stub.Subject.Label)
+	// CHAOS-12619: the stub's label is the target as a reader names it; the raw
+	// target id stays in the canonical id.
+	if stub.Subject.Label != "owner/repo#7" {
+		t.Fatalf("stub label = %q, want the target's key", stub.Subject.Label)
 	}
 
 	edge := relationshipByID(t, batch, wantRelationshipID)

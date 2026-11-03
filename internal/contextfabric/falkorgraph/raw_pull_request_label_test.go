@@ -3,6 +3,7 @@ package falkorgraph
 import (
 	"testing"
 
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric/identity"
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 )
 
@@ -68,5 +69,41 @@ func TestReadRepairKeepsNormalizedLists(t *testing.T) {
 	got = edgeProperties(map[string]interface{}{propEvidenceRefs: []interface{}{"a"}})[propEvidenceRefs]
 	if list, ok := got.([]string); !ok || len(list) != 1 {
 		t.Fatalf("edge evidence refs = %#v, want []string", got)
+	}
+}
+
+// CHAOS-12619: a stub node an edge created holds its raw source id as its label.
+// The read gives it the reader form; a node whose label is anything else keeps it.
+func TestAReadNeverServesARawWorkItemProjectOrTeamID(t *testing.T) {
+	workItem := func(raw string) string {
+		id, _, err := identity.Derive(identity.KindWorkItem, []string{"00000000-0000-0000-0000-000000000000", raw}, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return id
+	}
+	ref, _ := identity.DeriveWorkItemRef("extkey:CHAOS-11405", nil)
+	project, _, _ := identity.Derive(identity.KindProject, []string{"linear", "c67b1602-31db-4422-8dec-a4a02bbcc513"}, nil)
+	for _, tc := range []struct {
+		kind, id, label, want string
+	}{
+		{string(contractsv1.ContextFabricSubjectWorkItem), workItem("gh:full-chaos/dev-health-ops#5059"), "gh:full-chaos/dev-health-ops#5059", "full-chaos/dev-health-ops#5059"},
+		{string(contractsv1.ContextFabricSubjectWorkItem), workItem("ghpr:full-chaos/dev-health-ops#5063"), "ghpr:full-chaos/dev-health-ops#5063", "full-chaos/dev-health-ops#5063"},
+		{string(contractsv1.ContextFabricSubjectWorkItem), workItem("linear:CHAOS-2320"), "linear:CHAOS-2320", "CHAOS-2320"},
+		{string(contractsv1.ContextFabricSubjectWorkItem), workItem("jira:OPS-11"), "jira:OPS-11", "OPS-11"},
+		{string(contractsv1.ContextFabricSubjectWorkItemRef), ref, "extkey:CHAOS-11405", "CHAOS-11405"},
+		{string(contractsv1.ContextFabricSubjectProject), project, "c67b1602-31db-4422-8dec-a4a02bbcc513", "project"},
+		{string(contractsv1.ContextFabricSubjectTeam), "team:linear:CHAOS", "linear:CHAOS", "CHAOS"},
+		// A title or a name stands.
+		{string(contractsv1.ContextFabricSubjectWorkItem), workItem("linear:CHAOS-2320"), "Generate taxonomy table", "Generate taxonomy table"},
+		{string(contractsv1.ContextFabricSubjectProject), project, "Investment View Documentation", "Investment View Documentation"},
+	} {
+		node := map[string]interface{}{propKind: tc.kind, propCanonicalID: tc.id, propLabel: tc.label}
+		if got := nodeProperties(node)[propLabel]; got != tc.want {
+			t.Errorf("%s %q: label = %v, want %q", tc.kind, tc.label, got, tc.want)
+		}
+		if got := walkNode(node).Properties[propLabel]; got != tc.want {
+			t.Errorf("%s %q: walk label = %v, want %q", tc.kind, tc.label, got, tc.want)
+		}
 	}
 }
