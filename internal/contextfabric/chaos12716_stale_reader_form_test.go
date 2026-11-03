@@ -46,6 +46,18 @@ func TestAStoredReaderFormFromBeforeTheOrgScopeRuleIsRestated(t *testing.T) {
 	if got := RepairRawEdgeFact("CHAOS-2320 belongs to project "+stale, "BELONGS_TO_PROJECT", item, unlabelled); got != "CHAOS-2320 belongs to project 71133891" {
 		t.Errorf("unlabelled end: fact served %q", got)
 	}
+	// A graph driver's title is composed from the To label (codex r3 opinion).
+	for title, want := range map[string]string{
+		"Belongs To Project: " + stale:       "Belongs To Project: 71133891",
+		"Belongs To Project: " + raw:         "Belongs To Project: " + raw,
+		"Belongs To Project: Payments":       "Belongs To Project: Payments",
+		"Owned By Team: " + stale:            "Owned By Team: " + stale,
+		"Belongs To Project: gitlab:7113389": "Belongs To Project: gitlab:7113389",
+	} {
+		if got := readerDriverTitle(title, "BELONGS_TO_PROJECT", project); got != want {
+			t.Errorf("driver title %q served %q, want %q", title, got, want)
+		}
+	}
 	var result InvestigationResult
 	result.SubjectResolution.Committed = []SubjectRef{project}
 	if got, _ := contractsv1.ContextFabricEvidenceRefLabelNamed("acr:v1:project:gitlab:"+raw, evidenceSubjectNames(result)); got != "Project: 71133891" {
