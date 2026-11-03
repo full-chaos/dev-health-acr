@@ -92,6 +92,37 @@ func TestExportDataIsBuiltFromTheParsedBytesNotTheDisk(t *testing.T) {
 	}
 }
 
+// CHAOS-12749: the same guarantee through a scan root reached by a symlink. The go command reads the module by its physical
+// path, so an overlay keyed by the symlinked path is not applied and go list builds the file on disk. The root here is an
+// explicit symlink, so the case fails on every OS before the fix, not only where the temp directory crosses one (darwin).
+func TestExportDataIsBuiltFromTheParsedBytesThroughASymlinkedRoot(t *testing.T) {
+	real, depFile := exportModule(t)
+	physical, err := filepath.EvalSymlinks(real)
+	if err != nil {
+		t.Fatal(err)
+	}
+	root := filepath.Join(t.TempDir(), "linked-module")
+	if err := os.Symlink(physical, root); err != nil {
+		t.Fatal(err)
+	}
+	control := scanExportModule(t, root)
+	if !strings.Contains(control, "mismatch:pass") {
+		t.Fatalf("control scan through the symlink %q does not carry the mismatch finding", control)
+	}
+	emitscan.ResetGoTool()
+	emitscan.SetHelperBinary("")()
+	ran := filepath.Join(t.TempDir(), "go-list-ran")
+	goBin, _ := exec.LookPath("go")
+	goWrapper(t, "touch '"+ran+"'\ncp '"+depFile+"' '"+depFile+".orig'\nprintf 'package dep\\n\\nvar Value int\\n' > '"+depFile+"'\n'"+goBin+"' \"$@\"; rc=$?\nmv '"+depFile+".orig' '"+depFile+"'\nexit $rc")
+	got := scanExportModule(t, root)
+	if _, err := os.Stat(ran); err != nil {
+		t.Fatalf("go list never ran in the second scan (an export cache served it): %v", err)
+	}
+	if got != control {
+		t.Errorf("scan through a symlinked root with dep.go changed only during go list = %q, want %q", got, control)
+	}
+}
+
 // Two scans of one module directory with different parsed bytes must not share an export set.
 func TestExportCacheIsKeyedByTheParsedBytes(t *testing.T) {
 	root, depFile := exportModule(t)
