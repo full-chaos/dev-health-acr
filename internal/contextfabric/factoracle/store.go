@@ -42,6 +42,19 @@ type unitGeneration struct {
 	subcats    map[string]float64
 	prs        []string
 	issues     []string
+	// status is the row's categorization_status.
+	status string
+}
+
+// gated is the evidence gate of both producers: a work unit whose latest
+// generation has too little text (insufficient_evidence) or none
+// (no_text_sources) carries a fixed uniform prior, not a measured split, and
+// stays out of the theme mix. ops: analytics.CategorizedOnlySQL
+// (internal/queryapi/analytics/investment.go:677 at 0b763a85), counted in
+// evidenceQualityStats.uncategorizedCount; acr: evidenceGatedStatuses
+// (devhealthfacts/investment_uncategorized.go, #1666).
+func (g unitGeneration) gated() bool {
+	return g.status == "insufficient_evidence" || g.status == "no_text_sources"
 }
 
 type unitGenerations struct {
@@ -130,6 +143,7 @@ func NewStore(extract *Extract) (*Store, error) {
 		if repo, ok := rowString(row, "repo_id"); ok {
 			gen.repoID = &repo
 		}
+		gen.status, _ = rowString(row, "categorization_status")
 		if evidence, ok := rowString(row, "structural_evidence_json"); ok {
 			var refs struct {
 				PRs    []string `json:"prs"`
@@ -197,7 +211,8 @@ func (s *Store) inScope(id string) bool {
 }
 
 // OrgThemeEffort is the ops ORG reading under COUNT by theme: the sum,
-// over the latest generation of every work unit in scope and in the window,
+// over the latest generation of every work unit in scope, in the window and
+// not evidence-gated (gated),
 // of one per work unit x subcategory share, grouped by the theme prefix of the
 // subcategory key, with the share as the Float32 ops casts it to
 // (dev-health-ops internal/queryapi/analytics investmentContextFor).
@@ -205,12 +220,25 @@ func (s *Store) OrgThemeEffort(w Window) map[string]float64 {
 	out := map[string]float64{}
 	for _, id := range s.unitIDs() {
 		unit := s.units[id]
-		if !s.inScope(id) || !w.holds(unit.latest) {
+		if !s.inScope(id) || !w.holds(unit.latest) || unit.latest.gated() {
 			continue
 		}
 		addSubcategoryEffort(out, unit.latest)
 	}
 	return out
+}
+
+// GatedUnits is the number of work units in scope and in the window that the
+// evidence gate leaves out of the mix: what ops counts as uncategorized.
+func (s *Store) GatedUnits(w Window) int64 {
+	var n int64
+	for _, id := range s.unitIDs() {
+		unit := s.units[id]
+		if s.inScope(id) && w.holds(unit.latest) && unit.latest.gated() {
+			n++
+		}
+	}
+	return n
 }
 
 func addSubcategoryEffort(out map[string]float64, gen unitGeneration) {
@@ -337,13 +365,13 @@ func reachTotal(reach map[string]float64) float64 {
 
 // ExpectedRepositoryEffort is the acr repository mix the store rows give:
 // per repository and theme, one per work unit x theme share x the repository's
-// share of the unit, over the latest generation of every work unit in scope
-// and in the window.
+// share of the unit, over the latest generation of every work unit in scope,
+// in the window and not evidence-gated (gated).
 func (s *Store) ExpectedRepositoryEffort(w Window) map[string]map[string]float64 {
 	out := map[string]map[string]float64{}
 	for _, id := range s.unitIDs() {
 		unit := s.units[id]
-		if !s.inScope(id) || !w.holds(unit.latest) {
+		if !s.inScope(id) || !w.holds(unit.latest) || unit.latest.gated() {
 			continue
 		}
 		for repo, share := range s.reach(unit.latest, unit.latest.repoID) {
@@ -362,7 +390,8 @@ func (s *Store) ExpectedRepositoryEffort(w Window) map[string]map[string]float64
 // gain when the reader loses that class's rule: the effort, as far as it
 // reaches a repository, of the superseded work units, of the work units
 // outside the membership run, and of the work units whose latest NULL
-// repo_id an older generation would replace.
+// repo_id an older generation would replace. An evidence-gated work unit
+// (gated) is out of every mix whatever the rule, so it witnesses nothing.
 type Witnesses map[Class]map[string]float64
 
 // Witnesses computes the witness of every investment regression class.
@@ -375,7 +404,7 @@ func (s *Store) Witnesses(w Window) Witnesses {
 	}
 	for _, id := range s.unitIDs() {
 		unit := s.units[id]
-		if !w.holds(unit.latest) {
+		if !w.holds(unit.latest) || unit.latest.gated() {
 			continue
 		}
 		switch {
