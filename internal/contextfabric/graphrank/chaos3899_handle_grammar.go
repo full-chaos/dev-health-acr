@@ -105,8 +105,11 @@ type BoundHandle struct {
 }
 
 type handleGrammarEntry struct {
-	name       string
-	kind       CensusKind
+	name string
+	kind CensusKind
+	// pattern binds the handle in question text. nil for an entry no text binds
+	// alone: pull_request_repo_reference is a repository reference that the
+	// stored rows show to be a pull request (bindQuestionHandles, CHAOS-12642).
 	pattern    *regexp.Regexp
 	valueGroup int // 0 = whole match is the value; N>0 = capture group N
 	// valuePattern (CHAOS-3900 P1.E) matches the CAPTURED VALUE alone --
@@ -182,6 +185,14 @@ type handleGrammarEntry struct {
 //     first colon of work_item_id, so a key of the form above can never reach
 //     them. A URL with a path and a fragment has the same shape, so a reference
 //     takes the same prefix read as a ticket key (bindQuestionHandles).
+//   - pull_request_repo_reference: "owner/repo#12" -> pull_request, Value is the
+//     whole reference. No text binds it alone. On GitHub, issues and pull
+//     requests share one number space, so a reference with "#" names an issue or
+//     a pull request, and the text cannot tell which. bindQuestionHandles reads
+//     the stored rows: a GitHub pull request row with that repository and number
+//     makes the work_item_repo_reference handle this one (CHAOS-12642). GitLab
+//     writes "!" for a merge request and "#" for an issue, so its readings do
+//     not change.
 //   - ci_run_id: "run 18234567", "CI run #18234567", "pipeline 18234567",
 //     "CI pipeline #18234567", "pipeline run 18234567" -> ci_pipeline_run,
 //     Value is the bound digits. The "pipeline"/"CI pipeline"/"pipeline
@@ -261,9 +272,14 @@ func IsWorkItemRepoReference(handle BoundHandle) bool {
 func HasWorkItemKeyToken(text string) bool { return workItemKeyAnyPrefix.MatchString(text) }
 
 const (
-	workItemTicketKeyGrammar     = "work_item_ticket_key"
-	workItemRepoReferenceGrammar = "work_item_repo_reference"
+	workItemTicketKeyGrammar        = "work_item_ticket_key"
+	workItemRepoReferenceGrammar    = "work_item_repo_reference"
+	pullRequestRepoReferenceGrammar = "pull_request_repo_reference"
 )
+
+// pullRequestRepoReferenceShape is a repository reference with "#": the only form
+// a GitHub pull request takes in one (CHAOS-12642).
+const pullRequestRepoReferenceShape = `[A-Za-z0-9][A-Za-z0-9._-]*(?:/[A-Za-z0-9._-]+)+#\d+`
 
 var handleGrammarRegistry = []handleGrammarEntry{
 	// CHAOS-12633: "MR" / "merge request" with "#" or "!" are GitLab's
@@ -272,6 +288,7 @@ var handleGrammarRegistry = []handleGrammarEntry{
 	{name: "pull_request_number", kind: contextfabric.SubjectPullRequest, pattern: regexp.MustCompile(`(?i)\b(?:PR|pull\s+request|MR|merge\s+request)\s*[#!]?\s*(\d+)\b`), valueGroup: 1, valuePattern: regexp.MustCompile(`^\d+$`), sourceColumn: "git_pull_requests.number"},
 	{name: workItemTicketKeyGrammar, kind: contextfabric.SubjectWorkItem, pattern: regexp.MustCompile(`\b` + workItemTicketKeyPrefix + workItemKeyNumber), valueGroup: 0, valuePattern: regexp.MustCompile(`^` + workItemTicketKeyPrefix + workItemKeyNumber + `$`), sourceColumn: "work_items.work_item_id"},
 	{name: workItemRepoReferenceGrammar, kind: contextfabric.SubjectWorkItem, pattern: regexp.MustCompile(`\b` + workItemRepoReferenceShape), valueGroup: 0, valuePattern: regexp.MustCompile(`^` + workItemRepoReferenceShape + `$`), sourceColumn: "work_items.work_item_id"},
+	{name: pullRequestRepoReferenceGrammar, kind: contextfabric.SubjectPullRequest, valuePattern: regexp.MustCompile(`^` + pullRequestRepoReferenceShape + `$`), sourceColumn: "git_pull_requests.number"},
 	{name: "ci_run_id", kind: contractsv1.ContextFabricSubjectCIRun, pattern: regexp.MustCompile(`(?i)\b(?:CI\s+pipeline|CI\s+run|pipeline\s+run|pipeline|run)\b\s*#?\s*(\d{4,})\b`), valueGroup: 1, valuePattern: regexp.MustCompile(`^\d{4,}$`), sourceColumn: "ci_pipeline_runs.run_id"},
 }
 
@@ -332,6 +349,9 @@ func HandleSourceColumn(kind CensusKind, patternID string) (string, bool) {
 func BindHandles(question string) []BoundHandle {
 	var bound []BoundHandle
 	for _, entry := range handleGrammarRegistry {
+		if entry.pattern == nil {
+			continue
+		}
 		locations := entry.pattern.FindAllStringSubmatchIndex(question, -1)
 		for _, loc := range locations {
 			start, end := loc[0], loc[1]

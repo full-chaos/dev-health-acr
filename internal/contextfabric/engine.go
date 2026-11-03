@@ -1399,7 +1399,10 @@ type Engine struct {
 	renderShapeOptions          RenderShapeOptions
 	// measureUnitsOf states each claimed table's measure units from the fact
 	// declarations (CHAOS-11984). See withDeclaredMeasureUnits.
-	measureUnitsOf                              factMeasureUnits
+	measureUnitsOf factMeasureUnits
+	// columnWordsOf states each claimed table's column words from the fact
+	// declarations (CHAOS-12639). See withDeclaredColumnWords.
+	columnWordsOf                               factColumnWords
 	serverCompletenessAuthorityEnabled          bool
 	serverCompletenessAuthoritySymmetricEnabled bool
 	// servedLateHook is a test seam: a writer that adds bytes to the document
@@ -1495,6 +1498,7 @@ func NewEngine(dependencies EngineDependencies, options EngineOptions) (*Engine,
 			TableCadence:         declaredCadenceOf(options.FactCapabilities),
 		},
 		measureUnitsOf:                              declaredMeasureUnitsOf(options.FactCapabilities),
+		columnWordsOf:                               declaredColumnWordsOf(options.FactCapabilities),
 		serverCompletenessAuthorityEnabled:          options.ServerCompletenessAuthorityEnabled,
 		serverCompletenessAuthoritySymmetricEnabled: options.ServerCompletenessAuthoritySymmetricEnabled,
 		maxItems:                 options.MaxItems,
