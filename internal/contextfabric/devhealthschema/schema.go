@@ -170,13 +170,15 @@ var ProductionColumns = map[string][]Column{
 	// ReadTeamCompletionForecasts) also SELECTs simulation_count, the P85/P95
 	// days, the three dates and migration 101's two completion_days_*
 	// arrays. Types and order are dev-health-go v0.38.0's schema, which is ops'
-	// baseline at 8dcc0377 plus migration 101.
+	// baseline at 8dcc0377 plus migration 101. CHAOS-12634 adds target_items
+	// (dev-health-go v0.40.0), in its baseline place after backlog_size.
 	"capacity_forecasts": {
 		{Name: "forecast_id", Type: "String"},
 		{Name: "computed_at", Type: "DateTime64(3, 'UTC')"},
 		{Name: "team_id", Type: "Nullable(String)"},
 		{Name: "work_scope_id", Type: "Nullable(String)"},
 		{Name: "backlog_size", Type: "UInt32"},
+		{Name: "target_items", Type: "Nullable(UInt32)"},
 		{Name: "simulation_count", Type: "UInt32"},
 		{Name: "p50_days", Type: "Nullable(UInt16)"},
 		{Name: "p85_days", Type: "Nullable(UInt16)"},

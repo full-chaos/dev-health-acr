@@ -16,7 +16,7 @@ import (
 func forecastRow(values []uint16, counts []uint32) readers.CompletionForecastRow {
 	return readers.CompletionForecastRow{
 		TeamID: "CHAOS", HasWorkScope: 1, WorkScopeID: "scope-a", ComputedAt: "2026-11-02 04:00:12.672",
-		SimulationCount: 10000, BacklogSize: 4,
+		SimulationCount: 10000, BacklogSize: 4, HasTargetItems: 1, TargetItems: 4,
 		HasP50Days: 1, P50Days: 114, HasP85Days: 1, P85Days: 208, HasP95Days: 1, P95Days: 281,
 		P50Date: "2027-02-24", P85Date: "2027-05-29", P95Date: "2027-08-11",
 		CompletionDayBins: uint64(len(values)), CompletionCountBins: uint64(len(counts)),
@@ -75,7 +75,7 @@ func TestACompletionDistributionIsServedWithOpsShares(t *testing.T) {
 	if got := *fields["horizon_days"].Integer; got != forecastHorizonDays {
 		t.Errorf("horizon_days = %d", got)
 	}
-	for _, name := range []string{"forecast_p85_days", "forecast_p95_days", "forecast_p50_date", "forecast_p85_date", "forecast_p95_date", "simulation_count"} {
+	for _, name := range []string{"forecast_p85_days", "forecast_p95_days", "forecast_p50_date", "forecast_p85_date", "forecast_p95_date", "simulation_count", "target_items"} {
 		if _, ok := fields[name]; !ok {
 			t.Errorf("%s absent", name)
 		}
@@ -192,7 +192,7 @@ func TestTheDeploymentSwitchGatesOnlyTheDistribution(t *testing.T) {
 			t.Errorf("switch off: %s emitted", name)
 		}
 	}
-	for _, name := range []string{"forecast_p85_days", "forecast_p95_days", "forecast_p50_date", "forecast_p85_date", "forecast_p95_date", "simulation_count"} {
+	for _, name := range []string{"forecast_p85_days", "forecast_p95_days", "forecast_p50_date", "forecast_p85_date", "forecast_p95_date", "simulation_count", "target_items"} {
 		if _, ok := off[name]; !ok {
 			t.Errorf("switch off: %s absent, want the scalar served", name)
 		}
@@ -245,4 +245,22 @@ func TestTheLargestMeasuredDistributionFitsTheClaimedFactBounds(t *testing.T) {
 		t.Fatalf("359 rows: %d bytes, %d cells; bounds %d bytes, %d cells", bytes, cells, contractsv1.ContextFabricClaimedFactCombinedContentBytesMax, contractsv1.ContextFabricClaimedFactCombinedCellsMax)
 	}
 	t.Logf("359 rows: %d row bytes, %d cells", bytes, cells)
+}
+
+// CHAOS-12634: the item target is served as stored: absent when NULL, and a
+// stored 0 is 0, not absent.
+func TestTheItemTargetIsServedAsStored(t *testing.T) {
+	row := forecastRow([]uint16{5, 12}, []uint32{9000, 1000})
+	row.TargetItems = 40
+	if got := forecastFields(row)["target_items"].Integer; got == nil || *got != 40 {
+		t.Fatalf("a stored 40: target_items = %v", got)
+	}
+	row.HasTargetItems, row.TargetItems = 0, 0
+	if value, ok := forecastFields(row)["target_items"]; ok {
+		t.Fatalf("a NULL target: target_items = %+v, want absent", value)
+	}
+	row.HasTargetItems = 1
+	if got := forecastFields(row)["target_items"].Integer; got == nil || *got != 0 {
+		t.Fatalf("a stored 0: target_items = %v, want 0", got)
+	}
 }

@@ -403,14 +403,16 @@ func servedStoredResult(stored StoredInvestigationResult, principal storage.Prin
 }
 
 // citedEvidenceExpansion builds the expansion from the stored result's own
-// persisted content: the label the engine stamped for the ref, the citing
-// sites, and the titles/summaries of the drivers and findings citing it. A stored
-// row's raw source ids read in reader words (withReaderSubjectText, CHAOS-12619).
+// persisted content: the label the engine stamped for the ref (one saved before
+// CHAOS-12620 restated in reader words), the citing sites, and the
+// titles/summaries of the drivers and findings citing it. A stored row's raw
+// source ids read in reader words (withReaderSubjectText, CHAOS-12619).
 func citedEvidenceExpansion(result InvestigationResult, ref, entityType, entityID string, now time.Time) contractsv1.ExpandedEvidence {
+	names := evidenceSubjectNames(result)
+	label := strings.TrimSpace(contractsv1.ContextFabricEvidenceRefStoredLabel(ref, result.EvidenceRefLabels[ref], names))
 	result = withReaderSubjectText(result)
-	label := strings.TrimSpace(result.EvidenceRefLabels[ref])
 	if label == "" {
-		label, _ = contractsv1.ContextFabricEvidenceRefLabel(ref)
+		label, _ = contractsv1.ContextFabricEvidenceRefLabelNamed(ref, names)
 	}
 	sites, excerpt := citingSites(result, ref)
 	siteNames := make([]string, 0, len(sites))
