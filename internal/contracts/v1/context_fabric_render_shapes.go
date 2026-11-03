@@ -210,6 +210,22 @@ const (
 	// only rule that yields a sunburst, and a sunburst has no other rule.
 	// Declared ahead of its producer: the wire widens first.
 	ContextFabricRenderRuleInvestmentSubcategoryShare ContextFabricRenderShapeRule = "investment_subcategory_share"
+	// ContextFabricRenderRuleCompletionForecast is the Monte Carlo completion
+	// curve of one team's forecast for one work scope (CHAOS-12608, CHAOS-4613):
+	// one point per row of the claimed workload fact's `distribution` table
+	// (ContextFabricRenderForecastTableField), labelled with the row's
+	// completion day and valued at its cumulative share of runs finished. It
+	// is the only rule that yields a forecast, and a forecast has no other
+	// rule.
+	ContextFabricRenderRuleCompletionForecast ContextFabricRenderShapeRule = "completion_forecast"
+	// ContextFabricRenderRuleCompletionForecastPercentiles is the
+	// P50/P85/P95 table of the claimed team scopes whose forecast serves
+	// percentiles, drawn when no completion curve is (CHAOS-12608, CHAOS-4613
+	// ruling 3): one series per claimed scope, one point per percentile, each
+	// cited to the claim's completion forecast summary. It needs percentiles,
+	// not a distribution. It and comparison_side_by_side are the two rules
+	// that yield a table.
+	ContextFabricRenderRuleCompletionForecastPercentiles ContextFabricRenderShapeRule = "completion_forecast_percentiles"
 	// ContextFabricRenderRuleInvestmentRepositoryFlow is one team's investment as
 	// flows from its repositories to the themes (CHAOS-12578; the CHAOS-4610
 	// sankey): every link of one claimed fact's repository_theme_breakdown table
@@ -240,6 +256,16 @@ const (
 	ContextFabricRenderLandscapeDayField   = "as_of_day"
 	ContextFabricRenderLandscapeXField     = "churn_loc_30d"
 	ContextFabricRenderLandscapeYField     = "delivery_units_30d"
+)
+
+// The forecast's table (CHAOS-12608): the `distribution` table of the team
+// workload fact (CHAOS-12607), one row per distinct completion day, keyed by
+// ContextFabricRenderForecastAxisField, with the share of runs finished by
+// that day in ContextFabricRenderForecastShareField (ops binsToModel's rule).
+const (
+	ContextFabricRenderForecastTableField = "completion_distribution"
+	ContextFabricRenderForecastAxisField  = "completion_days"
+	ContextFabricRenderForecastShareField = "cumulative_share"
 )
 
 // The sankey's table (CHAOS-12578). ContextFabricRenderRepositoryFlowTableField
@@ -410,6 +436,17 @@ const (
 	// the claim's own Field. A derived claim does not resolve: its Field is not
 	// looked up on a fact, so it has no stored value to copy.
 	ContextFabricRenderSourceClaimedFactValue ContextFabricRenderPointSourceKind = "claimed_fact_value"
+	// ContextFabricRenderSourceClaimedFactTableRow resolves to
+	// ClaimedFacts[ClaimID].Rows[RowIndex].Fields[Field]: always the claim's
+	// `rows`, never its `time_series_rows` (CHAOS-12608). claimed_fact_row
+	// resolves through the time series when a claim carries one, so it cannot
+	// address the declared table of a claim that has both; this kind can.
+	// Requires ClaimID, RowIndex and Field.
+	ContextFabricRenderSourceClaimedFactTableRow ContextFabricRenderPointSourceKind = "claimed_fact_table_row"
+	// ContextFabricRenderSourceClaimedFactForecastSummary resolves to the
+	// numeric field Field of ClaimedFacts[ClaimID].CompletionForecast
+	// (CHAOS-12608). Requires ClaimID and Field.
+	ContextFabricRenderSourceClaimedFactForecastSummary ContextFabricRenderPointSourceKind = "claimed_fact_forecast_summary"
 )
 
 // Render shape bounds. Deliberately small: this contract exists to carry a
@@ -513,4 +550,33 @@ type ContextFabricRenderPointSource struct {
 	ClaimID  string `json:"claim_id,omitempty"`
 	RowIndex *int   `json:"row_index,omitempty"`
 	Field    string `json:"field,omitempty"`
+}
+
+// contextFabricRenderPointBounds is the ONE table of per-kind point caps above
+// ContextFabricRenderPointsMaxCount (CHAOS-12608). A forecast plots every row
+// of its distribution table, so its cap is that table's row cap. Every other
+// kind keeps ContextFabricRenderPointsMaxCount. The published schemas carry
+// the same table as one clause per kind plus a default clause on a shape's
+// series points, held to this map by TestEveryRenderPointBoundKindHasItsSchemaClause.
+var contextFabricRenderPointBounds = map[ContextFabricRenderKind]int{
+	ContextFabricRenderKindForecast: ContextFabricClaimedFactDistributionMaxRows,
+}
+
+// ContextFabricRenderPointsMax is the point cap of one series of a shape of
+// this kind.
+func ContextFabricRenderPointsMax(kind ContextFabricRenderKind) int {
+	if points, ok := contextFabricRenderPointBounds[kind]; ok {
+		return points
+	}
+	return ContextFabricRenderPointsMaxCount
+}
+
+// ContextFabricRenderPointBoundKinds returns every kind with its own point
+// cap, and the cap.
+func ContextFabricRenderPointBoundKinds() map[ContextFabricRenderKind]int {
+	out := make(map[ContextFabricRenderKind]int, len(contextFabricRenderPointBounds))
+	for kind, points := range contextFabricRenderPointBounds {
+		out[kind] = points
+	}
+	return out
 }
