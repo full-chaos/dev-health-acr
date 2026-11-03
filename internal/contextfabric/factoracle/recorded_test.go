@@ -420,6 +420,9 @@ func TestThePinNamesWhereTheReplayIsNotTheVenue(t *testing.T) {
 		t.Fatal("no divergence is named: remove this test with the last entry")
 	}
 	for root, d := range venueReplayDivergence {
+		if d.venueCompared == d.replayCompared && d.venueFindings == d.replayFindings {
+			t.Fatalf("root %s is named as diverging (%s) but its venue and replay outcomes are the same (%d with %d): no divergence to name", root, d.ticket, d.replayCompared, d.replayFindings)
+		}
 		pinned, ok := manifest.Expect[root]
 		if !ok {
 			t.Fatalf("root %s is named as diverging (%s) but the capture pins no outcome for it", root, d.ticket)
