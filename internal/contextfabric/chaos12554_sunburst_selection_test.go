@@ -237,10 +237,10 @@ func TestCHAOS12554AStoredSunburstIsRemovedWhenTheSwitchIsOff(t *testing.T) {
 		options RenderShapeOptions
 		kept    int
 	}{
-		"off":                     {RenderShapeOptions{InvestmentThemeShare: true, ComparisonSideBySide: true, LandscapePosition: true, CompletionForecast: true}, 0},
+		"off":                     {RenderShapeOptions{InvestmentThemeShare: true, ComparisonSideBySide: true, LandscapePosition: true, CompletionForecast: true, InvestmentRepositoryFlow: true}, 0},
 		"everything off":          {RenderShapeOptions{}, 0},
 		"on":                      {RenderShapeOptions{InvestmentSubcategoryShare: true}, 1},
-		"on with every other one": {RenderShapeOptions{InvestmentSubcategoryShare: true, InvestmentThemeShare: true, ComparisonSideBySide: true, LandscapePosition: true, CompletionForecast: true}, 1},
+		"on with every other one": {RenderShapeOptions{InvestmentSubcategoryShare: true, InvestmentThemeShare: true, ComparisonSideBySide: true, LandscapePosition: true, CompletionForecast: true, InvestmentRepositoryFlow: true}, 1},
 	} {
 		if got := len(sunburstsOf(WithoutDisabledRenderShapes(result, tc.options).RenderShapes)); got != tc.kept {
 			t.Errorf("%s: kept %d sunbursts, want %d", name, got, tc.kept)
@@ -272,23 +272,22 @@ func TestCHAOS12554TheReuseKeyNamesTheSunburstSwitch(t *testing.T) {
 		}
 	}
 	seen := map[string]int{}
-	for mask := 0; mask < 32; mask++ {
-		options := RenderShapeOptions{InvestmentThemeShare: mask&1 != 0, ComparisonSideBySide: mask&2 != 0, CompletionForecast: mask&4 != 0, LandscapePosition: mask&8 != 0, InvestmentSubcategoryShare: mask&16 != 0}
+	for mask := 0; mask < 64; mask++ {
+		options := RenderShapeOptions{InvestmentThemeShare: mask&1 != 0, ComparisonSideBySide: mask&2 != 0, CompletionForecast: mask&4 != 0, LandscapePosition: mask&8 != 0, InvestmentSubcategoryShare: mask&16 != 0, InvestmentRepositoryFlow: mask&32 != 0}
 		version := ReuseQuestionFamilyVersion(options)
 		if earlier, repeated := seen[version]; repeated {
-			t.Errorf("switch masks %05b and %05b share the reuse version %q", earlier, mask, version)
+			t.Errorf("switch masks %06b and %06b share the reuse version %q", earlier, mask, version)
 		}
 		seen[version] = mask
 	}
 }
 
-// The length half of the 32-switch check. Every switch on is 140 characters,
-// past the question_family_version column's 128; the ruled length rule is acr
-// #1974 (CHAOS-12582), which keys such a form by its digest.
+// The length half of the 64-set check. With the sunburst switch on, a readable
+// form can pass the question_family_version column's 128 characters (migration
+// 0036); the length rule of CHAOS-12582 keys such a form by its digest.
 func TestCHAOS12554EveryReuseFormFitsTheColumn(t *testing.T) {
-	t.Skip("needs CHAOS-12582 #1974 length rule")
-	for mask := 0; mask < 32; mask++ {
-		options := RenderShapeOptions{InvestmentThemeShare: mask&1 != 0, ComparisonSideBySide: mask&2 != 0, CompletionForecast: mask&4 != 0, LandscapePosition: mask&8 != 0, InvestmentSubcategoryShare: mask&16 != 0}
+	for mask := 0; mask < 64; mask++ {
+		options := RenderShapeOptions{InvestmentThemeShare: mask&1 != 0, ComparisonSideBySide: mask&2 != 0, CompletionForecast: mask&4 != 0, LandscapePosition: mask&8 != 0, InvestmentSubcategoryShare: mask&16 != 0, InvestmentRepositoryFlow: mask&32 != 0}
 		if version := ReuseQuestionFamilyVersion(options); len(version) > 128 {
 			t.Errorf("%+v: %d characters, past the column's 128", options, len(version))
 		}

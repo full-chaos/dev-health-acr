@@ -48,6 +48,10 @@ type AppConfig struct {
 	// config.Config.ContextFabricInvestmentSunburstEnabled (CHAOS-12554), for
 	// the same two doors.
 	ContextFabricInvestmentSunburstEnabled bool
+	// ContextFabricInvestmentSankeyEnabled mirrors
+	// config.Config.ContextFabricInvestmentSankeyEnabled (CHAOS-12582), for the
+	// same two doors.
+	ContextFabricInvestmentSankeyEnabled bool
 	// ContextFabricComparisonTableEnabled mirrors
 	// config.Config.ContextFabricComparisonTableEnabled, for the same two doors.
 	ContextFabricComparisonTableEnabled bool

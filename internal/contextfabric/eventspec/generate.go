@@ -86,6 +86,8 @@ func goVarName(e Event) string {
 	switch e.ID {
 	case AnswerDisplay.ID:
 		return "AnswerDisplay"
+	case RepositoryThemeBreakdownWithheld.ID:
+		return "RepositoryThemeBreakdownWithheld"
 	case RetainedRankingAccounting.ID:
 		return "RetainedRankingAccounting"
 	case RankedCutSummary.ID:

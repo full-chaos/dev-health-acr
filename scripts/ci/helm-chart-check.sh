@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Renders the ACR Helm chart offline: default values (with only the required
 # references supplied), the development values through the harness happy path,
-# and every negative scenario of scripts/deploy/test-helm.sh.
+# and every negative scenario of scripts/deploy/test-helm.sh; then executes the
+# in-release FalkorDB AOF scripts (scripts/deploy/test-falkordb-aof.sh).
 #
 # Runs only when the chart or the harness changed relative to the base ref;
 # set HELM_CHECK_FORCE=1 to run unconditionally. A push event has no base, so
@@ -13,7 +14,7 @@ cd "$repo_root"
 
 base_ref="${1:-}"
 if [[ -n "$base_ref" && "${HELM_CHECK_FORCE:-0}" != 1 ]]; then
-  changed="$(git diff --name-only "$base_ref"...HEAD -- deploy/helm scripts/deploy/test-helm.sh scripts/ci/helm-chart-check.sh)"
+  changed="$(git diff --name-only "$base_ref"...HEAD -- deploy/helm scripts/deploy/test-helm.sh scripts/deploy/test-falkordb-aof.sh scripts/ci/helm-chart-check.sh)"
   if [[ -z "$changed" ]]; then
     echo "helm-chart-check: no chart or harness change against $base_ref; nothing to render"
     exit 0
@@ -41,4 +42,7 @@ mapfile -t scenarios < <(sed -nE '/^case "\$scenario" in$/,/^esac$/ s/^  ([a-z0-
 for scenario in "${scenarios[@]}"; do
   bash scripts/deploy/test-helm.sh --values "$chart/values-development.yaml" --image "$image" --scenario "$scenario"
 done
-echo "helm-chart-check: default, development and ${#scenarios[@]} negative scenarios passed"
+
+echo "== FalkorDB AOF start wrapper and postStart hook, executed (CHAOS-12650)"
+bash scripts/deploy/test-falkordb-aof.sh
+echo "helm-chart-check: default, development, ${#scenarios[@]} negative scenarios and the FalkorDB AOF scripts passed"

@@ -216,6 +216,14 @@ type Config struct {
 	// reuse key are as before. Turn it on after web's and ask-dev's pins are
 	// deployed.
 	ContextFabricInvestmentSunburstEnabled bool
+	// ContextFabricInvestmentSankeyEnabled (CHAOS-12582,
+	// ACR_CONTEXT_FABRIC_INVESTMENT_SANKEY_ENABLED) turns on the
+	// investment_repository_flow render rule: one team's effort from its
+	// repositories to the themes. Default OFF, for the treemap's reason, and on
+	// its own switch: the treemap is on where the sankey's pins are not yet
+	// deployed. It joins the answer-reuse key and is stripped at both serving
+	// doors (contextfabric.WithoutDisabledRenderShapes).
+	ContextFabricInvestmentSankeyEnabled bool
 	// ContextFabricComparisonTableEnabled (CHAOS-12513,
 	// ACR_CONTEXT_FABRIC_COMPARISON_TABLE_ENABLED) turns on the
 	// comparison_side_by_side render rule. Default OFF, for the same reason as

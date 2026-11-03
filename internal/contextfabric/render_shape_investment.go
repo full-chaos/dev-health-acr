@@ -1,6 +1,8 @@
 package contextfabric
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"reflect"
 	"slices"
 	"strings"
@@ -28,6 +30,9 @@ type RenderShapeOptions struct {
 	// See Config.CompletionDistributionEnabled: the rule draws the table that
 	// switch serves, so one switch gates both.
 	CompletionForecast bool
+	// InvestmentRepositoryFlow turns on the investment_repository_flow rule
+	// (CHAOS-12582). See Config.ContextFabricInvestmentSankeyEnabled.
+	InvestmentRepositoryFlow bool
 	// FieldScope reads the declared scope of a field. The comparison rule
 	// reads it. A nil lookup scopes nothing, so that rule finds no cell.
 	FieldScope FactFieldScopeLookup
@@ -47,12 +52,14 @@ type RenderShapeOptions struct {
 // adds. WithoutDisabledRenderShapes covers the other direction at the serving
 // doors. With every switch off this is the table version itself, so a
 // deployment that turns nothing on keeps every stored answer. The landscape
-// quadrant switch joins it (CHAOS-12675), and the sunburst switch by its rule
-// name like every other (CHAOS-12554). With every switch on the form is 140
-// characters, past the question_family_version column's 128 (migration 0036).
-// acr #1974 (CHAOS-12582) brings the ruled length rule: a form past 128 is
-// keyed by its digest. Until it merges, do not turn every render switch on
-// together.
+// quadrant switch (CHAOS-12675), the sankey switch (CHAOS-12582) and the
+// sunburst switch (CHAOS-12554) join it, each by its rule name.
+//
+// With every switch on, the readable form is past the column's 128, so a form
+// past 128 is the table version, "+render#" and the first 32 hex digits of the
+// full form's sha256 (lead ruling on CHAOS-12582). Every shorter form stays
+// readable and byte-equal to what it was
+// (TestTheReuseFamilyVersionNamesTheRenderSwitchesOn sweeps all 64 sets).
 func ReuseQuestionFamilyVersion(options RenderShapeOptions) string {
 	var on []string
 	if options.ComparisonSideBySide {
@@ -60,6 +67,9 @@ func ReuseQuestionFamilyVersion(options RenderShapeOptions) string {
 	}
 	if options.CompletionForecast {
 		on = append(on, string(contractsv1.ContextFabricRenderRuleCompletionForecast))
+	}
+	if options.InvestmentRepositoryFlow {
+		on = append(on, string(contractsv1.ContextFabricRenderRuleInvestmentRepositoryFlow))
 	}
 	if options.InvestmentSubcategoryShare {
 		on = append(on, string(contractsv1.ContextFabricRenderRuleInvestmentSubcategoryShare))
@@ -73,8 +83,18 @@ func ReuseQuestionFamilyVersion(options RenderShapeOptions) string {
 	if len(on) == 0 {
 		return QuestionFamilyTableVersion
 	}
-	return QuestionFamilyTableVersion + "+render:" + strings.Join(on, ",")
+	full := QuestionFamilyTableVersion + "+render:" + strings.Join(on, ",")
+	// Migration 0036's CHECK holds question_family_version to 128 characters.
+	if len(full) <= reuseQuestionFamilyVersionMaxLength {
+		return full
+	}
+	digest := sha256.Sum256([]byte(full))
+	return QuestionFamilyTableVersion + "+render#" + hex.EncodeToString(digest[:16])
 }
+
+// reuseQuestionFamilyVersionMaxLength is the question_family_version column's
+// bound (migration 0036, ck_acr_cf_investigation_results_question_family_version_length).
+const reuseQuestionFamilyVersionMaxLength = 128
 
 // The words of the treemap (CHAOS-12521). They are served, never derived from a
 // model, and agreed with the seam that draws them.
@@ -225,7 +245,7 @@ func familyTakesShape(family QuestionFamily, shape InvestigationShape) bool {
 // (Codex #1949 r1): a result stored while it was on keeps its summaries, and
 // the summary is the same widening the shapes are.
 func WithoutDisabledRenderShapes(result InvestigationResult, options RenderShapeOptions) InvestigationResult {
-	if options.InvestmentThemeShare && options.InvestmentSubcategoryShare && options.ComparisonSideBySide && options.LandscapePosition && options.CompletionForecast {
+	if options.InvestmentThemeShare && options.InvestmentSubcategoryShare && options.ComparisonSideBySide && options.LandscapePosition && options.CompletionForecast && options.InvestmentRepositoryFlow {
 		return result
 	}
 	if !options.CompletionForecast {
@@ -240,6 +260,10 @@ func WithoutDisabledRenderShapes(result InvestigationResult, options RenderShape
 			}
 		case contractsv1.ContextFabricRenderRuleInvestmentSubcategoryShare:
 			if !options.InvestmentSubcategoryShare {
+				continue
+			}
+		case contractsv1.ContextFabricRenderRuleInvestmentRepositoryFlow:
+			if !options.InvestmentRepositoryFlow {
 				continue
 			}
 		case contractsv1.ContextFabricRenderRuleComparisonSideBySide:

@@ -1287,6 +1287,63 @@ grep -qF 'mutable-image: contextFabric.falkordb.image' <<<"$falkordb_mutable" \
   || fail_gate "falkordb-workload: mutable falkordb image failure did not name the violation"
 pass "falkordb-workload: mutable falkordb image reference fails closed naming the violation"
 
+# Gate 19b (CHAOS-12650): FalkorDB append-only file. Off by default, the
+# StatefulSet keeps the image's own entrypoint and renders no scripts ConfigMap,
+# so no existing deployment changes. On, it starts through the guarded wrapper
+# (a plain REDIS_ARGS="--appendonly yes" starts EMPTY on a dump.rdb with no AOF)
+# with the postStart hook, mounts the scripts read-only, and the ConfigMap
+# carries the chart's files byte for byte: scripts/deploy/test-falkordb-aof.sh
+# executes those same files.
+grep -qE '/opt/acr-falkordb|postStart|falkordb-scripts' <<<"$falkordb_sts" \
+  && fail_gate "falkordb-aof: appendOnly off must render no wrapper, hook or scripts volume"
+[[ -z "$(extract_doc ConfigMap 'name: [^[:space:]]+-falkordb-scripts' <<<"$falkordb_render")" ]] \
+  || fail_gate "falkordb-aof: appendOnly off must render no scripts ConfigMap"
+falkordb_aof_render="$(render \
+  --set contextFabric.falkordb.enabled=true \
+  --set contextFabric.falkordb.persistence.appendOnly=true \
+  --set-string contextFabric.falkor.addr=acr-test-falkordb:6379)"
+falkordb_aof_sts="$(extract_doc StatefulSet 'component: falkordb' <<<"$falkordb_aof_render")"
+grep -qF 'command: ["/bin/sh", "/opt/acr-falkordb/falkordb-start.sh"]' <<<"$falkordb_aof_sts" \
+  || fail_gate "falkordb-aof: appendOnly on must start through the guarded wrapper"
+multiline_match() { # $1 Python regex across lines, stdin the text -> exit 0 when it matches
+  python3 -c 'import re, sys; sys.exit(0 if re.search(sys.argv[1], sys.stdin.read()) else 1)' "$1"
+}
+multiline_match 'postStart:\n\s+exec:\n\s+command: \["/bin/sh", "/opt/acr-falkordb/falkordb-aof-on.sh"\]' <<<"$falkordb_aof_sts" \
+  || fail_gate "falkordb-aof: appendOnly on must run the AOF hook as postStart"
+multiline_match '- name: scripts\n\s+mountPath: /opt/acr-falkordb\n\s+readOnly: true' <<<"$falkordb_aof_sts" \
+  || fail_gate "falkordb-aof: the scripts must mount read-only at /opt/acr-falkordb"
+grep -qE '^\s+checksum/falkordb-scripts: [0-9a-f]{64}\s*$' <<<"$falkordb_aof_sts" \
+  || fail_gate "falkordb-aof: the pod template must carry the scripts checksum so a script change rolls the pod"
+# The checksum must follow the rendered ConfigMap, not be a fixed value: a render
+# whose ConfigMap differs (another name) must carry another checksum.
+falkordb_scripts_checksum() { grep -E '^\s+checksum/falkordb-scripts:' | awk '{print $2}'; }
+falkordb_aof_other_sts="$(extract_doc StatefulSet 'component: falkordb' <<<"$(render \
+  --set contextFabric.falkordb.enabled=true \
+  --set contextFabric.falkordb.persistence.appendOnly=true \
+  --set-string fullnameOverride=acr-other \
+  --set-string contextFabric.falkor.addr=acr-other-falkordb:6379)")"
+[[ "$(falkordb_scripts_checksum <<<"$falkordb_aof_sts")" != "$(falkordb_scripts_checksum <<<"$falkordb_aof_other_sts")" ]] \
+  || fail_gate "falkordb-aof: the scripts checksum must change when the rendered ConfigMap changes"
+grep -qE '^\s+volumeClaimTemplates:' <<<"$falkordb_aof_sts" \
+  || fail_gate "falkordb-aof: appendOnly on must keep the persistent data volume"
+grep -qE 'appendonly|REDIS_ARGS' <<<"$(grep -vE '^\s+#' <<<"$falkordb_aof_sts")" \
+  && fail_gate "falkordb-aof: the StatefulSet must not set appendonly itself (only the guarded wrapper may)"
+falkordb_aof_cm="$(extract_doc ConfigMap 'name: [^[:space:]]+-falkordb-scripts' <<<"$falkordb_aof_render")"
+[[ -n "$falkordb_aof_cm" ]] || fail_gate "falkordb-aof: appendOnly on must render the scripts ConfigMap"
+strip_trailing_blank() { sed -e ':a' -e '/^\n*$/{$d;N;ba' -e '}'; }
+falkordb_cm_key() { # $1 data key -> its block scalar, indent stripped, trailing blank lines dropped
+  awk -v key="  $1: |" '
+    $0 == key { inkey = 1; next }
+    inkey && /^  [^ ]/ { exit }
+    inkey { sub(/^    /, ""); sub(/^ +$/, ""); print }
+  ' <<<"$falkordb_aof_cm" | strip_trailing_blank
+}
+for script in falkordb-start.sh falkordb-aof-on.sh; do
+  [[ "$(falkordb_cm_key "$script")" == "$(strip_trailing_blank <"$chart/files/$script")" ]] \
+    || fail_gate "falkordb-aof: the ConfigMap's $script must equal $chart/files/$script"
+done
+pass "falkordb-aof: off by default (image entrypoint, no ConfigMap); on renders the guarded wrapper, the postStart hook, a read-only scripts mount and the chart's scripts unchanged"
+
 # Gate 13: hosted acr-mcp workload. Enabled, it is its own Deployment from its
 # own digest-pinned image, restricted, probed on /healthz and /readyz, and holds
 # NO credential: no Secret mounted or read into its environment, no mounted

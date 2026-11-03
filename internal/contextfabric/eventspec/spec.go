@@ -3607,6 +3607,23 @@ var TeamLinkedMixSet = Event{
 	},
 }
 
+// RepositoryThemeBreakdownWithheld is the Info line of a team investment read that withheld the team's repository_theme_breakdown (CHAOS-12580): a repository with no name (its word would be an id), two repositories sharing one handle, a linked read cut at its bound, or more links than the table's row bound. The answer keeps theme_breakdown.
+var RepositoryThemeBreakdownWithheld = Event{
+	ID:                       "devhealthfacts.repository_theme_breakdown_withheld",
+	Msg:                      "devhealthfacts.repository_theme_breakdown_withheld",
+	Level:                    LevelInfo,
+	Multiplicity:             MultiplicityZeroOrOnePerRequest,
+	RequiredOnlyConstruction: true,
+	Attribution:              []string{"request_id"},
+	Fields: []Field{
+		{Key: "reason", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: []string{"repository_without_name", "repository_name_shared", "linked_repositories_over_bound", "rows_over_bound"}},
+		{Key: "team", Type: FieldString, Presence: PresenceRequired},
+		{Key: "repository", Type: FieldString, Presence: PresenceConditional, Applicability: "written when reason=repository_without_name or reason=repository_name_shared"},
+		{Key: "bound", Type: FieldInt, Presence: PresenceConditional, Applicability: "written when reason=linked_repositories_over_bound or reason=rows_over_bound"},
+		{Key: "request_id", Type: FieldString, Presence: PresenceConditional, Applicability: "written when the request context carries a request ID"},
+	},
+}
+
 // TeamPRLinkStateNativeFirst is the Info line of the fallback-only rule of the team pull request link state: how many pull requests and linked ones the repositories read hold, and how many a fallback link suppressed.
 var TeamPRLinkStateNativeFirst = Event{
 	ID:                       "devhealthfacts.team_pr_link_state_native_first",
@@ -5984,6 +6001,7 @@ var All = []Event{
 	FactReadFailed,
 	TeamLinkedMixNativeFirst,
 	TeamLinkedMixSet,
+	RepositoryThemeBreakdownWithheld,
 	TeamPRLinkStateNativeFirst,
 	ProjectOwningTeamRollup,
 	PullRequestProjectNativeFirst,

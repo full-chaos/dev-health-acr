@@ -317,6 +317,11 @@ contextFabric:
   # investment_subcategory_share rule). selected_by is a closed enum, so keep
   # false until web's and ask-dev's pins hold the rule.
   investmentSunburstEnabled: false
+  # CHAOS-12582: serves the investment_repository_flow sankey (one team's effort
+  # from its repositories to the themes). selected_by is a closed enum, so keep
+  # false until web's and ask-dev's pins hold the rule. Its own switch: the
+  # treemap may be on where the sankey's pins are not deployed.
+  investmentSankeyEnabled: false
   # CHAOS-12513: serves the comparison_side_by_side table. selected_by is a
   # closed enum, so keep false until web's and ask-dev's pins hold the rule.
   comparisonTableEnabled: false
@@ -467,6 +472,19 @@ contextFabric:
       size: 1Gi
       # Empty selects the cluster default StorageClass.
       storageClassName: ""
+      # CHAOS-12650: append-only file with appendfsync everysec, beside the RDB
+      # save points (which stay as they are). With RDB alone a non-graceful
+      # restart (an OOM kill, a SIGKILL) reloads the last dump and drops every
+      # write since it, while the projector's checkpoint in Postgres has moved on.
+      # With the AOF a SIGKILL loses at most about the last second.
+      # Off by default, so no existing deployment changes on upgrade. Turning it
+      # on is safe on a graph that already has data: a plain
+      # REDIS_ARGS="--appendonly yes" would start EMPTY on a dump.rdb with no AOF,
+      # so the chart starts from dump.rdb and its postStart hook turns AOF on once
+      # the load is done (files/falkordb-start.sh, files/falkordb-aof-on.sh).
+      # Disk: the AOF base is about the size of dump.rdb, and a rewrite holds a
+      # second base for a moment; size the volume for about three dumps.
+      appendOnly: false
     # The upstream image runs redis-server as root via its run.sh entrypoint
     # (no USER directive) and its bundled browser UI is disabled below
     # (BROWSER=0) to keep the workload headless. The restricted

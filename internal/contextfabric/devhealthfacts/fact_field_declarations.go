@@ -142,6 +142,9 @@ var (
 	// declRepositoryRef: a repos.id uuid ("repository:"+uuid is the stored
 	// canonical id).
 	declRepositoryRef = &contextfabric.FactSubjectRefDeclaration{Kind: contextfabric.SubjectRepository, IDForm: contextfabric.FactSubjectIDRepositoryUUID}
+	// declRepositoryCanonicalRef: a repository's stored canonical id
+	// ("repository:"+uuid), as repository_theme_breakdown serves it (CHAOS-12580).
+	declRepositoryCanonicalRef = &contextfabric.FactSubjectRefDeclaration{Kind: contextfabric.SubjectRepository, IDForm: contextfabric.FactSubjectIDCanonical}
 	// declUnresolvedHandleRef: a reference no repository of the organization
 	// resolves; the gate cannot decide it, so it is opaque.
 	declUnresolvedHandleRef = &contextfabric.FactSubjectRefDeclaration{Kind: contextfabric.SubjectRepository, IDForm: contextfabric.FactSubjectIDOpaque}
@@ -1119,6 +1122,15 @@ func investmentFields() []fieldDecl {
 		declOn(declOrganizationOnly, fStr("scope"), fInt("repositories_in_scope", "count"), fNum("unattributed_effort_share", "ratio")),
 		declOn([]contextfabric.SubjectKind{contextfabric.SubjectRepository, contextfabric.SubjectOrganization}, fInt("work_unit_count", "count")),
 		declOn(declTeamOnly, declAggregate(fInt("owned_repository_count", "count"))),
+		// CHAOS-12580: the team's effort split by repository, a declared detail
+		// table a claim gets only by naming it (single-team reads).
+		declOn(declTeamOnly, fTable("repository_theme_breakdown",
+			cWord("repository_label", cRef(declRepositoryCanonicalRef, cStr("repository"))),
+			cStr("repository_label"),
+			cVocab(contractsv1.ContextFabricVocabularyInvestmentTheme, cStr("theme")),
+			cNum("weighted_effort", ""),
+			cNum("theme_weighted_effort", ""),
+		)),
 		declOn(declTeamOnly, declAggregate(fInt("project_reached_repository_count", "count")), fStr("repository_link_basis"),
 			fTable("project_reached_repositories",
 				cWord("repository_name", cRef(declRepositoryRef, cStr("repository_id"))),

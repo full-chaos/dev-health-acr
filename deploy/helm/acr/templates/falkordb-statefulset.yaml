@@ -16,6 +16,7 @@ and does not capture the dump files.)
 {{- if .Values.contextFabric.falkordb.enabled }}
 {{- $falkordb := .Values.contextFabric.falkordb -}}
 {{- $image := include "acr.falkordbImage" . -}}
+{{- $aof := $falkordb.persistence.appendOnly | default false -}}
 apiVersion: apps/v1
 kind: StatefulSet
 metadata:
@@ -39,9 +40,14 @@ spec:
         {{- toYaml . | nindent 8 }}
         {{- end }}
         {{- include "acr.falkordbSelectorLabels" . | nindent 8 }}
-      {{- with $falkordb.podAnnotations }}
+      {{- if or $falkordb.podAnnotations $aof }}
       annotations:
+        {{- with $falkordb.podAnnotations }}
         {{- toYaml . | nindent 8 }}
+        {{- end }}
+        {{- if $aof }}
+        checksum/falkordb-scripts: {{ include (print $.Template.BasePath "/falkordb-scripts-configmap.yaml") . | sha256sum }}
+        {{- end }}
       {{- end }}
     spec:
       automountServiceAccountToken: false
@@ -64,6 +70,18 @@ spec:
         - name: falkordb
           image: {{ $image | quote }}
           imagePullPolicy: {{ $falkordb.imagePullPolicy }}
+          {{- if $aof }}
+          # CHAOS-12650: AOF on (appendfsync everysec) without ever starting
+          # empty. The wrapper turns AOF on at startup only over an existing AOF
+          # (or an empty data dir); over a dump.rdb alone it starts with AOF off,
+          # and the postStart hook turns AOF on once the load is done. The hook
+          # logs every outcome and fails the container on any failure.
+          command: ["/bin/sh", "/opt/acr-falkordb/falkordb-start.sh"]
+          lifecycle:
+            postStart:
+              exec:
+                command: ["/bin/sh", "/opt/acr-falkordb/falkordb-aof-on.sh"]
+          {{- end }}
           # The upstream image runs redis-server as root via its run.sh
           # entrypoint (no USER directive), so the restricted
           # acr.containerSecurityContext (runAsNonRoot, uid 65532, read-only
@@ -121,6 +139,24 @@ spec:
           volumeMounts:
             - name: data
               mountPath: /var/lib/falkordb/data
+            {{- if $aof }}
+            - name: scripts
+              mountPath: /opt/acr-falkordb
+              readOnly: true
+            {{- end }}
+      {{- if or $aof (not $falkordb.persistence.enabled) }}
+      volumes:
+        {{- if $aof }}
+        - name: scripts
+          configMap:
+            name: {{ include "acr.fullname" . }}-falkordb-scripts
+            defaultMode: 0555
+        {{- end }}
+        {{- if not $falkordb.persistence.enabled }}
+        - name: data
+          emptyDir: {}
+        {{- end }}
+      {{- end }}
   {{- if $falkordb.persistence.enabled }}
   volumeClaimTemplates:
     - metadata:
@@ -133,9 +169,5 @@ spec:
         resources:
           requests:
             storage: {{ $falkordb.persistence.size | quote }}
-  {{- else }}
-      volumes:
-        - name: data
-          emptyDir: {}
   {{- end }}
 {{- end }}

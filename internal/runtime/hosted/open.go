@@ -1103,6 +1103,8 @@ func buildContextFabricInvestigator(ctx context.Context, request buildRequest, p
 		InvestmentTreemapEnabled: request.config.ContextFabricInvestmentTreemapEnabled,
 		// See Config.ContextFabricInvestmentSunburstEnabled.
 		InvestmentSunburstEnabled: request.config.ContextFabricInvestmentSunburstEnabled,
+		// See Config.ContextFabricInvestmentSankeyEnabled (CHAOS-12582).
+		InvestmentSankeyEnabled: request.config.ContextFabricInvestmentSankeyEnabled,
 		// See Config.ContextFabricComparisonTableEnabled.
 		ComparisonTableEnabled: request.config.ContextFabricComparisonTableEnabled,
 		// See Config.ContextFabricLandscapeQuadrantEnabled.
@@ -1217,6 +1219,8 @@ func buildContextFabricInvestigator(ctx context.Context, request buildRequest, p
 				CompletionForecast:         request.config.CompletionDistributionEnabled,
 				// CHAOS-12675: the quadrant switch joins the key.
 				LandscapePosition: request.config.ContextFabricLandscapeQuadrantEnabled,
+				// CHAOS-12582.
+				InvestmentRepositoryFlow: request.config.ContextFabricInvestmentSankeyEnabled,
 			}),
 			// One more deployment-current version authority -- the
 			// ownership-routing gate's own arm-selection rules (falkorgraph:

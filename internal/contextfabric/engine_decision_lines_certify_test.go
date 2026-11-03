@@ -48,6 +48,7 @@ func TestRenderShapeSummaryAndSkippedLinesCertify(t *testing.T) {
 		contractsv1.ContextFabricRenderRuleInvestmentSubcategoryShare,
 		contractsv1.ContextFabricRenderRuleComparisonSideBySide, contractsv1.ContextFabricRenderRuleLandscapePosition,
 		contractsv1.ContextFabricRenderRuleCompletionForecast, contractsv1.ContextFabricRenderRuleCompletionForecastPercentiles,
+		contractsv1.ContextFabricRenderRuleInvestmentRepositoryFlow,
 	}
 	reasons := contextfabric.RenderShapeSkipReasonLineVocabulary()
 	ok := contextfabric.RenderShapeSelectionEvent{Shape: contractsv1.ContextFabricShapeOpen, MembersTruncated: 2, TrendsOmitted: 3, ComparisonMeasuresLeftOut: 4, LandscapeSidesLeftOut: 5, TablesCadenceWithheld: 6}
@@ -58,8 +59,8 @@ func TestRenderShapeSummaryAndSkippedLinesCertify(t *testing.T) {
 	telemetry, ctx := cohortTelemetry(&buf)
 	telemetry.RecordRenderShapeSelection(ctx, storage.Principal{OrgID: "org_1"}, ok)
 	lines := bytes.Split(bytes.TrimSpace(buf.Bytes()), []byte("\n"))
-	if len(lines) != 10 {
-		t.Fatalf("a selection of nine skipped rules writes the summary and nine skip lines, got %d: %s", len(lines), buf.String())
+	if len(lines) != 11 {
+		t.Fatalf("a selection of ten skipped rules writes the summary and ten skip lines, got %d: %s", len(lines), buf.String())
 	}
 	if got := jsonKeys(t, lines[0]); !reflect.DeepEqual(got, renderShapeSummaryLegacyKeys) {
 		t.Fatalf("summary key sequence = %v, want %v", got, renderShapeSummaryLegacyKeys)
@@ -69,7 +70,7 @@ func TestRenderShapeSummaryAndSkippedLinesCertify(t *testing.T) {
 	}
 	certifyRequestLine(t, buf.Bytes(), eventspec.RenderShapeSelectionSummary, map[string]any{
 		"org_id": "org_1", "question_shape": string(contractsv1.ContextFabricShapeOpen), "render_shapes_selected": 0,
-		"render_shape_rules_skipped": 9, "render_shape_members_truncated": 2, "render_shape_trends_omitted": 3,
+		"render_shape_rules_skipped": 10, "render_shape_members_truncated": 2, "render_shape_trends_omitted": 3,
 		"render_shape_comparison_measures_left_out": 4, "render_shape_landscape_sides_left_out": 5, "render_shape_tables_cadence_withheld": 6, "render_shape_accounting": "ok",
 	})
 	for i, rule := range rules {

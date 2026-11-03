@@ -12,7 +12,7 @@ import (
 )
 
 func teamMixTables(teamID string) []fakeTable {
-	return []fakeTable{watermarkTable(), ownsRepoTable(teamID), {match: "FROM work_unit_investments", rows: [][]any{
+	return []fakeTable{watermarkTable(), ownsRepoTable(teamID), repositoryNamesTable(teamID), {match: "FROM work_unit_investments", rows: [][]any{
 		themeMixRow(teamID, "", map[string]float64{"feature_delivery": 60, "operational": 20, "maintenance": 10, "quality": 6, "risk": 4}, 0),
 	}}}
 }
