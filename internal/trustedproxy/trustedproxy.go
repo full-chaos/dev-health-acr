@@ -10,7 +10,6 @@
 package trustedproxy
 
 import (
-	"errors"
 	"fmt"
 	"net/netip"
 	"strings"
@@ -49,7 +48,7 @@ func Parse(values []string) (List, error) {
 		}
 		prefix, err := netip.ParsePrefix(value)
 		if err != nil {
-			return List{}, errors.New("trusted proxy CIDR is invalid")
+			return List{}, fmt.Errorf("trusted proxy entry %d is not a network (CIDR)", index+1)
 		}
 		list.prefixes = append(list.prefixes, prefix.Masked())
 	}

@@ -380,6 +380,32 @@ func TestTrustedProxyCIDRsRejectABadExclusion(t *testing.T) {
 	}
 }
 
+// CHAOS-11734 r1: the startup refusal carries the parser's diagnostic, which
+// names the entry position (entry 2 in every form) and never the value.
+func TestTrustedProxyCIDRsRefusalNamesTheEntryNotTheValue(t *testing.T) {
+	for _, c := range []struct{ form, list, address string }{
+		{"outside network", "10.42.0.0/24,!192.0.2.1", "192.0.2.1"},
+		{"network exclusion", "10.42.0.0/24,!10.42.0.0/24", "10.42.0.0"},
+		{"empty exclusion", "10.42.0.0/24,!", ""},
+		{"not an address", "10.42.0.0/24,!junkhost", "junkhost"},
+		{"zoned address", "fe80::/64,!fe80::1%eth0", "fe80::1"},
+		{"IPv4-mapped address", "10.42.0.0/24,!::ffff:10.42.0.1", "10.42.0.1"},
+		{"not a network", "10.42.0.0/24,junknet", "junknet"},
+	} {
+		_, err := load(mapLookup(map[string]string{"ACR_TRUSTED_PROXY_CIDRS": c.list, "ACR_LOCAL_COMPOSITION_READY": "true"}))
+		if err == nil {
+			t.Errorf("%s: %q accepted", c.form, c.list)
+			continue
+		}
+		if !strings.Contains(err.Error(), "ACR_TRUSTED_PROXY_CIDRS") || !strings.Contains(err.Error(), "entry 2 ") {
+			t.Errorf("%s: error %q does not name the setting and entry 2", c.form, err)
+		}
+		if c.address != "" && strings.Contains(err.Error(), c.address) {
+			t.Errorf("%s: error %q names the value %q", c.form, err, c.address)
+		}
+	}
+}
+
 func TestTrustedProxyCIDRsRejectInvalidNetwork(t *testing.T) {
 	if _, err := load(mapLookup(map[string]string{"ACR_TRUSTED_PROXY_CIDRS": "not-a-cidr"})); err == nil {
 		t.Fatal("invalid trusted proxy network accepted")

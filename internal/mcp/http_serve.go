@@ -118,10 +118,18 @@ func (o ServeOptions) edgeGate() EdgeGateOptions {
 }
 
 // ErrServeOptionInvalid reports a serve setting that is out of range or
-// unparseable. Its message names the setting, never the value.
-type ErrServeOptionInvalid struct{ Setting string }
+// unparseable. Its message names the setting, never the value. Reason, when
+// set, is a diagnostic that itself names no value (the trusted-proxy parser's
+// entry position).
+type ErrServeOptionInvalid struct {
+	Setting string
+	Reason  string
+}
 
 func (e *ErrServeOptionInvalid) Error() string {
+	if e.Reason != "" {
+		return "acr-mcp: serve setting " + e.Setting + " is invalid: " + e.Reason
+	}
 	return "acr-mcp: serve setting " + e.Setting + " is invalid"
 }
 
@@ -243,7 +251,7 @@ func (o ServeOptions) Validate() error {
 		return &ErrServeOptionInvalid{Setting: HTTPMaxBodyBytesEnvironment}
 	}
 	if _, err := newEdgeGate(o.edgeGate()); err != nil {
-		return &ErrServeOptionInvalid{Setting: TrustedProxyCIDRsEnvironment}
+		return &ErrServeOptionInvalid{Setting: TrustedProxyCIDRsEnvironment, Reason: err.Error()}
 	}
 	return validateOAuthDiscovery(o)
 }

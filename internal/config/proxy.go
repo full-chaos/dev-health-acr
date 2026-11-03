@@ -1,7 +1,7 @@
 package config
 
 import (
-	"errors"
+	"fmt"
 	"strings"
 
 	"github.com/full-chaos/dev-health-acr/internal/trustedproxy"
@@ -26,7 +26,7 @@ func stringListValue(lookup lookupEnv, key string) []string {
 // networks and "!<address>" exclusions.
 func validateTrustedProxyCIDRs(values []string) error {
 	if _, err := trustedproxy.Parse(values); err != nil {
-		return errors.New("ACR_TRUSTED_PROXY_CIDRS contains an invalid entry")
+		return fmt.Errorf("ACR_TRUSTED_PROXY_CIDRS: %w", err)
 	}
 	return nil
 }
