@@ -130,13 +130,20 @@ var extractTables = []tableSpec{
 	// The source writes one more row, equal but for valid_from and
 	// updated_at, at every sync; of such rows the earliest is valid whenever
 	// a later one is, so it alone decides every read.
+	//
+	// share (CHAOS-12691) is in the group: rows that differ in their share
+	// are not one row. A changed share is a new version of the row under the
+	// same sorting key (same valid_from, newer updated_at; ops
+	// team-attribution.md section 1.1), so of one valid_from the NEWEST
+	// version is kept, the one FINAL keeps. A capture taken before share was
+	// captured holds no share key; the store reads it as NULL (not measured).
 	{Table: tableTeamRepoOwnership, Where: "valid_to IS NULL OR valid_to >= toDateTime64({start:String}, 3, 'UTC')",
-		OrderBy: "valid_from ASC, updated_at ASC",
-		LimitBy: "provider, team_id, repo_id, repo_full_name, match_type, source, is_primary, specificity, priority, valid_to",
+		OrderBy: "valid_from ASC, updated_at DESC",
+		LimitBy: "provider, team_id, repo_id, repo_full_name, match_type, source, is_primary, specificity, priority, valid_to, share",
 		Rules: map[string]columnRule{
 			"org_id": ruleOrg, "provider": ruleKeep, "team_id": ruleTeam, "repo_id": ruleUUID, "repo_full_name": ruleSlug, "match_type": ruleKeep,
 			"source": ruleKeep, "is_primary": ruleKeep, "specificity": ruleKeep, "priority": ruleKeep, "valid_from": ruleKeep, "valid_to": ruleKeep,
-			"updated_at": ruleKeep,
+			"updated_at": ruleKeep, "share": ruleKeep,
 		}},
 	{Table: tableCapacityForecasts, Where: "toDate(computed_at) >= toDate({start:String}) AND toDate(computed_at) < toDate({end:String})", Rules: map[string]columnRule{
 		"forecast_id": ruleUUID, "computed_at": ruleKeep, "team_id": ruleTeam, "work_scope_id": ruleWorkScope, "backlog_size": ruleKeep,
