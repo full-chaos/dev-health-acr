@@ -27,7 +27,8 @@ func TestLiveFailedReadinessLeavesNoContainerBehind(t *testing.T) {
 	defer cancel()
 	req := request(liveFalkorImage, nil)
 	req.WaitingFor = neverReady{}
-	container, err := start(ctx, req, testcontainers.GenericContainer)
+	// With the missing-image retry, so a dropped pull is not read as this test's failure (CHAOS-12855).
+	container, err := start(ctx, req, imageRetried(testcontainers.GenericContainer))
 	if err == nil || !strings.Contains(err.Error(), "readiness probe failed on purpose") {
 		t.Fatalf("the failing probe must fail the start: %v", err)
 	}
