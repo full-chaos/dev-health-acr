@@ -14,5 +14,5 @@ import (
 // values and numbers only: no subject id, no key and no value from ops.
 func logSubcategoryBreakdownWithheld(ctx context.Context, orgID string, withheld subcategoryWithheld) {
 	fields := eventspec.NewInvestmentSubcategoryBreakdownWithheldFields(orgID, string(withheld.subject.Kind), withheld.reason, withheld.theme, withheld.gap)
-	slog.WarnContext(ctx, eventspec.InvestmentSubcategoryBreakdownWithheld.Msg, append(fields.SlogArgs(), requestIDLogAttrs(ctx)...)...)
+	slog.WarnContext(ctx, "devhealthfacts.investment_subcategory_breakdown_withheld", append(fields.SlogArgs(), requestIDLogAttrs(ctx)...)...)
 }
