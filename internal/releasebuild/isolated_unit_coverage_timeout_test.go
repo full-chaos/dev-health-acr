@@ -98,11 +98,26 @@ func TestUnitCoverageShard_appliesExtendedTimeoutToIsolatedPackages(t *testing.T
 	if !strings.Contains(unitStep, "test-shard.sh --with-isolated") {
 		t.Fatalf("unit job step must still shard with --with-isolated; step:\n%s", unitStep)
 	}
-	if !strings.Contains(unitStep, "scripts/ci/test-shard.sh --print-isolated-packages") {
-		t.Fatalf("unit job step must check the shard's packages against scripts/ci/test-shard.sh --print-isolated-packages to detect one sharing this shard -- NOT the bare `isolated` subcommand, which scripts/ci/test-workflow-contract.sh's check_isolated_devhealthschema_job reads as \"this job runs the isolated set for real\" and would misclassify/double-count the unit job; step:\n%s", unitStep)
+	// CHAOS-12717: the lookup lives in scripts/ci/unit-leg-timeout.sh, which
+	// both unit jobs call; it must still detect the shard's isolated packages
+	// with --print-isolated-packages, read each budget from `make
+	// isolated-timeout`, and only RAISE the leg above the 600s default.
+	if !strings.Contains(unitStep, `isolated_timeout="$(scripts/ci/unit-leg-timeout.sh "$packages")"`) {
+		t.Fatalf("unit job step must take the leg budget from scripts/ci/unit-leg-timeout.sh; step:\n%s", unitStep)
 	}
-	if !strings.Contains(unitStep, "make -s isolated-timeout") {
-		t.Fatalf("unit job step must read the per-package budget from `make isolated-timeout`, not a second hard-coded copy; step:\n%s", unitStep)
+	legScript, err := os.ReadFile(filepath.Join(repoRoot, "scripts", "ci", "unit-leg-timeout.sh"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	legSrc := string(legScript)
+	if !strings.Contains(legSrc, `scripts/ci/test-shard.sh" --print-isolated-packages`) {
+		t.Fatalf("unit-leg-timeout.sh must check the shard's packages against scripts/ci/test-shard.sh --print-isolated-packages to detect one sharing this shard -- NOT the bare `isolated` subcommand, which scripts/ci/test-workflow-contract.sh's check_isolated_devhealthschema_job reads as \"this job runs the isolated set for real\"; script:\n%s", legSrc)
+	}
+	if !strings.Contains(legSrc, "isolated-timeout PKG=") {
+		t.Fatalf("unit-leg-timeout.sh must read the per-package budget from `make isolated-timeout`, not a second hard-coded copy; script:\n%s", legSrc)
+	}
+	if !strings.Contains(legSrc, "floor_secs=600") || !strings.Contains(legSrc, `best_secs="$floor_secs"`) {
+		t.Fatalf("unit-leg-timeout.sh must start from the 600s default so an isolated package only raises a leg (CHAOS-12717); script:\n%s", legSrc)
 	}
 	if !strings.Contains(unitStep, `GOTEST_PLAIN_TIMEOUT="$isolated_timeout"`) {
 		t.Fatalf("unit job step must pass the looked-up budget as GOTEST_PLAIN_TIMEOUT to make test-coverage; step:\n%s", unitStep)

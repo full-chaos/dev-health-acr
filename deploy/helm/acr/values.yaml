@@ -316,6 +316,9 @@ contextFabric:
   # CHAOS-12513: serves the comparison_side_by_side table. selected_by is a
   # closed enum, so keep false until web's and ask-dev's pins hold the rule.
   comparisonTableEnabled: false
+  # CHAOS-12626: serves the landscape_position quadrant. selected_by is a
+  # closed enum, so keep false until web's and ask-dev's pins hold the rule.
+  landscapeQuadrantEnabled: false
   # CHAOS-12472: runs a streamed Ask Dev question under an ACR-owned lease, so
   # Stop cancels it and a reload reattaches. Turn it on wherever Ask Dev runs.
   # acr-api refuses to start without ACR_CONTEXT_FABRIC_EVENT_STREAM_ENABLED=true

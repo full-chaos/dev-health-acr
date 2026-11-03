@@ -17,6 +17,9 @@ type RenderShapeOptions struct {
 	// ComparisonSideBySide turns on the comparison_side_by_side rule
 	// (CHAOS-12513). See Config.ContextFabricComparisonTableEnabled.
 	ComparisonSideBySide bool
+	// LandscapePosition turns on the landscape_position rule (CHAOS-12626). See
+	// Config.ContextFabricLandscapeQuadrantEnabled.
+	LandscapePosition bool
 	// CompletionForecast turns on the completion_forecast rule (CHAOS-12608).
 	// See Config.CompletionDistributionEnabled: the rule draws the table that
 	// switch serves, so one switch gates both.
@@ -207,7 +210,7 @@ func familyTakesShape(family QuestionFamily, shape InvestigationShape) bool {
 // (Codex #1949 r1): a result stored while it was on keeps its summaries, and
 // the summary is the same widening the shapes are.
 func WithoutDisabledRenderShapes(result InvestigationResult, options RenderShapeOptions) InvestigationResult {
-	if options.InvestmentThemeShare && options.ComparisonSideBySide && options.CompletionForecast {
+	if options.InvestmentThemeShare && options.ComparisonSideBySide && options.LandscapePosition && options.CompletionForecast {
 		return result
 	}
 	if !options.CompletionForecast {
@@ -224,6 +227,10 @@ func WithoutDisabledRenderShapes(result InvestigationResult, options RenderShape
 			if !options.ComparisonSideBySide {
 				continue
 			}
+		case contractsv1.ContextFabricRenderRuleLandscapePosition:
+			if !options.LandscapePosition {
+				continue
+			}
 		case contractsv1.ContextFabricRenderRuleCompletionForecast, contractsv1.ContextFabricRenderRuleCompletionForecastPercentiles:
 			if !options.CompletionForecast {
 				continue
@@ -232,6 +239,10 @@ func WithoutDisabledRenderShapes(result InvestigationResult, options RenderShape
 		kept = append(kept, shape)
 	}
 	result.RenderShapes = kept
+	// The quadrant's served line goes with it (CHAOS-12626).
+	if !hasLandscapePosition(kept) {
+		result.Limitations = withoutLimitation(result.Limitations, contractsv1.ContextFabricLandscapePositionLimitation)
+	}
 	return result
 }
 

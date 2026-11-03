@@ -37,9 +37,9 @@ func DisplayLogArgs(r v1.ContextFabricInvestigationResult, p v1.ContextFabricAns
 	// ran, once with the allowance and once without, so the difference is
 	// exactly the byte cut and never the count cap, dedup or displacement.
 	allowance := b.MaxSerializedBytes / NarrativeByteShareDivisor
-	limitationSource := restateWorkItemListed(r, p.Cohort, b)
-	_, limitationsWith := boundedLimitationsWithin(limitationSource, &clamper{}, allowance)
-	_, limitationsWithout := boundedLimitations(limitationSource, &clamper{})
+	limitationSource, retainLimitation := limitationsToBound(r, p.Cohort, b, p.RenderShapes)
+	_, limitationsWith := boundedNarrativeRetaining(limitationSource, &clamper{}, retainLimitation, allowance)
+	_, limitationsWithout := boundedNarrativeRetaining(limitationSource, &clamper{}, retainLimitation, 0)
 	_, warningsWith := boundedNarrativeWithin(r.Warnings, &clamper{}, allowance)
 	_, warningsWithout := boundedNarrative(r.Warnings, &clamper{})
 	limitationsByteCut, warningsByteCut := limitationsWith-limitationsWithout, warningsWith-warningsWithout

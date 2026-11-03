@@ -1,0 +1,61 @@
+{
+  "source": "ops/internal/fixturescli/testdata/generate/mixed_chaos-fixtures__shared-api_r18_180d_c0_p189_t8_s9440_raw.json.gz",
+  "source_sha256": "b0395375a13207831d44f2b3fe241cc8f319b3ff569699cc938faae2e11e67a3",
+  "producer": "77e8b23a1e6e33544d127feeecbba804238d90e5",
+  "frozen_at": "2026-10-12T12:00:00.000000Z",
+  "params": {
+    "provider": "mixed",
+    "repo_name": "chaos-fixtures/shared-api",
+    "repo_count": 18,
+    "days": 180,
+    "commits_per_day": 0,
+    "pr_count": 189,
+    "team_count": 8,
+    "seed": 9440,
+    "with_metrics": false,
+    "with_work_graph": false
+  },
+  "command": "dho fixtures generate --provider mixed --repo-name chaos-fixtures/shared-api --repo-count 18 --days 180 --commits-per-day 0 --pr-count 189 --team-count 8 --seed 9440",
+  "teams": [
+    {
+      "id": "gh:identity",
+      "name": "Identity",
+      "provider": "github"
+    },
+    {
+      "id": "gl:chaos-gl",
+      "name": "Delivery",
+      "provider": "gitlab"
+    },
+    {
+      "id": "gl:chaos-gl/data",
+      "name": "Data",
+      "provider": "gitlab"
+    },
+    {
+      "id": "gl:chaos-gl/web",
+      "name": "Web",
+      "provider": "gitlab"
+    },
+    {
+      "id": "jira:9a1f0c3e-0000-4000-8000-0000000d0001",
+      "name": "Payments",
+      "provider": "jira"
+    },
+    {
+      "id": "jira:9a1f0c3e-0000-4000-8000-0000000d0002",
+      "name": "Support Tools",
+      "provider": "jira"
+    },
+    {
+      "id": "linear:CHK",
+      "name": "Checkout",
+      "provider": "linear"
+    },
+    {
+      "id": "linear:MOB",
+      "name": "Mobile",
+      "provider": "linear"
+    }
+  ]
+}

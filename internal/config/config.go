@@ -211,6 +211,11 @@ type Config struct {
 	// comparison_side_by_side render rule. Default OFF, for the same reason as
 	// the treemap. Turn it on after web's and ask-dev's pins are deployed.
 	ContextFabricComparisonTableEnabled bool
+	// ContextFabricLandscapeQuadrantEnabled (CHAOS-12626,
+	// ACR_CONTEXT_FABRIC_LANDSCAPE_QUADRANT_ENABLED) turns on the
+	// landscape_position render rule. Default OFF, for the same reason as the
+	// treemap. Turn it on after web's and ask-dev's pins are deployed.
+	ContextFabricLandscapeQuadrantEnabled bool
 	// ServerCompletenessAuthorityEnabled (CHAOS-5640,
 	// ACR_CONTEXT_FABRIC_SERVER_COMPLETENESS_AUTHORITY_ENABLED) is the
 	// gated FLIP's master switch -- default OFF, same "ships dark"
