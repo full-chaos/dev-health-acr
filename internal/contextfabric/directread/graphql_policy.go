@@ -182,6 +182,69 @@ type rootCandidate struct {
 	literalJSON map[string]any
 	// varTypes maps a document variable to its SDL type text.
 	varTypes map[string]string
+	// pins are the enum variables this candidate admits at one value only,
+	// where a sibling candidate of the same root admits another single value:
+	// the variables that tell the root's candidates apart, such as the scope
+	// level of the investment entries (CHAOS-12819). assignPins sets them.
+	pins map[string]string
+}
+
+// assignPins sets each candidate's pins: an allowed enum variable with exactly
+// one allowed value is a pin only when two candidates of the root pin the same
+// path to different values. A single-candidate root has no pins.
+func assignPins(root *GraphQLRootPolicy) {
+	single := make([]map[string]string, len(root.candidates))
+	values := map[string]map[string]bool{}
+	for i, cand := range root.candidates {
+		single[i] = map[string]string{}
+		for _, rule := range cand.op.Variables {
+			if !rule.Allowed || rule.Kind != VariableKindEnum || len(rule.AllowedValues) != 1 {
+				continue
+			}
+			single[i][rule.Path] = rule.AllowedValues[0]
+			if values[rule.Path] == nil {
+				values[rule.Path] = map[string]bool{}
+			}
+			values[rule.Path][rule.AllowedValues[0]] = true
+		}
+	}
+	for i, cand := range root.candidates {
+		cand.pins = nil
+		for path, value := range single[i] {
+			if len(values[path]) < 2 {
+				continue
+			}
+			if cand.pins == nil {
+				cand.pins = map[string]string{}
+			}
+			cand.pins[path] = value
+		}
+	}
+}
+
+// keepsPins reports whether a query's variables keep every pin of the
+// candidate: the value at the pinned path equals the pinned value, the rule's
+// default standing in when the query leaves the path out. A candidate with no
+// pins keeps none, so a tie it is part of goes to the earlier candidate.
+func (c *rootCandidate) keepsPins(vars map[string]any) bool {
+	if len(c.pins) == 0 {
+		return false
+	}
+	for path, want := range c.pins {
+		value := ""
+		if got := lookupOne(vars, path); isNullish(got) {
+			rule, _ := c.op.Variable(path)
+			value = rule.EffectiveDefault()
+		} else if s, ok := got.value.(string); ok {
+			value = s
+		} else {
+			return false
+		}
+		if value != want {
+			return false
+		}
+	}
+	return true
 }
 
 // GraphQLRootPolicy is the derived policy of one allowed root field.
@@ -286,6 +349,7 @@ func NewGraphQLPolicy(cat *Catalogue, sdl []byte, limits GraphQLLimits) (*GraphQ
 	}
 	for _, root := range p.roots {
 		sort.SliceStable(root.candidates, func(i, j int) bool { return candidateStricter(root.candidates[i], root.candidates[j]) })
+		assignPins(root)
 	}
 	return p, nil
 }
