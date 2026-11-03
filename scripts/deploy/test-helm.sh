@@ -1314,6 +1314,16 @@ multiline_match '- name: scripts\n\s+mountPath: /opt/acr-falkordb\n\s+readOnly: 
   || fail_gate "falkordb-aof: the scripts must mount read-only at /opt/acr-falkordb"
 grep -qE '^\s+checksum/falkordb-scripts: [0-9a-f]{64}\s*$' <<<"$falkordb_aof_sts" \
   || fail_gate "falkordb-aof: the pod template must carry the scripts checksum so a script change rolls the pod"
+# The checksum must follow the rendered ConfigMap, not be a fixed value: a render
+# whose ConfigMap differs (another name) must carry another checksum.
+falkordb_scripts_checksum() { grep -E '^\s+checksum/falkordb-scripts:' | awk '{print $2}'; }
+falkordb_aof_other_sts="$(extract_doc StatefulSet 'component: falkordb' <<<"$(render \
+  --set contextFabric.falkordb.enabled=true \
+  --set contextFabric.falkordb.persistence.appendOnly=true \
+  --set-string fullnameOverride=acr-other \
+  --set-string contextFabric.falkor.addr=acr-other-falkordb:6379)")"
+[[ "$(falkordb_scripts_checksum <<<"$falkordb_aof_sts")" != "$(falkordb_scripts_checksum <<<"$falkordb_aof_other_sts")" ]] \
+  || fail_gate "falkordb-aof: the scripts checksum must change when the rendered ConfigMap changes"
 grep -qE '^\s+volumeClaimTemplates:' <<<"$falkordb_aof_sts" \
   || fail_gate "falkordb-aof: appendOnly on must keep the persistent data volume"
 grep -qE 'appendonly|REDIS_ARGS' <<<"$(grep -vE '^\s+#' <<<"$falkordb_aof_sts")" \

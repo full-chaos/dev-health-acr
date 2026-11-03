@@ -77,7 +77,7 @@ case "$*" in
     if [ "$(cat "$STATE/appendonly")" = yes ]; then cat "$STATE/rewrite"; fi ;;
   "CONFIG GET appendonly") printf 'appendonly\r\n%s\r\n' "$(cat "$STATE/appendonly")" ;;
   "CONFIG GET appendfsync") printf 'appendfsync\r\neverysec\r\n' ;;
-  "CONFIG SET appendfsync everysec") printf 'OK\r\n' ;;
+  "CONFIG SET appendfsync everysec") printf '%s\r\n' "$(cat "$STATE/fsync")" ;;
   "CONFIG SET appendonly yes")
     reply="$(cat "$STATE/set")"
     printf '%s\r\n' "$reply"
@@ -86,17 +86,26 @@ case "$*" in
 esac
 EOF
 chmod +x "$work/stub/redis-cli"
+# The stub timeout records its duration and the command, then runs it, so a case
+# can check that every redis-cli call is bounded.
+cat >"$work/stub/timeout" <<'EOF2'
+#!/bin/sh
+echo "timeout $1 $2" >>"$STATE/timeouts"
+shift
+exec "$@"
+EOF2
+chmod +x "$work/stub/timeout"
 
 hook_case() { # $1 name, then key=value state; runs the hook, sets rc and log
   local name="$1"; shift
   STATE="$work/state-$name"; mkdir -p "$STATE"
-  echo 0 >"$STATE/loading"; echo no >"$STATE/appendonly"; echo OK >"$STATE/set"
+  echo 0 >"$STATE/loading"; echo no >"$STATE/appendonly"; echo OK >"$STATE/set"; echo OK >"$STATE/fsync"
   printf 'aof_rewrite_in_progress:0\r\naof_rewrite_scheduled:0\r\naof_last_bgrewrite_status:ok\r\n' >"$STATE/rewrite"
   local kv
   for kv in "$@"; do printf '%b\n' "${kv#*=}" >"$STATE/${kv%%=*}"; done
-  : >"$STATE/log"
+  : >"$STATE/log"; : >"$STATE/timeouts"
   set +e
-  env -i PATH="$work/stub:$PATH" STATE="$STATE" ACR_FALKORDB_LOG="$STATE/log" ACR_FALKORDB_AOF_WAIT_SECONDS=3 ACR_FALKORDB_AOF_POLL_SECONDS=1 sh "$hook" >/dev/null 2>&1
+  env -i PATH="$work/stub:$PATH" STATE="$STATE" ${DATA_PATH:+FALKORDB_DATA_PATH="$DATA_PATH"} ACR_FALKORDB_LOG="$STATE/log" ACR_FALKORDB_AOF_WAIT_SECONDS=3 ACR_FALKORDB_AOF_POLL_SECONDS=1 ACR_FALKORDB_CLI_TIMEOUT_SECONDS=7 sh "$hook" >/dev/null 2>&1
   rc=$?
   set -e
   log="$(cat "$STATE/log")"
@@ -113,7 +122,30 @@ hook_case turn-on
 grep -qxF 'CONFIG SET appendonly yes' "$STATE/calls" || fail "hook: must CONFIG SET appendonly yes"
 grep -qF 'CONFIG SET appendonly yes: OK' <<<"$log" || fail "hook: must log the CONFIG SET result: $log"
 grep -qF 'AOF base written' <<<"$log" || fail "hook: must log that the AOF base was written: $log"
-pass "hook: AOF off after an RDB start -> CONFIG SET appendonly yes, result and base logged, exit 0"
+[[ "$(grep -c . "$STATE/calls")" -gt 0 && "$(grep -c . "$STATE/calls")" -eq "$(grep -c '^timeout 7 redis-cli$' "$STATE/timeouts")" ]] \
+  || fail "hook: every redis-cli call must run under timeout: $(wc -l <"$STATE/calls") calls, $(wc -l <"$STATE/timeouts") bounded"
+pass "hook: AOF off after an RDB start -> CONFIG SET appendonly yes, result and base logged, exit 0, every call bounded"
+
+DATA_PATH="$work/hook-data-manifest"; mkdir -p "$DATA_PATH/appendonlydir"; : >"$DATA_PATH/appendonlydir/appendonly.aof.manifest"
+hook_case manifest-present
+[[ $rc -eq 0 ]] || fail "hook: a written AOF manifest must let the hook exit 0 (rc $rc): $log"
+DATA_PATH="$work/hook-data-none"; mkdir -p "$DATA_PATH"
+hook_case manifest-missing
+[[ $rc -ne 0 ]] || fail "hook: a rewrite reported ok with no manifest on disk must fail the hook"
+grep -qF 'appendonly.aof.manifest is missing' <<<"$log" || fail "hook: a missing manifest must be logged: $log"
+unset DATA_PATH
+pass "hook: the AOF manifest on disk is checked after the rewrite (present -> exit 0, missing -> FAILED)"
+
+hook_case fsync-refused fsync='ERR appendfsync refused'
+[[ $rc -ne 0 ]] || fail "hook: a refused CONFIG SET appendfsync must fail the hook"
+grep -qF 'FAILED: CONFIG SET appendfsync everysec: ERR appendfsync refused' <<<"$log" || fail "hook: a refused appendfsync must be logged: $log"
+grep -qxF 'CONFIG SET appendonly yes' "$STATE/calls" && fail "hook: must not turn AOF on after a refused appendfsync"
+pass "hook: a refused CONFIG SET appendfsync -> FAILED, AOF not turned on, non-zero exit"
+
+hook_case rewrite-scheduled rewrite='aof_rewrite_in_progress:0\r\naof_rewrite_scheduled:1\r\naof_last_bgrewrite_status:ok\r'
+[[ $rc -ne 0 ]] || fail "hook: a rewrite that stays scheduled must fail the hook at its deadline"
+grep -qF 'FAILED: the AOF base rewrite did not finish' <<<"$log" || fail "hook: a rewrite left scheduled must be logged: $log"
+pass "hook: a rewrite still scheduled at the deadline -> FAILED, non-zero exit"
 
 hook_case set-refused set='ERR something refused'
 [[ $rc -ne 0 ]] || fail "hook: a refused CONFIG SET must fail the hook"

@@ -14,6 +14,7 @@ set -u
 log_target="${ACR_FALKORDB_LOG:-/proc/1/fd/1}"
 wait_seconds="${ACR_FALKORDB_AOF_WAIT_SECONDS:-1800}"
 poll_seconds="${ACR_FALKORDB_AOF_POLL_SECONDS:-2}"
+call_seconds="${ACR_FALKORDB_CLI_TIMEOUT_SECONDS:-10}"
 
 log() {
   echo "acr-falkordb-aof: $*" >>"$log_target" 2>/dev/null || echo "acr-falkordb-aof: $*"
@@ -22,11 +23,16 @@ fail() {
   log "FAILED: $*"
   exit 1
 }
+# Every call is bounded, so a server that accepts a connection and never answers
+# cannot hold the hook past its deadlines.
+cli() {
+  timeout "$call_seconds" redis-cli "$@"
+}
 field() { # $1 INFO field -> its value in INFO persistence, CR stripped
-  redis-cli INFO persistence 2>/dev/null | tr -d '\r' | sed -n "s/^$1://p"
+  cli INFO persistence 2>/dev/null | tr -d '\r' | sed -n "s/^$1://p"
 }
 config() { # $1 parameter -> its value from CONFIG GET
-  redis-cli CONFIG GET "$1" 2>/dev/null | tr -d '\r' | sed -n 2p
+  cli CONFIG GET "$1" 2>/dev/null | tr -d '\r' | sed -n 2p
 }
 
 deadline=$(($(date +%s) + wait_seconds))
@@ -42,11 +48,15 @@ if [ "$(config appendonly)" = "yes" ]; then
   exit 0
 fi
 
-reply="$(redis-cli CONFIG SET appendfsync everysec 2>&1 | tr -d '\r')"
+reply="$(cli CONFIG SET appendfsync everysec 2>&1 | tr -d '\r')"
 [ "$reply" = "OK" ] || fail "CONFIG SET appendfsync everysec: $reply"
-reply="$(redis-cli CONFIG SET appendonly yes 2>&1 | tr -d '\r')"
+reply="$(cli CONFIG SET appendonly yes 2>&1 | tr -d '\r')"
 [ "$reply" = "OK" ] || fail "CONFIG SET appendonly yes: $reply"
 log "CONFIG SET appendonly yes: OK; waiting for Redis to write the AOF base from memory"
+
+# The rewrite has its own window: a load that used most of the first one must
+# not leave the rewrite none.
+deadline=$(($(date +%s) + wait_seconds))
 
 while :; do
   if [ "$(field aof_rewrite_in_progress)" = "0" ] && [ "$(field aof_rewrite_scheduled)" = "0" ]; then
