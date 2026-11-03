@@ -2986,10 +2986,6 @@ func resolveSubjects(ctx context.Context, principal storage.Principal, request c
 	if !contextfabric.PageHintLookupReported(ctx) {
 		defer pageHints.emit(deps.ResolutionTracer)
 	}
-	// CHAOS-12706: a work item hint under a requested repository scope is
-	// tested through its link (hint_link_scope.go); one keyed read serves the
-	// loop.
-	var links hintLinks
 	for hintIndex, hint := range request.RequestedScope.SubjectHints {
 		if strings.TrimSpace(hint.ID) == "" || hint.Kind == "" {
 			continue
@@ -3047,7 +3043,7 @@ func resolveSubjects(ctx context.Context, principal storage.Principal, request c
 		// unrelated exclusion reason) never inflates this count.
 		// CHAOS-12706: a work item under a requested repository scope is
 		// tested through its link, never through its own repository.
-		linkAdmission := admitHint(ctx, principal, request, deps, &links, subject.Kind, hint.Source, subject.Label, node)
+		linkAdmission := admitHint(ctx, principal, request, deps, subject.Kind, hint.Source, subject.Label, node)
 		candidate := linkAdmission.candidate
 		if !linkAdmission.admitted {
 			if !linkAdmission.authorized {

@@ -16,7 +16,9 @@ import (
 // census tests its satisfiers (census_link_scope.go): AuthorizedThroughLink for
 // the caller's grants and every other part of the request, and the keyed link
 // read for the repository part. A failed, cut or unwired read admits nothing,
-// as it admits nothing to the census.
+// as it admits nothing to the census. Hints are independent, so each hint has
+// its own read: a read that fails for one hint refuses that hint alone (Codex
+// r1 on #1982), where a census round's failed read fails the whole round.
 //
 // The answer reuse recheck keeps the issue's own node test: a stored answer's
 // subject that the census admitted through its link is not re-admitted by the
@@ -29,22 +31,6 @@ import (
 func hintThroughLink(request contextfabric.InvestigationRequest, kind contextfabric.SubjectKind, source string) bool {
 	return kind == contextfabric.SubjectWorkItem && len(request.RequestedScope.RepositorySlugs) > 0 &&
 		hintsource.Source(source) != hintsource.AnswerReuseAuthorizationRecheck
-}
-
-// hintLinks is the keyed link read of the request's repository scope for the
-// hints of one resolution, made when the first work item hint needs it. What it
-// decided for an id is kept, and a failed or cut read fails every later hint, as
-// it fails every later call of a census round.
-type hintLinks struct {
-	built bool
-	scope *linkScope
-}
-
-func (h *hintLinks) read(deps ResolveDeps, scope contextfabric.RequestedScope) *linkScope {
-	if !h.built {
-		h.built, h.scope = true, newLinkScope(deps, scope)
-	}
-	return h.scope
 }
 
 // hintAdmission is what one hinted node gives under the request.
@@ -64,7 +50,7 @@ type hintAdmission struct {
 // admitHint tests one hinted node: through the link for a work item under a
 // requested repository scope (hintThroughLink), and against the whole requested
 // scope otherwise, as before.
-func admitHint(ctx context.Context, principal storage.Principal, request contextfabric.InvestigationRequest, deps ResolveDeps, links *hintLinks, kind contextfabric.SubjectKind, source, term string, node CandidateNode) hintAdmission {
+func admitHint(ctx context.Context, principal storage.Principal, request contextfabric.InvestigationRequest, deps ResolveDeps, kind contextfabric.SubjectKind, source, term string, node CandidateNode) hintAdmission {
 	if !hintThroughLink(request, kind, source) {
 		candidate, admitted := NodeCandidate(principal, request.RequestedScope, term, node, deps.IsInternal, true, deps.ResolutionTracer, request.RequestID)
 		return hintAdmission{candidate: candidate, admitted: admitted, authorized: AuthorizedAttributes(principal, request.RequestedScope, node.Attributes)}
@@ -75,7 +61,7 @@ func admitHint(ctx context.Context, principal storage.Principal, request context
 	if !admitted {
 		return out
 	}
-	tiers, err := links.read(deps, request.RequestedScope).linked(ctx, []string{candidate.Subject.CanonicalID})
+	tiers, err := newLinkScope(deps, request.RequestedScope).linked(ctx, []string{candidate.Subject.CanonicalID})
 	tier := tiers[candidate.Subject.CanonicalID]
 	if err != nil || tier == "" {
 		return out

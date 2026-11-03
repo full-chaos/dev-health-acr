@@ -268,3 +268,44 @@ func TestTheReuseRecheckIsNotAdmittedThroughTheLink(t *testing.T) {
 		t.Fatalf("committed %t, link reads %v: the recheck must not admit a work item through the link", turn.committed, turn.asked)
 	}
 }
+
+// Codex r1 on #1982 (executed): hints are independent, so a link read that
+// fails for one hint does not refuse another. The first hint's read errors;
+// the second hint's read admits it, and it commits.
+func TestAFailedLinkReadForOneHintDoesNotRefuseAnother(t *testing.T) {
+	t.Parallel()
+	failing, linked := hintScopeItem("linear"), hintScopeItem("jira")
+	hints := map[string]CandidateNode{}
+	for _, id := range []string{failing, linked} {
+		hints[SubjectKey(contextfabric.SubjectRef{Kind: contextfabric.SubjectWorkItem, CanonicalID: id})] = candidateNode(contextfabric.SubjectWorkItem, id, "CHAOS-91", 0.5, []string{contractsv1.ContextFabricNoRepositorySentinel})
+	}
+	deps := (&fakeGraphBackend{exactHints: hints, searchResults: map[string][]CandidateNode{}}).deps()
+	var asked [][]string
+	deps.LinkScopedWorkItemsOf = func(_ context.Context, _ contextfabric.RequestedScope, ids []string) (map[string]string, bool, error) {
+		asked = append(asked, slices.Clone(ids))
+		if slices.Contains(ids, failing) {
+			return nil, false, errors.New("graph down")
+		}
+		return map[string]string{linked: contractsv1.ContextFabricWorkItemRepositoryTierNative}, true, nil
+	}
+	request := testRequest()
+	request.Question = "What is their state now?"
+	request.RequestedScope.RepositorySlugs = []string{hintScopeSlug}
+	for _, id := range []string{failing, linked} {
+		request.RequestedScope.SubjectHints = append(request.RequestedScope.SubjectHints, contextfabric.SubjectHint{Kind: contextfabric.SubjectWorkItem, ID: id, Source: string(hintsource.PriorSubjectReceipt)})
+	}
+	resolution, _, bases, _, err := ResolveSubjectsWithCommitBasis(context.Background(), storage.Principal{OrgID: "org_1"}, request, testInterpreted(), deps, nil, nil, nil, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var committed []string
+	for _, s := range resolution.Committed {
+		committed = append(committed, s.CanonicalID)
+	}
+	if !slices.Equal(committed, []string{linked}) || bases[SubjectKey(contextfabric.SubjectRef{Kind: contextfabric.SubjectWorkItem, CanonicalID: linked})] != contextfabric.CommitBasisCallerCanonicalID {
+		t.Fatalf("committed %v (reads %v), want only the hint whose read admitted it, on the caller's canonical id", committed, asked)
+	}
+	if len(asked) != 2 {
+		t.Fatalf("link reads %v, want one per hint: a failed read is that hint's alone", asked)
+	}
+}
