@@ -110,5 +110,61 @@ printf 'TestNoSuchTestExists\n' >>"$dir/scripts/ci/devhealthfacts-race-mid-tests
 printf 'TestNoSuchTestExists\n' >>"$dir/scripts/ci/devhealthfacts-unit-heavy-extra-tests.txt"
 expect_fail 'an extra name that is in the mid list but is no real test' "$dir" devhealthfacts
 
+# CHAOS-12667: devhealthsource's rest list. With it, every test is in exactly one
+# race list, so a new test is placed by its author and never lands in the rest
+# job unseen. verify and race-partition both enforce it.
+expect_fail_mode() {
+  local label="$1" dir="$2" mode="$3"
+  if "$dir/scripts/ci/race-split.sh" devhealthsource "$mode" >"$tmp/out" 2>&1; then
+    bad "NEGATIVE CONTROL: $mode accepted: $label"
+    return 0
+  fi
+  printf 'CONTROL OK: %s rejects %s\n' "$mode" "$label"
+}
+echo "positive: real tree, devhealthsource rest list"
+"$root/scripts/ci/race-split.sh" devhealthsource verify
+"$root/scripts/ci/race-split.sh" devhealthsource race-partition
+rest="scripts/ci/devhealthsource-race-rest-tests.txt"
+dir="$(fixture source-rest-missing-a-test)"
+first="$(awk '!/^[[:space:]]*(#|$)/ { print; exit }' "$dir/$rest")"
+grep -vxF -- "$first" "$dir/$rest" >"$dir/rest.new"
+cmp -s "$dir/rest.new" "$dir/$rest" && { echo "CONTROL SETUP FAILED: source-rest-missing-a-test" >&2; exit 1; }
+mv "$dir/rest.new" "$dir/$rest"
+expect_fail_mode 'a test in no race list' "$dir" verify
+expect_fail_mode 'a test in no race list' "$dir" race-partition
+dir="$(fixture source-rest-and-fourth)"
+awk '!/^[[:space:]]*(#|$)/ { print; exit }' "$dir/scripts/ci/devhealthsource-race-fourth-tests.txt" >>"$dir/$rest"
+expect_fail_mode 'a rest name that is also in the fourth list' "$dir" verify
+dir="$(fixture source-rest-no-such-test)"
+printf 'TestNoSuchTestExists\n' >>"$dir/$rest"
+expect_fail_mode 'a rest name that is no real test' "$dir" verify
+# Codex #1967 r1: the race selectors' flags. -skip of race-mid keeps the selector
+# text, but the mid job would run every non-mid test.
+dir="$(fixture source-race-mid-skip)"
+sed 's/-run=\(.*devhealthsource race-mid)\)/-skip=\1/' "$dir/.github/workflows/ci.yml" >"$dir/ci.new"
+cmp -s "$dir/ci.new" "$dir/.github/workflows/ci.yml" && { echo "CONTROL SETUP FAILED: source-race-mid-skip" >&2; exit 1; }
+mv "$dir/ci.new" "$dir/.github/workflows/ci.yml"
+expect_fail_mode 'a race-mid selector passed to -skip' "$dir" race-partition
+# Codex #1967 r3: a test function in a file built only under -race is invisible
+# to `go test -list`. verify refuses one; a file with only constants (the
+# raceDetectorEnabled pair) and a !race file stay allowed.
+src="$tmp/race-only-src"
+mkdir -p "$src"
+printf '//go:build race\n\npackage x\n\nconst raceOn = true\n' >"$src/race_on_test.go"
+printf '//go:build !race\n\npackage x\n\nfunc TestPlainOnly(t *testing.T) {}\n' >"$src/race_off_test.go"
+if RACE_SPLIT_SOURCE_DIR="$src" "$root/scripts/ci/race-split.sh" devhealthsource verify >"$tmp/out" 2>&1; then
+  echo "positive: a race file with constants only and a !race test file pass verify"
+else
+  bad "verify refused a race file with constants only:"; cat "$tmp/out" >&2
+fi
+printf '//go:build race && linux\n\npackage x\n\nfunc TestRaceOnly(t *testing.T) {}\n' >"$src/race_only_test.go"
+if RACE_SPLIT_SOURCE_DIR="$src" "$root/scripts/ci/race-split.sh" devhealthsource verify >"$tmp/out" 2>&1; then
+  bad "NEGATIVE CONTROL: verify accepted a test function in a race-only file"
+elif grep -q 'race_only_test.go: TestRaceOnly' "$tmp/out"; then
+  echo "CONTROL OK: verify rejects a test function in a race-only file"
+else
+  bad "verify failed for another reason:"; cat "$tmp/out" >&2
+fi
+
 [ "$fails" -eq 0 ] || { printf '%s violation(s)\n' "$fails" >&2; exit 1; }
 echo "PASS: unit split partition and its negative controls"

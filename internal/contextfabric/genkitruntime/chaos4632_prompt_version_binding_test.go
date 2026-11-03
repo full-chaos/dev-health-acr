@@ -116,7 +116,9 @@ func TestVersionedModelContractsAreBoundToTheirContent(t *testing.T) {
 			// v27 -> v28 (CHAOS-11600): every reader-facing sentence that states a
 			// derived number must carry appears, leans or suggests.
 			// v28 -> v29: a comparison claims every compared subject (CHAOS-12549).
-			digest: "c033e0f7ae9a6248d4bd669eb331f7443ceaf034d2d919dc864cd0c3c9a14b45",
+			// v29 -> v30: a fact lists its detail tables, claimed with value null
+			// only when the question asks for that breakdown (CHAOS-12554).
+			digest: "3f98398bd1bd585722cf670c892b3b632a3f19661c0e5e8243ee0334242d5fbf",
 		},
 		{
 			name:    "interpretation model-output schema",
