@@ -58,3 +58,46 @@ func TestR9KeyTextIsOneLine(t *testing.T) {
 		t.Fatalf("R9 sites = %q, want one line without a tab", got)
 	}
 }
+
+// Two methods of one name on different receiver types are two sites: moving a finding between them changes the pin.
+func TestR9SameNamedMethodsOnTwoReceiversAreTwoPins(t *testing.T) {
+	before := r9Sites(t, `type a struct{}
+type b struct{}
+func (x *a) emit(l *slog.Logger, k string) { l.Info("m", k, 1) }
+func (x *b) emit(l *slog.Logger) {}`)
+	after := r9Sites(t, `type a struct{}
+type b struct{}
+func (x *a) emit(l *slog.Logger) {}
+func (x *b) emit(l *slog.Logger, k string) { l.Info("m", k, 1) }`)
+	if len(before) != 1 || len(after) != 1 || before[0] == after[0] {
+		t.Fatalf("R9 sites before %q after %q, want one each and different", before, after)
+	}
+}
+
+func TestR9MethodSiteNamesItsReceiver(t *testing.T) {
+	got := r9Sites(t, `type a struct{}
+type g[T any] struct{}
+func (x *a) p(l *slog.Logger, k string) { l.Info("m", k, 1) }
+func (x a) v(l *slog.Logger, k string) { l.Info("m", k, 1) }
+func (x *g[T]) q(l *slog.Logger, k string) { l.Info("m", k, 1) }`)
+	want := []string{"(*a).p|unresolvable key: k", "a.v|unresolvable key: k", "(*g).q|unresolvable key: k"}
+	if strings.Join(got, ";") != strings.Join(want, ";") {
+		t.Fatalf("R9 sites = %q, want %q", got, want)
+	}
+}
+
+// Whitespace inside a string literal is content: a changed literal changes the pin.
+func TestR9WhitespaceInsideStringLiteralChangesThePin(t *testing.T) {
+	before := r9Sites(t, `func f(l *slog.Logger, k string) { l.Info("m", "prefix  suffix"+k, 1) }`)
+	after := r9Sites(t, `func f(l *slog.Logger, k string) { l.Info("m", "prefix suffix"+k, 1) }`)
+	if len(before) != 1 || len(after) != 1 || before[0] == after[0] {
+		t.Fatalf("R9 sites before %q after %q, want one each and different", before, after)
+	}
+}
+
+func TestR9RawLiteralLineBreakStaysOneLine(t *testing.T) {
+	got := r9Sites(t, "func f(l *slog.Logger, k string) { l.Info(\"m\", `a\n\tb`+k, 1) }")
+	if len(got) != 1 || strings.ContainsAny(got[0], "\t\n") {
+		t.Fatalf("R9 sites = %q, want one line without a tab", got)
+	}
+}
