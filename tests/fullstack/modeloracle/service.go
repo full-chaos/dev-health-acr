@@ -484,9 +484,9 @@ func buildSynthesisReply(entry *ServiceQuestion, userMessage string) (string, er
 	if err := json.Unmarshal([]byte(userMessage), &in); err != nil {
 		return "", fmt.Errorf("the synthesis request is not JSON: %w", err)
 	}
-	if len(in.Resolution.Committed) == 0 {
-		return "", errors.New("the synthesis request holds no committed subject to attribute the driver to")
-	}
+	// A committed subject is needed only to attribute a driver (checked below). A discovered
+	// cohort names no subject, so acr commits none and sends the members in `cohort`; a plan with
+	// no driver answers it (CHAOS-12842).
 	var evidence []string
 	seen := map[string]bool{}
 	for _, f := range in.Facts {
@@ -511,16 +511,20 @@ func buildSynthesisReply(entry *ServiceQuestion, userMessage string) (string, er
 	if category == "" {
 		category = "narrative"
 	}
-	driver := map[string]any{
-		"driver_id": "driver_oracle_01", "standing": "principal", "category": category,
-		"title": plan.Driver.Title, "summary": plan.Driver.Summary,
-		"affected_subjects": []json.RawMessage{in.Resolution.Committed[0]},
-		"evidence_ref_ids":  evidence,
-		"derivation":        "graph_associated", "epistemic_status": "inferred", "confidence": 0.5, "current": true,
-	}
 	drivers := []any{}
 	if plan.Driver.Title != "" || plan.Driver.Summary != "" {
-		drivers = append(drivers, driver)
+		// The oracle never invents the subject a driver is about: with no committed subject a
+		// driver plan fails loudly.
+		if len(in.Resolution.Committed) == 0 {
+			return "", errors.New("the plan asks for a driver and the synthesis request holds no committed subject to attribute it to")
+		}
+		drivers = append(drivers, map[string]any{
+			"driver_id": "driver_oracle_01", "standing": "principal", "category": category,
+			"title": plan.Driver.Title, "summary": plan.Driver.Summary,
+			"affected_subjects": []json.RawMessage{in.Resolution.Committed[0]},
+			"evidence_ref_ids":  evidence,
+			"derivation":        "graph_associated", "epistemic_status": "inferred", "confidence": 0.5, "current": true,
+		})
 	}
 	// A model that read canonical facts restates one it relies on. Without a claim the
 	// engine redraws once (zero-claim redraw), which would double the synthesis call count.
