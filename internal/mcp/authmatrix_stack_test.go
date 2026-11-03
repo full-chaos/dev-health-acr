@@ -352,7 +352,7 @@ func newMatrixStackWith(t *testing.T, investigator func(*memoryinvestigation.Sto
 			Assembler:    assembler, Evidence: evidence, Episodes: episodes,
 			DeviceAuthorizations: devices, DeviceVerificationURL: "https://verify.example.test/device",
 			DeviceAuthorizationLimiter: api.NewDeviceAuthorizationLimiter(api.ClockFunc(time.Now)),
-			ReadinessChecks:            []api.ReadinessCheck{api.CheckFunc{CheckName: "postgres"}, api.CheckFunc{CheckName: "entitlement"}},
+			ReadinessChecks:            []api.ReadinessCheck{api.CheckFunc{CheckName: "postgres"}},
 			DataStoreChecks:            []api.ReadinessCheck{api.CheckFunc{CheckName: "clickhouse"}},
 			Investigator:               investigator(results),
 			InvestigationResults:       results,

@@ -187,11 +187,10 @@ func principalPacketRepositoryAllowed(principal storage.Principal, slug string) 
 
 func repositoryAllowed(scopes []string, slug string) bool {
 	normalized := strings.ToLower(strings.TrimSpace(slug))
-	parts := strings.Split(normalized, "/")
-	if len(parts) != 2 || !reposlug.ValidOwner(parts[0]) || !reposlug.ValidName(parts[1]) {
+	if !reposlug.ValidSlug(normalized) {
 		return false
 	}
-	owner := parts[0]
+	owner, _, _ := strings.Cut(normalized, "/")
 	for _, raw := range scopes {
 		scope := strings.ToLower(strings.TrimSpace(raw))
 		if scope == "*" || scope == normalized || scope == owner+"/*" {

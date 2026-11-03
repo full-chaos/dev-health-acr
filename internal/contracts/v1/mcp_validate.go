@@ -38,7 +38,7 @@ func (r MCPContextForTaskRequest) Validate() error {
 }
 
 func (r MCPRepositoryRef) Validate() error {
-	if !repositorySlugPattern.MatchString(r.Slug) || !stringLengthBetween(r.Slug, 1, 512) {
+	if !validRepositorySlug(r.Slug) {
 		return fmt.Errorf("slug violates v1 bounds")
 	}
 	return nil

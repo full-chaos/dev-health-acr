@@ -524,6 +524,7 @@ type recordingTelemetry struct {
 	windowBinderProposals          []WindowBindOutcome
 	windowGatedForConfirmation     []windowGatedRecord
 	operandReadKinds               [][3]int
+	subjectObligationReads         []recordedSubjectObligationReads
 	windowClassifications          []recordedWindowClassification
 	inferredWindowGates            []recordedInferredWindowGate
 	interpretationTerms            []InterpretationTermsEvent
@@ -532,6 +533,7 @@ type recordingTelemetry struct {
 	// (CHAOS-3900 P1.F) mirror the SAME list-not-count discipline.
 	structureNeedsDisclosed []contractsv1.ContextFabricStructureNeedKind
 	gatedOfferResolutions   []GatedOfferResolutionOutcome
+	gatedOfferFailures      []GatedOfferErrorClass
 	cohortStructureGates    []cohortStructureGateRecord
 	structureOfferCounts    []structureOfferCountRecord
 	structureReceipts       []structureReceiptRecord
@@ -811,6 +813,18 @@ func (r *recordingTelemetry) RecordOperandReadKinds(_ context.Context, _ storage
 	r.operandReadKinds = append(r.operandReadKinds, [3]int{operandRows, kindsNamed, kindsAdded})
 }
 
+// recordedSubjectObligationReads is one RecordSubjectObligationReadKinds call
+// (CHAOS-12710).
+type recordedSubjectObligationReads struct {
+	SubjectRows int
+	KindsNamed  int
+	KindsAdded  []FactKind
+}
+
+func (r *recordingTelemetry) RecordSubjectObligationReadKinds(_ context.Context, _ storage.Principal, subjectRows, kindsNamed int, kindsAdded []FactKind) {
+	r.subjectObligationReads = append(r.subjectObligationReads, recordedSubjectObligationReads{SubjectRows: subjectRows, KindsNamed: kindsNamed, KindsAdded: append([]FactKind(nil), kindsAdded...)})
+}
+
 func (r *recordingTelemetry) RecordWindowClassification(_ context.Context, _ storage.Principal, modelClass WindowClass, outcome WindowClassOutcome) {
 	r.windowClassifications = append(r.windowClassifications, recordedWindowClassification{ModelClass: modelClass, Outcome: outcome})
 }
@@ -876,6 +890,10 @@ func (r *recordingTelemetry) RecordRememberedWindowAxis(_ context.Context, _ sto
 
 func (r *recordingTelemetry) RecordGatedOfferResolution(_ context.Context, _ storage.Principal, outcome GatedOfferResolutionOutcome) {
 	r.gatedOfferResolutions = append(r.gatedOfferResolutions, outcome)
+}
+
+func (r *recordingTelemetry) RecordGatedOfferResolutionFailure(_ context.Context, _ storage.Principal, class GatedOfferErrorClass) {
+	r.gatedOfferFailures = append(r.gatedOfferFailures, class)
 }
 
 // cohortStructureGateRecord (CHAOS-4579/CHAOS-4531) keeps BOTH arguments

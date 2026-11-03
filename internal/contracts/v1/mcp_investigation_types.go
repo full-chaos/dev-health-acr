@@ -215,6 +215,8 @@ var MCPInvestigateQuestionUntrustedFields = []string{
 	// prompt bounds claimed_fact.field), so it is model-facing text, not a
 	// service-issued vocabulary (codex round-5 R5-6).
 	"structured.key_facts[].field",
+	// CHAOS-12608: the forecast's work scope is a provider identifier.
+	"structured.key_facts[].completion_forecast.work_scope_id",
 	"structured.key_facts[].value.string",
 	// CHAOS-4347: Rows is the SAME producer-sourced fact data as Value,
 	// just shaped as a table instead of one scalar -- same reasoning,
@@ -241,6 +243,10 @@ var MCPInvestigateQuestionUntrustedFields = []string{
 	// columns, classified exactly like measures[] just above. Its unit is a
 	// closed vocabulary and is trusted by trustedBecauseClosed.
 	"structured.key_facts[].table.measure_units[].measure",
+	// CHAOS-12639: word_columns{} values name the producer's own columns,
+	// classified exactly like measures[]. column_vocabularies{} values are a
+	// closed vocabulary and are trusted by trustedBecauseClosed.
+	"structured.key_facts[].table.word_columns{}",
 	// CHAOS-4682 (§5.1 P2): the ADDITIVE time_series_rows/time_series_table
 	// pair carries the SAME producer-sourced content as rows/table just
 	// above -- a dual-table fact's second table, classified identically
@@ -254,6 +260,7 @@ var MCPInvestigateQuestionUntrustedFields = []string{
 	"structured.key_facts[].time_series_table.observations[]",
 	"structured.key_facts[].time_series_table.order_by",
 	"structured.key_facts[].time_series_table.measure_units[].measure",
+	"structured.key_facts[].time_series_table.word_columns{}",
 	// CHAOS-4415: a render shape's DISPLAY text. Title/axis_label/
 	// value_label/series[].label/points[].label are built from canonical
 	// subject labels and producer column names, so they are entity display
@@ -353,6 +360,8 @@ var MCPInvestigationResultUntrustedFields = []string{
 	"structured.subject_resolution.clarification_prompt",
 	"structured.subject_resolution.candidates[].match_reasons[]",
 	"structured.claimed_facts[].field",
+	// CHAOS-12608: the forecast's work scope is a provider identifier.
+	"structured.claimed_facts[].completion_forecast.work_scope_id",
 	"structured.claimed_facts[].fact_id",
 	"structured.claimed_facts[].derived_from[].fact_id",
 	"structured.claimed_facts[].derived_from[].field",
@@ -381,6 +390,10 @@ var MCPInvestigationResultUntrustedFields = []string{
 	// columns, classified exactly like measures[] just above. Its unit is a
 	// closed vocabulary and is trusted by trustedBecauseClosed.
 	"structured.claimed_facts[].table.measure_units[].measure",
+	// CHAOS-12639: word_columns{} values name the producer's own columns,
+	// classified exactly like measures[]. column_vocabularies{} values are a
+	// closed vocabulary and are trusted by trustedBecauseClosed.
+	"structured.claimed_facts[].table.word_columns{}",
 	// CHAOS-4682 (§5.1 P2): the ADDITIVE time_series_rows/time_series_table
 	// pair, classified identically to rows/table just above and for the
 	// identical reason. time_series_table.shape lives in
@@ -392,6 +405,7 @@ var MCPInvestigationResultUntrustedFields = []string{
 	"structured.claimed_facts[].time_series_table.observations[]",
 	"structured.claimed_facts[].time_series_table.order_by",
 	"structured.claimed_facts[].time_series_table.measure_units[].measure",
+	"structured.claimed_facts[].time_series_table.word_columns{}",
 	// CHAOS-4415: a render shape's DISPLAY text. Title/axis_label/
 	// value_label/series[].label/points[].label are built from canonical
 	// subject labels and producer column names, so they are entity display

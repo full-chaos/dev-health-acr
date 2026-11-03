@@ -1382,7 +1382,35 @@ import (
 // repository-bound or project-only grant included, and an organization
 // allocation question is answered from it (CHAOS-12585). An answer saved under
 // v268 for such a caller says the fact was refused.
-const QueryVersion = "devhealthfacts.clickhouse.v269"
+//
+// v269 -> v270: an organization allocation requirement is evaluated by the
+// assembled answer, because the investment producer declares
+// allocation_breakdown for the organization (CHAOS-12601). An answer saved under
+// v269 can read complete with no breakdown served.
+//
+// v270 -> v271: an edge's fact and a stub node's label name a work item, project
+// or team in reader words, not by its raw source id (CHAOS-12619). An answer saved
+// earlier can show a raw id in a path's why_relevant.
+//
+// v271 -> v272: an evidence ref's label names its subject in reader words, or by
+// the name the answer holds, never by a UUID or a raw provider id (CHAOS-12620).
+// An answer saved earlier can carry such a label.
+//
+// v272 -> v273: a claimed table states where each cell's word comes from: the
+// theme column's vocabulary and each id column's word column (CHAOS-12639). An
+// answer saved under v272 serves raw theme tokens and ids with no word to show
+// in their place.
+//
+// v273 -> v274: a stored issue-to-pull-request fact names its work item end by
+// its key when the read has already given the pull request end its label
+// (CHAOS-12715). An answer saved earlier can show the raw work item id in a
+// path's why_relevant.
+//
+// v274 -> v275: a nameless project whose source id is org-scoped
+// ("<org UUID>:gitlab:<id>") reads as its native id in a graph end and in an
+// evidence label alike (CHAOS-12716). An answer saved earlier can carry the
+// scoped id.
+const QueryVersion = "devhealthfacts.clickhouse.v275"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each
@@ -2012,12 +2040,14 @@ func sortedSubjectKinds(m map[contextfabric.SubjectKind][]contextfabric.AnswerOb
 // A NIL RETURN IS A DECISION, NOT A GAP. FactMembership and
 // FactSourceHealth are substrate: they make other producers' facts
 // believable rather than answering an obligation themselves.
-// FactSourceHealth matters most because it is the ONLY producer serving
-// SubjectOrganization -- declaring `state` on it would build an org-wide
-// "how are we doing" answer out of ingestion health, which is the
-// mis-answer the design's own B5 row DEFERS rather than ships. It stays
-// empty on purpose, so an organization state requirement derives an
-// explicit `unavailable` instead of a confident wrong answer.
+// FactSourceHealth matters most because it serves SubjectOrganization --
+// declaring `state` on it would build an org-wide "how are we doing" answer
+// out of ingestion health, which is the mis-answer the design's own B5 row
+// DEFERS rather than ships. It stays empty on purpose, so an organization
+// state requirement derives an explicit `unavailable` instead of a confident
+// wrong answer. FactInvestment serves the organization too (CHAOS-8978), and
+// declares allocation_breakdown for it (CHAOS-12601): its organization fact is
+// the theme breakdown over every repository.
 func factKindSubjectObligations(kind contextfabric.FactKind) map[contextfabric.SubjectKind][]contextfabric.AnswerObligation {
 	// The composition family: these producers answer "how is this subject
 	// doing" directly (state), explain it (principal_drivers) and can be
@@ -2206,6 +2236,12 @@ func factKindSubjectObligations(kind contextfabric.FactKind) map[contextfabric.S
 			// CHAOS-6560: repository is the primitive of investment
 			// attribution (readRepositoryThemeMix).
 			contextfabric.SubjectRepository: {contextfabric.ObligationAllocationBreakdown},
+			// CHAOS-12601: the organization fact carries the theme breakdown
+			// over every repository once (readOrganizationThemeMix), and Tables
+			// declares it. Without this row an organization allocation answer
+			// read "no declaring producer, not applicable", so it was complete
+			// whether its breakdown was served, withheld or empty.
+			contextfabric.SubjectOrganization: {contextfabric.ObligationAllocationBreakdown},
 		}
 	// landscape.go's IC-level throughput scatter is a team/project state
 	// reading and a driver. It is deliberately NOT the producer for

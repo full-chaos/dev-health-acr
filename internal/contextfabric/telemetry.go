@@ -447,6 +447,21 @@ func (t SlogEngineTelemetry) RecordOperandReadKinds(ctx context.Context, princip
 	t.logger.InfoContext(ctx, "context fabric plan operand reads", args...)
 }
 
+// RecordSubjectObligationReadKinds (CHAOS-12710) logs at Info: two counts, the
+// count of added kinds and the added kinds themselves, each a fact-kind
+// vocabulary token.
+func (t SlogEngineTelemetry) RecordSubjectObligationReadKinds(ctx context.Context, principal storage.Principal, subjectRows, kindsNamed int, kindsAdded []FactKind) {
+	added := make([]string, 0, len(kindsAdded))
+	for _, kind := range kindsAdded {
+		added = append(added, string(kind))
+	}
+	args := append([]any{
+		"org_id", SanitizeLogAttr(principal.OrgID), "subject_rows", subjectRows, "kinds_named", kindsNamed,
+		"kinds_added", len(kindsAdded), "added_kinds", SanitizeLogStrings(added),
+	}, requestIDLogAttrs(ctx)...)
+	t.logger.InfoContext(ctx, "context fabric plan subject obligation reads", args...)
+}
+
 // RecordWindowClassification (CHAOS-12595) logs at Info: every field is a
 // closed vocabulary member or a bool, never question text.
 func (t SlogEngineTelemetry) RecordWindowClassification(ctx context.Context, principal storage.Principal, modelClass WindowClass, outcome WindowClassOutcome) {
@@ -633,6 +648,14 @@ func (t SlogEngineTelemetry) RecordStructureNeedsDisclosed(ctx context.Context, 
 func (t SlogEngineTelemetry) RecordGatedOfferResolution(ctx context.Context, principal storage.Principal, outcome GatedOfferResolutionOutcome) {
 	args := append([]any{"org_id", SanitizeLogAttr(principal.OrgID), "outcome", SanitizeLogAttr(string(outcome))}, requestIDLogAttrs(ctx)...)
 	t.logger.InfoContext(ctx, "context fabric gated offer resolution", args...)
+}
+
+// RecordGatedOfferResolutionFailure (CHAOS-12681) logs at Warn: a failed
+// offers-only pass leaves the turn gated on the window alone, and the line says
+// why by a closed class, never by the error's text.
+func (t SlogEngineTelemetry) RecordGatedOfferResolutionFailure(ctx context.Context, principal storage.Principal, class GatedOfferErrorClass) {
+	args := append([]any{"org_id", SanitizeLogAttr(principal.OrgID), "error_class", SanitizeLogAttr(string(class))}, requestIDLogAttrs(ctx)...)
+	t.logger.WarnContext(ctx, "context fabric gated offer resolution failed", args...)
 }
 
 // RecordCohortStructureGate (CHAOS-4579/CHAOS-4531). outcome and shape are
@@ -1307,6 +1330,7 @@ func (t SlogEngineTelemetry) RecordRenderShapeSelection(ctx context.Context, pri
 			"render_shape_members_truncated", event.MembersTruncated,
 			"render_shape_trends_omitted", event.TrendsOmitted,
 			"render_shape_comparison_measures_left_out", event.ComparisonMeasuresLeftOut,
+			"render_shape_landscape_sides_left_out", event.LandscapeSidesLeftOut,
 			"render_shape_tables_cadence_withheld", event.TablesCadenceWithheld,
 			"render_shape_accounting", SanitizeLogAttr(accounting),
 			"selected_shapes", selected)...)

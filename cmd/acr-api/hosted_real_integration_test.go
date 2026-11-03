@@ -53,12 +53,13 @@ func TestHostedRuntime_real_binary_serves_and_fails_readiness_safely(t *testing.
 	packet := apiClient.contextPacket(t)
 
 	// Then
-	if ready.Status != "ready" || ready.checkStatus("postgres") != "ready" || ready.checkStatus("entitlement") != "ready" || ready.hasCheck("clickhouse") {
+	if ready.Status != "ready" || ready.checkStatus("postgres") != "ready" || ready.hasCheck("entitlement") || ready.hasCheck("clickhouse") {
 		t.Fatalf("initial readiness = %#v", ready)
 	}
 	entitlement.RotateToken(t)
 	ready = apiClient.readiness(t)
-	if ready.checkStatus("entitlement") != "not_ready" {
+	// CHAOS-12730: the entitlement provider is not part of /readyz.
+	if ready.Status != "ready" || ready.hasCheck("entitlement") {
 		t.Fatalf("readiness with rejected pre-rotation application token = %#v", ready)
 	}
 	if err := process.Stop(ctx); err != nil {
@@ -69,7 +70,7 @@ func TestHostedRuntime_real_binary_serves_and_fails_readiness_safely(t *testing.
 	}
 	process = startAPIProcess(t, ctx, apiProcessRequest{binary: binary, environment: environment})
 	ready = apiClient.readiness(t)
-	if ready.Status != "ready" || ready.checkStatus("entitlement") != "ready" {
+	if ready.Status != "ready" || ready.hasCheck("entitlement") {
 		t.Fatalf("readiness with rotated application token = %#v", ready)
 	}
 	if !capabilities.Entitlements.AgentContextRuntime || !capabilities.Permissions.ContextRead || !capabilities.Permissions.EvidenceRead {
@@ -106,7 +107,7 @@ func TestHostedRuntime_real_binary_serves_and_fails_readiness_safely(t *testing.
 	// pod, and the OAuth routes, out of service); the data route degrades
 	// alone with a typed, retryable store_unavailable 503.
 	ready = apiClient.readiness(t)
-	if ready.Status != "ready" || ready.hasCheck("clickhouse") || ready.checkStatus("postgres") != "ready" || ready.checkStatus("entitlement") != "ready" {
+	if ready.Status != "ready" || ready.hasCheck("clickhouse") || ready.checkStatus("postgres") != "ready" || ready.hasCheck("entitlement") {
 		t.Fatalf("readiness after ClickHouse loss = %#v", ready)
 	}
 	var storeDown map[string]any
@@ -128,7 +129,9 @@ func TestHostedRuntime_real_binary_serves_and_fails_readiness_safely(t *testing.
 	}
 	entitlement.Stop()
 	ready = apiClient.readiness(t)
-	if ready.checkStatus("entitlement") != "not_ready" || ready.Status != "not_ready" {
+	// CHAOS-12730: entitlement loss does not change /readyz (postgres is
+	// already down here, so the pod is not_ready for that reason alone).
+	if ready.hasCheck("entitlement") {
 		t.Fatalf("readiness after entitlement loss = %#v", ready)
 	}
 	select {

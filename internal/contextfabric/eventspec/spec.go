@@ -748,6 +748,32 @@ var WorkItemKeyPrefixUnread = Event{
 	},
 }
 
+// RepositoryReferenceRow is the Info line (graphrank/tracer.go, case
+// "repository_reference_row", CHAOS-12642) for a question holding a repository
+// reference with "#" (owner/repo#N). On GitHub one number space holds issues and
+// pull requests, so the stored rows decide what the reference names, in this
+// order: a pull request row, else a work item row, else nothing. The line counts
+// which rule decided each reference; a read that could not run, or did not close,
+// is unread, and that reference keeps its work item reading. COUNTS ONLY: no
+// reference, repository or question.
+var RepositoryReferenceRow = Event{
+	ID:                 "graphrank.repository_reference_row",
+	Msg:                "context fabric resolution trace: repository reference row",
+	Level:              LevelInfo,
+	Multiplicity:       MultiplicityZeroOrOnePerRequest,
+	Attribution:        []string{"request_id"},
+	BoundedAggregation: "at most one line per request: emitted from bindQuestionHandles only by the call that ran a reference read; the turn's memo keeps each read, so a later resolveSubjects call of the same turn reads none and writes no line",
+	Fields: []Field{
+		{Key: "request_id", Type: FieldString, Presence: PresenceRequired},
+		{Key: "stage", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: []string{"repository_reference_row"}},
+		{Key: "references", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "pull_request_row", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "work_item_row", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "not_found", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "unread", Type: FieldInt, Presence: PresenceRequired},
+	},
+}
+
 // Corroboration is the Debug per-candidate line (graphrank/tracer.go, case
 // "corroboration", event.CorroborationSummary==false) emitted once per
 // candidate every corroboration pass processes, unconditionally (retrieval-
@@ -1878,6 +1904,7 @@ var RenderShapeSelectionSummary = Event{
 		{Key: "render_shape_members_truncated", Type: FieldInt, Presence: PresenceRequired},
 		{Key: "render_shape_trends_omitted", Type: FieldInt, Presence: PresenceRequired},
 		{Key: "render_shape_comparison_measures_left_out", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "render_shape_landscape_sides_left_out", Type: FieldInt, Presence: PresenceRequired},
 		{Key: "render_shape_tables_cadence_withheld", Type: FieldInt, Presence: PresenceRequired},
 		{Key: "render_shape_accounting", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: []string{"ok", "violated"}},
 		{Key: "selected_shapes", Type: FieldObjectSlice, Presence: PresenceRequired, MaxItems: contractsv1.ContextFabricRenderShapesMaxCount, Fields: []Field{
@@ -2146,6 +2173,25 @@ var PlanOperandReads = Event{
 	},
 }
 
+// PlanSubjectObligationReads is the Info line of what a committed subject's own required read obligations added to the fact read (CHAOS-12710).
+var PlanSubjectObligationReads = Event{
+	ID:                       "contextfabric.plan_subject_obligation_reads",
+	Msg:                      "context fabric plan subject obligation reads",
+	Level:                    LevelInfo,
+	Multiplicity:             MultiplicityZeroOrOnePerRequest,
+	RequiredOnlyConstruction: true,
+	Attribution:              []string{"request_id"},
+	BoundedAggregation:       "at most one line per investigation: recorded once, when the plan is built and the committed subject has a read row that requires its kinds.",
+	Fields: []Field{
+		{Key: "org_id", Type: FieldString, Presence: PresenceRequired},
+		{Key: "subject_rows", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "kinds_named", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "kinds_added", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "added_kinds", Type: FieldStringSlice, Presence: PresenceRequired, ClosedVocabulary: arrayTokens(factKindArr[:]), Applicability: "the kinds the fact read gained only because the committed subject's read obligations require them, in fact-kind vocabulary order; empty when an earlier group already asked for every required kind. Its length is kinds_added"},
+		{Key: "request_id", Type: FieldString, Presence: PresenceConditional, Applicability: requestIDApplicability},
+	},
+}
+
 // WindowClassification is the Info line of the window-class decision a current-axis turn with no request window draws its default from (CHAOS-12595).
 var WindowClassification = Event{
 	ID:                       "contextfabric.window_classification",
@@ -2290,6 +2336,24 @@ var GatedOfferResolution = Event{
 	Fields: []Field{
 		{Key: "org_id", Type: FieldString, Presence: PresenceRequired},
 		{Key: "outcome", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: contextfabric.GatedOfferResolutionOutcomeVocabulary()},
+		{Key: "request_id", Type: FieldString, Presence: PresenceConditional, Applicability: requestIDApplicability},
+	},
+}
+
+// GatedOfferResolutionFailure is the Warn line beside a "failed" gated offer
+// resolution (CHAOS-12681): why the offers-only pass failed, by a closed class
+// and never by the error's text. The turn then gates on the window alone.
+var GatedOfferResolutionFailure = Event{
+	ID:                       "contextfabric.gated_offer_resolution_failure",
+	Msg:                      "context fabric gated offer resolution failed",
+	Level:                    LevelWarn,
+	Multiplicity:             MultiplicityZeroOrOnePerRequest,
+	RequiredOnlyConstruction: true,
+	Attribution:              []string{"request_id"},
+	BoundedAggregation:       "at most one line per investigation: written only beside a failed gated offer resolution, and the window gate ends the pass.",
+	Fields: []Field{
+		{Key: "org_id", Type: FieldString, Presence: PresenceRequired},
+		{Key: "error_class", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: contextfabric.GatedOfferErrorClassVocabulary()},
 		{Key: "request_id", Type: FieldString, Presence: PresenceConditional, Applicability: requestIDApplicability},
 	},
 }
@@ -5006,6 +5070,7 @@ var DirectRead = Event{
 		{Key: "latency_ms", Type: FieldInt, Presence: PresenceRequired},
 		{Key: "error_class", Type: FieldString, Presence: PresenceConditional, Applicability: "written when the call ends invalid_request or unavailable", ClosedVocabulary: directReadErrorClass},
 		{Key: "anchor", Type: FieldString, Presence: PresenceConditional, Applicability: "written when a handle-mode anchor was given and a gate decision is available (absent when the gate is unavailable) (CHAOS-7158): the true gate decision, server side only", ClosedVocabulary: []string{"admitted", "refused"}},
+		{Key: "reference_row", Type: FieldString, Presence: PresenceConditional, Applicability: "written when a handle-mode handle is a GitHub owner/repo#N reference, unanchored, of a caller who is not repository-restricted (CHAOS-12642): what the stored rows decided; unread keeps the work item reading", ClosedVocabulary: []string{"pull_request_row", "work_item_reading", "unread"}},
 		{Key: "request_id", Type: FieldString, Presence: PresenceConditional, Applicability: "written when the request context carries a request ID"},
 	},
 }
@@ -5835,7 +5900,7 @@ var All = []Event{
 	RetainedRankingAccounting,
 	WorkItemTupleAdmission,
 	WorkItemAuthorizationGap,
-	RankedCutSummary, AnchorSlotDisplaced, DecisionSummary, Search, KindOfferWithheld, PageHintLookup, WorkItemKeyPrefixUnread,
+	RankedCutSummary, AnchorSlotDisplaced, DecisionSummary, Search, KindOfferWithheld, PageHintLookup, WorkItemKeyPrefixUnread, RepositoryReferenceRow,
 	Corroboration, CorroborationSummary, ReservedKindAdmitted, OfferPool, OfferPoolSummary,
 	Decision, SearchQuestion, AliasLookup, AnchorPool, KindCoverageFloor, ConfirmedKindRescue, KindScopedSemantic,
 	IdentityUniverse, KindHintSearch, ExactNameSearch, AnchorOffer,
@@ -5920,6 +5985,7 @@ var All = []Event{
 	WindowGatedForConfirmation,
 	WindowCanonicalizationOutcome,
 	PlanOperandReads,
+	PlanSubjectObligationReads,
 	WindowClassification,
 	InferredWindowGate,
 	InterpretationTerms,
@@ -5928,6 +5994,7 @@ var All = []Event{
 	ConfirmedNeedLedgerWindow,
 	StructureNeedsDisclosed,
 	GatedOfferResolution,
+	GatedOfferResolutionFailure,
 	CohortStructureGate,
 	WindowGateOfferDisclosure,
 	WindowExpandOfferRedeemed,
@@ -6342,7 +6409,7 @@ var MCPHostedContextScope = Event{
 }
 
 // GraphCountCheckFinished is the Info line for one finished graph count
-// check of one organization: its outcome (completed, cancelled by the check timeout or shutdown, or failed with at least one count read error or one measurement it could not make), how many sources and kinds it compared, how many
+// check of one organization: its outcome (completed, cancelled by the check timeout or shutdown, failed with at least one count read error or one measurement it could not make, or unknown when a source's owned node counts cannot be compared yet), how many sources and kinds it compared, how many sources it could not compare, how many
 // confirmed graph_below_source gaps it found, how many edge populations it compared, how many confirmed graph_edges_below_source gaps it found, how many relation types are not measured yet, and how many count reads failed.
 // The Warn lines the check emits for a gap or a failed read stay as they are;
 // this line is what makes a check that ran and found nothing observable.
@@ -6362,10 +6429,19 @@ var GraphCountCheckFinished = Event{
 		// each interval's check is a distinct pass, so recurring checks of one
 		// organization are told apart and a duplicate sequence is a defect.
 		{Key: "pass", Type: FieldInt, Presence: PresenceRequired},
-		{Key: "outcome", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: []string{"completed", "cancelled", "failed"}},
+		// outcome "unknown" (CHAOS-12649): every read succeeded, and at least one
+		// source's owned node counts could not be compared, because no walk from
+		// zero has marked its owned nodes yet; sources_unknown counts them.
+		{Key: "outcome", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: []string{"completed", "cancelled", "failed", "unknown"}},
 		{Key: "sources_checked", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "sources_unknown", Type: FieldInt, Presence: PresenceRequired},
 		{Key: "kinds_compared", Type: FieldInt, Presence: PresenceRequired},
 		{Key: "gap_count", Type: FieldInt, Presence: PresenceRequired},
+		// days_compared (CHAOS-12649) is the number of (kind, UTC day of the rows'
+		// sync stamp) buckets whose source and graph counts were both read;
+		// day_gap_count the confirmed graph_below_source_on_day gaps among them.
+		{Key: "days_compared", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "day_gap_count", Type: FieldInt, Presence: PresenceRequired},
 		// relations_compared is the number of edge populations (relation type
 		// and arm) whose source and graph edge counts were both read;
 		// edge_gap_count the confirmed graph_edges_below_source gaps among

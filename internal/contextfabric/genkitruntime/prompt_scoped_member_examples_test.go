@@ -34,6 +34,8 @@ var scopedMemberExampleFrames = map[string]struct {
 	"Which of the Vesper team's pull requests are stuck in review?":                               {`["rank_or_survey"]`, "current"},
 	"What is the status of pull request 5063 in the ledger-api repository?":                       {`["assess_state"]`, "current"},
 	"Which pull requests in the ledger-api repository are open?":                                  {`["rank_or_survey"]`, "current"},
+	"What is the status of merge request !42 in platform/ledger-api?":                             {`["assess_state"]`, "current"},
+	"Which merge requests in the platform/ledger-api repository are waiting on review?":           {`["rank_or_survey"]`, "current"},
 }
 
 // DecideFrameGate refuses these two examples and passes every other one.

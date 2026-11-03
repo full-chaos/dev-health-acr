@@ -129,20 +129,22 @@ func open(ctx context.Context, request buildRequest) (*Runtime, error) {
 			return nil, closeAfterError(runtime, fmt.Errorf("initialize episode runtime: %w", err))
 		}
 	}
-	// CHAOS-6745: livenessChecks gate /readyz, the k8s readinessProbe target
-	// that pulls the WHOLE pod from every Service's endpoints -- including
-	// the OAuth/authorization-server routes -- the moment any one check
-	// fails. It therefore carries only what EVERY surface needs (postgres,
-	// entitlement), never clickhouse: an OAuth login has no ClickHouse
-	// dependency, so a ClickHouse outage must not make this pod unroutable
-	// for it. dataStoreChecks (clickhouse) is checked live, per request,
-	// only by the ClickHouse-backed handlers -- see
-	// api.Dependencies.Runtime.DataStoreChecks and its doc comment.
+	// CHAOS-6745/12730: livenessChecks gate /readyz, the k8s readinessProbe
+	// target that pulls the WHOLE pod from every Service's endpoints --
+	// including the OAuth/authorization-server routes -- the moment any one
+	// check fails. It therefore carries only what EVERY surface needs
+	// (postgres), never clickhouse and never the entitlement provider: an
+	// OAuth login needs neither, so an outage of either must not make this
+	// pod unroutable for it. dataStoreChecks (clickhouse) is checked live,
+	// per request, by the ClickHouse-backed handlers; entitlement is decided
+	// live, per request, by the entitlement-gated handlers, which refuse
+	// fail-closed when the provider cannot answer.
 	livenessChecks := []api.ReadinessCheck{
 		api.CheckFunc{CheckName: "postgres", Fn: postgres.check},
-		api.CheckFunc{CheckName: "entitlement", Fn: entitlement.Check},
 	}
-	for _, check := range livenessChecks {
+	// CHAOS-12092: the start is still fail-closed on the entitlement provider.
+	startupChecks := []api.ReadinessCheck{livenessChecks[0], api.CheckFunc{CheckName: "entitlement", Fn: entitlement.Check}}
+	for _, check := range startupChecks {
 		if err := check.Check(ctx); err != nil {
 			return nil, closeAfterError(runtime, fmt.Errorf("initial %s readiness check: %w", check.Name(), err))
 		}
@@ -1096,7 +1098,11 @@ func buildContextFabricInvestigator(ctx context.Context, request buildRequest, p
 		InvestmentTreemapEnabled: request.config.ContextFabricInvestmentTreemapEnabled,
 		// See Config.ContextFabricComparisonTableEnabled.
 		ComparisonTableEnabled: request.config.ContextFabricComparisonTableEnabled,
-		FactCapabilities:       factRegistry.Capabilities(),
+		// See Config.ContextFabricLandscapeQuadrantEnabled.
+		LandscapeQuadrantEnabled: request.config.ContextFabricLandscapeQuadrantEnabled,
+		// CHAOS-12608: the forecast draws the distribution the same switch serves.
+		CompletionForecastEnabled: request.config.CompletionDistributionEnabled,
+		FactCapabilities:          factRegistry.Capabilities(),
 		// See Config.ServerCompletenessAuthorityEnabled's own doc comment.
 		ServerCompletenessAuthorityEnabled: request.config.ServerCompletenessAuthorityEnabled,
 		// See Config.AnchorBindingCountEnabled.
@@ -1191,7 +1197,18 @@ func buildContextFabricInvestigator(ctx context.Context, request buildRequest, p
 			// own reuse lookup could otherwise serve a pre-edit
 			// disclosure from cache. Wired unconditionally, same reasoning
 			// as its seven siblings; see ReuseKey.QuestionFamilyVersion.
-			QuestionFamilyVersion: contextfabric.QuestionFamilyTableVersion,
+			//
+			// Codex #1949 r2: the render switches that are on join it
+			// (ReuseQuestionFamilyVersion), from the same config fields the
+			// engine's selection reads, so an answer stored while a switch
+			// was off is not reused once it is on.
+			QuestionFamilyVersion: contextfabric.ReuseQuestionFamilyVersion(contextfabric.RenderShapeOptions{
+				InvestmentThemeShare: request.config.ContextFabricInvestmentTreemapEnabled,
+				ComparisonSideBySide: request.config.ContextFabricComparisonTableEnabled,
+				CompletionForecast:   request.config.CompletionDistributionEnabled,
+				// CHAOS-12675: the quadrant switch joins the key.
+				LandscapePosition: request.config.ContextFabricLandscapeQuadrantEnabled,
+			}),
 			// One more deployment-current version authority -- the
 			// ownership-routing gate's own arm-selection rules (falkorgraph:
 			// ownership census vs. hopWalk graph-proximity for a

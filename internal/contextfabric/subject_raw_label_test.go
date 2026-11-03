@@ -1,0 +1,173 @@
+package contextfabric_test
+
+import (
+	"testing"
+
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric/identity"
+)
+
+func workItemRef(t *testing.T, repoID, raw string) contextfabric.SubjectRef {
+	t.Helper()
+	id, omitted, err := identity.Derive(identity.KindWorkItem, []string{repoID, raw}, nil)
+	if err != nil || omitted {
+		t.Fatalf("derive %s: %v %v", raw, omitted, err)
+	}
+	return contextfabric.SubjectRef{Kind: contextfabric.SubjectWorkItem, CanonicalID: id, Label: raw}
+}
+
+const zeroRepo = "00000000-0000-0000-0000-000000000000"
+
+// CHAOS-12619: a raw source id reads as a reader names the subject, for every
+// provider, read back from the canonical id alone.
+func TestARawSourceIDReadsAsItsKey(t *testing.T) {
+	t.Parallel()
+	for raw, want := range map[string]string{
+		"linear:CHAOS-2320":                   "CHAOS-2320",
+		"jira:OPS-11":                         "OPS-11",
+		"gh:full-chaos/dev-health-ops#5035":   "full-chaos/dev-health-ops#5035",
+		"ghpr:full-chaos/dev-health-ops#5063": "full-chaos/dev-health-ops#5063",
+		"gitlab:group/project#9":              "group/project#9",
+		"gitlab:group/project!12":             "group/project!12",
+	} {
+		ref := workItemRef(t, zeroRepo, raw)
+		if got, ok := contextfabric.RawSubjectLabel(ref.Kind, ref.CanonicalID); !ok || got != raw {
+			t.Errorf("%s: raw = %q %v", raw, got, ok)
+		}
+		if got := contextfabric.SubjectReadableLabel(ref); got != want {
+			t.Errorf("%s: label = %q, want %q", raw, got, want)
+		}
+	}
+	refID, omitted := identity.DeriveWorkItemRef("extkey:CHAOS-11405", nil)
+	if omitted {
+		t.Fatal("ref omitted")
+	}
+	stub := contextfabric.SubjectRef{Kind: contextfabric.SubjectWorkItemRef, CanonicalID: refID, Label: "extkey:CHAOS-11405"}
+	if got := contextfabric.SubjectReadableLabel(stub); got != "CHAOS-11405" {
+		t.Errorf("work item ref = %q", got)
+	}
+	// A nameless project reads as its source id with the provider dropped; only a
+	// UUID-shaped id, which names nothing a reader knows, reads as the kind word
+	// (lead ruling, 2026-11-02: a team's project list must not read "project,
+	// project").
+	for _, row := range []struct{ provider, id, want string }{
+		{"linear", "c67b1602-31db-4422-8dec-a4a02bbcc513", "project"},
+		{"gitlab", "acme/live-e2e", "acme/live-e2e"},
+		{"github", "ci-metrics-executed-proof/repo", "ci-metrics-executed-proof/repo"},
+		{"jira", "OPS", "OPS"},
+		// CHAOS-12716: an org-scoped source id reads as its native id; a bare UUID
+		// under the org scope is still the kind word.
+		{"gitlab", "70d529e0-3c06-4597-8480-794fd02328b6:gitlab:71133891", "71133891"},
+		{"gitlab", "70d529e0-3c06-4597-8480-794fd02328b6:c67b1602-31db-4422-8dec-a4a02bbcc513", "project"},
+	} {
+		project, omitted, err := identity.Derive(identity.KindProject, []string{row.provider, row.id}, nil)
+		if err != nil || omitted {
+			t.Fatalf("derive %s:%s: %v %v", row.provider, row.id, omitted, err)
+		}
+		if got := contextfabric.SubjectReadableLabel(contextfabric.SubjectRef{Kind: contextfabric.SubjectProject, CanonicalID: project, Label: row.id}); got != row.want {
+			t.Errorf("project stub %s:%s = %q, want %q", row.provider, row.id, got, row.want)
+		}
+	}
+	team := contextfabric.TeamCanonicalID("linear:CHAOS")
+	if got := contextfabric.SubjectReadableLabel(contextfabric.SubjectRef{Kind: contextfabric.SubjectTeam, CanonicalID: team, Label: "linear:CHAOS"}); got != "CHAOS" {
+		t.Errorf("team stub = %q, want CHAOS", got)
+	}
+}
+
+// A label that is not the subject's raw id stands, whatever it looks like: a
+// title, a name, and text shaped like another subject's id.
+func TestALabelThatIsNotTheRawIDStands(t *testing.T) {
+	t.Parallel()
+	ref := workItemRef(t, zeroRepo, "linear:CHAOS-2320")
+	for _, label := range []string{"Generate taxonomy table", "linear:CHAOS-9999", "CHAOS-2320", ""} {
+		ref.Label = label
+		if got := contextfabric.SubjectReadableLabel(ref); got != label {
+			t.Errorf("label %q read as %q", label, got)
+		}
+	}
+	repo := contextfabric.SubjectRef{Kind: contextfabric.SubjectRepository, CanonicalID: contextfabric.RepositoryCanonicalID("920f9442-07df-4217-4dc4-c5833c0b8268"), Label: "920f9442-07df-4217-4dc4-c5833c0b8268"}
+	if got := contextfabric.SubjectReadableLabel(repo); got != repo.Label {
+		t.Errorf("a repository is not this change's: %q", got)
+	}
+}
+
+// A fact's raw ends read as the reader names them; each end is matched by its
+// endpoint's own raw id, never by text that merely looks like one.
+func TestARawEdgeFactReadsInReaderWords(t *testing.T) {
+	t.Parallel()
+	item := workItemRef(t, zeroRepo, "linear:CHAOS-2320")
+	item.Label = "Generate taxonomy table"
+	project, _, _ := identity.Derive(identity.KindProject, []string{"linear", "c67b1602-31db-4422-8dec-a4a02bbcc513"}, nil)
+	named := contextfabric.SubjectRef{Kind: contextfabric.SubjectProject, CanonicalID: project, Label: "Investment View Documentation"}
+	stub := named
+	stub.Label = "c67b1602-31db-4422-8dec-a4a02bbcc513"
+	team := contextfabric.SubjectRef{Kind: contextfabric.SubjectTeam, CanonicalID: contextfabric.TeamCanonicalID("linear:CHAOS"), Label: "Fullchaos"}
+	pr := contextfabric.SubjectRef{Kind: contextfabric.SubjectPullRequest, CanonicalID: "pull_request:920f9442-07df-4217-4dc4-c5833c0b8268:872", Label: "PR #872"}
+	other := workItemRef(t, zeroRepo, "jira:OPS-11")
+	pathProjectID, _, _ := identity.Derive(identity.KindProject, []string{"gitlab", "acme/live-e2e"}, nil)
+	pathProject := contextfabric.SubjectRef{Kind: contextfabric.SubjectProject, CanonicalID: pathProjectID, Label: "acme/live-e2e"}
+	titled := pr
+	titled.Label = "ci(docs): add investment anti-drift guards"
+	numberless := titled
+	numberless.CanonicalID = "pull_request:920f9442-07df-4217-4dc4-c5833c0b8268:main"
+	repoless := titled
+	repoless.CanonicalID = "pull_request:872"
+	emptyRepo := titled
+	emptyRepo.CanonicalID = "pull_request::872"
+	review := contextfabric.SubjectRef{Kind: contextfabric.SubjectKind("pull_request_review"), CanonicalID: "pull_request_review:920f9442-07df-4217-4dc4-c5833c0b8268:872:55", Label: "PR #872 review"}
+	for _, tc := range []struct {
+		fact, relation string
+		from, to       contextfabric.SubjectRef
+		want           string
+	}{
+		{"linear:CHAOS-2320 links pull request PR #872", "LINKS_PULL_REQUEST", item, pr, "CHAOS-2320 links pull request PR #872"},
+		// A nameless project with a path-like id keeps that id as its end.
+		{"linear:CHAOS-2320 belongs to project acme/live-e2e", "BELONGS_TO_PROJECT", item, pathProject, "CHAOS-2320 belongs to project acme/live-e2e"},
+		{"linear:CHAOS-2320 belongs to project c67b1602-31db-4422-8dec-a4a02bbcc513", "BELONGS_TO_PROJECT", item, named, "CHAOS-2320 belongs to project Investment View Documentation"},
+		{"linear:CHAOS-2320 belongs to project c67b1602-31db-4422-8dec-a4a02bbcc513", "BELONGS_TO_PROJECT", item, stub, "CHAOS-2320 belongs to project"},
+		{"linear:CHAOS-2320 owned by team linear:CHAOS", "OWNED_BY_TEAM", item, team, "CHAOS-2320 owned by team Fullchaos"},
+		{"jira:OPS-11 blocks linear:CHAOS-2320", "BLOCKS", other, item, "OPS-11 blocks CHAOS-2320"},
+		// Already reader words: the writer after CHAOS-12619.
+		{"CHAOS-2320 links pull request PR #872", "LINKS_PULL_REQUEST", item, pr, "CHAOS-2320 links pull request PR #872"},
+		// Text shaped like an id that is not this endpoint's stays.
+		{"linear:CHAOS-9999 links pull request PR #872", "LINKS_PULL_REQUEST", item, pr, "linear:CHAOS-9999 links pull request PR #872"},
+		// Not the writer's composition: a custom fact, and an end with other
+		// words beside it, stay as they are (codex r1).
+		{"linear:CHAOS-2320 is a human-authored escalation note", "LINKS_PULL_REQUEST", item, pr, "linear:CHAOS-2320 is a human-authored escalation note"},
+		{"a title that says linear:CHAOS-2320", "BLOCKS", pr, item, "a title that says linear:CHAOS-2320"},
+		{"linear:CHAOS-2320 links pull request PR #872", "", item, pr, "linear:CHAOS-2320 links pull request PR #872"},
+		// A custom fact that starts or ends like the writer's composition is
+		// still a custom fact: only the whole composition is repaired (codex r2).
+		{"linear:CHAOS-2320 links pull request PR #872; escalation note", "LINKS_PULL_REQUEST", item, pr, "linear:CHAOS-2320 links pull request PR #872; escalation note"},
+		{"escalation note: belongs to project c67b1602-31db-4422-8dec-a4a02bbcc513", "BELONGS_TO_PROJECT", item, named, "escalation note: belongs to project c67b1602-31db-4422-8dec-a4a02bbcc513"},
+		// The writer after CHAOS-12619 names a work item end by its key, which
+		// is not the endpoint's title: its raw project end is still repaired.
+		{"CHAOS-2320 belongs to project c67b1602-31db-4422-8dec-a4a02bbcc513", "BELONGS_TO_PROJECT", item, named, "CHAOS-2320 belongs to project Investment View Documentation"},
+		// An end the writer named by the endpoint's own label stands beside a
+		// repaired end.
+		{"Generate taxonomy table belongs to project c67b1602-31db-4422-8dec-a4a02bbcc513", "BELONGS_TO_PROJECT", item, stub, "Generate taxonomy table belongs to project"},
+		// CHAOS-12715: a pull request end the graph carries with its title. The
+		// fact names it by its canonical id (the writer before CHAOS-12468) or by
+		// the label a read gives that id; either way the work item end is repaired,
+		// and a canonical id end reads as that label.
+		{"linear:CHAOS-2320 links pull request PR #872", "LINKS_PULL_REQUEST", item, titled, "CHAOS-2320 links pull request PR #872"},
+		{"linear:CHAOS-2320 links pull request pull_request:920f9442-07df-4217-4dc4-c5833c0b8268:872", "LINKS_PULL_REQUEST", item, titled, "CHAOS-2320 links pull request PR #872"},
+		{"linear:CHAOS-2320 links pull request ci(docs): add investment anti-drift guards", "LINKS_PULL_REQUEST", item, titled, "CHAOS-2320 links pull request ci(docs): add investment anti-drift guards"},
+		// A number that is not this pull request's stays, and so does its work
+		// item end.
+		{"linear:CHAOS-2320 links pull request PR #87", "LINKS_PULL_REQUEST", item, titled, "linear:CHAOS-2320 links pull request PR #87"},
+		// A pull request whose canonical id holds no number, or no repository, has
+		// no such form; nor has a review, whose canonical id is not a pull
+		// request's.
+		{"linear:CHAOS-2320 links pull request PR #0", "LINKS_PULL_REQUEST", item, numberless, "linear:CHAOS-2320 links pull request PR #0"},
+		{"linear:CHAOS-2320 links pull request PR #872", "LINKS_PULL_REQUEST", item, repoless, "linear:CHAOS-2320 links pull request PR #872"},
+		{"linear:CHAOS-2320 links pull request PR #872", "LINKS_PULL_REQUEST", item, emptyRepo, "linear:CHAOS-2320 links pull request PR #872"},
+		{"linear:CHAOS-2320 links pull request PR #55", "LINKS_PULL_REQUEST", item, review, "linear:CHAOS-2320 links pull request PR #55"},
+		// A pull request end on the From side is matched the same way.
+		{"pull_request:920f9442-07df-4217-4dc4-c5833c0b8268:872 blocks linear:CHAOS-2320", "BLOCKS", titled, item, "PR #872 blocks CHAOS-2320"},
+	} {
+		if got := contextfabric.RepairRawEdgeFact(tc.fact, tc.relation, tc.from, tc.to); got != tc.want {
+			t.Errorf("%q = %q, want %q", tc.fact, got, tc.want)
+		}
+	}
+}

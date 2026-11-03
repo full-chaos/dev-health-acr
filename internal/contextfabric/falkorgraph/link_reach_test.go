@@ -208,17 +208,28 @@ func TestALargePageIsReadWhole(t *testing.T) {
 	}
 }
 
-// An owner grant matches a prefix in the statement, a necessary condition only.
-// A three-part slug is not a repository the gate admits for that owner.
-func TestAnOwnerGrantDoesNotReachAThreePartSlug(t *testing.T) {
+// An owner grant matches a prefix in the statement, a necessary condition
+// only; the gate decides. acme/* reaches a repository at any depth below acme/
+// (CHAOS-10708) and never another owner's tree or a slug the gate refuses.
+func TestAnOwnerGrantReachesTheSubgroupsOfItsOwnerOnly(t *testing.T) {
 	t.Parallel()
-	principal := userprincipal.Authenticated(t, "org_1", []string{"acme/*"})
-	fake := &fakeConn{linkReachFunc: func(_ context.Context, cypher string, params map[string]interface{}) ([]row, error) {
-		return reachRows(t, []linkEdgeRow{{repoLessItemID, "native", "acme/group/secret"}}, cypher, params), nil
-	}}
-	candidate, _ := readNode(t, fake, principal, repoLessNode(repoLessItemID))
-	if _, held := candidate.Attributes[graphrank.AuthorizationLinkRepositoriesAttr]; held {
-		t.Fatalf("attributes = %v, want no link for a slug the gate refuses", candidate.Attributes)
+	for slug, want := range map[string]bool{
+		"acme/group/secret":     true,
+		"acme/group/sub/secret": true,
+		"acme/secret":           true,
+		"acme2/group/secret":    false,
+		"other/acme/group":      false,
+		"acme/group/trailing-":  false,
+		"acme/../secret":        false,
+	} {
+		principal := userprincipal.Authenticated(t, "org_1", []string{"acme/*"})
+		fake := &fakeConn{linkReachFunc: func(_ context.Context, cypher string, params map[string]interface{}) ([]row, error) {
+			return reachRows(t, []linkEdgeRow{{repoLessItemID, "native", slug}}, cypher, params), nil
+		}}
+		candidate, _ := readNode(t, fake, principal, repoLessNode(repoLessItemID))
+		if _, held := candidate.Attributes[graphrank.AuthorizationLinkRepositoriesAttr]; held != want {
+			t.Errorf("%s: link held = %v, want %v (attributes %v)", slug, held, want, candidate.Attributes)
+		}
 	}
 }
 

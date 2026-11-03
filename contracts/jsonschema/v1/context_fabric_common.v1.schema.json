@@ -3492,6 +3492,9 @@
         },
         "investment_mix": {
           "$ref": "#/$defs/ClaimedInvestmentMix"
+        },
+        "completion_forecast": {
+          "$ref": "#/$defs/ClaimedCompletionForecast"
         }
       },
       "required": [
@@ -4806,6 +4809,8 @@
         "investment_theme_share",
         "comparison_side_by_side",
         "investment_subcategory_share",
+        "completion_forecast",
+        "completion_forecast_percentiles",
         "investment_repository_flow",
         "landscape_position"
       ]
@@ -4828,7 +4833,9 @@
             "cohort_member_score",
             "cohort_driver_weight_contributed",
             "claimed_fact_row",
-            "claimed_fact_value"
+            "claimed_fact_value",
+            "claimed_fact_table_row",
+            "claimed_fact_forecast_summary"
           ]
         },
         "subject_canonical_id": {
@@ -4901,7 +4908,7 @@
         "points": {
           "type": "array",
           "minItems": 1,
-          "maxItems": 64,
+          "maxItems": 366,
           "items": {
             "$ref": "#/$defs/RenderPoint"
           }
@@ -4917,6 +4924,68 @@
       "description": "CHAOS-4415: ONE renderable shape an answer carries, selected by a deterministic rule from the interpreted intent and the facts the answer already holds. Conditional on intent, never default.",
       "type": "object",
       "additionalProperties": false,
+      "allOf": [
+        {
+          "$comment": "render-point-bound-kind: default",
+          "description": "CHAOS-12608 point bound, default clause: a series of a shape of any kind not listed keeps 64 points.",
+          "if": {
+            "not": {
+              "anyOf": [
+                {
+                  "properties": {
+                    "kind": {
+                      "const": "forecast"
+                    }
+                  },
+                  "required": [
+                    "kind"
+                  ]
+                }
+              ]
+            }
+          },
+          "then": {
+            "properties": {
+              "series": {
+                "items": {
+                  "properties": {
+                    "points": {
+                      "maxItems": 64
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        {
+          "$comment": "render-point-bound-kind: forecast",
+          "description": "CHAOS-12608 point bound, kind forecast: a forecast plots every row of its completion distribution, up to 366.",
+          "if": {
+            "properties": {
+              "kind": {
+                "const": "forecast"
+              }
+            },
+            "required": [
+              "kind"
+            ]
+          },
+          "then": {
+            "properties": {
+              "series": {
+                "items": {
+                  "properties": {
+                    "points": {
+                      "maxItems": 366
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      ],
       "properties": {
         "shape_id": {
           "type": "string",
@@ -5596,6 +5665,30 @@
           "enum": [
             "day"
           ]
+        },
+        "column_vocabularies": {
+          "description": "CHAOS-12639: maps each key or observation column whose values are tokens of a closed vocabulary to that vocabulary. A consumer reads each cell's served word from `vocabulary_labels` under `<vocabulary>:<value>` and keeps no word table of its own. Set by the server from the producer's declaration; never model-authored. Each key is a name in `key` or `observations`.",
+          "type": "object",
+          "maxProperties": 40,
+          "additionalProperties": {
+            "description": "`investment_theme` is a canonical investment theme; `subcategory` is a canonical investment subcategory.",
+            "type": "string",
+            "enum": [
+              "investment_theme",
+              "subcategory"
+            ]
+          }
+        },
+        "word_columns": {
+          "description": "CHAOS-12639: maps each id column to the observation column of the same row that carries its served word (a repository's handle beside its canonical id). A consumer shows the word and keeps the id out of sight. Set by the server from the producer's declaration; never model-authored. Each key is a name in `key` or `observations`: the id column.",
+          "type": "object",
+          "maxProperties": 40,
+          "additionalProperties": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128,
+            "description": "Another name in `observations`: the column that carries the id's served word."
+          }
         }
       },
       "required": [
@@ -5897,6 +5990,83 @@
         "project_own_work_unit_count": {
           "type": "integer",
           "minimum": 0
+        }
+      }
+    },
+    "ClaimedCompletionForecast": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Additive (CHAOS-12608): the completion forecast of a team workload claim's grounding fact, the same stored forecast row the claim is grounded on. Set by the server from the claim's grounding fact, never model-authored, only on a team workload claim, and only when the deployment serves the forecast's distribution. A completion forecast or forecast percentiles shape cites its numbers (claimed_fact_forecast_summary). An absent percentile, date or count is not 0.",
+      "required": [
+        "state",
+        "computed_at"
+      ],
+      "properties": {
+        "work_scope_id": {
+          "type": "string",
+          "maxLength": 128
+        },
+        "state": {
+          "type": "string",
+          "enum": [
+            "available",
+            "not_stored",
+            "no_run_within_horizon",
+            "over_limit",
+            "malformed",
+            "scope_ambiguous",
+            "unmatched"
+          ]
+        },
+        "computed_at": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "format": "date-time",
+          "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\\.[0-9]+)?Z$"
+        },
+        "simulation_count": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "horizon_days": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "unfinished_runs": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "target_items": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "forecast_p50_days": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "forecast_p85_days": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "forecast_p95_days": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "forecast_p50_date": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
+        },
+        "forecast_p85_date": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
+        },
+        "forecast_p95_date": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
         }
       }
     }

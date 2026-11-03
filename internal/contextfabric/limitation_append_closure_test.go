@@ -52,6 +52,14 @@ type limitationAudit struct {
 }
 
 var auditedLimitationWrites = map[string]limitationAudit{
+	"finalizeResult#withLandscapeLimitation#0": {
+		sameShapedTotal: 1,
+		reason:          "withLandscapeLimitation removes the quadrant's one service-authored line and adds it back only through appendBoundedLimitations, so the list is never longer than the bounded appender makes it (CHAOS-12626)",
+	},
+	"WithoutDisabledRenderShapes#withoutLimitation#0": {
+		sameShapedTotal: 1,
+		reason:          "removes every copy of the quadrant's one line when the flag drops the quadrant: the list only shrinks, so the bound cannot move (CHAOS-12626)",
+	},
 	"restateWithheldPoolClarification#Clone#0": {
 		sameShapedTotal: 1,
 		reason:          "a copy of the served list, then a same-length replacement of one sentence by another (CHAOS-12524): nothing is added, so the bound cannot move; the copy keeps a store's own slice unedited",

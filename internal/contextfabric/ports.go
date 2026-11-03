@@ -494,6 +494,13 @@ type GraphDiscoveryRequest struct {
 	// discovery for the member set actually served under that certified
 	// line.
 	Bases CommitBasisSet `json:"-"`
+	// AnchorFactOnly says the served family answers from the scope anchor's own
+	// fact, so discovery reads no member set (CHAOS-12606; the lead's ruling on
+	// CHAOS-4610, option a). The engine sets it when the scope-anchor
+	// allocation route decided the family: "how is team X investing across its
+	// repositories" is the team's investment fact, and its repository split is
+	// the fact's own table, never a cohort of member facts.
+	AnchorFactOnly bool `json:"-"`
 }
 
 // CanonicalFactReader is the typed, read-only boundary back to canonical Dev
@@ -1455,9 +1462,35 @@ type ProjectionSourceCounts interface {
 
 // ProjectionGraphCounts is an OPTIONAL capability a ProjectionBackend
 // implements to count the subject nodes of one kind that organization holds in
-// its ACTIVE graph.
+// its ACTIVE graph. CountKind counts the nodes the owned writer wrote, never a
+// stub a relationship created (CHAOS-12649). OwnedCountsKnown reports whether a
+// source's owned counts can be compared at all: false until a walk from zero
+// wrote every owned node with the owned marker.
 type ProjectionGraphCounts interface {
 	CountKind(ctx context.Context, orgID string, kind SubjectKind) (int64, error)
+	OwnedCountsKnown(ctx context.Context, orgID, source string) (bool, error)
+}
+
+// ProjectionSyncedAtProperty (CHAOS-12649) is the entity property a producer
+// sets to the row's sync stamp (last_synced, the column the walk pages on), in
+// Unix nanoseconds. The walk loses contiguous ranges of that stamp, so the count
+// check compares source rows and owned nodes per UTC day of it.
+const ProjectionSyncedAtProperty = "source_synced_at_ns"
+
+// ProjectionSourceDayCounts is an OPTIONAL capability a ProjectionSource
+// implements beside ProjectionSourceCounts (CHAOS-12649): per kind it stamps
+// with ProjectionSyncedAtProperty, the distinct rows it can project per UTC day
+// (days since the Unix epoch) of their latest sync stamp. Same population as
+// ProjectionSourceCounts. Read-only.
+type ProjectionSourceDayCounts interface {
+	ProjectionSourceDayCounts(ctx context.Context, orgID string) (map[SubjectKind]map[int64]int64, error)
+}
+
+// ProjectionGraphDayCounts is an OPTIONAL capability a ProjectionBackend
+// implements (CHAOS-12649): the owned nodes of one kind per UTC day (days since
+// the Unix epoch) of their ProjectionSyncedAtProperty.
+type ProjectionGraphDayCounts interface {
+	CountKindByDay(ctx context.Context, orgID string, kind SubjectKind) (map[int64]int64, error)
 }
 
 // EdgeCountKey names one measured edge population: a relation type and, for a

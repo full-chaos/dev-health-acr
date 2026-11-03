@@ -102,6 +102,8 @@ func goVarName(e Event) string {
 		return "PageHintLookup"
 	case WorkItemKeyPrefixUnread.ID:
 		return "WorkItemKeyPrefixUnread"
+	case RepositoryReferenceRow.ID:
+		return "RepositoryReferenceRow"
 	case Corroboration.ID:
 		return "Corroboration"
 	case CorroborationSummary.ID:
@@ -306,6 +308,8 @@ func goVarName(e Event) string {
 		return "StructureNeedsDisclosed"
 	case GatedOfferResolution.ID:
 		return "GatedOfferResolution"
+	case GatedOfferResolutionFailure.ID:
+		return "GatedOfferResolutionFailure"
 	case CohortStructureGate.ID:
 		return "CohortStructureGate"
 	case WindowGateOfferDisclosure.ID:
@@ -444,6 +448,8 @@ func goVarName(e Event) string {
 		return "GraphCountCheckFinished"
 	case PlanOperandReads.ID:
 		return "PlanOperandReads"
+	case PlanSubjectObligationReads.ID:
+		return "PlanSubjectObligationReads"
 	case WindowClassification.ID:
 		return "WindowClassification"
 	case InferredWindowGate.ID:

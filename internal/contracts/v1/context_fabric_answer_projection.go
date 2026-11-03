@@ -410,6 +410,10 @@ type ContextFabricProjectedFact struct {
 	// Ask Dev reads a fact from, so a roll-up disclosed only on the canonical
 	// result would still reach the reader as the project's own investment.
 	InvestmentMix *ContextFabricClaimedInvestmentMix `json:"investment_mix,omitempty"`
+	// CompletionForecast mirrors ContextFabricClaimedFact.CompletionForecast
+	// (CHAOS-12608), passed through unchanged, so a forecast drawn on the
+	// answer surface cites the same summary.
+	CompletionForecast *ContextFabricClaimedCompletionForecast `json:"completion_forecast,omitempty"`
 }
 
 // ContextFabricProjectedCoverage reports one source's state. Reason is

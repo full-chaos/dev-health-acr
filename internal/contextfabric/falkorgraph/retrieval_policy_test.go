@@ -29,9 +29,19 @@ import (
 //
 // CHAOS-10031 bumped it again to "rp6": the calibrated entry is re-keyed
 // t3 -> t4 when ci_pipeline_run vectors are dropped.
+//
+// CHAOS-12663 bumped it again to "rp7": a unique case-exact label match now
+// commits over its case-folded twins, so a question that clarified under rp6
+// can commit, and a stored rp6 clarification must not be replayed for it.
+//
+// CHAOS-12706 bumped it again to "rp8": a work item receipt under a requested
+// repository scope now commits through its link where rp7 retracted the
+// commit, and a work item tied to the scoped repository only by its own
+// repository column is no longer admitted by a hint, so a stored rp7 answer
+// must not be replayed for either.
 func TestRetrievalPolicyVersionBumpedByCHAOS3829(t *testing.T) {
-	if RetrievalPolicyVersion != "rp6" {
-		t.Fatalf("RetrievalPolicyVersion = %q, want rp6 (CHAOS-10031 re-keyed the calibrated retrieval-policy entry t3 -> t4, which must bump the constant)", RetrievalPolicyVersion)
+	if RetrievalPolicyVersion != "rp8" {
+		t.Fatalf("RetrievalPolicyVersion = %q, want rp8 (CHAOS-12706 changes which work item hints a repository scope admits, which must bump the constant)", RetrievalPolicyVersion)
 	}
 }
 

@@ -175,6 +175,10 @@ func loadHostedRuntimeValues(lookup lookupEnv, cfg *Config, defaultRequireStores
 	if cfg.ContextFabricComparisonTableEnabled, err = boolValue(lookup, ContextFabricComparisonTableEnabledEnvVar, false); err != nil {
 		return err
 	}
+	// CHAOS-12626: default OFF -- see Config.ContextFabricLandscapeQuadrantEnabled.
+	if cfg.ContextFabricLandscapeQuadrantEnabled, err = boolValue(lookup, ContextFabricLandscapeQuadrantEnabledEnvVar, false); err != nil {
+		return err
+	}
 	// CHAOS-12521: default OFF -- see Config.ContextFabricInvestmentTreemapEnabled.
 	if cfg.ContextFabricInvestmentTreemapEnabled, err = boolValue(lookup, ContextFabricInvestmentTreemapEnabledEnvVar, false); err != nil {
 		return err
@@ -220,6 +224,10 @@ const ContextFabricInvestmentTreemapEnabledEnvVar = "ACR_CONTEXT_FABRIC_INVESTME
 // ContextFabricComparisonTableEnabledEnvVar turns on the
 // comparison_side_by_side render rule (CHAOS-12513).
 const ContextFabricComparisonTableEnabledEnvVar = "ACR_CONTEXT_FABRIC_COMPARISON_TABLE_ENABLED"
+
+// ContextFabricLandscapeQuadrantEnabledEnvVar turns on the landscape_position
+// render rule (CHAOS-12626).
+const ContextFabricLandscapeQuadrantEnabledEnvVar = "ACR_CONTEXT_FABRIC_LANDSCAPE_QUADRANT_ENABLED"
 
 // ContextFabricVocabularyLabelsEnabledEnvVar serves vocabulary_labels (CHAOS-12416).
 const ContextFabricVocabularyLabelsEnabledEnvVar = "ACR_CONTEXT_FABRIC_VOCABULARY_LABELS_ENABLED"
@@ -314,6 +322,7 @@ func (c Config) SafeAttributes() []any {
 		"context_fabric_vocabulary_labels_enabled", c.ContextFabricVocabularyLabelsEnabled,
 		"context_fabric_investment_treemap_enabled", c.ContextFabricInvestmentTreemapEnabled,
 		"context_fabric_comparison_table_enabled", c.ContextFabricComparisonTableEnabled,
+		"context_fabric_landscape_quadrant_enabled", c.ContextFabricLandscapeQuadrantEnabled,
 		"context_fabric_event_stream_enabled", c.ContextFabricEventStreamEnabled,
 		"context_fabric_run_lease_enabled", c.ContextFabricRunLeaseEnabled,
 		"thread_list_first_question_enabled", c.ThreadListFirstQuestionEnabled,

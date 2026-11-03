@@ -76,6 +76,13 @@ type RenderShapeSelectionEvent struct {
 	// and says nothing reads as the whole comparison. Zero on every selection
 	// that lost nothing.
 	ComparisonMeasuresLeftOut int
+	// LandscapeSidesLeftOut counts committed teams the quadrant rule gave no
+	// point (CHAOS-12626): no claim of both measures from one fact, no row that
+	// holds them, or fewer than 2 identities. A COUNT and not a skip, as for the
+	// table: the rule can fire on the teams that remain, and a chart that drops
+	// a team and says nothing reads as the whole comparison. Zero on every
+	// selection that lost nothing.
+	LandscapeSidesLeftOut int
 	// TablesCadenceWithheld counts the claimed tables whose declaration states
 	// a cadence the table does not carry, because its rows do not keep one row
 	// per calendar day or it is not a time_series (CHAOS-11985). A consumer then
@@ -250,6 +257,49 @@ const (
 	RenderShapeSkipNoSharedMeasure RenderShapeSkipReason = "no_shared_measure"
 	// RenderShapeSkipComparisonUnprovable -- the contract refused the table.
 	RenderShapeSkipComparisonUnprovable RenderShapeSkipReason = "comparison_unprovable"
+	// The landscape_position rule's reasons (CHAOS-12626). See
+	// render_shape_landscape.go. It shares rule_disabled, not_plan_authorized,
+	// fewer_than_two_sides, too_many_sides and subject_kind_not_charted.
+	//
+	// RenderShapeSkipNoLandscapeRequirement -- the interpretation does not ask
+	// for landscape facts. This is the common exit for a comparison: most ask
+	// for other measures (check 10).
+	RenderShapeSkipNoLandscapeRequirement RenderShapeSkipReason = "no_landscape_requirement"
+	// RenderShapeSkipFewerThanTwoPoints -- fewer than two teams give a point:
+	// each needs both measures claimed from one fact, its one area_breakdown row
+	// holding them, and 2 or more identities in that row.
+	RenderShapeSkipFewerThanTwoPoints RenderShapeSkipReason = "fewer_than_two_points"
+	// RenderShapeSkipLandscapeDaysDiffer -- the teams' rows speak for different
+	// days. The quadrant is refused WHOLE: no common-day read (lead ruling 3).
+	RenderShapeSkipLandscapeDaysDiffer RenderShapeSkipReason = "landscape_days_differ"
+	// RenderShapeSkipQuadrantUnprovable -- the contract refused the quadrant.
+	RenderShapeSkipQuadrantUnprovable RenderShapeSkipReason = "quadrant_unprovable"
+	// The completion_forecast rule's reasons (CHAOS-12608).
+	// RenderShapeSkipNotForecastIntent -- this turn's frame asks for neither
+	// completion nor remaining work.
+	RenderShapeSkipNotForecastIntent RenderShapeSkipReason = "not_forecast_intent"
+	// RenderShapeSkipNoCompletionDistribution -- no claimed team workload fact
+	// carries a served completion distribution.
+	RenderShapeSkipNoCompletionDistribution RenderShapeSkipReason = "no_completion_distribution"
+	// RenderShapeSkipMoreThanOneScope -- several claimed scopes carry one; the
+	// answer does not choose a scope for the reader.
+	RenderShapeSkipMoreThanOneScope RenderShapeSkipReason = "more_than_one_scope"
+	// RenderShapeSkipDistributionUnusable -- a row is not a day and a share,
+	// or the contract refused the shape.
+	RenderShapeSkipDistributionUnusable RenderShapeSkipReason = "distribution_unusable"
+	// The completion_forecast_percentiles rule's reasons (CHAOS-12608).
+	// RenderShapeSkipForecastCurveDrawn -- the curve was drawn; the table is
+	// what an answer gets when no curve is.
+	RenderShapeSkipForecastCurveDrawn RenderShapeSkipReason = "forecast_curve_drawn"
+	// RenderShapeSkipNoForecastPercentiles -- no claimed team scope's
+	// forecast serves a percentile.
+	RenderShapeSkipNoForecastPercentiles RenderShapeSkipReason = "no_forecast_percentiles"
+	// RenderShapeSkipTooManyScopes -- more claimed scopes than a shape holds
+	// series.
+	RenderShapeSkipTooManyScopes RenderShapeSkipReason = "too_many_scopes"
+	// RenderShapeSkipForecastPercentilesUnprovable -- the contract refused
+	// the table.
+	RenderShapeSkipForecastPercentilesUnprovable RenderShapeSkipReason = "forecast_percentiles_unprovable"
 )
 
 // cohortRenderIntent reports whether a cohort chart is an answer TO this
@@ -348,6 +398,25 @@ func selectRenderShapes(result InvestigationResult, frame *QuestionFrame, option
 	}
 
 	// CHAOS-12513: ahead of the trends, for the same reason.
+	switch {
+	case !options.CompletionForecast:
+		event.skip(contractsv1.ContextFabricRenderRuleCompletionForecast, RenderShapeSkipRuleDisabled)
+		event.skip(contractsv1.ContextFabricRenderRuleCompletionForecastPercentiles, RenderShapeSkipRuleDisabled)
+	default:
+		if forecast, reason := completionForecastShape(result, frame); forecast != nil {
+			shapes = append(shapes, *forecast)
+			event.skip(contractsv1.ContextFabricRenderRuleCompletionForecastPercentiles, RenderShapeSkipForecastCurveDrawn)
+		} else {
+			event.skip(contractsv1.ContextFabricRenderRuleCompletionForecast, reason)
+			// No curve: the P50/P85/P95 table of the claimed scopes.
+			if table, tableReason := forecastPercentilesShape(result, frame); table != nil {
+				shapes = append(shapes, *table)
+			} else {
+				event.skip(contractsv1.ContextFabricRenderRuleCompletionForecastPercentiles, tableReason)
+			}
+		}
+	}
+
 	if !options.ComparisonSideBySide {
 		event.skip(contractsv1.ContextFabricRenderRuleComparisonSideBySide, RenderShapeSkipRuleDisabled)
 	} else {
@@ -357,6 +426,19 @@ func selectRenderShapes(result InvestigationResult, frame *QuestionFrame, option
 			shapes = append(shapes, *table)
 		} else {
 			event.skip(contractsv1.ContextFabricRenderRuleComparisonSideBySide, reason)
+		}
+	}
+
+	// CHAOS-12626: ahead of the trends, for the same reason.
+	if !options.LandscapePosition {
+		event.skip(contractsv1.ContextFabricRenderRuleLandscapePosition, RenderShapeSkipRuleDisabled)
+	} else {
+		quadrant, leftOut, reason := landscapePositionShape(result)
+		event.LandscapeSidesLeftOut = leftOut
+		if quadrant != nil {
+			shapes = append(shapes, *quadrant)
+		} else {
+			event.skip(contractsv1.ContextFabricRenderRuleLandscapePosition, reason)
 		}
 	}
 
@@ -977,6 +1059,9 @@ var renderShapeRules = []contractsv1.ContextFabricRenderShapeRule{
 	contractsv1.ContextFabricRenderRuleDatedFactTrend,
 	contractsv1.ContextFabricRenderRuleInvestmentThemeShare,
 	contractsv1.ContextFabricRenderRuleComparisonSideBySide,
+	contractsv1.ContextFabricRenderRuleLandscapePosition,
+	contractsv1.ContextFabricRenderRuleCompletionForecast,
+	contractsv1.ContextFabricRenderRuleCompletionForecastPercentiles,
 }
 
 // Accounted is CHAOS-4621's structural invariant, as code rather than as a
@@ -1055,6 +1140,12 @@ func RenderShapeSkipReasonLineVocabulary() []string {
 		string(RenderShapeSkipTooManySignals), string(RenderShapeSkipNoDeclaredTable), string(RenderShapeSkipNoTimeSeriesTable),
 		string(RenderShapeSkipClaimFieldNotAMeasure), string(RenderShapeSkipUnresolvableMeasureRoles),
 		string(RenderShapeSkipNoPlottableMeasure), string(RenderShapeSkipShapeBudgetSpent), string(RenderShapeSkipNotPlanAuthorized),
+		string(RenderShapeSkipNoLandscapeRequirement), string(RenderShapeSkipFewerThanTwoPoints),
+		string(RenderShapeSkipLandscapeDaysDiffer), string(RenderShapeSkipQuadrantUnprovable),
+		string(RenderShapeSkipNotForecastIntent), string(RenderShapeSkipNoCompletionDistribution),
+		string(RenderShapeSkipMoreThanOneScope), string(RenderShapeSkipDistributionUnusable),
+		string(RenderShapeSkipForecastCurveDrawn), string(RenderShapeSkipNoForecastPercentiles),
+		string(RenderShapeSkipTooManyScopes), string(RenderShapeSkipForecastPercentilesUnprovable),
 	}
 }
 

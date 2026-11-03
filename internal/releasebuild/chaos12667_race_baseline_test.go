@@ -24,6 +24,8 @@ func TestRaceBaselineTokenReachesOnlyTheFetchStep(t *testing.T) {
 	for _, job := range []string{
 		"race-devhealthfacts", "race-devhealthfacts-heavy", "race-devhealthfacts-mid", "race-devhealthfacts-fourth",
 		"race-devhealthsource", "race-devhealthsource-heavy", "race-devhealthsource-mid", "race-devhealthsource-fourth",
+		// CHAOS-12717: internal/api's two isolated race jobs.
+		"race-api", "race-api-heavy",
 	} {
 		start := strings.Index(src, "\n  "+job+":\n")
 		if start < 0 {

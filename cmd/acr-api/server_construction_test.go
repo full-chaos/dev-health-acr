@@ -233,12 +233,33 @@ func validServeConfig(t *testing.T) config.Config {
 	return cfg
 }
 
+// CHAOS-12626: the switch reaches the app both doors read it from.
+func TestAppConfigThreadsTheLandscapeQuadrantSwitch(t *testing.T) {
+	for _, enabled := range []bool{true, false} {
+		got := appConfig(config.Config{ContextFabricLandscapeQuadrantEnabled: enabled}, "test-version")
+		if got.ContextFabricLandscapeQuadrantEnabled != enabled {
+			t.Fatalf("appConfig(...).ContextFabricLandscapeQuadrantEnabled = %v, want %v", got.ContextFabricLandscapeQuadrantEnabled, enabled)
+		}
+	}
+}
+
 // CHAOS-12513: the switch reaches the app both doors read it from.
 func TestAppConfigThreadsTheComparisonTableSwitch(t *testing.T) {
 	for _, enabled := range []bool{true, false} {
 		got := appConfig(config.Config{ContextFabricComparisonTableEnabled: enabled}, "test-version")
 		if got.ContextFabricComparisonTableEnabled != enabled {
 			t.Fatalf("appConfig(...).ContextFabricComparisonTableEnabled = %v, want %v", got.ContextFabricComparisonTableEnabled, enabled)
+		}
+	}
+}
+
+// CHAOS-12608 (Codex #1949 r1): the completion distribution switch reaches the
+// app both doors read it from; without it they removed every forecast shape.
+func TestAppConfigThreadsTheCompletionDistributionSwitch(t *testing.T) {
+	for _, enabled := range []bool{true, false} {
+		got := appConfig(config.Config{CompletionDistributionEnabled: enabled}, "test-version")
+		if got.ContextFabricCompletionDistributionEnabled != enabled {
+			t.Fatalf("appConfig(...).ContextFabricCompletionDistributionEnabled = %v, want %v", got.ContextFabricCompletionDistributionEnabled, enabled)
 		}
 	}
 }

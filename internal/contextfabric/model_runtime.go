@@ -1111,12 +1111,13 @@ func StripModelAuthoredClaimedFactTableContent(claims []ClaimedFact) (cleaned []
 		// or the field on a non-investment claim), so a model-authored value
 		// would reject the whole draft. Stripped here and counted as server
 		// content the model authored.
-		if len(claim.Rows) > 0 || claim.Table != nil || len(claim.TimeSeriesRows) > 0 || claim.TimeSeriesTable != nil || claim.InvestmentMix != nil {
+		if len(claim.Rows) > 0 || claim.Table != nil || len(claim.TimeSeriesRows) > 0 || claim.TimeSeriesTable != nil || claim.InvestmentMix != nil || claim.CompletionForecast != nil {
 			claim.Rows = nil
 			claim.Table = nil
 			claim.TimeSeriesRows = nil
 			claim.TimeSeriesTable = nil
 			claim.InvestmentMix = nil
+			claim.CompletionForecast = nil
 			strippedCount++
 		}
 		cleaned[i] = claim
@@ -2587,7 +2588,7 @@ func (r RuntimeQuestionInterpreter) finishFamilyResolution(
 	// comparison is a measurement and suppressing it would blind the flip
 	// decision this shadow exists to inform. Only the overwrite is withheld.
 	if shadow.FrameObserved {
-		route = RouteFrameFamily(shadow.Agreement, outcome.Frame)
+		route = RouteFrameFamily(shadow.Agreement, outcome.Frame, receipt.ScopeAnchorKind)
 		if outcome.Source != QuestionFamilySourcePluralityRejected {
 			outcome.Family = route.Family
 		}

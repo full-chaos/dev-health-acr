@@ -539,6 +539,11 @@ type ResolveDeps struct {
 	// so an item it did not prove is unknown, not unlinked, whatever committed.
 	// Nil means no such read.
 	WorkItemLinksUnread func() bool
+	// TeamOwnedRepositories returns the repositories a team currently owns that
+	// the caller may read, at most limit (CHAOS-12557: a handle named beside a
+	// team is read in them). complete is false when the read was cut or the team
+	// owns more. nil: no handle beside a team is read, and today's answer stands.
+	TeamOwnedRepositories func(ctx context.Context, team contextfabric.SubjectRef, limit int) (repositories []contextfabric.SubjectRef, complete bool, err error)
 	// LinkScopedWorkItemsOf returns, of ids, the work items in a requested
 	// repository scope, each with the strongest tier of its admitted links: a
 	// read keyed on the ids (CHAOS-12505), decided by the repository walk's own
@@ -2030,17 +2035,25 @@ type ResolutionTraceEvent struct {
 	// or label.
 	// WorkItemKey* (stage == "work_item_key_gate" ONLY, CHAOS-12463): counts, and
 	// no token, of the ticket-key shapes in one question.
-	WorkItemKeyTokens           int
-	WorkItemKeysHeld            int
-	WorkItemKeysUnread          int
-	PageHintCount               int
-	PageHintExactHit            int
-	PageHintLabelFallback       int
-	PageHintUnresolved          int
-	PageHintSearchFallback      bool
-	PageHintExactHitByKind      map[string]int
-	PageHintLabelFallbackByKind map[string]int
-	PageHintUnresolvedByKind    map[string]int
+	WorkItemKeyTokens  int
+	WorkItemKeysHeld   int
+	WorkItemKeysUnread int
+	// RepositoryReference* (stage == "repository_reference_row" ONLY,
+	// CHAOS-12642): counts, and no reference, of what the stored rows showed
+	// each owner/repo#N reference in one question to name.
+	RepositoryReferences               int
+	RepositoryReferencePullRequestRows int
+	RepositoryReferenceWorkItemRows    int
+	RepositoryReferencesNotFound       int
+	RepositoryReferencesUnread         int
+	PageHintCount                      int
+	PageHintExactHit                   int
+	PageHintLabelFallback              int
+	PageHintUnresolved                 int
+	PageHintSearchFallback             bool
+	PageHintExactHitByKind             map[string]int
+	PageHintLabelFallbackByKind        map[string]int
+	PageHintUnresolvedByKind           map[string]int
 	// PageHintOtherKindByKind counts the page hints dropped because the question
 	// asks for another kind (CHAOS-12555), by the hint's own kind.
 	PageHintOtherKind       int
@@ -2841,17 +2854,53 @@ func resolveSubjects(ctx context.Context, principal storage.Principal, request c
 	// decision path at worst.
 	if !contextfabric.OffersOnlyResolution(ctx) {
 		comparison := contextfabric.ClassifyComparisonOperands(frame)
+		basis := ComparisonKindBasisStated
+		if comparison.Admission == contextfabric.ComparisonHeldScopedOperand {
+			basis = ComparisonKindBasisNone
+		}
+		// CHAOS-12600: a bare-name pair whose sides each match exactly one
+		// subject by its full label, all of one kind, resolves under that kind.
+		// A refusal keeps today's path (the kind question), and its reason is
+		// on the policy line, which fires for the pair either way.
+		// One exact-name read serves this check and the comparison it
+		// enables: the same once-per-comparison wrapper the comparison uses.
+		deps = withSharedExactNameCandidates(deps)
+		resolved, exactMatched, refusal, ok, exactErr := exactLabelPairKind(ctx, deps, comparison)
+		if exactErr != nil {
+			// The refusal line is written before the error returns, so a
+			// failed census is diagnosable from its own artifacts.
+			recordComparisonPolicy(ctx, principal, request, deps, comparison, ComparisonKindBasisNone, refusal)
+			return contextfabric.SubjectResolution{}, contextfabric.StructureOfferMaterial{}, exactErr
+		}
+		if ok {
+			comparison, basis = resolved, ComparisonKindBasisExactLabel
+		} else if refusal != "" {
+			recordComparisonPolicy(ctx, principal, request, deps, comparison, ComparisonKindBasisNone, refusal)
+		}
 		switch comparison.Admission {
 		case contextfabric.ComparisonAdmittedNamedPair, contextfabric.ComparisonHeldScopedOperand:
 			request := comparisonRequest(ctx, comparison, request)
-			if inactive, inactiveErr := inactiveCallerTeamHints(ctx, deps, request); inactiveErr != nil {
-				return contextfabric.SubjectResolution{}, contextfabric.StructureOfferMaterial{}, inactiveErr
-			} else if len(inactive) > 0 {
+			if inactive, inactiveErr := inactiveCallerTeamHints(ctx, deps, request); inactiveErr != nil || len(inactive) > 0 {
+				// Codex r3: a pair whose kind the exact-label rule resolved
+				// writes its policy line on these exits too, so the decision
+				// is in the run's own log.
+				if basis == ComparisonKindBasisExactLabel {
+					recordComparisonPolicy(ctx, principal, request, deps, comparison, basis, "")
+				}
+				if inactiveErr != nil {
+					return contextfabric.SubjectResolution{}, contextfabric.StructureOfferMaterial{}, inactiveErr
+				}
 				return contextfabric.SubjectResolution{Candidates: []contextfabric.SubjectCandidate{}, Committed: []contextfabric.SubjectRef{}, InactiveHints: inactive}, contextfabric.StructureOfferMaterial{}, nil
 			}
-			resolution, bases, digests, err := resolveNamedComparison(ctx, principal, request, deps, comparison, admission)
+			resolution, bases, digests, err := resolveNamedComparisonWithBasis(ctx, principal, request, deps, comparison, admission, basis)
 			if err != nil {
 				return contextfabric.SubjectResolution{}, contextfabric.StructureOfferMaterial{}, err
+			}
+			if basis == ComparisonKindBasisExactLabel && committedEvery(resolution.Committed, exactMatched) {
+				// Disclosed only when each side committed the subject its name
+				// matched: a side that still asks is a question, not a
+				// reading. Both sides may name one subject, which commits once.
+				resolution.ExactLabelKind = comparison.Slots[0].Kind
 			}
 			commitBases.ResetTo(bases)
 			commitDigests.ResetTo(digests)
@@ -2869,6 +2918,8 @@ func resolveSubjects(ctx context.Context, principal storage.Principal, request c
 		// The frame's own terms say what the question names.
 		terms = boundedFrameTerms(frame)
 	}
+	// CHAOS-12663: every spelling behind terms, which keeps one per name.
+	typedTerms := append(subjectTermInputs(request, interpreted), terms...)
 	// offersOnly (CHAOS-4234): the class-default window gate's offers-only
 	// mode -- every commit MECHANISM below that only exists to reach a
 	// commit (shadow evidence round/census, confirmed-kind truncation
@@ -2990,10 +3041,12 @@ func resolveSubjects(ctx context.Context, principal storage.Principal, request c
 		// CHAOS-3888: checked before NodeCandidate, not derived from its
 		// !ok result, so an invalid/internal-bookkeeping node (a different,
 		// unrelated exclusion reason) never inflates this count.
-		hintAuthorized := AuthorizedAttributes(principal, request.RequestedScope, node.Attributes)
-		candidate, ok := NodeCandidate(principal, request.RequestedScope, subject.Label, node, deps.IsInternal, true, deps.ResolutionTracer, request.RequestID)
-		if !ok {
-			if !hintAuthorized {
+		// CHAOS-12706: a work item under a requested repository scope is
+		// tested through its link, never through its own repository.
+		linkAdmission := admitHint(ctx, principal, request, deps, subject.Kind, hint.Source, subject.Label, node)
+		candidate := linkAdmission.candidate
+		if !linkAdmission.admitted {
+			if !linkAdmission.authorized {
 				subjectCandidatesAuthzDropped++
 			}
 			continue
@@ -3027,6 +3080,7 @@ func resolveSubjects(ctx context.Context, principal storage.Principal, request c
 			admission.refuse(candidate.Subject)
 			continue
 		}
+		recordHintLink(ctx, linkAdmission)
 		candidatesBySubject[SubjectKey(candidate.Subject)] = candidate
 	}
 	// A caller-explicit hint that resolved is authoritative and
@@ -3179,7 +3233,7 @@ func resolveSubjects(ctx context.Context, principal storage.Principal, request c
 			// its anchor have not run here), and the attestation is
 			// consumed exactly as the ordinary path consumes it: same
 			// predicate, same census, same commit.
-			shadowsHandle := len(request.SubjectHandles) == 0 && committedScopeAnchorShadowsHandle(deps.questionHandles, exactResolution.Committed, frame)
+			shadowsHandle := len(request.SubjectHandles) == 0 && committedScopeAnchorShadowsHandle(request, deps.questionHandles, exactResolution.Committed, frame)
 			// The hinted anchor reaches the round as the sole claimant of its
 			// own label, the same shape the alias lookup gives the ordinary
 			// path, so the trace reports a unique claimant and never a
@@ -3847,7 +3901,7 @@ func resolveSubjects(ctx context.Context, principal storage.Principal, request c
 	// exactRefusal is the exact-label refusal of this resolution, carried into
 	// every later decision over a new pool (exact_label_proof.go).
 	var exactRefusal exactLabelRefusal
-	resolution, firstPassBases, firstPassDigests := resolveFromMergedCandidatesWithAnchorSlot(candidatesBySubject, observationParentKey, observationBlocked, request.Options.MaxSubjectCandidates, request.Options.AllowClarification, searchTruncated, vectorArmSimilarity, deps.VectorMarginCommitThreshold, retrievalDegraded, effectiveSearchLimit, deps.CalibratedTopK, unscopedVisibility, gate, identity, identityTerms, identityLookup, firstPassTracer, request.RequestID, "", false, false, frameReservedKinds(frame, anchorScope.Kind), anchorReservedSlot{Kind: anchorScope.Kind, Source: anchorScope.Source}, &exactRefusal, kindRescue, pass)
+	resolution, firstPassBases, firstPassDigests := resolveFromMergedCandidatesWithAnchorSlot(candidatesBySubject, observationParentKey, observationBlocked, request.Options.MaxSubjectCandidates, request.Options.AllowClarification, searchTruncated, vectorArmSimilarity, deps.VectorMarginCommitThreshold, retrievalDegraded, effectiveSearchLimit, deps.CalibratedTopK, unscopedVisibility, gate, identity, identityTerms, identityLookup, firstPassTracer, request.RequestID, "", false, false, frameReservedKinds(frame, anchorScope.Kind), typedTerms, anchorReservedSlot{Kind: anchorScope.Kind, Source: anchorScope.Source}, &exactRefusal, kindRescue, pass)
 	commitBases.ResetTo(firstPassBases)
 	commitDigests.ResetTo(firstPassDigests)
 	// coverageFloorDegraded (CHAOS-4038, codex review round 2 finding 1) is
@@ -3870,7 +3924,7 @@ func resolveSubjects(ctx context.Context, principal storage.Principal, request c
 	if teamOffers != nil {
 		pass++
 		candidatesBySubject = teamPool
-		resolution, firstPassBases, firstPassDigests = resolveFromMergedCandidatesWithAnchorSlot(candidatesBySubject, observationParentKey, observationBlocked, request.Options.MaxSubjectCandidates, request.Options.AllowClarification, searchTruncated, vectorArmSimilarity, deps.VectorMarginCommitThreshold, retrievalDegraded, effectiveSearchLimit, deps.CalibratedTopK, unscopedVisibility, gate, identity, identityTerms, identityLookup, firstPassTracer, request.RequestID, "", false, false, frameReservedKinds(frame, anchorScope.Kind), anchorReservedSlot{Kind: anchorScope.Kind, Source: anchorScope.Source}, &exactRefusal, kindRescue, pass)
+		resolution, firstPassBases, firstPassDigests = resolveFromMergedCandidatesWithAnchorSlot(candidatesBySubject, observationParentKey, observationBlocked, request.Options.MaxSubjectCandidates, request.Options.AllowClarification, searchTruncated, vectorArmSimilarity, deps.VectorMarginCommitThreshold, retrievalDegraded, effectiveSearchLimit, deps.CalibratedTopK, unscopedVisibility, gate, identity, identityTerms, identityLookup, firstPassTracer, request.RequestID, "", false, false, frameReservedKinds(frame, anchorScope.Kind), typedTerms, anchorReservedSlot{Kind: anchorScope.Kind, Source: anchorScope.Source}, &exactRefusal, kindRescue, pass)
 		commitBases.ResetTo(firstPassBases)
 		commitDigests.ResetTo(firstPassDigests)
 		resolution.RetrievalDegraded = retrievalDegraded || coverageFloorDegraded || traversalDegraded > 0
@@ -4044,7 +4098,7 @@ func resolveSubjects(ctx context.Context, principal storage.Principal, request c
 				scopedPool, scopedObservationParentKey, scopedObservationBlocked, request.Options.MaxSubjectCandidates,
 				request.Options.AllowClarification, false, nil, 0, false, effectiveSearchLimit, 0,
 				unscopedVisibility, gate, scopedIdentity, scopedIdentityTerms, identityLookup,
-				scopedDecisionTracer, request.RequestID, "", true, false, nil, anchorReservedSlot{}, &exactRefusal, kindRescue, pass,
+				scopedDecisionTracer, request.RequestID, "", true, false, nil, typedTerms, anchorReservedSlot{}, &exactRefusal, kindRescue, pass,
 			)
 			if len(scopedResolution.Committed) > 0 {
 				resolution = scopedResolution
@@ -4156,7 +4210,7 @@ func resolveSubjects(ctx context.Context, principal storage.Principal, request c
 	stalledForCensus := len(resolution.Committed) == 0 && (searchTruncated || handleBoundRound(principal, deps.questionHandles))
 	var handleRound workItemHandleRound
 	var undecidingHandle *BoundHandle
-	if !offersOnly && deps.CensusFunc != nil && (stalledForCensus || committedScopeAnchorShadowsHandle(deps.questionHandles, resolution.Committed, frame)) {
+	if !offersOnly && deps.CensusFunc != nil && (stalledForCensus || committedScopeAnchorShadowsHandle(request, deps.questionHandles, resolution.Committed, frame)) {
 		// CHAOS-4300: false -- this is the pre-existing stalled-resolution
 		// call site, not the caller-hint short circuit's own new call above.
 		censusVisibility := unscopedVisibility || repositoryNarrowedByUnrestrictedPrincipal(principal, request) || teamNarrowedByUnrestrictedPrincipal(principal, request, deps) || grantScopedRequest(principal, request, deps)
@@ -4196,7 +4250,7 @@ func resolveSubjects(ctx context.Context, principal storage.Principal, request c
 					commitCensusAttestedBesideScopeAnchor(&resolution, candidatesBySubject[attestedKey], request, deps, commitBases, commitDigests, searchTruncated, identityLookup, effectiveSearchLimit, pass)
 				} else {
 					pass++
-					resolution, censusBases, censusDigests = resolveFromMergedCandidatesWithAnchorSlot(candidatesBySubject, observationParentKey, observationBlocked, request.Options.MaxSubjectCandidates, request.Options.AllowClarification, searchTruncated, vectorArmSimilarity, deps.VectorMarginCommitThreshold, retrievalDegraded, effectiveSearchLimit, deps.CalibratedTopK, unscopedVisibility, gate, identity, identityTerms, identityLookup, deps.ResolutionTracer, request.RequestID, attestedKey, false, false, nil, anchorReservedSlot{}, &exactRefusal, kindRescue, pass)
+					resolution, censusBases, censusDigests = resolveFromMergedCandidatesWithAnchorSlot(candidatesBySubject, observationParentKey, observationBlocked, request.Options.MaxSubjectCandidates, request.Options.AllowClarification, searchTruncated, vectorArmSimilarity, deps.VectorMarginCommitThreshold, retrievalDegraded, effectiveSearchLimit, deps.CalibratedTopK, unscopedVisibility, gate, identity, identityTerms, identityLookup, deps.ResolutionTracer, request.RequestID, attestedKey, false, false, nil, typedTerms, anchorReservedSlot{}, &exactRefusal, kindRescue, pass)
 					commitBases.ResetTo(censusBases)
 					commitDigests.ResetTo(censusDigests)
 					resolution.RetrievalDegraded = retrievalDegraded || coverageFloorDegraded || traversalDegraded > 0
@@ -4625,24 +4679,24 @@ func resolveSubjects(ctx context.Context, principal storage.Principal, request c
 // none is of the handle's own kind. A committed scope anchor must not shadow
 // a handle the question names: the census runs for that handle regardless.
 //
-// Only a named-subject (or absent) frame qualifies, and one that states an
-// expected kind must state the handle's kind: in a cohort, grouped or count
-// question, or one about the repository itself, a handle is an example or an
-// operand, and committing it would change what the answer is about.
-func committedScopeAnchorShadowsHandle(bound []BoundHandle, committed []contextfabric.SubjectRef, frame *contextfabric.QuestionFrame) bool {
+// Only a named-subject (or absent) frame qualifies, and a turn that states a
+// kind must state the handle's kind: in a cohort, grouped or count question, or
+// one about the repository itself, a handle is an example or an operand, and
+// committing it would change what the answer is about. The stated kind is
+// statedKind's: the frame's expected kind, or else a lone expected_kinds
+// (CHAOS-12631).
+func committedScopeAnchorShadowsHandle(request contextfabric.InvestigationRequest, bound []BoundHandle, committed []contextfabric.SubjectRef, frame *contextfabric.QuestionFrame) bool {
 	if len(committed) == 0 {
 		return false
 	}
 	if len(bound) != 1 || !IsCensusKindRegistered(bound[0].Kind) {
 		return false
 	}
-	if frame != nil {
-		if frame.SubjectExpression.Kind != contextfabric.SubjectExpressionNamed {
-			return false
-		}
-		if named := frame.SubjectExpression.Named; named != nil && named.ExpectedKind != nil && *named.ExpectedKind != bound[0].Kind {
-			return false
-		}
+	if frame != nil && frame.SubjectExpression.Kind != contextfabric.SubjectExpressionNamed {
+		return false
+	}
+	if turnStatesAnotherKind(request, frame, bound[0].Kind) {
+		return false
 	}
 	for _, subject := range committed {
 		if subject.Kind == bound[0].Kind || !KindHasAnchorFK(bound[0].Kind, subject.Kind) {

@@ -338,3 +338,42 @@ func (l *SubjectLookup) clock() time.Time {
 	}
 	return time.Now()
 }
+
+// The stored-row decisions find_subjects writes on its line for a GitHub "#"
+// reference handle (CHAOS-12642).
+const (
+	referenceRowPullRequest = "pull_request_row"
+	referenceRowWorkItem    = "work_item_reading"
+	referenceRowUnread      = "unread"
+)
+
+// ReferenceRowVocabulary is the closed reference_row vocabulary of the line.
+func ReferenceRowVocabulary() []string {
+	return []string{referenceRowPullRequest, referenceRowWorkItem, referenceRowUnread}
+}
+
+// decideReferenceRow reads a GitHub owner/repo#N handle by stored rows, as a turn
+// does (CHAOS-12642): issues and pull requests share one number space, and the
+// sync stores each pull request as a ghpr work item too, so the work item reading
+// alone finds that mirror. A pull request row with that repository and number
+// makes the handle the pull request; any other result, a failed read included,
+// keeps the work item reading. Only an unanchored handle of a caller who is not
+// repository-restricted is read: a restricted caller is refused on the key shape
+// before this (CHAOS-7200), and with an anchor the census of a refused anchor
+// must not show through the kind.
+func (l *SubjectLookup) decideReferenceRow(ctx context.Context, principal storage.Principal, plan *findPlan) {
+	if !graphrank.IsPullRequestReferenceShape(plan.handle) || plan.anchor != nil || l.census == nil || ClassifyPrincipal(principal) == ClassRestricted {
+		return
+	}
+	outcome, err := l.census(ctx, principal.OrgID, contractsv1.ContextFabricSubjectPullRequest, plan.handle.Value, true, "", "", false)
+	switch {
+	case err != nil || outcome.ClosureMismatch || outcome.SatisfierSetClosureMismatch:
+		plan.referenceRow = referenceRowUnread
+	case outcome.Count > 0:
+		plan.referenceRow = referenceRowPullRequest
+		plan.handle = graphrank.AsPullRequestReference(plan.handle)
+		plan.kinds = []string{string(plan.handle.Kind)}
+	default:
+		plan.referenceRow = referenceRowWorkItem
+	}
+}

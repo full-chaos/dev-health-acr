@@ -833,6 +833,7 @@ func ContextFabricServiceAuthoredLimitations() []string {
 		ContextFabricGraphHopWalkTruncatedLimitation,
 		ContextFabricGraphTeamNarrowingUndecidedPathsLimitation,
 		ContextFabricProjectScopeWithheldLimitation,
+		ContextFabricDistributionWithheldLimitation,
 		ContextFabricRequestedProjectNarrowingUnavailableLimitation,
 		ContextFabricTruncatedPopulationNoMemberLimitation,
 		ContextFabricFactScopeUnexpandedLimitation,
@@ -868,6 +869,7 @@ func ContextFabricServiceAuthoredLimitations() []string {
 		ContextFabricSynthesisNotNarrowableLimitation,
 		ContextFabricSynthesisRowsOverBudgetLimitation,
 		ContextFabricSynthesisRetryRanLimitation,
+		ContextFabricLandscapePositionLimitation,
 	}
 }
 
@@ -965,6 +967,9 @@ func IsContextFabricServiceAuthoredLimitation(limitation string) bool {
 		IsContextFabricOutsideRequestedRepositoriesLimitation(limitation) ||
 		IsContextFabricWorkItemLinkLimitation(limitation) ||
 		IsContextFabricNamedRepositoryLinkLimitation(limitation) ||
+		IsContextFabricExactLabelKindLimitation(limitation) ||
+		IsContextFabricCaseTwinReadingLimitation(limitation) ||
+		IsContextFabricUnansweredHandlesLimitation(limitation) ||
 		IsContextFabricCensusListingLimitation(limitation) ||
 		IsContextFabricDegradedWithoutLimitation(limitation) ||
 		IsContextFabricWorkItemRepositoryLimitation(limitation) ||

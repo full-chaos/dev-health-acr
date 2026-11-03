@@ -1100,6 +1100,20 @@ finds a subject term, and a subject the resolution committed is not counted. A
 comparison states the distinct subjects of both operands. The window confirmation runs before any search, so it has
 nothing to state.
 
+**A bare-name comparison of exact full labels resolves its kind (CHAOS-12600).**
+A comparison of two named sides that state no kind (`out_of_cut_unstated_kind`)
+gets one check before the flat path, over the shared exact-name population
+(`ExactNameCandidates`, read once for the check and the comparison it enables).
+Each side counts the subjects whose name or label equals its first term,
+case-folded; an alias match does not count. When every side has exactly one such
+subject and all are one kind, the kind is resolved, not inferred: the pair runs
+through `resolveNamedComparison` with that kind, as a stated kind does, and the
+answer carries the service sentence "Both sides were read as repositories: ..."
+(`ContextFabricExactLabelKindLimitation`). A truncated population, no match or
+two matches on a side, or mixed kinds keep the kind question (CHAOS-12548). The
+comparison policy line carries `kind_basis` (`stated`, `exact_label`, `none`)
+and, for a refused check, `kind_refusal`.
+
 **A requested repository scope follows the link (CHAOS-8694).** An issue is in
 a requested repository scope when it is linked to a pull request of a named
 repository, whatever its own repository: the scope is tested on the pull
@@ -1136,6 +1150,21 @@ carried to another request: a reused repository answer re-walks under the
 current grants and scope, and a reused answer of another shape rechecks its
 subjects with the requested scope. A work item the census admitted through a
 text or heuristic link says so in the answer; it is never shown as native.
+
+**A work item hint under a requested repository scope follows the link too
+(CHAOS-12706).** A hint that names a work item (a prior-result receipt, a
+confirmed candidate, an engine carry, a caller's canonical id) is tested as the
+census tests its satisfiers: `graphrank.AuthorizedThroughLink` for the grants
+and the rest of the request, then the keyed link read for the repository part
+(`graphrank.admitHint`). The issue's own repository column never admits it, so
+a GitHub or GitLab issue tied to the scoped repository only by its own column is
+not admitted by a hint. A failed, cut or unwired read admits nothing. An admitted
+hint is recorded as the census records a satisfier, so the fact read and the
+link-tier sentence treat it the same, and it commits on the caller's canonical
+id, which client synthesis does not retract. The answer-reuse recheck is the one
+exception: it keeps the issue's own node test, so a link admission is re-derived
+by a fresh turn, never carried by a stored answer. The comparison receipt
+binding still tests a work item operand against the whole requested scope.
 
 ---
 
@@ -3462,7 +3491,7 @@ uses `ServeStoredWorkItemTuple`; `response_owner_middleware.go` encloses recover
 ```mermaid
 flowchart TD
   REUSE["Try reuse first"] -->|"miss: release discarded lease"| INTERPRET["Validate and interpret frame + TimeContext"]
-  INTERPRET --> POLICY["LookupQuestionFamily: private tuple policy<br/>true only for scoped_cohort_status; unknown denies<br/>question-family.v6 reuse/carry fence"]
+  INTERPRET --> POLICY["LookupQuestionFamily: private tuple policy<br/>true only for scoped_cohort_status; unknown denies<br/>question-family.v8 reuse/carry fence"]
   POLICY --> INITIAL{"Initial tuple admission:<br/>children_of_scope + work_item<br/>assess_state/count_or_aggregate only<br/>current intent AND current axis<br/>qualifier absent, or a status qualifier<br/>whose value is in the closed status set<br/>(assignee and unrecognized stay refused).<br/>A bounded_window frame is admitted only with a<br/>server-committed window and exactly one time<br/>field bound from the question verb"}
   INITIAL -->|"refused / invalid"| REFUSE["existing refusal; no ResolveSubjects or S1"]
   INITIAL -->|"prospective"| FINAL["Final family routing + accepted continuation + plan carry<br/>lookup final family policy; tighten gate using policy and effective time"]

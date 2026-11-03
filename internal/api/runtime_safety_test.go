@@ -70,13 +70,12 @@ func TestRuntimeDependencies_requires_exact_named_readiness_checks(t *testing.T)
 	}
 }
 
-func TestRuntimeDependencies_allows_additional_readiness_checks_beyond_required_two(t *testing.T) {
+func TestRuntimeDependencies_allows_additional_readiness_checks_beyond_required_one(t *testing.T) {
 	// Given
 	app, _ := newHostedTestApp(t, nil, nil, nil, nil, nil)
 	runtime := *app.runtime
 	runtime.ReadinessChecks = []ReadinessCheck{
 		CheckFunc{CheckName: "postgres"},
-		CheckFunc{CheckName: "entitlement"},
 		CheckFunc{CheckName: "packet_purge_loop"},
 	}
 
@@ -85,7 +84,7 @@ func TestRuntimeDependencies_allows_additional_readiness_checks_beyond_required_
 
 	// Then
 	if err != nil {
-		t.Fatalf("runtime rejected an additional readiness check beyond the required two: %v", err)
+		t.Fatalf("runtime rejected an additional readiness check beyond the required one: %v", err)
 	}
 }
 
@@ -104,7 +103,6 @@ func TestRuntimeDependencies_rejects_clickhouse_in_readiness_checks(t *testing.T
 	runtime.ReadinessChecks = []ReadinessCheck{
 		CheckFunc{CheckName: "postgres"},
 		CheckFunc{CheckName: "clickhouse"},
-		CheckFunc{CheckName: "entitlement"},
 	}
 
 	// When
@@ -154,7 +152,6 @@ func TestRuntimeDependencies_rejects_duplicate_required_readiness_check_names(t 
 	runtime.ReadinessChecks = []ReadinessCheck{
 		CheckFunc{CheckName: "postgres"},
 		CheckFunc{CheckName: "postgres"},
-		CheckFunc{CheckName: "entitlement"},
 	}
 
 	// When
@@ -171,7 +168,7 @@ func TestRuntimeDependencies_rejects_typed_nil_readiness_check_without_panic(t *
 	app, _ := newHostedTestApp(t, nil, nil, nil, nil, nil)
 	runtime := *app.runtime
 	var nilCheck *typedNilCheck
-	runtime.ReadinessChecks = []ReadinessCheck{CheckFunc{CheckName: "postgres"}, nilCheck, CheckFunc{CheckName: "entitlement"}}
+	runtime.ReadinessChecks = []ReadinessCheck{CheckFunc{CheckName: "postgres"}, nilCheck}
 
 	// When
 	err := runtime.validate()
@@ -228,7 +225,6 @@ func TestRuntimeDependencies_rejectsMissingDeviceAuthorizationControls(t *testin
 func exactRuntimeChecks() []ReadinessCheck {
 	return []ReadinessCheck{
 		CheckFunc{CheckName: "postgres"},
-		CheckFunc{CheckName: "entitlement"},
 	}
 }
 

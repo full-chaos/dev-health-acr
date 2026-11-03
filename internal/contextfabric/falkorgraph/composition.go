@@ -67,7 +67,26 @@ import (
 // only.
 // CHAOS-10031 bumped this rp5 -> rp6: the calibrated retrieval-policy entry is
 // re-keyed t3 -> t4 (inherited calibration, see calibratedIdentityText3Large).
-const RetrievalPolicyVersion = "rp6"
+//
+// CHAOS-12663 bumped this rp6 -> rp7: a unique case-exact label match now
+// commits over subjects whose labels differ from the term only in case
+// (graphrank.narrowCaseExactLabel), and a comparison selection binds to the
+// operand spelled with its label's case. A question that PREVIOUSLY resolved
+// ambiguous (a clarification naming both case twins) can now COMMIT for the
+// identical text -- the rp4 -> rp5 class above -- and answer reuse can replay
+// a stored clarification, so an rp6 one must miss. No vector or node stamp
+// moves; this is a read-side commit-decision change only.
+//
+// CHAOS-12706 bumped this rp7 -> rp8: under a requested repository scope a
+// work item hint is admitted through its link (graphrank.admitHint), never
+// through the issue's own repository column. A receipt that rp7 dropped (so
+// its item committed only on a statistical basis, which client synthesis
+// retracted) now commits on the caller's canonical id, and an issue tied to
+// the scoped repository only by its own repository column is no longer
+// admitted by a hint. Answer reuse could replay either rp7 outcome, so an rp7
+// answer must miss. No vector or node stamp moves; this is a read-side
+// commit-decision change only.
+const RetrievalPolicyVersion = "rp8"
 
 // EmbedRetrievalIdentityNone is the persisted embed-retrieval-identity value
 // for a deployment with NO embedder configured. A literal, never the empty

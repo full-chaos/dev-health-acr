@@ -149,6 +149,23 @@ func init() {
 			exhaustive: true,
 		},
 		outputVocabulary{
+			// CHAOS-12608: the state of a team forecast's completion
+			// distribution. Closed: a new state is a contract change.
+			name:  "ClaimedCompletionForecast.state",
+			kind:  vocabFrozen,
+			why:   "protocol",
+			sites: []string{"ClaimedCompletionForecast.state", "ProjectedCompletionForecast.state"},
+			// schema: "available", "not_stored", "no_run_within_horizon", "over_limit", "malformed", "scope_ambiguous", "unmatched"
+			goSet: func() []string {
+				var out []string
+				for _, state := range contractsv1.ContextFabricCompletionDistributionStates() {
+					out = append(out, string(state))
+				}
+				return out
+			}(),
+			exhaustive: true,
+		},
+		outputVocabulary{
 			name:           "EffectiveEvidenceWindow.window_class",
 			kind:           vocabAdditive,
 			clientValidate: "contractsv1.ValidateStoredResult",
@@ -281,6 +298,24 @@ func init() {
 			exhaustive: true,
 		},
 		outputVocabulary{
+			// CHAOS-12639: the vocabulary a claimed table declares for a token
+			// column. Closed like measure_units.unit: a consumer looks words up
+			// only in a vocabulary it knows, and a new one is a contract change.
+			name:  "ClaimedFactTable.column_vocabularies",
+			kind:  vocabFrozen,
+			why:   "protocol",
+			sites: []string{"ClaimedFactTable.column_vocabularies.additionalProperties", "ProjectedFactTable.column_vocabularies.additionalProperties"},
+			// schema: "investment_theme", "subcategory"
+			goSet: func() []string {
+				var out []string
+				for _, vocabulary := range contractsv1.ContextFabricColumnVocabularyNames() {
+					out = append(out, string(vocabulary))
+				}
+				return out
+			}(),
+			exhaustive: true,
+		},
+		outputVocabulary{
 			// CHAOS-11985: the expected spacing of a time_series table's rows.
 			// Closed: a consumer breaks a line only on a cadence it knows.
 			name:  "ClaimedFactTable.cadence",
@@ -335,7 +370,7 @@ func init() {
 			why:   "protocol",
 			sites: []string{"RenderPointSource.kind"},
 			// schema: "cohort_member_score", "cohort_driver_weight_contributed", "claimed_fact_row", "claimed_fact_value"
-			goSet:      []string{string(contractsv1.ContextFabricRenderSourceCohortMemberScore), string(contractsv1.ContextFabricRenderSourceCohortDriverWeight), string(contractsv1.ContextFabricRenderSourceClaimedFactRow), string(contractsv1.ContextFabricRenderSourceClaimedFactValue)},
+			goSet:      []string{string(contractsv1.ContextFabricRenderSourceCohortMemberScore), string(contractsv1.ContextFabricRenderSourceCohortDriverWeight), string(contractsv1.ContextFabricRenderSourceClaimedFactRow), string(contractsv1.ContextFabricRenderSourceClaimedFactValue), string(contractsv1.ContextFabricRenderSourceClaimedFactTableRow), string(contractsv1.ContextFabricRenderSourceClaimedFactForecastSummary)},
 			exhaustive: true,
 		},
 		outputVocabulary{
@@ -352,8 +387,8 @@ func init() {
 			kind:  vocabFrozen,
 			why:   "protocol",
 			sites: []string{"RenderShapeRule"},
-			// schema: "cohort_attention_score", "cohort_driver_contribution", "dated_fact_trend", "investment_theme_share", "comparison_side_by_side", "investment_subcategory_share", "investment_repository_flow", "landscape_position"
-			goSet:      []string{string(contractsv1.ContextFabricRenderRuleCohortAttentionScore), string(contractsv1.ContextFabricRenderRuleCohortDriverContribution), string(contractsv1.ContextFabricRenderRuleDatedFactTrend), string(contractsv1.ContextFabricRenderRuleInvestmentThemeShare), string(contractsv1.ContextFabricRenderRuleComparisonSideBySide), string(contractsv1.ContextFabricRenderRuleInvestmentSubcategoryShare), string(contractsv1.ContextFabricRenderRuleInvestmentRepositoryFlow), string(contractsv1.ContextFabricRenderRuleLandscapePosition)},
+			// schema: "cohort_attention_score", "cohort_driver_contribution", "dated_fact_trend", "investment_theme_share", "comparison_side_by_side", "investment_subcategory_share", "completion_forecast", "completion_forecast_percentiles", "investment_repository_flow", "landscape_position"
+			goSet:      []string{string(contractsv1.ContextFabricRenderRuleCohortAttentionScore), string(contractsv1.ContextFabricRenderRuleCohortDriverContribution), string(contractsv1.ContextFabricRenderRuleDatedFactTrend), string(contractsv1.ContextFabricRenderRuleInvestmentThemeShare), string(contractsv1.ContextFabricRenderRuleComparisonSideBySide), string(contractsv1.ContextFabricRenderRuleInvestmentSubcategoryShare), string(contractsv1.ContextFabricRenderRuleCompletionForecast), string(contractsv1.ContextFabricRenderRuleCompletionForecastPercentiles), string(contractsv1.ContextFabricRenderRuleInvestmentRepositoryFlow), string(contractsv1.ContextFabricRenderRuleLandscapePosition)},
 			exhaustive: true,
 		},
 		outputVocabulary{

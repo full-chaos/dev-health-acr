@@ -278,8 +278,10 @@ func DeriveQuestionFamily(frame QuestionFrame) FamilyProjection {
 	// that to a cohort RANKING, which discovers a member set and orders
 	// it, answering a question the user did not ask. That reroute is
 	// behaviour change B5 and it is DEFERRED, not claimed: nothing commits
-	// an organization subject today and only one producer serves that
-	// subject kind, so an organization_scope frame with a state-ish goal
+	// an organization subject today, and no producer declares `state` for
+	// that subject kind (source health and investment serve it, and only
+	// investment declares an obligation for it, allocation_breakdown;
+	// CHAOS-12601), so an organization_scope frame with a state-ish goal
 	// derives unavailable outcomes. The route stays in the table because
 	// it is the correct projection; what is withdrawn is any claim that it
 	// improves an answer today.

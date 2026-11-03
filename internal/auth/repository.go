@@ -42,8 +42,7 @@ func NormalizeRepositoryScopes(scopes []string) ([]string, error) {
 
 func NormalizeRepositorySlug(slug string) (string, error) {
 	normalized := strings.ToLower(strings.TrimSpace(slug))
-	parts := strings.Split(normalized, "/")
-	if len(parts) != 2 || !reposlug.ValidOwner(parts[0]) || !reposlug.ValidName(parts[1]) {
+	if !reposlug.ValidSlug(normalized) {
 		return "", fmt.Errorf("%w: invalid repository slug", ErrRepositoryForbidden)
 	}
 	return normalized, nil
@@ -83,28 +82,32 @@ func AuthorizeRepository(principal storage.Principal, slug string) error {
 }
 
 func validRepositoryScope(scope string) bool {
-	if scope == "*" {
-		return true
-	}
-	parts := strings.Split(scope, "/")
-	if len(parts) != 2 || !reposlug.ValidOwner(parts[0]) {
-		return false
-	}
-	return parts[1] == "*" || reposlug.ValidName(parts[1])
+	return reposlug.ValidScope(scope)
 }
 
-// repositorySlugFault says which part of a rejected owner/repo slug is wrong
+// repositorySlugFault says which part of a rejected repository key is wrong
 // and why, for logs. It is only called for a slug NormalizeRepositorySlug
 // refused.
 func repositorySlugFault(slug string) string {
-	parts := strings.Split(strings.ToLower(strings.TrimSpace(slug)), "/")
-	if len(parts) != 2 {
+	normalized := strings.ToLower(strings.TrimSpace(slug))
+	parts := strings.Split(normalized, "/")
+	switch {
+	case len(parts) < 2:
 		return "not of the form owner/repo"
+	case len(parts) > reposlug.MaxSlugSegments:
+		return "more than 20 segments"
+	case len(normalized) > reposlug.MaxSlugBytes:
+		return "longer than 255 characters"
 	}
 	if fault := reposlug.Fault(parts[0], true); fault != "" {
 		return "owner " + fault
 	}
-	if fault := reposlug.Fault(parts[1], false); fault != "" {
+	for _, group := range parts[1 : len(parts)-1] {
+		if fault := reposlug.Fault(group, true); fault != "" {
+			return "group " + fault
+		}
+	}
+	if fault := reposlug.Fault(parts[len(parts)-1], false); fault != "" {
 		return "repository " + fault
 	}
 	return "invalid repository slug"
