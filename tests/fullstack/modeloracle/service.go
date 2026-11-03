@@ -123,6 +123,11 @@ type ServiceSynthesis struct {
 	DeterministicAnswer string        `json:"deterministic_answer"`
 	// MinEvidenceRefs is how many evidence refs the request must hold. Less fails loudly.
 	MinEvidenceRefs int `json:"min_evidence_refs"`
+	// ClaimFields, when set, claims each named scalar field of every canonical fact that
+	// holds it, in fact order, in place of the one first-scalar claim (CHAOS-12626: a
+	// comparison claims each side's measures). A named field no fact holds as a scalar
+	// fails loudly. The values are copied from the request, never written by the plan.
+	ClaimFields []string `json:"claim_fields,omitempty"`
 }
 
 type ServiceDriver struct {
@@ -513,7 +518,13 @@ func buildSynthesisReply(entry *ServiceQuestion, userMessage string) (string, er
 	// engine redraws once (zero-claim redraw), which would double the synthesis call count.
 	// The claim is copied from the request, never written by the plan.
 	claims := []any{}
-	if claim := firstScalarClaim(in.Facts); claim != nil {
+	if len(plan.ClaimFields) > 0 {
+		named, err := namedScalarClaims(in.Facts, plan.ClaimFields)
+		if err != nil {
+			return "", err
+		}
+		claims = append(claims, named...)
+	} else if claim := firstScalarClaim(in.Facts); claim != nil {
 		claims = append(claims, claim)
 	}
 	reply := map[string]any{
@@ -563,6 +574,63 @@ func buildPhraseReply(entry *ServiceQuestion, userMessage string) (string, error
 	}
 	encoded, err := json.Marshal(map[string]any{"phrasings": out})
 	return string(encoded), err
+}
+
+// namedScalarClaims restates each named scalar field of every canonical fact that holds it,
+// in fact order then name order, so the same request always gets the same claims.
+func namedScalarClaims[F any](facts []F, fields []string) ([]any, error) {
+	var claims []any
+	held := map[string]bool{}
+	for _, raw := range facts {
+		encoded, err := json.Marshal(raw)
+		if err != nil {
+			continue
+		}
+		var f struct {
+			ID      string                     `json:"id"`
+			Kind    string                     `json:"kind"`
+			Subject json.RawMessage            `json:"subject"`
+			Fields  map[string]json.RawMessage `json:"fields"`
+		}
+		if json.Unmarshal(encoded, &f) != nil {
+			continue
+		}
+		for _, name := range fields {
+			if !scalarField(f.Fields[name]) {
+				continue
+			}
+			held[name] = true
+			claim := map[string]any{"claim_id": fmt.Sprintf("claim_oracle_%02d", len(claims)+1), "kind": f.Kind, "subject": f.Subject, "field": name, "value": f.Fields[name]}
+			if f.ID != "" {
+				claim["fact_id"] = f.ID
+			}
+			claims = append(claims, claim)
+		}
+	}
+	for _, name := range fields {
+		if !held[name] {
+			return nil, fmt.Errorf("the plan claims field %q and no canonical fact in the request holds it as a scalar", name)
+		}
+	}
+	return claims, nil
+}
+
+// scalarField reports that a fact field holds one scalar value, not rows.
+func scalarField(field json.RawMessage) bool {
+	if len(field) == 0 {
+		return false
+	}
+	var value struct {
+		String  *string  `json:"string"`
+		Integer *int64   `json:"integer"`
+		Number  *float64 `json:"number"`
+		Boolean *bool    `json:"boolean"`
+		Rows    []any    `json:"rows"`
+	}
+	if json.Unmarshal(field, &value) != nil || len(value.Rows) > 0 {
+		return false
+	}
+	return value.String != nil || value.Integer != nil || value.Number != nil || value.Boolean != nil
 }
 
 // firstScalarClaim restates the first scalar field of the first canonical fact that has one,

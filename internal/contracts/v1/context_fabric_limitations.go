@@ -869,6 +869,7 @@ func ContextFabricServiceAuthoredLimitations() []string {
 		ContextFabricSynthesisNotNarrowableLimitation,
 		ContextFabricSynthesisRowsOverBudgetLimitation,
 		ContextFabricSynthesisRetryRanLimitation,
+		ContextFabricLandscapePositionLimitation,
 	}
 }
 

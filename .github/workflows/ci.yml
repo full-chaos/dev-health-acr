@@ -364,6 +364,8 @@ jobs:
         run: scripts/ci/test-race-contracts-isolation.sh
       - name: Test the internal/api race isolation
         run: scripts/ci/test-race-api-isolation.sh
+      - name: Test that an isolated package never lowers a unit leg's timeout
+        run: scripts/ci/test-unit-leg-timeout.sh
       - name: Test the reached-shard selection and the lane check that accepts its skips
         run: scripts/ci/test-reached-shards.sh
       - name: Test the devhealthsource unit split partition
@@ -595,21 +597,11 @@ jobs:
           # leaves the shards that draw none unchanged. `make isolated-timeout`
           # is the single source both this job and test-split/test-race-isolated
           # (Makefile) read the per-package budget from.
-          isolated_timeout=""
-          for isolated_pkg in $(scripts/ci/test-shard.sh --print-isolated-packages); do
-            case " $packages " in
-              *" $isolated_pkg "*)
-                pkg_timeout="$(make -s isolated-timeout PKG="$isolated_pkg")"
-                printf 'unit leg %s of ${{ strategy.job-total }} carries isolated package %s -> GOTEST_PLAIN_TIMEOUT=%s\n' \
-                  '${{ matrix.shard }}' "$isolated_pkg" "$pkg_timeout"
-                pkg_secs="${pkg_timeout%s}"
-                cur_secs="${isolated_timeout%s}"
-                if [ -z "$isolated_timeout" ] || [ "$pkg_secs" -gt "$cur_secs" ]; then
-                  isolated_timeout="$pkg_timeout"
-                fi
-                ;;
-            esac
-          done
+          # CHAOS-12717: an isolated package only RAISES the leg above its 600s
+          # default, never lowers it (a race job's budget, such as internal/api's
+          # 420s, is not a unit leg's); scripts/ci/unit-leg-timeout.sh holds the rule.
+          isolated_timeout="$(scripts/ci/unit-leg-timeout.sh "$packages")"
+          printf 'unit leg %s of ${{ strategy.job-total }}: GOTEST_PLAIN_TIMEOUT=%s\n' '${{ matrix.shard }}' "${isolated_timeout:-10m (default)}"
           # Legs 5-8 run the two split packages, each in two halves split by
           # the SAME list the race jobs use (scripts/ci/<package>-heavy-tests.txt):
           # legs 5 and 6 run the rest half of devhealthfacts and devhealthsource
@@ -893,21 +885,11 @@ jobs:
           # leaves the shards that draw none unchanged. `make isolated-timeout`
           # is the single source both this job and test-split/test-race-isolated
           # (Makefile) read the per-package budget from.
-          isolated_timeout=""
-          for isolated_pkg in $(scripts/ci/test-shard.sh --print-isolated-packages); do
-            case " $packages " in
-              *" $isolated_pkg "*)
-                pkg_timeout="$(make -s isolated-timeout PKG="$isolated_pkg")"
-                printf 'unit leg %s of ${{ strategy.job-total }} carries isolated package %s -> GOTEST_PLAIN_TIMEOUT=%s\n' \
-                  '${{ matrix.shard }}' "$isolated_pkg" "$pkg_timeout"
-                pkg_secs="${pkg_timeout%s}"
-                cur_secs="${isolated_timeout%s}"
-                if [ -z "$isolated_timeout" ] || [ "$pkg_secs" -gt "$cur_secs" ]; then
-                  isolated_timeout="$pkg_timeout"
-                fi
-                ;;
-            esac
-          done
+          # CHAOS-12717: an isolated package only RAISES the leg above its 600s
+          # default, never lowers it (a race job's budget, such as internal/api's
+          # 420s, is not a unit leg's); scripts/ci/unit-leg-timeout.sh holds the rule.
+          isolated_timeout="$(scripts/ci/unit-leg-timeout.sh "$packages")"
+          printf 'unit leg %s of ${{ strategy.job-total }}: GOTEST_PLAIN_TIMEOUT=%s\n' '${{ matrix.shard }}' "${isolated_timeout:-10m (default)}"
           # Legs 5-8 run the two split packages, each in two halves split by
           # the SAME list the race jobs use (scripts/ci/<package>-heavy-tests.txt):
           # legs 5 and 6 run the rest half of devhealthfacts and devhealthsource
