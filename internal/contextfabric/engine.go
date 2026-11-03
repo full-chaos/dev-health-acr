@@ -978,6 +978,12 @@ type EngineTelemetry interface {
 	// every call, same "quiet run is as visible as a busy one" convention
 	// as RecordProjectedRowsCount.
 	RecordDualTableFacts(ctx context.Context, principal storage.Principal, dualTableClaims, secondaryRowsBytes int)
+	// RecordDetailTablesAttached (CHAOS-12587) reports, once per Synthesize
+	// call that attached a declared detail table to at least one claim, how
+	// many claims carry one and the names of the tables they carry, so a pick
+	// of the wrong table shows in the log even when two tables are the same
+	// size. Not written when no claim carries a detail table.
+	RecordDetailTablesAttached(ctx context.Context, principal storage.Principal, event DetailTablesAttachedEvent)
 	// RecordRenderShapeSelection (CHAOS-4415) reports which conditional
 	// render shapes the deterministic selection rules chose for THIS
 	// answer, and -- equally important -- which eligible rule produced

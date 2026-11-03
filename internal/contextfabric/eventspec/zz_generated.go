@@ -44,6 +44,7 @@ var ByID = map[string]Event{
 	"contextfabric.count_population_scope":                CountPopulationScope,
 	"contextfabric.coverage_disclosure_phrasing":          CoverageDisclosurePhrasing,
 	"contextfabric.coverage_entries_capped":               CoverageEntriesCapped,
+	"contextfabric.detail_tables_attached":                DetailTablesAttached,
 	"contextfabric.direct_read":                           DirectRead,
 	"contextfabric.direct_read_authorization":             DirectReadAuthorization,
 	"contextfabric.direct_relationships_read":             DirectRelationshipsRead,
@@ -2165,6 +2166,60 @@ func (f CoverageEntriesCappedFields) SlogArgs() []any {
 		"coverage_entries_served", f.CoverageEntriesServed,
 		"coverage_entries_omitted", f.CoverageEntriesOmitted,
 		"coverage_entries_bound", f.CoverageEntriesBound,
+	}
+}
+
+// DetailTablesAttachedFields is contextfabric.detail_tables_attached's generated typed construction interface
+// (CHAOS-5516): one Go field per Field DetailTablesAttached.Fields declares in spec.go.
+type DetailTablesAttachedFields struct {
+	OrgID               string
+	DetailTableClaims   int
+	DetailTables        []string
+	DetailTablesOmitted int
+	// constructed (CHAOS-5516 r1 fix): an UNEXPORTED marker, generated on
+	// every DetailTablesAttachedFields uniformly, set ONLY by NewDetailTablesAttachedFields below. A caller
+	// outside this package cannot set an unexported field via a composite
+	// literal -- not partially (one exported field set, the rest at their
+	// Go zero value) and not even by hand-setting every EXPORTED field --
+	// so this is the class fix for "a caller still assembles that event's
+	// field list": no composite literal built outside eventspec, complete or
+	// partial, can ever read as constructed.
+	constructed bool
+}
+
+// NewDetailTablesAttachedFields is the generated constructor for DetailTablesAttachedFields -- every
+// field DetailTablesAttached.Fields declares is a required parameter.
+func NewDetailTablesAttachedFields(orgID string, detailTableClaims int, detailTables []string, detailTablesOmitted int) DetailTablesAttachedFields {
+	valid := true
+	if detailTables == nil {
+		valid = false
+	}
+	return DetailTablesAttachedFields{
+		OrgID:               orgID,
+		DetailTableClaims:   detailTableClaims,
+		DetailTables:        detailTables,
+		DetailTablesOmitted: detailTablesOmitted,
+		constructed:         valid,
+	}
+}
+
+// IsConstructed reports whether f was built by NewDetailTablesAttachedFields -- the ONE
+// exported way to read the unexported "constructed" marker from outside
+// this package. false for the Go zero value and for ANY composite literal
+// assembled elsewhere, complete or partial.
+func (f DetailTablesAttachedFields) IsConstructed() bool { return f.constructed }
+
+// SlogArgs returns DetailTablesAttached's own declared fields as alternating slog
+// key/value pairs, in the SAME order spec.go declares them. Every
+// free-text string/[]string value is sanitized HERE, at its own
+// construction site inside this function's body -- the shape CHAOS-5544's
+// own instrument (TestNoUnsanitizedLogAttributeInContextFabric) requires.
+func (f DetailTablesAttachedFields) SlogArgs() []any {
+	return []any{
+		"org_id", contextfabric.SanitizeLogAttr(f.OrgID),
+		"detail_table_claims", f.DetailTableClaims,
+		"detail_tables", contextfabric.SanitizeLogStrings(f.DetailTables),
+		"detail_tables_omitted", f.DetailTablesOmitted,
 	}
 }
 
