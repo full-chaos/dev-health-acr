@@ -230,7 +230,7 @@ git push -u origin HEAD:<branch>
 ## PR NAMING AND STRUCTURE
 
 - Branch name: `<type>/<topic>`, named by topic — never by lane name or date.
-- PR title: `<type>(<area>): CHAOS-<n> <short imperative description>` — `type` is `feat`/`fix`/`bug`/`enhancement`/`chore`/`docs`; `area` is the code actually touched. Every PR cites **exactly one** ticket — split a shared ticket into sub-issues **before** opening the PR. A PR that genuinely spans more than one ticket omits the id (rare; the id exists so the PR is easy to find). A follow-up ticket found during the work is noted in the body as "filed separately", never by id. Commit messages carry no ticket ids — the squash commit takes the PR title.
+- PR title: `<type>(<area>): CHAOS-<n> <short imperative description>` — `type` is `feat`/`fix`/`bug`/`enhancement`/`chore`/`docs`; `area` is the code actually touched. Every PR cites **exactly one** ticket — split a shared ticket into sub-issues **before** opening the PR. The required check `pr-title` enforces this; the one pattern lives in `scripts/ci/check-pr-title.sh` (dependabot[bot] is exempt). A follow-up ticket found during the work is noted in the body as "filed separately", never by id. Commit messages carry no ticket ids — the squash commit takes the PR title.
 - PR body carries the literal headings `## TEST-EVIDENCE` and `## RISK-NOTES` — the governance gate's parser reads them literally.
 - A PR that depends on another **open** PR's content opens **stacked** on it (base = the dependency), never parallel and main-based.
 - Body edits: one edit per pushed tip, made **before** that tip's CI goes terminal; none after.
