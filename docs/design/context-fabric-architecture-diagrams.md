@@ -1151,6 +1151,21 @@ current grants and scope, and a reused answer of another shape rechecks its
 subjects with the requested scope. A work item the census admitted through a
 text or heuristic link says so in the answer; it is never shown as native.
 
+**A work item hint under a requested repository scope follows the link too
+(CHAOS-12706).** A hint that names a work item (a prior-result receipt, a
+confirmed candidate, an engine carry, a caller's canonical id) is tested as the
+census tests its satisfiers: `graphrank.AuthorizedThroughLink` for the grants
+and the rest of the request, then the keyed link read for the repository part
+(`graphrank.admitHint`). The issue's own repository column never admits it, so
+a GitHub or GitLab issue tied to the scoped repository only by its own column is
+not admitted by a hint. A failed, cut or unwired read admits nothing. An admitted
+hint is recorded as the census records a satisfier, so the fact read and the
+link-tier sentence treat it the same, and it commits on the caller's canonical
+id, which client synthesis does not retract. The answer-reuse recheck is the one
+exception: it keeps the issue's own node test, so a link admission is re-derived
+by a fresh turn, never carried by a stored answer. The comparison receipt
+binding still tests a work item operand against the whole requested scope.
+
 ---
 
 ## 4 — Fact data model

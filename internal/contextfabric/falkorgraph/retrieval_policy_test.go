@@ -33,9 +33,15 @@ import (
 // CHAOS-12663 bumped it again to "rp7": a unique case-exact label match now
 // commits over its case-folded twins, so a question that clarified under rp6
 // can commit, and a stored rp6 clarification must not be replayed for it.
+//
+// CHAOS-12706 bumped it again to "rp8": a work item receipt under a requested
+// repository scope now commits through its link where rp7 retracted the
+// commit, and a work item tied to the scoped repository only by its own
+// repository column is no longer admitted by a hint, so a stored rp7 answer
+// must not be replayed for either.
 func TestRetrievalPolicyVersionBumpedByCHAOS3829(t *testing.T) {
-	if RetrievalPolicyVersion != "rp7" {
-		t.Fatalf("RetrievalPolicyVersion = %q, want rp7 (CHAOS-12663 lets a case-exact label commit where rp6 clarified, which must bump the constant)", RetrievalPolicyVersion)
+	if RetrievalPolicyVersion != "rp8" {
+		t.Fatalf("RetrievalPolicyVersion = %q, want rp8 (CHAOS-12706 changes which work item hints a repository scope admits, which must bump the constant)", RetrievalPolicyVersion)
 	}
 }
 

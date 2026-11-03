@@ -76,7 +76,17 @@ import (
 // identical text -- the rp4 -> rp5 class above -- and answer reuse can replay
 // a stored clarification, so an rp6 one must miss. No vector or node stamp
 // moves; this is a read-side commit-decision change only.
-const RetrievalPolicyVersion = "rp7"
+//
+// CHAOS-12706 bumped this rp7 -> rp8: under a requested repository scope a
+// work item hint is admitted through its link (graphrank.admitHint), never
+// through the issue's own repository column. A receipt that rp7 dropped (so
+// its item committed only on a statistical basis, which client synthesis
+// retracted) now commits on the caller's canonical id, and an issue tied to
+// the scoped repository only by its own repository column is no longer
+// admitted by a hint. Answer reuse could replay either rp7 outcome, so an rp7
+// answer must miss. No vector or node stamp moves; this is a read-side
+// commit-decision change only.
+const RetrievalPolicyVersion = "rp8"
 
 // EmbedRetrievalIdentityNone is the persisted embed-retrieval-identity value
 // for a deployment with NO embedder configured. A literal, never the empty

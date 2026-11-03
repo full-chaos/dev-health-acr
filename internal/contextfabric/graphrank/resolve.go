@@ -2986,6 +2986,10 @@ func resolveSubjects(ctx context.Context, principal storage.Principal, request c
 	if !contextfabric.PageHintLookupReported(ctx) {
 		defer pageHints.emit(deps.ResolutionTracer)
 	}
+	// CHAOS-12706: a work item hint under a requested repository scope is
+	// tested through its link (hint_link_scope.go); one keyed read serves the
+	// loop.
+	var links hintLinks
 	for hintIndex, hint := range request.RequestedScope.SubjectHints {
 		if strings.TrimSpace(hint.ID) == "" || hint.Kind == "" {
 			continue
@@ -3041,10 +3045,12 @@ func resolveSubjects(ctx context.Context, principal storage.Principal, request c
 		// CHAOS-3888: checked before NodeCandidate, not derived from its
 		// !ok result, so an invalid/internal-bookkeeping node (a different,
 		// unrelated exclusion reason) never inflates this count.
-		hintAuthorized := AuthorizedAttributes(principal, request.RequestedScope, node.Attributes)
-		candidate, ok := NodeCandidate(principal, request.RequestedScope, subject.Label, node, deps.IsInternal, true, deps.ResolutionTracer, request.RequestID)
-		if !ok {
-			if !hintAuthorized {
+		// CHAOS-12706: a work item under a requested repository scope is
+		// tested through its link, never through its own repository.
+		linkAdmission := admitHint(ctx, principal, request, deps, &links, subject.Kind, hint.Source, subject.Label, node)
+		candidate := linkAdmission.candidate
+		if !linkAdmission.admitted {
+			if !linkAdmission.authorized {
 				subjectCandidatesAuthzDropped++
 			}
 			continue
@@ -3078,6 +3084,7 @@ func resolveSubjects(ctx context.Context, principal storage.Principal, request c
 			admission.refuse(candidate.Subject)
 			continue
 		}
+		recordHintLink(ctx, linkAdmission)
 		candidatesBySubject[SubjectKey(candidate.Subject)] = candidate
 	}
 	// A caller-explicit hint that resolved is authoritative and
