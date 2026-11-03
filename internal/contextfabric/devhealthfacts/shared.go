@@ -1395,7 +1395,12 @@ import (
 // v271 -> v272: an evidence ref's label names its subject in reader words, or by
 // the name the answer holds, never by a UUID or a raw provider id (CHAOS-12620).
 // An answer saved earlier can carry such a label.
-const QueryVersion = "devhealthfacts.clickhouse.v272"
+//
+// v272 -> v273: a stored issue-to-pull-request fact names its work item end by
+// its key when the read has already given the pull request end its label
+// (CHAOS-12715). An answer saved earlier can show the raw work item id in a
+// path's why_relevant.
+const QueryVersion = "devhealthfacts.clickhouse.v273"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each
