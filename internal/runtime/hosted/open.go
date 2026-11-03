@@ -41,6 +41,7 @@ import (
 	"github.com/full-chaos/dev-health-acr/internal/limits"
 	"github.com/full-chaos/dev-health-acr/internal/observability"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
+	"github.com/full-chaos/dev-health-acr/internal/trustedproxy"
 	"github.com/full-chaos/dev-health-go/readers"
 )
 
@@ -166,10 +167,12 @@ func open(ctx context.Context, request buildRequest) (*Runtime, error) {
 	if err != nil {
 		return nil, closeAfterError(runtime, fmt.Errorf("initialize request controls: %w", err))
 	}
-	clientIP, err := auth.NewTrustedProxyClientIPResolver(request.config.TrustedProxyCIDRs)
+	trustedProxies, err := trustedproxy.Parse(request.config.TrustedProxyCIDRs)
 	if err != nil {
 		return nil, closeAfterError(runtime, fmt.Errorf("initialize client address resolver: %w", err))
 	}
+	request.options.Logger.InfoContext(ctx, "trusted proxies", "networks", trustedProxies.Networks(), "exclusions", trustedProxies.Exclusions())
+	clientIP := auth.TrustedProxyClientIPResolver(trustedProxies)
 	var actionFindingsGate *directread.SubjectGate
 	assembler := contextpacket.NewAssembler(clickhouse.evidence, contextpacket.Options{
 		Now: request.options.Now, ServiceVersion: request.options.ServiceVersion,

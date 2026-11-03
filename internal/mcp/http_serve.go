@@ -18,6 +18,7 @@ import (
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 	"github.com/full-chaos/dev-health-acr/internal/otelexport"
 	"github.com/full-chaos/dev-health-acr/internal/sidecar"
+	"github.com/full-chaos/dev-health-acr/internal/trustedproxy"
 	"github.com/full-chaos/dev-health-acr/internal/version"
 )
 
@@ -322,6 +323,8 @@ func serveHTTPOn(ctx context.Context, listener net.Listener, cfg *ProcessConfig,
 		MaxHeaderBytes:    64 << 10,
 		BaseContext:       func(net.Listener) context.Context { return context.WithoutCancel(ctx) },
 	}
+	// Validate refused a list the parser refuses, so only the counts remain.
+	trustedProxies, _ := trustedproxy.Parse(opts.edgeGate().TrustedProxyCIDRs)
 	logger.InfoContext(ctx, HTTPServingLogMessage,
 		"listen_address", listener.Addr().String(),
 		"transport", TransportHTTP,
@@ -331,6 +334,8 @@ func serveHTTPOn(ctx context.Context, listener net.Listener, cfg *ProcessConfig,
 		"server_commit", identity.Commit,
 		"protocol_revisions", ProtocolRevisions(TransportHTTP),
 		"max_body_bytes", opts.MaxBodyBytes,
+		"trusted_proxy_networks", trustedProxies.Networks(),
+		"trusted_proxy_exclusions", trustedProxies.Exclusions(),
 	)
 	serveErr := make(chan error, 1)
 	go func() { serveErr <- server.Serve(listener) }()

@@ -357,6 +357,29 @@ func TestTrustedProxyCIDRsAreParsedWithoutLoggingValues(t *testing.T) {
 	}
 }
 
+// CHAOS-11734: config accepts the exclusion form the resolver reads, and
+// refuses a bad exclusion at start.
+func TestTrustedProxyCIDRsAcceptNodeExclusions(t *testing.T) {
+	cfg, err := load(mapLookup(map[string]string{
+		"ACR_TRUSTED_PROXY_CIDRS":     "10.42.0.0/24,!10.42.0.0,!10.42.0.1",
+		"ACR_LOCAL_COMPOSITION_READY": "true",
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(cfg.TrustedProxyCIDRs) != 3 {
+		t.Fatalf("trusted proxies = %#v", cfg.TrustedProxyCIDRs)
+	}
+}
+
+func TestTrustedProxyCIDRsRejectABadExclusion(t *testing.T) {
+	for _, value := range []string{"10.42.0.0/24,!192.0.2.1", "10.42.0.0/24,!10.42.0.0/24", "10.42.0.0/24,!"} {
+		if _, err := load(mapLookup(map[string]string{"ACR_TRUSTED_PROXY_CIDRS": value, "ACR_LOCAL_COMPOSITION_READY": "true"})); err == nil {
+			t.Errorf("%q: bad exclusion accepted", value)
+		}
+	}
+}
+
 func TestTrustedProxyCIDRsRejectInvalidNetwork(t *testing.T) {
 	if _, err := load(mapLookup(map[string]string{"ACR_TRUSTED_PROXY_CIDRS": "not-a-cidr"})); err == nil {
 		t.Fatal("invalid trusted proxy network accepted")

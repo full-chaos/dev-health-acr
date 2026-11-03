@@ -83,6 +83,28 @@ func TestServeOptionsRefuseInvalidTrustedProxyCIDRs(t *testing.T) {
 	}
 }
 
+// CHAOS-11734: acr-mcp accepts the node exclusions go-api reads, and refuses a
+// bad exclusion at start.
+func TestServeOptionsAcceptTrustedProxyExclusions(t *testing.T) {
+	opts, err := acrmcp.ServeOptionsFromEnvironment(envLookup(map[string]string{"ACR_MCP_TRUSTED_PROXY_CIDRS": "10.42.0.0/24,!10.42.0.0,!10.42.0.1"}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := opts.Validate(); err != nil {
+		t.Fatalf("Validate = %v, want the exclusion list accepted", err)
+	}
+	for _, value := range []string{"10.42.0.0/24,!192.0.2.1", "10.42.0.0/24,!10.42.0.0/24"} {
+		bad, err := acrmcp.ServeOptionsFromEnvironment(envLookup(map[string]string{"ACR_MCP_TRUSTED_PROXY_CIDRS": value}))
+		if err != nil {
+			t.Fatalf("%q: env parse: %v", value, err)
+		}
+		var invalid *acrmcp.ErrServeOptionInvalid
+		if err := bad.Validate(); !errors.As(err, &invalid) || invalid.Setting != "ACR_MCP_TRUSTED_PROXY_CIDRS" {
+			t.Errorf("%q: Validate = %v, want ErrServeOptionInvalid naming ACR_MCP_TRUSTED_PROXY_CIDRS", value, err)
+		}
+	}
+}
+
 // The environment values reach the running gate: a limit of 3 refuses the
 // fourth failure, and the trusted list separates two forwarded callers.
 func TestServeEnvironmentSizesTheRunningEdgeGate(t *testing.T) {

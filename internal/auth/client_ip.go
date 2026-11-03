@@ -1,13 +1,13 @@
 package auth
 
 import (
-	"errors"
 	"net"
 	"net/http"
 	"net/netip"
 	"strings"
 
 	"github.com/full-chaos/dev-health-acr/internal/logsanitize"
+	"github.com/full-chaos/dev-health-acr/internal/trustedproxy"
 )
 
 type ClientIPResolver func(*http.Request) string
@@ -39,18 +39,21 @@ func RemoteAddressClientIP(request *http.Request) string {
 }
 
 func NewTrustedProxyClientIPResolver(cidrs []string) (ClientIPResolver, error) {
-	trusted := make([]netip.Prefix, 0, len(cidrs))
-	for _, value := range cidrs {
-		prefix, err := netip.ParsePrefix(strings.TrimSpace(value))
-		if err != nil {
-			return nil, errors.New("trusted proxy CIDR is invalid")
-		}
-		trusted = append(trusted, prefix.Masked())
+	trusted, err := trustedproxy.Parse(cidrs)
+	if err != nil {
+		return nil, err
 	}
+	return TrustedProxyClientIPResolver(trusted), nil
+}
+
+// TrustedProxyClientIPResolver names the client: the TCP peer unless the peer
+// is a trusted proxy; then the right-most X-Forwarded-For hop that is not one.
+// A malformed hop reached in the walk ends it at the peer.
+func TrustedProxyClientIPResolver(trusted trustedproxy.List) ClientIPResolver {
 	return func(request *http.Request) string {
 		peerText := RemoteAddressClientIP(request)
 		peer, err := netip.ParseAddr(peerText)
-		if err != nil || !addressTrusted(peer, trusted) {
+		if err != nil || !trusted.Trusts(peer) {
 			return peerText
 		}
 		forwarded := []string{}
@@ -62,20 +65,10 @@ func NewTrustedProxyClientIPResolver(cidrs []string) (ClientIPResolver, error) {
 			if parseErr != nil {
 				return peerText
 			}
-			if !addressTrusted(candidate, trusted) {
+			if !trusted.Trusts(candidate) {
 				return candidate.String()
 			}
 		}
 		return peerText
-	}, nil
-}
-
-func addressTrusted(address netip.Addr, prefixes []netip.Prefix) bool {
-	address = address.Unmap()
-	for _, prefix := range prefixes {
-		if prefix.Contains(address) {
-			return true
-		}
 	}
-	return false
 }
