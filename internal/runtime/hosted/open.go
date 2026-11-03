@@ -1206,6 +1206,8 @@ func buildContextFabricInvestigator(ctx context.Context, request buildRequest, p
 				InvestmentThemeShare: request.config.ContextFabricInvestmentTreemapEnabled,
 				ComparisonSideBySide: request.config.ContextFabricComparisonTableEnabled,
 				CompletionForecast:   request.config.CompletionDistributionEnabled,
+				// CHAOS-12675: the quadrant switch joins the key.
+				LandscapePosition: request.config.ContextFabricLandscapeQuadrantEnabled,
 			}),
 			// One more deployment-current version authority -- the
 			// ownership-routing gate's own arm-selection rules (falkorgraph:
