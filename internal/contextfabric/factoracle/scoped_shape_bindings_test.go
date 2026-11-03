@@ -101,6 +101,17 @@ func TestAStoreWithNoOwnedRepositoryStopsTheScopedShapes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// The ownership check is asked on the team entry first: without it the
+	// team entry names a subject that owns nothing ("team:", or a team with
+	// no repository), and that is the defect, named here before the repository
+	// entry is reached.
+	oracle := &Oracle{Store: store, Window: manifest.Window}
+	for _, chosen := range []string{"", "team:" + store.TeamIDs()[0]} {
+		level, id, err := oracle.scopedInvestmentSubject("investmentBreakdownTeam", chosen)
+		if err == nil || !strings.Contains(err.Error(), "no team owns a repository") {
+			t.Fatalf("with no owned repository, the team entry (capacity subject %q) asks scope %s for %q (error %v): a subject that owns nothing", chosen, level, id, err)
+		}
+	}
 	if _, err := scopedCases(t, store, manifest.Window); err == nil || !strings.Contains(err.Error(), "no team owns a repository") {
 		t.Fatalf("a store with no owned repository ended with %v", err)
 	}
