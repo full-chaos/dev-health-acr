@@ -1094,6 +1094,8 @@ func buildContextFabricInvestigator(ctx context.Context, request buildRequest, p
 		MaxSerializedBytes: int64(request.config.MaxSerializedBytes),
 		// See Config.ContextFabricInvestmentTreemapEnabled.
 		InvestmentTreemapEnabled: request.config.ContextFabricInvestmentTreemapEnabled,
+		// See Config.ContextFabricInvestmentSankeyEnabled (CHAOS-12582).
+		InvestmentSankeyEnabled: request.config.ContextFabricInvestmentSankeyEnabled,
 		// See Config.ContextFabricComparisonTableEnabled.
 		ComparisonTableEnabled: request.config.ContextFabricComparisonTableEnabled,
 		// CHAOS-12608: the forecast draws the distribution the same switch serves.
@@ -1202,6 +1204,8 @@ func buildContextFabricInvestigator(ctx context.Context, request buildRequest, p
 				InvestmentThemeShare: request.config.ContextFabricInvestmentTreemapEnabled,
 				ComparisonSideBySide: request.config.ContextFabricComparisonTableEnabled,
 				CompletionForecast:   request.config.CompletionDistributionEnabled,
+				// CHAOS-12582.
+				InvestmentRepositoryFlow: request.config.ContextFabricInvestmentSankeyEnabled,
 			}),
 			// One more deployment-current version authority -- the
 			// ownership-routing gate's own arm-selection rules (falkorgraph:

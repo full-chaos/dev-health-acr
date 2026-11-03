@@ -580,11 +580,14 @@ var questionFamilyDefinitions = []QuestionFamilyDefinition{
 		// in DeclaredUnproducedRenderKinds, which is what makes this
 		// declaration honest rather than a promise. table and series are
 		// what these questions already allowed, as above.
+		// CHAOS-12582: sankey, one team's effort from its repositories to the
+		// themes, behind its own switch (investment_repository_flow).
 		RenderKinds: []contractsv1.ContextFabricRenderKind{
 			contractsv1.ContextFabricRenderKindTable,
 			contractsv1.ContextFabricRenderKindSeries,
 			contractsv1.ContextFabricRenderKindTreemap,
 			contractsv1.ContextFabricRenderKindSunburst,
+			contractsv1.ContextFabricRenderKindSankey,
 		},
 		Budget:           PlanBudgetSingleSubject,
 		CompatibleShapes: []InvestigationShape{ShapeSingleSubject, ShapeOpen},

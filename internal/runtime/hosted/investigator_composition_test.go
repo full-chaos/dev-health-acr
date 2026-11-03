@@ -322,6 +322,7 @@ func TestBuildContextFabricInvestigator_keysReuseByTheRenderSwitches(t *testing.
 		request.config.CompletionDistributionEnabled = on
 		request.config.ContextFabricInvestmentTreemapEnabled = on
 		request.config.ContextFabricComparisonTableEnabled = on
+		request.config.ContextFabricInvestmentSankeyEnabled = on
 		investigator, _, _, _, err := buildContextFabricInvestigator(context.Background(), request, postgres, clickhouse, nil)
 		if err != nil {
 			t.Fatalf("buildContextFabricInvestigator() = %v", err)
@@ -332,7 +333,7 @@ func TestBuildContextFabricInvestigator_keysReuseByTheRenderSwitches(t *testing.
 		}
 		authorities := mustField(t, reflect.ValueOf(engine).Elem(), "reuseVersionAuthorities")
 		got := mustField(t, authorities, "QuestionFamilyVersion").String()
-		want := contextfabric.ReuseQuestionFamilyVersion(contextfabric.RenderShapeOptions{InvestmentThemeShare: on, ComparisonSideBySide: on, CompletionForecast: on})
+		want := contextfabric.ReuseQuestionFamilyVersion(contextfabric.RenderShapeOptions{InvestmentThemeShare: on, ComparisonSideBySide: on, CompletionForecast: on, InvestmentRepositoryFlow: on})
 		if got != want {
 			t.Errorf("switches on=%v: QuestionFamilyVersion = %q, want %q", on, got, want)
 		}

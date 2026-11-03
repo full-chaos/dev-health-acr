@@ -1515,8 +1515,8 @@ func retainPastTheCut(kept, dropped []clampedNarrative, retain func(string) bool
 	return kept
 }
 
-// claimsAChartPlots names the claims the answer's treemaps, tables and forecast
-// curves plot (CHAOS-12521, CHAOS-12513, CHAOS-12608). An investment answer need
+// claimsAChartPlots names the claims the answer's treemaps, tables, forecast
+// curves and sankeys plot (CHAOS-12521, CHAOS-12513, CHAOS-12608, CHAOS-12582). An investment answer need
 // not have a driver, a comparison's drivers need not cite every cell, and a
 // forecast's drivers need not cite its distribution, so no driver brings those
 // facts and the chart would be dropped. The server built the chart from those
@@ -1526,7 +1526,8 @@ func claimsAChartPlots(shapes []contractsv1.ContextFabricRenderShape) map[string
 	plotted := map[string]struct{}{}
 	for _, shape := range shapes {
 		switch shape.Kind {
-		case contractsv1.ContextFabricRenderKindTreemap, contractsv1.ContextFabricRenderKindTable, contractsv1.ContextFabricRenderKindForecast:
+		case contractsv1.ContextFabricRenderKindTreemap, contractsv1.ContextFabricRenderKindTable, contractsv1.ContextFabricRenderKindForecast,
+			contractsv1.ContextFabricRenderKindSankey:
 		default:
 			continue
 		}

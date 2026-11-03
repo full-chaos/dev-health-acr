@@ -14,8 +14,9 @@ func TestTheReuseFamilyVersionNamesTheRenderSwitchesOn(t *testing.T) {
 		t.Fatalf("every switch off: %q, want the table version: a deployment that turns nothing on keeps its stored answers", got)
 	}
 	seen := map[string]RenderShapeOptions{}
-	for mask := 0; mask < 8; mask++ {
-		options := RenderShapeOptions{InvestmentThemeShare: mask&1 != 0, ComparisonSideBySide: mask&2 != 0, CompletionForecast: mask&4 != 0}
+	// CHAOS-12582: the sankey switch is the fourth.
+	for mask := 0; mask < 16; mask++ {
+		options := RenderShapeOptions{InvestmentThemeShare: mask&1 != 0, ComparisonSideBySide: mask&2 != 0, CompletionForecast: mask&4 != 0, InvestmentRepositoryFlow: mask&8 != 0}
 		version := ReuseQuestionFamilyVersion(options)
 		if len(version) > 128 {
 			t.Errorf("%+v: %d characters, past the column's 128", options, len(version))

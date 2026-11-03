@@ -220,6 +220,27 @@ const (
 	// RenderShapeSkipThemeTableCut -- the table does not hold every canonical
 	// theme, because the row budget cut it.
 	RenderShapeSkipThemeTableCut RenderShapeSkipReason = "theme_table_cut"
+	// The investment_repository_flow rule's reasons (CHAOS-12582). See
+	// render_shape_repository_flow.go.
+	//
+	// RenderShapeSkipNotRepositoryFlowQuestion -- this turn's frame does not ask
+	// for the repositories under a scope anchor with the one goal
+	// allocate_investment. The common exit for an allocation answer.
+	RenderShapeSkipNotRepositoryFlowQuestion RenderShapeSkipReason = "not_repository_flow_question"
+	// RenderShapeSkipNoRepositoryFlowTable -- no investment claim carries the
+	// declared repository_theme_breakdown table.
+	RenderShapeSkipNoRepositoryFlowTable RenderShapeSkipReason = "no_repository_flow_table"
+	// RenderShapeSkipSeveralRepositoryFlowTables -- more than one does. A
+	// sankey is one team's flow.
+	RenderShapeSkipSeveralRepositoryFlowTables RenderShapeSkipReason = "several_repository_flow_tables"
+	// RenderShapeSkipRepositoryCountOutsideBounds -- fewer than 2 or more than
+	// 64 repositories carry effort. Past 64 there is no shape, never an
+	// "other" node.
+	RenderShapeSkipRepositoryCountOutsideBounds RenderShapeSkipReason = "repository_count_outside_bounds"
+	// RenderShapeSkipRepositoryFlowUnprovable -- a row is unusable or the shape
+	// does not prove against the contract (a cut table, a theme sum the rows
+	// disagree on, two nodes with one word).
+	RenderShapeSkipRepositoryFlowUnprovable RenderShapeSkipReason = "repository_flow_unprovable"
 	// RenderShapeSkipThemeRowUnusable -- a row holds no canonical theme or no
 	// numeric share. The shape is skipped WHOLE: a part of a whole left out
 	// changes what every other part means.
@@ -361,6 +382,16 @@ func selectRenderShapes(result InvestigationResult, frame *QuestionFrame, option
 		} else {
 			event.skip(contractsv1.ContextFabricRenderRuleCohortDriverContribution, reason)
 		}
+	}
+
+	// CHAOS-12582: the sankey answers a question asked by repository, so it
+	// comes ahead of the treemap. Each yields at most one shape.
+	if !options.InvestmentRepositoryFlow {
+		event.skip(contractsv1.ContextFabricRenderRuleInvestmentRepositoryFlow, RenderShapeSkipRuleDisabled)
+	} else if sankey, reason := investmentRepositoryFlowShape(result, frame); sankey != nil {
+		shapes = append(shapes, *sankey)
+	} else {
+		event.skip(contractsv1.ContextFabricRenderRuleInvestmentRepositoryFlow, reason)
 	}
 
 	// CHAOS-12521: ahead of the trends, because they take whatever room the
@@ -1024,6 +1055,7 @@ var renderShapeRules = []contractsv1.ContextFabricRenderShapeRule{
 	contractsv1.ContextFabricRenderRuleComparisonSideBySide,
 	contractsv1.ContextFabricRenderRuleCompletionForecast,
 	contractsv1.ContextFabricRenderRuleCompletionForecastPercentiles,
+	contractsv1.ContextFabricRenderRuleInvestmentRepositoryFlow,
 }
 
 // Accounted is CHAOS-4621's structural invariant, as code rather than as a
@@ -1096,6 +1128,9 @@ func RenderShapeSkipReasonLineVocabulary() []string {
 		string(RenderShapeSkipSeveralThemeBreakdowns), string(RenderShapeSkipSubjectKindNotCharted),
 		string(RenderShapeSkipThemeRowUnusable), string(RenderShapeSkipFewerThanTwoShares), string(RenderShapeSkipCohortAnswer),
 		string(RenderShapeSkipThemeTableCut),
+		string(RenderShapeSkipNotRepositoryFlowQuestion), string(RenderShapeSkipNoRepositoryFlowTable),
+		string(RenderShapeSkipSeveralRepositoryFlowTables), string(RenderShapeSkipRepositoryCountOutsideBounds),
+		string(RenderShapeSkipRepositoryFlowUnprovable),
 		string(RenderShapeSkipNotExplicitComparison), string(RenderShapeSkipFewerThanTwoSides), string(RenderShapeSkipTooManySides),
 		string(RenderShapeSkipMixedSubjectKinds), string(RenderShapeSkipNoSharedMeasure), string(RenderShapeSkipComparisonUnprovable),
 		string(RenderShapeSkipNotCohortIntent), string(RenderShapeSkipNoRankedMember), string(RenderShapeSkipNoDrivers),

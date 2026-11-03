@@ -17,6 +17,9 @@ type EngineOptions struct {
 	// InvestmentTreemapEnabled turns on the investment_theme_share rule
 	// (CHAOS-12521). See Config.ContextFabricInvestmentTreemapEnabled.
 	InvestmentTreemapEnabled bool
+	// InvestmentSankeyEnabled turns on the investment_repository_flow rule
+	// (CHAOS-12582). See Config.ContextFabricInvestmentSankeyEnabled.
+	InvestmentSankeyEnabled bool
 	// ComparisonTableEnabled turns on the comparison_side_by_side rule
 	// (CHAOS-12513). See Config.ContextFabricComparisonTableEnabled.
 	ComparisonTableEnabled bool
@@ -1490,8 +1493,10 @@ func NewEngine(dependencies EngineDependencies, options EngineOptions) (*Engine,
 			InvestmentThemeShare: options.InvestmentTreemapEnabled,
 			ComparisonSideBySide: options.ComparisonTableEnabled,
 			CompletionForecast:   options.CompletionForecastEnabled,
-			FieldScope:           factFieldScopeLookup(options.FactCapabilities),
-			TableCadence:         declaredCadenceOf(options.FactCapabilities),
+			// CHAOS-12582.
+			InvestmentRepositoryFlow: options.InvestmentSankeyEnabled,
+			FieldScope:               factFieldScopeLookup(options.FactCapabilities),
+			TableCadence:             declaredCadenceOf(options.FactCapabilities),
 		},
 		measureUnitsOf:                              declaredMeasureUnitsOf(options.FactCapabilities),
 		columnWordsOf:                               declaredColumnWordsOf(options.FactCapabilities),

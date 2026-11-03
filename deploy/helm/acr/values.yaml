@@ -313,6 +313,11 @@ contextFabric:
   # CHAOS-12521: serves the investment_theme_share treemap. selected_by is a
   # closed enum, so keep false until web's and ask-dev's pins hold the rule.
   investmentTreemapEnabled: false
+  # CHAOS-12582: serves the investment_repository_flow sankey (one team's effort
+  # from its repositories to the themes). selected_by is a closed enum, so keep
+  # false until web's and ask-dev's pins hold the rule. Its own switch: the
+  # treemap may be on where the sankey's pins are not deployed.
+  investmentSankeyEnabled: false
   # CHAOS-12513: serves the comparison_side_by_side table. selected_by is a
   # closed enum, so keep false until web's and ask-dev's pins hold the rule.
   comparisonTableEnabled: false

@@ -21,6 +21,9 @@ type RenderShapeOptions struct {
 	// See Config.CompletionDistributionEnabled: the rule draws the table that
 	// switch serves, so one switch gates both.
 	CompletionForecast bool
+	// InvestmentRepositoryFlow turns on the investment_repository_flow rule
+	// (CHAOS-12582). See Config.ContextFabricInvestmentSankeyEnabled.
+	InvestmentRepositoryFlow bool
 	// FieldScope reads the declared scope of a field. The comparison rule
 	// reads it. A nil lookup scopes nothing, so that rule finds no cell.
 	FieldScope FactFieldScopeLookup
@@ -40,7 +43,8 @@ type RenderShapeOptions struct {
 // adds. WithoutDisabledRenderShapes covers the other direction at the serving
 // doors. With every switch off this is the table version itself, so a
 // deployment that turns nothing on keeps every stored answer. The longest form
-// is 92 characters, inside the column's 128.
+// is 119 characters at question-family.v6, inside the column's 128
+// (TestTheReuseFamilyVersionNamesTheRenderSwitchesOn).
 func ReuseQuestionFamilyVersion(options RenderShapeOptions) string {
 	var on []string
 	if options.ComparisonSideBySide {
@@ -48,6 +52,9 @@ func ReuseQuestionFamilyVersion(options RenderShapeOptions) string {
 	}
 	if options.CompletionForecast {
 		on = append(on, string(contractsv1.ContextFabricRenderRuleCompletionForecast))
+	}
+	if options.InvestmentRepositoryFlow {
+		on = append(on, string(contractsv1.ContextFabricRenderRuleInvestmentRepositoryFlow))
 	}
 	if options.InvestmentThemeShare {
 		on = append(on, string(contractsv1.ContextFabricRenderRuleInvestmentThemeShare))
@@ -207,7 +214,7 @@ func familyTakesShape(family QuestionFamily, shape InvestigationShape) bool {
 // (Codex #1949 r1): a result stored while it was on keeps its summaries, and
 // the summary is the same widening the shapes are.
 func WithoutDisabledRenderShapes(result InvestigationResult, options RenderShapeOptions) InvestigationResult {
-	if options.InvestmentThemeShare && options.ComparisonSideBySide && options.CompletionForecast {
+	if options.InvestmentThemeShare && options.ComparisonSideBySide && options.CompletionForecast && options.InvestmentRepositoryFlow {
 		return result
 	}
 	if !options.CompletionForecast {
@@ -218,6 +225,10 @@ func WithoutDisabledRenderShapes(result InvestigationResult, options RenderShape
 		switch shape.SelectedBy {
 		case contractsv1.ContextFabricRenderRuleInvestmentThemeShare:
 			if !options.InvestmentThemeShare {
+				continue
+			}
+		case contractsv1.ContextFabricRenderRuleInvestmentRepositoryFlow:
+			if !options.InvestmentRepositoryFlow {
 				continue
 			}
 		case contractsv1.ContextFabricRenderRuleComparisonSideBySide:

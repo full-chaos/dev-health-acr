@@ -1018,6 +1018,16 @@ turning the flag on or off needs no migration and no backfill.
 enum, so a consumer on a pin that does not hold the rule fails every answer that
 carries the shape. Confirm web's and ask-dev's pins first, then set the flag.
 
+**The investment sankey.** `ACR_CONTEXT_FABRIC_INVESTMENT_SANKEY_ENABLED`
+(chart: `contextFabric.investmentSankeyEnabled`, default `false`) turns on the
+`investment_repository_flow` render rule: one team's effort from its
+repositories to the themes, for a question about how a team's effort split
+across its repositories. It is its own switch, apart from the treemap's, and
+follows the same order: confirm web's and ask-dev's pins first, then set it. The
+switch joins the answer-reuse key, so an answer stored while it was off is not
+reused once it is on, and both serving doors strip a stored sankey while it is
+off.
+
 **The comparison table.** `ACR_CONTEXT_FABRIC_COMPARISON_TABLE_ENABLED` (chart:
 `contextFabric.comparisonTableEnabled`, default `false`) turns on the
 `comparison_side_by_side` render rule, with the same order: pins first, then the
