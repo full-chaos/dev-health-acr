@@ -482,6 +482,14 @@ func (e *Engine) synthesizeAndAssemble(ctx context.Context, principal storage.Pr
 		result.Limitations = composed
 		result.LimitationsDisplaced += displaced
 	}
+	// CHAOS-12663 (ruling 2): a term read by case over a same-name twin says
+	// which subject it was read as and names each twin, one sentence per term.
+	// The engine states it, so it stands on no model.
+	if len(resolution.CaseTwinReadingLimitations) > 0 {
+		composed, displaced := appendBoundedLimitations(result.Limitations, resolution.CaseTwinReadingLimitations)
+		result.Limitations = composed
+		result.LimitationsDisplaced += displaced
+	}
 	// CHAOS-12523: an answer about a repository says why a handle the question named
 	// beside it is not in the answer. The engine states it, so it stands on no model.
 	if contractsv1.IsContextFabricCensusAbsenceLimitation(resolution.CensusLimitation) {
