@@ -259,14 +259,16 @@ func withLevelReasons(decl operationDecl, reasons map[string]string) operationDe
 // with ONE subject id (CHAOS-12691): the K14-A shape of investmentDecl, except
 // that batch.filters.scope.level must be the given level (absent is the SDL
 // default ORG and is refused) and batch.filters.scope.ids holds exactly one
-// id of the bound subject kind, checked by the subject gate. ops reads an
-// empty id list as no scope, the whole organization
+// id of the bound subject kind, checked by the subject gate; the breakdown
+// measures add ISSUE_SIZE (scopedMeasures). ops reads an empty id list as no
+// scope, the whole organization
 // ([ops] analytics/filtertranslation.go:47-50, 186-193 at 0b763a85).
 func scopedInvestmentDecl(documentName, level string, subject *dr.SubjectConversion, levelRefusals []dr.ValueRefusal, basis string) operationDecl {
 	decl := investmentDecl(documentName, investmentBreakdownExceptions, nil)
 	decl.Variables = withVariables(decl.Variables, map[string]variableDecl{
-		"batch.filters.scope.level": {AllowedValues: []string{level}, RefusedValues: levelRefusals},
-		"batch.filters.scope.ids":   {MinItems: 1, MaxItems: 1, Subject: subject},
+		"batch.breakdowns[*].measure": enum(scopedMeasures...),
+		"batch.filters.scope.level":   {AllowedValues: []string{level}, RefusedValues: levelRefusals},
+		"batch.filters.scope.ids":     {MinItems: 1, MaxItems: 1, Subject: subject},
 	})
 	decl.Constraints = []dr.Constraint{
 		{Kind: dr.ConstraintRequiresValue, Other: "batch.filters.scope.level", Values: []string{level}, Code: dr.RefusalVariableNotAllowed, Reason: "scope level must be " + level + " on " + documentName + "; an absent level is the SDL default ORG, served by investmentBreakdown"},
@@ -275,6 +277,11 @@ func scopedInvestmentDecl(documentName, level string, subject *dr.SubjectConvers
 	decl.Unrestricted = served(basis)
 	return decl
 }
+
+// scopedMeasures are the breakdown measures of the scoped entries: the shared
+// measures list plus ISSUE_SIZE (lead ruling, CHAOS-12691). The ORG entries
+// keep the shared list; CHURN_LOC is on neither.
+var scopedMeasures = append(slices.Clone(measures), "ISSUE_SIZE")
 
 // scopeServiceRefusal is the SERVICE level refusal every investment entry
 // shares.
