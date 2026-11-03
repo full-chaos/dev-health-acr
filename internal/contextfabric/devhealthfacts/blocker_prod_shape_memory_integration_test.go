@@ -2,8 +2,10 @@ package devhealthfacts_test
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"reflect"
+	"sort"
 	"strconv"
 	"strings"
 	"testing"
@@ -398,7 +400,7 @@ func TestTeamBlockerStatementsOnTheProductionShapeOnRealClickHouse(t *testing.T)
 	}
 	for index := range inStatementProjects.Facts {
 		if !reflect.DeepEqual(inStatementProjects.Facts[index].Fields, restrictedProjectsResult.Facts[index].Fields) {
-			t.Errorf("restricted projects, authorization read once vs inside each statement: fact %d differs: %+v vs %+v", index, restrictedProjectsResult.Facts[index].Fields, inStatementProjects.Facts[index].Fields)
+			t.Errorf("restricted projects, authorization read once vs inside each statement: fact %d (%s) differs: %s", index, restrictedProjectsResult.Facts[index].Subject.CanonicalID, blockerFieldDiff(restrictedProjectsResult.Facts[index].Fields, inStatementProjects.Facts[index].Fields))
 		}
 	}
 	for _, pair := range []struct {
@@ -412,7 +414,7 @@ func TestTeamBlockerStatementsOnTheProductionShapeOnRealClickHouse(t *testing.T)
 			for _, name := range []string{"blocked_work_items_current", "blocker_dependencies_current", "blocker_dependencies_excluded_by_status_current", "blocker_dependencies_writer_unresolved_current", "project_blocked_work_items_current", "oldest_blocked_age_days"} {
 				a, b := pair.got.Facts[index].Fields[name], pair.want.Facts[index].Fields[name]
 				if (a.Integer == nil) != (b.Integer == nil) || (a.Integer != nil && *a.Integer != *b.Integer) {
-					t.Errorf("%s: team fact %d field %s differs: %+v vs %+v", pair.label, index, name, a, b)
+					t.Errorf("%s: team fact %d field %s differs: %s vs %s", pair.label, index, name, blockerFactValue(a, true), blockerFactValue(b, true))
 				}
 			}
 		}
@@ -450,7 +452,9 @@ func TestTeamBlockerStatementsOnTheProductionShapeOnRealClickHouse(t *testing.T)
 			}
 			for index := range got.Facts {
 				if !reflect.DeepEqual(got.Facts[index].Fields, caller.want.Facts[index].Fields) {
-					t.Errorf("block size %d, %s: fact %d differs from the default block size: %+v vs %+v", rows, caller.label, index, got.Facts[index].Fields, caller.want.Facts[index].Fields)
+					// CHAOS-12689: name the subject and each field that moved, by
+					// value; a pointer says nothing about which value differs.
+					t.Errorf("block size %d, %s: fact %d (%s %s) differs from the default block size: %s", rows, caller.label, index, got.Facts[index].Subject.Kind, got.Facts[index].Subject.CanonicalID, blockerFieldDiff(got.Facts[index].Fields, caller.want.Facts[index].Fields))
 				}
 			}
 		}
@@ -762,4 +766,44 @@ func TestOrganizationWideAuthorizationEqualsTheLibraryRelationOnRealClickHouse(t
 	if equal(ids(restricted, nil, "fast"), ids(restricted, nil, "library")) {
 		t.Fatal("the organization-wide shape forced on a restricted scope authorizes the same work items as the library: the differential cannot tell a wrongly fired fast path")
 	}
+}
+
+// blockerFieldDiff renders, by value, every field that differs between two
+// facts' fields (got, then want), sorted by name (CHAOS-12689).
+func blockerFieldDiff(got, want map[string]contextfabric.FactValue) string {
+	names := map[string]bool{}
+	for name := range got {
+		names[name] = true
+	}
+	for name := range want {
+		names[name] = true
+	}
+	sorted := make([]string, 0, len(names))
+	for name := range names {
+		sorted = append(sorted, name)
+	}
+	sort.Strings(sorted)
+	var out []string
+	for _, name := range sorted {
+		a, aok := got[name]
+		b, bok := want[name]
+		if aok == bok && reflect.DeepEqual(a, b) {
+			continue
+		}
+		out = append(out, fmt.Sprintf("%s: got %s, want %s", name, blockerFactValue(a, aok), blockerFactValue(b, bok)))
+	}
+	return strings.Join(out, "; ")
+}
+
+// blockerFactValue renders one field by value (JSON dereferences the
+// pointers, rows included), or "absent".
+func blockerFactValue(value contextfabric.FactValue, present bool) string {
+	if !present {
+		return "absent"
+	}
+	encoded, err := json.Marshal(value)
+	if err != nil {
+		return "unencodable: " + err.Error()
+	}
+	return string(encoded)
 }
