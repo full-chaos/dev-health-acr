@@ -141,7 +141,8 @@
               "properties": {
                 "enabled": { "type": "boolean" },
                 "size": { "type": "string" },
-                "storageClassName": { "type": "string" }
+                "storageClassName": { "type": "string" },
+                "appendOnly": { "type": "boolean" }
               }
             },
             "podAnnotations": { "type": "object", "additionalProperties": true },

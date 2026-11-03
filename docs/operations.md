@@ -988,6 +988,55 @@ before its limit: one read of the largest node went past it.
 Raising `limits.memory` needs no rebuild, because FalkorDB reloads the graph from
 its dump. Re-measure after the graph grows, or when `THREAD_COUNT` changes.
 
+### FalkorDB durability: the append-only file (CHAOS-12650)
+
+The in-release FalkorDB persists by RDB snapshots by default (`save 3600 1 300
+100 60 10000`). A non-graceful restart (an OOM kill, a SIGKILL, a node loss)
+reloads the last snapshot. Every write since that snapshot is lost, while the
+projector's checkpoint in Postgres has moved past it. The projector then resumes
+past writes the graph no longer holds. CHAOS-12630 makes the projector resume
+from the graph's own watermark, so a loss heals; the append-only file (AOF) makes
+the loss rare. On a scratch FalkorDB of the chart's image, a SIGKILL 1.5 s after
+the last write kept 1,000 of 1,050 nodes with RDB only, and 1,050 of 1,050 with
+AOF `everysec`.
+
+Turn it on with `contextFabric.falkordb.persistence.appendOnly: true`. It is off
+by default, and a release with it off renders exactly as before.
+
+- **Why the chart starts FalkorDB through a wrapper.** Redis loads the AOF instead
+  of `dump.rdb` when `appendonly` is on at startup. On a data dir that holds only
+  `dump.rdb` it starts **empty** and writes an empty AOF base (executed: 1,000
+  nodes, then 0). A plain `REDIS_ARGS="--appendonly yes"` on an existing graph
+  therefore wipes it, and the projector's divergence check (CHAOS-3882) then
+  rebuilds the graph from zero. The wrapper (`files/falkordb-start.sh`) turns AOF
+  on at startup only when an AOF manifest exists, or when there is no dump. Over
+  a `dump.rdb` alone it starts with AOF off. The `postStart` hook
+  (`files/falkordb-aof-on.sh`) then waits for the load, runs `CONFIG SET
+  appendonly yes`, and waits until Redis has written the AOF base from memory.
+  The next start loads the AOF.
+- **Read it back.** The container log shows one of the lines `acr-falkordb:
+  starting with AOF on`, or `acr-falkordb: dump.rdb and no AOF manifest …`
+  followed by `acr-falkordb-aof: AOF base written; AOF is on`. Any failure logs
+  `acr-falkordb-aof: FAILED: …`, and the kubelet reports `FailedPostStartHook`
+  and restarts the container. With no manifest, the restart starts from
+  `dump.rdb` again and the hook runs again. Check `redis-cli CONFIG GET
+  appendonly` (yes) and `INFO persistence` (`aof_enabled:1`,
+  `aof_last_bgrewrite_status:ok`).
+- **Disk.** The AOF base is about the size of `dump.rdb`, and a rewrite holds a
+  second base for a moment beside the incremental file and `dump.rdb`. Size the
+  volume for about three dumps. A `volumeClaimTemplates` size cannot change on an
+  existing StatefulSet, so resize the PersistentVolumeClaim itself where the
+  storage class allows it.
+- **Memory.** A snapshot or rewrite forks; the copy-on-write cost is what the
+  graph writes while the fork runs (`rdb_last_cow_size`, `aof_last_cow_size` in
+  `INFO persistence`). Keep it inside the memory limit's headroom above the
+  sizing rule.
+- **Turning it off.** Run `redis-cli SAVE` first, so `dump.rdb` holds every
+  write, then roll with `appendOnly: false`. The pod starts from `dump.rdb`. Then
+  delete `appendonlydir` from the data volume before AOF is ever turned on again:
+  the wrapper takes an existing manifest as current, and an old AOF would bring
+  back the graph as it was when AOF was turned off.
+
 ### Vocabulary labels on an answer (CHAOS-12416)
 
 `ACR_CONTEXT_FABRIC_VOCABULARY_LABELS_ENABLED` (helm
