@@ -13316,14 +13316,16 @@ func (f MCPHTTPRequestFields) SlogArgs() []any {
 // MCPHTTPServingFields is mcp.http_serving's generated typed construction interface
 // (CHAOS-5516): one Go field per Field MCPHTTPServing.Fields declares in spec.go.
 type MCPHTTPServingFields struct {
-	ListenAddress     string
-	Transport         string
-	BasePath          string
-	McpHop            bool
-	ServerVersion     string
-	ServerCommit      string
-	ProtocolRevisions []string
-	MaxBodyBytes      int
+	ListenAddress          string
+	Transport              string
+	BasePath               string
+	McpHop                 bool
+	ServerVersion          string
+	ServerCommit           string
+	ProtocolRevisions      []string
+	MaxBodyBytes           int
+	TrustedProxyNetworks   int
+	TrustedProxyExclusions int
 	// constructed (CHAOS-5516 r1 fix): an UNEXPORTED marker, generated on
 	// every MCPHTTPServingFields uniformly, set ONLY by NewMCPHTTPServingFields below. A caller
 	// outside this package cannot set an unexported field via a composite
@@ -13337,21 +13339,23 @@ type MCPHTTPServingFields struct {
 
 // NewMCPHTTPServingFields is the generated constructor for MCPHTTPServingFields -- every
 // field MCPHTTPServing.Fields declares is a required parameter.
-func NewMCPHTTPServingFields(listenAddress string, transport string, basePath string, mcpHop bool, serverVersion string, serverCommit string, protocolRevisions []string, maxBodyBytes int) MCPHTTPServingFields {
+func NewMCPHTTPServingFields(listenAddress string, transport string, basePath string, mcpHop bool, serverVersion string, serverCommit string, protocolRevisions []string, maxBodyBytes int, trustedProxyNetworks int, trustedProxyExclusions int) MCPHTTPServingFields {
 	valid := true
 	if protocolRevisions == nil {
 		valid = false
 	}
 	return MCPHTTPServingFields{
-		ListenAddress:     listenAddress,
-		Transport:         transport,
-		BasePath:          basePath,
-		McpHop:            mcpHop,
-		ServerVersion:     serverVersion,
-		ServerCommit:      serverCommit,
-		ProtocolRevisions: protocolRevisions,
-		MaxBodyBytes:      maxBodyBytes,
-		constructed:       valid,
+		ListenAddress:          listenAddress,
+		Transport:              transport,
+		BasePath:               basePath,
+		McpHop:                 mcpHop,
+		ServerVersion:          serverVersion,
+		ServerCommit:           serverCommit,
+		ProtocolRevisions:      protocolRevisions,
+		MaxBodyBytes:           maxBodyBytes,
+		TrustedProxyNetworks:   trustedProxyNetworks,
+		TrustedProxyExclusions: trustedProxyExclusions,
+		constructed:            valid,
 	}
 }
 
@@ -13376,6 +13380,8 @@ func (f MCPHTTPServingFields) SlogArgs() []any {
 		"server_commit", contextfabric.SanitizeLogAttr(f.ServerCommit),
 		"protocol_revisions", contextfabric.SanitizeLogStrings(f.ProtocolRevisions),
 		"max_body_bytes", f.MaxBodyBytes,
+		"trusted_proxy_networks", f.TrustedProxyNetworks,
+		"trusted_proxy_exclusions", f.TrustedProxyExclusions,
 	}
 }
 

@@ -250,6 +250,10 @@ var MCPHTTPServing = Event{
 		{Key: "server_commit", Type: FieldString, Presence: PresenceRequired},
 		{Key: "protocol_revisions", Type: FieldStringSlice, Presence: PresenceRequired, ClosedVocabulary: MCPHTTPProtocolRevisionVocabulary()},
 		{Key: "max_body_bytes", Type: FieldInt, Presence: PresenceRequired},
+		// CHAOS-11734: the edge gate's trusted-proxy list, as counts (never
+		// the addresses): networks, and "!<address>" exclusions.
+		{Key: "trusted_proxy_networks", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "trusted_proxy_exclusions", Type: FieldInt, Presence: PresenceRequired},
 	},
 }
 

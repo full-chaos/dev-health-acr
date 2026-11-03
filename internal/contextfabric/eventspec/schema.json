@@ -18927,6 +18927,16 @@
         "key": "max_body_bytes",
         "type": "int",
         "presence": "required"
+      },
+      {
+        "key": "trusted_proxy_networks",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "trusted_proxy_exclusions",
+        "type": "int",
+        "presence": "required"
       }
     ]
   },
