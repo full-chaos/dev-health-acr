@@ -399,32 +399,42 @@ func (p *InvestmentProvider) resolveMembershipScopeRun(ctx context.Context, orgI
 		}
 		return ids, nil
 	})
-	var loaded any
-	select {
-	case <-ctx.Done():
-		return membershipScope{}, "", ctx.Err()
-	case res := <-result:
-		if res.Err != nil {
-			// The scope ids are an optimization of the scope subqueries: a load
-			// that failed on its own (its timeout, a server error) degrades to
-			// them, so the read costs more but still answers. A caller that is
-			// itself cancelled is not degraded.
-			if err := ctx.Err(); err != nil {
-				return membershipScope{}, "", err
-			}
-			reason := "load_failed"
-			if errors.Is(res.Err, context.DeadlineExceeded) {
-				reason = "load_timeout"
-			}
-			slog.WarnContext(ctx, "devhealthfacts.membership_scope_fallback", "reason", contextfabric.SanitizeLogAttr(reason), "path", contextfabric.SanitizeLogAttr("scope_subqueries"), "elapsed_ms", clock().Sub(started).Milliseconds(), "load_timeout_ms", loadTimeout.Milliseconds())
-			projectMixEvent(ctx, membershipScopeFallbackReader, res.Err)
-			return subqueryMembershipScope, runID, nil
-		}
-		loaded = res.Val
+	res, err := awaitScopeLoad(ctx, result)
+	if err != nil {
+		return membershipScope{}, "", err
 	}
-	ids, _ := loaded.([]string)
+	if res.Err != nil {
+		// The scope ids are an optimization of the scope subqueries: a load
+		// that failed on its own (its timeout, a server error) degrades to
+		// them, so the read costs more but still answers.
+		reason := "load_failed"
+		if errors.Is(res.Err, context.DeadlineExceeded) {
+			reason = "load_timeout"
+		}
+		slog.WarnContext(ctx, "devhealthfacts.membership_scope_fallback", "reason", contextfabric.SanitizeLogAttr(reason), "path", contextfabric.SanitizeLogAttr("scope_subqueries"), "elapsed_ms", clock().Sub(started).Milliseconds(), "load_timeout_ms", loadTimeout.Milliseconds())
+		projectMixEvent(ctx, membershipScopeFallbackReader, res.Err)
+		return subqueryMembershipScope, runID, nil
+	}
+	ids, _ := res.Val.([]string)
 	if ids == nil {
 		return subqueryMembershipScope, runID, nil
 	}
 	return membershipScope{mode: membershipScopeIDs, ids: ids}, runID, nil
+}
+
+// awaitScopeLoad waits for the shared scope load or for the caller's end. A
+// caller whose context is done gets its own error, never the load's result: a
+// load done at the moment the caller is cancelled makes both cases of the
+// select ready, and select then picks one at random (CHAOS-12611), so the
+// context is checked again after the result arrives.
+func awaitScopeLoad(ctx context.Context, result <-chan singleflight.Result) (singleflight.Result, error) {
+	select {
+	case <-ctx.Done():
+		return singleflight.Result{}, ctx.Err()
+	case res := <-result:
+		if err := ctx.Err(); err != nil {
+			return singleflight.Result{}, err
+		}
+		return res, nil
+	}
 }
