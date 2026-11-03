@@ -104,6 +104,11 @@ func TestEveryDeclaredUntrustedStringIsMarkedInTheRendering(t *testing.T) {
 		// render_shapes labels above do, so that a future markdown rendering
 		// of the group axis cannot ship the label unmarked.
 		"structured.cohort.groups[].subject.label": "not rendered by this plain-text markdown view; the group axis is a structural layout Ask Dev reads off Structured, and every member still appears in the flat member list",
+		// CHAOS-12608: the forecast summary is the cited source of a forecast
+		// shape's points. This view draws no shape and renders no summary;
+		// the claim's own value still renders. The declaration STAYS, as the
+		// render_shapes labels above do.
+		"structured.key_facts[].completion_forecast.work_scope_id": "not rendered by this plain-text markdown view; Ask Dev reads the forecast summary off Structured and draws the forecast shape",
 		// CHAOS-4690: display labels and structured coverage details are
 		// Ask Dev's rendering surface (it reads Structured directly and
 		// renders phrasing ▸ label with raw behind a Details fold). This
@@ -504,6 +509,14 @@ func baseProjection() contractsv1.ContextFabricAnswerProjection {
 				Measures:     []string{"backlog_size"},
 				Observations: []string{"insufficient_history"},
 				MeasureUnits: []contractsv1.ContextFabricMeasureUnitDeclaration{{Measure: "backlog_size", Unit: contractsv1.ContextFabricMeasureUnitCount}},
+			},
+			// CHAOS-12608: the forecast summary, non-nil for the identical
+			// reason Table is: a nil pointer leaves the declared
+			// "key_facts[].completion_forecast.work_scope_id" unplantable.
+			CompletionForecast: &contractsv1.ContextFabricClaimedCompletionForecast{
+				WorkScopeID: "scope_injection",
+				State:       contractsv1.ContextFabricCompletionDistributionAvailable,
+				ComputedAt:  "2026-08-13T12:00:00Z",
 			},
 		}},
 		// CHAOS-4415: a non-empty render shape so the reflection walk below

@@ -2128,6 +2128,24 @@ var WindowCanonicalizationOutcome = Event{
 	},
 }
 
+// PlanOperandReads is the Info line of what a comparison turn's operand read rows added to the plan (CHAOS-12596).
+var PlanOperandReads = Event{
+	ID:                       "contextfabric.plan_operand_reads",
+	Msg:                      "context fabric plan operand reads",
+	Level:                    LevelInfo,
+	Multiplicity:             MultiplicityZeroOrOnePerRequest,
+	RequiredOnlyConstruction: true,
+	Attribution:              []string{"request_id"},
+	BoundedAggregation:       "at most one line per investigation: recorded once, when the plan is built and the turn has an operand read row.",
+	Fields: []Field{
+		{Key: "org_id", Type: FieldString, Presence: PresenceRequired},
+		{Key: "operand_rows", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "kinds_named", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "kinds_added", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "request_id", Type: FieldString, Presence: PresenceConditional, Applicability: requestIDApplicability},
+	},
+}
+
 // WindowClassification is the Info line of the window-class decision a current-axis turn with no request window draws its default from (CHAOS-12595).
 var WindowClassification = Event{
 	ID:                       "contextfabric.window_classification",
@@ -2515,6 +2533,25 @@ var ProjectedRowsByFactKind = Event{
 		{Key: "org_id", Type: FieldString, Presence: PresenceRequired},
 		{Key: "fact_kind", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: contextfabric.ProjectedRowsFactKindLogVocabulary()},
 		{Key: "rows_projected_by_fact_kind", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "request_id", Type: FieldString, Presence: PresenceConditional, Applicability: requestIDApplicability},
+	},
+}
+
+// DetailTablesAttached is the Info line of the declared detail tables a synthesis attached to its claims, by name (CHAOS-12587). It is written only when a claim carries one.
+var DetailTablesAttached = Event{
+	ID:                       "contextfabric.detail_tables_attached",
+	Msg:                      "context fabric detail tables attached",
+	Level:                    LevelInfo,
+	Multiplicity:             MultiplicityZeroOrManyPerRequest,
+	MaxLinesPerScope:         2,
+	RequiredOnlyConstruction: true,
+	Attribution:              []string{"request_id"},
+	BoundedAggregation:       "at most one line per synthesis call that attached a detail table; a request makes at most two synthesis calls (the first and one retry).",
+	Fields: []Field{
+		{Key: "org_id", Type: FieldString, Presence: PresenceRequired},
+		{Key: "detail_table_claims", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "detail_tables", Type: FieldStringSlice, Presence: PresenceRequired, MaxItems: contextfabric.MaxLoggedDetailTables},
+		{Key: "detail_tables_omitted", Type: FieldInt, Presence: PresenceRequired},
 		{Key: "request_id", Type: FieldString, Presence: PresenceConditional, Applicability: requestIDApplicability},
 	},
 }
@@ -5882,6 +5919,7 @@ var All = []Event{
 	StatedWindowAxisDecision,
 	WindowGatedForConfirmation,
 	WindowCanonicalizationOutcome,
+	PlanOperandReads,
 	WindowClassification,
 	InferredWindowGate,
 	InterpretationTerms,
@@ -5905,6 +5943,7 @@ var All = []Event{
 	ProjectedRowsCount,
 	ProjectedRowsByFactKind,
 	DualTableFacts,
+	DetailTablesAttached,
 	ModelRowsStripped,
 	DriverSourceStateCorrected,
 	ServiceLimitationLookalikesDropped,
@@ -6303,7 +6342,7 @@ var MCPHostedContextScope = Event{
 }
 
 // GraphCountCheckFinished is the Info line for one finished graph count
-// check of one organization: its outcome (completed, cancelled by the check timeout or shutdown, or failed with at least one count read error or one measurement it could not make), how many sources and kinds it compared, how many
+// check of one organization: its outcome (completed, cancelled by the check timeout or shutdown, failed with at least one count read error or one measurement it could not make, or unknown when a source's owned node counts cannot be compared yet), how many sources and kinds it compared, how many sources it could not compare, how many
 // confirmed graph_below_source gaps it found, how many edge populations it compared, how many confirmed graph_edges_below_source gaps it found, how many relation types are not measured yet, and how many count reads failed.
 // The Warn lines the check emits for a gap or a failed read stay as they are;
 // this line is what makes a check that ran and found nothing observable.
@@ -6323,10 +6362,19 @@ var GraphCountCheckFinished = Event{
 		// each interval's check is a distinct pass, so recurring checks of one
 		// organization are told apart and a duplicate sequence is a defect.
 		{Key: "pass", Type: FieldInt, Presence: PresenceRequired},
-		{Key: "outcome", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: []string{"completed", "cancelled", "failed"}},
+		// outcome "unknown" (CHAOS-12649): every read succeeded, and at least one
+		// source's owned node counts could not be compared, because no walk from
+		// zero has marked its owned nodes yet; sources_unknown counts them.
+		{Key: "outcome", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: []string{"completed", "cancelled", "failed", "unknown"}},
 		{Key: "sources_checked", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "sources_unknown", Type: FieldInt, Presence: PresenceRequired},
 		{Key: "kinds_compared", Type: FieldInt, Presence: PresenceRequired},
 		{Key: "gap_count", Type: FieldInt, Presence: PresenceRequired},
+		// days_compared (CHAOS-12649) is the number of (kind, UTC day of the rows'
+		// sync stamp) buckets whose source and graph counts were both read;
+		// day_gap_count the confirmed graph_below_source_on_day gaps among them.
+		{Key: "days_compared", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "day_gap_count", Type: FieldInt, Presence: PresenceRequired},
 		// relations_compared is the number of edge populations (relation type
 		// and arm) whose source and graph edge counts were both read;
 		// edge_gap_count the confirmed graph_edges_below_source gaps among

@@ -401,6 +401,9 @@ var questionFamilyDefinitions = []QuestionFamilyDefinition{
 		RenderKinds: []contractsv1.ContextFabricRenderKind{
 			contractsv1.ContextFabricRenderKindTable,
 			contractsv1.ContextFabricRenderKindSeries,
+			// CHAOS-12608: one team's completion curve, drawn only on
+			// positive evidence (completionForecastShape).
+			contractsv1.ContextFabricRenderKindForecast,
 		},
 		Budget:           PlanBudgetSingleSubject,
 		CompatibleShapes: []InvestigationShape{ShapeSingleSubject},
@@ -629,7 +632,6 @@ func DeclaredUnproducedRenderKinds() []contractsv1.ContextFabricRenderKind {
 		contractsv1.ContextFabricRenderKindSunburst,
 		contractsv1.ContextFabricRenderKindSankey,
 		contractsv1.ContextFabricRenderKindBurndown,
-		contractsv1.ContextFabricRenderKindForecast,
 	}
 }
 
@@ -694,7 +696,12 @@ func LookupQuestionFamily(family QuestionFamily) (QuestionFamilyDefinition, bool
 // investment_allocation (CHAOS-12492), and that family's axes, ask order and
 // render kinds changed. Stored answers planned as subject_investigation for
 // these questions must not be replayed as the v5 plan.
-const QuestionFamilyTableVersion = "question-family.v5"
+//
+// v5 -> v6: an organization question whose goal set is exactly
+// {allocate_investment} is served investment_allocation (CHAOS-12585), where it
+// was a discovered_cohort_ranking. The reuse lookup runs before interpretation,
+// so stored answers planned under v5 for these questions must not be replayed.
+const QuestionFamilyTableVersion = "question-family.v6"
 
 func allStructureNeedKinds() []StructureNeedKind {
 	wire := contractsv1.ContextFabricStructureNeedKindVocabulary()

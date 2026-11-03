@@ -3,6 +3,7 @@ package contextfabric
 import (
 	"reflect"
 	"slices"
+	"strings"
 
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 )
@@ -16,6 +17,10 @@ type RenderShapeOptions struct {
 	// ComparisonSideBySide turns on the comparison_side_by_side rule
 	// (CHAOS-12513). See Config.ContextFabricComparisonTableEnabled.
 	ComparisonSideBySide bool
+	// CompletionForecast turns on the completion_forecast rule (CHAOS-12608).
+	// See Config.CompletionDistributionEnabled: the rule draws the table that
+	// switch serves, so one switch gates both.
+	CompletionForecast bool
 	// FieldScope reads the declared scope of a field. The comparison rule
 	// reads it. A nil lookup scopes nothing, so that rule finds no cell.
 	FieldScope FactFieldScopeLookup
@@ -25,6 +30,34 @@ type RenderShapeOptions struct {
 	TableCadence FactTableCadenceLookup
 }
 
+// ReuseQuestionFamilyVersion (Codex #1949 r2) is the question family
+// dimension a deployment keys stored answers by (ReuseKey.QuestionFamilyVersion):
+// the family table's version, and every render switch that is on. Reuse serves
+// a stored answer without running selection again, and a switch decides which
+// shapes an answer is assembled with and, for the completion forecast, the
+// summary its team workload claims carry. So an answer stored while a switch
+// was off must not be served once it is on: it would lack what the switch
+// adds. WithoutDisabledRenderShapes covers the other direction at the serving
+// doors. With every switch off this is the table version itself, so a
+// deployment that turns nothing on keeps every stored answer. The longest form
+// is 92 characters, inside the column's 128.
+func ReuseQuestionFamilyVersion(options RenderShapeOptions) string {
+	var on []string
+	if options.ComparisonSideBySide {
+		on = append(on, string(contractsv1.ContextFabricRenderRuleComparisonSideBySide))
+	}
+	if options.CompletionForecast {
+		on = append(on, string(contractsv1.ContextFabricRenderRuleCompletionForecast))
+	}
+	if options.InvestmentThemeShare {
+		on = append(on, string(contractsv1.ContextFabricRenderRuleInvestmentThemeShare))
+	}
+	if len(on) == 0 {
+		return QuestionFamilyTableVersion
+	}
+	return QuestionFamilyTableVersion + "+render:" + strings.Join(on, ",")
+}
+
 // The words of the treemap (CHAOS-12521). They are served, never derived from a
 // model, and agreed with the seam that draws them.
 const (
@@ -32,6 +65,10 @@ const (
 	themeShareAxisLabel   = "Theme"
 	themeShareValueLabel  = "Share of effort (ratio)"
 	themeShareSeriesLabel = "Share of effort"
+	// An organization's shares are of the effort that reaches a repository. The
+	// rest is the fact's unattributed_effort_share, outside the mix, so the
+	// words say which effort the parts divide (CHAOS-12585).
+	themeShareOrganizationValueLabel = "Share of effort linked to a repository (ratio)"
 )
 
 // investmentThemeShareShape is the part of a whole of one subject's investment.
@@ -41,10 +78,11 @@ const (
 // rows are the parts. There is no geometry to infer, and no fallback: a question
 // this rule does not fire for gets no treemap (check 10).
 //
-// Exactly one breakdown, on a repository or a team. Each claim on a fact carries
-// that fact's rows, so several claims on one fact are one breakdown (CHAOS-12591),
-// and the chart cites the first of them. A second breakdown is a comparison, and
-// an organization frame does not reach this family. The subject check is an allow
+// Exactly one breakdown, on a repository, a team or the organization. Each claim
+// on a fact carries that fact's rows, so several claims on one fact are one
+// breakdown (CHAOS-12591), and the chart cites the first of them. A second
+// breakdown is a comparison. An organization frame reaches this family through
+// RouteFrameFamily (CHAOS-12585). The subject check is an allow
 // list, so a person never gets this chart: the vocabulary has no such kind today,
 // and a kind added later stays out until someone decides otherwise. Every row is a
 // point, so a measured zero stays a part of the whole.
@@ -84,7 +122,7 @@ func investmentThemeShareShape(result InvestigationResult, frame *QuestionFrame)
 		return nil, RenderShapeSkipNoThemeBreakdown
 	}
 	switch fact.Subject.Kind {
-	case contractsv1.ContextFabricSubjectRepository, contractsv1.ContextFabricSubjectTeam:
+	case contractsv1.ContextFabricSubjectRepository, contractsv1.ContextFabricSubjectTeam, contractsv1.ContextFabricSubjectOrganization:
 	default:
 		return nil, RenderShapeSkipSubjectKindNotCharted
 	}
@@ -129,7 +167,7 @@ func investmentThemeShareShape(result InvestigationResult, frame *QuestionFrame)
 		Title:      themeShareTitle,
 		AxisKind:   contractsv1.ContextFabricRenderAxisCategory,
 		AxisLabel:  themeShareAxisLabel,
-		ValueLabel: themeShareValueLabel,
+		ValueLabel: themeShareValueLabelFor(fact.Subject.Kind),
 		ValueUnit:  contractsv1.ContextFabricRenderValueUnitRatio,
 		Series: []contractsv1.ContextFabricRenderSeries{{
 			Key:    contractsv1.ContextFabricRenderThemeShareField,
@@ -164,9 +202,16 @@ func familyTakesShape(family QuestionFamily, shape InvestigationShape) bool {
 // off. A flag that only gated selection would leave every answer stored while it
 // was on still serving the shape, on a by-id read and on a reuse hit, to the very
 // consumer the flag protects. The stored row is not touched.
+//
+// The completion forecast switch also gates the forecast summary on a claim
+// (Codex #1949 r1): a result stored while it was on keeps its summaries, and
+// the summary is the same widening the shapes are.
 func WithoutDisabledRenderShapes(result InvestigationResult, options RenderShapeOptions) InvestigationResult {
-	if options.InvestmentThemeShare && options.ComparisonSideBySide {
+	if options.InvestmentThemeShare && options.ComparisonSideBySide && options.CompletionForecast {
 		return result
+	}
+	if !options.CompletionForecast {
+		result.ClaimedFacts = withoutCompletionForecasts(result.ClaimedFacts)
 	}
 	var kept []contractsv1.ContextFabricRenderShape
 	for _, shape := range result.RenderShapes {
@@ -179,11 +224,36 @@ func WithoutDisabledRenderShapes(result InvestigationResult, options RenderShape
 			if !options.ComparisonSideBySide {
 				continue
 			}
+		case contractsv1.ContextFabricRenderRuleCompletionForecast, contractsv1.ContextFabricRenderRuleCompletionForecastPercentiles:
+			if !options.CompletionForecast {
+				continue
+			}
 		}
 		kept = append(kept, shape)
 	}
 	result.RenderShapes = kept
 	return result
+}
+
+// withoutCompletionForecasts is claims with no forecast summary, on a copy when
+// any claim carries one: the stored row is not touched.
+func withoutCompletionForecasts(claims []ClaimedFact) []ClaimedFact {
+	if !slices.ContainsFunc(claims, func(claim ClaimedFact) bool { return claim.CompletionForecast != nil }) {
+		return claims
+	}
+	stripped := slices.Clone(claims)
+	for index := range stripped {
+		stripped[index].CompletionForecast = nil
+	}
+	return stripped
+}
+
+// themeShareValueLabelFor names what the shares divide for the subject's kind.
+func themeShareValueLabelFor(kind contractsv1.ContextFabricSubjectKind) string {
+	if kind == contractsv1.ContextFabricSubjectOrganization {
+		return themeShareOrganizationValueLabel
+	}
+	return themeShareValueLabel
 }
 
 // sameThemeBreakdown reports that two claims carry one breakdown: one subject,

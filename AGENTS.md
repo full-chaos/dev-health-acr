@@ -182,9 +182,12 @@ to `main`, split across parallel jobs (`mirror-preflight`, `scripts`, `lint`, `d
 `race-devhealthfacts`, `race-devhealthsource` and `race-factoracle`, `build`, `contracts`, and three
 container jobs) behind a single required `verify` gate job that merges the unit shards' coverage and
 JUnit reports and checks every other job succeeded.
-`devhealthfacts` and `devhealthsource` each race in two jobs, `-heavy` and the rest, split by test
-name through `scripts/ci/race-split.sh` (the heavy lists live beside it; the `rest` half skips them,
-so a new test cannot drop out). On a pull request the `plan` job runs
+`devhealthfacts` and `devhealthsource` each race in four jobs (the rest, `-heavy`, `-mid` and
+`-fourth`), split by test name through `scripts/ci/race-split.sh` (the lists live beside it; the
+rest job skips every listed name, so a new test cannot drop out). For `devhealthsource` every test
+must also be named in one race list (`devhealthsource-race-rest-tests.txt` for the rest job,
+CHAOS-12667): a new test fails `race-split.sh verify` until its author places it, by its real span,
+which each race job's budget guard prints beside main's. On a pull request the `plan` job runs
 `scripts/ci/reached-shards.sh`: a `unit`/`race*` shard runs only when its `test-shard.sh` package
 list holds a package the change reaches (its test binary imports a changed package, its tests walk
 the module tree, or its test source names a changed file). Pushes to `main`, any other event, and a
