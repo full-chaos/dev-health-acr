@@ -4,7 +4,10 @@
 // they cannot import it) agree on one grammar.
 package reposlug
 
-import "regexp"
+import (
+	"regexp"
+	"strings"
+)
 
 // NamePattern is the grammar of a repository name as one RE2 group, with no
 // anchor, so a ClickHouse statement can apply the rule ValidName applies. It
@@ -44,4 +47,32 @@ func Fault(part string, owner bool) string {
 	default:
 		return "must start with a letter or digit (a leading '.' is allowed for a repository name), end with a letter or digit, and contain only letters, digits, '.', '_' and '-'"
 	}
+}
+
+// MaxSlugSegments and MaxSlugBytes bound a whole repository key: a GitLab path
+// nests 20 groups deep and holds 255 characters.
+const (
+	MaxSlugSegments = 20
+	MaxSlugBytes    = 255
+)
+
+// SlugPattern is the grammar of a whole repository key as one RE2 group.
+const SlugPattern = `[^/]+/` + NamePattern
+
+// ValidSlug reports whether a lower-cased repository key is valid.
+func ValidSlug(slug string) bool {
+	parts := strings.Split(slug, "/")
+	return len(parts) == 2 && ValidOwner(parts[0]) && ValidName(parts[1])
+}
+
+// ValidScope reports whether a lower-cased repository scope is valid: "*",
+// "<owner>/*", or a repository key.
+func ValidScope(scope string) bool {
+	if scope == "*" {
+		return true
+	}
+	if owner, ok := strings.CutSuffix(scope, "/*"); ok {
+		return ValidOwner(owner)
+	}
+	return ValidSlug(scope)
 }

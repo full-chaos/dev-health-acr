@@ -105,7 +105,7 @@ func TestAGrantOwnerWildcardIsApplied(t *testing.T) {
 	if err != nil || !outcome.GrantApplied {
 		t.Fatalf("census = %+v %v, want the grant applied", outcome, err)
 	}
-	shape := "startsWith(lower(trimBoth(repo)), {census_grant_0:String}) AND match(lower(trimBoth(repo)), '^[^/]+/" + reposlug.NamePattern + "$')"
+	shape := "startsWith(lower(trimBoth(repo)), {census_grant_0:String}) AND length(trimBoth(repo)) <= 255 AND match(lower(trimBoth(repo)), '^" + reposlug.SlugPattern + "$')"
 	if !strings.Contains(client.calls[0], shape) || bindingValues(client.bindings[0])["census_grant_0"] != "acme/" {
 		t.Fatalf("statement = %q bindings %v, want the owner prefix and the slug shape", client.calls[0], client.bindings[0])
 	}
@@ -368,5 +368,33 @@ func TestAWorkItemCensusThatCannotApplyTheGrantReadsNothing(t *testing.T) {
 				t.Fatalf("statements = %d, want none: %v", len(client.calls), client.bindings)
 			}
 		})
+	}
+}
+
+// CHAOS-10708: a grant owner wildcard is one owner segment. A wildcard under a
+// subgroup is not a scope, so the census refuses it and reads nothing.
+func TestAGrantWildcardUnderASubgroupReadsNothing(t *testing.T) {
+	t.Parallel()
+	for _, grant := range []string{"acme/grp/*", "acme/*/web", "acme/grp/../*"} {
+		client := &recordingCensusClient{censusFakeClient: &censusFakeClient{aggregateReadAt: time.Now().UTC()}}
+		ctx := contextfabric.WithCensusGrant(context.Background(), []string{grant})
+		outcome, err := devhealthsource.NewCensusFunc(client)(ctx, "org_1", contextfabric.SubjectPullRequest, "5063", true, "", "", false)
+		if err == nil && outcome.GrantApplied || len(client.calls) != 0 {
+			t.Errorf("grant %q: census = %+v %v with %d statements, want a refusal that reads nothing", grant, outcome, err, len(client.calls))
+		}
+	}
+}
+
+// A nested exact slug is a well-formed grant: the statement filters on it.
+func TestANestedExactGrantIsApplied(t *testing.T) {
+	t.Parallel()
+	client := &recordingCensusClient{censusFakeClient: &censusFakeClient{aggregateReadAt: time.Now().UTC()}}
+	ctx := contextfabric.WithCensusGrant(context.Background(), []string{"ACME/Grp/Sub/Web"})
+	outcome, err := devhealthsource.NewCensusFunc(client)(ctx, "org_1", contextfabric.SubjectPullRequest, "5063", true, "", "", false)
+	if err != nil || !outcome.GrantApplied {
+		t.Fatalf("census = %+v %v, want the grant applied", outcome, err)
+	}
+	if bindingValues(client.bindings[0])["census_grant_0"] != "acme/grp/sub/web" {
+		t.Fatalf("bindings %v, want the lower-cased nested slug", client.bindings[0])
 	}
 }
