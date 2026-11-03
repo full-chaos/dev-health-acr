@@ -42,8 +42,9 @@ type grantRepository struct {
 type grantWorld struct {
 	org                                                      string
 	insideGitHub, insideGitLab, outsideGitHub, outsideGitLab grantRepository
-	// nestedGitLab and malformed sit under the insideGitHub owner, and the
-	// graph gate refuses both slugs: they are outside an owner grant.
+	// nestedGitLab and malformed sit under the insideGitHub owner. The owner
+	// covers its subgroups, so nestedGitLab is inside an owner grant; the graph
+	// gate refuses malformed.
 	nestedGitLab, malformed grantRepository
 	client                  contextpacket.ClickHouseQueryClient
 	add                     func(t *testing.T, repository grantRepository)
