@@ -237,9 +237,12 @@ func TestACallInSpanKeyPositionIsADynamicKey(t *testing.T) {
 			t.Errorf("%s: findings = %v, want one R2 dynamic key", id, got)
 		}
 	}
+	// a conversion of a variable is a key the scan cannot read: an R9 pin, not a dynamic key
+	if got := scanSource(t, head+"func f(v, k string) { _ = attribute.String(string(k), v) }\n"); len(got) != 1 || got[0].Rule != "R9" {
+		t.Errorf("conversion of a variable: findings = %v, want one R9", got)
+	}
 	for id, body := range map[string]string{
-		"conversion of a variable": "func f(v, k string) { _ = attribute.String(string(k), v) }\n",
-		"Itoa of a constant":       "func f(v string) { _ = attribute.String(fmt.Sprint(3), v) }\n",
+		"Itoa of a constant": "func f(v string) { _ = attribute.String(fmt.Sprint(3), v) }\n",
 	} {
 		if got := scanSource(t, head+body); len(got) != 0 {
 			t.Errorf("%s: findings = %v, want none", id, got)

@@ -2268,7 +2268,10 @@ func (s *fileScan) errorTextValue(expr ast.Expr) bool {
 		if name == "Error" && len(call.Args) == 0 {
 			found = true
 		}
-		if pkg == "fmt" && (name == "Sprint" || name == "Sprintf" || name == "Sprintln" || name == "Errorf") {
+		if pkg == "fmt" && (name == "Sprint" || name == "Sprintln") {
+			found = true
+		}
+		if pkg == "fmt" && (name == "Sprintf" || name == "Errorf") && formatMayPrintError(call.Args) {
 			found = true
 		}
 		return !found
@@ -2276,11 +2279,45 @@ func (s *fileScan) errorTextValue(expr ast.Expr) bool {
 	return found
 }
 
+// formatMayPrintError reports whether a Sprintf or Errorf call can print error text: its format is not a string literal
+// (fail closed), or it holds a verb that prints an error: %v %s %q %x %X (fmt calls Error() for the string verbs) or %w.
+func formatMayPrintError(args []ast.Expr) bool {
+	if len(args) == 0 {
+		return true
+	}
+	lit, ok := ast.Unparen(args[0]).(*ast.BasicLit)
+	if !ok || lit.Kind != token.STRING {
+		return true
+	}
+	format, err := strconv.Unquote(lit.Value)
+	if err != nil {
+		return true
+	}
+	for i := 0; i < len(format); i++ {
+		if format[i] != '%' {
+			continue
+		}
+		i++
+		for i < len(format) && strings.IndexByte("+-# 0123456789.[]*", format[i]) >= 0 {
+			i++ // flags, width, precision and argument indexes
+		}
+		if i >= len(format) {
+			break
+		}
+		if strings.IndexByte("vsqxXw", format[i]) >= 0 {
+			return true
+		}
+	}
+	return false
+}
+
 func (s *fileScan) attribute(call *ast.CallExpr, keyExpr, value ast.Expr) {
 	keys, literal, over := s.keysOf(keyExpr)
+	unfoldable := false
 	if !literal && (over || s.unfoldableConst(keyExpr)) {
 		// a constant (or a conversion of one) the scan cannot fold: fail closed rather than skip
 		s.add(RuleProtectedKey, call.Pos(), "unfoldable const key")
+		unfoldable = true
 	}
 	label := "-"
 	for _, key := range keys {
@@ -2304,8 +2341,15 @@ func (s *fileScan) attribute(call *ast.CallExpr, keyExpr, value ast.Expr) {
 	if s.metricAttrs[call] {
 		s.metricLabel(call, keys, literal)
 		s.metricValue(value)
-	} else if !literal && s.dynamicCallInKey(keyExpr) {
-		s.add(RuleMetricLabel, call.Pos(), "dynamic key")
+	} else {
+		dynamic := !literal && s.dynamicCallInKey(keyExpr)
+		if dynamic {
+			s.add(RuleMetricLabel, call.Pos(), "dynamic key")
+		}
+		if !literal && !unfoldable && !dynamic {
+			// a span attribute key computed at run time: no key reaches the census, so it is pinned like an slog key
+			s.addLogKey(call.Pos(), keyExpr)
+		}
 	}
 }
 
