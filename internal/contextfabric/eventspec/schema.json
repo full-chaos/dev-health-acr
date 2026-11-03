@@ -8385,7 +8385,7 @@
         "type": "string",
         "presence": "required",
         "closed_vocabulary": [
-          "question-family.v7"
+          "question-family.v8"
         ]
       },
       {
@@ -8713,6 +8713,77 @@
         "key": "kinds_added",
         "type": "int",
         "presence": "required"
+      },
+      {
+        "key": "request_id",
+        "type": "string",
+        "presence": "conditional",
+        "applicability": "written when the request context carries a request ID"
+      }
+    ]
+  },
+  {
+    "id": "contextfabric.plan_subject_obligation_reads",
+    "msg": "context fabric plan subject obligation reads",
+    "level": "info",
+    "multiplicity": "zero_or_one_per_request",
+    "attribution": [
+      "request_id"
+    ],
+    "bounded_aggregation": "at most one line per investigation: recorded once, when the plan is built and the committed subject has a read row that requires its kinds.",
+    "fields": [
+      {
+        "key": "org_id",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "subject_rows",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "kinds_named",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "kinds_added",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "added_kinds",
+        "type": "string_slice",
+        "presence": "required",
+        "closed_vocabulary": [
+          "identity",
+          "membership",
+          "status",
+          "actual_completion",
+          "work",
+          "blockers",
+          "required_children",
+          "pull_requests",
+          "reviews",
+          "continuous_integration",
+          "deployments",
+          "incidents",
+          "metrics",
+          "health",
+          "workload",
+          "investment",
+          "readiness",
+          "operational_deficiencies",
+          "source_health",
+          "evidence",
+          "flow",
+          "landscape",
+          "security_alerts",
+          "commitment",
+          "file_hotspots"
+        ],
+        "applicability": "the kinds the fact read gained only because the committed subject's read obligations require them, in fact-kind vocabulary order; empty when an earlier group already asked for every required kind. Its length is kinds_added"
       },
       {
         "key": "request_id",
@@ -9446,7 +9517,7 @@
         "presence": "required",
         "closed_vocabulary": [
           "",
-          "question-family.v7"
+          "question-family.v8"
         ]
       },
       {
@@ -12347,7 +12418,7 @@
         "type": "string",
         "presence": "required",
         "closed_vocabulary": [
-          "question-family.v7"
+          "question-family.v8"
         ]
       },
       {

@@ -361,7 +361,42 @@ func planFactKinds(definition QuestionFamilyDefinition, interpretation Interpret
 		appendKind(kind)
 	}
 	kinds, _ = appendOperandReadKinds(kinds, requirements)
+	kinds, _ = appendSubjectObligationKinds(kinds, requirements)
 	return kinds
+}
+
+// appendSubjectObligationKinds is planFactKinds' fifth widening (CHAOS-12710):
+// every kind a committed subject's own read obligation REQUIRES
+// (SubjectObligationRequiredKinds), appended last for the same
+// first-kind-wins reason as the four above it. It returns the kinds it
+// actually added.
+func appendSubjectObligationKinds(kinds []FactKind, requirements []DerivedRequirement) ([]FactKind, []FactKind) {
+	var added []FactKind
+	for _, kind := range SubjectObligationRequiredKinds(requirements) {
+		if slices.Contains(kinds, kind) {
+			continue
+		}
+		kinds = append(kinds, kind)
+		added = append(added, kind)
+	}
+	return kinds, added
+}
+
+// subjectObligationFactRequirements is the fact request group for the kinds a
+// committed subject's own read obligations require (CHAOS-12710): one
+// requirement per kind, in vocabulary order, nil for a work-item tuple or when
+// there is none. plan.FactKinds reaches the fact request only through a
+// cohort, so without this group a single named subject's plan would name the
+// kind and the read would never ask for it.
+func subjectObligationFactRequirements(rows []DerivedRequirement, workItemTuple bool) []FactRequirement {
+	if workItemTuple {
+		return nil
+	}
+	var requirements []FactRequirement
+	for _, kind := range SubjectObligationRequiredKinds(rows) {
+		requirements = append(requirements, FactRequirement{Kind: kind})
+	}
+	return requirements
 }
 
 // appendOperandReadKinds is planFactKinds' fourth widening (CHAOS-12596):
@@ -401,16 +436,23 @@ func operandReadFactRequirements(rows []DerivedRequirement, workItemTuple bool) 
 // of the operand rows. A count, not a second merge, so the fact request keeps
 // its one merge sink (TestMergeSinkArityPinsTheAuthorityRoster).
 func operandKindsAbsentFrom(operand []FactRequirement, earlier ...[]FactRequirement) int {
+	return len(requirementKindsAbsentFrom(operand, earlier...))
+}
+
+// requirementKindsAbsentFrom returns the kinds of group that no earlier group
+// already requests, in group order: what the fact request gained only because
+// of group. The subject-obligation telemetry line (CHAOS-12710) names them.
+func requirementKindsAbsentFrom(group []FactRequirement, earlier ...[]FactRequirement) []FactKind {
 	present := make(map[FactKind]struct{})
-	for _, group := range earlier {
-		for _, requirement := range group {
+	for _, requirements := range earlier {
+		for _, requirement := range requirements {
 			present[requirement.Kind] = struct{}{}
 		}
 	}
-	added := 0
-	for _, requirement := range operand {
+	var added []FactKind
+	for _, requirement := range group {
 		if _, ok := present[requirement.Kind]; !ok {
-			added++
+			added = append(added, requirement.Kind)
 		}
 	}
 	return added

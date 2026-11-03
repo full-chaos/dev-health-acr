@@ -400,11 +400,12 @@ type planningAuthority struct {
 	// mergeFactRequirements call this authority rides into the fact read,
 	// or 0 for an authority that does not reach that call at all.
 	//
-	// engine.go passes four groups:
+	// engine.go passes five groups:
 	//   1  statusComposedRequirements   <- authority 1 (fed by 2)
 	//   2  graphContext.FactRequirements <- authorities 5a and 5b
 	//   3  cohortRankingRequirements     <- authorities 3 and 4
 	//   4  operandReadRequirements       <- authority 7 (CHAOS-12596)
+	//   5  subjectObligationRequirements <- authority 8 (CHAOS-12710)
 	// Authority 6 is 0: the carry acts on the FAMILY, upstream of the
 	// sink, which is why it contributes no kinds of its own.
 	sinkArgument int
@@ -507,6 +508,17 @@ func planningAuthorities() []planningAuthority {
 			sinkArgument: 4,
 		},
 		{
+			// CHAOS-12710: the kinds a COMMITTED subject's own read
+			// obligation requires (its quantifier cannot be met without every
+			// kind it names). A fifth group of the sink, filled last
+			// (subjectObligationFactRequirements); derived from the rows, so
+			// it is subsumed by them by construction.
+			id: "8", name: "subjectObligationFactRequirements (committed subject's required read kinds)", site: "chaos4636_answer_plan.go / engine.go",
+			reach:        reachPreResolution,
+			contribute:   contributeSubjectObligationRows,
+			sinkArgument: 5,
+		},
+		{
 			id: "6", name: "applyCarriedPlan (the carried plan)", site: "chaos4636_plan_carry.go",
 			reach: reachPriorTurn,
 			// 0: the carry acts upstream of the sink, on the family.
@@ -585,6 +597,19 @@ func contributeOperandReadRows(frame contextfabric.QuestionFrame) ([]contextfabr
 	}
 	rows := contextfabric.DeriveRequirements(frame, contextfabric.GenerateObligationSeed(capabilities), capabilities)
 	return sortedUniqueKinds(contextfabric.OperandReadRowServingKinds(rows)), true
+}
+
+// contributeSubjectObligationRows runs AUTHORITY 8 for this frame: the
+// production derivation over the live capability list, then the production
+// committed-subject filter.
+func contributeSubjectObligationRows(frame contextfabric.QuestionFrame) ([]contextfabric.FactKind, bool) {
+	providers := devhealthfacts.NewProviders(nil)
+	capabilities := make([]contextfabric.FactCapability, 0, len(providers))
+	for _, provider := range providers {
+		capabilities = append(capabilities, provider.Capability())
+	}
+	rows := contextfabric.DeriveRequirements(frame, contextfabric.GenerateObligationSeed(capabilities), capabilities)
+	return sortedUniqueKinds(contextfabric.SubjectObligationRequiredKinds(rows)), true
 }
 
 // contributeDeclaredCohortRequirements runs AUTHORITY 5a for this frame.
@@ -890,7 +915,7 @@ func TestEachAuthorityBlockingLossCountIsPinned(t *testing.T) {
 	// model-input, post-resolution or prior-turn authority is dropped before
 	// any set is compared, so it can hold no loss cell at all. They are
 	// listed rather than skipped so the table is total over the roster.
-	want := map[string]int{"1": 1, "2": 0, "3": 0, "4": 0, "5a": 0, "5b": 0, "6": 0, "7": 0}
+	want := map[string]int{"1": 1, "2": 0, "3": 0, "4": 0, "5a": 0, "5b": 0, "6": 0, "7": 0, "8": 0}
 
 	blocking := map[string]int{}
 	seen := map[string]bool{}
