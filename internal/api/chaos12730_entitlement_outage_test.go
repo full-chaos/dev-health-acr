@@ -41,6 +41,7 @@ var gatedRoutePatterns = []string{
 	"GET /api/v1/context-fabric/data/catalog",
 	"GET /api/v1/context-fabric/investigations/feedback/{result_id}",
 	"GET /api/v1/context-fabric/investigations/submissions/{submission_id}",
+	"GET /api/v1/context-fabric/investigations/submissions/{submission_id}/events",
 	"GET /api/v1/context-fabric/investigations/{result_id}",
 	"GET /api/v1/context-fabric/threads",
 	"GET /api/v1/context-fabric/threads/{thread_id}",
@@ -52,6 +53,7 @@ var gatedRoutePatterns = []string{
 	"POST /api/v1/context-fabric/data/subjects",
 	"POST /api/v1/context-fabric/investigations",
 	"POST /api/v1/context-fabric/investigations/feedback/{result_id}",
+	"POST /api/v1/context-fabric/investigations/submissions/{submission_id}/cancel",
 }
 
 type outagePatternMux struct{ patterns []string }

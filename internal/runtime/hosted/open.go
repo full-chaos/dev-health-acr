@@ -129,20 +129,22 @@ func open(ctx context.Context, request buildRequest) (*Runtime, error) {
 			return nil, closeAfterError(runtime, fmt.Errorf("initialize episode runtime: %w", err))
 		}
 	}
-	// CHAOS-6745: livenessChecks gate /readyz, the k8s readinessProbe target
-	// that pulls the WHOLE pod from every Service's endpoints -- including
-	// the OAuth/authorization-server routes -- the moment any one check
-	// fails. It therefore carries only what EVERY surface needs (postgres,
-	// entitlement), never clickhouse: an OAuth login has no ClickHouse
-	// dependency, so a ClickHouse outage must not make this pod unroutable
-	// for it. dataStoreChecks (clickhouse) is checked live, per request,
-	// only by the ClickHouse-backed handlers -- see
-	// api.Dependencies.Runtime.DataStoreChecks and its doc comment.
+	// CHAOS-6745/12730: livenessChecks gate /readyz, the k8s readinessProbe
+	// target that pulls the WHOLE pod from every Service's endpoints --
+	// including the OAuth/authorization-server routes -- the moment any one
+	// check fails. It therefore carries only what EVERY surface needs
+	// (postgres), never clickhouse and never the entitlement provider: an
+	// OAuth login needs neither, so an outage of either must not make this
+	// pod unroutable for it. dataStoreChecks (clickhouse) is checked live,
+	// per request, by the ClickHouse-backed handlers; entitlement is decided
+	// live, per request, by the entitlement-gated handlers, which refuse
+	// fail-closed when the provider cannot answer.
 	livenessChecks := []api.ReadinessCheck{
 		api.CheckFunc{CheckName: "postgres", Fn: postgres.check},
-		api.CheckFunc{CheckName: "entitlement", Fn: entitlement.Check},
 	}
-	for _, check := range livenessChecks {
+	// CHAOS-12092: the start is still fail-closed on the entitlement provider.
+	startupChecks := []api.ReadinessCheck{livenessChecks[0], api.CheckFunc{CheckName: "entitlement", Fn: entitlement.Check}}
+	for _, check := range startupChecks {
 		if err := check.Check(ctx); err != nil {
 			return nil, closeAfterError(runtime, fmt.Errorf("initial %s readiness check: %w", check.Name(), err))
 		}
