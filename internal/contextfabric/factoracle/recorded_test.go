@@ -19,8 +19,9 @@ import (
 const captureDir = "testdata/venue"
 
 // captureSchemaDigest is the SDL digest the recorded capture was taken at
-// (the venue at ops b1d7e1f1, pin 31, captured again 2026-10-14 on the COUNT measure).
-const captureSchemaDigest = "sha256:c00c3c65aa6bdbe476b515549be17868f5a39f5e41aa2f106b08cc9f9cb4b462"
+// (askdev-1, ops query-api 0b763a85, acr 74fe0f1e, captured 2026-11-03,
+// CHAOS-12808).
+const captureSchemaDigest = "sha256:6d40791c0e2a28c2e0284a3330d1b30ddc3e9b24d397d9ceb237c398d4cd106c"
 
 // contractsAtCapture is contractDigest of every served operation under the SDL
 // the capture was taken at. A build that pins another SDL may replay the
@@ -36,30 +37,26 @@ var contractsAtCapture = map[string]string{
 	"cognitiveLoad":                  "sha256:52ce7277e9e7033d638b213773e41b478f6cd9af0c540655998dad13dabc4dfb",
 	"complexityTimeseries":           "sha256:5795ecd7c05b216647191e6eca4b6b397c4612a21e2225137590930bf1c65569",
 	"compoundingRisk":                "sha256:ded079a60583d070f41a5d5682bd77c32b22923d21843c2c9f2bdfe1ce0360e2",
-	// home is advanced past the capture: ops 5376c7c1 added home.filterEmptyReason and ops 51652ba7 more fields, and the capture
-	// holds no home case (TestTheCaptureHoldsNoHomeCaseWhileItsContractIsAdvanced); retake the capture on the next venue move.
+	// home is not a root graphql_query allows, so the capture holds no home case
+	// (TestTheCaptureHoldsNoHomeCaseWhileItsContractIsAdvanced); this is its digest at the capture.
 	"home":     "sha256:518dd7b5e00d9ab67289ce26a8dfe601dc961d971883fc05c2977929fbc2c525",
 	"hotspots": "sha256:30999b82cd7e907ea1711e271b90aae84e66e60f9e93bbee835acf377cdbab23",
-	// investmentBreakdown is advanced past the capture: the re-vendor from ops 0b763a85 brings its V2 document
-	// (CHAOS-10351), which adds analytics.evidenceQualityStats.uncategorizedCount, and two new candidates of root
-	// analytics, investmentBreakdownTeam and investmentBreakdownRepository (CHAOS-12698), which the capture has no
-	// reply for: they are in notRecordedOperations. Retake the capture on the next venue move (CHAOS-12808; it was
-	// sha256:8742ea2b7d3c3014c7a429a115108e167caf8a250230f5e59c16e3332f7b1749 at the capture).
+	// investmentBreakdown is the V2 document of ops 0b763a85 (CHAOS-10351,
+	// analytics.evidenceQualityStats.uncategorizedCount); investmentBreakdownTeam and
+	// investmentBreakdownRepository are the scoped candidates of root analytics (CHAOS-12698). The capture of
+	// CHAOS-12808 records all three.
 	"investmentBreakdown":           "sha256:dcaf3bfe8899a3ba1fff623bb9dff5380212d515c51f073c1f2eb670f1c353df",
 	"investmentBreakdownRepository": "sha256:0535d2800c3017e3f9494e3da384e6ff96eb340f286372c812e220c00c73802c",
 	"investmentBreakdownTeam":       "sha256:fbc2c1b16914b5f673bc4700d4dd351a6390b804270a0b70c232c4b14681aa90",
-	// investmentFull is advanced past the capture: ops 51652ba7 added analytics.sankey.coverage.sizingCoverage and
-	// unsizedUnitCount and the ISSUE_SIZE measure. The recorded ops replies of root analytics lack those two paths, so the
-	// pinned outcome of analytics names them (make o4-oracle-repin); retake the capture on the next venue move.
-	"investmentFull":           "sha256:961a15df3b4a1ee6ecd80c0a66a7d856256e97b475039d58d08fbfcd82176dd3",
-	"recommendations":          "sha256:2a2a5d0a1c1dcddae195d7c4d7d73517e4113694e6396620222c28a250003ee1",
-	"securityOverview":         "sha256:df174e0fc36768a4385f9a9337e64f4e38f1a782704d8394e2e98253dccee9cb",
-	"sourceHealth":             "sha256:1e37288fae98f7a84a5f7a2a8d6bea26514c6e4bf284f8d9e528a7e0819ba876",
-	"throughputForecast":       "sha256:ad5d774fa899197d84842001d2f9fcee48155c5356a27238e1d726e1aff4db51",
-	"workGraphArtifacts":       "sha256:551ed4f4200e13f02a988d6deab6a9ffc41e41a2d2c72c9d66f224b0d5fe86fc",
-	"workGraphEdges":           "sha256:22f4a10da08615255631c5f866313fdeda9c65bd17a6b621f332984e61ce602e",
-	"workGraphFlow":            "sha256:d442757b8633c7f9542f48a92a34ef1dbcfacdd994e68c76ad7a31cce1428cf1",
-	"workItemTeamAttributions": "sha256:e3e1700f64773540a6192f8239068aac3b780a4d5cf37c5252f766bf819dda58",
+	"investmentFull":                "sha256:961a15df3b4a1ee6ecd80c0a66a7d856256e97b475039d58d08fbfcd82176dd3",
+	"recommendations":               "sha256:2a2a5d0a1c1dcddae195d7c4d7d73517e4113694e6396620222c28a250003ee1",
+	"securityOverview":              "sha256:df174e0fc36768a4385f9a9337e64f4e38f1a782704d8394e2e98253dccee9cb",
+	"sourceHealth":                  "sha256:1e37288fae98f7a84a5f7a2a8d6bea26514c6e4bf284f8d9e528a7e0819ba876",
+	"throughputForecast":            "sha256:ad5d774fa899197d84842001d2f9fcee48155c5356a27238e1d726e1aff4db51",
+	"workGraphArtifacts":            "sha256:551ed4f4200e13f02a988d6deab6a9ffc41e41a2d2c72c9d66f224b0d5fe86fc",
+	"workGraphEdges":                "sha256:22f4a10da08615255631c5f866313fdeda9c65bd17a6b621f332984e61ce602e",
+	"workGraphFlow":                 "sha256:d442757b8633c7f9542f48a92a34ef1dbcfacdd994e68c76ad7a31cce1428cf1",
+	"workItemTeamAttributions":      "sha256:e3e1700f64773540a6192f8239068aac3b780a4d5cf37c5252f766bf819dda58",
 }
 
 func requireCaptureContractsUnchanged(t *testing.T, policy *directread.GraphQLPolicy, recorded, pinned string) {
@@ -382,18 +379,13 @@ func TestRecordedCaptureKeepsTheDarkOperationAndTheTestExcludesIt(t *testing.T) 
 // the list is empty; a root added here again must say why the capture lacks it.
 var notRecordedRoots = map[string]string{}
 
-// notRecordedReason is why the capture holds no case of the scoped investment
-// breakdowns.
-const notRecordedReason = "no recorded reply: the operation was registered after the capture, CHAOS-12698; restored by the re-capture CHAOS-12808"
-
 // notRecordedOperations are the operations every recorded-mode run leaves out
 // (Oracle.NotRecorded): every generated shape of each, and nothing else.
 // Their root runs with its other candidates. The oracle refuses a listed
-// operation that has a case, so the list cannot outlive the re-capture.
-var notRecordedOperations = map[string]string{
-	"investmentBreakdownTeam":       notRecordedReason,
-	"investmentBreakdownRepository": notRecordedReason,
-}
+// operation that has a case, so the list cannot outlive a re-capture. The
+// capture of CHAOS-12808 records every operation, so the list is empty; an
+// operation added here again must say why the capture lacks it.
+var notRecordedOperations = map[string]string{}
 
 // withoutNotRecordedRoots returns the manifest without the shape cases and
 // the pinned outcome of a root the capture does not record, and the sorted
@@ -511,101 +503,70 @@ func darkCases(t *testing.T, _ Recording, dark map[string]bool) []string {
 	return out
 }
 
-// The recorded mode leaves out exactly the generated shapes of the operations
-// in notRecordedOperations: they are candidates of root analytics with no case
-// in the capture, and every other shape of root analytics has one, so the ORG
-// investmentBreakdown and investmentFull shapes still run. A run of root
-// analytics states exactly those shapes as not recorded, and the oracle
-// refuses a listed operation once one of its shapes has a case.
-func TestRecordedModeLeavesOutOnlyTheScopedInvestmentShapes(t *testing.T) {
-	manifest, _, extract := loadedCapture(t)
+// The capture of CHAOS-12808 records the scoped investment breakdowns
+// (CHAOS-12698): every generated shape of root analytics has a case, those of
+// investmentBreakdownTeam and investmentBreakdownRepository included, and each
+// of their cases has a recorded reply. The oracle still refuses an operation
+// listed as not recorded once one of its shapes has a case.
+func TestTheCaptureRecordsTheScopedInvestmentShapes(t *testing.T) {
+	manifest, recording, extract := loadedCapture(t)
+	if len(notRecordedOperations) != 0 {
+		t.Fatalf("not recorded operations = %v, want none: the capture records every operation", notRecordedOperations)
+	}
 	policy := mustPolicy(t)
-	analytics, ok := policy.Root("analytics")
-	if !ok {
-		t.Fatal("root analytics is not allowed")
-	}
-	listed := make([]string, 0, len(notRecordedOperations))
-	for name, why := range notRecordedOperations {
-		if !slices.Contains(analytics.Operations(), name) || why != notRecordedReason {
-			t.Fatalf("not recorded operation %s is not a candidate of root analytics or has another reason: %q", name, why)
-		}
-		listed = append(listed, name)
-	}
-	sort.Strings(listed)
-	if !slices.Equal(listed, []string{"investmentBreakdownRepository", "investmentBreakdownTeam"}) {
-		t.Fatalf("not recorded operations = %v", listed)
+	shapes, err := Shapes(policy)
+	if err != nil {
+		t.Fatal(err)
 	}
 	cases := map[string]int{}
 	for _, c := range manifest.ShapeCases {
 		cases[c.ShapeID]++
 	}
-	shapes, err := Shapes(policy)
-	if err != nil {
-		t.Fatal(err)
-	}
-	var want []string
-	analyticsCases := 0
+	scoped := map[string]int{}
 	for _, shape := range shapes {
-		if _, out := notRecordedOperations[shape.Operation]; out {
-			if cases[shape.ID()] > 0 {
-				t.Fatalf("shape %s has a recorded case: remove its operation from notRecordedOperations", shape.ID())
-			}
-			want = append(want, shape.ID()+": "+notRecordedReason)
+		if shape.Root != "analytics" {
 			continue
 		}
-		if shape.Root == "analytics" {
-			if cases[shape.ID()] == 0 {
-				t.Fatalf("shape %s has no case: it would not run", shape.ID())
-			}
-			analyticsCases += cases[shape.ID()]
+		if cases[shape.ID()] == 0 {
+			t.Fatalf("shape %s has no case: it would not run", shape.ID())
+		}
+		if shape.Operation == "investmentBreakdownTeam" || shape.Operation == "investmentBreakdownRepository" {
+			scoped[shape.Operation] += cases[shape.ID()]
 		}
 	}
-	for _, id := range []string{"analytics/investmentBreakdownTeam/all", "analytics/investmentBreakdownRepository/all"} {
-		if !slices.ContainsFunc(want, func(w string) bool { return strings.HasPrefix(w, id+": ") }) {
-			t.Fatalf("%s is not left out: %v", id, want)
+	if scoped["investmentBreakdownTeam"] == 0 || scoped["investmentBreakdownRepository"] == 0 {
+		t.Fatalf("scoped cases in the capture = %v, want cases of both operations", scoped)
+	}
+	for _, c := range manifest.ShapeCases {
+		shape, ok := ShapeByID(shapes, c.ShapeID)
+		if !ok {
+			t.Fatalf("case %s has no shape", c.ShapeID)
+		}
+		if shape.Operation != "investmentBreakdownTeam" && shape.Operation != "investmentBreakdownRepository" {
+			continue
+		}
+		if _, ok := recording.Replies[CaseKey(shape, c.Variables)]; !ok {
+			t.Fatalf("case %s has no recorded reply", c.ShapeID)
 		}
 	}
 
+	// A recorded case of a listed operation stops the run.
 	store, err := NewStore(extract)
 	if err != nil {
 		t.Fatal(err)
 	}
 	data := `{"analytics":{"__typename":"AnalyticsResult","breakdowns":[],"evidenceQualityDistribution":{"low":1},"evidenceQualityStats":{"__typename":"EvidenceQualityStats","mean":0.4,"stddev":0.2,"total":10,"bandCounts":{"low":1},"uncategorizedCount":0}}}`
-	oracleOver := func(shapeCases []ShapeCase) *Oracle {
-		return &Oracle{Policy: policy, Store: store, Window: manifest.Window, ShapeCases: shapeCases, OnlyRoots: []string{"analytics"}, NotRecorded: notRecordedOperations,
-			Planes: fakePlanes{
-				graphQL: func(shape Shape, _ map[string]any) (json.RawMessage, error) {
-					return servedAnswer(t, "analytics", shape.Operation, data, len(data), 32768), nil
-				},
-				operation: func(shape Shape, _ map[string]any) (json.RawMessage, error) {
-					return operationAnswer(t, shape.Operation, data), nil
-				},
-			}}
-	}
-	report, err := oracleOver(manifest.ShapeCases).Run(context.Background())
-	if err != nil {
-		t.Fatal(err)
-	}
-	rr := report.Root("analytics")
-	got := slices.Clone(rr.NotRecorded)
-	sort.Strings(got)
-	sort.Strings(want)
-	if !slices.Equal(got, want) || rr.ShapesRun != analyticsCases || analyticsCases == 0 {
-		t.Fatalf("not recorded %v (ran %d cases), want %v (and %d cases)", got, rr.ShapesRun, want, analyticsCases)
-	}
-	if details := report.Details(); !strings.Contains(details, "NOT-RECORDED analytics: analytics/investmentBreakdownTeam/all: "+notRecordedReason) {
-		t.Fatalf("the report does not state the left-out shapes:\n%s", details)
-	}
-
-	// A recorded case of a listed operation stops the run.
-	var sibling map[string]any
-	for _, c := range manifest.ShapeCases {
-		if c.ShapeID == "analytics/investmentBreakdown/all" {
-			sibling = c.Variables
-		}
-	}
-	planted := append(slices.Clone(manifest.ShapeCases), ShapeCase{ShapeID: "analytics/investmentBreakdownTeam/all", Variables: sibling})
-	if _, err := oracleOver(planted).Run(context.Background()); err == nil || !strings.Contains(err.Error(), "is listed as not recorded") {
+	listed := &Oracle{Policy: policy, Store: store, Window: manifest.Window, ShapeCases: manifest.ShapeCases, OnlyRoots: []string{"analytics"},
+		NotRecorded: map[string]string{"investmentBreakdownTeam": "planted: listed although the capture records it"},
+		Planes: fakePlanes{
+			graphQL: func(shape Shape, _ map[string]any) (json.RawMessage, error) {
+				return servedAnswer(t, "analytics", shape.Operation, data, len(data), 32768), nil
+			},
+			operation: func(shape Shape, _ map[string]any) (json.RawMessage, error) {
+				return operationAnswer(t, shape.Operation, data), nil
+			},
+		}}
+	if _, err := listed.Run(context.Background()); err == nil || !strings.Contains(err.Error(), "is listed as not recorded") {
 		t.Fatalf("a recorded case of a listed operation did not stop the run: %v", err)
 	}
 }
