@@ -80,7 +80,13 @@ func TestPinsAreTheVariablesThatTellARootsCandidatesApart(t *testing.T) {
 		byName[cand.op.Name] = cand
 	}
 	noScope := map[string]any{"batch": map[string]any{"breakdowns": []any{}}}
-	team := map[string]any{"batch": map[string]any{"filters": map[string]any{"scope": map[string]any{"level": "TEAM"}}}}
+	level := func(v any) map[string]any {
+		return map[string]any{"batch": map[string]any{"filters": map[string]any{"scope": map[string]any{"level": v}}}}
+	}
+	team := level("TEAM")
+	// An explicit null stands for the default, as an absent value does; a
+	// value that is not a string keeps no pin.
+	null, number := level(nil), level(7)
 	for _, c := range []struct {
 		op   string
 		vars map[string]any
@@ -90,6 +96,10 @@ func TestPinsAreTheVariablesThatTellARootsCandidatesApart(t *testing.T) {
 		{"investmentBreakdownTeam", noScope, false},
 		{"investmentBreakdown", team, false},
 		{"investmentBreakdownTeam", team, true},
+		{"investmentBreakdown", null, true},
+		{"investmentBreakdownTeam", null, false},
+		{"investmentBreakdown", number, false},
+		{"investmentBreakdownTeam", number, false},
 	} {
 		if got := byName[c.op].keepsPins(c.vars); got != c.want {
 			t.Fatalf("%s keepsPins(%v) = %v, want %v", c.op, c.vars, got, c.want)
@@ -99,7 +109,8 @@ func TestPinsAreTheVariablesThatTellARootsCandidatesApart(t *testing.T) {
 
 // A one-value enum is a pin only where siblings pin the same path to another
 // value: two candidates that both admit mode X alone are not told apart by it,
-// and a not-allowed or non-enum rule is never a pin.
+// a path only one candidate pins tells none apart, a not-allowed or non-enum
+// rule is never a pin, and a list path ([*]) is never a pin.
 func TestOnlyADifferingOneValueEnumIsAPin(t *testing.T) {
 	op := func(name string, rules ...VariableRule) *rootCandidate {
 		return &rootCandidate{op: &OperationPolicy{Name: name, Variables: rules}}
@@ -107,8 +118,8 @@ func TestOnlyADifferingOneValueEnumIsAPin(t *testing.T) {
 	enum := func(path string, values ...string) VariableRule {
 		return VariableRule{Path: path, Kind: VariableKindEnum, Allowed: true, AllowedValues: values}
 	}
-	a := op("a", enum("v.level", "ORG"), enum("v.mode", "X"), VariableRule{Path: "v.off", Kind: VariableKindEnum, AllowedValues: []string{"P"}}, VariableRule{Path: "v.id", Kind: "scalar", Allowed: true, AllowedValues: []string{"1"}})
-	b := op("b", enum("v.level", "TEAM"), enum("v.mode", "X"), VariableRule{Path: "v.off", Kind: VariableKindEnum, AllowedValues: []string{"Q"}}, VariableRule{Path: "v.id", Kind: "scalar", Allowed: true, AllowedValues: []string{"2"}})
+	a := op("a", enum("v.level", "ORG"), enum("v.mode", "X"), enum("v.solo", "S"), enum("v.items[*].kind", "K1"), VariableRule{Path: "v.off", Kind: VariableKindEnum, AllowedValues: []string{"P"}}, VariableRule{Path: "v.id", Kind: "scalar", Allowed: true, AllowedValues: []string{"1"}})
+	b := op("b", enum("v.level", "TEAM"), enum("v.mode", "X"), enum("v.items[*].kind", "K2"), VariableRule{Path: "v.off", Kind: VariableKindEnum, AllowedValues: []string{"Q"}}, VariableRule{Path: "v.id", Kind: "scalar", Allowed: true, AllowedValues: []string{"2"}})
 	c := op("c", enum("v.level", "REPO", "TEAM"), enum("v.mode", "X"))
 	assignPins(&GraphQLRootPolicy{Field: "r", candidates: []*rootCandidate{a, b, c}})
 	for _, w := range []struct {

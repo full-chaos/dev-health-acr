@@ -191,14 +191,16 @@ type rootCandidate struct {
 
 // assignPins sets each candidate's pins: an allowed enum variable with exactly
 // one allowed value is a pin only when two candidates of the root pin the same
-// path to different values. A single-candidate root has no pins.
+// path to different values. A single-candidate root has no pins. A list path
+// ([*]) is never a pin: a query can hold zero or several values there, and
+// keepsPins reads one value per path.
 func assignPins(root *GraphQLRootPolicy) {
 	single := make([]map[string]string, len(root.candidates))
 	values := map[string]map[string]bool{}
 	for i, cand := range root.candidates {
 		single[i] = map[string]string{}
 		for _, rule := range cand.op.Variables {
-			if !rule.Allowed || rule.Kind != VariableKindEnum || len(rule.AllowedValues) != 1 {
+			if !rule.Allowed || rule.Kind != VariableKindEnum || len(rule.AllowedValues) != 1 || strings.Contains(rule.Path, "[*]") {
 				continue
 			}
 			single[i][rule.Path] = rule.AllowedValues[0]
