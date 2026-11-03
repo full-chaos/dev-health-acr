@@ -767,6 +767,13 @@ type ContextFabricEvidenceSubjectName func(kind ContextFabricSubjectKind, rawID 
 // names the answer holds: a repository, project or organization ref reads as its
 // name when name gives one, and else as the noun alone. A nil name is the noun.
 func ContextFabricEvidenceRefLabelNamed(refID string, name ContextFabricEvidenceSubjectName) (string, bool) {
+	return evidenceRefLabel(refID, name, ContextFabricSourceKey)
+}
+
+// evidenceRefLabel is ContextFabricEvidenceRefLabelNamed with the function that
+// reads a raw source id: ContextFabricSourceKey, or an earlier rule a stored label
+// was made with (evidenceKeyBefore12716).
+func evidenceRefLabel(refID string, name ContextFabricEvidenceSubjectName, key func(string) string) (string, bool) {
 	parts := strings.Split(refID, ":")
 	if len(parts) < 4 || parts[0] != "acr" || parts[1] != "v1" {
 		return "Evidence", false
@@ -789,7 +796,7 @@ func ContextFabricEvidenceRefLabelNamed(refID string, name ContextFabricEvidence
 	if EncodedEvidenceEntityType(ContextFabricEvidenceEntityType(entityType)) {
 		segments = decodedEvidenceSegments(id)
 	}
-	display := evidenceIDDisplay(ContextFabricEvidenceEntityType(entityType), id, segments, name)
+	display := evidenceIDDisplay(ContextFabricEvidenceEntityType(entityType), id, segments, name, key)
 	if display == "" {
 		return label, true
 	}
