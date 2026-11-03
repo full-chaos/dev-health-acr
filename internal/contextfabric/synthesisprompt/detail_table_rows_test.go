@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"slices"
 	"strings"
 	"testing"
 
@@ -157,5 +158,29 @@ func TestTheContractMovedWithTheDetailTableRowCount(t *testing.T) {
 	}
 	if assembly := synthesisprompt.ClientAssembly(); assembly.PromptVersion != synthesisprompt.PromptVersion || assembly.SystemSHA256 != digest {
 		t.Fatalf("the served contract reads %q %q, want %q %q", assembly.PromptVersion, assembly.SystemSHA256, synthesisprompt.PromptVersion, digest)
+	}
+}
+
+// A caller that writes the answer itself (client synthesis) gets the same input,
+// counts included, so it gets the same rule (Codex r1 P2 on #2012, reproduced):
+// without it, a caller's model can still call a counted breakdown unavailable.
+func TestTheClientRulesReadADetailTableCountWithoutPromisingItIsShown(t *testing.T) {
+	t.Parallel()
+	rule := ""
+	for _, each := range synthesisprompt.ClientRules() {
+		if strings.Contains(each, "detail_table_rows") {
+			rule = each
+		}
+	}
+	if !strings.Contains(rule, "do not write that the breakdown is unavailable") {
+		t.Fatalf("no client rule reads detail_table_rows and forbids calling a counted breakdown unavailable: %q", synthesisprompt.ClientRules())
+	}
+	for _, promise := range []string{"served", "shown", "displayed", "drawn"} {
+		if strings.Contains(strings.ToLower(rule), promise) {
+			t.Fatalf("the client rule promises the breakdown is %s: %q", promise, rule)
+		}
+	}
+	if assembly := synthesisprompt.ClientAssembly(); !slices.Contains(assembly.Rules, rule) {
+		t.Fatal("the served client assembly does not carry the rule")
 	}
 }

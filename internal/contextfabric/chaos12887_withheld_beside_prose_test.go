@@ -22,6 +22,10 @@ func TestAServeTimeWithholdAddsItsSentenceBesideTheModelProse(t *testing.T) {
 	if !applied || rules.RepositoryFlowWithheld != 1 {
 		t.Fatalf("applied = %t, rules = %+v; want the repository flow table withheld whole", applied, rules)
 	}
+	// The table itself is gone, not only counted as withheld (Codex r1 P3).
+	if claim := cut.ClaimedFacts[0]; claim.Rows != nil || claim.Table != nil {
+		t.Fatalf("rows = %d, table = %v after the cut; want the table withheld whole", len(claim.Rows), claim.Table)
+	}
 	if !slices.Contains(cut.Limitations, prose) {
 		t.Fatalf("limitations %q dropped the model's prose", cut.Limitations)
 	}
