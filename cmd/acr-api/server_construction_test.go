@@ -243,6 +243,17 @@ func TestAppConfigThreadsTheComparisonTableSwitch(t *testing.T) {
 	}
 }
 
+// CHAOS-12608 (Codex #1949 r1): the completion distribution switch reaches the
+// app both doors read it from; without it they removed every forecast shape.
+func TestAppConfigThreadsTheCompletionDistributionSwitch(t *testing.T) {
+	for _, enabled := range []bool{true, false} {
+		got := appConfig(config.Config{CompletionDistributionEnabled: enabled}, "test-version")
+		if got.ContextFabricCompletionDistributionEnabled != enabled {
+			t.Fatalf("appConfig(...).ContextFabricCompletionDistributionEnabled = %v, want %v", got.ContextFabricCompletionDistributionEnabled, enabled)
+		}
+	}
+}
+
 // CHAOS-12416: the switch reaches the app both doors read it from.
 func TestAppConfigThreadsTheVocabularyLabelsSwitch(t *testing.T) {
 	for _, enabled := range []bool{true, false} {

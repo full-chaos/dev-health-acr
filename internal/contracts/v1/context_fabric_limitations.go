@@ -833,6 +833,7 @@ func ContextFabricServiceAuthoredLimitations() []string {
 		ContextFabricGraphHopWalkTruncatedLimitation,
 		ContextFabricGraphTeamNarrowingUndecidedPathsLimitation,
 		ContextFabricProjectScopeWithheldLimitation,
+		ContextFabricDistributionWithheldLimitation,
 		ContextFabricRequestedProjectNarrowingUnavailableLimitation,
 		ContextFabricTruncatedPopulationNoMemberLimitation,
 		ContextFabricFactScopeUnexpandedLimitation,

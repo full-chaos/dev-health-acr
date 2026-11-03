@@ -1070,6 +1070,9 @@ func (c ContextFabricClaimedFact) validate(bounds contextFabricBounds) error {
 	if err := validateClaimedInvestmentMix(c.Kind, c.InvestmentMix, bounds); err != nil {
 		return fmt.Errorf("investment_mix: %w", err)
 	}
+	if err := validateClaimedCompletionForecast(c.Kind, c.Subject, c.CompletionForecast); err != nil {
+		return fmt.Errorf("completion_forecast: %w", err)
+	}
 	return nil
 }
 

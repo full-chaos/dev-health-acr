@@ -1,6 +1,8 @@
 package synthesisprompt
 
 import (
+	"slices"
+
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 )
@@ -128,19 +130,29 @@ func ModelFacingAnswerBudget(allocation contextfabric.ItemAllocation) *AnswerBud
 // (Kind/Subject) or its other fields. Used by both the real Synthesize
 // call and BuildSynthesisPrompt (exchange_support.go), so a non-genkit
 // responder sees byte-identical input to what genkit actually sends.
+//
+// A declared detail table (CHAOS-12554) is left out the same way, and its name
+// is listed in the fact's detail_tables, so a question that asks for that
+// breakdown can name it in a claim with value null. Names only, sorted: the
+// model never sees its rows.
 func ModelFacingFacts(facts []contextfabric.CanonicalFact) []contextfabric.CanonicalFact {
 	out := make([]contextfabric.CanonicalFact, len(facts))
 	for i, fact := range facts {
 		clone := fact
+		clone.DetailTables = nil
 		if len(fact.Fields) > 0 {
 			fields := make(map[string]contextfabric.FactValue, len(fact.Fields))
 			for key, value := range fact.Fields {
 				if len(value.Rows) > 0 {
+					if value.Table != nil && value.Table.Detail {
+						clone.DetailTables = append(clone.DetailTables, key)
+					}
 					continue
 				}
 				fields[key] = value
 			}
 			clone.Fields = fields
+			slices.Sort(clone.DetailTables)
 		}
 		out[i] = clone
 	}
