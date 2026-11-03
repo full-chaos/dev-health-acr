@@ -695,8 +695,10 @@ func tree(v reflect.Value, depth int, b *budget, path []string) any {
 			}
 			switch class {
 			case classProtected:
+				b.take()
 				out[f.Name] = Redacted
 			case classNetwork:
+				b.take()
 				if str, ok := scalarString(v.Field(i)); ok {
 					out[f.Name] = networkPrefix(str)
 				} else {
