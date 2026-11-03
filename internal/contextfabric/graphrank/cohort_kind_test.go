@@ -316,6 +316,11 @@ func TestEveryCohortKindBasisIsReachable(t *testing.T) {
 		}
 		reached[basis] = true
 	}
+	// anchor_fact_only is the route's, not the frame's (CHAOS-12606):
+	// DiscoveredCohort returns it for a servable cohort frame whose anchor's own
+	// fact answers.
+	_, _, _, _, routeBasis, _ := DiscoveredCohort(storage.Principal{OrgID: "org-1"}, contextfabric.GraphDiscoveryRequest{Frame: &contextfabric.QuestionFrame{SubjectExpression: discovered}, AnchorFactOnly: true}, nil, false, func(contextfabric.SubjectRef) bool { return false })
+	reached[routeBasis] = true
 	for _, member := range CohortKindBasisVocabulary() {
 		if !reached[member] {
 			t.Errorf("no input in this test reaches basis %q; a basis nothing produces is a dead label", member)

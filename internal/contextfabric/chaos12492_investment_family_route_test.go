@@ -13,7 +13,7 @@ import (
 // projection, the real precedence table, the real classifier and the real route.
 
 func routedFamily(frame QuestionFrame, sample FamilySample) FamilyRouteDecision {
-	return RouteFrameFamily(ClassifyFamilyAgreement(DeriveQuestionFamily(frame), ResolveFamilyForSample(sample)), &frame)
+	return RouteFrameFamily(ClassifyFamilyAgreement(DeriveQuestionFamily(frame), ResolveFamilyForSample(sample)), &frame, sample.ScopeAnchorKind)
 }
 
 func allocationSubject() SubjectExpression {
@@ -102,7 +102,7 @@ func TestAnOrganizationFrameWithASecondGoalKeepsTheTable(t *testing.T) {
 				frame := goalFrame(SubjectExpression{Kind: SubjectExpressionOrganizationScope, Org: &OrganizationScopeExpression{}}, goals...)
 				sample := FamilySample{Shape: shape}
 				agreement := ClassifyFamilyAgreement(DeriveQuestionFamily(frame), ResolveFamilyForSample(sample))
-				got := RouteFrameFamily(agreement, &frame)
+				got := RouteFrameFamily(agreement, &frame, "")
 				if want := RouteQuestionFamily(agreement); got != want {
 					t.Fatalf("goals %v, %s: decision %+v, want the table's %+v", goals, shape, got, want)
 				}
@@ -115,10 +115,11 @@ func TestAnOrganizationFrameWithASecondGoalKeepsTheTable(t *testing.T) {
 	}
 }
 
-// Check 10: the organization is the only scope anchor this route serves here.
-// Every other topology with the goal set {allocate_investment} keeps what the
-// table decides, as before this change.
-func TestOnlyTheOrganizationTakesTheScopeAllocationRoute(t *testing.T) {
+// Check 10: the organization and a team's children are the only scope anchors
+// this route serves (the second is CHAOS-12606). Every other topology with the
+// goal set {allocate_investment}, and children_of_scope under any anchor that is
+// not a team, keep what the table decides, as before this change.
+func TestOnlyTheOrganizationAndATeamsChildrenTakeTheScopeAllocationRoute(t *testing.T) {
 	t.Parallel()
 	expressions := []SubjectExpression{
 		{Kind: SubjectExpressionGroupedMembers, Grouped: &GroupedSetExpression{}},
@@ -126,15 +127,22 @@ func TestOnlyTheOrganizationTakesTheScopeAllocationRoute(t *testing.T) {
 		{Kind: SubjectExpressionDiscoveredKind, Discovered: &DiscoveredSetExpression{MemberKind: contractsv1.ContextFabricSubjectTeam}},
 		{Kind: SubjectExpressionChildrenOfScope, Scoped: &ScopedSetExpression{AnchorTerms: []string{"a"}, MemberKind: contractsv1.ContextFabricSubjectRepository}},
 	}
+	anchors := []SubjectKind{"", contractsv1.ContextFabricSubjectTeam, contractsv1.ContextFabricSubjectProject, contractsv1.ContextFabricSubjectRepository, contractsv1.ContextFabricSubjectOrganization}
 	checked := 0
 	for _, expression := range expressions {
-		for _, shape := range allInvestigationShapes() {
-			frame := goalFrame(expression, GoalAllocateInvestment)
-			agreement := ClassifyFamilyAgreement(DeriveQuestionFamily(frame), ResolveFamilyForSample(FamilySample{Shape: shape, SubjectTerms: []string{"acme/widgets"}}))
-			if got, want := RouteFrameFamily(agreement, &frame), RouteQuestionFamily(agreement); got != want {
-				t.Fatalf("%s, %s: decision %+v, want the table's %+v", expression.Kind, shape, got, want)
+		for _, anchor := range anchors {
+			if expression.Kind == SubjectExpressionChildrenOfScope && anchor == contractsv1.ContextFabricSubjectTeam {
+				continue
 			}
-			checked++
+			for _, shape := range allInvestigationShapes() {
+				frame := goalFrame(expression, GoalAllocateInvestment)
+				sample := FamilySample{Shape: shape, SubjectTerms: []string{"acme/widgets"}, ScopeAnchorKind: anchor, ScopeAnchorTerm: "a"}
+				agreement := ClassifyFamilyAgreement(DeriveQuestionFamily(frame), ResolveFamilyForSample(sample))
+				if got, want := RouteFrameFamily(agreement, &frame, anchor), RouteQuestionFamily(agreement); got != want {
+					t.Fatalf("%s under %q, %s: decision %+v, want the table's %+v", expression.Kind, anchor, shape, got, want)
+				}
+				checked++
+			}
 		}
 	}
 	if checked == 0 {
@@ -171,7 +179,7 @@ func TestAModelPickOfTheFamilyStaysOutsideThePrecedenceTable(t *testing.T) {
 // questions, because the reuse lookup runs before interpretation.
 func TestTheTableVersionFencesAnswersPlannedBeforeThisChange(t *testing.T) {
 	t.Parallel()
-	if QuestionFamilyTableVersion == "question-family.v4" || QuestionFamilyTableVersion == "question-family.v5" {
+	if QuestionFamilyTableVersion == "question-family.v4" || QuestionFamilyTableVersion == "question-family.v5" || QuestionFamilyTableVersion == "question-family.v6" {
 		t.Fatal("the family table changed and its version did not: reuse would replay the old plan")
 	}
 }
@@ -213,7 +221,7 @@ func TestNoFrameWithoutTheGoalChangesFamily(t *testing.T) {
 					sample := FamilySample{Shape: shape, SubjectTerms: []string{"acme/widgets"}}
 					frame := goalFrame(expression, first, second)
 					agreement := ClassifyFamilyAgreement(DeriveQuestionFamily(frame), ResolveFamilyForSample(sample))
-					got := RouteFrameFamily(agreement, &frame)
+					got := RouteFrameFamily(agreement, &frame, "")
 					family, source, disposition := routedByTheTableAlone(agreement)
 					checked++
 					if got.Family != family || got.Source != source || got.Disposition != disposition {

@@ -1904,6 +1904,7 @@ var RenderShapeSelectionSummary = Event{
 		{Key: "render_shape_members_truncated", Type: FieldInt, Presence: PresenceRequired},
 		{Key: "render_shape_trends_omitted", Type: FieldInt, Presence: PresenceRequired},
 		{Key: "render_shape_comparison_measures_left_out", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "render_shape_landscape_sides_left_out", Type: FieldInt, Presence: PresenceRequired},
 		{Key: "render_shape_tables_cadence_withheld", Type: FieldInt, Presence: PresenceRequired},
 		{Key: "render_shape_accounting", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: []string{"ok", "violated"}},
 		{Key: "selected_shapes", Type: FieldObjectSlice, Presence: PresenceRequired, MaxItems: contractsv1.ContextFabricRenderShapesMaxCount, Fields: []Field{

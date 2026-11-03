@@ -8385,7 +8385,7 @@
         "type": "string",
         "presence": "required",
         "closed_vocabulary": [
-          "question-family.v6"
+          "question-family.v7"
         ]
       },
       {
@@ -9446,7 +9446,7 @@
         "presence": "required",
         "closed_vocabulary": [
           "",
-          "question-family.v6"
+          "question-family.v7"
         ]
       },
       {
@@ -9673,7 +9673,8 @@
           "",
           "projected",
           "precedence",
-          "carried"
+          "carried",
+          "scope_allocation"
         ]
       },
       {
@@ -10041,6 +10042,7 @@
           "dated_fact_trend",
           "investment_theme_share",
           "comparison_side_by_side",
+          "landscape_position",
           "completion_forecast",
           "completion_forecast_percentiles"
         ]
@@ -10076,6 +10078,10 @@
           "no_plottable_measure",
           "shape_budget_spent",
           "not_plan_authorized",
+          "no_landscape_requirement",
+          "fewer_than_two_points",
+          "landscape_days_differ",
+          "quadrant_unprovable",
           "not_forecast_intent",
           "no_completion_distribution",
           "more_than_one_scope",
@@ -10146,6 +10152,11 @@
         "presence": "required"
       },
       {
+        "key": "render_shape_landscape_sides_left_out",
+        "type": "int",
+        "presence": "required"
+      },
+      {
         "key": "render_shape_tables_cadence_withheld",
         "type": "int",
         "presence": "required"
@@ -10200,6 +10211,7 @@
               "dated_fact_trend",
               "investment_theme_share",
               "comparison_side_by_side",
+              "landscape_position",
               "completion_forecast",
               "completion_forecast_percentiles"
             ]
@@ -12335,7 +12347,7 @@
         "type": "string",
         "presence": "required",
         "closed_vocabulary": [
-          "question-family.v6"
+          "question-family.v7"
         ]
       },
       {
