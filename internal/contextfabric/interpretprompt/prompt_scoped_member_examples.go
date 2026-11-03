@@ -117,6 +117,17 @@ var interpretationScopedMemberExamples = []scopedMemberExample{
 		Note:       "one pull request inside its repository: the terms hold the repository, never the number alone; requested_subject_kind pull_request",
 	},
 	{
+		Question:   "What is the status of merge request !42 in platform/ledger-api?",
+		Expression: `{"kind":"named_subject","terms":["platform/ledger-api"]}`,
+		Note:       "a GitLab merge request is a pull request: the terms hold the repository path, never the number alone; requested_subject_kind pull_request",
+	},
+	{
+		Question:   "Which merge requests in the platform/ledger-api repository are waiting on review?",
+		Expression: `{"kind":"children_of_scope","anchor_terms":["platform/ledger-api"],"member_kind":"pull_request","member_qualifier":"status","member_qualifier_value":"awaiting_review"}`,
+		AnchorKind: "repository",
+		Note:       "merge requests are pull requests; the members are filtered by a state",
+	},
+	{
 		Question:   "Which pull requests in the ledger-api repository are open?",
 		Expression: `{"kind":"children_of_scope","anchor_terms":["ledger-api"],"member_kind":"pull_request","member_qualifier":"status","member_qualifier_value":"open"}`,
 		AnchorKind: "repository",
