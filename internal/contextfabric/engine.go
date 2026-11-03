@@ -694,6 +694,12 @@ type EngineTelemetry interface {
 	// vocabulary. Called once per call, from Investigate, after
 	// canonicalizeEvidenceWindow/composeEffectiveWindow both run.
 	RecordWindowCanonicalization(ctx context.Context, principal storage.Principal, outcome WindowCanonicalizationOutcome)
+	// RecordOperandReadKinds (CHAOS-12596) reports, for a turn whose derived
+	// rows hold at least one served operand read row (one side of an explicit
+	// comparison), how many such rows there were, how many distinct kinds
+	// they name as serving their sides, and how many of those the plan read
+	// only because of them. Plain counts, no kind names.
+	RecordOperandReadKinds(ctx context.Context, principal storage.Principal, operandRows, kindsNamed, kindsAdded int)
 	// RecordWindowClassification (CHAOS-12595) reports the window-class
 	// decision a current-axis turn with no request window draws its default
 	// from: the model's own sanitized pick, the class decided, its source,
@@ -3832,7 +3838,19 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 			return terminal, terminalErr
 		}
 	}
-	mergedFactRequirements := mergeFactRequirements(statusComposedRequirements, graphContext.FactRequirements, cohortRankingRequirements)
+	// CHAOS-12596: the kinds a served OPERAND read row names as serving its
+	// side are READ, not only planned. plan.FactKinds reaches the fact request
+	// above only through a cohort, and an explicit comparison of named
+	// subjects has none, so without this group the plan said metrics and the
+	// read never asked for it (codex r1 on the PR, executed). Appended LAST,
+	// so every more specific requirement for the same kind wins and this only
+	// fills a kind that is otherwise absent. A work-item tuple reads its own
+	// fixed set and gains nothing here.
+	operandReadRequirements := operandReadFactRequirements(derivedRequirements, workItemTuple)
+	mergedFactRequirements := mergeFactRequirements(statusComposedRequirements, graphContext.FactRequirements, cohortRankingRequirements, operandReadRequirements)
+	if operandRows := OperandReadRowCount(derivedRequirements); operandRows > 0 && !workItemTuple && e.telemetry != nil {
+		e.telemetry.RecordOperandReadKinds(ctx, principal, operandRows, len(operandReadRequirements), operandKindsAbsentFrom(operandReadRequirements, statusComposedRequirements, graphContext.FactRequirements, cohortRankingRequirements))
+	}
 	factRequest := CanonicalFactRequest{
 		workItemTuple:            workItemTuple,
 		LinkScopedSubjects:       linkScopedFactSubjects(ctx, request, subjects, tupleCensus),
