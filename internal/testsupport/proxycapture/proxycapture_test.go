@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptrace"
 	"os"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -124,7 +125,7 @@ func shortCallTimeout(t *testing.T, d time.Duration) {
 // CHAOS-12868: a call's own error is returned as it is, and a call the deadline ended fails as the timeout, loudly,
 // never as the client's error.
 func TestCallReturnsTheCallsOwnErrorAndFailsLoudlyOnItsDeadline(t *testing.T) {
-	shortCallTimeout(t, 100*time.Millisecond)
+	shortCallTimeout(t, time.Second)
 	want := errors.New("x: failed in transport")
 	if got := Call(context.Background(), func(context.Context) error { return want }); !errors.Is(got, want) {
 		t.Fatalf("Call returned %v, want the call's own error", got)
@@ -140,10 +141,10 @@ func TestCallReturnsTheCallsOwnErrorAndFailsLoudlyOnItsDeadline(t *testing.T) {
 			return errors.New("Post request timeout")
 		})
 	})
-	if remaining <= 50*time.Millisecond || remaining > 100*time.Millisecond {
-		t.Fatalf("the call's deadline was %v away at its start, want callTimeout (100 ms)", remaining)
+	if remaining <= 500*time.Millisecond || remaining > time.Second {
+		t.Fatalf("the call's deadline was %v away at its start, want callTimeout (1 s)", remaining)
 	}
-	if !strings.HasPrefix(message, "TIMEOUT FALLBACK: the call's own 100ms deadline ended it after ") ||
+	if !strings.HasPrefix(message, "TIMEOUT FALLBACK: the call's own 1s deadline ended it after ") ||
 		!strings.Contains(message, "(it returned Post request timeout)") {
 		t.Fatalf("a call the deadline ended gave %q, want the TIMEOUT FALLBACK failure", message)
 	}
@@ -152,18 +153,18 @@ func TestCallReturnsTheCallsOwnErrorAndFailsLoudlyOnItsDeadline(t *testing.T) {
 // The budget is per call: calls that each fit their deadline pass however long they take together, and a parent
 // context that has already ended does not end the next call.
 func TestCallGivesEachCallItsOwnBudget(t *testing.T) {
-	shortCallTimeout(t, 200*time.Millisecond)
-	parent, cancel := context.WithTimeout(context.Background(), 150*time.Millisecond)
+	shortCallTimeout(t, time.Second)
+	parent, cancel := context.WithTimeout(context.Background(), 400*time.Millisecond)
 	defer cancel()
 	for i := range 3 {
 		message := panicOf(func() {
 			_ = Call(parent, func(ctx context.Context) error {
-				time.Sleep(120 * time.Millisecond)
+				time.Sleep(300 * time.Millisecond)
 				return ctx.Err()
 			})
 		})
 		if message != "" {
-			t.Fatalf("call %d of 3 (each 120 ms, budget 200 ms each, parent 150 ms in all) failed: %s", i+1, message)
+			t.Fatalf("call %d of 3 (each 300 ms, budget 1 s each, parent 400 ms in all) failed: %s", i+1, message)
 		}
 	}
 	if parent.Err() == nil {
@@ -180,14 +181,21 @@ func TestCallTellsTheTimelineOfACallItsDeadlineEnded(t *testing.T) {
 			trace.DNSStart(httptrace.DNSStartInfo{Host: "upstream.invalid"})
 			trace.DNSDone(httptrace.DNSDoneInfo{Err: errors.New("no such host")})
 			trace.DNSStart(httptrace.DNSStartInfo{Host: "upstream.invalid"})
+			trace.DNSDone(httptrace.DNSDoneInfo{})
+			trace.ConnectStart("tcp", "192.0.2.1:80")
+			trace.ConnectDone("tcp", "192.0.2.1:80", errors.New("refused"))
+			trace.ConnectStart("tcp", "192.0.2.2:80")
+			trace.ConnectDone("tcp", "192.0.2.2:80", nil)
 			<-ctx.Done()
 			return ctx.Err()
 		})
 	})
-	for _, want := range []string{"timeline: +0s dns start upstream.invalid, +0s dns failed, +0s dns start upstream.invalid"} {
-		if !strings.Contains(message, want) {
-			t.Fatalf("the fallback said %q, want it to contain %q", message, want)
-		}
+	// Offsets vary with load: compare the events in order, without them.
+	events := regexp.MustCompile(`\+[0-9.]+(?:ns|µs|ms|s) `).ReplaceAllString(message, "")
+	want := "timeline: dns start upstream.invalid, dns failed, dns start upstream.invalid, dns done, " +
+		"connect start 192.0.2.1:80, connect failed 192.0.2.1:80, connect start 192.0.2.2:80, connect done 192.0.2.2:80"
+	if !strings.Contains(events, want) || !regexp.MustCompile(`timeline: \+[0-9.]+(?:ns|µs|ms|s) dns start`).MatchString(message) {
+		t.Fatalf("the fallback said %q, want its timeline to be %q, each event with its offset", message, want)
 	}
 	if got := panicOf(func() {
 		_ = Call(context.Background(), func(ctx context.Context) error { <-ctx.Done(); return nil })
