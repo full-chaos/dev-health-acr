@@ -1,20 +1,48 @@
 // Package startterm starts test containers and terminates one whose start fails. testcontainers returns the
 // container together with the start error and removes nothing, so a readiness timeout or probe error leaks one
 // container per failed start unless the caller terminates it. Every fixture start in the module goes through here.
+//
+// It also starts again, a bounded number of times and with a log line each time, a start whose create the daemon
+// refused because the image is not there after testcontainers' pull (CHAOS-12855): see imageMissingAtCreate.
 package startterm
 
 import (
 	"context"
 	"errors"
 	"fmt"
+	"log"
 	"reflect"
+	"strings"
 	"time"
 
+	"github.com/containerd/errdefs"
 	"github.com/testcontainers/testcontainers-go"
 	tcpostgres "github.com/testcontainers/testcontainers-go/modules/postgres"
 )
 
 const terminateBudget = 30 * time.Second
+
+// imageMissingStarts bounds the starts of one fixture whose create finds no image; imageMissingPause is the wait
+// between them. On acr #2000 (run 41672061049) a start of the same image 5 s after the refused one served.
+const (
+	imageMissingStarts = 3
+	imageMissingPause  = 2 * time.Second
+)
+
+// pause waits between starts and returns ctx's error when ctx ends first. logf reports each retry. Tests replace both.
+var (
+	pause = func(ctx context.Context, d time.Duration) error {
+		timer := time.NewTimer(d)
+		defer timer.Stop()
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-timer.C:
+			return nil
+		}
+	}
+	logf = log.Printf
+)
 
 type genericFunc func(context.Context, testcontainers.GenericContainerRequest) (testcontainers.Container, error)
 
@@ -54,19 +82,50 @@ func Terminate(c testcontainers.Container) error {
 }
 
 func generic(ctx context.Context, req testcontainers.GenericContainerRequest, create genericFunc) (testcontainers.Container, error) {
-	c, err := create(ctx, req)
-	if err != nil {
-		err = TerminateFailed(c, err)
-	}
-	return c, err
+	return startUntilImageServes(ctx, func() (testcontainers.Container, error) {
+		c, err := create(ctx, req)
+		if err != nil {
+			err = TerminateFailed(c, err)
+		}
+		return c, err
+	})
 }
 
 func postgresRun(ctx context.Context, image string, opts []testcontainers.ContainerCustomizer, run postgresFunc) (*tcpostgres.PostgresContainer, error) {
-	pc, err := run(ctx, image, opts...)
-	if err != nil && pc != nil {
-		err = TerminateFailed(pc, err)
+	return startUntilImageServes(ctx, func() (*tcpostgres.PostgresContainer, error) {
+		pc, err := run(ctx, image, opts...)
+		if err != nil && pc != nil {
+			err = TerminateFailed(pc, err)
+		}
+		return pc, err
+	})
+}
+
+// imageMissingAtCreate reports a start that the daemon refused at create because the image is not there.
+// testcontainers v0.44 (attemptToPullImage) reads the pull stream into io.Discard, so a registry error reported
+// inside the stream is dropped: the pull returns nil with no image, and only the create sees it ("No such image").
+// Any other failure, another not-found among them, is not this one and is never retried.
+func imageMissingAtCreate(err error) bool {
+	return errdefs.IsNotFound(err) && strings.Contains(err.Error(), "No such image")
+}
+
+// startUntilImageServes runs start until it serves, fails for another reason, or imageMissingStarts starts all found
+// no image. Every start it repeats is logged: a retry that is not seen would hide a registry or daemon fault.
+func startUntilImageServes[T any](ctx context.Context, start func() (T, error)) (T, error) {
+	for attempt := 1; ; attempt++ {
+		c, err := start()
+		if err == nil || !imageMissingAtCreate(err) {
+			return c, err
+		}
+		if attempt == imageMissingStarts {
+			return c, fmt.Errorf("no image after %d starts: %w", attempt, err)
+		}
+		logf("startterm: start %d of %d found no image (%v); testcontainers drops errors inside the pull stream (CHAOS-12855), so the image is pulled again",
+			attempt, imageMissingStarts, err)
+		if pause(ctx, imageMissingPause) != nil {
+			return c, err
+		}
 	}
-	return pc, err
 }
 
 func isNil(c testcontainers.Container) bool {
