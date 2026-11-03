@@ -276,7 +276,7 @@ func ServeHTTPTransport(ctx context.Context, diagnostics io.Writer, identity ver
 }
 
 // ProbeHostedLiveness checks the hosted API's liveness route with the process
-// configuration alone, exactly as /readyz does. It needs no credential.
+// configuration alone, through its /healthz route. It needs no credential.
 func ProbeHostedLiveness(ctx context.Context, identity version.Info) error {
 	sidecarCfg, err := sidecar.LoadConfig()
 	if err != nil {

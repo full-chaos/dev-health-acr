@@ -4,7 +4,10 @@
 // they cannot import it) agree on one grammar.
 package reposlug
 
-import "regexp"
+import (
+	"regexp"
+	"strings"
+)
 
 // NamePattern is the grammar of a repository name as one RE2 group, with no
 // anchor, so a ClickHouse statement can apply the rule ValidName applies. It
@@ -44,4 +47,91 @@ func Fault(part string, owner bool) string {
 	default:
 		return "must start with a letter or digit (a leading '.' is allowed for a repository name), end with a letter or digit, and contain only letters, digits, '.', '_' and '-'"
 	}
+}
+
+// MaxSlugSegments and MaxSlugBytes bound a whole repository key: a GitLab path
+// nests 20 groups deep and holds 255 characters.
+const (
+	MaxSlugSegments = 20
+	MaxSlugBytes    = 255
+)
+
+// groupPattern is ownerPattern's grammar as one RE2 group, with no anchor and
+// no 100-character bound: RE2 refuses a bounded repeat nested in a repeat past
+// 1000 copies, so a statement tests each segment's length beside SlugPattern.
+const groupPattern = `([a-z0-9]|[a-z0-9][a-z0-9._-]*[a-z0-9])`
+
+// SlugPattern is the grammar of a whole repository key as one RE2 group, with
+// no anchor and without the 255-byte cap and the 100-character segment bound,
+// which a statement tests as lengths: 1-19 group segments, then a repository
+// name. It reads the same as a SQL string literal.
+const SlugPattern = groupPattern + `(/` + groupPattern + `){0,18}/` + NamePattern
+
+// ValidSlug reports whether a lower-cased repository key is valid: 2-20
+// segments in at most 255 bytes, every segment but the last a group name (no
+// leading '.') and the last a repository name.
+func ValidSlug(slug string) bool {
+	if len(slug) > MaxSlugBytes {
+		return false
+	}
+	parts := strings.Split(slug, "/")
+	if len(parts) < 2 || len(parts) > MaxSlugSegments {
+		return false
+	}
+	for _, group := range parts[:len(parts)-1] {
+		if !ValidOwner(group) {
+			return false
+		}
+	}
+	return ValidName(parts[len(parts)-1])
+}
+
+// ValidScope reports whether a lower-cased repository scope is valid: "*",
+// "<owner>/*" (one owner segment; the wildcard reaches every depth below it),
+// or a repository key.
+func ValidScope(scope string) bool {
+	if scope == "*" {
+		return true
+	}
+	if owner, ok := strings.CutSuffix(scope, "/*"); ok {
+		return ValidOwner(owner)
+	}
+	return ValidSlug(scope)
+}
+
+// Lower lower-cases ASCII letters only, so a repository key folds the way the
+// schema pattern reads it (strings.ToLower would fold U+212A to "k").
+func Lower(s string) string {
+	for i := 0; i < len(s); i++ {
+		if c := s[i]; 'A' <= c && c <= 'Z' {
+			b := []byte(s)
+			for j := i; j < len(b); j++ {
+				if 'A' <= b[j] && b[j] <= 'Z' {
+					b[j] += 'a' - 'A'
+				}
+			}
+			return string(b)
+		}
+	}
+	return s
+}
+
+// ValidSlugFolded reports whether a repository key is valid once ASCII case is
+// folded: the form a request carries before it is normalised.
+func ValidSlugFolded(slug string) bool { return ValidSlug(Lower(slug)) }
+
+// SchemaSlugPattern is the pattern every published schema holds for a
+// repository key (with maxLength MaxSlugBytes): ValidSlugFolded as an RE2 and
+// ECMA-262 pattern. The group repeat is unrolled because RE2 refuses a bounded
+// repeat nested in a repeat past 1000 copies.
+var SchemaSlugPattern = schemaSlugPattern()
+
+func schemaSlugPattern() string {
+	const group = `[A-Za-z0-9](?:[A-Za-z0-9._-]{0,98}[A-Za-z0-9])?`
+	const last = `(?:[A-Za-z0-9]|[A-Za-z0-9.][A-Za-z0-9._-]{0,98}[A-Za-z0-9])`
+	nest := ""
+	for i := 0; i < MaxSlugSegments-2; i++ {
+		nest = "(?:/" + group + nest + ")?"
+	}
+	return "^" + group + nest + "/" + last + "$"
 }

@@ -182,7 +182,7 @@ func newOAuthStackWith(t *testing.T, hop *auth.MCPHopPolicy, hopFile string, ext
 			Assembler:    assembler, Evidence: evaluation,
 			DeviceAuthorizations: devices, DeviceVerificationURL: "https://web.example.test/acr/device",
 			DeviceAuthorizationLimiter: api.NewDeviceAuthorizationLimiter(api.ClockFunc(time.Now)),
-			ReadinessChecks:            []api.ReadinessCheck{api.CheckFunc{CheckName: "postgres"}, api.CheckFunc{CheckName: "entitlement"}},
+			ReadinessChecks:            []api.ReadinessCheck{api.CheckFunc{CheckName: "postgres"}},
 			DataStoreChecks:            []api.ReadinessCheck{api.CheckFunc{CheckName: "clickhouse"}},
 			OAuth: &api.OAuthRuntime{
 				Store: memory.NewOAuthStore(s.clock.now), Issuer: s.api.URL,

@@ -378,8 +378,7 @@ func normalizeRepositories(values []string) ([]string, error) {
 	result := make([]string, 0, len(values))
 	for _, raw := range values {
 		value := strings.ToLower(strings.TrimSpace(raw))
-		parts := strings.Split(value, "/")
-		if value != "*" && (len(parts) != 2 || !reposlug.ValidOwner(parts[0]) || (parts[1] != "*" && !reposlug.ValidName(parts[1]))) {
+		if !reposlug.ValidScope(value) {
 			return nil, invalid("repository scope")
 		}
 		if _, exists := seen[value]; !exists {

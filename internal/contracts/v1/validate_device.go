@@ -207,7 +207,7 @@ func validateBoundedRepositoryScopes(repositories []string) error {
 		return fmt.Errorf("repository scopes violate v1 bounds")
 	}
 	for _, repository := range repositories {
-		if !stringLengthBetween(repository, 1, 512) || !repositorySlugPattern.MatchString(repository) || strings.ContainsRune(repository, '*') {
+		if !validRepositorySlug(repository) {
 			return fmt.Errorf("repository scopes violate v1 bounds")
 		}
 	}

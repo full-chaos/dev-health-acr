@@ -94,11 +94,11 @@ func TestAuthorizedAttributesDeniesMissingAuthorizationAttribute(t *testing.T) {
 // (Codex finding G3(b)): the owner/* matcher must validate each decoded
 // entry as a well-formed "owner/repo" slug via
 // internal/auth.NormalizeRepositorySlug before trusting its owner prefix, so
-// a malformed entry like "acme/" (empty repo) or "acme/not/real" (extra
+// a malformed entry like "acme/" (empty repo) or "acme/../real" (a dot
 // segment) cannot satisfy an "acme/*" wildcard by owner-prefix alone.
 func TestScopeMatchOwnerWildcardRejectsMalformedSlugEntries(t *testing.T) {
 	t.Parallel()
-	entries := []string{"acme/", "acme/not/real"}
+	entries := []string{"acme/", "acme/../real", "acme//real"}
 	if ScopeMatch(entries, "acme/*", ScopeValueRepositoryName) {
 		t.Fatalf("ScopeMatch(%#v, \"acme/*\") = true, want false: malformed entries must not satisfy an owner wildcard", entries)
 	}
@@ -234,4 +234,23 @@ func TestChaos5405_NamesMatchCaseInsensitivelyAndIdsDoNot(t *testing.T) {
 			t.Fatal("two malformed values matched case-insensitively -- the fallback must be an exact comparison")
 		}
 	})
+}
+
+// CHAOS-10708: an owner wildcard admits a repository at any depth below the
+// owner, and only below that owner.
+func TestScopeMatchOwnerWildcardMatchesAtDepthOneTwoAndThree(t *testing.T) {
+	t.Parallel()
+	for depth, entries := range map[int][]string{1: {"owner/x"}, 2: {"Owner/g/x"}, 3: {"owner/g/h/x"}} {
+		if !ScopeMatch(entries, "owner/*", ScopeValueRepositoryName) {
+			t.Errorf("depth %d: owner/* did not match %v", depth, entries)
+		}
+	}
+	for _, entries := range [][]string{{"owner2/x"}, {"owner2/g/x"}, {"ownerx/g/h/x"}, {"other/owner/x"}} {
+		if ScopeMatch(entries, "owner/*", ScopeValueRepositoryName) {
+			t.Errorf("owner/* matched %v", entries)
+		}
+	}
+	if !ScopeMatch([]string{"acme/grp/web"}, "ACME/grp/web", ScopeValueRepositoryName) || ScopeMatch([]string{"acme/grp/web"}, "acme/grp/web2", ScopeValueRepositoryName) {
+		t.Error("an exact nested slug does not match itself only")
+	}
 }
