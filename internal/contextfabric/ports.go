@@ -499,7 +499,10 @@ type GraphDiscoveryRequest struct {
 	// CHAOS-4610, option a). The engine sets it when the scope-anchor
 	// allocation route decided the family: "how is team X investing across its
 	// repositories" is the team's investment fact, and its repository split is
-	// the fact's own table, never a cohort of member facts.
+	// the fact's own table, never a cohort of member facts. The same route
+	// sets the turn's requirement on the anchor (allocation_breakdown/subject/
+	// team, scopeAllocationRequirementFrame; CHAOS-12885), so no member
+	// requirement waits on a population this read never builds.
 	AnchorFactOnly bool `json:"-"`
 }
 

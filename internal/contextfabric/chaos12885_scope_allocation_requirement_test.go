@@ -102,8 +102,14 @@ func runScopeAllocationQuestion(t *testing.T, run scopeAllocationRun) (Investiga
 		for _, subject := range request.Subjects {
 			facts = append(facts, CanonicalFact{Kind: FactInvestment, Subject: subject, Fields: map[string]FactValue{}, SourceState: SourceAvailable, Source: "ops", SourceVersion: "v1"})
 		}
+		// The source observation the fact registry records for each kind it
+		// read (fact_registry.go), which the read evaluator counts.
+		sources := []SourceObservation{}
+		if len(facts) > 0 {
+			sources = append(sources, SourceObservation{Source: canonicalFactSourcePrefix + string(FactInvestment), State: SourceAvailable})
+		}
 		return CanonicalFactBundle{
-			Facts: facts, Coverage: Coverage{Sources: []SourceObservation{}, DegradedReasons: []string{}},
+			Facts: facts, Coverage: Coverage{Sources: sources, DegradedReasons: []string{}},
 			Version: "ops-v1", Versions: map[FactKind]string{}, Watermarks: map[FactKind]string{},
 		}, nil
 	})
@@ -124,12 +130,15 @@ func runScopeAllocationQuestion(t *testing.T, run scopeAllocationRun) (Investiga
 		},
 		Graph: graph,
 		Facts: readFacts,
-		Synthesizer: synthesizerFunc(func(context.Context, storage.Principal, SynthesisInput) (InvestigationResult, error) {
+		// The synthesizer states the fact read's coverage, as the production
+		// synthesizer does, so the read evaluator sees what was read.
+		Synthesizer: synthesizerFunc(func(_ context.Context, _ storage.Principal, input SynthesisInput) (InvestigationResult, error) {
+			sources := append([]SourceObservation{}, input.Facts.Coverage.Sources...)
 			return InvestigationResult{
 				Status: InvestigationComplete, DirectJudgment: "Assessed.", CurrentState: "Nominal.",
 				StrongestPressures: []string{}, Drivers: []DriverJudgment{}, RemainingWork: []Finding{}, ReadinessGaps: []Finding{},
 				Paths: []RelationshipPath{}, Conflicts: []Finding{}, Limitations: []string{}, EvidenceRefIDs: []string{},
-				ClaimedFacts: []ClaimedFact{}, Coverage: Coverage{Sources: []SourceObservation{}, DegradedReasons: []string{}},
+				ClaimedFacts: []ClaimedFact{}, Coverage: Coverage{Sources: sources, DegradedReasons: []string{}},
 				DeterministicAnswer: "Assessed.", Warnings: []string{},
 				Versions: VersionSet{
 					Backend: "test", ProjectionVersion: "projection-v1", QueryVersion: "query-v1",
