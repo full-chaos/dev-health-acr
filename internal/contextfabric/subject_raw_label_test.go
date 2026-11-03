@@ -102,6 +102,15 @@ func TestARawEdgeFactReadsInReaderWords(t *testing.T) {
 	other := workItemRef(t, zeroRepo, "jira:OPS-11")
 	pathProjectID, _, _ := identity.Derive(identity.KindProject, []string{"gitlab", "acme/live-e2e"}, nil)
 	pathProject := contextfabric.SubjectRef{Kind: contextfabric.SubjectProject, CanonicalID: pathProjectID, Label: "acme/live-e2e"}
+	titled := pr
+	titled.Label = "ci(docs): add investment anti-drift guards"
+	numberless := titled
+	numberless.CanonicalID = "pull_request:920f9442-07df-4217-4dc4-c5833c0b8268:main"
+	repoless := titled
+	repoless.CanonicalID = "pull_request:872"
+	emptyRepo := titled
+	emptyRepo.CanonicalID = "pull_request::872"
+	review := contextfabric.SubjectRef{Kind: contextfabric.SubjectKind("pull_request_review"), CanonicalID: "pull_request_review:920f9442-07df-4217-4dc4-c5833c0b8268:872:55", Label: "PR #872 review"}
 	for _, tc := range []struct {
 		fact, relation string
 		from, to       contextfabric.SubjectRef
@@ -133,6 +142,25 @@ func TestARawEdgeFactReadsInReaderWords(t *testing.T) {
 		// An end the writer named by the endpoint's own label stands beside a
 		// repaired end.
 		{"Generate taxonomy table belongs to project c67b1602-31db-4422-8dec-a4a02bbcc513", "BELONGS_TO_PROJECT", item, stub, "Generate taxonomy table belongs to project"},
+		// CHAOS-12715: a pull request end the graph carries with its title. The
+		// fact names it by its canonical id (the writer before CHAOS-12468) or by
+		// the label a read gives that id; either way the work item end is repaired,
+		// and a canonical id end reads as that label.
+		{"linear:CHAOS-2320 links pull request PR #872", "LINKS_PULL_REQUEST", item, titled, "CHAOS-2320 links pull request PR #872"},
+		{"linear:CHAOS-2320 links pull request pull_request:920f9442-07df-4217-4dc4-c5833c0b8268:872", "LINKS_PULL_REQUEST", item, titled, "CHAOS-2320 links pull request PR #872"},
+		{"linear:CHAOS-2320 links pull request ci(docs): add investment anti-drift guards", "LINKS_PULL_REQUEST", item, titled, "CHAOS-2320 links pull request ci(docs): add investment anti-drift guards"},
+		// A number that is not this pull request's stays, and so does its work
+		// item end.
+		{"linear:CHAOS-2320 links pull request PR #87", "LINKS_PULL_REQUEST", item, titled, "linear:CHAOS-2320 links pull request PR #87"},
+		// A pull request whose canonical id holds no number, or no repository, has
+		// no such form; nor has a review, whose canonical id is not a pull
+		// request's.
+		{"linear:CHAOS-2320 links pull request PR #0", "LINKS_PULL_REQUEST", item, numberless, "linear:CHAOS-2320 links pull request PR #0"},
+		{"linear:CHAOS-2320 links pull request PR #872", "LINKS_PULL_REQUEST", item, repoless, "linear:CHAOS-2320 links pull request PR #872"},
+		{"linear:CHAOS-2320 links pull request PR #872", "LINKS_PULL_REQUEST", item, emptyRepo, "linear:CHAOS-2320 links pull request PR #872"},
+		{"linear:CHAOS-2320 links pull request PR #55", "LINKS_PULL_REQUEST", item, review, "linear:CHAOS-2320 links pull request PR #55"},
+		// A pull request end on the From side is matched the same way.
+		{"pull_request:920f9442-07df-4217-4dc4-c5833c0b8268:872 blocks linear:CHAOS-2320", "BLOCKS", titled, item, "PR #872 blocks CHAOS-2320"},
 	} {
 		if got := contextfabric.RepairRawEdgeFact(tc.fact, tc.relation, tc.from, tc.to); got != tc.want {
 			t.Errorf("%q = %q, want %q", tc.fact, got, tc.want)

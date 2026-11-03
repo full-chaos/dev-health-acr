@@ -3,6 +3,7 @@ package contextfabric
 import (
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/identity"
@@ -118,8 +119,8 @@ func RepairRawEdgeFact(fact, relation string, from, to SubjectRef) string {
 	if words == "" {
 		return fact
 	}
-	fromRaw, fromOK := RawSubjectLabel(from.Kind, from.CanonicalID)
-	toRaw, toOK := RawSubjectLabel(to.Kind, to.CanonicalID)
+	fromRaw, fromOK := factEndRawID(from)
+	toRaw, toOK := factEndRawID(to)
 	if !fromOK && !toOK {
 		return fact
 	}
@@ -155,7 +156,7 @@ func RepairRawEdgeFact(fact, relation string, from, to SubjectRef) string {
 func factEndForms(end SubjectRef, raw string, ok bool) []string {
 	forms := make([]string, 0, 3)
 	if ok {
-		forms = append(forms, raw, ReadableSourceID(end.Kind, raw))
+		forms = append(forms, raw, factEndReaderForm(end, raw))
 	}
 	if end.Label != "" {
 		forms = append(forms, end.Label)
@@ -170,5 +171,52 @@ func factEnd(end SubjectRef, raw string) string {
 			return end.Label
 		}
 	}
+	return factEndReaderForm(end, raw)
+}
+
+// factEndRawID is the raw id a writer can have named an endpoint by in a fact:
+// RawSubjectLabel for a work item, work item ref, project or team, and for a pull
+// request its canonical id, which the writers used until CHAOS-12468.
+func factEndRawID(end SubjectRef) (string, bool) {
+	if raw, ok := RawSubjectLabel(end.Kind, end.CanonicalID); ok {
+		return raw, true
+	}
+	if _, ok := pullRequestFactLabel(end); ok {
+		return end.CanonicalID, true
+	}
+	return "", false
+}
+
+// factEndReaderForm is the reader form of an endpoint's raw id in a fact. A pull
+// request's is the label a graph read gives its canonical id
+// (identity.PullRequestLabel, falkorgraph's edgeProperties), and that read runs
+// before this repair: a stored "linear:CHAOS-1 links pull request pull_request:r:7"
+// reaches RepairRawEdgeFact as "linear:CHAOS-1 links pull request PR #7". Both
+// texts must match the pull request end, or its work item end is never repaired
+// (CHAOS-12715). Every other kind's is ReadableSourceID.
+func factEndReaderForm(end SubjectRef, raw string) string {
+	if label, ok := pullRequestFactLabel(end); ok {
+		return label
+	}
 	return ReadableSourceID(end.Kind, raw)
+}
+
+// pullRequestFactLabel is identity.PullRequestLabel of a pull request endpoint's
+// number, read from its canonical id (pull_request:<repository>:<number>) the
+// way falkorgraph's read reads it. ok is false for a canonical id of any other
+// form, a review's (pull_request_review:…) among them.
+func pullRequestFactLabel(end SubjectRef) (string, bool) {
+	rest, ok := strings.CutPrefix(end.CanonicalID, "pull_request:")
+	if !ok {
+		return "", false
+	}
+	cut := strings.LastIndexByte(rest, ':')
+	if cut <= 0 {
+		return "", false
+	}
+	number, err := strconv.ParseInt(rest[cut+1:], 10, 64)
+	if err != nil {
+		return "", false
+	}
+	return identity.PullRequestLabel(number), true
 }
