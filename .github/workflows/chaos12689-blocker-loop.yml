@@ -50,28 +50,33 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-      # Round 1: the test alone, 30 runs, 30 passes. Round 2: the heavy half as
-      # the race job runs it, 10 runs, 10 passes. Round 3 is the REPRO of the
-      # cause: the test's clock is pinned one second before 00:00 UTC for the
-      # reads before the block-size loop and one second after it for the loop.
-      # Expected: FAIL, with oldest_blocked_age_days one day apart.
-      - name: Run the midnight repro of the test
+      # Round 4: the fixed test. Shard 1 runs it as committed (expect pass);
+      # shard 2 plants a defect in the product (the age reads time.Now, not
+      # the clock the test pins), which the one-day check must catch (expect
+      # FAIL with "a day later" lines). Shard 3 repeats shard 1.
+      - name: Run the fixed test, planted on shard 2
         run: |
           set -uo pipefail
           mkdir -p .tmp/loop
-          log=.tmp/loop/repro.log
+          log=.tmp/loop/fixed.log
+          want=pass
+          if [ '${{ matrix.shard }}' = 2 ]; then
+            want=fail
+            sed -i 's|blockerOldestAgeOrUnavailable(ages\[teamID\], clock(), ageUnavailable\[teamID\])|blockerOldestAgeOrUnavailable(ages[teamID], time.Now(), ageUnavailable[teamID])|' internal/contextfabric/devhealthfacts/dependencies.go
+            grep -c 'ages\[teamID\], time.Now()' internal/contextfabric/devhealthfacts/dependencies.go
+          fi
+          code=0
           go test -race -count=1 -timeout 20m -v \
             -run '^TestTeamBlockerStatementsOnTheProductionShapeOnRealClickHouse$' \
-            ./internal/contextfabric/devhealthfacts > "$log" 2>&1
-          code=$?
-          grep -E -- '--- (PASS|FAIL|SKIP)|differs' "$log" | head -80 || true
-          if grep -q -- '--- FAIL: TestTeamBlockerStatementsOnTheProductionShapeOnRealClickHouse' "$log"; then
-            printf 'RESULT shard=%s repro FAIL as expected (exit %s)\n' '${{ matrix.shard }}' "$code"
-          else
-            printf 'RESULT shard=%s repro did NOT fail (exit %s)\n' '${{ matrix.shard }}' "$code"
-            tail -30 "$log"
-            exit 1
+            ./internal/contextfabric/devhealthfacts > "$log" 2>&1 || code=$?
+          grep -E -- '--- (PASS|FAIL|SKIP)|differs|a day later' "$log" | head -40 || true
+          if grep -q -- '--- SKIP: TestTeamBlocker' "$log" || ! grep -q -E -- '--- (PASS|FAIL): TestTeamBlocker' "$log"; then
+            printf 'RESULT shard=%s INVALID (exit %s)\n' '${{ matrix.shard }}' "$code"; tail -30 "$log"; exit 1
           fi
+          got=pass
+          if [ "$code" -ne 0 ]; then got=fail; fi
+          printf 'RESULT shard=%s want=%s got=%s\n' '${{ matrix.shard }}' "$want" "$got"
+          [ "$got" = "$want" ]
       # actions/upload-artifact v7.0.1
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         if: always()
