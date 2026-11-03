@@ -15,10 +15,14 @@
 package emitscan
 
 import (
+	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"go/ast"
 	"go/parser"
+	"go/printer"
 	"go/token"
 	"go/types"
 	"io/fs"
@@ -29,6 +33,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"unicode"
+	"unicode/utf8"
 
 	"github.com/full-chaos/dev-health-acr/internal/telemetryscrub"
 )
@@ -1401,7 +1406,7 @@ func (s *fileScan) attrLiteral(lit *ast.CompositeLit) {
 func (s *fileScan) withAttrs(arg ast.Expr) {
 	lit, ok := arg.(*ast.CompositeLit)
 	if !ok {
-		s.add(RuleLogKey, arg.Pos(), "unresolvable key")
+		s.addLogKey(arg.Pos(), arg)
 		return
 	}
 	for _, element := range lit.Elts {
@@ -1410,7 +1415,7 @@ func (s *fileScan) withAttrs(arg ast.Expr) {
 			continue
 		}
 		if !s.isAttrItem(element) {
-			s.add(RuleLogKey, element.Pos(), "unresolvable key")
+			s.addLogKey(element.Pos(), element)
 		}
 	}
 }
@@ -1438,7 +1443,7 @@ func (s *fileScan) attrFields(lit *ast.CompositeLit) {
 		}
 	}
 	if key == nil {
-		s.add(RuleLogKey, lit.Pos(), "unresolvable key")
+		s.addLogKey(lit.Pos(), lit)
 		return
 	}
 	s.logKey(key, value, lit.Pos())
@@ -1733,10 +1738,38 @@ func (s *fileScan) add(rule string, pos token.Pos, detail string) {
 	}
 	s.reported[dedupe] = true
 	fn := "-"
-	if len(s.funcs) > 0 && rule != RuleLogKey { // R9 is pinned by a count per file, so it names no function
+	if len(s.funcs) > 0 {
 		fn = s.funcs[len(s.funcs)-1]
 	}
 	s.out = append(s.out, Finding{Rule: rule, File: s.rel, Line: s.fset.Position(pos).Line, Func: fn, Detail: detail})
+}
+
+// maxKeyText is the longest key expression text kept whole in an R9 detail; a longer one keeps its head and a digest.
+const maxKeyText = 80
+
+// addLogKey reports an R9 finding. Its detail is the source text of the expression that hides the key (whitespace
+// collapsed to single spaces, so a pins.tsv row stays one line), so a pin follows the site and not a count per file.
+func (s *fileScan) addLogKey(pos token.Pos, expr ast.Expr) {
+	s.add(RuleLogKey, pos, "unresolvable key: "+keyText(s.fset, expr))
+}
+
+// keyText renders an expression as one line of source text. A text over maxKeyText bytes keeps its first bytes and the
+// first 8 hex digits of the digest of the whole text.
+func keyText(fset *token.FileSet, expr ast.Expr) string {
+	var buf bytes.Buffer
+	if err := printer.Fprint(&buf, fset, expr); err != nil {
+		return "-"
+	}
+	text := strings.Join(strings.Fields(buf.String()), " ")
+	if len(text) <= maxKeyText {
+		return text
+	}
+	sum := sha256.Sum256([]byte(text))
+	cut := maxKeyText
+	for cut > 0 && !utf8.RuneStart(text[cut]) {
+		cut--
+	}
+	return text[:cut] + "...#" + hex.EncodeToString(sum[:4])
 }
 
 func unquote(literal string) string {
@@ -2016,7 +2049,7 @@ func (s *fileScan) logKeys(args []ast.Expr, from int) {
 func (s *fileScan) logAttrs(args []ast.Expr, from int) {
 	for i := from; i < len(args); i++ {
 		if !s.isAttrItem(args[i]) {
-			s.add(RuleLogKey, args[i].Pos(), "unresolvable key")
+			s.addLogKey(args[i].Pos(), args[i])
 		}
 		s.emitValue(args[i], args[i].Pos())
 	}
@@ -2044,7 +2077,7 @@ func (s *fileScan) isAttrItem(expr ast.Expr) bool {
 func (s *fileScan) logKey(keyExpr, value ast.Expr, pos token.Pos) {
 	keys, literal, over := s.keysOf(keyExpr)
 	if !literal || over {
-		s.add(RuleLogKey, pos, "unresolvable key")
+		s.addLogKey(pos, keyExpr)
 		return
 	}
 	label := "-"

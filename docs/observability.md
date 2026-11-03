@@ -151,7 +151,7 @@ Exported spans pass through one scrub in `internal/otelexport`: only the attribu
 
 ## Emit-path census
 
-`internal/cigates/emitscan` reads the Go source of `cmd` and `internal` on every run and fails the build on a protected or network key in a log line, span attribute or metric label, error text as a log or attribute value, a raw request path or query in a log attribute, a log key that is not a constant (pinned per file in `pins.tsv`), an slog handler built outside `telemetryscrub`, and an unbounded metric label. `labels.tsv` pins the label keys of every metric call site, `spans.tsv` pins the span attribute keys (each must satisfy `otelexport.SafeSpanKey`), and `pins.tsv` holds the reviewed exceptions with a reason; a stale row fails too. A package whose scan exhausts its work budget is a finding, never a pass.
+`internal/cigates/emitscan` reads the Go source of `cmd` and `internal` on every run and fails the build on a protected or network key in a log line, span attribute or metric label, error text as a log or attribute value, a raw request path or query in a log attribute, a log key that is not a constant (pinned in `pins.tsv` by file, enclosing function and key expression text), an slog handler built outside `telemetryscrub`, and an unbounded metric label. `labels.tsv` pins the label keys of every metric call site, `spans.tsv` pins the span attribute keys (each must satisfy `otelexport.SafeSpanKey`), and `pins.tsv` holds the reviewed exceptions with a reason; a stale row fails too. A package whose scan exhausts its work budget is a finding, never a pass.
 
 ## SLOs and alerts
 
