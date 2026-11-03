@@ -1,0 +1,92 @@
+---
+# CHAOS-12689 measurement only, on a draft pull request that is closed
+# unmerged: run the one intermittent test many times on hosted runners, the
+# venue where it failed, and keep each run's output.
+name: chaos12689-blocker-loop
+
+"on":
+  pull_request:
+    paths:
+      - .github/workflows/chaos12689-blocker-loop.yml
+
+permissions:
+  contents: read
+  packages: read
+
+concurrency:
+  group: chaos12689-blocker-loop-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+env:
+  ACR_CONTAINER_TESTS: '1'
+  GOFLAGS: -trimpath
+  GOPROXY: https://proxy.golang.org|direct
+
+jobs:
+  loop:
+    name: blocker block size (shard ${{ matrix.shard }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+    env:
+      TESTCONTAINERS_HUB_IMAGE_NAME_PREFIX: ghcr.io/${{ github.repository }}
+      TESTCONTAINERS_RYUK_DISABLED: 'true'
+      TESTCONTAINERS_SESSION_ID: ci-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.job }}-${{ strategy.job-index }}
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        with: {persist-credentials: false}
+      # actions/setup-go v6.5.0
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16
+        with:
+          go-version: '1.27.3'
+          cache: true
+      # docker/login-action v4.5.1
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@abd2ef45e78c5afb21d64d4ca52ee8550d9572c7
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Run the test three times, as the failing race job runs it
+        run: |
+          set -uo pipefail
+          mkdir -p .tmp/loop
+          status=0
+          for run in 1 2 3; do
+            printf '=== shard %s run %s\n' '${{ matrix.shard }}' "$run"
+            log=".tmp/loop/run-$run.log"
+            go test -race -count=1 -timeout 20m -v \
+              -run '^TestTeamBlockerStatementsOnTheProductionShapeOnRealClickHouse$' \
+              ./internal/contextfabric/devhealthfacts > "$log" 2>&1
+            code=$?
+            # A run that skipped or never reached the test measured nothing:
+            # it is INVALID, never a pass.
+            if grep -q -- '--- SKIP: TestTeamBlockerStatementsOnTheProductionShapeOnRealClickHouse' "$log" || \
+               ! grep -q -E -- '--- (PASS|FAIL): TestTeamBlockerStatementsOnTheProductionShapeOnRealClickHouse' "$log"; then
+              printf 'RESULT shard=%s run=%s INVALID (exit %s)\n' '${{ matrix.shard }}' "$run" "$code"
+              tail -20 "$log"
+              status=1
+            elif [ "$code" -eq 0 ]; then
+              printf 'RESULT shard=%s run=%s pass\n' '${{ matrix.shard }}' "$run"
+            else
+              printf 'RESULT shard=%s run=%s FAIL\n' '${{ matrix.shard }}' "$run"
+              status=1
+            fi
+            grep -E -- '--- (PASS|FAIL|SKIP)|differs|PRODSHAPE org-wide' ".tmp/loop/run-$run.log" | head -60 || true
+          done
+          exit "$status"
+      # actions/upload-artifact v7.0.1
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        if: always()
+        with:
+          name: chaos12689-loop-shard-${{ matrix.shard }}
+          path: .tmp/loop/
+          include-hidden-files: true
+          if-no-files-found: warn
+          retention-days: 7
+      - name: Remove this job's testcontainers by session id
+        if: always()
+        run: scripts/ci/reap-testcontainers-session.sh
