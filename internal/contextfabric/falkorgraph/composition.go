@@ -67,7 +67,16 @@ import (
 // only.
 // CHAOS-10031 bumped this rp5 -> rp6: the calibrated retrieval-policy entry is
 // re-keyed t3 -> t4 (inherited calibration, see calibratedIdentityText3Large).
-const RetrievalPolicyVersion = "rp6"
+//
+// CHAOS-12663 bumped this rp6 -> rp7: a unique case-exact label match now
+// commits over subjects whose labels differ from the term only in case
+// (graphrank.narrowCaseExactLabel), and a comparison selection binds to the
+// operand spelled with its label's case. A question that PREVIOUSLY resolved
+// ambiguous (a clarification naming both case twins) can now COMMIT for the
+// identical text -- the rp4 -> rp5 class above -- and answer reuse can replay
+// a stored clarification, so an rp6 one must miss. No vector or node stamp
+// moves; this is a read-side commit-decision change only.
+const RetrievalPolicyVersion = "rp7"
 
 // EmbedRetrievalIdentityNone is the persisted embed-retrieval-identity value
 // for a deployment with NO embedder configured. A literal, never the empty

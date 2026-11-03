@@ -3,6 +3,7 @@ package contextfabric
 import (
 	"testing"
 
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric/identity"
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 )
 
@@ -134,5 +135,36 @@ func TestChaos4690_ApplyCoverageDisplayLabels_AllKnownSegmentsZeroFallbacks(t *t
 	fallbacks := applyCoverageDisplayLabels(result)
 	if fallbacks != 0 {
 		t.Fatalf("fallbacks = %d, want 0: every segment (commit, incident) is in the registry", fallbacks)
+	}
+}
+
+// CHAOS-12620: a repository, project or organization ref is labelled with the name
+// the answer holds for that subject, from any of the answer's subjects, and with
+// the noun alone when the answer holds none. Nothing is read for it.
+func TestAnEvidenceLabelTakesTheNameTheAnswerHolds(t *testing.T) {
+	t.Parallel()
+	const repoID = "920f9442-07df-4217-4dc4-c5833c0b8268"
+	project, _, err := identity.Derive(identity.KindProject, []string{"linear", "c67b1602-31db-4422-8dec-a4a02bbcc513"}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	result := &InvestigationResult{
+		SubjectResolution: SubjectResolution{Committed: []SubjectRef{{Kind: SubjectRepository, CanonicalID: RepositoryCanonicalID(repoID), Label: "full-chaos/dev-health-ops"}}},
+		Paths:             []RelationshipPath{{Nodes: []SubjectRef{{Kind: SubjectProject, CanonicalID: project, Label: "Investment View Documentation"}}}},
+		EvidenceRefIDs: []string{
+			"acr:v1:repository:" + repoID,
+			"acr:v1:project:linear:c67b1602-31db-4422-8dec-a4a02bbcc513",
+			"acr:v1:repository:7b9583ee-4d24-2be7-4d09-34f815bebdd7",
+		},
+	}
+	applyCoverageDisplayLabels(result)
+	for ref, want := range map[string]string{
+		"acr:v1:repository:" + repoID:                                "Repository: full-chaos/dev-health-ops",
+		"acr:v1:project:linear:c67b1602-31db-4422-8dec-a4a02bbcc513": "Project: Investment View Documentation",
+		"acr:v1:repository:7b9583ee-4d24-2be7-4d09-34f815bebdd7":     "Repository",
+	} {
+		if got := result.EvidenceRefLabels[ref]; got != want {
+			t.Errorf("%s: label = %q, want %q", ref, got, want)
+		}
 	}
 }

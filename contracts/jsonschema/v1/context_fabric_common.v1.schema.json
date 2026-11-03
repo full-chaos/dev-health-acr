@@ -6037,6 +6037,10 @@
           "type": "integer",
           "minimum": 0
         },
+        "target_items": {
+          "type": "integer",
+          "minimum": 0
+        },
         "forecast_p50_days": {
           "type": "integer",
           "minimum": 0

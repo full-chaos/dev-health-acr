@@ -101,6 +101,11 @@ type operandSlotRun struct {
 	// from one authority is the property, and it is only checkable if both
 	// are recorded.
 	searchLimit int
+
+	// caseTwinReadings are the CHAOS-12663 sentences this slot's own decision
+	// owes: its term read by case over a same-name twin. Published only with
+	// the comparison it belongs to.
+	caseTwinReadings []string
 }
 
 // state derives what happened to this operand from its own contents.
@@ -241,6 +246,9 @@ func publishComparisonResolution(run comparisonResolutionRun, budget int) (conte
 	for _, slot := range run.slots {
 		subject := slot.committed[0]
 		resolution.Committed = append(resolution.Committed, subject)
+		// CHAOS-12663: each operand read by case states it, in slot order. A
+		// hold publishes no commit, so it owes none.
+		resolution.CaseTwinReadingLimitations = append(resolution.CaseTwinReadingLimitations, slot.caseTwinReadings...)
 		// FIRST WRITER WINS, BY SUBJECT KEY. The union is what stops the
 		// second slot's proof map overwriting the first's for a subject both
 		// happened to see; the published basis must describe the commit that
@@ -850,7 +858,7 @@ func resolveOneOperandSlot(
 		retrievalDegraded, effectiveSearchLimit, deps.CalibratedTopK,
 		unscopedVisibilityFor(principal, request), gate, identity, identityTerms,
 		aliases.state(), deps.ResolutionTracer, request.RequestID, "", false, false,
-		[]contextfabric.SubjectKind{slot.Kind}, anchorReservedSlot{}, nil, nil, pass,
+		[]contextfabric.SubjectKind{slot.Kind}, slot.Terms, anchorReservedSlot{}, nil, nil, pass,
 	)
 
 	return operandSlotRun{
@@ -864,7 +872,8 @@ func resolveOneOperandSlot(
 		// Recorded from the value HANDED TO the resolver, not re-derived, so
 		// the line reports the bound that ran rather than a second opinion
 		// about what it should have been.
-		searchLimit: effectiveSearchLimit,
+		searchLimit:      effectiveSearchLimit,
+		caseTwinReadings: resolution.CaseTwinReadingLimitations,
 	}, nil
 }
 
@@ -941,6 +950,13 @@ func bindReceiptsToSlots(
 		}
 
 		matches := matchingSlotsForReceipt(principal, request, deps, slots, subject, node, aliases)
+		// CHAOS-12663: identity witnesses fold case, so a selection whose label
+		// differs from the other operand's term only in case witnesses both. The
+		// operand that spells its served label with its case is the one it
+		// answers; none or several such operands leave it unbound as before.
+		if len(matches) > 1 {
+			matches = slotsSpellingServedLabel(slots, matches, node)
+		}
 		if len(matches) != 1 {
 			unbound++
 			continue

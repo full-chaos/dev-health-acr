@@ -407,7 +407,7 @@ func ResolveFromMergedCandidatesWithGateAndBasis(candidatesBySubject map[string]
 	// multi-pass callers in resolve.go's own resolveSubjects call the
 	// unexported form below directly, with the pass number their own
 	// control flow actually reached).
-	return resolveFromMergedCandidatesWithAnchorSlot(candidatesBySubject, observationParentKey, observationBlocked, max, allowClarification, searchTruncated, vectorArmSimilarity, vectorMarginCommitThreshold, retrievalDegraded, effectiveSearchLimit, calibratedTopK, unscopedVisibility, gate, identity, identityTerms, legacyIdentityLookupState(aliasIdentityComplete), tracer, requestID, evidenceCensusAttestedKey, confirmedKindScopedBasis, lowPopulationKindScopedBasis, reservedKinds, anchorReservedSlot{}, nil, nil, 1)
+	return resolveFromMergedCandidatesWithAnchorSlot(candidatesBySubject, observationParentKey, observationBlocked, max, allowClarification, searchTruncated, vectorArmSimilarity, vectorMarginCommitThreshold, retrievalDegraded, effectiveSearchLimit, calibratedTopK, unscopedVisibility, gate, identity, identityTerms, legacyIdentityLookupState(aliasIdentityComplete), tracer, requestID, evidenceCensusAttestedKey, confirmedKindScopedBasis, lowPopulationKindScopedBasis, reservedKinds, nil, anchorReservedSlot{}, nil, nil, 1)
 }
 
 // resolveFromMergedCandidatesWithAnchorSlot carries the two extra inputs the
@@ -426,7 +426,12 @@ func ResolveFromMergedCandidatesWithGateAndBasis(candidatesBySubject map[string]
 // sites, in the fixed textual order those sites already run in. Every other
 // caller (including the exported wrapper above and every direct test call)
 // is single-shot and passes 1.
-func resolveFromMergedCandidatesWithAnchorSlot(candidatesBySubject map[string]contextfabric.SubjectCandidate, observationParentKey map[string]string, observationBlocked map[string]bool, max int, allowClarification bool, searchTruncated bool, vectorArmSimilarity map[string]float64, vectorMarginCommitThreshold float64, retrievalDegraded bool, effectiveSearchLimit int, calibratedTopK int, unscopedVisibility bool, gate CommitGatePolicy, identity identityClaimants, identityTerms identityMatchTerms, identityLookup IdentityLookupState, tracer ResolutionTracer, requestID string, evidenceCensusAttestedKey string, confirmedKindScopedBasis bool, lowPopulationKindScopedBasis bool, reservedKinds []contextfabric.SubjectKind, anchorSlot anchorReservedSlot, carry *exactLabelRefusal, kindRescue *kindRescueLedger, pass int) (contextfabric.SubjectResolution, contextfabric.CommitBasisSet, contextfabric.CommitDecisionDigestSet) {
+//
+// typedTerms (CHAOS-12663) is every spelling the question typed for the terms
+// this decision resolves, before SubjectTerms' case-insensitive dedup keeps the
+// first: a name typed in two spellings is not read by case. nil when the caller
+// has none (the exported wrappers); the matched terms then speak alone.
+func resolveFromMergedCandidatesWithAnchorSlot(candidatesBySubject map[string]contextfabric.SubjectCandidate, observationParentKey map[string]string, observationBlocked map[string]bool, max int, allowClarification bool, searchTruncated bool, vectorArmSimilarity map[string]float64, vectorMarginCommitThreshold float64, retrievalDegraded bool, effectiveSearchLimit int, calibratedTopK int, unscopedVisibility bool, gate CommitGatePolicy, identity identityClaimants, identityTerms identityMatchTerms, identityLookup IdentityLookupState, tracer ResolutionTracer, requestID string, evidenceCensusAttestedKey string, confirmedKindScopedBasis bool, lowPopulationKindScopedBasis bool, reservedKinds []contextfabric.SubjectKind, typedTerms []string, anchorSlot anchorReservedSlot, carry *exactLabelRefusal, kindRescue *kindRescueLedger, pass int) (contextfabric.SubjectResolution, contextfabric.CommitBasisSet, contextfabric.CommitDecisionDigestSet) {
 	aliasIdentityComplete := identityLookup == IdentityLookupComplete
 	bases := make(contextfabric.CommitBasisSet)
 	// digests (CHAOS-4087) records IN LOCKSTEP with bases above, at every
@@ -769,6 +774,15 @@ func resolveFromMergedCandidatesWithAnchorSlot(candidatesBySubject map[string]co
 				exactIndex = append(exactIndex, index)
 			}
 		}
+		// CHAOS-12663: a term that exact-matched several labels differing only
+		// in case, one of which spells it with its case, names that one. The
+		// narrowed exactIndex is what every later gate and guard reads, so the
+		// pick commits (or is refused) on the exact-label tier as a lone exact
+		// match would. Any other population is left as it was.
+		caseExact := narrowCaseExactLabel(candidates, exactIndex, typedTerms)
+		if caseExact.sentence != "" {
+			exactIndex = []int{caseExact.winner}
+		}
 		// identityIndex (CHAOS-3884): the RAW, unconditional-on-uniqueness
 		// eligible-kind alias/provider-key population -- isAliasIdentityEligibleKind,
 		// Confidence==1 (only ever true via NodeCandidate's identityTrusted
@@ -930,6 +944,12 @@ func resolveFromMergedCandidatesWithAnchorSlot(candidatesBySubject map[string]co
 			}
 		default:
 			ambiguous = true
+		}
+		// CHAOS-12663 ruling 2: a commit made by case states which subject the
+		// term was read as and names each twin. Only the exact-label tier's own
+		// commit of the pick owes it; a refused pick commits nothing by case.
+		if caseExact.sentence != "" && commitGate == contractsv1.CommitGateExactIndex && committedIndex[caseExact.winner] {
+			resolution.CaseTwinReadingLimitations = []string{caseExact.sentence}
 		}
 		// CHAOS-3829: the additive commit-path carve-out, checked ONLY as
 		// a RESCUE once every gate above has already run to completion

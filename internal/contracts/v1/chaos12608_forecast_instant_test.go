@@ -143,6 +143,20 @@ func TestThePublishedSchemaRefusesAZonelessInstant(t *testing.T) {
 	if !valid(instantSummaryClaim("2026-11-02T04:00:00Z", "2026-11-20")) {
 		t.Error("a UTC instant and a full-date refused by the schema")
 	}
+	// CHAOS-12634: the item target is a count in the schema too.
+	target := instantSummaryClaim("2026-11-02T04:00:00Z", "")
+	for _, value := range []int64{0, 40} {
+		count := value
+		target.CompletionForecast.TargetItems = &count
+		if !valid(target) {
+			t.Errorf("target_items %d refused by the schema", value)
+		}
+	}
+	negative := int64(-1)
+	target.CompletionForecast.TargetItems = &negative
+	if valid(target) {
+		t.Error("target_items -1 admitted by the schema")
+	}
 	for _, tc := range []struct{ computedAt, p50Date string }{
 		{"2026-11-02 04:00:00.000", ""},
 		{"2026-11-02T04:00:00+02:00", ""},
@@ -151,5 +165,22 @@ func TestThePublishedSchemaRefusesAZonelessInstant(t *testing.T) {
 		if valid(instantSummaryClaim(tc.computedAt, tc.p50Date)) {
 			t.Errorf("computed_at %q, p50 date %q admitted by the schema", tc.computedAt, tc.p50Date)
 		}
+	}
+}
+
+// CHAOS-12634: the item target is a count: 0 and up, and absent is absent.
+func TestTheSummaryItemTargetIsACount(t *testing.T) {
+	fact := instantSummaryClaim("2026-11-02T04:00:00Z", "")
+	for _, target := range []int64{0, 40} {
+		value := target
+		fact.CompletionForecast.TargetItems = &value
+		if err := fact.Validate(); err != nil {
+			t.Fatalf("target_items %d: Validate() = %v", target, err)
+		}
+	}
+	negative := int64(-1)
+	fact.CompletionForecast.TargetItems = &negative
+	if err := fact.Validate(); err == nil {
+		t.Fatal("target_items -1 validated")
 	}
 }
