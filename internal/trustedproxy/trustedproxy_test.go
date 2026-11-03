@@ -22,6 +22,7 @@ func TestExcludedAddressIsNeverAProxyInsideAListedNetwork(t *testing.T) {
 		"10.42.0.1":        false,
 		"::ffff:10.42.0.1": false,
 		"10.42.0.6":        true,
+		"::ffff:10.42.0.6": true,
 		"10.42.0.255":      true,
 		"10.42.1.6":        false,
 	} {

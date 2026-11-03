@@ -110,6 +110,7 @@ func TestTrustedProxyClientIPResolverHonoursExclusions(t *testing.T) {
 		{name: "ingress pod peer forwards the client", remote: "10.42.0.6:443", forwarded: "198.51.100.7", want: "198.51.100.7"},
 		{name: "excluded hop in a trusted chain is the client", remote: "10.42.0.6:443", forwarded: "198.51.100.7, 10.42.0.1", want: "10.42.0.1"},
 		{name: "IPv4-mapped excluded peer is the client", remote: "[::ffff:10.42.0.1]:443", forwarded: "198.51.100.7", want: "::ffff:10.42.0.1"},
+		{name: "IPv4-mapped ingress pod peer forwards the client", remote: "[::ffff:10.42.0.6]:443", forwarded: "198.51.100.7", want: "198.51.100.7"},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
