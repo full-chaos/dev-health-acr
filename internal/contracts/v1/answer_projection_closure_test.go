@@ -367,7 +367,7 @@ func TestEveryProjectionStringFieldIsClassified(t *testing.T) {
 		// table and time_series_table.
 		// CHAOS-11985: 265 -> 267 -- table.cadence and time_series_table.cadence,
 		// a closed vocabulary.
-		{name: "answer_projection", root: "answer", prefix: "structured", untrusted: MCPInvestigateQuestionUntrustedFields, expectedPaths: 267},
+		{name: "answer_projection", root: "answer", prefix: "structured", untrusted: MCPInvestigateQuestionUntrustedFields, expectedPaths: 273},
 		// CHAOS-4087: 213 -> 217 -- CommitDecisionDigest contributed four
 		// new string leaves (commit_gate, subject.kind, subject.canonical_id,
 		// subject.label).
@@ -457,7 +457,10 @@ func TestEveryProjectionStringFieldIsClassified(t *testing.T) {
 		// projection.
 		// CHAOS-11985: 386 -> 388 -- the same two cadence leaves as the
 		// projection.
-		{name: "investigation_result", root: "result", prefix: "structured", untrusted: MCPInvestigationResultUntrustedFields, expectedPaths: 388},
+		// CHAOS-12608: 388 -> 394 -- claimed_facts[].completion_forecast's six
+		// strings (work_scope_id, state, computed_at, three dates), as on the
+		// projection (267 -> 273).
+		{name: "investigation_result", root: "result", prefix: "structured", untrusted: MCPInvestigationResultUntrustedFields, expectedPaths: 394},
 	} {
 		t.Run(surface.name, func(t *testing.T) {
 			paths := stringPathsIn(t, documents, surface.root, surface.prefix)
@@ -522,6 +525,15 @@ func trustedBecauseClosed(path string) bool {
 	// rollup_basis a provider constant. Neither is model-authored.
 	if strings.HasSuffix(path, ".investment_mix.investment_mix_source") || strings.HasSuffix(path, ".investment_mix.rollup_basis") {
 		return true
+	}
+	// completion_forecast (CHAOS-12608) is set by the server from the claim's
+	// grounding fact: its computed_at and percentile dates are the stored
+	// forecast row's own time values. Its work_scope_id is a provider
+	// identifier and is declared untrusted instead.
+	for _, leaf := range []string{".completion_forecast.computed_at", ".completion_forecast.forecast_p50_date", ".completion_forecast.forecast_p85_date", ".completion_forecast.forecast_p95_date"} {
+		if strings.HasSuffix(path, leaf) {
+			return true
+		}
 	}
 	// claimed_facts[].operation is ContextFabricDerivationOperation (sum,
 	// difference, ratio), validated before a result is stored. Matched on

@@ -53,7 +53,10 @@ const (
 	//
 	// v36 -> v37 (CHAOS-12632): one pull request named inside its repository
 	// keeps the repository's name as the subject term, never the number alone.
-	PromptVersion = "context-fabric-interpretation.v37"
+	//
+	// v37 -> v38 (CHAOS-12632): the same rule names GitLab merge requests
+	// ("merge request !N in X", "MR !N in X"), with a worked example.
+	PromptVersion = "context-fabric-interpretation.v38"
 	// OutputVersion names the model-output contract the prompt asks for.
 	//
 	// v10 -> v11: the fact_requirements kind enum names commitment.

@@ -154,6 +154,14 @@ func wordRows() []wordRow {
 				},
 			}
 		}, map[string]string{"subcategory:quality.bugfix": "Bugfix"}},
+		// CHAOS-12608: the state of a claim's completion forecast summary, and
+		// nothing for a claim with none.
+		{"claimed completion forecast state", func(r *InvestigationResult) {
+			r.ClaimedFacts = []contractsv1.ContextFabricClaimedFact{
+				{CompletionForecast: &contractsv1.ContextFabricClaimedCompletionForecast{State: contractsv1.ContextFabricCompletionDistributionNoRunWithinHorizon}},
+				{},
+			}
+		}, map[string]string{"completion_distribution_state:no_run_within_horizon": "No simulated run finished within the forecast horizon"}},
 	}
 }
 

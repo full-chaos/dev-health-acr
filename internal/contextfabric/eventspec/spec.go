@@ -6369,7 +6369,7 @@ var MCPHostedContextScope = Event{
 }
 
 // GraphCountCheckFinished is the Info line for one finished graph count
-// check of one organization: its outcome (completed, cancelled by the check timeout or shutdown, or failed with at least one count read error or one measurement it could not make), how many sources and kinds it compared, how many
+// check of one organization: its outcome (completed, cancelled by the check timeout or shutdown, failed with at least one count read error or one measurement it could not make, or unknown when a source's owned node counts cannot be compared yet), how many sources and kinds it compared, how many sources it could not compare, how many
 // confirmed graph_below_source gaps it found, how many edge populations it compared, how many confirmed graph_edges_below_source gaps it found, how many relation types are not measured yet, and how many count reads failed.
 // The Warn lines the check emits for a gap or a failed read stay as they are;
 // this line is what makes a check that ran and found nothing observable.
@@ -6389,10 +6389,19 @@ var GraphCountCheckFinished = Event{
 		// each interval's check is a distinct pass, so recurring checks of one
 		// organization are told apart and a duplicate sequence is a defect.
 		{Key: "pass", Type: FieldInt, Presence: PresenceRequired},
-		{Key: "outcome", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: []string{"completed", "cancelled", "failed"}},
+		// outcome "unknown" (CHAOS-12649): every read succeeded, and at least one
+		// source's owned node counts could not be compared, because no walk from
+		// zero has marked its owned nodes yet; sources_unknown counts them.
+		{Key: "outcome", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: []string{"completed", "cancelled", "failed", "unknown"}},
 		{Key: "sources_checked", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "sources_unknown", Type: FieldInt, Presence: PresenceRequired},
 		{Key: "kinds_compared", Type: FieldInt, Presence: PresenceRequired},
 		{Key: "gap_count", Type: FieldInt, Presence: PresenceRequired},
+		// days_compared (CHAOS-12649) is the number of (kind, UTC day of the rows'
+		// sync stamp) buckets whose source and graph counts were both read;
+		// day_gap_count the confirmed graph_below_source_on_day gaps among them.
+		{Key: "days_compared", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "day_gap_count", Type: FieldInt, Presence: PresenceRequired},
 		// relations_compared is the number of edge populations (relation type
 		// and arm) whose source and graph edge counts were both read;
 		// edge_gap_count the confirmed graph_edges_below_source gaps among
