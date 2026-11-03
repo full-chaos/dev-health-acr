@@ -34,8 +34,8 @@ func TestOpen_constructs_checks_then_closes_in_reverse_order(t *testing.T) {
 	if closeErr != nil {
 		t.Fatal(closeErr)
 	}
-	// CHAOS-6745: postgres/entitlement gate startup fatally (livenessChecks,
-	// same as /readyz); clickhouse is checked SEPARATELY, after, and only
+	// CHAOS-6745/12730: postgres and entitlement gate startup fatally;
+	// /readyz carries postgres only; clickhouse is checked SEPARATELY, after, and only
 	// logs on failure -- see the matching "clickhouse.check" stage case in
 	// TestOpen_cleans_partial_resources_when_stage_fails for the succeeding
 	// half of that story.
@@ -48,8 +48,8 @@ func TestOpen_constructs_checks_then_closes_in_reverse_order(t *testing.T) {
 		t.Fatalf("events = %#v, want %#v", events, want)
 	}
 	checks := runtime.Dependencies.Runtime.ReadinessChecks
-	if len(checks) != 2 || checks[0].Name() != "postgres" || checks[1].Name() != "entitlement" {
-		t.Fatalf("readiness checks = %#v, want postgres/entitlement", checks)
+	if len(checks) != 1 || checks[0].Name() != "postgres" {
+		t.Fatalf("readiness checks = %#v, want postgres only", checks)
 	}
 	dataStoreChecks := runtime.Dependencies.Runtime.DataStoreChecks
 	if len(dataStoreChecks) != 1 || dataStoreChecks[0].Name() != "clickhouse" {

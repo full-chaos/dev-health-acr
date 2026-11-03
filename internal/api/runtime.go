@@ -3,7 +3,6 @@ package api
 import (
 	"context"
 	"errors"
-	"fmt"
 	"maps"
 	"net/http"
 	"net/url"
@@ -176,10 +175,12 @@ type RuntimeDependencies struct {
 	// pulls the WHOLE pod from every Service's endpoints (including the
 	// OAuth/authorization-server routes) the moment any one check fails. It
 	// therefore carries only the dependencies EVERY surface on this pod
-	// needs: postgres and entitlement. ClickHouse does not belong here (see
-	// DataStoreChecks) -- CHAOS-6745: an OAuth login has no ClickHouse
-	// dependency, so a ClickHouse outage must never make the pod
-	// unroutable for it.
+	// needs: postgres. ClickHouse does not belong here (see DataStoreChecks)
+	// -- CHAOS-6745: an OAuth login has no ClickHouse dependency -- and nor
+	// does the entitlement provider (CHAOS-12730): the entitlement-gated
+	// handlers decide it live per request and refuse fail-closed, so a
+	// provider outage must never make the pod unroutable for the OAuth
+	// surface.
 	ReadinessChecks []ReadinessCheck
 	// DataStoreChecks (CHAOS-6745) are checked live, per request, only by
 	// the handlers that actually read ClickHouse (agent-context
@@ -241,14 +242,12 @@ func (r *RuntimeDependencies) validate() error {
 	if r.WorkloadTokenExchange != nil && storage.IsNil(r.WorkloadTokenExchange) {
 		return errors.New("hosted workload token exchange must not be typed nil")
 	}
-	// CHAOS-6745: /readyz (r.ReadinessChecks) gates pod-level routing for
-	// EVERY surface on this pod, so it carries only what every surface
-	// needs -- postgres and entitlement, never clickhouse. ClickHouse is
-	// validated separately, below, as r.DataStoreChecks.
-	if len(r.ReadinessChecks) < 2 {
-		return errors.New("hosted read runtime requires postgres and entitlement readiness checks")
-	}
-	required := map[string]bool{"postgres": false, "entitlement": false}
+	// CHAOS-6745/12730: /readyz (r.ReadinessChecks) gates pod-level routing
+	// for EVERY surface on this pod, so it carries only what every surface
+	// needs -- postgres. Neither clickhouse (r.DataStoreChecks) nor the
+	// entitlement provider (decided live per request by the entitlement
+	// gates) may sit here.
+	required := map[string]bool{"postgres": false}
 	for _, check := range r.ReadinessChecks {
 		if storage.IsNil(check) {
 			return errors.New("hosted read runtime readiness checks must not be nil")
@@ -260,17 +259,18 @@ func (r *RuntimeDependencies) validate() error {
 		if name == "clickhouse" {
 			return errors.New("hosted read runtime must not gate /readyz on clickhouse -- see DataStoreChecks")
 		}
+		if name == "entitlement" {
+			return errors.New("hosted read runtime must not gate /readyz on the entitlement provider -- entitlement is checked live per request")
+		}
 		if seen, ok := required[name]; ok {
 			if seen {
-				return errors.New("hosted read runtime readiness checks must not repeat postgres or entitlement")
+				return errors.New("hosted read runtime readiness checks must not repeat postgres")
 			}
 			required[name] = true
 		}
 	}
-	for _, name := range []string{"postgres", "entitlement"} {
-		if !required[name] {
-			return fmt.Errorf("hosted read runtime requires a %s readiness check", name)
-		}
+	if !required["postgres"] {
+		return errors.New("hosted read runtime requires a postgres readiness check")
 	}
 	if len(r.DataStoreChecks) != 1 || storage.IsNil(r.DataStoreChecks[0]) || strings.TrimSpace(r.DataStoreChecks[0].Name()) != "clickhouse" {
 		return errors.New("hosted read runtime requires exactly one clickhouse data-store check")
