@@ -57,10 +57,16 @@ const (
 	SubcategoryWithheldThemeCrossCheck = "theme_cross_check"
 	SubcategoryWithheldNoData          = "no_data"
 	SubcategoryWithheldWindow          = "window_not_whole_days"
+	// SubcategoryWithheldSeveralSubjects: the read holds more than one team or
+	// repository mix fact, so no call is made (lead ruling, CHAOS-12554: never a
+	// silent drop). It is served as coverage only and not written on the Warn
+	// line: a cohort read is no failure.
+	SubcategoryWithheldSeveralSubjects = "several_subjects"
 )
 
-// SubcategoryWithheldReasonVocabulary is every reason the withheld line and
-// the coverage reason can carry.
+// SubcategoryWithheldReasonVocabulary is every reason the withheld line
+// carries. The coverage reason carries these and
+// SubcategoryWithheldSeveralSubjects.
 func SubcategoryWithheldReasonVocabulary() []string {
 	return []string{
 		SubcategoryWithheldCallerUnset, SubcategoryWithheldCallFailed, SubcategoryWithheldNotServed,
@@ -105,10 +111,12 @@ type subcategoryBreakdownRequest struct {
 	Batch subcategoryBreakdownBatch `json:"batch"`
 }
 
+// subcategoryBreakdownBatch sends no useInvestment: the policy forces it true
+// (acr_forced), and refuses a client that names a forced path at all, even with
+// the forced value.
 type subcategoryBreakdownBatch struct {
-	Breakdowns    []subcategoryBreakdownItem `json:"breakdowns"`
-	UseInvestment bool                       `json:"useInvestment"`
-	Filters       subcategoryBreakdownFilter `json:"filters"`
+	Breakdowns []subcategoryBreakdownItem `json:"breakdowns"`
+	Filters    subcategoryBreakdownFilter `json:"filters"`
 }
 
 type subcategoryBreakdownItem struct {
@@ -133,18 +141,17 @@ type subcategoryBreakdownScope struct {
 }
 
 // subcategoryBreakdownVariables are the variables of one call: one breakdown
-// of dimension under ISSUE_SIZE over the window, the investment source on, and
-// the scope of the one subject. The id is the subject's canonical id: the
-// policy's subject gate decides it and converts it to the ops form (the team
-// id, or the repository uuid).
+// of dimension under ISSUE_SIZE over the window, and the scope of the one
+// subject. The policy forces the investment source on (batch.useInvestment).
+// The id is the subject's canonical id: the policy's subject gate decides it
+// and converts it to the ops form (the team id, or the repository uuid).
 func subcategoryBreakdownVariables(dimension, level, canonicalID, startDate, endDate string) json.RawMessage {
 	raw, _ := json.Marshal(subcategoryBreakdownRequest{Batch: subcategoryBreakdownBatch{
 		Breakdowns: []subcategoryBreakdownItem{{
 			Dimension: dimension, Measure: subcategoryBreakdownMeasure,
 			DateRange: subcategoryBreakdownWindowJS{StartDate: startDate, EndDate: endDate}, TopN: subcategoryBreakdownTopN,
 		}},
-		UseInvestment: true,
-		Filters:       subcategoryBreakdownFilter{Scope: subcategoryBreakdownScope{Level: level, IDs: []string{canonicalID}}},
+		Filters: subcategoryBreakdownFilter{Scope: subcategoryBreakdownScope{Level: level, IDs: []string{canonicalID}}},
 	}})
 	return raw
 }
@@ -187,10 +194,11 @@ func subcategoryBreakdownScopeOf(kind contextfabric.SubjectKind) (operation, lev
 // attachSubcategoryBreakdown gives the read's one team or repository mix fact
 // its subcategory_breakdown table, and returns why it could not when it could
 // not. The table is read for one breakdown per read: a sunburst plots one
-// breakdown, and a second subject would be a comparison the rule refuses, so a
-// read of several subjects makes no call and asserts nothing.
+// breakdown, and a second subject would be a comparison the rule refuses. So a
+// read of several subjects makes no call, and each of its subjects gets the
+// closed reason several_subjects (never a silent drop).
 func (p *InvestmentProvider) attachSubcategoryBreakdown(ctx context.Context, principal storage.Principal, orgID string, facts []contextfabric.CanonicalFact, bound factTimeBound) []subcategoryWithheld {
-	target := -1
+	var targets []int
 	for index := range facts {
 		fact := &facts[index]
 		if fact.Kind != contextfabric.FactInvestment {
@@ -202,15 +210,19 @@ func (p *InvestmentProvider) attachSubcategoryBreakdown(ctx context.Context, pri
 		if _, _, charted := subcategoryBreakdownScopeOf(fact.Subject.Kind); !charted {
 			continue
 		}
-		if target >= 0 {
-			return nil
-		}
-		target = index
+		targets = append(targets, index)
 	}
-	if target < 0 {
+	if len(targets) == 0 {
 		return nil
 	}
-	fact := &facts[target]
+	if len(targets) > 1 {
+		several := make([]subcategoryWithheld, 0, len(targets))
+		for _, index := range targets {
+			several = append(several, subcategoryWithheld{subject: facts[index].Subject, reason: SubcategoryWithheldSeveralSubjects})
+		}
+		return several
+	}
+	fact := &facts[targets[0]]
 	table, withheld := p.readSubcategoryBreakdown(ctx, principal, fact.Subject, bound)
 	if withheld != nil {
 		logSubcategoryBreakdownWithheld(ctx, orgID, *withheld)

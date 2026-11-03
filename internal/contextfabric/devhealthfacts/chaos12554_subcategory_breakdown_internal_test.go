@@ -148,14 +148,14 @@ func TestCHAOS12554TheTwoCallsSendTheRuledVariables(t *testing.T) {
 	caller := servingCaller()
 	readSunburst(t, context.Background(), true, caller, sunburstWindow())
 	want := []breakdownCall{
-		{operation: "investmentBreakdownRepository", variables: `{"batch":{"breakdowns":[{"dimension":"THEME","measure":"ISSUE_SIZE","dateRange":{"startDate":"2026-09-01","endDate":"2026-10-01"},"topN":100}],"useInvestment":true,"filters":{"scope":{"level":"REPO","ids":["repository:8d0f8f5c-0b55-4f43-9f7e-3b0f6f0d1a11"]}}}}`},
-		{operation: "investmentBreakdownRepository", variables: `{"batch":{"breakdowns":[{"dimension":"SUBCATEGORY","measure":"ISSUE_SIZE","dateRange":{"startDate":"2026-09-01","endDate":"2026-10-01"},"topN":100}],"useInvestment":true,"filters":{"scope":{"level":"REPO","ids":["repository:8d0f8f5c-0b55-4f43-9f7e-3b0f6f0d1a11"]}}}}`},
+		{operation: "investmentBreakdownRepository", variables: `{"batch":{"breakdowns":[{"dimension":"THEME","measure":"ISSUE_SIZE","dateRange":{"startDate":"2026-09-01","endDate":"2026-10-01"},"topN":100}],"filters":{"scope":{"level":"REPO","ids":["repository:8d0f8f5c-0b55-4f43-9f7e-3b0f6f0d1a11"]}}}}`},
+		{operation: "investmentBreakdownRepository", variables: `{"batch":{"breakdowns":[{"dimension":"SUBCATEGORY","measure":"ISSUE_SIZE","dateRange":{"startDate":"2026-09-01","endDate":"2026-10-01"},"topN":100}],"filters":{"scope":{"level":"REPO","ids":["repository:8d0f8f5c-0b55-4f43-9f7e-3b0f6f0d1a11"]}}}}`},
 	}
 	if !slices.Equal(caller.calls, want) {
 		t.Fatalf("calls:\n%+v\nwant:\n%+v", caller.calls, want)
 	}
 	team := string(subcategoryBreakdownVariables("THEME", "TEAM", "team:linear:CHAOS", "2026-09-01", "2026-10-01"))
-	if want := `{"batch":{"breakdowns":[{"dimension":"THEME","measure":"ISSUE_SIZE","dateRange":{"startDate":"2026-09-01","endDate":"2026-10-01"},"topN":100}],"useInvestment":true,"filters":{"scope":{"level":"TEAM","ids":["team:linear:CHAOS"]}}}}`; team != want {
+	if want := `{"batch":{"breakdowns":[{"dimension":"THEME","measure":"ISSUE_SIZE","dateRange":{"startDate":"2026-09-01","endDate":"2026-10-01"},"topN":100}],"filters":{"scope":{"level":"TEAM","ids":["team:linear:CHAOS"]}}}}`; team != want {
 		t.Fatalf("team variables:\n%s\nwant\n%s", team, want)
 	}
 	if operation, level, ok := subcategoryBreakdownScopeOf(contextfabric.SubjectTeam); !ok || operation != "investmentBreakdownTeam" || level != "TEAM" {
@@ -353,7 +353,10 @@ func TestCHAOS12554AnAnswerWithANullOrRepeatedValueIsUnreadable(t *testing.T) {
 	}
 }
 
-func TestCHAOS12554AReadOfSeveralSubjectsMakesNoCall(t *testing.T) {
+// Lead ruling (CHAOS-12554): a read of several subjects makes no call and
+// serves no table, and says so with a closed reason on every subject. It never
+// drops the table silently, and it never serves zero rows or an empty table.
+func TestCHAOS12554AReadOfSeveralSubjectsMakesNoCallAndSaysWhy(t *testing.T) {
 	t.Parallel()
 	caller := servingCaller()
 	other := contextfabric.SubjectRef{Kind: contextfabric.SubjectRepository, CanonicalID: repositoryPrefix + "9d0f8f5c-0b55-4f43-9f7e-3b0f6f0d1a12"}
@@ -361,11 +364,20 @@ func TestCHAOS12554AReadOfSeveralSubjectsMakesNoCall(t *testing.T) {
 	if len(caller.calls) != 0 {
 		t.Fatalf("calls %d, want none: a sunburst plots one breakdown", len(caller.calls))
 	}
-	if _, ok := subcategoryTableOf(t, result); ok {
-		t.Fatal("a table was served on a read of two subjects")
+	for _, subject := range []contextfabric.SubjectRef{sunburstRepo, other} {
+		fact := investmentFactOf(result, subject)
+		if fact == nil {
+			t.Fatalf("%s: no investment fact", subject.CanonicalID)
+		}
+		if value, ok := fact.Fields[subcategoryBreakdownField]; ok {
+			t.Fatalf("%s: a subcategory table was served on a read of two subjects: %+v", subject.CanonicalID, value)
+		}
+		if reasons := servedReasons(result, subject); !strings.Contains(reasons, subcategoryWithheldReasonPrefix) || !strings.Contains(reasons, "(several_subjects)") {
+			t.Fatalf("%s: reasons %q, want the closed reason several_subjects", subject.CanonicalID, reasons)
+		}
 	}
-	if strings.Contains(servedReasons(result, sunburstRepo), subcategoryWithheldReasonPrefix) {
-		t.Fatal("a read that asked nothing of ops claims a withheld table")
+	if slices.Contains(SubcategoryWithheldReasonVocabulary(), SubcategoryWithheldSeveralSubjects) {
+		t.Fatal("several_subjects is on the Warn line's vocabulary: a cohort read is no failure")
 	}
 }
 
