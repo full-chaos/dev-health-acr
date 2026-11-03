@@ -100,13 +100,38 @@ func ValidScope(scope string) bool {
 }
 
 // Lower lower-cases ASCII letters only, so a repository key folds the way the
-// schema pattern reads it.
-func Lower(s string) string { return strings.ToLower(s) }
+// schema pattern reads it (strings.ToLower would fold U+212A to "k").
+func Lower(s string) string {
+	for i := 0; i < len(s); i++ {
+		if c := s[i]; 'A' <= c && c <= 'Z' {
+			b := []byte(s)
+			for j := i; j < len(b); j++ {
+				if 'A' <= b[j] && b[j] <= 'Z' {
+					b[j] += 'a' - 'A'
+				}
+			}
+			return string(b)
+		}
+	}
+	return s
+}
 
 // ValidSlugFolded reports whether a repository key is valid once ASCII case is
 // folded: the form a request carries before it is normalised.
-func ValidSlugFolded(slug string) bool { return ValidSlug(slug) }
+func ValidSlugFolded(slug string) bool { return ValidSlug(Lower(slug)) }
 
 // SchemaSlugPattern is the pattern every published schema holds for a
-// repository key, and maxLength is MaxSlugBytes.
-const SchemaSlugPattern = `^[^/\s]+(/[^/\s]+){1,19}$`
+// repository key (with maxLength MaxSlugBytes): ValidSlugFolded as an RE2 and
+// ECMA-262 pattern. The group repeat is unrolled because RE2 refuses a bounded
+// repeat nested in a repeat past 1000 copies.
+var SchemaSlugPattern = schemaSlugPattern()
+
+func schemaSlugPattern() string {
+	const group = `[A-Za-z0-9](?:[A-Za-z0-9._-]{0,98}[A-Za-z0-9])?`
+	const last = `(?:[A-Za-z0-9]|[A-Za-z0-9.][A-Za-z0-9._-]{0,98}[A-Za-z0-9])`
+	nest := ""
+	for i := 0; i < MaxSlugSegments-2; i++ {
+		nest = "(?:/" + group + nest + ")?"
+	}
+	return "^" + group + nest + "/" + last + "$"
+}

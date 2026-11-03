@@ -4,9 +4,10 @@ import (
 	"net/url"
 	"regexp"
 	"unicode/utf8"
+
+	"github.com/full-chaos/dev-health-acr/internal/reposlug"
 )
 
-var repositorySlugPattern = regexp.MustCompile(`^[^/\s]+(/[^/\s]+){1,19}$`)
 var commitSHAPattern = regexp.MustCompile(`^[0-9a-fA-F]{7,64}$`)
 var clientCredentialTokenPrefixPattern = regexp.MustCompile(`^fcacr_[A-Za-z0-9_-]{4,32}$`)
 
@@ -20,6 +21,10 @@ var clientCredentialTokenPrefixPattern = regexp.MustCompile(`^fcacr_[A-Za-z0-9_-
 // minted -- enforce the documented digest shape here, the same way
 // receipt_id already enforces its own namespace prefix.
 var matchedTermHashPattern = regexp.MustCompile(`^[0-9a-f]{24}$`)
+
+// validRepositorySlug is the one repository key rule: reposlug's, with ASCII
+// case folded because a request is normalised after it is validated.
+func validRepositorySlug(slug string) bool { return reposlug.ValidSlugFolded(slug) }
 
 func stringLengthBetween(value string, minimum, maximum int) bool {
 	length := utf8.RuneCountInString(value)
