@@ -1,6 +1,7 @@
 package contextfabric
 
 import (
+	"regexp"
 	"slices"
 	"strconv"
 	"strings"
@@ -81,6 +82,39 @@ func ReadableSourceID(kind SubjectKind, raw string) string {
 	return raw
 }
 
+// providerTokenBefore12716 and uuidFormBefore12716 are ReadableSourceID's own
+// patterns from CHAOS-12619 until CHAOS-12716 (readableSourceIDBefore12716).
+var (
+	providerTokenBefore12716 = regexp.MustCompile(`^[a-z][a-z0-9._-]*:`)
+	uuidFormBefore12716      = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$`)
+)
+
+// readableSourceIDBefore12716 is ReadableSourceID as it was from CHAOS-12619 until
+// CHAOS-12716: the provider token dropped and a UUID read as the kind word, but an
+// org scope kept, and an org UUID that starts with a letter read as a provider
+// token, so "c67b…:gitlab:71133891" read "gitlab:71133891". The graph read labelled
+// nodes and the repair named fact ends with it, so an answer saved in that time
+// holds this form (codex r2 of CHAOS-12716).
+func readableSourceIDBefore12716(kind SubjectKind, raw string) string {
+	switch kind {
+	case SubjectWorkItem, SubjectWorkItemRef, SubjectTeam, SubjectProject:
+		key := providerTokenBefore12716.ReplaceAllString(raw, "")
+		if key == "" || uuidFormBefore12716.MatchString(key) {
+			return kindWord(kind, raw)
+		}
+		return key
+	}
+	return raw
+}
+
+// isRawForm reports whether text is a form of a subject's raw id that a reader must
+// not see: the raw id itself, or the reader form an earlier rule gave it
+// (readableSourceIDBefore12716). Where that form is today's too, restating it gives
+// the same text.
+func isRawForm(kind SubjectKind, raw, text string) bool {
+	return text == raw || text == readableSourceIDBefore12716(kind, raw)
+}
+
 func kindWord(kind SubjectKind, fallback string) string {
 	if word, ok := contractsv1.ContextFabricVocabularyLabel(contractsv1.ContextFabricVocabularySubjectKind, string(kind)); ok && word != "" {
 		return word
@@ -88,10 +122,11 @@ func kindWord(kind SubjectKind, fallback string) string {
 	return fallback
 }
 
-// SubjectReadableLabel is a subject's label for a reader: a label that is the
-// subject's raw source id reads as ReadableSourceID, and any other label stands.
+// SubjectReadableLabel is a subject's label for a reader: a label that is a raw
+// form of the subject's source id (isRawForm) reads as ReadableSourceID, and any
+// other label stands.
 func SubjectReadableLabel(subject SubjectRef) string {
-	if raw, ok := RawSubjectLabel(subject.Kind, subject.CanonicalID); ok && subject.Label == raw {
+	if raw, ok := RawSubjectLabel(subject.Kind, subject.CanonicalID); ok && isRawForm(subject.Kind, raw, subject.Label) {
 		return ReadableSourceID(subject.Kind, raw)
 	}
 	return subject.Label
@@ -123,7 +158,7 @@ func RepairRawEdgeFact(fact, relation string, from, to SubjectRef) string {
 		if !found || !slices.Contains(factEndForms(to, toRaw, toOK), tail) {
 			continue
 		}
-		fromRepair, toRepair := fromOK && head == fromRaw, toOK && tail == toRaw
+		fromRepair, toRepair := fromOK && isRawForm(from.Kind, fromRaw, head), toOK && isRawForm(to.Kind, toRaw, tail)
 		if !fromRepair && !toRepair {
 			return fact
 		}
@@ -145,12 +180,13 @@ func RepairRawEdgeFact(fact, relation string, from, to SubjectRef) string {
 }
 
 // factEndForms are the texts a writer can have named an endpoint by in a fact:
-// its raw id, that id's reader form (the writer after CHAOS-12619), and its label.
-// The raw id comes first, so a fact whose end is the raw id is read as such.
+// its raw id, that id's reader form (the writer after CHAOS-12619), the reader form
+// an earlier rule gave it (readableSourceIDBefore12716), and its label. The raw id
+// comes first, so a fact whose end is the raw id is read as such.
 func factEndForms(end SubjectRef, raw string, ok bool) []string {
-	forms := make([]string, 0, 3)
+	forms := make([]string, 0, 4)
 	if ok {
-		forms = append(forms, raw, factEndReaderForm(end, raw))
+		forms = append(forms, raw, factEndReaderForm(end, raw), readableSourceIDBefore12716(end.Kind, raw))
 	}
 	if end.Label != "" {
 		forms = append(forms, end.Label)
@@ -161,7 +197,7 @@ func factEndForms(end SubjectRef, raw string, ok bool) []string {
 func factEnd(end SubjectRef, raw string) string {
 	switch end.Kind {
 	case SubjectProject, SubjectTeam:
-		if label := strings.TrimSpace(end.Label); label != "" && end.Label != raw {
+		if label := strings.TrimSpace(end.Label); label != "" && !isRawForm(end.Kind, raw, end.Label) {
 			return end.Label
 		}
 	}
