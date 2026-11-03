@@ -12,6 +12,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode"
 )
 
 const Redacted = "[REDACTED]"
@@ -128,7 +129,12 @@ func closedValue(c, v string) bool {
 }
 
 // BenignKind returns the one value kind ("int", "bool" or "string") for which key is exempt from the key rule, or "".
-func BenignKind(key string) string { return typedBenignKeys[compact(key)] }
+func BenignKind(key string) string {
+	if hasForeignLetter(key) {
+		return ""
+	}
+	return typedBenignKeys[compact(key)]
+}
 
 func attrKind(v slog.Value) string {
 	switch v.Kind() {
@@ -240,6 +246,17 @@ func ErrorClass(err error) string {
 	return fmt.Sprintf("%T", err)
 }
 
+// hasForeignLetter reports a non-ASCII letter or digit: compact() drops it, so such a key could fold onto an
+// exact benign key. Zero-width and other format runes are not letters and stay folded.
+func hasForeignLetter(key string) bool {
+	for _, r := range key {
+		if r > unicode.MaxASCII && (unicode.IsLetter(r) || unicode.IsDigit(r) || unicode.IsMark(r)) {
+			return true
+		}
+	}
+	return false
+}
+
 func compact(key string) string {
 	var b strings.Builder
 	for _, r := range key {
@@ -315,7 +332,7 @@ const (
 
 func classify(key string) keyClass {
 	c := compact(key)
-	if !benignKeys[c] {
+	if !benignKeys[c] || hasForeignLetter(key) {
 		cf := c
 		for _, f := range protectedFragments {
 			if strings.Contains(cf, f) {
@@ -350,7 +367,7 @@ type keyEntry struct {
 func newKeyEntry(key string) keyEntry {
 	e := keyEntry{class: classify(key)}
 	if e.class == classProtected {
-		if c := compact(key); typedBenignKeys[c] != "" {
+		if c := compact(key); typedBenignKeys[c] != "" && !hasForeignLetter(key) {
 			e.kind, e.compact = typedBenignKeys[c], c
 		}
 	}
