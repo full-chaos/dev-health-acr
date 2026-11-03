@@ -23,6 +23,12 @@ package contextfabric
 // one layer up, in requirement_derivation.go, where a coordinate is
 // crossed with what a producer can actually serve.
 //
+// THE ONE OTHER INPUT is the frame's requirement route (CHAOS-12885), a typed
+// value the engine sets on its requirement-frame copy once the served family
+// and the scope anchor kind are decided, BEFORE any read. It is decided once
+// per turn and does not change after the read, so the property above holds.
+// See RequirementRoute.
+//
 // SHADOW ONLY, on the same footing as the rest of the frame layer: no wire
 // surface, no schema, no migration.
 
@@ -45,6 +51,14 @@ import (
 // coordinate is worse than an absent coordinate because it reads as
 // coverage. The absence is reported, not silent: RenderRequirementCoordinates
 // states it in the artifact header.
+//
+// ONE ROUTE NAMES THE ANCHOR, and it does so without an anchor role and
+// without a guess (CHAOS-12885). The scope-anchor allocation route
+// (CHAOS-12606) is decided after resolution, and only under a TEAM anchor, so
+// on that route the anchor kind is a decided fact. The route reads the team's
+// own investment fact and no member set, so its requirement is the team's, in
+// the subject role -- see RequirementRoute. Every other frame keeps the rule
+// above.
 type SubjectRole string
 
 const (
@@ -82,6 +96,47 @@ func ValidSubjectRole(value SubjectRole) bool {
 		}
 	}
 	return false
+}
+
+// RequirementRoute is the served route a requirement derivation reads beside
+// the frame (CHAOS-12885). The frame alone cannot name it: the route is decided
+// after interpretation, from the served family and the resolved scope anchor
+// kind, and the frame is immutable before both.
+//
+// It travels on the engine's REQUIREMENT FRAME, the copy every requirement
+// reader of one turn derives from (engine.go's requirementFrame, the same copy
+// workItemTupleRequirementFrame makes), so the plan's rows, the finalization
+// seed and the cardinality check derive one set. It is never on the canonical
+// frame, so nothing persisted or carried holds it.
+type RequirementRoute uint8
+
+const (
+	// RequirementRouteFrame: the frame alone decides the coordinates. The zero
+	// value, so every frame that no route copied derives as it always has.
+	RequirementRouteFrame RequirementRoute = iota
+	// RequirementRouteScopeAllocationTeam: the scope-anchor allocation route
+	// (CHAOS-12606) served this turn under a team anchor. The team's own
+	// investment fact answers the question and no member set is read, so the
+	// frame's one role is the anchor team as the subject
+	// (allocation_breakdown/subject/team), never each member repository. It
+	// mirrors the organization route's allocation_breakdown/subject/organization
+	// (CHAOS-12601).
+	RequirementRouteScopeAllocationTeam
+)
+
+// requirementRoleSlots is frameRoleSlots under the frame's requirement route.
+//
+// The route takes effect only on the frame it is decided for: a
+// children_of_scope frame scopeAllocationFrame admits under a team anchor. Any
+// other frame that carries the route derives from its topology alone, so a
+// misplaced route cannot move a coordinate.
+func requirementRoleSlots(frame QuestionFrame) []roleSlot {
+	if frame.requirementRoute == RequirementRouteScopeAllocationTeam &&
+		frame.SubjectExpression.Kind == SubjectExpressionChildrenOfScope &&
+		scopeAllocationFrame(&frame, SubjectTeam) {
+		return []roleSlot{{Role: SubjectRoleSubject, Subject: SubjectTeam}}
+	}
+	return frameRoleSlots(frame.SubjectExpression)
 }
 
 // RequirementCoordinate is one cell of the requirement layer: an
@@ -260,7 +315,8 @@ func attachesToRole(variant SubjectExpressionKind, role SubjectRole, obligation 
 }
 
 // DeriveRequirementCoordinates crosses the frame's DERIVED obligation set
-// with the roles its subject expression offers.
+// with the roles its subject expression offers, under the frame's requirement
+// route (requirementRoleSlots; CHAOS-12885).
 //
 // Answer-contract obligations (`evidence`, `coverage`) yield NO coordinate:
 // they are satisfied by the answer contract itself and involve no subject
@@ -278,7 +334,7 @@ func attachesToRole(variant SubjectExpressionKind, role SubjectRole, obligation 
 // runs of one frame produce a diffable list -- the property the regenerated
 // artifact depends on.
 func DeriveRequirementCoordinates(frame QuestionFrame) []RequirementCoordinate {
-	slots := frameRoleSlots(frame.SubjectExpression)
+	slots := requirementRoleSlots(frame)
 	hasPopulationSlot := false
 	for _, slot := range slots {
 		if slot.Role == SubjectRoleMember {

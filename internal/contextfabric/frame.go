@@ -116,6 +116,14 @@ type QuestionFrame struct {
 	// answer reads it to state that it is a roll-up over those members.
 	// Encoded (omitempty) so a carried frame keeps the disclosure.
 	OrganizationSurveyMemberKind SubjectKind `json:"organization_survey_member_kind,omitempty"`
+
+	// requirementRoute is the served route requirement derivation reads
+	// beside the frame (CHAOS-12885). It is set ONLY on the engine's
+	// requirement-frame copy (scopeAllocationRequirementFrame), never on the
+	// canonical frame: unexported, so it is never encoded, persisted or
+	// carried, and a frame from the model, the store or a test derives under
+	// RequirementRouteFrame, the frame alone. See RequirementRoute.
+	requirementRoute RequirementRoute
 }
 
 // QuestionFrameVersion is the derivation-table version this build
