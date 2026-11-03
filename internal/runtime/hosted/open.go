@@ -1098,7 +1098,9 @@ func buildContextFabricInvestigator(ctx context.Context, request buildRequest, p
 		ComparisonTableEnabled: request.config.ContextFabricComparisonTableEnabled,
 		// See Config.ContextFabricLandscapeQuadrantEnabled.
 		LandscapeQuadrantEnabled: request.config.ContextFabricLandscapeQuadrantEnabled,
-		FactCapabilities:         factRegistry.Capabilities(),
+		// CHAOS-12608: the forecast draws the distribution the same switch serves.
+		CompletionForecastEnabled: request.config.CompletionDistributionEnabled,
+		FactCapabilities:          factRegistry.Capabilities(),
 		// See Config.ServerCompletenessAuthorityEnabled's own doc comment.
 		ServerCompletenessAuthorityEnabled: request.config.ServerCompletenessAuthorityEnabled,
 		// See Config.AnchorBindingCountEnabled.
@@ -1193,7 +1195,16 @@ func buildContextFabricInvestigator(ctx context.Context, request buildRequest, p
 			// own reuse lookup could otherwise serve a pre-edit
 			// disclosure from cache. Wired unconditionally, same reasoning
 			// as its seven siblings; see ReuseKey.QuestionFamilyVersion.
-			QuestionFamilyVersion: contextfabric.QuestionFamilyTableVersion,
+			//
+			// Codex #1949 r2: the render switches that are on join it
+			// (ReuseQuestionFamilyVersion), from the same config fields the
+			// engine's selection reads, so an answer stored while a switch
+			// was off is not reused once it is on.
+			QuestionFamilyVersion: contextfabric.ReuseQuestionFamilyVersion(contextfabric.RenderShapeOptions{
+				InvestmentThemeShare: request.config.ContextFabricInvestmentTreemapEnabled,
+				ComparisonSideBySide: request.config.ContextFabricComparisonTableEnabled,
+				CompletionForecast:   request.config.CompletionDistributionEnabled,
+			}),
 			// One more deployment-current version authority -- the
 			// ownership-routing gate's own arm-selection rules (falkorgraph:
 			// ownership census vs. hopWalk graph-proximity for a

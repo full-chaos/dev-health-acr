@@ -50,6 +50,10 @@ type AppConfig struct {
 	// ContextFabricLandscapeQuadrantEnabled mirrors
 	// config.Config.ContextFabricLandscapeQuadrantEnabled, for the same two doors.
 	ContextFabricLandscapeQuadrantEnabled bool
+	// ContextFabricCompletionDistributionEnabled mirrors
+	// config.Config.CompletionDistributionEnabled (CHAOS-12608), for the same
+	// two doors: the forecast shapes and the claim's forecast summary.
+	ContextFabricCompletionDistributionEnabled bool
 	// ContextFabricEventStreamEnabled mirrors
 	// config.Config.ContextFabricEventStreamEnabled: the create-investigation
 	// route serves `Accept: text/event-stream` only when it is on.

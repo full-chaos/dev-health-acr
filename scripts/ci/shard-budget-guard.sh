@@ -33,7 +33,15 @@ if [ ! -s "$file" ]; then
 fi
 
 lines="$(mktemp)"
-trap 'rm -f "$lines"' EXIT
+# One cleanup for every exit (Codex #1967 r2): it removes the temporary files and then exits with the status the guard
+# reached, so a failing rm can never change the result.
+cleanup() {
+  local rc=$?
+  rm -f "$lines" "${tests:-}" 2>/dev/null || true
+  if [ -n "${tmpd:-}" ]; then rm -rf "$tmpd" 2>/dev/null || true; fi
+  exit "$rc"
+}
+trap cleanup EXIT
 if [ "$json" -eq 1 ]; then
   jq -Rr 'fromjson? | select((.Action == "pass" or .Action == "fail") and (.Test == null) and (.Package != null)) |
     (if .Action == "pass" then "ok" else "FAIL" end) + "\t" + .Package + "\t" + ((.Elapsed // 0) | tostring) + "s"' \
@@ -104,7 +112,6 @@ if [ "$json" -eq 1 ]; then
     exit 1
   fi
   tests="$(mktemp)"
-  trap 'rm -f "$lines" "$tests"' EXIT
   # A line that starts with "{" is a test2json record and must parse; a top-level test record that ended (pass, fail or skip)
   # must carry a package and a numeric Elapsed. Anything else fails closed. A line that does not start with "{" is
   # the wrapper's own echo (make's recipe line) and is ignored.
@@ -159,4 +166,105 @@ if [ "$json" -eq 1 ]; then
     }
   ' "$tests" || test_rc=$?
 fi
+# CHAOS-12667: real span report, JSON mode only. Reporting only: nothing below changes the exit code. A top-level test
+# that starts parallel subtests reports only its own function time as Elapsed, while the subtests keep it running, so
+# the span is (last event of T or of any T/...) - (T's last run/cont event). A paused parallel test starts at its cont.
+# It never prints a number it did not measure: a parse failure prints ::warning:: and skips the block.
+span_rows() { # file -> "P<TAB>pkg<TAB>elapsed" and "T<TAB>pkg<TAB>test<TAB>span<TAB>elapsed" rows, slowest span first
+  local f="$1" ev
+  ev="$(mktemp)"
+  jq -Rr 'fromjson? | select(type == "object" and .Package != null and .Time != null and (.Action | type) == "string")
+    | (.Time as $t
+       | ($t | sub("\\.[0-9]+Z$"; "Z") | fromdateiso8601) as $s
+       | ((($t | capture("\\.(?<f>[0-9]+)Z$").f) // "0") | ("0." + .) | tonumber) as $f
+       | ($s + $f)) as $ts
+    | if .Test == null then (select(.Action == "pass" or .Action == "fail") | "P\t\(.Package)\t\(.Elapsed // 0)")
+      else "E\t\(.Package)\t\(.Test)\t\(.Action)\t\($ts)\t\(.Elapsed // 0)" end' "$f" >"$ev" || { rm -f "$ev"; return 1; }
+  awk -F'\t' '
+    $1 == "P" { print; next }
+    $1 == "E" {
+      split($3, parts, "/"); top = parts[1]; key = $2 "\t" top; ts = $5 + 0
+      if ($3 == top && ($4 == "run" || $4 == "cont")) { start[key] = ts; has[key] = 1 }
+      if (!(key in last) || ts > last[key]) last[key] = ts
+      if ($3 == top && ($4 == "pass" || $4 == "fail" || $4 == "skip")) { el[key] = $6 + 0; ended[key] = 1 }
+    }
+    END { for (key in has) printf "T\t%s\t%.3f\t%.3f\t%d\n", key, last[key] - start[key], el[key] + 0, (key in ended) }
+  ' "$ev" | sort -t "$(printf '\t')" -k1,1 -k4,4gr
+  rm -f "$ev"
+}
+
+fetch_baseline() { # prints the path of the baseline race.json (RACE_BASELINE_JSON); on failure returns 1 with the reason in $tmpd/reason
+  # CHAOS-12667 (Codex #1967 r1): the guard fetches nothing. The job's race-baseline step (.github/actions/race-baseline)
+  # downloads main's artifact with the token before the tests run, so no token reaches this script or the tests.
+  if [ -r "$RACE_BASELINE_JSON" ] && [ -s "$RACE_BASELINE_JSON" ]; then echo "$RACE_BASELINE_JSON"; return 0; fi
+  printf %s "RACE_BASELINE_JSON $RACE_BASELINE_JSON is not a readable file (main's artifact was not fetched)" >"$tmpd/reason"
+  return 1
+}
+
+span_report() {
+  local now base="" b_rows="" note="" baseline_reason=""
+  now="$(span_rows "$file")" || return 1
+  grep -q '^T' <<<"$now" || return 1
+  if [ -n "${RACE_BASELINE_JSON:-}" ]; then
+    local bf
+    if bf="$(fetch_baseline 2>"$tmpd/note")"; then
+      note="$(cat "$tmpd/note")"
+      if ! b_rows="$(span_rows "$bf")" || ! grep -q '^T' <<<"$b_rows"; then
+        b_rows=""
+        printf %s "baseline $bf has no test timing" >"$tmpd/reason"
+      fi
+      [ -n "$b_rows" ] && base="$bf"
+    fi
+    baseline_reason="$(cat "$tmpd/reason" 2>/dev/null || true)"
+    if [ -z "$base" ]; then
+      printf '::warning::shard-budget-guard: no main baseline for %s: %s\n' "$RACE_BASELINE_JSON" "$baseline_reason"
+    fi
+  fi
+  { printf '%s\n' "$now"; printf 'BASE\n'; [ -n "$b_rows" ] && printf '%s\n' "$b_rows"; true; } | awk -F'\t' -v hasbase="$([ -n "$base" ] && echo 1 || echo 0)" -v note="$note" '
+    /^BASE$/ { inbase = 1; next }
+    $1 == "P" { if (inbase) bp[$2] += $3; else np[$2] += $3; next }
+    $1 == "T" {
+      k = $2 "\t" $3
+      if (inbase) { bspan[k] = $4 + 0 } else { n++; key[n] = k; pk[n] = $2; nm[n] = $3; sp[n] = $4 + 0; el[n] = $5 + 0; ended[n] = $6 + 0 }
+    }
+    END {
+      npk = 0; for (p in np) { npk++; onlypkg = p }
+      printf "slowest top-level tests by real span (s), reported Elapsed beside it%s:\n", (npk == 1 ? " [" onlypkg "]" : "")
+      for (i = 1; i <= n && i <= 10; i++) {
+        label = (npk == 1 ? nm[i] : pk[i] " " nm[i])
+        line = sprintf("  span %7.1f  elapsed %7.1f  %s", sp[i], el[i], label)
+        # Codex #1967 r2: a test with no end event (a cut-off transcript) has a lower bound, not a span.
+        if (!ended[i]) line = line "  (no end event: ran at least this long)"
+        if (hasbase) {
+          if (key[i] in bspan) line = line sprintf("  | baseline %7.1f  delta %+.1f", bspan[key[i]], sp[i] - bspan[key[i]])
+          else line = line "  | new (not in baseline)"
+        }
+        print line
+      }
+      if (hasbase) {
+        if (note != "") print "baseline: " note
+        # Codex #1967 r3: a package delta only from two measured package times; a cut-off run has none to compare.
+        tn = 0; tb = 0; nnow = 0; for (p in np) { nnow++; tn += np[p]; if (p in bp) tb += bp[p]; else missing = 1 }
+        if (nnow == 0) print "package time: not measured in this run; no package delta"
+        else if (missing) print "package time: baseline lacks a package here; no package delta"
+        else printf "package time: now %.1fs, baseline %.1fs, delta %+.1fs\n", tn, tb, tn - tb
+      }
+    }'
+}
+
+# The report's own temp directory is made inside the reporting branch (Codex #1967 r1): a failure here is a warning,
+# never an exit under set -e, so the exit code stays the one the package and per-test checks gave.
+tmpd=""
+if [ "$json" -eq 1 ]; then
+  if ! tmpd="$(mktemp -d 2>/dev/null)" || [ -z "$tmpd" ]; then
+    tmpd=""
+    echo "::warning::shard-budget-guard: no temporary directory for the real span report; the block is skipped"
+  elif ! span_report; then
+    echo "::warning::shard-budget-guard: could not compute the real span report from $file; the block is skipped"
+  fi
+  if [ -z "${RACE_BASELINE_JSON:-}" ]; then
+    echo "no baseline set (RACE_BASELINE_JSON)"
+  fi
+fi
+
 if [ "$pkg_rc" -ne 0 ] || [ "$test_rc" -ne 0 ]; then exit 1; fi

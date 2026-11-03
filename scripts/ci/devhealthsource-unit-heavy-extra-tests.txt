@@ -1,0 +1,5 @@
+# Unit legs only (race jobs ignore this list): tests of the race-mid/race-fourth lists that plain
+# unit leg 8 (unit-heavy) runs instead of leg 9 (unit-mid). CHAOS-12667 moved the ownership
+# producer into the fourth race job; this keeps its plain unit run in leg 8, where it ran before.
+# Every name must be in the mid or the fourth list, exactly once (race-split.sh verify, partition).
+TestOwnershipProducerAgainstRealClickHouse

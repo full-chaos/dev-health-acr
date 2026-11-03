@@ -274,6 +274,32 @@ const (
 	RenderShapeSkipLandscapeDaysDiffer RenderShapeSkipReason = "landscape_days_differ"
 	// RenderShapeSkipQuadrantUnprovable -- the contract refused the quadrant.
 	RenderShapeSkipQuadrantUnprovable RenderShapeSkipReason = "quadrant_unprovable"
+	// The completion_forecast rule's reasons (CHAOS-12608).
+	// RenderShapeSkipNotForecastIntent -- this turn's frame asks for neither
+	// completion nor remaining work.
+	RenderShapeSkipNotForecastIntent RenderShapeSkipReason = "not_forecast_intent"
+	// RenderShapeSkipNoCompletionDistribution -- no claimed team workload fact
+	// carries a served completion distribution.
+	RenderShapeSkipNoCompletionDistribution RenderShapeSkipReason = "no_completion_distribution"
+	// RenderShapeSkipMoreThanOneScope -- several claimed scopes carry one; the
+	// answer does not choose a scope for the reader.
+	RenderShapeSkipMoreThanOneScope RenderShapeSkipReason = "more_than_one_scope"
+	// RenderShapeSkipDistributionUnusable -- a row is not a day and a share,
+	// or the contract refused the shape.
+	RenderShapeSkipDistributionUnusable RenderShapeSkipReason = "distribution_unusable"
+	// The completion_forecast_percentiles rule's reasons (CHAOS-12608).
+	// RenderShapeSkipForecastCurveDrawn -- the curve was drawn; the table is
+	// what an answer gets when no curve is.
+	RenderShapeSkipForecastCurveDrawn RenderShapeSkipReason = "forecast_curve_drawn"
+	// RenderShapeSkipNoForecastPercentiles -- no claimed team scope's
+	// forecast serves a percentile.
+	RenderShapeSkipNoForecastPercentiles RenderShapeSkipReason = "no_forecast_percentiles"
+	// RenderShapeSkipTooManyScopes -- more claimed scopes than a shape holds
+	// series.
+	RenderShapeSkipTooManyScopes RenderShapeSkipReason = "too_many_scopes"
+	// RenderShapeSkipForecastPercentilesUnprovable -- the contract refused
+	// the table.
+	RenderShapeSkipForecastPercentilesUnprovable RenderShapeSkipReason = "forecast_percentiles_unprovable"
 )
 
 // cohortRenderIntent reports whether a cohort chart is an answer TO this
@@ -372,6 +398,25 @@ func selectRenderShapes(result InvestigationResult, frame *QuestionFrame, option
 	}
 
 	// CHAOS-12513: ahead of the trends, for the same reason.
+	switch {
+	case !options.CompletionForecast:
+		event.skip(contractsv1.ContextFabricRenderRuleCompletionForecast, RenderShapeSkipRuleDisabled)
+		event.skip(contractsv1.ContextFabricRenderRuleCompletionForecastPercentiles, RenderShapeSkipRuleDisabled)
+	default:
+		if forecast, reason := completionForecastShape(result, frame); forecast != nil {
+			shapes = append(shapes, *forecast)
+			event.skip(contractsv1.ContextFabricRenderRuleCompletionForecastPercentiles, RenderShapeSkipForecastCurveDrawn)
+		} else {
+			event.skip(contractsv1.ContextFabricRenderRuleCompletionForecast, reason)
+			// No curve: the P50/P85/P95 table of the claimed scopes.
+			if table, tableReason := forecastPercentilesShape(result, frame); table != nil {
+				shapes = append(shapes, *table)
+			} else {
+				event.skip(contractsv1.ContextFabricRenderRuleCompletionForecastPercentiles, tableReason)
+			}
+		}
+	}
+
 	if !options.ComparisonSideBySide {
 		event.skip(contractsv1.ContextFabricRenderRuleComparisonSideBySide, RenderShapeSkipRuleDisabled)
 	} else {
@@ -1015,6 +1060,8 @@ var renderShapeRules = []contractsv1.ContextFabricRenderShapeRule{
 	contractsv1.ContextFabricRenderRuleInvestmentThemeShare,
 	contractsv1.ContextFabricRenderRuleComparisonSideBySide,
 	contractsv1.ContextFabricRenderRuleLandscapePosition,
+	contractsv1.ContextFabricRenderRuleCompletionForecast,
+	contractsv1.ContextFabricRenderRuleCompletionForecastPercentiles,
 }
 
 // Accounted is CHAOS-4621's structural invariant, as code rather than as a
@@ -1095,6 +1142,10 @@ func RenderShapeSkipReasonLineVocabulary() []string {
 		string(RenderShapeSkipNoPlottableMeasure), string(RenderShapeSkipShapeBudgetSpent), string(RenderShapeSkipNotPlanAuthorized),
 		string(RenderShapeSkipNoLandscapeRequirement), string(RenderShapeSkipFewerThanTwoPoints),
 		string(RenderShapeSkipLandscapeDaysDiffer), string(RenderShapeSkipQuadrantUnprovable),
+		string(RenderShapeSkipNotForecastIntent), string(RenderShapeSkipNoCompletionDistribution),
+		string(RenderShapeSkipMoreThanOneScope), string(RenderShapeSkipDistributionUnusable),
+		string(RenderShapeSkipForecastCurveDrawn), string(RenderShapeSkipNoForecastPercentiles),
+		string(RenderShapeSkipTooManyScopes), string(RenderShapeSkipForecastPercentilesUnprovable),
 	}
 }
 

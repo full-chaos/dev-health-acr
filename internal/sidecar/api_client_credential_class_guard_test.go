@@ -20,11 +20,12 @@ import (
 )
 
 // The class ids below are a copy of the class_id values in the ops-owned
-// contracts/auth/v1/credential-classes.json, taken from dev-health-ops
-// origin/main 171b2c8d058cb7003260c2cf8f2c48aff0a80889 (file sha256
-// 195f307cc72e0e16..., 36 classes). acr does not vendor that file, so this
-// table can drift from it; a follow-up check in ci/checkendpointprofiles
-// (which already fetches the ops file) is meant to compare the two.
+// contracts/auth/v1/credential-classes.json at the dev-health-ops commit named
+// in ci/ops-contract.pin (8137953ba7684c6d63c56b1086f10aa575c4fd50; file sha256
+// 92b70da8ff009964..., 38 classes). acr does not vendor that file. The gate in
+// ci/checkendpointprofiles compares this table with the pinned file in both
+// directions, so a pin bump that adds, removes or renames a class fails CI until
+// this table follows.
 //
 // The transport guard in callWithHeaders accepts exactly one class,
 // acr_client_credential. Every other class, and every near-miss of the
@@ -115,13 +116,10 @@ func otherClassRows() []guardRow {
 		row("internal_svc_acr_token", "svc_acr_"+padded43(m("internal_svc_acr_token"))),
 		row("internal_svc_worker_token", "svc_worker_"+padded43(m("internal_svc_worker_token"))),
 		row("internal_svc_authsess_token", "svc_authsess_"+padded43(m("internal_svc_authsess_token"))),
-		row("worker_operational_bridge_token", m("worker_operational_bridge_token")),
 		row("acr_device_flow_code", m("acr_device_flow_code")),
 		row("acr_web_assertion", jwtShaped("EdDSA", m("acr_web_assertion"))),
 		row("acr_workload_identity_exchange", jwtShaped("RS256", m("acr_workload_identity_exchange"))),
 		row("external_push_ingest_token", "fcpush_"+padded43(m("external_push_ingest_token"))),
-		row("legacy_ingest_api_key", m("legacy_ingest_api_key")),
-		hexNeedle("legacy_ingest_hmac_signature", "sha256="+hexMarker("legacy_ingest_hmac_signature")),
 		hexNeedle("stripe_webhook_signature", "t=1700000000,v1="+hexMarker("stripe_webhook_signature")),
 		hexNeedle("github_webhook_signature", "sha256="+hexMarker("github_webhook_signature")),
 		row("gitlab_webhook_signature", m("gitlab_webhook_signature")),
@@ -129,6 +127,11 @@ func otherClassRows() []guardRow {
 		row("github_app_installation_token", jwtShaped("RS256", m("github_app_installation_token"))),
 		row("pagerduty_oauth_credential", m("pagerduty_oauth_credential")),
 		hexNeedle("pagerduty_webhook_signature", "v1="+hexMarker("pagerduty_webhook_signature")),
+		row("acr_browser_refresh_token", "acrrt_"+padded43(m("acr_browser_refresh_token"))),
+		row("kubernetes_sa_token_exchange", jwtShaped("RS256", m("kubernetes_sa_token_exchange"))),
+		row("service_account_key", "fcsak_"+padded43(m("service_account_key"))),
+		row("workload_bootstrap_credential", "fcwlb_"+padded43(m("workload_bootstrap_credential"))),
+		row("workload_token", b64(`{"alg":"EdDSA","typ":"workload+jwt"}`)+"."+b64(`{"sub":"`+m("workload_token")+`"}`)+"."+b64("sig-"+m("workload_token"))),
 		row("llm_api_keys", m("llm_api_keys")),
 		row("email_verification_token", b64(m("email_verification_token"))+"."+b64("sig")),
 		row("password_reset_token", b64(m("password_reset_token"))+"."+b64("sig")),
@@ -252,8 +255,8 @@ func TestClientCredentialShapeGuardRefusesEveryOtherClassBeforeSend(t *testing.T
 			t.Fatalf("row %q is shaped like the accepted class", row.name)
 		}
 	}
-	if got, want := len(otherClassRows()), 35; got != want {
-		t.Fatalf("other-class rows = %d, want %d (36 ops classes minus the accepted one)", got, want)
+	if got, want := len(otherClassRows()), 37; got != want {
+		t.Fatalf("other-class rows = %d, want %d (38 ops classes at the pin minus the accepted one)", got, want)
 	}
 	for _, row := range rows {
 		t.Run(row.name, func(t *testing.T) {

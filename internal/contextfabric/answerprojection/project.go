@@ -500,6 +500,8 @@ func projectDrivers(result contractsv1.ContextFabricInvestigationResult, bounds 
 				// copied evidence too; a projection without it would serve a
 				// team roll-up as the project's own investment.
 				InvestmentMix: fact.InvestmentMix,
+				// CHAOS-12608: the forecast summary the shapes cite.
+				CompletionForecast: fact.CompletionForecast,
 			})
 		}
 		drivers = append(drivers, contractsv1.ContextFabricProjectedDriver{
@@ -568,6 +570,8 @@ func projectDrivers(result contractsv1.ContextFabricInvestigationResult, bounds 
 			TimeSeriesRows:  claim.TimeSeriesRows,
 			TimeSeriesTable: claim.TimeSeriesTable,
 			InvestmentMix:   claim.InvestmentMix,
+			// CHAOS-12608 (Codex #1949 r1): the summary a forecast shape cites.
+			CompletionForecast: claim.CompletionForecast,
 		})
 	}
 	// Eligible omissions are counted after member/fact admission in Project.
@@ -1512,17 +1516,20 @@ func retainPastTheCut(kept, dropped []clampedNarrative, retain func(string) bool
 	return out
 }
 
-// claimsAChartPlots names the claims the answer's treemaps, comparison tables and
-// quadrants plot (CHAOS-12521, CHAOS-12513, CHAOS-12626). An investment answer need
-// not have a driver, and a comparison's drivers need not cite every cell, so no
+// claimsAChartPlots names the claims the answer's treemaps, tables, forecast
+// curves and quadrants plot (CHAOS-12521, CHAOS-12513, CHAOS-12608, CHAOS-12626).
+// An investment answer need not have a driver, a comparison's drivers need not
+// cite every cell, and a forecast's drivers need not cite its distribution, so no
 // driver brings those facts and the chart would be dropped. The server built the
 // chart from those claims, so the chart is the citation. Only these kinds: a claim
 // no such chart plots stays out, and a dropped shape stays a counted drop.
 func claimsAChartPlots(shapes []contractsv1.ContextFabricRenderShape) map[string]struct{} {
 	plotted := map[string]struct{}{}
 	for _, shape := range shapes {
-		if shape.Kind != contractsv1.ContextFabricRenderKindTreemap && shape.Kind != contractsv1.ContextFabricRenderKindTable &&
-			shape.Kind != contractsv1.ContextFabricRenderKindQuadrant {
+		switch shape.Kind {
+		case contractsv1.ContextFabricRenderKindTreemap, contractsv1.ContextFabricRenderKindTable, contractsv1.ContextFabricRenderKindForecast,
+			contractsv1.ContextFabricRenderKindQuadrant:
+		default:
 			continue
 		}
 		for _, series := range shape.Series {

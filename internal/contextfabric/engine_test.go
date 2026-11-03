@@ -523,6 +523,7 @@ type recordingTelemetry struct {
 	windowBinderOutcomes           []WindowBindReason
 	windowBinderProposals          []WindowBindOutcome
 	windowGatedForConfirmation     []windowGatedRecord
+	operandReadKinds               [][3]int
 	windowClassifications          []recordedWindowClassification
 	inferredWindowGates            []recordedInferredWindowGate
 	interpretationTerms            []InterpretationTermsEvent
@@ -562,6 +563,8 @@ type recordingTelemetry struct {
 	// discipline: a test asserts the exact dualTableClaims/secondaryRowsBytes
 	// pair, never merely that something fired.
 	dualTableFacts []dualTableFactsRecord
+	// detailTablesAttached (CHAOS-12587) holds every detail-tables line.
+	detailTablesAttached []DetailTablesAttachedEvent
 	// windowGateOfferDisclosures/windowExpandOfferRedemptions (CHAOS-4314)
 	// mirror the SAME list-not-count discipline as windowCanonicalizationOutcomes
 	// above.
@@ -802,6 +805,10 @@ func (r *recordingTelemetry) RecordWindowGatedForConfirmation(_ context.Context,
 
 func (r *recordingTelemetry) RecordWindowCanonicalization(_ context.Context, _ storage.Principal, outcome WindowCanonicalizationOutcome) {
 	r.windowCanonicalizationOutcomes = append(r.windowCanonicalizationOutcomes, outcome)
+}
+
+func (r *recordingTelemetry) RecordOperandReadKinds(_ context.Context, _ storage.Principal, operandRows, kindsNamed, kindsAdded int) {
+	r.operandReadKinds = append(r.operandReadKinds, [3]int{operandRows, kindsNamed, kindsAdded})
 }
 
 func (r *recordingTelemetry) RecordWindowClassification(_ context.Context, _ storage.Principal, modelClass WindowClass, outcome WindowClassOutcome) {
@@ -1082,6 +1089,10 @@ func (r *recordingTelemetry) RecordProjectedRowsByFactKind(_ context.Context, _ 
 
 func (r *recordingTelemetry) RecordDualTableFacts(_ context.Context, _ storage.Principal, dualTableClaims, secondaryRowsBytes int) {
 	r.dualTableFacts = append(r.dualTableFacts, dualTableFactsRecord{dualTableClaims: dualTableClaims, secondaryRowsBytes: secondaryRowsBytes})
+}
+
+func (r *recordingTelemetry) RecordDetailTablesAttached(_ context.Context, _ storage.Principal, event DetailTablesAttachedEvent) {
+	r.detailTablesAttached = append(r.detailTablesAttached, event)
 }
 
 func (r *recordingTelemetry) RecordModelRowsStripped(_ context.Context, _ storage.Principal, claims int) {

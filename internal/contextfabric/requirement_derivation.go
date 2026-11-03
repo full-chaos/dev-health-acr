@@ -526,6 +526,53 @@ func ComputedStepInputReads(rows []DerivedRequirement) []FactKind {
 	return sortedFactKinds(kinds)
 }
 
+// OperandReadRowServingKinds is what the derived OPERAND read rows name as
+// serving their cells: the FactKinds of every served read row whose role is
+// operand, i.e. one side of an explicit comparison (CHAOS-12596).
+//
+// Before this, a read row published its serving kinds and nothing planned
+// them: planFactKinds read the model's kinds, the cohort ranking kinds and
+// ComputedStepInputReads, never a read row's own kinds. A two-repository
+// comparison's state/operand/repository row named [health identity metrics]
+// and the plan read health only, so the window-scoped pull request measures
+// in metrics never reached the answer and the cell published
+// requirement_read_not_planned.
+//
+// OPERAND ROWS ONLY, by the lead's ruling on CHAOS-12596. Every served read
+// row would also widen cohort and single-subject plans (every cohort turn
+// gains flow and landscape, a named team with drivers gains eleven kinds);
+// that widening waits for a bytes and budget measure per family (CHAOS-12602),
+// and the cohort zero-growth pin (TestOnACohortFamilyTheInputConsumerAddsNothing)
+// stays true because no cohort frame has an operand role.
+//
+// A row's FactKinds are already the kinds the obligation seed declares for
+// the row's own subject kind (seed.KindsFor), so no kind is added that cannot
+// serve that side. An unavailable row has no FactKinds and adds nothing.
+// Deduplicated, vocabulary order, nil when nothing is added --
+// ComputedStepInputReads' own contract.
+func OperandReadRowServingKinds(rows []DerivedRequirement) []FactKind {
+	var kinds []FactKind
+	for _, row := range rows {
+		if row.Kind != ObligationKindRead || row.Role != SubjectRoleOperand || !row.Served() {
+			continue
+		}
+		kinds = append(kinds, row.FactKinds...)
+	}
+	return sortedFactKinds(kinds)
+}
+
+// OperandReadRowCount is the number of served operand read rows, the
+// population the operand-read telemetry line is emitted for.
+func OperandReadRowCount(rows []DerivedRequirement) int {
+	count := 0
+	for _, row := range rows {
+		if row.Kind == ObligationKindRead && row.Role == SubjectRoleOperand && row.Served() {
+			count++
+		}
+	}
+	return count
+}
+
 // dimensionsOfFactKinds reads the §13.3 requirement dimension off the
 // producers' own declarations: the set of FactCapability.Dimension values
 // carried by the kinds that actually serve this cell.
