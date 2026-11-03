@@ -23,16 +23,23 @@ func ownerShareReportPath(path string) string {
 
 // TestVenueOwnerShareLive is the owner-share pair (CHAOS-12691) on the venue
 // (`make o4-owner-share-live`): ops ORG, TEAM and REPO investment by theme
-// through the ops public GraphQL API, the owners read from the venue
-// ClickHouse as of the start of the calls. Configuration, by environment:
+// through the ops public GraphQL API, the owners read as of the start of the
+// calls from the operator's ownership extract file or from the venue
+// ClickHouse. Configuration, by environment:
 //
 //   - ACR_O4_OPS_API_URL: the ops API base (http://api.localhost:3000);
 //   - ACR_O4_OPS_EMAIL and ACR_O4_OPS_PASSWORD_FILE: the login; the file is
 //     0600 and is read in process only;
 //   - ACR_O4_OPS_DIAL_ADDR (optional): the host:port to dial in place of the
 //     host of the API URL, which the request keeps (127.0.0.1:3000);
-//   - ACR_O4_ORG_ID, ACR_O4_CLICKHOUSE_DSN_FILE, ACR_O4_CLICKHOUSE_ADDR and
-//     ACR_O4_WINDOW_END as for TestVenueLive;
+//   - ACR_O4_ORG_ID and ACR_O4_WINDOW_END as for TestVenueLive;
+//   - ACR_O4_OWNERSHIP_EXTRACT: the operator's output of
+//     testdata/owner_share_venue_extract.sql (OwnershipExtractSQLFile), a
+//     0600 file the running user owns; the venue ClickHouse is then not
+//     opened. ACR_O4_OWNERSHIP_EXTRACT_MAX_AGE (optional, a Go duration,
+//     default 15m) bounds the age of its snapshot at the last ops call;
+//   - else ACR_O4_CLICKHOUSE_DSN_FILE and ACR_O4_CLICKHOUSE_ADDR as for
+//     TestVenueLive; naming both sources fails the run;
 //   - ACR_O4_REPORT_FILE (optional): the verdict goes to its .owner_share
 //     sibling (ownerShareReportPath).
 //
@@ -47,10 +54,22 @@ func TestVenueOwnerShareLive(t *testing.T) {
 		PasswordFile: venueEnv(t, "ACR_O4_OPS_PASSWORD_FILE"), OrgID: orgID,
 		DialAddr: os.Getenv("ACR_O4_OPS_DIAL_ADDR"), MinInterval: venuePaceInterval, Logf: t.Logf,
 	}
-	report, err := RunOwnerShareLive(ctx, OwnerShareLiveConfig{
-		Ops: plane, ClickHouseDSNFile: venueEnv(t, "ACR_O4_CLICKHOUSE_DSN_FILE"), ClickHouseAddr: os.Getenv("ACR_O4_CLICKHOUSE_ADDR"),
+	cfg := OwnerShareLiveConfig{
+		Ops: plane, OwnershipExtract: os.Getenv("ACR_O4_OWNERSHIP_EXTRACT"),
+		ClickHouseDSNFile: os.Getenv("ACR_O4_CLICKHOUSE_DSN_FILE"), ClickHouseAddr: os.Getenv("ACR_O4_CLICKHOUSE_ADDR"),
 		OrgID: orgID, Window: venueWindow(t),
-	})
+	}
+	if cfg.OwnershipExtract == "" {
+		cfg.ClickHouseDSNFile = venueEnv(t, "ACR_O4_CLICKHOUSE_DSN_FILE")
+	}
+	if raw := os.Getenv("ACR_O4_OWNERSHIP_EXTRACT_MAX_AGE"); raw != "" {
+		maxAge, err := time.ParseDuration(raw)
+		if err != nil || maxAge <= 0 {
+			t.Fatal("ACR_O4_OWNERSHIP_EXTRACT_MAX_AGE is not a positive Go duration (15m)")
+		}
+		cfg.OwnershipExtractMaxAge = maxAge
+	}
+	report, err := RunOwnerShareLive(ctx, cfg)
 	if err != nil {
 		t.Fatal(err)
 	}

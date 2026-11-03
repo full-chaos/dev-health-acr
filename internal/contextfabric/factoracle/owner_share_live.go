@@ -406,6 +406,11 @@ type OwnerShareLiveReport struct {
 	// both instants are the same, or the run is refused.
 	OwnershipAsOf      time.Time `json:"ownership_as_of"`
 	OwnershipCheckedAt time.Time `json:"ownership_checked_at"`
+	// OwnershipSource names where the store rows were read
+	// (OwnershipSourceClickHouse, OwnershipSourceExtractFile);
+	// OwnershipExtract records the extract file when it was the source.
+	OwnershipSource  string                  `json:"ownership_source,omitempty"`
+	OwnershipExtract *OwnershipExtractRecord `json:"ownership_extract,omitempty"`
 	// Teams counts the teams asked (the owning teams and the active ones),
 	// Repositories the repositories asked.
 	Teams             int `json:"teams"`
@@ -449,6 +454,10 @@ func (r *OwnerShareLiveReport) Table() string {
 	fmt.Fprintf(&b, "owner-share pair: window %s to %s, owners as of %s (checked at %s), %d teams (%d owning), %d repositories (%d owned), %d calls, %d rate limited (%s)\n",
 		r.Window.startDate(), r.Window.endDate(), r.OwnershipAsOf.Format(time.RFC3339), r.OwnershipCheckedAt.Format(time.RFC3339),
 		r.Teams, r.OwningTeams, r.Repositories, r.OwnedRepositories, r.Calls, r.RateLimited, r.RateLimitWait)
+	if e := r.OwnershipExtract; e != nil {
+		fmt.Fprintf(&b, "owners read once from the extract snapshot taken at %s (%s old at the last call, bound %s), sha256 %s, rows: repos %d, teams %d, team_repo_ownership %d\n",
+			e.SnapshotAt.Format(time.RFC3339), e.AgeAtLastCall, e.MaxAge, e.SHA256, e.Rows[tableRepos], e.Rows[tableTeams], e.Rows[tableTeamRepoOwnership])
+	}
 	b.WriteString("| measure | compared | matches | findings | notes |\n|---|---|---|---|---|\n")
 	for _, m := range r.Measures {
 		fmt.Fprintf(&b, "| %s | %d | %d | %d | %d |\n", m.Measure, m.Compared, m.Matches, len(m.Findings), len(m.Notes))
@@ -646,20 +655,39 @@ type OwnerShareLiveConfig struct {
 	// are read from (VenueConfig).
 	ClickHouseDSNFile string
 	ClickHouseAddr    string
-	OrgID             string
-	Window            Window
+	// OwnershipExtract, in place of ClickHouseDSNFile, names the operator's
+	// ownership extract file (ACR_O4_OWNERSHIP_EXTRACT, the output of
+	// OwnershipExtractSQLFile): the owners are read from it and the venue
+	// ClickHouse is not opened. OwnershipExtractMaxAge bounds the age of its
+	// snapshot; zero is DefaultOwnershipExtractMaxAge.
+	OwnershipExtract       string
+	OwnershipExtractMaxAge time.Duration
+	OrgID                  string
+	Window                 Window
 	// Measures default to COUNT and ISSUE_SIZE.
 	Measures []string
 }
 
 // RunOwnerShareLive runs the owner-share pair on the venue: the ops answers
-// through the ops public GraphQL API, the owners read with SELECT statements
-// from the venue ClickHouse. The store must not change while the run reads
-// it: the extract is read before and after the calls, and a run over a store
-// that moved is refused (the error names the tables).
+// through the ops public GraphQL API, the owners read from one of two
+// sources. With ClickHouseDSNFile they are read with SELECT statements from
+// the venue ClickHouse; the store must not change while the run reads it: the
+// extract is read before and after the calls, and a run over a store that
+// moved is refused (the error names the tables). With OwnershipExtract they
+// are read once from the operator's extract file (runOwnerShareFromExtract).
 func RunOwnerShareLive(ctx context.Context, cfg OwnerShareLiveConfig) (*OwnerShareLiveReport, error) {
-	if cfg.Ops == nil || cfg.ClickHouseDSNFile == "" || cfg.OrgID == "" {
+	return runOwnerShareLive(ctx, cfg, time.Now)
+}
+
+func runOwnerShareLive(ctx context.Context, cfg OwnerShareLiveConfig, now func() time.Time) (*OwnerShareLiveReport, error) {
+	if cfg.Ops == nil || cfg.OrgID == "" {
 		return nil, errors.New("owner-share venue configuration is incomplete")
+	}
+	switch {
+	case cfg.ClickHouseDSNFile != "" && cfg.OwnershipExtract != "":
+		return nil, errors.New("name one source of the owners: the ownership extract file (ACR_O4_OWNERSHIP_EXTRACT) or the venue ClickHouse (ACR_O4_CLICKHOUSE_DSN_FILE), not both")
+	case cfg.ClickHouseDSNFile == "" && cfg.OwnershipExtract == "":
+		return nil, errors.New("owner-share venue configuration is incomplete: name the ownership extract file (ACR_O4_OWNERSHIP_EXTRACT) or the venue ClickHouse (ACR_O4_CLICKHOUSE_DSN_FILE)")
 	}
 	if cfg.Ops.OrgID != cfg.OrgID {
 		return nil, errors.New("the ops plane and the store name different organizations")
@@ -667,6 +695,9 @@ func RunOwnerShareLive(ctx context.Context, cfg OwnerShareLiveConfig) (*OwnerSha
 	measures := cfg.Measures
 	if len(measures) == 0 {
 		measures = mapKeys(ownerShareMeasures)
+	}
+	if cfg.OwnershipExtract != "" {
+		return runOwnerShareFromExtract(ctx, cfg, measures, now)
 	}
 	conn, err := openVenueClickHouse(VenueConfig{ClickHouseDSNFile: cfg.ClickHouseDSNFile, ClickHouseAddr: cfg.ClickHouseAddr})
 	if err != nil {
@@ -682,7 +713,7 @@ func RunOwnerShareLive(ctx context.Context, cfg OwnerShareLiveConfig) (*OwnerSha
 	if err != nil {
 		return nil, err
 	}
-	report, err := runOwnerShare(ctx, cfg.Ops, store, cfg.Window, measures, time.Now)
+	report, err := runOwnerShare(ctx, cfg.Ops, store, cfg.Window, measures, now)
 	if err != nil {
 		return nil, err
 	}
@@ -694,5 +725,6 @@ func RunOwnerShareLive(ctx context.Context, cfg OwnerShareLiveConfig) (*OwnerSha
 		sort.Strings(moved)
 		return nil, fmt.Errorf("the venue store changed during the run (%s); no verdict is reported: run again when no job writes these tables", strings.Join(moved, ", "))
 	}
+	report.OwnershipSource = OwnershipSourceClickHouse
 	return report, nil
 }
