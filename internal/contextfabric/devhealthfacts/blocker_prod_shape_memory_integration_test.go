@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/ClickHouse/clickhouse-go/v2"
 	clickhousedriver "github.com/ClickHouse/clickhouse-go/v2/lib/driver"
@@ -324,6 +325,13 @@ GROUP BY normalized_query_hash`, mark)
 
 func TestTeamBlockerStatementsOnTheProductionShapeOnRealClickHouse(t *testing.T) {
 	ctx := context.Background()
+	// CHAOS-12689 REPRO (measurement branch only, never merged): the reads
+	// before the block-size loop run one second before 00:00 UTC, the loop's
+	// reads one second after, as on the failing main run (23:52 to 00:06 UTC).
+	beforeMidnight := time.Date(2026, 11, 3, 23, 59, 59, 0, time.UTC)
+	afterMidnight := beforeMidnight.Add(2 * time.Second)
+	restoreClock := devhealthfacts.SetClockForTest(func() time.Time { return beforeMidnight })
+	defer func() { restoreClock() }()
 	rawQuery, direct := newDedicatedClickHouseIntegrationClientWithOptions(t, ctx, func(options *runtimeclickhouse.Options) {
 		maxBytesToRead := config.DefaultClickHouseMaxBytesToRead
 		options.MaxBytesToRead = &maxBytesToRead
@@ -437,6 +445,8 @@ func TestTeamBlockerStatementsOnTheProductionShapeOnRealClickHouse(t *testing.T)
 		t.Fatalf("the production shape served no blocked items: the measurement is vacuous")
 	}
 
+	restoreClock()
+	restoreClock = devhealthfacts.SetClockForTest(func() time.Time { return afterMidnight })
 	// Block-size experiment (logged): the same reads with the server default
 	// block size, to show what the setting buys on this shape.
 	for _, rows := range []int{0, 2048} {

@@ -30,7 +30,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        shard: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+        shard: [1, 2, 3]
     env:
       TESTCONTAINERS_HUB_IMAGE_NAME_PREFIX: ghcr.io/${{ github.repository }}
       TESTCONTAINERS_RYUK_DISABLED: 'true'
@@ -50,29 +50,28 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-      # Round 1 ran the test alone 30 times: 30 passes. Round 2 runs the
-      # heavy half exactly as the failing job does (its -run list, the same
-      # script), so the test shares the job with the tests beside it.
-      - name: Run the devhealthfacts heavy half as the race job runs it
+      # Round 1: the test alone, 30 runs, 30 passes. Round 2: the heavy half as
+      # the race job runs it, 10 runs, 10 passes. Round 3 is the REPRO of the
+      # cause: the test's clock is pinned one second before 00:00 UTC for the
+      # reads before the block-size loop and one second after it for the loop.
+      # Expected: FAIL, with oldest_blocked_age_days one day apart.
+      - name: Run the midnight repro of the test
         run: |
           set -uo pipefail
-          mkdir -p .tmp/loop .tmp/race-json
-          packages="$(scripts/ci/test-shard.sh isolated-dedicated devhealthfacts)"
-          heavy="$(scripts/ci/race-split.sh devhealthfacts race-heavy)"
-          export GOFLAGS="-trimpath -run=$heavy"
-          RACE_JSON_OUT=.tmp/race-json/race.json GOTEST_TIMEOUT=20m GUARD=true \
-            scripts/ci/run-isolated-budget.sh 'devhealthfacts (heavy half)' "$packages" > .tmp/loop/heavy.log 2>&1
+          mkdir -p .tmp/loop
+          log=.tmp/loop/repro.log
+          go test -race -count=1 -timeout 20m -v \
+            -run '^TestTeamBlockerStatementsOnTheProductionShapeOnRealClickHouse$' \
+            ./internal/contextfabric/devhealthfacts > "$log" 2>&1
           code=$?
-          test=TestTeamBlockerStatementsOnTheProductionShapeOnRealClickHouse
-          result="$(jq -r --arg t "$test" 'select(.Test == $t and (.Action == "pass" or .Action == "fail" or .Action == "skip")) | .Action' .tmp/race-json/race.json | tail -1)"
-          jq -r --arg t "$test" 'select(.Test == $t and .Action == "output") | .Output' .tmp/race-json/race.json > .tmp/loop/test-output.log
-          grep -E 'differs|PRODSHAPE org-wide|--- (PASS|FAIL|SKIP)' .tmp/loop/test-output.log | head -80 || true
-          others="$(jq -r 'select(.Test != null and (.Test | contains("/") | not) and .Action == "fail") | .Test' .tmp/race-json/race.json | sort -u | tr '\n' ' ')"
-          case "$result" in
-            pass) printf 'RESULT shard=%s pass (job exit %s; other failed tests: %s)\n' '${{ matrix.shard }}' "$code" "$others" ;;
-            fail) printf 'RESULT shard=%s FAIL (job exit %s; other failed tests: %s)\n' '${{ matrix.shard }}' "$code" "$others"; exit 1 ;;
-            *) printf 'RESULT shard=%s INVALID (%s, job exit %s)\n' '${{ matrix.shard }}' "${result:-not run}" "$code"; tail -40 .tmp/loop/heavy.log; exit 1 ;;
-          esac
+          grep -E -- '--- (PASS|FAIL|SKIP)|differs' "$log" | head -80 || true
+          if grep -q -- '--- FAIL: TestTeamBlockerStatementsOnTheProductionShapeOnRealClickHouse' "$log"; then
+            printf 'RESULT shard=%s repro FAIL as expected (exit %s)\n' '${{ matrix.shard }}' "$code"
+          else
+            printf 'RESULT shard=%s repro did NOT fail (exit %s)\n' '${{ matrix.shard }}' "$code"
+            tail -30 "$log"
+            exit 1
+          fi
       # actions/upload-artifact v7.0.1
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         if: always()
