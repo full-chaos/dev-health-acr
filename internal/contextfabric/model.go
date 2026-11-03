@@ -544,7 +544,7 @@ func maxFactTableRows(t FactTable) int {
 // bound classifier reads. A row bound class keyed on more than the shape
 // adds its declaration property here.
 func (t FactTable) rowBoundDeclaration() *contractsv1.ContextFabricClaimedFactTable {
-	return &contractsv1.ContextFabricClaimedFactTable{Shape: contractsv1.ContextFabricFactTableShape(t.Shape)}
+	return &contractsv1.ContextFabricClaimedFactTable{Shape: contractsv1.ContextFabricFactTableShape(t.Shape), Key: t.Key}
 }
 
 type FactValue struct {

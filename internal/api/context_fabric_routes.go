@@ -1455,5 +1455,7 @@ func (a *App) withoutDisabledRenderShapes(answer contractsv1.ContextFabricInvest
 		ComparisonSideBySide: a.config.ContextFabricComparisonTableEnabled,
 		LandscapePosition:    a.config.ContextFabricLandscapeQuadrantEnabled,
 		CompletionForecast:   a.config.ContextFabricCompletionDistributionEnabled,
+		// CHAOS-12582.
+		InvestmentRepositoryFlow: a.config.ContextFabricInvestmentSankeyEnabled,
 	})
 }

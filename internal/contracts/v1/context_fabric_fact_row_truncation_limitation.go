@@ -118,4 +118,12 @@ func ParseContextFabricFactRowTruncationLimitation(limitation string) (served, d
 // stay on the fact. It is its own sentence rather than part of the per-table
 // one: a withheld table keeps no rows at all, which that sentence's counts do
 // not describe.
+// ContextFabricRepositoryFlowWithheldLimitation is the disclosure of a team's
+// repository_theme_breakdown table the answer-size row cut left out whole
+// (CHAOS-12582, lead ruling). The cut keeps a breakdown's first rows, and on
+// this table that can take every link of one theme while every other theme
+// still adds up, so a part of it would read as the team's whole effort. It is
+// withheld instead, and this says so.
+const ContextFabricRepositoryFlowWithheldLimitation = "This answer leaves out the team's effort by repository and theme, because the assembled answer exceeded the size budget; a part of that table would not be the team's whole effort."
+
 const ContextFabricDistributionWithheldLimitation = "This answer leaves out the completion forecast's distribution of simulation runs, because the assembled answer exceeded the size budget; the forecast's percentile days are still stated."
