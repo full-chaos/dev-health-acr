@@ -3050,6 +3050,46 @@
     ]
   },
   {
+    "id": "contextfabric.detail_tables_attached",
+    "msg": "context fabric detail tables attached",
+    "level": "info",
+    "multiplicity": "zero_or_many_per_request",
+    "attribution": [
+      "request_id"
+    ],
+    "bounded_aggregation": "at most one line per synthesis call that attached a detail table; a request makes at most two synthesis calls (the first and one retry).",
+    "max_lines_per_scope": 2,
+    "fields": [
+      {
+        "key": "org_id",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "detail_table_claims",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "detail_tables",
+        "type": "string_slice",
+        "presence": "required",
+        "max_items": 8
+      },
+      {
+        "key": "detail_tables_omitted",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "request_id",
+        "type": "string",
+        "presence": "conditional",
+        "applicability": "written when the request context carries a request ID"
+      }
+    ]
+  },
+  {
     "id": "contextfabric.direct_read",
     "msg": "context fabric direct read",
     "level": "info",
@@ -6807,7 +6847,8 @@
           "offers_unavailable",
           "period_shape",
           "offers_beyond_window",
-          "window_only"
+          "window_only",
+          "window_only_unpickable_asks"
         ]
       },
       {
@@ -8299,7 +8340,7 @@
         "type": "string",
         "presence": "required",
         "closed_vocabulary": [
-          "question-family.v5"
+          "question-family.v6"
         ]
       },
       {
@@ -8589,6 +8630,44 @@
           "walk_list_cut",
           "decisive_fit"
         ]
+      },
+      {
+        "key": "request_id",
+        "type": "string",
+        "presence": "conditional",
+        "applicability": "written when the request context carries a request ID"
+      }
+    ]
+  },
+  {
+    "id": "contextfabric.plan_operand_reads",
+    "msg": "context fabric plan operand reads",
+    "level": "info",
+    "multiplicity": "zero_or_one_per_request",
+    "attribution": [
+      "request_id"
+    ],
+    "bounded_aggregation": "at most one line per investigation: recorded once, when the plan is built and the turn has an operand read row.",
+    "fields": [
+      {
+        "key": "org_id",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "operand_rows",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "kinds_named",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "kinds_added",
+        "type": "int",
+        "presence": "required"
       },
       {
         "key": "request_id",
@@ -9322,7 +9401,7 @@
         "presence": "required",
         "closed_vocabulary": [
           "",
-          "question-family.v5"
+          "question-family.v6"
         ]
       },
       {
@@ -12199,7 +12278,7 @@
         "type": "string",
         "presence": "required",
         "closed_vocabulary": [
-          "question-family.v5"
+          "question-family.v6"
         ]
       },
       {
