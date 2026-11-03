@@ -43,7 +43,7 @@ var contractsAtCapture = map[string]string{
 	// investmentBreakdown is advanced past the capture: the re-vendor from ops 0b763a85 brings its V2 document
 	// (CHAOS-10351), which adds analytics.evidenceQualityStats.uncategorizedCount, and two new candidates of root
 	// analytics, investmentBreakdownTeam and investmentBreakdownRepository (CHAOS-12698), which the capture has no
-	// reply for. Root analytics is listed in notRecordedRoots; retake the capture on the next venue move (it was
+	// reply for: they are in notRecordedOperations. Retake the capture on the next venue move (CHAOS-12808; it was
 	// sha256:8742ea2b7d3c3014c7a429a115108e167caf8a250230f5e59c16e3332f7b1749 at the capture).
 	"investmentBreakdown":           "sha256:dcaf3bfe8899a3ba1fff623bb9dff5380212d515c51f073c1f2eb670f1c353df",
 	"investmentBreakdownRepository": "sha256:0535d2800c3017e3f9494e3da384e6ff96eb340f286372c812e220c00c73802c",
@@ -135,7 +135,7 @@ func oracleFor(t *testing.T, manifest Manifest, planes Planes, reference *Extrac
 	if err != nil {
 		t.Fatalf("reference store: %v", err)
 	}
-	return &Oracle{Policy: policy, Planes: planes, Store: store, Window: manifest.Window, ShapeCases: manifest.ShapeCases,
+	return &Oracle{Policy: policy, Planes: planes, Store: store, Window: manifest.Window, ShapeCases: manifest.ShapeCases, NotRecorded: notRecordedOperations,
 		ListenerDark: manifest.ListenerDark, OperationDark: manifest.OperationDark, DeniedTeams: manifest.DeniedTeams}
 }
 
@@ -378,13 +378,21 @@ func TestRecordedCaptureKeepsTheDarkOperationAndTheTestExcludesIt(t *testing.T) 
 
 // notRecordedRoots are the roots the recorded capture cannot replay: a root
 // whose registry document or shape the venue did not serve when the capture
-// was taken. Root analytics is listed since the re-vendor from ops 0b763a85:
-// the capture holds investmentBreakdown V1 replies and no reply of the scoped
-// candidates. The capture stays as recorded; the recorded run says which roots
-// it did not measure, and recording them again needs the venue
-// (`make o4-oracle-capture`), after which this list must be emptied.
-var notRecordedRoots = map[string]string{
-	"analytics": "the capture was taken before investmentBreakdown V2 (CHAOS-10351, vendored from ops 0b763a85) added analytics.evidenceQualityStats.uncategorizedCount, so its recorded replies lack that path, and investmentBreakdownTeam and investmentBreakdownRepository (CHAOS-12698) have no recorded reply",
+// was taken. The capture of the venue at ops 5c9a3d32 records every root, so
+// the list is empty; a root added here again must say why the capture lacks it.
+var notRecordedRoots = map[string]string{}
+
+// notRecordedReason is why the capture holds no case of the scoped investment
+// breakdowns.
+const notRecordedReason = "no recorded reply: the operation was registered after the capture, CHAOS-12698; restored by the re-capture CHAOS-12808"
+
+// notRecordedOperations are the operations every recorded-mode run leaves out
+// (Oracle.NotRecorded): every generated shape of each, and nothing else.
+// Their root runs with its other candidates. The oracle refuses a listed
+// operation that has a case, so the list cannot outlive the re-capture.
+var notRecordedOperations = map[string]string{
+	"investmentBreakdownTeam":       notRecordedReason,
+	"investmentBreakdownRepository": notRecordedReason,
 }
 
 // withoutNotRecordedRoots returns the manifest without the shape cases and
@@ -467,27 +475,23 @@ func isNotRecordedKey(t *testing.T, key string, skipped []string) bool {
 	return false
 }
 
-// The recorded run excludes exactly root analytics (notRecordedRoots): the
-// exclusion drops its pinned outcome and its shape cases, and the capture
-// holds replies of it, so the exclusion measures something. Every other root
+// The capture of the venue records every root: nothing is excluded, so a root
+// added to notRecordedRoots has to be a root the capture really lacks. The
+// ops side of root analytics is compared again on COUNT: the root
 // runs in full.
 func TestRecordedRunNamesTheRootsItDoesNotMeasure(t *testing.T) {
 	manifest, recording, _ := loadedCapture(t)
 	filtered, skipped := withoutNotRecordedRoots(t, manifest)
-	if !slices.Equal(skipped, []string{"analytics"}) {
+	if len(skipped) != 0 {
 		t.Fatalf("not recorded roots = %v", skipped)
 	}
-	if len(manifest.Expect) != len(filtered.Expect)+1 || len(manifest.ShapeCases) <= len(filtered.ShapeCases) {
-		t.Fatalf("the recorded manifest was changed or the exclusion dropped nothing: %d pinned roots, %d shape cases", len(manifest.Expect), len(manifest.ShapeCases))
+	if len(manifest.Expect) != len(filtered.Expect) || len(manifest.ShapeCases) != len(filtered.ShapeCases) {
+		t.Fatalf("the recorded manifest was changed: %d pinned roots, %d shape cases", len(manifest.Expect), len(manifest.ShapeCases))
 	}
-	n := 0
 	for key := range recording.Replies {
 		if isNotRecordedKey(t, key, skipped) {
-			n++
+			t.Fatalf("reply %s belongs to a not recorded root", key)
 		}
-	}
-	if n == 0 {
-		t.Fatal("the capture holds no reply of a not recorded root: the exclusion measured nothing")
 	}
 	if _, ok := manifest.Expect["capacityForecast"]; !ok {
 		t.Fatal("the capture pins no outcome for capacityForecast")
@@ -505,4 +509,103 @@ func darkCases(t *testing.T, _ Recording, dark map[string]bool) []string {
 		}
 	}
 	return out
+}
+
+// The recorded mode leaves out exactly the generated shapes of the operations
+// in notRecordedOperations: they are candidates of root analytics with no case
+// in the capture, and every other shape of root analytics has one, so the ORG
+// investmentBreakdown and investmentFull shapes still run. A run of root
+// analytics states exactly those shapes as not recorded, and the oracle
+// refuses a listed operation once one of its shapes has a case.
+func TestRecordedModeLeavesOutOnlyTheScopedInvestmentShapes(t *testing.T) {
+	manifest, _, extract := loadedCapture(t)
+	policy := mustPolicy(t)
+	analytics, ok := policy.Root("analytics")
+	if !ok {
+		t.Fatal("root analytics is not allowed")
+	}
+	listed := make([]string, 0, len(notRecordedOperations))
+	for name, why := range notRecordedOperations {
+		if !slices.Contains(analytics.Operations(), name) || why != notRecordedReason {
+			t.Fatalf("not recorded operation %s is not a candidate of root analytics or has another reason: %q", name, why)
+		}
+		listed = append(listed, name)
+	}
+	sort.Strings(listed)
+	if !slices.Equal(listed, []string{"investmentBreakdownRepository", "investmentBreakdownTeam"}) {
+		t.Fatalf("not recorded operations = %v", listed)
+	}
+	cases := map[string]int{}
+	for _, c := range manifest.ShapeCases {
+		cases[c.ShapeID]++
+	}
+	shapes, err := Shapes(policy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var want []string
+	analyticsCases := 0
+	for _, shape := range shapes {
+		if _, out := notRecordedOperations[shape.Operation]; out {
+			if cases[shape.ID()] > 0 {
+				t.Fatalf("shape %s has a recorded case: remove its operation from notRecordedOperations", shape.ID())
+			}
+			want = append(want, shape.ID()+": "+notRecordedReason)
+			continue
+		}
+		if shape.Root == "analytics" {
+			if cases[shape.ID()] == 0 {
+				t.Fatalf("shape %s has no case: it would not run", shape.ID())
+			}
+			analyticsCases += cases[shape.ID()]
+		}
+	}
+	for _, id := range []string{"analytics/investmentBreakdownTeam/all", "analytics/investmentBreakdownRepository/all"} {
+		if !slices.ContainsFunc(want, func(w string) bool { return strings.HasPrefix(w, id+": ") }) {
+			t.Fatalf("%s is not left out: %v", id, want)
+		}
+	}
+
+	store, err := NewStore(extract)
+	if err != nil {
+		t.Fatal(err)
+	}
+	data := `{"analytics":{"__typename":"AnalyticsResult","breakdowns":[],"evidenceQualityDistribution":{"low":1},"evidenceQualityStats":{"__typename":"EvidenceQualityStats","mean":0.4,"stddev":0.2,"total":10,"bandCounts":{"low":1},"uncategorizedCount":0}}}`
+	oracleOver := func(shapeCases []ShapeCase) *Oracle {
+		return &Oracle{Policy: policy, Store: store, Window: manifest.Window, ShapeCases: shapeCases, OnlyRoots: []string{"analytics"}, NotRecorded: notRecordedOperations,
+			Planes: fakePlanes{
+				graphQL: func(shape Shape, _ map[string]any) (json.RawMessage, error) {
+					return servedAnswer(t, "analytics", shape.Operation, data, len(data), 32768), nil
+				},
+				operation: func(shape Shape, _ map[string]any) (json.RawMessage, error) {
+					return operationAnswer(t, shape.Operation, data), nil
+				},
+			}}
+	}
+	report, err := oracleOver(manifest.ShapeCases).Run(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	rr := report.Root("analytics")
+	got := slices.Clone(rr.NotRecorded)
+	sort.Strings(got)
+	sort.Strings(want)
+	if !slices.Equal(got, want) || rr.ShapesRun != analyticsCases || analyticsCases == 0 {
+		t.Fatalf("not recorded %v (ran %d cases), want %v (and %d cases)", got, rr.ShapesRun, want, analyticsCases)
+	}
+	if details := report.Details(); !strings.Contains(details, "NOT-RECORDED analytics: analytics/investmentBreakdownTeam/all: "+notRecordedReason) {
+		t.Fatalf("the report does not state the left-out shapes:\n%s", details)
+	}
+
+	// A recorded case of a listed operation stops the run.
+	var sibling map[string]any
+	for _, c := range manifest.ShapeCases {
+		if c.ShapeID == "analytics/investmentBreakdown/all" {
+			sibling = c.Variables
+		}
+	}
+	planted := append(slices.Clone(manifest.ShapeCases), ShapeCase{ShapeID: "analytics/investmentBreakdownTeam/all", Variables: sibling})
+	if _, err := oracleOver(planted).Run(context.Background()); err == nil || !strings.Contains(err.Error(), "is listed as not recorded") {
+		t.Fatalf("a recorded case of a listed operation did not stop the run: %v", err)
+	}
 }

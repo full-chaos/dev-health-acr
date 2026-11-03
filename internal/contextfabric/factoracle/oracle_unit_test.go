@@ -8,7 +8,6 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
-	"slices"
 	"sort"
 	"strings"
 	"testing"
@@ -805,10 +804,9 @@ func TestTheTwoPathsMustAnswerTheSame(t *testing.T) {
 		t.Fatal(err)
 	}
 	flow := `{"workGraphFlow":{"__typename":"WorkGraphFlowResult","degradedReason":null,"rows":[{"__typename":"WorkGraphFlowRow","nodeType":"ISSUE","inflow":3,"outflow":4},{"__typename":"WorkGraphFlowRow","nodeType":"PR","inflow":1,"outflow":2}]}}`
-	cases := withSiblingCases(t, manifest.ShapeCases)
 	run := func(root, graphQL, operation string) *RootReport {
 		t.Helper()
-		oracle := &Oracle{Policy: mustPolicy(t), Store: store, Window: manifest.Window, ShapeCases: cases, OnlyRoots: []string{root},
+		oracle := &Oracle{Policy: mustPolicy(t), Store: store, Window: manifest.Window, ShapeCases: manifest.ShapeCases, OnlyRoots: []string{root}, NotRecorded: notRecordedOperations,
 			Planes: fakePlanes{
 				graphQL: func(shape Shape, _ map[string]any) (json.RawMessage, error) {
 					if shape.Name != "all" {
@@ -894,42 +892,6 @@ func TestTheTwoPathsMustAnswerTheSame(t *testing.T) {
 	if rr := run("compoundingRisk", risk("2026-10-01T16:00:00Z"), strings.Replace(risk("2026-10-01T16:00:00Z"), `"REPO"`, `"TEAM"`, 1)); crossFindings(rr) == 0 {
 		t.Fatalf("another breakout on the other path is not a finding")
 	}
-}
-
-// withSiblingCases adds a case for every generated shape the capture has none
-// for: the scoped investment candidates of root analytics, which the capture
-// does not record (notRecordedRoots). A comparator test answers every shape
-// from fakes, so such a shape runs with the variables of the same-named shape
-// of investmentBreakdown; a shape with no such sibling fails the test.
-func withSiblingCases(t *testing.T, captured []ShapeCase) []ShapeCase {
-	t.Helper()
-	shapes, err := Shapes(mustPolicy(t))
-	if err != nil {
-		t.Fatal(err)
-	}
-	vars := map[string]map[string]any{}
-	for _, c := range captured {
-		if _, seen := vars[c.ShapeID]; !seen {
-			vars[c.ShapeID] = c.Variables
-		}
-	}
-	out := slices.Clone(captured)
-	added := 0
-	for _, shape := range shapes {
-		if _, ok := vars[shape.ID()]; ok {
-			continue
-		}
-		sibling, ok := vars[shape.Root+"/investmentBreakdown/"+shape.Name]
-		if !ok {
-			t.Fatalf("shape %s has no case and no investmentBreakdown sibling", shape.ID())
-		}
-		out = append(out, ShapeCase{ShapeID: shape.ID(), Variables: sibling})
-		added++
-	}
-	if added == 0 {
-		t.Fatal("every shape has a captured case: drop withSiblingCases")
-	}
-	return out
 }
 
 func TestTemporaryAllowanceExpiresWithItsPaths(t *testing.T) {
