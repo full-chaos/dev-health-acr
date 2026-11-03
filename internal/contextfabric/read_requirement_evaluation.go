@@ -1359,8 +1359,9 @@ type ReadRequirementObservationCoverEvent struct {
 	// decision: the answer that pass would have served, and why a later
 	// pass replaced it.
 	Served bool
-	// Outcome is the requirement row's own decision -- satisfied, narrowed
-	// or unavailable -- for the SAME requirement this cover event describes.
+	// Outcome is the requirement row's own decision -- satisfied, narrowed,
+	// unavailable, not_attempted or (CHAOS-12821) not_applicable -- for the
+	// SAME requirement this cover event describes.
 	// It distinguishes a truncated source from a genuinely absent one on
 	// this line itself: `health` narrowed by a truncation and `health`
 	// unavailable from no_data both carry observed_kinds=1 served_kinds=0,
