@@ -24,7 +24,7 @@ func TestRefusedCandidatesAreComparedInTheStatedOrder(t *testing.T) {
 		{"on a tie kept pins win", candidateOutcome{refusal: other, stage: 4, keepsPins: true}, candidateOutcome{refusal: other, stage: 4}, true},
 		{"on a full tie the earlier candidate keeps it", candidateOutcome{refusal: other, stage: 4, keepsPins: true}, candidateOutcome{refusal: other, stage: 4, keepsPins: true}, false},
 		{"on a tie with no pins kept the earlier candidate keeps it", candidateOutcome{refusal: other, stage: 4}, candidateOutcome{refusal: other, stage: 4}, false},
-		{"two person refusals: the earlier keeps it", candidateOutcome{refusal: person, stage: 4, keepsPins: true}, candidateOutcome{refusal: person, stage: 4}, true},
+		{"two person refusals: the one that keeps the pins wins", candidateOutcome{refusal: person, stage: 4, keepsPins: true}, candidateOutcome{refusal: person, stage: 4}, true},
 	} {
 		t.Run(c.label, func(t *testing.T) {
 			if got := c.candidate.preferredOver(&c.best); got != c.want {
