@@ -524,6 +524,7 @@ type recordingTelemetry struct {
 	windowBinderProposals          []WindowBindOutcome
 	windowGatedForConfirmation     []windowGatedRecord
 	operandReadKinds               [][3]int
+	subjectObligationReads         []recordedSubjectObligationReads
 	windowClassifications          []recordedWindowClassification
 	inferredWindowGates            []recordedInferredWindowGate
 	interpretationTerms            []InterpretationTermsEvent
@@ -810,6 +811,18 @@ func (r *recordingTelemetry) RecordWindowCanonicalization(_ context.Context, _ s
 
 func (r *recordingTelemetry) RecordOperandReadKinds(_ context.Context, _ storage.Principal, operandRows, kindsNamed, kindsAdded int) {
 	r.operandReadKinds = append(r.operandReadKinds, [3]int{operandRows, kindsNamed, kindsAdded})
+}
+
+// recordedSubjectObligationReads is one RecordSubjectObligationReadKinds call
+// (CHAOS-12710).
+type recordedSubjectObligationReads struct {
+	SubjectRows int
+	KindsNamed  int
+	KindsAdded  []FactKind
+}
+
+func (r *recordingTelemetry) RecordSubjectObligationReadKinds(_ context.Context, _ storage.Principal, subjectRows, kindsNamed int, kindsAdded []FactKind) {
+	r.subjectObligationReads = append(r.subjectObligationReads, recordedSubjectObligationReads{SubjectRows: subjectRows, KindsNamed: kindsNamed, KindsAdded: append([]FactKind(nil), kindsAdded...)})
 }
 
 func (r *recordingTelemetry) RecordWindowClassification(_ context.Context, _ storage.Principal, modelClass WindowClass, outcome WindowClassOutcome) {

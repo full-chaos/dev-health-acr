@@ -602,6 +602,43 @@ measure per family (CHAOS-12602), and the cohort zero-growth pin stays true. The
 `context fabric plan operand reads` counts the operand rows, the kinds they name and the kinds the
 fact request gained only because of them.
 
+**Fifth widening, a committed subject's REQUIRED kinds (CHAOS-12710 Fix A, 2026-11-03).** The lead
+amended the CHAOS-12596 ruling for this case only: plan and read the kinds the frame's own
+obligations require, for the committed subject only. On askdev-1 a single named team with goals
+`[assess_state]` and the model's `workload` requirement planned `workload` only; `health/subject/team`
+ended `unavailable` with `requirement_read_not_planned` and the completeness authority corrected the
+answer to `degraded` on that row. A kind is REQUIRED when the obligation cannot be met without it:
+the row's completion quantifier asks for as many serving sources as the row has serving kinds
+(`at_least_one` = 1, `corroborated` = 2). `SubjectObligationRequiredKinds` selects served READ rows
+whose role is `subject` (the one named subject or the organization scope) and whose kinds meet
+that test; `planFactKinds` appends them last, first-kind-wins, and the fact request gains a fifth,
+fill-only group (`subjectObligationFactRequirements`, planning authority 8), for the same no-cohort
+reason as the operand group. Health is read through the existing health provider; no SQL and no
+provider is added. **This is not the all-read-rows union, which stays parked (CHAOS-12602):** a
+row that a subset of its kinds can satisfy adds nothing, so `state` over a team (six kinds) and
+`principal_drivers` over a team (eleven kinds) add nothing; member, group and operand rows add
+nothing; an unrecognised quantifier adds nothing. Measured on the production capability list, the
+plan changes as follows, and every cohort plan in the trace corpus is unchanged:
+
+| Family | Before | After | Required by |
+| --- | --- | --- | --- |
+| Q1 named team, assess | — | health | `health/subject/team` (`[health]`, at_least_one) |
+| Q1' named project, assess | — | health | `health/subject/project` |
+| Q-B scoped projects | cohort five | cohort five | — (member rows) |
+| C5 count of teams | cohort five | cohort five | — (no read row) |
+| N-repo named repository | — | health | `health/subject/repository` (state is three kinds: none required) |
+| N-pr named pull request | — | pull_requests | `state/subject/pull_request` (`[pull_requests]`, its only serving kind) |
+| N-team assess + explain | — | health | `health/subject/team` (drivers: eleven kinds, none required) |
+| F1 forecast team | workload | workload, health | `health/subject/team` |
+
+A team whose health is missing ends `unavailable` on `health/subject/team` with the provider's own
+cause, never satisfied, and the answer is not `complete` (North Star check 12), on every provider
+team (`jira`, `gitlab`, `github`, `linear`). The Info line `context fabric plan subject obligation
+reads` counts the rows, the kinds they require and the kinds the fact request gained only because
+of them, and names those kinds from the closed fact-kind vocabulary (`added_kinds`). The cut hop
+walk that also marks this answer (`graph_hop_walk_truncated`) is a separate question on CHAOS-12710
+and is not changed here.
+
 **Two guards, and neither follows from the other.** The row must be SERVED — an unavailable cell
 runs nothing, so reading its declared inputs fetches facts for a computation that cannot happen —
 and the step must be SERVER-EXECUTED (`declared_only` is exactly the read nobody needs). Each guard
