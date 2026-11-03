@@ -1,0 +1,15 @@
+# devhealthsource race job 4 (fourth, CHAOS-12667): tests run only in race-devhealthsource-fourth.
+# Names are exact top-level test names of internal/contextfabric/devhealthsource, one per line.
+# Cut by measured run time under -race (test2json span on main 5cb92237, run 41524399062): the
+# ownership producer (146s: its 45 parallel subtests run after the parent reports 4.6s), the window
+# pass over a 60ms round trip (142s, out of the mid job), the ownership statement memory test (50s)
+# and the live membership refresh (27s), both out of the rest job. The memory test stays out of the
+# heavy list (scripts/ci/test-race-budget-cut.sh pins the six CHAOS-10321 cuts there). With
+# TestCensusProjectAnchorGroupingSurvivesAHandle (17s) moved from rest to heavy, the four jobs land
+# near rest 322s, heavy 317s, mid 328s, fourth 365s of tests: under the 510s guard at up to 1.4x
+# the median runner speed. A name in two race lists, or a name that no longer exists, fails
+# scripts/ci/race-split.sh (race-partition, verify).
+TestLiveTheMembershipRefreshFollowsTheCatalogNotItsStamp
+TestOwnershipProducerAgainstRealClickHouse
+TestProjectTeamOwnershipStatementMemoryAgainstTheOwnershipHistory
+TestWindowPassOverA60msRoundTrip

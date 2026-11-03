@@ -338,6 +338,8 @@ func goVarName(e Event) string {
 		return "ProjectedRowsByFactKind"
 	case DualTableFacts.ID:
 		return "DualTableFacts"
+	case DetailTablesAttached.ID:
+		return "DetailTablesAttached"
 	case ModelRowsStripped.ID:
 		return "ModelRowsStripped"
 	case DriverSourceStateCorrected.ID:

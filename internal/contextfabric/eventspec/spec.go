@@ -2555,6 +2555,25 @@ var ProjectedRowsByFactKind = Event{
 	},
 }
 
+// DetailTablesAttached is the Info line of the declared detail tables a synthesis attached to its claims, by name (CHAOS-12587). It is written only when a claim carries one.
+var DetailTablesAttached = Event{
+	ID:                       "contextfabric.detail_tables_attached",
+	Msg:                      "context fabric detail tables attached",
+	Level:                    LevelInfo,
+	Multiplicity:             MultiplicityZeroOrManyPerRequest,
+	MaxLinesPerScope:         2,
+	RequiredOnlyConstruction: true,
+	Attribution:              []string{"request_id"},
+	BoundedAggregation:       "at most one line per synthesis call that attached a detail table; a request makes at most two synthesis calls (the first and one retry).",
+	Fields: []Field{
+		{Key: "org_id", Type: FieldString, Presence: PresenceRequired},
+		{Key: "detail_table_claims", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "detail_tables", Type: FieldStringSlice, Presence: PresenceRequired, MaxItems: contextfabric.MaxLoggedDetailTables},
+		{Key: "detail_tables_omitted", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "request_id", Type: FieldString, Presence: PresenceConditional, Applicability: requestIDApplicability},
+	},
+}
+
 // DualTableFacts is the Info line of how many claims carried a second time series table and the extra bytes it cost.
 var DualTableFacts = Event{
 	ID:                       "contextfabric.dual_table_facts",
@@ -5943,6 +5962,7 @@ var All = []Event{
 	ProjectedRowsCount,
 	ProjectedRowsByFactKind,
 	DualTableFacts,
+	DetailTablesAttached,
 	ModelRowsStripped,
 	DriverSourceStateCorrected,
 	ServiceLimitationLookalikesDropped,
