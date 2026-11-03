@@ -16,6 +16,8 @@ var unboundedEvents = []string{
 	"contextfabric.work_item_link_reach",
 	"devhealthfacts.fact_bytes_bound_exceeded",
 	"devhealthfacts.health_daily_health_cap_cut",
+	"devhealthfacts.investment_subcategory_breakdown_noncanonical_key",
+	"devhealthfacts.investment_subcategory_breakdown_withheld",
 	"devhealthfacts.owning_teams_truncated",
 	"devhealthfacts.project_owning_team_rollup",
 	"devhealthfacts.pull_request_project_native_first",

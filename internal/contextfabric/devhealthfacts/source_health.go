@@ -108,7 +108,7 @@ func (p *SourceHealthProvider) read(ctx context.Context, principal storage.Princ
 	if p == nil || !p.operations.IsSet() {
 		return limitation(contextfabric.SourceUnconfigured, sourceHealthUnsetReason)
 	}
-	outcome, callErr := p.operations.CallOperation(ctx, principal, SourceHealthOperationName)
+	outcome, callErr := p.operations.CallOperation(ctx, principal, SourceHealthOperationName, nil)
 	if callErr != nil {
 		return limitation(contextfabric.SourceUnavailable, sourceHealthNotServedReason+"call_failed")
 	}

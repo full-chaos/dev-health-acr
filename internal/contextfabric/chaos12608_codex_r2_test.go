@@ -15,10 +15,11 @@ func TestTheReuseFamilyVersionNamesTheRenderSwitchesOn(t *testing.T) {
 		t.Fatalf("every switch off: %q, want the table version: a deployment that turns nothing on keeps its stored answers", got)
 	}
 	seen := map[string]RenderShapeOptions{}
-	// CHAOS-12675 and CHAOS-12582: the quadrant and sankey switches are the
-	// fourth and fifth, so every one of the 32 switch sets is swept.
-	for mask := 0; mask < 32; mask++ {
-		options := RenderShapeOptions{InvestmentThemeShare: mask&1 != 0, ComparisonSideBySide: mask&2 != 0, CompletionForecast: mask&4 != 0, LandscapePosition: mask&8 != 0, InvestmentRepositoryFlow: mask&16 != 0}
+	// CHAOS-12675, CHAOS-12582 and CHAOS-12554: the quadrant, sankey and
+	// sunburst switches are the fourth, fifth and sixth, so every one of the 64
+	// switch sets is swept.
+	for mask := 0; mask < 64; mask++ {
+		options := RenderShapeOptions{InvestmentThemeShare: mask&1 != 0, ComparisonSideBySide: mask&2 != 0, CompletionForecast: mask&4 != 0, LandscapePosition: mask&8 != 0, InvestmentRepositoryFlow: mask&16 != 0, InvestmentSubcategoryShare: mask&32 != 0}
 		version := ReuseQuestionFamilyVersion(options)
 		if len(version) > 128 {
 			t.Errorf("%+v: %d characters, past the column's 128", options, len(version))
@@ -28,8 +29,8 @@ func TestTheReuseFamilyVersionNamesTheRenderSwitchesOn(t *testing.T) {
 		}
 		seen[version] = options
 	}
-	// Today's sets stay byte-equal: with the sankey switch off, every key is the
-	// readable form main writes (lead ruling on CHAOS-12582).
+	// Today's sets stay byte-equal: with the sankey and sunburst switches off,
+	// every key is the readable form main writes (lead ruling on CHAOS-12582).
 	for mask := 0; mask < 16; mask++ {
 		options := RenderShapeOptions{InvestmentThemeShare: mask&1 != 0, ComparisonSideBySide: mask&2 != 0, CompletionForecast: mask&4 != 0, LandscapePosition: mask&8 != 0}
 		var on []string
@@ -55,7 +56,7 @@ func TestTheReuseFamilyVersionNamesTheRenderSwitchesOn(t *testing.T) {
 		}
 	}
 	// Every switch on: the readable form is past 128, so the key is its digest.
-	all := RenderShapeOptions{InvestmentThemeShare: true, ComparisonSideBySide: true, CompletionForecast: true, LandscapePosition: true, InvestmentRepositoryFlow: true}
+	all := RenderShapeOptions{InvestmentThemeShare: true, ComparisonSideBySide: true, CompletionForecast: true, LandscapePosition: true, InvestmentRepositoryFlow: true, InvestmentSubcategoryShare: true}
 	if got := ReuseQuestionFamilyVersion(all); !strings.HasPrefix(got, QuestionFamilyTableVersion+"+render#") || len(got) != len(QuestionFamilyTableVersion)+len("+render#")+32 {
 		t.Errorf("every switch on: %q, want the table version, +render# and 32 hex digits", got)
 	}

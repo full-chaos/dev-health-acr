@@ -643,6 +643,8 @@ var frameFieldConsumers = map[string]string{
 		"read that carries a frame into a later turn",
 	"OrganizationSurveyMemberKind": "organizationRollUpLimitation and organizationSubjectAnswers (member_status.go) -- " +
 		"PROVENANCE that repairOrganizationScopeSurvey produced this frame; the served answer names its roll-up basis from it",
+	"requirementRoute": "requirementRoleSlots (subject_role.go) -- the served route requirement derivation reads, set only " +
+		"on the engine's requirement-frame copy by scopeAllocationRequirementFrame (CHAOS-12885); unexported, so never encoded or carried",
 }
 
 // TestLawL6EveryFrameFieldHasANamedConsumer is law L6's structural half.

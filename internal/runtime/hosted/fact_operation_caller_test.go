@@ -55,7 +55,7 @@ func TestFactOperationCallerSendsTheRegisteredSourceHealthDocument(t *testing.T)
 	if policy.Digest != registeredSourceHealthDigest || directread.DocumentDigest(policy.DocumentText) != registeredSourceHealthDigest {
 		t.Fatalf("policy digest = %s, want the registered %s", policy.Digest, registeredSourceHealthDigest)
 	}
-	outcome, err := newFactOperationCaller(runner).CallOperation(context.Background(), storage.Principal{OrgID: "11111111-1111-4111-8111-111111111111"}, devhealthfacts.SourceHealthOperationName)
+	outcome, err := newFactOperationCaller(runner).CallOperation(context.Background(), storage.Principal{OrgID: "11111111-1111-4111-8111-111111111111"}, devhealthfacts.SourceHealthOperationName, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -79,7 +79,7 @@ func TestFactOperationCallerSendsTheRegisteredSourceHealthDocument(t *testing.T)
 
 func TestFactOperationCallerReportsRootNotEnabledAsAClosedReason(t *testing.T) {
 	runner, _ := sourceHealthRunner(t, &recordingQueryClient{err: &directread.QueryError{Class: directread.QueryErrorNotFound, StatusCode: 404, ListenerReason: directread.ListenerNotFoundRootNotEnabled}})
-	outcome, err := newFactOperationCaller(runner).CallOperation(context.Background(), storage.Principal{OrgID: "11111111-1111-4111-8111-111111111111"}, devhealthfacts.SourceHealthOperationName)
+	outcome, err := newFactOperationCaller(runner).CallOperation(context.Background(), storage.Principal{OrgID: "11111111-1111-4111-8111-111111111111"}, devhealthfacts.SourceHealthOperationName, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

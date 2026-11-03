@@ -125,6 +125,10 @@ func copyFactKinds(kinds []FactKind) []FactKind {
 // frame or nil deriver yields no rows, which is an honest absence and one the
 // document shows: no plan requirements, no seed outcomes, and a completeness
 // state of `not_derived` rather than a vacuous `complete`.
+//
+// The frame is the engine's requirement frame, and it may carry the turn's
+// requirement route (RequirementRoute; CHAOS-12885). Every caller passes that
+// same copy, so the plan's rows and the finalization seed agree.
 func deriveTurnRequirements(frame *QuestionFrame, deriver RequirementDeriver) []DerivedRequirement {
 	if frame == nil || deriver == nil {
 		return nil

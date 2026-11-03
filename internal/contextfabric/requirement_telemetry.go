@@ -53,7 +53,14 @@ import (
 // investment fact kind, where before it derived UNAVAILABLE for "no declaring
 // producer". A semantic snapshot derived under v2 carries the old row, and a
 // continuation must not replay it (Codex r2, executed).
-const RequirementDerivationVersion = "requirement-derivation.v3"
+//
+// v3 -> v4: on the scope-anchor allocation route (CHAOS-12606) the
+// allocation requirement is the anchor team's, allocation_breakdown/subject/
+// team, where before it was allocation_breakdown/member/repository
+// (CHAOS-12885). A role rule changed meaning for that route, so a snapshot
+// derived under v3 carries the member row, and a continuation must not replay
+// it beside a finalization that seeds the team row.
+const RequirementDerivationVersion = "requirement-derivation.v4"
 
 // RequirementDerivationSummary is the requirement layer's telemetry row.
 //
