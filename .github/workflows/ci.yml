@@ -268,6 +268,8 @@ jobs:
             --fixtures testdata/release-approvals
       - name: Verify CI workflow contract
         run: scripts/ci/test-workflow-contract.sh
+      - name: Test the PR title check
+        run: scripts/ci/test-pr-title.sh
       - name: Verify the vendored ops contract check
         run: scripts/ci/test-vendored-ops-contract.sh
       - name: Verify Go builds use -trimpath
