@@ -43,7 +43,13 @@ var valuePaths = map[string][]pathRule{
 		{Path: "analytics.breakdowns[*].items[*].key"},
 		{Path: "analytics.breakdowns[*].items[*].value"},
 		{Path: "analytics.evidenceQualityDistribution", Reason: noField},
-		{Path: "analytics.evidenceQualityStats", Reason: noField},
+		{Path: "analytics.evidenceQualityStats.bandCounts", Reason: noField},
+		{Path: "analytics.evidenceQualityStats.mean", Reason: noField},
+		{Path: "analytics.evidenceQualityStats.stddev", Reason: noField},
+		{Path: "analytics.evidenceQualityStats.total", Reason: noField},
+		// The V2 count of evidence-gated units, against the units the store
+		// reading gates (CHAOS-12836).
+		{Path: "analytics.evidenceQualityStats.uncategorizedCount"},
 		{Path: "analytics.sankey", Reason: "refused shape (design K14-A): sankey is null"},
 	},
 	"capacityForecasts": {
