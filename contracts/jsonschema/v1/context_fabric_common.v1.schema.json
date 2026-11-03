@@ -5665,6 +5665,30 @@
           "enum": [
             "day"
           ]
+        },
+        "column_vocabularies": {
+          "description": "CHAOS-12639: maps each key or observation column whose values are tokens of a closed vocabulary to that vocabulary. A consumer reads each cell's served word from `vocabulary_labels` under `<vocabulary>:<value>` and keeps no word table of its own. Set by the server from the producer's declaration; never model-authored. Each key is a name in `key` or `observations`.",
+          "type": "object",
+          "maxProperties": 40,
+          "additionalProperties": {
+            "description": "`investment_theme` is a canonical investment theme; `subcategory` is a canonical investment subcategory.",
+            "type": "string",
+            "enum": [
+              "investment_theme",
+              "subcategory"
+            ]
+          }
+        },
+        "word_columns": {
+          "description": "CHAOS-12639: maps each id column to the observation column of the same row that carries its served word (a repository's handle beside its canonical id). A consumer shows the word and keeps the id out of sight. Set by the server from the producer's declaration; never model-authored. Each key is a name in `key` or `observations`: the id column.",
+          "type": "object",
+          "maxProperties": 40,
+          "additionalProperties": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128,
+            "description": "Another name in `observations`: the column that carries the id's served word."
+          }
         }
       },
       "required": [
@@ -6010,6 +6034,10 @@
           "minimum": 0
         },
         "unfinished_runs": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "target_items": {
           "type": "integer",
           "minimum": 0
         },

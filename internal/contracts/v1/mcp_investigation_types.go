@@ -243,6 +243,10 @@ var MCPInvestigateQuestionUntrustedFields = []string{
 	// columns, classified exactly like measures[] just above. Its unit is a
 	// closed vocabulary and is trusted by trustedBecauseClosed.
 	"structured.key_facts[].table.measure_units[].measure",
+	// CHAOS-12639: word_columns{} values name the producer's own columns,
+	// classified exactly like measures[]. column_vocabularies{} values are a
+	// closed vocabulary and are trusted by trustedBecauseClosed.
+	"structured.key_facts[].table.word_columns{}",
 	// CHAOS-4682 (§5.1 P2): the ADDITIVE time_series_rows/time_series_table
 	// pair carries the SAME producer-sourced content as rows/table just
 	// above -- a dual-table fact's second table, classified identically
@@ -256,6 +260,7 @@ var MCPInvestigateQuestionUntrustedFields = []string{
 	"structured.key_facts[].time_series_table.observations[]",
 	"structured.key_facts[].time_series_table.order_by",
 	"structured.key_facts[].time_series_table.measure_units[].measure",
+	"structured.key_facts[].time_series_table.word_columns{}",
 	// CHAOS-4415: a render shape's DISPLAY text. Title/axis_label/
 	// value_label/series[].label/points[].label are built from canonical
 	// subject labels and producer column names, so they are entity display
@@ -385,6 +390,10 @@ var MCPInvestigationResultUntrustedFields = []string{
 	// columns, classified exactly like measures[] just above. Its unit is a
 	// closed vocabulary and is trusted by trustedBecauseClosed.
 	"structured.claimed_facts[].table.measure_units[].measure",
+	// CHAOS-12639: word_columns{} values name the producer's own columns,
+	// classified exactly like measures[]. column_vocabularies{} values are a
+	// closed vocabulary and are trusted by trustedBecauseClosed.
+	"structured.claimed_facts[].table.word_columns{}",
 	// CHAOS-4682 (§5.1 P2): the ADDITIVE time_series_rows/time_series_table
 	// pair, classified identically to rows/table just above and for the
 	// identical reason. time_series_table.shape lives in
@@ -396,6 +405,7 @@ var MCPInvestigationResultUntrustedFields = []string{
 	"structured.claimed_facts[].time_series_table.observations[]",
 	"structured.claimed_facts[].time_series_table.order_by",
 	"structured.claimed_facts[].time_series_table.measure_units[].measure",
+	"structured.claimed_facts[].time_series_table.word_columns{}",
 	// CHAOS-4415: a render shape's DISPLAY text. Title/axis_label/
 	// value_label/series[].label/points[].label are built from canonical
 	// subject labels and producer column names, so they are entity display

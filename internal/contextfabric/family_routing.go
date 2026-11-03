@@ -77,9 +77,17 @@ const (
 	// carry applied. Review caught that contradiction: the doc comment said
 	// neither table decided while the field said precedence.
 	FamilyRouteSourceCarried FamilyRouteSource = "carried"
+	// FamilyRouteScopeAllocation: NEITHER table decided; the scope-anchor
+	// allocation rule did (CHAOS-12606, the lead's ruling on CHAOS-4610). A
+	// team's children_of_scope frame with the goal set {allocate_investment}
+	// projects to scoped_cohort_status, because topology decides the
+	// projection, and the precedence table agrees. The rule serves
+	// investment_allocation all the same, so naming either table would be
+	// false, for the reason `carried` is its own source.
+	FamilyRouteScopeAllocation FamilyRouteSource = "scope_allocation"
 )
 
-var familyRouteSources = [...]FamilyRouteSource{FamilyRouteProjected, FamilyRoutePrecedence, FamilyRouteSourceCarried}
+var familyRouteSources = [...]FamilyRouteSource{FamilyRouteProjected, FamilyRoutePrecedence, FamilyRouteSourceCarried, FamilyRouteScopeAllocation}
 
 // FamilyRouteSourceCount is the closed vocabulary's size.
 const FamilyRouteSourceCount = len(familyRouteSources)
@@ -307,28 +315,43 @@ func namedInvestmentGoalRow(agreement FamilyAgreement) bool {
 
 // scopeAllocationFrame reports an allocation question over a scope anchor: the
 // frame's goal set is exactly {allocate_investment}, and its subject is the
-// organization. The anchor's own investment fact answers it, so the family is
-// investment_allocation (the lead's ruling on CHAOS-4610). A second goal keeps
+// organization, or the children of a team (anchorKind is the interpretation's
+// scope anchor kind). The anchor's own investment fact answers it, so the family
+// is investment_allocation (the lead's ruling on CHAOS-4610). A second goal keeps
 // the precedence table, because the question then asks more than where effort
-// went.
-func scopeAllocationFrame(frame *QuestionFrame) bool {
+// went. A project anchor keeps it too: a project reaches repositories only
+// through its issues' linked pull requests, so "across its repositories" is not
+// its own fact's split.
+func scopeAllocationFrame(frame *QuestionFrame, anchorKind SubjectKind) bool {
 	if frame == nil || len(frame.Goals) != 1 || frame.Goals[0] != GoalAllocateInvestment {
 		return false
 	}
-	return frame.SubjectExpression.Kind == SubjectExpressionOrganizationScope
+	switch frame.SubjectExpression.Kind {
+	case SubjectExpressionOrganizationScope:
+		return true
+	case SubjectExpressionChildrenOfScope:
+		return anchorKind == SubjectTeam
+	default:
+		return false
+	}
 }
 
 // RouteFrameFamily is the route the interpreter applies: RouteQuestionFamily,
 // and then the scope-anchor allocation route. The organization frame projects to
-// investment_allocation (row 5 of the projection), so the served family is the
-// projection's, and Switched is still measured against the precedence family.
-func RouteFrameFamily(agreement FamilyAgreement, frame *QuestionFrame) FamilyRouteDecision {
+// investment_allocation (row 5 of the projection), so its served family is the
+// projection's. A team's children_of_scope frame projects to its topology row,
+// so the rule itself decided (FamilyRouteScopeAllocation). Switched is measured
+// against the precedence family either way.
+func RouteFrameFamily(agreement FamilyAgreement, frame *QuestionFrame, anchorKind SubjectKind) FamilyRouteDecision {
 	decision := RouteQuestionFamily(agreement)
-	if !scopeAllocationFrame(frame) {
+	if !scopeAllocationFrame(frame, anchorKind) {
 		return decision
 	}
 	decision.Family = QuestionFamilyInvestmentAllocation
-	decision.Source = FamilyRouteProjected
+	decision.Source = FamilyRouteScopeAllocation
+	if agreement.ProjectedFamily == QuestionFamilyInvestmentAllocation {
+		decision.Source = FamilyRouteProjected
+	}
 	decision.Disposition = FamilyRouteIntendedChange
 	decision.Switched = decision.Family != agreement.PrecedenceFamily
 	return decision

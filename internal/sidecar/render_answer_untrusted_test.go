@@ -174,6 +174,8 @@ func TestEveryDeclaredUntrustedStringIsMarkedInTheRendering(t *testing.T) {
 		"structured.key_facts[].table.order_by":       "not rendered by this plain-text markdown view; it declares the shape of a table this view does not render (see key_facts[].rows above). Ask Dev reads the declaration from Structured directly",
 		// CHAOS-11984: a stated unit's measure name, the same carve-out.
 		"structured.key_facts[].table.measure_units[].measure": "not rendered by this plain-text markdown view; it declares the shape of a table this view does not render (see key_facts[].rows above). Ask Dev reads the declaration from Structured directly",
+		// CHAOS-12639: a word column's name, the same carve-out.
+		"structured.key_facts[].table.word_columns{}": "not rendered by this plain-text markdown view; it declares the shape of a table this view does not render (see key_facts[].rows above). Ask Dev reads the declaration from Structured directly",
 		// CHAOS-4682 (§5.1 P2): the ADDITIVE time_series_rows/time_series_table
 		// pair is the SAME carve-out as rows/table above, for the identical
 		// reason -- this plain-text view has no chart for either table, and
@@ -186,6 +188,7 @@ func TestEveryDeclaredUntrustedStringIsMarkedInTheRendering(t *testing.T) {
 		"structured.key_facts[].time_series_table.observations[]":          "not rendered by this plain-text markdown view; it declares the shape of a table this view does not render (see key_facts[].time_series_rows above). Ask Dev reads the declaration from Structured directly",
 		"structured.key_facts[].time_series_table.order_by":                "not rendered by this plain-text markdown view; it declares the shape of a table this view does not render (see key_facts[].time_series_rows above). Ask Dev reads the declaration from Structured directly",
 		"structured.key_facts[].time_series_table.measure_units[].measure": "not rendered by this plain-text markdown view; it declares the shape of a table this view does not render (see key_facts[].time_series_rows above). Ask Dev reads the declaration from Structured directly",
+		"structured.key_facts[].time_series_table.word_columns{}":          "not rendered by this plain-text markdown view; it declares the shape of a table this view does not render (see key_facts[].time_series_rows above). Ask Dev reads the declaration from Structured directly",
 		// CHAOS-4398 PR3b: RankingTable and AffectedSubjects are now
 		// rendered (the "## Rows" block and the drivers' own "Affected:"
 		// line) -- the carve-out that stood here through PR3 is gone; both
@@ -495,6 +498,9 @@ func baseProjection() contractsv1.ContextFabricAnswerProjection {
 				// CHAOS-11984: a stated unit, non-empty for the identical
 				// reason Key/Measures are.
 				MeasureUnits: []contractsv1.ContextFabricMeasureUnitDeclaration{{Measure: "commits_count", Unit: contractsv1.ContextFabricMeasureUnitCount}},
+				// CHAOS-12639: column words, non-empty for the identical reason.
+				ColumnVocabularies: map[string]contractsv1.ContextFabricVocabulary{"repository_id": contractsv1.ContextFabricVocabularyInvestmentTheme},
+				WordColumns:        map[string]string{"repository_id": "code_ownership_gini"},
 			},
 			// CHAOS-4682 (§5.1 P2): the ADDITIVE time_series_rows/
 			// time_series_table pair, non-empty for the identical
@@ -509,6 +515,7 @@ func baseProjection() contractsv1.ContextFabricAnswerProjection {
 				Measures:     []string{"backlog_size"},
 				Observations: []string{"insufficient_history"},
 				MeasureUnits: []contractsv1.ContextFabricMeasureUnitDeclaration{{Measure: "backlog_size", Unit: contractsv1.ContextFabricMeasureUnitCount}},
+				WordColumns:  map[string]string{"day": "insufficient_history"},
 			},
 			// CHAOS-12608: the forecast summary, non-nil for the identical
 			// reason Table is: a nil pointer leaves the declared

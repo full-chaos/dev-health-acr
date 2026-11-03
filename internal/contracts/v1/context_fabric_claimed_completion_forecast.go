@@ -34,9 +34,13 @@ type ContextFabricClaimedCompletionForecast struct {
 	SimulationCount *int64 `json:"simulation_count,omitempty"`
 	HorizonDays     *int64 `json:"horizon_days,omitempty"`
 	UnfinishedRuns  *int64 `json:"unfinished_runs,omitempty"`
-	P50Days         *int64 `json:"forecast_p50_days,omitempty"`
-	P85Days         *int64 `json:"forecast_p85_days,omitempty"`
-	P95Days         *int64 `json:"forecast_p95_days,omitempty"`
+	// TargetItems (CHAOS-12634) is the item target the run forecast: the
+	// scope's own target, or its backlog, as ops' worker falls back to it.
+	// Absent when the stored row has none, never 0 for none.
+	TargetItems *int64 `json:"target_items,omitempty"`
+	P50Days     *int64 `json:"forecast_p50_days,omitempty"`
+	P85Days     *int64 `json:"forecast_p85_days,omitempty"`
+	P95Days     *int64 `json:"forecast_p95_days,omitempty"`
 	// P50Date, P85Date and P95Date are RFC 3339 full-dates, "2026-11-20":
 	// the stored dates, which name a UTC day.
 	P50Date string `json:"forecast_p50_date,omitempty"`
@@ -160,7 +164,7 @@ func (f ContextFabricClaimedCompletionForecast) validate() error {
 			return fmt.Errorf("completion_forecast date is not an RFC 3339 full-date")
 		}
 	}
-	for _, value := range []*int64{f.SimulationCount, f.HorizonDays, f.UnfinishedRuns, f.P50Days, f.P85Days, f.P95Days} {
+	for _, value := range []*int64{f.SimulationCount, f.HorizonDays, f.UnfinishedRuns, f.TargetItems, f.P50Days, f.P85Days, f.P95Days} {
 		if value != nil && *value < 0 {
 			return fmt.Errorf("completion_forecast numbers must not be negative")
 		}

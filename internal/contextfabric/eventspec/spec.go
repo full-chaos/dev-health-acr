@@ -748,6 +748,32 @@ var WorkItemKeyPrefixUnread = Event{
 	},
 }
 
+// RepositoryReferenceRow is the Info line (graphrank/tracer.go, case
+// "repository_reference_row", CHAOS-12642) for a question holding a repository
+// reference with "#" (owner/repo#N). On GitHub one number space holds issues and
+// pull requests, so the stored rows decide what the reference names, in this
+// order: a pull request row, else a work item row, else nothing. The line counts
+// which rule decided each reference; a read that could not run, or did not close,
+// is unread, and that reference keeps its work item reading. COUNTS ONLY: no
+// reference, repository or question.
+var RepositoryReferenceRow = Event{
+	ID:                 "graphrank.repository_reference_row",
+	Msg:                "context fabric resolution trace: repository reference row",
+	Level:              LevelInfo,
+	Multiplicity:       MultiplicityZeroOrOnePerRequest,
+	Attribution:        []string{"request_id"},
+	BoundedAggregation: "at most one line per request: emitted from bindQuestionHandles only by the call that ran a reference read; the turn's memo keeps each read, so a later resolveSubjects call of the same turn reads none and writes no line",
+	Fields: []Field{
+		{Key: "request_id", Type: FieldString, Presence: PresenceRequired},
+		{Key: "stage", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: []string{"repository_reference_row"}},
+		{Key: "references", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "pull_request_row", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "work_item_row", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "not_found", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "unread", Type: FieldInt, Presence: PresenceRequired},
+	},
+}
+
 // Corroboration is the Debug per-candidate line (graphrank/tracer.go, case
 // "corroboration", event.CorroborationSummary==false) emitted once per
 // candidate every corroboration pass processes, unconditionally (retrieval-
@@ -5025,6 +5051,7 @@ var DirectRead = Event{
 		{Key: "latency_ms", Type: FieldInt, Presence: PresenceRequired},
 		{Key: "error_class", Type: FieldString, Presence: PresenceConditional, Applicability: "written when the call ends invalid_request or unavailable", ClosedVocabulary: directReadErrorClass},
 		{Key: "anchor", Type: FieldString, Presence: PresenceConditional, Applicability: "written when a handle-mode anchor was given and a gate decision is available (absent when the gate is unavailable) (CHAOS-7158): the true gate decision, server side only", ClosedVocabulary: []string{"admitted", "refused"}},
+		{Key: "reference_row", Type: FieldString, Presence: PresenceConditional, Applicability: "written when a handle-mode handle is a GitHub owner/repo#N reference, unanchored, of a caller who is not repository-restricted (CHAOS-12642): what the stored rows decided; unread keeps the work item reading", ClosedVocabulary: []string{"pull_request_row", "work_item_reading", "unread"}},
 		{Key: "request_id", Type: FieldString, Presence: PresenceConditional, Applicability: "written when the request context carries a request ID"},
 	},
 }
@@ -5854,7 +5881,7 @@ var All = []Event{
 	RetainedRankingAccounting,
 	WorkItemTupleAdmission,
 	WorkItemAuthorizationGap,
-	RankedCutSummary, AnchorSlotDisplaced, DecisionSummary, Search, KindOfferWithheld, PageHintLookup, WorkItemKeyPrefixUnread,
+	RankedCutSummary, AnchorSlotDisplaced, DecisionSummary, Search, KindOfferWithheld, PageHintLookup, WorkItemKeyPrefixUnread, RepositoryReferenceRow,
 	Corroboration, CorroborationSummary, ReservedKindAdmitted, OfferPool, OfferPoolSummary,
 	Decision, SearchQuestion, AliasLookup, AnchorPool, KindCoverageFloor, ConfirmedKindRescue, KindScopedSemantic,
 	IdentityUniverse, KindHintSearch, ExactNameSearch, AnchorOffer,

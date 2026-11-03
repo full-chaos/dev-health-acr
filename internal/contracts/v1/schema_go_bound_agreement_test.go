@@ -294,6 +294,7 @@ func TestSchemaAndGoBoundsAgree(t *testing.T) {
 		"common#$defs.ClaimedCompletionForecast.properties.simulation_count.minimum":    0,
 		"common#$defs.ClaimedCompletionForecast.properties.horizon_days.minimum":        0,
 		"common#$defs.ClaimedCompletionForecast.properties.unfinished_runs.minimum":     0,
+		"common#$defs.ClaimedCompletionForecast.properties.target_items.minimum":        0,
 		"common#$defs.ClaimedCompletionForecast.properties.forecast_p50_days.minimum":   0,
 		"common#$defs.ClaimedCompletionForecast.properties.forecast_p85_days.minimum":   0,
 		"common#$defs.ClaimedCompletionForecast.properties.forecast_p95_days.minimum":   0,
@@ -318,8 +319,15 @@ func TestSchemaAndGoBoundsAgree(t *testing.T) {
 		"common#$defs.ClaimedFactTable.properties.measure_units.maxItems":                           ContextFabricFactTableMeasuresMaxCount,
 		"common#$defs.ClaimedFactTable.properties.measure_units.items.properties.measure.minLength": 1,
 		"common#$defs.ClaimedFactTable.properties.measure_units.items.properties.measure.maxLength": ContextFabricFactTableColumnMaxLength,
-		"common#$defs.InterpretedQuestion.properties.subject_terms.maxItems":                        contextFabricWriteBounds.interpretationTerms,
-		"common#$defs.InterpretedQuestion.properties.comparison_terms.maxItems":                     contextFabricWriteBounds.interpretationTerms,
+		// CHAOS-12639: the column word declarations, mapped declaratively for
+		// the same reason: each entry names a different declared key or
+		// observation column, so there are never more than those.
+		"common#$defs.ClaimedFactTable.properties.column_vocabularies.maxProperties":           ContextFabricFactTableKeyMaxCount + ContextFabricFactTableObservationsMaxCount,
+		"common#$defs.ClaimedFactTable.properties.word_columns.maxProperties":                  ContextFabricFactTableKeyMaxCount + ContextFabricFactTableObservationsMaxCount,
+		"common#$defs.ClaimedFactTable.properties.word_columns.additionalProperties.minLength": 1,
+		"common#$defs.ClaimedFactTable.properties.word_columns.additionalProperties.maxLength": ContextFabricFactTableColumnMaxLength,
+		"common#$defs.InterpretedQuestion.properties.subject_terms.maxItems":                   contextFabricWriteBounds.interpretationTerms,
+		"common#$defs.InterpretedQuestion.properties.comparison_terms.maxItems":                contextFabricWriteBounds.interpretationTerms,
 		// CHAOS-4398 PR2: CohortMemberDriver lives one level under
 		// CohortMember.Drivers (a slice of a $defs-nested struct) AND its
 		// own Validate() entangles Value/Weight/WeightContributed with the

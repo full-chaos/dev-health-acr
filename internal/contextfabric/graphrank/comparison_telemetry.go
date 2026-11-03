@@ -61,6 +61,11 @@ type ComparisonPolicyEvent struct {
 	QuestionSearchSuppressed bool
 	EvidenceCensusSuppressed bool
 	CandidateBudget          int
+	// KindBasis and KindRefusal (CHAOS-12600): why the operands resolve under
+	// the kinds they do -- stated, resolved from exact full labels, or none --
+	// and, for a bare-name pair whose exact-label kind was not resolved, why.
+	KindBasis   ComparisonKindBasis
+	KindRefusal ExactLabelKindRefusal
 }
 
 // OperandSlotEvent is emitted ONCE PER OPERAND.
@@ -168,6 +173,8 @@ var (
 		"QuestionSearchSuppressed": "question_search_suppressed",
 		"EvidenceCensusSuppressed": "evidence_census_suppressed",
 		"CandidateBudget":          "candidate_budget",
+		"KindBasis":                "kind_basis",
+		"KindRefusal":              "kind_refusal",
 	}
 	operandSlotLogKeys = map[string]string{
 		"RequestID": "request_id", "OrgID": "org_id",
@@ -212,7 +219,9 @@ func (s SlogOperandResolutionSink) RecordComparisonPolicy(ctx context.Context, e
 		comparisonPolicyLogKeys["SlotCount"], contextfabric.SanitizeLogInt(int64(event.SlotCount)),
 		comparisonPolicyLogKeys["QuestionSearchSuppressed"], event.QuestionSearchSuppressed,
 		comparisonPolicyLogKeys["EvidenceCensusSuppressed"], event.EvidenceCensusSuppressed,
-		comparisonPolicyLogKeys["CandidateBudget"], contextfabric.SanitizeLogInt(int64(event.CandidateBudget)))
+		comparisonPolicyLogKeys["CandidateBudget"], contextfabric.SanitizeLogInt(int64(event.CandidateBudget)),
+		comparisonPolicyLogKeys["KindBasis"], contextfabric.SanitizeLogAttr(string(event.KindBasis)),
+		comparisonPolicyLogKeys["KindRefusal"], contextfabric.SanitizeLogAttr(string(event.KindRefusal)))
 }
 
 func (s SlogOperandResolutionSink) RecordOperandSlot(ctx context.Context, event OperandSlotEvent) {

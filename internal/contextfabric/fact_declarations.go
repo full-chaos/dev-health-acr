@@ -171,6 +171,15 @@ type FactColumnDeclaration struct {
 	// Additivity is set on every numeric column of a DailySeries table, and
 	// on no other column.
 	Additivity FactAdditivity `json:"additivity,omitempty"`
+	// Vocabulary (CHAOS-12639) names the closed vocabulary this string column's
+	// values are tokens of, so an answer serves each value's word and a reader
+	// never sees the token. Only a vocabulary a column may be declared in
+	// (contractsv1.ValidContextFabricColumnVocabulary).
+	Vocabulary contractsv1.ContextFabricVocabulary `json:"vocabulary,omitempty"`
+	// WordColumn (CHAOS-12639) names the string column of the same row that
+	// carries this id column's served word (repository_name beside
+	// repository_id), so a reader sees the word and not the id.
+	WordColumn string `json:"word_column,omitempty"`
 }
 
 // FactFieldScope says what span one numeric scalar speaks for, so a comparison
@@ -393,7 +402,38 @@ func validateFieldDeclarations(capability FactCapability) error {
 			if err := validateSubjectRefDeclaration(column.SubjectRef, columns); err != nil {
 				return fmt.Errorf("fact table field %s column %s: %w", field.Name, column.Name, err)
 			}
+			if err := validateColumnWords(field, column); err != nil {
+				return err
+			}
 		}
+	}
+	return nil
+}
+
+// validateColumnWords holds a column's word declarations (CHAOS-12639) to the
+// table it is in: a vocabulary only on a string column, and only one a column
+// may be declared in; a word column only on a string column, naming another
+// string column of the same table that declares no word column of its own.
+func validateColumnWords(field FactFieldDeclaration, column FactColumnDeclaration) error {
+	if column.Vocabulary != "" {
+		if column.Type != FactFieldString {
+			return fmt.Errorf("fact table field %s column %s declares a vocabulary but is not a string column", field.Name, column.Name)
+		}
+		if !contractsv1.ValidContextFabricColumnVocabulary(column.Vocabulary) {
+			return fmt.Errorf("fact table field %s column %s vocabulary %q is not one a column may be declared in", field.Name, column.Name, column.Vocabulary)
+		}
+	}
+	if column.WordColumn == "" {
+		return nil
+	}
+	word, ok := field.Column(column.WordColumn)
+	switch {
+	case column.Type != FactFieldString:
+		return fmt.Errorf("fact table field %s column %s declares a word column but is not a string column", field.Name, column.Name)
+	case !ok || column.WordColumn == column.Name || word.Type != FactFieldString:
+		return fmt.Errorf("fact table field %s column %s word column %q is not another string column of the table", field.Name, column.Name, column.WordColumn)
+	case word.WordColumn != "":
+		return fmt.Errorf("fact table field %s column %s word column %q declares a word column of its own", field.Name, column.Name, column.WordColumn)
 	}
 	return nil
 }

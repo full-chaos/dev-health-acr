@@ -176,6 +176,11 @@ const (
 	// subcategory (CHAOS-12554): the subcategory column of a claimed
 	// subcategory_breakdown table, and the outer ring of a sunburst.
 	ContextFabricVocabularySubcategory ContextFabricVocabulary = "subcategory"
+	// ContextFabricVocabularyInvestmentTheme words a canonical investment theme
+	// (CHAOS-12639): a theme column a claimed table declares in this
+	// vocabulary. Its words are the theme words the render shapes already use
+	// (contextFabricInvestmentThemeLabels), from the one map.
+	ContextFabricVocabularyInvestmentTheme ContextFabricVocabulary = "investment_theme"
 	// ContextFabricVocabularyCompletionDistributionState words the state of a
 	// team forecast's completion distribution (CHAOS-12608): the state of a
 	// claim's completion forecast summary, so a reader is told why no curve
@@ -205,6 +210,7 @@ var contextFabricVocabularyNames = [...]ContextFabricVocabulary{
 	ContextFabricVocabularyWindowProvenance,
 	ContextFabricVocabularyMeasureUnit,
 	ContextFabricVocabularySubcategory,
+	ContextFabricVocabularyInvestmentTheme,
 	ContextFabricVocabularyCompletionDistributionState,
 }
 
@@ -410,6 +416,9 @@ var contextFabricVocabularyLabels = map[ContextFabricVocabulary]map[string]strin
 	},
 	// The words the investment page has shown for these keys. Each is unique
 	// within its theme, which a sunburst ring needs.
+	// One source with ContextFabricInvestmentThemeLabel: the same map, never a
+	// second copy of the five words (CHAOS-12639).
+	ContextFabricVocabularyInvestmentTheme: contextFabricInvestmentThemeLabels,
 	ContextFabricVocabularySubcategory: {
 		"feature_delivery.customer":     "Customer",
 		"feature_delivery.enablement":   "Enablement",
@@ -753,6 +762,20 @@ func ContextFabricSourceObservationLabel(source string) string {
 // stays one fold away in the raw evidence_ref_ids the consumer already
 // renders in Details.
 func ContextFabricEvidenceRefLabel(refID string) (string, bool) {
+	return ContextFabricEvidenceRefLabelNamed(refID, nil)
+}
+
+// ContextFabricEvidenceSubjectName gives the name the answer already holds for a
+// repository, a project or an organization an evidence ref names by its raw id
+// (CHAOS-12620): the repository's UUID, the project's "<provider>:<id>", the
+// organization's id. ok is false when the answer holds no name; nothing is read
+// for a label.
+type ContextFabricEvidenceSubjectName func(kind ContextFabricSubjectKind, rawID string) (string, bool)
+
+// ContextFabricEvidenceRefLabelNamed is ContextFabricEvidenceRefLabel with the
+// names the answer holds: a repository, project or organization ref reads as its
+// name when name gives one, and else as the noun alone. A nil name is the noun.
+func ContextFabricEvidenceRefLabelNamed(refID string, name ContextFabricEvidenceSubjectName) (string, bool) {
 	parts := strings.Split(refID, ":")
 	if len(parts) < 4 || parts[0] != "acr" || parts[1] != "v1" {
 		return "Evidence", false
@@ -761,6 +784,8 @@ func ContextFabricEvidenceRefLabel(refID string) (string, bool) {
 	id := strings.Join(parts[3:], ":")
 	label, known := contextFabricEvidenceEntityLabels[ContextFabricEvidenceEntityType(entityType)]
 	if !known {
+		// A type outside the closed vocabulary keeps the id-carrying generic
+		// fallback; CHAOS-12620 covers the known types.
 		if id == "" {
 			return "Evidence", false
 		}
@@ -769,10 +794,15 @@ func ContextFabricEvidenceRefLabel(refID string) (string, bool) {
 	if id == "" {
 		return label, true
 	}
+	var segments []string
 	if EncodedEvidenceEntityType(ContextFabricEvidenceEntityType(entityType)) {
-		id = decodedEvidenceID(id)
+		segments = decodedEvidenceSegments(id)
 	}
-	return clampLabel(label + ": " + id), true
+	display := evidenceIDDisplay(ContextFabricEvidenceEntityType(entityType), id, segments, name)
+	if display == "" {
+		return label, true
+	}
+	return clampLabel(label + ": " + display), true
 }
 
 // decodedEvidenceID renders an encoded (".v2") id for display: each
@@ -782,12 +812,17 @@ func ContextFabricEvidenceRefLabel(refID string) (string, bool) {
 // then "%25" -> '%'); TestDecodedEvidenceIDMatchesTheIdentityCodec pins the
 // two against each other, since contracts/v1 imports nothing internal.
 func decodedEvidenceID(id string) string {
+	return strings.Join(decodedEvidenceSegments(id), ":")
+}
+
+// decodedEvidenceSegments is an encoded (".v2") id's segments, each unescaped.
+func decodedEvidenceSegments(id string) []string {
 	segments := strings.Split(id, ":")
 	for index, segment := range segments {
 		segment = strings.ReplaceAll(segment, "%3A", ":")
 		segments[index] = strings.ReplaceAll(segment, "%25", "%")
 	}
-	return strings.Join(segments, ":")
+	return segments
 }
 
 // countPhrase renders a detail's structured Count for a label — the ONLY

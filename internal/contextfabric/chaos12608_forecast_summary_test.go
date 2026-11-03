@@ -18,6 +18,7 @@ func summaryFact(scope, state string, p50, p85 *int64) CanonicalFact {
 		"simulation_count":              IntegerFactValue(10000),
 		"horizon_days":                  IntegerFactValue(365),
 		"forecast_p50_date":             StringFactValue("2026-11-13"),
+		"target_items":                  IntegerFactValue(40),
 	}
 	if scope != "" {
 		fields["work_scope_id"] = StringFactValue(scope)
@@ -45,6 +46,15 @@ func TestTheForecastSummaryIsDisclosedFromTheGroundingFact(t *testing.T) {
 	}
 	if got.WorkScopeID != "scope-a" || got.P50Date != "2026-11-13" || *got.HorizonDays != 365 || got.UnfinishedRuns != nil {
 		t.Fatalf("summary = %+v", got)
+	}
+	// CHAOS-12634: the item target rides on the summary.
+	if got.TargetItems == nil || *got.TargetItems != 40 {
+		t.Fatalf("target_items = %v, want 40", got.TargetItems)
+	}
+	without := summaryFact("scope-a", "not_stored", days(12), nil)
+	delete(without.Fields, "target_items")
+	if none := completionForecastOf(without); none == nil || none.TargetItems != nil {
+		t.Fatalf("a fact with no target: summary = %+v, want no target_items", none)
 	}
 	// The fact's ClickHouse text is served as an RFC 3339 UTC instant.
 	if got.ComputedAt != "2026-11-01T04:00:00Z" {

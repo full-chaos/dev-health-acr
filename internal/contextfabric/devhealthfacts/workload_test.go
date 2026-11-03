@@ -166,6 +166,8 @@ func TestWorkloadProviderNoPersonLevelFields(t *testing.T) {
 		// CHAOS-12607: the rest of the same stored forecast row.
 		"forecast_p85_days": true, "forecast_p95_days": true, "forecast_p50_date": true, "forecast_p85_date": true,
 		"forecast_p95_date": true, "simulation_count": true, "horizon_days": true, "unfinished_runs": true,
+		// CHAOS-12634: the item target of the same row.
+		"target_items":            true,
 		"completion_distribution": true, "completion_distribution_state": true,
 	}
 	for _, fact := range result.Facts {
@@ -575,10 +577,11 @@ func TestWorkloadProviderProjectRollupBasisIsFactLevelScalar(t *testing.T) {
 }
 
 // completionForecastRow shapes one readers.ReadTeamCompletionForecasts row
-// (CHAOS-12607): every percentile and date present, the arrays as given, and
-// their stored lengths equal to them.
+// (CHAOS-12607): every percentile and date present, the item target 120
+// (CHAOS-12634), the arrays as given, and their stored lengths equal to them.
 func completionForecastRow(teamID, workScopeID, computedAt string, values []uint16, counts []uint32) []any {
 	return []any{teamID, uint8(1), workScopeID, computedAt, uint32(10000), int64(120),
+		uint8(1), int64(120),
 		uint8(1), int64(14), uint8(1), int64(30), uint8(1), int64(40),
 		"2026-08-10", "2026-08-26", "2026-09-05", uint8(0), uint8(1),
 		uint64(len(values)), uint64(len(counts)), values, counts}

@@ -191,6 +191,7 @@ var ByID = map[string]Event{
 	"graphrank.offer_pool_summary":                        OfferPoolSummary,
 	"graphrank.page_hint_lookup":                          PageHintLookup,
 	"graphrank.ranked_cut_summary":                        RankedCutSummary,
+	"graphrank.repository_reference_row":                  RepositoryReferenceRow,
 	"graphrank.reserved_kind_admitted":                    ReservedKindAdmitted,
 	"graphrank.search":                                    Search,
 	"graphrank.search_question":                           SearchQuestion,
@@ -2237,6 +2238,7 @@ type DirectReadFields struct {
 	LatencyMs    int
 	ErrorClass   string
 	Anchor       string
+	ReferenceRow string
 	RequestID    string
 	// constructed (CHAOS-5516 r1 fix): an UNEXPORTED marker, generated on
 	// every DirectReadFields uniformly, set ONLY by NewDirectReadFields below. A caller
@@ -2251,7 +2253,7 @@ type DirectReadFields struct {
 
 // NewDirectReadFields is the generated constructor for DirectReadFields -- every
 // field DirectRead.Fields declares is a required parameter.
-func NewDirectReadFields(orgID string, tool string, mode string, kinds []string, subjectKinds []string, count int, status string, latencyMs int, errorClass string, anchor string, requestID string) DirectReadFields {
+func NewDirectReadFields(orgID string, tool string, mode string, kinds []string, subjectKinds []string, count int, status string, latencyMs int, errorClass string, anchor string, referenceRow string, requestID string) DirectReadFields {
 	valid := true
 	if kinds == nil {
 		valid = false
@@ -2270,6 +2272,7 @@ func NewDirectReadFields(orgID string, tool string, mode string, kinds []string,
 		LatencyMs:    latencyMs,
 		ErrorClass:   errorClass,
 		Anchor:       anchor,
+		ReferenceRow: referenceRow,
 		RequestID:    requestID,
 		constructed:  valid,
 	}
@@ -2298,6 +2301,7 @@ func (f DirectReadFields) SlogArgs() []any {
 		"latency_ms", f.LatencyMs,
 		"error_class", contextfabric.SanitizeLogAttr(f.ErrorClass),
 		"anchor", contextfabric.SanitizeLogAttr(f.Anchor),
+		"reference_row", contextfabric.SanitizeLogAttr(f.ReferenceRow),
 		"request_id", contextfabric.SanitizeLogAttr(f.RequestID),
 	}
 }
@@ -12617,6 +12621,63 @@ func (f RankedCutSummaryFields) SlogArgs() []any {
 		"anchor_slot_displaced", f.AnchorSlotDisplaced,
 		"pool_truncated_n", f.PoolTruncatedN,
 		"declared_kind_rescue", f.DeclaredKindRescue,
+	}
+}
+
+// RepositoryReferenceRowFields is graphrank.repository_reference_row's generated typed construction interface
+// (CHAOS-5516): one Go field per Field RepositoryReferenceRow.Fields declares in spec.go.
+type RepositoryReferenceRowFields struct {
+	RequestID      string
+	References     int
+	PullRequestRow int
+	WorkItemRow    int
+	NotFound       int
+	Unread         int
+	// constructed (CHAOS-5516 r1 fix): an UNEXPORTED marker, generated on
+	// every RepositoryReferenceRowFields uniformly, set ONLY by NewRepositoryReferenceRowFields below. A caller
+	// outside this package cannot set an unexported field via a composite
+	// literal -- not partially (one exported field set, the rest at their
+	// Go zero value) and not even by hand-setting every EXPORTED field --
+	// so this is the class fix for "a caller still assembles that event's
+	// field list": no composite literal built outside eventspec, complete or
+	// partial, can ever read as constructed.
+	constructed bool
+}
+
+// NewRepositoryReferenceRowFields is the generated constructor for RepositoryReferenceRowFields -- every
+// field RepositoryReferenceRow.Fields declares is a required parameter.
+func NewRepositoryReferenceRowFields(requestID string, references int, pullRequestRow int, workItemRow int, notFound int, unread int) RepositoryReferenceRowFields {
+	return RepositoryReferenceRowFields{
+		RequestID:      requestID,
+		References:     references,
+		PullRequestRow: pullRequestRow,
+		WorkItemRow:    workItemRow,
+		NotFound:       notFound,
+		Unread:         unread,
+		constructed:    true,
+	}
+}
+
+// IsConstructed reports whether f was built by NewRepositoryReferenceRowFields -- the ONE
+// exported way to read the unexported "constructed" marker from outside
+// this package. false for the Go zero value and for ANY composite literal
+// assembled elsewhere, complete or partial.
+func (f RepositoryReferenceRowFields) IsConstructed() bool { return f.constructed }
+
+// SlogArgs returns RepositoryReferenceRow's own declared fields as alternating slog
+// key/value pairs, in the SAME order spec.go declares them. Every
+// free-text string/[]string value is sanitized HERE, at its own
+// construction site inside this function's body -- the shape CHAOS-5544's
+// own instrument (TestNoUnsanitizedLogAttributeInContextFabric) requires.
+func (f RepositoryReferenceRowFields) SlogArgs() []any {
+	return []any{
+		"request_id", contextfabric.SanitizeLogAttr(f.RequestID),
+		"stage", "repository_reference_row",
+		"references", f.References,
+		"pull_request_row", f.PullRequestRow,
+		"work_item_row", f.WorkItemRow,
+		"not_found", f.NotFound,
+		"unread", f.Unread,
 	}
 }
 

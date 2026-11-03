@@ -220,17 +220,30 @@ func TestHandleExamplesBindThroughRealGrammar(t *testing.T) {
 		if !ok {
 			t.Fatalf("pattern %s has no example", pattern.ID)
 		}
+		// A pattern the stored rows choose binds no text alone: its example
+		// must bind the text pattern it is chosen over, and its value must
+		// pass its own pattern (CHAOS-12642).
+		textPattern := pattern.ID
+		if pattern.FromStoredRows != (example.FromStoredRows != "") {
+			t.Fatalf("pattern %s: from stored rows %v, guide example says %q", pattern.ID, pattern.FromStoredRows, example.FromStoredRows)
+		}
+		if pattern.FromStoredRows {
+			textPattern = example.FromStoredRows
+			if !graphrank.ValidateHandleGrammar(pattern.Kind, pattern.ID, example.Value) {
+				t.Fatalf("pattern %s rejects its own example value %q", pattern.ID, example.Value)
+			}
+		}
 		var hit *graphrank.BoundHandle
 		for _, bound := range graphrank.BindHandles(example.Question) {
-			if bound.Grammar == pattern.ID {
+			if bound.Grammar == textPattern {
 				b := bound
 				hit = &b
 			}
 		}
 		if hit == nil {
-			t.Fatalf("example %q does not bind pattern %s", example.Question, pattern.ID)
+			t.Fatalf("example %q does not bind pattern %s", example.Question, textPattern)
 		}
-		if hit.Value != example.Value || hit.Kind != pattern.Kind {
+		if hit.Value != example.Value || (!pattern.FromStoredRows && hit.Kind != pattern.Kind) {
 			t.Errorf("pattern %s bound value %q kind %q; guide says %q kind %q", pattern.ID, hit.Value, hit.Kind, example.Value, pattern.Kind)
 		}
 	}
