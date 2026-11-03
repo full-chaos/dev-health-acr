@@ -52,7 +52,9 @@ const (
 	ContextFabricRequirementUnavailable ContextFabricPlanRequirementOutcome = "unavailable"
 	// ContextFabricRequirementNotApplicable: the question did not ask for
 	// it; the row exists only because a wider derivation produced the
-	// coordinate.
+	// coordinate. Or (CHAOS-12822) every kind it declares was read and its
+	// provider reported that the cell does not apply to this subject, which is
+	// not a measured zero and not a missing value.
 	//
 	// This member is what lets an omittable field ship populated at all.
 	// Without it an absent field carries two meanings -- "not produced
@@ -772,11 +774,20 @@ func validatePlanRequirementOutcomeRow(row ContextFabricPlanRequirementOutcomeRo
 	named := row.CauseOverrun != "" || row.CauseCoverage != "" || row.CauseNarrowing != ""
 	// not_applicable is the one lossless outcome that may NAME why: it lost
 	// nothing, but "this does not apply" without the reason reads the same as
-	// a row nobody explained. Only the no-declaring-producer coverage cause is legal there, and
-	// only as an OBSERVED one -- a budget overrun or a narrowing basis states a
-	// reduction that did not happen. A satisfied row still names none.
+	// a row nobody explained. Two coverage causes are legal there, and only as
+	// OBSERVED ones -- a budget overrun or a narrowing basis states a reduction
+	// that did not happen. A satisfied row still names none.
+	//
+	//   - fact_no_declaring_producer: the plan found no producer for the cell.
+	//   - fact_provider_reported, on an ASSEMBLED-RESULT row only (CHAOS-12822,
+	//     the expand step for CHAOS-12821): every kind the requirement declares
+	//     was read and its provider reported `not_applicable` for this subject
+	//     ("not a measured zero"). A planning row runs before any provider
+	//     speaks, so it can never carry a provider's report.
 	notApplicableWhy := row.Outcome == ContextFabricRequirementNotApplicable &&
-		row.CauseCoverage == ContextFabricCoverageDetailFactNoDeclaringProducer &&
+		(row.CauseCoverage == ContextFabricCoverageDetailFactNoDeclaringProducer ||
+			(row.CauseCoverage == ContextFabricCoverageDetailFactProviderReported &&
+				row.Stage == ContextFabricOutcomeStageAssembledResult)) &&
 		row.CauseOverrun == "" && row.CauseNarrowing == ""
 	// A loss with no named cause is the generic truncation bit this layer
 	// exists to replace, and a cause named on a row that lost nothing
