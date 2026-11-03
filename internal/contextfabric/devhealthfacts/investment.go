@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -382,6 +383,9 @@ func (p *InvestmentProvider) readTeamThemeMix(ctx context.Context, orgID string,
 	if len(ids) == 0 {
 		return shapeRejected, 0, nil, nil, nil, nil, nil, false, nil
 	}
+	// One linked set per (teams, window) for the whole read: the team linked
+	// mix and repository_theme_breakdown share it (CHAOS-12580).
+	ctx = withLinkedSetMemo(ctx)
 	// CHAOS-6559 (chris ruling 2026-09-24): a team's mix is the SUM of the
 	// mixes of the repositories the team OWNS (team_repo_ownership), each
 	// repository's mix being the PR-ref-share partition of persisted work
@@ -392,7 +396,7 @@ func (p *InvestmentProvider) readTeamThemeMix(ctx context.Context, orgID string,
 		duration := timeBound.end.Sub(timeBound.start)
 		priorBound = &factTimeBound{active: true, hasStart: true, start: timeBound.start.Add(-duration), end: timeBound.start}
 	}
-	current, prior, owned, ownedUnits, linked, projectTeams, err := p.teamOwnedRepoMix(ctx, orgID, ids, timeBound, priorBound)
+	current, prior, owned, ownedUnits, linked, projectTeams, ownedRepoMix, err := p.teamOwnedRepoMix(ctx, orgID, ids, timeBound, priorBound)
 	if err != nil {
 		return shapeRejected, 0, nil, nil, nil, nil, nil, false, err
 	}
@@ -448,6 +452,16 @@ func (p *InvestmentProvider) readTeamThemeMix(ctx context.Context, orgID string,
 		}
 		fields[contextfabric.FactFieldThemeQualityBugfix] = contextfabric.NumberFactValue(roundMixEffort(m.bugfix / currentTotal))
 		fields["theme_breakdown"] = themeBreakdownTable(m, timeBound.effectiveGrain(grainDaily))
+		// CHAOS-12580: the same effort split by repository, for one team.
+		if teamRollupTablesIncluded(len(ids)) {
+			table, ok, breakdownErr := p.teamRepositoryThemeBreakdown(ctx, orgID, teamID, owned[teamID], ownedRepoMix, slices.Contains(projectTeams, teamID), m.theme, timeBound)
+			if breakdownErr != nil {
+				return shapeRejected, 0, nil, nil, nil, nil, nil, false, breakdownErr
+			}
+			if ok {
+				fields[contractsv1.ContextFabricRenderRepositoryFlowTableField] = table
+			}
+		}
 		units, sized := m.sizingUnits()
 		investmentSizingFields(fields, currentTotal, units, sized)
 		investmentUncategorizedFields(fields, units, m.uncategorizedUnits())

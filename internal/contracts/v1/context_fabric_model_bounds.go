@@ -328,6 +328,13 @@ const (
 	ContextFabricClaimedFactsMaxCount = 250
 )
 
+// ContextFabricClaimedFactRepositoryFlowMaxRows is the row cap of a team's
+// repository_theme_breakdown table (CHAOS-12580): one row per (repository,
+// theme) link, so the sankey's 64 repositories times the 5 canonical themes.
+// Rows past it would draw repositories the sankey refuses anyway, so the cap
+// never cuts a table a sankey could draw.
+const ContextFabricClaimedFactRepositoryFlowMaxRows = ContextFabricRenderRepositoryFlowMaxRepositories * 5
+
 // ContextFabricModelFacingBound names one entry in the registry below.
 type ContextFabricModelFacingBound struct {
 	// Name is a short, stable, human-readable identifier for this bound --

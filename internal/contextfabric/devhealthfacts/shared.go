@@ -1410,7 +1410,11 @@ import (
 // ("<org UUID>:gitlab:<id>") reads as its native id in a graph end and in an
 // evidence label alike (CHAOS-12716). An answer saved earlier can carry the
 // scoped id.
-const QueryVersion = "devhealthfacts.clickhouse.v275"
+//
+// v275 -> v276: a team investment fact on a single-team read carries
+// repository_theme_breakdown, its effort split by repository (CHAOS-12580). An
+// answer saved under v275 has no such table.
+const QueryVersion = "devhealthfacts.clickhouse.v276"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each

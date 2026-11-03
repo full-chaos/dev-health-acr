@@ -15107,6 +15107,52 @@
     ]
   },
   {
+    "id": "devhealthfacts.repository_theme_breakdown_withheld",
+    "msg": "devhealthfacts.repository_theme_breakdown_withheld",
+    "level": "info",
+    "multiplicity": "zero_or_one_per_request",
+    "attribution": [
+      "request_id"
+    ],
+    "bounded_aggregation": "",
+    "fields": [
+      {
+        "key": "reason",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "repository_without_name",
+          "repository_name_shared",
+          "linked_repositories_over_bound",
+          "rows_over_bound"
+        ]
+      },
+      {
+        "key": "team",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "repository",
+        "type": "string",
+        "presence": "conditional",
+        "applicability": "written when reason=repository_without_name or reason=repository_name_shared"
+      },
+      {
+        "key": "bound",
+        "type": "int",
+        "presence": "conditional",
+        "applicability": "written when reason=linked_repositories_over_bound or reason=rows_over_bound"
+      },
+      {
+        "key": "request_id",
+        "type": "string",
+        "presence": "conditional",
+        "applicability": "written when the request context carries a request ID"
+      }
+    ]
+  },
+  {
     "id": "devhealthfacts.rule_basis_day_absent",
     "msg": "devhealthfacts.rule_basis_day_absent",
     "level": "info",
