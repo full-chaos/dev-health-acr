@@ -142,30 +142,58 @@ func TestPostgresStartsAgainWhenCreateFindsNoImageAfterThePull(t *testing.T) {
 	}
 }
 
-func TestRetryImageMissingTerminatesARefusedContainerAndHandsBackEverythingElseAsCreated(t *testing.T) {
+func TestAMissingImageWhoseContainerCouldNotBeTerminatedIsNotStartedAgain(t *testing.T) {
+	// Codex r2 P2 on #2006: a cleanup failure joined to the refusal must end the retry, or a later start that
+	// serves would hide the container left behind.
 	pauses, _ := quietRetries(t, nil)
-	refused, served := &fakeContainer{}, &fakeContainer{}
+	stuck := &fakeContainer{termErr: errors.New("daemon refused remove")}
+	script := &startScript{errs: []error{imageMissing()}}
+	create := func(ctx context.Context, req testcontainers.GenericContainerRequest) (testcontainers.Container, error) {
+		if script.calls == 0 {
+			script.calls++
+			return stuck, script.errs[0]
+		}
+		script.calls++
+		return &fakeContainer{}, nil
+	}
+	_, err := generic(context.Background(), testcontainers.GenericContainerRequest{}, create)
+	if err == nil || !strings.Contains(err.Error(), "daemon refused remove") || script.calls != 1 || *pauses != 0 {
+		t.Fatalf("err=%v starts=%d pauses=%d, want the cleanup failure after one start and no pause", err, script.calls, *pauses)
+	}
+
 	calls := 0
-	create := RetryImageMissing(func(context.Context, testcontainers.GenericContainerRequest) (testcontainers.Container, error) {
+	_, err = StartUntilImageServes(context.Background(), time.Time{}, func() (testcontainers.Container, error) {
+		calls++
+		return nil, TerminateFailed(&fakeContainer{termErr: errors.New("daemon refused remove")}, imageMissing())
+	})
+	if err == nil || !strings.Contains(err.Error(), "daemon refused remove") || calls != 1 {
+		t.Fatalf("err=%v starts=%d, want the cleanup failure after one start", err, calls)
+	}
+}
+
+func TestStartUntilImageServesNeverPausesPastItsDeadline(t *testing.T) {
+	// Codex r2 P2 on #2006: a fixture with its own budget passes its deadline; a pause that would end after it is
+	// not taken, and the refusal is returned at once.
+	pauses, lines := quietRetries(t, nil)
+	calls := 0
+	_, err := StartUntilImageServes(context.Background(), time.Now().Add(imageMissingPause/2), func() (testcontainers.Container, error) {
+		calls++
+		return nil, imageMissing()
+	})
+	if err == nil || !errdefs.IsNotFound(err) || !strings.Contains(err.Error(), "deadline") || calls != 1 || *pauses != 0 || len(*lines) != 0 {
+		t.Fatalf("err=%v starts=%d pauses=%d logged=%d, want the refusal after one start, naming the deadline", err, calls, *pauses, len(*lines))
+	}
+
+	calls = 0
+	served := &fakeContainer{}
+	got, err := StartUntilImageServes(context.Background(), time.Now().Add(time.Hour), func() (testcontainers.Container, error) {
 		calls++
 		if calls == 1 {
-			return refused, imageMissing()
+			return nil, imageMissing()
 		}
 		return served, nil
 	})
-	got, err := create(context.Background(), testcontainers.GenericContainerRequest{})
-	if err != nil || got != testcontainers.Container(served) || calls != 2 || *pauses != 1 {
-		t.Fatalf("container=%v err=%v starts=%d pauses=%d, want the second container after 2 starts", got, err, calls, *pauses)
-	}
-	if refused.terminated.Load() != 1 || served.terminated.Load() != 0 {
-		t.Fatalf("terminated refused=%d served=%d, want 1 and 0", refused.terminated.Load(), served.terminated.Load())
-	}
-
-	// Any other failure is the caller's: its container comes back untouched, for the caller's own terminate.
-	failed := &fakeContainer{}
-	probeErr := errors.New("published port unreachable")
-	got, err = RetryImageMissing(genericReturning(failed, probeErr))(context.Background(), testcontainers.GenericContainerRequest{})
-	if !errors.Is(err, probeErr) || got != testcontainers.Container(failed) || failed.terminated.Load() != 0 {
-		t.Fatalf("container=%v err=%v terminated=%d, want the failed container back untouched", got, err, failed.terminated.Load())
+	if err != nil || got != testcontainers.Container(served) || calls != 2 {
+		t.Fatalf("container=%v err=%v starts=%d, want the second start to serve", got, err, calls)
 	}
 }
