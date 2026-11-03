@@ -331,6 +331,10 @@ func TestBuildContextFabricInvestigator_keysReuseByTheRenderSwitches(t *testing.
 		if !ok {
 			t.Fatalf("investigator is a %T, want *contextfabric.Engine", investigator)
 		}
+		// CHAOS-12582: the sankey switch reaches the engine's selection too.
+		if got := mustField(t, mustField(t, reflect.ValueOf(engine).Elem(), "renderShapeOptions"), "InvestmentRepositoryFlow").Bool(); got != on {
+			t.Errorf("switches on=%v: the engine selects the sankey %v", on, got)
+		}
 		authorities := mustField(t, reflect.ValueOf(engine).Elem(), "reuseVersionAuthorities")
 		got := mustField(t, authorities, "QuestionFamilyVersion").String()
 		want := contextfabric.ReuseQuestionFamilyVersion(contextfabric.RenderShapeOptions{InvestmentThemeShare: on, ComparisonSideBySide: on, CompletionForecast: on, InvestmentRepositoryFlow: on})

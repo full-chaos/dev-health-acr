@@ -465,3 +465,22 @@ func TestAWithheldRepositoryFlowTableIsNotCountedAsCut(t *testing.T) {
 		t.Fatalf("limitations %q, want %q and the withheld sentence", cut.Limitations, want)
 	}
 }
+
+// The deployment's switch reaches the engine's selection: EngineOptions is the
+// one door from config, and selection reads only renderShapeOptions.
+func TestTheEngineSelectsTheSankeyOnlyWithItsSwitch(t *testing.T) {
+	t.Parallel()
+	for _, on := range []bool{false, true} {
+		engine, err := NewEngine(tableEngineDependencies(), EngineOptions{ServiceVersion: "sankey", NewResultID: resultIDSequence(), InvestmentSankeyEnabled: on})
+		if err != nil {
+			t.Fatalf("NewEngine: %v", err)
+		}
+		if engine.renderShapeOptions.InvestmentRepositoryFlow != on {
+			t.Fatalf("switch %v: the engine's selection has the rule %v", on, engine.renderShapeOptions.InvestmentRepositoryFlow)
+		}
+		shapes, _ := selectRenderShapes(repositoryFlowResult(repositoryFlowLinks()), repositoryFlowFrameOf(), engine.renderShapeOptions)
+		if drawn := len(sankeysOf(shapes)) == 1; drawn != on {
+			t.Fatalf("switch %v: drawn = %v", on, drawn)
+		}
+	}
+}
