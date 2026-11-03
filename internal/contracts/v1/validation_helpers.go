@@ -6,7 +6,7 @@ import (
 	"unicode/utf8"
 )
 
-var repositorySlugPattern = regexp.MustCompile(`^[^/\s]+/[^/\s]+$`)
+var repositorySlugPattern = regexp.MustCompile(`^[^/\s]+(/[^/\s]+){1,19}$`)
 var commitSHAPattern = regexp.MustCompile(`^[0-9a-fA-F]{7,64}$`)
 var clientCredentialTokenPrefixPattern = regexp.MustCompile(`^fcacr_[A-Za-z0-9_-]{4,32}$`)
 

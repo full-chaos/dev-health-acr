@@ -105,7 +105,7 @@ func TestAGrantOwnerWildcardIsApplied(t *testing.T) {
 	if err != nil || !outcome.GrantApplied {
 		t.Fatalf("census = %+v %v, want the grant applied", outcome, err)
 	}
-	shape := "startsWith(lower(trimBoth(repo)), {census_grant_0:String}) AND length(trimBoth(repo)) <= 255 AND match(lower(trimBoth(repo)), '^" + reposlug.SlugPattern + "$')"
+	shape := "startsWith(lower(trimBoth(repo)), {census_grant_0:String}) AND match(lower(trimBoth(repo)), '^" + reposlug.SlugPattern + "$') AND length(trimBoth(repo)) <= 255 AND arrayAll(s -> length(s) <= 100, splitByChar('/', trimBoth(repo)))"
 	if !strings.Contains(client.calls[0], shape) || bindingValues(client.bindings[0])["census_grant_0"] != "acme/" {
 		t.Fatalf("statement = %q bindings %v, want the owner prefix and the slug shape", client.calls[0], client.bindings[0])
 	}

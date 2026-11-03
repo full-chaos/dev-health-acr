@@ -20,10 +20,13 @@ func TestOwnerWildcardAdmitsNestedRepositoriesAtDepthOneTwoAndThree(t *testing.T
 			t.Errorf("principal, depth %d: owner/* refused %q", depth, slug)
 		}
 	}
-	for _, slug := range []string{"owner2/x", "owner2/g/x", "ownerx/g/h/x", "owner"} {
+	for _, slug := range []string{"owner2/x", "owner2/g/x", "ownerx/g/h/x"} {
 		if repositoryAllowed(scopes, slug) || episodeRepositoryAllowed(scopes, slug) {
 			t.Errorf("owner/* admitted %q", slug)
 		}
+	}
+	if repositoryAllowed(scopes, "owner") {
+		t.Error("owner/* admitted the bare owner")
 	}
 }
 

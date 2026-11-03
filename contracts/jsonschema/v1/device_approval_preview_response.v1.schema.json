@@ -13,7 +13,7 @@
       "minItems": 1,
       "maxItems": 100,
       "uniqueItems": true,
-      "items": { "type": "string", "pattern": "^[^/*\\s]+/[^/*\\s]+$", "maxLength": 512 }
+      "items": { "type": "string", "pattern": "^[^/*\\s]+(/[^/*\\s]+){1,19}$", "maxLength": 512 }
     },
     "requested_scopes": {
       "description": "The scopes the device grant asked for, in canonical order. The default pair (context:read, evidence:read) when the grant named none or the device authorization has no OAuth grant (legacy acr-mcp login).",

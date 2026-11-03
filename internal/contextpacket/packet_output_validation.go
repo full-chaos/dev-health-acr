@@ -8,6 +8,7 @@ import (
 	"unicode/utf8"
 
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
+	"github.com/full-chaos/dev-health-acr/internal/reposlug"
 )
 
 func validatePacketOutputBounds(packet contractsv1.ContextPacket) error {
@@ -146,7 +147,15 @@ func optionalPacketURI(value string, maximum int) bool {
 
 func validSlug(value string) bool {
 	parts := strings.Split(value, "/")
-	return len(parts) == 2 && parts[0] != "" && parts[1] != "" && !strings.ContainsAny(value, " \t\n\r") && packetString(value, 0, 512)
+	if len(parts) < 2 || len(parts) > reposlug.MaxSlugSegments {
+		return false
+	}
+	for _, part := range parts {
+		if part == "" {
+			return false
+		}
+	}
+	return !strings.ContainsAny(value, " \t\n\r") && packetString(value, 0, 512)
 }
 
 func hexString(value string, minimum, maximum int) bool {

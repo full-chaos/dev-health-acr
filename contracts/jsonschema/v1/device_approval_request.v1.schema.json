@@ -15,7 +15,7 @@
           "minItems": 1,
           "maxItems": 100,
           "uniqueItems": true,
-          "items": { "type": "string", "pattern": "^[^/*\\s]+/[^/*\\s]+$", "maxLength": 512 }
+          "items": { "type": "string", "pattern": "^[^/*\\s]+(/[^/*\\s]+){1,19}$", "maxLength": 512 }
         },
         {
           "type": "array",

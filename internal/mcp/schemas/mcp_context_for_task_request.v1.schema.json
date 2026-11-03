@@ -46,7 +46,7 @@
         "slug": {
           "type": "string",
           "description": "Repository in owner/name form, for example acme/billing. Exactly one slash and no spaces.",
-          "pattern": "^[^/\\s]+/[^/\\s]+$",
+          "pattern": "^[^/\\s]+(/[^/\\s]+){1,19}$",
           "minLength": 1,
           "maxLength": 512
         }

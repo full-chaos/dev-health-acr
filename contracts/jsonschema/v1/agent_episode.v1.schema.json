@@ -60,7 +60,7 @@
       "properties": {
         "slug": {
           "type": "string",
-          "pattern": "^[^/\\s]+/[^/\\s]+$",
+          "pattern": "^[^/\\s]+(/[^/\\s]+){1,19}$",
           "maxLength": 512
         },
         "repo_id": {

@@ -441,10 +441,11 @@ func anInsideSatisfierBesideAnOutsideOneCommits(t *testing.T, build grantWorldBu
 }
 
 // anOwnerGrantReadsOnlyWhatTheGateAdmits: an owner wildcard admits exactly the
-// two-part slugs the graph gate admits, through the census count and through a
-// turn. The turn is the caller-visible half (codex r2, CHAOS-12455): the node
-// of a repository now at acme/group/secret still lists an old in-grant slug, so
-// the gate alone would have committed the row a prefix let through.
+// repository keys the graph gate admits (an owner covers its subgroups),
+// through the census count and through a turn. The turn is the caller-visible
+// half (codex r2, CHAOS-12455): the node of a repository now at acme/trailing-
+// still lists an old in-grant slug, so the gate alone would have committed the
+// row a prefix let through.
 func anOwnerGrantReadsOnlyWhatTheGateAdmits(t *testing.T, build grantWorldBuilder) {
 	world := build(t, "owner wildcard")
 	world.add(t, world.insideGitHub)
@@ -455,20 +456,22 @@ func anOwnerGrantReadsOnlyWhatTheGateAdmits(t *testing.T, build grantWorldBuilde
 	if err != nil {
 		t.Fatal(err)
 	}
-	if want := grantCanonicalID(world, world.insideGitHub); outcome.Count != 1 || outcome.SatisfierCanonicalID != want {
-		t.Fatalf("census = %+v, want only %s", outcome, want)
+	wantInside, wantNested := grantCanonicalID(world, world.insideGitHub), grantCanonicalID(world, world.nestedGitLab)
+	ids := append([]string(nil), outcome.SatisfierCanonicalIDs...)
+	sort.Strings(ids)
+	if outcome.Count != 2 || !slices.Equal(ids, []string{wantInside, wantNested}) {
+		t.Fatalf("census = %+v, want %s and %s (the owner covers its subgroups; the malformed slug stays out)", outcome, wantInside, wantNested)
 	}
 
 	alone := build(t, "owner wildcard turn")
 	stale := map[string]graphrank.CandidateNode{}
-	for _, repository := range []grantRepository{alone.nestedGitLab, alone.malformed} {
+	for _, repository := range []grantRepository{alone.malformed} {
 		node := grantCandidateNode(alone, repository)
 		node.Attributes["authorization_repositories"] = []string{"acme/old-name"}
 		stale[grantCanonicalID(alone, repository)] = node
 	}
 	principal := userprincipal.Authenticated(t, alone.org, []string{"acme/*"})
 	none := observeTurnAs(t, alone, principal, stale)
-	alone.add(t, alone.nestedGitLab)
 	alone.add(t, alone.malformed)
 	assertSameTurn(t, none, observeTurnAs(t, alone, principal, stale))
 }

@@ -56,17 +56,39 @@ const (
 	MaxSlugBytes    = 255
 )
 
-// SlugPattern is the grammar of a whole repository key as one RE2 group.
-const SlugPattern = `[^/]+/` + NamePattern
+// groupPattern is ownerPattern's grammar as one RE2 group, with no anchor and
+// no 100-character bound: RE2 refuses a bounded repeat nested in a repeat past
+// 1000 copies, so a statement tests each segment's length beside SlugPattern.
+const groupPattern = `([a-z0-9]|[a-z0-9][a-z0-9._-]*[a-z0-9])`
 
-// ValidSlug reports whether a lower-cased repository key is valid.
+// SlugPattern is the grammar of a whole repository key as one RE2 group, with
+// no anchor and without the 255-byte cap and the 100-character segment bound,
+// which a statement tests as lengths: 1-19 group segments, then a repository
+// name. It reads the same as a SQL string literal.
+const SlugPattern = groupPattern + `(/` + groupPattern + `){0,18}/` + NamePattern
+
+// ValidSlug reports whether a lower-cased repository key is valid: 2-20
+// segments in at most 255 bytes, every segment but the last a group name (no
+// leading '.') and the last a repository name.
 func ValidSlug(slug string) bool {
+	if len(slug) > MaxSlugBytes {
+		return false
+	}
 	parts := strings.Split(slug, "/")
-	return len(parts) == 2 && ValidOwner(parts[0]) && ValidName(parts[1])
+	if len(parts) < 2 || len(parts) > MaxSlugSegments {
+		return false
+	}
+	for _, group := range parts[:len(parts)-1] {
+		if !ValidOwner(group) {
+			return false
+		}
+	}
+	return ValidName(parts[len(parts)-1])
 }
 
 // ValidScope reports whether a lower-cased repository scope is valid: "*",
-// "<owner>/*", or a repository key.
+// "<owner>/*" (one owner segment; the wildcard reaches every depth below it),
+// or a repository key.
 func ValidScope(scope string) bool {
 	if scope == "*" {
 		return true
