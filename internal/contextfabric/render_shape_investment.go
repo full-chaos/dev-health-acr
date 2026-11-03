@@ -50,7 +50,7 @@ type RenderShapeOptions struct {
 // deployment that turns nothing on keeps every stored answer. The landscape
 // quadrant switch (CHAOS-12675) and the sankey switch (CHAOS-12582) join it.
 //
-// With every switch on, the readable form is 138 characters (question-family.v7),
+// With every switch on, the readable form is 138 characters (question-family.v8),
 // past the column's 128, so a form past 128 is the table version, "+render#" and
 // the first 32 hex digits of the full form's sha256 (lead ruling on CHAOS-12582).
 // Every shorter form stays readable and byte-equal to what it was
