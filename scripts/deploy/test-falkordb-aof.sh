@@ -85,6 +85,24 @@ aside=("$data"/appendonlydir.stale-*)
   || fail "start: the stale AOF must be kept whole under appendonlydir.stale-<time>: $(ls "$data")"
 pass "start: dump snapshotted after the last AOF write -> AOF moved aside whole (never deleted), RDB path, said loudly"
 
+# Left-over stale dirs are counted and sized at every start, and more than one is
+# a loud warning; nothing is deleted (disk growth from left-over files has bitten
+# before).
+grep -qF 'acr-falkordb: 1 stale AOF dir (appendonlydir.stale-*)' <<<"$out" || fail "start: the one stale dir just moved aside must be counted: $out"
+grep -qF 'WARNING' <<<"$out" && fail "start: one stale dir must not warn: $out"
+data="$work/two-stale"; mkdir -p "$data/appendonlydir.stale-20261101T000000Z" "$data/appendonlydir.stale-20261102T000000Z"; : >"$data/dump.rdb"
+head -c 300000 /dev/zero >"$data/appendonlydir.stale-20261101T000000Z/appendonly.aof.1.base.rdb"
+head -c 200000 /dev/zero >"$data/appendonlydir.stale-20261102T000000Z/appendonly.aof.1.base.rdb"
+out="$(run_start "$data")"
+grep -qE 'acr-falkordb: WARNING: 2 stale AOF dirs \(appendonlydir.stale-\*\) hold [0-9]+ KiB on the data volume' <<<"$out" \
+  || fail "start: two stale dirs must warn with their count and size: $out"
+kib="$(sed -nE 's/.*hold ([0-9]+) KiB.*/\1/p' <<<"$out")"
+[[ "$kib" -ge 488 ]] || fail "start: the size must cover both dirs (>= 488 KiB), got ${kib:-none}: $out"
+[[ -d "$data/appendonlydir.stale-20261101T000000Z" && -d "$data/appendonlydir.stale-20261102T000000Z" ]] || fail "start: stale dirs must never be deleted"
+out="$(run_start "$work/empty")"
+grep -qF 'acr-falkordb: 0 stale AOF dirs' <<<"$out" || fail "start: no stale dir must still be counted (0): $out"
+pass "start: stale dirs counted and sized at every start (0, 1); more than one -> WARNING with count and KiB; none deleted"
+
 data="$work/within-slack"; mkdir -p "$data"; : >"$data/dump.rdb"; aof_dir "$data" "$t0"
 out="$(run_start "$data" "$((t0 + 2))")"
 grep -qF 'REDIS_ARGS=[--existing yes --appendonly yes --appendfsync everysec]' <<<"$out" \

@@ -43,6 +43,24 @@ if [ -f "$aofdir/appendonly.aof.manifest" ] && [ -e "$data/dump.rdb" ]; then
   fi
 fi
 
+# Stale AOF dirs are never deleted here, so every start counts and sizes them, and
+# more than one is a loud warning: left-over files must not fill the volume
+# unseen. An operator deletes them once the graph has been read back.
+stale_count=0
+stale_kib=0
+for d in "$aofdir".stale-*; do
+  [ -d "$d" ] || continue
+  stale_count=$((stale_count + 1))
+  stale_kib=$((stale_kib + $(du -sk "$d" | cut -f1)))
+done
+if [ "$stale_count" -gt 1 ]; then
+  echo "acr-falkordb: WARNING: $stale_count stale AOF dirs (appendonlydir.stale-*) hold $stale_kib KiB on the data volume; delete them by hand once the graph has been read back"
+elif [ "$stale_count" -eq 1 ]; then
+  echo "acr-falkordb: 1 stale AOF dir (appendonlydir.stale-*) holds $stale_kib KiB on the data volume"
+else
+  echo "acr-falkordb: 0 stale AOF dirs"
+fi
+
 if [ -f "$aofdir/appendonly.aof.manifest" ] || [ ! -e "$data/dump.rdb" ]; then
   REDIS_ARGS="${REDIS_ARGS:-} --appendonly yes --appendfsync everysec"
   export REDIS_ARGS

@@ -1046,8 +1046,11 @@ by default, and a release with it off renders exactly as before.
   not trip it, because Redis rewrites the manifest at shutdown. A SIGKILL after a
   quiet period longer than a save interval can trip it; that is safe (the dump
   holds every write) and leaves one more `.stale-` directory. Delete
-  `.stale-` directories by hand once the graph has been read back. If the
-  snapshot time cannot be read, the wrapper says so and takes the AOF.
+  `.stale-` directories by hand once the graph has been read back: the chart
+  never deletes them. Every start logs their count and size (`acr-falkordb: N
+  stale AOF dirs …`), and more than one logs `acr-falkordb: WARNING: N stale AOF
+  dirs (appendonlydir.stale-*) hold K KiB on the data volume`. If the snapshot
+  time cannot be read, the wrapper says so and takes the AOF.
 - **The check needs the data volume's mtimes on the node's clock.** That holds for
   a local volume. On a network volume whose server sets mtimes with another
   clock, the comparison can be off by the skew between the two clocks.
