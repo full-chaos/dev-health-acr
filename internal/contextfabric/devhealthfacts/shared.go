@@ -1396,11 +1396,16 @@ import (
 // the name the answer holds, never by a UUID or a raw provider id (CHAOS-12620).
 // An answer saved earlier can carry such a label.
 //
-// v272 -> v273: a stored issue-to-pull-request fact names its work item end by
+// v272 -> v273: a claimed table states where each cell's word comes from: the
+// theme column's vocabulary and each id column's word column (CHAOS-12639). An
+// answer saved under v272 serves raw theme tokens and ids with no word to show
+// in their place.
+//
+// v273 -> v274: a stored issue-to-pull-request fact names its work item end by
 // its key when the read has already given the pull request end its label
 // (CHAOS-12715). An answer saved earlier can show the raw work item id in a
 // path's why_relevant.
-const QueryVersion = "devhealthfacts.clickhouse.v273"
+const QueryVersion = "devhealthfacts.clickhouse.v274"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each

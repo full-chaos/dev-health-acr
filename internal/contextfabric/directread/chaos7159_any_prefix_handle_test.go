@@ -2,6 +2,7 @@ package directread
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
@@ -55,6 +56,14 @@ func TestChaos7159_HandleModeAcceptsAnyPrefixKeyAndTheCensusDecidesExistence(t *
 			}
 			if response.Status != tc.wantStatus {
 				t.Fatalf("status = %s, want %s", response.Status, tc.wantStatus)
+			}
+			// CHAOS-12642: a GitHub "#" reference is first read as a pull
+			// request; the work item census is the last call.
+			if graphrank.HasWorkItemKeyToken(tc.handle) && strings.Contains(tc.handle, "#") {
+				if len(calls) != 2 || calls[0].kind != contextfabric.SubjectPullRequest || calls[0].value != tc.wantCensus {
+					t.Fatalf("census calls = %+v, want a pull_request read of %q first", calls, tc.wantCensus)
+				}
+				calls = calls[1:]
 			}
 			if len(calls) != 1 || calls[0].value != tc.wantCensus || calls[0].kind != contextfabric.SubjectWorkItem {
 				t.Fatalf("census calls = %+v, want one work_item census for %q", calls, tc.wantCensus)
