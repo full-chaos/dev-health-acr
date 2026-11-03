@@ -1,0 +1,40 @@
+---
+# CHAOS-12749 measurement only, on a draft closed unmerged: the new symlinked-root test on Linux, before the fix.
+# Expected: FAIL (the overlay is not applied through the symlink), and the original test PASS.
+name: chaos12749-linux-red
+
+"on":
+  pull_request:
+    paths:
+      - .github/workflows/chaos12749-linux-red.yml
+
+permissions:
+  contents: read
+
+env:
+  GOFLAGS: -trimpath
+  GOPROXY: https://proxy.golang.org|direct
+
+jobs:
+  red:
+    name: symlinked root (before the fix)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        with: {persist-credentials: false}
+      # actions/setup-go v6.5.0
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16
+        with:
+          go-version: '1.27.3'
+          cache: true
+      - name: Run both export tests
+        run: |
+          set -uo pipefail
+          code=0
+          go test -count=1 -v -run '^(TestExportDataIsBuiltFromTheParsedBytesThroughASymlinkedRoot|TestExportDataIsBuiltFromTheParsedBytesNotTheDisk)$' ./internal/cigates/emitscan/ > run.log 2>&1 || code=$?
+          grep -E -- '--- (PASS|FAIL|SKIP)|export_snapshot_test.go' run.log || true
+          sym=$(grep -o -E -- '--- (PASS|FAIL): TestExportDataIsBuiltFromTheParsedBytesThroughASymlinkedRoot' run.log | awk '{print $2}')
+          orig=$(grep -o -E -- '--- (PASS|FAIL): TestExportDataIsBuiltFromTheParsedBytesNotTheDisk' run.log | awk '{print $2}')
+          printf 'RESULT symlinked=%s original=%s (exit %s)\n' "${sym:-not-run}" "${orig:-not-run}" "$code"
+          [ "$sym" = "FAIL:" ] && [ "$orig" = "PASS:" ]
