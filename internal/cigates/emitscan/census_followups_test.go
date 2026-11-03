@@ -12,10 +12,8 @@ func TestSpanAttributeVariableKeyIsR9(t *testing.T) {
 	for name, body := range map[string]string{
 		"parameter key": `func f(k, v string) { _ = attribute.String(k, v) }`,
 		"attribute.Int": `func f(k string) { _ = attribute.Int(k, 1) }`,
-		"key from a call": `func f(v string) { _ = attribute.String(name(), v) }
-func name() string { return "x" }`,
 	} {
-		if got := ruleList(t, body); got != "R9" && got != "R2,R9" && got != "R9,R2" {
+		if got := ruleList(t, body); got != "R9" {
 			t.Errorf("%s: rules %q, want an R9", name, got)
 		}
 	}
@@ -25,6 +23,13 @@ func TestSpanAttributeVariableKeyNamesItsSite(t *testing.T) {
 	got := r9Sites(t, `func f(k, v string) { _ = attribute.String(k, v) }`)
 	if len(got) != 1 || got[0] != "f|unresolvable key: k" {
 		t.Fatalf("R9 sites = %q, want [f|unresolvable key: k]", got)
+	}
+}
+
+// A call in key position is already an R2 dynamic key: one finding, no second R9 for the same key.
+func TestSpanAttributeCallKeyStaysOneR2(t *testing.T) {
+	if got := ruleList(t, "func f(v string) { _ = attribute.String(name(), v) }\nfunc name() string { return \"x\" }"); got != "R2" {
+		t.Errorf("rules %q, want R2", got)
 	}
 }
 
