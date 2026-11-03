@@ -9,6 +9,7 @@
 # never as a silent empty set.
 
 allocation_breakdown
+  organization         investment
   project              investment
   repository           investment
   team                 investment

@@ -266,7 +266,10 @@ const (
 )
 
 var handleGrammarRegistry = []handleGrammarEntry{
-	{name: "pull_request_number", kind: contextfabric.SubjectPullRequest, pattern: regexp.MustCompile(`(?i)\b(?:PR|pull\s+request)\s*#?\s*(\d+)\b`), valueGroup: 1, valuePattern: regexp.MustCompile(`^\d+$`), sourceColumn: "git_pull_requests.number"},
+	// CHAOS-12633: "MR" / "merge request" with "#" or "!" are GitLab's
+	// spellings of the same row: a GitLab merge request is stored in
+	// git_pull_requests with its iid as number.
+	{name: "pull_request_number", kind: contextfabric.SubjectPullRequest, pattern: regexp.MustCompile(`(?i)\b(?:PR|pull\s+request|MR|merge\s+request)\s*[#!]?\s*(\d+)\b`), valueGroup: 1, valuePattern: regexp.MustCompile(`^\d+$`), sourceColumn: "git_pull_requests.number"},
 	{name: workItemTicketKeyGrammar, kind: contextfabric.SubjectWorkItem, pattern: regexp.MustCompile(`\b` + workItemTicketKeyPrefix + workItemKeyNumber), valueGroup: 0, valuePattern: regexp.MustCompile(`^` + workItemTicketKeyPrefix + workItemKeyNumber + `$`), sourceColumn: "work_items.work_item_id"},
 	{name: workItemRepoReferenceGrammar, kind: contextfabric.SubjectWorkItem, pattern: regexp.MustCompile(`\b` + workItemRepoReferenceShape), valueGroup: 0, valuePattern: regexp.MustCompile(`^` + workItemRepoReferenceShape + `$`), sourceColumn: "work_items.work_item_id"},
 	{name: "ci_run_id", kind: contractsv1.ContextFabricSubjectCIRun, pattern: regexp.MustCompile(`(?i)\b(?:CI\s+pipeline|CI\s+run|pipeline\s+run|pipeline|run)\b\s*#?\s*(\d{4,})\b`), valueGroup: 1, valuePattern: regexp.MustCompile(`^\d{4,}$`), sourceColumn: "ci_pipeline_runs.run_id"},

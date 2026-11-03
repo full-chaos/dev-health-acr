@@ -348,6 +348,9 @@ func subjectMergeAttrs(subject contextfabric.SubjectRef, authorization contextfa
 	// counts it into the coverage disclosure. An over-admitted stub is
 	// visible; a wrongly-excluded real subject is not.
 	if entityOwned != nil {
+		// CHAOS-12649: only the owned writer marks a node; a referenced stub
+		// never does, so it never counts as projected.
+		attrs[propProjectionOwned] = true
 		attrs[propAliases] = graphrank.UniqueSorted(entityOwned.Aliases)
 		// CHAOS-3884: provider-qualified identity variants, same write
 		// discipline as propAliases -- a distinct property so NodeCandidate
@@ -726,6 +729,12 @@ func (a *Adapter) writeWatermark(ctx context.Context, key string, batch contextf
 	attrs := map[string]interface{}{
 		"cursor": batch.NextCursor, propSourceVersion: batch.SourceVersion, "backend_watermark": watermark,
 		"projected_at": projectedAt.Format(time.RFC3339Nano), "projected_at_ns": projectedAt.UnixNano(),
+	}
+	// CHAOS-12649: the first batch of a walk from zero says every owned node of
+	// this source is written with the owned marker from here on. Later batches
+	// omit the key, so `w += $attrs` keeps it.
+	if batch.Cursor == "" {
+		attrs[watermarkOwnedMarkedWalk] = true
 	}
 	_, err := a.api.query(ctx, key, cypher, map[string]interface{}{
 		"org": batch.OrgID, "source": batch.Source, "attrs": attrs,

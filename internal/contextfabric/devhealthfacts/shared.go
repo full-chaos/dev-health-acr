@@ -1378,10 +1378,21 @@ import (
 // issue by its own repository (CHAOS-12561). An answer saved under v267 can say
 // such an issue is not in what the caller can read.
 //
-// v268 -> v269: an edge's fact and a stub node's label name a work item, project
+// v268 -> v269: an organization investment fact is served to every caller, a
+// repository-bound or project-only grant included, and an organization
+// allocation question is answered from it (CHAOS-12585). An answer saved under
+// v268 for such a caller says the fact was refused.
+//
+// v269 -> v270: an organization allocation requirement is evaluated by the
+// assembled answer, because the investment producer declares
+// allocation_breakdown for the organization (CHAOS-12601). An answer saved under
+// v269 can read complete with no breakdown served.
+//
+// v271 -> v272: an edge's fact and a stub node's label name a work item, project
 // or team in reader words, not by its raw source id (CHAOS-12619). An answer saved
-// under v268 can show a raw id in a path's why_relevant.
-const QueryVersion = "devhealthfacts.clickhouse.v269"
+// earlier can show a raw id in a path's why_relevant.
+// (QueryVersion plan, 2026-11-03: v271 is #1961's, v272 #1958's, v273 #1959's.)
+const QueryVersion = "devhealthfacts.clickhouse.v272"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each
@@ -2011,12 +2022,14 @@ func sortedSubjectKinds(m map[contextfabric.SubjectKind][]contextfabric.AnswerOb
 // A NIL RETURN IS A DECISION, NOT A GAP. FactMembership and
 // FactSourceHealth are substrate: they make other producers' facts
 // believable rather than answering an obligation themselves.
-// FactSourceHealth matters most because it is the ONLY producer serving
-// SubjectOrganization -- declaring `state` on it would build an org-wide
-// "how are we doing" answer out of ingestion health, which is the
-// mis-answer the design's own B5 row DEFERS rather than ships. It stays
-// empty on purpose, so an organization state requirement derives an
-// explicit `unavailable` instead of a confident wrong answer.
+// FactSourceHealth matters most because it serves SubjectOrganization --
+// declaring `state` on it would build an org-wide "how are we doing" answer
+// out of ingestion health, which is the mis-answer the design's own B5 row
+// DEFERS rather than ships. It stays empty on purpose, so an organization
+// state requirement derives an explicit `unavailable` instead of a confident
+// wrong answer. FactInvestment serves the organization too (CHAOS-8978), and
+// declares allocation_breakdown for it (CHAOS-12601): its organization fact is
+// the theme breakdown over every repository.
 func factKindSubjectObligations(kind contextfabric.FactKind) map[contextfabric.SubjectKind][]contextfabric.AnswerObligation {
 	// The composition family: these producers answer "how is this subject
 	// doing" directly (state), explain it (principal_drivers) and can be
@@ -2205,6 +2218,12 @@ func factKindSubjectObligations(kind contextfabric.FactKind) map[contextfabric.S
 			// CHAOS-6560: repository is the primitive of investment
 			// attribution (readRepositoryThemeMix).
 			contextfabric.SubjectRepository: {contextfabric.ObligationAllocationBreakdown},
+			// CHAOS-12601: the organization fact carries the theme breakdown
+			// over every repository once (readOrganizationThemeMix), and Tables
+			// declares it. Without this row an organization allocation answer
+			// read "no declaring producer, not applicable", so it was complete
+			// whether its breakdown was served, withheld or empty.
+			contextfabric.SubjectOrganization: {contextfabric.ObligationAllocationBreakdown},
 		}
 	// landscape.go's IC-level throughput scatter is a team/project state
 	// reading and a driver. It is deliberately NOT the producer for

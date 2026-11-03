@@ -44,6 +44,7 @@ var ByID = map[string]Event{
 	"contextfabric.count_population_scope":                CountPopulationScope,
 	"contextfabric.coverage_disclosure_phrasing":          CoverageDisclosurePhrasing,
 	"contextfabric.coverage_entries_capped":               CoverageEntriesCapped,
+	"contextfabric.detail_tables_attached":                DetailTablesAttached,
 	"contextfabric.direct_read":                           DirectRead,
 	"contextfabric.direct_read_authorization":             DirectReadAuthorization,
 	"contextfabric.direct_relationships_read":             DirectRelationshipsRead,
@@ -86,6 +87,7 @@ var ByID = map[string]Event{
 	"contextfabric.plan_carry":                            PlanCarry,
 	"contextfabric.plan_carry_outcome":                    PlanCarryOutcome,
 	"contextfabric.plan_narrowing":                        PlanNarrowing,
+	"contextfabric.plan_operand_reads":                    PlanOperandReads,
 	"contextfabric.prior_consulted":                       PriorConsulted,
 	"contextfabric.prior_degradation":                     PriorDegradation,
 	"contextfabric.prior_degradation_pointer_dangling":    PriorDegradationPointerDangling,
@@ -2164,6 +2166,60 @@ func (f CoverageEntriesCappedFields) SlogArgs() []any {
 		"coverage_entries_served", f.CoverageEntriesServed,
 		"coverage_entries_omitted", f.CoverageEntriesOmitted,
 		"coverage_entries_bound", f.CoverageEntriesBound,
+	}
+}
+
+// DetailTablesAttachedFields is contextfabric.detail_tables_attached's generated typed construction interface
+// (CHAOS-5516): one Go field per Field DetailTablesAttached.Fields declares in spec.go.
+type DetailTablesAttachedFields struct {
+	OrgID               string
+	DetailTableClaims   int
+	DetailTables        []string
+	DetailTablesOmitted int
+	// constructed (CHAOS-5516 r1 fix): an UNEXPORTED marker, generated on
+	// every DetailTablesAttachedFields uniformly, set ONLY by NewDetailTablesAttachedFields below. A caller
+	// outside this package cannot set an unexported field via a composite
+	// literal -- not partially (one exported field set, the rest at their
+	// Go zero value) and not even by hand-setting every EXPORTED field --
+	// so this is the class fix for "a caller still assembles that event's
+	// field list": no composite literal built outside eventspec, complete or
+	// partial, can ever read as constructed.
+	constructed bool
+}
+
+// NewDetailTablesAttachedFields is the generated constructor for DetailTablesAttachedFields -- every
+// field DetailTablesAttached.Fields declares is a required parameter.
+func NewDetailTablesAttachedFields(orgID string, detailTableClaims int, detailTables []string, detailTablesOmitted int) DetailTablesAttachedFields {
+	valid := true
+	if detailTables == nil {
+		valid = false
+	}
+	return DetailTablesAttachedFields{
+		OrgID:               orgID,
+		DetailTableClaims:   detailTableClaims,
+		DetailTables:        detailTables,
+		DetailTablesOmitted: detailTablesOmitted,
+		constructed:         valid,
+	}
+}
+
+// IsConstructed reports whether f was built by NewDetailTablesAttachedFields -- the ONE
+// exported way to read the unexported "constructed" marker from outside
+// this package. false for the Go zero value and for ANY composite literal
+// assembled elsewhere, complete or partial.
+func (f DetailTablesAttachedFields) IsConstructed() bool { return f.constructed }
+
+// SlogArgs returns DetailTablesAttached's own declared fields as alternating slog
+// key/value pairs, in the SAME order spec.go declares them. Every
+// free-text string/[]string value is sanitized HERE, at its own
+// construction site inside this function's body -- the shape CHAOS-5544's
+// own instrument (TestNoUnsanitizedLogAttributeInContextFabric) requires.
+func (f DetailTablesAttachedFields) SlogArgs() []any {
+	return []any{
+		"org_id", contextfabric.SanitizeLogAttr(f.OrgID),
+		"detail_table_claims", f.DetailTableClaims,
+		"detail_tables", contextfabric.SanitizeLogStrings(f.DetailTables),
+		"detail_tables_omitted", f.DetailTablesOmitted,
 	}
 }
 
@@ -5649,6 +5705,56 @@ func (f PlanNarrowingFields) SlogArgs() []any {
 		"quota_groups_over_allowance", f.QuotaGroupsOverAllowance,
 		"evidence_pinned_members", f.EvidencePinnedMembers,
 		"ceiling_fit", contextfabric.SanitizeLogAttr(f.CeilingFit),
+	}
+}
+
+// PlanOperandReadsFields is contextfabric.plan_operand_reads's generated typed construction interface
+// (CHAOS-5516): one Go field per Field PlanOperandReads.Fields declares in spec.go.
+type PlanOperandReadsFields struct {
+	OrgID       string
+	OperandRows int
+	KindsNamed  int
+	KindsAdded  int
+	// constructed (CHAOS-5516 r1 fix): an UNEXPORTED marker, generated on
+	// every PlanOperandReadsFields uniformly, set ONLY by NewPlanOperandReadsFields below. A caller
+	// outside this package cannot set an unexported field via a composite
+	// literal -- not partially (one exported field set, the rest at their
+	// Go zero value) and not even by hand-setting every EXPORTED field --
+	// so this is the class fix for "a caller still assembles that event's
+	// field list": no composite literal built outside eventspec, complete or
+	// partial, can ever read as constructed.
+	constructed bool
+}
+
+// NewPlanOperandReadsFields is the generated constructor for PlanOperandReadsFields -- every
+// field PlanOperandReads.Fields declares is a required parameter.
+func NewPlanOperandReadsFields(orgID string, operandRows int, kindsNamed int, kindsAdded int) PlanOperandReadsFields {
+	return PlanOperandReadsFields{
+		OrgID:       orgID,
+		OperandRows: operandRows,
+		KindsNamed:  kindsNamed,
+		KindsAdded:  kindsAdded,
+		constructed: true,
+	}
+}
+
+// IsConstructed reports whether f was built by NewPlanOperandReadsFields -- the ONE
+// exported way to read the unexported "constructed" marker from outside
+// this package. false for the Go zero value and for ANY composite literal
+// assembled elsewhere, complete or partial.
+func (f PlanOperandReadsFields) IsConstructed() bool { return f.constructed }
+
+// SlogArgs returns PlanOperandReads's own declared fields as alternating slog
+// key/value pairs, in the SAME order spec.go declares them. Every
+// free-text string/[]string value is sanitized HERE, at its own
+// construction site inside this function's body -- the shape CHAOS-5544's
+// own instrument (TestNoUnsanitizedLogAttributeInContextFabric) requires.
+func (f PlanOperandReadsFields) SlogArgs() []any {
+	return []any{
+		"org_id", contextfabric.SanitizeLogAttr(f.OrgID),
+		"operand_rows", f.OperandRows,
+		"kinds_named", f.KindsNamed,
+		"kinds_added", f.KindsAdded,
 	}
 }
 
@@ -13119,8 +13225,11 @@ type GraphCountCheckFinishedFields struct {
 	Pass              int
 	Outcome           string
 	SourcesChecked    int
+	SourcesUnknown    int
 	KindsCompared     int
 	GapCount          int
+	DaysCompared      int
+	DayGapCount       int
 	RelationsCompared int
 	EdgeGapCount      int
 	RelationsDeferred int
@@ -13139,15 +13248,18 @@ type GraphCountCheckFinishedFields struct {
 
 // NewGraphCountCheckFinishedFields is the generated constructor for GraphCountCheckFinishedFields -- every
 // field GraphCountCheckFinished.Fields declares is a required parameter.
-func NewGraphCountCheckFinishedFields(orgIDHash string, instance string, pass int, outcome string, sourcesChecked int, kindsCompared int, gapCount int, relationsCompared int, edgeGapCount int, relationsDeferred int, errorCount int, durationMs int) GraphCountCheckFinishedFields {
+func NewGraphCountCheckFinishedFields(orgIDHash string, instance string, pass int, outcome string, sourcesChecked int, sourcesUnknown int, kindsCompared int, gapCount int, daysCompared int, dayGapCount int, relationsCompared int, edgeGapCount int, relationsDeferred int, errorCount int, durationMs int) GraphCountCheckFinishedFields {
 	return GraphCountCheckFinishedFields{
 		OrgIDHash:         orgIDHash,
 		Instance:          instance,
 		Pass:              pass,
 		Outcome:           outcome,
 		SourcesChecked:    sourcesChecked,
+		SourcesUnknown:    sourcesUnknown,
 		KindsCompared:     kindsCompared,
 		GapCount:          gapCount,
+		DaysCompared:      daysCompared,
+		DayGapCount:       dayGapCount,
 		RelationsCompared: relationsCompared,
 		EdgeGapCount:      edgeGapCount,
 		RelationsDeferred: relationsDeferred,
@@ -13175,8 +13287,11 @@ func (f GraphCountCheckFinishedFields) SlogArgs() []any {
 		"pass", f.Pass,
 		"outcome", contextfabric.SanitizeLogAttr(f.Outcome),
 		"sources_checked", f.SourcesChecked,
+		"sources_unknown", f.SourcesUnknown,
 		"kinds_compared", f.KindsCompared,
 		"gap_count", f.GapCount,
+		"days_compared", f.DaysCompared,
+		"day_gap_count", f.DayGapCount,
 		"relations_compared", f.RelationsCompared,
 		"edge_gap_count", f.EdgeGapCount,
 		"relations_deferred", f.RelationsDeferred,
