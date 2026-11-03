@@ -2530,6 +2530,91 @@ has no PSA implication for this chart's own namespace. See
 security context this workload does apply (dropped capabilities, no
 privilege escalation, `RuntimeDefault` seccomp) despite running as root.
 
+### Workload bindings: add, move and disable
+
+`acr.workload_bindings` maps one Kubernetes identity to one organization, one role and a set of repository scopes.
+The token exchange looks the row up by the exact tuple of trust domain, namespace, ServiceAccount name, ServiceAccount UID
+and, when more than one organization is bound, an organization selector
+(`internal/auth/workload_grant_resolver.go`). The table has no HTTP route and no `acr-api` or `acr-migrate` verb by design
+(`internal/storage/postgres/workload_bindings.go`, the type comment). An operator changes it with `psql`. A workload with no row gets no
+token until an operator adds one.
+
+Who writes. The runtime role holds `SELECT` only on the table (`internal/dbacl/runtime_grants.go`). The purge role holds `SELECT` and
+`DELETE` for the organization purge. The migration role owns the table (`deploy/compose/acr-db-init.sh`, the `ALTER TABLE acr.%I OWNER TO` block).
+Run the statements below as the migration role (the login in `ACR_POSTGRES_MIGRATION_DSN`), never as the runtime role. Do not print the DSN.
+
+| Column | Meaning |
+| --- | --- |
+| `binding_id` | Text primary key. Credentials issued for the binding carry it. Choose a stable name and never reuse it. |
+| `org_id` | The organization the binding serves (UUID). |
+| `trust_domain` | The deployment trust domain (`ACR_WORKLOAD_TRUST_DOMAIN`). |
+| `namespace` | The Kubernetes namespace of the ServiceAccount. |
+| `service_account_name` | The ServiceAccount name. |
+| `service_account_uid` | The ServiceAccount UID. A recreated ServiceAccount has a new UID. |
+| `role` | `read`, `ops` or `reconcile`. The scopes of each role are in `RoleScopes` (`internal/auth/workload_scopes.go`). |
+| `repository_scopes` | A JSON array of repository scopes. It must be an array. |
+| `created_at` | Required timestamp. |
+| `created_by` | Required text: who made the row. |
+| `disabled_at` | Null means the binding is active. A time means the resolver treats the row as not found. |
+
+The identity (trust domain, namespace, name, UID) and the organization are unique together
+(`uq_acr_workload_bindings_identity_org`, migration 0070). A row is never deleted while a credential row names it
+(the foreign key is `ON DELETE RESTRICT`, migration 0030). Disable a row; do not delete it.
+
+Add a binding. Read the UID first with `kubectl get serviceaccount <name> -n <namespace> -o jsonpath='{.metadata.uid}'`
+(the UID is not a secret). Then:
+
+```sql
+INSERT INTO acr.workload_bindings
+  (binding_id, org_id, trust_domain, namespace, service_account_name, service_account_uid,
+   role, repository_scopes, created_at, created_by)
+VALUES
+  ('<binding id>', '<org uuid>', '<trust domain>', '<namespace>', '<service account>', '<uid>',
+   'read', '[]'::jsonb, now(), '<operator>');
+```
+
+Move a binding (a ServiceAccount was recreated, or the workload moved to another namespace). A move is a disable and an add, in one
+transaction, so that the identity is never bound twice and never unbound for longer than the commit:
+
+```sql
+BEGIN;
+UPDATE acr.workload_bindings SET disabled_at = now()
+  WHERE binding_id = '<old binding id>' AND disabled_at IS NULL;
+INSERT INTO acr.workload_bindings
+  (binding_id, org_id, trust_domain, namespace, service_account_name, service_account_uid,
+   role, repository_scopes, created_at, created_by)
+VALUES
+  ('<new binding id>', '<org uuid>', '<trust domain>', '<new namespace>', '<service account>', '<new uid>',
+   '<role>', '<repository scopes json>'::jsonb, now(), '<operator>');
+COMMIT;
+```
+
+Disable a binding. This stops new issuance for the identity:
+
+```sql
+UPDATE acr.workload_bindings SET disabled_at = now() WHERE binding_id = '<binding id>' AND disabled_at IS NULL;
+```
+
+Credentials the binding already issued stay valid until they expire (300 seconds,
+`authverify.WorkloadAccessTokenLifetime`). To end one at once, revoke it with `acr-api credentials revoke` (see the lost token procedure above).
+
+Check the result with a read, and expect one row per binding:
+
+```sql
+SELECT binding_id, org_id, role, disabled_at FROM acr.workload_bindings
+  WHERE namespace = '<namespace>' AND service_account_name = '<service account>' ORDER BY org_id;
+```
+
+Recovery.
+
+- A wrong row (wrong role, wrong scopes, wrong organization): disable it and add the right row under a new `binding_id`.
+- A disabled row that should be active again: `UPDATE acr.workload_bindings SET disabled_at = NULL WHERE binding_id = '<binding id>';`.
+  An add with the same identity and organization fails on the unique key while the disabled row exists, so clear `disabled_at` instead.
+- A recreated ServiceAccount: the old UID no longer matches, so the exchange finds no row. Move the binding with the new UID.
+- A transaction that fails stops at the first error and leaves the old row as it was. Read the row, then run it again.
+- Two active rows for one identity and different organizations need an organization selector on the exchange request;
+  without it the exchange is refused (`ErrWorkloadOrgSelectorRequired`).
+
 ## Backup and restore
 
 ACR PostgreSQL is operational state; ClickHouse evidence is read-only and is
