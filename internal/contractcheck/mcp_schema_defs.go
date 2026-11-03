@@ -110,7 +110,8 @@ var contextFabricCommonDefsRewrites = map[string]string{
 	// CHAOS-4637: ClaimedFact.table's own new $defs entry.
 	"#/$defs/ClaimedFactTable": "#/$defs/context_fabric_common.v1/$defs/ClaimedFactTable",
 	// CHAOS-12160: ClaimedFact.investment_mix's own new $defs entry.
-	"#/$defs/ClaimedInvestmentMix": "#/$defs/context_fabric_common.v1/$defs/ClaimedInvestmentMix",
+	"#/$defs/ClaimedInvestmentMix":      "#/$defs/context_fabric_common.v1/$defs/ClaimedInvestmentMix",
+	"#/$defs/ClaimedCompletionForecast": "#/$defs/context_fabric_common.v1/$defs/ClaimedCompletionForecast",
 	// CHAOS-4415: render_shapes' own eight new common $defs entries.
 	"#/$defs/RenderShape":        "#/$defs/context_fabric_common.v1/$defs/RenderShape",
 	"#/$defs/RenderSeries":       "#/$defs/context_fabric_common.v1/$defs/RenderSeries",
@@ -241,7 +242,8 @@ var contextFabricProjectionDefsRewrites = map[string]string{
 	// CHAOS-4637: ProjectedFact.table's own new $defs entry.
 	"#/$defs/ProjectedFactTable": "#/$defs/context_fabric_answer_projection.v1/$defs/ProjectedFactTable",
 	// CHAOS-12160: ProjectedFact.investment_mix's own new $defs entry.
-	"#/$defs/ProjectedInvestmentMix": "#/$defs/context_fabric_answer_projection.v1/$defs/ProjectedInvestmentMix",
+	"#/$defs/ProjectedInvestmentMix":      "#/$defs/context_fabric_answer_projection.v1/$defs/ProjectedInvestmentMix",
+	"#/$defs/ProjectedCompletionForecast": "#/$defs/context_fabric_answer_projection.v1/$defs/ProjectedCompletionForecast",
 	// CHAOS-4415: render_shapes' own eight new projection-local $defs
 	// entries -- the projection embeds the SAME shapes common.v1 declares
 	// (see answer_projection_closure_test.go's pinned reused-shapes set),
