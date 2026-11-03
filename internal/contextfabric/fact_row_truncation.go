@@ -155,6 +155,14 @@ func truncateClaimedFactRows(claims []ClaimedFact, perTable int) (truncated []Cl
 			truncated[index].Rows, truncated[index].Table = nil, nil
 			rules.add(factRowCutDistributionWithheld)
 		}
+		// A team's repository_theme_breakdown is withheld whole too (CHAOS-12582,
+		// lead ruling): the prefix cut can take every link of one theme while
+		// every other theme still adds up, and no reader, chart or check could
+		// tell the part from the team's whole effort.
+		if len(truncated[index].Rows) > perTable && withheldWholeRepositoryFlow(truncated[index].Table) {
+			truncated[index].Rows, truncated[index].Table = nil, nil
+			rules.add(factRowCutRepositoryFlowWithheld)
+		}
 		if len(truncated[index].Rows) > perTable {
 			var rule factRowCutRule
 			truncated[index].Rows, rule = keepFactTableRows(truncated[index].Rows, truncated[index].Table, perTable)
@@ -168,6 +176,13 @@ func truncateClaimedFactRows(claims []ClaimedFact, perTable int) (truncated []Cl
 		served += len(truncated[index].Rows) + len(truncated[index].TimeSeriesRows)
 	}
 	return truncated, served, rules
+}
+
+// withheldWholeRepositoryFlow is a table the cut withholds whole: the team's
+// repository_theme_breakdown (CHAOS-12582), by its declared name: the field the
+// sankey contract names (ContextFabricRenderRepositoryFlowTableField).
+func withheldWholeRepositoryFlow(table *contractsv1.ContextFabricClaimedFactTable) bool {
+	return table != nil && table.Field == contractsv1.ContextFabricRenderRepositoryFlowTableField
 }
 
 // factRowCutRule is WHICH rule cut one table (codex r2, P1: the served rows
@@ -190,6 +205,9 @@ const (
 	// factRowCutDistributionWithheld: a distribution over the cap, withheld
 	// whole rather than cut (CHAOS-12607).
 	factRowCutDistributionWithheld
+	// factRowCutRepositoryFlowWithheld: a repository_theme_breakdown over the
+	// cap, withheld whole rather than cut (CHAOS-12582).
+	factRowCutRepositoryFlowWithheld
 )
 
 // factRowCutRules counts the truncated tables by the rule that cut them.
@@ -203,6 +221,9 @@ type factRowCutRules struct {
 	RankingUnscored int
 	// DistributionWithheld counts distributions withheld whole.
 	DistributionWithheld int
+	// RepositoryFlowWithheld counts repository_theme_breakdown tables withheld
+	// whole (CHAOS-12582).
+	RepositoryFlowWithheld int
 }
 
 func (r *factRowCutRules) add(rule factRowCutRule) {
@@ -218,6 +239,8 @@ func (r *factRowCutRules) add(rule factRowCutRule) {
 		r.RankingUnscored++
 	case factRowCutDistributionWithheld:
 		r.DistributionWithheld++
+	case factRowCutRepositoryFlowWithheld:
+		r.RepositoryFlowWithheld++
 	default:
 		r.SourcePrefix++
 	}
@@ -417,12 +440,13 @@ func applyFactRowTruncation(result InvestigationResult, perTable, declared int) 
 	withheldRows := 0
 	for index := range claims {
 		if result.ClaimedFacts[index].Rows != nil && claims[index].Rows == nil && result.ClaimedFacts[index].Table != nil &&
-			result.ClaimedFacts[index].Table.Shape == contractsv1.ContextFabricFactTableShapeDistribution {
+			(result.ClaimedFacts[index].Table.Shape == contractsv1.ContextFabricFactTableShapeDistribution ||
+				withheldWholeRepositoryFlow(result.ClaimedFacts[index].Table)) {
 			withheldRows += len(result.ClaimedFacts[index].Rows)
 		}
 	}
 	var sentences []string
-	if tables.Total > tables.DistributionWithheld {
+	if tables.Total > tables.DistributionWithheld+tables.RepositoryFlowWithheld {
 		sentence, ok := contractsv1.ContextFabricFactRowTruncationLimitation(served, declared-withheldRows, perTable)
 		if !ok {
 			return result, served, tables, false
@@ -431,6 +455,9 @@ func applyFactRowTruncation(result InvestigationResult, perTable, declared int) 
 	}
 	if tables.DistributionWithheld > 0 {
 		sentences = append(sentences, contractsv1.ContextFabricDistributionWithheldLimitation)
+	}
+	if tables.RepositoryFlowWithheld > 0 {
+		sentences = append(sentences, contractsv1.ContextFabricRepositoryFlowWithheldLimitation)
 	}
 	result.ClaimedFacts = claims
 	var evicted int
@@ -591,8 +618,11 @@ type FactRowTruncationEvent struct {
 	// TablesDistributionWithheld counts distributions the cap withheld
 	// whole (CHAOS-12607).
 	TablesDistributionWithheld int
-	Served                     bool
-	Declined                   FactRowTruncationDeclined
+	// TablesRepositoryFlowWithheld counts repository_theme_breakdown tables
+	// the cap withheld whole (CHAOS-12582).
+	TablesRepositoryFlowWithheld int
+	Served                       bool
+	Declined                     FactRowTruncationDeclined
 }
 
 // recordFactRowTruncation emits one lever application. A lever that never ran
@@ -602,27 +632,28 @@ func (e *Engine) recordFactRowTruncation(ctx context.Context, principal storage.
 		return
 	}
 	e.telemetry.RecordFactRowTruncation(ctx, principal, FactRowTruncationEvent{
-		Family:                     plan.Family,
-		Stage:                      contractsv1.ContextFabricPlanNarrowingAssembledResult,
-		Pass:                       pass,
-		Overrun:                    before.Overrun,
-		MaxSerializedBytes:         budget.MaxSerializedBytes,
-		BytesBefore:                before.Measurement.Bytes,
-		BytesAfter:                 attempt.Measured.Measurement.Bytes,
-		RowBytes:                   attempt.RowBytes,
-		RowsDominate:               attempt.RowsDominate,
-		RowsBefore:                 attempt.RowsDeclared,
-		RowsAfter:                  attempt.RowsServed,
-		PerTable:                   attempt.PerTable,
-		TablesTruncated:            attempt.Tables.Total,
-		TablesNewestDays:           attempt.Tables.NewestDays,
-		TablesHighestRank:          attempt.Tables.HighestRank,
-		TablesSourcePrefix:         attempt.Tables.SourcePrefix,
-		TablesSeriesUndated:        attempt.Tables.SeriesUndated,
-		TablesRankingUnscored:      attempt.Tables.RankingUnscored,
-		TablesDistributionWithheld: attempt.Tables.DistributionWithheld,
-		OutcomeRowsEvicted:         outcomeRowsEvicted(attempt.Result.Limitations),
-		Served:                     attempt.Served,
-		Declined:                   attempt.Declined,
+		Family:                       plan.Family,
+		Stage:                        contractsv1.ContextFabricPlanNarrowingAssembledResult,
+		Pass:                         pass,
+		Overrun:                      before.Overrun,
+		MaxSerializedBytes:           budget.MaxSerializedBytes,
+		BytesBefore:                  before.Measurement.Bytes,
+		BytesAfter:                   attempt.Measured.Measurement.Bytes,
+		RowBytes:                     attempt.RowBytes,
+		RowsDominate:                 attempt.RowsDominate,
+		RowsBefore:                   attempt.RowsDeclared,
+		RowsAfter:                    attempt.RowsServed,
+		PerTable:                     attempt.PerTable,
+		TablesTruncated:              attempt.Tables.Total,
+		TablesNewestDays:             attempt.Tables.NewestDays,
+		TablesHighestRank:            attempt.Tables.HighestRank,
+		TablesSourcePrefix:           attempt.Tables.SourcePrefix,
+		TablesSeriesUndated:          attempt.Tables.SeriesUndated,
+		TablesRankingUnscored:        attempt.Tables.RankingUnscored,
+		TablesDistributionWithheld:   attempt.Tables.DistributionWithheld,
+		TablesRepositoryFlowWithheld: attempt.Tables.RepositoryFlowWithheld,
+		OutcomeRowsEvicted:           outcomeRowsEvicted(attempt.Result.Limitations),
+		Served:                       attempt.Served,
+		Declined:                     attempt.Declined,
 	})
 }
