@@ -448,6 +448,8 @@ func goVarName(e Event) string {
 		return "GraphCountCheckFinished"
 	case PlanOperandReads.ID:
 		return "PlanOperandReads"
+	case PlanSubjectObligationReads.ID:
+		return "PlanSubjectObligationReads"
 	case WindowClassification.ID:
 		return "WindowClassification"
 	case InferredWindowGate.ID:

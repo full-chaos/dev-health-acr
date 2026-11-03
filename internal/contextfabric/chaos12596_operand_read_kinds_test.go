@@ -49,14 +49,17 @@ func TestOperandReadRowKindsJoinThePlan(t *testing.T) {
 	}
 }
 
-// Only a served operand read row widens the plan: a subject-role read row, a
+// Only a served operand read row widens the plan by its serving kinds: a
+// subject-role read row whose quantifier does not require every kind, a
 // member-role read row, an unavailable operand row and a computed operand row
-// add nothing.
+// add nothing. (A subject-role row whose quantifier requires every kind it
+// names widens the plan under CHAOS-12710, pinned by
+// TestOnlyRequiredKindsOfACommittedSubjectWidenThePlan.)
 func TestOnlyServedOperandReadRowsWidenThePlan(t *testing.T) {
 	t.Parallel()
 	definition, _ := LookupQuestionFamily(QuestionFamilyExplicitComparison)
 	base := planFactKinds(definition, InterpretedQuestion{}, nil)
-	subjectRow := operandStateRow(SubjectRepository, FactMetrics)
+	subjectRow := operandStateRow(SubjectRepository, FactHealth, FactIdentity, FactMetrics)
 	subjectRow.Role = SubjectRoleSubject
 	memberRow := operandStateRow(SubjectRepository, FactMetrics)
 	memberRow.Role = SubjectRoleMember
