@@ -99,6 +99,12 @@ type readEvidence struct {
 	//
 	Truncated int
 	Failed    int
+	// NotApplicable is how many of the Failed kinds came back
+	// `not_applicable` from their provider (CHAOS-12821). They stay counted
+	// in Failed, so every arm that reads Failed is unchanged; this count
+	// exists only for the one arm that publishes a row whose EVERY declared
+	// kind does not apply to the subject as `not_applicable`.
+	NotApplicable int
 	// TruncatedKinds are WHICH kinds counted Truncated above, in the
 	// requirement's own declared order -- ServedKinds' twin for the one
 	// other state that CAN return real facts.
@@ -338,6 +344,9 @@ func evaluateReadRequirement(requirement contractsv1.ContextFabricPlanRequiremen
 			}
 		default:
 			evidence.Failed++
+			if state == SourceNotApplicable {
+				evidence.NotApplicable++
+			}
 		}
 		if severity := sourceStateSeverity(state); severity > worst {
 			worst = severity
@@ -1015,6 +1024,49 @@ func readRequirementOutcomeRow(
 			CauseObserved: false,
 			Served:        0,
 			Declared:      threshold,
+		}, true, cover
+	}
+
+	// EVERY DECLARED KIND DOES NOT APPLY (CHAOS-12821), and the provider said
+	// so: `not_applicable` is "not a measured zero", and the fact layer does not
+	// degrade on it (factStateDegrades). Counting it as a failure here re-decided
+	// that one layer up -- the defect class this file already closed for the
+	// prune and the truncation -- and published a cell that does not apply to
+	// the subject as a cell that is missing (North Star check 12).
+	//
+	// FOUR CONJUNCTS, each one guarding a false `not_applicable`, which is
+	// LOSSLESS and would let a row that lost something read as complete:
+	//
+	//   - single-subject scope only. A distributive row's kind state is folded
+	//     over many subjects, so one kind's `not_applicable` does not say it
+	//     applies to none of them; those rows keep today's arms.
+	//   - EVERY declared kind observed. A kind not read (or pruned) leaves the
+	//     row's standard open, and a not-applicable kind beside it says nothing
+	//     about the others. The arm sits BELOW the Observed == 0 arms, so a row
+	//     with nothing observed (or no declared kind at all) never reaches it.
+	//   - every observed kind `not_applicable`. Any kind that served, narrowed,
+	//     truncated or failed another way takes today's arms.
+	//   - the cause is the provider's report. A carried detail naming any other
+	//     code is a different account of the same kind, and is not overridden.
+	//
+	// Served and Declared are 0/0: nothing was asked of a cell that does not
+	// apply, as on the planning-time not_applicable row. CauseObserved is true:
+	// the provider returned the state.
+	if !distributiveScope(requirement.Scope) &&
+		evidence.Observed == len(requirement.FactKinds) &&
+		evidence.NotApplicable == evidence.Observed &&
+		evidence.Cause == contractsv1.ContextFabricCoverageDetailFactProviderReported {
+		cover.Outcome = contractsv1.ContextFabricRequirementNotApplicable
+		return RequirementOutcomeRow{
+			Stage:         contractsv1.ContextFabricOutcomeStageAssembledResult,
+			Requirement:   requirement.Requirement,
+			Obligation:    requirement.Obligation,
+			Outcome:       contractsv1.ContextFabricRequirementNotApplicable,
+			Impact:        contractsv1.ContextFabricAnswerImpactNone,
+			CauseCoverage: contractsv1.ContextFabricCoverageDetailFactProviderReported,
+			CauseObserved: true,
+			Served:        0,
+			Declared:      0,
 		}, true, cover
 	}
 
