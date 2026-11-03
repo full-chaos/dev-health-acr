@@ -460,7 +460,8 @@ func AuthorizedEdgeBasis(principal storage.Principal, requested contextfabric.Re
 // never on the issue's own repository. The issue still meets the caller's
 // grants and every other part of the request. Every reader that admits an
 // issue through a link (the tree walks, the scoped work-item census and its
-// cross-check, the census commit) uses this one predicate.
+// cross-check, the census commit, and a work item hint under a requested
+// repository scope, CHAOS-12706) uses this one predicate.
 func AuthorizedThroughLink(principal storage.Principal, requested contextfabric.RequestedScope, attributes map[string]interface{}) bool {
 	return AuthorizedAttributes(principal, issueScopeOfLink(requested), attributes)
 }
