@@ -1023,6 +1023,12 @@ carries the shape. Confirm web's and ask-dev's pins first, then set the flag.
 `comparison_side_by_side` render rule, with the same order: pins first, then the
 flag. With the flag off, both doors that serve a result remove a stored table.
 
+**The landscape quadrant.** `ACR_CONTEXT_FABRIC_LANDSCAPE_QUADRANT_ENABLED`
+(chart: `contextFabric.landscapeQuadrantEnabled`, default `false`) turns on the
+`landscape_position` render rule, with the same order: pins first, then the
+flag. With the flag off, both doors that serve a result remove a stored
+quadrant and its served line.
+
 **The roll step "vocabulary labels on".** Confirm that the deployed pins of
 ask-dev, web and every MCP client carry `vocabulary_labels`. Then set the flag
 for `acr-api` and roll it. To turn it off, unset the flag and roll: the next read
