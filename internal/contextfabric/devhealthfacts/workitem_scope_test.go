@@ -37,7 +37,7 @@ func TestWorkItemRepositoryAuthorizationPreservesACRRequestSemantics(t *testing.
 		},
 		{
 			name:            "principal exact and owner selectors are normalized",
-			principalScopes: []string{" ACME/TOOLS ", "Acme/*", "acme/tools", "bad/no/slash"},
+			principalScopes: []string{" ACME/TOOLS ", "Acme/*", "acme/tools", "bad/../slash"},
 			requested:       []string{" ACME/TOOLS ", "Acme/*", "not a selector"},
 			wantGranted: readers.RepositorySelectorSet{
 				ExactSlugs: []string{"acme/tools"},
@@ -67,6 +67,12 @@ func TestWorkItemRepositoryAuthorizationPreservesACRRequestSemantics(t *testing.
 			requested:       []string{"not a selector", "acme/", "/*"},
 			wantGranted:     readers.RepositorySelectorSet{ExactSlugs: []string{"acme/tools"}},
 			wantRequested:   &readers.RepositorySelectorSet{},
+		},
+		{
+			name:            "a nested repository key is an exact selector, lower-cased",
+			principalScopes: []string{" ACME/Grp/Sub/Web ", "bad/../slash"},
+			requested:       nil,
+			wantGranted:     readers.RepositorySelectorSet{ExactSlugs: []string{"acme/grp/sub/web"}},
 		},
 		{
 			name:            "invalid nonempty grant list fails closed",

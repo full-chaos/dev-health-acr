@@ -168,7 +168,7 @@ func TestChaos5405_TheAuthorizationKeyDecidesTheComparisonNotTheValueShape(t *te
 		// A malformed entry must still not satisfy the wildcard by prefix
 		// alone; that rule predates the kind parameter and survives it.
 		malformed := map[string]interface{}{
-			authorizationRepositoriesAttr: []string{"acme/not/real"},
+			authorizationRepositoriesAttr: []string{"acme/../real"},
 		}
 		if AuthorizedAttributes(principal,
 			contextfabric.RequestedScope{RepositorySlugs: []string{"acme/*"}}, malformed) {

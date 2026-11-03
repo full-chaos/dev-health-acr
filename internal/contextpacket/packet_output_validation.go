@@ -4,10 +4,10 @@ import (
 	"fmt"
 	"net/url"
 	"slices"
-	"strings"
 	"unicode/utf8"
 
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
+	"github.com/full-chaos/dev-health-acr/internal/reposlug"
 )
 
 func validatePacketOutputBounds(packet contractsv1.ContextPacket) error {
@@ -144,10 +144,7 @@ func optionalPacketURI(value string, maximum int) bool {
 	return err == nil && parsed.Scheme != "" && packetString(value, 0, maximum)
 }
 
-func validSlug(value string) bool {
-	parts := strings.Split(value, "/")
-	return len(parts) == 2 && parts[0] != "" && parts[1] != "" && !strings.ContainsAny(value, " \t\n\r") && packetString(value, 0, 512)
-}
+func validSlug(value string) bool { return reposlug.ValidSlugFolded(value) }
 
 func hexString(value string, minimum, maximum int) bool {
 	if !packetString(value, minimum, maximum) {
