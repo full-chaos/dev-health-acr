@@ -47,13 +47,21 @@ type subjectObligationTurn struct {
 // kind reports healthState, so a test can make the team's health missing.
 func runSubjectObligationTurn(t *testing.T, team SubjectRef, healthState SourceState) subjectObligationTurn {
 	t.Helper()
+	return runSubjectObligationTurnWith(t, team, healthState, []FactRequirement{{Kind: FactWorkload}})
+}
+
+// runSubjectObligationTurnWith is runSubjectObligationTurn with the model's
+// fact requirements given (CHAOS-12821: nil is the askdev-1 ML team shape,
+// where health is the only kind the turn plans).
+func runSubjectObligationTurnWith(t *testing.T, team SubjectRef, healthState SourceState, requirements []FactRequirement) subjectObligationTurn {
+	t.Helper()
 	turn := subjectObligationTurn{telemetry: &recordingTelemetry{}}
 	frame := frameWith([]InvestigationGoal{GoalAssessState}, namedExpression(SubjectTeam), TemporalIntentCurrent, nil)
 	engine, err := NewEngine(EngineDependencies{
 		Interpreter: familyInterpreter{
 			interpreted: InterpretedQuestion{
 				Shape: ShapeOpen, RequestedJudgment: "status",
-				TimeContext: TimeContext{Axis: TemporalCurrent}, FactRequirements: []FactRequirement{{Kind: FactWorkload}},
+				TimeContext: TimeContext{Axis: TemporalCurrent}, FactRequirements: requirements,
 			},
 			outcome: QuestionFamilyOutcome{
 				Frame: &frame, FrameObligations: frame.Obligations,

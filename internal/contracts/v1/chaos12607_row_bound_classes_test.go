@@ -153,20 +153,35 @@ func TestThePublishedClaimedFactSchemaHoldsEachRowBound(t *testing.T) {
 		}
 		return report.Valid()
 	}
-	shapes := map[ContextFabricClaimedFactRowBoundClass]ContextFabricFactTableShape{
-		ContextFabricClaimedFactRowBoundDistribution: ContextFabricFactTableShapeDistribution,
+	// One example declaration per class: the table its rows travel with.
+	examples := map[ContextFabricClaimedFactRowBoundClass]func(rows int) ContextFabricClaimedFact{
+		ContextFabricClaimedFactRowBoundDistribution: func(rows int) ContextFabricClaimedFact {
+			return claimedFactWithTable(ContextFabricFactTableShapeDistribution, distributionRows(rows))
+		},
+		// CHAOS-12580: a breakdown keyed by (repository, theme).
+		ContextFabricClaimedFactRowBoundRepositoryFlow: func(rows int) ContextFabricClaimedFact {
+			fact := claimedFactWithTable(ContextFabricFactTableShapeBreakdown, distributionRows(rows))
+			fact.Table.Key = []string{ContextFabricRenderRepositoryField, ContextFabricRenderThemeField}
+			return fact
+		},
 	}
 	for class, rows := range ContextFabricClaimedFactRowBoundClasses() {
-		shape, ok := shapes[class]
+		example, ok := examples[class]
 		if !ok {
 			t.Fatalf("row bound class %q has no example declaration here: add one", class)
 		}
-		if !valid(claimedFactWithTable(shape, distributionRows(rows))) {
+		if !valid(example(rows)) {
 			t.Errorf("class %s: %d rows refused by the schema", class, rows)
 		}
-		if valid(claimedFactWithTable(shape, distributionRows(rows+1))) {
+		if valid(example(rows + 1)) {
 			t.Errorf("class %s: %d rows admitted by the schema", class, rows+1)
 		}
+	}
+	// A breakdown keyed otherwise keeps the default cap.
+	other := claimedFactWithTable(ContextFabricFactTableShapeBreakdown, distributionRows(ContextFabricClaimedFactMaxRows+1))
+	other.Table.Key = []string{ContextFabricRenderThemeField, ContextFabricRenderRepositoryField}
+	if valid(other) {
+		t.Errorf("a breakdown keyed (theme, repository) at %d rows admitted by the schema", ContextFabricClaimedFactMaxRows+1)
 	}
 	if !valid(claimedFactWithTable(ContextFabricFactTableShapeBreakdown, distributionRows(ContextFabricClaimedFactMaxRows))) {
 		t.Errorf("a breakdown at %d rows refused by the schema", ContextFabricClaimedFactMaxRows)

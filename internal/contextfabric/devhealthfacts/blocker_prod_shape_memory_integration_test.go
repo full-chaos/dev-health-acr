@@ -2,11 +2,15 @@ package devhealthfacts_test
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"maps"
 	"reflect"
+	"sort"
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/ClickHouse/clickhouse-go/v2"
 	clickhousedriver "github.com/ClickHouse/clickhouse-go/v2/lib/driver"
@@ -344,6 +348,15 @@ func TestTeamBlockerStatementsOnTheProductionShapeOnRealClickHouse(t *testing.T)
 		teamIDs = append(teamIDs, fmt.Sprintf("team-%d", team))
 	}
 	provider := findProvider(t, devhealthfacts.NewProviders(query), contextfabric.FactBlockers)
+	// CHAOS-12689: oldest_blocked_age_days is (now - oldest start) in whole
+	// days, and the seed's starts sit at 00:00 UTC, so a run across 00:00 UTC
+	// moved that field between the reads this test compares (main run
+	// 41546651897, 23:52 to 00:06 UTC). Every read shares one pinned now; the
+	// clock check after the block-size loop proves the age is the only field
+	// that follows it.
+	pinnedNow := time.Now().UTC()
+	restoreClock := devhealthfacts.SetClockForTest(func() time.Time { return pinnedNow })
+	defer restoreClock()
 	read := func(principal storage.Principal) contextfabric.FactProviderResult {
 		t.Helper()
 		result, err := provider.ReadFacts(ctx, principal, contextfabric.FactQuery{
@@ -398,7 +411,7 @@ func TestTeamBlockerStatementsOnTheProductionShapeOnRealClickHouse(t *testing.T)
 	}
 	for index := range inStatementProjects.Facts {
 		if !reflect.DeepEqual(inStatementProjects.Facts[index].Fields, restrictedProjectsResult.Facts[index].Fields) {
-			t.Errorf("restricted projects, authorization read once vs inside each statement: fact %d differs: %+v vs %+v", index, restrictedProjectsResult.Facts[index].Fields, inStatementProjects.Facts[index].Fields)
+			t.Errorf("restricted projects, authorization read once vs inside each statement: fact %d (%s) differs: %s", index, restrictedProjectsResult.Facts[index].Subject.CanonicalID, blockerFieldDiff(restrictedProjectsResult.Facts[index].Fields, inStatementProjects.Facts[index].Fields))
 		}
 	}
 	for _, pair := range []struct {
@@ -412,7 +425,7 @@ func TestTeamBlockerStatementsOnTheProductionShapeOnRealClickHouse(t *testing.T)
 			for _, name := range []string{"blocked_work_items_current", "blocker_dependencies_current", "blocker_dependencies_excluded_by_status_current", "blocker_dependencies_writer_unresolved_current", "project_blocked_work_items_current", "oldest_blocked_age_days"} {
 				a, b := pair.got.Facts[index].Fields[name], pair.want.Facts[index].Fields[name]
 				if (a.Integer == nil) != (b.Integer == nil) || (a.Integer != nil && *a.Integer != *b.Integer) {
-					t.Errorf("%s: team fact %d field %s differs: %+v vs %+v", pair.label, index, name, a, b)
+					t.Errorf("%s: team fact %d field %s differs: %s vs %s", pair.label, index, name, blockerFactValue(a, true), blockerFactValue(b, true))
 				}
 			}
 		}
@@ -450,7 +463,9 @@ func TestTeamBlockerStatementsOnTheProductionShapeOnRealClickHouse(t *testing.T)
 			}
 			for index := range got.Facts {
 				if !reflect.DeepEqual(got.Facts[index].Fields, caller.want.Facts[index].Fields) {
-					t.Errorf("block size %d, %s: fact %d differs from the default block size: %+v vs %+v", rows, caller.label, index, got.Facts[index].Fields, caller.want.Facts[index].Fields)
+					// CHAOS-12689: name the subject and each field that moved, by
+					// value; a pointer says nothing about which value differs.
+					t.Errorf("block size %d, %s: fact %d (%s %s) differs from the default block size: %s", rows, caller.label, index, got.Facts[index].Subject.Kind, got.Facts[index].Subject.CanonicalID, blockerFieldDiff(got.Facts[index].Fields, caller.want.Facts[index].Fields))
 				}
 			}
 		}
@@ -464,6 +479,45 @@ func TestTeamBlockerStatementsOnTheProductionShapeOnRealClickHouse(t *testing.T)
 			}
 		}
 		restoreBlock()
+	}
+
+	// CHAOS-12689, the mechanism: one day later on the pinned clock, every
+	// field of every team fact reads the same, except oldest_blocked_age_days,
+	// which is exactly one day more wherever it is served. A comparison above
+	// whose reads did not share one now, or a field that starts to follow the
+	// clock, fails here at any hour, not only across 00:00 UTC.
+	for _, caller := range []struct {
+		label     string
+		principal storage.Principal
+		want      contextfabric.FactProviderResult
+	}{{"org-wide", orgWide, orgWideResult}, {"restricted", restricted, restrictedResult}} {
+		restoreDay := devhealthfacts.SetClockForTest(func() time.Time { return pinnedNow.Add(24 * time.Hour) })
+		later := read(caller.principal)
+		restoreDay()
+		if len(later.Facts) != len(caller.want.Facts) {
+			t.Fatalf("a day later, %s: %d facts, want %d", caller.label, len(later.Facts), len(caller.want.Facts))
+		}
+		aged := 0
+		for index := range later.Facts {
+			got, want := maps.Clone(later.Facts[index].Fields), maps.Clone(caller.want.Facts[index].Fields)
+			gotAge, gotServed := got[blockerAgeField]
+			wantAge, wantServed := want[blockerAgeField]
+			switch {
+			case !gotServed && !wantServed:
+			case gotServed && wantServed && gotAge.Integer != nil && wantAge.Integer != nil && *gotAge.Integer == *wantAge.Integer+1:
+				aged++
+			default:
+				t.Errorf("a day later, %s: fact %d (%s) %s is %s, want one day more than %s", caller.label, index, later.Facts[index].Subject.CanonicalID, blockerAgeField, blockerFactValue(gotAge, gotServed), blockerFactValue(wantAge, wantServed))
+			}
+			delete(got, blockerAgeField)
+			delete(want, blockerAgeField)
+			if !reflect.DeepEqual(got, want) {
+				t.Errorf("a day later, %s: fact %d (%s) differs beyond its age: %s", caller.label, index, later.Facts[index].Subject.CanonicalID, blockerFieldDiff(got, want))
+			}
+		}
+		if aged == 0 {
+			t.Fatalf("a day later, %s: no fact served %s, so the clock check measured nothing", caller.label, blockerAgeField)
+		}
 	}
 
 	// Ceilings: the HIGHEST peak of each statement over three warm reads, as
@@ -762,4 +816,47 @@ func TestOrganizationWideAuthorizationEqualsTheLibraryRelationOnRealClickHouse(t
 	if equal(ids(restricted, nil, "fast"), ids(restricted, nil, "library")) {
 		t.Fatal("the organization-wide shape forced on a restricted scope authorizes the same work items as the library: the differential cannot tell a wrongly fired fast path")
 	}
+}
+
+// blockerAgeField is the one team blocker field that follows the clock.
+const blockerAgeField = "oldest_blocked_age_days"
+
+// blockerFieldDiff renders, by value, every field that differs between two
+// facts' fields (got, then want), sorted by name (CHAOS-12689).
+func blockerFieldDiff(got, want map[string]contextfabric.FactValue) string {
+	names := map[string]bool{}
+	for name := range got {
+		names[name] = true
+	}
+	for name := range want {
+		names[name] = true
+	}
+	sorted := make([]string, 0, len(names))
+	for name := range names {
+		sorted = append(sorted, name)
+	}
+	sort.Strings(sorted)
+	var out []string
+	for _, name := range sorted {
+		a, aok := got[name]
+		b, bok := want[name]
+		if aok == bok && reflect.DeepEqual(a, b) {
+			continue
+		}
+		out = append(out, fmt.Sprintf("%s: got %s, want %s", name, blockerFactValue(a, aok), blockerFactValue(b, bok)))
+	}
+	return strings.Join(out, "; ")
+}
+
+// blockerFactValue renders one field by value (JSON dereferences the
+// pointers, rows included), or "absent".
+func blockerFactValue(value contextfabric.FactValue, present bool) string {
+	if !present {
+		return "absent"
+	}
+	encoded, err := json.Marshal(value)
+	if err != nil {
+		return "unencodable: " + err.Error()
+	}
+	return string(encoded)
 }

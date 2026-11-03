@@ -101,7 +101,7 @@ func membershipScopeExternalTable(ids []string) (*ext.Table, error) {
 	return table, nil
 }
 
-func (p *InvestmentProvider) readLinkedPullRequestSet(ctx context.Context, orgID string, chunk []string, bound factTimeBound) (repos, numbers, teams []string, err error) {
+func (p *InvestmentProvider) readLinkedPullRequestSetOnce(ctx context.Context, orgID string, chunk []string, bound factTimeBound) (repos, numbers, teams []string, err error) {
 	var issues []string
 	var ranks []uint8
 	setCtx, ok, err := withTeamLinkCandidates(ctx, p.facts.client, orgID, chunk, bound)

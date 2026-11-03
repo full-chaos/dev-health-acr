@@ -62,12 +62,17 @@ const (
 	// ContextFabricClaimedFactRowBoundDistribution: a `distribution` table
 	// (CHAOS-12607), every distinct completion day to the 365-day horizon.
 	ContextFabricClaimedFactRowBoundDistribution ContextFabricClaimedFactRowBoundClass = "distribution"
+	// ContextFabricClaimedFactRowBoundRepositoryFlow: a breakdown keyed by
+	// (repository, theme) (CHAOS-12580), a team's repository_theme_breakdown:
+	// every link of up to 64 repositories over the 5 themes.
+	ContextFabricClaimedFactRowBoundRepositoryFlow ContextFabricClaimedFactRowBoundClass = "repository_flow"
 )
 
 // contextFabricClaimedFactRowBounds is the cap of every class above the
 // default.
 var contextFabricClaimedFactRowBounds = map[ContextFabricClaimedFactRowBoundClass]int{
-	ContextFabricClaimedFactRowBoundDistribution: ContextFabricClaimedFactDistributionMaxRows,
+	ContextFabricClaimedFactRowBoundDistribution:   ContextFabricClaimedFactDistributionMaxRows,
+	ContextFabricClaimedFactRowBoundRepositoryFlow: ContextFabricClaimedFactRepositoryFlowMaxRows,
 }
 
 // ContextFabricClaimedFactRowBoundClasses returns every class with its own
@@ -88,6 +93,12 @@ func ContextFabricClaimedFactRowBoundClassOf(table *ContextFabricClaimedFactTabl
 	}
 	if table.Shape == ContextFabricFactTableShapeDistribution {
 		return ContextFabricClaimedFactRowBoundDistribution
+	}
+	// Keyed on the declaration, not the field name: the internal table a
+	// producer bounds carries no field name, and both carry the key.
+	if table.Shape == ContextFabricFactTableShapeBreakdown && len(table.Key) == 2 &&
+		table.Key[0] == ContextFabricRenderRepositoryField && table.Key[1] == ContextFabricRenderThemeField {
+		return ContextFabricClaimedFactRowBoundRepositoryFlow
 	}
 	return ""
 }
