@@ -2,6 +2,7 @@ package devhealthfacts_test
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
 	"testing"
@@ -112,6 +113,10 @@ type t4Case struct {
 	// completionDistribution turns on the CHAOS-12607 deployment switch, so
 	// the workload fact emits its completion distribution.
 	completionDistribution bool
+	// investmentSunburst turns on the CHAOS-12554 switch, and operations is
+	// the caller the investment read asks for the ops breakdowns.
+	investmentSunburst bool
+	operations         devhealthfacts.OperationCaller
 }
 
 func t4Days(n int) []string {
@@ -454,6 +459,15 @@ func t4Cases() []t4Case {
 			themeMixRow("CHAOS", "", map[string]float64{"feature_delivery": 60, "operational": 20, "maintenance": 10, "quality": 6, "risk": 4}, 1),
 		}},
 	}})
+	// CHAOS-12554: the sunburst's detail table, on a team and a repository.
+	add(t4Case{name: "investment/team_subcategory_breakdown", kind: contextfabric.FactInvestment, subjects: team, tables: teamMixTables("CHAOS"),
+		investmentSunburst: true, operations: sunburstBreakdownCaller()})
+	add(t4Case{name: "investment/repository_subcategory_breakdown", kind: contextfabric.FactInvestment, subjects: []contextfabric.SubjectRef{repoSubject("repo-CHAOS")},
+		investmentSunburst: true, operations: sunburstBreakdownCaller(), tables: []fakeTable{
+			{match: "FROM work_unit_investments", rows: [][]any{
+				themeMixRow("CHAOS", "", map[string]float64{"feature_delivery": 60, "operational": 20, "maintenance": 10, "quality": 6, "risk": 4}, 1),
+			}},
+		}})
 	add(t4Case{name: "investment/organization", kind: contextfabric.FactInvestment, subjects: org, tables: organizationMixTable()})
 	projectAB := []fakeTable{
 		// The phased roll-up (CHAOS-7271): scope, repo themes, repo bugfix, evidence arm.
@@ -647,9 +661,12 @@ func t4Run(t *testing.T, cases []t4Case, capabilityOf func(contextfabric.FactKin
 	observed := t4Observed{seen: map[string]bool{}, subjects: map[string]bool{}, cases: map[contextfabric.FactKind]int{}}
 	for _, c := range cases {
 		client := &fakeClient{tables: c.tables}
-		options := devhealthfacts.ProviderOptions{CompletionDistributionEnabled: c.completionDistribution}
+		options := devhealthfacts.ProviderOptions{CompletionDistributionEnabled: c.completionDistribution, InvestmentSunburstEnabled: c.investmentSunburst}
 		if c.operation != nil {
 			options.Operations = sourceHealthHolder(&fakeOperationCaller{outcome: *c.operation})
+		}
+		if c.operations != nil {
+			options.Operations = sourceHealthHolder(c.operations)
 		}
 		providers := devhealthfacts.NewProvidersWithOptions(client, options)
 		provider := findProvider(t, providers, c.kind)
@@ -993,4 +1010,24 @@ func t4MeasuresNotTracked(row []any) []any {
 	n := len(out)
 	out[n-3], out[n-1] = uint8(1), uint8(1)
 	return out
+}
+
+// sunburstBreakdownCaller answers the two ops investment breakdowns of the
+// sunburst (CHAOS-12554) by the dimension the variables ask for.
+func sunburstBreakdownCaller() devhealthfacts.OperationCaller {
+	return dimensionCaller{
+		"THEME":       `{"analytics":{"breakdowns":[{"dimension":"theme","items":[{"key":"feature_delivery","value":6},{"key":"quality","value":2}]}]}}`,
+		"SUBCATEGORY": `{"analytics":{"breakdowns":[{"dimension":"subcategory","items":[{"key":"feature_delivery.roadmap","value":6},{"key":"quality.bugfix","value":2}]}]}}`,
+	}
+}
+
+type dimensionCaller map[string]string
+
+func (c dimensionCaller) CallOperation(_ context.Context, _ storage.Principal, _ string, variables json.RawMessage) (devhealthfacts.OperationOutcome, error) {
+	for dimension, body := range c {
+		if strings.Contains(string(variables), `"dimension":"`+dimension+`"`) {
+			return devhealthfacts.OperationOutcome{Served: true, Complete: true, Data: json.RawMessage(body)}, nil
+		}
+	}
+	return devhealthfacts.OperationOutcome{Reason: "refused:variable_not_allowed"}, nil
 }

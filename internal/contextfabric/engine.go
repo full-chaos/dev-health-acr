@@ -17,6 +17,9 @@ type EngineOptions struct {
 	// InvestmentTreemapEnabled turns on the investment_theme_share rule
 	// (CHAOS-12521). See Config.ContextFabricInvestmentTreemapEnabled.
 	InvestmentTreemapEnabled bool
+	// InvestmentSunburstEnabled turns on the investment_subcategory_share rule
+	// (CHAOS-12554). See Config.ContextFabricInvestmentSunburstEnabled.
+	InvestmentSunburstEnabled bool
 	// ComparisonTableEnabled turns on the comparison_side_by_side rule
 	// (CHAOS-12513). See Config.ContextFabricComparisonTableEnabled.
 	ComparisonTableEnabled bool
@@ -1500,12 +1503,13 @@ func NewEngine(dependencies EngineDependencies, options EngineOptions) (*Engine,
 		regimeAOffersDisabled:       options.RegimeAOffersDisabled,
 		anchorBindingShadowDisabled: options.DisableAnchorBindingShadow,
 		renderShapeOptions: RenderShapeOptions{
-			InvestmentThemeShare: options.InvestmentTreemapEnabled,
-			ComparisonSideBySide: options.ComparisonTableEnabled,
-			LandscapePosition:    options.LandscapeQuadrantEnabled,
-			CompletionForecast:   options.CompletionForecastEnabled,
-			FieldScope:           factFieldScopeLookup(options.FactCapabilities),
-			TableCadence:         declaredCadenceOf(options.FactCapabilities),
+			InvestmentThemeShare:       options.InvestmentTreemapEnabled,
+			InvestmentSubcategoryShare: options.InvestmentSunburstEnabled,
+			ComparisonSideBySide:       options.ComparisonTableEnabled,
+			LandscapePosition:          options.LandscapeQuadrantEnabled,
+			CompletionForecast:         options.CompletionForecastEnabled,
+			FieldScope:                 factFieldScopeLookup(options.FactCapabilities),
+			TableCadence:               declaredCadenceOf(options.FactCapabilities),
 		},
 		measureUnitsOf:                              declaredMeasureUnitsOf(options.FactCapabilities),
 		columnWordsOf:                               declaredColumnWordsOf(options.FactCapabilities),

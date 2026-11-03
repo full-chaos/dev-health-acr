@@ -206,6 +206,16 @@ type Config struct {
 	// a pin that does not hold the rule fails every answer that carries the
 	// shape. Turn it on after web's and ask-dev's pins are deployed.
 	ContextFabricInvestmentTreemapEnabled bool
+	// ContextFabricInvestmentSunburstEnabled (CHAOS-12554,
+	// ACR_CONTEXT_FABRIC_INVESTMENT_SUNBURST_ENABLED) is the one switch of the
+	// investment sunburst: a team or repository investment fact reads its
+	// subcategory_breakdown detail table from the ops investment breakdown
+	// operations, the investment_subcategory_share render rule draws it, and
+	// the switch joins the answer-reuse key. Default OFF, for the same reason
+	// as the treemap. Off, no call is made, and the synthesis input and the
+	// reuse key are as before. Turn it on after web's and ask-dev's pins are
+	// deployed.
+	ContextFabricInvestmentSunburstEnabled bool
 	// ContextFabricComparisonTableEnabled (CHAOS-12513,
 	// ACR_CONTEXT_FABRIC_COMPARISON_TABLE_ENABLED) turns on the
 	// comparison_side_by_side render rule. Default OFF, for the same reason as

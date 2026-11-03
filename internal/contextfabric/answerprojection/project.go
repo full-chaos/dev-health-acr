@@ -1516,8 +1516,9 @@ func retainPastTheCut(kept, dropped []clampedNarrative, retain func(string) bool
 	return out
 }
 
-// claimsAChartPlots names the claims the answer's treemaps, tables, forecast
-// curves and quadrants plot (CHAOS-12521, CHAOS-12513, CHAOS-12608, CHAOS-12626).
+// claimsAChartPlots names the claims the answer's treemaps, sunbursts, tables,
+// forecast curves and quadrants plot (CHAOS-12521, CHAOS-12554, CHAOS-12513,
+// CHAOS-12608, CHAOS-12626).
 // An investment answer need not have a driver, a comparison's drivers need not
 // cite every cell, and a forecast's drivers need not cite its distribution, so no
 // driver brings those facts and the chart would be dropped. The server built the
@@ -1527,8 +1528,8 @@ func claimsAChartPlots(shapes []contractsv1.ContextFabricRenderShape) map[string
 	plotted := map[string]struct{}{}
 	for _, shape := range shapes {
 		switch shape.Kind {
-		case contractsv1.ContextFabricRenderKindTreemap, contractsv1.ContextFabricRenderKindTable, contractsv1.ContextFabricRenderKindForecast,
-			contractsv1.ContextFabricRenderKindQuadrant:
+		case contractsv1.ContextFabricRenderKindTreemap, contractsv1.ContextFabricRenderKindSunburst, contractsv1.ContextFabricRenderKindTable,
+			contractsv1.ContextFabricRenderKindForecast, contractsv1.ContextFabricRenderKindQuadrant:
 		default:
 			continue
 		}

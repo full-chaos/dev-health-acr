@@ -238,6 +238,32 @@ const (
 	// RenderShapeSkipFewerThanTwoShares -- fewer than two shares are above 0.
 	// One part is no split.
 	RenderShapeSkipFewerThanTwoShares RenderShapeSkipReason = "fewer_than_two_shares"
+	// The investment_subcategory_share rule's reasons (CHAOS-12554). See
+	// render_shape_sunburst.go. It shares the treemap's family, cohort, frame,
+	// plan, subject kind and fewer-than-two reasons.
+	//
+	// RenderShapeSkipNoSubcategoryBreakdown -- no claim names the declared
+	// subcategory_breakdown detail table. The common exit: a claim names it only
+	// when the question asks for that breakdown.
+	RenderShapeSkipNoSubcategoryBreakdown RenderShapeSkipReason = "no_subcategory_breakdown"
+	// RenderShapeSkipSeveralSubcategoryBreakdowns -- claims name more than one
+	// subject's table. Two splits are a comparison.
+	RenderShapeSkipSeveralSubcategoryBreakdowns RenderShapeSkipReason = "several_subcategory_breakdowns"
+	// RenderShapeSkipSubcategoryTableCut -- the table does not hold every
+	// canonical subcategory, because the row budget cut it.
+	RenderShapeSkipSubcategoryTableCut RenderShapeSkipReason = "subcategory_table_cut"
+	// RenderShapeSkipSubcategoryRowUnusable -- a row holds no canonical
+	// subcategory under its own theme, no registry word, or no numeric share.
+	// The shape is skipped whole.
+	RenderShapeSkipSubcategoryRowUnusable RenderShapeSkipReason = "subcategory_row_unusable"
+	// RenderShapeSkipSubcategoryShapeUnprovable -- the contract refused the
+	// shape (for example, a theme's subcategory shares do not add up to its
+	// theme share).
+	RenderShapeSkipSubcategoryShapeUnprovable RenderShapeSkipReason = "subcategory_shape_unprovable"
+	// RenderShapeSkipSubcategoryBreakdownDrawn -- the treemap's reason when the
+	// answer already draws the sunburst: its inner ring is the theme split, so
+	// an answer never carries both.
+	RenderShapeSkipSubcategoryBreakdownDrawn RenderShapeSkipReason = "subcategory_breakdown_drawn"
 	// The comparison_side_by_side rule's reasons (CHAOS-12513). See
 	// render_shape_comparison.go.
 	//
@@ -387,10 +413,26 @@ func selectRenderShapes(result InvestigationResult, frame *QuestionFrame, option
 		}
 	}
 
+	// CHAOS-12554: the sunburst first. A claim holds one table, but two claims
+	// on one fact can hold the theme table and the subcategory table, and the
+	// sunburst's inner ring is the theme split: when it is drawn, the treemap
+	// is not.
+	sunburstDrawn := false
+	if !options.InvestmentSubcategoryShare {
+		event.skip(contractsv1.ContextFabricRenderRuleInvestmentSubcategoryShare, RenderShapeSkipRuleDisabled)
+	} else if sunburst, reason := investmentSubcategoryShareShape(result, frame); sunburst != nil {
+		shapes = append(shapes, *sunburst)
+		sunburstDrawn = true
+	} else {
+		event.skip(contractsv1.ContextFabricRenderRuleInvestmentSubcategoryShare, reason)
+	}
+
 	// CHAOS-12521: ahead of the trends, because they take whatever room the
 	// shape bound leaves and this rule yields at most one shape.
 	if !options.InvestmentThemeShare {
 		event.skip(contractsv1.ContextFabricRenderRuleInvestmentThemeShare, RenderShapeSkipRuleDisabled)
+	} else if sunburstDrawn {
+		event.skip(contractsv1.ContextFabricRenderRuleInvestmentThemeShare, RenderShapeSkipSubcategoryBreakdownDrawn)
 	} else if treemap, reason := investmentThemeShareShape(result, frame); treemap != nil {
 		shapes = append(shapes, *treemap)
 	} else {
@@ -1058,6 +1100,7 @@ var renderShapeRules = []contractsv1.ContextFabricRenderShapeRule{
 	contractsv1.ContextFabricRenderRuleCohortDriverContribution,
 	contractsv1.ContextFabricRenderRuleDatedFactTrend,
 	contractsv1.ContextFabricRenderRuleInvestmentThemeShare,
+	contractsv1.ContextFabricRenderRuleInvestmentSubcategoryShare,
 	contractsv1.ContextFabricRenderRuleComparisonSideBySide,
 	contractsv1.ContextFabricRenderRuleLandscapePosition,
 	contractsv1.ContextFabricRenderRuleCompletionForecast,
@@ -1134,6 +1177,9 @@ func RenderShapeSkipReasonLineVocabulary() []string {
 		string(RenderShapeSkipSeveralThemeBreakdowns), string(RenderShapeSkipSubjectKindNotCharted),
 		string(RenderShapeSkipThemeRowUnusable), string(RenderShapeSkipFewerThanTwoShares), string(RenderShapeSkipCohortAnswer),
 		string(RenderShapeSkipThemeTableCut),
+		string(RenderShapeSkipNoSubcategoryBreakdown), string(RenderShapeSkipSeveralSubcategoryBreakdowns),
+		string(RenderShapeSkipSubcategoryTableCut), string(RenderShapeSkipSubcategoryRowUnusable),
+		string(RenderShapeSkipSubcategoryShapeUnprovable), string(RenderShapeSkipSubcategoryBreakdownDrawn),
 		string(RenderShapeSkipNotExplicitComparison), string(RenderShapeSkipFewerThanTwoSides), string(RenderShapeSkipTooManySides),
 		string(RenderShapeSkipMixedSubjectKinds), string(RenderShapeSkipNoSharedMeasure), string(RenderShapeSkipComparisonUnprovable),
 		string(RenderShapeSkipNotCohortIntent), string(RenderShapeSkipNoRankedMember), string(RenderShapeSkipNoDrivers),

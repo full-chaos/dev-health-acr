@@ -18,12 +18,14 @@ type fakeOperationCaller struct {
 	calls      int
 	operation  string
 	principals []storage.Principal
+	variables  []json.RawMessage
 }
 
-func (f *fakeOperationCaller) CallOperation(_ context.Context, principal storage.Principal, operation string) (devhealthfacts.OperationOutcome, error) {
+func (f *fakeOperationCaller) CallOperation(_ context.Context, principal storage.Principal, operation string, variables json.RawMessage) (devhealthfacts.OperationOutcome, error) {
 	f.calls++
 	f.operation = operation
 	f.principals = append(f.principals, principal)
+	f.variables = append(f.variables, variables)
 	return f.outcome, f.err
 }
 

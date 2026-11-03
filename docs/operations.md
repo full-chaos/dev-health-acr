@@ -1018,6 +1018,19 @@ turning the flag on or off needs no migration and no backfill.
 enum, so a consumer on a pin that does not hold the rule fails every answer that
 carries the shape. Confirm web's and ask-dev's pins first, then set the flag.
 
+**The investment sunburst.** `ACR_CONTEXT_FABRIC_INVESTMENT_SUNBURST_ENABLED`
+(chart: `contextFabric.investmentSunburstEnabled`, default `false`) is the one
+switch of the sunburst. With it on, a team or repository investment read asks
+ops for the THEME and the SUBCATEGORY breakdown of its one subject
+(`investmentBreakdownTeam` or `investmentBreakdownRepository`, measure
+`ISSUE_SIZE`, through the run_operation policy), the fact carries the
+`subcategory_breakdown` detail table, and the `investment_subcategory_share`
+rule draws it. A refused, failed or incomplete call gives no table and a coverage
+reason, and the Warn line `devhealthfacts.investment_subcategory_breakdown_withheld`
+counts it. The switch joins the answer-reuse key. Same order: pins first, then
+the flag. With the flag off, no call is made and both doors that serve a result
+remove a stored sunburst.
+
 **The comparison table.** `ACR_CONTEXT_FABRIC_COMPARISON_TABLE_ENABLED` (chart:
 `contextFabric.comparisonTableEnabled`, default `false`) turns on the
 `comparison_side_by_side` render rule, with the same order: pins first, then the

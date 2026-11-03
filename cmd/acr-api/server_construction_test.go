@@ -233,6 +233,16 @@ func validServeConfig(t *testing.T) config.Config {
 	return cfg
 }
 
+// CHAOS-12554: the switch reaches the app both doors read it from.
+func TestAppConfigThreadsTheInvestmentSunburstSwitch(t *testing.T) {
+	for _, enabled := range []bool{true, false} {
+		got := appConfig(config.Config{ContextFabricInvestmentSunburstEnabled: enabled}, "test-version")
+		if got.ContextFabricInvestmentSunburstEnabled != enabled {
+			t.Fatalf("appConfig(...).ContextFabricInvestmentSunburstEnabled = %v, want %v", got.ContextFabricInvestmentSunburstEnabled, enabled)
+		}
+	}
+}
+
 // CHAOS-12626: the switch reaches the app both doors read it from.
 func TestAppConfigThreadsTheLandscapeQuadrantSwitch(t *testing.T) {
 	for _, enabled := range []bool{true, false} {

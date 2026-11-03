@@ -260,6 +260,8 @@ func goVarName(e Event) string {
 		return "ProjectOwningTeamRollup"
 	case PullRequestProjectNativeFirst.ID:
 		return "PullRequestProjectNativeFirst"
+	case InvestmentSubcategoryBreakdownWithheld.ID:
+		return "InvestmentSubcategoryBreakdownWithheld"
 	case ProjectStatusDrivers.ID:
 		return "ProjectStatusDrivers"
 	case TeamBlockersDrivers.ID:

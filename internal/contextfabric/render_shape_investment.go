@@ -14,6 +14,10 @@ type RenderShapeOptions struct {
 	// InvestmentThemeShare turns on the investment_theme_share rule
 	// (CHAOS-12521). See Config.ContextFabricInvestmentTreemapEnabled.
 	InvestmentThemeShare bool
+	// InvestmentSubcategoryShare turns on the investment_subcategory_share
+	// rule (CHAOS-12554). See Config.ContextFabricInvestmentSunburstEnabled:
+	// the rule draws the table that switch serves, so one switch gates both.
+	InvestmentSubcategoryShare bool
 	// ComparisonSideBySide turns on the comparison_side_by_side rule
 	// (CHAOS-12513). See Config.ContextFabricComparisonTableEnabled.
 	ComparisonSideBySide bool
@@ -43,8 +47,12 @@ type RenderShapeOptions struct {
 // adds. WithoutDisabledRenderShapes covers the other direction at the serving
 // doors. With every switch off this is the table version itself, so a
 // deployment that turns nothing on keeps every stored answer. The landscape
-// quadrant switch joins it (CHAOS-12675). The longest form is 111 characters,
-// inside the column's 128.
+// quadrant switch joins it (CHAOS-12675), and the sunburst switch by its rule
+// name like every other (CHAOS-12554). With every switch on the form is 140
+// characters, past the question_family_version column's 128 (migration 0036).
+// acr #1974 (CHAOS-12582) brings the ruled length rule: a form past 128 is
+// keyed by its digest. Until it merges, do not turn every render switch on
+// together.
 func ReuseQuestionFamilyVersion(options RenderShapeOptions) string {
 	var on []string
 	if options.ComparisonSideBySide {
@@ -52,6 +60,9 @@ func ReuseQuestionFamilyVersion(options RenderShapeOptions) string {
 	}
 	if options.CompletionForecast {
 		on = append(on, string(contractsv1.ContextFabricRenderRuleCompletionForecast))
+	}
+	if options.InvestmentSubcategoryShare {
+		on = append(on, string(contractsv1.ContextFabricRenderRuleInvestmentSubcategoryShare))
 	}
 	if options.InvestmentThemeShare {
 		on = append(on, string(contractsv1.ContextFabricRenderRuleInvestmentThemeShare))
@@ -214,7 +225,7 @@ func familyTakesShape(family QuestionFamily, shape InvestigationShape) bool {
 // (Codex #1949 r1): a result stored while it was on keeps its summaries, and
 // the summary is the same widening the shapes are.
 func WithoutDisabledRenderShapes(result InvestigationResult, options RenderShapeOptions) InvestigationResult {
-	if options.InvestmentThemeShare && options.ComparisonSideBySide && options.LandscapePosition && options.CompletionForecast {
+	if options.InvestmentThemeShare && options.InvestmentSubcategoryShare && options.ComparisonSideBySide && options.LandscapePosition && options.CompletionForecast {
 		return result
 	}
 	if !options.CompletionForecast {
@@ -225,6 +236,10 @@ func WithoutDisabledRenderShapes(result InvestigationResult, options RenderShape
 		switch shape.SelectedBy {
 		case contractsv1.ContextFabricRenderRuleInvestmentThemeShare:
 			if !options.InvestmentThemeShare {
+				continue
+			}
+		case contractsv1.ContextFabricRenderRuleInvestmentSubcategoryShare:
+			if !options.InvestmentSubcategoryShare {
 				continue
 			}
 		case contractsv1.ContextFabricRenderRuleComparisonSideBySide:

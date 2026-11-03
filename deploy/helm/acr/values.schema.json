@@ -44,6 +44,10 @@
           "type": "boolean",
           "description": "ACR_CONTEXT_FABRIC_INVESTMENT_TREEMAP_ENABLED for acr-api (CHAOS-12521). Keep false until web's and ask-dev's pins hold the investment_theme_share rule."
         },
+        "investmentSunburstEnabled": {
+          "type": "boolean",
+          "description": "ACR_CONTEXT_FABRIC_INVESTMENT_SUNBURST_ENABLED for acr-api (CHAOS-12554). Keep false until web's and ask-dev's pins hold the investment_subcategory_share rule and ACR's run_operation policy serves ISSUE_SIZE on the scoped investment breakdowns."
+        },
         "comparisonTableEnabled": {
           "type": "boolean",
           "description": "ACR_CONTEXT_FABRIC_COMPARISON_TABLE_ENABLED for acr-api (CHAOS-12513). Keep false until web's and ask-dev's pins hold the comparison_side_by_side rule."

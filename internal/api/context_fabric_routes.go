@@ -1451,9 +1451,10 @@ func contextFabricBudgetRefusalFields(refusal contextfabric.AnswerBudgetRefusal)
 // switches at both doors that serve a result.
 func (a *App) withoutDisabledRenderShapes(answer contractsv1.ContextFabricInvestigationResult) contractsv1.ContextFabricInvestigationResult {
 	return contextfabric.WithoutDisabledRenderShapes(answer, contextfabric.RenderShapeOptions{
-		InvestmentThemeShare: a.config.ContextFabricInvestmentTreemapEnabled,
-		ComparisonSideBySide: a.config.ContextFabricComparisonTableEnabled,
-		LandscapePosition:    a.config.ContextFabricLandscapeQuadrantEnabled,
-		CompletionForecast:   a.config.ContextFabricCompletionDistributionEnabled,
+		InvestmentThemeShare:       a.config.ContextFabricInvestmentTreemapEnabled,
+		InvestmentSubcategoryShare: a.config.ContextFabricInvestmentSunburstEnabled,
+		ComparisonSideBySide:       a.config.ContextFabricComparisonTableEnabled,
+		LandscapePosition:          a.config.ContextFabricLandscapeQuadrantEnabled,
+		CompletionForecast:         a.config.ContextFabricCompletionDistributionEnabled,
 	})
 }
