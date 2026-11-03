@@ -1,6 +1,7 @@
 package graphrank
 
 import (
+	"fmt"
 	"slices"
 	"testing"
 
@@ -45,23 +46,29 @@ func handleContainerReaches(turn besideTurn, id string) bool {
 	return slices.ContainsFunc(turn.offers.CandidateOptions, func(o contextfabric.CandidateOption) bool { return o.CanonicalID == id })
 }
 
+// handleContainerSpellings are the pull request spellings the v38 rule names; a
+// GitLab merge request is a pull request (CHAOS-12633).
+var handleContainerSpellings = []string{"pull request %d", "merge request !%d", "MR !%d"}
+
 func TestAHandleQuestionThatKeepsItsContainerStaysInsideIt(t *testing.T) {
 	t.Parallel()
-	question := besideQuestion("pull request 748")
 	elsewhere := besideNode(contextfabric.SubjectPullRequest, besidePRElsewhere, "PR #748")
-	for caller, principal := range besideCallers(t) {
-		t.Run(caller, func(t *testing.T) {
-			t.Parallel()
-			// The container shape (v37): the answer stays inside the named
-			// repository and says the handle is absent there.
-			container := runBeside(t, besideWorld{principal: principal, question: question, frame: handleContainerFrame(scopeAnchorRepo), census: &besideCensus{rows: besideRows()}, nodes: []CandidateNode{elsewhere}, searches: map[string][]CandidateNode{"748": {elsewhere}}})
-			if handleContainerReaches(container, besidePRElsewhere) {
-				t.Fatalf("container shape reached the other repository's pull request 748: committed %v candidates %v", besideCommittedIDs(container.resolution), candidateIDs(container.resolution.Candidates))
-			}
-			if container.resolution.CensusLimitation != contractsv1.ContextFabricCensusAbsentInScopeLimitation {
-				t.Fatalf("limitation = %q, want the named repository's absence sentence", container.resolution.CensusLimitation)
-			}
-		})
+	for _, spelling := range handleContainerSpellings {
+		question := besideQuestion(fmt.Sprintf(spelling, 748))
+		for caller, principal := range besideCallers(t) {
+			t.Run(fmt.Sprintf(spelling, 748)+"/"+caller, func(t *testing.T) {
+				t.Parallel()
+				// The container shape (v37): the answer stays inside the named
+				// repository and says the handle is absent there.
+				container := runBeside(t, besideWorld{principal: principal, question: question, frame: handleContainerFrame(scopeAnchorRepo), census: &besideCensus{rows: besideRows()}, nodes: []CandidateNode{elsewhere}, searches: map[string][]CandidateNode{"748": {elsewhere}}})
+				if handleContainerReaches(container, besidePRElsewhere) {
+					t.Fatalf("container shape reached the other repository's pull request 748: committed %v candidates %v", besideCommittedIDs(container.resolution), candidateIDs(container.resolution.Candidates))
+				}
+				if container.resolution.CensusLimitation != contractsv1.ContextFabricCensusAbsentInScopeLimitation {
+					t.Fatalf("limitation = %q, want the named repository's absence sentence", container.resolution.CensusLimitation)
+				}
+			})
+		}
 	}
 }
 
@@ -69,13 +76,15 @@ func TestAHandleQuestionThatKeepsItsContainerStaysInsideIt(t *testing.T) {
 // repository commits beside it under the container shape.
 func TestAHandleQuestionThatKeepsItsContainerCommitsTheHandleInIt(t *testing.T) {
 	t.Parallel()
-	for caller, principal := range besideCallers(t) {
-		t.Run(caller, func(t *testing.T) {
-			t.Parallel()
-			turn := runBeside(t, besideWorld{principal: principal, question: besideQuestion("pull request 747"), frame: handleContainerFrame(scopeAnchorRepo), census: &besideCensus{rows: besideRows()}})
-			if got := besideCommittedIDs(turn.resolution); !slices.Contains(got, scopeAnchorRepoID) || !slices.Contains(got, besidePRInRepo) {
-				t.Fatalf("committed = %v, want the repository and pull request 747", got)
-			}
-		})
+	for _, spelling := range handleContainerSpellings {
+		for caller, principal := range besideCallers(t) {
+			t.Run(fmt.Sprintf(spelling, 747)+"/"+caller, func(t *testing.T) {
+				t.Parallel()
+				turn := runBeside(t, besideWorld{principal: principal, question: besideQuestion(fmt.Sprintf(spelling, 747)), frame: handleContainerFrame(scopeAnchorRepo), census: &besideCensus{rows: besideRows()}})
+				if got := besideCommittedIDs(turn.resolution); !slices.Contains(got, scopeAnchorRepoID) || !slices.Contains(got, besidePRInRepo) {
+					t.Fatalf("committed = %v, want the repository and pull request 747", got)
+				}
+			})
+		}
 	}
 }
