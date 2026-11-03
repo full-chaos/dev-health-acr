@@ -264,14 +264,16 @@ func TestInferredWindowGateLineCertifiesEveryProducerValue(t *testing.T) {
 	for _, beyond := range []bool{false, true} {
 		for _, unavailable := range []bool{false, true} {
 			for _, series := range []bool{false, true} {
-				decision, basis := contextfabric.DecideInferredWindowGateForTest(beyond, unavailable, series)
-				var buf bytes.Buffer
-				sink, ctx := answerLineSink(&buf, slog.LevelInfo)
-				sink.RecordInferredWindowGate(ctx, principalOrg1, decision, basis)
-				pinKeys(t, bytes.NewBuffer(buf.Bytes()), keys, 1)
-				line := certifyRequestLine(t, buf.Bytes(), eventspec.InferredWindowGate, map[string]any{"decision": string(decision), "basis": string(basis)})
-				seenDecision[line["decision"].(string)] = true
-				seenBasis[line["basis"].(string)] = true
+				for _, emptyAsks := range []bool{false, true} {
+					decision, basis := contextfabric.DecideInferredWindowGateWithEmptyAsksForTest(beyond, emptyAsks, unavailable, series)
+					var buf bytes.Buffer
+					sink, ctx := answerLineSink(&buf, slog.LevelInfo)
+					sink.RecordInferredWindowGate(ctx, principalOrg1, decision, basis)
+					pinKeys(t, bytes.NewBuffer(buf.Bytes()), keys, 1)
+					line := certifyRequestLine(t, buf.Bytes(), eventspec.InferredWindowGate, map[string]any{"decision": string(decision), "basis": string(basis)})
+					seenDecision[line["decision"].(string)] = true
+					seenBasis[line["basis"].(string)] = true
+				}
 			}
 		}
 	}

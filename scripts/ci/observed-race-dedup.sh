@@ -48,7 +48,7 @@ set -euo pipefail
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 
 expected_covering_devhealthfacts=4
-expected_covering_devhealthsource=3
+expected_covering_devhealthsource=4
 default_legs="6 7 8 9 10"
 
 die() { printf 'observed-race-dedup: %s\n' "$*" >&2; exit 2; }
@@ -115,7 +115,7 @@ cmd_legs() {
 go_list_tests() {
   local regex="$1" dir="$2" out
   out="$(cd "$repo_root" && go test -trimpath -list "$regex" "./internal/contextfabric/$dir")" || return 1
-  printf '%s\n' "$out" | grep '^Test' | LC_ALL=C sort -u
+  printf '%s\n' "$out" | grep -E '^(Test|Fuzz|Example)' | LC_ALL=C sort -u
 }
 
 cmd_collect() {

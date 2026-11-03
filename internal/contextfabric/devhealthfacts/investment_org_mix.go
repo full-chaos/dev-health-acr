@@ -9,7 +9,6 @@ import (
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	"github.com/full-chaos/dev-health-acr/internal/contextpacket"
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
-	"github.com/full-chaos/dev-health-acr/internal/storage"
 	"github.com/full-chaos/dev-health-go/readers"
 )
 
@@ -32,10 +31,6 @@ const investmentOrgUnattributedOnlyReason = "investment_organization_unattribute
 const (
 	orgMixScope       = "organization"
 	orgMixBasisSuffix = "_over_all_repositories"
-	// investmentOrgRestrictedReason is the closed limitation for a caller
-	// whose grant is bound to repositories: a partial sum presented as the
-	// organization would be wrong, so no total is served.
-	investmentOrgRestrictedReason = "org-level fact; caller scope is repository-bound"
 )
 
 type orgMixRow struct {
@@ -142,17 +137,21 @@ func organizationSubjectsOfCaller(subjects []contextfabric.SubjectRef, orgID str
 // a zero mix). When all of the window's effort is unattributed the fact carries
 // no theme shares and no breakdown, only the counts and the unattributed share
 // (1): the effort is disclosed, never presented as a mix.
-func (p *InvestmentProvider) readOrganizationThemeMix(ctx context.Context, principal storage.Principal, orgID string, subjects []contextfabric.SubjectRef, facts *[]contextfabric.CanonicalFact, timeBound factTimeBound) (rejected int, restricted, unattributedOnly bool, err error) {
+//
+// Every caller of the organization gets the same fact, a repository-bound or a
+// project-only grant included (chris's ruling on CHAOS-4415, CHAOS-12585): the
+// fact is the organization's total over every repository once, never a sum over
+// the caller's grant, so it is the same number for every caller and names no
+// repository. The unit listing stays withheld from a restricted grant
+// (InvestmentProvider.ReadFacts), because a unit is an evidence row.
+func (p *InvestmentProvider) readOrganizationThemeMix(ctx context.Context, orgID string, subjects []contextfabric.SubjectRef, facts *[]contextfabric.CanonicalFact, timeBound factTimeBound) (rejected int, unattributedOnly bool, err error) {
 	own, rejected := organizationSubjectsOfCaller(subjects, orgID)
 	if len(own) == 0 {
-		return rejected, false, false, nil
-	}
-	if sourceHealthRestricted(principal) {
-		return rejected, true, false, nil
+		return rejected, false, nil
 	}
 	row, err := p.readOrgMixRow(ctx, orgID, timeBound)
 	if err != nil {
-		return rejected, false, false, err
+		return rejected, false, err
 	}
 	// Both accepted spellings of the organization id name ONE organization:
 	// one fact, under the first spelling asked for.
@@ -167,7 +166,7 @@ func (p *InvestmentProvider) readOrganizationThemeMix(ctx context.Context, princ
 	total := t.total()
 	recordInvestmentUncategorized(ctx, own[0], row.CategorizedUnits, t.gatedUnits, false)
 	if total <= 0 && row.UnattributedEffort <= 0 {
-		return rejected, false, false, nil
+		return rejected, false, nil
 	}
 	unattributedShare := 0.0
 	if all := row.ResolvedEffort + row.UnattributedEffort; all > 0 {
@@ -195,7 +194,7 @@ func (p *InvestmentProvider) readOrganizationThemeMix(ctx context.Context, princ
 			EvidenceRefIDs: []string{evidenceRefID(contractsv1.ContextFabricEvidenceEntityOrganization, orgID)},
 		})
 	}
-	return rejected, false, total <= 0, nil
+	return rejected, total <= 0, nil
 }
 
 // orgNoRefUnit names the one placeholder reference a unit with no reference

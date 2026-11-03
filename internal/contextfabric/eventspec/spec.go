@@ -2128,6 +2128,24 @@ var WindowCanonicalizationOutcome = Event{
 	},
 }
 
+// PlanOperandReads is the Info line of what a comparison turn's operand read rows added to the plan (CHAOS-12596).
+var PlanOperandReads = Event{
+	ID:                       "contextfabric.plan_operand_reads",
+	Msg:                      "context fabric plan operand reads",
+	Level:                    LevelInfo,
+	Multiplicity:             MultiplicityZeroOrOnePerRequest,
+	RequiredOnlyConstruction: true,
+	Attribution:              []string{"request_id"},
+	BoundedAggregation:       "at most one line per investigation: recorded once, when the plan is built and the turn has an operand read row.",
+	Fields: []Field{
+		{Key: "org_id", Type: FieldString, Presence: PresenceRequired},
+		{Key: "operand_rows", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "kinds_named", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "kinds_added", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "request_id", Type: FieldString, Presence: PresenceConditional, Applicability: requestIDApplicability},
+	},
+}
+
 // WindowClassification is the Info line of the window-class decision a current-axis turn with no request window draws its default from (CHAOS-12595).
 var WindowClassification = Event{
 	ID:                       "contextfabric.window_classification",
@@ -2515,6 +2533,25 @@ var ProjectedRowsByFactKind = Event{
 		{Key: "org_id", Type: FieldString, Presence: PresenceRequired},
 		{Key: "fact_kind", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: contextfabric.ProjectedRowsFactKindLogVocabulary()},
 		{Key: "rows_projected_by_fact_kind", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "request_id", Type: FieldString, Presence: PresenceConditional, Applicability: requestIDApplicability},
+	},
+}
+
+// DetailTablesAttached is the Info line of the declared detail tables a synthesis attached to its claims, by name (CHAOS-12587). It is written only when a claim carries one.
+var DetailTablesAttached = Event{
+	ID:                       "contextfabric.detail_tables_attached",
+	Msg:                      "context fabric detail tables attached",
+	Level:                    LevelInfo,
+	Multiplicity:             MultiplicityZeroOrManyPerRequest,
+	MaxLinesPerScope:         2,
+	RequiredOnlyConstruction: true,
+	Attribution:              []string{"request_id"},
+	BoundedAggregation:       "at most one line per synthesis call that attached a detail table; a request makes at most two synthesis calls (the first and one retry).",
+	Fields: []Field{
+		{Key: "org_id", Type: FieldString, Presence: PresenceRequired},
+		{Key: "detail_table_claims", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "detail_tables", Type: FieldStringSlice, Presence: PresenceRequired, MaxItems: contextfabric.MaxLoggedDetailTables},
+		{Key: "detail_tables_omitted", Type: FieldInt, Presence: PresenceRequired},
 		{Key: "request_id", Type: FieldString, Presence: PresenceConditional, Applicability: requestIDApplicability},
 	},
 }
@@ -5882,6 +5919,7 @@ var All = []Event{
 	StatedWindowAxisDecision,
 	WindowGatedForConfirmation,
 	WindowCanonicalizationOutcome,
+	PlanOperandReads,
 	WindowClassification,
 	InferredWindowGate,
 	InterpretationTerms,
@@ -5905,6 +5943,7 @@ var All = []Event{
 	ProjectedRowsCount,
 	ProjectedRowsByFactKind,
 	DualTableFacts,
+	DetailTablesAttached,
 	ModelRowsStripped,
 	DriverSourceStateCorrected,
 	ServiceLimitationLookalikesDropped,

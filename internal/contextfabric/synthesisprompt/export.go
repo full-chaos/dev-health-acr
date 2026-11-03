@@ -44,7 +44,10 @@ const (
 	// v28 -> v29 (CHAOS-12549): the prompt and the client rules ask a comparison to
 	// restate the same measures for every compared subject, because the commit
 	// gate keeps only a subject the answer stands behind.
-	PromptVersion = "context-fabric-synthesis.v29"
+	// v29 -> v30 (CHAOS-12554): a fact lists its detail tables, and the prompt
+	// asks for one, as a claim with value null, only when the question asks for
+	// that breakdown.
+	PromptVersion = "context-fabric-synthesis.v30"
 	// OutputVersion names the model-output contract the prompt asks for.
 	OutputVersion = interpretprompt.OutputVersion
 )
