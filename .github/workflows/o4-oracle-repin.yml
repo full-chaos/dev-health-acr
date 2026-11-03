@@ -59,6 +59,11 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
+      # The preflight of ci.yml's mirror-preflight job, run here because a
+      # dispatch-only workflow cannot depend on that job: fail before the pull
+      # when a mirrored image does not resolve.
+      - name: Verify every mirrored image is resolvable before the pull
+        run: scripts/ci/verify-mirrored-images.sh "${{ github.repository }}"
       - name: Re-pin the recorded outcome
         run: make o4-oracle-repin
       - name: Record the manifest diff
@@ -78,4 +83,7 @@ jobs:
         with:
           name: o4-repin-manifest
           path: .tmp/o4-repin/
+          # .tmp/ is a dot-directory: upload-artifact drops hidden paths
+          # unless they are opted in (see the container-reports upload in ci.yml).
+          include-hidden-files: true
           if-no-files-found: error
