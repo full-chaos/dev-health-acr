@@ -34,7 +34,7 @@ func TestEveryCommitSiteAfterTheExactStepHonoursTheRefusal(t *testing.T) {
 		resolution, _, digests := resolveFromMergedCandidatesWithAnchorSlot(
 			identityBySubject(r.pool...), map[string]string{}, map[string]bool{}, 10, true, r.truncated,
 			r.sims, 0.25, false, 10, 20, true,
-			DefaultCommitGatePolicy(), identity, terms, r.lookup, nil, "", r.census, false, false, nil, anchorReservedSlot{}, nil, nil, 1)
+			DefaultCommitGatePolicy(), identity, terms, r.lookup, nil, "", r.census, false, false, nil, nil, anchorReservedSlot{}, nil, nil, 1)
 		return resolution, digests
 	}
 	key := func(c contextfabric.SubjectCandidate) string { return SubjectKey(c.Subject) }
@@ -199,7 +199,7 @@ func TestTheDecisionLineNamesARivalRefusal(t *testing.T) {
 		resolveFromMergedCandidatesWithAnchorSlot(
 			identityBySubject(exact, rival), map[string]string{}, map[string]bool{}, 10, true, true,
 			nil, 0, false, 10, 20, true,
-			DefaultCommitGatePolicy(), identity, terms, lookup, tracer, "", "", false, false, nil, anchorReservedSlot{}, nil, nil, 1)
+			DefaultCommitGatePolicy(), identity, terms, lookup, tracer, "", "", false, false, nil, nil, anchorReservedSlot{}, nil, nil, 1)
 		decisions := tracedStage(tracer.events, "decision")
 		if len(decisions) != 1 || decisions[0].Outcome != "ambiguous" || decisions[0].CommitGate != want {
 			t.Fatalf("lookup %s: decision events = %#v, want one ambiguous line naming %q", lookup, decisions, want)

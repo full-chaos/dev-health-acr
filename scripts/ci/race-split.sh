@@ -13,8 +13,9 @@
 #   verify fails unless every listed name is a real top-level test, so a
 #          rename cannot silently move a heavy test into the rest half.
 #
-# factoracle splits two ways (heavy/rest/verify/partition only): its race jobs
-# run the heavy list with -run and everything else with -skip.
+# factoracle and api (CHAOS-12717) split two ways (heavy/rest/verify/partition
+# only): their race jobs run the heavy list with -run and everything else with
+# -skip, and partition checks both flags.
 #
 # devhealthfacts and devhealthsource split four ways (CHAOS-12667 added devhealthsource's fourth job; its plain unit legs still run three parts: unit-heavy, unit-mid, unit-rest, checked by `partition`): the race jobs split by these lists. race-mid-tests.txt and
 # race-fourth-tests.txt name tests moved out of the heavy and rest halves into
@@ -39,12 +40,15 @@ set -euo pipefail
 
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 name="${1:-}"
+# pkg_dir is the package's directory under the module root. CHAOS-12717 adds
+# internal/api, a two-way split like factoracle, outside internal/contextfabric.
 case "$name" in
-  devhealthfacts|devhealthsource|factoracle) ;;
-  *) printf 'usage: %s devhealthfacts|devhealthsource|factoracle heavy|rest|verify|partition\n' "${0##*/}" >&2; exit 2 ;;
+  devhealthfacts|devhealthsource|factoracle) pkg_dir="internal/contextfabric/$name" ;;
+  api) pkg_dir="internal/api" ;;
+  *) printf 'usage: %s devhealthfacts|devhealthsource|factoracle|api heavy|rest|verify|partition\n' "${0##*/}" >&2; exit 2 ;;
 esac
 list="$root/scripts/ci/$name-heavy-tests.txt"
-pkg="./internal/contextfabric/$name"
+pkg="./$pkg_dir"
 
 names() { grep -v '^[[:space:]]*\(#\|$\)' "$list" | LC_ALL=C sort -u; }
 
@@ -102,7 +106,7 @@ rest_list_problems() {
 # may hold constants (the raceDetectorEnabled pair) but no test function.
 # RACE_SPLIT_SOURCE_DIR points the scan at another directory (tests only).
 race_only_tests() {
-  local dir="${RACE_SPLIT_SOURCE_DIR:-$root/internal/contextfabric/$name}" f constraint
+  local dir="${RACE_SPLIT_SOURCE_DIR:-$root/$pkg_dir}" f constraint
   for f in "$dir"/*_test.go; do
     [ -f "$f" ] || continue
     constraint="$(grep -m1 '^//go:build' "$f" || true)"
@@ -188,6 +192,14 @@ case "${2:-}" in
     for want in "race-split.sh $name rest)" "race-split.sh $name $unit_mode)"; do
       [ "$unit_mode" = unit-heavy ] && [ "$want" = "race-split.sh $name rest)" ] && want="race-split.sh $name unit-heavy)"
       grep -qF -- "$want" "$wf" || { printf 'ci.yml never uses "%s"\n' "$want" >&2; exit 1; }
+    done
+    # CHAOS-12717: the flag decides the split as much as the list (the Codex
+    # #1967 r1 class): the rest job must -skip the list and the heavy job must
+    # -run it, each exactly once, or a job runs the other half too.
+    for want in 'skip|rest' 'run|heavy'; do
+      flag="${want%%|*}"; mode="${want#*|}"
+      n="$(grep -cE -- "GOFLAGS=\"-trimpath -$flag=\\\$\(scripts/ci/race-split\.sh $name $mode\)\"" "$wf" || true)"
+      [ "$n" = 1 ] || { printf 'ci.yml must pass "race-split.sh %s %s" to -%s exactly once, found %s\n' "$name" "$mode" "$flag" "$n" >&2; exit 1; }
     done
     all="$(go test -list '.' "$pkg" | grep -E '^(Test|Fuzz|Example)' | LC_ALL=C sort -u)"
     a="$(go test -list "$unit_regex" "$pkg" | grep -E '^(Test|Fuzz|Example)' | LC_ALL=C sort -u)"

@@ -278,7 +278,7 @@ bad_reach='{"heavy":"true","reach_mode":"partial","skip_jobs":"[]","unit_skip":"
 draft_full='{"heavy":"false","reach_mode":"full","skip_jobs":"[]","unit_skip":"[]","race_skip":"[]"}'
 heavy_lanes=(race race-devhealthschema race-devhealthfacts race-devhealthfacts-heavy race-devhealthfacts-mid
   race-devhealthfacts-fourth race-devhealthsource race-devhealthsource-heavy race-devhealthsource-mid race-devhealthsource-fourth
-  race-factoracle race-factoracle-heavy build contracts container-contract-smoke container-reproducible container-oci-scan)
+  race-factoracle race-factoracle-heavy race-api race-api-heavy build contracts container-contract-smoke container-reproducible container-oci-scan)
 
 lane push-all-green 0 push "$full"
 lane push-unit-skipped 1 push "$full" unit=skipped

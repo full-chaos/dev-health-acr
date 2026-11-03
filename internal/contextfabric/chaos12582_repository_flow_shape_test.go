@@ -484,3 +484,36 @@ func TestTheEngineSelectsTheSankeyOnlyWithItsSwitch(t *testing.T) {
 		}
 	}
 }
+
+// The served path, piece by piece: the scope allocation route serves a team's
+// repository question as investment_allocation (CHAOS-12606), that family's
+// registry row authorizes the sankey, and the rule draws it for every
+// interpretation shape the route serves.
+func TestTheScopeAllocationRouteReachesTheSankey(t *testing.T) {
+	t.Parallel()
+	frame := teamChildrenFrame(GoalAllocateInvestment)
+	for _, shape := range []InvestigationShape{ShapeDiscoveredCohort, ShapeOpen, ShapeSingleSubject} {
+		decision := routedFamily(frame, teamChildrenSample(shape))
+		if decision.Family != QuestionFamilyInvestmentAllocation {
+			t.Fatalf("%s: the route serves %q", shape, decision.Family)
+		}
+		definition, _ := LookupQuestionFamily(decision.Family)
+		result := repositoryFlowResult(repositoryFlowLinks())
+		result.Interpretation.Shape = shape
+		result.AnswerPlan.Family = decision.Family
+		result.AnswerPlan.RenderKinds = definition.RenderKinds
+		shapes, event := selectRenderShapes(result, &frame, sankeyOn)
+		if len(sankeysOf(shapes)) != 1 {
+			t.Fatalf("%s: shapes %+v, skip %q: want the sankey", shape, shapes, repositoryFlowSkipOf(t, event))
+		}
+	}
+	// The same frame with a second goal is routed by the table, and gets none.
+	two := teamChildrenFrame(GoalAllocateInvestment, GoalCompare)
+	if decision := routedFamily(two, teamChildrenSample(ShapeOpen)); decision.Family == QuestionFamilyInvestmentAllocation {
+		t.Fatalf("a second goal was routed to %q", decision.Family)
+	}
+	result := repositoryFlowResult(repositoryFlowLinks())
+	if shapes, _ := selectRenderShapes(result, &two, sankeyOn); len(sankeysOf(shapes)) != 0 {
+		t.Fatal("a frame with a second goal drew the sankey")
+	}
+}

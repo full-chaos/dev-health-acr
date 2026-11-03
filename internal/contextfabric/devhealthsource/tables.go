@@ -39,6 +39,12 @@ type entityTable struct {
 	// proof; a producer added with no declaration, or with a stale one,
 	// fails that pin rather than going unasserted.
 	subjectKinds []contractsv1.ContextFabricSubjectKind
+	// stampsSyncedAt (CHAOS-12649) says the table pages on its rows' own
+	// last_synced, so a row's walk position is its sync stamp, and readTable
+	// writes it on each entity of a declared kind
+	// (contextfabric.ProjectionSyncedAtProperty). A pin requires the table's
+	// declared cursor expression to be that column.
+	stampsSyncedAt bool
 }
 
 // devhealthschema:not-a-production-replica this is the PRODUCER REGISTRY -- it pairs each table
@@ -61,10 +67,10 @@ type entityTable struct {
 // ClickHouse table -- it self-joins work_items on parent_id, a column
 // work_item_dependencies never carries, to project the PART_OF edge type.
 var entityTables = []entityTable{
-	{name: "repos", dimension: true, query: queryRepositories, subjectKinds: []contractsv1.ContextFabricSubjectKind{contractsv1.ContextFabricSubjectRepository}},
-	{name: "work_items", query: queryWorkItems, subjectKinds: []contractsv1.ContextFabricSubjectKind{contractsv1.ContextFabricSubjectWorkItem}},
-	{name: "git_pull_requests", query: queryPullRequests, subjectKinds: []contractsv1.ContextFabricSubjectKind{contractsv1.ContextFabricSubjectPullRequest}},
-	{name: "deployments", query: queryDeployments, subjectKinds: []contractsv1.ContextFabricSubjectKind{contractsv1.ContextFabricSubjectDeployment}},
+	{name: "repos", dimension: true, stampsSyncedAt: true, query: queryRepositories, subjectKinds: []contractsv1.ContextFabricSubjectKind{contractsv1.ContextFabricSubjectRepository}},
+	{name: "work_items", stampsSyncedAt: true, query: queryWorkItems, subjectKinds: []contractsv1.ContextFabricSubjectKind{contractsv1.ContextFabricSubjectWorkItem}},
+	{name: "git_pull_requests", stampsSyncedAt: true, query: queryPullRequests, subjectKinds: []contractsv1.ContextFabricSubjectKind{contractsv1.ContextFabricSubjectPullRequest}},
+	{name: "deployments", stampsSyncedAt: true, query: queryDeployments, subjectKinds: []contractsv1.ContextFabricSubjectKind{contractsv1.ContextFabricSubjectDeployment}},
 	{name: "operational_incidents", query: queryIncidents, subjectKinds: []contractsv1.ContextFabricSubjectKind{contractsv1.ContextFabricSubjectIncident}},
 	{name: "work_item_dependencies", query: queryWorkItemDependencies},
 	{name: "work_items_hierarchy", query: queryWorkItemHierarchy},
@@ -75,8 +81,8 @@ var entityTables = []entityTable{
 	// past the reach of the marker on the declaration above. Still a
 	// table-to-query pairing that mirrors no column type, engine or sort key.
 	{name: "work_graph_deployment_incident_edges", query: queryDeploymentIncidentEdges},
-	{name: "git_pull_request_reviews", query: queryPullRequestReviews, subjectKinds: []contractsv1.ContextFabricSubjectKind{contractsv1.ContextFabricSubjectPullRequestReview}},
-	{name: "ci_pipeline_runs", query: queryCIRuns, subjectKinds: []contractsv1.ContextFabricSubjectKind{contractsv1.ContextFabricSubjectCIRun}},
+	{name: "git_pull_request_reviews", stampsSyncedAt: true, query: queryPullRequestReviews, subjectKinds: []contractsv1.ContextFabricSubjectKind{contractsv1.ContextFabricSubjectPullRequestReview}},
+	{name: "ci_pipeline_runs", stampsSyncedAt: true, query: queryCIRuns, subjectKinds: []contractsv1.ContextFabricSubjectKind{contractsv1.ContextFabricSubjectCIRun}},
 }
 
 // ProjectedSubjectKinds returns, sorted, every entity subject kind the
@@ -398,6 +404,9 @@ func scanWorkItemRow(r contextpacket.ClickHouseRowScanner) ([]candidate, error) 
 		// value, so a whitespace-only title falls back exactly as before.
 		label := title
 		if strings.TrimSpace(label) == "" {
+			// The raw id stays the stored label: it feeds the search text, whose
+			// composition tag would otherwise have to move. The read gives it its
+			// reader form (CHAOS-12619).
 			label = workItemID
 		}
 		subject := contractsv1.ContextFabricSubjectRef{Kind: contractsv1.ContextFabricSubjectWorkItem, CanonicalID: canonicalID, Label: label}
@@ -1130,7 +1139,7 @@ func queryWorkItemDependencies(ctx context.Context, client contextpacket.ClickHo
 			return []candidate{progressCandidate(observedAt, rowSortKey)}, nil
 		}
 		sourceValidFrom, sourceValidTo := requiredTime(sourceCreatedAt), optionalTime(sourceHasEnded, sourceEndedAt)
-		sourceSubject := contractsv1.ContextFabricSubjectRef{Kind: contractsv1.ContextFabricSubjectWorkItem, CanonicalID: sourceCanonicalID, Label: sourceID}
+		sourceSubject := contractsv1.ContextFabricSubjectRef{Kind: contractsv1.ContextFabricSubjectWorkItem, CanonicalID: sourceCanonicalID, Label: contextfabric.ReadableSourceID(contextfabric.SubjectWorkItem, sourceID)}
 		if linkEnded != 0 {
 			return endedDependencyCandidates(relationshipType, sourceSubject, targetID, targetHasCreated != 0, targetRepoID, endedAt.UTC(), observedAt, rowSortKey, seenNodeTombstones)
 		}
@@ -1154,7 +1163,7 @@ func queryWorkItemDependencies(ctx context.Context, client contextpacket.ClickHo
 			if refOmitted {
 				return []candidate{progressCandidate(observedAt, rowSortKey)}, nil
 			}
-			refSubject := contractsv1.ContextFabricSubjectRef{Kind: contractsv1.ContextFabricSubjectWorkItemRef, CanonicalID: refID, Label: targetID}
+			refSubject := contractsv1.ContextFabricSubjectRef{Kind: contractsv1.ContextFabricSubjectWorkItemRef, CanonicalID: refID, Label: contextfabric.ReadableSourceID(contextfabric.SubjectWorkItemRef, targetID)}
 			// The stub's own window is the SOURCE row's window alone
 			// (edgeValidity with nil target bounds reduces to exactly
 			// that, laterTime/earlierTime's own nil-is-unbounded
@@ -1216,7 +1225,7 @@ func queryWorkItemDependencies(ctx context.Context, client contextpacket.ClickHo
 		// CHAOS-4874: see the ref-form branch above for why the source
 		// spelling is translated here rather than cast straight through.
 		edgeType, edgeSwap, edgeSpelling := dependencyRelationshipType(relationshipType)
-		targetSubject := contractsv1.ContextFabricSubjectRef{Kind: contractsv1.ContextFabricSubjectWorkItem, CanonicalID: targetCanonicalID, Label: targetID}
+		targetSubject := contractsv1.ContextFabricSubjectRef{Kind: contractsv1.ContextFabricSubjectWorkItem, CanonicalID: targetCanonicalID, Label: contextfabric.ReadableSourceID(contextfabric.SubjectWorkItem, targetID)}
 		edgeFrom, edgeTo := orientDependencyEndpoints(sourceSubject, targetSubject, edgeSwap)
 		relationshipID := identity.DeriveRelationship(identity.RelationshipFamilyWorkItemDependency, edgeFrom.CanonicalID, edgeTo.CanonicalID, edgeSpelling)
 		relationship := contractsv1.ContextFabricRelationshipProjection{
@@ -1416,8 +1425,8 @@ func queryWorkItemHierarchy(ctx context.Context, client contextpacket.ClickHouse
 		hierarchyRef, _ := evidenceref.Mint(contractsv1.ContextFabricEvidenceEntityWorkItemHierarchyV2, repoID, childID, parentID)
 		relationship := contractsv1.ContextFabricRelationshipProjection{
 			RelationshipID: relationshipID, Type: contractsv1.ContextFabricRelationshipPartOf,
-			From:       contractsv1.ContextFabricSubjectRef{Kind: contractsv1.ContextFabricSubjectWorkItem, CanonicalID: childCanonicalID, Label: childID},
-			To:         contractsv1.ContextFabricSubjectRef{Kind: contractsv1.ContextFabricSubjectWorkItem, CanonicalID: parentCanonicalID, Label: parentID},
+			From:       contractsv1.ContextFabricSubjectRef{Kind: contractsv1.ContextFabricSubjectWorkItem, CanonicalID: childCanonicalID, Label: contextfabric.ReadableSourceID(contextfabric.SubjectWorkItem, childID)},
+			To:         contractsv1.ContextFabricSubjectRef{Kind: contractsv1.ContextFabricSubjectWorkItem, CanonicalID: parentCanonicalID, Label: contextfabric.ReadableSourceID(contextfabric.SubjectWorkItem, parentID)},
 			Derivation: contractsv1.ContextFabricDerivationCanonicalStructured, EpistemicStatus: contractsv1.ContextFabricEpistemicObserved,
 			Authorization: workItemAuthorization(repoID, repoSlug), EvidenceRefIDs: []string{hierarchyRef},
 			ObservedAt: observedAt, ValidFrom: validFrom, ValidTo: validTo, SourceVersion: ClickHouseSourceVersion,

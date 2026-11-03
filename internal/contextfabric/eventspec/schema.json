@@ -3215,6 +3215,17 @@
         "applicability": "written when a handle-mode anchor was given and a gate decision is available (absent when the gate is unavailable) (CHAOS-7158): the true gate decision, server side only"
       },
       {
+        "key": "reference_row",
+        "type": "string",
+        "presence": "conditional",
+        "closed_vocabulary": [
+          "pull_request_row",
+          "work_item_reading",
+          "unread"
+        ],
+        "applicability": "written when a handle-mode handle is a GitHub owner/repo#N reference, unanchored, of a caller who is not repository-restricted (CHAOS-12642): what the stored rows decided; unread keeps the work item reading"
+      },
+      {
         "key": "request_id",
         "type": "string",
         "presence": "conditional",
@@ -6422,6 +6433,40 @@
     ]
   },
   {
+    "id": "contextfabric.gated_offer_resolution_failure",
+    "msg": "context fabric gated offer resolution failed",
+    "level": "warn",
+    "multiplicity": "zero_or_one_per_request",
+    "attribution": [
+      "request_id"
+    ],
+    "bounded_aggregation": "at most one line per investigation: written only beside a failed gated offer resolution, and the window gate ends the pass.",
+    "fields": [
+      {
+        "key": "org_id",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "error_class",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "deadline_exceeded",
+          "canceled",
+          "dependency_unavailable",
+          "internal"
+        ]
+      },
+      {
+        "key": "request_id",
+        "type": "string",
+        "presence": "conditional",
+        "applicability": "written when the request context carries a request ID"
+      }
+    ]
+  },
+  {
     "id": "contextfabric.graphql_query",
     "msg": "context fabric graphql query",
     "level": "info",
@@ -8340,7 +8385,7 @@
         "type": "string",
         "presence": "required",
         "closed_vocabulary": [
-          "question-family.v6"
+          "question-family.v7"
         ]
       },
       {
@@ -9401,7 +9446,7 @@
         "presence": "required",
         "closed_vocabulary": [
           "",
-          "question-family.v6"
+          "question-family.v7"
         ]
       },
       {
@@ -9628,7 +9673,8 @@
           "",
           "projected",
           "precedence",
-          "carried"
+          "carried",
+          "scope_allocation"
         ]
       },
       {
@@ -12297,7 +12343,7 @@
         "type": "string",
         "presence": "required",
         "closed_vocabulary": [
-          "question-family.v6"
+          "question-family.v7"
         ]
       },
       {
@@ -18114,6 +18160,56 @@
     ]
   },
   {
+    "id": "graphrank.repository_reference_row",
+    "msg": "context fabric resolution trace: repository reference row",
+    "level": "info",
+    "multiplicity": "zero_or_one_per_request",
+    "attribution": [
+      "request_id"
+    ],
+    "bounded_aggregation": "at most one line per request: emitted from bindQuestionHandles only by the call that ran a reference read; the turn's memo keeps each read, so a later resolveSubjects call of the same turn reads none and writes no line",
+    "fields": [
+      {
+        "key": "request_id",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "stage",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "repository_reference_row"
+        ]
+      },
+      {
+        "key": "references",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "pull_request_row",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "work_item_row",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "not_found",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "unread",
+        "type": "int",
+        "presence": "required"
+      }
+    ]
+  },
+  {
     "id": "graphrank.reserved_kind_admitted",
     "msg": "context fabric resolution trace: reserved kind admitted",
     "level": "info",
@@ -18823,11 +18919,17 @@
         "closed_vocabulary": [
           "completed",
           "cancelled",
-          "failed"
+          "failed",
+          "unknown"
         ]
       },
       {
         "key": "sources_checked",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "sources_unknown",
         "type": "int",
         "presence": "required"
       },
@@ -18838,6 +18940,16 @@
       },
       {
         "key": "gap_count",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "days_compared",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "day_gap_count",
         "type": "int",
         "presence": "required"
       },

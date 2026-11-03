@@ -194,7 +194,23 @@ expected kind, which the model's `requested_subject_kind` fills, or a lone
   admits, or a link that could not be read (`contractsv1`
   `ContextFabricNamedRepository*LinkLimitation`). A failed or cut read never reads as
   "no link". With two named repositories nothing is read and nothing is said.
-- **Not here:** a team beside a handle and two handles are CHAOS-12557.
+- **A handle beside a team (CHAOS-12557).** Team = ownership only. A pull request or a
+  CI run is counted in the repositories the team owns now (the tree walk over current
+  OWNED_BY_TEAM edges, then one repository-anchored census each, at most 25; past that
+  nothing is read and the cut is logged at Info). A work item is counted across what you
+  can read. The same gate decides: a count of 1 commits beside the team; a stated 0 takes
+  the team out and ends in `no_match` (the declared-kind gate cannot redeem a team option
+  on a turn that states the handle's kind), with the scope's absence sentence; an
+  unstated 0 keeps the team's answer, with that sentence. A read that fails or is cut
+  changes nothing.
+- **Several handles beside a repository (CHAOS-12557).** A turn that states their kind
+  counts each inside the repository, takes the repository out, offers what was found and
+  asks for one at a time; a complete 0 among them gets the scope's absence sentence. A
+  turn that states no kind keeps the repository's answer, and the engine appends after
+  synthesis that it does not answer for them
+  (`contractsv1.ContextFabricSeveralHandlesUnansweredLimitation`). A turn that states
+  another kind, the repository's included, is untouched.
+- **Not here:** a project beside a handle (a follow-up row first).
 
 ## Gates
 
@@ -345,6 +361,39 @@ recheck batch, the group read), and every call reads one memo that `Investigate`
 attaches, so each prefix is read once per turn, a failed read included. Measured on the
 local stack: 40 to 130 ms under a one- to five-repository grant, 4 to 8 ms with no
 grant.
+
+### A GitHub reference names an issue or a pull request (CHAOS-12642)
+
+GitHub issues and pull requests share one number space, so `owner/repo#8` can name
+either, and the text cannot tell which. The sync also stores each GitHub pull
+request as a work item `ghpr:owner/repo#8`, so the work item reading alone commits
+that mirror, not the pull request. Before the prefix read, a turn reads the stored
+rows for each reference with `#`, through the census and under the caller's grant,
+in this order (lead ruling, CHAOS-12642):
+
+| Stored rows | Handle | Rule on the line |
+| --- | --- | --- |
+| a `git_pull_requests` row with that number, in a `github` repository of that name | `pull_request_repo_reference`, kind `pull_request` | `pull_request_row` |
+| else a work item with that key | `work_item_repo_reference`, as before | `work_item_row` |
+| neither | `work_item_repo_reference`; the census proves the absence | `not_found` |
+| a read that failed or did not close | `work_item_repo_reference`, as before | `unread` |
+
+The repository name compares trimmed and lower-cased. GitLab writes `!` for a merge
+request and `#` for an issue, so a `!` reference is never read as a pull request,
+and a GitLab repository never holds the pull request row. Each reference costs at
+most two census reads, the turn's memo keeps them, and a call makes at most 8
+census reads for references, the prefix read's budget; a reference past it is
+unread. `graphrank.repository_reference_row` logs at Info, once per turn, how
+many references each rule decided; counts only.
+
+`find_subjects` handle mode reads a whole `owner/repo#N` handle the same way: one
+pull request census first, and a row makes the handle the pull request. The direct
+read line names the decision in `reference_row` (`pull_request_row`,
+`work_item_reading`, `unread`). It reads only an unanchored handle of a caller
+who is not repository-restricted: a restricted caller is refused on the key shape
+before any read (CHAOS-7200), and with an anchor the census of a refused anchor
+must not show through the kind, so an anchored reference keeps the work item
+reading.
 
 `find_subjects` handle mode keeps one whole key of any prefix
 (`BindWorkItemKey`). A key in a sentence is refused there for every prefix; before

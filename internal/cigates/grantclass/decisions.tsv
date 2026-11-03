@@ -72,6 +72,8 @@ internal/contextfabric/directread/subject_gate.go	SubjectGate.decide	derived-esc
 internal/contextfabric/directread/subject_gate.go	needsOwnershipReach	compare	1	r-sub	project_only is restricted here: decide skips the reach for it, and markInactiveTeams reach check denies it every team (ownershipReachAdmits never admits it); c3 CHAOS-12299
 internal/contextfabric/directread/subject_lookup.go	SubjectLookup.Find	classify	1	r-sub	restricted callers get the restricted lookup (12107 v2 inventory subject_lookup.go:383)
 internal/contextfabric/directread/subject_lookup.go	SubjectLookup.Find	compare	1	r-sub	restricted callers get the restricted lookup (12107 v2 inventory subject_lookup.go:383)
+internal/contextfabric/directread/subject_lookup_modes.go	SubjectLookup.decideReferenceRow	classify	1	r-sub	a restricted caller, project_only included, skips the stored-row read of a repository reference: it is refused on the key shape before any read (CHAOS-12642)
+internal/contextfabric/directread/subject_lookup_modes.go	SubjectLookup.decideReferenceRow	compare	1	r-sub	a restricted caller, project_only included, skips the stored-row read of a repository reference: it is refused on the key shape before any read (CHAOS-12642)
 internal/contextfabric/directread/subject_lookup_modes.go	SubjectLookup.scanHandle	classify	1	r-sub	restricted callers get the restricted lookup (12107 v2 inventory subject_lookup_modes.go:246)
 internal/contextfabric/directread/subject_lookup_modes.go	SubjectLookup.scanHandle	compare	1	r-sub	restricted callers get the restricted lookup (12107 v2 inventory subject_lookup_modes.go:246)
 internal/contextfabric/directread/telemetry.go	AuthorizationLogArgs	classify	1	vocab	telemetry: the grant class written to the log (c4 CHAOS-12300)

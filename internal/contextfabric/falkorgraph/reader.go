@@ -308,6 +308,10 @@ func (a *Adapter) ResolveSubjects(ctx context.Context, principal storage.Princip
 		LinkScopedWorkItemsOf: func(ctx context.Context, scope contextfabric.RequestedScope, ids []string) (map[string]string, bool, error) {
 			return a.linkScopedWorkItemsOf(ctx, key, principal, scope, ids)
 		},
+		// CHAOS-12557: the repositories a team named beside a handle owns.
+		TeamOwnedRepositories: func(ctx context.Context, team contextfabric.SubjectRef, limit int) ([]contextfabric.SubjectRef, bool, error) {
+			return a.teamOwnedRepositories(ctx, key, principal, request.RequestedScope, team, limit)
+		},
 		// CHAOS-3972 P3: nil unless the composition root sets
 		// Config.HandleGrammarChecker -- see that field's own doc comment.
 		HandleGrammarChecker: a.config.HandleGrammarChecker,
@@ -653,7 +657,10 @@ func (a *Adapter) DiscoverContext(ctx context.Context, principal storage.Princip
 	// in the same call (a different anchor kind, or team-owns-project rather
 	// than team-owns-repository) is unaffected and still walks as before.
 	var declaredCohortKindForRouting contextfabric.SubjectKind
-	if request.Frame != nil {
+	// CHAOS-12606: when the anchor's own fact answers, the frame's member kind
+	// names no member set to read, so this read is a non-cohort read: no
+	// member walk, no census and no cohort.
+	if request.Frame != nil && !request.AnchorFactOnly {
 		declaredCohortKindForRouting, _, _ = contextfabric.CohortMemberKindForFrame(*request.Frame)
 	}
 	// shapeAnchorEligible/censusBasis/censusAdmitted are computed HERE, ahead
@@ -674,6 +681,9 @@ func (a *Adapter) DiscoverContext(ctx context.Context, principal storage.Princip
 	// call. RecordCohortExactNameCensusGate's own emission point stays
 	// where cohortExactNameCensusEligibility's doc comment documents it.
 	shapeAnchorEligible, censusBasis := cohortExactNameCensusEligibility(request.Frame, request.ScopeAnchorResolved)
+	if request.AnchorFactOnly {
+		shapeAnchorEligible = false
+	}
 	censusAdmitted := shapeAnchorEligible && len(request.Resolution.Committed) == 0
 	var ownershipRoutedRepoSlug string
 	var ownershipRoutedRepoID string

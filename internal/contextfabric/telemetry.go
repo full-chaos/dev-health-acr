@@ -635,6 +635,14 @@ func (t SlogEngineTelemetry) RecordGatedOfferResolution(ctx context.Context, pri
 	t.logger.InfoContext(ctx, "context fabric gated offer resolution", args...)
 }
 
+// RecordGatedOfferResolutionFailure (CHAOS-12681) logs at Warn: a failed
+// offers-only pass leaves the turn gated on the window alone, and the line says
+// why by a closed class, never by the error's text.
+func (t SlogEngineTelemetry) RecordGatedOfferResolutionFailure(ctx context.Context, principal storage.Principal, class GatedOfferErrorClass) {
+	args := append([]any{"org_id", SanitizeLogAttr(principal.OrgID), "error_class", SanitizeLogAttr(string(class))}, requestIDLogAttrs(ctx)...)
+	t.logger.WarnContext(ctx, "context fabric gated offer resolution failed", args...)
+}
+
 // RecordCohortStructureGate (CHAOS-4579/CHAOS-4531). outcome and shape are
 // both closed enums -- content-safe by construction, never question text,
 // a subject identifier, or an offer label. One event per

@@ -309,4 +309,39 @@ func TestDevhealthsourceIsolation_ownRaceJobAndBudget(t *testing.T) {
 			t.Fatalf("race-devhealthsource-fourth job must contain %q; block:\n%s", want, fourth)
 		}
 	}
+	// CHAOS-12717: internal/api runs alone in two halves, each through the
+	// budget wrapper with main's baseline, and the aggregate verify job waits
+	// for both.
+	for _, j := range []struct{ job, name, selector string }{
+		{"race-api", "name: race (api, isolated scope)", "-skip=$(scripts/ci/race-split.sh api rest)"},
+		{"race-api-heavy", "name: race (api heavy, isolated scope)", "-run=$(scripts/ci/race-split.sh api heavy)"},
+	} {
+		if !regexp.MustCompile(`(?m)^      - ` + regexp.QuoteMeta(j.job) + `\s*$`).MatchString(ciSrc) {
+			t.Fatalf("aggregate verify job must list %s in its needs", j.job)
+		}
+		start := strings.Index(ciSrc, "\n  "+j.job+":\n")
+		if start < 0 {
+			t.Fatalf("ci.yml must define a %s job", j.job)
+		}
+		block := ciSrc[start+1:]
+		if next := regexp.MustCompile(`(?m)^  [A-Za-z0-9_-]+:\s*$`).FindStringIndex(block[3:]); next != nil {
+			block = block[:next[0]+3]
+		}
+		for _, want := range []string{
+			j.name,
+			"- mirror-preflight",
+			"isolated-dedicated api",
+			j.selector,
+			"race-split.sh api verify",
+			"scripts/ci/run-isolated-budget.sh",
+			"uses: ./.github/actions/race-baseline",
+			"artifact: race-json-" + j.job + "\n",
+			"RACE_BASELINE_JSON: .tmp/race-baseline/race.json",
+			"name: race-json-" + j.job + "\n",
+		} {
+			if !strings.Contains(block, want) {
+				t.Fatalf("%s job must contain %q; block:\n%s", j.job, want, block)
+			}
+		}
+	}
 }

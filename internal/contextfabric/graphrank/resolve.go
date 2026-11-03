@@ -539,6 +539,11 @@ type ResolveDeps struct {
 	// so an item it did not prove is unknown, not unlinked, whatever committed.
 	// Nil means no such read.
 	WorkItemLinksUnread func() bool
+	// TeamOwnedRepositories returns the repositories a team currently owns that
+	// the caller may read, at most limit (CHAOS-12557: a handle named beside a
+	// team is read in them). complete is false when the read was cut or the team
+	// owns more. nil: no handle beside a team is read, and today's answer stands.
+	TeamOwnedRepositories func(ctx context.Context, team contextfabric.SubjectRef, limit int) (repositories []contextfabric.SubjectRef, complete bool, err error)
 	// LinkScopedWorkItemsOf returns, of ids, the work items in a requested
 	// repository scope, each with the strongest tier of its admitted links: a
 	// read keyed on the ids (CHAOS-12505), decided by the repository walk's own
@@ -2030,17 +2035,25 @@ type ResolutionTraceEvent struct {
 	// or label.
 	// WorkItemKey* (stage == "work_item_key_gate" ONLY, CHAOS-12463): counts, and
 	// no token, of the ticket-key shapes in one question.
-	WorkItemKeyTokens           int
-	WorkItemKeysHeld            int
-	WorkItemKeysUnread          int
-	PageHintCount               int
-	PageHintExactHit            int
-	PageHintLabelFallback       int
-	PageHintUnresolved          int
-	PageHintSearchFallback      bool
-	PageHintExactHitByKind      map[string]int
-	PageHintLabelFallbackByKind map[string]int
-	PageHintUnresolvedByKind    map[string]int
+	WorkItemKeyTokens  int
+	WorkItemKeysHeld   int
+	WorkItemKeysUnread int
+	// RepositoryReference* (stage == "repository_reference_row" ONLY,
+	// CHAOS-12642): counts, and no reference, of what the stored rows showed
+	// each owner/repo#N reference in one question to name.
+	RepositoryReferences               int
+	RepositoryReferencePullRequestRows int
+	RepositoryReferenceWorkItemRows    int
+	RepositoryReferencesNotFound       int
+	RepositoryReferencesUnread         int
+	PageHintCount                      int
+	PageHintExactHit                   int
+	PageHintLabelFallback              int
+	PageHintUnresolved                 int
+	PageHintSearchFallback             bool
+	PageHintExactHitByKind             map[string]int
+	PageHintLabelFallbackByKind        map[string]int
+	PageHintUnresolvedByKind           map[string]int
 	// PageHintOtherKindByKind counts the page hints dropped because the question
 	// asks for another kind (CHAOS-12555), by the hint's own kind.
 	PageHintOtherKind       int
@@ -2841,17 +2854,53 @@ func resolveSubjects(ctx context.Context, principal storage.Principal, request c
 	// decision path at worst.
 	if !contextfabric.OffersOnlyResolution(ctx) {
 		comparison := contextfabric.ClassifyComparisonOperands(frame)
+		basis := ComparisonKindBasisStated
+		if comparison.Admission == contextfabric.ComparisonHeldScopedOperand {
+			basis = ComparisonKindBasisNone
+		}
+		// CHAOS-12600: a bare-name pair whose sides each match exactly one
+		// subject by its full label, all of one kind, resolves under that kind.
+		// A refusal keeps today's path (the kind question), and its reason is
+		// on the policy line, which fires for the pair either way.
+		// One exact-name read serves this check and the comparison it
+		// enables: the same once-per-comparison wrapper the comparison uses.
+		deps = withSharedExactNameCandidates(deps)
+		resolved, exactMatched, refusal, ok, exactErr := exactLabelPairKind(ctx, deps, comparison)
+		if exactErr != nil {
+			// The refusal line is written before the error returns, so a
+			// failed census is diagnosable from its own artifacts.
+			recordComparisonPolicy(ctx, principal, request, deps, comparison, ComparisonKindBasisNone, refusal)
+			return contextfabric.SubjectResolution{}, contextfabric.StructureOfferMaterial{}, exactErr
+		}
+		if ok {
+			comparison, basis = resolved, ComparisonKindBasisExactLabel
+		} else if refusal != "" {
+			recordComparisonPolicy(ctx, principal, request, deps, comparison, ComparisonKindBasisNone, refusal)
+		}
 		switch comparison.Admission {
 		case contextfabric.ComparisonAdmittedNamedPair, contextfabric.ComparisonHeldScopedOperand:
 			request := comparisonRequest(ctx, comparison, request)
-			if inactive, inactiveErr := inactiveCallerTeamHints(ctx, deps, request); inactiveErr != nil {
-				return contextfabric.SubjectResolution{}, contextfabric.StructureOfferMaterial{}, inactiveErr
-			} else if len(inactive) > 0 {
+			if inactive, inactiveErr := inactiveCallerTeamHints(ctx, deps, request); inactiveErr != nil || len(inactive) > 0 {
+				// Codex r3: a pair whose kind the exact-label rule resolved
+				// writes its policy line on these exits too, so the decision
+				// is in the run's own log.
+				if basis == ComparisonKindBasisExactLabel {
+					recordComparisonPolicy(ctx, principal, request, deps, comparison, basis, "")
+				}
+				if inactiveErr != nil {
+					return contextfabric.SubjectResolution{}, contextfabric.StructureOfferMaterial{}, inactiveErr
+				}
 				return contextfabric.SubjectResolution{Candidates: []contextfabric.SubjectCandidate{}, Committed: []contextfabric.SubjectRef{}, InactiveHints: inactive}, contextfabric.StructureOfferMaterial{}, nil
 			}
-			resolution, bases, digests, err := resolveNamedComparison(ctx, principal, request, deps, comparison, admission)
+			resolution, bases, digests, err := resolveNamedComparisonWithBasis(ctx, principal, request, deps, comparison, admission, basis)
 			if err != nil {
 				return contextfabric.SubjectResolution{}, contextfabric.StructureOfferMaterial{}, err
+			}
+			if basis == ComparisonKindBasisExactLabel && committedEvery(resolution.Committed, exactMatched) {
+				// Disclosed only when each side committed the subject its name
+				// matched: a side that still asks is a question, not a
+				// reading. Both sides may name one subject, which commits once.
+				resolution.ExactLabelKind = comparison.Slots[0].Kind
 			}
 			commitBases.ResetTo(bases)
 			commitDigests.ResetTo(digests)
@@ -2869,6 +2918,8 @@ func resolveSubjects(ctx context.Context, principal storage.Principal, request c
 		// The frame's own terms say what the question names.
 		terms = boundedFrameTerms(frame)
 	}
+	// CHAOS-12663: every spelling behind terms, which keeps one per name.
+	typedTerms := append(subjectTermInputs(request, interpreted), terms...)
 	// offersOnly (CHAOS-4234): the class-default window gate's offers-only
 	// mode -- every commit MECHANISM below that only exists to reach a
 	// commit (shadow evidence round/census, confirmed-kind truncation
@@ -3847,7 +3898,7 @@ func resolveSubjects(ctx context.Context, principal storage.Principal, request c
 	// exactRefusal is the exact-label refusal of this resolution, carried into
 	// every later decision over a new pool (exact_label_proof.go).
 	var exactRefusal exactLabelRefusal
-	resolution, firstPassBases, firstPassDigests := resolveFromMergedCandidatesWithAnchorSlot(candidatesBySubject, observationParentKey, observationBlocked, request.Options.MaxSubjectCandidates, request.Options.AllowClarification, searchTruncated, vectorArmSimilarity, deps.VectorMarginCommitThreshold, retrievalDegraded, effectiveSearchLimit, deps.CalibratedTopK, unscopedVisibility, gate, identity, identityTerms, identityLookup, firstPassTracer, request.RequestID, "", false, false, frameReservedKinds(frame, anchorScope.Kind), anchorReservedSlot{Kind: anchorScope.Kind, Source: anchorScope.Source}, &exactRefusal, kindRescue, pass)
+	resolution, firstPassBases, firstPassDigests := resolveFromMergedCandidatesWithAnchorSlot(candidatesBySubject, observationParentKey, observationBlocked, request.Options.MaxSubjectCandidates, request.Options.AllowClarification, searchTruncated, vectorArmSimilarity, deps.VectorMarginCommitThreshold, retrievalDegraded, effectiveSearchLimit, deps.CalibratedTopK, unscopedVisibility, gate, identity, identityTerms, identityLookup, firstPassTracer, request.RequestID, "", false, false, frameReservedKinds(frame, anchorScope.Kind), typedTerms, anchorReservedSlot{Kind: anchorScope.Kind, Source: anchorScope.Source}, &exactRefusal, kindRescue, pass)
 	commitBases.ResetTo(firstPassBases)
 	commitDigests.ResetTo(firstPassDigests)
 	// coverageFloorDegraded (CHAOS-4038, codex review round 2 finding 1) is
@@ -3870,7 +3921,7 @@ func resolveSubjects(ctx context.Context, principal storage.Principal, request c
 	if teamOffers != nil {
 		pass++
 		candidatesBySubject = teamPool
-		resolution, firstPassBases, firstPassDigests = resolveFromMergedCandidatesWithAnchorSlot(candidatesBySubject, observationParentKey, observationBlocked, request.Options.MaxSubjectCandidates, request.Options.AllowClarification, searchTruncated, vectorArmSimilarity, deps.VectorMarginCommitThreshold, retrievalDegraded, effectiveSearchLimit, deps.CalibratedTopK, unscopedVisibility, gate, identity, identityTerms, identityLookup, firstPassTracer, request.RequestID, "", false, false, frameReservedKinds(frame, anchorScope.Kind), anchorReservedSlot{Kind: anchorScope.Kind, Source: anchorScope.Source}, &exactRefusal, kindRescue, pass)
+		resolution, firstPassBases, firstPassDigests = resolveFromMergedCandidatesWithAnchorSlot(candidatesBySubject, observationParentKey, observationBlocked, request.Options.MaxSubjectCandidates, request.Options.AllowClarification, searchTruncated, vectorArmSimilarity, deps.VectorMarginCommitThreshold, retrievalDegraded, effectiveSearchLimit, deps.CalibratedTopK, unscopedVisibility, gate, identity, identityTerms, identityLookup, firstPassTracer, request.RequestID, "", false, false, frameReservedKinds(frame, anchorScope.Kind), typedTerms, anchorReservedSlot{Kind: anchorScope.Kind, Source: anchorScope.Source}, &exactRefusal, kindRescue, pass)
 		commitBases.ResetTo(firstPassBases)
 		commitDigests.ResetTo(firstPassDigests)
 		resolution.RetrievalDegraded = retrievalDegraded || coverageFloorDegraded || traversalDegraded > 0
@@ -4044,7 +4095,7 @@ func resolveSubjects(ctx context.Context, principal storage.Principal, request c
 				scopedPool, scopedObservationParentKey, scopedObservationBlocked, request.Options.MaxSubjectCandidates,
 				request.Options.AllowClarification, false, nil, 0, false, effectiveSearchLimit, 0,
 				unscopedVisibility, gate, scopedIdentity, scopedIdentityTerms, identityLookup,
-				scopedDecisionTracer, request.RequestID, "", true, false, nil, anchorReservedSlot{}, &exactRefusal, kindRescue, pass,
+				scopedDecisionTracer, request.RequestID, "", true, false, nil, typedTerms, anchorReservedSlot{}, &exactRefusal, kindRescue, pass,
 			)
 			if len(scopedResolution.Committed) > 0 {
 				resolution = scopedResolution
@@ -4196,7 +4247,7 @@ func resolveSubjects(ctx context.Context, principal storage.Principal, request c
 					commitCensusAttestedBesideScopeAnchor(&resolution, candidatesBySubject[attestedKey], request, deps, commitBases, commitDigests, searchTruncated, identityLookup, effectiveSearchLimit, pass)
 				} else {
 					pass++
-					resolution, censusBases, censusDigests = resolveFromMergedCandidatesWithAnchorSlot(candidatesBySubject, observationParentKey, observationBlocked, request.Options.MaxSubjectCandidates, request.Options.AllowClarification, searchTruncated, vectorArmSimilarity, deps.VectorMarginCommitThreshold, retrievalDegraded, effectiveSearchLimit, deps.CalibratedTopK, unscopedVisibility, gate, identity, identityTerms, identityLookup, deps.ResolutionTracer, request.RequestID, attestedKey, false, false, nil, anchorReservedSlot{}, &exactRefusal, kindRescue, pass)
+					resolution, censusBases, censusDigests = resolveFromMergedCandidatesWithAnchorSlot(candidatesBySubject, observationParentKey, observationBlocked, request.Options.MaxSubjectCandidates, request.Options.AllowClarification, searchTruncated, vectorArmSimilarity, deps.VectorMarginCommitThreshold, retrievalDegraded, effectiveSearchLimit, deps.CalibratedTopK, unscopedVisibility, gate, identity, identityTerms, identityLookup, deps.ResolutionTracer, request.RequestID, attestedKey, false, false, nil, typedTerms, anchorReservedSlot{}, &exactRefusal, kindRescue, pass)
 					commitBases.ResetTo(censusBases)
 					commitDigests.ResetTo(censusDigests)
 					resolution.RetrievalDegraded = retrievalDegraded || coverageFloorDegraded || traversalDegraded > 0

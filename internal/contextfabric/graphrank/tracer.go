@@ -528,6 +528,14 @@ func (t SlogResolutionTracer) Trace(event ResolutionTraceEvent) {
 		t.logger.WarnContext(ctx, "context fabric resolution trace: work item key prefix unread",
 			"request_id", contextfabric.SanitizeLogAttr(event.RequestID), "stage", contextfabric.SanitizeLogAttr(event.Stage),
 			"key_shapes", event.WorkItemKeyTokens, "held", event.WorkItemKeysHeld, "unread", event.WorkItemKeysUnread)
+	case "repository_reference_row":
+		// CHAOS-12642: which stored row decided each owner/repo#N reference.
+		// Counts only, no reference.
+		t.logger.InfoContext(ctx, "context fabric resolution trace: repository reference row",
+			"request_id", contextfabric.SanitizeLogAttr(event.RequestID), "stage", contextfabric.SanitizeLogAttr(event.Stage),
+			"references", event.RepositoryReferences, "pull_request_row", event.RepositoryReferencePullRequestRows,
+			"work_item_row", event.RepositoryReferenceWorkItemRows, "not_found", event.RepositoryReferencesNotFound,
+			"unread", event.RepositoryReferencesUnread)
 	case "page_hint_lookup":
 		// CHAOS-12230: at most one line per resolveSubjects call, Info like
 		// kind_offer_withheld above: a page hint that misses the exact lookup

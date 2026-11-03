@@ -704,7 +704,12 @@ func LookupQuestionFamily(family QuestionFamily) (QuestionFamilyDefinition, bool
 // {allocate_investment} is served investment_allocation (CHAOS-12585), where it
 // was a discovered_cohort_ranking. The reuse lookup runs before interpretation,
 // so stored answers planned under v5 for these questions must not be replayed.
-const QuestionFamilyTableVersion = "question-family.v6"
+//
+// v6 -> v7: a team's children_of_scope question whose goal set is exactly
+// {allocate_investment} is served investment_allocation from the team's own fact
+// (CHAOS-12606), where it was a scoped_cohort_status. Stored answers planned
+// under v6 for these questions must not be replayed.
+const QuestionFamilyTableVersion = "question-family.v7"
 
 func allStructureNeedKinds() []StructureNeedKind {
 	wire := contractsv1.ContextFabricStructureNeedKindVocabulary()

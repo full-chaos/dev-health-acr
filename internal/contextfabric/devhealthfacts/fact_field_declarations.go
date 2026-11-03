@@ -643,7 +643,7 @@ func landscapeAreaColumns() []columnDecl {
 		cInt("identity_count", "count"),
 		cInt("churn_loc_30d", "loc"),
 		cInt("delivery_units_30d", "count"),
-		cNum("cycle_p50_30d_hours_avg", "hours"),
+		cNullable(cNum("cycle_p50_30d_hours_avg", "hours")),
 		cInt("wip_max_30d", "count"),
 	}
 }
@@ -794,6 +794,8 @@ func workloadFields() []fieldDecl {
 			fStr("forecast_p85_date"),
 			fStr("forecast_p95_date"),
 			fInt("simulation_count", "count"),
+			// CHAOS-12634: the item target of the fixed-scope run.
+			fInt("target_items", "count"),
 			fInt("horizon_days", "days"),
 			fInt("unfinished_runs", "count"),
 			fStr("completion_distribution_state"),

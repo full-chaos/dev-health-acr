@@ -250,15 +250,36 @@ func anchorProviderValue(anchorKind contextfabric.SubjectKind, canonicalID strin
 // own CHAOS-3789 scan-then-convert note) -- the handle grammar already
 // extracts the bare digits, so no inversion is needed here (unlike the
 // work-item ticket-key class below).
+//
+// A pull_request_repo_reference value ("owner/repo#12", CHAOS-12642) also names
+// the repository: the number must sit in a GitHub repository of that name. The
+// name compares trimmed and lower-cased, like the repository filter
+// (census_repository_filter.go), since GitHub names are not case-sensitive. A
+// GitLab "#N" is an issue, never a merge request, so only a github repository
+// can hold the row.
 func pullRequestNumberPredicate(value string) (CensusPredicate, error) {
-	number, err := strconv.ParseUint(value, 10, 32)
+	repository, digits, isReference := strings.Cut(value, "#")
+	if !isReference {
+		digits = value
+	}
+	number, err := strconv.ParseUint(digits, 10, 32)
 	if err != nil {
 		return CensusPredicate{}, fmt.Errorf("devhealthsource: invalid pull_request handle %q: %w", value, err)
 	}
-	return CensusPredicate{
+	predicate := CensusPredicate{
 		SQL:      "p.number = {census_handle_pr_number:UInt32}",
 		Bindings: []contextpacket.ClickHouseBinding{{Name: "census_handle_pr_number", Value: uint32(number)}},
-	}, nil
+	}
+	if !isReference {
+		return predicate, nil
+	}
+	repository = strings.ToLower(strings.TrimSpace(repository))
+	if repository == "" {
+		return CensusPredicate{}, fmt.Errorf("devhealthsource: invalid pull_request reference %q", value)
+	}
+	predicate.SQL += " AND toString(p.repo_id) IN (SELECT toString(id) FROM repos FINAL WHERE org_id = {census_org_id:String} AND provider = 'github' AND lower(trimBoth(repo)) = {census_handle_pr_repository:String})"
+	predicate.Bindings = append(predicate.Bindings, contextpacket.ClickHouseBinding{Name: "census_handle_pr_repository", Value: repository})
+	return predicate, nil
 }
 
 // workItemTicketKeyPredicate is the work_item handle registry entry's SQL
