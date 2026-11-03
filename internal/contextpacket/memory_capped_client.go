@@ -90,6 +90,10 @@ type MemoryNearCap struct {
 	// memory-limit exception before any peak value was read: PeakBytes is then
 	// the cap, and the real peak is at least that.
 	PeakIsLowerBound bool
+	// ServerTotal is true when the refusal was the server's total memory
+	// limit, not the statement's own cap (CHAOS-12683): PeakBytes is then the
+	// statement's observed peak (0 when none was read), never the cap.
+	ServerTotal bool
 }
 
 // memoryLimitExceededCode is the ClickHouse exception code of a statement that
@@ -198,15 +202,30 @@ func isMemoryLimitExceeded(err error) bool {
 	return errors.As(err, &exception) && exception.Code == memoryLimitExceededCode
 }
 
+// isServerTotalMemoryLimit reports a code 241 raised by the server's total
+// memory limit ("(total) memory limit exceeded"), not by the statement's own
+// max_memory_usage ("Memory limit (for query) exceeded") (CHAOS-12683).
+func isServerTotalMemoryLimit(err error) bool {
+	var exception *clickhousedriver.Exception
+	return errors.As(err, &exception) && exception.Code == memoryLimitExceededCode && strings.Contains(strings.ToLower(exception.Message), "(total)")
+}
+
 func (c memoryCappedQueryClient) observeRefused(ctx context.Context, statement string, err error, peak uint64) {
 	if c.observer == nil || !isMemoryLimitExceeded(err) {
 		return
 	}
-	c.observeRefusal(ctx, statement, peak)
+	c.observeRefusal(ctx, statement, peak, isServerTotalMemoryLimit(err))
 }
 
-func (c memoryCappedQueryClient) observeRefusal(ctx context.Context, statement string, peak uint64) {
+// observeRefusal reports a code 241. The statement's own cap is a lower bound
+// on its peak; the server's total limit says nothing about this statement's
+// peak, so a server-total refusal keeps the peak it observed (CHAOS-12683).
+func (c memoryCappedQueryClient) observeRefusal(ctx context.Context, statement string, peak uint64, serverTotal bool) {
 	capBytes := effectiveStatementCap(statement, c.capBytes)
+	if serverTotal {
+		c.observer(ctx, MemoryNearCap{Statement: statement, PeakBytes: peak, CapBytes: capBytes, ServerTotal: true})
+		return
+	}
 	if peak < capBytes {
 		peak = capBytes
 	}
@@ -238,11 +257,15 @@ type memoryObservedRows struct {
 	peak      *atomic.Uint64
 	reported  atomic.Bool
 	refused   atomic.Bool
+	total     atomic.Bool
 }
 
 func (r *memoryObservedRows) noteRefusal(err error) {
 	if isMemoryLimitExceeded(err) {
 		r.refused.Store(true)
+		if isServerTotalMemoryLimit(err) {
+			r.total.Store(true)
+		}
 	}
 }
 
@@ -258,7 +281,7 @@ func (r *memoryObservedRows) Close() error {
 	if r.reported.CompareAndSwap(false, true) {
 		peak := r.peak.Load()
 		if r.refused.Load() && r.client.observer != nil {
-			r.client.observeRefusal(r.ctx, r.statement, peak)
+			r.client.observeRefusal(r.ctx, r.statement, peak, r.total.Load())
 			return err
 		}
 		if peak == 0 && r.client.unobserved != nil {
@@ -287,6 +310,15 @@ func NewSlogMemoryNearCapObserver(logger *slog.Logger, count func(context.Contex
 		head := strings.Join(strings.Fields(near.Statement), " ")
 		if len(head) > 80 {
 			head = head[:80]
+		}
+		if near.ServerTotal {
+			// CHAOS-12683: the server's total limit refused this statement; its
+			// own cap was not reached, so the cap is named as the statement's cap,
+			// never as its peak.
+			logger.WarnContext(ctx, "clickhouse server memory limit refused a statement",
+				"statement_sha", hex.EncodeToString(sum[:6]), "statement_head", head,
+				"peak_bytes", near.PeakBytes, "statement_cap_bytes", near.CapBytes)
+			return
 		}
 		logger.WarnContext(ctx, "clickhouse statement memory near cap",
 			"statement_sha", hex.EncodeToString(sum[:6]), "statement_head", head,

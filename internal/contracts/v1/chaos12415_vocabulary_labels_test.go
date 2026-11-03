@@ -180,6 +180,9 @@ func vocabularySources(t *testing.T) map[ContextFabricVocabulary][][]string {
 			closedVocabularyStrings(units[:]), schemaMeasureUnitValues(t, defs),
 		},
 		ContextFabricVocabularySubcategory: {closedVocabularyStrings(subcategories[:])},
+		ContextFabricVocabularyCompletionDistributionState: {
+			closedVocabularyStrings(ContextFabricCompletionDistributionStates()), schema("ClaimedCompletionForecast", "state"),
+		},
 	}
 }
 

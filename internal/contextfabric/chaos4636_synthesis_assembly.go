@@ -468,6 +468,13 @@ func (e *Engine) synthesizeAndAssemble(ctx context.Context, principal storage.Pr
 		result.LimitationsDisplaced += displaced
 		result.Coverage.Partial = true
 	}
+	// CHAOS-12557 (ruling (c)): several identifiers named beside a repository, no
+	// kind stated; the answer says it does not answer for them.
+	if resolution.UnansweredHandlesLimitation != "" {
+		composed, displaced := appendBoundedLimitations(result.Limitations, []string{resolution.UnansweredHandlesLimitation})
+		result.Limitations = composed
+		result.LimitationsDisplaced += displaced
+	}
 	// CHAOS-12505 (ruling 3): a work item committed beside a named repository; the
 	// answer says whether a pull request link joins them. The engine states it.
 	if resolution.NamedRepositoryLinkLimitation != "" {
@@ -822,6 +829,7 @@ func (e *Engine) synthesizeAndAssemble(ctx context.Context, principal storage.Pr
 	// project says whether its value is the project's own mix or its owning
 	// teams' roll-up, from the fact it is grounded against.
 	result.ClaimedFacts = discloseInvestmentMix(result.ClaimedFacts, facts.Facts)
+	result.ClaimedFacts = discloseCompletionForecast(result.ClaimedFacts, facts.Facts)
 	// THE PROSE, COMPOSED AFTER THE RECOMPOSE -- and the split from the mint
 	// above is deliberate, not an accident of layout.
 	//

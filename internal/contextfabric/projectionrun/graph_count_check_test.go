@@ -70,6 +70,23 @@ type countingBackend struct {
 
 	edgeGraph map[contextfabric.EdgeCountKey]int64
 	edgeErr   error
+
+	// unmarked: no walk from zero has marked the source's owned nodes yet
+	// (CHAOS-12649); markerErr fails that read.
+	unmarked  bool
+	markerErr error
+
+	// days is the graph's owned nodes per kind and UTC day (CHAOS-12649).
+	days    map[contextfabric.SubjectKind]map[int64]int64
+	daysErr error
+}
+
+func (b *countingBackend) CountKindByDay(_ context.Context, _ string, kind contextfabric.SubjectKind) (map[int64]int64, error) {
+	return b.days[kind], b.daysErr
+}
+
+func (b *countingBackend) OwnedCountsKnown(context.Context, string, string) (bool, error) {
+	return !b.unmarked, b.markerErr
 }
 
 func (b *countingBackend) CountEdges(_ context.Context, _ string, key contextfabric.EdgeCountKey) (int64, error) {
@@ -141,6 +158,10 @@ type nodeOnlyBackend struct {
 
 func (b nodeOnlyBackend) CountKind(ctx context.Context, org string, kind contextfabric.SubjectKind) (int64, error) {
 	return b.inner.CountKind(ctx, org, kind)
+}
+
+func (b nodeOnlyBackend) OwnedCountsKnown(ctx context.Context, org, source string) (bool, error) {
+	return b.inner.OwnedCountsKnown(ctx, org, source)
 }
 
 func buildCountHarness(t *testing.T, sourceCounts, graphCounts map[contextfabric.SubjectKind]int64, sourceErr, graphErr error, interval time.Duration, wrapSource func(*countingSource) contextfabric.ProjectionSource, wrapBackend func(*countingBackend) contextfabric.ProjectionBackend, fetchErr ...error) *countHarness {

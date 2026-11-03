@@ -169,7 +169,7 @@ func (o SlogObserver) ObserveGraphCountCheck(check GraphCountCheck) {
 	if logger == nil {
 		logger = slog.Default()
 	}
-	fields := eventspec.NewGraphCountCheckFinishedFields(orgIDHash(check.OrgID), check.Instance, check.Pass, check.Outcome, check.SourcesChecked, check.KindsCompared, check.Gaps, check.RelationsCompared, check.EdgeGaps, check.RelationsDeferred, check.Errors, int(check.Duration.Milliseconds()))
+	fields := eventspec.NewGraphCountCheckFinishedFields(orgIDHash(check.OrgID), check.Instance, check.Pass, check.Outcome, check.SourcesChecked, check.SourcesUnknown, check.KindsCompared, check.Gaps, check.DaysCompared, check.DayGaps, check.RelationsCompared, check.EdgeGaps, check.RelationsDeferred, check.Errors, int(check.Duration.Milliseconds()))
 	logger.Info(eventspec.GraphCountCheckFinished.Msg, fields.SlogArgs()...)
 }
 
