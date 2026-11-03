@@ -60,6 +60,11 @@ type besideLiveTurn struct {
 	// link is the named-repository link sentence the resolution handed to
 	// synthesis (CHAOS-12505 ruling 3).
 	link string
+	// unanswered is the several-handles sentence the resolution handed to
+	// synthesis (CHAOS-12557 ruling (c)).
+	unanswered string
+	// census is the census sentence the resolution handed to synthesis.
+	census string
 }
 
 func (b besideLiveTurn) hasCommitted(kind contextfabric.SubjectKind) bool {
@@ -136,11 +141,25 @@ func TestANamedSubjectBesideARepositoryOnRealStores(t *testing.T) {
 		exec("link", `INSERT INTO work_graph_issue_pr (repo_id, work_item_id, pr_number, confidence, provenance, evidence, last_synced, org_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
 			repo[item.slug], item.id, item.number, float32(0.9), "native", "", now.Add(time.Duration(i)*time.Millisecond), org)
 	}
+	// CHAOS-12557: a team that owns the GitHub and the GitLab repository, not
+	// acme/r01.
+	const teamID, teamName = "TWIDGET", "Widget Guild"
+	exec("team", `INSERT INTO teams (id, name, description, updated_at, last_synced, org_id, provider, native_team_key, project_keys, is_active) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		teamID, teamName, "", created, created, org, "linear", teamID, []string{}, uint8(1))
+	for _, slug := range []string{github, gitlab} {
+		exec("ownership", `INSERT INTO team_repo_ownership (org_id, provider, team_id, repo_id, repo_full_name, match_type, source, is_primary, specificity, priority, valid_from, valid_to, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+			org, "github", teamID, repo[slug], slug, "exact", "native", uint8(1), uint16(1), int32(1), created, nil, created)
+	}
 	main, err := devhealthsource.NewClickHouseProjectionSource(query)
 	if err != nil {
 		t.Fatal(err)
 	}
 	scopedDrain(t, ctx, main, devhealthsource.SourceName, org, adapter)
+	teamsSource, err := devhealthsource.NewTeamsProjectsSource(query, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	scopedDrain(t, ctx, teamsSource, devhealthsource.TeamsProjectsSourceName, org, adapter)
 
 	restricted := userprincipal.Narrowed(t, org, []string{"acme/*"}, inside)
 	unrestricted := storage.Principal{OrgID: org, Subject: "u", CredentialID: "c"}
@@ -163,6 +182,8 @@ func TestANamedSubjectBesideARepositoryOnRealStores(t *testing.T) {
 			Synthesizer: synthesizeFunc(func(_ context.Context, _ storage.Principal, input contextfabric.SynthesisInput) (contextfabric.InvestigationResult, error) {
 				got.synthesized = true
 				got.link = input.Graph.Resolution.NamedRepositoryLinkLimitation
+				got.unanswered = input.Graph.Resolution.UnansweredHandlesLimitation
+				got.census = input.Graph.Resolution.CensusLimitation
 				for _, subject := range input.Graph.Resolution.Committed {
 					got.committed = append(got.committed, string(subject.Kind))
 				}
@@ -329,6 +350,73 @@ func TestANamedSubjectBesideARepositoryOnRealStores(t *testing.T) {
 			})
 		})
 	}
+	// CHAOS-12557, on real stores: a handle beside a team is read in the
+	// repositories the team owns; several handles beside a repository are offered
+	// one at a time, or, with no kind stated, the repository's answer says it does
+	// not answer for them.
+	t.Run("a handle beside a team, several handles beside a repository", func(t *testing.T) {
+		teamQ := func(handle string) string { return "What is the state of " + handle + " in team " + teamName + "?" }
+		hasTeam := func(got besideLiveTurn) bool { return got.hasCommitted(contextfabric.SubjectTeam) }
+		for name, principal := range callers {
+			kindPR := stated(contextfabric.SubjectPullRequest, teamName)
+			unstatedTeam := unstated(teamName)
+			// Count 1 in what the team owns, on each provider: both commit.
+			for _, handle := range []string{"pull request 77", "pull request 75"} {
+				got := turn(t, principal, teamQ(handle), teamName, kindPR, nil)
+				if !got.synthesized || !hasTeam(got) || !got.hasCommitted(contextfabric.SubjectPullRequest) {
+					t.Fatalf("%s, %s: synthesis %t committed %v, want the team and the pull request", name, handle, got.synthesized, got.committed)
+				}
+			}
+			mentioned := turn(t, principal, teamQ("pull request 77"), teamName, unstatedTeam, nil)
+			if !mentioned.synthesized || !hasTeam(mentioned) || !mentioned.hasCommitted(contextfabric.SubjectPullRequest) {
+				t.Fatalf("%s, unstated 77: synthesis %t committed %v", name, mentioned.synthesized, mentioned.committed)
+			}
+			// Pull request 78 is in acme/r01, which the team does not own, and 999
+			// is nowhere: a stated 0 takes the team out, with the in-scope absence.
+			for _, handle := range []string{"pull request 78", "pull request 999"} {
+				// The team leaves the answer. A turn that states a pull request
+				// cannot redeem a team option (the declared-kind gate), so it ends
+				// in no_match, with the in-scope absence beside it; nothing reaches
+				// synthesis and nothing says a subject matched.
+				out := turn(t, principal, teamQ(handle), teamName, kindPR, nil)
+				if out.synthesized || out.result.Status != contextfabric.InvestigationNoMatch || !slices.Contains(out.result.Limitations, scope) {
+					t.Fatalf("%s, stated %s: synthesis %t status %q limitations %q, want no_match with the in-scope absence", name, handle, out.synthesized, out.result.Status, out.result.Limitations)
+				}
+				for _, limitation := range out.result.Limitations {
+					if strings.Contains(limitation, "authorized subject matched") {
+						t.Fatalf("%s, stated %s: limitations %q say a subject matched", name, handle, out.result.Limitations)
+					}
+				}
+				kept := turn(t, principal, teamQ(handle), teamName, unstatedTeam, nil)
+				if !kept.synthesized || !hasTeam(kept) || kept.hasCommitted(contextfabric.SubjectPullRequest) || kept.census != scope {
+					t.Fatalf("%s, unstated %s: synthesis %t committed %v census %q, want the team's answer and the in-scope absence", name, handle, kept.synthesized, kept.committed, kept.census)
+				}
+			}
+			// A work item beside the team: its census reads what the caller reads.
+			item := turn(t, principal, "Why is CHAOS-71 blocked in team "+teamName+"?", teamName, stated(contextfabric.SubjectWorkItem, teamName), nil)
+			if !item.synthesized || !hasTeam(item) || !item.hasCommitted(contextfabric.SubjectWorkItem) {
+				t.Fatalf("%s, work item: synthesis %t committed %v", name, item.synthesized, item.committed)
+			}
+			// Several handles beside a repository.
+			two := "What is the state of pull request 77 and pull request 999 in " + github + "?"
+			owed := turn(t, principal, two, github, stated(contextfabric.SubjectPullRequest, github), nil)
+			if owed.synthesized || owed.result.Status != contextfabric.InvestigationClarificationRequired {
+				t.Fatalf("%s, two stated: synthesis %t status %q, want the clarification", name, owed.synthesized, owed.result.Status)
+			}
+			if prompt := owed.result.SubjectResolution.ClarificationPrompt; !strings.Contains(prompt, "ask about one at a time") {
+				t.Fatalf("%s, two stated: prompt %q", name, prompt)
+			}
+			if !slices.ContainsFunc(owed.result.SubjectResolution.Candidates, func(c contextfabric.SubjectCandidate) bool {
+				return c.Subject.Kind == contextfabric.SubjectPullRequest
+			}) {
+				t.Fatalf("%s, two stated: candidates %+v, want pull request 77 offered", name, owed.result.SubjectResolution.Candidates)
+			}
+			said := turn(t, principal, two, github, unstated(github), nil)
+			if !said.synthesized || !said.hasCommitted(contextfabric.SubjectRepository) || said.unanswered != contractsv1.ContextFabricSeveralHandlesUnansweredLimitation {
+				t.Fatalf("%s, two unstated: synthesis %t committed %v sentence %q", name, said.synthesized, said.committed, said.unanswered)
+			}
+		}
+	})
 	t.Run("no row outside the grant shows, on either provider", func(t *testing.T) {
 		kindPR := stated(contextfabric.SubjectPullRequest, github)
 		absent(t, turn(t, restricted, pr("555", github), github, kindPR, nil), scope)
