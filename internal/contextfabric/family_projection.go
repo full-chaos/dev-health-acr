@@ -283,6 +283,11 @@ func DeriveQuestionFamily(frame QuestionFrame) FamilyProjection {
 	// derives unavailable outcomes. The route stays in the table because
 	// it is the correct projection; what is withdrawn is any claim that it
 	// improves an answer today.
+	//
+	// The investment row is the exception, and it is served: the organization's
+	// own investment fact answers "where does our effort go" (CHAOS-12585), so
+	// RouteFrameFamily serves this projection for the goal set
+	// {allocate_investment}.
 	case SubjectExpressionNamed, SubjectExpressionOrganizationScope:
 		switch {
 		case frame.HasGoal(GoalAllocateInvestment):

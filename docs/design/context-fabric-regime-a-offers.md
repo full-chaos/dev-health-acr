@@ -43,7 +43,9 @@ flowchart TD
     RS -- "resolution, bases, digests" --> X[DISCARDED]
     RS -- "StructureOfferMaterial" --> P[consultPriorStructureOffers]
     P --> CG["GateOffersByFamily<br/>family ApplicableAxes gate, CHAOS-4634 (subsumes CHAOS-4579/4531)<br/>family=discovered_cohort_ranking: drop kind/subject_anchor/subject_handle/subject_candidate<br/>rows AND their options; a family with no axis restriction passes through unchanged"]
-    CG --> C["composeGatedStructureNeeds<br/>Missing = [window, +kind/handle/candidate]<br/>WindowOptions + KindOptions + HandleOptions + CandidateOptions<br/>receipts minted by composeStructureNeeds"]
+    CG --> DEC{"decideInferredWindowGate (window.go, CHAOS-4451)<br/>offers_unavailable / period_shape / offers_beyond_window -> gated<br/>window_only -> answered"}
+    DEC -- "gated" --> C["composeGatedStructureNeeds<br/>Missing = [window, +kind/handle/candidate]<br/>WindowOptions + KindOptions + HandleOptions + CandidateOptions<br/>receipts minted by composeStructureNeeds"]
+    DEC -- "answered: window is the only question" --> ANS["decisive path on the inferred window<br/>(decisive ResolveSubjects marked WithPageHintLookupReported)<br/>answer keeps provenance inferred_default,<br/>window_clarification + window-only structure_needs + warning beside it"]
     WO --> R
     C --> R[windowConfirmationRequiredResult<br/>status clarification_required<br/>SubjectResolution EMPTY<br/>persisted with StructureNeeds]
     R --> T2["Turn 2: PriorWindowReceipts + PriorKindReceipts/Handle/Candidate<br/>in ONE request (engine.go canonicalizes both before the gate)"]
@@ -58,6 +60,30 @@ flowchart TD
     end
     RS --- OFFERS_ONLY
 ```
+
+CHAOS-4451 (lead ruling 2026-11-02, option 1 of chris's options on the
+ticket, "default window with disclosure, or offer + partial answer"): the gate
+ends the turn only when the window is not its only question. After the
+offers-only pass, `decideInferredWindowGate` gates on one of three bases, in
+this order: `offers_unavailable` (the pass did not read: disabled, frame
+refused, failed, graph not projected), `period_shape` (a series or
+period-comparison frame: its period is the question, and one inferred current
+window would drop it), `offers_beyond_window` (the pass offered a kind, anchor,
+handle or candidate option to pick: `offerMaterialRedeemable`). Otherwise the
+turn runs the decisive path on the inferred window: `window_only`, or
+`window_only_unpickable_asks` when the pass named needs beyond the window with
+nothing to pick for them (CHAOS-12640: the standing zero-candidates disclosure
+is kept on the result, and a named subject with zero candidates still ends
+`no_match` on no other subject). The answer keeps provenance
+`inferred_default`, so CHAOS-4040's protections hold: it is never reused or
+carried as a confirmed window, and a later confirmation runs fresh. It serves
+the window offer beside the answer: `window_clarification`, a window-only
+`structure_needs` (what Ask Dev draws its window popup from), and a warning
+that names the window it read. Each decision writes one Info line,
+`contextfabric.inferred_window_gate` (`decision`, `basis`). A window-only
+answer runs two resolutions (the pass, then the decisive one); the decisive one
+carries `WithPageHintLookupReported`, so `graphrank.page_hint_lookup` stays one
+line per request.
 
 The pass is window-agnostic by construction: the inferred window lives in
 `effectiveWindow`, never in `interpretation.TimeContext`, and the graph
@@ -184,6 +210,7 @@ discard is the load-bearing safety layer; the ctx mark
 | --- | --- | --- |
 | `EngineTelemetry.RecordGatedOfferResolution` | `composed` / `empty` / `failed` / `disabled` / `refused` / `not_projected` | once per class-default gated request; `not_projected` (codex round-2 finding #2) distinguishes a never-projected org from a genuinely empty pool, same as `subjectlessTerminalReasons`' `graph_not_projected` does for the decisive path |
 | `EngineTelemetry.RecordCohortStructureGate` | `applied` / `no_op` / `subject_bearing` + the `shape` it fired for | once per `GateOffersByFamily` call (CHAOS-4634), at both call sites; `applied` = at least one inapplicable axis's rows were removed, `no_op` = the family restricts some axis but nothing on it was present to remove, `subject_bearing` = the family places no restriction on any of the five wire axes and the material passed through. The DECISION is family-keyed; the reported `shape` dimension is unchanged (still a meaningful cross-check of what the model reported vs. what the family gate decided). Both outcomes AND the denominator are reported, so "cohort vs subject clarification" is a countable split rather than an inference from a missing log line. **Not** one per composed `StructureNeeds` — see the denominator note below |
+| `EngineTelemetry.RecordInferredWindowGate` (`contextfabric.inferred_window_gate`) | `decision` `gated` / `answered`, `basis` `offers_unavailable` / `period_shape` / `offers_beyond_window` / `window_only` / `window_only_unpickable_asks` | once per class-default turn (CHAOS-4451): what the gate did with the turn and the one basis that decided it |
 | `kind_offer` trace event | `OfferedUnderWindowGate` | this resolution ran in offers-only mode |
 | `ranked_cut` trace stage (`resolution.go`) | `Subject`, `Rank`, `Survived` | one event per candidate, in rank order, before the `MaxSubjectCandidates` cut; `Rank==1` opens a batch, readers keep the last batch |
 | `ranked_cut` companion (`resolve.go`) | `CoverageBypass=true`, `Rank 0` | a coverage-floor find the cut dropped but `unionCandidatesForOffer` still hands to the offer builders |

@@ -439,6 +439,14 @@ func (t SlogEngineTelemetry) RecordWindowCanonicalization(ctx context.Context, p
 	t.logger.InfoContext(ctx, "context fabric window canonicalization outcome", args...)
 }
 
+// RecordOperandReadKinds (CHAOS-12596) logs at Info: three plain counts.
+func (t SlogEngineTelemetry) RecordOperandReadKinds(ctx context.Context, principal storage.Principal, operandRows, kindsNamed, kindsAdded int) {
+	args := append([]any{
+		"org_id", SanitizeLogAttr(principal.OrgID), "operand_rows", operandRows, "kinds_named", kindsNamed, "kinds_added", kindsAdded,
+	}, requestIDLogAttrs(ctx)...)
+	t.logger.InfoContext(ctx, "context fabric plan operand reads", args...)
+}
+
 // RecordWindowClassification (CHAOS-12595) logs at Info: every field is a
 // closed vocabulary member or a bool, never question text.
 func (t SlogEngineTelemetry) RecordWindowClassification(ctx context.Context, principal storage.Principal, modelClass WindowClass, outcome WindowClassOutcome) {
@@ -449,6 +457,27 @@ func (t SlogEngineTelemetry) RecordWindowClassification(ctx context.Context, pri
 		"downgraded", outcome.Downgraded,
 	}, requestIDLogAttrs(ctx)...)
 	t.logger.InfoContext(ctx, "context fabric window classification", args...)
+}
+
+// RecordInferredWindowGate (CHAOS-4451) logs at Info: both fields are closed
+// vocabulary members, never question text.
+func (t SlogEngineTelemetry) RecordInferredWindowGate(ctx context.Context, principal storage.Principal, decision InferredWindowGateDecision, basis InferredWindowGateBasis) {
+	args := append([]any{
+		"org_id", SanitizeLogAttr(principal.OrgID), "decision", SanitizeLogAttr(string(decision)), "basis", SanitizeLogAttr(string(basis)),
+	}, requestIDLogAttrs(ctx)...)
+	t.logger.InfoContext(ctx, "context fabric inferred window gate", args...)
+}
+
+// RecordInterpretationTerms (CHAOS-12632) logs at Info: a count, a closed
+// subject kind, a closed handle_bound value and a bool; never a term or the
+// question.
+func (t SlogEngineTelemetry) RecordInterpretationTerms(ctx context.Context, principal storage.Principal, event InterpretationTermsEvent) {
+	args := append([]any{
+		"org_id", SanitizeLogAttr(principal.OrgID), "subject_term_count", event.SubjectTermCount,
+		"stated_kind", SanitizeLogAttr(string(event.StatedKind)), "handle_bound", SanitizeLogAttr(string(event.HandleBound)),
+		"repository_slug_term", event.RepositorySlugTerm,
+	}, requestIDLogAttrs(ctx)...)
+	t.logger.InfoContext(ctx, "context fabric interpretation terms", args...)
 }
 
 // RecordWindowCarry (CHAOS-4360) logs at Info: outcome/chain_depth are both

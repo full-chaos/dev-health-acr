@@ -47,7 +47,10 @@ type SuppliedInterpreter struct {
 	config   SuppliedInterpreterConfig
 	contract contextfabric.InterpretationContract
 	schema   *gojsonschema.Schema
-	now      func() time.Time
+	// wire is the schema document decode validates against, read for the
+	// window picks' enums (withoutUnknownWindowPicks).
+	wire map[string]any
+	now  func() time.Time
 }
 
 func NewSuppliedInterpreter(config SuppliedInterpreterConfig) (*SuppliedInterpreter, error) {
@@ -74,6 +77,10 @@ func NewSuppliedInterpreter(config SuppliedInterpreterConfig) (*SuppliedInterpre
 	if err != nil {
 		return nil, fmt.Errorf("interpretation output schema: %w", err)
 	}
+	var wire map[string]any
+	if err := json.Unmarshal(document, &wire); err != nil {
+		return nil, fmt.Errorf("interpretation output schema: %w", err)
+	}
 	return &SuppliedInterpreter{
 		config: config,
 		contract: contextfabric.InterpretationContract{
@@ -82,6 +89,7 @@ func NewSuppliedInterpreter(config SuppliedInterpreterConfig) (*SuppliedInterpre
 			SystemSHA256:       InterpretationSystemPromptSHA256(),
 		},
 		schema: schema,
+		wire:   wire,
 		now:    time.Now,
 	}, nil
 }
@@ -174,7 +182,7 @@ func (s *SuppliedInterpreter) InterpretSuppliedQuestion(ctx context.Context, pri
 		RequestID:    request.RequestID,
 	}
 
-	output, schemaErrorType, err := s.decode(supplied.Output)
+	output, schemaErrorType, err := s.decode(ctx, supplied.Output)
 	if err != nil {
 		decision.schemaErrorType = schemaErrorType
 		rejection := contextfabric.NewInterpretationRejection(contextfabric.InterpretationRejectionUnclassified,
@@ -221,9 +229,15 @@ func (s *SuppliedInterpreter) contractMismatch(supplied contextfabric.SuppliedIn
 // decode checks raw against the model output schema and decodes it with
 // unknown fields refused. The returned error text is fixed: it never carries
 // a value or a key the caller wrote. schemaErrorType is the validator's own
-// name for the first failed rule.
-func (s *SuppliedInterpreter) decode(raw []byte) (interpretationOutput, string, error) {
-	result, err := s.schema.Validate(gojsonschema.NewBytesLoader(raw))
+// name for the first failed rule. An unknown window pick is left out of what
+// the schema judges and decoded as written, so the sanitizer sees it, as on
+// the server path (CHAOS-12617).
+func (s *SuppliedInterpreter) decode(ctx context.Context, raw []byte) (interpretationOutput, string, error) {
+	checked, dropped := withoutUnknownWindowPicks(string(raw), s.wire)
+	if len(dropped) > 0 {
+		logUnknownWindowPicksDropped(ctx, s.config.Logger, "supplied_interpret", dropped)
+	}
+	result, err := s.schema.Validate(gojsonschema.NewStringLoader(checked))
 	if err != nil {
 		return interpretationOutput{}, suppliedSchemaErrorUndecoded, errSuppliedOutputSchema
 	}

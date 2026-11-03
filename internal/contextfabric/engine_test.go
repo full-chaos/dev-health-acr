@@ -523,7 +523,10 @@ type recordingTelemetry struct {
 	windowBinderOutcomes           []WindowBindReason
 	windowBinderProposals          []WindowBindOutcome
 	windowGatedForConfirmation     []windowGatedRecord
+	operandReadKinds               [][3]int
 	windowClassifications          []recordedWindowClassification
+	inferredWindowGates            []recordedInferredWindowGate
+	interpretationTerms            []InterpretationTermsEvent
 	windowCanonicalizationOutcomes []WindowCanonicalizationOutcome
 	// structureNeedsDisclosed/structureOfferCounts/structureReceipts
 	// (CHAOS-3900 P1.F) mirror the SAME list-not-count discipline.
@@ -802,8 +805,26 @@ func (r *recordingTelemetry) RecordWindowCanonicalization(_ context.Context, _ s
 	r.windowCanonicalizationOutcomes = append(r.windowCanonicalizationOutcomes, outcome)
 }
 
+func (r *recordingTelemetry) RecordOperandReadKinds(_ context.Context, _ storage.Principal, operandRows, kindsNamed, kindsAdded int) {
+	r.operandReadKinds = append(r.operandReadKinds, [3]int{operandRows, kindsNamed, kindsAdded})
+}
+
 func (r *recordingTelemetry) RecordWindowClassification(_ context.Context, _ storage.Principal, modelClass WindowClass, outcome WindowClassOutcome) {
 	r.windowClassifications = append(r.windowClassifications, recordedWindowClassification{ModelClass: modelClass, Outcome: outcome})
+}
+
+func (r *recordingTelemetry) RecordInferredWindowGate(_ context.Context, _ storage.Principal, decision InferredWindowGateDecision, basis InferredWindowGateBasis) {
+	r.inferredWindowGates = append(r.inferredWindowGates, recordedInferredWindowGate{Decision: decision, Basis: basis})
+}
+
+// recordedInferredWindowGate is one RecordInferredWindowGate call.
+type recordedInferredWindowGate struct {
+	Decision InferredWindowGateDecision
+	Basis    InferredWindowGateBasis
+}
+
+func (r *recordingTelemetry) RecordInterpretationTerms(_ context.Context, _ storage.Principal, event InterpretationTermsEvent) {
+	r.interpretationTerms = append(r.interpretationTerms, event)
 }
 
 // recordedWindowClassification is one RecordWindowClassification call.

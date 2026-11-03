@@ -104,6 +104,9 @@ type clientRouteFixture struct {
 	resources  limits.ResourceBudget
 	// runtime, when set, wraps the fixture model as the engine's model runtime.
 	runtime func(contextfabric.ModelRuntime) contextfabric.ModelRuntime
+	// offersUnreadable keeps the window gate on a turn with no window of its
+	// own (authorizingGraph.offersUnreadable).
+	offersUnreadable bool
 }
 
 type clientRouteRig struct {
@@ -153,7 +156,7 @@ func newClientRouteRigWithAssembly(t *testing.T, fixture clientRouteFixture, edi
 	}
 	engine, err := contextfabric.NewEngine(contextfabric.EngineDependencies{
 		Interpreter: contextfabric.RuntimeQuestionInterpreter{Runtime: runtime},
-		Graph:       clientRouteGraph{authorizingGraph: authorizingGraph{liveGraphReader: liveGraphReader{project: project}, outcome: contextfabric.StoredSubjectAdmitted}, cohort: fixture.cohort},
+		Graph:       clientRouteGraph{authorizingGraph: authorizingGraph{liveGraphReader: liveGraphReader{project: project}, outcome: contextfabric.StoredSubjectAdmitted, offersUnreadable: fixture.offersUnreadable}, cohort: fixture.cohort},
 		Facts:       liveFactReader{bundle: fixture.facts},
 		Synthesizer: synthesizer,
 		Results:     store,
@@ -562,7 +565,9 @@ func TestClientSynthesisTurnOverTheBudgetIsARefusalNotAProjection(t *testing.T) 
 // A client turn that ends before synthesis delivers no input and names no
 // synthesis source.
 func TestATerminalClientTurnCarriesNoSynthesisInputAndNoSource(t *testing.T) {
-	rig := newClientRouteRig(t, singleSubjectFixture())
+	fixture := singleSubjectFixture()
+	fixture.offersUnreadable = true
+	rig := newClientRouteRig(t, fixture)
 	recorder := rig.post(t, contractsv1.ContextFabricSynthesisModeClient, func(r *contractsv1.ContextFabricInvestigationRequest) { r.TimeContext.EvidenceWindow = nil })
 	envelope := decodeEnvelope(t, recorder)
 	if envelope.Status != contractsv1.ContextFabricInvestigationClarificationRequired || envelope.WindowClarification == nil {

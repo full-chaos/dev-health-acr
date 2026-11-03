@@ -235,6 +235,10 @@ type EngineDependencies struct {
 	// reuse (anchor_freshness.go). Nil reads nothing, and the transition
 	// line says unwired.
 	AnchorFreshness AnchorFreshnessReader
+	// QuestionHandleProbe is optional (CHAOS-12632): the graph package's
+	// free-text handle grammar, for the interpretation terms line. Unset,
+	// the line reports handle_bound=unwired.
+	QuestionHandleProbe QuestionHandleProbe
 	// ReuseModelIdentityResolver is optional (CHAOS-3782, Codex round-2
 	// finding #3; CHAOS-3786). When set, tryReuse resolves the CURRENT
 	// org-effective model CHAIN through it, per call, instead of using
@@ -690,12 +694,27 @@ type EngineTelemetry interface {
 	// vocabulary. Called once per call, from Investigate, after
 	// canonicalizeEvidenceWindow/composeEffectiveWindow both run.
 	RecordWindowCanonicalization(ctx context.Context, principal storage.Principal, outcome WindowCanonicalizationOutcome)
+	// RecordOperandReadKinds (CHAOS-12596) reports, for a turn whose derived
+	// rows hold at least one served operand read row (one side of an explicit
+	// comparison), how many such rows there were, how many distinct kinds
+	// they name as serving their sides, and how many of those the plan read
+	// only because of them. Plain counts, no kind names.
+	RecordOperandReadKinds(ctx context.Context, principal storage.Principal, operandRows, kindsNamed, kindsAdded int)
 	// RecordWindowClassification (CHAOS-12595) reports the window-class
 	// decision a current-axis turn with no request window draws its default
 	// from: the model's own sanitized pick, the class decided, its source,
 	// confidence and basis (model, shape fallback, handle state, none), and
 	// whether a model pick was overridden. Closed vocabularies only.
 	RecordWindowClassification(ctx context.Context, principal storage.Principal, modelClass WindowClass, outcome WindowClassOutcome)
+	// RecordInferredWindowGate (CHAOS-4451) reports what the class-default
+	// window gate decided for a turn on an inferred window -- gated or
+	// answered -- and the one basis that decided it. Closed vocabularies only.
+	RecordInferredWindowGate(ctx context.Context, principal storage.Principal, decision InferredWindowGateDecision, basis InferredWindowGateBasis)
+	// RecordInterpretationTerms (CHAOS-12632) reports, once per interpreted
+	// turn, how many subject terms the interpretation kept, its stated kind,
+	// whether the question text binds a handle, and whether a term has a
+	// repository slug's shape. No question text.
+	RecordInterpretationTerms(ctx context.Context, principal storage.Principal, event InterpretationTermsEvent)
 	// RecordWindowCarry (CHAOS-4360) reports the outcome of ONE
 	// same-conversation window-carry attempt -- see WindowCarryOutcome's
 	// own doc comment for the closed vocabulary (chaos4360_carry.go).
@@ -1320,9 +1339,10 @@ type CohortRankedEvent struct {
 // Engine coordinates one open-ended investigation. It deliberately composes
 // capabilities rather than matching the question against a route/plan table.
 type Engine struct {
-	interpreter QuestionInterpreter
-	graph       GraphReader
-	facts       CanonicalFactReader
+	interpreter         QuestionInterpreter
+	graph               GraphReader
+	questionHandleProbe QuestionHandleProbe
+	facts               CanonicalFactReader
 	// directFacts is the ungated registry the direct read tools build their
 	// own gate over (DirectReadSources); facts is the same reader wrapped in
 	// the engine's embedded-subject gate (engine_fact_gate.go, CHAOS-7127).
@@ -1430,6 +1450,7 @@ func NewEngine(dependencies EngineDependencies, options EngineOptions) (*Engine,
 		reuseGate:        dependencies.ReuseGate, reuseSnapshotter: dependencies.ReuseSnapshotter,
 		reuseEpochSnapshotter:      dependencies.ReuseEpochSnapshotter,
 		anchorFreshness:            dependencies.AnchorFreshness,
+		questionHandleProbe:        dependencies.QuestionHandleProbe,
 		anchorBindingMaxAgeSetting: options.AnchorBindingMaxAge,
 		anchorBindingCountEnabled:  options.AnchorBindingCountEnabled,
 		anchorBindingCarryEnabled:  options.AnchorBindingCarryEnabled,
@@ -2327,6 +2348,8 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 		interpretation, termsInput = deriveSuppliedSubjectTerms(request, interpretation, familyOutcome.Frame)
 		ctx = withSubjectTermsInput(ctx, termsInput)
 	}
+	// CHAOS-12632: what the interpretation kept of the question, counts only.
+	e.recordInterpretationTerms(ctx, principal, request.Question, interpretation, familyOutcome.Frame)
 	// Bound the INTERPRETED question too, not just the wire request
 	// (CHAOS-3755 codex delta review, P2).
 	//
@@ -3021,6 +3044,11 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 			confirmedNeedsForUnevaluatedExit, carriedStructureEntriesUnevaluatedExit = withheldForUnevaluatedExit(confirmedNeedsForCapture, carriedStructureEntries, entry, disposition)
 		}
 	}
+	// CHAOS-4451: true once the class-default gate's offers-only resolution
+	// ran and the turn goes on to answer. That resolution already wrote the
+	// request's one page_hint_lookup line, so the decisive resolution below
+	// is marked not to write a second.
+	pageHintLookupReported := false
 	if effectiveWindow != nil && effectiveWindow.Provenance == WindowInferredDefault && request.Options.AllowClarification {
 		// CHAOS-4234: the gate still fires HERE, before anything decisive,
 		// but it now composes kind/handle/candidate offers from an
@@ -3035,33 +3063,59 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 		// recordConfirmedNeedLedger call above reads this value, so the
 		// ledger discloses the decision rather than a silent empty
 		// capture_decision.
+		captureSkipBeforeGate := captureSkipReasonForTelemetry
 		captureSkipReasonForTelemetry = CaptureSkipReasonWindowConfirmationGatedDiscard
 		anchorShadow.observeResolution(AnchorBindingEvaluationWindowGated, SubjectResolution{}, nil)
 		gatedMaterial, gatedMaterialWindowExpandUnavailable := e.gatedOfferMaterial(ctx, principal, request, graphRequest, interpretation, familyOutcome, binding, structureCanon, kindCarry, appliedNeeds, priorEntries, anchorShadow)
-		if e.anchorBindingCarryEnabled && anchorShadow.holdsPendingProof() {
-			// The proof is not discarded: the binding holds it pending, and
-			// the confirming turn may carry it (anchor_binding_carry.go).
-			// Nothing on this turn's served result changes.
-			captureSkipReasonForTelemetry = CaptureSkipReasonWindowConfirmationGatedPending
+		// CHAOS-4451 (lead ruling 2026-11-02, option 1, within chris's options
+		// on the ticket: "default window with disclosure, or offer + partial
+		// answer"): the turn ends here ONLY when the offers-only pass found a
+		// question beyond the window (a kind, anchor, handle or candidate the
+		// turn would ask anyway). When the window is the only question, the
+		// turn answers on the inferred window, discloses it, and serves the
+		// window offer beside the answer (chaos4636_synthesis_assembly.go).
+		// What CHAOS-4040 protects stays: the window keeps provenance
+		// inferred_default on the wire, a stored answer on it is never reused
+		// (answer_reuse.go) or carried (chaos4360_carry.go), a later
+		// confirmation runs fresh, and a work-item period read on it is still
+		// refused (below). A pass that could not read at all (failed, graph not
+		// projected, disabled, frame refused) keeps the gate: it cannot show
+		// that the window is the only question. A series or period-comparison
+		// frame keeps it too: its period is the question, and one inferred
+		// current window would drop it without a word.
+		gateDecision, gateBasis := decideInferredWindowGate(gatedMaterial, gatedMaterialWindowExpandUnavailable, familyOutcome.Frame)
+		if e.telemetry != nil {
+			e.telemetry.RecordInferredWindowGate(ctx, principal, gateDecision, gateBasis)
 		}
-		// CHAOS-3478/CHAOS-4234: priorOutcomes was already computed above
-		// (resolvePriorSubjectHints runs before Interpret, this gate fires
-		// after) but this gate's own resolution is offers-only and
-		// discarded by the CHAOS-4234 ruling -- never a real
-		// SubjectResolution to re-verify a matched receipt's hint against.
-		// A zero-value SubjectResolution{} classifies every matched hint as
-		// skipped_failed_reauth ("not re-verified this call"), the same
-		// honest convention the ErrGraphNotProjected branch above uses,
-		// never silently omitting these receipts from the response the way
-		// this path did before this ticket (a real, previously-unclosed
-		// gap: this early return skipped recordPriorSubjectReceiptSkips
-		// entirely).
-		gatedDispositions := composePriorSubjectReceiptDispositions(priorOutcomes, SubjectResolution{})
-		if len(gatedDispositions) > 0 {
-			e.recordPriorSubjectReceiptSkips(ctx, principal, gatedDispositions, priorHintsStaleGraphEpochDelta)
+		if gateDecision == InferredWindowGateGated {
+			if e.anchorBindingCarryEnabled && anchorShadow.holdsPendingProof() {
+				// The proof is not discarded: the binding holds it pending, and
+				// the confirming turn may carry it (anchor_binding_carry.go).
+				// Nothing on this turn's served result changes.
+				captureSkipReasonForTelemetry = CaptureSkipReasonWindowConfirmationGatedPending
+			}
+			// CHAOS-3478/CHAOS-4234: priorOutcomes was already computed above
+			// (resolvePriorSubjectHints runs before Interpret, this gate fires
+			// after) but this gate's own resolution is offers-only and
+			// discarded by the CHAOS-4234 ruling -- never a real
+			// SubjectResolution to re-verify a matched receipt's hint against.
+			// A zero-value SubjectResolution{} classifies every matched hint as
+			// skipped_failed_reauth ("not re-verified this call"), the same
+			// honest convention the ErrGraphNotProjected branch above uses,
+			// never silently omitting these receipts from the response the way
+			// this path did before this ticket (a real, previously-unclosed
+			// gap: this early return skipped recordPriorSubjectReceiptSkips
+			// entirely).
+			gatedDispositions := composePriorSubjectReceiptDispositions(priorOutcomes, SubjectResolution{})
+			if len(gatedDispositions) > 0 {
+				e.recordPriorSubjectReceiptSkips(ctx, principal, gatedDispositions, priorHintsStaleGraphEpochDelta)
+			}
+			gated, gatedErr := e.windowConfirmationRequiredResult(ctx, principal, request, &interpretation, *effectiveWindow, &structureCanon, WindowCanonicalizationGatedClassDefault, binding, gatedMaterial, gatedMaterialWindowExpandUnavailable, carriedStructureEntriesUnevaluatedExit, gatedDispositions, &plan, ancestryRoot(request, receiptsValidated(priorValidatedReceipts), driftRefusedParent), e.captureAcceptedReading(request, continuation, familyOutcome, acceptedShape, &plan, derivedRequirements, confirmedNeedsForUnevaluatedExit).withAnchorShadow(anchorShadow))
+			return gated, gatedErr
 		}
-		gated, gatedErr := e.windowConfirmationRequiredResult(ctx, principal, request, &interpretation, *effectiveWindow, &structureCanon, WindowCanonicalizationGatedClassDefault, binding, gatedMaterial, gatedMaterialWindowExpandUnavailable, carriedStructureEntriesUnevaluatedExit, gatedDispositions, &plan, ancestryRoot(request, receiptsValidated(priorValidatedReceipts), driftRefusedParent), e.captureAcceptedReading(request, continuation, familyOutcome, acceptedShape, &plan, derivedRequirements, confirmedNeedsForUnevaluatedExit).withAnchorShadow(anchorShadow))
-		return gated, gatedErr
+		captureSkipReasonForTelemetry = captureSkipBeforeGate
+		anchorShadow.observeResolution(AnchorBindingEvaluationNotResolved, SubjectResolution{}, nil)
+		pageHintLookupReported = true
 	}
 	// CHAOS-3782 Codex round-1 F1: capture the reuse watermark snapshot
 	// HERE, immediately before the graph is read for this fresh
@@ -3109,6 +3163,9 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 	// comment for why a context value is the right carrier for this
 	// specific, telemetry-only signal.
 	resolveCtx, subjectCandidatesAuthzDropped := withSubjectCandidatesAuthzDroppedRecorder(ctx)
+	if pageHintLookupReported {
+		resolveCtx = WithPageHintLookupReported(resolveCtx)
+	}
 	// CHAOS-3900 P1.D: threads structureCanon's own resolved expected_kind
 	// confirmation (nil for every request that carried none -- the common
 	// case) so ResolveSubjects can narrow its pool to it. See
@@ -3781,7 +3838,19 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 			return terminal, terminalErr
 		}
 	}
-	mergedFactRequirements := mergeFactRequirements(statusComposedRequirements, graphContext.FactRequirements, cohortRankingRequirements)
+	// CHAOS-12596: the kinds a served OPERAND read row names as serving its
+	// side are READ, not only planned. plan.FactKinds reaches the fact request
+	// above only through a cohort, and an explicit comparison of named
+	// subjects has none, so without this group the plan said metrics and the
+	// read never asked for it (codex r1 on the PR, executed). Appended LAST,
+	// so every more specific requirement for the same kind wins and this only
+	// fills a kind that is otherwise absent. A work-item tuple reads its own
+	// fixed set and gains nothing here.
+	operandReadRequirements := operandReadFactRequirements(derivedRequirements, workItemTuple)
+	mergedFactRequirements := mergeFactRequirements(statusComposedRequirements, graphContext.FactRequirements, cohortRankingRequirements, operandReadRequirements)
+	if operandRows := OperandReadRowCount(derivedRequirements); operandRows > 0 && !workItemTuple && e.telemetry != nil {
+		e.telemetry.RecordOperandReadKinds(ctx, principal, operandRows, len(operandReadRequirements), operandKindsAbsentFrom(operandReadRequirements, statusComposedRequirements, graphContext.FactRequirements, cohortRankingRequirements))
+	}
 	factRequest := CanonicalFactRequest{
 		workItemTuple:            workItemTuple,
 		LinkScopedSubjects:       linkScopedFactSubjects(ctx, request, subjects, tupleCensus),
