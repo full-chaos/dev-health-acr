@@ -31,7 +31,7 @@ func WithLabels(labels map[string]string) Option {
 func Start(ctx context.Context, t testing.TB, image string, opts ...Option) testcontainers.Container {
 	t.Helper()
 	chfixture.RequireContainers(t)
-	container, err := startRetrying(ctx, t, image, opts, testcontainers.GenericContainer)
+	container, err := startServing(ctx, t, image, opts, testcontainers.GenericContainer)
 	if err != nil {
 		t.Fatalf("start FalkorDB container: %v", err)
 	}
@@ -55,6 +55,24 @@ type logger interface {
 
 type strategyFunc func(time.Duration) wait.Strategy
 
+// startServing runs the budgeted start (startRetrying) and, when it ends because a create found no image after
+// testcontainers' pull (CHAOS-12855), runs the whole budgeted start again (startterm.StartUntilImageServes). The
+// image retry stays outside every budget: inside one, its pauses and starts would stretch the budget (Codex r2 and
+// r3 on #2006 found three such paths), so a budgeted start never retries an image and never outlives its budget.
+func startServing(ctx context.Context, t logger, image string, opts []Option, create startFunc) (testcontainers.Container, error) {
+	t.Helper()
+	return startServingWithin(ctx, t, image, opts, create, chfixture.FalkorReadyWithin, serveBudget, minRetryBudget)
+}
+
+func startServingWithin(ctx context.Context, t logger, image string, opts []Option, create startFunc, strategy strategyFunc, total, floor time.Duration) (testcontainers.Container, error) {
+	t.Helper()
+	// startRetryingWithin terminates the container of every failed start itself; a removal that failed is in its
+	// error, which ends the retry.
+	return startterm.StartUntilImageServes(ctx, func() (testcontainers.Container, error) {
+		return startRetryingWithin(ctx, t, image, opts, create, strategy, total, floor)
+	})
+}
+
 func startRetrying(ctx context.Context, t logger, image string, opts []Option, create startFunc) (testcontainers.Container, error) {
 	t.Helper()
 	return startRetryingWithin(ctx, t, image, opts, create, chfixture.FalkorReadyWithin, serveBudget, minRetryBudget)
@@ -66,13 +84,15 @@ func startRetrying(ctx context.Context, t logger, image string, opts []Option, c
 func startRetryingWithin(ctx context.Context, t logger, image string, opts []Option, create startFunc, strategy strategyFunc, total, floor time.Duration) (testcontainers.Container, error) {
 	t.Helper()
 	began := time.Now()
-	deadline := began.Add(total)
-	container, err := startWithin(ctx, image, opts, create, strategy, total, deadline)
+	req := request(image, opts)
+	req.WaitingFor = strategy(total)
+	container, err := create(ctx, req)
 	if err == nil {
 		return container, nil
 	}
 	if cleanupErr := startterm.Terminate(container); cleanupErr != nil {
-		return container, errors.Join(err, fmt.Errorf("terminate after failed start: %w", cleanupErr))
+		// Joined as startterm's terminate failure, which startterm.StartUntilImageServes never retries over.
+		return container, startterm.JoinTerminateFailure(err, cleanupErr)
 	}
 	if !errors.Is(err, chfixture.ErrPublishedPortUnreachable) {
 		return container, err
@@ -88,8 +108,9 @@ func startRetryingWithin(ctx context.Context, t logger, image string, opts []Opt
 		t.Logf("falkordb-fixture: published port unreachable, restarting once port=unknown tries=0 elapsed=%s", time.Since(began).Round(time.Millisecond))
 	}
 	t.Logf("falkordb-fixture: first failure (retry budget %s):\n%v", budget, err)
-	container, err = startWithin(ctx, image, opts, create, strategy, budget, deadline)
-	return container, startterm.TerminateFailed(container, err)
+	req = request(image, opts)
+	req.WaitingFor = strategy(budget)
+	return start(ctx, req, create)
 }
 
 func request(image string, opts []Option) testcontainers.GenericContainerRequest {
@@ -106,36 +127,21 @@ func request(image string, opts []Option) testcontainers.GenericContainerRequest
 }
 
 // start returns the container that failed to start only so a caller can prove it is gone; it is already terminated.
-// A create that finds no image after the pull is started again (CHAOS-12855), with no deadline: start has no budget.
 func start(ctx context.Context, req testcontainers.GenericContainerRequest, create startFunc) (testcontainers.Container, error) {
-	container, err := startterm.StartUntilImageServes(ctx, time.Time{}, func() (testcontainers.Container, error) {
-		return refusedHoldsNoContainer(create(ctx, req))
-	})
+	container, err := create(ctx, req)
 	return container, startterm.TerminateFailed(container, err)
 }
 
-// refusedHoldsNoContainer terminates the container of a create the daemon refused for a missing image, so no start
-// carries it into the next one.
-func refusedHoldsNoContainer(container testcontainers.Container, err error) (testcontainers.Container, error) {
-	if err != nil && startterm.ImageMissingAtCreate(err) {
-		return nil, startterm.TerminateFailed(container, err)
+// imageRetried is create with the missing-image retry (CHAOS-12855), for a start with no budget: the live
+// readiness test. A refused create's container is terminated before the next start.
+func imageRetried(create startFunc) startFunc {
+	return func(ctx context.Context, req testcontainers.GenericContainerRequest) (testcontainers.Container, error) {
+		return startterm.StartUntilImageServes(ctx, func() (testcontainers.Container, error) {
+			container, err := create(ctx, req)
+			if err != nil && startterm.ImageMissingAtCreate(err) {
+				return nil, startterm.TerminateFailed(container, err)
+			}
+			return container, err
+		})
 	}
-	return container, err
-}
-
-// startWithin runs one start whose readiness wait is within. A create that finds no image after testcontainers'
-// pull (CHAOS-12855) is started again by startterm.StartUntilImageServes, never past deadline, and each such start
-// waits only for what is left before deadline, so the image retry cannot stretch the budget.
-func startWithin(ctx context.Context, image string, opts []Option, create startFunc, strategy strategyFunc, within time.Duration, deadline time.Time) (testcontainers.Container, error) {
-	first := true
-	return startterm.StartUntilImageServes(ctx, deadline, func() (testcontainers.Container, error) {
-		wait := within
-		if !first {
-			wait = time.Until(deadline)
-		}
-		first = false
-		req := request(image, opts)
-		req.WaitingFor = strategy(wait)
-		return refusedHoldsNoContainer(create(ctx, req))
-	})
 }

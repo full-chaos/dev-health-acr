@@ -66,9 +66,16 @@ func TerminateFailed(c testcontainers.Container, err error) error {
 		return err
 	}
 	if termErr := Terminate(c); termErr != nil {
-		return errors.Join(err, &terminateError{err: termErr})
+		return JoinTerminateFailure(err, termErr)
 	}
 	return err
+}
+
+// JoinTerminateFailure joins a failed removal of a failed start's container to the start error, as TerminateFailed
+// does, for a caller that terminates the container itself. A start that left a container behind is never started
+// again (StartUntilImageServes).
+func JoinTerminateFailure(err, termErr error) error {
+	return errors.Join(err, &terminateError{err: termErr})
 }
 
 // terminateError is a failed removal of a failed start's container. A start that left one behind is never started
@@ -89,7 +96,7 @@ func Terminate(c testcontainers.Container) error {
 }
 
 func generic(ctx context.Context, req testcontainers.GenericContainerRequest, create genericFunc) (testcontainers.Container, error) {
-	return startUntilImageServes(ctx, time.Time{}, func() (testcontainers.Container, error) {
+	return startUntilImageServes(ctx, func() (testcontainers.Container, error) {
 		c, err := create(ctx, req)
 		if err != nil {
 			err = TerminateFailed(c, err)
@@ -99,7 +106,7 @@ func generic(ctx context.Context, req testcontainers.GenericContainerRequest, cr
 }
 
 func postgresRun(ctx context.Context, image string, opts []testcontainers.ContainerCustomizer, run postgresFunc) (*tcpostgres.PostgresContainer, error) {
-	return startUntilImageServes(ctx, time.Time{}, func() (*tcpostgres.PostgresContainer, error) {
+	return startUntilImageServes(ctx, func() (*tcpostgres.PostgresContainer, error) {
 		pc, err := run(ctx, image, opts...)
 		if err != nil && pc != nil {
 			err = TerminateFailed(pc, err)
@@ -110,10 +117,11 @@ func postgresRun(ctx context.Context, image string, opts []testcontainers.Contai
 
 // StartUntilImageServes is the retry Generic applies, for the one fixture that hands
 // testcontainers.GenericContainer to its own terminate wrapper (falkorfixture) and so cannot call Generic. start
-// builds and runs one start; a start whose create finds no image must return no container (terminate it first,
-// with TerminateFailed). A zero deadline sets no deadline.
-func StartUntilImageServes(ctx context.Context, deadline time.Time, start func() (testcontainers.Container, error)) (testcontainers.Container, error) {
-	return startUntilImageServes(ctx, deadline, start)
+// runs one start; a start whose create finds no image must not leave its container behind (terminate it first,
+// with TerminateFailed, whose failure ends the retry). The retry has no budget of its own: run it outside any start
+// that has one.
+func StartUntilImageServes(ctx context.Context, start func() (testcontainers.Container, error)) (testcontainers.Container, error) {
+	return startUntilImageServes(ctx, start)
 }
 
 // ImageMissingAtCreate reports a start that the daemon refused at create because the image is not there.
@@ -125,9 +133,9 @@ func ImageMissingAtCreate(err error) bool {
 }
 
 // startUntilImageServes runs start until it serves, fails for another reason, leaves a container it could not
-// remove, imageMissingStarts starts all found no image, or the pause before the next start would end after deadline
-// (zero: none). Every start it repeats is logged: a retry that is not seen would hide a registry or daemon fault.
-func startUntilImageServes[T any](ctx context.Context, deadline time.Time, start func() (T, error)) (T, error) {
+// remove, or imageMissingStarts starts all found no image. Every start it repeats is logged: a retry that is not
+// seen would hide a registry or daemon fault.
+func startUntilImageServes[T any](ctx context.Context, start func() (T, error)) (T, error) {
 	for attempt := 1; ; attempt++ {
 		c, err := start()
 		var leftBehind *terminateError
@@ -136,9 +144,6 @@ func startUntilImageServes[T any](ctx context.Context, deadline time.Time, start
 		}
 		if attempt == imageMissingStarts {
 			return c, fmt.Errorf("no image after %d starts: %w", attempt, err)
-		}
-		if !deadline.IsZero() && time.Until(deadline) <= imageMissingPause {
-			return c, fmt.Errorf("no image after %d start(s), and no time for another before the deadline: %w", attempt, err)
 		}
 		logf("startterm: start %d of %d found no image (%v); testcontainers drops errors inside the pull stream (CHAOS-12855), so the image is pulled again",
 			attempt, imageMissingStarts, err)

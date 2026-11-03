@@ -162,38 +162,11 @@ func TestAMissingImageWhoseContainerCouldNotBeTerminatedIsNotStartedAgain(t *tes
 	}
 
 	calls := 0
-	_, err = StartUntilImageServes(context.Background(), time.Time{}, func() (testcontainers.Container, error) {
+	_, err = StartUntilImageServes(context.Background(), func() (testcontainers.Container, error) {
 		calls++
 		return nil, TerminateFailed(&fakeContainer{termErr: errors.New("daemon refused remove")}, imageMissing())
 	})
 	if err == nil || !strings.Contains(err.Error(), "daemon refused remove") || calls != 1 {
 		t.Fatalf("err=%v starts=%d, want the cleanup failure after one start", err, calls)
-	}
-}
-
-func TestStartUntilImageServesNeverPausesPastItsDeadline(t *testing.T) {
-	// Codex r2 P2 on #2006: a fixture with its own budget passes its deadline; a pause that would end after it is
-	// not taken, and the refusal is returned at once.
-	pauses, lines := quietRetries(t, nil)
-	calls := 0
-	_, err := StartUntilImageServes(context.Background(), time.Now().Add(imageMissingPause/2), func() (testcontainers.Container, error) {
-		calls++
-		return nil, imageMissing()
-	})
-	if err == nil || !errdefs.IsNotFound(err) || !strings.Contains(err.Error(), "deadline") || calls != 1 || *pauses != 0 || len(*lines) != 0 {
-		t.Fatalf("err=%v starts=%d pauses=%d logged=%d, want the refusal after one start, naming the deadline", err, calls, *pauses, len(*lines))
-	}
-
-	calls = 0
-	served := &fakeContainer{}
-	got, err := StartUntilImageServes(context.Background(), time.Now().Add(time.Hour), func() (testcontainers.Container, error) {
-		calls++
-		if calls == 1 {
-			return nil, imageMissing()
-		}
-		return served, nil
-	})
-	if err != nil || got != testcontainers.Container(served) || calls != 2 {
-		t.Fatalf("container=%v err=%v starts=%d, want the second start to serve", got, err, calls)
 	}
 }

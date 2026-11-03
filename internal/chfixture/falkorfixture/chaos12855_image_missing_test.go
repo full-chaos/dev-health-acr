@@ -2,6 +2,7 @@ package falkorfixture
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"testing"
@@ -13,26 +14,13 @@ import (
 	"github.com/testcontainers/testcontainers-go/wait"
 )
 
-// CHAOS-12855 (Codex r1 P2 on #2006): this fixture hands testcontainers.GenericContainer to its own wrapper, so the
-// startterm retry did not reach it. A create the daemon refuses because the image is missing after testcontainers'
-// pull must be started again here too, and a port-unreachable restart must still follow its own rule.
-func TestStartStartsAgainWhenCreateFindsNoImageAfterThePull(t *testing.T) {
-	served := &fakeContainer{}
-	var calls int
-	got, err := startRetrying(context.Background(), &recordingT{}, "falkordb/falkordb", nil, func(context.Context, testcontainers.GenericContainerRequest) (testcontainers.Container, error) {
-		calls++
-		if calls == 1 {
-			daemon := fmt.Errorf("Error response from daemon: No such image: falkordb/falkordb:latest: %w", errdefs.ErrNotFound)
-			return nil, fmt.Errorf("create container: container create: %w", daemon)
-		}
-		return served, nil
-	})
-	if err != nil || got != testcontainers.Container(served) || calls != 2 {
-		t.Fatalf("a start whose create found no image must be tried again and serve: err=%v calls=%d", err, calls)
-	}
-	if served.terminated.Load() != 0 {
-		t.Fatal("the serving container must stay up")
-	}
+// CHAOS-12855: this fixture hands testcontainers.GenericContainer to its own budgeted wrapper, so the startterm
+// retry did not reach it (Codex r1 P2 on #2006). The image retry runs outside the budget: inside it, its pauses and
+// starts stretched the budget on three paths (Codex r2 and r3).
+
+func imageMissing() error {
+	daemon := fmt.Errorf("Error response from daemon: No such image: falkordb/falkordb:latest: %w", errdefs.ErrNotFound)
+	return fmt.Errorf("create container: container create: %w", daemon)
 }
 
 func missingImageCreate(calls *int, servesOn int) startFunc {
@@ -41,84 +29,98 @@ func missingImageCreate(calls *int, servesOn int) startFunc {
 		if servesOn > 0 && *calls >= servesOn {
 			return &fakeContainer{}, nil
 		}
-		daemon := fmt.Errorf("Error response from daemon: No such image: falkordb/falkordb:latest: %w", errdefs.ErrNotFound)
-		return nil, fmt.Errorf("create container: container create: %w", daemon)
+		return nil, imageMissing()
 	}
 }
 
-func TestStartImageRetryNeverRunsPastTheTotalBudget(t *testing.T) {
-	// Codex r2 P2 on #2006: the image retry's pauses must stay inside the fixture's total budget.
-	var calls int
-	began := time.Now()
-	strategy := func(time.Duration) wait.Strategy { return nil }
-	_, err := startRetryingWithin(context.Background(), &recordingT{}, "falkordb/falkordb", nil, missingImageCreate(&calls, 0), strategy, 80*time.Millisecond, 40*time.Millisecond)
-	if elapsed := time.Since(began); elapsed > 80*time.Millisecond || calls != 1 || err == nil || !errdefs.IsNotFound(err) {
-		t.Fatalf("elapsed=%s starts=%d err=%v, want the refusal inside the 80ms budget after one start", elapsed, calls, err)
-	}
-	if !strings.Contains(err.Error(), "deadline") {
-		t.Fatalf("the refusal must say no start fits before the deadline: %v", err)
-	}
-}
-
-func TestStartImageRetryWaitsOnlyForWhatIsLeftOfTheBudget(t *testing.T) {
-	var budgets []time.Duration
-	strategy := func(d time.Duration) wait.Strategy { budgets = append(budgets, d); return nil }
-	var calls int
-	total := 3 * time.Second
-	_, err := startRetryingWithin(context.Background(), &recordingT{}, "falkordb/falkordb", nil, missingImageCreate(&calls, 2), strategy, total, time.Second)
-	if err != nil || calls != 2 || len(budgets) != 2 {
-		t.Fatalf("starts=%d budgets=%v err=%v, want the second start to serve", calls, budgets, err)
-	}
-	if budgets[0] != total || budgets[1] <= 0 || budgets[1] > total-2*time.Second {
-		t.Fatalf("the start after a pause waits only for what is left of the total: %v", budgets)
-	}
-}
-
-func TestARefusedStartsContainerIsRemovedBeforeTheNextStart(t *testing.T) {
+func TestStartServingRunsTheBudgetedStartAgainWhenCreateFindsNoImage(t *testing.T) {
 	refused, served := &fakeContainer{}, &fakeContainer{}
 	var calls int
-	got, err := startRetrying(context.Background(), &recordingT{}, "falkordb/falkordb", nil, func(context.Context, testcontainers.GenericContainerRequest) (testcontainers.Container, error) {
+	got, err := startServing(context.Background(), &recordingT{}, "falkordb/falkordb", nil, func(context.Context, testcontainers.GenericContainerRequest) (testcontainers.Container, error) {
 		calls++
 		if calls == 1 {
-			daemon := fmt.Errorf("Error response from daemon: No such image: falkordb/falkordb:latest: %w", errdefs.ErrNotFound)
-			return refused, fmt.Errorf("create container: container create: %w", daemon)
+			return refused, imageMissing()
 		}
 		return served, nil
 	})
 	if err != nil || got != testcontainers.Container(served) || calls != 2 {
-		t.Fatalf("container=%v err=%v starts=%d, want the second container", got, err, calls)
+		t.Fatalf("container=%v err=%v starts=%d, want the second start to serve", got, err, calls)
 	}
 	if refused.terminated.Load() != 1 || served.terminated.Load() != 0 {
 		t.Fatalf("terminated refused=%d served=%d, want 1 and 0", refused.terminated.Load(), served.terminated.Load())
 	}
 }
 
-func TestTheBareStartHelperAlsoStartsAgainWhenCreateFindsNoImage(t *testing.T) {
-	// Codex r2 P3 on #2006: the live readiness test starts through start, which has no budget.
+func TestEachBudgetedStartGetsItsWholeBudgetAndTheImageRetryNoneOfIt(t *testing.T) {
+	// Every budgeted start begins with the full total; the image retry's pause sits between budgeted starts.
+	var budgets []time.Duration
+	strategy := func(d time.Duration) wait.Strategy { budgets = append(budgets, d); return nil }
 	var calls int
-	got, err := start(context.Background(), request("falkordb/falkordb", nil), missingImageCreate(&calls, 2))
-	if err != nil || got == nil || calls != 2 {
-		t.Fatalf("container=%v err=%v starts=%d, want the second start to serve", got, err, calls)
+	total := 3 * time.Second
+	_, err := startServingWithin(context.Background(), &recordingT{}, "falkordb/falkordb", nil, missingImageCreate(&calls, 2), strategy, total, time.Second)
+	if err != nil || calls != 2 || len(budgets) != 2 || budgets[0] != total || budgets[1] != total {
+		t.Fatalf("starts=%d budgets=%v err=%v, want two budgeted starts of %s each", calls, budgets, err, total)
 	}
 }
 
-func TestTheRestartsImageRetryAlsoStaysInsideTheTotalBudget(t *testing.T) {
-	// The port-unreachable restart gets what is left of the total; an image refusal on it must not pause past it.
+func TestABudgetedStartNeverRetriesAnImage(t *testing.T) {
+	// Codex r2 and r3 on #2006: an image retry inside the budget ran past it on three paths. The invariant: a
+	// budgeted start makes no image retry at all, however much budget is left, on the first start or on the
+	// port-unreachable restart; the refusal ends it at once, for startServing to start the whole of it again.
+	strategy := func(time.Duration) wait.Strategy { return nil }
+	var calls int
+	began := time.Now()
+	_, err := startRetryingWithin(context.Background(), &recordingT{}, "falkordb/falkordb", nil, missingImageCreate(&calls, 0), strategy, time.Minute, time.Second)
+	if elapsed := time.Since(began); elapsed > time.Second || calls != 1 || !errdefs.IsNotFound(err) {
+		t.Fatalf("first start: elapsed=%s starts=%d err=%v, want the refusal after one start", elapsed, calls, err)
+	}
+
+	calls = 0
+	restart := func(context.Context, testcontainers.GenericContainerRequest) (testcontainers.Container, error) {
+		calls++
+		if calls == 1 {
+			return &fakeContainer{}, &chfixture.PortUnreachableError{Port: "1", Tries: 1, Elapsed: time.Millisecond, Err: fmt.Errorf("w: %w", chfixture.ErrPublishedPortUnreachable)}
+		}
+		return nil, imageMissing()
+	}
+	began = time.Now()
+	_, err = startRetryingWithin(context.Background(), &recordingT{}, "falkordb/falkordb", nil, restart, strategy, time.Minute, time.Second)
+	if elapsed := time.Since(began); elapsed > time.Second || calls != 2 || !errdefs.IsNotFound(err) {
+		t.Fatalf("restart: elapsed=%s starts=%d err=%v, want the restart's refusal after two starts", elapsed, calls, err)
+	}
+}
+
+func TestStartServingDoesNotStartAgainOverAContainerItCouldNotRemove(t *testing.T) {
+	stuck := &fakeContainer{termErr: errors.New("daemon refused remove")}
+	var calls int
+	_, err := startServing(context.Background(), &recordingT{}, "falkordb/falkordb", nil, func(context.Context, testcontainers.GenericContainerRequest) (testcontainers.Container, error) {
+		calls++
+		if calls == 1 {
+			return stuck, imageMissing()
+		}
+		return &fakeContainer{}, nil
+	})
+	if err == nil || !strings.Contains(err.Error(), "daemon refused remove") || calls != 1 {
+		t.Fatalf("err=%v starts=%d, want the removal failure after one start", err, calls)
+	}
+}
+
+func TestTheLiveTestsImageRetriedCreateStartsAgainWhenCreateFindsNoImage(t *testing.T) {
+	// Codex r2 P3 on #2006: the live readiness test starts through start with imageRetried.
+	refused, served := &fakeContainer{}, &fakeContainer{}
 	var calls int
 	create := func(context.Context, testcontainers.GenericContainerRequest) (testcontainers.Container, error) {
 		calls++
 		if calls == 1 {
-			time.Sleep(time.Second)
-			return &fakeContainer{}, &chfixture.PortUnreachableError{Port: "1", Tries: 1, Elapsed: time.Second, Err: fmt.Errorf("w: %w", chfixture.ErrPublishedPortUnreachable)}
+			return refused, imageMissing()
 		}
-		daemon := fmt.Errorf("Error response from daemon: No such image: falkordb/falkordb:latest: %w", errdefs.ErrNotFound)
-		return nil, fmt.Errorf("create container: container create: %w", daemon)
+		return served, nil
 	}
-	total := 2500 * time.Millisecond
-	began := time.Now()
-	strategy := func(time.Duration) wait.Strategy { return nil }
-	_, err := startRetryingWithin(context.Background(), &recordingT{}, "falkordb/falkordb", nil, create, strategy, total, 500*time.Millisecond)
-	if elapsed := time.Since(began); elapsed > total || calls != 2 || err == nil || !errdefs.IsNotFound(err) {
-		t.Fatalf("elapsed=%s starts=%d err=%v, want the restart's refusal inside the %s budget", elapsed, calls, err, total)
+	got, err := start(context.Background(), request("falkordb/falkordb", nil), imageRetried(create))
+	if err != nil || got != testcontainers.Container(served) || calls != 2 {
+		t.Fatalf("container=%v err=%v starts=%d, want the second start to serve", got, err, calls)
+	}
+	if refused.terminated.Load() != 1 || served.terminated.Load() != 0 {
+		t.Fatalf("terminated refused=%d served=%d, want the refused container removed before the next start", refused.terminated.Load(), served.terminated.Load())
 	}
 }
