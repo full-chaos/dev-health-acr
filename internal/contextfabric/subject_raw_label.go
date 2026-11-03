@@ -1,7 +1,6 @@
 package contextfabric
 
 import (
-	"regexp"
 	"slices"
 	"strconv"
 	"strings"
@@ -19,13 +18,6 @@ import (
 // source version would stop projection for one, so the read gives such a label and
 // such a fact end their reader form. The raw ids stay in the data (canonical ids,
 // evidence refs) for the collapsed Details (CHAOS-4690).
-
-// providerToken is the provider part of a raw source id: "linear", "jira", "gh",
-// "ghpr", "gitlab", "extkey", "gl" and any other lower-case token before the first
-// ':'. Provider-agnostic: no provider is named.
-var providerToken = regexp.MustCompile(`^[a-z][a-z0-9._-]*:`)
-
-var uuidForm = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$`)
 
 // RawSubjectLabel is the raw source id a relationship writer used as this
 // subject's label before CHAOS-12619, read back from its canonical id: a work
@@ -68,18 +60,20 @@ func lastDecodedSegment(rest string) (string, bool) {
 }
 
 // ReadableSourceID is a raw source id as a reader names the subject. A work item
-// or a work item ref reads as its key: the provider token is dropped, so
+// or a work item ref reads as its key: the provider prefix is dropped, so
 // linear:CHAOS-1 reads CHAOS-1, gh:owner/repo#7 reads owner/repo#7 and
 // extkey:CHAOS-9 reads CHAOS-9. A team and a nameless project read as their source
 // id the same way (acme/live-e2e, OPS), so a team's project list never reads
-// "project, project" (lead ruling, 2026-11-02). A UUID names nothing a reader
-// knows, so it reads as the kind's word from the label registry. Any other kind
-// keeps the raw id.
+// "project, project" (lead ruling, 2026-11-02); an org-scoped source id
+// ("<org UUID>:gitlab:71133891") reads as its native id, 71133891 (lead ruling,
+// 2026-11-03). A UUID names nothing a reader knows, so it reads as the kind's word
+// from the label registry. Any other kind keeps the raw id. The key is
+// contractsv1.ContextFabricSourceKey, the evidence label's own (CHAOS-12716).
 func ReadableSourceID(kind SubjectKind, raw string) string {
 	switch kind {
 	case SubjectWorkItem, SubjectWorkItemRef, SubjectTeam, SubjectProject:
-		key := providerToken.ReplaceAllString(raw, "")
-		if key == "" || uuidForm.MatchString(key) {
+		key := contractsv1.ContextFabricSourceKey(raw)
+		if key == "" {
 			return kindWord(kind, raw)
 		}
 		return key

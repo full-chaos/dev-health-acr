@@ -18,11 +18,25 @@ var evidenceUUIDForm = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-
 // token before the first ':'. No provider is named.
 var evidenceProviderToken = regexp.MustCompile(`^[a-z][a-z0-9._-]*:`)
 
-// evidenceKey is a raw source id as a reader names it: the provider token dropped
-// (linear:CHAOS-2311 reads CHAOS-2311, gh:owner/repo#7 reads owner/repo#7). A UUID
-// names nothing a reader knows and reads as "".
+// evidenceKey is a raw source id as a reader names it (ContextFabricSourceKey).
 func evidenceKey(raw string) string {
-	key := evidenceProviderToken.ReplaceAllString(strings.TrimSpace(raw), "")
+	return ContextFabricSourceKey(raw)
+}
+
+// ContextFabricSourceKey is a raw source id as a reader names it, for an evidence
+// label and a graph end alike (contextfabric.ReadableSourceID): one function, so the
+// two never read the same id differently (CHAOS-12716). The provider prefix is
+// dropped: linear:CHAOS-2311 reads CHAOS-2311, gh:owner/repo#7 reads owner/repo#7.
+// An organization or repository scope ("<uuid>:") counts as part of that prefix,
+// before the provider or after it, so an org-scoped source id reads as its native
+// id: "<org UUID>:gitlab:71133891" and "gitlab:<org UUID>:gitlab:71133891" read
+// 71133891 (lead ruling, 2026-11-03). A UUID names nothing a reader knows and reads
+// as "", for the caller's kind word.
+func ContextFabricSourceKey(raw string) string {
+	key := evidenceProviderToken.ReplaceAllString(withoutLeadingUUID(strings.TrimSpace(raw)), "")
+	if scoped := withoutLeadingUUID(key); scoped != key {
+		key = evidenceProviderToken.ReplaceAllString(scoped, "")
+	}
 	if evidenceUUIDForm.MatchString(key) {
 		return ""
 	}

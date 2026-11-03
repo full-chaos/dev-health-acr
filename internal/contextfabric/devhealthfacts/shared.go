@@ -1400,7 +1400,12 @@ import (
 // its key when the read has already given the pull request end its label
 // (CHAOS-12715). An answer saved earlier can show the raw work item id in a
 // path's why_relevant.
-const QueryVersion = "devhealthfacts.clickhouse.v273"
+//
+// v273 -> v274: a nameless project whose source id is org-scoped
+// ("<org UUID>:gitlab:<id>") reads as its native id in a graph end and in an
+// evidence label alike (CHAOS-12716). An answer saved earlier can carry the
+// scoped id.
+const QueryVersion = "devhealthfacts.clickhouse.v274"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each
