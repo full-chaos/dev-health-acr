@@ -491,6 +491,27 @@ func resolveNamedComparison(
 	// to remember it.
 	contest *contestAdmission,
 ) (contextfabric.SubjectResolution, contextfabric.CommitBasisSet, contextfabric.CommitDecisionDigestSet, error) {
+	basis := ComparisonKindBasisNone
+	if comparison.Admission == contextfabric.ComparisonAdmittedNamedPair {
+		basis = ComparisonKindBasisStated
+	}
+	return resolveNamedComparisonWithBasis(ctx, principal, request, deps, comparison, contest, basis)
+}
+
+// resolveNamedComparisonWithBasis is resolveNamedComparison with the reason
+// the operands hold their kinds (CHAOS-12600): stated by the question, or
+// resolved from unique exact full-label matches. The basis reaches the policy
+// line; the dispatch stamps an exact-label kind on the resolution, which the
+// answer discloses.
+func resolveNamedComparisonWithBasis(
+	ctx context.Context,
+	principal storage.Principal,
+	request contextfabric.InvestigationRequest,
+	deps ResolveDeps,
+	comparison contextfabric.ComparisonOperands,
+	contest *contestAdmission,
+	basis ComparisonKindBasis,
+) (contextfabric.SubjectResolution, contextfabric.CommitBasisSet, contextfabric.CommitDecisionDigestSet, error) {
 	// Every slot's merges record here, so two operands that match one subject
 	// count it once (CHAOS-12360).
 	deps.outsideRequested = map[string]struct{}{}
@@ -501,7 +522,7 @@ func resolveNamedComparison(
 	// from a rig's logs for a question that should be a comparison, the
 	// dispatch did not happen: the one failure that leaves no other trace,
 	// because the flat pooled path serves a perfectly well-formed answer.
-	recordComparisonPolicy(ctx, principal, request, deps, comparison)
+	recordComparisonPolicy(ctx, principal, request, deps, comparison, basis, "")
 
 	// THE SCOPED HOLD FIRES BEFORE ANY RETRIEVAL. Not after a failed attempt to
 	// resolve the anchor, and not after reading anything: the pair is refused
@@ -626,7 +647,7 @@ func resolveNamedComparison(
 // EMISSION HELPERS -- one per event, nil-sink-safe
 // ---------------------------------------------------------------------------
 
-func recordComparisonPolicy(ctx context.Context, principal storage.Principal, request contextfabric.InvestigationRequest, deps ResolveDeps, comparison contextfabric.ComparisonOperands) {
+func recordComparisonPolicy(ctx context.Context, principal storage.Principal, request contextfabric.InvestigationRequest, deps ResolveDeps, comparison contextfabric.ComparisonOperands, basis ComparisonKindBasis, refusal ExactLabelKindRefusal) {
 	if deps.OperandResolutionSink == nil {
 		return
 	}
@@ -649,6 +670,8 @@ func recordComparisonPolicy(ctx context.Context, principal storage.Principal, re
 		// function every slot derives its own limit from, so the policy line
 		// and the slots cannot report two different budgets for one run.
 		CandidateBudget: enforcedCandidateBudget(request, deps),
+		KindBasis:       basis,
+		KindRefusal:     refusal,
 	})
 }
 
