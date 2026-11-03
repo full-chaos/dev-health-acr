@@ -308,6 +308,8 @@ func goVarName(e Event) string {
 		return "StructureNeedsDisclosed"
 	case GatedOfferResolution.ID:
 		return "GatedOfferResolution"
+	case GatedOfferResolutionFailure.ID:
+		return "GatedOfferResolutionFailure"
 	case CohortStructureGate.ID:
 		return "CohortStructureGate"
 	case WindowGateOfferDisclosure.ID:

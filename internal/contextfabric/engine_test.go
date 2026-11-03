@@ -532,6 +532,7 @@ type recordingTelemetry struct {
 	// (CHAOS-3900 P1.F) mirror the SAME list-not-count discipline.
 	structureNeedsDisclosed []contractsv1.ContextFabricStructureNeedKind
 	gatedOfferResolutions   []GatedOfferResolutionOutcome
+	gatedOfferFailures      []GatedOfferErrorClass
 	cohortStructureGates    []cohortStructureGateRecord
 	structureOfferCounts    []structureOfferCountRecord
 	structureReceipts       []structureReceiptRecord
@@ -876,6 +877,10 @@ func (r *recordingTelemetry) RecordRememberedWindowAxis(_ context.Context, _ sto
 
 func (r *recordingTelemetry) RecordGatedOfferResolution(_ context.Context, _ storage.Principal, outcome GatedOfferResolutionOutcome) {
 	r.gatedOfferResolutions = append(r.gatedOfferResolutions, outcome)
+}
+
+func (r *recordingTelemetry) RecordGatedOfferResolutionFailure(_ context.Context, _ storage.Principal, class GatedOfferErrorClass) {
+	r.gatedOfferFailures = append(r.gatedOfferFailures, class)
 }
 
 // cohortStructureGateRecord (CHAOS-4579/CHAOS-4531) keeps BOTH arguments
